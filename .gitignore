@@ -23,6 +23,9 @@ target/
 *.jar
 !**/.mvn/wrapper/maven-wrapper.jar
 
+# ---- PlantUML JVM font-cache litter (from an unset HOME in the render container) ----
+docs/diagrams/[?]/
+
 # ---- Tooling / editor ----
 .idea/
 .vscode/

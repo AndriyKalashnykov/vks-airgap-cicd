@@ -179,7 +179,9 @@ validate: ## kustomize build + kubeconform manifests; kubectl dry-run Tekton YAM
 .PHONY: diagrams
 diagrams: ## Render docs/diagrams/*.puml → docs/diagrams/out/*.png (PlantUML via Docker)
 	@mkdir -p docs/diagrams/out
-	@docker run --rm -u "$$(id -u):$$(id -g)" -e PLANTUML_SECURITY_PROFILE=UNSECURE \
+	@docker run --rm -u "$$(id -u):$$(id -g)" \
+		-e PLANTUML_SECURITY_PROFILE=UNSECURE \
+		-e JAVA_TOOL_OPTIONS=-Duser.home=/tmp \
 		-v "$$PWD/docs/diagrams:/work" -w /work plantuml/plantuml:$(PLANTUML_VERSION) \
 		-tpng -o out context.puml container.puml deployment.puml pipeline-flow.puml
 	@echo "diagrams: rendered → docs/diagrams/out/"
