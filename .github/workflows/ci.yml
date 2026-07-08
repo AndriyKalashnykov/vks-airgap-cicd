@@ -57,7 +57,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Installs the .mise.toml toolchain (Java/Maven/kubectl/kustomize/jq/yq/...).
+      # JDK 21 with JAVA_HOME set (the app targets Java 21; ./mvnw honors JAVA_HOME,
+      # and the runner's default is older). Provides Maven via the ./mvnw wrapper.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Installs the rest of the .mise.toml toolchain (kubectl/kustomize/jq/yq/...).
       - uses: jdx/mise-action@v2
 
       # Tools mise does not provide (shellcheck + Docker are preinstalled on the runner).
