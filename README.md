@@ -48,6 +48,32 @@ Set `RUN_MODE` in `.env`.
 - Network reach to the VKS Supervisor, Harbor, and (for dual-homed) the workload cluster.
 - The Harbor (and Gitea, once installed) **CA certificates** (`.env` → `HARBOR_CA_FILE` / `GITEA_CA_FILE`).
 - [mise](https://mise.jdx.dev/) for the toolchain (installed by `make deps` where possible).
+- **docker or podman** on the jump box (to build + push the Maven builder image).
+
+### Disk space on the jump box
+
+Measured for the current image set (19 images: Tekton Pipelines+Triggers, Gitea,
+Kaniko, Maven, Temurin JDK/JRE, alpine/git, yq). Figures are approximate.
+
+| What | Where | Size |
+|------|-------|------|
+| Mirror image cache — **single-arch** (default, `MIRROR_ARCH=amd64`) | `bundle/images/` | **~3.0 GB** |
+| Mirror image cache — **all architectures** (`MIRROR_ALL_ARCH=1`) | `bundle/images/` | ~5.2 GB |
+| Maven builder image build (local docker/podman storage) | engine store | ~1.5 GB |
+| Sneakernet bundle tarball (`RUN_MODE=sneakernet` only) | repo root | ~2.5 GB (on top of the cache) |
+
+> Even in single-arch mode the **Tekton controller images stay multi-arch**
+> (~2 GB of the 3 GB): they are digest-pinned in the release manifests, so their
+> multi-arch list digest must be preserved for the pull to resolve. The
+> single-arch saving therefore applies to the large tag-referenced images
+> (Maven, Temurin, the builder).
+
+**Recommended free space on the jump box:**
+- **Dual-homed:** ≥ **10 GB** (cache + builder build + working overhead).
+- **Sneakernet:** ≥ **15 GB** (adds the transferable bundle tarball).
+
+The **VKS/KinD cluster** additionally stores these images in Harbor + each node's
+containerd (~5–6 GB) — that is cluster-side, separate from the jump box.
 
 ## Quickstart (dual-homed jump box)
 
