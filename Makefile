@@ -31,6 +31,8 @@ APP_DEV_PORT        ?= 8080
 BUNDLE_DIR          ?= ./bundle
 # renovate: datasource=docker depName=plantuml/plantuml
 PLANTUML_VERSION    ?= 1.2025.4
+# Container engine — podman preferred, docker fallback. Override: CONTAINER_ENGINE=docker
+CONTAINER_ENGINE    ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
 SCRIPTS := ./scripts
 APP_DIR := ./app
@@ -176,22 +178,35 @@ lint: ## shellcheck scripts, yamllint manifests, hadolint Dockerfile
 validate: ## kustomize build + kubeconform manifests; kubectl dry-run Tekton YAML
 	@$(SCRIPTS)/validate.sh
 
+# podman rootless needs --userns=keep-id so the mapped uid can write the mounted
+# output dir; docker does not. Empty for docker.
+PODMAN_USERNS := $(if $(filter podman,$(CONTAINER_ENGINE)),--userns=keep-id,)
+
+# Render helper: $(1) = output subdir under docs/diagrams (created if missing).
+# --network=none + -DRELATIVE_INCLUDE="." force the VENDORED c4/*.puml (offline,
+# deterministic — no fetch from githubusercontent at render time).
+define _render_diagrams
+	mkdir -p docs/diagrams/$(1); \
+	$(CONTAINER_ENGINE) run --rm $(PODMAN_USERNS) --network=none -u "$$(id -u):$$(id -g)" \
+		-e PLANTUML_SECURITY_PROFILE=UNSECURE -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp \
+		-v "$$PWD/docs/diagrams:/work" -w /work docker.io/plantuml/plantuml:$(PLANTUML_VERSION) \
+		-tpng -o $(1) -DRELATIVE_INCLUDE="." context.puml container.puml deployment.puml pipeline-flow.puml
+endef
+
 .PHONY: diagrams
-diagrams: ## Render docs/diagrams/*.puml → docs/diagrams/out/*.png (PlantUML via Docker)
-	@mkdir -p docs/diagrams/out
-	@docker run --rm -u "$$(id -u):$$(id -g)" \
-		-e PLANTUML_SECURITY_PROFILE=UNSECURE \
-		-e JAVA_TOOL_OPTIONS=-Duser.home=/tmp \
-		-v "$$PWD/docs/diagrams:/work" -w /work plantuml/plantuml:$(PLANTUML_VERSION) \
-		-tpng -o out context.puml container.puml deployment.puml pipeline-flow.puml
-	@echo "diagrams: rendered → docs/diagrams/out/"
+diagrams: ## Render docs/diagrams/*.puml → docs/diagrams/out/*.png ($(CONTAINER_ENGINE))
+	@$(call _render_diagrams,out)
+	@echo "diagrams: rendered → docs/diagrams/out/  (commit the PNGs)"
 
 .PHONY: diagrams-check
-diagrams-check: ## Fail if committed diagram PNGs are stale vs their .puml sources (drift gate)
-	@$(MAKE) --no-print-directory diagrams
-	@git diff --exit-code -- docs/diagrams/out || { \
-		echo "ERROR: diagram PNGs are stale — run 'make diagrams' and commit docs/diagrams/out/."; exit 1; }
-	@echo "diagrams-check: PNGs match their .puml sources"
+diagrams-check: ## CI-safe: every .puml renders AND has a committed PNG (PlantUML PNGs are not byte-reproducible across machines, so no byte-diff). Run `make diagrams` before committing .puml edits.
+	@rm -rf docs/diagrams/.check
+	@$(call _render_diagrams,.check)
+	@rc=0; for d in context container deployment pipeline-flow; do \
+		test -s docs/diagrams/.check/$$d.png || { echo "ERROR: $$d.puml failed to render"; rc=1; }; \
+		test -s docs/diagrams/out/$$d.png    || { echo "ERROR: committed docs/diagrams/out/$$d.png missing — run 'make diagrams'"; rc=1; }; \
+	done; rm -rf docs/diagrams/.check; \
+	if [ $$rc -eq 0 ]; then echo "diagrams-check: all .puml render + committed PNGs present"; else exit 1; fi
 
 .PHONY: docs-lint
 docs-lint: diagrams-check ## Lint markdown + verify diagrams are current

@@ -13,6 +13,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 rc=0
 KUBERNETES_VERSION="${KUBERNETES_VERSION:-1.31.0}"
 RENDERED=/tmp/vks-deploy-rendered.yaml
+# Cache downloaded JSON schemas so the multiple kubeconform runs below share them
+# and re-runs don't re-fetch (githubusercontent rate-limits under heavy use).
+KC_CACHE="${KUBECONFORM_CACHE:-${HOME}/.cache/kubeconform}"
+mkdir -p "$KC_CACHE"
 
 # kustomize_build DIR OUT — prefer standalone kustomize, fall back to `kubectl kustomize`.
 kustomize_build() {
@@ -26,7 +30,7 @@ if [ -d "$REPO_ROOT/deploy/base" ]; then
   if kustomize_build "$REPO_ROOT/deploy/base" "$RENDERED"; then
     log_info "kustomize build OK ($(grep -c '^kind:' "$RENDERED") resources)"
     if have kubeconform; then
-      kubeconform -strict -summary -kubernetes-version "$KUBERNETES_VERSION" \
+      kubeconform -strict -summary -cache "$KC_CACHE" -kubernetes-version "$KUBERNETES_VERSION" \
         -ignore-missing-schemas "$RENDERED" || rc=1
     elif have kubectl; then
       log_info "kubeconform absent — falling back to 'kubectl apply --dry-run=client'"
@@ -47,7 +51,7 @@ if have kubeconform; then
     if [ -d "$REPO_ROOT/$dir" ] && find "$REPO_ROOT/$dir" -name '*.yaml' | read -r _; then
       log_info "validating $dir/"
       find "$REPO_ROOT/$dir" -name '*.yaml' -print0 \
-        | xargs -0 kubeconform -summary -ignore-missing-schemas \
+        | xargs -0 kubeconform -summary -cache "$KC_CACHE" -ignore-missing-schemas \
             -kubernetes-version "$KUBERNETES_VERSION" || rc=1
     else
       log_warn "$dir/ has no manifests yet — skipped"

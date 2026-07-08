@@ -25,6 +25,7 @@ target/
 
 # ---- PlantUML JVM font-cache litter (from an unset HOME in the render container) ----
 docs/diagrams/[?]/
+docs/diagrams/.check/
 
 # ---- Tooling / editor ----
 .idea/

@@ -110,6 +110,15 @@ pkg_install() {
 # ---------------------------------------------------------------------------
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# container_engine — the OCI engine to use, podman preferred over docker.
+# Override with CONTAINER_ENGINE. Prints the engine name (podman|docker) or dies.
+container_engine() {
+  if [ -n "${CONTAINER_ENGINE:-}" ]; then printf '%s' "$CONTAINER_ENGINE"; return 0; fi
+  if have podman; then printf 'podman'
+  elif have docker; then printf 'docker'
+  else die "no container engine found — install podman (preferred) or docker"; fi
+}
+
 # require_cmd cmd [human hint] — fail fast with an actionable message.
 require_cmd() {
   local cmd="$1" hint="${2:-run scripts/00-install-prereqs.sh}"

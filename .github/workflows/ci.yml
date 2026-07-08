@@ -85,6 +85,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
+    # podman is the local default; on the runner use docker for the diagram render
+    # (rootless-podman keep-id isn't guaranteed configured on the runner).
+    env:
+      CONTAINER_ENGINE: docker
     steps:
       - uses: actions/checkout@v4
 

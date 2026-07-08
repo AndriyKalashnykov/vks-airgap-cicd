@@ -25,6 +25,10 @@ log_info "detected OS: $(os_id) (pkg manager: $(pkg_mgr))"
 pkg_refresh
 # skopeo package name is consistent across apt (Ubuntu 20.10+) and tdnf (Photon).
 pkg_install ca-certificates curl git jq tar gzip skopeo
+# podman is the default container engine (build/push the Maven builder, render
+# diagrams); docker also works if already present. Best-effort — some minimal
+# images lack it in the default repos.
+pkg_install podman || log_warn "podman unavailable via package manager; install podman or docker manually"
 # The shellcheck linter is best-effort (dev/lint convenience; not required at runtime).
 pkg_install shellcheck || log_warn "shellcheck unavailable via package manager; lint will skip it"
 
@@ -65,8 +69,19 @@ install_argocd() {
   chmod 0755 "${BIN_DIR}/argocd"
 }
 
+# kubectl: normally provided by mise (.mise.toml). Install a pinned build only if
+# it's still missing (mise absent, or not on PATH).
+install_kubectl() {
+  have kubectl && { log_info "kubectl present: $(command -v kubectl)"; return 0; }
+  local v="${KUBECTL_VERSION:-v1.31.4}"
+  log_info "kubectl not found — downloading ${v}"
+  curl -fsSL "https://dl.k8s.io/release/${v}/bin/linux/${go_arch}/kubectl" -o "${BIN_DIR}/kubectl"
+  chmod 0755 "${BIN_DIR}/kubectl"
+}
+
 install_tkn
 install_argocd
+install_kubectl
 
 # ---- Summary --------------------------------------------------------------
 log_info "prereqs installed. Versions:"

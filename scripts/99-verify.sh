@@ -29,7 +29,7 @@ TOKEN="$(cat "$TOKEN_FILE")"
 MARKER="vks-cicd-verify-$(date +%s)"
 
 tmp="$(mktemp -d)"; PF_PID=""
-cleanup() { [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null || true; rm -rf "$tmp"; }
+cleanup() { if [ -n "$PF_PID" ]; then kill "$PF_PID" 2>/dev/null || true; fi; rm -rf "$tmp"; }
 trap cleanup EXIT
 umask 077
 

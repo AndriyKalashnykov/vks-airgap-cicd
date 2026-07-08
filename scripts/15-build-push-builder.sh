@@ -17,14 +17,10 @@ load_env
 : "${HARBOR_PASSWORD:?set HARBOR_PASSWORD in .env (never on argv)}"
 : "${BUILDER_IMAGE_TAG:?}"
 
-# Pick a builder engine. For an insecure (HTTP) registry — e.g. the KinD Harbor —
-# prefer podman: it honours --tls-verify=false per-command, whereas docker needs a
-# daemon-level insecure-registries entry. Otherwise prefer docker.
-ENGINE=""
-if [ "${HARBOR_INSECURE:-0}" = "1" ] && have podman; then ENGINE=podman
-elif have docker; then ENGINE=docker
-elif have podman; then ENGINE=podman
-else die "need docker or podman to build the builder image (install one on the jump box)"; fi
+# Container engine — podman preferred (honours --tls-verify=false per-command for
+# an insecure/HTTP Harbor; docker would need a daemon insecure-registries entry).
+# Override with CONTAINER_ENGINE=docker.
+ENGINE="$(container_engine)"
 log_info "using container engine: $ENGINE"
 
 REF="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/webui-builder:${BUILDER_IMAGE_TAG}"

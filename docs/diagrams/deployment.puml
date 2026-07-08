@@ -1,5 +1,5 @@
 @startuml deployment
-!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/v2.11.0/C4_Deployment.puml
+!include c4/C4_Deployment.puml
 !include _style.puml
 
 title Deployment — jump box + air-gapped VKS cluster

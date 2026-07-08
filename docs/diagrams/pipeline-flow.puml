@@ -1,5 +1,5 @@
 @startuml pipeline-flow
-!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/v2.11.0/C4_Dynamic.puml
+!include c4/C4_Dynamic.puml
 !include _style.puml
 LAYOUT_LEFT_RIGHT()
 
