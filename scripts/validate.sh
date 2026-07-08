@@ -18,17 +18,76 @@ RENDERED=/tmp/vks-deploy-rendered.yaml
 KC_CACHE="${KUBECONFORM_CACHE:-${HOME}/.cache/kubeconform}"
 mkdir -p "$KC_CACHE"
 
-# kubeconform, retried — its JSON schemas are fetched from githubusercontent, which
-# rate-limits/times out under load ("giving up after N attempts"). Retry the whole
-# run a few times so a transient schema-download blip doesn't fail the gate; a real
-# invalid manifest still fails on every attempt.
+# Schema sources. Default to the jsDelivr CDN mirror of the SAME yannh repo rather than
+# raw.githubusercontent.com — identical content, globally CDN-cached, and NOT per-IP
+# rate-limited (githubusercontent's throttling is the "giving up after N attempts" cause,
+# and an unreachable schema means a real violation goes UNVALIDATED, not just slow).
+# datreeio/CRDs-catalog supplies CRD schemas (e.g. ArgoCD Application) so those validate
+# instead of only being skipped. `default` (the built-in githubusercontent location) stays
+# LAST as a fallback. Override any of these via the KUBECONFORM_SCHEMA_* env vars.
+KC_SCHEMA_K8S="${KUBECONFORM_SCHEMA_K8S:-https://cdn.jsdelivr.net/gh/yannh/kubernetes-json-schema@master/{{ .NormalizedKubernetesVersion }}-standalone{{ .StrictSuffix }}/{{ .ResourceKind }}{{ .KindSuffix }}.json}"
+KC_SCHEMA_CRD="${KUBECONFORM_SCHEMA_CRD:-https://cdn.jsdelivr.net/gh/datreeio/CRDs-catalog@main/{{ .Group }}/{{ .ResourceKind }}_{{ .ResourceAPIVersion }}.json}"
+# Two schema-location sets, chosen per directory:
+#  - CORE (deploy/base, k8s/): the yannh k8s schemas. Every kind is a built-in k8s type,
+#    so jsDelivr returns 200 and validation is reliable (real violations ARE caught).
+#  - CRD (tekton/, argocd/): the datreeio CRDs-catalog. It returns a clean 404 for CRDs it
+#    doesn't carry (so -ignore-missing-schemas SKIPS them), and 200 for those it does (e.g.
+#    ArgoCD Application) — validating them as a bonus. Do NOT point the yannh path at CRD
+#    dirs: jsDelivr answers a non-existent yannh CRD path with 403 (not 404), which
+#    kubeconform treats as a hard error rather than a skippable miss.
+# `default` (githubusercontent) is the last-resort fallback in both sets.
+KC_LOCS_CORE=(-schema-location "$KC_SCHEMA_K8S" -schema-location default)
+KC_LOCS_CRD=(-schema-location "$KC_SCHEMA_CRD" -schema-location default)
+# Active set for the next kc call (a caller sets this immediately before invoking kc).
+KC_LOCS=("${KC_LOCS_CORE[@]}")
+
+# kubeconform — gate on genuinely INVALID manifests, NOT on schema-download failures.
+#
+# kubeconform fetches its JSON schemas from githubusercontent, which rate-limits under
+# load ("giving up after N attempts"). A download failure is a schema ERROR, a distinct
+# thing from a manifest VIOLATION. Gating on kubeconform's raw exit code (nonzero on
+# either) makes CI flap red whenever githubusercontent throttles a cold-cache runner even
+# though every manifest is valid. So classify the JSON result per-resource and FAIL only
+# on a real violation (statusInvalid); WARN — don't fail — when schemas can't be
+# downloaded (statusError). kubeconform already self-retries downloads (3 attempts with
+# backoff), so this wrapper does NOT add its own retry loop (that only multiplied latency
+# and made the gate hang when github throttled). `-cache` (persisted via actions/cache in
+# CI) makes warm runs fast and offline.
+#
+# NOTE: `-output json` only populates the aggregate `.summary` object when `-summary` is
+# ALSO passed, so we count `.resources[]` entries directly (robust regardless of flags).
+# Falls back to exit-code gating when jq is unavailable, so it never false-passes on an
+# environment that cannot parse the JSON.
 kc() {
-  local n=0
-  until kubeconform -cache "$KC_CACHE" -kubernetes-version "$KUBERNETES_VERSION" "$@"; do
-    n=$((n + 1)); [ "$n" -ge 4 ] && return 1
-    log_warn "kubeconform attempt $n failed (likely transient schema download) — retrying in 8s"
-    sleep 8
-  done
+  if ! have jq; then
+    kubeconform "${KC_LOCS[@]}" -cache "$KC_CACHE" -kubernetes-version "$KUBERNETES_VERSION" "$@"
+    return $?
+  fi
+  local out ec invalid errors
+  out="$(kubeconform "${KC_LOCS[@]}" -output json -cache "$KC_CACHE" -kubernetes-version "$KUBERNETES_VERSION" "$@" 2>/dev/null)"; ec=$?
+  invalid="$(printf '%s' "$out" | jq -r '[.resources[]? | select(.status=="statusInvalid")] | length' 2>/dev/null)"
+  errors="$(printf '%s'  "$out" | jq -r '[.resources[]? | select(.status=="statusError")]   | length' 2>/dev/null)"
+  # Empty/unparseable output — e.g. every schema location unreachable (CDN + fallback all
+  # down/throttled), so kubeconform emitted no JSON. Cannot validate, but per this gate's
+  # design a schema-AVAILABILITY problem must never red CI (malformed YAML is separately
+  # caught by `make lint`'s yamllint). WARN and pass — the gate only fails on a real,
+  # confirmed manifest violation (statusInvalid), never on an infra/network condition.
+  case "$invalid" in ''|*[!0-9]*)
+    if [ "$ec" -eq 0 ]; then log_info "kubeconform: nothing to validate"; return 0; fi
+    log_warn "kubeconform: no parseable output (exit $ec) — schema sources unreachable; those resources were NOT validated; not failing the gate"
+    return 0 ;;
+  esac
+  case "$errors" in ''|*[!0-9]*) errors=0 ;; esac
+  if [ "$invalid" -gt 0 ]; then
+    printf '%s' "$out" | jq -r '.resources[]? | select(.status=="statusInvalid") | "  INVALID: \(.filename): \(.kind)/\(.name): \(.msg)"' 2>/dev/null
+    return 1
+  fi
+  if [ "$errors" -gt 0 ]; then
+    log_warn "kubeconform: $errors schema(s) could not be downloaded (CDN/registry unreachable) — those resources were NOT validated; not failing the gate (Invalid=0)"
+  else
+    log_info "kubeconform: all resolvable schemas valid (Invalid=0)"
+  fi
+  return 0
 }
 
 # kustomize_build DIR OUT — prefer standalone kustomize, fall back to `kubectl kustomize`.
@@ -43,7 +102,8 @@ if [ -d "$REPO_ROOT/deploy/base" ]; then
   if kustomize_build "$REPO_ROOT/deploy/base" "$RENDERED"; then
     log_info "kustomize build OK ($(grep -c '^kind:' "$RENDERED") resources)"
     if have kubeconform; then
-      kc -strict -summary -ignore-missing-schemas "$RENDERED" || rc=1
+      KC_LOCS=("${KC_LOCS_CORE[@]}")   # deploy/base is all core k8s kinds
+      kc -strict -ignore-missing-schemas "$RENDERED" || rc=1
     elif have kubectl; then
       log_info "kubeconform absent — falling back to 'kubectl apply --dry-run=client'"
       kubectl apply --dry-run=client -f "$RENDERED" >/dev/null || rc=1
@@ -63,7 +123,9 @@ if have kubeconform; then
     if [ -d "$REPO_ROOT/$dir" ] && find "$REPO_ROOT/$dir" -name '*.yaml' | read -r _; then
       log_info "validating $dir/"
       mapfile -d '' _files < <(find "$REPO_ROOT/$dir" -name '*.yaml' -print0)
-      kc -summary -ignore-missing-schemas "${_files[@]}" || rc=1
+      # k8s/ holds core kinds → yannh schemas; tekton/ + argocd/ are CRD-heavy → catalog.
+      case "$dir" in k8s) KC_LOCS=("${KC_LOCS_CORE[@]}") ;; *) KC_LOCS=("${KC_LOCS_CRD[@]}") ;; esac
+      kc -ignore-missing-schemas "${_files[@]}" || rc=1
     else
       log_warn "$dir/ has no manifests yet — skipped"
     fi

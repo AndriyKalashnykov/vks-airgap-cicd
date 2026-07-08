@@ -220,6 +220,13 @@ static-check: check-env lint validate app-test ## Composite code gate (lint + ma
 .PHONY: ci
 ci: static-check docs-lint ## Full local pipeline (offline-verifiable parts)
 
+##@ Dependencies (Renovate)
+.PHONY: renovate-validate
+renovate-validate: ## Validate renovate.json (renovate@latest — needs node on PATH)
+	@if [ -n "$$GH_ACCESS_TOKEN" ]; then export GITHUB_COM_TOKEN="$$GH_ACCESS_TOKEN"; \
+	else echo "note: GH_ACCESS_TOKEN unset — some lookups may be skipped"; fi; \
+	npx --yes renovate@latest --platform=local
+
 ##@ Housekeeping
 .PHONY: clean
 clean: ## Remove build output and the air-gap bundle
