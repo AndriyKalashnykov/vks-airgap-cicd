@@ -31,15 +31,25 @@ elif [ -n "${HARBOR_CA_FILE:-}" ] && [ -f "$HARBOR_CA_FILE" ]; then
 fi
 CURL_CACERT=(); [ -f "${HARBOR_CA_FILE:-/nonexistent}" ] && CURL_CACERT=(--cacert "$HARBOR_CA_FILE")
 [ "$TLS_VERIFY" = "false" ] && CURL_CACERT=(--insecure)
+# HTTP for an insecure (kind) Harbor, HTTPS otherwise.
+SCHEME="https"; [ "$TLS_VERIFY" = "false" ] && SCHEME="http"
 
-# ---- Harbor API helper (creds via a stdin config file — not argv) ----
+# Curl auth in a real umask-077 config FILE (kept out of argv). A process
+# substitution can't be used because the curl call runs on a later line than
+# where the fd would be created.
+HARBOR_TMP="$(mktemp -d)"; trap 'rm -rf "$HARBOR_TMP"' EXIT
+HARBOR_CURL_CFG="${HARBOR_TMP}/curl.cfg"
+( umask 077; printf 'user = "%s:%s"\n' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" > "$HARBOR_CURL_CFG" )
+
+# ---- Harbor API helper (creds via a -K config file — not argv) ----
 harbor_api() {
   # harbor_api METHOD PATH [json-body]
   local method="$1" path="$2" body="${3:-}"
-  local args=(-sS -o /dev/null -w '%{http_code}' -X "$method" "${CURL_CACERT[@]}"
-              -K <(printf 'user = "%s:%s"\n' "$HARBOR_USERNAME" "$HARBOR_PASSWORD"))
+  local args=(-sS -o /dev/null -w '%{http_code}' "${CURL_CACERT[@]}" -K "$HARBOR_CURL_CFG")
+  # Use --head for HEAD (curl -X HEAD still waits for a body -> curl error 18).
+  if [ "$method" = "HEAD" ]; then args+=(--head); else args+=(-X "$method"); fi
   [ -n "$body" ] && args+=(-H 'Content-Type: application/json' -d "$body")
-  curl "${args[@]}" "https://${HARBOR_URL}/api/v2.0/${path}"
+  curl "${args[@]}" "${SCHEME}://${HARBOR_URL}/api/v2.0/${path}"
 }
 
 ensure_project() {

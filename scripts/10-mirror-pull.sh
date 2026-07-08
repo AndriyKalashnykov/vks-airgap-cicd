@@ -43,11 +43,12 @@ log_info "collected ${#IMAGES[@]} images to pull"
 fails=0
 for src in "${IMAGES[@]}"; do
   dst_dir="$(mirror_cache_dir "$src")"
-  log_info "pull $src"
+  pull_ref="$(mirror_pull_ref "$src")"      # digest-valid (never tag+digest)
+  log_info "pull $pull_ref"
   mkdir -p "$dst_dir"
   # --all preserves multi-arch manifest lists; --preserve-digests keeps identity.
   if run skopeo copy --all --preserve-digests --retry-times 3 \
-        "docker://${src}" "dir:${dst_dir}"; then
+        "docker://${pull_ref}" "dir:${dst_dir}"; then
     :
   else
     log_error "failed to pull $src"; fails=$((fails+1))

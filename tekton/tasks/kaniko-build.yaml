@@ -38,7 +38,7 @@ spec:
       description: The digest of the pushed image.
   steps:
     - name: build-and-push
-      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/kaniko-project/executor:v1.25.0
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/kaniko-project/executor:v1.24.0
       env:
         - name: DOCKER_CONFIG
           value: $(workspaces.dockerconfig.path)

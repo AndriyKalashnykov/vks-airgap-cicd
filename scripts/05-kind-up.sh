@@ -24,7 +24,7 @@ READY_TIMEOUT="${READY_TIMEOUT_SECONDS:-300}"
 POLL_INTERVAL="${POLL_INTERVAL_SECONDS:-5}"
 KIND_CONFIG="${REPO_ROOT}/kind/kind-config.yaml"
 CPK_CONTAINER="cloud-provider-kind"
-CPK_IMAGE="registry.k8s.io/cloud-provider-kind/cloud-provider-kind:${CPK_VERSION}"
+CPK_IMAGE="registry.k8s.io/cloud-provider-kind/cloud-controller-manager:${CPK_VERSION}"
 
 require_cmd kind
 require_cmd docker
@@ -70,10 +70,12 @@ if docker ps -a --format '{{.Names}}' | grep -qxF "$CPK_CONTAINER"; then
   log_info "removing existing '$CPK_CONTAINER' container before (re)start"
   run docker rm -f "$CPK_CONTAINER"
 fi
-log_info "starting $CPK_CONTAINER ($CPK_IMAGE) on the kind docker network"
+log_info "starting $CPK_CONTAINER ($CPK_IMAGE) — manages LB via the docker socket"
+# Per the cloud-provider-kind README: run with --network host + the docker socket;
+# it creates the per-Service envoy sidecars on the kind network itself via the API.
 run docker run -d \
   --name "$CPK_CONTAINER" \
-  --network kind \
+  --network host \
   --restart unless-stopped \
   -v /var/run/docker.sock:/var/run/docker.sock \
   "$CPK_IMAGE"

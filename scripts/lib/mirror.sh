@@ -7,22 +7,20 @@
 [ -n "${__VKS_MIRROR_SH_LOADED:-}" ] && return 0
 __VKS_MIRROR_SH_LOADED=1
 
-# mirror_split_ref SRC -> prints "name<TAB>tagpart" where tagpart is ":tag" or
-# "@sha256:...". name is the full repo path (may include a registry host).
-_mirror_split_ref() {
-  local ref="$1" name tag
-  if [[ "$ref" == *"@"* ]]; then
-    name="${ref%@*}"; tag="@${ref#*@}"
-  elif [[ "${ref##*/}" == *":"* ]]; then
-    # colon in the LAST path segment => it's a tag (not a registry port)
-    name="${ref%:*}"; tag=":${ref##*:}"
-  else
-    name="$ref"; tag=":latest"
-  fi
-  printf '%s\t%s' "$name" "$tag"
+# _mirror_parse SRC -> prints "NAME<TAB>TAG<TAB>DIGEST".
+# NAME is the full repo path incl. any registry host, WITHOUT tag/digest.
+# Handles all four shapes: repo, repo:tag, repo@digest, and repo:tag@digest
+# (the last is how Tekton release manifests pin images).
+_mirror_parse() {
+  local ref="$1" name tag="" digest=""
+  case "$ref" in *@*) digest="${ref##*@}"; ref="${ref%@*}";; esac
+  # A colon in the LAST path segment is a tag (not a registry :port).
+  case "${ref##*/}" in *:*) tag="${ref##*:}"; ref="${ref%:*}";; esac
+  name="$ref"
+  printf '%s|%s|%s' "$name" "$tag" "$digest"
 }
 
-# mirror_repo_path SRC -> the repo path WITHOUT the registry host and WITHOUT tag.
+# _mirror_repo_path NAME -> repo path WITHOUT the registry host.
 # docker.io short names (alpine/git, gitea/gitea) keep their path; a leading
 # registry host (contains '.' or ':' or is 'localhost') is stripped.
 _mirror_repo_path() {
@@ -35,13 +33,26 @@ _mirror_repo_path() {
   fi
 }
 
-# mirror_target_ref SRC -> Harbor destination ref:
-#   $HARBOR_URL/$HARBOR_INFRA_PROJECT/<repo-path><tag>
+# mirror_pull_ref SRC -> a skopeo-valid docker source. skopeo rejects refs with
+# BOTH a tag and a digest, so prefer the digest (exact content) when present.
+mirror_pull_ref() {
+  local name tag digest
+  IFS='|' read -r name tag digest <<<"$(_mirror_parse "$1")"
+  if   [ -n "$digest" ]; then printf '%s@%s' "$name" "$digest"
+  elif [ -n "$tag" ];    then printf '%s:%s' "$name" "$tag"
+  else                         printf '%s:latest' "$name"; fi
+}
+
+# mirror_target_ref SRC -> Harbor destination (a TAG ref — you push to a tag, not
+# a digest; --preserve-digests keeps the original digest resolvable there).
+#   $HARBOR_URL/$HARBOR_INFRA_PROJECT/<repo-path>:<tag>
+# A digest-only source (no tag) gets a stable synthesized tag from its digest.
 mirror_target_ref() {
-  local src="$1" name tag path
-  IFS=$'\t' read -r name tag <<<"$(_mirror_split_ref "$src")"
+  local name tag digest path
+  IFS='|' read -r name tag digest <<<"$(_mirror_parse "$1")"
   path="$(_mirror_repo_path "$name")"
-  printf '%s/%s/%s%s' "${HARBOR_URL:?}" "${HARBOR_INFRA_PROJECT:?}" "$path" "$tag"
+  if [ -z "$tag" ]; then tag="sha-${digest#sha256:}"; tag="${tag:0:19}"; fi
+  printf '%s/%s/%s:%s' "${HARBOR_URL:?}" "${HARBOR_INFRA_PROJECT:?}" "$path" "$tag"
 }
 
 # mirror_cache_dir SRC -> local OCI-dir path holding the pulled image.
