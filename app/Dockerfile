@@ -3,21 +3,26 @@
 # Built by the Tekton pipeline (kaniko) and pushed to the VKS-provided Harbor.
 
 # ---- build stage ----------------------------------------------------------
-FROM maven:3.9-eclipse-temurin-21 AS build
+# BUILDER_IMAGE defaults to public Maven (local `docker build` works online).
+# In the air gap, CI passes BUILDER_IMAGE=<harbor>/cicd/webui-builder:<ver> (a
+# builder with this pom's dependencies pre-baked — see app/Dockerfile.builder and
+# scripts/15-build-push-builder.sh) plus MVN_OFFLINE=-o so `package` needs no network.
+ARG BUILDER_IMAGE=maven:3.9-eclipse-temurin-21
+ARG RUNTIME_IMAGE=eclipse-temurin:21-jre-jammy
+FROM ${BUILDER_IMAGE} AS build
+ARG MVN_OFFLINE=
 WORKDIR /workspace
 
-# Warm the dependency cache using the wrapper + pom before copying sources,
-# so source-only changes don't re-resolve dependencies.
 COPY .mvn/ .mvn/
 COPY mvnw pom.xml ./
-RUN ./mvnw -B -q dependency:go-offline
-
 COPY src/ src/
-RUN ./mvnw -B -DskipTests clean package \
+# With the pre-baked builder image the ~/.m2 cache already holds every dependency,
+# so `-o` (offline) succeeds with no registry access. Locally MVN_OFFLINE is empty.
+RUN ./mvnw -B ${MVN_OFFLINE} -DskipTests clean package \
     && cp target/*.jar /workspace/app.jar
 
 # ---- runtime stage --------------------------------------------------------
-FROM eclipse-temurin:21-jre-jammy AS runtime
+FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG APP_INTERNAL_PORT=8080
 ARG APP_UID=10001

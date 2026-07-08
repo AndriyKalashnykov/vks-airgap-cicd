@@ -1,0 +1,27 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: maven-test
+  namespace: ${CI_NAMESPACE}
+spec:
+  description: >-
+    Run the app's unit + integration tests OFFLINE using the pre-baked builder
+    image (its ~/.m2 already holds every dependency), so no registry access is
+    needed. Fails the pipeline if tests fail.
+  params:
+    - name: subdir
+      type: string
+      default: repo
+    - name: builder-image
+      type: string
+  workspaces:
+    - name: source
+  steps:
+    - name: test
+      image: $(params.builder-image)
+      workingDir: $(workspaces.source.path)/$(params.subdir)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        # -o (offline): deps are pre-baked in the builder image's ~/.m2.
+        ./mvnw -B -o test

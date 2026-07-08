@@ -12,23 +12,30 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 rc=0
 KUBERNETES_VERSION="${KUBERNETES_VERSION:-1.31.0}"
+RENDERED=/tmp/vks-deploy-rendered.yaml
+
+# kustomize_build DIR OUT — prefer standalone kustomize, fall back to `kubectl kustomize`.
+kustomize_build() {
+  if have kustomize; then kustomize build "$1" > "$2"
+  elif have kubectl; then kubectl kustomize "$1" > "$2"
+  else return 127; fi
+}
 
 echo "== kustomize build (deploy/base) =="
 if [ -d "$REPO_ROOT/deploy/base" ]; then
-  if have kustomize; then
-    if kustomize build "$REPO_ROOT/deploy/base" > /tmp/vks-deploy-rendered.yaml; then
-      log_info "kustomize build OK ($(grep -c '^kind:' /tmp/vks-deploy-rendered.yaml) resources)"
-      if have kubeconform; then
-        kubeconform -strict -summary -kubernetes-version "$KUBERNETES_VERSION" \
-          -ignore-missing-schemas /tmp/vks-deploy-rendered.yaml || rc=1
-      else
-        log_warn "kubeconform not installed — deploy manifests unchecked against schemas"
-      fi
+  if kustomize_build "$REPO_ROOT/deploy/base" "$RENDERED"; then
+    log_info "kustomize build OK ($(grep -c '^kind:' "$RENDERED") resources)"
+    if have kubeconform; then
+      kubeconform -strict -summary -kubernetes-version "$KUBERNETES_VERSION" \
+        -ignore-missing-schemas "$RENDERED" || rc=1
+    elif have kubectl; then
+      log_info "kubeconform absent — falling back to 'kubectl apply --dry-run=client'"
+      kubectl apply --dry-run=client -f "$RENDERED" >/dev/null || rc=1
     else
-      log_error "kustomize build failed"; rc=1
+      log_warn "no kubeconform/kubectl — deploy manifests unchecked against schemas"
     fi
   else
-    log_warn "kustomize not installed — skipped"
+    log_error "kustomize build failed (need kustomize or kubectl)"; rc=1
   fi
 else
   log_warn "deploy/base not present yet — skipped"

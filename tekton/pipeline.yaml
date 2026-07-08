@@ -1,0 +1,83 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: webui-ci
+  namespace: ${CI_NAMESPACE}
+spec:
+  description: >-
+    On a push to webui-app: clone -> test -> build+push image to Harbor ->
+    write the new tag back to webui-deploy (which ArgoCD then syncs).
+  params:
+    - name: app-repo-url
+      type: string
+    - name: app-revision
+      type: string
+      default: main
+    - name: deploy-repo-url
+      type: string
+    - name: deploy-revision
+      type: string
+      default: main
+    - name: image
+      type: string
+      description: App image without tag (e.g. harbor/apps/webui).
+    - name: builder-image
+      type: string
+    - name: registry
+      type: string
+    - name: insecure-registry
+      type: string
+      default: "false"
+  workspaces:
+    - name: shared-data
+    - name: dockerconfig
+    - name: ca
+      optional: true
+  tasks:
+    - name: clone-app
+      taskRef: { name: git-clone }
+      params:
+        - { name: url, value: $(params.app-repo-url) }
+        - { name: revision, value: $(params.app-revision) }
+        - { name: subdir, value: app }
+      workspaces:
+        - { name: output, workspace: shared-data }
+
+    - name: test
+      runAfter: [clone-app]
+      taskRef: { name: maven-test }
+      params:
+        - { name: subdir, value: app }
+        - { name: builder-image, value: $(params.builder-image) }
+      workspaces:
+        - { name: source, workspace: shared-data }
+
+    - name: build
+      runAfter: [test]
+      taskRef: { name: kaniko-build }
+      params:
+        - { name: subdir, value: app }
+        - { name: image, value: $(params.image) }
+        - { name: tag, value: $(tasks.clone-app.results.commit) }
+        - { name: builder-image, value: $(params.builder-image) }
+        - { name: registry, value: $(params.registry) }
+        - { name: insecure, value: $(params.insecure-registry) }
+      workspaces:
+        - { name: source, workspace: shared-data }
+        - { name: dockerconfig, workspace: dockerconfig }
+        - { name: ca, workspace: ca }
+
+    - name: deploy-update
+      runAfter: [build]
+      taskRef: { name: update-deploy }
+      params:
+        - { name: deploy-url, value: $(params.deploy-repo-url) }
+        - { name: deploy-revision, value: $(params.deploy-revision) }
+        - { name: tag, value: $(tasks.clone-app.results.commit) }
+      workspaces:
+        - { name: scratch, workspace: shared-data }
+  results:
+    - name: image
+      value: $(params.image):$(tasks.clone-app.results.commit)
+    - name: commit
+      value: $(tasks.clone-app.results.commit)

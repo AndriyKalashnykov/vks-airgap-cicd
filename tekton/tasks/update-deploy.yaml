@@ -1,0 +1,68 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: update-deploy
+  namespace: ${CI_NAMESPACE}
+spec:
+  description: >-
+    GitOps write-back: clone the deploy repo, set the image tag in
+    kustomization.yaml to the new build tag, commit and push. ArgoCD (tracking
+    the branch) then syncs the new version. Credentials come from the SA's
+    tekton.dev/git-0 secret.
+  params:
+    - name: deploy-url
+      type: string
+    - name: deploy-revision
+      type: string
+      default: main
+    - name: tag
+      type: string
+      description: New image tag to write into kustomization.yaml.
+    - name: git-user-name
+      type: string
+      default: ci-bot
+    - name: git-user-email
+      type: string
+      default: ci-bot@vks-cicd.local
+  workspaces:
+    - name: scratch
+  steps:
+    - name: clone
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/alpine/git:2.47.1
+      script: |
+        #!/bin/sh
+        set -eu
+        git config --global credential.helper store
+        rm -rf "$(workspaces.scratch.path)/deploy"
+        git clone -b "$(params.deploy-revision)" "$(params.deploy-url)" \
+          "$(workspaces.scratch.path)/deploy"
+    - name: set-tag
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/mikefarah/yq:4.44.6
+      env:
+        - name: TAG
+          value: $(params.tag)
+      script: |
+        #!/bin/sh
+        set -eu
+        cd "$(workspaces.scratch.path)/deploy"
+        # kustomization.yaml is at the deploy repo root (seeded from deploy/base).
+        yq -i '.images[0].newTag = strenv(TAG)' kustomization.yaml
+        echo "set image tag -> $TAG"
+        yq '.images' kustomization.yaml
+    - name: commit-push
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/alpine/git:2.47.1
+      script: |
+        #!/bin/sh
+        set -eu
+        cd "$(workspaces.scratch.path)/deploy"
+        git config user.name  "$(params.git-user-name)"
+        git config user.email "$(params.git-user-email)"
+        git config --global credential.helper store
+        if git diff --quiet; then
+          echo "no manifest change (tag already current) — nothing to push"
+          exit 0
+        fi
+        git add kustomization.yaml
+        git commit -m "ci: deploy webui $(params.tag)"
+        git push origin "HEAD:$(params.deploy-revision)"
+        echo "pushed deploy update for tag $(params.tag)"

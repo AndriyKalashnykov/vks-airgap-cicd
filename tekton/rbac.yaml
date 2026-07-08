@@ -1,0 +1,72 @@
+---
+# ServiceAccount the PipelineRuns run as. 60-configure-tekton.sh attaches the
+# Gitea git-auth secret (tekton.dev/git-0) and the Harbor docker-config secret.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: webui-ci
+  namespace: ${CI_NAMESPACE}
+---
+# ServiceAccount the Tekton Triggers EventListener runs as.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tekton-triggers-sa
+  namespace: ${CI_NAMESPACE}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tekton-triggers-eventlistener
+  namespace: ${CI_NAMESPACE}
+rules:
+  - apiGroups: ["triggers.tekton.dev"]
+    resources: ["eventlisteners", "triggerbindings", "triggertemplates", "triggers", "interceptors"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "serviceaccounts"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["tekton.dev"]
+    resources: ["pipelineruns", "taskruns"]
+    verbs: ["create", "get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tekton-triggers-eventlistener
+  namespace: ${CI_NAMESPACE}
+subjects:
+  - kind: ServiceAccount
+    name: tekton-triggers-sa
+    namespace: ${CI_NAMESPACE}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tekton-triggers-eventlistener
+---
+# Cluster-scoped read of ClusterInterceptors (the Gitea/CEL interceptors live
+# cluster-wide) is required by the EventListener.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ${CI_NAMESPACE}-tekton-triggers-clusterinterceptors
+rules:
+  - apiGroups: ["triggers.tekton.dev"]
+    resources: ["clusterinterceptors", "clustertriggerbindings"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ${CI_NAMESPACE}-tekton-triggers-clusterinterceptors
+subjects:
+  - kind: ServiceAccount
+    name: tekton-triggers-sa
+    namespace: ${CI_NAMESPACE}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ${CI_NAMESPACE}-tekton-triggers-clusterinterceptors

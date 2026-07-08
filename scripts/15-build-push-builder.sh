@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# 15-build-push-builder.sh — (INTERNET side) build the air-gap Maven builder image
+# (app/Dockerfile.builder) with this pom's dependencies pre-baked, and push it to
+# Harbor. The in-cluster CI (kaniko) and the Tekton maven-test task then build/test
+# OFFLINE using this image's warm ~/.m2 cache.
+#
+# Requires docker or podman + internet (to pull Maven Central deps during the build).
+# Rebuild whenever app/pom.xml dependencies change (bump BUILDER_IMAGE_TAG).
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/os.sh
+. "${SCRIPT_DIR}/lib/os.sh"
+load_env
+
+: "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"; : "${HARBOR_USERNAME:?}"
+: "${HARBOR_PASSWORD:?set HARBOR_PASSWORD in .env (never on argv)}"
+: "${BUILDER_IMAGE_TAG:?}"
+
+# Pick a builder engine.
+ENGINE=""
+if have docker; then ENGINE=docker; elif have podman; then ENGINE=podman; else
+  die "need docker or podman to build the builder image (install one on the jump box)"
+fi
+log_info "using container engine: $ENGINE"
+
+REF="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/webui-builder:${BUILDER_IMAGE_TAG}"
+MAVEN_BASE="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/maven:3.9-eclipse-temurin-21"
+
+# Base the builder on the MIRRORED maven image if present in Harbor, else public
+# Maven Central image (jump box has internet). Try Harbor first for consistency.
+BUILD_BASE="maven:3.9-eclipse-temurin-21"
+if "$ENGINE" pull "$MAVEN_BASE" >/dev/null 2>&1; then
+  BUILD_BASE="$MAVEN_BASE"; log_info "basing builder on mirrored $MAVEN_BASE"
+else
+  log_warn "mirrored maven image not pullable; using public $BUILD_BASE"
+fi
+
+TLS_VERIFY="true"; [ "${HARBOR_INSECURE:-0}" = "1" ] && TLS_VERIFY="false"
+
+log_info "building builder image $REF (this pulls Maven deps — needs internet)"
+run "$ENGINE" build \
+  --build-arg "MAVEN_IMAGE=${BUILD_BASE}" \
+  -f "${REPO_ROOT}/app/Dockerfile.builder" \
+  -t "$REF" \
+  "${REPO_ROOT}/app"
+
+log_info "logging in to Harbor and pushing $REF"
+# --tls-verify is a podman flag (docker uses daemon insecure-registries / certs.d).
+login_args=(--username "$HARBOR_USERNAME" --password-stdin)
+[ "$ENGINE" = podman ] && login_args=(--tls-verify="$TLS_VERIFY" "${login_args[@]}")
+printf '%s' "$HARBOR_PASSWORD" | run "$ENGINE" login "${login_args[@]}" "$HARBOR_URL"
+
+push_args=("$REF")
+[ "$ENGINE" = podman ] && push_args=(--tls-verify="$TLS_VERIFY" "$REF")
+run "$ENGINE" push "${push_args[@]}"
+
+log_info "builder image pushed: $REF"
+log_info "the pipeline references it as BUILDER_IMAGE; the app Dockerfile builds offline against it"

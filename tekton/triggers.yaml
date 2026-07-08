@@ -1,0 +1,109 @@
+---
+# Extract the pushed branch from the Gitea payload for the PipelineRun.
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: webui-push
+  namespace: ${CI_NAMESPACE}
+spec:
+  params:
+    - name: app-revision
+      value: $(extensions.branch)
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: webui-ci
+  namespace: ${CI_NAMESPACE}
+spec:
+  params:
+    - name: app-revision
+      default: ${APP_BRANCH}
+    # Defaults below are rendered from .env by 60-configure-tekton.sh.
+    - name: app-repo-url
+      default: ${APP_REPO_CLONE_URL}
+    - name: deploy-repo-url
+      default: ${DEPLOY_REPO_CLONE_URL}
+    - name: deploy-revision
+      default: ${ARGOCD_TRACK_BRANCH}
+    - name: image
+      default: ${APP_IMAGE}
+    - name: builder-image
+      default: ${BUILDER_IMAGE_REF}
+    - name: registry
+      default: ${HARBOR_URL}
+    - name: insecure-registry
+      default: "${HARBOR_INSECURE_BOOL}"
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: webui-ci-
+        namespace: ${CI_NAMESPACE}
+      spec:
+        pipelineRef:
+          name: webui-ci
+        taskRunTemplate:
+          serviceAccountName: webui-ci
+        params:
+          - { name: app-repo-url, value: $(tt.params.app-repo-url) }
+          - { name: app-revision, value: $(tt.params.app-revision) }
+          - { name: deploy-repo-url, value: $(tt.params.deploy-repo-url) }
+          - { name: deploy-revision, value: $(tt.params.deploy-revision) }
+          - { name: image, value: $(tt.params.image) }
+          - { name: builder-image, value: $(tt.params.builder-image) }
+          - { name: registry, value: $(tt.params.registry) }
+          - { name: insecure-registry, value: $(tt.params.insecure-registry) }
+        workspaces:
+          - name: shared-data
+            volumeClaimTemplate:
+              spec:
+                accessModes: ["ReadWriteOnce"]
+                resources:
+                  requests:
+                    storage: 2Gi
+          - name: dockerconfig
+            secret:
+              secretName: harbor-dockerconfig
+          - name: ca
+            configMap:
+              name: harbor-ca
+              optional: true
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: webui
+  namespace: ${CI_NAMESPACE}
+spec:
+  serviceAccountName: tekton-triggers-sa
+  triggers:
+    - name: gitea-push
+      interceptors:
+        # Gitea sends GitHub-compatible headers (X-GitHub-Event +
+        # X-Hub-Signature-256 HMAC) alongside its X-Gitea-* ones, so the github
+        # interceptor validates the shared secret and filters push events; the
+        # cel interceptor then restricts to the tracked branch and extracts it.
+        - ref:
+            name: "github"
+          params:
+            - name: secretRef
+              value:
+                secretName: gitea-webhook-secret
+                secretKey: secretToken
+            - name: eventTypes
+              value: ["push"]
+        - ref:
+            name: "cel"
+          params:
+            - name: filter
+              value: >-
+                body.ref == 'refs/heads/${APP_BRANCH}'
+            - name: overlays
+              value:
+                - key: branch
+                  expression: "body.ref.split('/')[2]"
+      bindings:
+        - ref: webui-push
+      template:
+        ref: webui-ci

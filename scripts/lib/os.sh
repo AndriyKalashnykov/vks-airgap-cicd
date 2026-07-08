@@ -153,6 +153,24 @@ trust_ca() {
 }
 
 # ---------------------------------------------------------------------------
+# Shared-secret token: read from a gitignored file, generating it once if absent
+# (umask 077). Used so the Gitea webhook (50) and the EventListener secret (60)
+# agree on the same HMAC token. Prints the token to stdout.
+# ---------------------------------------------------------------------------
+ensure_secret_token() {
+  local file="$1"
+  mkdir -p "$(dirname "$file")"
+  if [ ! -s "$file" ]; then
+    local tok
+    if have openssl; then tok="$(openssl rand -hex 24)";
+    else tok="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"; fi
+    ( umask 077; printf '%s' "$tok" > "$file" )
+    log_info "generated shared secret token -> $file" >&2
+  fi
+  cat "$file"
+}
+
+# ---------------------------------------------------------------------------
 # Misc
 # ---------------------------------------------------------------------------
 # dry_run flag: set DRY_RUN=1 to print privileged/mutating commands instead of

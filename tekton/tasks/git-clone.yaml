@@ -1,0 +1,41 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: git-clone
+  namespace: ${CI_NAMESPACE}
+spec:
+  description: >-
+    Clone a git repo into the output workspace at ./repo and emit the short
+    commit SHA. Credentials are injected from the ServiceAccount's
+    tekton.dev/git-0 basic-auth secret (Gitea).
+  params:
+    - name: url
+      type: string
+    - name: revision
+      type: string
+      default: main
+    - name: subdir
+      type: string
+      default: repo
+  workspaces:
+    - name: output
+  results:
+    - name: commit
+      description: Short commit SHA of the checked-out revision.
+  steps:
+    - name: clone
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/alpine/git:2.47.1
+      script: |
+        #!/bin/sh
+        set -eu
+        dest="$(workspaces.output.path)/$(params.subdir)"
+        rm -rf "$dest"
+        # Tekton's credential-initializer writes ~/.git-credentials from the SA's
+        # tekton.dev/git-0 secret; enable it for this clone.
+        git config --global credential.helper store
+        if ! git clone --depth 1 -b "$(params.revision)" "$(params.url)" "$dest"; then
+          git clone "$(params.url)" "$dest"
+          git -C "$dest" checkout "$(params.revision)"
+        fi
+        printf '%s' "$(git -C "$dest" rev-parse --short HEAD)" > "$(results.commit.path)"
+        echo "cloned $(params.url)@$(params.revision) -> $dest"

@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webui
+  labels:
+    app.kubernetes.io/name: webui
+    app.kubernetes.io/part-of: vks-cicd-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: webui
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: webui
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: webui
+          # kustomize `images:` transformer rewrites this name to the Harbor ref + tag.
+          # The Tekton write-back task bumps the tag in kustomization.yaml on each build.
+          image: webui
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Structured JSON logs in-cluster (see application.yml `json` profile).
+            - name: SPRING_PROFILES_ACTIVE
+              value: "json"
+            - name: APP_INTERNAL_PORT
+              value: "8080"
+          startupProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits: { cpu: "1", memory: "512Mi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # Spring Boot / Tomcat needs a writable /tmp under readOnlyRootFilesystem.
+        - name: tmp
+          emptyDir: {}

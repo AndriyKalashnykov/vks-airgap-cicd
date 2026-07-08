@@ -1,0 +1,63 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: kaniko-build
+  namespace: ${CI_NAMESPACE}
+spec:
+  description: >-
+    Build the app image with Kaniko (no docker daemon) and push it to Harbor.
+    Builds OFFLINE against the pre-baked builder image. Trusts the self-signed
+    Harbor CA from the optional ca workspace, or skips TLS when insecure=true.
+  params:
+    - name: subdir
+      type: string
+      default: repo
+    - name: image
+      type: string
+      description: Destination image WITHOUT tag, e.g. harbor/apps/webui
+    - name: tag
+      type: string
+      description: Image tag (typically the app commit SHA)
+    - name: builder-image
+      type: string
+    - name: registry
+      type: string
+      description: Harbor host, for --registry-certificate
+    - name: insecure
+      type: string
+      default: "false"
+  workspaces:
+    - name: source
+    - name: dockerconfig
+      description: Holds config.json with Harbor push credentials.
+    - name: ca
+      optional: true
+      description: Optional; ca.crt is the Harbor CA for TLS trust.
+  results:
+    - name: image-digest
+      description: The digest of the pushed image.
+  steps:
+    - name: build-and-push
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/kaniko-project/executor:v1.25.0
+      env:
+        - name: DOCKER_CONFIG
+          value: $(workspaces.dockerconfig.path)
+      script: |
+        #!/busybox/sh
+        set -e
+        set -- \
+          "--context=dir://$(workspaces.source.path)/$(params.subdir)" \
+          "--dockerfile=Dockerfile" \
+          "--destination=$(params.image):$(params.tag)" \
+          "--build-arg=BUILDER_IMAGE=$(params.builder-image)" \
+          "--build-arg=MVN_OFFLINE=-o" \
+          "--digest-file=$(results.image-digest.path)"
+        # Trust the Harbor CA when the ca workspace supplies one.
+        if [ -f "$(workspaces.ca.path)/ca.crt" ]; then
+          set -- "$@" "--registry-certificate=$(params.registry)=$(workspaces.ca.path)/ca.crt"
+        fi
+        if [ "$(params.insecure)" = "true" ]; then
+          set -- "$@" "--insecure" "--skip-tls-verify"
+        fi
+        echo "kaniko $*"
+        exec /kaniko/executor "$@"
