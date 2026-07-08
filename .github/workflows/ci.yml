@@ -22,6 +22,10 @@ jobs:
   # Detect which parts of the tree changed, to skip irrelevant gates.
   changes:
     runs-on: ubuntu-latest
+    # paths-filter reads the PR's changed files via the API on pull_request events.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       code: ${{ steps.filter.outputs.code }}
       docs: ${{ steps.filter.outputs.docs }}
