@@ -49,6 +49,7 @@ jobs:
               - 'Makefile'
               - '.env.example'
               - '.mise.toml'
+              - '.github/workflows/**'
             docs:
               - '**/*.md'
               - 'docs/**'
