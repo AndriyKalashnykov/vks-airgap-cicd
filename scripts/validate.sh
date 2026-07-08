@@ -18,6 +18,19 @@ RENDERED=/tmp/vks-deploy-rendered.yaml
 KC_CACHE="${KUBECONFORM_CACHE:-${HOME}/.cache/kubeconform}"
 mkdir -p "$KC_CACHE"
 
+# kubeconform, retried — its JSON schemas are fetched from githubusercontent, which
+# rate-limits/times out under load ("giving up after N attempts"). Retry the whole
+# run a few times so a transient schema-download blip doesn't fail the gate; a real
+# invalid manifest still fails on every attempt.
+kc() {
+  local n=0
+  until kubeconform -cache "$KC_CACHE" -kubernetes-version "$KUBERNETES_VERSION" "$@"; do
+    n=$((n + 1)); [ "$n" -ge 4 ] && return 1
+    log_warn "kubeconform attempt $n failed (likely transient schema download) — retrying in 8s"
+    sleep 8
+  done
+}
+
 # kustomize_build DIR OUT — prefer standalone kustomize, fall back to `kubectl kustomize`.
 kustomize_build() {
   if have kustomize; then kustomize build "$1" > "$2"
@@ -30,8 +43,7 @@ if [ -d "$REPO_ROOT/deploy/base" ]; then
   if kustomize_build "$REPO_ROOT/deploy/base" "$RENDERED"; then
     log_info "kustomize build OK ($(grep -c '^kind:' "$RENDERED") resources)"
     if have kubeconform; then
-      kubeconform -strict -summary -cache "$KC_CACHE" -kubernetes-version "$KUBERNETES_VERSION" \
-        -ignore-missing-schemas "$RENDERED" || rc=1
+      kc -strict -summary -ignore-missing-schemas "$RENDERED" || rc=1
     elif have kubectl; then
       log_info "kubeconform absent — falling back to 'kubectl apply --dry-run=client'"
       kubectl apply --dry-run=client -f "$RENDERED" >/dev/null || rc=1
@@ -50,9 +62,8 @@ if have kubeconform; then
   for dir in tekton argocd k8s; do
     if [ -d "$REPO_ROOT/$dir" ] && find "$REPO_ROOT/$dir" -name '*.yaml' | read -r _; then
       log_info "validating $dir/"
-      find "$REPO_ROOT/$dir" -name '*.yaml' -print0 \
-        | xargs -0 kubeconform -summary -cache "$KC_CACHE" -ignore-missing-schemas \
-            -kubernetes-version "$KUBERNETES_VERSION" || rc=1
+      mapfile -d '' _files < <(find "$REPO_ROOT/$dir" -name '*.yaml' -print0)
+      kc -summary -ignore-missing-schemas "${_files[@]}" || rc=1
     else
       log_warn "$dir/ has no manifests yet — skipped"
     fi
