@@ -1,0 +1,23 @@
+# Jump-box developer/operator toolchain (portfolio version-manager policy: mise).
+#
+# Scope: tools mise installs cleanly across Ubuntu + PhotonOS on the INTERNET side.
+# Air-gap exception: the air-gapped host cannot reach mise's download sources, so
+# scripts/00-install-prereqs.sh installs the same binaries from OS packages /
+# the transferred bundle there. `skopeo`, `tkn`, and `argocd` are handled by
+# 00-install-prereqs.sh (OS package or pinned GitHub-release download) rather than
+# mise, because they are not reliably available across both distros via mise.
+#
+# Run `mise install` on the jump box before running the Makefile.
+
+[tools]
+java     = "temurin-21"
+maven    = "3.9"
+kubectl  = "1.31"
+helm     = "3.16"
+kustomize = "5.5"
+jq       = "1.7"
+yq       = "4"
+
+[settings]
+# Reproducible: never auto-bump; pin via this file + Renovate.
+experimental = true

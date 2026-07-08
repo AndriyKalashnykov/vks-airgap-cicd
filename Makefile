@@ -1,0 +1,158 @@
+# vks-cicd — orchestration for the air-gapped VKS CI/CD demo.
+#
+# Layered targets: `make deps` → `make mirror` → `make vks-login` → `make platform`
+# → `make gitops` → `make verify`. Or run the whole thing with `make install-all`.
+#
+# Every tunable comes from .env (gitignored) via `-include .env`, falling back to
+# the `?=` defaults below (mirrors .env.example). `.env` wins for `make` too.
+
+# Load operator overrides FIRST so they win over the ?= defaults. `-include`
+# (leading '-') silently skips a missing .env.
+-include .env
+
+SHELL := /usr/bin/env bash
+.SHELLFLAGS := -eu -o pipefail -c
+.DEFAULT_GOAL := help
+
+# ---- Defaults (mirror .env.example; env/.env override) ----
+RUN_MODE            ?= dual-homed
+HARBOR_URL          ?= harbor.vks.local
+HARBOR_INFRA_PROJECT?= cicd
+HARBOR_APP_PROJECT  ?= apps
+GITEA_NAMESPACE     ?= gitea
+CI_NAMESPACE        ?= ci
+TEKTON_NAMESPACE    ?= tekton-pipelines
+ARGOCD_NAMESPACE    ?= argocd
+ARGOCD_DEST_NAMESPACE ?= webui
+APP_NAME            ?= webui
+APP_DEV_PORT        ?= 8080
+BUNDLE_DIR          ?= ./bundle
+
+SCRIPTS := ./scripts
+APP_DIR := ./app
+MVN     := ./app/mvnw
+
+# ---------------------------------------------------------------------------
+.PHONY: help
+help: ## Show this help
+	@awk 'BEGIN{FS=":.*##"; printf "\nvks-cicd targets\n\n"} \
+	  /^[a-zA-Z0-9_-]+:.*##/ {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2} \
+	  /^##@/ {printf "\n\033[1m%s\033[0m\n", substr($$0,5)}' $(MAKEFILE_LIST)
+	@echo ""
+
+##@ Prerequisites
+.PHONY: deps
+deps: ## Install jump-box toolchain (mise tools + skopeo/tkn/argocd via prereqs script)
+	@command -v mise >/dev/null 2>&1 && mise install || echo "mise not found; skipping mise install"
+	@$(SCRIPTS)/00-install-prereqs.sh
+
+.PHONY: check-env
+check-env: ## STOPPER gate — fail if the committed .env.example source of truth is missing
+	@test -f .env.example || { \
+	  echo "ERROR: .env.example is missing (BLOCKING). It is the committed source of truth"; \
+	  echo "       for every operator-tunable value. Restore it before continuing."; \
+	  exit 1; }
+	@echo "check-env: .env.example present"
+
+.PHONY: check-ports
+check-ports: ## Fail early if the local app-dev port is already in use (names the holder)
+	@port="$(APP_DEV_PORT)"; \
+	if (exec 3<>/dev/tcp/127.0.0.1/$$port) 2>/dev/null; then \
+	  exec 3>&- 3<&-; \
+	  holder=$$(command -v docker >/dev/null 2>&1 && docker ps --filter "publish=$$port" --format '{{.Names}}' | head -1 || true); \
+	  echo "ERROR: port $$port already in use$${holder:+ by container '$$holder'}."; \
+	  echo "       Free it or override APP_DEV_PORT (e.g. make app-run APP_DEV_PORT=8081)."; \
+	  exit 1; \
+	else echo "check-ports: $$port free"; fi
+
+##@ Air-gap image mirroring
+.PHONY: mirror-pull
+mirror-pull: check-env ## (internet) Pull every image in images/images.txt into the local cache
+	@$(SCRIPTS)/10-mirror-pull.sh
+
+.PHONY: bundle
+bundle: ## (sneakernet) Package pulled images + manifests into a transferable bundle
+	@$(SCRIPTS)/11-bundle.sh
+
+.PHONY: bundle-load
+bundle-load: ## (sneakernet, air-gap host) Unpack a transferred bundle
+	@$(SCRIPTS)/20-bundle-load.sh
+
+.PHONY: mirror-push
+mirror-push: check-env ## Push all mirrored images into Harbor
+	@$(SCRIPTS)/21-mirror-push.sh
+
+.PHONY: mirror
+mirror: mirror-pull mirror-push ## (dual-homed) Pull + push in one run
+
+##@ VKS access
+.PHONY: vks-login
+vks-login: check-env ## Authenticate to VKS (VCF 9 + Supervisor) → writes KUBECONFIG/context
+	@$(SCRIPTS)/30-vks-login.sh
+
+##@ Platform install (Gitea + Tekton)
+.PHONY: install-gitea
+install-gitea: check-env ## Install Gitea on VKS (images from Harbor)
+	@$(SCRIPTS)/40-install-gitea.sh
+
+.PHONY: seed-gitea
+seed-gitea: check-env ## Create + seed webui-app and webui-deploy repos in Gitea
+	@$(SCRIPTS)/50-seed-gitea-repos.sh
+
+.PHONY: install-tekton
+install-tekton: check-env ## Install Tekton Pipelines + Triggers (image refs remapped to Harbor)
+	@$(SCRIPTS)/41-install-tekton.sh
+
+.PHONY: configure-tekton
+configure-tekton: check-env ## Apply pipeline/tasks/triggers + registry/git secrets
+	@$(SCRIPTS)/60-configure-tekton.sh
+
+.PHONY: platform
+platform: install-gitea seed-gitea install-tekton configure-tekton ## Install + wire Gitea and Tekton
+
+##@ GitOps CD (ArgoCD)
+.PHONY: configure-argocd
+configure-argocd: check-env ## Register the deploy repo + create the ArgoCD Application
+	@$(SCRIPTS)/70-configure-argocd.sh
+
+.PHONY: gitops
+gitops: configure-argocd ## Wire ArgoCD to track webui-deploy
+
+##@ Full pipeline
+.PHONY: install-all
+install-all: mirror vks-login platform gitops ## Run the complete air-gap install end to end
+
+.PHONY: verify
+verify: check-env ## e2e: push a change → Tekton build → Harbor → ArgoCD sync → HTTP check (LIVE cluster)
+	@$(SCRIPTS)/99-verify.sh
+
+##@ Demo application (local dev)
+.PHONY: app-test
+app-test: ## Run the Spring Boot app unit/integration tests
+	@cd $(APP_DIR) && ./mvnw -B test
+
+.PHONY: app-build
+app-build: ## Build the Spring Boot app jar
+	@cd $(APP_DIR) && ./mvnw -B -DskipTests package
+
+.PHONY: app-run
+app-run: check-ports ## Run the app locally (http://localhost:$(APP_DEV_PORT))
+	@cd $(APP_DIR) && APP_INTERNAL_PORT=$(APP_DEV_PORT) ./mvnw -B spring-boot:run
+
+##@ Quality gates
+.PHONY: lint
+lint: ## shellcheck scripts, yamllint manifests, hadolint Dockerfile
+	@$(SCRIPTS)/lint.sh
+
+.PHONY: validate
+validate: ## kustomize build + kubeconform manifests; kubectl dry-run Tekton YAML
+	@$(SCRIPTS)/validate.sh
+
+.PHONY: ci
+ci: check-env lint validate app-test ## Full local pipeline (offline-verifiable parts)
+
+##@ Housekeeping
+.PHONY: clean
+clean: ## Remove build output and the air-gap bundle
+	@rm -rf $(BUNDLE_DIR) $(APP_DIR)/target
+	@echo "clean: removed $(BUNDLE_DIR) and app target/"

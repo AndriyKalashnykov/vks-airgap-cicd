@@ -1,0 +1,35 @@
+# images/images.txt — authoritative inventory of images to mirror into Harbor.
+#
+# FORMAT: one image reference per line. Blank lines and '#' comments ignored.
+# scripts/10-mirror-pull.sh reads this file, AND additionally auto-extracts the
+# Tekton Pipelines/Triggers image refs from their release manifests (those are
+# many and digest-pinned upstream, so they are derived rather than hand-listed).
+#
+# Renovate tracks each tag via the inline `# renovate:` annotation above it.
+# Keep the versions here aligned with .env.example section 9 and .mise.toml.
+
+# ---- Container image builder (Tekton kaniko task) ----
+# renovate: datasource=docker depName=gcr.io/kaniko-project/executor
+gcr.io/kaniko-project/executor:v1.25.0
+
+# ---- Java build + runtime base images (app Dockerfile + maven task) ----
+# renovate: datasource=docker depName=eclipse-temurin
+eclipse-temurin:21-jdk-jammy
+# renovate: datasource=docker depName=eclipse-temurin
+eclipse-temurin:21-jre-jammy
+
+# ---- Maven (dependency resolution + test/package in the pipeline) ----
+# renovate: datasource=docker depName=maven
+maven:3.9-eclipse-temurin-21
+
+# ---- Git client (git-clone task + write-back task) ----
+# renovate: datasource=docker depName=alpine/git
+alpine/git:2.47.1
+
+# ---- yq (deterministic image-tag edit in the write-back task) ----
+# renovate: datasource=docker depName=mikefarah/yq
+mikefarah/yq:4.44.6
+
+# ---- Gitea (self-hosted Git server; single image, SQLite backend for the demo) ----
+# renovate: datasource=docker depName=gitea/gitea
+gitea/gitea:1.23.1-rootless

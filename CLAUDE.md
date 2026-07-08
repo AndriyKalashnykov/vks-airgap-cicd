@@ -1,0 +1,67 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this repo is
+
+An **air-gapped VKS CI/CD demo**: from an internet-connected jump box (Ubuntu or
+PhotonOS), mirror all required images into the VKS-provided **Harbor**, install and
+wire **Gitea + Tekton**, and demonstrate GitOps CD via the VKS-provided **ArgoCD**.
+Harbor and ArgoCD are pre-provided by VKS; we install Gitea + Tekton and the demo app.
+
+End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag write-back) → ArgoCD sync → web UI`.
+
+## Common commands
+
+| Command | What it does |
+|---------|--------------|
+| `make help` | List all targets (grouped) |
+| `make deps` | Install jump-box toolchain (mise + `scripts/00-install-prereqs.sh`) |
+| `make ci` | Offline gate: `lint` + `validate` + `app-test` |
+| `make app-test` / `app-build` / `app-run` | Spring Boot app dev (in `app/`, uses `./mvnw`) |
+| `make mirror` | (dual-homed) pull images → push to Harbor |
+| `make mirror-pull` / `bundle` / `bundle-load` / `mirror-push` | sneakernet phases |
+| `make vks-login` | Authenticate to VKS → writes `$KUBECONFIG` + context |
+| `make platform` | Install + wire Gitea and Tekton |
+| `make gitops` | Create the ArgoCD Application |
+| `make install-all` | Full air-gap install: `mirror → vks-login → platform → gitops` |
+| `make verify` | End-to-end smoke test (LIVE cluster) |
+
+Run a single app test: `cd app && ./mvnw -B -Dtest=<ClassName>#<method> test`.
+
+## Architecture / big picture
+
+- **Scripts are numbered by execution order** (`scripts/NN-*.sh`) and all source
+  `scripts/lib/os.sh` — the shared library providing OS detection (Ubuntu `apt` /
+  PhotonOS `tdnf`), `pkg_install`, logging, `load_env`, and `trust_ca`. Add new OS
+  support in `lib/os.sh`, not in individual scripts.
+- **`.env.example` is the single source of truth** for every tunable. The Makefile
+  `-include .env` + `?=` defaults and every script's `load_env` both read it. Never
+  hardcode a host/port/timeout/version — add it to `.env.example`.
+- **`RUN_MODE`** selects dual-homed (default, jump box routed to ESXi/Harbor) vs
+  sneakernet (bundle carried inside).
+- **Two Git repos** in Gitea: `webui-app` (source + Dockerfile + trigger binding)
+  and `webui-deploy` (kustomize manifests ArgoCD watches). CI writes the new image
+  tag back to `webui-deploy`; ArgoCD deploys from it.
+- **VKS auth is isolated in `scripts/30-vks-login.sh`** — the only auth-aware step;
+  everything else consumes `$KUBECONFIG`/context.
+- **Internal CA trust** (Harbor/Gitea self-signed) is wired via `trust_ca` and
+  in-cluster ConfigMaps for Kaniko/Tekton/ArgoCD.
+
+## Conventions
+
+- **Version manager:** mise (`.mise.toml`) on the jump box. Air-gap exception:
+  `skopeo`/`tkn`/`argocd` come from OS packages / pinned releases via
+  `00-install-prereqs.sh`; the air-gapped host gets binaries from the bundle.
+- **Secrets never in argv** — PATs/registry creds via stdin / `--password-stdin` /
+  env-by-name (see `.env.example` commented secret placeholders).
+- **Java app:** Spring Boot + JUnit/`@SpringBootTest`; Dockerfile follows the
+  multistage temurin / non-root / actuator-`HEALTHCHECK` template.
+- **Manifests:** Kustomize; validated with `kustomize build | kubeconform`.
+
+## Verification honesty
+
+Offline-verifiable (no cluster): app tests, manifest/Tekton YAML validation, script
+lint, Makefile targets, mirror pull mechanics. The **air-gap end-to-end runs on the
+live VKS cluster** (`make verify`) and is the demo itself — do not report it
+"verified" without running it against real infrastructure.

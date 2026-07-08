@@ -1,0 +1,31 @@
+# ---- Local operator overrides / secrets (NEVER commit) ----
+.env
+.env.*
+!.env.example
+
+# ---- Air-gap bundle + mirrored artifacts (large, regenerated) ----
+/bundle/
+*.tar
+*.tar.gz
+*.tar.zst
+
+# ---- Kubeconfigs / credentials pulled at runtime ----
+kubeconfig
+*.kubeconfig
+/secrets/
+*.pem
+*.key
+!**/testdata/**/*.key
+
+# ---- Java build output ----
+target/
+*.class
+*.jar
+!**/.mvn/wrapper/maven-wrapper.jar
+
+# ---- Tooling / editor ----
+.idea/
+.vscode/
+*.iml
+.DS_Store
+mise.local.toml
