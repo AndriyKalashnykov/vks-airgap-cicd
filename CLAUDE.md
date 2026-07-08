@@ -21,6 +21,7 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make app-test` / `app-build` / `app-run` | Spring Boot app dev (in `app/`, uses `./mvnw`) |
 | `make mirror` | (dual-homed) pull images → push to Harbor |
 | `make mirror-pull` / `bundle` / `bundle-load` / `mirror-push` | sneakernet phases |
+| `make builder-image` | build+push the offline Maven builder image (deps pre-baked) |
 | `make vks-login` | Authenticate to VKS → writes `$KUBECONFIG` + context |
 | `make platform` | Install + wire Gitea and Tekton |
 | `make gitops` | Create the ArgoCD Application |
@@ -47,6 +48,16 @@ Run a single app test: `cd app && ./mvnw -B -Dtest=<ClassName>#<method> test`.
   everything else consumes `$KUBECONFIG`/context.
 - **Internal CA trust** (Harbor/Gitea self-signed) is wired via `trust_ca` and
   in-cluster ConfigMaps for Kaniko/Tekton/ArgoCD.
+- **Air-gap Maven builds**: an in-cluster `mvn`/Kaniko build cannot reach Maven
+  Central, so `scripts/15-build-push-builder.sh` builds `app/Dockerfile.builder`
+  on the internet side (bakes the full `~/.m2` via `mvn verify`) and pushes it to
+  Harbor. The app `Dockerfile` (`BUILDER_IMAGE` + `MVN_OFFLINE=-o` args) and the
+  Tekton `maven-test` task both consume it and build **offline**. Rebuild + bump
+  `BUILDER_IMAGE_TAG` when `app/pom.xml` deps change.
+- **Manifest rendering**: k8s/Tekton/ArgoCD YAML carry `${VAR}` tokens rendered by
+  the configure scripts with a RESTRICTED `envsubst` allowlist (so step-script
+  `$(...)`/`${}` are untouched). Tekton install rewrites upstream image hosts
+  (`gcr.io/…` → Harbor) via `sed`, matching `lib/mirror.sh`'s mapping.
 
 ## Conventions
 

@@ -85,6 +85,10 @@ mirror-push: check-env ## Push all mirrored images into Harbor
 .PHONY: mirror
 mirror: mirror-pull mirror-push ## (dual-homed) Pull + push in one run
 
+.PHONY: builder-image
+builder-image: check-env ## (internet) Build + push the air-gap Maven builder image (deps pre-baked)
+	@$(SCRIPTS)/15-build-push-builder.sh
+
 ##@ VKS access
 .PHONY: vks-login
 vks-login: check-env ## Authenticate to VKS (VCF 9 + Supervisor) → writes KUBECONFIG/context
@@ -120,7 +124,7 @@ gitops: configure-argocd ## Wire ArgoCD to track webui-deploy
 
 ##@ Full pipeline
 .PHONY: install-all
-install-all: mirror vks-login platform gitops ## Run the complete air-gap install end to end
+install-all: mirror builder-image vks-login platform gitops ## Run the complete air-gap install end to end
 
 .PHONY: verify
 verify: check-env ## e2e: push a change → Tekton build → Harbor → ArgoCD sync → HTTP check (LIVE cluster)

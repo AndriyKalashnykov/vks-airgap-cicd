@@ -7,6 +7,8 @@
 #
 # Rebuild whenever pom.xml changes. See scripts/15-build-push-builder.sh.
 ARG MAVEN_IMAGE=maven:3.9-eclipse-temurin-21
+# MAVEN_IMAGE default is explicitly tagged; DL3006 can't see through the ARG.
+# hadolint ignore=DL3006
 FROM ${MAVEN_IMAGE}
 
 WORKDIR /build

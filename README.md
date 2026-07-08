@@ -49,33 +49,59 @@ Set `RUN_MODE` in `.env`.
 - The Harbor (and Gitea, once installed) **CA certificates** (`.env` → `HARBOR_CA_FILE` / `GITEA_CA_FILE`).
 - [mise](https://mise.jdx.dev/) for the toolchain (installed by `make deps` where possible).
 
-## Quickstart
+## Quickstart (dual-homed jump box)
 
 ```bash
 git clone <this-repo> vks-cicd && cd vks-cicd
-cp .env.example .env         # edit: Harbor/Gitea URLs, VKS access, CA files, secrets
-make deps                    # [offline] install jump-box toolchain
-make ci                      # [offline] lint + validate + app tests
-
-# On the jump box, against live VKS:
-make mirror                  # [cluster] pull images → push to Harbor  (dual-homed)
-make vks-login               # [cluster] authenticate to VKS (VCF 9 + Supervisor)
-make platform                # [cluster] install + wire Gitea and Tekton
-make gitops                  # [cluster] create the ArgoCD Application
-make verify                  # [cluster] end-to-end smoke test
+cp .env.example .env          # edit: Harbor/Gitea URLs, VKS access, CA files, secrets (see below)
+make deps                     # [offline] install jump-box toolchain
+make ci                       # [offline] lint + validate + app tests
+make install-all              # [cluster] mirror → builder → vks-login → platform → gitops
+make verify                   # [cluster] end-to-end smoke test
 ```
 
-Run `make help` for the full target list.
+`make install-all` runs, in order: `mirror` (pull images → Harbor) → `builder-image`
+(build+push the offline Maven builder) → `vks-login` → `platform` (Gitea + Tekton) →
+`gitops` (ArgoCD Application). Run `make help` for the full target list.
+
+## Detailed steps
+
+Legend: **[offline]** verifiable without a cluster · **[cluster]** runs against live VKS.
+
+| # | Command | Mode | What happens |
+|---|---------|------|--------------|
+| 1 | `cp .env.example .env` + edit | [offline] | Set Harbor/Gitea URLs, VKS auth, CA files, and secrets (`HARBOR_PASSWORD`, `GITEA_ADMIN_PASSWORD`). |
+| 2 | `make deps` | [offline] | `mise install` + `scripts/00-install-prereqs.sh` (skopeo, tkn, argocd, kubectl, helm, jq, yq). |
+| 3 | `make ci` | [offline] | shellcheck + yamllint + hadolint + kubeconform + `mvn test`. |
+| 4 | `make mirror` | [cluster] | `10-mirror-pull.sh` pulls all images (+ Tekton release manifests) then `21-mirror-push.sh` pushes them into Harbor. **Sneakernet:** `make mirror-pull && make bundle`, carry the bundle, then `make bundle-load BUNDLE_TARBALL=… && make mirror-push` inside. |
+| 5 | `make builder-image` | [internet] | Builds the Maven builder image with this app's deps pre-baked and pushes it to Harbor (so in-cluster CI builds offline). |
+| 6 | `make vks-login` | [cluster] | `30-vks-login.sh` writes a working `$KUBECONFIG`/context (see auth note). |
+| 7 | `make platform` | [cluster] | Installs Gitea (`k8s/gitea/`), seeds the two repos + webhook, installs Tekton (images remapped to Harbor), applies the pipeline/triggers. |
+| 8 | `make gitops` | [cluster] | Registers the deploy repo and creates the ArgoCD `Application` (auto-sync). |
+| 9 | `make verify` | [cluster] | Pushes a marked change to `webui-app`, then asserts: PipelineRun succeeds → image in Harbor → deploy tag bumped → ArgoCD Synced/Healthy → the live page shows the marker. |
+
+### Minimum `.env` you must set
+
+```bash
+HARBOR_URL=harbor.<your-domain>          # provided by VKS
+HARBOR_PASSWORD=<robot-or-admin-secret>  # never committed
+HARBOR_CA_FILE=./secrets/harbor-ca.crt   # the Harbor CA (self-signed)
+GITEA_URL=http://gitea.<your-domain>
+GITEA_ADMIN_PASSWORD=<choose-one>
+ARGOCD_NAMESPACE=argocd                  # where VKS runs ArgoCD
+KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
+```
 
 ## Repository layout
 
 | Path | Purpose |
 |------|---------|
-| `scripts/` | Ordered, OS-portable (Ubuntu+PhotonOS) automation; `lib/os.sh` is the shared library |
-| `app/` | Minimal Spring Boot web UI (seeded into Gitea `webui-app`) |
-| `deploy/` | Kustomize manifests ArgoCD deploys (seeded into Gitea `webui-deploy`) |
-| `tekton/` | Tekton pipeline, tasks, and triggers |
+| `scripts/` | Ordered, OS-portable (Ubuntu+PhotonOS) automation; `lib/os.sh` + `lib/mirror.sh` are shared libraries |
+| `app/` | Minimal Spring Boot web UI (seeded into Gitea `webui-app`); `Dockerfile` + `Dockerfile.builder` |
+| `deploy/base/` | Kustomize manifests ArgoCD deploys (seeded into Gitea `webui-deploy`) |
+| `tekton/` | Tekton pipeline, tasks, triggers, RBAC |
 | `argocd/` | ArgoCD `Application` definition |
+| `k8s/gitea/` | Gitea install manifest (SQLite, single image) |
 | `images/images.txt` | Authoritative image inventory to mirror |
 | `.env.example` | Committed source of truth for every tunable |
 

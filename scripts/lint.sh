@@ -20,9 +20,10 @@ fi
 
 echo "== yamllint (manifests) =="
 if have yamllint; then
-  # Relaxed: line-length off (kubernetes manifests are wide); document-start off.
-  yamllint -d "{extends: relaxed, rules: {line-length: disable}}" \
-    "$REPO_ROOT/tekton" "$REPO_ROOT/deploy" "$REPO_ROOT/argocd" 2>/dev/null || rc=1
+  # Relaxed: line-length off (manifests are wide); comma/colon spacing off
+  # (we column-align inline maps for readability).
+  yamllint -d "{extends: relaxed, rules: {line-length: disable, commas: disable, colons: disable}}" \
+    "$REPO_ROOT/tekton" "$REPO_ROOT/deploy" "$REPO_ROOT/argocd" "$REPO_ROOT/k8s" 2>/dev/null || rc=1
 else
   log_warn "yamllint not installed — skipped"
 fi

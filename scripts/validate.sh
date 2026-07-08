@@ -43,7 +43,7 @@ fi
 
 echo "== kubeconform (tekton/ + argocd/) =="
 if have kubeconform; then
-  for dir in tekton argocd; do
+  for dir in tekton argocd k8s; do
     if [ -d "$REPO_ROOT/$dir" ] && find "$REPO_ROOT/$dir" -name '*.yaml' | read -r _; then
       log_info "validating $dir/"
       find "$REPO_ROOT/$dir" -name '*.yaml' -print0 \

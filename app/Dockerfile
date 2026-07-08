@@ -9,6 +9,8 @@
 # scripts/15-build-push-builder.sh) plus MVN_OFFLINE=-o so `package` needs no network.
 ARG BUILDER_IMAGE=maven:3.9-eclipse-temurin-21
 ARG RUNTIME_IMAGE=eclipse-temurin:21-jre-jammy
+# BUILDER_IMAGE default is explicitly tagged; DL3006 can't see through the ARG.
+# hadolint ignore=DL3006
 FROM ${BUILDER_IMAGE} AS build
 ARG MVN_OFFLINE=
 WORKDIR /workspace
@@ -22,6 +24,8 @@ RUN ./mvnw -B ${MVN_OFFLINE} -DskipTests clean package \
     && cp target/*.jar /workspace/app.jar
 
 # ---- runtime stage --------------------------------------------------------
+# RUNTIME_IMAGE default is explicitly tagged; DL3006 can't see through the ARG.
+# hadolint ignore=DL3006
 FROM ${RUNTIME_IMAGE} AS runtime
 
 ARG APP_INTERNAL_PORT=8080
