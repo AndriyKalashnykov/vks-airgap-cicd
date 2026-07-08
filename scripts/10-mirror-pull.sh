@@ -44,10 +44,10 @@ fails=0
 for src in "${IMAGES[@]}"; do
   dst_dir="$(mirror_cache_dir "$src")"
   pull_ref="$(mirror_pull_ref "$src")"      # digest-valid (never tag+digest)
-  log_info "pull $pull_ref"
+  read -ra copy_flags <<<"$(mirror_copy_flags "$src")"   # single-arch, or --all for digest-pinned
+  log_info "pull $pull_ref (${copy_flags[*]})"
   mkdir -p "$dst_dir"
-  # --all preserves multi-arch manifest lists; --preserve-digests keeps identity.
-  if run skopeo copy --all --preserve-digests --retry-times 3 \
+  if run skopeo copy "${copy_flags[@]}" --retry-times 3 \
         "docker://${pull_ref}" "dir:${dst_dir}"; then
     :
   else

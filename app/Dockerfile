@@ -20,7 +20,9 @@ COPY mvnw pom.xml ./
 COPY src/ src/
 # With the pre-baked builder image the ~/.m2 cache already holds every dependency,
 # so `-o` (offline) succeeds with no registry access. Locally MVN_OFFLINE is empty.
-RUN ./mvnw -B ${MVN_OFFLINE} -DskipTests clean package \
+# No `clean`: the build context is a fresh git clone (nothing to clean), and it
+# would need the clean plugin cached offline for no benefit.
+RUN ./mvnw -B ${MVN_OFFLINE} -DskipTests package \
     && cp target/*.jar /workspace/app.jar
 
 # ---- runtime stage --------------------------------------------------------

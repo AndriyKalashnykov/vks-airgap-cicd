@@ -59,7 +59,9 @@ ensure_project() {
     log_info "Harbor project '$name' exists"
   else
     log_info "creating Harbor project '$name'"
-    code="$(harbor_api POST "projects" "{\"project_name\":\"${name}\",\"public\":false}")"
+    # Public: kubelet/containerd pull anonymously (no imagePullSecret on every
+    # workload). Push still requires auth (kaniko/skopeo log in).
+    code="$(harbor_api POST "projects" "{\"project_name\":\"${name}\",\"public\":true}")"
     case "$code" in
       201|409) log_info "project '$name' ready (http $code)" ;;
       *) die "failed to create Harbor project '$name' (http $code)" ;;
@@ -85,8 +87,9 @@ for src in "${IMAGES[@]}"; do
   cache="$(mirror_cache_dir "$src")"
   dst="$(mirror_target_ref "$src")"
   [ -d "$cache" ] || { log_error "cache missing for $src ($cache) — was it pulled?"; fails=$((fails+1)); continue; }
+  read -ra copy_flags <<<"$(mirror_copy_flags "$src")"   # must match what was pulled
   log_info "push $src -> $dst"
-  if run skopeo copy --all --preserve-digests --retry-times 3 \
+  if run skopeo copy "${copy_flags[@]}" --retry-times 3 \
         --dest-tls-verify="$TLS_VERIFY" "dir:${cache}" "docker://${dst}"; then
     :
   else

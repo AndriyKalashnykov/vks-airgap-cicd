@@ -26,6 +26,13 @@ spec:
       default: ci-bot@vks-cicd.local
   workspaces:
     - name: scratch
+  # Run every step as root so the git-clone step (root) and the yq step share a
+  # writable workspace — mikefarah/yq's default non-root user otherwise can't
+  # overwrite the root-owned kustomization.yaml ("permission denied").
+  stepTemplate:
+    securityContext:
+      runAsUser: 0
+      runAsGroup: 0
   steps:
     - name: clone
       image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/alpine/git:2.47.1

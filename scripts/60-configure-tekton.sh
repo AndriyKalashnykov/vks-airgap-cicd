@@ -31,6 +31,7 @@ GITEA_CI_TOKEN="${GITEA_CI_TOKEN:-}"
 export CI_NAMESPACE HARBOR_URL HARBOR_INFRA_PROJECT APP_BRANCH ARGOCD_TRACK_BRANCH
 export APP_IMAGE="${HARBOR_URL}/${HARBOR_APP_PROJECT}/${APP_NAME}"
 export BUILDER_IMAGE_REF="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/webui-builder:${BUILDER_IMAGE_TAG}"
+export RUNTIME_IMAGE_REF="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/eclipse-temurin:${TEMURIN_JRE_TAG:-21-jre-jammy}"
 export APP_REPO_CLONE_URL="${GITEA_INTERNAL_URL}/${GITEA_ORG}/${GITEA_APP_REPO}.git"
 export DEPLOY_REPO_CLONE_URL="${GITEA_INTERNAL_URL}/${GITEA_ORG}/${GITEA_DEPLOY_REPO}.git"
 if [ "${HARBOR_INSECURE:-0}" = "1" ]; then export HARBOR_INSECURE_BOOL="true"; else export HARBOR_INSECURE_BOOL="false"; fi
@@ -38,7 +39,7 @@ if [ "${HARBOR_INSECURE:-0}" = "1" ]; then export HARBOR_INSECURE_BOOL="true"; e
 # Single-quoted on purpose: envsubst needs the literal ${VAR} names (an allowlist),
 # not their expansions.
 # shellcheck disable=SC2016
-ALLOWLIST='${CI_NAMESPACE} ${HARBOR_URL} ${HARBOR_INFRA_PROJECT} ${APP_BRANCH} ${APP_REPO_CLONE_URL} ${DEPLOY_REPO_CLONE_URL} ${ARGOCD_TRACK_BRANCH} ${APP_IMAGE} ${BUILDER_IMAGE_REF} ${HARBOR_INSECURE_BOOL}'
+ALLOWLIST='${CI_NAMESPACE} ${HARBOR_URL} ${HARBOR_INFRA_PROJECT} ${APP_BRANCH} ${APP_REPO_CLONE_URL} ${DEPLOY_REPO_CLONE_URL} ${ARGOCD_TRACK_BRANCH} ${APP_IMAGE} ${BUILDER_IMAGE_REF} ${RUNTIME_IMAGE_REF} ${HARBOR_INSECURE_BOOL}'
 
 require_cmd envsubst "install gettext (provides envsubst)"
 
@@ -66,10 +67,15 @@ log_info "creating harbor-dockerconfig secret"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 auth="$(printf '%s:%s' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" | base64 -w0 2>/dev/null || printf '%s:%s' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" | base64)"
 ( umask 077; printf '{"auths":{"%s":{"auth":"%s"}}}' "$HARBOR_URL" "$auth" > "${tmp}/config.json" )
+# Generic secret keyed EXACTLY 'config.json' (not .dockerconfigjson): the kaniko
+# task sets DOCKER_CONFIG to the workspace dir, and kaniko reads <dir>/config.json.
+# A kubernetes.io/dockerconfigjson secret would mount as '.dockerconfigjson' and
+# kaniko would push anonymously (UNAUTHORIZED).
+# Delete-then-create: a Secret's `type` is immutable, so `apply` can't convert an
+# existing dockerconfigjson secret to this generic one — recreate it.
+run kubectl -n "$CI_NAMESPACE" delete secret harbor-dockerconfig --ignore-not-found
 run kubectl -n "$CI_NAMESPACE" create secret generic harbor-dockerconfig \
-  --type=kubernetes.io/dockerconfigjson \
-  --from-file=.dockerconfigjson="${tmp}/config.json" \
-  --dry-run=client -o yaml | run kubectl apply -f -
+  --from-file=config.json="${tmp}/config.json"
 
 # ---- Secret: webhook HMAC token (shared with the Gitea webhook from 50-seed) ----
 token="$(ensure_secret_token "${REPO_ROOT}/secrets/webhook-token")"

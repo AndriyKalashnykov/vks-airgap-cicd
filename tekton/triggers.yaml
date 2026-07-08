@@ -30,6 +30,8 @@ spec:
       default: ${APP_IMAGE}
     - name: builder-image
       default: ${BUILDER_IMAGE_REF}
+    - name: runtime-image
+      default: ${RUNTIME_IMAGE_REF}
     - name: registry
       default: ${HARBOR_URL}
     - name: insecure-registry
@@ -52,6 +54,7 @@ spec:
           - { name: deploy-revision, value: $(tt.params.deploy-revision) }
           - { name: image, value: $(tt.params.image) }
           - { name: builder-image, value: $(tt.params.builder-image) }
+          - { name: runtime-image, value: $(tt.params.runtime-image) }
           - { name: registry, value: $(tt.params.registry) }
           - { name: insecure-registry, value: $(tt.params.insecure-registry) }
         workspaces:

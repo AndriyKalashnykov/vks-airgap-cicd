@@ -23,6 +23,8 @@ spec:
       description: App image without tag (e.g. harbor/apps/webui).
     - name: builder-image
       type: string
+    - name: runtime-image
+      type: string
     - name: registry
       type: string
     - name: insecure-registry
@@ -60,6 +62,7 @@ spec:
         - { name: image, value: $(params.image) }
         - { name: tag, value: $(tasks.clone-app.results.commit) }
         - { name: builder-image, value: $(params.builder-image) }
+        - { name: runtime-image, value: $(params.runtime-image) }
         - { name: registry, value: $(params.registry) }
         - { name: insecure, value: $(params.insecure-registry) }
       workspaces:
@@ -76,8 +79,3 @@ spec:
         - { name: tag, value: $(tasks.clone-app.results.commit) }
       workspaces:
         - { name: scratch, workspace: shared-data }
-  results:
-    - name: image
-      value: $(params.image):$(tasks.clone-app.results.commit)
-    - name: commit
-      value: $(tasks.clone-app.results.commit)

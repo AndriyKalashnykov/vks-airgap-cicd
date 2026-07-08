@@ -20,6 +20,9 @@ spec:
       description: Image tag (typically the app commit SHA)
     - name: builder-image
       type: string
+    - name: runtime-image
+      type: string
+      description: Harbor-mirrored runtime base (air-gap; no docker.io pull).
     - name: registry
       type: string
       description: Harbor host, for --registry-certificate
@@ -38,7 +41,7 @@ spec:
       description: The digest of the pushed image.
   steps:
     - name: build-and-push
-      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/kaniko-project/executor:v1.24.0
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/kaniko-project/executor:v1.24.0-debug
       env:
         - name: DOCKER_CONFIG
           value: $(workspaces.dockerconfig.path)
@@ -50,8 +53,12 @@ spec:
           "--dockerfile=Dockerfile" \
           "--destination=$(params.image):$(params.tag)" \
           "--build-arg=BUILDER_IMAGE=$(params.builder-image)" \
+          "--build-arg=RUNTIME_IMAGE=$(params.runtime-image)" \
           "--build-arg=MVN_OFFLINE=-o" \
-          "--digest-file=$(results.image-digest.path)"
+          "--digest-file=$(results.image-digest.path)" \
+          "--ignore-path=/product_uuid"
+        # /product_uuid is a kubelet-mounted file; kaniko's between-stage filesystem
+        # delete can't unlink it ("device or resource busy") -> ignore it.
         # Trust the Harbor CA when the ca workspace supplies one.
         if [ -f "$(workspaces.ca.path)/ca.crt" ]; then
           set -- "$@" "--registry-certificate=$(params.registry)=$(workspaces.ca.path)/ca.crt"

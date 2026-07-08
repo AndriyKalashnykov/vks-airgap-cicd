@@ -55,6 +55,23 @@ mirror_target_ref() {
   printf '%s/%s/%s:%s' "${HARBOR_URL:?}" "${HARBOR_INFRA_PROJECT:?}" "$path" "$tag"
 }
 
+# mirror_copy_flags SRC -> the skopeo copy flags for this image, as a
+# space-separated string the caller reads into an array.
+#   - DIGEST-pinned refs (Tekton controller images) MUST be copied --all so the
+#     multi-arch LIST digest is preserved — their manifests reference that exact
+#     digest, and a single-arch copy would change it and break the pull.
+#   - Otherwise, default to a SINGLE architecture (${MIRROR_ARCH:-amd64}) to keep
+#     the cache small + mirroring fast. Set MIRROR_ALL_ARCH=1 to mirror every arch.
+mirror_copy_flags() {
+  local digest
+  IFS='|' read -r _ _ digest <<<"$(_mirror_parse "$1")"
+  if [ -n "$digest" ] || [ "${MIRROR_ALL_ARCH:-0}" = "1" ]; then
+    printf -- '--all --preserve-digests'
+  else
+    printf -- '--override-os linux --override-arch %s' "${MIRROR_ARCH:-amd64}"
+  fi
+}
+
 # mirror_cache_dir SRC -> local OCI-dir path holding the pulled image.
 mirror_cache_dir() {
   local src="$1" safe
@@ -64,16 +81,21 @@ mirror_cache_dir() {
 
 # mirror_collect_images -> prints the deduplicated list of source images:
 #   (a) every non-comment line in images/images.txt, plus
-#   (b) every `image:` ref found in $BUNDLE_DIR/manifests/*.yaml (Tekton/Triggers
-#       release manifests downloaded by 10-mirror-pull.sh).
+#   (b) every fully-qualified registry image ref found ANYWHERE in
+#       $BUNDLE_DIR/manifests/*.yaml — not just `image:` keys. Tekton controllers
+#       pass several critical images as ARGS/env (the EventListener sink via
+#       `-el-image`; the entrypoint/nop/sidecarlogresults/workingdirinit images
+#       via controller flags), so an `image:`-only grep silently misses them and
+#       they ImagePullBackOff in a real air gap.
 mirror_collect_images() {
   local list="${REPO_ROOT}/images/images.txt" mdir="${BUNDLE_DIR:?}/manifests"
   {
     [ -f "$list" ] && grep -vE '^\s*(#|$)' "$list"
     if [ -d "$mdir" ]; then
-      grep -rhoE '^\s*image:\s*"?[^"'"'"' ]+"?' "$mdir" 2>/dev/null \
-        | sed -E 's/^\s*image:\s*//; s/^"//; s/"$//' \
-        | grep -vE '^\s*$'
+      # Any host/path[:tag][@digest] on a known registry. The char class excludes
+      # quotes/commas/spaces so refs embedded in JSON arg arrays are captured cleanly.
+      grep -rhoE '(gcr\.io|ghcr\.io|registry\.k8s\.io|quay\.io|docker\.io)/[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?(@sha256:[a-f0-9]+)?' "$mdir" 2>/dev/null \
+        | grep -vE 'catalog/upstream|/\*$'    # drop Tekton Hub catalog globs/bundles
     fi
   } | sort -u
 }
