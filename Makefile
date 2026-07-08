@@ -29,6 +29,8 @@ ARGOCD_DEST_NAMESPACE ?= webui
 APP_NAME            ?= webui
 APP_DEV_PORT        ?= 8080
 BUNDLE_DIR          ?= ./bundle
+# renovate: datasource=docker depName=plantuml/plantuml
+PLANTUML_VERSION    ?= 1.2025.4
 
 SCRIPTS := ./scripts
 APP_DIR := ./app
@@ -174,8 +176,32 @@ lint: ## shellcheck scripts, yamllint manifests, hadolint Dockerfile
 validate: ## kustomize build + kubeconform manifests; kubectl dry-run Tekton YAML
 	@$(SCRIPTS)/validate.sh
 
+.PHONY: diagrams
+diagrams: ## Render docs/diagrams/*.puml → docs/diagrams/out/*.png (PlantUML via Docker)
+	@mkdir -p docs/diagrams/out
+	@docker run --rm -u "$$(id -u):$$(id -g)" -e PLANTUML_SECURITY_PROFILE=UNSECURE \
+		-v "$$PWD/docs/diagrams:/work" -w /work plantuml/plantuml:$(PLANTUML_VERSION) \
+		-tpng -o out context.puml container.puml deployment.puml pipeline-flow.puml
+	@echo "diagrams: rendered → docs/diagrams/out/"
+
+.PHONY: diagrams-check
+diagrams-check: ## Fail if committed diagram PNGs are stale vs their .puml sources (drift gate)
+	@$(MAKE) --no-print-directory diagrams
+	@git diff --exit-code -- docs/diagrams/out || { \
+		echo "ERROR: diagram PNGs are stale — run 'make diagrams' and commit docs/diagrams/out/."; exit 1; }
+	@echo "diagrams-check: PNGs match their .puml sources"
+
+.PHONY: docs-lint
+docs-lint: diagrams-check ## Lint markdown + verify diagrams are current
+	@if command -v markdownlint >/dev/null 2>&1; then markdownlint '**/*.md' --ignore app --ignore bundle; \
+	elif command -v npx >/dev/null 2>&1; then npx --yes markdownlint-cli '**/*.md' --ignore app --ignore bundle; \
+	else echo "markdownlint not installed — skipping (install markdownlint-cli)"; fi
+
+.PHONY: static-check
+static-check: check-env lint validate app-test ## Composite code gate (lint + manifests + app tests)
+
 .PHONY: ci
-ci: check-env lint validate app-test ## Full local pipeline (offline-verifiable parts)
+ci: static-check docs-lint ## Full local pipeline (offline-verifiable parts)
 
 ##@ Housekeeping
 .PHONY: clean

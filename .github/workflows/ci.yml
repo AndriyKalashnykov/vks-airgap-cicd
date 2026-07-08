@@ -1,0 +1,112 @@
+name: CI
+
+# Offline-verifiable gates for the air-gapped VKS CI/CD demo.
+# Flow: changes → (static-check, docs-lint) → ci-pass (single required check).
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege: jobs only read the repo.
+permissions:
+  contents: read
+
+# One in-flight run per ref; newer pushes cancel older runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Detect which parts of the tree changed, to skip irrelevant gates.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # `base` set only on push so paths-filter works under `act push`;
+          # left empty on pull_request (where it is ignored — avoids the annotation).
+          base: ${{ github.event_name == 'push' && github.ref_name || '' }}
+          filters: |
+            code:
+              - 'scripts/**'
+              - 'app/**'
+              - 'deploy/**'
+              - 'tekton/**'
+              - 'k8s/**'
+              - 'argocd/**'
+              - 'images/**'
+              - 'Makefile'
+              - '.env.example'
+              - '.mise.toml'
+            docs:
+              - '**/*.md'
+              - 'docs/**'
+
+  # Composite code gate: check-env + lint + validate + app-test (Java 21 via mise).
+  static-check:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Installs the .mise.toml toolchain (Java/Maven/kubectl/kustomize/jq/yq/...).
+      - uses: jdx/mise-action@v2
+
+      # Tools mise does not provide (shellcheck + Docker are preinstalled on the runner).
+      - name: Install kubeconform, yamllint, hadolint
+        env:
+          KUBECONFORM_VERSION: v0.6.7
+          HADOLINT_VERSION: v2.12.0
+        run: |
+          set -euo pipefail
+          curl -sSfL \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin kubeconform
+          sudo curl -sSfL \
+            "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
+            -o /usr/local/bin/hadolint
+          sudo chmod +x /usr/local/bin/hadolint
+          pipx install yamllint
+          kubeconform -v && hadolint --version && yamllint --version
+
+      - name: make static-check
+        run: make static-check
+
+  # Docs gate: diagrams drift-check (PlantUML via Docker) + markdownlint (via npx).
+  docs-lint:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node so `npx markdownlint-cli` works (Docker is preinstalled for diagrams-check).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: make docs-lint
+        run: make docs-lint
+
+  # Single required status check: fails if any needed job failed/cancelled,
+  # passes if they succeeded or were legitimately skipped by paths-filter.
+  ci-pass:
+    needs: [changes, static-check, docs-lint]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs
+        run: |
+          if [ "${{ needs.static-check.result }}" = "failure" ] || [ "${{ needs.static-check.result }}" = "cancelled" ] \
+          || [ "${{ needs.docs-lint.result }}" = "failure" ] || [ "${{ needs.docs-lint.result }}" = "cancelled" ]; then
+            echo "a required job failed"; exit 1
+          fi
+          echo "ci-pass: OK"

@@ -1,0 +1,28 @@
+@startuml pipeline-flow
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/v2.11.0/C4_Dynamic.puml
+!include _style.puml
+LAYOUT_LEFT_RIGHT()
+
+title Pipeline flow — a push to production, inside the air gap
+
+Person(dev, "Developer")
+Container(gitea_app, "Gitea: webui-app", "git repo")
+Container(el, "Tekton EventListener", "el-webui")
+Container(pipe, "Tekton PipelineRun", "clone · test · build · write-back")
+ContainerDb(harbor, "Harbor", "OCI registry")
+Container(gitea_dep, "Gitea: webui-deploy", "git repo")
+Container(argo, "ArgoCD", "GitOps")
+Container(app, "webui", "Deployment + Service")
+
+Rel(dev, gitea_app, "1. git push")
+Rel(gitea_app, el, "2. push webhook")
+Rel(el, pipe, "3. create PipelineRun")
+Rel(pipe, pipe, "4. mvn test (offline, builder image)")
+Rel(pipe, harbor, "5. kaniko build + push image")
+Rel(pipe, gitea_dep, "6. commit new image tag")
+Rel(gitea_dep, argo, "7. auto-sync detects change")
+Rel(argo, app, "8. deploy new version")
+Rel(harbor, app, "pull image")
+
+SHOW_LEGEND()
+@enduml

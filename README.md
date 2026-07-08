@@ -1,46 +1,40 @@
-# vks-cicd — Air-gapped VKS end-to-end CI/CD demo
+[![CI](https://github.com/AndriyKalashnykov/vks-cicd/actions/workflows/ci.yml/badge.svg)](https://github.com/AndriyKalashnykov/vks-cicd/actions/workflows/ci.yml)
+[![Hits](https://hits.sh/github.com/AndriyKalashnykov/vks-cicd.svg?view=today-total&style=plastic)](https://hits.sh/github.com/AndriyKalashnykov/vks-cicd/)
 
-A self-contained demonstration of a complete CI/CD pipeline running on a **fully
-air-gapped VKS cluster** (VMware vSphere Kubernetes Service, VCF 9 + Supervisor):
+# Air-gapped CI/CD on VMware VKS — Reference Demo
 
-> A developer pushes a change to **Gitea** → **Tekton** runs tests, builds a
-> container image with **Kaniko**, and pushes it to **Harbor** → Tekton bumps the
-> image tag in the deploy repo → **ArgoCD** syncs the new version to the cluster →
-> the web UI updates.
+Reference implementation of an end-to-end CI/CD pipeline for a **fully air-gapped**
+VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). The **pipeline
+surface** wires self-hosted **Gitea** + **Tekton** (test → **Kaniko** build → **Harbor**
+push → GitOps tag write-back) to the VKS-provided **Harbor** and **ArgoCD**; the
+**delivery surface** covers an OS-portable (Ubuntu/PhotonOS) jump-box image mirror
+(**skopeo**, dual-homed or sneakernet), a dependency-baked offline **Maven** builder, and a
+one-command **KinD** end-to-end that proves the whole flow locally.
 
-Harbor and ArgoCD are **provided by VKS**. This project mirrors all required images
-into Harbor and installs + wires **Gitea + Tekton** and the demo app.
+<p align="center"><img src="docs/diagrams/out/context.png" alt="System context: air-gapped CI/CD on VMware VKS" width="440"></p>
 
-> ⚠️ **Status:** work in progress. This README's command flow is being built out
-> phase by phase (see `plan`/`CLAUDE.md`). Steps are marked
-> **[offline]** (validated without a cluster) or **[cluster]** (runs on live VKS).
+> A developer pushes a change to **Gitea** → **Tekton** runs tests, builds a container
+> image with **Kaniko** and pushes it to **Harbor** → Tekton bumps the image tag in the
+> deploy repo → **ArgoCD** syncs the new version to the cluster → the web UI updates.
+> Harbor and ArgoCD are **provided by VKS**; this project mirrors all required images
+> into Harbor and installs + wires **Gitea + Tekton** and the demo app.
 
-## Architecture
+## Quick Start (dual-homed jump box)
 
-```
-INTERNET SIDE (jump box: Ubuntu or PhotonOS)   AIR GAP (VKS: Harbor + ArgoCD given)
-────────────────────────────────────────────  ────────────────────────────────────
-skopeo pull images.txt ──(dual-homed / bundle)──▶ Harbor  (CI/CD + build-base images)
-                                                    │
-                                        install  ──▶ Gitea  (webui-app, webui-deploy)
-                                        install  ──▶ Tekton (Pipelines + Triggers)
-                                                    │
-  git push ─▶ Gitea webhook ─▶ Tekton EventListener ─▶ PipelineRun:
-     clone → mvn test → mvn package → kaniko build+push→Harbor → write-back tag→webui-deploy
-                                                    │
-                                 ArgoCD (tracks webui-deploy) ─▶ sync ─▶ Deployment/Service
-                                                                            │
-                                                                    web UI reachable
+```bash
+cp .env.example .env          # edit: Harbor/Gitea URLs, VKS access, CA files, secrets (see below)
+make deps                     # [offline] install jump-box toolchain
+make ci                       # [offline] lint + validate + app tests + docs
+make install-all              # [cluster] mirror → builder → vks-login → platform → gitops
+make verify                   # [cluster] end-to-end smoke test
 ```
 
-## Two operating modes
+`make install-all` runs, in order: `mirror` (pull images → Harbor) → `builder-image`
+(build+push the offline Maven builder) → `vks-login` → `platform` (Gitea + Tekton) →
+`gitops` (ArgoCD Application). Run `make help` for the full target list.
 
-| Mode | When | Flow |
-|------|------|------|
-| **dual-homed** (default) | Jump box reaches internet **and** the VKS/Harbor network (routed to ESXi) | `make mirror` pulls + pushes in one run |
-| **sneakernet** | Jump box has internet only | `make mirror-pull && make bundle` → carry the bundle → `make bundle-load && make mirror-push` inside |
-
-Set `RUN_MODE` in `.env`.
+> **Try it with no VKS cluster:** `make e2e-kind` stands the whole thing up locally in
+> KinD — see [Try it locally end-to-end with KinD](#try-it-locally-end-to-end-with-kind).
 
 ## Prerequisites
 
@@ -64,38 +58,51 @@ Kaniko, Maven, Temurin JDK/JRE, alpine/git, yq). Figures are approximate.
 
 > Even in single-arch mode the **Tekton controller images stay multi-arch**
 > (~2 GB of the 3 GB): they are digest-pinned in the release manifests, so their
-> multi-arch list digest must be preserved for the pull to resolve. The
-> single-arch saving therefore applies to the large tag-referenced images
-> (Maven, Temurin, the builder).
+> multi-arch list digest must be preserved for the pull to resolve. The single-arch
+> saving therefore applies to the large tag-referenced images (Maven, Temurin, the builder).
 
-**Recommended free space on the jump box:**
-- **Dual-homed:** ≥ **10 GB** (cache + builder build + working overhead).
-- **Sneakernet:** ≥ **15 GB** (adds the transferable bundle tarball).
+**Recommended free space on the jump box:** **≥ 10 GB** dual-homed (cache + builder build +
+overhead); **≥ 15 GB** sneakernet (adds the transferable bundle tarball). The **VKS/KinD
+cluster** additionally stores these images in Harbor + each node's containerd (~5–6 GB) —
+that is cluster-side, separate from the jump box.
 
-The **VKS/KinD cluster** additionally stores these images in Harbor + each node's
-containerd (~5–6 GB) — that is cluster-side, separate from the jump box.
+## Architecture
 
-## Quickstart (dual-homed jump box)
+Harbor + ArgoCD are **provided by VKS** (blue in the diagrams). The jump box mirrors every
+image into Harbor; a `git push` then drives the whole CI/CD flow entirely inside the air gap.
 
-```bash
-git clone <this-repo> vks-cicd && cd vks-cicd
-cp .env.example .env          # edit: Harbor/Gitea URLs, VKS access, CA files, secrets (see below)
-make deps                     # [offline] install jump-box toolchain
-make ci                       # [offline] lint + validate + app tests
-make install-all              # [cluster] mirror → builder → vks-login → platform → gitops
-make verify                   # [cluster] end-to-end smoke test
-```
+### Containers
 
-`make install-all` runs, in order: `mirror` (pull images → Harbor) → `builder-image`
-(build+push the offline Maven builder) → `vks-login` → `platform` (Gitea + Tekton) →
-`gitops` (ArgoCD Application). Run `make help` for the full target list.
+<p align="center"><img src="docs/diagrams/out/container.png" alt="Container diagram" width="900"></p>
+
+### Deployment
+
+<p align="center"><img src="docs/diagrams/out/deployment.png" alt="Deployment diagram" width="760"></p>
+
+### Pipeline flow
+
+<p align="center"><img src="docs/diagrams/out/pipeline-flow.png" alt="Pipeline flow" width="900"></p>
+
+Diagram sources are committed under [`docs/diagrams/`](docs/diagrams/) (C4-PlantUML);
+`make diagrams` re-renders the PNGs and `make diagrams-check` fails CI if they drift.
+
+### Two operating modes
+
+| Mode | When | Flow |
+|------|------|------|
+| **dual-homed** (default) | Jump box reaches internet **and** the VKS/Harbor network (routed to ESXi) | `make mirror` pulls + pushes in one run |
+| **sneakernet** | Jump box has internet only | `make mirror-pull && make bundle` → carry the bundle → `make bundle-load && make mirror-push` inside |
+
+Set `RUN_MODE` in `.env`.
 
 ## Try it locally end-to-end with KinD
 
-You don't need a VKS cluster to exercise the whole pipeline. `make e2e-kind` stands
-up a local [KinD](https://kind.sigs.k8s.io/) cluster, installs the "VKS-provided"
-pieces (**Harbor** + **ArgoCD**) into it, then runs the exact same
-`mirror → builder → platform → gitops → verify` flow the real environment uses.
+You don't need a VKS cluster to exercise the whole pipeline. `make e2e-kind` stands up a
+local [KinD](https://kind.sigs.k8s.io/) cluster, installs the "VKS-provided" pieces
+(**Harbor** + **ArgoCD**) into it, then runs the exact same
+`mirror → builder → platform → gitops → verify` flow the real environment uses. This path
+is verified end-to-end (git push → Tekton build → Harbor → ArgoCD → the live app serves
+the new version).
 
 ```bash
 cp .env.example .env          # set HARBOR_PASSWORD + GITEA_ADMIN_PASSWORD (any demo values)
@@ -106,15 +113,16 @@ make kind-down                # tear everything down (also prunes cloud-provider
 ```
 
 How the local stand-in works:
+
 - **`cloud-provider-kind`** gives Harbor a real `LoadBalancer` IP on the kind docker
   network — reachable by the *same IP* from the host (push), Kaniko pods (push), and
   containerd (pull), which is what makes one image ref work everywhere.
 - Harbor runs **plain HTTP**; `kind-up`/`install-harbor` wire each node's containerd
   (`/etc/containerd/certs.d`) to pull from it insecurely, and write the discovered
-  `HARBOR_URL` (the LB IP) + `KUBECONFIG` into a gitignored **`.env.kind`** overlay so
-  the normal scripts target the kind cluster unchanged.
-- `make vks-login` uses the kind kubeconfig (`VKS_AUTH_METHOD=kubeconfig`), so no VCF
-  auth is needed for the local run.
+  `HARBOR_URL` (the LB IP) + `KUBECONFIG` into a gitignored **`.env.kind`** overlay so the
+  normal scripts target the kind cluster unchanged.
+- `make vks-login` uses the kind kubeconfig (`VKS_AUTH_METHOD=kubeconfig`), so no VCF auth
+  is needed for the local run.
 
 Individual targets: `make kind-up`, `make install-harbor`, `make install-argocd`.
 
@@ -126,7 +134,7 @@ Legend: **[offline]** verifiable without a cluster · **[cluster]** runs against
 |---|---------|------|--------------|
 | 1 | `cp .env.example .env` + edit | [offline] | Set Harbor/Gitea URLs, VKS auth, CA files, and secrets (`HARBOR_PASSWORD`, `GITEA_ADMIN_PASSWORD`). |
 | 2 | `make deps` | [offline] | `mise install` + `scripts/00-install-prereqs.sh` (skopeo, tkn, argocd, kubectl, helm, jq, yq). |
-| 3 | `make ci` | [offline] | shellcheck + yamllint + hadolint + kubeconform + `mvn test`. |
+| 3 | `make ci` | [offline] | shellcheck + yamllint + hadolint + kubeconform + `mvn test` + docs/diagram checks. |
 | 4 | `make mirror` | [cluster] | `10-mirror-pull.sh` pulls all images (+ Tekton release manifests) then `21-mirror-push.sh` pushes them into Harbor. **Sneakernet:** `make mirror-pull && make bundle`, carry the bundle, then `make bundle-load BUNDLE_TARBALL=… && make mirror-push` inside. |
 | 5 | `make builder-image` | [internet] | Builds the Maven builder image with this app's deps pre-baked and pushes it to Harbor (so in-cluster CI builds offline). |
 | 6 | `make vks-login` | [cluster] | `30-vks-login.sh` writes a working `$KUBECONFIG`/context (see auth note). |
@@ -156,17 +164,33 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 | `tekton/` | Tekton pipeline, tasks, triggers, RBAC |
 | `argocd/` | ArgoCD `Application` definition |
 | `k8s/gitea/` | Gitea install manifest (SQLite, single image) |
+| `kind/` | KinD cluster config (containerd insecure-registry wiring) |
+| `docs/diagrams/` | C4-PlantUML sources + rendered PNGs |
 | `images/images.txt` | Authoritative image inventory to mirror |
 | `.env.example` | Committed source of truth for every tunable |
 
+## CI/CD
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on push to `main`, tags `v*`, and pull requests.
+
+| Job | Runs | Purpose |
+|-----|------|---------|
+| **changes** | always | `dorny/paths-filter` classifies the diff into `code` / `docs` |
+| **static-check** | if `code` changed | `make static-check` — shellcheck, yamllint, hadolint, kubeconform, `mvn test` |
+| **docs-lint** | if `docs` changed | `make docs-lint` — markdownlint + `diagrams-check` (PNG drift vs `.puml`) |
+| **ci-pass** | always | Aggregator; the single required status check — green only if the needed jobs passed |
+
+Locally, `make ci` runs the same gates (`static-check` + `docs-lint`).
+
 ## Configuration
 
-Everything is driven by `.env` (copied from `.env.example`). Nothing is hardcoded
-in scripts or the Makefile. See `.env.example` for the full, documented list.
+Everything is driven by `.env` (copied from `.env.example`), with an optional `.env.kind`
+overlay written by the KinD flow. Nothing is hardcoded in scripts or the Makefile. See
+`.env.example` for the full, documented list of tunables.
 
 ## VKS authentication (VCF 9 + Supervisor)
 
 `scripts/30-vks-login.sh` is the single pluggable step that produces a working
-`KUBECONFIG` + context; everything downstream is auth-agnostic. The exact login
-command (VCF CLI, token-based in vSphere 9) is finalized once confirmed for the
-target environment.
+`KUBECONFIG` and context; everything downstream is auth-agnostic. It supports `kubeconfig` (bring your own),
+`vcf` (VCF CLI, token-based in vSphere 9 — finalized once confirmed for the target
+environment), and legacy `vsphere` (kubectl-vsphere plugin) methods via `VKS_AUTH_METHOD`.

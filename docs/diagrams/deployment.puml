@@ -1,0 +1,43 @@
+@startuml deployment
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/v2.11.0/C4_Deployment.puml
+!include _style.puml
+
+title Deployment — jump box + air-gapped VKS cluster
+
+Deployment_Node(jb, "Jump box", "Ubuntu or PhotonOS · internet-connected") {
+  Container(cli, "Toolchain", "mise, skopeo, docker/podman, kubectl, tkn, argocd, helm")
+  Container(mir, "Mirror + builder", "skopeo copy · builder image build")
+}
+
+Deployment_Node(vks, "VKS workload cluster", "VMware vSphere Kubernetes Service · air-gapped") {
+  Deployment_Node(ns_harbor, "namespace: harbor (VKS-provided)", "") {
+    ContainerDb(harbor, "Harbor", "OCI registry, LoadBalancer")
+  }
+  Deployment_Node(ns_gitea, "namespace: gitea", "") {
+    Container(gitea, "Gitea", "Deployment + PVC (SQLite)")
+  }
+  Deployment_Node(ns_tk, "namespace: tekton-pipelines", "") {
+    Container(tk, "Tekton", "Pipelines + Triggers controllers")
+  }
+  Deployment_Node(ns_ci, "namespace: ci", "") {
+    Container(ci, "Pipeline + EventListener", "PipelineRuns, el-webui")
+  }
+  Deployment_Node(ns_argo, "namespace: argocd (VKS-provided)", "") {
+    Container(argo, "ArgoCD", "Application controller")
+  }
+  Deployment_Node(ns_app, "namespace: webui", "") {
+    Container(app, "webui", "Deployment (2 replicas) + Service")
+  }
+}
+
+Rel(mir, harbor, "push images", "HTTPS/HTTP")
+Rel(cli, gitea, "install + seed", "kubectl")
+Rel(cli, tk, "install", "kubectl")
+Rel(ci, harbor, "build+push / pull", "kaniko / containerd")
+Rel(ci, gitea, "clone + write-back", "git")
+Rel(argo, gitea, "sync from webui-deploy", "git")
+Rel(argo, app, "deploy", "kubectl")
+Rel(app, harbor, "pull image", "containerd")
+
+SHOW_LEGEND()
+@enduml
