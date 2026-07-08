@@ -17,6 +17,8 @@ helm     = "3.16"
 kustomize = "5.5"
 jq       = "1.7"
 yq       = "4"
+# node is only for `make renovate-validate` (renovate@latest requires node ^24.11).
+node     = "24"
 
 [settings]
 # Reproducible: never auto-bump; pin via this file + Renovate.

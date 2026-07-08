@@ -89,6 +89,14 @@ jobs:
           pipx install yamllint
           kubeconform -v && hadolint --version && yamllint --version
 
+      # Persist kubeconform's downloaded JSON schemas across runs (validate.sh
+      # points kubeconform -cache here) so githubusercontent isn't re-hit every run.
+      - name: Cache kubeconform schemas
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/kubeconform
+          key: kubeconform-schemas-v1
+
       - name: make static-check
         run: make static-check
 
