@@ -27,6 +27,8 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make gitops` | Create the ArgoCD Application |
 | `make install-all` | Full air-gap install: `mirror → vks-login → platform → gitops` |
 | `make verify` | End-to-end smoke test (LIVE cluster) |
+| `make e2e-kind` | Full local end-to-end in KinD (cluster → Harbor → ArgoCD → pipeline → verify) |
+| `make kind-up` / `install-harbor` / `install-argocd` / `kind-down` | Individual KinD steps |
 
 Run a single app test: `cd app && ./mvnw -B -Dtest=<ClassName>#<method> test`.
 
@@ -54,6 +56,13 @@ Run a single app test: `cd app && ./mvnw -B -Dtest=<ClassName>#<method> test`.
   Harbor. The app `Dockerfile` (`BUILDER_IMAGE` + `MVN_OFFLINE=-o` args) and the
   Tekton `maven-test` task both consume it and build **offline**. Rebuild + bump
   `BUILDER_IMAGE_TAG` when `app/pom.xml` deps change.
+- **KinD local e2e**: `kind/kind-config.yaml` enables containerd `config_path`;
+  `05-kind-up.sh` runs cloud-provider-kind (LoadBalancer) and writes `KUBECONFIG` +
+  `VKS_AUTH_METHOD=kubeconfig` to `.env.kind`; `06-install-harbor.sh` exposes Harbor
+  as an HTTP LoadBalancer, wires each node's containerd for insecure pull, and
+  writes `HARBOR_URL`(LB IP)+`HARBOR_INSECURE=1` to `.env.kind`. That overlay
+  (loaded last by `load_env` / `-include`) makes the normal flow run against kind
+  unchanged. `kind-down.sh` prunes cloud-provider-kind + `kindccm-*` orphans.
 - **Manifest rendering**: k8s/Tekton/ArgoCD YAML carry `${VAR}` tokens rendered by
   the configure scripts with a RESTRICTED `envsubst` allowlist (so step-script
   `$(...)`/`${}` are untouched). Tekton install rewrites upstream image hosts

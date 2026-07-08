@@ -7,8 +7,10 @@
 # the `?=` defaults below (mirrors .env.example). `.env` wins for `make` too.
 
 # Load operator overrides FIRST so they win over the ?= defaults. `-include`
-# (leading '-') silently skips a missing .env.
+# (leading '-') silently skips a missing file. .env.kind is written by the KinD
+# flow and overrides .env for local end-to-end testing.
 -include .env
+-include .env.kind
 
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
@@ -121,6 +123,26 @@ configure-argocd: check-env ## Register the deploy repo + create the ArgoCD Appl
 
 .PHONY: gitops
 gitops: configure-argocd ## Wire ArgoCD to track webui-deploy
+
+##@ KinD local end-to-end (simulates VKS-provided Harbor + ArgoCD locally)
+.PHONY: kind-up
+kind-up: check-env ## Create the KinD cluster + cloud-provider-kind LoadBalancer
+	@$(SCRIPTS)/05-kind-up.sh
+
+.PHONY: install-harbor
+install-harbor: check-env ## Install Harbor (LoadBalancer, HTTP) into KinD; wire containerd + .env.kind
+	@$(SCRIPTS)/06-install-harbor.sh
+
+.PHONY: install-argocd
+install-argocd: check-env ## Install ArgoCD into KinD
+	@$(SCRIPTS)/07-install-argocd.sh
+
+.PHONY: kind-down
+kind-down: ## Tear down the KinD cluster (prunes cloud-provider-kind + kindccm-* orphans)
+	@$(SCRIPTS)/kind-down.sh
+
+.PHONY: e2e-kind
+e2e-kind: kind-up install-harbor install-argocd install-all verify ## Full local end-to-end in KinD
 
 ##@ Full pipeline
 .PHONY: install-all

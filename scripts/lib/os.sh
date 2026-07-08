@@ -121,14 +121,29 @@ require_cmd() {
 # `set -a` exports everything so child processes (skopeo, kubectl, curl) see it.
 # ---------------------------------------------------------------------------
 load_env() {
-  local example="${REPO_ROOT}/.env.example" override="${REPO_ROOT}/.env"
+  local example="${REPO_ROOT}/.env.example" override="${REPO_ROOT}/.env" kind="${REPO_ROOT}/.env.kind"
   [ -f "$example" ] || die ".env.example missing at $example (it is the committed source of truth)"
   set -a
   # shellcheck disable=SC1090
   . "$example"
   # shellcheck disable=SC1090
   [ -f "$override" ] && . "$override"
+  # .env.kind is written by the KinD flow (discovered LB IP, kubeconfig, ...) and
+  # overrides the above so the normal scripts run unchanged against the kind cluster.
+  # shellcheck disable=SC1090
+  [ -f "$kind" ] && . "$kind"
   set +a
+}
+
+# set_env_var KEY VALUE [file] — idempotently upsert KEY=VALUE (default .env.kind).
+# Used by the KinD flow to publish discovered values to the normal scripts.
+set_env_var() {
+  local key="$1" val="$2" file="${3:-${REPO_ROOT}/.env.kind}"
+  mkdir -p "$(dirname "$file")"; touch "$file"
+  if grep -qE "^${key}=" "$file" 2>/dev/null; then
+    grep -vE "^${key}=" "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+  fi
+  printf '%s=%s\n' "$key" "$val" >> "$file"
 }
 
 # ---------------------------------------------------------------------------

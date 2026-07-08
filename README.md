@@ -64,6 +64,34 @@ make verify                   # [cluster] end-to-end smoke test
 (build+push the offline Maven builder) → `vks-login` → `platform` (Gitea + Tekton) →
 `gitops` (ArgoCD Application). Run `make help` for the full target list.
 
+## Try it locally end-to-end with KinD
+
+You don't need a VKS cluster to exercise the whole pipeline. `make e2e-kind` stands
+up a local [KinD](https://kind.sigs.k8s.io/) cluster, installs the "VKS-provided"
+pieces (**Harbor** + **ArgoCD**) into it, then runs the exact same
+`mirror → builder → platform → gitops → verify` flow the real environment uses.
+
+```bash
+cp .env.example .env          # set HARBOR_PASSWORD + GITEA_ADMIN_PASSWORD (any demo values)
+make deps                     # kind, helm, kubectl, skopeo, etc.
+make e2e-kind                 # cluster → Harbor → ArgoCD → mirror → build → deploy → verify
+# ... explore ...
+make kind-down                # tear everything down (also prunes cloud-provider-kind orphans)
+```
+
+How the local stand-in works:
+- **`cloud-provider-kind`** gives Harbor a real `LoadBalancer` IP on the kind docker
+  network — reachable by the *same IP* from the host (push), Kaniko pods (push), and
+  containerd (pull), which is what makes one image ref work everywhere.
+- Harbor runs **plain HTTP**; `kind-up`/`install-harbor` wire each node's containerd
+  (`/etc/containerd/certs.d`) to pull from it insecurely, and write the discovered
+  `HARBOR_URL` (the LB IP) + `KUBECONFIG` into a gitignored **`.env.kind`** overlay so
+  the normal scripts target the kind cluster unchanged.
+- `make vks-login` uses the kind kubeconfig (`VKS_AUTH_METHOD=kubeconfig`), so no VCF
+  auth is needed for the local run.
+
+Individual targets: `make kind-up`, `make install-harbor`, `make install-argocd`.
+
 ## Detailed steps
 
 Legend: **[offline]** verifiable without a cluster · **[cluster]** runs against live VKS.

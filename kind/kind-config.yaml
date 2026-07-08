@@ -1,0 +1,16 @@
+# KinD cluster config for the local end-to-end test.
+# The containerd config_path enables per-registry hosts.toml drop-ins, which
+# scripts/06-install-harbor.sh writes AFTER Harbor's LoadBalancer IP is known
+# (config_path is read per-pull, so no containerd restart is needed) — this lets
+# containerd pull from the plain-HTTP in-cluster Harbor at its LB IP.
+#
+# Cluster name is passed via `kind create cluster --name` (from KIND_CLUSTER_NAME),
+# not here, to keep this file env-free.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
+nodes:
+  - role: control-plane
