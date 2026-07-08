@@ -15,8 +15,19 @@
 __VKS_OS_SH_LOADED=1
 
 # Repo root = parent of scripts/. Resolved from THIS file's location so callers
-# in scripts/ or scripts/lib/ both work.
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# in scripts/ or scripts/lib/ both work. Fallbacks handle the case where
+# BASH_SOURCE is empty (file sourced at the top level of `bash -c`).
+if [ -z "${REPO_ROOT:-}" ]; then
+  _os_self="${BASH_SOURCE[0]:-}"
+  if [ -n "$_os_self" ]; then
+    REPO_ROOT="$(cd "$(dirname "$_os_self")/../.." && pwd)"
+  fi
+  # If that didn't land on a real repo root, fall back to git, then CWD.
+  if [ -z "${REPO_ROOT:-}" ] || [ ! -f "${REPO_ROOT}/.env.example" ]; then
+    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  fi
+  unset _os_self
+fi
 export REPO_ROOT
 
 # ---------------------------------------------------------------------------
