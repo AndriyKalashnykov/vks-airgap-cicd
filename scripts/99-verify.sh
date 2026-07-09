@@ -42,6 +42,12 @@ wait_for() { # wait_for <desc> <cmd...> ; polls until cmd succeeds or timeout
 
 # ---- 1. Record existing PipelineRuns, then push a marked change ----
 before="$(kubectl -n "$CI_NAMESPACE" get pipelineruns -o name 2>/dev/null | sort || true)"
+# Capture the currently-deployed image so step 3 can wait for it to CHANGE. A
+# generic ArgoCD "Synced/Healthy" reflects the PRE-write-back revision (auto-sync
+# polls every ~3 min), so waiting on that alone races the old pods — the deployed
+# image, not the sync status, is the ground truth that the new build landed.
+pre_img="$(kubectl -n "$ARGOCD_DEST_NAMESPACE" get deploy "$APP_NAME" \
+  -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
 
 log_info "port-forwarding Gitea + pushing marked change ($MARKER)"
 kubectl -n "$GITEA_NAMESPACE" port-forward svc/gitea-http "${GITEA_LOCAL_PORT}:3000" >/dev/null 2>&1 &
@@ -85,36 +91,47 @@ if ! kubectl -n "$CI_NAMESPACE" wait --for=condition=Succeeded --timeout="${READ
 fi
 log_info "PipelineRun succeeded"
 
-# ---- 3. Wait for ArgoCD Synced + Healthy ----
+# ---- 3. Force ArgoCD to pick up the write-back NOW, then wait for the NEW image ----
 argo_status() {
   kubectl -n "$ARGOCD_NAMESPACE" get application "$ARGOCD_APP_NAME" \
     -o jsonpath='{.status.sync.status}/{.status.health.status}' 2>/dev/null
 }
-if ! wait_for "ArgoCD Synced/Healthy" sh -c "[ \"\$(kubectl -n $ARGOCD_NAMESPACE get application $ARGOCD_APP_NAME -o jsonpath='{.status.sync.status}/{.status.health.status}')\" = 'Synced/Healthy' ]"; then
-  log_error "ArgoCD not Synced/Healthy (got: $(argo_status))"
+deploy_img() {
+  kubectl -n "$ARGOCD_DEST_NAMESPACE" get deploy "$APP_NAME" \
+    -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null
+}
+# Hard-refresh so ArgoCD reconciles the write-back commit immediately instead of
+# waiting out its ~3 min auto-sync poll.
+kubectl -n "$ARGOCD_NAMESPACE" annotate application "$ARGOCD_APP_NAME" \
+  argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
+# Ground truth = the deployed image actually CHANGED (not a generic "Synced/Healthy",
+# which can still reflect the pre-write-back revision mid-poll and race the old pods).
+if ! wait_for "ArgoCD rolls a new image (was ${pre_img:-none})" \
+     sh -c "[ \"\$(kubectl -n $ARGOCD_DEST_NAMESPACE get deploy $APP_NAME -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)\" != '${pre_img}' ]"; then
+  log_error "ArgoCD did not roll a new image (still ${pre_img:-none}); status: $(argo_status)"
   kubectl -n "$ARGOCD_NAMESPACE" get application "$ARGOCD_APP_NAME" -o wide >&2 || true
-  die "ArgoCD did not converge"
+  die "ArgoCD did not converge on the new build"
 fi
-log_info "ArgoCD: $(argo_status)"
+log_info "ArgoCD: $(argo_status) — deployed image now $(deploy_img)"
 
 # ---- 4. Verify the running app serves the new marker (the USER-FACING result) ----
-wait_for "app deployment available" kubectl -n "$ARGOCD_DEST_NAMESPACE" rollout status "deploy/${APP_NAME}" --timeout=30s
-# Diagnostic: log the deployed image tag so a "marker missing" failure below is
-# localized to build/push+write-back vs ArgoCD-sync (i.e. did the new image tag
-# actually reach the running Deployment) rather than just "end result not observed".
-deployed_img="$(kubectl -n "$ARGOCD_DEST_NAMESPACE" get deploy "$APP_NAME" \
-  -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
-log_info "deployed image: ${deployed_img:-<unknown>}"
+# Wait for the NEW ReplicaSet to fully roll out before port-forwarding, so the
+# forward lands on a new pod (not one being torn down).
+wait_for "new app rollout complete" kubectl -n "$ARGOCD_DEST_NAMESPACE" rollout status "deploy/${APP_NAME}" --timeout=30s
+log_info "deployed image: $(deploy_img)"
 kubectl -n "$ARGOCD_DEST_NAMESPACE" port-forward "svc/${APP_NAME}" "${APP_LOCAL_PORT}:80" >/dev/null 2>&1 &
 PF_PID=$!
 app="http://localhost:${APP_LOCAL_PORT}"
 wait_for "app HTTP up" curl -fsS "${app}/actuator/health" || die "app not serving"
 
-if curl -fsS "${app}/" | grep -q "$MARKER"; then
+# Poll (not single-shot): the Service briefly load-balances across old+new pods
+# during rollout, so the marker may take a few polls to appear on every replica.
+marker_visible() { curl -fsS "${app}/" 2>/dev/null | grep -q "$MARKER"; }
+if wait_for "deployed page shows marker $MARKER" marker_visible; then
   log_info "SUCCESS — the deployed page shows the new marker '$MARKER'"
   log_info "End-to-end verified: git push -> Tekton -> Harbor -> write-back -> ArgoCD -> live app."
 else
-  log_error "app is up but the page does NOT show marker '$MARKER' (deployed an older image?)"
+  log_error "app is up but the page does NOT show marker '$MARKER' (deployed image: $(deploy_img))"
   curl -fsS "${app}/" | grep -i 'class=\"message\"' >&2 || true
   die "end result not observed"
 fi
