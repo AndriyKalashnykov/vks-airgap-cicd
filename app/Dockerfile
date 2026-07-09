@@ -7,7 +7,7 @@
 # In the air gap, CI passes BUILDER_IMAGE=<harbor>/cicd/webui-builder:<ver> (a
 # builder with this pom's dependencies pre-baked — see app/Dockerfile.builder and
 # scripts/15-build-push-builder.sh) plus MVN_OFFLINE=-o so `package` needs no network.
-ARG BUILDER_IMAGE=maven:3.9-eclipse-temurin-21
+ARG BUILDER_IMAGE=maven:3.9-eclipse-temurin-25
 ARG RUNTIME_IMAGE=eclipse-temurin:25.0.3_9-jre-jammy
 # BUILDER_IMAGE default is explicitly tagged; DL3006 can't see through the ARG.
 # hadolint ignore=DL3006

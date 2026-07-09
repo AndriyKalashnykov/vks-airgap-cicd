@@ -10,7 +10,7 @@
 # Run `mise install` on the jump box before running the Makefile.
 
 [tools]
-java     = "temurin-21"
+java     = "temurin-25"
 maven    = "3.9"
 kubectl  = "1.36.2"
 helm     = "4.2.2"
