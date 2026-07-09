@@ -12,10 +12,10 @@
 [tools]
 java     = "temurin-21"
 maven    = "3.9"
-kubectl  = "1.31"
+kubectl  = "1.36.2"
 helm     = "4.2.2"
-kustomize = "5.5"
-jq       = "1.7"
+kustomize = "5.8.1"
+jq       = "1.8.2"
 yq       = "4"
 # node is only for `make renovate-validate` (renovate@latest requires node ^24.11).
 node     = "24"
