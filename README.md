@@ -42,12 +42,17 @@ make verify                   # [cluster] end-to-end smoke test
 - Network reach to the VKS Supervisor, Harbor, and (for dual-homed) the workload cluster.
 - The Harbor (and Gitea, once installed) **CA certificates** (`.env` → `HARBOR_CA_FILE` / `GITEA_CA_FILE`).
 - [mise](https://mise.jdx.dev/) for the toolchain (installed by `make deps` where possible).
-- **docker or podman** on the jump box (to build + push the Maven builder image).
+- **Container engine:** image operations (mirror, Maven builder build/push, diagram
+  rendering) use `CONTAINER_ENGINE` — **podman-preferred**, docker fallback. The
+  **local KinD end-to-end** additionally **requires Docker**: KinD's node and
+  `cloud-provider-kind` run on the `kind` Docker network + socket. So a real air-gap
+  run can be podman-only; `make e2e-kind` needs Docker.
 
 ### Disk space on the jump box
 
-Measured for the current image set (19 images: Tekton Pipelines+Triggers, Gitea,
-Kaniko, Maven, Temurin JDK/JRE, alpine/git, yq). Figures are approximate.
+Measured for the current image set (~31 images: the Tekton Pipelines+Triggers
+controller images dominate the count, plus Gitea, Kaniko, Maven, Temurin JDK/JRE,
+alpine/git, yq). Figures are approximate.
 
 | What | Where | Size |
 |------|-------|------|
