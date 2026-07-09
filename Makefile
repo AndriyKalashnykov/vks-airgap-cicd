@@ -51,9 +51,14 @@ help: ## Show this help
 	@echo ""
 
 ##@ Prerequisites
-.PHONY: deps
-deps: ## Install jump-box toolchain (mise tools + skopeo/tkn/argocd via prereqs script)
-	@if command -v mise >/dev/null 2>&1; then mise install; else echo "mise not found; skipping mise install"; fi
+.PHONY: deps deps-mise deps-prereqs
+deps: deps-mise deps-prereqs ## Install the full jump-box toolchain (mise tools + prereqs script)
+
+deps-mise: ## Install mise-managed tools from .mise.toml (java, maven, kubectl, helm, trivy, ...)
+	@if command -v mise >/dev/null 2>&1; then mise install; \
+	 else echo "mise not found — install it first (see README → Prerequisites), then re-run 'make deps'"; exit 1; fi
+
+deps-prereqs: ## Install non-mise CLIs + OS packages (skopeo, git, tkn, argocd, podman, ...) via 00-install-prereqs.sh
 	@$(SCRIPTS)/00-install-prereqs.sh
 
 .PHONY: check-env
