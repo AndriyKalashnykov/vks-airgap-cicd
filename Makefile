@@ -207,6 +207,10 @@ validate: ## kustomize build + kubeconform manifests; kubectl dry-run Tekton YAM
 check-image-alignment: ## Fail if any mirrored image tag drifts between k8s/tekton manifests and images/images.txt
 	@$(SCRIPTS)/check-image-alignment.sh
 
+.PHONY: check-java-alignment
+check-java-alignment: ## Fail if the Java major drifts across pom/mise/ci/Dockerfile/images.txt
+	@$(SCRIPTS)/check-java-alignment.sh
+
 .PHONY: check-toolchain-alignment
 check-toolchain-alignment: ## Fail if kubectl pinned in .mise.toml disagrees with .env.example KUBECTL_VERSION
 	@mise_v=$$(grep -E '^kubectl' .mise.toml | sed -E 's/.*"([^"]+)".*/\1/' | tr -d 'v'); \
@@ -298,7 +302,7 @@ docs-lint: diagrams-check ## Lint markdown + verify diagrams are current
 	else echo "markdownlint not installed — skipping (install markdownlint-cli)"; fi
 
 .PHONY: static-check
-static-check: check-toolchain-alignment check-env check-image-alignment lint validate sec app-test ## Composite code gate (alignment + lint + manifests + security + app tests)
+static-check: check-toolchain-alignment check-java-alignment check-env check-image-alignment lint validate sec app-test ## Composite code gate (alignment + lint + manifests + security + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint ## Full local pipeline (offline-verifiable parts)

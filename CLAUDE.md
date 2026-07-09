@@ -18,7 +18,7 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make help` | List all targets (grouped) |
 | `make deps` | Install jump-box toolchain (mise + `scripts/00-install-prereqs.sh`) |
 | `make ci` | Offline gate: `static-check` + `docs-lint` |
-| `make static-check` | `check-toolchain-alignment` + `check-env` + `check-image-alignment` + `lint` + `validate` + `sec` + `app-test` |
+| `make static-check` | `check-toolchain-alignment` + `check-java-alignment` + `check-env` + `check-image-alignment` + `lint` + `validate` + `sec` + `app-test` |
 | `make sec` | Security scans: `secrets` (gitleaks) + `trivy-fs` (built-jar deps) + `trivy-config` (manifests) |
 | `make app-test` / `app-build` / `app-run` | Spring Boot app dev (in `app/`, uses `./mvnw`) |
 | `make mirror` | (dual-homed) pull images → push to Harbor |
@@ -84,7 +84,11 @@ Run a single app test: `cd app && ./mvnw -B -Dtest=<ClassName>#<method> test`.
   each host through the LB with a K1.5 readiness poll (cloud-provider-kind wires the LB
   Envoy 5–60s after the IP is assigned); `verify-ingress-both` runs the istio+traefik matrix.
 - **Security + alignment gates** (`static-check`, internet/CI side): `check-toolchain-alignment`
-  (kubectl pin in `.mise.toml` == `.env.example` `KUBECTL_VERSION`), `sec` (gitleaks +
+  (kubectl pin in `.mise.toml` == `.env.example` `KUBECTL_VERSION`), `check-java-alignment`
+  (Java major identical across `app/pom.xml`, `.mise.toml`, `ci.yml`, the `app/Dockerfile`
+  build+runtime images, and `images/images.txt` — Renovate tracks the maven build image and
+  the eclipse-temurin runtime image separately, so it can split them; the build once compiled
+  for 21 but ran on 25), `sec` (gitleaks +
   trivy fs on the built jar + trivy config on manifests; `.trivyignore` documents the two
   accepted-by-design misconfigs — gitea RO-rootfs, Traefik secrets RBAC). trivy/gitleaks
   are `.mise.toml`-provided so local `make static-check` mirrors the CI job.
