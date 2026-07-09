@@ -24,6 +24,7 @@ mkdir -p "$MANIFEST_DIR" "$IMAGE_CACHE_DIR"
 # ---- 1. Download the Tekton install manifests (also feed the image list) ----
 tk_pipe="${TEKTON_PIPELINES_VERSION:?}"
 tk_trig="${TEKTON_TRIGGERS_VERSION:?}"
+tk_dash="${TEKTON_DASHBOARD_VERSION:?}"
 # Tekton publishes its pinned per-version install manifests as GitHub RELEASE
 # ASSETS. The legacy GCS `.../previous/<version>/` mirror was abandoned after
 # pipeline v1.14.0 / triggers v0.34.0 (newer tags 404 there), and Renovate
@@ -33,6 +34,9 @@ declare -A MANIFESTS=(
   ["tekton-pipelines-${tk_pipe}.yaml"]="https://github.com/tektoncd/pipeline/releases/download/${tk_pipe}/release.yaml"
   ["tekton-triggers-${tk_trig}.yaml"]="https://github.com/tektoncd/triggers/releases/download/${tk_trig}/release.yaml"
   ["tekton-triggers-interceptors-${tk_trig}.yaml"]="https://github.com/tektoncd/triggers/releases/download/${tk_trig}/interceptors.yaml"
+  # Dashboard: read-only (release.yaml). Its ghcr.io image is auto-collected from this
+  # manifest by mirror_collect_images (same as the pipeline/triggers controllers).
+  ["tekton-dashboard-${tk_dash}.yaml"]="https://github.com/tektoncd/dashboard/releases/download/${tk_dash}/release.yaml"
 )
 for f in "${!MANIFESTS[@]}"; do
   log_info "downloading manifest $f"

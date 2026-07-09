@@ -20,13 +20,13 @@ harbor_url="${harbor_scheme}://${HARBOR_URL:-harbor.vks.local}"
 gitea_url="${GITEA_URL:-http://${GITEA_HOST:-gitea.vks.local}}"
 argocd_url="http://${ARGOCD_HOST:-argocd.vks.local}"
 app_url="http://${WEBUI_HOST:-app.vks.local}"
+tekton_url="http://${TEKTON_DASHBOARD_HOST:-tekton.vks.local}"  # Tekton Dashboard (read-only UI)
 
 # --- resolve logins -------------------------------------------------------------------
 harbor_user="${HARBOR_USERNAME:-admin}"
 harbor_pw="${HARBOR_PASSWORD:-<set HARBOR_PASSWORD in .env>}"
 gitea_user="${GITEA_ADMIN_USER:-gitea_admin}"
 gitea_pw="${GITEA_ADMIN_PASSWORD:-<set GITEA_ADMIN_PASSWORD in .env>}"
-ci_ns="${CI_NAMESPACE:-ci}"  # Tekton pipeline/EventListener namespace (in-cluster CI, no web UI)
 # ArgoCD via the context-aware resolver; exit 3 => VKS-provided / not knowable locally.
 if argo_pw="$("${SCRIPT_DIR}/argocd-password.sh" 2>/dev/null)"; then :; else
   argo_pw="<VKS-provided — get it from your lab>"
@@ -37,7 +37,7 @@ echo "Access the UIs (local demo credentials):"
 if [ -n "${INGRESS_LB_IP:-}" ]; then
   echo
   echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"
-  echo "    ${INGRESS_LB_IP}  ${GITEA_HOST:-gitea.vks.local} ${ARGOCD_HOST:-argocd.vks.local} ${WEBUI_HOST:-app.vks.local}"
+  echo "    ${INGRESS_LB_IP}  ${GITEA_HOST:-gitea.vks.local} ${ARGOCD_HOST:-argocd.vks.local} ${WEBUI_HOST:-app.vks.local} ${TEKTON_DASHBOARD_HOST:-tekton.vks.local}"
 fi
 
 # --- table ----------------------------------------------------------------------------
@@ -46,7 +46,7 @@ printf '  %-9s %-32s %-14s %s\n'   "-------" "---" "--------" "--------"
 # Ordered by the pipeline flow: Gitea (push) -> Tekton (build) -> Harbor (registry)
 # -> ArgoCD (deploy) -> App. Tekton is in-cluster CI with no web UI.
 printf '  %-9s %-32s %-14s %s\n'   "Gitea"   "$gitea_url"  "$gitea_user"  "$gitea_pw"
-printf '  %-9s %-32s %-14s %s\n'   "Tekton"  "in-cluster CI - no web UI"   "-" "use: tkn -n ${ci_ns}"
+printf '  %-9s %-32s %-14s %s\n'   "Tekton"  "$tekton_url" "-"            "(no login; read-only dashboard)"
 printf '  %-9s %-32s %-14s %s\n'   "Harbor"  "$harbor_url" "$harbor_user" "$harbor_pw"
 printf '  %-9s %-32s %-14s %s\n'   "ArgoCD"  "$argocd_url" "admin"        "$argo_pw"
 printf '  %-9s %-32s %-14s %s\n'   "App"     "$app_url"    "-"            "(no login; health at /actuator/health)"

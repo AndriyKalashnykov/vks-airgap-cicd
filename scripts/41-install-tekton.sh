@@ -16,7 +16,7 @@ load_env
 require_cmd kubectl
 : "${KUBECONFIG:?}"; export KUBECONFIG
 : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"; : "${BUNDLE_DIR:?}"
-: "${TEKTON_PIPELINES_VERSION:?}"; : "${TEKTON_TRIGGERS_VERSION:?}"
+: "${TEKTON_PIPELINES_VERSION:?}"; : "${TEKTON_TRIGGERS_VERSION:?}"; : "${TEKTON_DASHBOARD_VERSION:?}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 
 MANIFEST_DIR="${BUNDLE_DIR}/manifests"
@@ -41,10 +41,13 @@ apply_manifest() {
 pipe="${MANIFEST_DIR}/tekton-pipelines-${TEKTON_PIPELINES_VERSION}.yaml"
 trig="${MANIFEST_DIR}/tekton-triggers-${TEKTON_TRIGGERS_VERSION}.yaml"
 intc="${MANIFEST_DIR}/tekton-triggers-interceptors-${TEKTON_TRIGGERS_VERSION}.yaml"
+# Dashboard (web UI) — read-only release, into the same tekton-pipelines namespace.
+dash="${MANIFEST_DIR}/tekton-dashboard-${TEKTON_DASHBOARD_VERSION}.yaml"
 
 apply_manifest "$pipe"
 apply_manifest "$trig"
 apply_manifest "$intc"
+apply_manifest "$dash"
 
 log_info "waiting for Tekton controllers to become ready (timeout ${READY_TIMEOUT_SECONDS}s)"
 run kubectl -n "${TEKTON_NAMESPACE:-tekton-pipelines}" wait --for=condition=Available \
