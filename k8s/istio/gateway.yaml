@@ -22,6 +22,7 @@ spec:
         - ${GITEA_HOST}
         - ${ARGOCD_HOST}
         - ${WEBUI_HOST}
+        - ${TEKTON_DASHBOARD_HOST}
 ---
 apiVersion: networking.istio.io/v1
 kind: VirtualService
@@ -73,3 +74,20 @@ spec:
             host: ${APP_NAME}.${ARGOCD_DEST_NAMESPACE}.svc.cluster.local
             port:
               number: 80
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: tekton-dashboard
+  namespace: ${ISTIO_GATEWAY_NAMESPACE}
+spec:
+  hosts:
+    - ${TEKTON_DASHBOARD_HOST}
+  gateways:
+    - vks-uis
+  http:
+    - route:
+        - destination:
+            host: tekton-dashboard.${TEKTON_NAMESPACE}.svc.cluster.local
+            port:
+              number: 9097

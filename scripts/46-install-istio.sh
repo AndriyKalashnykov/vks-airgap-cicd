@@ -23,6 +23,7 @@ require_cmd envsubst "install gettext (provides envsubst)"
 : "${GITEA_NAMESPACE:?}"; : "${GITEA_HOST:?}"
 : "${ARGOCD_NAMESPACE:?}"; : "${ARGOCD_HOST:?}"
 : "${ARGOCD_DEST_NAMESPACE:?}"; : "${WEBUI_HOST:?}"; : "${APP_NAME:?}"
+: "${TEKTON_NAMESPACE:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
 
@@ -67,9 +68,9 @@ run helm upgrade --install istio-ingressgateway "${CHART_REPO_NAME}/gateway" \
 for ns in "$GITEA_NAMESPACE" "$ARGOCD_NAMESPACE" "$ARGOCD_DEST_NAMESPACE"; do
   run bash -c "kubectl create namespace \"$ns\" --dry-run=client -o yaml | kubectl apply -f -"
 done
-log_info "applying Gateway + VirtualServices (gitea/argocd/app -> *.vks.local)"
+log_info "applying Gateway + VirtualServices (gitea/argocd/app/tekton -> *.vks.local)"
 # shellcheck disable=SC2016
-ALLOWLIST='${ISTIO_GATEWAY_NAMESPACE} ${GITEA_HOST} ${GITEA_NAMESPACE} ${ARGOCD_HOST} ${ARGOCD_NAMESPACE} ${WEBUI_HOST} ${APP_NAME} ${ARGOCD_DEST_NAMESPACE}'
+ALLOWLIST='${ISTIO_GATEWAY_NAMESPACE} ${GITEA_HOST} ${GITEA_NAMESPACE} ${ARGOCD_HOST} ${ARGOCD_NAMESPACE} ${WEBUI_HOST} ${APP_NAME} ${ARGOCD_DEST_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${TEKTON_NAMESPACE}'
 # shellcheck disable=SC2016
 envsubst "$ALLOWLIST" < "${K8S_DIR}/gateway.yaml" | run kubectl apply -f -
 
@@ -93,7 +94,7 @@ set_env_var INGRESS_LB_IP "$LB_IP"
 log_info "published INGRESS_LB_IP=${LB_IP} to ${REPO_ROOT}/.env.kind"
 log_info "Istio installed. Add ONE line to /etc/hosts on the jump box / your client:"
 log_info ""
-log_info "    ${LB_IP}  ${GITEA_HOST} ${ARGOCD_HOST} ${WEBUI_HOST}"
+log_info "    ${LB_IP}  ${GITEA_HOST} ${ARGOCD_HOST} ${WEBUI_HOST} ${TEKTON_DASHBOARD_HOST}"
 log_info ""
-log_info "then browse: http://${GITEA_HOST}  http://${ARGOCD_HOST}  http://${WEBUI_HOST}"
+log_info "then browse: http://${GITEA_HOST}  http://${ARGOCD_HOST}  http://${WEBUI_HOST}  http://${TEKTON_DASHBOARD_HOST}"
 log_info "(no port-forward for the UIs; Harbor keeps its own LB IP)"
