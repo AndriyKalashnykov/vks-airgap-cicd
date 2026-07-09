@@ -108,7 +108,7 @@ the new version).
 cp .env.example .env          # set HARBOR_PASSWORD + GITEA_ADMIN_PASSWORD (any demo values)
 make deps                     # kind, helm, kubectl, skopeo, etc.
 make e2e-kind                 # cluster → Harbor → ArgoCD → mirror → build → deploy → verify
-# ... explore ...
+# open the UIs → see "Access the UIs" below for URLs, logins, and passwords
 make kind-down                # tear everything down (also prunes cloud-provider-kind orphans)
 ```
 
@@ -125,6 +125,177 @@ How the local stand-in works:
   is needed for the local run.
 
 Individual targets: `make kind-up`, `make install-harbor`, `make install-argocd`.
+
+### Access the UIs (URLs, logins, passwords)
+
+Every service is `ClusterIP` (Harbor is a `LoadBalancer` on the kind network), so you reach
+each one over `kubectl port-forward` — run each in its own terminal (it blocks). Logins are
+the values you put in `.env`; ArgoCD's is generated and read from a secret.
+
+| Service | URL | Username | Password |
+|---------|-----|----------|----------|
+| **Harbor** | `http://$(grep '^HARBOR_URL=' .env.kind \| cut -d= -f2)` (the LB IP, plain HTTP) | `admin` | your `HARBOR_PASSWORD` from `.env` |
+| **Gitea** | `kubectl -n gitea port-forward svc/gitea-http 3000:3000` → <http://localhost:3000> | `gitea_admin` | your `GITEA_ADMIN_PASSWORD` from `.env` |
+| **ArgoCD** | `kubectl -n argocd port-forward svc/argocd-server 8081:80` → <http://localhost:8081> | `admin` | see command below |
+| **App (webui)** | `kubectl -n webui port-forward svc/webui 18080:80` → <http://localhost:18080/> | — | — (health at `/actuator/health`) |
+
+```bash
+# ArgoCD initial admin password (generated at install):
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+```
+
+The Tekton **EventListener** is reached in-cluster only (`el-webui.ci.svc:8080`); the Gitea
+webhook fires cluster-internally, so there is nothing to expose or log into.
+
+## Run against a real VKS lab (Harbor & ArgoCD pre-provided)
+
+This is the real target: the VKS lab already runs **Harbor** and **ArgoCD** (you have their
+IPs, logins, and passwords) and gives you a workload-cluster kubeconfig. You install only
+**Gitea** + **Tekton** and wire the flow. Dual-homed: the jump box reaches both the internet
+and the lab (VKS API + Harbor).
+
+**Step 0 — remove the KinD overlay.** `.env.kind` (written by the local flow) is sourced
+*after* `.env` and would silently redirect everything at a kind cluster. Delete it first:
+
+```bash
+make kind-down        # if you ran the local flow (also removes .env.kind)
+rm -f .env.kind       # belt-and-suspenders
+```
+
+**Step 1 — fill in `.env`** (copied from `.env.example`; gitignored, never committed) with
+the lab-provided values:
+
+```bash
+# --- Harbor (pre-provided by the lab) ---
+HARBOR_URL=harbor.<lab-host-or-ip>       # the lab's Harbor (HTTPS)
+HARBOR_USERNAME=admin                    # or a robot account name (step 4)
+HARBOR_PASSWORD=<lab-harbor-secret>      # set in .env only, never on argv
+HARBOR_CA_FILE=./secrets/harbor-ca.crt   # the lab Harbor's CA (step 2)
+HARBOR_INFRA_PROJECT=cicd                # CI/CD + base images
+HARBOR_APP_PROJECT=apps                  # the built application image
+
+# --- ArgoCD (pre-provided, running IN the workload cluster) ---
+ARGOCD_NAMESPACE=<ns-where-lab-argocd-runs>   # e.g. argocd — find it in step 4
+ARGOCD_APP_NAME=webui
+ARGOCD_DEST_NAMESPACE=webui
+ARGOCD_TRACK_BRANCH=main
+# ARGOCD_SERVER is NOT consumed by the scripts (wiring is via kubectl, not the argocd CLI).
+# You only need the lab's ArgoCD IP/login/password to open its UI (step 7).
+
+# --- Gitea (WE install it) ---
+GITEA_ADMIN_PASSWORD=<choose-one>        # set in .env only
+
+# --- VKS access ---
+VKS_AUTH_METHOD=kubeconfig               # simplest: bring the lab's kubeconfig
+KUBECONFIG=./secrets/vks.kubeconfig      # place the lab's exported kubeconfig here
+VKS_CONTEXT=<context-name-in-that-kubeconfig>
+```
+
+For VKS auth, `kubeconfig` (drop the lab's exported kubeconfig at `$KUBECONFIG`) is the
+simplest working method. If the lab uses the vSphere plugin instead, set
+`VKS_AUTH_METHOD=vsphere` and `SUPERVISOR_HOST` / `VKS_NAMESPACE` / `VKS_CLUSTER_NAME` /
+`VKS_USERNAME` / `VKS_PASSWORD`. (The `vcf` method is a stub — do not use it yet.)
+
+**Step 2 — save the Harbor CA certificate** to `./secrets/harbor-ca.crt` (the
+`HARBOR_CA_FILE` path). If the lab handed you the cert, drop it there. Otherwise fetch it
+from the running Harbor:
+
+```bash
+mkdir -p secrets
+openssl s_client -connect <harbor-host>:443 -showcerts </dev/null 2>/dev/null \
+  | openssl x509 -outform PEM > secrets/harbor-ca.crt
+```
+
+(Or download it from the Harbor UI → your project → **Registry Certificate**.) The CA is
+consumed in **two** places, both handled for you: `make mirror` / `make vks-login` install it
+into the jump box's system trust store (so `skopeo` can push over HTTPS), and `make platform`
+creates an in-cluster ConfigMap **`harbor-ca`** (key `ca.crt`) in the `ci` namespace so
+Kaniko/Tekton trust it too. If Harbor presents a publicly-trusted cert, leave
+`HARBOR_CA_FILE` empty.
+
+**Step 3 — install prereqs and log in to VKS:**
+
+```bash
+make deps         # skopeo, tkn, argocd, kubectl, helm, mise tools
+make vks-login    # validates $KUBECONFIG + context against the lab cluster
+```
+
+**Step 4 — Harbor projects + (recommended) a robot account.** `make mirror` (run in step 6)
+creates the `cicd` and `apps` projects for you via Harbor's REST API if they don't exist
+(needs push rights). For least-privilege CI, create a Harbor **robot account** (Harbor UI →
+**Administration → Robot Accounts**, or the REST API) scoped to push/pull those two projects,
+and put its name/secret in `HARBOR_USERNAME` / `HARBOR_PASSWORD` instead of `admin`. Find the
+namespace the lab's ArgoCD watches (for `ARGOCD_NAMESPACE` in step 1):
+
+```bash
+kubectl get pods -A | grep argocd-application-controller   # its namespace = ARGOCD_NAMESPACE
+```
+
+**Step 5 — verify (or create) the in-cluster registry secret.** The pipeline pushes the
+built image to Harbor from inside the cluster, which needs a Docker-config secret.
+`make platform` (its `configure-tekton` step, run in step 6) creates it for you as
+**`harbor-dockerconfig`** in the `ci` namespace, from `HARBOR_USERNAME` / `HARBOR_PASSWORD`.
+Check whether it already exists:
+
+```bash
+kubectl -n ci get secret harbor-dockerconfig
+```
+
+If you ever need to create or rotate it by hand (keeping the secret **off argv** — build the
+`config.json` on disk and load it from a file; kaniko needs the key named literally
+`config.json`, not `.dockerconfigjson`):
+
+```bash
+umask 077
+auth=$(printf '%s:%s' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" | base64 -w0)
+printf '{"auths":{"%s":{"auth":"%s"}}}' "$HARBOR_URL" "$auth" > /tmp/harbor-config.json
+kubectl -n ci create secret generic harbor-dockerconfig \
+  --from-file=config.json=/tmp/harbor-config.json --dry-run=client -o yaml | kubectl apply -f -
+rm -f /tmp/harbor-config.json
+```
+
+The Kubernetes secret is built from your Harbor **login/password**; Harbor's **REST API** is
+used only to create the *projects* (and, optionally, a robot account) — it does not create
+this cluster secret.
+
+**Step 6 — install everything and verify end-to-end:**
+
+```bash
+make install-all   # mirror → builder-image → vks-login → platform → gitops
+make verify        # push a marked change → Tekton → Harbor → ArgoCD → live app serves it
+```
+
+`install-all` deliberately does **not** install Harbor or ArgoCD — those are the lab's. It
+mirrors all images into the lab Harbor, builds + pushes the offline Maven builder image,
+installs Gitea + Tekton, and creates the ArgoCD `Application`.
+
+**Step 7 — access the UIs.** Harbor and ArgoCD are the lab's — use the IPs/logins/passwords
+the lab gave you. For **Gitea** (which you installed) and the deployed **app**, use the same
+port-forward pattern as the local run (see [Access the UIs](#access-the-uis-urls-logins-passwords)):
+`kubectl -n gitea port-forward svc/gitea-http 3000:3000` and
+`kubectl -n webui port-forward svc/webui 18080:80`.
+
+### VKS-lab checklist (easy-to-miss items)
+
+- **`.env.kind` must not exist** (step 0) — it is sourced after `.env` and silently forces
+  kind values.
+- **ArgoCD must run in the same cluster** your `KUBECONFIG` targets. The `Application`'s
+  destination is `https://kubernetes.default.svc` (in-cluster) and the scripts wire it by
+  `kubectl apply`-ing the `Application` into `ARGOCD_NAMESPACE` — **not** via the ArgoCD API.
+  A remote/off-cluster ArgoCD addressed by URL + API is not supported.
+- **`ARGOCD_NAMESPACE` must match** where the lab's ArgoCD controller watches Applications
+  (step 4).
+- **ArgoCD reaches Gitea over the in-cluster URL** (`GITEA_INTERNAL_URL`, default
+  `http://gitea-http.gitea.svc:3000`) — Gitea and ArgoCD are in the same cluster, so this
+  works without exposing Gitea externally.
+- **cluster-admin** on the workload cluster is required — the flow creates namespaces
+  (`gitea`, `ci`, `webui`) and installs Tekton CRDs.
+- **StorageClass:** Gitea uses a PVC (`GITEA_STORAGE_SIZE`, default `5Gi`). Ensure the
+  cluster has a default StorageClass (or set one explicitly).
+- **Harbor projects** `cicd` + `apps` must exist (auto-created by `make mirror` with push
+  rights; otherwise create them first).
+- **Network reach (dual-homed):** the jump box must reach the VKS API server and the lab
+  Harbor.
 
 ## Detailed steps
 
