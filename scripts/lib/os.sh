@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/lib/os.sh — shared library for all vks-cicd scripts.
+# scripts/lib/os.sh — shared library for all vks-airgap-cicd scripts.
 #
 # Provides: OS detection + package-manager abstraction (Ubuntu apt / PhotonOS tdnf),
 # structured logging, env loading (.env.example then .env), command assertions,

@@ -1,4 +1,4 @@
-# vks-cicd — orchestration for the air-gapped VKS CI/CD demo.
+# vks-airgap-cicd — orchestration for the air-gapped VKS CI/CD demo.
 #
 # Layered targets: `make deps` → `make mirror` → `make vks-login` → `make platform`
 # → `make gitops` → `make verify`. Or run the whole thing with `make install-all`.
@@ -45,7 +45,7 @@ MVN     := ./app/mvnw
 # ---------------------------------------------------------------------------
 .PHONY: help
 help: ## Show this help
-	@awk 'BEGIN{FS=":.*##"; printf "\nvks-cicd targets\n\n"} \
+	@awk 'BEGIN{FS=":.*##"; printf "\nvks-airgap-cicd targets\n\n"} \
 	  /^[a-zA-Z0-9_-]+:.*##/ {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2} \
 	  /^##@/ {printf "\n\033[1m%s\033[0m\n", substr($$0,5)}' $(MAKEFILE_LIST)
 	@echo ""

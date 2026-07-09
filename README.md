@@ -1,7 +1,7 @@
-[![CI](https://github.com/AndriyKalashnykov/vks-cicd/actions/workflows/ci.yml/badge.svg)](https://github.com/AndriyKalashnykov/vks-cicd/actions/workflows/ci.yml)
+[![CI](https://github.com/AndriyKalashnykov/vks-airgap-cicd/actions/workflows/ci.yml/badge.svg)](https://github.com/AndriyKalashnykov/vks-airgap-cicd/actions/workflows/ci.yml)
 [![Renovate enabled](https://img.shields.io/badge/renovate-enabled-brightgreen?logo=renovatebot)](https://docs.renovatebot.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Hits](https://hits.sh/github.com/AndriyKalashnykov/vks-cicd.svg?view=today-total&style=plastic)](https://hits.sh/github.com/AndriyKalashnykov/vks-cicd/)
+[![Hits](https://hits.sh/github.com/AndriyKalashnykov/vks-airgap-cicd.svg?view=today-total&style=plastic)](https://hits.sh/github.com/AndriyKalashnykov/vks-airgap-cicd/)
 
 # Air-gapped CI/CD on VMware VKS — Reference Demo
 
