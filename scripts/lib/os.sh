@@ -195,6 +195,39 @@ ensure_secret_token() {
 }
 
 # ---------------------------------------------------------------------------
+# Network
+# ---------------------------------------------------------------------------
+# http_get_retry <url> <dest> — download <url> to <dest>, resilient to transient
+# failures (notably raw.githubusercontent.com HTTP 429 rate-limiting). Combines
+# curl's own transient-error retry with an outer exponential-backoff loop, so a
+# rate-limited GitHub-raw fetch does not fail the install on the first blip.
+# Tunables come from .env.example (HTTP_GET_* / CURL_MAX_TIME_SECONDS). Writes
+# to <dest> only on success (curl -o truncates, but the outer loop re-fetches);
+# dies after the retry budget is exhausted.
+http_get_retry() {
+  local url="$1" dest="$2"
+  local attempts="${HTTP_GET_RETRIES:-5}"
+  local delay="${HTTP_GET_RETRY_DELAY_SECONDS:-5}"
+  require_cmd curl
+  local i
+  for (( i = 1; i <= attempts; i++ )); do
+    if curl -fsSL \
+         --retry 3 --retry-delay "$delay" --retry-all-errors \
+         --connect-timeout "${HTTP_CONNECT_TIMEOUT_SECONDS:-10}" \
+         --max-time "${HTTP_GET_MAX_TIME_SECONDS:-60}" \
+         -o "$dest" "$url"; then
+      return 0
+    fi
+    if [ "$i" -lt "$attempts" ]; then
+      log_warn "download failed (attempt ${i}/${attempts}): ${url} — retrying in ${delay}s"
+      sleep "$delay"
+      delay=$(( delay * 2 ))
+    fi
+  done
+  die "failed to download ${url} after ${attempts} attempts"
+}
+
+# ---------------------------------------------------------------------------
 # Misc
 # ---------------------------------------------------------------------------
 # dry_run flag: set DRY_RUN=1 to print privileged/mutating commands instead of

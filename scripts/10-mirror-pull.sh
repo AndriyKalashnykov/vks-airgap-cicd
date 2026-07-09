@@ -24,14 +24,19 @@ mkdir -p "$MANIFEST_DIR" "$IMAGE_CACHE_DIR"
 # ---- 1. Download the Tekton install manifests (also feed the image list) ----
 tk_pipe="${TEKTON_PIPELINES_VERSION:?}"
 tk_trig="${TEKTON_TRIGGERS_VERSION:?}"
+# Tekton publishes its pinned per-version install manifests as GitHub RELEASE
+# ASSETS. The legacy GCS `.../previous/<version>/` mirror was abandoned after
+# pipeline v1.14.0 / triggers v0.34.0 (newer tags 404 there), and Renovate
+# tracks these via datasource=github-releases (see .env.example) — so the
+# GitHub release download URL is the single, version-consistent source of truth.
 declare -A MANIFESTS=(
-  ["tekton-pipelines-${tk_pipe}.yaml"]="https://storage.googleapis.com/tekton-releases/pipeline/previous/${tk_pipe}/release.yaml"
-  ["tekton-triggers-${tk_trig}.yaml"]="https://storage.googleapis.com/tekton-releases/triggers/previous/${tk_trig}/release.yaml"
-  ["tekton-triggers-interceptors-${tk_trig}.yaml"]="https://storage.googleapis.com/tekton-releases/triggers/previous/${tk_trig}/interceptors.yaml"
+  ["tekton-pipelines-${tk_pipe}.yaml"]="https://github.com/tektoncd/pipeline/releases/download/${tk_pipe}/release.yaml"
+  ["tekton-triggers-${tk_trig}.yaml"]="https://github.com/tektoncd/triggers/releases/download/${tk_trig}/release.yaml"
+  ["tekton-triggers-interceptors-${tk_trig}.yaml"]="https://github.com/tektoncd/triggers/releases/download/${tk_trig}/interceptors.yaml"
 )
 for f in "${!MANIFESTS[@]}"; do
   log_info "downloading manifest $f"
-  run curl -fsSL "${MANIFESTS[$f]}" -o "${MANIFEST_DIR}/${f}"
+  http_get_retry "${MANIFESTS[$f]}" "${MANIFEST_DIR}/${f}"
 done
 
 # ---- 2. Collect the full image list ----
