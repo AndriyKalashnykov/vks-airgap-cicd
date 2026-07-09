@@ -18,9 +18,11 @@ System_Boundary(vks, "Air-gapped VKS cluster") {
   ContainerDb(harbor, "Harbor", "OCI registry (VKS-provided)", "Stores mirrored + built images", $tags="datastore")
   Container(argo, "ArgoCD", "GitOps controller (VKS-provided)", "Watches webui-deploy, syncs to the cluster")
   Container(app, "webui", "Spring Boot 4 / Java 25", "The demo web application")
+  Container(dash, "Tekton Dashboard", "Tekton", "Read-only web UI for PipelineRuns / TaskRuns / logs")
 }
 
 Rel(dev, gitea, "git push", "HTTP")
+Rel(dev, dash, "watch PipelineRuns", "HTTP")
 Rel(mirror, harbor, "push all images", "HTTPS/HTTP")
 Rel(gitea, el, "push webhook", "HTTP")
 Rel(el, pipe, "creates PipelineRun")

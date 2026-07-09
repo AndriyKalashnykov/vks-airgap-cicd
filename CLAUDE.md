@@ -77,13 +77,21 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   controller. `scripts/44-install-ingress.sh` dispatches to `46-install-istio.sh` (helm
   control plane + gateway LB; istio images from Harbor via the `global.hub` override) or
   `45-install-traefik.sh` (single-binary LB). Both expose the SAME `*.vks.local` hosts
-  (`GITEA_HOST`/`ARGOCD_HOST`/`WEBUI_HOST`) behind ONE LoadBalancer and publish
-  `INGRESS_LB_IP` + the chosen `INGRESS_CONTROLLER` to `.env.kind`. Hostnames resolve via
+  (`GITEA_HOST`/`ARGOCD_HOST`/`WEBUI_HOST`/`TEKTON_DASHBOARD_HOST`) behind ONE LoadBalancer and
+  publish `INGRESS_LB_IP` + the chosen `INGRESS_CONTROLLER` to `.env.kind`. `44-install-ingress.sh`
+  lets an explicit `INGRESS_CONTROLLER` override win over the persisted `.env.kind` value (so
+  `verify-ingress-both` actually flips controllers). Hostnames resolve via
   `/etc/hosts` → the LB IP (no internet DNS). **Harbor keeps its OWN direct LB** — its LB
   IP is load-bearing for the containerd insecure-registry pull path, so it is NOT routed
   through the ingress. `make verify-ingress` (in `e2e-kind`, after `verify`) route-checks
   each host through the LB with a K1.5 readiness poll (cloud-provider-kind wires the LB
-  Envoy 5–60s after the IP is assigned); `verify-ingress-both` runs the istio+traefik matrix.
+  Envoy 5–60s after the IP is assigned) and asserts each host serves its own body marker;
+  `verify-ingress-both` runs the istio+traefik matrix.
+- **Tekton Dashboard**: `TEKTON_DASHBOARD_VERSION` (Renovate `github-releases`) pins the
+  read-only `tektoncd/dashboard` web UI; `10-mirror-pull.sh` fetches its release manifest (its
+  ghcr.io image auto-mirrors to Harbor), `41-install-tekton.sh` applies it (host-rewritten)
+  into `tekton-pipelines`, and the ingress fronts it at `TEKTON_DASHBOARD_HOST`
+  (`tekton.vks.local`). No built-in auth — network/ingress-gated (no login).
 - **Security + alignment gates** (`static-check`, internet/CI side): `check-toolchain-alignment`
   (kubectl pin in `.mise.toml` == `.env.example` `KUBECTL_VERSION`), `check-java-alignment`
   (Java major identical across `apps/java/webui/pom.xml`, `.mise.toml`, `ci.yml`, the `apps/java/webui/Dockerfile`

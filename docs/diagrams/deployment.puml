@@ -21,6 +21,7 @@ Deployment_Node(vks, "VKS workload cluster", "VMware vSphere Kubernetes Service 
   }
   Deployment_Node(ns_tk, "namespace: tekton-pipelines", "") {
     Container(tk, "Tekton", "Pipelines + Triggers controllers")
+    Container(dash, "Tekton Dashboard", "read-only web UI")
   }
   Deployment_Node(ns_ci, "namespace: ci", "") {
     Container(ci, "Pipeline + EventListener", "PipelineRuns, el-webui")
@@ -48,6 +49,7 @@ Rel(op, ing, "browse UIs", "*.vks.local / HTTP")
 Rel(ing, gitea, "route", "HTTP")
 Rel(ing, argo, "route", "HTTP")
 Rel(ing, app, "route", "HTTP")
+Rel(ing, dash, "route", "HTTP")
 
 SHOW_LEGEND()
 @enduml

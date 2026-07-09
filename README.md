@@ -24,10 +24,35 @@ pluggable ingress (**Istio** by default, **Traefik** optional) fronting the UIs 
 
 ## Prerequisites
 
+### Install and configure git (first — before mise)
+
+git is the one tool you need **before everything else**: you use it to clone this repo, and
+the CI flow uses git both in-cluster (clone) and for the GitOps tag write-back. Install the
+client for your jump-box OS (`scripts/00-install-prereqs.sh` also installs it via the OS
+package manager, but you need it *before* you can clone the repo and run `make deps`):
+
+```bash
+# Ubuntu
+sudo apt-get update && sudo apt-get install -y git
+
+# Photon OS
+sudo tdnf install -y git
+```
+
+Set your commit identity — used for any local commits you make on the jump box (the
+in-cluster pipeline commits under its own identity):
+
+```bash
+git config --global user.name  "VKS Developer"
+git config --global user.email "vks.developer@sample.corp.com"
+```
+
+### Toolchain and access
+
 - A jump box running **Ubuntu** or **PhotonOS** with internet access.
 - Network reach to the VKS Supervisor, Harbor, and (for dual-homed) the workload cluster.
 - The Harbor (and Gitea, once installed) **CA certificates** (`.env` → `HARBOR_CA_FILE` / `GITEA_CA_FILE`).
-- [mise](https://mise.jdx.dev/) for the toolchain (installed by `make deps` where possible).
+- [mise](https://mise.jdx.dev/) for the rest of the toolchain (installed by `make deps`; git must already be present).
 - **Container engine:** image operations (mirror, Maven builder build/push, diagram
   rendering) use `CONTAINER_ENGINE` — **podman-preferred**, docker fallback. The
   **local KinD end-to-end** additionally **requires Docker**: KinD's node and
@@ -58,12 +83,40 @@ overhead); **≥ 15 GB** sneakernet (adds the transferable bundle tarball). The 
 cluster** additionally stores these images in Harbor + each node's containerd (~5–6 GB) —
 that is cluster-side, separate from the jump box.
 
+### Guest (VKS workload) cluster sizing
+
+Sizing for the **guest cluster** where this project deploys **Gitea + Tekton (+ Dashboard) +
+the webui app** and its images. Harbor and ArgoCD are **VKS-provided**, so they are budgeted
+separately (see the last bullet). Figures were measured on the live single-node KinD stack
+(no metrics-server, so per-pod RAM is the declared request or a working-set estimate).
+
+| Tier | vCPU | RAM | Disk | Fits |
+|------|------|-----|------|------|
+| **Minimum** | 4 | 8 GB | 40 GB | steady state + one pipeline; pipelines serialize, no concurrency headroom |
+| **Recommended** | 6 | 12 GB | 60 GB | comfortable single pipeline + ~30% headroom + image-growth room |
+| **Comfortable** | 8 | 16 GB | 80–100 GB | 2–3 concurrent PipelineRuns, production-ish headroom |
+
+- **What dominates the baseline:** the steady-state RAM *request* is ~3.7 GiB, of which
+  **istiod alone reserves 2 GiB** (its real working set is ~150–200 MiB). Choosing
+  `INGRESS_CONTROLLER=traefik` (single binary, ~128 MiB) frees ~2 GiB + ~0.5 vCPU — the
+  Minimum tier then drops to **4 vCPU / 6 GB**.
+- **The spikes are the pipeline pods.** `maven-test` (offline JVM build, ~1–1.5 GiB) and
+  `kaniko-build` (image build, ~1.5–2 GiB) run **sequentially**, so a single-pipeline peak is
+  the baseline **+ ~2 vCPU / ~2 GiB**; each *concurrent* run adds that again. These pods
+  declare no limits, so the cluster needs real headroom for them.
+- **Disk:** ~6 GB of mirrored + built images in the node's containerd, a 5 GB Gitea PVC, a
+  2 GB CI workspace, plus transient kaniko/maven scratch and a new `webui:<sha>` image per
+  run (budget growth room — hence the 40 → 100 GB range).
+- **If Harbor + ArgoCD are co-located** in this same guest cluster (instead of provided
+  externally), add roughly **+2 vCPU / +4 GB RAM / +5 GB disk** to each tier.
+
 ## Tech stack
 
 | Layer | Technology | Why |
 |-------|-----------|-----|
 | Git server | **Gitea** (self-hosted, SQLite) | Single-image, air-gap-friendly Git host with webhooks; installed inside the cluster |
 | CI engine | **Tekton** Pipelines + Triggers | Kubernetes-native, in-cluster builds — no external CI runner to reach across the air gap |
+| CI dashboard | **Tekton Dashboard** | Read-only web UI for PipelineRuns / TaskRuns / logs, fronted at `tekton.vks.local` |
 | Image build | **Kaniko** | Builds container images in-cluster without a Docker daemon (rootless, no privileged socket) |
 | Registry | **Harbor** (VKS-provided) | The one OCI registry all parties share (host push, Kaniko push, containerd pull) |
 | GitOps CD | **ArgoCD** (VKS-provided) | Watches the deploy repo and reconciles the cluster to the committed image tag |
@@ -149,7 +202,7 @@ How the local stand-in works:
 - `make vks-login` uses the kind kubeconfig (`VKS_AUTH_METHOD=kubeconfig`), so no VCF auth
   is needed for the local run.
 - **`make install-ingress`** installs one ingress LoadBalancer (`INGRESS_CONTROLLER=istio`
-  by default, `traefik` optional) that fronts the Gitea/ArgoCD/app UIs at `*.vks.local`, so
+  by default, `traefik` optional) that fronts the Gitea/ArgoCD/app/Tekton-Dashboard UIs at `*.vks.local`, so
   you reach them by hostname instead of `kubectl port-forward`. Harbor keeps its own direct
   LB (its IP is load-bearing for the containerd pull path). Both ingress images are mirrored
   into Harbor.
@@ -162,13 +215,16 @@ Individual targets: `make kind-up`, `make install-harbor`, `make install-argocd`
 Run **`make creds`** — it prints the URLs and logins for whichever context you're in (the
 KinD demo or a real VKS lab), self-resolving the kubeconfig so there's no `kubectl` context
 to set. It also prints the one-time `/etc/hosts` line that maps the `*.vks.local` hosts to
-the ingress LoadBalancer. (Gitea, ArgoCD, and the app are fronted by the ingress at
-`*.vks.local`; Harbor keeps its own LB IP over plain HTTP.)
+the ingress LoadBalancer. (Gitea, ArgoCD, the app, and the read-only Tekton Dashboard are
+fronted by the ingress at `*.vks.local`; Harbor keeps its own LB IP over plain HTTP.)
+
+Ordered by the pipeline flow (Gitea → Tekton → Harbor → ArgoCD → App):
 
 | Service | URL | Username | Password |
 |---------|-----|----------|----------|
-| **Harbor** | its own LB IP, plain HTTP | `admin` | your `HARBOR_PASSWORD` from `.env` |
 | **Gitea** | <http://gitea.vks.local> | `gitea_admin` | your `GITEA_ADMIN_PASSWORD` from `.env` |
+| **Tekton Dashboard** | <http://tekton.vks.local> | — | — (read-only; no login) |
+| **Harbor** | its own LB IP, plain HTTP | `admin` | your `HARBOR_PASSWORD` from `.env` |
 | **ArgoCD** | <http://argocd.vks.local> | `admin` | `make argocd-password` |
 | **App (webui)** | <http://app.vks.local/> | — | — (health at `/actuator/health`) |
 
@@ -184,8 +240,9 @@ the ingress LoadBalancer. (Gitea, ArgoCD, and the app are fronted by the ingress
 > reachable over `kubectl port-forward` — e.g. `kubectl -n gitea port-forward svc/gitea-http
 > 3000:3000` → <http://localhost:3000>. Harbor is always a direct LoadBalancer, not behind the ingress.
 
-The Tekton **EventListener** is reached in-cluster only (`el-webui.ci.svc:8080`); the Gitea
-webhook fires cluster-internally, so there is nothing to expose or log into.
+The **Tekton Dashboard** (above) is Tekton's web UI. The Tekton **EventListener** is a
+separate, in-cluster-only webhook receiver (`el-webui.ci.svc:8080`) — the Gitea webhook fires
+cluster-internally, so there is nothing to expose or log into there.
 
 ## Run against a real VKS lab (Harbor & ArgoCD pre-provided)
 
