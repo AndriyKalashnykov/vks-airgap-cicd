@@ -33,6 +33,26 @@ while read -r ref; do
 done < <(grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"]+:[^[:space:]"]+' k8s/ tekton/ 2>/dev/null \
           | sed -E 's|\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/||' | sort -u)
 
+# eclipse-temurin's tag is ALSO carried outside the manifests: in .env.example
+# (TEMURIN_JDK_TAG / TEMURIN_JRE_TAG, which feed the rendered RUNTIME_IMAGE_REF
+# in configure-tekton) and in the app runtime Dockerfile ARG. A grep over
+# manifest literals cannot see those, so check them explicitly against images.txt.
+temurin_itag() { grep -oE "eclipse-temurin:[^[:space:]\"]*-$1-jammy" images/images.txt | head -1 | sed 's|eclipse-temurin:||'; }
+check_pinned() { # <label> <actual> <expected-from-images.txt>
+  [ -n "$3" ] || return 0
+  if [ "$2" != "$3" ]; then
+    echo "DRIFT ${1}: ${2:-<absent>} vs images/images.txt eclipse-temurin=${3}"
+    drift=1
+  else
+    echo "ok    ${1}=${2}"
+  fi
+}
+jre_itag="$(temurin_itag jre)"
+jdk_itag="$(temurin_itag jdk)"
+check_pinned "TEMURIN_JRE_TAG (.env.example)" "$(grep -E '^TEMURIN_JRE_TAG=' .env.example | cut -d= -f2)" "$jre_itag"
+check_pinned "TEMURIN_JDK_TAG (.env.example)" "$(grep -E '^TEMURIN_JDK_TAG=' .env.example | cut -d= -f2)" "$jdk_itag"
+check_pinned "RUNTIME_IMAGE (app/Dockerfile)" "$(grep -oE 'RUNTIME_IMAGE=eclipse-temurin:[^[:space:]"]+' app/Dockerfile | head -1 | sed 's|RUNTIME_IMAGE=eclipse-temurin:||')" "$jre_itag"
+
 if [ "$drift" -ne 0 ]; then
   echo "ERROR: image tag drift between manifests and images/images.txt (BLOCKING)." >&2
   echo "       The mirror pushes the images.txt tag; each manifest pulls its own tag." >&2
