@@ -23,7 +23,7 @@ spec:
       default: ci-bot
     - name: git-user-email
       type: string
-      default: ci-bot@vks-cicd.local
+      default: ci-bot@vks-airgap-cicd.local
   workspaces:
     - name: scratch
   # Run every step as root so the git-clone step (root) and the yq step share a
