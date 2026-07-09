@@ -38,6 +38,13 @@ KC_SCHEMA_CRD="${KUBECONFORM_SCHEMA_CRD:-https://cdn.jsdelivr.net/gh/datreeio/CR
 # `default` (githubusercontent) is the last-resort fallback in both sets.
 KC_LOCS_CORE=(-schema-location "$KC_SCHEMA_K8S" -schema-location default)
 KC_LOCS_CRD=(-schema-location "$KC_SCHEMA_CRD" -schema-location default)
+# k8s/ is MIXED: core kinds (Deployment/Service/RBAC) AND CRDs (istio Gateway/
+# VirtualService in k8s/istio, traefik IngressRoute-adjacent objects). Try the
+# yannh core schemas FIRST (200 for core kinds), then the datreeio CRD catalog
+# (200 for istio networking.istio.io kinds), then the built-in default. A kind
+# missing from all three is skipped by -ignore-missing-schemas; a real violation
+# is still caught (kc() fails only on statusInvalid, never on a download miss).
+KC_LOCS_K8S=(-schema-location "$KC_SCHEMA_K8S" -schema-location "$KC_SCHEMA_CRD" -schema-location default)
 # Active set for the next kc call (a caller sets this immediately before invoking kc).
 KC_LOCS=("${KC_LOCS_CORE[@]}")
 
@@ -124,7 +131,7 @@ if have kubeconform; then
       log_info "validating $dir/"
       mapfile -d '' _files < <(find "$REPO_ROOT/$dir" -name '*.yaml' -print0)
       # k8s/ holds core kinds → yannh schemas; tekton/ + argocd/ are CRD-heavy → catalog.
-      case "$dir" in k8s) KC_LOCS=("${KC_LOCS_CORE[@]}") ;; *) KC_LOCS=("${KC_LOCS_CRD[@]}") ;; esac
+      case "$dir" in k8s) KC_LOCS=("${KC_LOCS_K8S[@]}") ;; *) KC_LOCS=("${KC_LOCS_CRD[@]}") ;; esac
       kc -ignore-missing-schemas "${_files[@]}" || rc=1
     else
       log_warn "$dir/ has no manifests yet — skipped"

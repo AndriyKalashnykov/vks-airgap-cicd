@@ -10,7 +10,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 load_env
 
-case "${INGRESS_CONTROLLER:-istio}" in
+# Persist the chosen controller so a later `make verify-ingress` (a fresh make
+# with no command-line override) reads the controller that was actually installed
+# from .env.kind, not the .env.example default.
+CONTROLLER="${INGRESS_CONTROLLER:-istio}"
+set_env_var INGRESS_CONTROLLER "$CONTROLLER"
+
+case "$CONTROLLER" in
   istio)
     log_info "INGRESS_CONTROLLER=istio -> installing Istio ingress"
     exec "${SCRIPT_DIR}/46-install-istio.sh"

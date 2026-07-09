@@ -99,6 +99,12 @@ log_info "ArgoCD: $(argo_status)"
 
 # ---- 4. Verify the running app serves the new marker (the USER-FACING result) ----
 wait_for "app deployment available" kubectl -n "$ARGOCD_DEST_NAMESPACE" rollout status "deploy/${APP_NAME}" --timeout=30s
+# Diagnostic: log the deployed image tag so a "marker missing" failure below is
+# localized to build/push+write-back vs ArgoCD-sync (i.e. did the new image tag
+# actually reach the running Deployment) rather than just "end result not observed".
+deployed_img="$(kubectl -n "$ARGOCD_DEST_NAMESPACE" get deploy "$APP_NAME" \
+  -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+log_info "deployed image: ${deployed_img:-<unknown>}"
 kubectl -n "$ARGOCD_DEST_NAMESPACE" port-forward "svc/${APP_NAME}" "${APP_LOCAL_PORT}:80" >/dev/null 2>&1 &
 PF_PID=$!
 app="http://localhost:${APP_LOCAL_PORT}"
