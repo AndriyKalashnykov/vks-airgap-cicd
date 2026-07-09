@@ -22,39 +22,6 @@ pluggable ingress (**Istio** by default, **Traefik** optional) fronting the UIs 
 > Harbor and ArgoCD are **provided by VKS**; this project mirrors all required images
 > into Harbor and installs + wires **Gitea + Tekton** and the demo app.
 
-## Tech stack
-
-| Layer | Technology | Why |
-|-------|-----------|-----|
-| Git server | **Gitea** (self-hosted, SQLite) | Single-image, air-gap-friendly Git host with webhooks; installed inside the cluster |
-| CI engine | **Tekton** Pipelines + Triggers | Kubernetes-native, in-cluster builds — no external CI runner to reach across the air gap |
-| Image build | **Kaniko** | Builds container images in-cluster without a Docker daemon (rootless, no privileged socket) |
-| Registry | **Harbor** (VKS-provided) | The one OCI registry all parties share (host push, Kaniko push, containerd pull) |
-| GitOps CD | **ArgoCD** (VKS-provided) | Watches the deploy repo and reconciles the cluster to the committed image tag |
-| Ingress | **Istio** (default) / **Traefik** (option) | One LoadBalancer fronting the UIs at `*.vks.local`; pluggable via `INGRESS_CONTROLLER` |
-| Image mirror | **skopeo** | Copies images internet→Harbor (dual-homed) or into a sneakernet bundle, single- or multi-arch |
-| Demo app | **Spring Boot 4 / Java 25** | Minimal web UI whose greeting proves the deployed image changed end-to-end |
-| Offline build | dependency-baked **Maven** builder image | Bakes `~/.m2` so in-cluster `mvn` builds with no Maven Central reach |
-| Local e2e | **KinD** + **cloud-provider-kind** | Stands up the "VKS-provided" Harbor + ArgoCD locally with a real LoadBalancer |
-| Toolchain | **mise** | One cross-distro (Ubuntu/PhotonOS) version manager for the jump-box tools |
-
-## Quick Start (dual-homed jump box)
-
-```bash
-cp .env.example .env          # edit: Harbor/Gitea URLs, VKS access, CA files, secrets (see below)
-make deps                     # [offline] install jump-box toolchain
-make ci                       # [offline] lint + validate + app tests + docs
-make install-all              # [cluster] mirror → builder → vks-login → platform → gitops
-make verify                   # [cluster] end-to-end smoke test
-```
-
-`make install-all` runs, in order: `mirror` (pull images → Harbor) → `builder-image`
-(build+push the offline Maven builder) → `vks-login` → `platform` (Gitea + Tekton) →
-`gitops` (ArgoCD Application). Run `make help` for the full target list.
-
-> **Try it with no VKS cluster:** `make e2e-kind` stands the whole thing up locally in
-> KinD — see [Try it locally end-to-end with KinD](#try-it-locally-end-to-end-with-kind).
-
 ## Prerequisites
 
 - A jump box running **Ubuntu** or **PhotonOS** with internet access.
@@ -90,6 +57,39 @@ Kaniko, Maven, Temurin JDK/JRE, alpine/git, yq, and the ingress images). Figures
 overhead); **≥ 15 GB** sneakernet (adds the transferable bundle tarball). The **VKS/KinD
 cluster** additionally stores these images in Harbor + each node's containerd (~5–6 GB) —
 that is cluster-side, separate from the jump box.
+
+## Tech stack
+
+| Layer | Technology | Why |
+|-------|-----------|-----|
+| Git server | **Gitea** (self-hosted, SQLite) | Single-image, air-gap-friendly Git host with webhooks; installed inside the cluster |
+| CI engine | **Tekton** Pipelines + Triggers | Kubernetes-native, in-cluster builds — no external CI runner to reach across the air gap |
+| Image build | **Kaniko** | Builds container images in-cluster without a Docker daemon (rootless, no privileged socket) |
+| Registry | **Harbor** (VKS-provided) | The one OCI registry all parties share (host push, Kaniko push, containerd pull) |
+| GitOps CD | **ArgoCD** (VKS-provided) | Watches the deploy repo and reconciles the cluster to the committed image tag |
+| Ingress | **Istio** (default) / **Traefik** (option) | One LoadBalancer fronting the UIs at `*.vks.local`; pluggable via `INGRESS_CONTROLLER` |
+| Image mirror | **skopeo** | Copies images internet→Harbor (dual-homed) or into a sneakernet bundle, single- or multi-arch |
+| Demo app | **Spring Boot 4 / Java 25** | Minimal web UI whose greeting proves the deployed image changed end-to-end |
+| Offline build | dependency-baked **Maven** builder image | Bakes `~/.m2` so in-cluster `mvn` builds with no Maven Central reach |
+| Local e2e | **KinD** + **cloud-provider-kind** | Stands up the "VKS-provided" Harbor + ArgoCD locally with a real LoadBalancer |
+| Toolchain | **mise** | One cross-distro (Ubuntu/PhotonOS) version manager for the jump-box tools |
+
+## Quick Start (dual-homed jump box)
+
+```bash
+cp .env.example .env          # edit: Harbor/Gitea URLs, VKS access, CA files, secrets (see below)
+make deps                     # [offline] install jump-box toolchain
+make ci                       # [offline] lint + validate + app tests + docs
+make install-all              # [cluster] mirror → builder → vks-login → platform → gitops
+make verify                   # [cluster] end-to-end smoke test
+```
+
+`make install-all` runs, in order: `mirror` (pull images → Harbor) → `builder-image`
+(build+push the offline Maven builder) → `vks-login` → `platform` (Gitea + Tekton) →
+`gitops` (ArgoCD Application). Run `make help` for the full target list.
+
+> **Try it with no VKS cluster:** `make e2e-kind` stands the whole thing up locally in
+> KinD — see [Try it locally end-to-end with KinD](#try-it-locally-end-to-end-with-kind).
 
 ## Architecture
 
@@ -374,7 +374,7 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 | Path | Purpose |
 |------|---------|
 | `scripts/` | Ordered, OS-portable (Ubuntu+PhotonOS) automation; `lib/os.sh` + `lib/mirror.sh` are shared libraries |
-| `app/` | Minimal Spring Boot web UI (seeded into Gitea `webui-app`); `Dockerfile` + `Dockerfile.builder` |
+| `apps/java/webui/` | Minimal Spring Boot web UI (seeded into Gitea `webui-app`); `Dockerfile` + `Dockerfile.builder` |
 | `deploy/base/` | Kustomize manifests ArgoCD deploys (seeded into Gitea `webui-deploy`) |
 | `tekton/` | Tekton pipeline, tasks, triggers, RBAC |
 | `argocd/` | ArgoCD `Application` definition |

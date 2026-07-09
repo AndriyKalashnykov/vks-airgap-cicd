@@ -39,8 +39,8 @@ MARKDOWNLINT_VERSION ?= 0.49.0
 CONTAINER_ENGINE    ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
 SCRIPTS := ./scripts
-APP_DIR := ./app
-MVN     := ./app/mvnw
+APP_DIR := ./apps/java/webui
+MVN     := ./apps/java/webui/mvnw
 
 # ---------------------------------------------------------------------------
 .PHONY: help
@@ -241,7 +241,7 @@ trivy-fs: app-build ## trivy — scan the built app jar's embedded deps for fixa
 trivy-config: ## trivy — scan k8s/Tekton manifests for HIGH/CRITICAL misconfigurations (.trivyignore documents accepted findings)
 	@if command -v trivy >/dev/null 2>&1; then \
 	  trivy config --severity HIGH,CRITICAL --exit-code 1 --quiet \
-	    --skip-dirs bundle --skip-dirs app --skip-dirs docs .; \
+	    --skip-dirs bundle --skip-dirs apps/java/webui --skip-dirs docs .; \
 	else echo "trivy not installed — run 'make deps' (mise) — skipping"; fi
 
 .PHONY: sec

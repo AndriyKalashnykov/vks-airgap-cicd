@@ -119,7 +119,7 @@ push_repo() {
 }
 
 # App repo: the Spring Boot app at repo root.
-push_repo "${REPO_ROOT}/app" "$GITEA_APP_REPO" "$APP_BRANCH"
+push_repo "${REPO_ROOT}/apps/java/webui" "$GITEA_APP_REPO" "$APP_BRANCH"
 
 # Deploy repo: deploy/base rendered to operator values (kustomization at root).
 deploy_src="${tmp}/deploy-src"

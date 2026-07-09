@@ -50,7 +50,7 @@ check_pinned() { # <label> <actual> <expected-from-images.txt>
 }
 jre_itag="$(temurin_itag jre)"
 check_pinned "TEMURIN_JRE_TAG (.env.example)" "$(grep -E '^TEMURIN_JRE_TAG=' .env.example | cut -d= -f2)" "$jre_itag"
-check_pinned "RUNTIME_IMAGE (app/Dockerfile)" "$(grep -oE 'RUNTIME_IMAGE=eclipse-temurin:[^[:space:]"]+' app/Dockerfile | head -1 | sed 's|RUNTIME_IMAGE=eclipse-temurin:||')" "$jre_itag"
+check_pinned "RUNTIME_IMAGE (apps/java/webui/Dockerfile)" "$(grep -oE 'RUNTIME_IMAGE=eclipse-temurin:[^[:space:]"]+' apps/java/webui/Dockerfile | head -1 | sed 's|RUNTIME_IMAGE=eclipse-temurin:||')" "$jre_itag"
 
 # Istio's version is carried in .env.example (ISTIO_VERSION, which feeds the helm
 # global.tag in 46-install-istio.sh) and mirrored as istio/pilot + istio/proxyv2

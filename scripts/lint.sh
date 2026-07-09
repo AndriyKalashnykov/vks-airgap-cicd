@@ -28,15 +28,15 @@ else
   log_warn "yamllint not installed — skipped"
 fi
 
-echo "== hadolint (app/Dockerfile) =="
-if [ -f "$REPO_ROOT/app/Dockerfile" ]; then
+echo "== hadolint (apps/java/webui/Dockerfile) =="
+if [ -f "$REPO_ROOT/apps/java/webui/Dockerfile" ]; then
   if have hadolint; then
-    hadolint "$REPO_ROOT/app/Dockerfile" || rc=1
+    hadolint "$REPO_ROOT/apps/java/webui/Dockerfile" || rc=1
   else
     log_warn "hadolint not installed — skipped"
   fi
 else
-  log_warn "app/Dockerfile not present yet — skipped"
+  log_warn "apps/java/webui/Dockerfile not present yet — skipped"
 fi
 
 if [ "$rc" -eq 0 ]; then log_info "lint: OK"; else log_error "lint: findings above"; fi
