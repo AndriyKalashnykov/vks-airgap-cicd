@@ -35,6 +35,7 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make verify-ingress` / `verify-ingress-both` | Assert the `*.vks.local` UIs route through the ingress LB (one controller / both) |
 | `make e2e-kind` | Full local end-to-end in KinD (cluster → Harbor → ArgoCD → pipeline → ingress → verify) |
 | `make kind-up` / `install-harbor` / `install-argocd` / `install-ingress` / `kind-down` | Individual KinD steps |
+| `make jumpbox` | Validate the README jump-box bootstrap on a real **Photon 5** container (rootless podman, joined to the kind network): runs `make deps` + engine + cluster/Harbor reach. Needs the KinD cluster up |
 
 Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<method> test`.
 
@@ -104,8 +105,9 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
 
 ## Conventions
 
-- **Version manager:** mise (`.mise.toml`) on the jump box. Air-gap exception:
-  `skopeo`/`tkn`/`argocd` come from OS packages / pinned releases via
+- **Version manager:** mise (`.mise.toml`) on the jump box — including `crane`
+  (the image-mirror engine, a static Go binary). Air-gap exception:
+  `tkn`/`argocd` come from OS packages / pinned releases via
   `00-install-prereqs.sh`; the air-gapped host gets binaries from the bundle.
 - **Secrets never in argv** — PATs/registry creds via stdin / `--password-stdin` /
   env-by-name (see `.env.example` commented secret placeholders).

@@ -3,7 +3,7 @@
 # Scope: tools mise installs cleanly across Ubuntu + PhotonOS on the INTERNET side.
 # Air-gap exception: the air-gapped host cannot reach mise's download sources, so
 # scripts/00-install-prereqs.sh installs the same binaries from OS packages /
-# the transferred bundle there. `skopeo`, `tkn`, and `argocd` are handled by
+# the transferred bundle there. `tkn` and `argocd` are handled by
 # 00-install-prereqs.sh (OS package or pinned GitHub-release download) rather than
 # mise, because they are not reliably available across both distros via mise.
 #
@@ -17,6 +17,10 @@ helm     = "4.2.2"
 kustomize = "5.8.1"
 jq       = "1.8.2"
 yq       = "4"
+# crane (google/go-containerregistry) — the image-mirror engine. Replaces skopeo, which
+# ships no static binary and isn't packaged on Photon OS 5; crane ships static amd64/arm64
+# binaries, so it installs cross-distro via mise on the jump box.
+crane    = "0.21.7"
 # node is only for `make renovate-validate` (renovate requires node ^24.11).
 node     = "24"
 # Security-scan gates (make sec / static-check) — internet/CI side only, never

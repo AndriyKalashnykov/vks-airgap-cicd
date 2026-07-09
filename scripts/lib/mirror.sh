@@ -33,8 +33,8 @@ _mirror_repo_path() {
   fi
 }
 
-# mirror_pull_ref SRC -> a skopeo-valid docker source. skopeo rejects refs with
-# BOTH a tag and a digest, so prefer the digest (exact content) when present.
+# mirror_pull_ref SRC -> a crane-valid image source. Prefer the digest (exact content)
+# when present (crane pulls `name@digest`); otherwise the tag, else `:latest`.
 mirror_pull_ref() {
   local name tag digest
   IFS='|' read -r name tag digest <<<"$(_mirror_parse "$1")"
@@ -55,21 +55,36 @@ mirror_target_ref() {
   printf '%s/%s/%s:%s' "${HARBOR_URL:?}" "${HARBOR_INFRA_PROJECT:?}" "$path" "$tag"
 }
 
-# mirror_copy_flags SRC -> the skopeo copy flags for this image, as a
-# space-separated string the caller reads into an array.
-#   - DIGEST-pinned refs (Tekton controller images) MUST be copied --all so the
-#     multi-arch LIST digest is preserved — their manifests reference that exact
-#     digest, and a single-arch copy would change it and break the pull.
-#   - Otherwise, default to a SINGLE architecture (${MIRROR_ARCH:-amd64}) to keep
-#     the cache small + mirroring fast. Set MIRROR_ALL_ARCH=1 to mirror every arch.
-mirror_copy_flags() {
+# mirror_platform_arg SRC -> the crane `--platform` selector for this image, as a
+# space-separated string the caller reads into an array (empty = all architectures).
+#   - DIGEST-pinned refs (Tekton controller images) and MIRROR_ALL_ARCH=1 copy EVERY
+#     arch — crane's DEFAULT (no --platform) preserves the whole manifest LIST/index, so
+#     the multi-arch digest their manifests reference stays valid. (A single-arch copy
+#     would change that digest and break the pull.)
+#   - Otherwise select a SINGLE platform (linux/${MIRROR_ARCH:-amd64}) to keep the cache
+#     small + mirroring fast.
+mirror_platform_arg() {
   local digest
   IFS='|' read -r _ _ digest <<<"$(_mirror_parse "$1")"
   if [ -n "$digest" ] || [ "${MIRROR_ALL_ARCH:-0}" = "1" ]; then
-    printf -- '--all --preserve-digests'
+    printf ''                                          # all arches (crane default)
   else
-    printf -- '--override-os linux --override-arch %s' "${MIRROR_ARCH:-amd64}"
+    printf -- '--platform linux/%s' "${MIRROR_ARCH:-amd64}"
   fi
+}
+
+# mirror_retry N CMD... -> run CMD, retrying up to N times with linear backoff. crane has
+# no built-in retry (skopeo had --retry-times); transient registry 5xx/network errors are
+# common on a cold mirror, so wrap the crane calls with this.
+mirror_retry() {
+  local n="$1"; shift
+  local i=1
+  while :; do
+    if "$@"; then return 0; fi
+    [ "$i" -ge "$n" ] && return 1
+    log_warn "attempt ${i}/${n} failed: $* — retrying in $((i*2))s"
+    sleep $((i*2)); i=$((i+1))
+  done
 }
 
 # mirror_cache_dir SRC -> local OCI-dir path holding the pulled image.

@@ -6,7 +6,7 @@
 # by scripts/05-kind-up.sh, assigns an external IP on the `kind` docker network).
 # We then wire every kind node's containerd to pull from that LB IP INSECURELY, so
 # the SAME image ref (the LB IP, HTTP:80) works identically from:
-#   - the host        (skopeo push)
+#   - the host        (crane push)
 #   - in-cluster pods (Kaniko push)
 #   - containerd      (image pull)
 #
@@ -153,7 +153,7 @@ log_info "Harbor is routable at http://${LB_IP}"
 
 # --- 8. Publish the discovered registry to downstream scripts (.env.kind) -----
 # HTTP:80, no port suffix; plain HTTP so no CA file. These override .env for the
-# rest of the toolchain (skopeo/kaniko/Tekton all consume HARBOR_URL).
+# rest of the toolchain (crane/kaniko/Tekton all consume HARBOR_URL).
 set_env_var HARBOR_URL "$LB_IP"
 set_env_var HARBOR_INSECURE 1
 set_env_var HARBOR_CA_FILE ""

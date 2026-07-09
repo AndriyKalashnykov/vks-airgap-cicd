@@ -127,7 +127,7 @@ require_cmd() {
 
 # ---------------------------------------------------------------------------
 # Environment loading — .env.example (committed defaults) then .env (overrides).
-# `set -a` exports everything so child processes (skopeo, kubectl, curl) see it.
+# `set -a` exports everything so child processes (crane, kubectl, curl) see it.
 # ---------------------------------------------------------------------------
 load_env() {
   local example="${REPO_ROOT}/.env.example" override="${REPO_ROOT}/.env" kind="${REPO_ROOT}/.env.kind"

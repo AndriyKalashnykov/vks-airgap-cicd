@@ -33,3 +33,6 @@ docs/diagrams/.check/
 *.iml
 .DS_Store
 mise.local.toml
+
+# Jump-box harness runtime (internal kubeconfig)
+.jumpbox/

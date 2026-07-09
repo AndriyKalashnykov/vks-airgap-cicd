@@ -10,7 +10,7 @@ VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). The **pipel
 surface** wires self-hosted **Gitea** + **Tekton** (test → **Kaniko** build → **Harbor**
 push → GitOps tag write-back) to the VKS-provided **Harbor** and **ArgoCD**; the
 **delivery surface** covers an OS-portable (Ubuntu/PhotonOS) jump-box image mirror
-(**skopeo**, dual-homed or sneakernet), a dependency-baked offline **Maven** builder, a
+(**crane**, dual-homed or sneakernet), a dependency-baked offline **Maven** builder, a
 pluggable ingress (**Istio** by default, **Traefik** optional) fronting the UIs at
 `*.vks.local`, and a one-command **KinD** end-to-end that proves the whole flow locally.
 
@@ -81,9 +81,17 @@ git clone git@github.com:AndriyKalashnykov/vks-airgap-cicd.git
 git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git
 cd vks-airgap-cicd
 
-curl https://mise.run | sh    # installs mise to ~/.local/bin (add it to PATH as the installer prints)
-make deps                     # installs the full jump-box toolchain (mise tools + scripts/00-install-prereqs.sh)
+curl https://mise.run | sh                 # installs mise to ~/.local/bin
+export PATH="$HOME/.local/bin:$PATH"       # put mise on PATH for THIS shell (the installer also
+                                           # adds `mise activate` to your profile for new shells)
+make deps                                  # installs the full jump-box toolchain (mise tools +
+                                           # scripts/00-install-prereqs.sh); on Photon it also sets
+                                           # up podman (crun + registries) for the builder-image build
 ```
+
+> These Ubuntu / Photon 5 bootstrap steps are **validated end-to-end** by `make jumpbox`,
+> which runs them on a fresh `photon:5.0` container (rootless podman, joined to a local KinD
+> cluster) and fails if `make deps` or the container-engine setup breaks on a real jump box.
 
 ### Toolchain and access
 
@@ -159,7 +167,7 @@ separately (see the last bullet). Figures were measured on the live single-node 
 | Registry | **Harbor** (VKS-provided) | The one OCI registry all parties share (host push, Kaniko push, containerd pull) |
 | GitOps CD | **ArgoCD** (VKS-provided) | Watches the deploy repo and reconciles the cluster to the committed image tag |
 | Ingress | **Istio** (default) / **Traefik** (option) | One LoadBalancer fronting the UIs at `*.vks.local`; pluggable via `INGRESS_CONTROLLER` |
-| Image mirror | **skopeo** | Copies images internet→Harbor (dual-homed) or into a sneakernet bundle, single- or multi-arch |
+| Image mirror | **crane** (go-containerregistry) | Copies images internet→Harbor (dual-homed) or into a sneakernet bundle, single- or multi-arch; a static Go binary, so it installs cross-distro via mise (incl. Photon OS 5, where skopeo has no static build/package) |
 | Demo app | **Spring Boot 4 / Java 25** | Minimal web UI whose greeting proves the deployed image changed end-to-end |
 | Offline build | dependency-baked **Maven** builder image | Bakes `~/.m2` so in-cluster `mvn` builds with no Maven Central reach |
 | Local e2e | **KinD** + **cloud-provider-kind** | Stands up the "VKS-provided" Harbor + ArgoCD locally with a real LoadBalancer |
@@ -222,7 +230,7 @@ the new version).
 
 ```bash
 cp .env.example .env          # set HARBOR_PASSWORD + GITEA_ADMIN_PASSWORD (any demo values)
-make deps                     # kind, helm, kubectl, skopeo, etc.
+make deps                     # kind, helm, kubectl, crane, etc.
 make e2e-kind                 # cluster → Harbor → ArgoCD → mirror → build → deploy → ingress → verify
 # open the UIs → see "Access the UIs" below for the *.vks.local hostnames
 make kind-down                # tear everything down (also prunes cloud-provider-kind orphans)
@@ -343,7 +351,7 @@ openssl s_client -connect <harbor-host>:443 -showcerts </dev/null 2>/dev/null \
 
 (Or download it from the Harbor UI → your project → **Registry Certificate**.) The CA is
 consumed in **two** places, both handled for you: `make mirror` / `make vks-login` install it
-into the jump box's system trust store (so `skopeo` can push over HTTPS), and `make platform`
+into the jump box's system trust store (so `crane` can push over HTTPS), and `make platform`
 creates an in-cluster ConfigMap **`harbor-ca`** (key `ca.crt`) in the `ci` namespace so
 Kaniko/Tekton trust it too. If Harbor presents a publicly-trusted cert, leave
 `HARBOR_CA_FILE` empty.
@@ -351,7 +359,7 @@ Kaniko/Tekton trust it too. If Harbor presents a publicly-trusted cert, leave
 **Step 3 — install prereqs and log in to VKS:**
 
 ```bash
-make deps         # skopeo, tkn, argocd, kubectl, helm, mise tools
+make deps         # crane, tkn, argocd, kubectl, helm, mise tools
 make vks-login    # validates $KUBECONFIG + context against the lab cluster
 ```
 
@@ -440,7 +448,7 @@ Legend: **[offline]** verifiable without a cluster · **[cluster]** runs against
 | # | Command | Mode | What happens |
 |---|---------|------|--------------|
 | 1 | `cp .env.example .env` + edit | [offline] | Set Harbor/Gitea URLs, VKS auth, CA files, and secrets (`HARBOR_PASSWORD`, `GITEA_ADMIN_PASSWORD`). |
-| 2 | `make deps` | [offline] | `mise install` + `scripts/00-install-prereqs.sh` (skopeo, tkn, argocd, kubectl, helm, jq, yq). |
+| 2 | `make deps` | [offline] | `mise install` (kubectl, helm, crane, jq, yq, …) + `scripts/00-install-prereqs.sh` (tkn, argocd). |
 | 3 | `make ci` | [offline] | toolchain/image alignment + shellcheck + yamllint + hadolint + kubeconform + gitleaks + trivy fs/config + `mvn test` + docs/diagram checks. |
 | 4 | `make mirror` | [cluster] | `10-mirror-pull.sh` pulls all images (+ Tekton release manifests) then `21-mirror-push.sh` pushes them into Harbor. **Sneakernet:** `make mirror-pull && make bundle`, carry the bundle, then `make bundle-load BUNDLE_TARBALL=… && make mirror-push` inside. |
 | 5 | `make builder-image` | [internet] | Builds the Maven builder image with this app's deps pre-baked and pushes it to Harbor (so in-cluster CI builds offline). |
@@ -483,7 +491,7 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 
 | Group | Target | Purpose |
 |-------|--------|---------|
-| Prereqs | `deps` | Install the jump-box toolchain (mise tools + skopeo/tkn/argocd) |
+| Prereqs | `deps` | Install the jump-box toolchain (mise tools incl. crane + tkn/argocd) |
 | Mirror | `mirror` / `mirror-pull` / `bundle` / `bundle-load` / `mirror-push` | Pull images → Harbor (dual-homed), or the sneakernet phases |
 | Mirror | `builder-image` | Build + push the deps-baked offline Maven builder image |
 | Install | `vks-login` / `platform` / `gitops` / `install-all` | Auth to VKS; install Gitea+Tekton; wire ArgoCD; or all of it |
