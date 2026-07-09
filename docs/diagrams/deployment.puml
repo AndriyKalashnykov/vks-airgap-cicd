@@ -14,7 +14,7 @@ Deployment_Node(jb, "Jump box", "Ubuntu or PhotonOS · internet-connected") {
 
 Deployment_Node(vks, "VKS workload cluster", "VMware vSphere Kubernetes Service · air-gapped") {
   Deployment_Node(ns_harbor, "namespace: harbor (VKS-provided)", "") {
-    ContainerDb(harbor, "Harbor", "OCI registry, LoadBalancer")
+    ContainerDb(harbor, "Harbor", "OCI registry, LoadBalancer", $tags="datastore")
   }
   Deployment_Node(ns_gitea, "namespace: gitea", "") {
     Container(gitea, "Gitea", "Deployment + PVC (SQLite)")

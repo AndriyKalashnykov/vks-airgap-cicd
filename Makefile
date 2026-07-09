@@ -264,14 +264,31 @@ diagrams: ## Render docs/diagrams/*.puml → docs/diagrams/out/*.png ($(CONTAINE
 	@echo "diagrams: rendered → docs/diagrams/out/  (commit the PNGs)"
 
 .PHONY: diagrams-check
-diagrams-check: ## CI-safe: every .puml renders AND has a committed PNG (PlantUML PNGs are not byte-reproducible across machines, so no byte-diff). Run `make diagrams` before committing .puml edits.
+diagrams-check: ## CI drift gate: re-render every .puml and byte-compare vs the committed PNG. The pinned plantuml image + vendored c4/ render byte-deterministically (verified: same image → identical sha256), so a mismatch means the .puml changed without re-rendering. Run `make diagrams` before committing .puml edits.
 	@rm -rf docs/diagrams/.check
 	@$(call _render_diagrams,.check)
 	@rc=0; for d in context container deployment pipeline-flow; do \
-		test -s docs/diagrams/.check/$$d.png || { echo "ERROR: $$d.puml failed to render"; rc=1; }; \
-		test -s docs/diagrams/out/$$d.png    || { echo "ERROR: committed docs/diagrams/out/$$d.png missing — run 'make diagrams'"; rc=1; }; \
+		if [ ! -s docs/diagrams/.check/$$d.png ]; then echo "ERROR: $$d.puml failed to render"; rc=1; \
+		elif [ ! -s docs/diagrams/out/$$d.png ]; then echo "ERROR: committed docs/diagrams/out/$$d.png missing — run 'make diagrams'"; rc=1; \
+		elif ! cmp -s docs/diagrams/.check/$$d.png docs/diagrams/out/$$d.png; then \
+			echo "ERROR: docs/diagrams/out/$$d.png is STALE — $$d.puml (or _style.puml) changed but the PNG was not re-rendered. Run 'make diagrams' and commit the PNGs."; rc=1; \
+		fi; \
 	done; rm -rf docs/diagrams/.check; \
-	if [ $$rc -eq 0 ]; then echo "diagrams-check: all .puml render + committed PNGs present"; else exit 1; fi
+	if [ $$rc -eq 0 ]; then echo "diagrams-check: all committed PNGs match their source (no drift)"; else exit 1; fi
+
+# C4-PlantUML stdlib pin for the vendored docs/diagrams/c4/*.puml. NOT Renovate-tracked
+# on purpose: a bump the hosted bot can't re-vendor + re-render is a standing red PR
+# (the diagrams-check gate would fail it). Bump manually via `make vendor-diagrams`.
+C4_PLANTUML_VERSION ?= v2.11.0
+
+.PHONY: vendor-diagrams
+vendor-diagrams: ## Re-download the pinned C4-PlantUML stdlib into docs/diagrams/c4/ (manual bump path; then `make diagrams`)
+	@base="https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/$(C4_PLANTUML_VERSION)"; \
+	for f in C4 C4_Context C4_Container C4_Component C4_Deployment C4_Dynamic; do \
+	  echo "fetching $$f.puml @ $(C4_PLANTUML_VERSION)"; \
+	  curl -sSfL "$$base/$$f.puml" -o docs/diagrams/c4/$$f.puml || { echo "ERROR: failed to fetch $$f.puml"; exit 1; }; \
+	done; \
+	echo "vendor-diagrams: refreshed docs/diagrams/c4/ @ $(C4_PLANTUML_VERSION) — now run 'make diagrams' and verify the offline render"
 
 .PHONY: docs-lint
 docs-lint: diagrams-check ## Lint markdown + verify diagrams are current
