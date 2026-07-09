@@ -17,8 +17,13 @@ helm     = "4.2.2"
 kustomize = "5.8.1"
 jq       = "1.8.2"
 yq       = "4"
-# node is only for `make renovate-validate` (renovate@latest requires node ^24.11).
+# node is only for `make renovate-validate` (renovate requires node ^24.11).
 node     = "24"
+# Security-scan gates (make sec / static-check) — internet/CI side only, never
+# needed for the air-gap install flow. Provided cross-distro via mise so local
+# `make static-check` mirrors the CI static-check job (which runs mise-action).
+trivy    = "0.72.0"
+gitleaks = "8.30.1"
 
 [settings]
 # Reproducible: never auto-bump; pin via this file + Renovate.

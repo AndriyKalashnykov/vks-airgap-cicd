@@ -31,6 +31,10 @@ APP_DEV_PORT        ?= 8080
 BUNDLE_DIR          ?= ./bundle
 # renovate: datasource=docker depName=plantuml/plantuml
 PLANTUML_VERSION    ?= 1.2026.6
+# renovate: datasource=npm depName=renovate
+RENOVATE_VERSION    ?= 43.256.0
+# renovate: datasource=npm depName=markdownlint-cli
+MARKDOWNLINT_VERSION ?= 0.49.0
 # Container engine — podman preferred, docker fallback. Override: CONTAINER_ENGINE=docker
 CONTAINER_ENGINE    ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
@@ -49,7 +53,7 @@ help: ## Show this help
 ##@ Prerequisites
 .PHONY: deps
 deps: ## Install jump-box toolchain (mise tools + skopeo/tkn/argocd via prereqs script)
-	@command -v mise >/dev/null 2>&1 && mise install || echo "mise not found; skipping mise install"
+	@if command -v mise >/dev/null 2>&1; then mise install; else echo "mise not found; skipping mise install"; fi
 	@$(SCRIPTS)/00-install-prereqs.sh
 
 .PHONY: check-env
@@ -194,6 +198,42 @@ validate: ## kustomize build + kubeconform manifests; kubectl dry-run Tekton YAM
 check-image-alignment: ## Fail if any mirrored image tag drifts between k8s/tekton manifests and images/images.txt
 	@$(SCRIPTS)/check-image-alignment.sh
 
+.PHONY: check-toolchain-alignment
+check-toolchain-alignment: ## Fail if kubectl pinned in .mise.toml disagrees with .env.example KUBECTL_VERSION
+	@mise_v=$$(grep -E '^kubectl' .mise.toml | sed -E 's/.*"([^"]+)".*/\1/' | tr -d 'v'); \
+	env_v=$$(grep -E '^KUBECTL_VERSION=' .env.example | cut -d= -f2 | tr -d 'v'); \
+	if [ "$$mise_v" != "$$env_v" ]; then \
+	  echo "ERROR: kubectl version drift (BLOCKING) — .mise.toml=$$mise_v vs .env.example KUBECTL_VERSION=$$env_v."; \
+	  echo "       Same tool, two pins: jump box (mise) + air-gap fallback (00-install-prereqs.sh). Align them."; \
+	  exit 1; \
+	fi; \
+	echo "check-toolchain-alignment: kubectl aligned ($$mise_v)"
+
+##@ Security scanning (internet/CI side; not part of the air-gap install)
+.PHONY: secrets
+secrets: ## gitleaks — scan git history + working tree for committed secrets
+	@if command -v gitleaks >/dev/null 2>&1; then gitleaks detect --no-banner --redact; \
+	else echo "gitleaks not installed — run 'make deps' (mise) — skipping"; fi
+
+.PHONY: trivy-fs
+trivy-fs: app-build ## trivy — scan the built app jar's embedded deps for fixable HIGH/CRITICAL CVEs
+	@if command -v trivy >/dev/null 2>&1; then \
+	  jar=$$(ls $(APP_DIR)/target/*.jar 2>/dev/null | grep -v -- '-sources\|-javadoc' | head -1); \
+	  if [ -z "$$jar" ]; then echo "ERROR: no built jar under $(APP_DIR)/target — app-build failed?"; exit 1; fi; \
+	  echo "trivy-fs: scanning $$jar (embedded deps, offline)"; \
+	  trivy rootfs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --quiet "$$jar"; \
+	else echo "trivy not installed — run 'make deps' (mise) — skipping"; fi
+
+.PHONY: trivy-config
+trivy-config: ## trivy — scan k8s/Tekton manifests for HIGH/CRITICAL misconfigurations (.trivyignore documents accepted findings)
+	@if command -v trivy >/dev/null 2>&1; then \
+	  trivy config --severity HIGH,CRITICAL --exit-code 1 --quiet \
+	    --skip-dirs bundle --skip-dirs app --skip-dirs docs .; \
+	else echo "trivy not installed — run 'make deps' (mise) — skipping"; fi
+
+.PHONY: sec
+sec: secrets trivy-fs trivy-config ## Run all security scanners (gitleaks + trivy fs/config)
+
 # podman rootless needs --userns=keep-id so the mapped uid can write the mounted
 # output dir; docker does not. Empty for docker.
 PODMAN_USERNS := $(if $(filter podman,$(CONTAINER_ENGINE)),--userns=keep-id,)
@@ -227,21 +267,21 @@ diagrams-check: ## CI-safe: every .puml renders AND has a committed PNG (PlantUM
 .PHONY: docs-lint
 docs-lint: diagrams-check ## Lint markdown + verify diagrams are current
 	@if command -v markdownlint >/dev/null 2>&1; then markdownlint '**/*.md' --ignore app --ignore bundle; \
-	elif command -v npx >/dev/null 2>&1; then npx --yes markdownlint-cli '**/*.md' --ignore app --ignore bundle; \
+	elif command -v npx >/dev/null 2>&1; then npx --yes markdownlint-cli@$(MARKDOWNLINT_VERSION) '**/*.md' --ignore app --ignore bundle; \
 	else echo "markdownlint not installed — skipping (install markdownlint-cli)"; fi
 
 .PHONY: static-check
-static-check: check-env check-image-alignment lint validate app-test ## Composite code gate (lint + manifests + app tests)
+static-check: check-toolchain-alignment check-env check-image-alignment lint validate sec app-test ## Composite code gate (alignment + lint + manifests + security + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint ## Full local pipeline (offline-verifiable parts)
 
 ##@ Dependencies (Renovate)
 .PHONY: renovate-validate
-renovate-validate: ## Validate renovate.json (renovate@latest — needs node on PATH)
-	@if [ -n "$$GH_ACCESS_TOKEN" ]; then export GITHUB_COM_TOKEN="$$GH_ACCESS_TOKEN"; \
+renovate-validate: ## Validate renovate.json (pinned renovate — needs node on PATH)
+	@if [ -n "$${GH_ACCESS_TOKEN:-}" ]; then export GITHUB_COM_TOKEN="$$GH_ACCESS_TOKEN"; \
 	else echo "note: GH_ACCESS_TOKEN unset — some lookups may be skipped"; fi; \
-	npx --yes renovate@latest --platform=local
+	npx --yes renovate@$(RENOVATE_VERSION) --platform=local
 
 ##@ Housekeeping
 .PHONY: clean

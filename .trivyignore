@@ -1,0 +1,18 @@
+# trivy config (misconfiguration) waivers — accepted-by-design for this demo.
+# Each entry documents WHY the finding is accepted; the trivy-config gate
+# (make trivy-config, in static-check) blocks any NEW HIGH/CRITICAL misconfig.
+
+# KSV0014 — gitea container readOnlyRootFilesystem=false.
+# Gitea (rootless) writes runtime state to its working tree (SQLite DB lives on a
+# PVC, but the image also writes to paths outside the PVC at startup). Enforcing a
+# read-only root FS would require enumerating + emptyDir-mounting every such path
+# and risks breaking the DB-backed demo. Accepted for the demo; revisit if gitea
+# is hardened for production.
+AVD-KSV-0014
+
+# KSV0041 — Traefik ClusterRole has access to 'secrets'.
+# An ingress controller must read Kubernetes Secrets to serve TLS certificates and
+# to back auth middleware; this is Traefik's standard (upstream-published) RBAC.
+# The permission is get/list/watch, not cluster-admin. Accepted as inherent to the
+# ingress-controller role.
+AVD-KSV-0041

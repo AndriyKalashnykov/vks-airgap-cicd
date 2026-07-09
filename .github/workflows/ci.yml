@@ -37,19 +37,15 @@ jobs:
           # `base` set only on push so paths-filter works under `act push`;
           # left empty on pull_request (where it is ignored — avoids the annotation).
           base: ${{ github.event_name == 'push' && github.ref_name || '' }}
+          # `code` is a DENY-list: everything that is NOT pure docs. An allow-list
+          # would let a root-config-only PR (e.g. renovate.json, .trivyignore) match
+          # neither filter -> static-check AND docs-lint both skip -> ci-pass green
+          # with zero gates run. The deny-list makes any non-docs change run static-check.
           filters: |
             code:
-              - 'scripts/**'
-              - 'app/**'
-              - 'deploy/**'
-              - 'tekton/**'
-              - 'k8s/**'
-              - 'argocd/**'
-              - 'images/**'
-              - 'Makefile'
-              - '.env.example'
-              - '.mise.toml'
-              - '.github/workflows/**'
+              - '**'
+              - '!**/*.md'
+              - '!docs/**'
             docs:
               - '**/*.md'
               - 'docs/**'
@@ -75,7 +71,9 @@ jobs:
       # Tools mise does not provide (shellcheck + Docker are preinstalled on the runner).
       - name: Install kubeconform, yamllint, hadolint
         env:
+          # renovate: datasource=github-releases depName=yannh/kubeconform
           KUBECONFORM_VERSION: v0.6.7
+          # renovate: datasource=github-releases depName=hadolint/hadolint
           HADOLINT_VERSION: v2.12.0
         run: |
           set -euo pipefail
@@ -128,9 +126,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs
+        # Inspect the changes detector too: if `changes` itself fails/cancels, the
+        # gate jobs are skipped (result 'skipped', not 'failure'), so a check that
+        # only looked at static-check/docs-lint would go green with no gates run.
         run: |
-          if [ "${{ needs.static-check.result }}" = "failure" ] || [ "${{ needs.static-check.result }}" = "cancelled" ] \
-          || [ "${{ needs.docs-lint.result }}" = "failure" ] || [ "${{ needs.docs-lint.result }}" = "cancelled" ]; then
-            echo "a required job failed"; exit 1
+          if ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}; then
+            echo "a required job failed or was cancelled"; exit 1
           fi
           echo "ci-pass: OK"

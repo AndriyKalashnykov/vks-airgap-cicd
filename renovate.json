@@ -38,10 +38,10 @@
     },
     {
       "customType": "regex",
-      "description": "Tekton Pipelines/Triggers release versions pinned in .env.example (only # renovate:-annotated lines are matched).",
+      "description": "Consumed release/tool versions pinned in .env.example (Tekton, kubectl, tkn, argocd CLI+manifest, cloud-provider-kind, harbor chart). Only # renovate:-annotated lines are matched. The optional extractVersion + registryUrl groups mirror every annotation shape used (extractVersion for tkn's v-prefix strip, registryUrl for the harbor helm datasource).",
       "managerFilePatterns": ["/^\\.env\\.example$/"],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)(?: extractVersion=(?<extractVersion>[^\\s]+))?\\n[A-Z_]+=(?<currentValue>[^\\s]+)"
+        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)(?: extractVersion=(?<extractVersion>[^\\s]+))?(?: registryUrl=(?<registryUrl>[^\\s]+))?\\n[A-Z_]+=(?<currentValue>[^\\s]+)"
       ]
     },
     {
@@ -52,6 +52,14 @@
         "\\$\\{HARBOR_URL\\}/\\$\\{HARBOR_INFRA_PROJECT\\}/(?<depName>[^:\\s\"]+):(?<currentValue>[^\\s\"]+)"
       ],
       "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Tool versions pinned in GitHub Actions workflow env: blocks (kubeconform, hadolint) — CI installs these directly, the github-actions manager can't see them, so they're tracked via inline # renovate: comments.",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)(?: extractVersion=(?<extractVersion>[^\\s]+))?\\n\\s+[A-Z_]+:\\s*(?<currentValue>[^\\s]+)"
+      ]
     }
   ],
   "vulnerabilityAlerts": {
@@ -86,6 +94,12 @@
       "matchDatasources": ["docker"],
       "groupName": "Docker images",
       "pinDigests": false
+    },
+    {
+      "description": "kaniko's real image is gcr.io/kaniko-project/executor; the manifest customManager derives depName=kaniko-project/executor which defaults to Docker Hub (no such repo -> chronic 401 on the dashboard lookup). Point it at gcr.io. images.txt tracks the correct gcr.io ref and check-image-alignment is the deterministic backstop.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["kaniko-project/executor"],
+      "registryUrls": ["https://gcr.io"]
     }
   ]
 }
