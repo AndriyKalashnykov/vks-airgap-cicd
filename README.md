@@ -33,7 +33,7 @@ pluggable ingress (**Istio** by default, **Traefik** optional) fronting the UIs 
 | GitOps CD | **ArgoCD** (VKS-provided) | Watches the deploy repo and reconciles the cluster to the committed image tag |
 | Ingress | **Istio** (default) / **Traefik** (option) | One LoadBalancer fronting the UIs at `*.vks.local`; pluggable via `INGRESS_CONTROLLER` |
 | Image mirror | **skopeo** | Copies images internet→Harbor (dual-homed) or into a sneakernet bundle, single- or multi-arch |
-| Demo app | **Spring Boot 4 / Java 21** | Minimal web UI whose greeting proves the deployed image changed end-to-end |
+| Demo app | **Spring Boot 4 / Java 25** | Minimal web UI whose greeting proves the deployed image changed end-to-end |
 | Offline build | dependency-baked **Maven** builder image | Bakes `~/.m2` so in-cluster `mvn` builds with no Maven Central reach |
 | Local e2e | **KinD** + **cloud-provider-kind** | Stands up the "VKS-provided" Harbor + ArgoCD locally with a real LoadBalancer |
 | Toolchain | **mise** | One cross-distro (Ubuntu/PhotonOS) version manager for the jump-box tools |

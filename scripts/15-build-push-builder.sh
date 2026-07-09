@@ -24,13 +24,13 @@ ENGINE="$(container_engine)"
 log_info "using container engine: $ENGINE"
 
 REF="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/webui-builder:${BUILDER_IMAGE_TAG}"
-MAVEN_BASE="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/maven:3.9-eclipse-temurin-21"
+MAVEN_BASE="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/maven:3.9-eclipse-temurin-25"
 TLS_VERIFY="true"; [ "${HARBOR_INSECURE:-0}" = "1" ] && TLS_VERIFY="false"
 
 # Base the builder on the MIRRORED maven image if pullable, else the public one.
 # Fully-qualified (docker.io/library/...) so podman — which does NOT assume a
 # default registry for short names — can resolve it. --tls-verify is podman-only.
-BUILD_BASE="docker.io/library/maven:3.9-eclipse-temurin-21"
+BUILD_BASE="docker.io/library/maven:3.9-eclipse-temurin-25"
 pull_args=("$MAVEN_BASE")
 [ "$ENGINE" = podman ] && pull_args=(--tls-verify="$TLS_VERIFY" "$MAVEN_BASE")
 if "$ENGINE" pull "${pull_args[@]}" >/dev/null 2>&1; then

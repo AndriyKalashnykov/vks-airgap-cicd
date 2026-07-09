@@ -6,7 +6,7 @@
 # app Dockerfile and as the maven-test task image.
 #
 # Rebuild whenever pom.xml changes. See scripts/15-build-push-builder.sh.
-ARG MAVEN_IMAGE=maven:3.9-eclipse-temurin-21
+ARG MAVEN_IMAGE=maven:3.9-eclipse-temurin-25
 # MAVEN_IMAGE default is explicitly tagged; DL3006 can't see through the ARG.
 # hadolint ignore=DL3006
 FROM ${MAVEN_IMAGE}

@@ -50,7 +50,7 @@ jobs:
               - '**/*.md'
               - 'docs/**'
 
-  # Composite code gate: check-env + lint + validate + app-test (Java 21 via mise).
+  # Composite code gate: check-env + lint + validate + app-test (Java 25 via mise).
   static-check:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -58,12 +58,12 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
-      # JDK 21 with JAVA_HOME set (the app targets Java 21; ./mvnw honors JAVA_HOME,
+      # JDK 25 with JAVA_HOME set (the app targets Java 25; ./mvnw honors JAVA_HOME,
       # and the runner's default is older). Provides Maven via the ./mvnw wrapper.
       - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
 
       # Installs the rest of the .mise.toml toolchain (kubectl/kustomize/jq/yq/...).
       - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4
