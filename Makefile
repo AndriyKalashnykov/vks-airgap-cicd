@@ -243,6 +243,7 @@ trivy-config: ## trivy — scan k8s/Tekton manifests for HIGH/CRITICAL misconfig
 .PHONY: sec
 sec: secrets trivy-fs trivy-config ## Run all security scanners (gitleaks + trivy fs/config)
 
+##@ Diagrams & composite gates
 # podman rootless needs --userns=keep-id so the mapped uid can write the mounted
 # output dir; docker does not. Empty for docker.
 PODMAN_USERNS := $(if $(filter podman,$(CONTAINER_ENGINE)),--userns=keep-id,)

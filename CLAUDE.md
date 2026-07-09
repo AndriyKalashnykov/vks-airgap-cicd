@@ -17,7 +17,9 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 |---------|--------------|
 | `make help` | List all targets (grouped) |
 | `make deps` | Install jump-box toolchain (mise + `scripts/00-install-prereqs.sh`) |
-| `make ci` | Offline gate: `lint` + `validate` + `app-test` |
+| `make ci` | Offline gate: `static-check` + `docs-lint` |
+| `make static-check` | `check-toolchain-alignment` + `check-env` + `check-image-alignment` + `lint` + `validate` + `sec` + `app-test` |
+| `make sec` | Security scans: `secrets` (gitleaks) + `trivy-fs` (built-jar deps) + `trivy-config` (manifests) |
 | `make app-test` / `app-build` / `app-run` | Spring Boot app dev (in `app/`, uses `./mvnw`) |
 | `make mirror` | (dual-homed) pull images → push to Harbor |
 | `make mirror-pull` / `bundle` / `bundle-load` / `mirror-push` | sneakernet phases |
@@ -25,10 +27,13 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make vks-login` | Authenticate to VKS → writes `$KUBECONFIG` + context |
 | `make platform` | Install + wire Gitea and Tekton |
 | `make gitops` | Create the ArgoCD Application |
-| `make install-all` | Full air-gap install: `mirror → vks-login → platform → gitops` |
+| `make install-ingress` | Install the ingress (`INGRESS_CONTROLLER=istio` default / `traefik`) fronting the UIs at `*.vks.local` |
+| `make install-istio` / `install-traefik` | Install a specific ingress controller directly |
+| `make install-all` | Full air-gap install: `mirror → builder-image → vks-login → platform → gitops` |
 | `make verify` | End-to-end smoke test (LIVE cluster) |
-| `make e2e-kind` | Full local end-to-end in KinD (cluster → Harbor → ArgoCD → pipeline → verify) |
-| `make kind-up` / `install-harbor` / `install-argocd` / `kind-down` | Individual KinD steps |
+| `make verify-ingress` / `verify-ingress-both` | Assert the `*.vks.local` UIs route through the ingress LB (one controller / both) |
+| `make e2e-kind` | Full local end-to-end in KinD (cluster → Harbor → ArgoCD → pipeline → ingress → verify) |
+| `make kind-up` / `install-harbor` / `install-argocd` / `install-ingress` / `kind-down` | Individual KinD steps |
 
 Run a single app test: `cd app && ./mvnw -B -Dtest=<ClassName>#<method> test`.
 
@@ -67,6 +72,22 @@ Run a single app test: `cd app && ./mvnw -B -Dtest=<ClassName>#<method> test`.
   the configure scripts with a RESTRICTED `envsubst` allowlist (so step-script
   `$(...)`/`${}` are untouched). Tekton install rewrites upstream image hosts
   (`gcr.io/…` → Harbor) via `sed`, matching `lib/mirror.sh`'s mapping.
+- **Pluggable ingress**: `INGRESS_CONTROLLER` (`istio` default / `traefik`) selects the
+  controller. `scripts/44-install-ingress.sh` dispatches to `46-install-istio.sh` (helm
+  control plane + gateway LB; istio images from Harbor via the `global.hub` override) or
+  `45-install-traefik.sh` (single-binary LB). Both expose the SAME `*.vks.local` hosts
+  (`GITEA_HOST`/`ARGOCD_HOST`/`WEBUI_HOST`) behind ONE LoadBalancer and publish
+  `INGRESS_LB_IP` + the chosen `INGRESS_CONTROLLER` to `.env.kind`. Hostnames resolve via
+  `/etc/hosts` → the LB IP (no internet DNS). **Harbor keeps its OWN direct LB** — its LB
+  IP is load-bearing for the containerd insecure-registry pull path, so it is NOT routed
+  through the ingress. `make verify-ingress` (in `e2e-kind`, after `verify`) route-checks
+  each host through the LB with a K1.5 readiness poll (cloud-provider-kind wires the LB
+  Envoy 5–60s after the IP is assigned); `verify-ingress-both` runs the istio+traefik matrix.
+- **Security + alignment gates** (`static-check`, internet/CI side): `check-toolchain-alignment`
+  (kubectl pin in `.mise.toml` == `.env.example` `KUBECTL_VERSION`), `sec` (gitleaks +
+  trivy fs on the built jar + trivy config on manifests; `.trivyignore` documents the two
+  accepted-by-design misconfigs — gitea RO-rootfs, Traefik secrets RBAC). trivy/gitleaks
+  are `.mise.toml`-provided so local `make static-check` mirrors the CI job.
 
 ## Conventions
 
@@ -99,6 +120,7 @@ Use the following skills when working on related files:
 | `renovate.json` | `/renovate` |
 | `README.md` | `/readme` |
 | `.github/workflows/*.{yml,yaml}` | `/ci-workflow` |
+| `docs/diagrams/*.puml` | `/architecture-diagrams` |
 
 When spawning subagents, always pass conventions from the respective skill into the agent's prompt.
 
@@ -108,3 +130,11 @@ Offline-verifiable (no cluster): app tests, manifest/Tekton YAML validation, scr
 lint, Makefile targets, mirror pull mechanics. The **air-gap end-to-end runs on the
 live VKS cluster** (`make verify`) and is the demo itself — do not report it
 "verified" without running it against real infrastructure.
+
+**CI runs only the offline gates** (`static-check` + `docs-lint`); the KinD end-to-end
+(`make e2e-kind`, which now includes `verify-ingress`) is deliberately **local-only**.
+A full-stack KinD e2e in GitHub Actions (Harbor via helm + cloud-provider-kind LB +
+ArgoCD + Gitea + Tekton + offline builder + pipeline + ingress) is heavy and flaky, and
+the real demo is the live VKS run — so the KinD e2e stays a local `make` target rather
+than a CI job. Run it locally (and both ingress controllers via `make verify-ingress-both`)
+when changing the pipeline, ingress, or manifests.

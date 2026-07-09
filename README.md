@@ -1,4 +1,5 @@
 [![CI](https://github.com/AndriyKalashnykov/vks-cicd/actions/workflows/ci.yml/badge.svg)](https://github.com/AndriyKalashnykov/vks-cicd/actions/workflows/ci.yml)
+[![Renovate enabled](https://img.shields.io/badge/renovate-enabled-brightgreen?logo=renovatebot)](https://docs.renovatebot.com/)
 [![Hits](https://hits.sh/github.com/AndriyKalashnykov/vks-cicd.svg?view=today-total&style=plastic)](https://hits.sh/github.com/AndriyKalashnykov/vks-cicd/)
 
 # Air-gapped CI/CD on VMware VKS — Reference Demo
@@ -19,6 +20,22 @@ pluggable ingress (**Istio** by default, **Traefik** optional) fronting the UIs 
 > deploy repo → **ArgoCD** syncs the new version to the cluster → the web UI updates.
 > Harbor and ArgoCD are **provided by VKS**; this project mirrors all required images
 > into Harbor and installs + wires **Gitea + Tekton** and the demo app.
+
+## Tech stack
+
+| Layer | Technology | Why |
+|-------|-----------|-----|
+| Git server | **Gitea** (self-hosted, SQLite) | Single-image, air-gap-friendly Git host with webhooks; installed inside the cluster |
+| CI engine | **Tekton** Pipelines + Triggers | Kubernetes-native, in-cluster builds — no external CI runner to reach across the air gap |
+| Image build | **Kaniko** | Builds container images in-cluster without a Docker daemon (rootless, no privileged socket) |
+| Registry | **Harbor** (VKS-provided) | The one OCI registry all parties share (host push, Kaniko push, containerd pull) |
+| GitOps CD | **ArgoCD** (VKS-provided) | Watches the deploy repo and reconciles the cluster to the committed image tag |
+| Ingress | **Istio** (default) / **Traefik** (option) | One LoadBalancer fronting the UIs at `*.vks.local`; pluggable via `INGRESS_CONTROLLER` |
+| Image mirror | **skopeo** | Copies images internet→Harbor (dual-homed) or into a sneakernet bundle, single- or multi-arch |
+| Demo app | **Spring Boot 4 / Java 21** | Minimal web UI whose greeting proves the deployed image changed end-to-end |
+| Offline build | dependency-baked **Maven** builder image | Bakes `~/.m2` so in-cluster `mvn` builds with no Maven Central reach |
+| Local e2e | **KinD** + **cloud-provider-kind** | Stands up the "VKS-provided" Harbor + ArgoCD locally with a real LoadBalancer |
+| Toolchain | **mise** | One cross-distro (Ubuntu/PhotonOS) version manager for the jump-box tools |
 
 ## Quick Start (dual-homed jump box)
 
@@ -51,9 +68,10 @@ make verify                   # [cluster] end-to-end smoke test
 
 ### Disk space on the jump box
 
-Measured for the current image set (~31 images: the Tekton Pipelines+Triggers
-controller images dominate the count, plus Gitea, Kaniko, Maven, Temurin JDK/JRE,
-alpine/git, yq). Figures are approximate.
+Measured for the current image set (~30 images: 10 pinned in
+[`images/images.txt`](images/images.txt) plus the Tekton Pipelines+Triggers controller
+images pulled from their release manifests, which dominate the count — alongside Gitea,
+Kaniko, Maven, Temurin JDK/JRE, alpine/git, yq, and the ingress images). Figures are approximate.
 
 | What | Where | Size |
 |------|-------|------|
@@ -330,7 +348,7 @@ Legend: **[offline]** verifiable without a cluster · **[cluster]** runs against
 |---|---------|------|--------------|
 | 1 | `cp .env.example .env` + edit | [offline] | Set Harbor/Gitea URLs, VKS auth, CA files, and secrets (`HARBOR_PASSWORD`, `GITEA_ADMIN_PASSWORD`). |
 | 2 | `make deps` | [offline] | `mise install` + `scripts/00-install-prereqs.sh` (skopeo, tkn, argocd, kubectl, helm, jq, yq). |
-| 3 | `make ci` | [offline] | shellcheck + yamllint + hadolint + kubeconform + `mvn test` + docs/diagram checks. |
+| 3 | `make ci` | [offline] | toolchain/image alignment + shellcheck + yamllint + hadolint + kubeconform + gitleaks + trivy fs/config + `mvn test` + docs/diagram checks. |
 | 4 | `make mirror` | [cluster] | `10-mirror-pull.sh` pulls all images (+ Tekton release manifests) then `21-mirror-push.sh` pushes them into Harbor. **Sneakernet:** `make mirror-pull && make bundle`, carry the bundle, then `make bundle-load BUNDLE_TARBALL=… && make mirror-push` inside. |
 | 5 | `make builder-image` | [internet] | Builds the Maven builder image with this app's deps pre-baked and pushes it to Harbor (so in-cluster CI builds offline). |
 | 6 | `make vks-login` | [cluster] | `30-vks-login.sh` writes a working `$KUBECONFIG`/context (see auth note). |
@@ -341,10 +359,10 @@ Legend: **[offline]** verifiable without a cluster · **[cluster]** runs against
 ### Minimum `.env` you must set
 
 ```bash
-HARBOR_URL=harbor.<your-domain>          # provided by VKS
+HARBOR_URL=harbor.<lab-host-or-ip>          # provided by VKS
 HARBOR_PASSWORD=<robot-or-admin-secret>  # never committed
 HARBOR_CA_FILE=./secrets/harbor-ca.crt   # the Harbor CA (self-signed)
-GITEA_URL=http://gitea.<your-domain>
+GITEA_URL=http://gitea.<lab-host-or-ip>
 GITEA_ADMIN_PASSWORD=<choose-one>
 ARGOCD_NAMESPACE=argocd                  # where VKS runs ArgoCD
 KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
@@ -366,6 +384,26 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 | `images/images.txt` | Authoritative image inventory to mirror |
 | `.env.example` | Committed source of truth for every tunable |
 
+## Make targets
+
+`make help` prints the full grouped list. The most-used targets:
+
+| Group | Target | Purpose |
+|-------|--------|---------|
+| Prereqs | `deps` | Install the jump-box toolchain (mise tools + skopeo/tkn/argocd) |
+| Mirror | `mirror` / `mirror-pull` / `bundle` / `bundle-load` / `mirror-push` | Pull images → Harbor (dual-homed), or the sneakernet phases |
+| Mirror | `builder-image` | Build + push the deps-baked offline Maven builder image |
+| Install | `vks-login` / `platform` / `gitops` / `install-all` | Auth to VKS; install Gitea+Tekton; wire ArgoCD; or all of it |
+| KinD e2e | `e2e-kind` | Full local end-to-end in KinD (cluster → Harbor → ArgoCD → pipeline → ingress → verify) |
+| KinD e2e | `kind-up` / `install-harbor` / `install-argocd` / `install-ingress` / `kind-down` | Individual KinD steps (`install-istio` / `install-traefik` pick the controller) |
+| Verify | `verify` | End-to-end smoke test on a LIVE cluster |
+| Verify | `verify-ingress` / `verify-ingress-both` | Assert the `*.vks.local` UIs route through the ingress LB (one controller / both) |
+| App dev | `app-test` / `app-build` / `app-run` | Spring Boot app tests / jar / local run |
+| Gates | `ci` / `static-check` / `docs-lint` | Composite offline gate; code gate; docs gate |
+| Gates | `lint` / `validate` / `check-image-alignment` / `check-toolchain-alignment` | Individual code gates |
+| Security | `sec` / `secrets` / `trivy-fs` / `trivy-config` | gitleaks + trivy fs (app deps) / config (manifests) |
+| Diagrams | `diagrams` / `diagrams-check` / `vendor-diagrams` | Render PNGs / byte-diff drift gate / re-vendor C4-PlantUML |
+
 ## CI/CD
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on push to `main`, tags `v*`, and pull requests.
@@ -373,7 +411,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on push to `main`, tags `v*`, a
 | Job | Runs | Purpose |
 |-----|------|---------|
 | **changes** | always | `dorny/paths-filter` classifies the diff into `code` / `docs` |
-| **static-check** | if `code` changed | `make static-check` — shellcheck, yamllint, hadolint, kubeconform, `mvn test` |
+| **static-check** | if `code` changed | `make static-check` — toolchain/image alignment, shellcheck, yamllint, hadolint, kubeconform, security scans (gitleaks + trivy fs/config), `mvn test` |
 | **docs-lint** | if `docs` changed | `make docs-lint` — markdownlint + `diagrams-check` (PNG drift vs `.puml`) |
 | **ci-pass** | always | Aggregator; the single required status check — green only if the needed jobs passed |
 
@@ -391,3 +429,16 @@ overlay written by the KinD flow. Nothing is hardcoded in scripts or the Makefil
 `KUBECONFIG` and context; everything downstream is auth-agnostic. It supports `kubeconfig` (bring your own),
 `vcf` (VCF CLI, token-based in vSphere 9 — finalized once confirmed for the target
 environment), and legacy `vsphere` (kubectl-vsphere plugin) methods via `VKS_AUTH_METHOD`.
+
+## Contributing
+
+Contributions welcome — open an issue or a pull request. Before pushing, run `make ci`
+(the offline gate: alignment, lint, manifest validation, security scans, app tests, and
+docs/diagram drift checks) so the change matches what CI enforces. Dependency updates are
+managed by [Renovate](https://docs.renovatebot.com/); tool and image versions are pinned
+via `.mise.toml`, `.env.example`, `images/images.txt`, and inline `# renovate:` comments.
+
+## License
+
+No license has been declared for this repository yet. Until one is added, it is
+"all rights reserved" by default — open an issue if you need clarification on reuse.
