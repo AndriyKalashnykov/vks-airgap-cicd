@@ -71,4 +71,17 @@ if [ -n "$KUBECONFIG_PATH" ]; then
   esac
 fi
 
+# --- 5. Remove cluster-specific credentials so the NEXT fresh cluster re-mints
+# them. These are bound to the torn-down cluster's Gitea instance: the CI access
+# token and the webhook shared secret. If left behind, seed-gitea "reuses" the
+# stale token against a fresh Gitea that never issued it -> HTTP 401. (Same
+# rationale as removing .env.kind above: cluster-scoped state must not survive a
+# teardown.) Only the kind flow writes these; real-VKS runs use their own.
+for stale in "${REPO_ROOT}/secrets/gitea-ci-token" "${REPO_ROOT}/secrets/webhook-token"; do
+  if [ -f "$stale" ]; then
+    log_info "removing cluster-specific credential $stale"
+    run rm -f "$stale"
+  fi
+done
+
 log_info "kind teardown complete"
