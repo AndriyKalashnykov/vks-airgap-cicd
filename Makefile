@@ -197,14 +197,15 @@ verify-ingress-both: check-env ## Matrix: install + route-verify BOTH ingress co
 	@$(MAKE) install-ingress verify-ingress INGRESS_CONTROLLER=istio
 	@$(MAKE) install-ingress verify-ingress INGRESS_CONTROLLER=traefik
 
-##@ Jump-box validation (Photon 5 container, rootless podman)
-JUMPBOX_IMAGE ?= vks-jumpbox:photon5
+##@ Jump-box validation (Photon / Ubuntu container, rootless podman)
+JUMPBOX_OS    ?= photon
+JUMPBOX_IMAGE ?= vks-jumpbox:$(JUMPBOX_OS)
 .PHONY: jumpbox-image
-jumpbox-image: ## Build the Photon 5 jump-box test image (rootless podman inside)
-	@docker build -f Dockerfile.jumpbox -t $(JUMPBOX_IMAGE) .
+jumpbox-image: ## Build the jump-box test image for JUMPBOX_OS (photon|ubuntu; rootless podman inside)
+	@docker build -f jumpbox/Dockerfile.$(JUMPBOX_OS) -t $(JUMPBOX_IMAGE) .
 
 .PHONY: jumpbox
-jumpbox: jumpbox-image ## Validate the README jump-box flow on real Photon 5 (make deps + rootless podman + cluster reach) against the running KinD cluster
+jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photon|ubuntu): make deps + rootless podman + cluster reach, vs the running KinD cluster
 	@command -v kind >/dev/null 2>&1 || { echo "ERROR: 'kind' not found — the KinD cluster must be up (make kind-up install-harbor ...)"; exit 1; }
 	@docker network inspect kind >/dev/null 2>&1 || { echo "ERROR: kind Docker network not found — bring the cluster up first (make kind-up)"; exit 1; }
 	@mkdir -p .jumpbox
@@ -212,12 +213,17 @@ jumpbox: jumpbox-image ## Validate the README jump-box flow on real Photon 5 (ma
 	 kind get kubeconfig --name "$$kind_name" --internal > .jumpbox/kubeconfig
 	@harbor_url="$$(grep '^HARBOR_URL=' .env.kind 2>/dev/null | cut -d= -f2)"; \
 	 [ -n "$$harbor_url" ] || { echo "ERROR: HARBOR_URL not in .env.kind — run 'make install-harbor' first"; exit 1; }; \
-	 echo "running Photon 5 jump box on the kind network (Harbor=$$harbor_url)"; \
+	 echo "running $(JUMPBOX_OS) jump box on the kind network (Harbor=$$harbor_url)"; \
 	 docker run --rm --privileged --network kind \
 	   -e HARBOR_URL="$$harbor_url" \
 	   -v "$(PWD):/src:ro" \
 	   -v "$(PWD)/.jumpbox/kubeconfig:/run/jumpbox/kubeconfig:ro" \
 	   $(JUMPBOX_IMAGE) bash /src/scripts/jumpbox-run.sh
+
+.PHONY: jumpbox-both
+jumpbox-both: ## Validate the jump-box flow on BOTH Photon and Ubuntu (matrix)
+	@$(MAKE) jumpbox JUMPBOX_OS=photon
+	@$(MAKE) jumpbox JUMPBOX_OS=ubuntu
 
 ##@ Demo application (local dev)
 .PHONY: app-test

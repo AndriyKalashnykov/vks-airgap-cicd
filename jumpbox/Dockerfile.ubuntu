@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1
+# jumpbox/Dockerfile.ubuntu — an Ubuntu "jump box" for validating the README bootstrap +
+# air-gap flow on the REAL jump-box OS, with ROOTLESS podman (the README's preferred engine).
+# Built/run by `make jumpbox JUMPBOX_OS=ubuntu`; the Photon counterpart is
+# jumpbox/Dockerfile.photon. A test harness, NOT a production image. The image installs only
+# the documented bootstrap set; `make deps` (at container start) installs the rest of the
+# toolchain, so a green run proves the Ubuntu dependency path works end-to-end.
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+# Bootstrap set (mirrors README → Prerequisites) + the rootless-podman engine (uidmap provides
+# newuidmap/newgidmap for the userns mapping; crun comes in as a podman dependency). Ubuntu's
+# apt is the counterpart to Photon's tdnf — the whole point of running both is to exercise the
+# lib/os.sh apt/tdnf abstraction on a real box of each family.
+# hadolint ignore=DL3008
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl git openssh-client make tar gzip sudo \
+      uidmap podman fuse-overlayfs slirp4netns \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root operator with subuid/subgid (for rootless podman) + passwordless sudo
+# (scripts/lib/os.sh pkg_install uses $SUDO to apt-install the OS packages).
+RUN groupadd vks && useradd -g vks -m -s /bin/bash vks && \
+    printf 'vks:100000:65536\n' > /etc/subuid && \
+    printf 'vks:100000:65536\n' > /etc/subgid && \
+    printf 'vks ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/vks && chmod 0440 /etc/sudoers.d/vks
+
+# Rootless podman storage → fuse-overlayfs (overlay-in-container needs the fuse mount program).
+RUN install -d -o vks -g vks /home/vks/.config/containers && \
+    printf '[storage]\ndriver = "overlay"\n[storage.options.overlay]\nmount_program = "/usr/bin/fuse-overlayfs"\n' \
+      > /home/vks/.config/containers/storage.conf && \
+    chown -R vks:vks /home/vks/.config
+
+USER vks
+# bash + pipefail so the piped mise installer fails loudly (hadolint DL4006).
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+# mise (toolchain version manager) — installed per-user exactly as the README documents.
+RUN curl -fsSL https://mise.run | sh
+# ~/.local/bin holds mise + the prereqs-script CLIs (tkn/argocd/kubectl); the mise shims
+# expose java/maven/kubectl/helm/... so the Makefile finds them on PATH.
+ENV PATH="/home/vks/.local/bin:/home/vks/.local/share/mise/shims:${PATH}"
+WORKDIR /home/vks
+CMD ["bash"]
