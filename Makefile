@@ -141,12 +141,16 @@ install-harbor: check-env ## Install Harbor (LoadBalancer, HTTP) into KinD; wire
 install-argocd: check-env ## Install ArgoCD into KinD
 	@$(SCRIPTS)/07-install-argocd.sh
 
+.PHONY: install-traefik
+install-traefik: check-env ## Install Traefik ingress (one LB) fronting Gitea/ArgoCD/app at *.vks.local
+	@$(SCRIPTS)/45-install-traefik.sh
+
 .PHONY: kind-down
 kind-down: ## Tear down the KinD cluster (prunes cloud-provider-kind + kindccm-* orphans)
 	@$(SCRIPTS)/kind-down.sh
 
 .PHONY: e2e-kind
-e2e-kind: kind-up install-harbor install-argocd install-all verify ## Full local end-to-end in KinD
+e2e-kind: kind-up install-harbor install-argocd install-all install-traefik verify ## Full local end-to-end in KinD
 
 ##@ Full pipeline
 .PHONY: install-all

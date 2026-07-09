@@ -1,0 +1,64 @@
+# Ingress objects fronting the browser UIs at *.vks.local through the single
+# Traefik LoadBalancer. Each Ingress lives in the SAME namespace as the Service
+# it targets (a k8s Ingress can only reference a Service in its own namespace).
+# All three services already serve plain HTTP inside the cluster (Gitea :3000,
+# ArgoCD server in --insecure mode :80, the app :80), so no TLS wrangling here —
+# this is the local/lab convenience path, not production edge TLS.
+#
+# ${VAR} tokens rendered by scripts/45-install-traefik.sh (envsubst allowlist).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gitea
+  namespace: ${GITEA_NAMESPACE}
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: ${GITEA_HOST}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gitea-http
+                port:
+                  number: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd
+  namespace: ${ARGOCD_NAMESPACE}
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: ${ARGOCD_HOST}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: webui
+  namespace: ${ARGOCD_DEST_NAMESPACE}
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: ${WEBUI_HOST}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ${APP_NAME}
+                port:
+                  number: 80
