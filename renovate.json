@@ -46,11 +46,12 @@
     },
     {
       "customType": "regex",
-      "description": "Gitea image tag in the k8s deployment manifest (${VAR}-prefixed ref the docker manager can't parse); kept in lockstep with images/images.txt.",
-      "managerFilePatterns": ["/^k8s/gitea/gitea\\.yaml$/"],
+      "description": "Image tags in k8s + Tekton manifests, referenced as ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/<repo>:<tag> (a ${VAR}-prefixed ref the built-in docker manager can't parse). depName/currentValue are extracted from the ref so these bump in lockstep with images/images.txt; the check-image-alignment gate is the deterministic backstop.",
+      "managerFilePatterns": ["/^k8s/.+\\.yaml$/", "/^tekton/.+\\.yaml$/"],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)\\n\\s*image:[^\\n]*:(?<currentValue>[^\\s\"]+)"
-      ]
+        "\\$\\{HARBOR_URL\\}/\\$\\{HARBOR_INFRA_PROJECT\\}/(?<depName>[^:\\s\"]+):(?<currentValue>[^\\s\"]+)"
+      ],
+      "datasourceTemplate": "docker"
     }
   ],
   "vulnerabilityAlerts": {

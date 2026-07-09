@@ -24,7 +24,7 @@ spec:
       description: Short commit SHA of the checked-out revision.
   steps:
     - name: clone
-      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/alpine/git:2.47.1
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/alpine/git:v2.54.0
       script: |
         #!/bin/sh
         set -eu

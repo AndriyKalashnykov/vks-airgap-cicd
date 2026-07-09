@@ -43,9 +43,9 @@ spec:
           type: RuntimeDefault
       containers:
         - name: gitea
-          # Keep in lockstep with images/images.txt (the mirror source of truth);
-          # the check-image-alignment gate fails CI if these two drift.
-          # renovate: datasource=docker depName=gitea/gitea
+          # Tag tracked by the general k8s/tekton manifest customManager in
+          # renovate.json; the check-image-alignment gate keeps it in lockstep
+          # with images/images.txt (the mirror source of truth).
           image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/gitea/gitea:1.26.4-rootless
           imagePullPolicy: IfNotPresent
           env:

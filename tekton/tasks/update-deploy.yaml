@@ -35,7 +35,7 @@ spec:
       runAsGroup: 0
   steps:
     - name: clone
-      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/alpine/git:2.47.1
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/alpine/git:v2.54.0
       script: |
         #!/bin/sh
         set -eu
@@ -44,7 +44,7 @@ spec:
         git clone -b "$(params.deploy-revision)" "$(params.deploy-url)" \
           "$(workspaces.scratch.path)/deploy"
     - name: set-tag
-      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/mikefarah/yq:4.44.6
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/mikefarah/yq:4.53.3
       env:
         - name: TAG
           value: $(params.tag)
@@ -57,7 +57,7 @@ spec:
         echo "set image tag -> $TAG"
         yq '.images' kustomization.yaml
     - name: commit-push
-      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/alpine/git:2.47.1
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/alpine/git:v2.54.0
       script: |
         #!/bin/sh
         set -eu
