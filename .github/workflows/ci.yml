@@ -74,7 +74,7 @@ jobs:
           # renovate: datasource=github-releases depName=yannh/kubeconform
           KUBECONFORM_VERSION: v0.6.7
           # renovate: datasource=github-releases depName=hadolint/hadolint
-          HADOLINT_VERSION: v2.12.0
+          HADOLINT_VERSION: v2.14.0
         run: |
           set -euo pipefail
           curl -sSfL \
