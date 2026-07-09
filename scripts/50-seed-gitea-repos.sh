@@ -103,7 +103,12 @@ push_repo() {
   git -C "$d" add -A
   git -C "$d" commit -q -m "seed: initial ${repo}"
   git -C "$d" remote add origin "${base}/${GITEA_ORG}/${repo}.git"
-  git -C "$d" push -q -u origin "$branch"
+  # Force-push: the seed is the AUTHORITATIVE initial content, and push_repo
+  # builds a fresh history (git init) each run. Against an already-seeded repo
+  # (a prior run, or a deploy repo that received pipeline tag write-backs) a
+  # plain push is a non-fast-forward rejection ("fetch first"). Force makes the
+  # seed idempotent and ensures the CURRENT source (e.g. an updated app) lands.
+  git -C "$d" push -q -f -u origin "$branch"
   log_info "pushed ${repo} (branch ${branch})"
 }
 
