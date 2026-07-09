@@ -74,6 +74,24 @@
       "minimumReleaseAge": "3 days"
     },
     {
+      "description": "Cluster-only platform tools (helm, kubectl, tkn, argocd, cloud-provider-kind, harbor chart, Tekton, Istio) are exercised ONLY by the local KinD e2e — CI runs offline gates, never a cluster (see CLAUDE.md verification-honesty). A breaking MAJOR would otherwise auto-merge green-but-blind (helm 3->4 did, 2026-07-08). Require manual Dependency-Dashboard approval for their majors so a human runs `make e2e-kind` first; minors/patches still automerge on green.",
+      "matchDepNames": [
+        "helm",
+        "kubectl",
+        "kubernetes/kubernetes",
+        "tektoncd/cli",
+        "tektoncd/pipeline",
+        "tektoncd/triggers",
+        "argoproj/argo-cd",
+        "kubernetes-sigs/cloud-provider-kind",
+        "harbor",
+        "istio/pilot",
+        "istio/proxyv2"
+      ],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
       "description": "Group GitHub Actions into one PR",
       "matchManagers": ["github-actions"],
       "groupName": "GitHub Actions"
