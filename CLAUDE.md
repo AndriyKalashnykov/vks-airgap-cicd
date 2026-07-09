@@ -147,8 +147,8 @@ when changing the pipeline, ingress, or manifests.
 
 Snapshot for picking up next session exactly where this one left off.
 
-**Where things stand:** `main` GREEN, **0 open PRs**, KinD cluster **DOWN**. This session
-landed a large hardening + rename arc, all merged:
+**Where things stand:** `main` GREEN, **0 open PRs**, KinD cluster **UP** (rebuilt +
+e2e-verified this session). This session landed a large hardening + rename arc, all merged:
 
 - `/project-review` in full — gates/foundation, ingress-e2e, diagrams, docs, verify-race.
 - Whole toolchain aligned to **Java 25** + a `check-java-alignment` drift gate (RED-proven;
@@ -162,6 +162,13 @@ landed a large hardening + rename arc, all merged:
 - Renovate hardening: cluster-only-tool **MAJORS require Dependency-Dashboard approval**
   (CI has no cluster job); the two kubectl pins (`.mise.toml` + `.env.example`) grouped.
 - **Repo renamed `vks-cicd` → `vks-airgap-cicd`** (all in-repo refs aligned; GitHub redirects the old URL).
+- **App relocated `./app` → `./apps/java/webui`** (PR #48 — `apps/<lang>/<name>` layout; `APP_DIR`/`MVN`,
+  builder/seed/alignment/lint scripts, README, CLAUDE.md, `.env.example` updated; `trivy-config --skip-dirs`
+  moved with the tree). README `Prerequisites` now precedes `Tech stack`. Verified offline (`make ci`) + live
+  (`make builder-image` from the new path pushed to Harbor).
+- **Ingress body markers LIVE-CONFIRMED** (istio `e2e-kind`): `gitea.vks.local` / `argocd.vks.local` /
+  `app.vks.local` each served its own UI through the LB — the `gitea`/`argo`/`class="message"` asserts in
+  `scripts/98-verify-ingress.sh` match real served HTML.
 
 **To resume:**
 
@@ -170,11 +177,6 @@ landed a large hardening + rename arc, all merged:
 
 **Open / next-session items (none blocking):**
 
-- [ ] Rename the LOCAL dir `~/projects/vks-cicd` → `vks-airgap-cicd` and reopen the session there
-      (deferred — renaming the cwd mid-session breaks paths).
-- [ ] On the next `make e2e-kind`, confirm the gitea/argocd ingress **body markers** in
-      `scripts/98-verify-ingress.sh` (hard-asserted `gitea`/`argo` substrings; the webui marker
-      was live-verified, gitea/argocd are verified-on-next-live-run).
 - [ ] (optional) **ArgoCD Image Updater** for registry-driven redeploy — considered and
       **declined** this session; the Tekton tag-write-back stays the primary GitOps path. Revisit
       only to demo registry-driven deploys or to track externally-built (non-pipeline) images.
