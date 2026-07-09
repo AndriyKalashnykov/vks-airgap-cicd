@@ -75,9 +75,19 @@ Run a single app test: `cd app && ./mvnw -B -Dtest=<ClassName>#<method> test`.
   `00-install-prereqs.sh`; the air-gapped host gets binaries from the bundle.
 - **Secrets never in argv** — PATs/registry creds via stdin / `--password-stdin` /
   env-by-name (see `.env.example` commented secret placeholders).
-- **Java app:** Spring Boot + JUnit/`@SpringBootTest`; Dockerfile follows the
+- **Java app:** Spring Boot 4 + JUnit/`@SpringBootTest`; Dockerfile follows the
   multistage temurin / non-root / actuator-`HEALTHCHECK` template.
 - **Manifests:** Kustomize; validated with `kustomize build | kubeconform`.
+- **Container engine split:** `CONTAINER_ENGINE` (podman-preferred, docker fallback)
+  drives image ops — mirror, builder image, diagrams. The **KinD local e2e path
+  requires Docker**: `05-kind-up.sh` (`require_cmd docker`) + cloud-provider-kind use
+  the `kind` Docker network/socket, so node interactions (`crictl` via
+  `docker exec <node>`) use Docker even in this podman-default repo.
+- **Image tag alignment:** every mirrored image's tag is duplicated between
+  `images/images.txt` (the Renovate-tracked mirror source of truth) and its consumers
+  (k8s/tekton manifests, `.env.example` `TEMURIN_*_TAG`, the app `Dockerfile`). `make
+  check-image-alignment` (in `static-check`) fails CI on any drift; a general Renovate
+  customManager bumps the consumers in lockstep.
 
 ## Skills
 
