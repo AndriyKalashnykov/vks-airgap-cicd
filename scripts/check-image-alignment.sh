@@ -41,7 +41,7 @@ temurin_itag() { grep -oE "eclipse-temurin:[^[:space:]\"]*-$1-jammy" images/imag
 check_pinned() { # <label> <actual> <expected-from-images.txt>
   [ -n "$3" ] || return 0
   if [ "$2" != "$3" ]; then
-    echo "DRIFT ${1}: ${2:-<absent>} vs images/images.txt eclipse-temurin=${3}"
+    echo "DRIFT ${1}: ${2:-<absent>} vs images/images.txt=${3}"
     drift=1
   else
     echo "ok    ${1}=${2}"
@@ -52,6 +52,14 @@ jdk_itag="$(temurin_itag jdk)"
 check_pinned "TEMURIN_JRE_TAG (.env.example)" "$(grep -E '^TEMURIN_JRE_TAG=' .env.example | cut -d= -f2)" "$jre_itag"
 check_pinned "TEMURIN_JDK_TAG (.env.example)" "$(grep -E '^TEMURIN_JDK_TAG=' .env.example | cut -d= -f2)" "$jdk_itag"
 check_pinned "RUNTIME_IMAGE (app/Dockerfile)" "$(grep -oE 'RUNTIME_IMAGE=eclipse-temurin:[^[:space:]"]+' app/Dockerfile | head -1 | sed 's|RUNTIME_IMAGE=eclipse-temurin:||')" "$jre_itag"
+
+# Istio's version is carried in .env.example (ISTIO_VERSION, which feeds the helm
+# global.tag in 46-install-istio.sh) and mirrored as istio/pilot + istio/proxyv2
+# in images.txt. Keep them aligned (both istio images share the one version).
+istio_itag="$(grep -oE 'istio/pilot:[^[:space:]"]+' images/images.txt | head -1 | sed 's|istio/pilot:||')"
+proxyv2_itag="$(grep -oE 'istio/proxyv2:[^[:space:]"]+' images/images.txt | head -1 | sed 's|istio/proxyv2:||')"
+check_pinned "ISTIO_VERSION (.env.example)" "$(grep -E '^ISTIO_VERSION=' .env.example | cut -d= -f2)" "$istio_itag"
+check_pinned "istio/proxyv2 (images.txt)" "$proxyv2_itag" "$istio_itag"
 
 if [ "$drift" -ne 0 ]; then
   echo "ERROR: image tag drift between manifests and images/images.txt (BLOCKING)." >&2

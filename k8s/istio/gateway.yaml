@@ -1,0 +1,75 @@
+# Istio Gateway + VirtualServices fronting the browser UIs at *.vks.local through
+# the single istio-ingressgateway LoadBalancer. The Gateway binds the gateway
+# workload (selector istio=ingressgateway) on :80; each VirtualService routes one
+# hostname to a backend Service by FQDN. No sidecars are needed on the backends —
+# istiod knows every k8s Service, so the gateway proxies to their ClusterIP.
+#
+# ${VAR} tokens rendered by scripts/46-install-istio.sh (envsubst allowlist).
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: vks-uis
+  namespace: ${ISTIO_GATEWAY_NAMESPACE}
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - ${GITEA_HOST}
+        - ${ARGOCD_HOST}
+        - ${WEBUI_HOST}
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: gitea
+  namespace: ${ISTIO_GATEWAY_NAMESPACE}
+spec:
+  hosts:
+    - ${GITEA_HOST}
+  gateways:
+    - vks-uis
+  http:
+    - route:
+        - destination:
+            host: gitea-http.${GITEA_NAMESPACE}.svc.cluster.local
+            port:
+              number: 3000
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: argocd
+  namespace: ${ISTIO_GATEWAY_NAMESPACE}
+spec:
+  hosts:
+    - ${ARGOCD_HOST}
+  gateways:
+    - vks-uis
+  http:
+    - route:
+        - destination:
+            host: argocd-server.${ARGOCD_NAMESPACE}.svc.cluster.local
+            port:
+              number: 80
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: webui
+  namespace: ${ISTIO_GATEWAY_NAMESPACE}
+spec:
+  hosts:
+    - ${WEBUI_HOST}
+  gateways:
+    - vks-uis
+  http:
+    - route:
+        - destination:
+            host: ${APP_NAME}.${ARGOCD_DEST_NAMESPACE}.svc.cluster.local
+            port:
+              number: 80

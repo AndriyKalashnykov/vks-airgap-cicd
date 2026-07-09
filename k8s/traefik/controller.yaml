@@ -1,0 +1,121 @@
+# Traefik v3 ingress controller — the single LoadBalancer that fronts the browser
+# UIs (Gitea, ArgoCD, the demo app) at *.vks.local. Image is pulled from Harbor
+# (mirrored), like every other workload. Standard KubernetesIngress provider (no
+# IngressRoute CRDs) so the Ingress objects in ingress.yaml are plain k8s Ingress.
+#
+# ${VAR} tokens are rendered by scripts/45-install-traefik.sh via a restricted
+# envsubst allowlist. Non-root, read-only rootfs, all caps dropped; Traefik binds
+# the unprivileged :8000 (web) / :9000 (ping) and the Service maps :80 -> :8000.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${TRAEFIK_NAMESPACE}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: traefik
+  namespace: ${TRAEFIK_NAMESPACE}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: traefik
+rules:
+  - apiGroups: [""]
+    resources: ["services", "endpoints", "secrets", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "ingressclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses/status"]
+    verbs: ["update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: traefik
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: traefik
+subjects:
+  - kind: ServiceAccount
+    name: traefik
+    namespace: ${TRAEFIK_NAMESPACE}
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: traefik
+spec:
+  controller: traefik.io/ingress-controller
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traefik
+  namespace: ${TRAEFIK_NAMESPACE}
+  labels: { app: traefik }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: traefik }
+  template:
+    metadata:
+      labels: { app: traefik }
+    spec:
+      serviceAccountName: traefik
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: traefik
+          image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/traefik:v3.7.7
+          args:
+            - "--global.checknewversion=false"
+            - "--global.sendanonymoususage=false"
+            - "--entrypoints.web.address=:8000"
+            - "--entrypoints.traefik.address=:9000"
+            - "--ping=true"
+            - "--providers.kubernetesingress=true"
+            - "--providers.kubernetesingress.ingressclass=traefik"
+          ports:
+            - { name: web, containerPort: 8000 }
+            - { name: traefik, containerPort: 9000 }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          livenessProbe:
+            httpGet: { path: /ping, port: traefik }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /ping, port: traefik }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: traefik
+  namespace: ${TRAEFIK_NAMESPACE}
+  labels: { app: traefik }
+spec:
+  type: LoadBalancer
+  selector: { app: traefik }
+  ports:
+    - { name: web, port: 80, targetPort: web, protocol: TCP }
