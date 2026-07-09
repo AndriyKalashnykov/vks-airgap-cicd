@@ -142,3 +142,41 @@ ArgoCD + Gitea + Tekton + offline builder + pipeline + ingress) is heavy and fla
 the real demo is the live VKS run — so the KinD e2e stays a local `make` target rather
 than a CI job. Run it locally (and both ingress controllers via `make verify-ingress-both`)
 when changing the pipeline, ingress, or manifests.
+
+## Backlog / resume state (2026-07-09)
+
+Snapshot for picking up next session exactly where this one left off.
+
+**Where things stand:** `main` GREEN, **0 open PRs**, KinD cluster **DOWN**. This session
+landed a large hardening + rename arc, all merged:
+
+- `/project-review` in full — gates/foundation, ingress-e2e, diagrams, docs, verify-race.
+- Whole toolchain aligned to **Java 25** + a `check-java-alignment` drift gate (RED-proven;
+  build image `maven:*-temurin-25` and runtime `eclipse-temurin:25-jre` are separate Renovate
+  deps, so the gate stops them re-splitting).
+- Security gates in `static-check`: `secrets` (gitleaks) + `trivy-fs` (scans the built jar via
+  `trivy rootfs`) + `trivy-config` (`.trivyignore` waives gitea RO-rootfs + Traefik secrets RBAC).
+- `make verify` ArgoCD race fixed (`refresh=hard` + wait for the deployed image to change).
+- Ingress e2e: `verify-ingress` / `verify-ingress-both` (K1.5 route-readiness) + per-host body markers.
+- MIT LICENSE; argocd CLI aligned to the server (`v3.4.4`).
+- Renovate hardening: cluster-only-tool **MAJORS require Dependency-Dashboard approval**
+  (CI has no cluster job); the two kubectl pins (`.mise.toml` + `.env.example`) grouped.
+- **Repo renamed `vks-cicd` → `vks-airgap-cicd`** (all in-repo refs aligned; GitHub redirects the old URL).
+
+**To resume:**
+
+1. `git fetch origin && git checkout main && git reset --hard origin/main` (sync).
+2. Bring the stack back up: `make e2e-kind` (full KinD end-to-end).
+
+**Open / next-session items (none blocking):**
+
+- [ ] Rename the LOCAL dir `~/projects/vks-cicd` → `vks-airgap-cicd` and reopen the session there
+      (deferred — renaming the cwd mid-session breaks paths).
+- [ ] On the next `make e2e-kind`, confirm the gitea/argocd ingress **body markers** in
+      `scripts/98-verify-ingress.sh` (hard-asserted `gitea`/`argo` substrings; the webui marker
+      was live-verified, gitea/argocd are verified-on-next-live-run).
+- [ ] (optional) **ArgoCD Image Updater** for registry-driven redeploy — considered and
+      **declined** this session; the Tekton tag-write-back stays the primary GitOps path. Revisit
+      only to demo registry-driven deploys or to track externally-built (non-pipeline) images.
+- CI runs offline gates only; the KinD e2e is **local by design** (verification-honesty) — a
+      decision, not a TODO.
