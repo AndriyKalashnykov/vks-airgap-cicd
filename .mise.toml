@@ -13,7 +13,7 @@
 java     = "temurin-21"
 maven    = "3.9"
 kubectl  = "1.31"
-helm     = "3.16"
+helm     = "4.2.2"
 kustomize = "5.5"
 jq       = "1.7"
 yq       = "4"
