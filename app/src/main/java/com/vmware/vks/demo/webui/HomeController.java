@@ -19,7 +19,7 @@ public class HomeController {
 
     public HomeController(
             @Value("${spring.application.name:webui}") String appName,
-            @Value("${app.message:Hello from vks-cicd}") String message,
+            @Value("${app.message:Hello from vks-airgap-cicd}") String message,
             @Value("${info.app.version:dev}") String version,
             @Value("${info.app.commit:unknown}") String commit) {
         this.appName = appName;

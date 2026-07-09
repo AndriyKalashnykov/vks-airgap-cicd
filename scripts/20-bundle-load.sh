@@ -2,7 +2,7 @@
 # 20-bundle-load.sh — (SNEAKERNET, air-gap host) unpack a transferred bundle so
 # 21-mirror-push.sh can push its images into Harbor.
 #
-# Usage: make bundle-load BUNDLE_TARBALL=/path/to/vks-cicd-bundle-*.tar.zst
+# Usage: make bundle-load BUNDLE_TARBALL=/path/to/vks-airgap-cicd-bundle-*.tar.zst
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 
 : "${BUNDLE_DIR:?}"
-tarball="${BUNDLE_TARBALL:?set BUNDLE_TARBALL=/path/to/vks-cicd-bundle-*.tar.[zst|gz]}"
+tarball="${BUNDLE_TARBALL:?set BUNDLE_TARBALL=/path/to/vks-airgap-cicd-bundle-*.tar.[zst|gz]}"
 [ -f "$tarball" ] || die "bundle not found: $tarball"
 
 # Verify checksum if present.

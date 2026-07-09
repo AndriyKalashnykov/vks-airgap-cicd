@@ -18,7 +18,7 @@ load_env
 
 OUT_DIR="${BUNDLE_OUT_DIR:-$REPO_ROOT}"
 stamp="$(date -u +%Y%m%d-%H%M%S)"
-base="vks-cicd-bundle-${stamp}"
+base="vks-airgap-cicd-bundle-${stamp}"
 
 # Prefer zstd (fast, small); fall back to gzip.
 if have zstd; then

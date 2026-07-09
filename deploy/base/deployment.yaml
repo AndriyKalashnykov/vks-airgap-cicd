@@ -4,7 +4,7 @@ metadata:
   name: webui
   labels:
     app.kubernetes.io/name: webui
-    app.kubernetes.io/part-of: vks-cicd-demo
+    app.kubernetes.io/part-of: vks-airgap-cicd-demo
 spec:
   replicas: 2
   selector:

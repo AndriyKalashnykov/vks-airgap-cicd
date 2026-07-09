@@ -15,7 +15,7 @@ spring:
 
 app:
   # The demo "deploy me" value — change this and redeploy to see the UI update.
-  message: ${APP_MESSAGE:Hello from vks-cicd}
+  message: ${APP_MESSAGE:Hello from vks-airgap-cicd}
 
 info:
   app:

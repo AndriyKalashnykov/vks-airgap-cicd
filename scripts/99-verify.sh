@@ -28,7 +28,7 @@ APP_LOCAL_PORT="${APP_LOCAL_PORT:-$(pick_port)}"
 TOKEN_FILE="${REPO_ROOT}/secrets/gitea-ci-token"
 [ -s "$TOKEN_FILE" ] || die "missing $TOKEN_FILE — run 'make seed-gitea' first"
 TOKEN="$(cat "$TOKEN_FILE")"
-MARKER="vks-cicd-verify-$(date +%s)"
+MARKER="vks-airgap-cicd-verify-$(date +%s)"
 
 tmp="$(mktemp -d)"; PF_PID=""
 cleanup() { if [ -n "$PF_PID" ]; then kill "$PF_PID" 2>/dev/null || true; fi; rm -rf "$tmp"; }
@@ -62,8 +62,8 @@ printf 'http://%s:%s@localhost:%s\n' "$GITEA_ADMIN_USER" "$TOKEN" "$GITEA_LOCAL_
 d="${tmp}/app"
 git clone -q "${base}/${GITEA_ORG}/${GITEA_APP_REPO}.git" "$d"
 git -C "$d" config credential.helper "store --file=${gitcreds}"
-git -C "$d" config user.email "verify@vks-cicd.local"
-git -C "$d" config user.name  "vks-cicd-verify"
+git -C "$d" config user.email "verify@vks-airgap-cicd.local"
+git -C "$d" config user.name  "vks-airgap-cicd-verify"
 # Change the greeting default so the rebuilt image visibly shows the marker.
 sed -i "s#\${APP_MESSAGE:[^}]*}#\${APP_MESSAGE:${MARKER}}#" \
   "$d/src/main/resources/application.yml"

@@ -21,7 +21,7 @@ require_cmd kubectl; require_cmd git; require_cmd curl; require_cmd yq
 : "${CI_NAMESPACE:?}"; : "${APP_NAME:?}"; : "${APP_BRANCH:?}"; : "${ARGOCD_TRACK_BRANCH:?}"
 : "${HARBOR_URL:?}"; : "${HARBOR_APP_PROJECT:?}"; : "${ARGOCD_DEST_NAMESPACE:?}"; : "${APP_REPLICAS:?}"
 : "${GITEA_CI_USER:?}"
-GITEA_ADMIN_EMAIL="${GITEA_ADMIN_EMAIL:-admin@vks-cicd.local}"
+GITEA_ADMIN_EMAIL="${GITEA_ADMIN_EMAIL:-admin@vks-airgap-cicd.local}"
 # Ephemeral by default (pick_port) so parallel runs don't collide on a fixed local
 # port; an operator can still pin it via GITEA_LOCAL_PORT.
 LOCAL_PORT="${GITEA_LOCAL_PORT:-$(pick_port)}"

@@ -65,7 +65,7 @@ run bash -c "kubectl create namespace \"$ARGOCD_NAMESPACE\" --dry-run=client -o 
 #    rate-limits (HTTP 429), and `kubectl apply -f <url>` fetches with no retry, so a
 #    transient 429 would otherwise fail the whole install. The cache also makes re-runs
 #    offline-friendly once the manifest has been fetched at least once.
-ARGOCD_MANIFEST_CACHE="${ARGOCD_MANIFEST_CACHE:-${TMPDIR:-/tmp}/vks-cicd-manifests}"
+ARGOCD_MANIFEST_CACHE="${ARGOCD_MANIFEST_CACHE:-${TMPDIR:-/tmp}/vks-airgap-cicd-manifests}"
 MANIFEST_FILE="${ARGOCD_MANIFEST_CACHE}/argocd-install-${ARGOCD_VERSION}.yaml"
 mkdir -p "$ARGOCD_MANIFEST_CACHE"
 if [ ! -s "$MANIFEST_FILE" ]; then
