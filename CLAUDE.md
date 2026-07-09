@@ -180,16 +180,37 @@ e2e-verified this session). This session landed a large hardening + rename arc, 
 - **Ingress body markers LIVE-CONFIRMED** (istio `e2e-kind`): `gitea.vks.local` / `argocd.vks.local` /
   `app.vks.local` each served its own UI through the LB — the `gitea`/`argo`/`class="message"` asserts in
   `scripts/98-verify-ingress.sh` match real served HTML.
+- **Context-aware credentials UX** (PR #50): `make creds` (URLs + logins table) + `make argocd-password`
+  (self-resolves the kubeconfig; `.env` value → generated secret → VKS-lab guidance). KinD install can set
+  the ArgoCD admin password from `ARGOCD_ADMIN_PASSWORD` (`.env`).
+- **Tekton Dashboard** (PR #52): read-only web UI at `tekton.vks.local` — mirrored air-gap
+  (ghcr.io → Harbor), installed into `tekton-pipelines`, ingress-routed on **both** istio + traefik; added
+  to the C4 diagrams. Also fixed `44-install-ingress` so an explicit `INGRESS_CONTROLLER` override wins
+  over `.env.kind` (so `verify-ingress-both` actually flips controllers).
+- **Photon 5 / Ubuntu jump-box bootstrap** (PR #53): README "Bootstrap a bare jump box" (tdnf TLS-stack
+  refresh, SSH keypair, clone) + `make deps` split into atomic `deps-mise` / `deps-prereqs`.
+- **crane replaces skopeo as the mirror engine** (PR #54): static Go binary, mise-native
+  (`.mise.toml` `crane = "0.21.7"`); `lib/mirror.sh` `mirror_platform_arg` + retry helper, `10-mirror-pull.sh`
+  `crane pull --format=oci`, `21-mirror-push.sh` `crane auth login` + `crane push --insecure`. Multi-arch by
+  default. Verified: 34 images mirrored to Harbor, 0 failures. Chosen after 3-agent research (imgpkg ruled out).
+- **`make jumpbox` — Photon 5 validation harness** (PR #54): runs the README bootstrap on a real `photon:5.0`
+  container (rootless podman, joined to the kind network). Caught + fixed **5** real bootstrap bugs:
+  `mise trust`, `tkn` arch-404 (uname vs Go arch), skopeo-not-on-Photon, missing `crun`, commented-only
+  `unqualified-search-registries` (all now in `00-install-prereqs.sh`, the real path).
+- **Uniform brightgreen badges** (PR #57): fixed the yellow MIT license badge; all four badges the same shade.
 
 **To resume:**
 
 1. `git fetch origin && git checkout main && git reset --hard origin/main` (sync).
-2. Bring the stack back up: `make e2e-kind` (full KinD end-to-end).
+2. Bring the stack back up: `make e2e-kind` (full KinD end-to-end). The mirror engine is now **crane**
+   (mise-provided, no skopeo). `make jumpbox` validates the Photon 5 jump-box bootstrap (needs the cluster up).
 
 **Open / next-session items (none blocking):**
 
 - [ ] (optional) **ArgoCD Image Updater** for registry-driven redeploy — considered and
       **declined** this session; the Tekton tag-write-back stays the primary GitOps path. Revisit
       only to demo registry-driven deploys or to track externally-built (non-pipeline) images.
+- [ ] (minor) `Dockerfile.jumpbox` isn't in the `lint`/hadolint gate; the two `spike-crane:*` test images
+      left in Harbor's `cicd` project during the crane spike can be pruned.
 - CI runs offline gates only; the KinD e2e is **local by design** (verification-honesty) — a
       decision, not a TODO.
