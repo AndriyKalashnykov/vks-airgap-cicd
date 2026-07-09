@@ -30,7 +30,7 @@ APP_NAME            ?= webui
 APP_DEV_PORT        ?= 8080
 BUNDLE_DIR          ?= ./bundle
 # renovate: datasource=docker depName=plantuml/plantuml
-PLANTUML_VERSION    ?= 1.2025.4
+PLANTUML_VERSION    ?= 1.2026.6
 # Container engine — podman preferred, docker fallback. Override: CONTAINER_ENGINE=docker
 CONTAINER_ENGINE    ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
