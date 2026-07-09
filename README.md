@@ -159,29 +159,26 @@ Individual targets: `make kind-up`, `make install-harbor`, `make install-argocd`
 
 ### Access the UIs (URLs, logins, passwords)
 
-Gitea, ArgoCD, and the app are fronted by the ingress (`make install-ingress`) at
-`*.vks.local` behind one LoadBalancer. Add its IP to `/etc/hosts` once (the install step
-prints this exact line), then browse by hostname — no `kubectl port-forward`:
-
-```bash
-# The install-ingress step publishes the LB IP to .env.kind; add it to /etc/hosts:
-IP=$(grep '^INGRESS_LB_IP=' .env.kind | cut -d= -f2)
-echo "$IP gitea.vks.local argocd.vks.local app.vks.local" | sudo tee -a /etc/hosts
-```
-
-Logins are the values you put in `.env`; ArgoCD's is generated and read from a secret.
+Run **`make creds`** — it prints the URLs and logins for whichever context you're in (the
+KinD demo or a real VKS lab), self-resolving the kubeconfig so there's no `kubectl` context
+to set. It also prints the one-time `/etc/hosts` line that maps the `*.vks.local` hosts to
+the ingress LoadBalancer. (Gitea, ArgoCD, and the app are fronted by the ingress at
+`*.vks.local`; Harbor keeps its own LB IP over plain HTTP.)
 
 | Service | URL | Username | Password |
 |---------|-----|----------|----------|
-| **Harbor** | `http://$(grep '^HARBOR_URL=' .env.kind \| cut -d= -f2)` (its own LB IP, plain HTTP) | `admin` | your `HARBOR_PASSWORD` from `.env` |
+| **Harbor** | its own LB IP, plain HTTP | `admin` | your `HARBOR_PASSWORD` from `.env` |
 | **Gitea** | <http://gitea.vks.local> | `gitea_admin` | your `GITEA_ADMIN_PASSWORD` from `.env` |
-| **ArgoCD** | <http://argocd.vks.local> | `admin` | see command below |
+| **ArgoCD** | <http://argocd.vks.local> | `admin` | `make argocd-password` |
 | **App (webui)** | <http://app.vks.local/> | — | — (health at `/actuator/health`) |
 
-```bash
-# ArgoCD initial admin password (generated at install):
-kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
-```
+**ArgoCD password** — `make argocd-password` reveals it for either context:
+
+- **KinD:** set `ARGOCD_ADMIN_PASSWORD` in `.env` for a known, stable login (applied at
+  `make install-argocd`, like Gitea/Harbor); leave it blank to keep ArgoCD's auto-generated
+  password. Either way `make argocd-password` prints it — no `kubectl`/context needed.
+- **Real VKS:** ArgoCD is lab-provided — leave `ARGOCD_ADMIN_PASSWORD` blank; the command
+  reads the initial-admin secret if present, otherwise points you to your lab.
 
 > Without the ingress (or before adding the `/etc/hosts` line), the same services are still
 > reachable over `kubectl port-forward` — e.g. `kubectl -n gitea port-forward svc/gitea-http

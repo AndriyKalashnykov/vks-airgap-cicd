@@ -27,6 +27,7 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make vks-login` | Authenticate to VKS → writes `$KUBECONFIG` + context |
 | `make platform` | Install + wire Gitea and Tekton |
 | `make gitops` | Create the ArgoCD Application |
+| `make creds` / `make argocd-password` | Print access URLs+logins / the ArgoCD admin password (context-aware, self-resolves kubeconfig) |
 | `make install-ingress` | Install the ingress (`INGRESS_CONTROLLER=istio` default / `traefik`) fronting the UIs at `*.vks.local` |
 | `make install-istio` / `install-traefik` | Install a specific ingress controller directly |
 | `make install-all` | Full air-gap install: `mirror → builder-image → vks-login → platform → gitops` |

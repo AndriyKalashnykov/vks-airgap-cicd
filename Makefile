@@ -132,6 +132,16 @@ configure-argocd: check-env ## Register the deploy repo + create the ArgoCD Appl
 .PHONY: gitops
 gitops: configure-argocd ## Wire ArgoCD to track webui-deploy
 
+##@ Access (URLs + logins)
+.PHONY: creds
+creds: ## Print the access summary (URLs + logins) for the current context
+	@$(SCRIPTS)/creds.sh
+
+.PHONY: argocd-password
+argocd-password: ## Print the ArgoCD 'admin' password (self-resolves kubeconfig; .env value or generated)
+	@$(SCRIPTS)/argocd-password.sh
+
+
 ##@ KinD local end-to-end (simulates VKS-provided Harbor + ArgoCD locally)
 .PHONY: kind-up
 kind-up: check-env ## Create the KinD cluster + cloud-provider-kind LoadBalancer

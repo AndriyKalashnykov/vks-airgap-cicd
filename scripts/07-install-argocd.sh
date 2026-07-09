@@ -93,9 +93,35 @@ run kubectl -n "$ARGOCD_NAMESPACE" patch configmap argocd-cmd-params-cm \
 run kubectl -n "$ARGOCD_NAMESPACE" rollout restart deploy/argocd-server
 wait_ready deploy/argocd-server
 
-# 5. Summary — show HOW to read the admin password; never print it or place it
-# on argv (the command is emitted for the operator to run, not executed here).
+# 5. Optional: set a deterministic 'admin' password from .env (KinD convenience so the
+# UI login is known + stable, like Gitea/Harbor). Skipped when ARGOCD_ADMIN_PASSWORD is
+# blank — the case on real VKS, where ArgoCD is lab-provided. The bcrypt hash is generated
+# by the argocd binary INSIDE the server pod, fed the plaintext on STDIN (never on argv,
+# per the secrets rule); the resulting one-way hash is then safe to patch into the secret.
+if [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]; then
+  log_info "setting ArgoCD 'admin' password from ARGOCD_ADMIN_PASSWORD (.env)"
+  # The single-quoted grep pattern's '$' are literal bcrypt-hash anchors, not shell
+  # expansions — single quotes are correct here.
+  # shellcheck disable=SC2016
+  bhash="$(kubectl -n "$ARGOCD_NAMESPACE" exec -i deploy/argocd-server -- \
+             argocd account bcrypt <<<"$ARGOCD_ADMIN_PASSWORD" 2>/dev/null \
+           | grep -oE '\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}' | head -1)"
+  [ -n "$bhash" ] || die "failed to generate the bcrypt hash for ARGOCD_ADMIN_PASSWORD"
+  # ${bhash} is expanded ONCE here; run() uses "$@" (no eval), so the '$' chars in the
+  # hash are literal to kubectl — not re-expanded as shell positionals.
+  run kubectl -n "$ARGOCD_NAMESPACE" patch secret argocd-secret --type merge \
+    -p "{\"stringData\":{\"admin.password\":\"${bhash}\",\"admin.passwordMtime\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"
+  # Drop the generated secret so `make argocd-password` unambiguously returns OUR value.
+  run kubectl -n "$ARGOCD_NAMESPACE" delete secret argocd-initial-admin-secret --ignore-not-found >/dev/null 2>&1 || true
+fi
+
+# 6. Summary. The admin password is revealed by `make argocd-password` (it self-resolves
+# the kubeconfig and picks the source: the .env value if set, else the generated secret)
+# — never printed or placed on argv here.
 log_info "ArgoCD ${ARGOCD_VERSION} installed in namespace ${ARGOCD_NAMESPACE}."
-log_info "Read the initial admin password (user 'admin') with:"
-log_info "  kubectl -n ${ARGOCD_NAMESPACE} get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+if [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]; then
+  log_info "admin password set from .env (user 'admin'); reveal it with: make argocd-password"
+else
+  log_info "admin password is auto-generated (user 'admin'); reveal it with: make argocd-password"
+fi
 log_info "Next step: run 'make gitops' to create the ArgoCD Application."
