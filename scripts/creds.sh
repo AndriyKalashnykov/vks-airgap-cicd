@@ -26,6 +26,7 @@ harbor_user="${HARBOR_USERNAME:-admin}"
 harbor_pw="${HARBOR_PASSWORD:-<set HARBOR_PASSWORD in .env>}"
 gitea_user="${GITEA_ADMIN_USER:-gitea_admin}"
 gitea_pw="${GITEA_ADMIN_PASSWORD:-<set GITEA_ADMIN_PASSWORD in .env>}"
+ci_ns="${CI_NAMESPACE:-ci}"  # Tekton pipeline/EventListener namespace (in-cluster CI, no web UI)
 # ArgoCD via the context-aware resolver; exit 3 => VKS-provided / not knowable locally.
 if argo_pw="$("${SCRIPT_DIR}/argocd-password.sh" 2>/dev/null)"; then :; else
   argo_pw="<VKS-provided — get it from your lab>"
@@ -42,8 +43,11 @@ fi
 # --- table ----------------------------------------------------------------------------
 printf '\n  %-9s %-32s %-14s %s\n' "Service" "URL" "Username" "Password"
 printf '  %-9s %-32s %-14s %s\n'   "-------" "---" "--------" "--------"
-printf '  %-9s %-32s %-14s %s\n'   "Harbor"  "$harbor_url" "$harbor_user" "$harbor_pw"
+# Ordered by the pipeline flow: Gitea (push) -> Tekton (build) -> Harbor (registry)
+# -> ArgoCD (deploy) -> App. Tekton is in-cluster CI with no web UI.
 printf '  %-9s %-32s %-14s %s\n'   "Gitea"   "$gitea_url"  "$gitea_user"  "$gitea_pw"
+printf '  %-9s %-32s %-14s %s\n'   "Tekton"  "in-cluster CI - no web UI"   "-" "use: tkn -n ${ci_ns}"
+printf '  %-9s %-32s %-14s %s\n'   "Harbor"  "$harbor_url" "$harbor_user" "$harbor_pw"
 printf '  %-9s %-32s %-14s %s\n'   "ArgoCD"  "$argocd_url" "admin"        "$argo_pw"
 printf '  %-9s %-32s %-14s %s\n'   "App"     "$app_url"    "-"            "(no login; health at /actuator/health)"
 echo
