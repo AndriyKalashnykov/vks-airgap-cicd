@@ -12,9 +12,8 @@
 # renovate: datasource=docker depName=gcr.io/kaniko-project/executor
 gcr.io/kaniko-project/executor:v1.24.0-debug
 
-# ---- Java build + runtime base images (app Dockerfile + maven task) ----
-# renovate: datasource=docker depName=eclipse-temurin
-eclipse-temurin:25.0.3_9-jdk-jammy
+# ---- Java runtime base image (app Dockerfile runtime stage) ----
+# The BUILD uses the maven:...-temurin image below; only the JRE runtime is mirrored.
 # renovate: datasource=docker depName=eclipse-temurin
 eclipse-temurin:25.0.3_9-jre-jammy
 

@@ -34,9 +34,10 @@ done < <(grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"]+
           | sed -E 's|\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/||' | sort -u)
 
 # eclipse-temurin's tag is ALSO carried outside the manifests: in .env.example
-# (TEMURIN_JDK_TAG / TEMURIN_JRE_TAG, which feed the rendered RUNTIME_IMAGE_REF
-# in configure-tekton) and in the app runtime Dockerfile ARG. A grep over
-# manifest literals cannot see those, so check them explicitly against images.txt.
+# (TEMURIN_JRE_TAG, which feeds the rendered RUNTIME_IMAGE_REF in configure-tekton)
+# and in the app runtime Dockerfile ARG. A grep over manifest literals cannot see
+# those, so check them explicitly against images.txt. (Only the JRE runtime image
+# is mirrored — the build uses the maven:...-temurin image.)
 temurin_itag() { grep -oE "eclipse-temurin:[^[:space:]\"]*-$1-jammy" images/images.txt | head -1 | sed 's|eclipse-temurin:||'; }
 check_pinned() { # <label> <actual> <expected-from-images.txt>
   [ -n "$3" ] || return 0
@@ -48,9 +49,7 @@ check_pinned() { # <label> <actual> <expected-from-images.txt>
   fi
 }
 jre_itag="$(temurin_itag jre)"
-jdk_itag="$(temurin_itag jdk)"
 check_pinned "TEMURIN_JRE_TAG (.env.example)" "$(grep -E '^TEMURIN_JRE_TAG=' .env.example | cut -d= -f2)" "$jre_itag"
-check_pinned "TEMURIN_JDK_TAG (.env.example)" "$(grep -E '^TEMURIN_JDK_TAG=' .env.example | cut -d= -f2)" "$jdk_itag"
 check_pinned "RUNTIME_IMAGE (app/Dockerfile)" "$(grep -oE 'RUNTIME_IMAGE=eclipse-temurin:[^[:space:]"]+' app/Dockerfile | head -1 | sed 's|RUNTIME_IMAGE=eclipse-temurin:||')" "$jre_itag"
 
 # Istio's version is carried in .env.example (ISTIO_VERSION, which feeds the helm
