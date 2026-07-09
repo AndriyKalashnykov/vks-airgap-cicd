@@ -141,8 +141,16 @@ install-harbor: check-env ## Install Harbor (LoadBalancer, HTTP) into KinD; wire
 install-argocd: check-env ## Install ArgoCD into KinD
 	@$(SCRIPTS)/07-install-argocd.sh
 
+.PHONY: install-ingress
+install-ingress: check-env ## Install the selected ingress (INGRESS_CONTROLLER=istio|traefik) fronting the UIs at *.vks.local
+	@$(SCRIPTS)/44-install-ingress.sh
+
+.PHONY: install-istio
+install-istio: check-env ## Install Istio ingress (control plane + gateway LB) — the default
+	@$(SCRIPTS)/46-install-istio.sh
+
 .PHONY: install-traefik
-install-traefik: check-env ## Install Traefik ingress (one LB) fronting Gitea/ArgoCD/app at *.vks.local
+install-traefik: check-env ## Install Traefik ingress (one LB) — the lighter option
 	@$(SCRIPTS)/45-install-traefik.sh
 
 .PHONY: kind-down
@@ -150,7 +158,7 @@ kind-down: ## Tear down the KinD cluster (prunes cloud-provider-kind + kindccm-*
 	@$(SCRIPTS)/kind-down.sh
 
 .PHONY: e2e-kind
-e2e-kind: kind-up install-harbor install-argocd install-all install-traefik verify ## Full local end-to-end in KinD
+e2e-kind: kind-up install-harbor install-argocd install-all install-ingress verify ## Full local end-to-end in KinD
 
 ##@ Full pipeline
 .PHONY: install-all
