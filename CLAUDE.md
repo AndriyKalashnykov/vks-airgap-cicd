@@ -79,6 +79,19 @@ Run a single app test: `cd app && ./mvnw -B -Dtest=<ClassName>#<method> test`.
   multistage temurin / non-root / actuator-`HEALTHCHECK` template.
 - **Manifests:** Kustomize; validated with `kustomize build | kubeconform`.
 
+## Skills
+
+Use the following skills when working on related files:
+
+| File(s) | Skill |
+|---------|-------|
+| `Makefile` | `/makefile` |
+| `renovate.json` | `/renovate` |
+| `README.md` | `/readme` |
+| `.github/workflows/*.{yml,yaml}` | `/ci-workflow` |
+
+When spawning subagents, always pass conventions from the respective skill into the agent's prompt.
+
 ## Verification honesty
 
 Offline-verifiable (no cluster): app tests, manifest/Tekton YAML validation, script
