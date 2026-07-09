@@ -1,5 +1,7 @@
 ' Shared modern-flat theme for the C4 diagrams. Included AFTER the C4_*.puml
 ' macro include (it uses C4 UpdateElementStyle/UpdateBoundaryStyle macros).
+' dpi 150 = 1.5x rasterization for crisp text on github.com (layout/aspect unchanged).
+skinparam dpi 150
 skinparam backgroundColor #FAFAFA
 skinparam shadowing false
 skinparam roundCorner 4

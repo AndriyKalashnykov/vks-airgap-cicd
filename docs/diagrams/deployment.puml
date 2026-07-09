@@ -1,8 +1,11 @@
 @startuml deployment
 !include c4/C4_Deployment.puml
 !include _style.puml
+LAYOUT_LEFT_RIGHT()
 
 title Deployment — jump box + air-gapped VKS cluster
+
+Person(op, "Operator", "browses the UIs at *.vks.local")
 
 Deployment_Node(jb, "Jump box", "Ubuntu or PhotonOS · internet-connected") {
   Container(cli, "Toolchain", "mise, skopeo, docker/podman, kubectl, tkn, argocd, helm")
@@ -28,6 +31,9 @@ Deployment_Node(vks, "VKS workload cluster", "VMware vSphere Kubernetes Service 
   Deployment_Node(ns_app, "namespace: webui", "") {
     Container(app, "webui", "Deployment (2 replicas) + Service")
   }
+  Deployment_Node(ns_ing, "namespace: istio-ingress", "") {
+    Container(ing, "Ingress gateway", "LoadBalancer · INGRESS_CONTROLLER=istio (default) | traefik")
+  }
 }
 
 Rel(mir, harbor, "push images", "HTTPS/HTTP")
@@ -38,6 +44,10 @@ Rel(ci, gitea, "clone + write-back", "git")
 Rel(argo, gitea, "sync from webui-deploy", "git")
 Rel(argo, app, "deploy", "kubectl")
 Rel(app, harbor, "pull image", "containerd")
+Rel(op, ing, "browse UIs", "*.vks.local / HTTP")
+Rel(ing, gitea, "route", "HTTP")
+Rel(ing, argo, "route", "HTTP")
+Rel(ing, app, "route", "HTTP")
 
 SHOW_LEGEND()
 @enduml
