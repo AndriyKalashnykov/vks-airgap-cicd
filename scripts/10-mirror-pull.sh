@@ -14,7 +14,7 @@ load_env
 # shellcheck source=scripts/lib/mirror.sh
 . "${SCRIPT_DIR}/lib/mirror.sh"
 
-require_cmd skopeo
+require_cmd crane
 require_cmd curl
 
 : "${BUNDLE_DIR:?}"; : "${IMAGE_CACHE_DIR:?}"
@@ -53,11 +53,11 @@ fails=0
 for src in "${IMAGES[@]}"; do
   dst_dir="$(mirror_cache_dir "$src")"
   pull_ref="$(mirror_pull_ref "$src")"      # digest-valid (never tag+digest)
-  read -ra copy_flags <<<"$(mirror_copy_flags "$src")"   # single-arch, or --all for digest-pinned
-  log_info "pull $pull_ref (${copy_flags[*]})"
-  mkdir -p "$dst_dir"
-  if run skopeo copy "${copy_flags[@]}" --retry-times 3 \
-        "docker://${pull_ref}" "dir:${dst_dir}"; then
+  read -ra platform <<<"$(mirror_platform_arg "$src")"   # single-arch, or empty for all/digest-pinned
+  log_info "pull $pull_ref ${platform[*]:-(all arches)}"
+  # crane writes an OCI image layout; start from a clean dir so a re-pull doesn't append.
+  rm -rf "$dst_dir"; mkdir -p "$dst_dir"
+  if mirror_retry 3 run crane pull --format=oci "${platform[@]}" "$pull_ref" "$dst_dir"; then
     :
   else
     log_error "failed to pull $src"; fails=$((fails+1))

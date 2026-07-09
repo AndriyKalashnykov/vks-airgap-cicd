@@ -1,0 +1,40 @@
+# syntax=docker/dockerfile:1
+# Dockerfile.jumpbox — a Photon 5 "jump box" for validating the README bootstrap +
+# air-gap install flow on the REAL jump-box OS, with ROOTLESS podman (the README's
+# preferred container engine). Built and run by `make jumpbox` — a test harness, not a
+# production image. The image installs only the documented bootstrap set; `make deps`
+# (run at container start) installs the rest of the toolchain, so a green run proves the
+# Photon 5 dependency path works end-to-end.
+FROM photon:5.0
+
+# Bootstrap set (mirrors README → Prerequisites) + the rootless-podman engine
+# (crun runtime + fuse-overlayfs + slirp4netns). Refresh the cache first — the stale-cache
+# openssl/TLS trap documented in the README.
+RUN tdnf clean all && tdnf makecache && \
+    tdnf install -y \
+      ca-certificates openssl curl git openssh-clients make tar gzip which \
+      shadow sudo \
+      podman fuse-overlayfs slirp4netns && \
+    tdnf clean all
+
+# Non-root operator with subuid/subgid (for rootless podman) + passwordless sudo
+# (scripts/lib/os.sh pkg_install uses $SUDO to tdnf-install the OS packages).
+RUN groupadd vks && useradd -g vks -m -s /bin/bash vks && \
+    printf 'vks:100000:65536\n' > /etc/subuid && \
+    printf 'vks:100000:65536\n' > /etc/subgid && \
+    printf 'vks ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/vks && chmod 0440 /etc/sudoers.d/vks
+
+# Rootless podman storage → fuse-overlayfs (overlay-in-container needs the fuse mount program).
+RUN install -d -o vks -g vks /home/vks/.config/containers && \
+    printf '[storage]\ndriver = "overlay"\n[storage.options.overlay]\nmount_program = "/usr/bin/fuse-overlayfs"\n' \
+      > /home/vks/.config/containers/storage.conf && \
+    chown -R vks:vks /home/vks/.config
+
+USER vks
+# mise (toolchain version manager) — installed per-user exactly as the README documents.
+RUN curl -fsSL https://mise.run | sh
+# ~/.local/bin holds mise + the prereqs-script CLIs (tkn/argocd/kubectl); the mise shims
+# expose java/maven/kubectl/helm/... so the Makefile finds them on PATH.
+ENV PATH="/home/vks/.local/bin:/home/vks/.local/share/mise/shims:${PATH}"
+WORKDIR /home/vks
+CMD ["bash"]

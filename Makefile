@@ -55,10 +55,11 @@ help: ## Show this help
 deps: deps-mise deps-prereqs ## Install the full jump-box toolchain (mise tools + prereqs script)
 
 deps-mise: ## Install mise-managed tools from .mise.toml (java, maven, kubectl, helm, trivy, ...)
-	@if command -v mise >/dev/null 2>&1; then mise install; \
+	@if command -v mise >/dev/null 2>&1; then \
+	   mise trust "$(CURDIR)/.mise.toml"; mise install; \
 	 else echo "mise not found — install it first (see README → Prerequisites), then re-run 'make deps'"; exit 1; fi
 
-deps-prereqs: ## Install non-mise CLIs + OS packages (skopeo, git, tkn, argocd, podman, ...) via 00-install-prereqs.sh
+deps-prereqs: ## Install non-mise CLIs + OS packages (git, tkn, argocd, podman, ...) via 00-install-prereqs.sh
 	@$(SCRIPTS)/00-install-prereqs.sh
 
 .PHONY: check-env
@@ -195,6 +196,28 @@ verify-ingress: check-env ## Assert the *.vks.local UIs route through the ingres
 verify-ingress-both: check-env ## Matrix: install + route-verify BOTH ingress controllers against the running cluster
 	@$(MAKE) install-ingress verify-ingress INGRESS_CONTROLLER=istio
 	@$(MAKE) install-ingress verify-ingress INGRESS_CONTROLLER=traefik
+
+##@ Jump-box validation (Photon 5 container, rootless podman)
+JUMPBOX_IMAGE ?= vks-jumpbox:photon5
+.PHONY: jumpbox-image
+jumpbox-image: ## Build the Photon 5 jump-box test image (rootless podman inside)
+	@docker build -f Dockerfile.jumpbox -t $(JUMPBOX_IMAGE) .
+
+.PHONY: jumpbox
+jumpbox: jumpbox-image ## Validate the README jump-box flow on real Photon 5 (make deps + rootless podman + cluster reach) against the running KinD cluster
+	@command -v kind >/dev/null 2>&1 || { echo "ERROR: 'kind' not found — the KinD cluster must be up (make kind-up install-harbor ...)"; exit 1; }
+	@docker network inspect kind >/dev/null 2>&1 || { echo "ERROR: kind Docker network not found — bring the cluster up first (make kind-up)"; exit 1; }
+	@mkdir -p .jumpbox
+	@kind_name="$$(grep -h '^KIND_CLUSTER_NAME=' .env .env.example 2>/dev/null | head -1 | cut -d= -f2)"; \
+	 kind get kubeconfig --name "$$kind_name" --internal > .jumpbox/kubeconfig
+	@harbor_url="$$(grep '^HARBOR_URL=' .env.kind 2>/dev/null | cut -d= -f2)"; \
+	 [ -n "$$harbor_url" ] || { echo "ERROR: HARBOR_URL not in .env.kind — run 'make install-harbor' first"; exit 1; }; \
+	 echo "running Photon 5 jump box on the kind network (Harbor=$$harbor_url)"; \
+	 docker run --rm --privileged --network kind \
+	   -e HARBOR_URL="$$harbor_url" \
+	   -v "$(PWD):/src:ro" \
+	   -v "$(PWD)/.jumpbox/kubeconfig:/run/jumpbox/kubeconfig:ro" \
+	   $(JUMPBOX_IMAGE) bash /src/scripts/jumpbox-run.sh
 
 ##@ Demo application (local dev)
 .PHONY: app-test

@@ -3,7 +3,7 @@
 # Runs on the dual-homed jump box (after 10) or the air-gapped host (after 20).
 #
 # Ensures the Harbor projects exist, logs in via stdin (no secret in argv), then
-# skopeo-copies each cached OCI image to its Harbor destination (identical mapping
+# crane-pushes each cached OCI image to its Harbor destination (identical mapping
 # to the pull side via lib/mirror.sh).
 set -euo pipefail
 
@@ -14,7 +14,7 @@ load_env
 # shellcheck source=scripts/lib/mirror.sh
 . "${SCRIPT_DIR}/lib/mirror.sh"
 
-require_cmd skopeo
+require_cmd crane
 require_cmd curl
 
 : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"; : "${HARBOR_APP_PROJECT:?}"
@@ -33,6 +33,8 @@ CURL_CACERT=(); [ -f "${HARBOR_CA_FILE:-/nonexistent}" ] && CURL_CACERT=(--cacer
 [ "$TLS_VERIFY" = "false" ] && CURL_CACERT=(--insecure)
 # HTTP for an insecure (kind) Harbor, HTTPS otherwise.
 SCHEME="https"; [ "$TLS_VERIFY" = "false" ] && SCHEME="http"
+# crane uses a boolean --insecure flag (vs skopeo's --tls-verify=<bool>).
+INSECURE=(); [ "$TLS_VERIFY" = "false" ] && INSECURE=(--insecure)
 
 # Curl auth in a real umask-077 config FILE (kept out of argv). A process
 # substitution can't be used because the curl call runs on a later line than
@@ -60,7 +62,7 @@ ensure_project() {
   else
     log_info "creating Harbor project '$name'"
     # Public: kubelet/containerd pull anonymously (no imagePullSecret on every
-    # workload). Push still requires auth (kaniko/skopeo log in).
+    # workload). Push still requires auth (kaniko/crane log in).
     code="$(harbor_api POST "projects" "{\"project_name\":\"${name}\",\"public\":true}")"
     case "$code" in
       201|409) log_info "project '$name' ready (http $code)" ;;
@@ -71,8 +73,8 @@ ensure_project() {
 
 # ---- Registry login (password on stdin) ----
 log_info "logging in to Harbor $HARBOR_URL as $HARBOR_USERNAME"
-printf '%s' "$HARBOR_PASSWORD" | run skopeo login --tls-verify="$TLS_VERIFY" \
-  --username "$HARBOR_USERNAME" --password-stdin "$HARBOR_URL"
+printf '%s' "$HARBOR_PASSWORD" | run crane auth login "$HARBOR_URL" \
+  --username "$HARBOR_USERNAME" --password-stdin
 
 ensure_project "$HARBOR_INFRA_PROJECT"
 ensure_project "$HARBOR_APP_PROJECT"
@@ -87,10 +89,10 @@ for src in "${IMAGES[@]}"; do
   cache="$(mirror_cache_dir "$src")"
   dst="$(mirror_target_ref "$src")"
   [ -d "$cache" ] || { log_error "cache missing for $src ($cache) — was it pulled?"; fails=$((fails+1)); continue; }
-  read -ra copy_flags <<<"$(mirror_copy_flags "$src")"   # must match what was pulled
+  # No platform arg on push — the cached OCI layout already holds exactly the arch(es)
+  # that were pulled; crane push preserves the manifest list/index as-is.
   log_info "push $src -> $dst"
-  if run skopeo copy "${copy_flags[@]}" --retry-times 3 \
-        --dest-tls-verify="$TLS_VERIFY" "dir:${cache}" "docker://${dst}"; then
+  if mirror_retry 3 run crane push "${INSECURE[@]}" "$cache" "$dst"; then
     :
   else
     log_error "failed to push $dst"; fails=$((fails+1))
