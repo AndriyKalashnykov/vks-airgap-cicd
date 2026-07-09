@@ -8,14 +8,18 @@
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-# Bootstrap set (mirrors README → Prerequisites) + the rootless-podman engine (uidmap provides
-# newuidmap/newgidmap for the userns mapping; crun comes in as a podman dependency). Ubuntu's
-# apt is the counterpart to Photon's tdnf — the whole point of running both is to exercise the
+# Bootstrap set (mirrors README → Prerequisites) + podman + fuse-overlayfs (the latter is the
+# overlay-in-container storage backend this privileged harness needs). We deliberately DO NOT
+# pre-install uidmap/slirp4netns: on Ubuntu those are podman *Recommends* that
+# --no-install-recommends drops, and re-adding the rootless deps is `make deps`' job
+# (scripts/00-install-prereqs.sh). Leaving them out of the image makes the stage-2 rootless smoke
+# actually VALIDATE that real path, instead of passing on packages the image pre-baked (a false
+# green). Ubuntu's apt is the counterpart to Photon's tdnf — running both exercises the
 # lib/os.sh apt/tdnf abstraction on a real box of each family.
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl git openssh-client make tar gzip sudo \
-      uidmap podman fuse-overlayfs slirp4netns \
+      podman fuse-overlayfs \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root operator with subuid/subgid (for rootless podman) + passwordless sudo

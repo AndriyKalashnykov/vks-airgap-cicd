@@ -31,13 +31,24 @@ pkg_install ca-certificates curl git jq tar gzip
 # diagrams); docker also works if already present. Best-effort — some minimal
 # images lack it in the default repos.
 pkg_install podman || log_warn "podman unavailable via package manager; install podman or docker manually"
-# Photon's podman ships WITHOUT crun (its default OCI runtime, not pulled as a dep) and
-# WITHOUT a default unqualified-search-registries, so a `podman build` of a short-named base
-# image (maven:...-temurin — the offline Maven builder) fails with "crun not found" or
-# "short-name ... did not resolve". Install crun + point bare names at docker.io. Both are
-# best-effort + idempotent, and no-ops on distros (e.g. Ubuntu) that already ship them.
+# Rootless podman needs more than the podman binary: an OCI runtime (crun), the userns-mapping
+# setuid helpers newuidmap/newgidmap (pkg `uidmap`), and a rootless network backend
+# (slirp4netns) — without them a `podman build` of the short-named Maven builder base fails.
+# WHICH of these podman pulls in differs by distro (verified on photon:5.0 / ubuntu:24.04), so
+# install only the gaps explicitly. All steps are best-effort + idempotent:
+#   • Photon (tdnf): pulls uidmap + slirp4netns + fuse-overlayfs WITH podman, but NOT crun.
+#   • Ubuntu (apt):  pulls crun (a hard Depends) but uidmap + slirp4netns are podman *Recommends*,
+#     which lib/os.sh's `--no-install-recommends` drops — so rootless breaks ("newuidmap: command
+#     not found") until we add them back.
+# Photon also ships only a COMMENTED unqualified-search-registries example (a `podman build` of a
+# short-named base then fails "short-name … did not resolve"), so add an active one if none is set.
 if have podman; then
   have crun || pkg_install crun || log_warn "crun unavailable — rootless podman builds may fail (install crun manually)"
+  # Ubuntu/Debian only: re-add the podman Recommends that --no-install-recommends dropped. tdnf
+  # already pulls these with podman, so this is apt-only (gated to keep it a no-op on Photon).
+  if [ "$(pkg_mgr)" = "apt-get" ]; then
+    pkg_install uidmap slirp4netns || log_warn "uidmap/slirp4netns unavailable — rootless podman may fail (install them manually)"
+  fi
   # Match only an ACTIVE (uncommented) setting — Photon's default registries.conf ships a
   # commented `# unqualified-search-registries = […]` example that a loose grep would match.
   if ! grep -qsE '^[[:space:]]*unqualified-search-registries' /etc/containers/registries.conf 2>/dev/null; then
@@ -94,7 +105,9 @@ install_argocd() {
 # it's still missing (mise absent, or not on PATH).
 install_kubectl() {
   have kubectl && { log_info "kubectl present: $(command -v kubectl)"; return 0; }
-  local v="${KUBECTL_VERSION:-v1.31.4}"
+  # KUBECTL_VERSION is always set by load_env from .env.example (the source of truth) — require
+  # it rather than carry a second, drift-prone inline default (was the stale `v1.31.4`).
+  local v="${KUBECTL_VERSION:?KUBECTL_VERSION unset}"
   log_info "kubectl not found — downloading ${v}"
   curl -fsSL "https://dl.k8s.io/release/${v}/bin/linux/${go_arch}/kubectl" -o "${BIN_DIR}/kubectl"
   chmod 0755 "${BIN_DIR}/kubectl"

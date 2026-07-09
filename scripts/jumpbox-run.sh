@@ -14,9 +14,14 @@ set -euo pipefail
 WORK="${HOME}/work"
 rm -rf "$WORK"; mkdir -p "$WORK"
 # Copy the read-only repo mount into a writable workspace (like a fresh clone); skip heavy /
-# gitignored build outputs so the jump box starts clean.
-tar -C /src --exclude='./.git' --exclude='./bundle' --exclude='./app/target' \
-    --exclude='./apps/java/webui/target' --exclude='./.jumpbox' -cf - . | tar -C "$WORK" -xf -
+# gitignored build outputs so the jump box starts clean. `./secrets` is gitignored (mode 0600,
+# owned by the host uid) — a real `git clone` never has it, and on a base whose default user
+# already holds uid 1000 (ubuntu:24.04 ships a `ubuntu` user there) the container's `vks` lands
+# on uid 1001 and cannot read the 0600 files, so tar would fail. Excluding it is both faithful
+# to a fresh clone and uid-mismatch-proof on every host/OS.
+tar -C /src --exclude='./.git' --exclude='./bundle' --exclude='./secrets' \
+    --exclude='./app/target' --exclude='./apps/java/webui/target' --exclude='./.jumpbox' \
+    -cf - . | tar -C "$WORK" -xf -
 cd "$WORK"
 
 . /etc/os-release
