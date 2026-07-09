@@ -12,7 +12,7 @@ push → GitOps tag write-back) to the VKS-provided **Harbor** and **ArgoCD**; t
 pluggable ingress (**Istio** by default, **Traefik** optional) fronting the UIs at
 `*.vks.local`, and a one-command **KinD** end-to-end that proves the whole flow locally.
 
-<p align="center"><img src="docs/diagrams/out/context.png" alt="System context: air-gapped CI/CD on VMware VKS" width="440"></p>
+<p align="center"><img src="docs/diagrams/out/context.png" alt="System context: air-gapped CI/CD on VMware VKS" width="500"></p>
 
 > A developer pushes a change to **Gitea** → **Tekton** runs tests, builds a container
 > image with **Kaniko** and pushes it to **Harbor** → Tekton bumps the image tag in the
@@ -79,15 +79,15 @@ image into Harbor; a `git push` then drives the whole CI/CD flow entirely inside
 
 ### Containers
 
-<p align="center"><img src="docs/diagrams/out/container.png" alt="Container diagram" width="900"></p>
+<p align="center"><img src="docs/diagrams/out/container.png" alt="Container diagram" width="960"></p>
 
 ### Deployment
 
-<p align="center"><img src="docs/diagrams/out/deployment.png" alt="Deployment diagram" width="760"></p>
+<p align="center"><img src="docs/diagrams/out/deployment.png" alt="Deployment diagram" width="900"></p>
 
 ### Pipeline flow
 
-<p align="center"><img src="docs/diagrams/out/pipeline-flow.png" alt="Pipeline flow" width="900"></p>
+<p align="center"><img src="docs/diagrams/out/pipeline-flow.png" alt="Pipeline flow" width="960"></p>
 
 Diagram sources are committed under [`docs/diagrams/`](docs/diagrams/) (C4-PlantUML);
 `make diagrams` re-renders the PNGs and `make diagrams-check` fails CI if they drift.
