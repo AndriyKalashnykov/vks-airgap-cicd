@@ -24,6 +24,7 @@ require_cmd kubectl; require_cmd git; require_cmd curl; require_cmd yq
 GITEA_ADMIN_EMAIL="${GITEA_ADMIN_EMAIL:-admin@vks-cicd.local}"
 LOCAL_PORT="${GITEA_LOCAL_PORT:-3000}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
+READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 
 tmp="$(mktemp -d)"
 PF_PID=""
@@ -60,11 +61,14 @@ log_info "port-forwarding gitea-http -> localhost:${LOCAL_PORT}"
 kubectl -n "$GITEA_NAMESPACE" port-forward svc/gitea-http "${LOCAL_PORT}:3000" >/dev/null 2>&1 &
 PF_PID=$!
 base="http://localhost:${LOCAL_PORT}"
-for _ in $(seq 1 30); do
+# Poll bounded by READY_TIMEOUT_SECONDS (from .env.example), matching 99-verify.sh
+# — not a hardcoded iteration count.
+end=$((SECONDS + READY_TIMEOUT_SECONDS))
+while [ "$SECONDS" -lt "$end" ]; do
   curl -fsS "${base}/api/healthz" >/dev/null 2>&1 && break
   sleep "$POLL_INTERVAL_SECONDS"
 done
-curl -fsS "${base}/api/healthz" >/dev/null 2>&1 || die "Gitea not reachable via port-forward"
+curl -fsS "${base}/api/healthz" >/dev/null 2>&1 || die "Gitea not reachable via port-forward within ${READY_TIMEOUT_SECONDS}s"
 
 # curl auth via -K config file (token stays out of argv).
 authcfg="${tmp}/curl.cfg"
