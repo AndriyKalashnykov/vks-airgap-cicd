@@ -162,7 +162,7 @@ kind-down: ## Tear down the KinD cluster (prunes cloud-provider-kind + kindccm-*
 	@$(SCRIPTS)/kind-down.sh
 
 .PHONY: e2e-kind
-e2e-kind: kind-up install-harbor install-argocd install-all install-ingress verify ## Full local end-to-end in KinD
+e2e-kind: kind-up install-harbor install-argocd install-all install-ingress verify verify-ingress ## Full local end-to-end in KinD (+ ingress route check)
 
 ##@ Full pipeline
 .PHONY: install-all
@@ -171,6 +171,15 @@ install-all: mirror builder-image vks-login platform gitops ## Run the complete 
 .PHONY: verify
 verify: check-env ## e2e: push a change → Tekton build → Harbor → ArgoCD sync → HTTP check (LIVE cluster)
 	@$(SCRIPTS)/99-verify.sh
+
+.PHONY: verify-ingress
+verify-ingress: check-env ## Assert the *.vks.local UIs route through the ingress LB (reads INGRESS_LB_IP from .env.kind)
+	@$(SCRIPTS)/98-verify-ingress.sh
+
+.PHONY: verify-ingress-both
+verify-ingress-both: check-env ## Matrix: install + route-verify BOTH ingress controllers against the running cluster
+	@$(MAKE) install-ingress verify-ingress INGRESS_CONTROLLER=istio
+	@$(MAKE) install-ingress verify-ingress INGRESS_CONTROLLER=traefik
 
 ##@ Demo application (local dev)
 .PHONY: app-test
