@@ -1,5 +1,6 @@
 [![CI](https://github.com/AndriyKalashnykov/vks-cicd/actions/workflows/ci.yml/badge.svg)](https://github.com/AndriyKalashnykov/vks-cicd/actions/workflows/ci.yml)
 [![Renovate enabled](https://img.shields.io/badge/renovate-enabled-brightgreen?logo=renovatebot)](https://docs.renovatebot.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Hits](https://hits.sh/github.com/AndriyKalashnykov/vks-cicd.svg?view=today-total&style=plastic)](https://hits.sh/github.com/AndriyKalashnykov/vks-cicd/)
 
 # Air-gapped CI/CD on VMware VKS — Reference Demo
@@ -440,5 +441,4 @@ via `.mise.toml`, `.env.example`, `images/images.txt`, and inline `# renovate:` 
 
 ## License
 
-No license has been declared for this repository yet. Until one is added, it is
-"all rights reserved" by default — open an issue if you need clarification on reuse.
+Released under the [MIT License](LICENSE).
