@@ -68,16 +68,26 @@ for host in "$GITEA_HOST" "$ARGOCD_HOST" "$WEBUI_HOST"; do
   fi
 done
 
-# The app is the only backend we control end-to-end: assert the greeting page it
-# renders actually comes back through the ingress (not just a 200 from some proxy).
+# Assert each host's body actually comes from ITS backend, not just a 200 from some
+# proxy — a wrong Ingress/VirtualService backend still returns 2xx. Markers are the
+# apps' own branding: Gitea always emits "gitea" (title/footer/asset paths), ArgoCD
+# emits "argo" (title "Argo CD" + assets), the app renders class="message". curl -L
+# follows any login/dashboard redirect to the real page. (Confirmed end-to-end on the
+# next `make e2e-kind`; blast radius is the local e2e, never CI.)
 if [ "$rc" -eq 0 ]; then
-  body="$(curl -s -H "Host: ${WEBUI_HOST}" --max-time "$CURL_MAX_TIME_SECONDS" "http://${INGRESS_LB_IP}/" 2>/dev/null || true)"
-  if printf '%s' "$body" | grep -q 'class="message"'; then
-    log_info "  OK    ${WEBUI_HOST} served the app greeting page through the ingress"
-  else
-    log_error "  FAIL  ${WEBUI_HOST} returned 2xx/3xx but not the app greeting page (wrong backend?)"
-    rc=1
-  fi
+  assert_body() { # <host> <grep-ERE> <label>
+    local b
+    b="$(curl -sL -H "Host: $1" --max-time "$CURL_MAX_TIME_SECONDS" "http://${INGRESS_LB_IP}/" 2>/dev/null || true)"
+    if printf '%s' "$b" | grep -qiE "$2"; then
+      log_info "  OK    $1 served the $3 through the ingress"
+    else
+      log_error "  FAIL  $1 returned 2xx/3xx but not the $3 (wrong backend?)"
+      rc=1
+    fi
+  }
+  assert_body "$GITEA_HOST"  'gitea'           "Gitea UI"
+  assert_body "$ARGOCD_HOST" 'argo'            "ArgoCD UI"
+  assert_body "$WEBUI_HOST"  'class="message"' "app greeting page"
 fi
 
 if [ "$rc" -ne 0 ]; then
