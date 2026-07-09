@@ -61,8 +61,21 @@ log_info "ensuring namespace ${ARGOCD_NAMESPACE}"
 run bash -c "kubectl create namespace \"$ARGOCD_NAMESPACE\" --dry-run=client -o yaml | kubectl apply -f -"
 
 # 2. Install ArgoCD from the pinned upstream manifest via server-side apply.
+#    Download to a per-version cache with retry/backoff first: raw.githubusercontent.com
+#    rate-limits (HTTP 429), and `kubectl apply -f <url>` fetches with no retry, so a
+#    transient 429 would otherwise fail the whole install. The cache also makes re-runs
+#    offline-friendly once the manifest has been fetched at least once.
+ARGOCD_MANIFEST_CACHE="${ARGOCD_MANIFEST_CACHE:-${TMPDIR:-/tmp}/vks-cicd-manifests}"
+MANIFEST_FILE="${ARGOCD_MANIFEST_CACHE}/argocd-install-${ARGOCD_VERSION}.yaml"
+mkdir -p "$ARGOCD_MANIFEST_CACHE"
+if [ ! -s "$MANIFEST_FILE" ]; then
+  log_info "fetching ArgoCD ${ARGOCD_VERSION} install manifest (retry/backoff) -> ${MANIFEST_FILE}"
+  http_get_retry "$INSTALL_MANIFEST" "$MANIFEST_FILE"
+else
+  log_info "using cached ArgoCD ${ARGOCD_VERSION} install manifest: ${MANIFEST_FILE}"
+fi
 log_info "installing ArgoCD ${ARGOCD_VERSION} into ${ARGOCD_NAMESPACE} (server-side apply)"
-run kubectl apply -n "$ARGOCD_NAMESPACE" --server-side --force-conflicts -f "$INSTALL_MANIFEST"
+run kubectl apply -n "$ARGOCD_NAMESPACE" --server-side --force-conflicts -f "$MANIFEST_FILE"
 
 # 3. Readiness — gate on the core workloads (poll loop, not a bare sleep).
 wait_ready deploy/argocd-server
