@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # check-java-alignment.sh — fail if the Java MAJOR version drifts across the
 # toolchain. The app's Java major is pinned in several places that MUST agree:
-#   1. app/pom.xml <java.version>                       (bytecode target — authoritative)
+#   1. apps/java/webui/pom.xml <java.version>                       (bytecode target — authoritative)
 #   2. .mise.toml java = "temurin-N"                     (jump-box / local build JDK)
 #   3. .github/workflows/ci.yml java-version             (CI build JDK)
-#   4. app/Dockerfile BUILDER_IMAGE maven:...-temurin-N  (in-cluster build JDK)
-#   5. app/Dockerfile RUNTIME_IMAGE eclipse-temurin:N... (app runtime JRE)
+#   4. apps/java/webui/Dockerfile BUILDER_IMAGE maven:...-temurin-N  (in-cluster build JDK)
+#   5. apps/java/webui/Dockerfile RUNTIME_IMAGE eclipse-temurin:N... (app runtime JRE)
 #   6. images/images.txt maven:...-temurin-N             (mirrored build image)
 #   7. images/images.txt eclipse-temurin:N...            (mirrored runtime image)
 #
@@ -21,13 +21,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$ROOT"
 
-pom="$(grep -oE '<java\.version>[0-9]+' app/pom.xml | grep -oE '[0-9]+' | head -1)"
-[ -n "$pom" ] || { echo "ERROR: could not read <java.version> from app/pom.xml" >&2; exit 1; }
+pom="$(grep -oE '<java\.version>[0-9]+' apps/java/webui/pom.xml | grep -oE '[0-9]+' | head -1)"
+[ -n "$pom" ] || { echo "ERROR: could not read <java.version> from apps/java/webui/pom.xml" >&2; exit 1; }
 
 drift=0
 check() { # <label> <actual-major> — compare to $pom
   if [ "$2" != "$pom" ]; then
-    echo "DRIFT ${1}: Java ${2:-<none>} vs app/pom.xml=${pom}"
+    echo "DRIFT ${1}: Java ${2:-<none>} vs apps/java/webui/pom.xml=${pom}"
     drift=1
   else
     echo "ok    ${1}=Java ${2}"
@@ -36,15 +36,15 @@ check() { # <label> <actual-major> — compare to $pom
 
 mise="$(grep -oE '^java[[:space:]]*=[[:space:]]*"temurin-[0-9]+' .mise.toml | grep -oE '[0-9]+$')"
 ci="$(grep -oE "java-version:[[:space:]]*'[0-9]+" .github/workflows/ci.yml | grep -oE '[0-9]+' | head -1)"
-df_build="$(grep -oE 'BUILDER_IMAGE=maven:[0-9.]+-eclipse-temurin-[0-9]+' app/Dockerfile | grep -oE '[0-9]+$' | head -1)"
-df_run="$(grep -oE 'RUNTIME_IMAGE=eclipse-temurin:[0-9]+' app/Dockerfile | grep -oE '[0-9]+$' | head -1)"
+df_build="$(grep -oE 'BUILDER_IMAGE=maven:[0-9.]+-eclipse-temurin-[0-9]+' apps/java/webui/Dockerfile | grep -oE '[0-9]+$' | head -1)"
+df_run="$(grep -oE 'RUNTIME_IMAGE=eclipse-temurin:[0-9]+' apps/java/webui/Dockerfile | grep -oE '[0-9]+$' | head -1)"
 img_mvn="$(grep -oE 'maven:[0-9.]+-eclipse-temurin-[0-9]+' images/images.txt | grep -oE '[0-9]+$' | head -1)"
 img_jre="$(grep -oE 'eclipse-temurin:[0-9]+' images/images.txt | grep -oE '[0-9]+$' | head -1)"
 
 check ".mise.toml (temurin)"                 "$mise"
 check ".github/workflows/ci.yml"             "$ci"
-check "app/Dockerfile BUILDER_IMAGE (maven)" "$df_build"
-check "app/Dockerfile RUNTIME_IMAGE"         "$df_run"
+check "apps/java/webui/Dockerfile BUILDER_IMAGE (maven)" "$df_build"
+check "apps/java/webui/Dockerfile RUNTIME_IMAGE"         "$df_run"
 check "images.txt maven build image"         "$img_mvn"
 check "images.txt eclipse-temurin runtime"   "$img_jre"
 
