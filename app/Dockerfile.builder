@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.25
 # Builder image for AIR-GAPPED CI: bakes this app's full Maven dependency +
 # plugin cache so the in-cluster build (kaniko) and the Tekton maven-test task
 # need NO network. Build this on the INTERNET-connected jump box (it pulls from

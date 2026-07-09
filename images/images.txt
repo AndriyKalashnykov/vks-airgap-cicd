@@ -14,9 +14,9 @@ gcr.io/kaniko-project/executor:v1.24.0-debug
 
 # ---- Java build + runtime base images (app Dockerfile + maven task) ----
 # renovate: datasource=docker depName=eclipse-temurin
-eclipse-temurin:21-jdk-jammy
+eclipse-temurin:21.0.11_10-jdk-jammy
 # renovate: datasource=docker depName=eclipse-temurin
-eclipse-temurin:21-jre-jammy
+eclipse-temurin:21.0.11_10-jre-jammy
 
 # ---- Maven (dependency resolution + test/package in the pipeline) ----
 # renovate: datasource=docker depName=maven
@@ -24,12 +24,12 @@ maven:3.9-eclipse-temurin-21
 
 # ---- Git client (git-clone task + write-back task) ----
 # renovate: datasource=docker depName=alpine/git
-alpine/git:2.47.1
+alpine/git:v2.54.0
 
 # ---- yq (deterministic image-tag edit in the write-back task) ----
 # renovate: datasource=docker depName=mikefarah/yq
-mikefarah/yq:4.44.6
+mikefarah/yq:4.53.3
 
 # ---- Gitea (self-hosted Git server; single image, SQLite backend for the demo) ----
 # renovate: datasource=docker depName=gitea/gitea
-gitea/gitea:1.23.1-rootless
+gitea/gitea:1.26.4-rootless
