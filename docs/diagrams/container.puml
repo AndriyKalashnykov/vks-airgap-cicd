@@ -15,21 +15,20 @@ System_Boundary(vks, "Air-gapped VKS cluster") {
   Container(gitea, "Gitea", "Go, SQLite", "Hosts webui-app + webui-deploy repos; fires push webhooks")
   Container(el, "Tekton EventListener", "Tekton Triggers", "Turns Gitea push webhooks into PipelineRuns")
   Container(pipe, "Tekton Pipeline", "Tekton Pipelines", "clone → mvn test (offline) → kaniko build+push → write-back image tag")
-  ContainerDb(harbor, "Harbor", "OCI registry (VKS-provided)", "Stores mirrored + built images")
+  ContainerDb(harbor, "Harbor", "OCI registry (VKS-provided)", "Stores mirrored + built images", $tags="datastore")
   Container(argo, "ArgoCD", "GitOps controller (VKS-provided)", "Watches webui-deploy, syncs to the cluster")
-  Container(app, "webui", "Spring Boot 3 / Java 21", "The demo web application")
+  Container(app, "webui", "Spring Boot 4 / Java 21", "The demo web application")
 }
 
 Rel(dev, gitea, "git push", "HTTP")
 Rel(mirror, harbor, "push all images", "HTTPS/HTTP")
 Rel(gitea, el, "push webhook", "HTTP")
 Rel(el, pipe, "creates PipelineRun")
-Rel(pipe, harbor, "build + push app image", "kaniko")
+Rel(pipe, harbor, "build+push app image (kaniko)\npull builder+base (containerd)")
 Rel(pipe, gitea, "commit new image tag to webui-deploy", "git")
 Rel(argo, gitea, "poll webui-deploy", "git")
 Rel(argo, app, "apply manifests", "kubectl")
 Rel(app, harbor, "pull image", "containerd")
-Rel(pipe, harbor, "pull builder + base", "containerd")
 
 SHOW_LEGEND()
 @enduml

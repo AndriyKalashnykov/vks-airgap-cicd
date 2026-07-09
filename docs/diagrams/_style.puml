@@ -15,5 +15,8 @@ UpdateElementStyle("person",       $fontColor="#FFFFFF", $bgColor="#0F766E", $bo
 UpdateElementStyle("system",       $fontColor="#FFFFFF", $bgColor="#2563EB", $borderColor="#1E3A8A")
 UpdateElementStyle("external_system", $fontColor="#1E293B", $bgColor="#E2E8F0", $borderColor="#94A3B8")
 UpdateElementStyle("container",    $fontColor="#FFFFFF", $bgColor="#2563EB", $borderColor="#1E3A8A")
-UpdateElementStyle("container_db", $fontColor="#FFFFFF", $bgColor="#7C3AED", $borderColor="#4C1D95")
+' C4-PlantUML v2.11.0 has no "container_db" element tag, so UpdateElementStyle on it
+' is a silent no-op (Harbor would render as a plain blue container). Define an explicit
+' "datastore" tag instead and pass $tags="datastore" on each ContainerDb(harbor, ...).
+AddElementTag("datastore", $fontColor="#FFFFFF", $bgColor="#7C3AED", $borderColor="#4C1D95")
 UpdateBoundaryStyle($bgColor="#F1F5F9", $borderColor="#94A3B8", $fontColor="#1E293B")
