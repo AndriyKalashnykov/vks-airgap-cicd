@@ -239,3 +239,12 @@ run() {
     "$@"
   fi
 }
+
+# pick_port — print a free TCP port from the kernel's ephemeral range (bind :0).
+# Race-free: the kernel assigns the port atomically at bind time (no TOCTOU window
+# like a RANDOM + `ss -tln` poll). Used for LOCAL `kubectl port-forward` aliases so
+# two e2e runs (parallel CI matrix, dev + CI on one host, sibling project) don't
+# collide on a fixed local port. The REMOTE port (the Service's port) stays literal.
+pick_port() {
+  python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()'
+}

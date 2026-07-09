@@ -48,4 +48,10 @@ class WebuiApplicationIntegrationTest {
         assertThat(rest.getForEntity(url("/actuator/health/readiness"), String.class).getBody())
                 .contains("\"status\":\"UP\"");
     }
+
+    @Test
+    void unknownPathReturns404() {
+        ResponseEntity<String> resp = rest.getForEntity(url("/no-such-page"), String.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+    }
 }

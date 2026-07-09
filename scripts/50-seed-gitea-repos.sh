@@ -22,7 +22,9 @@ require_cmd kubectl; require_cmd git; require_cmd curl; require_cmd yq
 : "${HARBOR_URL:?}"; : "${HARBOR_APP_PROJECT:?}"; : "${ARGOCD_DEST_NAMESPACE:?}"; : "${APP_REPLICAS:?}"
 : "${GITEA_CI_USER:?}"
 GITEA_ADMIN_EMAIL="${GITEA_ADMIN_EMAIL:-admin@vks-cicd.local}"
-LOCAL_PORT="${GITEA_LOCAL_PORT:-3000}"
+# Ephemeral by default (pick_port) so parallel runs don't collide on a fixed local
+# port; an operator can still pin it via GITEA_LOCAL_PORT.
+LOCAL_PORT="${GITEA_LOCAL_PORT:-$(pick_port)}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 

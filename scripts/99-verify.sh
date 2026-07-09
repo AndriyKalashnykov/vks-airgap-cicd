@@ -20,8 +20,10 @@ require_cmd kubectl; require_cmd git; require_cmd curl
 : "${ARGOCD_DEST_NAMESPACE:?}"; : "${APP_NAME:?}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-600}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
-GITEA_LOCAL_PORT="${GITEA_LOCAL_PORT:-3000}"
-APP_LOCAL_PORT="${APP_LOCAL_PORT:-18080}"
+# LOCAL port-forward aliases — ephemeral by default (pick_port) so parallel runs
+# never collide; an operator can still pin them via the env vars.
+GITEA_LOCAL_PORT="${GITEA_LOCAL_PORT:-$(pick_port)}"
+APP_LOCAL_PORT="${APP_LOCAL_PORT:-$(pick_port)}"
 
 TOKEN_FILE="${REPO_ROOT}/secrets/gitea-ci-token"
 [ -s "$TOKEN_FILE" ] || die "missing $TOKEN_FILE — run 'make seed-gitea' first"
