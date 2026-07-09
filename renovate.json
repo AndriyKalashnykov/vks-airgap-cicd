@@ -103,6 +103,12 @@
       "minimumReleaseAge": "3 days"
     },
     {
+      "description": "kubectl is pinned twice for one logical version — .mise.toml (mise manager, depName 'kubectl', the jump-box toolchain) and .env.example KUBECTL_VERSION (custom.regex, depName 'kubernetes/kubernetes', the air-gap fallback used by 00-install-prereqs.sh). They are DIFFERENT managers with DIFFERENT depNames, so by default Renovate opens two separate PRs that momentarily desync check-toolchain-alignment (the gate that asserts they stay equal). Group both depNames so the two pins bump in ONE PR. Must come AFTER the 'mise tools' rule so it overrides kubectl's group; keeps the 3-day buffer (kubernetes releases can tag before the release assets publish). (istio/pilot is also pinned in two files but with the SAME depName, so Renovate already bundles it — no group needed there.)",
+      "matchDepNames": ["kubectl", "kubernetes/kubernetes"],
+      "groupName": "kubectl",
+      "minimumReleaseAge": "3 days"
+    },
+    {
       "description": "Group Spring Boot dependencies",
       "matchPackageNames": ["/^org\\.springframework\\.boot/"],
       "groupName": "Spring Boot"
