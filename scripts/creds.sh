@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# creds.sh — print the access summary (URLs + logins) for the CURRENT context.
+#
+# One command for both contexts: it resolves URLs from .env (+ the .env.kind overlay the
+# KinD flow writes) and the ArgoCD password via argocd-password.sh (which self-selects the
+# right source). These are LOCAL DEMO credentials the operator set in .env — printing them
+# to the operator's own terminal is the intended function, not a leak (no value touches argv).
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/os.sh
+. "${SCRIPT_DIR}/lib/os.sh"
+load_env
+
+# --- resolve URLs ---------------------------------------------------------------------
+# Harbor keeps its OWN LB (not behind the ingress); http when HARBOR_INSECURE=1 (KinD).
+harbor_scheme="https"; [ "${HARBOR_INSECURE:-0}" = "1" ] && harbor_scheme="http"
+harbor_url="${harbor_scheme}://${HARBOR_URL:-harbor.vks.local}"
+# Gitea/ArgoCD/app are fronted by the ingress at their *.vks.local hosts (http in the demo).
+gitea_url="${GITEA_URL:-http://${GITEA_HOST:-gitea.vks.local}}"
+argocd_url="http://${ARGOCD_HOST:-argocd.vks.local}"
+app_url="http://${WEBUI_HOST:-app.vks.local}"
+
+# --- resolve logins -------------------------------------------------------------------
+harbor_user="${HARBOR_USERNAME:-admin}"
+harbor_pw="${HARBOR_PASSWORD:-<set HARBOR_PASSWORD in .env>}"
+gitea_user="${GITEA_ADMIN_USER:-gitea_admin}"
+gitea_pw="${GITEA_ADMIN_PASSWORD:-<set GITEA_ADMIN_PASSWORD in .env>}"
+# ArgoCD via the context-aware resolver; exit 3 => VKS-provided / not knowable locally.
+if argo_pw="$("${SCRIPT_DIR}/argocd-password.sh" 2>/dev/null)"; then :; else
+  argo_pw="<VKS-provided — get it from your lab>"
+fi
+
+# --- /etc/hosts helper (KinD ingress) -------------------------------------------------
+echo "Access the UIs (local demo credentials):"
+if [ -n "${INGRESS_LB_IP:-}" ]; then
+  echo
+  echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"
+  echo "    ${INGRESS_LB_IP}  ${GITEA_HOST:-gitea.vks.local} ${ARGOCD_HOST:-argocd.vks.local} ${WEBUI_HOST:-app.vks.local}"
+fi
+
+# --- table ----------------------------------------------------------------------------
+printf '\n  %-9s %-32s %-14s %s\n' "Service" "URL" "Username" "Password"
+printf '  %-9s %-32s %-14s %s\n'   "-------" "---" "--------" "--------"
+printf '  %-9s %-32s %-14s %s\n'   "Harbor"  "$harbor_url" "$harbor_user" "$harbor_pw"
+printf '  %-9s %-32s %-14s %s\n'   "Gitea"   "$gitea_url"  "$gitea_user"  "$gitea_pw"
+printf '  %-9s %-32s %-14s %s\n'   "ArgoCD"  "$argocd_url" "admin"        "$argo_pw"
+printf '  %-9s %-32s %-14s %s\n'   "App"     "$app_url"    "-"            "(no login; health at /actuator/health)"
+echo
