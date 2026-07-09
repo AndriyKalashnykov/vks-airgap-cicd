@@ -198,44 +198,38 @@ e2e-verified this session). This session landed a large hardening + rename arc, 
   `mise trust`, `tkn` arch-404 (uname vs Go arch), skopeo-not-on-Photon, missing `crun`, commented-only
   `unqualified-search-registries` (all now in `00-install-prereqs.sh`, the real path).
 - **Uniform brightgreen badges** (PR #57): fixed the yellow MIT license badge; all four badges the same shade.
+- **Jump-box OS matrix — Photon + Ubuntu (PR #60):** the Photon-only harness became an OS matrix.
+  `make jumpbox JUMPBOX_OS=photon|ubuntu` (default `photon`) + `make jumpbox-both`; `Dockerfile.jumpbox`
+  → `jumpbox/Dockerfile.{photon,ubuntu}` (both hadolinted via `scripts/lint.sh`); `jumpbox-run.sh` is
+  OS-generic with an `ENGINE` var. **Live-validated on real `photon:5.0` AND `ubuntu:24.04` — both reach
+  `JUMPBOX_OK`** — which surfaced 2 real Ubuntu jump-box bugs, fixed in the REAL `make deps` path (not
+  just the harness image):
+  1. `apt --no-install-recommends podman` pulls `crun` (a Depends) but DROPS `uidmap`/`slirp4netns`
+     (Recommends) → rootless `make builder-image` would fail `newuidmap: command not found`.
+     `00-install-prereqs.sh` now installs the rootless deps per distro (apt → `uidmap`+`slirp4netns`;
+     tdnf → `crun`, since Photon's podman pulls uidmap/slirp4netns but not crun). `Dockerfile.ubuntu`
+     no longer pre-bakes uidmap/slirp4netns, so the harness genuinely VALIDATES that make-deps install.
+  2. `jumpbox-run.sh` excludes `./secrets` from the work-dir tar: `secrets/` is gitignored (mode 0600,
+     host-uid-owned) and `ubuntu:24.04` ships a default `ubuntu` user at uid 1000, so the container's
+     `vks` lands on uid 1001 and couldn't read them → tar failed before `make deps` ran.
+  Also dropped a stale dead-code `KUBECTL_VERSION:-v1.31.4` default. `make ci` + `make jumpbox-both` green.
+- **README demo walkthrough (PR #60):** new "Demo walkthrough — drive the GitOps loop by hand" — edit the
+  greeting in the Gitea web UI → Tekton test/build (Kaniko) → Harbor → tag write-back to `webui-deploy` →
+  ArgoCD sync → the live page changes; grounded in real repo names/paths and mirrored by `make verify`.
+  Plus OS-matrix wording for the jump box + a per-OS rootless-dep note.
 
-**⏳ IN PROGRESS — RESUME HERE (branch `feat/jumpbox-ubuntu`, pushed, NOT merged):**
+**To resume the stack (if the cluster is down):**
 
-The Ubuntu counterpart to the Photon jump-box harness + an OS matrix. All edits are committed on
-that branch and **offline-green** (`make lint` = shellcheck + hadolint both Dockerfiles clean;
-`make help`; Makefile parses) — but **NOT yet live-validated**:
-
-- `jumpbox/` folder: `Dockerfile.jumpbox` → `jumpbox/Dockerfile.photon` (version lives in the `FROM`,
-  not the filename) + new `jumpbox/Dockerfile.ubuntu` (apt; `uidmap`; apt-list cleanup; `SHELL` pipefail).
-- `make jumpbox JUMPBOX_OS=photon|ubuntu` (default `photon`) + new `make jumpbox-both` (matrix).
-- `scripts/jumpbox-run.sh`: an `ENGINE` variable (mirrors `CONTAINER_ENGINE`, `JUMPBOX_ENGINE` override)
-  instead of hardcoded `podman`; OS-generic wording; smoke uses a short-named `alpine:3` base.
-- `scripts/lint.sh`: hadolints `jumpbox/Dockerfile.*` (closes the "not linted" gap). Renovate's
-  `dockerfile` manager auto-tracks both `FROM` bases (`photon:5.0`, `ubuntu:24.04`).
-
-**Remaining next session (do these):**
-
-1. `git fetch origin && git checkout feat/jumpbox-ubuntu` (the WIP is on the branch, **not** main).
-2. Bring the KinD cluster up if down (`make e2e-kind`), then LIVE-validate:
-   `make jumpbox JUMPBOX_OS=ubuntu` → **JUMPBOX_OK** (fix any Ubuntu-specific bootstrap bugs it
-   surfaces — that is the harness's whole job); re-run `make jumpbox JUMPBOX_OS=photon` (its path +
-   engine var changed); then `make jumpbox-both`.
-3. Update README/CLAUDE wording from "Photon 5"-specific to the OS matrix (the harness note under
-   Prerequisites + the `make jumpbox` command-table row).
-4. `make ci` green → PR + merge; then update this backlog.
-
-**To resume the STACK (if the cluster is down):**
-
-1. `git fetch origin && git checkout main && git reset --hard origin/main` (sync `main`) — the WIP
-   above lives on `feat/jumpbox-ubuntu`, so a `reset --hard main` won't touch it.
-2. `make e2e-kind` (full KinD end-to-end). Mirror engine is now **crane** (mise-provided, no skopeo).
+1. `git fetch origin && git checkout main && git reset --hard origin/main` (sync `main`).
+2. `make e2e-kind` (full KinD end-to-end). Mirror engine is **crane** (mise-provided, no skopeo).
+   `make jumpbox-both` validates the jump-box bootstrap on Photon + Ubuntu (needs the cluster up).
 
 **Open / next-session items (none blocking):**
 
 - [ ] (optional) **ArgoCD Image Updater** for registry-driven redeploy — considered and
       **declined** this session; the Tekton tag-write-back stays the primary GitOps path. Revisit
       only to demo registry-driven deploys or to track externally-built (non-pipeline) images.
-- Done this session (housekeeping): the `spike-crane:*` test images were **pruned** from Harbor's
-  `cicd` project; the jump-box Dockerfiles are now hadolinted (on the WIP branch above).
+- Done (housekeeping): the `spike-crane:*` test images were pruned from Harbor's `cicd` project;
+  the jump-box Dockerfiles (`jumpbox/Dockerfile.{photon,ubuntu}`) are hadolinted in the `lint` gate.
 - CI runs offline gates only; the KinD e2e is **local by design** (verification-honesty) — a
       decision, not a TODO.
