@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1
-# Dockerfile.jumpbox — a Photon 5 "jump box" for validating the README bootstrap +
-# air-gap install flow on the REAL jump-box OS, with ROOTLESS podman (the README's
-# preferred container engine). Built and run by `make jumpbox` — a test harness, not a
-# production image. The image installs only the documented bootstrap set; `make deps`
-# (run at container start) installs the rest of the toolchain, so a green run proves the
-# Photon 5 dependency path works end-to-end.
+# jumpbox/Dockerfile.photon — a VMware Photon OS "jump box" for validating the README
+# bootstrap + air-gap flow on the REAL jump-box OS, with ROOTLESS podman (the README's
+# preferred engine). Built/run by `make jumpbox` (JUMPBOX_OS=photon, the default); the
+# Ubuntu counterpart is jumpbox/Dockerfile.ubuntu. A test harness, NOT a production image.
+# The image installs only the documented bootstrap set; `make deps` (at container start)
+# installs the rest of the toolchain, so a green run proves the Photon dependency path works.
 FROM photon:5.0
 
 # Bootstrap set (mirrors README → Prerequisites) + the rootless-podman engine
@@ -31,6 +31,8 @@ RUN install -d -o vks -g vks /home/vks/.config/containers && \
     chown -R vks:vks /home/vks/.config
 
 USER vks
+# bash + pipefail so the piped mise installer fails loudly (hadolint DL4006).
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # mise (toolchain version manager) — installed per-user exactly as the README documents.
 RUN curl -fsSL https://mise.run | sh
 # ~/.local/bin holds mise + the prereqs-script CLIs (tkn/argocd/kubectl); the mise shims

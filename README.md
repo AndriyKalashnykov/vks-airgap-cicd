@@ -85,13 +85,16 @@ curl https://mise.run | sh                 # installs mise to ~/.local/bin
 export PATH="$HOME/.local/bin:$PATH"       # put mise on PATH for THIS shell (the installer also
                                            # adds `mise activate` to your profile for new shells)
 make deps                                  # installs the full jump-box toolchain (mise tools +
-                                           # scripts/00-install-prereqs.sh); on Photon it also sets
-                                           # up podman (crun + registries) for the builder-image build
+                                           # scripts/00-install-prereqs.sh); it also sets up rootless
+                                           # podman for the builder-image build — crun + registries on
+                                           # Photon, uidmap + slirp4netns on Ubuntu
 ```
 
-> These Ubuntu / Photon 5 bootstrap steps are **validated end-to-end** by `make jumpbox`,
-> which runs them on a fresh `photon:5.0` container (rootless podman, joined to a local KinD
-> cluster) and fails if `make deps` or the container-engine setup breaks on a real jump box.
+> These Ubuntu / Photon bootstrap steps are **validated end-to-end** by `make jumpbox` — it runs
+> them on a fresh jump-box container (`JUMPBOX_OS=photon` on `photon:5.0`, the default, or
+> `JUMPBOX_OS=ubuntu` on `ubuntu:24.04`; `make jumpbox-both` runs the matrix), joined to a local
+> KinD cluster with rootless podman, and fails if `make deps` or the container-engine setup
+> breaks on a real jump box of that OS.
 
 ### Toolchain and access
 
@@ -100,10 +103,12 @@ make deps                                  # installs the full jump-box toolchai
 - The Harbor (and Gitea, once installed) **CA certificates** (`.env` → `HARBOR_CA_FILE` / `GITEA_CA_FILE`).
 - [mise](https://mise.jdx.dev/) for the rest of the toolchain (installed by `make deps`; git must already be present).
 - **Container engine:** image operations (mirror, Maven builder build/push, diagram
-  rendering) use `CONTAINER_ENGINE` — **podman-preferred**, docker fallback. The
-  **local KinD end-to-end** additionally **requires Docker**: KinD's node and
-  `cloud-provider-kind` run on the `kind` Docker network + socket. So a real air-gap
-  run can be podman-only; `make e2e-kind` needs Docker.
+  rendering) use `CONTAINER_ENGINE` — **podman-preferred**, docker fallback. `make deps`
+  installs the rootless-podman runtime deps per OS (crun + an active
+  `unqualified-search-registries` on Photon; `uidmap` + `slirp4netns` on Ubuntu, which apt
+  leaves out of a default podman install). The **local KinD end-to-end** additionally
+  **requires Docker**: KinD's node and `cloud-provider-kind` run on the `kind` Docker network +
+  socket. So a real air-gap run can be podman-only; `make e2e-kind` needs Docker.
 
 ### Disk space on the jump box
 
@@ -232,7 +237,8 @@ the new version).
 cp .env.example .env          # set HARBOR_PASSWORD + GITEA_ADMIN_PASSWORD (any demo values)
 make deps                     # kind, helm, kubectl, crane, etc.
 make e2e-kind                 # cluster → Harbor → ArgoCD → mirror → build → deploy → ingress → verify
-# open the UIs → see "Access the UIs" below for the *.vks.local hostnames
+# open the UIs (see "Access the UIs" below) and drive the pipeline by hand:
+# → "Demo walkthrough" below walks a code change from Gitea to the live page
 make kind-down                # tear everything down (also prunes cloud-provider-kind orphans)
 ```
 
@@ -441,6 +447,79 @@ or use `kubectl port-forward` — `kubectl -n gitea port-forward svc/gitea-http 
 - **Network reach (dual-homed):** the jump box must reach the VKS API server and the lab
   Harbor.
 
+## Demo walkthrough — drive the GitOps loop by hand
+
+This is the demo. With the stack up (`make e2e-kind` locally, or `make install-all` against a
+real VKS lab) you can watch a **one-line code change flow from the Gitea web editor all the way
+to the running web page — entirely inside the air gap**, and see each hop in its own Web UI.
+`make verify` does exactly this automatically; the steps below are the same loop by hand.
+
+**Before you start:** run **`make creds`** for the URLs, logins, and the one-time `/etc/hosts`
+line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
+[Access the UIs](#access-the-uis-urls-logins-passwords)). Open these four UIs in tabs:
+
+| UI | URL | Login | What you'll watch |
+|----|-----|-------|-------------------|
+| **App (webui)** | <http://app.vks.local/> | — | the greeting that changes |
+| **Gitea** | <http://gitea.vks.local> | `gitea_admin` / your `GITEA_ADMIN_PASSWORD` | edit source; see the tag write-back |
+| **Tekton Dashboard** | <http://tekton.vks.local> | — (read-only) | the PipelineRun: test → build → deploy |
+| **Harbor** | its own LB IP (KinD, plain HTTP) or the lab's URL | `admin` / your `HARBOR_PASSWORD` | the freshly-built image |
+| **ArgoCD** | <http://argocd.vks.local> | `admin` / `make argocd-password` | the sync that rolls the new image |
+
+1. **See the current greeting.** Open <http://app.vks.local/>. The page shows a greeting —
+   `Hello from vks-airgap-cicd` by default — rendered in the `<p class="message">` element,
+   alongside the app version and git commit. This is what will visibly change.
+
+2. **Edit the greeting in Gitea.** Go to **`demo/webui-app`** →
+   `src/main/resources/application.yml`, click the **edit (pencil)** icon, and change the
+   greeting default on line 18:
+
+   ```yaml
+   # from:
+     message: ${APP_MESSAGE:Hello from vks-airgap-cicd}
+   # to (any text):
+     message: ${APP_MESSAGE:Hello from the air-gapped pipeline}
+   ```
+
+   **Commit directly to `main`.** The commit fires the Gitea push webhook
+   (`el-webui.ci.svc:8080`) → the Tekton EventListener → a new PipelineRun. (This is the same
+   `application.yml` line `make verify` rewrites with a unique marker.)
+
+3. **Watch Tekton build it.** In the **Tekton Dashboard** (<http://tekton.vks.local>), a new
+   **`webui-ci-*`** PipelineRun appears in the `ci` namespace. Its TaskRuns run in order — open
+   each to tail logs live:
+
+   | TaskRun | Does |
+   |---------|------|
+   | `clone-app` | clones `webui-app`; its short commit SHA becomes the image tag |
+   | `test` | runs `./mvnw -B -o test` **offline** (against the deps-baked builder image) |
+   | `build` | **Kaniko** builds the image and pushes it to Harbor |
+   | `deploy-update` | writes the new tag back into `webui-deploy` (the GitOps hand-off) |
+
+4. **See the new image in Harbor.** In Harbor, open project **`apps`** → repository
+   **`webui`**. A new tag appears — the **git short SHA** of your commit
+   (`harbor.vks.local/apps/webui:<sha>`) — pushed by the Kaniko `build` task.
+
+5. **See the tag written back in Gitea.** Open **`demo/webui-deploy`** → `kustomization.yaml`.
+   There's a new commit by **`ci-bot`** with message **`ci: deploy webui <sha>`** that bumps
+   `images[0].newTag` to your `<sha>`. This deploy repo — not the app repo — is what ArgoCD
+   watches, which is why the tag write-back (not the source push) is what triggers a deploy.
+
+6. **Watch ArgoCD deploy it.** In **ArgoCD** (<http://argocd.vks.local>), the Application
+   **`webui`** flips **`OutOfSync → Synced`** (auto-sync + self-heal) and rolls the Deployment
+   in namespace `webui` to `harbor.vks.local/apps/webui:<sha>`. (Auto-sync polls the deploy repo
+   on an interval; click **Refresh** to reconcile immediately.)
+
+7. **See the page change.** Refresh <http://app.vks.local/>. The greeting now shows your new
+   text. That change went **source → test → image → registry → GitOps write-back → cluster →
+   running page** without a single byte crossing the air gap.
+
+> **`make verify` is the automated form of this whole loop** — it edits the same
+> `application.yml` line with a unique marker, waits for the PipelineRun to succeed, forces an
+> ArgoCD refresh, waits for the *deployed image* to change, then curls
+> <http://app.vks.local/> until the page contains the marker. Run it to prove the pipeline;
+> walk the UIs above to *see* it.
+
 ## Detailed steps
 
 Legend: **[offline]** verifiable without a cluster · **[cluster]** runs against live VKS.
@@ -499,6 +578,7 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 | KinD e2e | `kind-up` / `install-harbor` / `install-argocd` / `install-ingress` / `kind-down` | Individual KinD steps (`install-istio` / `install-traefik` pick the controller) |
 | Verify | `verify` | End-to-end smoke test on a LIVE cluster |
 | Verify | `verify-ingress` / `verify-ingress-both` | Assert the `*.vks.local` UIs route through the ingress LB (one controller / both) |
+| Verify | `jumpbox` / `jumpbox-both` | Validate the README bootstrap on a real jump-box container — `JUMPBOX_OS=photon`\|`ubuntu`, or both (needs the KinD cluster up) |
 | App dev | `app-test` / `app-build` / `app-run` | Spring Boot app tests / jar / local run |
 | Gates | `ci` / `static-check` / `docs-lint` | Composite offline gate; code gate; docs gate |
 | Gates | `lint` / `validate` / `check-image-alignment` / `check-toolchain-alignment` | Individual code gates |

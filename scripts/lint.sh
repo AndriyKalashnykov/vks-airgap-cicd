@@ -39,5 +39,14 @@ else
   log_warn "apps/java/webui/Dockerfile not present yet — skipped"
 fi
 
+echo "== hadolint (jumpbox/Dockerfile.*) =="
+if have hadolint; then
+  for df in "$REPO_ROOT"/jumpbox/Dockerfile.*; do
+    [ -f "$df" ] && { hadolint "$df" || rc=1; }
+  done
+else
+  log_warn "hadolint not installed — skipped"
+fi
+
 if [ "$rc" -eq 0 ]; then log_info "lint: OK"; else log_error "lint: findings above"; fi
 exit "$rc"
