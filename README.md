@@ -24,27 +24,65 @@ pluggable ingress (**Istio** by default, **Traefik** optional) fronting the UIs 
 
 ## Prerequisites
 
-### Install and configure git (first — before mise)
+### Bootstrap a bare jump box (before you can clone this repo)
 
-git is the one tool you need **before everything else**: you use it to clone this repo, and
-the CI flow uses git both in-cluster (clone) and for the GitOps tag write-back. Install the
-client for your jump-box OS (`scripts/00-install-prereqs.sh` also installs it via the OS
-package manager, but you need it *before* you can clone the repo and run `make deps`):
+Everything else (mise, `make deps`, the toolchain) runs from a clone of this repo, so first
+get **git + SSH + `make`** working on a fresh box. Do this once, manually.
+
+**Ubuntu:**
 
 ```bash
-# Ubuntu
-sudo apt-get update && sudo apt-get install -y git
-
-# Photon OS
-sudo tdnf install -y git
+sudo apt-get update
+sudo apt-get install -y git openssh-client ca-certificates curl make
 ```
 
-Set your commit identity — used for any local commits you make on the jump box (the
-in-cluster pipeline commits under its own identity):
+**Photon OS:**
+
+```bash
+# Refresh the package cache FIRST. A stale tdnf cache is the #1 cause of a broken TLS stack
+# on a long-lived Photon box: `tdnf install git` UPGRADES openssl-libs, and a partial or
+# mismatched upgrade then breaks HTTPS/SSH — git clone fails with an SSL error. Cleaning the
+# cache and installing a consistent TLS set up front avoids it.
+sudo tdnf clean all && sudo tdnf makecache
+sudo tdnf install -y ca-certificates openssl curl git openssh-clients make tar
+```
+
+**If `git clone` (or `make deps`) still fails with an SSL / TLS / certificate error on Photon
+OS**, that is the stale-cache openssl mismatch — refresh and reinstall the TLS stack, then
+retry the clone:
+
+```bash
+sudo tdnf clean all && sudo tdnf makecache
+sudo tdnf reinstall -y ca-certificates openssl openssl-libs curl curl-libs
+```
+
+**Configure your git identity** (both OSes; used for local commits — the in-cluster pipeline
+commits under its own identity):
 
 ```bash
 git config --global user.name  "VKS Developer"
 git config --global user.email "vks.developer@sample.corp.com"
+```
+
+**Create an SSH key and add it to GitHub** (for `git@github.com:` clones):
+
+```bash
+ssh-keygen -t ed25519 -C "vks.developer@sample.corp.com" -f ~/.ssh/id_ed25519 -N ""
+cat ~/.ssh/id_ed25519.pub     # add this line at GitHub → Settings → SSH and GPG keys → New SSH key
+ssh -T git@github.com         # expect: "Hi <user>! You've successfully authenticated…"
+```
+
+**Clone the repo, then install mise** and let the Makefile pull the rest of the toolchain:
+
+```bash
+# SSH (needs the key above added to your GitHub account)…
+git clone git@github.com:AndriyKalashnykov/vks-airgap-cicd.git
+# …or HTTPS (this repo is public — no key needed):
+git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git
+cd vks-airgap-cicd
+
+curl https://mise.run | sh    # installs mise to ~/.local/bin (add it to PATH as the installer prints)
+make deps                     # installs the full jump-box toolchain (mise tools + scripts/00-install-prereqs.sh)
 ```
 
 ### Toolchain and access
