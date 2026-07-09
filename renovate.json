@@ -43,6 +43,14 @@
       "matchStrings": [
         "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)(?: extractVersion=(?<extractVersion>[^\\s]+))?\\n[A-Z_]+=(?<currentValue>[^\\s]+)"
       ]
+    },
+    {
+      "customType": "regex",
+      "description": "Gitea image tag in the k8s deployment manifest (${VAR}-prefixed ref the docker manager can't parse); kept in lockstep with images/images.txt.",
+      "managerFilePatterns": ["/^k8s/gitea/gitea\\.yaml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)\\n\\s*image:[^\\n]*:(?<currentValue>[^\\s\"]+)"
+      ]
     }
   ],
   "vulnerabilityAlerts": {

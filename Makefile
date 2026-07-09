@@ -178,6 +178,18 @@ lint: ## shellcheck scripts, yamllint manifests, hadolint Dockerfile
 validate: ## kustomize build + kubeconform manifests; kubectl dry-run Tekton YAML
 	@$(SCRIPTS)/validate.sh
 
+.PHONY: check-image-alignment
+check-image-alignment: ## Fail if a mirrored image tag drifts between k8s manifests and images/images.txt
+	@mf=$$(grep -oE 'gitea/gitea:[^"[:space:]]+' k8s/gitea/gitea.yaml | head -1 | cut -d: -f2); \
+	 inv=$$(grep -oE 'gitea/gitea:[^"[:space:]]+' images/images.txt | head -1 | cut -d: -f2); \
+	 if [ -z "$$mf" ] || [ -z "$$inv" ]; then \
+	   echo "ERROR: could not extract gitea tag from k8s/gitea/gitea.yaml or images/images.txt"; exit 1; fi; \
+	 if [ "$$mf" != "$$inv" ]; then \
+	   echo "ERROR: gitea image tag drift (BLOCKING) — k8s/gitea/gitea.yaml=$$mf vs images/images.txt=$$inv."; \
+	   echo "       The mirror pushes the images.txt tag; the Deployment pulls the manifest tag. Align them."; \
+	   exit 1; fi; \
+	 echo "check-image-alignment: gitea tag aligned ($$mf)"
+
 # podman rootless needs --userns=keep-id so the mapped uid can write the mounted
 # output dir; docker does not. Empty for docker.
 PODMAN_USERNS := $(if $(filter podman,$(CONTAINER_ENGINE)),--userns=keep-id,)
@@ -215,7 +227,7 @@ docs-lint: diagrams-check ## Lint markdown + verify diagrams are current
 	else echo "markdownlint not installed — skipping (install markdownlint-cli)"; fi
 
 .PHONY: static-check
-static-check: check-env lint validate app-test ## Composite code gate (lint + manifests + app tests)
+static-check: check-env check-image-alignment lint validate app-test ## Composite code gate (lint + manifests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint ## Full local pipeline (offline-verifiable parts)
