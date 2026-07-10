@@ -26,7 +26,9 @@ log_info "detected OS: $(os_id) (pkg manager: $(pkg_mgr))"
 # binary provided by mise via .mise.toml) — skopeo has no static binary and isn't packaged
 # on Photon OS 5, so it can't be relied on cross-distro. See scripts/lib/mirror.sh.
 pkg_refresh
-pkg_install ca-certificates curl git jq tar gzip
+# findutils (`find`) is not in Photon's base image and is used by the archive-extraction in
+# scripts/01-install-vcf-clis.sh (and generally handy); tar/gzip cover the same minimal-image gaps.
+pkg_install ca-certificates curl git jq tar gzip findutils
 # podman is the default container engine (build/push the Maven builder, render
 # diagrams); docker also works if already present. Best-effort — some minimal
 # images lack it in the default repos.

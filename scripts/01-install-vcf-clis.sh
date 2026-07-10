@@ -114,11 +114,13 @@ fetch_url() {
       if have megatools || have megadl; then
         local td f
         td="$(mktemp -d)"
-        if have megatools; then run megatools dl --path "$td" "$url"; else run megadl --path "$td" "$url"; fi
+        # Redirect the client's stdout to stderr: megatools prints its progress bar to STDOUT,
+      # which would otherwise pollute a caller that captures this function via $(...).
+      if have megatools; then run megatools dl --path "$td" "$url" 1>&2; else run megadl --path "$td" "$url" 1>&2; fi
         f="$(find "$td" -type f | head -1)"
         [ -n "$f" ] || { rm -rf "$td"; die "MEGA download produced no file (bad link/key?)"; }
         mv "$f" "$dest"; rm -rf "$td"
-      elif have mega-get; then run mega-get "$url" "$dest"
+      elif have mega-get; then run mega-get "$url" "$dest" 1>&2
       else die "MEGA URL needs megatools/megadl/mega-get — install one, or pre-download to VCF_CLI_SRC_DIR"; fi ;;
     http://*|https://*)
       curl_via_config "$url" "$dest" ;;
@@ -154,7 +156,10 @@ resolve_archive() {
   fi
   [ -s "$out" ] || die "download did not produce an archive for ${cli}"
   gzip -t "$out" 2>/dev/null || die "the ${cli} archive is not a valid gzip (bad/blocked/expired download?) — re-generate the URL or use VCF_CLI_SRC_DIR"
-  printf '%s' "$out"
+  # Return via a global (NOT stdout): download tools like megatools print progress to stdout,
+  # and a `$(resolve_archive ...)` capture would fold that into the path. RESOLVED_ARCHIVE is
+  # immune to any sub-tool output.
+  RESOLVED_ARCHIVE="$out"
 }
 
 # --- Installers --------------------------------------------------------------
@@ -162,7 +167,7 @@ resolve_archive() {
 install_argocd_vcf() {
   log_info "installing argocd (VCF ${ARGOCD_VCF_VERSION}, ${os}/${go_arch}) -> ${BIN_DIR}/argocd"
   log_warn "this is the VCF-flavored argocd for a real lab; it shadows any upstream argocd in ${BIN_DIR}"
-  local ar; ar="$(resolve_archive argocd)"
+  local ar; resolve_archive argocd; ar="$RESOLVED_ARCHIVE"
   # The argocd artifact is either a bare .gz of the binary (MEGA) or a tarball/bundle (portal).
   if tar -tzf "$ar" >/dev/null 2>&1; then
     local d bin; d="$(mktemp -d)"; tar -xzf "$ar" -C "$d"
@@ -178,7 +183,7 @@ install_argocd_vcf() {
 install_vcf_cli() {
   [ "$os" = linux ] || die "the VCF Consumption CLI is Linux-only for this installer (no ${os} target)"
   log_info "installing vcf (VCF Consumption CLI ${VCF_CLI_VERSION}, ${os}/${go_arch}) -> ${BIN_DIR}/vcf"
-  local ar d bin; ar="$(resolve_archive vcf)"
+  local ar d bin; resolve_archive vcf; ar="$RESOLVED_ARCHIVE"
   d="$(mktemp -d)"; tar -xzf "$ar" -C "$d"
   # Flat tarball (vcf-cli-linux_<arch> at root) OR a multi-arch "Binaries" bundle
   # (<os>/<arch>/v<ver>/vcf-cli-<os>_<arch>) — find at ANY depth.
@@ -193,7 +198,7 @@ install_vcf_plugins() {
   have vcf || [ -x "${BIN_DIR}/vcf" ] || die "install the vcf CLI first (make install-vcf-cli)"
   local vcf_bin; vcf_bin="$(command -v vcf || echo "${BIN_DIR}/vcf")"
   log_info "installing vcf plugins (bundle ${VCF_PLUGINS_VERSION}, ${os}/${go_arch})"
-  local ar pdir src; ar="$(resolve_archive plugins)"
+  local ar pdir src; resolve_archive plugins; ar="$RESOLVED_ARCHIVE"
   pdir="${WORK}/plugins"; mkdir -p "$pdir"; tar -xzf "$ar" -C "$pdir"
   # `vcf plugin install all --local-source` wants the dir holding the plugin binaries. A
   # multi-arch bundle nests them under <os>/<arch>/...; point at that subdir when present.
@@ -205,6 +210,11 @@ install_vcf_plugins() {
   run "$vcf_bin" plugin install all --local-source "$src"
   "$vcf_bin" plugin list || log_warn "plugins installed but 'vcf plugin list' failed"
 }
+
+# --- Preflight: the extraction/install tools every path needs (clear error over a cryptic
+#     mid-run failure). `find` (findutils) is the usual gap on a bare Photon box; `tar`/`gzip`
+#     on minimal images. The MEGA client (megatools) is checked in fetch_url, only when needed.
+for _t in tar gzip find install; do require_cmd "$_t"; done
 
 # --- Dispatch ----------------------------------------------------------------
 case "$WHAT" in
