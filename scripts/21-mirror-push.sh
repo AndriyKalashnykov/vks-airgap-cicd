@@ -13,6 +13,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 # shellcheck source=scripts/lib/mirror.sh
 . "${SCRIPT_DIR}/lib/mirror.sh"
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"
 
 require_cmd crane
 require_cmd curl
@@ -22,12 +24,20 @@ require_cmd curl
 : "${HARBOR_PASSWORD:?set HARBOR_PASSWORD in .env (never passed on argv)}"
 : "${IMAGE_CACHE_DIR:?}"
 
-# ---- TLS trust for the self-signed Harbor CA ----
+HARBOR_TMP="$(mktemp -d)"; trap 'rm -rf "$HARBOR_TMP"' EXIT
+
+# ---- TLS trust for the self-signed Harbor CA (sudo-free: SSL_CERT_FILE, not the store) ----
 TLS_VERIFY="true"
 if [ "${HARBOR_INSECURE:-0}" = "1" ]; then
   TLS_VERIFY="false"; log_warn "HARBOR_INSECURE=1 — skipping TLS verification (demo only)"
 elif [ -n "${HARBOR_CA_FILE:-}" ] && [ -f "$HARBOR_CA_FILE" ]; then
-  trust_ca "$HARBOR_CA_FILE" harbor-ca
+  # crane (go-containerregistry) honors SSL_CERT_FILE — point it at a bundle of the system
+  # CAs + the Harbor CA so pushes verify the self-signed cert WITHOUT modifying the
+  # root-owned system trust store (no sudo). curl uses --cacert (below).
+  BUNDLE="${HARBOR_TMP}/ca-bundle.crt"
+  ca_bundle_with_system "$HARBOR_CA_FILE" "$BUNDLE"
+  export SSL_CERT_FILE="$BUNDLE"
+  log_info "trusting Harbor CA via SSL_CERT_FILE=$BUNDLE (no system-store change, no sudo)"
 fi
 CURL_CACERT=(); [ -f "${HARBOR_CA_FILE:-/nonexistent}" ] && CURL_CACERT=(--cacert "$HARBOR_CA_FILE")
 [ "$TLS_VERIFY" = "false" ] && CURL_CACERT=(--insecure)
@@ -36,10 +46,7 @@ SCHEME="https"; [ "$TLS_VERIFY" = "false" ] && SCHEME="http"
 # crane uses a boolean --insecure flag (vs skopeo's --tls-verify=<bool>).
 INSECURE=(); [ "$TLS_VERIFY" = "false" ] && INSECURE=(--insecure)
 
-# Curl auth in a real umask-077 config FILE (kept out of argv). A process
-# substitution can't be used because the curl call runs on a later line than
-# where the fd would be created.
-HARBOR_TMP="$(mktemp -d)"; trap 'rm -rf "$HARBOR_TMP"' EXIT
+# Curl auth in a real umask-077 config FILE (kept out of argv).
 HARBOR_CURL_CFG="${HARBOR_TMP}/curl.cfg"
 ( umask 077; printf 'user = "%s:%s"\n' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" > "$HARBOR_CURL_CFG" )
 
