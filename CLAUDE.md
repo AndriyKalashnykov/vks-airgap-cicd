@@ -178,17 +178,17 @@ istio `gateway.yaml` + traefik `ingress.yaml` + `46/45-install-*.sh` + `98-verif
 `creds.sh` (ArgoCD REMOVED from the `*.vks.local` ingress — own LB, like VKS); `.env.example`
 `HARBOR_INSECURE=0` / `ARGOCD_INSECURE=0`.
 
-Validation at session end: a clean **secure** `make kind-down && make e2e-kind` was RUNNING.
-LIVE-VALIDATED: Harbor self-signed HTTPS (`https://<LB_IP>` routable with `--cacert`), ArgoCD
-own-LB self-signed TLS (`https://<LB_IP>`). PENDING (was still in the ~40-min mirror-pull): the
-CA-trusted **crane push over TLS**, **builder podman `--cert-dir` push**, **Kaniko build over
-TLS**, `make verify`, `make verify-ingress`.
+Validation: the **secure** mode is **FULLY VALIDATED end-to-end** (clean `make kind-down && make
+e2e-kind` green this session): Harbor self-signed HTTPS on the LB IP; **34 images crane-pushed over
+TLS via `SSL_CERT_FILE`**; builder **podman-`--cert-dir`-pushed**; **Kaniko built over TLS**; ArgoCD
+own-LB self-signed TLS; `End-to-end verified` + `verify-ingress SUCCESS` — all **sudo-free**. The
+**insecure** mode has NOT been re-validated after this change (it worked before; re-confirm).
 
 **Remaining next session (do these):**
 
-1. `git fetch origin && git checkout feat/kind-tls-fidelity`. Read the secure e2e log / re-run:
-   `make kind-down && make e2e-kind` (SECURE default) **with NO other docker/registry load**
-   (registry-corruption lesson) → drive to `End-to-end verified` + `verify-ingress SUCCESS`.
+1. ✅ DONE — secure e2e-kind validated green end-to-end this session (sudo-free). `git fetch
+   origin && git checkout feat/kind-tls-fidelity` to continue. (Re-run only if the cluster
+   is gone — SECURE default, **NO other docker/registry load** per the corruption lesson.)
 2. Validate the **insecure** mode too: `make kind-down && make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1`
    → green. BOTH modes must pass (owner requirement).
 3. Update `docs/decisions/kind-tls-fidelity.md` — it still describes the superseded **FQDN** variant;
@@ -199,9 +199,9 @@ TLS**, `make verify`, `make verify-ingress`.
    Harbor-plain-HTTP prose; CLAUDE.md architecture bullets (Harbor "HTTP LoadBalancer" → self-signed
    HTTPS + CA; ArgoCD "server.insecure convenience" → self-signed TLS + own LB). Diagrams: any
    HTTP/insecure edge labels → HTTPS; `make diagrams` + `diagrams-check`.
-5. Add the HELD portfolio rule **"sudo-free self-signed-registry CA trust"** (crane `SSL_CERT_FILE` /
-   podman `--cert-dir` / containerd `certs.d ca=` / Kaniko `additional-ca-cert-bundle` + LB-IP
-   endpoint) to `claude-config/rules/common/version-discipline.md` once step 1/2 confirm it e2e.
+5. ✅ DONE — the "sudo-free self-signed-registry CA trust" portfolio rule is captured in
+   `claude-config/rules/common/version-discipline.md` (validated by step 1). (A `/readme`
+   "context-split a dual-context table" rule was also added to `claude-config/commands/readme.md`.)
 6. `make ci` green → PR + merge; then refresh this backlog.
 
 **Merged THIS session (2026-07-10):**
