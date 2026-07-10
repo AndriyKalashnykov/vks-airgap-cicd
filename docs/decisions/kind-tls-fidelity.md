@@ -18,8 +18,26 @@ The whole point of the KinD path is to predict lab behavior. Today it hides exac
 class of failure most likely on a real air-gapped lab: a self-signed registry cert that
 every consumer (jump-box `crane`, node `containerd`, in-cluster Kaniko) must trust.
 
-**Goal:** make KinD mimic the lab's cert posture *exactly*, so "works on KinD" means
-"the CA-trust wiring works" — not "TLS was skipped".
+**Goal:** make KinD mimic the lab's cert posture *exactly* **by default**, so "works on KinD"
+means "the CA-trust wiring works" — not "TLS was skipped" — while keeping the current
+insecure posture as an **optional, still-tested** fast-iteration path.
+
+## Modes — secure by default, insecure optional (both tested)
+
+KinD keeps **both** postures as a per-component toggle, defaulting to the faithful one:
+
+- **`secure` (default)** — self-signed TLS + CA trust, mimics VCF/VKS 9.1. Driven by
+  **`HARBOR_INSECURE=0`** (Harbor self-signed HTTPS) and **`ARGOCD_INSECURE=0`** (ArgoCD
+  upstream self-signed TLS). This is the new `.env.kind` default (was `HARBOR_INSECURE=1`).
+- **`insecure` (optional)** — the current convenience posture: plain-HTTP Harbor
+  (`HARBOR_INSECURE=1`) + `server.insecure` ArgoCD (`ARGOCD_INSECURE=1`). Retained verbatim for
+  fast local iteration / debugging without cert wrangling.
+
+`06-install-harbor.sh` and `07-install-argocd.sh` **branch** on these flags — the secure
+branch is new, the insecure branch is exactly today's code. `make e2e-kind` runs `secure` by
+default; **both modes are validated** (a `make e2e-kind INSECURE_TLS=1`-style override runs the
+insecure matrix; see Validation). Every downstream consumer (containerd wiring, Kaniko flags,
+`verify`, `creds`) keys off the same flags so the two modes never half-mix.
 
 ## VCF/VKS 9.1 cert models (researched, cited)
 
@@ -150,6 +168,11 @@ Clean `make e2e-kind` with **no concurrent load** (registry corruption lesson). 
 5. `make verify` + `make verify-ingress` green; a demo walk over the TLS Harbor.
 
 A failure at any layer is exactly the lab-predictive signal we want (a missing CA-trust hop).
+
+**Both modes validated:** the implementation runs the **`secure`** e2e-kind (default)
+end-to-end green, then the **`insecure`** e2e-kind (the retained convenience path) end-to-end
+green, so neither branch rots. Both are local-only (e2e-kind is not a CI job); a
+mode-override (e.g. `HARBOR_INSECURE=1 ARGOCD_INSECURE=1`) selects the insecure matrix.
 
 ## Docs to update (ALL `*.md` + diagrams)
 
