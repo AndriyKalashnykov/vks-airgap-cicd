@@ -5,9 +5,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this repo is
 
 An **air-gapped VKS CI/CD demo**: from an internet-connected jump box (Ubuntu or
-PhotonOS), mirror all required images into the VKS-provided **Harbor**, install and
-wire **Gitea + Tekton**, and demonstrate GitOps CD via the VKS-provided **ArgoCD**.
-Harbor and ArgoCD are pre-provided by VKS; we install Gitea + Tekton and the demo app.
+PhotonOS), mirror all required images into **Harbor**, install and wire **Gitea +
+Tekton**, and demonstrate GitOps CD via **ArgoCD**. On a real VKS lab Harbor and ArgoCD
+are installed as **VCF Supervisor Services** (the README real-lab flow documents that,
+Part A); we then install Gitea + Tekton and the demo app. The KinD stand-in installs
+Harbor + ArgoCD locally to mimic that.
 
 End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag write-back) → ArgoCD sync → web UI`.
 
