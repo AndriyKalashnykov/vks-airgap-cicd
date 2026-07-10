@@ -328,11 +328,15 @@ make install-vcf-clis VCF_CLI_SRC_DIR=~/vcf-clis   # argocd-vcf + vcf + vcf plug
 # keep them in sync with the artifacts you place in the folder.
 ```
 
-**Extra packages this step needs** (beyond the [bootstrap set](#bootstrap-a-bare-jump-box-before-you-can-clone-this-repo); the installer checks for `tar`/`gzip`/`find`/`install` and errors clearly if missing):
+**Packages this step needs** (`tar`, `gzip`/`gunzip`, `find`, `install`) — **`make deps`
+already provides them** (`scripts/00-install-prereqs.sh` installs `tar`, `gzip`, `findutils`),
+so if you ran the bootstrap you're covered. The installer also checks for them and errors
+clearly if any is missing. On a minimal box where you skipped `make deps`:
 
-- **Ubuntu:** `find` is present by default — nothing extra.
-- **Photon OS:** `sudo tdnf install -y findutils` (`find` is not in Photon's base). `unzip` is
-  **not** required — the artifacts are `.gz`/`.tar.gz`, and `make deps` doesn't need it either.
+- **Ubuntu:** present by default — nothing extra.
+- **Photon OS:** `sudo tdnf install -y findutils` (`find` is not in Photon's base; its
+  `gzip`/`tar` come from BusyBox-style **toybox**, which lacks `gzip -t` — the installer uses
+  portable checks so it works there). `unzip` is **not** required — the artifacts are `.gz`/`.tar.gz`.
 
 > **Fidelity vs a real lab.** The local KinD stand-in faithfully reproduces the lab's
 > **self-signed-TLS + CA-trust** posture (Harbor HTTPS + ArgoCD self-signed TLS on their own
