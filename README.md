@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen?style=flat)](LICENSE)
 [![Hits](https://hits.sh/github.com/AndriyKalashnykov/vks-airgap-cicd.svg?view=today-total&style=flat&color=4c1)](https://hits.sh/github.com/AndriyKalashnykov/vks-airgap-cicd/)
 
-# Air-gapped CI/CD on VMware VKS — Reference Demo
+# Air-gapped GitOps CI/CD on VMware VKS — Reference Demo
 
 Reference implementation of an end-to-end CI/CD pipeline for a **fully air-gapped**
 VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surfaces:
