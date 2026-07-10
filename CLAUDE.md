@@ -55,8 +55,11 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   tag back to `webui-deploy`; ArgoCD deploys from it.
 - **VKS auth is isolated in `scripts/30-vks-login.sh`** — the only auth-aware step;
   everything else consumes `$KUBECONFIG`/context.
-- **Internal CA trust** (Harbor/Gitea self-signed) is wired via `trust_ca` and
-  in-cluster ConfigMaps for Kaniko/Tekton/ArgoCD.
+- **Internal CA trust** (self-signed Harbor) is wired **sudo-free** per consumer — jump-box
+  `crane`/`curl` via `SSL_CERT_FILE` (a system-store + our-CA bundle from `lib/tls.sh`), the
+  builder push via podman `--cert-dir`, each kind node's containerd via `certs.d/<ip>/ca.crt`,
+  and in-cluster Kaniko via the `harbor-ca` ConfigMap. No root-owned system-store change. See
+  `docs/decisions/kind-tls-fidelity.md`.
 - **Air-gap Maven builds**: an in-cluster `mvn`/Kaniko build cannot reach Maven
   Central, so `scripts/15-build-push-builder.sh` builds `apps/java/webui/Dockerfile.builder`
   on the internet side (bakes the full `~/.m2` via `mvn verify`) and pushes it to
@@ -65,11 +68,14 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   `BUILDER_IMAGE_TAG` when `apps/java/webui/pom.xml` deps change.
 - **KinD local e2e**: `kind/kind-config.yaml` enables containerd `config_path`;
   `05-kind-up.sh` runs cloud-provider-kind (LoadBalancer) and writes `KUBECONFIG` +
-  `VKS_AUTH_METHOD=kubeconfig` to `.env.kind`; `06-install-harbor.sh` exposes Harbor
-  as an HTTP LoadBalancer, wires each node's containerd for insecure pull, and
-  writes `HARBOR_URL`(LB IP)+`HARBOR_INSECURE=1` to `.env.kind`. That overlay
-  (loaded last by `load_env` / `-include`) makes the normal flow run against kind
-  unchanged. `kind-down.sh` prunes cloud-provider-kind + `kindccm-*` orphans.
+  `VKS_AUTH_METHOD=kubeconfig` to `.env.kind`; `06-install-harbor.sh` exposes Harbor as a
+  **self-signed-HTTPS LoadBalancer on the LB IP** (default; two-phase: install TLS-off →
+  discover LB IP → mint CA+leaf with SAN=IP → upgrade to TLS), wires each node's containerd
+  with the CA (`certs.d/<ip>/`), and writes `HARBOR_URL`(LB IP)+`HARBOR_INSECURE=0`+
+  `HARBOR_CA_FILE` to `.env.kind` (`HARBOR_INSECURE=1` selects the original plain-HTTP mode).
+  `07-install-argocd.sh` exposes ArgoCD on its **own** LB with self-signed TLS (default) and
+  publishes `ARGOCD_LB_IP`. That overlay (loaded last by `load_env` / `-include`) makes the
+  normal flow run against kind unchanged. `kind-down.sh` prunes cloud-provider-kind + `kindccm-*` orphans.
 - **Manifest rendering**: k8s/Tekton/ArgoCD YAML carry `${VAR}` tokens rendered by
   the configure scripts with a RESTRICTED `envsubst` allowlist (so step-script
   `$(...)`/`${}` are untouched). Tekton install rewrites upstream image hosts
@@ -78,12 +84,13 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   controller. `scripts/44-install-ingress.sh` dispatches to `46-install-istio.sh` (helm
   control plane + gateway LB; istio images from Harbor via the `global.hub` override) or
   `45-install-traefik.sh` (single-binary LB). Both expose the SAME `*.vks.local` hosts
-  (`GITEA_HOST`/`ARGOCD_HOST`/`WEBUI_HOST`/`TEKTON_DASHBOARD_HOST`) behind ONE LoadBalancer and
+  (`GITEA_HOST`/`WEBUI_HOST`/`TEKTON_DASHBOARD_HOST` — **not** ArgoCD, which has its own LB) behind ONE LoadBalancer and
   publish `INGRESS_LB_IP` + the chosen `INGRESS_CONTROLLER` to `.env.kind`. `44-install-ingress.sh`
   lets an explicit `INGRESS_CONTROLLER` override win over the persisted `.env.kind` value (so
   `verify-ingress-both` actually flips controllers). Hostnames resolve via
-  `/etc/hosts` → the LB IP (no internet DNS). **Harbor keeps its OWN direct LB** — its LB
-  IP is load-bearing for the containerd insecure-registry pull path, so it is NOT routed
+  `/etc/hosts` → the LB IP (no internet DNS). **Harbor and ArgoCD each keep their OWN direct LB**
+  — Harbor's LB IP is load-bearing for the containerd registry pull path (self-signed HTTPS +
+  node CA by default) and ArgoCD's own self-signed-TLS LB mirrors the VKS lab; neither is routed
   through the ingress. `make verify-ingress` (in `e2e-kind`, after `verify`) route-checks
   each host through the LB with a K1.5 readiness poll (cloud-provider-kind wires the LB
   Envoy 5–60s after the IP is assigned) and asserts each host serves its own body marker;
@@ -189,20 +196,29 @@ own-LB self-signed TLS; `End-to-end verified` + `verify-ingress SUCCESS` — all
 1. ✅ DONE — secure e2e-kind validated green end-to-end this session (sudo-free). `git fetch
    origin && git checkout feat/kind-tls-fidelity` to continue. (Re-run only if the cluster
    is gone — SECURE default, **NO other docker/registry load** per the corruption lesson.)
-2. Validate the **insecure** mode too: `make kind-down && make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1`
-   → green. BOTH modes must pass (owner requirement).
-3. Update `docs/decisions/kind-tls-fidelity.md` — it still describes the superseded **FQDN** variant;
-   rewrite to the chosen **LB-IP sudo-free** variant.
-4. Update **ALL `*.md`** (owner reminder): README Access-UIs table (Harbor = self-signed HTTPS in
-   BOTH KinD + lab now; ArgoCD = own-LB self-signed TLS in both — the KinD/lab gap shrinks to "we
-   mint the cert locally"), the demo-walkthrough Harbor/ArgoCD rows + step 6, the "Try it locally"
-   Harbor-plain-HTTP prose; CLAUDE.md architecture bullets (Harbor "HTTP LoadBalancer" → self-signed
-   HTTPS + CA; ArgoCD "server.insecure convenience" → self-signed TLS + own LB). Diagrams: any
-   HTTP/insecure edge labels → HTTPS; `make diagrams` + `diagrams-check`.
+2. ⏳ STILL PENDING (env-blocked when last attempted — host had unrelated docker load;
+   run it on a quiet host): validate the **insecure** mode too:
+   `make kind-down && make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1` → green. BOTH modes
+   must pass (owner requirement). **NO other docker/registry load** per the corruption lesson.
+3. ✅ DONE — `docs/decisions/kind-tls-fidelity.md` rewritten from the superseded FQDN variant to
+   the chosen **LB-IP sudo-free** variant (grounded in the actual implemented scripts; keeps a
+   short "Endpoint choice" note recording *why* the FQDN/sudo variant was dropped). Status →
+   ACCEPTED & LANDED.
+4. ✅ DONE — all `*.md` + diagrams swept: README (how-the-stand-in-works bullet, Access-the-UIs
+   section+table, port-forward note, demo-walkthrough table + step 6), CLAUDE.md architecture
+   bullets (CA-trust, Harbor HTTPS+CA, ArgoCD own-LB TLS, ingress host list minus ArgoCD),
+   `deployment.puml`/`container.puml` (ArgoCD off the ingress → own self-signed-TLS LB; Harbor
+   HTTPS+CA edges) re-rendered + `diagrams-check` green.
 5. ✅ DONE — the "sudo-free self-signed-registry CA trust" portfolio rule is captured in
    `claude-config/rules/common/version-discipline.md` (validated by step 1). (A `/readme`
    "context-split a dual-context table" rule was also added to `claude-config/commands/readme.md`.)
-6. `make ci` green → PR + merge; then refresh this backlog.
+6. ⏳ `make ci` is GREEN (docs + diagrams). Docs/diagram sweep committed to the branch. Remaining
+   before PR: run the step-2 insecure e2e on a quiet host, then PR + merge; refresh this backlog.
+
+Also this session: `links.md` (operator-local MEGA download links) added by the owner is now
+**gitignored/untracked** (owner's choice); `make docs-lint` was hardened to lint **tracked**
+markdown only (`git ls-files '*.md'`) so untracked operator scratch can never redden the gate
+again — RED-proven on a tracked violation, GREEN on the real tree.
 
 **Merged THIS session (2026-07-10):**
 

@@ -23,7 +23,8 @@ System_Boundary(vks, "Air-gapped VKS cluster") {
 
 Rel(dev, gitea, "git push", "HTTP")
 Rel(dev, dash, "watch PipelineRuns", "HTTP")
-Rel(mirror, harbor, "push all images", "HTTPS/HTTP")
+Rel(dev, argo, "watch sync (own LB)", "HTTPS (self-signed)")
+Rel(mirror, harbor, "push all images", "HTTPS (self-signed + CA)")
 Rel(gitea, el, "push webhook", "HTTP")
 Rel(el, pipe, "creates PipelineRun")
 Rel(pipe, harbor, "build+push app image (kaniko)\npull builder+base (containerd)")

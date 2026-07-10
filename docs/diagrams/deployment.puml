@@ -37,19 +37,20 @@ Deployment_Node(vks, "VKS workload cluster", "VMware vSphere Kubernetes Service 
   }
 }
 
-Rel(mir, harbor, "push images", "HTTPS/HTTP")
+Rel(mir, harbor, "push images", "HTTPS (self-signed + CA)")
 Rel(cli, gitea, "install + seed", "kubectl")
 Rel(cli, tk, "install", "kubectl")
-Rel(ci, harbor, "build+push / pull", "kaniko / containerd")
+Rel(ci, harbor, "build+push / pull", "kaniko / containerd (TLS + CA)")
 Rel(ci, gitea, "clone + write-back", "git")
 Rel(argo, gitea, "sync from webui-deploy", "git")
 Rel(argo, app, "deploy", "kubectl")
-Rel(app, harbor, "pull image", "containerd")
-Rel(op, ing, "browse UIs", "*.vks.local / HTTP")
+Rel(app, harbor, "pull image", "containerd (TLS + CA)")
+Rel(op, ing, "browse Gitea / Tekton / app UIs", "*.vks.local / HTTP")
 Rel(ing, gitea, "route", "HTTP")
-Rel(ing, argo, "route", "HTTP")
 Rel(ing, app, "route", "HTTP")
 Rel(ing, dash, "route", "HTTP")
+Rel(op, argo, "browse ArgoCD (own LB)", "HTTPS (self-signed)")
+Rel(op, harbor, "browse Harbor (own LB)", "HTTPS (self-signed)")
 
 SHOW_LEGEND()
 @enduml

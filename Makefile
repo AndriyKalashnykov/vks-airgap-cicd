@@ -351,9 +351,11 @@ vendor-diagrams: ## Re-download the pinned C4-PlantUML stdlib into docs/diagrams
 	echo "vendor-diagrams: refreshed docs/diagrams/c4/ @ $(C4_PLANTUML_VERSION) — now run 'make diagrams' and verify the offline render"
 
 .PHONY: docs-lint
-docs-lint: diagrams-check ## Lint markdown + verify diagrams are current
-	@if command -v markdownlint >/dev/null 2>&1; then markdownlint '**/*.md' --ignore app --ignore bundle; \
-	elif command -v npx >/dev/null 2>&1; then npx --yes markdownlint-cli@$(MARKDOWNLINT_VERSION) '**/*.md' --ignore app --ignore bundle; \
+docs-lint: diagrams-check ## Lint tracked markdown + verify diagrams are current
+	@files=$$(git ls-files '*.md'); \
+	[ -n "$$files" ] || { echo "docs-lint: no tracked markdown"; exit 0; }; \
+	if command -v markdownlint >/dev/null 2>&1; then markdownlint $$files; \
+	elif command -v npx >/dev/null 2>&1; then npx --yes markdownlint-cli@$(MARKDOWNLINT_VERSION) $$files; \
 	else echo "markdownlint not installed — skipping (install markdownlint-cli)"; fi
 
 .PHONY: static-check

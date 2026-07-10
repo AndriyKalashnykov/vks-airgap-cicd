@@ -422,17 +422,23 @@ How the local stand-in works:
 - **`cloud-provider-kind`** gives Harbor a real `LoadBalancer` IP on the kind docker
   network — reachable by the *same IP* from the host (push), Kaniko pods (push), and
   containerd (pull), which is what makes one image ref work everywhere.
-- Harbor runs **plain HTTP**; `kind-up`/`install-harbor` wire each node's containerd
-  (`/etc/containerd/certs.d`) to pull from it insecurely, and write the discovered
-  `HARBOR_URL` (the LB IP) + `KUBECONFIG` into a gitignored **`.env.kind`** overlay so the
-  normal scripts target the kind cluster unchanged.
+- Harbor runs **self-signed HTTPS on its LB IP** by default (mimicking the VCF/VKS lab —
+  see [KinD TLS fidelity](docs/decisions/kind-tls-fidelity.md)); `install-harbor` mints a
+  self-signed CA + leaf (SAN = the LB IP) and wires each node's containerd
+  (`/etc/containerd/certs.d/<ip>/`) with that **CA** so pulls verify over TLS. The CA is
+  trusted at every consumer **sudo-free** — jump-box `crane`/`curl` via `SSL_CERT_FILE`, the
+  builder push via podman `--cert-dir`, in-cluster Kaniko via the `harbor-ca` ConfigMap. It
+  writes the discovered `HARBOR_URL` (the LB IP) + `HARBOR_CA_FILE` + `KUBECONFIG` into a
+  gitignored **`.env.kind`** overlay so the normal scripts target the kind cluster unchanged.
+  (Set `HARBOR_INSECURE=1` for the original plain-HTTP fast-iteration mode.)
 - `make vks-login` uses the kind kubeconfig (`VKS_AUTH_METHOD=kubeconfig`), so no VCF auth
   is needed for the local run.
 - **`make install-ingress`** installs one ingress LoadBalancer (`INGRESS_CONTROLLER=istio`
-  by default, `traefik` optional) that fronts the Gitea/ArgoCD/app/Tekton-Dashboard UIs at `*.vks.local`, so
-  you reach them by hostname instead of `kubectl port-forward`. Harbor keeps its own direct
-  LB (its IP is load-bearing for the containerd pull path). Both ingress images are mirrored
-  into Harbor.
+  by default, `traefik` optional) that fronts the Gitea/app/Tekton-Dashboard UIs at `*.vks.local`, so
+  you reach them by hostname instead of `kubectl port-forward`. **Harbor and ArgoCD each keep
+  their own direct LB** — Harbor's IP is load-bearing for the containerd pull path, and ArgoCD
+  gets its own self-signed-TLS LB (like the real VKS lab, which does not front ArgoCD behind
+  the shared ingress). Both ingress images are mirrored into Harbor.
 
 Individual targets: `make kind-up`, `make install-harbor`, `make install-argocd`,
 `make install-ingress` (or `make install-istio` / `make install-traefik`).
@@ -446,17 +452,19 @@ VKS cluster:
 
 - The **`*.vks.local`** hostnames exist **only after `make install-ingress`** (part of
   `make e2e-kind`; a separate, optional step in the lab flow) and front only the UIs this project
-  controls — **Gitea, the app, the Tekton Dashboard, and — KinD only — ArgoCD**.
-- **Harbor is never behind the ingress** — always its own address (plain-HTTP LB IP in KinD; the
-  lab's HTTPS URL in a lab).
+  controls — **Gitea, the app, and the Tekton Dashboard**.
+- **Harbor and ArgoCD are never behind the ingress** — each has its own LB address in both
+  contexts. In KinD, Harbor is **self-signed HTTPS on its LB IP** and ArgoCD is **self-signed
+  TLS on its own LB IP** (published as `ARGOCD_LB_IP`); the real lab serves the same posture at
+  the lab's own URLs. The KinD-vs-lab gap shrinks to "we mint the cert locally".
 
 | Service | Local KinD | Real VKS lab | Login |
 |---------|------------|--------------|-------|
 | **Gitea** (we install) | <http://gitea.vks.local> | `http://gitea.vks.local` after `make install-ingress`, else `kubectl -n gitea port-forward svc/gitea-http 3000:3000` | `gitea_admin` / `GITEA_ADMIN_PASSWORD` |
 | **Tekton Dashboard** (we install) | <http://tekton.vks.local> | same — ingress or `port-forward` | — (read-only) |
 | **App (webui)** (we deploy) | <http://app.vks.local/> | same — ingress or `port-forward svc/webui` | — (health at `/actuator/health`) |
-| **Harbor** | its own LB IP, **plain HTTP** | the **lab's** Harbor URL, **HTTPS** | `admin` / `HARBOR_PASSWORD` |
-| **ArgoCD** | <http://argocd.vks.local> (we install it in insecure/HTTP mode) | the **lab's own ArgoCD** URL/IP — `argocd.vks.local` assumes the KinD-only insecure-HTTP-on-:80 setup, so it won't front a stock TLS lab ArgoCD | `admin` / `make argocd-password` |
+| **Harbor** | its own LB IP, **self-signed HTTPS** (`https://<ip>`, our CA) | the **lab's** Harbor URL, **HTTPS** | `admin` / `HARBOR_PASSWORD` |
+| **ArgoCD** | its own LB IP, **self-signed TLS** (`https://<ARGOCD_LB_IP>`, `--insecure`) — **not** behind the ingress | the **lab's own ArgoCD** URL/IP, self-signed TLS | `admin` / `make argocd-password` |
 
 **ArgoCD password** — `make argocd-password` reveals it for either context:
 
@@ -468,7 +476,7 @@ VKS cluster:
 
 > Without the ingress (or before adding the `/etc/hosts` line), the same services are still
 > reachable over `kubectl port-forward` — e.g. `kubectl -n gitea port-forward svc/gitea-http
-> 3000:3000` → <http://localhost:3000>. Harbor is always a direct LoadBalancer, not behind the ingress.
+> 3000:3000` → <http://localhost:3000>. Harbor and ArgoCD are always direct LoadBalancers, not behind the ingress.
 
 The **Tekton Dashboard** (above) is Tekton's web UI. The Tekton **EventListener** is a
 separate, in-cluster-only webhook receiver (`el-webui.ci.svc:8080`) — the Gitea webhook fires
@@ -490,8 +498,8 @@ line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
 | **App (webui)** | <http://app.vks.local/> | — | the greeting that changes |
 | **Gitea** | <http://gitea.vks.local> | `gitea_admin` / your `GITEA_ADMIN_PASSWORD` | edit source; see the tag write-back |
 | **Tekton Dashboard** | <http://tekton.vks.local> | — (read-only) | the PipelineRun: test → build → deploy |
-| **Harbor** | its own LB IP (KinD, plain HTTP) or the lab's URL | `admin` / your `HARBOR_PASSWORD` | the freshly-built image |
-| **ArgoCD** | <http://argocd.vks.local> **(KinD only)** — on a real VKS lab, **your lab's own ArgoCD URL** | `admin` / `make argocd-password` | the sync that rolls the new image |
+| **Harbor** | its own LB IP, self-signed HTTPS (KinD) or the lab's HTTPS URL | `admin` / your `HARBOR_PASSWORD` | the freshly-built image |
+| **ArgoCD** | its own LB IP, self-signed TLS (`https://<ARGOCD_LB_IP>`, `--insecure`) on KinD — on a real VKS lab, **your lab's own ArgoCD URL** | `admin` / `make argocd-password` | the sync that rolls the new image |
 
 1. **See the current greeting.** Open <http://app.vks.local/>. The page shows a greeting —
    `Hello from vks-airgap-cicd` by default — rendered in the `<p class="message">` element,
@@ -532,9 +540,9 @@ line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
    `images[0].newTag` to your `<sha>`. This deploy repo — not the app repo — is what ArgoCD
    watches, which is why the tag write-back (not the source push) is what triggers a deploy.
 
-6. **Watch ArgoCD deploy it.** In **ArgoCD** (<http://argocd.vks.local> on KinD; on a real
-   VKS lab, **your lab's own ArgoCD URL** — `argocd.vks.local` assumes the KinD-only
-   insecure-HTTP setup), the Application
+6. **Watch ArgoCD deploy it.** In **ArgoCD** (its own self-signed-TLS LB IP on KinD —
+   `https://<ARGOCD_LB_IP>`, shown by `make creds`; on a real VKS lab, **your lab's own
+   ArgoCD URL**), the Application
    **`webui`** flips **`OutOfSync → Synced`** (auto-sync + self-heal) and rolls the Deployment
    in namespace `webui` to `harbor.vks.local/apps/webui:<sha>`. (Auto-sync polls the deploy repo
    on an interval; click **Refresh** to reconcile immediately.)
