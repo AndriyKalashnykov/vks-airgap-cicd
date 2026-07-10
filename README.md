@@ -460,6 +460,30 @@ or use `kubectl port-forward` — `kubectl -n gitea port-forward svc/gitea-http 
 
 </details>
 
+## Run against a real VKS lab (Harbor & ArgoCD need to be installed)
+
+This is the real target: the VKS lab needs **Harbor** and **ArgoCD** to be installed you only have supoervisor IP, login and password so you can obtain workload-cluster kubeconfig. 
+You need to install **Gitea** + **Tekton** and wire the flow. Dual-homed: the jump box reaches both the internet
+and the lab (VKS API + Harbor).
+
+You need to download the follwing: 
+
+**VCF Consumption CLI** - 9.1.0.0
+
+https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20Cloud%20Foundation%209&release=9.1.0.0&os=&servicePk=540528&language=EN&groupId=540529&viewGroup=true
+
+**VCF Consumption CLI Plugins** - 9.1.0.0
+
+https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20Cloud%20Foundation%209&release=9.1.0.0&os=&servicePk=540528&language=EN&groupId=540672&viewGroup=true
+
+For **ArgoCD** search for **vSphere Supervisor Services** -> **ArgoCD Service**`
+
+[https://support.broadcom.com/group/ecx/productdownloads?subfamily=vSphere%20Supervisor%20Services](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&displayGroup=ArgoCD%20Service&release=1.1.0&os=&servicePk=538499&language=EN)
+
+For **Harbor** search **vSphere Supervisor Services** -> **Harbor**
+
+https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&displayGroup=Harbor&release=2.14.3&os=&servicePk=542081&language=EN
+
 ## Try it locally end-to-end with KinD
 
 You don't need a VKS cluster to exercise the whole pipeline. `make e2e-kind` stands up a
