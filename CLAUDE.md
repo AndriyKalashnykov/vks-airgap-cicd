@@ -25,6 +25,7 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make mirror-pull` / `bundle` / `bundle-load` / `mirror-push` | sneakernet phases |
 | `make builder-image` | build+push the offline Maven builder image (deps pre-baked) |
 | `make vks-login` | Authenticate to VKS → writes `$KUBECONFIG` + context |
+| `make install-vcf-clis` | (lab-only) Install the Broadcom VCF/VKS lab CLIs (`argocd-vcf` + `vcf` + plugins), OS/arch-aware + sudo-free, from `VCF_CLI_SRC_DIR=<dir>` (operator-supplied licensed artifacts). Not needed for local KinD. Granular: `install-argocd-vcf` / `install-vcf-cli` / `install-vcf-plugins` |
 | `make platform` | Install + wire Gitea and Tekton |
 | `make gitops` | Create the ArgoCD Application |
 | `make creds` / `make argocd-password` | Print access URLs+logins / the ArgoCD admin password (context-aware, self-resolves kubeconfig) |
