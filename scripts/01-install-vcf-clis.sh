@@ -107,9 +107,18 @@ fetch_url() {
       [ -n "$tok" ] || die "Broadcom path '${url}' needs a token — set BROADCOM_DOWNLOAD_TOKEN or BROADCOM_TOKEN_FILE (a token.md)"
       curl_via_config "${BROADCOM_DL_BASE}/${tok}/${url#/}" "$dest" ;;
     *mega.nz*|*mega.co.nz*)
-      if   have megatools;  then run megatools dl --path "$(dirname "$dest")" "$url"
-      elif have megadl;     then run megadl --path "$(dirname "$dest")" "$url"
-      elif have mega-get;   then run mega-get "$url" "$dest"
+      # MEGA encrypts client-side (the #key fragment) — curl can't decrypt it; use a MEGA client.
+      # megatools/megadl write to --path under the file's ORIGINAL name (they ignore a dest
+      # basename), so download into a fresh temp dir and move the single file to $dest.
+      # mega-get takes an explicit dest, so it writes to $dest directly.
+      if have megatools || have megadl; then
+        local td f
+        td="$(mktemp -d)"
+        if have megatools; then run megatools dl --path "$td" "$url"; else run megadl --path "$td" "$url"; fi
+        f="$(find "$td" -type f | head -1)"
+        [ -n "$f" ] || { rm -rf "$td"; die "MEGA download produced no file (bad link/key?)"; }
+        mv "$f" "$dest"; rm -rf "$td"
+      elif have mega-get; then run mega-get "$url" "$dest"
       else die "MEGA URL needs megatools/megadl/mega-get — install one, or pre-download to VCF_CLI_SRC_DIR"; fi ;;
     http://*|https://*)
       curl_via_config "$url" "$dest" ;;
