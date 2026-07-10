@@ -297,11 +297,11 @@ openssl s_client -connect <harbor-host>:443 -showcerts </dev/null 2>/dev/null \
 ```
 
 (Or download it from the Harbor UI → your project → **Registry Certificate**.) The CA is
-consumed in **two** places, both handled for you: `make mirror` / `make vks-login` install it
-into the jump box's system trust store (so `crane` can push over HTTPS), and `make platform`
-creates an in-cluster ConfigMap **`harbor-ca`** (key `ca.crt`) in the `ci` namespace so
-Kaniko/Tekton trust it too. If Harbor presents a publicly-trusted cert, leave
-`HARBOR_CA_FILE` empty.
+consumed in **two** places, both handled for you: `make mirror` builds a **sudo-free** trust
+bundle (`SSL_CERT_FILE` = the system CAs + your Harbor CA) so `crane` pushes over HTTPS
+**without** touching the jump box's system trust store, and `make platform` creates an
+in-cluster ConfigMap **`harbor-ca`** (key `ca.crt`) so Kaniko/Tekton trust it too. If Harbor
+presents a publicly-trusted cert, leave `HARBOR_CA_FILE` empty.
 
 **Step 3 — install prereqs and log in to VKS:**
 
@@ -361,7 +361,19 @@ clearly if any is missing. On a minimal box where you skipped `make deps`:
 
 **Step 4 — Harbor projects + (recommended) a robot account.** `make mirror` (run in step 6)
 creates the `cicd` and `apps` projects for you via Harbor's REST API if they don't exist
-(needs push rights). For least-privilege CI, create a Harbor **robot account** (Harbor UI →
+(needs push rights). It creates them **public** (`HARBOR_PUBLIC_PROJECTS=true`, the default),
+so the cluster's containerd/kubelet pull the app image **anonymously** — the deployed manifest
+carries no `imagePullSecret`, which is why the KinD demo needs none.
+
+**If your lab mandates PRIVATE projects**, set `HARBOR_PUBLIC_PROJECTS=false` (so any project
+`make mirror` auto-creates is private) or pre-create them private, and additionally create a
+**robot-account image-pull secret** in the app namespace (`ARGOCD_DEST_NAMESPACE`) and
+reference it from the app Deployment's `imagePullSecrets` — the pipeline's push secret
+(`harbor-dockerconfig` in `ci`, step 5) authorizes **pushes only**, not the workload's pull.
+The demo does not scaffold that pull secret (it assumes public projects); it is the one
+private-lab step you supply by hand.
+
+For least-privilege CI, create a Harbor **robot account** (Harbor UI →
 **Administration → Robot Accounts**, or the REST API) scoped to push/pull those two projects,
 and put its name/secret in `HARBOR_USERNAME` / `HARBOR_PASSWORD` instead of `admin`. Find the
 namespace the lab's ArgoCD watches (for `ARGOCD_NAMESPACE` in step 1):

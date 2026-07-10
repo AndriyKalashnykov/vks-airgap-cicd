@@ -123,13 +123,14 @@ vks-login: check-env ## Authenticate to VKS (VCF 9 + Supervisor) → writes KUBE
 
 .PHONY: fetch-harbor-ca
 fetch-harbor-ca: ## Fetch a self-signed lab Harbor's CA cert → HARBOR_CA_FILE (for HTTPS mirror/Kaniko trust)
-	@host="$$(printf '%s' "$(HARBOR_URL)" | sed -E 's#^https?://##; s#/.*##; s#:.*##')"; \
+	@hostport="$$(printf '%s' "$(HARBOR_URL)" | sed -E 's#^https?://##; s#/.*##')"; \
+	 host="$${hostport%%:*}"; port="$${hostport##*:}"; [ "$$port" = "$$host" ] && port=443; \
 	 out="$(HARBOR_CA_FILE)"; mkdir -p "$$(dirname "$$out")"; \
-	 echo "fetching Harbor CA from $$host:443 -> $$out"; \
-	 openssl s_client -connect "$$host:443" -showcerts </dev/null 2>/dev/null \
+	 echo "fetching Harbor CA from $$host:$$port -> $$out"; \
+	 openssl s_client -connect "$$host:$$port" -showcerts </dev/null 2>/dev/null \
 	   | openssl x509 -outform PEM > "$$out" \
 	   && echo "wrote $$out (now set HARBOR_CA_FILE=$$out in .env)" \
-	   || { echo "ERROR: could not fetch a CA from $$host:443 — is the lab Harbor reachable over HTTPS?"; exit 1; }
+	   || { echo "ERROR: could not fetch a CA from $$host:$$port — is the lab Harbor reachable over HTTPS?"; exit 1; }
 
 ##@ Platform install (Gitea + Tekton)
 .PHONY: install-gitea
