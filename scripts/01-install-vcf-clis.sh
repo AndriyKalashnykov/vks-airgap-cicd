@@ -131,8 +131,10 @@ install_vcf_plugins() {
   src="$pdir"
   local archdir; archdir="$(find "$pdir" -type d -path "*/${os}/${go_arch}" | head -1)"
   [ -n "$archdir" ] && src="$archdir"
-  # Clear any stale local plugin state so the bundle installs cleanly (matches the vendor steps).
-  rm -rf "${HOME}/.local/vcf" "${HOME}/.local/vcf-cli-telemetry"
+  # `vcf plugin install all` is idempotent — it upgrades/replaces in place, so no pre-clean is
+  # needed (verified: a second install over existing state succeeds). Real vcf state lives under
+  # ~/.config/vcf + ~/.local/share/vcf-cli; do NOT wipe those (it would destroy the operator's
+  # vcf config/context on a re-install).
   run "$vcf_bin" plugin install all --local-source "$src"
   "$vcf_bin" plugin list || log_warn "plugins installed but 'vcf plugin list' failed"
 }
