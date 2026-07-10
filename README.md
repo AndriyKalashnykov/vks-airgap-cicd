@@ -234,12 +234,107 @@ Diagram sources are committed under [`docs/diagrams/`](docs/diagrams/) (C4-Plant
 
 Set `RUN_MODE` in `.env`.
 
-## Run against a real VKS lab (Harbor & ArgoCD pre-provided)
+## Run against a real VKS lab (Harbor & ArgoCD need to be installed)
 
-This is the real target: the VKS lab already runs **Harbor** and **ArgoCD** (you have their
-IPs, logins, and passwords) and gives you a workload-cluster kubeconfig. You install only
-**Gitea** + **Tekton** and wire the flow. Dual-homed: the jump box reaches both the internet
-and the lab (VKS API + Harbor).
+This is the real target. You are given a **Supervisor** endpoint (IP), a login, and a password —
+nothing else. **Harbor** and **ArgoCD** are **not** pre-provided: you install them as **VCF
+Supervisor Services**, provision a **workload VKS cluster**, then install **Gitea** + **Tekton**
+and wire the pipeline. Dual-homed: the jump box reaches both the internet and the lab (Supervisor
+API + Harbor).
+
+The order below installs the lab-side services first (**Part A** — Harbor, ArgoCD, workload
+cluster; mostly the vSphere Client + `kubectl`), then wires this repo and runs the flow
+(**Part B**).
+
+**Downloads** (each needs your Broadcom entitlement):
+
+- **VCF Consumption CLI** 9.1.0.0 —
+  [download](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20Cloud%20Foundation%209&release=9.1.0.0&os=&servicePk=540528&language=EN&groupId=540529&viewGroup=true)
+- **VCF Consumption CLI Plugins** 9.1.0.0 —
+  [download](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20Cloud%20Foundation%209&release=9.1.0.0&os=&servicePk=540528&language=EN&groupId=540672&viewGroup=true)
+- **ArgoCD Service** (search **vSphere Supervisor Services** → **ArgoCD Service**) —
+  [download](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&displayGroup=ArgoCD%20Service&release=1.1.0&os=&servicePk=538499&language=EN)
+- **Harbor** (search **vSphere Supervisor Services** → **Harbor**) —
+  [download](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&displayGroup=Harbor&release=2.14.3&os=&servicePk=542081&language=EN)
+
+Reference docs:
+[Installing and Configuring Harbor as a VCF Service](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-harbor-as-vcf-service/installing-and-configuring-harbor-and-contour.html)
+·
+[Install the Argo CD Service](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-argo-cd-service/install-argo-cd-service.html).
+
+### Part A — install the lab services
+
+**A1 — Install Harbor as a Supervisor Service** (vSphere Client — not scriptable):
+
+1. **Ingress prereq:** install **Contour** first (Harbor's default ingress on VKS), or configure
+   an NGINX-based load balancer for the Supervisor.
+2. **Register the operator:** vSphere Client → **Supervisor Management → Services → Add New
+   Service** → upload `harbor-service-<ver>.yml`.
+3. **Configure `harbor-data-values-<ver>.yml`** — the key fields: `hostname` (the Harbor
+   **FQDN**), `harborAdminPassword` (initial admin password, changeable later), `secretKey`
+   (exactly 16 chars), `database.password`, `core.xsrfKey` (32 chars), the storage classes
+   (registry/jobservice/database/redis/trivy — your storage-policy name, lowercased with dashes),
+   and the ingress toggle (`enableContourHttpProxy: true` for Contour **or**
+   `enableNginxLoadBalancer: true` for NGINX). Leave the `tlsCertificate` block alone unless you
+   bring a custom cert — cert-manager auto-issues a self-signed one (keep the
+   `managed-by: vmware-vRegistry` label; it is required for VKS trust).
+4. **Deploy:** Harbor service card → **Actions → Manage Service** → pick version + target
+   Supervisor → paste the edited `harbor-data-values` → **Finish**.
+5. **Map the FQDN:** get the ingress IP (`kubectl get svc -n <harbor-ns>` for NGINX, or the
+   Contour Envoy service IP), then add a DNS record — or a jump-box `/etc/hosts` entry — mapping
+   the Harbor FQDN → that IP.
+
+> **Fidelity bonus (real lab beats KinD here):** when Harbor and your VKS workload cluster run on
+> the **same Supervisor**, the VKS clusters **automatically trust the Harbor registry
+> certificate** — so the workload-node image pull "just works" without the per-node `certs.d`
+> wiring the KinD stand-in uses.
+
+**A2 — Install the ArgoCD Operator + an ArgoCD instance** (`kubectl`-driven):
+
+1. **Install the ArgoCD Operator** service on the Supervisor (Supervisor Services, same flow as
+   Harbor).
+2. **Create a vSphere Namespace** for the instance (e.g. `argocd-instance-1`) with VM + storage
+   classes.
+3. **Authenticate to the Supervisor:** `vcf context create mgmt-cluster --endpoint <supervisor-IP>
+   --type k8s` (vSphere 9+; on vSphere 8 use `kubectl vsphere login --server <IP>`).
+4. **Pick a supported version** with `kubectl explain argocd.spec.version`, then apply the CR:
+
+   ```yaml
+   apiVersion: argocd-service.vsphere.vmware.com/v1alpha1
+   kind: ArgoCD
+   metadata:
+     name: argocd-1
+     namespace: argocd-instance-1
+   spec:
+     version: <supported-version>   # e.g. 2.14.15+vmware.1-vks.1
+   ```
+
+5. **Get its LoadBalancer IP:** `kubectl get svc -n argocd-instance-1` → the `argocd-server`
+   EXTERNAL-IP (its **own** LB, self-signed TLS with no IP SAN — like the KinD stand-in).
+6. **Get the admin password:**
+   `kubectl get secret -n argocd-instance-1 argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d`.
+7. **Log in + rotate:** `argocd login <LB-IP>` (accept the self-signed cert) →
+   `argocd account update-password`.
+
+> **Version note:** the operator CR pins the ArgoCD **server** (the example is `2.14.15`, a 2.x
+> line), while the shipped `argocd` **CLI** from the VCF download is `3.0.19-vcf` (3.x). Read the
+> real supported server versions with `kubectl explain argocd.spec.version` on the lab; the KinD
+> stand-in runs a 3.x server, so expect a possible server-generation delta.
+>
+> **Topology to verify on the lab:** `make gitops` applies an ArgoCD `Application` (via
+> `kubectl`) into `ARGOCD_NAMESPACE` and targets the in-cluster destination
+> `https://kubernetes.default.svc`. Confirm the ArgoCD instance can deploy into the workload
+> namespace it watches — same cluster, or the workload cluster registered with ArgoCD. An
+> off-cluster ArgoCD addressed **only** by URL + API is not what the scripts assume.
+
+**A3 — Provision the workload VKS cluster + get its kubeconfig.** Gitea, Tekton, and the demo app
+run in a **guest VKS (Tanzu Kubernetes) cluster**, not on the Supervisor. Create a vSphere
+Namespace, provision a VKS cluster in it, and obtain its kubeconfig (e.g. a `vcf`/`kubectl
+vsphere` login to the guest cluster, or export it from VCF Automation). You need **cluster-admin**
+on it — the flow creates namespaces (`gitea`, `ci`, `webui`) and installs Tekton CRDs. Place the
+kubeconfig at `$KUBECONFIG` (Part B, Step 1).
+
+### Part B — wire this repo and run
 
 **Step 0 — remove the KinD overlay.** `.env.kind` (written by the local flow) is sourced
 *after* `.env` and would silently redirect everything at a kind cluster. Delete it first:
@@ -253,21 +348,21 @@ rm -f .env.kind       # belt-and-suspenders
 the lab-provided values:
 
 ```bash
-# --- Harbor (pre-provided by the lab) ---
-HARBOR_URL=harbor.<lab-host-or-ip>       # the lab's Harbor (HTTPS)
-HARBOR_USERNAME=admin                    # or a robot account name (step 4)
-HARBOR_PASSWORD=<lab-harbor-secret>      # set in .env only, never on argv
-HARBOR_CA_FILE=./secrets/harbor-ca.crt   # the lab Harbor's CA (step 2)
+# --- Harbor (you installed it in A1) ---
+HARBOR_URL=harbor.<lab-fqdn>             # the Harbor FQDN you set in A1 (HTTPS)
+HARBOR_USERNAME=admin                    # or the robot account name (step 4)
+HARBOR_PASSWORD=<harborAdminPassword>    # the A1 admin password; set in .env only, never on argv
+HARBOR_CA_FILE=./secrets/harbor-ca.crt   # Harbor's self-signed CA (step 2)
 HARBOR_INFRA_PROJECT=cicd                # CI/CD + base images
 HARBOR_APP_PROJECT=apps                  # the built application image
 
-# --- ArgoCD (pre-provided, running IN the workload cluster) ---
-ARGOCD_NAMESPACE=<ns-where-lab-argocd-runs>   # e.g. argocd — find it in step 4
+# --- ArgoCD (you installed it in A2 — its own LoadBalancer) ---
+ARGOCD_NAMESPACE=<ns-where-argocd-runs>       # e.g. argocd-instance-1 — where the A2 ArgoCD runs
 ARGOCD_APP_NAME=webui
 ARGOCD_DEST_NAMESPACE=webui
 ARGOCD_TRACK_BRANCH=main
-# ARGOCD_SERVER is NOT consumed by the scripts (wiring is via kubectl, not the argocd CLI).
-# You only need the lab's ArgoCD IP/login/password to open its UI (step 7).
+ARGOCD_SERVER=<argocd-server-LB-IP>           # the A2 argocd-server EXTERNAL-IP (for the UI + fetch-argocd-ca)
+# ARGOCD_CA_FILE=./secrets/argocd-ca.crt      # ArgoCD's self-signed CA (step 2, make fetch-argocd-ca)
 
 # --- Gitea (WE install it) ---
 GITEA_ADMIN_PASSWORD=<choose-one>        # set in .env only
@@ -302,6 +397,11 @@ bundle (`SSL_CERT_FILE` = the system CAs + your Harbor CA) so `crane` pushes ove
 **without** touching the jump box's system trust store, and `make platform` creates an
 in-cluster ConfigMap **`harbor-ca`** (key `ca.crt`) so Kaniko/Tekton trust it too. If Harbor
 presents a publicly-trusted cert, leave `HARBOR_CA_FILE` empty.
+
+For **ArgoCD**'s self-signed CA (only needed if you drive `argocd login` with verification, or
+to trust its UI), fetch it the same way — set `ARGOCD_SERVER` to the A2 `argocd-server` LB IP and
+run **`make fetch-argocd-ca`** (writes `ARGOCD_CA_FILE`). The pipeline wires ArgoCD via `kubectl`
+(not the `argocd` CLI), so this is optional for the demo itself.
 
 **Step 3 — install prereqs and log in to VKS:**
 
@@ -373,10 +473,17 @@ reference it from the app Deployment's `imagePullSecrets` — the pipeline's pus
 The demo does not scaffold that pull secret (it assumes public projects); it is the one
 private-lab step you supply by hand.
 
-For least-privilege CI, create a Harbor **robot account** (Harbor UI →
-**Administration → Robot Accounts**, or the REST API) scoped to push/pull those two projects,
-and put its name/secret in `HARBOR_USERNAME` / `HARBOR_PASSWORD` instead of `admin`. Find the
-namespace the lab's ArgoCD watches (for `ARGOCD_NAMESPACE` in step 1):
+For least-privilege CI, create a Harbor **robot account** (push/pull scoped to the two projects)
+instead of using `admin`. **`make harbor-robot`** does it via Harbor's REST API — it creates
+`robot$<HARBOR_ROBOT_NAME>` (default `vks-cicd`) and writes the name + one-time secret to a
+gitignored `secrets/harbor-robot.env` (mode 0600, never printed):
+
+```bash
+make harbor-robot                                  # → secrets/harbor-robot.env
+# then copy its two lines (HARBOR_USERNAME='robot$vks-cicd' / HARBOR_PASSWORD=…) into .env
+```
+
+Confirm the namespace your ArgoCD (A2) runs in / watches (for `ARGOCD_NAMESPACE`):
 
 ```bash
 kubectl get pods -A | grep argocd-application-controller   # its namespace = ARGOCD_NAMESPACE
@@ -422,12 +529,13 @@ make install-all   # mirror → builder-image → vks-login → platform → git
 make verify        # push a marked change → Tekton → Harbor → ArgoCD → live app serves it
 ```
 
-`install-all` deliberately does **not** install Harbor or ArgoCD — those are the lab's. It
-mirrors all images into the lab Harbor, builds + pushes the offline Maven builder image,
-installs Gitea + Tekton, and creates the ArgoCD `Application`.
+`install-all` deliberately does **not** install Harbor or ArgoCD — those you installed in
+**Part A**. It mirrors all images into that Harbor, builds + pushes the offline Maven builder
+image, installs Gitea + Tekton, and creates the ArgoCD `Application`.
 
-**Step 7 — access the UIs.** Harbor and ArgoCD are the lab's — use the IPs/logins/passwords
-the lab gave you. For **Gitea** (which you installed) and the deployed **app**, either run
+**Step 7 — access the UIs.** Harbor and ArgoCD are your **Part A** installs — use the FQDN /
+LB IP + admin credentials you set there. For **Gitea** (which you installed) and the deployed
+**app**, either run
 `make install-ingress` to reach them by hostname at `*.vks.local` (add the printed
 `INGRESS_LB_IP` line to `/etc/hosts`; see [Access the UIs](#access-the-uis-urls-logins-passwords)),
 or use `kubectl port-forward` — `kubectl -n gitea port-forward svc/gitea-http 3000:3000` and
@@ -459,24 +567,6 @@ or use `kubectl port-forward` — `kubectl -n gitea port-forward svc/gitea-http 
   Harbor.
 
 </details>
-
-## Run against a real VKS lab (Harbor & ArgoCD need to be installed)
-
-This is the real target: the VKS lab needs **Harbor** and **ArgoCD** to be installed — you only
-have the Supervisor IP, login, and password, from which you obtain the workload-cluster
-kubeconfig. You install **Gitea** + **Tekton** and wire the flow. Dual-homed: the jump box
-reaches both the internet and the lab (VKS API + Harbor).
-
-Download the following (each needs your Broadcom entitlement):
-
-- **VCF Consumption CLI** 9.1.0.0 —
-  [download](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20Cloud%20Foundation%209&release=9.1.0.0&os=&servicePk=540528&language=EN&groupId=540529&viewGroup=true)
-- **VCF Consumption CLI Plugins** 9.1.0.0 —
-  [download](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20Cloud%20Foundation%209&release=9.1.0.0&os=&servicePk=540528&language=EN&groupId=540672&viewGroup=true)
-- **ArgoCD Service** (search **vSphere Supervisor Services** → **ArgoCD Service**) —
-  [download](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&displayGroup=ArgoCD%20Service&release=1.1.0&os=&servicePk=538499&language=EN)
-- **Harbor** (search **vSphere Supervisor Services** → **Harbor**) —
-  [download](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&displayGroup=Harbor&release=2.14.3&os=&servicePk=542081&language=EN)
 
 ## Try it locally end-to-end with KinD
 
