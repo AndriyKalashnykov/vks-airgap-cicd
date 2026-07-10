@@ -162,146 +162,26 @@ the real demo is the live VKS run — so the KinD e2e stays a local `make` targe
 than a CI job. Run it locally (and both ingress controllers via `make verify-ingress-both`)
 when changing the pipeline, ingress, or manifests.
 
-## Backlog / resume state (2026-07-10)
+## Backlog / resume state
 
-Snapshot for picking up next session exactly where this one left off.
+`main` is GREEN. The KinD self-signed-TLS fidelity + VCF/VKS lab-CLI arc is COMPLETE and merged —
+see git history / merged PRs for the trail. Design rationale: `docs/decisions/kind-tls-fidelity.md`.
 
-**✅ COMPLETE — KinD self-signed-TLS fidelity + VCF/VKS lab CLIs (branch `feat/kind-tls-fidelity`; both e2e modes validated; PR-ready)**
+**Resume the stack (if the cluster is down):**
 
-Goal (met): make the KinD stand-in mimic **VCF/VKS 9.1's self-signed TLS** for the VKS-provided
-Harbor + ArgoCD, so `make e2e-kind` predicts lab behavior instead of hiding the CA-trust path.
-Design + cited research: `docs/decisions/kind-tls-fidelity.md` (rewritten to the **LB-IP sudo-free**
-variant + a **"Fidelity vs a real VCF/VKS 9.1 lab" readiness section**). Endpoint = the LB IP
-(SAN=IP), CA trusted sudo-free via crane `SSL_CERT_FILE` / podman `--cert-dir` / containerd
-`certs.d ca=` / Kaniko `additional-ca-cert-bundle`. Toggles `HARBOR_INSECURE`/`ARGOCD_INSECURE`
-(default `0` = secure). ArgoCD on its OWN LB (not the `*.vks.local` ingress), like VKS.
-
-**BOTH modes VALIDATED end-to-end this session (the 4-way matrix, all green):**
-
-- **secure e2e-kind** (fresh, default): `Harbor/ArgoCD mode: SECURE`, CA minted **0644** in-path,
-  34 images crane-pushed over TLS, Kaniko built over TLS, `End-to-end verified` + istio ingress `SUCCESS`.
-- **insecure e2e-kind** (`HARBOR_INSECURE=1 ARGOCD_INSECURE=1`): `mode: INSECURE`, full loop green.
-- **`make jumpbox-both` secure** (Photon + Ubuntu 26.04): Harbor HTTPS+CA reach `HTTP 200`, real lab CLIs installed.
-- **`make jumpbox-both` insecure** (both OSes): Harbor HTTP reach `HTTP 200`.
-
-**3 real bugs found + fixed by actually running it (each invisible to a green exit):**
-
-1. **CA-perms uid asymmetry** — `tls.sh` minted certs `umask 077` (0600); Ubuntu 26.04's default
-   `ubuntu` user (uid 1000) pushes the jump-box `vks` to uid 1001, which couldn't read the mounted
-   0600 CA → misleading `error adding trust anchors from file` (real cause: Permission denied;
-   `curl -k` = 200). Fix: CA/leaf are PUBLIC → `chmod 0644` (keys stay 0600). Only the Ubuntu target surfaced it.
-2. **jumpbox harness Harbor check hardcoded `http://`** — broken by the secure-TLS default; now TLS-mode-aware.
-3. **`make e2e-kind HARBOR_INSECURE=1` silently ran SECURE** — `load_env`'s `set -a; . .env.example`
-   clobbered the make-cmdline override; caught by reading the mid-run mode log, not the exit code.
-   Fix: comment the toggles in `.env.example` (proven RED→GREEN). Insecure mode was likely never
-   truly validated before this.
-
-**NEW feature — `make install-vcf-clis`** (+ granular `install-argocd-vcf`/`install-vcf-cli`/`install-vcf-plugins`):
-OS/arch-aware, sudo-free (`~/.local/bin`) install of the Broadcom-LICENSED lab CLIs (`argocd-vcf`,
-`vcf` Consumption CLI, plugins). Licensed artifacts operator-supplied via `VCF_CLI_SRC_DIR` (air-gap)
-or a gitignored links file; versions pinned in `.env.example`. **Verified with the REAL binaries on
-BOTH jumpboxes**: `argocd v3.0.19+…-vcf`, `vcf v9.1.0.0.25296329` (GA), all 7 vcf plugins installed.
-Lab-only (the pipeline wires via `kubectl`); documented in the README real-lab flow.
-
-**Research + empirical fact-check (readiness):** Harbor 2.14.3 + ArgoCD (Broadcom operator, 3.x) in
-VKS 9.1. Empirical beat doc-inference — the ArgoCD-on-9.0 docs imply 2.14.x, but the operator's real
-9.1 `argocd` CLI is **3.0.19-vcf (3.x)**, so our KinD ArgoCD (3.4.5) is the RIGHT generation (did NOT
-downgrade). Top residual lab risk (documented, not KinD-reproducible): the workload cluster trusts the
-Harbor CA **declaratively** via the Cluster spec `trust.additionalTrustedCAs` + a double-base64
-`<cluster>-user-trusted-ca-secret`, not per-node `certs.d`; plus private-project robot accounts + FQDN addressing.
-
-**Learnings captured to `claude-config`** (committed, main, unpushed): empirical-version-beats-doc-inference
-and CA-perms-uid-asymmetry (version-discipline), docs-lint-lint-tracked-files (makefile §10 #18),
-runtime-toggle-must-be-commented (configuration). `links.md` was removed after both jumpboxes passed (owner's instruction).
-
-**Remaining:** `make ci` (final offline gate) → open PR → merge on green → post-merge sync + watch triggered workflows.
-
-**Merged THIS session (2026-07-10):**
-
-- PR #60 — jumpbox Photon+Ubuntu OS matrix + demo walkthrough.
-- PR #62 — backlog refresh.
-- PR #63 — air-gap connectivity diagram + README scannability + fixed stale skopeo diagram labels.
-- PR #64 — Ubuntu **26.04** rootless-podman `pasta` fix + harness `.env`/`.env.kind` gitignored
-  tar-exclude (Renovate had bumped the jumpbox base 24.04→26.04, exposing podman-5's pasta default).
-- PR #65 — README: VKS-lab section FIRST + context-split KinD-vs-VKS-lab UI table + `make fetch-harbor-ca`.
-- PR #66 — KinD-TLS-fidelity design doc.
-
-Two portfolio rules captured to `claude-config/rules/common/version-discipline.md` (Ubuntu
-air-gap jump-box gotchas; no-concurrent-load-during-mirror).
-
----
-
-**Where things stand:** `main` GREEN. Earlier this arc landed a large hardening + rename set, all merged:
-
-- `/project-review` in full — gates/foundation, ingress-e2e, diagrams, docs, verify-race.
-- Whole toolchain aligned to **Java 25** + a `check-java-alignment` drift gate (RED-proven;
-  build image `maven:*-temurin-25` and runtime `eclipse-temurin:25-jre` are separate Renovate
-  deps, so the gate stops them re-splitting).
-- Security gates in `static-check`: `secrets` (gitleaks) + `trivy-fs` (scans the built jar via
-  `trivy rootfs`) + `trivy-config` (`.trivyignore` waives gitea RO-rootfs + Traefik secrets RBAC).
-- `make verify` ArgoCD race fixed (`refresh=hard` + wait for the deployed image to change).
-- Ingress e2e: `verify-ingress` / `verify-ingress-both` (K1.5 route-readiness) + per-host body markers.
-- MIT LICENSE; argocd CLI aligned to the server (`v3.4.4`).
-- Renovate hardening: cluster-only-tool **MAJORS require Dependency-Dashboard approval**
-  (CI has no cluster job); the two kubectl pins (`.mise.toml` + `.env.example`) grouped.
-- **Repo renamed `vks-cicd` → `vks-airgap-cicd`** (all in-repo refs aligned; GitHub redirects the old URL).
-- **App relocated `./app` → `./apps/java/webui`** (PR #48 — `apps/<lang>/<name>` layout; `APP_DIR`/`MVN`,
-  builder/seed/alignment/lint scripts, README, CLAUDE.md, `.env.example` updated; `trivy-config --skip-dirs`
-  moved with the tree). README `Prerequisites` now precedes `Tech stack`. Verified offline (`make ci`) + live
-  (`make builder-image` from the new path pushed to Harbor).
-- **Ingress body markers LIVE-CONFIRMED** (istio `e2e-kind`): `gitea.vks.local` / `argocd.vks.local` /
-  `app.vks.local` each served its own UI through the LB — the `gitea`/`argo`/`class="message"` asserts in
-  `scripts/98-verify-ingress.sh` match real served HTML.
-- **Context-aware credentials UX** (PR #50): `make creds` (URLs + logins table) + `make argocd-password`
-  (self-resolves the kubeconfig; `.env` value → generated secret → VKS-lab guidance). KinD install can set
-  the ArgoCD admin password from `ARGOCD_ADMIN_PASSWORD` (`.env`).
-- **Tekton Dashboard** (PR #52): read-only web UI at `tekton.vks.local` — mirrored air-gap
-  (ghcr.io → Harbor), installed into `tekton-pipelines`, ingress-routed on **both** istio + traefik; added
-  to the C4 diagrams. Also fixed `44-install-ingress` so an explicit `INGRESS_CONTROLLER` override wins
-  over `.env.kind` (so `verify-ingress-both` actually flips controllers).
-- **Photon 5 / Ubuntu jump-box bootstrap** (PR #53): README "Bootstrap a bare jump box" (tdnf TLS-stack
-  refresh, SSH keypair, clone) + `make deps` split into atomic `deps-mise` / `deps-prereqs`.
-- **crane replaces skopeo as the mirror engine** (PR #54): static Go binary, mise-native
-  (`.mise.toml` `crane = "0.21.7"`); `lib/mirror.sh` `mirror_platform_arg` + retry helper, `10-mirror-pull.sh`
-  `crane pull --format=oci`, `21-mirror-push.sh` `crane auth login` + `crane push --insecure`. Multi-arch by
-  default. Verified: 34 images mirrored to Harbor, 0 failures. Chosen after 3-agent research (imgpkg ruled out).
-- **`make jumpbox` — Photon 5 validation harness** (PR #54): runs the README bootstrap on a real `photon:5.0`
-  container (rootless podman, joined to the kind network). Caught + fixed **5** real bootstrap bugs:
-  `mise trust`, `tkn` arch-404 (uname vs Go arch), skopeo-not-on-Photon, missing `crun`, commented-only
-  `unqualified-search-registries` (all now in `00-install-prereqs.sh`, the real path).
-- **Uniform brightgreen badges** (PR #57): fixed the yellow MIT license badge; all four badges the same shade.
-- **Jump-box OS matrix — Photon + Ubuntu (PR #60):** the Photon-only harness became an OS matrix.
-  `make jumpbox JUMPBOX_OS=photon|ubuntu` (default `photon`) + `make jumpbox-both`; `Dockerfile.jumpbox`
-  → `jumpbox/Dockerfile.{photon,ubuntu}` (both hadolinted via `scripts/lint.sh`); `jumpbox-run.sh` is
-  OS-generic with an `ENGINE` var. **Live-validated on real `photon:5.0` AND `ubuntu:24.04` — both reach
-  `JUMPBOX_OK`** — which surfaced 2 real Ubuntu jump-box bugs, fixed in the REAL `make deps` path (not
-  just the harness image):
-  1. `apt --no-install-recommends podman` pulls `crun` (a Depends) but DROPS `uidmap`/`slirp4netns`
-     (Recommends) → rootless `make builder-image` would fail `newuidmap: command not found`.
-     `00-install-prereqs.sh` now installs the rootless deps per distro (apt → `uidmap`+`slirp4netns`;
-     tdnf → `crun`, since Photon's podman pulls uidmap/slirp4netns but not crun). `Dockerfile.ubuntu`
-     no longer pre-bakes uidmap/slirp4netns, so the harness genuinely VALIDATES that make-deps install.
-  2. `jumpbox-run.sh` excludes `./secrets` from the work-dir tar: `secrets/` is gitignored (mode 0600,
-     host-uid-owned) and `ubuntu:24.04` ships a default `ubuntu` user at uid 1000, so the container's
-     `vks` lands on uid 1001 and couldn't read them → tar failed before `make deps` ran.
-  Also dropped a stale dead-code `KUBECTL_VERSION:-v1.31.4` default. `make ci` + `make jumpbox-both` green.
-- **README demo walkthrough (PR #60):** new "Demo walkthrough — drive the GitOps loop by hand" — edit the
-  greeting in the Gitea web UI → Tekton test/build (Kaniko) → Harbor → tag write-back to `webui-deploy` →
-  ArgoCD sync → the live page changes; grounded in real repo names/paths and mirrored by `make verify`.
-  Plus OS-matrix wording for the jump box + a per-OS rootless-dep note.
-
-**To resume the stack (if the cluster is down):**
-
-1. `git fetch origin && git checkout main && git reset --hard origin/main` (sync `main`).
-2. `make e2e-kind` (full KinD end-to-end). Mirror engine is **crane** (mise-provided, no skopeo).
+1. `git fetch origin && git checkout main && git reset --hard origin/main`
+2. `make e2e-kind` — full KinD end-to-end (mirror engine is **crane**, mise-provided).
    `make jumpbox-both` validates the jump-box bootstrap on Photon + Ubuntu (needs the cluster up).
 
-**Open / next-session items (none blocking):**
+**Deferred — real-lab-only, NOT KinD-reproducible (verify when a VCF/VKS 9.1 lab is available):**
 
-- [ ] (optional) **ArgoCD Image Updater** for registry-driven redeploy — considered and
-      **declined** this session; the Tekton tag-write-back stays the primary GitOps path. Revisit
-      only to demo registry-driven deploys or to track externally-built (non-pipeline) images.
-- Done (housekeeping): the `spike-crane:*` test images were pruned from Harbor's `cicd` project;
-  the jump-box Dockerfiles (`jumpbox/Dockerfile.{photon,ubuntu}`) are hadolinted in the `lint` gate.
-- CI runs offline gates only; the KinD e2e is **local by design** (verification-honesty) — a
-      decision, not a TODO.
+- The workload cluster trusts the Harbor CA **declaratively** via the Cluster spec
+  `trust.additionalTrustedCAs` + a double-base64 `<cluster>-user-trusted-ca-secret` (KinD uses
+  per-node `certs.d` instead); a **private** Harbor project needs a robot account + `imagePullSecret`;
+  the lab is **FQDN**-addressed (KinD uses the LB IP with SAN=IP).
+- ArgoCD generation is confirmed: the real 9.1 operator ships `argocd` **3.0.19-vcf (3.x)**, so
+  KinD's 3.x ArgoCD is the right generation (empirically verified, not downgraded).
+
+**Declined (decision, not a TODO):** ArgoCD Image Updater for registry-driven redeploy — the Tekton
+tag-write-back stays the primary GitOps path; revisit only to demo registry-driven deploys or to
+track externally-built (non-pipeline) images.
