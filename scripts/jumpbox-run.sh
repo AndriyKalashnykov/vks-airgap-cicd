@@ -13,13 +13,17 @@ set -euo pipefail
 
 WORK="${HOME}/work"
 rm -rf "$WORK"; mkdir -p "$WORK"
-# Copy the read-only repo mount into a writable workspace (like a fresh clone); skip heavy /
-# gitignored build outputs so the jump box starts clean. `./secrets` is gitignored (mode 0600,
-# owned by the host uid) — a real `git clone` never has it, and on a base whose default user
-# already holds uid 1000 (ubuntu:24.04 ships a `ubuntu` user there) the container's `vks` lands
-# on uid 1001 and cannot read the 0600 files, so tar would fail. Excluding it is both faithful
-# to a fresh clone and uid-mismatch-proof on every host/OS.
-tar -C /src --exclude='./.git' --exclude='./bundle' --exclude='./secrets' \
+# Copy the read-only repo mount into a writable workspace (like a fresh clone), EXCLUDING every
+# gitignored operator-local file: `.env` / `.env.kind` (host-specific paths like a host KUBECONFIG,
+# plus whatever perms the KinD flow leaves — often 0600) and `./secrets` (mode 0600 tokens). A real
+# `git clone` never has any of them, the harness doesn't need them (it gets the kubeconfig via the
+# docker mount at /run/jumpbox and HARBOR_URL via -e), and on a base whose default user already holds
+# uid 1000 (ubuntu:24.04/26.04 ship a `ubuntu` user there) the container's `vks` lands on uid 1001 and
+# cannot read the 0600 files — so copying them fails the tar. `.env.example` is KEPT (load_env needs it).
+# NB: GNU tar's --exclude-vcs-ignores is NOT usable here — it ignores git's leading-slash-anchored
+# patterns (`/secrets/`, `/bundle/`), verified on this repo — so the excludes are explicit.
+tar -C /src --exclude='./.git' --exclude='./.env' --exclude='./.env.kind' \
+    --exclude='./secrets' --exclude='./bundle' \
     --exclude='./app/target' --exclude='./apps/java/webui/target' --exclude='./.jumpbox' \
     -cf - . | tar -C "$WORK" -xf -
 cd "$WORK"
