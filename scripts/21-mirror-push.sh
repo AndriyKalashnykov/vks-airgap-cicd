@@ -68,9 +68,10 @@ ensure_project() {
     log_info "Harbor project '$name' exists"
   else
     log_info "creating Harbor project '$name'"
-    # Public: kubelet/containerd pull anonymously (no imagePullSecret on every
-    # workload). Push still requires auth (kaniko/crane log in).
-    code="$(harbor_api POST "projects" "{\"project_name\":\"${name}\",\"public\":true}")"
+    # Public (HARBOR_PUBLIC_PROJECTS, default true): kubelet/containerd pull anonymously
+    # (no imagePullSecret on every workload). Push still requires auth (kaniko/crane log in).
+    # Set false for a private-project lab — you then supply an app-namespace imagePullSecret.
+    code="$(harbor_api POST "projects" "{\"project_name\":\"${name}\",\"public\":${HARBOR_PUBLIC_PROJECTS:-true}}")"
     case "$code" in
       201|409) log_info "project '$name' ready (http $code)" ;;
       *) die "failed to create Harbor project '$name' (http $code)" ;;
@@ -83,6 +84,8 @@ log_info "logging in to Harbor $HARBOR_URL as $HARBOR_USERNAME"
 printf '%s' "$HARBOR_PASSWORD" | run crane auth login "$HARBOR_URL" \
   --username "$HARBOR_USERNAME" --password-stdin
 
+# Guard the public/private toggle up front (malformed value → invalid Harbor JSON otherwise).
+case "${HARBOR_PUBLIC_PROJECTS:-true}" in true|false) ;; *) die "HARBOR_PUBLIC_PROJECTS must be 'true' or 'false' (got '${HARBOR_PUBLIC_PROJECTS}')" ;; esac
 ensure_project "$HARBOR_INFRA_PROJECT"
 ensure_project "$HARBOR_APP_PROJECT"
 
