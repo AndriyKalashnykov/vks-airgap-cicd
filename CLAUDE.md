@@ -165,60 +165,55 @@ when changing the pipeline, ingress, or manifests.
 
 Snapshot for picking up next session exactly where this one left off.
 
-**⏳ IN PROGRESS — RESUME HERE: KinD self-signed-TLS fidelity (branch `feat/kind-tls-fidelity`, pushed, NOT merged / no PR yet)**
+**✅ COMPLETE — KinD self-signed-TLS fidelity + VCF/VKS lab CLIs (branch `feat/kind-tls-fidelity`; both e2e modes validated; PR-ready)**
 
-Goal: make the KinD stand-in mimic **VCF/VKS 9.1's self-signed TLS** for the VKS-provided
+Goal (met): make the KinD stand-in mimic **VCF/VKS 9.1's self-signed TLS** for the VKS-provided
 Harbor + ArgoCD, so `make e2e-kind` predicts lab behavior instead of hiding the CA-trust path.
-Design + cited VKS 9.1 cert research: `docs/decisions/kind-tls-fidelity.md` (merged, PR #66).
-Owner-approved decisions: **secure (self-signed TLS) default + insecure optional, BOTH tested**;
-**sudo-free LB-IP variant** — endpoint = the LoadBalancer IP, cert SAN=IP, CA trusted via crane
-`SSL_CERT_FILE` / podman `--cert-dir` / containerd `certs.d ca=` / Kaniko `additional-ca-cert-bundle`
-(no `/etc/hosts` / CoreDNS / system-store; no sudo). Toggles: `HARBOR_INSECURE` / `ARGOCD_INSECURE`
-(both default `0` = secure).
+Design + cited research: `docs/decisions/kind-tls-fidelity.md` (rewritten to the **LB-IP sudo-free**
+variant + a **"Fidelity vs a real VCF/VKS 9.1 lab" readiness section**). Endpoint = the LB IP
+(SAN=IP), CA trusted sudo-free via crane `SSL_CERT_FILE` / podman `--cert-dir` / containerd
+`certs.d ca=` / Kaniko `additional-ca-cert-bundle`. Toggles `HARBOR_INSECURE`/`ARGOCD_INSECURE`
+(default `0` = secure). ArgoCD on its OWN LB (not the `*.vks.local` ingress), like VKS.
 
-Code DONE on the branch (shellcheck + `make lint` green): `scripts/lib/tls.sh` (CA/leaf mint +
-`ca_bundle_with_system`); `06-install-harbor.sh` (dual-mode; secure = two-phase self-signed HTTPS
-on the LB IP + node containerd `certs.d` CA); `21-mirror-push.sh` (crane via `SSL_CERT_FILE`, no
-`trust_ca`/sudo); `15-build-push-builder.sh` (podman `--cert-dir`); `07-install-argocd.sh`
-(dual-mode; ArgoCD on its OWN LoadBalancer, self-signed TLS default, publishes `ARGOCD_LB_IP`);
-istio `gateway.yaml` + traefik `ingress.yaml` + `46/45-install-*.sh` + `98-verify-ingress.sh` +
-`creds.sh` (ArgoCD REMOVED from the `*.vks.local` ingress — own LB, like VKS); `.env.example`
-`HARBOR_INSECURE=0` / `ARGOCD_INSECURE=0`.
+**BOTH modes VALIDATED end-to-end this session (the 4-way matrix, all green):**
 
-Validation: the **secure** mode is **FULLY VALIDATED end-to-end** (clean `make kind-down && make
-e2e-kind` green this session): Harbor self-signed HTTPS on the LB IP; **34 images crane-pushed over
-TLS via `SSL_CERT_FILE`**; builder **podman-`--cert-dir`-pushed**; **Kaniko built over TLS**; ArgoCD
-own-LB self-signed TLS; `End-to-end verified` + `verify-ingress SUCCESS` — all **sudo-free**. The
-**insecure** mode has NOT been re-validated after this change (it worked before; re-confirm).
+- **secure e2e-kind** (fresh, default): `Harbor/ArgoCD mode: SECURE`, CA minted **0644** in-path,
+  34 images crane-pushed over TLS, Kaniko built over TLS, `End-to-end verified` + istio ingress `SUCCESS`.
+- **insecure e2e-kind** (`HARBOR_INSECURE=1 ARGOCD_INSECURE=1`): `mode: INSECURE`, full loop green.
+- **`make jumpbox-both` secure** (Photon + Ubuntu 26.04): Harbor HTTPS+CA reach `HTTP 200`, real lab CLIs installed.
+- **`make jumpbox-both` insecure** (both OSes): Harbor HTTP reach `HTTP 200`.
 
-**Remaining next session (do these):**
+**3 real bugs found + fixed by actually running it (each invisible to a green exit):**
 
-1. ✅ DONE — secure e2e-kind validated green end-to-end this session (sudo-free). `git fetch
-   origin && git checkout feat/kind-tls-fidelity` to continue. (Re-run only if the cluster
-   is gone — SECURE default, **NO other docker/registry load** per the corruption lesson.)
-2. ⏳ STILL PENDING (env-blocked when last attempted — host had unrelated docker load;
-   run it on a quiet host): validate the **insecure** mode too:
-   `make kind-down && make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1` → green. BOTH modes
-   must pass (owner requirement). **NO other docker/registry load** per the corruption lesson.
-3. ✅ DONE — `docs/decisions/kind-tls-fidelity.md` rewritten from the superseded FQDN variant to
-   the chosen **LB-IP sudo-free** variant (grounded in the actual implemented scripts; keeps a
-   short "Endpoint choice" note recording *why* the FQDN/sudo variant was dropped). Status →
-   ACCEPTED & LANDED.
-4. ✅ DONE — all `*.md` + diagrams swept: README (how-the-stand-in-works bullet, Access-the-UIs
-   section+table, port-forward note, demo-walkthrough table + step 6), CLAUDE.md architecture
-   bullets (CA-trust, Harbor HTTPS+CA, ArgoCD own-LB TLS, ingress host list minus ArgoCD),
-   `deployment.puml`/`container.puml` (ArgoCD off the ingress → own self-signed-TLS LB; Harbor
-   HTTPS+CA edges) re-rendered + `diagrams-check` green.
-5. ✅ DONE — the "sudo-free self-signed-registry CA trust" portfolio rule is captured in
-   `claude-config/rules/common/version-discipline.md` (validated by step 1). (A `/readme`
-   "context-split a dual-context table" rule was also added to `claude-config/commands/readme.md`.)
-6. ⏳ `make ci` is GREEN (docs + diagrams). Docs/diagram sweep committed to the branch. Remaining
-   before PR: run the step-2 insecure e2e on a quiet host, then PR + merge; refresh this backlog.
+1. **CA-perms uid asymmetry** — `tls.sh` minted certs `umask 077` (0600); Ubuntu 26.04's default
+   `ubuntu` user (uid 1000) pushes the jump-box `vks` to uid 1001, which couldn't read the mounted
+   0600 CA → misleading `error adding trust anchors from file` (real cause: Permission denied;
+   `curl -k` = 200). Fix: CA/leaf are PUBLIC → `chmod 0644` (keys stay 0600). Only the Ubuntu target surfaced it.
+2. **jumpbox harness Harbor check hardcoded `http://`** — broken by the secure-TLS default; now TLS-mode-aware.
+3. **`make e2e-kind HARBOR_INSECURE=1` silently ran SECURE** — `load_env`'s `set -a; . .env.example`
+   clobbered the make-cmdline override; caught by reading the mid-run mode log, not the exit code.
+   Fix: comment the toggles in `.env.example` (proven RED→GREEN). Insecure mode was likely never
+   truly validated before this.
 
-Also this session: `links.md` (operator-local, external licensed-artifact download links) added by the owner is now
-**gitignored/untracked** (owner's choice); `make docs-lint` was hardened to lint **tracked**
-markdown only (`git ls-files '*.md'`) so untracked operator scratch can never redden the gate
-again — RED-proven on a tracked violation, GREEN on the real tree.
+**NEW feature — `make install-vcf-clis`** (+ granular `install-argocd-vcf`/`install-vcf-cli`/`install-vcf-plugins`):
+OS/arch-aware, sudo-free (`~/.local/bin`) install of the Broadcom-LICENSED lab CLIs (`argocd-vcf`,
+`vcf` Consumption CLI, plugins). Licensed artifacts operator-supplied via `VCF_CLI_SRC_DIR` (air-gap)
+or a gitignored links file; versions pinned in `.env.example`. **Verified with the REAL binaries on
+BOTH jumpboxes**: `argocd v3.0.19+…-vcf`, `vcf v9.1.0.0.25296329` (GA), all 7 vcf plugins installed.
+Lab-only (the pipeline wires via `kubectl`); documented in the README real-lab flow.
+
+**Research + empirical fact-check (readiness):** Harbor 2.14.3 + ArgoCD (Broadcom operator, 3.x) in
+VKS 9.1. Empirical beat doc-inference — the ArgoCD-on-9.0 docs imply 2.14.x, but the operator's real
+9.1 `argocd` CLI is **3.0.19-vcf (3.x)**, so our KinD ArgoCD (3.4.5) is the RIGHT generation (did NOT
+downgrade). Top residual lab risk (documented, not KinD-reproducible): the workload cluster trusts the
+Harbor CA **declaratively** via the Cluster spec `trust.additionalTrustedCAs` + a double-base64
+`<cluster>-user-trusted-ca-secret`, not per-node `certs.d`; plus private-project robot accounts + FQDN addressing.
+
+**Learnings captured to `claude-config`** (committed, main, unpushed): empirical-version-beats-doc-inference
+and CA-perms-uid-asymmetry (version-discipline), docs-lint-lint-tracked-files (makefile §10 #18),
+runtime-toggle-must-be-commented (configuration). `links.md` was removed after both jumpboxes passed (owner's instruction).
+
+**Remaining:** `make ci` (final offline gate) → open PR → merge on green → post-merge sync + watch triggered workflows.
 
 **Merged THIS session (2026-07-10):**
 
