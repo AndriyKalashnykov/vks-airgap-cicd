@@ -149,6 +149,10 @@ fetch-argocd-ca: ## Fetch a self-signed ArgoCD server CA cert → ARGOCD_CA_FILE
 harbor-robot: ## Create a least-privilege Harbor CI robot account (push+pull) → secrets/harbor-robot.env; copy into .env
 	@$(SCRIPTS)/22-harbor-robot.sh
 
+.PHONY: argocd-preflight
+argocd-preflight: ## Report ArgoCD version + topology on $KUBECONFIG's cluster before `make gitops` (lab vs KinD)
+	@$(SCRIPTS)/23-argocd-preflight.sh
+
 ##@ Platform install (Gitea + Tekton)
 .PHONY: install-gitea
 install-gitea: check-env ## Install Gitea on VKS (images from Harbor)

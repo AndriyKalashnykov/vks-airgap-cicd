@@ -326,6 +326,12 @@ Reference docs:
 > `https://kubernetes.default.svc`. Confirm the ArgoCD instance can deploy into the workload
 > namespace it watches — same cluster, or the workload cluster registered with ArgoCD. An
 > off-cluster ArgoCD addressed **only** by URL + API is not what the scripts assume.
+>
+> **`make argocd-preflight`** automates both checks against your `KUBECONFIG` cluster — it
+> prints the operator's supported server versions (`kubectl explain argocd.spec.version`), the
+> running server image, the `argocd` CLI version, and a **TOPOLOGY OK / MISMATCH** verdict
+> (is ArgoCD in this cluster, are any workload clusters registered, does the target namespace
+> exist). Run it after Step 1 (kubeconfig in place), before `make gitops`.
 
 **A3 — Provision the workload VKS cluster + get its kubeconfig.** Gitea, Tekton, and the demo app
 run in a **guest VKS (Tanzu Kubernetes) cluster**, not on the Supervisor. Create a vSphere
