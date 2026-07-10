@@ -37,17 +37,23 @@ pkg_install podman || log_warn "podman unavailable via package manager; install 
 # WHICH of these podman pulls in differs by distro (verified on photon:5.0 / ubuntu:24.04), so
 # install only the gaps explicitly. All steps are best-effort + idempotent:
 #   • Photon (tdnf): pulls uidmap + slirp4netns + fuse-overlayfs WITH podman, but NOT crun.
-#   • Ubuntu (apt):  pulls crun (a hard Depends) but uidmap + slirp4netns are podman *Recommends*,
-#     which lib/os.sh's `--no-install-recommends` drops — so rootless breaks ("newuidmap: command
-#     not found") until we add them back.
+#   • Ubuntu (apt):  pulls crun (a hard Depends) but uidmap + the rootless network backends (pasta,
+#     via `passt`, and slirp4netns) are podman *Recommends*, which lib/os.sh's --no-install-recommends
+#     drops — so rootless breaks ("newuidmap: command not found"; or on podman 5.x / Ubuntu 26.04
+#     "could not find pasta") until we add them back.
 # Photon also ships only a COMMENTED unqualified-search-registries example (a `podman build` of a
 # short-named base then fails "short-name … did not resolve"), so add an active one if none is set.
 if have podman; then
   have crun || pkg_install crun || log_warn "crun unavailable — rootless podman builds may fail (install crun manually)"
   # Ubuntu/Debian only: re-add the podman Recommends that --no-install-recommends dropped. tdnf
   # already pulls these with podman, so this is apt-only (gated to keep it a no-op on Photon).
+  #   uidmap      — newuidmap/newgidmap for the userns mapping (all podman versions).
+  #   passt       — provides `pasta`, the DEFAULT rootless net backend on podman 5.x (Ubuntu 26.04);
+  #                 without it a rootless build dies "could not find pasta … executable not found".
+  #   slirp4netns — the default rootless net backend on podman 4.x (Ubuntu 24.04) + the fallback.
+  # Installing BOTH backends keeps rootless podman working across the podman 4.x <-> 5.x split.
   if [ "$(pkg_mgr)" = "apt-get" ]; then
-    pkg_install uidmap slirp4netns || log_warn "uidmap/slirp4netns unavailable — rootless podman may fail (install them manually)"
+    pkg_install uidmap passt slirp4netns || log_warn "uidmap/passt/slirp4netns unavailable — rootless podman may fail (install them manually)"
   fi
   # Match only an ACTIVE (uncommented) setting — Photon's default registries.conf ships a
   # commented `# unqualified-search-registries = […]` example that a loose grep would match.
