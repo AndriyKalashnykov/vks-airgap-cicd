@@ -132,6 +132,23 @@ fetch-harbor-ca: ## Fetch a self-signed lab Harbor's CA cert → HARBOR_CA_FILE 
 	   && echo "wrote $$out (now set HARBOR_CA_FILE=$$out in .env)" \
 	   || { echo "ERROR: could not fetch a CA from $$host:$$port — is the lab Harbor reachable over HTTPS?"; exit 1; }
 
+.PHONY: fetch-argocd-ca
+fetch-argocd-ca: ## Fetch a self-signed ArgoCD server CA cert → ARGOCD_CA_FILE (endpoint: ARGOCD_LB_IP or ARGOCD_SERVER)
+	@ep="$(if $(ARGOCD_LB_IP),$(ARGOCD_LB_IP),$(ARGOCD_SERVER))"; \
+	 [ -n "$$ep" ] || { echo "ERROR: set ARGOCD_LB_IP (kind, from .env.kind) or ARGOCD_SERVER (lab argocd-server LB IP) first"; exit 1; }; \
+	 hostport="$$(printf '%s' "$$ep" | sed -E 's#^https?://##; s#/.*##')"; \
+	 host="$${hostport%%:*}"; port="$${hostport##*:}"; [ "$$port" = "$$host" ] && port=443; \
+	 out="$(if $(ARGOCD_CA_FILE),$(ARGOCD_CA_FILE),./secrets/argocd-ca.crt)"; mkdir -p "$$(dirname "$$out")"; \
+	 echo "fetching ArgoCD CA from $$host:$$port -> $$out"; \
+	 openssl s_client -connect "$$host:$$port" -showcerts </dev/null 2>/dev/null \
+	   | openssl x509 -outform PEM > "$$out" \
+	   && echo "wrote $$out (now set ARGOCD_CA_FILE=$$out in .env)" \
+	   || { echo "ERROR: could not fetch a CA from $$host:$$port — is ArgoCD reachable over HTTPS?"; exit 1; }
+
+.PHONY: harbor-robot
+harbor-robot: ## Create a least-privilege Harbor CI robot account (push+pull) → secrets/harbor-robot.env; copy into .env
+	@$(SCRIPTS)/22-harbor-robot.sh
+
 ##@ Platform install (Gitea + Tekton)
 .PHONY: install-gitea
 install-gitea: check-env ## Install Gitea on VKS (images from Harbor)

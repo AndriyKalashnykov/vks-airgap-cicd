@@ -15,6 +15,8 @@ load_env
 . "${SCRIPT_DIR}/lib/mirror.sh"
 # shellcheck source=scripts/lib/tls.sh
 . "${SCRIPT_DIR}/lib/tls.sh"
+# shellcheck source=scripts/lib/harbor.sh
+. "${SCRIPT_DIR}/lib/harbor.sh"
 
 require_cmd crane
 require_cmd curl
@@ -26,58 +28,12 @@ require_cmd curl
 
 HARBOR_TMP="$(mktemp -d)"; trap 'rm -rf "$HARBOR_TMP"' EXIT
 
-# ---- TLS trust for the self-signed Harbor CA (sudo-free: SSL_CERT_FILE, not the store) ----
-TLS_VERIFY="true"
-if [ "${HARBOR_INSECURE:-0}" = "1" ]; then
-  TLS_VERIFY="false"; log_warn "HARBOR_INSECURE=1 — skipping TLS verification (demo only)"
-elif [ -n "${HARBOR_CA_FILE:-}" ] && [ -f "$HARBOR_CA_FILE" ]; then
-  # crane (go-containerregistry) honors SSL_CERT_FILE — point it at a bundle of the system
-  # CAs + the Harbor CA so pushes verify the self-signed cert WITHOUT modifying the
-  # root-owned system trust store (no sudo). curl uses --cacert (below).
-  BUNDLE="${HARBOR_TMP}/ca-bundle.crt"
-  ca_bundle_with_system "$HARBOR_CA_FILE" "$BUNDLE"
-  export SSL_CERT_FILE="$BUNDLE"
-  log_info "trusting Harbor CA via SSL_CERT_FILE=$BUNDLE (no system-store change, no sudo)"
-fi
-CURL_CACERT=(); [ -f "${HARBOR_CA_FILE:-/nonexistent}" ] && CURL_CACERT=(--cacert "$HARBOR_CA_FILE")
-[ "$TLS_VERIFY" = "false" ] && CURL_CACERT=(--insecure)
-# HTTP for an insecure (kind) Harbor, HTTPS otherwise.
-SCHEME="https"; [ "$TLS_VERIFY" = "false" ] && SCHEME="http"
+# ---- TLS trust + auth for the self-signed Harbor CA (sudo-free; see lib/harbor.sh) ----
+# harbor_setup exports SSL_CERT_FILE (crane) and sets SCHEME / CURL_CACERT / HARBOR_CURL_CFG /
+# HARBOR_TLS_VERIFY; harbor_api + ensure_project come from the same lib (shared with 22-harbor-robot.sh).
+harbor_setup "$HARBOR_TMP"
 # crane uses a boolean --insecure flag (vs skopeo's --tls-verify=<bool>).
-INSECURE=(); [ "$TLS_VERIFY" = "false" ] && INSECURE=(--insecure)
-
-# Curl auth in a real umask-077 config FILE (kept out of argv).
-HARBOR_CURL_CFG="${HARBOR_TMP}/curl.cfg"
-( umask 077; printf 'user = "%s:%s"\n' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" > "$HARBOR_CURL_CFG" )
-
-# ---- Harbor API helper (creds via a -K config file — not argv) ----
-harbor_api() {
-  # harbor_api METHOD PATH [json-body]
-  local method="$1" path="$2" body="${3:-}"
-  local args=(-sS -o /dev/null -w '%{http_code}' "${CURL_CACERT[@]}" -K "$HARBOR_CURL_CFG")
-  # Use --head for HEAD (curl -X HEAD still waits for a body -> curl error 18).
-  if [ "$method" = "HEAD" ]; then args+=(--head); else args+=(-X "$method"); fi
-  [ -n "$body" ] && args+=(-H 'Content-Type: application/json' -d "$body")
-  curl "${args[@]}" "${SCHEME}://${HARBOR_URL}/api/v2.0/${path}"
-}
-
-ensure_project() {
-  local name="$1" code
-  code="$(harbor_api HEAD "projects?project_name=${name}")"
-  if [ "$code" = "200" ]; then
-    log_info "Harbor project '$name' exists"
-  else
-    log_info "creating Harbor project '$name'"
-    # Public (HARBOR_PUBLIC_PROJECTS, default true): kubelet/containerd pull anonymously
-    # (no imagePullSecret on every workload). Push still requires auth (kaniko/crane log in).
-    # Set false for a private-project lab — you then supply an app-namespace imagePullSecret.
-    code="$(harbor_api POST "projects" "{\"project_name\":\"${name}\",\"public\":${HARBOR_PUBLIC_PROJECTS:-true}}")"
-    case "$code" in
-      201|409) log_info "project '$name' ready (http $code)" ;;
-      *) die "failed to create Harbor project '$name' (http $code)" ;;
-    esac
-  fi
-}
+INSECURE=(); [ "$HARBOR_TLS_VERIFY" = "false" ] && INSECURE=(--insecure)
 
 # ---- Registry login (password on stdin) ----
 log_info "logging in to Harbor $HARBOR_URL as $HARBOR_USERNAME"
