@@ -8,7 +8,7 @@ title Container — Air-gapped CI/CD on VMware VKS
 Person(dev, "Developer")
 
 System_Boundary(jb, "Jump box (internet side)") {
-  Container(mirror, "Mirror + builder", "skopeo, docker/podman", "Pulls images (images.txt + Tekton manifests), builds the deps-baked Maven builder image, pushes all to Harbor")
+  Container(mirror, "Mirror + builder", "crane, podman/docker", "Pulls images (images.txt + Tekton manifests), builds the deps-baked Maven builder image, pushes all to Harbor")
 }
 
 System_Boundary(vks, "Air-gapped VKS cluster") {

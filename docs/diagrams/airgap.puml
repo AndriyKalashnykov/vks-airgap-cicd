@@ -1,0 +1,22 @@
+@startuml airgap
+!include c4/C4_Context.puml
+!include _style.puml
+LAYOUT_LEFT_RIGHT()
+
+title Air-gap connectivity — the jump box is the only bridge
+
+System_Ext(net, "Internet", "Upstream registries + Maven Central\ngcr.io · ghcr.io · docker.io · repo.maven.apache.org")
+
+System_Boundary(jbz, "Jump box  ·  dual-homed (internet + cluster)") {
+  System(jb, "Mirror + offline builder", "crane copies images into Harbor;\nbuilds the deps-baked Maven builder")
+}
+
+System_Boundary(agz, "Air-gapped VKS cluster  ·  NO internet access") {
+  System(cluster, "Harbor · Gitea · Tekton · ArgoCD · webui", "The whole CI/CD platform runs here;\npulls images only from Harbor")
+}
+
+Rel(jb, net, "1 · pull images + Maven deps", "HTTPS (internet side)")
+Rel(jb, cluster, "2 · push mirrored images, install + wire", "HTTPS (cluster side)")
+
+SHOW_LEGEND()
+@enduml

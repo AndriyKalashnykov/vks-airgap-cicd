@@ -8,8 +8,8 @@ title Deployment — jump box + air-gapped VKS cluster
 Person(op, "Operator", "browses the UIs at *.vks.local")
 
 Deployment_Node(jb, "Jump box", "Ubuntu or PhotonOS · internet-connected") {
-  Container(cli, "Toolchain", "mise, skopeo, docker/podman, kubectl, tkn, argocd, helm")
-  Container(mir, "Mirror + builder", "skopeo copy · builder image build")
+  Container(cli, "Toolchain", "mise, crane, podman/docker, kubectl, tkn, argocd, helm")
+  Container(mir, "Mirror + builder", "crane copy · builder image build")
 }
 
 Deployment_Node(vks, "VKS workload cluster", "VMware vSphere Kubernetes Service · air-gapped") {

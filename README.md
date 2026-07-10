@@ -6,15 +6,18 @@
 # Air-gapped CI/CD on VMware VKS — Reference Demo
 
 Reference implementation of an end-to-end CI/CD pipeline for a **fully air-gapped**
-VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). The **pipeline
-surface** wires self-hosted **Gitea** + **Tekton** (test → **Kaniko** build → **Harbor**
-push → GitOps tag write-back) to the VKS-provided **Harbor** and **ArgoCD**; the
-**delivery surface** covers an OS-portable (Ubuntu/PhotonOS) jump-box image mirror
-(**crane**, dual-homed or sneakernet), a dependency-baked offline **Maven** builder, a
-pluggable ingress (**Istio** by default, **Traefik** optional) fronting the UIs at
-`*.vks.local`, and a one-command **KinD** end-to-end that proves the whole flow locally.
+VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surfaces:
 
-<p align="center"><img src="docs/diagrams/out/context.png" alt="System context: air-gapped CI/CD on VMware VKS" width="500"></p>
+- **Pipeline surface** — self-hosted **Gitea** + **Tekton** (test → **Kaniko** build →
+  **Harbor** push → GitOps tag write-back), wired to the VKS-provided **Harbor** + **ArgoCD**.
+- **Delivery surface** — an OS-portable (Ubuntu / PhotonOS) jump-box image mirror (**crane**,
+  dual-homed or sneakernet), a dependency-baked offline **Maven** builder, a pluggable ingress
+  (**Istio** default, **Traefik** optional) fronting the UIs at `*.vks.local`, and a one-command
+  **KinD** end-to-end that proves the whole flow locally.
+
+<p align="center"><img src="docs/diagrams/out/airgap.png" alt="Air-gap connectivity: the jump box bridges the internet and the air-gapped VKS cluster; the cluster itself has no internet access" width="820"></p>
+
+<p align="center"><em>The jump box is the only bridge — it pulls from the internet and pushes into the air-gapped cluster, which has no internet access of its own.</em></p>
 
 > A developer pushes a change to **Gitea** → **Tekton** runs tests, builds a container
 > image with **Kaniko** and pushes it to **Harbor** → Tekton bumps the image tag in the
@@ -110,9 +113,12 @@ make deps                                  # installs the full jump-box toolchai
   **requires Docker**: KinD's node and `cloud-provider-kind` run on the `kind` Docker network +
   socket. So a real air-gap run can be podman-only; `make e2e-kind` needs Docker.
 
-### Disk space on the jump box
+<details>
+<summary><strong>Sizing reference</strong> — jump-box disk space + guest-cluster resources (click to expand)</summary>
 
-Measured for the current image set (~30 images: 10 pinned in
+<br>
+
+**Jump-box disk space** — measured for the current image set (~30 images: 10 pinned in
 [`images/images.txt`](images/images.txt) plus the Tekton Pipelines+Triggers controller
 images pulled from their release manifests, which dominate the count — alongside Gitea,
 Kaniko, Maven, Temurin JDK/JRE, alpine/git, yq, and the ingress images). Figures are approximate.
@@ -134,9 +140,7 @@ overhead); **≥ 15 GB** sneakernet (adds the transferable bundle tarball). The 
 cluster** additionally stores these images in Harbor + each node's containerd (~5–6 GB) —
 that is cluster-side, separate from the jump box.
 
-### Guest (VKS workload) cluster sizing
-
-Sizing for the **guest cluster** where this project deploys **Gitea + Tekton (+ Dashboard) +
+**Guest (VKS workload) cluster sizing** — sizing for the **guest cluster** where this project deploys **Gitea + Tekton (+ Dashboard) +
 the webui app** and its images. Harbor and ArgoCD are **VKS-provided**, so they are budgeted
 separately (see the last bullet). Figures were measured on the live single-node KinD stack
 (no metrics-server, so per-pod RAM is the declared request or a working-set estimate).
@@ -160,6 +164,8 @@ separately (see the last bullet). Figures were measured on the live single-node 
   run (budget growth room — hence the 40 → 100 GB range).
 - **If Harbor + ArgoCD are co-located** in this same guest cluster (instead of provided
   externally), add roughly **+2 vCPU / +4 GB RAM / +5 GB disk** to each tier.
+
+</details>
 
 ## Tech stack
 
@@ -199,6 +205,10 @@ make verify                   # [cluster] end-to-end smoke test
 
 Harbor + ArgoCD are **provided by VKS** (blue in the diagrams). The jump box mirrors every
 image into Harbor; a `git push` then drives the whole CI/CD flow entirely inside the air gap.
+
+### System context
+
+<p align="center"><img src="docs/diagrams/out/context.png" alt="System context: air-gapped CI/CD on VMware VKS" width="640"></p>
 
 ### Containers
 
@@ -390,9 +400,13 @@ Check whether it already exists:
 kubectl -n ci get secret harbor-dockerconfig
 ```
 
-If you ever need to create or rotate it by hand (keeping the secret **off argv** — build the
-`config.json` on disk and load it from a file; kaniko needs the key named literally
-`config.json`, not `.dockerconfigjson`):
+<details>
+<summary>Create or rotate <code>harbor-dockerconfig</code> by hand (only if needed)</summary>
+
+<br>
+
+Keep the secret **off argv** — build the `config.json` on disk and load it from a file; kaniko
+needs the key named literally `config.json`, not `.dockerconfigjson`:
 
 ```bash
 umask 077
@@ -402,6 +416,8 @@ kubectl -n ci create secret generic harbor-dockerconfig \
   --from-file=config.json=/tmp/harbor-config.json --dry-run=client -o yaml | kubectl apply -f -
 rm -f /tmp/harbor-config.json
 ```
+
+</details>
 
 The Kubernetes secret is built from your Harbor **login/password**; Harbor's **REST API** is
 used only to create the *projects* (and, optionally, a robot account) — it does not create
@@ -425,7 +441,10 @@ the lab gave you. For **Gitea** (which you installed) and the deployed **app**, 
 or use `kubectl port-forward` — `kubectl -n gitea port-forward svc/gitea-http 3000:3000` and
 `kubectl -n webui port-forward svc/webui 18080:80`.
 
-### VKS-lab checklist (easy-to-miss items)
+<details>
+<summary><strong>VKS-lab checklist</strong> — easy-to-miss items (click to expand)</summary>
+
+<br>
 
 - **`.env.kind` must not exist** (step 0) — it is sourced after `.env` and silently forces
   kind values.
@@ -446,6 +465,8 @@ or use `kubectl port-forward` — `kubectl -n gitea port-forward svc/gitea-http 
   rights; otherwise create them first).
 - **Network reach (dual-homed):** the jump box must reach the VKS API server and the lab
   Harbor.
+
+</details>
 
 ## Demo walkthrough — drive the GitOps loop by hand
 
