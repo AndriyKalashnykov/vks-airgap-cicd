@@ -215,7 +215,7 @@ own-LB self-signed TLS; `End-to-end verified` + `verify-ingress SUCCESS` — all
 6. ⏳ `make ci` is GREEN (docs + diagrams). Docs/diagram sweep committed to the branch. Remaining
    before PR: run the step-2 insecure e2e on a quiet host, then PR + merge; refresh this backlog.
 
-Also this session: `links.md` (operator-local MEGA download links) added by the owner is now
+Also this session: `links.md` (operator-local, external licensed-artifact download links) added by the owner is now
 **gitignored/untracked** (owner's choice); `make docs-lint` was hardened to lint **tracked**
 markdown only (`git ls-files '*.md'`) so untracked operator scratch can never redden the gate
 again — RED-proven on a tracked violation, GREEN on the real tree.

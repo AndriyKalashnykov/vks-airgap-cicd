@@ -37,5 +37,5 @@ mise.local.toml
 # Jump-box harness runtime (internal kubeconfig)
 .jumpbox/
 
-# Operator-local download links (external MEGA URLs) — not committed
+# Operator-local download links (external, licensed artifacts) — not committed
 links.md

@@ -63,6 +63,16 @@ deps-mise: ## Install mise-managed tools from .mise.toml (java, maven, kubectl, 
 deps-prereqs: ## Install non-mise CLIs + OS packages (git, tkn, argocd, podman, ...) via 00-install-prereqs.sh
 	@$(SCRIPTS)/00-install-prereqs.sh
 
+.PHONY: install-vcf-clis install-argocd-vcf install-vcf-cli install-vcf-plugins
+install-vcf-clis: ## Install the Broadcom VCF/VKS lab CLIs (argocd-vcf + vcf + plugins), OS/arch-aware, sudo-free. Licensed artifacts from VCF_CLI_SRC_DIR (pre-downloaded) or the gitignored links.md. Lab-only — not needed for local KinD.
+	@$(SCRIPTS)/01-install-vcf-clis.sh all
+install-argocd-vcf: ## Install ONLY the VCF-flavored argocd CLI (ARGOCD_VCF_VERSION) for a real lab's ArgoCD
+	@$(SCRIPTS)/01-install-vcf-clis.sh argocd
+install-vcf-cli: ## Install ONLY the VCF Consumption CLI `vcf` (VCF_CLI_VERSION)
+	@$(SCRIPTS)/01-install-vcf-clis.sh vcf
+install-vcf-plugins: ## Install ONLY the VCF Consumption CLI plugin bundle (VCF_PLUGINS_VERSION; needs `vcf` first)
+	@$(SCRIPTS)/01-install-vcf-clis.sh plugins
+
 .PHONY: check-env
 check-env: ## STOPPER gate — fail if the committed .env.example source of truth is missing
 	@test -f .env.example || { \
