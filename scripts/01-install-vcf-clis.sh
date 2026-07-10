@@ -59,7 +59,7 @@ RESOLVED_ARCHIVE=""
 resolve_archive() {
   local cli="$1" glob="" name="" out m
   case "$cli" in
-    argocd)  name="$argocd_file";  glob="argocd-cli-${os}-${go_arch}-*" ;;
+    argocd)  name="$argocd_file";  glob="argocd-cli-${os}-${go_arch}-${ARGOCD_VCF_VERSION}*" ;;
     vcf)     name="$vcf_file";     glob="VCF-Consumption-CLI-*${VCF_CLI_VERSION}*.tar.gz" ;;
     plugins) name="$plugins_file"; glob="VCF-Consumption-CLI-*Plugin*${VCF_PLUGINS_VERSION}*.tar.gz" ;;
     *) die "resolve_archive: unknown cli '$cli'" ;;
@@ -67,7 +67,11 @@ resolve_archive() {
   out="${WORK}/${cli}-archive"
   if [ -f "${SRC_DIR}/${name}" ]; then
     log_info "using ${name} from VCF_CLI_SRC_DIR"; cp "${SRC_DIR}/${name}" "$out"
-  elif m="$(find "$SRC_DIR" -maxdepth 1 -type f -name "$glob" 2>/dev/null | head -1)" && [ -n "$m" ]; then
+  elif m="$(find "$SRC_DIR" -maxdepth 1 -type f -name "$glob" 2>/dev/null | sort | head -1)" && [ -n "$m" ]; then
+    # `sort` makes the pick deterministic across machines (find order is filesystem-dependent).
+    # The glob is version-pinned per cli, so only same-version archives can co-match here (e.g. an
+    # arch-agnostic "…-Binaries-…" bundle) — a differently-versioned artifact in the folder is
+    # never selected; the wrong-version case dies below, it does not silently pick.
     log_info "using $(basename "$m") from VCF_CLI_SRC_DIR"; cp "$m" "$out"
   else
     die "no ${cli} artifact for ${os}/${go_arch} in ${SRC_DIR} (looked for '${name}' or '${glob}') — put that archive in the folder"
