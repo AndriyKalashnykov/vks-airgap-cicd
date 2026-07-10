@@ -39,3 +39,6 @@ mise.local.toml
 
 # Operator-local download links (external, licensed artifacts) — not committed
 links.md
+
+# Operator-local Broadcom download token (live credential) — NEVER commit
+token.md

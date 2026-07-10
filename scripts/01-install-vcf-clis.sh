@@ -12,13 +12,15 @@
 # the operator's own mirror). Their download URLs live in a GITIGNORED `links.md`
 # (operator-local, never committed). Two supply modes, in priority order:
 #
-#   1) VCF_CLI_SRC_DIR — a directory already holding the downloaded artifacts. Preferred
-#      (and the only air-gap-correct path): download them on an internet box / carry them
-#      in, then point this at the dir. No network access needed.
-#   2) links file — auto-download from the URLs in the operator-local links file (default
-#      ./links.md; one artifact name per line and its URL on the next). Internet side only.
-#      Direct http(s) URLs use curl; a URL whose scheme needs a dedicated client falls back
-#      to a downloader (megatools/megadl/mega-get) if one is installed.
+#   1) Broadcom support portal (preferred) — an authenticated download TOKEN in the URL path
+#      (https://dl.broadcom.com/<TOKEN>/PROD/COMP/.../<file>). The links file holds the
+#      token-LESS `PROD/COMP/.../<file>` path per artifact; the token comes from
+#      BROADCOM_DOWNLOAD_TOKEN / BROADCOM_TOKEN_FILE (default ./token.md) and is fed to curl
+#      via a `-K` config file so it never appears in argv/ps.
+#   2) links file with a direct http(s) URL (a mirror) — curl (same secret-safe -K path).
+#      A MEGA URL also works but needs megatools/megadl/mega-get (curl can't decrypt a #key).
+#   3) VCF_CLI_SRC_DIR — a directory already holding the downloaded artifacts. The
+#      air-gap-correct path: download on an internet box / carry them in. No network needed.
 #
 # Sudo-free: installs to BIN_DIR (~/.local/bin by default), matching 00-install-prereqs.sh
 # (override BIN_DIR to install elsewhere). Usage:
@@ -68,38 +70,82 @@ links_url() {
   awk -v f="$1" '$0==f {getline; print; exit}' "$LINKS_FILE"
 }
 
-# fetch_url <url> <dest> — download <url> to <dest>. Prefer a dedicated downloader when one
-# is installed (some entitled links need a scheme-specific client); else curl for direct
-# http(s) URLs. The caller validates the result, so a wrong-content download is caught.
-fetch_url() {
-  local url="$1" dest="$2"
-  if   have megatools;  then run megatools dl --path "$(dirname "$dest")" "$url"
-  elif have megadl;     then run megadl --path "$(dirname "$dest")" "$url"
-  elif have mega-get;   then run mega-get "$url" "$dest"
-  else
-    case "$url" in
-      http://*|https://*) run curl -fSL "$url" -o "$dest" ;;
-      *) die "cannot fetch '${url}': no suitable downloader installed — pre-download the artifacts and set VCF_CLI_SRC_DIR=<dir>" ;;
-    esac
-  fi
+# Broadcom support-portal download: the token goes in the URL PATH
+# (https://dl.broadcom.com/<TOKEN>/PROD/COMP/.../<file>). The token is a CREDENTIAL —
+# read from BROADCOM_DOWNLOAD_TOKEN, else a token FILE (BROADCOM_TOKEN_FILE, default
+# ./token.md if present) — and NEVER placed in argv/ps (the assembled URL, which embeds
+# the token, is written to a `curl -K` config file). No auth header/creds needed.
+BROADCOM_DL_BASE="${BROADCOM_DL_BASE:-https://dl.broadcom.com}"
+
+bcom_token() {
+  if [ -n "${BROADCOM_DOWNLOAD_TOKEN:-}" ]; then printf '%s' "$BROADCOM_DOWNLOAD_TOKEN"; return 0; fi
+  local f="${BROADCOM_TOKEN_FILE:-${REPO_ROOT}/token.md}"
+  [ -f "$f" ] && tr -d '\n\r' < "$f"
 }
 
-# ensure_artifact <filename> — guarantee $WORK/<filename> exists, from VCF_CLI_SRC_DIR if
-# present, else by downloading its links.md URL. Dies with an actionable message otherwise.
-ensure_artifact() {
-  local f="$1"
-  if [ -n "$SRC_DIR" ] && [ -f "${SRC_DIR}/${f}" ]; then
-    log_info "using pre-downloaded ${f} from VCF_CLI_SRC_DIR"
-    cp "${SRC_DIR}/${f}" "${WORK}/${f}"
-    return 0
+# curl_via_config <url> <dest> — curl <url> to <dest> via a `-K` config file so a token
+# embedded in the URL never appears in argv/ps. The logged command is `curl -K <cfg>`.
+curl_via_config() {
+  local url="$1" dest="$2" cfg rc
+  umask 077; cfg="$(mktemp)"
+  { printf 'url = "%s"\n' "$url"; printf 'output = "%s"\n' "$dest"; printf 'fail\nlocation\nsilent\nshow-error\n'; } > "$cfg"
+  curl -K "$cfg"; rc=$?
+  rm -f "$cfg"
+  return "$rc"
+}
+
+# fetch_url <url> <dest> — download <url> to <dest>. Routing by URL shape:
+#   - a Broadcom path (PROD/COMP/...) -> assemble https://dl.broadcom.com/<TOKEN>/<path>, curl (secret-safe)
+#   - a direct http(s) URL (portal/mirror; may embed a token) -> curl (secret-safe)
+#   - a MEGA URL (mega.nz) -> megatools/megadl/mega-get (curl can't decrypt the #key)
+# The caller validates the result (gzip -t), so a wrong-content download is caught.
+fetch_url() {
+  local url="$1" dest="$2" tok
+  case "$url" in
+    PROD/*|/PROD/*|COMP/*)
+      tok="$(bcom_token)"
+      [ -n "$tok" ] || die "Broadcom path '${url}' needs a token — set BROADCOM_DOWNLOAD_TOKEN or BROADCOM_TOKEN_FILE (a token.md)"
+      curl_via_config "${BROADCOM_DL_BASE}/${tok}/${url#/}" "$dest" ;;
+    *mega.nz*|*mega.co.nz*)
+      if   have megatools;  then run megatools dl --path "$(dirname "$dest")" "$url"
+      elif have megadl;     then run megadl --path "$(dirname "$dest")" "$url"
+      elif have mega-get;   then run mega-get "$url" "$dest"
+      else die "MEGA URL needs megatools/megadl/mega-get — install one, or pre-download to VCF_CLI_SRC_DIR"; fi ;;
+    http://*|https://*)
+      curl_via_config "$url" "$dest" ;;
+    *) die "cannot fetch '${url}': not a Broadcom PROD/... path, a direct http(s) URL, or a MEGA URL — pre-download to VCF_CLI_SRC_DIR" ;;
+  esac
+}
+
+# resolve_archive <cli> — locate/download the archive for <cli>, echo its local path.
+# Source priority (first that applies): a per-CLI direct URL env var (a Broadcom-portal
+# PRE-SIGNED URL — self-signed, time-limited — or a mirror) -> VCF_CLI_SRC_DIR (exact name
+# OR a version glob, so a portal `...-Binaries-...` bundle is found too) -> the links file
+# (by the versioned filename OR the bare <cli> key). Validates the result is a real gzip.
+resolve_archive() {
+  local cli="$1" url="" glob="" name="" out u m
+  case "$cli" in
+    argocd)  url="${ARGOCD_VCF_URL:-}"; glob="argocd-cli-*${ARGOCD_VCF_VERSION}*";                    name="$argocd_file" ;;
+    vcf)     url="${VCF_CLI_URL:-}";     glob="VCF-Consumption-CLI-*${VCF_CLI_VERSION}*.tar.gz";        name="$vcf_file" ;;
+    plugins) url="${VCF_PLUGINS_URL:-}"; glob="VCF-Consumption-CLI-*Plugin*${VCF_PLUGINS_VERSION}*.tar.gz"; name="$plugins_file" ;;
+    *) die "resolve_archive: unknown cli '$cli'" ;;
+  esac
+  out="${WORK}/${cli}-archive"
+  if [ -n "$url" ]; then
+    log_info "fetching ${cli} archive from its configured URL"
+    fetch_url "$url" "$out"
+  elif [ -n "$SRC_DIR" ] && [ -f "${SRC_DIR}/${name}" ]; then
+    log_info "using pre-downloaded ${name} from VCF_CLI_SRC_DIR"; cp "${SRC_DIR}/${name}" "$out"
+  elif [ -n "$SRC_DIR" ] && m="$(find "$SRC_DIR" -maxdepth 1 -name "$glob" 2>/dev/null | head -1)" && [ -n "$m" ]; then
+    log_info "using pre-downloaded $(basename "$m") from VCF_CLI_SRC_DIR"; cp "$m" "$out"
+  else
+    u="$(links_url "$name" || true)"; [ -n "$u" ] || u="$(links_url "$cli" || true)"
+    [ -n "$u" ] || die "no source for ${cli}: set ${cli}_URL (portal pre-signed URL / mirror), VCF_CLI_SRC_DIR, or a ${LINKS_FILE} entry"
+    log_info "fetching ${cli} archive"; fetch_url "$u" "$out"
   fi
-  local url; url="$(links_url "$f" || true)"
-  [ -n "$url" ] || die "cannot find '${f}': set VCF_CLI_SRC_DIR to a dir containing it, or add it to ${LINKS_FILE}"
-  log_info "fetching ${f}"
-  fetch_url "$url" "${WORK}/${f}"
-  [ -s "${WORK}/${f}" ] || die "download did not produce ${WORK}/${f}"
-  # Validate: the artifact must be a real gzip, not an HTML error page from a bad fetch.
-  gzip -t "${WORK}/${f}" 2>/dev/null || die "'${f}' is not a valid gzip (bad/blocked download?) — pre-download it and set VCF_CLI_SRC_DIR"
+  [ -s "$out" ] || die "download did not produce an archive for ${cli}"
+  gzip -t "$out" 2>/dev/null || die "the ${cli} archive is not a valid gzip (bad/blocked/expired download?) — re-generate the URL or use VCF_CLI_SRC_DIR"
+  printf '%s' "$out"
 }
 
 # --- Installers --------------------------------------------------------------
@@ -107,37 +153,47 @@ ensure_artifact() {
 install_argocd_vcf() {
   log_info "installing argocd (VCF ${ARGOCD_VCF_VERSION}, ${os}/${go_arch}) -> ${BIN_DIR}/argocd"
   log_warn "this is the VCF-flavored argocd for a real lab; it shadows any upstream argocd in ${BIN_DIR}"
-  ensure_artifact "$argocd_file"
-  # The .gz decompresses to the argocd binary; stream it straight to BIN_DIR (name-agnostic).
-  gunzip -c "${WORK}/${argocd_file}" > "${BIN_DIR}/argocd"
-  chmod 0755 "${BIN_DIR}/argocd"
+  local ar; ar="$(resolve_archive argocd)"
+  # The argocd artifact is either a bare .gz of the binary (MEGA) or a tarball/bundle (portal).
+  if tar -tzf "$ar" >/dev/null 2>&1; then
+    local d bin; d="$(mktemp -d)"; tar -xzf "$ar" -C "$d"
+    bin="$(find "$d" -type f \( -name "argocd-cli-${os}-${go_arch}*" -o -name "argocd-${os}-${go_arch}" -o -name argocd \) | head -1)"
+    [ -n "$bin" ] || { rm -rf "$d"; die "argocd binary not found inside the archive"; }
+    install -m 0755 "$bin" "${BIN_DIR}/argocd"; rm -rf "$d"
+  else
+    gunzip -c "$ar" > "${BIN_DIR}/argocd"; chmod 0755 "${BIN_DIR}/argocd"
+  fi
   "${BIN_DIR}/argocd" version --client || log_warn "argocd installed but 'version --client' failed"
 }
 
 install_vcf_cli() {
-  [ "$os" = linux ] || die "the VCF Consumption CLI is Linux-only; no ${os} artifact exists"
-  log_info "installing vcf (VCF Consumption CLI ${VCF_CLI_VERSION}, linux/${go_arch}) -> ${BIN_DIR}/vcf"
-  ensure_artifact "$vcf_file"
-  run tar -xf "${WORK}/${vcf_file}" -C "$WORK"
-  # The tarball ships a `vcf-cli-linux_<arch>` binary; find it robustly.
-  local bin; bin="$(find "$WORK" -maxdepth 2 -type f -name "vcf-cli-linux_${go_arch}" | head -1)"
-  [ -n "$bin" ] || die "vcf-cli-linux_${go_arch} not found inside ${vcf_file}"
-  install -m 0755 "$bin" "${BIN_DIR}/vcf"
+  [ "$os" = linux ] || die "the VCF Consumption CLI is Linux-only for this installer (no ${os} target)"
+  log_info "installing vcf (VCF Consumption CLI ${VCF_CLI_VERSION}, ${os}/${go_arch}) -> ${BIN_DIR}/vcf"
+  local ar d bin; ar="$(resolve_archive vcf)"
+  d="$(mktemp -d)"; tar -xzf "$ar" -C "$d"
+  # Flat tarball (vcf-cli-linux_<arch> at root) OR a multi-arch "Binaries" bundle
+  # (<os>/<arch>/v<ver>/vcf-cli-<os>_<arch>) — find at ANY depth.
+  bin="$(find "$d" -type f -name "vcf-cli-${os}_${go_arch}" | head -1)"
+  [ -n "$bin" ] || { rm -rf "$d"; die "vcf-cli-${os}_${go_arch} not found inside the archive"; }
+  install -m 0755 "$bin" "${BIN_DIR}/vcf"; rm -rf "$d"
   "${BIN_DIR}/vcf" version || log_warn "vcf installed but 'vcf version' failed"
 }
 
 install_vcf_plugins() {
-  [ "$os" = linux ] || die "the VCF Consumption CLI plugin bundle is Linux-only; no ${os} artifact exists"
+  [ "$os" = linux ] || die "the VCF Consumption CLI plugin bundle is Linux-only for this installer (no ${os} target)"
   have vcf || [ -x "${BIN_DIR}/vcf" ] || die "install the vcf CLI first (make install-vcf-cli)"
   local vcf_bin; vcf_bin="$(command -v vcf || echo "${BIN_DIR}/vcf")"
-  log_info "installing vcf plugins (bundle ${VCF_PLUGINS_VERSION}, linux/${go_arch})"
-  ensure_artifact "$plugins_file"
-  local pdir="${WORK}/plugins"
-  mkdir -p "$pdir"
-  run tar -zxf "${WORK}/${plugins_file}" -C "$pdir"
+  log_info "installing vcf plugins (bundle ${VCF_PLUGINS_VERSION}, ${os}/${go_arch})"
+  local ar pdir src; ar="$(resolve_archive plugins)"
+  pdir="${WORK}/plugins"; mkdir -p "$pdir"; tar -xzf "$ar" -C "$pdir"
+  # `vcf plugin install all --local-source` wants the dir holding the plugin binaries. A
+  # multi-arch bundle nests them under <os>/<arch>/...; point at that subdir when present.
+  src="$pdir"
+  local archdir; archdir="$(find "$pdir" -type d -path "*/${os}/${go_arch}" | head -1)"
+  [ -n "$archdir" ] && src="$archdir"
   # Clear any stale local plugin state so the bundle installs cleanly (matches the vendor steps).
   rm -rf "${HOME}/.local/vcf" "${HOME}/.local/vcf-cli-telemetry"
-  run "$vcf_bin" plugin install all --local-source "$pdir"
+  run "$vcf_bin" plugin install all --local-source "$src"
   "$vcf_bin" plugin list || log_warn "plugins installed but 'vcf plugin list' failed"
 }
 
