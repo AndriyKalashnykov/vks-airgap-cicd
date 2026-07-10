@@ -318,12 +318,25 @@ everything via `kubectl`, so this is optional for the demo. They install **sudo-
 
 **Supply them as a folder.** Download the artifacts — however you have entitlement (the
 [Broadcom support portal](https://support.broadcom.com) or an internal mirror) — on an
-internet-connected box, put them **all in one directory**, and point `VCF_CLI_SRC_DIR` at it.
-This is the air-gap-correct path: carry the folder in, no download client / token / network at
-install time. The folder may hold per-arch files and/or the portal's multi-arch "Binaries" bundles.
+internet-connected box, drop them **all in one directory** (e.g. your browser's default
+`~/Downloads/vcf`), and point `VCF_CLI_SRC_DIR` at it. This is the air-gap-correct path: carry
+the folder in, no download client / token / network at install time.
+
+**Just dump everything in there — the installer auto-selects.** You don't have to prune the
+folder to this box's platform: it may hold every arch (`…-Linux_AMD64-…` + `…-Linux_ARM64-…`),
+macOS builds, **and** the portal's multi-arch `…-Binaries-…` bundle, all at once. The installer
+picks the archive matching **this jump box's OS/arch** and the **pinned versions** (from
+`.env.example`) and ignores the rest — a mixed folder resolves deterministically, and if the
+pinned version isn't present it errors clearly rather than ever installing a different version.
+
+`VCF_CLI_SRC_DIR` is **required** — the installer does not guess where you dropped the files. Set
+it on the command line, or uncomment it in `.env` (gitignored) so every `make` invocation picks
+it up. The version pins in `.env.example` already match the current portal artifacts, so normally
+you only set the folder:
 
 ```bash
-make install-vcf-clis VCF_CLI_SRC_DIR=~/vcf-clis   # argocd-vcf + vcf + vcf plugins
+make install-vcf-clis VCF_CLI_SRC_DIR=~/Downloads/vcf   # argocd-vcf + vcf + vcf plugins
+# or put it in .env once:  VCF_CLI_SRC_DIR=/home/you/Downloads/vcf   → then just `make install-vcf-clis`
 # versions are pinned in .env.example (ARGOCD_VCF_VERSION / VCF_CLI_VERSION / VCF_PLUGINS_VERSION);
 # keep them in sync with the artifacts you place in the folder.
 ```
