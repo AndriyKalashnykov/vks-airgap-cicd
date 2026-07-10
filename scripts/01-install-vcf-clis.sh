@@ -1,30 +1,18 @@
 #!/usr/bin/env bash
-# scripts/01-install-vcf-clis.sh — download + install the Broadcom VCF/VKS lab CLIs a
-# jump box needs to drive a REAL VCF/VKS 9.1 lab. These are NOT needed for the local KinD
-# flow (which uses the upstream argocd from 00-install-prereqs.sh); install them only when
-# targeting an actual lab:
+# scripts/01-install-vcf-clis.sh — install the Broadcom VCF/VKS lab CLIs a jump box needs to
+# drive a REAL VCF/VKS 9.1 lab: the VCF-flavored argocd, the VCF Consumption CLI (vcf), and its
+# plugin bundle. NOT needed for the local KinD flow (that uses the upstream argocd from
+# 00-install-prereqs.sh) — install these only when targeting an actual lab.
 #
-#   - argocd (VCF build, e.g. v3.0.19-vcf)         — talk to the lab's VKS-provided ArgoCD
-#   - vcf    (VCF Consumption CLI, e.g. 9.1.0.x)    — VKS auth / cluster access
-#   - vcf plugins (Consumption CLI plugin bundle)   — the `vcf` subcommand plugins
+# The artifacts are Broadcom-LICENSED and OPERATOR-SUPPLIED. Download them however you have
+# entitlement (the Broadcom support portal, an internal mirror, ...) on an internet-connected
+# box, put them ALL in ONE directory, and point VCF_CLI_SRC_DIR at it — the air-gap-correct
+# path (carry the folder in; no download client / token / network at install time). The folder
+# may hold per-arch files AND/OR the portal's multi-arch "Binaries" bundles; this script picks
+# the right archive for THIS jump box's OS/arch and extracts the matching binary.
 #
-# These are Broadcom-LICENSED binaries the operator supplies (entitled download portal or
-# the operator's own mirror). Their download URLs live in a GITIGNORED `links.md`
-# (operator-local, never committed). Two supply modes, in priority order:
-#
-#   1) Broadcom support portal (preferred) — an authenticated download TOKEN in the URL path
-#      (https://dl.broadcom.com/<TOKEN>/PROD/COMP/.../<file>). The links file holds the
-#      token-LESS `PROD/COMP/.../<file>` path per artifact; the token comes from
-#      BROADCOM_DOWNLOAD_TOKEN / BROADCOM_TOKEN_FILE (default ./token.md) and is fed to curl
-#      via a `-K` config file so it never appears in argv/ps.
-#   2) links file with a direct http(s) URL (a mirror) — curl (same secret-safe -K path).
-#      A MEGA URL also works but needs megatools/megadl/mega-get (curl can't decrypt a #key).
-#   3) VCF_CLI_SRC_DIR — a directory already holding the downloaded artifacts. The
-#      air-gap-correct path: download on an internet box / carry them in. No network needed.
-#
-# Sudo-free: installs to BIN_DIR (~/.local/bin by default), matching 00-install-prereqs.sh
-# (override BIN_DIR to install elsewhere). Usage:
-#   scripts/01-install-vcf-clis.sh [all|argocd|vcf|plugins]   (default: all)
+# Sudo-free: installs to BIN_DIR (~/.local/bin by default). Usage:
+#   VCF_CLI_SRC_DIR=<dir> scripts/01-install-vcf-clis.sh [all|argocd|vcf|plugins]   (default: all)
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
@@ -33,22 +21,23 @@ load_env
 
 WHAT="${1:-all}"
 BIN_DIR="${BIN_DIR:-${HOME}/.local/bin}"
-LINKS_FILE="${LINKS_FILE:-${REPO_ROOT}/links.md}"
-SRC_DIR="${VCF_CLI_SRC_DIR:-}"
+# The one input: a directory holding the downloaded, licensed artifacts.
+SRC_DIR="${VCF_CLI_SRC_DIR:?set VCF_CLI_SRC_DIR to the directory holding the downloaded VCF/VKS lab CLI artifacts (argocd/vcf/plugins)}"
 
-# Pinned versions (operator-supplied — these track whatever licensed artifacts you hold;
-# Renovate cannot bump a MEGA/entitled download, so they live in .env.example, not renovate).
+# Pinned versions (operator-supplied — track whatever licensed artifacts you hold; Renovate
+# cannot bump a licensed download, so they live in .env.example, not renovate).
 ARGOCD_VCF_VERSION="${ARGOCD_VCF_VERSION:?set ARGOCD_VCF_VERSION in .env.example (e.g. v3.0.19-vcf)}"
 VCF_CLI_VERSION="${VCF_CLI_VERSION:?set VCF_CLI_VERSION in .env.example (e.g. 9.1.0.0.25296329)}"
 VCF_PLUGINS_VERSION="${VCF_PLUGINS_VERSION:?set VCF_PLUGINS_VERSION in .env.example (e.g. 9.1.0.0300.25509668)}"
 
+[ -d "$SRC_DIR" ] || die "VCF_CLI_SRC_DIR '$SRC_DIR' is not a directory"
 mkdir -p "$BIN_DIR"
 case ":$PATH:" in *":$BIN_DIR:"*) : ;; *) log_warn "add $BIN_DIR to your PATH" ;; esac
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# --- OS/arch → the tokens used in the artifact filenames ----------------------
+# --- OS/arch of THIS jump box → the tokens used in the artifact filenames ------
 os="$(uname -s)"; os="${os,,}"                         # linux | darwin (bash lowercase, no `tr`)
 case "$(uname -m)" in
   x86_64|amd64)  go_arch=amd64; vcf_arch=AMD64 ;;
@@ -56,109 +45,37 @@ case "$(uname -m)" in
   *) die "unsupported machine arch: $(uname -m)" ;;
 esac
 
-# Artifact filenames (match the naming in links.md), parameterized by the pinned versions.
+# Expected vendor filenames for this OS/arch, parameterized by the pinned versions.
 argocd_file="argocd-cli-${os}-${go_arch}-${ARGOCD_VCF_VERSION}.gz"
 vcf_file="VCF-Consumption-CLI-Linux_${vcf_arch}-${VCF_CLI_VERSION}.tar.gz"
 plugins_file="VCF-Consumption-CLI-PluginBundle-Linux_${vcf_arch}-${VCF_PLUGINS_VERSION}.tar.gz"
 
-# --- Helpers -----------------------------------------------------------------
+RESOLVED_ARCHIVE=""
 
-# links_url <filename> — print the URL that follows <filename> in the links file (each
-# artifact name is on one line and its URL on the next).
-links_url() {
-  [ -f "$LINKS_FILE" ] || return 1
-  awk -v f="$1" '$0==f {getline; print; exit}' "$LINKS_FILE"
-}
-
-# Broadcom support-portal download: the token goes in the URL PATH
-# (https://dl.broadcom.com/<TOKEN>/PROD/COMP/.../<file>). The token is a CREDENTIAL —
-# read from BROADCOM_DOWNLOAD_TOKEN, else a token FILE (BROADCOM_TOKEN_FILE, default
-# ./token.md if present) — and NEVER placed in argv/ps (the assembled URL, which embeds
-# the token, is written to a `curl -K` config file). No auth header/creds needed.
-BROADCOM_DL_BASE="${BROADCOM_DL_BASE:-https://dl.broadcom.com}"
-
-bcom_token() {
-  if [ -n "${BROADCOM_DOWNLOAD_TOKEN:-}" ]; then printf '%s' "$BROADCOM_DOWNLOAD_TOKEN"; return 0; fi
-  local f="${BROADCOM_TOKEN_FILE:-${REPO_ROOT}/token.md}"
-  [ -f "$f" ] && tr -d '\n\r' < "$f"
-}
-
-# curl_via_config <url> <dest> — curl <url> to <dest> via a `-K` config file so a token
-# embedded in the URL never appears in argv/ps. The logged command is `curl -K <cfg>`.
-curl_via_config() {
-  local url="$1" dest="$2" cfg rc
-  umask 077; cfg="$(mktemp)"
-  { printf 'url = "%s"\n' "$url"; printf 'output = "%s"\n' "$dest"; printf 'fail\nlocation\nsilent\nshow-error\n'; } > "$cfg"
-  curl -K "$cfg"; rc=$?
-  rm -f "$cfg"
-  return "$rc"
-}
-
-# fetch_url <url> <dest> — download <url> to <dest>. Routing by URL shape:
-#   - a Broadcom path (PROD/COMP/...) -> assemble https://dl.broadcom.com/<TOKEN>/<path>, curl (secret-safe)
-#   - a direct http(s) URL (portal/mirror; may embed a token) -> curl (secret-safe)
-#   - a MEGA URL (mega.nz) -> megatools/megadl/mega-get (curl can't decrypt the #key)
-# The caller validates the result (gzip -t), so a wrong-content download is caught.
-fetch_url() {
-  local url="$1" dest="$2" tok
-  case "$url" in
-    PROD/*|/PROD/*|COMP/*)
-      tok="$(bcom_token)"
-      [ -n "$tok" ] || die "Broadcom path '${url}' needs a token — set BROADCOM_DOWNLOAD_TOKEN or BROADCOM_TOKEN_FILE (a token.md)"
-      curl_via_config "${BROADCOM_DL_BASE}/${tok}/${url#/}" "$dest" ;;
-    *mega.nz*|*mega.co.nz*)
-      # MEGA encrypts client-side (the #key fragment) — curl can't decrypt it; use a MEGA client.
-      # megatools/megadl write to --path under the file's ORIGINAL name (they ignore a dest
-      # basename), so download into a fresh temp dir and move the single file to $dest.
-      # mega-get takes an explicit dest, so it writes to $dest directly.
-      if have megatools || have megadl; then
-        local td f
-        td="$(mktemp -d)"
-        # Redirect the client's stdout to stderr: megatools prints its progress bar to STDOUT,
-      # which would otherwise pollute a caller that captures this function via $(...).
-      if have megatools; then run megatools dl --path "$td" "$url" 1>&2; else run megadl --path "$td" "$url" 1>&2; fi
-        f="$(find "$td" -type f | head -1)"
-        [ -n "$f" ] || { rm -rf "$td"; die "MEGA download produced no file (bad link/key?)"; }
-        mv "$f" "$dest"; rm -rf "$td"
-      elif have mega-get; then run mega-get "$url" "$dest" 1>&2
-      else die "MEGA URL needs megatools/megadl/mega-get — install one, or pre-download to VCF_CLI_SRC_DIR"; fi ;;
-    http://*|https://*)
-      curl_via_config "$url" "$dest" ;;
-    *) die "cannot fetch '${url}': not a Broadcom PROD/... path, a direct http(s) URL, or a MEGA URL — pre-download to VCF_CLI_SRC_DIR" ;;
-  esac
-}
-
-# resolve_archive <cli> — locate/download the archive for <cli>, echo its local path.
-# Source priority (first that applies): a per-CLI direct URL env var (a Broadcom-portal
-# PRE-SIGNED URL — self-signed, time-limited — or a mirror) -> VCF_CLI_SRC_DIR (exact name
-# OR a version glob, so a portal `...-Binaries-...` bundle is found too) -> the links file
-# (by the versioned filename OR the bare <cli> key). Validates the result is a real gzip.
+# resolve_archive <cli> — locate the <cli> archive in VCF_CLI_SRC_DIR (the exact vendor name for
+# this OS/arch, OR a version glob so the portal's multi-arch "…-Binaries-…" bundle also matches),
+# copy it into $WORK, validate it's a gzip, and set RESOLVED_ARCHIVE. Returns via a global (NOT
+# stdout) so no sub-tool's output can corrupt the path.
 resolve_archive() {
-  local cli="$1" url="" glob="" name="" out u m
+  local cli="$1" glob="" name="" out m
   case "$cli" in
-    argocd)  url="${ARGOCD_VCF_URL:-}"; glob="argocd-cli-*${ARGOCD_VCF_VERSION}*";                    name="$argocd_file" ;;
-    vcf)     url="${VCF_CLI_URL:-}";     glob="VCF-Consumption-CLI-*${VCF_CLI_VERSION}*.tar.gz";        name="$vcf_file" ;;
-    plugins) url="${VCF_PLUGINS_URL:-}"; glob="VCF-Consumption-CLI-*Plugin*${VCF_PLUGINS_VERSION}*.tar.gz"; name="$plugins_file" ;;
+    argocd)  name="$argocd_file";  glob="argocd-cli-${os}-${go_arch}-*" ;;
+    vcf)     name="$vcf_file";     glob="VCF-Consumption-CLI-*${VCF_CLI_VERSION}*.tar.gz" ;;
+    plugins) name="$plugins_file"; glob="VCF-Consumption-CLI-*Plugin*${VCF_PLUGINS_VERSION}*.tar.gz" ;;
     *) die "resolve_archive: unknown cli '$cli'" ;;
   esac
   out="${WORK}/${cli}-archive"
-  if [ -n "$url" ]; then
-    log_info "fetching ${cli} archive from its configured URL"
-    fetch_url "$url" "$out"
-  elif [ -n "$SRC_DIR" ] && [ -f "${SRC_DIR}/${name}" ]; then
-    log_info "using pre-downloaded ${name} from VCF_CLI_SRC_DIR"; cp "${SRC_DIR}/${name}" "$out"
-  elif [ -n "$SRC_DIR" ] && m="$(find "$SRC_DIR" -maxdepth 1 -name "$glob" 2>/dev/null | head -1)" && [ -n "$m" ]; then
-    log_info "using pre-downloaded $(basename "$m") from VCF_CLI_SRC_DIR"; cp "$m" "$out"
+  if [ -f "${SRC_DIR}/${name}" ]; then
+    log_info "using ${name} from VCF_CLI_SRC_DIR"; cp "${SRC_DIR}/${name}" "$out"
+  elif m="$(find "$SRC_DIR" -maxdepth 1 -type f -name "$glob" 2>/dev/null | head -1)" && [ -n "$m" ]; then
+    log_info "using $(basename "$m") from VCF_CLI_SRC_DIR"; cp "$m" "$out"
   else
-    u="$(links_url "$name" || true)"; [ -n "$u" ] || u="$(links_url "$cli" || true)"
-    [ -n "$u" ] || die "no source for ${cli}: set ${cli}_URL (portal pre-signed URL / mirror), VCF_CLI_SRC_DIR, or a ${LINKS_FILE} entry"
-    log_info "fetching ${cli} archive"; fetch_url "$u" "$out"
+    die "no ${cli} artifact for ${os}/${go_arch} in ${SRC_DIR} (looked for '${name}' or '${glob}') — put that archive in the folder"
   fi
-  [ -s "$out" ] || die "download did not produce an archive for ${cli}"
-  gzip -t "$out" 2>/dev/null || die "the ${cli} archive is not a valid gzip (bad/blocked/expired download?) — re-generate the URL or use VCF_CLI_SRC_DIR"
-  # Return via a global (NOT stdout): download tools like megatools print progress to stdout,
-  # and a `$(resolve_archive ...)` capture would fold that into the path. RESOLVED_ARCHIVE is
-  # immune to any sub-tool output.
+  [ -s "$out" ] || die "the ${cli} archive is empty"
+  # Portable gzip-validity check: decompress to /dev/null. `gunzip -c` works on GNU gzip AND
+  # Photon's toybox gzip (which has NO `gzip -t` — it errors "Unknown option 't'").
+  gunzip -c "$out" >/dev/null 2>&1 || die "the ${cli} archive is not a valid gzip (corrupt/incomplete artifact?)"
   RESOLVED_ARCHIVE="$out"
 }
 
@@ -167,16 +84,22 @@ resolve_archive() {
 install_argocd_vcf() {
   log_info "installing argocd (VCF ${ARGOCD_VCF_VERSION}, ${os}/${go_arch}) -> ${BIN_DIR}/argocd"
   log_warn "this is the VCF-flavored argocd for a real lab; it shadows any upstream argocd in ${BIN_DIR}"
-  local ar; resolve_archive argocd; ar="$RESOLVED_ARCHIVE"
-  # The argocd artifact is either a bare .gz of the binary (MEGA) or a tarball/bundle (portal).
-  if tar -tzf "$ar" >/dev/null 2>&1; then
-    local d bin; d="$(mktemp -d)"; tar -xzf "$ar" -C "$d"
+  local ar d bin; resolve_archive argocd; ar="$RESOLVED_ARCHIVE"
+  # The argocd artifact is either a bare .gz of the binary OR a tarball/bundle. Detect
+  # robustly: try to extract it as a tar.gz — if that yields at least one file, it's a bundle
+  # (find the argocd binary); otherwise the .gz is the raw binary, so gunzip it straight out.
+  # (The "extracted a file?" check avoids the false-positive where `tar` reads a tiny non-tar
+  # gzip as an empty archive.)
+  d="$(mktemp -d)"
+  if tar -xzf "$ar" -C "$d" 2>/dev/null && [ -n "$(find "$d" -type f 2>/dev/null | head -1)" ]; then
     bin="$(find "$d" -type f \( -name "argocd-cli-${os}-${go_arch}*" -o -name "argocd-${os}-${go_arch}" -o -name argocd \) | head -1)"
+    [ -n "$bin" ] || bin="$(find "$d" -type f -name 'argocd*' | head -1)"
     [ -n "$bin" ] || { rm -rf "$d"; die "argocd binary not found inside the archive"; }
-    install -m 0755 "$bin" "${BIN_DIR}/argocd"; rm -rf "$d"
+    install -m 0755 "$bin" "${BIN_DIR}/argocd"
   else
     gunzip -c "$ar" > "${BIN_DIR}/argocd"; chmod 0755 "${BIN_DIR}/argocd"
   fi
+  rm -rf "$d"
   "${BIN_DIR}/argocd" version --client || log_warn "argocd installed but 'version --client' failed"
 }
 
@@ -200,8 +123,7 @@ install_vcf_plugins() {
   log_info "installing vcf plugins (bundle ${VCF_PLUGINS_VERSION}, ${os}/${go_arch})"
   local ar pdir src; resolve_archive plugins; ar="$RESOLVED_ARCHIVE"
   pdir="${WORK}/plugins"; mkdir -p "$pdir"; tar -xzf "$ar" -C "$pdir"
-  # `vcf plugin install all --local-source` wants the dir holding the plugin binaries. A
-  # multi-arch bundle nests them under <os>/<arch>/...; point at that subdir when present.
+  # A multi-arch bundle nests the plugins under <os>/<arch>/...; point --local-source there.
   src="$pdir"
   local archdir; archdir="$(find "$pdir" -type d -path "*/${os}/${go_arch}" | head -1)"
   [ -n "$archdir" ] && src="$archdir"
@@ -212,8 +134,7 @@ install_vcf_plugins() {
 }
 
 # --- Preflight: the extraction/install tools every path needs (clear error over a cryptic
-#     mid-run failure). `find` (findutils) is the usual gap on a bare Photon box; `tar`/`gzip`
-#     on minimal images. The MEGA client (megatools) is checked in fetch_url, only when needed.
+#     mid-run failure). `find` (findutils) is the usual gap on a bare Photon box.
 for _t in tar gzip find install; do require_cmd "$_t"; done
 
 # --- Dispatch ----------------------------------------------------------------

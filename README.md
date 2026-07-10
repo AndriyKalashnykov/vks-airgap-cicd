@@ -311,35 +311,27 @@ make vks-login    # validates $KUBECONFIG + context against the lab cluster
 ```
 
 **Step 3b (optional) — install the Broadcom VCF/VKS lab CLIs.** To drive the lab's
-VKS-provided ArgoCD/registry directly (open its UI, `argocd login`, or the `vcf` Consumption
-CLI + plugins) you need the **licensed** `argocd-vcf` + `vcf` binaries from the Broadcom
-support portal — the pipeline itself wires everything via `kubectl`, so this is optional for
-the demo. They install **sudo-free** to `~/.local/bin`, OS/arch-aware:
+VKS-provided ArgoCD directly (`argocd login`, open its UI) or use the `vcf` Consumption CLI +
+plugins, you need the **licensed** `argocd-vcf` + `vcf` binaries. The pipeline itself wires
+everything via `kubectl`, so this is optional for the demo. They install **sudo-free** to
+`~/.local/bin`, and the installer picks the right archive for the jump box's **OS/arch**.
+
+**Supply them as a folder.** Download the artifacts — however you have entitlement (the
+[Broadcom support portal](https://support.broadcom.com) or an internal mirror) — on an
+internet-connected box, put them **all in one directory**, and point `VCF_CLI_SRC_DIR` at it.
+This is the air-gap-correct path: carry the folder in, no download client / token / network at
+install time. The folder may hold per-arch files and/or the portal's multi-arch "Binaries" bundles.
 
 ```bash
-make install-vcf-clis                       # argocd-vcf + vcf + vcf plugins
+make install-vcf-clis VCF_CLI_SRC_DIR=~/vcf-clis   # argocd-vcf + vcf + vcf plugins
+# versions are pinned in .env.example (ARGOCD_VCF_VERSION / VCF_CLI_VERSION / VCF_PLUGINS_VERSION);
+# keep them in sync with the artifacts you place in the folder.
 ```
 
-Supply the entitled artifacts one of these ways (the target uses the first that applies):
+**Extra packages this step needs** (beyond the [bootstrap set](#bootstrap-a-bare-jump-box-before-you-can-clone-this-repo); the installer checks for `tar`/`gzip`/`find`/`install` and errors clearly if missing):
 
-- **Broadcom support portal (preferred).** From the portal's download page, copy the download
-  link for each CLI (a pre-signed, time-limited `https://downloads2.broadcom.com/?file=…` URL)
-  and pass it per CLI: `make install-vcf-clis ARGOCD_VCF_URL=… VCF_CLI_URL=… VCF_PLUGINS_URL=…`.
-  For depot-style downloads you can instead put a portal **download token** in `token.md`
-  (gitignored) or `BROADCOM_DOWNLOAD_TOKEN`; it's fed to `curl` via a config file so it never
-  appears in `ps`. Both handle the portal's multi-arch "Binaries" bundles automatically.
-- **`VCF_CLI_SRC_DIR=<dir>`** — a directory of pre-downloaded artifacts (the air-gap path).
-- A gitignored **`links.md`** mapping each CLI to a durable URL (a mirror; a MEGA URL works too
-  but needs `megatools`). Versions are pinned in `.env.example`
-  (`ARGOCD_VCF_VERSION` / `VCF_CLI_VERSION` / `VCF_PLUGINS_VERSION`).
-
-**Extra packages this step needs** (beyond the [bootstrap set](#bootstrap-a-bare-jump-box-before-you-can-clone-this-repo); the target checks for `tar`/`gzip`/`find` and errors clearly if missing):
-
-- **Ubuntu:** `sudo apt-get install -y findutils` (usually already present). Only for a **MEGA**
-  URL: `sudo apt-get install -y megatools`.
-- **Photon OS:** `sudo tdnf install -y findutils` (`find` is not in Photon's base). **`megatools`
-  is not packaged for Photon**, so the **MEGA** route is unavailable there — use the **Broadcom
-  portal** URL (curl, above) or **`VCF_CLI_SRC_DIR`** (pre-download on another box). `unzip` is
+- **Ubuntu:** `find` is present by default — nothing extra.
+- **Photon OS:** `sudo tdnf install -y findutils` (`find` is not in Photon's base). `unzip` is
   **not** required — the artifacts are `.gz`/`.tar.gz`, and `make deps` doesn't need it either.
 
 > **Fidelity vs a real lab.** The local KinD stand-in faithfully reproduces the lab's
@@ -650,7 +642,7 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 | Group | Target | Purpose |
 |-------|--------|---------|
 | Prereqs | `deps` | Install the jump-box toolchain (mise tools incl. crane + tkn/argocd) |
-| Prereqs | `install-vcf-clis` | Install the Broadcom VCF/VKS lab CLIs (argocd-vcf + vcf + plugins), sudo-free — lab-only, licensed artifacts from `VCF_CLI_SRC_DIR` / links.md |
+| Prereqs | `install-vcf-clis` | Install the Broadcom VCF/VKS lab CLIs (argocd-vcf + vcf + plugins), sudo-free — lab-only, licensed artifacts from a folder (`VCF_CLI_SRC_DIR`) |
 | Mirror | `mirror` / `mirror-pull` / `bundle` / `bundle-load` / `mirror-push` | Pull images → Harbor (dual-homed), or the sneakernet phases |
 | Mirror | `builder-image` | Build + push the deps-baked offline Maven builder image |
 | Install | `vks-login` / `platform` / `gitops` / `install-all` | Auth to VKS; install Gitea+Tekton; wire ArgoCD; or all of it |
