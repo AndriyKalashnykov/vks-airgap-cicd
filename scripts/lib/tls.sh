@@ -24,7 +24,7 @@ __VKS_TLS_SH_LOADED=1
 #   cloud-provider-kind may reassign between cluster rebuilds).
 gen_selfsigned_ca_cert() {
   local host="$1" dir="$2" ca_cn="${3:-vks-lab-ca}"
-  [ -n "$host" ] && [ -n "$dir" ] || { echo "gen_selfsigned_ca_cert: need <host> <dir>" >&2; return 2; }
+  if [ -z "$host" ] || [ -z "$dir" ]; then echo "gen_selfsigned_ca_cert: need <host> <dir>" >&2; return 2; fi
   command -v openssl >/dev/null 2>&1 || { echo "gen_selfsigned_ca_cert: openssl not found" >&2; return 2; }
   mkdir -p "$dir"
   local umask_old; umask_old="$(umask)"; umask 077
