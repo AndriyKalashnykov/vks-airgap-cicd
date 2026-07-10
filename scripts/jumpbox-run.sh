@@ -34,7 +34,7 @@ cd "$WORK"
 ENGINE="${JUMPBOX_ENGINE:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}"
 echo "### jump box: ${PRETTY_NAME} · user=$(whoami) · engine=${ENGINE} ($(command -v "$ENGINE")) ###"
 
-echo "### 1/3 make deps — install the jump-box toolchain on this OS ###"
+echo "### 1/4 make deps — install the jump-box toolchain on this OS ###"
 make deps
 # Pick up the mise-installed shims in this shell.
 eval "$(mise activate bash)" 2>/dev/null || true
@@ -44,7 +44,7 @@ for t in kubectl helm kustomize yq jq crane tkn argocd; do
   printf '  %-9s %s\n' "$t" "$(command -v "$t" || echo 'MISSING')"
 done
 
-echo "### 2/3 rootless ${ENGINE} build + run smoke, and crane (mirror engine, mise) ###"
+echo "### 2/4 rootless ${ENGINE} build + run smoke, and crane (mirror engine, mise) ###"
 ctx="$(mktemp -d)"
 # A short-named base (alpine) exercises unqualified-search-registries resolution + a rootless
 # overlay build — the exact things Photon's podman lacks by default — on either OS variant.
@@ -53,11 +53,34 @@ printf 'FROM alpine:3\nRUN echo jumpbox-rootless-ok > /marker\n' > "${ctx}/Docke
 "$ENGINE" run --rm jb-smoke cat /marker
 echo "crane (mirror engine): $(crane version 2>&1 | head -1)"
 
-echo "### 3/3 cluster + Harbor reachability from the jump box (internal kubeconfig) ###"
+echo "### 3/4 cluster + Harbor reachability from the jump box (internal kubeconfig) ###"
 export KUBECONFIG=/run/jumpbox/kubeconfig
 kubectl get nodes -o wide
-harbor_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://${HARBOR_URL}/api/v2.0/systeminfo" 2>/dev/null || echo 000)"
-echo "Harbor (${HARBOR_URL}) systeminfo -> HTTP ${harbor_code}"
-[ "$harbor_code" = "200" ] || { echo "ERROR: Harbor not reachable from the jump box"; exit 1; }
+# TLS-mode-aware: secure Harbor (HARBOR_INSECURE=0, the lab-faithful default) serves HTTPS
+# on the LB IP with a self-signed cert we must trust via the mounted CA; insecure = plain HTTP.
+if [ "${HARBOR_INSECURE:-0}" = "1" ]; then
+  harbor_scheme=http; harbor_ca_args=()
+else
+  harbor_scheme=https; harbor_ca_args=()
+  [ -f /run/jumpbox/harbor-ca.crt ] && harbor_ca_args=(--cacert /run/jumpbox/harbor-ca.crt)
+fi
+harbor_code="$(curl -s -o /dev/null -w '%{http_code}' "${harbor_ca_args[@]}" --max-time 10 \
+  "${harbor_scheme}://${HARBOR_URL}/api/v2.0/systeminfo" 2>/dev/null || echo 000)"
+echo "Harbor (${harbor_scheme}://${HARBOR_URL}) systeminfo -> HTTP ${harbor_code}"
+[ "$harbor_code" = "200" ] || { echo "ERROR: Harbor not reachable from the jump box over ${harbor_scheme}"; exit 1; }
+
+# 4/4 — OPTIONAL: install the VCF/VKS lab CLIs (argocd-vcf + vcf + plugins) when the operator
+# mounts the licensed artifacts (VCF_CLI_SRC_DIR). Proves the install targets work on THIS OS.
+if [ -n "${VCF_CLI_SRC_DIR:-}" ] && [ -d "${VCF_CLI_SRC_DIR}" ] && [ -n "$(ls -A "${VCF_CLI_SRC_DIR}" 2>/dev/null)" ]; then
+  echo "### 4/4 VCF/VKS lab CLIs (argocd-vcf + vcf + plugins) from mounted artifacts ###"
+  make install-vcf-clis
+  export PATH="${HOME}/.local/bin:${PATH}"; hash -r
+  echo "installed lab CLIs:"
+  argocd version --client 2>&1 | head -1
+  vcf version 2>&1 | head -1
+  vcf plugin list 2>&1 | tail -6
+else
+  echo "### 4/4 VCF lab CLIs SKIPPED (no VCF_CLI_SRC_DIR mounted — set JUMPBOX_VCF_SRC) ###"
+fi
 
 echo "JUMPBOX_OK"

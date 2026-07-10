@@ -203,6 +203,64 @@ so neither branch rots; both are local-only (e2e-kind is not a CI job).
 A failure at any secure-mode layer is exactly the lab-predictive signal we want (a missing
 CA-trust hop).
 
+## Fidelity vs a real VCF/VKS 9.1 lab (readiness — researched + empirically fact-checked)
+
+Two things ground this section: (a) primary-source research on how VCF/VKS 9.1 provides
+Harbor + ArgoCD, and (b) **empirical version checks of the actual lab CLIs** the operator
+holds (installed via `make install-vcf-clis`). Empirical beats doc-inference: the published
+9.0 docs imply a 2.14.x ArgoCD, but the real **9.1** `argocd` CLI is 3.x — so our KinD
+ArgoCD is the *right generation*.
+
+**Ground-truth versions (verified):** lab `argocd` CLI = **`v3.0.19+d67e6eb90-vcf`** (built
+2025-12-02); `vcf` (VCF Consumption CLI) = **`v9.1.0.0.25296329`** (GA, 2026-03-20). VKS 9.1
+Harbor ≈ **2.14.3** (`_vmware` build); ArgoCD provisioned by the Broadcom Argo CD Operator
+(GA Jul 2025), upstream 3.x-era in 9.1.
+
+**What our KinD stand-in faithfully predicts (green KinD ⇒ likely-green lab):**
+
+- **The self-signed-TLS + CA-trust transport** across all four consumers (crane `SSL_CERT_FILE`,
+  podman `--cert-dir`, node containerd `certs.d ca=`, Kaniko `additional-ca-cert-bundle`) over
+  real HTTPS/443. A missing-CA hop fails KinD exactly as it would fail the lab.
+- **ArgoCD exposure/auth**: own LoadBalancer reached by IP, self-signed TLS on 443,
+  `argocd login <ip> --insecure` (IP-SAN warning), admin from `argocd-initial-admin-secret` —
+  all match VKS 9.1. ArgoCD generation (3.x) matches.
+- **The GitOps loop shape**: push → Tekton → Harbor → tag write-back → ArgoCD sync → app roll.
+
+**What a green KinD run does NOT prove (residual lab risk — verify on the real lab):**
+
+1. **The VKS workload-cluster CA-trust MECHANISM.** The lab does NOT hand-edit
+   `certs.d/hosts.toml`. It trusts the Harbor CA declaratively via the Cluster (v1beta1) spec
+   `variables: [{name: trust, value: {additionalTrustedCAs: [{name: …}]}}]`, backed by a
+   **`<CLUSTER-NAME>-user-trusted-ca-secret`** in the vSphere Namespace holding the CA
+   **double-base64-encoded** (`base64 -w0 ca.crt | base64 -w0`). The secret is **not watched**
+   (CA rotation needs a new secret + a cluster-spec update). Our per-node `certs.d` reaches the
+   same end state by a non-transferable route — the most likely real-lab failure (wrong
+   encoding, wrong namespace, un-reapplied rotation) is invisible to KinD.
+2. **Private projects / robot accounts.** We make Harbor projects public (anonymous pull). A
+   private VKS Harbor project needs a **robot account + `imagePullSecret`** — a path we don't
+   exercise.
+3. **FQDN/DNS addressing.** The lab is FQDN-addressed (ExternalDNS + VIP, cert SAN=FQDN); we
+   use the LB **IP** (SAN=IP) for the sudo-free reasons above. Fine for TLS, but any downstream
+   assuming an IP-shaped `HARBOR_URL` would break on the FQDN lab — treat `HARBOR_URL` as opaque.
+4. **Provisioning is operator/CR-driven, not manifest-driven.** The lab creates a Harbor
+   Supervisor Service + an `argocd-service.vsphere.vmware.com/v1alpha1` `ArgoCD` CR
+   (`enableLoadBalancer: true`, `spec.version: <3.x>+vmware.1-vks.1`) via the Broadcom operators;
+   our `06`/`07` install helm/upstream to mimic the *runtime*, not the provisioning (correct —
+   those scripts don't run against a real lab).
+
+**Sources:** [Harbor as a Supervisor Service (TechDocs)](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vsphere-supervisor-services-and-standalone-components/latest/using-supervisor-services/installing-and-configuring-harbor-and-contour/install-harbor-as-a-supervisor-service.html),
+[Air-gapped Harbor in VCF 9 (VCF blog)](https://blogs.vmware.com/cloud-foundation/2026/04/21/deploying-harbor-service-in-air-gapped-vmware-cloud-foundation-9-0/),
+[Integrate TKG clusters with a private registry — the `trust.additionalTrustedCAs` path (TechDocs)](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/using-private-registries-with-tkg-service-clusters/integrate-tkg-service-clusters-with-a-private-container-registry.html),
+[williamlam — VKS self-signed registry trust](https://williamlam.com/2025/08/quick-tip-configuring-vsphere-kubernetes-service-vks-cluster-with-self-signed-container-registry.html),
+[Broadcom Argo CD Operator GA](https://blogs.vmware.com/cloud-foundation/2025/07/11/gitops-for-vcf-broadcom-argo-cd-operator-now-available/),
+[Install the Argo CD Service (TechDocs)](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/using-supervisor-services/using-argo-cd-service/install-argo-cd-service.html).
+
+**Actionable follow-ups (low-risk, tracked):** (T1) after the secure Harbor upgrade, assert the
+CA served by Harbor's own `GET /api/v2.0/systeminfo/getcert` matches our minted CA (exercises the
+real CA-retrieval path); (T2 — done here) document the `trust.additionalTrustedCAs` delta; (T3)
+guard that no IP-shaped `HARBOR_URL` literal is hardcoded downstream (keep the FQDN swap safe);
+(T4, optional) a `HARBOR_PUBLIC_PROJECTS=0` matrix exercising a robot account + `imagePullSecret`.
+
 ## Risks / notes
 
 - **openssl vs cert-manager:** we mint with openssl for determinism; a `cert-manager +

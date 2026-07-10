@@ -310,6 +310,28 @@ make deps         # crane, tkn, argocd, kubectl, helm, mise tools
 make vks-login    # validates $KUBECONFIG + context against the lab cluster
 ```
 
+**Step 3b (optional) — install the Broadcom VCF/VKS lab CLIs.** To drive the lab's
+VKS-provided ArgoCD/registry directly (open its UI, `argocd login`, or the `vcf` Consumption
+CLI + plugins) you need the **licensed** `argocd-vcf` + `vcf` binaries from the Broadcom
+support portal — the pipeline itself wires everything via `kubectl`, so this is optional for
+the demo. They install **sudo-free** to `~/.local/bin`, OS/arch-aware:
+
+```bash
+# Supply the entitled artifacts one of two ways, then:
+make install-vcf-clis                       # argocd-vcf + vcf + vcf plugins
+#   VCF_CLI_SRC_DIR=<dir>  → a directory holding the pre-downloaded artifacts (air-gap: carry them in)
+#   or a gitignored links.md (one artifact filename per line, its download URL on the next)
+# Versions are pinned in .env.example (ARGOCD_VCF_VERSION / VCF_CLI_VERSION / VCF_PLUGINS_VERSION).
+```
+
+> **Fidelity vs a real lab.** The local KinD stand-in faithfully reproduces the lab's
+> **self-signed-TLS + CA-trust** posture (Harbor HTTPS + ArgoCD self-signed TLS on their own
+> LBs). Three things differ on a real VKS lab and must be verified there: the workload cluster
+> trusts the Harbor CA **declaratively** via the Cluster spec `trust.additionalTrustedCAs`
+> (not per-node `certs.d`); a **private** Harbor project needs a robot account +
+> `imagePullSecret`; and the lab is **FQDN**-addressed. See
+> [KinD TLS fidelity → Fidelity vs a real VCF/VKS 9.1 lab](docs/decisions/kind-tls-fidelity.md).
+
 **Step 4 — Harbor projects + (recommended) a robot account.** `make mirror` (run in step 6)
 creates the `cicd` and `apps` projects for you via Harbor's REST API if they don't exist
 (needs push rights). For least-privilege CI, create a Harbor **robot account** (Harbor UI →
@@ -430,7 +452,9 @@ How the local stand-in works:
   builder push via podman `--cert-dir`, in-cluster Kaniko via the `harbor-ca` ConfigMap. It
   writes the discovered `HARBOR_URL` (the LB IP) + `HARBOR_CA_FILE` + `KUBECONFIG` into a
   gitignored **`.env.kind`** overlay so the normal scripts target the kind cluster unchanged.
-  (Set `HARBOR_INSECURE=1` for the original plain-HTTP fast-iteration mode.)
+  Harbor **and** ArgoCD both default to secure (self-signed TLS, mimicking the VCF/VKS 9.1
+  lab). For the original plain-HTTP fast-iteration mode, flip both switches:
+  `make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1`. Both modes are validated locally.
 - `make vks-login` uses the kind kubeconfig (`VKS_AUTH_METHOD=kubeconfig`), so no VCF auth
   is needed for the local run.
 - **`make install-ingress`** installs one ingress LoadBalancer (`INGRESS_CONTROLLER=istio`
@@ -608,6 +632,7 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 | Group | Target | Purpose |
 |-------|--------|---------|
 | Prereqs | `deps` | Install the jump-box toolchain (mise tools incl. crane + tkn/argocd) |
+| Prereqs | `install-vcf-clis` | Install the Broadcom VCF/VKS lab CLIs (argocd-vcf + vcf + plugins), sudo-free — lab-only, licensed artifacts from `VCF_CLI_SRC_DIR` / links.md |
 | Mirror | `mirror` / `mirror-pull` / `bundle` / `bundle-load` / `mirror-push` | Pull images → Harbor (dual-homed), or the sneakernet phases |
 | Mirror | `builder-image` | Build + push the deps-baked offline Maven builder image |
 | Install | `vks-login` / `platform` / `gitops` / `install-all` | Auth to VKS; install Gitea+Tekton; wire ArgoCD; or all of it |

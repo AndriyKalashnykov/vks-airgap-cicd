@@ -50,6 +50,14 @@ gen_selfsigned_ca_cert() {
     -CAcreateserial -out "$dir/tls.crt" -days 825 -sha256 \
     -extfile <(printf 'subjectAltName=%s\n' "$san") 2>/dev/null
   rm -f "$dir/tls.csr" "$dir/ca.srl"
+  # The CA cert (and the leaf cert) are PUBLIC trust material — make them world-readable so
+  # EVERY consumer can read them regardless of uid: node containerd (docker cp), the SSL_CERT_FILE
+  # bundle, podman --cert-dir, and a jump-box container whose service user may land on a DIFFERENT
+  # uid than the host minter (e.g. Ubuntu 24.04/26.04 ship a default `ubuntu` at uid 1000, so a
+  # useradd'd service user is uid 1001 and cannot read a host-uid-1000 0600 file → TLS trust fails
+  # with a misleading "error adding trust anchors from file"). Only the *.key private keys stay 0600.
+  [ -f "$dir/ca.crt" ]  && chmod 0644 "$dir/ca.crt"
+  [ -f "$dir/tls.crt" ] && chmod 0644 "$dir/tls.crt"
   umask "$umask_old"
 }
 
