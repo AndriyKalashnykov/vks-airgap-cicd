@@ -5,7 +5,7 @@
 # jumpbox/Dockerfile.photon. A test harness, NOT a production image. The image installs only
 # the documented bootstrap set; `make deps` (at container start) installs the rest of the
 # toolchain, so a green run proves the Ubuntu dependency path works end-to-end.
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 # Bootstrap set (mirrors README → Prerequisites) + podman + fuse-overlayfs (the latter is the
