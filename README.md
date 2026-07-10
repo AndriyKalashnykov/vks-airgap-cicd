@@ -333,6 +333,15 @@ Supply the entitled artifacts one of these ways (the target uses the first that 
   but needs `megatools`). Versions are pinned in `.env.example`
   (`ARGOCD_VCF_VERSION` / `VCF_CLI_VERSION` / `VCF_PLUGINS_VERSION`).
 
+**Extra packages this step needs** (beyond the [bootstrap set](#bootstrap-a-bare-jump-box-before-you-can-clone-this-repo); the target checks for `tar`/`gzip`/`find` and errors clearly if missing):
+
+- **Ubuntu:** `sudo apt-get install -y findutils` (usually already present). Only for a **MEGA**
+  URL: `sudo apt-get install -y megatools`.
+- **Photon OS:** `sudo tdnf install -y findutils` (`find` is not in Photon's base). **`megatools`
+  is not packaged for Photon**, so the **MEGA** route is unavailable there — use the **Broadcom
+  portal** URL (curl, above) or **`VCF_CLI_SRC_DIR`** (pre-download on another box). `unzip` is
+  **not** required — the artifacts are `.gz`/`.tar.gz`, and `make deps` doesn't need it either.
+
 > **Fidelity vs a real lab.** The local KinD stand-in faithfully reproduces the lab's
 > **self-signed-TLS + CA-trust** posture (Harbor HTTPS + ArgoCD self-signed TLS on their own
 > LBs). Three things differ on a real VKS lab and must be verified there: the workload cluster
