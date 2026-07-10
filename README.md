@@ -317,12 +317,21 @@ support portal — the pipeline itself wires everything via `kubectl`, so this i
 the demo. They install **sudo-free** to `~/.local/bin`, OS/arch-aware:
 
 ```bash
-# Supply the entitled artifacts one of two ways, then:
 make install-vcf-clis                       # argocd-vcf + vcf + vcf plugins
-#   VCF_CLI_SRC_DIR=<dir>  → a directory holding the pre-downloaded artifacts (air-gap: carry them in)
-#   or a gitignored links.md (one artifact filename per line, its download URL on the next)
-# Versions are pinned in .env.example (ARGOCD_VCF_VERSION / VCF_CLI_VERSION / VCF_PLUGINS_VERSION).
 ```
+
+Supply the entitled artifacts one of these ways (the target uses the first that applies):
+
+- **Broadcom support portal (preferred).** From the portal's download page, copy the download
+  link for each CLI (a pre-signed, time-limited `https://downloads2.broadcom.com/?file=…` URL)
+  and pass it per CLI: `make install-vcf-clis ARGOCD_VCF_URL=… VCF_CLI_URL=… VCF_PLUGINS_URL=…`.
+  For depot-style downloads you can instead put a portal **download token** in `token.md`
+  (gitignored) or `BROADCOM_DOWNLOAD_TOKEN`; it's fed to `curl` via a config file so it never
+  appears in `ps`. Both handle the portal's multi-arch "Binaries" bundles automatically.
+- **`VCF_CLI_SRC_DIR=<dir>`** — a directory of pre-downloaded artifacts (the air-gap path).
+- A gitignored **`links.md`** mapping each CLI to a durable URL (a mirror; a MEGA URL works too
+  but needs `megatools`). Versions are pinned in `.env.example`
+  (`ARGOCD_VCF_VERSION` / `VCF_CLI_VERSION` / `VCF_PLUGINS_VERSION`).
 
 > **Fidelity vs a real lab.** The local KinD stand-in faithfully reproduces the lab's
 > **self-signed-TLS + CA-trust** posture (Harbor HTTPS + ArgoCD self-signed TLS on their own
