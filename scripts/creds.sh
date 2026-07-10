@@ -16,9 +16,16 @@ load_env
 # Harbor keeps its OWN LB (not behind the ingress); http when HARBOR_INSECURE=1 (KinD).
 harbor_scheme="https"; [ "${HARBOR_INSECURE:-0}" = "1" ] && harbor_scheme="http"
 harbor_url="${harbor_scheme}://${HARBOR_URL:-harbor.vks.local}"
-# Gitea/ArgoCD/app are fronted by the ingress at their *.vks.local hosts (http in the demo).
+# Gitea/app/Tekton are fronted by the ingress at their *.vks.local hosts (http in the demo).
 gitea_url="${GITEA_URL:-http://${GITEA_HOST:-gitea.vks.local}}"
-argocd_url="http://${ARGOCD_HOST:-argocd.vks.local}"
+# ArgoCD is on its OWN LoadBalancer (like real VKS): KinD publishes ARGOCD_LB_IP to .env.kind
+# (scheme https unless ARGOCD_INSECURE=1); a real lab uses the lab's own ArgoCD URL.
+if [ -n "${ARGOCD_LB_IP:-}" ]; then
+  argo_scheme="https"; [ "${ARGOCD_INSECURE:-0}" = "1" ] && argo_scheme="http"
+  argocd_url="${argo_scheme}://${ARGOCD_LB_IP} (self-signed; --insecure)"
+else
+  argocd_url="<your lab's ArgoCD URL>"
+fi
 app_url="http://${WEBUI_HOST:-app.vks.local}"
 tekton_url="http://${TEKTON_DASHBOARD_HOST:-tekton.vks.local}"  # Tekton Dashboard (read-only UI)
 
@@ -37,7 +44,7 @@ echo "Access the UIs (local demo credentials):"
 if [ -n "${INGRESS_LB_IP:-}" ]; then
   echo
   echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"
-  echo "    ${INGRESS_LB_IP}  ${GITEA_HOST:-gitea.vks.local} ${ARGOCD_HOST:-argocd.vks.local} ${WEBUI_HOST:-app.vks.local} ${TEKTON_DASHBOARD_HOST:-tekton.vks.local}"
+  echo "    ${INGRESS_LB_IP}  ${GITEA_HOST:-gitea.vks.local} ${WEBUI_HOST:-app.vks.local} ${TEKTON_DASHBOARD_HOST:-tekton.vks.local}"
 fi
 
 # --- table ----------------------------------------------------------------------------

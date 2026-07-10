@@ -23,7 +23,7 @@ require_cmd envsubst "install gettext (provides envsubst)"
 : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"
 : "${TRAEFIK_NAMESPACE:?}"
 : "${GITEA_NAMESPACE:?}"; : "${GITEA_HOST:?}"
-: "${ARGOCD_NAMESPACE:?}"; : "${ARGOCD_HOST:?}"
+: "${ARGOCD_NAMESPACE:?}"
 : "${ARGOCD_DEST_NAMESPACE:?}"; : "${WEBUI_HOST:?}"; : "${APP_NAME:?}"
 : "${TEKTON_NAMESPACE:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
@@ -37,7 +37,7 @@ K8S_DIR="${REPO_ROOT}/k8s/traefik"
 # shellcheck disable=SC2016
 CTRL_ALLOWLIST='${HARBOR_URL} ${HARBOR_INFRA_PROJECT} ${TRAEFIK_NAMESPACE}'
 # shellcheck disable=SC2016
-ING_ALLOWLIST='${GITEA_NAMESPACE} ${GITEA_HOST} ${ARGOCD_NAMESPACE} ${ARGOCD_HOST} ${ARGOCD_DEST_NAMESPACE} ${WEBUI_HOST} ${APP_NAME} ${TEKTON_NAMESPACE} ${TEKTON_DASHBOARD_HOST}'
+ING_ALLOWLIST='${GITEA_NAMESPACE} ${GITEA_HOST} ${ARGOCD_DEST_NAMESPACE} ${WEBUI_HOST} ${APP_NAME} ${TEKTON_NAMESPACE} ${TEKTON_DASHBOARD_HOST}'
 
 # --- 1. Install the controller (namespace, RBAC, IngressClass, Deployment, LB) ---
 log_info "installing Traefik controller into namespace '${TRAEFIK_NAMESPACE}'"
@@ -56,7 +56,7 @@ for ns in "$GITEA_NAMESPACE" "$ARGOCD_NAMESPACE" "$ARGOCD_DEST_NAMESPACE"; do
   run bash -c "kubectl create namespace \"$ns\" --dry-run=client -o yaml | kubectl apply -f -"
 done
 
-log_info "applying Ingress objects (gitea/argocd/app -> *.vks.local)"
+log_info "applying Ingress objects (gitea/app/tekton -> *.vks.local)"
 # shellcheck disable=SC2016
 envsubst "$ING_ALLOWLIST" < "${K8S_DIR}/ingress.yaml" | run kubectl apply -f -
 
@@ -81,7 +81,8 @@ log_info "published INGRESS_LB_IP=${LB_IP} to ${REPO_ROOT}/.env.kind"
 
 log_info "Traefik installed. Add ONE line to /etc/hosts on the jump box / your client:"
 log_info ""
-log_info "    ${LB_IP}  ${GITEA_HOST} ${ARGOCD_HOST} ${WEBUI_HOST} ${TEKTON_DASHBOARD_HOST}"
+log_info "    ${LB_IP}  ${GITEA_HOST} ${WEBUI_HOST} ${TEKTON_DASHBOARD_HOST}"
 log_info ""
-log_info "then browse: http://${GITEA_HOST}  http://${ARGOCD_HOST}  http://${WEBUI_HOST}  http://${TEKTON_DASHBOARD_HOST}"
+log_info "then browse: http://${GITEA_HOST}  http://${WEBUI_HOST}  http://${TEKTON_DASHBOARD_HOST}"
+log_info "(ArgoCD is on its own LoadBalancer IP, not the ingress — see 'make creds')"
 log_info "(no more 'kubectl port-forward' for the UIs; Harbor keeps its own LB IP)"
