@@ -21,6 +21,7 @@ RUN_MODE            ?= dual-homed
 HARBOR_URL          ?= harbor.vks.local
 HARBOR_INFRA_PROJECT?= cicd
 HARBOR_APP_PROJECT  ?= apps
+HARBOR_CA_FILE      ?= ./secrets/harbor-ca.crt
 GITEA_NAMESPACE     ?= gitea
 CI_NAMESPACE        ?= ci
 TEKTON_NAMESPACE    ?= tekton-pipelines
@@ -109,6 +110,16 @@ builder-image: check-env ## (internet) Build + push the air-gap Maven builder im
 .PHONY: vks-login
 vks-login: check-env ## Authenticate to VKS (VCF 9 + Supervisor) → writes KUBECONFIG/context
 	@$(SCRIPTS)/30-vks-login.sh
+
+.PHONY: fetch-harbor-ca
+fetch-harbor-ca: ## Fetch a self-signed lab Harbor's CA cert → HARBOR_CA_FILE (for HTTPS mirror/Kaniko trust)
+	@host="$$(printf '%s' "$(HARBOR_URL)" | sed -E 's#^https?://##; s#/.*##; s#:.*##')"; \
+	 out="$(HARBOR_CA_FILE)"; mkdir -p "$$(dirname "$$out")"; \
+	 echo "fetching Harbor CA from $$host:443 -> $$out"; \
+	 openssl s_client -connect "$$host:443" -showcerts </dev/null 2>/dev/null \
+	   | openssl x509 -outform PEM > "$$out" \
+	   && echo "wrote $$out (now set HARBOR_CA_FILE=$$out in .env)" \
+	   || { echo "ERROR: could not fetch a CA from $$host:443 — is the lab Harbor reachable over HTTPS?"; exit 1; }
 
 ##@ Platform install (Gitea + Tekton)
 .PHONY: install-gitea
