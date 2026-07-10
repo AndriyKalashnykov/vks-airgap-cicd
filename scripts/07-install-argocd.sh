@@ -24,6 +24,10 @@ require_cmd kubectl
 ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
+# Mode: secure (default) = upstream self-signed TLS on 443 (mimics VCF/VKS); insecure
+# (ARGOCD_INSECURE=1) = server.insecure plain HTTP. Exposed via its OWN LoadBalancer in both.
+ARGOCD_INSECURE="${ARGOCD_INSECURE:-0}"
+ARGOCD_SVC="${ARGOCD_SVC:-argocd-server}"
 
 # The one allowed literal: the argoproj GitHub raw install manifest path,
 # parameterized by the pinned ${ARGOCD_VERSION}.
@@ -83,15 +87,36 @@ wait_ready deploy/argocd-repo-server
 wait_ready deploy/argocd-redis
 wait_ready statefulset/argocd-application-controller
 
-# 4. Local-demo convenience: run the API/UI server in insecure (HTTP) mode so
-# it is reachable without TLS wrangling / cert trust in the local KinD demo.
-# This is NOT for production — the real VKS-provided ArgoCD terminates TLS.
-log_info "patching argocd-cmd-params-cm to enable server.insecure (local demo convenience)"
-run kubectl -n "$ARGOCD_NAMESPACE" patch configmap argocd-cmd-params-cm \
-  --type merge -p '{"data":{"server.insecure":"true"}}'
-# Restart the server so it picks up the config change, then re-gate readiness.
-run kubectl -n "$ARGOCD_NAMESPACE" rollout restart deploy/argocd-server
-wait_ready deploy/argocd-server
+# 4. Exposure + TLS mode. Mimic VCF/VKS 9.1: expose argocd-server as its OWN LoadBalancer
+# (the KinD analog of the Supervisor L4 LB), reached BY IP — NOT behind the *.vks.local
+# ingress (VKS does not front ArgoCD there). Mode:
+#   secure   (default)          — leave upstream self-signed TLS on 443 (what real VKS serves).
+#   insecure (ARGOCD_INSECURE=1) — patch server.insecure so the UI/API is plain HTTP.
+if [ "$ARGOCD_INSECURE" = "1" ]; then
+  log_info "ArgoCD mode: INSECURE (server.insecure, plain HTTP) — set ARGOCD_INSECURE=0 for lab-faithful TLS"
+  run kubectl -n "$ARGOCD_NAMESPACE" patch configmap argocd-cmd-params-cm \
+    --type merge -p '{"data":{"server.insecure":"true"}}'
+  run kubectl -n "$ARGOCD_NAMESPACE" rollout restart deploy/argocd-server
+  wait_ready deploy/argocd-server
+else
+  log_info "ArgoCD mode: SECURE (upstream self-signed TLS on 443) — mimics VCF/VKS self-signed ArgoCD"
+fi
+
+# Expose argocd-server as a LoadBalancer (both modes) and discover its IP (cloud-provider-kind).
+run kubectl -n "$ARGOCD_NAMESPACE" patch svc "$ARGOCD_SVC" -p '{"spec":{"type":"LoadBalancer"}}'
+log_info "waiting for ${ARGOCD_SVC} LoadBalancer IP (timeout ${READY_TIMEOUT_SECONDS}s, poll ${POLL_INTERVAL_SECONDS}s)"
+ARGOCD_LB_IP=""; deadline=$(( SECONDS + READY_TIMEOUT_SECONDS ))
+while :; do
+  ARGOCD_LB_IP="$(kubectl -n "$ARGOCD_NAMESPACE" get svc "$ARGOCD_SVC" \
+                    -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+  [ -n "$ARGOCD_LB_IP" ] && break
+  [ "$SECONDS" -ge "$deadline" ] && { kubectl -n "$ARGOCD_NAMESPACE" get svc "$ARGOCD_SVC" >&2 || true; die "argocd-server LoadBalancer did not get an IP (is cloud-provider-kind running?)"; }
+  sleep "$POLL_INTERVAL_SECONDS"
+done
+log_info "argocd-server LoadBalancer IP: $ARGOCD_LB_IP  ($([ "$ARGOCD_INSECURE" = "1" ] && echo "http://${ARGOCD_LB_IP}" || echo "https://${ARGOCD_LB_IP} (self-signed; --insecure)"))"
+# Publish to .env.kind (KinD-only; in a real lab ArgoCD is lab-provided and this script never runs).
+set_env_var ARGOCD_LB_IP "$ARGOCD_LB_IP"
+set_env_var ARGOCD_INSECURE "$ARGOCD_INSECURE"
 
 # 5. Optional: set a deterministic 'admin' password from .env (KinD convenience so the
 # UI login is known + stable, like Gitea/Harbor). Skipped when ARGOCD_ADMIN_PASSWORD is

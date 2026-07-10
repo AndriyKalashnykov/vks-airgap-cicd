@@ -25,7 +25,7 @@ load_env
 
 require_cmd curl
 : "${INGRESS_LB_IP:?INGRESS_LB_IP not set — run 'make install-ingress' first (it writes the LB IP to .env.kind)}"
-: "${GITEA_HOST:?}"; : "${ARGOCD_HOST:?}"; : "${WEBUI_HOST:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
+: "${GITEA_HOST:?}"; : "${WEBUI_HOST:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
 : "${INGRESS_CONTROLLER:=istio}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
@@ -58,7 +58,7 @@ wait_route() { # <host> — 0 + echo code when routed; 1 on timeout
 
 log_info "verifying ingress routing via INGRESS_CONTROLLER=${INGRESS_CONTROLLER} at ${INGRESS_LB_IP}"
 rc=0
-for host in "$GITEA_HOST" "$ARGOCD_HOST" "$WEBUI_HOST" "$TEKTON_DASHBOARD_HOST"; do
+for host in "$GITEA_HOST" "$WEBUI_HOST" "$TEKTON_DASHBOARD_HOST"; do
   log_info "  route-readiness poll: ${host} (timeout ${READY_TIMEOUT_SECONDS}s)"
   if code="$(wait_route "$host")"; then
     log_info "  OK    ${host} -> HTTP ${code} (routed through the ingress LB)"
@@ -70,10 +70,10 @@ done
 
 # Assert each host's body actually comes from ITS backend, not just a 200 from some
 # proxy — a wrong Ingress/VirtualService backend still returns 2xx. Markers are the
-# apps' own branding: Gitea always emits "gitea" (title/footer/asset paths), ArgoCD
-# emits "argo" (title "Argo CD" + assets), the app renders class="message". curl -L
-# follows any login/dashboard redirect to the real page. (Confirmed end-to-end on the
-# next `make e2e-kind`; blast radius is the local e2e, never CI.)
+# apps' own branding: Gitea always emits "gitea" (title/footer/asset paths), the app
+# renders class="message", Tekton emits "tekton". curl -L follows any login/dashboard
+# redirect to the real page. (ArgoCD is NOT fronted by the ingress — it has its own
+# LoadBalancer IP, like real VKS; see scripts/07-install-argocd.sh + make creds.)
 if [ "$rc" -eq 0 ]; then
   assert_body() { # <host> <grep-ERE> <label>
     local b
@@ -86,7 +86,6 @@ if [ "$rc" -eq 0 ]; then
     fi
   }
   assert_body "$GITEA_HOST"             'gitea'           "Gitea UI"
-  assert_body "$ARGOCD_HOST"            'argo'            "ArgoCD UI"
   assert_body "$WEBUI_HOST"             'class="message"' "app greeting page"
   assert_body "$TEKTON_DASHBOARD_HOST"  'tekton'          "Tekton Dashboard UI"
 fi

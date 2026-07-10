@@ -63,6 +63,16 @@ deps-mise: ## Install mise-managed tools from .mise.toml (java, maven, kubectl, 
 deps-prereqs: ## Install non-mise CLIs + OS packages (git, tkn, argocd, podman, ...) via 00-install-prereqs.sh
 	@$(SCRIPTS)/00-install-prereqs.sh
 
+.PHONY: install-vcf-clis install-argocd-vcf install-vcf-cli install-vcf-plugins
+install-vcf-clis: ## Install the Broadcom VCF/VKS lab CLIs (argocd-vcf + vcf + plugins), OS/arch-aware, sudo-free. Licensed artifacts from VCF_CLI_SRC_DIR (pre-downloaded) or the gitignored links.md. Lab-only — not needed for local KinD.
+	@$(SCRIPTS)/01-install-vcf-clis.sh all
+install-argocd-vcf: ## Install ONLY the VCF-flavored argocd CLI (ARGOCD_VCF_VERSION) for a real lab's ArgoCD
+	@$(SCRIPTS)/01-install-vcf-clis.sh argocd
+install-vcf-cli: ## Install ONLY the VCF Consumption CLI `vcf` (VCF_CLI_VERSION)
+	@$(SCRIPTS)/01-install-vcf-clis.sh vcf
+install-vcf-plugins: ## Install ONLY the VCF Consumption CLI plugin bundle (VCF_PLUGINS_VERSION; needs `vcf` first)
+	@$(SCRIPTS)/01-install-vcf-clis.sh plugins
+
 .PHONY: check-env
 check-env: ## STOPPER gate — fail if the committed .env.example source of truth is missing
 	@test -f .env.example || { \
@@ -165,7 +175,7 @@ kind-up: check-env ## Create the KinD cluster + cloud-provider-kind LoadBalancer
 	@$(SCRIPTS)/05-kind-up.sh
 
 .PHONY: install-harbor
-install-harbor: check-env ## Install Harbor (LoadBalancer, HTTP) into KinD; wire containerd + .env.kind
+install-harbor: check-env ## Install Harbor into KinD (LoadBalancer; self-signed HTTPS+CA by default, HTTP with HARBOR_INSECURE=1); wire containerd + .env.kind
 	@$(SCRIPTS)/06-install-harbor.sh
 
 .PHONY: install-argocd
@@ -224,11 +234,22 @@ jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photo
 	 kind get kubeconfig --name "$$kind_name" --internal > .jumpbox/kubeconfig
 	@harbor_url="$$(grep '^HARBOR_URL=' .env.kind 2>/dev/null | cut -d= -f2)"; \
 	 [ -n "$$harbor_url" ] || { echo "ERROR: HARBOR_URL not in .env.kind — run 'make install-harbor' first"; exit 1; }; \
-	 echo "running $(JUMPBOX_OS) jump box on the kind network (Harbor=$$harbor_url)"; \
+	 harbor_insecure="$$(grep '^HARBOR_INSECURE=' .env.kind 2>/dev/null | cut -d= -f2)"; harbor_insecure="$${harbor_insecure:-0}"; \
+	 harbor_ca="$$(grep '^HARBOR_CA_FILE=' .env.kind 2>/dev/null | cut -d= -f2)"; \
+	 extra=""; \
+	 if [ "$$harbor_insecure" != "1" ] && [ -n "$$harbor_ca" ] && [ -f "$$harbor_ca" ]; then \
+	   cp "$$harbor_ca" .jumpbox/harbor-ca.crt; chmod 0644 .jumpbox/harbor-ca.crt; \
+	   extra="$$extra -v $(PWD)/.jumpbox/harbor-ca.crt:/run/jumpbox/harbor-ca.crt:ro"; \
+	 fi; \
+	 if [ -n "$(JUMPBOX_VCF_SRC)" ] && [ -d "$(JUMPBOX_VCF_SRC)" ]; then \
+	   extra="$$extra -v $(abspath $(JUMPBOX_VCF_SRC)):/run/vcf-artifacts:ro -e VCF_CLI_SRC_DIR=/run/vcf-artifacts"; \
+	 fi; \
+	 echo "running $(JUMPBOX_OS) jump box on the kind network (Harbor=$$harbor_url, insecure=$$harbor_insecure)"; \
 	 docker run --rm --privileged --network kind \
-	   -e HARBOR_URL="$$harbor_url" \
+	   -e HARBOR_URL="$$harbor_url" -e HARBOR_INSECURE="$$harbor_insecure" \
 	   -v "$(PWD):/src:ro" \
 	   -v "$(PWD)/.jumpbox/kubeconfig:/run/jumpbox/kubeconfig:ro" \
+	   $$extra \
 	   $(JUMPBOX_IMAGE) bash /src/scripts/jumpbox-run.sh
 
 .PHONY: jumpbox-both
@@ -351,9 +372,11 @@ vendor-diagrams: ## Re-download the pinned C4-PlantUML stdlib into docs/diagrams
 	echo "vendor-diagrams: refreshed docs/diagrams/c4/ @ $(C4_PLANTUML_VERSION) — now run 'make diagrams' and verify the offline render"
 
 .PHONY: docs-lint
-docs-lint: diagrams-check ## Lint markdown + verify diagrams are current
-	@if command -v markdownlint >/dev/null 2>&1; then markdownlint '**/*.md' --ignore app --ignore bundle; \
-	elif command -v npx >/dev/null 2>&1; then npx --yes markdownlint-cli@$(MARKDOWNLINT_VERSION) '**/*.md' --ignore app --ignore bundle; \
+docs-lint: diagrams-check ## Lint tracked markdown + verify diagrams are current
+	@files=$$(git ls-files '*.md'); \
+	[ -n "$$files" ] || { echo "docs-lint: no tracked markdown"; exit 0; }; \
+	if command -v markdownlint >/dev/null 2>&1; then markdownlint $$files; \
+	elif command -v npx >/dev/null 2>&1; then npx --yes markdownlint-cli@$(MARKDOWNLINT_VERSION) $$files; \
 	else echo "markdownlint not installed — skipping (install markdownlint-cli)"; fi
 
 .PHONY: static-check

@@ -1,26 +1,28 @@
 # KinD TLS fidelity — mimic VCF/VKS 9.1 self-signed TLS for Harbor + ArgoCD
 
-**Status:** PROPOSED (awaiting review; implement after approval)
+**Status:** ACCEPTED & LANDED (secure mode validated end-to-end; see Validation)
 **Date:** 2026-07-10
+**Branch:** `feat/kind-tls-fidelity`
 
 ## Problem
 
-The local KinD stand-in currently presents the **opposite** TLS posture to a real
-VCF/VKS 9.1 lab, so a green `make e2e-kind` does **not** exercise the self-signed-TLS +
+The local KinD stand-in originally presented the **opposite** TLS posture to a real
+VCF/VKS 9.1 lab, so a green `make e2e-kind` did **not** exercise the self-signed-TLS +
 CA-trust path the lab actually requires:
 
-| Component | KinD today | Real VKS 9.1 lab |
+| Component | KinD (before) | Real VKS 9.1 lab |
 |-----------|-----------|------------------|
 | **Harbor** | plain **HTTP** LB; containerd `skip_verify = true`; Kaniko `--skip-tls-verify` | **HTTPS/443**, self-signed cert (cert-manager), clients trust its CA |
 | **ArgoCD** | patched `server.insecure=true` (plain HTTP) | **self-signed TLS/443** (`server.insecure` is *not* the default), reached by LB IP with `--insecure` |
 
-The whole point of the KinD path is to predict lab behavior. Today it hides exactly the
-class of failure most likely on a real air-gapped lab: a self-signed registry cert that
-every consumer (jump-box `crane`, node `containerd`, in-cluster Kaniko) must trust.
+The whole point of the KinD path is to predict lab behavior. It hid exactly the class of
+failure most likely on a real air-gapped lab: a self-signed registry cert that every
+consumer (jump-box `crane`, node `containerd`, in-cluster Kaniko) must trust.
 
-**Goal:** make KinD mimic the lab's cert posture *exactly* **by default**, so "works on KinD"
-means "the CA-trust wiring works" — not "TLS was skipped" — while keeping the current
-insecure posture as an **optional, still-tested** fast-iteration path.
+**Goal:** make KinD mimic the lab's cert posture **by default**, so "works on KinD" means
+"the CA-trust wiring works" — not "TLS was skipped" — while keeping the current insecure
+posture as an **optional, still-tested** fast-iteration path, and doing all of it
+**sudo-free** (no root-owned system-trust-store changes, no `/etc/hosts` / DNS edits).
 
 ## Modes — secure by default, insecure optional (both tested)
 
@@ -28,16 +30,17 @@ KinD keeps **both** postures as a per-component toggle, defaulting to the faithf
 
 - **`secure` (default)** — self-signed TLS + CA trust, mimics VCF/VKS 9.1. Driven by
   **`HARBOR_INSECURE=0`** (Harbor self-signed HTTPS) and **`ARGOCD_INSECURE=0`** (ArgoCD
-  upstream self-signed TLS). This is the new `.env.kind` default (was `HARBOR_INSECURE=1`).
-- **`insecure` (optional)** — the current convenience posture: plain-HTTP Harbor
-  (`HARBOR_INSECURE=1`) + `server.insecure` ArgoCD (`ARGOCD_INSECURE=1`). Retained verbatim for
-  fast local iteration / debugging without cert wrangling.
+  upstream self-signed TLS). This is the `.env.example` default.
+- **`insecure` (optional)** — the original convenience posture: plain-HTTP Harbor
+  (`HARBOR_INSECURE=1`) + `server.insecure` ArgoCD (`ARGOCD_INSECURE=1`). Retained verbatim
+  for fast local iteration / debugging without cert wrangling.
 
 `06-install-harbor.sh` and `07-install-argocd.sh` **branch** on these flags — the secure
-branch is new, the insecure branch is exactly today's code. `make e2e-kind` runs `secure` by
-default; **both modes are validated** (a `make e2e-kind INSECURE_TLS=1`-style override runs the
-insecure matrix; see Validation). Every downstream consumer (containerd wiring, Kaniko flags,
-`verify`, `creds`) keys off the same flags so the two modes never half-mix.
+branch is the new default, the insecure branch is the original code. `make e2e-kind` runs
+`secure` by default; both modes are validated by a mode-override
+(`make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1` runs the insecure matrix; see
+Validation). Every downstream consumer (containerd wiring, Kaniko flags, `crane`, the
+builder push, `verify`, `creds`) keys off the same flags so the two modes never half-mix.
 
 ## VCF/VKS 9.1 cert models (researched, cited)
 
@@ -67,7 +70,7 @@ insecure matrix; see Validation). Every downstream consumer (containerd wiring, 
 - Exposed via a **LoadBalancer** Service (ports 80 + 443); reached **by IP** with
   `argocd login <ip> --insecure` (client skips verification of the self-signed cert).
 - Terminology trap: client `--insecure` = "don't *verify* the cert" (used against VKS);
-  server `--insecure` / `server.insecure` = "serve **no** TLS" (what KinD wrongly does today).
+  server `--insecure` / `server.insecure` = "serve **no** TLS" (what KinD wrongly did before).
 - Sources: [VMware Argo CD Operator install](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/using-supervisor-services/using-argo-cd-service/install-argo-cd-service.html),
   [vSphere Supervisor 9.1 release notes](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/release-notes/vmware-vsphere-supervisor-release-notes.html),
   [Argo CD upstream TLS docs](https://argo-cd.readthedocs.io/en/stable/operator-manual/tls/).
@@ -79,72 +82,95 @@ upstream defaults. A given lab *may* have been handed a custom/CA-signed instanc
 design below trusts a **CA we control**, which covers both (a self-signed leaf under our CA
 is the faithful default; a lab-CA-signed cert is the same trust mechanism, different issuer).
 
+## Endpoint choice — the LoadBalancer IP (sudo-free), not an FQDN
+
+The lab's cert SAN is the Harbor **FQDN**; an earlier sketch of this design mirrored that by
+minting the cert for `harbor.vks.local` and wiring the name in via `/etc/hosts` (host),
+CoreDNS `hosts` (in-cluster pods), and the system trust store (`update-ca-certificates`).
+**That variant was superseded** because every one of those hops needs **sudo** (root-owned
+`/etc/hosts`, CoreDNS ConfigMap edits, the system CA store) — which blocks unattended runs
+and every operator without root.
+
+The chosen design uses the **LoadBalancer IP** as the endpoint instead:
+
+- The cloud-provider-kind LB IP is routable **from the host** AND **in-cluster** (both sit on
+  the kind Docker network), so **no `/etc/hosts` / CoreDNS / DNS wiring is needed** — the one
+  genuinely new mechanism the FQDN variant required is gone.
+- The leaf cert's SAN is that **IP** (`IP:<lb-ip>`), and each consumer trusts our CA through
+  its own per-tool mechanism (below) — **never the system store**. No sudo, anywhere.
+- The FQDN-vs-IP SAN is **cosmetic fidelity**: what actually predicts lab behavior is the
+  self-signed-TLS + explicit-CA-trust *posture* (the class of failure that bites on a real
+  lab), and that is identical whether the SAN is an IP or a name. We don't pay the
+  sudo/DNS friction for a cosmetic match.
+
 ## Design — mimic on KinD (exact per-file changes)
 
 Only **Harbor** and **ArgoCD** are VKS-provided, so only they change. Gitea, Tekton, the
 Tekton Dashboard and the webui app are *ours* — they stay HTTP behind the `*.vks.local`
 ingress (no VKS cert contract on them).
 
-### Cert minting (both)
+### Cert minting (`scripts/lib/tls.sh`)
 
-Generate a **self-signed CA + leaf cert** with `openssl` (deterministic, no extra
-cert-manager dependency in the KinD stack — same *end state* as cert-manager's self-signed
-default; noted as a deliberate simplification). One CA, leaf SANs cover the FQDN **and** the
-LB IP. New helper: `scripts/lib/tls.sh` (`gen_selfsigned_ca_cert <cn> <san-dns> <san-ip> <out-dir>`).
+Mint a **self-signed CA + leaf cert** with `openssl` (deterministic, no cert-manager
+dependency in the KinD stack — same *end state* as cert-manager's self-signed default;
+a deliberate simplification). Helpers:
 
-### Harbor → self-signed HTTPS + CA trust
+- `gen_selfsigned_ca_cert <endpoint-ip-or-host> <out-dir> [ca-cn]` — writes `ca.crt`/`ca.key`
+  (self-signed CA) + `tls.crt`/`tls.key` (leaf signed by that CA; CN + SAN = the endpoint).
+  SAN is `IP:<addr>` when the endpoint looks like an IPv4 address, else `DNS:<host>`. The
+  **CA is stable across runs** (kept if present, so already-distributed trust stays valid);
+  the **leaf is always regenerated** so its SAN tracks the CURRENT LB IP (cloud-provider-kind
+  may reassign it between cluster rebuilds). `umask 077` on all key material.
+- `ca_bundle_with_system <ca-file> <out-bundle>` — builds a bundle = the system trust store
+  **+** our CA, so a host tool pointed at it via `SSL_CERT_FILE` trusts **both** upstream
+  (public) registries and our self-signed Harbor in one run, without touching the root-owned
+  system store.
 
-Endpoint becomes the FQDN **`harbor.vks.local`** (cert SAN = `DNS:harbor.vks.local` +
-`IP:<LB_IP>`), matching the lab's FQDN-with-SAN model.
+### Harbor → self-signed HTTPS on the LB IP + CA trust
 
-- **`scripts/06-install-harbor.sh`:**
-  - after the LB IP is assigned, mint the CA+leaf (SAN = `harbor.vks.local` + LB IP), write
-    the CA to `HARBOR_CA_FILE` (`secrets/harbor-ca.crt`), create the Harbor TLS secret.
-  - install Harbor with `expose.tls.enabled=true`, `expose.tls.certSource=secret`,
-    `externalURL=https://harbor.vks.local`.
-  - wire each node's containerd from `skip_verify` to **`server = "https://harbor.vks.local"`**
-    with a **`ca = ".../ca.crt"`** line in `/etc/containerd/certs.d/harbor.vks.local/hosts.toml`,
-    and add `LB_IP harbor.vks.local` to each node's `/etc/hosts`.
-  - patch **CoreDNS** (a `hosts` block: `LB_IP harbor.vks.local`) so in-cluster pods (Kaniko,
-    the webui Deployment) resolve the FQDN → the Harbor LB IP.
-  - `.env.kind`: `HARBOR_URL=harbor.vks.local`, **`HARBOR_INSECURE=0`**,
-    `HARBOR_CA_FILE=secrets/harbor-ca.crt` (was `HARBOR_INSECURE=1` + LB-IP URL).
-- **`tekton/tasks/kaniko-build.yaml`:** drop `--skip-tls-verify --insecure`; mount the
-  `harbor-ca` ConfigMap to `/kaniko/ssl/certs/additional-ca-cert-bundle.crt` (Kaniko appends it
-  to its trust bundle).
-- **`make platform` (`60-configure-tekton.sh`)** already creates the `harbor-ca` ConfigMap
-  from `HARBOR_CA_FILE` — in KinD it was empty; now it's populated, so no new code, it just
-  starts carrying a real CA.
-- **Jump box:** `make mirror` / `make vks-login` already `trust_ca` the CA into the system
-  store (for `crane` push over HTTPS) — again already in the lab flow, now exercised in KinD.
-- **Alignment:** image refs switch from the raw LB IP to `harbor.vks.local` (the
-  `check-image-alignment` gate and `HARBOR_URL` consumers already parameterize on `HARBOR_URL`,
-  so this is a value change, not new drift).
+Endpoint = the Harbor LoadBalancer **IP** (cert SAN = `IP:<lb-ip>`).
 
-### ArgoCD → self-signed TLS via its own LoadBalancer
+- **`scripts/06-install-harbor.sh`** (two-phase, because the LB IP — the cert SAN — isn't
+  known until the Service is up):
+  1. install Harbor with **TLS off** (`expose.tls.enabled=false`), poll for the LB IP;
+  2. mint the CA + leaf (SAN=`IP:<lb-ip>`) into `secrets/harbor-tls/`, create the
+     `harbor-tls` k8s TLS secret, `helm upgrade` to **HTTPS** (`expose.tls.certSource=secret`,
+     `externalURL=https://<lb-ip>`).
+  - wire **each kind node's** containerd: `/etc/containerd/certs.d/<lb-ip>/hosts.toml` with
+    `server = "https://<lb-ip>"` **and an explicit `ca = ".../ca.crt"`** line, plus
+    `docker cp` the CA into the node at that path (copying the CA into the node *system* store
+    alone is NOT reliable for containerd's registry client — a known kind gotcha).
+    `config_path=/etc/containerd/certs.d` is read per-pull, no restart.
+  - readiness: poll `https://<lb-ip>/api/v2.0/health` with `--cacert ca.crt` (the LB-routable
+    poll — an assigned IP isn't envoy-routable immediately).
+  - `.env.kind`: `HARBOR_URL=<lb-ip>`, **`HARBOR_INSECURE=0`**,
+    `HARBOR_CA_FILE=secrets/harbor-tls/ca.crt`. (insecure branch: `HARBOR_INSECURE=1`,
+    `HARBOR_CA_FILE=''`, plain-HTTP `externalURL`, containerd `skip_verify`.)
+- **`scripts/21-mirror-push.sh`:** in secure mode, `ca_bundle_with_system "$HARBOR_CA_FILE"`
+  → `export SSL_CERT_FILE=<bundle>`; `crane` (go-containerregistry) honors `SSL_CERT_FILE`, so
+  it pushes over TLS trusting our CA **and** still verifies upstream public registries — no
+  `--insecure`, no system-store change, no sudo.
+- **`scripts/15-build-push-builder.sh`:** the builder-image podman push points at the CA via
+  **`--cert-dir <dir>`** (a clean dir holding only `ca.crt`, so podman doesn't mistake a stray
+  `tls.*` for a client cert) — sudo-free.
+- **`tekton/tasks/kaniko-build.yaml` + `make platform`:** Kaniko trusts the CA via the
+  `harbor-ca` ConfigMap mounted at `/kaniko/ssl/certs/additional-ca-cert-bundle.crt`
+  (Kaniko appends it to its trust bundle). `60-configure-tekton.sh` already creates that
+  ConfigMap from `HARBOR_CA_FILE` — in KinD it was empty before; now it carries a real CA.
 
-- **`scripts/07-install-argocd.sh`:** remove the `server.insecure=true` patch; leave upstream
-  TLS on (self-signed cert on 443). Expose `argocd-server` as **`type: LoadBalancer`**
-  (cloud-provider-kind assigns an IP — the KinD analog of the VKS L4 LB). Optionally install an
-  `argocd-server-tls` secret from our CA with SAN = the LB IP + `argocd.vks.local` for a stable
-  cert (still self-signed under our CA — a superset of the VKS default).
-- **Ingress:** remove the `argocd` VirtualService/route from `k8s/istio/gateway.yaml`,
+### ArgoCD → self-signed TLS on its OWN LoadBalancer
+
+- **`scripts/07-install-argocd.sh`:** secure mode leaves upstream self-signed TLS on 443
+  (what real VKS serves); insecure mode patches `server.insecure`. In **both** modes,
+  `argocd-server` is exposed as its **own `type: LoadBalancer`** (the KinD analog of the VKS
+  L4 LB), the IP is discovered and published as **`ARGOCD_LB_IP`** to `.env.kind`. ArgoCD is
+  **not** fronted by the shared `*.vks.local` ingress — VKS gives it its own LB.
+- **Ingress:** the `argocd` route was removed from `k8s/istio/gateway.yaml`,
   `k8s/traefik/ingress.yaml`, and the `${ARGOCD_HOST}`/`${ARGOCD_NAMESPACE}` allowlist entries
-  in `46-install-istio.sh` / `45-install-traefik.sh`. VKS does **not** front ArgoCD behind the
-  shared ingress — it's its own LB. (This also resolves the `argocd.vks.local` conflation the
-  README just documented.)
-- **`scripts/creds.sh`:** ArgoCD URL becomes `https://<argocd LB IP>` (self-signed) instead of
-  `http://argocd.vks.local`; note `--insecure` for the CLI. `argocd-password.sh` unchanged.
-
-### Verify / verify-ingress
-
-- **`scripts/99-verify.sh`:** the pipeline mechanics are in-cluster (unaffected). The webui
-  page check via the ingress (`app.vks.local`, HTTP) is unaffected. No Harbor HTTPS curl is on
-  the critical path, but add a `crane manifest`/`curl --cacert` smoke against Harbor to prove
-  the CA trust end-to-end.
-- **`scripts/98-verify-ingress.sh`:** drop the `argocd.vks.local` route-check (ArgoCD no longer
-  behind the ingress); keep gitea/app/tekton. Add an ArgoCD-over-its-LB-IP TLS reachability
-  check (`curl -k https://<ip>` or `argocd version --server <ip> --insecure`).
+  in `46-install-istio.sh` / `45-install-traefik.sh`. `98-verify-ingress.sh` no longer
+  route-checks `argocd.vks.local` (keeps gitea/app/tekton).
+- **`scripts/creds.sh`:** ArgoCD URL = `https://<ARGOCD_LB_IP> (self-signed; --insecure)`
+  when `ARGOCD_LB_IP` is set; Harbor scheme = `https` unless `HARBOR_INSECURE=1`.
 
 ## What stays the same
 
@@ -153,45 +179,95 @@ Endpoint becomes the FQDN **`harbor.vks.local`** (cert SAN = `DNS:harbor.vks.loc
   only the *transport* to Harbor (HTTP→HTTPS+CA) and ArgoCD's UI TLS change.
 - `cloud-provider-kind` LoadBalancers, the mirror engine (`crane`), the offline builder.
 
-## Validation plan
+## Validation
 
-Clean `make e2e-kind` with **no concurrent load** (registry corruption lesson). It must prove:
+Clean `make e2e-kind` with **no concurrent load** (registry-corruption lesson).
 
-1. `make mirror` — `crane` pushes to `https://harbor.vks.local` over TLS, trusting the CA from
-   the jump-box store (no `--insecure`).
-2. Kaniko `build` — pulls the builder/runtime base **and** pushes the app image to
-   `https://harbor.vks.local` over TLS, trusting the CA via the mounted ConfigMap (no
-   `--skip-tls-verify`).
-3. containerd — the webui Deployment pulls `harbor.vks.local/apps/webui:<sha>` over TLS with
-   the node `certs.d` CA.
-4. ArgoCD — reachable over self-signed TLS on its LB IP; the GitOps sync still rolls the image.
-5. `make verify` + `make verify-ingress` green; a demo walk over the TLS Harbor.
+**`secure` mode — VALIDATED end-to-end green** (clean `make kind-down && make e2e-kind`,
+2026-07-10), all sudo-free:
 
-A failure at any layer is exactly the lab-predictive signal we want (a missing CA-trust hop).
+1. `make mirror` — **34 images crane-pushed** to `https://<lb-ip>` over TLS via `SSL_CERT_FILE`
+   (no `--insecure`).
+2. `make builder-image` — builder pushed to Harbor over TLS via podman `--cert-dir`.
+3. Kaniko `build` — app image built + pushed to `https://<lb-ip>` over TLS via the mounted
+   `additional-ca-cert-bundle` (no `--skip-tls-verify`).
+4. containerd — the webui Deployment pulled `<lb-ip>/apps/webui:<sha>` over TLS with the node
+   `certs.d` CA.
+5. ArgoCD — reachable over self-signed TLS on its own LB IP; the GitOps sync rolled the image.
+6. `make verify` (`End-to-end verified`) + `make verify-ingress` (`SUCCESS`) green.
 
-**Both modes validated:** the implementation runs the **`secure`** e2e-kind (default)
-end-to-end green, then the **`insecure`** e2e-kind (the retained convenience path) end-to-end
-green, so neither branch rots. Both are local-only (e2e-kind is not a CI job); a
-mode-override (e.g. `HARBOR_INSECURE=1 ARGOCD_INSECURE=1`) selects the insecure matrix.
+**`insecure` mode — pending re-validation** (it worked before this change; re-confirm with
+`make kind-down && make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1`). Both modes must pass
+so neither branch rots; both are local-only (e2e-kind is not a CI job).
 
-## Docs to update (ALL `*.md` + diagrams)
+A failure at any secure-mode layer is exactly the lab-predictive signal we want (a missing
+CA-trust hop).
 
-- **README.md:** the Access-the-UIs table (Harbor is now HTTPS+self-signed in **both** KinD
-  and lab; ArgoCD is its own-LB self-signed TLS in both — the KinD-vs-lab gap shrinks to
-  "we mint the cert locally"); the "Try it locally" Harbor-plain-HTTP prose; the demo-table
-  Harbor/ArgoCD rows; step 6.
-- **CLAUDE.md:** the architecture bullets ("Harbor as an HTTP LoadBalancer" → HTTPS+CA;
-  "server.insecure local convenience" → self-signed TLS); the backlog.
-- **Diagrams** (`docs/diagrams/*.puml`): any HTTP/insecure edge labels → HTTPS; re-render +
-  `diagrams-check`.
+## Fidelity vs a real VCF/VKS 9.1 lab (readiness — researched + empirically fact-checked)
+
+Two things ground this section: (a) primary-source research on how VCF/VKS 9.1 provides
+Harbor + ArgoCD, and (b) **empirical version checks of the actual lab CLIs** the operator
+holds (installed via `make install-vcf-clis`). Empirical beats doc-inference: the published
+9.0 docs imply a 2.14.x ArgoCD, but the real **9.1** `argocd` CLI is 3.x — so our KinD
+ArgoCD is the *right generation*.
+
+**Ground-truth versions (verified):** lab `argocd` CLI = **`v3.0.19+d67e6eb90-vcf`** (built
+2025-12-02); `vcf` (VCF Consumption CLI) = **`v9.1.0.0.25296329`** (GA, 2026-03-20). VKS 9.1
+Harbor ≈ **2.14.3** (`_vmware` build); ArgoCD provisioned by the Broadcom Argo CD Operator
+(GA Jul 2025), upstream 3.x-era in 9.1.
+
+**What our KinD stand-in faithfully predicts (green KinD ⇒ likely-green lab):**
+
+- **The self-signed-TLS + CA-trust transport** across all four consumers (crane `SSL_CERT_FILE`,
+  podman `--cert-dir`, node containerd `certs.d ca=`, Kaniko `additional-ca-cert-bundle`) over
+  real HTTPS/443. A missing-CA hop fails KinD exactly as it would fail the lab.
+- **ArgoCD exposure/auth**: own LoadBalancer reached by IP, self-signed TLS on 443,
+  `argocd login <ip> --insecure` (IP-SAN warning), admin from `argocd-initial-admin-secret` —
+  all match VKS 9.1. ArgoCD generation (3.x) matches.
+- **The GitOps loop shape**: push → Tekton → Harbor → tag write-back → ArgoCD sync → app roll.
+
+**What a green KinD run does NOT prove (residual lab risk — verify on the real lab):**
+
+1. **The VKS workload-cluster CA-trust MECHANISM.** The lab does NOT hand-edit
+   `certs.d/hosts.toml`. It trusts the Harbor CA declaratively via the Cluster (v1beta1) spec
+   `variables: [{name: trust, value: {additionalTrustedCAs: [{name: …}]}}]`, backed by a
+   **`<CLUSTER-NAME>-user-trusted-ca-secret`** in the vSphere Namespace holding the CA
+   **double-base64-encoded** (`base64 -w0 ca.crt | base64 -w0`). The secret is **not watched**
+   (CA rotation needs a new secret + a cluster-spec update). Our per-node `certs.d` reaches the
+   same end state by a non-transferable route — the most likely real-lab failure (wrong
+   encoding, wrong namespace, un-reapplied rotation) is invisible to KinD.
+2. **Private projects / robot accounts.** We make Harbor projects public (anonymous pull). A
+   private VKS Harbor project needs a **robot account + `imagePullSecret`** — a path we don't
+   exercise.
+3. **FQDN/DNS addressing.** The lab is FQDN-addressed (ExternalDNS + VIP, cert SAN=FQDN); we
+   use the LB **IP** (SAN=IP) for the sudo-free reasons above. Fine for TLS, but any downstream
+   assuming an IP-shaped `HARBOR_URL` would break on the FQDN lab — treat `HARBOR_URL` as opaque.
+4. **Provisioning is operator/CR-driven, not manifest-driven.** The lab creates a Harbor
+   Supervisor Service + an `argocd-service.vsphere.vmware.com/v1alpha1` `ArgoCD` CR
+   (`enableLoadBalancer: true`, `spec.version: <3.x>+vmware.1-vks.1`) via the Broadcom operators;
+   our `06`/`07` install helm/upstream to mimic the *runtime*, not the provisioning (correct —
+   those scripts don't run against a real lab).
+
+**Sources:** [Harbor as a Supervisor Service (TechDocs)](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vsphere-supervisor-services-and-standalone-components/latest/using-supervisor-services/installing-and-configuring-harbor-and-contour/install-harbor-as-a-supervisor-service.html),
+[Air-gapped Harbor in VCF 9 (VCF blog)](https://blogs.vmware.com/cloud-foundation/2026/04/21/deploying-harbor-service-in-air-gapped-vmware-cloud-foundation-9-0/),
+[Integrate TKG clusters with a private registry — the `trust.additionalTrustedCAs` path (TechDocs)](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/using-private-registries-with-tkg-service-clusters/integrate-tkg-service-clusters-with-a-private-container-registry.html),
+[williamlam — VKS self-signed registry trust](https://williamlam.com/2025/08/quick-tip-configuring-vsphere-kubernetes-service-vks-cluster-with-self-signed-container-registry.html),
+[Broadcom Argo CD Operator GA](https://blogs.vmware.com/cloud-foundation/2025/07/11/gitops-for-vcf-broadcom-argo-cd-operator-now-available/),
+[Install the Argo CD Service (TechDocs)](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/using-supervisor-services/using-argo-cd-service/install-argo-cd-service.html).
+
+**Actionable follow-ups (low-risk, tracked):** (T1) after the secure Harbor upgrade, assert the
+CA served by Harbor's own `GET /api/v2.0/systeminfo/getcert` matches our minted CA (exercises the
+real CA-retrieval path); (T2 — done here) document the `trust.additionalTrustedCAs` delta; (T3)
+guard that no IP-shaped `HARBOR_URL` literal is hardcoded downstream (keep the FQDN swap safe);
+(T4, optional) a `HARBOR_PUBLIC_PROJECTS=0` matrix exercising a robot account + `imagePullSecret`.
 
 ## Risks / notes
 
-- **CoreDNS hosts patch** is the one genuinely new mechanism (so in-cluster pods resolve the
-  Harbor FQDN → its LB IP). Low-risk (a `hosts` plugin block), reversible.
 - **openssl vs cert-manager:** we mint with openssl for determinism; a `cert-manager +
   self-signed ClusterIssuer` variant would mimic the *minting mechanism* too, at the cost of
   adding cert-manager to the KinD stack. End-state cert posture is identical. Decision:
   openssl now; revisit cert-manager only if we want to test cert *rotation*.
+- **LB IP churn:** the CA is stable but the leaf's SAN tracks the current LB IP (regenerated
+  each run), so a cluster rebuild that reassigns the IP re-mints the leaf transparently.
 - **Scope:** Harbor + ArgoCD only (the VKS-provided pair). One PR, staged internally
   (Harbor first, then ArgoCD, then docs), validated by one clean `e2e-kind`.

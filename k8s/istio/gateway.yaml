@@ -20,7 +20,6 @@ spec:
         protocol: HTTP
       hosts:
         - ${GITEA_HOST}
-        - ${ARGOCD_HOST}
         - ${WEBUI_HOST}
         - ${TEKTON_DASHBOARD_HOST}
 ---
@@ -40,23 +39,6 @@ spec:
             host: gitea-http.${GITEA_NAMESPACE}.svc.cluster.local
             port:
               number: 3000
----
-apiVersion: networking.istio.io/v1
-kind: VirtualService
-metadata:
-  name: argocd
-  namespace: ${ISTIO_GATEWAY_NAMESPACE}
-spec:
-  hosts:
-    - ${ARGOCD_HOST}
-  gateways:
-    - vks-uis
-  http:
-    - route:
-        - destination:
-            host: argocd-server.${ARGOCD_NAMESPACE}.svc.cluster.local
-            port:
-              number: 80
 ---
 apiVersion: networking.istio.io/v1
 kind: VirtualService

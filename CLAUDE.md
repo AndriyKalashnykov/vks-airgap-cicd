@@ -55,8 +55,11 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   tag back to `webui-deploy`; ArgoCD deploys from it.
 - **VKS auth is isolated in `scripts/30-vks-login.sh`** — the only auth-aware step;
   everything else consumes `$KUBECONFIG`/context.
-- **Internal CA trust** (Harbor/Gitea self-signed) is wired via `trust_ca` and
-  in-cluster ConfigMaps for Kaniko/Tekton/ArgoCD.
+- **Internal CA trust** (self-signed Harbor) is wired **sudo-free** per consumer — jump-box
+  `crane`/`curl` via `SSL_CERT_FILE` (a system-store + our-CA bundle from `lib/tls.sh`), the
+  builder push via podman `--cert-dir`, each kind node's containerd via `certs.d/<ip>/ca.crt`,
+  and in-cluster Kaniko via the `harbor-ca` ConfigMap. No root-owned system-store change. See
+  `docs/decisions/kind-tls-fidelity.md`.
 - **Air-gap Maven builds**: an in-cluster `mvn`/Kaniko build cannot reach Maven
   Central, so `scripts/15-build-push-builder.sh` builds `apps/java/webui/Dockerfile.builder`
   on the internet side (bakes the full `~/.m2` via `mvn verify`) and pushes it to
@@ -65,11 +68,14 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   `BUILDER_IMAGE_TAG` when `apps/java/webui/pom.xml` deps change.
 - **KinD local e2e**: `kind/kind-config.yaml` enables containerd `config_path`;
   `05-kind-up.sh` runs cloud-provider-kind (LoadBalancer) and writes `KUBECONFIG` +
-  `VKS_AUTH_METHOD=kubeconfig` to `.env.kind`; `06-install-harbor.sh` exposes Harbor
-  as an HTTP LoadBalancer, wires each node's containerd for insecure pull, and
-  writes `HARBOR_URL`(LB IP)+`HARBOR_INSECURE=1` to `.env.kind`. That overlay
-  (loaded last by `load_env` / `-include`) makes the normal flow run against kind
-  unchanged. `kind-down.sh` prunes cloud-provider-kind + `kindccm-*` orphans.
+  `VKS_AUTH_METHOD=kubeconfig` to `.env.kind`; `06-install-harbor.sh` exposes Harbor as a
+  **self-signed-HTTPS LoadBalancer on the LB IP** (default; two-phase: install TLS-off →
+  discover LB IP → mint CA+leaf with SAN=IP → upgrade to TLS), wires each node's containerd
+  with the CA (`certs.d/<ip>/`), and writes `HARBOR_URL`(LB IP)+`HARBOR_INSECURE=0`+
+  `HARBOR_CA_FILE` to `.env.kind` (`HARBOR_INSECURE=1` selects the original plain-HTTP mode).
+  `07-install-argocd.sh` exposes ArgoCD on its **own** LB with self-signed TLS (default) and
+  publishes `ARGOCD_LB_IP`. That overlay (loaded last by `load_env` / `-include`) makes the
+  normal flow run against kind unchanged. `kind-down.sh` prunes cloud-provider-kind + `kindccm-*` orphans.
 - **Manifest rendering**: k8s/Tekton/ArgoCD YAML carry `${VAR}` tokens rendered by
   the configure scripts with a RESTRICTED `envsubst` allowlist (so step-script
   `$(...)`/`${}` are untouched). Tekton install rewrites upstream image hosts
@@ -78,12 +84,13 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   controller. `scripts/44-install-ingress.sh` dispatches to `46-install-istio.sh` (helm
   control plane + gateway LB; istio images from Harbor via the `global.hub` override) or
   `45-install-traefik.sh` (single-binary LB). Both expose the SAME `*.vks.local` hosts
-  (`GITEA_HOST`/`ARGOCD_HOST`/`WEBUI_HOST`/`TEKTON_DASHBOARD_HOST`) behind ONE LoadBalancer and
+  (`GITEA_HOST`/`WEBUI_HOST`/`TEKTON_DASHBOARD_HOST` — **not** ArgoCD, which has its own LB) behind ONE LoadBalancer and
   publish `INGRESS_LB_IP` + the chosen `INGRESS_CONTROLLER` to `.env.kind`. `44-install-ingress.sh`
   lets an explicit `INGRESS_CONTROLLER` override win over the persisted `.env.kind` value (so
   `verify-ingress-both` actually flips controllers). Hostnames resolve via
-  `/etc/hosts` → the LB IP (no internet DNS). **Harbor keeps its OWN direct LB** — its LB
-  IP is load-bearing for the containerd insecure-registry pull path, so it is NOT routed
+  `/etc/hosts` → the LB IP (no internet DNS). **Harbor and ArgoCD each keep their OWN direct LB**
+  — Harbor's LB IP is load-bearing for the containerd registry pull path (self-signed HTTPS +
+  node CA by default) and ArgoCD's own self-signed-TLS LB mirrors the VKS lab; neither is routed
   through the ingress. `make verify-ingress` (in `e2e-kind`, after `verify`) route-checks
   each host through the LB with a K1.5 readiness poll (cloud-provider-kind wires the LB
   Envoy 5–60s after the IP is assigned) and asserts each host serves its own body marker;
@@ -154,12 +161,76 @@ the real demo is the live VKS run — so the KinD e2e stays a local `make` targe
 than a CI job. Run it locally (and both ingress controllers via `make verify-ingress-both`)
 when changing the pipeline, ingress, or manifests.
 
-## Backlog / resume state (2026-07-09)
+## Backlog / resume state (2026-07-10)
 
 Snapshot for picking up next session exactly where this one left off.
 
-**Where things stand:** `main` GREEN, **0 open PRs**, KinD cluster **UP** (rebuilt +
-e2e-verified this session). This session landed a large hardening + rename arc, all merged:
+**✅ COMPLETE — KinD self-signed-TLS fidelity + VCF/VKS lab CLIs (branch `feat/kind-tls-fidelity`; both e2e modes validated; PR-ready)**
+
+Goal (met): make the KinD stand-in mimic **VCF/VKS 9.1's self-signed TLS** for the VKS-provided
+Harbor + ArgoCD, so `make e2e-kind` predicts lab behavior instead of hiding the CA-trust path.
+Design + cited research: `docs/decisions/kind-tls-fidelity.md` (rewritten to the **LB-IP sudo-free**
+variant + a **"Fidelity vs a real VCF/VKS 9.1 lab" readiness section**). Endpoint = the LB IP
+(SAN=IP), CA trusted sudo-free via crane `SSL_CERT_FILE` / podman `--cert-dir` / containerd
+`certs.d ca=` / Kaniko `additional-ca-cert-bundle`. Toggles `HARBOR_INSECURE`/`ARGOCD_INSECURE`
+(default `0` = secure). ArgoCD on its OWN LB (not the `*.vks.local` ingress), like VKS.
+
+**BOTH modes VALIDATED end-to-end this session (the 4-way matrix, all green):**
+
+- **secure e2e-kind** (fresh, default): `Harbor/ArgoCD mode: SECURE`, CA minted **0644** in-path,
+  34 images crane-pushed over TLS, Kaniko built over TLS, `End-to-end verified` + istio ingress `SUCCESS`.
+- **insecure e2e-kind** (`HARBOR_INSECURE=1 ARGOCD_INSECURE=1`): `mode: INSECURE`, full loop green.
+- **`make jumpbox-both` secure** (Photon + Ubuntu 26.04): Harbor HTTPS+CA reach `HTTP 200`, real lab CLIs installed.
+- **`make jumpbox-both` insecure** (both OSes): Harbor HTTP reach `HTTP 200`.
+
+**3 real bugs found + fixed by actually running it (each invisible to a green exit):**
+
+1. **CA-perms uid asymmetry** — `tls.sh` minted certs `umask 077` (0600); Ubuntu 26.04's default
+   `ubuntu` user (uid 1000) pushes the jump-box `vks` to uid 1001, which couldn't read the mounted
+   0600 CA → misleading `error adding trust anchors from file` (real cause: Permission denied;
+   `curl -k` = 200). Fix: CA/leaf are PUBLIC → `chmod 0644` (keys stay 0600). Only the Ubuntu target surfaced it.
+2. **jumpbox harness Harbor check hardcoded `http://`** — broken by the secure-TLS default; now TLS-mode-aware.
+3. **`make e2e-kind HARBOR_INSECURE=1` silently ran SECURE** — `load_env`'s `set -a; . .env.example`
+   clobbered the make-cmdline override; caught by reading the mid-run mode log, not the exit code.
+   Fix: comment the toggles in `.env.example` (proven RED→GREEN). Insecure mode was likely never
+   truly validated before this.
+
+**NEW feature — `make install-vcf-clis`** (+ granular `install-argocd-vcf`/`install-vcf-cli`/`install-vcf-plugins`):
+OS/arch-aware, sudo-free (`~/.local/bin`) install of the Broadcom-LICENSED lab CLIs (`argocd-vcf`,
+`vcf` Consumption CLI, plugins). Licensed artifacts operator-supplied via `VCF_CLI_SRC_DIR` (air-gap)
+or a gitignored links file; versions pinned in `.env.example`. **Verified with the REAL binaries on
+BOTH jumpboxes**: `argocd v3.0.19+…-vcf`, `vcf v9.1.0.0.25296329` (GA), all 7 vcf plugins installed.
+Lab-only (the pipeline wires via `kubectl`); documented in the README real-lab flow.
+
+**Research + empirical fact-check (readiness):** Harbor 2.14.3 + ArgoCD (Broadcom operator, 3.x) in
+VKS 9.1. Empirical beat doc-inference — the ArgoCD-on-9.0 docs imply 2.14.x, but the operator's real
+9.1 `argocd` CLI is **3.0.19-vcf (3.x)**, so our KinD ArgoCD (3.4.5) is the RIGHT generation (did NOT
+downgrade). Top residual lab risk (documented, not KinD-reproducible): the workload cluster trusts the
+Harbor CA **declaratively** via the Cluster spec `trust.additionalTrustedCAs` + a double-base64
+`<cluster>-user-trusted-ca-secret`, not per-node `certs.d`; plus private-project robot accounts + FQDN addressing.
+
+**Learnings captured to `claude-config`** (committed, main, unpushed): empirical-version-beats-doc-inference
+and CA-perms-uid-asymmetry (version-discipline), docs-lint-lint-tracked-files (makefile §10 #18),
+runtime-toggle-must-be-commented (configuration). `links.md` was removed after both jumpboxes passed (owner's instruction).
+
+**Remaining:** `make ci` (final offline gate) → open PR → merge on green → post-merge sync + watch triggered workflows.
+
+**Merged THIS session (2026-07-10):**
+
+- PR #60 — jumpbox Photon+Ubuntu OS matrix + demo walkthrough.
+- PR #62 — backlog refresh.
+- PR #63 — air-gap connectivity diagram + README scannability + fixed stale skopeo diagram labels.
+- PR #64 — Ubuntu **26.04** rootless-podman `pasta` fix + harness `.env`/`.env.kind` gitignored
+  tar-exclude (Renovate had bumped the jumpbox base 24.04→26.04, exposing podman-5's pasta default).
+- PR #65 — README: VKS-lab section FIRST + context-split KinD-vs-VKS-lab UI table + `make fetch-harbor-ca`.
+- PR #66 — KinD-TLS-fidelity design doc.
+
+Two portfolio rules captured to `claude-config/rules/common/version-discipline.md` (Ubuntu
+air-gap jump-box gotchas; no-concurrent-load-during-mirror).
+
+---
+
+**Where things stand:** `main` GREEN. Earlier this arc landed a large hardening + rename set, all merged:
 
 - `/project-review` in full — gates/foundation, ingress-e2e, diagrams, docs, verify-race.
 - Whole toolchain aligned to **Java 25** + a `check-java-alignment` drift gate (RED-proven;
