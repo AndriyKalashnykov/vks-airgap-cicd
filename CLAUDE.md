@@ -154,12 +154,72 @@ the real demo is the live VKS run — so the KinD e2e stays a local `make` targe
 than a CI job. Run it locally (and both ingress controllers via `make verify-ingress-both`)
 when changing the pipeline, ingress, or manifests.
 
-## Backlog / resume state (2026-07-09)
+## Backlog / resume state (2026-07-10)
 
 Snapshot for picking up next session exactly where this one left off.
 
-**Where things stand:** `main` GREEN, **0 open PRs**, KinD cluster **UP** (rebuilt +
-e2e-verified this session). This session landed a large hardening + rename arc, all merged:
+**⏳ IN PROGRESS — RESUME HERE: KinD self-signed-TLS fidelity (branch `feat/kind-tls-fidelity`, pushed, NOT merged / no PR yet)**
+
+Goal: make the KinD stand-in mimic **VCF/VKS 9.1's self-signed TLS** for the VKS-provided
+Harbor + ArgoCD, so `make e2e-kind` predicts lab behavior instead of hiding the CA-trust path.
+Design + cited VKS 9.1 cert research: `docs/decisions/kind-tls-fidelity.md` (merged, PR #66).
+Owner-approved decisions: **secure (self-signed TLS) default + insecure optional, BOTH tested**;
+**sudo-free LB-IP variant** — endpoint = the LoadBalancer IP, cert SAN=IP, CA trusted via crane
+`SSL_CERT_FILE` / podman `--cert-dir` / containerd `certs.d ca=` / Kaniko `additional-ca-cert-bundle`
+(no `/etc/hosts` / CoreDNS / system-store; no sudo). Toggles: `HARBOR_INSECURE` / `ARGOCD_INSECURE`
+(both default `0` = secure).
+
+Code DONE on the branch (shellcheck + `make lint` green): `scripts/lib/tls.sh` (CA/leaf mint +
+`ca_bundle_with_system`); `06-install-harbor.sh` (dual-mode; secure = two-phase self-signed HTTPS
+on the LB IP + node containerd `certs.d` CA); `21-mirror-push.sh` (crane via `SSL_CERT_FILE`, no
+`trust_ca`/sudo); `15-build-push-builder.sh` (podman `--cert-dir`); `07-install-argocd.sh`
+(dual-mode; ArgoCD on its OWN LoadBalancer, self-signed TLS default, publishes `ARGOCD_LB_IP`);
+istio `gateway.yaml` + traefik `ingress.yaml` + `46/45-install-*.sh` + `98-verify-ingress.sh` +
+`creds.sh` (ArgoCD REMOVED from the `*.vks.local` ingress — own LB, like VKS); `.env.example`
+`HARBOR_INSECURE=0` / `ARGOCD_INSECURE=0`.
+
+Validation at session end: a clean **secure** `make kind-down && make e2e-kind` was RUNNING.
+LIVE-VALIDATED: Harbor self-signed HTTPS (`https://<LB_IP>` routable with `--cacert`), ArgoCD
+own-LB self-signed TLS (`https://<LB_IP>`). PENDING (was still in the ~40-min mirror-pull): the
+CA-trusted **crane push over TLS**, **builder podman `--cert-dir` push**, **Kaniko build over
+TLS**, `make verify`, `make verify-ingress`.
+
+**Remaining next session (do these):**
+
+1. `git fetch origin && git checkout feat/kind-tls-fidelity`. Read the secure e2e log / re-run:
+   `make kind-down && make e2e-kind` (SECURE default) **with NO other docker/registry load**
+   (registry-corruption lesson) → drive to `End-to-end verified` + `verify-ingress SUCCESS`.
+2. Validate the **insecure** mode too: `make kind-down && make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1`
+   → green. BOTH modes must pass (owner requirement).
+3. Update `docs/decisions/kind-tls-fidelity.md` — it still describes the superseded **FQDN** variant;
+   rewrite to the chosen **LB-IP sudo-free** variant.
+4. Update **ALL `*.md`** (owner reminder): README Access-UIs table (Harbor = self-signed HTTPS in
+   BOTH KinD + lab now; ArgoCD = own-LB self-signed TLS in both — the KinD/lab gap shrinks to "we
+   mint the cert locally"), the demo-walkthrough Harbor/ArgoCD rows + step 6, the "Try it locally"
+   Harbor-plain-HTTP prose; CLAUDE.md architecture bullets (Harbor "HTTP LoadBalancer" → self-signed
+   HTTPS + CA; ArgoCD "server.insecure convenience" → self-signed TLS + own LB). Diagrams: any
+   HTTP/insecure edge labels → HTTPS; `make diagrams` + `diagrams-check`.
+5. Add the HELD portfolio rule **"sudo-free self-signed-registry CA trust"** (crane `SSL_CERT_FILE` /
+   podman `--cert-dir` / containerd `certs.d ca=` / Kaniko `additional-ca-cert-bundle` + LB-IP
+   endpoint) to `claude-config/rules/common/version-discipline.md` once step 1/2 confirm it e2e.
+6. `make ci` green → PR + merge; then refresh this backlog.
+
+**Merged THIS session (2026-07-10):**
+
+- PR #60 — jumpbox Photon+Ubuntu OS matrix + demo walkthrough.
+- PR #62 — backlog refresh.
+- PR #63 — air-gap connectivity diagram + README scannability + fixed stale skopeo diagram labels.
+- PR #64 — Ubuntu **26.04** rootless-podman `pasta` fix + harness `.env`/`.env.kind` gitignored
+  tar-exclude (Renovate had bumped the jumpbox base 24.04→26.04, exposing podman-5's pasta default).
+- PR #65 — README: VKS-lab section FIRST + context-split KinD-vs-VKS-lab UI table + `make fetch-harbor-ca`.
+- PR #66 — KinD-TLS-fidelity design doc.
+
+Two portfolio rules captured to `claude-config/rules/common/version-discipline.md` (Ubuntu
+air-gap jump-box gotchas; no-concurrent-load-during-mirror).
+
+---
+
+**Where things stand:** `main` GREEN. Earlier this arc landed a large hardening + rename set, all merged:
 
 - `/project-review` in full — gates/foundation, ingress-e2e, diagrams, docs, verify-race.
 - Whole toolchain aligned to **Java 25** + a `check-java-alignment` drift gate (RED-proven;
