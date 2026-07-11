@@ -34,9 +34,10 @@ mise, clones this repo, runs `make deps`, and prints a toolchain report:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AndriyKalashnykov/vks-airgap-cicd/main/bootstrap-jumpbox.sh | bash
-# prefer to read before running? download, inspect, then run:
-curl -fsSLO https://raw.githubusercontent.com/AndriyKalashnykov/vks-airgap-cicd/main/bootstrap-jumpbox.sh
-less bootstrap-jumpbox.sh && bash bootstrap-jumpbox.sh
+
+# Prefer to read before running? Download, inspect, then run this INSTEAD of the line above:
+#   curl -fsSLO https://raw.githubusercontent.com/AndriyKalashnykov/vks-airgap-cicd/main/bootstrap-jumpbox.sh
+#   less bootstrap-jumpbox.sh && bash bootstrap-jumpbox.sh
 ```
 
 It's idempotent (re-run skips what's present); pin a ref with `REF=<tag-or-sha>`. It installs
@@ -193,6 +194,11 @@ separately (see the last bullet). Figures were measured on the live single-node 
 
 ## Tech stack
 
+<details>
+<summary><strong>Layers &amp; choices</strong> — what each component is and why (click to expand)</summary>
+
+<br>
+
 | Layer | Technology | Why |
 |-------|-----------|-----|
 | Git server | **Gitea** (self-hosted, SQLite) | Single-image, air-gap-friendly Git host with webhooks; installed inside the cluster |
@@ -207,6 +213,8 @@ separately (see the last bullet). Figures were measured on the live single-node 
 | Offline build | dependency-baked **Maven** builder image | Bakes `~/.m2` so in-cluster `mvn` builds with no Maven Central reach |
 | Local e2e | **KinD** + **cloud-provider-kind** | Stands up the "VKS-provided" Harbor + ArgoCD locally with a real LoadBalancer |
 | Toolchain | **mise** | One cross-distro (Ubuntu/PhotonOS) version manager for the jump-box tools |
+
+</details>
 
 ## Quick Start (dual-homed jump box)
 
@@ -226,6 +234,11 @@ make verify                   # [cluster] end-to-end smoke test
 > KinD — see [Try it locally end-to-end with KinD](#try-it-locally-end-to-end-with-kind).
 
 ## Architecture
+
+<details>
+<summary><strong>System context, containers, deployment, pipeline flow &amp; operating modes</strong> (click to expand)</summary>
+
+<br>
 
 Harbor + ArgoCD are **provided by VKS** (blue in the diagrams). The jump box mirrors every
 image into Harbor; a `git push` then drives the whole CI/CD flow entirely inside the air gap.
@@ -257,6 +270,8 @@ Diagram sources are committed under [`docs/diagrams/`](docs/diagrams/) (C4-Plant
 | **sneakernet** | Jump box has internet only | `make mirror-pull && make bundle` → carry the bundle → `make bundle-load && make mirror-push` inside |
 
 Set `RUN_MODE` in `.env`.
+
+</details>
 
 ## Run against a real VKS lab (Harbor & ArgoCD need to be installed)
 
@@ -640,6 +655,11 @@ or use `kubectl port-forward` — `kubectl -n gitea port-forward svc/gitea-http 
 
 ## Try it locally end-to-end with KinD
 
+<details>
+<summary><strong>Local KinD end-to-end</strong> — stand up the whole stack + pipeline locally (click to expand)</summary>
+
+<br>
+
 You don't need a VKS cluster to exercise the whole pipeline. `make e2e-kind` stands up a
 local [KinD](https://kind.sigs.k8s.io/) cluster, installs the "VKS-provided" pieces
 (**Harbor** + **ArgoCD**) into it, then runs the exact same
@@ -684,7 +704,14 @@ How the local stand-in works:
 Individual targets: `make kind-up`, `make install-harbor`, `make install-argocd`,
 `make install-ingress` (or `make install-istio` / `make install-traefik`).
 
+</details>
+
 ## Access the UIs (URLs, logins, passwords)
+
+<details>
+<summary><strong>URLs, logins &amp; passwords</strong> — make creds + per-UI access (click to expand)</summary>
+
+<br>
 
 Run **`make creds`** — it self-resolves the kubeconfig and prints the URLs, logins, and (when an
 ingress is installed) the one-time `/etc/hosts` line for the `*.vks.local` hosts. **Which URLs are
@@ -722,6 +749,8 @@ VKS cluster:
 The **Tekton Dashboard** (above) is Tekton's web UI. The Tekton **EventListener** is a
 separate, in-cluster-only webhook receiver (`el-webui.ci.svc:8080`) — the Gitea webhook fires
 cluster-internally, so there is nothing to expose or log into there.
+
+</details>
 
 ## Demo walkthrough — drive the GitOps loop by hand
 
@@ -936,6 +965,11 @@ overlay written by the KinD flow. Nothing is hardcoded in scripts or the Makefil
 
 ## VKS authentication (VCF 9 + Supervisor)
 
+<details>
+<summary><strong>Auth methods</strong> — kubeconfig / vcf / vsphere via VKS_AUTH_METHOD (click to expand)</summary>
+
+<br>
+
 `scripts/30-vks-login.sh` (`make vks-login`) is the single pluggable step that produces a
 working `KUBECONFIG` and context; everything downstream is auth-agnostic. Select the method
 with `VKS_AUTH_METHOD`:
@@ -979,6 +1013,8 @@ wget --no-check-certificate https://<SUPERVISOR_HOST>/wcp/plugin/linux-amd64/vsp
 > `vcf context create`, so `30-vks-login.sh` carries a `TODO(verify on a real VKS lab)` to
 > confirm one before automating further. A password is never placed on argv either way.
 > `kubeconfig` (bring the lab's exported kubeconfig) is the simplest working method.
+
+</details>
 
 ## Contributing
 
