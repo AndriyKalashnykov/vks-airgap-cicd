@@ -29,8 +29,30 @@ VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surface
 
 ### Bootstrap a bare jump box (before you can clone this repo)
 
+**Fast path (dual-homed Ubuntu/Photon)** — one command OS-gates, installs git/curl/make +
+mise, clones this repo, runs `make deps`, and prints a toolchain report:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AndriyKalashnykov/vks-airgap-cicd/main/bootstrap-jumpbox.sh | bash
+# prefer to read before running? download, inspect, then run:
+curl -fsSLO https://raw.githubusercontent.com/AndriyKalashnykov/vks-airgap-cicd/main/bootstrap-jumpbox.sh
+less bootstrap-jumpbox.sh && bash bootstrap-jumpbox.sh
+```
+
+It's idempotent (re-run skips what's present); pin a ref with `REF=<tag-or-sha>`. It installs
+only the **open** toolchain — the licensed VCF CLIs stay operator-supplied (`make install-vcf-clis`).
+It needs internet (dual-homed); a fully air-gapped host uses the carried bundle instead.
+
+> **`curl` must already be present** for the pipe form above. Ubuntu images ship it; a **bare
+> Photon OS 5** box does **not** — run `sudo tdnf install -y curl` first, then re-run the command.
+
+<details>
+<summary><strong>Manual / detailed path</strong> — the step-by-step the bootstrap automates (click to expand)</summary>
+
+<br>
+
 Everything else (mise, `make deps`, the toolchain) runs from a clone of this repo, so first
-get **git + SSH + `make`** working on a fresh box. Do this once, manually.
+get **git + SSH + make** working on a fresh box. Do this once, manually.
 
 **Ubuntu:**
 
@@ -80,8 +102,8 @@ ssh -T git@github.com         # expect: "Hi <user>! You've successfully authenti
 ```bash
 # SSH (needs the key above added to your GitHub account)…
 git clone git@github.com:AndriyKalashnykov/vks-airgap-cicd.git
-# …or HTTPS (this repo is public — no key needed):
-git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git
+# …or HTTPS (this repo is public — no key needed) — use ONE of these two:
+# git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git
 cd vks-airgap-cicd
 
 curl https://mise.run | sh                 # installs mise to ~/.local/bin
@@ -93,6 +115,8 @@ make deps                                  # installs the full jump-box toolchai
                                            # Photon, uidmap + slirp4netns on Ubuntu
 ```
 
+</details>
+
 > The **`make deps` toolchain install + rootless-podman engine + cluster reachability** are
 > validated end-to-end by `make jumpbox` — it runs them on a fresh jump-box container
 > (`JUMPBOX_OS=photon` on `photon:5.0`, the default, or `JUMPBOX_OS=ubuntu` on `ubuntu:26.04`;
@@ -103,7 +127,7 @@ make deps                                  # installs the full jump-box toolchai
 
 - A jump box running **Ubuntu** or **PhotonOS** with internet access.
 - Network reach to the VKS Supervisor, Harbor, and (for dual-homed) the workload cluster.
-- The Harbor (and Gitea, once installed) **CA certificates** (`.env` → `HARBOR_CA_FILE` / `GITEA_CA_FILE`).
+- The Harbor **CA certificate** (`.env` → `HARBOR_CA_FILE`) — Harbor is self-signed HTTPS; Gitea is served over HTTP (no CA needed).
 - [mise](https://mise.jdx.dev/) for the rest of the toolchain (installed by `make deps`; git must already be present).
 - **Container engine:** image operations (mirror, Maven builder build/push, diagram
   rendering) use `CONTAINER_ENGINE` — **podman-preferred**, docker fallback. `make deps`

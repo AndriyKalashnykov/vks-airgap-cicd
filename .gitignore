@@ -42,3 +42,6 @@ links.md
 
 # Operator-local Broadcom download token (live credential) — NEVER commit
 token.md
+
+# Claude Code harness (agent worktrees, local state) — never tracked/scanned
+.claude/

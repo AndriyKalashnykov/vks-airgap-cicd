@@ -283,6 +283,10 @@ jumpbox-both: ## Validate the jump-box flow on BOTH Photon and Ubuntu (matrix)
 	@$(MAKE) jumpbox JUMPBOX_OS=photon
 	@$(MAKE) jumpbox JUMPBOX_OS=ubuntu
 
+.PHONY: bootstrap-test
+bootstrap-test: ## Validate bootstrap-jumpbox.sh from-nothing on BARE OS images (BOOTSTRAP_TEST_OSES matrix) + unsupported-OS reject
+	@$(SCRIPTS)/bootstrap-test.sh
+
 ##@ Demo application (local dev)
 .PHONY: app-test
 app-test: ## Run the Spring Boot app unit/integration tests
@@ -343,7 +347,8 @@ trivy-fs: app-build ## trivy — scan the built app jar's embedded deps for fixa
 trivy-config: ## trivy — scan k8s/Tekton manifests for HIGH/CRITICAL misconfigurations (.trivyignore documents accepted findings)
 	@if command -v trivy >/dev/null 2>&1; then \
 	  trivy config --severity HIGH,CRITICAL --exit-code 1 --quiet \
-	    --skip-dirs bundle --skip-dirs apps/java/webui --skip-dirs docs .; \
+	    --skip-dirs bundle --skip-dirs apps/java/webui --skip-dirs docs --skip-dirs .claude \
+	    --skip-files jumpbox/Dockerfile.bootstrap .; \
 	else echo "trivy not installed — run 'make deps' (mise) — skipping"; fi
 
 .PHONY: sec
