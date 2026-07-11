@@ -41,8 +41,15 @@ require_cmd kubectl
 need_create=1
 if kind get clusters 2>/dev/null | grep -qxF "$CLUSTER_NAME"; then
   kc="$(mktemp)"
-  if kind get kubeconfig --name "$CLUSTER_NAME" >"$kc" 2>/dev/null \
-     && kubectl --kubeconfig "$kc" get nodes 2>/dev/null | grep -q ' Ready'; then
+  # Capture the node list first, THEN grep the variable: piping `kubectl … | grep -q` directly
+  # lets `grep -q` close the pipe on its first match, SIGPIPE-killing `kubectl` (exit 141), which
+  # under `set -o pipefail` reads as "not Ready" → we would DELETE a HEALTHY cluster. `grep` on a
+  # small captured string never SIGPIPEs its source.
+  nodes=""
+  if kind get kubeconfig --name "$CLUSTER_NAME" >"$kc" 2>/dev/null; then
+    nodes="$(kubectl --kubeconfig "$kc" get nodes 2>/dev/null || true)"
+  fi
+  if [ -n "$nodes" ] && printf '%s\n' "$nodes" | grep -q ' Ready'; then
     log_info "kind cluster '$CLUSTER_NAME' already exists and is healthy — skipping create"
     need_create=0
   else

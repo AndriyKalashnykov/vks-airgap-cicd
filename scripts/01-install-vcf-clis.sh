@@ -67,7 +67,12 @@ resolve_archive() {
   out="${WORK}/${cli}-archive"
   if [ -f "${SRC_DIR}/${name}" ]; then
     log_info "using ${name} from VCF_CLI_SRC_DIR"; cp "${SRC_DIR}/${name}" "$out"
-  elif m="$(find "$SRC_DIR" -maxdepth 1 -type f -name "$glob" 2>/dev/null | sort | head -1)" && [ -n "$m" ]; then
+  elif m="$(find "$SRC_DIR" -maxdepth 1 -type f -name "$glob" 2>/dev/null | sort | head -1 || true)" && [ -n "$m" ]; then
+    # NB: `-print -quit` can't replace `sort | head -1` here — it would defeat the deterministic
+    # pick. `sort` buffers all of `find`'s output, so the SELECTED line is already correct; only
+    # the pipe's EXIT STATUS is a spurious 141 (`head -1` closes the pipe → `sort` SIGPIPEs) under
+    # `pipefail`. The trailing `|| true` neutralises just that status so the `&& [ -n "$m" ]`
+    # branch is taken on a real match (without it a legitimate multi-arch match is misread as "none").
     # `sort` makes the pick deterministic across machines (find order is filesystem-dependent).
     # The glob is version-pinned per cli, so only same-version archives can co-match here (e.g. an
     # arch-agnostic "…-Binaries-…" bundle) — a differently-versioned artifact in the folder is
@@ -96,8 +101,8 @@ install_argocd_vcf() {
   # gzip as an empty archive.)
   d="$(mktemp -d)"
   if tar -xzf "$ar" -C "$d" 2>/dev/null && [ -n "$(find "$d" -type f 2>/dev/null | head -1)" ]; then
-    bin="$(find "$d" -type f \( -name "argocd-cli-${os}-${go_arch}*" -o -name "argocd-${os}-${go_arch}" -o -name argocd \) | head -1)"
-    [ -n "$bin" ] || bin="$(find "$d" -type f -name 'argocd*' | head -1)"
+    bin="$(find "$d" -type f \( -name "argocd-cli-${os}-${go_arch}*" -o -name "argocd-${os}-${go_arch}" -o -name argocd \) -print -quit)"
+    [ -n "$bin" ] || bin="$(find "$d" -type f -name 'argocd*' -print -quit)"
     [ -n "$bin" ] || { rm -rf "$d"; die "argocd binary not found inside the archive"; }
     install -m 0755 "$bin" "${BIN_DIR}/argocd"
   else
@@ -114,7 +119,7 @@ install_vcf_cli() {
   d="$(mktemp -d)"; tar -xzf "$ar" -C "$d"
   # Flat tarball (vcf-cli-linux_<arch> at root) OR a multi-arch "Binaries" bundle
   # (<os>/<arch>/v<ver>/vcf-cli-<os>_<arch>) — find at ANY depth.
-  bin="$(find "$d" -type f -name "vcf-cli-${os}_${go_arch}" | head -1)"
+  bin="$(find "$d" -type f -name "vcf-cli-${os}_${go_arch}" -print -quit)"
   [ -n "$bin" ] || { rm -rf "$d"; die "vcf-cli-${os}_${go_arch} not found inside the archive"; }
   install -m 0755 "$bin" "${BIN_DIR}/vcf"; rm -rf "$d"
   "${BIN_DIR}/vcf" version || log_warn "vcf installed but 'vcf version' failed"
@@ -129,7 +134,7 @@ install_vcf_plugins() {
   pdir="${WORK}/plugins"; mkdir -p "$pdir"; tar -xzf "$ar" -C "$pdir"
   # A multi-arch bundle nests the plugins under <os>/<arch>/...; point --local-source there.
   src="$pdir"
-  local archdir; archdir="$(find "$pdir" -type d -path "*/${os}/${go_arch}" | head -1)"
+  local archdir; archdir="$(find "$pdir" -type d -path "*/${os}/${go_arch}" -print -quit)"
   [ -n "$archdir" ] && src="$archdir"
   # `vcf plugin install all` is idempotent — it upgrades/replaces in place, so no pre-clean is
   # needed (verified: a second install over existing state succeeds). Real vcf state lives under

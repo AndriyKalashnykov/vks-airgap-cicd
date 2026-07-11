@@ -137,7 +137,12 @@ push_repo "$deploy_src" "$GITEA_DEPLOY_REPO" "$ARGOCD_TRACK_BRANCH"
 # firing 2 PipelineRuns per push. Skip if a hook already targets our EventListener URL.
 hook_url="http://el-webui.${CI_NAMESPACE}.svc:8080"
 hooks_api="${base}/api/v1/repos/${GITEA_ORG}/${GITEA_APP_REPO}/hooks"
-if api_body -X GET "$hooks_api" | grep -qF "$hook_url"; then
+# Capture the hooks list first, then grep the variable draining all input (no `-q`): piping
+# `api_body … | grep -qF` lets grep close the pipe on its first match and SIGPIPE `api_body`
+# (exit 141), which under `set -o pipefail` reads as "no hook present" → we would create a
+# DUPLICATE hook (the very thing this idempotency check exists to prevent) on a large hooks body.
+hooks_body="$(api_body -X GET "$hooks_api" || true)"
+if printf '%s' "$hooks_body" | grep -F "$hook_url" >/dev/null; then
   log_info "webhook on ${GITEA_APP_REPO} -> ${hook_url} already present — skipping (idempotent)"
 else
   cat > "${tmp}/hook.json" <<EOF

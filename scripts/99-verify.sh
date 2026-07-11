@@ -128,7 +128,11 @@ wait_for "app HTTP up" curl -fsS "${app}/actuator/health" || die "app not servin
 
 # Poll (not single-shot): the Service briefly load-balances across old+new pods
 # during rollout, so the marker may take a few polls to appear on every replica.
-marker_visible() { curl -fsS "${app}/" 2>/dev/null | grep -q "$MARKER"; }
+# Capture the page first, then grep the variable: piping `curl … | grep -q` lets grep exit on
+# its first match and SIGPIPE `curl` (exit 141) while it is still streaming the body, which under
+# `set -o pipefail` reads as "marker absent" → a false "end result not observed" on a page that
+# DID show the marker. `|| true` preserves the original semantics (a curl HTTP error → not visible).
+marker_visible() { local b; b="$(curl -fsS "${app}/" 2>/dev/null || true)"; printf '%s' "$b" | grep -q "$MARKER"; }
 if wait_for "deployed page shows marker $MARKER" marker_visible; then
   log_info "SUCCESS — the deployed page shows the new marker '$MARKER'"
   log_info "End-to-end verified: git push -> Tekton -> Harbor -> write-back -> ArgoCD -> live app."

@@ -19,7 +19,10 @@ while read -r ref; do
   [ -n "$ref" ] || continue
   repo="${ref%:*}"
   mtag="${ref##*:}"
-  itag="$(grep -oE "${repo}:[^[:space:]\"]+" images/images.txt | head -1 | sed "s|${repo}:||")"
+  # `|| true`: `head -1` closes the pipe → `grep` SIGPIPEs (141), and a repo absent from
+  # images.txt makes `grep` exit 1; either non-zero would abort this `set -e` script mid-loop
+  # and skip the `[ -z "$itag" ]` WARN guard below. The captured value is already correct.
+  itag="$(grep -oE "${repo}:[^[:space:]\"]+" images/images.txt | head -1 | sed "s|${repo}:||" || true)"
   if [ -z "$itag" ]; then
     echo "WARN  ${repo}: referenced in a manifest but absent from images/images.txt (not mirrored?)"
     continue
@@ -38,7 +41,9 @@ done < <(grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"]+
 # and in the app runtime Dockerfile ARG. A grep over manifest literals cannot see
 # those, so check them explicitly against images.txt. (Only the JRE runtime image
 # is mirrored — the build uses the maven:...-temurin image.)
-temurin_itag() { grep -oE "eclipse-temurin:[^[:space:]\"]*-$1-jammy" images/images.txt | head -1 | sed 's|eclipse-temurin:||'; }
+# `|| true`: this is the function body, consumed by `jre_itag="$(temurin_itag jre)"` (a `set -e`
+# assignment) — a `head -1` SIGPIPE or no-match would otherwise abort the whole script there.
+temurin_itag() { grep -oE "eclipse-temurin:[^[:space:]\"]*-$1-jammy" images/images.txt | head -1 | sed 's|eclipse-temurin:||' || true; }
 check_pinned() { # <label> <actual> <expected-from-images.txt>
   [ -n "$3" ] || return 0
   if [ "$2" != "$3" ]; then
@@ -55,8 +60,10 @@ check_pinned "RUNTIME_IMAGE (apps/java/webui/Dockerfile)" "$(grep -oE 'RUNTIME_I
 # Istio's version is carried in .env.example (ISTIO_VERSION, which feeds the helm
 # global.tag in 46-install-istio.sh) and mirrored as istio/pilot + istio/proxyv2
 # in images.txt. Keep them aligned (both istio images share the one version).
-istio_itag="$(grep -oE 'istio/pilot:[^[:space:]"]+' images/images.txt | head -1 | sed 's|istio/pilot:||')"
-proxyv2_itag="$(grep -oE 'istio/proxyv2:[^[:space:]"]+' images/images.txt | head -1 | sed 's|istio/proxyv2:||')"
+# `|| true`: standalone `set -e` assignments — a `head -1` SIGPIPE (or istio absent from
+# images.txt) would abort the script before the aligning `check_pinned` calls below run.
+istio_itag="$(grep -oE 'istio/pilot:[^[:space:]"]+' images/images.txt | head -1 | sed 's|istio/pilot:||' || true)"
+proxyv2_itag="$(grep -oE 'istio/proxyv2:[^[:space:]"]+' images/images.txt | head -1 | sed 's|istio/proxyv2:||' || true)"
 check_pinned "ISTIO_VERSION (.env.example)" "$(grep -E '^ISTIO_VERSION=' .env.example | cut -d= -f2)" "$istio_itag"
 check_pinned "istio/proxyv2 (images.txt)" "$proxyv2_itag" "$istio_itag"
 
