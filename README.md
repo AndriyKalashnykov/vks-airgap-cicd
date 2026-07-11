@@ -219,7 +219,11 @@ separately (see the last bullet). Figures were measured on the live single-node 
 ## Quick Start (dual-homed jump box)
 
 ```bash
-cp .env.example .env          # edit: Harbor/Gitea URLs, VKS access, CA files, secrets (see below)
+# Step 0 — set up cluster access and fill .env. Which values, in what order, and where to get
+# each are covered in "Run against a real VKS lab" below (upfront vCenter vars → get kubeconfig
+# → discover Harbor/ArgoCD after you install them → choose Gitea passwords). Or use
+# "Try it locally end-to-end with KinD" for the zero-config local path — it fills .env for you.
+cp .env.example .env
 make deps                     # [offline] install jump-box toolchain
 make ci                       # [offline] lint + validate + app tests + docs
 make install-all              # [cluster] mirror → builder → vks-login → platform → gitops
@@ -273,10 +277,71 @@ Set `RUN_MODE` in `.env`.
 
 </details>
 
-## Run against a real VKS lab (Harbor & ArgoCD need to be installed)
+## VKS authentication (VCF 9 + Supervisor)
 
 <details>
-<summary><strong>Run against a real VKS lab</strong> — install Harbor & ArgoCD as VCF Supervisor Services, provision a workload cluster, then wire the pipeline (Part A + Part B; click to expand)</summary>
+<summary><strong>Auth methods</strong> — kubeconfig / vcf / vsphere via VKS_AUTH_METHOD (click to expand)</summary>
+
+<br>
+
+`scripts/30-vks-login.sh` (`make vks-login`) is the single pluggable step that produces a
+working `KUBECONFIG` and context; everything downstream is auth-agnostic. Select the method
+with `VKS_AUTH_METHOD`:
+
+| Method | Use it when | Inputs (`.env`) |
+|--------|-------------|-----------------|
+| `kubeconfig` (default) | You already have the lab's exported kubeconfig | `KUBECONFIG`, `VKS_CONTEXT` |
+| `vcf` | Real VCF 9 lab, via the VCF Consumption CLI | `SUPERVISOR_HOST`, `VKS_USERNAME` (+ `VKS_SSO_DOMAIN`), `VKS_NAMESPACE`, `VKS_CLUSTER_NAME`, `VKS_CONTEXT_NAME`, `VKS_INSECURE_SKIP_TLS_VERIFY` |
+| `vsphere` | Pre-9 Supervisor, via the kubectl-vsphere plugin (legacy) | `SUPERVISOR_HOST`, `VKS_NAMESPACE`, `VKS_CLUSTER_NAME`, `VKS_USERNAME`, `VKS_PASSWORD` |
+
+**`vcf` method — the real VCF Consumption CLI flow.** `.env` inputs:
+
+```bash
+VKS_AUTH_METHOD=vcf
+SUPERVISOR_HOST=<supervisor-IP-or-FQDN>   # no scheme; vCenter → Workload Management → Supervisors → Control Plane IP
+VKS_USERNAME=administrator@WLD.SSO        # 'user@SSO.DOMAIN' (or set VKS_SSO_DOMAIN and give the bare user)
+VKS_NAMESPACE=<vsphere-namespace>         # the <ns> in `vcf context use <name>:<ns>`
+VKS_CLUSTER_NAME=<vks-cluster-name>       # the workload cluster to fetch the kubeconfig for
+VKS_CONTEXT_NAME=sup66                    # the vcf context NAME you type at the create prompt
+VKS_INSECURE_SKIP_TLS_VERIFY=true         # skip verifying the Supervisor's self-signed cert
+```
+
+`make vks-login` then runs (interactively — the CLI **prompts** for the context name and the
+password, so no secret ever touches argv):
+
+```bash
+vcf context create --endpoint https://<SUPERVISOR_HOST> --username <user>@<SSO-DOMAIN> \
+    --insecure-skip-tls-verify --auth-type basic     # enter the context name (VKS_CONTEXT_NAME) + password when prompted
+vcf context use <VKS_CONTEXT_NAME>:<VKS_NAMESPACE>   # note the <ctx>:<ns> COLON form
+vcf cluster kubeconfig get <VKS_CLUSTER_NAME> --export-file <KUBECONFIG>   # write the workload-cluster kubeconfig to $KUBECONFIG
+```
+
+`vcf cluster kubeconfig get` is the **primary** VKS 9 way to obtain the **workload-cluster**
+kubeconfig (verify the exact 9.1 flags on your lab). The legacy `kubectl vsphere login --server
+<ip> --vsphere-username <u> --tanzu-kubernetes-cluster-name <c> --tanzu-kubernetes-cluster-namespace
+<ns> [--insecure-skip-tls-verify]` form (the `vsphere` method) is the **vSphere-with-Tanzu 7/8
+fallback** — present only where the `vcf` CLI is unavailable.
+
+If the workload cluster needs the kubectl-vsphere plugin, fetch it from the Supervisor:
+
+```bash
+wget --no-check-certificate https://<SUPERVISOR_HOST>/wcp/plugin/linux-amd64/vsphere-plugin.zip
+```
+
+> **Not yet lab-validated.** The `vcf` flow is written to the command **shape** verified from
+> primary sources (the ogelbric/LAB VCF-CLI transcript and Broadcom's "Install the Argo CD
+> Service" techdoc), but it has **not** been run end-to-end against a real VKS lab in this repo.
+> The login is interactive today: no non-interactive/stdin password mechanism is confirmed for
+> `vcf context create`, so `30-vks-login.sh` carries a `TODO(verify on a real VKS lab)` to
+> confirm one before automating further. A password is never placed on argv either way.
+> `kubeconfig` (bring the lab's exported kubeconfig) is the simplest working method.
+
+</details>
+
+## Run against a real VKS lab — Scenario 1: Harbor & ArgoCD need to be installed
+
+<details>
+<summary><strong>Scenario 1 — Harbor &amp; ArgoCD need to be installed</strong> — install them as VCF Supervisor Services, provision a workload cluster, then wire the pipeline (Part A + Part B; click to expand)</summary>
 
 <br>
 
@@ -314,6 +379,20 @@ Reference docs:
 
 ### Part A — install the lab services
 
+**A1 and A2 install ON the Supervisor** (each Service lands in its own vSphere Namespace),
+**not** on a workload cluster — so they need **Supervisor** access, not the VKS kubeconfig you
+fetch in A3. The `.env` prompts below are interleaved with the steps: set each value at the
+step where it first becomes known, rather than all at once.
+
+> **→ before Part A, set the upfront vCenter vars in `.env`** (they drive the Supervisor login):
+>
+> ```bash
+> SUPERVISOR_HOST=<supervisor-control-plane-IP>   # vCenter → Workload Management → Supervisors
+> VKS_USERNAME=administrator@vsphere.local        # your vSphere SSO admin
+> VKS_NAMESPACE=<vsphere-namespace>               # where you create the ArgoCD/workload resources
+> VKS_CLUSTER_NAME=<vks-cluster-name>             # the workload cluster you provision in A3
+> ```
+
 **A1 — Install Harbor as a Supervisor Service** (vSphere Client — not scriptable):
 
 1. **Ingress prereq:** install **Contour** first (Harbor's default ingress on VKS), or configure
@@ -338,6 +417,20 @@ Reference docs:
 > the **same Supervisor**, the VKS clusters **automatically trust the Harbor registry
 > certificate** — so the workload-node image pull "just works" without the per-node `certs.d`
 > wiring the KinD stand-in uses.
+
+With Harbor installed, record its access details before moving on to ArgoCD.
+
+> **→ now (A1 done) set the Harbor values in `.env`** — the FQDN you set, or its discovered LB IP:
+>
+> ```bash
+> HARBOR_URL=harbor.<lab-fqdn>          # the hostname you set; or:
+> #   kubectl get svc -n <harbor-namespace> -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+> HARBOR_USERNAME=admin                 # or a robot account (Step 4 / make harbor-robot)
+> HARBOR_PASSWORD=<harborAdminPassword> # the A1 admin password; set in .env only, never on argv
+> HARBOR_CA_FILE=./secrets/harbor-ca.crt   # Harbor's self-signed CA (saved in Step 2)
+> HARBOR_INFRA_PROJECT=cicd             # CI/CD + base images
+> HARBOR_APP_PROJECT=apps               # the built application image
+> ```
 
 **A2 — Install the ArgoCD Operator + an ArgoCD instance** (`kubectl`-driven):
 
@@ -392,12 +485,36 @@ Reference docs:
 > (is ArgoCD in this cluster, are any workload clusters registered, does the target namespace
 > exist). Run it after Step 1 (kubeconfig in place), before `make gitops`.
 
+With the ArgoCD instance up, record its endpoint and namespace.
+
+> **→ now (A2 done) set the ArgoCD values in `.env`** — the argocd-server LB IP + where it runs:
+>
+> ```bash
+> ARGOCD_NAMESPACE=argocd-instance-1    # the vSphere Namespace your A2 ArgoCD instance runs in
+> ARGOCD_SERVER=<argocd-server-LB-IP>   # kubectl get svc -n argocd-instance-1 argocd-server \
+> #                                       -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+> ARGOCD_APP_NAME=webui
+> ARGOCD_DEST_NAMESPACE=webui
+> ARGOCD_TRACK_BRANCH=main
+> # ARGOCD_CA_FILE=./secrets/argocd-ca.crt   # ArgoCD's self-signed CA (Step 2, make fetch-argocd-ca)
+> ```
+
 **A3 — Provision the workload VKS cluster + get its kubeconfig.** Gitea, Tekton, and the demo app
 run in a **guest VKS (Tanzu Kubernetes) cluster**, not on the Supervisor. Create a vSphere
 Namespace, provision a VKS cluster in it, and obtain its kubeconfig (e.g. a `vcf`/`kubectl
 vsphere` login to the guest cluster, or export it from VCF Automation). You need **cluster-admin**
 on it — the flow creates namespaces (`gitea`, `ci`, `webui`) and installs Tekton CRDs. Place the
 kubeconfig at `$KUBECONFIG` (Part B, Step 1).
+
+> **→ now (A3 done) set the workload kubeconfig in `.env`** — the `vcf` CLI writes it for you:
+>
+> ```bash
+> vcf cluster kubeconfig get $VKS_CLUSTER_NAME --export-file ./secrets/vks.kubeconfig
+> #   (legacy 8.x: kubectl vsphere login --server $SUPERVISOR_HOST --vsphere-username $VKS_USERNAME \
+> #      --tanzu-kubernetes-cluster-name $VKS_CLUSTER_NAME --tanzu-kubernetes-cluster-namespace $VKS_NAMESPACE)
+> KUBECONFIG=./secrets/vks.kubeconfig      # then set this to the exported path
+> VKS_CONTEXT=<context-name-in-that-kubeconfig>
+> ```
 
 ### Part B — wire this repo and run
 
@@ -409,42 +526,27 @@ make kind-down        # if you ran the local flow (also removes .env.kind)
 rm -f .env.kind       # belt-and-suspenders
 ```
 
-**Step 1 — fill in `.env`** (copied from `.env.example`; gitignored, never committed) with
-the lab-provided values:
+**Step 1 — finish `.env`.** By now the interleaved "→ now set these in `.env`" callouts in
+Part A have filled the Harbor values (after A1), the ArgoCD values (after A2), and
+`KUBECONFIG` / `VKS_CONTEXT` (after A3). Only the **Gitea password** (a login for the
+component **we** install) and the **VKS auth method** remain:
 
 ```bash
-# --- Harbor (you installed it in A1) ---
-HARBOR_URL=harbor.<lab-fqdn>             # the Harbor FQDN you set in A1 (HTTPS)
-HARBOR_USERNAME=admin                    # or the robot account name (step 4)
-HARBOR_PASSWORD=<harborAdminPassword>    # the A1 admin password; set in .env only, never on argv
-HARBOR_CA_FILE=./secrets/harbor-ca.crt   # Harbor's self-signed CA (step 2)
-HARBOR_INFRA_PROJECT=cicd                # CI/CD + base images
-HARBOR_APP_PROJECT=apps                  # the built application image
-
-# --- ArgoCD (you installed it in A2 — its own LoadBalancer) ---
-ARGOCD_NAMESPACE=<ns-where-argocd-runs>       # e.g. argocd-instance-1 — where the A2 ArgoCD runs
-ARGOCD_APP_NAME=webui
-ARGOCD_DEST_NAMESPACE=webui
-ARGOCD_TRACK_BRANCH=main
-ARGOCD_SERVER=<argocd-server-LB-IP>           # the A2 argocd-server EXTERNAL-IP (for the UI + fetch-argocd-ca)
-# ARGOCD_CA_FILE=./secrets/argocd-ca.crt      # ArgoCD's self-signed CA (step 2, make fetch-argocd-ca)
-
-# --- Gitea (WE install it) ---
+# --- Gitea (WE install it — you choose the password) ---
 GITEA_ADMIN_PASSWORD=<choose-one>        # set in .env only
 
-# --- VKS access ---
-VKS_AUTH_METHOD=kubeconfig               # simplest: bring the lab's kubeconfig
-KUBECONFIG=./secrets/vks.kubeconfig      # place the lab's exported kubeconfig here
-VKS_CONTEXT=<context-name-in-that-kubeconfig>
+# --- VKS access method ---
+VKS_AUTH_METHOD=kubeconfig               # simplest: use the KUBECONFIG you fetched in A3 as-is
 ```
 
-For VKS auth, `kubeconfig` (drop the lab's exported kubeconfig at `$KUBECONFIG`) is the
-simplest working method. To log in with the VCF Consumption CLI instead, set
+For VKS auth, `kubeconfig` (the kubeconfig `vcf cluster kubeconfig get` wrote in A3) is the
+simplest working method. To have `make vks-login` run the VCF Consumption CLI login itself, set
 `VKS_AUTH_METHOD=vcf` and the `vcf` inputs (`SUPERVISOR_HOST` / `VKS_USERNAME` /
-`VKS_NAMESPACE` / `VKS_CONTEXT_NAME`) — see the [VKS authentication](#vks-authentication-vcf-9--supervisor)
-section for the exact flow (it is written to the verified shape but not yet lab-validated).
-For the legacy vSphere plugin, set `VKS_AUTH_METHOD=vsphere` and `SUPERVISOR_HOST` /
-`VKS_NAMESPACE` / `VKS_CLUSTER_NAME` / `VKS_USERNAME` / `VKS_PASSWORD`.
+`VKS_NAMESPACE` / `VKS_CLUSTER_NAME` / `VKS_CONTEXT_NAME`) — see the
+[VKS authentication](#vks-authentication-vcf-9--supervisor) section for the exact flow (written
+to the verified shape but not yet lab-validated). For the legacy vSphere plugin, set
+`VKS_AUTH_METHOD=vsphere` and `SUPERVISOR_HOST` / `VKS_NAMESPACE` / `VKS_CLUSTER_NAME` /
+`VKS_USERNAME` / `VKS_PASSWORD`.
 
 **Step 2 — save the Harbor CA certificate** to `./secrets/harbor-ca.crt` (the
 `HARBOR_CA_FILE` path). If the lab handed you the cert, drop it there. Otherwise fetch it
@@ -653,6 +755,70 @@ or use `kubectl port-forward` — `kubectl -n gitea port-forward svc/gitea-http 
 
 </details>
 
+## Run against a real VKS lab — Scenario 2: Harbor & ArgoCD already installed
+
+<details>
+<summary><strong>Scenario 2 — Harbor &amp; ArgoCD already installed</strong> — you are a tenant: discover the existing endpoints and request grants, no Part A (click to expand)</summary>
+
+<br>
+
+In a shared lab the platform team has **already** installed Harbor and ArgoCD as Supervisor
+Services. You are a **tenant**, not an admin — you do **not** run Part A. Instead you
+**DISCOVER** the existing endpoints and **REQUEST** the grants you need, then run Part B as in
+Scenario 1.
+
+**Skip Part A.** Do the following instead, then continue at Part B (Step 0).
+
+**1 — Discover the endpoints** (read-only; you need at least read access to the Services'
+namespaces, or ask the platform team for the values):
+
+```bash
+# Harbor LB IP (svc name/namespace vary per lab — verify on your lab):
+kubectl get svc -n <harbor-namespace> <harbor-svc> \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+# ArgoCD server LB IP:
+kubectl get svc -n <argocd-namespace> argocd-server \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+# CAs (self-signed) — fetch them from the running services:
+make fetch-harbor-ca      # HARBOR_URL → HARBOR_CA_FILE
+make fetch-argocd-ca      # ARGOCD_SERVER → ARGOCD_CA_FILE
+```
+
+**2 — Request grants from the platform team:**
+
+- **A Harbor project** (or two) you can **push** to, plus a **robot account** scoped to it.
+  `make harbor-robot` self-services the robot **if you hold Harbor project-admin on that
+  project** (Projects → *project* → Robot Accounts; system-admin is **not** required). Note the
+  upstream caveat: you must be a **direct** project-admin, not a project-admin inherited via an
+  SSO group. **If you do not hold project-admin, ask your platform admin** to create the robot
+  (push+pull on your project) and hand you `robot$<name>` + its secret.
+- Set `HARBOR_INFRA_PROJECT` / `HARBOR_APP_PROJECT` to the project name(s) you were granted
+  (they may be one shared project rather than the `cicd` / `apps` split Scenario 1 auto-creates).
+- **An ArgoCD `AppProject` + RBAC** permitting `make gitops` to create the `Application` and
+  deploy into `ARGOCD_DEST_NAMESPACE`. This is generic ArgoCD multi-tenancy (a standard
+  `AppProject` + a role/policy); there is no VKS-specific page for it — **verify the exact
+  `AppProject`/RBAC shape on your lab**.
+
+**Acquisition changes vs Scenario 1:**
+
+| Value | Scenario 1 (you install) | Scenario 2 (already installed — tenant) |
+|-------|--------------------------|------------------------------------------|
+| `HARBOR_URL` | the FQDN you set in A1 / its LB IP | **discover** the existing LB IP (`kubectl get svc -n <harbor-namespace> <harbor-svc> …`) or ask the team |
+| `HARBOR_USERNAME` / `HARBOR_PASSWORD` | admin you set, or `make harbor-robot` | **request** a robot on your granted project — `make harbor-robot` (needs project-admin) or ask your platform admin |
+| `HARBOR_CA_FILE` | `make fetch-harbor-ca` / lab-provided | `make fetch-harbor-ca` against the existing Harbor |
+| `HARBOR_INFRA_PROJECT` / `HARBOR_APP_PROJECT` | `cicd` / `apps` (auto-created by `make mirror`) | set to the project(s) you were **granted** push on |
+| `ARGOCD_SERVER` | your A2 instance's LB IP | **discover** the existing `argocd-server` LB IP, or ask |
+| `ARGOCD_NAMESPACE` | `argocd-instance-1` (yours) | the namespace the **shared** ArgoCD instance watches (ask the team) |
+| ArgoCD `Application` permission | you own the instance | a granted **`AppProject` + RBAC** (verify on your lab) |
+| `KUBECONFIG` | `vcf cluster kubeconfig get …` | same — `vcf cluster kubeconfig get …` for your workload cluster |
+| `GITEA_ADMIN_PASSWORD` | you choose (Gitea is **ours**) | same — you install Gitea either way |
+
+**Then continue at [Part B](#run-against-a-real-vks-lab--scenario-1-harbor--argocd-need-to-be-installed)**
+(remove the KinD overlay, finish `.env`, save CAs, `make deps` / `make vks-login`, install, verify).
+Everything from Part B on is identical — only the acquisition of the Harbor/ArgoCD values differs.
+
+</details>
+
 ## Try it locally end-to-end with KinD
 
 <details>
@@ -667,8 +833,14 @@ local [KinD](https://kind.sigs.k8s.io/) cluster, installs the "VKS-provided" pie
 is verified end-to-end (git push → Tekton build → Harbor → ArgoCD → the live app serves
 the new version).
 
+> **Zero `.env` setup.** Unlike the real lab, the kind steps **auto-discover and write
+> `.env.kind`** for you — `KUBECONFIG`, `HARBOR_URL` (the Harbor LB IP), `HARBOR_CA_FILE`,
+> and the ArgoCD LB IP — sourced last, so it overrides the defaults. This is the automated
+> parallel of the real-lab manual discovery (Scenario 1/2). Run `make creds` to show the
+> effective URLs, logins, and passwords.
+
 ```bash
-cp .env.example .env          # set HARBOR_PASSWORD + GITEA_ADMIN_PASSWORD (any demo values)
+cp .env.example .env          # optional: pin HARBOR_PASSWORD / GITEA_ADMIN_PASSWORD to known demo values
 make deps                     # kind, helm, kubectl, crane, etc.
 make e2e-kind                 # cluster → Harbor → ArgoCD → mirror → build → deploy → ingress → verify
 # open the UIs (see "Access the UIs" below) and drive the pipeline by hand:
@@ -962,59 +1134,6 @@ Locally, `make ci` runs the same gates (`static-check` + `docs-lint`).
 Everything is driven by `.env` (copied from `.env.example`), with an optional `.env.kind`
 overlay written by the KinD flow. Nothing is hardcoded in scripts or the Makefile. See
 `.env.example` for the full, documented list of tunables.
-
-## VKS authentication (VCF 9 + Supervisor)
-
-<details>
-<summary><strong>Auth methods</strong> — kubeconfig / vcf / vsphere via VKS_AUTH_METHOD (click to expand)</summary>
-
-<br>
-
-`scripts/30-vks-login.sh` (`make vks-login`) is the single pluggable step that produces a
-working `KUBECONFIG` and context; everything downstream is auth-agnostic. Select the method
-with `VKS_AUTH_METHOD`:
-
-| Method | Use it when | Inputs (`.env`) |
-|--------|-------------|-----------------|
-| `kubeconfig` (default) | You already have the lab's exported kubeconfig | `KUBECONFIG`, `VKS_CONTEXT` |
-| `vcf` | Real VCF 9 lab, via the VCF Consumption CLI | `SUPERVISOR_HOST`, `VKS_USERNAME` (+ `VKS_SSO_DOMAIN`), `VKS_NAMESPACE`, `VKS_CONTEXT_NAME`, `VKS_INSECURE_SKIP_TLS_VERIFY` |
-| `vsphere` | Pre-9 Supervisor, via the kubectl-vsphere plugin | `SUPERVISOR_HOST`, `VKS_NAMESPACE`, `VKS_CLUSTER_NAME`, `VKS_USERNAME`, `VKS_PASSWORD` |
-
-**`vcf` method — the real VCF Consumption CLI flow.** `.env` inputs:
-
-```bash
-VKS_AUTH_METHOD=vcf
-SUPERVISOR_HOST=<supervisor-IP-or-FQDN>   # no scheme
-VKS_USERNAME=administrator@WLD.SSO        # 'user@SSO.DOMAIN' (or set VKS_SSO_DOMAIN and give the bare user)
-VKS_NAMESPACE=<vsphere-namespace>         # the <ns> in `vcf context use <name>:<ns>`
-VKS_CONTEXT_NAME=sup66                    # the vcf context NAME you type at the create prompt
-VKS_INSECURE_SKIP_TLS_VERIFY=true         # skip verifying the Supervisor's self-signed cert
-```
-
-`make vks-login` then runs (interactively — the CLI **prompts** for the context name and the
-password, so no secret ever touches argv):
-
-```bash
-vcf context create --endpoint https://<SUPERVISOR_HOST> --username <user>@<SSO-DOMAIN> \
-    --insecure-skip-tls-verify --auth-type basic     # enter the context name (VKS_CONTEXT_NAME) + password when prompted
-vcf context use <VKS_CONTEXT_NAME>:<VKS_NAMESPACE>   # note the <ctx>:<ns> COLON form
-```
-
-If the workload cluster needs the kubectl-vsphere plugin, fetch it from the Supervisor:
-
-```bash
-wget --no-check-certificate https://<SUPERVISOR_HOST>/wcp/plugin/linux-amd64/vsphere-plugin.zip
-```
-
-> **Not yet lab-validated.** The `vcf` flow is written to the command **shape** verified from
-> primary sources (the ogelbric/LAB VCF-CLI transcript and Broadcom's "Install the Argo CD
-> Service" techdoc), but it has **not** been run end-to-end against a real VKS lab in this repo.
-> The login is interactive today: no non-interactive/stdin password mechanism is confirmed for
-> `vcf context create`, so `30-vks-login.sh` carries a `TODO(verify on a real VKS lab)` to
-> confirm one before automating further. A password is never placed on argv either way.
-> `kubeconfig` (bring the lab's exported kubeconfig) is the simplest working method.
-
-</details>
 
 ## Contributing
 
