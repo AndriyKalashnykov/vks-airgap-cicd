@@ -756,7 +756,8 @@ Legend: **[offline]** verifiable without a cluster · **[cluster]** runs against
 > per-image `.mirror-ok` completeness marker, written only on a complete pull), so it
 > **resumes** from where it stopped instead of re-pulling all of them. Progress shows as
 > `[i/N] (elapsed …)` so you can see it moving. `MIRROR_RETRIES` (default 5) sets per-image
-> retries; `MIRROR_FORCE_PULL=1` re-pulls everything.
+> retries; `MIRROR_FORCE_PULL=1` re-pulls everything. After a Renovate image bump, the old
+> digest's cache dir is auto-pruned on the next pull (`MIRROR_NO_PRUNE=1` to keep it).
 >
 > After pushing, run **`make mirror-verify`** to confirm every image is intact in Harbor —
 > `crane validate` fetches and digests each layer (catches a corrupt/incomplete blob before
