@@ -82,7 +82,16 @@ KIND_CONTEXT="kind-${CLUSTER_NAME}"
 set_env_var KUBECONFIG "$KUBECONFIG_ABS"
 set_env_var VKS_AUTH_METHOD kubeconfig
 set_env_var VKS_CONTEXT "$KIND_CONTEXT"
-log_info "published KUBECONFIG/VKS_AUTH_METHOD/VKS_CONTEXT to ${REPO_ROOT}/.env.kind"
+# Zero-config KinD: generate THROWAWAY test passwords for the local Harbor + Gitea admin
+# (this cluster is destroyed at teardown) so `make e2e-kind` needs NO manual .env. Written
+# only when unset — a real `.env` value still wins (.env.kind is sourced AFTER .env). NOT
+# used by the real lab (no .env.kind there). Revealed via `make creds`. gen_password is a
+# random, complexity-valid, NON-hardcoded value (lib/os.sh). ArgoCD's admin password stays
+# auto-generated when blank. NOTE: task #13 (env-init/env-populate) will move this into an
+# explicit `.env` populate step; kept here as the validated interim that unblocks #98's smoke.
+[ -n "${HARBOR_PASSWORD:-}" ]      || set_env_var HARBOR_PASSWORD "$(gen_password)"
+[ -n "${GITEA_ADMIN_PASSWORD:-}" ] || set_env_var GITEA_ADMIN_PASSWORD "$(gen_password)"
+log_info "published KUBECONFIG/VKS_AUTH_METHOD/VKS_CONTEXT (+ generated KinD Harbor/Gitea creds; see 'make creds') to ${REPO_ROOT}/.env.kind"
 
 # Point subsequent kubectl calls at the kind cluster.
 export KUBECONFIG="$KUBECONFIG_ABS"
