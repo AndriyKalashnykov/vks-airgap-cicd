@@ -124,3 +124,33 @@ mirror_collect_images() {
     fi
   } | sort -u
 }
+
+# mirror_prune_cache -> delete cache dirs in IMAGE_CACHE_DIR that are NOT in the current
+# collected set — orphaned old digests/tags left behind when a Renovate bump changes an
+# image ref (a new digest/tag = a new cache dir; the old one is never referenced again).
+# Keeps bundle/ lean. Echoes the count pruned. Set MIRROR_NO_PRUNE=1 to skip.
+#
+# SAFETY: call ONLY when the collected set is COMPLETE — i.e. after the Tekton manifests
+# have been (re)downloaded (end of a successful mirror-pull). A stale/empty manifest dir
+# would shrink the keep-set and wrongly prune live images. mirror-pull guarantees this
+# (it downloads the manifests in step 1, before pulling).
+mirror_prune_cache() {
+  if [ "${MIRROR_NO_PRUNE:-0}" = "1" ] || [ ! -d "${IMAGE_CACHE_DIR:?}" ]; then printf '0'; return; fi
+  # HARD SAFETY GUARD: the keep-set is only COMPLETE when the Tekton manifests are present
+  # (they contribute the digest-pinned images). Without them, mirror_collect_images returns
+  # ONLY the images.txt entries — a non-empty but INCOMPLETE set — and pruning against it
+  # would delete every manifest-derived image. So refuse to prune when the manifest dir is
+  # absent/empty. (mirror-pull downloads the manifests before calling this, so it's safe there.)
+  local mdir="${BUNDLE_DIR:-}/manifests"
+  if [ ! -d "$mdir" ] || [ -z "$(ls -A "$mdir" 2>/dev/null)" ]; then printf '0'; return; fi
+  local src d name pruned=0
+  declare -A keep=()
+  while IFS= read -r src; do keep["$(basename "$(mirror_cache_dir "$src")")"]=1; done < <(mirror_collect_images)
+  [ "${#keep[@]}" -gt 0 ] || { printf '0'; return; }   # belt-and-suspenders
+  for d in "$IMAGE_CACHE_DIR"/*/; do
+    [ -d "$d" ] || continue                            # bash: unmatched glob → literal, skipped
+    name="$(basename "$d")"
+    if [ -z "${keep[$name]:-}" ]; then rm -rf "$d"; pruned=$((pruned+1)); fi
+  done
+  printf '%s' "$pruned"
+}

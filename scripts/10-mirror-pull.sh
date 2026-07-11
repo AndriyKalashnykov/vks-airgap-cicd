@@ -99,5 +99,9 @@ if [ "$fails" -gt 0 ]; then
   die "$fails/${#IMAGES[@]} images failed to pull"
 fi
 pg_done "mirror-pull: ${#IMAGES[@]} images into $IMAGE_CACHE_DIR (${skipped} cache-skipped)"
+# Prune orphaned cache dirs (old digests/tags a Renovate bump left behind). Safe here:
+# the manifests were just (re)downloaded above, so the collected keep-set is complete.
+pruned="$(mirror_prune_cache)"
+[ "$pruned" -gt 0 ] && log_info "pruned $pruned orphaned cache dir(s) from $IMAGE_CACHE_DIR (stale digests/tags)"
 log_info "wrote $LOCK_FILE ($(wc -l < "$LOCK_FILE") digests) — used by 'make mirror-verify'"
 log_info "next: dual-homed -> 'make mirror-push'  |  sneakernet -> 'make bundle'"
