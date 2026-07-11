@@ -328,6 +328,21 @@ check-toolchain-alignment: ## Fail if kubectl pinned in .mise.toml disagrees wit
 	fi; \
 	echo "check-toolchain-alignment: kubectl aligned ($$mise_v)"
 
+##@ Offline script tests (unit tests for script logic; NOT in static-check/ci)
+# Fast, fully-offline (no network/cluster/registry) unit tests for script logic that
+# otherwise only breaks on a real lab box / mid-mirror. Deliberately NOT wired into
+# static-check/ci so the core gate stays fast — run explicitly via `make test-scripts`.
+.PHONY: test-vcf-cli-resolve
+test-vcf-cli-resolve: ## Unit-test 01-install-vcf-clis.sh archive resolve + tar-vs-gz branch logic (offline, synthetic fixtures)
+	@$(SCRIPTS)/test-vcf-cli-resolve.sh
+
+.PHONY: test-mirror-cache
+test-mirror-cache: ## Unit-test lib/mirror.sh cache-skip / resume / prune logic (offline, synthetic fixtures)
+	@$(SCRIPTS)/test-mirror-cache.sh
+
+.PHONY: test-scripts
+test-scripts: test-vcf-cli-resolve test-mirror-cache ## Run all offline script-logic unit tests
+
 ##@ Security scanning (internet/CI side; not part of the air-gap install)
 .PHONY: secrets
 secrets: ## gitleaks — scan git history + working tree for committed secrets
