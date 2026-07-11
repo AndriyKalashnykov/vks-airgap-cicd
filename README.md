@@ -260,6 +260,11 @@ Set `RUN_MODE` in `.env`.
 
 ## Run against a real VKS lab (Harbor & ArgoCD need to be installed)
 
+<details>
+<summary><strong>Run against a real VKS lab</strong> — install Harbor & ArgoCD as VCF Supervisor Services, provision a workload cluster, then wire the pipeline (Part A + Part B; click to expand)</summary>
+
+<br>
+
 This is the real target. You are given a **Supervisor** endpoint (IP), a login, and a password —
 nothing else. **Harbor** and **ArgoCD** are **not** pre-provided: you install them as **VCF
 Supervisor Services**, provision a **workload VKS cluster**, then install **Gitea** + **Tekton**
@@ -598,6 +603,8 @@ or use `kubectl port-forward` — `kubectl -n gitea port-forward svc/gitea-http 
 
 </details>
 
+</details>
+
 ## Try it locally end-to-end with KinD
 
 You don't need a VKS cluster to exercise the whole pipeline. `make e2e-kind` stands up a
@@ -685,6 +692,11 @@ cluster-internally, so there is nothing to expose or log into there.
 
 ## Demo walkthrough — drive the GitOps loop by hand
 
+<details>
+<summary><strong>Demo walkthrough</strong> — drive the GitOps loop by hand: watch a one-line change flow source → build → registry → GitOps write-back → running page (click to expand)</summary>
+
+<br>
+
 This is the demo. With the stack up (`make e2e-kind` locally, or `make install-all` against a
 real VKS lab) you can watch a **one-line code change flow from the Gitea web editor all the way
 to the running web page — entirely inside the air gap**, and see each hop in its own Web UI.
@@ -758,7 +770,14 @@ line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
 > <http://app.vks.local/> until the page contains the marker. Run it to prove the pipeline;
 > walk the UIs above to *see* it.
 
+</details>
+
 ## Detailed steps
+
+<details>
+<summary><strong>Detailed steps</strong> — the numbered command-by-command install (offline vs cluster), the resumable-mirror note, and the minimum <code>.env</code> (click to expand)</summary>
+
+<br>
 
 Legend: **[offline]** verifiable without a cluster · **[cluster]** runs against live VKS.
 
@@ -801,7 +820,14 @@ ARGOCD_NAMESPACE=argocd                  # where VKS runs ArgoCD
 KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 ```
 
+</details>
+
 ## Repository layout
+
+<details>
+<summary><strong>Repository layout</strong> — what lives where (scripts, app, deploy, tekton, argocd, k8s, kind, docs) (click to expand)</summary>
+
+<br>
 
 | Path | Purpose |
 |------|---------|
@@ -817,7 +843,14 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 | `images/images.txt` | Authoritative image inventory to mirror |
 | `.env.example` | Committed source of truth for every tunable |
 
+</details>
+
 ## Make targets
+
+<details>
+<summary><strong>Make targets</strong> — the most-used targets by group (<code>make help</code> prints the full list) (click to expand)</summary>
+
+<br>
 
 `make help` prints the full grouped list. The most-used targets:
 
@@ -840,7 +873,14 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 | Security | `sec` / `secrets` / `trivy-fs` / `trivy-config` | gitleaks + trivy fs (app deps) / config (manifests) |
 | Diagrams | `diagrams` / `diagrams-check` / `vendor-diagrams` | Render PNGs / byte-diff drift gate / re-vendor C4-PlantUML |
 
+</details>
+
 ## CI/CD
+
+<details>
+<summary><strong>CI/CD</strong> — GitHub Actions jobs (changes / static-check / docs-lint / ci-pass) (click to expand)</summary>
+
+<br>
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on push to `main`, tags `v*`, and pull requests.
 
@@ -852,6 +892,8 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on push to `main`, tags `v*`, a
 | **ci-pass** | always | Aggregator; the single required status check — green only if the needed jobs passed |
 
 Locally, `make ci` runs the same gates (`static-check` + `docs-lint`).
+
+</details>
 
 ## Configuration
 
