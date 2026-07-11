@@ -23,8 +23,9 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make static-check` | `check-toolchain-alignment` + `check-java-alignment` + `check-env` + `check-image-alignment` + `lint` + `validate` + `sec` + `app-test` |
 | `make sec` | Security scans: `secrets` (gitleaks) + `trivy-fs` (built-jar deps) + `trivy-config` (manifests) |
 | `make app-test` / `app-build` / `app-run` | Spring Boot app dev (in `apps/java/webui/`, uses `./mvnw`) |
-| `make mirror` | (dual-homed) pull images → push to Harbor |
+| `make mirror` | (dual-homed) pull images → push to Harbor. **Resumable:** a re-run cache-skips digest-pinned images already fully pulled (`.mirror-ok` sentinel), so an interrupted/CDN-flaky mirror resumes in seconds. `MIRROR_RETRIES` (default 5), `MIRROR_FORCE_PULL=1` |
 | `make mirror-pull` / `bundle` / `bundle-load` / `mirror-push` | sneakernet phases |
+| `make mirror-verify` | Verify every mirrored image is INTACT in Harbor (`crane validate` blobs + `images.lock` digest match) — read-only; run after `make mirror` |
 | `make builder-image` | build+push the offline Maven builder image (deps pre-baked) |
 | `make vks-login` | Authenticate to VKS → writes `$KUBECONFIG` + context |
 | `make install-vcf-clis` | On a real-VKS-lab jump box: install the Broadcom lab CLIs (`argocd-vcf` + `vcf` + plugins), OS/arch-aware + sudo-free, from operator-supplied licensed archives in `VCF_CLI_SRC_DIR=<dir>`. (The local KinD e2e doesn't need these — it uses the upstream `argocd` from `deps`.) Granular: `install-argocd-vcf` / `install-vcf-cli` / `install-vcf-plugins` |
@@ -110,8 +111,10 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   the eclipse-temurin runtime image separately, so it can split them; the build once compiled
   for 21 but ran on 25), `sec` (gitleaks +
   trivy fs on the built jar + trivy config on manifests; `.trivyignore` documents the two
-  accepted-by-design misconfigs — gitea RO-rootfs, Traefik secrets RBAC). trivy/gitleaks
-  are `.mise.toml`-provided so local `make static-check` mirrors the CI job.
+  accepted-by-design misconfigs — gitea RO-rootfs, Traefik secrets RBAC). trivy/gitleaks/shellcheck
+  are `.mise.toml`-provided (pinned) so local `make static-check`/`make lint` use the SAME versions as
+  CI — an unpinned system shellcheck drifts and flags SC2015 that a newer local build doesn't
+  (green-local/red-CI).
 
 ## Conventions
 
@@ -194,8 +197,32 @@ README §"Run against a real VKS lab" (Part A install Harbor+ArgoCD as Superviso
    `JUMPBOX_OK`, Harbor reach `http://…` 200; VCF step correctly SKIPPED.
 4. Ran **sequentially** (no-concurrent-load-during-mirror honored). mirror engine = **crane** (mise).
 
-Re-validated this session's changes (lib/harbor.sh refactor, HARBOR_PUBLIC_PROJECTS, the 3 helpers)
-end-to-end. **Cluster state:** the **insecure** KinD cluster is currently UP — `make kind-down` when done.
+Re-validated the prior session's changes (lib/harbor.sh refactor, HARBOR_PUBLIC_PROJECTS, the 3 helpers)
+end-to-end. Cluster torn down after the sweep.
+
+**✅ COMPLETED 2026-07-11 (same session, follow-on enhancements — all merged, `main` GREEN):**
+
+- **Traefik ingress matrix** — validated `INGRESS_CONTROLLER=traefik` in BOTH SSL modes (secure self-signed
+  TLS + insecure plain-HTTP), 7/7 UIs each; completes the full istio/traefik × secure/insecure 2×2.
+- **Resumable + verifiable mirror** (PR #87): `make mirror-verify` (crane validate blobs + `images.lock`
+  digest match; proven GREEN 34/34 and RED rc≠0 on a deleted image); `images.lock`; **cache-skip** (a
+  digest-pinned image already fully pulled via a `.mirror-ok` sentinel is skipped → interrupted mirror
+  RESUMES, proven 25/34 skipped in 21s vs ~20min); `MIRROR_RETRIES`/`MIRROR_FORCE_PULL`; `lib/progress.sh`
+  reusable `[i/N] (elapsed)` progress + completion signal. cache-skip composes safely with Renovate
+  (content-addressed refs → a version bump always pulls the new digest).
+- **Interruption-safety / idempotency** (PR #88): `05-kind-up.sh` health-checks an existing cluster and
+  recreates a partial/broken one (name-only guard would skip a dead cluster); `50-seed-gitea-repos.sh`
+  webhook is now idempotent (GET-then-skip; a re-run no longer creates a duplicate hook → proven count=1);
+  **shellcheck pinned via `.mise.toml`** so local `make lint` == CI (fixed an SC2015 green-local/red-CI drift).
+- **Diagram** (PR #86): neutralized the ingress namespace label (`istio-ingress | traefik`).
+- Docs: README documents the mirror interrupt/resume + `mirror-verify`; this file's Common-commands +
+  gates updated.
+
+**⏳ PENDING next — approved follow-ups (own PRs):**
+
+- `bootstrap.sh` — curl|bash jump-box entrypoint: OS-gate (Photon/Ubuntu) → check→install-if-missing→verify→report,
+  tag-pinned, dual-homed only, never curls licensed VCF CLIs; validate in the jumpbox harness.
+- `make mirror-prune` — drop orphaned old-digest cache dirs (bundle/ hygiene after Renovate bumps).
 
 **Merged this session (real-lab prep):** helpers `make harbor-robot` + `fetch-argocd-ca` +
 `argocd-preflight` (+ `lib/harbor.sh` extraction, `HARBOR_PUBLIC_PROJECTS` toggle, fetch-harbor-ca
