@@ -36,12 +36,19 @@ ARG APP_GID=10001
 
 ENV APP_INTERNAL_PORT=${APP_INTERNAL_PORT}
 
-# curl is needed by the HEALTHCHECK probe; slim install, no recommends.
-# DL3008 ignored: the jammy curl is pulled fresh with the base image's security
-# updates; pinning an exact patch version would break reproducibly on base bumps
-# and defeats getting curl's own CVE fixes.
-# hadolint ignore=DL3008
+# Patch base-OS CVEs in the DEPLOYED image, then install curl for the HEALTHCHECK
+# probe (slim, no recommends). The eclipse-temurin JRE base lags Ubuntu security
+# updates between rebuilds, so `apt-get install` alone leaves fixable HIGH CVEs in
+# already-present libs (e.g. libssl3/openssl) unpatched — an explicit `apt-get
+# upgrade` clears them (verified: raw base 2 HIGH -> 0 after upgrade). See
+# rules/common/security.md "apt-upgrade before the scan".
+# DL3005 ignored: `apt-get upgrade` is the intended CVE-patching mechanism here;
+#   its reproducibility caveat is outweighed by shipping base security fixes.
+# DL3008 ignored: pinning an exact curl patch would break on base bumps and defeat
+#   getting curl's own CVE fixes.
+# hadolint ignore=DL3005,DL3008
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends curl \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
