@@ -223,7 +223,9 @@ separately (see the last bullet). Figures were measured on the live single-node 
 # each are covered in "Run against a real VKS lab" below (upfront vCenter vars → get kubeconfig
 # → discover Harbor/ArgoCD after you install them → choose Gitea passwords). Or use
 # "Try it locally end-to-end with KinD" for the zero-config local path — it fills .env for you.
-cp .env.example .env
+make env-init                 # create .env from .env.example (backs up any existing .env → .env.bak)
+make env-populate             # mint the secrets we can + print what only you can provide
+make env-check                # confirm the required .env values are set
 make deps                     # [offline] install jump-box toolchain
 make ci                       # [offline] lint + validate + app tests + docs
 make install-all              # [cluster] mirror → builder → vks-login → platform → gitops
@@ -1070,7 +1072,7 @@ the new version).
 > effective URLs, logins, and passwords.
 
 ```bash
-cp .env.example .env          # optional: pin HARBOR_PASSWORD / GITEA_ADMIN_PASSWORD to known demo values
+make env-init                 # optional for KinD (it fills .env.kind for you); pins known demo secrets if you want them
 make deps                     # kind, helm, kubectl, crane, etc.
 make e2e-kind                 # cluster → Harbor → ArgoCD → mirror → build → deploy → ingress → verify
 # open the UIs (see "Access the UIs" below) and drive the pipeline by hand:
@@ -1247,7 +1249,7 @@ Legend: **[offline]** verifiable without a cluster · **[cluster]** runs against
 
 | # | Command | Mode | What happens |
 |---|---------|------|--------------|
-| 1 | `cp .env.example .env` + edit | [offline] | Set Harbor/Gitea URLs, VKS auth, CA files, and secrets (`HARBOR_PASSWORD`, `GITEA_ADMIN_PASSWORD`). |
+| 1 | `make env-init` → `make env-populate` → `make env-check` | [offline] | `env-init` copies `.env.example`→`.env` (backs up any existing); `env-populate` mints the secrets we can (Gitea/Harbor/ArgoCD) + prints the values only you can provide (Harbor/Gitea URLs, VKS auth, CA files); `env-check` verifies presence. `make env-validate` adds format + connectivity checks. |
 | 2 | `make deps` | [offline] | `mise install` (kubectl, helm, crane, jq, yq, …) + `scripts/00-install-prereqs.sh` (tkn, argocd). |
 | 3 | `make ci` | [offline] | toolchain/image alignment + shellcheck + yamllint + hadolint + kubeconform + gitleaks + trivy fs/config + `mvn test` + docs/diagram checks. |
 | 4 | `make mirror` | [cluster] | `10-mirror-pull.sh` pulls all images (+ Tekton release manifests) then `21-mirror-push.sh` pushes them into Harbor. Resumable (cache-skip) — see the note below. Then **`make mirror-verify`** confirms every image is intact in Harbor. **Sneakernet:** `make mirror-pull && make bundle`, carry the bundle, then `make bundle-load BUNDLE_TARBALL=… && make mirror-push` inside. |

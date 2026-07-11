@@ -81,6 +81,17 @@ check-env: ## STOPPER gate — fail if the committed .env.example source of trut
 	  exit 1; }
 	@echo "check-env: .env.example present"
 
+##@ Environment (.env lifecycle) — GENERATE / DISCOVER / user-PROVIDE
+.PHONY: env-init env-populate env-check env-validate
+env-init: ## Create a fresh .env from .env.example (backs up an existing .env → .env.bak)
+	@$(SCRIPTS)/02-env.sh init
+env-populate: ## Mint the secrets we can + discover cluster values (best-effort) into .env; print what only you can provide
+	@$(SCRIPTS)/02-env.sh populate
+env-check: ## Presence gate — fail if a required .env value is missing/placeholder (fast, no network)
+	@$(SCRIPTS)/02-env.sh check
+env-validate: ## Validity gate — format + KUBECONFIG/Harbor connectivity+auth (fail fast; secrets never on argv)
+	@$(SCRIPTS)/02-env.sh validate
+
 .PHONY: check-ports
 check-ports: ## Fail early if the local app-dev port is already in use (names the holder)
 	@port="$(APP_DEV_PORT)"; \
@@ -190,9 +201,10 @@ configure-argocd: check-env ## Register the deploy repo + create the ArgoCD Appl
 gitops: configure-argocd ## Wire ArgoCD to track webui-deploy
 
 ##@ Access (URLs + logins)
-.PHONY: creds
-creds: ## Print the access summary (URLs + logins) for the current context
+.PHONY: creds-show creds
+creds-show: ## Print the access summary (URLs + logins) for the current context
 	@$(SCRIPTS)/creds.sh
+creds: creds-show  ## Alias for creds-show (back-compat)
 
 .PHONY: argocd-password
 argocd-password: ## Print the ArgoCD 'admin' password (self-resolves kubeconfig; .env value or generated)
