@@ -1,7 +1,13 @@
 @startuml pipeline-flow
 !include c4/C4_Dynamic.puml
 !include _style.puml
-LAYOUT_LEFT_RIGHT()
+
+' Folded 2-lane layout (CI intake on top, GitOps/CD lane below) via directional
+' Rel_* hints — NOT LAYOUT_LEFT_RIGHT: the 8-step chain as one wide row rendered a
+' ~4200px strip that clipped at PlantUML's 4096px default (PLANTUML_LIMIT_SIZE),
+' truncating the webui node + legend, AND embedded as a thin sliver. Folding keeps
+' it complete and balanced. The render also raises PLANTUML_LIMIT_SIZE well above
+' 4096 (see Makefile _render_diagrams) so no diagram can silently clip again.
 
 title Pipeline flow — a push to production, inside the air gap
 
@@ -14,15 +20,15 @@ Container(gitea_dep, "Gitea: webui-deploy", "git repo")
 Container(argo, "ArgoCD", "GitOps")
 Container(app, "webui", "Deployment + Service")
 
-Rel(dev, gitea_app, "1. git push")
-Rel(gitea_app, el, "2. push webhook")
-Rel(el, pipe, "3. create PipelineRun")
-Rel(pipe, pipe, "4. mvn test (offline, builder image)")
-Rel(pipe, harbor, "5. kaniko build + push image")
-Rel(pipe, gitea_dep, "6. commit new image tag")
-Rel(gitea_dep, argo, "7. auto-sync detects change")
-Rel(argo, app, "8. deploy new version")
-Rel(harbor, app, "pull image")
+Rel_R(dev, gitea_app, "1. git push")
+Rel_R(gitea_app, el, "2. push webhook")
+Rel_R(el, pipe, "3. create PipelineRun")
+Rel(pipe, pipe, "4. mvn test (offline)")
+Rel_R(pipe, harbor, "5. kaniko build + push image")
+Rel_D(pipe, gitea_dep, "6. commit new image tag")
+Rel_R(gitea_dep, argo, "7. auto-sync detects change")
+Rel_R(argo, app, "8. deploy new version")
+Rel_D(harbor, app, "pull image")
 
 SHOW_LEGEND()
 @enduml
