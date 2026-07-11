@@ -128,9 +128,12 @@ if [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]; then
   # The single-quoted grep pattern's '$' are literal bcrypt-hash anchors, not shell
   # expansions — single quotes are correct here.
   # shellcheck disable=SC2016
+  # `|| true`: standalone `set -e` assignment — `head -1` closing the pipe SIGPIPEs the upstream
+  # `grep` (exit 141) under pipefail, which would abort the script HERE even on a successfully
+  # extracted hash, skipping the `[ -n "$bhash" ]` guard. The captured hash is already correct.
   bhash="$(kubectl -n "$ARGOCD_NAMESPACE" exec -i deploy/argocd-server -- \
              argocd account bcrypt <<<"$ARGOCD_ADMIN_PASSWORD" 2>/dev/null \
-           | grep -oE '\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}' | head -1)"
+           | grep -oE '\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}' | head -1 || true)"
   [ -n "$bhash" ] || die "failed to generate the bcrypt hash for ARGOCD_ADMIN_PASSWORD"
   # ${bhash} is expanded ONCE here; run() uses "$@" (no eval), so the '$' chars in the
   # hash are literal to kubectl — not re-expanded as shell positionals.

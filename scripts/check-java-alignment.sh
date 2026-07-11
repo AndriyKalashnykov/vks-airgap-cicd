@@ -21,7 +21,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$ROOT"
 
-pom="$(grep -oE '<java\.version>[0-9]+' apps/java/webui/pom.xml | grep -oE '[0-9]+' | head -1)"
+# `|| true` on every extraction below: these are standalone `set -e` assignments in a pipefail
+# script, so a `head -1` SIGPIPE (141) or a missing pattern (grep exit 1) would abort the script
+# right here — killing the `[ -n "$pom" ]` guard and the DRIFT-on-<none> reporting the `check()`
+# calls do. The captured value is already correct; only the spurious non-zero is neutralised.
+pom="$(grep -oE '<java\.version>[0-9]+' apps/java/webui/pom.xml | grep -oE '[0-9]+' | head -1 || true)"
 [ -n "$pom" ] || { echo "ERROR: could not read <java.version> from apps/java/webui/pom.xml" >&2; exit 1; }
 
 drift=0
@@ -34,12 +38,12 @@ check() { # <label> <actual-major> — compare to $pom
   fi
 }
 
-mise="$(grep -oE '^java[[:space:]]*=[[:space:]]*"temurin-[0-9]+' .mise.toml | grep -oE '[0-9]+$')"
-ci="$(grep -oE "java-version:[[:space:]]*'[0-9]+" .github/workflows/ci.yml | grep -oE '[0-9]+' | head -1)"
-df_build="$(grep -oE 'BUILDER_IMAGE=maven:[0-9.]+-eclipse-temurin-[0-9]+' apps/java/webui/Dockerfile | grep -oE '[0-9]+$' | head -1)"
-df_run="$(grep -oE 'RUNTIME_IMAGE=eclipse-temurin:[0-9]+' apps/java/webui/Dockerfile | grep -oE '[0-9]+$' | head -1)"
-img_mvn="$(grep -oE 'maven:[0-9.]+-eclipse-temurin-[0-9]+' images/images.txt | grep -oE '[0-9]+$' | head -1)"
-img_jre="$(grep -oE 'eclipse-temurin:[0-9]+' images/images.txt | grep -oE '[0-9]+$' | head -1)"
+mise="$(grep -oE '^java[[:space:]]*=[[:space:]]*"temurin-[0-9]+' .mise.toml | grep -oE '[0-9]+$' || true)"
+ci="$(grep -oE "java-version:[[:space:]]*'[0-9]+" .github/workflows/ci.yml | grep -oE '[0-9]+' | head -1 || true)"
+df_build="$(grep -oE 'BUILDER_IMAGE=maven:[0-9.]+-eclipse-temurin-[0-9]+' apps/java/webui/Dockerfile | grep -oE '[0-9]+$' | head -1 || true)"
+df_run="$(grep -oE 'RUNTIME_IMAGE=eclipse-temurin:[0-9]+' apps/java/webui/Dockerfile | grep -oE '[0-9]+$' | head -1 || true)"
+img_mvn="$(grep -oE 'maven:[0-9.]+-eclipse-temurin-[0-9]+' images/images.txt | grep -oE '[0-9]+$' | head -1 || true)"
+img_jre="$(grep -oE 'eclipse-temurin:[0-9]+' images/images.txt | grep -oE '[0-9]+$' | head -1 || true)"
 
 check ".mise.toml (temurin)"                 "$mise"
 check ".github/workflows/ci.yml"             "$ci"

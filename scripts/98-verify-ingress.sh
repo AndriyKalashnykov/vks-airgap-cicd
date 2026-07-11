@@ -78,7 +78,11 @@ if [ "$rc" -eq 0 ]; then
   assert_body() { # <host> <grep-ERE> <label>
     local b
     b="$(curl -sL -H "Host: $1" --max-time "$CURL_MAX_TIME_SECONDS" "http://${INGRESS_LB_IP}/" 2>/dev/null || true)"
-    if printf '%s' "$b" | grep -qiE "$2"; then
+    # Drop `-q` so grep DRAINS all of printf's output: on a page larger than the 64KB pipe
+    # buffer, `grep -q` exits on its first match and SIGPIPEs `printf` (exit 141), which under
+    # `set -o pipefail` misreads as "marker absent" → a false "wrong backend" on a page that WAS
+    # served. Draining grep never SIGPIPEs the writer; redirect its own stdout to keep it quiet.
+    if printf '%s' "$b" | grep -iE "$2" >/dev/null; then
       log_info "  OK    $1 served the $3 through the ingress"
     else
       log_error "  FAIL  $1 returned 2xx/3xx but not the $3 (wrong backend?)"

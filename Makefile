@@ -256,12 +256,12 @@ jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photo
 	@command -v kind >/dev/null 2>&1 || { echo "ERROR: 'kind' not found — the KinD cluster must be up (make kind-up install-harbor ...)"; exit 1; }
 	@docker network inspect kind >/dev/null 2>&1 || { echo "ERROR: kind Docker network not found — bring the cluster up first (make kind-up)"; exit 1; }
 	@mkdir -p .jumpbox
-	@kind_name="$$(grep -h '^KIND_CLUSTER_NAME=' .env .env.example 2>/dev/null | head -1 | cut -d= -f2)"; \
+	@kind_name="$$(grep -h '^KIND_CLUSTER_NAME=' .env .env.example 2>/dev/null | head -1 | cut -d= -f2 || true)"; \
 	 kind get kubeconfig --name "$$kind_name" --internal > .jumpbox/kubeconfig
-	@harbor_url="$$(grep '^HARBOR_URL=' .env.kind 2>/dev/null | cut -d= -f2)"; \
+	@harbor_url="$$(grep '^HARBOR_URL=' .env.kind 2>/dev/null | cut -d= -f2 || true)"; \
 	 [ -n "$$harbor_url" ] || { echo "ERROR: HARBOR_URL not in .env.kind — run 'make install-harbor' first"; exit 1; }; \
-	 harbor_insecure="$$(grep '^HARBOR_INSECURE=' .env.kind 2>/dev/null | cut -d= -f2)"; harbor_insecure="$${harbor_insecure:-0}"; \
-	 harbor_ca="$$(grep '^HARBOR_CA_FILE=' .env.kind 2>/dev/null | cut -d= -f2)"; \
+	 harbor_insecure="$$(grep '^HARBOR_INSECURE=' .env.kind 2>/dev/null | cut -d= -f2 || true)"; harbor_insecure="$${harbor_insecure:-0}"; \
+	 harbor_ca="$$(grep '^HARBOR_CA_FILE=' .env.kind 2>/dev/null | cut -d= -f2 || true)"; \
 	 extra=""; \
 	 if [ "$$harbor_insecure" != "1" ] && [ -n "$$harbor_ca" ] && [ -f "$$harbor_ca" ]; then \
 	   cp "$$harbor_ca" .jumpbox/harbor-ca.crt; chmod 0644 .jumpbox/harbor-ca.crt; \
