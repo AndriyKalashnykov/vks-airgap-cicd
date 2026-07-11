@@ -39,7 +39,7 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make verify-ingress` / `verify-ingress-both` | Assert the `*.vks.local` UIs route through the ingress LB (one controller / both) |
 | `make e2e-kind` | Full local end-to-end in KinD (cluster → Harbor → ArgoCD → pipeline → ingress → verify) |
 | `make kind-up` / `install-harbor` / `install-argocd` / `install-ingress` / `kind-down` | Individual KinD steps |
-| `make jumpbox` / `jumpbox-both` | Validate the README jump-box bootstrap on a real jump-box container — `JUMPBOX_OS=photon` (default, `photon:5.0`) or `JUMPBOX_OS=ubuntu` (`ubuntu:24.04`); rootless podman, joined to the kind network: runs `make deps` + engine + cluster/Harbor reach. `jumpbox-both` runs the OS matrix. Needs the KinD cluster up |
+| `make jumpbox` / `jumpbox-both` | Validate the README jump-box bootstrap on a real jump-box container — `JUMPBOX_OS=photon` (default, `photon:5.0`) or `JUMPBOX_OS=ubuntu` (`ubuntu:26.04`); rootless podman, joined to the kind network: runs `make deps` + engine + cluster/Harbor reach. `jumpbox-both` runs the OS matrix. Needs the KinD cluster up |
 
 Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<method> test`.
 
@@ -168,6 +168,101 @@ than a CI job. Run it locally (and both ingress controllers via `make verify-ing
 when changing the pipeline, ingress, or manifests.
 
 ## Backlog / resume state
+
+> ### ⏳ SESSION HANDOFF 2026-07-11 (READ FIRST — resume here)
+>
+> `main` GREEN; this session merged 6 PRs (#85 handoff, #86 diagram-label, #87
+> mirror-verify+cache-skip+progress+resume, #88 idempotency+shellcheck-pin, #89 docs,
+> #90 cache-prune). Below: in-flight work + a de-risking backlog + a research thread.
+> **Browser NOT needed: WebFetch reads techdocs.broadcom.com AND raw.githubusercontent.com.**
+>
+> **A. Bootstrap PR — branch `feat/bootstrap-curl-bash` PUSHED (commit a5de333), NOT merged.**
+> `bootstrap-jumpbox.sh` = curl|bash jump-box bootstrap (OS-gate → check→install→verify→report);
+> `jumpbox/Dockerfile.bootstrap` (ARG BASE + COPY) + `scripts/bootstrap-test.sh` + `make
+> bootstrap-test` (from-nothing on a bare-OS matrix). Validated: offline gates green; OS-gate
+> (ubuntu/photon supported, fedora rejected exit 1); bare ubuntu:22.04 + 24.04 from-nothing GREEN.
+> **Before merge:** (1) re-run `make bootstrap-test` to confirm **photon:4.0/5.0** + ubuntu:26.04
+> (matrix still running at handoff; if photon:4.0 fails on older-glibc-vs-temurin-25 or a tdnf
+> gap, drop it from `BOOTSTRAP_TEST_OSES` default in scripts/bootstrap-test.sh & note it);
+> (2) **README Prereqs restructure (Task 16)** — make curl|bash bootstrap the PRIMARY path,
+> collapse the manual git/SSH/clone/mise/make-deps steps under `<details>`, add the curl-prereq
+> note (**bare Photon 5 ships NO curl** → pipe form needs `sudo tdnf install -y curl` first;
+> verified). `.markdownlint.json` has `MD033:false` so `<details>` is fine. (3) `make ci`, PR, merge.
+>
+> **B. Diagrams PR (Task 15) — own branch.** Deployment+Container connectors intersect; pipeline-flow
+> too short. Add `skinparam nodesep`/`ranksep` to `docs/diagrams/_style.puml`; switch
+> `pipeline-flow.puml` to `LAYOUT_TOP_DOWN()`. `make diagrams` + **EYEBALL each PNG** (Read the
+> images) to confirm, iterate values; commit PNGs (diagrams-check gate).
+>
+> **C. README readability PR (Task 17) — own branch.** README is 870 lines. Wrap in
+> `<details><summary>descriptive</summary>` (blank line after summary; MD033 ok): "Run against a
+> real VKS lab" (339L, biggest win), "Demo walkthrough" (74L), "Detailed steps" (42L),
+> "Make targets" (22L), "Repository layout" (15L), "CI/CD" (12L). KEEP expanded: intro,
+> Prereqs(bootstrap), Tech stack, Quick Start, Architecture, Try-with-KinD, Access the UIs. ~250 visible.
+>
+> **D. Real-lab research thread (user-requested).** Compare our impl (`scripts/01-install-vcf-clis.sh`,
+> `30-vks-login.sh`, README "Run against a real VKS lab") with real-jumpbox experience + Broadcom
+> techdocs; fold accurate `vcf`-CLI flow into the README. Sources (all WebFetch-able):
+>
+> - `raw.githubusercontent.com/ogelbric/LAB/main/VCF-CLI/README.md` (FETCHED). Real flow:
+>   `vcf context create --endpoint https://<sup-IP> --username administrator@WLD.SSO
+>   --insecure-skip-tls-verify --auth-type basic` → name ctx; `vcf context use <ctx>:<ns>`;
+>   `vcf plugin install all --local-source <bundle>`; kubectl-vsphere via
+>   `wget https://<sup-IP>/wcp/plugin/linux-amd64/vsphere-plugin.zip`; `vcf package repository add`
+>   then `vcf package install istio`. **GOTCHAS:** configure Harbor cert+creds BEFORE creating guest
+>   clusters (else deploy fails); `kubectl label ns default pod-security…/enforce=privileged`;
+>   wildcard DNS A-record → ingress LB IP.
+> - `github.com/ogelbric/LAB/tree/main/where_is(are)/Create_Harbor` (NOT fetched — Harbor-as-
+>   Supervisor-Service real experience; fetch the raw README, compare vs README Harbor section).
+> - Broadcom techdocs `.../9-1/using-argo-cd-service/install-argo-cd-service.html` (FETCHED —
+>   confirms ArgoCD **server** CR `spec.version: 2.14.15+vmware.1-vks.1`; `vcf context create
+>   mgmt-cluster --endpoint <IP> --type k8s`; `kubectl explain argocd.spec.version`). Also research
+>   the Harbor-as-VCF-Service + VCF-CLI techdocs for real-lab accuracy.
+>
+> **E. De-risking backlog (holistic risk scan this session — 2 of 4 scans returned; RE-RUN robustness
+> and docs/config scans).** All LOCAL/cheap; close coverage on first-class modes with none today:
+>
+> 1. **`make e2e-sneakernet`** — the sneakernet `bundle → bundle-load → mirror-push → mirror-verify`
+>    round-trip (into a FRESH dir) has ZERO coverage; a break ships to real air-gap operators. TOP.
+> 2. **Wire `mirror-verify` INTO `e2e-kind`** (after mirror) + a **RED test** (corrupt a blob →
+>    assert INTEGRITY FAIL exit≠0). The integrity gate is only ever observed green.
+> 3. **Dispatch/scheduled CI e2e** — CI runs ONLY offline gates; ~30 scripts (05–99) can regress +
+>    merge green (a human edit to a TLS/manifest/pipeline script, or a cluster-tool MINOR bump).
+>    Add `workflow_dispatch` + weekly `make e2e-kind` (or a reduced kind-up+harbor+mirror+verify
+>    smoke) on a big runner; never blocks PRs.
+> 4. **`trivy image` CVE scan** — `trivy-fs` scans ONLY the app jar's deps; no `trivy image` on the
+>    app runtime image, the Maven builder image, or the mirrored bases → base-OS/JRE CVEs merge green.
+>    Add a `trivy-image` target into `sec`.
+> 5. **`make test-vcf-cli-resolve`** — synthetic fixtures (fake gz / tar.gz / nested multi-arch) for
+>    01-install-vcf-clis.sh's glob/tar-vs-gz branch logic (untested; breaks only on a real lab box).
+> 6. **`e2e-kind-both`** (secure+insecure matrix, mirror verify-ingress-both's pattern) — non-default
+>    TLS mode can regress + merge green.
+> 7. **cache-skip/resume/prune tests** (seed wrong-digest `.mirror-ok`→re-pull; correct→skip;
+>    orphan→pruned) + **smoke real-lab helpers in e2e-kind** (`argocd-preflight` assert `TOPOLOGY OK`
+>    string not exit-0; `fetch-argocd-ca` non-empty; `harbor-robot` env written).
+> 8. Minor: `Dockerfile.builder` gets neither hadolint nor trivy-config (add to lint.sh hadolint loop);
+>    `50-seed-gitea-repos.sh:46` comment ("not in argv") is misleading — the gitea-pod `ps` sees the
+>    password; add a prose-secret grep gate over `*.md` to `sec`.
+> 9. **[PROVEN, one-line — do it in the bootstrap branch's .env.example to avoid a conflict]** comment
+>    `MIRROR_ARCH`/`MIRROR_ALL_ARCH` (.env.example:195,197) — uncommented runtime toggles, so
+>    `make mirror MIRROR_ALL_ARCH=1` is silently clobbered back to single-arch (same class as the
+>    already-fixed HARBOR_INSECURE; the sibling MIRROR_RETRIES/FORCE_PULL/NO_PRUNE are already
+>    commented). Prove RED→GREEN: `MIRROR_ALL_ARCH=1 bash -c 'set -a;. ./.env.example;set +a;echo $MIRROR_ALL_ARCH'` must print 1.
+>    Also (docs-scan): add `VKS_AUTH_METHOD` (commented) to .env.example §6 (auth selector, read by
+>    30-vks-login.sh, undocumented in the source-of-truth file); `GITEA_CA_FILE` is a DEAD tunable
+>    (Gitea is HTTP-only — drop or comment "reserved"); the maven **build-image** tag
+>    (`maven:3.9-eclipse-temurin-25` in the two app Dockerfile ARGs + 15-build-push-builder.sh) is NOT
+>    covered by check-image-alignment (extend it, or soften the CLAUDE.md coverage claim).
+>
+> **F. Global config captured this session (on disk in ~/projects/claude-config, UNCOMMITTED — commit
+> that repo separately if desired):** coding-style.md (`A && B`-last-statement trips caller set -e),
+> testing.md (bare-image-testing corollary), + 2 memory files (stale-peek guard;
+> implement-what-user-literally-describes).
+>
+> **Cluster: torn down. Note:** a `make bootstrap-test` matrix + 2 risk-scan agents (robustness, docs)
+> may still be running from the prior session (nohup/harness) — ignore/re-run.
+>
+> ---
 
 `main` is GREEN. KinD self-signed-TLS fidelity + VCF/VKS lab-CLI + **real-lab install runbook &
 helpers** are merged. Design rationale: `docs/decisions/kind-tls-fidelity.md`; real-lab flow:
