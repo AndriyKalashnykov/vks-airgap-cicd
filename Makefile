@@ -113,6 +113,10 @@ mirror-push: check-env ## Push all mirrored images into Harbor
 mirror-verify: check-env ## Verify every mirrored image is INTACT in Harbor (crane validate blobs + images.lock digest match) — run after 'make mirror'
 	@$(SCRIPTS)/23-mirror-verify.sh
 
+.PHONY: mirror-verify-red-test
+mirror-verify-red-test: check-env ## NEGATIVE test (LIVE Harbor): delete one mirrored image, assert mirror-verify FAILS, then restore — proves the integrity gate catches corruption
+	@$(SCRIPTS)/24-mirror-verify-red-test.sh
+
 .PHONY: mirror
 mirror: mirror-pull mirror-push ## (dual-homed) Pull + push in one run
 
@@ -227,9 +231,62 @@ kind-down: ## Tear down the KinD cluster (prunes cloud-provider-kind + kindccm-*
 .PHONY: e2e-kind
 e2e-kind: kind-up install-harbor install-argocd install-all install-ingress verify verify-ingress ## Full local end-to-end in KinD (+ ingress route check)
 
+.PHONY: e2e-kind-both
+e2e-kind-both: ## Matrix: run the full KinD e2e in BOTH SSL modes (secure self-signed TLS, then insecure plain-HTTP)
+	@echo "==> e2e-kind matrix [1/2]: SECURE mode (self-signed TLS — the default)"
+	@$(MAKE) kind-down          # clear any stale .env.kind so the mode is deterministic
+	@$(MAKE) e2e-kind
+	@echo "==> e2e-kind matrix [2/2]: INSECURE mode (HARBOR_INSECURE=1 ARGOCD_INSECURE=1 — plain HTTP)"
+	@$(MAKE) kind-down          # kind-down clears .env.kind → the insecure toggle is not clobbered by a persisted HARBOR_INSECURE=0
+	@$(MAKE) e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1
+	@$(MAKE) kind-down
+	@echo "e2e-kind-both: both SSL modes verified end-to-end"
+
+##@ Air-gap sneakernet end-to-end (KinD)
+# The fresh staging dir the "carried" bundle tarball lands in — simulates the transfer
+# medium (USB/optical) between the internet host and the air-gapped host. Overridable;
+# when empty a fresh `mktemp -d` is used per run (and removed on exit), so nothing
+# pre-exists. Kept out of BUNDLE_DIR/IMAGE_CACHE_DIR so it survives load_env re-sourcing.
+SNEAKERNET_TRANSFER ?=
+
+.PHONY: e2e-sneakernet
+e2e-sneakernet: ## Full SNEAKERNET round-trip on KinD: mirror-pull → bundle → (fresh transfer dir) → bundle-load → mirror-push → mirror-verify (exercises the BUNDLE path, not a direct mirror)
+	@transfer="$(SNEAKERNET_TRANSFER)"; [ -n "$$transfer" ] || transfer="$$(mktemp -d)"; \
+	 stash="$(BUNDLE_DIR).presneakernet.$$$$"; \
+	 cleanup() { \
+	   if [ -d "$$stash" ]; then rm -rf "$(BUNDLE_DIR)"; mv "$$stash" "$(BUNDLE_DIR)"; fi; \
+	   if [ -z "$(SNEAKERNET_TRANSFER)" ]; then rm -rf "$$transfer"; fi; \
+	   $(MAKE) kind-down || true; \
+	 }; \
+	 trap cleanup EXIT; \
+	 echo "==> sneakernet e2e: staging transfer dir = $$transfer"; \
+	 $(MAKE) kind-up install-harbor; \
+	 echo "==> [internet side] pull images into $(BUNDLE_DIR)"; \
+	 $(MAKE) mirror-pull; \
+	 echo "==> [internet side] bundle into the transfer dir"; \
+	 $(MAKE) bundle BUNDLE_OUT_DIR="$$transfer"; \
+	 tarball=""; \
+	 for f in "$$transfer"/vks-airgap-cicd-bundle-*.tar.zst "$$transfer"/vks-airgap-cicd-bundle-*.tar.gz; do \
+	   [ -f "$$f" ] && { tarball="$$f"; break; }; \
+	 done; \
+	 [ -n "$$tarball" ] || { echo "ERROR: bundle produced no tarball in $$transfer"; exit 1; }; \
+	 echo "==> simulate carrying ONLY the tarball across the air gap (relocate the original cache)"; \
+	 mv "$(BUNDLE_DIR)" "$$stash"; \
+	 echo "==> [air-gap side] load the carried bundle into a FRESH $(BUNDLE_DIR)"; \
+	 $(MAKE) bundle-load BUNDLE_TARBALL="$$tarball"; \
+	 echo "==> [air-gap side] push the loaded images into Harbor"; \
+	 $(MAKE) mirror-push; \
+	 echo "==> [air-gap side] integrity-verify Harbor's copy (the sneakernet assertion)"; \
+	 $(MAKE) mirror-verify; \
+	 echo "e2e-sneakernet: OK — bundle round-trip pushed + integrity-verified from a cache reconstructed purely from the carried tarball"
+
 ##@ Full pipeline
 .PHONY: install-all
-install-all: mirror builder-image vks-login platform gitops ## Run the complete air-gap install end to end
+# mirror-verify runs RIGHT AFTER mirror (images pushed) and BEFORE builder-image /
+# platform / gitops consume them — so a corrupt/incomplete Harbor copy fails HERE (the
+# integrity gate) instead of surfacing later as a mid-pipeline Kaniko MANIFEST_UNKNOWN.
+# Read-only + non-disruptive to a healthy mirror. Prereqs update left-to-right (sequential).
+install-all: mirror mirror-verify builder-image vks-login platform gitops ## Run the complete air-gap install end to end (mirror integrity-verified before the pipeline)
 
 .PHONY: verify
 verify: check-env ## e2e: push a change → Tekton build → Harbor → ArgoCD sync → HTTP check (LIVE cluster)
