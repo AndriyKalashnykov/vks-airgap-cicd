@@ -28,6 +28,11 @@ node     = "24"
 # `make static-check` mirrors the CI static-check job (which runs mise-action).
 trivy    = "0.72.0"
 gitleaks = "8.30.1"
+# shellcheck — the lint gate's shell linter. Pinned via mise (not the OS package)
+# so local `make lint` uses the SAME version as CI; an unpinned system shellcheck
+# drifts (e.g. an older runner-bundled build flags SC2015 that a newer local one
+# does not), producing green-locally / red-in-CI surprises.
+shellcheck = "0.11.0"
 
 [settings]
 # Reproducible: never auto-bump; pin via this file + Renovate.

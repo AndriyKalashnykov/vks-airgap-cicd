@@ -76,6 +76,8 @@ curl -fsS "${base}/api/healthz" >/dev/null 2>&1 || die "Gitea not reachable via 
 authcfg="${tmp}/curl.cfg"
 printf 'header = "Authorization: token %s"\n' "$TOKEN" > "$authcfg"
 api() { curl -sS -o /dev/null -w '%{http_code}' -K "$authcfg" -H 'Content-Type: application/json' "$@"; }
+# api_body — like api() but returns the response BODY (for idempotency GET checks).
+api_body() { curl -sS -K "$authcfg" -H 'Content-Type: application/json' "$@"; }
 
 # ---- 3. Org + repos (idempotent: treat 201 and 409/422 as success) ----
 ok() { case "$1" in 2??|409|422) return 0;; *) return 1;; esac; }
@@ -130,14 +132,21 @@ NEWNAME="${HARBOR_URL}/${HARBOR_APP_PROJECT}/${APP_NAME}" NS="$ARGOCD_DEST_NAMES
 yq -i ".replicas[0].count = ${APP_REPLICAS}" "${deploy_src}/kustomization.yaml"
 push_repo "$deploy_src" "$GITEA_DEPLOY_REPO" "$ARGOCD_TRACK_BRANCH"
 
-# ---- 5. Register the push webhook on webui-app -> EventListener ----
+# ---- 5. Register the push webhook on webui-app -> EventListener (idempotent) ----
+# Gitea does NOT dedupe hooks — a blind re-POST on a re-run creates a DUPLICATE hook,
+# firing 2 PipelineRuns per push. Skip if a hook already targets our EventListener URL.
 hook_url="http://el-webui.${CI_NAMESPACE}.svc:8080"
-cat > "${tmp}/hook.json" <<EOF
+hooks_api="${base}/api/v1/repos/${GITEA_ORG}/${GITEA_APP_REPO}/hooks"
+if api_body -X GET "$hooks_api" | grep -qF "$hook_url"; then
+  log_info "webhook on ${GITEA_APP_REPO} -> ${hook_url} already present — skipping (idempotent)"
+else
+  cat > "${tmp}/hook.json" <<EOF
 {"type":"gitea","active":true,"events":["push"],
  "config":{"url":"${hook_url}","content_type":"json","secret":"${WEBHOOK_TOKEN}"}}
 EOF
-code="$(api -X POST -d @"${tmp}/hook.json" "${base}/api/v1/repos/${GITEA_ORG}/${GITEA_APP_REPO}/hooks")"
-ok "$code" || die "webhook registration failed (http $code)"
-log_info "webhook on ${GITEA_APP_REPO} -> ${hook_url} (http $code)"
+  code="$(api -X POST -d @"${tmp}/hook.json" "$hooks_api")"
+  ok "$code" || die "webhook registration failed (http $code)"
+  log_info "webhook on ${GITEA_APP_REPO} -> ${hook_url} (http $code)"
+fi
 
 log_info "Gitea seeded: org '${GITEA_ORG}', repos '${GITEA_APP_REPO}' + '${GITEA_DEPLOY_REPO}'"

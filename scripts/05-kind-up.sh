@@ -32,10 +32,26 @@ require_cmd kubectl
 
 [ -f "$KIND_CONFIG" ] || die "kind config not found at $KIND_CONFIG"
 
-# --- 1. Create the cluster (idempotent) --------------------------------------
+# --- 1. Create the cluster (idempotent + health-checked) ---------------------
+# A cluster with this name may be listed yet BROKEN — an interrupted `kind create`
+# (Ctrl+C mid-create) leaves a partial cluster that `kind get clusters` still lists.
+# A name-only guard would then skip create and proceed on a dead cluster. So when the
+# name exists, health-check the control-plane and only skip create if a node is
+# actually Ready; otherwise delete + recreate.
+need_create=1
 if kind get clusters 2>/dev/null | grep -qxF "$CLUSTER_NAME"; then
-  log_info "kind cluster '$CLUSTER_NAME' already exists — skipping create"
-else
+  kc="$(mktemp)"
+  if kind get kubeconfig --name "$CLUSTER_NAME" >"$kc" 2>/dev/null \
+     && kubectl --kubeconfig "$kc" get nodes 2>/dev/null | grep -q ' Ready'; then
+    log_info "kind cluster '$CLUSTER_NAME' already exists and is healthy — skipping create"
+    need_create=0
+  else
+    log_warn "kind cluster '$CLUSTER_NAME' exists but is NOT healthy (partial/interrupted create?) — deleting + recreating"
+    run kind delete cluster --name "$CLUSTER_NAME" || true
+  fi
+  rm -f "$kc"
+fi
+if [ "$need_create" = 1 ]; then
   log_info "creating kind cluster '$CLUSTER_NAME' from $KIND_CONFIG"
   # Assemble args in an array so the optional --image is added only when set.
   create_args=(create cluster --name "$CLUSTER_NAME" --config "$KIND_CONFIG")
