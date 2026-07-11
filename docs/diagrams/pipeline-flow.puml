@@ -1,7 +1,7 @@
 @startuml pipeline-flow
 !include c4/C4_Dynamic.puml
 !include _style.puml
-LAYOUT_TOP_DOWN()
+LAYOUT_LEFT_RIGHT()
 
 title Pipeline flow — a push to production, inside the air gap
 
