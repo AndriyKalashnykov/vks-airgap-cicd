@@ -56,7 +56,7 @@ pg_done() {
 pg_notify() {
   local title="${1:-vks}" msg="${2:-done}"
   # Terminal bell — only to an interactive tty, never into a log file / CI.
-  [ -t 2 ] && printf '\a' >&2 2>/dev/null || true
+  if [ -t 2 ]; then printf '\a' >&2 2>/dev/null || true; fi
   # Desktop notify — Linux notify-send (needs a display/dbus) or macOS osascript.
   if command -v notify-send >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
     notify-send "vks: $title" "$msg" >/dev/null 2>&1 || true
