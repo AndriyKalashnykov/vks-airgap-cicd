@@ -166,24 +166,41 @@ when changing the pipeline, ingress, or manifests.
 
 ## Backlog / resume state
 
-`main` is GREEN. The KinD self-signed-TLS fidelity + VCF/VKS lab-CLI arc is COMPLETE and merged —
-see git history / merged PRs for the trail. Design rationale: `docs/decisions/kind-tls-fidelity.md`.
+`main` is GREEN. KinD self-signed-TLS fidelity + VCF/VKS lab-CLI + **real-lab install runbook &
+helpers** are merged. Design rationale: `docs/decisions/kind-tls-fidelity.md`; real-lab flow:
+README §"Run against a real VKS lab" (Part A install Harbor+ArgoCD as Supervisor Services / Part B wire+run).
 
-**Resume the stack (if the cluster is down):**
+**⏳ PENDING next session — the full validation sweep (the cluster was torn down; run it fresh):**
 
 1. `git fetch origin && git checkout main && git reset --hard origin/main`
-2. `make e2e-kind` — full KinD end-to-end (mirror engine is **crane**, mise-provided).
-   `make jumpbox-both` validates the jump-box bootstrap on Photon + Ubuntu (needs the cluster up).
+2. `make ci` (offline gate) — **already green** this session.
+3. **Secure e2e-kind** (default): `make e2e-kind` → full loop. Then against the live secure cluster,
+   smoke the NEW helpers: `make argocd-preflight` (expect TOPOLOGY OK), `make fetch-argocd-ca`,
+   `make harbor-robot`. Then `make jumpbox-both JUMPBOX_VCF_SRC=/home/andriy/Downloads/vcf` (Photon+Ubuntu).
+4. **Insecure e2e-kind**: `make kind-down` then `make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1` →
+   full loop. Then `make jumpbox-both` (reads INSECURE from `.env.kind`).
+5. Run **sequentially** — the `no-concurrent-load-during-mirror` rule forbids overlapping docker.
+   This sweep re-validates this session's changes (lib/harbor.sh refactor, HARBOR_PUBLIC_PROJECTS,
+   the 3 new helpers) end-to-end. (mirror engine = **crane**, mise-provided.)
 
-**Deferred — real-lab-only, NOT KinD-reproducible (verify when a VCF/VKS 9.1 lab is available):**
+**Merged this session (real-lab prep):** helpers `make harbor-robot` + `fetch-argocd-ca` +
+`argocd-preflight` (+ `lib/harbor.sh` extraction, `HARBOR_PUBLIC_PROJECTS` toggle, fetch-harbor-ca
+port fix); README merged into ONE install-first real-lab flow with distilled Broadcom Harbor+ArgoCD
+Supervisor-Service steps; CLAUDE.md premise fixed (installed-as-Services, not pre-provided). All
+helpers verified against the (now-torn-down) KinD stand-in.
 
-- The workload cluster trusts the Harbor CA **declaratively** via the Cluster spec
-  `trust.additionalTrustedCAs` + a double-base64 `<cluster>-user-trusted-ca-secret` (KinD uses
-  per-node `certs.d` instead); a **private** Harbor project needs a robot account + `imagePullSecret`;
-  the lab is **FQDN**-addressed (KinD uses the LB IP with SAN=IP).
-- ArgoCD generation is confirmed: the real 9.1 operator ships `argocd` **3.0.19-vcf (3.x)**, so
-  KinD's 3.x ArgoCD is the right generation (empirically verified, not downgraded).
+**Deferred — real-lab-only, NOT KinD-reproducible (verify on a VCF/VKS 9.1 lab):**
+
+- Workload cluster trusts the Harbor CA **declaratively** (Cluster spec `trust.additionalTrustedCAs`
+  plus a double-base64 secret) — and, same-Supervisor, **auto-trusts** it (simpler than KinD `certs.d`);
+  a **private** Harbor project needs `make harbor-robot` creds + an app-namespace `imagePullSecret`
+  (`HARBOR_PUBLIC_PROJECTS=false`); the lab is **FQDN**-addressed (KinD uses LB IP + SAN=IP).
+- **ArgoCD version delta (corrected):** the operator CR pins the **server** at `2.14.15+vmware.1-vks.1`
+  (2.x) while the **CLI** is `3.0.19-vcf` (3.x) — CLI ≠ server; do NOT infer the server from the CLI.
+  KinD runs a 3.x server, so there IS a server-generation delta to reconcile. `make argocd-preflight`
+  surfaces CLI + running server image + `kubectl explain argocd.spec.version`.
+- **ArgoCD topology:** `make gitops` uses the in-cluster destination — confirm ArgoCD runs in / can
+  reach the workload cluster (`make argocd-preflight` → TOPOLOGY OK/MISMATCH).
 
 **Declined (decision, not a TODO):** ArgoCD Image Updater for registry-driven redeploy — the Tekton
-tag-write-back stays the primary GitOps path; revisit only to demo registry-driven deploys or to
-track externally-built (non-pipeline) images.
+tag-write-back stays the primary GitOps path; revisit only to demo registry-driven deploys.
