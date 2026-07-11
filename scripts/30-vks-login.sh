@@ -35,24 +35,58 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     ;;
 
   vcf)
-    # ---- VCF CLI (vSphere 9) — FINALIZE with the contractor-confirmed command ----
-    # The VCF CLI authenticates to the Supervisor and creates/refreshes contexts for
-    # both the Supervisor and the VKS workload cluster (token-based; revocable).
-    require_cmd vcf "install the VCF CLI + its VKS plugins on this jump box"
-    : "${SUPERVISOR_HOST:?set SUPERVISOR_HOST in .env}"
+    # ---- VCF Consumption CLI (vSphere 9 + Supervisor) ----
+    # Verified command SHAPE (primary sources: ogelbric/LAB VCF-CLI transcript;
+    # Broadcom "Install the Argo CD Service" techdoc). The CLI authenticates to the
+    # Supervisor and manages contexts; the two-step flow is:
+    #   1. `vcf context create` — creates a Supervisor context (INTERACTIVE: prompts
+    #      for a context NAME and the password).
+    #   2. `vcf context use <name>:<vsphere-namespace>` — activates it at the namespace.
+    #
+    # NOT end-to-end validated against a real VKS lab in this repo — the shape is from
+    # primary sources; confirm on a lab before relying on it (see the TODO below).
+    require_cmd vcf "install the VCF CLI (make install-vcf-clis) on this jump box"
+    : "${SUPERVISOR_HOST:?set SUPERVISOR_HOST in .env (Supervisor endpoint, host/IP, no scheme)}"
     : "${VKS_NAMESPACE:?set VKS_NAMESPACE (vSphere namespace) in .env}"
-    : "${VKS_CLUSTER_NAME:?set VKS_CLUSTER_NAME in .env}"
-    : "${VKS_USERNAME:?set VKS_USERNAME in .env}"
-    : "${VKS_PASSWORD:?set VKS_PASSWORD in .env (never passed on argv)}"
-    log_warn "The exact 'vcf' login invocation is a placeholder pending environment confirmation."
-    # Password via env (NOT argv) so it never appears in ps/procfs. Adjust flags to
-    # the confirmed VCF CLI syntax; the intent is: log in to Supervisor, then create
-    # a context for the workload cluster, writing to $KUBECONFIG.
-    #   VCF_PASSWORD="$VKS_PASSWORD" vcf login \
-    #       --server "$SUPERVISOR_HOST" --username "$VKS_USERNAME" \
-    #       --namespace "$VKS_NAMESPACE" --cluster "$VKS_CLUSTER_NAME" \
-    #       --kubeconfig "$KUBECONFIG"
-    die "vcf login not yet finalized — see the commented command above; use VKS_AUTH_METHOD=kubeconfig in the meantime"
+    : "${VKS_USERNAME:?set VKS_USERNAME in .env (user@SSO.DOMAIN, or set VKS_SSO_DOMAIN)}"
+    : "${VKS_CONTEXT_NAME:?set VKS_CONTEXT_NAME in .env (the vcf context NAME to type at the prompt)}"
+
+    # Username must be 'user@SSO.DOMAIN'. Append VKS_SSO_DOMAIN if the bare form was given.
+    user="$VKS_USERNAME"
+    case "$user" in
+      *@*) : ;;
+      *)
+        if [ -n "${VKS_SSO_DOMAIN:-}" ]; then
+          user="${VKS_USERNAME}@${VKS_SSO_DOMAIN}"
+        else
+          die "VKS_USERNAME must be 'user@SSO.DOMAIN' (e.g. administrator@WLD.SSO), or set VKS_SSO_DOMAIN in .env"
+        fi
+        ;;
+    esac
+
+    # Build argv WITHOUT any secret. `vcf context create` prompts interactively for the
+    # context name AND the password, so neither ever touches argv/procfs (security.md:
+    # secrets never in argv). The endpoint + username are non-secret.
+    create_args=(--endpoint "https://${SUPERVISOR_HOST}" --username "$user" --auth-type basic)
+    if [ "${VKS_INSECURE_SKIP_TLS_VERIFY:-false}" = "true" ]; then
+      create_args+=(--insecure-skip-tls-verify)
+    fi
+
+    log_info "creating a VCF context for the Supervisor at https://${SUPERVISOR_HOST} (user: ${user})"
+    log_warn "INTERACTIVE: at the prompt, enter the context name '${VKS_CONTEXT_NAME}' (must match VKS_CONTEXT_NAME) and your password."
+    # TODO(verify on a real VKS lab): confirm `vcf context create --help` for a
+    # non-interactive / stdin password mechanism before automating further. No such
+    # flag is confirmed in any primary source, so this runs interactively today; do
+    # NOT add a --password flag (a password on argv is forbidden — security.md).
+    vcf context create "${create_args[@]}"
+
+    log_info "activating context '${VKS_CONTEXT_NAME}' at namespace '${VKS_NAMESPACE}'"
+    vcf context use "${VKS_CONTEXT_NAME}:${VKS_NAMESPACE}"
+
+    # The kubectl-vsphere plugin (for `kubectl vsphere`-style access, if the workload
+    # cluster needs it) is fetched from the Supervisor at:
+    #   wget --no-check-certificate https://${SUPERVISOR_HOST}/wcp/plugin/linux-amd64/vsphere-plugin.zip
+    # It is a separate download, not part of this login step; see the README.
     ;;
 
   vsphere)

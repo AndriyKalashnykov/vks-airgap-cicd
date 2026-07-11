@@ -291,6 +291,12 @@ Reference docs:
 ·
 [Install the Argo CD Service](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-argo-cd-service/install-argo-cd-service.html).
 
+> **Doc-provenance note.** Broadcom's **9.1** ArgoCD/Harbor techdoc pages currently **301-redirect
+> to the 9.0 tree**, so the version-specific facts below (the `2.14.15` ArgoCD server example, field
+> names) are **9.0 content taken as authoritative-for-9.1** — an inference, not verified 9.1 ground
+> truth. Confirm against the running lab (`kubectl explain argocd.spec.version`, the actual service
+> YAML) before relying on an exact version.
+
 ### Part A — install the lab services
 
 **A1 — Install Harbor as a Supervisor Service** (vSphere Client — not scriptable):
@@ -324,8 +330,17 @@ Reference docs:
    Harbor).
 2. **Create a vSphere Namespace** for the instance (e.g. `argocd-instance-1`) with VM + storage
    classes.
-3. **Authenticate to the Supervisor:** `vcf context create mgmt-cluster --endpoint <supervisor-IP>
-   --type k8s` (vSphere 9+; on vSphere 8 use `kubectl vsphere login --server <IP>`).
+3. **Authenticate to the Supervisor** with the VCF Consumption CLI (interactive — it prompts
+   for the context name + password; no secret on argv), then activate the namespace:
+
+   ```bash
+   vcf context create --endpoint https://<supervisor-IP> --username <user>@<SSO-DOMAIN> \
+       --insecure-skip-tls-verify --auth-type basic     # enter a context name (e.g. sup66) + password
+   vcf context use <context-name>:<vsphere-namespace>   # note the <ctx>:<ns> COLON form
+   ```
+
+   On vSphere 8, use `kubectl vsphere login --server <IP>` instead. `make vks-login` with
+   `VKS_AUTH_METHOD=vcf` runs this flow from `.env` (see the [VKS authentication](#vks-authentication-vcf-9--supervisor) section).
 4. **Pick a supported version** with `kubectl explain argocd.spec.version`, then apply the CR:
 
    ```yaml
@@ -409,9 +424,12 @@ VKS_CONTEXT=<context-name-in-that-kubeconfig>
 ```
 
 For VKS auth, `kubeconfig` (drop the lab's exported kubeconfig at `$KUBECONFIG`) is the
-simplest working method. If the lab uses the vSphere plugin instead, set
-`VKS_AUTH_METHOD=vsphere` and `SUPERVISOR_HOST` / `VKS_NAMESPACE` / `VKS_CLUSTER_NAME` /
-`VKS_USERNAME` / `VKS_PASSWORD`. (The `vcf` method is a stub — do not use it yet.)
+simplest working method. To log in with the VCF Consumption CLI instead, set
+`VKS_AUTH_METHOD=vcf` and the `vcf` inputs (`SUPERVISOR_HOST` / `VKS_USERNAME` /
+`VKS_NAMESPACE` / `VKS_CONTEXT_NAME`) — see the [VKS authentication](#vks-authentication-vcf-9--supervisor)
+section for the exact flow (it is written to the verified shape but not yet lab-validated).
+For the legacy vSphere plugin, set `VKS_AUTH_METHOD=vsphere` and `SUPERVISOR_HOST` /
+`VKS_NAMESPACE` / `VKS_CLUSTER_NAME` / `VKS_USERNAME` / `VKS_PASSWORD`.
 
 **Step 2 — save the Harbor CA certificate** to `./secrets/harbor-ca.crt` (the
 `HARBOR_CA_FILE` path). If the lab handed you the cert, drop it there. Otherwise fetch it
@@ -493,6 +511,21 @@ clearly if any is missing. On a minimal box where you skipped `make deps`:
 > (not per-node `certs.d`); a **private** Harbor project needs a robot account +
 > `imagePullSecret`; and the lab is **FQDN**-addressed. See
 > [KinD TLS fidelity → Fidelity vs a real VCF/VKS 9.1 lab](docs/decisions/kind-tls-fidelity.md).
+
+When Harbor and the workload cluster are **not** on the same Supervisor (or the Harbor project is
+**private**), the auto-trust does not apply and you must make the VKS cluster trust the Harbor CA
+**declaratively**. Add the CA to the Cluster spec `trust.additionalTrustedCAs` — the value is the CA
+PEM **encoded twice with base64** (VKS decodes one layer, then the node trust store decodes the
+inner PEM):
+
+```bash
+# DOUBLE base64: the outer -w0 keeps it a single line for the Cluster YAML.
+base64 -w 0 harbor-ca.crt | base64 -w 0
+```
+
+Reference: [William Lam — using a VKS cluster with a private container registry](https://williamlam.com/2024/06/using-a-vsphere-kubernetes-service-vks-cluster-with-a-private-container-registry.html).
+(Verify the exact `trust.additionalTrustedCAs` shape against your VCF/VKS 9.1 lab — it is not
+reproducible on the KinD stand-in.)
 
 **Step 4 — Harbor projects + (recommended) a robot account.** `make mirror` (run in step 6)
 creates the `cicd` and `apps` projects for you via Harbor's REST API if they don't exist
@@ -903,10 +936,49 @@ overlay written by the KinD flow. Nothing is hardcoded in scripts or the Makefil
 
 ## VKS authentication (VCF 9 + Supervisor)
 
-`scripts/30-vks-login.sh` is the single pluggable step that produces a working
-`KUBECONFIG` and context; everything downstream is auth-agnostic. It supports `kubeconfig` (bring your own),
-`vcf` (VCF CLI, token-based in vSphere 9 — finalized once confirmed for the target
-environment), and legacy `vsphere` (kubectl-vsphere plugin) methods via `VKS_AUTH_METHOD`.
+`scripts/30-vks-login.sh` (`make vks-login`) is the single pluggable step that produces a
+working `KUBECONFIG` and context; everything downstream is auth-agnostic. Select the method
+with `VKS_AUTH_METHOD`:
+
+| Method | Use it when | Inputs (`.env`) |
+|--------|-------------|-----------------|
+| `kubeconfig` (default) | You already have the lab's exported kubeconfig | `KUBECONFIG`, `VKS_CONTEXT` |
+| `vcf` | Real VCF 9 lab, via the VCF Consumption CLI | `SUPERVISOR_HOST`, `VKS_USERNAME` (+ `VKS_SSO_DOMAIN`), `VKS_NAMESPACE`, `VKS_CONTEXT_NAME`, `VKS_INSECURE_SKIP_TLS_VERIFY` |
+| `vsphere` | Pre-9 Supervisor, via the kubectl-vsphere plugin | `SUPERVISOR_HOST`, `VKS_NAMESPACE`, `VKS_CLUSTER_NAME`, `VKS_USERNAME`, `VKS_PASSWORD` |
+
+**`vcf` method — the real VCF Consumption CLI flow.** `.env` inputs:
+
+```bash
+VKS_AUTH_METHOD=vcf
+SUPERVISOR_HOST=<supervisor-IP-or-FQDN>   # no scheme
+VKS_USERNAME=administrator@WLD.SSO        # 'user@SSO.DOMAIN' (or set VKS_SSO_DOMAIN and give the bare user)
+VKS_NAMESPACE=<vsphere-namespace>         # the <ns> in `vcf context use <name>:<ns>`
+VKS_CONTEXT_NAME=sup66                    # the vcf context NAME you type at the create prompt
+VKS_INSECURE_SKIP_TLS_VERIFY=true         # skip verifying the Supervisor's self-signed cert
+```
+
+`make vks-login` then runs (interactively — the CLI **prompts** for the context name and the
+password, so no secret ever touches argv):
+
+```bash
+vcf context create --endpoint https://<SUPERVISOR_HOST> --username <user>@<SSO-DOMAIN> \
+    --insecure-skip-tls-verify --auth-type basic     # enter the context name (VKS_CONTEXT_NAME) + password when prompted
+vcf context use <VKS_CONTEXT_NAME>:<VKS_NAMESPACE>   # note the <ctx>:<ns> COLON form
+```
+
+If the workload cluster needs the kubectl-vsphere plugin, fetch it from the Supervisor:
+
+```bash
+wget --no-check-certificate https://<SUPERVISOR_HOST>/wcp/plugin/linux-amd64/vsphere-plugin.zip
+```
+
+> **Not yet lab-validated.** The `vcf` flow is written to the command **shape** verified from
+> primary sources (the ogelbric/LAB VCF-CLI transcript and Broadcom's "Install the Argo CD
+> Service" techdoc), but it has **not** been run end-to-end against a real VKS lab in this repo.
+> The login is interactive today: no non-interactive/stdin password mechanism is confirmed for
+> `vcf context create`, so `30-vks-login.sh` carries a `TODO(verify on a real VKS lab)` to
+> confirm one before automating further. A password is never placed on argv either way.
+> `kubeconfig` (bring the lab's exported kubeconfig) is the simplest working method.
 
 ## Contributing
 
