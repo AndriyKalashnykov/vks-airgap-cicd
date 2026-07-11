@@ -109,6 +109,10 @@ bundle-load: ## (sneakernet, air-gap host) Unpack a transferred bundle
 mirror-push: check-env ## Push all mirrored images into Harbor
 	@$(SCRIPTS)/21-mirror-push.sh
 
+.PHONY: mirror-verify
+mirror-verify: check-env ## Verify every mirrored image is INTACT in Harbor (crane validate blobs + images.lock digest match) — run after 'make mirror'
+	@$(SCRIPTS)/23-mirror-verify.sh
+
 .PHONY: mirror
 mirror: mirror-pull mirror-push ## (dual-homed) Pull + push in one run
 
