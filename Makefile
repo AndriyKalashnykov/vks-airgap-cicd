@@ -438,10 +438,14 @@ PODMAN_USERNS := $(if $(filter podman,$(CONTAINER_ENGINE)),--userns=keep-id,)
 # Render helper: $(1) = output subdir under docs/diagrams (created if missing).
 # --network=none + -DRELATIVE_INCLUDE="." force the VENDORED c4/*.puml (offline,
 # deterministic — no fetch from githubusercontent at render time).
+# PLANTUML_LIMIT_SIZE raises PlantUML's 4096px default max canvas so a wide diagram
+# renders COMPLETE instead of silently truncating (the webui node + legend were being
+# clipped off pipeline-flow at 4096px). Deterministic — it caps, it does not scale.
 define _render_diagrams
 	mkdir -p docs/diagrams/$(1); \
 	$(CONTAINER_ENGINE) run --rm $(PODMAN_USERNS) --network=none -u "$$(id -u):$$(id -g)" \
 		-e PLANTUML_SECURITY_PROFILE=UNSECURE -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp \
+		-e PLANTUML_LIMIT_SIZE=16384 \
 		-v "$$PWD/docs/diagrams:/work" -w /work docker.io/plantuml/plantuml:$(PLANTUML_VERSION) \
 		-tpng -o $(1) -DRELATIVE_INCLUDE="." airgap.puml context.puml container.puml deployment.puml pipeline-flow.puml
 endef

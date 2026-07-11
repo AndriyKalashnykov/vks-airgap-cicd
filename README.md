@@ -261,7 +261,7 @@ image into Harbor; a `git push` then drives the whole CI/CD flow entirely inside
 
 ### Pipeline flow
 
-<p align="center"><img src="docs/diagrams/out/pipeline-flow.png" alt="Pipeline flow" width="960"></p>
+<p align="center"><a href="docs/diagrams/out/pipeline-flow.png"><img src="docs/diagrams/out/pipeline-flow.png" alt="Pipeline flow — click to enlarge" width="960"></a></p>
 
 Diagram sources are committed under [`docs/diagrams/`](docs/diagrams/) (C4-PlantUML);
 `make diagrams` re-renders the PNGs and `make diagrams-check` fails CI if they drift.
