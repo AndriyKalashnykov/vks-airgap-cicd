@@ -221,7 +221,8 @@ when changing the pipeline, ingress, or manifests.
 >   upload `harbor-sys.yaml` + `harbor-data-values.yaml` via Supervisor Mgmt → Services → Add;
 >   edit data-values: `hostname: <fqdn>`, `enableNginxLoadBalancer: true`,
 >   `enableContourHttpProxy: false`, storage class `vsan-default-storage-policy`; Actions → Manage
->   Service → paste YAML; get LB IP from Network→Services; DNS FQDN→LB IP; default `admin/Harbor12345`;
+>   Service → paste YAML; get LB IP from Network→Services; DNS FQDN→LB IP; log in with Harbor's
+>   documented default admin credential (see Broadcom's Harbor docs — rotate on first login);
 >   CA into `/etc/docker/certs.d/<fqdn>/ca.crt` (strip trailing CR); `docker login <fqdn>`. GOTCHA:
 >   remove trailing CR from the cert. Compare vs our README Harbor-as-VCF-Service section + fetch the
 >   Broadcom "Installing and Configuring Harbor as a VCF Service" techdoc to reconcile.

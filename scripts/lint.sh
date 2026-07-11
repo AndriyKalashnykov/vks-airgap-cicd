@@ -31,15 +31,19 @@ else
   log_warn "yamllint not installed — skipped"
 fi
 
-echo "== hadolint (apps/java/webui/Dockerfile) =="
-if [ -f "$REPO_ROOT/apps/java/webui/Dockerfile" ]; then
-  if have hadolint; then
-    hadolint "$REPO_ROOT/apps/java/webui/Dockerfile" || rc=1
-  else
-    log_warn "hadolint not installed — skipped"
-  fi
+echo "== hadolint (apps/java/webui/Dockerfile*) =="
+if have hadolint; then
+  # Glob covers both the runtime Dockerfile AND Dockerfile.builder (the
+  # air-gapped Maven builder image) — both must be lint-clean.
+  found=0
+  for df in "$REPO_ROOT"/apps/java/webui/Dockerfile*; do
+    [ -f "$df" ] || continue
+    found=1
+    hadolint "$df" || rc=1
+  done
+  [ "$found" -eq 1 ] || log_warn "apps/java/webui/Dockerfile* not present yet — skipped"
 else
-  log_warn "apps/java/webui/Dockerfile not present yet — skipped"
+  log_warn "hadolint not installed — skipped"
 fi
 
 echo "== hadolint (jumpbox/Dockerfile.*) =="
