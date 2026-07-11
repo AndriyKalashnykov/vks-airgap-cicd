@@ -67,6 +67,22 @@ proxyv2_itag="$(grep -oE 'istio/proxyv2:[^[:space:]"]+' images/images.txt | head
 check_pinned "ISTIO_VERSION (.env.example)" "$(grep -E '^ISTIO_VERSION=' .env.example | cut -d= -f2)" "$istio_itag"
 check_pinned "istio/proxyv2 (images.txt)" "$proxyv2_itag" "$istio_itag"
 
+# The Maven BUILD image (maven:<mvn>-eclipse-temurin-<jdk>) is mirrored in images.txt and its
+# FULL tag is re-typed in four consumers the manifest grep above cannot see: the two app
+# Dockerfile ARGs and 15-build-push-builder.sh's upstream-pull + Harbor-ref lines. Renovate tracks
+# it (depName=maven) via images.txt only, and check-java-alignment aligns just the JDK MAJOR — so a
+# maven `3.9 -> 3.10` bump would drift the consumers silently. Assert the full tag across all four.
+# `|| true`: standalone `set -e` assignments — a head-1 SIGPIPE / no-match must not abort here.
+mvn_itag="$(grep -oE '^maven:[^[:space:]"]+' images/images.txt | head -1 | sed 's|maven:||' || true)"
+check_pinned "MAVEN_IMAGE (apps/java/webui/Dockerfile.builder)" \
+  "$(grep -oE 'MAVEN_IMAGE=maven:[^[:space:]"]+' apps/java/webui/Dockerfile.builder | head -1 | sed 's|MAVEN_IMAGE=maven:||' || true)" "$mvn_itag"
+check_pinned "BUILDER_IMAGE (apps/java/webui/Dockerfile)" \
+  "$(grep -oE 'BUILDER_IMAGE=maven:[^[:space:]"]+' apps/java/webui/Dockerfile | head -1 | sed 's|BUILDER_IMAGE=maven:||' || true)" "$mvn_itag"
+check_pinned "BUILD_BASE (15-build-push-builder.sh)" \
+  "$(grep -E '^BUILD_BASE=' scripts/15-build-push-builder.sh | grep -oE 'maven:[^[:space:]"]+' | head -1 | sed 's|maven:||' || true)" "$mvn_itag"
+check_pinned "MAVEN_BASE (15-build-push-builder.sh)" \
+  "$(grep -E '^MAVEN_BASE=' scripts/15-build-push-builder.sh | grep -oE 'maven:[^[:space:]"]+' | head -1 | sed 's|maven:||' || true)" "$mvn_itag"
+
 if [ "$drift" -ne 0 ]; then
   echo "ERROR: image tag drift between manifests and images/images.txt (BLOCKING)." >&2
   echo "       The mirror pushes the images.txt tag; each manifest pulls its own tag." >&2
