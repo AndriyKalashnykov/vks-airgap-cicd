@@ -1,0 +1,118 @@
+name: e2e-kind-smoke
+
+# ┌───────────────────────────────────────────────────────────────────────────┐
+# │ NON-BLOCKING safety net — NEVER a PR/push gate.                            │
+# │                                                                           │
+# │ CI (ci.yml) runs only OFFLINE gates (static-check + docs-lint). The ~30   │
+# │ numbered behavioral scripts (scripts/05-*..99-*) that drive the KinD /    │
+# │ air-gap flow have NO behavioral coverage in CI, so a regression in them   │
+# │ (a TLS/manifest/mirror/pipeline script edit, or a cluster-tool minor      │
+# │ bump) can merge green. This workflow runs a REDUCED KinD smoke on a       │
+# │ schedule + on demand to catch those regressions — WITHOUT the weight and  │
+# │ flakiness of the full pipeline.                                           │
+# │                                                                           │
+# │ It is DELIBERATELY not the authority. The authoritative end-to-end is the │
+# │ local `make e2e-kind` (heavy/flaky, local-only by design — see CLAUDE.md  │
+# │ "Verification honesty") and the live VKS run (`make install-all`). A red  │
+# │ run here is a heads-up to investigate, not a merge blocker.               │
+# │                                                                           │
+# │ Reduced scope: cluster up → Harbor up → mirror images → verify integrity  │
+# │ → tear down. It exercises 05-kind-up / 06-install-harbor / 10-mirror-pull │
+# │ / 21-mirror-push / 23-mirror-verify (+ their shared lib/*.sh), which is   │
+# │ where silent script rot is most likely, and stops BEFORE the full         │
+# │ ArgoCD/Gitea/Tekton/ingress pipeline (that lives in local `make e2e-kind`).│
+# └───────────────────────────────────────────────────────────────────────────┘
+
+on:
+  # Manual runs only (never gates PRs). Note: a NET-NEW workflow cannot be
+  # dispatched from a feature branch — it must be on the default branch first.
+  workflow_dispatch:
+  # One weekly off-peak run: Mondays 04:17 UTC (early week, off the hour).
+  schedule:
+    - cron: '17 4 * * 1'
+
+# Least privilege: the smoke only needs to read the repo.
+permissions:
+  contents: read
+
+# Serialize smoke runs (a manual dispatch + the weekly cron must not overlap and
+# clobber the same KinD cluster / Harbor). Do NOT cancel an in-flight run — let a
+# started smoke finish rather than tearing down its cluster mid-mirror.
+concurrency:
+  group: e2e-kind-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    # Generous cap: cluster create + cloud-provider-kind LB wiring + Harbor helm
+    # install + a full image mirror + integrity verify. Well under 45m in practice.
+    timeout-minutes: 45
+    env:
+      # The KinD path requires Docker (cloud-provider-kind + node crictl use the
+      # kind Docker network/socket); force it over the repo's podman default.
+      CONTAINER_ENGINE: docker
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      # Provides the jump-box toolchain from .mise.toml (kubectl/helm/crane/jq/yq/
+      # kustomize/java/…) — the SAME setup ci.yml's static-check job uses, so local
+      # `make` targets run against the pinned versions.
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4
+
+      # `kind` is NOT installed by any repo script (operators install it locally),
+      # so the smoke installs the pinned binary itself. Docker is preinstalled on
+      # the runner; the mise toolchain above covers crane/kubectl/helm/jq. `make
+      # deps` is intentionally SKIPPED — it also installs tkn/argocd/podman that
+      # this reduced smoke (stops at mirror-verify) never exercises.
+      - name: Install kind
+        env:
+          # renovate: datasource=github-releases depName=kubernetes-sigs/kind
+          KIND_VERSION: v0.32.0
+        run: |
+          set -euo pipefail
+          sudo curl -sSfL \
+            "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64" \
+            -o /usr/local/bin/kind
+          sudo chmod +x /usr/local/bin/kind
+          kind --version
+
+      # Diagnostics: record the toolchain versions the smoke will use (helps triage
+      # a red run — e.g. a cluster-tool bump that broke a script).
+      - name: Toolchain versions
+        run: |
+          set -euo pipefail
+          docker --version
+          kind --version
+          kubectl version --client
+          helm version --short
+          crane version
+
+      # Create the KinD cluster + cloud-provider-kind LoadBalancer (05-kind-up.sh).
+      # Writes the discovered KUBECONFIG/context to the gitignored .env.kind overlay.
+      - name: make kind-up
+        run: make kind-up
+
+      # Install Harbor into KinD as a self-signed-HTTPS LoadBalancer (default mode:
+      # mints a CA+leaf with SAN=IP, wires each node's containerd trust) — 06-install
+      # -harbor.sh. Exercises the TLS/CA fidelity path, not just a plain-HTTP shortcut.
+      - name: make install-harbor
+        run: make install-harbor
+
+      # Mirror every image in images/images.txt (+ the derived Tekton manifest images)
+      # into Harbor, then VERIFY each is intact (crane validate blobs + images.lock
+      # digest match). `make mirror` is not trivially reducible to a smaller image set
+      # (10-mirror-pull.sh reads images.txt AND auto-derives the Tekton release-manifest
+      # images), so the smoke mirrors the full inventory — the dominant runtime cost of
+      # this job, but exactly what exercises the pull→push→verify path end to end.
+      - name: make mirror + mirror-verify
+        run: |
+          set -euo pipefail
+          make mirror
+          make mirror-verify
+
+      # Always tear down: prune the cluster + cloud-provider-kind + kindccm-* orphans
+      # (kind-down.sh) even if an earlier step failed, so a red run leaves no residue.
+      - name: make kind-down (cleanup)
+        if: always()
+        run: make kind-down
