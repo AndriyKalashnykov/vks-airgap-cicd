@@ -5,6 +5,10 @@ skinparam dpi 150
 skinparam backgroundColor #FAFAFA
 skinparam shadowing false
 skinparam roundCorner 4
+' Layout breathing room: wider node/rank separation spreads connectors so they
+' route between nodes rather than crossing/overlapping them (readability fix).
+skinparam nodesep 70
+skinparam ranksep 100
 skinparam defaultFontName "Inter, Helvetica, Arial, sans-serif"
 skinparam defaultFontSize 13
 skinparam ArrowColor #37474F
