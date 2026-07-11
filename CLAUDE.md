@@ -170,18 +170,32 @@ when changing the pipeline, ingress, or manifests.
 helpers** are merged. Design rationale: `docs/decisions/kind-tls-fidelity.md`; real-lab flow:
 README §"Run against a real VKS lab" (Part A install Harbor+ArgoCD as Supervisor Services / Part B wire+run).
 
-**⏳ PENDING next session — the full validation sweep (the cluster was torn down; run it fresh):**
+**✅ COMPLETED 2026-07-11 — the full validation sweep ran GREEN end-to-end (both modes):**
 
-1. `git fetch origin && git checkout main && git reset --hard origin/main`
-2. `make ci` (offline gate) — **already green** this session.
-3. **Secure e2e-kind** (default): `make e2e-kind` → full loop. Then against the live secure cluster,
-   smoke the NEW helpers: `make argocd-preflight` (expect TOPOLOGY OK), `make fetch-argocd-ca`,
-   `make harbor-robot`. Then `make jumpbox-both JUMPBOX_VCF_SRC=/home/andriy/Downloads/vcf` (Photon+Ubuntu).
-4. **Insecure e2e-kind**: `make kind-down` then `make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1` →
-   full loop. Then `make jumpbox-both` (reads INSECURE from `.env.kind`).
-5. Run **sequentially** — the `no-concurrent-load-during-mirror` rule forbids overlapping docker.
-   This sweep re-validates this session's changes (lib/harbor.sh refactor, HARBOR_PUBLIC_PROJECTS,
-   the 3 new helpers) end-to-end. (mirror engine = **crane**, mise-provided.)
+1. `make ci` (offline gate) — green (rc=0).
+2. **Secure e2e-kind** (default, self-signed TLS): full loop green — git push → Tekton PipelineRun →
+   Harbor → tag write-back → ArgoCD sync (`webui:0.1.0`→`:96e22fc`) → rollout → deployed page shows
+   the new marker → end-to-end verified; `verify-ingress` all 3 `*.vks.local` UIs 200 + body markers.
+   - **All 5 README UIs walked to real content** (7 checks): Gitea, App greeting, Tekton Dashboard
+     (via ingress); **Harbor UI portal HTML over CA-trusted HTTPS** (no `-k`, systeminfo `auth_mode`);
+     and **ArgoCD UI SPA + API `v3.4.5`** (own LB, self-signed TLS).
+   - **3 helpers verified:** `argocd-preflight` → TOPOLOGY OK (reads running server image
+     `quay.io/argoproj/argocd:v3.4.5`, not the CLI); `fetch-argocd-ca` → fetches the exact server cert
+     (byte-identical), verifies against a covered SAN (`argocd-server`); the raw-LB-IP gap is ArgoCD's
+     default cert not listing the IP → documented `--insecure` posture. `harbor-robot` → creates
+     `robot$vks-cicd`, creds **authenticate** to the registry and list `apps/webui:96e22fc` (pull scope).
+   - `make jumpbox-both JUMPBOX_VCF_SRC=/home/andriy/Downloads/vcf` — Photon **and** Ubuntu `JUMPBOX_OK`
+     (mise toolchain, rootless podman, Harbor reach 200, VCF CLIs `argocd v3.0.19-vcf` / `vcf v9.1.0.0`
+     and its 6 plugins). Photon `shellcheck` not-packaged is handled gracefully (WARN, lint skips it).
+3. **Insecure e2e-kind** (`HARBOR_INSECURE=1 ARGOCD_INSECURE=1`, plain HTTP): `kind-down` (which also
+   clears `.env.kind`, so the toggle is deterministic) → full loop green, **install-mode log confirmed
+   `Harbor mode: INSECURE` + `ArgoCD mode: INSECURE`** (not silently secure); marker `…1783733627`,
+   image `:4619fa4`. **All 5 UIs 7/7** over plain HTTP. `make jumpbox-both` (no VCF src) — both OSes
+   `JUMPBOX_OK`, Harbor reach `http://…` 200; VCF step correctly SKIPPED.
+4. Ran **sequentially** (no-concurrent-load-during-mirror honored). mirror engine = **crane** (mise).
+
+Re-validated this session's changes (lib/harbor.sh refactor, HARBOR_PUBLIC_PROJECTS, the 3 helpers)
+end-to-end. **Cluster state:** the **insecure** KinD cluster is currently UP — `make kind-down` when done.
 
 **Merged this session (real-lab prep):** helpers `make harbor-robot` + `fetch-argocd-ca` +
 `argocd-preflight` (+ `lib/harbor.sh` extraction, `HARBOR_PUBLIC_PROJECTS` toggle, fetch-harbor-ca
