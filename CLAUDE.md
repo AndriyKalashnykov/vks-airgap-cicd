@@ -169,141 +169,58 @@ when changing the pipeline, ingress, or manifests.
 
 ## Backlog / resume state
 
-> ### ⏳ SESSION HANDOFF 2026-07-11 (READ FIRST — resume here)
+> ### ⏳ SESSION HANDOFF 2026-07-11b (READ FIRST — resume here)
 >
-> `main` GREEN; this session merged 6 PRs (#85 handoff, #86 diagram-label, #87
-> mirror-verify+cache-skip+progress+resume, #88 idempotency+shellcheck-pin, #89 docs,
-> #90 cache-prune). Below: in-flight work + a de-risking backlog + a research thread.
-> **Browser NOT needed: WebFetch reads techdocs.broadcom.com AND raw.githubusercontent.com.**
+> `main` GREEN. This session merged **13 PRs** (#93–#107) and validated the full KinD
+> e2e end-to-end.
 >
-> **A. Bootstrap PR — branch `feat/bootstrap-curl-bash` PUSHED (commit a5de333), NOT merged.**
-> `bootstrap-jumpbox.sh` = curl|bash jump-box bootstrap (OS-gate → check→install→verify→report);
-> `jumpbox/Dockerfile.bootstrap` (ARG BASE + COPY) + `scripts/bootstrap-test.sh` + `make
-> bootstrap-test` (from-nothing on a bare-OS matrix). Validated: offline gates green; OS-gate
-> (ubuntu/photon supported, fedora rejected exit 1). **MATRIX RESULT (done):** ubuntu:22.04 +
-> 24.04 + 26.04 + **photon:5.0** all from-nothing GREEN (all core tools present); **photon:4.0
-> FAILS** (older Photon — out of scope) and **fedora-reject failed the ASSERTION** (the OS gate
-> DID reject it exit≠0, but bootstrap-test.sh didn't find the `UNSUPPORTED` string — likely the
-> `docker build --build-arg BASE=fedora … || true` masking a build/pull issue, OR the message
-> needs de-colorizing before grep; investigate the fedora leg).
-> **Before merge:** (1) **DROP `photon:4.0`** from `BOOTSTRAP_TEST_OSES` default in
-> scripts/bootstrap-test.sh (keep ubuntu:22.04/24.04/26.04 + photon:5.0) + fix the fedora-reject
-> assertion; the bootstrap SCRIPT works on all real targets — the 2 failures are matrix/harness,
-> not script logic. (2) **README Prereqs restructure (Task 16)** — make curl|bash bootstrap the PRIMARY path,
-> collapse the manual git/SSH/clone/mise/make-deps steps under `<details>`, add the curl-prereq
-> note (**bare Photon 5 ships NO curl** → pipe form needs `sudo tdnf install -y curl` first;
-> verified). `.markdownlint.json` has `MD033:false` so `<details>` is fine. (3) `make ci`, PR, merge.
+> - **Backlog cleared:** bootstrap curl|bash + bare-OS harness (#95), SIGPIPE robustness
+>   sweep (#94), diagram layout + proportions (#93/#105), README readability + collapses
+>   (#96/#104), maven-image full-tag alignment (#97), hadolint-builder + prose-secret gate
+>   (#99), runtime apt-upgrade CVE fix (#100), offline unit tests for resolve + mirror-cache
+>   (#101), real `vcf context` login flow replacing the fictional stub (#103).
+> - **`.env`/README real-lab ergonomics redesign (#107):** every operator-supplied var now
+>   carries a stage tag + `# how:` acquisition command (reusing the same var names); README
+>   has TWO real-lab scenarios (**Scenario 1** install / **Scenario 2** already-installed
+>   tenant), a staged `.env` fill distributed across the install steps, a Quick-Start Step 0,
+>   the VKS-auth section moved up, and the KinD zero-`.env` auto-discovery note.
+> - **e2e-kind VALIDATED** end-to-end (kind → Harbor → ArgoCD → mirror-34 → builder
+>   [apt-upgrade] → platform → gitops → ingress → pipeline → live app). The one flake found —
+>   the Tekton EventListener crash-loops on the clusterInterceptor CaBundle race, so a
+>   one-shot webhook pushed during that window is lost — is fixed in `99-verify.sh` (wait for
+>   the EL POD Ready + empty-commit re-fire; #106). Codified as `/ci-workflow` K1.6.
 >
-> **B. Diagrams PR (Task 15) — own branch.** Deployment+Container connectors intersect; pipeline-flow
-> too short. Add `skinparam nodesep`/`ranksep` to `docs/diagrams/_style.puml`; switch
-> `pipeline-flow.puml` to `LAYOUT_TOP_DOWN()`. `make diagrams` + **EYEBALL each PNG** (Read the
-> images) to confirm, iterate values; commit PNGs (diagrams-check gate).
+> **Corrected real-lab facts (from research; all Broadcom pages are 9.0-via-redirect → 9.1
+> inferences — verify on a lab):**
 >
-> **C. README readability PR (Task 17) — own branch.** README is 870 lines. Wrap in
-> `<details><summary>descriptive</summary>` (blank line after summary; MD033 ok): "Run against a
-> real VKS lab" (339L, biggest win), "Demo walkthrough" (74L), "Detailed steps" (42L),
-> "Make targets" (22L), "Repository layout" (15L), "CI/CD" (12L). KEEP expanded: intro,
-> Prereqs(bootstrap), Tech stack, Quick Start, Architecture, Try-with-KinD, Access the UIs. ~250 visible.
+> - Workload-cluster kubeconfig on VCF 9 = **`vcf cluster kubeconfig get <cluster>
+>   --export-file <path>`** (NOT `kubectl vsphere login`, which is legacy vSphere-with-Tanzu 7/8).
+> - Harbor & ArgoCD Supervisor Services run **on the Supervisor** (each in its own vSphere
+>   Namespace) — installing them needs Supervisor access; the workload kubeconfig is only
+>   needed at `make gitops` deploy time. ArgoCD: svc `argocd-server`, ns `argocd-instance-1`,
+>   server `2.14.15+vmware.1-vks.1` (2.x; the CLI `3.0.19-vcf` is 3.x — do NOT infer one from
+>   the other).
+> - Shared-lab tenant: a Harbor **project-admin** (direct, not via an SSO group) self-services
+>   a robot; the ArgoCD tenant needs an **AppProject** + RBAC (generic ArgoCD — verify on lab).
 >
-> **D. Real-lab research thread (user-requested).** Compare our impl (`scripts/01-install-vcf-clis.sh`,
-> `30-vks-login.sh`, README "Run against a real VKS lab") with real-jumpbox experience + Broadcom
-> techdocs; fold accurate `vcf`-CLI flow into the README. Sources (all WebFetch-able):
+> **HELD PRs — need a LIVE run before merge (not validated this session):**
 >
-> - `raw.githubusercontent.com/ogelbric/LAB/main/VCF-CLI/README.md` (FETCHED). Real flow:
->   `vcf context create --endpoint https://<sup-IP> --username administrator@WLD.SSO
->   --insecure-skip-tls-verify --auth-type basic` → name ctx; `vcf context use <ctx>:<ns>`;
->   `vcf plugin install all --local-source <bundle>`; kubectl-vsphere via
->   `wget https://<sup-IP>/wcp/plugin/linux-amd64/vsphere-plugin.zip`; `vcf package repository add`
->   then `vcf package install istio`. **GOTCHAS:** configure Harbor cert+creds BEFORE creating guest
->   clusters (else deploy fails); `kubectl label ns default pod-security…/enforce=privileged`;
->   wildcard DNS A-record → ingress LB IP.
-> - ogelbric `where_is(are)/Create_Harbor` (FETCHED). Harbor-as-Supervisor-Service real flow:
->   upload `harbor-sys.yaml` + `harbor-data-values.yaml` via Supervisor Mgmt → Services → Add;
->   edit data-values: `hostname: <fqdn>`, `enableNginxLoadBalancer: true`,
->   `enableContourHttpProxy: false`, storage class `vsan-default-storage-policy`; Actions → Manage
->   Service → paste YAML; get LB IP from Network→Services; DNS FQDN→LB IP; log in with Harbor's
->   documented default admin credential (see Broadcom's Harbor docs — rotate on first login);
->   CA into `/etc/docker/certs.d/<fqdn>/ca.crt` (strip trailing CR); `docker login <fqdn>`. GOTCHA:
->   remove trailing CR from the cert. Compare vs our README Harbor-as-VCF-Service section + fetch the
->   Broadcom "Installing and Configuring Harbor as a VCF Service" techdoc to reconcile.
-> - Broadcom techdocs `.../9-1/using-argo-cd-service/install-argo-cd-service.html` (FETCHED —
->   confirms ArgoCD **server** CR `spec.version: 2.14.15+vmware.1-vks.1`; `vcf context create
->   mgmt-cluster --endpoint <IP> --type k8s`; `kubectl explain argocd.spec.version`). Also research
->   the Harbor-as-VCF-Service + VCF-CLI techdocs for real-lab accuracy.
+> - **#98** — non-blocking dispatch+weekly KinD smoke workflow (net-new; needs one live
+>   `workflow_dispatch` on `main` to confirm green).
+> - **#102** — `make e2e-sneakernet` + mirror-verify-in-e2e + integrity RED test +
+>   `e2e-kind-both`; statically validated (lint + `make -n`), needs a live
+>   `make e2e-sneakernet` / `make e2e-kind-both` run.
 >
-> **E. De-risking backlog (holistic risk scan this session — all 4 scans returned).** All LOCAL/cheap;
-> close coverage on first-class modes with none today:
+> **Skill lessons captured this session** (in `~/projects/claude-config`, uncommitted — commit
+> that repo separately): diagram render-scale (`architecture-diagrams`), robust background-job
+> detect/kill (`git-workflow`), worktree-agents pollute tree-walking gates (`agents`),
+> multi-stage `.env` runbook (`configuration`), K1.6 EventListener-CaBundle webhook race
+> (`ci-workflow`).
 >
-> 1. **`make e2e-sneakernet`** — the sneakernet `bundle → bundle-load → mirror-push → mirror-verify`
->    round-trip (into a FRESH dir) has ZERO coverage; a break ships to real air-gap operators. TOP.
-> 2. **Wire `mirror-verify` INTO `e2e-kind`** (after mirror) + a **RED test** (corrupt a blob →
->    assert INTEGRITY FAIL exit≠0). The integrity gate is only ever observed green.
-> 3. **Dispatch/scheduled CI e2e** — CI runs ONLY offline gates; ~30 scripts (05–99) can regress +
->    merge green (a human edit to a TLS/manifest/pipeline script, or a cluster-tool MINOR bump).
->    Add `workflow_dispatch` + weekly `make e2e-kind` (or a reduced kind-up+harbor+mirror+verify
->    smoke) on a big runner; never blocks PRs.
-> 4. **`trivy image` CVE scan** — `trivy-fs` scans ONLY the app jar's deps; no `trivy image` on the
->    app runtime image, the Maven builder image, or the mirrored bases → base-OS/JRE CVEs merge green.
->    Add a `trivy-image` target into `sec`.
-> 5. **`make test-vcf-cli-resolve`** — synthetic fixtures (fake gz / tar.gz / nested multi-arch) for
->    01-install-vcf-clis.sh's glob/tar-vs-gz branch logic (untested; breaks only on a real lab box).
-> 6. **`e2e-kind-both`** (secure+insecure matrix, mirror verify-ingress-both's pattern) — non-default
->    TLS mode can regress + merge green.
-> 7. **cache-skip/resume/prune tests** (seed wrong-digest `.mirror-ok`→re-pull; correct→skip;
->    orphan→pruned) + **smoke real-lab helpers in e2e-kind** (`argocd-preflight` assert `TOPOLOGY OK`
->    string not exit-0; `fetch-argocd-ca` non-empty; `harbor-robot` env written).
-> 8. Minor: `Dockerfile.builder` gets neither hadolint nor trivy-config (add to lint.sh hadolint loop);
->    `50-seed-gitea-repos.sh:46` comment ("not in argv") is misleading — the gitea-pod `ps` sees the
->    password; add a prose-secret grep gate over `*.md` to `sec`.
-> 9. **[PROVEN, one-line — do it in the bootstrap branch's .env.example to avoid a conflict]** comment
->    `MIRROR_ARCH`/`MIRROR_ALL_ARCH` (.env.example:195,197) — uncommented runtime toggles, so
->    `make mirror MIRROR_ALL_ARCH=1` is silently clobbered back to single-arch (same class as the
->    already-fixed HARBOR_INSECURE; the sibling MIRROR_RETRIES/FORCE_PULL/NO_PRUNE are already
->    commented). Prove RED→GREEN: `MIRROR_ALL_ARCH=1 bash -c 'set -a;. ./.env.example;set +a;echo $MIRROR_ALL_ARCH'` must print 1.
->    Also (docs-scan): add `VKS_AUTH_METHOD` (commented) to .env.example §6 (auth selector, read by
->    30-vks-login.sh, undocumented in the source-of-truth file); `GITEA_CA_FILE` is a DEAD tunable
->    (Gitea is HTTP-only — drop or comment "reserved"); the maven **build-image** tag
->    (`maven:3.9-eclipse-temurin-25` in the two app Dockerfile ARGs + 15-build-push-builder.sh) is NOT
->    covered by check-image-alignment (extend it, or soften the CLAUDE.md coverage claim).
->
-> **E2. Robustness scan findings (the `grep -q`/`head` under `set -o pipefail` SIGPIPE class — sweep it):**
->
-> - **HIGH** `01-install-vcf-clis.sh:99,100,117,132` `x="$(find … | head -1)"` inside a `set -e`
->   function → on **≥2 matches** (a multi-arch bundle, expected!) `head` exits, `find` gets SIGPIPE
->   (141), pipefail aborts the script RIGHT AFTER finding the binary. Fix: `find … -print -quit`
->   (no pipe). (The `[ -n "$(find…|head -1)" ]` on :98 is safe — inside `[ ]`.)
-> - **MED** `05-kind-up.sh:45` — the health-check I ADDED this session, `kubectl get nodes | grep -q
->   ' Ready'`, can SIGPIPE → false → **delete a HEALTHY cluster**. Capture-then-test: `nodes="$(kubectl
->   … || true)"; printf '%s\n' "$nodes" | grep -q ' Ready'`.
-> - **MED** `98-verify-ingress.sh:81` `printf "$b" | grep -qiE` — large captured page > 64KB pipe buf →
->   printf SIGPIPEs → false "wrong backend" on a page that WAS served. Drop `-q` (grep drains all).
-> - **MED** Makefile `jumpbox` recipe (:259,261) + `check-image-alignment.sh:22,58` +
->   `check-java-alignment.sh` — `x="$(grep … | cut)"` under `.SHELLFLAGS=-eu -o pipefail`: a missing
->   `.env.kind`/absent key makes grep exit 1/2 → the assignment aborts the recipe BEFORE the friendly
->   `[ -n ] || { echo ERROR; exit 1; }` guard (dead code). Add `|| true` to the grep.
-> - **LOW** `50-seed-gitea-repos.sh:140` (the webhook idempotency check itself has `grep -q` — could
->   dup on a large body), `99-verify.sh:131`, `07-install-argocd.sh:131`. Same capture-then-grep fix.
->   Unifying rule already in coding-style.md; the libs + most install scripts are otherwise robust.
->
-> **G. VKS-auth section is thin — rewrite + AUTOMATE (user-requested).** README "VKS authentication
-> (VCF 9 + Supervisor)" (~6 lines) needs: clear ".env inputs to provide" + "commands to execute" +
-> **Makefile targets/scripts automating the manual repeatable steps.** Use the real `vcf`-CLI flow
-> from section D (`vcf context create --endpoint https://<sup-IP> --username <admin>@<SSO-domain>
-> --insecure-skip-tls-verify --auth-type basic` → ctx name → `vcf context use <ctx>:<ns>`; kubectl-
-> vsphere from `https://<sup-IP>/wcp/plugin/linux-amd64/vsphere-plugin.zip`) — compare with
-> `scripts/30-vks-login.sh` (which has a `vsphere`/`kubeconfig`/`vcf(stub)` method switch) and FLESH
-> OUT the `vcf` method into a real `make vks-login`-driven flow. Add `.env` vars (SUPERVISOR_HOST,
-> VKS_NAMESPACE, VKS_CLUSTER_NAME, VKS_USERNAME, VKS_AUTH_METHOD=vsphere|vcf) with clear docs. Research
-> the Broadcom VCF-CLI + "Install the Argo CD Service" + Harbor-as-VCF-Service techdocs (WebFetch-able)
-> for exact field names before writing.
->
-> **F. Global config captured this session (on disk in ~/projects/claude-config, UNCOMMITTED — commit
-> that repo separately if desired):** coding-style.md (`A && B`-last-statement trips caller set -e),
-> testing.md (bare-image-testing corollary), + 2 memory files (stale-peek guard;
-> implement-what-user-literally-describes).
->
-> **Cluster: torn down. Note:** a `make bootstrap-test` matrix + 2 risk-scan agents (robustness, docs)
-> may still be running from the prior session (nohup/harness) — ignore/re-run.
+> **Next:** merge #98/#102 after a live run; the `vcf`-login flow + the real-lab `.env`
+> guidance are written to the verified shape but NOT lab-validated — see the vcf-CLI research
+> block in "Deferred — real-lab-only" below (confirm the interactive/stdin password mechanism
+> and the exact 9.1 CLI flags on a real VCF/VKS lab).
 >
 > ---
 
@@ -380,6 +297,27 @@ helpers verified against the (now-torn-down) KinD stand-in.
   surfaces CLI + running server image + `kubectl explain argocd.spec.version`.
 - **ArgoCD topology:** `make gitops` uses the in-cluster destination — confirm ArgoCD runs in / can
   reach the workload cluster (`make argocd-preflight` → TOPOLOGY OK/MISMATCH).
+
+**VKS `vcf`-CLI auth flow (`--auth-type basic`) — SHIPPED as verified-SHAPE (PR #103) but NOT lab-validated; KEEP RESEARCHING before trusting the automation.** The `vcf` method in `scripts/30-vks-login.sh` now runs the real two-step context flow (it replaced the earlier FICTIONAL `vcf login --server … --kubeconfig …` stub, which NO source supports):
+
+```text
+vcf context create --endpoint https://<SUPERVISOR_HOST> --username <user>@<VKS_SSO_DOMAIN> \
+    [--insecure-skip-tls-verify] --auth-type basic     # INTERACTIVE: prompts for a context NAME + password
+vcf context use <VKS_CONTEXT_NAME>:<VKS_NAMESPACE>     # note the <ctx>:<ns> COLON form
+# kubectl-vsphere plugin (if the guest cluster needs it) — pulled from the Supervisor:
+wget --no-check-certificate https://<SUPERVISOR_HOST>/wcp/plugin/linux-amd64/vsphere-plugin.zip
+# offline plugin bundle install: vcf plugin install all --local-source <bundle-dir>
+```
+
+Open research items — confirm on a real VCF/VKS 9.1 lab before relying on the automation:
+
+1. **Non-interactive / stdin password mechanism** — `vcf context create` is INTERACTIVE (prompts for the ctx name + password); NO `--password`/`--kubeconfig` flag is confirmed in any source. Run `vcf context create --help` on a lab to find a stdin/env mechanism; until then the flow prompts interactively (a password on argv stays forbidden — security.md). `30-vks-login.sh` carries a matching `TODO(verify on a real VKS lab)`.
+2. **Reaching the WORKLOAD (guest) cluster** — ANSWERED by research (documented in #107): on VCF 9 the workload-cluster kubeconfig is obtained via `vcf cluster kubeconfig get <VKS_CLUSTER_NAME> --export-file <path>` (NOT `kubectl vsphere login`, which is legacy vSphere-with-Tanzu 7/8). The Supervisor context ≠ the workload cluster; Harbor + ArgoCD install ON the Supervisor (each in its own vSphere Namespace), and the workload kubeconfig is only needed at `make gitops` deploy time. ArgoCD server pins `2.14.15+vmware.1-vks.1` (svc `argocd-server`, ns `argocd-instance-1`). Still verify the exact 9.1 CLI flags on a real lab.
+3. **`.env` inputs** now documented (commented) in `.env.example` §6: `VKS_AUTH_METHOD=vcf`, `SUPERVISOR_HOST`, `VKS_NAMESPACE`, `VKS_USERNAME`, `VKS_SSO_DOMAIN`, `VKS_CONTEXT_NAME` (the vcf ctx name — DISTINCT from the kubeconfig `VKS_CONTEXT`), `VKS_INSECURE_SKIP_TLS_VERIFY`.
+4. **Doc-provenance caveat** — the Broadcom **9.1** ArgoCD/Harbor techdoc pages 301-REDIRECT to the **9.0** tree, so the version facts (ArgoCD server `2.14.15+vmware.1-vks.1`, Harbor data-values fields) are 9.0 content taken as authoritative-for-9.1 — an INFERENCE; re-verify against a real 9.1 lab.
+5. **Harbor-as-VCF-Service field constraints** (from Broadcom + William Lam, to verify on 9.1): `secretKey` exactly 16 chars, `core.xsrfKey` exactly 32, `tlsSecretLabels: {managed-by: vmware-vRegistry}` REQUIRED for VKS trust; `trust.additionalTrustedCAs` needs a **DOUBLE-base64** cert (`base64 -w0 ca.crt | base64 -w0`); configure Harbor cert+creds BEFORE creating guest clusters.
+
+Primary sources: ogelbric/LAB `VCF-CLI/README.md` (raw.githubusercontent.com — a real working jump-box transcript); ogelbric `Create_Harbor` (Harbor-as-Supervisor-Service); Broadcom `install-argo-cd-service.html` (9-0 redirect); williamlam.com 2025/08 VKS private-registry quick-tip; Broadcom "Integrate VKS with a Private Registry".
 
 **Declined (decision, not a TODO):** ArgoCD Image Updater for registry-driven redeploy — the Tekton
 tag-write-back stays the primary GitOps path; revisit only to demo registry-driven deploys.
