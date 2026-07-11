@@ -13,12 +13,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 # shellcheck source=scripts/lib/mirror.sh
 . "${SCRIPT_DIR}/lib/mirror.sh"
+# shellcheck source=scripts/lib/progress.sh
+. "${SCRIPT_DIR}/lib/progress.sh"
 
 require_cmd crane
 require_cmd curl
+require_cmd jq
 
 : "${BUNDLE_DIR:?}"; : "${IMAGE_CACHE_DIR:?}"
 MANIFEST_DIR="${BUNDLE_DIR}/manifests"
+# images.lock — the resolved source digest of every mirrored image, recorded at
+# pull time. Travels with the bundle (sneakernet) and is what 'make mirror-verify'
+# checks Harbor against, so re-mirrors are reproducible + verifiable.
+LOCK_FILE="${BUNDLE_DIR}/images.lock"
 mkdir -p "$MANIFEST_DIR" "$IMAGE_CACHE_DIR"
 
 # ---- 1. Download the Tekton install manifests (also feed the image list) ----
@@ -49,16 +56,39 @@ mapfile -t IMAGES < <(mirror_collect_images)
 log_info "collected ${#IMAGES[@]} images to pull"
 
 # ---- 3. Pull each image into the local OCI cache ----
-fails=0
+# Resilient to transient upstream-CDN failures (e.g. ghcr.io connection resets):
+#   * cache-skip — a DIGEST-PINNED image already present at the exact digest (proven
+#     by the .mirror-ok sentinel, written only on a COMPLETE pull) is immutable, so
+#     reuse it instead of re-hitting the registry. A re-run after a partial failure
+#     RESUMES (re-pulls only the misses) rather than restarting all of them.
+#     Tag-based refs can move, so they are always re-pulled. MIRROR_FORCE_PULL=1 forces all.
+#   * retry — MIRROR_RETRIES (default 5) attempts per image via mirror_retry.
+: > "$LOCK_FILE"                              # start a fresh lock for this pull
+fails=0; skipped=0
+pg_init "${#IMAGES[@]}"
 for src in "${IMAGES[@]}"; do
   dst_dir="$(mirror_cache_dir "$src")"
   pull_ref="$(mirror_pull_ref "$src")"      # digest-valid (never tag+digest)
   read -ra platform <<<"$(mirror_platform_arg "$src")"   # single-arch, or empty for all/digest-pinned
-  log_info "pull $pull_ref ${platform[*]:-(all arches)}"
+  want_dg="$(mirror_src_digest "$src")"     # empty for tag-based (always re-pulled)
+  if [ "${MIRROR_FORCE_PULL:-0}" != "1" ] && [ -n "$want_dg" ] \
+     && [ -f "$dst_dir/.mirror-ok" ] && [ "$(cat "$dst_dir/.mirror-ok" 2>/dev/null)" = "$want_dg" ]; then
+    pg_step "cached $pull_ref (digest match — skip)"
+    printf '%s %s\n' "$src" "$want_dg" >> "$LOCK_FILE"
+    skipped=$((skipped+1)); continue
+  fi
+  pg_step "pull $pull_ref ${platform[*]:-(all arches)}"
   # crane writes an OCI image layout; start from a clean dir so a re-pull doesn't append.
   rm -rf "$dst_dir"; mkdir -p "$dst_dir"
-  if mirror_retry 3 run crane pull --format=oci "${platform[@]}" "$pull_ref" "$dst_dir"; then
-    :
+  if mirror_retry "${MIRROR_RETRIES:-5}" run crane pull --format=oci "${platform[@]}" "$pull_ref" "$dst_dir"; then
+    # Record the resolved source digest (the OCI layout's top-level manifest) so
+    # 'make mirror-verify' can confirm Harbor serves the exact same content.
+    dg="$(jq -r '.manifests[0].digest // empty' "$dst_dir/index.json" 2>/dev/null)"
+    [ -n "$dg" ] && printf '%s %s\n' "$src" "$dg" >> "$LOCK_FILE"
+    # Completeness sentinel — written LAST, so an interrupted pull leaves no marker
+    # and is re-pulled next run. Only for digest-pinned (immutable) images whose
+    # pulled digest matches what was requested.
+    [ -n "$want_dg" ] && [ "$dg" = "$want_dg" ] && printf '%s\n' "$dg" > "$dst_dir/.mirror-ok"
   else
     log_error "failed to pull $src"; fails=$((fails+1))
   fi
@@ -68,5 +98,6 @@ done
 if [ "$fails" -gt 0 ]; then
   die "$fails/${#IMAGES[@]} images failed to pull"
 fi
-log_info "pulled ${#IMAGES[@]} images into $IMAGE_CACHE_DIR"
+pg_done "mirror-pull: ${#IMAGES[@]} images into $IMAGE_CACHE_DIR (${skipped} cache-skipped)"
+log_info "wrote $LOCK_FILE ($(wc -l < "$LOCK_FILE") digests) — used by 'make mirror-verify'"
 log_info "next: dual-homed -> 'make mirror-push'  |  sneakernet -> 'make bundle'"

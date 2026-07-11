@@ -17,6 +17,8 @@ load_env
 . "${SCRIPT_DIR}/lib/tls.sh"
 # shellcheck source=scripts/lib/harbor.sh
 . "${SCRIPT_DIR}/lib/harbor.sh"
+# shellcheck source=scripts/lib/progress.sh
+. "${SCRIPT_DIR}/lib/progress.sh"
 
 require_cmd crane
 require_cmd curl
@@ -51,14 +53,15 @@ mapfile -t IMAGES < <(mirror_collect_images)
 log_info "pushing ${#IMAGES[@]} images to Harbor"
 
 fails=0
+pg_init "${#IMAGES[@]}"
 for src in "${IMAGES[@]}"; do
   cache="$(mirror_cache_dir "$src")"
   dst="$(mirror_target_ref "$src")"
   [ -d "$cache" ] || { log_error "cache missing for $src ($cache) — was it pulled?"; fails=$((fails+1)); continue; }
   # No platform arg on push — the cached OCI layout already holds exactly the arch(es)
   # that were pulled; crane push preserves the manifest list/index as-is.
-  log_info "push $src -> $dst"
-  if mirror_retry 3 run crane push "${INSECURE[@]}" "$cache" "$dst"; then
+  pg_step "push $src -> $dst"
+  if mirror_retry "${MIRROR_RETRIES:-5}" run crane push "${INSECURE[@]}" "$cache" "$dst"; then
     :
   else
     log_error "failed to push $dst"; fails=$((fails+1))
@@ -66,4 +69,5 @@ for src in "${IMAGES[@]}"; do
 done
 
 [ "$fails" -eq 0 ] || die "$fails/${#IMAGES[@]} images failed to push"
-log_info "pushed ${#IMAGES[@]} images into Harbor projects '$HARBOR_INFRA_PROJECT' (infra)"
+pg_done "mirror-push: ${#IMAGES[@]} images into Harbor project '$HARBOR_INFRA_PROJECT'"
+log_info "verify integrity with: make mirror-verify"

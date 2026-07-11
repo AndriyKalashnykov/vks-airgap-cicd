@@ -43,6 +43,16 @@ mirror_pull_ref() {
   else                         printf '%s:latest' "$name"; fi
 }
 
+# mirror_src_digest SRC -> the pinned @sha256 digest of SRC, or empty if SRC is
+# tag-based. Digest-pinned refs are content-addressable + immutable, so a cached
+# copy at that exact digest is safe to reuse (cache-skip); tag-based refs can move,
+# so they are always re-pulled.
+mirror_src_digest() {
+  local digest
+  IFS='|' read -r _ _ digest <<<"$(_mirror_parse "$1")"
+  printf '%s' "$digest"
+}
+
 # mirror_target_ref SRC -> Harbor destination (a TAG ref — you push to a tag, not
 # a digest; --preserve-digests keeps the original digest resolvable there).
 #   $HARBOR_URL/$HARBOR_INFRA_PROJECT/<repo-path>:<tag>

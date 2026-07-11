@@ -750,6 +750,20 @@ Legend: **[offline]** verifiable without a cluster · **[cluster]** runs against
 | 8 | `make gitops` | [cluster] | Registers the deploy repo and creates the ArgoCD `Application` (auto-sync). |
 | 9 | `make verify` | [cluster] | Pushes a marked change to `webui-app`, then asserts: PipelineRun succeeds → image in Harbor → deploy tag bumped → ArgoCD Synced/Healthy → the live page shows the marker. |
 
+> **The mirror is resumable and verifiable.** If `make mirror` / `make mirror-pull` is
+> interrupted (Ctrl+C, dropped connection, an upstream-CDN reset such as ghcr.io throttling),
+> **just re-run it** — every digest-pinned image already fully pulled is **skipped** (a
+> per-image `.mirror-ok` completeness marker, written only on a complete pull), so it
+> **resumes** from where it stopped instead of re-pulling all of them. Progress shows as
+> `[i/N] (elapsed …)` so you can see it moving. `MIRROR_RETRIES` (default 5) sets per-image
+> retries; `MIRROR_FORCE_PULL=1` re-pulls everything.
+>
+> After pushing, run **`make mirror-verify`** to confirm every image is intact in Harbor —
+> `crane validate` fetches and digests each layer (catches a corrupt/incomplete blob before
+> it surfaces mid-pipeline as `MANIFEST_UNKNOWN`/`BLOB_UNKNOWN`) and cross-checks Harbor's
+> digest against `images.lock`. `mirror-verify` is **read-only**, so it too is safe to
+> interrupt and re-run.
+
 ### Minimum `.env` you must set
 
 ```bash
