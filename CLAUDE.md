@@ -192,7 +192,7 @@ helpers verified against the (now-torn-down) KinD stand-in.
 **Deferred — real-lab-only, NOT KinD-reproducible (verify on a VCF/VKS 9.1 lab):**
 
 - Workload cluster trusts the Harbor CA **declaratively** (Cluster spec `trust.additionalTrustedCAs`
-  + double-base64 secret) — and, same-Supervisor, **auto-trusts** it (simpler than KinD `certs.d`);
+  plus a double-base64 secret) — and, same-Supervisor, **auto-trusts** it (simpler than KinD `certs.d`);
   a **private** Harbor project needs `make harbor-robot` creds + an app-namespace `imagePullSecret`
   (`HARBOR_PUBLIC_PROJECTS=false`); the lab is **FQDN**-addressed (KinD uses LB IP + SAN=IP).
 - **ArgoCD version delta (corrected):** the operator CR pins the **server** at `2.14.15+vmware.1-vks.1`
