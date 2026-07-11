@@ -42,6 +42,17 @@ wait_for() { # wait_for <desc> <cmd...> ; polls until cmd succeeds or timeout
   return 1
 }
 
+# ---- 0. Wait for the EventListener POD to be Ready to receive ----
+# The EL pod crash-loops on startup until the Tekton Triggers controller populates the
+# clusterInterceptor CaBundle ("empty caBundle in clusterInterceptor spec"); meanwhile the
+# EL *resource* already reports Ready=True. A one-shot Gitea webhook pushed during that
+# window is LOST -> no PipelineRun. Gate the push on the POD being Ready (it only stays
+# Ready once the CaBundle is populated).
+log_info "waiting for the EventListener pod to be ready (Tekton Triggers CaBundle race)"
+kubectl -n "$CI_NAMESPACE" wait --for=condition=Ready pod -l eventlistener=webui \
+  --timeout="${EL_READY_TIMEOUT_SECONDS:-180}s" >/dev/null 2>&1 \
+  || log_warn "EventListener pod not confirmed Ready in time — proceeding (the webhook re-fire below covers a lost delivery)"
+
 # ---- 1. Record existing PipelineRuns, then push a marked change ----
 before="$(kubectl -n "$CI_NAMESPACE" get pipelineruns -o name 2>/dev/null | sort || true)"
 # Capture the currently-deployed image so step 3 can wait for it to CHANGE. A
@@ -72,17 +83,31 @@ git -C "$d" push -q origin "$APP_BRANCH"
 kill "$PF_PID" 2>/dev/null || true; PF_PID=""
 log_info "pushed marker $MARKER to ${GITEA_APP_REPO}"
 
-# ---- 2. Wait for a NEW PipelineRun and its success ----
+# ---- 2. Wait for a NEW PipelineRun; re-fire the webhook once if the first delivery was lost ----
 log_info "waiting for the webhook-triggered PipelineRun"
 pr=""
-end=$((SECONDS + 120))
-while [ "$SECONDS" -lt "$end" ]; do
-  now="$(kubectl -n "$CI_NAMESPACE" get pipelineruns -o name 2>/dev/null | sort || true)"
-  pr="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$now") | head -1)"
+for attempt in 1 2; do
+  end=$((SECONDS + ${PIPELINERUN_WAIT_SECONDS:-120}))
+  while [ "$SECONDS" -lt "$end" ]; do
+    now="$(kubectl -n "$CI_NAMESPACE" get pipelineruns -o name 2>/dev/null | sort || true)"
+    pr="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$now") | head -1)"
+    [ -n "$pr" ] && break
+    sleep "$POLL_INTERVAL_SECONDS"
+  done
   [ -n "$pr" ] && break
-  sleep "$POLL_INTERVAL_SECONDS"
+  [ "$attempt" -ge 2 ] && break
+  # Gitea's webhook fires ONCE per push; if that delivery hit the EventListener while it
+  # was still stabilizing it is lost. Re-fire with an empty commit (the marker change is
+  # already committed, so the rebuilt image still shows $MARKER) and wait again.
+  log_warn "no PipelineRun yet — re-firing the Gitea webhook (empty commit)"
+  kubectl -n "$GITEA_NAMESPACE" port-forward svc/gitea-http "${GITEA_LOCAL_PORT}:3000" >/dev/null 2>&1 &
+  PF_PID=$!
+  wait_for "Gitea reachable" curl -fsS "http://localhost:${GITEA_LOCAL_PORT}/api/healthz" || true
+  git -C "$d" commit -q --allow-empty -m "verify: re-fire ${MARKER}" >/dev/null 2>&1 || true
+  git -C "$d" push -q origin "$APP_BRANCH" >/dev/null 2>&1 || true
+  kill "$PF_PID" 2>/dev/null || true; PF_PID=""
 done
-[ -n "$pr" ] || die "no new PipelineRun appeared — check the Gitea webhook + EventListener (kubectl -n $CI_NAMESPACE get el,pods)"
+[ -n "$pr" ] || die "no new PipelineRun appeared after 2 attempts — check the Gitea webhook + EventListener (kubectl -n $CI_NAMESPACE get el,pods)"
 log_info "PipelineRun: $pr"
 
 if ! kubectl -n "$CI_NAMESPACE" wait --for=condition=Succeeded --timeout="${READY_TIMEOUT_SECONDS}s" "$pr"; then
