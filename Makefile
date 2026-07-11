@@ -351,8 +351,12 @@ trivy-config: ## trivy — scan k8s/Tekton manifests for HIGH/CRITICAL misconfig
 	    --skip-files jumpbox/Dockerfile.bootstrap .; \
 	else echo "trivy not installed — run 'make deps' (mise) — skipping"; fi
 
+.PHONY: prose-secrets
+prose-secrets: ## grep *.md for prose credentials gitleaks misses (natural-language secrets in runbooks)
+	@bash scripts/check-prose-secrets.sh
+
 .PHONY: sec
-sec: secrets trivy-fs trivy-config ## Run all security scanners (gitleaks + trivy fs/config)
+sec: secrets prose-secrets trivy-fs trivy-config ## Run all security scanners (gitleaks + prose-secrets + trivy fs/config)
 
 ##@ Diagrams & composite gates
 # podman rootless needs --userns=keep-id so the mapped uid can write the mounted
