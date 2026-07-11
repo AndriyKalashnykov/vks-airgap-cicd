@@ -1,0 +1,19 @@
+# jumpbox/Dockerfile.bootstrap — a LITERALLY BARE jump box for validating
+# bootstrap-jumpbox.sh's from-nothing install. Only the bootstrap script is added;
+# NOTHING is pre-installed (no git/curl/make/mise) — that is the whole point: the
+# script must install its own prerequisites. Parameterized by ARG BASE so the same
+# Dockerfile covers both jump-box target OSes.
+#
+#   docker build -f jumpbox/Dockerfile.bootstrap --build-arg BASE=photon:5.0  -t vks-boot:photon .
+#   docker build -f jumpbox/Dockerfile.bootstrap --build-arg BASE=ubuntu:26.04 -t vks-boot:ubuntu .
+#   docker run --rm vks-boot:photon bash /bootstrap-jumpbox.sh
+#
+# Driven by `make bootstrap-test`.
+# This test image INTENTIONALLY runs as root: bootstrap-jumpbox.sh installs system
+# packages (apt/tdnf) and needs root on a bare box. The "non-root USER" misconfig
+# (trivy DS-0002) is therefore accepted by design — this file is excluded from
+# trivy-config via `--skip-files` in the Makefile (a test harness, not a deployed image).
+ARG BASE=photon:5.0
+# hadolint ignore=DL3006
+FROM ${BASE}
+COPY bootstrap-jumpbox.sh /bootstrap-jumpbox.sh

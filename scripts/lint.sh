@@ -10,10 +10,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 rc=0
 
-echo "== shellcheck (scripts/*.sh) =="
+echo "== shellcheck (scripts/*.sh + repo-root *.sh) =="
 if have shellcheck; then
   # Exclude nothing; lib/os.sh is sourced so give it shell=bash via its directive.
-  find "$REPO_ROOT/scripts" -name '*.sh' -print0 | xargs -0 shellcheck -x || rc=1
+  # Include repo-root *.sh (e.g. bootstrap-jumpbox.sh) — not just scripts/.
+  { find "$REPO_ROOT/scripts" -name '*.sh' -print0; \
+    find "$REPO_ROOT" -maxdepth 1 -name '*.sh' -print0; } \
+    | xargs -0 shellcheck -x || rc=1
 else
   log_warn "shellcheck not installed — skipped"
 fi
