@@ -194,6 +194,21 @@ ensure_secret_token() {
   cat "$file"
 }
 
+# gen_password — a random 16-char password that satisfies typical complexity policies
+# (Harbor/Gitea: >=1 uppercase, lowercase, digit) with NO hardcoded literal. One char of
+# each class is drawn FROM the random stream, then padded with more random alphanumerics,
+# so the result is fully random yet always complexity-valid. openssl preferred; urandom
+# fallback. Alphanumeric only, so the value is shell-clean for .env / KEY=value files.
+gen_password() {
+  local raw u l d
+  if have openssl; then raw="$(openssl rand -base64 48 | LC_ALL=C tr -dc 'A-Za-z0-9')"
+  else raw="$(head -c 128 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9')"; fi
+  u="$(printf '%s' "$raw" | LC_ALL=C tr -dc '[:upper:]' | head -c1)"
+  l="$(printf '%s' "$raw" | LC_ALL=C tr -dc '[:lower:]' | head -c1)"
+  d="$(printf '%s' "$raw" | LC_ALL=C tr -dc '[:digit:]' | head -c1)"
+  printf '%s%s%s%s' "$u" "$l" "$d" "$(printf '%s' "$raw" | head -c13)"
+}
+
 # ---------------------------------------------------------------------------
 # Network
 # ---------------------------------------------------------------------------

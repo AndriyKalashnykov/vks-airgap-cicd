@@ -217,10 +217,16 @@ when changing the pipeline, ingress, or manifests.
 > multi-stage `.env` runbook (`configuration`), K1.6 EventListener-CaBundle webhook race
 > (`ci-workflow`).
 >
-> **Next:** merge #98/#102 after a live run; the `vcf`-login flow + the real-lab `.env`
-> guidance are written to the verified shape but NOT lab-validated — see the vcf-CLI research
-> block in "Deferred — real-lab-only" below (confirm the interactive/stdin password mechanism
-> and the exact 9.1 CLI flags on a real VCF/VKS lab).
+> **Next / IN-FLIGHT (2026-07-11b tail — READ):**
+>
+> - **#102 e2e-sneakernet LIVE-VALIDATED** (real KinD run: bundle → carry-ONLY-tarball → load → push → verify 34/34 green). Merge #102. Its `e2e-kind-both`/`mirror-verify-red-test` not individually re-run.
+> - **#109 OPEN (validated):** fixes #98's KinD smoke — `gen_password` (lib/os.sh, NO hardcode) + `05-kind-up.sh` writes throwaway Harbor/Gitea creds to `.env.kind` when unset; validated on a CLEAN checkout (no `.env`): kind-up→install-harbor→mirror→verify green, `make creds` reveals the logins. Merge on green.
+> - **TASK #13 (env-UX flow) — user-DESIGNED, REPLACES #109's `.env.kind` hack:** `env-init` (backup `.env`→`.env.bak`, `cp .env.example .env`) · `env-populate` (GENERATE secrets we can + DISCOVER cluster values we can [LB IPs via `kubectl get svc … jsonpath`] → `.env`; PRINT the user-must-set list) · `env-check` (presence) · `env-validate` (validity: format + KUBECONFIG/Harbor connectivity+auth via stdin, fail fast) · rename `creds`→`creds-show` (+ thin alias). Wire into the e2e targets (KinD = fully auto). Three value sources: GENERATE / DISCOVER / user-PROVIDE.
+> - **TWO-BOX e2e-sneakernet (faithful > convenient):** run the air-gapped half (`bundle-load`→`mirror-push`→`mirror-verify`) in a FRESH `make jumpbox` container with ONLY the tarball — not the same-machine relocate-sim (which hides the host-state bugs that caused #98). Harness ready: `make jumpbox` mounts repo RO + Harbor CA + kind network, no host `.env`/cache.
+> - **pipeline-flow diagram is now the THIN outlier** (LEFT_RIGHT ~153px displayed vs Deployment ~555px). User wants it vertical/balanced — try `LAYOUT_TOP_DOWN` tuned or a folded 2-row, and MEASURE displayed heights (see `/architecture-diagrams` render-scale rule; can't render while a mirror runs).
+> - `vcf`-login + real-lab `.env` still NOT lab-validated — see the vcf-CLI research block below.
+>
+> **Skill lessons captured this session** (`~/projects/claude-config`, UNCOMMITTED — commit that repo): **faithful-over-convenient** (work-principles) · local-`.env`-hides-CI + verify-zero-config-on-clean-checkout (configuration) · K1.6 EventListener-CaBundle webhook race (ci-workflow) · diagram render-scale (architecture-diagrams) · robust background-job detect/kill (git-workflow) · worktree-agents pollute tree-walking gates (agents) · multi-stage `.env` runbook (configuration).
 >
 > ---
 
