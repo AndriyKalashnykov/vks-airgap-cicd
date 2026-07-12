@@ -45,3 +45,6 @@ token.md
 
 # Claude Code harness (agent worktrees, local state) — never tracked/scanned
 .claude/
+
+# Serializes registry-mutating work (see with_registry_lock in scripts/lib/os.sh)
+.registry.lock

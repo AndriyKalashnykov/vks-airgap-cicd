@@ -12,7 +12,8 @@ VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surface
   **Harbor** push → GitOps tag write-back), wired to the VKS-provided **Harbor** + **ArgoCD**.
 - **Delivery surface** — an OS-portable (Ubuntu / PhotonOS) jump-box image mirror (**crane**,
   dual-homed or sneakernet), a dependency-baked offline **Maven** builder, a pluggable ingress
-  (**Istio** default, **Traefik** optional) fronting the UIs at `*.vks.local`, and a one-command
+  (**Istio** default, **Traefik** optional — or **attach to the Istio a real VKS lab already has**,
+  since Istio ships there as a VKS Standard Package) fronting the UIs at `*.vks.local`, and a one-command
   **KinD** end-to-end that proves the whole flow locally.
 
 <p align="center"><img src="docs/diagrams/out/airgap.png" alt="Air-gap connectivity: the jump box bridges the internet and the air-gapped VKS cluster; the cluster itself has no internet access" width="820"></p>
@@ -327,7 +328,9 @@ How the local stand-in works:
 - `make vks-login` uses the kind kubeconfig (`VKS_AUTH_METHOD=kubeconfig`), so no VCF auth
   is needed for the local run.
 - **`make install-ingress`** installs one ingress LoadBalancer (`INGRESS_CONTROLLER=istio`
-  by default, `traefik` optional) that fronts the Gitea/app/Tekton-Dashboard UIs at `*.vks.local`, so
+  by default, `traefik` optional; on a **real lab** use `istio-existing` — see
+  [Istio: we install it, or we attach to one we didn't](#istio-we-install-it-or-we-attach-to-one-we-didnt))
+  that fronts the Gitea/app/Tekton-Dashboard UIs at `*.vks.local`, so
   you reach them by hostname instead of `kubectl port-forward`. **Harbor and ArgoCD each keep
   their own direct LB** — Harbor's IP is load-bearing for the containerd pull path, and ArgoCD
   gets its own self-signed-TLS LB (like the real VKS lab, which does not front ArgoCD behind
@@ -353,11 +356,13 @@ so it is something you **request from the mesh admin**, never something you fetc
 
 | | Scenario 1 — **we install Istio** | Scenario 2 — **the platform already did** |
 |---|---|---|
+| When | the KinD stand-in, or a cluster with no mesh | **a real VKS lab** (Istio ships as a Standard Package) |
 | `INGRESS_CONTROLLER` | `istio` (default) | `istio-existing` |
 | Script | `scripts/46-install-istio.sh` | `scripts/47-attach-istio.sh` |
 | What gets installed | `istio/base` + `istiod` + `istio/gateway` (images from Harbor) | **nothing** |
-| Gateway selector | pinned by us: `istio: ingressgateway` | **DISCOVERED** — see below |
-| What we create | `Gateway` + `VirtualService`s | `VirtualService`s (+ a `Gateway`, only if allowed) |
+| Route API | classic `Gateway` + `VirtualService` | `ISTIO_ROUTE_API=auto` → **Gateway API** when Istio is an Accepted `GatewayClass`, else classic |
+| What we create | a `Gateway` (selector pinned by us: `istio: ingressgateway`) + `VirtualService`s | **Gateway API:** a `Gateway` (`gatewayClassName: istio`) + `HTTPRoute`s — Istio auto-provisions the proxy *and* its LoadBalancer.<br>**Classic:** a `Gateway` bound by the **DISCOVERED** selector (or reuse the platform's), + `VirtualService`s |
+| Where the routes live | each route object sits in **its backend's namespace** and names the Gateway `<gw-ns>/<gw-name>` — the only layout a locked-down tenant can use | same |
 
 **Start with `make istio-preflight`** (read-only). It reports whether Istio is present, the exact
 selector a `Gateway` must use, what your kubeconfig is actually allowed to do, and — if you are a
@@ -382,7 +387,11 @@ Discovery finds the gateway as *the Service exposing port `15021`* (the istio-pr
 *with a `spec.selector.istio` key* — istiod does not expose 15021, which is what excludes the
 control plane from the match.
 
-### If you may not create a Gateway
+### If you may not create a Gateway (classic path only)
+
+With the **Gateway API** path this does not arise: you create the `Gateway` in your *own* namespace
+and Istio provisions the data plane for you, so nothing is needed from the mesh admin. The
+following applies only when the cluster has no `istio` GatewayClass and you fall back to classic.
 
 Set `ISTIO_SHARED_GATEWAY=<ns>/<name>` — the platform's own `Gateway`. We then create **only**
 `VirtualService`s, in our own namespaces (proven to work, including against a `*.vks.local`
@@ -396,8 +405,12 @@ and discovery is skipped entirely.
 ### Validation
 
 `make e2e-kind-istio-existing` is the standing regression test: a "platform team" installs Istio
-into KinD under **foreign naming**, then we attach with zero install. It also demonstrates the REDs
-(attaching to a mesh-free cluster must fail; the old hardcoded selector must produce a dead route).
+into KinD under **foreign naming**, then we attach with zero install — and it verifies **both route
+API legs** (Gateway API on Istio's own auto-provisioned LB, then classic on the platform's shared
+gateway). It also demonstrates the REDs (attaching to a mesh-free cluster must fail; the old
+hardcoded selector must produce a dead route) and runs `make psa-check`.
+
+`make e2e-kind` covers the default **install** path (Scenario 1) end-to-end.
 
 ### On a real VKS lab, the mesh is theirs — so `istio-existing` is the mode you want
 
@@ -426,6 +439,16 @@ Full rationale, the verification matrix, and the Broadcom facts with provenance:
 [`docs/decisions/istio-on-vks.md`](docs/decisions/istio-on-vks.md).
 
 </details>
+
+### CLIs you do *not* need (and why)
+
+| CLI | Needed? | Why not |
+|---|---|---|
+| **`istioctl`** | **no** | Istio is driven entirely through `helm` + `kubectl`, in both modes. To inspect a mesh you did not install, use `make istio-preflight` — the thing that matters is the **mesh**, not a local CLI. |
+| **`argocd`** | **no** (optional) | The admin password's bcrypt hash is generated **inside the pod** (`kubectl exec … argocd account bcrypt`), and `make argocd-register-guest` registers the guest cluster **declaratively with `kubectl`** — it creates the `argocd-manager` ServiceAccount + a **non-expiring** token Secret on the guest, then writes ArgoCD's `Cluster` Secret (`argocd.argoproj.io/secret-type: cluster`) with the API URL + CA + token. That is exactly what `argocd cluster add` does internally, done by hand **on purpose**: `argocd cluster add` mints an **expiring** token when the source kubeconfig uses x509 client-cert auth ([argo-cd#13175](https://github.com/argoproj/argo-cd/issues/13175)) — which is the shape of a `vcf cluster kubeconfig get` kubeconfig — so the registered cluster would later flip to `Unknown`. The local `argocd` CLI is used only to *report* a version in `make argocd-preflight`. |
+
+`make check-tools` lists every CLI the flow uses, its version, and whether it is **required** or
+**optional** — run it before anything else on a fresh jump box.
 
 ## VKS authentication (VCF 9 + Supervisor)
 
@@ -879,11 +902,35 @@ builder image, installs Gitea + Tekton, and creates the ArgoCD `Application`.
 
 **Step 7 — access the UIs.** Harbor and ArgoCD are the ones you installed above — use the FQDN /
 LB IP + admin credentials you set there. For **Gitea** (which you installed) and the deployed
-**app**, either run
-`make install-ingress` to reach them by hostname at `*.vks.local` (add the printed
-`INGRESS_LB_IP` line to `/etc/hosts`; see [Access the UIs](#access-the-uis-urls-logins-passwords)),
-or use `kubectl port-forward` — `kubectl -n gitea port-forward svc/gitea-http 3000:3000` and
-`kubectl -n webui port-forward svc/webui 18080:80`.
+**app**, either front them with the ingress at `*.vks.local`, or `kubectl port-forward`
+(`kubectl -n gitea port-forward svc/gitea-http 3000:3000`,
+`kubectl -n webui port-forward svc/webui 18080:80`).
+
+> **On a real VKS lab, do NOT run the bare `make install-ingress`** — it defaults to
+> `INGRESS_CONTROLLER=istio`, which **helm-installs a second istiod over the platform's mesh**.
+> Istio ships on VKS as a **Standard Package** (`istio.kubernetes.vmware.com`), so the mesh is
+> already there and you only need to **attach** to it:
+>
+> ```bash
+> make istio-preflight                                     # read-only: is Istio here? what does it require of me?
+> make install-ingress INGRESS_CONTROLLER=istio-existing   # installs NOTHING; attaches our routes only
+> ```
+>
+> `istio-preflight` prints the exact `Gateway` selector the mesh requires, what your kubeconfig may
+> actually do, and what (if anything) to request from the mesh admin. It also picks the route API:
+> the **Kubernetes Gateway API** when Istio is an Accepted `GatewayClass` (Istio then
+> auto-provisions the proxy *and* its LoadBalancer — nothing needed from the platform team), else
+> the classic `Gateway`/`VirtualService` path. Add the printed `INGRESS_LB_IP` line to `/etc/hosts`
+> (see [Access the UIs](#access-the-uis-urls-logins-passwords)).
+>
+> Only if the cluster genuinely has **no** mesh should you install one (`make install-ingress`, or
+> `INGRESS_CONTROLLER=traefik` for the lighter option).
+>
+> **Run `make psa-check` before installing anything.** A VKS guest cluster enforces the
+> `restricted` Pod Security Standard **by default** (VKr v1.26+), which **rejects** our Kaniko build
+> pods and the Istio-provisioned gateway proxy unless their namespaces are labelled `baseline`. The
+> installers apply the measured labels; `psa-check` proves the cluster will admit the workloads
+> *before* you spend 20 minutes mirroring.
 
 <details>
 <summary><strong>VKS-lab checklist</strong> — easy-to-miss items (click to expand)</summary>
@@ -1182,11 +1229,35 @@ were granted).
 
 **Step 7 — access the UIs.** Harbor and ArgoCD are the **shared** instances — use the endpoints
 you discovered + the credentials you were granted. For **Gitea** (which you installed) and the
-deployed **app**, either run
-`make install-ingress` to reach them by hostname at `*.vks.local` (add the printed
-`INGRESS_LB_IP` line to `/etc/hosts`; see [Access the UIs](#access-the-uis-urls-logins-passwords)),
-or use `kubectl port-forward` — `kubectl -n gitea port-forward svc/gitea-http 3000:3000` and
-`kubectl -n webui port-forward svc/webui 18080:80`.
+deployed **app**, either front them with the ingress at `*.vks.local`, or `kubectl port-forward`
+(`kubectl -n gitea port-forward svc/gitea-http 3000:3000`,
+`kubectl -n webui port-forward svc/webui 18080:80`).
+
+> **On a real VKS lab, do NOT run the bare `make install-ingress`** — it defaults to
+> `INGRESS_CONTROLLER=istio`, which **helm-installs a second istiod over the platform's mesh**.
+> Istio ships on VKS as a **Standard Package** (`istio.kubernetes.vmware.com`), so the mesh is
+> already there and you only need to **attach** to it:
+>
+> ```bash
+> make istio-preflight                                     # read-only: is Istio here? what does it require of me?
+> make install-ingress INGRESS_CONTROLLER=istio-existing   # installs NOTHING; attaches our routes only
+> ```
+>
+> `istio-preflight` prints the exact `Gateway` selector the mesh requires, what your kubeconfig may
+> actually do, and what (if anything) to request from the mesh admin. It also picks the route API:
+> the **Kubernetes Gateway API** when Istio is an Accepted `GatewayClass` (Istio then
+> auto-provisions the proxy *and* its LoadBalancer — nothing needed from the platform team), else
+> the classic `Gateway`/`VirtualService` path. Add the printed `INGRESS_LB_IP` line to `/etc/hosts`
+> (see [Access the UIs](#access-the-uis-urls-logins-passwords)).
+>
+> Only if the cluster genuinely has **no** mesh should you install one (`make install-ingress`, or
+> `INGRESS_CONTROLLER=traefik` for the lighter option).
+>
+> **Run `make psa-check` before installing anything.** A VKS guest cluster enforces the
+> `restricted` Pod Security Standard **by default** (VKr v1.26+), which **rejects** our Kaniko build
+> pods and the Istio-provisioned gateway proxy unless their namespaces are labelled `baseline`. The
+> installers apply the measured labels; `psa-check` proves the cluster will admit the workloads
+> *before* you spend 20 minutes mirroring.
 
 <details>
 <summary><strong>VKS-lab checklist</strong> — easy-to-miss items (click to expand)</summary>
@@ -1230,7 +1301,9 @@ ingress is installed) the one-time `/etc/hosts` line for the `*.vks.local` hosts
 correct depends on the context** — Harbor and ArgoCD are *ours* in KinD but the *lab's* on a real
 VKS cluster:
 
-- The **`*.vks.local`** hostnames exist **only after `make install-ingress`** (part of
+- The **`*.vks.local`** hostnames exist **only after the ingress is in place** — `make install-ingress`
+  (KinD / a mesh-free cluster), or `make install-ingress INGRESS_CONTROLLER=istio-existing` on a real
+  VKS lab, where Istio already exists and we only attach routes (part of
   `make e2e-kind`; a separate, optional step in the lab flow) and front only the UIs this project
   controls — **Gitea, the app, and the Tekton Dashboard**.
 - **Harbor and ArgoCD are never behind the ingress** — each has its own LB address in both
@@ -1240,7 +1313,7 @@ VKS cluster:
 
 | Service | Local KinD | Real VKS lab | Login |
 |---------|------------|--------------|-------|
-| **Gitea** (we install) | <http://gitea.vks.local> | `http://gitea.vks.local` after `make install-ingress`, else `kubectl -n gitea port-forward svc/gitea-http 3000:3000` | `gitea_admin` / `GITEA_ADMIN_PASSWORD` |
+| **Gitea** (we install) | <http://gitea.vks.local> | `http://gitea.vks.local` once the ingress is in place (install, or attach with `INGRESS_CONTROLLER=istio-existing`), else `kubectl -n gitea port-forward svc/gitea-http 3000:3000` | `gitea_admin` / `GITEA_ADMIN_PASSWORD` |
 | **Tekton Dashboard** (we install) | <http://tekton.vks.local> | same — ingress or `port-forward` | — (read-only) |
 | **App (webui)** (we deploy) | <http://app.vks.local/> | same — ingress or `port-forward svc/webui` | — (health at `/actuator/health`) |
 | **Harbor** | its own LB IP, **self-signed HTTPS** (`https://<ip>`, our CA) | the **lab's** Harbor URL, **HTTPS** | `admin` / `HARBOR_PASSWORD` |
@@ -1438,6 +1511,7 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 | Install | `fetch-harbor-ca` | Fetch a self-signed lab Harbor's CA cert → `HARBOR_CA_FILE` (VKS-lab convenience) |
 | KinD e2e | `e2e-kind` | Full local end-to-end in KinD (cluster → Harbor → ArgoCD → pipeline → ingress → verify) |
 | KinD e2e | `kind-up` / `install-harbor` / `install-argocd` / `install-ingress` / `kind-down` | Individual KinD steps (`install-istio` / `attach-istio` / `install-traefik` pick the controller) |
+| Preflight | `check-tools` / `psa-check` | Required-vs-optional CLIs + versions / would a real VKS cluster (PSA `restricted` by default) even ADMIT our pods? |
 | Istio | `istio-preflight` / `attach-istio` / `e2e-kind-istio-existing` | Read-only mesh discovery + what to ask the mesh admin for / attach to an Istio we did not install / its KinD regression test |
 | Verify | `verify` | End-to-end smoke test on a LIVE cluster |
 | Verify | `verify-ingress` / `verify-ingress-both` | Assert the `*.vks.local` UIs route through the ingress LB (one controller / both) |

@@ -346,6 +346,28 @@ istio_diagnose_pending_lb() { # <ns> <svc>
     --sort-by=.lastTimestamp 2>/dev/null | tail -5 | sed 's/^/      /' >&2 || true
 }
 
+
+# ---------------------------------------------------------------------------
+# istio_require_env — every variable we are about to envsubst MUST be non-empty AND exported.
+#
+# envsubst substitutes from the ENVIRONMENT, not from shell variables. A caller that sets
+# `FOO=bar` without `export` renders `${FOO}` as the EMPTY STRING — silently. In a k8s manifest
+# that is not a harmless blank: `namespace: ` makes kubectl fall back to `default`, so the object
+# is created in the WRONG NAMESPACE and everything that references it by its intended namespace
+# then fails to match. The symptom is a 404 from a listener that exists — never an error at apply
+# time. (This shipped exactly once: the Gateway landed in `default` while the VirtualServices
+# referenced `istio-ingress/vks-uis`.)
+# ---------------------------------------------------------------------------
+istio_require_env() {
+  local v missing=""
+  for v in "$@"; do
+    # Non-empty in the shell AND visible in the environment (i.e. exported).
+    [ -n "${!v:-}" ] || { missing="${missing} ${v}(unset)"; continue; }
+    env | grep -q "^${v}=" || missing="${missing} ${v}(NOT EXPORTED)"
+  done
+  [ -z "$missing" ] || die "cannot render manifests —${missing}. envsubst reads the ENVIRONMENT: a non-exported variable renders EMPTY and would silently create the object in the WRONG namespace."
+}
+
 # ---------------------------------------------------------------------------
 # istio_apply_routes — apply the Gateway (unless reusing a shared one) + the
 # VirtualServices.
@@ -374,12 +396,20 @@ istio_apply_routes() {
     log_info "reusing the platform-owned Gateway ${ISTIO_SHARED_GATEWAY} (creating NO Gateway of our own)"
     istio_assert_shared_gateway_hosts || return 1
   else
+    # Export before envsubst — a caller may have set these as plain shell vars (46-install-istio.sh
+    # pins them; istio_discover exports them). See istio_require_env for why an unexported var is
+    # not a cosmetic problem.
+    export ISTIO_GATEWAY_NAMESPACE ISTIO_GATEWAY_LABEL
+    istio_require_env ISTIO_GATEWAY_NAMESPACE ISTIO_GATEWAY_NAME ISTIO_GATEWAY_LABEL \
+                      GITEA_HOST WEBUI_HOST TEKTON_DASHBOARD_HOST
     log_info "applying Gateway ${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_NAME} (selector istio=${ISTIO_GATEWAY_LABEL})"
     # shellcheck disable=SC2016
     envsubst '${ISTIO_GATEWAY_NAMESPACE} ${ISTIO_GATEWAY_NAME} ${ISTIO_GATEWAY_LABEL} ${GITEA_HOST} ${WEBUI_HOST} ${TEKTON_DASHBOARD_HOST}' \
       < "${k8s_dir}/gateway.yaml" | run kubectl apply -f -
   fi
 
+  istio_require_env ISTIO_GATEWAY_REF GITEA_HOST GITEA_NAMESPACE WEBUI_HOST APP_NAME \
+                    ARGOCD_DEST_NAMESPACE TEKTON_DASHBOARD_HOST TEKTON_NAMESPACE
   log_info "applying VirtualServices (gitea/webui/tekton -> ${ISTIO_GATEWAY_REF})"
   # shellcheck disable=SC2016
   envsubst '${ISTIO_GATEWAY_REF} ${GITEA_HOST} ${GITEA_NAMESPACE} ${WEBUI_HOST} ${APP_NAME} ${ARGOCD_DEST_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${TEKTON_NAMESPACE}' \

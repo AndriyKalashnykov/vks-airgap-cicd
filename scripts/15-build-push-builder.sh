@@ -13,6 +13,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 load_env
 
+# Serialize registry mutation on this host: a concurrent push corrupts Harbor's blob store
+# (MANIFEST_UNKNOWN/BLOB_UNKNOWN later, recoverable only by rebuilding the registry). Re-exec
+# ourselves under the lock; the second caller fails fast instead of silently corrupting.
+if [ -z "${__REGISTRY_LOCK_HELD:-}" ]; then
+  export __REGISTRY_LOCK_HELD=1
+  with_registry_lock "$(basename "$0")" "$0" "$@"
+  exit $?
+fi
+
 : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"; : "${HARBOR_USERNAME:?}"
 : "${HARBOR_PASSWORD:?set HARBOR_PASSWORD in .env (never on argv)}"
 : "${BUILDER_IMAGE_TAG:?}"

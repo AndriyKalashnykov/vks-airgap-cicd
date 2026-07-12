@@ -33,7 +33,7 @@ Deployment_Node(vks, "VKS workload cluster", "VMware vSphere Kubernetes Service 
     Container(app, "webui", "Deployment (2 replicas) + Service")
   }
   Deployment_Node(ns_ing, "namespace: istio-ingress | traefik", "") {
-    Container(ing, "Ingress gateway", "LoadBalancer · INGRESS_CONTROLLER=istio (default) | traefik")
+    Container(ing, "Ingress gateway", "LoadBalancer · INGRESS_CONTROLLER=istio (we install) | istio-existing (attach to the platform's mesh — the REAL-LAB case) | traefik")
   }
 }
 

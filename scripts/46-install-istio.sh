@@ -29,7 +29,12 @@ require_cmd helm
 # The gateway namespace is OUR install's default and lives here, not in .env.example:
 # an uncommented global would be sourced into the environment in istio-existing mode too,
 # constraining discovery to our own naming and hiding the platform team's real gateway.
-ISTIO_GATEWAY_NAMESPACE="${ISTIO_GATEWAY_NAMESPACE:-istio-ingress}"
+# EXPORT, not a bare assignment: istio_apply_routes renders the manifests with envsubst, which
+# reads the ENVIRONMENT. An unexported var renders EMPTY -> `namespace:` blank -> the Gateway is
+# silently created in `default` while the VirtualServices reference istio-ingress/<name> -> 404
+# from a listener that exists. (This regressed exactly this way once the var stopped being
+# exported implicitly by load_env's `set -a` when it was commented out of .env.example.)
+export ISTIO_GATEWAY_NAMESPACE="${ISTIO_GATEWAY_NAMESPACE:-istio-ingress}"
 : "${GITEA_NAMESPACE:?}"; : "${GITEA_HOST:?}"
 : "${ARGOCD_DEST_NAMESPACE:?}"; : "${WEBUI_HOST:?}"; : "${APP_NAME:?}"
 : "${TEKTON_NAMESPACE:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
