@@ -9,8 +9,21 @@
 # Load operator overrides FIRST so they win over the ?= defaults. `-include`
 # (leading '-') silently skips a missing file. .env.kind is written by the KinD
 # flow and overrides .env for local end-to-end testing.
+#
+# SKIP_DOTENV=1 ignores `.env` — at the MAKE level here, and inside every script
+# (scripts/lib/os.sh `load_env`). The KinD e2e passes it (E2E_SKIP_DOTENV below) so a
+# local run reproduces a FRESH operator's box, where the you-choose secrets do not exist
+# and must be GENERATED. It is deliberately env-only: it does NOT touch the image cache,
+# so a re-run still cache-skips the mirror (no re-download).
+ifneq ($(SKIP_DOTENV),1)
 -include .env
+endif
 -include .env.kind
+
+# The KinD e2e is a stand-in for a brand-new operator / a CI runner — neither has a `.env`.
+# Ignoring it by default keeps "make e2e-kind needs zero .env" an ENFORCED property instead
+# of a claim that happens to hold on the author's box. Opt back in with E2E_SKIP_DOTENV=0.
+E2E_SKIP_DOTENV ?= 1
 
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
@@ -280,8 +293,13 @@ install-traefik: check-env ## Install Traefik ingress (one LB) — the lighter o
 kind-down: ## Tear down the KinD cluster (prunes cloud-provider-kind + kindccm-* orphans)
 	@$(SCRIPTS)/kind-down.sh
 
+# Target-specific export: every recipe line below (sub-makes AND direct script calls) runs
+# with SKIP_DOTENV in its environment, so `.env` is ignored end-to-end. Make also treats an
+# environment variable as a make variable, so the sub-make's `ifneq ($(SKIP_DOTENV),1)` sees it.
 .PHONY: e2e-kind
-e2e-kind: kind-up install-harbor install-argocd install-all install-ingress verify verify-ingress psa-check ## Full local end-to-end in KinD (+ ingress route check + PSA/VKS admission check)
+e2e-kind: export SKIP_DOTENV = $(E2E_SKIP_DOTENV)
+e2e-kind: ## Full local end-to-end in KinD (+ ingress route check + PSA/VKS admission check). Runs with .env IGNORED (fresh-box fidelity); E2E_SKIP_DOTENV=0 to use yours
+	@$(MAKE) kind-up install-harbor install-argocd install-all install-ingress verify verify-ingress psa-check
 
 .PHONY: e2e-kind-both
 e2e-kind-both: ## Matrix: run the full KinD e2e in BOTH SSL modes (secure self-signed TLS, then insecure plain-HTTP)
@@ -350,7 +368,10 @@ verify-ingress-both: check-env ## Matrix: install + route-verify BOTH ingress co
 	@$(MAKE) install-ingress verify-ingress INGRESS_CONTROLLER=istio
 	@$(MAKE) install-ingress verify-ingress INGRESS_CONTROLLER=traefik
 
+# Same fresh-box fidelity as e2e-kind (a trailing '#' comment here would land INSIDE the
+# value — make keeps the whitespace — so the note lives on its own line).
 .PHONY: e2e-kind-istio-existing
+e2e-kind-istio-existing: export SKIP_DOTENV = $(E2E_SKIP_DOTENV)
 e2e-kind-istio-existing: ## KinD e2e for the ATTACH mode: a "platform team" installs Istio (foreign naming) -> we attach, installing nothing
 	@echo "==> e2e-kind-istio-existing: fresh cluster, platform-owned Istio, attach-only"
 	@$(MAKE) kind-down          # clear stale .env.kind so the ingress mode is deterministic
