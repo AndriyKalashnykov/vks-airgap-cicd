@@ -207,9 +207,17 @@ CA-trust hop).
 
 Two things ground this section: (a) primary-source research on how VCF/VKS 9.1 provides
 Harbor + ArgoCD, and (b) **empirical version checks of the actual lab CLIs** the operator
-holds (installed via `make install-vcf-clis`). Empirical beats doc-inference: the published
-9.0 docs imply a 2.14.x ArgoCD, but the real **9.1** `argocd` CLI is 3.x — so our KinD
-ArgoCD is the *right generation*.
+holds (installed via `make install-vcf-clis`).
+
+> **CORRECTION (2026-07-11) — read this before trusting the version claims below.**
+> This section originally argued: "the 9.0 docs imply a 2.14.x ArgoCD, but the real 9.1 `argocd`
+> CLI is 3.x, so our KinD ArgoCD is the *right generation*." **That inference was wrong.** A
+> client/server tool's **CLI version is not its SERVER version**: the Broadcom install doc pins the
+> ArgoCD **server** via the operator CR at **`2.14.15+vmware.1-vks.1`** (a **2.x** line), while the
+> shipped **CLI** is `v3.0.19-vcf` (**3.x**). Both facts are true; they describe *different things*.
+> Our KinD stand-in runs a **3.x server**, so a real server-generation delta DOES exist — it is a
+> known fidelity gap, not a match. `make argocd-preflight` reports all three (CLI, running server
+> image, `kubectl explain argocd.spec.version`) so this cannot be guessed at again.
 
 **Ground-truth versions (verified):** lab `argocd` CLI = **`v3.0.19+d67e6eb90-vcf`** (built
 2025-12-02); `vcf` (VCF Consumption CLI) = **`v9.1.0.0.25296329`** (GA, 2026-03-20). VKS 9.1
@@ -223,7 +231,8 @@ Harbor ≈ **2.14.3** (`_vmware` build); ArgoCD provisioned by the Broadcom Argo
   real HTTPS/443. A missing-CA hop fails KinD exactly as it would fail the lab.
 - **ArgoCD exposure/auth**: own LoadBalancer reached by IP, self-signed TLS on 443,
   `argocd login <ip> --insecure` (IP-SAN warning), admin from `argocd-initial-admin-secret` —
-  all match VKS 9.1. ArgoCD generation (3.x) matches.
+  all match VKS 9.1. **NOT the server generation**: KinD runs ArgoCD **3.x** while the lab's
+  operator CR pins the server at **2.14.15** (2.x) — see the CORRECTION above.
 - **The GitOps loop shape**: push → Tekton → Harbor → tag write-back → ArgoCD sync → app roll.
 
 **What a green KinD run does NOT prove (residual lab risk — verify on the real lab):**

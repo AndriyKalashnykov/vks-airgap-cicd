@@ -20,8 +20,8 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make help` | List all targets (grouped) |
 | `make deps` | Install jump-box toolchain (mise + `scripts/00-install-prereqs.sh`) |
 | `make ci` | Offline gate: `static-check` + `docs-lint` |
-| `make static-check` | `check-toolchain-alignment` + `check-java-alignment` + `check-env` + `check-image-alignment` + `lint` + `validate` + `sec` + `app-test` |
-| `make sec` | Security scans: `secrets` (gitleaks) + `trivy-fs` (built-jar deps) + `trivy-config` (manifests) |
+| `make static-check` | `check-toolchain-alignment` + `check-java-alignment` + `check-env` + `check-env-coverage` + `check-how-provenance` + `check-image-alignment` + `lint` + `validate` + `sec` + `app-test` |
+| `make sec` | Security scans: `secrets` (gitleaks) + `prose-secrets` (credential-shaped prose in docs) + `trivy-fs` (built-jar deps) + `trivy-config` (manifests) |
 | `make app-test` / `app-build` / `app-run` | Spring Boot app dev (in `apps/java/webui/`, uses `./mvnw`) |
 | `make mirror` | (dual-homed) pull images → push to Harbor. **Resumable:** a re-run cache-skips digest-pinned images already fully pulled (`.mirror-ok` sentinel), so an interrupted/CDN-flaky mirror resumes in seconds. `MIRROR_RETRIES` (default 5), `MIRROR_FORCE_PULL=1` |
 | `make mirror-pull` / `bundle` / `bundle-load` / `mirror-push` | sneakernet phases |
@@ -55,7 +55,19 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   support in `lib/os.sh`, not in individual scripts.
 - **`.env.example` is the single source of truth** for every tunable. The Makefile
   `-include .env` + `?=` defaults and every script's `load_env` both read it. Never
-  hardcode a host/port/timeout/version — add it to `.env.example`.
+  hardcode a host/port/timeout/version — add it to `.env.example` (`make check-env-coverage`
+  gates it). A var the code reads with a FALLBACK (`${X:-$(pick_port)}`, `${A:-$B}`) or a
+  per-run TOGGLE must be left **commented** there — `load_env` sources the file with `set -a`,
+  so an uncommented value is exported and silently CLOBBERS the fallback/override.
+- **The KinD e2e IGNORES `.env`** (`SKIP_DOTENV=1`, set by `E2E_SKIP_DOTENV ?= 1` on both
+  `e2e-kind` targets). It is a stand-in for a fresh operator / a CI runner, neither of which has
+  a `.env`, so the you-choose secrets must be GENERATED (`05-kind-up.sh`), not read from yours.
+  Without it a local run passes on values only your box has. Opt out: `E2E_SKIP_DOTENV=0`.
+- **Manifest layout:** `k8s/{gitea,istio,traefik,tekton,argocd}/` = everything **we** apply to
+  the cluster. `deploy/webui/` is **not** applied by us — `50-seed-gitea-repos.sh` seeds it into
+  the `webui-deploy` Gitea repo (one dir per deploy repo); `apps/java/webui/` is the content of
+  the `webui-app` repo. Do not nest `deploy/` inside `apps/java/webui/` — that dir IS the app
+  repo, so the manifests would land in it and collapse the two-repo GitOps split.
 - **Mirror mode is not a variable** — dual-homed vs sneakernet is simply which mirror
   commands you run: dual-homed → `make mirror`; sneakernet → `make mirror-pull && make
   bundle` (carry the bundle) then `make bundle-load && make mirror-push`.
@@ -525,11 +537,10 @@ end-to-end. Cluster torn down after the sweep.
 - Docs: README documents the mirror interrupt/resume + `mirror-verify`; this file's Common-commands +
   gates updated.
 
-**⏳ PENDING next — approved follow-ups (own PRs):**
-
-- `bootstrap.sh` — curl|bash jump-box entrypoint: OS-gate (Photon/Ubuntu) → check→install-if-missing→verify→report,
-  tag-pinned, dual-homed only, never curls licensed VCF CLIs; validate in the jumpbox harness.
-- `make mirror-prune` — drop orphaned old-digest cache dirs (bundle/ hygiene after Renovate bumps).
+**✅ Both former "PENDING next" items are SHIPPED** (the block that listed them was stale):
+`bootstrap-jumpbox.sh` exists (curl|bash jump-box entrypoint, OS-gated, validated by the bare-OS
+harness), and cache pruning ships as `mirror_prune_cache` (`lib/mirror.sh`), run automatically by
+`10-mirror-pull.sh` — there is deliberately no separate `make mirror-prune` target.
 
 **Merged this session (real-lab prep):** helpers `make harbor-robot` + `fetch-argocd-ca` +
 `argocd-preflight` (+ `lib/harbor.sh` extraction, `HARBOR_PUBLIC_PROJECTS` toggle, fetch-harbor-ca

@@ -15,6 +15,14 @@ maven    = "3.9"
 kubectl  = "1.36.2"
 helm     = "4.2.3"
 kustomize = "5.8.1"
+# kind — the local KinD stand-in cluster (scripts/05-kind-up.sh `require_cmd kind`).
+# It USED to be installed by nothing at all: the README promised `make deps  # kind, ...`
+# while neither this file nor 00-install-prereqs.sh provided it, so `make e2e-kind` — the
+# repo's flagship "just see it work" path — died at step one on any box that did not happen
+# to already have kind (the CI smoke curled its own copy to work around it). Pinning it here
+# makes `make deps` deliver what the docs claim, and single-sources the version (CI's
+# mise-action reads this file) so it cannot drift from a second pin in a workflow.
+kind     = "0.32.0"
 jq       = "1.8.2"
 yq       = "4"
 # crane (google/go-containerregistry) — the image-mirror engine. Replaces skopeo, which

@@ -60,22 +60,14 @@ jobs:
       # `make` targets run against the pinned versions.
       - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4
 
-      # `kind` is NOT installed by any repo script (operators install it locally),
-      # so the smoke installs the pinned binary itself. Docker is preinstalled on
-      # the runner; the mise toolchain above covers crane/kubectl/helm/jq. `make
-      # deps` is intentionally SKIPPED — it also installs tkn/argocd/podman that
-      # this reduced smoke (stops at mirror-verify) never exercises.
-      - name: Install kind
-        env:
-          # renovate: datasource=github-releases depName=kubernetes-sigs/kind
-          KIND_VERSION: v0.32.0
-        run: |
-          set -euo pipefail
-          sudo curl -sSfL \
-            "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64" \
-            -o /usr/local/bin/kind
-          sudo chmod +x /usr/local/bin/kind
-          kind --version
+      # `kind` comes from .mise.toml (the mise-action above), like crane/kubectl/helm/jq —
+      # so CI and a real jump box get the SAME pinned version from ONE source of truth.
+      # (It used to be curled here with a second KIND_VERSION pin, because nothing in the
+      # repo installed kind at all; `make deps` now does.) Docker is preinstalled on the
+      # runner. `make deps` itself is still SKIPPED: it also installs tkn/argocd/podman
+      # that this reduced smoke (stops at mirror-verify) never exercises.
+      - name: Show kind version (provided by mise)
+        run: kind --version
 
       # Diagnostics: record the toolchain versions the smoke will use (helps triage
       # a red run — e.g. a cluster-tool bump that broke a script).
