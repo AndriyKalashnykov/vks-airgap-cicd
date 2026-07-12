@@ -169,10 +169,12 @@ when changing the pipeline, ingress, or manifests.
 
 ## Backlog / resume state
 
-> ### ⏳ SESSION HANDOFF 2026-07-11b (READ FIRST — resume here)
+> ### ⏳ SESSION HANDOFF 2026-07-11c (READ FIRST — resume here)
 >
-> `main` GREEN. This session merged **13 PRs** (#93–#107) and validated the full KinD
-> e2e end-to-end.
+> `main` GREEN, **0 open PRs**. Session 2026-07-11c merged **#109, #102, #110, #111, #112, #113**
+> (see the SESSION 2026-07-11c summary below); the ONLY remaining backlog item (vcf-CLI real-lab
+> auth) is blocked on a real VCF/VKS 9.1 lab. Earlier session (2026-07-11b) merged 13 PRs
+> (#93–#107); that history is retained below.
 >
 > - **Backlog cleared:** bootstrap curl|bash + bare-OS harness (#95), SIGPIPE robustness
 >   sweep (#94), diagram layout + proportions (#93/#105), README readability + collapses
@@ -203,28 +205,19 @@ when changing the pipeline, ingress, or manifests.
 > - Shared-lab tenant: a Harbor **project-admin** (direct, not via an SSO group) self-services
 >   a robot; the ArgoCD tenant needs an **AppProject** + RBAC (generic ArgoCD — verify on lab).
 >
-> **HELD PRs — need a LIVE run before merge (not validated this session):**
+> **SESSION 2026-07-11c — every in-flight item SHIPPED (`main` green, 0 open PRs):**
 >
-> - **#98** — non-blocking dispatch+weekly KinD smoke workflow (net-new; needs one live
->   `workflow_dispatch` on `main` to confirm green).
-> - **#102** — `make e2e-sneakernet` + mirror-verify-in-e2e + integrity RED test +
->   `e2e-kind-both`; statically validated (lint + `make -n`), needs a live
->   `make e2e-sneakernet` / `make e2e-kind-both` run.
+> - **#98 / #102 / #109** — `e2e-kind-smoke` dispatched on `main` → **GREEN on a fresh runner** (verifies #109's zero-config throwaway passwords fix the #98 smoke); #102 (sneakernet + mirror-verify-in-e2e + integrity RED test) merged + live-validated.
+> - **#110** — pipeline-flow diagram: was **CLIPPED at PlantUML's 4096px `PLANTUML_LIMIT_SIZE`** (the `webui` node + legend truncated) — folded to a complete 2-lane directional-`Rel` layout (3101×672), `PLANTUML_LIMIT_SIZE=16384` render backstop, click-to-enlarge README embed.
+> - **#111** — real-lab README: **each scenario is now self-contained end-to-end** (no "Part A/Part B / as in Scenario 1" cross-refs; the ~200-line shared run-steps tail is duplicated into each; redundant "Scenario N —" summary prefixes stripped).
+> - **#112** — env-UX (**TASK #13**): `scripts/02-env.sh` + `make env-init`/`env-populate`/`env-check`/`env-validate` + `creds`→`creds-show`; models GENERATE/DISCOVER/user-PROVIDE; Harbor auth in `env-validate` via a `umask 077` `curl -K` file (no argv). Verified on a clean checkout, both gates RED-proven, idempotent; README uses `make env-init` everywhere.
+> - **#113** — faithful **TWO-BOX e2e-sneakernet**: the air-gap half (`bundle-load`→`mirror-push`→`mirror-verify`) runs INSIDE a FRESH `make jumpbox` container (`JUMPBOX_MODE=airgap-half`) with ONLY the carried tarball — no more same-machine `mv` relocate-sim. Fidelity assert (`bundle/` must be empty) guards host-cache leakage; push creds via `-e` name-only. Live run: 34 images reconstructed→pushed→verified intact, `JUMPBOX_SNEAKERNET_OK`.
+> - **Backlog audit:** `bootstrap-jumpbox.sh` + `mirror-prune` (auto in `make mirror-pull`) were already DONE (the old backlog line was stale).
+> - **Skill learnings committed** to `~/projects/claude-config`: architecture-diagrams (4096px silent clip + fold + click-to-enlarge), readme (self-contained scenario collapsibles), work-principles (front-load-parallel / fan-out-at-t0 — after a ~3h no-commit stretch the user flagged as procrastination). Earlier lessons (render-scale, bg-job detect/kill, worktree-gate pollution, `.env` runbook, K1.6 EventListener-CaBundle race) also captured.
 >
-> **Skill lessons captured this session** (in `~/projects/claude-config`, uncommitted — commit
-> that repo separately): diagram render-scale (`architecture-diagrams`), robust background-job
-> detect/kill (`git-workflow`), worktree-agents pollute tree-walking gates (`agents`),
-> multi-stage `.env` runbook (`configuration`), K1.6 EventListener-CaBundle webhook race
-> (`ci-workflow`).
+> **ONLY remaining — BLOCKED on external infra (cannot do from here):**
 >
-> **Next / IN-FLIGHT (2026-07-11b tail — READ):**
->
-> - **#102 e2e-sneakernet LIVE-VALIDATED** (real KinD run: bundle → carry-ONLY-tarball → load → push → verify 34/34 green). Merge #102. Its `e2e-kind-both`/`mirror-verify-red-test` not individually re-run.
-> - **#109 OPEN (validated):** fixes #98's KinD smoke — `gen_password` (lib/os.sh, NO hardcode) + `05-kind-up.sh` writes throwaway Harbor/Gitea creds to `.env.kind` when unset; validated on a CLEAN checkout (no `.env`): kind-up→install-harbor→mirror→verify green, `make creds` reveals the logins. Merge on green.
-> - **TASK #13 (env-UX flow) — user-DESIGNED, REPLACES #109's `.env.kind` hack:** `env-init` (backup `.env`→`.env.bak`, `cp .env.example .env`) · `env-populate` (GENERATE secrets we can + DISCOVER cluster values we can [LB IPs via `kubectl get svc … jsonpath`] → `.env`; PRINT the user-must-set list) · `env-check` (presence) · `env-validate` (validity: format + KUBECONFIG/Harbor connectivity+auth via stdin, fail fast) · rename `creds`→`creds-show` (+ thin alias). Wire into the e2e targets (KinD = fully auto). Three value sources: GENERATE / DISCOVER / user-PROVIDE.
-> - **TWO-BOX e2e-sneakernet — DONE + LIVE-VALIDATED.** `e2e-sneakernet` now runs its air-gapped half (`bundle-load`→`mirror-push`→`mirror-verify`) INSIDE a FRESH `make jumpbox` container (new `JUMPBOX_MODE=airgap-half` in `scripts/jumpbox-run.sh`) carrying ONLY the tarball — no more same-machine `mv` relocate-sim. The container excludes the host `./bundle` (fidelity assert: `bundle/` must be empty), reconstructs the cache purely from the tarball, and pushes with Harbor creds passed via `-e` name-only (password never on argv). Live run: 34 images reconstructed → pushed → integrity-verified in Harbor, `JUMPBOX_SNEAKERNET_OK`, no host-state leakage.
-> - **pipeline-flow diagram is now the THIN outlier** (LEFT_RIGHT ~153px displayed vs Deployment ~555px). User wants it vertical/balanced — try `LAYOUT_TOP_DOWN` tuned or a folded 2-row, and MEASURE displayed heights (see `/architecture-diagrams` render-scale rule; can't render while a mirror runs).
-> - `vcf`-login + real-lab `.env` still NOT lab-validated — see the vcf-CLI research block below.
+> - **vcf-CLI real-lab auth** — `scripts/30-vks-login.sh` ships the verified SHAPE (#103); the open items (non-interactive/stdin password mechanism, exact VCF/VKS 9.1 CLI flags, 9.0→9.1 doc-provenance) ALL require a real VCF/VKS 9.1 lab. NOT reproducible on KinD — see the vcf-CLI research block below.
 >
 > **Skill lessons captured this session** (`~/projects/claude-config`, UNCOMMITTED — commit that repo): **faithful-over-convenient** (work-principles) · local-`.env`-hides-CI + verify-zero-config-on-clean-checkout (configuration) · K1.6 EventListener-CaBundle webhook race (ci-workflow) · diagram render-scale (architecture-diagrams) · robust background-job detect/kill (git-workflow) · worktree-agents pollute tree-walking gates (agents) · multi-stage `.env` runbook (configuration).
 >
