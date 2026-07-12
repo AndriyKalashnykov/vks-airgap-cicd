@@ -17,6 +17,15 @@ load_env
 [ -d "${BUNDLE_DIR}/images" ] || die "no image cache at ${BUNDLE_DIR}/images — run 'make mirror-pull' first"
 
 OUT_DIR="${BUNDLE_OUT_DIR:-$REPO_ROOT}"
+# The tarball must NOT land inside the directory we are archiving: tar would be reading a file that
+# is still growing and abort with "file changed as we read it" (it did — it broke e2e-sneakernet).
+# Fail fast and say why, instead of producing a corrupt/failed bundle.
+_bundle_abs="$(cd "$BUNDLE_DIR" 2>/dev/null && pwd)" || die "BUNDLE_DIR does not exist: $BUNDLE_DIR"
+mkdir -p "$OUT_DIR"
+_out_abs="$(cd "$OUT_DIR" && pwd)"
+case "$_out_abs/" in
+  "$_bundle_abs"/*) die "BUNDLE_OUT_DIR ($_out_abs) is INSIDE BUNDLE_DIR ($_bundle_abs) — tar cannot archive a directory into itself. Point BUNDLE_OUT_DIR somewhere else (default: the repo root)." ;;
+esac
 stamp="$(date -u +%Y%m%d-%H%M%S)"
 base="vks-airgap-cicd-bundle-${stamp}"
 

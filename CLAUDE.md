@@ -8,7 +8,8 @@ An **air-gapped VKS CI/CD demo**: from an internet-connected jump box (Ubuntu or
 PhotonOS), mirror all required images into **Harbor**, install and wire **Gitea +
 Tekton**, and demonstrate GitOps CD via **ArgoCD**. On a real VKS lab Harbor and ArgoCD
 are installed as **VCF Supervisor Services** (the README real-lab flow documents that,
-Part A); we then install Gitea + Tekton and the demo app. The KinD stand-in installs
+Scenario 1); in Scenario 2 they already exist and you discover them as a tenant. We then install
+Gitea + Tekton and the demo app. The KinD stand-in installs
 Harbor + ArgoCD locally to mimic that.
 
 End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag write-back) → ArgoCD sync → web UI`.
@@ -20,8 +21,8 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make help` | List all targets (grouped) |
 | `make deps` | Install jump-box toolchain (mise + `scripts/00-install-prereqs.sh`) |
 | `make ci` | Offline gate: `static-check` + `docs-lint` |
-| `make static-check` | `check-toolchain-alignment` + `check-java-alignment` + `check-env` + `check-image-alignment` + `lint` + `validate` + `sec` + `app-test` |
-| `make sec` | Security scans: `secrets` (gitleaks) + `trivy-fs` (built-jar deps) + `trivy-config` (manifests) |
+| `make static-check` | `check-toolchain-alignment` + `check-java-alignment` + `check-env` + `check-env-coverage` + `check-how-provenance` + `check-image-alignment` + `lint` + `validate` + `sec` + `test-scripts` (offline script unit tests) + `app-test` |
+| `make sec` | Security scans: `secrets` (gitleaks) + `prose-secrets` (credential-shaped prose in docs) + `trivy-fs` (built-jar deps) + `trivy-config` (manifests) |
 | `make app-test` / `app-build` / `app-run` | Spring Boot app dev (in `apps/java/webui/`, uses `./mvnw`) |
 | `make mirror` | (dual-homed) pull images → push to Harbor. **Resumable:** a re-run cache-skips digest-pinned images already fully pulled (`.mirror-ok` sentinel), so an interrupted/CDN-flaky mirror resumes in seconds. `MIRROR_RETRIES` (default 5), `MIRROR_FORCE_PULL=1` |
 | `make mirror-pull` / `bundle` / `bundle-load` / `mirror-push` | sneakernet phases |
@@ -31,8 +32,12 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make install-vcf-clis` | On a real-VKS-lab jump box: install the Broadcom lab CLIs (`argocd-vcf` + `vcf` + plugins), OS/arch-aware + sudo-free, from operator-supplied licensed archives in `VCF_CLI_SRC_DIR=<dir>`. (The local KinD e2e doesn't need these — it uses the upstream `argocd` from `deps`.) Granular: `install-argocd-vcf` / `install-vcf-cli` / `install-vcf-plugins` |
 | `make platform` | Install + wire Gitea and Tekton |
 | `make gitops` | Create the ArgoCD Application |
-| `make creds` / `make argocd-password` | Print access URLs+logins / the ArgoCD admin password (context-aware, self-resolves kubeconfig) |
-| `make install-ingress` | Install the ingress (`INGRESS_CONTROLLER=istio` default / `traefik`) fronting the UIs at `*.vks.local` |
+| `make creds-show` (alias `creds`) / `make argocd-password` | Print access URLs+logins / the ArgoCD admin password (context-aware, self-resolves kubeconfig) |
+| `make env-init` / `env-populate` / `env-check` / `env-validate` | `.env` lifecycle: create from `.env.example` → GENERATE the secrets we can + DISCOVER cluster values (and print the user-PROVIDE list) → presence gate → validity gate (format + KUBECONFIG/Harbor auth) |
+| `make harbor-robot` / `fetch-harbor-ca` / `fetch-argocd-ca` / `fetch-argocd-kubeconfig` / `argocd-preflight` | Real-lab helpers: mint a Harbor robot (needs project-admin) · fetch a self-signed CA · fetch the Supervisor kubeconfig for ArgoCD registration · report ArgoCD CLI vs RUNNING SERVER vs supported versions |
+| `make test-scripts` | Offline script-logic unit tests (mirror cache-skip/resume/prune; VCF-CLI archive resolve). Part of `static-check` |
+| `make e2e-kind-both` / `verify-ingress-both` / `e2e-cross-cluster` / `e2e-sneakernet` | e2e permutations: both SSL modes · both ingress controllers · 2-cluster ArgoCD registration · two-box sneakernet |
+| `make install-ingress` | Install the ingress (`INGRESS_CONTROLLER=istio` default / `istio-existing` = attach to a platform-owned mesh / `traefik`) fronting the UIs at `*.vks.local` |
 | `make install-istio` / `install-traefik` | Install a specific ingress controller directly |
 | `make psa-check` | Read-only: would our pods survive a real VKS guest cluster? VKS **enforces PSA `restricted` by default** (VKr v1.26+) while KinD enforces nothing — so `ci` (Kaniko builds as root) and the Gateway namespace (Istio's auto-provisioned proxy sets no seccompProfile) need `baseline` or their pods are REJECTED on the lab. Levels are MEASURED via a server-side dry-run label, not guessed. Wired into both e2e targets |
 | `make istio-preflight` | Read-only: is Istio here, what `Gateway` selector does it require, what may this kubeconfig do, and what must the mesh admin grant? Run before touching a cluster you don't own |
@@ -55,7 +60,19 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   support in `lib/os.sh`, not in individual scripts.
 - **`.env.example` is the single source of truth** for every tunable. The Makefile
   `-include .env` + `?=` defaults and every script's `load_env` both read it. Never
-  hardcode a host/port/timeout/version — add it to `.env.example`.
+  hardcode a host/port/timeout/version — add it to `.env.example` (`make check-env-coverage`
+  gates it). A var the code reads with a FALLBACK (`${X:-$(pick_port)}`, `${A:-$B}`) or a
+  per-run TOGGLE must be left **commented** there — `load_env` sources the file with `set -a`,
+  so an uncommented value is exported and silently CLOBBERS the fallback/override.
+- **The KinD e2e IGNORES `.env`** (`SKIP_DOTENV=1`, set by `E2E_SKIP_DOTENV ?= 1` on both
+  `e2e-kind` targets). It is a stand-in for a fresh operator / a CI runner, neither of which has
+  a `.env`, so the you-choose secrets must be GENERATED (`05-kind-up.sh`), not read from yours.
+  Without it a local run passes on values only your box has. Opt out: `E2E_SKIP_DOTENV=0`.
+- **Manifest layout:** `k8s/{gitea,istio,traefik,tekton,argocd}/` = everything **we** apply to
+  the cluster. `deploy/webui/` is **not** applied by us — `50-seed-gitea-repos.sh` seeds it into
+  the `webui-deploy` Gitea repo (one dir per deploy repo); `apps/java/webui/` is the content of
+  the `webui-app` repo. Do not nest `deploy/` inside `apps/java/webui/` — that dir IS the app
+  repo, so the manifests would land in it and collapse the two-repo GitOps split.
 - **Mirror mode is not a variable** — dual-homed vs sneakernet is simply which mirror
   commands you run: dual-homed → `make mirror`; sneakernet → `make mirror-pull && make
   bundle` (carry the bundle) then `make bundle-load && make mirror-push`.
@@ -85,7 +102,7 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   `07-install-argocd.sh` exposes ArgoCD on its **own** LB with self-signed TLS (default) and
   publishes `ARGOCD_LB_IP`. That overlay (loaded last by `load_env` / `-include`) makes the
   normal flow run against kind unchanged. `kind-down.sh` prunes cloud-provider-kind + `kindccm-*` orphans.
-- **Manifest rendering**: k8s/Tekton/ArgoCD YAML carry `${VAR}` tokens rendered by
+- **Manifest rendering**: k8s/ YAML (gitea, istio, traefik, tekton, argocd) carry `${VAR}` tokens rendered by
   the configure scripts with a RESTRICTED `envsubst` allowlist (so step-script
   `$(...)`/`${}` are untouched). Tekton install rewrites upstream image hosts
   (`gcr.io/…` → Harbor) via `sed`, matching `lib/mirror.sh`'s mapping.
@@ -204,23 +221,26 @@ when changing the pipeline, ingress, or manifests.
 
 ## Backlog / resume state
 
-> ### ▶️ DO THIS FIRST, NEXT SESSION — re-run BOTH e2e targets, then hand off
+> ### ▶️ STATE — everything below was verified on 2026-07-12c; nothing is known-broken
 >
-> Nothing is known-broken; this is the confirmation step. `main` merged **#125–#131** today, including
-> a shared-lib refactor (`scripts/lib/istio.sh`), a namespace-creation change (PSA labels), and an
-> `envsubst`/export fix — code BOTH e2e paths run through. Run them **sequentially, alone**
-> (a second registry-mutating run corrupts Harbor — now blocked by a `flock`, but do not fight it):
+> **The full KinD e2e permutation matrix is 7/7 GREEN** (run sequentially — two registry-mutating
+> runs at once corrupt Harbor; a `flock` now blocks it, do not fight it):
 >
-> ```bash
-> make kind-down && make e2e-kind                  # DEFAULT path: we INSTALL Istio
-> make kind-down && make e2e-kind-istio-existing   # ATTACH path: both route APIs + PSA
-> ```
+> | Permutation | Command | Result |
+> |---|---|---|
+> | istio + secure TLS (default) | `make e2e-kind` | ✅ marker deployed, 3 UIs 200, PSA OK |
+> | both ingress controllers | `make verify-ingress-both` | ✅ istio + traefik routes |
+> | traefik + secure TLS | `make e2e-kind INGRESS_CONTROLLER=traefik` | ✅ |
+> | istio + INSECURE (plain HTTP) | `make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1` | ✅ (mode read from the log banner, not inferred) |
+> | attach to a platform-owned Istio | `make e2e-kind-istio-existing` | ✅ both REDs, DISCOVERY OK, both route APIs |
+> | cross-cluster ArgoCD registration | `make e2e-kind-cross-cluster` | ✅ |
+> | two-box sneakernet | `make e2e-sneakernet` | ✅ `JUMPBOX_SNEAKERNET_OK` |
 >
-> Both PASSED at the end of 2026-07-12b. Expect: GitOps loop deploys the new marker, all three
-> `*.vks.local` UIs 200 + body markers, `PSA OK`, and (attach) `RED 1 OK` / `RED 2 OK` /
-> `DISCOVERY OK` / both legs green.
+> **`make deps` now installs `kind`** (pinned in `.mise.toml`) — verified on a bare `ubuntu:26.04`
+> container with no kind on PATH. It previously installed it NOWHERE, so the flagship KinD path was
+> unrunnable on a fresh box and only worked because dev boxes already had it.
 >
-> If green → `make kind-down`, update this handoff, done.
+> Next session: pick up the backlog below. Re-run any e2e permutation you touch code for.
 
 ---
 
@@ -478,7 +498,7 @@ when changing the pipeline, ingress, or manifests.
 
 `main` is GREEN. KinD self-signed-TLS fidelity + VCF/VKS lab-CLI + **real-lab install runbook &
 helpers** are merged. Design rationale: `docs/decisions/kind-tls-fidelity.md`; real-lab flow:
-README §"Run against a real VKS lab" (Part A install Harbor+ArgoCD as Supervisor Services / Part B wire+run).
+README §"Run against a real VKS lab" — Scenario 1 (you install Harbor+ArgoCD as Supervisor Services) and Scenario 2 (they already exist; you are a tenant: discover + request). Each scenario is self-contained end to end.
 
 **✅ COMPLETED 2026-07-11 — the full validation sweep ran GREEN end-to-end (both modes):**
 
@@ -525,11 +545,10 @@ end-to-end. Cluster torn down after the sweep.
 - Docs: README documents the mirror interrupt/resume + `mirror-verify`; this file's Common-commands +
   gates updated.
 
-**⏳ PENDING next — approved follow-ups (own PRs):**
-
-- `bootstrap.sh` — curl|bash jump-box entrypoint: OS-gate (Photon/Ubuntu) → check→install-if-missing→verify→report,
-  tag-pinned, dual-homed only, never curls licensed VCF CLIs; validate in the jumpbox harness.
-- `make mirror-prune` — drop orphaned old-digest cache dirs (bundle/ hygiene after Renovate bumps).
+**✅ Both former "PENDING next" items are SHIPPED** (the block that listed them was stale):
+`bootstrap-jumpbox.sh` exists (curl|bash jump-box entrypoint, OS-gated, validated by the bare-OS
+harness), and cache pruning ships as `mirror_prune_cache` (`lib/mirror.sh`), run automatically by
+`10-mirror-pull.sh` — there is deliberately no separate `make mirror-prune` target.
 
 **Merged this session (real-lab prep):** helpers `make harbor-robot` + `fetch-argocd-ca` +
 `argocd-preflight` (+ `lib/harbor.sh` extraction, `HARBOR_PUBLIC_PROJECTS` toggle, fetch-harbor-ca

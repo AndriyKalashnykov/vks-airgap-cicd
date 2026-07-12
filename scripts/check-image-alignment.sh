@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # check-image-alignment.sh — fail if any mirrored image referenced in a k8s/ or
-# tekton/ manifest (as ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/<repo>:<tag>) has a
+# manifest under k8s/ (as ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/<repo>:<tag>) has a
 # tag that differs from images/images.txt (the mirror's source of truth).
 #
 # Why this gate exists: image versions are duplicated between images/images.txt
@@ -33,7 +33,7 @@ while read -r ref; do
   else
     echo "ok    ${repo}=${mtag}"
   fi
-done < <(grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"]+:[^[:space:]"]+' k8s/ tekton/ 2>/dev/null \
+done < <(grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"]+:[^[:space:]"]+' k8s/ 2>/dev/null \
           | sed -E 's|\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/||' | sort -u)
 
 # eclipse-temurin's tag is ALSO carried outside the manifests: in .env.example

@@ -9,7 +9,7 @@ Reference implementation of an end-to-end CI/CD pipeline for a **fully air-gappe
 VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surfaces:
 
 - **Pipeline surface** — self-hosted **Gitea** + **Tekton** (test → **Kaniko** build →
-  **Harbor** push → GitOps tag write-back), wired to the VKS-provided **Harbor** + **ArgoCD**.
+  **Harbor** push → GitOps tag write-back), wired to **Harbor** + **ArgoCD**, which run as VCF **Supervisor Services** (you install them, or they already exist and you are a tenant).
 - **Delivery surface** — an OS-portable (Ubuntu / PhotonOS) jump-box image mirror (**crane**,
   dual-homed or sneakernet), a dependency-baked offline **Maven** builder, a pluggable ingress
   (**Istio** default, **Traefik** optional — or **attach to the Istio a real VKS lab already has**,
@@ -169,7 +169,7 @@ make deps                                  # installs the full jump-box toolchai
 
 <br>
 
-**Jump-box disk space** — measured for the current image set (~30 images: 10 pinned in
+**Jump-box disk space** — measured for the current image set (~30 images: 9 pinned in
 [`images/images.txt`](images/images.txt) plus the Tekton Pipelines+Triggers controller
 images pulled from their release manifests, which dominate the count — alongside Gitea,
 Kaniko, Maven, Temurin JDK/JRE, alpine/git, yq, and the ingress images). Figures are approximate.
@@ -192,7 +192,7 @@ cluster** additionally stores these images in Harbor + each node's containerd (~
 that is cluster-side, separate from the jump box.
 
 **Guest (VKS workload) cluster sizing** — sizing for the **guest cluster** where this project deploys **Gitea + Tekton (+ Dashboard) +
-the webui app** and its images. Harbor and ArgoCD are **VKS-provided**, so they are budgeted
+the webui app** and its images. Harbor and ArgoCD run on the **Supervisor** as VCF Supervisor Services, so they are budgeted
 separately (see the last bullet). Figures were measured on the live single-node KinD stack
 (no metrics-server, so per-pod RAM is the declared request or a working-set estimate).
 
@@ -295,13 +295,13 @@ wget --no-check-certificate https://<SUPERVISOR_HOST>/wcp/plugin/linux-amd64/vsp
 | CI engine | **Tekton** Pipelines + Triggers | Kubernetes-native, in-cluster builds — no external CI runner to reach across the air gap |
 | CI dashboard | **Tekton Dashboard** | Read-only web UI for PipelineRuns / TaskRuns / logs, fronted at `tekton.vks.local` |
 | Image build | **Kaniko** | Builds container images in-cluster without a Docker daemon (rootless, no privileged socket) |
-| Registry | **Harbor** (VKS-provided) | The one OCI registry all parties share (host push, Kaniko push, containerd pull) |
-| GitOps CD | **ArgoCD** (VKS-provided) | Watches the deploy repo and reconciles the cluster to the committed image tag |
+| Registry | **Harbor** (a VCF Supervisor Service) | The one OCI registry all parties share (host push, Kaniko push, containerd pull) |
+| GitOps CD | **ArgoCD** (a VCF Supervisor Service) | Watches the deploy repo and reconciles the cluster to the committed image tag |
 | Ingress | **Istio** (default) / **Traefik** (option) / **attach to an existing Istio** | One LoadBalancer fronting the UIs at `*.vks.local`; pluggable via `INGRESS_CONTROLLER` (`istio` \| `istio-existing` \| `traefik`) |
 | Image mirror | **crane** (go-containerregistry) | Copies images internet→Harbor (dual-homed) or into a sneakernet bundle, single- or multi-arch; a static Go binary, so it installs cross-distro via mise (incl. Photon OS 5, where skopeo has no static build/package) |
 | Demo app | **Spring Boot 4 / Java 25** | Minimal web UI whose greeting proves the deployed image changed end-to-end |
 | Offline build | dependency-baked **Maven** builder image | Bakes `~/.m2` so in-cluster `mvn` builds with no Maven Central reach |
-| Local e2e | **KinD** + **cloud-provider-kind** | Stands up the "VKS-provided" Harbor + ArgoCD locally with a real LoadBalancer |
+| Local e2e | **KinD** + **cloud-provider-kind** | Stands up the Supervisor-Service pieces (Harbor + ArgoCD) locally with a real LoadBalancer |
 | Toolchain | **mise** | One cross-distro (Ubuntu/PhotonOS) version manager for the jump-box tools |
 
 </details>
@@ -313,7 +313,7 @@ wget --no-check-certificate https://<SUPERVISOR_HOST>/wcp/plugin/linux-amd64/vsp
 
 <br>
 
-Harbor + ArgoCD are **provided by VKS** (blue in the diagrams). The jump box mirrors every
+Harbor + ArgoCD are VCF **Supervisor Services** (blue in the diagrams) — you install them (Scenario 1) or the platform team already has (Scenario 2). The jump box mirrors every
 image into Harbor; a `git push` then drives the whole CI/CD flow entirely inside the air gap.
 
 ### System context
@@ -330,14 +330,14 @@ image into Harbor; a `git push` then drives the whole CI/CD flow entirely inside
 
 ### Cluster topology (real lab)
 
-On a real VKS lab the stack spans **two** clusters: Harbor + ArgoCD are VKS-provided
+On a real VKS lab the stack spans **two** clusters: Harbor + ArgoCD are Supervisor Services
 Supervisor Services that run on the **Supervisor**, while Gitea, Tekton, the ingress, and
 the app are installed into the **guest** workload cluster. Because ArgoCD lives on the
 Supervisor, the guest cluster is **registered as an ArgoCD destination** (`make
 argocd-register-guest`) so it can deploy `webui` there — it does **not** run a second ArgoCD
 in the guest. (The KinD stand-in collapses both levels into one cluster.)
 
-<p align="center"><a href="docs/diagrams/out/vks-topology.png"><img src="docs/diagrams/out/vks-topology.png" alt="Real-lab namespace/cluster topology — Supervisor (VKS-provided Harbor + ArgoCD) vs the guest workload cluster we install into — click to enlarge" width="960"></a></p>
+<p align="center"><a href="docs/diagrams/out/vks-topology.png"><img src="docs/diagrams/out/vks-topology.png" alt="Real-lab namespace/cluster topology — Supervisor (Harbor + ArgoCD as Supervisor Services) vs the guest workload cluster we install into — click to enlarge" width="960"></a></p>
 
 ### Pipeline flow
 
@@ -367,7 +367,7 @@ There's no switch to flip — the mode is simply **which mirror commands you run
 > **You want to *see it work*.** No VKS cluster, **zero `.env`**, one command.
 
 You don't need a VKS cluster to exercise the whole pipeline. `make e2e-kind` stands up a
-local [KinD](https://kind.sigs.k8s.io/) cluster, installs the "VKS-provided" pieces
+local [KinD](https://kind.sigs.k8s.io/) cluster, installs the Supervisor-Service pieces
 (**Harbor** + **ArgoCD**) into it, then runs the exact same
 `mirror → builder → platform → gitops → verify` flow the real environment uses. This path
 is verified end-to-end (git push → Tekton build → Harbor → ArgoCD → the live app serves
@@ -665,14 +665,20 @@ run **`make fetch-argocd-ca`** (writes `ARGOCD_CA_FILE`). The pipeline wires Arg
 **Step 3 — install prereqs and log in to VKS:**
 
 ```bash
-make deps         # crane, tkn, argocd, kubectl, helm, mise tools
+make deps         # kind, crane, tkn, argocd, kubectl, helm + the rest of the mise toolchain
 make vks-login    # validates $KUBECONFIG + context against the lab cluster
 ```
 
-**Step 3b (optional) — install the Broadcom VCF/VKS lab CLIs.** To drive the lab's
-VKS-provided ArgoCD directly (`argocd login`, open its UI) or use the `vcf` Consumption CLI +
-plugins, you need the **licensed** `argocd-vcf` + `vcf` binaries. The pipeline itself wires
-everything via `kubectl`, so this is optional for the demo. They install **sudo-free** to
+**Step 3b — install the Broadcom VCF/VKS lab CLIs.** You need the **licensed** `argocd-vcf` +
+`vcf` binaries if **either** applies (both are the normal real-lab case):
+
+- you authenticate with `VKS_AUTH_METHOD=vcf` — `scripts/30-vks-login.sh` hard-requires `vcf`; or
+- you need **`make fetch-argocd-kubeconfig`** (the Supervisor kubeconfig that lets `make gitops`
+  register your guest cluster with the ArgoCD Supervisor Service) — it hard-requires `vcf` too.
+
+They are only **optional** if you already hold a working workload-cluster kubeconfig
+(`VKS_AUTH_METHOD=kubeconfig`) *and* your cluster is already registered with ArgoCD (Scenario 2,
+where the platform team does it for you). The pipeline itself wires everything via `kubectl`. They install **sudo-free** to
 `~/.local/bin`, and the installer picks the right archive for the jump box's **OS/arch**.
 
 **Supply them as a folder.** Download the artifacts — however you have entitlement (the
@@ -799,7 +805,7 @@ this cluster secret.
 **Step 6 — install everything and verify end-to-end:**
 
 ```bash
-make install-all   # mirror → builder-image → vks-login → platform → gitops
+make install-all   # mirror → mirror-verify → builder-image → vks-login → platform → gitops
 make verify        # push a marked change → Tekton → Harbor → ArgoCD → live app serves it
 ```
 
@@ -861,10 +867,12 @@ LB IP + admin credentials you set there. For **Gitea** (which you installed) and
 
 - **`.env.kind` must not exist** (step 0) — it is sourced after `.env` and silently forces
   kind values.
-- **ArgoCD must run in the same cluster** your `KUBECONFIG` targets. The `Application`'s
-  destination is `https://kubernetes.default.svc` (in-cluster) and the scripts wire it by
-  `kubectl apply`-ing the `Application` into `ARGOCD_NAMESPACE` — **not** via the ArgoCD API.
-  A remote/off-cluster ArgoCD addressed by URL + API is not supported.
+- **You need `kubectl` access to the cluster ArgoCD RUNS in** (the Supervisor), because the
+  scripts create the `Application` by `kubectl apply`-ing it into `ARGOCD_NAMESPACE` — **not**
+  via the ArgoCD API. ArgoCD itself does **not** have to run in your workload cluster: the
+  `Application`'s destination is `${ARGOCD_DEST_SERVER}` (`k8s/argocd/application.yaml`), which
+  defaults to in-cluster and is pointed at your guest cluster by `make argocd-register-guest`
+  (see Step 6). An ArgoCD reachable *only* by URL + API — with no kubeconfig — is not supported.
 - **`ARGOCD_NAMESPACE` must match** where the lab's ArgoCD controller watches Applications
   (step 4).
 - **ArgoCD reaches Gitea over the in-cluster URL** (`GITEA_INTERNAL_URL`, default
@@ -1020,14 +1028,20 @@ to trust its UI), fetch it the same way — `ARGOCD_SERVER` is already set from 
 **Step 3 — install prereqs and log in to VKS:**
 
 ```bash
-make deps         # crane, tkn, argocd, kubectl, helm, mise tools
+make deps         # kind, crane, tkn, argocd, kubectl, helm + the rest of the mise toolchain
 make vks-login    # validates $KUBECONFIG + context against the lab cluster
 ```
 
-**Step 3b (optional) — install the Broadcom VCF/VKS lab CLIs.** To drive the lab's
-VKS-provided ArgoCD directly (`argocd login`, open its UI) or use the `vcf` Consumption CLI +
-plugins, you need the **licensed** `argocd-vcf` + `vcf` binaries. The pipeline itself wires
-everything via `kubectl`, so this is optional for the demo. They install **sudo-free** to
+**Step 3b — install the Broadcom VCF/VKS lab CLIs.** You need the **licensed** `argocd-vcf` +
+`vcf` binaries if **either** applies (both are the normal real-lab case):
+
+- you authenticate with `VKS_AUTH_METHOD=vcf` — `scripts/30-vks-login.sh` hard-requires `vcf`; or
+- you need **`make fetch-argocd-kubeconfig`** (the Supervisor kubeconfig that lets `make gitops`
+  register your guest cluster with the ArgoCD Supervisor Service) — it hard-requires `vcf` too.
+
+They are only **optional** if you already hold a working workload-cluster kubeconfig
+(`VKS_AUTH_METHOD=kubeconfig`) *and* your cluster is already registered with ArgoCD (Scenario 2,
+where the platform team does it for you). The pipeline itself wires everything via `kubectl`. They install **sudo-free** to
 `~/.local/bin`, and the installer picks the right archive for the jump box's **OS/arch**.
 
 **Supply them as a folder.** Download the artifacts — however you have entitlement (the
@@ -1145,7 +1159,7 @@ secret.
 **Step 6 — install everything and verify end-to-end:**
 
 ```bash
-make install-all   # mirror → builder-image → vks-login → platform → gitops
+make install-all   # mirror → mirror-verify → builder-image → vks-login → platform → gitops
 make verify        # push a marked change → Tekton → Harbor → ArgoCD → live app serves it
 ```
 
@@ -1203,11 +1217,13 @@ deployed **app**, either front them with the ingress at `*.vks.local`, or `kubec
 
 - **`.env.kind` must not exist** (Step 0) — it is sourced after `.env` and silently forces
   kind values.
-- **The shared ArgoCD must be able to deploy into your workload cluster.** The `Application`'s
-  destination is `https://kubernetes.default.svc` (in-cluster) and the scripts wire it by
-  `kubectl apply`-ing the `Application` into `ARGOCD_NAMESPACE` — **not** via the ArgoCD API.
-  Confirm with the platform team that the shared ArgoCD watches your target namespace (an
-  off-cluster ArgoCD addressed only by URL + API is not supported).
+- **The shared ArgoCD must be able to deploy into your workload cluster** — i.e. your guest
+  cluster must be **registered** as an ArgoCD destination. That is **admin-only** (`clusters` is
+  a global ArgoCD RBAC resource), so you **request** it; the destination then becomes
+  `${ARGOCD_DEST_SERVER}` instead of in-cluster (`k8s/argocd/application.yaml`). You also need
+  `kubectl` access to the cluster ArgoCD runs in, because the scripts create the `Application`
+  by `kubectl apply` — **not** via the ArgoCD API (an ArgoCD reachable only by URL + API, with
+  no kubeconfig, is not supported).
 - **`ARGOCD_NAMESPACE` must match** where the shared ArgoCD controller watches Applications
   (Step 4), and your granted **`AppProject` + RBAC** must permit the `Application` + destination.
 - **ArgoCD reaches Gitea over the in-cluster URL** (`GITEA_INTERNAL_URL`, default
@@ -1330,7 +1346,8 @@ line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
 
 4. **See the new image in Harbor.** In Harbor, open project **`apps`** → repository
    **`webui`**. A new tag appears — the **git short SHA** of your commit
-   (`harbor.vks.local/apps/webui:<sha>`) — pushed by the Kaniko `build` task.
+   (`$HARBOR_URL/apps/webui:<sha>` — on KinD that is Harbor's **LB IP**, which `make creds` prints;
+   on a real lab it is your Harbor FQDN) — pushed by the Kaniko `build` task.
 
 5. **See the tag written back in Gitea.** Open **`demo/webui-deploy`** → `kustomization.yaml`.
    There's a new commit by **`ci-bot`** with message **`ci: deploy webui <sha>`** that bumps
@@ -1341,7 +1358,7 @@ line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
    `https://<ARGOCD_LB_IP>`, shown by `make creds`; on a real VKS lab, **your lab's own
    ArgoCD URL**), the Application
    **`webui`** flips **`OutOfSync → Synced`** (auto-sync + self-heal) and rolls the Deployment
-   in namespace `webui` to `harbor.vks.local/apps/webui:<sha>`. (Auto-sync polls the deploy repo
+   in namespace `webui` to `$HARBOR_URL/apps/webui:<sha>`. (Auto-sync polls the deploy repo
    on an interval; click **Refresh** to reconcile immediately.)
 
 7. **See the page change.** Refresh <http://app.vks.local/>. The greeting now shows your new
@@ -1350,9 +1367,10 @@ line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
 
 > **`make verify` is the automated form of this whole loop** — it edits the same
 > `application.yml` line with a unique marker, waits for the PipelineRun to succeed, forces an
-> ArgoCD refresh, waits for the *deployed image* to change, then curls
-> <http://app.vks.local/> until the page contains the marker. Run it to prove the pipeline;
-> walk the UIs above to *see* it.
+> ArgoCD refresh, waits for the *deployed image* to change, then **port-forwards `svc/webui`**
+> and polls it until the page contains the marker — so it needs no ingress and no `/etc/hosts`
+> entry. (`make verify-ingress` is the separate check that proves the `*.vks.local` routes.)
+> Run it to prove the pipeline; walk the UIs above to *see* it.
 
 </details>
 
@@ -1394,15 +1412,22 @@ Legend: **[offline]** verifiable without a cluster · **[cluster]** runs against
 
 ### Minimum `.env` you must set
 
+Start from `make env-init` (copies `.env.example`) + `make env-populate` (generates the secrets it
+can, discovers what the cluster already knows). These are the values only **you** can supply:
+
 ```bash
-HARBOR_URL=harbor.<lab-host-or-ip>          # provided by VKS
-HARBOR_PASSWORD=<robot-or-admin-secret>  # never committed
-HARBOR_CA_FILE=./secrets/harbor-ca.crt   # the Harbor CA (self-signed)
-GITEA_URL=http://gitea.<lab-host-or-ip>
-GITEA_ADMIN_PASSWORD=<choose-one>
-ARGOCD_NAMESPACE=argocd                  # where VKS runs ArgoCD
-KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
+HARBOR_URL=harbor.<lab-host-or-ip>       # the Harbor Supervisor Service's endpoint (discover: its LB IP/FQDN)
+HARBOR_USERNAME=robot$vks-cicd           # `make harbor-robot` writes this pair to secrets/harbor-robot.env
+HARBOR_PASSWORD=<robot-secret>           # never committed, never on argv
+HARBOR_CA_FILE=./secrets/harbor-ca.crt   # `make fetch-harbor-ca` (self-signed lab Harbor)
+GITEA_HOST=gitea.<lab-host-or-ip>        # the ingress hostname; GITEA_URL DERIVES from it
+GITEA_ADMIN_PASSWORD=<you choose>        # Gitea is a component WE install
+ARGOCD_NAMESPACE=argocd-instance-1       # the ns YOUR ArgoCD instance runs in (KinD uses `argocd`)
+KUBECONFIG=./secrets/vks.kubeconfig      # produced by `make vks-login`
 ```
+
+Then `make env-check` (presence) and `make env-validate` (format + reachability/auth) before you run
+anything. The KinD path needs **none** of this — it discovers and generates everything.
 
 </details>
 
@@ -1417,13 +1442,14 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 |------|---------|
 | `scripts/` | Ordered, OS-portable (Ubuntu+PhotonOS) automation; `lib/os.sh` + `lib/mirror.sh` are shared libraries |
 | `apps/java/webui/` | Minimal Spring Boot web UI (seeded into Gitea `webui-app`); `Dockerfile` + `Dockerfile.builder` |
-| `deploy/base/` | Kustomize manifests ArgoCD deploys (seeded into Gitea `webui-deploy`) |
-| `tekton/` | Tekton pipeline, tasks, triggers, RBAC |
-| `argocd/` | ArgoCD `Application` definition |
+| `deploy/webui/` | Kustomize manifests ArgoCD deploys (one dir per app = one deploy repo). **Not applied by us** — seeded into the Gitea `webui-deploy` repo, which Tekton writes the image tag into and ArgoCD syncs |
+| `k8s/` | Everything **we** apply to the cluster |
+| `k8s/tekton/` | Tekton pipeline, tasks, triggers, RBAC |
+| `k8s/argocd/` | ArgoCD `Application` definition |
 | `k8s/gitea/` | Gitea install manifest (SQLite, single image) |
 | `docs/vks-services/` | **What VKS actually provides** — Harbor, ArgoCD (Supervisor Services) and Istio (a guest-cluster Standard Package): what each one is, how it is installed/configured, how we consume it, and a provenance grade per fact (lab-verified / KinD-verified / doc / unverified). A living record — update it when a lab run confirms or refutes something |
 | `k8s/istio/`, `k8s/traefik/` | Ingress manifests (`INGRESS_CONTROLLER=istio` default / `istio-existing` / `traefik`) fronting the UIs at `*.vks.local`. `k8s/istio/gateway.yaml` = the Gateway (selector is a token — it is DISCOVERED, never assumed); `virtualservices.yaml` = one VS per UI, in its BACKEND's namespace |
-| `kind/` | KinD cluster config (containerd insecure-registry wiring) |
+| `kind/` | KinD cluster config — containerd `certs.d` `config_path`, which carries the Harbor CA for the default TLS pulls (plain-HTTP only under `HARBOR_INSECURE=1`) |
 | `docs/diagrams/` | C4-PlantUML sources + rendered PNGs |
 | `images/images.txt` | Authoritative image inventory to mirror |
 | `.env.example` | Committed source of truth for every tunable |

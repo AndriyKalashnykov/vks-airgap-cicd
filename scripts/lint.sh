@@ -25,8 +25,11 @@ echo "== yamllint (manifests) =="
 if have yamllint; then
   # Relaxed: line-length off (manifests are wide); comma/colon spacing off
   # (we column-align inline maps for readability).
+  # NOTE: stderr is NOT silenced. It used to be (`2>/dev/null`), and when a listed
+  # directory stopped existing, yamllint failed with its reason hidden — the gate printed
+  # "findings above" with nothing above. A gate that cannot say why it failed is a bug.
   yamllint -d "{extends: relaxed, rules: {line-length: disable, commas: disable, colons: disable}}" \
-    "$REPO_ROOT/tekton" "$REPO_ROOT/deploy" "$REPO_ROOT/argocd" "$REPO_ROOT/k8s" 2>/dev/null || rc=1
+    "$REPO_ROOT/k8s" "$REPO_ROOT/deploy" || rc=1
 else
   log_warn "yamllint not installed — skipped"
 fi

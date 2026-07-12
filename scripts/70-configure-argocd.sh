@@ -57,7 +57,7 @@ fi
 log_info "creating ArgoCD Application '$ARGOCD_APP_NAME' -> $DEPLOY_REPO_CLONE_URL"
 # shellcheck disable=SC2016
 envsubst '${ARGOCD_NAMESPACE} ${ARGOCD_APP_NAME} ${ARGOCD_DEST_NAMESPACE} ${ARGOCD_TRACK_BRANCH} ${DEPLOY_REPO_CLONE_URL} ${ARGOCD_DEST_SERVER}' \
-  < "${REPO_ROOT}/argocd/application.yaml" | run kubectl apply -f -
+  < "${REPO_ROOT}/k8s/argocd/application.yaml" | run kubectl apply -f -
 
 log_info "Application created. ArgoCD will sync automatically (automated + selfHeal)."
 log_info "Check: kubectl -n ${ARGOCD_NAMESPACE} get application ${ARGOCD_APP_NAME}"

@@ -28,17 +28,32 @@ PUBLISHED='HARBOR_URL|HARBOR_PASSWORD|HARBOR_CA_FILE|HARBOR_INSECURE|GITEA_ADMIN
 # Shell/library internals and CI-only knobs — never operator-facing.
 INTERNAL='REPO_ROOT|SCRIPT_DIR|BASH_SOURCE|PATH|HOME|PWD|IFS|SSL_CERT_FILE|TMPDIR|LC_ALL|HARBOR_PW|HARBOR_SVC|HARBOR_TMP|HARBOR_CURL_CFG|HARBOR_RELEASE|HARBOR_TLS_SECRET|HARBOR_TLS_VERIFY|HARBOR_INSECURE_BOOL|HARBOR_PROVISIONAL_EXTERNAL_URL|HARBOR_ROBOT_OUT|ARGOCD_SVC|ARGOCD_NS|ARGOCD_MANAGER_NS|ARGOCD_MANIFEST_VERSION|ISTIO_ROUTE_API_EFFECTIVE|PLATFORM_ISTIO_NAMESPACE|PLATFORM_ISTIO_RELEASE|PLATFORM_ISTIOD_NAMESPACE|PROBE_IMAGE|REGISTRY_LOCK_FILE|JUMPBOX_[A-Z_]*|E2E_[A-Z_]*|CI|GITHUB_[A-Z_]*|READY_TIMEOUT_SECONDS|POLL_INTERVAL_SECONDS|CURL_MAX_TIME_SECONDS|MIRROR_RETRIES|MIRROR_FORCE_PULL|NOTIFY|CONTAINER_ENGINE|VCF_[A-Z_]*|PSA_LEVEL_[A-Z_]*|DISPLAY|WAYLAND_DISPLAY|DRY_RUN|GW_IP|TOKEN|RED_TEST_SKIP_PRECHECK'
 
-# SCOPE: the OPERATOR FLOW only — the numbered install/operate scripts (00..8x) plus the shared
-# libs. Test fixtures and harnesses (90-e2e-*, e2e-*, test-*, jumpbox-*, bootstrap-*, check-*) have
-# their own knobs that an operator never sets, and folding them in would bury the real gaps in noise.
+# SCOPE: every script an OPERATOR runs (via a make target), plus the shared libs.
+#
+# This used to glob `scripts/[0-8][0-9]-*.sh`, which silently EXCLUDED 98-verify-ingress.sh and
+# 99-verify.sh — those are `make verify-ingress` / `make verify`, squarely operator flow, not test
+# fixtures — as well as creds.sh / argocd-password.sh / kind-down.sh. A gate that quietly checks a
+# subset is worse than no gate: GITEA_LOCAL_PORT is read ONLY by 50-seed + 99-verify, so the gate
+# could not see it, and an uncommented value in .env.example silently clobbered its ephemeral-port
+# fallback for who knows how long.
+#
+# Still excluded (genuinely not operator flow — their knobs are harness-internal, and folding them
+# in would bury the real gaps in noise): the e2e/test harnesses, the jump-box/bootstrap harnesses,
+# and the CI gates themselves.
 FLOW_SCRIPTS=()
-for f in "${REPO_ROOT}"/scripts/[0-8][0-9]-*.sh "${REPO_ROOT}"/scripts/lib/*.sh; do
+for f in "${REPO_ROOT}"/scripts/[0-9][0-9]-*.sh \
+         "${REPO_ROOT}"/scripts/creds.sh \
+         "${REPO_ROOT}"/scripts/argocd-password.sh \
+         "${REPO_ROOT}"/scripts/kind-down.sh \
+         "${REPO_ROOT}"/scripts/lib/*.sh; do
   [ -f "$f" ] || continue
   case "$(basename "$f")" in
-    90-*|e2e-*|test-*|jumpbox-*|bootstrap-*|check-*) continue ;;
+    90-e2e-*|e2e-*|test-*|jumpbox-*|bootstrap-*|check-*|lint.sh|validate.sh) continue ;;
   esac
   FLOW_SCRIPTS+=("$f")
 done
+# Print the DENOMINATOR: a gate that cannot say how much it looked at cannot be trusted.
+log_info "check-env-coverage: scanning ${#FLOW_SCRIPTS[@]} operator-flow scripts"
 
 vars="$(grep -rhoE '\$\{[A-Z][A-Z0-9_]{2,}:[-?=]|: *"\$\{[A-Z][A-Z0-9_]{2,}:[?=]' \
           "${FLOW_SCRIPTS[@]}" 2>/dev/null \

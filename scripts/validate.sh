@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # validate.sh — offline manifest validation (no cluster required).
-#   - `kustomize build deploy/base` renders, then kubeconform validates it.
+#   - `kustomize build deploy/webui` renders, then kubeconform validates it.
 #   - Tekton + ArgoCD YAML are validated with kubeconform in
 #     -ignore-missing-schemas mode (their CRDs aren't in the default schema set).
 # A missing tool is warned-and-skipped; a present tool that finds errors fails.
@@ -28,9 +28,9 @@ mkdir -p "$KC_CACHE"
 KC_SCHEMA_K8S="${KUBECONFORM_SCHEMA_K8S:-https://cdn.jsdelivr.net/gh/yannh/kubernetes-json-schema@master/{{ .NormalizedKubernetesVersion }}-standalone{{ .StrictSuffix }}/{{ .ResourceKind }}{{ .KindSuffix }}.json}"
 KC_SCHEMA_CRD="${KUBECONFORM_SCHEMA_CRD:-https://cdn.jsdelivr.net/gh/datreeio/CRDs-catalog@main/{{ .Group }}/{{ .ResourceKind }}_{{ .ResourceAPIVersion }}.json}"
 # Two schema-location sets, chosen per directory:
-#  - CORE (deploy/base, k8s/): the yannh k8s schemas. Every kind is a built-in k8s type,
+#  - CORE (deploy/webui, k8s/): the yannh k8s schemas. Every kind is a built-in k8s type,
 #    so jsDelivr returns 200 and validation is reliable (real violations ARE caught).
-#  - CRD (tekton/, argocd/): the datreeio CRDs-catalog. It returns a clean 404 for CRDs it
+#  - CRD (k8s/tekton, k8s/argocd): the datreeio CRDs-catalog. It returns a clean 404 for CRDs it
 #    doesn't carry (so -ignore-missing-schemas SKIPS them), and 200 for those it does (e.g.
 #    ArgoCD Application) — validating them as a bonus. Do NOT point the yannh path at CRD
 #    dirs: jsDelivr answers a non-existent yannh CRD path with 403 (not 404), which
@@ -104,12 +104,12 @@ kustomize_build() {
   else return 127; fi
 }
 
-echo "== kustomize build (deploy/base) =="
-if [ -d "$REPO_ROOT/deploy/base" ]; then
-  if kustomize_build "$REPO_ROOT/deploy/base" "$RENDERED"; then
+echo "== kustomize build (deploy/webui) =="
+if [ -d "$REPO_ROOT/deploy/webui" ]; then
+  if kustomize_build "$REPO_ROOT/deploy/webui" "$RENDERED"; then
     log_info "kustomize build OK ($(grep -c '^kind:' "$RENDERED") resources)"
     if have kubeconform; then
-      KC_LOCS=("${KC_LOCS_CORE[@]}")   # deploy/base is all core k8s kinds
+      KC_LOCS=("${KC_LOCS_CORE[@]}")   # deploy/webui is all core k8s kinds
       kc -strict -ignore-missing-schemas "$RENDERED" || rc=1
     elif have kubectl; then
       log_info "kubeconform absent — falling back to 'kubectl apply --dry-run=client'"
@@ -121,24 +121,32 @@ if [ -d "$REPO_ROOT/deploy/base" ]; then
     log_error "kustomize build failed (need kustomize or kubectl)"; rc=1
   fi
 else
-  log_warn "deploy/base not present yet — skipped"
+  log_warn "deploy/webui not present yet — skipped"
 fi
 
-echo "== kubeconform (tekton/ + argocd/) =="
+echo "== kubeconform (k8s/) =="
 if have kubeconform; then
-  for dir in tekton argocd k8s; do
-    if [ -d "$REPO_ROOT/$dir" ] && find "$REPO_ROOT/$dir" -name '*.yaml' | read -r _; then
-      log_info "validating $dir/"
-      mapfile -d '' _files < <(find "$REPO_ROOT/$dir" -name '*.yaml' -print0)
-      # k8s/ holds core kinds → yannh schemas; tekton/ + argocd/ are CRD-heavy → catalog.
-      case "$dir" in k8s) KC_LOCS=("${KC_LOCS_K8S[@]}") ;; *) KC_LOCS=("${KC_LOCS_CRD[@]}") ;; esac
+  # Enumerate k8s/* DYNAMICALLY: a hardcoded subdir list would silently skip a new one,
+  # and a gate that quietly checks a subset is worse than no gate. Print the denominator.
+  shopt -s nullglob
+  _subdirs=("$REPO_ROOT"/k8s/*/)
+  shopt -u nullglob
+  [ "${#_subdirs[@]}" -gt 0 ] || log_warn "k8s/ has no manifests yet — skipped"
+  for dir in "${_subdirs[@]}"; do
+    name="$(basename "$dir")"
+    if find "$dir" -name '*.yaml' | read -r _; then
+      mapfile -d '' _files < <(find "$dir" -name '*.yaml' -print0)
+      # tekton/ + argocd/ are CRD-heavy → CRDs-catalog. The rest (gitea, istio, traefik)
+      # is core kinds + a few CRDs → the k8s schema set.
+      case "$name" in tekton|argocd) KC_LOCS=("${KC_LOCS_CRD[@]}") ;; *) KC_LOCS=("${KC_LOCS_K8S[@]}") ;; esac
+      log_info "validating k8s/$name/ (${#_files[@]} manifests)"
       kc -ignore-missing-schemas "${_files[@]}" || rc=1
     else
-      log_warn "$dir/ has no manifests yet — skipped"
+      log_warn "k8s/$name/ has no manifests yet — skipped"
     fi
   done
 else
-  log_warn "kubeconform not installed — tekton/argocd manifests unchecked"
+  log_warn "kubeconform not installed — k8s/ manifests unchecked"
 fi
 
 if [ "$rc" -eq 0 ]; then log_info "validate: OK"; else log_error "validate: findings above"; fi

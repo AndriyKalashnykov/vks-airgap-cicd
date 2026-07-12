@@ -12,7 +12,12 @@ require_cmd kubectl
 require_cmd envsubst "install gettext (provides envsubst)"
 : "${KUBECONFIG:?}"; export KUBECONFIG
 : "${GITEA_NAMESPACE:?}"; : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"
-: "${GITEA_URL:?}"; : "${GITEA_STORAGE_SIZE:?}"
+# GITEA_URL DERIVES from GITEA_HOST (the ingress hostname) so the hostname has ONE source of
+# truth. It used to be a second literal in .env.example kept in sync with GITEA_HOST by a prose
+# "keep aligned" comment — i.e. by nothing. Set GITEA_URL explicitly only when the scheme/port
+# genuinely differ from the ingress route.
+GITEA_URL="${GITEA_URL:-http://${GITEA_HOST:?set GITEA_HOST (or GITEA_URL) in .env}}"
+: "${GITEA_STORAGE_SIZE:?}"
 export GITEA_NAMESPACE HARBOR_URL HARBOR_INFRA_PROJECT GITEA_URL GITEA_STORAGE_SIZE
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 
