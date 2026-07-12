@@ -49,7 +49,11 @@ spec:
 
     - name: test
       runAfter: [clone-app]
-      taskRef: { name: ${APP_TEST_TASK} }
+      # Block style (not the flow `{ name: ... }` the other taskRefs use): a `${VAR}` token inside a
+      # YAML FLOW mapping is a syntax error (the `{` of `${` opens a nested flow map), so yamllint
+      # and kubeconform cannot parse the template at all.
+      taskRef:
+        name: ${APP_TEST_TASK}
       params:
         - { name: subdir, value: app }
         - { name: builder-image, value: $(params.builder-image) }
@@ -79,6 +83,8 @@ spec:
         - { name: deploy-url, value: $(params.deploy-repo-url) }
         - { name: deploy-revision, value: $(params.deploy-revision) }
         - { name: tag, value: $(tasks.clone-app.results.commit) }
-        - { name: app, value: ${APP_NAME} }
+        # Block style: a `${VAR}` inside a YAML flow mapping is a syntax error (see the taskRef above).
+        - name: app
+          value: ${APP_NAME}
       workspaces:
         - { name: scratch, workspace: shared-data }

@@ -512,13 +512,8 @@ secrets: ## gitleaks — scan git history + working tree for committed secrets
 	else echo "gitleaks not installed — run 'make deps' (mise) — skipping"; fi
 
 .PHONY: trivy-fs
-trivy-fs: app-build ## trivy — scan the built app jar's embedded deps for fixable HIGH/CRITICAL CVEs
-	@if command -v trivy >/dev/null 2>&1; then \
-	  jar=$$(ls $(APP_DIR)/target/*.jar 2>/dev/null | grep -v -- '-sources\|-javadoc' | head -1); \
-	  if [ -z "$$jar" ]; then echo "ERROR: no built jar under $(APP_DIR)/target — app-build failed?"; exit 1; fi; \
-	  echo "trivy-fs: scanning $$jar (embedded deps, offline)"; \
-	  trivy rootfs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --quiet "$$jar"; \
-	else echo "trivy not installed — run 'make deps' (mise) — skipping"; fi
+trivy-fs: app-build ## trivy — scan EVERY app's built artifact (jar / Go binary) for fixable HIGH/CRITICAL CVEs
+	@$(SCRIPTS)/trivy-fs.sh
 
 .PHONY: trivy-config
 trivy-config: ## trivy — scan k8s/Tekton manifests for HIGH/CRITICAL misconfigurations (.trivyignore documents accepted findings)

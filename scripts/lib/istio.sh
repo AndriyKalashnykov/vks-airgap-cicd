@@ -202,6 +202,7 @@ EOF
     | run kubectl apply -f -
 
   # ONE HTTPRoute per app, from the registry — adding an app routes it with no YAML edit.
+  # shellcheck disable=SC2329  # invoked indirectly (for_each_app / wait_for)
   _istio_apply_app_httproute() {
     istio_require_env ISTIO_GATEWAY_NAME ISTIO_GWAPI_NAMESPACE APP_NAME APP_NAMESPACE APP_HOST
     log_info "applying HTTPRoute for app '${APP_NAME}' (${APP_HOST} -> ${APP_NAME}.${APP_NAMESPACE})"
@@ -494,6 +495,7 @@ EOF
     < "${k8s_dir}/virtualservices.yaml" | run kubectl apply -f -
 
   # ONE VirtualService per app, from the registry — adding an app routes it with no YAML edit.
+  # shellcheck disable=SC2329  # invoked indirectly (for_each_app / wait_for)
   _istio_apply_app_vs() {
     istio_require_env ISTIO_GATEWAY_REF APP_NAME APP_NAMESPACE APP_HOST
     log_info "applying VirtualService for app '${APP_NAME}' (${APP_HOST} -> ${APP_NAME}.${APP_NAMESPACE})"

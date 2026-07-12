@@ -38,6 +38,7 @@ kubectl get ns "$ARGOCD_NAMESPACE" >/dev/null 2>&1 \
 TOKEN=""
 [ -f "${REPO_ROOT}/secrets/gitea-ci-token" ] && TOKEN="$(cat "${REPO_ROOT}/secrets/gitea-ci-token")"
 
+# shellcheck disable=SC2329  # invoked indirectly (for_each_app / wait_for)
 configure_app_argocd() {
   local app="$1"
   export DEPLOY_REPO_CLONE_URL="${GITEA_INTERNAL_URL}/${GITEA_ORG}/${APP_DEPLOY_REPO}.git"

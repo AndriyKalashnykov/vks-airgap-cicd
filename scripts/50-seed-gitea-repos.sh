@@ -91,6 +91,7 @@ ok "$code" || die "create org failed (http $code)"; log_info "org '$GITEA_ORG' r
 # Two repos PER APP: <app>-app (source) and <app>-deploy (what ArgoCD watches). Derived from
 # apps/registry.tsv — `while read` (not `for x in $(...)`), because the login shell may be zsh,
 # which does not word-split an unquoted expansion and would run the body ONCE on the whole blob.
+# shellcheck disable=SC2329  # invoked indirectly (for_each_app / wait_for)
 create_app_repos() {
   local repo code
   for repo in "$APP_GIT_REPO" "$APP_DEPLOY_REPO"; do
@@ -132,6 +133,7 @@ push_repo() {
 # ---- 4b/5. PER APP (apps/registry.tsv): seed <app>-app + <app>-deploy, and register ONE webhook
 # on the app repo pointing at the SHARED EventListener. Adding an app is a registry ROW — no edit
 # here. Every app gets the identical walk; nothing about this loop is language-specific.
+# shellcheck disable=SC2329  # invoked indirectly (for_each_app / wait_for)
 seed_app() {
   local app="$1"
 

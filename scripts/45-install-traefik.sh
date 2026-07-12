@@ -64,6 +64,7 @@ log_info "applying Ingress objects for the shared UIs (gitea/tekton -> *.vks.loc
 envsubst "$ING_ALLOWLIST" < "${K8S_DIR}/ingress.yaml" | run kubectl apply -f -
 
 # ONE Ingress per app, from the registry — adding an app routes it with no YAML edit.
+# shellcheck disable=SC2329  # invoked indirectly (for_each_app / wait_for)
 _traefik_apply_app_ingress() {
   log_info "applying Ingress for app '${APP_NAME}' (${APP_HOST} -> ${APP_NAME}.${APP_NAMESPACE})"
   envsubst "$APP_ING_ALLOWLIST" < "${K8S_DIR}/ingress-app.yaml" | run kubectl apply -f -

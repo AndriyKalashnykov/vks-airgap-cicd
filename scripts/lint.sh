@@ -53,8 +53,12 @@ if have hadolint; then
 $(app_names)
 EOF
   # Print the denominator: a gate that cannot say how many Dockerfiles it linted cannot be trusted.
-  [ "$found" -gt 0 ] && log_info "hadolint: linted ${found} Dockerfile(s)" \
-                     || log_warn "no app Dockerfiles found — skipped"
+  # (if/else, NOT `A && B || C` — that runs C when A is true and B fails: SC2015.)
+  if [ "$found" -gt 0 ]; then
+    log_info "hadolint: linted ${found} Dockerfile(s)"
+  else
+    log_warn "no app Dockerfiles found — skipped"
+  fi
 else
   log_warn "hadolint not installed — skipped"
 fi

@@ -31,13 +31,14 @@ COPY *.go ./
 # Version/commit are NOT baked in with -ldflags -X: the app reads APP_VERSION / APP_COMMIT from the
 # environment at runtime (main.go), exactly like javawebapp does, and the Deployment supplies them.
 # Baking them in as well would create a second source of truth that silently disagrees.
-RUN CGO_ENABLED=0 GOOS=linux go build \
+# Tests run FIRST, in the same layer as the build (one RUN: hadolint DL3059), so a broken app
+# cannot produce an image at all — the Tekton pipeline also runs them in its own `go-test` task,
+# but an image built out-of-band still cannot skip them.
+RUN CGO_ENABLED=0 go test ./... \
+    && CGO_ENABLED=0 GOOS=linux go build \
         -trimpath \
         -ldflags="-s -w" \
         -o /out/gowebapp .
-
-# Run the tests in the image build too, so a broken app cannot produce an image at all.
-RUN CGO_ENABLED=0 go test ./...
 
 # hadolint ignore=DL3006
 FROM ${RUNTIME_IMAGE} AS runtime

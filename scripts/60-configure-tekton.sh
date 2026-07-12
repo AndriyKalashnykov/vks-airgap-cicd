@@ -122,6 +122,7 @@ render_and_apply "${REPO_ROOT}/k8s/tekton/eventlistener.yaml"
 # PER APP, from apps/registry.tsv: its Pipeline (<app>-ci) and its Trigger/Binding/Template.
 # ONE template each — only the name and the test task differ, so the walk is provably identical
 # for every app and adding one is a registry row, not a YAML edit.
+# shellcheck disable=SC2329  # invoked indirectly (for_each_app / wait_for)
 configure_app() {
   local app="$1"
   export APP_REPO_CLONE_URL="${GITEA_INTERNAL_URL}/${GITEA_ORG}/${APP_GIT_REPO}.git"
