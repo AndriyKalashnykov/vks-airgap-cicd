@@ -34,6 +34,55 @@ cd "$WORK"
 ENGINE="${JUMPBOX_ENGINE:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}"
 echo "### jump box: ${PRETTY_NAME} · user=$(whoami) · engine=${ENGINE} ($(command -v "$ENGINE")) ###"
 
+# ---------------------------------------------------------------------------
+# MODE=airgap-half — the AIR-GAP half of the two-box sneakernet (make e2e-sneakernet).
+# This container is a FRESH air-gap box: it has ONLY the carried bundle tarball (the
+# repo's ./bundle cache was excluded from the /src copy above) plus the target Harbor's
+# coordinates + push creds (via -e, exactly what a real air-gap operator carries in .env).
+# It reconstructs the image cache PURELY from the tarball, then pushes + integrity-verifies
+# it into the internal Harbor. This is the faithful two-box run that the same-machine
+# relocate-sim could not exercise (it never left the host, hiding host-state leakage).
+# ---------------------------------------------------------------------------
+if [ "${JUMPBOX_MODE:-validate}" = "airgap-half" ]; then
+  echo "### two-box sneakernet — AIR-GAP half (fresh box; cache comes ONLY from the carried tarball) ###"
+  : "${HARBOR_URL:?HARBOR_URL must be passed to the air-gap box (-e)}"
+  : "${JUMPBOX_TARBALL:?JUMPBOX_TARBALL must point at the carried bundle tarball}"
+  [ -f "$JUMPBOX_TARBALL" ] || { echo "ERROR: carried tarball not found: $JUMPBOX_TARBALL"; exit 1; }
+
+  # Reconstruct the Harbor coordinates the host's .env.kind would carry, so load_env
+  # resolves the KinD Harbor LB IP + creds (NOT the .env.example placeholder harbor.vks.local).
+  # 0600 + inside the ephemeral container only; the password arrived via -e (name only), not argv.
+  {
+    printf 'HARBOR_URL=%s\n'      "$HARBOR_URL"
+    printf 'HARBOR_INSECURE=%s\n' "${HARBOR_INSECURE:-0}"
+    printf 'HARBOR_USERNAME=%s\n' "${HARBOR_USERNAME:-admin}"
+    [ -n "${HARBOR_PASSWORD:-}" ] && printf 'HARBOR_PASSWORD=%s\n' "$HARBOR_PASSWORD"
+    printf 'HARBOR_CA_FILE=./secrets/harbor-ca.crt\n'
+  } > "$WORK/.env.kind"
+  chmod 600 "$WORK/.env.kind"
+  if [ "${HARBOR_INSECURE:-0}" != "1" ] && [ -f /run/jumpbox/harbor-ca.crt ]; then
+    mkdir -p secrets; cp /run/jumpbox/harbor-ca.crt secrets/harbor-ca.crt; chmod 0644 secrets/harbor-ca.crt
+  fi
+
+  echo "### make deps — install the mirror engine (crane) on this OS ###"
+  make deps
+  eval "$(mise activate bash)" 2>/dev/null || true; hash -r
+
+  # Fidelity assert: the image cache MUST be empty here — nothing leaked from the host.
+  if [ -n "$(ls -A bundle 2>/dev/null || true)" ]; then
+    echo "ERROR: bundle/ is not empty in the air-gap box — host cache leaked (fidelity broken)"; exit 1
+  fi
+
+  echo "### bundle-load — reconstruct the image cache from ONLY the carried tarball ###"
+  make bundle-load BUNDLE_TARBALL="$JUMPBOX_TARBALL"
+  echo "### mirror-push — push the loaded images into the internal Harbor ###"
+  make mirror-push
+  echo "### mirror-verify — integrity-check Harbor's copy (the sneakernet assertion) ###"
+  make mirror-verify
+  echo "JUMPBOX_SNEAKERNET_OK"
+  exit 0
+fi
+
 echo "### 1/4 make deps — install the jump-box toolchain on this OS ###"
 make deps
 # Pick up the mise-installed shims in this shell.
