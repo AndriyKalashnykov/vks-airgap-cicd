@@ -80,6 +80,13 @@ run helm upgrade --install "$GW_RELEASE" "${CHART_REPO_NAME}/gateway" \
   --set global.hub="$HUB" \
   --set global.tag="$ISTIO_VERSION"
 
+# --- 4b. PSA labels for the namespaces helm just created ----------------------
+# VKS enforces `restricted` by default (VKr v1.26+) and istiod/the gateway proxy set no
+# seccompProfile, so both namespaces need `baseline` or their pods are REJECTED on a real
+# guest cluster. Measured with `make psa-check`, not guessed.
+psa_label_namespace "$ISTIO_NAMESPACE"         "${PSA_LEVEL_ISTIO_SYSTEM:-baseline}"
+psa_label_namespace "$ISTIO_GATEWAY_NAMESPACE" "${PSA_LEVEL_INGRESS:-baseline}"
+
 # --- 5. Gateway + VirtualServices (shared with the attach path) ---------------
 istio_apply_routes
 

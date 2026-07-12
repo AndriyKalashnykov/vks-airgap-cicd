@@ -19,6 +19,10 @@
 [ -n "${__VKS_ISTIO_SH_LOADED:-}" ] && return 0
 __VKS_ISTIO_SH_LOADED=1
 
+# PSA levels for the namespaces we create (VKS enforces `restricted` by default from VKr 1.26).
+# shellcheck source=scripts/lib/psa.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/psa.sh"
+
 # ---------------------------------------------------------------------------
 # istio_discover — populate the mesh facts from the LIVE cluster.
 #
@@ -166,9 +170,13 @@ istio_apply_routes_gwapi() {
   ISTIO_GATEWAY_CLASS="${ISTIO_GATEWAY_CLASS:-istio}"
   export ISTIO_GATEWAY_NAME ISTIO_GWAPI_NAMESPACE ISTIO_GATEWAY_CLASS
 
-  for ns in "$ISTIO_GWAPI_NAMESPACE" "$GITEA_NAMESPACE" "$ARGOCD_DEST_NAMESPACE" "$TEKTON_NAMESPACE"; do
-    run bash -c "kubectl create namespace \"$ns\" --dry-run=client -o yaml | kubectl apply -f -"
-  done
+  # The gateway namespace needs `baseline`: the proxy Istio AUTO-PROVISIONS here sets no
+  # seccompProfile, so VKS's default `restricted` would REJECT it — and that pod is created by the
+  # platform's istiod, not by us, so we cannot make it compliant. (Measured with `make psa-check`.)
+  ensure_namespace "$ISTIO_GWAPI_NAMESPACE" "${PSA_LEVEL_INGRESS:-baseline}"
+  ensure_namespace "$GITEA_NAMESPACE"       "${PSA_LEVEL_GITEA:-restricted}"
+  ensure_namespace "$ARGOCD_DEST_NAMESPACE" "${PSA_LEVEL_APP:-restricted}"
+  ensure_namespace "$TEKTON_NAMESPACE"      "${PSA_LEVEL_TEKTON:-restricted}"
 
   log_info "applying Gateway(API) ${ISTIO_GWAPI_NAMESPACE}/${ISTIO_GATEWAY_NAME} (gatewayClassName=${ISTIO_GATEWAY_CLASS}) + HTTPRoutes"
   # shellcheck disable=SC2016
@@ -193,7 +201,19 @@ istio_wait_gwapi_address() {
     if [ "$elapsed" -ge "$timeout" ]; then
       log_error "Gateway not programmed within ${timeout}s (Programmed=${prog:-<none>}, address=${addr:-<none>})"
       log_error "  kubectl -n ${ISTIO_GWAPI_NAMESPACE} describe gateway ${ISTIO_GATEWAY_NAME}"
-      log_error "  (Istio provisions the data plane itself: look for deploy/${ISTIO_GATEWAY_NAME}-istio in that namespace)"
+      log_error "  Istio provisions the data plane itself — check what it created:"
+      kubectl -n "$ISTIO_GWAPI_NAMESPACE" get deploy,svc,pods -l "gateway.networking.k8s.io/gateway-name=${ISTIO_GATEWAY_NAME}" 2>&1 | sed 's/^/      /' >&2 || true
+      if [ "$prog" = "True" ] || kubectl -n "$ISTIO_GWAPI_NAMESPACE" get svc "${ISTIO_GATEWAY_NAME}-istio" >/dev/null 2>&1; then
+        # The proxy exists but has no address -> it is the LoadBalancer, not Istio, that is stuck.
+        istio_diagnose_pending_lb "$ISTIO_GWAPI_NAMESPACE" "${ISTIO_GATEWAY_NAME}-istio"
+      else
+        log_error "  No proxy was provisioned at all — Istio did not accept the Gateway. Most likely causes:"
+        log_error "    * Pod Security Admission rejected the proxy pod. VKS guest clusters enforce 'restricted'"
+        log_error "      by DEFAULT (VKS v1.26+), so the namespace may need an explicit PSA label."
+        log_error "      Check:  kubectl -n ${ISTIO_GWAPI_NAMESPACE} get events --sort-by=.lastTimestamp | tail"
+        log_error "    * the GatewayClass '${ISTIO_GATEWAY_CLASS:-istio}' is not actually served by this mesh."
+        kubectl -n "$ISTIO_GWAPI_NAMESPACE" get events --sort-by=.lastTimestamp 2>/dev/null | tail -5 | sed 's/^/      /' >&2 || true
+      fi
       return 1
     fi
     sleep "$interval"
@@ -293,9 +313,37 @@ istio_wait_lb_ip() {
       -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"
     [ -n "$ip" ] && { printf '%s' "$ip"; return 0; }
     elapsed=$(( elapsed + interval ))
-    [ "$elapsed" -ge "$timeout" ] && { log_error "no LoadBalancer address on ${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_SERVICE} within ${timeout}s"; return 1; }
+    if [ "$elapsed" -ge "$timeout" ]; then
+      log_error "no LoadBalancer address on ${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_SERVICE} within ${timeout}s"
+      istio_diagnose_pending_lb "$ISTIO_GATEWAY_NAMESPACE" "$ISTIO_GATEWAY_SERVICE"
+      return 1
+    fi
     sleep "$interval"
   done
+}
+
+# ---------------------------------------------------------------------------
+# istio_diagnose_pending_lb — a LoadBalancer Service stuck on EXTERNAL-IP <pending> is the
+# single most common "it works on KinD, not on the lab" failure, and a bare timeout tells the
+# operator nothing. On a VKS guest cluster the address is handed out by whichever load balancer
+# the platform configured — the NSX LB, the Foundation Load Balancer (FLB, the VDS default), or
+# NSX ALB/Avi — and it stays <pending> forever when none is configured for that cluster, or when
+# its IP pool is exhausted. Say so, and print the events that carry the real reason.
+# ---------------------------------------------------------------------------
+istio_diagnose_pending_lb() { # <ns> <svc>
+  local ns="$1" svc="$2"
+  log_error "  EXTERNAL-IP is <pending>: nothing has assigned an address to this Service."
+  log_error "  On a VKS guest cluster the address comes from the load balancer the platform configured:"
+  log_error "    NSX LB / Foundation Load Balancer (FLB — the VDS default) / NSX ALB (Avi)."
+  log_error "  It stays <pending> when no LB provider is configured for the cluster, or its IP pool is exhausted."
+  log_error "  Ask the platform team which LB backs this cluster and whether the pool has free VIPs. Then:"
+  log_error "    - if a LoadBalancer genuinely is not available, expose the gateway another way and set"
+  log_error "      INGRESS_LB_IP_OVERRIDE=<the address that reaches it> in .env."
+  log_error "  Service + events (the real reason is usually here):"
+  kubectl -n "$ns" get svc "$svc" -o wide 2>&1 | sed 's/^/      /' >&2 || true
+  kubectl -n "$ns" describe svc "$svc" 2>/dev/null | sed -n '/Events:/,$p' | sed 's/^/      /' >&2 || true
+  kubectl -n "$ns" get events --field-selector "involvedObject.name=${svc}" \
+    --sort-by=.lastTimestamp 2>/dev/null | tail -5 | sed 's/^/      /' >&2 || true
 }
 
 # ---------------------------------------------------------------------------
@@ -318,10 +366,9 @@ istio_apply_routes() {
   export ISTIO_GATEWAY_NAME ISTIO_GATEWAY_REF
 
   # Backend namespaces must exist before a VirtualService can be created in them.
-  local ns
-  for ns in "$GITEA_NAMESPACE" "$ARGOCD_DEST_NAMESPACE" "$TEKTON_NAMESPACE"; do
-    run bash -c "kubectl create namespace \"$ns\" --dry-run=client -o yaml | kubectl apply -f -"
-  done
+  ensure_namespace "$GITEA_NAMESPACE"       "${PSA_LEVEL_GITEA:-restricted}"
+  ensure_namespace "$ARGOCD_DEST_NAMESPACE" "${PSA_LEVEL_APP:-restricted}"
+  ensure_namespace "$TEKTON_NAMESPACE"      "${PSA_LEVEL_TEKTON:-restricted}"
 
   if [ -n "${ISTIO_SHARED_GATEWAY:-}" ]; then
     log_info "reusing the platform-owned Gateway ${ISTIO_SHARED_GATEWAY} (creating NO Gateway of our own)"
