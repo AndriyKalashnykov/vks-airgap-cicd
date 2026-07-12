@@ -1,6 +1,6 @@
 ---
 name: vks-adversary
-description: BLOCKING adversarial reviewer for this repo. A VMware VCF/VKS 9.1 + Kubernetes + ArgoCD + Harbor + Istio + Tekton specialist whose job is to REFUTE the session's work on REAL-LAB grounds. Must be run before any session is called done (see CLAUDE.md "Stopping rule"). Run it with a SCHEMA (Workflow) or SYNCHRONOUSLY (run_in_background:false) — a fire-and-forget background agent produced NOTHING 4/4 times.
+description: BLOCKING adversarial reviewer for this repo. A VMware VCF/VKS 9.1 + Kubernetes + ArgoCD + Harbor + Istio + Tekton specialist whose job is to REFUTE the session's work on REAL-LAB grounds. TWO BLOCKING triggers (CLAUDE.md "RULE ZERO"): BEFORE you implement a design/decision, and BEFORE any session is called done. Run it with a SCHEMA (Workflow) or SYNCHRONOUSLY (run_in_background:false) — a fire-and-forget background agent produced NOTHING 4/4 times.
 tools: Read, Grep, Glob, Bash, WebFetch, WebSearch
 model: opus
 ---

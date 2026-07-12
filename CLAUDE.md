@@ -2,6 +2,39 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 🛑 RULE ZERO — the adversary reviews your DESIGN, not just your diff (BLOCKING, read first)
+
+**`.claude/agents/vks-adversary.md`** is a VMware VCF/VKS 9.1 + Kubernetes + ArgoCD + Harbor + Istio +
+Tekton specialist whose only job is to **REFUTE** what you come up with, on REAL-LAB grounds. A green
+KinD run proves nothing about the lab — that gap is the entire point of the agent.
+
+**It has THREE mandatory triggers. All are BLOCKING.**
+
+| # | Trigger | When | Why |
+|---|---|---|---|
+| 1 | **START OF EVERY SESSION on this repo** | your FIRST substantive act — before you read your way into the code, before you plan, before you touch a file. Brief it with the handoff/backlog state and whatever you are about to do. | the inherited state is *itself* a set of claims (a prior session's findings, grades, "DONE" notes), and they are exactly the things that are wrong. It runs while you read — it costs you nothing to start it first. |
+| 2 | **BEFORE you implement** | the moment you have a DESIGN, a DECISION, a root-cause CLAIM, or a plan touching VKS/ArgoCD/Harbor/Istio/Tekton/the air gap — *before* writing the code | refuting a design costs one agent run; refuting shipped code costs a session. This trigger exists because it was MISSED: a fix for two CRITICALs was designed, and coding started, with no adversary in sight. |
+| 3 | **BEFORE you call the session done** | the stopping rule — no session is DONE without it | the findings are part of the deliverable |
+
+Triggers 1 and 2 collapse into one run when the session opens on a known task (brief it with the
+backlog **and** the design). What is NOT acceptable is starting work with no adversary running.
+
+**How to run it (NOT optional).** Use a **`Workflow`** (schema-forced output) or a **synchronous
+`Agent`** (`run_in_background: false`). Do **NOT** fire-and-forget a background `Agent`. Measured
+2026-07-12 in this repo: Workflow agents delivered **44/44**; background `Agent`s delivered **0/4**
+(all idled; re-pinging did not revive them). The difference is the output contract — a Workflow
+*forces* a result; a background agent's deliverable is merely whatever it says last, and these said
+nothing.
+
+Its findings are part of the deliverable: **fix them, or record each in the backlog with its grade**
+(`lab-verified` / `KinD-verified` / `primary-sourced` / `9.0-doc-inferred-for-9.1` / `community` /
+`UNVERIFIED`). "Reviewed, nothing found" is acceptable ONLY if the agent says so explicitly, with
+evidence. If it produces nothing, that is a **blocker to report** — never quietly substitute your own
+review and move on.
+
+Subagents do **not** inherit skills or rules: `vks-adversary.md` carries the domain brief and the
+portfolio conventions in its own system prompt on purpose. Keep it current when a fact changes.
+
 ## What this repo is
 
 An **air-gapped VKS CI/CD demo**: from an internet-connected jump box (Ubuntu or
@@ -223,36 +256,11 @@ Use the following skills when working on related files:
 
 When spawning subagents, always pass conventions from the respective skill into the agent's prompt.
 
-## STOPPING RULE — no session is DONE without an adversarial review (BLOCKING)
+## Adversarial review — see **RULE ZERO** at the top of this file
 
-Every session on this repo MUST end with an adversarial review by **`.claude/agents/vks-adversary.md`**
-— a VMware VCF/VKS 9.1 + Kubernetes + ArgoCD + Harbor + Istio + Tekton specialist whose job is to
-**refute** the session's work on REAL-LAB grounds. A green KinD run proves nothing about the lab; that
-gap is the whole point of the review.
-
-Its findings are part of the deliverable: **fix them, or record each one in the backlog with its
-grade** (`lab-verified` / `KinD-verified` / `9.0-doc-inferred-for-9.1` / `community` / `UNVERIFIED`).
-"Reviewed, nothing found" is only acceptable if the agent says so explicitly, with evidence.
-
-### How to run it (this part is NOT optional)
-
-**Run it with a SCHEMA (a `Workflow`) or SYNCHRONOUSLY (`Agent` with `run_in_background: false`).**
-
-Do **NOT** spawn it as a fire-and-forget background `Agent`. Measured on 2026-07-12 in this repo:
-
-| How it was run | Delivered a report? |
-|---|---|
-| `Workflow` agents (schema-forced `StructuredOutput`) | **44 / 44** |
-| background `Agent` tool (deliverable = "its final message") | **0 / 4** — all idled; re-pinging did not revive them |
-
-The difference is the **output contract**: a Workflow *forces* a result to be emitted; a background
-agent's deliverable is merely whatever it says last — and these said nothing. So: schema, or
-synchronous. If it still produces nothing, that is a **blocker to report**, not a thing to work
-around — do not quietly substitute your own review and move on (that happened, and it is exactly the
-failure this rule exists to stop).
-
-Subagents do **not** inherit skills or rules: `vks-adversary.md` carries the domain brief and the
-conventions in its own system prompt on purpose. Keep it current when a fact changes.
+The two BLOCKING triggers (before you implement · before you call the session done), how to run it
+(`Workflow` with a schema, or a synchronous `Agent` — never fire-and-forget), and what to do with the
+findings are all in Rule Zero. Do not duplicate them here.
 
 ## Verification honesty
 
