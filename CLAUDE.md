@@ -192,61 +192,65 @@ when changing the pipeline, ingress, or manifests.
 
 ## Backlog / resume state
 
-> ### ⏳ SESSION HANDOFF 2026-07-12 (READ FIRST — resume here)
+> ### ⏳ SESSION HANDOFF 2026-07-12b (READ FIRST — resume here)
 >
-> `main` GREEN, **0 open PRs**, nothing in flight. Session 2026-07-12 merged **#110–#123**: diagram
-> fold/clip fix (#110), README real-lab scenarios made self-contained (#111) + "Choose your path"
-> picker & Quick-Start removal (#115) + airgap-diagram clarity (#117) + Supervisor-ns/ArgoCD topology
-> comments (#118), env-UX `make env-init/populate/check/validate` (#112), faithful **two-box**
-> sneakernet (#113), `NOTIFY` toggle (#116), the **cross-cluster ArgoCD deploy** feature (#119
-> destination param + #120 `make argocd-register-guest` + a **live-validated**
-> `make e2e-kind-cross-cluster`), the real-lab cross-cluster **runbook + `docs/diagrams/vks-topology.puml`**
-> topology diagram (#122), and the **dead-`RUN_MODE` removal** (#123 — it was documented as a settable
-> in `.env.example`/README/Makefile/CLAUDE.md but nothing read it; the mode is simply which mirror
-> commands you run).
+> `main` GREEN, **0 open PRs**. Session 2026-07-12b answered "how is Istio meant to be used on VKS, and
+> how do we use/configure it if we DON'T install it" — and shipped **#125, #126, #127**.
 >
-> **Review-discipline lesson captured** (claude-config `dc6dec1`): the `/readme` skill now has a
-> **dead-variable check** — every documented settable (`VAR`/flag/`make VAR=…`) must have a grep-verified
-> consumer; wired into the review checklist so "read the README for validity" fact-checks settables,
-> not just prose flow. (Prompted by RUN_MODE surviving several README passes.)
+> **THE ANSWER (both halves):**
 >
-> **Deep-research verdicts this session (VCF/VKS 9.1; Broadcom 9.1 docs 301-redirect to 9.0 → verify on a lab):**
+> - **There are NO Istio credentials.** Istio exposes no login, no bearer token, no admin API, no UI.
+>   Mesh access is plain **kubectl RBAC**. The only credential-shaped object is a TLS Secret named by
+>   `Gateway.tls.credentialName`, which must live in the GATEWAY's namespace → you REQUEST it from the
+>   mesh admin. (Contrast Harbor/ArgoCD, which have real admin passwords.) Asking "how do we get the
+>   Istio credential" is a category error.
+> - **Configuring a mesh you didn't install = discovery + RBAC + attaching routes.** Shipped as
+>   `INGRESS_CONTROLLER=istio-existing` (#125): installs NOTHING, discovers, attaches. `make istio-preflight`
+>   tells a tenant exactly what to ask the platform team for.
 >
-> - **Istio is NOT a Supervisor Service — it IS a VKS Standard Package on the GUEST cluster**
->   (CONFIRMED 2026-07-12 against Broadcom TechDocs + the VMware VCF blog): package
->   `istio.kubernetes.vmware.com`, VMware-built versions (`1.25.3+vmware.1-vks.1`), installed with
->   `vcf package install istio -p istio.kubernetes.vmware.com -v <ver> --values-file … -n istio-installed`
->   (or the VCF 9 addon CLI: `vcf addon install create istio --cluster-name $VKS_CLUSTER`). Its
->   **ingress gateway is DISABLED by default** (`istio.gateways.ingress.enabled: false`; ns
->   `istio-ingress` when on), air-gap uses `meshConfig.imagePullSecrets`, and **Broadcom's own
->   walkthrough routes with the Kubernetes GATEWAY API** (`gatewayClassName: istio` →
->   auto-provisioned Service `<gw>-istio`, LoadBalancer, in the APP's namespace) — not the classic
->   Gateway/VirtualService API. Provenance: the 9.1 doc URLs **301-redirect to the 9.0 tree**
->   (verified live), so this is documented-for-9.0/VKS-3.5 and inferred for 9.1 — re-verify version
->   strings on a real lab.
->   **⇒ Consequence: on a real lab the mesh is NOT ours → `INGRESS_CONTROLLER=istio-existing` is the
->   correct mode. BOTH route APIs are now supported** (`ISTIO_ROUTE_API=auto|gateway-api|classic`):
->   auto prefers the **Gateway API** when Istio is an Accepted GatewayClass — it needs NOTHING from
->   the mesh admin (Istio auto-provisions the proxy + its LoadBalancer for a Gateway we create in our
->   own namespace, and the proxy inherits istiod's hub so it pulls from Harbor for free) and it works
->   even though the VKS package ships the shared gateway OFF. Both legs KinD-validated.
->   See `docs/decisions/istio-on-vks.md`.
->   (Historical note: a mid-session correction wrongly labelled this claim "unverified" — it is
->   verified. Recorded so the retraction doesn't get re-retracted.)
-> - **ArgoCD IS a Supervisor Service on the Supervisor** → the Application's in-cluster destination
->   would target the SUPERVISOR, not the guest. Shipped: `${ARGOCD_DEST_SERVER}` param +
->   `make argocd-register-guest` (registers the guest as an ArgoCD destination; durable SA token
->   sidesteps x509 #13175; **NEVER installs a 2nd ArgoCD in the guest**), auto-invoked by `gitops`
->   when `ARGOCD_KUBECONFIG` is set. Registration is **ArgoCD-ADMIN-only** — a tenant REQUESTS it.
->   Validated by `make e2e-kind-cross-cluster` (2-KinD; PASS A/B/C). See the
->   `argocd-cross-cluster-registration` memory + the `configuration.md` skill rule.
+> **VERIFIED BROADCOM FACTS (primary sources; 9.1 doc URLs 301-redirect to the 9.0 tree — verified live):**
+> Istio IS a VKS **Standard Package on the GUEST cluster** (`istio.kubernetes.vmware.com`,
+> `vcf package install istio -p … -n istio-installed`, or `vcf addon install create istio --cluster-name $VKS_CLUSTER`).
+> Its **ingress gateway is DISABLED by default**; air-gap knob is `meshConfig.imagePullSecrets`; and
+> **Broadcom routes with the Kubernetes GATEWAY API** (`gatewayClassName: istio` → auto-provisioned
+> Service `<gw>-istio`, LoadBalancer, in the APP's namespace). ⇒ On a real lab the mesh is THEIRS →
+> `istio-existing` is the correct mode. See `docs/decisions/istio-on-vks.md` + the
+> `istio-on-vks-broadcom-facts` / `istio-tenant-attach-mechanics` memories.
 >
-> **BLOCKED — real-lab-only (cannot do from here):** vcf-CLI real-lab auth (#9); the cross-cluster
-> ArgoCD path's REAL-lab validation (KinD-validated; guest-API routability/TLS + any Supervisor VAP
-> stay lab-only).
+> **THE BUG THIS FOUND:** the `istio/gateway` helm chart derives the gateway's `istio:` label from the
+> **HELM RELEASE NAME**, so our hardcoded `selector: {istio: ingressgateway}` could never bind a
+> platform-installed gateway — and the API server **accepts that Gateway with NO error**, so it failed
+> SILENTLY (connection refused, not 404). The selector is now DISCOVERED (the Service exposing port
+> **15021** with a `spec.selector.istio` key; istiod has no 15021, which excludes the control plane).
+>
+> **#126 — Gateway API support** (`ISTIO_ROUTE_API=auto|gateway-api|classic`). Auto prefers the Gateway
+> API when Istio is an Accepted GatewayClass: needs NOTHING from the mesh admin (Istio auto-provisions
+> the proxy AND its LoadBalancer for a Gateway in our own namespace) and is **air-gap-safe for free**
+> (the proxy inherits istiod's hub → pulls proxyv2 from Harbor). Works even though the VKS package ships
+> the shared gateway OFF. Classic stays as fallback.
+>
+> **#127 — PSA + LB diagnostics (a real-lab BLOCKER we could not see on KinD).** VKS **enforces PSA
+> `restricted` by DEFAULT (VKr v1.26+)**; KinD enforces nothing. MEASURED on a live cluster (server-side
+> dry-run label): **`ci` needs `baseline`** (Kaniko builds as ROOT) and **our Gateway's namespace needs
+> `baseline`** (the proxy Istio auto-provisions sets no seccompProfile — and it is created by the
+> PLATFORM's istiod, so we cannot make it compliant). Without this, `make install-all` on a real guest
+> cluster would have had its build pods and ingress proxy **rejected by admission**. `make psa-check`
+> (read-only, wired into both e2e targets) is the FIRST thing to run against a real cluster. Also: an
+> `EXTERNAL-IP <pending>` LB now names the real causes (NSX LB / Foundation LB / NSX ALB not configured,
+> or an exhausted IP pool) instead of a bare 300s timeout.
+>
+> **VALIDATED (fresh, from an empty machine):** `make e2e-kind-istio-existing` PASSES — a "platform team"
+> installs Istio under FOREIGN naming, we attach with ZERO install, **both** route-API legs green
+> (gateway-api → Istio's own auto-provisioned LB; classic → the platform's shared gateway), full GitOps
+> loop (the deployed page serves the new marker), all `*.vks.local` UIs 200 + body markers, `PSA OK`.
+> Both REDs demonstrated (attach refuses a mesh-free cluster; the old hardcoded selector binds no listener).
+>
+> **STILL BLOCKED — real-lab-only:** vcf-CLI real-lab auth (#9); exact VKS 9.1 Istio package version strings;
+> whether VMware's Istio build sets seccompProfile (if it does, the ingress namespace could tighten to
+> `restricted` — `make psa-check` measures it on the actual cluster).
 >
 > ---
-> Earlier session history (2026-07-11b/c) retained below.
+> Earlier session history retained below.
 >
 > ### ⏳ SESSION HANDOFF 2026-07-11c
 >
