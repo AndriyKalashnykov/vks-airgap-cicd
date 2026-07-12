@@ -144,6 +144,14 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   ghcr.io image auto-mirrors to Harbor), `41-install-tekton.sh` applies it (host-rewritten)
   into `tekton-pipelines`, and the ingress fronts it at `TEKTON_DASHBOARD_HOST`
   (`tekton.vks.local`). No built-in auth — network/ingress-gated (no login).
+- **`.env.example` clobber rule (BLOCKING, bites repeatedly):** `load_env` sources `.env.example`
+  with `set -a`, so **every uncommented line becomes an exported env var** — applied AFTER make put
+  a per-run override in the environment. So a var that the code reads with a **dynamic fallback**
+  (`${VAR:-$(pick_port)}`, `${VAR:-${OTHER}}`) or that a make target **overrides per-run**
+  (`make bundle BUNDLE_OUT_DIR=…`) MUST stay **COMMENTED** there, or the sourced value silently
+  wins. It has broken real things three times: `GITEA_LOCAL_PORT` killed the ephemeral-port
+  parallel-safety; `BUNDLE_OUT_DIR` made `tar` archive a directory into itself; `BUNDLE_TARBALL`
+  made `bundle-load` look in the wrong place. `make check-env-clobber` now enforces it.
 - **Security + alignment gates** (`static-check`, internet/CI side): `check-toolchain-alignment`
   (kubectl pin in `.mise.toml` == `.env.example` `KUBECTL_VERSION`), `check-java-alignment`
   (Java major identical across `apps/java/webui/pom.xml`, `.mise.toml`, `ci.yml`, the `apps/java/webui/Dockerfile`
@@ -155,6 +163,17 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   are `.mise.toml`-provided (pinned) so local `make static-check`/`make lint` use the SAME versions as
   CI — an unpinned system shellcheck drifts and flags SC2015 that a newer local build doesn't
   (green-local/red-CI).
+- **The `.env.example` gates** — `check-env` (it exists), `check-env-coverage` (every operator-settable
+  var the scripts read is documented; it scans **every operator-run script** and PRINTS ITS DENOMINATOR
+  — it used to glob `[0-8][0-9]-*.sh` and was blind to `99-verify.sh`, which is exactly why the
+  `GITEA_LOCAL_PORT` clobber survived), `check-env-clobber` (the rule above), `check-how-provenance`
+  (every `# how:` command must be one WE run, a real make target, or provenance-tagged — a fabricated
+  `vcf` command shipped once). `test-scripts` (offline script-logic unit tests) is also in
+  `static-check`; it previously had targets that **nothing invoked**.
+- **A gate is trusted only after a demonstrated RED.** Every gate here has been proven to fail on the
+  defect it claims to catch. Two of them were found *passing by not looking*: `check-env-coverage`
+  (above) and `lint`, which listed the manifest dirs by name and silenced yamllint's stderr — when a
+  dir moved it failed with "findings above" and **nothing above**.
 
 ## Conventions
 
@@ -244,90 +263,37 @@ when changing the pipeline, ingress, or manifests.
 
 ---
 
-> ### 📋 BACKLOG — adopt the operator-journey framing in README, and DEFINE "tenant"
+> ### ✅ DONE 2026-07-12c — all three former backlog items shipped (#135–#138)
 >
-> **(a) Use this verbiage** (the user liked it) as the framing for the three paths — it says what each
-> scenario IS from the operator's point of view, not what the repo does:
+> **Operator-journey framing + "tenant" defined (#135).** The three paths now say what the operator
+> IS DOING: (1) KinD — *see it work*; (2) real lab — *I install Harbor + ArgoCD*; (3) real lab — *I'm
+> a tenant*. The whole difference between the real-lab paths is **install** vs **discover + request**,
+> and that is what decides the Harbor robot, the ArgoCD registration, and install-vs-attach Istio.
+> "Tenant" is defined in Scenario 2's own section (self-service / must-request / needed-regardless /
+> the surprise: **Istio has no credentials**).
 >
-> 1. **KinD** — *see it work*. No VKS cluster, **zero `.env`**, one command.
-> 2. **Real lab, Scenario 1** — *I install Harbor + ArgoCD* (as VCF **Supervisor Services**), then run
->    the pipeline.
-> 3. **Real lab, Scenario 2** — *I'm a **tenant***: Harbor + ArgoCD already exist. I **discover** them,
->    **request** what I'm not allowed to self-service, then run the pipeline.
+> **The `Needs` column is a real checklist (#135).** Each path now gives **Have: / Reachable: / Run:**
+> — concrete requirements and the commands, no rationale. (Feedback that stuck: *docs say what you
+> need, how to get it, and what to run — the reasoning is not the reader's problem.*)
 >
-> Put it in "Choose your path" and echo each line as the opening sentence of its scenario section, so
-> a reader knows within one line whether they are in the right place. Note the shape: **install** (S1)
-> vs **discover + request** (S2) is the whole difference — and it is what decides Istio (attach), the
-> ArgoCD registration (admin-only → request), and the Harbor robot (project-admin or request).
+> **Document-correctness audit, claim-by-claim (#138).** 40 candidate findings, adversarially
+> verified → 29 confirmed / 11 refuted, then each re-checked against the code by hand. It found
+> **three real bugs**, not just prose:
 >
-> **(b) DEFINE what "tenant" means** — Scenario 2 uses the word throughout and never says what it
-> grants or denies. Expand it in the Scenario-2 intro (and cross-check every claim against the code /
-> `docs/vks-services/`; grade anything vendor-side as *inferred* until a lab confirms):
+> | Bug | Why it mattered |
+> |---|---|
+> | **`make deps` never installed `kind`** | The flagship KinD path was **unrunnable on a fresh box**. Nothing in the repo installed kind, yet the README promised it and `05-kind-up.sh` does `require_cmd kind`. It only ever worked because dev boxes already had it (CI curled its own copy). Now pinned in `.mise.toml` — **verified on a bare `ubuntu:26.04` container**. |
+> | **`e2e-sneakernet` was broken** | `.env.example` clobbered the per-run `BUNDLE_OUT_DIR` → `tar` archived a directory into itself; fixing that exposed the same bug in `BUNDLE_TARBALL`. |
+> | **`check-env-coverage` was blind to 19 scripts** | Incl. `99-verify.sh` — which is exactly why the `GITEA_LOCAL_PORT` clobber (killing ephemeral-port parallel-safety) survived. |
 >
-> - **What a tenant IS:** you consume a shared platform. You do **not** own the Supervisor, the ArgoCD
->   instance, the Harbor deployment, or (usually) the Istio mesh. You DO own your guest cluster's
->   namespaces and the workloads in them.
-> - **What you CAN self-service** (verify each): a Harbor **robot** *if* you hold **project-admin** on
->   the project (direct, not via an SSO group) → `make harbor-robot`; creating your own namespaces,
->   Gitea/Tekton, and the app; creating `Gateway`/`HTTPRoute`/`VirtualService` in **your own**
->   namespaces; discovering endpoints (Harbor LB/FQDN, `argocd-server`, the Istio gateway).
-> - **What you must REQUEST** (and from whom): the Harbor robot if you lack project-admin;
->   **registering your guest cluster as an ArgoCD destination** (ADMIN-only — `clusters` is a *global*
->   ArgoCD RBAC resource, and minting the `argocd-manager` cluster-admin RBAC needs cluster-admin on
->   the guest); an ArgoCD **AppProject/RBAC** role so you may create `Application`s at all; rights in
->   the **mesh's** namespace if you cannot use the Gateway-API path; a TLS `Secret` for
->   `Gateway.tls.credentialName` (it must live in the *gateway's* namespace).
-> - **What you still need regardless:** **cluster-admin on your own guest cluster** (we create
->   namespaces, RBAC and PSA labels), and PSA levels that admit Kaniko + the Istio-provisioned proxy.
-> - **The one thing that surprises people:** there are **no Istio credentials** — mesh access is
->   kubectl RBAC (`make istio-preflight` reports exactly what you may do and what to ask for).
+> Also killed: 12 false "Harbor/ArgoCD are **VKS-provided**" claims (they are Supervisor Services you
+> install, or that already exist), "`make verify` curls app.vks.local" (it port-forwards), "an
+> off-cluster ArgoCD is not supported" (it is — that is what `make argocd-register-guest` does), and
+> a dead `ARGOCD_HOST` knob advertising a route that does not exist.
 >
-> Both items feed the "Needs column" task below — do them together.
-
----
-
-> ### 📋 BACKLOG — "Choose your path" → make the **Needs** column a real, verified checklist
->
-> The table's `Needs` cells are hand-waves, not prerequisites:
->
-> | I want to… | Needs (today) | Problem |
-> |---|---|---|
-> | Just see it work (KinD) | `Docker + make deps` | ✅ now says Docker is KinD-specific (repo is podman-preferred) — but still not a *list* |
-> | Real lab — I install Harbor + ArgoCD | **"jump box + Supervisor access"** | tells an operator **nothing actionable**: which CLIs? which vSphere/Harbor/ArgoCD *roles*? which network reachability? which `.env` values, and can they even obtain them? |
-> | Real lab — tenant (Harbor + ArgoCD exist) | **"jump box + tenant grants"** | same — *which* grants? From whom? Harbor project-admin? An ArgoCD AppProject role? cluster-admin on the guest? |
->
-> **Task:** DEEP-SEARCH and verify each path's true prerequisites, then replace each cell with an
-> explicit **list, linked to the section that satisfies it**. Per path, enumerate and *verify*:
->
-> 1. **Tools** — exactly which CLIs, and which are optional. (`make check-tools` already classifies
->    them; the table should agree with it. Note `istioctl` is NOT needed and the `argocd` CLI is
->    optional — see `docs/vks-services/`.)
-> 2. **Identities / roles** — concretely, not "access":
->    - vSphere/Supervisor: what role installs a Supervisor Service? what creates a guest cluster?
->    - Harbor: **project-admin** (self-service a robot via `make harbor-robot`) vs having to *request* one.
->    - ArgoCD: who may create an `Application` in the instance's namespace (AppProject/RBAC)? Registering a
->      cluster is **ADMIN-only** (`clusters` is a global RBAC resource) — a tenant must request it.
->    - Guest cluster: **cluster-admin** is required (we create namespaces + RBAC + PSA labels).
->    - Istio: **no credentials exist** — it is kubectl RBAC. What a tenant needs is rights to create
->      `Gateway`/`HTTPRoute`/`VirtualService` in its OWN namespaces (`make istio-preflight` reports it).
-> 3. **Network reachability** — jump box → Supervisor / Harbor / guest API; and (cross-cluster ArgoCD)
->    **ArgoCD's cluster → the guest API** (`GUEST_API_SERVER` exists precisely because those differ).
-> 4. **`.env` values the path requires, and whether each is OBTAINABLE** — trace each to its populator
->    (operator-provided / generated / discovered / auto-written to `.env.kind`). ⚠️ At least one is
->    currently **NOT obtainable**: `ARGOCD_KUBECONFIG` (see the backlog item below).
-> 5. **PSA** — a VKS guest cluster enforces `restricted` by default; the namespaces we create need the
->    measured labels (`make psa-check`). That is a prerequisite, not a footnote.
->
-> **Method:** this is the document-correctness audit applied to one table — verify each claim against
-> the code (`make check-tools`, `make check-env-coverage`, `scripts/*`) and against Broadcom docs for
-> the roles, grading anything vendor-side as *inferred* until a lab confirms it. Do **not** invent a
-> role name or a CLI flag to fill a cell — an honest "⚠️ unverified: which vSphere role?" is worth
-> more than a plausible-sounding one (that is exactly how the fabricated `vcf cluster kubeconfig get`
-> shipped).
->
-> **Output:** each `Needs` cell becomes a short bulleted list with links (→ Prerequisites, → VKS
-> authentication, → `docs/vks-services/{harbor,argocd,istio}.md`, → `make check-tools`), plus a
-> per-path "you will be blocked without these" line.
+> **New gates (each RED-proven, in `static-check`):** `check-env-clobber` (three instances of one bug
+> class is a missing gate, not bad luck) and a widened `check-env-coverage` that prints its
+> denominator. `test-scripts` (offline unit tests that **nothing invoked**) is now wired in too.
 
 ---
 
