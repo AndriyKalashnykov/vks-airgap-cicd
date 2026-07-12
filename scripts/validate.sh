@@ -30,7 +30,7 @@ KC_SCHEMA_CRD="${KUBECONFORM_SCHEMA_CRD:-https://cdn.jsdelivr.net/gh/datreeio/CR
 # Two schema-location sets, chosen per directory:
 #  - CORE (deploy/webui, k8s/): the yannh k8s schemas. Every kind is a built-in k8s type,
 #    so jsDelivr returns 200 and validation is reliable (real violations ARE caught).
-#  - CRD (tekton/, argocd/): the datreeio CRDs-catalog. It returns a clean 404 for CRDs it
+#  - CRD (k8s/tekton, k8s/argocd): the datreeio CRDs-catalog. It returns a clean 404 for CRDs it
 #    doesn't carry (so -ignore-missing-schemas SKIPS them), and 200 for those it does (e.g.
 #    ArgoCD Application) — validating them as a bonus. Do NOT point the yannh path at CRD
 #    dirs: jsDelivr answers a non-existent yannh CRD path with 403 (not 404), which

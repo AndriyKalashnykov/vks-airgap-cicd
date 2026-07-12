@@ -8,7 +8,8 @@ An **air-gapped VKS CI/CD demo**: from an internet-connected jump box (Ubuntu or
 PhotonOS), mirror all required images into **Harbor**, install and wire **Gitea +
 Tekton**, and demonstrate GitOps CD via **ArgoCD**. On a real VKS lab Harbor and ArgoCD
 are installed as **VCF Supervisor Services** (the README real-lab flow documents that,
-Part A); we then install Gitea + Tekton and the demo app. The KinD stand-in installs
+Scenario 1); in Scenario 2 they already exist and you discover them as a tenant. We then install
+Gitea + Tekton and the demo app. The KinD stand-in installs
 Harbor + ArgoCD locally to mimic that.
 
 End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag write-back) → ArgoCD sync → web UI`.
@@ -32,7 +33,7 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make platform` | Install + wire Gitea and Tekton |
 | `make gitops` | Create the ArgoCD Application |
 | `make creds` / `make argocd-password` | Print access URLs+logins / the ArgoCD admin password (context-aware, self-resolves kubeconfig) |
-| `make install-ingress` | Install the ingress (`INGRESS_CONTROLLER=istio` default / `traefik`) fronting the UIs at `*.vks.local` |
+| `make install-ingress` | Install the ingress (`INGRESS_CONTROLLER=istio` default / `istio-existing` = attach to a platform-owned mesh / `traefik`) fronting the UIs at `*.vks.local` |
 | `make install-istio` / `install-traefik` | Install a specific ingress controller directly |
 | `make psa-check` | Read-only: would our pods survive a real VKS guest cluster? VKS **enforces PSA `restricted` by default** (VKr v1.26+) while KinD enforces nothing — so `ci` (Kaniko builds as root) and the Gateway namespace (Istio's auto-provisioned proxy sets no seccompProfile) need `baseline` or their pods are REJECTED on the lab. Levels are MEASURED via a server-side dry-run label, not guessed. Wired into both e2e targets |
 | `make istio-preflight` | Read-only: is Istio here, what `Gateway` selector does it require, what may this kubeconfig do, and what must the mesh admin grant? Run before touching a cluster you don't own |
@@ -490,7 +491,7 @@ when changing the pipeline, ingress, or manifests.
 
 `main` is GREEN. KinD self-signed-TLS fidelity + VCF/VKS lab-CLI + **real-lab install runbook &
 helpers** are merged. Design rationale: `docs/decisions/kind-tls-fidelity.md`; real-lab flow:
-README §"Run against a real VKS lab" (Part A install Harbor+ArgoCD as Supervisor Services / Part B wire+run).
+README §"Run against a real VKS lab" — Scenario 1 (you install Harbor+ArgoCD as Supervisor Services) and Scenario 2 (they already exist; you are a tenant: discover + request). Each scenario is self-contained end to end.
 
 **✅ COMPLETED 2026-07-11 — the full validation sweep ran GREEN end-to-end (both modes):**
 

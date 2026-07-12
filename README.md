@@ -665,14 +665,20 @@ run **`make fetch-argocd-ca`** (writes `ARGOCD_CA_FILE`). The pipeline wires Arg
 **Step 3 — install prereqs and log in to VKS:**
 
 ```bash
-make deps         # crane, tkn, argocd, kubectl, helm, mise tools
+make deps         # kind, crane, tkn, argocd, kubectl, helm + the rest of the mise toolchain
 make vks-login    # validates $KUBECONFIG + context against the lab cluster
 ```
 
-**Step 3b (optional) — install the Broadcom VCF/VKS lab CLIs.** To drive the lab's
-ArgoCD Supervisor Service directly (`argocd login`, open its UI) or use the `vcf` Consumption CLI +
-plugins, you need the **licensed** `argocd-vcf` + `vcf` binaries. The pipeline itself wires
-everything via `kubectl`, so this is optional for the demo. They install **sudo-free** to
+**Step 3b — install the Broadcom VCF/VKS lab CLIs.** You need the **licensed** `argocd-vcf` +
+`vcf` binaries if **either** applies (both are the normal real-lab case):
+
+- you authenticate with `VKS_AUTH_METHOD=vcf` — `scripts/30-vks-login.sh` hard-requires `vcf`; or
+- you need **`make fetch-argocd-kubeconfig`** (the Supervisor kubeconfig that lets `make gitops`
+  register your guest cluster with the ArgoCD Supervisor Service) — it hard-requires `vcf` too.
+
+They are only **optional** if you already hold a working workload-cluster kubeconfig
+(`VKS_AUTH_METHOD=kubeconfig`) *and* your cluster is already registered with ArgoCD (Scenario 2,
+where the platform team does it for you). The pipeline itself wires everything via `kubectl`. They install **sudo-free** to
 `~/.local/bin`, and the installer picks the right archive for the jump box's **OS/arch**.
 
 **Supply them as a folder.** Download the artifacts — however you have entitlement (the
@@ -799,7 +805,7 @@ this cluster secret.
 **Step 6 — install everything and verify end-to-end:**
 
 ```bash
-make install-all   # mirror → builder-image → vks-login → platform → gitops
+make install-all   # mirror → mirror-verify → builder-image → vks-login → platform → gitops
 make verify        # push a marked change → Tekton → Harbor → ArgoCD → live app serves it
 ```
 
@@ -1022,14 +1028,20 @@ to trust its UI), fetch it the same way — `ARGOCD_SERVER` is already set from 
 **Step 3 — install prereqs and log in to VKS:**
 
 ```bash
-make deps         # crane, tkn, argocd, kubectl, helm, mise tools
+make deps         # kind, crane, tkn, argocd, kubectl, helm + the rest of the mise toolchain
 make vks-login    # validates $KUBECONFIG + context against the lab cluster
 ```
 
-**Step 3b (optional) — install the Broadcom VCF/VKS lab CLIs.** To drive the lab's
-ArgoCD Supervisor Service directly (`argocd login`, open its UI) or use the `vcf` Consumption CLI +
-plugins, you need the **licensed** `argocd-vcf` + `vcf` binaries. The pipeline itself wires
-everything via `kubectl`, so this is optional for the demo. They install **sudo-free** to
+**Step 3b — install the Broadcom VCF/VKS lab CLIs.** You need the **licensed** `argocd-vcf` +
+`vcf` binaries if **either** applies (both are the normal real-lab case):
+
+- you authenticate with `VKS_AUTH_METHOD=vcf` — `scripts/30-vks-login.sh` hard-requires `vcf`; or
+- you need **`make fetch-argocd-kubeconfig`** (the Supervisor kubeconfig that lets `make gitops`
+  register your guest cluster with the ArgoCD Supervisor Service) — it hard-requires `vcf` too.
+
+They are only **optional** if you already hold a working workload-cluster kubeconfig
+(`VKS_AUTH_METHOD=kubeconfig`) *and* your cluster is already registered with ArgoCD (Scenario 2,
+where the platform team does it for you). The pipeline itself wires everything via `kubectl`. They install **sudo-free** to
 `~/.local/bin`, and the installer picks the right archive for the jump box's **OS/arch**.
 
 **Supply them as a folder.** Download the artifacts — however you have entitlement (the
@@ -1147,7 +1159,7 @@ secret.
 **Step 6 — install everything and verify end-to-end:**
 
 ```bash
-make install-all   # mirror → builder-image → vks-login → platform → gitops
+make install-all   # mirror → mirror-verify → builder-image → vks-login → platform → gitops
 make verify        # push a marked change → Tekton → Harbor → ArgoCD → live app serves it
 ```
 
@@ -1429,7 +1441,7 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 | `k8s/gitea/` | Gitea install manifest (SQLite, single image) |
 | `docs/vks-services/` | **What VKS actually provides** — Harbor, ArgoCD (Supervisor Services) and Istio (a guest-cluster Standard Package): what each one is, how it is installed/configured, how we consume it, and a provenance grade per fact (lab-verified / KinD-verified / doc / unverified). A living record — update it when a lab run confirms or refutes something |
 | `k8s/istio/`, `k8s/traefik/` | Ingress manifests (`INGRESS_CONTROLLER=istio` default / `istio-existing` / `traefik`) fronting the UIs at `*.vks.local`. `k8s/istio/gateway.yaml` = the Gateway (selector is a token — it is DISCOVERED, never assumed); `virtualservices.yaml` = one VS per UI, in its BACKEND's namespace |
-| `kind/` | KinD cluster config (containerd insecure-registry wiring) |
+| `kind/` | KinD cluster config — containerd `certs.d` `config_path`, which carries the Harbor CA for the default TLS pulls (plain-HTTP only under `HARBOR_INSECURE=1`) |
 | `docs/diagrams/` | C4-PlantUML sources + rendered PNGs |
 | `images/images.txt` | Authoritative image inventory to mirror |
 | `.env.example` | Committed source of truth for every tunable |
