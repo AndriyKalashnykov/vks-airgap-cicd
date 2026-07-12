@@ -314,7 +314,7 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 > 3. Correct the table, and grade every cell (lab-verified / doc-cited / INFERRED).
 > Open question to settle: does a 2.14 AppProject reject the Application with a distinguishable
 > error, and does a VKS-managed ArgoCD even let a tenant see their AppProject?
-
+>
 > #### Traps hit this session (do not repeat)
 >
 > - **`A && B` as a loop body returns NON-ZERO when A is false** -> under `set -e` the whole script
