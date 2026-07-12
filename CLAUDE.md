@@ -386,6 +386,23 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 ## Backlog / resume state
 
+> ### 💸 BACKLOG — CI COST (runner minutes are BILLED; a wasteful gate never goes red, so nothing surfaces it)
+>
+> **DONE (#144):** the `changes` paths-filter **never skipped anything** — its deny-list
+> (`code: ['**', '!**/*.md', …]`) was OR'd by dorny, so `'**'` matched alone and every docs-only PR
+> paid ~2 min for a full Java+Go build (tell: `Filter code = true` with an EMPTY "Matching files:").
+> Replaced by `scripts/classify-changes.sh` + 10 unit cases. Also dropped `actions/setup-java` —
+> mise-action overrode its `JAVA_HOME` anyway, so it downloaded a second JDK for nothing.
+>
+> **STILL PAYING, every `static-check` run (~25s each):** the "Install kubeconform, yamllint,
+> hadolint" step `curl`s two binaries and runs `pipx install yamllint` on EVERY run. `.mise.toml`
+> already provides trivy/gitleaks/shellcheck/etc — move these three there too (or cache them), so
+> mise-action installs them from its cache and local `make lint` uses the same pins. Check what mise
+> actually offers for each before assuming (that is why they were curled in the first place).
+>
+> **Also worth an audit:** `docs-lint` renders PlantUML through a Docker image on every docs PR —
+> confirm `diagrams-check` short-circuits when no `.puml` changed.
+>
 > ### ▶️ HANDOFF 2026-07-12e — START HERE
 >
 > `main` @ `4a8209b` GREEN, **0 open PRs** (#135–#142 merged today). The multi-app work below is
