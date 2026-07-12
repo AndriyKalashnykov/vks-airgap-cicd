@@ -275,8 +275,7 @@ The `vks-adversary` review (the stopping rule's first run) found **two CRITICALs
 LAB impossible** plus 6 more. Only #3 is fixed. Everything else is OPEN. Grades: `KinD-verified` /
 `9.0-doc-inferred-for-9.1` / `primary-sourced` / `UNVERIFIED`.
 
-**Branch `fix/adversary-findings` (pushed, no PR, static-check green) carries the #3 fix. The attach
-e2e was NOT run — do that first.**
+**#3 is DONE and e2e-verified (#146). #1/#2 are next — the fix is designed (below), not written.**
 
 ### #1 CRITICAL — `make gitops` creates the Applications on the WRONG CLUSTER (real lab dead)
 
@@ -303,14 +302,17 @@ reachable from ArgoCD's cluster; must also be in the repo Secret + AppProject `s
 preflight that PROVES reachability from ArgoCD's side (a one-shot Job in `ARGOCD_NAMESPACE` curling
 `${GITEA_ARGOCD_URL}/api/healthz`). Stacks on #1 — it is the second wall.
 
-### #3 HIGH — FIXED (branch `fix/adversary-findings`, e2e NOT re-run)
+### #3 HIGH — ✅ DONE (#146, e2e VERIFIED)
 
 `90-e2e-istio-existing.sh` used the DELETED globals `APP_NAME`/`ARGOCD_DEST_NAMESPACE` ⇒ `set -u`
 abort ⇒ **the ATTACH path (what a real lab uses) has been dead since the rename**; "both e2e green"
 covered only `make e2e-kind`. Its RED-2 asserted only `!= 200`, so a BROKEN fixture passed for the
 wrong reason. Fixed: `app_export "$PROBE_APP"`; RED-2 now asserts exactly `000`.
-**TODO: run `make e2e-kind-istio-existing`.** Why no gate caught it: shellcheck ignores a bare
-`${VAR}` in a heredoc, and `check-env-coverage` only matches `${VAR:-…}`/`${VAR:?}`.
+**VERIFIED** — `make e2e-kind-istio-existing` EXIT=0: `RED 1 OK` (attach refuses on a mesh-free
+cluster) · `DISCOVERY OK — platform-ingress/platform-gw, selector istio=platform-gw` · `RED 2 OK`
+(HTTP 000) · attached via **gateway-api** (`vks-ingress/vks-uis` → 172.18.0.6) AND via **classic**
+(`platform-ingress/platform-gw` → 172.18.0.5) · `PSA OK`. Why no gate caught it: shellcheck ignores a
+bare `${VAR}` in a heredoc, and `check-env-coverage` only matches `${VAR:-…}`/`${VAR:?}`.
 
 ### #4 HIGH — "adding an app is ONE ROW" is FALSE for a tenant
 
@@ -403,28 +405,47 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 > **Also worth an audit:** `docs-lint` renders PlantUML through a Docker image on every docs PR —
 > confirm `diagrams-check` short-circuits when no `.puml` changed.
 >
-> ### ▶️ HANDOFF 2026-07-12e — START HERE
+> ### ▶️ HANDOFF 2026-07-12f — START HERE
 >
-> `main` @ `4a8209b` GREEN, **0 open PRs** (#135–#142 merged today). The multi-app work below is
-> **merged**. What is NOT done is the **adversary's findings** — see "🚨 ADVERSARY FINDINGS" above:
-> **#1 and #2 are CRITICAL and mean the REAL LAB cannot work** (`make gitops` targets the wrong
-> cluster; the Application's `repoURL` is guest-internal DNS a Supervisor-hosted ArgoCD cannot
-> resolve). Neither is reproducible on KinD, which is exactly why they survived.
+> `main` @ `7948729` GREEN, **0 open PRs**. Merged this session: **#143** (the adversary's 8 findings,
+> recorded), **#144** (CI cost), **#145** (CI-cost backlog), **#146** (finding **#3** — fixed AND
+> e2e-verified). Skills captured in `claude-config` @ `400c051`.
 >
-> **Do these in order:**
+> **NEXT: findings #1 + #2 — the two CRITICALs. They are the same wall, and they mean the REAL LAB
+> CANNOT WORK: `make gitops` fails, and no app ever deploys.** Neither is reproducible on KinD, which
+> is exactly why they survived. The fix is DESIGNED (below) but NOT WRITTEN.
 >
-> 1. `git checkout fix/adversary-findings` (pushed, `78a5f13`, **no PR yet**, static-check green) —
->    it fixes finding **#3** (the ATTACH e2e was DEAD CODE: `set -u` abort on the deleted
->    `APP_NAME`/`ARGOCD_DEST_NAMESPACE` globals, so the path a real lab actually uses has not run
->    since the rename). **Run `make e2e-kind-istio-existing`**, then push + merge.
-> 2. Fix **#1 + #2** together (they are the same wall) and make `scripts/e2e-cross-cluster.sh`
->    **call** `70-configure-argocd.sh` instead of hand-writing the Application — that is what turns
->    it into a regression test.
-> 3. Then #4, #5, #6, #7, #8.
+> | | today | after |
+> |---|---|---|
+> | **which cluster** | `70-configure-argocd.sh` applies the repo Secret (`:49`) + every Application (`:71`) to `$KUBECONFIG` — the **guest**. ArgoCD is a **Supervisor Service**, so `ns/argocd-instance-1` is not there → it dies at its own ns check (`:31`) with the misleading *"is ArgoCD installed on this VKS cluster?"* | `ARGOCD_KUBECTL=(kubectl --kubeconfig "${ARGOCD_KUBECONFIG:-$KUBECONFIG}")` for the ns check, the Secret and the Application; guest-side work keeps `$KUBECONFIG`. On KinD the two are the same file → byte-identical behaviour. (`71-argocd-register-guest.sh` already does this — copy its `kg()`/`ka()` shape.) |
+> | **repo URL** | one `GITEA_INTERNAL_URL` (`gitea-http.gitea.svc:3000`, `.env.example:101`) feeds BOTH Tekton and the Application `repoURL` (`k8s/argocd/application.yaml:12`). A Supervisor-hosted repo-server cannot resolve guest cluster-local DNS → every Application `ComparisonError: dial tcp: lookup gitea-http.gitea.svc` | keep `GITEA_INTERNAL_URL` for Tekton (in-guest); add **`GITEA_ARGOCD_URL`** — reachable from **ArgoCD's** cluster (ingress host / LB IP) — used in the `repoURL`, the repo Secret, and the AppProject `sourceRepos`. Must ship **COMMENTED** in `.env.example` (it falls back to `GITEA_INTERNAL_URL` when ArgoCD is in-cluster; an uncommented value would be exported by `load_env`'s `set -a` and kill the fallback — `check-env-clobber` enforces this). |
+> | **proof it can't regress** | `e2e-cross-cluster.sh` **hand-writes** the Application (`:96`) and syncs from a **public GitHub repo** (`:92-94`) — the only two-cluster test bypasses the script under test and never uses Gitea | make it **CALL `70-configure-argocd.sh`** and sync from Gitea; add a preflight Job in `ARGOCD_NAMESPACE` that curls `${GITEA_ARGOCD_URL}/api/healthz` so "ArgoCD can actually reach the repo" is ASSERTED, not assumed. |
 >
-> Run the adversary again before calling the session done (STOPPING RULE, above).
+> **UNVERIFIED and the precondition for #1/#4 on a shared lab:** may a VKS *tenant* even create
+> `Application`s / repo Secrets in `argocd-instance-1`? Settle with
+> `kubectl --kubeconfig $ARGOCD_KUBECONFIG -n $ARGOCD_NAMESPACE auth can-i create applications.argoproj.io`
+> and `… can-i create secrets`. If not, the honest fix is a preflight that PRINTS what to request from
+> the platform team rather than failing with a confusing error.
 >
-> ---
+> **Then:** #4 (`ARGOCD_PROJECT` — `project: default` is hardcoded and not even in the envsubst
+> allowlist) · #5 (**no `imagePullSecret` anywhere** → a private-Harbor tenant gets `ImagePullBackOff`
+> while the grant table says "Harbor: nothing to do") · #6 (PSA labels only from the ingress step,
+> which `install-all` never runs) · #7 · #8 · **re-render the diagrams (they still show ONE app;
+> `diagrams-check` will fail if the PNGs aren't regenerated in the same change)** · the CI-cost item.
+>
+> **Run the adversary again before calling the next session done (STOPPING RULE, above).**
+>
+> #### Traps that bit ME this session (do not repeat)
+>
+> - **Never `git checkout` / edit a script while a long run is executing it.** Bash reads scripts
+>   incrementally: switching branches mid-e2e made the running attach e2e pick up `main`'s pre-fix
+>   line 128 and abort on `ARGOCD_DEST_NAMESPACE: unbound variable`. The failure was MINE, not the
+>   code's — and it cost a full ~15-minute re-run to find out.
+> - **A gate that lists files with `git ls-files` is blind to UNTRACKED files** — `check-app-hardcodes`
+>   green-lit my own brand-new unit test (which named both apps) locally, then failed in CI after the
+>   commit. Fixed with `--others --exclude-standard`.
+> - **A grep-gate must strip comments first**, or it matches the comment that documents it and fails
+>   the very file it certifies (`check-java-alignment` did, on its first run).
 >
 > ### ✅ MULTI-APP (javawebapp + gowebapp) — MERGED
 >
