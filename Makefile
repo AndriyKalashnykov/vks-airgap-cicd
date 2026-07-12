@@ -476,7 +476,7 @@ define _render_diagrams
 		-e PLANTUML_SECURITY_PROFILE=UNSECURE -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp \
 		-e PLANTUML_LIMIT_SIZE=16384 \
 		-v "$$PWD/docs/diagrams:/work" -w /work docker.io/plantuml/plantuml:$(PLANTUML_VERSION) \
-		-tpng -o $(1) -DRELATIVE_INCLUDE="." airgap.puml context.puml container.puml deployment.puml pipeline-flow.puml
+		-tpng -o $(1) -DRELATIVE_INCLUDE="." airgap.puml context.puml container.puml deployment.puml pipeline-flow.puml vks-topology.puml
 endef
 
 .PHONY: diagrams
@@ -488,7 +488,7 @@ diagrams: ## Render docs/diagrams/*.puml → docs/diagrams/out/*.png ($(CONTAINE
 diagrams-check: ## CI drift gate: re-render every .puml and byte-compare vs the committed PNG. The pinned plantuml image + vendored c4/ render byte-deterministically (verified: same image → identical sha256), so a mismatch means the .puml changed without re-rendering. Run `make diagrams` before committing .puml edits.
 	@rm -rf docs/diagrams/.check
 	@$(call _render_diagrams,.check)
-	@rc=0; for d in airgap context container deployment pipeline-flow; do \
+	@rc=0; for d in airgap context container deployment pipeline-flow vks-topology; do \
 		if [ ! -s docs/diagrams/.check/$$d.png ]; then echo "ERROR: $$d.puml failed to render"; rc=1; \
 		elif [ ! -s docs/diagrams/out/$$d.png ]; then echo "ERROR: committed docs/diagrams/out/$$d.png missing — run 'make diagrams'"; rc=1; \
 		elif ! cmp -s docs/diagrams/.check/$$d.png docs/diagrams/out/$$d.png; then \
