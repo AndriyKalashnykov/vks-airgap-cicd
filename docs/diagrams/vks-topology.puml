@@ -31,11 +31,13 @@ Deployment_Node(guest, "Guest / workload VKS cluster (VKS_CLUSTER_NAME)", "Tanzu
   Deployment_Node(ns_app, "namespace: webui (we install)", "") {
     Container(app, "webui", "Deployment (2 replicas) + Service — ArgoCD deploys here")
   }
-  ' Label describes what THIS REPO does, not how Broadcom packages Istio: whether VKS
-  ' 9.1 ships Istio (Supervisor Service / "Standard Package" / vcf package install) is
-  ' UNVERIFIED — the 9.1 docs redirect to the 9.0 tree. See docs/decisions/istio-on-vks.md.
+  ' On a real lab Istio is a VKS STANDARD PACKAGE installed into the GUEST cluster
+  ' (istio.kubernetes.vmware.com, vcf package install / vcf addon install) — so the mesh is
+  ' NOT ours and INGRESS_CONTROLLER=istio-existing is the correct mode there. This repo's
+  ' KinD stand-in helm-installs upstream Istio instead. Broadcom docs are 9.0-via-redirect;
+  ' see docs/decisions/istio-on-vks.md.
   Deployment_Node(ns_ing, "namespace: istio-system + istio-ingress | traefik", "") {
-    Container(ing, "Ingress gateway", "INGRESS_CONTROLLER=istio (we helm-install it) | istio-existing (the platform's — we attach only) | traefik")
+    Container(ing, "Ingress gateway", "real lab: Istio = a VKS Standard Package (theirs) -> INGRESS_CONTROLLER=istio-existing (attach only)\nlocal/KinD: we helm-install it (INGRESS_CONTROLLER=istio) | traefik")
   }
 }
 

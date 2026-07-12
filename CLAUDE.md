@@ -211,14 +211,24 @@ when changing the pipeline, ingress, or manifests.
 >
 > **Deep-research verdicts this session (VCF/VKS 9.1; Broadcom 9.1 docs 301-redirect to 9.0 → verify on a lab):**
 >
-> - **Istio is NOT a Supervisor Service.** ⚠️ The follow-on claim that it is a USER-installed VKS
->   **Standard Package** (`vcf package install istio`) is **UNVERIFIED** — it traces only to Broadcom
->   9.1 pages that 301-redirect to the 9.0 tree, and no primary source or lab has confirmed the
->   command or the package exists. **Do not assert it** (it had leaked into `vks-topology.puml` as a
->   node label, where it read as fact; corrected 2026-07-12). What IS settled, and what the design
->   now rests on instead: Istio ingress works the same regardless of *how* the mesh got there —
->   `INGRESS_CONTROLLER=istio` installs it, `istio-existing` attaches to a platform-installed one.
->   See `docs/decisions/istio-on-vks.md` (§Unverified).
+> - **Istio is NOT a Supervisor Service — it IS a VKS Standard Package on the GUEST cluster**
+>   (CONFIRMED 2026-07-12 against Broadcom TechDocs + the VMware VCF blog): package
+>   `istio.kubernetes.vmware.com`, VMware-built versions (`1.25.3+vmware.1-vks.1`), installed with
+>   `vcf package install istio -p istio.kubernetes.vmware.com -v <ver> --values-file … -n istio-installed`
+>   (or the VCF 9 addon CLI: `vcf addon install create istio --cluster-name $VKS_CLUSTER`). Its
+>   **ingress gateway is DISABLED by default** (`istio.gateways.ingress.enabled: false`; ns
+>   `istio-ingress` when on), air-gap uses `meshConfig.imagePullSecrets`, and **Broadcom's own
+>   walkthrough routes with the Kubernetes GATEWAY API** (`gatewayClassName: istio` →
+>   auto-provisioned Service `<gw>-istio`, LoadBalancer, in the APP's namespace) — not the classic
+>   Gateway/VirtualService API. Provenance: the 9.1 doc URLs **301-redirect to the 9.0 tree**
+>   (verified live), so this is documented-for-9.0/VKS-3.5 and inferred for 9.1 — re-verify version
+>   strings on a real lab.
+>   **⇒ Consequence: on a real lab the mesh is NOT ours → `INGRESS_CONTROLLER=istio-existing` is the
+>   correct mode. OPEN GAP: our attach path supports only the CLASSIC API and refuses to run without
+>   the VirtualService CRD; the Gateway-API path (which needs no gateway-ns RBAC and no selector
+>   discovery at all) is the next change.** See `docs/decisions/istio-on-vks.md`.
+>   (Historical note: a mid-session correction wrongly labelled this claim "unverified" — it is
+>   verified. Recorded so the retraction doesn't get re-retracted.)
 > - **ArgoCD IS a Supervisor Service on the Supervisor** → the Application's in-cluster destination
 >   would target the SUPERVISOR, not the guest. Shipped: `${ARGOCD_DEST_SERVER}` param +
 >   `make argocd-register-guest` (registers the guest as an ArgoCD destination; durable SA token

@@ -112,9 +112,11 @@ kubectl -n "$PROBE_NS" get pod probe >/dev/null 2>&1 || \
 kubectl -n "$PROBE_NS" wait --for=condition=Ready pod/probe --timeout=180s
 
 probe_code() { # -> HTTP code through the gateway, or 000 when there is no listener
-  kubectl -n "$PROBE_NS" exec probe -- curl -s -o /dev/null -w '%{http_code}' \
-    -H "Host: ${WEBUI_HOST}" --max-time 5 \
-    "http://${ISTIO_GATEWAY_SERVICE}.${ISTIO_GATEWAY_NAMESPACE}.svc.cluster.local/" 2>/dev/null || echo 000
+  # curl already writes `000` via -w on a connection failure, so a `|| echo 000` fallback
+  # would CONCATENATE and print "000000". Swallow curl's non-zero exit instead.
+  kubectl -n "$PROBE_NS" exec probe -- sh -c "curl -s -o /dev/null -w '%{http_code}' \
+    -H 'Host: ${WEBUI_HOST}' --max-time 5 \
+    'http://${ISTIO_GATEWAY_SERVICE}.${ISTIO_GATEWAY_NAMESPACE}.svc.cluster.local/' || true" 2>/dev/null
 }
 
 log_info "RED 2: applying a Gateway with the OLD hardcoded selector (istio: ingressgateway)"

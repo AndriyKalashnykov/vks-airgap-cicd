@@ -399,7 +399,24 @@ and discovery is skipped entirely.
 into KinD under **foreign naming**, then we attach with zero install. It also demonstrates the REDs
 (attaching to a mesh-free cluster must fail; the old hardcoded selector must produce a dead route).
 
-Full rationale, the verification matrix, and the still-open Broadcom packaging question:
+### On a real VKS lab, the mesh is theirs — so `istio-existing` is the mode you want
+
+Broadcom ships Istio as a **VKS Standard Package installed into the guest cluster**
+(`istio.kubernetes.vmware.com`, VMware-built versions like `1.25.3+vmware.1-vks.1`, installed with
+`vcf package install istio …` or the VCF 9 addon CLI). So on a real lab you do **not** install Istio
+from this repo — the platform already has, and `INGRESS_CONTROLLER=istio-existing` is the correct
+mode. Two things to know about that package:
+
+- its **ingress gateway is disabled by default** (`istio.gateways.ingress.enabled: false`), so there
+  may be **no shared gateway to attach to** unless the platform enabled one; and
+- Broadcom's own walkthrough exposes hostnames with the **Kubernetes Gateway API**
+  (`gatewayClassName: istio`), not the classic `Gateway`/`VirtualService` API this repo currently
+  emits. **Gateway-API support is the next change** — tracked in the decision doc.
+
+(Provenance: the Broadcom 9.1 doc URLs 301-redirect to the 9.0 tree, so the above is
+documented-for-9.0/VKS-3.5 and inferred for 9.1 — re-verify version strings on a real lab.)
+
+Full rationale, the verification matrix, and the Broadcom facts with provenance:
 [`docs/decisions/istio-on-vks.md`](docs/decisions/istio-on-vks.md).
 
 </details>

@@ -146,23 +146,46 @@ real attach path and the full route verification. (A test that installed Istio *
 afterwards — it "disproved" designs that in fact returned 200. Probe from an **in-cluster curl pod**
 against the gateway's ClusterIP: more robust, and the faithful data path.
 
-## Unverified — the Broadcom packaging question (do NOT assert this)
+## What Broadcom actually ships (researched 2026-07-12 — and it corrects an earlier correction)
 
-Whether VCF/VKS 9.1 *ships* Istio (as a Supervisor Service, a "VKS Standard Package", or a
-`vcf package install`-able add-on) is **not established**. A previous session's note claimed
-`vcf package install istio` installs it as a Standard Package on the guest cluster; that claim
-traces only to Broadcom 9.1 doc pages which **301-redirect to the 9.0 tree**, and it has not been
-confirmed against a real lab or a primary source. It had been baked into
-`docs/diagrams/vks-topology.puml` as a node label, where it read as settled fact — that label has
-been corrected to describe what the repo actually does.
+**Istio IS offered on VKS, as a Standard Package installed into the GUEST cluster.** An earlier
+session claimed this; a mid-session correction in this very document called it "unverified" and told
+readers not to assert it. That correction was **wrong** — primary Broadcom documentation confirms
+the package. Recorded plainly because a retracted retraction is exactly the kind of thing that
+otherwise rots into folklore.
 
-What this decision does **not** depend on: the attach mode above is generic Istio mechanics and
-works regardless of *how* the mesh got there — which is precisely why it was built and validated
-without waiting for the Broadcom answer.
+| Fact | Value | Provenance |
+|---|---|---|
+| Packaging | Carvel **Standard Package**, installed into the **guest/workload cluster** (not the Supervisor) | Broadcom TechDocs, "Istio Package Reference" |
+| Package name | `istio.kubernetes.vmware.com` | Broadcom TechDocs |
+| Versions | VMware-built, e.g. `1.25.3+vmware.1-vks.1`, `1.28.2+vmware.1-vks.1` | Broadcom TechDocs |
+| Install (package CLI) | `vcf package install istio -p istio.kubernetes.vmware.com -v <ver> --values-file istio-data-values.yaml -n istio-installed` | Broadcom TechDocs |
+| Install (VCF 9 addon CLI) | `vcf addon install create istio --cluster-name $VKS_CLUSTER -y`, then `vcf addon install update istio --cluster-name $VKS_CLUSTER -f values.yaml` | VMware VCF blog, "Istio on VKS: A Walkthrough" |
+| Control-plane namespace | `istio-system` (configurable) | package reference |
+| **Ingress gateway** | **DISABLED by default** (`istio.gateways.ingress.enabled: false`); namespace `istio-ingress` when enabled | package reference |
+| Data plane | sidecar by default; **ambient** supported (needs `istioCNI.enabled: true`) | package reference |
+| Air-gap / private registry | `meshConfig.imagePullSecrets` — "the secrets to access the private registry must be provided in the air-gapped environment" | package reference |
+| **Route API Broadcom demonstrates** | the **Kubernetes Gateway API** — `gatewayClassName: istio`, which auto-provisions a gateway whose Service is `<gateway-name>-istio`, type LoadBalancer, **in the app's own namespace** | VMware VCF blog walkthrough |
 
-Open items for a real VKS 9.1 lab:
+**Provenance caveat (verified live, 2026-07-12):** the 9.1 techdoc URLs **301-redirect to the 9.0
+tree** — confirmed by an actual `301 Moved Permanently` on fetch. The blog walkthrough targets VKS
+3.5 (March 2025). So all of the above is **documented for 9.0 / VKS 3.5 and inferred for 9.1**;
+re-verify against a real 9.1 lab before treating any version string as exact.
 
-* Is Istio offered by Broadcom at all, and if so under what packaging/CLI?
-* Pod Security Admission on VKS guest clusters vs. istiod / the gateway pod.
-* What supplies `Service type: LoadBalancer` addresses (NSX ALB / Avi), and any IP-pool prerequisite.
-* Whether a platform-supplied mesh would use the classic API or the Kubernetes Gateway API.
+### What this means for us (two consequences, one of them a real gap)
+
+1. **The attach mode is more relevant, not less.** A VKS operator installs Istio via the package —
+   so on a real lab the mesh is emphatically *not* ours, and `INGRESS_CONTROLLER=istio-existing` is
+   the correct mode. Everything above about discovery, RBAC, and "there are no credentials" still
+   holds: the package installs upstream-derived Istio, so its mechanics are the mechanics we proved.
+2. **GAP: we only support the classic API.** `47-attach-istio.sh` currently *refuses to run* unless
+   `virtualservices.networking.istio.io` exists — but Broadcom's own walkthrough exposes hostnames
+   with the **Kubernetes Gateway API**, and the package ships the ingress gateway **off** by default,
+   so a real VKS cluster may have **no shared gateway to attach to at all**. The Gateway-API path is
+   in fact *easier* for a tenant (create a `Gateway` with `gatewayClassName: istio` in your own
+   namespace; Istio provisions the data plane and a LoadBalancer for you — no gateway-namespace RBAC,
+   no selector label to discover). Supporting it is the next change; the classic path stays for a
+   platform that enabled the shared `istio-ingress` gateway.
+
+Still open for a real 9.1 lab: Pod Security Admission vs. istiod/gateway pods; what supplies the
+LoadBalancer address (NSX ALB / Avi) and any IP-pool prerequisite; exact 9.1 package version strings.
