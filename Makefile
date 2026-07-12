@@ -91,6 +91,10 @@ env-check: ## Presence gate — fail if a required .env value is missing/placeho
 env-validate: ## Validity gate — format + KUBECONFIG/Harbor connectivity+auth (fail fast; secrets never on argv)
 	@$(SCRIPTS)/02-env.sh validate
 
+.PHONY: check-tools
+check-tools: ## Read-only: is this jump box able to run the flow? (required vs optional CLIs + versions)
+	@$(SCRIPTS)/03-check-tools.sh
+
 .PHONY: check-ports
 check-ports: ## Fail early if the local app-dev port is already in use (names the holder)
 	@port="$(APP_DEV_PORT)"; \

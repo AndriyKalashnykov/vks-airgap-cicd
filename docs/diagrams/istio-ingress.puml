@@ -6,9 +6,10 @@ LAYOUT_TOP_DOWN()
 title Istio ingress — two scenarios: we INSTALL the mesh, or we ATTACH to one we did not install
 
 ' ---------------------------------------------------------------------------
-' Every label here describes what the REPO actually does (scripts/46, scripts/47,
-' k8s/istio/*). Nothing on this diagram asserts how Broadcom packages Istio on
-' VKS — that is unverified; see docs/decisions/istio-on-vks.md.
+' Every label here describes what the REPO actually does (scripts/46, scripts/47, k8s/istio/*).
+' Broadcom ships Istio as a VKS STANDARD PACKAGE on the guest cluster (verified: TechDocs +
+' the VMware VCF blog) — so on a real lab Scenario 2 is the one that applies, and the KinD
+' stand-in is what exercises Scenario 1. See docs/decisions/istio-on-vks.md.
 ' ---------------------------------------------------------------------------
 
 Person(op, "Operator / browser", "resolves *.vks.local via /etc/hosts -> INGRESS_LB_IP")

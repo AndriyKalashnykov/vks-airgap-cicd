@@ -30,6 +30,48 @@ if [ -z "${REPO_ROOT:-}" ]; then
 fi
 export REPO_ROOT
 
+
+# ---------------------------------------------------------------------------
+# with_registry_lock — serialize every registry-MUTATING operation on this host.
+#
+# Concurrent container/registry mutation CORRUPTS the target registry's blob store: a partial or
+# interleaved push leaves tags/manifests referencing blobs that HEAD-200 but are not actually
+# stored. It surfaces LATER as MANIFEST_UNKNOWN / BLOB_UNKNOWN on a pull or a Kaniko build — never
+# at push time — and the only reliable recovery is to rebuild the registry from scratch.
+#
+# The repo has always had a written rule about this ("never run a mirror alongside other registry
+# work"). A rule is not a mechanism: it was violated the moment a second `make e2e-kind` was
+# started while the first was still finishing, which helm-upgraded Harbor and pushed into it at the
+# same time — and corrupted all 34 images. So this makes it MECHANICAL: the second caller fails
+# fast with an explanation instead of silently destroying the registry.
+#
+# Usage:  with_registry_lock <label> <command...>
+# ---------------------------------------------------------------------------
+with_registry_lock() {
+  local label="$1"; shift
+  local lock="${REGISTRY_LOCK_FILE:-${REPO_ROOT}/.registry.lock}"
+
+  if ! have flock; then
+    log_warn "flock not available — cannot serialize registry work. Do NOT run another mirror/e2e concurrently."
+    "$@"; return $?
+  fi
+
+  exec 9>"$lock" || die "cannot open the registry lock file: $lock"
+  if ! flock -n 9; then
+    local holder; holder="$(cat "$lock" 2>/dev/null || true)"
+    log_error "another registry-mutating operation is already running${holder:+ (${holder})}."
+    log_error "  Concurrent pushes CORRUPT the registry's blob store (MANIFEST_UNKNOWN/BLOB_UNKNOWN later,"
+    log_error "  recoverable only by rebuilding it). Wait for it to finish, then re-run."
+    log_error "  Lock: $lock   (stale after a hard kill? remove it: rm -f '$lock')"
+    exit 1
+  fi
+  printf '%s pid=%s started=%s\n' "$label" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >&9
+  "$@"
+  local rc=$?
+  flock -u 9; exec 9>&-
+  return "$rc"
+}
+
 # ---------------------------------------------------------------------------
 # Logging (key=value-ish, timestamped, to stderr so stdout stays pipe-clean)
 # ---------------------------------------------------------------------------

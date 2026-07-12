@@ -11,6 +11,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
 load_env
+
+# Serialize registry mutation on this host: a concurrent push corrupts Harbor's blob store
+# (MANIFEST_UNKNOWN/BLOB_UNKNOWN later, recoverable only by rebuilding the registry). Re-exec
+# ourselves under the lock; the second caller fails fast instead of silently corrupting.
+if [ -z "${__REGISTRY_LOCK_HELD:-}" ]; then
+  export __REGISTRY_LOCK_HELD=1
+  with_registry_lock "$(basename "$0")" "$0" "$@"
+  exit $?
+fi
 # shellcheck source=scripts/lib/mirror.sh
 . "${SCRIPT_DIR}/lib/mirror.sh"
 # shellcheck source=scripts/lib/tls.sh
