@@ -262,35 +262,28 @@ e2e-kind-both: ## Matrix: run the full KinD e2e in BOTH SSL modes (secure self-s
 SNEAKERNET_TRANSFER ?=
 
 .PHONY: e2e-sneakernet
-e2e-sneakernet: ## Full SNEAKERNET round-trip on KinD: mirror-pull → bundle → (fresh transfer dir) → bundle-load → mirror-push → mirror-verify (exercises the BUNDLE path, not a direct mirror)
+e2e-sneakernet: ## Faithful TWO-BOX sneakernet on KinD: [host=internet box] mirror-pull → bundle → carry ONLY the tarball → [FRESH jumpbox container=air-gap box] bundle-load → mirror-push → mirror-verify
 	@transfer="$(SNEAKERNET_TRANSFER)"; [ -n "$$transfer" ] || transfer="$$(mktemp -d)"; \
-	 stash="$(BUNDLE_DIR).presneakernet.$$$$"; \
 	 cleanup() { \
-	   if [ -d "$$stash" ]; then rm -rf "$(BUNDLE_DIR)"; mv "$$stash" "$(BUNDLE_DIR)"; fi; \
 	   if [ -z "$(SNEAKERNET_TRANSFER)" ]; then rm -rf "$$transfer"; fi; \
 	   $(MAKE) kind-down || true; \
 	 }; \
 	 trap cleanup EXIT; \
 	 echo "==> sneakernet e2e: staging transfer dir = $$transfer"; \
 	 $(MAKE) kind-up install-harbor; \
-	 echo "==> [internet side] pull images into $(BUNDLE_DIR)"; \
+	 echo "==> [internet box / host] pull images into $(BUNDLE_DIR)"; \
 	 $(MAKE) mirror-pull; \
-	 echo "==> [internet side] bundle into the transfer dir"; \
+	 echo "==> [internet box / host] bundle into the transfer dir"; \
 	 $(MAKE) bundle BUNDLE_OUT_DIR="$$transfer"; \
 	 tarball=""; \
 	 for f in "$$transfer"/vks-airgap-cicd-bundle-*.tar.zst "$$transfer"/vks-airgap-cicd-bundle-*.tar.gz; do \
 	   [ -f "$$f" ] && { tarball="$$f"; break; }; \
 	 done; \
 	 [ -n "$$tarball" ] || { echo "ERROR: bundle produced no tarball in $$transfer"; exit 1; }; \
-	 echo "==> simulate carrying ONLY the tarball across the air gap (relocate the original cache)"; \
-	 mv "$(BUNDLE_DIR)" "$$stash"; \
-	 echo "==> [air-gap side] load the carried bundle into a FRESH $(BUNDLE_DIR)"; \
-	 $(MAKE) bundle-load BUNDLE_TARBALL="$$tarball"; \
-	 echo "==> [air-gap side] push the loaded images into Harbor"; \
-	 $(MAKE) mirror-push; \
-	 echo "==> [air-gap side] integrity-verify Harbor's copy (the sneakernet assertion)"; \
-	 $(MAKE) mirror-verify; \
-	 echo "e2e-sneakernet: OK — bundle round-trip pushed + integrity-verified from a cache reconstructed purely from the carried tarball"
+	 echo "==> carry ONLY $$(basename "$$tarball") across the air gap into a FRESH jump box"; \
+	 echo "==> [air-gap box] a fresh jumpbox container (only the tarball; host cache excluded) reconstructs the cache, pushes to Harbor, and integrity-verifies"; \
+	 $(MAKE) jumpbox JUMPBOX_TARBALL="$$tarball"; \
+	 echo "e2e-sneakernet: OK — a FRESH air-gap jump box reconstructed the cache from ONLY the carried tarball, pushed it into Harbor, and integrity-verified it (true two-box round-trip, no host-state leakage)"
 
 ##@ Full pipeline
 .PHONY: install-all
@@ -339,12 +332,23 @@ jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photo
 	 if [ -n "$(JUMPBOX_VCF_SRC)" ] && [ -d "$(JUMPBOX_VCF_SRC)" ]; then \
 	   extra="$$extra -v $(abspath $(JUMPBOX_VCF_SRC)):/run/vcf-artifacts:ro -e VCF_CLI_SRC_DIR=/run/vcf-artifacts"; \
 	 fi; \
-	 echo "running $(JUMPBOX_OS) jump box on the kind network (Harbor=$$harbor_url, insecure=$$harbor_insecure)"; \
-	 docker run --rm --privileged --network kind \
+	 tb_flags=""; hpw=""; \
+	 if [ -n "$(JUMPBOX_TARBALL)" ]; then \
+	   tbabs="$(abspath $(JUMPBOX_TARBALL))"; tbbase="$$(basename "$$tbabs")"; \
+	   [ -f "$$tbabs" ] || { echo "ERROR: JUMPBOX_TARBALL not found: $$tbabs"; exit 1; }; \
+	   huser="$$(grep -h '^HARBOR_USERNAME=' .env.kind .env .env.example 2>/dev/null | head -1 | cut -d= -f2)"; \
+	   hpw="$$(grep -h '^HARBOR_PASSWORD=' .env.kind .env 2>/dev/null | head -1 | cut -d= -f2)"; \
+	   [ -n "$$hpw" ] || { echo "ERROR: HARBOR_PASSWORD not in .env.kind/.env — the air-gap half needs push creds"; exit 1; }; \
+	   tb_flags="-v $$tbabs:/run/bundle/$$tbbase:ro -e JUMPBOX_MODE=airgap-half -e JUMPBOX_TARBALL=/run/bundle/$$tbbase -e HARBOR_USERNAME=$$huser -e HARBOR_PASSWORD"; \
+	   echo "running $(JUMPBOX_OS) AIR-GAP jump box (sneakernet half) on the kind network (Harbor=$$harbor_url, tarball=$$tbbase)"; \
+	 else \
+	   echo "running $(JUMPBOX_OS) jump box on the kind network (Harbor=$$harbor_url, insecure=$$harbor_insecure)"; \
+	 fi; \
+	 HARBOR_PASSWORD="$$hpw" docker run --rm --privileged --network kind \
 	   -e HARBOR_URL="$$harbor_url" -e HARBOR_INSECURE="$$harbor_insecure" \
 	   -v "$(PWD):/src:ro" \
 	   -v "$(PWD)/.jumpbox/kubeconfig:/run/jumpbox/kubeconfig:ro" \
-	   $$extra \
+	   $$extra $$tb_flags \
 	   $(JUMPBOX_IMAGE) bash /src/scripts/jumpbox-run.sh
 
 .PHONY: jumpbox-both
