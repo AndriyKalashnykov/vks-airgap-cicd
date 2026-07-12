@@ -251,7 +251,7 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 > ### ▶️ HANDOFF 2026-07-12d — MULTI-APP (javawebapp + gowebapp). Branch: refactor/webui-to-javawebapp
 >
-> ## ⚠️ DO THIS FIRST — the two-app walk is NOT yet proven green
+> ### ⚠️ DO THIS FIRST — the two-app walk is NOT yet proven green
 >
 > Run: `make kind-down && make e2e-kind`
 >
