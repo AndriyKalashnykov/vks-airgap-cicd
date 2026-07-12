@@ -101,10 +101,14 @@ log_info "guest API server ArgoCD will dial: $SERVER"
 
 # --- 3. ArgoCD cluster: create the destination Cluster Secret ----------------
 # tlsClientConfig.caData present ⇒ verify TLS; absent ⇒ insecure (self-signed without a CA handy).
-if [ -n "$CA_DATA" ]; then
+if [ "${ARGOCD_REGISTER_INSECURE:-0}" = "1" ]; then
+  # Opt-in: skip TLS verify of the guest API (the two-KinD stand-in reaches the guest by raw IP,
+  # which may not be in the API cert SAN — the guest-API TLS/CA specifics are a real-lab-only concern).
+  TLS_CFG="\"tlsClientConfig\":{\"insecure\":true}"
+elif [ -n "$CA_DATA" ]; then
   TLS_CFG="\"tlsClientConfig\":{\"caData\":\"${CA_DATA}\"}"
 else
-  log_warn "no CA in the SA token secret — registering with insecure TLS (fine for the kind stand-in)"
+  log_warn "no CA in the SA token secret — registering with insecure TLS"
   TLS_CFG="\"tlsClientConfig\":{\"insecure\":true}"
 fi
 CONFIG_JSON="{\"bearerToken\":\"${TOKEN}\",${TLS_CFG}}"

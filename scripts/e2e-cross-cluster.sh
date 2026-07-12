@@ -40,18 +40,22 @@ kind create cluster --name "$HUB"   >/dev/null
 kind create cluster --name "$GUEST" >/dev/null
 kind get kubeconfig --name "$HUB"   > "$HUB_KC"
 kind get kubeconfig --name "$GUEST" > "$GUEST_KC"
-# INTERNAL server URL of the guest API — reachable from HUB pods on the shared kind docker network
-# (the stand-in for a real guest control-plane VIP routable from the Supervisor).
-GUEST_INTERNAL_SERVER="$(kind get kubeconfig --name "$GUEST" --internal | \
-  kubectl --kubeconfig /dev/stdin config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
-log_info "guest internal API (routable from hub pods): $GUEST_INTERNAL_SERVER"
+# Guest API endpoint reachable from HUB pods on the shared kind docker network — the guest
+# control-plane container's IP (NOT `kind ... --internal`'s container HOSTNAME, which pod CoreDNS
+# can't resolve). Stand-in for a real guest control-plane VIP routable from the Supervisor.
+guest_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${GUEST}-control-plane" 2>/dev/null | tr -d '[:space:]')"
+[ -n "$guest_ip" ] || die "could not resolve the guest control-plane container IP"
+GUEST_INTERNAL_SERVER="https://${guest_ip}:6443"
+log_info "guest API (routable from hub pods, by IP): $GUEST_INTERNAL_SERVER"
 
 hub()   { kubectl --kubeconfig "$HUB_KC" "$@"; }
 guest() { kubectl --kubeconfig "$GUEST_KC" "$@"; }
 
 log_info "installing upstream ArgoCD $ARGOCD_MANIFEST_VERSION into HUB ns/$ARGOCD_NS"
 hub create namespace "$ARGOCD_NS" >/dev/null
-hub -n "$ARGOCD_NS" apply -f \
+# --server-side: the ArgoCD install bundles a large CRD (applicationsets) that overflows the
+# client-side-apply last-applied-configuration annotation (256KB limit).
+hub -n "$ARGOCD_NS" apply --server-side --force-conflicts -f \
   "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_MANIFEST_VERSION}/manifests/install.yaml" >/dev/null
 log_info "waiting for the ArgoCD application-controller + repo-server + redis to be Ready"
 hub -n "$ARGOCD_NS" rollout status statefulset/argocd-application-controller --timeout=180s >/dev/null
@@ -63,7 +67,7 @@ hub -n "$ARGOCD_NS" rollout status deploy/argocd-repo-server --timeout=180s >/de
 log_info "== registering GUEST with HUB via make argocd-register-guest =="
 KUBECONFIG="$GUEST_KC" GUEST_KUBECONFIG="$GUEST_KC" ARGOCD_KUBECONFIG="$HUB_KC" \
   ARGOCD_NAMESPACE="$ARGOCD_NS" ARGOCD_DEST_CLUSTER_NAME="$GUEST" \
-  GUEST_API_SERVER="$GUEST_INTERNAL_SERVER" \
+  GUEST_API_SERVER="$GUEST_INTERNAL_SERVER" ARGOCD_REGISTER_INSECURE=1 \
   "${SCRIPT_DIR}/71-argocd-register-guest.sh"
 
 # ASSERT A — the ArgoCD Cluster secret exists in HUB with the guest server.
