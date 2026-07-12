@@ -305,14 +305,28 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 > - `trivy-fs` now scans EVERY app's ARTIFACT (jar + the compiled Go binary — a stdlib-only app has
 >   no modules, so scanning go.mod would miss Go-STDLIB CVEs entirely).
 >
-> #### TODO (small, known)
+> #### 📋 BACKLOG — next session (both are small, self-contained, and verifiable)
 >
-> 1. **`ARGOCD_PROJECT`** — `k8s/argocd/application.yaml:9` hardcodes `project: default`. Fine for
->    KinD/Scenario 1 (admin); a TENANT has their own AppProject. Make it a var (default `default`).
-> 2. **Diagrams** show one app — re-render (`make diagrams`; the drift gate will catch it).
-> 3. **CLAUDE.md "Common commands"** still says one app in places; README got the multi-app pass
->    (new "Adding an app" section incl. the real-lab grant table).
-> 4. Merge #139, then #140.
+> **1. `ARGOCD_PROJECT` — stop hardcoding `project: default`.**
+> `k8s/argocd/application.yaml:9` pins `project: default`. That is correct for KinD and for
+> Scenario 1 (you installed ArgoCD, you are admin, and `default` permits every destination) — but a
+> **tenant** (Scenario 2) is given their OWN AppProject, and the Application will be rejected with
+> *"application destination … is not permitted in project"*.
+>
+> - Add `ARGOCD_PROJECT` to `.env.example` (default `default`), render it in
+>   `k8s/argocd/application.yaml` + `scripts/70-configure-argocd.sh` (add it to the envsubst
+>   allowlist — an UNLISTED var renders EMPTY and the Application silently lands in no project).
+> - Remember the tenant ALSO needs the new `<app>-deploy` repo URL in `spec.sourceRepos` — see the
+>   README "Adding an app -> on a REAL lab" table (whose commands are marked **INFERRED**).
+> - Verify: `make e2e-kind` (KinD uses `default`, so it must stay byte-identical in behaviour).
+>
+> **2. Re-render the diagrams — they still show ONE app.**
+> `docs/diagrams/*.puml` predate `gowebapp`: the container/deployment/pipeline-flow diagrams show a
+> single app, one Gitea repo pair and one pipeline. Update the `.puml` sources to show BOTH apps
+> (two `<app>-app`/`<app>-deploy` repo pairs, two `<app>-ci` pipelines, two namespaces, two hosts —
+> and the SHARED EventListener that label-selects the per-app Triggers), then `make diagrams` and
+> commit the PNGs. The `diagrams-check` drift gate WILL fail if the PNGs are not regenerated in the
+> same change (it caught exactly that during the rename).
 >
 > #### Real-lab facts established this session (no lab needed to re-derive)
 >
