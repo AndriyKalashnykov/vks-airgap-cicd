@@ -34,13 +34,42 @@ VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surface
 
 New here? Pick the path that matches your situation — each one is self-contained end to end:
 
-| I want to… | Path | Needs |
-|------------|------|-------|
-| **Just see it work** (no VKS cluster) | [Try it locally end-to-end with KinD](#try-it-locally-end-to-end-with-kind) — one command, zero `.env` | **Docker** + `make deps` — KinD specifically needs Docker (see below) |
-| **Run it on a real lab — I install Harbor + ArgoCD** | [Real VKS lab — Scenario 1](#run-against-a-real-vks-lab--scenario-1-harbor--argocd-need-to-be-installed) | jump box + Supervisor access |
-| **Run it on a real lab where Harbor + ArgoCD already exist** (I'm a tenant) | [Real VKS lab — Scenario 2](#run-against-a-real-vks-lab--scenario-2-harbor--argocd-already-installed) | jump box + tenant grants |
+1. **KinD** — *see it work.* No VKS cluster, **zero `.env`**, one command.
+2. **Real lab, Scenario 1** — *I install Harbor + ArgoCD* (as VCF **Supervisor Services**), then run the pipeline.
+3. **Real lab, Scenario 2** — *I'm a **tenant***: Harbor + ArgoCD already exist. I **discover** them,
+   **request** what I'm not allowed to self-service, then run the pipeline.
+
+The whole difference between the two real-lab paths is **install** (Scenario 1) vs **discover +
+request** (Scenario 2) — and that one difference is what decides how you get the Harbor robot, how
+your cluster gets registered with ArgoCD, and whether you install Istio or attach to the mesh the
+platform team already runs.
+
+| I want to… | Path | You need |
+|------------|------|----------|
+| **Just see it work** (no VKS cluster) | [KinD](#try-it-locally-end-to-end-with-kind) — one command, zero `.env` | • **Docker** (KinD-only — the repo is otherwise podman-preferred, see below) + `make deps`<br>• **No roles, no `.env`** — everything is discovered and written to `.env.kind`<br>• Internet access (to pull the images that get mirrored)<br>• Blocked without: Docker. |
+| **Real lab — I install Harbor + ArgoCD** | [Scenario 1](#run-against-a-real-vks-lab--scenario-1-harbor--argocd-need-to-be-installed) | • `make deps` + podman *or* Docker; the licensed [VCF CLIs](#vks-authentication-vcf-9--supervisor--real-lab-only) (`make install-vcf-clis`)<br>• A vSphere identity that can **install a Supervisor Service**, create a vSphere Namespace and **provision a guest cluster** (⚠️ exact role name unverified — ask your vSphere admin)<br>• **cluster-admin on your guest cluster** (we create namespaces, RBAC and PSA labels)<br>• Network: jump box → internet + Supervisor API + Harbor; **ArgoCD's cluster → your guest API** (`GUEST_API_SERVER`)<br>• `.env`: filled **as you install** (endpoints are only knowable afterwards) — `make env-init` → `make env-populate`<br>• **PSA**: a VKS guest cluster enforces `restricted` by default — the namespaces we create need the measured levels (`make psa-check`)<br>• Blocked without: the Supervisor identity above. |
+| **Real lab — Harbor + ArgoCD already exist** (I'm a **tenant**) | [Scenario 2](#run-against-a-real-vks-lab--scenario-2-harbor--argocd-already-installed) | • Same toolchain as Scenario 1<br>• **Harbor project-admin** to self-service a robot (`make harbor-robot`) — otherwise **request** the robot credentials<br>• An **ArgoCD AppProject/RBAC role** that lets you create an `Application` — **request** it<br>• Your guest cluster **registered** with ArgoCD — **admin-only, you must request it** (`clusters` is a global ArgoCD RBAC resource)<br>• **cluster-admin on your own guest cluster**; RBAC to create routes in **your** namespaces (Istio has **no credentials** — `make istio-preflight` tells you exactly what to ask for)<br>• Blocked without: the ArgoCD cluster registration. |
+
+**What "tenant" means (Scenario 2).** You *consume* a shared platform. You do **not** own the
+Supervisor, the ArgoCD instance, the Harbor deployment, or (usually) the Istio mesh — but you **do**
+own your guest cluster's namespaces and the workloads in them. So:
+
+- **You can self-service:** your own namespaces, Gitea + Tekton + the app; `Gateway`/`HTTPRoute`/
+  `VirtualService` in **your own** namespaces; discovering the Harbor/ArgoCD/Istio endpoints; and a
+  Harbor **robot** *if* you hold **project-admin** on the project (`make harbor-robot`).
+- **You must request:** the Harbor robot if you don't hold project-admin; an ArgoCD **AppProject/RBAC**
+  role so you may create `Application`s at all; **registering your guest cluster as an ArgoCD
+  destination** (admin-only — minting the `argocd-manager` RBAC needs cluster-admin on the guest); and
+  a TLS `Secret` for `Gateway.tls.credentialName` if you terminate TLS (it must live in the
+  *gateway's* namespace, not yours).
+- **You still need, regardless:** **cluster-admin on your own guest cluster**, and PSA levels that
+  admit Kaniko and the Istio-provisioned proxy (`make psa-check`).
+- **The one thing that surprises people:** there are **no Istio credentials** — no login, no token, no
+  admin API. Mesh access is plain kubectl RBAC. See [`docs/vks-services/istio.md`](docs/vks-services/istio.md).
 
 The real-lab paths start from the jump-box **[Prerequisites](#prerequisites)** below; the KinD path needs only Docker + `make deps`.
+Run **`make check-tools`** to see which CLIs you have and which are genuinely required (`istioctl` is
+**not** needed; the `argocd` CLI is **optional** — registration is declarative kubectl).
 
 > **Which container engine?** Image operations (mirror, builder image, diagram rendering) use
 > **`CONTAINER_ENGINE` — podman-preferred, Docker as the fallback**, so a real air-gap run can be
@@ -361,6 +390,8 @@ There's no switch to flip — the mode is simply **which mirror commands you run
 
 <br>
 
+> **You want to *see it work*.** No VKS cluster, **zero `.env`**, one command.
+
 You don't need a VKS cluster to exercise the whole pipeline. `make e2e-kind` stands up a
 local [KinD](https://kind.sigs.k8s.io/) cluster, installs the "VKS-provided" pieces
 (**Harbor** + **ArgoCD**) into it, then runs the exact same
@@ -426,6 +457,8 @@ Individual targets: `make kind-up`, `make install-harbor`, `make install-argocd`
 <summary><strong>You install Harbor &amp; ArgoCD</strong> — as VCF Supervisor Services, provision a workload cluster, then wire the pipeline and run it (self-contained; click to expand)</summary>
 
 <br>
+
+> **You install Harbor + ArgoCD** (as VCF **Supervisor Services**), then run the pipeline.
 
 This is the real target. You are given a **Supervisor** endpoint (IP), a login, and a password —
 nothing else. **Harbor** and **ArgoCD** are **not** pre-provided: you install them as **VCF
@@ -883,9 +916,24 @@ LB IP + admin credentials you set there. For **Gitea** (which you installed) and
 
 <br>
 
+> **You're a *tenant***: Harbor + ArgoCD already exist. You **discover** them, **request** what you
+> are not allowed to self-service, then run the pipeline.
+
 In a shared lab the platform team has **already** installed Harbor and ArgoCD as Supervisor
 Services. You are a **tenant**, not an admin — you don't install them. Instead you **discover**
 the existing endpoints and **request** the grants you need, then wire this repo and run the flow.
+
+**What that means concretely** — you consume a shared platform: you do **not** own the Supervisor,
+the ArgoCD instance, the Harbor deployment, or (usually) the Istio mesh; you **do** own your guest
+cluster's namespaces and the workloads in them.
+
+| | |
+|---|---|
+| **Self-service** | your namespaces + Gitea/Tekton/the app · routes (`Gateway`/`HTTPRoute`/`VirtualService`) in **your own** namespaces · discovering the Harbor/ArgoCD/Istio endpoints · a Harbor **robot** *if* you hold **project-admin** (`make harbor-robot`) |
+| **Must request** | the Harbor robot if you lack project-admin · an ArgoCD **AppProject/RBAC** role so you may create `Application`s · **registering your guest cluster** as an ArgoCD destination (**admin-only**) · a TLS `Secret` for `Gateway.tls.credentialName` (it lives in the *gateway's* namespace) |
+| **Needed regardless** | **cluster-admin on your own guest cluster** (we create namespaces, RBAC, PSA labels) · PSA levels that admit Kaniko and the Istio-provisioned proxy (`make psa-check`) |
+| **The surprise** | there are **no Istio credentials** — no login, no token, no admin API. Mesh access is plain kubectl RBAC; `make istio-preflight` reports what you may do and what to ask for. |
+
 Everything you need is in this section — you do not have to read the other scenario. Dual-homed:
 the jump box reaches both the internet and the lab (Supervisor API + Harbor).
 
