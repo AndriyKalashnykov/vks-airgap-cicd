@@ -298,6 +298,23 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 > | Ingress host | Only an issue on the CLASSIC shared-Gateway path (its `hosts:` belongs to the mesh admin). On the **Gateway-API** path (default; what Broadcom uses) Istio auto-provisions the gateway from OUR Gateway in OUR namespace -> self-service, no request. |
 > | Namespace | One per app (operator's decision). Apps COULD share one; that would remove the AppProject request but weaken isolation. |
 >
+> #### 📋 BACKLOG — DEEP-RESEARCH the real-lab grant table, then adversarially verify it
+>
+> The README's "Adding an app -> on a REAL lab" table gives commands (ArgoCD AppProject
+> `spec.destinations`/`spec.sourceRepos` patch; Istio shared-Gateway `hosts:` patch). The FACTS are
+> sourced (ArgoCD docs; our own 22-harbor-robot.sh; the Istio Gateway host model) but the **exact
+> invocations are INFERRED and never run on a lab** — and the lab's ArgoCD SERVER is 2.14.x while
+> ours is 3.x. This repo has a gate against exactly this class (`check-how-provenance`), so:
+>
+> 1. **Deep-research** each cell against PRIMARY sources for the PINNED versions (ArgoCD 2.14 docs,
+>    Broadcom VKS ArgoCD/Harbor/Istio package docs, Istio 1.30 Gateway API + classic).
+> 2. **Run the result past a devil's-advocate SPECIALIST** (VKS/VCF + Kubernetes + ArgoCD + Harbor +
+>    Istio) briefed with the portfolio conventions — and note that in this session FOUR agents idled
+>    without ever delivering, so do not block on one: verify yourself and use the agent as a check.
+> 3. Correct the table, and grade every cell (lab-verified / doc-cited / INFERRED).
+> Open question to settle: does a 2.14 AppProject reject the Application with a distinguishable
+> error, and does a VKS-managed ArgoCD even let a tenant see their AppProject?
+
 > #### Traps hit this session (do not repeat)
 >
 > - **`A && B` as a loop body returns NON-ZERO when A is false** -> under `set -e` the whole script

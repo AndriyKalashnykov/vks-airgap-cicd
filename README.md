@@ -1476,6 +1476,14 @@ granted. What that means concretely:
 auto-provisions the gateway from a `Gateway` we create in **our own** namespace, so its `hosts:`
 list is ours. That leaves the AppProject destination as the only universal tenant request.
 
+> ⚠️ **Provenance of the commands above: INFERRED, not lab-verified.** The *facts* are sourced —
+> ArgoCD's AppProject restricts by `spec.destinations` + `spec.sourceRepos`
+> ([docs](https://argo-cd.readthedocs.io/en/stable/user-guide/projects/)); the Harbor robot we mint
+> is project-scoped (`scripts/22-harbor-robot.sh`); an Istio `Gateway`'s `hosts:` list gates which
+> hostnames a VirtualService may bind. But the exact `kubectl patch` invocations have **not** been
+> run against a real VKS lab, and the ArgoCD **server** there is 2.14.x (ours is 3.x). Treat them as
+> a starting point, confirm against your lab, and correct this table. See the backlog in CLAUDE.md.
+
 ## Repository layout
 
 <details>
