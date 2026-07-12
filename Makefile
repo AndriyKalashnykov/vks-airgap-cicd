@@ -531,9 +531,14 @@ vendor-diagrams: ## Re-download the pinned C4-PlantUML stdlib into docs/diagrams
 	echo "vendor-diagrams: refreshed docs/diagrams/c4/ @ $(C4_PLANTUML_VERSION) — now run 'make diagrams' and verify the offline render"
 
 .PHONY: docs-lint
-docs-lint: diagrams-check ## Lint tracked markdown + verify diagrams are current
-	@files=$$(git ls-files '*.md'); \
-	[ -n "$$files" ] || { echo "docs-lint: no tracked markdown"; exit 0; }; \
+docs-lint: diagrams-check ## Lint markdown (tracked AND new-but-unignored) + verify diagrams are current
+	@# `--others --exclude-standard` adds UNTRACKED-but-not-gitignored markdown. Without it the
+	@# gate lints only COMMITTED files, so a brand-new doc is invisible to `make ci` and its
+	@# first lint happens in CI *after* it is pushed — a guaranteed green-local/red-CI round trip
+	@# for every new document. (Exactly how an MD040 shipped: the file was written, `make ci` went
+	@# green because git had never heard of it, and CI failed the moment it was committed.)
+	@files=$$(git ls-files --cached --others --exclude-standard '*.md'); \
+	[ -n "$$files" ] || { echo "docs-lint: no markdown"; exit 0; }; \
 	if command -v markdownlint >/dev/null 2>&1; then markdownlint $$files; \
 	elif command -v npx >/dev/null 2>&1; then npx --yes markdownlint-cli@$(MARKDOWNLINT_VERSION) $$files; \
 	else echo "markdownlint not installed — skipping (install markdownlint-cli)"; fi

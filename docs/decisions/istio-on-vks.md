@@ -48,7 +48,7 @@ and what you must ask the mesh admin for.
 **The load-bearing fact:** the `istio/gateway` helm chart derives the gateway workload's
 `istio:` label **from the helm release name**. Installing it as release `platform-gw` produces:
 
-```
+```text
 svc/platform-gw  spec.selector = {"app":"platform-gw","istio":"platform-gw"}
 ```
 
