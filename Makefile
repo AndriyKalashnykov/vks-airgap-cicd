@@ -515,8 +515,12 @@ test-vcf-cli-resolve: ## Unit-test 01-install-vcf-clis.sh archive resolve + tar-
 test-mirror-cache: ## Unit-test lib/mirror.sh cache-skip / resume / prune logic (offline, synthetic fixtures)
 	@$(SCRIPTS)/test-mirror-cache.sh
 
+.PHONY: test-classify-changes
+test-classify-changes: ## Unit-test the CI gate selector (a docs-only change must NOT pay for a build)
+	@$(SCRIPTS)/test-classify-changes.sh
+
 .PHONY: test-scripts
-test-scripts: test-vcf-cli-resolve test-mirror-cache ## Run all offline script-logic unit tests
+test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes ## Run all offline script-logic unit tests
 
 ##@ Security scanning (internet/CI side; not part of the air-gap install)
 .PHONY: secrets
