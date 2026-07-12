@@ -23,8 +23,11 @@ load_env
 require_cmd kubectl
 require_cmd jq
 : "${KUBECONFIG:?KUBECONFIG must be set (see .env.example / .env.kind)}"; export KUBECONFIG
-: "${GITEA_HOST:?}"; : "${JAVAWEBAPP_HOST:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
-: "${GITEA_NAMESPACE:?}"; : "${ARGOCD_DEST_NAMESPACE:?}"; : "${TEKTON_NAMESPACE:?}"
+: "${GITEA_HOST:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
+: "${GITEA_NAMESPACE:?}"; : "${TEKTON_NAMESPACE:?}"
+# Every app has its own namespace + host — both come from the registry.
+# shellcheck source=scripts/lib/apps.sh
+. "${SCRIPT_DIR}/lib/apps.sh"
 
 rc=0
 
@@ -55,7 +58,7 @@ if [ "$ISTIO_ROUTE_API" = "gateway-api" ]; then
   log_info "     namespaces; Istio auto-provisions the proxy + its LoadBalancer (image inherited from"
   log_info "     istiod's hub, so it pulls from Harbor on an air-gapped cluster)."
   log_info "  RBAC you need (own namespaces only):"
-  for ns in "${ISTIO_GWAPI_NAMESPACE:-vks-ingress}" "$GITEA_NAMESPACE" "$ARGOCD_DEST_NAMESPACE" "$TEKTON_NAMESPACE"; do
+  for ns in "${ISTIO_GWAPI_NAMESPACE:-vks-ingress}" "$GITEA_NAMESPACE" "$TEKTON_NAMESPACE" $(app_names | tr '\n' ' '); do
     printf '    %-46s gateways=%s httproutes=%s\n' "$ns" \
       "$(kubectl auth can-i create gateways.gateway.networking.k8s.io -n "$ns" 2>/dev/null || echo no)" \
       "$(kubectl auth can-i create httproutes.gateway.networking.k8s.io -n "$ns" 2>/dev/null || echo no)" >&2
@@ -105,7 +108,11 @@ check "read the gateway Service (${ISTIO_GATEWAY_NAMESPACE})"  get svc     -n "$
   log_warn "  (discovery still worked above — but a kubeconfig that cannot read it must be HANDED ISTIO_GATEWAY_* values)"
 check "create a Gateway in ${ISTIO_GATEWAY_NAMESPACE}"         create gateways.networking.istio.io -n "$ISTIO_GATEWAY_NAMESPACE" && CAN_MAKE_GW=1
 check "create VirtualServices in ${GITEA_NAMESPACE}"           create virtualservices.networking.istio.io -n "$GITEA_NAMESPACE" || rc=1
-check "create VirtualServices in ${ARGOCD_DEST_NAMESPACE}"     create virtualservices.networking.istio.io -n "$ARGOCD_DEST_NAMESPACE" || rc=1
+while read -r _a; do [ -n "$_a" ] || continue
+  check "create VirtualServices in ${_a}" create virtualservices.networking.istio.io -n "$_a" || rc=1
+done <<EOF
+$(app_names)
+EOF
 check "create VirtualServices in ${TEKTON_NAMESPACE}"          create virtualservices.networking.istio.io -n "$TEKTON_NAMESPACE" || rc=1
 
 echo >&2
@@ -116,7 +123,7 @@ else
   log_warn "  -> ASK THE MESH ADMIN to expose your hosts on a shared Gateway, then set:"
   log_warn "       ISTIO_SHARED_GATEWAY=${ISTIO_GATEWAY_NAMESPACE}/<their-gateway-name>"
   log_warn "     Its servers[].hosts must admit (exactly, or via a *.vks.local wildcard):"
-  log_warn "       ${GITEA_HOST}  ${JAVAWEBAPP_HOST}  ${TEKTON_DASHBOARD_HOST}"
+  log_warn "       ${GITEA_HOST}  ${TEKTON_DASHBOARD_HOST}  $(app_names | while read -r a; do [ -n "$a" ] && printf '%s  ' "$(app_host "$a")"; done)"
   log_warn "     We then create ONLY VirtualServices, in our own namespaces. That is enough:"
   log_warn "     a VS in the app's namespace referencing <gw-ns>/<gw-name> routes correctly."
 fi

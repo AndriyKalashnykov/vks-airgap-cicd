@@ -1,10 +1,12 @@
 ---
-# ServiceAccount the PipelineRuns run as. 60-configure-tekton.sh attaches the
-# Gitea git-auth secret (tekton.dev/git-0) and the Harbor docker-config secret.
+# ServiceAccount EVERY app's PipelineRuns run as (shared, not one per app): all apps clone from the
+# same Gitea and push to the same Harbor project, so they need the identical two secrets, and a
+# per-app SA would just be N copies for 60-configure-tekton.sh to patch. 60-configure-tekton.sh
+# attaches the Gitea git-auth secret (tekton.dev/git-0) and the Harbor docker-config secret.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: javawebapp-ci
+  name: apps-ci
   namespace: ${CI_NAMESPACE}
 ---
 # ServiceAccount the Tekton Triggers EventListener runs as.

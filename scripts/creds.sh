@@ -26,7 +26,8 @@ if [ -n "${ARGOCD_LB_IP:-}" ]; then
 else
   argocd_url="<your lab's ArgoCD URL>"
 fi
-app_url="http://${JAVAWEBAPP_HOST:-app.vks.local}"
+# shellcheck source=scripts/lib/apps.sh
+. "${SCRIPT_DIR}/lib/apps.sh"
 tekton_url="http://${TEKTON_DASHBOARD_HOST:-tekton.vks.local}"  # Tekton Dashboard (read-only UI)
 
 # --- resolve logins -------------------------------------------------------------------
@@ -44,7 +45,7 @@ echo "Access the UIs (local demo credentials):"
 if [ -n "${INGRESS_LB_IP:-}" ]; then
   echo
   echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"
-  echo "    ${INGRESS_LB_IP}  ${GITEA_HOST:-gitea.vks.local} ${JAVAWEBAPP_HOST:-app.vks.local} ${TEKTON_DASHBOARD_HOST:-tekton.vks.local}"
+  echo "    ${INGRESS_LB_IP}  ${GITEA_HOST:-gitea.vks.local} ${TEKTON_DASHBOARD_HOST:-tekton.vks.local} $(app_names | while read -r a; do [ -n "$a" ] && printf '%s ' "$(app_host "$a")"; done)"
 fi
 
 # --- table ----------------------------------------------------------------------------
@@ -56,5 +57,10 @@ printf '  %-9s %-32s %-14s %s\n'   "Gitea"   "$gitea_url"  "$gitea_user"  "$gite
 printf '  %-9s %-32s %-14s %s\n'   "Tekton"  "$tekton_url" "-"            "(no login; read-only dashboard)"
 printf '  %-9s %-32s %-14s %s\n'   "Harbor"  "$harbor_url" "$harbor_user" "$harbor_pw"
 printf '  %-9s %-32s %-14s %s\n'   "ArgoCD"  "$argocd_url" "admin"        "$argo_pw"
-printf '  %-9s %-32s %-14s %s\n'   "App"     "$app_url"    "-"            "(no login; health at /actuator/health)"
+while read -r _a; do
+  [ -n "$_a" ] || continue
+  printf '  %-9s %-32s %-14s %s\n' "$_a" "http://$(app_host "$_a")" "-" "(no login; health at $(app_health_path "$_a"))"
+done <<EOF
+$(app_names)
+EOF
 echo

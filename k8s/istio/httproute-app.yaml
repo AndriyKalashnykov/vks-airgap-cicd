@@ -1,0 +1,19 @@
+---
+# ONE HTTPRoute per app, rendered from apps/registry.tsv (scripts/lib/istio.sh).
+# Lives in the app's OWN namespace and attaches cross-namespace to the Gateway (allowed by the
+# listener's allowedRoutes; no ReferenceGrant needed — the backendRef is same-namespace).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ${APP_NAME}
+  namespace: ${APP_NAMESPACE}
+spec:
+  parentRefs:
+    - name: ${ISTIO_GATEWAY_NAME}
+      namespace: ${ISTIO_GWAPI_NAMESPACE}
+  hostnames:
+    - ${APP_HOST}
+  rules:
+    - backendRefs:
+        - name: ${APP_NAME}
+          port: 80

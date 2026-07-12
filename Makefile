@@ -38,8 +38,9 @@ GITEA_NAMESPACE     ?= gitea
 CI_NAMESPACE        ?= ci
 TEKTON_NAMESPACE    ?= tekton-pipelines
 ARGOCD_NAMESPACE    ?= argocd
-ARGOCD_DEST_NAMESPACE ?= javawebapp
-APP_NAME            ?= javawebapp
+# NO APP_NAME / ARGOCD_DEST_NAMESPACE: with more than one app these are PER-APP, and live in
+# apps/registry.tsv (scripts/lib/apps.sh). A global here would be exported into the scripts and
+# clobber the per-app value — every app would deploy as javawebapp.
 APP_DEV_PORT        ?= 8080
 BUNDLE_DIR          ?= ./bundle
 # renovate: datasource=docker depName=plantuml/plantuml
@@ -446,18 +447,18 @@ jumpbox-both: ## Validate the jump-box flow on BOTH Photon and Ubuntu (matrix)
 bootstrap-test: ## Validate bootstrap-jumpbox.sh from-nothing on BARE OS images (BOOTSTRAP_TEST_OSES matrix) + unsupported-OS reject
 	@$(SCRIPTS)/bootstrap-test.sh
 
-##@ Demo application (local dev)
+##@ Demo applications (local dev) — every app in apps/registry.tsv, dispatched by language
 .PHONY: app-test
-app-test: ## Run the Spring Boot app unit/integration tests
-	@cd $(APP_DIR) && ./mvnw -B test
+app-test: ## Test EVERY app (mvn test / go test). One app: APP=gowebapp
+	@$(SCRIPTS)/app-test.sh test $(APP)
 
 .PHONY: app-build
-app-build: ## Build the Spring Boot app jar
-	@cd $(APP_DIR) && ./mvnw -B -DskipTests package
+app-build: ## Build EVERY app (mvn package / go build). One app: APP=gowebapp
+	@$(SCRIPTS)/app-test.sh build $(APP)
 
 .PHONY: app-run
-app-run: check-ports ## Run the app locally (http://localhost:$(APP_DEV_PORT))
-	@cd $(APP_DIR) && APP_INTERNAL_PORT=$(APP_DEV_PORT) ./mvnw -B spring-boot:run
+app-run: check-ports ## Run ONE app locally (APP=javawebapp|gowebapp; default javawebapp) on http://localhost:$(APP_DEV_PORT)
+	@$(SCRIPTS)/app-run.sh $(APP)
 
 ##@ Quality gates
 .PHONY: lint

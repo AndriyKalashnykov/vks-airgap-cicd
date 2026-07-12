@@ -175,13 +175,62 @@ istio_apply_routes_gwapi() {
   # platform's istiod, not by us, so we cannot make it compliant. (Measured with `make psa-check`.)
   ensure_namespace "$ISTIO_GWAPI_NAMESPACE" "${PSA_LEVEL_INGRESS:-baseline}"
   ensure_namespace "$GITEA_NAMESPACE"       "${PSA_LEVEL_GITEA:-restricted}"
-  ensure_namespace "$ARGOCD_DEST_NAMESPACE" "${PSA_LEVEL_APP:-restricted}"
   ensure_namespace "$TEKTON_NAMESPACE"      "${PSA_LEVEL_TEKTON:-restricted}"
+  # One namespace per app, from apps/registry.tsv.
+  local a
+  while read -r a; do
+    [ -n "$a" ] || continue
+    ensure_namespace "$a" "${PSA_LEVEL_APP:-restricted}"
+  done <<EOF
+$(app_names)
+EOF
 
-  log_info "applying Gateway(API) ${ISTIO_GWAPI_NAMESPACE}/${ISTIO_GATEWAY_NAME} (gatewayClassName=${ISTIO_GATEWAY_CLASS}) + HTTPRoutes"
+  # The listener's allowedRoutes must name EVERY app namespace, else that app's HTTPRoute attaches
+  # to nothing and its host 404s — with no error at apply time. APPENDED with yq from the registry
+  # (not a text block), so the manifest on disk stays valid YAML that yamllint/kubeconform can check.
+  local ns_json; ns_json="$(app_namespaces_json)"
+  log_info "applying Gateway(API) ${ISTIO_GWAPI_NAMESPACE}/${ISTIO_GATEWAY_NAME} (gatewayClassName=${ISTIO_GATEWAY_CLASS}) + shared-UI HTTPRoutes; app namespaces ${ns_json}"
   # shellcheck disable=SC2016
-  envsubst '${ISTIO_GWAPI_NAMESPACE} ${ISTIO_GATEWAY_NAME} ${ISTIO_GATEWAY_CLASS} ${GITEA_HOST} ${GITEA_NAMESPACE} ${JAVAWEBAPP_HOST} ${APP_NAME} ${ARGOCD_DEST_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${TEKTON_NAMESPACE}' \
-    < "${k8s_dir}/gateway-api.yaml" | run kubectl apply -f -
+  envsubst '${ISTIO_GWAPI_NAMESPACE} ${ISTIO_GATEWAY_NAME} ${ISTIO_GATEWAY_CLASS} ${GITEA_HOST} ${GITEA_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${TEKTON_NAMESPACE}' \
+    < "${k8s_dir}/gateway-api.yaml" \
+    | NSS="$ns_json" yq '(select(.kind == "Gateway") | .spec.listeners[0].allowedRoutes.namespaces.selector.matchExpressions[0].values) += (strenv(NSS) | fromjson)' \
+    | run kubectl apply -f -
+
+  # ONE HTTPRoute per app, from the registry — adding an app routes it with no YAML edit.
+  _istio_apply_app_httproute() {
+    istio_require_env ISTIO_GATEWAY_NAME ISTIO_GWAPI_NAMESPACE APP_NAME APP_NAMESPACE APP_HOST
+    log_info "applying HTTPRoute for app '${APP_NAME}' (${APP_HOST} -> ${APP_NAME}.${APP_NAMESPACE})"
+    # shellcheck disable=SC2016
+    envsubst '${ISTIO_GATEWAY_NAME} ${ISTIO_GWAPI_NAMESPACE} ${APP_NAME} ${APP_NAMESPACE} ${APP_HOST}' \
+      < "${k8s_dir}/httproute-app.yaml" | run kubectl apply -f -
+  }
+  for_each_app _istio_apply_app_httproute
+}
+
+# app_hosts_json / app_namespaces_json — the registry as a JSON array, for yq to append into a
+# rendered manifest. JSON (not a YAML text block) keeps the manifests on disk valid.
+app_hosts_json() {
+  local a first=1 out="["
+  while read -r a; do
+    [ -n "$a" ] || continue
+    [ "$first" -eq 1 ] || out="${out},"
+    out="${out}\"$(app_host "$a")\""; first=0
+  done <<EOF
+$(app_names)
+EOF
+  printf '%s]' "$out"
+}
+
+app_namespaces_json() {
+  local a first=1 out="["
+  while read -r a; do
+    [ -n "$a" ] || continue
+    [ "$first" -eq 1 ] || out="${out},"
+    out="${out}\"${a}\""; first=0
+  done <<EOF
+$(app_names)
+EOF
+  printf '%s]' "$out"
 }
 
 # ---------------------------------------------------------------------------
@@ -388,9 +437,16 @@ istio_apply_routes() {
   export ISTIO_GATEWAY_NAME ISTIO_GATEWAY_REF
 
   # Backend namespaces must exist before a VirtualService can be created in them.
-  ensure_namespace "$GITEA_NAMESPACE"       "${PSA_LEVEL_GITEA:-restricted}"
-  ensure_namespace "$ARGOCD_DEST_NAMESPACE" "${PSA_LEVEL_APP:-restricted}"
-  ensure_namespace "$TEKTON_NAMESPACE"      "${PSA_LEVEL_TEKTON:-restricted}"
+  ensure_namespace "$GITEA_NAMESPACE"  "${PSA_LEVEL_GITEA:-restricted}"
+  ensure_namespace "$TEKTON_NAMESPACE" "${PSA_LEVEL_TEKTON:-restricted}"
+  # One namespace per app, from apps/registry.tsv.
+  local a
+  while read -r a; do
+    [ -n "$a" ] || continue
+    ensure_namespace "$a" "${PSA_LEVEL_APP:-restricted}"
+  done <<EOF
+$(app_names)
+EOF
 
   if [ -n "${ISTIO_SHARED_GATEWAY:-}" ]; then
     log_info "reusing the platform-owned Gateway ${ISTIO_SHARED_GATEWAY} (creating NO Gateway of our own)"
@@ -401,19 +457,33 @@ istio_apply_routes() {
     # not a cosmetic problem.
     export ISTIO_GATEWAY_NAMESPACE ISTIO_GATEWAY_LABEL
     istio_require_env ISTIO_GATEWAY_NAMESPACE ISTIO_GATEWAY_NAME ISTIO_GATEWAY_LABEL \
-                      GITEA_HOST JAVAWEBAPP_HOST TEKTON_DASHBOARD_HOST
-    log_info "applying Gateway ${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_NAME} (selector istio=${ISTIO_GATEWAY_LABEL})"
+                      GITEA_HOST TEKTON_DASHBOARD_HOST
+    # One host per app is APPENDED from the registry with yq — never hardcoded in the manifest.
+    local hosts_json; hosts_json="$(app_hosts_json)"
+    log_info "applying Gateway ${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_NAME} (selector istio=${ISTIO_GATEWAY_LABEL}) + app hosts ${hosts_json}"
     # shellcheck disable=SC2016
-    envsubst '${ISTIO_GATEWAY_NAMESPACE} ${ISTIO_GATEWAY_NAME} ${ISTIO_GATEWAY_LABEL} ${GITEA_HOST} ${JAVAWEBAPP_HOST} ${TEKTON_DASHBOARD_HOST}' \
-      < "${k8s_dir}/gateway.yaml" | run kubectl apply -f -
+    envsubst '${ISTIO_GATEWAY_NAMESPACE} ${ISTIO_GATEWAY_NAME} ${ISTIO_GATEWAY_LABEL} ${GITEA_HOST} ${TEKTON_DASHBOARD_HOST}' \
+      < "${k8s_dir}/gateway.yaml" \
+      | HOSTS="$hosts_json" yq '.spec.servers[0].hosts += (strenv(HOSTS) | fromjson)' \
+      | run kubectl apply -f -
   fi
 
-  istio_require_env ISTIO_GATEWAY_REF GITEA_HOST GITEA_NAMESPACE JAVAWEBAPP_HOST APP_NAME \
-                    ARGOCD_DEST_NAMESPACE TEKTON_DASHBOARD_HOST TEKTON_NAMESPACE
-  log_info "applying VirtualServices (gitea/javawebapp/tekton -> ${ISTIO_GATEWAY_REF})"
+  # The shared UIs (gitea, tekton dashboard).
+  istio_require_env ISTIO_GATEWAY_REF GITEA_HOST GITEA_NAMESPACE TEKTON_DASHBOARD_HOST TEKTON_NAMESPACE
+  log_info "applying VirtualServices for the shared UIs -> ${ISTIO_GATEWAY_REF}"
   # shellcheck disable=SC2016
-  envsubst '${ISTIO_GATEWAY_REF} ${GITEA_HOST} ${GITEA_NAMESPACE} ${JAVAWEBAPP_HOST} ${APP_NAME} ${ARGOCD_DEST_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${TEKTON_NAMESPACE}' \
+  envsubst '${ISTIO_GATEWAY_REF} ${GITEA_HOST} ${GITEA_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${TEKTON_NAMESPACE}' \
     < "${k8s_dir}/virtualservices.yaml" | run kubectl apply -f -
+
+  # ONE VirtualService per app, from the registry — adding an app routes it with no YAML edit.
+  _istio_apply_app_vs() {
+    istio_require_env ISTIO_GATEWAY_REF APP_NAME APP_NAMESPACE APP_HOST
+    log_info "applying VirtualService for app '${APP_NAME}' (${APP_HOST} -> ${APP_NAME}.${APP_NAMESPACE})"
+    # shellcheck disable=SC2016
+    envsubst '${ISTIO_GATEWAY_REF} ${APP_NAME} ${APP_NAMESPACE} ${APP_HOST}' \
+      < "${k8s_dir}/virtualservice-app.yaml" | run kubectl apply -f -
+  }
+  for_each_app _istio_apply_app_vs
 }
 
 # ---------------------------------------------------------------------------

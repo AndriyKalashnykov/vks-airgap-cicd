@@ -1,12 +1,14 @@
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
-  name: javawebapp-ci
+  name: ${APP_NAME}-ci
   namespace: ${CI_NAMESPACE}
 spec:
   description: >-
-    On a push to javawebapp-app: clone -> test -> build+push image to Harbor ->
-    write the new tag back to javawebapp-deploy (which ArgoCD then syncs).
+    On a push to ${APP_NAME}-app: clone -> test -> build+push image to Harbor ->
+    write the new tag back to ${APP_NAME}-deploy (which ArgoCD then syncs).
+    ONE template, rendered per app from apps/registry.tsv — only the name and the TEST task
+    differ (maven-test for Java, go-test for Go), so the walk is provably identical.
   params:
     - name: app-repo-url
       type: string
@@ -20,7 +22,7 @@ spec:
       default: main
     - name: image
       type: string
-      description: App image without tag (e.g. harbor/apps/javawebapp).
+      description: App image without tag (e.g. harbor/apps/<app>).
     - name: builder-image
       type: string
     - name: runtime-image
@@ -47,7 +49,7 @@ spec:
 
     - name: test
       runAfter: [clone-app]
-      taskRef: { name: maven-test }
+      taskRef: { name: ${APP_TEST_TASK} }
       params:
         - { name: subdir, value: app }
         - { name: builder-image, value: $(params.builder-image) }

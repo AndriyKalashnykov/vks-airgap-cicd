@@ -3,7 +3,7 @@
 apiVersion: triggers.tekton.dev/v1beta1
 kind: TriggerBinding
 metadata:
-  name: javawebapp-push
+  name: ${APP_NAME}-push
   namespace: ${CI_NAMESPACE}
 spec:
   params:
@@ -13,7 +13,7 @@ spec:
 apiVersion: triggers.tekton.dev/v1beta1
 kind: TriggerTemplate
 metadata:
-  name: javawebapp-ci
+  name: ${APP_NAME}-ci
   namespace: ${CI_NAMESPACE}
 spec:
   params:
@@ -29,9 +29,9 @@ spec:
     - name: image
       default: ${APP_IMAGE}
     - name: builder-image
-      default: ${BUILDER_IMAGE_REF}
+      default: ${APP_BUILDER_IMAGE}
     - name: runtime-image
-      default: ${RUNTIME_IMAGE_REF}
+      default: ${APP_RUNTIME_IMAGE}
     - name: registry
       default: ${HARBOR_URL}
     - name: insecure-registry
@@ -40,13 +40,13 @@ spec:
     - apiVersion: tekton.dev/v1
       kind: PipelineRun
       metadata:
-        generateName: javawebapp-ci-
+        generateName: ${APP_NAME}-ci-
         namespace: ${CI_NAMESPACE}
       spec:
         pipelineRef:
-          name: javawebapp-ci
+          name: ${APP_NAME}-ci
         taskRunTemplate:
-          serviceAccountName: javawebapp-ci
+          serviceAccountName: apps-ci
         params:
           - { name: app-repo-url, value: $(tt.params.app-repo-url) }
           - { name: app-revision, value: $(tt.params.app-revision) }
@@ -74,39 +74,44 @@ spec:
               optional: true
 ---
 apiVersion: triggers.tekton.dev/v1beta1
-kind: EventListener
+kind: Trigger
 metadata:
-  name: javawebapp
+  name: ${APP_NAME}
   namespace: ${CI_NAMESPACE}
+  labels:
+    # The SHARED EventListener (eventlistener.yaml) selects Triggers by this label — that is what
+    # makes "add an app" one registry row instead of a YAML edit.
+    vks-airgap-cicd/ci: app
 spec:
-  serviceAccountName: tekton-triggers-sa
-  triggers:
-    - name: gitea-push
-      interceptors:
-        # Gitea sends GitHub-compatible headers (X-GitHub-Event +
-        # X-Hub-Signature-256 HMAC) alongside its X-Gitea-* ones, so the github
-        # interceptor validates the shared secret and filters push events; the
-        # cel interceptor then restricts to the tracked branch and extracts it.
-        - ref:
-            name: "github"
-          params:
-            - name: secretRef
-              value:
-                secretName: gitea-webhook-secret
-                secretKey: secretToken
-            - name: eventTypes
-              value: ["push"]
-        - ref:
-            name: "cel"
-          params:
-            - name: filter
-              value: >-
-                body.ref == 'refs/heads/${APP_BRANCH}'
-            - name: overlays
-              value:
-                - key: branch
-                  expression: "body.ref.split('/')[2]"
-      bindings:
-        - ref: javawebapp-push
-      template:
-        ref: javawebapp-ci
+  interceptors:
+    # Gitea sends GitHub-compatible headers (X-GitHub-Event + X-Hub-Signature-256 HMAC) alongside
+    # its X-Gitea-* ones, so the github interceptor validates the shared secret and filters push
+    # events.
+    - ref:
+        name: "github"
+      params:
+        - name: secretRef
+          value:
+            secretName: gitea-webhook-secret
+            secretKey: secretToken
+        - name: eventTypes
+          value: ["push"]
+    - ref:
+        name: "cel"
+      params:
+        # BOTH conditions matter. The branch filter is the old one. The REPOSITORY filter is what
+        # keeps the apps apart now that one EventListener serves all of them: without it, a push to
+        # ANY app repo would fire EVERY app's pipeline (each building the wrong source). Gitea's
+        # push payload carries the repo as body.repository.name (e.g. "javawebapp-app").
+        - name: filter
+          value: >-
+            body.ref == 'refs/heads/${APP_BRANCH}' &&
+            body.repository.name == '${APP_GIT_REPO}'
+        - name: overlays
+          value:
+            - key: branch
+              expression: "body.ref.split('/')[2]"
+  bindings:
+    - ref: ${APP_NAME}-push
+  template:
+    ref: ${APP_NAME}-ci

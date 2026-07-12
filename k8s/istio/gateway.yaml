@@ -27,7 +27,9 @@ spec:
         number: 80
         name: http
         protocol: HTTP
+      # One host per app is APPENDED to this list at apply time, from apps/registry.tsv
+      # (scripts/lib/istio.sh, with yq). They are not listed here because hardcoding them would
+      # mean editing this manifest for every new app — the registry exists so that never happens.
       hosts:
         - ${GITEA_HOST}
-        - ${JAVAWEBAPP_HOST}
         - ${TEKTON_DASHBOARD_HOST}

@@ -1,7 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: ${ARGOCD_APP_NAME}
+  name: ${APP_NAME}
   namespace: ${ARGOCD_NAMESPACE}
   finalizers:
     - resources-finalizer.argocd.argoproj.io
@@ -17,7 +17,7 @@ spec:
     # Supervisor, `make argocd-register-guest` registers the guest cluster and sets
     # ARGOCD_DEST_SERVER to its API URL so ArgoCD deploys THERE, not on the Supervisor.
     server: ${ARGOCD_DEST_SERVER}
-    namespace: ${ARGOCD_DEST_NAMESPACE}
+    namespace: ${APP_NAMESPACE}
   syncPolicy:
     automated:
       prune: true

@@ -87,6 +87,52 @@ app_set_message() {
   esac
 }
 
+# --- per-LANGUAGE behaviour #3: the base images the app's Dockerfile is built FROM -------------
+# Both are refs INTO HARBOR (the air gap has nothing else). The tags come from .env.example and are
+# kept aligned with images/images.txt by `make check-image-alignment`, which reads each app's
+# Dockerfile ARGs straight out of the registry — so this stays honest without a per-app gate.
+app_builder_image() {
+  local name="$1"
+  case "$(app_lang "$name")" in
+    # Java needs a PRE-BAKED builder image (its ~/.m2 holds every dependency) because an in-cluster
+    # `mvn` cannot reach Maven Central. That image is built + pushed by 15-build-push-builder.sh.
+    java) printf '%s/%s/%s-builder:%s' "$HARBOR_URL" "$HARBOR_INFRA_PROJECT" "$name" "${BUILDER_IMAGE_TAG:?}" ;;
+    # Go needs NO builder image: the app is stdlib-only, so the offline build fetches nothing and
+    # the mirrored upstream golang image is enough.
+    go)   printf '%s/%s/golang:%s' "$HARBOR_URL" "$HARBOR_INFRA_PROJECT" "${GOLANG_BUILD_TAG:?}" ;;
+    *)    die "app '$name': add a branch to app_builder_image()" ;;
+  esac
+}
+
+app_runtime_image() {
+  local name="$1"
+  case "$(app_lang "$name")" in
+    java) printf '%s/%s/eclipse-temurin:%s' "$HARBOR_URL" "$HARBOR_INFRA_PROJECT" "${TEMURIN_JRE_TAG:?}" ;;
+    go)   printf '%s/%s/distroless/static-debian12:%s' "$HARBOR_URL" "$HARBOR_INFRA_PROJECT" "${DISTROLESS_STATIC_TAG:?}" ;;
+    *)    die "app '$name': add a branch to app_runtime_image()" ;;
+  esac
+}
+
+# --- per-LANGUAGE behaviour #4: the app's health endpoint ---------------------------------------
+# `make verify` waits for the app to serve HTTP before asserting the marker. Spring Boot exposes
+# actuator; the Go app exposes a plain /healthz (no actuator exists outside Spring).
+app_health_path() {
+  case "$(app_lang "$1")" in
+    java) printf '/actuator/health' ;;
+    go)   printf '/healthz' ;;
+    *)    die "app '$1': add a branch to app_health_path()" ;;
+  esac
+}
+
+# app_has_builder <name> — true iff the app ships a Dockerfile.builder, i.e. it needs a pre-baked
+# offline dependency cache. Keyed on the FILE, not on the language: that is what actually decides
+# whether `make builder-image` has work to do, and a future language that needs one just adds the
+# file. (gowebapp has none — stdlib-only.)
+app_has_builder() { [ -f "${REPO_ROOT}/$(app_src "$1")/Dockerfile.builder" ]; }
+
+# app_image <name> — the app's image repo in Harbor (no tag; the pipeline tags it with the commit).
+app_image() { printf '%s/%s/%s' "$HARBOR_URL" "$HARBOR_APP_PROJECT" "$1"; }
+
 # app_export <name> — export the APP_* tokens the manifests are rendered with (envsubst), so a
 # single set of templates (k8s/tekton/*, k8s/argocd/*, the ingress route) serves every app.
 app_export() {
@@ -100,6 +146,25 @@ app_export() {
   APP_NAMESPACE="$name"                    # one namespace per app, named after it
   APP_GIT_REPO="${name}-app"               # Gitea source repo
   APP_DEPLOY_REPO="${name}-deploy"         # Gitea deploy repo (ArgoCD's source)
+  APP_IMAGE="$(app_image "$name")"         # Harbor repo for the built image (tagged with the commit)
+  APP_BUILDER_IMAGE="$(app_builder_image "$name")"
+  APP_RUNTIME_IMAGE="$(app_runtime_image "$name")"
   export APP_NAME APP_LANG APP_SRC APP_DEPLOY_DIR APP_HOST APP_TEST_TASK \
-         APP_NAMESPACE APP_GIT_REPO APP_DEPLOY_REPO
+         APP_NAMESPACE APP_GIT_REPO APP_DEPLOY_REPO APP_IMAGE \
+         APP_BUILDER_IMAGE APP_RUNTIME_IMAGE
+}
+
+# for_each_app <fn> — run <fn> <app> for every app, in registry order, with app_export already
+# done. Every per-app loop in the repo goes through this, so "adding an app" is one registry row
+# and nothing else. NOTE the `while read` (not `for x in $(...)`): the login shell may be zsh,
+# which does NOT word-split an unquoted expansion, so a `for` loop would run ONCE on the whole blob.
+for_each_app() {
+  local fn="$1" app
+  while read -r app; do
+    [ -n "$app" ] || continue
+    app_export "$app"
+    "$fn" "$app"
+  done <<EOF
+$(app_names)
+EOF
 }

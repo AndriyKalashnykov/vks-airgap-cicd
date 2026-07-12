@@ -32,7 +32,14 @@ fi
 ENGINE="$(container_engine)"
 log_info "using container engine: $ENGINE"
 
-REF="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/javawebapp-builder:${BUILDER_IMAGE_TAG}"
+# Which apps need a pre-baked builder image? The ones that SHIP a Dockerfile.builder — keyed on
+# the FILE, not on a language name, so a future app that needs one just adds the file (and
+# gowebapp, which is stdlib-only and fetches nothing offline, correctly needs none).
+# shellcheck source=scripts/lib/apps.sh
+. "${SCRIPT_DIR}/lib/apps.sh"
+BUILDER_APPS="$(app_names | while read -r a; do app_has_builder "$a" && printf '%s ' "$a"; done)"
+[ -n "$BUILDER_APPS" ] || { log_info "no app ships a Dockerfile.builder — nothing to build (stdlib-only apps need no offline dependency cache)"; exit 0; }
+log_info "apps needing an offline builder image: ${BUILDER_APPS}"
 MAVEN_BASE="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/maven:3.9-eclipse-temurin-25"
 TLS_VERIFY="true"; [ "${HARBOR_INSECURE:-0}" = "1" ] && TLS_VERIFY="false"
 # SECURE Harbor: point podman at the CA via --cert-dir (a clean dir holding only ca.crt) so
@@ -58,12 +65,15 @@ else
   log_warn "mirrored maven image not pullable; using public $BUILD_BASE"
 fi
 
-log_info "building builder image $REF (this pulls Maven deps — needs internet)"
+for app in $BUILDER_APPS; do
+REF="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/${app}-builder:${BUILDER_IMAGE_TAG}"
+src="${REPO_ROOT}/$(app_src "$app")"
+log_info "building builder image $REF for '${app}' (this pulls its deps — needs internet)"
 run "$ENGINE" build \
   --build-arg "MAVEN_IMAGE=${BUILD_BASE}" \
-  -f "${REPO_ROOT}/apps/java/javawebapp/Dockerfile.builder" \
+  -f "${src}/Dockerfile.builder" \
   -t "$REF" \
-  "${REPO_ROOT}/apps/java/javawebapp"
+  "${src}"
 
 log_info "logging in to Harbor and pushing $REF"
 # --tls-verify is a podman flag (docker uses daemon insecure-registries / certs.d).
@@ -76,4 +86,7 @@ push_args=("$REF")
 run "$ENGINE" push "${push_args[@]}"
 
 log_info "builder image pushed: $REF"
-log_info "the pipeline references it as BUILDER_IMAGE; the app Dockerfile builds offline against it"
+done
+
+log_info "builder images pushed for: ${BUILDER_APPS}"
+log_info "each app's pipeline references its own as BUILDER_IMAGE; the app Dockerfile then builds OFFLINE against it"

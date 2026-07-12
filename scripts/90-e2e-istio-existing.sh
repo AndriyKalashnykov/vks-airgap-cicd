@@ -33,7 +33,12 @@ require_cmd helm
 require_cmd jq
 : "${KUBECONFIG:?}"; export KUBECONFIG
 : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"; : "${ISTIO_VERSION:?}"
-: "${JAVAWEBAPP_HOST:?}"; : "${APP_NAME:?}"; : "${ARGOCD_DEST_NAMESPACE:?}"
+# The RED tests probe ONE app's host (any app proves the selector/gateway mechanics); take the
+# first from the registry rather than hardcoding an app name.
+# shellcheck source=scripts/lib/apps.sh
+. "${SCRIPT_DIR}/lib/apps.sh"
+PROBE_APP="$(app_names | head -1)"
+PROBE_HOST="$(app_host "$PROBE_APP")"; export PROBE_HOST
 
 PLATFORM_NS="${PLATFORM_ISTIO_NAMESPACE:-platform-ingress}"
 PLATFORM_RELEASE="${PLATFORM_ISTIO_RELEASE:-platform-gw}"
@@ -115,7 +120,7 @@ probe_code() { # -> HTTP code through the gateway, or 000 when there is no liste
   # curl already writes `000` via -w on a connection failure, so a `|| echo 000` fallback
   # would CONCATENATE and print "000000". Swallow curl's non-zero exit instead.
   kubectl -n "$PROBE_NS" exec probe -- sh -c "curl -s -o /dev/null -w '%{http_code}' \
-    -H 'Host: ${JAVAWEBAPP_HOST}' --max-time 5 \
+    -H 'Host: ${PROBE_HOST}' --max-time 5 \
     'http://${ISTIO_GATEWAY_SERVICE}.${ISTIO_GATEWAY_NAMESPACE}.svc.cluster.local/' || true" 2>/dev/null
 }
 
@@ -126,13 +131,13 @@ kind: Gateway
 metadata: {name: red-hardcoded, namespace: ${ISTIO_GATEWAY_NAMESPACE}}
 spec:
   selector: {istio: ingressgateway}
-  servers: [{port: {number: 80, name: http, protocol: HTTP}, hosts: ["${JAVAWEBAPP_HOST}"]}]
+  servers: [{port: {number: 80, name: http, protocol: HTTP}, hosts: ["${PROBE_HOST}"]}]
 ---
 apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata: {name: red-hardcoded, namespace: ${ARGOCD_DEST_NAMESPACE}}
 spec:
-  hosts: ["${JAVAWEBAPP_HOST}"]
+  hosts: ["${PROBE_HOST}"]
   gateways: ["${ISTIO_GATEWAY_NAMESPACE}/red-hardcoded"]
   http: [{route: [{destination: {host: ${APP_NAME}.${ARGOCD_DEST_NAMESPACE}.svc.cluster.local, port: {number: 80}}}]}]
 YAML

@@ -104,25 +104,36 @@ kustomize_build() {
   else return 127; fi
 }
 
-echo "== kustomize build (deploy/javawebapp) =="
-if [ -d "$REPO_ROOT/deploy/javawebapp" ]; then
-  if kustomize_build "$REPO_ROOT/deploy/javawebapp" "$RENDERED"; then
-    log_info "kustomize build OK ($(grep -c '^kind:' "$RENDERED") resources)"
+echo "== kustomize build (every app's deploy dir) =="
+# shellcheck source=scripts/lib/apps.sh
+. "${REPO_ROOT}/scripts/lib/apps.sh"
+_validated=0
+while read -r _app; do
+  [ -n "$_app" ] || continue
+  _dir="${REPO_ROOT}/$(app_deploy "$_app")"
+  if [ ! -d "$_dir" ]; then
+    log_error "app '${_app}': deploy dir $(app_deploy "$_app") does not exist"; rc=1; continue
+  fi
+  if kustomize_build "$_dir" "$RENDERED"; then
+    log_info "kustomize build OK for '${_app}' ($(grep -c '^kind:' "$RENDERED") resources)"
+    _validated=$((_validated + 1))
     if have kubeconform; then
-      KC_LOCS=("${KC_LOCS_CORE[@]}")   # deploy/javawebapp is all core k8s kinds
+      KC_LOCS=("${KC_LOCS_CORE[@]}")   # an app's deploy manifests are all core k8s kinds
       kc -strict -ignore-missing-schemas "$RENDERED" || rc=1
     elif have kubectl; then
       log_info "kubeconform absent — falling back to 'kubectl apply --dry-run=client'"
       kubectl apply --dry-run=client -f "$RENDERED" >/dev/null || rc=1
     else
-      log_warn "no kubeconform/kubectl — deploy manifests unchecked against schemas"
+      log_warn "no kubeconform/kubectl — '${_app}' deploy manifests unchecked against schemas"
     fi
   else
-    log_error "kustomize build failed (need kustomize or kubectl)"; rc=1
+    log_error "kustomize build failed for '${_app}' (need kustomize or kubectl)"; rc=1
   fi
-else
-  log_warn "deploy/javawebapp not present yet — skipped"
-fi
+done <<EOF
+$(app_names)
+EOF
+# Print the DENOMINATOR: a gate that cannot say how many apps it checked cannot be trusted.
+log_info "kustomize: validated ${_validated} app deploy dir(s)"
 
 echo "== kubeconform (k8s/) =="
 if have kubeconform; then

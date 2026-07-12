@@ -17,9 +17,11 @@ require_cmd kubectl; require_cmd git; require_cmd curl; require_cmd yq
 : "${KUBECONFIG:?}"; export KUBECONFIG
 : "${GITEA_NAMESPACE:?}"; : "${GITEA_ADMIN_USER:?}"
 : "${GITEA_ADMIN_PASSWORD:?set GITEA_ADMIN_PASSWORD in .env}"
-: "${GITEA_ORG:?}"; : "${GITEA_APP_REPO:?}"; : "${GITEA_DEPLOY_REPO:?}"
+: "${GITEA_ORG:?}"
 : "${CI_NAMESPACE:?}"; : "${APP_NAME:?}"; : "${APP_BRANCH:?}"; : "${ARGOCD_TRACK_BRANCH:?}"
-: "${HARBOR_URL:?}"; : "${HARBOR_APP_PROJECT:?}"; : "${ARGOCD_DEST_NAMESPACE:?}"; : "${APP_REPLICAS:?}"
+: "${HARBOR_URL:?}"; : "${HARBOR_APP_PROJECT:?}"; : "${APP_REPLICAS:?}"
+# shellcheck source=scripts/lib/apps.sh
+. "${SCRIPT_DIR}/lib/apps.sh"
 : "${GITEA_CI_USER:?}"
 GITEA_ADMIN_EMAIL="${GITEA_ADMIN_EMAIL:-admin@vks-airgap-cicd.local}"
 # Ephemeral by default (pick_port) so parallel runs don't collide on a fixed local
@@ -86,12 +88,19 @@ printf '{"username":"%s"}' "$GITEA_ORG" > "${tmp}/org.json"
 code="$(api -X POST -d @"${tmp}/org.json" "${base}/api/v1/orgs")"
 ok "$code" || die "create org failed (http $code)"; log_info "org '$GITEA_ORG' ready (http $code)"
 
-for repo in "$GITEA_APP_REPO" "$GITEA_DEPLOY_REPO"; do
-  printf '{"name":"%s","private":false,"auto_init":false,"default_branch":"%s"}' \
-    "$repo" "$ARGOCD_TRACK_BRANCH" > "${tmp}/repo.json"
-  code="$(api -X POST -d @"${tmp}/repo.json" "${base}/api/v1/orgs/${GITEA_ORG}/repos")"
-  ok "$code" || die "create repo '$repo' failed (http $code)"; log_info "repo '$repo' ready (http $code)"
-done
+# Two repos PER APP: <app>-app (source) and <app>-deploy (what ArgoCD watches). Derived from
+# apps/registry.tsv — `while read` (not `for x in $(...)`), because the login shell may be zsh,
+# which does not word-split an unquoted expansion and would run the body ONCE on the whole blob.
+create_app_repos() {
+  local repo code
+  for repo in "$APP_GIT_REPO" "$APP_DEPLOY_REPO"; do
+    printf '{"name":"%s","private":false,"auto_init":false,"default_branch":"%s"}' \
+      "$repo" "$ARGOCD_TRACK_BRANCH" > "${tmp}/repo.json"
+    code="$(api -X POST -d @"${tmp}/repo.json" "${base}/api/v1/orgs/${GITEA_ORG}/repos")"
+    ok "$code" || die "create repo '$repo' failed (http $code)"; log_info "repo '$repo' ready (http $code)"
+  done
+}
+for_each_app create_app_repos
 
 # ---- 4. Push content ----
 gitcreds="${tmp}/gitcreds"
@@ -120,38 +129,45 @@ push_repo() {
   log_info "pushed ${repo} (branch ${branch})"
 }
 
-# App repo: the Spring Boot app at repo root.
-push_repo "${REPO_ROOT}/apps/java/javawebapp" "$GITEA_APP_REPO" "$APP_BRANCH"
+# ---- 4b/5. PER APP (apps/registry.tsv): seed <app>-app + <app>-deploy, and register ONE webhook
+# on the app repo pointing at the SHARED EventListener. Adding an app is a registry ROW — no edit
+# here. Every app gets the identical walk; nothing about this loop is language-specific.
+seed_app() {
+  local app="$1"
 
-# Deploy repo: deploy/javawebapp rendered to operator values (kustomization at root).
-deploy_src="${tmp}/deploy-src"
-rm -rf "$deploy_src"; mkdir -p "$deploy_src"; cp -a "${REPO_ROOT}/deploy/javawebapp/." "$deploy_src/"
-NEWNAME="${HARBOR_URL}/${HARBOR_APP_PROJECT}/${APP_NAME}" NS="$ARGOCD_DEST_NAMESPACE" \
-  yq -i '.images[0].newName = strenv(NEWNAME) | .namespace = strenv(NS)' \
-  "${deploy_src}/kustomization.yaml"
-yq -i ".replicas[0].count = ${APP_REPLICAS}" "${deploy_src}/kustomization.yaml"
-push_repo "$deploy_src" "$GITEA_DEPLOY_REPO" "$ARGOCD_TRACK_BRANCH"
+  # Source repo: the app's source dir IS the content of <app>-app.
+  push_repo "${REPO_ROOT}/${APP_SRC}" "$APP_GIT_REPO" "$APP_BRANCH"
 
-# ---- 5. Register the push webhook on javawebapp-app -> EventListener (idempotent) ----
-# Gitea does NOT dedupe hooks — a blind re-POST on a re-run creates a DUPLICATE hook,
-# firing 2 PipelineRuns per push. Skip if a hook already targets our EventListener URL.
-hook_url="http://el-javawebapp.${CI_NAMESPACE}.svc:8080"
-hooks_api="${base}/api/v1/repos/${GITEA_ORG}/${GITEA_APP_REPO}/hooks"
-# Capture the hooks list first, then grep the variable draining all input (no `-q`): piping
-# `api_body … | grep -qF` lets grep close the pipe on its first match and SIGPIPE `api_body`
-# (exit 141), which under `set -o pipefail` reads as "no hook present" → we would create a
-# DUPLICATE hook (the very thing this idempotency check exists to prevent) on a large hooks body.
-hooks_body="$(api_body -X GET "$hooks_api" || true)"
-if printf '%s' "$hooks_body" | grep -F "$hook_url" >/dev/null; then
-  log_info "webhook on ${GITEA_APP_REPO} -> ${hook_url} already present — skipping (idempotent)"
-else
-  cat > "${tmp}/hook.json" <<EOF
+  # Deploy repo: the app's kustomize dir, rendered to operator values (kustomization at root).
+  local deploy_src="${tmp}/deploy-src-${app}"
+  rm -rf "$deploy_src"; mkdir -p "$deploy_src"; cp -a "${REPO_ROOT}/${APP_DEPLOY_DIR}/." "$deploy_src/"
+  NEWNAME="${APP_IMAGE}" NS="${APP_NAMESPACE}" \
+    yq -i '.images[0].newName = strenv(NEWNAME) | .namespace = strenv(NS)' \
+    "${deploy_src}/kustomization.yaml"
+  yq -i ".replicas[0].count = ${APP_REPLICAS}" "${deploy_src}/kustomization.yaml"
+  push_repo "$deploy_src" "$APP_DEPLOY_REPO" "$ARGOCD_TRACK_BRANCH"
+
+  # Webhook on <app>-app -> the shared EventListener. Gitea does NOT dedupe hooks: a blind re-POST
+  # on a re-run creates a DUPLICATE, firing 2 PipelineRuns per push. Skip if ours is already there.
+  local hook_url="http://el-apps.${CI_NAMESPACE}.svc:8080"
+  local hooks_api="${base}/api/v1/repos/${GITEA_ORG}/${APP_GIT_REPO}/hooks"
+  # Capture the body, then grep the VARIABLE draining all input (no `-q`): `api_body | grep -qF`
+  # lets grep close the pipe on its first match and SIGPIPE api_body (exit 141), which under
+  # `set -o pipefail` reads as "no hook present" -> we would create the duplicate this check exists
+  # to prevent.
+  local hooks_body; hooks_body="$(api_body -X GET "$hooks_api" || true)"
+  if printf '%s' "$hooks_body" | grep -F "$hook_url" >/dev/null; then
+    log_info "webhook on ${APP_GIT_REPO} -> ${hook_url} already present — skipping (idempotent)"
+  else
+    cat > "${tmp}/hook-${app}.json" <<EOF
 {"type":"gitea","active":true,"events":["push"],
  "config":{"url":"${hook_url}","content_type":"json","secret":"${WEBHOOK_TOKEN}"}}
 EOF
-  code="$(api -X POST -d @"${tmp}/hook.json" "$hooks_api")"
-  ok "$code" || die "webhook registration failed (http $code)"
-  log_info "webhook on ${GITEA_APP_REPO} -> ${hook_url} (http $code)"
-fi
+    local code; code="$(api -X POST -d @"${tmp}/hook-${app}.json" "$hooks_api")"
+    ok "$code" || die "webhook registration failed for ${APP_GIT_REPO} (http $code)"
+    log_info "webhook on ${APP_GIT_REPO} -> ${hook_url} (http $code)"
+  fi
+}
+for_each_app seed_app
 
-log_info "Gitea seeded: org '${GITEA_ORG}', repos '${GITEA_APP_REPO}' + '${GITEA_DEPLOY_REPO}'"
+log_info "Gitea seeded: org '${GITEA_ORG}' — for each app: <app>-app + <app>-deploy ($(app_names | tr '\n' ' '))"

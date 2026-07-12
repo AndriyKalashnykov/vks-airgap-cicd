@@ -11,7 +11,7 @@
 # via BUILDER_IMAGE / RUNTIME_IMAGE, exactly as it does for the Java app.
 
 ARG BUILDER_IMAGE=golang:1.25.5-bookworm
-ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
+ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot@sha256:b7bb25d9f7c31d2bdd1982feb4dafcaf137703c7075dbe2febb41c24212b946f
 
 # BUILDER_IMAGE default is explicitly tagged; DL3006 cannot see through the ARG.
 # hadolint ignore=DL3006
@@ -45,8 +45,16 @@ FROM ${RUNTIME_IMAGE} AS runtime
 ARG APP_INTERNAL_PORT=8080
 ENV APP_INTERNAL_PORT=${APP_INTERNAL_PORT}
 
-# distroless:nonroot already runs as uid 65532 — no user creation needed, and no shell exists.
+# distroless:nonroot already defaults to uid 65532 and the image has no shell and no package
+# manager, so there is no user to create. State the UID EXPLICITLY anyway: relying on the base
+# image's default is implicit (a base bump could change it), a scanner cannot see through the ARG
+# (trivy DS-0002), and it must match deploy/gowebapp/deployment.yaml's runAsUser — if the two ever
+# disagree, the kubelet refuses to start the container.
 COPY --from=build /out/gowebapp /gowebapp
+
+ARG APP_UID=65532
+ARG APP_GID=65532
+USER ${APP_UID}:${APP_GID}
 
 EXPOSE ${APP_INTERNAL_PORT}
 
