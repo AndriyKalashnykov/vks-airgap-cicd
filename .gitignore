@@ -44,7 +44,12 @@ links.md
 token.md
 
 # Claude Code harness (agent worktrees, local state) — never tracked/scanned
-.claude/
+# Ignore the harness's scratch (worktrees, local settings) — but NOT the repo's own agent
+# DEFINITIONS: the VKS adversarial reviewer is a STOPPING RULE for every session (see CLAUDE.md),
+# so it must travel with the repo. (A negation cannot re-include a file under an EXCLUDED DIR, so
+# exclude the CONTENTS, not the directory.)
+.claude/*
+!.claude/agents/
 
 # Serializes registry-mutating work (see with_registry_lock in scripts/lib/os.sh)
 .registry.lock
