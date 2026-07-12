@@ -197,8 +197,17 @@ platform: install-gitea seed-gitea install-tekton configure-tekton ## Install + 
 configure-argocd: check-env ## Register the deploy repo + create the ArgoCD Application
 	@$(SCRIPTS)/70-configure-argocd.sh
 
+.PHONY: argocd-register-guest
+argocd-register-guest: ## Register the guest cluster as an ArgoCD destination (real-lab cross-cluster: ArgoCD on the Supervisor; ADMIN-only; needs ARGOCD_KUBECONFIG + KUBECONFIG)
+	@$(SCRIPTS)/71-argocd-register-guest.sh
+
 .PHONY: gitops
-gitops: configure-argocd ## Wire ArgoCD to track webui-deploy
+gitops: ## Wire ArgoCD to track webui-deploy (auto-registers the guest cluster when ArgoCD is off-cluster: ARGOCD_KUBECONFIG set)
+	@if [ -n "$(ARGOCD_KUBECONFIG)" ]; then \
+	  echo "==> ArgoCD is off-cluster (ARGOCD_KUBECONFIG set) — registering the guest cluster as an ArgoCD destination first"; \
+	  $(MAKE) argocd-register-guest; \
+	fi
+	@$(MAKE) configure-argocd
 
 ##@ Access (URLs + logins)
 .PHONY: creds-show creds
@@ -260,6 +269,10 @@ e2e-kind-both: ## Matrix: run the full KinD e2e in BOTH SSL modes (secure self-s
 # when empty a fresh `mktemp -d` is used per run (and removed on exit), so nothing
 # pre-exists. Kept out of BUNDLE_DIR/IMAGE_CACHE_DIR so it survives load_env re-sourcing.
 SNEAKERNET_TRANSFER ?=
+
+.PHONY: e2e-kind-cross-cluster
+e2e-kind-cross-cluster: ## Faithful 2-KinD-cluster validation of the cross-cluster ArgoCD registration (HUB ArgoCD registers a GUEST cluster + syncs an app INTO it — the real-lab Supervisor→guest topology)
+	@$(SCRIPTS)/e2e-cross-cluster.sh
 
 .PHONY: e2e-sneakernet
 e2e-sneakernet: ## Faithful TWO-BOX sneakernet on KinD: [host=internet box] mirror-pull → bundle → carry ONLY the tarball → [FRESH jumpbox container=air-gap box] bundle-load → mirror-push → mirror-verify

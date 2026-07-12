@@ -1,0 +1,10 @@
+# Trivial manifest deployed by ArgoCD (in the HUB cluster) into the GUEST cluster, to prove the
+# cross-cluster destination works end-to-end. Consumed ONLY by scripts/e2e-cross-cluster.sh
+# (make e2e-kind-cross-cluster). No namespace here — ArgoCD applies it into the Application's
+# destination namespace (cc-probe) on the GUEST cluster.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cc-probe-marker
+data:
+  proof: cross-cluster-deploy-ok
