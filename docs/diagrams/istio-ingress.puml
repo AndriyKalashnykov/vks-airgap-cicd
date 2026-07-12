@@ -1,0 +1,58 @@
+@startuml istio-ingress
+!include c4/C4_Deployment.puml
+!include _style.puml
+LAYOUT_TOP_DOWN()
+
+title Istio ingress — two scenarios: we INSTALL the mesh, or we ATTACH to one we did not install
+
+' ---------------------------------------------------------------------------
+' Every label here describes what the REPO actually does (scripts/46, scripts/47,
+' k8s/istio/*). Nothing on this diagram asserts how Broadcom packages Istio on
+' VKS — that is unverified; see docs/decisions/istio-on-vks.md.
+' ---------------------------------------------------------------------------
+
+Person(op, "Operator / browser", "resolves *.vks.local via /etc/hosts -> INGRESS_LB_IP")
+
+Deployment_Node(s1, "SCENARIO 1 — we INSTALL Istio   (INGRESS_CONTROLLER=istio, default)", "guest cluster · scripts/46-install-istio.sh · we OWN the mesh") {
+  Deployment_Node(s1cp, "namespace: istio-system", "helm istio/base + istio/istiod") {
+    Container(s1istiod, "istiod", "control plane\nimages from Harbor (global.hub)\nsidecar injection DISABLED")
+  }
+  Deployment_Node(s1gw, "namespace: istio-ingress", "helm istio/gateway · release istio-ingressgateway") {
+    Container(s1envoy, "ingress gateway (Envoy)", "Service type LoadBalancer\nselector label PINNED by us:\nlabels.istio=ingressgateway")
+  }
+  Deployment_Node(s1routes, "our route objects", "applied by scripts/lib/istio.sh") {
+    Container(s1g, "Gateway  vks-uis", "in the gateway ns\nselector: istio=ingressgateway")
+    Container(s1vs, "VirtualServices", "one per UI, in the BACKEND's namespace\ngateways: <gw-ns>/vks-uis")
+  }
+}
+
+Deployment_Node(s2, "SCENARIO 2 — the platform ALREADY installed Istio   (INGRESS_CONTROLLER=istio-existing)", "guest cluster · scripts/47-attach-istio.sh · we install NOTHING") {
+  Deployment_Node(s2cp, "namespace: <theirs>", "installed and owned by the platform team") {
+    Container(s2istiod, "istiod", "we only READ it\n(version = the running image tag)")
+  }
+  Deployment_Node(s2gw, "namespace: <theirs>", "their helm release — name unknown to us") {
+    Container(s2envoy, "ingress gateway (Envoy)", "DISCOVERED: the Service exposing port 15021\nwith a spec.selector.istio key\n(istiod has no 15021 — that is what excludes it)")
+  }
+  Deployment_Node(s2routes, "the ONLY things we create", "same lib, same manifests") {
+    Container(s2g, "Gateway (if allowed)", "selector: istio=<DISCOVERED label>\nthe chart derives it from the HELM RELEASE NAME,\nso it is NOT 'ingressgateway'\n— else reuse theirs: ISTIO_SHARED_GATEWAY=<ns>/<name>")
+    Container(s2vs, "VirtualServices", "in the BACKEND's namespace\n(the only place a locked-down tenant may write)")
+  }
+}
+
+Deployment_Node(be, "Backend Services (both scenarios)", "NO sidecars — the gateway proxies straight to each ClusterIP") {
+  Container(bgitea, "gitea", "gitea.vks.local")
+  Container(bapp, "webui", "app.vks.local")
+  Container(btkn, "tekton-dashboard", "tekton.vks.local")
+}
+
+Rel(op, s1envoy, "http://*.vks.local", "one LoadBalancer IP")
+Rel(op, s2envoy, "http://*.vks.local", "their LoadBalancer IP")
+Rel(s1g, s1envoy, "binds (selector matches)")
+Rel(s2g, s2envoy, "binds ONLY with the discovered label")
+Rel(s1vs, s1g, "gateways: <gw-ns>/<name>")
+Rel(s2vs, s2g, "gateways: <gw-ns>/<name>\n(a BARE name resolves namespace-locally -> 404)")
+Rel(s1envoy, bapp, "routes to ClusterIP")
+Rel(s2envoy, bapp, "routes to ClusterIP")
+
+SHOW_LEGEND()
+@enduml

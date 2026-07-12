@@ -34,6 +34,9 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make creds` / `make argocd-password` | Print access URLs+logins / the ArgoCD admin password (context-aware, self-resolves kubeconfig) |
 | `make install-ingress` | Install the ingress (`INGRESS_CONTROLLER=istio` default / `traefik`) fronting the UIs at `*.vks.local` |
 | `make install-istio` / `install-traefik` | Install a specific ingress controller directly |
+| `make istio-preflight` | Read-only: is Istio here, what `Gateway` selector does it require, what may this kubeconfig do, and what must the mesh admin grant? Run before touching a cluster you don't own |
+| `make attach-istio` | Attach to an Istio the platform team ALREADY installed (`INGRESS_CONTROLLER=istio-existing`) — installs nothing, discovers the gateway, applies routes only |
+| `make e2e-kind-istio-existing` | KinD regression test for the attach mode: a "platform team" installs Istio under FOREIGN naming, we attach with zero install (+ both REDs) |
 | `make install-all` | Full air-gap install: `mirror → builder-image → vks-login → platform → gitops` |
 | `make verify` | End-to-end smoke test (LIVE cluster) |
 | `make verify-ingress` / `verify-ingress-both` | Assert the `*.vks.local` UIs route through the ingress LB (one controller / both) |
@@ -85,10 +88,28 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   the configure scripts with a RESTRICTED `envsubst` allowlist (so step-script
   `$(...)`/`${}` are untouched). Tekton install rewrites upstream image hosts
   (`gcr.io/…` → Harbor) via `sed`, matching `lib/mirror.sh`'s mapping.
-- **Pluggable ingress**: `INGRESS_CONTROLLER` (`istio` default / `traefik`) selects the
-  controller. `scripts/44-install-ingress.sh` dispatches to `46-install-istio.sh` (helm
-  control plane + gateway LB; istio images from Harbor via the `global.hub` override) or
-  `45-install-traefik.sh` (single-binary LB). Both expose the SAME `*.vks.local` hosts
+- **Istio: two scenarios** (see `docs/decisions/istio-on-vks.md`). `INGRESS_CONTROLLER=istio`
+  (default) INSTALLS the mesh; `istio-existing` attaches to one the platform team already
+  installed and installs NOTHING. **Istio has no credentials** — it exposes no login, no bearer
+  token, and no admin API; mesh
+  access is kubectl RBAC (the only credential-shaped object is a TLS Secret named by
+  `Gateway.tls.credentialName`, which lives in the gateway's namespace → you REQUEST it).
+  The load-bearing fact: the `istio/gateway` helm chart derives the gateway's `istio:` label from
+  the **helm RELEASE NAME**, so a foreign mesh is NOT labelled `ingressgateway` — the selector must
+  be DISCOVERED (`scripts/lib/istio.sh`: the Service exposing port **15021** with a
+  `spec.selector.istio` key; istiod has no 15021, which excludes the control plane). A
+  non-matching selector is **accepted by the API server with no error** and binds nothing →
+  connection refused; a VirtualService naming the Gateway by **bare name** from another ns
+  resolves namespace-locally → 404. VirtualServices therefore live in their BACKEND's namespace
+  with a `<gw-ns>/<gw-name>` ref (the only layout a locked-down tenant can use). `make
+  istio-preflight` is the read-only "what do I have / what must the mesh admin grant me" helper;
+  `make e2e-kind-istio-existing` is the regression test (a "platform team" installs Istio under
+  FOREIGN naming, then we attach — plus both REDs).
+- **Pluggable ingress**: `INGRESS_CONTROLLER` (`istio` default / `istio-existing` / `traefik`)
+  selects the controller. `scripts/44-install-ingress.sh` dispatches to `46-install-istio.sh` (helm
+  control plane + gateway LB; istio images from Harbor via the `global.hub` override),
+  `47-attach-istio.sh` (discover + attach only), or
+  `45-install-traefik.sh` (single-binary LB). All expose the SAME `*.vks.local` hosts
   (`GITEA_HOST`/`WEBUI_HOST`/`TEKTON_DASHBOARD_HOST` — **not** ArgoCD, which has its own LB) behind ONE LoadBalancer and
   publish `INGRESS_LB_IP` + the chosen `INGRESS_CONTROLLER` to `.env.kind`. `44-install-ingress.sh`
   lets an explicit `INGRESS_CONTROLLER` override win over the persisted `.env.kind` value (so
@@ -190,9 +211,24 @@ when changing the pipeline, ingress, or manifests.
 >
 > **Deep-research verdicts this session (VCF/VKS 9.1; Broadcom 9.1 docs 301-redirect to 9.0 → verify on a lab):**
 >
-> - **Istio is NOT a Supervisor Service** — it's a USER-installed VKS **Standard Package** on the
->   GUEST cluster (`vcf package install istio`, per-cluster). Our "we install Istio" ingress design
->   is correct/aligned. (Contour is the Harbor-paired Supervisor-Service ingress, not Istio.)
+> - **Istio is NOT a Supervisor Service — it IS a VKS Standard Package on the GUEST cluster**
+>   (CONFIRMED 2026-07-12 against Broadcom TechDocs + the VMware VCF blog): package
+>   `istio.kubernetes.vmware.com`, VMware-built versions (`1.25.3+vmware.1-vks.1`), installed with
+>   `vcf package install istio -p istio.kubernetes.vmware.com -v <ver> --values-file … -n istio-installed`
+>   (or the VCF 9 addon CLI: `vcf addon install create istio --cluster-name $VKS_CLUSTER`). Its
+>   **ingress gateway is DISABLED by default** (`istio.gateways.ingress.enabled: false`; ns
+>   `istio-ingress` when on), air-gap uses `meshConfig.imagePullSecrets`, and **Broadcom's own
+>   walkthrough routes with the Kubernetes GATEWAY API** (`gatewayClassName: istio` →
+>   auto-provisioned Service `<gw>-istio`, LoadBalancer, in the APP's namespace) — not the classic
+>   Gateway/VirtualService API. Provenance: the 9.1 doc URLs **301-redirect to the 9.0 tree**
+>   (verified live), so this is documented-for-9.0/VKS-3.5 and inferred for 9.1 — re-verify version
+>   strings on a real lab.
+>   **⇒ Consequence: on a real lab the mesh is NOT ours → `INGRESS_CONTROLLER=istio-existing` is the
+>   correct mode. OPEN GAP: our attach path supports only the CLASSIC API and refuses to run without
+>   the VirtualService CRD; the Gateway-API path (which needs no gateway-ns RBAC and no selector
+>   discovery at all) is the next change.** See `docs/decisions/istio-on-vks.md`.
+>   (Historical note: a mid-session correction wrongly labelled this claim "unverified" — it is
+>   verified. Recorded so the retraction doesn't get re-retracted.)
 > - **ArgoCD IS a Supervisor Service on the Supervisor** → the Application's in-cluster destination
 >   would target the SUPERVISOR, not the guest. Shipped: `${ARGOCD_DEST_SERVER}` param +
 >   `make argocd-register-guest` (registers the guest as an ArgoCD destination; durable SA token

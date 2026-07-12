@@ -219,7 +219,7 @@ separately (see the last bullet). Figures were measured on the live single-node 
 | Image build | **Kaniko** | Builds container images in-cluster without a Docker daemon (rootless, no privileged socket) |
 | Registry | **Harbor** (VKS-provided) | The one OCI registry all parties share (host push, Kaniko push, containerd pull) |
 | GitOps CD | **ArgoCD** (VKS-provided) | Watches the deploy repo and reconciles the cluster to the committed image tag |
-| Ingress | **Istio** (default) / **Traefik** (option) | One LoadBalancer fronting the UIs at `*.vks.local`; pluggable via `INGRESS_CONTROLLER` |
+| Ingress | **Istio** (default) / **Traefik** (option) / **attach to an existing Istio** | One LoadBalancer fronting the UIs at `*.vks.local`; pluggable via `INGRESS_CONTROLLER` (`istio` \| `istio-existing` \| `traefik`) |
 | Image mirror | **crane** (go-containerregistry) | Copies images internet→Harbor (dual-homed) or into a sneakernet bundle, single- or multi-arch; a static Go binary, so it installs cross-distro via mise (incl. Photon OS 5, where skopeo has no static build/package) |
 | Demo app | **Spring Boot 4 / Java 25** | Minimal web UI whose greeting proves the deployed image changed end-to-end |
 | Offline build | dependency-baked **Maven** builder image | Bakes `~/.m2` so in-cluster `mvn` builds with no Maven Central reach |
@@ -335,6 +335,89 @@ How the local stand-in works:
 
 Individual targets: `make kind-up`, `make install-harbor`, `make install-argocd`,
 `make install-ingress` (or `make install-istio` / `make install-traefik`).
+
+</details>
+
+## Istio: we install it, or we attach to one we didn't
+
+<details>
+<summary><strong>Two scenarios</strong> — <code>INGRESS_CONTROLLER=istio</code> vs <code>istio-existing</code>, and why there is no "Istio credential" (click to expand)</summary>
+
+<a href="docs/diagrams/out/istio-ingress.png"><img src="docs/diagrams/out/istio-ingress.png" alt="Istio ingress — install vs attach" width="900"></a>
+
+**There are no Istio credentials to get.** Unlike Harbor and ArgoCD (which have real admin
+passwords — `make creds`, `make argocd-password`), Istio has **no login, no token, no admin API
+and no UI**. Access to the mesh is plain **kubectl RBAC**. The only credential-shaped object is a
+TLS `Secret` named by `Gateway.tls.credentialName`, and it must live in the *gateway's* namespace —
+so it is something you **request from the mesh admin**, never something you fetch.
+
+| | Scenario 1 — **we install Istio** | Scenario 2 — **the platform already did** |
+|---|---|---|
+| `INGRESS_CONTROLLER` | `istio` (default) | `istio-existing` |
+| Script | `scripts/46-install-istio.sh` | `scripts/47-attach-istio.sh` |
+| What gets installed | `istio/base` + `istiod` + `istio/gateway` (images from Harbor) | **nothing** |
+| Gateway selector | pinned by us: `istio: ingressgateway` | **DISCOVERED** — see below |
+| What we create | `Gateway` + `VirtualService`s | `VirtualService`s (+ a `Gateway`, only if allowed) |
+
+**Start with `make istio-preflight`** (read-only). It reports whether Istio is present, the exact
+selector a `Gateway` must use, what your kubeconfig is actually allowed to do, and — if you are a
+locked-down tenant — precisely what to ask the mesh admin for.
+
+### Why the selector must be discovered, never assumed
+
+The `istio/gateway` helm chart derives the gateway workload's `istio:` label **from the helm
+release name**. Installed as release `platform-gw`, the gateway is labelled `istio: platform-gw` —
+*not* `ingressgateway`. Our own install only gets `ingressgateway` because it forces
+`--set labels.istio=ingressgateway`. So a hardcoded selector **binds nothing** on someone else's
+mesh, and — the nasty part — **the API server accepts that `Gateway` without any error**.
+
+Two failure modes, with distinct symptoms:
+
+| Mistake | Symptom |
+|---|---|
+| `Gateway` selector matches no workload | Envoy never gets a listener → **connection refused** (no HTTP at all) |
+| `VirtualService` names the Gateway by **bare name** from another namespace | resolves namespace-locally → **404** |
+
+Discovery finds the gateway as *the Service exposing port `15021`* (the istio-proxy status-port)
+*with a `spec.selector.istio` key* — istiod does not expose 15021, which is what excludes the
+control plane from the match.
+
+### If you may not create a Gateway
+
+Set `ISTIO_SHARED_GATEWAY=<ns>/<name>` — the platform's own `Gateway`. We then create **only**
+`VirtualService`s, in our own namespaces (proven to work, including against a `*.vks.local`
+wildcard Gateway). `make istio-preflight` asserts that shared Gateway actually **admits our three
+hostnames**, rather than letting the routes be accepted and silently never match.
+
+If you cannot even *read* the gateway namespace, ask the mesh admin for
+`ISTIO_GATEWAY_NAMESPACE` / `ISTIO_GATEWAY_SERVICE` / `ISTIO_GATEWAY_LABEL`, put them in `.env`,
+and discovery is skipped entirely.
+
+### Validation
+
+`make e2e-kind-istio-existing` is the standing regression test: a "platform team" installs Istio
+into KinD under **foreign naming**, then we attach with zero install. It also demonstrates the REDs
+(attaching to a mesh-free cluster must fail; the old hardcoded selector must produce a dead route).
+
+### On a real VKS lab, the mesh is theirs — so `istio-existing` is the mode you want
+
+Broadcom ships Istio as a **VKS Standard Package installed into the guest cluster**
+(`istio.kubernetes.vmware.com`, VMware-built versions like `1.25.3+vmware.1-vks.1`, installed with
+`vcf package install istio …` or the VCF 9 addon CLI). So on a real lab you do **not** install Istio
+from this repo — the platform already has, and `INGRESS_CONTROLLER=istio-existing` is the correct
+mode. Two things to know about that package:
+
+- its **ingress gateway is disabled by default** (`istio.gateways.ingress.enabled: false`), so there
+  may be **no shared gateway to attach to** unless the platform enabled one; and
+- Broadcom's own walkthrough exposes hostnames with the **Kubernetes Gateway API**
+  (`gatewayClassName: istio`), not the classic `Gateway`/`VirtualService` API this repo currently
+  emits. **Gateway-API support is the next change** — tracked in the decision doc.
+
+(Provenance: the Broadcom 9.1 doc URLs 301-redirect to the 9.0 tree, so the above is
+documented-for-9.0/VKS-3.5 and inferred for 9.1 — re-verify version strings on a real lab.)
+
+Full rationale, the verification matrix, and the Broadcom facts with provenance:
+[`docs/decisions/istio-on-vks.md`](docs/decisions/istio-on-vks.md).
 
 </details>
 
@@ -1322,7 +1405,7 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 | `tekton/` | Tekton pipeline, tasks, triggers, RBAC |
 | `argocd/` | ArgoCD `Application` definition |
 | `k8s/gitea/` | Gitea install manifest (SQLite, single image) |
-| `k8s/istio/`, `k8s/traefik/` | Ingress manifests (`INGRESS_CONTROLLER=istio` default / `traefik` option) fronting the UIs at `*.vks.local` |
+| `k8s/istio/`, `k8s/traefik/` | Ingress manifests (`INGRESS_CONTROLLER=istio` default / `istio-existing` / `traefik`) fronting the UIs at `*.vks.local`. `k8s/istio/gateway.yaml` = the Gateway (selector is a token — it is DISCOVERED, never assumed); `virtualservices.yaml` = one VS per UI, in its BACKEND's namespace |
 | `kind/` | KinD cluster config (containerd insecure-registry wiring) |
 | `docs/diagrams/` | C4-PlantUML sources + rendered PNGs |
 | `images/images.txt` | Authoritative image inventory to mirror |
@@ -1348,7 +1431,8 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 | Install | `vks-login` / `platform` / `gitops` / `install-all` | Auth to VKS; install Gitea+Tekton; wire ArgoCD; or all of it |
 | Install | `fetch-harbor-ca` | Fetch a self-signed lab Harbor's CA cert → `HARBOR_CA_FILE` (VKS-lab convenience) |
 | KinD e2e | `e2e-kind` | Full local end-to-end in KinD (cluster → Harbor → ArgoCD → pipeline → ingress → verify) |
-| KinD e2e | `kind-up` / `install-harbor` / `install-argocd` / `install-ingress` / `kind-down` | Individual KinD steps (`install-istio` / `install-traefik` pick the controller) |
+| KinD e2e | `kind-up` / `install-harbor` / `install-argocd` / `install-ingress` / `kind-down` | Individual KinD steps (`install-istio` / `attach-istio` / `install-traefik` pick the controller) |
+| Istio | `istio-preflight` / `attach-istio` / `e2e-kind-istio-existing` | Read-only mesh discovery + what to ask the mesh admin for / attach to an Istio we did not install / its KinD regression test |
 | Verify | `verify` | End-to-end smoke test on a LIVE cluster |
 | Verify | `verify-ingress` / `verify-ingress-both` | Assert the `*.vks.local` UIs route through the ingress LB (one controller / both) |
 | Verify | `jumpbox` / `jumpbox-both` | Validate the README bootstrap on a real jump-box container — `JUMPBOX_OS=photon`\|`ubuntu`, or both (needs the KinD cluster up) |
