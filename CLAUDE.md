@@ -221,23 +221,23 @@ when changing the pipeline, ingress, or manifests.
 
 ## Backlog / resume state
 
-> ### ▶️ DO THIS FIRST, NEXT SESSION — re-run BOTH e2e targets, then hand off
+> ### ▶️ DO THIS FIRST, NEXT SESSION — verify `kind` installs on a box that lacks it
 >
-> Nothing is known-broken; this is the confirmation step. `main` merged **#125–#131** today, including
-> a shared-lib refactor (`scripts/lib/istio.sh`), a namespace-creation change (PSA labels), and an
-> `envsubst`/export fix — code BOTH e2e paths run through. Run them **sequentially, alone**
-> (a second registry-mutating run corrupts Harbor — now blocked by a `flock`, but do not fight it):
+> Nothing is known-broken. The one claim not yet proven on a CLEAN machine:
+>
+> `make deps` now installs **kind** (pinned in `.mise.toml`). This was a HIGH bug — the flagship
+> KinD path was **unrunnable on a fresh box**: nothing in the repo installed kind, yet the README
+> promised `make deps  # kind, ...` and `05-kind-up.sh` does `require_cmd kind`. It only ever
+> worked because dev boxes already had it (the CI smoke curled its own copy). `mise install kind`
+> is verified (0.32.0), but a box WITHOUT kind on PATH has not been tested:
 >
 > ```bash
-> make kind-down && make e2e-kind                  # DEFAULT path: we INSTALL Istio
-> make kind-down && make e2e-kind-istio-existing   # ATTACH path: both route APIs + PSA
+> # in a container with no kind: `make deps` must leave a working `kind`
+> docker run --rm -v "$PWD:/w" -w /w ubuntu:26.04 bash -c 'apt-get update -qq && apt-get install -y -qq curl git make >/dev/null && curl -fsSL https://mise.run | sh && export PATH=$HOME/.local/bin:$PATH && eval "$(mise activate bash)" && make deps-mise && kind --version'
 > ```
 >
-> Both PASSED at the end of 2026-07-12b. Expect: GitOps loop deploys the new marker, all three
-> `*.vks.local` UIs 200 + body markers, `PSA OK`, and (attach) `RED 1 OK` / `RED 2 OK` /
-> `DISCOVERY OK` / both legs green.
->
-> If green → `make kind-down`, update this handoff, done.
+> Same class as the `.env` bug (#137) and the `BUNDLE_*` clobbers: hidden local state making a
+> broken path look green. Verify on a box that does not have the thing.
 
 ---
 

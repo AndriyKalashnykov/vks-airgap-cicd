@@ -196,9 +196,14 @@ Clean `make e2e-kind` with **no concurrent load** (registry-corruption lesson).
 5. ArgoCD — reachable over self-signed TLS on its own LB IP; the GitOps sync rolled the image.
 6. `make verify` (`End-to-end verified`) + `make verify-ingress` (`SUCCESS`) green.
 
-**`insecure` mode — pending re-validation** (it worked before this change; re-confirm with
-`make kind-down && make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1`). Both modes must pass
-so neither branch rots; both are local-only (e2e-kind is not a CI job).
+**`insecure` mode — VALIDATED 2026-07-12** via
+`make kind-down && make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1`, as part of the full e2e
+permutation matrix. It genuinely ran the insecure branch (the install log states
+`Harbor mode: INSECURE (plain HTTP LoadBalancer)` and `ArgoCD mode: INSECURE (server.insecure,
+plain HTTP)` — the mode is read from the log, never inferred from a green exit) and reached the
+real end state: the deployed page served the new marker, all three `*.vks.local` UIs 200 through
+the ingress, `PSA OK`. Both modes must keep passing so neither branch rots; both are local-only
+(e2e-kind is not a CI job).
 
 A failure at any secure-mode layer is exactly the lab-predictive signal we want (a missing
 CA-trust hop).
