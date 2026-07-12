@@ -204,6 +204,51 @@ when changing the pipeline, ingress, or manifests.
 
 ## Backlog / resume state
 
+> ### 📋 BACKLOG — "Choose your path" → make the **Needs** column a real, verified checklist
+>
+> The table's `Needs` cells are hand-waves, not prerequisites:
+>
+> | I want to… | Needs (today) | Problem |
+> |---|---|---|
+> | Just see it work (KinD) | `Docker + make deps` | ✅ now says Docker is KinD-specific (repo is podman-preferred) — but still not a *list* |
+> | Real lab — I install Harbor + ArgoCD | **"jump box + Supervisor access"** | tells an operator **nothing actionable**: which CLIs? which vSphere/Harbor/ArgoCD *roles*? which network reachability? which `.env` values, and can they even obtain them? |
+> | Real lab — tenant (Harbor + ArgoCD exist) | **"jump box + tenant grants"** | same — *which* grants? From whom? Harbor project-admin? An ArgoCD AppProject role? cluster-admin on the guest? |
+>
+> **Task:** DEEP-SEARCH and verify each path's true prerequisites, then replace each cell with an
+> explicit **list, linked to the section that satisfies it**. Per path, enumerate and *verify*:
+>
+> 1. **Tools** — exactly which CLIs, and which are optional. (`make check-tools` already classifies
+>    them; the table should agree with it. Note `istioctl` is NOT needed and the `argocd` CLI is
+>    optional — see `docs/vks-services/`.)
+> 2. **Identities / roles** — concretely, not "access":
+>    - vSphere/Supervisor: what role installs a Supervisor Service? what creates a guest cluster?
+>    - Harbor: **project-admin** (self-service a robot via `make harbor-robot`) vs having to *request* one.
+>    - ArgoCD: who may create an `Application` in the instance's namespace (AppProject/RBAC)? Registering a
+>      cluster is **ADMIN-only** (`clusters` is a global RBAC resource) — a tenant must request it.
+>    - Guest cluster: **cluster-admin** is required (we create namespaces + RBAC + PSA labels).
+>    - Istio: **no credentials exist** — it is kubectl RBAC. What a tenant needs is rights to create
+>      `Gateway`/`HTTPRoute`/`VirtualService` in its OWN namespaces (`make istio-preflight` reports it).
+> 3. **Network reachability** — jump box → Supervisor / Harbor / guest API; and (cross-cluster ArgoCD)
+>    **ArgoCD's cluster → the guest API** (`GUEST_API_SERVER` exists precisely because those differ).
+> 4. **`.env` values the path requires, and whether each is OBTAINABLE** — trace each to its populator
+>    (operator-provided / generated / discovered / auto-written to `.env.kind`). ⚠️ At least one is
+>    currently **NOT obtainable**: `ARGOCD_KUBECONFIG` (see the backlog item below).
+> 5. **PSA** — a VKS guest cluster enforces `restricted` by default; the namespaces we create need the
+>    measured labels (`make psa-check`). That is a prerequisite, not a footnote.
+>
+> **Method:** this is the document-correctness audit applied to one table — verify each claim against
+> the code (`make check-tools`, `make check-env-coverage`, `scripts/*`) and against Broadcom docs for
+> the roles, grading anything vendor-side as *inferred* until a lab confirms it. Do **not** invent a
+> role name or a CLI flag to fill a cell — an honest "⚠️ unverified: which vSphere role?" is worth
+> more than a plausible-sounding one (that is exactly how the fabricated `vcf cluster kubeconfig get`
+> shipped).
+>
+> **Output:** each `Needs` cell becomes a short bulleted list with links (→ Prerequisites, → VKS
+> authentication, → `docs/vks-services/{harbor,argocd,istio}.md`, → `make check-tools`), plus a
+> per-path "you will be blocked without these" line.
+
+---
+
 > ### 📋 BACKLOG — real-lab: how do you OBTAIN `ARGOCD_KUBECONFIG` (the Supervisor kubeconfig)?
 >
 > **The single blocking unknown for the real-lab cross-cluster ArgoCD path.** `make gitops`

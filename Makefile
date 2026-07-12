@@ -91,6 +91,14 @@ env-check: ## Presence gate — fail if a required .env value is missing/placeho
 env-validate: ## Validity gate — format + KUBECONFIG/Harbor connectivity+auth (fail fast; secrets never on argv)
 	@$(SCRIPTS)/02-env.sh validate
 
+.PHONY: check-env-coverage
+check-env-coverage: ## Gate: every operator-settable var the scripts read must be documented in .env.example
+	@$(SCRIPTS)/check-env-coverage.sh
+
+.PHONY: check-how-provenance
+check-how-provenance: ## Gate: every `# how:` acquisition command must be runnable-by-us, a real make target, or provenance-tagged
+	@$(SCRIPTS)/check-how-provenance.sh
+
 .PHONY: check-tools
 check-tools: ## Read-only: is this jump box able to run the flow? (required vs optional CLIs + versions)
 	@$(SCRIPTS)/03-check-tools.sh
@@ -557,7 +565,7 @@ docs-lint: diagrams-check ## Lint markdown (tracked AND new-but-unignored) + ver
 	else echo "markdownlint not installed — skipping (install markdownlint-cli)"; fi
 
 .PHONY: static-check
-static-check: check-toolchain-alignment check-java-alignment check-env check-image-alignment lint validate sec app-test ## Composite code gate (alignment + lint + manifests + security + app tests)
+static-check: check-toolchain-alignment check-java-alignment check-env check-env-coverage check-how-provenance check-image-alignment lint validate sec app-test ## Composite code gate (alignment + lint + manifests + security + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint ## Full local pipeline (offline-verifiable parts)
