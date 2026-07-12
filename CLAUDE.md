@@ -251,7 +251,9 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 > ### ▶️ HANDOFF 2026-07-12d — MULTI-APP (javawebapp + gowebapp). Branch: refactor/webui-to-javawebapp
 >
-> ## ⚠️ DO THIS FIRST: `make kind-down && make e2e-kind` — the two-app walk is NOT yet proven green.
+> ## ⚠️ DO THIS FIRST — the two-app walk is NOT yet proven green
+>
+> Run: `make kind-down && make e2e-kind`
 >
 > At handoff the 4th e2e attempt was still running. **Nothing below is "verified" until it is.**
 > Each previous attempt failed on a REAL multi-app bug (all now fixed) and got one stage further:
@@ -263,6 +265,7 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 > | 3 | `gowebapp-ci` | `CouldntGetTask` — the `go-test` Task was never added to `k8s/tekton/tasks/` | ✅ added + **GATE** in `make validate` (RED-proven) |
 >
 > **What attempt 3 DID prove** (the two things that could not be checked statically):
+>
 > - the SHARED EventListener's `labelSelector` **does** discover the per-app `Trigger` CRs, and
 > - the CEL filter on `body.repository.name` routes each repo's push to its OWN pipeline —
 >   `javawebapp-ci` **Succeeded** while `gowebapp-ci` fired from a push to `gowebapp-app`.
