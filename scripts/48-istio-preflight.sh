@@ -123,7 +123,7 @@ else
   log_warn "  -> ASK THE MESH ADMIN to expose your hosts on a shared Gateway, then set:"
   log_warn "       ISTIO_SHARED_GATEWAY=${ISTIO_GATEWAY_NAMESPACE}/<their-gateway-name>"
   log_warn "     Its servers[].hosts must admit (exactly, or via a *.vks.local wildcard):"
-  log_warn "       ${GITEA_HOST}  ${TEKTON_DASHBOARD_HOST}  $(app_names | while read -r a; do [ -n "$a" ] && printf '%s  ' "$(app_host "$a")"; done)"
+  log_warn "       ${GITEA_HOST}  ${TEKTON_DASHBOARD_HOST}  $(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s  ' "$(app_host "$a")"; fi; done)"
   log_warn "     We then create ONLY VirtualServices, in our own namespaces. That is enough:"
   log_warn "     a VS in the app's namespace referencing <gw-ns>/<gw-name> routes correctly."
 fi

@@ -45,7 +45,7 @@ echo "Access the UIs (local demo credentials):"
 if [ -n "${INGRESS_LB_IP:-}" ]; then
   echo
   echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"
-  echo "    ${INGRESS_LB_IP}  ${GITEA_HOST:-gitea.vks.local} ${TEKTON_DASHBOARD_HOST:-tekton.vks.local} $(app_names | while read -r a; do [ -n "$a" ] && printf '%s ' "$(app_host "$a")"; done)"
+  echo "    ${INGRESS_LB_IP}  ${GITEA_HOST:-gitea.vks.local} ${TEKTON_DASHBOARD_HOST:-tekton.vks.local} $(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)"
 fi
 
 # --- table ----------------------------------------------------------------------------

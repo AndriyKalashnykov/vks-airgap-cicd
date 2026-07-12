@@ -29,7 +29,7 @@ require_cmd curl
 # Every app's host comes from the registry — a hardcoded list would silently stop checking a new app.
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
-APP_HOSTS="$(app_names | while read -r a; do [ -n "$a" ] && printf '%s ' "$(app_host "$a")"; done)"
+APP_HOSTS="$(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)"
 : "${INGRESS_CONTROLLER:=istio}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"

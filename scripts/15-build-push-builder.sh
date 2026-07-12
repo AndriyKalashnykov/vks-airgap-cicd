@@ -37,7 +37,10 @@ log_info "using container engine: $ENGINE"
 # gowebapp, which is stdlib-only and fetches nothing offline, correctly needs none).
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
-BUILDER_APPS="$(app_names | while read -r a; do app_has_builder "$a" && printf '%s ' "$a"; done)"
+# `if ... fi`, NOT `app_has_builder "$a" && printf ...`: a bare `A && B` returns NON-ZERO when A
+# is false, so the last iteration (gowebapp has no builder) made the command substitution fail and
+# `set -e` killed the script. `if` returns 0 when the condition is false.
+BUILDER_APPS="$(app_names | while read -r a; do if app_has_builder "$a"; then printf '%s ' "$a"; fi; done)"
 [ -n "$BUILDER_APPS" ] || { log_info "no app ships a Dockerfile.builder — nothing to build (stdlib-only apps need no offline dependency cache)"; exit 0; }
 log_info "apps needing an offline builder image: ${BUILDER_APPS}"
 MAVEN_BASE="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/maven:3.9-eclipse-temurin-25"

@@ -242,7 +242,7 @@ EOF
 # Space-separated variants, for the shell loops that iterate hosts/namespaces.
 app_hosts_flat() {
   local a
-  while read -r a; do [ -n "$a" ] && printf '%s ' "$(app_host "$a")"; done <<EOF
+  while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done <<EOF
 $(app_names)
 EOF
 }
