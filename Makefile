@@ -488,7 +488,16 @@ check-toolchain-alignment: ## Fail if kubectl pinned in .mise.toml disagrees wit
 	  echo "       Same tool, two pins: jump box (mise) + air-gap fallback (00-install-prereqs.sh). Align them."; \
 	  exit 1; \
 	fi; \
-	echo "check-toolchain-alignment: kubectl aligned ($$mise_v)"
+	echo "check-toolchain-alignment: kubectl aligned ($$mise_v)"; \
+	go_mise=$$(grep -E '^go ' .mise.toml | sed -E 's/.*"([^"]+)".*/\1/'); \
+	go_img=$$(grep -oE '^golang:[0-9.]+' images/images.txt | head -1 | sed 's|golang:||'); \
+	if [ -n "$$go_mise" ] && [ -n "$$go_img" ] && [ "$$go_mise" != "$$go_img" ]; then \
+	  echo "ERROR: Go version drift (BLOCKING) — .mise.toml=$$go_mise vs images/images.txt golang:$$go_img."; \
+	  echo "       The pipeline BUILDS the Go app with the mirrored golang image; local/CI must TEST it"; \
+	  echo "       with the same toolchain, or you test something the pipeline never builds."; \
+	  exit 1; \
+	fi; \
+	echo "check-toolchain-alignment: go aligned ($$go_mise)"
 
 ##@ Offline script tests (unit tests for script logic; NOT in static-check/ci)
 # Fast, fully-offline (no network/cluster/registry) unit tests for script logic that

@@ -10,7 +10,7 @@
 # Both stages come from images MIRRORED INTO HARBOR (images/images.txt); Kaniko rewrites the host
 # via BUILDER_IMAGE / RUNTIME_IMAGE, exactly as it does for the Java app.
 
-ARG BUILDER_IMAGE=golang:1.25.5-bookworm
+ARG BUILDER_IMAGE=golang:1.26.5-bookworm
 ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot@sha256:b7bb25d9f7c31d2bdd1982feb4dafcaf137703c7075dbe2febb41c24212b946f
 
 # BUILDER_IMAGE default is explicitly tagged; DL3006 cannot see through the ARG.

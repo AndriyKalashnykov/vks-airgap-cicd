@@ -1,3 +1,3 @@
 module github.com/AndriyKalashnykov/vks-airgap-cicd/apps/go/gowebapp
 
-go 1.25
+go 1.26.5

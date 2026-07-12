@@ -25,7 +25,7 @@ maven:3.9-eclipse-temurin-25
 # No pre-baked dependency cache is needed (unlike the Maven builder image): gowebapp is
 # stdlib-only, so the offline build fetches nothing. See apps/go/gowebapp/main.go.
 # renovate: datasource=docker depName=golang
-golang:1.25.5-bookworm
+golang:1.26.5-bookworm
 
 # ---- Go runtime base (gowebapp Dockerfile runtime stage) ----
 # distroless static + nonroot: no shell, no package manager, uid 65532 — the app is a static
