@@ -13,7 +13,10 @@ spec:
     targetRevision: ${ARGOCD_TRACK_BRANCH}
     path: .
   destination:
-    server: https://kubernetes.default.svc
+    # In-cluster by default (KinD / ArgoCD-in-guest). On a real lab where ArgoCD runs on the
+    # Supervisor, `make argocd-register-guest` registers the guest cluster and sets
+    # ARGOCD_DEST_SERVER to its API URL so ArgoCD deploys THERE, not on the Supervisor.
+    server: ${ARGOCD_DEST_SERVER}
     namespace: ${ARGOCD_DEST_NAMESPACE}
   syncPolicy:
     automated:

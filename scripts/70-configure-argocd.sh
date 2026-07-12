@@ -19,7 +19,11 @@ require_cmd envsubst "install gettext (provides envsubst)"
 : "${ARGOCD_NAMESPACE:?}"; : "${ARGOCD_APP_NAME:?}"; : "${ARGOCD_DEST_NAMESPACE:?}"
 : "${ARGOCD_TRACK_BRANCH:?}"; : "${GITEA_INTERNAL_URL:?}"; : "${GITEA_ORG:?}"; : "${GITEA_DEPLOY_REPO:?}"
 : "${GITEA_CI_USER:?}"
-export ARGOCD_NAMESPACE ARGOCD_APP_NAME ARGOCD_DEST_NAMESPACE ARGOCD_TRACK_BRANCH
+# ArgoCD deploy destination. Default in-cluster (KinD / ArgoCD-in-guest). On a real lab where
+# ArgoCD runs on the Supervisor, `make argocd-register-guest` registers the guest cluster and
+# sets ARGOCD_DEST_SERVER to its API URL so the Application deploys THERE, not on the Supervisor.
+: "${ARGOCD_DEST_SERVER:=https://kubernetes.default.svc}"
+export ARGOCD_NAMESPACE ARGOCD_APP_NAME ARGOCD_DEST_NAMESPACE ARGOCD_TRACK_BRANCH ARGOCD_DEST_SERVER
 export DEPLOY_REPO_CLONE_URL="${GITEA_INTERNAL_URL}/${GITEA_ORG}/${GITEA_DEPLOY_REPO}.git"
 
 kubectl get ns "$ARGOCD_NAMESPACE" >/dev/null 2>&1 \
@@ -52,7 +56,7 @@ fi
 # ---- Create the Application ----
 log_info "creating ArgoCD Application '$ARGOCD_APP_NAME' -> $DEPLOY_REPO_CLONE_URL"
 # shellcheck disable=SC2016
-envsubst '${ARGOCD_NAMESPACE} ${ARGOCD_APP_NAME} ${ARGOCD_DEST_NAMESPACE} ${ARGOCD_TRACK_BRANCH} ${DEPLOY_REPO_CLONE_URL}' \
+envsubst '${ARGOCD_NAMESPACE} ${ARGOCD_APP_NAME} ${ARGOCD_DEST_NAMESPACE} ${ARGOCD_TRACK_BRANCH} ${DEPLOY_REPO_CLONE_URL} ${ARGOCD_DEST_SERVER}' \
   < "${REPO_ROOT}/argocd/application.yaml" | run kubectl apply -f -
 
 log_info "Application created. ArgoCD will sync automatically (automated + selfHeal)."
