@@ -223,6 +223,37 @@ Use the following skills when working on related files:
 
 When spawning subagents, always pass conventions from the respective skill into the agent's prompt.
 
+## STOPPING RULE — no session is DONE without an adversarial review (BLOCKING)
+
+Every session on this repo MUST end with an adversarial review by **`.claude/agents/vks-adversary.md`**
+— a VMware VCF/VKS 9.1 + Kubernetes + ArgoCD + Harbor + Istio + Tekton specialist whose job is to
+**refute** the session's work on REAL-LAB grounds. A green KinD run proves nothing about the lab; that
+gap is the whole point of the review.
+
+Its findings are part of the deliverable: **fix them, or record each one in the backlog with its
+grade** (`lab-verified` / `KinD-verified` / `9.0-doc-inferred-for-9.1` / `community` / `UNVERIFIED`).
+"Reviewed, nothing found" is only acceptable if the agent says so explicitly, with evidence.
+
+### How to run it (this part is NOT optional)
+
+**Run it with a SCHEMA (a `Workflow`) or SYNCHRONOUSLY (`Agent` with `run_in_background: false`).**
+
+Do **NOT** spawn it as a fire-and-forget background `Agent`. Measured on 2026-07-12 in this repo:
+
+| How it was run | Delivered a report? |
+|---|---|
+| `Workflow` agents (schema-forced `StructuredOutput`) | **44 / 44** |
+| background `Agent` tool (deliverable = "its final message") | **0 / 4** — all idled; re-pinging did not revive them |
+
+The difference is the **output contract**: a Workflow *forces* a result to be emitted; a background
+agent's deliverable is merely whatever it says last — and these said nothing. So: schema, or
+synchronous. If it still produces nothing, that is a **blocker to report**, not a thing to work
+around — do not quietly substitute your own review and move on (that happened, and it is exactly the
+failure this rule exists to stop).
+
+Subagents do **not** inherit skills or rules: `vks-adversary.md` carries the domain brief and the
+conventions in its own system prompt on purpose. Keep it current when a fact changes.
+
 ## Verification honesty
 
 Offline-verifiable (no cluster): app tests, manifest/Tekton YAML validation, script
