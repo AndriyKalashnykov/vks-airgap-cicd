@@ -23,8 +23,12 @@ VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surface
 > A developer pushes a change to **Gitea** → **Tekton** runs tests, builds a container
 > image with **Kaniko** and pushes it to **Harbor** → Tekton bumps the image tag in the
 > deploy repo → **ArgoCD** syncs the new version to the cluster → the web UI updates.
-> Harbor and ArgoCD are **provided by VKS**; this project mirrors all required images
-> into Harbor and installs + wires **Gitea + Tekton** and the demo app.
+> On a real lab, **Harbor** and **ArgoCD** run as **VCF Supervisor Services** (on the Supervisor —
+> you either install them, or they already exist and you're a tenant), and **Istio** is a **VKS
+> Standard Package** in the guest cluster — so this project **attaches** to it rather than
+> installing it. What this project always owns: mirroring every required image into Harbor, and
+> installing + wiring **Gitea + Tekton** and the demo app.
+> See [`docs/vks-services/`](docs/vks-services/) for what each service is, and how to install/configure/use it.
 
 ## Choose your path
 
@@ -32,11 +36,17 @@ New here? Pick the path that matches your situation — each one is self-contain
 
 | I want to… | Path | Needs |
 |------------|------|-------|
-| **Just see it work** (no VKS cluster) | [Try it locally end-to-end with KinD](#try-it-locally-end-to-end-with-kind) — one command, zero `.env` | Docker + `make deps` |
+| **Just see it work** (no VKS cluster) | [Try it locally end-to-end with KinD](#try-it-locally-end-to-end-with-kind) — one command, zero `.env` | **Docker** + `make deps` — KinD specifically needs Docker (see below) |
 | **Run it on a real lab — I install Harbor + ArgoCD** | [Real VKS lab — Scenario 1](#run-against-a-real-vks-lab--scenario-1-harbor--argocd-need-to-be-installed) | jump box + Supervisor access |
 | **Run it on a real lab where Harbor + ArgoCD already exist** (I'm a tenant) | [Real VKS lab — Scenario 2](#run-against-a-real-vks-lab--scenario-2-harbor--argocd-already-installed) | jump box + tenant grants |
 
 The real-lab paths start from the jump-box **[Prerequisites](#prerequisites)** below; the KinD path needs only Docker + `make deps`.
+
+> **Which container engine?** Image operations (mirror, builder image, diagram rendering) use
+> **`CONTAINER_ENGINE` — podman-preferred, Docker as the fallback**, so a real air-gap run can be
+> **podman-only**. The **KinD stand-in is the exception**: it *additionally* requires **Docker**,
+> because the KinD nodes and `cloud-provider-kind` run on the `kind` Docker network and socket.
+> So: `make e2e-kind` → Docker; a real lab → podman is enough. `make check-tools` shows what you have.
 
 ## Prerequisites
 
@@ -1484,6 +1494,7 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 | `tekton/` | Tekton pipeline, tasks, triggers, RBAC |
 | `argocd/` | ArgoCD `Application` definition |
 | `k8s/gitea/` | Gitea install manifest (SQLite, single image) |
+| `docs/vks-services/` | **What VKS actually provides** — Harbor, ArgoCD (Supervisor Services) and Istio (a guest-cluster Standard Package): what each one is, how it is installed/configured, how we consume it, and a provenance grade per fact (lab-verified / KinD-verified / doc / unverified). A living record — update it when a lab run confirms or refutes something |
 | `k8s/istio/`, `k8s/traefik/` | Ingress manifests (`INGRESS_CONTROLLER=istio` default / `istio-existing` / `traefik`) fronting the UIs at `*.vks.local`. `k8s/istio/gateway.yaml` = the Gateway (selector is a token — it is DISCOVERED, never assumed); `virtualservices.yaml` = one VS per UI, in its BACKEND's namespace |
 | `kind/` | KinD cluster config (containerd insecure-registry wiring) |
 | `docs/diagrams/` | C4-PlantUML sources + rendered PNGs |
