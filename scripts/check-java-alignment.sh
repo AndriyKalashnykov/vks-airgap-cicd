@@ -2,12 +2,17 @@
 # check-java-alignment.sh — fail if the Java MAJOR version drifts across the
 # toolchain. The app's Java major is pinned in several places that MUST agree:
 #   1. apps/java/javawebapp/pom.xml <java.version>                       (bytecode target — authoritative)
-#   2. .mise.toml java = "temurin-N"                     (jump-box / local build JDK)
-#   3. .github/workflows/ci.yml java-version             (CI build JDK)
-#   4. apps/java/javawebapp/Dockerfile BUILDER_IMAGE maven:...-temurin-N  (in-cluster build JDK)
-#   5. apps/java/javawebapp/Dockerfile RUNTIME_IMAGE eclipse-temurin:N... (app runtime JRE)
-#   6. images/images.txt maven:...-temurin-N             (mirrored build image)
-#   7. images/images.txt eclipse-temurin:N...            (mirrored runtime image)
+#   2. .mise.toml java = "temurin-N"                     (jump-box / local / CI build JDK)
+#   3. apps/java/javawebapp/Dockerfile BUILDER_IMAGE maven:...-temurin-N  (in-cluster build JDK)
+#   4. apps/java/javawebapp/Dockerfile RUNTIME_IMAGE eclipse-temurin:N... (app runtime JRE)
+#   5. images/images.txt maven:...-temurin-N             (mirrored build image)
+#   6. images/images.txt eclipse-temurin:N...            (mirrored runtime image)
+#
+# CI is NOT in that list on purpose: it gets its JDK from .mise.toml via mise-action, so it
+# has no Java pin of its own. This gate used to reconcile a `java-version:` in ci.yml — a
+# duplicate that existed only because of a redundant actions/setup-java step (whose JDK mise
+# then overrode anyway). The step is gone; instead of checking that second pin agrees, this
+# gate now asserts it does NOT COME BACK.
 #
 # Why this gate exists: Renovate tracks the maven build image (depName=maven) and
 # the eclipse-temurin runtime image (depName=eclipse-temurin) as SEPARATE deps, so
@@ -49,18 +54,35 @@ check() { # <label> <actual-major> — compare to $pom
 }
 
 mise="$(grep -oE '^java[[:space:]]*=[[:space:]]*"temurin-[0-9]+' .mise.toml | grep -oE '[0-9]+$' || true)"
-ci="$(grep -oE "java-version:[[:space:]]*'[0-9]+" .github/workflows/ci.yml | grep -oE '[0-9]+' | head -1 || true)"
 df_build="$(grep -oE 'BUILDER_IMAGE=maven:[0-9.]+-eclipse-temurin-[0-9]+' "${JAVA_SRC}/Dockerfile" | grep -oE '[0-9]+$' | head -1 || true)"
 df_run="$(grep -oE 'RUNTIME_IMAGE=eclipse-temurin:[0-9]+' "${JAVA_SRC}/Dockerfile" | grep -oE '[0-9]+$' | head -1 || true)"
 img_mvn="$(grep -oE 'maven:[0-9.]+-eclipse-temurin-[0-9]+' images/images.txt | grep -oE '[0-9]+$' | head -1 || true)"
 img_jre="$(grep -oE 'eclipse-temurin:[0-9]+' images/images.txt | grep -oE '[0-9]+$' | head -1 || true)"
 
 check ".mise.toml (temurin)"                 "$mise"
-check ".github/workflows/ci.yml"             "$ci"
 check "${JAVA_SRC}/Dockerfile BUILDER_IMAGE (maven)" "$df_build"
 check "${JAVA_SRC}/Dockerfile RUNTIME_IMAGE"        "$df_run"
 check "images.txt maven build image"         "$img_mvn"
 check "images.txt eclipse-temurin runtime"   "$img_jre"
+
+# CI must have NO Java pin of its own: it installs the JDK from .mise.toml via mise-action.
+# A `java-version:` (i.e. an actions/setup-java) reappearing here is a second source of truth
+# for the Java major — and, since mise-action runs after it and overrides JAVA_HOME, one that
+# would silently NOT be the JDK the build actually uses. That is worse than drift: it is a pin
+# that lies. `grep -c` (not `grep -q`) because grep -q's early exit SIGPIPEs the upstream under
+# `set -o pipefail`.
+#
+# Comments are stripped FIRST: the workflow's own comment explains why setup-java is absent, and
+# a naive grep matches that prose and fails on the very file it certifies (it did, on the first
+# run). Documentation may name the thing; the YAML may not.
+ci_pin="$(sed -E 's/#.*$//' .github/workflows/ci.yml | grep -cE "java-version:|actions/setup-java" || true)"
+if [ "${ci_pin:-0}" -ne 0 ]; then
+  echo "DRIFT .github/workflows/ci.yml: it pins Java itself (setup-java / java-version)."
+  echo "      CI gets its JDK from .mise.toml via mise-action — remove the pin, do not align it."
+  drift=1
+else
+  echo "ok    .github/workflows/ci.yml pins no JDK (mise-action installs .mise.toml's temurin ${pom})"
+fi
 
 if [ "$drift" -ne 0 ]; then
   echo "ERROR: Java major version drift across the toolchain (BLOCKING)." >&2

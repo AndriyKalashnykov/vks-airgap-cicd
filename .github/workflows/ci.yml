@@ -19,10 +19,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Detect which parts of the tree changed, to skip irrelevant gates.
+  # Which gates does this change actually need? Runner minutes are BILLED, so a docs-only
+  # change must not pay for a full Java+Go build.
+  #
+  # This used to be dorny/paths-filter with a "deny-list" (`'**'` then `'!**/*.md'`), and it
+  # DID NOT WORK: paths-filter ORs the globs, so `'**'` matched on its own and the `!` lines
+  # subtracted nothing. Every docs-only PR reported `code = true` — with an EMPTY "Matching
+  # files:" list, which is the tell — and paid ~2 minutes of billed runner time for a build it
+  # did not need. Nothing ever failed, so nothing surfaced it; it just quietly cost money.
+  #
+  # The decision itself lives in scripts/classify-changes.sh, which has a unit test
+  # (make test-scripts) — logic that costs money gets a test. This job only fetches the file
+  # list. It keeps the deny-list SEMANTICS that motivated the original (anything that is not
+  # pure docs — renovate.json, .trivyignore, a new root config — runs static-check, so no
+  # change can slip through with zero gates).
   changes:
     runs-on: ubuntu-latest
-    # paths-filter reads the PR's changed files via the API on pull_request events.
     permissions:
       contents: read
       pull-requests: read
@@ -31,24 +43,30 @@ jobs:
       docs: ${{ steps.filter.outputs.docs }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
-        id: filter
-        with:
-          # `base` set only on push so paths-filter works under `act push`;
-          # left empty on pull_request (where it is ignored — avoids the annotation).
-          base: ${{ github.event_name == 'push' && github.ref_name || '' }}
-          # `code` is a DENY-list: everything that is NOT pure docs. An allow-list
-          # would let a root-config-only PR (e.g. renovate.json, .trivyignore) match
-          # neither filter -> static-check AND docs-lint both skip -> ci-pass green
-          # with zero gates run. The deny-list makes any non-docs change run static-check.
-          filters: |
-            code:
-              - '**'
-              - '!**/*.md'
-              - '!docs/**'
-            docs:
-              - '**/*.md'
-              - 'docs/**'
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.number }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          files=""
+          case "$EVENT" in
+            pull_request)
+              files="$(gh api "repos/${REPO}/pulls/${PR}/files" --paginate --jq '.[].filename')" ;;
+            push)
+              # A first push / a new branch / a tag has an all-zero `before`: nothing to compare
+              # to, so the list stays empty and classify-changes.sh runs every gate.
+              case "$BEFORE" in
+                ''|0000000000000000000000000000000000000000) files="" ;;
+                *) files="$(gh api "repos/${REPO}/compare/${BEFORE}...${SHA}" --jq '.files[].filename')" ;;
+              esac ;;
+          esac
+          printf '%s\n' "$files" | sed '/^$/d; s/^/  changed: /'
+          printf '%s\n' "$files" | ./scripts/classify-changes.sh | tee -a "$GITHUB_OUTPUT"
 
   # Composite code gate: check-env + lint + validate + app-test (Java 25 via mise).
   static-check:
@@ -58,14 +76,18 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
-      # JDK 25 with JAVA_HOME set (the app targets Java 25; ./mvnw honors JAVA_HOME,
-      # and the runner's default is older). Provides Maven via the ./mvnw wrapper.
-      - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5
-        with:
-          distribution: temurin
-          java-version: '25'
-
-      # Installs the rest of the .mise.toml toolchain (kubectl/kustomize/jq/yq/...).
+      # THE toolchain step: mise installs EVERY tool in .mise.toml — java (temurin 25),
+      # maven, go, kubectl, helm, kustomize, kind, jq, yq, crane, node, trivy, gitleaks,
+      # shellcheck — and puts them on PATH with JAVA_HOME/GOROOT set. That is the whole
+      # point of the version-manager policy: ONE pinned file, no per-language setup step.
+      #
+      # There is deliberately NO actions/setup-java here. There used to be, from before
+      # java was pinned in .mise.toml — and it was pure dead weight: it ran BEFORE this
+      # step, so mise's JAVA_HOME overrode its, it installed a second JDK nobody used,
+      # and it wrote a toolchains.xml the pom never reads. Its only lasting effect was a
+      # SECOND source of truth for the Java major (`java-version: '25'`), which
+      # check-java-alignment then had to police. Java comes from .mise.toml. Full stop —
+      # and check-java-alignment now FAILS if a java-version pin reappears here.
       - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4
 
       # Tools mise does not provide (shellcheck + Docker are preinstalled on the runner).
