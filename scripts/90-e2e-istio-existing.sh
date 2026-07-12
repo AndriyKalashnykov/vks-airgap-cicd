@@ -38,6 +38,11 @@ require_cmd jq
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
 PROBE_APP="$(app_names | head -1)"
+# app_export sets APP_NAME/APP_NAMESPACE/... for the probe app. WITHOUT it this fixture used the
+# GLOBALS the multi-app refactor DELETED (APP_NAME, ARGOCD_DEST_NAMESPACE) — under `set -u` that is
+# an "unbound variable" abort, so this target (the ATTACH path, the one a real lab actually uses)
+# was DEAD CODE after the rename. Found by the VKS adversarial review.
+app_export "$PROBE_APP"
 PROBE_HOST="$(app_host "$PROBE_APP")"; export PROBE_HOST
 
 PLATFORM_NS="${PLATFORM_ISTIO_NAMESPACE:-platform-ingress}"
@@ -135,20 +140,24 @@ spec:
 ---
 apiVersion: networking.istio.io/v1
 kind: VirtualService
-metadata: {name: red-hardcoded, namespace: ${ARGOCD_DEST_NAMESPACE}}
+metadata: {name: red-hardcoded, namespace: ${APP_NAMESPACE}}
 spec:
   hosts: ["${PROBE_HOST}"]
   gateways: ["${ISTIO_GATEWAY_NAMESPACE}/red-hardcoded"]
-  http: [{route: [{destination: {host: ${APP_NAME}.${ARGOCD_DEST_NAMESPACE}.svc.cluster.local, port: {number: 80}}}]}]
+  http: [{route: [{destination: {host: ${APP_NAME}.${APP_NAMESPACE}.svc.cluster.local, port: {number: 80}}}]}]
 YAML
 sleep 10
 RED2_CODE="$(probe_code)"
 kubectl -n "$ISTIO_GATEWAY_NAMESPACE" delete gateway red-hardcoded --ignore-not-found >/dev/null
-kubectl -n "$ARGOCD_DEST_NAMESPACE" delete virtualservice red-hardcoded --ignore-not-found >/dev/null
-if [ "$RED2_CODE" = "200" ]; then
-  die "RED 2 FAILED: the hardcoded 'istio: ingressgateway' selector SERVED traffic (HTTP 200) on a mesh labelled istio=${ACTUAL_LABEL}. The fixture is not testing what it claims."
+kubectl -n "$APP_NAMESPACE" delete virtualservice red-hardcoded --ignore-not-found >/dev/null
+# Assert the SPECIFIC failure, not merely "not 200". A hardcoded selector binds NO listener, so the
+# connection is REFUSED — curl reports 000. Accepting any non-200 let a BROKEN fixture pass for the
+# wrong reason: with the (then-unbound) vars empty the VirtualService was malformed, which also is
+# not-200. A gate that passes when the fixture is broken is a gate that cannot fail.
+if [ "$RED2_CODE" != "000" ]; then
+  die "RED 2 FAILED: expected HTTP 000 (no listener bound — connection refused) from the hardcoded 'istio: ingressgateway' selector on a mesh labelled istio=${ACTUAL_LABEL}, got '${RED2_CODE}'. 200 => the selector wrongly SERVED traffic; anything else => the fixture itself is broken and is not testing what it claims."
 fi
-log_info "RED 2 OK — hardcoded selector produced HTTP ${RED2_CODE} (no listener bound), as it must"
+log_info "RED 2 OK — hardcoded selector produced HTTP 000 (no listener bound), as it must"
 
 log_info "PLATFORM MESH READY. Now run:  make install-ingress INGRESS_CONTROLLER=istio-existing"
 log_info "  (it will DISCOVER ${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_SERVICE}, selector istio=${ISTIO_GATEWAY_LABEL},"
