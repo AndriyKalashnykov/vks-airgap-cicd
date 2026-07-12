@@ -1412,15 +1412,22 @@ Legend: **[offline]** verifiable without a cluster · **[cluster]** runs against
 
 ### Minimum `.env` you must set
 
+Start from `make env-init` (copies `.env.example`) + `make env-populate` (generates the secrets it
+can, discovers what the cluster already knows). These are the values only **you** can supply:
+
 ```bash
-HARBOR_URL=harbor.<lab-host-or-ip>          # the Harbor Supervisor Service's endpoint
-HARBOR_PASSWORD=<robot-or-admin-secret>  # never committed
-HARBOR_CA_FILE=./secrets/harbor-ca.crt   # the Harbor CA (self-signed)
-GITEA_URL=http://gitea.<lab-host-or-ip>
-GITEA_ADMIN_PASSWORD=<choose-one>
-ARGOCD_NAMESPACE=argocd                  # where VKS runs ArgoCD
-KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
+HARBOR_URL=harbor.<lab-host-or-ip>       # the Harbor Supervisor Service's endpoint (discover: its LB IP/FQDN)
+HARBOR_USERNAME=robot$vks-cicd           # `make harbor-robot` writes this pair to secrets/harbor-robot.env
+HARBOR_PASSWORD=<robot-secret>           # never committed, never on argv
+HARBOR_CA_FILE=./secrets/harbor-ca.crt   # `make fetch-harbor-ca` (self-signed lab Harbor)
+GITEA_HOST=gitea.<lab-host-or-ip>        # the ingress hostname; GITEA_URL DERIVES from it
+GITEA_ADMIN_PASSWORD=<you choose>        # Gitea is a component WE install
+ARGOCD_NAMESPACE=argocd-instance-1       # the ns YOUR ArgoCD instance runs in (KinD uses `argocd`)
+KUBECONFIG=./secrets/vks.kubeconfig      # produced by `make vks-login`
 ```
+
+Then `make env-check` (presence) and `make env-validate` (format + reachability/auth) before you run
+anything. The KinD path needs **none** of this — it discovers and generates everything.
 
 </details>
 
