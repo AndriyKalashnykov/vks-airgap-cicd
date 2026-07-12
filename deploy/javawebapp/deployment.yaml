@@ -1,19 +1,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: webui
+  name: javawebapp
   labels:
-    app.kubernetes.io/name: webui
+    app.kubernetes.io/name: javawebapp
     app.kubernetes.io/part-of: vks-airgap-cicd-demo
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app.kubernetes.io/name: webui
+      app.kubernetes.io/name: javawebapp
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: webui
+        app.kubernetes.io/name: javawebapp
     spec:
       securityContext:
         runAsNonRoot: true
@@ -23,10 +23,10 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: webui
+        - name: javawebapp
           # kustomize `images:` transformer rewrites this name to the Harbor ref + tag.
           # The Tekton write-back task bumps the tag in kustomization.yaml on each build.
-          image: webui
+          image: javawebapp
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

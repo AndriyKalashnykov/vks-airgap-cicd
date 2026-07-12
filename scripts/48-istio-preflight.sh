@@ -23,7 +23,7 @@ load_env
 require_cmd kubectl
 require_cmd jq
 : "${KUBECONFIG:?KUBECONFIG must be set (see .env.example / .env.kind)}"; export KUBECONFIG
-: "${GITEA_HOST:?}"; : "${WEBUI_HOST:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
+: "${GITEA_HOST:?}"; : "${JAVAWEBAPP_HOST:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
 : "${GITEA_NAMESPACE:?}"; : "${ARGOCD_DEST_NAMESPACE:?}"; : "${TEKTON_NAMESPACE:?}"
 
 rc=0
@@ -116,7 +116,7 @@ else
   log_warn "  -> ASK THE MESH ADMIN to expose your hosts on a shared Gateway, then set:"
   log_warn "       ISTIO_SHARED_GATEWAY=${ISTIO_GATEWAY_NAMESPACE}/<their-gateway-name>"
   log_warn "     Its servers[].hosts must admit (exactly, or via a *.vks.local wildcard):"
-  log_warn "       ${GITEA_HOST}  ${WEBUI_HOST}  ${TEKTON_DASHBOARD_HOST}"
+  log_warn "       ${GITEA_HOST}  ${JAVAWEBAPP_HOST}  ${TEKTON_DASHBOARD_HOST}"
   log_warn "     We then create ONLY VirtualServices, in our own namespaces. That is enough:"
   log_warn "     a VS in the app's namespace referencing <gw-ns>/<gw-name> routes correctly."
 fi

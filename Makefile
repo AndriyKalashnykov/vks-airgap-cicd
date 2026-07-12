@@ -38,8 +38,8 @@ GITEA_NAMESPACE     ?= gitea
 CI_NAMESPACE        ?= ci
 TEKTON_NAMESPACE    ?= tekton-pipelines
 ARGOCD_NAMESPACE    ?= argocd
-ARGOCD_DEST_NAMESPACE ?= webui
-APP_NAME            ?= webui
+ARGOCD_DEST_NAMESPACE ?= javawebapp
+APP_NAME            ?= javawebapp
 APP_DEV_PORT        ?= 8080
 BUNDLE_DIR          ?= ./bundle
 # renovate: datasource=docker depName=plantuml/plantuml
@@ -52,8 +52,8 @@ MARKDOWNLINT_VERSION ?= 0.49.0
 CONTAINER_ENGINE    ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
 SCRIPTS := ./scripts
-APP_DIR := ./apps/java/webui
-MVN     := ./apps/java/webui/mvnw
+APP_DIR := ./apps/java/javawebapp
+MVN     := ./apps/java/javawebapp/mvnw
 
 # ---------------------------------------------------------------------------
 .PHONY: help
@@ -210,7 +210,7 @@ install-gitea: check-env ## Install Gitea on VKS (images from Harbor)
 	@$(SCRIPTS)/40-install-gitea.sh
 
 .PHONY: seed-gitea
-seed-gitea: check-env ## Create + seed webui-app and webui-deploy repos in Gitea
+seed-gitea: check-env ## Create + seed javawebapp-app and javawebapp-deploy repos in Gitea
 	@$(SCRIPTS)/50-seed-gitea-repos.sh
 
 .PHONY: install-tekton
@@ -238,7 +238,7 @@ argocd-register-guest: ## Register the guest cluster as an ArgoCD destination (r
 	@$(SCRIPTS)/71-argocd-register-guest.sh
 
 .PHONY: gitops
-gitops: ## Wire ArgoCD to track webui-deploy (auto-registers the guest cluster when ArgoCD is off-cluster: ARGOCD_KUBECONFIG set)
+gitops: ## Wire ArgoCD to track javawebapp-deploy (auto-registers the guest cluster when ArgoCD is off-cluster: ARGOCD_KUBECONFIG set)
 	@if [ -n "$(ARGOCD_KUBECONFIG)" ]; then \
 	  echo "==> ArgoCD is off-cluster (ARGOCD_KUBECONFIG set) — registering the guest cluster as an ArgoCD destination first"; \
 	  $(MAKE) argocd-register-guest; \
@@ -521,7 +521,7 @@ trivy-fs: app-build ## trivy — scan the built app jar's embedded deps for fixa
 trivy-config: ## trivy — scan k8s/Tekton manifests for HIGH/CRITICAL misconfigurations (.trivyignore documents accepted findings)
 	@if command -v trivy >/dev/null 2>&1; then \
 	  trivy config --severity HIGH,CRITICAL --exit-code 1 --quiet \
-	    --skip-dirs bundle --skip-dirs apps/java/webui --skip-dirs docs --skip-dirs .claude \
+	    --skip-dirs bundle --skip-dirs apps/java/javawebapp --skip-dirs docs --skip-dirs .claude \
 	    --skip-files jumpbox/Dockerfile.bootstrap .; \
 	else echo "trivy not installed — run 'make deps' (mise) — skipping"; fi
 
@@ -541,7 +541,7 @@ PODMAN_USERNS := $(if $(filter podman,$(CONTAINER_ENGINE)),--userns=keep-id,)
 # --network=none + -DRELATIVE_INCLUDE="." force the VENDORED c4/*.puml (offline,
 # deterministic — no fetch from githubusercontent at render time).
 # PLANTUML_LIMIT_SIZE raises PlantUML's 4096px default max canvas so a wide diagram
-# renders COMPLETE instead of silently truncating (the webui node + legend were being
+# renders COMPLETE instead of silently truncating (the javawebapp node + legend were being
 # clipped off pipeline-flow at 4096px). Deterministic — it caps, it does not scale.
 define _render_diagrams
 	mkdir -p docs/diagrams/$(1); \

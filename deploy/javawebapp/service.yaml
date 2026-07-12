@@ -1,14 +1,14 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: webui
+  name: javawebapp
   labels:
-    app.kubernetes.io/name: webui
+    app.kubernetes.io/name: javawebapp
     app.kubernetes.io/part-of: vks-airgap-cicd-demo
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: webui
+    app.kubernetes.io/name: javawebapp
   ports:
     - name: http
       port: 80

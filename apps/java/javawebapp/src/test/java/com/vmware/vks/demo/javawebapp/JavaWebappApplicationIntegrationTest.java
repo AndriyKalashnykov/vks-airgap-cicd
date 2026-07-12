@@ -1,4 +1,4 @@
-package com.vmware.vks.demo.webui;
+package com.vmware.vks.demo.javawebapp;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -16,7 +16,7 @@ import org.springframework.http.ResponseEntity;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "app.message=Hello from integration test")
-class WebuiApplicationIntegrationTest {
+class JavaWebappApplicationIntegrationTest {
 
     @LocalServerPort
     private int port;

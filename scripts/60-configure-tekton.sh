@@ -32,7 +32,7 @@ GITEA_CI_TOKEN="${GITEA_CI_TOKEN:-}"
 # ---- Derived values for envsubst rendering ----
 export CI_NAMESPACE HARBOR_URL HARBOR_INFRA_PROJECT APP_BRANCH ARGOCD_TRACK_BRANCH
 export APP_IMAGE="${HARBOR_URL}/${HARBOR_APP_PROJECT}/${APP_NAME}"
-export BUILDER_IMAGE_REF="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/webui-builder:${BUILDER_IMAGE_TAG}"
+export BUILDER_IMAGE_REF="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/javawebapp-builder:${BUILDER_IMAGE_TAG}"
 export RUNTIME_IMAGE_REF="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/eclipse-temurin:${TEMURIN_JRE_TAG:-25.0.3_9-jre-jammy}"
 export APP_REPO_CLONE_URL="${GITEA_INTERNAL_URL}/${GITEA_ORG}/${GITEA_APP_REPO}.git"
 export DEPLOY_REPO_CLONE_URL="${GITEA_INTERNAL_URL}/${GITEA_ORG}/${GITEA_DEPLOY_REPO}.git"
@@ -119,8 +119,8 @@ render_and_apply "${REPO_ROOT}/k8s/tekton/pipeline.yaml"
 render_and_apply "${REPO_ROOT}/k8s/tekton/triggers.yaml"
 
 # ---- Attach the git-auth secret to the CI ServiceAccount ----
-run kubectl -n "$CI_NAMESPACE" patch serviceaccount webui-ci \
+run kubectl -n "$CI_NAMESPACE" patch serviceaccount javawebapp-ci \
   -p '{"secrets":[{"name":"gitea-git-auth"}]}'
 
 log_info "Tekton pipeline configured in namespace '$CI_NAMESPACE'"
-log_info "EventListener service: el-webui.${CI_NAMESPACE}.svc:8080 (Gitea webhook target)"
+log_info "EventListener service: el-javawebapp.${CI_NAMESPACE}.svc:8080 (Gitea webhook target)"

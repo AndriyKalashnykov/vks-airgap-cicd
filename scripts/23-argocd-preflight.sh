@@ -21,7 +21,7 @@ require_cmd kubectl
 : "${KUBECONFIG:?KUBECONFIG must be set (path to the workload-cluster kubeconfig)}"; export KUBECONFIG
 
 NS="${ARGOCD_NAMESPACE:-argocd}"
-DEST_NS="${ARGOCD_DEST_NAMESPACE:-webui}"
+DEST_NS="${ARGOCD_DEST_NAMESPACE:-javawebapp}"
 VKS_ARGOCD_CRD="argocds.argocd-service.vsphere.vmware.com"
 
 log_info "cluster context: $(kubectl config current-context 2>/dev/null || echo '?')  (ARGOCD_NAMESPACE=$NS, ARGOCD_DEST_NAMESPACE=$DEST_NS)"

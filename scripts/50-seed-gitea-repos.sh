@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 50-seed-gitea-repos.sh — create the Gitea admin + CI token, the org, the two
-# repos (webui-app, webui-deploy), push their content, and register the push
+# repos (javawebapp-app, javawebapp-deploy), push their content, and register the push
 # webhook to the Tekton EventListener.
 #
 # Secret hygiene: the admin password is passed via stdin (heredoc) to kubectl
@@ -121,21 +121,21 @@ push_repo() {
 }
 
 # App repo: the Spring Boot app at repo root.
-push_repo "${REPO_ROOT}/apps/java/webui" "$GITEA_APP_REPO" "$APP_BRANCH"
+push_repo "${REPO_ROOT}/apps/java/javawebapp" "$GITEA_APP_REPO" "$APP_BRANCH"
 
-# Deploy repo: deploy/webui rendered to operator values (kustomization at root).
+# Deploy repo: deploy/javawebapp rendered to operator values (kustomization at root).
 deploy_src="${tmp}/deploy-src"
-rm -rf "$deploy_src"; mkdir -p "$deploy_src"; cp -a "${REPO_ROOT}/deploy/webui/." "$deploy_src/"
+rm -rf "$deploy_src"; mkdir -p "$deploy_src"; cp -a "${REPO_ROOT}/deploy/javawebapp/." "$deploy_src/"
 NEWNAME="${HARBOR_URL}/${HARBOR_APP_PROJECT}/${APP_NAME}" NS="$ARGOCD_DEST_NAMESPACE" \
   yq -i '.images[0].newName = strenv(NEWNAME) | .namespace = strenv(NS)' \
   "${deploy_src}/kustomization.yaml"
 yq -i ".replicas[0].count = ${APP_REPLICAS}" "${deploy_src}/kustomization.yaml"
 push_repo "$deploy_src" "$GITEA_DEPLOY_REPO" "$ARGOCD_TRACK_BRANCH"
 
-# ---- 5. Register the push webhook on webui-app -> EventListener (idempotent) ----
+# ---- 5. Register the push webhook on javawebapp-app -> EventListener (idempotent) ----
 # Gitea does NOT dedupe hooks — a blind re-POST on a re-run creates a DUPLICATE hook,
 # firing 2 PipelineRuns per push. Skip if a hook already targets our EventListener URL.
-hook_url="http://el-webui.${CI_NAMESPACE}.svc:8080"
+hook_url="http://el-javawebapp.${CI_NAMESPACE}.svc:8080"
 hooks_api="${base}/api/v1/repos/${GITEA_ORG}/${GITEA_APP_REPO}/hooks"
 # Capture the hooks list first, then grep the variable draining all input (no `-q`): piping
 # `api_body … | grep -qF` lets grep close the pipe on its first match and SIGPIPE `api_body`

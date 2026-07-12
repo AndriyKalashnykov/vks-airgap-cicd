@@ -236,7 +236,7 @@ nothing), and it also explains *why* a namespace cannot run `restricted`.
 
 | Namespace | Minimum level | Why |
 |---|---|---|
-| `gitea`, `tekton-pipelines`, `webui` | **restricted** | compliant as they ship |
+| `gitea`, `tekton-pipelines`, `javawebapp` | **restricted** | compliant as they ship |
 | **`ci`** (build TaskRuns) | **baseline** | **Kaniko builds as root** — `runAsUser=0`, unrestricted capabilities, no `seccompProfile`. `restricted` rejects it. This is a genuine requirement, not a workaround (a restricted-only platform would need a rootless builder). |
 | **the namespace holding our `Gateway`** | **baseline** | the proxy Istio **auto-provisions** there sets no `seccompProfile` — and **that pod is created by the platform's istiod, not by us**, so we cannot make it compliant. |
 | `istio-system` (Scenario 1 only) | **baseline** | istiod sets no `seccompProfile`. In Scenario 2 this namespace is the platform's and we neither judge nor label it. |

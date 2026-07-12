@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 99-verify.sh — END-TO-END smoke test on the LIVE VKS cluster.
 #
-# Pushes a uniquely-marked change to webui-app, then verifies the full chain:
+# Pushes a uniquely-marked change to javawebapp-app, then verifies the full chain:
 #   push -> Tekton PipelineRun succeeds -> deploy repo tag bumped
 #        -> ArgoCD Synced/Healthy -> the app HTTP page shows the new marker.
 #
@@ -49,7 +49,7 @@ wait_for() { # wait_for <desc> <cmd...> ; polls until cmd succeeds or timeout
 # window is LOST -> no PipelineRun. Gate the push on the POD being Ready (it only stays
 # Ready once the CaBundle is populated).
 log_info "waiting for the EventListener pod to be ready (Tekton Triggers CaBundle race)"
-kubectl -n "$CI_NAMESPACE" wait --for=condition=Ready pod -l eventlistener=webui \
+kubectl -n "$CI_NAMESPACE" wait --for=condition=Ready pod -l eventlistener=javawebapp \
   --timeout="${EL_READY_TIMEOUT_SECONDS:-180}s" >/dev/null 2>&1 \
   || log_warn "EventListener pod not confirmed Ready in time — proceeding (the webhook re-fire below covers a lost delivery)"
 

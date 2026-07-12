@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 70-configure-argocd.sh — register the Gitea deploy repo with ArgoCD (so it can
-# clone private repos) and create the ArgoCD Application that syncs webui-deploy
+# clone private repos) and create the ArgoCD Application that syncs javawebapp-deploy
 # to the cluster. ArgoCD is provided by VKS.
 #
 # The demo seeds public repos, so the repo secret is optional; it is created when

@@ -45,7 +45,7 @@ Deployment_Node(s2, "SCENARIO 2 — the platform ALREADY installed Istio   (INGR
 
 Deployment_Node(be, "Backend Services (both scenarios)", "NO sidecars — the gateway proxies straight to each ClusterIP") {
   Container(bgitea, "gitea", "gitea.vks.local")
-  Container(bapp, "webui", "app.vks.local")
+  Container(bapp, "javawebapp", "app.vks.local")
   Container(btkn, "tekton-dashboard", "tekton.vks.local")
 }
 

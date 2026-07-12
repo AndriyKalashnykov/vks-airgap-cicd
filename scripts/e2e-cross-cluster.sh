@@ -3,7 +3,7 @@
 # (the real-lab topology: ArgoCD runs in a HUB cluster = the Supervisor; workloads deploy into a
 # separate GUEST cluster). Stands up TWO kind clusters:
 #   HUB   (cc-hub)   — runs a minimal upstream ArgoCD (the "Supervisor ArgoCD" stand-in)
-#   GUEST (cc-guest) — the workload cluster webui should land in
+#   GUEST (cc-guest) — the workload cluster javawebapp should land in
 # then: register GUEST with HUB via `make argocd-register-guest`, prove the stored credential
 # actually reaches GUEST, and prove ArgoCD in HUB SYNCS an Application whose destination is GUEST
 # (the resource appears in GUEST, not HUB). PSA/RBAC/token/secret/cross-cluster-sync are validated

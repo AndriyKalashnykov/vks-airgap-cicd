@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # 15-build-push-builder.sh — (INTERNET side) build the air-gap Maven builder image
-# (apps/java/webui/Dockerfile.builder) with this pom's dependencies pre-baked, and push it to
+# (apps/java/javawebapp/Dockerfile.builder) with this pom's dependencies pre-baked, and push it to
 # Harbor. The in-cluster CI (kaniko) and the Tekton maven-test task then build/test
 # OFFLINE using this image's warm ~/.m2 cache.
 #
 # Requires docker or podman + internet (to pull Maven Central deps during the build).
-# Rebuild whenever apps/java/webui/pom.xml dependencies change (bump BUILDER_IMAGE_TAG).
+# Rebuild whenever apps/java/javawebapp/pom.xml dependencies change (bump BUILDER_IMAGE_TAG).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,7 +32,7 @@ fi
 ENGINE="$(container_engine)"
 log_info "using container engine: $ENGINE"
 
-REF="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/webui-builder:${BUILDER_IMAGE_TAG}"
+REF="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/javawebapp-builder:${BUILDER_IMAGE_TAG}"
 MAVEN_BASE="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/maven:3.9-eclipse-temurin-25"
 TLS_VERIFY="true"; [ "${HARBOR_INSECURE:-0}" = "1" ] && TLS_VERIFY="false"
 # SECURE Harbor: point podman at the CA via --cert-dir (a clean dir holding only ca.crt) so
@@ -61,9 +61,9 @@ fi
 log_info "building builder image $REF (this pulls Maven deps — needs internet)"
 run "$ENGINE" build \
   --build-arg "MAVEN_IMAGE=${BUILD_BASE}" \
-  -f "${REPO_ROOT}/apps/java/webui/Dockerfile.builder" \
+  -f "${REPO_ROOT}/apps/java/javawebapp/Dockerfile.builder" \
   -t "$REF" \
-  "${REPO_ROOT}/apps/java/webui"
+  "${REPO_ROOT}/apps/java/javawebapp"
 
 log_info "logging in to Harbor and pushing $REF"
 # --tls-verify is a podman flag (docker uses daemon insecure-registries / certs.d).

@@ -2,7 +2,7 @@
 # 98-verify-ingress.sh — assert the browser UIs are reachable THROUGH the ingress
 # LoadBalancer at their *.vks.local hostnames, not via `kubectl port-forward`.
 #
-# Why this exists: `make verify` (99-verify.sh) port-forwards svc/webui + svc/gitea
+# Why this exists: `make verify` (99-verify.sh) port-forwards svc/javawebapp + svc/gitea
 # directly, so a broken Ingress / Gateway / VirtualService (wrong backend, host, or
 # port) still passes the whole e2e green. This script exercises the real data path:
 #   client -> INGRESS_LB_IP (Host: <host>) -> controller route -> backend Service.
@@ -25,7 +25,7 @@ load_env
 
 require_cmd curl
 : "${INGRESS_LB_IP:?INGRESS_LB_IP not set — run 'make install-ingress' first (it writes the LB IP to .env.kind)}"
-: "${GITEA_HOST:?}"; : "${WEBUI_HOST:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
+: "${GITEA_HOST:?}"; : "${JAVAWEBAPP_HOST:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
 : "${INGRESS_CONTROLLER:=istio}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
@@ -58,7 +58,7 @@ wait_route() { # <host> — 0 + echo code when routed; 1 on timeout
 
 log_info "verifying ingress routing via INGRESS_CONTROLLER=${INGRESS_CONTROLLER} at ${INGRESS_LB_IP}"
 rc=0
-for host in "$GITEA_HOST" "$WEBUI_HOST" "$TEKTON_DASHBOARD_HOST"; do
+for host in "$GITEA_HOST" "$JAVAWEBAPP_HOST" "$TEKTON_DASHBOARD_HOST"; do
   log_info "  route-readiness poll: ${host} (timeout ${READY_TIMEOUT_SECONDS}s)"
   if code="$(wait_route "$host")"; then
     log_info "  OK    ${host} -> HTTP ${code} (routed through the ingress LB)"
@@ -90,7 +90,7 @@ if [ "$rc" -eq 0 ]; then
     fi
   }
   assert_body "$GITEA_HOST"             'gitea'           "Gitea UI"
-  assert_body "$WEBUI_HOST"             'class="message"' "app greeting page"
+  assert_body "$JAVAWEBAPP_HOST"             'class="message"' "app greeting page"
   assert_body "$TEKTON_DASHBOARD_HOST"  'tekton'          "Tekton Dashboard UI"
 fi
 

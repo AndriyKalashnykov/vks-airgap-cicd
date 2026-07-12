@@ -180,7 +180,7 @@ istio_apply_routes_gwapi() {
 
   log_info "applying Gateway(API) ${ISTIO_GWAPI_NAMESPACE}/${ISTIO_GATEWAY_NAME} (gatewayClassName=${ISTIO_GATEWAY_CLASS}) + HTTPRoutes"
   # shellcheck disable=SC2016
-  envsubst '${ISTIO_GWAPI_NAMESPACE} ${ISTIO_GATEWAY_NAME} ${ISTIO_GATEWAY_CLASS} ${GITEA_HOST} ${GITEA_NAMESPACE} ${WEBUI_HOST} ${APP_NAME} ${ARGOCD_DEST_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${TEKTON_NAMESPACE}' \
+  envsubst '${ISTIO_GWAPI_NAMESPACE} ${ISTIO_GATEWAY_NAME} ${ISTIO_GATEWAY_CLASS} ${GITEA_HOST} ${GITEA_NAMESPACE} ${JAVAWEBAPP_HOST} ${APP_NAME} ${ARGOCD_DEST_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${TEKTON_NAMESPACE}' \
     < "${k8s_dir}/gateway-api.yaml" | run kubectl apply -f -
 }
 
@@ -255,10 +255,10 @@ istio_assert_shared_gateway_hosts() {
   hosts="$(kubectl -n "$gw_ns" get gateway "$gw_name" -o jsonpath='{range .spec.servers[*]}{range .hosts[*]}{@}{"\n"}{end}{end}' 2>/dev/null || true)"
   if [ -z "$hosts" ]; then
     log_error "cannot read the shared Gateway ${ISTIO_SHARED_GATEWAY} (missing, or no RBAC to get it)."
-    log_error "  Ask the mesh admin to confirm it exists and admits: ${GITEA_HOST} ${WEBUI_HOST} ${TEKTON_DASHBOARD_HOST}"
+    log_error "  Ask the mesh admin to confirm it exists and admits: ${GITEA_HOST} ${JAVAWEBAPP_HOST} ${TEKTON_DASHBOARD_HOST}"
     return 1
   fi
-  for host in "$GITEA_HOST" "$WEBUI_HOST" "$TEKTON_DASHBOARD_HOST"; do
+  for host in "$GITEA_HOST" "$JAVAWEBAPP_HOST" "$TEKTON_DASHBOARD_HOST"; do
     ok=0
     while IFS= read -r h; do
       [ -z "$h" ] && continue
@@ -401,18 +401,18 @@ istio_apply_routes() {
     # not a cosmetic problem.
     export ISTIO_GATEWAY_NAMESPACE ISTIO_GATEWAY_LABEL
     istio_require_env ISTIO_GATEWAY_NAMESPACE ISTIO_GATEWAY_NAME ISTIO_GATEWAY_LABEL \
-                      GITEA_HOST WEBUI_HOST TEKTON_DASHBOARD_HOST
+                      GITEA_HOST JAVAWEBAPP_HOST TEKTON_DASHBOARD_HOST
     log_info "applying Gateway ${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_NAME} (selector istio=${ISTIO_GATEWAY_LABEL})"
     # shellcheck disable=SC2016
-    envsubst '${ISTIO_GATEWAY_NAMESPACE} ${ISTIO_GATEWAY_NAME} ${ISTIO_GATEWAY_LABEL} ${GITEA_HOST} ${WEBUI_HOST} ${TEKTON_DASHBOARD_HOST}' \
+    envsubst '${ISTIO_GATEWAY_NAMESPACE} ${ISTIO_GATEWAY_NAME} ${ISTIO_GATEWAY_LABEL} ${GITEA_HOST} ${JAVAWEBAPP_HOST} ${TEKTON_DASHBOARD_HOST}' \
       < "${k8s_dir}/gateway.yaml" | run kubectl apply -f -
   fi
 
-  istio_require_env ISTIO_GATEWAY_REF GITEA_HOST GITEA_NAMESPACE WEBUI_HOST APP_NAME \
+  istio_require_env ISTIO_GATEWAY_REF GITEA_HOST GITEA_NAMESPACE JAVAWEBAPP_HOST APP_NAME \
                     ARGOCD_DEST_NAMESPACE TEKTON_DASHBOARD_HOST TEKTON_NAMESPACE
-  log_info "applying VirtualServices (gitea/webui/tekton -> ${ISTIO_GATEWAY_REF})"
+  log_info "applying VirtualServices (gitea/javawebapp/tekton -> ${ISTIO_GATEWAY_REF})"
   # shellcheck disable=SC2016
-  envsubst '${ISTIO_GATEWAY_REF} ${GITEA_HOST} ${GITEA_NAMESPACE} ${WEBUI_HOST} ${APP_NAME} ${ARGOCD_DEST_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${TEKTON_NAMESPACE}' \
+  envsubst '${ISTIO_GATEWAY_REF} ${GITEA_HOST} ${GITEA_NAMESPACE} ${JAVAWEBAPP_HOST} ${APP_NAME} ${ARGOCD_DEST_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${TEKTON_NAMESPACE}' \
     < "${k8s_dir}/virtualservices.yaml" | run kubectl apply -f -
 }
 
@@ -435,7 +435,7 @@ istio_drop_other_api_routes() { # <keep: gateway-api|classic>
     gateway-api)
       log_info "removing any CLASSIC routes we previously created (so they cannot serve stale traffic)"
       for ns in "$GITEA_NAMESPACE" "$ARGOCD_DEST_NAMESPACE" "$TEKTON_NAMESPACE"; do
-        kubectl -n "$ns" delete virtualservice gitea webui tekton-dashboard --ignore-not-found >/dev/null 2>&1 || true
+        kubectl -n "$ns" delete virtualservice gitea javawebapp tekton-dashboard --ignore-not-found >/dev/null 2>&1 || true
       done
       [ -n "${ISTIO_GATEWAY_NAMESPACE:-}" ] && \
         kubectl -n "$ISTIO_GATEWAY_NAMESPACE" delete gateway.networking.istio.io "${ISTIO_GATEWAY_NAME:-vks-uis}" --ignore-not-found >/dev/null 2>&1 || true
@@ -443,7 +443,7 @@ istio_drop_other_api_routes() { # <keep: gateway-api|classic>
     classic)
       log_info "removing any GATEWAY-API routes we previously created (so they cannot serve stale traffic)"
       for ns in "$GITEA_NAMESPACE" "$ARGOCD_DEST_NAMESPACE" "$TEKTON_NAMESPACE"; do
-        kubectl -n "$ns" delete httproute gitea webui tekton-dashboard --ignore-not-found >/dev/null 2>&1 || true
+        kubectl -n "$ns" delete httproute gitea javawebapp tekton-dashboard --ignore-not-found >/dev/null 2>&1 || true
       done
       kubectl -n "${ISTIO_GWAPI_NAMESPACE:-vks-ingress}" delete gateway.gateway.networking.k8s.io "${ISTIO_GATEWAY_NAME:-vks-uis}" --ignore-not-found >/dev/null 2>&1 || true
       ;;

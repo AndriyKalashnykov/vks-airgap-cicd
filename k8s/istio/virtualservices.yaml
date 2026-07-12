@@ -39,11 +39,11 @@ spec:
 apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
-  name: webui
+  name: javawebapp
   namespace: ${ARGOCD_DEST_NAMESPACE}
 spec:
   hosts:
-    - ${WEBUI_HOST}
+    - ${JAVAWEBAPP_HOST}
   gateways:
     - ${ISTIO_GATEWAY_REF}
   http:

@@ -1,4 +1,4 @@
-package com.vmware.vks.demo.webui;
+package com.vmware.vks.demo.javawebapp;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;

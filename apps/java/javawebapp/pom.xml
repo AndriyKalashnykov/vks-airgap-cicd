@@ -12,9 +12,9 @@
     </parent>
 
     <groupId>com.vmware.vks.demo</groupId>
-    <artifactId>webui</artifactId>
+    <artifactId>javawebapp</artifactId>
     <version>0.1.0</version>
-    <name>webui</name>
+    <name>javawebapp</name>
     <description>Air-gapped VKS CI/CD demo web UI</description>
 
     <properties>

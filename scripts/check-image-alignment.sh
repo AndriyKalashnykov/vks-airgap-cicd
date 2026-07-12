@@ -55,7 +55,7 @@ check_pinned() { # <label> <actual> <expected-from-images.txt>
 }
 jre_itag="$(temurin_itag jre)"
 check_pinned "TEMURIN_JRE_TAG (.env.example)" "$(grep -E '^TEMURIN_JRE_TAG=' .env.example | cut -d= -f2)" "$jre_itag"
-check_pinned "RUNTIME_IMAGE (apps/java/webui/Dockerfile)" "$(grep -oE 'RUNTIME_IMAGE=eclipse-temurin:[^[:space:]"]+' apps/java/webui/Dockerfile | head -1 | sed 's|RUNTIME_IMAGE=eclipse-temurin:||')" "$jre_itag"
+check_pinned "RUNTIME_IMAGE (apps/java/javawebapp/Dockerfile)" "$(grep -oE 'RUNTIME_IMAGE=eclipse-temurin:[^[:space:]"]+' apps/java/javawebapp/Dockerfile | head -1 | sed 's|RUNTIME_IMAGE=eclipse-temurin:||')" "$jre_itag"
 
 # Istio's version is carried in .env.example (ISTIO_VERSION, which feeds the helm
 # global.tag in 46-install-istio.sh) and mirrored as istio/pilot + istio/proxyv2
@@ -74,10 +74,10 @@ check_pinned "istio/proxyv2 (images.txt)" "$proxyv2_itag" "$istio_itag"
 # maven `3.9 -> 3.10` bump would drift the consumers silently. Assert the full tag across all four.
 # `|| true`: standalone `set -e` assignments — a head-1 SIGPIPE / no-match must not abort here.
 mvn_itag="$(grep -oE '^maven:[^[:space:]"]+' images/images.txt | head -1 | sed 's|maven:||' || true)"
-check_pinned "MAVEN_IMAGE (apps/java/webui/Dockerfile.builder)" \
-  "$(grep -oE 'MAVEN_IMAGE=maven:[^[:space:]"]+' apps/java/webui/Dockerfile.builder | head -1 | sed 's|MAVEN_IMAGE=maven:||' || true)" "$mvn_itag"
-check_pinned "BUILDER_IMAGE (apps/java/webui/Dockerfile)" \
-  "$(grep -oE 'BUILDER_IMAGE=maven:[^[:space:]"]+' apps/java/webui/Dockerfile | head -1 | sed 's|BUILDER_IMAGE=maven:||' || true)" "$mvn_itag"
+check_pinned "MAVEN_IMAGE (apps/java/javawebapp/Dockerfile.builder)" \
+  "$(grep -oE 'MAVEN_IMAGE=maven:[^[:space:]"]+' apps/java/javawebapp/Dockerfile.builder | head -1 | sed 's|MAVEN_IMAGE=maven:||' || true)" "$mvn_itag"
+check_pinned "BUILDER_IMAGE (apps/java/javawebapp/Dockerfile)" \
+  "$(grep -oE 'BUILDER_IMAGE=maven:[^[:space:]"]+' apps/java/javawebapp/Dockerfile | head -1 | sed 's|BUILDER_IMAGE=maven:||' || true)" "$mvn_itag"
 check_pinned "BUILD_BASE (15-build-push-builder.sh)" \
   "$(grep -E '^BUILD_BASE=' scripts/15-build-push-builder.sh | grep -oE 'maven:[^[:space:]"]+' | head -1 | sed 's|maven:||' || true)" "$mvn_itag"
 check_pinned "MAVEN_BASE (15-build-push-builder.sh)" \

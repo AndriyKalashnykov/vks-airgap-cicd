@@ -3,7 +3,7 @@
 apiVersion: triggers.tekton.dev/v1beta1
 kind: TriggerBinding
 metadata:
-  name: webui-push
+  name: javawebapp-push
   namespace: ${CI_NAMESPACE}
 spec:
   params:
@@ -13,7 +13,7 @@ spec:
 apiVersion: triggers.tekton.dev/v1beta1
 kind: TriggerTemplate
 metadata:
-  name: webui-ci
+  name: javawebapp-ci
   namespace: ${CI_NAMESPACE}
 spec:
   params:
@@ -40,13 +40,13 @@ spec:
     - apiVersion: tekton.dev/v1
       kind: PipelineRun
       metadata:
-        generateName: webui-ci-
+        generateName: javawebapp-ci-
         namespace: ${CI_NAMESPACE}
       spec:
         pipelineRef:
-          name: webui-ci
+          name: javawebapp-ci
         taskRunTemplate:
-          serviceAccountName: webui-ci
+          serviceAccountName: javawebapp-ci
         params:
           - { name: app-repo-url, value: $(tt.params.app-repo-url) }
           - { name: app-revision, value: $(tt.params.app-revision) }
@@ -76,7 +76,7 @@ spec:
 apiVersion: triggers.tekton.dev/v1beta1
 kind: EventListener
 metadata:
-  name: webui
+  name: javawebapp
   namespace: ${CI_NAMESPACE}
 spec:
   serviceAccountName: tekton-triggers-sa
@@ -107,6 +107,6 @@ spec:
                 - key: branch
                   expression: "body.ref.split('/')[2]"
       bindings:
-        - ref: webui-push
+        - ref: javawebapp-push
       template:
-        ref: webui-ci
+        ref: javawebapp-ci

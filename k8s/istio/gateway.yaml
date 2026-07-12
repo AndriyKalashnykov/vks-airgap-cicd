@@ -29,5 +29,5 @@ spec:
         protocol: HTTP
       hosts:
         - ${GITEA_HOST}
-        - ${WEBUI_HOST}
+        - ${JAVAWEBAPP_HOST}
         - ${TEKTON_DASHBOARD_HOST}

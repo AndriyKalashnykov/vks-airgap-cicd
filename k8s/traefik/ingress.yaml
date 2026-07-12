@@ -28,12 +28,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: webui
+  name: javawebapp
   namespace: ${ARGOCD_DEST_NAMESPACE}
 spec:
   ingressClassName: traefik
   rules:
-    - host: ${WEBUI_HOST}
+    - host: ${JAVAWEBAPP_HOST}
       http:
         paths:
           - path: /

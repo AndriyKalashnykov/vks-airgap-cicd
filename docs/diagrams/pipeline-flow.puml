@@ -5,20 +5,20 @@
 ' Folded 2-lane layout (CI intake on top, GitOps/CD lane below) via directional
 ' Rel_* hints — NOT LAYOUT_LEFT_RIGHT: the 8-step chain as one wide row rendered a
 ' ~4200px strip that clipped at PlantUML's 4096px default (PLANTUML_LIMIT_SIZE),
-' truncating the webui node + legend, AND embedded as a thin sliver. Folding keeps
+' truncating the javawebapp node + legend, AND embedded as a thin sliver. Folding keeps
 ' it complete and balanced. The render also raises PLANTUML_LIMIT_SIZE well above
 ' 4096 (see Makefile _render_diagrams) so no diagram can silently clip again.
 
 title Pipeline flow — a push to production, inside the air gap
 
 Person(dev, "Developer")
-Container(gitea_app, "Gitea: webui-app", "git repo")
-Container(el, "Tekton EventListener", "el-webui")
+Container(gitea_app, "Gitea: javawebapp-app", "git repo")
+Container(el, "Tekton EventListener", "el-javawebapp")
 Container(pipe, "Tekton PipelineRun", "clone · test · build · write-back")
 ContainerDb(harbor, "Harbor", "OCI registry", $tags="datastore")
-Container(gitea_dep, "Gitea: webui-deploy", "git repo")
+Container(gitea_dep, "Gitea: javawebapp-deploy", "git repo")
 Container(argo, "ArgoCD", "GitOps")
-Container(app, "webui", "Deployment + Service")
+Container(app, "javawebapp", "Deployment + Service")
 
 Rel_R(dev, gitea_app, "1. git push")
 Rel_R(gitea_app, el, "2. push webhook")

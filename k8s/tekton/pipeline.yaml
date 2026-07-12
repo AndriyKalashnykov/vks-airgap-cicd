@@ -1,12 +1,12 @@
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
-  name: webui-ci
+  name: javawebapp-ci
   namespace: ${CI_NAMESPACE}
 spec:
   description: >-
-    On a push to webui-app: clone -> test -> build+push image to Harbor ->
-    write the new tag back to webui-deploy (which ArgoCD then syncs).
+    On a push to javawebapp-app: clone -> test -> build+push image to Harbor ->
+    write the new tag back to javawebapp-deploy (which ArgoCD then syncs).
   params:
     - name: app-repo-url
       type: string
@@ -20,7 +20,7 @@ spec:
       default: main
     - name: image
       type: string
-      description: App image without tag (e.g. harbor/apps/webui).
+      description: App image without tag (e.g. harbor/apps/javawebapp).
     - name: builder-image
       type: string
     - name: runtime-image

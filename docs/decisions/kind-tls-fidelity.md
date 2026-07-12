@@ -106,7 +106,7 @@ The chosen design uses the **LoadBalancer IP** as the endpoint instead:
 ## Design — mimic on KinD (exact per-file changes)
 
 Only **Harbor** and **ArgoCD** are VKS-provided, so only they change. Gitea, Tekton, the
-Tekton Dashboard and the webui app are *ours* — they stay HTTP behind the `*.vks.local`
+Tekton Dashboard and the javawebapp app are *ours* — they stay HTTP behind the `*.vks.local`
 ingress (no VKS cert contract on them).
 
 ### Cert minting (`scripts/lib/tls.sh`)
@@ -174,7 +174,7 @@ Endpoint = the Harbor LoadBalancer **IP** (cert SAN = `IP:<lb-ip>`).
 
 ## What stays the same
 
-- **Gitea / Tekton Dashboard / webui app** — ours; HTTP behind the `*.vks.local` ingress.
+- **Gitea / Tekton Dashboard / javawebapp app** — ours; HTTP behind the `*.vks.local` ingress.
 - The **pipeline flow** (git push → Tekton → Harbor → write-back → ArgoCD → app) is unchanged;
   only the *transport* to Harbor (HTTP→HTTPS+CA) and ArgoCD's UI TLS change.
 - `cloud-provider-kind` LoadBalancers, the mirror engine (`crane`), the offline builder.
@@ -191,7 +191,7 @@ Clean `make e2e-kind` with **no concurrent load** (registry-corruption lesson).
 2. `make builder-image` — builder pushed to Harbor over TLS via podman `--cert-dir`.
 3. Kaniko `build` — app image built + pushed to `https://<lb-ip>` over TLS via the mounted
    `additional-ca-cert-bundle` (no `--skip-tls-verify`).
-4. containerd — the webui Deployment pulled `<lb-ip>/apps/webui:<sha>` over TLS with the node
+4. containerd — the javawebapp Deployment pulled `<lb-ip>/apps/javawebapp:<sha>` over TLS with the node
    `certs.d` CA.
 5. ArgoCD — reachable over self-signed TLS on its own LB IP; the GitOps sync rolled the image.
 6. `make verify` (`End-to-end verified`) + `make verify-ingress` (`SUCCESS`) green.

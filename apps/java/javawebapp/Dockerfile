@@ -4,7 +4,7 @@
 
 # ---- build stage ----------------------------------------------------------
 # BUILDER_IMAGE defaults to public Maven (local `docker build` works online).
-# In the air gap, CI passes BUILDER_IMAGE=<harbor>/cicd/webui-builder:<ver> (a
+# In the air gap, CI passes BUILDER_IMAGE=<harbor>/cicd/javawebapp-builder:<ver> (a
 # builder with this pom's dependencies pre-baked — see app/Dockerfile.builder and
 # scripts/15-build-push-builder.sh) plus MVN_OFFLINE=-o so `package` needs no network.
 ARG BUILDER_IMAGE=maven:3.9-eclipse-temurin-25

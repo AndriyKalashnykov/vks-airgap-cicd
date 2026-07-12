@@ -52,7 +52,7 @@ spec:
         #!/bin/sh
         set -eu
         cd "$(workspaces.scratch.path)/deploy"
-        # kustomization.yaml is at the deploy repo root (seeded from deploy/webui).
+        # kustomization.yaml is at the deploy repo root (seeded from deploy/javawebapp).
         yq -i '.images[0].newTag = strenv(TAG)' kustomization.yaml
         echo "set image tag -> $TAG"
         yq '.images' kustomization.yaml
@@ -70,6 +70,6 @@ spec:
           exit 0
         fi
         git add kustomization.yaml
-        git commit -m "ci: deploy webui $(params.tag)"
+        git commit -m "ci: deploy javawebapp $(params.tag)"
         git push origin "HEAD:$(params.deploy-revision)"
         echo "pushed deploy update for tag $(params.tag)"

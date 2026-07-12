@@ -55,7 +55,7 @@ require_cmd kubectl
 require_cmd jq
 : "${KUBECONFIG:?KUBECONFIG must be set (see .env.example / .env.kind)}"; export KUBECONFIG
 : "${GITEA_NAMESPACE:?}"; : "${GITEA_HOST:?}"
-: "${ARGOCD_DEST_NAMESPACE:?}"; : "${WEBUI_HOST:?}"; : "${APP_NAME:?}"
+: "${ARGOCD_DEST_NAMESPACE:?}"; : "${JAVAWEBAPP_HOST:?}"; : "${APP_NAME:?}"
 : "${TEKTON_NAMESPACE:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
 
 log_info "INGRESS_CONTROLLER=istio-existing — attaching to an Istio we did NOT install"
@@ -119,6 +119,6 @@ set_env_var INGRESS_CONTROLLER "istio-existing"
 log_info "attached to the existing Istio via ${ISTIO_ROUTE_API}: ${ATTACHED_AT} -> ${LB_IP}"
 log_info "Add ONE line to /etc/hosts on the jump box / your client:"
 log_info ""
-log_info "    ${LB_IP}  ${GITEA_HOST} ${WEBUI_HOST} ${TEKTON_DASHBOARD_HOST}"
+log_info "    ${LB_IP}  ${GITEA_HOST} ${JAVAWEBAPP_HOST} ${TEKTON_DASHBOARD_HOST}"
 log_info ""
-log_info "then browse: http://${GITEA_HOST}  http://${WEBUI_HOST}  http://${TEKTON_DASHBOARD_HOST}"
+log_info "then browse: http://${GITEA_HOST}  http://${JAVAWEBAPP_HOST}  http://${TEKTON_DASHBOARD_HOST}"

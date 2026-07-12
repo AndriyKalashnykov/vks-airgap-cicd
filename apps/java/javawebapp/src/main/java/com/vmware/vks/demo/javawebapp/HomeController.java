@@ -1,4 +1,4 @@
-package com.vmware.vks.demo.webui;
+package com.vmware.vks.demo.javawebapp;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
@@ -18,7 +18,7 @@ public class HomeController {
     private final String commit;
 
     public HomeController(
-            @Value("${spring.application.name:webui}") String appName,
+            @Value("${spring.application.name:javawebapp}") String appName,
             @Value("${app.message:Hello from vks-airgap-cicd}") String message,
             @Value("${info.app.version:dev}") String version,
             @Value("${info.app.commit:unknown}") String commit) {

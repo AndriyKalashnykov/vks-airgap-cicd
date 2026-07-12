@@ -26,7 +26,7 @@ if [ -n "${ARGOCD_LB_IP:-}" ]; then
 else
   argocd_url="<your lab's ArgoCD URL>"
 fi
-app_url="http://${WEBUI_HOST:-app.vks.local}"
+app_url="http://${JAVAWEBAPP_HOST:-app.vks.local}"
 tekton_url="http://${TEKTON_DASHBOARD_HOST:-tekton.vks.local}"  # Tekton Dashboard (read-only UI)
 
 # --- resolve logins -------------------------------------------------------------------
@@ -44,7 +44,7 @@ echo "Access the UIs (local demo credentials):"
 if [ -n "${INGRESS_LB_IP:-}" ]; then
   echo
   echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"
-  echo "    ${INGRESS_LB_IP}  ${GITEA_HOST:-gitea.vks.local} ${WEBUI_HOST:-app.vks.local} ${TEKTON_DASHBOARD_HOST:-tekton.vks.local}"
+  echo "    ${INGRESS_LB_IP}  ${GITEA_HOST:-gitea.vks.local} ${JAVAWEBAPP_HOST:-app.vks.local} ${TEKTON_DASHBOARD_HOST:-tekton.vks.local}"
 fi
 
 # --- table ----------------------------------------------------------------------------
