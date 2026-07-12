@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Namespace ArgoCD deploys into. The seed step rewrites it per-app from the app registry.
+namespace: gowebapp
+
+resources:
+  - deployment.yaml
+  - service.yaml
+
+# The demo app image. The seed sets newName to $HARBOR_URL/$HARBOR_APP_PROJECT/gowebapp; the
+# Tekton write-back task bumps newTag on every successful build (that commit is what ArgoCD syncs).
+images:
+  - name: gowebapp
+    newName: harbor.vks.local/apps/gowebapp
+    newTag: "0.1.0"
+
+replicas:
+  - name: gowebapp
+    count: 2

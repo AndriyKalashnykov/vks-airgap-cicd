@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: gowebapp
+  labels:
+    app.kubernetes.io/name: gowebapp
+    app.kubernetes.io/part-of: vks-airgap-cicd-demo
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: gowebapp
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
