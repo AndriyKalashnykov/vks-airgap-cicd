@@ -805,7 +805,13 @@ builder image, installs Gitea + Tekton, and creates the ArgoCD `Application`.
 > alongside `KUBECONFIG` (guest access); `make gitops` (invoked by `install-all`) then
 > **auto-registers** the guest cluster as an ArgoCD destination via **`make
 > argocd-register-guest`** and points the `Application` there — it does **not** install a second
-> ArgoCD in the guest. As the ArgoCD **admin** (you own the instance from A2), this
+> ArgoCD in the guest.
+>
+> **Get `ARGOCD_KUBECONFIG` with `make fetch-argocd-kubeconfig`.** ArgoCD runs on the **Supervisor**,
+> so registration needs a *Supervisor* kubeconfig — not the workload one `make vks-login` gives you.
+> The target creates a Supervisor VCF-CLI context, writes it to `$ARGOCD_KUBECONFIG`, and **proves**
+> it reaches `argocd-server` before you go further. (It is interactive — the CLI prompts for your
+> password.) See [`docs/vks-services/argocd.md`](docs/vks-services/argocd.md). As the ArgoCD **admin** (you own the instance from A2), this
 > auto-registration works out of the box. Leave `ARGOCD_KUBECONFIG` unset only if ArgoCD and the
 > workload run in the same cluster.
 

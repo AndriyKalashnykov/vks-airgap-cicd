@@ -55,6 +55,49 @@ for v in $vars; do
   missing="${missing} ${v}"; rc=1
 done
 
+
+# ---------------------------------------------------------------------------
+# PASS 2 — every operator-supplied value must state HOW IT IS ACQUIRED.
+#
+# The product of this repo is the three SCENARIOS (KinD / real-lab-install / real-lab-tenant), and a
+# scenario is only "done" if an operator can actually RUN it. A value with no acquisition path is a
+# hole in a scenario's critical path — the operator gets to that step and stops. Documenting the hole
+# is not completing the scenario.
+#
+# So each documented value must carry one of:
+#   how:/acquire:  an explicit acquisition command or `make` target
+#   auto/discover  the repo discovers it (and writes .env.kind) — the operator supplies nothing
+#   choose/you set you invent it (a password for something WE install)
+#   request        you must ask the platform admin (a legitimate, explicit end-state)
+#   a real default the value ships with (nothing to obtain)
+#
+# The one that bit us: ARGOCD_KUBECONFIG shipped with "nothing creates this and the command is
+# unknown" — which silently meant BOTH real-lab scenarios could not complete `make gitops`.
+# ---------------------------------------------------------------------------
+acq_rc=0
+# Markers that answer "how does the operator get this?" — a command/target, or an explicit class:
+#   how:/acquire:  a command or make target        auto/discover/generated  the repo supplies it
+#   choose/you set/toggle/password  you invent it   request/ask  you must ask the platform admin
+#   reserved/n/a   not used today
+ACQ_MARKERS='how|acquire|auto|discover|generated|choose|you set|you choose|toggle|runtime|password|request|ask (your|the)|reserved|n/a|default'
+while IFS= read -r line; do
+  ln="${line%%:*}"; rest="${line#*:}"
+  var="$(printf '%s' "$rest" | sed -E 's/^#?[[:space:]]*([A-Z][A-Z0-9_]+)=.*/\1/')"
+  printf '%s' "$var" | grep -qE '^[A-Z][A-Z0-9_]{2,}$' || continue
+  # an UNCOMMENTED line ships a real default -> nothing for the operator to obtain
+  printf '%s' "$rest" | grep -qE '^[A-Z]' && continue
+  # Walk UPWARD from the var, taking ONLY its own CONTIGUOUS comment block (stop at the first
+  # non-comment line). A wider window would pick up a NEIGHBOURING block's marker and the gate would
+  # never fire — which is exactly what it did on its first version.
+  blk="$(awk -v n="$ln" 'NR<n { if ($0 ~ /^#/) { b = b "\n" $0 } else { b = "" } } END { print b }' "$ENV_FILE" | tr '[:upper:]' '[:lower:]')"
+  printf '%s' "$blk" | grep -qE "$ACQ_MARKERS" && continue
+  log_error ".env.example:${ln}: '${var}' is operator-supplied but states NO acquisition path."
+  log_error "    Add 'how:'/'acquire:' (a command or make target), or mark it auto/discover/choose/request."
+  log_error "    A value an operator cannot obtain is a HOLE in a scenario's critical path."
+  acq_rc=1
+done < <(grep -nE '^#[[:space:]]*[A-Z][A-Z0-9_]{2,}=' "$ENV_FILE")
+[ "$acq_rc" -eq 0 ] || rc=1
+
 echo >&2
 if [ "$rc" -eq 0 ]; then
   log_info "check-env-coverage: OK — every operator-settable variable the scripts read is documented in .env.example."

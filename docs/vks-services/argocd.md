@@ -101,26 +101,34 @@ GUEST_API_SERVER=https://<guest-api-vip>:6443   # only if the guest API address 
 ARGOCD_DEST_CLUSTER_NAME=vks-guest              # name the destination appears under
 ```
 
-> **⚠️ Where does `ARGOCD_KUBECONFIG` come from? Nothing in this repo creates it for a real lab —
-> and the exact command is UNVERIFIED.** This is a genuine gap, stated rather than papered over:
+> **Where does `ARGOCD_KUBECONFIG` come from?** `make fetch-argocd-kubeconfig` — and it is worth
+> understanding why it is a *Supervisor* kubeconfig, not a workload one.
 >
 > | | |
 > |---|---|
-> | **Two-KinD e2e** | produced automatically (`kind get kubeconfig --name <hub>`) — that path needs no manual step |
-> | **`make vks-login`** | writes only the **guest/workload** kubeconfig — never a Supervisor one |
-> | **Real lab** | **you must supply it.** No target, no script. |
+> | **Two-KinD e2e** | produced automatically (`kind get kubeconfig --name <hub>`) — no manual step |
+> | **`make vks-login`** | the **guest/workload** kubeconfig (`vcf cluster kubeconfig get`) → `KUBECONFIG` |
+> | **`make fetch-argocd-kubeconfig`** | the **Supervisor** kubeconfig (where ArgoCD actually runs) → `ARGOCD_KUBECONFIG` |
 >
-> What *is* established: ArgoCD is a **Supervisor Service**, so this must be a kubeconfig for the
-> **Supervisor** (with access to the vSphere Namespace the instance runs in, e.g.
-> `argocd-instance-1`). The Supervisor is reached through the `vcf` CLI **context** flow —
-> `vcf context create --endpoint https://$SUPERVISOR_HOST --username <u>@$VKS_SSO_DOMAIN --auth-type basic`
-> then `vcf context use <ctx>:<ns>` — **not** `vcf cluster kubeconfig get`, which fetches a
-> *workload-cluster* kubeconfig (that is `KUBECONFIG` / `GUEST_KUBECONFIG`, not this one).
+> Per Broadcom (*Connect to the Supervisor as a vCenter SSO User* + *VCF CLI Context, Architecture,
+> and Configuration*): `vcf context create --endpoint https://<SUPERVISOR> --username <u>@<domain>
+> --ca-certificate <ca>` creates a **Supervisor** context — *"you can view the cluster context in the
+> file `.kube/config` in the user's home directory"*, and *"the VCF CLI respects the `KUBECONFIG`
+> environment variable for writing to alternate locations"*. So the target points `KUBECONFIG` at
+> `ARGOCD_KUBECONFIG` while creating the context, and the Supervisor kubeconfig lands in its own file
+> instead of polluting `~/.kube/config`. Creating a Supervisor context also auto-creates the
+> per-vSphere-Namespace contexts (`<ctx>` and `<ctx>:<namespace>`), so the target then selects
+> `<ctx>:$ARGOCD_NAMESPACE`, and finally **proves** the kubeconfig works (`argocd-server` must be
+> visible) rather than trusting that a file exists.
 >
-> **Open:** how to export that Supervisor context to a standalone kubeconfig file. Verify on a real
-> 9.1 lab, then replace the note in `.env.example` with the actual command — and add a `make` target
-> if it is scriptable. *(An earlier version of this page guessed a command here. It was wrong, and is
-> recorded as a correction rather than silently fixed.)*
+> ⚠️ **Provenance: INFERRED.** Those pages are the 9.0 tree (the 9.1 URLs 301-redirect to it), and we
+> have never run this on a lab. The flow is also **interactive** — the VCF CLI prompts for the
+> password (no documented non-interactive flag, and a password on argv is forbidden). Re-verify on a
+> real 9.1 lab and upgrade this grade.
+>
+> *(An earlier version of this page said "nothing creates this file and the command is unknown". That
+> was true of the repo but false of the world: the flow is documented, and was found by actually
+> searching. Recorded as a correction rather than silently fixed.)*
 
 then run **one** target — no manual `kubectl`:
 
@@ -131,6 +139,7 @@ make gitops        # auto-invokes `make argocd-register-guest` when ARGOCD_KUBEC
 | Command | Does |
 |---|---|
 | `make argocd-preflight` | CLI vs **server** version, and `TOPOLOGY OK / MISMATCH` (is ArgoCD even in a position to deploy to your cluster?) |
+| `make fetch-argocd-kubeconfig` | obtain the **Supervisor** kubeconfig (where ArgoCD runs) → `ARGOCD_KUBECONFIG`, and prove it reaches `argocd-server` |
 | `make argocd-register-guest` | the registration above (admin-only). Auto-invoked by `make gitops`. |
 | `make gitops` | register (if needed) → create/point the `Application` |
 | `make fetch-argocd-ca` | fetch the self-signed server CA → `ARGOCD_CA_FILE` |
@@ -146,9 +155,11 @@ kubectl --kubeconfig $ARGOCD_KUBECONFIG -n $ARGOCD_NAMESPACE \
 
 ## Open / unverified
 
-- **How to obtain `ARGOCD_KUBECONFIG` (the Supervisor kubeconfig) as a file on a real lab** — see the
-  warning above. Nothing in the repo produces it; the exact `vcf` command is unverified. This is the
-  single blocking unknown for the real-lab cross-cluster path.
+- **`make fetch-argocd-kubeconfig` has never been run on a real lab** — it implements the documented
+  (9.0-tree) `vcf context create` + `KUBECONFIG` flow. Confirm it, and upgrade the grade to
+  lab-verified. In particular confirm: the Supervisor context really lands in `$KUBECONFIG`; the
+  `<ctx>:<vsphere-namespace>` context name; and that `ARGOCD_NAMESPACE` is the vSphere Namespace the
+  ArgoCD instance runs in.
 - The **real-lab** run of the cross-cluster path. The mechanic is KinD-verified end-to-end (two
   clusters), but these stay lab-only: whether the guest API is **routable from the Supervisor**, the
   guest API's **TLS/CA trust** from there, and any Supervisor-side admission policy on cluster-admin RBAC.
