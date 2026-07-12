@@ -17,7 +17,6 @@ SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
 # ---- Defaults (mirror .env.example; env/.env override) ----
-RUN_MODE            ?= dual-homed
 HARBOR_URL          ?= harbor.vks.local
 HARBOR_INFRA_PROJECT?= cicd
 HARBOR_APP_PROJECT  ?= apps

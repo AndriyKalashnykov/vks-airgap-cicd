@@ -165,7 +165,7 @@ Kaniko, Maven, Temurin JDK/JRE, alpine/git, yq, and the ingress images). Figures
 | Mirror image cache — **single-arch** (default, `MIRROR_ARCH=amd64`) | `bundle/images/` | **~3.0 GB** |
 | Mirror image cache — **all architectures** (`MIRROR_ALL_ARCH=1`) | `bundle/images/` | ~5.2 GB |
 | Maven builder image build (local docker/podman storage) | engine store | ~1.5 GB |
-| Sneakernet bundle tarball (`RUN_MODE=sneakernet` only) | repo root | ~2.5 GB (on top of the cache) |
+| Sneakernet bundle tarball (sneakernet flow only) | repo root | ~2.5 GB (on top of the cache) |
 
 > Even in single-arch mode the **Tekton controller images stay multi-arch**
 > (~2 GB of the 3 GB): they are digest-pinned in the release manifests, so their
@@ -275,7 +275,7 @@ Diagram sources are committed under [`docs/diagrams/`](docs/diagrams/) (C4-Plant
 | **dual-homed** (default) | Jump box reaches internet **and** the VKS/Harbor network (routed to ESXi) | `make mirror` pulls + pushes in one run |
 | **sneakernet** | Jump box has internet only | `make mirror-pull && make bundle` → carry the bundle → `make bundle-load && make mirror-push` inside |
 
-Set `RUN_MODE` in `.env`.
+There's no switch to flip — the mode is simply **which mirror commands you run** (the Flow column above).
 
 </details>
 
