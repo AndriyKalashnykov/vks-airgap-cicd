@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gowebapp
+  labels:
+    app.kubernetes.io/name: gowebapp
+    app.kubernetes.io/part-of: vks-airgap-cicd-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gowebapp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gowebapp
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        # distroless:nonroot is uid/gid 65532 — NOT the 10001 the Java app creates. Using 10001
+        # here would make the kubelet refuse to start the container (the image has no such user).
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gowebapp
+          # kustomize `images:` transformer rewrites this name to the Harbor ref + tag.
+          # The Tekton write-back task bumps the tag in kustomization.yaml on each build.
+          image: gowebapp
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: APP_INTERNAL_PORT
+              value: "8080"
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            failureThreshold: 30
+            periodSeconds: 1
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          resources:
+            # An order of magnitude smaller than the JVM's — a static Go binary needs no heap
+            # headroom. This is the visible payoff of the second language in the demo.
+            requests: { cpu: "10m", memory: "16Mi" }
+            limits: { cpu: "500m", memory: "64Mi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      # No /tmp emptyDir: unlike Spring Boot/Tomcat, the Go binary writes nothing to disk, so a
+      # read-only root filesystem needs no writable mount at all.

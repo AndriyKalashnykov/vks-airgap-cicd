@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # validate.sh — offline manifest validation (no cluster required).
-#   - `kustomize build deploy/webui` renders, then kubeconform validates it.
+#   - `kustomize build deploy/javawebapp` renders, then kubeconform validates it.
 #   - Tekton + ArgoCD YAML are validated with kubeconform in
 #     -ignore-missing-schemas mode (their CRDs aren't in the default schema set).
 # A missing tool is warned-and-skipped; a present tool that finds errors fails.
@@ -28,7 +28,7 @@ mkdir -p "$KC_CACHE"
 KC_SCHEMA_K8S="${KUBECONFORM_SCHEMA_K8S:-https://cdn.jsdelivr.net/gh/yannh/kubernetes-json-schema@master/{{ .NormalizedKubernetesVersion }}-standalone{{ .StrictSuffix }}/{{ .ResourceKind }}{{ .KindSuffix }}.json}"
 KC_SCHEMA_CRD="${KUBECONFORM_SCHEMA_CRD:-https://cdn.jsdelivr.net/gh/datreeio/CRDs-catalog@main/{{ .Group }}/{{ .ResourceKind }}_{{ .ResourceAPIVersion }}.json}"
 # Two schema-location sets, chosen per directory:
-#  - CORE (deploy/webui, k8s/): the yannh k8s schemas. Every kind is a built-in k8s type,
+#  - CORE (deploy/javawebapp, k8s/): the yannh k8s schemas. Every kind is a built-in k8s type,
 #    so jsDelivr returns 200 and validation is reliable (real violations ARE caught).
 #  - CRD (k8s/tekton, k8s/argocd): the datreeio CRDs-catalog. It returns a clean 404 for CRDs it
 #    doesn't carry (so -ignore-missing-schemas SKIPS them), and 200 for those it does (e.g.
@@ -104,25 +104,56 @@ kustomize_build() {
   else return 127; fi
 }
 
-echo "== kustomize build (deploy/webui) =="
-if [ -d "$REPO_ROOT/deploy/webui" ]; then
-  if kustomize_build "$REPO_ROOT/deploy/webui" "$RENDERED"; then
-    log_info "kustomize build OK ($(grep -c '^kind:' "$RENDERED") resources)"
+echo "== kustomize build (every app's deploy dir) =="
+# shellcheck source=scripts/lib/apps.sh
+. "${REPO_ROOT}/scripts/lib/apps.sh"
+_validated=0
+while read -r _app; do
+  [ -n "$_app" ] || continue
+  _dir="${REPO_ROOT}/$(app_deploy "$_app")"
+  if [ ! -d "$_dir" ]; then
+    log_error "app '${_app}': deploy dir $(app_deploy "$_app") does not exist"; rc=1; continue
+  fi
+  if kustomize_build "$_dir" "$RENDERED"; then
+    log_info "kustomize build OK for '${_app}' ($(grep -c '^kind:' "$RENDERED") resources)"
+    _validated=$((_validated + 1))
     if have kubeconform; then
-      KC_LOCS=("${KC_LOCS_CORE[@]}")   # deploy/webui is all core k8s kinds
+      KC_LOCS=("${KC_LOCS_CORE[@]}")   # an app's deploy manifests are all core k8s kinds
       kc -strict -ignore-missing-schemas "$RENDERED" || rc=1
     elif have kubectl; then
       log_info "kubeconform absent — falling back to 'kubectl apply --dry-run=client'"
       kubectl apply --dry-run=client -f "$RENDERED" >/dev/null || rc=1
     else
-      log_warn "no kubeconform/kubectl — deploy manifests unchecked against schemas"
+      log_warn "no kubeconform/kubectl — '${_app}' deploy manifests unchecked against schemas"
     fi
   else
-    log_error "kustomize build failed (need kustomize or kubectl)"; rc=1
+    log_error "kustomize build failed for '${_app}' (need kustomize or kubectl)"; rc=1
   fi
-else
-  log_warn "deploy/webui not present yet — skipped"
-fi
+done <<EOF
+$(app_names)
+EOF
+# Print the DENOMINATOR: a gate that cannot say how many apps it checked cannot be trusted.
+log_info "kustomize: validated ${_validated} app deploy dir(s)"
+
+echo "== every app's Tekton TEST TASK must exist =="
+# A pipeline referencing a Task that is not applied fails at PIPELINE time with `CouldntGetTask` —
+# i.e. only when someone pushes, long after every gate went green. (It happened: the `go-test` task
+# was written but never added to k8s/tekton/tasks/, so gowebapp's first PipelineRun died while
+# javawebapp's succeeded.) Assert it statically instead.
+_missing=""
+while read -r _app; do
+  [ -n "$_app" ] || continue
+  _t="$(app_test_task "$_app")"
+  if grep -qs "^  name: ${_t}$" "${REPO_ROOT}"/k8s/tekton/tasks/*.yaml; then
+    log_info "test task OK: ${_app} -> ${_t}"
+  else
+    log_error "app '${_app}' needs Tekton task '${_t}', but no k8s/tekton/tasks/*.yaml defines it"
+    _missing=1; rc=1
+  fi
+done <<EOF
+$(app_names)
+EOF
+[ -z "$_missing" ] || log_error "  a pipeline referencing a missing Task fails at RUN time (CouldntGetTask), never at build time."
 
 echo "== kubeconform (k8s/) =="
 if have kubeconform; then

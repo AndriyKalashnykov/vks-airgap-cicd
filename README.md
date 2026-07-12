@@ -192,7 +192,7 @@ cluster** additionally stores these images in Harbor + each node's containerd (~
 that is cluster-side, separate from the jump box.
 
 **Guest (VKS workload) cluster sizing** — sizing for the **guest cluster** where this project deploys **Gitea + Tekton (+ Dashboard) +
-the webui app** and its images. Harbor and ArgoCD run on the **Supervisor** as VCF Supervisor Services, so they are budgeted
+the javawebapp app** and its images. Harbor and ArgoCD run on the **Supervisor** as VCF Supervisor Services, so they are budgeted
 separately (see the last bullet). Figures were measured on the live single-node KinD stack
 (no metrics-server, so per-pod RAM is the declared request or a working-set estimate).
 
@@ -211,7 +211,7 @@ separately (see the last bullet). Figures were measured on the live single-node 
   the baseline **+ ~2 vCPU / ~2 GiB**; each *concurrent* run adds that again. These pods
   declare no limits, so the cluster needs real headroom for them.
 - **Disk:** ~6 GB of mirrored + built images in the node's containerd, a 5 GB Gitea PVC, a
-  2 GB CI workspace, plus transient kaniko/maven scratch and a new `webui:<sha>` image per
+  2 GB CI workspace, plus transient kaniko/maven scratch and a new `javawebapp:<sha>` image per
   run (budget growth room — hence the 40 → 100 GB range).
 - **If Harbor + ArgoCD are co-located** in this same guest cluster (instead of provided
   externally), add roughly **+2 vCPU / +4 GB RAM / +5 GB disk** to each tier.
@@ -334,7 +334,7 @@ On a real VKS lab the stack spans **two** clusters: Harbor + ArgoCD are Supervis
 Supervisor Services that run on the **Supervisor**, while Gitea, Tekton, the ingress, and
 the app are installed into the **guest** workload cluster. Because ArgoCD lives on the
 Supervisor, the guest cluster is **registered as an ArgoCD destination** (`make
-argocd-register-guest`) so it can deploy `webui` there — it does **not** run a second ArgoCD
+argocd-register-guest`) so it can deploy `javawebapp` there — it does **not** run a second ArgoCD
 in the guest. (The KinD stand-in collapses both levels into one cluster.)
 
 <p align="center"><a href="docs/diagrams/out/vks-topology.png"><img src="docs/diagrams/out/vks-topology.png" alt="Real-lab namespace/cluster topology — Supervisor (Harbor + ArgoCD as Supervisor Services) vs the guest workload cluster we install into — click to enlarge" width="960"></a></p>
@@ -591,8 +591,8 @@ With the ArgoCD instance up, record its endpoint and namespace.
 > ARGOCD_NAMESPACE=argocd-instance-1    # the vSphere Namespace your A2 ArgoCD instance runs in
 > ARGOCD_SERVER=<argocd-server-LB-IP>   # kubectl get svc -n argocd-instance-1 argocd-server \
 > #                                       -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
-> ARGOCD_APP_NAME=webui
-> ARGOCD_DEST_NAMESPACE=webui
+> ARGOCD_APP_NAME=javawebapp
+> ARGOCD_DEST_NAMESPACE=javawebapp
 > ARGOCD_TRACK_BRANCH=main
 > # ARGOCD_CA_FILE=./secrets/argocd-ca.crt   # ArgoCD's self-signed CA (Step 2, make fetch-argocd-ca)
 > ```
@@ -601,7 +601,7 @@ With the ArgoCD instance up, record its endpoint and namespace.
 run in a **guest VKS (Tanzu Kubernetes) cluster**, not on the Supervisor. Create a vSphere
 Namespace, provision a VKS cluster in it, and obtain its kubeconfig (e.g. a `vcf`/`kubectl
 vsphere` login to the guest cluster, or export it from VCF Automation). You need **cluster-admin**
-on it — the flow creates namespaces (`gitea`, `ci`, `webui`) and installs Tekton CRDs. Place the
+on it — the flow creates namespaces (`gitea`, `ci`, `javawebapp`) and installs Tekton CRDs. Place the
 kubeconfig at `$KUBECONFIG` (used at "Wire the repo & run the pipeline", Step 1 below).
 
 > **→ now (A3 done) set the workload kubeconfig in `.env`** — the `vcf` CLI writes it for you:
@@ -841,7 +841,7 @@ builder image, installs Gitea + Tekton, and creates the ArgoCD `Application`.
 LB IP + admin credentials you set there. For **Gitea** (which you installed) and the deployed
 **app**, either front them with the ingress at `*.vks.local`, or `kubectl port-forward`
 (`kubectl -n gitea port-forward svc/gitea-http 3000:3000`,
-`kubectl -n webui port-forward svc/webui 18080:80`).
+`kubectl -n javawebapp port-forward svc/javawebapp 18080:80`).
 
 > **Ingress — the mesh ALREADY EXISTS here; attach to it, do not install one.** Istio ships on VKS
 > as a **Standard Package** (`istio.kubernetes.vmware.com`) in the guest cluster. The bare
@@ -888,7 +888,7 @@ LB IP + admin credentials you set there. For **Gitea** (which you installed) and
   `http://gitea-http.gitea.svc:3000`) — Gitea and ArgoCD are in the same cluster, so this
   works without exposing Gitea externally.
 - **cluster-admin** on the workload cluster is required — the flow creates namespaces
-  (`gitea`, `ci`, `webui`) and installs Tekton CRDs.
+  (`gitea`, `ci`, `javawebapp`) and installs Tekton CRDs.
 - **StorageClass:** Gitea uses a PVC (`GITEA_STORAGE_SIZE`, default `5Gi`). Ensure the
   cluster has a default StorageClass (or set one explicitly).
 - **Harbor projects** `cicd` + `apps` must exist (auto-created by `make mirror` with push
@@ -956,7 +956,7 @@ kubectl get svc -n <argocd-namespace> argocd-server \
   `AppProject`/RBAC shape on your lab**.
 - **The workload cluster kubeconfig** — `vcf cluster kubeconfig get <cluster> --export-file
   ./secrets/vks.kubeconfig` for the cluster you run the demo in. You need **cluster-admin** on
-  it (the flow creates the `gitea` / `ci` / `webui` namespaces and installs Tekton CRDs).
+  it (the flow creates the `gitea` / `ci` / `javawebapp` namespaces and installs Tekton CRDs).
 
 **3 — Record what you discovered / were granted in `.env`:**
 
@@ -970,8 +970,8 @@ HARBOR_APP_PROJECT=<granted-project>
 HARBOR_PUBLIC_PROJECTS=false            # tenant projects are typically private (see Step 4)
 ARGOCD_SERVER=<discovered-argocd-server-LB-IP>
 ARGOCD_NAMESPACE=<namespace the shared ArgoCD instance watches>
-ARGOCD_APP_NAME=webui
-ARGOCD_DEST_NAMESPACE=webui
+ARGOCD_APP_NAME=javawebapp
+ARGOCD_DEST_NAMESPACE=javawebapp
 ARGOCD_TRACK_BRANCH=main
 # ARGOCD_CA_FILE=./secrets/argocd-ca.crt   # optional; fetched in Step 2 (make fetch-argocd-ca)
 KUBECONFIG=./secrets/vks.kubeconfig
@@ -1191,7 +1191,7 @@ were granted).
 you discovered + the credentials you were granted. For **Gitea** (which you installed) and the
 deployed **app**, either front them with the ingress at `*.vks.local`, or `kubectl port-forward`
 (`kubectl -n gitea port-forward svc/gitea-http 3000:3000`,
-`kubectl -n webui port-forward svc/webui 18080:80`).
+`kubectl -n javawebapp port-forward svc/javawebapp 18080:80`).
 
 > **Ingress — the mesh ALREADY EXISTS here; attach to it, do not install one.** Istio ships on VKS
 > as a **Standard Package** (`istio.kubernetes.vmware.com`) in the guest cluster. The bare
@@ -1239,7 +1239,7 @@ deployed **app**, either front them with the ingress at `*.vks.local`, or `kubec
   `http://gitea-http.gitea.svc:3000`) — Gitea and ArgoCD are in the same cluster, so this
   works without exposing Gitea externally.
 - **cluster-admin** on the workload cluster is required — the flow creates namespaces
-  (`gitea`, `ci`, `webui`) and installs Tekton CRDs.
+  (`gitea`, `ci`, `javawebapp`) and installs Tekton CRDs.
 - **StorageClass:** Gitea uses a PVC (`GITEA_STORAGE_SIZE`, default `5Gi`). Ensure the
   cluster has a default StorageClass (or set one explicitly).
 - **Harbor project(s)** you were granted must exist and you must hold **push** on them; a
@@ -1277,7 +1277,7 @@ VKS cluster:
 |---------|------------|--------------|-------|
 | **Gitea** (we install) | <http://gitea.vks.local> | `http://gitea.vks.local` once the ingress is in place (install, or attach with `INGRESS_CONTROLLER=istio-existing`), else `kubectl -n gitea port-forward svc/gitea-http 3000:3000` | `gitea_admin` / `GITEA_ADMIN_PASSWORD` |
 | **Tekton Dashboard** (we install) | <http://tekton.vks.local> | same — ingress or `port-forward` | — (read-only) |
-| **App (webui)** (we deploy) | <http://app.vks.local/> | same — ingress or `port-forward svc/webui` | — (health at `/actuator/health`) |
+| **App (javawebapp)** (we deploy) | <http://javawebapp.vks.local/> | same — ingress or `port-forward svc/javawebapp` | — (health at `/actuator/health`) |
 | **Harbor** | its own LB IP, **self-signed HTTPS** (`https://<ip>`, our CA) | the **lab's** Harbor URL, **HTTPS** | `admin` / `HARBOR_PASSWORD` |
 | **ArgoCD** | its own LB IP, **self-signed TLS** (`https://<ARGOCD_LB_IP>`, `--insecure`) — **not** behind the ingress | the **lab's own ArgoCD** URL/IP, self-signed TLS | `admin` / `make argocd-password` |
 
@@ -1294,7 +1294,7 @@ VKS cluster:
 > 3000:3000` → <http://localhost:3000>. Harbor and ArgoCD are always direct LoadBalancers, not behind the ingress.
 
 The **Tekton Dashboard** (above) is Tekton's web UI. The Tekton **EventListener** is a
-separate, in-cluster-only webhook receiver (`el-webui.ci.svc:8080`) — the Gitea webhook fires
+separate, in-cluster-only webhook receiver (`el-javawebapp.ci.svc:8080`) — the Gitea webhook fires
 cluster-internally, so there is nothing to expose or log into there.
 
 </details>
@@ -1317,17 +1317,17 @@ line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
 
 | UI | URL | Login | What you'll watch |
 |----|-----|-------|-------------------|
-| **App (webui)** | <http://app.vks.local/> | — | the greeting that changes |
+| **App (javawebapp)** | <http://javawebapp.vks.local/> | — | the greeting that changes |
 | **Gitea** | <http://gitea.vks.local> | `gitea_admin` / your `GITEA_ADMIN_PASSWORD` | edit source; see the tag write-back |
 | **Tekton Dashboard** | <http://tekton.vks.local> | — (read-only) | the PipelineRun: test → build → deploy |
 | **Harbor** | its own LB IP, self-signed HTTPS (KinD) or the lab's HTTPS URL | `admin` / your `HARBOR_PASSWORD` | the freshly-built image |
 | **ArgoCD** | its own LB IP, self-signed TLS (`https://<ARGOCD_LB_IP>`, `--insecure`) on KinD — on a real VKS lab, **your lab's own ArgoCD URL** | `admin` / `make argocd-password` | the sync that rolls the new image |
 
-1. **See the current greeting.** Open <http://app.vks.local/>. The page shows a greeting —
+1. **See the current greeting.** Open <http://javawebapp.vks.local/>. The page shows a greeting —
    `Hello from vks-airgap-cicd` by default — rendered in the `<p class="message">` element,
    alongside the app version and git commit. This is what will visibly change.
 
-2. **Edit the greeting in Gitea.** Go to **`demo/webui-app`** →
+2. **Edit the greeting in Gitea.** Go to **`demo/javawebapp-app`** →
    `src/main/resources/application.yml`, click the **edit (pencil)** icon, and change the
    greeting default on line 18:
 
@@ -1339,44 +1339,44 @@ line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
    ```
 
    **Commit directly to `main`.** The commit fires the Gitea push webhook
-   (`el-webui.ci.svc:8080`) → the Tekton EventListener → a new PipelineRun. (This is the same
+   (`el-javawebapp.ci.svc:8080`) → the Tekton EventListener → a new PipelineRun. (This is the same
    `application.yml` line `make verify` rewrites with a unique marker.)
 
 3. **Watch Tekton build it.** In the **Tekton Dashboard** (<http://tekton.vks.local>), a new
-   **`webui-ci-*`** PipelineRun appears in the `ci` namespace. Its TaskRuns run in order — open
+   **`javawebapp-ci-*`** PipelineRun appears in the `ci` namespace. Its TaskRuns run in order — open
    each to tail logs live:
 
    | TaskRun | Does |
    |---------|------|
-   | `clone-app` | clones `webui-app`; its short commit SHA becomes the image tag |
+   | `clone-app` | clones `javawebapp-app`; its short commit SHA becomes the image tag |
    | `test` | runs `./mvnw -B -o test` **offline** (against the deps-baked builder image) |
    | `build` | **Kaniko** builds the image and pushes it to Harbor |
-   | `deploy-update` | writes the new tag back into `webui-deploy` (the GitOps hand-off) |
+   | `deploy-update` | writes the new tag back into `javawebapp-deploy` (the GitOps hand-off) |
 
 4. **See the new image in Harbor.** In Harbor, open project **`apps`** → repository
-   **`webui`**. A new tag appears — the **git short SHA** of your commit
-   (`$HARBOR_URL/apps/webui:<sha>` — on KinD that is Harbor's **LB IP**, which `make creds` prints;
+   **`javawebapp`**. A new tag appears — the **git short SHA** of your commit
+   (`$HARBOR_URL/apps/javawebapp:<sha>` — on KinD that is Harbor's **LB IP**, which `make creds` prints;
    on a real lab it is your Harbor FQDN) — pushed by the Kaniko `build` task.
 
-5. **See the tag written back in Gitea.** Open **`demo/webui-deploy`** → `kustomization.yaml`.
-   There's a new commit by **`ci-bot`** with message **`ci: deploy webui <sha>`** that bumps
+5. **See the tag written back in Gitea.** Open **`demo/javawebapp-deploy`** → `kustomization.yaml`.
+   There's a new commit by **`ci-bot`** with message **`ci: deploy javawebapp <sha>`** that bumps
    `images[0].newTag` to your `<sha>`. This deploy repo — not the app repo — is what ArgoCD
    watches, which is why the tag write-back (not the source push) is what triggers a deploy.
 
 6. **Watch ArgoCD deploy it.** In **ArgoCD** (its own self-signed-TLS LB IP on KinD —
    `https://<ARGOCD_LB_IP>`, shown by `make creds`; on a real VKS lab, **your lab's own
    ArgoCD URL**), the Application
-   **`webui`** flips **`OutOfSync → Synced`** (auto-sync + self-heal) and rolls the Deployment
-   in namespace `webui` to `$HARBOR_URL/apps/webui:<sha>`. (Auto-sync polls the deploy repo
+   **`javawebapp`** flips **`OutOfSync → Synced`** (auto-sync + self-heal) and rolls the Deployment
+   in namespace `javawebapp` to `$HARBOR_URL/apps/javawebapp:<sha>`. (Auto-sync polls the deploy repo
    on an interval; click **Refresh** to reconcile immediately.)
 
-7. **See the page change.** Refresh <http://app.vks.local/>. The greeting now shows your new
+7. **See the page change.** Refresh <http://javawebapp.vks.local/>. The greeting now shows your new
    text. That change went **source → test → image → registry → GitOps write-back → cluster →
    running page** without a single byte crossing the air gap.
 
 > **`make verify` is the automated form of this whole loop** — it edits the same
 > `application.yml` line with a unique marker, waits for the PipelineRun to succeed, forces an
-> ArgoCD refresh, waits for the *deployed image* to change, then **port-forwards `svc/webui`**
+> ArgoCD refresh, waits for the *deployed image* to change, then **port-forwards `svc/javawebapp`**
 > and polls it until the page contains the marker — so it needs no ingress and no `/etc/hosts`
 > entry. (`make verify-ingress` is the separate check that proves the `*.vks.local` routes.)
 > Run it to prove the pipeline; walk the UIs above to *see* it.
@@ -1402,7 +1402,7 @@ Legend: **[offline]** verifiable without a cluster · **[cluster]** runs against
 | 6 | `make vks-login` | [cluster] | `30-vks-login.sh` writes a working `$KUBECONFIG`/context (see auth note). |
 | 7 | `make platform` | [cluster] | Installs Gitea (`k8s/gitea/`), seeds the two repos + webhook, installs Tekton (images remapped to Harbor), applies the pipeline/triggers. |
 | 8 | `make gitops` | [cluster] | Registers the deploy repo and creates the ArgoCD `Application` (auto-sync). |
-| 9 | `make verify` | [cluster] | Pushes a marked change to `webui-app`, then asserts: PipelineRun succeeds → image in Harbor → deploy tag bumped → ArgoCD Synced/Healthy → the live page shows the marker. |
+| 9 | `make verify` | [cluster] | Pushes a marked change to `javawebapp-app`, then asserts: PipelineRun succeeds → image in Harbor → deploy tag bumped → ArgoCD Synced/Healthy → the live page shows the marker. |
 
 > **The mirror is resumable and verifiable.** If `make mirror` / `make mirror-pull` is
 > interrupted (Ctrl+C, dropped connection, an upstream-CDN reset such as ghcr.io throttling),
@@ -1440,6 +1440,50 @@ anything. The KinD path needs **none** of this — it discovers and generates ev
 
 </details>
 
+## Adding an app
+
+The demo runs **N apps** through the same walk. `apps/registry.tsv` is the single source of truth —
+seeding, Tekton, ArgoCD, the ingress, PSA and the gates all loop over it. **Adding an app is one
+row** (a new *language* is that row plus one `case` branch in `scripts/lib/apps.sh`):
+
+```tsv
+# name        lang  src                   deploy             host_var
+javawebapp    java  apps/java/javawebapp  deploy/javawebapp  JAVAWEBAPP_HOST
+gowebapp      go    apps/go/gowebapp      deploy/gowebapp    GOWEBAPP_HOST
+```
+
+Each app gets: its own Gitea repos (`<app>-app` + `<app>-deploy`), its own Tekton `Pipeline`
+(`<app>-ci`) and `Trigger`, its own Harbor repo, its own namespace, its own ArgoCD `Application`,
+its own ingress host — and `make verify` proves **each app independently** (its own marker on its
+own page). `make check-app-hardcodes` fails the build if any shared file names an app.
+
+Only two things differ per language: which Tekton task runs the tests (`maven-test` / `go-test`),
+and where `verify` injects its marker. Both live in `scripts/lib/apps.sh`.
+
+### On a REAL lab, adding an app may need grants you must request
+
+Locally (and in **Scenario 1**, where you are the admin) nothing else is needed. As a **tenant**
+(Scenario 2) an app's **new namespace** and **new hostname** may not be covered by what you were
+granted. What that means concretely:
+
+| What | When it bites | What to run / ask for |
+|---|---|---|
+| **ArgoCD AppProject destination** | Always, as a tenant (you get your own AppProject; ours defaults to `default`, which permits everything — a real lab's will not). The `Application` is rejected: *"application destination … is not permitted in project"* | **Check first:** `kubectl -n $ARGOCD_NAMESPACE get appproject <yours> -o jsonpath='{.spec.destinations}{"\n"}{.spec.sourceRepos}'` — your new namespace AND the new `<app>-deploy` repo URL must both be listed.<br>**Ask the ArgoCD admin** to add them: `kubectl -n $ARGOCD_NAMESPACE patch appproject <yours> --type=json -p='[{"op":"add","path":"/spec/destinations/-","value":{"server":"$ARGOCD_DEST_SERVER","namespace":"<app>"}},{"op":"add","path":"/spec/sourceRepos/-","value":"<gitea>/<org>/<app>-deploy.git"}]'` |
+| **Ingress hostname on a SHARED Gateway** | **Only** on the classic route API against a platform-owned Gateway (`ISTIO_SHARED_GATEWAY`). Its `hosts:` list belongs to the mesh admin, so an unlisted host **404s from a listener that exists** | **Check first:** `make istio-preflight` (and `istio_assert_shared_gateway_hosts` fails the install rather than 404ing later).<br>**Ask the mesh admin** to admit the host — ideally once, as a wildcard: `kubectl -n <gw-ns> patch gateway <gw> --type=json -p='[{"op":"add","path":"/spec/servers/0/hosts/-","value":"*.vks.local"}]'` |
+| **Harbor** | Never | Nothing to do: `make harbor-robot` mints a **project-scoped** robot (push+pull on the whole `apps` project), so a new repo under it is already covered. |
+
+**On the Gateway-API path (the default, and what Broadcom uses) the hostname needs nobody:** Istio
+auto-provisions the gateway from a `Gateway` we create in **our own** namespace, so its `hosts:`
+list is ours. That leaves the AppProject destination as the only universal tenant request.
+
+> ⚠️ **Provenance of the commands above: INFERRED, not lab-verified.** The *facts* are sourced —
+> ArgoCD's AppProject restricts by `spec.destinations` + `spec.sourceRepos`
+> ([docs](https://argo-cd.readthedocs.io/en/stable/user-guide/projects/)); the Harbor robot we mint
+> is project-scoped (`scripts/22-harbor-robot.sh`); an Istio `Gateway`'s `hosts:` list gates which
+> hostnames a VirtualService may bind. But the exact `kubectl patch` invocations have **not** been
+> run against a real VKS lab, and the ArgoCD **server** there is 2.14.x (ours is 3.x). Treat them as
+> a starting point, confirm against your lab, and correct this table. See the backlog in CLAUDE.md.
+
 ## Repository layout
 
 <details>
@@ -1450,8 +1494,10 @@ anything. The KinD path needs **none** of this — it discovers and generates ev
 | Path | Purpose |
 |------|---------|
 | `scripts/` | Ordered, OS-portable (Ubuntu+PhotonOS) automation; `lib/os.sh` + `lib/mirror.sh` are shared libraries |
-| `apps/java/webui/` | Minimal Spring Boot web UI (seeded into Gitea `webui-app`); `Dockerfile` + `Dockerfile.builder` |
-| `deploy/webui/` | Kustomize manifests ArgoCD deploys (one dir per app = one deploy repo). **Not applied by us** — seeded into the Gitea `webui-deploy` repo, which Tekton writes the image tag into and ArgoCD syncs |
+| `apps/registry.tsv` | **The app registry — one row per app.** Everything loops over it: seeding, Tekton, ArgoCD, ingress, PSA, the gates. Adding an app is **one row** |
+| `apps/java/javawebapp/` | Spring Boot app (seeded into Gitea `javawebapp-app`); `Dockerfile` + `Dockerfile.builder` (its offline Maven dependency cache) |
+| `apps/go/gowebapp/` | Go app, **stdlib-only** (seeded into `gowebapp-app`). No `Dockerfile.builder`: with zero modules the air-gapped build fetches nothing, so it needs no pre-baked dependency cache |
+| `deploy/<app>/` | Kustomize manifests ArgoCD deploys — one dir per app = one deploy repo. **Not applied by us** — seeded into Gitea `<app>-deploy`, which Tekton writes the image tag into and ArgoCD syncs |
 | `k8s/` | Everything **we** apply to the cluster |
 | `k8s/tekton/` | Tekton pipeline, tasks, triggers, RBAC |
 | `k8s/argocd/` | ArgoCD `Application` definition |

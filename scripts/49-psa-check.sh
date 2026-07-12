@@ -23,6 +23,9 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# One namespace per app — the list comes from the registry, never hardcoded.
+# shellcheck source=scripts/lib/apps.sh
+. "${SCRIPT_DIR}/lib/apps.sh"
 # shellcheck source=scripts/lib/psa.sh
 . "${SCRIPT_DIR}/lib/psa.sh"
 load_env
@@ -35,7 +38,7 @@ NS_SPEC="
 ${GITEA_NAMESPACE:-gitea}|${PSA_LEVEL_GITEA:-}
 ${TEKTON_NAMESPACE:-tekton-pipelines}|${PSA_LEVEL_TEKTON:-}
 ${CI_NAMESPACE:-ci}|${PSA_LEVEL_CI:-}
-${ARGOCD_DEST_NAMESPACE:-webui}|${PSA_LEVEL_APP:-}
+$(app_names | while read -r a; do if [ -n "$a" ]; then printf "%s|${PSA_LEVEL_APP:-}\n" "$a"; fi; done)
 ${ISTIO_GWAPI_NAMESPACE:-vks-ingress}|${PSA_LEVEL_INGRESS:-}
 ${ISTIO_GATEWAY_NAMESPACE:-istio-ingress}|${PSA_LEVEL_INGRESS:-}
 ${ISTIO_NAMESPACE:-istio-system}|${PSA_LEVEL_ISTIO_SYSTEM:-}

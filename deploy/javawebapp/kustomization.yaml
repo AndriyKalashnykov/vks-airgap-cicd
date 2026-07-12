@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Namespace ArgoCD deploys into. `make seed-gitea` runs `kustomize edit set
+# namespace $ARGOCD_DEST_NAMESPACE` on the seeded copy to match .env.
+namespace: javawebapp
+
+resources:
+  - deployment.yaml
+  - service.yaml
+
+# The demo app image. `make seed-gitea` sets newName to
+# $HARBOR_URL/$HARBOR_APP_PROJECT/$APP_NAME; the Tekton write-back task bumps
+# newTag on every successful build (that commit is what ArgoCD syncs).
+images:
+  - name: javawebapp
+    newName: harbor.vks.local/apps/javawebapp
+    newTag: "0.1.0"
+
+replicas:
+  - name: javawebapp
+    count: 2

@@ -21,10 +21,13 @@ require_cmd kubectl
 : "${KUBECONFIG:?KUBECONFIG must be set (path to the workload-cluster kubeconfig)}"; export KUBECONFIG
 
 NS="${ARGOCD_NAMESPACE:-argocd}"
-DEST_NS="${ARGOCD_DEST_NAMESPACE:-webui}"
+# One destination namespace per app (apps/registry.tsv).
+# shellcheck source=scripts/lib/apps.sh
+. "${SCRIPT_DIR}/lib/apps.sh"
+DEST_NS="$(app_names | tr '\n' ' ')"
 VKS_ARGOCD_CRD="argocds.argocd-service.vsphere.vmware.com"
 
-log_info "cluster context: $(kubectl config current-context 2>/dev/null || echo '?')  (ARGOCD_NAMESPACE=$NS, ARGOCD_DEST_NAMESPACE=$DEST_NS)"
+log_info "cluster context: $(kubectl config current-context 2>/dev/null || echo '?')  (ARGOCD_NAMESPACE=$NS, app namespaces: $DEST_NS)"
 
 echo "── ArgoCD version ──"
 if have argocd; then
@@ -73,7 +76,7 @@ fi
 
 echo "── verdict ──"
 if [ "$same_cluster" = 1 ]; then
-  log_info "TOPOLOGY OK for the repo default — ArgoCD is in this cluster; the in-cluster destination deploys the app here. Confirm ARGOCD_DEST_NAMESPACE ($DEST_NS) is this cluster's intended app namespace."
+  log_info "TOPOLOGY OK for the repo default — ArgoCD is in this cluster; the in-cluster destination deploys the app here. Confirm the app namespaces ($DEST_NS) are this cluster's intended ones."
 else
   log_warn "TOPOLOGY MISMATCH — ArgoCD is NOT in this cluster. If your VKS ArgoCD instance runs on a SEPARATE cluster (e.g. the Supervisor), either: (a) REGISTER this workload cluster with ArgoCD and point the Application destination at it (not kubernetes.default.svc), or (b) run ArgoCD in this workload cluster. The repo's 'make gitops' assumes the in-cluster destination."
 fi

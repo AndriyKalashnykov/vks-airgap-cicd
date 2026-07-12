@@ -38,8 +38,9 @@ GITEA_NAMESPACE     ?= gitea
 CI_NAMESPACE        ?= ci
 TEKTON_NAMESPACE    ?= tekton-pipelines
 ARGOCD_NAMESPACE    ?= argocd
-ARGOCD_DEST_NAMESPACE ?= webui
-APP_NAME            ?= webui
+# NO APP_NAME / ARGOCD_DEST_NAMESPACE: with more than one app these are PER-APP, and live in
+# apps/registry.tsv (scripts/lib/apps.sh). A global here would be exported into the scripts and
+# clobber the per-app value — every app would deploy as javawebapp.
 APP_DEV_PORT        ?= 8080
 BUNDLE_DIR          ?= ./bundle
 # renovate: datasource=docker depName=plantuml/plantuml
@@ -52,8 +53,6 @@ MARKDOWNLINT_VERSION ?= 0.49.0
 CONTAINER_ENGINE    ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
 SCRIPTS := ./scripts
-APP_DIR := ./apps/java/webui
-MVN     := ./apps/java/webui/mvnw
 
 # ---------------------------------------------------------------------------
 .PHONY: help
@@ -119,6 +118,14 @@ check-how-provenance: ## Gate: every `# how:` acquisition command must be runnab
 .PHONY: check-env-clobber
 check-env-clobber: ## Gate: an UNCOMMENTED .env.example value must not shadow a dynamic fallback or a per-run override
 	@$(SCRIPTS)/check-env-clobber.sh
+
+.PHONY: check-app-hardcodes
+check-app-hardcodes: ## Gate: no shared script/manifest/Makefile may NAME an app — everything derives from apps/registry.tsv
+	@$(SCRIPTS)/check-app-hardcodes.sh
+
+.PHONY: check-app-toolchains
+check-app-toolchains: ## Gate: every app's language toolchain must be pinned in .mise.toml, or CI cannot test/scan that app
+	@$(SCRIPTS)/check-app-toolchains.sh
 
 .PHONY: check-tools
 check-tools: ## Read-only: is this jump box able to run the flow? (required vs optional CLIs + versions)
@@ -210,7 +217,7 @@ install-gitea: check-env ## Install Gitea on VKS (images from Harbor)
 	@$(SCRIPTS)/40-install-gitea.sh
 
 .PHONY: seed-gitea
-seed-gitea: check-env ## Create + seed webui-app and webui-deploy repos in Gitea
+seed-gitea: check-env ## Create + seed javawebapp-app and javawebapp-deploy repos in Gitea
 	@$(SCRIPTS)/50-seed-gitea-repos.sh
 
 .PHONY: install-tekton
@@ -238,7 +245,7 @@ argocd-register-guest: ## Register the guest cluster as an ArgoCD destination (r
 	@$(SCRIPTS)/71-argocd-register-guest.sh
 
 .PHONY: gitops
-gitops: ## Wire ArgoCD to track webui-deploy (auto-registers the guest cluster when ArgoCD is off-cluster: ARGOCD_KUBECONFIG set)
+gitops: ## Wire ArgoCD to track javawebapp-deploy (auto-registers the guest cluster when ArgoCD is off-cluster: ARGOCD_KUBECONFIG set)
 	@if [ -n "$(ARGOCD_KUBECONFIG)" ]; then \
 	  echo "==> ArgoCD is off-cluster (ARGOCD_KUBECONFIG set) — registering the guest cluster as an ArgoCD destination first"; \
 	  $(MAKE) argocd-register-guest; \
@@ -446,18 +453,18 @@ jumpbox-both: ## Validate the jump-box flow on BOTH Photon and Ubuntu (matrix)
 bootstrap-test: ## Validate bootstrap-jumpbox.sh from-nothing on BARE OS images (BOOTSTRAP_TEST_OSES matrix) + unsupported-OS reject
 	@$(SCRIPTS)/bootstrap-test.sh
 
-##@ Demo application (local dev)
+##@ Demo applications (local dev) — every app in apps/registry.tsv, dispatched by language
 .PHONY: app-test
-app-test: ## Run the Spring Boot app unit/integration tests
-	@cd $(APP_DIR) && ./mvnw -B test
+app-test: ## Test EVERY app (mvn test / go test). One app: APP=gowebapp
+	@$(SCRIPTS)/app-test.sh test $(APP)
 
 .PHONY: app-build
-app-build: ## Build the Spring Boot app jar
-	@cd $(APP_DIR) && ./mvnw -B -DskipTests package
+app-build: ## Build EVERY app (mvn package / go build). One app: APP=gowebapp
+	@$(SCRIPTS)/app-test.sh build $(APP)
 
 .PHONY: app-run
-app-run: check-ports ## Run the app locally (http://localhost:$(APP_DEV_PORT))
-	@cd $(APP_DIR) && APP_INTERNAL_PORT=$(APP_DEV_PORT) ./mvnw -B spring-boot:run
+app-run: check-ports ## Run ONE app locally (APP=javawebapp|gowebapp; default javawebapp) on http://localhost:$(APP_DEV_PORT)
+	@$(SCRIPTS)/app-run.sh $(APP)
 
 ##@ Quality gates
 .PHONY: lint
@@ -485,7 +492,16 @@ check-toolchain-alignment: ## Fail if kubectl pinned in .mise.toml disagrees wit
 	  echo "       Same tool, two pins: jump box (mise) + air-gap fallback (00-install-prereqs.sh). Align them."; \
 	  exit 1; \
 	fi; \
-	echo "check-toolchain-alignment: kubectl aligned ($$mise_v)"
+	echo "check-toolchain-alignment: kubectl aligned ($$mise_v)"; \
+	go_mise=$$(grep -E '^go ' .mise.toml | sed -E 's/.*"([^"]+)".*/\1/'); \
+	go_img=$$(grep -oE '^golang:[0-9.]+' images/images.txt | head -1 | sed 's|golang:||'); \
+	if [ -n "$$go_mise" ] && [ -n "$$go_img" ] && [ "$$go_mise" != "$$go_img" ]; then \
+	  echo "ERROR: Go version drift (BLOCKING) — .mise.toml=$$go_mise vs images/images.txt golang:$$go_img."; \
+	  echo "       The pipeline BUILDS the Go app with the mirrored golang image; local/CI must TEST it"; \
+	  echo "       with the same toolchain, or you test something the pipeline never builds."; \
+	  exit 1; \
+	fi; \
+	echo "check-toolchain-alignment: go aligned ($$go_mise)"
 
 ##@ Offline script tests (unit tests for script logic; NOT in static-check/ci)
 # Fast, fully-offline (no network/cluster/registry) unit tests for script logic that
@@ -509,19 +525,14 @@ secrets: ## gitleaks — scan git history + working tree for committed secrets
 	else echo "gitleaks not installed — run 'make deps' (mise) — skipping"; fi
 
 .PHONY: trivy-fs
-trivy-fs: app-build ## trivy — scan the built app jar's embedded deps for fixable HIGH/CRITICAL CVEs
-	@if command -v trivy >/dev/null 2>&1; then \
-	  jar=$$(ls $(APP_DIR)/target/*.jar 2>/dev/null | grep -v -- '-sources\|-javadoc' | head -1); \
-	  if [ -z "$$jar" ]; then echo "ERROR: no built jar under $(APP_DIR)/target — app-build failed?"; exit 1; fi; \
-	  echo "trivy-fs: scanning $$jar (embedded deps, offline)"; \
-	  trivy rootfs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --quiet "$$jar"; \
-	else echo "trivy not installed — run 'make deps' (mise) — skipping"; fi
+trivy-fs: app-build ## trivy — scan EVERY app's built artifact (jar / Go binary) for fixable HIGH/CRITICAL CVEs
+	@$(SCRIPTS)/trivy-fs.sh
 
 .PHONY: trivy-config
 trivy-config: ## trivy — scan k8s/Tekton manifests for HIGH/CRITICAL misconfigurations (.trivyignore documents accepted findings)
 	@if command -v trivy >/dev/null 2>&1; then \
 	  trivy config --severity HIGH,CRITICAL --exit-code 1 --quiet \
-	    --skip-dirs bundle --skip-dirs apps/java/webui --skip-dirs docs --skip-dirs .claude \
+	    --skip-dirs bundle --skip-dirs apps --skip-dirs docs --skip-dirs .claude \
 	    --skip-files jumpbox/Dockerfile.bootstrap .; \
 	else echo "trivy not installed — run 'make deps' (mise) — skipping"; fi
 
@@ -541,7 +552,7 @@ PODMAN_USERNS := $(if $(filter podman,$(CONTAINER_ENGINE)),--userns=keep-id,)
 # --network=none + -DRELATIVE_INCLUDE="." force the VENDORED c4/*.puml (offline,
 # deterministic — no fetch from githubusercontent at render time).
 # PLANTUML_LIMIT_SIZE raises PlantUML's 4096px default max canvas so a wide diagram
-# renders COMPLETE instead of silently truncating (the webui node + legend were being
+# renders COMPLETE instead of silently truncating (the javawebapp node + legend were being
 # clipped off pipeline-flow at 4096px). Deterministic — it caps, it does not scale.
 define _render_diagrams
 	mkdir -p docs/diagrams/$(1); \
@@ -598,7 +609,7 @@ docs-lint: diagrams-check check-readme-scenarios ## Lint markdown (tracked AND n
 	else echo "markdownlint not installed — skipping (install markdownlint-cli)"; fi
 
 .PHONY: static-check
-static-check: check-toolchain-alignment check-java-alignment check-env check-env-coverage check-env-clobber check-how-provenance check-image-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: check-toolchain-alignment check-java-alignment check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-image-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint ## Full local pipeline (offline-verifiable parts)

@@ -23,13 +23,13 @@ Deployment_Node(guest, "Guest / workload VKS cluster (VKS_CLUSTER_NAME)", "Tanzu
     Container(gitea, "Gitea", "Deployment + PVC (SQLite)")
   }
   Deployment_Node(ns_ci, "namespace: ci (we install)", "") {
-    Container(ci, "Pipeline + EventListener", "PipelineRuns · el-webui")
+    Container(ci, "Pipeline + EventListener", "PipelineRuns · el-javawebapp")
   }
   Deployment_Node(ns_tk, "namespace: tekton-pipelines (we install)", "") {
     Container(tk, "Tekton + Dashboard", "Pipelines + Triggers controllers · read-only UI")
   }
-  Deployment_Node(ns_app, "namespace: webui (we install)", "") {
-    Container(app, "webui", "Deployment (2 replicas) + Service — ArgoCD deploys here")
+  Deployment_Node(ns_app, "namespace: javawebapp (we install)", "") {
+    Container(app, "javawebapp", "Deployment (2 replicas) + Service — ArgoCD deploys here")
   }
   ' On a real lab Istio is a VKS STANDARD PACKAGE installed into the GUEST cluster
   ' (istio.kubernetes.vmware.com, vcf package install / vcf addon install) — so the mesh is

@@ -39,8 +39,10 @@ spec:
               - key: kubernetes.io/metadata.name
                 operator: In
                 values:
+                  # Each app's namespace is APPENDED here at apply time from apps/registry.tsv
+                  # (scripts/lib/istio.sh, with yq). Without its namespace in this list, an app's
+                  # HTTPRoute attaches to nothing and its host 404s — with no error at apply time.
                   - ${GITEA_NAMESPACE}
-                  - ${ARGOCD_DEST_NAMESPACE}
                   - ${TEKTON_NAMESPACE}
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -58,22 +60,6 @@ spec:
     - backendRefs:
         - name: gitea-http
           port: 3000
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: webui
-  namespace: ${ARGOCD_DEST_NAMESPACE}
-spec:
-  parentRefs:
-    - name: ${ISTIO_GATEWAY_NAME}
-      namespace: ${ISTIO_GWAPI_NAMESPACE}
-  hostnames:
-    - ${WEBUI_HOST}
-  rules:
-    - backendRefs:
-        - name: ${APP_NAME}
-          port: 80
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute

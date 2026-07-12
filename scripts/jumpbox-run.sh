@@ -24,7 +24,7 @@ rm -rf "$WORK"; mkdir -p "$WORK"
 # patterns (`/secrets/`, `/bundle/`), verified on this repo — so the excludes are explicit.
 tar -C /src --exclude='./.git' --exclude='./.env' --exclude='./.env.kind' \
     --exclude='./secrets' --exclude='./bundle' \
-    --exclude='./app/target' --exclude='./apps/java/webui/target' --exclude='./.jumpbox' \
+    --exclude='*/target' --exclude='./.jumpbox' \
     -cf - . | tar -C "$WORK" -xf -
 cd "$WORK"
 

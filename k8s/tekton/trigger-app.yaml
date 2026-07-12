@@ -1,0 +1,117 @@
+---
+# Extract the pushed branch from the Gitea payload for the PipelineRun.
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: ${APP_NAME}-push
+  namespace: ${CI_NAMESPACE}
+spec:
+  params:
+    - name: app-revision
+      value: $(extensions.branch)
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: ${APP_NAME}-ci
+  namespace: ${CI_NAMESPACE}
+spec:
+  params:
+    - name: app-revision
+      default: ${APP_BRANCH}
+    # Defaults below are rendered from .env by 60-configure-tekton.sh.
+    - name: app-repo-url
+      default: ${APP_REPO_CLONE_URL}
+    - name: deploy-repo-url
+      default: ${DEPLOY_REPO_CLONE_URL}
+    - name: deploy-revision
+      default: ${ARGOCD_TRACK_BRANCH}
+    - name: image
+      default: ${APP_IMAGE}
+    - name: builder-image
+      default: ${APP_BUILDER_IMAGE}
+    - name: runtime-image
+      default: ${APP_RUNTIME_IMAGE}
+    - name: registry
+      default: ${HARBOR_URL}
+    - name: insecure-registry
+      default: "${HARBOR_INSECURE_BOOL}"
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: ${APP_NAME}-ci-
+        namespace: ${CI_NAMESPACE}
+      spec:
+        pipelineRef:
+          name: ${APP_NAME}-ci
+        taskRunTemplate:
+          serviceAccountName: apps-ci
+        params:
+          - { name: app-repo-url, value: $(tt.params.app-repo-url) }
+          - { name: app-revision, value: $(tt.params.app-revision) }
+          - { name: deploy-repo-url, value: $(tt.params.deploy-repo-url) }
+          - { name: deploy-revision, value: $(tt.params.deploy-revision) }
+          - { name: image, value: $(tt.params.image) }
+          - { name: builder-image, value: $(tt.params.builder-image) }
+          - { name: runtime-image, value: $(tt.params.runtime-image) }
+          - { name: registry, value: $(tt.params.registry) }
+          - { name: insecure-registry, value: $(tt.params.insecure-registry) }
+        workspaces:
+          - name: shared-data
+            volumeClaimTemplate:
+              spec:
+                accessModes: ["ReadWriteOnce"]
+                resources:
+                  requests:
+                    storage: 2Gi
+          - name: dockerconfig
+            secret:
+              secretName: harbor-dockerconfig
+          - name: ca
+            configMap:
+              name: harbor-ca
+              optional: true
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: Trigger
+metadata:
+  name: ${APP_NAME}
+  namespace: ${CI_NAMESPACE}
+  labels:
+    # The SHARED EventListener (eventlistener.yaml) selects Triggers by this label — that is what
+    # makes "add an app" one registry row instead of a YAML edit.
+    vks-airgap-cicd/ci: app
+spec:
+  interceptors:
+    # Gitea sends GitHub-compatible headers (X-GitHub-Event + X-Hub-Signature-256 HMAC) alongside
+    # its X-Gitea-* ones, so the github interceptor validates the shared secret and filters push
+    # events.
+    - ref:
+        name: "github"
+      params:
+        - name: secretRef
+          value:
+            secretName: gitea-webhook-secret
+            secretKey: secretToken
+        - name: eventTypes
+          value: ["push"]
+    - ref:
+        name: "cel"
+      params:
+        # BOTH conditions matter. The branch filter is the old one. The REPOSITORY filter is what
+        # keeps the apps apart now that one EventListener serves all of them: without it, a push to
+        # ANY app repo would fire EVERY app's pipeline (each building the wrong source). Gitea's
+        # push payload carries the repo as body.repository.name (e.g. "javawebapp-app").
+        - name: filter
+          value: >-
+            body.ref == 'refs/heads/${APP_BRANCH}' &&
+            body.repository.name == '${APP_GIT_REPO}'
+        - name: overlays
+          value:
+            - key: branch
+              expression: "body.ref.split('/')[2]"
+  bindings:
+    - ref: ${APP_NAME}-push
+  template:
+    ref: ${APP_NAME}-ci

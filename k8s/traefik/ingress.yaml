@@ -28,25 +28,6 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: webui
-  namespace: ${ARGOCD_DEST_NAMESPACE}
-spec:
-  ingressClassName: traefik
-  rules:
-    - host: ${WEBUI_HOST}
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: ${APP_NAME}
-                port:
-                  number: 80
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
   name: tekton-dashboard
   namespace: ${TEKTON_NAMESPACE}
 spec:

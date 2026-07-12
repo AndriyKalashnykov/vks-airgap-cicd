@@ -12,7 +12,7 @@ System_Boundary(jbz, "Jump box  ·  dual-homed (internet + air-gapped VKS)") {
 }
 
 System_Boundary(agz, "Air-gapped VKS cluster  ·  NO internet access") {
-  System(cluster, "Harbor · Gitea · Tekton · ArgoCD · webui", "The whole CI/CD platform runs here;\npulls images only from Harbor")
+  System(cluster, "Harbor · Gitea · Tekton · ArgoCD · javawebapp", "The whole CI/CD platform runs here;\npulls images only from Harbor")
 }
 
 Rel(jb, net, "1 · pull images + Maven deps", "HTTPS (internet side)")

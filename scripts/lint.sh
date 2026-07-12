@@ -34,17 +34,31 @@ else
   log_warn "yamllint not installed — skipped"
 fi
 
-echo "== hadolint (apps/java/webui/Dockerfile*) =="
+echo "== hadolint (EVERY app's Dockerfile*, from apps/registry.tsv) =="
 if have hadolint; then
-  # Glob covers both the runtime Dockerfile AND Dockerfile.builder (the
-  # air-gapped Maven builder image) — both must be lint-clean.
+  # Every app, not one hardcoded path: this glob used to name the Java app, which meant the Go
+  # app's Dockerfile was never linted at all. The glob covers the runtime Dockerfile AND any
+  # Dockerfile.builder (the air-gapped Maven builder) — both must be lint-clean.
+  # shellcheck source=scripts/lib/apps.sh
+  . "${SCRIPT_DIR}/lib/apps.sh"
   found=0
-  for df in "$REPO_ROOT"/apps/java/webui/Dockerfile*; do
-    [ -f "$df" ] || continue
-    found=1
-    hadolint "$df" || rc=1
-  done
-  [ "$found" -eq 1 ] || log_warn "apps/java/webui/Dockerfile* not present yet — skipped"
+  while read -r _app; do
+    [ -n "$_app" ] || continue
+    for df in "${REPO_ROOT}/$(app_src "$_app")"/Dockerfile*; do
+      [ -f "$df" ] || continue
+      found=$((found + 1))
+      hadolint "$df" || rc=1
+    done
+  done <<EOF
+$(app_names)
+EOF
+  # Print the denominator: a gate that cannot say how many Dockerfiles it linted cannot be trusted.
+  # (if/else, NOT `A && B || C` — that runs C when A is true and B fails: SC2015.)
+  if [ "$found" -gt 0 ]; then
+    log_info "hadolint: linted ${found} Dockerfile(s)"
+  else
+    log_warn "no app Dockerfiles found — skipped"
+  fi
 else
   log_warn "hadolint not installed — skipped"
 fi

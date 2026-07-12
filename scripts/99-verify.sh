@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 99-verify.sh — END-TO-END smoke test on the LIVE VKS cluster.
 #
-# Pushes a uniquely-marked change to webui-app, then verifies the full chain:
+# Pushes a uniquely-marked change to javawebapp-app, then verifies the full chain:
 #   push -> Tekton PipelineRun succeeds -> deploy repo tag bumped
 #        -> ArgoCD Synced/Healthy -> the app HTTP page shows the new marker.
 #
@@ -15,9 +15,11 @@ load_env
 
 require_cmd kubectl; require_cmd git; require_cmd curl
 : "${KUBECONFIG:?}"; export KUBECONFIG
-: "${GITEA_NAMESPACE:?}"; : "${GITEA_ADMIN_USER:?}"; : "${GITEA_ORG:?}"; : "${GITEA_APP_REPO:?}"
-: "${APP_BRANCH:?}"; : "${CI_NAMESPACE:?}"; : "${ARGOCD_NAMESPACE:?}"; : "${ARGOCD_APP_NAME:?}"
-: "${ARGOCD_DEST_NAMESPACE:?}"; : "${APP_NAME:?}"
+: "${GITEA_NAMESPACE:?}"; : "${GITEA_ADMIN_USER:?}"; : "${GITEA_ORG:?}"
+: "${APP_BRANCH:?}"; : "${CI_NAMESPACE:?}"; : "${ARGOCD_NAMESPACE:?}"
+# Per-app values come from the registry — verify runs the SAME proof for EVERY app.
+# shellcheck source=scripts/lib/apps.sh
+. "${SCRIPT_DIR}/lib/apps.sh"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-600}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
 # LOCAL port-forward aliases — ephemeral by default (pick_port) so parallel runs
@@ -49,120 +51,128 @@ wait_for() { # wait_for <desc> <cmd...> ; polls until cmd succeeds or timeout
 # window is LOST -> no PipelineRun. Gate the push on the POD being Ready (it only stays
 # Ready once the CaBundle is populated).
 log_info "waiting for the EventListener pod to be ready (Tekton Triggers CaBundle race)"
-kubectl -n "$CI_NAMESPACE" wait --for=condition=Ready pod -l eventlistener=webui \
+kubectl -n "$CI_NAMESPACE" wait --for=condition=Ready pod -l eventlistener=apps \
   --timeout="${EL_READY_TIMEOUT_SECONDS:-180}s" >/dev/null 2>&1 \
   || log_warn "EventListener pod not confirmed Ready in time — proceeding (the webhook re-fire below covers a lost delivery)"
 
-# ---- 1. Record existing PipelineRuns, then push a marked change ----
-before="$(kubectl -n "$CI_NAMESPACE" get pipelineruns -o name 2>/dev/null | sort || true)"
-# Capture the currently-deployed image so step 3 can wait for it to CHANGE. A
-# generic ArgoCD "Synced/Healthy" reflects the PRE-write-back revision (auto-sync
-# polls every ~3 min), so waiting on that alone races the old pods — the deployed
-# image, not the sync status, is the ground truth that the new build landed.
-pre_img="$(kubectl -n "$ARGOCD_DEST_NAMESPACE" get deploy "$APP_NAME" \
-  -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+# ============================================================================================
+# verify_app <app> — the FULL proof, for ONE app. Run for EVERY app in apps/registry.tsv.
+#
+# A green run for javawebapp says NOTHING about gowebapp: each app gets its OWN marker, its OWN
+# PipelineRun (matched by the pipeline label, not "some new run appeared"), its OWN deployed-image
+# change and its OWN page assertion. If any app fails, `make verify` fails.
+# ============================================================================================
+verify_app() {
+  local app="$1"
+  local marker="${MARKER}-${app}"
+  local ns="$APP_NAMESPACE" health; health="$(app_health_path "$app")"
+  local app_local_port; app_local_port="${APP_LOCAL_PORT:-$(pick_port)}"
 
-log_info "port-forwarding Gitea + pushing marked change ($MARKER)"
-kubectl -n "$GITEA_NAMESPACE" port-forward svc/gitea-http "${GITEA_LOCAL_PORT}:3000" >/dev/null 2>&1 &
-PF_PID=$!
-base="http://localhost:${GITEA_LOCAL_PORT}"
-wait_for "Gitea reachable" curl -fsS "${base}/api/healthz" || die "Gitea not reachable"
+  log_info "=== verify [${app}] (lang=${APP_LANG}) ==="
 
-gitcreds="${tmp}/gitcreds"
-printf 'http://%s:%s@localhost:%s\n' "$GITEA_ADMIN_USER" "$TOKEN" "$GITEA_LOCAL_PORT" > "$gitcreds"
-d="${tmp}/app"
-git clone -q "${base}/${GITEA_ORG}/${GITEA_APP_REPO}.git" "$d"
-git -C "$d" config credential.helper "store --file=${gitcreds}"
-git -C "$d" config user.email "verify@vks-airgap-cicd.local"
-git -C "$d" config user.name  "vks-airgap-cicd-verify"
-# Change the greeting default so the rebuilt image visibly shows the marker.
-sed -i "s#\${APP_MESSAGE:[^}]*}#\${APP_MESSAGE:${MARKER}}#" \
-  "$d/src/main/resources/application.yml"
-git -C "$d" commit -aqm "verify: ${MARKER}"
-git -C "$d" push -q origin "$APP_BRANCH"
-kill "$PF_PID" 2>/dev/null || true; PF_PID=""
-log_info "pushed marker $MARKER to ${GITEA_APP_REPO}"
+  # Ground truth for "did the new build land": the DEPLOYED IMAGE, not a generic ArgoCD
+  # "Synced/Healthy" (auto-sync polls ~3 min, so that can still reflect the pre-write-back
+  # revision and race the old pods).
+  local pre_img
+  pre_img="$(kubectl -n "$ns" get deploy "$app" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
 
-# ---- 2. Wait for a NEW PipelineRun; re-fire the webhook once if the first delivery was lost ----
-log_info "waiting for the webhook-triggered PipelineRun"
-pr=""
-for attempt in 1 2; do
-  end=$((SECONDS + ${PIPELINERUN_WAIT_SECONDS:-120}))
-  while [ "$SECONDS" -lt "$end" ]; do
-    now="$(kubectl -n "$CI_NAMESPACE" get pipelineruns -o name 2>/dev/null | sort || true)"
-    pr="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$now") | head -1)"
-    [ -n "$pr" ] && break
-    sleep "$POLL_INTERVAL_SECONDS"
-  done
-  [ -n "$pr" ] && break
-  [ "$attempt" -ge 2 ] && break
-  # Gitea's webhook fires ONCE per push; if that delivery hit the EventListener while it
-  # was still stabilizing it is lost. Re-fire with an empty commit (the marker change is
-  # already committed, so the rebuilt image still shows $MARKER) and wait again.
-  log_warn "no PipelineRun yet — re-firing the Gitea webhook (empty commit)"
+  # Only THIS app's PipelineRuns. Matching "any new PipelineRun" would let the other app's run
+  # satisfy this app's check — a green that proves nothing.
+  local sel="tekton.dev/pipeline=${app}-ci"
+  local before
+  before="$(kubectl -n "$CI_NAMESPACE" get pipelineruns -l "$sel" -o name 2>/dev/null | sort || true)"
+
+  # ---- push a marked change to <app>-app -----------------------------------------------------
+  log_info "[${app}] port-forwarding Gitea + pushing marked change (${marker})"
   kubectl -n "$GITEA_NAMESPACE" port-forward svc/gitea-http "${GITEA_LOCAL_PORT}:3000" >/dev/null 2>&1 &
   PF_PID=$!
-  wait_for "Gitea reachable" curl -fsS "http://localhost:${GITEA_LOCAL_PORT}/api/healthz" || true
-  git -C "$d" commit -q --allow-empty -m "verify: re-fire ${MARKER}" >/dev/null 2>&1 || true
-  git -C "$d" push -q origin "$APP_BRANCH" >/dev/null 2>&1 || true
+  local base="http://localhost:${GITEA_LOCAL_PORT}"
+  wait_for "Gitea reachable" curl -fsS "${base}/api/healthz" || die "Gitea not reachable"
+
+  local gitcreds="${tmp}/gitcreds"
+  printf 'http://%s:%s@localhost:%s\n' "$GITEA_ADMIN_USER" "$TOKEN" "$GITEA_LOCAL_PORT" > "$gitcreds"
+  local d="${tmp}/src-${app}"
+  rm -rf "$d"
+  git clone -q "${base}/${GITEA_ORG}/${APP_GIT_REPO}.git" "$d"
+  git -C "$d" config credential.helper "store --file=${gitcreds}"
+  git -C "$d" config user.email "verify@vks-airgap-cicd.local"
+  git -C "$d" config user.name  "vks-airgap-cicd-verify"
+  # WHERE the greeting lives is the only language-specific thing here (application.yml vs main.go);
+  # lib/apps.sh owns that, so this script has no per-language knowledge.
+  app_set_message "$app" "$d" "$marker"
+  git -C "$d" commit -aqm "verify: ${marker}"
+  git -C "$d" push -q origin "$APP_BRANCH"
   kill "$PF_PID" 2>/dev/null || true; PF_PID=""
-done
-[ -n "$pr" ] || die "no new PipelineRun appeared after 2 attempts — check the Gitea webhook + EventListener (kubectl -n $CI_NAMESPACE get el,pods)"
-log_info "PipelineRun: $pr"
+  log_info "[${app}] pushed marker to ${APP_GIT_REPO}"
 
-if ! kubectl -n "$CI_NAMESPACE" wait --for=condition=Succeeded --timeout="${READY_TIMEOUT_SECONDS}s" "$pr"; then
-  log_error "PipelineRun did not succeed — diagnostics:"
-  kubectl -n "$CI_NAMESPACE" get "$pr" -o wide >&2 || true
-  kubectl -n "$CI_NAMESPACE" get taskruns >&2 || true
-  die "pipeline failed"
-fi
-log_info "PipelineRun succeeded"
+  # ---- wait for THIS app's PipelineRun; re-fire once if the webhook delivery was lost ---------
+  local pr="" attempt end now
+  for attempt in 1 2; do
+    end=$((SECONDS + ${PIPELINERUN_WAIT_SECONDS:-120}))
+    while [ "$SECONDS" -lt "$end" ]; do
+      now="$(kubectl -n "$CI_NAMESPACE" get pipelineruns -l "$sel" -o name 2>/dev/null | sort || true)"
+      pr="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$now") | head -1)"
+      [ -n "$pr" ] && break
+      sleep "$POLL_INTERVAL_SECONDS"
+    done
+    [ -n "$pr" ] && break
+    [ "$attempt" -ge 2 ] && break
+    # Gitea fires the webhook ONCE per push; a delivery that hits the EventListener while it is
+    # still stabilizing is lost. Re-fire with an empty commit (the marker is already committed,
+    # so the rebuilt image still shows it).
+    log_warn "[${app}] no PipelineRun yet — re-firing the Gitea webhook (empty commit)"
+    kubectl -n "$GITEA_NAMESPACE" port-forward svc/gitea-http "${GITEA_LOCAL_PORT}:3000" >/dev/null 2>&1 &
+    PF_PID=$!
+    wait_for "Gitea reachable" curl -fsS "http://localhost:${GITEA_LOCAL_PORT}/api/healthz" || true
+    git -C "$d" commit -q --allow-empty -m "verify: re-fire ${marker}" >/dev/null 2>&1 || true
+    git -C "$d" push -q origin "$APP_BRANCH" >/dev/null 2>&1 || true
+    kill "$PF_PID" 2>/dev/null || true; PF_PID=""
+  done
+  [ -n "$pr" ] || die "[${app}] no PipelineRun for ${app}-ci after 2 attempts — check the Gitea webhook + the shared EventListener (kubectl -n $CI_NAMESPACE get el,trigger,pods)"
+  log_info "[${app}] PipelineRun: $pr"
 
-# ---- 3. Force ArgoCD to pick up the write-back NOW, then wait for the NEW image ----
-argo_status() {
-  kubectl -n "$ARGOCD_NAMESPACE" get application "$ARGOCD_APP_NAME" \
-    -o jsonpath='{.status.sync.status}/{.status.health.status}' 2>/dev/null
+  if ! kubectl -n "$CI_NAMESPACE" wait --for=condition=Succeeded --timeout="${READY_TIMEOUT_SECONDS}s" "$pr"; then
+    log_error "[${app}] PipelineRun did not succeed — diagnostics:"
+    kubectl -n "$CI_NAMESPACE" get "$pr" -o wide >&2 || true
+    kubectl -n "$CI_NAMESPACE" get taskruns -l "$sel" >&2 || true
+    die "[${app}] pipeline failed"
+  fi
+  log_info "[${app}] PipelineRun succeeded"
+
+  # ---- ArgoCD: force the write-back to reconcile NOW, then wait for the image to CHANGE -------
+  kubectl -n "$ARGOCD_NAMESPACE" annotate application "$app" \
+    argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
+  if ! wait_for "[${app}] ArgoCD rolls a new image (was ${pre_img:-none})" \
+       sh -c "[ \"\$(kubectl -n $ns get deploy $app -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)\" != '${pre_img}' ]"; then
+    log_error "[${app}] ArgoCD did not roll a new image (still ${pre_img:-none})"
+    kubectl -n "$ARGOCD_NAMESPACE" get application "$app" -o wide >&2 || true
+    die "[${app}] ArgoCD did not converge on the new build"
+  fi
+  local img; img="$(kubectl -n "$ns" get deploy "$app" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)"
+  log_info "[${app}] deployed image now ${img}"
+
+  # ---- THE USER-FACING END RESULT: the running page shows THIS app's marker -------------------
+  wait_for "[${app}] new rollout complete" kubectl -n "$ns" rollout status "deploy/${app}" --timeout=30s
+  kubectl -n "$ns" port-forward "svc/${app}" "${app_local_port}:80" >/dev/null 2>&1 &
+  PF_PID=$!
+  local url="http://localhost:${app_local_port}"
+  wait_for "[${app}] app HTTP up" curl -fsS "${url}${health}" || die "[${app}] app not serving ${health}"
+
+  # Capture the page, THEN grep the variable: `curl | grep -q` lets grep close the pipe on its
+  # first match and SIGPIPE curl (141), which under `set -o pipefail` reads as "marker absent" —
+  # a false failure on a page that DID show it.
+  # shellcheck disable=SC2329  # invoked indirectly (for_each_app / wait_for)
+  marker_visible() { local b; b="$(curl -fsS "${url}/" 2>/dev/null || true)"; printf '%s' "$b" | grep -q "$marker"; }
+  if wait_for "[${app}] deployed page shows marker ${marker}" marker_visible; then
+    log_info "[${app}] SUCCESS — the deployed page shows '${marker}'"
+  else
+    log_error "[${app}] app is up but the page does NOT show '${marker}' (deployed image: ${img})"
+    curl -fsS "${url}/" | grep -i 'class="message"' >&2 || true
+    die "[${app}] end result not observed"
+  fi
+  kill "$PF_PID" 2>/dev/null || true; PF_PID=""
 }
-deploy_img() {
-  kubectl -n "$ARGOCD_DEST_NAMESPACE" get deploy "$APP_NAME" \
-    -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null
-}
-# Hard-refresh so ArgoCD reconciles the write-back commit immediately instead of
-# waiting out its ~3 min auto-sync poll.
-kubectl -n "$ARGOCD_NAMESPACE" annotate application "$ARGOCD_APP_NAME" \
-  argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
-# Ground truth = the deployed image actually CHANGED (not a generic "Synced/Healthy",
-# which can still reflect the pre-write-back revision mid-poll and race the old pods).
-if ! wait_for "ArgoCD rolls a new image (was ${pre_img:-none})" \
-     sh -c "[ \"\$(kubectl -n $ARGOCD_DEST_NAMESPACE get deploy $APP_NAME -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)\" != '${pre_img}' ]"; then
-  log_error "ArgoCD did not roll a new image (still ${pre_img:-none}); status: $(argo_status)"
-  kubectl -n "$ARGOCD_NAMESPACE" get application "$ARGOCD_APP_NAME" -o wide >&2 || true
-  die "ArgoCD did not converge on the new build"
-fi
-log_info "ArgoCD: $(argo_status) — deployed image now $(deploy_img)"
 
-# ---- 4. Verify the running app serves the new marker (the USER-FACING result) ----
-# Wait for the NEW ReplicaSet to fully roll out before port-forwarding, so the
-# forward lands on a new pod (not one being torn down).
-wait_for "new app rollout complete" kubectl -n "$ARGOCD_DEST_NAMESPACE" rollout status "deploy/${APP_NAME}" --timeout=30s
-log_info "deployed image: $(deploy_img)"
-kubectl -n "$ARGOCD_DEST_NAMESPACE" port-forward "svc/${APP_NAME}" "${APP_LOCAL_PORT}:80" >/dev/null 2>&1 &
-PF_PID=$!
-app="http://localhost:${APP_LOCAL_PORT}"
-wait_for "app HTTP up" curl -fsS "${app}/actuator/health" || die "app not serving"
+for_each_app verify_app
 
-# Poll (not single-shot): the Service briefly load-balances across old+new pods
-# during rollout, so the marker may take a few polls to appear on every replica.
-# Capture the page first, then grep the variable: piping `curl … | grep -q` lets grep exit on
-# its first match and SIGPIPE `curl` (exit 141) while it is still streaming the body, which under
-# `set -o pipefail` reads as "marker absent" → a false "end result not observed" on a page that
-# DID show the marker. `|| true` preserves the original semantics (a curl HTTP error → not visible).
-marker_visible() { local b; b="$(curl -fsS "${app}/" 2>/dev/null || true)"; printf '%s' "$b" | grep -q "$MARKER"; }
-if wait_for "deployed page shows marker $MARKER" marker_visible; then
-  log_info "SUCCESS — the deployed page shows the new marker '$MARKER'"
-  log_info "End-to-end verified: git push -> Tekton -> Harbor -> write-back -> ArgoCD -> live app."
-else
-  log_error "app is up but the page does NOT show marker '$MARKER' (deployed image: $(deploy_img))"
-  curl -fsS "${app}/" | grep -i 'class=\"message\"' >&2 || true
-  die "end result not observed"
-fi
+log_info "End-to-end verified for EVERY app ($(app_names | tr '\n' ' ')): git push -> Tekton -> Harbor -> write-back -> ArgoCD -> live page."

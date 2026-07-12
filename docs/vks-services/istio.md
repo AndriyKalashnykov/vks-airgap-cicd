@@ -112,7 +112,7 @@ Measured minimums (KinD-verified, via a server-side dry-run label — `make psa-
 
 | Namespace | Minimum | Why |
 |---|---|---|
-| `gitea`, `tekton-pipelines`, `webui` | `restricted` | compliant as they ship |
+| `gitea`, `tekton-pipelines`, `javawebapp` | `restricted` | compliant as they ship |
 | **`ci`** (build TaskRuns) | **`baseline`** | **Kaniko builds as root** (`runAsUser=0`, unrestricted caps, no `seccompProfile`) |
 | **the namespace holding your `Gateway`** | **`baseline`** | the proxy Istio **auto-provisions** sets no `seccompProfile` — and **the platform's istiod creates that pod, not you**, so you cannot make it compliant |
 

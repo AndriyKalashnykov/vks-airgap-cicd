@@ -1,12 +1,14 @@
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
-  name: webui-ci
+  name: ${APP_NAME}-ci
   namespace: ${CI_NAMESPACE}
 spec:
   description: >-
-    On a push to webui-app: clone -> test -> build+push image to Harbor ->
-    write the new tag back to webui-deploy (which ArgoCD then syncs).
+    On a push to ${APP_NAME}-app: clone -> test -> build+push image to Harbor ->
+    write the new tag back to ${APP_NAME}-deploy (which ArgoCD then syncs).
+    ONE template, rendered per app from apps/registry.tsv — only the name and the TEST task
+    differ (maven-test for Java, go-test for Go), so the walk is provably identical.
   params:
     - name: app-repo-url
       type: string
@@ -20,7 +22,7 @@ spec:
       default: main
     - name: image
       type: string
-      description: App image without tag (e.g. harbor/apps/webui).
+      description: App image without tag (e.g. harbor/apps/<app>).
     - name: builder-image
       type: string
     - name: runtime-image
@@ -47,7 +49,11 @@ spec:
 
     - name: test
       runAfter: [clone-app]
-      taskRef: { name: maven-test }
+      # Block style (not the flow `{ name: ... }` the other taskRefs use): a `${VAR}` token inside a
+      # YAML FLOW mapping is a syntax error (the `{` of `${` opens a nested flow map), so yamllint
+      # and kubeconform cannot parse the template at all.
+      taskRef:
+        name: ${APP_TEST_TASK}
       params:
         - { name: subdir, value: app }
         - { name: builder-image, value: $(params.builder-image) }
@@ -77,5 +83,8 @@ spec:
         - { name: deploy-url, value: $(params.deploy-repo-url) }
         - { name: deploy-revision, value: $(params.deploy-revision) }
         - { name: tag, value: $(tasks.clone-app.results.commit) }
+        # Block style: a `${VAR}` inside a YAML flow mapping is a syntax error (see the taskRef above).
+        - name: app
+          value: ${APP_NAME}
       workspaces:
         - { name: scratch, workspace: shared-data }

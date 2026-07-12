@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 71-argocd-register-guest.sh — register the GUEST/workload cluster as a destination with an
 # ArgoCD instance that runs in a DIFFERENT cluster (the real-lab case: ArgoCD is a Supervisor
-# Service on the Supervisor; webui must deploy into the guest cluster).
+# Service on the Supervisor; javawebapp must deploy into the guest cluster).
 #
 # It does NOT install a second ArgoCD in the guest — it only:
 #   1. GUEST cluster: creates an `argocd-manager` ServiceAccount + a cluster-admin binding
@@ -26,7 +26,7 @@ load_env
 require_cmd kubectl "install kubectl (make deps)"
 
 # --- inputs ------------------------------------------------------------------
-# GUEST_KUBECONFIG : the workload cluster where webui deploys (default: the flow's $KUBECONFIG).
+# GUEST_KUBECONFIG : the workload cluster where javawebapp deploys (default: the flow's $KUBECONFIG).
 # ARGOCD_KUBECONFIG: the cluster the ArgoCD instance runs in (the Supervisor / the e2e ArgoCD box).
 GUEST_KUBECONFIG="${GUEST_KUBECONFIG:-${KUBECONFIG:?KUBECONFIG (guest cluster) must be set}}"
 : "${ARGOCD_KUBECONFIG:?ARGOCD_KUBECONFIG must point at the cluster ArgoCD runs in (the Supervisor / ArgoCD cluster)}"

@@ -31,6 +31,14 @@ yq       = "4"
 crane    = "0.21.7"
 # node is only for `make renovate-validate` (renovate requires node ^24.11).
 node     = "24"
+# go — the gowebapp toolchain. Without it, CI (which gets its toolchain from THIS file via
+# mise-action) has no `go`, so `make app-test` / `make trivy-fs` cannot test or scan the Go app at
+# all — it would pass locally (dev boxes have Go) and fail on a clean runner. Same hidden-local-state
+# class as `kind` being installed by nothing.
+# KEEP ALIGNED with the golang image in images/images.txt and the ARG in apps/go/gowebapp/Dockerfile
+# (check-toolchain-alignment gates it): the pipeline builds with that image, so a local/CI toolchain
+# on a different minor would test something the pipeline never builds.
+go       = "1.26.5"
 # Security-scan gates (make sec / static-check) — internet/CI side only, never
 # needed for the air-gap install flow. Provided cross-distro via mise so local
 # `make static-check` mirrors the CI static-check job (which runs mise-action).

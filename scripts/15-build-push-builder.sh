@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # 15-build-push-builder.sh — (INTERNET side) build the air-gap Maven builder image
-# (apps/java/webui/Dockerfile.builder) with this pom's dependencies pre-baked, and push it to
+# (apps/java/javawebapp/Dockerfile.builder) with this pom's dependencies pre-baked, and push it to
 # Harbor. The in-cluster CI (kaniko) and the Tekton maven-test task then build/test
 # OFFLINE using this image's warm ~/.m2 cache.
 #
 # Requires docker or podman + internet (to pull Maven Central deps during the build).
-# Rebuild whenever apps/java/webui/pom.xml dependencies change (bump BUILDER_IMAGE_TAG).
+# Rebuild whenever apps/java/javawebapp/pom.xml dependencies change (bump BUILDER_IMAGE_TAG).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,7 +32,17 @@ fi
 ENGINE="$(container_engine)"
 log_info "using container engine: $ENGINE"
 
-REF="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/webui-builder:${BUILDER_IMAGE_TAG}"
+# Which apps need a pre-baked builder image? The ones that SHIP a Dockerfile.builder — keyed on
+# the FILE, not on a language name, so a future app that needs one just adds the file (and
+# gowebapp, which is stdlib-only and fetches nothing offline, correctly needs none).
+# shellcheck source=scripts/lib/apps.sh
+. "${SCRIPT_DIR}/lib/apps.sh"
+# `if ... fi`, NOT `app_has_builder "$a" && printf ...`: a bare `A && B` returns NON-ZERO when A
+# is false, so the last iteration (gowebapp has no builder) made the command substitution fail and
+# `set -e` killed the script. `if` returns 0 when the condition is false.
+BUILDER_APPS="$(app_names | while read -r a; do if app_has_builder "$a"; then printf '%s ' "$a"; fi; done)"
+[ -n "$BUILDER_APPS" ] || { log_info "no app ships a Dockerfile.builder — nothing to build (stdlib-only apps need no offline dependency cache)"; exit 0; }
+log_info "apps needing an offline builder image: ${BUILDER_APPS}"
 MAVEN_BASE="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/maven:3.9-eclipse-temurin-25"
 TLS_VERIFY="true"; [ "${HARBOR_INSECURE:-0}" = "1" ] && TLS_VERIFY="false"
 # SECURE Harbor: point podman at the CA via --cert-dir (a clean dir holding only ca.crt) so
@@ -58,12 +68,15 @@ else
   log_warn "mirrored maven image not pullable; using public $BUILD_BASE"
 fi
 
-log_info "building builder image $REF (this pulls Maven deps — needs internet)"
+for app in $BUILDER_APPS; do
+REF="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/${app}-builder:${BUILDER_IMAGE_TAG}"
+src="${REPO_ROOT}/$(app_src "$app")"
+log_info "building builder image $REF for '${app}' (this pulls its deps — needs internet)"
 run "$ENGINE" build \
   --build-arg "MAVEN_IMAGE=${BUILD_BASE}" \
-  -f "${REPO_ROOT}/apps/java/webui/Dockerfile.builder" \
+  -f "${src}/Dockerfile.builder" \
   -t "$REF" \
-  "${REPO_ROOT}/apps/java/webui"
+  "${src}"
 
 log_info "logging in to Harbor and pushing $REF"
 # --tls-verify is a podman flag (docker uses daemon insecure-registries / certs.d).
@@ -76,4 +89,7 @@ push_args=("$REF")
 run "$ENGINE" push "${push_args[@]}"
 
 log_info "builder image pushed: $REF"
-log_info "the pipeline references it as BUILDER_IMAGE; the app Dockerfile builds offline against it"
+done
+
+log_info "builder images pushed for: ${BUILDER_APPS}"
+log_info "each app's pipeline references its own as BUILDER_IMAGE; the app Dockerfile then builds OFFLINE against it"

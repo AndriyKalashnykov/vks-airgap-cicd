@@ -1,0 +1,22 @@
+---
+# ONE VirtualService per app, rendered from apps/registry.tsv (scripts/lib/istio.sh).
+#
+# It lives in the app's OWN namespace (not the gateway's) with a namespace-qualified gateway ref.
+# That layout works in BOTH modes and is the only one a locked-down TENANT can use: a tenant has
+# no rights in the mesh's gateway namespace at all.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: ${APP_NAME}
+  namespace: ${APP_NAMESPACE}
+spec:
+  hosts:
+    - ${APP_HOST}
+  gateways:
+    - ${ISTIO_GATEWAY_REF}
+  http:
+    - route:
+        - destination:
+            host: ${APP_NAME}.${APP_NAMESPACE}.svc.cluster.local
+            port:
+              number: 80

@@ -23,7 +23,7 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make ci` | Offline gate: `static-check` + `docs-lint` |
 | `make static-check` | `check-toolchain-alignment` + `check-java-alignment` + `check-env` + `check-env-coverage` + `check-how-provenance` + `check-image-alignment` + `lint` + `validate` + `sec` + `test-scripts` (offline script unit tests) + `app-test` |
 | `make sec` | Security scans: `secrets` (gitleaks) + `prose-secrets` (credential-shaped prose in docs) + `trivy-fs` (built-jar deps) + `trivy-config` (manifests) |
-| `make app-test` / `app-build` / `app-run` | Spring Boot app dev (in `apps/java/webui/`, uses `./mvnw`) |
+| `make app-test` / `app-build` / `app-run` | Spring Boot app dev (in `apps/java/javawebapp/`, uses `./mvnw`) |
 | `make mirror` | (dual-homed) pull images → push to Harbor. **Resumable:** a re-run cache-skips digest-pinned images already fully pulled (`.mirror-ok` sentinel), so an interrupted/CDN-flaky mirror resumes in seconds. `MIRROR_RETRIES` (default 5), `MIRROR_FORCE_PULL=1` |
 | `make mirror-pull` / `bundle` / `bundle-load` / `mirror-push` | sneakernet phases |
 | `make mirror-verify` | Verify every mirrored image is INTACT in Harbor (`crane validate` blobs + `images.lock` digest match) — read-only; run after `make mirror` |
@@ -50,7 +50,7 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make kind-up` / `install-harbor` / `install-argocd` / `install-ingress` / `kind-down` | Individual KinD steps |
 | `make jumpbox` / `jumpbox-both` | Validate the README jump-box bootstrap on a real jump-box container — `JUMPBOX_OS=photon` (default, `photon:5.0`) or `JUMPBOX_OS=ubuntu` (`ubuntu:26.04`); rootless podman, joined to the kind network: runs `make deps` + engine + cluster/Harbor reach. `jumpbox-both` runs the OS matrix. Needs the KinD cluster up |
 
-Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<method> test`.
+Run a single app test: `cd apps/java/javawebapp && ./mvnw -B -Dtest=<ClassName>#<method> test`.
 
 ## Architecture / big picture
 
@@ -69,16 +69,16 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   a `.env`, so the you-choose secrets must be GENERATED (`05-kind-up.sh`), not read from yours.
   Without it a local run passes on values only your box has. Opt out: `E2E_SKIP_DOTENV=0`.
 - **Manifest layout:** `k8s/{gitea,istio,traefik,tekton,argocd}/` = everything **we** apply to
-  the cluster. `deploy/webui/` is **not** applied by us — `50-seed-gitea-repos.sh` seeds it into
-  the `webui-deploy` Gitea repo (one dir per deploy repo); `apps/java/webui/` is the content of
-  the `webui-app` repo. Do not nest `deploy/` inside `apps/java/webui/` — that dir IS the app
+  the cluster. `deploy/javawebapp/` is **not** applied by us — `50-seed-gitea-repos.sh` seeds it into
+  the `javawebapp-deploy` Gitea repo (one dir per deploy repo); `apps/java/javawebapp/` is the content of
+  the `javawebapp-app` repo. Do not nest `deploy/` inside `apps/java/javawebapp/` — that dir IS the app
   repo, so the manifests would land in it and collapse the two-repo GitOps split.
 - **Mirror mode is not a variable** — dual-homed vs sneakernet is simply which mirror
   commands you run: dual-homed → `make mirror`; sneakernet → `make mirror-pull && make
   bundle` (carry the bundle) then `make bundle-load && make mirror-push`.
-- **Two Git repos** in Gitea: `webui-app` (source + Dockerfile + trigger binding)
-  and `webui-deploy` (kustomize manifests ArgoCD watches). CI writes the new image
-  tag back to `webui-deploy`; ArgoCD deploys from it.
+- **Two Git repos** in Gitea: `javawebapp-app` (source + Dockerfile + trigger binding)
+  and `javawebapp-deploy` (kustomize manifests ArgoCD watches). CI writes the new image
+  tag back to `javawebapp-deploy`; ArgoCD deploys from it.
 - **VKS auth is isolated in `scripts/30-vks-login.sh`** — the only auth-aware step;
   everything else consumes `$KUBECONFIG`/context.
 - **Internal CA trust** (self-signed Harbor) is wired **sudo-free** per consumer — jump-box
@@ -87,11 +87,11 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   and in-cluster Kaniko via the `harbor-ca` ConfigMap. No root-owned system-store change. See
   `docs/decisions/kind-tls-fidelity.md`.
 - **Air-gap Maven builds**: an in-cluster `mvn`/Kaniko build cannot reach Maven
-  Central, so `scripts/15-build-push-builder.sh` builds `apps/java/webui/Dockerfile.builder`
+  Central, so `scripts/15-build-push-builder.sh` builds `apps/java/javawebapp/Dockerfile.builder`
   on the internet side (bakes the full `~/.m2` via `mvn verify`) and pushes it to
   Harbor. The app `Dockerfile` (`BUILDER_IMAGE` + `MVN_OFFLINE=-o` args) and the
   Tekton `maven-test` task both consume it and build **offline**. Rebuild + bump
-  `BUILDER_IMAGE_TAG` when `apps/java/webui/pom.xml` deps change.
+  `BUILDER_IMAGE_TAG` when `apps/java/javawebapp/pom.xml` deps change.
 - **KinD local e2e**: `kind/kind-config.yaml` enables containerd `config_path`;
   `05-kind-up.sh` runs cloud-provider-kind (LoadBalancer) and writes `KUBECONFIG` +
   `VKS_AUTH_METHOD=kubeconfig` to `.env.kind`; `06-install-harbor.sh` exposes Harbor as a
@@ -128,7 +128,7 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   control plane + gateway LB; istio images from Harbor via the `global.hub` override),
   `47-attach-istio.sh` (discover + attach only), or
   `45-install-traefik.sh` (single-binary LB). All expose the SAME `*.vks.local` hosts
-  (`GITEA_HOST`/`WEBUI_HOST`/`TEKTON_DASHBOARD_HOST` — **not** ArgoCD, which has its own LB) behind ONE LoadBalancer and
+  (`GITEA_HOST`/`JAVAWEBAPP_HOST`/`TEKTON_DASHBOARD_HOST` — **not** ArgoCD, which has its own LB) behind ONE LoadBalancer and
   publish `INGRESS_LB_IP` + the chosen `INGRESS_CONTROLLER` to `.env.kind`. `44-install-ingress.sh`
   lets an explicit `INGRESS_CONTROLLER` override win over the persisted `.env.kind` value (so
   `verify-ingress-both` actually flips controllers). Hostnames resolve via
@@ -154,7 +154,7 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   made `bundle-load` look in the wrong place. `make check-env-clobber` now enforces it.
 - **Security + alignment gates** (`static-check`, internet/CI side): `check-toolchain-alignment`
   (kubectl pin in `.mise.toml` == `.env.example` `KUBECTL_VERSION`), `check-java-alignment`
-  (Java major identical across `apps/java/webui/pom.xml`, `.mise.toml`, `ci.yml`, the `apps/java/webui/Dockerfile`
+  (Java major identical across `apps/java/javawebapp/pom.xml`, `.mise.toml`, `ci.yml`, the `apps/java/javawebapp/Dockerfile`
   build+runtime images, and `images/images.txt` — Renovate tracks the maven build image and
   the eclipse-temurin runtime image separately, so it can split them; the build once compiled
   for 21 but ran on 25), `sec` (gitleaks +
@@ -238,15 +238,120 @@ the real demo is the live VKS run — so the KinD e2e stays a local `make` targe
 than a CI job. Run it locally (and both ingress controllers via `make verify-ingress-both`)
 when changing the pipeline, ingress, or manifests.
 
+## Naming history
+
+**`webui` was renamed to `javawebapp`** (2026-07-12) when a second app (`gowebapp`) arrived — the
+name had to say WHICH app. The rename covered the source tree (`apps/java/javawebapp`, Java package
+`com.vmware.vks.demo.javawebapp`), the Gitea repos (`javawebapp-app` / `javawebapp-deploy`), the
+Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/javawebapp`) and the
+ingress host (`javawebapp.vks.local`). **The dated handoff entries below still say `webui`** — that
+is what those PRs actually touched, and rewriting them would falsify the record.
+
 ## Backlog / resume state
 
-> ### ▶️ STATE — everything below was verified on 2026-07-12c; nothing is known-broken
+> ### ▶️ HANDOFF 2026-07-12d — MULTI-APP (javawebapp + gowebapp). Branch: refactor/webui-to-javawebapp
 >
-> **The full KinD e2e permutation matrix is 7/7 GREEN** (run sequentially — two registry-mutating
-> runs at once corrupt Harbor; a `flock` now blocks it, do not fight it):
+> ### ✅ THE TWO-APP WALK IS GREEN (2026-07-12, `make e2e-kind`, EXIT=0)
 >
-> | Permutation | Command | Result |
+> Both apps completed the FULL walk **independently** — each with its own marker, its own
+> PipelineRun, its own image, its own page:
+>
+> | | javawebapp (java) | gowebapp (go) |
 > |---|---|---|
+> | PipelineRun | `javawebapp-ci-bwnzn` ✅ | `gowebapp-ci-9fzls` ✅ |
+> | Image in Harbor | `apps/javawebapp:4f27acb` | `apps/gowebapp:d678d9d` |
+> | Deployed page shows ITS OWN marker | ✅ | ✅ |
+> | Ingress | `javawebapp.vks.local` 200 | `gowebapp.vks.local` 200 |
+>
+> `PSA OK` on every namespace. The Go app's Kaniko build ran **offline** against the mirrored
+> `golang` + the DIGEST-pinned distroless — so the air-gap story holds for a second language with
+> no builder image (stdlib-only ⇒ nothing to fetch).
+>
+> **Getting there took 4 attempts, and every failure was a REAL multi-app bug the e2e caught:**
+>
+> | # | Died at | Cause | Fixed |
+> |---|---|---|---|
+> | 1 | `builder-image` | `app_has_builder "$a" && printf …` — a bare `A && B` returns NON-ZERO when A is false, and gowebapp (no `Dockerfile.builder`) is LAST ⇒ `set -e` killed the script | `if…fi` everywhere |
+> | 2 | `seed-gitea` | leftover `: "${APP_NAME:?}"` require of a global the refactor deleted | + swept every script |
+> | 3 | `gowebapp-ci` | `CouldntGetTask` — the `go-test` Task existed only in a scratchpad | added + **GATE** in `make validate` (RED-proven) |
+> | 4 | — | GREEN | — |
+>
+> **The property that made this work:** a green `javawebapp` never once hid a broken `gowebapp`.
+> `verify` proves EACH app (own marker, PipelineRun matched by the `tekton.dev/pipeline=<app>-ci`
+> label, own deployed-image change, own page). Keep it that way.
+>
+> #### What shipped (on the branch, NOT yet merged — PRs #139 docs-sync, #140 rename+multi-app)
+>
+> - **`webui` -> `javawebapp`** (a second app arrived; the name must say WHICH app). CLAUDE.md's
+>   dated history deliberately still says `webui` — rewriting it would falsify the record.
+> - **`gowebapp`**: Go, **stdlib-only** on purpose — with zero modules the air-gapped build fetches
+>   nothing, so it needs NO pre-baked dependency cache (the Maven app needs `Dockerfile.builder`
+>   precisely because an in-cluster `mvn` cannot reach Maven Central). distroless/static, uid 65532,
+>   digest-pinned base (the `nonroot` tag MOVES).
+> - **`apps/registry.tsv` + `scripts/lib/apps.sh`**: the single source of truth. Seeding, Tekton,
+>   ArgoCD, ingress, PSA, preflights, validate, lint, trivy-fs, builder-image, app-test/build/run
+>   and verify ALL loop over it. **Adding an app is ONE ROW**; a new LANGUAGE is that row + one
+>   `case` branch (test task, marker file, health path, base images).
+> - **Tekton**: ONE shared EventListener (`labelSelector`) discovering a per-app standalone
+>   `Trigger` CR (CEL-filtered on `body.repository.name` — VERIFIED against Gitea's docs); ONE
+>   pipeline template rendered per app; shared tasks + a shared `apps-ci` ServiceAccount.
+> - **`make verify` proves EACH app independently**: own marker, own PipelineRun (matched by the
+>   `tekton.dev/pipeline=<app>-ci` label, not "some new run appeared"), own deployed-image change,
+>   own page. A green javawebapp can no longer hide a broken gowebapp.
+> - **NEW GATE `check-app-hardcodes`** (in static-check): no shared file may NAME an app. It found
+>   4 REAL bugs on first run — the write-back commit message said "ci: deploy javawebapp" for EVERY
+>   app; a route-API switch deleted only javawebapp's routes; hadolint never linted the Go
+>   Dockerfile; several hardcoded paths.
+> - `trivy-fs` now scans EVERY app's ARTIFACT (jar + the compiled Go binary — a stdlib-only app has
+>   no modules, so scanning go.mod would miss Go-STDLIB CVEs entirely).
+>
+> #### TODO (small, known)
+>
+> 1. **`ARGOCD_PROJECT`** — `k8s/argocd/application.yaml:9` hardcodes `project: default`. Fine for
+>    KinD/Scenario 1 (admin); a TENANT has their own AppProject. Make it a var (default `default`).
+> 2. **Diagrams** show one app — re-render (`make diagrams`; the drift gate will catch it).
+> 3. **CLAUDE.md "Common commands"** still says one app in places; README got the multi-app pass
+>    (new "Adding an app" section incl. the real-lab grant table).
+> 4. Merge #139, then #140.
+>
+> #### Real-lab facts established this session (no lab needed to re-derive)
+>
+> | Concern | Verdict |
+> |---|---|
+> | Harbor robot | **Project-scoped** (`22-harbor-robot.sh:40`) -> a 2nd app needs NO new credential. |
+> | ArgoCD AppProject | A TENANT must have the new namespace in `spec.destinations` AND the new `<app>-deploy` URL in `spec.sourceRepos`. The ONLY universal tenant request. Scenario 1: none (`default` permits all). |
+> | Ingress host | Only an issue on the CLASSIC shared-Gateway path (its `hosts:` belongs to the mesh admin). On the **Gateway-API** path (default; what Broadcom uses) Istio auto-provisions the gateway from OUR Gateway in OUR namespace -> self-service, no request. |
+> | Namespace | One per app (operator's decision). Apps COULD share one; that would remove the AppProject request but weaken isolation. |
+>
+> #### 📋 BACKLOG — DEEP-RESEARCH the real-lab grant table, then adversarially verify it
+>
+> The README's "Adding an app -> on a REAL lab" table gives commands (ArgoCD AppProject
+> `spec.destinations`/`spec.sourceRepos` patch; Istio shared-Gateway `hosts:` patch). The FACTS are
+> sourced (ArgoCD docs; our own 22-harbor-robot.sh; the Istio Gateway host model) but the **exact
+> invocations are INFERRED and never run on a lab** — and the lab's ArgoCD SERVER is 2.14.x while
+> ours is 3.x. This repo has a gate against exactly this class (`check-how-provenance`), so:
+>
+> 1. **Deep-research** each cell against PRIMARY sources for the PINNED versions (ArgoCD 2.14 docs,
+>    Broadcom VKS ArgoCD/Harbor/Istio package docs, Istio 1.30 Gateway API + classic).
+> 2. **Run the result past a devil's-advocate SPECIALIST** (VKS/VCF + Kubernetes + ArgoCD + Harbor +
+>    Istio) briefed with the portfolio conventions — and note that in this session FOUR agents idled
+>    without ever delivering, so do not block on one: verify yourself and use the agent as a check.
+> 3. Correct the table, and grade every cell (lab-verified / doc-cited / INFERRED).
+> Open question to settle: does a 2.14 AppProject reject the Application with a distinguishable
+> error, and does a VKS-managed ArgoCD even let a tenant see their AppProject?
+>
+> #### Traps hit this session (do not repeat)
+>
+> - **`A && B` as a loop body returns NON-ZERO when A is false** -> under `set -e` the whole script
+>   dies. `app_has_builder "$a" && printf ...` killed `builder-image` (gowebapp is last and has no
+>   builder). Use `if ...; then ...; fi`.
+> - **A `${VAR}` inside a YAML FLOW mapping is a syntax error** (`{ name: ${X} }`) — block style only.
+> - **Never edit a script while a long run is executing it** (bash reads scripts incrementally).
+> - **Agents idle without reporting**: 4 devil's-advocate/research agents idled with no deliverable.
+>   Their key questions were answered directly instead (Gitea payload field, Harbor robot scope,
+>   Gateway-API self-service). Do not block on an agent; verify yourself.
+
+---|---|---|
 > | istio + secure TLS (default) | `make e2e-kind` | ✅ marker deployed, 3 UIs 200, PSA OK |
 > | both ingress controllers | `make verify-ingress-both` | ✅ istio + traefik routes |
 > | traefik + secure TLS | `make e2e-kind INGRESS_CONTROLLER=traefik` | ✅ |

@@ -19,9 +19,12 @@ require_cmd kubectl
 : "${KUBECONFIG:?}"; export KUBECONFIG
 : "${CI_NAMESPACE:?}"; : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"; : "${HARBOR_APP_PROJECT:?}"
 : "${HARBOR_USERNAME:?}"; : "${HARBOR_PASSWORD:?set HARBOR_PASSWORD in .env}"
-: "${GITEA_INTERNAL_URL:?}"; : "${GITEA_ORG:?}"; : "${GITEA_APP_REPO:?}"; : "${GITEA_DEPLOY_REPO:?}"
-: "${GITEA_CI_USER:?}"; : "${APP_NAME:?}"; : "${APP_BRANCH:?}"; : "${ARGOCD_TRACK_BRANCH:?}"
+: "${GITEA_INTERNAL_URL:?}"; : "${GITEA_ORG:?}"
+: "${GITEA_CI_USER:?}"; : "${APP_BRANCH:?}"; : "${ARGOCD_TRACK_BRANCH:?}"
 : "${BUILDER_IMAGE_TAG:?}"
+# The app registry: everything below is rendered ONCE PER APP from it.
+# shellcheck source=scripts/lib/apps.sh
+. "${SCRIPT_DIR}/lib/apps.sh"
 
 # ---- CI-bot Gitea token (minted by 50-seed-gitea-repos.sh) ----
 GITEA_CI_TOKEN="${GITEA_CI_TOKEN:-}"
@@ -30,18 +33,15 @@ GITEA_CI_TOKEN="${GITEA_CI_TOKEN:-}"
 [ -n "$GITEA_CI_TOKEN" ] || die "GITEA_CI_TOKEN not set and secrets/gitea-ci-token missing — run 'make seed-gitea' first"
 
 # ---- Derived values for envsubst rendering ----
+# App-INDEPENDENT tokens. The per-app ones (APP_NAME/APP_IMAGE/APP_BUILDER_IMAGE/APP_RUNTIME_IMAGE/
+# APP_TEST_TASK/APP_REPO_CLONE_URL/DEPLOY_REPO_CLONE_URL) are exported inside the loop below.
 export CI_NAMESPACE HARBOR_URL HARBOR_INFRA_PROJECT APP_BRANCH ARGOCD_TRACK_BRANCH
-export APP_IMAGE="${HARBOR_URL}/${HARBOR_APP_PROJECT}/${APP_NAME}"
-export BUILDER_IMAGE_REF="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/webui-builder:${BUILDER_IMAGE_TAG}"
-export RUNTIME_IMAGE_REF="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/eclipse-temurin:${TEMURIN_JRE_TAG:-25.0.3_9-jre-jammy}"
-export APP_REPO_CLONE_URL="${GITEA_INTERNAL_URL}/${GITEA_ORG}/${GITEA_APP_REPO}.git"
-export DEPLOY_REPO_CLONE_URL="${GITEA_INTERNAL_URL}/${GITEA_ORG}/${GITEA_DEPLOY_REPO}.git"
 if [ "${HARBOR_INSECURE:-0}" = "1" ]; then export HARBOR_INSECURE_BOOL="true"; else export HARBOR_INSECURE_BOOL="false"; fi
 
 # Single-quoted on purpose: envsubst needs the literal ${VAR} names (an allowlist),
 # not their expansions.
 # shellcheck disable=SC2016
-ALLOWLIST='${CI_NAMESPACE} ${HARBOR_URL} ${HARBOR_INFRA_PROJECT} ${APP_BRANCH} ${APP_REPO_CLONE_URL} ${DEPLOY_REPO_CLONE_URL} ${ARGOCD_TRACK_BRANCH} ${APP_IMAGE} ${BUILDER_IMAGE_REF} ${RUNTIME_IMAGE_REF} ${HARBOR_INSECURE_BOOL}'
+ALLOWLIST='${CI_NAMESPACE} ${HARBOR_URL} ${HARBOR_INFRA_PROJECT} ${APP_BRANCH} ${APP_REPO_CLONE_URL} ${DEPLOY_REPO_CLONE_URL} ${ARGOCD_TRACK_BRANCH} ${APP_IMAGE} ${APP_NAME} ${APP_TEST_TASK} ${APP_GIT_REPO} ${APP_BUILDER_IMAGE} ${APP_RUNTIME_IMAGE} ${HARBOR_INSECURE_BOOL}'
 
 require_cmd envsubst "install gettext (provides envsubst)"
 
@@ -113,14 +113,29 @@ render_and_apply() {
   # shellcheck disable=SC2016
   envsubst "$ALLOWLIST" < "$f" | run kubectl apply -f -
 }
+# SHARED, applied once: the RBAC, every Task (git-clone/kaniko-build/update-deploy + each
+# language's test task), and the ONE EventListener that label-selects the per-app Triggers.
 render_and_apply "${REPO_ROOT}/k8s/tekton/rbac.yaml"
 for t in "${REPO_ROOT}"/k8s/tekton/tasks/*.yaml; do render_and_apply "$t"; done
-render_and_apply "${REPO_ROOT}/k8s/tekton/pipeline.yaml"
-render_and_apply "${REPO_ROOT}/k8s/tekton/triggers.yaml"
+render_and_apply "${REPO_ROOT}/k8s/tekton/eventlistener.yaml"
 
-# ---- Attach the git-auth secret to the CI ServiceAccount ----
-run kubectl -n "$CI_NAMESPACE" patch serviceaccount webui-ci \
+# PER APP, from apps/registry.tsv: its Pipeline (<app>-ci) and its Trigger/Binding/Template.
+# ONE template each — only the name and the test task differ, so the walk is provably identical
+# for every app and adding one is a registry row, not a YAML edit.
+# shellcheck disable=SC2329  # invoked indirectly (for_each_app / wait_for)
+configure_app() {
+  local app="$1"
+  export APP_REPO_CLONE_URL="${GITEA_INTERNAL_URL}/${GITEA_ORG}/${APP_GIT_REPO}.git"
+  export DEPLOY_REPO_CLONE_URL="${GITEA_INTERNAL_URL}/${GITEA_ORG}/${APP_DEPLOY_REPO}.git"
+  log_info "configuring pipeline for app '${app}' (lang=${APP_LANG}, test=${APP_TEST_TASK})"
+  render_and_apply "${REPO_ROOT}/k8s/tekton/pipeline.yaml"
+  render_and_apply "${REPO_ROOT}/k8s/tekton/trigger-app.yaml"
+}
+for_each_app configure_app
+
+# ---- Attach the git-auth secret to the SHARED CI ServiceAccount ----
+run kubectl -n "$CI_NAMESPACE" patch serviceaccount apps-ci \
   -p '{"secrets":[{"name":"gitea-git-auth"}]}'
 
-log_info "Tekton pipeline configured in namespace '$CI_NAMESPACE'"
-log_info "EventListener service: el-webui.${CI_NAMESPACE}.svc:8080 (Gitea webhook target)"
+log_info "Tekton pipelines configured in namespace '$CI_NAMESPACE' for: $(app_names | tr '\n' ' ')"
+log_info "EventListener service: el-apps.${CI_NAMESPACE}.svc:8080 (the webhook target for EVERY app repo)"

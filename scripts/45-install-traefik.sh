@@ -24,7 +24,8 @@ require_cmd envsubst "install gettext (provides envsubst)"
 : "${TRAEFIK_NAMESPACE:?}"
 : "${GITEA_NAMESPACE:?}"; : "${GITEA_HOST:?}"
 : "${ARGOCD_NAMESPACE:?}"
-: "${ARGOCD_DEST_NAMESPACE:?}"; : "${WEBUI_HOST:?}"; : "${APP_NAME:?}"
+# shellcheck source=scripts/lib/apps.sh
+. "${SCRIPT_DIR}/lib/apps.sh"
 : "${TEKTON_NAMESPACE:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
@@ -37,7 +38,9 @@ K8S_DIR="${REPO_ROOT}/k8s/traefik"
 # shellcheck disable=SC2016
 CTRL_ALLOWLIST='${HARBOR_URL} ${HARBOR_INFRA_PROJECT} ${TRAEFIK_NAMESPACE}'
 # shellcheck disable=SC2016
-ING_ALLOWLIST='${GITEA_NAMESPACE} ${GITEA_HOST} ${ARGOCD_DEST_NAMESPACE} ${WEBUI_HOST} ${APP_NAME} ${TEKTON_NAMESPACE} ${TEKTON_DASHBOARD_HOST}'
+ING_ALLOWLIST='${GITEA_NAMESPACE} ${GITEA_HOST} ${TEKTON_NAMESPACE} ${TEKTON_DASHBOARD_HOST}'
+# shellcheck disable=SC2016
+APP_ING_ALLOWLIST='${APP_NAME} ${APP_NAMESPACE} ${APP_HOST}'
 
 # --- 1. Install the controller (namespace, RBAC, IngressClass, Deployment, LB) ---
 log_info "installing Traefik controller into namespace '${TRAEFIK_NAMESPACE}'"
@@ -52,13 +55,21 @@ run kubectl -n "$TRAEFIK_NAMESPACE" rollout status deploy/traefik \
 # gitea + argocd already exist; the app namespace is created by ArgoCD with
 # CreateNamespace, but the app Ingress may be applied before the first sync, so
 # pre-create it (ArgoCD adopts an existing namespace).
-for ns in "$GITEA_NAMESPACE" "$ARGOCD_NAMESPACE" "$ARGOCD_DEST_NAMESPACE"; do
+for ns in "$GITEA_NAMESPACE" "$ARGOCD_NAMESPACE" $(app_names | tr '\n' ' '); do
   run bash -c "kubectl create namespace \"$ns\" --dry-run=client -o yaml | kubectl apply -f -"
 done
 
-log_info "applying Ingress objects (gitea/app/tekton -> *.vks.local)"
+log_info "applying Ingress objects for the shared UIs (gitea/tekton -> *.vks.local)"
 # shellcheck disable=SC2016
 envsubst "$ING_ALLOWLIST" < "${K8S_DIR}/ingress.yaml" | run kubectl apply -f -
+
+# ONE Ingress per app, from the registry — adding an app routes it with no YAML edit.
+# shellcheck disable=SC2329  # invoked indirectly (for_each_app / wait_for)
+_traefik_apply_app_ingress() {
+  log_info "applying Ingress for app '${APP_NAME}' (${APP_HOST} -> ${APP_NAME}.${APP_NAMESPACE})"
+  envsubst "$APP_ING_ALLOWLIST" < "${K8S_DIR}/ingress-app.yaml" | run kubectl apply -f -
+}
+for_each_app _traefik_apply_app_ingress
 
 # --- 3. Discover the Traefik LoadBalancer IP -----------------------------------
 log_info "waiting for Traefik LoadBalancer IP (timeout ${READY_TIMEOUT_SECONDS}s, poll ${POLL_INTERVAL_SECONDS}s)"
@@ -81,8 +92,8 @@ log_info "published INGRESS_LB_IP=${LB_IP} to ${REPO_ROOT}/.env.kind"
 
 log_info "Traefik installed. Add ONE line to /etc/hosts on the jump box / your client:"
 log_info ""
-log_info "    ${LB_IP}  ${GITEA_HOST} ${WEBUI_HOST} ${TEKTON_DASHBOARD_HOST}"
+log_info "    ${LB_IP}  ${GITEA_HOST} ${TEKTON_DASHBOARD_HOST} $(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)"
 log_info ""
-log_info "then browse: http://${GITEA_HOST}  http://${WEBUI_HOST}  http://${TEKTON_DASHBOARD_HOST}"
+log_info "then browse: http://${GITEA_HOST}  http://${TEKTON_DASHBOARD_HOST}  $(app_names | while read -r a; do if [ -n "$a" ]; then printf 'http://%s  ' "$(app_host "$a")"; fi; done)"
 log_info "(ArgoCD is on its own LoadBalancer IP, not the ingress — see 'make creds')"
 log_info "(no more 'kubectl port-forward' for the UIs; Harbor keeps its own LB IP)"

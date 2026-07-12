@@ -14,7 +14,7 @@ spec:
       default: repo
     - name: image
       type: string
-      description: Destination image WITHOUT tag, e.g. harbor/apps/webui
+      description: Destination image WITHOUT tag, e.g. <harbor>/<project>/<app>
     - name: tag
       type: string
       description: Image tag (typically the app commit SHA)

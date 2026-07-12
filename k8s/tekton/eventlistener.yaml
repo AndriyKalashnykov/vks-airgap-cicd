@@ -1,0 +1,26 @@
+---
+# ONE EventListener for EVERY app (applied once, not per app).
+#
+# It does NOT list its triggers inline. It DISCOVERS them by label: each app renders a standalone
+# `Trigger` CR (k8s/tekton/trigger-app.yaml) carrying `vks-airgap-cicd/ci: app`, and this listener
+# picks it up. That is what keeps "add an app" down to ONE ROW in apps/registry.tsv: an inline
+# trigger list would have to be edited for every new app, and one EventListener PER app would mean
+# another pod, another webhook target and another clusterInterceptor CaBundle race to wait out.
+#
+# Verified against the PINNED version, not memory: Tekton Triggers v0.36 ships the standalone
+# `triggers.triggers.tekton.dev` CRD (bundle/manifests/tekton-triggers-v0.36.0.yaml) and the
+# EventListener supports `labelSelector` for Trigger discovery
+# (https://tekton.dev/docs/triggers/eventlisteners/ — "labelSelector - specifies the labels for
+# which your EventListener recognizes Triggers"). The EL's ServiceAccount already has
+# get/list/watch on `triggers` (see rbac.yaml) — without that it would silently see ZERO triggers
+# and every webhook would be a no-op: a green-looking run that never starts a PipelineRun.
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: apps
+  namespace: ${CI_NAMESPACE}
+spec:
+  serviceAccountName: tekton-triggers-sa
+  labelSelector:
+    matchLabels:
+      vks-airgap-cicd/ci: app

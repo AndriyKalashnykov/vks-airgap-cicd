@@ -24,13 +24,13 @@ Deployment_Node(vks, "VKS workload cluster", "VMware vSphere Kubernetes Service 
     Container(dash, "Tekton Dashboard", "read-only web UI")
   }
   Deployment_Node(ns_ci, "namespace: ci", "") {
-    Container(ci, "Pipeline + EventListener", "PipelineRuns, el-webui")
+    Container(ci, "Pipeline + EventListener", "PipelineRuns, el-javawebapp")
   }
   Deployment_Node(ns_argo, "namespace: argocd (VKS-provided)", "") {
     Container(argo, "ArgoCD", "Application controller")
   }
-  Deployment_Node(ns_app, "namespace: webui", "") {
-    Container(app, "webui", "Deployment (2 replicas) + Service")
+  Deployment_Node(ns_app, "namespace: javawebapp", "") {
+    Container(app, "javawebapp", "Deployment (2 replicas) + Service")
   }
   Deployment_Node(ns_ing, "namespace: istio-ingress | traefik", "") {
     Container(ing, "Ingress gateway", "LoadBalancer · INGRESS_CONTROLLER=istio (we install) | istio-existing (attach to the platform's mesh — the REAL-LAB case) | traefik")
@@ -42,7 +42,7 @@ Rel(cli, gitea, "install + seed", "kubectl")
 Rel(cli, tk, "install", "kubectl")
 Rel(ci, harbor, "build+push / pull", "kaniko / containerd (TLS + CA)")
 Rel(ci, gitea, "clone + write-back", "git")
-Rel(argo, gitea, "sync from webui-deploy", "git")
+Rel(argo, gitea, "sync from javawebapp-deploy", "git")
 Rel(argo, app, "deploy", "kubectl")
 Rel(app, harbor, "pull image", "containerd (TLS + CA)")
 Rel(op, ing, "browse Gitea / Tekton / app UIs", "*.vks.local / HTTP")
