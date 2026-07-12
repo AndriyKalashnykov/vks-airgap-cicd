@@ -215,6 +215,70 @@ separately (see the last bullet). Figures were measured on the live single-node 
 
 </details>
 
+### VKS authentication (VCF 9 + Supervisor) — real lab only
+
+> Needed by **both real-lab scenarios**, before their first step. The **KinD path skips this**
+> entirely (`make kind-up` writes a kubeconfig and sets `VKS_AUTH_METHOD=kubeconfig` for you).
+
+<details>
+<summary><strong>Auth methods</strong> — kubeconfig / vcf / vsphere via VKS_AUTH_METHOD (click to expand)</summary>
+
+<br>
+
+`scripts/30-vks-login.sh` (`make vks-login`) is the single pluggable step that produces a
+working `KUBECONFIG` and context; everything downstream is auth-agnostic. Select the method
+with `VKS_AUTH_METHOD`:
+
+| Method | Use it when | Inputs (`.env`) |
+|--------|-------------|-----------------|
+| `kubeconfig` (default) | You already have the lab's exported kubeconfig | `KUBECONFIG`, `VKS_CONTEXT` |
+| `vcf` | Real VCF 9 lab, via the VCF Consumption CLI | `SUPERVISOR_HOST`, `VKS_USERNAME` (+ `VKS_SSO_DOMAIN`), `VKS_NAMESPACE`, `VKS_CLUSTER_NAME`, `VKS_CONTEXT_NAME`, `VKS_INSECURE_SKIP_TLS_VERIFY` |
+| `vsphere` | Pre-9 Supervisor, via the kubectl-vsphere plugin (legacy) | `SUPERVISOR_HOST`, `VKS_NAMESPACE`, `VKS_CLUSTER_NAME`, `VKS_USERNAME`, `VKS_PASSWORD` |
+
+**`vcf` method — the real VCF Consumption CLI flow.** `.env` inputs:
+
+```bash
+VKS_AUTH_METHOD=vcf
+SUPERVISOR_HOST=<supervisor-IP-or-FQDN>   # no scheme; vCenter → Workload Management → Supervisors → Control Plane IP
+VKS_USERNAME=administrator@WLD.SSO        # 'user@SSO.DOMAIN' (or set VKS_SSO_DOMAIN and give the bare user)
+VKS_NAMESPACE=<vsphere-namespace>         # the <ns> in `vcf context use <name>:<ns>`
+VKS_CLUSTER_NAME=<vks-cluster-name>       # the workload cluster to fetch the kubeconfig for
+VKS_CONTEXT_NAME=sup66                    # the vcf context NAME you type at the create prompt
+VKS_INSECURE_SKIP_TLS_VERIFY=true         # skip verifying the Supervisor's self-signed cert
+```
+
+`make vks-login` then runs (interactively — the CLI **prompts** for the context name and the
+password, so no secret ever touches argv):
+
+```bash
+vcf context create --endpoint https://<SUPERVISOR_HOST> --username <user>@<SSO-DOMAIN> \
+    --insecure-skip-tls-verify --auth-type basic     # enter the context name (VKS_CONTEXT_NAME) + password when prompted
+vcf context use <VKS_CONTEXT_NAME>:<VKS_NAMESPACE>   # note the <ctx>:<ns> COLON form
+vcf cluster kubeconfig get <VKS_CLUSTER_NAME> --export-file <KUBECONFIG>   # write the workload-cluster kubeconfig to $KUBECONFIG
+```
+
+`vcf cluster kubeconfig get` is the **primary** VKS 9 way to obtain the **workload-cluster**
+kubeconfig (verify the exact 9.1 flags on your lab). The legacy `kubectl vsphere login --server
+<ip> --vsphere-username <u> --tanzu-kubernetes-cluster-name <c> --tanzu-kubernetes-cluster-namespace
+<ns> [--insecure-skip-tls-verify]` form (the `vsphere` method) is the **vSphere-with-Tanzu 7/8
+fallback** — present only where the `vcf` CLI is unavailable.
+
+If the workload cluster needs the kubectl-vsphere plugin, fetch it from the Supervisor:
+
+```bash
+wget --no-check-certificate https://<SUPERVISOR_HOST>/wcp/plugin/linux-amd64/vsphere-plugin.zip
+```
+
+> **Not yet lab-validated.** The `vcf` flow is written to the command **shape** verified from
+> primary sources (the ogelbric/LAB VCF-CLI transcript and Broadcom's "Install the Argo CD
+> Service" techdoc), but it has **not** been run end-to-end against a real VKS lab in this repo.
+> The login is interactive today: no non-interactive/stdin password mechanism is confirmed for
+> `vcf context create`, so `30-vks-login.sh` carries a `TODO(verify on a real VKS lab)` to
+> confirm one before automating further. A password is never placed on argv either way.
+> `kubeconfig` (bring the lab's exported kubeconfig) is the simplest working method.
+
+</details>
+
 ## Tech stack
 
 <details>
@@ -337,187 +401,22 @@ How the local stand-in works:
   `make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1`. Both modes are validated locally.
 - `make vks-login` uses the kind kubeconfig (`VKS_AUTH_METHOD=kubeconfig`), so no VCF auth
   is needed for the local run.
-- **`make install-ingress`** installs one ingress LoadBalancer (`INGRESS_CONTROLLER=istio`
-  by default, `traefik` optional; on a **real lab** use `istio-existing` — see
-  [Istio: we install it, or we attach to one we didn't](#istio-we-install-it-or-we-attach-to-one-we-didnt))
+- **Ingress — the KinD stand-in has NO mesh, so we install one.** `make install-ingress` installs
+  **Istio** (`INGRESS_CONTROLLER=istio`, the default — control plane + gateway, images from Harbor;
+  `traefik` is the lighter option) as one LoadBalancer
   that fronts the Gitea/app/Tekton-Dashboard UIs at `*.vks.local`, so
   you reach them by hostname instead of `kubectl port-forward`. **Harbor and ArgoCD each keep
   their own direct LB** — Harbor's IP is load-bearing for the containerd pull path, and ArgoCD
   gets its own self-signed-TLS LB (like the real VKS lab, which does not front ArgoCD behind
   the shared ingress). Both ingress images are mirrored into Harbor.
 
+> **This is the only path where we install Istio.** A real VKS lab already has it (Istio ships as a
+> **VKS Standard Package** in the guest cluster), so both real-lab scenarios **attach** to the
+> existing mesh instead — see their ingress step. Full reference:
+> [`docs/vks-services/istio.md`](docs/vks-services/istio.md).
+
 Individual targets: `make kind-up`, `make install-harbor`, `make install-argocd`,
 `make install-ingress` (or `make install-istio` / `make install-traefik`).
-
-</details>
-
-## Istio: we install it, or we attach to one we didn't
-
-<details>
-<summary><strong>Two scenarios</strong> — <code>INGRESS_CONTROLLER=istio</code> vs <code>istio-existing</code>, and why there is no "Istio credential" (click to expand)</summary>
-
-<a href="docs/diagrams/out/istio-ingress.png"><img src="docs/diagrams/out/istio-ingress.png" alt="Istio ingress — install vs attach" width="900"></a>
-
-**There are no Istio credentials to get.** Unlike Harbor and ArgoCD (which have real admin
-passwords — `make creds`, `make argocd-password`), Istio has **no login, no token, no admin API
-and no UI**. Access to the mesh is plain **kubectl RBAC**. The only credential-shaped object is a
-TLS `Secret` named by `Gateway.tls.credentialName`, and it must live in the *gateway's* namespace —
-so it is something you **request from the mesh admin**, never something you fetch.
-
-| | Scenario 1 — **we install Istio** | Scenario 2 — **the platform already did** |
-|---|---|---|
-| When | the KinD stand-in, or a cluster with no mesh | **a real VKS lab** (Istio ships as a Standard Package) |
-| `INGRESS_CONTROLLER` | `istio` (default) | `istio-existing` |
-| Script | `scripts/46-install-istio.sh` | `scripts/47-attach-istio.sh` |
-| What gets installed | `istio/base` + `istiod` + `istio/gateway` (images from Harbor) | **nothing** |
-| Route API | classic `Gateway` + `VirtualService` | `ISTIO_ROUTE_API=auto` → **Gateway API** when Istio is an Accepted `GatewayClass`, else classic |
-| What we create | a `Gateway` (selector pinned by us: `istio: ingressgateway`) + `VirtualService`s | **Gateway API:** a `Gateway` (`gatewayClassName: istio`) + `HTTPRoute`s — Istio auto-provisions the proxy *and* its LoadBalancer.<br>**Classic:** a `Gateway` bound by the **DISCOVERED** selector (or reuse the platform's), + `VirtualService`s |
-| Where the routes live | each route object sits in **its backend's namespace** and names the Gateway `<gw-ns>/<gw-name>` — the only layout a locked-down tenant can use | same |
-
-**Start with `make istio-preflight`** (read-only). It reports whether Istio is present, the exact
-selector a `Gateway` must use, what your kubeconfig is actually allowed to do, and — if you are a
-locked-down tenant — precisely what to ask the mesh admin for.
-
-### Why the selector must be discovered, never assumed
-
-The `istio/gateway` helm chart derives the gateway workload's `istio:` label **from the helm
-release name**. Installed as release `platform-gw`, the gateway is labelled `istio: platform-gw` —
-*not* `ingressgateway`. Our own install only gets `ingressgateway` because it forces
-`--set labels.istio=ingressgateway`. So a hardcoded selector **binds nothing** on someone else's
-mesh, and — the nasty part — **the API server accepts that `Gateway` without any error**.
-
-Two failure modes, with distinct symptoms:
-
-| Mistake | Symptom |
-|---|---|
-| `Gateway` selector matches no workload | Envoy never gets a listener → **connection refused** (no HTTP at all) |
-| `VirtualService` names the Gateway by **bare name** from another namespace | resolves namespace-locally → **404** |
-
-Discovery finds the gateway as *the Service exposing port `15021`* (the istio-proxy status-port)
-*with a `spec.selector.istio` key* — istiod does not expose 15021, which is what excludes the
-control plane from the match.
-
-### If you may not create a Gateway (classic path only)
-
-With the **Gateway API** path this does not arise: you create the `Gateway` in your *own* namespace
-and Istio provisions the data plane for you, so nothing is needed from the mesh admin. The
-following applies only when the cluster has no `istio` GatewayClass and you fall back to classic.
-
-Set `ISTIO_SHARED_GATEWAY=<ns>/<name>` — the platform's own `Gateway`. We then create **only**
-`VirtualService`s, in our own namespaces (proven to work, including against a `*.vks.local`
-wildcard Gateway). `make istio-preflight` asserts that shared Gateway actually **admits our three
-hostnames**, rather than letting the routes be accepted and silently never match.
-
-If you cannot even *read* the gateway namespace, ask the mesh admin for
-`ISTIO_GATEWAY_NAMESPACE` / `ISTIO_GATEWAY_SERVICE` / `ISTIO_GATEWAY_LABEL`, put them in `.env`,
-and discovery is skipped entirely.
-
-### Validation
-
-`make e2e-kind-istio-existing` is the standing regression test: a "platform team" installs Istio
-into KinD under **foreign naming**, then we attach with zero install — and it verifies **both route
-API legs** (Gateway API on Istio's own auto-provisioned LB, then classic on the platform's shared
-gateway). It also demonstrates the REDs (attaching to a mesh-free cluster must fail; the old
-hardcoded selector must produce a dead route) and runs `make psa-check`.
-
-`make e2e-kind` covers the default **install** path (Scenario 1) end-to-end.
-
-### On a real VKS lab, the mesh is theirs — so `istio-existing` is the mode you want
-
-Broadcom ships Istio as a **VKS Standard Package installed into the guest cluster**
-(`istio.kubernetes.vmware.com`, VMware-built versions like `1.25.3+vmware.1-vks.1`, installed with
-`vcf package install istio …` or the VCF 9 addon CLI). So on a real lab you do **not** install Istio
-from this repo — the platform already has, and `INGRESS_CONTROLLER=istio-existing` is the correct
-mode. Two things to know about that package:
-
-- its **ingress gateway is disabled by default** (`istio.gateways.ingress.enabled: false`), so there
-  may be **no shared gateway to attach to** unless the platform enabled one; and
-- Broadcom's own walkthrough exposes hostnames with the **Kubernetes Gateway API**
-  (`gatewayClassName: istio`). **We support both**: `ISTIO_ROUTE_API=auto` (default) prefers the
-  Gateway API whenever Istio is an Accepted `GatewayClass`, and falls back to the classic
-  `Gateway`/`VirtualService` API otherwise.
-
-The Gateway-API path needs **nothing from the mesh admin**: we create a `Gateway` in our own
-namespace and Istio **auto-provisions** the proxy *and* its LoadBalancer. It is even air-gap-safe for
-free — the provisioned proxy inherits istiod's image hub, so it pulls `proxyv2` straight from Harbor
-(verified). Both paths are validated on KinD against a platform-installed mesh.
-
-(Provenance: the Broadcom 9.1 doc URLs 301-redirect to the 9.0 tree, so the above is
-documented-for-9.0/VKS-3.5 and inferred for 9.1 — re-verify version strings on a real lab.)
-
-Full rationale, the verification matrix, and the Broadcom facts with provenance:
-[`docs/decisions/istio-on-vks.md`](docs/decisions/istio-on-vks.md).
-
-</details>
-
-### CLIs you do *not* need (and why)
-
-| CLI | Needed? | Why not |
-|---|---|---|
-| **`istioctl`** | **no** | Istio is driven entirely through `helm` + `kubectl`, in both modes. To inspect a mesh you did not install, use `make istio-preflight` — the thing that matters is the **mesh**, not a local CLI. |
-| **`argocd`** | **no** (optional) | The admin password's bcrypt hash is generated **inside the pod** (`kubectl exec … argocd account bcrypt`), and `make argocd-register-guest` registers the guest cluster **declaratively with `kubectl`** — it creates the `argocd-manager` ServiceAccount + a **non-expiring** token Secret on the guest, then writes ArgoCD's `Cluster` Secret (`argocd.argoproj.io/secret-type: cluster`) with the API URL + CA + token. That is exactly what `argocd cluster add` does internally, done by hand **on purpose**: `argocd cluster add` mints an **expiring** token when the source kubeconfig uses x509 client-cert auth ([argo-cd#13175](https://github.com/argoproj/argo-cd/issues/13175)) — which is the shape of a `vcf cluster kubeconfig get` kubeconfig — so the registered cluster would later flip to `Unknown`. The local `argocd` CLI is used only to *report* a version in `make argocd-preflight`. |
-
-`make check-tools` lists every CLI the flow uses, its version, and whether it is **required** or
-**optional** — run it before anything else on a fresh jump box.
-
-## VKS authentication (VCF 9 + Supervisor)
-
-<details>
-<summary><strong>Auth methods</strong> — kubeconfig / vcf / vsphere via VKS_AUTH_METHOD (click to expand)</summary>
-
-<br>
-
-`scripts/30-vks-login.sh` (`make vks-login`) is the single pluggable step that produces a
-working `KUBECONFIG` and context; everything downstream is auth-agnostic. Select the method
-with `VKS_AUTH_METHOD`:
-
-| Method | Use it when | Inputs (`.env`) |
-|--------|-------------|-----------------|
-| `kubeconfig` (default) | You already have the lab's exported kubeconfig | `KUBECONFIG`, `VKS_CONTEXT` |
-| `vcf` | Real VCF 9 lab, via the VCF Consumption CLI | `SUPERVISOR_HOST`, `VKS_USERNAME` (+ `VKS_SSO_DOMAIN`), `VKS_NAMESPACE`, `VKS_CLUSTER_NAME`, `VKS_CONTEXT_NAME`, `VKS_INSECURE_SKIP_TLS_VERIFY` |
-| `vsphere` | Pre-9 Supervisor, via the kubectl-vsphere plugin (legacy) | `SUPERVISOR_HOST`, `VKS_NAMESPACE`, `VKS_CLUSTER_NAME`, `VKS_USERNAME`, `VKS_PASSWORD` |
-
-**`vcf` method — the real VCF Consumption CLI flow.** `.env` inputs:
-
-```bash
-VKS_AUTH_METHOD=vcf
-SUPERVISOR_HOST=<supervisor-IP-or-FQDN>   # no scheme; vCenter → Workload Management → Supervisors → Control Plane IP
-VKS_USERNAME=administrator@WLD.SSO        # 'user@SSO.DOMAIN' (or set VKS_SSO_DOMAIN and give the bare user)
-VKS_NAMESPACE=<vsphere-namespace>         # the <ns> in `vcf context use <name>:<ns>`
-VKS_CLUSTER_NAME=<vks-cluster-name>       # the workload cluster to fetch the kubeconfig for
-VKS_CONTEXT_NAME=sup66                    # the vcf context NAME you type at the create prompt
-VKS_INSECURE_SKIP_TLS_VERIFY=true         # skip verifying the Supervisor's self-signed cert
-```
-
-`make vks-login` then runs (interactively — the CLI **prompts** for the context name and the
-password, so no secret ever touches argv):
-
-```bash
-vcf context create --endpoint https://<SUPERVISOR_HOST> --username <user>@<SSO-DOMAIN> \
-    --insecure-skip-tls-verify --auth-type basic     # enter the context name (VKS_CONTEXT_NAME) + password when prompted
-vcf context use <VKS_CONTEXT_NAME>:<VKS_NAMESPACE>   # note the <ctx>:<ns> COLON form
-vcf cluster kubeconfig get <VKS_CLUSTER_NAME> --export-file <KUBECONFIG>   # write the workload-cluster kubeconfig to $KUBECONFIG
-```
-
-`vcf cluster kubeconfig get` is the **primary** VKS 9 way to obtain the **workload-cluster**
-kubeconfig (verify the exact 9.1 flags on your lab). The legacy `kubectl vsphere login --server
-<ip> --vsphere-username <u> --tanzu-kubernetes-cluster-name <c> --tanzu-kubernetes-cluster-namespace
-<ns> [--insecure-skip-tls-verify]` form (the `vsphere` method) is the **vSphere-with-Tanzu 7/8
-fallback** — present only where the `vcf` CLI is unavailable.
-
-If the workload cluster needs the kubectl-vsphere plugin, fetch it from the Supervisor:
-
-```bash
-wget --no-check-certificate https://<SUPERVISOR_HOST>/wcp/plugin/linux-amd64/vsphere-plugin.zip
-```
-
-> **Not yet lab-validated.** The `vcf` flow is written to the command **shape** verified from
-> primary sources (the ogelbric/LAB VCF-CLI transcript and Broadcom's "Install the Argo CD
-> Service" techdoc), but it has **not** been run end-to-end against a real VKS lab in this repo.
-> The login is interactive today: no non-interactive/stdin password mechanism is confirmed for
-> `vcf context create`, so `30-vks-login.sh` carries a `TODO(verify on a real VKS lab)` to
-> confirm one before automating further. A password is never placed on argv either way.
-> `kubeconfig` (bring the lab's exported kubeconfig) is the simplest working method.
 
 </details>
 
@@ -631,7 +530,7 @@ With Harbor installed, record its access details before moving on to ArgoCD.
    ```
 
    On vSphere 8, use `kubectl vsphere login --server <IP>` instead. `make vks-login` with
-   `VKS_AUTH_METHOD=vcf` runs this flow from `.env` (see the [VKS authentication](#vks-authentication-vcf-9--supervisor) section).
+   `VKS_AUTH_METHOD=vcf` runs this flow from `.env` (see the [VKS authentication](#vks-authentication-vcf-9--supervisor--real-lab-only) section).
 4. **Pick a supported version** with `kubectl explain argocd.spec.version`, then apply the CR:
 
    ```yaml
@@ -726,7 +625,7 @@ For VKS auth, `kubeconfig` (the kubeconfig `vcf cluster kubeconfig get` wrote in
 simplest working method. To have `make vks-login` run the VCF Consumption CLI login itself, set
 `VKS_AUTH_METHOD=vcf` and the `vcf` inputs (`SUPERVISOR_HOST` / `VKS_USERNAME` /
 `VKS_NAMESPACE` / `VKS_CLUSTER_NAME` / `VKS_CONTEXT_NAME`) — see the
-[VKS authentication](#vks-authentication-vcf-9--supervisor) section for the exact flow (written
+[VKS authentication](#vks-authentication-vcf-9--supervisor--real-lab-only) section for the exact flow (written
 to the verified shape but not yet lab-validated). For the legacy vSphere plugin, set
 `VKS_AUTH_METHOD=vsphere` and `SUPERVISOR_HOST` / `VKS_NAMESPACE` / `VKS_CLUSTER_NAME` /
 `VKS_USERNAME` / `VKS_PASSWORD`.
@@ -916,10 +815,10 @@ LB IP + admin credentials you set there. For **Gitea** (which you installed) and
 (`kubectl -n gitea port-forward svc/gitea-http 3000:3000`,
 `kubectl -n webui port-forward svc/webui 18080:80`).
 
-> **On a real VKS lab, do NOT run the bare `make install-ingress`** — it defaults to
-> `INGRESS_CONTROLLER=istio`, which **helm-installs a second istiod over the platform's mesh**.
-> Istio ships on VKS as a **Standard Package** (`istio.kubernetes.vmware.com`), so the mesh is
-> already there and you only need to **attach** to it:
+> **Ingress — the mesh ALREADY EXISTS here; attach to it, do not install one.** Istio ships on VKS
+> as a **Standard Package** (`istio.kubernetes.vmware.com`) in the guest cluster. The bare
+> `make install-ingress` defaults to `INGRESS_CONTROLLER=istio`, which would **helm-install a second
+> istiod over the platform's mesh**. Instead:
 >
 > ```bash
 > make istio-preflight                                     # read-only: is Istio here? what does it require of me?
@@ -1060,7 +959,7 @@ For VKS auth, `kubeconfig` (the kubeconfig `vcf cluster kubeconfig get` wrote) i
 working method. To have `make vks-login` run the VCF Consumption CLI login itself, set
 `VKS_AUTH_METHOD=vcf` and the `vcf` inputs (`SUPERVISOR_HOST` / `VKS_USERNAME` /
 `VKS_NAMESPACE` / `VKS_CLUSTER_NAME` / `VKS_CONTEXT_NAME`) — see the
-[VKS authentication](#vks-authentication-vcf-9--supervisor) section for the exact flow (written
+[VKS authentication](#vks-authentication-vcf-9--supervisor--real-lab-only) section for the exact flow (written
 to the verified shape but not yet lab-validated). For the legacy vSphere plugin, set
 `VKS_AUTH_METHOD=vsphere` and `SUPERVISOR_HOST` / `VKS_NAMESPACE` / `VKS_CLUSTER_NAME` /
 `VKS_USERNAME` / `VKS_PASSWORD`.
@@ -1243,10 +1142,10 @@ deployed **app**, either front them with the ingress at `*.vks.local`, or `kubec
 (`kubectl -n gitea port-forward svc/gitea-http 3000:3000`,
 `kubectl -n webui port-forward svc/webui 18080:80`).
 
-> **On a real VKS lab, do NOT run the bare `make install-ingress`** — it defaults to
-> `INGRESS_CONTROLLER=istio`, which **helm-installs a second istiod over the platform's mesh**.
-> Istio ships on VKS as a **Standard Package** (`istio.kubernetes.vmware.com`), so the mesh is
-> already there and you only need to **attach** to it:
+> **Ingress — the mesh ALREADY EXISTS here; attach to it, do not install one.** Istio ships on VKS
+> as a **Standard Package** (`istio.kubernetes.vmware.com`) in the guest cluster. The bare
+> `make install-ingress` defaults to `INGRESS_CONTROLLER=istio`, which would **helm-install a second
+> istiod over the platform's mesh**. Instead:
 >
 > ```bash
 > make istio-preflight                                     # read-only: is Istio here? what does it require of me?
