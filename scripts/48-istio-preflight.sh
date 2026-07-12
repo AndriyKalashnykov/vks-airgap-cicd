@@ -41,6 +41,33 @@ if ! kubectl get crd virtualservices.networking.istio.io >/dev/null 2>&1 \
   exit 0
 fi
 
+# --- 1b. Which route API will we use? -----------------------------------------
+# Gateway API is preferred when Istio is an accepted GatewayClass — it is what Broadcom's VKS
+# walkthrough uses, and it needs NOTHING from the mesh admin (Istio provisions the data plane
+# and the LoadBalancer for the Gateway we create in our own namespace). Report that plainly:
+# it is usually the difference between "I must file a ticket" and "I can just deploy".
+istio_detect_route_api
+
+if [ "$ISTIO_ROUTE_API" = "gateway-api" ]; then
+  log_info "MODE: Kubernetes GATEWAY API (GatewayClass '${ISTIO_GATEWAY_CLASS:-istio}' is Accepted)."
+  log_info "  -> INGRESS_CONTROLLER=istio-existing installs nothing and needs NOTHING from the mesh admin:"
+  log_info "     we create a Gateway in '${ISTIO_GWAPI_NAMESPACE:-vks-ingress}' and HTTPRoutes in our own"
+  log_info "     namespaces; Istio auto-provisions the proxy + its LoadBalancer (image inherited from"
+  log_info "     istiod's hub, so it pulls from Harbor on an air-gapped cluster)."
+  log_info "  RBAC you need (own namespaces only):"
+  for ns in "${ISTIO_GWAPI_NAMESPACE:-vks-ingress}" "$GITEA_NAMESPACE" "$ARGOCD_DEST_NAMESPACE" "$TEKTON_NAMESPACE"; do
+    printf '    %-46s gateways=%s httproutes=%s\n' "$ns" \
+      "$(kubectl auth can-i create gateways.gateway.networking.k8s.io -n "$ns" 2>/dev/null || echo no)" \
+      "$(kubectl auth can-i create httproutes.gateway.networking.k8s.io -n "$ns" 2>/dev/null || echo no)" >&2
+  done
+  echo >&2
+  log_info "PREFLIGHT OK — 'make install-ingress INGRESS_CONTROLLER=istio-existing' will use the Gateway API."
+  log_info "(Set ISTIO_ROUTE_API=classic to force the legacy Gateway/VirtualService path instead.)"
+  echo "==========================================================" >&2
+  exit 0
+fi
+
+# --- classic path: we must FIND the platform's gateway workload ----------------
 if ! istio_discover; then
   log_error "Istio is present but discovery failed (most likely: no RBAC to read it)."
   log_error "  -> ASK THE MESH ADMIN for these three values and set them in .env:"

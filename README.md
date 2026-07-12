@@ -410,8 +410,14 @@ mode. Two things to know about that package:
 - its **ingress gateway is disabled by default** (`istio.gateways.ingress.enabled: false`), so there
   may be **no shared gateway to attach to** unless the platform enabled one; and
 - Broadcom's own walkthrough exposes hostnames with the **Kubernetes Gateway API**
-  (`gatewayClassName: istio`), not the classic `Gateway`/`VirtualService` API this repo currently
-  emits. **Gateway-API support is the next change** — tracked in the decision doc.
+  (`gatewayClassName: istio`). **We support both**: `ISTIO_ROUTE_API=auto` (default) prefers the
+  Gateway API whenever Istio is an Accepted `GatewayClass`, and falls back to the classic
+  `Gateway`/`VirtualService` API otherwise.
+
+The Gateway-API path needs **nothing from the mesh admin**: we create a `Gateway` in our own
+namespace and Istio **auto-provisions** the proxy *and* its LoadBalancer. It is even air-gap-safe for
+free — the provisioned proxy inherits istiod's image hub, so it pulls `proxyv2` straight from Harbor
+(verified). Both paths are validated on KinD against a platform-installed mesh.
 
 (Provenance: the Broadcom 9.1 doc URLs 301-redirect to the 9.0 tree, so the above is
 documented-for-9.0/VKS-3.5 and inferred for 9.1 — re-verify version strings on a real lab.)

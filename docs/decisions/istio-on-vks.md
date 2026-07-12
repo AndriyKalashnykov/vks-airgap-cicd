@@ -178,14 +178,44 @@ re-verify against a real 9.1 lab before treating any version string as exact.
    so on a real lab the mesh is emphatically *not* ours, and `INGRESS_CONTROLLER=istio-existing` is
    the correct mode. Everything above about discovery, RBAC, and "there are no credentials" still
    holds: the package installs upstream-derived Istio, so its mechanics are the mechanics we proved.
-2. **GAP: we only support the classic API.** `47-attach-istio.sh` currently *refuses to run* unless
-   `virtualservices.networking.istio.io` exists — but Broadcom's own walkthrough exposes hostnames
-   with the **Kubernetes Gateway API**, and the package ships the ingress gateway **off** by default,
-   so a real VKS cluster may have **no shared gateway to attach to at all**. The Gateway-API path is
-   in fact *easier* for a tenant (create a `Gateway` with `gatewayClassName: istio` in your own
-   namespace; Istio provisions the data plane and a LoadBalancer for you — no gateway-namespace RBAC,
-   no selector label to discover). Supporting it is the next change; the classic path stays for a
-   platform that enabled the shared `istio-ingress` gateway.
+2. **We now support BOTH route APIs, and prefer the Gateway API** (this was the gap the research
+   exposed; it is closed). See the next section.
+
+## Route API: Gateway API (preferred) or classic — auto-detected
+
+`ISTIO_ROUTE_API` = `auto` (default) | `gateway-api` | `classic`. Auto prefers the **Kubernetes
+Gateway API** whenever Istio is an **Accepted GatewayClass**, else falls back to classic.
+
+| | **gateway-api** (preferred) | **classic** |
+|---|---|---|
+| What we create | a `Gateway` (`gatewayClassName: istio`) in `ISTIO_GWAPI_NAMESPACE` + one `HTTPRoute` per UI in its backend's namespace | a `Gateway` bound by the discovered `istio:` selector + `VirtualService`s |
+| Needs a pre-existing gateway workload? | **No** — Istio **auto-provisions** the proxy *and* its LoadBalancer | **Yes** — and its selector label must be discovered |
+| Needs anything from the mesh admin? | **No** — only rights in our own namespaces | usually yes (rights in the gateway ns, or a shared Gateway to reference) |
+| Air-gap | **free** — the auto-provisioned proxy inherits istiod's image hub, so it pulls `<harbor>/…/istio/proxyv2` with no extra config (verified) | the platform's gateway already pulls from wherever it was configured |
+
+Why this matters on a real VKS cluster: the Standard Package ships its shared ingress gateway
+**disabled by default**, so the classic path may have *nothing to bind to* — while the Gateway-API
+path works regardless, and is what Broadcom's own walkthrough uses.
+
+**Verified on KinD against a platform-installed mesh** (both legs, each exclusive — switching APIs
+deletes the routes we created with the other one, because leftovers silently serve the same
+hostnames and would fake a successful switch):
+
+| Leg | Address | Result |
+|---|---|---|
+| gateway-api | **172.18.0.6** — the LB Istio auto-provisioned for our Gateway (`Programmed=True`) | all three UIs HTTP 200 + their own body markers |
+| classic | **172.18.0.5** — the platform's shared gateway | all three UIs HTTP 200 + their own body markers |
+
+### A false green this produced, and the fix
+
+`INGRESS_LB_IP` is **our own published state** — every install/attach writes the address it resolved
+into `.env.kind`, `load_env` sources it back, and `44-install-ingress.sh` *exports* it before
+`exec`ing the attach script. So it is always set after any previous run, and is indistinguishable
+from a deliberate operator override. Consuming it as an "override" made the Gateway-API attach report
+the **previous classic gateway's IP**, and the route check then passed *through the classic routes
+still left in the cluster* — a green that proved nothing. The attach path now always **resolves** the
+address of the gateway it is actually attaching to; a genuine override lives in its own variable
+(`INGRESS_LB_IP_OVERRIDE`) that nothing auto-publishes.
 
 Still open for a real 9.1 lab: Pod Security Admission vs. istiod/gateway pods; what supplies the
 LoadBalancer address (NSX ALB / Avi) and any IP-pool prerequisite; exact 9.1 package version strings.

@@ -30,12 +30,15 @@ Deployment_Node(s2, "SCENARIO 2 — the platform ALREADY installed Istio   (INGR
   Deployment_Node(s2cp, "namespace: <theirs>", "installed and owned by the platform team") {
     Container(s2istiod, "istiod", "we only READ it\n(version = the running image tag)")
   }
-  Deployment_Node(s2gw, "namespace: <theirs>", "their helm release — name unknown to us") {
-    Container(s2envoy, "ingress gateway (Envoy)", "DISCOVERED: the Service exposing port 15021\nwith a spec.selector.istio key\n(istiod has no 15021 — that is what excludes it)")
+  Deployment_Node(s2gw, "namespace: <theirs>  (classic path only)", "their helm release — name unknown to us; MAY NOT EXIST:\nthe VKS Istio package ships the shared gateway OFF by default") {
+    Container(s2envoy, "their ingress gateway (Envoy)", "DISCOVERED: the Service exposing port 15021\nwith a spec.selector.istio key\n(istiod has no 15021 — that is what excludes it)")
   }
-  Deployment_Node(s2routes, "the ONLY things we create", "same lib, same manifests") {
-    Container(s2g, "Gateway (if allowed)", "selector: istio=<DISCOVERED label>\nthe chart derives it from the HELM RELEASE NAME,\nso it is NOT 'ingressgateway'\n— else reuse theirs: ISTIO_SHARED_GATEWAY=<ns>/<name>")
-    Container(s2vs, "VirtualServices", "in the BACKEND's namespace\n(the only place a locked-down tenant may write)")
+  Deployment_Node(s2auto, "namespace: OURS  (gateway-api path)", "Istio provisions this FOR us — no mesh-admin rights needed") {
+    Container(s2autogw, "<gateway>-istio (Envoy) + its LoadBalancer", "auto-created from our Gateway resource.\nPulls proxyv2 from HARBOR (inherits istiod's hub)\n-> air-gap safe with no extra config")
+  }
+  Deployment_Node(s2routes, "the ONLY things we create — ISTIO_ROUTE_API picks the API", "auto: prefer Gateway API, else classic") {
+    Container(s2g, "PREFERRED: Gateway API\n(gatewayClassName: istio)", "a Gateway in OUR namespace + HTTPRoutes.\nIstio AUTO-PROVISIONS the proxy AND its LoadBalancer\n-> nothing needed from the mesh admin.\nAir-gap free: the proxy inherits istiod's hub (pulls from Harbor).\nWorks even though the VKS package ships the shared gateway OFF.")
+    Container(s2vs, "FALLBACK: classic\n(Gateway + VirtualService)", "binds an EXISTING gateway workload:\nselector istio=<DISCOVERED label> (chart derives it\nfrom the HELM RELEASE NAME -> NOT 'ingressgateway'),\nor reuse theirs: ISTIO_SHARED_GATEWAY=<ns>/<name>")
   }
 }
 
@@ -46,12 +49,14 @@ Deployment_Node(be, "Backend Services (both scenarios)", "NO sidecars — the ga
 }
 
 Rel(op, s1envoy, "http://*.vks.local", "one LoadBalancer IP")
-Rel(op, s2envoy, "http://*.vks.local", "their LoadBalancer IP")
+Rel(op, s2autogw, "http://*.vks.local", "the LB Istio auto-provisioned for US")
+Rel(op, s2envoy, "http://*.vks.local", "(classic path) their LoadBalancer IP")
 Rel(s1g, s1envoy, "binds (selector matches)")
-Rel(s2g, s2envoy, "binds ONLY with the discovered label")
+Rel(s2g, s2autogw, "Istio AUTO-PROVISIONS this from our Gateway")
+Rel(s2vs, s2envoy, "binds ONLY with the DISCOVERED selector label")
 Rel(s1vs, s1g, "gateways: <gw-ns>/<name>")
-Rel(s2vs, s2g, "gateways: <gw-ns>/<name>\n(a BARE name resolves namespace-locally -> 404)")
 Rel(s1envoy, bapp, "routes to ClusterIP")
+Rel(s2autogw, bapp, "routes to ClusterIP")
 Rel(s2envoy, bapp, "routes to ClusterIP")
 
 SHOW_LEGEND()

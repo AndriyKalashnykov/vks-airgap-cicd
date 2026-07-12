@@ -95,18 +95,109 @@ istio_discover() {
     ISTIO_GATEWAY_LABEL="${ISTIO_GATEWAY_LABEL:-$(printf '%s' "$picked" | jq -r '.label')}"
   fi
 
-  # --- which route API does this cluster actually serve? --------------------
-  if kubectl get crd virtualservices.networking.istio.io >/dev/null 2>&1; then
-    ISTIO_GATEWAY_API="classic"
-  elif kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
-    ISTIO_GATEWAY_API="gateway-api"
-  else
-    ISTIO_GATEWAY_API="none"
+  export ISTIOD_NAMESPACE ISTIO_DISCOVERED_VERSION \
+         ISTIO_GATEWAY_NAMESPACE ISTIO_GATEWAY_SERVICE ISTIO_GATEWAY_LABEL
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# istio_detect_route_api — decide HOW to attach routes, and prefer the Gateway API.
+#
+# Broadcom's own VKS walkthrough routes with the Kubernetes Gateway API
+# (`gatewayClassName: istio`), and the VKS Istio Standard Package ships its shared
+# ingress gateway DISABLED by default — so on a real lab there is frequently NO
+# shared gateway to attach to, and the classic path has nothing to bind. The Gateway
+# API path also needs strictly LESS from the platform team:
+#
+#   classic     : needs a shared gateway to exist + its selector label + (usually) rights
+#                 in the gateway namespace, or a platform-owned Gateway to reference.
+#   gateway-api : needs NOTHING outside our own namespaces. We create a Gateway with
+#                 gatewayClassName=istio and Istio AUTO-PROVISIONS the data plane and a
+#                 LoadBalancer for us — and the provisioned proxy inherits istiod's image
+#                 hub, so on an air-gapped cluster it pulls from Harbor with no extra config
+#                 (verified: the auto-created pod ran <harbor>/cicd/istio/proxyv2).
+#
+# Sets ISTIO_ROUTE_API to: gateway-api | classic | none
+# Honours an explicit ISTIO_ROUTE_API=gateway-api|classic to override the preference.
+# ---------------------------------------------------------------------------
+istio_detect_route_api() {
+  local have_classic=0 have_gwapi=0 gwclass_ok=""
+
+  kubectl get crd virtualservices.networking.istio.io >/dev/null 2>&1 && have_classic=1
+  if kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
+    # The CRDs alone are not enough — Istio must actually be the controller for a
+    # GatewayClass, otherwise our Gateway would be accepted and never programmed.
+    gwclass_ok="$(kubectl get gatewayclass "${ISTIO_GATEWAY_CLASS:-istio}" \
+      -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || true)"
+    [ "$gwclass_ok" = "True" ] && have_gwapi=1
   fi
 
-  export ISTIOD_NAMESPACE ISTIO_DISCOVERED_VERSION \
-         ISTIO_GATEWAY_NAMESPACE ISTIO_GATEWAY_SERVICE ISTIO_GATEWAY_LABEL ISTIO_GATEWAY_API
-  return 0
+  case "${ISTIO_ROUTE_API:-auto}" in
+    gateway-api)
+      [ "$have_gwapi" -eq 1 ] || die "ISTIO_ROUTE_API=gateway-api, but GatewayClass '${ISTIO_GATEWAY_CLASS:-istio}' is not Accepted on this cluster (Gateway API CRDs present: $([ "$have_gwapi" -eq 1 ] || kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1 && echo yes || echo no))"
+      ISTIO_ROUTE_API=gateway-api ;;
+    classic)
+      [ "$have_classic" -eq 1 ] || die "ISTIO_ROUTE_API=classic, but the VirtualService CRD is absent"
+      ISTIO_ROUTE_API=classic ;;
+    auto|"")
+      if   [ "$have_gwapi" -eq 1 ];   then ISTIO_ROUTE_API=gateway-api
+      elif [ "$have_classic" -eq 1 ]; then ISTIO_ROUTE_API=classic
+      else                                 ISTIO_ROUTE_API=none
+      fi ;;
+    *) die "ISTIO_ROUTE_API must be auto|gateway-api|classic (got '${ISTIO_ROUTE_API}')" ;;
+  esac
+  export ISTIO_ROUTE_API
+  log_info "route API: ${ISTIO_ROUTE_API} (GatewayClass '${ISTIO_GATEWAY_CLASS:-istio}' accepted=${gwclass_ok:-no}, VirtualService CRD=$([ "$have_classic" -eq 1 ] && echo yes || echo no))"
+}
+
+# ---------------------------------------------------------------------------
+# istio_apply_routes_gwapi — the Gateway-API attach: ONE Gateway (which Istio turns
+# into a data plane + LoadBalancer for us) + one HTTPRoute per UI, each in ITS BACKEND'S
+# namespace. Cross-namespace HTTPRoute->Gateway attachment is allowed by the listener's
+# allowedRoutes (no ReferenceGrant needed: that is only for cross-namespace backendRefs,
+# and every backendRef here is same-namespace as its route).
+# ---------------------------------------------------------------------------
+istio_apply_routes_gwapi() {
+  require_cmd envsubst "install gettext (provides envsubst)"
+  local k8s_dir="${REPO_ROOT}/k8s/istio" ns
+
+  ISTIO_GATEWAY_NAME="${ISTIO_GATEWAY_NAME:-vks-uis}"
+  ISTIO_GWAPI_NAMESPACE="${ISTIO_GWAPI_NAMESPACE:-vks-ingress}"
+  ISTIO_GATEWAY_CLASS="${ISTIO_GATEWAY_CLASS:-istio}"
+  export ISTIO_GATEWAY_NAME ISTIO_GWAPI_NAMESPACE ISTIO_GATEWAY_CLASS
+
+  for ns in "$ISTIO_GWAPI_NAMESPACE" "$GITEA_NAMESPACE" "$ARGOCD_DEST_NAMESPACE" "$TEKTON_NAMESPACE"; do
+    run bash -c "kubectl create namespace \"$ns\" --dry-run=client -o yaml | kubectl apply -f -"
+  done
+
+  log_info "applying Gateway(API) ${ISTIO_GWAPI_NAMESPACE}/${ISTIO_GATEWAY_NAME} (gatewayClassName=${ISTIO_GATEWAY_CLASS}) + HTTPRoutes"
+  # shellcheck disable=SC2016
+  envsubst '${ISTIO_GWAPI_NAMESPACE} ${ISTIO_GATEWAY_NAME} ${ISTIO_GATEWAY_CLASS} ${GITEA_HOST} ${GITEA_NAMESPACE} ${WEBUI_HOST} ${APP_NAME} ${ARGOCD_DEST_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${TEKTON_NAMESPACE}' \
+    < "${k8s_dir}/gateway-api.yaml" | run kubectl apply -f -
+}
+
+# ---------------------------------------------------------------------------
+# istio_wait_gwapi_address — wait for Istio to PROGRAM the Gateway and publish its address.
+# `Programmed=True` is the real readiness signal; the address is what /etc/hosts must point at.
+# ---------------------------------------------------------------------------
+istio_wait_gwapi_address() {
+  local timeout="${READY_TIMEOUT_SECONDS:-300}" interval="${POLL_INTERVAL_SECONDS:-5}" elapsed=0 prog addr
+  log_info "waiting for Istio to program Gateway ${ISTIO_GWAPI_NAMESPACE}/${ISTIO_GATEWAY_NAME} (timeout ${timeout}s)"
+  while :; do
+    prog="$(kubectl -n "$ISTIO_GWAPI_NAMESPACE" get gateway "$ISTIO_GATEWAY_NAME" \
+      -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null || true)"
+    addr="$(kubectl -n "$ISTIO_GWAPI_NAMESPACE" get gateway "$ISTIO_GATEWAY_NAME" \
+      -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true)"
+    [ "$prog" = "True" ] && [ -n "$addr" ] && { printf '%s' "$addr"; return 0; }
+    elapsed=$(( elapsed + interval ))
+    if [ "$elapsed" -ge "$timeout" ]; then
+      log_error "Gateway not programmed within ${timeout}s (Programmed=${prog:-<none>}, address=${addr:-<none>})"
+      log_error "  kubectl -n ${ISTIO_GWAPI_NAMESPACE} describe gateway ${ISTIO_GATEWAY_NAME}"
+      log_error "  (Istio provisions the data plane itself: look for deploy/${ISTIO_GATEWAY_NAME}-istio in that namespace)"
+      return 1
+    fi
+    sleep "$interval"
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -249,6 +340,41 @@ istio_apply_routes() {
 }
 
 # ---------------------------------------------------------------------------
+# istio_drop_other_api_routes — when attaching with one route API, remove the routes WE
+# created with the OTHER one.
+#
+# Without this, switching APIs leaves the previous route objects live in the cluster, and they
+# keep serving the same hostnames. That is not just untidy — it silently FAKES a successful
+# switch: the new path can be broken while the verification passes through the old routes.
+# (Observed exactly that: a Gateway-API attach "succeeded" while traffic still flowed through
+# the leftover classic Gateway/VirtualServices.)
+#
+# Only objects WE own are removed — by the names this repo creates. The platform's own Gateway
+# (ISTIO_SHARED_GATEWAY) and anything else in the mesh is never touched.
+# ---------------------------------------------------------------------------
+istio_drop_other_api_routes() { # <keep: gateway-api|classic>
+  local keep="$1" ns
+  case "$keep" in
+    gateway-api)
+      log_info "removing any CLASSIC routes we previously created (so they cannot serve stale traffic)"
+      for ns in "$GITEA_NAMESPACE" "$ARGOCD_DEST_NAMESPACE" "$TEKTON_NAMESPACE"; do
+        kubectl -n "$ns" delete virtualservice gitea webui tekton-dashboard --ignore-not-found >/dev/null 2>&1 || true
+      done
+      [ -n "${ISTIO_GATEWAY_NAMESPACE:-}" ] && \
+        kubectl -n "$ISTIO_GATEWAY_NAMESPACE" delete gateway.networking.istio.io "${ISTIO_GATEWAY_NAME:-vks-uis}" --ignore-not-found >/dev/null 2>&1 || true
+      ;;
+    classic)
+      log_info "removing any GATEWAY-API routes we previously created (so they cannot serve stale traffic)"
+      for ns in "$GITEA_NAMESPACE" "$ARGOCD_DEST_NAMESPACE" "$TEKTON_NAMESPACE"; do
+        kubectl -n "$ns" delete httproute gitea webui tekton-dashboard --ignore-not-found >/dev/null 2>&1 || true
+      done
+      kubectl -n "${ISTIO_GWAPI_NAMESPACE:-vks-ingress}" delete gateway.gateway.networking.k8s.io "${ISTIO_GATEWAY_NAME:-vks-uis}" --ignore-not-found >/dev/null 2>&1 || true
+      ;;
+  esac
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # istio_report — human-readable discovery summary (used by `make istio-preflight`).
 # ---------------------------------------------------------------------------
 istio_report() {
@@ -258,9 +384,9 @@ istio_report() {
   -------------------------------------------------------
   control plane ns   : ${ISTIOD_NAMESPACE:-<not found>}
   istiod image       : ${ISTIO_DISCOVERED_VERSION:-<unknown>}
-  route API          : ${ISTIO_GATEWAY_API:-<unknown>}
+  route API in use   : ${ISTIO_ROUTE_API:-<not detected>}
   ingress gateway    : ${ISTIO_GATEWAY_NAMESPACE:-?}/${ISTIO_GATEWAY_SERVICE:-?}
-  Gateway selector   : istio=${ISTIO_GATEWAY_LABEL:-?}   <- a Gateway MUST use exactly this
+  Gateway selector   : istio=${ISTIO_GATEWAY_LABEL:-?}   <- a CLASSIC Gateway MUST use exactly this
   gateway ref for VS : $( [ -n "${ISTIO_GATEWAY_NAMESPACE:-}" ] && istio_gateway_ref || echo '?' )
 
   Istio has NO login, token or admin credential: access to the mesh is kubectl RBAC.
