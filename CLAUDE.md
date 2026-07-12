@@ -169,7 +169,41 @@ when changing the pipeline, ingress, or manifests.
 
 ## Backlog / resume state
 
-> ### ⏳ SESSION HANDOFF 2026-07-11c (READ FIRST — resume here)
+> ### ⏳ SESSION HANDOFF 2026-07-12 (READ FIRST — resume here)
+>
+> `main` GREEN. Session 2026-07-12 merged **#110–#120**: diagram fold/clip fix (#110), README
+> real-lab scenarios made self-contained (#111) + "Choose your path" picker & Quick-Start removal
+> (#115) + airgap-diagram clarity (#117) + Supervisor-ns/ArgoCD topology comments (#118), env-UX
+> `make env-init/populate/check/validate` (#112), faithful **two-box** sneakernet (#113), `NOTIFY`
+> toggle (#116), and the **cross-cluster ArgoCD deploy** feature (#119 destination param + #120
+> `make argocd-register-guest` + a **live-validated** `make e2e-kind-cross-cluster`).
+>
+> **⏳ IN-FLIGHT — review + merge:** a worktree agent's PR for **part 4** of the cross-cluster
+> feature — the real-lab cross-cluster ArgoCD **runbook** + a new **VKS namespace/cluster topology
+> diagram** (`docs/diagrams/vks-topology.puml`). `gh pr list`; verify the render is complete (not
+> clipped) + well-proportioned (per `/architecture-diagrams` render-scale) + `docs-lint` green, then merge.
+>
+> **Deep-research verdicts this session (VCF/VKS 9.1; Broadcom 9.1 docs 301-redirect to 9.0 → verify on a lab):**
+>
+> - **Istio is NOT a Supervisor Service** — it's a USER-installed VKS **Standard Package** on the
+>   GUEST cluster (`vcf package install istio`, per-cluster). Our "we install Istio" ingress design
+>   is correct/aligned. (Contour is the Harbor-paired Supervisor-Service ingress, not Istio.)
+> - **ArgoCD IS a Supervisor Service on the Supervisor** → the Application's in-cluster destination
+>   would target the SUPERVISOR, not the guest. Shipped: `${ARGOCD_DEST_SERVER}` param +
+>   `make argocd-register-guest` (registers the guest as an ArgoCD destination; durable SA token
+>   sidesteps x509 #13175; **NEVER installs a 2nd ArgoCD in the guest**), auto-invoked by `gitops`
+>   when `ARGOCD_KUBECONFIG` is set. Registration is **ArgoCD-ADMIN-only** — a tenant REQUESTS it.
+>   Validated by `make e2e-kind-cross-cluster` (2-KinD; PASS A/B/C). See the
+>   `argocd-cross-cluster-registration` memory + the `configuration.md` skill rule.
+>
+> **BLOCKED — real-lab-only (cannot do from here):** vcf-CLI real-lab auth (#9); the cross-cluster
+> ArgoCD path's REAL-lab validation (KinD-validated; guest-API routability/TLS + any Supervisor VAP
+> stay lab-only).
+>
+> ---
+> Earlier session history (2026-07-11b/c) retained below.
+>
+> ### ⏳ SESSION HANDOFF 2026-07-11c
 >
 > `main` GREEN, **0 open PRs**. Session 2026-07-11c merged **#109, #102, #110, #111, #112, #113**
 > (see the SESSION 2026-07-11c summary below); the ONLY remaining backlog item (vcf-CLI real-lab
