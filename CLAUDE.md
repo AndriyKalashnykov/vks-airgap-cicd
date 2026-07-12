@@ -269,6 +269,112 @@ the real demo is the live VKS run — so the KinD e2e stays a local `make` targe
 than a CI job. Run it locally (and both ingress controllers via `make verify-ingress-both`)
 when changing the pipeline, ingress, or manifests.
 
+## 🚨 ADVERSARY FINDINGS 2026-07-12 — UNFIXED (read before touching anything)
+
+The `vks-adversary` review (the stopping rule's first run) found **two CRITICALs that make the REAL
+LAB impossible** plus 6 more. Only #3 is fixed. Everything else is OPEN. Grades: `KinD-verified` /
+`9.0-doc-inferred-for-9.1` / `primary-sourced` / `UNVERIFIED`.
+
+**Branch `fix/adversary-findings` (pushed, no PR, static-check green) carries the #3 fix. The attach
+e2e was NOT run — do that first.**
+
+### #1 CRITICAL — `make gitops` creates the Applications on the WRONG CLUSTER (real lab dead)
+
+`70-configure-argocd.sh` has never heard of `ARGOCD_KUBECONFIG`; it applies the repo Secret and every
+`Application` to `$KUBECONFIG` (the **guest**) — `:18`, `:31`, `:49`, `:71`. But ArgoCD is a
+**Supervisor Service**, so `ns/argocd-instance-1` does not exist there. `71-argocd-register-guest.sh`
+IS two-cluster aware (`kg()`/`ka()`, `:39-40`) — 70 is not. Both scenarios die at `make gitops` with
+the misleading *"is ArgoCD installed on this VKS cluster?"*.
+**Why no test caught it:** `e2e-cross-cluster.sh:96` HAND-WRITES the Application instead of calling
+`70-configure-argocd.sh` — the only cross-cluster test bypasses the script under test.
+**Fix:** `ARGOCD_KUBECTL=(kubectl --kubeconfig "${ARGOCD_KUBECONFIG:-$KUBECONFIG}")` for the ns check,
+the repo Secret and the Application apply; keep `$KUBECONFIG` for guest-side work. Then make
+`e2e-cross-cluster.sh` CALL `70-configure-argocd.sh` (that is what makes it a regression test).
+Grade: *9.0-doc-inferred-for-9.1*.
+
+### #2 CRITICAL — the Application's `repoURL` is a GUEST-INTERNAL DNS name
+
+`.env.example:101` `GITEA_INTERNAL_URL=http://gitea-http.gitea.svc:3000` → `70-configure-argocd.sh:44`
+→ `k8s/argocd/application.yaml:12`. A Supervisor-hosted ArgoCD's repo-server cannot resolve guest
+cluster-local Service DNS ⇒ every Application: `ComparisonError: dial tcp: lookup gitea-http.gitea.svc`.
+Untested BY CONSTRUCTION: `e2e-cross-cluster.sh:92-94` syncs from a **public GitHub repo** and says so.
+**Fix:** split `GITEA_INTERNAL_URL` (Tekton, in-guest) from `GITEA_ARGOCD_URL` (ingress host/LB IP
+reachable from ArgoCD's cluster; must also be in the repo Secret + AppProject `sourceRepos`), and add a
+preflight that PROVES reachability from ArgoCD's side (a one-shot Job in `ARGOCD_NAMESPACE` curling
+`${GITEA_ARGOCD_URL}/api/healthz`). Stacks on #1 — it is the second wall.
+
+### #3 HIGH — FIXED (branch `fix/adversary-findings`, e2e NOT re-run)
+
+`90-e2e-istio-existing.sh` used the DELETED globals `APP_NAME`/`ARGOCD_DEST_NAMESPACE` ⇒ `set -u`
+abort ⇒ **the ATTACH path (what a real lab uses) has been dead since the rename**; "both e2e green"
+covered only `make e2e-kind`. Its RED-2 asserted only `!= 200`, so a BROKEN fixture passed for the
+wrong reason. Fixed: `app_export "$PROBE_APP"`; RED-2 now asserts exactly `000`.
+**TODO: run `make e2e-kind-istio-existing`.** Why no gate caught it: shellcheck ignores a bare
+`${VAR}` in a heredoc, and `check-env-coverage` only matches `${VAR:-…}`/`${VAR:?}`.
+
+### #4 HIGH — "adding an app is ONE ROW" is FALSE for a tenant
+
+`k8s/argocd/application.yaml:9` `project: default` is hardcoded AND not in the envsubst allowlist
+(`70-configure-argocd.sh:70`) — it cannot even be overridden. A tenant has their own AppProject and
+needs an ADMIN, PER APP, to add the namespace to `spec.destinations` and the `<app>-deploy` URL to
+`spec.sourceRepos` (*primary-sourced*: argo-cd.readthedocs.io/en/stable/user-guide/projects/).
+So it is "one row **+ an admin ticket, per app**" — `README.md:1446` is untrue in Scenario 2.
+**Fix:** `project: ${ARGOCD_PROJECT:-default}` + allowlist + `.env.example`; an
+`argocd-appproject-preflight` that prints the exact missing `destination`/`sourceRepo` per registry
+row (generate the request, don't remember it); re-word the README claim.
+
+### #5 HIGH — private Harbor: NO `imagePullSecret` exists for any app namespace
+
+`grep -rn imagePullSecret` ⇒ **zero manifest hits**. The push secret lives only in `ci`
+(`60-configure-tekton.sh:83`). With `HARBOR_PUBLIC_PROJECTS=false` (the TENANT default,
+`README.md:970`) every app is `ImagePullBackOff` until you hand-create a Secret and hand-edit
+`deploy/<app>/deployment.yaml` (`README.md:1117-1119`, which still names the DELETED
+`ARGOCD_DEST_NAMESPACE`). The grant table says "Harbor → **Never**, nothing to do" (`README.md:1473`)
+— it contradicts itself. KinD (public projects) can never see this.
+**Fix:** create the robot pull Secret in each app namespace from the `for_each_app` loop; render
+`imagePullSecrets` behind `HARBOR_PUBLIC_PROJECTS` (kustomize patch); fix the grant table; purge
+`ARGOCD_DEST_NAMESPACE` from the README.
+
+### #6 MEDIUM — app namespaces get PSA labels ONLY from the ingress step, which `install-all` never runs
+
+`ensure_namespace <app> ${PSA_LEVEL_APP}` lives only in `istio_apply_routes*` (`lib/istio.sh:181-190`,
+`470-478`) + the Traefik equivalent. `install-all` = mirror → builder-image → vks-login → platform →
+gitops (no `install-ingress`), so ArgoCD's `CreateNamespace=true` creates them **unlabelled**. It works
+today only because both Deployments are genuinely restricted-compliant — the MECHANISM is not in the
+path. **Fix:** `ensure_namespace` in `70-configure-argocd.sh`'s per-app loop, or use the Application's
+`syncPolicy.managedNamespaceMetadata` (works on 2.14 too).
+
+### #7 MEDIUM — the gate that certifies "ONE ROW" cannot see the second required edit
+
+Adding an app also needs `<APP>_HOST` in `.env.example` (`lib/apps.sh:46-51` dies otherwise), but
+`.env.example` is not in `check-app-hardcodes`' scanned set, and `check-env-coverage` exempts `APP_*`.
+**Fix:** assert every registry row's column-5 var exists in `.env.example` — or derive the host
+(`<app>.${APP_DOMAIN}`) and delete the per-app var, making "one row" literally true.
+
+### #8 MINOR
+
+- `e2e-cross-cluster.sh:87` — a bearer token in **argv** (`ps`-visible), against this repo's own rule.
+- `kaniko-build.yaml:55` — `--build-arg=MVN_OFFLINE=-o` is passed to EVERY app incl. Go: language
+  knowledge in a shared task; it belongs in `lib/apps.sh` beside the other per-language hooks.
+
+### What SURVIVED the attack (do not re-litigate)
+
+Go app under PSA `restricted` ("correct by construction, not luck"); the air-gapped Kaniko build with
+the digest-pinned distroless; the shared EventListener + per-app `Trigger` (RBAC verified, Gitea CEL
+field correct); per-app `verify` ("end-result discipline done right — I could not make app A's run
+satisfy app B's check"); `istio_assert_shared_gateway_hosts`; and ArgoCD 2.14-vs-3.x at the manifest
+level (the 2.14→3.0 break is resource-tracking, irrelevant here — *primary-sourced*).
+
+### What the adversary did NOT check
+
+Anything on a real lab; it ran nothing that mutates (#1/#2/#5/#6 are read from the code, not observed
+failing). **UNVERIFIED and the precondition for #1/#4:** whether the VKS ArgoCD operator's RBAC even
+lets a tenant create `Application`s/repo Secrets in `argocd-instance-1`. Settle with:
+`kubectl --kubeconfig $ARGOCD_KUBECONFIG -n $ARGOCD_NAMESPACE auth can-i create applications.argoproj.io`
+and `… can-i create secrets`. Also unchecked: guest-kubelet→Harbor CA trust; the Triggers v0.36 CRD
+schema (KinD evidence accepted); and the new gates' RED (asserted by construction, not demonstrated —
+the brief forbade editing files).
+
 ## Naming history
 
 **`webui` was renamed to `javawebapp`** (2026-07-12) when a second app (`gowebapp`) arrived — the
@@ -280,7 +386,30 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 ## Backlog / resume state
 
-> ### ▶️ HANDOFF 2026-07-12d — MULTI-APP (javawebapp + gowebapp). Branch: refactor/webui-to-javawebapp
+> ### ▶️ HANDOFF 2026-07-12e — START HERE
+>
+> `main` @ `4a8209b` GREEN, **0 open PRs** (#135–#142 merged today). The multi-app work below is
+> **merged**. What is NOT done is the **adversary's findings** — see "🚨 ADVERSARY FINDINGS" above:
+> **#1 and #2 are CRITICAL and mean the REAL LAB cannot work** (`make gitops` targets the wrong
+> cluster; the Application's `repoURL` is guest-internal DNS a Supervisor-hosted ArgoCD cannot
+> resolve). Neither is reproducible on KinD, which is exactly why they survived.
+>
+> **Do these in order:**
+>
+> 1. `git checkout fix/adversary-findings` (pushed, `78a5f13`, **no PR yet**, static-check green) —
+>    it fixes finding **#3** (the ATTACH e2e was DEAD CODE: `set -u` abort on the deleted
+>    `APP_NAME`/`ARGOCD_DEST_NAMESPACE` globals, so the path a real lab actually uses has not run
+>    since the rename). **Run `make e2e-kind-istio-existing`**, then push + merge.
+> 2. Fix **#1 + #2** together (they are the same wall) and make `scripts/e2e-cross-cluster.sh`
+>    **call** `70-configure-argocd.sh` instead of hand-writing the Application — that is what turns
+>    it into a regression test.
+> 3. Then #4, #5, #6, #7, #8.
+>
+> Run the adversary again before calling the session done (STOPPING RULE, above).
+>
+> ---
+>
+> ### ✅ MULTI-APP (javawebapp + gowebapp) — MERGED
 >
 > ### ✅ THE TWO-APP WALK IS GREEN (2026-07-12, `make e2e-kind`, EXIT=0)
 >
@@ -311,7 +440,7 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 > `verify` proves EACH app (own marker, PipelineRun matched by the `tekton.dev/pipeline=<app>-ci`
 > label, own deployed-image change, own page). Keep it that way.
 >
-> #### What shipped (on the branch, NOT yet merged — PRs #139 docs-sync, #140 rename+multi-app)
+> #### What shipped (PRs #139 docs-sync, #140 rename+multi-app — MERGED)
 >
 > - **`webui` -> `javawebapp`** (a second app arrived; the name must say WHICH app). CLAUDE.md's
 >   dated history deliberately still says `webui` — rewriting it would falsify the record.
