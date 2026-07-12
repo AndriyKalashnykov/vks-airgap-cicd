@@ -52,7 +52,7 @@ spec:
         #!/bin/sh
         set -eu
         cd "$(workspaces.scratch.path)/deploy"
-        # kustomization.yaml is at the deploy repo root (seeded from deploy/base).
+        # kustomization.yaml is at the deploy repo root (seeded from deploy/webui).
         yq -i '.images[0].newTag = strenv(TAG)' kustomization.yaml
         echo "set image tag -> $TAG"
         yq '.images' kustomization.yaml

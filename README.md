@@ -1417,7 +1417,7 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 |------|---------|
 | `scripts/` | Ordered, OS-portable (Ubuntu+PhotonOS) automation; `lib/os.sh` + `lib/mirror.sh` are shared libraries |
 | `apps/java/webui/` | Minimal Spring Boot web UI (seeded into Gitea `webui-app`); `Dockerfile` + `Dockerfile.builder` |
-| `deploy/base/` | Kustomize manifests ArgoCD deploys. **Not applied by us** — seeded into the Gitea `webui-deploy` repo, which Tekton writes the image tag into and ArgoCD syncs |
+| `deploy/webui/` | Kustomize manifests ArgoCD deploys (one dir per app = one deploy repo). **Not applied by us** — seeded into the Gitea `webui-deploy` repo, which Tekton writes the image tag into and ArgoCD syncs |
 | `k8s/` | Everything **we** apply to the cluster |
 | `k8s/tekton/` | Tekton pipeline, tasks, triggers, RBAC |
 | `k8s/argocd/` | ArgoCD `Application` definition |

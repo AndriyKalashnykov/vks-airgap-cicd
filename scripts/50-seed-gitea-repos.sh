@@ -123,9 +123,9 @@ push_repo() {
 # App repo: the Spring Boot app at repo root.
 push_repo "${REPO_ROOT}/apps/java/webui" "$GITEA_APP_REPO" "$APP_BRANCH"
 
-# Deploy repo: deploy/base rendered to operator values (kustomization at root).
+# Deploy repo: deploy/webui rendered to operator values (kustomization at root).
 deploy_src="${tmp}/deploy-src"
-rm -rf "$deploy_src"; mkdir -p "$deploy_src"; cp -a "${REPO_ROOT}/deploy/base/." "$deploy_src/"
+rm -rf "$deploy_src"; mkdir -p "$deploy_src"; cp -a "${REPO_ROOT}/deploy/webui/." "$deploy_src/"
 NEWNAME="${HARBOR_URL}/${HARBOR_APP_PROJECT}/${APP_NAME}" NS="$ARGOCD_DEST_NAMESPACE" \
   yq -i '.images[0].newName = strenv(NEWNAME) | .namespace = strenv(NS)' \
   "${deploy_src}/kustomization.yaml"

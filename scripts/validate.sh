@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # validate.sh — offline manifest validation (no cluster required).
-#   - `kustomize build deploy/base` renders, then kubeconform validates it.
+#   - `kustomize build deploy/webui` renders, then kubeconform validates it.
 #   - Tekton + ArgoCD YAML are validated with kubeconform in
 #     -ignore-missing-schemas mode (their CRDs aren't in the default schema set).
 # A missing tool is warned-and-skipped; a present tool that finds errors fails.
@@ -28,7 +28,7 @@ mkdir -p "$KC_CACHE"
 KC_SCHEMA_K8S="${KUBECONFORM_SCHEMA_K8S:-https://cdn.jsdelivr.net/gh/yannh/kubernetes-json-schema@master/{{ .NormalizedKubernetesVersion }}-standalone{{ .StrictSuffix }}/{{ .ResourceKind }}{{ .KindSuffix }}.json}"
 KC_SCHEMA_CRD="${KUBECONFORM_SCHEMA_CRD:-https://cdn.jsdelivr.net/gh/datreeio/CRDs-catalog@main/{{ .Group }}/{{ .ResourceKind }}_{{ .ResourceAPIVersion }}.json}"
 # Two schema-location sets, chosen per directory:
-#  - CORE (deploy/base, k8s/): the yannh k8s schemas. Every kind is a built-in k8s type,
+#  - CORE (deploy/webui, k8s/): the yannh k8s schemas. Every kind is a built-in k8s type,
 #    so jsDelivr returns 200 and validation is reliable (real violations ARE caught).
 #  - CRD (tekton/, argocd/): the datreeio CRDs-catalog. It returns a clean 404 for CRDs it
 #    doesn't carry (so -ignore-missing-schemas SKIPS them), and 200 for those it does (e.g.
@@ -104,12 +104,12 @@ kustomize_build() {
   else return 127; fi
 }
 
-echo "== kustomize build (deploy/base) =="
-if [ -d "$REPO_ROOT/deploy/base" ]; then
-  if kustomize_build "$REPO_ROOT/deploy/base" "$RENDERED"; then
+echo "== kustomize build (deploy/webui) =="
+if [ -d "$REPO_ROOT/deploy/webui" ]; then
+  if kustomize_build "$REPO_ROOT/deploy/webui" "$RENDERED"; then
     log_info "kustomize build OK ($(grep -c '^kind:' "$RENDERED") resources)"
     if have kubeconform; then
-      KC_LOCS=("${KC_LOCS_CORE[@]}")   # deploy/base is all core k8s kinds
+      KC_LOCS=("${KC_LOCS_CORE[@]}")   # deploy/webui is all core k8s kinds
       kc -strict -ignore-missing-schemas "$RENDERED" || rc=1
     elif have kubectl; then
       log_info "kubeconform absent — falling back to 'kubectl apply --dry-run=client'"
@@ -121,7 +121,7 @@ if [ -d "$REPO_ROOT/deploy/base" ]; then
     log_error "kustomize build failed (need kustomize or kubectl)"; rc=1
   fi
 else
-  log_warn "deploy/base not present yet — skipped"
+  log_warn "deploy/webui not present yet — skipped"
 fi
 
 echo "== kubeconform (k8s/) =="
