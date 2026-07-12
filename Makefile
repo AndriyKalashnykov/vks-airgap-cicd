@@ -212,6 +212,10 @@ platform: install-gitea seed-gitea install-tekton configure-tekton ## Install + 
 configure-argocd: check-env ## Register the deploy repo + create the ArgoCD Application
 	@$(SCRIPTS)/70-configure-argocd.sh
 
+.PHONY: fetch-argocd-kubeconfig
+fetch-argocd-kubeconfig: check-env ## Real lab: obtain the SUPERVISOR kubeconfig (where ArgoCD runs) -> $ARGOCD_KUBECONFIG, so `make gitops` can register the guest
+	@$(SCRIPTS)/31-fetch-argocd-kubeconfig.sh
+
 .PHONY: argocd-register-guest
 argocd-register-guest: ## Register the guest cluster as an ArgoCD destination (real-lab cross-cluster: ArgoCD on the Supervisor; ADMIN-only; needs ARGOCD_KUBECONFIG + KUBECONFIG)
 	@$(SCRIPTS)/71-argocd-register-guest.sh

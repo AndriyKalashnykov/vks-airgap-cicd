@@ -269,29 +269,26 @@ when changing the pipeline, ingress, or manifests.
 
 ---
 
-> ### 📋 BACKLOG — real-lab: how do you OBTAIN `ARGOCD_KUBECONFIG` (the Supervisor kubeconfig)?
+> ### ✅ RESOLVED (2026-07-12b) — `ARGOCD_KUBECONFIG` acquisition → `make fetch-argocd-kubeconfig`
 >
-> **The single blocking unknown for the real-lab cross-cluster ArgoCD path.** `make gitops`
-> auto-registers the guest cluster when `ARGOCD_KUBECONFIG` is set — but **nothing in this repo
-> creates that file on a real lab**, and the exact command is **UNVERIFIED**:
+> It was briefly recorded as "nothing creates it, command UNKNOWN" — which silently meant **both
+> real-lab scenarios could not complete `make gitops`**. That was a research failure, not a real
+> unknown: one search found it in Broadcom's own docs.
 >
-> - the 2-KinD e2e makes its own (`kind get kubeconfig --name <hub>`);
-> - `make vks-login` writes only the **guest/workload** kubeconfig;
-> - a real lab → the operator must supply it, and we do not know the command.
+> ArgoCD is a **Supervisor Service**, so registration needs a **Supervisor** kubeconfig (not the
+> workload one `make vks-login` gives you). Per Broadcom (*Connect to the Supervisor as a vCenter SSO
+> User* + *VCF CLI Context, Architecture, and Configuration*): `vcf context create --endpoint
+> https://<SUPERVISOR> --username <u>@<domain> --ca-certificate <ca>` creates a Supervisor context,
+> and *"the VCF CLI respects the KUBECONFIG environment variable for writing to alternate
+> locations"*. `scripts/31-fetch-argocd-kubeconfig.sh` points `KUBECONFIG` at `$ARGOCD_KUBECONFIG`,
+> selects the `<ctx>:<ARGOCD_NAMESPACE>` context, and **proves** `argocd-server` is visible.
 >
-> What IS established: ArgoCD is a **Supervisor Service**, so this is a **Supervisor** kubeconfig
-> (with access to the ArgoCD vSphere Namespace). The Supervisor is reached via the `vcf` CLI
-> **context** flow (`vcf context create --endpoint https://$SUPERVISOR_HOST … --auth-type basic`
-> then `vcf context use <ctx>:<ns>`) — **not** `vcf cluster kubeconfig get`, which fetches a
-> *workload-cluster* kubeconfig (that is `KUBECONFIG`/`GUEST_KUBECONFIG`).
+> - **Scenario 1** (you are the admin): `make fetch-argocd-kubeconfig` → `make gitops` auto-registers.
+> - **Scenario 2** (tenant): registration is **ADMIN-only** — do NOT set `ARGOCD_KUBECONFIG`;
+>   **request** that the platform team register your guest cluster.
 >
-> **Open:** how to export that Supervisor context to a standalone kubeconfig file. Verify on a 9.1
-> lab → then replace the note in `.env.example` with the real command and, if scriptable, add a
-> `make` target (e.g. `fetch-argocd-kubeconfig`) so the operator never hand-rolls it.
->
-> ⚠️ An earlier pass **guessed** a command here (`vcf cluster kubeconfig get …`) and shipped it into
-> `.env.example` as if it were fact. It was wrong. Recorded, not silently fixed — see
-> `docs/vks-services/argocd.md`.
+> ⚠️ **Provenance: INFERRED** (Broadcom 9.0-tree docs; the 9.1 URLs redirect). Never run on a lab, and
+> **interactive** (the CLI prompts for the password). **Next lab session: run it and upgrade the grade.**
 
 ---
 
