@@ -594,7 +594,7 @@ docs-lint: diagrams-check check-readme-scenarios ## Lint markdown (tracked AND n
 	else echo "markdownlint not installed — skipping (install markdownlint-cli)"; fi
 
 .PHONY: static-check
-static-check: check-toolchain-alignment check-java-alignment check-env check-env-coverage check-how-provenance check-image-alignment lint validate sec app-test ## Composite code gate (alignment + lint + manifests + security + app tests)
+static-check: check-toolchain-alignment check-java-alignment check-env check-env-coverage check-how-provenance check-image-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint ## Full local pipeline (offline-verifiable parts)
