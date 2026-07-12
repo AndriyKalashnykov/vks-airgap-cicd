@@ -161,6 +161,18 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   check-image-alignment` (in `static-check`) fails CI on any drift; a general Renovate
   customManager bumps the consumers in lockstep.
 
+## VKS services — the living record
+
+`docs/vks-services/` is the tracked, updatable record of what VMware/Broadcom actually ships and how
+we consume it: [`harbor.md`](docs/vks-services/harbor.md), [`argocd.md`](docs/vks-services/argocd.md),
+[`istio.md`](docs/vks-services/istio.md). Each fact carries a **provenance grade** (lab-verified /
+KinD-verified / 9.0-doc-inferred-for-9.1 / community / UNVERIFIED) — the Broadcom 9.1 doc URLs
+301-redirect to the 9.0 tree, so most vendor facts are *inferences about 9.1*. **When a lab run
+confirms or refutes something, update the grade in place** (and correct the fact, with a note) rather
+than re-deriving it next session. The load-bearing split: Harbor + ArgoCD are **Supervisor Services**
+(they run beside your workload cluster → discover + request + register); Istio is a **guest-cluster
+Standard Package** (→ attach, never install; there are no Istio credentials).
+
 ## Skills
 
 Use the following skills when working on related files:
@@ -191,6 +203,74 @@ than a CI job. Run it locally (and both ingress controllers via `make verify-ing
 when changing the pipeline, ingress, or manifests.
 
 ## Backlog / resume state
+
+> ### 📋 BACKLOG — real-lab: how do you OBTAIN `ARGOCD_KUBECONFIG` (the Supervisor kubeconfig)?
+>
+> **The single blocking unknown for the real-lab cross-cluster ArgoCD path.** `make gitops`
+> auto-registers the guest cluster when `ARGOCD_KUBECONFIG` is set — but **nothing in this repo
+> creates that file on a real lab**, and the exact command is **UNVERIFIED**:
+>
+> - the 2-KinD e2e makes its own (`kind get kubeconfig --name <hub>`);
+> - `make vks-login` writes only the **guest/workload** kubeconfig;
+> - a real lab → the operator must supply it, and we do not know the command.
+>
+> What IS established: ArgoCD is a **Supervisor Service**, so this is a **Supervisor** kubeconfig
+> (with access to the ArgoCD vSphere Namespace). The Supervisor is reached via the `vcf` CLI
+> **context** flow (`vcf context create --endpoint https://$SUPERVISOR_HOST … --auth-type basic`
+> then `vcf context use <ctx>:<ns>`) — **not** `vcf cluster kubeconfig get`, which fetches a
+> *workload-cluster* kubeconfig (that is `KUBECONFIG`/`GUEST_KUBECONFIG`).
+>
+> **Open:** how to export that Supervisor context to a standalone kubeconfig file. Verify on a 9.1
+> lab → then replace the note in `.env.example` with the real command and, if scriptable, add a
+> `make` target (e.g. `fetch-argocd-kubeconfig`) so the operator never hand-rolls it.
+>
+> ⚠️ An earlier pass **guessed** a command here (`vcf cluster kubeconfig get …`) and shipped it into
+> `.env.example` as if it were fact. It was wrong. Recorded, not silently fixed — see
+> `docs/vks-services/argocd.md`.
+
+---
+
+> ### 📋 BACKLOG — document-correctness audit (claim-by-claim, NOT a keyword grep)
+>
+> **Why it exists:** two doc defects shipped in one session because every README review was scoped
+> to the *feature just built* — a grep for `istio|ingress|gateway` finds only claims that mention
+> those words. The defects it could never have found:
+>
+> - the **lead paragraph** said "Harbor and ArgoCD are **provided by VKS**" — contradicting
+>   Scenario 1 (where the operator installs them) and omitting Istio entirely;
+> - the **"Choose your path"** table told every newcomer the KinD path *"Needs: Docker"*, with no
+>   mention that the repo is **podman-preferred** (`CONTAINER_ENGINE ?= podman || docker`) and that
+>   Docker is required **only** by the KinD stand-in.
+>
+> Both were caught by the user, not the review. A diff-scoped grep inherits the blind spot of the
+> feature you just wrote; the document's *correctness* is not bounded by your diff.
+>
+> **The task:** audit every tracked doc (`README.md`, `CLAUDE.md`, `docs/**/*.md`) by its **CLAIMS**,
+> independent of what was last changed. A README is a set of factual assertions about the system —
+> enumerate them and verify each against the code:
+>
+> | Claim type | Verify against |
+> |---|---|
+> | prerequisites / "Needs: X" | the real toolchain — is X *required*, one *option*, the *fallback*, or needed by only one path? |
+> | defaults ("uses Y by default") | the `?=` / `${VAR:-}` default in the Makefile/script — not memory |
+> | commands | the target exists **and** is the right command *in each scenario the doc describes* |
+> | versions / names / endpoints | the pinned value in code |
+> | "X is not needed" | grep that it truly is not invoked |
+> | capability claims ("zero-config", "one command") | run it on a **clean checkout** |
+> | who-installs-what (Supervisor Service vs guest package vs ours) | `docs/vks-services/` |
+>
+> **Method (both, not either):** (1) read each doc top-to-bottom *as a stranger*, listing every
+> sentence that asserts a fact, then verify that list; (2) grep for **claim vocabulary**, not feature
+> vocabulary: `grep -niE 'needs?:|requires?|by default|only|must|never|no .* (needed|required)|zero|one command'`.
+>
+> Also fold in: every documented settable must have a grep-verified consumer (the dead-`RUN_MODE`
+> lesson), and every `.env`-consuming script's variables must appear in `.env.example` (5 of the 8
+> cross-cluster-registration vars were missing until 2026-07-12).
+>
+> Rule captured in the `/readme` skill ("Audit the README by its CLAIMS, never by a keyword grep
+> scoped to your diff").
+
+---
 
 > ### ⏳ SESSION HANDOFF 2026-07-12b (READ FIRST — resume here)
 >
