@@ -11,6 +11,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# shellcheck source=scripts/lib/psa.sh
+. "${SCRIPT_DIR}/lib/psa.sh"
 load_env
 
 require_cmd kubectl
@@ -44,7 +46,11 @@ ALLOWLIST='${CI_NAMESPACE} ${HARBOR_URL} ${HARBOR_INFRA_PROJECT} ${APP_BRANCH} $
 require_cmd envsubst "install gettext (provides envsubst)"
 
 # ---- Namespace ----
-run kubectl create namespace "$CI_NAMESPACE" --dry-run=client -o yaml | run kubectl apply -f -
+# The CI namespace needs `baseline`, not `restricted`: Kaniko builds run as root (runAsUser=0,
+# unrestricted capabilities, no seccompProfile) — VKS enforces `restricted` by DEFAULT from VKr
+# v1.26, so without this label the build TaskRun pods are REJECTED outright on a real guest
+# cluster. Measured, not guessed: `make psa-check`.
+ensure_namespace "$CI_NAMESPACE" "${PSA_LEVEL_CI:-baseline}"
 
 # ---- Secret: Gitea git basic-auth (annotated for Tekton SA credential wiring) ----
 log_info "creating gitea-git-auth secret"

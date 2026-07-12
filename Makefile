@@ -248,6 +248,10 @@ attach-istio: check-env ## Attach to an Istio the platform team ALREADY installe
 istio-preflight: check-env ## Read-only: is Istio here, what selector does it need, what must the mesh admin grant?
 	@$(SCRIPTS)/48-istio-preflight.sh
 
+.PHONY: psa-check
+psa-check: check-env ## Read-only: would our pods survive a VKS guest cluster (PSA enforce=restricted by default)?
+	@$(SCRIPTS)/49-psa-check.sh
+
 .PHONY: install-traefik
 install-traefik: check-env ## Install Traefik ingress (one LB) — the lighter option
 	@$(SCRIPTS)/45-install-traefik.sh
@@ -257,7 +261,7 @@ kind-down: ## Tear down the KinD cluster (prunes cloud-provider-kind + kindccm-*
 	@$(SCRIPTS)/kind-down.sh
 
 .PHONY: e2e-kind
-e2e-kind: kind-up install-harbor install-argocd install-all install-ingress verify verify-ingress ## Full local end-to-end in KinD (+ ingress route check)
+e2e-kind: kind-up install-harbor install-argocd install-all install-ingress verify verify-ingress psa-check ## Full local end-to-end in KinD (+ ingress route check + PSA/VKS admission check)
 
 .PHONY: e2e-kind-both
 e2e-kind-both: ## Matrix: run the full KinD e2e in BOTH SSL modes (secure self-signed TLS, then insecure plain-HTTP)
@@ -340,6 +344,7 @@ e2e-kind-istio-existing: ## KinD e2e for the ATTACH mode: a "platform team" inst
 	@echo "==> leg 2/2: attach via the CLASSIC Gateway/VirtualService API (shared platform gateway)"
 	@$(MAKE) install-ingress INGRESS_CONTROLLER=istio-existing ISTIO_ROUTE_API=classic
 	@$(MAKE) verify-ingress
+	@$(MAKE) psa-check INGRESS_CONTROLLER=istio-existing
 	@echo "==> e2e-kind-istio-existing PASSED — the UIs route through an Istio we did not install (BOTH route APIs)"
 
 ##@ Jump-box validation (Photon / Ubuntu container, rootless podman)

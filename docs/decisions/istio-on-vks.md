@@ -219,3 +219,36 @@ address of the gateway it is actually attaching to; a genuine override lives in 
 
 Still open for a real 9.1 lab: Pod Security Admission vs. istiod/gateway pods; what supplies the
 LoadBalancer address (NSX ALB / Avi) and any IP-pool prerequisite; exact 9.1 package version strings.
+
+## Pod Security Admission — the other thing a real VKS cluster does that KinD does not
+
+A VKS guest cluster runs the PSA controller and **enforces the `restricted` Pod Security Standard
+by DEFAULT from VKS/TKr v1.26** — "pods violating security are rejected unless namespace
+configuration is changed" (Broadcom, *Configure PSA for VKr 1.25 and Later*). Only `kube-system`,
+`tkg-system` and `vmware-system-cloud-provider` are exempt; **every namespace we create is not**.
+KinD enforces nothing, so a stack that installs perfectly locally can have its pods **rejected
+outright** on the lab, and nothing in our CI would ever say so.
+
+So each namespace we create is labelled with the minimum level its workloads actually need. The
+levels were **measured**, not guessed — `make psa-check` re-derives them with a server-side dry-run
+label (the API server evaluates the *real running pods* and reports the violations, changing
+nothing), and it also explains *why* a namespace cannot run `restricted`.
+
+| Namespace | Minimum level | Why |
+|---|---|---|
+| `gitea`, `tekton-pipelines`, `webui` | **restricted** | compliant as they ship |
+| **`ci`** (build TaskRuns) | **baseline** | **Kaniko builds as root** — `runAsUser=0`, unrestricted capabilities, no `seccompProfile`. `restricted` rejects it. This is a genuine requirement, not a workaround (a restricted-only platform would need a rootless builder). |
+| **the namespace holding our `Gateway`** | **baseline** | the proxy Istio **auto-provisions** there sets no `seccompProfile` — and **that pod is created by the platform's istiod, not by us**, so we cannot make it compliant. |
+| `istio-system` (Scenario 1 only) | **baseline** | istiod sets no `seccompProfile`. In Scenario 2 this namespace is the platform's and we neither judge nor label it. |
+
+`make psa-check` is wired into both KinD e2e targets, and is the thing to run **first** against a
+real guest cluster: it answers "would this stack even be admitted here?" before anything is installed.
+
+### A LoadBalancer that never gets an address
+
+On VKS the gateway's address comes from whichever LB the platform configured — the NSX LB, the
+Foundation Load Balancer (FLB, the VDS default), or NSX ALB (Avi). With none configured for the
+cluster, or an exhausted IP pool, `EXTERNAL-IP` stays `<pending>` forever. A bare 300s timeout tells
+an operator nothing, so the wait now names those causes, prints the Service events (where the real
+reason usually is), and points at `INGRESS_LB_IP_OVERRIDE` for the case where the gateway is fronted
+by something else entirely.
