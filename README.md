@@ -1346,7 +1346,8 @@ line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
 
 4. **See the new image in Harbor.** In Harbor, open project **`apps`** → repository
    **`webui`**. A new tag appears — the **git short SHA** of your commit
-   (`harbor.vks.local/apps/webui:<sha>`) — pushed by the Kaniko `build` task.
+   (`$HARBOR_URL/apps/webui:<sha>` — on KinD that is Harbor's **LB IP**, which `make creds` prints;
+   on a real lab it is your Harbor FQDN) — pushed by the Kaniko `build` task.
 
 5. **See the tag written back in Gitea.** Open **`demo/webui-deploy`** → `kustomization.yaml`.
    There's a new commit by **`ci-bot`** with message **`ci: deploy webui <sha>`** that bumps
@@ -1357,7 +1358,7 @@ line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
    `https://<ARGOCD_LB_IP>`, shown by `make creds`; on a real VKS lab, **your lab's own
    ArgoCD URL**), the Application
    **`webui`** flips **`OutOfSync → Synced`** (auto-sync + self-heal) and rolls the Deployment
-   in namespace `webui` to `harbor.vks.local/apps/webui:<sha>`. (Auto-sync polls the deploy repo
+   in namespace `webui` to `$HARBOR_URL/apps/webui:<sha>`. (Auto-sync polls the deploy repo
    on an interval; click **Refresh** to reconcile immediately.)
 
 7. **See the page change.** Refresh <http://app.vks.local/>. The greeting now shows your new
