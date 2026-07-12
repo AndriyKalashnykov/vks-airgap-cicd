@@ -251,9 +251,27 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 > ### ▶️ HANDOFF 2026-07-12d — MULTI-APP (javawebapp + gowebapp). Branch: refactor/webui-to-javawebapp
 >
-> **DO FIRST: re-run `make e2e-kind` and read the result.** At handoff time a two-app e2e was
-> running (the previous one died at `builder-image` on a `set -e` trap — fixed, see below). NOTHING
-> about the two-app walk is proven until that run is green. Everything else below is green gates.
+> ## ⚠️ DO THIS FIRST: `make kind-down && make e2e-kind` — the two-app walk is NOT yet proven green.
+>
+> At handoff the 4th e2e attempt was still running. **Nothing below is "verified" until it is.**
+> Each previous attempt failed on a REAL multi-app bug (all now fixed) and got one stage further:
+>
+> | # | Died at | Cause (a real bug, not a flake) | Fixed |
+> |---|---|---|---|
+> | 1 | `builder-image` | `app_has_builder "$a" && printf …` — a bare `A && B` returns NON-ZERO when A is false, and gowebapp (stdlib-only, no `Dockerfile.builder`) is LAST -> `set -e` killed the script | ✅ `if…fi` everywhere |
+> | 2 | `seed-gitea` | leftover `: "${APP_NAME:?}"` require of a global the refactor deleted | ✅ + swept every script |
+> | 3 | `gowebapp-ci` | `CouldntGetTask` — the `go-test` Task was never added to `k8s/tekton/tasks/` | ✅ added + **GATE** in `make validate` (RED-proven) |
+>
+> **What attempt 3 DID prove** (the two things that could not be checked statically):
+> - the SHARED EventListener's `labelSelector` **does** discover the per-app `Trigger` CRs, and
+> - the CEL filter on `body.repository.name` routes each repo's push to its OWN pipeline —
+>   `javawebapp-ci` **Succeeded** while `gowebapp-ci` fired from a push to `gowebapp-app`.
+> - **A green javawebapp did NOT hide the broken gowebapp** — which is exactly why `verify` was
+>   rewritten per-app. That property is the single most valuable thing in this refactor.
+>
+> **Still unproven** (what the next run must show): the Go app's Kaniko build OFFLINE against the
+> mirrored `golang` + digest-pinned distroless; its tag write-back; its ArgoCD sync; and BOTH pages
+> serving their own markers. Expect: `verify [javawebapp] SUCCESS` **and** `verify [gowebapp] SUCCESS`.
 >
 > #### What shipped (on the branch, NOT yet merged — PRs #139 docs-sync, #140 rename+multi-app)
 >
