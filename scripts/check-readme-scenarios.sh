@@ -47,23 +47,37 @@ verify|make verify|e2e-kind|install-all
 access-uis|vks.local|port-forward'
 
 rc=0
+
+# Extract each scenario body ONCE into a temp file. (The previous version did the matching with
+# nested `while IFS='|' read` loops over here-strings; the IFS juggling corrupted state and a
+# `grep` for a string that WAS present reported absent — a blind gate. Files + plain greps are
+# boring and correct.)
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+scenario_names=(); scenario_files=()
+while IFS='|' read -r sc head; do
+  [ -z "$sc" ] && continue
+  section "$head" > "${TMP}/${sc}.body"
+  scenario_names+=("$sc"); scenario_files+=("${TMP}/${sc}.body")
+  [ -s "${TMP}/${sc}.body" ] || { log_error "scenario '${sc}' section not found (heading changed?): ${head}"; rc=1; }
+done <<< "$SCENARIOS"
+
 printf '\n  %-14s' 'DECISION' >&2
-while IFS='|' read -r sc _; do printf '%-14s' "$sc" >&2; done <<< "$SCENARIOS"
+for sc in "${scenario_names[@]}"; do printf '%-14s' "$sc" >&2; done
 printf '\n  %s\n' "$(printf '%0.s-' {1..58})" >&2
 
 while IFS= read -r dline; do
+  [ -z "$dline" ] && continue
   dec="${dline%%|*}"; pats="${dline#*|}"
   printf '  %-14s' "$dec" >&2
-  while IFS='|' read -r sc head; do
-    body="$(section "$head")"
+  for k in "${!scenario_names[@]}"; do
+    f="${scenario_files[$k]}"
     hit=0
-    IFS='|' read -ra ps <<< "$pats"
-    for p in "${ps[@]}"; do
-      printf '%s' "$body" | grep -qiF "$p" && { hit=1; break; }
-    done
+    # `grep -F -e p1 -e p2 ...` — no arrays, no IFS games.
+    args=(); old="$IFS"; IFS='|'; for p in $pats; do args+=(-e "$p"); done; IFS="$old"
+    grep -qiF "${args[@]}" "$f" 2>/dev/null && hit=1
     if [ "$hit" -eq 1 ]; then printf '%-14s' 'OK' >&2
     else printf '%-14s' 'MISSING' >&2; rc=1; fi
-  done <<< "$SCENARIOS"
+  done
   printf '\n' >&2
 done <<< "$DECISIONS"
 
