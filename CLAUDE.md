@@ -52,8 +52,9 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
 - **`.env.example` is the single source of truth** for every tunable. The Makefile
   `-include .env` + `?=` defaults and every script's `load_env` both read it. Never
   hardcode a host/port/timeout/version — add it to `.env.example`.
-- **`RUN_MODE`** selects dual-homed (default, jump box routed to ESXi/Harbor) vs
-  sneakernet (bundle carried inside).
+- **Mirror mode is not a variable** — dual-homed vs sneakernet is simply which mirror
+  commands you run: dual-homed → `make mirror`; sneakernet → `make mirror-pull && make
+  bundle` (carry the bundle) then `make bundle-load && make mirror-push`.
 - **Two Git repos** in Gitea: `webui-app` (source + Dockerfile + trigger binding)
   and `webui-deploy` (kustomize manifests ArgoCD watches). CI writes the new image
   tag back to `webui-deploy`; ArgoCD deploys from it.
