@@ -91,6 +91,10 @@ env-check: ## Presence gate — fail if a required .env value is missing/placeho
 env-validate: ## Validity gate — format + KUBECONFIG/Harbor connectivity+auth (fail fast; secrets never on argv)
 	@$(SCRIPTS)/02-env.sh validate
 
+.PHONY: check-readme-scenarios
+check-readme-scenarios: ## Gate: the README is SCENARIO-BASED — each scenario must answer every decision itself
+	@$(SCRIPTS)/check-readme-scenarios.sh
+
 .PHONY: check-env-coverage
 check-env-coverage: ## Gate: every operator-settable var the scripts read must be documented in .env.example
 	@$(SCRIPTS)/check-env-coverage.sh
@@ -552,7 +556,7 @@ vendor-diagrams: ## Re-download the pinned C4-PlantUML stdlib into docs/diagrams
 	echo "vendor-diagrams: refreshed docs/diagrams/c4/ @ $(C4_PLANTUML_VERSION) — now run 'make diagrams' and verify the offline render"
 
 .PHONY: docs-lint
-docs-lint: diagrams-check ## Lint markdown (tracked AND new-but-unignored) + verify diagrams are current
+docs-lint: diagrams-check check-readme-scenarios ## Lint markdown (tracked AND new-but-unignored) + verify diagrams are current
 	@# `--others --exclude-standard` adds UNTRACKED-but-not-gitignored markdown. Without it the
 	@# gate lints only COMMITTED files, so a brand-new doc is invisible to `make ci` and its
 	@# first lint happens in CI *after* it is pushed — a guaranteed green-local/red-CI round trip
