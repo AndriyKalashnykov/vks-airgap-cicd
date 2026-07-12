@@ -1,27 +1,36 @@
 #!/usr/bin/env bash
-# 46-install-istio.sh — install Istio as the ingress controller: control plane
-# (istiod) + one ingress-gateway LoadBalancer, fronting the browser UIs at
-# *.vks.local. Default INGRESS_CONTROLLER; the lighter Traefik is the option.
+# 46-install-istio.sh — SCENARIO 1: we INSTALL Istio and use it as the ingress.
+# Control plane (istiod) + one ingress-gateway LoadBalancer fronting the browser UIs
+# at *.vks.local. This is INGRESS_CONTROLLER=istio (the default).
 #
-# Air-gap: the istio images (pilot/proxyv2) are pulled from Harbor via the helm
-# `global.hub` override (mirrored per images/images.txt). No sidecar injection is
-# enabled — the gateway routes to each backend Service's ClusterIP directly, so
-# the app/Gitea/ArgoCD pods stay sidecar-free. Idempotent (helm upgrade --install).
+# If the platform team already runs Istio on the cluster, do NOT use this script —
+# use INGRESS_CONTROLLER=istio-existing (scripts/47-attach-istio.sh), which installs
+# nothing and only attaches routes. Running this against a mesh you do not own would
+# helm-install a SECOND control plane over theirs.
+#
+# Air-gap: the istio images (pilot/proxyv2) come from Harbor via the helm `global.hub`
+# override (mirrored per images/images.txt). Sidecar injection is disabled — the gateway
+# routes to each backend Service's ClusterIP directly, so app/Gitea/Tekton pods stay
+# sidecar-free. Idempotent (helm upgrade --install).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# shellcheck source=scripts/lib/istio.sh
+. "${SCRIPT_DIR}/lib/istio.sh"
 load_env
 
 require_cmd kubectl
 require_cmd helm
-require_cmd envsubst "install gettext (provides envsubst)"
 : "${KUBECONFIG:?KUBECONFIG must be set (see .env.example / .env.kind)}"; export KUBECONFIG
 : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"
-: "${ISTIO_VERSION:?}"; : "${ISTIO_NAMESPACE:?}"; : "${ISTIO_GATEWAY_NAMESPACE:?}"
+: "${ISTIO_VERSION:?}"; : "${ISTIO_NAMESPACE:?}"
+# The gateway namespace is OUR install's default and lives here, not in .env.example:
+# an uncommented global would be sourced into the environment in istio-existing mode too,
+# constraining discovery to our own naming and hiding the platform team's real gateway.
+ISTIO_GATEWAY_NAMESPACE="${ISTIO_GATEWAY_NAMESPACE:-istio-ingress}"
 : "${GITEA_NAMESPACE:?}"; : "${GITEA_HOST:?}"
-: "${ARGOCD_NAMESPACE:?}"
 : "${ARGOCD_DEST_NAMESPACE:?}"; : "${WEBUI_HOST:?}"; : "${APP_NAME:?}"
 : "${TEKTON_NAMESPACE:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
@@ -30,7 +39,14 @@ POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
 CHART_REPO_NAME="istio"
 CHART_REPO_URL="https://istio-release.storage.googleapis.com/charts"
 HUB="${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/istio"
-K8S_DIR="${REPO_ROOT}/k8s/istio"
+
+# We own this mesh, so we PIN the gateway's identity rather than discovering it. The
+# helm release name IS the Service name, and `labels.istio` is what a Gateway selector
+# must match — the gateway chart would otherwise derive that label from the release name.
+GW_RELEASE="istio-ingressgateway"
+ISTIO_GATEWAY_SERVICE="$GW_RELEASE"
+ISTIO_GATEWAY_LABEL="ingressgateway"
+export ISTIO_GATEWAY_SERVICE ISTIO_GATEWAY_LABEL
 
 # --- 1. Helm repo (fetched on the internet side; images come from Harbor) ------
 log_info "adding/updating helm repo '${CHART_REPO_NAME}' (${CHART_REPO_URL})"
@@ -56,40 +72,22 @@ run helm upgrade --install istiod "${CHART_REPO_NAME}/istiod" \
 
 # --- 4. Ingress gateway (LoadBalancer), images from Harbor --------------------
 log_info "installing istio ingress gateway (LoadBalancer) into ${ISTIO_GATEWAY_NAMESPACE}"
-run helm upgrade --install istio-ingressgateway "${CHART_REPO_NAME}/gateway" \
+run helm upgrade --install "$GW_RELEASE" "${CHART_REPO_NAME}/gateway" \
   --namespace "$ISTIO_GATEWAY_NAMESPACE" --create-namespace \
   --version "$ISTIO_VERSION" --wait --timeout "${READY_TIMEOUT_SECONDS}s" \
   --set service.type=LoadBalancer \
-  --set labels.istio=ingressgateway \
+  --set labels.istio="$ISTIO_GATEWAY_LABEL" \
   --set global.hub="$HUB" \
   --set global.tag="$ISTIO_VERSION"
 
-# --- 5. Backend namespaces + Gateway/VirtualService routing -------------------
-for ns in "$GITEA_NAMESPACE" "$ARGOCD_NAMESPACE" "$ARGOCD_DEST_NAMESPACE"; do
-  run bash -c "kubectl create namespace \"$ns\" --dry-run=client -o yaml | kubectl apply -f -"
-done
-log_info "applying Gateway + VirtualServices (gitea/argocd/app/tekton -> *.vks.local)"
-# shellcheck disable=SC2016
-ALLOWLIST='${ISTIO_GATEWAY_NAMESPACE} ${GITEA_HOST} ${GITEA_NAMESPACE} ${WEBUI_HOST} ${APP_NAME} ${ARGOCD_DEST_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${TEKTON_NAMESPACE}'
-# shellcheck disable=SC2016
-envsubst "$ALLOWLIST" < "${K8S_DIR}/gateway.yaml" | run kubectl apply -f -
+# --- 5. Gateway + VirtualServices (shared with the attach path) ---------------
+istio_apply_routes
 
-# --- 6. Discover the ingress-gateway LoadBalancer IP --------------------------
-log_info "waiting for istio ingress-gateway LoadBalancer IP (timeout ${READY_TIMEOUT_SECONDS}s)"
-LB_IP=""
-elapsed=0
-while :; do
-  LB_IP="$(kubectl -n "$ISTIO_GATEWAY_NAMESPACE" get svc istio-ingressgateway \
-    -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
-  [ -n "$LB_IP" ] && break
-  elapsed=$(( elapsed + POLL_INTERVAL_SECONDS ))
-  [ "$elapsed" -ge "$READY_TIMEOUT_SECONDS" ] && die "istio ingress-gateway LoadBalancer IP not assigned within ${READY_TIMEOUT_SECONDS}s"
-  log_info "LB IP not assigned yet — retrying in ${POLL_INTERVAL_SECONDS}s"
-  sleep "$POLL_INTERVAL_SECONDS"
-done
-log_info "istio ingress-gateway LoadBalancer IP: ${LB_IP}"
+# --- 6. LoadBalancer address --------------------------------------------------
+LB_IP="$(istio_wait_lb_ip)" || die "istio ingress-gateway has no LoadBalancer address"
+log_info "istio ingress-gateway LoadBalancer address: ${LB_IP}"
 
-# --- 7. Publish the IP + emit the /etc/hosts guidance -------------------------
+# --- 7. Publish + emit the /etc/hosts guidance --------------------------------
 set_env_var INGRESS_LB_IP "$LB_IP"
 log_info "published INGRESS_LB_IP=${LB_IP} to ${REPO_ROOT}/.env.kind"
 log_info "Istio installed. Add ONE line to /etc/hosts on the jump box / your client:"

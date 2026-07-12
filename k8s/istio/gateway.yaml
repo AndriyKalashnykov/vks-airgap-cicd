@@ -1,18 +1,27 @@
-# Istio Gateway + VirtualServices fronting the browser UIs at *.vks.local through
-# the single istio-ingressgateway LoadBalancer. The Gateway binds the gateway
-# workload (selector istio=ingressgateway) on :80; each VirtualService routes one
-# hostname to a backend Service by FQDN. No sidecars are needed on the backends —
-# istiod knows every k8s Service, so the gateway proxies to their ClusterIP.
+# Istio Gateway binding the ingress-gateway workload on :80 for the *.vks.local UIs.
 #
-# ${VAR} tokens rendered by scripts/46-install-istio.sh (envsubst allowlist).
+# Applied ONLY when we own a Gateway:
+#   - INGRESS_CONTROLLER=istio           (we installed the mesh), or
+#   - INGRESS_CONTROLLER=istio-existing  with ISTIO_SHARED_GATEWAY unset (the mesh is
+#     the platform team's, but we are allowed to create our own Gateway in its namespace).
+# When ISTIO_SHARED_GATEWAY=<ns>/<name> is set we create NO Gateway and reuse theirs.
+#
+# ${ISTIO_GATEWAY_LABEL} is DISCOVERED, never assumed. The istio/gateway helm chart
+# derives the gateway workload's `istio:` label from the HELM RELEASE NAME, so a mesh
+# someone else installed will very likely NOT be labelled `istio: ingressgateway`.
+# A Gateway whose selector matches no workload is accepted by the API server WITHOUT
+# error and simply binds nothing — Envoy never gets a :80 listener, so the symptom is
+# a bare connection-refused, not a 404. (Proven on KinD; see docs/decisions/istio-on-vks.md.)
+#
+# ${VAR} tokens are rendered by scripts/lib/istio.sh (restricted envsubst allowlist).
 apiVersion: networking.istio.io/v1
 kind: Gateway
 metadata:
-  name: vks-uis
+  name: ${ISTIO_GATEWAY_NAME}
   namespace: ${ISTIO_GATEWAY_NAMESPACE}
 spec:
   selector:
-    istio: ingressgateway
+    istio: ${ISTIO_GATEWAY_LABEL}
   servers:
     - port:
         number: 80
@@ -22,54 +31,3 @@ spec:
         - ${GITEA_HOST}
         - ${WEBUI_HOST}
         - ${TEKTON_DASHBOARD_HOST}
----
-apiVersion: networking.istio.io/v1
-kind: VirtualService
-metadata:
-  name: gitea
-  namespace: ${ISTIO_GATEWAY_NAMESPACE}
-spec:
-  hosts:
-    - ${GITEA_HOST}
-  gateways:
-    - vks-uis
-  http:
-    - route:
-        - destination:
-            host: gitea-http.${GITEA_NAMESPACE}.svc.cluster.local
-            port:
-              number: 3000
----
-apiVersion: networking.istio.io/v1
-kind: VirtualService
-metadata:
-  name: webui
-  namespace: ${ISTIO_GATEWAY_NAMESPACE}
-spec:
-  hosts:
-    - ${WEBUI_HOST}
-  gateways:
-    - vks-uis
-  http:
-    - route:
-        - destination:
-            host: ${APP_NAME}.${ARGOCD_DEST_NAMESPACE}.svc.cluster.local
-            port:
-              number: 80
----
-apiVersion: networking.istio.io/v1
-kind: VirtualService
-metadata:
-  name: tekton-dashboard
-  namespace: ${ISTIO_GATEWAY_NAMESPACE}
-spec:
-  hosts:
-    - ${TEKTON_DASHBOARD_HOST}
-  gateways:
-    - vks-uis
-  http:
-    - route:
-        - destination:
-            host: tekton-dashboard.${TEKTON_NAMESPACE}.svc.cluster.local
-            port:
-              number: 9097

@@ -27,11 +27,15 @@ case "$CONTROLLER" in
     log_info "INGRESS_CONTROLLER=istio -> installing Istio ingress"
     exec "${SCRIPT_DIR}/46-install-istio.sh"
     ;;
+  istio-existing)
+    log_info "INGRESS_CONTROLLER=istio-existing -> attaching to an Istio we did NOT install"
+    exec "${SCRIPT_DIR}/47-attach-istio.sh"
+    ;;
   traefik)
     log_info "INGRESS_CONTROLLER=traefik -> installing Traefik ingress"
     exec "${SCRIPT_DIR}/45-install-traefik.sh"
     ;;
   *)
-    die "unknown INGRESS_CONTROLLER='${INGRESS_CONTROLLER}' (expected 'istio' or 'traefik')"
+    die "unknown INGRESS_CONTROLLER='${CONTROLLER}' (expected 'istio', 'istio-existing' or 'traefik')"
     ;;
 esac

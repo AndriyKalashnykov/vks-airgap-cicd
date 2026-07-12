@@ -98,7 +98,20 @@ if [ "$rc" -ne 0 ]; then
   log_error "ingress verification FAILED — diagnostics:"
   log_error "  INGRESS_LB_IP=${INGRESS_LB_IP} (from .env.kind); check the controller + its route objects:"
   case "${INGRESS_CONTROLLER}" in
-    istio)   log_error "    kubectl -n ${ISTIO_GATEWAY_NAMESPACE:-istio-ingress} get gateway,virtualservice,svc; kubectl -n ${ISTIO_NAMESPACE:-istio-system} get pods" ;;
+    istio|istio-existing)
+      log_error "    kubectl get gateway,virtualservice -A          # our routes (VSes live in the BACKEND namespaces)"
+      log_error "    kubectl -n ${ISTIO_GATEWAY_NAMESPACE:-istio-ingress} get svc,pods"
+      log_error "    kubectl -n ${ISTIO_NAMESPACE:-istio-system} get pods"
+      log_error "  SYMPTOM GUIDE (istio):"
+      log_error "    connection refused / no HTTP at all -> the Gateway's selector matches NO gateway workload."
+      log_error "      The Gateway object is accepted without error, so nothing flags it. Compare:"
+      log_error "        kubectl get gateway -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name} selector={.spec.selector}{\"\\n\"}{end}'"
+      log_error "        kubectl -n ${ISTIO_GATEWAY_NAMESPACE:-istio-ingress} get svc -o jsonpath='{.items[*].spec.selector}'"
+      log_error "      Run 'make istio-preflight' — it reports the selector the mesh actually requires."
+      log_error "    HTTP 404 -> Envoy is listening but no route matched: usually a VirtualService referencing"
+      log_error "      the Gateway by BARE name from another namespace (a bare name resolves namespace-locally)."
+      log_error "      It must be '<gateway-namespace>/<gateway-name>'."
+      ;;
     traefik) log_error "    kubectl -n ${TRAEFIK_NAMESPACE:-traefik} get ingress,svc,pods" ;;
   esac
   die "ingress routing not verified"

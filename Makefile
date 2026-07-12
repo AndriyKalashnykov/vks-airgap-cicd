@@ -233,12 +233,20 @@ install-argocd: check-env ## Install ArgoCD into KinD
 	@$(SCRIPTS)/07-install-argocd.sh
 
 .PHONY: install-ingress
-install-ingress: check-env ## Install the selected ingress (INGRESS_CONTROLLER=istio|traefik) fronting the UIs at *.vks.local
+install-ingress: check-env ## Install/attach the ingress (INGRESS_CONTROLLER=istio|istio-existing|traefik) fronting the UIs at *.vks.local
 	@$(SCRIPTS)/44-install-ingress.sh
 
 .PHONY: install-istio
-install-istio: check-env ## Install Istio ingress (control plane + gateway LB) — the default
+install-istio: check-env ## Install Istio ingress (control plane + gateway LB) — the default; we OWN the mesh
 	@$(SCRIPTS)/46-install-istio.sh
+
+.PHONY: attach-istio
+attach-istio: check-env ## Attach to an Istio the platform team ALREADY installed (installs nothing; routes only)
+	@$(SCRIPTS)/47-attach-istio.sh
+
+.PHONY: istio-preflight
+istio-preflight: check-env ## Read-only: is Istio here, what selector does it need, what must the mesh admin grant?
+	@$(SCRIPTS)/48-istio-preflight.sh
 
 .PHONY: install-traefik
 install-traefik: check-env ## Install Traefik ingress (one LB) — the lighter option
@@ -317,6 +325,18 @@ verify-ingress: check-env ## Assert the *.vks.local UIs route through the ingres
 verify-ingress-both: check-env ## Matrix: install + route-verify BOTH ingress controllers against the running cluster
 	@$(MAKE) install-ingress verify-ingress INGRESS_CONTROLLER=istio
 	@$(MAKE) install-ingress verify-ingress INGRESS_CONTROLLER=traefik
+
+.PHONY: e2e-kind-istio-existing
+e2e-kind-istio-existing: ## KinD e2e for the ATTACH mode: a "platform team" installs Istio (foreign naming) -> we attach, installing nothing
+	@echo "==> e2e-kind-istio-existing: fresh cluster, platform-owned Istio, attach-only"
+	@$(MAKE) kind-down          # clear stale .env.kind so the ingress mode is deterministic
+	@$(MAKE) kind-up install-harbor install-argocd install-all
+	@$(SCRIPTS)/90-e2e-istio-existing.sh   # RED 1 + RED 2 + install Istio as the "platform team"
+	@$(MAKE) istio-preflight
+	@$(MAKE) install-ingress INGRESS_CONTROLLER=istio-existing
+	@$(MAKE) verify
+	@$(MAKE) verify-ingress
+	@echo "==> e2e-kind-istio-existing PASSED — the UIs route through an Istio we did not install"
 
 ##@ Jump-box validation (Photon / Ubuntu container, rootless podman)
 JUMPBOX_OS    ?= photon
@@ -475,7 +495,7 @@ define _render_diagrams
 		-e PLANTUML_SECURITY_PROFILE=UNSECURE -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp \
 		-e PLANTUML_LIMIT_SIZE=16384 \
 		-v "$$PWD/docs/diagrams:/work" -w /work docker.io/plantuml/plantuml:$(PLANTUML_VERSION) \
-		-tpng -o $(1) -DRELATIVE_INCLUDE="." airgap.puml context.puml container.puml deployment.puml pipeline-flow.puml vks-topology.puml
+		-tpng -o $(1) -DRELATIVE_INCLUDE="." airgap.puml context.puml container.puml deployment.puml pipeline-flow.puml vks-topology.puml istio-ingress.puml
 endef
 
 .PHONY: diagrams

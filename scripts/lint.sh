@@ -55,5 +55,19 @@ else
   log_warn "hadolint not installed — skipped"
 fi
 
+echo "== exec bit (scripts/*.sh must be executable) =="
+# A script the Makefile / CI invokes as `./scripts/NN-foo.sh` and that was committed
+# mode 100644 fails at RUN time with `Permission denied` (exit 126) — never at lint or
+# build time, so it ships green and only breaks the e2e. Files created by an editor/tool
+# default to 0644, so this is easy to do and invisible until it bites.
+# scripts/lib/*.sh are SOURCED, never executed, so they are exempt (0644 is correct).
+_nonexec=0
+while IFS= read -r f; do
+  [ -x "$f" ] && continue
+  log_error "not executable (Makefile/CI runs it directly): ${f#"$REPO_ROOT"/}  -> chmod +x"
+  _nonexec=1
+done < <(find "$REPO_ROOT/scripts" -maxdepth 1 -name '*.sh' -type f | sort)
+[ "$_nonexec" -eq 0 ] || rc=1
+
 if [ "$rc" -eq 0 ]; then log_info "lint: OK"; else log_error "lint: findings above"; fi
 exit "$rc"

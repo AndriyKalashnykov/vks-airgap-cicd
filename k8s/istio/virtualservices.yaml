@@ -1,0 +1,71 @@
+# VirtualServices routing each *.vks.local hostname to its backend Service.
+#
+# Each VirtualService lives in ITS BACKEND'S namespace — not in the gateway namespace —
+# and references the Gateway with a NAMESPACE-QUALIFIED ref (${ISTIO_GATEWAY_REF}, i.e.
+# "<gateway-ns>/<gateway-name>"). Two reasons, both load-bearing:
+#
+#   1. It is the ONLY layout a locked-down tenant can use. On a platform-owned mesh a
+#      tenant typically has rights to create VirtualServices in its own namespaces and
+#      NOTHING in the gateway namespace (verified: `kubectl auth can-i` says no to
+#      creating a Gateway there, no to creating a VS there, and no to even READING the
+#      gateway Service). Same layout therefore works whether we installed the mesh or not.
+#
+#   2. A BARE gateway name in a VirtualService resolves NAMESPACE-LOCALLY (to
+#      <vs-namespace>/<name>). A VS sitting in the app's namespace that names the gateway
+#      bare silently matches nothing: Envoy listens but answers 404. The "<ns>/<name>" form
+#      is mandatory here. (Both behaviours proven on KinD — see docs/decisions/istio-on-vks.md.)
+#
+# The backends need NO sidecar: istiod knows every k8s Service, so the gateway proxies
+# straight to their ClusterIP. (Verified: single-container backend pods route fine.)
+#
+# ${VAR} tokens are rendered by scripts/lib/istio.sh (restricted envsubst allowlist).
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: gitea
+  namespace: ${GITEA_NAMESPACE}
+spec:
+  hosts:
+    - ${GITEA_HOST}
+  gateways:
+    - ${ISTIO_GATEWAY_REF}
+  http:
+    - route:
+        - destination:
+            host: gitea-http.${GITEA_NAMESPACE}.svc.cluster.local
+            port:
+              number: 3000
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: webui
+  namespace: ${ARGOCD_DEST_NAMESPACE}
+spec:
+  hosts:
+    - ${WEBUI_HOST}
+  gateways:
+    - ${ISTIO_GATEWAY_REF}
+  http:
+    - route:
+        - destination:
+            host: ${APP_NAME}.${ARGOCD_DEST_NAMESPACE}.svc.cluster.local
+            port:
+              number: 80
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: tekton-dashboard
+  namespace: ${TEKTON_NAMESPACE}
+spec:
+  hosts:
+    - ${TEKTON_DASHBOARD_HOST}
+  gateways:
+    - ${ISTIO_GATEWAY_REF}
+  http:
+    - route:
+        - destination:
+            host: tekton-dashboard.${TEKTON_NAMESPACE}.svc.cluster.local
+            port:
+              number: 9097

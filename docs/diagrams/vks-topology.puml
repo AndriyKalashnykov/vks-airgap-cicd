@@ -31,8 +31,11 @@ Deployment_Node(guest, "Guest / workload VKS cluster (VKS_CLUSTER_NAME)", "Tanzu
   Deployment_Node(ns_app, "namespace: webui (we install)", "") {
     Container(app, "webui", "Deployment (2 replicas) + Service — ArgoCD deploys here")
   }
-  Deployment_Node(ns_ing, "namespace: istio-system | traefik (we install)", "") {
-    Container(ing, "Ingress gateway", "VKS Standard Package · INGRESS_CONTROLLER=istio (default) | traefik")
+  ' Label describes what THIS REPO does, not how Broadcom packages Istio: whether VKS
+  ' 9.1 ships Istio (Supervisor Service / "Standard Package" / vcf package install) is
+  ' UNVERIFIED — the 9.1 docs redirect to the 9.0 tree. See docs/decisions/istio-on-vks.md.
+  Deployment_Node(ns_ing, "namespace: istio-system + istio-ingress | traefik", "") {
+    Container(ing, "Ingress gateway", "INGRESS_CONTROLLER=istio (we helm-install it) | istio-existing (the platform's — we attach only) | traefik")
   }
 }
 
