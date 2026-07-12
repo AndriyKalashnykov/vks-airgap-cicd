@@ -1,0 +1,48 @@
+@startuml vks-topology
+!include c4/C4_Deployment.puml
+!include _style.puml
+LAYOUT_LEFT_RIGHT()
+
+title Real-lab topology — Supervisor (VKS-provided) vs guest workload cluster (we install)
+
+Deployment_Node(jb, "Jump box", "Ubuntu or PhotonOS · dual-homed (internet + air gap)") {
+  Container(mir, "Mirror + builder", "crane copy · offline builder image")
+}
+
+Deployment_Node(sup, "Supervisor cluster", "VMware VCF · runs VKS-PROVIDED Supervisor Services") {
+  Deployment_Node(ns_harbor, "vSphere ns: harbor-* (VKS-provided)", "") {
+    ContainerDb(harbor, "Harbor", "OCI registry Supervisor Service · LoadBalancer", $tags="datastore")
+  }
+  Deployment_Node(ns_argo, "vSphere ns: argocd-instance-1 (VKS-provided)", "") {
+    Container(argo, "ArgoCD server", "Supervisor Service · server 2.14.15+vmware.1-vks.1")
+  }
+}
+
+Deployment_Node(guest, "Guest / workload VKS cluster (VKS_CLUSTER_NAME)", "Tanzu Kubernetes cluster · WE INSTALL everything below") {
+  Deployment_Node(ns_gitea, "namespace: gitea (we install)", "") {
+    Container(gitea, "Gitea", "Deployment + PVC (SQLite)")
+  }
+  Deployment_Node(ns_ci, "namespace: ci (we install)", "") {
+    Container(ci, "Pipeline + EventListener", "PipelineRuns · el-webui")
+  }
+  Deployment_Node(ns_tk, "namespace: tekton-pipelines (we install)", "") {
+    Container(tk, "Tekton + Dashboard", "Pipelines + Triggers controllers · read-only UI")
+  }
+  Deployment_Node(ns_app, "namespace: webui (we install)", "") {
+    Container(app, "webui", "Deployment (2 replicas) + Service — ArgoCD deploys here")
+  }
+  Deployment_Node(ns_ing, "namespace: istio-system | traefik (we install)", "") {
+    Container(ing, "Ingress gateway", "VKS Standard Package · INGRESS_CONTROLLER=istio (default) | traefik")
+  }
+}
+
+Rel(mir, harbor, "mirror images", "HTTPS (self-signed + CA)")
+Rel(tk, ci, "runs PipelineRuns")
+Rel(ci, gitea, "clone + tag write-back", "git")
+Rel(ci, harbor, "kaniko build + push", "TLS + CA")
+Rel(argo, app, "deploys (guest REGISTERED as an ArgoCD destination — argocd cluster add / make argocd-register-guest; NOT a 2nd ArgoCD in the guest)", "kubectl via stored cluster credential")
+Rel(app, harbor, "pull image", "containerd (TLS + CA)")
+Rel(ing, app, "route UI", "*.vks.local / HTTP")
+
+SHOW_LEGEND()
+@enduml

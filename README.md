@@ -250,6 +250,17 @@ image into Harbor; a `git push` then drives the whole CI/CD flow entirely inside
 
 <p align="center"><img src="docs/diagrams/out/deployment.png" alt="Deployment diagram" width="900"></p>
 
+### Cluster topology (real lab)
+
+On a real VKS lab the stack spans **two** clusters: Harbor + ArgoCD are VKS-provided
+Supervisor Services that run on the **Supervisor**, while Gitea, Tekton, the ingress, and
+the app are installed into the **guest** workload cluster. Because ArgoCD lives on the
+Supervisor, the guest cluster is **registered as an ArgoCD destination** (`make
+argocd-register-guest`) so it can deploy `webui` there — it does **not** run a second ArgoCD
+in the guest. (The KinD stand-in collapses both levels into one cluster.)
+
+<p align="center"><a href="docs/diagrams/out/vks-topology.png"><img src="docs/diagrams/out/vks-topology.png" alt="Real-lab namespace/cluster topology — Supervisor (VKS-provided Harbor + ArgoCD) vs the guest workload cluster we install into — click to enlarge" width="960"></a></p>
+
 ### Pipeline flow
 
 <p align="center"><a href="docs/diagrams/out/pipeline-flow.png"><img src="docs/diagrams/out/pipeline-flow.png" alt="Pipeline flow — click to enlarge" width="960"></a></p>
@@ -768,6 +779,15 @@ make verify        # push a marked change → Tekton → Harbor → ArgoCD → l
 Supervisor Services. It mirrors all images into that Harbor, builds + pushes the offline Maven
 builder image, installs Gitea + Tekton, and creates the ArgoCD `Application`.
 
+> **Cross-cluster ArgoCD deploy.** ArgoCD runs on the **Supervisor**, so it must be told where
+> your **guest** workload cluster is. Set **`ARGOCD_KUBECONFIG`** (Supervisor access) in `.env`
+> alongside `KUBECONFIG` (guest access); `make gitops` (invoked by `install-all`) then
+> **auto-registers** the guest cluster as an ArgoCD destination via **`make
+> argocd-register-guest`** and points the `Application` there — it does **not** install a second
+> ArgoCD in the guest. As the ArgoCD **admin** (you own the instance from A2), this
+> auto-registration works out of the box. Leave `ARGOCD_KUBECONFIG` unset only if ArgoCD and the
+> workload run in the same cluster.
+
 **Step 7 — access the UIs.** Harbor and ArgoCD are the ones you installed above — use the FQDN /
 LB IP + admin credentials you set there. For **Gitea** (which you installed) and the deployed
 **app**, either run
@@ -1060,6 +1080,16 @@ make verify        # push a marked change → Tekton → Harbor → ArgoCD → l
 did. It mirrors all images into that Harbor, builds + pushes the offline Maven builder image,
 installs Gitea + Tekton, and creates the ArgoCD `Application` (through the `AppProject` + RBAC you
 were granted).
+
+> **Cross-cluster ArgoCD deploy.** The shared ArgoCD runs on the **Supervisor**, so it must be
+> told where your **guest** workload cluster is — and **registering a cluster is an ArgoCD-ADMIN
+> operation** you cannot self-service as a tenant. Do **not** set `ARGOCD_KUBECONFIG` (you lack
+> Supervisor/ArgoCD-admin access, so `make gitops`'s auto-registration would fail). Instead
+> **request** that the platform team register your guest cluster as an ArgoCD destination (they
+> run `make argocd-register-guest` / `argocd cluster add`, or wire it via the argocd-attach-service
+> CRs), then set **`ARGOCD_DEST_SERVER`** to your guest cluster's API URL in `.env` so the
+> `Application` deploys **into your guest cluster**, not onto the Supervisor. This installs no
+> second ArgoCD in the guest.
 
 **Step 7 — access the UIs.** Harbor and ArgoCD are the **shared** instances — use the endpoints
 you discovered + the credentials you were granted. For **Gitea** (which you installed) and the
