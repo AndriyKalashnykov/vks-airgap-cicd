@@ -112,8 +112,14 @@ check_pinned "istio/proxyv2 (images.txt)" "$proxyv2_itag" "$istio_itag"
 # maven `3.9 -> 3.10` bump would drift the consumers silently. Assert the full tag across all four.
 # `|| true`: standalone `set -e` assignments — a head-1 SIGPIPE / no-match must not abort here.
 mvn_itag="$(grep -oE '^maven:[^[:space:]"]+' images/images.txt | head -1 | sed 's|maven:||' || true)"
-check_pinned "MAVEN_IMAGE (apps/java/javawebapp/Dockerfile.builder)" \
-  "$(grep -oE 'MAVEN_IMAGE=maven:[^[:space:]"]+' apps/java/javawebapp/Dockerfile.builder | head -1 | sed 's|MAVEN_IMAGE=maven:||' || true)" "$mvn_itag"
+# The builder Dockerfile belongs to whichever app SHIPS one (see app_has_builder) — found via the
+# registry, never by hardcoding which app is the Java one.
+builder_app="$(app_names | while read -r a; do app_has_builder "$a" && { printf '%s' "$a"; break; }; done)"
+if [ -n "$builder_app" ]; then
+  builder_df="$(app_src "$builder_app")/Dockerfile.builder"
+  check_pinned "MAVEN_IMAGE (${builder_df})" \
+    "$(grep -oE 'MAVEN_IMAGE=maven:[^[:space:]"]+' "$builder_df" | head -1 | sed 's|MAVEN_IMAGE=maven:||' || true)" "$mvn_itag"
+fi
 check_pinned "BUILD_BASE (15-build-push-builder.sh)" \
   "$(grep -E '^BUILD_BASE=' scripts/15-build-push-builder.sh | grep -oE 'maven:[^[:space:]"]+' | head -1 | sed 's|maven:||' || true)" "$mvn_itag"
 check_pinned "MAVEN_BASE (15-build-push-builder.sh)" \

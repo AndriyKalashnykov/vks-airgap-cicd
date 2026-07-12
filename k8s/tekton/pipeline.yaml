@@ -79,5 +79,6 @@ spec:
         - { name: deploy-url, value: $(params.deploy-repo-url) }
         - { name: deploy-revision, value: $(params.deploy-revision) }
         - { name: tag, value: $(tasks.clone-app.results.commit) }
+        - { name: app, value: ${APP_NAME} }
       workspaces:
         - { name: scratch, workspace: shared-data }

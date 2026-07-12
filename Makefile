@@ -53,8 +53,6 @@ MARKDOWNLINT_VERSION ?= 0.49.0
 CONTAINER_ENGINE    ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
 SCRIPTS := ./scripts
-APP_DIR := ./apps/java/javawebapp
-MVN     := ./apps/java/javawebapp/mvnw
 
 # ---------------------------------------------------------------------------
 .PHONY: help
@@ -120,6 +118,10 @@ check-how-provenance: ## Gate: every `# how:` acquisition command must be runnab
 .PHONY: check-env-clobber
 check-env-clobber: ## Gate: an UNCOMMENTED .env.example value must not shadow a dynamic fallback or a per-run override
 	@$(SCRIPTS)/check-env-clobber.sh
+
+.PHONY: check-app-hardcodes
+check-app-hardcodes: ## Gate: no shared script/manifest/Makefile may NAME an app — everything derives from apps/registry.tsv
+	@$(SCRIPTS)/check-app-hardcodes.sh
 
 .PHONY: check-tools
 check-tools: ## Read-only: is this jump box able to run the flow? (required vs optional CLIs + versions)
@@ -522,7 +524,7 @@ trivy-fs: app-build ## trivy — scan the built app jar's embedded deps for fixa
 trivy-config: ## trivy — scan k8s/Tekton manifests for HIGH/CRITICAL misconfigurations (.trivyignore documents accepted findings)
 	@if command -v trivy >/dev/null 2>&1; then \
 	  trivy config --severity HIGH,CRITICAL --exit-code 1 --quiet \
-	    --skip-dirs bundle --skip-dirs apps/java/javawebapp --skip-dirs docs --skip-dirs .claude \
+	    --skip-dirs bundle --skip-dirs apps --skip-dirs docs --skip-dirs .claude \
 	    --skip-files jumpbox/Dockerfile.bootstrap .; \
 	else echo "trivy not installed — run 'make deps' (mise) — skipping"; fi
 
@@ -599,7 +601,7 @@ docs-lint: diagrams-check check-readme-scenarios ## Lint markdown (tracked AND n
 	else echo "markdownlint not installed — skipping (install markdownlint-cli)"; fi
 
 .PHONY: static-check
-static-check: check-toolchain-alignment check-java-alignment check-env check-env-coverage check-env-clobber check-how-provenance check-image-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: check-toolchain-alignment check-java-alignment check-env check-env-coverage check-env-clobber check-app-hardcodes check-how-provenance check-image-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint ## Full local pipeline (offline-verifiable parts)

@@ -19,6 +19,11 @@
 [ -n "${__VKS_ISTIO_SH_LOADED:-}" ] && return 0
 __VKS_ISTIO_SH_LOADED=1
 
+# The routes are per-app: one VirtualService/HTTPRoute per app, and every app's host must be on the
+# Gateway. All of that comes from apps/registry.tsv — nothing here names an app.
+# shellcheck source=scripts/lib/apps.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/apps.sh"
+
 # PSA levels for the namespaces we create (VKS enforces `restricted` by default from VKr 1.26).
 # shellcheck source=scripts/lib/psa.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/psa.sh"
@@ -233,6 +238,16 @@ EOF
   printf '%s]' "$out"
 }
 
+# Space-separated variants, for the shell loops that iterate hosts/namespaces.
+app_hosts_flat() {
+  local a
+  while read -r a; do [ -n "$a" ] && printf '%s ' "$(app_host "$a")"; done <<EOF
+$(app_names)
+EOF
+}
+
+app_namespaces_flat() { app_names | tr '\n' ' '; }
+
 # ---------------------------------------------------------------------------
 # istio_wait_gwapi_address — wait for Istio to PROGRAM the Gateway and publish its address.
 # `Programmed=True` is the real readiness signal; the address is what /etc/hosts must point at.
@@ -304,10 +319,13 @@ istio_assert_shared_gateway_hosts() {
   hosts="$(kubectl -n "$gw_ns" get gateway "$gw_name" -o jsonpath='{range .spec.servers[*]}{range .hosts[*]}{@}{"\n"}{end}{end}' 2>/dev/null || true)"
   if [ -z "$hosts" ]; then
     log_error "cannot read the shared Gateway ${ISTIO_SHARED_GATEWAY} (missing, or no RBAC to get it)."
-    log_error "  Ask the mesh admin to confirm it exists and admits: ${GITEA_HOST} ${JAVAWEBAPP_HOST} ${TEKTON_DASHBOARD_HOST}"
+    log_error "  Ask the mesh admin to confirm it exists and admits: ${GITEA_HOST} ${TEKTON_DASHBOARD_HOST} $(app_hosts_flat)"
     return 1
   fi
-  for host in "$GITEA_HOST" "$JAVAWEBAPP_HOST" "$TEKTON_DASHBOARD_HOST"; do
+  # EVERY host we route must be admitted — including each app's. On a real lab the shared Gateway's
+  # `hosts:` list belongs to the MESH ADMIN, so a SECOND app may need a REQUEST to have its host
+  # added. This is where a tenant finds that out, instead of getting a silent 404.
+  for host in "$GITEA_HOST" "$TEKTON_DASHBOARD_HOST" $(app_hosts_flat); do
     ok=0
     while IFS= read -r h; do
       [ -z "$h" ] && continue
@@ -504,16 +522,18 @@ istio_drop_other_api_routes() { # <keep: gateway-api|classic>
   case "$keep" in
     gateway-api)
       log_info "removing any CLASSIC routes we previously created (so they cannot serve stale traffic)"
-      for ns in "$GITEA_NAMESPACE" "$ARGOCD_DEST_NAMESPACE" "$TEKTON_NAMESPACE"; do
-        kubectl -n "$ns" delete virtualservice gitea javawebapp tekton-dashboard --ignore-not-found >/dev/null 2>&1 || true
+      for ns in "$GITEA_NAMESPACE" "$TEKTON_NAMESPACE" $(app_namespaces_flat); do
+        # shellcheck disable=SC2046  # word-splitting is intended: one name per app
+        kubectl -n "$ns" delete virtualservice gitea tekton-dashboard $(app_names | tr '\n' ' ') --ignore-not-found >/dev/null 2>&1 || true
       done
       [ -n "${ISTIO_GATEWAY_NAMESPACE:-}" ] && \
         kubectl -n "$ISTIO_GATEWAY_NAMESPACE" delete gateway.networking.istio.io "${ISTIO_GATEWAY_NAME:-vks-uis}" --ignore-not-found >/dev/null 2>&1 || true
       ;;
     classic)
       log_info "removing any GATEWAY-API routes we previously created (so they cannot serve stale traffic)"
-      for ns in "$GITEA_NAMESPACE" "$ARGOCD_DEST_NAMESPACE" "$TEKTON_NAMESPACE"; do
-        kubectl -n "$ns" delete httproute gitea javawebapp tekton-dashboard --ignore-not-found >/dev/null 2>&1 || true
+      for ns in "$GITEA_NAMESPACE" "$TEKTON_NAMESPACE" $(app_namespaces_flat); do
+        # shellcheck disable=SC2046  # word-splitting is intended: one name per app
+        kubectl -n "$ns" delete httproute gitea tekton-dashboard $(app_names | tr '\n' ' ') --ignore-not-found >/dev/null 2>&1 || true
       done
       kubectl -n "${ISTIO_GWAPI_NAMESPACE:-vks-ingress}" delete gateway.gateway.networking.k8s.io "${ISTIO_GATEWAY_NAME:-vks-uis}" --ignore-not-found >/dev/null 2>&1 || true
       ;;

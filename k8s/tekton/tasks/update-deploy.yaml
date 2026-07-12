@@ -18,6 +18,12 @@ spec:
     - name: tag
       type: string
       description: New image tag to write into kustomization.yaml.
+    - name: app
+      type: string
+      description: >-
+        Which app this write-back is for. The task is SHARED by every app, so the commit message
+        must name the app it actually deployed — hardcoding one would make every app's write-back
+        claim it deployed that one.
     - name: git-user-name
       type: string
       default: ci-bot
@@ -52,7 +58,7 @@ spec:
         #!/bin/sh
         set -eu
         cd "$(workspaces.scratch.path)/deploy"
-        # kustomization.yaml is at the deploy repo root (seeded from deploy/javawebapp).
+        # kustomization.yaml is at the deploy repo root (seeded from the app's deploy/ dir).
         yq -i '.images[0].newTag = strenv(TAG)' kustomization.yaml
         echo "set image tag -> $TAG"
         yq '.images' kustomization.yaml
@@ -70,6 +76,6 @@ spec:
           exit 0
         fi
         git add kustomization.yaml
-        git commit -m "ci: deploy javawebapp $(params.tag)"
+        git commit -m "ci: deploy $(params.app) $(params.tag)"
         git push origin "HEAD:$(params.deploy-revision)"
         echo "pushed deploy update for tag $(params.tag)"

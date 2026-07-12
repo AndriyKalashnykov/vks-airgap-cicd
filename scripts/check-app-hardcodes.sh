@@ -42,8 +42,16 @@ for f in "${TARGETS[@]}"; do
   checked=$((checked + 1))
   while read -r app; do
     [ -n "$app" ] || continue
-    # A bare mention in a COMMENT is fine (explaining WHY, or naming an example). Code is not.
-    hits="$(grep -nE "\\b${app}\\b" "$f" 2>/dev/null | grep -vE '^[0-9]+:\s*#' | grep -vE '^[0-9]+:\s*(//|--)' || true)"
+    # DOCUMENTATION may name an app (a comment explaining why, a `make help` line, a YAML
+    # `description:` giving an example). CODE may not. So strip the documentation first, then look:
+    #   - whole-line shell/YAML comments        (^ #)
+    #   - Makefile help text after `##`
+    #   - YAML `description:` values
+    # What remains is code, and an app name there means adding an app needs a code edit.
+    hits="$(
+      sed -E 's/##.*$//; s/^[[:space:]]*#.*$//; s/^[[:space:]]*(description|#).*$//' "$f" 2>/dev/null \
+        | grep -nE "\\b${app}\\b" || true
+    )"
     if [ -n "$hits" ]; then
       log_error "app name '${app}' is HARDCODED in ${f}:"
       printf '%s\n' "$hits" | sed 's/^/      /' >&2
