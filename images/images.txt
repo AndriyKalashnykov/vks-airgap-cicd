@@ -21,6 +21,22 @@ eclipse-temurin:25.0.3_9-jre-jammy
 # renovate: datasource=docker depName=maven
 maven:3.9-eclipse-temurin-25
 
+# ---- Go toolchain (gowebapp: `go vet` + `go test` + `go build` in the Tekton go-test/kaniko tasks) ----
+# No pre-baked dependency cache is needed (unlike the Maven builder image): gowebapp is
+# stdlib-only, so the offline build fetches nothing. See apps/go/gowebapp/main.go.
+# renovate: datasource=docker depName=golang
+golang:1.25.5-bookworm
+
+# ---- Go runtime base (gowebapp Dockerfile runtime stage) ----
+# distroless static + nonroot: no shell, no package manager, uid 65532 — the app is a static
+# CGO_ENABLED=0 binary, so nothing else is needed in the image.
+# `nonroot` is a MOVING tag (like `latest`) — distroless publishes no semver tags, so the tag alone
+# is NOT reproducible: the same tag resolves to different bytes over time and the air-gap bundle
+# would silently change. Pinned by DIGEST; Renovate bumps the digest (datasource=docker + the
+# digest pin), and the mirror handles the `repo:tag@digest` shape (lib/mirror.sh:12).
+# renovate: datasource=docker depName=gcr.io/distroless/static-debian12
+gcr.io/distroless/static-debian12:nonroot@sha256:b7bb25d9f7c31d2bdd1982feb4dafcaf137703c7075dbe2febb41c24212b946f
+
 # ---- Git client (git-clone task + write-back task) ----
 # renovate: datasource=docker depName=alpine/git
 alpine/git:v2.54.0

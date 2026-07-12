@@ -1277,7 +1277,7 @@ VKS cluster:
 |---------|------------|--------------|-------|
 | **Gitea** (we install) | <http://gitea.vks.local> | `http://gitea.vks.local` once the ingress is in place (install, or attach with `INGRESS_CONTROLLER=istio-existing`), else `kubectl -n gitea port-forward svc/gitea-http 3000:3000` | `gitea_admin` / `GITEA_ADMIN_PASSWORD` |
 | **Tekton Dashboard** (we install) | <http://tekton.vks.local> | same — ingress or `port-forward` | — (read-only) |
-| **App (javawebapp)** (we deploy) | <http://app.vks.local/> | same — ingress or `port-forward svc/javawebapp` | — (health at `/actuator/health`) |
+| **App (javawebapp)** (we deploy) | <http://javawebapp.vks.local/> | same — ingress or `port-forward svc/javawebapp` | — (health at `/actuator/health`) |
 | **Harbor** | its own LB IP, **self-signed HTTPS** (`https://<ip>`, our CA) | the **lab's** Harbor URL, **HTTPS** | `admin` / `HARBOR_PASSWORD` |
 | **ArgoCD** | its own LB IP, **self-signed TLS** (`https://<ARGOCD_LB_IP>`, `--insecure`) — **not** behind the ingress | the **lab's own ArgoCD** URL/IP, self-signed TLS | `admin` / `make argocd-password` |
 
@@ -1317,13 +1317,13 @@ line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
 
 | UI | URL | Login | What you'll watch |
 |----|-----|-------|-------------------|
-| **App (javawebapp)** | <http://app.vks.local/> | — | the greeting that changes |
+| **App (javawebapp)** | <http://javawebapp.vks.local/> | — | the greeting that changes |
 | **Gitea** | <http://gitea.vks.local> | `gitea_admin` / your `GITEA_ADMIN_PASSWORD` | edit source; see the tag write-back |
 | **Tekton Dashboard** | <http://tekton.vks.local> | — (read-only) | the PipelineRun: test → build → deploy |
 | **Harbor** | its own LB IP, self-signed HTTPS (KinD) or the lab's HTTPS URL | `admin` / your `HARBOR_PASSWORD` | the freshly-built image |
 | **ArgoCD** | its own LB IP, self-signed TLS (`https://<ARGOCD_LB_IP>`, `--insecure`) on KinD — on a real VKS lab, **your lab's own ArgoCD URL** | `admin` / `make argocd-password` | the sync that rolls the new image |
 
-1. **See the current greeting.** Open <http://app.vks.local/>. The page shows a greeting —
+1. **See the current greeting.** Open <http://javawebapp.vks.local/>. The page shows a greeting —
    `Hello from vks-airgap-cicd` by default — rendered in the `<p class="message">` element,
    alongside the app version and git commit. This is what will visibly change.
 
@@ -1370,7 +1370,7 @@ line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
    in namespace `javawebapp` to `$HARBOR_URL/apps/javawebapp:<sha>`. (Auto-sync polls the deploy repo
    on an interval; click **Refresh** to reconcile immediately.)
 
-7. **See the page change.** Refresh <http://app.vks.local/>. The greeting now shows your new
+7. **See the page change.** Refresh <http://javawebapp.vks.local/>. The greeting now shows your new
    text. That change went **source → test → image → registry → GitOps write-back → cluster →
    running page** without a single byte crossing the air gap.
 
