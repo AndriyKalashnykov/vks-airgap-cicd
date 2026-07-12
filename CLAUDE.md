@@ -249,13 +249,67 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 ## Backlog / resume state
 
-> ### ▶️ STATE — everything below was verified on 2026-07-12c; nothing is known-broken
+> ### ▶️ HANDOFF 2026-07-12d — MULTI-APP (javawebapp + gowebapp). Branch: refactor/webui-to-javawebapp
 >
-> **The full KinD e2e permutation matrix is 7/7 GREEN** (run sequentially — two registry-mutating
-> runs at once corrupt Harbor; a `flock` now blocks it, do not fight it):
+> **DO FIRST: re-run `make e2e-kind` and read the result.** At handoff time a two-app e2e was
+> running (the previous one died at `builder-image` on a `set -e` trap — fixed, see below). NOTHING
+> about the two-app walk is proven until that run is green. Everything else below is green gates.
 >
-> | Permutation | Command | Result |
-> |---|---|---|
+> #### What shipped (on the branch, NOT yet merged — PRs #139 docs-sync, #140 rename+multi-app)
+>
+> - **`webui` -> `javawebapp`** (a second app arrived; the name must say WHICH app). CLAUDE.md's
+>   dated history deliberately still says `webui` — rewriting it would falsify the record.
+> - **`gowebapp`**: Go, **stdlib-only** on purpose — with zero modules the air-gapped build fetches
+>   nothing, so it needs NO pre-baked dependency cache (the Maven app needs `Dockerfile.builder`
+>   precisely because an in-cluster `mvn` cannot reach Maven Central). distroless/static, uid 65532,
+>   digest-pinned base (the `nonroot` tag MOVES).
+> - **`apps/registry.tsv` + `scripts/lib/apps.sh`**: the single source of truth. Seeding, Tekton,
+>   ArgoCD, ingress, PSA, preflights, validate, lint, trivy-fs, builder-image, app-test/build/run
+>   and verify ALL loop over it. **Adding an app is ONE ROW**; a new LANGUAGE is that row + one
+>   `case` branch (test task, marker file, health path, base images).
+> - **Tekton**: ONE shared EventListener (`labelSelector`) discovering a per-app standalone
+>   `Trigger` CR (CEL-filtered on `body.repository.name` — VERIFIED against Gitea's docs); ONE
+>   pipeline template rendered per app; shared tasks + a shared `apps-ci` ServiceAccount.
+> - **`make verify` proves EACH app independently**: own marker, own PipelineRun (matched by the
+>   `tekton.dev/pipeline=<app>-ci` label, not "some new run appeared"), own deployed-image change,
+>   own page. A green javawebapp can no longer hide a broken gowebapp.
+> - **NEW GATE `check-app-hardcodes`** (in static-check): no shared file may NAME an app. It found
+>   4 REAL bugs on first run — the write-back commit message said "ci: deploy javawebapp" for EVERY
+>   app; a route-API switch deleted only javawebapp's routes; hadolint never linted the Go
+>   Dockerfile; several hardcoded paths.
+> - `trivy-fs` now scans EVERY app's ARTIFACT (jar + the compiled Go binary — a stdlib-only app has
+>   no modules, so scanning go.mod would miss Go-STDLIB CVEs entirely).
+>
+> #### TODO (small, known)
+>
+> 1. **`ARGOCD_PROJECT`** — `k8s/argocd/application.yaml:9` hardcodes `project: default`. Fine for
+>    KinD/Scenario 1 (admin); a TENANT has their own AppProject. Make it a var (default `default`).
+> 2. **Diagrams** show one app — re-render (`make diagrams`; the drift gate will catch it).
+> 3. **CLAUDE.md "Common commands"** still says one app in places; README got the multi-app pass
+>    (new "Adding an app" section incl. the real-lab grant table).
+> 4. Merge #139, then #140.
+>
+> #### Real-lab facts established this session (no lab needed to re-derive)
+>
+> | Concern | Verdict |
+> |---|---|
+> | Harbor robot | **Project-scoped** (`22-harbor-robot.sh:40`) -> a 2nd app needs NO new credential. |
+> | ArgoCD AppProject | A TENANT must have the new namespace in `spec.destinations` AND the new `<app>-deploy` URL in `spec.sourceRepos`. The ONLY universal tenant request. Scenario 1: none (`default` permits all). |
+> | Ingress host | Only an issue on the CLASSIC shared-Gateway path (its `hosts:` belongs to the mesh admin). On the **Gateway-API** path (default; what Broadcom uses) Istio auto-provisions the gateway from OUR Gateway in OUR namespace -> self-service, no request. |
+> | Namespace | One per app (operator's decision). Apps COULD share one; that would remove the AppProject request but weaken isolation. |
+>
+> #### Traps hit this session (do not repeat)
+>
+> - **`A && B` as a loop body returns NON-ZERO when A is false** -> under `set -e` the whole script
+>   dies. `app_has_builder "$a" && printf ...` killed `builder-image` (gowebapp is last and has no
+>   builder). Use `if ...; then ...; fi`.
+> - **A `${VAR}` inside a YAML FLOW mapping is a syntax error** (`{ name: ${X} }`) — block style only.
+> - **Never edit a script while a long run is executing it** (bash reads scripts incrementally).
+> - **Agents idle without reporting**: 4 devil's-advocate/research agents idled with no deliverable.
+>   Their key questions were answered directly instead (Gitea payload field, Harbor robot scope,
+>   Gateway-API self-service). Do not block on an agent; verify yourself.
+
+---|---|---|
 > | istio + secure TLS (default) | `make e2e-kind` | ✅ marker deployed, 3 UIs 200, PSA OK |
 > | both ingress controllers | `make verify-ingress-both` | ✅ istio + traefik routes |
 > | traefik + secure TLS | `make e2e-kind INGRESS_CONTROLLER=traefik` | ✅ |

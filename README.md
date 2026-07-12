@@ -1440,6 +1440,42 @@ anything. The KinD path needs **none** of this — it discovers and generates ev
 
 </details>
 
+## Adding an app
+
+The demo runs **N apps** through the same walk. `apps/registry.tsv` is the single source of truth —
+seeding, Tekton, ArgoCD, the ingress, PSA and the gates all loop over it. **Adding an app is one
+row** (a new *language* is that row plus one `case` branch in `scripts/lib/apps.sh`):
+
+```tsv
+# name        lang  src                   deploy             host_var
+javawebapp    java  apps/java/javawebapp  deploy/javawebapp  JAVAWEBAPP_HOST
+gowebapp      go    apps/go/gowebapp      deploy/gowebapp    GOWEBAPP_HOST
+```
+
+Each app gets: its own Gitea repos (`<app>-app` + `<app>-deploy`), its own Tekton `Pipeline`
+(`<app>-ci`) and `Trigger`, its own Harbor repo, its own namespace, its own ArgoCD `Application`,
+its own ingress host — and `make verify` proves **each app independently** (its own marker on its
+own page). `make check-app-hardcodes` fails the build if any shared file names an app.
+
+Only two things differ per language: which Tekton task runs the tests (`maven-test` / `go-test`),
+and where `verify` injects its marker. Both live in `scripts/lib/apps.sh`.
+
+### On a REAL lab, adding an app may need grants you must request
+
+Locally (and in **Scenario 1**, where you are the admin) nothing else is needed. As a **tenant**
+(Scenario 2) an app's **new namespace** and **new hostname** may not be covered by what you were
+granted. What that means concretely:
+
+| What | When it bites | What to run / ask for |
+|---|---|---|
+| **ArgoCD AppProject destination** | Always, as a tenant (you get your own AppProject; ours defaults to `default`, which permits everything — a real lab's will not). The `Application` is rejected: *"application destination … is not permitted in project"* | **Check first:** `kubectl -n $ARGOCD_NAMESPACE get appproject <yours> -o jsonpath='{.spec.destinations}{"\n"}{.spec.sourceRepos}'` — your new namespace AND the new `<app>-deploy` repo URL must both be listed.<br>**Ask the ArgoCD admin** to add them: `kubectl -n $ARGOCD_NAMESPACE patch appproject <yours> --type=json -p='[{"op":"add","path":"/spec/destinations/-","value":{"server":"$ARGOCD_DEST_SERVER","namespace":"<app>"}},{"op":"add","path":"/spec/sourceRepos/-","value":"<gitea>/<org>/<app>-deploy.git"}]'` |
+| **Ingress hostname on a SHARED Gateway** | **Only** on the classic route API against a platform-owned Gateway (`ISTIO_SHARED_GATEWAY`). Its `hosts:` list belongs to the mesh admin, so an unlisted host **404s from a listener that exists** | **Check first:** `make istio-preflight` (and `istio_assert_shared_gateway_hosts` fails the install rather than 404ing later).<br>**Ask the mesh admin** to admit the host — ideally once, as a wildcard: `kubectl -n <gw-ns> patch gateway <gw> --type=json -p='[{"op":"add","path":"/spec/servers/0/hosts/-","value":"*.vks.local"}]'` |
+| **Harbor** | Never | Nothing to do: `make harbor-robot` mints a **project-scoped** robot (push+pull on the whole `apps` project), so a new repo under it is already covered. |
+
+**On the Gateway-API path (the default, and what Broadcom uses) the hostname needs nobody:** Istio
+auto-provisions the gateway from a `Gateway` we create in **our own** namespace, so its `hosts:`
+list is ours. That leaves the AppProject destination as the only universal tenant request.
+
 ## Repository layout
 
 <details>
@@ -1450,8 +1486,10 @@ anything. The KinD path needs **none** of this — it discovers and generates ev
 | Path | Purpose |
 |------|---------|
 | `scripts/` | Ordered, OS-portable (Ubuntu+PhotonOS) automation; `lib/os.sh` + `lib/mirror.sh` are shared libraries |
-| `apps/java/javawebapp/` | Minimal Spring Boot web UI (seeded into Gitea `javawebapp-app`); `Dockerfile` + `Dockerfile.builder` |
-| `deploy/javawebapp/` | Kustomize manifests ArgoCD deploys (one dir per app = one deploy repo). **Not applied by us** — seeded into the Gitea `javawebapp-deploy` repo, which Tekton writes the image tag into and ArgoCD syncs |
+| `apps/registry.tsv` | **The app registry — one row per app.** Everything loops over it: seeding, Tekton, ArgoCD, ingress, PSA, the gates. Adding an app is **one row** |
+| `apps/java/javawebapp/` | Spring Boot app (seeded into Gitea `javawebapp-app`); `Dockerfile` + `Dockerfile.builder` (its offline Maven dependency cache) |
+| `apps/go/gowebapp/` | Go app, **stdlib-only** (seeded into `gowebapp-app`). No `Dockerfile.builder`: with zero modules the air-gapped build fetches nothing, so it needs no pre-baked dependency cache |
+| `deploy/<app>/` | Kustomize manifests ArgoCD deploys — one dir per app = one deploy repo. **Not applied by us** — seeded into Gitea `<app>-deploy`, which Tekton writes the image tag into and ArgoCD syncs |
 | `k8s/` | Everything **we** apply to the cluster |
 | `k8s/tekton/` | Tekton pipeline, tasks, triggers, RBAC |
 | `k8s/argocd/` | ArgoCD `Application` definition |
