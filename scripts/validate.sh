@@ -124,21 +124,29 @@ else
   log_warn "deploy/base not present yet — skipped"
 fi
 
-echo "== kubeconform (tekton/ + argocd/) =="
+echo "== kubeconform (k8s/) =="
 if have kubeconform; then
-  for dir in tekton argocd k8s; do
-    if [ -d "$REPO_ROOT/$dir" ] && find "$REPO_ROOT/$dir" -name '*.yaml' | read -r _; then
-      log_info "validating $dir/"
-      mapfile -d '' _files < <(find "$REPO_ROOT/$dir" -name '*.yaml' -print0)
-      # k8s/ holds core kinds → yannh schemas; tekton/ + argocd/ are CRD-heavy → catalog.
-      case "$dir" in k8s) KC_LOCS=("${KC_LOCS_K8S[@]}") ;; *) KC_LOCS=("${KC_LOCS_CRD[@]}") ;; esac
+  # Enumerate k8s/* DYNAMICALLY: a hardcoded subdir list would silently skip a new one,
+  # and a gate that quietly checks a subset is worse than no gate. Print the denominator.
+  shopt -s nullglob
+  _subdirs=("$REPO_ROOT"/k8s/*/)
+  shopt -u nullglob
+  [ "${#_subdirs[@]}" -gt 0 ] || log_warn "k8s/ has no manifests yet — skipped"
+  for dir in "${_subdirs[@]}"; do
+    name="$(basename "$dir")"
+    if find "$dir" -name '*.yaml' | read -r _; then
+      mapfile -d '' _files < <(find "$dir" -name '*.yaml' -print0)
+      # tekton/ + argocd/ are CRD-heavy → CRDs-catalog. The rest (gitea, istio, traefik)
+      # is core kinds + a few CRDs → the k8s schema set.
+      case "$name" in tekton|argocd) KC_LOCS=("${KC_LOCS_CRD[@]}") ;; *) KC_LOCS=("${KC_LOCS_K8S[@]}") ;; esac
+      log_info "validating k8s/$name/ (${#_files[@]} manifests)"
       kc -ignore-missing-schemas "${_files[@]}" || rc=1
     else
-      log_warn "$dir/ has no manifests yet — skipped"
+      log_warn "k8s/$name/ has no manifests yet — skipped"
     fi
   done
 else
-  log_warn "kubeconform not installed — tekton/argocd manifests unchecked"
+  log_warn "kubeconform not installed — k8s/ manifests unchecked"
 fi
 
 if [ "$rc" -eq 0 ]; then log_info "validate: OK"; else log_error "validate: findings above"; fi

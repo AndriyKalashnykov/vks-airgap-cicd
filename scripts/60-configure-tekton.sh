@@ -113,10 +113,10 @@ render_and_apply() {
   # shellcheck disable=SC2016
   envsubst "$ALLOWLIST" < "$f" | run kubectl apply -f -
 }
-render_and_apply "${REPO_ROOT}/tekton/rbac.yaml"
-for t in "${REPO_ROOT}"/tekton/tasks/*.yaml; do render_and_apply "$t"; done
-render_and_apply "${REPO_ROOT}/tekton/pipeline.yaml"
-render_and_apply "${REPO_ROOT}/tekton/triggers.yaml"
+render_and_apply "${REPO_ROOT}/k8s/tekton/rbac.yaml"
+for t in "${REPO_ROOT}"/k8s/tekton/tasks/*.yaml; do render_and_apply "$t"; done
+render_and_apply "${REPO_ROOT}/k8s/tekton/pipeline.yaml"
+render_and_apply "${REPO_ROOT}/k8s/tekton/triggers.yaml"
 
 # ---- Attach the git-auth secret to the CI ServiceAccount ----
 run kubectl -n "$CI_NAMESPACE" patch serviceaccount webui-ci \

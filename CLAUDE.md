@@ -85,7 +85,7 @@ Run a single app test: `cd apps/java/webui && ./mvnw -B -Dtest=<ClassName>#<meth
   `07-install-argocd.sh` exposes ArgoCD on its **own** LB with self-signed TLS (default) and
   publishes `ARGOCD_LB_IP`. That overlay (loaded last by `load_env` / `-include`) makes the
   normal flow run against kind unchanged. `kind-down.sh` prunes cloud-provider-kind + `kindccm-*` orphans.
-- **Manifest rendering**: k8s/Tekton/ArgoCD YAML carry `${VAR}` tokens rendered by
+- **Manifest rendering**: k8s/ YAML (gitea, istio, traefik, tekton, argocd) carry `${VAR}` tokens rendered by
   the configure scripts with a RESTRICTED `envsubst` allowlist (so step-script
   `$(...)`/`${}` are untouched). Tekton install rewrites upstream image hosts
   (`gcr.io/…` → Harbor) via `sed`, matching `lib/mirror.sh`'s mapping.

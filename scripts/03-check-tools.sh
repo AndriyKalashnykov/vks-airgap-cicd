@@ -29,7 +29,7 @@ kubectl|required|talk to the cluster (every step)
 helm|required|install Harbor / Istio / Gitea charts
 jq|required|Istio discovery, Harbor API, mirror bookkeeping
 yq|required|manifest edits in the mirror//install path
-envsubst|required|render the \${VAR} tokens in k8s/ and tekton/ manifests (package: gettext)
+envsubst|required|render the \${VAR} tokens in k8s/ manifests (package: gettext)
 crane|required|the image-mirror engine (pull/push/validate)
 curl|required|Harbor + UI readiness probes
 git|required|seed the Gitea repos, tag write-back

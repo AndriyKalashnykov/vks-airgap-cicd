@@ -47,7 +47,7 @@
     {
       "customType": "regex",
       "description": "Image tags in k8s + Tekton manifests, referenced as ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/<repo>:<tag> (a ${VAR}-prefixed ref the built-in docker manager can't parse). depName/currentValue are extracted from the ref so these bump in lockstep with images/images.txt; the check-image-alignment gate is the deterministic backstop.",
-      "managerFilePatterns": ["/^k8s/.+\\.yaml$/", "/^tekton/.+\\.yaml$/"],
+      "managerFilePatterns": ["/^k8s/.+\\.yaml$/"],
       "matchStrings": [
         "\\$\\{HARBOR_URL\\}/\\$\\{HARBOR_INFRA_PROJECT\\}/(?<depName>[^:\\s\"]+):(?<currentValue>[^\\s\"]+)"
       ],

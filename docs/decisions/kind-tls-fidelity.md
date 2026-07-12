@@ -153,7 +153,7 @@ Endpoint = the Harbor LoadBalancer **IP** (cert SAN = `IP:<lb-ip>`).
 - **`scripts/15-build-push-builder.sh`:** the builder-image podman push points at the CA via
   **`--cert-dir <dir>`** (a clean dir holding only `ca.crt`, so podman doesn't mistake a stray
   `tls.*` for a client cert) — sudo-free.
-- **`tekton/tasks/kaniko-build.yaml` + `make platform`:** Kaniko trusts the CA via the
+- **`k8s/tekton/tasks/kaniko-build.yaml` + `make platform`:** Kaniko trusts the CA via the
   `harbor-ca` ConfigMap mounted at `/kaniko/ssl/certs/additional-ca-cert-bundle.crt`
   (Kaniko appends it to its trust bundle). `60-configure-tekton.sh` already creates that
   ConfigMap from `HARBOR_CA_FILE` — in KinD it was empty before; now it carries a real CA.

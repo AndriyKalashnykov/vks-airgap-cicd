@@ -1417,9 +1417,10 @@ KUBECONFIG=./secrets/vks.kubeconfig      # produced by make vks-login
 |------|---------|
 | `scripts/` | Ordered, OS-portable (Ubuntu+PhotonOS) automation; `lib/os.sh` + `lib/mirror.sh` are shared libraries |
 | `apps/java/webui/` | Minimal Spring Boot web UI (seeded into Gitea `webui-app`); `Dockerfile` + `Dockerfile.builder` |
-| `deploy/base/` | Kustomize manifests ArgoCD deploys (seeded into Gitea `webui-deploy`) |
-| `tekton/` | Tekton pipeline, tasks, triggers, RBAC |
-| `argocd/` | ArgoCD `Application` definition |
+| `deploy/base/` | Kustomize manifests ArgoCD deploys. **Not applied by us** — seeded into the Gitea `webui-deploy` repo, which Tekton writes the image tag into and ArgoCD syncs |
+| `k8s/` | Everything **we** apply to the cluster |
+| `k8s/tekton/` | Tekton pipeline, tasks, triggers, RBAC |
+| `k8s/argocd/` | ArgoCD `Application` definition |
 | `k8s/gitea/` | Gitea install manifest (SQLite, single image) |
 | `docs/vks-services/` | **What VKS actually provides** — Harbor, ArgoCD (Supervisor Services) and Istio (a guest-cluster Standard Package): what each one is, how it is installed/configured, how we consume it, and a provenance grade per fact (lab-verified / KinD-verified / doc / unverified). A living record — update it when a lab run confirms or refutes something |
 | `k8s/istio/`, `k8s/traefik/` | Ingress manifests (`INGRESS_CONTROLLER=istio` default / `istio-existing` / `traefik`) fronting the UIs at `*.vks.local`. `k8s/istio/gateway.yaml` = the Gateway (selector is a token — it is DISCOVERED, never assumed); `virtualservices.yaml` = one VS per UI, in its BACKEND's namespace |
