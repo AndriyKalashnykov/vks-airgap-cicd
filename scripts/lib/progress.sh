@@ -55,6 +55,10 @@ pg_done() {
 # NEVER fails: every path is guarded and swallowed.
 pg_notify() {
   local title="${1:-vks}" msg="${2:-done}"
+  # Operator opt-out: NOTIFY=false silences BOTH the bell and the desktop notification.
+  # Default true (code default via ${NOTIFY:-true}); documented COMMENTED in .env.example so
+  # a `make <target> NOTIFY=false` / `.env` override is not clobbered when load_env re-sources it.
+  [ "${NOTIFY:-true}" = "true" ] || return 0
   # Terminal bell — only to an interactive tty, never into a log file / CI.
   if [ -t 2 ]; then printf '\a' >&2 2>/dev/null || true; fi
   # Desktop notify — Linux notify-send (needs a display/dbus) or macOS osascript.
