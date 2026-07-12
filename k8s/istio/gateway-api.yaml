@@ -1,0 +1,92 @@
+# Kubernetes Gateway API routing for the *.vks.local UIs — the path Broadcom's own VKS
+# walkthrough uses (`gatewayClassName: istio`).
+#
+# Why this is the preferred attach path on a real VKS cluster:
+#   * The VKS Istio Standard Package ships its shared ingress gateway DISABLED by default
+#     (istio.gateways.ingress.enabled=false), so there is often NO shared gateway to attach
+#     the classic Gateway/VirtualService path to.
+#   * Istio AUTO-PROVISIONS the data plane for this Gateway: it creates a Deployment and a
+#     LoadBalancer Service named `<gateway-name>-istio` in THIS namespace. We therefore need
+#     no rights in the mesh's namespaces, no gateway Service to find, and no `istio:` selector
+#     label to discover.
+#   * Air-gap safe for free: the auto-provisioned proxy inherits istiod's image hub, so on our
+#     cluster it pulls `<harbor>/<project>/istio/proxyv2` — verified, no extra configuration.
+#
+# The HTTPRoutes live in their BACKEND's namespace and attach cross-namespace via parentRefs.
+# That is allowed by the listener's `allowedRoutes.namespaces.from: Selector` below; a
+# ReferenceGrant is NOT required, because that only governs cross-namespace *backendRefs* and
+# every backendRef here is same-namespace as its route.
+#
+# ${VAR} tokens are rendered by scripts/lib/istio.sh (restricted envsubst allowlist).
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ${ISTIO_GATEWAY_NAME}
+  namespace: ${ISTIO_GWAPI_NAMESPACE}
+spec:
+  gatewayClassName: ${ISTIO_GATEWAY_CLASS}
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      # Admit routes only from the namespaces that actually host our UIs — `from: All` would
+      # let any namespace in the cluster attach a route to our listener.
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values:
+                  - ${GITEA_NAMESPACE}
+                  - ${ARGOCD_DEST_NAMESPACE}
+                  - ${TEKTON_NAMESPACE}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: gitea
+  namespace: ${GITEA_NAMESPACE}
+spec:
+  parentRefs:
+    - name: ${ISTIO_GATEWAY_NAME}
+      namespace: ${ISTIO_GWAPI_NAMESPACE}
+  hostnames:
+    - ${GITEA_HOST}
+  rules:
+    - backendRefs:
+        - name: gitea-http
+          port: 3000
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: webui
+  namespace: ${ARGOCD_DEST_NAMESPACE}
+spec:
+  parentRefs:
+    - name: ${ISTIO_GATEWAY_NAME}
+      namespace: ${ISTIO_GWAPI_NAMESPACE}
+  hostnames:
+    - ${WEBUI_HOST}
+  rules:
+    - backendRefs:
+        - name: ${APP_NAME}
+          port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: tekton-dashboard
+  namespace: ${TEKTON_NAMESPACE}
+spec:
+  parentRefs:
+    - name: ${ISTIO_GATEWAY_NAME}
+      namespace: ${ISTIO_GWAPI_NAMESPACE}
+  hostnames:
+    - ${TEKTON_DASHBOARD_HOST}
+  rules:
+    - backendRefs:
+        - name: tekton-dashboard
+          port: 9097

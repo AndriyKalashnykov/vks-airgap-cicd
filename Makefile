@@ -333,10 +333,14 @@ e2e-kind-istio-existing: ## KinD e2e for the ATTACH mode: a "platform team" inst
 	@$(MAKE) kind-up install-harbor install-argocd install-all
 	@$(SCRIPTS)/90-e2e-istio-existing.sh   # RED 1 + RED 2 + install Istio as the "platform team"
 	@$(MAKE) istio-preflight
-	@$(MAKE) install-ingress INGRESS_CONTROLLER=istio-existing
+	@echo "==> leg 1/2: attach via the KUBERNETES GATEWAY API (the default, and what VKS uses)"
+	@$(MAKE) install-ingress INGRESS_CONTROLLER=istio-existing ISTIO_ROUTE_API=gateway-api
 	@$(MAKE) verify
 	@$(MAKE) verify-ingress
-	@echo "==> e2e-kind-istio-existing PASSED — the UIs route through an Istio we did not install"
+	@echo "==> leg 2/2: attach via the CLASSIC Gateway/VirtualService API (shared platform gateway)"
+	@$(MAKE) install-ingress INGRESS_CONTROLLER=istio-existing ISTIO_ROUTE_API=classic
+	@$(MAKE) verify-ingress
+	@echo "==> e2e-kind-istio-existing PASSED — the UIs route through an Istio we did not install (BOTH route APIs)"
 
 ##@ Jump-box validation (Photon / Ubuntu container, rootless podman)
 JUMPBOX_OS    ?= photon

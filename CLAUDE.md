@@ -35,8 +35,8 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make install-ingress` | Install the ingress (`INGRESS_CONTROLLER=istio` default / `traefik`) fronting the UIs at `*.vks.local` |
 | `make install-istio` / `install-traefik` | Install a specific ingress controller directly |
 | `make istio-preflight` | Read-only: is Istio here, what `Gateway` selector does it require, what may this kubeconfig do, and what must the mesh admin grant? Run before touching a cluster you don't own |
-| `make attach-istio` | Attach to an Istio the platform team ALREADY installed (`INGRESS_CONTROLLER=istio-existing`) — installs nothing, discovers the gateway, applies routes only |
-| `make e2e-kind-istio-existing` | KinD regression test for the attach mode: a "platform team" installs Istio under FOREIGN naming, we attach with zero install (+ both REDs) |
+| `make attach-istio` | Attach to an Istio the platform team ALREADY installed (`INGRESS_CONTROLLER=istio-existing`) — installs nothing, applies routes only. `ISTIO_ROUTE_API=auto` (default) prefers the Kubernetes **Gateway API** (Istio auto-provisions the proxy + LB; nothing needed from the mesh admin) and falls back to `classic` (discovered `istio:` selector + VirtualServices) |
+| `make e2e-kind-istio-existing` | KinD regression test for the attach mode: a "platform team" installs Istio under FOREIGN naming, we attach with zero install (+ both REDs), then verify BOTH route APIs (gateway-api leg + classic leg) |
 | `make install-all` | Full air-gap install: `mirror → builder-image → vks-login → platform → gitops` |
 | `make verify` | End-to-end smoke test (LIVE cluster) |
 | `make verify-ingress` / `verify-ingress-both` | Assert the `*.vks.local` UIs route through the ingress LB (one controller / both) |
@@ -224,9 +224,12 @@ when changing the pipeline, ingress, or manifests.
 >   (verified live), so this is documented-for-9.0/VKS-3.5 and inferred for 9.1 — re-verify version
 >   strings on a real lab.
 >   **⇒ Consequence: on a real lab the mesh is NOT ours → `INGRESS_CONTROLLER=istio-existing` is the
->   correct mode. OPEN GAP: our attach path supports only the CLASSIC API and refuses to run without
->   the VirtualService CRD; the Gateway-API path (which needs no gateway-ns RBAC and no selector
->   discovery at all) is the next change.** See `docs/decisions/istio-on-vks.md`.
+>   correct mode. BOTH route APIs are now supported** (`ISTIO_ROUTE_API=auto|gateway-api|classic`):
+>   auto prefers the **Gateway API** when Istio is an Accepted GatewayClass — it needs NOTHING from
+>   the mesh admin (Istio auto-provisions the proxy + its LoadBalancer for a Gateway we create in our
+>   own namespace, and the proxy inherits istiod's hub so it pulls from Harbor for free) and it works
+>   even though the VKS package ships the shared gateway OFF. Both legs KinD-validated.
+>   See `docs/decisions/istio-on-vks.md`.
 >   (Historical note: a mid-session correction wrongly labelled this claim "unverified" — it is
 >   verified. Recorded so the retraction doesn't get re-retracted.)
 > - **ArgoCD IS a Supervisor Service on the Supervisor** → the Application's in-cluster destination

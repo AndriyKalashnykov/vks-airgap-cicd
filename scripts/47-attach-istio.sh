@@ -34,7 +34,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 # shellcheck source=scripts/lib/istio.sh
 . "${SCRIPT_DIR}/lib/istio.sh"
+
 load_env
+
+# INGRESS_LB_IP is OUR OWN PUBLISHED STATE, never an input here.
+#
+# Every install/attach writes the address it resolved into .env.kind (set_env_var INGRESS_LB_IP);
+# load_env sources that back, and 44-install-ingress.sh (which load_envs and then exec's us)
+# EXPORTS it into our environment. So after any previous run INGRESS_LB_IP is always set, and it
+# is indistinguishable from a deliberate operator override. Consuming it produced a FALSE GREEN:
+# a Gateway-API attach reported the PREVIOUS classic gateway's IP and the route check passed
+# through the classic routes still left in the cluster — the new path was never exercised.
+#
+# So: this script always RESOLVES the address of the gateway it is actually attaching to.
+# A genuine override lives in its own unambiguous variable, which nothing auto-publishes.
+unset INGRESS_LB_IP
+LB_OVERRIDE="${INGRESS_LB_IP_OVERRIDE:-}"
 
 require_cmd kubectl
 require_cmd jq
@@ -45,37 +60,63 @@ require_cmd jq
 
 log_info "INGRESS_CONTROLLER=istio-existing — attaching to an Istio we did NOT install"
 
-# --- 1. Discover the mesh -----------------------------------------------------
-istio_discover || die "Istio discovery failed — see the guidance above. (Is Istio actually installed on this cluster? \`kubectl get pods -A -l app=istiod\`)"
-istio_report
+# --- 1. Is a mesh even here? ---------------------------------------------------
+ISTIOD_NAMESPACE="${ISTIOD_NAMESPACE:-$(kubectl get deploy -A -l app=istiod -o jsonpath='{.items[0].metadata.namespace}' 2>/dev/null || true)}"
+[ -n "${ISTIOD_NAMESPACE:-}" ] || \
+  die "no istiod found — nothing to attach to. Use INGRESS_CONTROLLER=istio to INSTALL Istio instead."
+export ISTIOD_NAMESPACE
+ISTIO_DISCOVERED_VERSION="$(kubectl -n "$ISTIOD_NAMESPACE" get deploy istiod -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+export ISTIO_DISCOVERED_VERSION
 
-[ "${ISTIO_GATEWAY_API}" = "classic" ] || \
-  die "this cluster does not serve the classic Istio route API (networking.istio.io VirtualService CRD missing; detected API: ${ISTIO_GATEWAY_API}). A Gateway-API-only mesh needs HTTPRoutes instead — not yet supported by this repo."
+# --- 2. WHICH route API? -------------------------------------------------------
+# Gateway API is preferred when Istio is an accepted GatewayClass: it is what Broadcom's
+# VKS walkthrough uses, it needs nothing outside our own namespaces, and it works even when
+# the VKS Istio package's shared ingress gateway is off (its default).
+istio_detect_route_api
 
-# Refuse to silently no-op if the mesh is not actually there.
-[ -n "${ISTIOD_NAMESPACE:-}" ] || die "no istiod found — nothing to attach to. Use INGRESS_CONTROLLER=istio to INSTALL Istio instead."
+case "$ISTIO_ROUTE_API" in
+  gateway-api)
+    log_info "attaching via the Kubernetes Gateway API — Istio will provision the data plane + LoadBalancer itself"
+    istio_discover >/dev/null 2>&1 || true   # best-effort: only so we can clean up any classic routes we own
+    istio_drop_other_api_routes gateway-api
+    istio_apply_routes_gwapi
+    if [ -n "$LB_OVERRIDE" ]; then
+      log_info "using INGRESS_LB_IP_OVERRIDE=${LB_OVERRIDE}"
+      LB_IP="$LB_OVERRIDE"
+    else
+      LB_IP="$(istio_wait_gwapi_address)" || die "Istio did not program the Gateway"
+    fi
+    ATTACHED_AT="Gateway ${ISTIO_GWAPI_NAMESPACE}/${ISTIO_GATEWAY_NAME} (gatewayClassName=${ISTIO_GATEWAY_CLASS})"
+    ;;
 
-# --- 2. Guard: never install anything in this mode -----------------------------
-# If our own release names are present, the operator is in the wrong mode.
-if helm status istiod -n "${ISTIOD_NAMESPACE}" >/dev/null 2>&1; then
-  log_warn "istiod carries OUR helm release name — this mesh may have been installed by 'make install-istio'."
-  log_warn "  That is fine (attach still works), but INGRESS_CONTROLLER=istio is the mode that OWNS it."
-fi
+  classic)
+    log_info "attaching via the classic Istio API (no accepted 'istio' GatewayClass on this cluster)"
+    # Only the classic path needs to FIND the platform's gateway workload.
+    istio_discover || die "Istio discovery failed — see the guidance above."
+    istio_report
+    istio_drop_other_api_routes classic
+    if helm status istiod -n "${ISTIOD_NAMESPACE}" >/dev/null 2>&1; then
+      log_warn "istiod carries OUR helm release name — this mesh may have been installed by 'make install-istio'."
+      log_warn "  That is fine (attach still works), but INGRESS_CONTROLLER=istio is the mode that OWNS it."
+    fi
+    istio_apply_routes
+    if [ -n "$LB_OVERRIDE" ]; then
+      log_info "using INGRESS_LB_IP_OVERRIDE=${LB_OVERRIDE}"
+      LB_IP="$LB_OVERRIDE"
+    else
+      LB_IP="$(istio_wait_lb_ip)" || die "could not resolve the ingress gateway's external address (set INGRESS_LB_IP_OVERRIDE in .env if the gateway is fronted by something else)"
+    fi
+    ATTACHED_AT="${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_SERVICE} (selector istio=${ISTIO_GATEWAY_LABEL})"
+    ;;
 
-# --- 3. Attach our routes ------------------------------------------------------
-istio_apply_routes
-
-# --- 4. External address -------------------------------------------------------
-if [ -n "${INGRESS_LB_IP:-}" ]; then
-  log_info "using operator-supplied INGRESS_LB_IP=${INGRESS_LB_IP}"
-  LB_IP="$INGRESS_LB_IP"
-else
-  LB_IP="$(istio_wait_lb_ip)" || die "could not resolve the ingress gateway's external address (set INGRESS_LB_IP in .env if the gateway is fronted by something else)"
-fi
+  *)
+    die "this cluster serves neither the classic Istio route API (VirtualService CRD) nor an accepted '${ISTIO_GATEWAY_CLASS:-istio}' GatewayClass — there is no way to attach routes."
+    ;;
+esac
 
 set_env_var INGRESS_LB_IP "$LB_IP"
 set_env_var INGRESS_CONTROLLER "istio-existing"
-log_info "attached to the existing Istio at ${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_SERVICE} (${LB_IP})"
+log_info "attached to the existing Istio via ${ISTIO_ROUTE_API}: ${ATTACHED_AT} -> ${LB_IP}"
 log_info "Add ONE line to /etc/hosts on the jump box / your client:"
 log_info ""
 log_info "    ${LB_IP}  ${GITEA_HOST} ${WEBUI_HOST} ${TEKTON_DASHBOARD_HOST}"
