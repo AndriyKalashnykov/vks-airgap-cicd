@@ -221,23 +221,26 @@ when changing the pipeline, ingress, or manifests.
 
 ## Backlog / resume state
 
-> ### ▶️ DO THIS FIRST, NEXT SESSION — verify `kind` installs on a box that lacks it
+> ### ▶️ STATE — everything below was verified on 2026-07-12c; nothing is known-broken
 >
-> Nothing is known-broken. The one claim not yet proven on a CLEAN machine:
+> **The full KinD e2e permutation matrix is 7/7 GREEN** (run sequentially — two registry-mutating
+> runs at once corrupt Harbor; a `flock` now blocks it, do not fight it):
 >
-> `make deps` now installs **kind** (pinned in `.mise.toml`). This was a HIGH bug — the flagship
-> KinD path was **unrunnable on a fresh box**: nothing in the repo installed kind, yet the README
-> promised `make deps  # kind, ...` and `05-kind-up.sh` does `require_cmd kind`. It only ever
-> worked because dev boxes already had it (the CI smoke curled its own copy). `mise install kind`
-> is verified (0.32.0), but a box WITHOUT kind on PATH has not been tested:
+> | Permutation | Command | Result |
+> |---|---|---|
+> | istio + secure TLS (default) | `make e2e-kind` | ✅ marker deployed, 3 UIs 200, PSA OK |
+> | both ingress controllers | `make verify-ingress-both` | ✅ istio + traefik routes |
+> | traefik + secure TLS | `make e2e-kind INGRESS_CONTROLLER=traefik` | ✅ |
+> | istio + INSECURE (plain HTTP) | `make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1` | ✅ (mode read from the log banner, not inferred) |
+> | attach to a platform-owned Istio | `make e2e-kind-istio-existing` | ✅ both REDs, DISCOVERY OK, both route APIs |
+> | cross-cluster ArgoCD registration | `make e2e-kind-cross-cluster` | ✅ |
+> | two-box sneakernet | `make e2e-sneakernet` | ✅ `JUMPBOX_SNEAKERNET_OK` |
 >
-> ```bash
-> # in a container with no kind: `make deps` must leave a working `kind`
-> docker run --rm -v "$PWD:/w" -w /w ubuntu:26.04 bash -c 'apt-get update -qq && apt-get install -y -qq curl git make >/dev/null && curl -fsSL https://mise.run | sh && export PATH=$HOME/.local/bin:$PATH && eval "$(mise activate bash)" && make deps-mise && kind --version'
-> ```
+> **`make deps` now installs `kind`** (pinned in `.mise.toml`) — verified on a bare `ubuntu:26.04`
+> container with no kind on PATH. It previously installed it NOWHERE, so the flagship KinD path was
+> unrunnable on a fresh box and only worked because dev boxes already had it.
 >
-> Same class as the `.env` bug (#137) and the `BUNDLE_*` clobbers: hidden local state making a
-> broken path look green. Verify on a box that does not have the thing.
+> Next session: pick up the backlog below. Re-run any e2e permutation you touch code for.
 
 ---
 
