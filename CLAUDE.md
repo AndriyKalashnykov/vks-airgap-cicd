@@ -224,6 +224,48 @@ when changing the pipeline, ingress, or manifests.
 
 ---
 
+> ### 📋 BACKLOG — adopt the operator-journey framing in README, and DEFINE "tenant"
+>
+> **(a) Use this verbiage** (the user liked it) as the framing for the three paths — it says what each
+> scenario IS from the operator's point of view, not what the repo does:
+>
+> 1. **KinD** — *see it work*. No VKS cluster, **zero `.env`**, one command.
+> 2. **Real lab, Scenario 1** — *I install Harbor + ArgoCD* (as VCF **Supervisor Services**), then run
+>    the pipeline.
+> 3. **Real lab, Scenario 2** — *I'm a **tenant***: Harbor + ArgoCD already exist. I **discover** them,
+>    **request** what I'm not allowed to self-service, then run the pipeline.
+>
+> Put it in "Choose your path" and echo each line as the opening sentence of its scenario section, so
+> a reader knows within one line whether they are in the right place. Note the shape: **install** (S1)
+> vs **discover + request** (S2) is the whole difference — and it is what decides Istio (attach), the
+> ArgoCD registration (admin-only → request), and the Harbor robot (project-admin or request).
+>
+> **(b) DEFINE what "tenant" means** — Scenario 2 uses the word throughout and never says what it
+> grants or denies. Expand it in the Scenario-2 intro (and cross-check every claim against the code /
+> `docs/vks-services/`; grade anything vendor-side as *inferred* until a lab confirms):
+>
+> - **What a tenant IS:** you consume a shared platform. You do **not** own the Supervisor, the ArgoCD
+>   instance, the Harbor deployment, or (usually) the Istio mesh. You DO own your guest cluster's
+>   namespaces and the workloads in them.
+> - **What you CAN self-service** (verify each): a Harbor **robot** *if* you hold **project-admin** on
+>   the project (direct, not via an SSO group) → `make harbor-robot`; creating your own namespaces,
+>   Gitea/Tekton, and the app; creating `Gateway`/`HTTPRoute`/`VirtualService` in **your own**
+>   namespaces; discovering endpoints (Harbor LB/FQDN, `argocd-server`, the Istio gateway).
+> - **What you must REQUEST** (and from whom): the Harbor robot if you lack project-admin;
+>   **registering your guest cluster as an ArgoCD destination** (ADMIN-only — `clusters` is a *global*
+>   ArgoCD RBAC resource, and minting the `argocd-manager` cluster-admin RBAC needs cluster-admin on
+>   the guest); an ArgoCD **AppProject/RBAC** role so you may create `Application`s at all; rights in
+>   the **mesh's** namespace if you cannot use the Gateway-API path; a TLS `Secret` for
+>   `Gateway.tls.credentialName` (it must live in the *gateway's* namespace).
+> - **What you still need regardless:** **cluster-admin on your own guest cluster** (we create
+>   namespaces, RBAC and PSA labels), and PSA levels that admit Kaniko + the Istio-provisioned proxy.
+> - **The one thing that surprises people:** there are **no Istio credentials** — mesh access is
+>   kubectl RBAC (`make istio-preflight` reports exactly what you may do and what to ask for).
+>
+> Both items feed the "Needs column" task below — do them together.
+
+---
+
 > ### 📋 BACKLOG — "Choose your path" → make the **Needs** column a real, verified checklist
 >
 > The table's `Needs` cells are hand-waves, not prerequisites:
