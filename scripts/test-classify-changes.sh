@@ -28,11 +28,11 @@ t() { # <name> <expected-code> <expected-docs> <file...>
 # THE regression: a docs-only PR must NOT run static-check. (The old paths-filter said code=true.)
 t "docs only (CLAUDE.md)"          false true  "CLAUDE.md"
 t "docs only (README + docs/)"     false true  "README.md" "docs/vks-services/istio.md"
-t "docs only (nested md)"          false true  "apps/java/javawebapp/README.md"
+t "docs only (nested md)"          false true  "apps/some/app/README.md"
 
 # Code must always run static-check.
 t "code only"                      true  false "scripts/lib/apps.sh"
-t "go source"                      true  false "apps/go/gowebapp/main.go"
+t "app source (nested)"            true  false "apps/some/app/main.go"
 t "mixed code + docs"              true  true  "Makefile" "README.md"
 
 # Deny-list semantics: a root-config-only change is CODE (an allow-list would skip BOTH gates

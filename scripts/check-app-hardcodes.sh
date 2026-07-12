@@ -27,8 +27,14 @@ cd "$REPO_ROOT"
 
 # Files that MUST be app-agnostic: the shared scripts, the shared manifests, the Makefile.
 # (An app's own dirs — apps/<lang>/<app>/, deploy/<app>/ — obviously name it, as does the registry.)
+# `--others --exclude-standard` alongside `--cached`: a NEW, not-yet-`git add`ed script is exactly
+# where a hardcode gets written, and a tracked-files-only list gives it a free pass locally — the
+# gate then first fires in CI, after the commit. (It did: the classifier's unit test named both apps
+# and `make static-check` was green locally because the file was untracked.) Gitignored files stay
+# out via --exclude-standard.
 mapfile -t TARGETS < <(
-  git ls-files 'scripts/*.sh' 'scripts/lib/*.sh' 'k8s/**/*.yaml' 'Makefile' 'renovate.json' 2>/dev/null
+  git ls-files --cached --others --exclude-standard \
+    'scripts/*.sh' 'scripts/lib/*.sh' 'k8s/**/*.yaml' 'Makefile' 'renovate.json' 2>/dev/null | sort -u
 )
 
 rc=0
