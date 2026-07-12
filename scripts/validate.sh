@@ -135,6 +135,26 @@ EOF
 # Print the DENOMINATOR: a gate that cannot say how many apps it checked cannot be trusted.
 log_info "kustomize: validated ${_validated} app deploy dir(s)"
 
+echo "== every app's Tekton TEST TASK must exist =="
+# A pipeline referencing a Task that is not applied fails at PIPELINE time with `CouldntGetTask` —
+# i.e. only when someone pushes, long after every gate went green. (It happened: the `go-test` task
+# was written but never added to k8s/tekton/tasks/, so gowebapp's first PipelineRun died while
+# javawebapp's succeeded.) Assert it statically instead.
+_missing=""
+while read -r _app; do
+  [ -n "$_app" ] || continue
+  _t="$(app_test_task "$_app")"
+  if grep -qs "^  name: ${_t}$" "${REPO_ROOT}"/k8s/tekton/tasks/*.yaml; then
+    log_info "test task OK: ${_app} -> ${_t}"
+  else
+    log_error "app '${_app}' needs Tekton task '${_t}', but no k8s/tekton/tasks/*.yaml defines it"
+    _missing=1; rc=1
+  fi
+done <<EOF
+$(app_names)
+EOF
+[ -z "$_missing" ] || log_error "  a pipeline referencing a missing Task fails at RUN time (CouldntGetTask), never at build time."
+
 echo "== kubeconform (k8s/) =="
 if have kubeconform; then
   # Enumerate k8s/* DYNAMICALLY: a hardcoded subdir list would silently skip a new one,

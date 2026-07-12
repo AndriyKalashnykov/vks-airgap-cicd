@@ -1,0 +1,38 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: go-test
+  namespace: ${CI_NAMESPACE}
+spec:
+  description: >-
+    Run the Go app's tests OFFLINE. No pre-baked dependency cache is needed (and no builder image
+    exists for Go): the app is stdlib-only by design, so `go test` fetches nothing. GOFLAGS=-mod=mod
+    with GOPROXY=off makes that explicit — if a dependency is ever added, this task FAILS loudly in
+    the air gap instead of silently trying to reach a module proxy.
+  params:
+    - name: subdir
+      type: string
+      default: repo
+    - name: builder-image
+      type: string
+  workspaces:
+    - name: source
+  steps:
+    - name: test
+      image: $(params.builder-image)
+      workingDir: $(workspaces.source.path)/$(params.subdir)
+      env:
+        # The pipeline runs air-gapped: there is no module proxy to reach. Fail fast if a
+        # dependency sneaks in, rather than hanging on a dial timeout.
+        - name: GOPROXY
+          value: "off"
+        - name: GOFLAGS
+          value: "-mod=mod"
+        # HOME must be writable for the build cache; the Tekton workspace is.
+        - name: GOCACHE
+          value: $(workspaces.source.path)/.gocache
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        go vet ./...
+        go test ./...
