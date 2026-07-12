@@ -124,6 +124,20 @@ app_health_path() {
   esac
 }
 
+# --- per-LANGUAGE behaviour #5: the toolchain the app needs to BE TESTED ------------------------
+# `make app-test` / `make trivy-fs` run each app's tests and scan its built artifact. CI gets its
+# toolchain from .mise.toml (mise-action) — so a language whose tools are NOT pinned there simply
+# cannot be tested or scanned on a clean runner, while passing on any dev box that happens to have
+# them. That is how the Go app shipped with an unpinned toolchain AND a CVE'd stdlib.
+# `make check-app-toolchains` gates it.
+app_toolchain() {
+  case "$(app_lang "$1")" in
+    java) printf 'java maven' ;;
+    go)   printf 'go' ;;
+    *)    die "app '$1': add a branch to app_toolchain() — and pin its tools in .mise.toml" ;;
+  esac
+}
+
 # app_has_builder <name> — true iff the app ships a Dockerfile.builder, i.e. it needs a pre-baked
 # offline dependency cache. Keyed on the FILE, not on the language: that is what actually decides
 # whether `make builder-image` has work to do, and a future language that needs one just adds the

@@ -123,6 +123,10 @@ check-env-clobber: ## Gate: an UNCOMMENTED .env.example value must not shadow a 
 check-app-hardcodes: ## Gate: no shared script/manifest/Makefile may NAME an app — everything derives from apps/registry.tsv
 	@$(SCRIPTS)/check-app-hardcodes.sh
 
+.PHONY: check-app-toolchains
+check-app-toolchains: ## Gate: every app's language toolchain must be pinned in .mise.toml, or CI cannot test/scan that app
+	@$(SCRIPTS)/check-app-toolchains.sh
+
 .PHONY: check-tools
 check-tools: ## Read-only: is this jump box able to run the flow? (required vs optional CLIs + versions)
 	@$(SCRIPTS)/03-check-tools.sh
@@ -605,7 +609,7 @@ docs-lint: diagrams-check check-readme-scenarios ## Lint markdown (tracked AND n
 	else echo "markdownlint not installed — skipping (install markdownlint-cli)"; fi
 
 .PHONY: static-check
-static-check: check-toolchain-alignment check-java-alignment check-env check-env-coverage check-env-clobber check-app-hardcodes check-how-provenance check-image-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: check-toolchain-alignment check-java-alignment check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-image-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint ## Full local pipeline (offline-verifiable parts)
