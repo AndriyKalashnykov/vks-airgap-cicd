@@ -18,7 +18,7 @@ require_cmd kubectl; require_cmd git; require_cmd curl; require_cmd yq
 : "${GITEA_NAMESPACE:?}"; : "${GITEA_ADMIN_USER:?}"
 : "${GITEA_ADMIN_PASSWORD:?set GITEA_ADMIN_PASSWORD in .env}"
 : "${GITEA_ORG:?}"
-: "${CI_NAMESPACE:?}"; : "${APP_NAME:?}"; : "${APP_BRANCH:?}"; : "${ARGOCD_TRACK_BRANCH:?}"
+: "${CI_NAMESPACE:?}"; : "${APP_BRANCH:?}"; : "${ARGOCD_TRACK_BRANCH:?}"  # APP_NAME is PER-APP (registry), never a global
 : "${HARBOR_URL:?}"; : "${HARBOR_APP_PROJECT:?}"; : "${APP_REPLICAS:?}"
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
