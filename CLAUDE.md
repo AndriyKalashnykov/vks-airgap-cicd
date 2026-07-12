@@ -172,17 +172,21 @@ when changing the pipeline, ingress, or manifests.
 
 > ### ⏳ SESSION HANDOFF 2026-07-12 (READ FIRST — resume here)
 >
-> `main` GREEN. Session 2026-07-12 merged **#110–#120**: diagram fold/clip fix (#110), README
-> real-lab scenarios made self-contained (#111) + "Choose your path" picker & Quick-Start removal
-> (#115) + airgap-diagram clarity (#117) + Supervisor-ns/ArgoCD topology comments (#118), env-UX
-> `make env-init/populate/check/validate` (#112), faithful **two-box** sneakernet (#113), `NOTIFY`
-> toggle (#116), and the **cross-cluster ArgoCD deploy** feature (#119 destination param + #120
-> `make argocd-register-guest` + a **live-validated** `make e2e-kind-cross-cluster`).
+> `main` GREEN, **0 open PRs**, nothing in flight. Session 2026-07-12 merged **#110–#123**: diagram
+> fold/clip fix (#110), README real-lab scenarios made self-contained (#111) + "Choose your path"
+> picker & Quick-Start removal (#115) + airgap-diagram clarity (#117) + Supervisor-ns/ArgoCD topology
+> comments (#118), env-UX `make env-init/populate/check/validate` (#112), faithful **two-box**
+> sneakernet (#113), `NOTIFY` toggle (#116), the **cross-cluster ArgoCD deploy** feature (#119
+> destination param + #120 `make argocd-register-guest` + a **live-validated**
+> `make e2e-kind-cross-cluster`), the real-lab cross-cluster **runbook + `docs/diagrams/vks-topology.puml`**
+> topology diagram (#122), and the **dead-`RUN_MODE` removal** (#123 — it was documented as a settable
+> in `.env.example`/README/Makefile/CLAUDE.md but nothing read it; the mode is simply which mirror
+> commands you run).
 >
-> **⏳ IN-FLIGHT — review + merge:** a worktree agent's PR for **part 4** of the cross-cluster
-> feature — the real-lab cross-cluster ArgoCD **runbook** + a new **VKS namespace/cluster topology
-> diagram** (`docs/diagrams/vks-topology.puml`). `gh pr list`; verify the render is complete (not
-> clipped) + well-proportioned (per `/architecture-diagrams` render-scale) + `docs-lint` green, then merge.
+> **Review-discipline lesson captured** (claude-config `dc6dec1`): the `/readme` skill now has a
+> **dead-variable check** — every documented settable (`VAR`/flag/`make VAR=…`) must have a grep-verified
+> consumer; wired into the review checklist so "read the README for validity" fact-checks settables,
+> not just prose flow. (Prompted by RUN_MODE surviving several README passes.)
 >
 > **Deep-research verdicts this session (VCF/VKS 9.1; Broadcom 9.1 docs 301-redirect to 9.0 → verify on a lab):**
 >
