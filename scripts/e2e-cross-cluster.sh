@@ -156,7 +156,7 @@ export GITEA_INTERNAL_URL="http://gitea-http.${GITEA_NAMESPACE:-gitea}.svc:3000"
 # This is CRITICAL #2, reproduced. An off-cluster repo-server cannot resolve gitea-http.gitea.svc.
 log_info "== RED 1: 70 must REFUSE a guest cluster-local repoURL when ArgoCD is off-cluster =="
 if KUBECONFIG="$GUEST_KC" ARGOCD_KUBECONFIG="$HUB_KC" ARGOCD_NAMESPACE="$ARGOCD_NS" \
-   GITEA_ARGOCD_URL="$GITEA_INTERNAL_URL" ARGOCD_DEST_CLUSTER_NAME="$GUEST" \
+   GITEA_ARGOCD_URL_OVERRIDE="$GITEA_INTERNAL_URL" ARGOCD_DEST_CLUSTER_NAME="$GUEST" \
    "${SCRIPT_DIR}/70-configure-argocd.sh" >/dev/null 2>&1; then
   die "FAIL: 70 ACCEPTED a cluster-local repoURL for an OFF-CLUSTER ArgoCD — CRITICAL #2 would ship again."
 fi
@@ -165,7 +165,7 @@ log_info "RED 1 OK — refused (the repo-server could never have cloned it)"
 # --- the REAL run: ArgoCD in HUB, workload in GUEST, Gitea reachable ---------------------------
 log_info "== running the REAL 70-configure-argocd.sh across the two clusters =="
 KUBECONFIG="$GUEST_KC" ARGOCD_KUBECONFIG="$HUB_KC" ARGOCD_NAMESPACE="$ARGOCD_NS" \
-  GITEA_ARGOCD_URL="$GITEA_FROM_HUB" ARGOCD_DEST_CLUSTER_NAME="$GUEST" \
+  GITEA_ARGOCD_URL_OVERRIDE="$GITEA_FROM_HUB" ARGOCD_DEST_CLUSTER_NAME="$GUEST" \
   "${SCRIPT_DIR}/70-configure-argocd.sh"
 
 # --- ASSERT C: the Applications are in the HUB, and NOT in the GUEST --------------------------

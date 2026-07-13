@@ -171,8 +171,8 @@ else
     [ -n "$app" ] || continue
     # Same rule: before `make platform` the clone URL is not known. Checking the cluster-local
     # fallback would BLOCK on a repo the admin was never asked to permit.
-    [ -n "${GITEA_ARGOCD_URL:-}" ] || { log_info "  ${app}: repo check deferred (GITEA_ARGOCD_URL not discovered yet)"; continue; }
-    repo="${GITEA_ARGOCD_URL}/${GITEA_ORG:-demo}/${app}-deploy.git"
+    [ -n "${GITEA_ARGOCD_URL_OVERRIDE:-}" ] || { log_info "  ${app}: repo check deferred (the clone URL is resolved at 'make gitops')"; continue; }
+    repo="${GITEA_ARGOCD_URL_OVERRIDE}/${GITEA_ORG:-demo}/${app}-deploy.git"
     ok_dest="$(printf '%s' "$pj" | jq -r --arg s "$dest_server" --arg n "$app" \
       '[.spec.destinations[]? | select((.server==$s or .server=="*") and (.namespace==$n or .namespace=="*"))] | length' 2>/dev/null || echo 0)"
     ok_repo="$(printf '%s' "$pj" | jq -r --arg r "$repo" \
@@ -192,7 +192,7 @@ fi
 echo "── Gitea reachability (from the ArgoCD cluster) ──"
 # A PREFLIGHT MAY ONLY BLOCK ON WHAT THE OPERATOR CAN FIX RIGHT NOW.
 #
-# GITEA_ARGOCD_URL is DISCOVERED by 40-install-gitea.sh, which runs inside `make platform` — and
+# The clone URL is RESOLVED from the live Gitea Service by 70-configure-argocd.sh (`make gitops`) — and
 # `make preflight` is the FIRST prerequisite of `make install-all`. So on a real lab it is legitimately
 # UNSET here. Blocking on the fallback (the cluster-local GITEA_INTERNAL_URL) made `make install-all`
 # — the single command both runbooks tell the operator to run — die BEFORE THE MIRROR, demanding they
@@ -201,13 +201,13 @@ echo "── Gitea reachability (from the ArgoCD cluster) ──"
 #
 #   unset                       -> WARN  (70-configure-argocd.sh asserts it at the point of USE)
 #   SET to a cluster-local value-> BLOCK (that IS something the operator can fix now)
-if [ "$OFF" = 1 ] && [ -n "${GITEA_ARGOCD_URL:-}" ] && argocd_url_is_cluster_local "$GITEA_ARGOCD_URL"; then
-  block "GITEA_ARGOCD_URL is SET to a CLUSTER-LOCAL address ($GITEA_ARGOCD_URL). An off-cluster repo-server cannot resolve it, and the ingress hostname will not work either (it exists only in your /etc/hosts). Use Gitea's own LoadBalancer address."
+if [ "$OFF" = 1 ] && [ -n "${GITEA_ARGOCD_URL_OVERRIDE:-}" ] && argocd_url_is_cluster_local "$GITEA_ARGOCD_URL_OVERRIDE"; then
+  block "GITEA_ARGOCD_URL_OVERRIDE is a CLUSTER-LOCAL address ($GITEA_ARGOCD_URL_OVERRIDE). An off-cluster repo-server cannot resolve it, and the ingress hostname will not work either (it exists only in your /etc/hosts). Use Gitea's own LoadBalancer address, or leave it unset and let 'make gitops' resolve it from the live Service."
 elif [ "$OFF" = 1 ]; then
-  log_info "GITEA_ARGOCD_URL not discovered yet — 'make install-gitea' (inside 'make platform') publishes it."
-  log_info "  'make gitops' re-asserts it at the point of use, so it is not a blocker now."
+  log_info "ArgoCD's clone URL is RESOLVED from Gitea's live Service by 'make gitops' — nothing to set."
+  log_info "  Override it only if that address is not reachable from the ArgoCD cluster: GITEA_ARGOCD_URL_OVERRIDE."
 else
-  log_info "ArgoCD would clone from: ${GITEA_ARGOCD_URL:-${GITEA_INTERNAL_URL:-<unset>}}"
+  log_info "ArgoCD would clone from: ${GITEA_ARGOCD_URL_OVERRIDE:-${GITEA_INTERNAL_URL:-<resolved at gitops>}}"
 fi
 
 # ---- 7. app namespaces on the GUEST (one per app) ------------------------------------------------

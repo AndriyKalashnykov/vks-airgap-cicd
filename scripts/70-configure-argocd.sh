@@ -63,12 +63,33 @@ else
   log_info "ArgoCD runs in the SAME cluster as the workload ($ARGOCD_API)"
 fi
 
-# ---- which Gitea URL can ARGOCD'S repo-server actually clone? (checked FIRST — no cluster needed) -
+# ---- which Gitea URL can ARGOCD'S repo-server actually clone? --------------------------------------
 # GITEA_INTERNAL_URL (gitea-http.gitea.svc:3000) resolves ONLY inside the guest cluster. It is right
 # for Tekton (which runs there) and WRONG for an off-cluster ArgoCD, whose repo-server would fail
-# every sync with `dial tcp: lookup gitea-http.gitea.svc`. 40-install-gitea.sh publishes
-# GITEA_ARGOCD_URL from Gitea's own LoadBalancer for exactly this.
-GITEA_ARGOCD_URL="${GITEA_ARGOCD_URL:-${GITEA_INTERNAL_URL}}"
+# every sync with `dial tcp: lookup gitea-http.gitea.svc`. The address that works is Gitea's own
+# LoadBalancer.
+#
+# We RESOLVE it from the live Service — we do NOT read back GITEA_ARGOCD_URL.
+# 40-install-gitea.sh used to PUBLISH GITEA_ARGOCD_URL into .env.kind, and this script read it back
+# as an input. That is the publish-then-read-back trap the ingress code already refuses (see
+# INGRESS_LB_IP_OVERRIDE): once a value is auto-published, it is ALWAYS set on the next run, so a
+# STALE value is indistinguishable from a deliberate override — and it is consumed silently. A
+# rebuilt Gitea with a new LB address would be cloned from the OLD one, and the failure surfaces as
+# "Application never fetched a revision", pointing nowhere near the cause.
+#
+# A genuine operator override lives in its own variable, which nothing auto-publishes.
+unset GITEA_ARGOCD_URL
+if [ -n "${GITEA_ARGOCD_URL_OVERRIDE:-}" ]; then
+  GITEA_ARGOCD_URL="$GITEA_ARGOCD_URL_OVERRIDE"
+  log_info "using GITEA_ARGOCD_URL_OVERRIDE=${GITEA_ARGOCD_URL}"
+elif gitea_lb="$(kubectl -n "${GITEA_NAMESPACE:-gitea}" get svc gitea-http \
+                   -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}' \
+                   2>/dev/null)" && [ -n "$gitea_lb" ]; then
+  GITEA_ARGOCD_URL="http://${gitea_lb}:3000"
+  log_info "resolved Gitea's LoadBalancer from the live Service: ${GITEA_ARGOCD_URL}"
+else
+  GITEA_ARGOCD_URL="${GITEA_INTERNAL_URL}"
+fi
 argocd_assert_clonable_url "$ARGOCD_OFF_CLUSTER" "$GITEA_ARGOCD_URL" \
   "${GITEA_NAMESPACE:-gitea}" "${GITEA_HOST:-gitea.vks.local}"
 log_info "ArgoCD will clone from: $GITEA_ARGOCD_URL"

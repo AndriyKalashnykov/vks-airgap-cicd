@@ -52,7 +52,7 @@ dests=""; repos=""
 while read -r app; do
   [ -n "$app" ] || continue
   dests="${dests}    - server: https://kubernetes.default.svc"$'\n'"      namespace: ${app}"$'\n'
-  repos="${repos}    - ${GITEA_ARGOCD_URL:-${GITEA_INTERNAL_URL}}/${GITEA_ORG}/${app}-deploy.git"$'\n'
+  repos="${repos}    - ${GITEA_ARGOCD_URL_OVERRIDE:-${GITEA_INTERNAL_URL}}/${GITEA_ORG}/${app}-deploy.git"$'\n'
 done <<EOF
 $(app_names)
 EOF
