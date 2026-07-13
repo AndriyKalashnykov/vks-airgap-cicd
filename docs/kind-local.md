@@ -2,7 +2,7 @@
 
 <br>
 
-> **You want to *see it work*.** No VKS cluster, **zero `.env`**, one command.
+> **You want to *see it work*.** No VKS cluster, **zero `.env`**, two commands.
 
 You don't need a VKS cluster to exercise the whole pipeline. `make e2e-kind` stands up a
 local [KinD](https://kind.sigs.k8s.io/) cluster, installs the Supervisor-Service pieces
@@ -27,7 +27,7 @@ the new version).
 > The VKS discovery (Scenario 1/2) is the manual parallel of the same thing.
 
 ```bash
-make env-init                 # optional for KinD (it fills .env.kind for you); pins known demo secrets if you want them
+make env-init                 # OPTIONAL for KinD (it discovers its own state); pins known demo secrets if you want them
 make deps                     # kind, helm, kubectl, crane, etc.
 make e2e-kind                 # cluster → Harbor → ArgoCD → mirror → build → deploy → ingress → verify
 # open the UIs (see "Access the UIs" below) and drive the pipeline by hand:
