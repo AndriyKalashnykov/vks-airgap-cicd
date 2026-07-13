@@ -541,8 +541,12 @@ test-argocd-topology: ## Unit-test lib/argocd.sh: off-cluster derivation + the c
 test-harbor-robot-payload: ## Unit-test the Harbor robot payloads (system vs project level) — offline, no Harbor
 	@$(SCRIPTS)/test-harbor-robot-payload.sh
 
+.PHONY: test-kind-down-safety
+test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD flow created (it used to eat a real lab's kubeconfig)
+	@$(SCRIPTS)/test-kind-down-safety.sh
+
 .PHONY: test-scripts
-test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload ## Run all offline script-logic unit tests
+test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety ## Run all offline script-logic unit tests
 
 ##@ Security scanning (internet/CI side; not part of the air-gap install)
 .PHONY: secrets

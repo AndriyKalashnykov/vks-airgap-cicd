@@ -80,6 +80,10 @@ kind get kubeconfig --name "$CLUSTER_NAME" > "$KUBECONFIG_PATH"
 KUBECONFIG_ABS="$(cd "$(dirname "$KUBECONFIG_PATH")" && pwd)/$(basename "$KUBECONFIG_PATH")"
 KIND_CONTEXT="kind-${CLUSTER_NAME}"
 set_env_var KUBECONFIG "$KUBECONFIG_ABS"
+# Record it separately: `make kind-down` must delete ONLY the kubeconfig THIS flow wrote. It used to
+# delete any kubeconfig under ./secrets — which is where the DOCUMENTED real-lab default lives
+# (secrets/vks.kubeconfig), so a lab operator following Step 0 of their own runbook lost it.
+set_env_var KIND_KUBECONFIG "$KUBECONFIG_ABS"
 set_env_var VKS_AUTH_METHOD kubeconfig
 set_env_var VKS_CONTEXT "$KIND_CONTEXT"
 # Zero-config KinD: generate THROWAWAY test passwords for the local Harbor + Gitea admin
