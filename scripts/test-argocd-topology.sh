@@ -182,5 +182,25 @@ else
   bad "ARGOCD_DEST_CLUSTER_NAME tiebreak failed (got '$got') — a shared-lab tenant could not deploy"
 fi
 
+# ---------------------------------------------------------------------------------------------
+# 3. A PREFLIGHT MAY ONLY BLOCK ON WHAT THE OPERATOR CAN FIX RIGHT NOW.
+#
+# `make preflight` is the FIRST prerequisite of `make install-all`. GITEA_ARGOCD_URL is DISCOVERED
+# later, by 40-install-gitea.sh inside `make platform`. So preflight used to BLOCK, on every real-lab
+# first run, on a value that CANNOT EXIST YET — killing the one command both runbooks tell the
+# operator to run, before the mirror even started. Invisible on KinD (ArgoCD is in-cluster there, so
+# the off-cluster branch never runs).
+PF="${SCRIPT_DIR}/23-argocd-preflight.sh"
+if grep -qE 'GITEA_CLONE_URL="\$\{GITEA_ARGOCD_URL:-\$\{GITEA_INTERNAL_URL' "$PF" ; then
+  bad "preflight still blocks via the GITEA_INTERNAL_URL FALLBACK — on a real lab that value is cluster-local by definition, so 'make install-all' dies at its own preflight before the mirror"
+else
+  ok "preflight does not block on the cluster-local fallback for a value 'make platform' has not published yet"
+fi
+if grep -qE 'block .*GITEA_ARGOCD_URL is SET to a CLUSTER-LOCAL' "$PF"; then
+  ok "preflight still BLOCKS when GITEA_ARGOCD_URL is actually SET to a cluster-local address (that IS fixable now)"
+else
+  bad "preflight no longer blocks a genuinely cluster-local GITEA_ARGOCD_URL — the real guard was lost"
+fi
+
 [ "$fail" = 0 ] && { echo "test-argocd-topology: OK"; exit 0; }
 echo "test-argocd-topology: FAILED" >&2; exit 1
