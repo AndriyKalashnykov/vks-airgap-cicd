@@ -11,10 +11,16 @@ VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surface
 - **Pipeline surface** — self-hosted **Gitea** + **Tekton** (test → **Kaniko** build →
   **Harbor** push → GitOps tag write-back), wired to **Harbor** + **ArgoCD**, which run as VCF **Supervisor Services** (you install them, or they already exist and you are a tenant).
 - **Delivery surface** — an OS-portable (Ubuntu / PhotonOS) jump-box image mirror (**crane**,
-  dual-homed or sneakernet), a dependency-baked offline **Maven** builder, a pluggable ingress
-  (**Istio** default, **Traefik** optional — or **attach to the Istio a real VKS lab already has**,
-  since Istio ships there as a VKS Standard Package) fronting the UIs at `*.vks.local`, and a one-command
-  **KinD** end-to-end that proves the whole flow locally.
+  dual-homed or sneakernet), a dependency-baked offline **Maven** builder, an **optional** pluggable
+  ingress (**Istio** default, **Traefik** optional — or **attach to the Istio a real VKS lab already
+  has**, since Istio ships there as a VKS Standard Package) fronting the UIs at `*.vks.local`, and a
+  one-command **KinD** end-to-end that proves the whole flow locally.
+
+  The ingress is **not part of the pipeline** and **not part of `make install-all`** — it only decides
+  *how you reach the UIs*. `make verify` proves the whole GitOps loop over a **port-forward**, so it
+  needs no ingress and no `/etc/hosts` entry. Add one when you want `*.vks.local` URLs
+  (`make install-ingress`; on a real lab **`INGRESS_CONTROLLER=istio-existing`** — attach only, never
+  install a second istiod over the platform's mesh).
 
 <p align="center"><img src="docs/diagrams/out/airgap.png" alt="Air-gap connectivity: the jump box bridges the internet and the air-gapped VKS cluster; the cluster itself has no internet access" width="820"></p>
 
