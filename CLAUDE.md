@@ -414,6 +414,73 @@ re-type one, or go read a script to know what should have happened — that step
   `vcf package install istio …` command that has not been verified against a primary source.
 - Anything else that assumes state a greenfield admin cluster does not have.
 
+### 🚨 ADVERSARY 2026-07-13 (Istio / scenario-1) — the Gateway-API path is a KinD ARTEFACT
+
+**Read this before touching ingress.** Full report in the session transcript; the load-bearing parts:
+
+**BLOCKING — our preferred route API may not exist on a real lab.** **Nothing in this repo installs
+the Gateway API CRDs.** On KinD they appear because **cloud-provider-kind auto-installs them**
+(`05-kind-up.sh:146` runs CPK with no `--gateway-channel disabled`). Istio does **not** install them
+(primary-sourced, istio.io). So on a real VKS guest cluster, if the CRDs are absent:
+`istio_detect_route_api` (`lib/istio.sh:132`) finds no accepted `istio` GatewayClass → picks
+**classic** → classic needs the **shared ingress gateway** → the VKS Istio package ships that
+**`enabled: false`** (primary-sourced) → **`47-attach-istio.sh` dies.**
+⇒ `make e2e-kind-istio-existing`'s gateway-api leg is green **because of a KinD-only shim**, and
+`docs/vks-services/istio.md:82` markets it as *"works when the shared gateway is OFF: Yes"* on that
+green. **That KinD verification does not transfer.** One community blog is the only support for "VKS
+ships the CRDs". **Fix:** (a) verify on a lab (`kubectl get crd httproutes.gateway.networking.k8s.io`)
+and grade it, and/or (b) install the pinned CRDs ourselves when absent (`kubectl apply --server-side`
+— the bundle exceeds the 256 KiB client-side-apply limit). Either way `istio-preflight` must **say**
+the CRDs are missing instead of silently degrading to classic. **Side benefit of (b):** it removes an
+accidental CPK dependency — a CPK bump adding `--gateway-channel disabled` silently kills the leg.
+
+**HIGH — the runbook argues with its own tool** (my original bug report, corrected). `istio-existing`
+does **not** "attach to nothing": `47-attach-istio.sh:66` **dies loudly** — *"no istiod found … Use
+INGRESS_CONTROLLER=istio to INSTALL Istio instead"* — and `48-istio-preflight.sh:38` already prints
+*"NO Istio detected → INSTALL it"* and exits 0. The **tools are right; the doc contradicts them**:
+`scenario-1.md:432` tells you to run the preflight, and `:433` tells you to do the opposite of what it
+says. Not silent breakage — a wasted cycle and a false mental model. **Scenario 2 has the identical
+paragraph** (`scenario-2.md:315`), where the conclusion is *plausible* but still **asserted, not
+measured** — lead with the preflight there too.
+
+**The fix (adversary's recommendation): default Scenario 1 to `make install-ingress`** (our helm Istio),
+because: images already come from **our Harbor** (`global.hub`, `46:47,73` + `images.txt:56-60`); it
+needs **no Gateway API CRDs** (classic path, installs its own gateway with a pinned
+`labels.istio=ingressgateway`); **PSA handled** (`46:93` labels `istio-system`/`istio-ingress`
+`baseline`); no mesh to conflict with (you own the cluster). **Two caveats that MUST be written down,
+not hidden:** it `helm repo add`s from `istio-release.storage.googleapis.com` — **fine dual-homed,
+breaks a true sneakernet install**; and it is **not the Broadcom-supported mesh**.
+
+**The VKS add-on path stays a documented ALTERNATIVE, ungraded above `9.0-doc-inferred-for-9.1`** —
+and do NOT ship it as one line:
+
+- The `vcf package` sequence is **incomplete**: it needs `vcf package repository add` first (Broadcom:
+  *"required only when using the legacy package management system"*) and the values file comes from
+  `vcf package available get … --default-values-file-output`.
+- **9.1 forked the CLI**: "Standard Package" → **VKS Add-ons** (`vcf addon install create …`).
+- **LANDMINE:** `-n` is a **guest-cluster namespace** in `vcf package`, but the **vSphere Namespace of
+  the workload cluster** in `vcf addon`. **Opposite meanings, same flag.** Never copy it across.
+- **UNVERIFIED and load-bearing:** on an air-gapped cluster the add-on's **own** istiod/proxy images
+  come from Broadcom's registry, which the guest cannot reach. We neither mirror nor repoint them.
+
+**Also from the same report, not yet fixed** (ordering bugs in the admin runbook):
+
+- **G5 (real):** `scenario-1.md:357` greps for `argocd-application-controller` while `$KUBECONFIG` is
+  the **guest** cluster — but ArgoCD is a **Supervisor Service**, so it is not there. It finds nothing
+  and teaches the operator the topology is flat. Same bug in `scenario-2.md:253`. This is the exact
+  Supervisor-vs-guest confusion a prior session spent itself killing.
+- **G3:** A2 tells the operator to run `vcf context create` (`:114`) ~180 lines **before**
+  `make install-vcf-clis` (`:291`) installs `vcf`. Fresh jump box → `vcf: command not found`.
+- **G1:** `make psa-check` is instructed at Step 8, *after* Step 7 already mirrored for 20 minutes —
+  its own note says "before you spend 20 minutes mirroring". Move it to Step 3.
+- **G2:** the whole ingress decision is buried inside "Step 8 — access the UIs". An install step hidden
+  in an access section is *how this bug survived*. Promote it to its own step.
+
+**What survived the attack:** the Supervisor/guest split (Istio is **not** a Supervisor Service — the
+TMM catalog lists Harbor/Contour/ArgoCD, not Istio); "Istio has no credentials"; the
+selector-is-the-helm-release-name discovery via port 15021; `44-install-ingress.sh:16` genuinely
+surviving the `.env.example` clobber; and the ingress-gateway-off-by-default fact (primary-sourced).
+
 ### ⛔ NEXT TASK — prove the docker-only claim, and DO NOT do it with `make e2e-kind`
 
 The owner wants: *"we use podman by default; prove the e2e ALSO works with docker only, then claim it in `*.md`."*
