@@ -44,11 +44,27 @@ mapfile -t UNCOMMENTED < <(grep -oE '^[A-Z][A-Z0-9_]*=' "$ENV_EXAMPLE" | tr -d '
 # Anything added here needs the same treatment: an empirical check, and the reason written down.
 EXEMPT='APP_DEV_PORT|INGRESS_CONTROLLER'
 
+# (c) SELECTOR VARS — a var that chooses WHICH SYSTEM you are talking to must never be pinned here.
+# KUBECONFIG was UNCOMMENTED, so `make <target> KUBECONFIG=/other` was silently ignored: load_env
+# sources this file with `set -a` AFTER make put the override in the environment, and the sourced
+# value wins. You would run against the default cluster while believing you had switched. It also
+# made a two-cluster test undrivable. These must be COMMENTED, with their default applied in code.
+SELECTORS='KUBECONFIG|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|KUBECONTEXT'
+
 rc=0
 checked=0
 for v in "${UNCOMMENTED[@]}"; do
   [[ "$v" =~ ^(${EXEMPT})$ ]] && continue
   checked=$((checked + 1))
+
+  # (c) a SELECTOR var pinned uncommented -> a per-run override can never win.
+  if [[ "$v" =~ ^(${SELECTORS})$ ]]; then
+    log_error "CLOBBER: '${v}' is UNCOMMENTED in .env.example, but it SELECTS WHICH CLUSTER/SYSTEM you talk to."
+    log_error "    load_env sources this file with 'set -a' AFTER a per-run override is in the environment,"
+    log_error "    so 'make <target> ${v}=...' would be SILENTLY IGNORED — you would run against the default"
+    log_error "    while believing you had switched. Comment it out; apply the default in code."
+    rc=1
+  fi
 
   # (a) DYNAMIC fallback in any script: ${VAR:-$(...)} or ${VAR:-${OTHER}}
   dyn="$(grep -rlE "\\\$\{${v}:-\\\$[({]" "${REPO_ROOT}/scripts" 2>/dev/null | xargs -r -n1 basename | tr '\n' ' ')"
