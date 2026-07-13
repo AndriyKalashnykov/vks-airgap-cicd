@@ -46,7 +46,12 @@ VKS Supervisor Services?\tSupervisor Service(s). Prefixing a Supervisor-resident
 # test-argocd-topology.sh comment. A comment teaches the reader exactly as a heading does.
 scan() { cat "$1"; }
 
-files="$(git ls-files '*.md' '*.sh' | grep -v '^scripts/check-vks-terminology.sh$')"
+# EVERY tracked text file — not just *.md/*.sh. The first draft globbed those two extensions and
+# MISSED two real hits (.env.example and k8s/gitea/gitea.yaml). A gate's SCOPE LIST is the gate: a
+# member you forget is not "not yet covered", it is the defect still shipping with a green check
+# beside it. Binary/derived files are excluded by content, not by a hand-kept extension list.
+files="$(git ls-files | grep -vE '^(scripts/check-vks-terminology\.sh|docs/diagrams/out/|.*\.(png|svg|jar|ico|gz|tgz))$' \
+          | while IFS= read -r f; do [ -f "$f" ] && grep -Iq . "$f" 2>/dev/null && printf '%s\n' "$f"; done)"
 n=0
 while IFS=$'\t' read -r pat fix || [ -n "${pat:-}" ]; do
   [ -n "${pat:-}" ] || continue

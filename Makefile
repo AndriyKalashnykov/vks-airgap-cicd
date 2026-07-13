@@ -128,7 +128,7 @@ check-env-coverage: ## Gate: every operator-settable var the scripts read must b
 	@$(SCRIPTS)/check-env-coverage.sh
 
 .PHONY: check-vks-terminology
-check-vks-terminology: ## Gate: Broadcom's product nouns — no phantom "VCF Supervisor Service", no "VKS Supervisor"
+check-vks-terminology: ## Gate: Broadcom's product nouns (the vendor says "Supervisor Service"; phantom hybrids are banned)
 	@./scripts/check-vks-terminology.sh
 
 .PHONY: check-how-provenance

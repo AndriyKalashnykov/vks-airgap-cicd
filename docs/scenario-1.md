@@ -63,8 +63,9 @@ step where it first becomes known, rather than all at once.
 
 **A1 — Install Harbor as a Supervisor Service** (vSphere Client — not scriptable):
 
-1. **Ingress prereq:** install **Contour** first (Harbor's default ingress on VKS), or configure
-   an NGINX-based load balancer for the Supervisor.
+1. **Ingress prereq:** install **Contour** first — it is itself a **Supervisor Service**, and it is
+   Harbor's required ingress **on the Supervisor** (not in a VKS cluster) — or configure an
+   NGINX-based load balancer for the Supervisor.
 2. **Register the operator:** vSphere Client → **Supervisor Management → Services → Add New
    Service** → upload `harbor-service-<ver>.yml`.
 3. **Configure `harbor-data-values-<ver>.yml`** — the key fields: `hostname` (the Harbor
@@ -167,7 +168,8 @@ With the ArgoCD instance up, record its endpoint and namespace.
 > ```
 
 **A3 — Provision the workload VKS cluster + get its kubeconfig.** Gitea, Tekton, and the demo app
-run in a **guest VKS (Tanzu Kubernetes) cluster**, not on the Supervisor. Create a vSphere
+run in a **guest VKS cluster** (the workload cluster — *Tanzu Kubernetes cluster* is the pre-9.0
+vSphere-with-Tanzu 7/8 name), not on the Supervisor. Create a vSphere
 Namespace, provision a VKS cluster in it, and obtain its kubeconfig (e.g. a `vcf`/`kubectl
 vsphere` login to the guest cluster, or export it from VCF Automation). You need **cluster-admin**
 on it — the flow creates namespaces (`gitea`, `ci`, `javawebapp`) and installs Tekton CRDs. Place the
@@ -475,8 +477,9 @@ LB IP + admin credentials you set there. For **Gitea** (which you installed) and
   cluster has a default StorageClass (or set one explicitly).
 - **Harbor projects** `cicd` + `apps` must exist (auto-created by `make mirror` with push
   rights; otherwise create them first).
-- **Network reach (dual-homed):** the jump box must reach the VKS API server and the lab
-  Harbor.
+- **Network reach (dual-homed):** the jump box must reach the **Supervisor** API (`make vks-login`,
+  `make fetch-argocd-kubeconfig` and `make gitops` all talk to it — ArgoCD is a Supervisor Service),
+  the **VKS workload cluster's** API server, and the lab **Harbor**.
 
 ---
 
