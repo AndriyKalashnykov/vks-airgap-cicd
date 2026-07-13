@@ -78,8 +78,10 @@ jobs:
 
       # THE toolchain step: mise installs EVERY tool in .mise.toml — java (temurin 25),
       # maven, go, kubectl, helm, kustomize, kind, jq, yq, crane, node, trivy, gitleaks,
-      # shellcheck — and puts them on PATH with JAVA_HOME/GOROOT set. That is the whole
-      # point of the version-manager policy: ONE pinned file, no per-language setup step.
+      # shellcheck, kubeconform, hadolint, yamllint — and puts them on PATH with
+      # JAVA_HOME/GOROOT set. That is the whole point of the version-manager policy:
+      # ONE pinned file, no per-language setup step. mise-action caches the installs,
+      # so a warm run costs seconds.
       #
       # There is deliberately NO actions/setup-java here. There used to be, from before
       # java was pinned in .mise.toml — and it was pure dead weight: it ran BEFORE this
@@ -88,26 +90,15 @@ jobs:
       # SECOND source of truth for the Java major (`java-version: '25'`), which
       # check-java-alignment then had to police. Java comes from .mise.toml. Full stop —
       # and check-java-alignment now FAILS if a java-version pin reappears here.
+      #
+      # There is ALSO deliberately no bespoke "Install kubeconform, yamllint, hadolint"
+      # step. There used to be one: it curl'd two GitHub-release binaries into
+      # /usr/local/bin and ran `pipx install yamllint` (UNPINNED) on EVERY run — ~25 s
+      # of billed runner time, uncached, and a second source of truth for two tool pins
+      # that only CI could see (a local `make lint` used whatever the dev box had).
+      # All three ARE in mise's registry (kubeconform + hadolint via aqua, yamllint via
+      # pipx/uv); they are pinned in .mise.toml and installed by the step above.
       - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4
-
-      # Tools mise does not provide (shellcheck + Docker are preinstalled on the runner).
-      - name: Install kubeconform, yamllint, hadolint
-        env:
-          # renovate: datasource=github-releases depName=yannh/kubeconform
-          KUBECONFORM_VERSION: v0.8.0
-          # renovate: datasource=github-releases depName=hadolint/hadolint
-          HADOLINT_VERSION: v2.14.0
-        run: |
-          set -euo pipefail
-          curl -sSfL \
-            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
-            | sudo tar -xz -C /usr/local/bin kubeconform
-          sudo curl -sSfL \
-            "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
-            -o /usr/local/bin/hadolint
-          sudo chmod +x /usr/local/bin/hadolint
-          pipx install yamllint
-          kubeconform -v && hadolint --version && yamllint --version
 
       # Persist kubeconform's downloaded JSON schemas across runs (validate.sh
       # points kubeconform -cache here) so githubusercontent isn't re-hit every run.
