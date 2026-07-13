@@ -317,11 +317,29 @@ session's OWN fixes, an hour old:
   `applications`/`repositories` are **project-scoped**, so the tenant's real path is **argocd-server**
   (#163).
 
-### The mechanism ladder (#163) — the tenant path WORKS
+### …and 3 more at the very end, from the STOPPING-RULE run (#174)
 
-`ARGOCD_MECHANISM=auto|kubectl|api|request`. **Proven on KinD** (`make e2e-kind-tenant`): a kubeconfig
-with **ZERO Kubernetes RBAC** in the ArgoCD namespace created both Applications through
-**argocd-server** using only an AppProject role.
+The session-end adversary (RULE ZERO, trigger 3) returned **NOT DONE** on the session's own work.
+All three confirmed by hand; **none is reproducible on KinD**, which is why they survived a green e2e:
+
+- **`make install-all` died at its own `preflight`** on every real-lab first run. Preflight blocked on
+  `GITEA_ARGOCD_URL` — a value `40-install-gitea.sh` only DISCOVERS *later*, inside `make platform`,
+  which runs **after** preflight. The one command both runbooks tell the operator to run failed
+  **before the mirror**. → warn when unset; still block when it *is* set to something cluster-local.
+- **`ARGOCD_SERVER` was uncommented in `.env.example`** → `set -a` clobbered every override, and **the
+  tenant e2e passed only on this box's `/etc/hosts`**. See the handoff's red block.
+- **`05-kind-up.sh` wrote `kind get kubeconfig` into the CALLER's `$KUBECONFIG`**, which `kind-down`
+  then deletes → a developer with `export KUBECONFIG=~/.kube/config` lost it. The `.env.example` pin
+  was an **accidental shield**, not a design; it came off when `load_env` began honouring the caller's
+  `KUBECONFIG` (#168). Latent for the repo's whole life. → the flow now owns `secrets/kind.kubeconfig`.
+
+### The mechanism ladder (#163) — the tenant path is IMPLEMENTED, not yet PROVEN
+
+`ARGOCD_MECHANISM=auto|kubectl|api|request`. `make e2e-kind-tenant` exits 0 — a kubeconfig with **ZERO
+Kubernetes RBAC** in the ArgoCD namespace creates both Applications through **argocd-server** using
+only an AppProject role. **But that green is not yet trustworthy**: it depended on `ARGOCD_SERVER`
+being resolvable via this box's `/etc/hosts` (see #174 above). Re-run it on clean machine state before
+citing it.
 
 ### STILL OPEN
 
@@ -349,30 +367,67 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 ### ▶️ HANDOFF 2026-07-13 — START HERE
 
-`main` GREEN, **0 open PRs**. ~24 PRs merged (#148–#169). All 8 original adversary findings CLOSED,
-plus 4 CRITICALs the adversary found in this session's own work (see the section above).
+`main` GREEN, **0 open PRs**. ~25 PRs merged (#148–#174). All 8 original adversary findings CLOSED,
+plus **7** CRITICALs the adversary found in this session's own work — the last three in **#174**.
 
-**Every fix ships with a demonstrated RED, and the e2e permutations are green:**
+**Every fix ships with a demonstrated RED, and the e2e permutations were green:**
 
 | | |
 |---|---|
 | `make e2e-kind` | EXIT=0 — both apps served their own markers, all UIs 200, PSA OK |
-| `make e2e-kind-tenant` | EXIT=0 — a kubeconfig with ZERO k8s RBAC in ns/argocd created both Applications via **argocd-server** |
+| `make e2e-kind-tenant` | EXIT=0 — **but see the caveat below: this green is not trustworthy yet** |
 | `make e2e-kind-cross-cluster` | EXIT=0 — the Applications land in the HUB (not the GUEST), target the GUEST API, and ArgoCD **actually fetched a revision** from a Gitea it can reach |
+
+### 🔴 The tenant e2e's green is UNPROVEN — this is the first thing to settle
+
+`make e2e-kind-tenant` (the #163 headline: *a kubeconfig with zero k8s RBAC in `ns/argocd` still
+creates both Applications, via argocd-server*) **passed only because THIS box's `/etc/hosts` resolves
+`argocd.vks.local`.** `.env.example` pinned `ARGOCD_SERVER=argocd.vks.local` uncommented, so
+`load_env`'s `set -a` exported it over any override. On a clean box the `api` mechanism would have
+fallen through to `request` and **exited 0 having applied nothing** — a green measuring nothing.
+
+PR #174 removed the clobber (and added `ARGOCD_SERVER`/`ARGOCD_AUTH_TOKEN`/`ARGOCD_DEST_*` to
+`check-env-clobber`'s `SELECTORS` **and** `load_env`'s snapshot list). **But the tenant path has still
+never been proven on clean machine state.** Re-run it on a box (or container) WITHOUT that
+`/etc/hosts` line before believing it. Until then, treat #163 as unverified.
 
 ### NEXT (in order)
 
-1. **Kill the `GITEA_ARGOCD_URL` read-back.** `40-install-gitea.sh` publishes it into `.env.kind` and
+1. **Re-prove `make e2e-kind-tenant` without the `/etc/hosts` shortcut** (above).
+2. **Kill the `GITEA_ARGOCD_URL` read-back.** `40-install-gitea.sh` publishes it into `.env.kind` and
    `70` reads it back as an input. A stale value is then indistinguishable from a deliberate
    override — the exact anti-pattern `lib/argocd.sh` invokes to justify NOT trusting
    `ARGOCD_DEST_SERVER` from that same file. **Derive it from the live Gitea Service** (`kubectl -n
    $GITEA_NAMESPACE get svc gitea-http -o jsonpath='{.status.loadBalancer.ingress[0].ip}'`), with a
    `GITEA_ARGOCD_URL_OVERRIDE` for the operator (precedent: `INGRESS_LB_IP_OVERRIDE`).
-2. **Retire `.env.kind` as the carrier of REAL-LAB state.** The sink is hardcoded in `lib/os.sh`
+3. **Retire `.env.kind` as the carrier of REAL-LAB state.** The sink is hardcoded in `lib/os.sh`
    (`load_env` + `set_env_var`). Make it a variable (`VKS_ENV_OVERLAY`), and STAMP it with the cluster
    it was written for — then refuse to source it against a different one. A rename alone deletes the
    one cue ("kind") that tells an operator the file is foreign state.
-3. Whatever the **session-end adversary review** surfaces (RULE ZERO trigger 3).
+4. **`check-env-clobber` is blind to env-prefix invocations** (`VAR=… ./script.sh`). It only reasons
+   about `make <target> VAR=…`. Widen it, or the next selector-var lands the same way `ARGOCD_SERVER`
+   did.
+5. **The USER-JOURNEY audit** (three agents were run for this; fold their findings in). The repeated
+   ask was: walk **all three paths end to end** — choose-a-path → the path doc → the walkthrough —
+   *as the user*, not as the author. The lesson that produced it: I kept patching whichever symptom
+   was pointed at (a table, a link, a column header) instead of auditing the journey, so the same
+   class of defect kept surfacing one cell at a time.
+
+### 🪤 Traps that bit ME this session (beyond the ones already listed below)
+
+- **NEVER background a git command that mutates the working tree.** A backgrounded merge loop ending
+  in `git checkout main && git reset --hard origin/main` fired **mid-edit** and wiped three verified
+  CRITICAL fixes — **three separate times**, once immediately after promising not to. Worse than the
+  wipe: `make static-check` then went **green on the reverted tree**, and I briefly believed it. Only
+  `git diff main --stat` (empty) told the truth. A background job may only **READ**; merge + sync are
+  foreground, when you are the sole writer of the tree. (Now a rule in `common/git-workflow.md`.)
+- **A grep-gate must strip comments before it looks** — `test-kind-down-safety` failed on its own
+  first run by matching the comment that *explains* it. Second occurrence this session
+  (`check-java-alignment` did the same). `sed 's/#.*//'` first.
+- **Never answer "is this claim true?" by quoting the artifact that makes the claim.** Asked whether
+  the walkthrough applied to all three scenarios, I quoted the doc's own intro — then opened a PR on
+  that unverified premise. The code said otherwise (URLs derive from `APP_DOMAIN`; Harbor and ArgoCD
+  deliberately sit **outside** the ingress).
 
 ### UNVERIFIED — needs a real lab, not reproducible on KinD
 
