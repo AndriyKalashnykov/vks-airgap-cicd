@@ -41,22 +41,28 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
 
-README="${REPO_ROOT}/README.md"
-[ -f "$README" ] || die "no README.md"
+# THE SCENARIOS NOW LIVE IN ./docs/ — and the gate FOLLOWED them.
+#
+# The README is a router; each path is its own document. That is a presentation choice, and it does
+# NOT relax the rule: a reader who picks one path must find EVERY decision inside THAT path's
+# document. So the gate scans the path DOCS, not README sections.
+#
+# If it had been left pointing at the README, it would have gone one of two ways, both bad:
+# fail spuriously (the sections are gone), or — after someone "fixed" that by loosening it — pass
+# vacuously on a README that answers nothing. A gate must follow its content.
+SCENARIO_DIR="${REPO_ROOT}/docs"
 
 # Extract a '## <heading match>' section body (up to the next '## ').
-# Extract a '## <heading match>' section body (up to the next '## '), with markdown LINK TARGETS
-# REMOVED: `[text](docs/x.md)` -> `[text]`, `[text](#anchor)` -> `[text]`. A decision answered only by
-# a link is a decision ORPHANED — that is precisely what this gate exists to stop, and the old
-# patterns let an anchor (`vks-authentication`) satisfy `cluster-access`.
-section() { awk -v pat="$1" '
-  $0 ~ /^## / { if (inb) exit; if (index($0,pat)) { inb=1; next } }
-  inb { gsub(/\]\([^)]*\)/, "]"); print }' "$README"; }
+# Read a path document, with markdown LINK TARGETS REMOVED: `[text](x.md)` -> `[text]`,
+# `[text](#anchor)` -> `[text]`. A decision answered only by a LINK is a decision ORPHANED — that is
+# precisely what this gate exists to stop (the old version let the anchor `vks-authentication`
+# satisfy `cluster-access`, i.e. it blessed the very cross-reference its own header forbids).
+section() { sed -e 's/\]([^)]*)/]/g' "${SCENARIO_DIR}/$1" 2>/dev/null; }
 
-# scenario|heading fragment
-SCENARIOS='KinD|Try it locally end-to-end with KinD
-Scenario-1|Scenario 1: Harbor & ArgoCD need to be installed
-Scenario-2|Scenario 2: Harbor & ArgoCD already installed'
+# scenario|the document that MUST answer every decision below, by itself
+SCENARIOS='KinD|kind-local.md
+Scenario-1|scenario-1.md
+Scenario-2|scenario-2.md'
 
 # decision|the COMMAND(s) that ANSWER it. Never a bare noun — see the header.
 DECISIONS='cluster-access|make vks-login|make kind-up|make env-populate
@@ -79,7 +85,7 @@ while IFS='|' read -r sc head; do
   [ -z "$sc" ] && continue
   section "$head" > "${TMP}/${sc}.body"
   scenario_names+=("$sc"); scenario_files+=("${TMP}/${sc}.body")
-  [ -s "${TMP}/${sc}.body" ] || { log_error "scenario '${sc}' section not found (heading changed?): ${head}"; rc=1; }
+  [ -s "${TMP}/${sc}.body" ] || { log_error "scenario '${sc}' document not found or empty: docs/${head}"; rc=1; }
 done <<< "$SCENARIOS"
 
 printf '\n  %-14s' 'DECISION' >&2
@@ -107,8 +113,9 @@ if [ "$rc" -eq 0 ]; then
   log_info "check-readme-scenarios: OK — every scenario answers every decision within its own section."
 else
   log_error "check-readme-scenarios: a scenario does NOT answer a decision it must."
-  log_error "  This README is SCENARIO-BASED: a reader follows ONE path end to end. Do not park the"
-  log_error "  answer in a standalone topic section — put it in EACH scenario that needs it."
+  log_error "  The docs are SCENARIO-BASED: a reader follows ONE path end to end, inside ONE document."
+  log_error "  Do not park the answer in a shared topic doc and link to it — put the COMMAND in EACH"
+  log_error "  path document that needs it. (A link does not count: link targets are stripped first.)"
   log_error "  (That is exactly how the Istio install-vs-attach decision got orphaned, and the"
   log_error "   real-lab runbooks ended up telling operators to install a second istiod.)"
 fi
