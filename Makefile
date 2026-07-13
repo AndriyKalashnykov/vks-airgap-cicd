@@ -52,7 +52,9 @@ PLANTUML_VERSION    ?= 1.2026.6
 RENOVATE_VERSION    ?= 43.257.6
 # renovate: datasource=npm depName=markdownlint-cli
 MARKDOWNLINT_VERSION ?= 0.49.0
-# Container engine — podman preferred, docker fallback. Override: CONTAINER_ENGINE=docker
+# Container engine — podman is the DEFAULT, docker only a fallback. Override: CONTAINER_ENGINE=docker
+# This duplicates container_engine() (scripts/lib/os.sh) because make needs it at parse time; the two
+# MUST agree, and `make test-container-engine` asserts both put podman first.
 CONTAINER_ENGINE    ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
 SCRIPTS := ./scripts
@@ -582,7 +584,11 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay ## Run all offline script-logic unit tests
+test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine ## Run all offline script-logic unit tests
+
+.PHONY: test-container-engine
+test-container-engine: ## Offline: podman is the DEFAULT engine (docker only as fallback); no operator-flow script requires docker
+	@./scripts/test-container-engine.sh
 
 .PHONY: test-state-overlay
 test-state-overlay: ## Offline: the stamped state overlay (unstamped=source, mismatch=ARCHIVE not delete, kind-down's delete contract)

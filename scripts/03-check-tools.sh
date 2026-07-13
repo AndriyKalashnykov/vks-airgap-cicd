@@ -38,7 +38,7 @@ argocd|optional|REPORT the client version in argocd-preflight. NOT needed to ins
 tkn|optional|inspect PipelineRuns by hand; the flow uses kubectl
 docker|kind-only|the KinD stand-in (cloud-provider-kind + node exec) requires docker specifically
 kind|kind-only|create the local stand-in cluster
-podman|optional|preferred container engine for builds/mirroring (docker is the fallback)
+podman|optional|the DEFAULT container engine for builds/mirroring (docker is only a fallback)
 trivy|ci-only|make sec / static-check
 gitleaks|ci-only|make sec / static-check
 shellcheck|ci-only|make lint

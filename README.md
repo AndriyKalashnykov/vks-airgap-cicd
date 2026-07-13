@@ -54,8 +54,13 @@ New here? Pick the path that matches your situation — each one is self-contain
 The VKS paths start from the jump-box **[Prerequisites](#prerequisites)** below.
 Run **`make check-tools`** to see which CLIs you have and which are required.
 
-> **Container engine:** podman or Docker on VKS (`CONTAINER_ENGINE`, podman preferred).
-> `make e2e-kind` requires **Docker** specifically.
+> **Container engine:** **podman by default** on VKS — daemonless, so it trusts the self-signed Harbor CA
+> **per command** (`--cert-dir`), sudo-free, and it is the only engine `make deps` installs.
+> Docker also works, but its *daemon* does the registry TLS, so the CA must be installed for the daemon
+> — root-owned (`/etc/docker/certs.d/…`, or the OS store + a daemon restart) unless you run **rootless**
+> docker. See `CONTAINER_ENGINE` in `.env.example`.
+> `make e2e-kind` requires **Docker** regardless of `CONTAINER_ENGINE` (kind's node containers) — a
+> stand-in detail; the air-gapped jump box needs no docker at all.
 
 ## Demo apps
 
@@ -176,7 +181,7 @@ It needs internet (dual-homed); a fully air-gapped host uses the carried bundle 
 - The Harbor **CA certificate** (`.env` → `HARBOR_CA_FILE`) — Harbor is self-signed HTTPS; Gitea is served over HTTP (no CA needed).
 - [mise](https://mise.jdx.dev/) for the rest of the toolchain (installed by `make deps`; git must already be present).
 - **Container engine:** image operations (mirror, Maven builder build/push, diagram
-  rendering) use `CONTAINER_ENGINE` — **podman-preferred**, docker fallback. `make deps`
+  rendering) use `CONTAINER_ENGINE` — **podman is the default**, docker the fallback. `make deps`
   installs the rootless-podman runtime deps per OS (crun + an active
   `unqualified-search-registries` on Photon; `uidmap` + `slirp4netns` on Ubuntu, which apt
   leaves out of a default podman install). The **local KinD end-to-end** additionally
