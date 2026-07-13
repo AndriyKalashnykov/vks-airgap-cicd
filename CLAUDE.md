@@ -365,81 +365,60 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 ## Backlog / resume state
 
-### ▶️ HANDOFF 2026-07-13 — START HERE
+### ▶️ HANDOFF 2026-07-13 (late) — START HERE
 
-`main` GREEN, **0 open PRs**. ~25 PRs merged (#148–#174). All 8 original adversary findings CLOSED,
-plus **7** CRITICALs the adversary found in this session's own work — the last three in **#174**.
-
-**Every fix ships with a demonstrated RED, and the e2e permutations were green:**
+`main` GREEN, **0 open PRs**, ~33 merged this session. **Every e2e path in the repo is green on
+current code** — and that is the headline, because `static-check` cannot see any of what they catch:
 
 | | |
 |---|---|
-| `make e2e-kind` | EXIT=0 — both apps served their own markers, all UIs 200, PSA OK |
-| `make e2e-kind-tenant` | EXIT=0 — **but see the caveat below: this green is not trustworthy yet** |
-| `make e2e-kind-cross-cluster` | EXIT=0 — the Applications land in the HUB (not the GUEST), target the GUEST API, and ArgoCD **actually fetched a revision** from a Gitea it can reach |
+| `make e2e-kind` | EXIT=0 — both apps' markers live, all UIs routed |
+| `make e2e-kind-tenant` | EXIT=0 — ZERO k8s RBAC in ns/argocd; Applications created via **argocd-server**, against the **LB IP** (it now ASSERTS the override survives `load_env`, so the green no longer depends on `/etc/hosts`) |
+| `make e2e-kind-cross-cluster` | EXIT=0 — RED refusal + hub/guest registration + a revision actually fetched |
+| `make e2e-kind-istio-existing` | EXIT=0 — **2 demonstrated REDs**; DISCOVERED the platform's `istio=platform-gw` selector from the live cluster; **both** route APIs |
+| `make e2e-sneakernet` | EXIT=0 — 36/36 images intact after an 11 GB carry to a fresh **PhotonOS** jumpbox; no host-state leakage |
+| `make e2e-kind-both` | EXIT=0 — secure + insecure, **each leg reporting its true mode** |
+| `make verify-ingress-both` | EXIT=0 — istio **and** traefik |
 
-### 🔴 The tenant e2e's green is UNPROVEN — this is the first thing to settle
+### The state overlay was redesigned (#192) — read this before touching `load_env`
 
-`make e2e-kind-tenant` (the #163 headline: *a kubeconfig with zero k8s RBAC in `ns/argocd` still
-creates both Applications, via argocd-server*) **passed only because THIS box's `/etc/hosts` resolves
-`argocd.vks.local`.** `.env.example` pinned `ARGOCD_SERVER=argocd.vks.local` uncommented, so
-`load_env`'s `set -a` exported it over any override. On a clean box the `api` mechanism would have
-fallen through to `request` and **exited 0 having applied nothing** — a green measuring nothing.
+`.env.kind` is GONE. It was a KinD-named file carrying REAL-LAB state that `make kind-down` deletes —
+and both runbooks tell the operator to run `kind-down` at Step 0. The sink is now **`.env.state`**
+(`VKS_STATE_FILE`), **STAMPED** with the cluster that wrote it.
 
-PR #174 removed the clobber (and added `ARGOCD_SERVER`/`ARGOCD_AUTH_TOKEN`/`ARGOCD_DEST_*` to
-`check-env-clobber`'s `SELECTORS` **and** `load_env`'s snapshot list). **But the tenant path has still
-never been proven on clean machine state.** Re-run it on a box (or container) WITHOUT that
-`/etc/hosts` line before believing it. Until then, treat #163 as unverified.
+**The adversary killed the backlog's own instruction.** It said "STAMP it and REFUSE to source it
+against a different cluster". Refusing is WRONG: the sink holds the ONLY copy of the generated
+passwords, and the air-gap jumpbox has no cluster to stamp against. The polarity is INVERTED:
 
-### 📋 USER-JOURNEY AUDIT — what is FIXED, and what is still OPEN
+- **UNSTAMPED** → source it, warn.
+- **MISMATCHED** → **ARCHIVE it (rename), never `rm`** — it may hold a *live* cluster's only credentials.
+- `kind-down` deletes it **only** if the KinD flow stamped it (`VKS_STATE_KIND=1`). **Proven live.**
+- `set_env_var` **has no default sink** — the line that stops the class regrowing. Use `state_set`.
+- `make state-show` says WHOSE the file is, whether kind-down may touch it, and its contents (redacted).
 
-Three walkers (KinD / Scenario 1 / Scenario 2) walked `README → path doc → demo-walkthrough` **as the
-user**; every finding was adversarially verified against the code before it counted. **Do this as a
-Workflow, never as background `Agent`s** — 3 background agents delivered *nothing* (0/7 this session),
-the Workflow delivered 39/39.
+It also killed two designs that sounded right: *"two sinks split by key lifetime"* (**lifetime is a
+property of the CLUSTER, not the key**) and *"derive everything"* (it would **silently MINT a random
+`HARBOR_PASSWORD` on a real lab**, where Harbor is a Supervisor Service whose credential we CONSUME).
 
-**FIXED** (#177, #178): `make deps` exited 1 on a fresh box in a documentation loop (nothing installed
-mise, while the README said `make deps` did) · `make argocd-password` printed a password **that does
-not log in** (`e2e-kind` runs `SKIP_DOTENV=1`, so the `.env` value was never applied — but the command
-read `.env` first) · `.env.example` had `KUBECONFIG` and `GUEST_KUBECONFIG` declared **in each other's
-blocks** from a substring-matching edit in #168, with every gate green · `creds-show` printed
-`<your lab's ArgoCD URL>` on a real lab while `ARGOCD_SERVER` **already held the address**.
+### NEXT
 
-**ALL 9 CLOSED (verified against the tree, 2026-07-13)** — `.env` creation in both runbooks (#180) ·
-`ARGOCD_KUBECONFIG` hoisted to its own step *before* the install that needs it (#180) · `install-all`'s
-chain now names `preflight` (#180) · both stale "the ArgoCD API is not supported" claims gone — one of
-them denied the **tenant their own path** (#180) · the tenant mechanism ladder documented (#180) ·
-broken anchor, doubled blockquote, hardcoded `apps` project (#180).
+1. **A real lab.** Everything below is gated and reasoned but **NOT RUN**: the Supervisor topology, the
+   `vcf` CLI auth flow (`30-vks-login.sh`), and whether a tenant may `kubectl` into the ArgoCD
+   namespace at all. No amount of KinD green changes that.
+2. `INGRESS_LB_IP` is still published and read back by `98-verify-ingress.sh` (the
+   `INGRESS_LB_IP_OVERRIDE` exists for it). An `ingress_lb_ip()` resolver would close the last one.
 
-Later sweeps found more, also fixed: the **phantom noun** (Broadcom's "Supervisor Service" welded to
-"VCF") pointed operators at the wrong console, **Contour was documented on the wrong cluster**, and **both scenarios' network-reach
-prereqs were unrunnable as written** (they never named the Supervisor API that `vks-login` /
-`fetch-argocd-kubeconfig` / `gitops` all need) — #189, gated by `check-vks-terminology`.
+### ✅ CLOSED this session (verified against the tree, not remembered)
 
-### NEXT (in order)
+The 8 original adversary findings · **7 more CRITICALs the adversary found in my own fixes** · the
+user-journey audit (9 findings) · the terminology sweep (a **phantom Broadcom noun** that pointed
+operators at the wrong console; **Contour documented on the wrong cluster**; **both scenarios' network-reach
+prereqs unrunnable as written**) · `check-env-clobber`'s env-prefix blindness (which was hiding a LIVE
+clobber) · the `.env.kind` redesign · Gitea 1.27 (Renovate moved the inventory, not the consumer).
 
-1. **Retire `.env.kind` as the carrier of REAL-LAB state.** The sink is hardcoded in `lib/os.sh`
-   (`load_env` + `set_env_var`), yet it holds real-lab discovered values (Harbor/ArgoCD/Gitea LB IPs,
-   `INGRESS_LB_IP`) under a name that says "kind". `make kind-down` deletes what the KinD flow created —
-   and both real-lab runbooks tell the operator to run it at Step 0. Make the sink a variable and
-   **stamp it with the cluster it was written for**, refusing to source it against a different one. A
-   rename alone deletes the one cue ("kind") that tells an operator the file is foreign state.
-2. **Run the e2e paths that were never run this session** — `e2e-sneakernet` (two-box air-gap) and the
-   `e2e-kind-both` / `verify-ingress-both` matrices. `static-check` does NOT cover them, and this
-   session proved why: the SIGPIPE guard (#183) passed every static gate and still killed the e2e.
-
-### ✅ CLOSED since the last handoff (verified against the tree, not remembered)
-
-- **Tenant path re-proved without the `/etc/hosts` shortcut** — `70` now LOGS the effective
-  argocd-server, and the tenant e2e ASSERTS the LB IP survives `load_env`. Green for the right reason.
-- **`GITEA_ARGOCD_URL` read-back killed** (#181) — resolved live from the Service; then #184 gave it a
-  SINGLE definition (`gitea_clone_url()`), because two derivations had drifted and argocd-server
-  rejected the tenant's app as *"not permitted in project"* — an error naming permissions that was
-  really two copies of a URL.
-- **`check-env-clobber`'s env-prefix blindness** (#190) — and widening it found a LIVE clobber
-  (`ARGOCD_NAMESPACE`), whose naive fix would have killed `make gitops`.
-- **The USER-JOURNEY audit** — all 9 findings fixed; later sweeps added the phantom-noun /
-  wrong-cluster-Contour / unrunnable-network-prereq fixes (#189).
+**The through-line: nearly every real bug was one shape — something checked that a value was PRESENT
+instead of whether it WORKS.** A token file. A `.env` password. A published URL. A mirrored tag. That
+class is now gated in six places, each with a demonstrated RED.
 
 ### 🪤 Traps that bit ME this session (beyond the ones already listed below)
 
