@@ -65,7 +65,13 @@ Scenario-1|scenario-1.md
 Scenario-2|scenario-2.md'
 
 # decision|the COMMAND(s) that ANSWER it. Never a bare noun — see the header.
-DECISIONS='cluster-access|make vks-login|make kind-up|make env-populate
+# `env-file` is here because BOTH real-lab runbooks told the operator to "set these in .env" — five
+# separate times in Scenario 1 — and NEVER told them to create it. `.env` is gitignored, so it does
+# not exist in a fresh clone. Only the README's Run column mentioned `make env-init`, and each
+# scenario doc claims to be self-contained ("you do not have to read the other scenario"). This gate
+# was GREEN throughout: it never asked the one question a reader hits first.
+DECISIONS='env-file|make env-init|cp .env.example
+cluster-access|make vks-login|make kind-up|make env-populate
 harbor|make install-harbor|make harbor-robot|make fetch-harbor-ca|make mirror
 argocd|make install-argocd|make gitops|make argocd-preflight|make fetch-argocd-kubeconfig
 istio-mode|INGRESS_CONTROLLER=istio-existing|INGRESS_CONTROLLER=istio|make attach-istio|make install-istio

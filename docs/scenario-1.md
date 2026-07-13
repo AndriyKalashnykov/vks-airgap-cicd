@@ -43,7 +43,14 @@ Reference docs:
 fetch in A3. The `.env` prompts below are interleaved with the steps: set each value at the
 step where it first becomes known, rather than all at once.
 
-> **→ before you start, set the upfront vCenter vars in `.env`** (they drive the Supervisor login):
+> **→ before you start, CREATE `.env`, then set the upfront vCenter vars in it** (they drive the
+> Supervisor login). `.env` is gitignored — it does not exist in a fresh clone:
+>
+> ```bash
+> make env-init      # creates .env from .env.example (backs up any existing one)
+> ```
+>
+> Then edit `.env`:
 >
 > ```bash
 > SUPERVISOR_HOST=<supervisor-control-plane-IP>   # vCenter → Workload Management → Supervisors
@@ -132,17 +139,18 @@ With Harbor installed, record its access details before moving on to ArgoCD.
 > real supported server versions with `kubectl explain argocd.spec.version` on the lab; the KinD
 > stand-in runs a 3.x server, so expect a possible server-generation delta.
 >
-> **Topology to verify on the lab:** `make gitops` applies an ArgoCD `Application` (via
-> `kubectl`) into `ARGOCD_NAMESPACE` and targets the in-cluster destination
-> `https://kubernetes.default.svc`. Confirm the ArgoCD instance can deploy into the workload
-> namespace it watches — same cluster, or the workload cluster registered with ArgoCD. An
-> off-cluster ArgoCD addressed **only** by URL + API is not what the scripts assume.
+> **Topology.** ArgoCD is a Supervisor Service, so it runs in a **different cluster** from your
+> workload. `make gitops` handles that: it applies the `Application` to the cluster ArgoCD runs in
+> (`ARGOCD_KUBECONFIG`), **registers your guest cluster** as a destination, and points the
+> `Application` at it — it never deploys into the Supervisor. An ArgoCD reachable **only** by URL +
+> API (no kubeconfig) is also supported: `ARGOCD_MECHANISM=api` creates the `Application` through
+> `argocd-server`, needing no Kubernetes RBAC in the ArgoCD namespace.
 >
 > **`make argocd-preflight`** automates both checks against your `KUBECONFIG` cluster — it
 > prints the operator's supported server versions (`kubectl explain argocd.spec.version`), the
 > running server image, the `argocd` CLI version, and a **TOPOLOGY OK / MISMATCH** verdict
 > (is ArgoCD in this cluster, are any workload clusters registered, does the target namespace
-> exist). Run it after Step 1 (kubeconfig in place), before `make gitops`.
+> exist). Run it after Step 3 (kubeconfig in place), before `make gitops`.
 
 With the ArgoCD instance up, record its endpoint and namespace.
 
@@ -152,7 +160,7 @@ With the ArgoCD instance up, record its endpoint and namespace.
 > ARGOCD_NAMESPACE=argocd-instance-1    # the vSphere Namespace your A2 ArgoCD instance runs in
 > ARGOCD_SERVER=<argocd-server-LB-IP>   # kubectl get svc -n argocd-instance-1 argocd-server \
 > #                                       -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
-> > ARGOCD_TRACK_BRANCH=main
+> ARGOCD_TRACK_BRANCH=main
 > # ARGOCD_CA_FILE=./secrets/argocd-ca.crt   # ArgoCD's self-signed CA (Step 2, make fetch-argocd-ca)
 > ```
 
@@ -315,7 +323,7 @@ Reference: [William Lam — using a VKS cluster with a private container registr
 (Verify the exact `trust.additionalTrustedCAs` shape against your VCF/VKS 9.1 lab — it is not
 reproducible on the KinD stand-in.)
 
-**Step 4 — Harbor projects + (recommended) a robot account.** `make mirror` (run in step 6)
+**Step 4 — Harbor projects + (recommended) a robot account.** `make mirror` (run in step 7)
 creates the `cicd` and `apps` projects for you via Harbor's REST API if they don't exist
 (needs push rights). It creates them **public** (`HARBOR_PUBLIC_PROJECTS=true`, the default),
 so the cluster's containerd/kubelet *can* pull the app image anonymously. The image-pull
@@ -350,7 +358,7 @@ kubectl get pods -A | grep argocd-application-controller   # its namespace = ARG
 
 **Step 5 — verify (or create) the in-cluster registry secret.** The pipeline pushes the
 built image to Harbor from inside the cluster, which needs a Docker-config secret.
-`make platform` (its `configure-tekton` step, run in step 6) creates it for you as
+`make platform` (its `configure-tekton` step, run in step 7) creates it for you as
 **`harbor-dockerconfig`** in the `ci` namespace, from `HARBOR_USERNAME` / `HARBOR_PASSWORD`.
 Check whether it already exists:
 
@@ -376,10 +384,22 @@ The Kubernetes secret is built from your Harbor **login/password**; Harbor's **R
 used only to create the *projects* (and, optionally, a robot account) — it does not create
 this cluster secret.
 
-**Step 6 — install everything and verify end-to-end:**
+**Step 6 — get the Supervisor kubeconfig ArgoCD needs.** ArgoCD runs on the **Supervisor**, your app
+runs in the **guest** cluster — so `make gitops` needs access to *both*. `make vks-login` (Step 5)
+gave you the **guest** one; this gives you the **Supervisor** one:
 
 ```bash
-make install-all   # mirror → mirror-verify → builder-image → vks-login → platform → gitops
+make fetch-argocd-kubeconfig   # interactive: the CLI prompts for your password
+```
+
+It creates a Supervisor VCF-CLI context, writes it to `$ARGOCD_KUBECONFIG` (`.env`), and **proves**
+it reaches `argocd-server` before you go further. Skip it **only** if ArgoCD and your workload run in
+the same cluster. See [`docs/vks-services/argocd.md`](vks-services/argocd.md).
+
+**Step 7 — install everything and verify end-to-end:**
+
+```bash
+make install-all   # preflight → mirror → mirror-verify → builder-image → vks-login → platform → gitops
 make verify        # push a marked change → Tekton → Harbor → ArgoCD → live app serves it
 ```
 
@@ -387,22 +407,13 @@ make verify        # push a marked change → Tekton → Harbor → ArgoCD → l
 Supervisor Services. It mirrors all images into that Harbor, builds + pushes the offline Maven
 builder image, installs Gitea + Tekton, and creates the ArgoCD `Application`.
 
-> **Cross-cluster ArgoCD deploy.** ArgoCD runs on the **Supervisor**, so it must be told where
-> your **guest** workload cluster is. Set **`ARGOCD_KUBECONFIG`** (Supervisor access) in `.env`
-> alongside `KUBECONFIG` (guest access); `make gitops` (invoked by `install-all`) then
-> **auto-registers** the guest cluster as an ArgoCD destination via **`make
-> argocd-register-guest`** and points the `Application` there — it does **not** install a second
-> ArgoCD in the guest.
->
-> **Get `ARGOCD_KUBECONFIG` with `make fetch-argocd-kubeconfig`.** ArgoCD runs on the **Supervisor**,
-> so registration needs a *Supervisor* kubeconfig — not the workload one `make vks-login` gives you.
-> The target creates a Supervisor VCF-CLI context, writes it to `$ARGOCD_KUBECONFIG`, and **proves**
-> it reaches `argocd-server` before you go further. (It is interactive — the CLI prompts for your
-> password.) See [`docs/vks-services/argocd.md`](vks-services/argocd.md). As the ArgoCD **admin** (you own the instance from A2), this
-> auto-registration works out of the box. Leave `ARGOCD_KUBECONFIG` unset only if ArgoCD and the
-> workload run in the same cluster.
+> **Cross-cluster deploy is automatic.** With `ARGOCD_KUBECONFIG` (Supervisor, Step 6) and
+> `KUBECONFIG` (guest, Step 5) both set, `make gitops` **registers** your guest cluster as an ArgoCD
+> destination (`make argocd-register-guest`) and points the `Application` there. It does **not**
+> install a second ArgoCD in the guest. As the ArgoCD **admin** (you own the instance from A2), this
+> works out of the box.
 
-**Step 7 — access the UIs.** Harbor and ArgoCD are the ones you installed above — use the FQDN /
+**Step 8 — access the UIs.** Harbor and ArgoCD are the ones you installed above — use the FQDN /
 LB IP + admin credentials you set there. For **Gitea** (which you installed) and the deployed
 **app**, either front them with the ingress at `*.vks.local`, or `kubectl port-forward`
 (`kubectl -n gitea port-forward svc/gitea-http 3000:3000`,
@@ -423,7 +434,7 @@ LB IP + admin credentials you set there. For **Gitea** (which you installed) and
 > the **Kubernetes Gateway API** when Istio is an Accepted `GatewayClass` (Istio then
 > auto-provisions the proxy *and* its LoadBalancer — nothing needed from the platform team), else
 > the classic `Gateway`/`VirtualService` path. Add the printed `INGRESS_LB_IP` line to `/etc/hosts`
-> (see [Access the UIs](../README.md#access-the-uis-urls-logins-passwords)).
+> (see [Access the UIs](access-uis.md)).
 >
 > Only if the cluster genuinely has **no** mesh should you install one (`make install-ingress`, or
 > `INGRESS_CONTROLLER=traefik` for the lighter option).
@@ -438,12 +449,14 @@ LB IP + admin credentials you set there. For **Gitea** (which you installed) and
 
 - **No STALE `.env.kind` when you start** (step 0) — it is sourced after `.env` and silently forces
   kind values.
-- **You need `kubectl` access to the cluster ArgoCD RUNS in** (the Supervisor), because the
-  scripts create the `Application` by `kubectl apply`-ing it into `ARGOCD_NAMESPACE` — **not**
-  via the ArgoCD API. ArgoCD itself does **not** have to run in your workload cluster: the
-  `Application`'s destination is `${ARGOCD_DEST_SERVER}` (`k8s/argocd/application.yaml`), which
-  defaults to in-cluster and is pointed at your guest cluster by `make argocd-register-guest`
-  (see Step 6). An ArgoCD reachable *only* by URL + API — with no kubeconfig — is not supported.
+- **Reaching the cluster ArgoCD RUNS in** (the Supervisor). By default the scripts create the
+  `Application` by `kubectl apply`-ing it into `ARGOCD_NAMESPACE` using `ARGOCD_KUBECONFIG`
+  (Step 6). ArgoCD does **not** have to run in your workload cluster: the `Application`'s
+  destination is `${ARGOCD_DEST_SERVER}` (`k8s/argocd/application.yaml`), pointed at your guest
+  cluster by `make argocd-register-guest`. And a kubeconfig is **not** the only way in — an ArgoCD
+  reachable *only* by URL + API is supported via **`ARGOCD_MECHANISM=api`**, which creates the
+  `Application` through `argocd-server` (`ARGOCD_SERVER` + `ARGOCD_AUTH_TOKEN`) and needs no
+  Kubernetes RBAC in the ArgoCD namespace.
 - **`ARGOCD_NAMESPACE` must match** where the lab's ArgoCD controller watches Applications
   (step 4).
 - **ArgoCD must be able to CLONE Gitea from whatever cluster ArgoCD runs in.** In-cluster
