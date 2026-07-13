@@ -111,17 +111,49 @@ fi
 # refuse it and re-derive the destination from the registered ArgoCD Cluster Secret (the cluster
 # ArgoCD itself will dial) rather than trusting a value someone left in a file.
 if [ "$ARGOCD_OFF_CLUSTER" = "1" ]; then
-  if [ -z "${ARGOCD_DEST_SERVER:-}" ] || [ "${ARGOCD_DEST_SERVER}" = "$ARGOCD_INCLUSTER_SERVER" ]; then
-    ARGOCD_DEST_SERVER="$(ka -n "$ARGOCD_NAMESPACE" get secret -l argocd.argoproj.io/secret-type=cluster \
-      -o jsonpath='{.items[0].data.server}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-  fi
-  if [ -z "$ARGOCD_DEST_SERVER" ] || [ "$ARGOCD_DEST_SERVER" = "$ARGOCD_INCLUSTER_SERVER" ]; then
-    log_error "ArgoCD is off-cluster, but no guest cluster is registered as an ArgoCD destination."
+  # The clusters this ArgoCD actually knows about. On a real lab this ArgoCD is SHARED: the platform
+  # team has registered MANY tenants' guest clusters here, so "just take the first one" is not a
+  # shortcut — it is a way to deploy THIS tenant's app into ANOTHER tenant's cluster, with
+  # prune:true + selfHeal:true. We match exactly, or we refuse.
+  REGISTERED="$(ka -n "$ARGOCD_NAMESPACE" get secret -l argocd.argoproj.io/secret-type=cluster \
+    -o go-template='{{range .items}}{{.metadata.name}}{{"\t"}}{{.data.server | base64decode}}{{"\n"}}{{end}}' 2>/dev/null || true)"
+
+  if [ -z "$REGISTERED" ]; then
+    log_error "ArgoCD is off-cluster, but NO guest cluster is registered as an ArgoCD destination."
     log_error "  Deploying with the in-cluster destination would install the app INTO THE ARGOCD"
     log_error "  CLUSTER (on a real lab: the Supervisor) — with prune+selfHeal. Refusing."
-    die "run 'make argocd-register-guest' first (ADMIN-only; a tenant requests it), or set ARGOCD_DEST_SERVER to the guest API URL ArgoCD can dial."
+    die "run 'make argocd-register-guest' first (ADMIN-only; a tenant REQUESTS it from the platform team)."
   fi
-  log_info "deploy destination (from the registered ArgoCD Cluster Secret): $ARGOCD_DEST_SERVER"
+
+  if [ -n "${ARGOCD_DEST_SERVER:-}" ] && [ "${ARGOCD_DEST_SERVER}" != "$ARGOCD_INCLUSTER_SERVER" ]; then
+    # An explicit destination still has to be one ArgoCD can actually reach — i.e. registered.
+    if ! printf '%s\n' "$REGISTERED" | cut -f2 | grep -qxF "$ARGOCD_DEST_SERVER"; then
+      log_error "ARGOCD_DEST_SERVER=$ARGOCD_DEST_SERVER is NOT a cluster registered with this ArgoCD."
+      log_error "  ArgoCD can only deploy to a cluster it holds credentials for. Registered:"
+      printf '%s\n' "$REGISTERED" | while IFS="$(printf '\t')" read -r n s; do
+        [ -n "${s:-}" ] && log_error "    - ${n}: ${s}"
+      done
+      die "set ARGOCD_DEST_SERVER to one of the above, or have the guest cluster registered."
+    fi
+  else
+    ARGOCD_DEST_SERVER="$(printf '%s\n' "$REGISTERED" \
+      | argocd_pick_dest_server "$GUEST_API" "${ARGOCD_DEST_CLUSTER_NAME:-}" || true)"
+  fi
+
+  if [ -z "${ARGOCD_DEST_SERVER:-}" ]; then
+    log_error "AMBIGUOUS deploy destination — refusing to guess."
+    log_error "  This ArgoCD has several clusters registered, and none of them matches the cluster"
+    log_error "  we are deploying with (${GUEST_API}) by name or by API URL. Picking one at random"
+    log_error "  could deploy this app into SOMEONE ELSE'S CLUSTER — with prune + selfHeal."
+    log_error "  Registered destinations:"
+    printf '%s\n' "$REGISTERED" | while IFS="$(printf '\t')" read -r n s; do
+      [ -n "${s:-}" ] && log_error "    - ${n}: ${s}"
+    done
+    log_error "  Note the guest API URL ArgoCD dials may legitimately differ from the one in YOUR"
+    log_error "  kubeconfig (a VIP vs a hostname). Pick the right one deliberately:"
+    die "set ARGOCD_DEST_SERVER (or ARGOCD_DEST_CLUSTER_NAME) to the guest cluster you own."
+  fi
+  log_info "deploy destination (matched against the clusters registered with ArgoCD): $ARGOCD_DEST_SERVER"
 else
   ARGOCD_DEST_SERVER="${ARGOCD_DEST_SERVER:-$ARGOCD_INCLUSTER_SERVER}"
   log_info "deploy destination: $ARGOCD_DEST_SERVER (in-cluster)"

@@ -53,6 +53,42 @@ argocd_is_off_cluster() {
   [ "$a" != "$g" ]
 }
 
+# argocd_pick_dest_server <guest_api> <dest_name> — choose WHICH registered ArgoCD cluster the app
+# deploys to, reading `<name>\t<server>` lines (one per registered Cluster Secret) on STDIN.
+# Prints the chosen server, or prints NOTHING (exit 1) if the choice is not unambiguous.
+#
+# WHY THIS EXISTS — it fixes a defect in the first version of this fix, which took `.items[0]`:
+# on a SHARED ArgoCD (the real-lab TENANT case, where the platform team has registered MANY guest
+# clusters) `.items[0]` is an ARBITRARY cluster. The Application is created with prune:true and
+# selfHeal:true — so "arbitrary" means we could have deployed this tenant's app into ANOTHER
+# TENANT'S CLUSTER, and then pruned whatever did not match. KinD can never show it (one cluster,
+# one Secret, so items[0] is always right).
+#
+# The rule: match EXACTLY, or refuse. Never pick for the operator.
+#   1. by NAME   — the destination the register step gave us (ARGOCD_DEST_CLUSTER_NAME)
+#   2. by SERVER — the API URL of the very kubeconfig we are deploying with
+#   3. exactly ONE registered cluster ⇒ unambiguous, take it
+#   4. otherwise ⇒ FAIL. The caller must print the candidates and make the operator choose.
+argocd_pick_dest_server() {
+  local guest_api="${1:-}" dest_name="${2:-}" n s only_s="" count=0
+  local by_name="" by_server=""
+  # `|| [ -n "${n:-}" ]` is load-bearing: `read` returns non-zero on a final line with no trailing
+  # newline, and a plain `while read` would SILENTLY DROP it. That is not academic — it is how the
+  # single-registered-cluster case returned nothing and the multi-cluster case saw only the first
+  # entry (i.e. it re-created the very "pick an arbitrary cluster" bug this function exists to kill).
+  while IFS="$(printf '\t')" read -r n s || [ -n "${n:-}" ]; do
+    [ -n "${s:-}" ] || continue
+    count=$((count + 1)); only_s="$s"
+    [ -n "$dest_name" ] && [ "$n" = "$dest_name" ] && by_name="$s"
+    [ -n "$guest_api" ] && [ "$s" = "$guest_api" ] && by_server="$s"
+  done
+  if   [ -n "$by_name" ];   then printf '%s' "$by_name";   return 0
+  elif [ -n "$by_server" ]; then printf '%s' "$by_server"; return 0
+  elif [ "$count" = 1 ];    then printf '%s' "$only_s";    return 0
+  fi
+  return 1
+}
+
 # argocd_url_is_cluster_local <url> — exit 0 if the URL can only be resolved from INSIDE the cluster
 # that hosts it (a Service DNS name, localhost, or a loopback address).
 argocd_url_is_cluster_local() {

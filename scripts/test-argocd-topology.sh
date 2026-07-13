@@ -108,5 +108,46 @@ else
   bad "in-cluster + '.svc' was REFUSED — the guard would break the single-cluster/KinD path"
 fi
 
+# --- 3. the destination must be matched EXACTLY, never guessed -----------------------------------
+# The first version of the cross-cluster fix took `.items[0]` of the registered Cluster Secrets. On a
+# SHARED ArgoCD (the real-lab TENANT case) that is an ARBITRARY cluster — and the Application carries
+# prune:true + selfHeal:true, so "arbitrary" means deploying this tenant's app into ANOTHER TENANT'S
+# CLUSTER and pruning what does not match. KinD cannot show it: one cluster, one Secret, items[0] is
+# always right. These cases are the only thing standing between that bug and a real lab.
+GUEST_API="https://guest.example:6443"
+OTHER_API="https://other-tenant.example:6443"
+SHARED="$(printf 'cluster-other\t%s\ncluster-guest\t%s\ncluster-third\thttps://third.example:6443\n' "$OTHER_API" "$GUEST_API")"
+
+got="$(printf '%s' "$SHARED" | argocd_pick_dest_server "$GUEST_API" "" || true)"
+if [ "$got" = "$GUEST_API" ]; then
+  ok "shared ArgoCD: picked OUR cluster by API URL (not the first item)"
+else
+  bad "shared ArgoCD: picked '$got' instead of our own cluster ($GUEST_API) — CAN DEPLOY INTO ANOTHER TENANT'S CLUSTER"
+fi
+
+got="$(printf '%s' "$SHARED" | argocd_pick_dest_server "" "cluster-guest" || true)"
+if [ "$got" = "$GUEST_API" ]; then
+  ok "shared ArgoCD: picked our cluster by registered NAME"
+else
+  bad "shared ArgoCD: name match failed (got '$got')"
+fi
+
+# THE CRITICAL CASE: several registered clusters and NONE is ours -> we must REFUSE, not guess.
+NONE_OURS="$(printf 'cluster-other\t%s\ncluster-third\thttps://third.example:6443\n' "$OTHER_API")"
+if got="$(printf '%s' "$NONE_OURS" | argocd_pick_dest_server "$GUEST_API" "")" && [ -n "$got" ]; then
+  bad "AMBIGUOUS destination was RESOLVED to '$got' — this is the bug: it would deploy into someone else's cluster"
+else
+  ok  "AMBIGUOUS destination REFUSED (no registered cluster is ours) — the tenant-safety guard holds"
+fi
+
+# Exactly one registered cluster is unambiguous even if the URL differs (a VIP vs a hostname).
+ONE="$(printf 'cluster-guest\thttps://vip.example:6443\n')"
+got="$(printf '%s' "$ONE" | argocd_pick_dest_server "$GUEST_API" "" || true)"
+if [ "$got" = "https://vip.example:6443" ]; then
+  ok  "single registered cluster: unambiguous, taken (ArgoCD may dial a VIP, not your kubeconfig's URL)"
+else
+  bad "single registered cluster was refused (got '$got') — this breaks the normal cross-cluster case"
+fi
+
 [ "$fail" = 0 ] && { echo "test-argocd-topology: OK"; exit 0; }
 echo "test-argocd-topology: FAILED" >&2; exit 1
