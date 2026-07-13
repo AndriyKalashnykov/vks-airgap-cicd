@@ -186,17 +186,22 @@ kubeconfig at `$KUBECONFIG` (used at "Wire the repo & run the pipeline", Step 1 
 
 ### Wire the repo & run the pipeline
 
-**Step 0 — remove any STALE KinD overlay.** `.env.kind` is sourced *after* `.env`, so a leftover
+**Step 0 — remove any STALE KinD overlay.** the state overlay is sourced *after* `.env`, so a leftover
 one from a local run would silently redirect everything at a kind cluster. Delete it **before you
 start**:
 
 ```bash
-make kind-down        # ONLY if you ran the local KinD flow on this box
-rm -f .env.kind       # belt-and-suspenders (this is all you need if you never ran KinD here)
+make state-show       # WHOSE state is this? (prints the cluster it was written for; redacts secrets)
+make kind-down        # ONLY if you ran the local KinD flow on this box — deletes the state it wrote
 ```
 
+The state overlay is **`.env.state`** (not `.env.kind` — that was renamed; a legacy `.env.kind` is still
+read, and `make state-migrate` moves it). It is **stamped with the cluster it was written for**: if it
+belongs to a *different* cluster it is **archived, not deleted** — it may hold the only copy of that
+cluster's generated passwords. `make kind-down` removes it **only if the KinD flow wrote it**.
+
 > **Do not delete it again later.** On VKS `make install-gitea` (inside `make platform`)
-> *writes* `.env.kind` to publish the Gitea **LoadBalancer** address it just discovered
+> *writes* the state overlay (`.env.state`) to publish the Gitea **LoadBalancer** address it just discovered
 > (`GITEA_ARGOCD_URL`) — the address ArgoCD's repo-server clones from. That file is how the value
 > reaches `make gitops`, which runs as a separate process. Removing it between `make platform` and
 > `make gitops` throws the address away, and `make gitops` will refuse to build a repoURL ArgoCD
@@ -450,7 +455,7 @@ LB IP + admin credentials you set there. For **Gitea** (which you installed) and
 
 <br>
 
-- **No STALE `.env.kind` when you start** (step 0) — it is sourced after `.env` and silently forces
+- **No STALE state overlay when you start** (step 0) — it is sourced after `.env` and silently forces
   kind values.
 - **Reaching the cluster ArgoCD RUNS in** (the Supervisor). By default the scripts create the
   `Application` by `kubectl apply`-ing it into `ARGOCD_NAMESPACE` using `ARGOCD_KUBECONFIG`

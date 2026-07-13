@@ -102,7 +102,7 @@ log_info "istio ingress-gateway LoadBalancer address: ${LB_IP}"
 
 # --- 7. Publish + emit the /etc/hosts guidance --------------------------------
 state_set INGRESS_LB_IP "$LB_IP"
-log_info "published INGRESS_LB_IP=${LB_IP} to ${REPO_ROOT}/.env.kind"
+log_info "published INGRESS_LB_IP=${LB_IP} to $(state_file)"
 log_info "Istio installed. Add ONE line to /etc/hosts on the jump box / your client:"
 log_info ""
 log_info "    ${LB_IP}  ${GITEA_HOST} ${TEKTON_DASHBOARD_HOST} $(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)"

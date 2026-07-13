@@ -193,11 +193,11 @@ state_set HARBOR_URL "$LB_IP"
 if [ "$HARBOR_INSECURE" = "1" ]; then
   state_set HARBOR_INSECURE 1
   state_set HARBOR_CA_FILE ""
-  log_info "published HARBOR_URL=$LB_IP, HARBOR_INSECURE=1, HARBOR_CA_FILE='' to ${REPO_ROOT}/.env.kind"
+  log_info "published HARBOR_URL=$LB_IP, HARBOR_INSECURE=1, HARBOR_CA_FILE='' to $(state_file)"
 else
   state_set HARBOR_INSECURE 0
   state_set HARBOR_CA_FILE "${CERT_DIR}/ca.crt"
-  log_info "published HARBOR_URL=$LB_IP, HARBOR_INSECURE=0, HARBOR_CA_FILE=${CERT_DIR}/ca.crt to ${REPO_ROOT}/.env.kind"
+  log_info "published HARBOR_URL=$LB_IP, HARBOR_INSECURE=0, HARBOR_CA_FILE=${CERT_DIR}/ca.crt to $(state_file)"
 fi
 
 # --- 9. Summary --------------------------------------------------------------

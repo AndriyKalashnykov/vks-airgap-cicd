@@ -88,7 +88,7 @@ log_info "Traefik LoadBalancer IP: ${LB_IP}"
 
 # --- 4. Publish the IP + emit the /etc/hosts guidance --------------------------
 state_set INGRESS_LB_IP "$LB_IP"
-log_info "published INGRESS_LB_IP=${LB_IP} to ${REPO_ROOT}/.env.kind"
+log_info "published INGRESS_LB_IP=${LB_IP} to $(state_file)"
 
 log_info "Traefik installed. Add ONE line to /etc/hosts on the jump box / your client:"
 log_info ""

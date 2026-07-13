@@ -119,7 +119,7 @@ state_set VKS_CONTEXT "$KIND_CONTEXT"
 # .env.kind IS sourced under SKIP_DOTENV, so generating it here means 07 applies it and
 # `make creds-show` prints the password that actually works.
 [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ] || state_set ARGOCD_ADMIN_PASSWORD "$(gen_password)"
-log_info "published KUBECONFIG/VKS_AUTH_METHOD/VKS_CONTEXT (+ generated KinD Harbor/Gitea/ArgoCD creds; see 'make creds-show') to ${REPO_ROOT}/.env.kind"
+log_info "published KUBECONFIG/VKS_AUTH_METHOD/VKS_CONTEXT (+ generated KinD Harbor/Gitea/ArgoCD creds; see 'make creds-show') to $(state_file)"
 
 # Point subsequent kubectl calls at the kind cluster.
 export KUBECONFIG="$KUBECONFIG_ABS"

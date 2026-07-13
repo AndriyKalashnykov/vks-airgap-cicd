@@ -37,6 +37,8 @@ probe 2 "subagent: gh pr merge"                "$(sub '"gh pr merge 1 --squash"'
 probe 2 "subagent: gh api -X POST"             "$(sub '"gh api -X POST repos/o/r/pulls"')"
 probe 2 "subagent: gh api implicit POST (-f)"  "$(sub '"gh api repos/o/r/pulls -f title=x"')"
 probe 2 "subagent: mutation HIDDEN MID-CHAIN"  "$(sub '"make static-check && git push"')"
+# shellcheck disable=SC2016  # the $(...) is a LITERAL test fixture: it must NOT expand — it is the
+# command string we are asserting the hook blocks. Expanding it would run `git commit` in the test.
 probe 2 "subagent: mutation in a subshell"     "$(sub '"echo $(git commit -m x)"')"
 probe 2 "subagent: sudo-prefixed"              "$(sub '"sudo git clean -fd"')"
 
