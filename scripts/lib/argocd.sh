@@ -131,3 +131,35 @@ argocd_assert_clonable_url() {
   log_error "  and dialling the ingress IP sends 'Host: <ip>', which matches no vhost (404, not a clone)."
   die "set GITEA_ARGOCD_URL to an address the ArgoCD cluster can reach."
 }
+
+# ---------------------------------------------------------------------------
+# gitea_clone_url — the ONE address ArgoCD's repo-server will clone from.
+#
+# It MUST have exactly one definition. It is consumed in two places that have to AGREE:
+#   * 70-configure-argocd.sh  — builds the Application's repoURL
+#   * an AppProject's sourceRepos — which must PERMIT that exact repoURL
+# When they were derived separately, they drifted the moment one of them changed: the tenant e2e
+# built its AppProject from GITEA_INTERNAL_URL while gitops used the live LB, and argocd-server
+# rejected the Application with
+#     "application repo http://<lb>:3000/... is not permitted in project 'tenant-a'"
+# — an error about PERMISSIONS that was really about two copies of a URL.
+#
+# Resolution order (never read back a published GITEA_ARGOCD_URL — see 70 for why):
+#   1. GITEA_ARGOCD_URL_OVERRIDE — the operator's explicit choice; nothing auto-publishes it.
+#   2. Gitea's own LoadBalancer, resolved from the LIVE Service (the address an off-cluster
+#      ArgoCD can actually reach).
+#   3. GITEA_INTERNAL_URL — correct only when ArgoCD runs in this cluster.
+# ---------------------------------------------------------------------------
+gitea_clone_url() {
+  local lb
+  if [ -n "${GITEA_ARGOCD_URL_OVERRIDE:-}" ]; then
+    printf '%s' "$GITEA_ARGOCD_URL_OVERRIDE"; return 0
+  fi
+  lb="$(kubectl -n "${GITEA_NAMESPACE:-gitea}" get svc gitea-http \
+          -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}' \
+          2>/dev/null || true)"
+  if [ -n "$lb" ]; then
+    printf 'http://%s:3000' "$lb"; return 0
+  fi
+  printf '%s' "${GITEA_INTERNAL_URL:-}"
+}

@@ -217,5 +217,41 @@ else
   ok "70-configure-argocd.sh resolves the clone URL from the live Gitea Service (override: GITEA_ARGOCD_URL_OVERRIDE)"
 fi
 
+# ---------------------------------------------------------------------------------------------
+# 4. THE CLONE URL HAS EXACTLY ONE DEFINITION.
+#
+# Two places must agree on it: the Application's repoURL (70-configure-argocd.sh) and the
+# AppProject's sourceRepos, which must PERMIT that exact repoURL. When each derived the URL on its
+# own they drifted the instant one changed: the tenant e2e listed the in-cluster Gitea URL while
+# gitops used the live LoadBalancer, and argocd-server rejected the Application with
+#   "application repo http://<lb>:3000/... is not permitted in project 'tenant-a'"
+# — an error about PERMISSIONS that was really about two copies of a URL.
+if grep -q '^gitea_clone_url()' "${SCRIPT_DIR}/lib/argocd.sh"; then
+  ok "gitea_clone_url() is defined ONCE, in lib/argocd.sh"
+else
+  bad "gitea_clone_url() is missing from lib/argocd.sh — the clone URL has no single definition"
+fi
+# NOTE `grep -c`, not `| grep -q`: under `set -o pipefail`, `grep -q` exits at the first match and
+# SIGPIPEs the upstream `sed` (141), which pipefail reports as failure — a FALSE NEGATIVE that only
+# fires when the file is long enough that sed is still writing. It bit this very gate: it passed on
+# the short script and failed on the long one, for a call that was plainly there. (Same bug as #183.)
+for f in 70-configure-argocd.sh 91-e2e-tenant-mechanism.sh; do
+  n="$(sed 's/#.*//' "${SCRIPT_DIR}/${f}" | grep -c 'gitea_clone_url' || true)"
+  if [ "${n:-0}" -gt 0 ]; then
+    ok "${f} uses the shared gitea_clone_url()"
+  else
+    bad "${f} does NOT use gitea_clone_url() — it derives the clone URL itself, and will drift"
+  fi
+done
+# and neither may hand-roll the LB lookup any more
+for f in 70-configure-argocd.sh 91-e2e-tenant-mechanism.sh; do
+  n="$(sed 's/#.*//' "${SCRIPT_DIR}/${f}" | grep -c 'gitea-http.*loadBalancer\|loadBalancer.*gitea-http' || true)"
+  if [ "${n:-0}" -gt 0 ]; then
+    bad "${f} resolves Gitea's LoadBalancer itself instead of calling gitea_clone_url() — that is the second copy"
+  else
+    ok "${f} does not hand-roll the Gitea LB lookup"
+  fi
+done
+
 [ "$fail" = 0 ] && { echo "test-argocd-topology: OK"; exit 0; }
 echo "test-argocd-topology: FAILED" >&2; exit 1
