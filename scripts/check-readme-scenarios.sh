@@ -15,9 +15,26 @@
 #   `make install-ingress`, which would have helm-installed a second istiod over the platform's mesh.
 #   Topic sections are how scenario-based docs rot: they look tidy and they orphan decisions.
 #
-# WHAT IT CHECKS: each scenario section resolves each decision below within its OWN body.
-# It is deliberately COARSE (keyword presence) — it proves a decision is ADDRESSED, not that the
-# prose is correct. Correctness is the claim-by-claim audit; this stops the STRUCTURE regressing.
+# WHAT IT CHECKS: each scenario section resolves each decision below within its OWN body — by
+# carrying the COMMAND the reader must actually run, not by mentioning the word or linking away.
+#
+# IT USED TO PASS ON A LINK BLURB. The patterns were bare words (`harbor|Harbor`, `argocd|ArgoCD`),
+# so ANY mention satisfied them; and `cluster-access` accepted the anchor `vks-authentication`, i.e.
+# the gate blessed the very cross-reference its own header forbids. Demonstrated: replacing all of
+# Scenario 2 with a five-line stub — "see docs/scenario-2.md for Harbor, ArgoCD, Istio, ..." — that
+# answers NOTHING scored 7/7, rc=0.
+#
+# That matters right now, because the plan is to move REFERENCE material out to ./docs/. A gate that
+# green-lights a hollowed-out scenario is worse than no gate: it converts "weak but honest" into
+# "passes by not looking". So, two rules:
+#
+#   1. LINK TARGETS ARE STRIPPED before matching. A `[text](docs/x.md)` or `[text](#anchor)` can
+#      never satisfy a decision. Delegating a decision to another document IS the failure mode.
+#   2. EVERY PATTERN IS A COMMAND (a `make` target, an env assignment the reader must set, or a real
+#      CLI invocation) — never a bare noun. "Harbor" is a word; `make install-harbor` is an answer.
+#
+# It is still deliberately coarse: it proves a decision is ANSWERED IN PLACE, not that the prose is
+# correct. Correctness is the claim-by-claim audit; this stops the STRUCTURE regressing.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,23 +45,27 @@ README="${REPO_ROOT}/README.md"
 [ -f "$README" ] || die "no README.md"
 
 # Extract a '## <heading match>' section body (up to the next '## ').
+# Extract a '## <heading match>' section body (up to the next '## '), with markdown LINK TARGETS
+# REMOVED: `[text](docs/x.md)` -> `[text]`, `[text](#anchor)` -> `[text]`. A decision answered only by
+# a link is a decision ORPHANED — that is precisely what this gate exists to stop, and the old
+# patterns let an anchor (`vks-authentication`) satisfy `cluster-access`.
 section() { awk -v pat="$1" '
   $0 ~ /^## / { if (inb) exit; if (index($0,pat)) { inb=1; next } }
-  inb { print }' "$README"; }
+  inb { gsub(/\]\([^)]*\)/, "]"); print }' "$README"; }
 
 # scenario|heading fragment
 SCENARIOS='KinD|Try it locally end-to-end with KinD
 Scenario-1|Scenario 1: Harbor & ArgoCD need to be installed
 Scenario-2|Scenario 2: Harbor & ArgoCD already installed'
 
-# decision|regex that shows the scenario ADDRESSES it
-DECISIONS='cluster-access|VKS_AUTH_METHOD|vks-authentication|kind-up
-harbor|install-harbor|Harbor
-argocd|install-argocd|ArgoCD
-istio-mode|istio-existing|we install
-ingress-cmd|install-ingress
-verify|make verify|e2e-kind|install-all
-access-uis|vks.local|port-forward'
+# decision|the COMMAND(s) that ANSWER it. Never a bare noun — see the header.
+DECISIONS='cluster-access|make vks-login|make kind-up|VKS_AUTH_METHOD=
+harbor|make install-harbor|make harbor-robot|make fetch-harbor-ca|HARBOR_URL=
+argocd|make install-argocd|make gitops|make argocd-preflight|make fetch-argocd-kubeconfig
+istio-mode|INGRESS_CONTROLLER=istio-existing|INGRESS_CONTROLLER=istio|make attach-istio|make install-istio
+ingress-cmd|make install-ingress|make verify-ingress
+verify|make verify|make e2e-kind|make install-all
+access-uis|make creds|port-forward|/etc/hosts'
 
 rc=0
 
