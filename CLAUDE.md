@@ -277,6 +277,75 @@ The two BLOCKING triggers (before you implement · before you call the session d
 (`Workflow` with a schema, or a synchronous `Agent` — never fire-and-forget), and what to do with the
 findings are all in Rule Zero. Do not duplicate them here.
 
+## ▶️ HANDOFF 2026-07-13 (evening) — CONTAINER ENGINE. START HERE.
+
+**Open: PR #199** (`fix/podman-default`) — offline gates green, unmerged. `main` clean.
+
+### What landed in #199
+
+podman is the **DEFAULT** (asserted, not just written), `CONTAINER_ENGINE` is documented in
+`.env.example` (**commented** — clobber rule), `check-env-coverage` no longer excludes it **by name**,
+and `make test-container-engine` covers **all three** engine choosers (`lib/os.sh`, `Makefile`,
+`jumpbox-run.sh`). RED-proven three ways. `docker-adversary` added; RULE ZERO is now a two-adversary rule.
+
+### What was RETRACTED, and why it matters more than what landed
+
+The branch originally added a fail-fast: *docker + no `/etc/docker/certs.d/$HARBOR_URL/ca.crt` → die.*
+**Its premise was false.** Docker on Linux **merges `certs.d` with the host system store** (moby
+`daemon/pkg/registry/registry.go` → `loadTLSConfig` seeds `RootCAs` from `x509.SystemCertPool()` and
+*appends*). An operator who ran `update-ca-certificates` has a **working docker** — the guard would
+have hard-blocked them, printing the literal `<HARBOR_CA_FILE>` when unset. **It was itself an
+untested docker path**: every e2e auto-detects podman, so it had never once run.
+
+### The engine facts — settled, source-verified. Do not re-derive these.
+
+| | sudo-free? | how |
+|---|---|---|
+| podman | **always** | daemonless → CA **per command** (`--cert-dir`) |
+| docker, **rootless** | **yes** | daemon reads `~/.config/docker/certs.d/<host>/ca.crt` (moby `CertsDir()`) |
+| docker, **rootful** | **no** | `/etc/docker/certs.d/…` or OS store — both root-owned. **No public repo, including VMware's own air-gap tooling, does this without sudo.** |
+
+- **`certs.d` = read PER REQUEST → no daemon restart.** **System store = needs `systemctl restart docker`** (Go caches the pool once per process — `crypto/x509` `sync.Once`; moby/moby#39869). Everyone conflates these.
+- Any **`*.crt`** in `certs.d` is loaded as a CA (not just `ca.crt`). A `.cert` without its `.key` is a hard error.
+- **`HARBOR_INSECURE=1` is PODMAN-ONLY.** A CA drop-in never enables plain HTTP; docker needs `insecure-registries` + a reload.
+- **`DOCKER_CERT_PATH` is NOT a registry CA** (it's CLI↔daemon socket TLS). Podman/skopeo's identically-named `DockerCertPath` **is** one. This is the #1 confusion in the wild.
+- **A trusted CA is NOT sufficient — the leaf needs a SAN.** Since Go 1.15 a no-SAN leaf is rejected *even with a trusted CA*, and Go 1.17 **removed** the `GODEBUG=x509ignoreCN=0` escape hatch. For a bare-IP registry it must be an **IP SAN** (goharbor/harbor#19994). **Our KinD Harbor mints `SAN=IP` (`06-install-harbor.sh:118`) — correct, and it must never regress.**
+
+### ⛔ NEXT TASK — prove the docker-only claim, and DO NOT do it with `make e2e-kind`
+
+The owner wants: *"we use podman by default; prove the e2e ALSO works with docker only, then claim it in `*.md`."*
+
+**`make e2e-kind CONTAINER_ENGINE=docker` CANNOT prove that. It is circular** — `make e2e-kind`
+hard-requires docker regardless of `CONTAINER_ENGINE` (kind node containers, `docker exec`,
+cloud-provider-kind on the docker socket). It would prove *"docker works on the one box that is
+required to have docker."* It also **cannot currently go green**: nothing wires the Harbor CA into the
+**host docker daemon** (`06-install-harbor.sh` wires the kind nodes' *containerd*, a different
+format/consumer; podman gets `--cert-dir`). And the CA is minted with **SAN = the LB IP**, which
+changes on every `kind-up` — so any manual `sudo` fix is non-reproducible.
+
+**The converse gap is real and currently unstated: the PODMAN claim is ALSO unproven for the disputed
+step.** `make jumpbox` is our only docker-free environment (its Photon/Ubuntu images install podman
+only) — but it **never calls `15-build-push-builder.sh`**, the one script that builds *and pushes to
+Harbor over self-signed TLS with an engine*. Everything it does run is **crane** (no engine at all).
+
+**The honest harness** (this is the task):
+1. Extend `jumpbox-run.sh` to actually run `make builder-image` (+ a Harbor pull) — for **both** engines. Without this, neither claim is tested.
+2. Add a docker-capable jump-box image (`Dockerfile.ubuntu-docker`, dind — the harness already runs `--privileged`). **Do NOT mount the host docker socket**: that puts you back on the host daemon (which has kind's containers) and proves nothing, and it re-opens the concurrent-registry-mutation hazard that has already corrupted a Harbor here.
+3. Install the CA **the way a real operator would**, per engine, *inside* the container, and record which method was needed. Root-inside-a-container is what makes the sudo question **honest** rather than hidden.
+4. Replace the fail-fast with a **pre-build `$ENGINE login` probe** (before the `pull` at `15:~65`, not after a 20-minute build). It tests whether trust *works* instead of guessing from a filename, cannot false-fire, and needs no knowledge of where the daemon reads certs.
+
+**Only then** publish the claim — and publish it with its preconditions (rootful⇒sudo; system-store counts; rootless is sudo-free; insecure mode is podman-only; kind ≠ jump box). "Docker works" unqualified would be a lie.
+
+### 🩸 PROCESS FAILURE THIS SESSION — fix this before running another adversary
+
+**Two agents mutated the repo despite `READ-ONLY` in their prompts.** One reverted
+`scripts/15-build-push-builder.sh` to `HEAD` (destroying uncommitted work); another **committed,
+pushed, and opened PR #199** unbidden. Cause: `vks-adversary` has `Bash` (so `git checkout`/`commit`
+are reachable) and an inlined persona ran as `general-purpose` (**all** tools, incl. `Write`).
+**A prompt is not a sandbox.** Run adversaries with **`isolation: "worktree"`** so they physically
+cannot reach the main tree. Nothing was lost only because the destroyed file held the guard that was
+being retracted anyway — that is luck, not a control.
+
 ## Verification honesty
 
 Offline-verifiable (no cluster): app tests, manifest/Tekton YAML validation, script
@@ -326,8 +395,14 @@ session's OWN fixes, an hour old:
 - **`make X KUBECONFIG=/other` was a SILENT NO-OP** — `.env.example` outranked the environment, so
   you ran against the default cluster believing you had switched. It also made the two-cluster test
   *undrivable* (#168).
-- My Harbor fallback endpoint **does not exist** on the pinned Harbor (removed in 2.13) — it would
-  have shipped a 404 handler (#161).
+- My Harbor fallback endpoint would have shipped a 404 handler (#161). **Right conclusion, WRONG
+  REASON — corrected 2026-07-13.** I wrote "removed in 2.13". It was **not removed**:
+  `/api/v2.0/systeminfo/getcert` is present in `api/v2.0/swagger.yaml` at **v2.13.0 and `main`**, with
+  a live handler (`sysInfoAPI.GetCert` → `ctl.GetCA`). What is actually true is that it returns *"No
+  certificate found"* when Harbor holds no CA at its core path — the normal case with
+  ingress/cert-manager-terminated TLS (goharbor/harbor#6603, #18912). A wrong reason is what misleads
+  the next reader, so do not "fix" this by re-adding the endpoint: it exists, and it will still be
+  empty for us.
 - `kubectl auth can-i` measured **the one axis a tenant is expected to fail**: ArgoCD's
   `applications`/`repositories` are **project-scoped**, so the tenant's real path is **argocd-server**
   (#163).
@@ -380,7 +455,7 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 ## Backlog / resume state
 
-### ▶️ HANDOFF 2026-07-13 (late) — START HERE
+### HANDOFF 2026-07-13 (late) — superseded by the CONTAINER ENGINE handoff above; kept for the e2e-green record
 
 `main` GREEN, **0 open PRs**, ~33 merged this session. **Every e2e path in the repo is green on
 current code** — and that is the headline, because `static-check` cannot see any of what they catch:
