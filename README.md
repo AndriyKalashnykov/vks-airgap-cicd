@@ -42,7 +42,7 @@ New here? Pick the path that matches your situation — each one is self-contain
 | I want to… | Path | You need |
 |------------|------|----------|
 | **Just see it work** (no VKS cluster) | [KinD](#try-it-locally-end-to-end-with-kind) — one command, zero `.env` | **Have:** Docker (KinD needs Docker specifically) · internet access<br>**Run:** `make deps` → `make e2e-kind` |
-| **Real lab — I install Harbor + ArgoCD** | [Scenario 1](#run-against-a-real-vks-lab--scenario-1-harbor--argocd-need-to-be-installed) | **Have:** a vSphere login that can install a Supervisor Service, create a vSphere Namespace and provision a guest cluster · cluster-admin on that guest cluster · the licensed VCF CLI archives ([where to get them](#vks-authentication-vcf-9--supervisor--real-lab-only))<br>**Reachable from the jump box:** the internet, the Supervisor API, Harbor — and ArgoCD's cluster must reach your guest API<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make env-check` → `make psa-check` |
+| **Real lab — I install Harbor + ArgoCD** | [Scenario 1](#run-against-a-real-vks-lab--scenario-1-harbor--argocd-need-to-be-installed) | **Have:** a vSphere login that can install a Supervisor Service, create a vSphere Namespace and provision a guest cluster · cluster-admin on that guest cluster · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md))<br>**Reachable from the jump box:** the internet, the Supervisor API, Harbor — and ArgoCD's cluster must reach your guest API<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make env-check` → `make psa-check` |
 | **Real lab — Harbor + ArgoCD already exist** (I'm a **tenant**) | [Scenario 2](#run-against-a-real-vks-lab--scenario-2-harbor--argocd-already-installed) | **Have:** cluster-admin on your own guest cluster · Harbor **project-admin** (else ask for robot credentials) · the licensed VCF CLI archives<br>**Ask the platform team for:** your guest cluster **registered** with ArgoCD (admin-only) · an ArgoCD role that lets you create an `Application` · mesh rights — `make istio-preflight` prints exactly what to request<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make harbor-robot` → `make psa-check` |
 
 The real-lab paths start from the jump-box **[Prerequisites](#prerequisites)** below.
@@ -50,6 +50,70 @@ Run **`make check-tools`** to see which CLIs you have and which are required.
 
 > **Container engine:** podman or Docker for a real lab (`CONTAINER_ENGINE`, podman preferred).
 > `make e2e-kind` requires **Docker** specifically.
+
+## Demo apps
+
+The demo ships **two apps, in two languages**, and runs both through the *same* walk:
+`git push` → Tekton (test → Kaniko build → Harbor → tag write-back) → ArgoCD → the live page.
+`apps/registry.tsv` is the single source of truth — seeding, Tekton, ArgoCD, the ingress, PSA and
+the gates all loop over it.
+
+**The two languages are not decoration — they are the air-gap story.** The Java app needs a
+**pre-baked offline Maven builder image** (`Dockerfile.builder`), because an in-cluster `mvn` cannot
+reach Maven Central. The Go app is **stdlib-only**, so its air-gapped build fetches *nothing* and it
+needs **no builder image at all**. Same pipeline, and the difference is one `case` branch.
+
+`make verify` proves **each app independently** (its own marker, its own PipelineRun, its own
+deployed image) — a green `javawebapp` never hides a broken `gowebapp`.
+
+### Add a third app
+
+**One row** in `apps/registry.tsv` (a new *language* is that row plus one `case` branch in
+`scripts/lib/apps.sh`):
+
+```tsv
+# name        lang  src                   deploy
+javawebapp    java  apps/java/javawebapp  deploy/javawebapp
+gowebapp      go    apps/go/gowebapp      deploy/gowebapp
+```
+
+Each app gets: its own Gitea repos (`<app>-app` + `<app>-deploy`), its own Tekton `Pipeline`
+(`<app>-ci`) and `Trigger`, its own Harbor repo, its own namespace, its own ArgoCD `Application`,
+its own ingress host — and `make verify` proves **each app independently** (its own marker on its
+own page). `make check-app-hardcodes` fails the build if any shared file (**including
+`.env.example`**) names an app — that is the gate that keeps "one row" true.
+
+The **ingress hostname is derived, not configured**: an app is reachable at
+**`<app>.${APP_DOMAIN}`** (`APP_DOMAIN=vks.local`, one global in `.env.example`). There is no
+per-app `<APP>_HOST` variable — there used to be, and it meant a new row silently died until you
+*also* edited `.env.example`, so "one row" was a lie the gates could not see.
+
+Only two things differ per language: which Tekton task runs the tests (`maven-test` / `go-test`),
+and where `verify` injects its marker. Both live in `scripts/lib/apps.sh`.
+
+### On a REAL lab, adding an app may need grants you must request
+
+Locally (and in **Scenario 1**, where you are the admin) nothing else is needed. As a **tenant**
+(Scenario 2) an app's **new namespace** and **new hostname** may not be covered by what you were
+granted. What that means concretely:
+
+| What | When it bites | What to run / ask for |
+|---|---|---|
+| **ArgoCD AppProject destination** | Always, as a tenant (you get your own AppProject; ours defaults to `default`, which permits everything — a real lab's will not). The `Application` is rejected: *"application destination … is not permitted in project"* | **Check first:** `kubectl -n $ARGOCD_NAMESPACE get appproject <yours> -o jsonpath='{.spec.destinations}{"\n"}{.spec.sourceRepos}'` — your new namespace AND the new `<app>-deploy` repo URL must both be listed.<br>**Ask the ArgoCD admin** to add them: `kubectl -n $ARGOCD_NAMESPACE patch appproject <yours> --type=json -p='[{"op":"add","path":"/spec/destinations/-","value":{"server":"$ARGOCD_DEST_SERVER","namespace":"<app>"}},{"op":"add","path":"/spec/sourceRepos/-","value":"<gitea>/<org>/<app>-deploy.git"}]'` |
+| **Ingress hostname on a SHARED Gateway** | **Only** on the classic route API against a platform-owned Gateway (`ISTIO_SHARED_GATEWAY`). Its `hosts:` list belongs to the mesh admin, so an unlisted host **404s from a listener that exists** | **Check first:** `make istio-preflight` (and `istio_assert_shared_gateway_hosts` fails the install rather than 404ing later).<br>**Ask the mesh admin** to admit the host — ideally once, as a wildcard: `kubectl -n <gw-ns> patch gateway <gw> --type=json -p='[{"op":"add","path":"/spec/servers/0/hosts/-","value":"*.vks.local"}]'` |
+| **Harbor** | Never (for a *new app*) | Nothing to do **when adding an app**: the robot's push+pull is scoped to the whole project, so a new repo under it is already covered — and `make gitops` creates the `harbor-pull` Secret in the new app's namespace for you. **But the robot itself is not always self-serviceable**: only a Harbor **system-admin** can create one that spans two projects. See [Scenario 2 → grants](#run-against-a-real-vks-lab--scenario-2-harbor--argocd-already-installed). |
+
+**On the Gateway-API path (the default, and what Broadcom uses) the hostname needs nobody:** Istio
+auto-provisions the gateway from a `Gateway` we create in **our own** namespace, so its `hosts:`
+list is ours. That leaves the AppProject destination as the only universal tenant request.
+
+> ⚠️ **Provenance of the commands above: INFERRED, not lab-verified.** The *facts* are sourced —
+> ArgoCD's AppProject restricts by `spec.destinations` + `spec.sourceRepos`
+> ([docs](https://argo-cd.readthedocs.io/en/stable/user-guide/projects/)); the Harbor robot we mint
+> is project-scoped (`scripts/22-harbor-robot.sh`); an Istio `Gateway`'s `hosts:` list gates which
+> hostnames a VirtualService may bind. But the exact `kubectl patch` invocations have **not** been
+> run against a real VKS lab, and the ArgoCD **server** there is 2.14.x (ours is 3.x). Treat them as
+> a starting point, confirm against your lab, and correct this table. See the backlog in CLAUDE.md.
 
 ## Prerequisites
 
@@ -222,89 +286,6 @@ separately (see the last bullet). Figures were measured on the live single-node 
 
 > Needed by **both real-lab scenarios**, before their first step. The **KinD path skips this**
 > entirely (`make kind-up` writes a kubeconfig and sets `VKS_AUTH_METHOD=kubeconfig` for you).
-
-<details>
-<summary><strong>Auth methods</strong> — kubeconfig / vcf / vsphere via VKS_AUTH_METHOD (click to expand)</summary>
-
-<br>
-
-`scripts/30-vks-login.sh` (`make vks-login`) is the single pluggable step that produces a
-working `KUBECONFIG` and context; everything downstream is auth-agnostic. Select the method
-with `VKS_AUTH_METHOD`:
-
-| Method | Use it when | Inputs (`.env`) |
-|--------|-------------|-----------------|
-| `kubeconfig` (default) | You already have the lab's exported kubeconfig | `KUBECONFIG`, `VKS_CONTEXT` |
-| `vcf` | Real VCF 9 lab, via the VCF Consumption CLI | `SUPERVISOR_HOST`, `VKS_USERNAME` (+ `VKS_SSO_DOMAIN`), `VKS_NAMESPACE`, `VKS_CLUSTER_NAME`, `VKS_CONTEXT_NAME`, `VKS_INSECURE_SKIP_TLS_VERIFY` |
-| `vsphere` | Pre-9 Supervisor, via the kubectl-vsphere plugin (legacy) | `SUPERVISOR_HOST`, `VKS_NAMESPACE`, `VKS_CLUSTER_NAME`, `VKS_USERNAME`, `VKS_PASSWORD` |
-
-**`vcf` method — the real VCF Consumption CLI flow.** `.env` inputs:
-
-```bash
-VKS_AUTH_METHOD=vcf
-SUPERVISOR_HOST=<supervisor-IP-or-FQDN>   # no scheme; vCenter → Workload Management → Supervisors → Control Plane IP
-VKS_USERNAME=administrator@WLD.SSO        # 'user@SSO.DOMAIN' (or set VKS_SSO_DOMAIN and give the bare user)
-VKS_NAMESPACE=<vsphere-namespace>         # the <ns> in `vcf context use <name>:<ns>`
-VKS_CLUSTER_NAME=<vks-cluster-name>       # the workload cluster to fetch the kubeconfig for
-VKS_CONTEXT_NAME=sup66                    # the vcf context NAME you type at the create prompt
-VKS_INSECURE_SKIP_TLS_VERIFY=true         # skip verifying the Supervisor's self-signed cert
-```
-
-`make vks-login` then runs (interactively — the CLI **prompts** for the context name and the
-password, so no secret ever touches argv):
-
-```bash
-vcf context create --endpoint https://<SUPERVISOR_HOST> --username <user>@<SSO-DOMAIN> \
-    --insecure-skip-tls-verify --auth-type basic     # enter the context name (VKS_CONTEXT_NAME) + password when prompted
-vcf context use <VKS_CONTEXT_NAME>:<VKS_NAMESPACE>   # note the <ctx>:<ns> COLON form
-vcf cluster kubeconfig get <VKS_CLUSTER_NAME> --export-file <KUBECONFIG>   # write the workload-cluster kubeconfig to $KUBECONFIG
-```
-
-`vcf cluster kubeconfig get` is the **primary** VKS 9 way to obtain the **workload-cluster**
-kubeconfig (verify the exact 9.1 flags on your lab). The legacy `kubectl vsphere login --server
-<ip> --vsphere-username <u> --tanzu-kubernetes-cluster-name <c> --tanzu-kubernetes-cluster-namespace
-<ns> [--insecure-skip-tls-verify]` form (the `vsphere` method) is the **vSphere-with-Tanzu 7/8
-fallback** — present only where the `vcf` CLI is unavailable.
-
-If the workload cluster needs the kubectl-vsphere plugin, fetch it from the Supervisor:
-
-```bash
-wget --no-check-certificate https://<SUPERVISOR_HOST>/wcp/plugin/linux-amd64/vsphere-plugin.zip
-```
-
-> **Not yet lab-validated.** The `vcf` flow is written to the command **shape** verified from
-> primary sources (the ogelbric/LAB VCF-CLI transcript and Broadcom's "Install the Argo CD
-> Service" techdoc), but it has **not** been run end-to-end against a real VKS lab in this repo.
-> The login is interactive today: no non-interactive/stdin password mechanism is confirmed for
-> `vcf context create`, so `30-vks-login.sh` carries a `TODO(verify on a real VKS lab)` to
-> confirm one before automating further. A password is never placed on argv either way.
-> `kubeconfig` (bring the lab's exported kubeconfig) is the simplest working method.
-
-</details>
-
-## Tech stack
-
-<details>
-<summary><strong>Layers &amp; choices</strong> — what each component is and why (click to expand)</summary>
-
-<br>
-
-| Layer | Technology | Why |
-|-------|-----------|-----|
-| Git server | **Gitea** (self-hosted, SQLite) | Single-image, air-gap-friendly Git host with webhooks; installed inside the cluster |
-| CI engine | **Tekton** Pipelines + Triggers | Kubernetes-native, in-cluster builds — no external CI runner to reach across the air gap |
-| CI dashboard | **Tekton Dashboard** | Read-only web UI for PipelineRuns / TaskRuns / logs, fronted at `tekton.vks.local` |
-| Image build | **Kaniko** | Builds container images in-cluster without a Docker daemon (rootless, no privileged socket) |
-| Registry | **Harbor** (a VCF Supervisor Service) | The one OCI registry all parties share (host push, Kaniko push, containerd pull) |
-| GitOps CD | **ArgoCD** (a VCF Supervisor Service) | Watches the deploy repo and reconciles the cluster to the committed image tag |
-| Ingress | **Istio** (default) / **Traefik** (option) / **attach to an existing Istio** | One LoadBalancer fronting the UIs at `*.vks.local`; pluggable via `INGRESS_CONTROLLER` (`istio` \| `istio-existing` \| `traefik`) |
-| Image mirror | **crane** (go-containerregistry) | Copies images internet→Harbor (dual-homed) or into a sneakernet bundle, single- or multi-arch; a static Go binary, so it installs cross-distro via mise (incl. Photon OS 5, where skopeo has no static build/package) |
-| Demo app | **Spring Boot 4 / Java 25** | Minimal web UI whose greeting proves the deployed image changed end-to-end |
-| Offline build | dependency-baked **Maven** builder image | Bakes `~/.m2` so in-cluster `mvn` builds with no Maven Central reach |
-| Local e2e | **KinD** + **cloud-provider-kind** | Stands up the Supervisor-Service pieces (Harbor + ArgoCD) locally with a real LoadBalancer |
-| Toolchain | **mise** | One cross-distro (Ubuntu/PhotonOS) version manager for the jump-box tools |
-
-</details>
 
 ## Architecture
 
@@ -546,7 +527,7 @@ With Harbor installed, record its access details before moving on to ArgoCD.
    ```
 
    On vSphere 8, use `kubectl vsphere login --server <IP>` instead. `make vks-login` with
-   `VKS_AUTH_METHOD=vcf` runs this flow from `.env` (see the [VKS authentication](#vks-authentication-vcf-9--supervisor--real-lab-only) section).
+   `VKS_AUTH_METHOD=vcf` runs this flow from `.env` (see the [VKS authentication](docs/vks-authentication.md) section).
 4. **Pick a supported version** with `kubectl explain argocd.spec.version`, then apply the CR:
 
    ```yaml
@@ -647,7 +628,7 @@ For VKS auth, `kubeconfig` (the kubeconfig `vcf cluster kubeconfig get` wrote in
 simplest working method. To have `make vks-login` run the VCF Consumption CLI login itself, set
 `VKS_AUTH_METHOD=vcf` and the `vcf` inputs (`SUPERVISOR_HOST` / `VKS_USERNAME` /
 `VKS_NAMESPACE` / `VKS_CLUSTER_NAME` / `VKS_CONTEXT_NAME`) — see the
-[VKS authentication](#vks-authentication-vcf-9--supervisor--real-lab-only) section for the exact flow (written
+[VKS authentication](docs/vks-authentication.md) section for the exact flow (written
 to the verified shape but not yet lab-validated). For the legacy vSphere plugin, set
 `VKS_AUTH_METHOD=vsphere` and `SUPERVISOR_HOST` / `VKS_NAMESPACE` / `VKS_CLUSTER_NAME` /
 `VKS_USERNAME` / `VKS_PASSWORD`.
@@ -1041,7 +1022,7 @@ For VKS auth, `kubeconfig` (the kubeconfig `vcf cluster kubeconfig get` wrote) i
 working method. To have `make vks-login` run the VCF Consumption CLI login itself, set
 `VKS_AUTH_METHOD=vcf` and the `vcf` inputs (`SUPERVISOR_HOST` / `VKS_USERNAME` /
 `VKS_NAMESPACE` / `VKS_CLUSTER_NAME` / `VKS_CONTEXT_NAME`) — see the
-[VKS authentication](#vks-authentication-vcf-9--supervisor--real-lab-only) section for the exact flow (written
+[VKS authentication](docs/vks-authentication.md) section for the exact flow (written
 to the verified shape but not yet lab-validated). For the legacy vSphere plugin, set
 `VKS_AUTH_METHOD=vsphere` and `SUPERVISOR_HOST` / `VKS_NAMESPACE` / `VKS_CLUSTER_NAME` /
 `VKS_USERNAME` / `VKS_PASSWORD`.
@@ -1341,284 +1322,22 @@ cluster-internally, so there is nothing to expose or log into there.
 
 </details>
 
-## Demo walkthrough — drive the GitOps loop by hand
+## Reference
 
-<details>
-<summary><strong>Demo walkthrough</strong> — drive the GitOps loop by hand: watch a one-line change flow source → build → registry → GitOps write-back → running page (click to expand)</summary>
+Background and deep-dives. **Nothing you have to *run* lives behind these links** — each scenario
+above is self-contained end to end (a CI gate enforces that: `make check-readme-scenarios`).
 
-<br>
-
-This is the demo. With the stack up (`make e2e-kind` locally, or `make install-all` against a
-real VKS lab) you can watch a **one-line code change flow from the Gitea web editor all the way
-to the running web page — entirely inside the air gap**, and see each hop in its own Web UI.
-`make verify` does exactly this automatically; the steps below are the same loop by hand.
-
-**Before you start:** run **`make creds`** for the URLs, logins, and the one-time `/etc/hosts`
-line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
-[Access the UIs](#access-the-uis-urls-logins-passwords)). Open these four UIs in tabs:
-
-| UI | URL | Login | What you'll watch |
-|----|-----|-------|-------------------|
-| **App (javawebapp)** | <http://javawebapp.vks.local/> | — | the greeting that changes |
-| **Gitea** | <http://gitea.vks.local> | `gitea_admin` / your `GITEA_ADMIN_PASSWORD` | edit source; see the tag write-back |
-| **Tekton Dashboard** | <http://tekton.vks.local> | — (read-only) | the PipelineRun: test → build → deploy |
-| **Harbor** | its own LB IP, self-signed HTTPS (KinD) or the lab's HTTPS URL | `admin` / your `HARBOR_PASSWORD` | the freshly-built image |
-| **ArgoCD** | its own LB IP, self-signed TLS (`https://<ARGOCD_LB_IP>`, `--insecure`) on KinD — on a real VKS lab, **your lab's own ArgoCD URL** | `admin` / `make argocd-password` | the sync that rolls the new image |
-
-1. **See the current greeting.** Open <http://javawebapp.vks.local/>. The page shows a greeting —
-   `Hello from vks-airgap-cicd` by default — rendered in the `<p class="message">` element,
-   alongside the app version and git commit. This is what will visibly change.
-
-2. **Edit the greeting in Gitea.** Go to **`demo/javawebapp-app`** →
-   `src/main/resources/application.yml`, click the **edit (pencil)** icon, and change the
-   greeting default on line 18:
-
-   ```yaml
-   # from:
-     message: ${APP_MESSAGE:Hello from vks-airgap-cicd}
-   # to (any text):
-     message: ${APP_MESSAGE:Hello from the air-gapped pipeline}
-   ```
-
-   **Commit directly to `main`.** The commit fires the Gitea push webhook
-   (`el-apps.ci.svc:8080`) → the Tekton EventListener → a new PipelineRun. (This is the same
-   `application.yml` line `make verify` rewrites with a unique marker.)
-
-3. **Watch Tekton build it.** In the **Tekton Dashboard** (<http://tekton.vks.local>), a new
-   **`javawebapp-ci-*`** PipelineRun appears in the `ci` namespace. Its TaskRuns run in order — open
-   each to tail logs live:
-
-   | TaskRun | Does |
-   |---------|------|
-   | `clone-app` | clones `javawebapp-app`; its short commit SHA becomes the image tag |
-   | `test` | runs `./mvnw -B -o test` **offline** (against the deps-baked builder image) |
-   | `build` | **Kaniko** builds the image and pushes it to Harbor |
-   | `deploy-update` | writes the new tag back into `javawebapp-deploy` (the GitOps hand-off) |
-
-4. **See the new image in Harbor.** In Harbor, open project **`apps`** → repository
-   **`javawebapp`**. A new tag appears — the **git short SHA** of your commit
-   (`$HARBOR_URL/apps/javawebapp:<sha>` — on KinD that is Harbor's **LB IP**, which `make creds` prints;
-   on a real lab it is your Harbor FQDN) — pushed by the Kaniko `build` task.
-
-5. **See the tag written back in Gitea.** Open **`demo/javawebapp-deploy`** → `kustomization.yaml`.
-   There's a new commit by **`ci-bot`** with message **`ci: deploy javawebapp <sha>`** that bumps
-   `images[0].newTag` to your `<sha>`. This deploy repo — not the app repo — is what ArgoCD
-   watches, which is why the tag write-back (not the source push) is what triggers a deploy.
-
-6. **Watch ArgoCD deploy it.** In **ArgoCD** (its own self-signed-TLS LB IP on KinD —
-   `https://<ARGOCD_LB_IP>`, shown by `make creds`; on a real VKS lab, **your lab's own
-   ArgoCD URL**), the Application
-   **`javawebapp`** flips **`OutOfSync → Synced`** (auto-sync + self-heal) and rolls the Deployment
-   in namespace `javawebapp` to `$HARBOR_URL/apps/javawebapp:<sha>`. (Auto-sync polls the deploy repo
-   on an interval; click **Refresh** to reconcile immediately.)
-
-7. **See the page change.** Refresh <http://javawebapp.vks.local/>. The greeting now shows your new
-   text. That change went **source → test → image → registry → GitOps write-back → cluster →
-   running page** without a single byte crossing the air gap.
-
-> **`make verify` is the automated form of this whole loop** — it edits the same
-> `application.yml` line with a unique marker, waits for the PipelineRun to succeed, forces an
-> ArgoCD refresh, waits for the *deployed image* to change, then **port-forwards `svc/javawebapp`**
-> and polls it until the page contains the marker — so it needs no ingress and no `/etc/hosts`
-> entry. (`make verify-ingress` is the separate check that proves the `*.vks.local` routes.)
-> Run it to prove the pipeline; walk the UIs above to *see* it.
-
-</details>
-
-## Detailed steps
-
-<details>
-<summary><strong>Detailed steps</strong> — the numbered command-by-command install (offline vs cluster), the resumable-mirror note, and the minimum <code>.env</code> (click to expand)</summary>
-
-<br>
-
-Legend: **[offline]** verifiable without a cluster · **[cluster]** runs against live VKS.
-
-| # | Command | Mode | What happens |
-|---|---------|------|--------------|
-| 1 | `make env-init` → `make env-populate` → `make env-check` | [offline] | `env-init` copies `.env.example`→`.env` (backs up any existing); `env-populate` mints the secrets we can (Gitea/Harbor/ArgoCD) + prints the values only you can provide (Harbor/Gitea URLs, VKS auth, CA files); `env-check` verifies presence. `make env-validate` adds format + connectivity checks. |
-| 2 | `make deps` | [offline] | `mise install` (kubectl, helm, crane, jq, yq, …) + `scripts/00-install-prereqs.sh` (tkn, argocd). |
-| 3 | `make ci` | [offline] | toolchain/image alignment + shellcheck + yamllint + hadolint + kubeconform + gitleaks + trivy fs/config + `mvn test` + docs/diagram checks. |
-| 4 | `make mirror` | [cluster] | `10-mirror-pull.sh` pulls all images (+ Tekton release manifests) then `21-mirror-push.sh` pushes them into Harbor. Resumable (cache-skip) — see the note below. Then **`make mirror-verify`** confirms every image is intact in Harbor. **Sneakernet:** `make mirror-pull && make bundle`, carry the bundle, then `make bundle-load BUNDLE_TARBALL=… && make mirror-push` inside. |
-| 5 | `make builder-image` | [internet] | Builds the Maven builder image with this app's deps pre-baked and pushes it to Harbor (so in-cluster CI builds offline). |
-| 6 | `make vks-login` | [cluster] | `30-vks-login.sh` writes a working `$KUBECONFIG`/context (see auth note). |
-| 7 | `make platform` | [cluster] | Installs Gitea (`k8s/gitea/`), seeds the two repos + webhook, installs Tekton (images remapped to Harbor), applies the pipeline/triggers. |
-| 8 | `make gitops` | [cluster] | Registers the deploy repo and creates the ArgoCD `Application` (auto-sync). |
-| 9 | `make verify` | [cluster] | Pushes a marked change to `javawebapp-app`, then asserts: PipelineRun succeeds → image in Harbor → deploy tag bumped → ArgoCD Synced/Healthy → the live page shows the marker. |
-
-> **The mirror is resumable and verifiable.** If `make mirror` / `make mirror-pull` is
-> interrupted (Ctrl+C, dropped connection, an upstream-CDN reset such as ghcr.io throttling),
-> **just re-run it** — every digest-pinned image already fully pulled is **skipped** (a
-> per-image `.mirror-ok` completeness marker, written only on a complete pull), so it
-> **resumes** from where it stopped instead of re-pulling all of them. Progress shows as
-> `[i/N] (elapsed …)` so you can see it moving. `MIRROR_RETRIES` (default 5) sets per-image
-> retries; `MIRROR_FORCE_PULL=1` re-pulls everything. After a Renovate image bump, the old
-> digest's cache dir is auto-pruned on the next pull (`MIRROR_NO_PRUNE=1` to keep it).
->
-> After pushing, run **`make mirror-verify`** to confirm every image is intact in Harbor —
-> `crane validate` fetches and digests each layer (catches a corrupt/incomplete blob before
-> it surfaces mid-pipeline as `MANIFEST_UNKNOWN`/`BLOB_UNKNOWN`) and cross-checks Harbor's
-> digest against `images.lock`. `mirror-verify` is **read-only**, so it too is safe to
-> interrupt and re-run.
-
-### Minimum `.env` you must set
-
-Start from `make env-init` (copies `.env.example`) + `make env-populate` (generates the secrets it
-can, discovers what the cluster already knows). These are the values only **you** can supply:
-
-```bash
-HARBOR_URL=harbor.<lab-host-or-ip>       # the Harbor Supervisor Service's endpoint (discover: its LB IP/FQDN)
-HARBOR_USERNAME=robot$vks-cicd           # `make harbor-robot` writes this pair to secrets/harbor-robot.env
-HARBOR_PASSWORD=<robot-secret>           # never committed, never on argv
-HARBOR_CA_FILE=./secrets/harbor-ca.crt   # `make fetch-harbor-ca` (self-signed lab Harbor)
-GITEA_HOST=gitea.<lab-host-or-ip>        # the ingress hostname; GITEA_URL DERIVES from it
-GITEA_ADMIN_PASSWORD=<you choose>        # Gitea is a component WE install
-ARGOCD_NAMESPACE=argocd-instance-1       # the ns YOUR ArgoCD instance runs in (KinD uses `argocd`)
-KUBECONFIG=./secrets/vks.kubeconfig      # produced by `make vks-login`
-```
-
-Then `make env-check` (presence) and `make env-validate` (format + reachability/auth) before you run
-anything. The KinD path needs **none** of this — it discovers and generates everything.
-
-</details>
-
-## Adding an app
-
-The demo runs **N apps** through the same walk. `apps/registry.tsv` is the single source of truth —
-seeding, Tekton, ArgoCD, the ingress, PSA and the gates all loop over it. **Adding an app is one
-row** (a new *language* is that row plus one `case` branch in `scripts/lib/apps.sh`):
-
-```tsv
-# name        lang  src                   deploy
-javawebapp    java  apps/java/javawebapp  deploy/javawebapp
-gowebapp      go    apps/go/gowebapp      deploy/gowebapp
-```
-
-Each app gets: its own Gitea repos (`<app>-app` + `<app>-deploy`), its own Tekton `Pipeline`
-(`<app>-ci`) and `Trigger`, its own Harbor repo, its own namespace, its own ArgoCD `Application`,
-its own ingress host — and `make verify` proves **each app independently** (its own marker on its
-own page). `make check-app-hardcodes` fails the build if any shared file (**including
-`.env.example`**) names an app — that is the gate that keeps "one row" true.
-
-The **ingress hostname is derived, not configured**: an app is reachable at
-**`<app>.${APP_DOMAIN}`** (`APP_DOMAIN=vks.local`, one global in `.env.example`). There is no
-per-app `<APP>_HOST` variable — there used to be, and it meant a new row silently died until you
-*also* edited `.env.example`, so "one row" was a lie the gates could not see.
-
-Only two things differ per language: which Tekton task runs the tests (`maven-test` / `go-test`),
-and where `verify` injects its marker. Both live in `scripts/lib/apps.sh`.
-
-### On a REAL lab, adding an app may need grants you must request
-
-Locally (and in **Scenario 1**, where you are the admin) nothing else is needed. As a **tenant**
-(Scenario 2) an app's **new namespace** and **new hostname** may not be covered by what you were
-granted. What that means concretely:
-
-| What | When it bites | What to run / ask for |
-|---|---|---|
-| **ArgoCD AppProject destination** | Always, as a tenant (you get your own AppProject; ours defaults to `default`, which permits everything — a real lab's will not). The `Application` is rejected: *"application destination … is not permitted in project"* | **Check first:** `kubectl -n $ARGOCD_NAMESPACE get appproject <yours> -o jsonpath='{.spec.destinations}{"\n"}{.spec.sourceRepos}'` — your new namespace AND the new `<app>-deploy` repo URL must both be listed.<br>**Ask the ArgoCD admin** to add them: `kubectl -n $ARGOCD_NAMESPACE patch appproject <yours> --type=json -p='[{"op":"add","path":"/spec/destinations/-","value":{"server":"$ARGOCD_DEST_SERVER","namespace":"<app>"}},{"op":"add","path":"/spec/sourceRepos/-","value":"<gitea>/<org>/<app>-deploy.git"}]'` |
-| **Ingress hostname on a SHARED Gateway** | **Only** on the classic route API against a platform-owned Gateway (`ISTIO_SHARED_GATEWAY`). Its `hosts:` list belongs to the mesh admin, so an unlisted host **404s from a listener that exists** | **Check first:** `make istio-preflight` (and `istio_assert_shared_gateway_hosts` fails the install rather than 404ing later).<br>**Ask the mesh admin** to admit the host — ideally once, as a wildcard: `kubectl -n <gw-ns> patch gateway <gw> --type=json -p='[{"op":"add","path":"/spec/servers/0/hosts/-","value":"*.vks.local"}]'` |
-| **Harbor** | Never (for a *new app*) | Nothing to do **when adding an app**: the robot's push+pull is scoped to the whole project, so a new repo under it is already covered — and `make gitops` creates the `harbor-pull` Secret in the new app's namespace for you. **But the robot itself is not always self-serviceable**: only a Harbor **system-admin** can create one that spans two projects. See [Scenario 2 → grants](#run-against-a-real-vks-lab--scenario-2-harbor--argocd-already-installed). |
-
-**On the Gateway-API path (the default, and what Broadcom uses) the hostname needs nobody:** Istio
-auto-provisions the gateway from a `Gateway` we create in **our own** namespace, so its `hosts:`
-list is ours. That leaves the AppProject destination as the only universal tenant request.
-
-> ⚠️ **Provenance of the commands above: INFERRED, not lab-verified.** The *facts* are sourced —
-> ArgoCD's AppProject restricts by `spec.destinations` + `spec.sourceRepos`
-> ([docs](https://argo-cd.readthedocs.io/en/stable/user-guide/projects/)); the Harbor robot we mint
-> is project-scoped (`scripts/22-harbor-robot.sh`); an Istio `Gateway`'s `hosts:` list gates which
-> hostnames a VirtualService may bind. But the exact `kubectl patch` invocations have **not** been
-> run against a real VKS lab, and the ArgoCD **server** there is 2.14.x (ours is 3.x). Treat them as
-> a starting point, confirm against your lab, and correct this table. See the backlog in CLAUDE.md.
-
-## Repository layout
-
-<details>
-<summary><strong>Repository layout</strong> — what lives where (scripts, app, deploy, tekton, argocd, k8s, kind, docs) (click to expand)</summary>
-
-<br>
-
-| Path | Purpose |
-|------|---------|
-| `scripts/` | Ordered, OS-portable (Ubuntu+PhotonOS) automation; `lib/os.sh` + `lib/mirror.sh` are shared libraries |
-| `apps/registry.tsv` | **The app registry — one row per app.** Everything loops over it: seeding, Tekton, ArgoCD, ingress, PSA, the gates. Adding an app is **one row** |
-| `apps/java/javawebapp/` | Spring Boot app (seeded into Gitea `javawebapp-app`); `Dockerfile` + `Dockerfile.builder` (its offline Maven dependency cache) |
-| `apps/go/gowebapp/` | Go app, **stdlib-only** (seeded into `gowebapp-app`). No `Dockerfile.builder`: with zero modules the air-gapped build fetches nothing, so it needs no pre-baked dependency cache |
-| `deploy/<app>/` | Kustomize manifests ArgoCD deploys — one dir per app = one deploy repo. **Not applied by us** — seeded into Gitea `<app>-deploy`, which Tekton writes the image tag into and ArgoCD syncs |
-| `k8s/` | Everything **we** apply to the cluster |
-| `k8s/tekton/` | Tekton pipeline, tasks, triggers, RBAC |
-| `k8s/argocd/` | ArgoCD `Application` definition |
-| `k8s/gitea/` | Gitea install manifest (SQLite, single image) |
-| `docs/vks-services/` | **What VKS actually provides** — Harbor, ArgoCD (Supervisor Services) and Istio (a guest-cluster Standard Package): what each one is, how it is installed/configured, how we consume it, and a provenance grade per fact (lab-verified / KinD-verified / doc / unverified). A living record — update it when a lab run confirms or refutes something |
-| `k8s/istio/`, `k8s/traefik/` | Ingress manifests (`INGRESS_CONTROLLER=istio` default / `istio-existing` / `traefik`) fronting the UIs at `*.vks.local`. `k8s/istio/gateway.yaml` = the Gateway (selector is a token — it is DISCOVERED, never assumed); `virtualservices.yaml` = one VS per UI, in its BACKEND's namespace |
-| `kind/` | KinD cluster config — containerd `certs.d` `config_path`, which carries the Harbor CA for the default TLS pulls (plain-HTTP only under `HARBOR_INSECURE=1`) |
-| `docs/diagrams/` | C4-PlantUML sources + rendered PNGs |
-| `images/images.txt` | Authoritative image inventory to mirror |
-| `.env.example` | Committed source of truth for every tunable |
-
-</details>
-
-## Make targets
-
-<details>
-<summary><strong>Make targets</strong> — the most-used targets by group (<code>make help</code> prints the full list) (click to expand)</summary>
-
-<br>
-
-`make help` prints the full grouped list. The most-used targets:
-
-| Group | Target | Purpose |
-|-------|--------|---------|
-| Prereqs | `deps` | Install the jump-box toolchain (mise tools incl. **kind**, crane, kubectl, helm + tkn/argocd) |
-| Env | `env-init` / `env-populate` / `env-check` / `env-validate` | `.env` lifecycle: copy from `.env.example` → GENERATE the secrets we can + DISCOVER cluster values (and print what only you can provide) → presence gate → validity gate (format + KUBECONFIG/Harbor auth) |
-| Env | `creds-show` (alias `creds`) / `argocd-password` | Print the access URLs + logins / the ArgoCD admin password |
-| Prereqs | `install-vcf-clis` | Install the Broadcom VCF/VKS lab CLIs (argocd-vcf + vcf + plugins), sudo-free — lab-only, licensed artifacts from a folder (`VCF_CLI_SRC_DIR`) |
-| Mirror | `mirror` / `mirror-pull` / `bundle` / `bundle-load` / `mirror-push` | Pull images → Harbor (dual-homed), or the sneakernet phases |
-| Mirror | `builder-image` | Build + push the deps-baked offline Maven builder image |
-| Install | `vks-login` / `platform` / `gitops` / `install-all` | Auth to VKS; install Gitea+Tekton; wire ArgoCD; or all of it |
-| Install | `fetch-harbor-ca` | Fetch a self-signed lab Harbor's CA cert → `HARBOR_CA_FILE` (VKS-lab convenience) |
-| KinD e2e | `e2e-kind` | Full local end-to-end in KinD (cluster → Harbor → ArgoCD → pipeline → ingress → verify). Runs with **`.env` ignored** (`E2E_SKIP_DOTENV`) so a local run reproduces a **fresh** box — see below |
-| KinD e2e | `e2e-kind-both` | Both SSL modes: secure self-signed TLS, then insecure plain-HTTP |
-| KinD e2e | `e2e-kind-istio-existing` | Attach mode: a "platform team" installs Istio under foreign naming; we attach and install nothing (+ both RED tests, both route APIs) |
-| KinD e2e | `e2e-kind-cross-cluster` | Two KinD clusters: a HUB ArgoCD registers a GUEST cluster and syncs an app into it (the real-lab Supervisor→guest topology) |
-| KinD e2e | `e2e-sneakernet` | Two-BOX sneakernet: bundle on the host, carry **only** the tarball into a FRESH jump-box container, reconstruct → push → integrity-verify |
-| KinD e2e | `kind-up` / `install-harbor` / `install-argocd` / `install-ingress` / `kind-down` | Individual KinD steps (`install-istio` / `attach-istio` / `install-traefik` pick the controller) |
-| Preflight | `check-tools` / `psa-check` | Required-vs-optional CLIs + versions / would a real VKS cluster (PSA `restricted` by default) even ADMIT our pods? |
-| Istio | `istio-preflight` / `attach-istio` / `e2e-kind-istio-existing` | Read-only mesh discovery + what to ask the mesh admin for / attach to an Istio we did not install / its KinD regression test |
-| Verify | `verify` | End-to-end smoke test on a LIVE cluster |
-| Verify | `verify-ingress` / `verify-ingress-both` | Assert the `*.vks.local` UIs route through the ingress LB (one controller / both) |
-| Verify | `jumpbox` / `jumpbox-both` | Validate the README bootstrap on a real jump-box container — `JUMPBOX_OS=photon`\|`ubuntu`, or both (needs the KinD cluster up) |
-| App dev | `app-test` / `app-build` / `app-run` | Spring Boot app tests / jar / local run |
-| Gates | `ci` / `static-check` / `docs-lint` | Composite offline gate; code gate; docs gate |
-| Gates | `lint` / `validate` / `test-scripts` | Shell/YAML/Dockerfile lint · manifest schema validation · offline script-logic unit tests |
-| Gates | `check-image-alignment` / `check-toolchain-alignment` / `check-java-alignment` | A version that lives in >1 file must agree everywhere (image tags ↔ `images/images.txt`; kubectl pin; Java major) |
-| Gates | `check-env` / `check-env-coverage` / `check-env-clobber` / `check-how-provenance` | `.env.example` is the source of truth: it exists · every var the scripts read is documented · **no uncommented value silently defeats a dynamic fallback or a per-run override** · every `# how:` command is runnable or provenance-tagged |
-| Gates | `check-readme-scenarios` / `check-tools` / `psa-check` | Every scenario answers every decision in its own section · required-vs-optional CLIs · would a real VKS cluster (PSA `restricted`) admit our pods? |
-| Security | `sec` / `secrets` / `trivy-fs` / `trivy-config` | gitleaks + trivy fs (app deps) / config (manifests) |
-| Diagrams | `diagrams` / `diagrams-check` / `vendor-diagrams` | Render PNGs / byte-diff drift gate / re-vendor C4-PlantUML |
-
-</details>
-
-## CI/CD
-
-<details>
-<summary><strong>CI/CD</strong> — GitHub Actions jobs (changes / static-check / docs-lint / ci-pass) (click to expand)</summary>
-
-<br>
-
-GitHub Actions (`.github/workflows/ci.yml`) runs on push to `main`, tags `v*`, and pull requests.
-
-| Job | Runs | Purpose |
-|-----|------|---------|
-| **changes** | always | `dorny/paths-filter` classifies the diff into `code` / `docs` |
-| **static-check** | if `code` changed | `make static-check` — toolchain/image alignment, shellcheck, yamllint, hadolint, kubeconform, security scans (gitleaks + trivy fs/config), `mvn test` |
-| **docs-lint** | if `docs` changed | `make docs-lint` — markdownlint + `diagrams-check` (PNG drift vs `.puml`) |
-| **ci-pass** | always | Aggregator; the single required status check — green only if the needed jobs passed |
-
-Locally, `make ci` runs the same gates (`static-check` + `docs-lint`).
-
-</details>
+| | |
+|---|---|
+| [Tech stack](docs/tech-stack.md) | what the demo is built from |
+| [Repository layout](docs/repository-layout.md) | where things live |
+| [Make targets](docs/make-targets.md) | every target, grouped |
+| [CI/CD](docs/ci-cd.md) | what CI actually gates (and what it deliberately does not) |
+| [VKS authentication](docs/vks-authentication.md) | how `$KUBECONFIG` is produced on a real lab, and **why Scenario 1 needs a second kubeconfig** |
+| [Demo walkthrough](docs/demo-walkthrough.md) | drive the GitOps loop by hand |
+| [Detailed steps](docs/detailed-steps.md) | the full step-by-step |
+| [VKS services](docs/vks-services/) | what Broadcom actually ships (Harbor / ArgoCD / Istio), each fact **graded** by provenance |
+| [Decisions](docs/decisions/) | why the KinD stand-in is built the way it is |
 
 ## Configuration
 
