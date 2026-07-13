@@ -207,8 +207,11 @@ fetch-argocd-ca: ## Fetch a self-signed ArgoCD server CA cert → ARGOCD_CA_FILE
 harbor-robot: ## Create a least-privilege Harbor CI robot account (push+pull) → secrets/harbor-robot.env; copy into .env
 	@$(SCRIPTS)/22-harbor-robot.sh
 
+.PHONY: preflight argocd-preflight
+preflight: check-tools argocd-preflight psa-check ## Read-only: can this lab actually run the flow? Run it BEFORE the 20-minute mirror (first prereq of install-all)
+
 .PHONY: argocd-preflight
-argocd-preflight: ## Report ArgoCD version + topology on $KUBECONFIG's cluster before `make gitops` (lab vs KinD)
+argocd-preflight: ## ArgoCD version + TOPOLOGY + write-mechanism + AppProject + Gitea reachability (two-cluster aware; non-zero on a blocking finding)
 	@$(SCRIPTS)/23-argocd-preflight.sh
 
 ##@ Platform install (Gitea + Tekton)
@@ -364,7 +367,7 @@ e2e-sneakernet: ## Faithful TWO-BOX sneakernet on KinD: [host=internet box] mirr
 # platform / gitops consume them — so a corrupt/incomplete Harbor copy fails HERE (the
 # integrity gate) instead of surfacing later as a mid-pipeline Kaniko MANIFEST_UNKNOWN.
 # Read-only + non-disruptive to a healthy mirror. Prereqs update left-to-right (sequential).
-install-all: mirror mirror-verify builder-image vks-login platform gitops ## Run the complete air-gap install end to end (mirror integrity-verified before the pipeline)
+install-all: preflight mirror mirror-verify builder-image vks-login platform gitops ## Run the complete air-gap install end to end (preflight FIRST, then mirror integrity-verified, then the pipeline)
 
 .PHONY: verify
 verify: check-env ## e2e: push a change → Tekton build → Harbor → ArgoCD sync → HTTP check (LIVE cluster)
