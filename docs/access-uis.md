@@ -28,7 +28,7 @@ VKS cluster:
 **ArgoCD password** — **`make argocd-password`** prints it, in every context. It asks the **cluster**
 first, so what it prints is the password that actually works.
 
-- **KinD:** the flow generates one for you (`.env.kind`) and applies it at install — nothing to set.
+- **KinD:** the flow generates one for you (`.env.state`) and applies it at install — nothing to set.
 - **VKS:** ArgoCD is the platform's's. If you set `ARGOCD_ADMIN_PASSWORD` in `.env`, that is what you
   get; otherwise the command reads the initial-admin secret, or points you at your lab.
 

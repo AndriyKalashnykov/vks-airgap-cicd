@@ -12,7 +12,7 @@ is verified end-to-end (git push → Tekton build → Harbor → ArgoCD → the 
 the new version).
 
 > **Zero `.env` setup — and the e2e ENFORCES it.** The kind steps **auto-discover and write
-> `.env.kind`** for you — `KUBECONFIG`, `HARBOR_URL` (the Harbor LB IP), `HARBOR_CA_FILE`, the
+> `.env.state`** for you — `KUBECONFIG`, `HARBOR_URL` (the Harbor LB IP), `HARBOR_CA_FILE`, the
 > ArgoCD LB IP — and **generate** the passwords for the components we install. Run
 > `make creds-show` for the effective URLs, logins and passwords.
 >
@@ -47,7 +47,7 @@ How the local stand-in works:
   trusted at every consumer **sudo-free** — jump-box `crane`/`curl` via `SSL_CERT_FILE`, the
   builder push via podman `--cert-dir`, in-cluster Kaniko via the `harbor-ca` ConfigMap. It
   writes the discovered `HARBOR_URL` (the LB IP) + `HARBOR_CA_FILE` + `KUBECONFIG` into a
-  gitignored **`.env.kind`** overlay so the normal scripts target the kind cluster unchanged.
+  gitignored **`.env.state`** overlay so the normal scripts target the kind cluster unchanged.
   Harbor **and** ArgoCD both default to secure (self-signed TLS, mimicking the VCF/VKS 9.1
   lab). For the original plain-HTTP fast-iteration mode, flip both switches:
   `make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1`. Both modes are validated locally.

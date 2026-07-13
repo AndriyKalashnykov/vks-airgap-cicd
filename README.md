@@ -226,7 +226,7 @@ above is self-contained end to end (a CI gate enforces that: `make check-readme-
 
 ## Configuration
 
-Everything is driven by `.env` (copied from `.env.example`), with an optional `.env.kind`
+Everything is driven by `.env` (copied from `.env.example`), with an optional `.env.state`
 overlay written by the KinD flow. Nothing is hardcoded in scripts or the Makefile. See
 `.env.example` for the full, documented list of tunables.
 

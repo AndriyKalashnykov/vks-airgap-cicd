@@ -1,35 +1,52 @@
 # VKS lab run — the validation plan (Scenario 1)
 
 <br>
-**Read this before you start.** It is not a runbook — it is a *validation* plan. Every step
-settles a claim this repo currently **cannot verify**, and asks you to capture evidence we act on.
-The runbook itself is [Scenario 1](scenario-1.md); this rides alongside it.
+**This is a validation plan, not a runbook.** The runbook is [Scenario 1](scenario-1.md) — follow it.
+This rides alongside it and, at each point, tells you **what to capture**. Every step settles a claim
+this repo currently **cannot verify** without a lab.
 
-> **This plan was adversarially reviewed** — three drafts were attacked for wasted steps, fabricated
-> commands, and anything that could damage your lab, then adjudicated into one. Where we have never run a
-> command, it says **UNVERIFIED-COMMAND** and gives you a fallback. We would rather learn the real CLI
-> shape than have you fight our guess.
+## Rules — these change what you type
 
-## Why it is ordered this way
+1. **Run the `install-all` stages SEPARATELY, never as one command.** `make install-all` is a 30–40 min
+   monolith; run `mirror` → `platform` → `gitops` as separate targets so two claims can be probed *at
+   the moment they become observable* and **before** the step that depends on them (steps 17 and 20).
+2. **Start every command block with `set -a; . ./.env; set +a`.** In a bare shell `$HARBOR_URL`,
+   `$ARGOCD_NAMESPACE` etc. are **EMPTY** (scripts materialise them via `load_env`), and an empty var
+   in an `envsubst` render silently yields `namespace:` blank.
+3. **Never hardcode ArgoCD's workload names** — discover by label
+   (`-l app.kubernetes.io/part-of=argocd`) and record the real ones. If they are not `argocd-server`,
+   that is **our bug**, not your lab.
+4. **Capture the tool's raw output, never your verdict** — `--help` blocks, `describe` Events, image
+   tags, cert SANs. We compute the conclusions.
+5. **A step marked `UNVERIFIED-COMMAND` has never been run by us.** If it errors, **send us the
+   `--help` output** and use the fallback. Do not fight our guess.
 
-ORDERING PRINCIPLE. Three things drove this plan.
+**Cost:** steps 1–14 are cheap (minutes each, read-only) and settle 7 of the 8 headline claims.
+**Step 16 (`make mirror`) is the only slow one** (~20–40 min, ~34 images) and **must run alone**.
+Steps 19–24 are minutes each.
 
-(1) **Walk the runbook, don't bypass it.** In Scenario 1 the operator MUST install Harbor + ArgoCD as Supervisor Services and provision the VKS cluster (docs/scenario-1.md A1/A2/A3). They have to do that anyway — so we ride it, and every divergence between the doc and the vSphere Client they actually see is free evidence about the least-verified prose we ship. A plan that starts at "assume ./secrets/vks.kubeconfig exists" throws that away.
+<details><summary><b>Why the plan is ordered this way</b> (background — skip unless a step looks wrong)</summary>
 
-(2) **Read-only before write, and NEVER trust our own command shapes.** Every step that touches the `vcf` CLI is marked **UNVERIFIED-COMMAND**: we ship TWO CONTRADICTORY forms of `vcf context create` (scripts/30-vks-login.sh:70-84 uses an interactive name + `--auth-type basic`; scripts/31-fetch-argocd-kubeconfig.sh:63-67 uses a positional name + `--type k8s` + `--ca-certificate`) — at most one can be right, neither has ever run, and this repo has shipped a fabricated `vcf` command before. So step 3 dumps `vcf … --help` VERBATIM **before** any `vcf` command is typed in anger, and every `vcf` step carries "if this errors, send us the --help output and use the fallback".
+- **Walk the runbook, don't bypass it.** Scenario 1 makes you install Harbor + ArgoCD as Supervisor
+  Services and provision the cluster anyway — so every divergence between our doc and the vSphere
+  Client you actually see is free evidence about the least-verified prose we ship. A plan that starts
+  at *"assume `./secrets/vks.kubeconfig` exists"* throws that away.
+- **We ship TWO CONTRADICTORY forms of `vcf context create`** (`30-vks-login.sh:70` uses an interactive
+  name with `--auth-type basic`; `31-fetch-argocd-kubeconfig.sh:63` uses a positional name with
+  `--type k8s` and `--ca-certificate`). At most one is right, **neither has ever run**, and this repo has shipped a
+  fabricated `vcf` command before — hence rule 5 and the `--help` dump in step 3.
+- **Why the stages must be split** (rule 1): **Harbor CA auto-trust** (graded *community*) is
+  observable right after `mirror` and **before** `platform`, which pulls Gitea *from* Harbor — if
+  auto-trust is false, `platform` ImagePullBackOffs and the remedy rolls your worker nodes.
+  **Supervisor → guest LoadBalancer reachability** is the one claim KinD structurally cannot settle;
+  it becomes observable the moment `platform` gives Gitea an LB, and we probe it **before** `gitops`
+  on the exact port (3000) and protocol ArgoCD will use — from inside the real repo-server pod, with
+  `git ls-remote` (**git** is in that image; `curl`/`wget` are **not**, and a curl-based probe would
+  report "not found" and have us tear up the architecture over a missing binary).
+- This plan was adversarially reviewed: three drafts attacked for wasted steps, fabricated commands,
+  and anything that could damage your lab, then adjudicated into one.
 
-(3) **DO NOT run `make install-all` as one 30-40 minute monolith.** Its stages already exist as separate targets (Makefile:407), and running them separately is what lets us settle two claims at the exact moment they become observable and BEFORE the thing that depends on them:
-
-- **Harbor CA auto-trust** (harbor.md:24-27, graded *community*) is observable right after `make mirror` and BEFORE `make platform` — which pulls Gitea FROM Harbor. If auto-trust is false, `platform` ImagePullBackOffs and the remedy (`trust.additionalTrustedCAs` on the Cluster CR) rolls their worker nodes. Probe it first.
-- **Supervisor → guest LoadBalancer reachability** — the ONE claim KinD structurally cannot settle, and the premise of `gitea_clone_url()` (lib/argocd.sh:153-165). It becomes observable the moment `make platform` gives Gitea its own LB, and we probe it BEFORE `make gitops`, on the EXACT port (3000) and the EXACT protocol (git-over-HTTP) ArgoCD will use — from inside the real repo-server pod, with `git ls-remote` (git IS in that image; curl/wget are NOT — a probe using curl there would print "not found" and we would tear up the architecture on the strength of a missing binary).
-
-Three cross-cutting rules the commands obey:
-
-- **Every raw command block begins with `set -a; . ./.env; set +a`.** `$ARGOCD_NAMESPACE`, `$HARBOR_URL`, `$TEMURIN_JRE_TAG` etc. live in `.env` and are materialised inside scripts by `load_env` — in a bare interactive shell they are EMPTY, and an empty var in an `envsubst` render silently produces `namespace:` blank (this repo has been bitten by exactly that).
-- **Never hardcode ArgoCD's workload names.** The VKS ArgoCD is operator-managed and may name things `<CR-name>-server` / `<CR-name>-repo-server`. We discover by LABEL (`-l app.kubernetes.io/part-of=argocd`) and capture the real names — if they differ from `argocd-server`, that is a bug in OUR scripts (31-fetch-argocd-kubeconfig.sh:77 hardcodes it), not a broken lab.
-- **Capture the tool's own output, never a verdict.** `--help` blocks, `describe` Events, image tags, `explain` lists, cert SANs — raw. We compute the conclusions.
-
-Honesty about cost: steps 1-14 are CHEAP (minutes each, all read-only or their-own-vSphere-work) and settle 7 of the 8 headline claims. Step 16 (`make mirror`) is the only SLOW one (~20-40 min, ~34 images) and must run ALONE. Steps 19-24 are minutes each.
+</details>
 
 ## The steps
 
