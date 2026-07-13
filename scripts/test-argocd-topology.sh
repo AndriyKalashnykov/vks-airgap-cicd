@@ -272,6 +272,33 @@ if [ "$(sed 's/#.*//' "$PF70" | sed -n '/ka get ns/,/^}/p' | grep -c 'die ' || t
 else
   ok "70 does not die on the ArgoCD-namespace probe (it MEASURES; the tenant can still reach api/request)"
 fi
+
+# ...BUT NOT DYING IS ONLY HALF THE CONTRACT. Deleting that die also deleted the ONLY guard against
+# deploying ONTO THE SUPERVISOR: a tenant has no Supervisor kubeconfig -> ARGOCD_KUBECONFIG defaults to
+# the GUEST -> argocd_is_off_cluster compares it WITH ITSELF -> off_cluster=0 -> destination defaults to
+# https://kubernetes.default.svc -> MECH=api writes it to the SUPERVISOR's argocd-server, where
+# "in-cluster" IS the Supervisor, with prune+selfHeal. That is #158 re-entering through the fix.
+if [ "$(sed 's/#.*//' "$PF70" | grep -c 'REFUSING to deploy' || true)" -gt 0 ]; then
+  ok "the SUPERVISOR GUARD is armed (an unreadable ArgoCD ns + an in-cluster destination is REFUSED)"
+else
+  bad "70 has NO Supervisor guard: an unreadable ArgoCD namespace with off_cluster=0 would deploy the app ONTO THE SUPERVISOR with prune+selfHeal"
+fi
+# shellcheck disable=SC2016  # the ${...} is LITERAL shell source we are grepping FOR, not an expansion
+if [ "$(sed 's/#.*//' "$PF70" | grep -c 'ARGOCD_DEST_SERVER:-}\${ARGOCD_DEST_CLUSTER_NAME' || true)" -gt 0 ]; then
+  ok "an EXPLICIT destination (server OR name) still satisfies the guard — the tenant path stays open"
+else
+  bad "the Supervisor guard does not accept an explicit ARGOCD_DEST_* — it would block the tenant it exists to protect"
+fi
+
+# ARGOCD_DEST_CLUSTER_NAME is documented as "the only handle a tenant usually has". It used to be read
+# ONLY inside the off_cluster=1 branch — so on the tenant path (which always lands in the ELSE branch)
+# it was DEAD CODE, and the Application still shipped destination=kubernetes.default.svc. Same class as
+# #160: a knob that could never take effect.
+if [ "$(sed 's/#.*//' "$PF70" | grep -c 'explicit, by NAME' || true)" -gt 0 ]; then
+  ok "ARGOCD_DEST_CLUSTER_NAME is honoured in BOTH branches (it was dead on the tenant path)"
+else
+  bad "ARGOCD_DEST_CLUSTER_NAME is only read when off_cluster=1 — DEAD on the tenant path, where it is the only handle a tenant has"
+fi
 if [ "$(sed 's/#.*//' "$PF70" | grep -c 'argocd_ns_readable' || true)" -gt 0 ]; then
   ok "the namespace probe feeds the mechanism ladder (argocd_ns_readable)"
 else

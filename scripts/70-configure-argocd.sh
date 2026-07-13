@@ -63,6 +63,38 @@ else
   log_info "ArgoCD runs in the SAME cluster as the workload ($ARGOCD_API)"
 fi
 
+# ---- THE SUPERVISOR GUARD. Re-armed after the tenant fix DELETED it. -------------------------------
+#
+# Removing the `die` on the namespace probe unblocked the tenant — and simultaneously removed the ONLY
+# thing standing between a misconfigured run and a DEPLOY ONTO THE SUPERVISOR:
+#
+#   a tenant has no Supervisor kubeconfig -> ARGOCD_KUBECONFIG defaults to the GUEST
+#     -> argocd_is_off_cluster compares the guest kubeconfig WITH ITSELF -> ARGOCD_OFF_CLUSTER=0
+#     -> the destination defaults to https://kubernetes.default.svc
+#     -> MECH=api writes that Application to the SUPERVISOR's argocd-server, where "in-cluster" IS
+#        THE SUPERVISOR — with prune: true and selfHeal: true.
+#
+# That is CRITICAL #158 ("more dangerous than the bug") walking back in through the door the fix
+# opened. KinD cannot see it: one cluster, so the namespace is always readable and in-cluster is
+# genuinely correct.
+#
+# The signature is exact: the ArgoCD namespace is UNREADABLE from the kubeconfig we would deploy
+# "in-cluster" into. That combination is never legitimate. An operator who really means it says so
+# explicitly with ARGOCD_DEST_SERVER / ARGOCD_DEST_CLUSTER_NAME — which keeps the tenant path open.
+if [ "$argocd_ns_readable" = no ] && [ "$ARGOCD_OFF_CLUSTER" = 0 ] \
+   && [ -z "${ARGOCD_DEST_SERVER:-}${ARGOCD_DEST_CLUSTER_NAME:-}" ]; then
+  log_error "REFUSING to deploy: the ArgoCD namespace '$ARGOCD_NAMESPACE' is UNREADABLE from the very"
+  log_error "  kubeconfig we would deploy IN-CLUSTER into ($ARGOCD_API)."
+  log_error "  That means ArgoCD is NOT in this cluster — it is a Supervisor Service in ANOTHER one —"
+  log_error "  and an in-cluster destination would deploy your app ONTO THE SUPERVISOR, with prune"
+  log_error "  and self-heal enabled."
+  log_error "  Fix ONE of these:"
+  log_error "    * make fetch-argocd-kubeconfig      (get the Supervisor kubeconfig; the ADMIN path)"
+  log_error "    * ARGOCD_DEST_SERVER=<your guest API URL>          (the TENANT path)"
+  log_error "    * ARGOCD_DEST_CLUSTER_NAME=<your guest, as registered in ArgoCD>"
+  die "refusing to guess a deploy destination when ArgoCD is demonstrably not in this cluster."
+fi
+
 # ---- which Gitea URL can ARGOCD'S repo-server actually clone? --------------------------------------
 # GITEA_INTERNAL_URL (gitea-http.gitea.svc:3000) resolves ONLY inside the guest cluster. It is right
 # for Tekton (which runs there) and WRONG for an off-cluster ArgoCD, whose repo-server would fail
@@ -259,8 +291,18 @@ if [ "$ARGOCD_OFF_CLUSTER" = "1" ]; then
   fi
   log_info "deploy destination: ${ARGOCD_DEST_SERVER:-(by name) ${ARGOCD_DEST_CLUSTER_NAME:-}}"
 else
-  ARGOCD_DEST_SERVER="${ARGOCD_DEST_SERVER:-$ARGOCD_INCLUSTER_SERVER}"
-  log_info "deploy destination: $ARGOCD_DEST_SERVER (in-cluster)"
+  # An EXPLICIT operator destination wins even here. It used to be ignored in this branch — so
+  # ARGOCD_DEST_CLUSTER_NAME, documented as "the only handle a tenant usually has", was DEAD CODE on
+  # precisely the path it was written for (the same class as #160: a knob that could never take
+  # effect). Only fall back to in-cluster when the operator named nothing.
+  if [ -n "${ARGOCD_DEST_SERVER:-}" ]; then
+    log_info "deploy destination: $ARGOCD_DEST_SERVER (explicit)"
+  elif [ -n "${ARGOCD_DEST_CLUSTER_NAME:-}" ]; then
+    log_info "deploy destination: ${ARGOCD_DEST_CLUSTER_NAME} (explicit, by NAME)"
+  else
+    ARGOCD_DEST_SERVER="$ARGOCD_INCLUSTER_SERVER"
+    log_info "deploy destination: $ARGOCD_DEST_SERVER (in-cluster)"
+  fi
 fi
 
 # ArgoCD's Application.destination accepts EITHER `server:` (the API URL) or `name:` (the name the

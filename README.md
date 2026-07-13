@@ -117,10 +117,16 @@ granted. What that means concretely:
 | **Ingress hostname on a SHARED Gateway** | **Only** on the classic route API against a platform-owned Gateway (`ISTIO_SHARED_GATEWAY`). Its `hosts:` list belongs to the mesh admin, so an unlisted host **404s from a listener that exists** | **Check first:** `make istio-preflight` (and `istio_assert_shared_gateway_hosts` fails the install rather than 404ing later).<br>**Ask the mesh admin** to admit the host — ideally once, as a wildcard: `kubectl -n <gw-ns> patch gateway <gw> --type=json -p='[{"op":"add","path":"/spec/servers/0/hosts/-","value":"*.vks.local"}]'` |
 | **Harbor** | Never (for a *new app*) | Nothing to do **when adding an app**: the robot's push+pull is scoped to the whole project, so a new repo under it is already covered — and `make gitops` creates the `harbor-pull` Secret in the new app's namespace for you. **But the robot itself is not always self-serviceable**: only a Harbor **system-admin** can create one that spans two projects. See [Scenario 2 → grants](docs/scenario-2.md). |
 
-**On the Gateway-API path (the default, and what Broadcom uses) the hostname needs nobody:** Istio
+**On the Gateway-API path the hostname needs nobody:** Istio
 auto-provisions the gateway from a `Gateway` we create in **our own** namespace, so its `hosts:`
 list is ours. That leaves the AppProject destination as the only universal tenant request.
 
+> **Provenance.** The *mechanism* is **KinD-verified** (`make e2e-kind-istio-existing` — Istio
+> auto-provisioned the gateway and its LB from our own `Gateway`). That **Broadcom's Istio routes with
+> the Gateway API** is **doc-inferred, never seen on a lab** — and it is load-bearing for a tenant
+> (it decides whether you must ask the mesh admin for a hostname at all). It is item 12 of the
+> [lab validation plan](docs/lab-validation-plan.md).
+---
 > ⚠️ **Provenance of the commands above: INFERRED, not lab-verified.** The *facts* are sourced —
 > ArgoCD's AppProject restricts by `spec.destinations` + `spec.sourceRepos`
 > ([docs](https://argo-cd.readthedocs.io/en/stable/user-guide/projects/)); the Harbor robot we mint
@@ -208,6 +214,7 @@ above is self-contained end to end (a CI gate enforces that: `make check-readme-
 | [VKS authentication](docs/vks-authentication.md) | how `$KUBECONFIG` is produced on VKS (`VKS_AUTH_METHOD`, the `vcf` CLI flow), and **why Scenario 1 needs a second kubeconfig**. Both VKS scenarios run `make vks-login` themselves; **the KinD path skips it entirely** |
 | [Demo walkthrough](docs/demo-walkthrough.md) | drive the GitOps loop by hand |
 | [Detailed steps](docs/detailed-steps.md) | the full step-by-step |
+| [Lab validation plan](docs/lab-validation-plan.md) | the 24 steps to run on a **real VKS lab** to settle what KinD cannot — each with the command, what to capture, and what a PASS/FAIL proves |
 | [VKS services](docs/vks-services/) | what Broadcom actually ships (Harbor / ArgoCD / Istio), each fact **graded** by provenance |
 | [Decisions](docs/decisions/) | why the KinD stand-in is built the way it is |
 

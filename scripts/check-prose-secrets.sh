@@ -36,6 +36,10 @@ hits="$(git grep --untracked -nEi "$PATTERN" -- '*.md' 2>/dev/null |
   # this gate targets prose, so a bare env-var name (HARBOR_PASSWORD, OSS_INDEX_TOKEN,
   # GPG_PASSPHRASE, …) is a reference, not a leak.
   grep -vE '\b[A-Z][A-Z0-9]*_(PASSWORD|PASSWD|PWD|TOKEN|SECRET|KEY|PASSPHRASE)\b' |
+  # `$PWD/` is the shell's working-directory variable, not a password. The `pwd ?[:/]` pattern (which
+  # hunts for prose like `pwd: hunter2`) matches it, and every `export KUBECONFIG=$PWD/secrets/...` in
+  # a runbook trips the gate. A path is not a credential.
+  grep -vE '\$\{?PWD\}?/' |
   grep -vE 'GPG_' |
   # README "**Get the admin password:**" — a value-less markdown instruction
   # heading; the NEXT line shows the `kubectl get secret … | base64 -d` read

@@ -92,9 +92,6 @@ kind get kubeconfig --name "$CLUSTER_NAME" > "$KUBECONFIG_PATH"
 # Absolute path so the value works regardless of the caller's CWD.
 KUBECONFIG_ABS="$(cd "$(dirname "$KUBECONFIG_PATH")" && pwd)/$(basename "$KUBECONFIG_PATH")"
 KIND_CONTEXT="kind-${CLUSTER_NAME}"
-# STAMP FIRST: mark this sink as KinD-flow state, so `make kind-down` may remove it and a REAL LAB's
-# discovered state (written by the same helpers, to the same sink) never is.
-state_stamp --kind
 state_set KUBECONFIG "$KUBECONFIG_ABS"
 # Record it separately: `make kind-down` must delete ONLY the kubeconfig THIS flow wrote. It used to
 # delete any kubeconfig under ./secrets — which is where the DOCUMENTED real-lab default lives
@@ -126,6 +123,16 @@ log_info "published KUBECONFIG/VKS_AUTH_METHOD/VKS_CONTEXT (+ generated KinD Har
 
 # Point subsequent kubectl calls at the kind cluster.
 export KUBECONFIG="$KUBECONFIG_ABS"
+
+# STAMP ONLY NOW — AFTER KUBECONFIG points at the cluster we just created.
+#
+# state_stamp reads the AMBIENT $KUBECONFIG. Stamping earlier recorded whatever load_env had defaulted
+# to — `secrets/vks.kubeconfig`. On THIS box that happened to be a stale KinD file, so the stamp looked
+# right. ON A LAB BOX secrets/vks.kubeconfig IS THE LAB: `make e2e-kind` would have stamped the KinD
+# sink with the LAB's API server, and then either ARCHIVED the live KinD sink away (destroying the only
+# copy of the generated passwords) or let a LAB run source KinD's LB IPs and CA — the exact
+# cross-cluster contamination the stamp exists to prevent, wearing a green stamp.
+state_stamp --kind
 
 # --- 3. Start cloud-provider-kind (detached) for LoadBalancer IPs ------------
 # It watches the `kind` docker network and assigns external IPs to LB Services.
