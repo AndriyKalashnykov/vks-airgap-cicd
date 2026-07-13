@@ -163,6 +163,13 @@
         "istio/istio"
       ],
       "groupName": "istio + gateway-api (version-locked)"
+    },
+    {
+      "description": "HOLD gateway-api at <v1.6.0. It is NOT stale: v1.5.1 is the NEWEST version any Istio supports \u2014 Istio 1.30.2 (the latest release) vendors sigs.k8s.io/gateway-api v1.5.1, and CRDs newer than Istio's own Go client re-introduce the supportedFeatures []string->[]object skew that crash-loops controllers. Renovate solo-merged v1.6.0 once already. REMOVE THIS CAP the moment an Istio release vendors v1.6+; verify with: curl -sSL https://raw.githubusercontent.com/istio/istio/release-<minor>/go.mod | grep gateway-api",
+      "matchPackageNames": [
+        "kubernetes-sigs/gateway-api"
+      ],
+      "allowedVersions": "<v1.6.0"
     }
   ]
 }
