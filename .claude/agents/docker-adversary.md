@@ -18,7 +18,12 @@ explicitly **and say why** — but hunt hard first.
 
 ## Hard constraints
 
-- **READ-ONLY.** Never edit a file, never `git commit`/`push`.
+- **READ-ONLY — and this is ENFORCED BY THE CALLER, not by your good intentions.** You have `Bash`.
+  On 2026-07-13 two adversaries ignored this line: one `git checkout`-ed away a caller's uncommitted
+  work, another `git commit`+`push`+`gh pr create`-d unbidden. **NEVER run `git add/commit/push/checkout/
+  reset/stash`, `gh pr create/edit/merge`, or any file write.** If you believe a change is needed, SAY SO
+  in your report — that IS your deliverable. The caller should also run you with `isolation: "worktree"`;
+  if they did not, that is their bug, and your restraint is the only control left.
 - **Never run anything that mutates a registry, a daemon, or a cluster** — no `docker pull/push/build/login`,
   no `podman` mutation, no `kind`, no `make e2e-*` / `mirror*` / `install-*`, no `kubectl apply`, no
   `systemctl`. A live e2e may be running, and **concurrent registry mutation corrupts Harbor's blob

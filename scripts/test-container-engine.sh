@@ -115,7 +115,15 @@ for f in scripts/[0-9][0-9]-*.sh scripts/lib/*.sh scripts/creds.sh scripts/argoc
   # NOTE a bare `(` is deliberately NOT a command position: English parentheses contain prose
   # ("(docker is only a fallback)" in the check-tools table) and matching them re-introduces the bug.
   # `$(` IS matched, which is the only form a real invocation takes here.
-  if sed 's/#.*//' "$f" | grep -qE \
+  # An EXPLICIT, REASONED exemption: a line ending `# docker-ok: <why>` is skipped. This is for a
+  # docker command that runs ONLY on a branch the operator reached by CHOOSING docker
+  # (CONTAINER_ENGINE=docker) — there, docker exists by construction, so the line is not a docker
+  # REQUIREMENT. The marker is per-LINE and must carry a reason: an exemption you cannot read is an
+  # exemption you cannot audit, and a by-filename allowlist would hide the next real dependency.
+  # NOTE the marker DELETES THE WHOLE LINE (`/d`), it does not just strip the comment: the docker call
+  # sits BEFORE the `#`, so blanking only the comment would leave the call behind and the exemption
+  # would silently do nothing. (First draft did exactly that — caught by the RED test, not by reading.)
+  if sed '/#[[:space:]]*docker-ok:/d' "$f" | sed 's/#.*//' | grep -qE \
        '(require_cmd|command -v|have|run|sudo)[[:space:]]+docker([[:space:]]|$)|(^|[;&|]|\$\()[[:space:]]*docker[[:space:]]+[a-z]|docker\.sock'; then
     offenders="${offenders} ${b}"
   fi

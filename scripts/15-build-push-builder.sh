@@ -56,6 +56,50 @@ if [ "$TLS_VERIFY" = "true" ] && [ -n "${HARBOR_CA_FILE:-}" ] && [ -f "$HARBOR_C
   log_info "trusting Harbor CA via podman --cert-dir=$BUILDER_CERTD (no sudo)"
 fi
 
+# --------------------------------------------------------------------------------------------------
+# PRE-BUILD TRUST PROBE. Log in to Harbor NOW, before the ~20-minute build.
+#
+# This replaces a guard that inspected the FILESYSTEM (`is there a ca.crt under /etc/docker/certs.d?`)
+# and died if it was absent. That guard was WRONG: docker on Linux MERGES certs.d with the HOST SYSTEM
+# STORE (moby daemon/pkg/registry/registry.go -> loadTLSConfig seeds RootCAs from x509.SystemCertPool
+# and APPENDS), so an operator who ran `update-ca-certificates` has a WORKING docker — and the guard
+# hard-blocked them. It was also wrong in the other direction: a stale/expired ca.crt in certs.d
+# PASSED the file check and then died 20 minutes later at `docker login` anyway.
+#
+# The only honest test of trust is a TRUST OPERATION. `login` does the real TLS handshake AND the auth,
+# for whichever engine we are, wherever that engine happens to read its CA from. It cannot false-fire,
+# and it needs no knowledge of certs.d rules. Do it FIRST, so a bad setup costs seconds, not a build.
+# (Login is also required before the push at the end, so this is not an extra round-trip — it is the
+# same one, moved to where its failure is cheap.)
+log_info "probing Harbor trust + auth with $ENGINE (before the build, so a failure costs seconds)"
+login_args=(--username "$HARBOR_USERNAME" --password-stdin)
+[ "$ENGINE" = podman ] && login_args=(--tls-verify="$TLS_VERIFY" "${CERT_DIR_ARG[@]}" "${login_args[@]}")
+if ! printf '%s' "$HARBOR_PASSWORD" | "$ENGINE" login "${login_args[@]}" "$HARBOR_URL" >/dev/null 2>&1; then
+  log_error "$ENGINE cannot authenticate to Harbor at ${HARBOR_URL}."
+  if [ "$ENGINE" = podman ]; then
+    log_error "  podman takes the CA per-command. Check HARBOR_CA_FILE points at Harbor's CA:"
+    log_error "      HARBOR_CA_FILE=${HARBOR_CA_FILE:-<unset>}"
+    log_error "      make fetch-harbor-ca     # re-fetch it"
+  else
+    # NO `docker info | grep -q rootless`: under `set -o pipefail`, grep -q exits at the first match
+    # and SIGPIPEs `docker info` (141), so the pipeline is non-zero and the `if` takes the WRONG
+    # branch even when "rootless" IS present. It is invisible on a rootful box (both branches agree).
+    # Read the field with --format instead — no pipe, no trap.
+    sec="$(docker info --format '{{range .SecurityOptions}}{{.}} {{end}}' 2>/dev/null || true)"  # docker-ok: only reached when the operator CHOSE CONTAINER_ENGINE=docker, so docker exists; never on the podman path
+    case "$sec" in
+      *rootless*) certd="${HOME}/.config/docker/certs.d/${HARBOR_URL}/ca.crt"; sudo_="" ;;
+      *)          certd="/etc/docker/certs.d/${HARBOR_URL}/ca.crt";            sudo_="sudo " ;;
+    esac
+    log_error "  Docker's DAEMON does the registry TLS, so the CA must be installed for the daemon."
+    log_error "  Install it (no daemon restart needed — certs.d is read per request):"
+    log_error "      ${sudo_}install -D -m0644 '${HARBOR_CA_FILE:-<HARBOR_CA_FILE unset — run: make fetch-harbor-ca>}' '${certd}'"
+    log_error "  Then re-run. Or use podman (the default, no sudo, nothing installed): unset CONTAINER_ENGINE"
+    [ "$TLS_VERIFY" = "false" ] && log_error "  NOTE: HARBOR_INSECURE=1 (plain HTTP) is PODMAN-ONLY — docker needs an insecure-registries entry."
+  fi
+  die "refusing to start a ~20-minute build that would fail at the push."
+fi
+log_info "Harbor trust + auth OK ($ENGINE)"
+
 # Base the builder on the MIRRORED maven image if pullable, else the public one.
 # Fully-qualified (docker.io/library/...) so podman — which does NOT assume a
 # default registry for short names — can resolve it. --tls-verify is podman-only.
@@ -78,12 +122,8 @@ run "$ENGINE" build \
   -t "$REF" \
   "${src}"
 
-log_info "logging in to Harbor and pushing $REF"
-# --tls-verify is a podman flag (docker uses daemon insecure-registries / certs.d).
-login_args=(--username "$HARBOR_USERNAME" --password-stdin)
-[ "$ENGINE" = podman ] && login_args=(--tls-verify="$TLS_VERIFY" "${CERT_DIR_ARG[@]}" "${login_args[@]}")
-printf '%s' "$HARBOR_PASSWORD" | run "$ENGINE" login "${login_args[@]}" "$HARBOR_URL"
-
+# Already logged in by the pre-build trust probe above — do not re-login per app.
+log_info "pushing $REF"
 push_args=("$REF")
 [ "$ENGINE" = podman ] && push_args=(--tls-verify="$TLS_VERIFY" "${CERT_DIR_ARG[@]}" "$REF")
 run "$ENGINE" push "${push_args[@]}"

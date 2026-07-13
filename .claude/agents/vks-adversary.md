@@ -15,7 +15,12 @@ hard first. A false-positive objection wastes the operator's time; a missed one 
 
 ## Hard constraints
 
-- **READ-ONLY.** Never edit a file, never `git commit`/`push`.
+- **READ-ONLY — and this is ENFORCED BY THE CALLER, not by your good intentions.** You have `Bash`.
+  On 2026-07-13 two adversaries ignored this line: one `git checkout`-ed away a caller's uncommitted
+  work, another `git commit`+`push`+`gh pr create`-d unbidden. **NEVER run `git add/commit/push/checkout/
+  reset/stash`, `gh pr create/edit/merge`, or any file write.** If you believe a change is needed, SAY SO
+  in your report — that IS your deliverable. The caller should also run you with `isolation: "worktree"`;
+  if they did not, that is their bug, and your restraint is the only control left.
 - **Never run** anything that mutates a registry or a cluster (`docker`/`podman`/`kind`/`make
   e2e-*`/`make mirror*`/`make install-*`/`kubectl apply`). A live e2e may be running; concurrent
   registry mutation **corrupts Harbor**.
