@@ -582,7 +582,11 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay ## Run all offline script-logic unit tests
+test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine ## Run all offline script-logic unit tests
+
+.PHONY: test-container-engine
+test-container-engine: ## Offline: podman is the DEFAULT engine (docker only as fallback); no operator-flow script requires docker
+	@./scripts/test-container-engine.sh
 
 .PHONY: test-state-overlay
 test-state-overlay: ## Offline: the stamped state overlay (unstamped=source, mismatch=ARCHIVE not delete, kind-down's delete contract)

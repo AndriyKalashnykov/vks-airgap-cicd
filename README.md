@@ -54,7 +54,7 @@ New here? Pick the path that matches your situation — each one is self-contain
 The VKS paths start from the jump-box **[Prerequisites](#prerequisites)** below.
 Run **`make check-tools`** to see which CLIs you have and which are required.
 
-> **Container engine:** podman or Docker on VKS (`CONTAINER_ENGINE`, podman preferred).
+> **Container engine:** **podman by default** on VKS — it trusts the self-signed Harbor CA per-command, sudo-free. Docker works only if you install that CA into the daemon yourself (`CONTAINER_ENGINE=docker` says so and stops).
 > `make e2e-kind` requires **Docker** specifically.
 
 ## Demo apps
@@ -176,7 +176,7 @@ It needs internet (dual-homed); a fully air-gapped host uses the carried bundle 
 - The Harbor **CA certificate** (`.env` → `HARBOR_CA_FILE`) — Harbor is self-signed HTTPS; Gitea is served over HTTP (no CA needed).
 - [mise](https://mise.jdx.dev/) for the rest of the toolchain (installed by `make deps`; git must already be present).
 - **Container engine:** image operations (mirror, Maven builder build/push, diagram
-  rendering) use `CONTAINER_ENGINE` — **podman-preferred**, docker fallback. `make deps`
+  rendering) use `CONTAINER_ENGINE` — **podman is the default**, docker the fallback. `make deps`
   installs the rootless-podman runtime deps per OS (crun + an active
   `unqualified-search-registries` on Photon; `uidmap` + `slirp4netns` on Ubuntu, which apt
   leaves out of a default podman install). The **local KinD end-to-end** additionally

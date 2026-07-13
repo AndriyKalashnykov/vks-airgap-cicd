@@ -2,18 +2,27 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 🛑 RULE ZERO — the adversary reviews your DESIGN, not just your diff (BLOCKING, read first)
+## 🛑 RULE ZERO — the adversaries review your DESIGN, not just your diff (BLOCKING, read first)
 
-**`.claude/agents/vks-adversary.md`** is a VMware VCF/VKS 9.1 + Kubernetes + ArgoCD + Harbor + Istio +
-Tekton specialist whose only job is to **REFUTE** what you come up with, on REAL-LAB grounds. A green
-KinD run proves nothing about the lab — that gap is the entire point of the agent.
+There are **TWO** adversaries. Both are BLOCKING. Each exists because a green run *here* cannot see
+the ground it hunts on.
 
-**It has THREE mandatory triggers. All are BLOCKING.**
+| Agent | Specialism | Its hunting ground — what a green run here CANNOT show |
+|---|---|---|
+| **`.claude/agents/vks-adversary.md`** | VMware VCF/VKS 9.1 + Kubernetes + ArgoCD + Harbor + Istio + Tekton | **the REAL LAB.** A green KinD run proves nothing about a Supervisor, a tenant's RBAC, a corporate PKI, or PSA `restricted`. |
+| **`.claude/agents/docker-adversary.md`** | Docker Engine + containerd + registry TLS trust (`certs.d`, `insecure-registries`, rootless, credential stores, BuildKit, kind's Docker coupling, Kaniko, crane, podman's per-command trust) | **the DAEMON, and a COLD box.** Your box has a warm `~/.docker/config.json`, a stale login, a CA possibly already in the system store, a rootful daemon, and BOTH engines installed. A fresh air-gapped jump box has none of that. |
+
+**Run EVERY docker/podman/engine/registry-trust design past `docker-adversary` BEFORE implementing it**
+(owner's standing instruction, 2026-07-13). It has already earned its keep: see the `fix/podman-default`
+entry in the handoff, where a "fail-fast" guard shipped a docker behaviour that **docker's own docs
+contradict**.
+
+**They have THREE mandatory triggers. All are BLOCKING.**
 
 | # | Trigger | When | Why |
 |---|---|---|---|
 | 1 | **START OF EVERY SESSION on this repo** | your FIRST substantive act — before you read your way into the code, before you plan, before you touch a file. Brief it with the handoff/backlog state and whatever you are about to do. | the inherited state is *itself* a set of claims (a prior session's findings, grades, "DONE" notes), and they are exactly the things that are wrong. It runs while you read — it costs you nothing to start it first. |
-| 2 | **BEFORE you implement** | the moment you have a DESIGN, a DECISION, a root-cause CLAIM, or a plan touching VKS/ArgoCD/Harbor/Istio/Tekton/the air gap — *before* writing the code | refuting a design costs one agent run; refuting shipped code costs a session. This trigger exists because it was MISSED: a fix for two CRITICALs was designed, and coding started, with no adversary in sight. |
+| 2 | **BEFORE you implement** | the moment you have a DESIGN, a DECISION, a root-cause CLAIM, or a plan. Touching VKS/ArgoCD/Harbor/Istio/Tekton/the air gap → **vks-adversary**. Touching docker/podman/the engine/registry trust/image builds → **docker-adversary**. Touching both (e.g. "make docker work against the lab's Harbor") → **BOTH**. Always *before* writing the code. | refuting a design costs one agent run; refuting shipped code costs a session. This trigger exists because it was MISSED: a fix for two CRITICALs was designed, and coding started, with no adversary in sight. |
 | 3 | **BEFORE you call the session done** | the stopping rule — no session is DONE without it | the findings are part of the deliverable |
 
 Triggers 1 and 2 collapse into one run when the session opens on a known task (brief it with the
@@ -32,8 +41,14 @@ Its findings are part of the deliverable: **fix them, or record each in the back
 evidence. If it produces nothing, that is a **blocker to report** — never quietly substitute your own
 review and move on.
 
-Subagents do **not** inherit skills or rules: `vks-adversary.md` carries the domain brief and the
-portfolio conventions in its own system prompt on purpose. Keep it current when a fact changes.
+Subagents do **not** inherit skills or rules: each adversary carries its domain brief and the
+portfolio conventions in its own system prompt on purpose. Keep them current when a fact changes.
+
+**Agent definitions load at SESSION START.** A newly-written `.claude/agents/*.md` is **not
+dispatchable in the session that created it** (`Agent type '<name>' not found`). If you must review a
+design in that same session, run the persona **inlined** into a `general-purpose` agent's prompt —
+the review still happens; only the shortcut is unavailable. (Learned 2026-07-13, creating
+`docker-adversary`.)
 
 ## What this repo is
 
