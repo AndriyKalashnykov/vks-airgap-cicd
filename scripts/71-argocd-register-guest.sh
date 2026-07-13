@@ -29,8 +29,52 @@ require_cmd kubectl "install kubectl (make deps)"
 # GUEST_KUBECONFIG : the workload cluster where javawebapp deploys (default: the flow's $KUBECONFIG).
 # ARGOCD_KUBECONFIG: the cluster the ArgoCD instance runs in (the Supervisor / the e2e ArgoCD box).
 GUEST_KUBECONFIG="${GUEST_KUBECONFIG:-${KUBECONFIG:?KUBECONFIG (guest cluster) must be set}}"
-: "${ARGOCD_KUBECONFIG:?ARGOCD_KUBECONFIG must point at the cluster ArgoCD runs in (the Supervisor / ArgoCD cluster)}"
+ARGOCD_KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}"
 : "${ARGOCD_NAMESPACE:?ARGOCD_NAMESPACE must be set (namespace the ArgoCD instance watches)}"
+
+# ---- IS REGISTRATION EVEN NEEDED? DERIVE IT; DO NOT REMEMBER IT ----------------------------------
+# `make gitops` used to force-run this whenever ARGOCD_KUBECONFIG was merely SET — which meant it
+# minted a cluster-admin ClusterRoleBinding on the guest even when both kubeconfigs pointed at the
+# SAME cluster (nothing to register), and it made the tenant path impossible: the README told tenants
+# not to set ARGOCD_KUBECONFIG (registration is admin-only), but 70 NEEDS it to write the Application.
+#
+# ARGOCD_REGISTER=auto|never|force
+#   auto  (default) — register only if ArgoCD is OFF-CLUSTER and the guest is not registered yet.
+#   never           — a TENANT: registration is someone else's job. Skip, quietly.
+#   force           — register even if it looks unnecessary.
+# shellcheck source=scripts/lib/argocd.sh
+. "${SCRIPT_DIR}/lib/argocd.sh"
+ARGOCD_REGISTER="${ARGOCD_REGISTER:-auto}"
+
+if [ "$ARGOCD_REGISTER" = never ]; then
+  log_info "ARGOCD_REGISTER=never — skipping guest-cluster registration (a tenant REQUESTS it from the platform team)."
+  exit 0
+fi
+if [ "$ARGOCD_REGISTER" != force ]; then
+  if ! argocd_is_off_cluster "$ARGOCD_KUBECONFIG" "$GUEST_KUBECONFIG" 2>/dev/null; then
+    log_info "ArgoCD runs in the SAME cluster as the workload — nothing to register."
+    exit 0
+  fi
+  guest_api="$(argocd_api_server "$GUEST_KUBECONFIG")"
+  already="$(kubectl --kubeconfig "$ARGOCD_KUBECONFIG" -n "$ARGOCD_NAMESPACE" \
+      get secret -l argocd.argoproj.io/secret-type=cluster \
+      -o go-template="$ARGOCD_CLUSTER_LIST_TEMPLATE" 2>/dev/null \
+    | argocd_pick_dest_server "$guest_api" "${ARGOCD_DEST_CLUSTER_NAME:-}" || true)"
+  if [ -n "$already" ]; then
+    log_info "the guest cluster is ALREADY registered with this ArgoCD ($already) — nothing to do."
+    exit 0
+  fi
+  # Registration mints a cluster-admin ClusterRoleBinding on the guest AND writes a Secret into the
+  # ArgoCD namespace. A tenant can do neither. Say so plainly instead of failing with a stack of
+  # Forbidden errors.
+  if [ "$(kubectl --kubeconfig "$ARGOCD_KUBECONFIG" auth can-i create secrets -n "$ARGOCD_NAMESPACE" 2>/dev/null || echo no)" != yes ]; then
+    log_warn "you may not create Secrets in ns/${ARGOCD_NAMESPACE} on the ArgoCD cluster — registration is ADMIN-only."
+    log_warn "  REQUEST from your platform team: register guest cluster '$(kubectl --kubeconfig "$GUEST_KUBECONFIG" config current-context 2>/dev/null || echo guest)' ($guest_api) as an ArgoCD destination."
+    log_warn "  Then set ARGOCD_DEST_CLUSTER_NAME (the name they registered it under) and re-run 'make gitops'."
+    log_warn "  Skipping registration (set ARGOCD_REGISTER=never to silence this)."
+    exit 0
+  fi
+fi
 ARGOCD_MANAGER_SA="${ARGOCD_MANAGER_SA:-argocd-manager}"
 ARGOCD_MANAGER_NS="${ARGOCD_MANAGER_NS:-kube-system}"
 [ -f "$GUEST_KUBECONFIG" ]  || die "GUEST_KUBECONFIG not found: $GUEST_KUBECONFIG"

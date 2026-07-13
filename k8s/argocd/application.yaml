@@ -18,10 +18,11 @@ spec:
     targetRevision: ${ARGOCD_TRACK_BRANCH}
     path: .
   destination:
-    # In-cluster by default (KinD / ArgoCD-in-guest). On a real lab where ArgoCD runs on the
-    # Supervisor, `make argocd-register-guest` registers the guest cluster and sets
-    # ARGOCD_DEST_SERVER to its API URL so ArgoCD deploys THERE, not on the Supervisor.
-    server: ${ARGOCD_DEST_SERVER}
+    # Rendered as EITHER `server: <api-url>` OR `name: <registered cluster name>` — ArgoCD accepts
+    # both, and a TENANT often has only the name: the cluster Secrets live in the ArgoCD admin's
+    # namespace, which they may not list. In-cluster by default (KinD / ArgoCD-in-guest); on a real
+    # lab the guest must be a REGISTERED destination or ArgoCD would deploy onto the Supervisor.
+    ${ARGOCD_DEST_KEY}: ${ARGOCD_DEST_VALUE}
     namespace: ${APP_NAMESPACE}
   syncPolicy:
     automated:

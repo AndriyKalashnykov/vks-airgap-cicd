@@ -248,11 +248,12 @@ argocd-register-guest: ## Register the guest cluster as an ArgoCD destination (r
 	@$(SCRIPTS)/71-argocd-register-guest.sh
 
 .PHONY: gitops
-gitops: ## Wire ArgoCD to track javawebapp-deploy (auto-registers the guest cluster when ArgoCD is off-cluster: ARGOCD_KUBECONFIG set)
-	@if [ -n "$(ARGOCD_KUBECONFIG)" ]; then \
-	  echo "==> ArgoCD is off-cluster (ARGOCD_KUBECONFIG set) — registering the guest cluster as an ArgoCD destination first"; \
-	  $(MAKE) argocd-register-guest; \
-	fi
+gitops: ## Wire ArgoCD to each <app>-deploy repo (registers the guest cluster first, but only if that is actually needed AND permitted)
+	@# 71 DERIVES whether registration is needed (ArgoCD off-cluster? guest not registered yet?) and
+	@# whether we may do it. It used to be gated on `[ -n "$$ARGOCD_KUBECONFIG" ]` — i.e. REMEMBERING,
+	@# which also force-ran the ADMIN-only register (it mints a cluster-admin ClusterRoleBinding) even
+	@# when both kubeconfigs pointed at the SAME cluster.
+	@$(SCRIPTS)/71-argocd-register-guest.sh
 	@$(MAKE) configure-argocd
 
 ##@ Access (URLs + logins)
@@ -384,6 +385,10 @@ verify-ingress-both: check-env ## Matrix: install + route-verify BOTH ingress co
 
 # Same fresh-box fidelity as e2e-kind (a trailing '#' comment here would land INSIDE the
 # value — make keeps the whitespace — so the note lives on its own line).
+.PHONY: e2e-kind-tenant
+e2e-kind-tenant: ## Prove the TENANT write path (argocd-server, zero k8s RBAC in the ArgoCD ns) — run after e2e-kind
+	@$(SCRIPTS)/91-e2e-tenant-mechanism.sh
+
 .PHONY: e2e-kind-istio-existing
 e2e-kind-istio-existing: export SKIP_DOTENV = $(E2E_SKIP_DOTENV)
 e2e-kind-istio-existing: ## KinD e2e for the ATTACH mode: a "platform team" installs Istio (foreign naming) -> we attach, installing nothing
