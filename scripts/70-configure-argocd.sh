@@ -115,8 +115,10 @@ if [ "$ARGOCD_OFF_CLUSTER" = "1" ]; then
   # team has registered MANY tenants' guest clusters here, so "just take the first one" is not a
   # shortcut — it is a way to deploy THIS tenant's app into ANOTHER tenant's cluster, with
   # prune:true + selfHeal:true. We match exactly, or we refuse.
+  # The clusters registered with THIS ArgoCD, as `<name>\t<server>` lines. The template is a library
+  # constant (lib/argocd.sh) because WHICH FIELD it reads is a contract — see the comment there.
   REGISTERED="$(ka -n "$ARGOCD_NAMESPACE" get secret -l argocd.argoproj.io/secret-type=cluster \
-    -o go-template='{{range .items}}{{.metadata.name}}{{"\t"}}{{.data.server | base64decode}}{{"\n"}}{{end}}' 2>/dev/null || true)"
+    -o go-template="$ARGOCD_CLUSTER_LIST_TEMPLATE" 2>/dev/null || true)"
 
   if [ -z "$REGISTERED" ]; then
     log_error "ArgoCD is off-cluster, but NO guest cluster is registered as an ArgoCD destination."
