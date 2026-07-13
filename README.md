@@ -1447,15 +1447,21 @@ seeding, Tekton, ArgoCD, the ingress, PSA and the gates all loop over it. **Addi
 row** (a new *language* is that row plus one `case` branch in `scripts/lib/apps.sh`):
 
 ```tsv
-# name        lang  src                   deploy             host_var
-javawebapp    java  apps/java/javawebapp  deploy/javawebapp  JAVAWEBAPP_HOST
-gowebapp      go    apps/go/gowebapp      deploy/gowebapp    GOWEBAPP_HOST
+# name        lang  src                   deploy
+javawebapp    java  apps/java/javawebapp  deploy/javawebapp
+gowebapp      go    apps/go/gowebapp      deploy/gowebapp
 ```
 
 Each app gets: its own Gitea repos (`<app>-app` + `<app>-deploy`), its own Tekton `Pipeline`
 (`<app>-ci`) and `Trigger`, its own Harbor repo, its own namespace, its own ArgoCD `Application`,
 its own ingress host — and `make verify` proves **each app independently** (its own marker on its
-own page). `make check-app-hardcodes` fails the build if any shared file names an app.
+own page). `make check-app-hardcodes` fails the build if any shared file (**including
+`.env.example`**) names an app — that is the gate that keeps "one row" true.
+
+The **ingress hostname is derived, not configured**: an app is reachable at
+**`<app>.${APP_DOMAIN}`** (`APP_DOMAIN=vks.local`, one global in `.env.example`). There is no
+per-app `<APP>_HOST` variable — there used to be, and it meant a new row silently died until you
+*also* edited `.env.example`, so "one row" was a lie the gates could not see.
 
 Only two things differ per language: which Tekton task runs the tests (`maven-test` / `go-test`),
 and where `verify` injects its marker. Both live in `scripts/lib/apps.sh`.

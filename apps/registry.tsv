@@ -5,16 +5,21 @@
 # Adding an app is a ROW plus (only if it is a new language) one `case` branch in lib/apps.sh.
 #
 # Why a file and not .env.example: this is STRUCTURE (which apps exist), not a tunable. Same shape
-# as images/images.txt — an inventory the code iterates. The per-app values an operator may
-# actually want to change (hostnames) still live in .env.example and are referenced here by name.
+# as images/images.txt — an inventory the code iterates.
+#
+# The ingress HOSTNAME is DERIVED, not listed: app_host() (lib/apps.sh) returns <name>.${APP_DOMAIN},
+# where APP_DOMAIN is ONE global in .env.example. There used to be a 5th column naming a per-app
+# `<APP>_HOST` variable — which meant adding an app was a row here PLUS a line in .env.example, and
+# no gate could see the second edit. Deriving it is what makes "ONE ROW" literally true (and it is
+# also what lets a shared Istio Gateway admit every app at once with a single `*.${APP_DOMAIN}`).
 #
 # COLUMNS (tab-separated):
 #   name      the app + its k8s namespace + its Harbor repo + its Gitea repos (<name>-app/-deploy)
+#             + its ingress host (<name>.${APP_DOMAIN})
 #   lang      java | go — selects the Tekton test task and the marker-rewrite rule (lib/apps.sh)
 #   src       source dir; this dir IS the content of the <name>-app Gitea repo
 #   deploy    kustomize dir; this dir IS the content of the <name>-deploy Gitea repo
-#   host_var  the .env variable holding its ingress hostname (so hostnames stay operator-tunable)
 #
-# name		lang	src			deploy			host_var
-javawebapp	java	apps/java/javawebapp	deploy/javawebapp	JAVAWEBAPP_HOST
-gowebapp	go	apps/go/gowebapp	deploy/gowebapp	GOWEBAPP_HOST
+# name		lang	src			deploy
+javawebapp	java	apps/java/javawebapp	deploy/javawebapp
+gowebapp	go	apps/go/gowebapp	deploy/gowebapp

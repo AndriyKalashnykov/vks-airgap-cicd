@@ -120,7 +120,7 @@ check-env-clobber: ## Gate: an UNCOMMENTED .env.example value must not shadow a 
 	@$(SCRIPTS)/check-env-clobber.sh
 
 .PHONY: check-app-hardcodes
-check-app-hardcodes: ## Gate: no shared script/manifest/Makefile may NAME an app — everything derives from apps/registry.tsv
+check-app-hardcodes: ## Gate: no shared script/manifest/Makefile/.env.example may NAME an app — everything derives from apps/registry.tsv
 	@$(SCRIPTS)/check-app-hardcodes.sh
 
 .PHONY: check-app-toolchains

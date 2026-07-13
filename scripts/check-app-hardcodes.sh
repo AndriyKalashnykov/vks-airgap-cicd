@@ -25,7 +25,15 @@ cd "$REPO_ROOT"
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
 
-# Files that MUST be app-agnostic: the shared scripts, the shared manifests, the Makefile.
+# Files that MUST be app-agnostic: the shared scripts, the shared manifests, the Makefile, and
+# .env.example.
+#
+# .env.example is here because it was the ONE required second edit the gate could not see: adding a
+# row to apps/registry.tsv used to ALSO require a `<APP>_HOST=<app>.vks.local` line here, or the new
+# app died in app_host(). So "adding an app is ONE ROW" was certified by a gate that was blind to the
+# second edit. The host is now DERIVED (<app>.${APP_DOMAIN}) and this file may no longer name an app
+# in a VALUE — if it does, a required per-app edit has crept back in.
+#
 # (An app's own dirs — apps/<lang>/<app>/, deploy/<app>/ — obviously name it, as does the registry.)
 # `--others --exclude-standard` alongside `--cached`: a NEW, not-yet-`git add`ed script is exactly
 # where a hardcode gets written, and a tracked-files-only list gives it a free pass locally — the
@@ -34,7 +42,7 @@ cd "$REPO_ROOT"
 # out via --exclude-standard.
 mapfile -t TARGETS < <(
   git ls-files --cached --others --exclude-standard \
-    'scripts/*.sh' 'scripts/lib/*.sh' 'k8s/**/*.yaml' 'Makefile' 'renovate.json' 2>/dev/null | sort -u
+    'scripts/*.sh' 'scripts/lib/*.sh' 'k8s/**/*.yaml' 'Makefile' 'renovate.json' '.env.example' 2>/dev/null | sort -u
 )
 
 rc=0

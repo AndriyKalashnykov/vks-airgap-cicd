@@ -41,13 +41,14 @@ app_lang()   { app_field "$1" 2; }
 app_src()    { app_field "$1" 3; }
 app_deploy() { app_field "$1" 4; }
 
-# app_host <name> — resolve the app's ingress hostname through the .env variable named in the
-# registry (indirect expansion), so hostnames stay operator-tunable in .env.example.
+# app_host <name> — the app's ingress hostname, DERIVED: <name>.${APP_DOMAIN}.
+#
+# It used to be read through a per-app `<APP>_HOST` variable named in a 5th registry column — which
+# made "adding an app is ONE ROW" false (the row died at `app_host` until you ALSO added the var to
+# .env.example), and no gate could see that second edit. Deriving it removes the second edit instead
+# of policing it: the only tunable left is the DOMAIN, and it is ONE global.
 app_host() {
-  local var; var="$(app_field "$1" 5)"
-  local val="${!var:-}"
-  [ -n "$val" ] || die "app '$1': ${var} is not set (add it to .env.example / .env)"
-  printf '%s' "$val"
+  printf '%s.%s' "$1" "${APP_DOMAIN:?APP_DOMAIN is not set (it is in .env.example; scripts get it via load_env)}"
 }
 
 # --- per-LANGUAGE behaviour #1: which Tekton task runs the tests -----------------------------
