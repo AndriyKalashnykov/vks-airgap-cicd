@@ -50,6 +50,12 @@ token.md
 # exclude the CONTENTS, not the directory.)
 .claude/*
 !.claude/agents/
+# The subagent read-only gate is a SAFETY CONTROL, not a preference: without it an adversary can
+# (and did) destroy uncommitted work and open a PR unbidden. It must travel with the repo, or it
+# protects exactly one machine. `settings.json` is the wiring; `hooks/` is the gate itself.
+# (settings.local.json stays ignored — that one IS per-operator.)
+!.claude/settings.json
+!.claude/hooks/
 
 # Serializes registry-mutating work (see with_registry_lock in scripts/lib/os.sh)
 .registry.lock
