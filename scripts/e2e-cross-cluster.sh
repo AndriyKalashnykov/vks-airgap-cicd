@@ -81,7 +81,26 @@ log_info "PASS A: HUB has Cluster secret '$sec' → server $reg_server"
 tok="$(hub -n "$ARGOCD_NS" get secret "$sec" -o jsonpath='{.data.config}' | base64 -d | sed -n 's/.*"bearerToken":"\([^"]*\)".*/\1/p')"
 [ -n "$tok" ] || die "FAIL: no bearerToken in the Cluster secret config"
 guest_host_server="$(guest config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
-if kubectl --server "$guest_host_server" --token "$tok" --insecure-skip-tls-verify get nodes >/dev/null 2>&1; then
+# The token goes into a umask-077 kubeconfig FILE, never onto argv: `kubectl --token=<secret>` is
+# visible to any local user via `ps -ef` / /proc/<pid>/cmdline for the life of the process. Same rule
+# as the rest of this repo (common/security.md) — a throwaway kind cluster is not an excuse.
+tok_kc="${WORK}/argocd-manager.kubeconfig"
+( umask 077; cat > "$tok_kc" <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+  - name: g
+    cluster: { server: ${guest_host_server}, insecure-skip-tls-verify: true }
+contexts:
+  - name: g
+    context: { cluster: g, user: argocd-manager }
+current-context: g
+users:
+  - name: argocd-manager
+    user: { token: ${tok} }
+EOF
+)
+if kubectl --kubeconfig "$tok_kc" get nodes >/dev/null 2>&1; then
   log_info "PASS B: the registered argocd-manager token authenticates to GUEST (credential is valid + durable)"
 else
   die "FAIL: the registered token does NOT authenticate to GUEST — registration credential is broken"
