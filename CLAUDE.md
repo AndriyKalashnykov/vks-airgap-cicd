@@ -517,7 +517,10 @@ surviving the `.env.example` clobber; and the ingress-gateway-off-by-default fac
 `istio_ensure_gwapi_crds` passed `static-check` + `docs-lint`. **That means it lints. It does NOT mean
 the CRDs install.** `make e2e-kind` was not run on it.
 
-**Run `make e2e-kind`** (~20–40 min, **alone** — concurrent registry work corrupts Harbor). It must show:
+**Run `make e2e-kind`** (~20–40 min, and **alone** — run the e2es serially; they mutate a shared
+cluster + registry, so parallel work makes a failure unattributable. Note: the old claim that
+"concurrent registry work **corrupts Harbor**" was a **MISDIAGNOSIS** — see the Harbor section below).
+It must show:
 
 1. the CRDs are applied with **`--server-side`** — required, not a preference: the bundle exceeds the
    256 KiB `last-applied-configuration` limit that client-side apply writes;
@@ -569,7 +572,7 @@ Harbor over self-signed TLS with an engine*. Everything it does run is **crane**
 **The honest harness** (this is the task):
 
 1. Extend `jumpbox-run.sh` to actually run `make builder-image` (+ a Harbor pull) — for **both** engines. Without this, neither claim is tested.
-2. Add a docker-capable jump-box image (`Dockerfile.ubuntu-docker`, dind — the harness already runs `--privileged`). **Do NOT mount the host docker socket**: that puts you back on the host daemon (which has kind's containers) and proves nothing, and it re-opens the concurrent-registry-mutation hazard that has already corrupted a Harbor here.
+2. Add a docker-capable jump-box image (`Dockerfile.ubuntu-docker`, dind — the harness already runs `--privileged`). **Do NOT mount the host docker socket**: that puts you back on the host daemon (which has kind's containers), so the "docker-only jump box" would be running against the very box it is supposed to be independent of — it proves nothing. (The old second reason given here — "it re-opens the concurrent-registry-mutation hazard that has already corrupted a Harbor" — was based on a **misdiagnosis**; see the SETTLED Harbor section. The first reason is the real one and is sufficient.)
 3. Install the CA **the way a real operator would**, per engine, *inside* the container, and record which method was needed. Root-inside-a-container is what makes the sudo question **honest** rather than hidden.
 4. Replace the fail-fast with a **pre-build `$ENGINE login` probe** (before the `pull` at `15:~65`, not after a 20-minute build). It tests whether trust *works* instead of guessing from a filename, cannot false-fire, and needs no knowledge of where the daemon reads certs.
 
@@ -586,6 +589,55 @@ are reachable) and an inlined persona ran as `general-purpose` (**all** tools, i
 **A prompt is not a sandbox.** Run adversaries with **`isolation: "worktree"`** so they physically
 cannot reach the main tree. Nothing was lost only because the destroyed file held the guard that was
 being retracted anyway — that is luck, not a control.
+
+## 🔴 SETTLED 2026-07-13 — Harbor's "blob-store corruption" was NEVER concurrency — it was US
+
+**Do not re-derive this, and do not re-blame concurrency.** Root-caused from the box (disk contents,
+Redis dbsize, a hand-reproduced blob GET), fixed, and empirically proven.
+
+The registry's blob store was an **emptyDir** (`persistence.enabled=false`), and `install-harbor`
+**helm-upgraded unconditionally twice per run** — phase 1 downgrading a TLS-enabled Harbor back to
+TLS-off, phase 2 re-enabling it. Each upgrade **rolled the registry pod and destroyed the whole
+mirror**. That alone would have been loud.
+
+What made it **silent**: `harbor-redis` is a **different pod** and does not roll, and the registry
+caches blob **descriptors** there (`cm/harbor-registry`: `cache.layerinfo: redis`, `db: 2`). After the
+wipe the cache still answered `HEAD /v2/<repo>/blobs/<digest>` with **200** — so `crane`,
+*spec-correctly*, read that as "already present", **skipped every upload**, printed `existing blob:`
+and exited **0**. `make mirror` reported 36/36 pushed. On disk: **153 manifest links, ZERO blobs**; a
+blob GET returned `200 OK` + the right `Content-Length` + **zero bytes of body**. `mirror-verify` was
+the only thing in the repo that ever saw it.
+
+**Why the concurrency story survived so long:** it predicts every symptom (HEAD-200 blobs that aren't
+stored, `MANIFEST_UNKNOWN`/`BLOB_UNKNOWN` in Kaniko, a re-push that "succeeds" and changes nothing),
+and its prescribed cure — a clean `kind-down && e2e-kind` — genuinely works, **because it destroys
+Redis**, not because it avoids concurrency. Two tells refute it: the failure took out **36 of 36**
+images (a *wipe*; a write race damages *some*), and the failing run had **no concurrent load at all**.
+**Reflex: before accepting "it's a race", check whether it is DETERMINISTIC.** A race that reproduces
+100% of the time on a warm cluster is not a race.
+
+**The fix** (`scripts/06-install-harbor.sh`, `Makefile`, `scripts/15-build-push-builder.sh`):
+
+- `persistence.enabled=true` — the blob store gets a **PVC** (KinD's default `standard` SC, already
+  used by `ci`/`gitea`), so it outlives the pod and the cache cannot describe a store that is gone.
+- phase 1 runs **only on a first install** — no more TLS-off downgrade, no more double registry roll.
+- phase 2 applies the **full desired values**, not `--reuse-values`, which had made the TLS mode
+  **sticky** (an insecure re-install of a secure Harbor set `externalURL=http://` but left TLS **on**).
+- the registry's Redis descriptor cache is **flushed** after an upgrade; the DB index is **read from
+  `cm/harbor-registry`**, never guessed (flushing the wrong DB would silently clear someone else's keys).
+- **`make mirror` now depends on `mirror-verify`.** A push you have not verified is not a mirror:
+  `crane` establishes blob existence with a **HEAD**, so a lying registry makes the push a no-op.
+- `15-build-push-builder.sh` no longer **silently falls back to the public Docker Hub base** when the
+  mirrored one won't pull. On a dual-homed box that turns a broken mirror into a **green build** that
+  proves nothing about the air gap — it would have masked exactly this bug. It is now a hard failure
+  unless you ask for it by name (`ALLOW_PUBLIC_BASE=1`).
+
+**PROVEN:** cold cluster → `make mirror` green → `kubectl -n harbor rollout restart deploy/harbor-registry`
+with **zero concurrent load** → `make mirror-verify` still reports **36/36 intact**. Before the fix,
+that same restart destroyed everything.
+
+**Still run the e2es serially** — not because of blob corruption, but because they mutate a shared
+cluster + registry and parallel work makes a failure unattributable.
 
 ## Verification honesty
 
