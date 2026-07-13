@@ -187,7 +187,7 @@ load_env() {
   # A variable that selects WHICH CLUSTER you are talking to must be owned by the caller. Config may
   # supply a DEFAULT; it may not overrule an explicit choice.
   local _sel _snap_names="" _snap_vals=""
-  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG; do
+  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME; do
     if [ -n "${!_sel:-}" ]; then
       _snap_names="${_snap_names} ${_sel}"
       _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'

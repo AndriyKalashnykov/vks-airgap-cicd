@@ -19,7 +19,20 @@ load_env
 CLUSTER_NAME="${KIND_CLUSTER_NAME:?KIND_CLUSTER_NAME must be set in .env.example}"
 NODE_IMAGE="${KIND_NODE_IMAGE:-}"
 CPK_VERSION="${CLOUD_PROVIDER_KIND_VERSION:?CLOUD_PROVIDER_KIND_VERSION must be set in .env.example}"
-KUBECONFIG_PATH="${KUBECONFIG:?KUBECONFIG must be set in .env.example}"
+# The KinD flow writes its OWN kubeconfig, at its OWN path — NEVER to whatever $KUBECONFIG points at.
+#
+# It used to do `KUBECONFIG_PATH="${KUBECONFIG:?}"` and then `kind get kubeconfig > "$KUBECONFIG_PATH"`,
+# i.e. it wrote to a CALLER-CONTROLLED path. Anyone who set KUBECONFIG in .env (which .env.example
+# invites) already had that file truncated; the uncommented .env.example pin was only an ACCIDENTAL
+# SHIELD redirecting it to ./secrets/vks.kubeconfig. Once load_env began honouring the caller's
+# KUBECONFIG (so a two-cluster test could be driven at all), the shield came off — a developer with an
+# ordinary `export KUBECONFIG=~/.kube/config` would have had it OVERWRITTEN, and then DELETED by
+# `make kind-down`, which removes the kubeconfig this flow recorded.
+#
+# A flow writes only what it owns, and destroys only what it created.
+# Not an env var: this path is OWNED by the KinD flow, not an operator knob. (Making it settable
+# would just re-open the hole from the other side.)
+KUBECONFIG_PATH="${REPO_ROOT}/secrets/kind.kubeconfig"
 READY_TIMEOUT="${READY_TIMEOUT_SECONDS:-300}"
 POLL_INTERVAL="${POLL_INTERVAL_SECONDS:-5}"
 KIND_CONFIG="${REPO_ROOT}/kind/kind-config.yaml"
