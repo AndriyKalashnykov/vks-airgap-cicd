@@ -373,6 +373,47 @@ session that quoted it. Prose did not hold. That is the signature of a missing g
 > - The uid-1000-vs-1001 asymmetry between the images has already broken CA *readability* once
 >   (a 0600 CA the Ubuntu `vks` user could not read → a TLS error that named trust, not permissions).
 
+### 📋 PLANNED — make `docs/scenario-1.md` ACTIONABLE (it is the admin runbook; it currently reads like a paper)
+
+The first instance of the "mechanism essay" review above, and the highest-value one: **Scenario 1 is
+the document an admin actually executes on a real lab.** Today it explains, cites, and caveats — and
+leaves the operator to assemble the commands. Rewrite it so **every step has exactly three parts**:
+
+| Part | Rule |
+|---|---|
+| **What it's for** | ONE line. Why this step exists at all. Not how it works internally. |
+| **What to run** | The literal command(s). If a step is not runnable (a vSphere Client click-path), say so plainly and give the click-path — do not dress it up as a command. |
+| **What to expect** | The **observable** that proves it worked — the object that appears, the field that becomes non-empty, the URL that answers. Not "it should succeed". |
+
+**Do not make the operator type the same value a million times.** Every value that recurs across steps
+(`HARBOR_URL`, `HARBOR_CA_FILE`, the Supervisor host, the vSphere Namespace, the cluster name, the
+ArgoCD server, the app domain) MUST come from `.env` and be referenced as `$VAR` — never re-typed
+literally in step 7 after being typed in step 3. Where a value can be **discovered**, discover it
+(`make env-populate` already does this for the cluster-derived ones) and say so instead of asking for it.
+
+**Automate anything typed more than once into a `make` target**, and reduce the doc to that target
+plus its expected output. Candidates already visible: the Harbor-CA fetch (`make fetch-harbor-ca`),
+the version truth (`make argocd-preflight`), the mesh interrogation (`make istio-preflight`), the PSA
+check (`make psa-check`). If a step is a bare `kubectl` incantation the operator would paste twice, it
+is a missing target.
+
+**The completion test** (this is what "actionable" means, mechanically): a competent admin who has
+never read this repo can execute Scenario 1 top-to-bottom **without opening any other file** and,
+after each step, can tell from the printed output whether it worked. If they have to infer a value,
+re-type one, or go read a script to know what should have happened — that step is not done.
+
+**Known content bugs to fix in the same pass** (do not paper over them):
+
+- **The Istio/ingress section is wrong for Scenario 1** — it says *"the mesh ALREADY EXISTS here;
+  attach to it"*, which is **Scenario 2's** (tenant) situation pasted into the admin path. In
+  Scenario 1 the admin provisions the guest cluster themselves; a VKS **Standard Package** is
+  *available* in the package repo, **not installed**, so there is no mesh until someone installs it.
+  (And per `docs/vks-services/istio.md:24` the ingress gateway is **disabled by default** even then.)
+  **Istio is NOT a Supervisor Service** — Harbor/ArgoCD/Contour are; Istio is a **guest-cluster
+  Standard Package**. Adversary review of the fix was in flight at handoff; do not ship a
+  `vcf package install istio …` command that has not been verified against a primary source.
+- Anything else that assumes state a greenfield admin cluster does not have.
+
 ### ⛔ NEXT TASK — prove the docker-only claim, and DO NOT do it with `make e2e-kind`
 
 The owner wants: *"we use podman by default; prove the e2e ALSO works with docker only, then claim it in `*.md`."*
