@@ -24,7 +24,7 @@ the new version).
 > `HARBOR_PASSWORD` while every local run was green. Use your own `.env` with
 > `make e2e-kind E2E_SKIP_DOTENV=0`.
 >
-> The real-lab discovery (Scenario 1/2) is the manual parallel of the same thing.
+> The VKS discovery (Scenario 1/2) is the manual parallel of the same thing.
 
 ```bash
 make env-init                 # optional for KinD (it fills .env.kind for you); pins known demo secrets if you want them
@@ -59,11 +59,11 @@ How the local stand-in works:
   that fronts the Gitea/app/Tekton-Dashboard UIs at `*.vks.local`, so
   you reach them by hostname instead of `kubectl port-forward`. **Harbor and ArgoCD each keep
   their own direct LB** — Harbor's IP is load-bearing for the containerd pull path, and ArgoCD
-  gets its own self-signed-TLS LB (like the real VKS lab, which does not front ArgoCD behind
+  gets its own self-signed-TLS LB (like the VKS, which does not front ArgoCD behind
   the shared ingress). Both ingress images are mirrored into Harbor.
 
-> **This is the only path where we install Istio.** A real VKS lab already has it (Istio ships as a
-> **VKS Standard Package** in the guest cluster), so both real-lab scenarios **attach** to the
+> **This is the only path where we install Istio.** A VKS already has it (Istio ships as a
+> **VKS Standard Package** in the guest cluster), so both VKS scenarios **attach** to the
 > existing mesh instead — see their ingress step. Full reference:
 > [`docs/vks-services/istio.md`](vks-services/istio.md).
 
