@@ -277,13 +277,58 @@ the real demo is the live VKS run — so the KinD e2e stays a local `make` targe
 than a CI job. Run it locally (and both ingress controllers via `make verify-ingress-both`)
 when changing the pipeline, ingress, or manifests.
 
-## 🚨 ADVERSARY FINDINGS 2026-07-12 — UNFIXED (read before touching anything)
+## 🚨 ADVERSARY FINDINGS 2026-07-12 — STATUS (read before touching anything)
 
-The `vks-adversary` review (the stopping rule's first run) found **two CRITICALs that make the REAL
-LAB impossible** plus 6 more. Only #3 is fixed. Everything else is OPEN. Grades: `KinD-verified` /
-`9.0-doc-inferred-for-9.1` / `primary-sourced` / `UNVERIFIED`.
+The `vks-adversary` review found **two CRITICALs that make the REAL LAB impossible** plus 6 more.
+Grades: `KinD-verified` / `9.0-doc-inferred-for-9.1` / `primary-sourced` / `UNVERIFIED`.
 
-**#3 is DONE and e2e-verified (#146). #1/#2 are next — the fix is designed (below), not written.**
+| # | What | Status |
+|---|---|---|
+| **#1** | `make gitops` targets the WRONG CLUSTER | **FIXED** (#153) — KinD-verified; NOT lab-verified |
+| **#2** | the Application's `repoURL` is guest-internal DNS | **FIXED** (#153) — Gitea got its own LoadBalancer |
+| **#3** | the ATTACH-mode e2e was dead code | **DONE + e2e-verified** (#146) |
+| **#4** | `project: default` hardcoded, not even overridable | **FIXED** (#153) — `ARGOCD_PROJECT` |
+| **#5** | private Harbor: NO `imagePullSecret` anywhere | **OPEN** — next |
+| **#6** | app namespaces get PSA labels only from the ingress step | **FIXED** (#153) — `70` labels them at creation |
+| **#7** | the "ONE ROW" gate can't see the 2nd required edit | **FIXED** (#151) — host is DERIVED; one row is now literally true |
+| **#8** | token in argv · language knowledge in a shared task | **half FIXED** (#150 = the build-arg); the argv token is OPEN |
+
+**A SECOND adversary run (on the FIX for #1/#2, before it was written — RULE ZERO trigger 2) refuted
+the first design.** What it changed, and why it matters more than the original bugs:
+
+- **Fixing #1 alone is MORE DANGEROUS than the bug.** `70` currently fails fast only *by accident*
+  (the guest has no ArgoCD namespace). Make the apply succeed on the Supervisor while the
+  destination still defaults to `https://kubernetes.default.svc` — "the cluster ArgoCD runs in" —
+  and the first misconfigured lab run deploys the tenant's app **onto the Supervisor**, with
+  prune+selfHeal. The topology is therefore **DERIVED** from the two kubeconfigs, never remembered
+  from `.env.kind` (which `make kind-down` deletes and a fresh checkout never had).
+- **`GITEA_ARGOCD_URL` had NO valid value.** Gitea was `ClusterIP`-only, and the only off-cluster
+  route matches the hostname `gitea.vks.local` — which exists **solely in the operator's
+  `/etc/hosts`**. A Supervisor repo-server can't resolve it, and dialling the ingress IP sends
+  `Host: <ip>` → matches no vhost → **404, not a clone**. Fix: **Gitea gets its own LoadBalancer**,
+  exactly as Harbor and ArgoCD each already have.
+- **"Fail on ComparisonError" is a FALSE-GREEN.** An Application ArgoCD never reconciled has *no
+  status at all*, so absence-of-error passes vacuously; and the seeded repos are **public**, so
+  ArgoCD silently falls back to an **anonymous clone** on a repo-Secret URL miss — a wholly broken
+  credential still Syncs green. The gate now asserts a POSITIVE signal (`.status.sync.revision`,
+  which is only set after repo-server actually fetched the repo).
+
+**THE LOAD-BEARING UNVERIFIED QUESTION (blocks a real lab; no KinD e2e can ever answer it, because
+both kubeconfigs there are cluster-admin):** may a VKS **tenant** create `Application`s / repo
+Secrets in the ArgoCD instance's vSphere Namespace at all? Broadcom has a **cloud administrator**
+create that instance, and a tenant's realistic grant is **ArgoCD RBAC via `argocd-server`** (an
+AppProject role) — *not* Kubernetes RBAC. If so, `kubectl apply` is the **wrong mechanism**, not an
+incomplete one. Two commands settle it in 30 seconds on a lab:
+
+```bash
+kubectl --kubeconfig "$ARGOCD_KUBECONFIG" -n "$ARGOCD_NAMESPACE" auth can-i create applications.argoproj.io
+kubectl --kubeconfig "$ARGOCD_KUBECONFIG" -n "$ARGOCD_NAMESPACE" auth can-i create secrets
+```
+
+Until then `70-configure-argocd.sh` **measures** it (`auth can-i`) and, if refused, prints exactly
+what to request from the platform team — rather than assuming the write lands.
+Also `UNVERIFIED`: whether a Supervisor can route to a **guest LoadBalancer VIP** (NSX/AVI-dependent;
+NOT implied by Supervisor→guest-API reachability). If it cannot, #2's fix needs another address.
 
 ### #1 CRITICAL — `make gitops` creates the Applications on the WRONG CLUSTER (real lab dead)
 
