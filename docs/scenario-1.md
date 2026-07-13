@@ -30,13 +30,12 @@ Reference docs:
 ·
 [Install the Argo CD Service](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-argo-cd-service/install-argo-cd-service.html).
 
-> **Doc-provenance note (corrected 2026-07-13).** The **explicit `/9-1/` techdoc URLs serve REAL 9.1
-> content** — fetched live, no redirect. (It is the *older* doc-set path,
-> `vsphere-supervisor-services-and-standalone-components/...`, that 301-redirects to the 9.0 tree —
-> which is what earlier notes here mistook for "9.1 redirects".) The **version-specific** pins below
-> (the `2.14.15` ArgoCD server example) are still **9.0 facts inferred for 9.1** and unconfirmed on a
-> lab — confirm with `kubectl explain argocd.spec.version` and the running instance's image before
-> relying on an exact version.
+> **Do not trust the version numbers in this document** (e.g. the `2.14.15` ArgoCD server example) —
+> they are inferred, not lab-confirmed. Get the real ones from your cluster:
+>
+> ```bash
+> make argocd-preflight   # CLI version · the RUNNING server image · the versions your operator supports
+> ```
 
 ## Install Harbor & ArgoCD as Supervisor Services
 

@@ -121,10 +121,24 @@ ARGOCD_DEST_CLUSTER_NAME=vks-guest              # name the destination appears u
 > `<ctx>:$ARGOCD_NAMESPACE`, and finally **proves** the kubeconfig works (`argocd-server` must be
 > visible) rather than trusting that a file exists.
 >
-> ⚠️ **Provenance: INFERRED.** Those pages are the 9.0 tree (the 9.1 URLs 301-redirect to it), and we
-> have never run this on a lab. The flow is also **interactive** — the VCF CLI prompts for the
-> password (no documented non-interactive flag, and a password on argv is forbidden). Re-verify on a
-> real 9.1 lab and upgrade this grade.
+> ⚠️ **Provenance: INFERRED**, and we have never run this on a lab. The flow is also **interactive** —
+> the VCF CLI prompts for the password (no documented non-interactive flag, and a password on argv is
+> forbidden). Re-verify on a real 9.1 lab and upgrade this grade.
+>
+> **Which techdoc URLs are actually 9.1 (the earlier blanket "all 9.1 URLs redirect to 9.0" claim was
+> WRONG).**
+>
+> - **VERIFIED 2026-07-13** (`curl -L`): the **explicit `/9-1/` URLs return HTTP 200 with NO redirect**
+>   — the final URL is still `/9-1/`. So a `/9-1/` page **may be cited as 9.1**.
+> - **NOT reproduced**: a prior session reported that the *older* doc-set path
+>   (`vsphere-supervisor-services-and-standalone-components/…`) 301-redirects to the 9.0 tree. Probing
+>   a guessed URL on that path returned **404**, not a redirect, so this half is **UNVERIFIED** — do
+>   not repeat it as fact. To settle it, `curl -sSL -o /dev/null -w '%{url_effective}'` a *real* URL
+>   from that doc set and see where it lands.
+>
+> Either way, the **version-specific pins** (the `2.14.15` server example) are **not stated by the doc
+> at all** — the server version is pinned by the **operator's CR**. Only the cluster can answer it:
+> `make argocd-preflight`.
 >
 > *(An earlier version of this page said "nothing creates this file and the command is unknown". That
 > was true of the repo but false of the world: the flow is documented, and was found by actually
@@ -163,7 +177,9 @@ kubectl --kubeconfig $ARGOCD_KUBECONFIG -n $ARGOCD_NAMESPACE \
 - The **real-lab** run of the cross-cluster path. The mechanic is KinD-verified end-to-end (two
   clusters), but these stay lab-only: whether the guest API is **routable from the Supervisor**, the
   guest API's **TLS/CA trust** from there, and any Supervisor-side admission policy on cluster-admin RBAC.
-- Exact 9.1 server version (the 9.1 docs redirect to the 9.0 tree).
+- Exact 9.1 server version. (Not because "the 9.1 docs redirect" — the `/9-1/` pages are real 9.1; see
+  the provenance note above. The server version is pinned by the **operator's CR**, not stated in the
+  doc, so only the cluster can answer it: `make argocd-preflight`.)
 
 ## Sources
 
