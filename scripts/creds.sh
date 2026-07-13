@@ -20,11 +20,20 @@ harbor_url="${harbor_scheme}://${HARBOR_URL:-harbor.vks.local}"
 gitea_url="${GITEA_URL:-http://${GITEA_HOST:-gitea.vks.local}}"
 # ArgoCD is on its OWN LoadBalancer (like real VKS): KinD publishes ARGOCD_LB_IP to .env.kind
 # (scheme https unless ARGOCD_INSECURE=1); a real lab uses the lab's own ArgoCD URL.
+argo_scheme="https"; [ "${ARGOCD_INSECURE:-0}" = "1" ] && argo_scheme="http"
 if [ -n "${ARGOCD_LB_IP:-}" ]; then
-  argo_scheme="https"; [ "${ARGOCD_INSECURE:-0}" = "1" ] && argo_scheme="http"
   argocd_url="${argo_scheme}://${ARGOCD_LB_IP} (self-signed; --insecure)"
+elif [ -n "${ARGOCD_SERVER:-}" ]; then
+  # A REAL LAB. ARGOCD_LB_IP is published only by the KinD flow (07-install-argocd.sh), so on a lab
+  # this used to print the literal '<your lab's ArgoCD URL>' — while the operator had ALREADY told us
+  # the address in ARGOCD_SERVER (both scenario runbooks have them discover and set it, and every
+  # argocd-CLI call uses it). We were asking them to look up a value we were holding.
+  case "$ARGOCD_SERVER" in
+    http://*|https://*) argocd_url="$ARGOCD_SERVER" ;;
+    *)                  argocd_url="${argo_scheme}://${ARGOCD_SERVER}" ;;
+  esac
 else
-  argocd_url="<your lab's ArgoCD URL>"
+  argocd_url="<not set — discover it, then set ARGOCD_SERVER in .env (see docs/scenario-2.md)>"
 fi
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
