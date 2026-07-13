@@ -66,7 +66,8 @@ needs **no builder image at all**. Same pipeline, and the difference is one `cas
 `make verify` proves **each app independently** (its own marker, its own PipelineRun, its own
 deployed image) — a green `javawebapp` never hides a broken `gowebapp`.
 
-### Add a third app
+<details>
+<summary><strong>Add a third app</strong> — one row in <code>apps/registry.tsv</code> (click to expand)</summary>
 
 **One row** in `apps/registry.tsv` (a new *language* is that row plus one `case` branch in
 `scripts/lib/apps.sh`):
@@ -91,7 +92,8 @@ per-app `<APP>_HOST` variable — there used to be, and it meant a new row silen
 Only two things differ per language: which Tekton task runs the tests (`maven-test` / `go-test`),
 and where `verify` injects its marker. Both live in `scripts/lib/apps.sh`.
 
-### On a REAL lab, adding an app may need grants you must request
+<details>
+<summary><strong>On a REAL lab, adding an app may need grants you must request</strong> (click to expand)</summary>
 
 Locally (and in **Scenario 1**, where you are the admin) nothing else is needed. As a **tenant**
 (Scenario 2) an app's **new namespace** and **new hostname** may not be covered by what you were
@@ -114,6 +116,10 @@ list is ours. That leaves the AppProject destination as the only universal tenan
 > hostnames a VirtualService may bind. But the exact `kubectl patch` invocations have **not** been
 > run against a real VKS lab, and the ArgoCD **server** there is 2.14.x (ours is 3.x). Treat them as
 > a starting point, confirm against your lab, and correct this table. See the backlog in CLAUDE.md.
+
+</details>
+
+</details>
 
 ## Prerequisites
 
