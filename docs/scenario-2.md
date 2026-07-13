@@ -377,8 +377,10 @@ deployed **app**, either front them with the ingress at `*.vks.local`, or `kubec
   cluster has a default StorageClass (or set one explicitly).
 - **Harbor project(s)** you were granted must exist and you must hold **push** on them; a
   **private** project also needs the app-namespace `imagePullSecret` (Step 4).
-- **Network reach (dual-homed):** the jump box must reach the VKS API server and the lab
-  Harbor.
+- **Network reach (dual-homed):** the jump box must reach the **VKS cluster's** API server, the
+  shared **ArgoCD server** endpoint (`ARGOCD_SERVER` — the tenant `api` path dials it; ArgoCD is a
+  Supervisor Service, so that endpoint is Supervisor-side), and the lab **Harbor**. The **Supervisor**
+  API itself is only needed if you have `kubectl` there (endpoint discovery, or `ARGOCD_MECHANISM=kubectl`).
 
 ---
 

@@ -103,7 +103,7 @@ spec:
   # LoadBalancer, NOT ClusterIP — and for the same reason Harbor and ArgoCD each keep their own
   # direct LB: a MACHINE outside this cluster has to reach Gitea, and the ingress cannot serve one.
   #
-  # ArgoCD is a VCF Supervisor Service: its repo-server runs in a DIFFERENT cluster and must clone
+  # ArgoCD is a Supervisor Service (it runs on the Supervisor): its repo-server is in a DIFFERENT cluster and must clone
   # <app>-deploy. It cannot use the in-cluster DNS name (gitea-http.gitea.svc — that resolves only
   # inside THIS cluster), and it cannot use the ingress either: every route matches the hostname
   # `gitea.vks.local`, which exists solely in the operator's /etc/hosts. A repo-server has no

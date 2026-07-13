@@ -68,7 +68,7 @@ cluster** additionally stores these images in Harbor + each node's containerd (~
 that is cluster-side, separate from the jump box.
 
 **Guest (VKS workload) cluster sizing** — sizing for the **guest cluster** where this project deploys **Gitea + Tekton (+ Dashboard) +
-the demo apps** and their images. Harbor and ArgoCD run on the **Supervisor** as VCF Supervisor Services, so they are budgeted
+the demo apps** and their images. Harbor and ArgoCD run on the **Supervisor** as Supervisor Services, so they are budgeted
 separately (see the last bullet). Figures were measured on the live single-node KinD stack
 (no metrics-server, so per-pod RAM is the declared request or a working-set estimate).
 

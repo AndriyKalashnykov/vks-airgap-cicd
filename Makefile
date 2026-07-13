@@ -127,6 +127,10 @@ check-readme-scenarios: ## Gate: the README is SCENARIO-BASED — each scenario 
 check-env-coverage: ## Gate: every operator-settable var the scripts read must be documented in .env.example
 	@$(SCRIPTS)/check-env-coverage.sh
 
+.PHONY: check-vks-terminology
+check-vks-terminology: ## Gate: Broadcom's product nouns (the vendor says "Supervisor Service"; phantom hybrids are banned)
+	@./scripts/check-vks-terminology.sh
+
 .PHONY: check-how-provenance
 check-how-provenance: ## Gate: every `# how:` acquisition command must be runnable-by-us, a real make target, or provenance-tagged
 	@$(SCRIPTS)/check-how-provenance.sh
@@ -661,7 +665,7 @@ docs-lint: check-readme-scenarios ## Lint markdown (tracked AND new-but-unignore
 	else echo "markdownlint not installed — skipping (install markdownlint-cli)"; fi
 
 .PHONY: static-check
-static-check: check-toolchain-alignment check-java-alignment check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: check-toolchain-alignment check-java-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)
