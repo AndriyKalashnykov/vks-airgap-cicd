@@ -167,11 +167,6 @@ It needs internet (dual-homed); a fully air-gapped host uses the carried bundle 
   **requires Docker**: KinD's node and `cloud-provider-kind` run on the `kind` Docker network +
   socket. So a real air-gap run can be podman-only; `make e2e-kind` needs Docker.
 
-### VKS authentication (VCF 9 + Supervisor) — real lab only
-
-> Needed by **both real-lab scenarios**, before their first step. The **KinD path skips this**
-> entirely (`make kind-up` writes a kubeconfig and sets `VKS_AUTH_METHOD=kubeconfig` for you).
-
 ## The three paths
 
 Pick **one** and follow it end to end. Each document is **self-contained** — every command you need
@@ -200,7 +195,7 @@ above is self-contained end to end (a CI gate enforces that: `make check-readme-
 | [Repository layout](docs/repository-layout.md) | where things live |
 | [Make targets](docs/make-targets.md) | every target, grouped |
 | [CI/CD](docs/ci-cd.md) | what CI actually gates (and what it deliberately does not) |
-| [VKS authentication](docs/vks-authentication.md) | how `$KUBECONFIG` is produced on a real lab, and **why Scenario 1 needs a second kubeconfig** |
+| [VKS authentication](docs/vks-authentication.md) | how `$KUBECONFIG` is produced on a real lab (`VKS_AUTH_METHOD`, the `vcf` CLI flow), and **why Scenario 1 needs a second kubeconfig**. Both real-lab scenarios run `make vks-login` themselves; **the KinD path skips it entirely** |
 | [Demo walkthrough](docs/demo-walkthrough.md) | drive the GitOps loop by hand |
 | [Detailed steps](docs/detailed-steps.md) | the full step-by-step |
 | [VKS services](docs/vks-services/) | what Broadcom actually ships (Harbor / ArgoCD / Istio), each fact **graded** by provenance |
