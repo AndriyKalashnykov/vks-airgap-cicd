@@ -310,5 +310,19 @@ else
   bad "ARGOCD_MECHANISM=kubectl no longer fails loudly when kubectl cannot write — it would silently do nothing"
 fi
 
+# ---- ORDERING. Every check above reads the SOURCE TEXT; none of them RUNS it. So they were all GREEN
+# on a `70` that died on its very first line of work with `argocd_ns_readable: unbound variable` — I
+# had placed the SUPERVISOR guard ABOVE the probe that sets its input, and under `set -u` that kills
+# `make gitops` on EVERY path, KinD included. static-check was green; only the (local, expensive) e2e
+# caught it. A grep-test proves text EXISTS; it cannot prove the text is REACHABLE. So assert the one
+# invariant the guard depends on: the probe assigns argocd_ns_readable BEFORE the guard reads it.
+probe_ln="$(grep -n '^argocd_ns_readable=yes' "$PF70" | head -1 | cut -d: -f1)"
+guard_ln="$(grep -n 'THE SUPERVISOR GUARD' "$PF70" | head -1 | cut -d: -f1)"
+if [ -n "$probe_ln" ] && [ -n "$guard_ln" ] && [ "$probe_ln" -lt "$guard_ln" ]; then
+  ok "the probe (line ${probe_ln}) assigns argocd_ns_readable BEFORE the guard (line ${guard_ln}) reads it"
+else
+  bad "the SUPERVISOR guard (line ${guard_ln:-?}) runs BEFORE the probe (line ${probe_ln:-?}) that sets argocd_ns_readable — under set -u that kills make gitops on EVERY path"
+fi
+
 [ "$fail" = 0 ] && { echo "test-argocd-topology: OK"; exit 0; }
 echo "test-argocd-topology: FAILED" >&2; exit 1
