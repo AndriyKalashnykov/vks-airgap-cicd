@@ -79,17 +79,8 @@ fi
 #
 # A genuine operator override lives in its own variable, which nothing auto-publishes.
 unset GITEA_ARGOCD_URL
-if [ -n "${GITEA_ARGOCD_URL_OVERRIDE:-}" ]; then
-  GITEA_ARGOCD_URL="$GITEA_ARGOCD_URL_OVERRIDE"
-  log_info "using GITEA_ARGOCD_URL_OVERRIDE=${GITEA_ARGOCD_URL}"
-elif gitea_lb="$(kubectl -n "${GITEA_NAMESPACE:-gitea}" get svc gitea-http \
-                   -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}' \
-                   2>/dev/null)" && [ -n "$gitea_lb" ]; then
-  GITEA_ARGOCD_URL="http://${gitea_lb}:3000"
-  log_info "resolved Gitea's LoadBalancer from the live Service: ${GITEA_ARGOCD_URL}"
-else
-  GITEA_ARGOCD_URL="${GITEA_INTERNAL_URL}"
-fi
+GITEA_ARGOCD_URL="$(gitea_clone_url)"   # lib/argocd.sh — the SINGLE definition (see there)
+log_info "ArgoCD clone URL resolved: ${GITEA_ARGOCD_URL}"
 argocd_assert_clonable_url "$ARGOCD_OFF_CLUSTER" "$GITEA_ARGOCD_URL" \
   "${GITEA_NAMESPACE:-gitea}" "${GITEA_HOST:-gitea.vks.local}"
 log_info "ArgoCD will clone from: $GITEA_ARGOCD_URL"

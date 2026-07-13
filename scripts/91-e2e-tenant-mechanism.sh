@@ -30,6 +30,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
+# shellcheck source=scripts/lib/argocd.sh
+. "${SCRIPT_DIR}/lib/argocd.sh"   # gitea_clone_url — the same one 70-configure-argocd.sh uses
 
 require_cmd kubectl
 require_cmd argocd "the tenant path IS the argocd CLI — install it (make deps)"
@@ -52,7 +54,10 @@ dests=""; repos=""
 while read -r app; do
   [ -n "$app" ] || continue
   dests="${dests}    - server: https://kubernetes.default.svc"$'\n'"      namespace: ${app}"$'\n'
-  repos="${repos}    - ${GITEA_ARGOCD_URL_OVERRIDE:-${GITEA_INTERNAL_URL}}/${GITEA_ORG}/${app}-deploy.git"$'\n'
+  # The SAME resolver 70-configure-argocd.sh uses to build the repoURL. Deriving it separately is
+  # what made argocd-server reject the Application as "not permitted in project" — the AppProject
+  # listed the in-cluster URL while gitops used the live LB.
+  repos="${repos}    - $(gitea_clone_url)/${GITEA_ORG}/${app}-deploy.git"$'\n'
 done <<EOF
 $(app_names)
 EOF
