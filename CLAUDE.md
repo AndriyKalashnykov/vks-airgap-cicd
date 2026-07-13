@@ -418,25 +418,28 @@ prereqs were unrunnable as written** (they never named the Supervisor API that `
 
 ### NEXT (in order)
 
-1. **Re-prove `make e2e-kind-tenant` without the `/etc/hosts` shortcut** (above).
-2. **Kill the `GITEA_ARGOCD_URL` read-back.** `40-install-gitea.sh` publishes it into `.env.kind` and
-   `70` reads it back as an input. A stale value is then indistinguishable from a deliberate
-   override — the exact anti-pattern `lib/argocd.sh` invokes to justify NOT trusting
-   `ARGOCD_DEST_SERVER` from that same file. **Derive it from the live Gitea Service** (`kubectl -n
-   $GITEA_NAMESPACE get svc gitea-http -o jsonpath='{.status.loadBalancer.ingress[0].ip}'`), with a
-   `GITEA_ARGOCD_URL_OVERRIDE` for the operator (precedent: `INGRESS_LB_IP_OVERRIDE`).
-3. **Retire `.env.kind` as the carrier of REAL-LAB state.** The sink is hardcoded in `lib/os.sh`
-   (`load_env` + `set_env_var`). Make it a variable (`VKS_ENV_OVERLAY`), and STAMP it with the cluster
-   it was written for — then refuse to source it against a different one. A rename alone deletes the
-   one cue ("kind") that tells an operator the file is foreign state.
-4. **`check-env-clobber` is blind to env-prefix invocations** (`VAR=… ./script.sh`). It only reasons
-   about `make <target> VAR=…`. Widen it, or the next selector-var lands the same way `ARGOCD_SERVER`
-   did.
-5. **The USER-JOURNEY audit** (three agents were run for this; fold their findings in). The repeated
-   ask was: walk **all three paths end to end** — choose-a-path → the path doc → the walkthrough —
-   *as the user*, not as the author. The lesson that produced it: I kept patching whichever symptom
-   was pointed at (a table, a link, a column header) instead of auditing the journey, so the same
-   class of defect kept surfacing one cell at a time.
+1. **Retire `.env.kind` as the carrier of REAL-LAB state.** The sink is hardcoded in `lib/os.sh`
+   (`load_env` + `set_env_var`), yet it holds real-lab discovered values (Harbor/ArgoCD/Gitea LB IPs,
+   `INGRESS_LB_IP`) under a name that says "kind". `make kind-down` deletes what the KinD flow created —
+   and both real-lab runbooks tell the operator to run it at Step 0. Make the sink a variable and
+   **stamp it with the cluster it was written for**, refusing to source it against a different one. A
+   rename alone deletes the one cue ("kind") that tells an operator the file is foreign state.
+2. **Run the e2e paths that were never run this session** — `e2e-sneakernet` (two-box air-gap) and the
+   `e2e-kind-both` / `verify-ingress-both` matrices. `static-check` does NOT cover them, and this
+   session proved why: the SIGPIPE guard (#183) passed every static gate and still killed the e2e.
+
+### ✅ CLOSED since the last handoff (verified against the tree, not remembered)
+
+- **Tenant path re-proved without the `/etc/hosts` shortcut** — `70` now LOGS the effective
+  argocd-server, and the tenant e2e ASSERTS the LB IP survives `load_env`. Green for the right reason.
+- **`GITEA_ARGOCD_URL` read-back killed** (#181) — resolved live from the Service; then #184 gave it a
+  SINGLE definition (`gitea_clone_url()`), because two derivations had drifted and argocd-server
+  rejected the tenant's app as *"not permitted in project"* — an error naming permissions that was
+  really two copies of a URL.
+- **`check-env-clobber`'s env-prefix blindness** (#190) — and widening it found a LIVE clobber
+  (`ARGOCD_NAMESPACE`), whose naive fix would have killed `make gitops`.
+- **The USER-JOURNEY audit** — all 9 findings fixed; later sweeps added the phantom-noun /
+  wrong-cluster-Contour / unrunnable-network-prereq fixes (#189).
 
 ### 🪤 Traps that bit ME this session (beyond the ones already listed below)
 
