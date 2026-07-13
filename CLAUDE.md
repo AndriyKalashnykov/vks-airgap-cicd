@@ -411,8 +411,8 @@ chain now names `preflight` (#180) · both stale "the ArgoCD API is not supporte
 them denied the **tenant their own path** (#180) · the tenant mechanism ladder documented (#180) ·
 broken anchor, doubled blockquote, hardcoded `apps` project (#180).
 
-Later sweeps found more, also fixed: the **phantom noun** "VCF Supervisor Service" pointed operators at
-the wrong console, **Contour was documented on the wrong cluster**, and **both scenarios' network-reach
+Later sweeps found more, also fixed: the **phantom noun** (Broadcom's "Supervisor Service" welded to
+"VCF") pointed operators at the wrong console, **Contour was documented on the wrong cluster**, and **both scenarios' network-reach
 prereqs were unrunnable as written** (they never named the Supervisor API that `vks-login` /
 `fetch-argocd-kubeconfig` / `gitops` all need) — #189, gated by `check-vks-terminology`.
 
