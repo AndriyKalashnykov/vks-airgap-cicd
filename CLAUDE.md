@@ -373,7 +373,7 @@ session that quoted it. Prose did not hold. That is the signature of a missing g
 > - The uid-1000-vs-1001 asymmetry between the images has already broken CA *readability* once
 >   (a 0600 CA the Ubuntu `vks` user could not read → a TLS error that named trust, not permissions).
 
-### 📋 PLANNED — validate every STEP of `docs/lab-validation-plan.md` against the FOUR-PART shape
+### ✅ DONE (#205) — every step of `docs/lab-validation-plan.md` now answers Why · Where · Who-needs-it · We-then · Run · Expect · Send-back
 
 The **intro** was fixed (PR #203: five rules up front, the derivation moved behind a `<details>`). The
 **24 steps below it were NOT touched** — they are still the pile they were, and they are what the
@@ -404,7 +404,7 @@ the lab is the scarce resource, and we get one pass at it.
 - The same **row test** applies inside a step: a sentence that neither tells them what to do, what to
   see, nor what to send back, is deleted.
 
-### 📋 PLANNED — make `docs/scenario-1.md` ACTIONABLE (it is the admin runbook; it currently reads like a paper)
+### ✅ DONE (#206) — `docs/scenario-1.md` is now 313 lines (was 490), 13 headings (was 2), every step = for/run/expect. Its four bugs (ingress-wrong-for-admin · vcf-before-install · psa-after-mirror · argocd-grep-on-wrong-cluster) are fixed, and scenario-2's mirror-image copies with them
 
 The first instance of the "mechanism essay" review above, and the highest-value one: **Scenario 1 is
 the document an admin actually executes on a real lab.** Today it explains, cites, and caveats — and

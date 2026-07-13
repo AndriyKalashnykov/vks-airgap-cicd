@@ -255,11 +255,16 @@ make harbor-robot                                  # → secrets/harbor-robot.en
 # then copy its two lines (HARBOR_USERNAME='robot$<name>' / HARBOR_PASSWORD=…) into .env
 ```
 
-Confirm the namespace the shared ArgoCD watches (for `ARGOCD_NAMESPACE`):
+Confirm the namespace the shared ArgoCD watches (for `ARGOCD_NAMESPACE`). **ArgoCD is a Supervisor
+Service — it does NOT run in your guest cluster**, so this must query the ArgoCD side, not your
+`KUBECONFIG`:
 
 ```bash
-kubectl get pods -A | grep argocd-application-controller   # its namespace = ARGOCD_NAMESPACE
+kubectl --kubeconfig $ARGOCD_KUBECONFIG get pods -A | grep argocd-application-controller
 ```
+
+If you have no kubeconfig for it (a locked-down tenant often does not), **ask the platform team for
+the namespace** — or use `ARGOCD_MECHANISM=api`, which needs no Kubernetes access there at all.
 
 **Step 5 — verify (or create) the in-cluster registry secret.** The pipeline pushes the
 built image to Harbor from inside the cluster, which needs a Docker-config secret.
@@ -317,25 +322,33 @@ deployed **app**, either front them with the ingress at `*.vks.local`, or `kubec
 (`kubectl -n gitea port-forward svc/gitea-http 3000:3000`,
 `kubectl -n javawebapp port-forward svc/javawebapp 18080:80`).
 
-> **Ingress — the mesh ALREADY EXISTS here; attach to it, do not install one.** Istio ships on VKS
-> as a **Standard Package** (`istio.kubernetes.vmware.com`) in the guest cluster. The bare
-> `make install-ingress` defaults to `INGRESS_CONTROLLER=istio`, which would **helm-install a second
-> istiod over the platform's mesh**. Instead:
+> **Ingress — ASK the cluster whether a mesh is there. Do not assume.** A platform team *may* have
+> shipped your cluster with the VKS Istio package (possibly at cluster-creation time) — but
+> **available is not installed**, and you hold cluster-admin on your own guest cluster, so either
+> answer is workable. `istio-preflight` measures it; it is sitting right there.
 >
 > ```bash
-> make istio-preflight                                     # read-only: is Istio here? what does it require of me?
-> make install-ingress INGRESS_CONTROLLER=istio-existing   # installs NOTHING; attaches our routes only
+> make istio-preflight     # read-only: is Istio here? what does it require of me? what must I request?
 > ```
 >
-> `istio-preflight` prints the exact `Gateway` selector the mesh requires, what your kubeconfig may
-> actually do, and what (if anything) to request from the mesh admin. It also picks the route API:
-> the **Kubernetes Gateway API** when Istio is an Accepted `GatewayClass` (Istio then
-> auto-provisions the proxy *and* its LoadBalancer — nothing needed from the platform team), else
-> the classic `Gateway`/`VirtualService` path. Add the printed `INGRESS_LB_IP` line to `/etc/hosts`
-> (see [Access the UIs](../README.md#access-the-uis-urls-logins-passwords)).
+> | It says | You run |
+> |---|---|
+> | **Istio is here** (the expected tenant case) | `make install-ingress INGRESS_CONTROLLER=istio-existing` — installs **nothing**, attaches routes only. **Never** the bare `make install-ingress` against a mesh you did not install: its default would **helm-install a second istiod over the platform's**. |
+> | **NO Istio detected** | `make install-ingress` (installs our own; images come from your Harbor) or `INGRESS_CONTROLLER=traefik` for a lighter option. |
 >
-> Only if the cluster genuinely has **no** mesh should you install one (`make install-ingress`, or
-> `INGRESS_CONTROLLER=traefik` for the lighter option).
+> `istio-preflight` also prints the exact `Gateway` selector the mesh requires, what your kubeconfig
+> may actually do, and what (if anything) to **request from the mesh admin**. It picks the route API:
+> the **Kubernetes Gateway API** when Istio is an Accepted `GatewayClass` (Istio then auto-provisions
+> the proxy *and* its LoadBalancer — nothing needed from the platform team), else the classic
+> `Gateway`/`VirtualService` path.
+>
+> ⚠️ **As a tenant you cannot install the Gateway API CRDs.** If they are absent, you are on the
+> classic path — and the VKS package ships its shared gateway **off by default**, so there may be
+> nothing to bind to. In that case you must **ask the mesh admin** to enable a gateway.
+> `istio-preflight` says so in those words.
+>
+> Add the printed `INGRESS_LB_IP` line to `/etc/hosts`
+> (see [Access the UIs](../README.md#access-the-uis-urls-logins-passwords)).
 >
 > **Run `make psa-check` before installing anything.** A VKS guest cluster enforces the
 > `restricted` Pod Security Standard **by default** (VKr v1.26+), which **rejects** our Kaniko build
