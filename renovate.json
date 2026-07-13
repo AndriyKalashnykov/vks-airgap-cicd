@@ -52,14 +52,6 @@
         "\\$\\{HARBOR_URL\\}/\\$\\{HARBOR_INFRA_PROJECT\\}/(?<depName>[^:\\s\"]+):(?<currentValue>[^\\s\"]+)"
       ],
       "datasourceTemplate": "docker"
-    },
-    {
-      "customType": "regex",
-      "description": "Tool versions pinned in GitHub Actions workflow env: blocks (kubeconform, hadolint) — CI installs these directly, the github-actions manager can't see them, so they're tracked via inline # renovate: comments.",
-      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
-      "matchStrings": [
-        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)(?: extractVersion=(?<extractVersion>[^\\s]+))?\\n\\s+[A-Z_]+:\\s*(?<currentValue>[^\\s]+)"
-      ]
     }
   ],
   "vulnerabilityAlerts": {

@@ -41,6 +41,7 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
       docs: ${{ steps.filter.outputs.docs }}
+      diagrams: ${{ steps.filter.outputs.diagrams }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - id: filter
@@ -111,10 +112,30 @@ jobs:
       - name: make static-check
         run: make static-check
 
-  # Docs gate: diagrams drift-check (PlantUML via Docker) + markdownlint (via npx).
+  # Docs gate: markdownlint (via npx) + the README-scenario gate. CHEAP — no Docker.
   docs-lint:
     needs: changes
     if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      # Node so `npx markdownlint-cli` works.
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: '24'
+
+      - name: make docs-lint
+        run: make docs-lint
+
+  # Diagram drift gate — SEPARATE from docs-lint because it is FAR more expensive: it `docker run`s
+  # the pinned PlantUML image (~478 MB cold) and re-renders every .puml to byte-compare it against
+  # the committed PNG. It used to be an unconditional prerequisite of docs-lint, so every README-only
+  # PR paid for a render of seven diagrams it never touched. It now runs only when a diagram source,
+  # a committed PNG, or the renderer pin (PLANTUML_VERSION, in the Makefile) actually changed.
+  diagrams-check:
+    needs: changes
+    if: needs.changes.outputs.diagrams == 'true'
     runs-on: ubuntu-latest
     # podman is the local default; on the runner use docker for the diagram render
     # (rootless-podman keep-id isn't guaranteed configured on the runner).
@@ -123,18 +144,13 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
-      # Node so `npx markdownlint-cli` works (Docker is preinstalled for diagrams-check).
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version: '24'
-
-      - name: make docs-lint
-        run: make docs-lint
+      - name: make diagrams-check
+        run: make diagrams-check
 
   # Single required status check: fails if any needed job failed/cancelled,
   # passes if they succeeded or were legitimately skipped by paths-filter.
   ci-pass:
-    needs: [changes, static-check, docs-lint]
+    needs: [changes, static-check, docs-lint, diagrams-check]
     if: always()
     runs-on: ubuntu-latest
     steps:

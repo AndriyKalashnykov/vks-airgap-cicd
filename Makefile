@@ -608,7 +608,13 @@ vendor-diagrams: ## Re-download the pinned C4-PlantUML stdlib into docs/diagrams
 	echo "vendor-diagrams: refreshed docs/diagrams/c4/ @ $(C4_PLANTUML_VERSION) — now run 'make diagrams' and verify the offline render"
 
 .PHONY: docs-lint
-docs-lint: diagrams-check check-readme-scenarios ## Lint markdown (tracked AND new-but-unignored) + verify diagrams are current
+docs-lint: check-readme-scenarios ## Lint markdown (tracked AND new-but-unignored) + the README-scenario gate
+	@# NOTE: diagrams-check is deliberately NOT a prerequisite here. It `docker run`s the pinned
+	@# PlantUML image (a ~478 MB pull, cold) and re-renders every .puml — so making it unconditional
+	@# meant a README-only PR paid for a full JVM render of seven diagrams it never touched. `make ci`
+	@# still runs it (below), so the LOCAL gate is unchanged and still a superset of CI; CI runs it
+	@# only when a diagram source / committed PNG / the renderer pin actually changed
+	@# (scripts/classify-changes.sh emits `diagrams=`, unit-tested in test-classify-changes.sh).
 	@# `--others --exclude-standard` adds UNTRACKED-but-not-gitignored markdown. Without it the
 	@# gate lints only COMMITTED files, so a brand-new doc is invisible to `make ci` and its
 	@# first lint happens in CI *after* it is pushed — a guaranteed green-local/red-CI round trip
@@ -624,7 +630,7 @@ docs-lint: diagrams-check check-readme-scenarios ## Lint markdown (tracked AND n
 static-check: check-toolchain-alignment check-java-alignment check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
-ci: static-check docs-lint ## Full local pipeline (offline-verifiable parts)
+ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)
 
 ##@ Dependencies (Renovate)
 .PHONY: renovate-validate
