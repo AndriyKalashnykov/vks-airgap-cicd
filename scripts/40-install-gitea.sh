@@ -56,15 +56,18 @@ if [ "$GITEA_SERVICE_TYPE" = "LoadBalancer" ]; then
     sleep 1
   done
   if [ -n "$GITEA_LB_IP" ]; then
+    # Publish the IP for humans (`make creds-show`) — but NOT a GITEA_ARGOCD_URL for a later step to
+    # read back as an input. 70-configure-argocd.sh RESOLVES the address from the live Service at the
+    # moment it needs it, so a rebuilt Gitea can never be cloned from a stale address. (Publishing it
+    # as an input is the trap INGRESS_LB_IP_OVERRIDE exists to avoid.)
     set_env_var GITEA_LB_IP "$GITEA_LB_IP"
-    set_env_var GITEA_ARGOCD_URL "http://${GITEA_LB_IP}:3000"
-    log_info "Gitea LoadBalancer: ${GITEA_LB_IP}:3000 (published as GITEA_LB_IP + GITEA_ARGOCD_URL)"
+    log_info "Gitea LoadBalancer: ${GITEA_LB_IP}:3000 (published as GITEA_LB_IP)"
   else
     # NOT fatal here: a single-cluster deploy never needs it. It IS fatal in 70-configure-argocd.sh,
     # which refuses to build a repoURL an off-cluster ArgoCD cannot reach.
     log_warn "the Gitea LoadBalancer never got an address — no cluster-external Gitea URL."
     log_warn "  Fine when ArgoCD runs in THIS cluster. If it does NOT, 'make gitops' will refuse to"
-    log_warn "  continue: set GITEA_ARGOCD_URL to an address the ArgoCD cluster can reach."
+    log_warn "  continue: set GITEA_ARGOCD_URL_OVERRIDE to an address the ArgoCD cluster can reach."
   fi
 fi
 
