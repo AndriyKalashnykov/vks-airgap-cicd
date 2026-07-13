@@ -277,9 +277,11 @@ The two BLOCKING triggers (before you implement · before you call the session d
 (`Workflow` with a schema, or a synchronous `Agent` — never fire-and-forget), and what to do with the
 findings are all in Rule Zero. Do not duplicate them here.
 
-## ▶️ HANDOFF 2026-07-13 (evening) — CONTAINER ENGINE. START HERE.
+## ▶️ HANDOFF 2026-07-13 (evening) — CONTAINER ENGINE — START HERE
 
-**Open: PR #199** (`fix/podman-default`) — offline gates green, unmerged. `main` clean.
+**PR #199 MERGED** (`fix/podman-default`) — all gates green. **PR #201 open** (this handoff + the
+subagent read-only gate). Note #199 **auto-merged on green between two pushes**, stranding a commit
+on the branch — if a PR seems to be missing part of its content, check for exactly that race.
 
 ### What landed in #199
 
@@ -297,7 +299,7 @@ The branch originally added a fail-fast: *docker + no `/etc/docker/certs.d/$HARB
 have hard-blocked them, printing the literal `<HARBOR_CA_FILE>` when unset. **It was itself an
 untested docker path**: every e2e auto-detects podman, so it had never once run.
 
-### The engine facts — settled, source-verified. Do not re-derive these.
+### The engine facts — settled and source-verified; do not re-derive these
 
 | | sudo-free? | how |
 |---|---|---|
@@ -310,6 +312,65 @@ untested docker path**: every e2e auto-detects podman, so it had never once run.
 - **`HARBOR_INSECURE=1` is PODMAN-ONLY.** A CA drop-in never enables plain HTTP; docker needs `insecure-registries` + a reload.
 - **`DOCKER_CERT_PATH` is NOT a registry CA** (it's CLI↔daemon socket TLS). Podman/skopeo's identically-named `DockerCertPath` **is** one. This is the #1 confusion in the wild.
 - **A trusted CA is NOT sufficient — the leaf needs a SAN.** Since Go 1.15 a no-SAN leaf is rejected *even with a trusted CA*, and Go 1.17 **removed** the `GODEBUG=x509ignoreCN=0` escape hatch. For a bare-IP registry it must be an **IP SAN** (goharbor/harbor#19994). **Our KinD Harbor mints `SAN=IP` (`06-install-harbor.sh:118`) — correct, and it must never regress.**
+
+### 📋 PLANNED REVIEW — "mechanism essay" prose in operator docs (repo-wide; a PATTERN, not a one-off)
+
+**The defect.** An operator doc explains **how the internals work** where it should state **the
+operator's CHOICE and the ONE COMMAND to run**. It reads as thorough and is actually a burden: the
+reader has to *derive* their action from a mechanism description we could have just automated.
+
+**The specimen** (README, container-engine blurb — caught by the owner 2026-07-13). It explained
+docker's daemon TLS model, `certs.d` ownership, the OS store, daemon restarts, and rootless — three
+sentences of mechanism — and never once told the reader *what to type*. What it should say:
+
+| Your situation | What you run |
+|---|---|
+| Default (podman) | nothing — `make deps` installs it |
+| docker, **rootless** | `make trust-harbor` (sudo-free) |
+| docker, **rootful** | `make trust-harbor` → prints the `sudo` lines |
+| `make e2e-kind` | docker required regardless — that is kind, not us |
+
+**Why it is a PATTERN and not a typo.** Every hard-won fact in this repo arrives as a *mechanism*
+(that is what the adversaries and the research produce), and the reflex is to write the mechanism
+down where it was learned — which is usually an operator doc. The knowledge belongs in `CLAUDE.md` /
+`docs/decisions/` / `docs/vks-services/`; the **operator** doc gets the choice and the command.
+The rule already exists (*docs say WHAT, not WHY*) and it was violated anyway — by me, in the same
+session that quoted it. Prose did not hold. That is the signature of a missing gate.
+
+**The review (do this as its own PR, not folded into feature work):**
+
+1. **Audit** every operator-facing surface — `README.md`, `.env.example` comments, `make help`
+   strings, `docs/*.md` runbooks — for a paragraph that explains a MECHANISM without naming an
+   ACTION. Detection heuristic: a block of ≥2 sentences containing *how/because/so that/it works
+   by/the daemon/per-command* and **no** imperative + **no** `make` target.
+2. **For each hit, decide**: (a) automate it into a `make` target and reduce the doc to one line
+   pointing at the target — **preferred**; (b) move the mechanism to `CLAUDE.md`/`docs/decisions/`
+   and leave a choice-table row; (c) it is genuinely a decision the operator must reason about →
+   keep it, but lead with the action.
+3. **Gate it if a mechanical signal exists** (the repo's standing rule: a violated rule becomes a
+   gate, not another paragraph). Candidate: `check-readme-actionable` — every `##` section of the
+   README that describes an operator task must contain at least one `make` invocation or a fenced
+   command block. RED-prove it by hollowing a section into pure prose. If no honest mechanical
+   signal exists, say so and leave it a review checklist item — do NOT ship a gate that passes by
+   not looking (this repo has shipped that twice).
+
+**Known first target**: the container-engine blurb above, together with the `make engine-check` /
+`make trust-harbor` targets it should point at (designed, adversary-review pending, NOT yet built).
+
+> **These two targets run ON THE JUMP BOX, so they must be proven on BOTH OS images — `make jumpbox-both`
+> (`photon:5.0` + `ubuntu:26.04`), not just the dev box.** This is not ceremony; the two OSes differ in
+> exactly the places these targets touch:
+>
+> - **Photon's coreutils are toybox, not GNU.** A `gzip -t` gate already false-failed on it for this
+>   reason. `install -D -m0644` — the obvious way to place the CA — is a GNU-ism that **must be checked
+>   on toybox** before it is relied on (fall back to `mkdir -p` + `cp` + `chmod` if absent).
+> - **Rootless podman needs different packages per OS** (`crun` + an active `unqualified-search-registries`
+>   on Photon; `uidmap`/`passt`/`slirp4netns` on Ubuntu, which apt omits from a default podman install).
+> - **Docker may not exist on either image at all** — the jump-box images install **podman only**, which
+>   is the whole point. A docker leg needs its own image (see the NEXT TASK below); do not assume the
+>   host's docker, and do NOT mount the host docker socket.
+> - The uid-1000-vs-1001 asymmetry between the images has already broken CA *readability* once
+>   (a 0600 CA the Ubuntu `vks` user could not read → a TLS error that named trust, not permissions).
 
 ### ⛔ NEXT TASK — prove the docker-only claim, and DO NOT do it with `make e2e-kind`
 
@@ -329,10 +390,13 @@ only) — but it **never calls `15-build-push-builder.sh`**, the one script that
 Harbor over self-signed TLS with an engine*. Everything it does run is **crane** (no engine at all).
 
 **The honest harness** (this is the task):
+
 1. Extend `jumpbox-run.sh` to actually run `make builder-image` (+ a Harbor pull) — for **both** engines. Without this, neither claim is tested.
 2. Add a docker-capable jump-box image (`Dockerfile.ubuntu-docker`, dind — the harness already runs `--privileged`). **Do NOT mount the host docker socket**: that puts you back on the host daemon (which has kind's containers) and proves nothing, and it re-opens the concurrent-registry-mutation hazard that has already corrupted a Harbor here.
 3. Install the CA **the way a real operator would**, per engine, *inside* the container, and record which method was needed. Root-inside-a-container is what makes the sudo question **honest** rather than hidden.
 4. Replace the fail-fast with a **pre-build `$ENGINE login` probe** (before the `pull` at `15:~65`, not after a 20-minute build). It tests whether trust *works* instead of guessing from a filename, cannot false-fire, and needs no knowledge of where the daemon reads certs.
+
+5. **Run the matrix on BOTH OSes, not just the dev box: `make jumpbox-both` (`photon:5.0` + `ubuntu:26.04`) × both engines.** The engine/CA code paths are exactly where the two OSes diverge (toybox vs GNU `install -D`; `crun` + `unqualified-search-registries` on Photon vs `uidmap`/`passt`/`slirp4netns` on Ubuntu; the uid-1000-vs-1001 CA-readability trap). A green Ubuntu-only run has already been mistaken for a proof in this repo. The full grid is **4 legs** — {photon, ubuntu} × {podman, docker} — and the docker legs need the dind image from (2), because the stock jump-box images install **podman only**.
 
 **Only then** publish the claim — and publish it with its preconditions (rootful⇒sudo; system-store counts; rootless is sudo-free; insecure mode is podman-only; kind ≠ jump box). "Docker works" unqualified would be a lie.
 
