@@ -192,6 +192,22 @@ $(app_names)
 EOF
 
 log_info "== running 70-configure-argocd.sh as the TENANT (mechanism=api) =="
+# --- the green must not depend on THIS BOX ---------------------------------------------------------
+# This e2e passes the ArgoCD LB IP explicitly. But load_env sources .env.example with `set -a` AFTER
+# the environment is established, so an UNCOMMENTED ARGOCD_SERVER there silently CLOBBERS it (that is
+# exactly what happened: the value became `argocd.vks.local`, and the run passed only because this
+# machine's /etc/hosts maps that name to the same LB — dev-machine state, not the code). On a clean
+# box the api mechanism would fall through to `request` and exit 0 having applied NOTHING.
+#
+# So: assert the value the code will ACTUALLY use, before using it.
+eff_server="$(ARGOCD_SERVER="$argocd_lb" bash -c '. "'"${SCRIPT_DIR}"'/lib/os.sh"; load_env; printf "%s" "${ARGOCD_SERVER:-}"')"
+if [ "$eff_server" != "$argocd_lb" ]; then
+  die "ARGOCD_SERVER was CLOBBERED: passed '${argocd_lb}', load_env resolved '${eff_server}'.
+  A run against a name only THIS box resolves is not evidence. Comment ARGOCD_SERVER in .env.example
+  and keep it in load_env's selector snapshot (see check-env-clobber)."
+fi
+log_info "ARGOCD_SERVER survives load_env: ${eff_server} (the green does not depend on /etc/hosts)"
+
 KUBECONFIG="$TENANT_KC" \
 ARGOCD_KUBECONFIG="$TENANT_KC" \
 ARGOCD_MECHANISM=api \

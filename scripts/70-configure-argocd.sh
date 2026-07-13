@@ -156,6 +156,11 @@ case "$ARGOCD_MECHANISM" in
     fi ;;
   *) die "ARGOCD_MECHANISM must be auto|kubectl|api|request (got '$ARGOCD_MECHANISM')" ;;
 esac
+# Log the server we ACTUALLY talk to, not the one we were passed. ARGOCD_SERVER is a SELECTOR: an
+# uncommented value in .env.example used to be exported by load_env's `set -a` OVER a per-run
+# override, so a run could target a hostname that resolves only on the author's box (/etc/hosts) —
+# and the e2e still went green. A log line naming the effective server is what makes that visible.
+[ -z "${ARGOCD_SERVER:-}" ] || log_info "argocd-server (effective): ${ARGOCD_SERVER}"
 log_info "write mechanism: ${MECH}  (kubectl=${can_kubectl}, argocd-api=${can_api}$([ "$argocd_api_ready" = no ] && printf ' [api not probed: set ARGOCD_SERVER + ARGOCD_AUTH_TOKEN]'))"
 
 if [ "$MECH" = kubectl ] && [ "$can_kubectl" != yes ] ; then
