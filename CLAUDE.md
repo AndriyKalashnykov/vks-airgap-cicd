@@ -512,6 +512,29 @@ TMM catalog lists Harbor/Contour/ArgoCD, not Istio); "Istio has no credentials";
 selector-is-the-helm-release-name discovery via port 15021; `44-install-ingress.sh:16` genuinely
 surviving the `.env.example` clobber; and the ingress-gateway-off-by-default fact (primary-sourced).
 
+### ⚠️ SHIPPED BUT UNPROVEN — the Gateway API CRD install (#209) has never actually RUN
+
+`istio_ensure_gwapi_crds` passed `static-check` + `docs-lint`. **That means it lints. It does NOT mean
+the CRDs install.** `make e2e-kind` was not run on it.
+
+**Run `make e2e-kind`** (~20–40 min, **alone** — concurrent registry work corrupts Harbor). It must show:
+
+1. the CRDs are applied with **`--server-side`** — required, not a preference: the bundle exceeds the
+   256 KiB `last-applied-configuration` limit that client-side apply writes;
+2. **`--force-conflicts` takes ownership from cloud-provider-kind's bundle.** CPK force-installs its
+   own Gateway API CRDs at startup — *that* is what used to make our gateway-api e2e leg green, and it
+   is precisely the takeover this fix depends on. **A pre-existing KinD cluster already has CPK's CRDs,
+   so it is a GOOD test of the takeover** — but start from `kind-up` anyway;
+3. `istio-preflight` prints **`Gateway API CRDs: PRESENT`**, and the attach picks **gateway-api**.
+
+**Then RED-prove it:** delete the CRDs, re-run `make istio-preflight`, and confirm it now prints
+**ABSENT** with the tenant-vs-admin ask — instead of silently degrading to classic. Until that RED is
+demonstrated, the honest-failure path is itself unverified.
+
+**Renovate is grouped** (`istio + gateway-api (version-locked)`) so a bot cannot move the CRD version
+alone — it must land with the Istio bump and be judged by CI as a unit. PR #210 (a solo bump to
+v1.6.0) is exactly the thing that group exists to prevent; close it or let the group re-open it paired.
+
 ### 📋 OPEN — audit EVERY gate for MISPLACEMENT (a gate in the wrong target is green because nobody asked it)
 
 `check-vks-terminology` is a **docs** gate that lived only in `static-check` — which CI's paths-filter
