@@ -10,17 +10,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLASSIFY="${SCRIPT_DIR}/classify-changes.sh"
 
 fail=0
-t() { # <name> <expected-code> <expected-docs> <file...>
+t() { # <name> <expected-code> <expected-docs> [<expected-diagrams>] <file...>
   local name="$1" want_code="$2" want_docs="$3"; shift 3
+  local want_diag=""
+  case "$1" in true|false) want_diag="$1"; shift ;; esac
   local out; out="$(printf '%s\n' "$@" | "$CLASSIFY")"
-  local got_code got_docs
+  local got_code got_docs got_diag
   got_code="$(printf '%s\n' "$out" | sed -n 's/^code=//p')"
   got_docs="$(printf '%s\n' "$out" | sed -n 's/^docs=//p')"
-  if [ "$got_code" = "$want_code" ] && [ "$got_docs" = "$want_docs" ]; then
-    printf 'ok    %-42s code=%s docs=%s\n' "$name" "$got_code" "$got_docs"
+  got_diag="$(printf '%s\n' "$out" | sed -n 's/^diagrams=//p')"
+  if [ "$got_code" = "$want_code" ] && [ "$got_docs" = "$want_docs" ] \
+     && { [ -z "$want_diag" ] || [ "$got_diag" = "$want_diag" ]; }; then
+    printf 'ok    %-42s code=%s docs=%s diagrams=%s\n' "$name" "$got_code" "$got_docs" "$got_diag"
   else
-    printf 'FAIL  %-42s want code=%s docs=%s, got code=%s docs=%s\n' \
-      "$name" "$want_code" "$want_docs" "$got_code" "$got_docs" >&2
+    printf 'FAIL  %-42s want code=%s docs=%s diagrams=%s, got code=%s docs=%s diagrams=%s\n' \
+      "$name" "$want_code" "$want_docs" "$want_diag" "$got_code" "$got_docs" "$got_diag" >&2
     fail=1
   fi
 }
@@ -44,8 +48,21 @@ t "workflow only"                    true false ".github/workflows/ci.yml"
 # Unknown file list (workflow_dispatch / tag / first push) -> run everything, never guess cheap.
 t "empty list"                     true  true  ""
 
+# THE regression this change exists to prevent: a README-only PR must NOT pay for a PlantUML
+# render (a ~478 MB image pull + a JVM re-render of every diagram it never touched).
+t "docs only -> NO diagram render"   false true  false "README.md"
+t "docs only (many)"                 false true  false "README.md" "docs/vks-services/istio.md"
+# A diagram source or a committed PNG changed -> the drift gate MUST run.
+t "puml changed -> render"           false true  true  "docs/diagrams/container.puml"
+t "committed PNG changed -> render"  false true  true  "docs/diagrams/out/container.png"
+# The renderer itself is pinned in the Makefile: a plantuml bump changes the rendered BYTES, so
+# the drift gate must run even though no .puml changed (else every PNG silently goes stale).
+t "Makefile (PLANTUML_VERSION) -> render" true false true "Makefile"
+# Unknown/empty input -> run everything (never guess cheap).
+t "empty input -> everything"        true  true  true
+
 if [ "$fail" -ne 0 ]; then
   echo "test-classify-changes: FAILED" >&2
   exit 1
 fi
-echo "test-classify-changes: OK — 10 case(s); a docs-only change does not pay for a build."
+echo "test-classify-changes: OK — 16 case(s); a docs-only change does not pay for a build."

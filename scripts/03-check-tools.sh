@@ -42,6 +42,9 @@ podman|optional|preferred container engine for builds/mirroring (docker is the f
 trivy|ci-only|make sec / static-check
 gitleaks|ci-only|make sec / static-check
 shellcheck|ci-only|make lint
+kubeconform|ci-only|make validate (manifest schema)
+hadolint|ci-only|make lint (Dockerfiles)
+yamllint|ci-only|make lint (YAML)
 "
 
 printf '\n  %-12s %-10s %-28s %s\n' TOOL STATUS VERSION 'PURPOSE' >&2

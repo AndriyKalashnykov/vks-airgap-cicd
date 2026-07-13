@@ -21,12 +21,25 @@ set -euo pipefail
 
 code=false
 docs=false
+# `diagrams` is a SEPARATE, much more expensive gate than the rest of docs-lint: diagrams-check
+# `docker run`s the pinned PlantUML image (a ~478 MB pull, cold) and re-renders EVERY .puml to
+# byte-compare it against the committed PNG. It only needs to run when a diagram SOURCE or a
+# committed PNG actually changed. It used to be an unconditional prerequisite of docs-lint, so a
+# README-only PR paid for a full JVM render of seven diagrams it never touched — which cost far
+# more than the curl/pipx step we removed for being wasteful.
+diagrams=false
 
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   case "$f" in
-    *.md|docs/*) docs=true ;;
-    *)           code=true ;;
+    # A diagram change is also a docs change (docs-lint still lints the markdown that embeds it).
+    docs/diagrams/*) docs=true; diagrams=true ;;
+    # The Makefile carries PLANTUML_VERSION and the render recipe: a Renovate bump of the renderer
+    # changes the RENDERED BYTES, so the drift gate must run even though no .puml changed. (Without
+    # this, a plantuml bump merges green and every committed PNG is silently stale.)
+    Makefile)        code=true; diagrams=true ;;
+    *.md|docs/*)     docs=true ;;
+    *)               code=true ;;
   esac
 done
 
@@ -35,7 +48,9 @@ done
 if [ "$code" = false ] && [ "$docs" = false ]; then
   code=true
   docs=true
+  diagrams=true
 fi
 
 echo "code=${code}"
 echo "docs=${docs}"
+echo "diagrams=${diagrams}"
