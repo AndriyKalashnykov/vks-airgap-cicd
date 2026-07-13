@@ -430,8 +430,19 @@ istio_require_env() {
   local v missing=""
   for v in "$@"; do
     # Non-empty in the shell AND visible in the environment (i.e. exported).
+    #
+    # `printenv "$v"`, NOT `env | grep -q "^$v="`. The pipe was a FALSE-NEGATIVE GENERATOR: `grep -q`
+    # exits on the FIRST match, which SIGPIPEs `env` (exit 141), and under this script's
+    # `set -o pipefail` the pipeline's status becomes that 141 — so the check reported NOT EXPORTED
+    # for a variable that WAS exported. It only fires once the environment is big enough that `env`
+    # is still writing when grep quits, which is exactly the case under `make` (the e2e), and never
+    # in a small standalone shell. Measured: 20/20 false negatives with a large environment, 0/20
+    # with a small one — a latent landmine that took down `make e2e-kind` at install-ingress.
+    #
+    # printenv reads the environment directly: no pipe, no SIGPIPE, and its exit status IS the
+    # question we are asking ("is this name in the environment?").
     [ -n "${!v:-}" ] || { missing="${missing} ${v}(unset)"; continue; }
-    env | grep -q "^${v}=" || missing="${missing} ${v}(NOT EXPORTED)"
+    printenv "$v" >/dev/null 2>&1 || missing="${missing} ${v}(NOT EXPORTED)"
   done
   [ -z "$missing" ] || die "cannot render manifests —${missing}. envsubst reads the ENVIRONMENT: a non-exported variable renders EMPTY and would silently create the object in the WRONG namespace."
 }
