@@ -70,7 +70,13 @@ kubectl get svc -n <argocd-namespace> argocd-server \
   ./secrets/vks.kubeconfig` for the cluster you run the demo in. You need **cluster-admin** on
   it (the flow creates the `gitea` / `ci` / `javawebapp` namespaces and installs Tekton CRDs).
 
-**3 — Record what you discovered / were granted in `.env`:**
+**3 — Record what you discovered / were granted in `.env`.** `.env` is gitignored — create it first:
+
+```bash
+make env-init      # creates .env from .env.example (backs up any existing one)
+```
+
+Then set:
 
 ```bash
 HARBOR_URL=<discovered-harbor-LB-IP-or-FQDN>
@@ -281,7 +287,7 @@ secret.
 **Step 6 — install everything and verify end-to-end:**
 
 ```bash
-make install-all   # mirror → mirror-verify → builder-image → vks-login → platform → gitops
+make install-all   # preflight → mirror → mirror-verify → builder-image → vks-login → platform → gitops
 make verify        # push a marked change → Tekton → Harbor → ArgoCD → live app serves it
 ```
 
@@ -339,10 +345,22 @@ deployed **app**, either front them with the ingress at `*.vks.local`, or `kubec
 - **The shared ArgoCD must be able to deploy into your workload cluster** — i.e. your guest
   cluster must be **registered** as an ArgoCD destination. That is **admin-only** (`clusters` is
   a global ArgoCD RBAC resource), so you **request** it; the destination then becomes
-  `${ARGOCD_DEST_SERVER}` instead of in-cluster (`k8s/argocd/application.yaml`). You also need
-  `kubectl` access to the cluster ArgoCD runs in, because the scripts create the `Application`
-  by `kubectl apply` — **not** via the ArgoCD API (an ArgoCD reachable only by URL + API, with
-  no kubeconfig, is not supported).
+  `${ARGOCD_DEST_SERVER}` instead of in-cluster (`k8s/argocd/application.yaml`).
+- **You do NOT need `kubectl` access to the cluster ArgoCD runs in.** As a tenant you usually will
+  not have it — and you do not need it. ArgoCD's `applications` and `repositories` are
+  **project-scoped** RBAC, so `make gitops` can create the `Application` **through `argocd-server`**
+  using only your `AppProject` role. `ARGOCD_MECHANISM` picks how:
+
+  | value | what it does |
+  |---|---|
+  | `auto` (default) | tries `kubectl`, falls back to the API, then tells you exactly what to request |
+  | `kubectl` | apply into `ARGOCD_NAMESPACE` (needs k8s RBAC there — the admin path) |
+  | `api` | create via `argocd-server` — **the tenant path**. Needs `ARGOCD_SERVER` + `ARGOCD_AUTH_TOKEN`, and **no** Kubernetes RBAC in the ArgoCD namespace |
+  | `request` | apply nothing; print the exact grant to ask the platform team for |
+
+  Get a token with `argocd login <server> --sso` then
+  `argocd account generate-token --account <you>`, and put it in `.env` as `ARGOCD_AUTH_TOKEN`
+  (never on argv).
 - **`ARGOCD_NAMESPACE` must match** where the shared ArgoCD controller watches Applications
   (Step 4), and your granted **`AppProject` + RBAC** must permit the `Application` + destination.
 - **ArgoCD must be able to CLONE Gitea from whatever cluster ArgoCD runs in.** In-cluster
