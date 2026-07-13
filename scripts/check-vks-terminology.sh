@@ -44,7 +44,16 @@ VKS Supervisor Services?\tSupervisor Service(s). Prefixing a Supervisor-resident
 # explaining the banned term does not trip itself" — but this script is already excluded by NAME, and
 # stripping comments created a blind spot that immediately hid a real hit: a wrong noun in a
 # test-argocd-topology.sh comment. A comment teaches the reader exactly as a heading does.
-scan() { cat "$1"; }
+# STRIP MARKDOWN EMPHASIS BEFORE MATCHING.
+#
+# The first version grepped the raw text — so `VCF **Supervisor Services**` did NOT match
+# `VCF Supervisor Services`, and the phantom noun SHIPPED in two user-facing docs (architecture.md:5,
+# scenario-1.md:5) with this gate GREEN beside them, in the very PR that claimed to eliminate it.
+#
+# A banned PHRASE must be matched against the text a READER sees, not the source bytes. Markdown
+# emphasis (**bold**, *italic*, `code`, _under_) is invisible to the reader and must be invisible to
+# the gate. This is the "a gate that passes by not looking" failure: green, and measuring nothing.
+scan() { sed -E 's/\*\*|__|[*_`]//g' "$1"; }
 
 # EVERY tracked text file — not just *.md/*.sh. The first draft globbed those two extensions and
 # MISSED two real hits (.env.example and k8s/gitea/gitea.yaml). A gate's SCOPE LIST is the gate: a

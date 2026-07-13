@@ -1,6 +1,6 @@
-# VKS authentication (VCF 9 + Supervisor) — real lab only
+# VKS authentication (VCF 9 + Supervisor) — not needed for KinD
 
-How `$KUBECONFIG` is produced. This is the same for **both** real-lab scenarios — the mechanism does
+How `$KUBECONFIG` is produced. This is the same for **both** VKS scenarios — the mechanism does
 not depend on whether you install Harbor/ArgoCD or inherit them, so it lives here once.
 
 **What DOES differ per scenario is how many kubeconfigs you need**, and each scenario says so in its
@@ -59,9 +59,9 @@ wget --no-check-certificate https://<SUPERVISOR_HOST>/wcp/plugin/linux-amd64/vsp
 
 > **Not yet lab-validated.** The `vcf` flow is written to the command **shape** verified from
 > primary sources (the ogelbric/LAB VCF-CLI transcript and Broadcom's "Install the Argo CD
-> Service" techdoc), but it has **not** been run end-to-end against a real VKS lab in this repo.
+> Service" techdoc), but it has **not** been run end-to-end against a VKS cluster in this repo.
 > The login is interactive today: no non-interactive/stdin password mechanism is confirmed for
-> `vcf context create`, so `30-vks-login.sh` carries a `TODO(verify on a real VKS lab)` to
+> `vcf context create`, so `30-vks-login.sh` carries a `TODO(verify on a VKS cluster)` to
 > confirm one before automating further. A password is never placed on argv either way.
 > `kubeconfig` (bring the lab's exported kubeconfig) is the simplest working method.
 

@@ -12,14 +12,14 @@ VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surface
   **Harbor** push → GitOps tag write-back), wired to **Harbor** + **ArgoCD**, which run as **Supervisor Services** (you install them, or they already exist and you are a tenant).
 - **Delivery surface** — an OS-portable (Ubuntu / PhotonOS) jump-box image mirror (**crane**,
   dual-homed or sneakernet), a dependency-baked offline **Maven** builder, an **optional** pluggable
-  ingress (**Istio** default, **Traefik** optional — or **attach to the Istio a real VKS lab already
+  ingress (**Istio** default, **Traefik** optional — or **attach to the Istio a VKS cluster already
   has**, since Istio ships there as a VKS Standard Package) fronting the UIs at `*.vks.local`, and a
   one-command **KinD** end-to-end that proves the whole flow locally.
 
   The ingress is **not part of the pipeline** and **not part of `make install-all`** — it only decides
   *how you reach the UIs*. `make verify` proves the whole GitOps loop over a **port-forward**, so it
   needs no ingress and no `/etc/hosts` entry. Add one when you want `*.vks.local` URLs
-  (`make install-ingress`; on a real lab **`INGRESS_CONTROLLER=istio-existing`** — attach only, never
+  (`make install-ingress`; on VKS **`INGRESS_CONTROLLER=istio-existing`** — attach only, never
   install a second istiod over the platform's mesh).
 
 <p align="center"><img src="docs/diagrams/out/airgap.png" alt="Air-gap connectivity: the jump box bridges the internet and the air-gapped VKS cluster; the cluster itself has no internet access" width="820"></p>
@@ -29,7 +29,7 @@ VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surface
 > A developer pushes a change to **Gitea** → **Tekton** runs tests, builds a container
 > image with **Kaniko** and pushes it to **Harbor** → Tekton bumps the image tag in the
 > deploy repo → **ArgoCD** syncs the new version to the cluster → the web UI updates.
-> On a real lab, **Harbor** and **ArgoCD** run as **Supervisor Services** (on the Supervisor —
+> On VKS, **Harbor** and **ArgoCD** run as **Supervisor Services** (on the Supervisor —
 > you either install them, or they already exist and you're a tenant), and **Istio** is a **VKS
 > Standard Package** in the guest cluster — so this project **attaches** to it rather than
 > installing it. What this project always owns: mirroring every required image into Harbor, and
@@ -51,10 +51,10 @@ New here? Pick the path that matches your situation — each one is self-contain
 | **VKS — I install Harbor + ArgoCD** (I am the admin) | [Scenario 1](docs/scenario-1.md) | **Have:** a vSphere login that can install a Supervisor Service, create a vSphere Namespace and provision a guest cluster · cluster-admin on that guest cluster · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md))<br>**Reachable from the jump box:** the internet, the Supervisor API, Harbor — and ArgoCD's cluster must reach your guest API<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make env-check` → `make psa-check` |
 | **VKS — Harbor + ArgoCD already exist** (I am a **tenant**) | [Scenario 2](docs/scenario-2.md) | **Have:** cluster-admin on your own guest cluster · Harbor **project-admin** (else ask for robot credentials) · the licensed VCF CLI archives<br>**Ask the platform team for:** your guest cluster **registered** with ArgoCD (admin-only) · an ArgoCD role that lets you create an `Application` · mesh rights — `make istio-preflight` prints exactly what to request<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make harbor-robot` → `make psa-check` |
 
-The real-lab paths start from the jump-box **[Prerequisites](#prerequisites)** below.
+The VKS paths start from the jump-box **[Prerequisites](#prerequisites)** below.
 Run **`make check-tools`** to see which CLIs you have and which are required.
 
-> **Container engine:** podman or Docker for a real lab (`CONTAINER_ENGINE`, podman preferred).
+> **Container engine:** podman or Docker on VKS (`CONTAINER_ENGINE`, podman preferred).
 > `make e2e-kind` requires **Docker** specifically.
 
 ## Demo apps
@@ -103,7 +103,7 @@ and where `verify` injects its marker. Both live in `scripts/lib/apps.sh`.
 </details>
 
 <details>
-<summary><strong>On a REAL lab, adding an app may need grants you must request</strong></summary>
+<summary><strong>On VKS, adding an app may need grants you must request</strong></summary>
 
 <br>
 
@@ -113,7 +113,7 @@ granted. What that means concretely:
 
 | What | When it bites | What to run / ask for |
 |---|---|---|
-| **ArgoCD AppProject destination** | Always, as a tenant (you get your own AppProject; ours defaults to `default`, which permits everything — a real lab's will not). The `Application` is rejected: *"application destination … is not permitted in project"* | **Check first:** `kubectl -n $ARGOCD_NAMESPACE get appproject <yours> -o jsonpath='{.spec.destinations}{"\n"}{.spec.sourceRepos}'` — your new namespace AND the new `<app>-deploy` repo URL must both be listed.<br>**Ask the ArgoCD admin** to add them: `kubectl -n $ARGOCD_NAMESPACE patch appproject <yours> --type=json -p='[{"op":"add","path":"/spec/destinations/-","value":{"server":"$ARGOCD_DEST_SERVER","namespace":"<app>"}},{"op":"add","path":"/spec/sourceRepos/-","value":"<gitea>/<org>/<app>-deploy.git"}]'` |
+| **ArgoCD AppProject destination** | Always, as a tenant (you get your own AppProject; ours defaults to `default`, which permits everything — VKS's will not). The `Application` is rejected: *"application destination … is not permitted in project"* | **Check first:** `kubectl -n $ARGOCD_NAMESPACE get appproject <yours> -o jsonpath='{.spec.destinations}{"\n"}{.spec.sourceRepos}'` — your new namespace AND the new `<app>-deploy` repo URL must both be listed.<br>**Ask the ArgoCD admin** to add them: `kubectl -n $ARGOCD_NAMESPACE patch appproject <yours> --type=json -p='[{"op":"add","path":"/spec/destinations/-","value":{"server":"$ARGOCD_DEST_SERVER","namespace":"<app>"}},{"op":"add","path":"/spec/sourceRepos/-","value":"<gitea>/<org>/<app>-deploy.git"}]'` |
 | **Ingress hostname on a SHARED Gateway** | **Only** on the classic route API against a platform-owned Gateway (`ISTIO_SHARED_GATEWAY`). Its `hosts:` list belongs to the mesh admin, so an unlisted host **404s from a listener that exists** | **Check first:** `make istio-preflight` (and `istio_assert_shared_gateway_hosts` fails the install rather than 404ing later).<br>**Ask the mesh admin** to admit the host — ideally once, as a wildcard: `kubectl -n <gw-ns> patch gateway <gw> --type=json -p='[{"op":"add","path":"/spec/servers/0/hosts/-","value":"*.vks.local"}]'` |
 | **Harbor** | Never (for a *new app*) | Nothing to do **when adding an app**: the robot's push+pull is scoped to the whole project, so a new repo under it is already covered — and `make gitops` creates the `harbor-pull` Secret in the new app's namespace for you. **But the robot itself is not always self-serviceable**: only a Harbor **system-admin** can create one that spans two projects. See [Scenario 2 → grants](docs/scenario-2.md). |
 
@@ -126,7 +126,7 @@ list is ours. That leaves the AppProject destination as the only universal tenan
 > ([docs](https://argo-cd.readthedocs.io/en/stable/user-guide/projects/)); the Harbor robot we mint
 > is project-scoped (`scripts/22-harbor-robot.sh`); an Istio `Gateway`'s `hosts:` list gates which
 > hostnames a VirtualService may bind. But the exact `kubectl patch` invocations have **not** been
-> run against a real VKS lab, and the ArgoCD **server** there is 2.14.x (ours is 3.x). Treat them as
+> run against a VKS cluster, and the ArgoCD **server** there is 2.14.x (ours is 3.x). Treat them as
 > a starting point, confirm against your lab, and correct this table. See the backlog in CLAUDE.md.
 
 </details>
@@ -201,7 +201,7 @@ above is self-contained end to end (a CI gate enforces that: `make check-readme-
 | [Repository layout](docs/repository-layout.md) | where things live |
 | [Make targets](docs/make-targets.md) | every target, grouped |
 | [CI/CD](docs/ci-cd.md) | what CI actually gates (and what it deliberately does not) |
-| [VKS authentication](docs/vks-authentication.md) | how `$KUBECONFIG` is produced on a real lab (`VKS_AUTH_METHOD`, the `vcf` CLI flow), and **why Scenario 1 needs a second kubeconfig**. Both real-lab scenarios run `make vks-login` themselves; **the KinD path skips it entirely** |
+| [VKS authentication](docs/vks-authentication.md) | how `$KUBECONFIG` is produced on VKS (`VKS_AUTH_METHOD`, the `vcf` CLI flow), and **why Scenario 1 needs a second kubeconfig**. Both VKS scenarios run `make vks-login` themselves; **the KinD path skips it entirely** |
 | [Demo walkthrough](docs/demo-walkthrough.md) | drive the GitOps loop by hand |
 | [Detailed steps](docs/detailed-steps.md) | the full step-by-step |
 | [VKS services](docs/vks-services/) | what Broadcom actually ships (Harbor / ArgoCD / Istio), each fact **graded** by provenance |

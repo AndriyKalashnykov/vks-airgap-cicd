@@ -14,7 +14,7 @@ VKS cluster:
   controls — **Gitea, the app, and the Tekton Dashboard**.
 - **Harbor and ArgoCD are never behind the ingress** — each has its own LB address in both
   contexts. In KinD, Harbor is **self-signed HTTPS on its LB IP** and ArgoCD is **self-signed
-  TLS on its own LB IP** (published as `ARGOCD_LB_IP`); the real lab serves the same posture at
+  TLS on its own LB IP** (published as `ARGOCD_LB_IP`); VKS serves the same posture at
   the lab's own URLs. The KinD-vs-lab gap shrinks to "we mint the cert locally".
 
 | Service | Local KinD | VKS | Login |
@@ -29,7 +29,7 @@ VKS cluster:
 first, so what it prints is the password that actually works.
 
 - **KinD:** the flow generates one for you (`.env.kind`) and applies it at install — nothing to set.
-- **Real VKS:** ArgoCD is the lab's. If you set `ARGOCD_ADMIN_PASSWORD` in `.env`, that is what you
+- **VKS:** ArgoCD is the platform's's. If you set `ARGOCD_ADMIN_PASSWORD` in `.env`, that is what you
   get; otherwise the command reads the initial-admin secret, or points you at your lab.
 
 > Setting `ARGOCD_ADMIN_PASSWORD` in `.env` does **not** affect `make e2e-kind` — that path runs with

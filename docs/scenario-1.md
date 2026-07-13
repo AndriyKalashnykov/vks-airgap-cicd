@@ -2,7 +2,7 @@
 
 <br>
 
-> **You install Harbor + ArgoCD** (as VCF **Supervisor Services**), then run the pipeline.
+> **You install Harbor + ArgoCD** (as **Supervisor Services**), then run the pipeline.
 
 This is the real target. You are given a **Supervisor** endpoint (IP), a login, and a password —
 nothing else. **Harbor** and **ArgoCD** are **not** pre-provided: you install them as **VCF
@@ -82,7 +82,7 @@ step where it first becomes known, rather than all at once.
    Contour Envoy service IP), then add a DNS record — or a jump-box `/etc/hosts` entry — mapping
    the Harbor FQDN → that IP.
 
-> **Fidelity bonus (real lab beats KinD here):** when Harbor and your VKS workload cluster run on
+> **Fidelity bonus (VKS beats KinD here):** when Harbor and your VKS workload cluster run on
 > the **same Supervisor**, the VKS clusters **automatically trust the Harbor registry
 > certificate** — so the workload-node image pull "just works" without the per-node `certs.d`
 > wiring the KinD stand-in uses.
@@ -196,7 +196,7 @@ make kind-down        # ONLY if you ran the local KinD flow on this box
 rm -f .env.kind       # belt-and-suspenders (this is all you need if you never ran KinD here)
 ```
 
-> **Do not delete it again later.** On a real lab `make install-gitea` (inside `make platform`)
+> **Do not delete it again later.** On VKS `make install-gitea` (inside `make platform`)
 > *writes* `.env.kind` to publish the Gitea **LoadBalancer** address it just discovered
 > (`GITEA_ARGOCD_URL`) — the address ArgoCD's repo-server clones from. That file is how the value
 > reaches `make gitops`, which runs as a separate process. Removing it between `make platform` and
@@ -258,7 +258,7 @@ make vks-login    # validates $KUBECONFIG + context against the lab cluster
 ```
 
 **Step 3b — install the Broadcom VCF/VKS lab CLIs.** You need the **licensed** `argocd-vcf` +
-`vcf` binaries if **either** applies (both are the normal real-lab case):
+`vcf` binaries if **either** applies (both are the normal VKS case):
 
 - you authenticate with `VKS_AUTH_METHOD=vcf` — `scripts/30-vks-login.sh` hard-requires `vcf`; or
 - you need **`make fetch-argocd-kubeconfig`** (the Supervisor kubeconfig that lets `make gitops`
@@ -304,9 +304,9 @@ clearly if any is missing. On a minimal box where you skipped `make deps`:
   `gzip`/`tar` come from BusyBox-style **toybox**, which lacks `gzip -t` — the installer uses
   portable checks so it works there). `unzip` is **not** required — the artifacts are `.gz`/`.tar.gz`.
 
-> **Fidelity vs a real lab.** The local KinD stand-in faithfully reproduces the lab's
+> **Fidelity vs VKS.** The local KinD stand-in faithfully reproduces the lab's
 > **self-signed-TLS + CA-trust** posture (Harbor HTTPS + ArgoCD self-signed TLS on their own
-> LBs). Three things differ on a real VKS lab and must be verified there: the workload cluster
+> LBs). Three things differ on a VKS cluster and must be verified there: the workload cluster
 > trusts the Harbor CA **declaratively** via the Cluster spec `trust.additionalTrustedCAs`
 > (not per-node `certs.d`); a **private** Harbor project needs a robot account +
 > `imagePullSecret`; and the lab is **FQDN**-addressed. See
@@ -465,7 +465,7 @@ LB IP + admin credentials you set there. For **Gitea** (which you installed) and
   (step 4).
 - **ArgoCD must be able to CLONE Gitea from whatever cluster ArgoCD runs in.** In-cluster
   (KinD, ArgoCD-in-guest) that is `GITEA_INTERNAL_URL` (`http://gitea-http.gitea.svc:3000`).
-  On a real lab ArgoCD is a **Supervisor Service** — a *different* cluster — and that name does
+  On VKS ArgoCD is a **Supervisor Service** — a *different* cluster — and that name does
   not resolve there, so Gitea gets its **own LoadBalancer** and `make install-gitea` publishes
   `GITEA_ARGOCD_URL` (`http://<gitea-lb-ip>:3000`). The ingress hostname (`gitea.vks.local`) is
   **not** usable for this: it exists only in your `/etc/hosts`, and dialling the ingress IP sends
