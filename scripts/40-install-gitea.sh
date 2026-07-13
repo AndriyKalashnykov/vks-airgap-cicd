@@ -25,12 +25,15 @@ GITEA_URL="${GITEA_URL:-http://${GITEA_HOST:?set GITEA_HOST (or GITEA_URL) in .e
 # comment on the Service in k8s/gitea/gitea.yaml. A LoadBalancer keeps its ClusterIP, so Tekton's
 # in-cluster clone/write-back over GITEA_INTERNAL_URL is unaffected.
 GITEA_SERVICE_TYPE="${GITEA_SERVICE_TYPE:-LoadBalancer}"
-export GITEA_NAMESPACE HARBOR_URL HARBOR_INFRA_PROJECT GITEA_URL GITEA_STORAGE_SIZE GITEA_SERVICE_TYPE
+# The air-gap default: the image mirrored into Harbor. Overridable so a test WITHOUT a Harbor (the
+# cross-cluster e2e, which exercises the ArgoCD topology rather than the air gap) can still run Gitea.
+GITEA_IMAGE="${GITEA_IMAGE:-${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/gitea/gitea:1.26.4-rootless}"
+export GITEA_NAMESPACE HARBOR_URL HARBOR_INFRA_PROJECT GITEA_URL GITEA_STORAGE_SIZE GITEA_SERVICE_TYPE GITEA_IMAGE
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 LB_TIMEOUT_SECONDS="${GITEA_LB_TIMEOUT_SECONDS:-180}"
 
 # shellcheck disable=SC2016
-ALLOWLIST='${GITEA_NAMESPACE} ${HARBOR_URL} ${HARBOR_INFRA_PROJECT} ${GITEA_URL} ${GITEA_STORAGE_SIZE} ${GITEA_SERVICE_TYPE}'
+ALLOWLIST='${GITEA_NAMESPACE} ${HARBOR_URL} ${HARBOR_INFRA_PROJECT} ${GITEA_URL} ${GITEA_STORAGE_SIZE} ${GITEA_SERVICE_TYPE} ${GITEA_IMAGE}'
 
 log_info "installing Gitea into namespace '$GITEA_NAMESPACE' (Service type: ${GITEA_SERVICE_TYPE})"
 # shellcheck disable=SC2016

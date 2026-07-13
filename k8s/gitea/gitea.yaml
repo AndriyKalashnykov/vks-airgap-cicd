@@ -46,7 +46,10 @@ spec:
           # Tag tracked by the general k8s/tekton manifest customManager in
           # renovate.json; the check-image-alignment gate keeps it in lockstep
           # with images/images.txt (the mirror source of truth).
-          image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/gitea/gitea:1.26.4-rootless
+          # Defaults to the mirrored Harbor ref (the air-gap path). GITEA_IMAGE lets a test that has
+          # no Harbor — e2e-cross-cluster, which is about the ArgoCD topology, not the air gap —
+          # point at an upstream image without weakening the real flow.
+          image: ${GITEA_IMAGE}
           imagePullPolicy: IfNotPresent
           env:
             - { name: GITEA__database__DB_TYPE, value: "sqlite3" }
