@@ -405,19 +405,16 @@ read `.env` first) · `.env.example` had `KUBECONFIG` and `GUEST_KUBECONFIG` dec
 blocks** from a substring-matching edit in #168, with every gate green · `creds-show` printed
 `<your lab's ArgoCD URL>` on a real lab while `ARGOCD_SERVER` **already held the address**.
 
-**STILL OPEN** — all confirmed against the code, none fixed:
+**ALL 9 CLOSED (verified against the tree, 2026-07-13)** — `.env` creation in both runbooks (#180) ·
+`ARGOCD_KUBECONFIG` hoisted to its own step *before* the install that needs it (#180) · `install-all`'s
+chain now names `preflight` (#180) · both stale "the ArgoCD API is not supported" claims gone — one of
+them denied the **tenant their own path** (#180) · the tenant mechanism ladder documented (#180) ·
+broken anchor, doubled blockquote, hardcoded `apps` project (#180).
 
-| Where | What |
-|---|---|
-| `docs/scenario-1.md`, `docs/scenario-2.md` | **Neither doc ever tells you to CREATE `.env`** — no `make env-init`, no `cp .env.example .env` — yet both have "set these in `.env`" callouts, and `.env` is gitignored. Only the README's *Run* column mentions `env-init`. Both docs claim to be self-contained, and `check-readme-scenarios` passes anyway. |
-| `docs/scenario-1.md` | **`ARGOCD_KUBECONFIG` is never fetched.** `make fetch-argocd-kubeconfig` appears only as a *rationale for installing the vcf CLI*, never as a step — but `make gitops` needs it (ArgoCD is a Supervisor Service). |
-| `docs/scenario-1.md:382`, `docs/scenario-2.md:284` | The `make install-all` chain comment omits **`preflight`** — the FIRST prerequisite (`Makefile:371`). |
-| `docs/scenario-1.md:135-139` | Stale: claims `make gitops` targets the in-cluster destination and that an off-cluster ArgoCD "is not what the scripts assume". Both false since #153/#163. |
-| `docs/scenario-2.md:343-345` | Stale: claims the Application is created by `kubectl apply` "**not** via the ArgoCD API (… not supported)". `ARGOCD_MECHANISM=api` is exactly that, and it is the tenant's real path. |
-| `docs/scenario-2.md` | **`ARGOCD_AUTH_TOKEN` and `ARGOCD_MECHANISM` are never mentioned** — the tenant's whole mechanism ladder is documented only in `.env.example`. |
-| `docs/scenario-1.md:426` | Broken anchor: `../README.md#access-the-uis-urls-logins-passwords` — that heading no longer exists (the README was split into `docs/`). |
-| `docs/scenario-1.md:155` | `> > ARGOCD_TRACK_BRANCH=main` — a doubled blockquote marker inside a fenced block. |
-| `docs/scenario-2.md` | Prose hardcodes the Harbor project as **`apps`**; it is `$HARBOR_APP_PROJECT` (`apps` is only the default). |
+Later sweeps found more, also fixed: the **phantom noun** (Broadcom's "Supervisor Service" welded to
+"VCF") pointed operators at the wrong console, **Contour was documented on the wrong cluster**, and **both scenarios' network-reach
+prereqs were unrunnable as written** (they never named the Supervisor API that `vks-login` /
+`fetch-argocd-kubeconfig` / `gitops` all need) — #189, gated by `check-vks-terminology`.
 
 ### NEXT (in order)
 

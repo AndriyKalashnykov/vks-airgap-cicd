@@ -49,7 +49,7 @@ EXEMPT='APP_DEV_PORT|INGRESS_CONTROLLER'
 # sources this file with `set -a` AFTER make put the override in the environment, and the sourced
 # value wins. You would run against the default cluster while believing you had switched. It also
 # made a two-cluster test undrivable. These must be COMMENTED, with their default applied in code.
-SELECTORS='KUBECONFIG|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|KUBECONTEXT|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME'
+SELECTORS='KUBECONFIG|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|KUBECONTEXT|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE'
 
 rc=0
 checked=0
@@ -75,9 +75,32 @@ for v in "${UNCOMMENTED[@]}"; do
     rc=1
   fi
 
-  # (b) per-run override: a Makefile recipe or a script passes VAR=<value> to a sub-make/command.
+  # (b) per-run override — TWO forms, and the second one is how ARGOCD_SERVER got through.
+  #
+  #   b1. a sub-make / make invocation:      $(MAKE) foo VAR=x     |  make foo VAR=x
+  #   b2. an ENV-PREFIX invocation:          VAR=x ./scripts/y.sh  |  VAR="$x" \  (continued)
+  #                                                                    other-script.sh
+  #
+  # This check used to detect ONLY b1. But b2 is how the harnesses actually drive things —
+  # 91-e2e-tenant-mechanism.sh passes ARGOCD_SERVER="$argocd_lb" \ as an env prefix to
+  # 70-configure-argocd.sh — so an uncommented ARGOCD_SERVER in .env.example was invisible to this
+  # gate while silently defeating that very override. The e2e still went green, against a hostname
+  # only the author's box resolved. A gate that reasons about one invocation form is a gate that
+  # misses every other one.
+  #
+  # b2 patterns (deliberately NOT matching a plain `VAR=value` assignment on its own):
+  #   ^ VAR=<val> <command>     an assignment followed by a command on the same line
+  #   ^ VAR=<val> \             an assignment ending in a line-continuation (an env-prefix block)
   ovr="$(grep -rlE "(MAKE\)[^#]*|make )[^#]*\b${v}=" "${REPO_ROOT}/Makefile" "${REPO_ROOT}/scripts" 2>/dev/null \
           | xargs -r -n1 basename | tr '\n' ' ')"
+  # The VALUE must be consumed properly or a quoted value CONTAINING SPACES looks like
+  # `VAR=x command`. First draft did exactly that and false-flagged
+  #     VCF_CLI_VERSION="${VCF_CLI_VERSION:?set VCF_CLI_VERSION in .env.example (e.g. ...)}"
+  # which is a plain assignment, not an override. So: value = "quoted" | 'quoted' | bare-no-space,
+  # and only THEN a following command token (or a line-continuation) makes it an env prefix.
+  ovr2="$(grep -rlE "^[[:space:]]*${v}=(\"[^\"]*\"|'[^']*'|[^[:space:]\"']+)([[:space:]]+[^[:space:]=#]|[[:space:]]*\\\\$)" \
+            "${REPO_ROOT}/scripts" 2>/dev/null | xargs -r -n1 basename | tr '\n' ' ')"
+  [ -n "$ovr2" ] && ovr="${ovr}${ovr2}"
   if [ -n "$ovr" ]; then
     log_error "CLOBBER: '${v}' is UNCOMMENTED in .env.example, but it is passed as a PER-RUN OVERRIDE"
     log_error "    in: ${ovr}"
