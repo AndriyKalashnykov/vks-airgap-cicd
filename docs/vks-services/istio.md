@@ -82,8 +82,23 @@ documentation — is the mechanism.
 | Air-gap | **free** — the auto-provisioned proxy inherits istiod's image hub, so it pulls `proxyv2` from Harbor with no extra config | already configured by whoever installed the mesh |
 | Works when the VKS package's shared gateway is OFF (the default)? | **Yes** | **No — nothing to bind to** |
 
-All KinD-verified. `ISTIO_ROUTE_API=auto` (default) picks the Gateway API whenever Istio is an
-Accepted `GatewayClass`, else falls back to classic.
+`ISTIO_ROUTE_API=auto` (default) picks the Gateway API whenever Istio is an Accepted `GatewayClass`,
+else falls back to classic.
+
+> ⚠️ **The gateway-api column was "KinD-verified" for a FALSE reason — corrected 2026-07-13.**
+> **Nothing in this repo installed the Gateway API CRDs**, and Istio does not ship them. On KinD they
+> existed only because **cloud-provider-kind force-installs its own bundle**. So the green that graded
+> this column *KinD-verified* was produced by a **KinD-only shim**, and on a real VKS cluster the CRDs
+> may simply be **absent** — in which case we fall back to **classic**, which needs the shared ingress
+> gateway that the VKS package ships **disabled by default**: nothing to bind to.
+>
+> We now install the CRDs ourselves when we own the cluster (`istio_ensure_gwapi_crds`,
+> `GATEWAY_API_VERSION`), carry them in the air-gap bundle, and **say so** when they are absent instead
+> of degrading silently. **A tenant cannot install them** (cluster-scoped) — `istio-preflight` prints
+> that ask.
+>
+> **Grade: the MECHANISM is KinD-verified; "the CRDs are present on a VKS guest cluster" is
+> UNVERIFIED** and only a lab can settle it (`kubectl get crd httproutes.gateway.networking.k8s.io`).
 
 ### 5. RBAC — this *is* the access model
 
