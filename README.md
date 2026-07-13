@@ -591,7 +591,6 @@ With the ArgoCD instance up, record its endpoint and namespace.
 > ARGOCD_NAMESPACE=argocd-instance-1    # the vSphere Namespace your A2 ArgoCD instance runs in
 > ARGOCD_SERVER=<argocd-server-LB-IP>   # kubectl get svc -n argocd-instance-1 argocd-server \
 > #                                       -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
-> ARGOCD_APP_NAME=javawebapp
 > > ARGOCD_TRACK_BRANCH=main
 > # ARGOCD_CA_FILE=./secrets/argocd-ca.crt   # ArgoCD's self-signed CA (Step 2, make fetch-argocd-ca)
 > ```
@@ -615,13 +614,21 @@ kubeconfig at `$KUBECONFIG` (used at "Wire the repo & run the pipeline", Step 1 
 
 ### Wire the repo & run the pipeline
 
-**Step 0 — remove the KinD overlay.** `.env.kind` (written by the local flow) is sourced
-*after* `.env` and would silently redirect everything at a kind cluster. Delete it first:
+**Step 0 — remove any STALE KinD overlay.** `.env.kind` is sourced *after* `.env`, so a leftover
+one from a local run would silently redirect everything at a kind cluster. Delete it **before you
+start**:
 
 ```bash
 make kind-down        # if you ran the local flow (also removes .env.kind)
 rm -f .env.kind       # belt-and-suspenders
 ```
+
+> **Do not delete it again later.** On a real lab `make install-gitea` (inside `make platform`)
+> *writes* `.env.kind` to publish the Gitea **LoadBalancer** address it just discovered
+> (`GITEA_ARGOCD_URL`) — the address ArgoCD's repo-server clones from. That file is how the value
+> reaches `make gitops`, which runs as a separate process. Removing it between `make platform` and
+> `make gitops` throws the address away, and `make gitops` will refuse to build a repoURL ArgoCD
+> cannot reach. (The name is a leftover from when only the KinD flow discovered anything.)
 
 **Step 1 — finish `.env`.** By now the interleaved "→ now set these in `.env`" callouts above
 have filled the Harbor values (as you installed Harbor), the ArgoCD values (as you installed
@@ -750,8 +757,11 @@ reproducible on the KinD stand-in.)
 **Step 4 — Harbor projects + (recommended) a robot account.** `make mirror` (run in step 6)
 creates the `cicd` and `apps` projects for you via Harbor's REST API if they don't exist
 (needs push rights). It creates them **public** (`HARBOR_PUBLIC_PROJECTS=true`, the default),
-so the cluster's containerd/kubelet pull the app image **anonymously** — the deployed manifest
-carries no `imagePullSecret`, which is why the KinD demo needs none.
+so the cluster's containerd/kubelet *can* pull the app image anonymously. The image-pull
+credential is created either way: `make gitops` puts a `harbor-pull` Secret in **every app's
+namespace** and every app's Deployment references it — public projects just make it redundant.
+(`make check-pull-secret-alignment` gates that the two agree; a mismatch is an ImagePullBackOff
+that nothing else would catch.)
 
 **If your lab mandates PRIVATE projects**, set `HARBOR_PUBLIC_PROJECTS=false` (so any project
 `make mirror` auto-creates is private) or pre-create them private. Nothing else to do: `make gitops`
@@ -873,7 +883,7 @@ LB IP + admin credentials you set there. For **Gitea** (which you installed) and
 
 <br>
 
-- **`.env.kind` must not exist** (step 0) — it is sourced after `.env` and silently forces
+- **No STALE `.env.kind` when you start** (step 0) — it is sourced after `.env` and silently forces
   kind values.
 - **You need `kubectl` access to the cluster ArgoCD RUNS in** (the Supervisor), because the
   scripts create the `Application` by `kubectl apply`-ing it into `ARGOCD_NAMESPACE` — **not**
@@ -978,7 +988,6 @@ HARBOR_APP_PROJECT=<granted-project>
 HARBOR_PUBLIC_PROJECTS=false            # tenant projects are typically private (see Step 4)
 ARGOCD_SERVER=<discovered-argocd-server-LB-IP>
 ARGOCD_NAMESPACE=<namespace the shared ArgoCD instance watches>
-ARGOCD_APP_NAME=javawebapp
 ARGOCD_TRACK_BRANCH=main
 # ARGOCD_CA_FILE=./secrets/argocd-ca.crt   # optional; fetched in Step 2 (make fetch-argocd-ca)
 KUBECONFIG=./secrets/vks.kubeconfig
@@ -987,13 +996,21 @@ VKS_CONTEXT=<context-name-in-that-kubeconfig>
 
 ### Wire the repo & run the pipeline
 
-**Step 0 — remove the KinD overlay.** `.env.kind` (written by the local flow) is sourced
-*after* `.env` and would silently redirect everything at a kind cluster. Delete it first:
+**Step 0 — remove any STALE KinD overlay.** `.env.kind` is sourced *after* `.env`, so a leftover
+one from a local run would silently redirect everything at a kind cluster. Delete it **before you
+start**:
 
 ```bash
 make kind-down        # if you ran the local flow (also removes .env.kind)
 rm -f .env.kind       # belt-and-suspenders
 ```
+
+> **Do not delete it again later.** On a real lab `make install-gitea` (inside `make platform`)
+> *writes* `.env.kind` to publish the Gitea **LoadBalancer** address it just discovered
+> (`GITEA_ARGOCD_URL`) — the address ArgoCD's repo-server clones from. That file is how the value
+> reaches `make gitops`, which runs as a separate process. Removing it between `make platform` and
+> `make gitops` throws the address away, and `make gitops` will refuse to build a repoURL ArgoCD
+> cannot reach. (The name is a leftover from when only the KinD flow discovered anything.)
 
 **Step 1 — finish `.env`.** The discovery step above filled the Harbor + ArgoCD values,
 `ARGOCD_NAMESPACE`, and `KUBECONFIG` / `VKS_CONTEXT`. Only the **Gitea password** (a login for
@@ -1231,7 +1248,7 @@ deployed **app**, either front them with the ingress at `*.vks.local`, or `kubec
 
 <br>
 
-- **`.env.kind` must not exist** (Step 0) — it is sourced after `.env` and silently forces
+- **No STALE `.env.kind` when you start** (Step 0) — it is sourced after `.env` and silently forces
   kind values.
 - **The shared ArgoCD must be able to deploy into your workload cluster** — i.e. your guest
   cluster must be **registered** as an ArgoCD destination. That is **admin-only** (`clusters` is
@@ -1306,7 +1323,7 @@ VKS cluster:
 > 3000:3000` → <http://localhost:3000>. Harbor and ArgoCD are always direct LoadBalancers, not behind the ingress.
 
 The **Tekton Dashboard** (above) is Tekton's web UI. The Tekton **EventListener** is a
-separate, in-cluster-only webhook receiver (`el-javawebapp.ci.svc:8080`) — the Gitea webhook fires
+separate, in-cluster-only webhook receiver (`el-apps.ci.svc:8080`) — the Gitea webhook fires
 cluster-internally, so there is nothing to expose or log into there.
 
 </details>
@@ -1351,7 +1368,7 @@ line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
    ```
 
    **Commit directly to `main`.** The commit fires the Gitea push webhook
-   (`el-javawebapp.ci.svc:8080`) → the Tekton EventListener → a new PipelineRun. (This is the same
+   (`el-apps.ci.svc:8080`) → the Tekton EventListener → a new PipelineRun. (This is the same
    `application.yml` line `make verify` rewrites with a unique marker.)
 
 3. **Watch Tekton build it.** In the **Tekton Dashboard** (<http://tekton.vks.local>), a new
