@@ -22,20 +22,41 @@ load_env
 
 ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
 
-# 1. Operator-set password from .env (the KinD install applied it). No cluster needed.
-if [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]; then
-  printf '%s\n' "$ARGOCD_ADMIN_PASSWORD"
-  exit 0
+# THE CLUSTER IS THE TRUTH, NOT `.env`.
+#
+# This used to print ARGOCD_ADMIN_PASSWORD from .env first, "because the KinD install applied it".
+# It often did not: `make e2e-kind` runs with SKIP_DOTENV=1, so 07-install-argocd.sh never saw the
+# .env value and never applied it — ArgoCD kept its AUTO-GENERATED password. But THIS script does
+# not skip .env, so it printed the .env value anyway: a confidently-wrong password that does not
+# log in. Telling someone a wrong password is worse than telling them nothing.
+#
+# The signal is exact: 07-install-argocd.sh DELETES `argocd-initial-admin-secret` when (and only
+# when) it applies our password. So:
+#   secret PRESENT -> the auto-generated password is in force; ours was NOT applied -> print theirs.
+#   secret ABSENT  -> ours was applied (or ArgoCD is lab-provided) -> fall back to ARGOCD_ADMIN_PASSWORD.
+# Ask the cluster first, and only believe .env when the cluster is unreachable or has no such secret.
+
+# 1. The auto-generated initial-admin secret — if it EXISTS, it is the password in force.
+if command -v kubectl >/dev/null 2>&1 && [ -n "${KUBECONFIG:-}" ] && [ -f "${KUBECONFIG:-}" ]; then
+  export KUBECONFIG
+  if enc="$(kubectl -n "$ARGOCD_NAMESPACE" get secret argocd-initial-admin-secret \
+              -o jsonpath='{.data.password}' 2>/dev/null)" && [ -n "$enc" ]; then
+    if [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]; then
+      log_warn "ARGOCD_ADMIN_PASSWORD is set, but the cluster still has argocd-initial-admin-secret"
+      log_warn "  -> your value was NEVER APPLIED (an install with SKIP_DOTENV=1 does not read .env)."
+      log_warn "  -> printing the password that ACTUALLY works. To pin your own:"
+      log_warn "     make install-argocd   (or: make e2e-kind E2E_SKIP_DOTENV=0)"
+    fi
+    printf '%s' "$enc" | base64 -d
+    echo
+    exit 0
+  fi
 fi
 
-# 2. Auto-generated initial-admin secret — needs cluster access.
-require_cmd kubectl
-: "${KUBECONFIG:?KUBECONFIG not set — is the cluster up? (written to .env.kind by the KinD flow)}"
-export KUBECONFIG
-if enc="$(kubectl -n "$ARGOCD_NAMESPACE" get secret argocd-initial-admin-secret \
-            -o jsonpath='{.data.password}' 2>/dev/null)" && [ -n "$enc" ]; then
-  printf '%s' "$enc" | base64 -d
-  echo
+# 2. No initial-admin secret -> our password was applied (07 deletes it when it applies ours),
+#    or ArgoCD is lab-provided and the operator set the value themselves.
+if [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]; then
+  printf '%s\n' "$ARGOCD_ADMIN_PASSWORD"
   exit 0
 fi
 

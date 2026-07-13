@@ -25,13 +25,19 @@ VKS cluster:
 | **Harbor** | its own LB IP, **self-signed HTTPS** (`https://<ip>`, our CA) | the **lab's** Harbor URL, **HTTPS** | `admin` / `HARBOR_PASSWORD` |
 | **ArgoCD** | its own LB IP, **self-signed TLS** (`https://<ARGOCD_LB_IP>`, `--insecure`) — **not** behind the ingress | the **lab's own ArgoCD** URL/IP, self-signed TLS | `admin` / `make argocd-password` |
 
-**ArgoCD password** — `make argocd-password` reveals it for either context:
+**ArgoCD password** — **`make argocd-password`** prints it, in every context. It asks the **cluster**
+first, so what it prints is the password that actually works.
 
-- **KinD:** set `ARGOCD_ADMIN_PASSWORD` in `.env` for a known, stable login (applied at
-  `make install-argocd`, like Gitea/Harbor); leave it blank to keep ArgoCD's auto-generated
-  password. Either way `make argocd-password` prints it — no `kubectl`/context needed.
-- **Real VKS:** ArgoCD is lab-provided — leave `ARGOCD_ADMIN_PASSWORD` blank; the command
-  reads the initial-admin secret if present, otherwise points you to your lab.
+- **KinD:** the flow generates one for you (`.env.kind`) and applies it at install — nothing to set.
+- **Real VKS:** ArgoCD is the lab's. If you set `ARGOCD_ADMIN_PASSWORD` in `.env`, that is what you
+  get; otherwise the command reads the initial-admin secret, or points you at your lab.
+
+> Setting `ARGOCD_ADMIN_PASSWORD` in `.env` does **not** affect `make e2e-kind` — that path runs with
+> `SKIP_DOTENV=1` (it stands in for a fresh operator, who has no `.env`). To pin your own on KinD:
+> `make e2e-kind E2E_SKIP_DOTENV=0`. `make argocd-password` will tell you if a value you set was
+> never applied, rather than printing a password that does not log in.
+
+---
 
 > Without the ingress (or before adding the `/etc/hosts` line), the same services are still
 > reachable over `kubectl port-forward` — e.g. `kubectl -n gitea port-forward svc/gitea-http

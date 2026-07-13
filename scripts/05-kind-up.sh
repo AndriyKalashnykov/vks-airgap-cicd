@@ -108,7 +108,18 @@ set_env_var VKS_CONTEXT "$KIND_CONTEXT"
 # explicit `.env` populate step; kept here as the validated interim that unblocks #98's smoke.
 [ -n "${HARBOR_PASSWORD:-}" ]      || set_env_var HARBOR_PASSWORD "$(gen_password)"
 [ -n "${GITEA_ADMIN_PASSWORD:-}" ] || set_env_var GITEA_ADMIN_PASSWORD "$(gen_password)"
-log_info "published KUBECONFIG/VKS_AUTH_METHOD/VKS_CONTEXT (+ generated KinD Harbor/Gitea creds; see 'make creds') to ${REPO_ROOT}/.env.kind"
+# ArgoCD too — and it MUST be generated HERE, into .env.kind, not left to `.env`.
+#
+# `make e2e-kind` runs with SKIP_DOTENV=1 (it stands in for a fresh operator / a CI runner, neither
+# of which has a .env). So an ARGOCD_ADMIN_PASSWORD sitting in `.env` is NOT seen by
+# 07-install-argocd.sh and is NEVER APPLIED — ArgoCD keeps its auto-generated password. But
+# `make argocd-password` does NOT skip .env, so it would happily print the .env value: a password
+# that does not work. The user is told a password and cannot log in.
+#
+# .env.kind IS sourced under SKIP_DOTENV, so generating it here means 07 applies it and
+# `make creds-show` prints the password that actually works.
+[ -n "${ARGOCD_ADMIN_PASSWORD:-}" ] || set_env_var ARGOCD_ADMIN_PASSWORD "$(gen_password)"
+log_info "published KUBECONFIG/VKS_AUTH_METHOD/VKS_CONTEXT (+ generated KinD Harbor/Gitea/ArgoCD creds; see 'make creds-show') to ${REPO_ROOT}/.env.kind"
 
 # Point subsequent kubectl calls at the kind cluster.
 export KUBECONFIG="$KUBECONFIG_ABS"
