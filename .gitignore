@@ -53,3 +53,6 @@ token.md
 
 # Serializes registry-mutating work (see with_registry_lock in scripts/lib/os.sh)
 .registry.lock
+
+# Rendered ArgoCD Applications for a TENANT to hand to their platform team (ARGOCD_MECHANISM=request).
+/out/

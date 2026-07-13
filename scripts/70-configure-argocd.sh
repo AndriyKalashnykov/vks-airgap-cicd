@@ -88,21 +88,60 @@ ns_err="$(ka get ns "$ARGOCD_NAMESPACE" 2>&1 >/dev/null)" || {
   die "namespace '$ARGOCD_NAMESPACE' not found on the ArgoCD cluster ($ARGOCD_API). Is ARGOCD_KUBECONFIG/ARGOCD_NAMESPACE right? (ArgoCD is a Supervisor Service on a real lab — it is NOT in your guest cluster.)"
 }
 
+# WHICH MECHANISM CAN ACTUALLY WRITE THE APPLICATION?
+#
+# This used to gate on `kubectl auth can-i create applications` AND `create secrets` in the ArgoCD
+# namespace, and DIE if either said no. That measures KUBERNETES RBAC in an ADMIN-owned vSphere
+# Namespace — the one axis a VKS tenant is EXPECTED to fail. It is the wrong axis: in ArgoCD,
+# `applications` and `repositories` are PROJECT-SCOPED RBAC resources, so an AppProject role lets a
+# tenant create them through ARGOCD-SERVER with no Kubernetes RBAC at all. The old gate told a tenant
+# who could deploy that they could not.
+#
+# So MEASURE, then pick (ARGOCD_MECHANISM=auto|kubectl|api|request):
+#   kubectl — we may write to the ArgoCD namespace directly (Scenario 1, KinD). Unchanged.
+#   api     — argocd-server accepts us (the TENANT path: an AppProject role, no k8s RBAC).
+#   request — neither. Render what we WOULD have applied and print the exact ask. The give-up path,
+#             and it is LAST, not first.
+ARGOCD_MECHANISM="${ARGOCD_MECHANISM:-auto}"
+
+# The deploy repos are seeded PUBLIC (50-seed-gitea-repos.sh), so ArgoCD needs no credential to clone
+# them and the repo Secret is OPTIONAL. Demanding `create secrets` — the grant a tenant is least
+# likely to hold — for a repo that needs no credential is how the old gate failed them twice over.
+GITEA_DEPLOY_PRIVATE="${GITEA_DEPLOY_PRIVATE:-false}"
+
 can() { [ "$(ka auth can-i "$1" "$2" -n "$ARGOCD_NAMESPACE" 2>/dev/null || echo no)" = yes ]; }
-if ! can create applications.argoproj.io || ! can create secrets; then
-  log_error "This kubeconfig may NOT create ArgoCD objects in '$ARGOCD_NAMESPACE' on $ARGOCD_API:"
-  log_error "    create applications.argoproj.io : $(ka auth can-i create applications.argoproj.io -n "$ARGOCD_NAMESPACE" 2>&1 || true)"
-  log_error "    create secrets                  : $(ka auth can-i create secrets -n "$ARGOCD_NAMESPACE" 2>&1 || true)"
-  log_error ""
-  log_error "  On VKS the ArgoCD instance runs in an ADMIN-owned vSphere Namespace, so a tenant"
-  log_error "  typically cannot write there with kubectl. REQUEST from your platform team, per app:"
-  app_names | while read -r a; do
-    [ -n "$a" ] || continue
-    log_error "    - an ArgoCD Application '${a}' tracking ${GITEA_ORG}/${a}-deploy -> namespace '${a}' on ${GUEST_API}"
-  done
-  log_error "    - (private repos only) the matching ArgoCD repository Secret"
-  log_error "  Or ask to be granted create/update on applications.argoproj.io + secrets in '$ARGOCD_NAMESPACE'."
-  die "refusing to continue — the writes below would fail with Forbidden."
+can_kubectl=no
+if can create applications.argoproj.io; then
+  if [ "$GITEA_DEPLOY_PRIVATE" != "true" ] || can create secrets; then can_kubectl=yes; fi
+fi
+
+can_api=no
+argocd_api_ready=no
+if have argocd && [ -n "${ARGOCD_SERVER:-}" ] && [ -n "${ARGOCD_AUTH_TOKEN:-}" ]; then
+  argocd_api_ready=yes
+  # ARGOCD_AUTH_TOKEN reaches the CLI through the ENVIRONMENT (the argocd CLI reads it by name) —
+  # never `argocd login --password`, which would put the secret in argv.
+  if argocd account can-i create applications "${ARGOCD_PROJECT}/*" >/dev/null 2>&1; then can_api=yes; fi
+fi
+
+case "$ARGOCD_MECHANISM" in
+  kubectl) MECH=kubectl ;;
+  api)     MECH=api ;;
+  request) MECH=request ;;
+  auto)
+    if   [ "$can_kubectl" = yes ]; then MECH=kubectl
+    elif [ "$can_api"     = yes ]; then MECH=api
+    else                                MECH=request
+    fi ;;
+  *) die "ARGOCD_MECHANISM must be auto|kubectl|api|request (got '$ARGOCD_MECHANISM')" ;;
+esac
+log_info "write mechanism: ${MECH}  (kubectl=${can_kubectl}, argocd-api=${can_api}$([ "$argocd_api_ready" = no ] && printf ' [api not probed: set ARGOCD_SERVER + ARGOCD_AUTH_TOKEN]'))"
+
+if [ "$MECH" = kubectl ] && [ "$can_kubectl" != yes ] ; then
+  die "ARGOCD_MECHANISM=kubectl, but this kubeconfig may not create Applications in '$ARGOCD_NAMESPACE' on $ARGOCD_API."
+fi
+if [ "$MECH" = api ] && [ "$argocd_api_ready" != yes ]; then
+  die "ARGOCD_MECHANISM=api needs the argocd CLI plus ARGOCD_SERVER and ARGOCD_AUTH_TOKEN (see .env.example)."
 fi
 
 # ---- where does the app DEPLOY to? ---------------------------------------------------------------
@@ -117,17 +156,36 @@ if [ "$ARGOCD_OFF_CLUSTER" = "1" ]; then
   # prune:true + selfHeal:true. We match exactly, or we refuse.
   # The clusters registered with THIS ArgoCD, as `<name>\t<server>` lines. The template is a library
   # constant (lib/argocd.sh) because WHICH FIELD it reads is a contract — see the comment there.
+  reg_err="$(ka -n "$ARGOCD_NAMESPACE" get secret -l argocd.argoproj.io/secret-type=cluster \
+    -o go-template="$ARGOCD_CLUSTER_LIST_TEMPLATE" 2>&1 >/dev/null)" || true
   REGISTERED="$(ka -n "$ARGOCD_NAMESPACE" get secret -l argocd.argoproj.io/secret-type=cluster \
     -o go-template="$ARGOCD_CLUSTER_LIST_TEMPLATE" 2>/dev/null || true)"
 
-  if [ -z "$REGISTERED" ]; then
+  # FORBIDDEN is not "nothing is registered". The cluster Secrets live in the ArgoCD admin's
+  # namespace, and a tenant may not list them — saying "no guest cluster is registered" would be
+  # FALSE, and it would point them at an admin-only target (`make argocd-register-guest`). In that
+  # case we accept the destination the operator was TOLD (by name, or by API URL) without the
+  # cross-check we are not allowed to perform.
+  if [ -z "$REGISTERED" ] && printf '%s' "$reg_err" | grep -qi 'forbidden'; then
+    if [ -n "${ARGOCD_DEST_CLUSTER_NAME:-}" ] || [ -n "${ARGOCD_DEST_SERVER:-}" ]; then
+      log_warn "you may not LIST the clusters registered with this ArgoCD (Forbidden) — that is normal for a tenant."
+      log_warn "  Trusting the destination you supplied; ArgoCD will reject it if it is not registered."
+      REGISTERED=""
+    else
+      log_error "You may not list the clusters registered with this ArgoCD (Forbidden), and you have not"
+      log_error "  told us which one is yours. We will NOT guess: the Application carries prune+selfHeal."
+      die "set ARGOCD_DEST_CLUSTER_NAME (the name your platform team registered your guest cluster under), or ARGOCD_DEST_SERVER."
+    fi
+  elif [ -z "$REGISTERED" ]; then
     log_error "ArgoCD is off-cluster, but NO guest cluster is registered as an ArgoCD destination."
     log_error "  Deploying with the in-cluster destination would install the app INTO THE ARGOCD"
     log_error "  CLUSTER (on a real lab: the Supervisor) — with prune+selfHeal. Refusing."
     die "run 'make argocd-register-guest' first (ADMIN-only; a tenant REQUESTS it from the platform team)."
   fi
 
-  if [ -n "${ARGOCD_DEST_SERVER:-}" ] && [ "${ARGOCD_DEST_SERVER}" != "$ARGOCD_INCLUSTER_SERVER" ]; then
+  if [ -z "$REGISTERED" ]; then
+    : # tenant, cannot list: trust the supplied ARGOCD_DEST_CLUSTER_NAME / ARGOCD_DEST_SERVER (warned above)
+  elif [ -n "${ARGOCD_DEST_SERVER:-}" ] && [ "${ARGOCD_DEST_SERVER}" != "$ARGOCD_INCLUSTER_SERVER" ]; then
     # An explicit destination still has to be one ArgoCD can actually reach — i.e. registered.
     if ! printf '%s\n' "$REGISTERED" | cut -f2 | grep -qxF "$ARGOCD_DEST_SERVER"; then
       log_error "ARGOCD_DEST_SERVER=$ARGOCD_DEST_SERVER is NOT a cluster registered with this ArgoCD."
@@ -142,7 +200,10 @@ if [ "$ARGOCD_OFF_CLUSTER" = "1" ]; then
       | argocd_pick_dest_server "$GUEST_API" "${ARGOCD_DEST_CLUSTER_NAME:-}" || true)"
   fi
 
-  if [ -z "${ARGOCD_DEST_SERVER:-}" ]; then
+  if [ -z "${ARGOCD_DEST_SERVER:-}" ] && [ -n "${ARGOCD_DEST_CLUSTER_NAME:-}" ]; then
+    : # we will address the destination BY NAME (below) — ArgoCD accepts that, and it may be all a
+      # tenant has, since the cluster Secrets are in the admin's namespace.
+  elif [ -z "${ARGOCD_DEST_SERVER:-}" ]; then
     log_error "AMBIGUOUS deploy destination — refusing to guess."
     log_error "  This ArgoCD has several clusters registered, and none of them matches the cluster"
     log_error "  we are deploying with (${GUEST_API}) by name or by API URL. Picking one at random"
@@ -155,22 +216,59 @@ if [ "$ARGOCD_OFF_CLUSTER" = "1" ]; then
     log_error "  kubeconfig (a VIP vs a hostname). Pick the right one deliberately:"
     die "set ARGOCD_DEST_SERVER (or ARGOCD_DEST_CLUSTER_NAME) to the guest cluster you own."
   fi
-  log_info "deploy destination (matched against the clusters registered with ArgoCD): $ARGOCD_DEST_SERVER"
+  log_info "deploy destination: ${ARGOCD_DEST_SERVER:-(by name) ${ARGOCD_DEST_CLUSTER_NAME:-}}"
 else
   ARGOCD_DEST_SERVER="${ARGOCD_DEST_SERVER:-$ARGOCD_INCLUSTER_SERVER}"
   log_info "deploy destination: $ARGOCD_DEST_SERVER (in-cluster)"
 fi
 
-export ARGOCD_NAMESPACE ARGOCD_TRACK_BRANCH ARGOCD_DEST_SERVER ARGOCD_PROJECT
+# ArgoCD's Application.destination accepts EITHER `server:` (the API URL) or `name:` (the name the
+# cluster was registered under). Prefer the URL when we have it; fall back to the NAME, which may be
+# all a tenant has — the cluster Secrets live in the ArgoCD admin's namespace.
+if [ -n "${ARGOCD_DEST_SERVER:-}" ]; then
+  ARGOCD_DEST_KEY=server; ARGOCD_DEST_VALUE="$ARGOCD_DEST_SERVER"
+else
+  ARGOCD_DEST_KEY=name;   ARGOCD_DEST_VALUE="${ARGOCD_DEST_CLUSTER_NAME:?no deploy destination resolved}"
+fi
+export ARGOCD_NAMESPACE ARGOCD_TRACK_BRANCH ARGOCD_DEST_SERVER ARGOCD_PROJECT ARGOCD_DEST_KEY ARGOCD_DEST_VALUE
 
 # ---- PER APP: its namespace (guest), its repo credentials + its Application (ArgoCD) --------------
 TOKEN=""
 [ -f "${REPO_ROOT}/secrets/gitea-ci-token" ] && TOKEN="$(cat "${REPO_ROOT}/secrets/gitea-ci-token")"
 APPS_APPLIED=""
+WORK_DIR="$(mktemp -d)"; trap 'rm -rf "$WORK_DIR"' EXIT
+OUT_DIR="${REPO_ROOT}/out"           # only used by the `request` mechanism (gitignored)
+
+# apply_application <app> <manifest> — write the Application through the mechanism we MEASURED.
+apply_application() {
+  local app="$1" manifest="$2"
+  case "$MECH" in
+    kubectl)
+      run ka apply -f "$manifest" >/dev/null
+      ;;
+    api)
+      # The TENANT path. argocd-server enforces ARGOCD RBAC (an AppProject role), not Kubernetes RBAC
+      # — which is why this works where `kubectl apply` into the admin's namespace is Forbidden.
+      # ARGOCD_AUTH_TOKEN reaches the CLI through the ENVIRONMENT, never argv.
+      argocd app create -f "$manifest" --upsert >/dev/null \
+        || die "argocd-server refused to create Application '${app}'. Does your AppProject '${ARGOCD_PROJECT}' permit this destination and repo? ('make argocd-preflight' checks exactly that.)"
+      ;;
+    request)
+      # The GIVE-UP path, and deliberately LAST. We cannot write, so render EXACTLY what we would
+      # have applied and tell the operator precisely what to ask for. We do NOT render the repo
+      # Secret: it carries a live Gitea token, and a token written to a file to be emailed to an
+      # admin is a credential leak. `argocd repo add` is the right way to hand it over.
+      mkdir -p "$OUT_DIR"
+      cp "$manifest" "${OUT_DIR}/application-${app}.yaml"
+      log_warn "  ${app}: rendered ${OUT_DIR#"${REPO_ROOT}/"}/application-${app}.yaml — ASK your platform team to apply it."
+      ;;
+  esac
+}
 
 # shellcheck disable=SC2329  # invoked indirectly (for_each_app)
 configure_app_argocd() {
   local app="$1"
+  local app_manifest="${WORK_DIR}/application-${app}.yaml"
   export DEPLOY_REPO_CLONE_URL="${GITEA_ARGOCD_URL}/${GITEA_ORG}/${APP_DEPLOY_REPO}.git"
 
   # GUEST: create the app's namespace WITH its PSA label. ArgoCD's CreateNamespace=true would create
@@ -212,13 +310,19 @@ EOF
     log_warn "    Fine only if the Harbor project is PUBLIC. With a private project every pod will ImagePullBackOff."
   fi
 
-  if [ -n "$TOKEN" ]; then
-    log_info "registering ${APP_DEPLOY_REPO} with ArgoCD"
-    # The token reaches kubectl on STDIN (a heredoc), never on argv — see common/security.md.
-    # NOTE: no `project:` field on purpose. A project-less repo Secret is ArgoCD's global-credential
-    # fallback and matches any project; setting it to the WRONG project makes the credential vanish
-    # silently (ArgoCD then falls back to an anonymous clone with no error).
-    ka apply -f - >/dev/null <<EOF
+  # The ArgoCD repo credential — ONLY when the deploy repo is actually private. The repos are seeded
+  # PUBLIC (50-seed-gitea-repos.sh), so ArgoCD clones them anonymously and no Secret is needed.
+  # Creating one anyway used to force the `create secrets` grant — the one a tenant is least likely
+  # to hold — for a repo that needs no credential at all.
+  if [ "$GITEA_DEPLOY_PRIVATE" = "true" ] && [ -n "$TOKEN" ]; then
+    case "$MECH" in
+      kubectl)
+        log_info "  ${app}: registering ${APP_DEPLOY_REPO} with ArgoCD (private repo)"
+        # The token reaches kubectl on STDIN (a heredoc), never argv — see common/security.md.
+        # No `project:` field: a project-less repo Secret is ArgoCD's GLOBAL credential and matches
+        # any project; setting it to the wrong one makes the credential vanish silently (ArgoCD then
+        # falls back to an anonymous clone, with NO error).
+        ka apply -f - >/dev/null <<EOF
 apiVersion: v1
 kind: Secret
 metadata:
@@ -233,14 +337,28 @@ stringData:
   username: ${GITEA_CI_USER}
   password: ${TOKEN}
 EOF
-  else
-    log_warn "no CI token found — assuming a public deploy repo (no ArgoCD repo secret) for ${app}"
+        ;;
+      api)
+        # A tenant's repo credential MUST be project-scoped — that is the only kind ArgoCD RBAC lets
+        # them create. Password on STDIN, never argv.
+        log_info "  ${app}: argocd repo add ${DEPLOY_REPO_CLONE_URL} (project ${ARGOCD_PROJECT})"
+        printf '%s' "$TOKEN" | argocd repo add "$DEPLOY_REPO_CLONE_URL" \
+          --project "$ARGOCD_PROJECT" --username "$GITEA_CI_USER" --password-stdin >/dev/null \
+          || die "argocd repo add failed for ${DEPLOY_REPO_CLONE_URL}"
+        ;;
+      request)
+        log_warn "  ${app}: the deploy repo is PRIVATE — ask your platform team to run:"
+        log_warn "      argocd repo add ${DEPLOY_REPO_CLONE_URL} --project ${ARGOCD_PROJECT} --username ${GITEA_CI_USER} --password-stdin"
+        log_warn "    (hand the token over out-of-band — this script will NOT write it to a file.)"
+        ;;
+    esac
   fi
 
-  log_info "creating ArgoCD Application '${APP_NAME}' (project ${ARGOCD_PROJECT}) -> ${DEPLOY_REPO_CLONE_URL} (ns ${APP_NAMESPACE} on ${ARGOCD_DEST_SERVER})"
+  log_info "Application '${APP_NAME}' (project ${ARGOCD_PROJECT}) -> ${DEPLOY_REPO_CLONE_URL} (ns ${APP_NAMESPACE} on ${ARGOCD_DEST_KEY}=${ARGOCD_DEST_VALUE}) via ${MECH}"
   # shellcheck disable=SC2016
-  envsubst '${ARGOCD_NAMESPACE} ${ARGOCD_PROJECT} ${APP_NAME} ${APP_NAMESPACE} ${ARGOCD_TRACK_BRANCH} ${DEPLOY_REPO_CLONE_URL} ${ARGOCD_DEST_SERVER}' \
-    < "${REPO_ROOT}/k8s/argocd/application.yaml" | run ka apply -f -
+  envsubst '${ARGOCD_NAMESPACE} ${ARGOCD_PROJECT} ${APP_NAME} ${APP_NAMESPACE} ${ARGOCD_TRACK_BRANCH} ${DEPLOY_REPO_CLONE_URL} ${ARGOCD_DEST_KEY} ${ARGOCD_DEST_VALUE}' \
+    < "${REPO_ROOT}/k8s/argocd/application.yaml" > "$app_manifest"
+  apply_application "$app" "$app_manifest"
   APPS_APPLIED="${APPS_APPLIED} ${APP_NAME}"
 }
 for_each_app configure_app_argocd
@@ -252,6 +370,24 @@ for_each_app configure_app_argocd
 # AFTER repo-server successfully fetched the repository — so a non-empty revision is proof of a real
 # clone, not the absence of a complaint.
 ARGOCD_REPO_TIMEOUT_SECONDS="${ARGOCD_REPO_TIMEOUT_SECONDS:-180}"
+if [ "$MECH" = request ]; then
+  log_warn "nothing was applied (mechanism=request) — rendered the Applications to ${OUT_DIR#"${REPO_ROOT}/"}/ instead."
+  log_warn "Ask your platform team to apply them, then re-run 'make verify'."
+  log_info "ArgoCD Applications RENDERED (not applied): $(app_names | tr '\n' ' ')"
+  exit 0
+fi
+if [ "$MECH" = api ] && ! ka auth can-i get applications.argoproj.io -n "$ARGOCD_NAMESPACE" >/dev/null 2>&1; then
+  # The tenant path writes through argocd-server and may not read the Application object with
+  # kubectl at all. `argocd app wait` is the equivalent check.
+  log_info "verifying via argocd-server that each Application syncs (kubectl cannot read them on this path)"
+  for app in $APPS_APPLIED; do
+    argocd app wait "$app" --sync --timeout "$ARGOCD_REPO_TIMEOUT_SECONDS" >/dev/null 2>&1 \
+      || die "Application '$app' did not sync. If it never fetched a revision, ArgoCD's repo-server cannot reach ${GITEA_ARGOCD_URL}."
+    log_info "  ${app}: synced (argocd-server)"
+  done
+  log_info "ArgoCD Applications created: $(app_names | tr '\n' ' ')"
+  exit 0
+fi
 log_info "verifying ArgoCD can reach ${GITEA_ARGOCD_URL} (waiting for each Application to fetch a revision)"
 for app in $APPS_APPLIED; do
   ka -n "$ARGOCD_NAMESPACE" annotate application "$app" argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
