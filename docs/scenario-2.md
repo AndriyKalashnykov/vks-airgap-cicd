@@ -95,8 +95,8 @@ one from a local run would silently redirect everything at a kind cluster. Delet
 start**:
 
 ```bash
-make kind-down        # if you ran the local flow (also removes .env.kind)
-rm -f .env.kind       # belt-and-suspenders
+make kind-down        # ONLY if you ran the local KinD flow on this box
+rm -f .env.kind       # belt-and-suspenders (this is all you need if you never ran KinD here)
 ```
 
 > **Do not delete it again later.** On a real lab `make install-gitea` (inside `make platform`)
