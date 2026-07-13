@@ -38,10 +38,27 @@ umask 077
 
 # ---- 1. Admin user + CI access token ----
 TOKEN_FILE="${REPO_ROOT}/secrets/gitea-ci-token"
+
+# A TOKEN FILE EXISTING DOES NOT MEAN THE TOKEN WORKS.
+#
+# This used to be `if [ -s "$TOKEN_FILE" ]` — presence, not validity. But the token belongs to a
+# SPECIFIC Gitea: a fresh cluster installs a fresh Gitea with a freshly GENERATED admin password and
+# an empty database, so any token left over from a previous cluster is dead. Seeding then failed with
+# `create org failed (http 401)` — an error that names authorization and points nowhere near the
+# stale file that caused it.
+#
+# It is only reachable because `make kind-down` (correctly) removes these credentials ONLY when it
+# actually deleted a cluster — so a no-op teardown leaves the token behind for the next run.
+#
+# So: the file is a CANDIDATE. Whether it works is decided by the live Gitea, below (mint_token), the
+# same way we detect anything else — by the artifact, never by a file's existence.
+CANDIDATE_TOKEN=""
 if [ -s "$TOKEN_FILE" ]; then
-  TOKEN="$(cat "$TOKEN_FILE")"
-  log_info "reusing existing CI token ($TOKEN_FILE)"
-else
+  CANDIDATE_TOKEN="$(cat "$TOKEN_FILE")"
+fi
+
+# mint_token — create the admin (idempotent) and generate a fresh CI token.
+mint_token() {
   log_info "creating Gitea admin user '$GITEA_ADMIN_USER' (password via stdin)"
   # Password travels in the heredoc (stdin), not the jump-box argv.
   kubectl -n "$GITEA_NAMESPACE" exec -i deploy/gitea -- sh <<EOF || log_warn "admin may already exist — continuing"
@@ -54,9 +71,9 @@ EOF
       --scopes all --token-name "seed-$(date +%s)" --raw | tr -d '\r' | tail -1)"
   [ -n "$TOKEN" ] || die "failed to generate Gitea access token"
   mkdir -p "$(dirname "$TOKEN_FILE")"
-  printf '%s' "$TOKEN" > "$TOKEN_FILE"
+  ( umask 077; printf '%s' "$TOKEN" > "$TOKEN_FILE" )
   log_info "stored CI token -> $TOKEN_FILE"
-fi
+}
 
 WEBHOOK_TOKEN="$(ensure_secret_token "${REPO_ROOT}/secrets/webhook-token")"
 
@@ -74,9 +91,30 @@ while [ "$SECONDS" -lt "$end" ]; do
 done
 curl -fsS "${base}/api/healthz" >/dev/null 2>&1 || die "Gitea not reachable via port-forward within ${READY_TIMEOUT_SECONDS}s"
 
+# ---- 2b. Is the candidate token VALID FOR THIS GITEA? (ask Gitea, do not trust the file) ----------
+# Token stays out of argv: -K config file, mode 0600.
+token_works() {
+  cfg="${tmp}/probe.cfg"
+  ( umask 077; printf 'header = "Authorization: token %s"\n' "$1" > "$cfg" )
+  [ "$(curl -sS -o /dev/null -w '%{http_code}' -K "$cfg" "${base}/api/v1/user" 2>/dev/null)" = "200" ]
+}
+
+TOKEN=""
+if [ -n "$CANDIDATE_TOKEN" ] && token_works "$CANDIDATE_TOKEN"; then
+  TOKEN="$CANDIDATE_TOKEN"
+  log_info "reusing the existing CI token (verified against THIS Gitea)"
+else
+  if [ -n "$CANDIDATE_TOKEN" ]; then
+    log_warn "the CI token in $TOKEN_FILE does NOT authenticate against this Gitea — it belongs to a"
+    log_warn "  previous cluster (a fresh Gitea generates a new admin password + an empty DB)."
+    log_warn "  Minting a new one. (Reusing it produced 'create org failed (http 401)'.)"
+  fi
+  mint_token
+fi
+
 # curl auth via -K config file (token stays out of argv).
 authcfg="${tmp}/curl.cfg"
-printf 'header = "Authorization: token %s"\n' "$TOKEN" > "$authcfg"
+( umask 077; printf 'header = "Authorization: token %s"\n' "$TOKEN" > "$authcfg" )
 api() { curl -sS -o /dev/null -w '%{http_code}' -K "$authcfg" -H 'Content-Type: application/json' "$@"; }
 # api_body — like api() but returns the response BODY (for idempotency GET checks).
 api_body() { curl -sS -K "$authcfg" -H 'Content-Type: application/json' "$@"; }
