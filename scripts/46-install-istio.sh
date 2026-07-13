@@ -56,6 +56,11 @@ export ISTIO_GATEWAY_SERVICE ISTIO_GATEWAY_LABEL
 
 # --- 1. Helm repo (fetched on the internet side; images come from Harbor) ------
 log_info "adding/updating helm repo '${CHART_REPO_NAME}' (${CHART_REPO_URL})"
+# The Gateway API CRDs. Nothing else installs them (Istio does not ship them), and on KinD they
+# only appeared because cloud-provider-kind force-installs its own — which made our gateway-api
+# e2e leg green for a KinD-only reason. We own this cluster on this path, so install them.
+istio_ensure_gwapi_crds
+
 run helm repo add "$CHART_REPO_NAME" "$CHART_REPO_URL" --force-update
 run helm repo update "$CHART_REPO_NAME"
 

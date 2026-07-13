@@ -512,6 +512,20 @@ TMM catalog lists Harbor/Contour/ArgoCD, not Istio); "Istio has no credentials";
 selector-is-the-helm-release-name discovery via port 15021; `44-install-ingress.sh:16` genuinely
 surviving the `.env.example` clobber; and the ingress-gateway-off-by-default fact (primary-sourced).
 
+### 📋 OPEN — audit EVERY gate for MISPLACEMENT (a gate in the wrong target is green because nobody asked it)
+
+`check-vks-terminology` is a **docs** gate that lived only in `static-check` — which CI's paths-filter
+**skips on a docs-only PR**. So a docs PR reintroduced the phantom noun that gate exists to catch, and
+**CI certified it green** (#208 moved it to `docs-lint` and RED-proved it). Assume it is not the only one.
+
+**Do:** for every gate in `static-check` / `docs-lint` / `lint`, ask *which files does it protect* and
+*which CI job actually runs it, under which paths-filter?* A gate that guards `docs/**` but runs only
+in the `code`-filtered job is dead. Fix by moving the gate to the job its own paths trigger.
+
+**Suspects:** `check-readme-scenarios`, `check-how-provenance`, `check-doc-command-count` (docs gates —
+confirm they are in `docs-lint`, not `static-check`) · `check-env-coverage` / `check-env-clobber` (they
+guard `.env.example` **and** scripts — which filter fires?).
+
 ### ⛔ NEXT TASK — prove the docker-only claim, and DO NOT do it with `make e2e-kind`
 
 The owner wants: *"we use podman by default; prove the e2e ALSO works with docker only, then claim it in `*.md`."*

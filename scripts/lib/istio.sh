@@ -110,6 +110,48 @@ istio_discover() {
 }
 
 # ---------------------------------------------------------------------------
+# istio_ensure_gwapi_crds — install the Kubernetes Gateway API CRDs if they are absent.
+#
+# WHY THIS EXISTS. Nothing in this repo used to install them, and Istio does not ship them
+# either ("The Gateway APIs do not come installed by default on most Kubernetes clusters" —
+# istio.io). On KinD they appeared anyway, because **cloud-provider-kind force-installs its
+# own bundle at startup**. So `make e2e-kind-istio-existing`'s gateway-api leg was green
+# because of a KinD-only shim, and the tenant path we ADVERTISE as verified could simply not
+# exist on a real VKS cluster — where the shared gateway is ALSO off by default, leaving the
+# classic fallback with nothing to bind to. The e2e proved nothing about the lab.
+#
+# --server-side is REQUIRED, not a preference: the CRD bundle exceeds the 256 KiB
+# last-applied-configuration annotation limit that client-side apply writes.
+#
+# We only do this when we OWN the cluster (the install path). A tenant attaching to someone
+# else's mesh cannot install cluster-scoped CRDs — istio_require_gwapi_crds below tells them
+# so in those words instead of silently degrading to a path that cannot work.
+istio_ensure_gwapi_crds() {
+  local ver="${GATEWAY_API_VERSION:?GATEWAY_API_VERSION must be set (.env.example)}"
+  if kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
+    log_info "Gateway API CRDs already present"
+    return 0
+  fi
+  local src="${MANIFEST_DIR:-}/gateway-api-${ver}.yaml"
+  if [ -f "$src" ]; then
+    log_info "installing Gateway API CRDs ${ver} from the carried bundle (air-gap)"
+  else
+    src="https://github.com/kubernetes-sigs/gateway-api/releases/download/${ver}/standard-install.yaml"
+    log_info "installing Gateway API CRDs ${ver} from upstream (needs internet)"
+  fi
+  # --force-conflicts: idempotent re-runs, and it takes ownership from any bundle a
+  # component (e.g. cloud-provider-kind) force-installed first.
+  run kubectl apply --server-side --force-conflicts -f "$src"
+  kubectl wait --for=condition=Established --timeout=60s \
+    crd/httproutes.gateway.networking.k8s.io crd/gateways.gateway.networking.k8s.io >/dev/null
+  log_info "Gateway API CRDs ${ver} established"
+}
+
+# istio_gwapi_crds_present — cheap, honest boolean.
+istio_gwapi_crds_present() {
+  kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1
+}
+
 # istio_detect_route_api — decide HOW to attach routes, and prefer the Gateway API.
 #
 # Broadcom's own VKS walkthrough routes with the Kubernetes Gateway API
@@ -150,7 +192,20 @@ istio_detect_route_api() {
       ISTIO_ROUTE_API=classic ;;
     auto|"")
       if   [ "$have_gwapi" -eq 1 ];   then ISTIO_ROUTE_API=gateway-api
-      elif [ "$have_classic" -eq 1 ]; then ISTIO_ROUTE_API=classic
+      elif [ "$have_classic" -eq 1 ]; then
+        # Do NOT degrade silently. If the CRDs are simply ABSENT, say so — that is a
+        # different (and fixable) problem from "the CRDs are here but Istio is not the
+        # GatewayClass controller", and on a real lab it is the likely one, because
+        # nothing installs them and the VKS shared gateway is off by default.
+        if ! istio_gwapi_crds_present; then
+          log_warn "Gateway API CRDs are ABSENT — falling back to the CLASSIC route API."
+          log_warn "  The classic path needs a SHARED INGRESS GATEWAY, which the VKS Istio package"
+          log_warn "  ships DISABLED by default — so this may have nothing to bind to."
+          log_warn "  If you OWN this cluster:  make install-ingress  (installs the CRDs for you)"
+          log_warn "  If you are a TENANT:      ask the mesh admin to install the Gateway API CRDs,"
+          log_warn "                            or to enable the shared ingress gateway."
+        fi
+        ISTIO_ROUTE_API=classic
       else                                 ISTIO_ROUTE_API=none
       fi ;;
     *) die "ISTIO_ROUTE_API must be auto|gateway-api|classic (got '${ISTIO_ROUTE_API}')" ;;
