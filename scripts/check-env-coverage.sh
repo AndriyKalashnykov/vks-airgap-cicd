@@ -118,6 +118,31 @@ while IFS= read -r line; do
 done < <(grep -nE '^#[[:space:]]*[A-Z][A-Z0-9_]{2,}=' "$ENV_FILE")
 [ "$acq_rc" -eq 0 ] || rc=1
 
+# ---------------------------------------------------------------------------------------------
+# INTEGRITY: no SPLICED variable-slot line.
+#
+# A search-and-replace on this file that matches a SUBSTRING of another variable's name silently
+# welds two blocks together. It really happened (PR #168): editing `KUBECONFIG=...` also matched
+# the tail of `# GUEST_KUBECONFIG=...`, producing
+#
+#     # GUEST_# COMMENTED, and that is load-bearing. load_env sources this file with `set -a` ...
+#
+# — destroying GUEST_KUBECONFIG's declaration AND moving KUBECONFIG's into the GUEST block. Every
+# gate stayed GREEN: the coverage check above only asks whether each NAME appears SOMEWHERE, and
+# both still did — in each other's homes. Only a human reading the file could see it, and nobody
+# reads .env.example top to bottom.
+#
+# The signature is unmistakable: an identifier immediately followed by '#' (no space, no '='),
+# which prose never produces. Cheap, exact, and it would have caught the real defect.
+splice_rc=0
+while IFS=: read -r ln line; do
+  log_error ".env.example:${ln}: SPLICED variable slot — '${line}'"
+  log_error "    An identifier is welded to a comment ('NAME#...'), so a variable's declaration was"
+  log_error "    destroyed by a substring-matching edit. Restore each variable's own '# NAME=value' slot."
+  splice_rc=1
+done < <(grep -nE '^#[[:space:]]*[A-Za-z][A-Za-z0-9_]*#' "$ENV_FILE" || true)
+[ "$splice_rc" -eq 0 ] || rc=1
+
 echo >&2
 if [ "$rc" -eq 0 ]; then
   log_info "check-env-coverage: OK — every operator-settable variable the scripts read is documented in .env.example."
