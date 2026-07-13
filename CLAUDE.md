@@ -373,6 +373,37 @@ session that quoted it. Prose did not hold. That is the signature of a missing g
 > - The uid-1000-vs-1001 asymmetry between the images has already broken CA *readability* once
 >   (a 0600 CA the Ubuntu `vks` user could not read → a TLS error that named trust, not permissions).
 
+### 📋 PLANNED — validate every STEP of `docs/lab-validation-plan.md` against the FOUR-PART shape
+
+The **intro** was fixed (PR #203: five rules up front, the derivation moved behind a `<details>`). The
+**24 steps below it were NOT touched** — they are still the pile they were, and they are what the
+operator will actually be holding in the lab. Sweep every one of them.
+
+**A validation-plan step has FOUR parts.** (This is the three-part runbook shape plus the part that
+makes it a *validation* plan rather than a runbook: the evidence comes back to us.)
+
+| # | Part | Rule |
+|---|---|---|
+| 1 | **What it's for** | ONE line: which claim does this step settle? Name the claim, not the mechanism. If it settles nothing, **delete the step.** |
+| 2 | **What you want the operator to DO** | The literal command(s), copy-pasteable, in order. If it is a vSphere Client click-path, say so — don't dress it up as a command. Mark it `UNVERIFIED-COMMAND` if we have never run it, and give the fallback. |
+| 3 | **What you expect them to SEE** (if anything) | The **observable** — the object that appears, the field that goes non-empty, the string in the output. This is what tells them it worked **without asking us**. If a step has no observable, say so explicitly rather than leaving them guessing. |
+| 4 | **What they must COLLECT and send back — AND IN WHAT FORM** | The evidence. Be exact: *"the full `vcf context create --help` block, verbatim"* · *"`kubectl -n $ns describe pod <x>` — the **Events** section"* · *"the image tag string"*. **Raw tool output, never their verdict** — we compute the conclusions. Name the file/paste format if it matters. |
+
+**Why part 4 is the whole point:** a step that tells them what to run but not what to bring back
+produces a lab trip we cannot learn from. That is the single most expensive failure available here —
+the lab is the scarce resource, and we get one pass at it.
+
+**Do this as its own PR**, step by step, and while sweeping:
+
+- **Delete steps that settle nothing.** The plan claims steps 1–14 settle 7 of 8 headline claims —
+  check that arithmetic against the actual steps, and cut anything that is just narration.
+- **Every `UNVERIFIED-COMMAND` must carry its fallback** (rule 5 of the intro). Grep for the marker and
+  confirm each one does.
+- **Do not re-inline the mechanism** the intro just moved out — if a step needs a *reason*, it goes in
+  the `<details>`, not the step body.
+- The same **row test** applies inside a step: a sentence that neither tells them what to do, what to
+  see, nor what to send back, is deleted.
+
 ### 📋 PLANNED — make `docs/scenario-1.md` ACTIONABLE (it is the admin runbook; it currently reads like a paper)
 
 The first instance of the "mechanism essay" review above, and the highest-value one: **Scenario 1 is
