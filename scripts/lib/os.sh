@@ -189,12 +189,19 @@ load_env() {
   # A variable that selects WHICH CLUSTER you are talking to must be owned by the caller. Config may
   # supply a DEFAULT; it may not overrule an explicit choice.
   local _sel _snap_names="" _snap_vals=""
-  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE; do
+  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT; do
     if [ -n "${!_sel:-}" ]; then
       _snap_names="${_snap_names} ${_sel}"
       _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'
     fi
   done
+
+  # THE SNAPSHOT IS ALSO THE SIGNAL. state_check needs to know whether the CALLER explicitly chose a
+  # KUBECONFIG — that is the only thing that can contradict the sink's stamp. It read
+  # _VKS_EXPLICIT_KUBECONFIG, which NOTHING IN THE PRODUCT SET: only the unit test did. So the whole
+  # mismatch-refusal branch was DEAD CODE, and a foreign cluster's sink was ALWAYS sourced. The test
+  # passed because the fixture hand-supplied the input the product never supplied — a test of a mock.
+  export _VKS_EXPLICIT_KUBECONFIG="${KUBECONFIG:-}"
 
   set -a
   # shellcheck disable=SC1090
@@ -264,6 +271,14 @@ EOF
   # value would kill `make gitops`. The default belongs HERE, after the sourcing, where a caller's
   # explicit choice still wins.
   export ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
+
+  # VKS_CONTEXT selects WHICH KUBE CONTEXT you talk to (30-vks-login.sh: `kubectl config use-context`).
+  # It was pinned UNCOMMENTED in .env.example, so `VKS_CONTEXT=my-lab-ctx make ...` was SILENTLY
+  # IGNORED — byte-for-byte the ARGOCD_SERVER bug (#174) on a different variable, with check-env-clobber
+  # GREEN beside it, because that gate's SELECTORS list was CURATED FROM MEMORY: it named KUBECONTEXT
+  # (which exists NOWHERE in this repo) and missed the one that does the work. Only bites on a real lab,
+  # where a kubeconfig carries more than one context.
+  export VKS_CONTEXT="${VKS_CONTEXT:-vks-workload}"
 }
 
 # set_env_var KEY VALUE FILE — idempotently upsert KEY=VALUE into an EXPLICIT file.

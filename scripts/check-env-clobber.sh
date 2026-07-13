@@ -49,7 +49,7 @@ EXEMPT='APP_DEV_PORT|INGRESS_CONTROLLER'
 # sources this file with `set -a` AFTER make put the override in the environment, and the sourced
 # value wins. You would run against the default cluster while believing you had switched. It also
 # made a two-cluster test undrivable. These must be COMMENTED, with their default applied in code.
-SELECTORS='KUBECONFIG|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|KUBECONTEXT|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE'
+SELECTORS='KUBECONFIG|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_CONTEXT|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE'
 
 rc=0
 checked=0

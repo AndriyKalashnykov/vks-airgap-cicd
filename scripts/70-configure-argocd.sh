@@ -91,13 +91,33 @@ log_info "ArgoCD will clone from: $GITEA_ARGOCD_URL"
 # in which case `kubectl apply` into that namespace is Forbidden and this whole mechanism is the
 # wrong tool. That question is UNVERIFIED against a real lab; rather than assume the write lands,
 # ask the API server, and if the answer is no, print exactly what to request.
+# THIS IS A MEASUREMENT, NOT A GATE. It used to `die` here — on Forbidden OR NotFound — which is the
+# opposite of what the comment above says, and it made the TENANT PATH IMPOSSIBLE ON A REAL LAB:
+#
+#   * The die is at THIS line. ARGOCD_MECHANISM is not read until ~20 lines below and not dispatched
+#     until ~45 below. So `ARGOCD_MECHANISM=api` — the tenant's ONLY path — could never rescue it.
+#   * On a lab the guest cluster has NO `argocd` namespace at all (ArgoCD is a Supervisor Service in
+#     ANOTHER cluster), so ARGOCD_KUBECONFIG defaulting to the guest yields NotFound -> die.
+#   * A tenant who DOES point it at the Supervisor but holds no k8s RBAC there gets Forbidden -> die.
+#
+# Either way `make gitops` died before it could choose the api mechanism. KinD cannot show this: it is
+# ONE cluster, so the namespace is always present and readable. 23-argocd-preflight.sh already treats
+# the same Forbidden as a WARN — the two scripts disagreed, and this one was wrong.
+#
+# So: a namespace we cannot read means "kubectl is not available to us here" — feed that to the
+# ladder. Only MECH=kubectl may die on it (it does, further below).
+argocd_ns_readable=yes
 ns_err="$(ka get ns "$ARGOCD_NAMESPACE" 2>&1 >/dev/null)" || {
+  argocd_ns_readable=no
   if printf '%s' "$ns_err" | grep -qi 'forbidden'; then
-    log_error "FORBIDDEN reading namespace '$ARGOCD_NAMESPACE' on the ArgoCD cluster ($ARGOCD_API)."
-    log_error "  This is a PERMISSION problem, not a missing install — do not go looking for ArgoCD."
-    die "ask your platform admin for read access to '$ARGOCD_NAMESPACE', or for the ArgoCD-side objects to be created for you (see below)."
+    log_warn "cannot READ namespace '$ARGOCD_NAMESPACE' on the ArgoCD cluster ($ARGOCD_API): FORBIDDEN."
+    log_warn "  That is normal for a TENANT — the ArgoCD instance lives in an admin-owned namespace."
+    log_warn "  kubectl is not your write path; argocd-server is. Continuing to the mechanism ladder."
+  else
+    log_warn "namespace '$ARGOCD_NAMESPACE' not found on the ArgoCD cluster ($ARGOCD_API)."
+    log_warn "  Expected when ArgoCD is a Supervisor Service and ARGOCD_KUBECONFIG points at the GUEST."
+    log_warn "  kubectl is not usable here. Continuing to the mechanism ladder (api / request)."
   fi
-  die "namespace '$ARGOCD_NAMESPACE' not found on the ArgoCD cluster ($ARGOCD_API). Is ARGOCD_KUBECONFIG/ARGOCD_NAMESPACE right? (ArgoCD is a Supervisor Service on a real lab — it is NOT in your guest cluster.)"
 }
 
 # WHICH MECHANISM CAN ACTUALLY WRITE THE APPLICATION?
@@ -109,6 +129,38 @@ ns_err="$(ka get ns "$ARGOCD_NAMESPACE" 2>&1 >/dev/null)" || {
 # tenant create them through ARGOCD-SERVER with no Kubernetes RBAC at all. The old gate told a tenant
 # who could deploy that they could not.
 #
+# ---- THE SUPERVISOR GUARD. Re-armed after the tenant fix DELETED it. -------------------------------
+#
+# Removing the `die` on the namespace probe unblocked the tenant — and simultaneously removed the ONLY
+# thing standing between a misconfigured run and a DEPLOY ONTO THE SUPERVISOR:
+#
+#   a tenant has no Supervisor kubeconfig -> ARGOCD_KUBECONFIG defaults to the GUEST
+#     -> argocd_is_off_cluster compares the guest kubeconfig WITH ITSELF -> ARGOCD_OFF_CLUSTER=0
+#     -> the destination defaults to https://kubernetes.default.svc
+#     -> MECH=api writes that Application to the SUPERVISOR's argocd-server, where "in-cluster" IS
+#        THE SUPERVISOR — with prune: true and selfHeal: true.
+#
+# That is CRITICAL #158 ("more dangerous than the bug") walking back in through the door the fix
+# opened. KinD cannot see it: one cluster, so the namespace is always readable and in-cluster is
+# genuinely correct.
+#
+# The signature is exact: the ArgoCD namespace is UNREADABLE from the kubeconfig we would deploy
+# "in-cluster" into. That combination is never legitimate. An operator who really means it says so
+# explicitly with ARGOCD_DEST_SERVER / ARGOCD_DEST_CLUSTER_NAME — which keeps the tenant path open.
+if [ "$argocd_ns_readable" = no ] && [ "$ARGOCD_OFF_CLUSTER" = 0 ] \
+   && [ -z "${ARGOCD_DEST_SERVER:-}${ARGOCD_DEST_CLUSTER_NAME:-}" ]; then
+  log_error "REFUSING to deploy: the ArgoCD namespace '$ARGOCD_NAMESPACE' is UNREADABLE from the very"
+  log_error "  kubeconfig we would deploy IN-CLUSTER into ($ARGOCD_API)."
+  log_error "  That means ArgoCD is NOT in this cluster — it is a Supervisor Service in ANOTHER one —"
+  log_error "  and an in-cluster destination would deploy your app ONTO THE SUPERVISOR, with prune"
+  log_error "  and self-heal enabled."
+  log_error "  Fix ONE of these:"
+  log_error "    * make fetch-argocd-kubeconfig      (get the Supervisor kubeconfig; the ADMIN path)"
+  log_error "    * ARGOCD_DEST_SERVER=<your guest API URL>          (the TENANT path)"
+  log_error "    * ARGOCD_DEST_CLUSTER_NAME=<your guest, as registered in ArgoCD>"
+  die "refusing to guess a deploy destination when ArgoCD is demonstrably not in this cluster."
+fi
+
 # So MEASURE, then pick (ARGOCD_MECHANISM=auto|kubectl|api|request):
 #   kubectl — we may write to the ArgoCD namespace directly (Scenario 1, KinD). Unchanged.
 #   api     — argocd-server accepts us (the TENANT path: an AppProject role, no k8s RBAC).
@@ -123,7 +175,11 @@ GITEA_DEPLOY_PRIVATE="${GITEA_DEPLOY_PRIVATE:-false}"
 
 can() { [ "$(ka auth can-i "$1" "$2" -n "$ARGOCD_NAMESPACE" 2>/dev/null || echo no)" = yes ]; }
 can_kubectl=no
-if can create applications.argoproj.io; then
+# A namespace we cannot even READ is a namespace we cannot apply into. Short-circuit the probes.
+if [ "$argocd_ns_readable" = no ]; then
+  log_info "kubectl write path: NOT AVAILABLE (the ArgoCD namespace is unreadable from this kubeconfig)"
+fi
+if [ "$argocd_ns_readable" = yes ] && can create applications.argoproj.io; then
   if [ "$GITEA_DEPLOY_PRIVATE" != "true" ] || can create secrets; then can_kubectl=yes; fi
 fi
 
@@ -235,8 +291,18 @@ if [ "$ARGOCD_OFF_CLUSTER" = "1" ]; then
   fi
   log_info "deploy destination: ${ARGOCD_DEST_SERVER:-(by name) ${ARGOCD_DEST_CLUSTER_NAME:-}}"
 else
-  ARGOCD_DEST_SERVER="${ARGOCD_DEST_SERVER:-$ARGOCD_INCLUSTER_SERVER}"
-  log_info "deploy destination: $ARGOCD_DEST_SERVER (in-cluster)"
+  # An EXPLICIT operator destination wins even here. It used to be ignored in this branch — so
+  # ARGOCD_DEST_CLUSTER_NAME, documented as "the only handle a tenant usually has", was DEAD CODE on
+  # precisely the path it was written for (the same class as #160: a knob that could never take
+  # effect). Only fall back to in-cluster when the operator named nothing.
+  if [ -n "${ARGOCD_DEST_SERVER:-}" ]; then
+    log_info "deploy destination: $ARGOCD_DEST_SERVER (explicit)"
+  elif [ -n "${ARGOCD_DEST_CLUSTER_NAME:-}" ]; then
+    log_info "deploy destination: ${ARGOCD_DEST_CLUSTER_NAME} (explicit, by NAME)"
+  else
+    ARGOCD_DEST_SERVER="$ARGOCD_INCLUSTER_SERVER"
+    log_info "deploy destination: $ARGOCD_DEST_SERVER (in-cluster)"
+  fi
 fi
 
 # ArgoCD's Application.destination accepts EITHER `server:` (the API URL) or `name:` (the name the

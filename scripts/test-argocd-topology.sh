@@ -253,5 +253,76 @@ for f in 70-configure-argocd.sh 91-e2e-tenant-mechanism.sh; do
   fi
 done
 
+# ---------------------------------------------------------------------------------------------
+# 5. THE TENANT PATH MUST NOT DIE BEFORE IT CAN CHOOSE ITS MECHANISM.
+#
+# 70 used to `die` on the ArgoCD-namespace probe — on Forbidden OR NotFound — at a line that runs
+# BEFORE ARGOCD_MECHANISM is even read. So `ARGOCD_MECHANISM=api`, the TENANT'S ONLY PATH, could never
+# rescue it:
+#   * on a lab the GUEST cluster has no `argocd` namespace at all (ArgoCD is a Supervisor Service in
+#     ANOTHER cluster) -> NotFound -> die.
+#   * a tenant pointing at the Supervisor without k8s RBAC there -> Forbidden -> die.
+# `make gitops` therefore could not complete for a Scenario-2 tenant following our own runbook — and
+# KinD cannot show it, because KinD is ONE cluster where the namespace always exists and is readable.
+#
+# The probe is now a MEASUREMENT that feeds the ladder. Only MECH=kubectl may die on it.
+PF70="${SCRIPT_DIR}/70-configure-argocd.sh"
+if [ "$(sed 's/#.*//' "$PF70" | sed -n '/ka get ns/,/^}/p' | grep -c 'die ' || true)" -gt 0 ]; then
+  bad "70 DIES on the ArgoCD-namespace probe — that runs BEFORE ARGOCD_MECHANISM is read, so the TENANT (api) path can never be reached"
+else
+  ok "70 does not die on the ArgoCD-namespace probe (it MEASURES; the tenant can still reach api/request)"
+fi
+
+# ...BUT NOT DYING IS ONLY HALF THE CONTRACT. Deleting that die also deleted the ONLY guard against
+# deploying ONTO THE SUPERVISOR: a tenant has no Supervisor kubeconfig -> ARGOCD_KUBECONFIG defaults to
+# the GUEST -> argocd_is_off_cluster compares it WITH ITSELF -> off_cluster=0 -> destination defaults to
+# https://kubernetes.default.svc -> MECH=api writes it to the SUPERVISOR's argocd-server, where
+# "in-cluster" IS the Supervisor, with prune+selfHeal. That is #158 re-entering through the fix.
+if [ "$(sed 's/#.*//' "$PF70" | grep -c 'REFUSING to deploy' || true)" -gt 0 ]; then
+  ok "the SUPERVISOR GUARD is armed (an unreadable ArgoCD ns + an in-cluster destination is REFUSED)"
+else
+  bad "70 has NO Supervisor guard: an unreadable ArgoCD namespace with off_cluster=0 would deploy the app ONTO THE SUPERVISOR with prune+selfHeal"
+fi
+# shellcheck disable=SC2016  # the ${...} is LITERAL shell source we are grepping FOR, not an expansion
+if [ "$(sed 's/#.*//' "$PF70" | grep -c 'ARGOCD_DEST_SERVER:-}\${ARGOCD_DEST_CLUSTER_NAME' || true)" -gt 0 ]; then
+  ok "an EXPLICIT destination (server OR name) still satisfies the guard — the tenant path stays open"
+else
+  bad "the Supervisor guard does not accept an explicit ARGOCD_DEST_* — it would block the tenant it exists to protect"
+fi
+
+# ARGOCD_DEST_CLUSTER_NAME is documented as "the only handle a tenant usually has". It used to be read
+# ONLY inside the off_cluster=1 branch — so on the tenant path (which always lands in the ELSE branch)
+# it was DEAD CODE, and the Application still shipped destination=kubernetes.default.svc. Same class as
+# #160: a knob that could never take effect.
+if [ "$(sed 's/#.*//' "$PF70" | grep -c 'explicit, by NAME' || true)" -gt 0 ]; then
+  ok "ARGOCD_DEST_CLUSTER_NAME is honoured in BOTH branches (it was dead on the tenant path)"
+else
+  bad "ARGOCD_DEST_CLUSTER_NAME is only read when off_cluster=1 — DEAD on the tenant path, where it is the only handle a tenant has"
+fi
+if [ "$(sed 's/#.*//' "$PF70" | grep -c 'argocd_ns_readable' || true)" -gt 0 ]; then
+  ok "the namespace probe feeds the mechanism ladder (argocd_ns_readable)"
+else
+  bad "70 has no argocd_ns_readable measurement — an unreadable namespace cannot fall through to api"
+fi
+if [ "$(sed 's/#.*//' "$PF70" | grep -c 'ARGOCD_MECHANISM=kubectl, but this kubeconfig' || true)" -gt 0 ]; then
+  ok "an EXPLICIT ARGOCD_MECHANISM=kubectl still dies when kubectl is unusable (the guard is intact)"
+else
+  bad "ARGOCD_MECHANISM=kubectl no longer fails loudly when kubectl cannot write — it would silently do nothing"
+fi
+
+# ---- ORDERING. Every check above reads the SOURCE TEXT; none of them RUNS it. So they were all GREEN
+# on a `70` that died on its very first line of work with `argocd_ns_readable: unbound variable` — I
+# had placed the SUPERVISOR guard ABOVE the probe that sets its input, and under `set -u` that kills
+# `make gitops` on EVERY path, KinD included. static-check was green; only the (local, expensive) e2e
+# caught it. A grep-test proves text EXISTS; it cannot prove the text is REACHABLE. So assert the one
+# invariant the guard depends on: the probe assigns argocd_ns_readable BEFORE the guard reads it.
+probe_ln="$(grep -n '^argocd_ns_readable=yes' "$PF70" | head -1 | cut -d: -f1)"
+guard_ln="$(grep -n 'THE SUPERVISOR GUARD' "$PF70" | head -1 | cut -d: -f1)"
+if [ -n "$probe_ln" ] && [ -n "$guard_ln" ] && [ "$probe_ln" -lt "$guard_ln" ]; then
+  ok "the probe (line ${probe_ln}) assigns argocd_ns_readable BEFORE the guard (line ${guard_ln}) reads it"
+else
+  bad "the SUPERVISOR guard (line ${guard_ln:-?}) runs BEFORE the probe (line ${probe_ln:-?}) that sets argocd_ns_readable — under set -u that kills make gitops on EVERY path"
+fi
+
 [ "$fail" = 0 ] && { echo "test-argocd-topology: OK"; exit 0; }
 echo "test-argocd-topology: FAILED" >&2; exit 1

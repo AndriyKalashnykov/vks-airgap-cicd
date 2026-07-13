@@ -53,10 +53,19 @@ contexts: [{name: other, context: {cluster: other, user: u}}]
 current-context: other
 users: [{name: u, user: {}}]
 KC
-if _VKS_EXPLICIT_KUBECONFIG="${tmp}/other.kubeconfig" state_check >/dev/null 2>&1; then
-  bad "a MISMATCHED sink was SOURCED — its LB IPs and passwords belong to another cluster"
+# DRIVE load_env, NOT state_check. The first version of this test hand-set _VKS_EXPLICIT_KUBECONFIG —
+# the input the PRODUCT never supplied — so it passed against DEAD CODE: load_env never set that
+# variable, state_check always returned 0, and a foreign sink was ALWAYS sourced. A test that supplies
+# the mechanism's input itself is testing the fixture, not the code.
+# Probe a key that exists ONLY in the sink, with .env skipped — otherwise the operator's own .env
+# supplies HARBOR_PASSWORD and the probe measures nothing.
+printf 'SINK_ONLY_CANARY=leaked\n' >> "$VKS_STATE_FILE"
+leak="$(SKIP_DOTENV=1 VKS_STATE_FILE="$VKS_STATE_FILE" KUBECONFIG="${tmp}/other.kubeconfig" \
+          bash -c '. scripts/lib/os.sh; load_env >/dev/null 2>&1; printf "%s" "${SINK_ONLY_CANARY:-}"')"
+if [ -n "$leak" ]; then
+  bad "a MISMATCHED sink was SOURCED through load_env — a foreign cluster's state leaked in"
 else
-  ok "a MISMATCHED sink is NOT sourced"
+  ok "a MISMATCHED sink is NOT sourced (proven through load_env, the product's real entry point)"
 fi
 if [ -f "$VKS_STATE_FILE" ]; then
   bad "the mismatched sink is still in place"
@@ -73,8 +82,10 @@ fi
 rm -f "${tmp}"/.env.state.stale-*
 state_set FOO bar
 printf 'VKS_STATE_SERVER=https://9.9.9.9:6443\n' >> "$VKS_STATE_FILE"
-if _VKS_EXPLICIT_KUBECONFIG="${tmp}/other.kubeconfig" state_check >/dev/null 2>&1; then
-  ok "a MATCHING sink IS sourced"
+got="$(SKIP_DOTENV=1 VKS_STATE_FILE="$VKS_STATE_FILE" KUBECONFIG="${tmp}/other.kubeconfig" \
+         bash -c '. scripts/lib/os.sh; load_env >/dev/null 2>&1; printf "%s" "${FOO:-}"')"
+if [ "$got" = bar ]; then
+  ok "a MATCHING sink IS sourced (through load_env)"
 else
   bad "a matching sink was refused"
 fi
