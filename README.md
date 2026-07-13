@@ -592,8 +592,7 @@ With the ArgoCD instance up, record its endpoint and namespace.
 > ARGOCD_SERVER=<argocd-server-LB-IP>   # kubectl get svc -n argocd-instance-1 argocd-server \
 > #                                       -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
 > ARGOCD_APP_NAME=javawebapp
-> ARGOCD_DEST_NAMESPACE=javawebapp
-> ARGOCD_TRACK_BRANCH=main
+> > ARGOCD_TRACK_BRANCH=main
 > # ARGOCD_CA_FILE=./secrets/argocd-ca.crt   # ArgoCD's self-signed CA (Step 2, make fetch-argocd-ca)
 > ```
 
@@ -755,12 +754,12 @@ so the cluster's containerd/kubelet pull the app image **anonymously** — the d
 carries no `imagePullSecret`, which is why the KinD demo needs none.
 
 **If your lab mandates PRIVATE projects**, set `HARBOR_PUBLIC_PROJECTS=false` (so any project
-`make mirror` auto-creates is private) or pre-create them private, and additionally create a
-**robot-account image-pull secret** in the app namespace (`ARGOCD_DEST_NAMESPACE`) and
-reference it from the app Deployment's `imagePullSecrets` — the pipeline's push secret
-(`harbor-dockerconfig` in `ci`, step 5) authorizes **pushes only**, not the workload's pull.
-The demo does not scaffold that pull secret (it assumes public projects); it is the one
-private-lab step you supply by hand.
+`make mirror` auto-creates is private) or pre-create them private. Nothing else to do: `make gitops`
+creates the image-pull secret (`harbor-pull`, from `HARBOR_USERNAME`/`HARBOR_PASSWORD`) in **every
+app's namespace**, and each app's Deployment already references it. The pipeline's push secret
+(`harbor-dockerconfig` in `ci`, step 5) authorizes **pushes only**, never the workload's pull —
+they are two different credentials in two different namespaces, and `make check-pull-secret-alignment`
+gates that the Deployment asks for the secret the flow actually creates.
 
 For least-privilege CI, create a Harbor **robot account** (push/pull scoped to the two projects)
 instead of using `admin`. **`make harbor-robot`** does it via Harbor's REST API — it creates
@@ -884,9 +883,14 @@ LB IP + admin credentials you set there. For **Gitea** (which you installed) and
   (see Step 6). An ArgoCD reachable *only* by URL + API — with no kubeconfig — is not supported.
 - **`ARGOCD_NAMESPACE` must match** where the lab's ArgoCD controller watches Applications
   (step 4).
-- **ArgoCD reaches Gitea over the in-cluster URL** (`GITEA_INTERNAL_URL`, default
-  `http://gitea-http.gitea.svc:3000`) — Gitea and ArgoCD are in the same cluster, so this
-  works without exposing Gitea externally.
+- **ArgoCD must be able to CLONE Gitea from whatever cluster ArgoCD runs in.** In-cluster
+  (KinD, ArgoCD-in-guest) that is `GITEA_INTERNAL_URL` (`http://gitea-http.gitea.svc:3000`).
+  On a real lab ArgoCD is a **Supervisor Service** — a *different* cluster — and that name does
+  not resolve there, so Gitea gets its **own LoadBalancer** and `make install-gitea` publishes
+  `GITEA_ARGOCD_URL` (`http://<gitea-lb-ip>:3000`). The ingress hostname (`gitea.vks.local`) is
+  **not** usable for this: it exists only in your `/etc/hosts`, and dialling the ingress IP sends
+  `Host: <ip>`, which matches no vhost (404, not a clone). `make gitops` refuses to build an
+  unreachable repoURL rather than let every Application fail silently.
 - **cluster-admin** on the workload cluster is required — the flow creates namespaces
   (`gitea`, `ci`, `javawebapp`) and installs Tekton CRDs.
 - **StorageClass:** Gitea uses a PVC (`GITEA_STORAGE_SIZE`, default `5Gi`). Ensure the
@@ -950,10 +954,14 @@ kubectl get svc -n <argocd-namespace> argocd-server \
   upstream caveat: you must be a **direct** project-admin, not a project-admin inherited via an
   SSO group. **If you do not hold project-admin, ask your platform admin** to create the robot
   (push+pull on your project) and hand you `robot$<name>` + its secret.
-- **An ArgoCD `AppProject` + RBAC** permitting `make gitops` to create the `Application` and
-  deploy into `ARGOCD_DEST_NAMESPACE`. This is generic ArgoCD multi-tenancy (a standard
-  `AppProject` + a role/policy); there is no VKS-specific page for it — **verify the exact
-  `AppProject`/RBAC shape on your lab**.
+- **An ArgoCD `AppProject` + RBAC** permitting `make gitops` to create each `Application` and
+  deploy into that app's namespace. Set `ARGOCD_PROJECT` to your AppProject; per app, the admin
+  must add the app's namespace to `spec.destinations` and its `<app>-deploy` repo URL to
+  `spec.sourceRepos`. **UNVERIFIED and load-bearing:** a tenant may not be able to `kubectl apply`
+  into the ArgoCD instance's (admin-owned) vSphere Namespace at all — a tenant's grant may be
+  *ArgoCD* RBAC (via `argocd-server`) rather than *Kubernetes* RBAC. `make gitops` MEASURES this
+  (`kubectl auth can-i`) and, if refused, prints exactly what to request. Settle it on your lab:
+  `kubectl --kubeconfig $ARGOCD_KUBECONFIG -n $ARGOCD_NAMESPACE auth can-i create applications.argoproj.io`.
 - **The workload cluster kubeconfig** — `vcf cluster kubeconfig get <cluster> --export-file
   ./secrets/vks.kubeconfig` for the cluster you run the demo in. You need **cluster-admin** on
   it (the flow creates the `gitea` / `ci` / `javawebapp` namespaces and installs Tekton CRDs).
@@ -971,7 +979,6 @@ HARBOR_PUBLIC_PROJECTS=false            # tenant projects are typically private 
 ARGOCD_SERVER=<discovered-argocd-server-LB-IP>
 ARGOCD_NAMESPACE=<namespace the shared ArgoCD instance watches>
 ARGOCD_APP_NAME=javawebapp
-ARGOCD_DEST_NAMESPACE=javawebapp
 ARGOCD_TRACK_BRANCH=main
 # ARGOCD_CA_FILE=./secrets/argocd-ca.crt   # optional; fetched in Step 2 (make fetch-argocd-ca)
 KUBECONFIG=./secrets/vks.kubeconfig
@@ -1115,11 +1122,11 @@ reproducible on the KinD stand-in.)
 `HARBOR_APP_PROJECT` at the project(s) you were **granted** (Step 2) — they already exist, so
 `make mirror` (run in Step 6) just pushes to them (it does **not** need to create them). Because a
 tenant project is typically **private** (`HARBOR_PUBLIC_PROJECTS=false`), the workload's kubelet
-cannot pull the app image anonymously: create a **robot-account image-pull secret** in the app
-namespace (`ARGOCD_DEST_NAMESPACE`) and reference it from the app Deployment's `imagePullSecrets`.
-The pipeline's push secret (`harbor-dockerconfig` in `ci`, Step 5) authorizes **pushes only**, not
-the workload's pull — so this pull secret is the one private-lab step you supply by hand. Use the
-robot you were granted:
+cannot pull the app image anonymously — so `make gitops` creates the image-pull secret
+(`harbor-pull`) in **every app's namespace** from `HARBOR_USERNAME`/`HARBOR_PASSWORD`, and each
+app's Deployment already references it. The pipeline's push secret (`harbor-dockerconfig` in `ci`,
+Step 5) authorizes **pushes only**, never the workload's pull — two different credentials, two
+different namespaces. You supply the robot you were granted; the wiring is automatic:
 
 ```bash
 make harbor-robot                                  # → secrets/harbor-robot.env (if you hold project-admin)
@@ -1235,9 +1242,14 @@ deployed **app**, either front them with the ingress at `*.vks.local`, or `kubec
   no kubeconfig, is not supported).
 - **`ARGOCD_NAMESPACE` must match** where the shared ArgoCD controller watches Applications
   (Step 4), and your granted **`AppProject` + RBAC** must permit the `Application` + destination.
-- **ArgoCD reaches Gitea over the in-cluster URL** (`GITEA_INTERNAL_URL`, default
-  `http://gitea-http.gitea.svc:3000`) — Gitea and ArgoCD are in the same cluster, so this
-  works without exposing Gitea externally.
+- **ArgoCD must be able to CLONE Gitea from whatever cluster ArgoCD runs in.** In-cluster
+  (KinD, ArgoCD-in-guest) that is `GITEA_INTERNAL_URL` (`http://gitea-http.gitea.svc:3000`).
+  On a real lab ArgoCD is a **Supervisor Service** — a *different* cluster — and that name does
+  not resolve there, so Gitea gets its **own LoadBalancer** and `make install-gitea` publishes
+  `GITEA_ARGOCD_URL` (`http://<gitea-lb-ip>:3000`). The ingress hostname (`gitea.vks.local`) is
+  **not** usable for this: it exists only in your `/etc/hosts`, and dialling the ingress IP sends
+  `Host: <ip>`, which matches no vhost (404, not a clone). `make gitops` refuses to build an
+  unreachable repoURL rather than let every Application fail silently.
 - **cluster-admin** on the workload cluster is required — the flow creates namespaces
   (`gitea`, `ci`, `javawebapp`) and installs Tekton CRDs.
 - **StorageClass:** Gitea uses a PVC (`GITEA_STORAGE_SIZE`, default `5Gi`). Ensure the

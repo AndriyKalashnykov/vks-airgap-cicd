@@ -97,7 +97,20 @@ metadata:
   labels:
     app.kubernetes.io/name: gitea
 spec:
-  type: ClusterIP
+  # LoadBalancer, NOT ClusterIP — and for the same reason Harbor and ArgoCD each keep their own
+  # direct LB: a MACHINE outside this cluster has to reach Gitea, and the ingress cannot serve one.
+  #
+  # ArgoCD is a VCF Supervisor Service: its repo-server runs in a DIFFERENT cluster and must clone
+  # <app>-deploy. It cannot use the in-cluster DNS name (gitea-http.gitea.svc — that resolves only
+  # inside THIS cluster), and it cannot use the ingress either: every route matches the hostname
+  # `gitea.vks.local`, which exists solely in the operator's /etc/hosts. A repo-server has no
+  # /etc/hosts entry to give, and dialling the ingress LB IP directly sends `Host: <ip>`, which
+  # matches no vhost -> 404 from a live listener, not a clone. (Nor can the IP be added as a
+  # Gateway-API hostname: the spec forbids IP literals.)
+  #
+  # A LoadBalancer Service keeps its ClusterIP too, so the in-cluster consumers (Tekton clone +
+  # tag write-back) are unaffected and still use GITEA_INTERNAL_URL.
+  type: ${GITEA_SERVICE_TYPE}
   selector:
     app.kubernetes.io/name: gitea
   ports:

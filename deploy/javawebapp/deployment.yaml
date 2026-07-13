@@ -15,6 +15,11 @@ spec:
       labels:
         app.kubernetes.io/name: javawebapp
     spec:
+      # Harbor image-pull credential, created in this namespace by 70-configure-argocd.sh.
+      # REQUIRED when the Harbor project is private (the tenant default: HARBOR_PUBLIC_PROJECTS=false);
+      # harmless when it is public. Without it every pod here goes ImagePullBackOff.
+      imagePullSecrets:
+        - name: harbor-pull
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001

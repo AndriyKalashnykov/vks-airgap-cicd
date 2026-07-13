@@ -6,9 +6,14 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: default
+  # `default` permits every destination and repo — right for KinD and for the operator who INSTALLED
+  # ArgoCD. A TENANT is given their own AppProject, and an Application whose project does not permit
+  # its destination/repo is REJECTED. So this is a variable, not a literal.
+  project: ${ARGOCD_PROJECT}
   source:
-    # In-cluster Gitea URL (ArgoCD resolves it via kube-DNS). Kustomize app at root.
+    # The Gitea URL ARGOCD'S repo-server can clone (GITEA_ARGOCD_URL — Gitea's LoadBalancer when
+    # ArgoCD is off-cluster; the in-cluster Service DNS when it is not). NOT the ingress hostname:
+    # that resolves only in the operator's /etc/hosts. Kustomize app at root.
     repoURL: ${DEPLOY_REPO_CLONE_URL}
     targetRevision: ${ARGOCD_TRACK_BRANCH}
     path: .
