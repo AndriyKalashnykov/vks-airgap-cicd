@@ -958,12 +958,25 @@ kubectl get svc -n <argocd-namespace> argocd-server \
 
 **2 — Request grants from the platform team:**
 
-- **A Harbor project** (or two) you can **push** to, plus a **robot account** scoped to it.
-  `make harbor-robot` self-services the robot **if you hold Harbor project-admin on that
-  project** (Projects → *project* → Robot Accounts; system-admin is **not** required). Note the
-  upstream caveat: you must be a **direct** project-admin, not a project-admin inherited via an
-  SSO group. **If you do not hold project-admin, ask your platform admin** to create the robot
-  (push+pull on your project) and hand you `robot$<name>` + its secret.
+- **A Harbor project you can push to, plus a robot account.** Here the number of projects decides
+  what you can do for yourself, because **Harbor scopes robots by level**:
+
+  | You are | Projects the flow needs | What `make harbor-robot` does |
+  |---|---|---|
+  | Harbor **system-admin** | any | creates a **system-level** robot with push+pull on each — the only shape that can span two projects in one credential |
+  | **project-admin**, and `HARBOR_INFRA_PROJECT` == `HARBOR_APP_PROJECT` | **one** | creates a **project-level** robot in it. Login name is `robot$<project>+<name>` (note: *not* `robot$<name>`) |
+  | **project-admin**, two different projects | **two** | **impossible** — it prints the exact request and stops |
+
+  Why impossible: a project-level robot (all a project-admin may create) is scoped to **exactly one**
+  project, and *two robots cannot help* — the kaniko build pod carries **one** registry credential and
+  must **pull** its builder/runtime images from `HARBOR_INFRA_PROJECT` *and* **push** the app image to
+  `HARBOR_APP_PROJECT` with that same credential.
+
+  So as a tenant, either **use one project for both** (set `HARBOR_INFRA_PROJECT` and
+  `HARBOR_APP_PROJECT` to it **in `.env`** — the repo names don't collide) or **ask your platform
+  admin** for a system-level robot with push+pull on both, and put `robot$<name>` + its secret in
+  `.env`. `make harbor-robot` asks Harbor who you are (`GET /users/current`) and tells you which case
+  you're in rather than failing with a bare 403.
 - **An ArgoCD `AppProject` + RBAC** permitting `make gitops` to create each `Application` and
   deploy into that app's namespace. Set `ARGOCD_PROJECT` to your AppProject; per app, the admin
   must add the app's namespace to `spec.destinations` and its `<app>-deploy` repo URL to
@@ -1505,7 +1518,7 @@ granted. What that means concretely:
 |---|---|---|
 | **ArgoCD AppProject destination** | Always, as a tenant (you get your own AppProject; ours defaults to `default`, which permits everything — a real lab's will not). The `Application` is rejected: *"application destination … is not permitted in project"* | **Check first:** `kubectl -n $ARGOCD_NAMESPACE get appproject <yours> -o jsonpath='{.spec.destinations}{"\n"}{.spec.sourceRepos}'` — your new namespace AND the new `<app>-deploy` repo URL must both be listed.<br>**Ask the ArgoCD admin** to add them: `kubectl -n $ARGOCD_NAMESPACE patch appproject <yours> --type=json -p='[{"op":"add","path":"/spec/destinations/-","value":{"server":"$ARGOCD_DEST_SERVER","namespace":"<app>"}},{"op":"add","path":"/spec/sourceRepos/-","value":"<gitea>/<org>/<app>-deploy.git"}]'` |
 | **Ingress hostname on a SHARED Gateway** | **Only** on the classic route API against a platform-owned Gateway (`ISTIO_SHARED_GATEWAY`). Its `hosts:` list belongs to the mesh admin, so an unlisted host **404s from a listener that exists** | **Check first:** `make istio-preflight` (and `istio_assert_shared_gateway_hosts` fails the install rather than 404ing later).<br>**Ask the mesh admin** to admit the host — ideally once, as a wildcard: `kubectl -n <gw-ns> patch gateway <gw> --type=json -p='[{"op":"add","path":"/spec/servers/0/hosts/-","value":"*.vks.local"}]'` |
-| **Harbor** | Never | Nothing to do: `make harbor-robot` mints a **project-scoped** robot (push+pull on the whole `apps` project), so a new repo under it is already covered. |
+| **Harbor** | Never (for a *new app*) | Nothing to do **when adding an app**: the robot's push+pull is scoped to the whole project, so a new repo under it is already covered — and `make gitops` creates the `harbor-pull` Secret in the new app's namespace for you. **But the robot itself is not always self-serviceable**: only a Harbor **system-admin** can create one that spans two projects. See [Scenario 2 → grants](#run-against-a-real-vks-lab--scenario-2-harbor--argocd-already-installed). |
 
 **On the Gateway-API path (the default, and what Broadcom uses) the hostname needs nobody:** Istio
 auto-provisions the gateway from a `Gateway` we create in **our own** namespace, so its `hosts:`

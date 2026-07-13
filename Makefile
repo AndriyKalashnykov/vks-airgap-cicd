@@ -429,8 +429,10 @@ jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photo
 	 if [ -n "$(JUMPBOX_TARBALL)" ]; then \
 	   tbabs="$(abspath $(JUMPBOX_TARBALL))"; tbbase="$$(basename "$$tbabs")"; \
 	   [ -f "$$tbabs" ] || { echo "ERROR: JUMPBOX_TARBALL not found: $$tbabs"; exit 1; }; \
-	   huser="$$(grep -h '^HARBOR_USERNAME=' .env.kind .env .env.example 2>/dev/null | head -1 | cut -d= -f2)"; \
-	   hpw="$$(grep -h '^HARBOR_PASSWORD=' .env.kind .env 2>/dev/null | head -1 | cut -d= -f2)"; \
+	   : "harbor-robot writes these single-quoted (the name is robot$$<x>, the secret can hold metachars)."; \
+	   : "cut keeps the quotes, so an unstripped value logs in as \047robot$$...\047 and 401s."; \
+	   huser="$$(grep -h '^HARBOR_USERNAME=' .env.kind .env .env.example 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//")"; \
+	   hpw="$$(grep -h '^HARBOR_PASSWORD=' .env.kind .env 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//")"; \
 	   [ -n "$$hpw" ] || { echo "ERROR: HARBOR_PASSWORD not in .env.kind/.env — the air-gap half needs push creds"; exit 1; }; \
 	   tb_flags="-v $$tbabs:/run/bundle/$$tbbase:ro -e JUMPBOX_MODE=airgap-half -e JUMPBOX_TARBALL=/run/bundle/$$tbbase -e HARBOR_USERNAME=$$huser -e HARBOR_PASSWORD"; \
 	   echo "running $(JUMPBOX_OS) AIR-GAP jump box (sneakernet half) on the kind network (Harbor=$$harbor_url, tarball=$$tbbase)"; \
@@ -527,8 +529,12 @@ test-classify-changes: ## Unit-test the CI gate selector (a docs-only change mus
 test-argocd-topology: ## Unit-test lib/argocd.sh: off-cluster derivation + the clonable-repoURL guard (the two CRITICALs)
 	@$(SCRIPTS)/test-argocd-topology.sh
 
+.PHONY: test-harbor-robot-payload
+test-harbor-robot-payload: ## Unit-test the Harbor robot payloads (system vs project level) — offline, no Harbor
+	@$(SCRIPTS)/test-harbor-robot-payload.sh
+
 .PHONY: test-scripts
-test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology ## Run all offline script-logic unit tests
+test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload ## Run all offline script-logic unit tests
 
 ##@ Security scanning (internet/CI side; not part of the air-gap install)
 .PHONY: secrets
