@@ -140,10 +140,14 @@ mise, clones this repo, runs `make deps`, and prints a toolchain report:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AndriyKalashnykov/vks-airgap-cicd/main/bootstrap-jumpbox.sh | bash
+```
 
-# Prefer to read before running? Download, inspect, then run this INSTEAD of the line above:
-#   curl -fsSLO https://raw.githubusercontent.com/AndriyKalashnykov/vks-airgap-cicd/main/bootstrap-jumpbox.sh
-#   less bootstrap-jumpbox.sh && bash bootstrap-jumpbox.sh
+**Prefer to read a script before running it?** Download, inspect, then run — instead of the one-liner above:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/AndriyKalashnykov/vks-airgap-cicd/main/bootstrap-jumpbox.sh
+less bootstrap-jumpbox.sh
+bash bootstrap-jumpbox.sh
 ```
 
 It's idempotent (re-run skips what's present); pin a ref with `REF=<tag-or-sha>`. It installs

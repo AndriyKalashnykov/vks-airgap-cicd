@@ -91,13 +91,33 @@ log_info "ArgoCD will clone from: $GITEA_ARGOCD_URL"
 # in which case `kubectl apply` into that namespace is Forbidden and this whole mechanism is the
 # wrong tool. That question is UNVERIFIED against a real lab; rather than assume the write lands,
 # ask the API server, and if the answer is no, print exactly what to request.
+# THIS IS A MEASUREMENT, NOT A GATE. It used to `die` here — on Forbidden OR NotFound — which is the
+# opposite of what the comment above says, and it made the TENANT PATH IMPOSSIBLE ON A REAL LAB:
+#
+#   * The die is at THIS line. ARGOCD_MECHANISM is not read until ~20 lines below and not dispatched
+#     until ~45 below. So `ARGOCD_MECHANISM=api` — the tenant's ONLY path — could never rescue it.
+#   * On a lab the guest cluster has NO `argocd` namespace at all (ArgoCD is a Supervisor Service in
+#     ANOTHER cluster), so ARGOCD_KUBECONFIG defaulting to the guest yields NotFound -> die.
+#   * A tenant who DOES point it at the Supervisor but holds no k8s RBAC there gets Forbidden -> die.
+#
+# Either way `make gitops` died before it could choose the api mechanism. KinD cannot show this: it is
+# ONE cluster, so the namespace is always present and readable. 23-argocd-preflight.sh already treats
+# the same Forbidden as a WARN — the two scripts disagreed, and this one was wrong.
+#
+# So: a namespace we cannot read means "kubectl is not available to us here" — feed that to the
+# ladder. Only MECH=kubectl may die on it (it does, further below).
+argocd_ns_readable=yes
 ns_err="$(ka get ns "$ARGOCD_NAMESPACE" 2>&1 >/dev/null)" || {
+  argocd_ns_readable=no
   if printf '%s' "$ns_err" | grep -qi 'forbidden'; then
-    log_error "FORBIDDEN reading namespace '$ARGOCD_NAMESPACE' on the ArgoCD cluster ($ARGOCD_API)."
-    log_error "  This is a PERMISSION problem, not a missing install — do not go looking for ArgoCD."
-    die "ask your platform admin for read access to '$ARGOCD_NAMESPACE', or for the ArgoCD-side objects to be created for you (see below)."
+    log_warn "cannot READ namespace '$ARGOCD_NAMESPACE' on the ArgoCD cluster ($ARGOCD_API): FORBIDDEN."
+    log_warn "  That is normal for a TENANT — the ArgoCD instance lives in an admin-owned namespace."
+    log_warn "  kubectl is not your write path; argocd-server is. Continuing to the mechanism ladder."
+  else
+    log_warn "namespace '$ARGOCD_NAMESPACE' not found on the ArgoCD cluster ($ARGOCD_API)."
+    log_warn "  Expected when ArgoCD is a Supervisor Service and ARGOCD_KUBECONFIG points at the GUEST."
+    log_warn "  kubectl is not usable here. Continuing to the mechanism ladder (api / request)."
   fi
-  die "namespace '$ARGOCD_NAMESPACE' not found on the ArgoCD cluster ($ARGOCD_API). Is ARGOCD_KUBECONFIG/ARGOCD_NAMESPACE right? (ArgoCD is a Supervisor Service on a real lab — it is NOT in your guest cluster.)"
 }
 
 # WHICH MECHANISM CAN ACTUALLY WRITE THE APPLICATION?
@@ -123,7 +143,11 @@ GITEA_DEPLOY_PRIVATE="${GITEA_DEPLOY_PRIVATE:-false}"
 
 can() { [ "$(ka auth can-i "$1" "$2" -n "$ARGOCD_NAMESPACE" 2>/dev/null || echo no)" = yes ]; }
 can_kubectl=no
-if can create applications.argoproj.io; then
+# A namespace we cannot even READ is a namespace we cannot apply into. Short-circuit the probes.
+if [ "$argocd_ns_readable" = no ]; then
+  log_info "kubectl write path: NOT AVAILABLE (the ArgoCD namespace is unreadable from this kubeconfig)"
+fi
+if [ "$argocd_ns_readable" = yes ] && can create applications.argoproj.io; then
   if [ "$GITEA_DEPLOY_PRIVATE" != "true" ] || can create secrets; then can_kubectl=yes; fi
 fi
 
