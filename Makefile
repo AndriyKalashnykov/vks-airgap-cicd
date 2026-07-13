@@ -128,6 +128,10 @@ env-validate: ## Validity gate — format + KUBECONFIG/Harbor connectivity+auth 
 check-doc-command-count: ## Gate: a doc that COUNTS commands ("two commands") must list exactly that many
 	@$(SCRIPTS)/check-doc-command-count.sh
 
+.PHONY: check-gwapi-istio-alignment
+check-gwapi-istio-alignment: ## Gate: GATEWAY_API_VERSION == the version the pinned ISTIO vendors (ground truth: istio's go.mod)
+	@$(SCRIPTS)/check-gwapi-istio-alignment.sh
+
 .PHONY: check-readme-scenarios
 check-readme-scenarios: ## Gate: the README is SCENARIO-BASED — each scenario must answer every decision itself
 	@$(SCRIPTS)/check-readme-scenarios.sh
@@ -699,7 +703,7 @@ docs-lint: check-readme-scenarios check-doc-command-count check-vks-terminology 
 	else echo "markdownlint not installed — skipping (install markdownlint-cli)"; fi
 
 .PHONY: static-check
-static-check: check-toolchain-alignment check-java-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)
