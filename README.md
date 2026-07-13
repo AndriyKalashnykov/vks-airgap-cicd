@@ -40,14 +40,14 @@ VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surface
 
 New here? Pick the path that matches your situation — each one is self-contained end to end:
 
-1. **KinD** — *see it work.* No VKS cluster, **zero `.env`**, one command.
+1. **KinD** — *see it work.* No VKS cluster, **zero `.env`**, two commands.
 2. **VKS — I install Harbor + ArgoCD** (as **Supervisor Services**) — I am the admin: I provision the workload cluster too, then run the pipeline.
 3. **VKS — Harbor + ArgoCD already exist** — I am a **tenant**: I **discover** them,
    **request** what I'm not allowed to self-service, then run the pipeline.
 
 | I want to… | Path | You need |
 |------------|------|----------|
-| **Just see it work** (no VKS cluster) | [KinD](docs/kind-local.md) — one command, zero `.env` | **Have:** Docker (KinD needs Docker specifically) · internet access<br>**Run:** `make deps` → `make e2e-kind` |
+| **Just see it work** (no VKS cluster) | [KinD](docs/kind-local.md) — two commands, zero `.env` | **Have:** Docker (KinD needs Docker specifically) · internet access<br>**Run:** `make deps` → `make e2e-kind` |
 | **VKS — I install Harbor + ArgoCD** (I am the admin) | [Scenario 1](docs/scenario-1.md) | **Have:** a vSphere login that can install a Supervisor Service, create a vSphere Namespace and provision a guest cluster · cluster-admin on that guest cluster · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md))<br>**Reachable from the jump box:** the internet, the Supervisor API, Harbor — and ArgoCD's cluster must reach your guest API<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make env-check` → `make psa-check` |
 | **VKS — Harbor + ArgoCD already exist** (I am a **tenant**) | [Scenario 2](docs/scenario-2.md) | **Have:** cluster-admin on your own guest cluster · Harbor **project-admin** (else ask for robot credentials) · the licensed VCF CLI archives<br>**Ask the platform team for:** your guest cluster **registered** with ArgoCD (admin-only) · an ArgoCD role that lets you create an `Application` · mesh rights — `make istio-preflight` prints exactly what to request<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make harbor-robot` → `make psa-check` |
 
@@ -197,7 +197,7 @@ that: `make check-readme-scenarios`.)
 
 | Path | Document | You are |
 |---|---|---|
-| **See it work, locally** | **[KinD end-to-end](docs/kind-local.md)** | just trying the demo — one command, no lab, no `.env` |
+| **See it work, locally** | **[KinD end-to-end](docs/kind-local.md)** | just trying the demo — two commands, no lab, no `.env` |
 | **VKS — I install Harbor + ArgoCD** (I am the admin) | **[Scenario 1](docs/scenario-1.md)** | the admin: you install them as **Supervisor Services**, then wire the pipeline |
 | **VKS — they already exist** | **[Scenario 2](docs/scenario-2.md)** | a **tenant**: you *discover* the endpoints and *request* the grants you need |
 
@@ -232,11 +232,16 @@ overlay written by the KinD flow. Nothing is hardcoded in scripts or the Makefil
 
 ## Contributing
 
-Contributions welcome — open an issue or a pull request. Before pushing, run `make ci`
-(the offline gate: alignment, lint, manifest validation, security scans, app tests, and
-docs/diagram drift checks) so the change matches what CI enforces. Dependency updates are
-managed by [Renovate](https://docs.renovatebot.com/); tool and image versions are pinned
-via `.mise.toml`, `.env.example`, `images/images.txt`, and inline `# renovate:` comments.
+Open an issue or a pull request. Before you push:
+
+```bash
+make ci      # the same gate CI runs. Green here = green there.
+```
+
+**Do not bump tool or image versions by hand** — [Renovate](https://docs.renovatebot.com/) owns them
+(`.mise.toml`, `.env.example`, `images/images.txt`, and inline `# renovate:` comments). A hand-edit
+gets reverted by the next bot PR, and `make ci` fails it anyway: the same version lives in several
+files and an alignment gate asserts they agree.
 
 ## License
 
