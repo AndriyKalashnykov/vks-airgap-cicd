@@ -49,6 +49,25 @@ gitleaks = "8.30.1"
 # drifts (e.g. an older runner-bundled build flags SC2015 that a newer local one
 # does not), producing green-locally / red-in-CI surprises.
 shellcheck = "0.11.0"
+# The rest of the quality gate: `make validate` (kubeconform), `make lint`
+# (yamllint + hadolint). These USED to be curl'd + `pipx install`ed by a bespoke
+# CI step on EVERY static-check run (~25 s of billed runner time, no cache) —
+# because "mise doesn't have them" was assumed, never checked. It does:
+#   kubeconform -> aqua:yannh/kubeconform     hadolint -> aqua:hadolint/hadolint
+#   yamllint    -> pipx:yamllint  (mise drives it through the pinned `uv` below)
+# Pinning them here deletes that step, puts them in mise-action's cache, AND —
+# the real win — makes local `make lint`/`make validate` use the same versions as
+# CI. yamllint in particular was installed UNPINNED (`pipx install yamllint`), so
+# CI floated to whatever was newest while every dev box had something else: the
+# exact green-local/red-CI drift the shellcheck comment above warns about.
+kubeconform = "0.8.0"
+hadolint    = "2.14.0"
+yamllint    = "1.38.0"
+# uv — NOT a project tool: it is what mise's `pipx:` backend shells out to in order
+# to install yamllint. Without it on PATH mise errors `pipx may be required but was
+# not found` (verified). Pinning it here means the yamllint install does not depend
+# on whatever pipx/python the runner (or the operator's box) happens to ship.
+uv       = "0.11.28"
 
 [settings]
 # Reproducible: never auto-bump; pin via this file + Renovate.
