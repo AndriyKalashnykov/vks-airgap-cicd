@@ -66,10 +66,26 @@ help: ## Show this help
 .PHONY: deps deps-mise deps-prereqs
 deps: deps-mise deps-prereqs ## Install the full jump-box toolchain (mise tools + prereqs script)
 
-deps-mise: ## Install mise-managed tools from .mise.toml (java, maven, kubectl, helm, trivy, ...)
-	@if command -v mise >/dev/null 2>&1; then \
-	   mise trust "$(CURDIR)/.mise.toml"; mise install; \
-	 else echo "mise not found — install it first (see README → Prerequisites), then re-run 'make deps'"; exit 1; fi
+deps-mise: ## Install mise itself (if absent) + the mise-managed tools from .mise.toml (java, maven, kubectl, helm, trivy, ...)
+# This used to `exit 1` with "mise not found — install it first (see README → Prerequisites)" — while
+# the README's Prerequisites said mise is "installed by `make deps`". A new user following the KinD
+# row (Have: Docker · Run: make deps) hit a documentation LOOP and could not get past step one.
+# bootstrap-jumpbox.sh already installs mise the same way; `make deps` now does too, so the README
+# claim is true. mise lands in ~/.local/bin, which may not be on PATH yet in THIS shell — so resolve
+# the binary explicitly rather than trusting `command -v` right after installing it.
+	@if ! command -v mise >/dev/null 2>&1 && [ ! -x "$$HOME/.local/bin/mise" ]; then \
+	   echo "mise not found — installing it (https://mise.run)"; \
+	   curl -fsSL https://mise.run | sh || { echo "mise install failed — install it manually: https://mise.jdx.dev/getting-started.html"; exit 1; }; \
+	 fi; \
+	 MISE="$$(command -v mise 2>/dev/null || echo "$$HOME/.local/bin/mise")"; \
+	 [ -x "$$MISE" ] || { echo "mise still not found after install — install it manually: https://mise.jdx.dev/getting-started.html"; exit 1; }; \
+	 "$$MISE" trust "$(CURDIR)/.mise.toml"; "$$MISE" install; \
+	 command -v mise >/dev/null 2>&1 || { \
+	   echo ""; \
+	   echo "NOTE: mise is installed at $$HOME/.local/bin/mise but is NOT on your PATH."; \
+	   echo "      For this shell:  export PATH=\"$$HOME/.local/bin:$$PATH\""; \
+	   echo "      Permanently:     echo 'eval \"\$$(mise activate bash)\"' >> ~/.bashrc   # or ~/.zshrc"; \
+	 }
 
 deps-prereqs: ## Install non-mise CLIs + OS packages (git, tkn, argocd, podman, ...) via 00-install-prereqs.sh
 	@$(SCRIPTS)/00-install-prereqs.sh
