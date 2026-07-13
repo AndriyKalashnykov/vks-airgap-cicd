@@ -54,8 +54,13 @@ New here? Pick the path that matches your situation — each one is self-contain
 The VKS paths start from the jump-box **[Prerequisites](#prerequisites)** below.
 Run **`make check-tools`** to see which CLIs you have and which are required.
 
-> **Container engine:** **podman by default** on VKS — it trusts the self-signed Harbor CA per-command, sudo-free. Docker works only if you install that CA into the daemon yourself (`CONTAINER_ENGINE=docker` says so and stops).
-> `make e2e-kind` requires **Docker** specifically.
+> **Container engine:** **podman by default** on VKS — daemonless, so it trusts the self-signed Harbor CA
+> **per command** (`--cert-dir`), sudo-free, and it is the only engine `make deps` installs.
+> Docker also works, but its *daemon* does the registry TLS, so the CA must be installed for the daemon
+> — root-owned (`/etc/docker/certs.d/…`, or the OS store + a daemon restart) unless you run **rootless**
+> docker. See `CONTAINER_ENGINE` in `.env.example`.
+> `make e2e-kind` requires **Docker** regardless of `CONTAINER_ENGINE` (kind's node containers) — a
+> stand-in detail; the air-gapped jump box needs no docker at all.
 
 ## Demo apps
 

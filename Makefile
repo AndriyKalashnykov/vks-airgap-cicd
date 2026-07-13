@@ -52,7 +52,9 @@ PLANTUML_VERSION    ?= 1.2026.6
 RENOVATE_VERSION    ?= 43.257.6
 # renovate: datasource=npm depName=markdownlint-cli
 MARKDOWNLINT_VERSION ?= 0.49.0
-# Container engine — podman preferred, docker fallback. Override: CONTAINER_ENGINE=docker
+# Container engine — podman is the DEFAULT, docker only a fallback. Override: CONTAINER_ENGINE=docker
+# This duplicates container_engine() (scripts/lib/os.sh) because make needs it at parse time; the two
+# MUST agree, and `make test-container-engine` asserts both put podman first.
 CONTAINER_ENGINE    ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
 SCRIPTS := ./scripts

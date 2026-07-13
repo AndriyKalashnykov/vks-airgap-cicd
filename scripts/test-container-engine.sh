@@ -85,9 +85,17 @@ fi
 #    lab. Docker belongs ONLY to the KinD stand-in and the local test harnesses.
 #    Allowlist = the KinD/local-only scripts, each of which is genuinely docker-bound: they use the
 #    kind Docker network, `docker exec` into node containers, or build the jump-box test image.
-KIND_ONLY='05-kind-up.sh|06-install-harbor.sh|07-install-argocd.sh|kind-down.sh|e2e-.*\.sh|test-.*\.sh|jumpbox.*\.sh|bootstrap-test\.sh'
-offenders=""
-for f in scripts/[0-9][0-9]-*.sh scripts/lib/*.sh scripts/creds.sh scripts/argocd-password.sh; do
+#    The verb list USED to be `docker (exec|cp|network|run|build)`. That gate went GREEN on the very
+#    commit that added a bare `docker info` to an operator script — a gate that passes on the change
+#    it forbids is not a gate. Match the BINARY INVOCATION (`docker <subcommand>`), not a verb menu.
+KIND_ONLY='05-kind-up\.sh|06-install-harbor\.sh|07-install-argocd\.sh|kind-down\.sh'
+# The glob below can only ever yield NN-*.sh / lib/*.sh / the two named scripts, so an allowlist entry
+# for e2e-*/test-*/jumpbox* would be DEAD — it would advertise coverage we do not have. They are
+# genuinely docker-bound and genuinely out of the operator flow, so they are simply not scanned; say
+# so rather than pretending an exemption.
+offenders=""; scanned=0
+for f in scripts/[0-9][0-9]-*.sh scripts/lib/*.sh scripts/creds.sh scripts/argocd-password.sh \
+         scripts/app-run.sh scripts/app-test.sh; do
   [ -f "$f" ] || continue
   b="$(basename "$f")"
   printf '%s' "$b" | grep -qE "^(${KIND_ONLY})$" && continue
@@ -95,17 +103,51 @@ for f in scripts/[0-9][0-9]-*.sh scripts/lib/*.sh scripts/creds.sh scripts/argoc
   # (My first draft flagged it: the gate cannot treat the abstraction's definition as a violation
   # of the abstraction. It is the one file allowed to name docker.)
   [ "$b" = os.sh ] && continue
-  # comments stripped first: a gate that matches the comment EXPLAINING it is a gate that lies
+  scanned=$((scanned + 1))
+  # Comments stripped first: a gate that matches the comment EXPLAINING it is a gate that lies
   # (this repo has shipped that bug twice — check-java-alignment and test-kind-down-safety).
-  if sed 's/#.*//' "$f" | grep -qE '(require_cmd|command -v|have)[[:space:]]+docker|docker (exec|cp|network|run|build)|docker\.sock'; then
+  #
+  # ...but stripping comments is NOT enough: `docker` also appears in PROSE inside STRINGS and DATA
+  # ("install podman or docker manually" in a log_warn; "requires docker specifically" in the
+  # check-tools table). A naive /docker[[:space:]]+[a-z]/ flags those — the same lie, one level down.
+  # So match docker only at a COMMAND POSITION: line-start, or after | && ; $( , or after run/sudo.
+  # Prose reaches `docker` preceded by an ordinary word ("or docker", "requires docker") and is skipped.
+  # NOTE a bare `(` is deliberately NOT a command position: English parentheses contain prose
+  # ("(docker is only a fallback)" in the check-tools table) and matching them re-introduces the bug.
+  # `$(` IS matched, which is the only form a real invocation takes here.
+  if sed 's/#.*//' "$f" | grep -qE \
+       '(require_cmd|command -v|have|run|sudo)[[:space:]]+docker([[:space:]]|$)|(^|[;&|]|\$\()[[:space:]]*docker[[:space:]]+[a-z]|docker\.sock'; then
     offenders="${offenders} ${b}"
   fi
 done
 if [ -z "$offenders" ]; then
-  ok "no operator-flow script requires docker (the real-lab path is podman + crane; \`make deps\` installs neither docker nor a daemon)"
+  ok "no docker dependency in ${scanned} operator-flow scripts (real-lab path = podman + crane; \`make deps\` installs neither docker nor a daemon)"
 else
-  bad "operator-flow script(s) require docker:${offenders} — an air-gapped jump box that ran \`make deps\` has podman only, so this breaks ON THE LAB"
+  bad "operator-flow script(s) invoke/require docker:${offenders} — an air-gapped jump box that ran \`make deps\` has podman ONLY, so this breaks ON THE LAB"
 fi
+
+# 6. ALL THREE engine implementations must agree that podman is first.
+#    container_engine() is not the only chooser: the Makefile has its own `command -v podman ... ||
+#    echo docker` (it drives `make diagrams`), and jumpbox-run.sh has a third. Checks 1-3 above test
+#    ONLY os.sh — so flipping the Makefile's `&&`/`||` order leaves this gate green while every
+#    `make diagrams` silently switches engine. Assert each chooser puts podman BEFORE docker.
+impls=0
+check_impl() { # file, human name
+  [ -f "$1" ] || return 0
+  line="$(sed 's/#.*//' "$1" | grep -nE 'command -v podman|have podman' | head -1)"
+  if [ -z "$line" ]; then bad "$2: no podman-first engine detection found (did it move?)"; return; fi
+  impls=$((impls + 1))
+  # podman must be the FIRST engine named on that line — `podman ... || ... docker`, never the reverse.
+  if printf '%s' "$line" | grep -qE 'podman.*docker'; then
+    ok "$2: podman is chosen before docker"
+  else
+    bad "$2: engine detection does not put podman first: ${line}"
+  fi
+}
+check_impl Makefile                "Makefile CONTAINER_ENGINE ?="
+check_impl scripts/jumpbox-run.sh  "jumpbox-run.sh JUMPBOX_ENGINE"
+[ "$impls" -eq 2 ] || bad "expected 2 non-os.sh engine implementations, found ${impls} — a new one appeared, or one moved (the gate must cover EVERY chooser)"
+ok "engine choosers covered: os.sh (checks 1-3) + ${impls} others"
 
 if [ "$fail" = 0 ]; then
   echo "test-container-engine: OK"
