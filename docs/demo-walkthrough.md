@@ -2,24 +2,47 @@
 
 <br>
 
-This is the demo. With the stack up (`make e2e-kind` locally, or `make install-all` against a
-real VKS lab) you can watch a **one-line code change flow from the Gitea web editor all the way
-to the running web page — entirely inside the air gap**, and see each hop in its own Web UI.
-`make verify` does exactly this automatically; the steps below are the same loop by hand.
+This is the demo. Once the stack is up — **[KinD](kind-local.md)**, **[Scenario 1](scenario-1.md)** or
+**[Scenario 2](scenario-2.md)**; the *loop* is identical on all three — you can watch a **one-line code
+change flow from the Gitea web editor all the way to the running web page, entirely inside the air
+gap**, with each hop visible in its own Web UI. `make verify` does exactly this automatically; the
+steps below are the same loop by hand, so you can watch it happen.
 
-**Before you start:** run **`make creds`** for the URLs, logins, and the one-time `/etc/hosts`
-line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
-[Access the UIs](../README.md#access-the-uis-urls-logins-passwords)). Open these four UIs in tabs:
+## Before you start — get your URLs, usernames AND passwords
 
-| UI | URL | Login | What you'll watch |
-|----|-----|-------|-------------------|
-| **App (javawebapp)** | <http://javawebapp.vks.local/> | — | the greeting that changes |
-| **Gitea** | <http://gitea.vks.local> | `gitea_admin` / your `GITEA_ADMIN_PASSWORD` | edit source; see the tag write-back |
-| **Tekton Dashboard** | <http://tekton.vks.local> | — (read-only) | the PipelineRun: test → build → deploy |
-| **Harbor** | its own LB IP, self-signed HTTPS (KinD) or the lab's HTTPS URL | `admin` / your `HARBOR_PASSWORD` | the freshly-built image |
-| **ArgoCD** | its own LB IP, self-signed TLS (`https://<ARGOCD_LB_IP>`, `--insecure`) on KinD — on a real VKS lab, **your lab's own ArgoCD URL** | `admin` / `make argocd-password` | the sync that rolls the new image |
+**One command prints all three, with the real values for *your* environment:**
 
-1. **See the current greeting.** Open <http://javawebapp.vks.local/>. The page shows a greeting —
+```bash
+make creds-show
+```
+
+It outputs a `Service · URL · Username · Password` table — the passwords are **printed, not named**.
+(You never have to know where they came from: on the KinD path the flow *generates* them; on a real
+lab they are the ones you set in `.env`. `make creds-show` reads them back either way.) It also gives
+you the one-time `/etc/hosts` line the `*.vks.local` hosts need — there is no internet DNS in an air
+gap.
+
+| UI | Username | Password | What you'll watch |
+|----|----------|----------|-------------------|
+| **The app** | — | — (no login) | the greeting that changes |
+| **Gitea** | `gitea_admin` | printed by `make creds-show` | edit the source; see the tag write-back |
+| **Tekton Dashboard** | — | — (read-only, no login) | the PipelineRun: test → build → deploy |
+| **Harbor** | `admin` | printed by `make creds-show` | the freshly-built image |
+| **ArgoCD** | `admin` | printed by `make creds-show` (or `make argocd-password` on its own) | the sync that rolls the new image |
+
+**Do not copy URLs from this page** — they are *not* the same on all three paths:
+
+| UI | Where its URL comes from |
+|----|--------------------------|
+| **app / Gitea / Tekton** | the **ingress**, at `<app>.${APP_DOMAIN}` / `${GITEA_HOST}` / `${TEKTON_DASHBOARD_HOST}` — **derived**, so they change with `APP_DOMAIN` (default `vks.local`) |
+| **Harbor** | **its OWN LoadBalancer — never the ingress** (its LB IP is load-bearing for the containerd pull path). An LB IP on KinD; your lab's own URL on a real lab |
+| **ArgoCD** | **its OWN LoadBalancer — never the ingress** (mirroring the real lab, where ArgoCD is a **Supervisor Service** in a *different* cluster). An LB IP on KinD; your lab's own URL on a real lab |
+
+See [Access the UIs](access-uis.md). The steps below use `javawebapp` at the **default** domain as the
+worked example; substitute your own from `make creds-show`.
+
+1. **See the current greeting.** Open your app URL (the default-domain example is
+   <http://javawebapp.vks.local/>). The page shows a greeting —
    `Hello from vks-airgap-cicd` by default — rendered in the `<p class="message">` element,
    alongside the app version and git commit. This is what will visibly change.
 
@@ -38,7 +61,8 @@ line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
    (`el-apps.ci.svc:8080`) → the Tekton EventListener → a new PipelineRun. (This is the same
    `application.yml` line `make verify` rewrites with a unique marker.)
 
-3. **Watch Tekton build it.** In the **Tekton Dashboard** (<http://tekton.vks.local>), a new
+3. **Watch Tekton build it.** In the **Tekton Dashboard** (default-domain example:
+   <http://tekton.vks.local>), a new
    **`javawebapp-ci-*`** PipelineRun appears in the `ci` namespace. Its TaskRuns run in order — open
    each to tail logs live:
 
@@ -66,7 +90,7 @@ line that maps the `*.vks.local` hosts to the ingress LoadBalancer (see
    in namespace `javawebapp` to `$HARBOR_URL/apps/javawebapp:<sha>`. (Auto-sync polls the deploy repo
    on an interval; click **Refresh** to reconcile immediately.)
 
-7. **See the page change.** Refresh <http://javawebapp.vks.local/>. The greeting now shows your new
+7. **See the page change.** Refresh your app URL. The greeting now shows your new
    text. That change went **source → test → image → registry → GitOps write-back → cluster →
    running page** without a single byte crossing the air gap.
 
