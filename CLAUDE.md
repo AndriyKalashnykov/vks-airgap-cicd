@@ -362,8 +362,9 @@ session that quoted it. Prose did not hold. That is the signature of a missing g
 > exactly the places these targets touch:
 >
 > - **Photon's coreutils are toybox, not GNU.** A `gzip -t` gate already false-failed on it for this
->   reason. `install -D -m0644` — the obvious way to place the CA — is a GNU-ism that **must be checked
->   on toybox** before it is relied on (fall back to `mkdir -p` + `cp` + `chmod` if absent).
+>   reason. **`install -D -m0644` was CHECKED and WORKS on Photon 5 (toybox 0.8.9)** — verified
+>   2026-07-13, so the CA-placement command in `.env.example` is safe on both OSes. Do not re-open
+>   this; DO keep checking any *new* GNU-ism the same way.
 > - **Rootless podman needs different packages per OS** (`crun` + an active `unqualified-search-registries`
 >   on Photon; `uidmap`/`passt`/`slirp4netns` on Ubuntu, which apt omits from a default podman install).
 > - **Docker may not exist on either image at all** — the jump-box images install **podman only**, which

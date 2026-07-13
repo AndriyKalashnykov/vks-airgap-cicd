@@ -54,13 +54,9 @@ New here? Pick the path that matches your situation — each one is self-contain
 The VKS paths start from the jump-box **[Prerequisites](#prerequisites)** below.
 Run **`make check-tools`** to see which CLIs you have and which are required.
 
-> **Container engine:** **podman by default** on VKS — daemonless, so it trusts the self-signed Harbor CA
-> **per command** (`--cert-dir`), sudo-free, and it is the only engine `make deps` installs.
-> Docker also works, but its *daemon* does the registry TLS, so the CA must be installed for the daemon
-> — root-owned (`/etc/docker/certs.d/…`, or the OS store + a daemon restart) unless you run **rootless**
-> docker. See `CONTAINER_ENGINE` in `.env.example`.
-> `make e2e-kind` requires **Docker** regardless of `CONTAINER_ENGINE` (kind's node containers) — a
-> stand-in detail; the air-gapped jump box needs no docker at all.
+> **Container engine:** you do nothing — `make deps` installs **podman** and the flow uses it.
+> Only if you must use **docker** instead: set `CONTAINER_ENGINE=docker` and make its daemon trust the
+> Harbor CA (`.env.example` → `CONTAINER_ENGINE` has the commands). `make e2e-kind` needs Docker either way.
 
 ## Demo apps
 
@@ -176,17 +172,22 @@ It needs internet (dual-homed); a fully air-gapped host uses the carried bundle 
 
 ### Toolchain and access
 
-- A jump box running **Ubuntu** or **PhotonOS** with internet access.
-- Network reach to the Supervisor, Harbor, and (for dual-homed) the workload cluster.
-- The Harbor **CA certificate** (`.env` → `HARBOR_CA_FILE`) — Harbor is self-signed HTTPS; Gitea is served over HTTP (no CA needed).
-- [mise](https://mise.jdx.dev/) for the rest of the toolchain (installed by `make deps`; git must already be present).
-- **Container engine:** image operations (mirror, Maven builder build/push, diagram
-  rendering) use `CONTAINER_ENGINE` — **podman is the default**, docker the fallback. `make deps`
-  installs the rootless-podman runtime deps per OS (crun + an active
-  `unqualified-search-registries` on Photon; `uidmap` + `slirp4netns` on Ubuntu, which apt
-  leaves out of a default podman install). The **local KinD end-to-end** additionally
-  **requires Docker**: KinD's node and `cloud-provider-kind` run on the `kind` Docker network +
-  socket. So a real air-gap run can be podman-only; `make e2e-kind` needs Docker.
+**You need:** a jump box on **Ubuntu** or **PhotonOS**, with network reach to the Supervisor, Harbor,
+and (dual-homed only) the workload cluster.
+
+**Then run these, in order. Nothing else on this page requires action.**
+
+```bash
+make deps            # toolchain: mise + podman (git must already be present)
+make env-init        # create .env from .env.example
+make env-populate    # mint the secrets we can, discover cluster values, print what only you can supply
+make fetch-harbor-ca # Harbor is self-signed: write its CA to the path HARBOR_CA_FILE points at
+make env-check       # gate: fail now if anything required is still missing
+make check-tools     # what this box has, and what it still needs
+```
+
+Running `make e2e-kind` (the local stand-in)? It **also needs Docker** — kind's nodes run on the
+Docker socket. A real air-gap run does not: it is podman-only.
 
 ## The three paths
 
