@@ -59,8 +59,8 @@ Scenario-1|Scenario 1: Harbor & ArgoCD need to be installed
 Scenario-2|Scenario 2: Harbor & ArgoCD already installed'
 
 # decision|the COMMAND(s) that ANSWER it. Never a bare noun — see the header.
-DECISIONS='cluster-access|make vks-login|make kind-up|VKS_AUTH_METHOD=
-harbor|make install-harbor|make harbor-robot|make fetch-harbor-ca|HARBOR_URL=
+DECISIONS='cluster-access|make vks-login|make kind-up|make env-populate
+harbor|make install-harbor|make harbor-robot|make fetch-harbor-ca|make mirror
 argocd|make install-argocd|make gitops|make argocd-preflight|make fetch-argocd-kubeconfig
 istio-mode|INGRESS_CONTROLLER=istio-existing|INGRESS_CONTROLLER=istio|make attach-istio|make install-istio
 ingress-cmd|make install-ingress|make verify-ingress
