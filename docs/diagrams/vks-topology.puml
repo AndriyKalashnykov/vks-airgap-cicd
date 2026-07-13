@@ -3,18 +3,18 @@
 !include _style.puml
 LAYOUT_LEFT_RIGHT()
 
-title Real-lab topology — Supervisor (VKS-provided) vs guest workload cluster (we install)
+title Real-lab topology — Supervisor Services vs the guest workload cluster (we install)
 
 Deployment_Node(jb, "Jump box", "Ubuntu or PhotonOS · dual-homed (internet + air gap)") {
   Container(mir, "Mirror + builder", "crane copy · offline builder image")
 }
 
-Deployment_Node(sup, "Supervisor cluster", "VMware VCF · runs VKS-PROVIDED Supervisor Services") {
-  Deployment_Node(ns_harbor, "vSphere ns: harbor-* (VKS-provided)", "") {
+Deployment_Node(sup, "Supervisor cluster", "VMware VCF · runs the Supervisor Services (you install them in Scenario 1;\nin Scenario 2 the platform team already has)") {
+  Deployment_Node(ns_harbor, "vSphere ns: e.g. harbor-* (a Supervisor Service)", "") {
     ContainerDb(harbor, "Harbor", "OCI registry Supervisor Service · LoadBalancer", $tags="datastore")
   }
-  Deployment_Node(ns_argo, "vSphere ns: argocd-instance-1 (VKS-provided)", "") {
-    Container(argo, "ArgoCD server", "Supervisor Service · server 2.14.15+vmware.1-vks.1")
+  Deployment_Node(ns_argo, "vSphere ns: e.g. argocd-instance-1 (a Supervisor Service)", "") {
+    Container(argo, "ArgoCD server", "Supervisor Service · server 2.14.x\n(9.0-doc inferred for 9.1 — UNVERIFIED on a lab;\nthe vcf argocd CLI is 3.x — do NOT infer one from the other)")
   }
 }
 
@@ -23,13 +23,17 @@ Deployment_Node(guest, "Guest / workload VKS cluster (VKS_CLUSTER_NAME)", "Tanzu
     Container(gitea, "Gitea", "Deployment + PVC (SQLite)")
   }
   Deployment_Node(ns_ci, "namespace: ci (we install)", "") {
-    Container(ci, "Pipeline + EventListener", "PipelineRuns · el-javawebapp")
+    Container(ci, "EventListener 'apps' + one Pipeline per app", "el-apps label-selects the per-app Trigger CRs;\neach app's TriggerTemplate creates its <app>-ci PipelineRun")
   }
   Deployment_Node(ns_tk, "namespace: tekton-pipelines (we install)", "") {
     Container(tk, "Tekton + Dashboard", "Pipelines + Triggers controllers · read-only UI")
   }
-  Deployment_Node(ns_app, "namespace: javawebapp (we install)", "") {
-    Container(app, "javawebapp", "Deployment (2 replicas) + Service — ArgoCD deploys here")
+  ' One namespace per app (apps/registry.tsv → scripts/lib/apps.sh). Two today; adding an app is a row.
+  Deployment_Node(ns_app_java, "namespace: javawebapp (we install)", "") {
+    Container(app_java, "javawebapp", "Spring Boot 4.1 / Java 25 — Deployment (2 replicas) + Service")
+  }
+  Deployment_Node(ns_app_go, "namespace: gowebapp (we install)", "") {
+    Container(app_go, "gowebapp", "Go 1.26, stdlib-only — Deployment (2 replicas) + Service")
   }
   ' On a real lab Istio is a VKS STANDARD PACKAGE installed into the GUEST cluster
   ' (istio.kubernetes.vmware.com, vcf package install / vcf addon install) — so the mesh is
@@ -43,11 +47,14 @@ Deployment_Node(guest, "Guest / workload VKS cluster (VKS_CLUSTER_NAME)", "Tanzu
 
 Rel(mir, harbor, "mirror images", "HTTPS (self-signed + CA)")
 Rel(tk, ci, "runs PipelineRuns")
-Rel(ci, gitea, "clone + tag write-back", "git")
-Rel(ci, harbor, "kaniko build + push", "TLS + CA")
-Rel(argo, app, "deploys (guest REGISTERED as an ArgoCD destination — argocd cluster add / make argocd-register-guest; NOT a 2nd ArgoCD in the guest)", "kubectl via stored cluster credential")
-Rel(app, harbor, "pull image", "containerd (TLS + CA)")
-Rel(ing, app, "route UI", "*.vks.local / HTTP")
+Rel(ci, gitea, "clone <app>-app + tag write-back to <app>-deploy", "git")
+Rel(ci, harbor, "kaniko build + push apps/<app>:<sha>", "TLS + CA")
+Rel(argo, app_java, "deploys (one Application per app; the guest is REGISTERED as an ArgoCD destination —\nargocd cluster add / make argocd-register-guest; NOT a 2nd ArgoCD in the guest)", "kubectl via stored cluster credential")
+Rel(argo, app_go, "deploys (one Application per app)", "kubectl via stored cluster credential")
+Rel(app_java, harbor, "pull image", "containerd (TLS + CA)")
+Rel(app_go, harbor, "pull image", "containerd (TLS + CA)")
+Rel(ing, app_java, "route javawebapp.vks.local", "HTTP")
+Rel(ing, app_go, "route gowebapp.vks.local", "HTTP")
 
 SHOW_LEGEND()
 @enduml

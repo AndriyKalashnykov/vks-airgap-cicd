@@ -313,7 +313,7 @@ wget --no-check-certificate https://<SUPERVISOR_HOST>/wcp/plugin/linux-amd64/vsp
 
 <br>
 
-Harbor + ArgoCD are VCF **Supervisor Services** (blue in the diagrams) — you install them (Scenario 1) or the platform team already has (Scenario 2). The jump box mirrors every
+Harbor + ArgoCD are VCF **Supervisor Services** — you install them (Scenario 1) or the platform team already has (Scenario 2); the [cluster-topology diagram](#cluster-topology-real-lab) is the one that shows where they actually run (the context/container/deployment diagrams below draw the **collapsed** single-cluster view the KinD stand-in uses). The jump box mirrors every
 image into Harbor; a `git push` then drives the whole CI/CD flow entirely inside the air gap.
 
 ### System context
@@ -322,11 +322,11 @@ image into Harbor; a `git push` then drives the whole CI/CD flow entirely inside
 
 ### Containers
 
-<p align="center"><img src="docs/diagrams/out/container.png" alt="Container diagram" width="960"></p>
+<p align="center"><a href="docs/diagrams/out/container.png"><img src="docs/diagrams/out/container.png" alt="Container diagram — N apps (javawebapp, gowebapp) from apps/registry.tsv, one shared Tekton EventListener — click to enlarge" width="960"></a></p>
 
 ### Deployment
 
-<p align="center"><img src="docs/diagrams/out/deployment.png" alt="Deployment diagram" width="900"></p>
+<p align="center"><a href="docs/diagrams/out/deployment.png"><img src="docs/diagrams/out/deployment.png" alt="Deployment diagram — collapsed single-cluster view (KinD stand-in); one namespace per app — click to enlarge" width="900"></a></p>
 
 ### Cluster topology (real lab)
 
@@ -334,14 +334,14 @@ On a real VKS lab the stack spans **two** clusters: Harbor + ArgoCD are Supervis
 Supervisor Services that run on the **Supervisor**, while Gitea, Tekton, the ingress, and
 the app are installed into the **guest** workload cluster. Because ArgoCD lives on the
 Supervisor, the guest cluster is **registered as an ArgoCD destination** (`make
-argocd-register-guest`) so it can deploy `javawebapp` there — it does **not** run a second ArgoCD
+argocd-register-guest`) so it can deploy the apps (`javawebapp`, `gowebapp`) there — it does **not** run a second ArgoCD
 in the guest. (The KinD stand-in collapses both levels into one cluster.)
 
 <p align="center"><a href="docs/diagrams/out/vks-topology.png"><img src="docs/diagrams/out/vks-topology.png" alt="Real-lab namespace/cluster topology — Supervisor (Harbor + ArgoCD as Supervisor Services) vs the guest workload cluster we install into — click to enlarge" width="960"></a></p>
 
 ### Pipeline flow
 
-<p align="center"><a href="docs/diagrams/out/pipeline-flow.png"><img src="docs/diagrams/out/pipeline-flow.png" alt="Pipeline flow — click to enlarge" width="960"></a></p>
+<p align="center"><a href="docs/diagrams/out/pipeline-flow.png"><img src="docs/diagrams/out/pipeline-flow.png" alt="Pipeline flow — one lane per app (javawebapp, gowebapp) through the shared Tekton EventListener — click to enlarge" width="720"></a></p>
 
 Diagram sources are committed under [`docs/diagrams/`](docs/diagrams/) (C4-PlantUML);
 `make diagrams` re-renders the PNGs and `make diagrams-check` fails CI if they drift.
