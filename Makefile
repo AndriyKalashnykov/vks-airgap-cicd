@@ -519,8 +519,12 @@ test-mirror-cache: ## Unit-test lib/mirror.sh cache-skip / resume / prune logic 
 test-classify-changes: ## Unit-test the CI gate selector (a docs-only change must NOT pay for a build)
 	@$(SCRIPTS)/test-classify-changes.sh
 
+.PHONY: test-argocd-topology
+test-argocd-topology: ## Unit-test lib/argocd.sh: off-cluster derivation + the clonable-repoURL guard (the two CRITICALs)
+	@$(SCRIPTS)/test-argocd-topology.sh
+
 .PHONY: test-scripts
-test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes ## Run all offline script-logic unit tests
+test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology ## Run all offline script-logic unit tests
 
 ##@ Security scanning (internet/CI side; not part of the air-gap install)
 .PHONY: secrets
