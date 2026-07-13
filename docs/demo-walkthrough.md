@@ -16,19 +16,22 @@ steps below are the same loop by hand, so you can watch it happen.
 make creds-show
 ```
 
-It outputs a `Service · URL · Username · Password` table — the passwords are **printed, not named**.
-(You never have to know where they came from: on the KinD path the flow *generates* them; on a real
-lab they are the ones you set in `.env`. `make creds-show` reads them back either way.) It also gives
-you the one-time `/etc/hosts` line the `*.vks.local` hosts need — there is no internet DNS in an air
-gap.
+It prints a **`Service · URL · Username · Password`** table with the real values for *your*
+environment — the passwords are **printed, not named**. (You never have to know where they came from:
+on the KinD path the flow *generates* them; on a real lab they are the ones you set in `.env`.
+`make creds-show` reads them back either way.) It also gives you the one-time `/etc/hosts` line the
+`*.vks.local` hosts need — there is no internet DNS in an air gap.
 
-| UI | Username | Password | What you'll watch |
-|----|----------|----------|-------------------|
-| **The app** | — | — (no login) | the greeting that changes |
-| **Gitea** | `gitea_admin` | printed by `make creds-show` | edit the source; see the tag write-back |
-| **Tekton Dashboard** | — | — (read-only, no login) | the PipelineRun: test → build → deploy |
-| **Harbor** | `admin` | printed by `make creds-show` | the freshly-built image |
-| **ArgoCD** | `admin` | printed by `make creds-show` (or `make argocd-password` on its own) | the sync that rolls the new image |
+That is the whole answer to "what are the URLs and logins". This page does **not** repeat them — a
+second copy would only go stale. What it *does* tell you is **which UI shows which hop**:
+
+| UI | Login | What you'll watch here |
+|----|-------|------------------------|
+| **The app** | none | the greeting that changes |
+| **Gitea** | yes (`make creds-show`) | edit the source; then see the tag write-back |
+| **Tekton Dashboard** | none — read-only | the PipelineRun: test → build → deploy |
+| **Harbor** | yes (`make creds-show`) | the freshly-built image appear |
+| **ArgoCD** | yes (`make creds-show`, or `make argocd-password`) | the sync that rolls the new image |
 
 **Do not copy URLs from this page** — they are *not* the same on all three paths:
 
