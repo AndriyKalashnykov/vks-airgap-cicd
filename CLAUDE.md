@@ -391,6 +391,34 @@ PR #174 removed the clobber (and added `ARGOCD_SERVER`/`ARGOCD_AUTH_TOKEN`/`ARGO
 never been proven on clean machine state.** Re-run it on a box (or container) WITHOUT that
 `/etc/hosts` line before believing it. Until then, treat #163 as unverified.
 
+### 📋 USER-JOURNEY AUDIT — what is FIXED, and what is still OPEN
+
+Three walkers (KinD / Scenario 1 / Scenario 2) walked `README → path doc → demo-walkthrough` **as the
+user**; every finding was adversarially verified against the code before it counted. **Do this as a
+Workflow, never as background `Agent`s** — 3 background agents delivered *nothing* (0/7 this session),
+the Workflow delivered 39/39.
+
+**FIXED** (#177, #178): `make deps` exited 1 on a fresh box in a documentation loop (nothing installed
+mise, while the README said `make deps` did) · `make argocd-password` printed a password **that does
+not log in** (`e2e-kind` runs `SKIP_DOTENV=1`, so the `.env` value was never applied — but the command
+read `.env` first) · `.env.example` had `KUBECONFIG` and `GUEST_KUBECONFIG` declared **in each other's
+blocks** from a substring-matching edit in #168, with every gate green · `creds-show` printed
+`<your lab's ArgoCD URL>` on a real lab while `ARGOCD_SERVER` **already held the address**.
+
+**STILL OPEN** — all confirmed against the code, none fixed:
+
+| Where | What |
+|---|---|
+| `docs/scenario-1.md`, `docs/scenario-2.md` | **Neither doc ever tells you to CREATE `.env`** — no `make env-init`, no `cp .env.example .env` — yet both have "set these in `.env`" callouts, and `.env` is gitignored. Only the README's *Run* column mentions `env-init`. Both docs claim to be self-contained, and `check-readme-scenarios` passes anyway. |
+| `docs/scenario-1.md` | **`ARGOCD_KUBECONFIG` is never fetched.** `make fetch-argocd-kubeconfig` appears only as a *rationale for installing the vcf CLI*, never as a step — but `make gitops` needs it (ArgoCD is a Supervisor Service). |
+| `docs/scenario-1.md:382`, `docs/scenario-2.md:284` | The `make install-all` chain comment omits **`preflight`** — the FIRST prerequisite (`Makefile:371`). |
+| `docs/scenario-1.md:135-139` | Stale: claims `make gitops` targets the in-cluster destination and that an off-cluster ArgoCD "is not what the scripts assume". Both false since #153/#163. |
+| `docs/scenario-2.md:343-345` | Stale: claims the Application is created by `kubectl apply` "**not** via the ArgoCD API (… not supported)". `ARGOCD_MECHANISM=api` is exactly that, and it is the tenant's real path. |
+| `docs/scenario-2.md` | **`ARGOCD_AUTH_TOKEN` and `ARGOCD_MECHANISM` are never mentioned** — the tenant's whole mechanism ladder is documented only in `.env.example`. |
+| `docs/scenario-1.md:426` | Broken anchor: `../README.md#access-the-uis-urls-logins-passwords` — that heading no longer exists (the README was split into `docs/`). |
+| `docs/scenario-1.md:155` | `> > ARGOCD_TRACK_BRANCH=main` — a doubled blockquote marker inside a fenced block. |
+| `docs/scenario-2.md` | Prose hardcodes the Harbor project as **`apps`**; it is `$HARBOR_APP_PROJECT` (`apps` is only the default). |
+
 ### NEXT (in order)
 
 1. **Re-prove `make e2e-kind-tenant` without the `/etc/hosts` shortcut** (above).
