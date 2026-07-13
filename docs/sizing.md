@@ -19,38 +19,48 @@ Kaniko, Maven, Temurin JDK/JRE, alpine/git, yq, and the ingress images). Figures
 > multi-arch list digest must be preserved for the pull to resolve. The single-arch
 > saving therefore applies to the large tag-referenced images (Maven, Temurin, the builder).
 
-## What each app costs
+## What each language costs — every image, attributed
 
-The two apps are not decoration — **they are the air-gap story**, and the sizes show why. Measured
-(registry-compressed, `linux/amd64`; the app images are the ones the pipeline actually built in the
-last KinD run):
+The two apps are not decoration — **they are the air-gap story**. Below is the **entire image set**,
+each image attributed to the language that needs it. Measured (registry-compressed, `linux/amd64`;
+the app images are the ones the pipeline actually built in the last KinD run).
 
-| | **Java** (`javawebapp`) | **Go** (`gowebapp`) |
+| Bucket | Image | Size |
 |---|---|---|
-| build image | `maven:3.9-eclipse-temurin-25` — **168 MB** | `golang:1.26.5-bookworm` — **283 MB** |
-| **offline builder** (deps pre-baked) | `javawebapp-builder` — **292 MB** | **none needed** — the app is stdlib-only, so its air-gapped build fetches nothing |
-| runtime base | `eclipse-temurin:…-jre-jammy` — **99 MB** | `distroless/static-debian12` — **1 MB** |
-| **the app image the pipeline builds** | **130 MB** | **4.85 MB** |
-| **≈ per-app total** | **~690 MB** | **~290 MB** |
+| **Java** | `maven:3.9-eclipse-temurin-25` (build) | 168 MB |
+| **Java** | `eclipse-temurin:…-jre-jammy` (runtime base) | 99 MB |
+| **Java** | `javawebapp-builder` — **offline builder, `~/.m2` pre-baked** (built on the jump box, pushed to Harbor) | **292 MB** |
+| **Java** | `javawebapp:<sha>` — the image the pipeline builds | 130 MB |
+| | **Java total** | **≈ 690 MB** |
+| **Go** | `golang:1.26.5-bookworm` (build) | 283 MB |
+| **Go** | `distroless/static-debian12` (runtime base) | 1 MB |
+| **Go** | *offline builder* | **none — the app is stdlib-only, so its air-gapped build fetches nothing** |
+| **Go** | `gowebapp:<sha>` — the image the pipeline builds | **4.85 MB** |
+| | **Go total** | **≈ 290 MB** |
+| **Shared** | Tekton (Pipelines + Triggers + Dashboard) | **~2 GB** — dominates the mirror |
+| **Shared** | `gitea` 62 · `istio/proxyv2` 87 · `istio/pilot` 72 · `kaniko` 44 · `alpine/git` 35 · `traefik` 52 · `yq` 9 | 362 MB |
+| | **Shared total** | **≈ 2.4 GB** |
 
-Two things worth reading off that table:
+### The three things this table says
 
-- **The Go app's runtime image is ~27× smaller** (4.85 MB vs 130 MB): a static binary on
-  `distroless/static` versus a JAR on a JRE.
-- **The Java app needs a pre-baked dependency cache and the Go app does not.** An in-cluster `mvn`
-  cannot reach Maven Central, so `Dockerfile.builder` bakes the whole `~/.m2` on the internet side
-  (that is the 292 MB). A stdlib-only Go build needs nothing — same pipeline, one `case` branch.
+1. **On the BUILD side the two languages cost about the same** — Java 267 MB of mirrored images
+   (maven + JRE) vs Go 284 MB (the `golang` image alone is *bigger* than Maven's). The interesting
+   difference is not the compiler.
+2. **Java needs an offline builder and Go does not.** An in-cluster `mvn` cannot reach Maven Central,
+   so `Dockerfile.builder` bakes the whole `~/.m2` on the internet side — that is the **292 MB**, and
+   it is the single largest per-language cost in the repo. A stdlib-only Go build fetches **nothing**.
+   Same pipeline, one `case` branch in `lib/apps.sh`.
+3. **On the DELIVERY side Go wins by ~27×** — a 4.85 MB static binary on `distroless/static` versus a
+   130 MB JAR on a JRE. That is what you ship, and re-ship on every commit.
 
 > **These do not simply add up.** Layers are **shared and de-duplicated** in the registry and in each
 > node's containerd: `javawebapp:<sha>` sits on the *same* Temurin JRE layers already mirrored, and
-> the builder shares the Maven image's base. Treat the per-app figures as the **marginal** cost of
-> adding that language, not as slices of a pie.
+> the builder shares Maven's base. Read the per-language figures as the **marginal** cost of adding
+> that language, not as slices of a pie.
 
-**Everything else is shared infrastructure** — Tekton (Pipelines + Triggers + Dashboard, which
-dominate the count and ~2 GB of the mirror), Gitea, Kaniko, Harbor, the ingress, `alpine/git`, `yq`.
-Adding a *third app in an existing language* costs only its own app image; a **new language** adds a
-build image + a runtime base (+ a builder image only if that language cannot build offline
-unaided).
+Adding a **third app in an existing language** costs only its own app image (≈130 MB Java, ≈5 MB Go).
+Adding a **new language** costs a build image + a runtime base — plus an offline builder **only if
+that language cannot build offline unaided**.
 
 **Recommended free space on the jump box:** **≥ 10 GB** dual-homed (cache + builder build +
 overhead); **≥ 15 GB** sneakernet (adds the transferable bundle tarball). The **VKS/KinD
