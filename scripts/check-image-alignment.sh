@@ -33,8 +33,13 @@ while read -r ref; do
   else
     echo "ok    ${repo}=${mtag}"
   fi
-done < <(grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"]+:[^[:space:]"]+' k8s/ 2>/dev/null \
-          | sed -E 's|\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/||' | sort -u)
+done < <( { grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"]+:[^[:space:]"]+' k8s/ 2>/dev/null
+            # Gitea's ref lives in the SCRIPT's default, not the manifest: the manifest carries
+            # ${GITEA_IMAGE} so a Harbor-less test (e2e-cross-cluster) can override it. A gate that
+            # only greps k8s/ would have gone BLIND to the gitea tag the moment that changed — the
+            # gate must follow its content. (Same treatment as eclipse-temurin below.)
+            grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"}]+:[^[:space:]"}]+' scripts/40-install-gitea.sh 2>/dev/null
+          } | sed -E 's|\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/||' | sort -u)
 
 # eclipse-temurin's tag is ALSO carried outside the manifests: in .env.example
 # (TEMURIN_JRE_TAG, which feeds the rendered RUNTIME_IMAGE_REF in configure-tekton)
