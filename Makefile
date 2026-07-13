@@ -18,6 +18,9 @@
 ifneq ($(SKIP_DOTENV),1)
 -include .env
 endif
+# The STAMPED state overlay (was `.env.kind` — a KinD-named file that carried REAL-LAB state, which is
+# how `make kind-down` came to destroy a lab's kubeconfig). VKS_STATE_FILE overrides the path.
+-include $(if $(VKS_STATE_FILE),$(VKS_STATE_FILE),.env.state)
 -include .env.kind
 
 # The KinD e2e is a stand-in for a brand-new operator / a CI runner — neither has a `.env`.
@@ -126,6 +129,19 @@ check-readme-scenarios: ## Gate: the README is SCENARIO-BASED — each scenario 
 .PHONY: check-env-coverage
 check-env-coverage: ## Gate: every operator-settable var the scripts read must be documented in .env.example
 	@$(SCRIPTS)/check-env-coverage.sh
+
+.PHONY: state-show state-stamp state-migrate
+state-show: ## Show the state overlay: WHICH CLUSTER wrote it, when, and what is in it (secrets redacted)
+	@bash -c '. scripts/lib/os.sh; state_show'
+
+state-stamp: ## Stamp the state overlay with the cluster it belongs to (run once against a live cluster)
+	@bash -c '. scripts/lib/os.sh; load_env; state_stamp; state_show'
+
+state-migrate: ## Move a legacy .env.kind to the stamped overlay
+	@bash -c 'set -e; . scripts/lib/os.sh; \
+	  [ -f .env.kind ] || { echo "no .env.kind — nothing to migrate"; exit 0; }; \
+	  f="$$(state_file)"; cat .env.kind >> "$$f"; chmod 0600 "$$f"; rm -f .env.kind; \
+	  echo "migrated .env.kind -> $$(basename "$$f") (stamp it: make state-stamp)"'
 
 .PHONY: check-vks-terminology
 check-vks-terminology: ## Gate: Broadcom's product nouns (the vendor says "Supervisor Service"; phantom hybrids are banned)
@@ -566,7 +582,11 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety ## Run all offline script-logic unit tests
+test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay ## Run all offline script-logic unit tests
+
+.PHONY: test-state-overlay
+test-state-overlay: ## Offline: the stamped state overlay (unstamped=source, mismatch=ARCHIVE not delete, kind-down's delete contract)
+	@./scripts/test-state-overlay.sh
 
 ##@ Security scanning (internet/CI side; not part of the air-gap install)
 .PHONY: secrets

@@ -175,6 +175,10 @@ stringData:
 EOF
 
 # --- 4. publish ARGOCD_DEST_SERVER so `make gitops` targets the guest --------
-set_env_var ARGOCD_DEST_SERVER "$SERVER"
+# DELIBERATELY NOT PUBLISHED. 70-configure-argocd.sh RE-DERIVES the destination from the live ArgoCD
+# Cluster Secrets and validates it against that list, so writing ARGOCD_DEST_SERVER here would be pure
+# redundancy — plus a stale pointer that survives into the NEXT cluster, which is the publish-then-
+# read-back trap this repo has already removed twice (INGRESS_LB_IP_OVERRIDE, GITEA_ARGOCD_URL).
+# An operator who must force it has ARGOCD_DEST_SERVER as an explicit env override.
 log_info "registered. ARGOCD_DEST_SERVER=$SERVER written to .env.kind — 'make gitops' will now deploy to the guest cluster."
 log_info "verify: kubectl --kubeconfig \$ARGOCD_KUBECONFIG -n $ARGOCD_NAMESPACE get secret -l argocd.argoproj.io/secret-type=cluster"

@@ -60,7 +60,7 @@ if [ "$GITEA_SERVICE_TYPE" = "LoadBalancer" ]; then
     # read back as an input. 70-configure-argocd.sh RESOLVES the address from the live Service at the
     # moment it needs it, so a rebuilt Gitea can never be cloned from a stale address. (Publishing it
     # as an input is the trap INGRESS_LB_IP_OVERRIDE exists to avoid.)
-    set_env_var GITEA_LB_IP "$GITEA_LB_IP"
+    state_set GITEA_LB_IP "$GITEA_LB_IP"
     log_info "Gitea LoadBalancer: ${GITEA_LB_IP}:3000 (published as GITEA_LB_IP)"
   else
     # NOT fatal here: a single-cluster deploy never needs it. It IS fatal in 70-configure-argocd.sh,
