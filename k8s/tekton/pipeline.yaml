@@ -27,6 +27,12 @@ spec:
       type: string
     - name: runtime-image
       type: string
+    - name: build-args
+      type: string
+      default: ""
+      description: >-
+        Extra --build-arg flags for this app's LANGUAGE (scripts/lib/apps.sh app_build_args);
+        empty for a language whose Dockerfile needs none.
     - name: registry
       type: string
     - name: insecure-registry
@@ -69,6 +75,7 @@ spec:
         - { name: tag, value: $(tasks.clone-app.results.commit) }
         - { name: builder-image, value: $(params.builder-image) }
         - { name: runtime-image, value: $(params.runtime-image) }
+        - { name: build-args, value: $(params.build-args) }
         - { name: registry, value: $(params.registry) }
         - { name: insecure, value: $(params.insecure-registry) }
       workspaces:

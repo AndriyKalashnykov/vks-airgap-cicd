@@ -138,6 +138,29 @@ app_toolchain() {
   esac
 }
 
+# --- per-LANGUAGE behaviour #6: extra --build-arg flags for the image build ---------------------
+# The Kaniko task (k8s/tekton/tasks/kaniko-build.yaml) is SHARED and app-agnostic: it knows about a
+# context, a destination, a builder image and a runtime image — and nothing about a language. Any
+# build-arg beyond those two images is language knowledge, so it belongs here, not in the task.
+#
+# Java: the app Dockerfile's `RUN ./mvnw -B ${MVN_OFFLINE} ... package` needs `-o` so the build
+#       resolves everything from the pre-baked ~/.m2 in the builder image (Maven Central is
+#       unreachable in the air gap). Passing it to a NON-Maven app is meaningless — Kaniko silently
+#       drops a --build-arg the Dockerfile never declares, so it "worked", but it is a landmine for
+#       the next language.
+# Go:   none — the app is stdlib-only, so its Dockerfile declares no offline switch at all.
+#
+# Prints a SPACE-SEPARATED list of `--build-arg=K=V` flags (empty for a language that needs none).
+# It is threaded to the Kaniko task as the `build-args` param (Trigger -> Pipeline -> Task), where
+# it is word-split into individual kaniko flags — so no flag may contain whitespace.
+app_build_args() {
+  case "$(app_lang "$1")" in
+    java) printf -- '--build-arg=MVN_OFFLINE=-o' ;;
+    go)   printf '' ;;
+    *)    die "app '$1': add a branch to app_build_args()" ;;
+  esac
+}
+
 # app_has_builder <name> — true iff the app ships a Dockerfile.builder, i.e. it needs a pre-baked
 # offline dependency cache. Keyed on the FILE, not on the language: that is what actually decides
 # whether `make builder-image` has work to do, and a future language that needs one just adds the
@@ -163,9 +186,10 @@ app_export() {
   APP_IMAGE="$(app_image "$name")"         # Harbor repo for the built image (tagged with the commit)
   APP_BUILDER_IMAGE="$(app_builder_image "$name")"
   APP_RUNTIME_IMAGE="$(app_runtime_image "$name")"
+  APP_BUILD_ARGS="$(app_build_args "$name")"   # extra kaniko --build-arg flags (may be empty)
   export APP_NAME APP_LANG APP_SRC APP_DEPLOY_DIR APP_HOST APP_TEST_TASK \
          APP_NAMESPACE APP_GIT_REPO APP_DEPLOY_REPO APP_IMAGE \
-         APP_BUILDER_IMAGE APP_RUNTIME_IMAGE
+         APP_BUILDER_IMAGE APP_RUNTIME_IMAGE APP_BUILD_ARGS
 }
 
 # for_each_app <fn> — run <fn> <app> for every app, in registry order, with app_export already
