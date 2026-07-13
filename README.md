@@ -67,7 +67,7 @@ needs **no builder image at all**. Same pipeline, and the difference is one `cas
 deployed image) — a green `javawebapp` never hides a broken `gowebapp`.
 
 <details>
-<summary><strong>Add a third app</strong> — one row in <code>apps/registry.tsv</code> (click to expand)</summary>
+<summary><strong>Add another app</strong> — one row in <code>apps/registry.tsv</code> (click to expand)</summary>
 
 **One row** in `apps/registry.tsv` (a new *language* is that row plus one `case` branch in
 `scripts/lib/apps.sh`):
