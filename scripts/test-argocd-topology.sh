@@ -149,5 +149,38 @@ else
   bad "single registered cluster was refused (got '$got') — this breaks the normal cross-cluster case"
 fi
 
+# --- 4. the cluster-list template must read the RIGHT FIELD --------------------------------------
+# An ArgoCD cluster Secret keeps the cluster's real name in `data.name`; `metadata.name` is a
+# PREFIXED object name (`cluster-<name>` — see 71-argocd-register-guest.sh). Reading metadata.name
+# made the by-NAME tiebreak DEAD: ARGOCD_DEST_CLUSTER_NAME=vks-guest can never equal
+# `cluster-vks-guest`. That tiebreak is the ONLY reliable selector on a shared lab, because the guest
+# API URL ArgoCD dials often differs from the operator's kubeconfig — so without it everything falls
+# through to "AMBIGUOUS -- refusing" and the tenant simply cannot deploy.
+# kubectl cannot render a go-template without an API server, so the EXPRESSION is what we gate.
+case "$ARGOCD_CLUSTER_LIST_TEMPLATE" in
+  *'.data.name'*) ok "cluster-list template reads .data.name (the cluster's real name)" ;;
+  *) bad "cluster-list template does NOT read .data.name — the by-name tiebreak is DEAD on a shared lab" ;;
+esac
+case "$ARGOCD_CLUSTER_LIST_TEMPLATE" in
+  *'.metadata.name'*) bad "cluster-list template reads .metadata.name — that is 'cluster-<name>', NOT the cluster name" ;;
+  *) ok "cluster-list template does not use .metadata.name" ;;
+esac
+# And the consumer must actually USE the constant (not re-inline a stale template).
+# shellcheck disable=SC2016  # a literal grep pattern; $ARGOCD_... must NOT expand here
+if grep -q 'go-template="\$ARGOCD_CLUSTER_LIST_TEMPLATE"' "${SCRIPT_DIR}/70-configure-argocd.sh"; then
+  ok "70-configure-argocd.sh uses the shared template constant"
+else
+  bad "70-configure-argocd.sh does NOT use ARGOCD_CLUSTER_LIST_TEMPLATE — the contract can drift"
+fi
+
+# The name the register step writes is what the tiebreak must match (data.name == DEST_NAME).
+got="$(printf 'vks-guest\thttps://vip.example:6443\ncluster-other\thttps://other:6443\n' \
+       | argocd_pick_dest_server "https://not-matching:6443" "vks-guest" || true)"
+if [ "$got" = "https://vip.example:6443" ]; then
+  ok  "ARGOCD_DEST_CLUSTER_NAME tiebreak resolves the guest even when the API URL does not match"
+else
+  bad "ARGOCD_DEST_CLUSTER_NAME tiebreak failed (got '$got') — a shared-lab tenant could not deploy"
+fi
+
 [ "$fail" = 0 ] && { echo "test-argocd-topology: OK"; exit 0; }
 echo "test-argocd-topology: FAILED" >&2; exit 1

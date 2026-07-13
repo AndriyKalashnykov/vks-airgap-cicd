@@ -53,6 +53,24 @@ argocd_is_off_cluster() {
   [ "$a" != "$g" ]
 }
 
+# The go-template that lists the clusters registered with an ArgoCD, as `<name>\t<server>` lines.
+#
+# THE FIELD IS `data.name`, NOT `metadata.name`. An ArgoCD cluster Secret carries the cluster's real
+# name in `data.name`; `metadata.name` is a prefixed object name (`cluster-<name>` — see
+# 71-argocd-register-guest.sh, and ArgoCD's declarative-setup docs). Reading metadata.name made the
+# by-NAME match DEAD: ARGOCD_DEST_CLUSTER_NAME=vks-guest could never equal `cluster-vks-guest`.
+# That is the one tiebreak a shared-lab tenant actually needs, because the guest API URL ArgoCD dials
+# often differs from the one in their kubeconfig (that is what GUEST_API_SERVER exists for), so the
+# by-SERVER match misses and everything falls through to "AMBIGUOUS — refusing". It fails SAFE, but
+# the operator's documented escape hatch was inert — and KinD can never show it (one registered
+# cluster, so the single-cluster rule always wins).
+#
+# It lives here as a CONSTANT so the contract can be asserted offline (test-argocd-topology.sh);
+# kubectl cannot render a go-template without an API server, so the expression itself is what we gate.
+# shellcheck disable=SC2034,SC2016  # SC2034: used by sourcing scripts. SC2016: the {{...}} are
+# GO-template expressions, not shell — single quotes are deliberate (they must NOT be expanded).
+ARGOCD_CLUSTER_LIST_TEMPLATE='{{range .items}}{{.data.name | base64decode}}{{"\t"}}{{.data.server | base64decode}}{{"\n"}}{{end}}'
+
 # argocd_pick_dest_server <guest_api> <dest_name> — choose WHICH registered ArgoCD cluster the app
 # deploys to, reading `<name>\t<server>` lines (one per registered Cluster Secret) on STDIN.
 # Prints the chosen server, or prints NOTHING (exit 1) if the choice is not unambiguous.
