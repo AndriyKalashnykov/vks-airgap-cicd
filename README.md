@@ -41,15 +41,15 @@ VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surface
 New here? Pick the path that matches your situation — each one is self-contained end to end:
 
 1. **KinD** — *see it work.* No VKS cluster, **zero `.env`**, one command.
-2. **Real VKS lab, Scenario 1** — *I install Harbor + ArgoCD* (as **Supervisor Services**), then run the pipeline.
-3. **Real VKS lab, Scenario 2** — *I'm a **tenant***: Harbor + ArgoCD already exist. I **discover** them,
+2. **VKS — I install Harbor + ArgoCD** (as **Supervisor Services**) — I am the admin: I provision the workload cluster too, then run the pipeline.
+3. **VKS — Harbor + ArgoCD already exist** — I am a **tenant**: I **discover** them,
    **request** what I'm not allowed to self-service, then run the pipeline.
 
 | I want to… | Path | You need |
 |------------|------|----------|
 | **Just see it work** (no VKS cluster) | [KinD](docs/kind-local.md) — one command, zero `.env` | **Have:** Docker (KinD needs Docker specifically) · internet access<br>**Run:** `make deps` → `make e2e-kind` |
-| **Real VKS lab — I install Harbor + ArgoCD** | [Scenario 1](docs/scenario-1.md) | **Have:** a vSphere login that can install a Supervisor Service, create a vSphere Namespace and provision a guest cluster · cluster-admin on that guest cluster · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md))<br>**Reachable from the jump box:** the internet, the Supervisor API, Harbor — and ArgoCD's cluster must reach your guest API<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make env-check` → `make psa-check` |
-| **Real VKS lab — Harbor + ArgoCD already exist** (I'm a **tenant**) | [Scenario 2](docs/scenario-2.md) | **Have:** cluster-admin on your own guest cluster · Harbor **project-admin** (else ask for robot credentials) · the licensed VCF CLI archives<br>**Ask the platform team for:** your guest cluster **registered** with ArgoCD (admin-only) · an ArgoCD role that lets you create an `Application` · mesh rights — `make istio-preflight` prints exactly what to request<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make harbor-robot` → `make psa-check` |
+| **VKS — I install Harbor + ArgoCD** (I am the admin) | [Scenario 1](docs/scenario-1.md) | **Have:** a vSphere login that can install a Supervisor Service, create a vSphere Namespace and provision a guest cluster · cluster-admin on that guest cluster · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md))<br>**Reachable from the jump box:** the internet, the Supervisor API, Harbor — and ArgoCD's cluster must reach your guest API<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make env-check` → `make psa-check` |
+| **VKS — Harbor + ArgoCD already exist** (I am a **tenant**) | [Scenario 2](docs/scenario-2.md) | **Have:** cluster-admin on your own guest cluster · Harbor **project-admin** (else ask for robot credentials) · the licensed VCF CLI archives<br>**Ask the platform team for:** your guest cluster **registered** with ArgoCD (admin-only) · an ArgoCD role that lets you create an `Application` · mesh rights — `make istio-preflight` prints exactly what to request<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make harbor-robot` → `make psa-check` |
 
 The real-lab paths start from the jump-box **[Prerequisites](#prerequisites)** below.
 Run **`make check-tools`** to see which CLIs you have and which are required.
@@ -182,8 +182,8 @@ that: `make check-readme-scenarios`.)
 | Path | Document | You are |
 |---|---|---|
 | **See it work, locally** | **[KinD end-to-end](docs/kind-local.md)** | just trying the demo — one command, no lab, no `.env` |
-| **Real VKS lab — I install Harbor + ArgoCD** | **[Scenario 1](docs/scenario-1.md)** | the admin: you install them as **Supervisor Services**, then wire the pipeline |
-| **Real VKS lab — they already exist** | **[Scenario 2](docs/scenario-2.md)** | a **tenant**: you *discover* the endpoints and *request* the grants you need |
+| **VKS — I install Harbor + ArgoCD** (I am the admin) | **[Scenario 1](docs/scenario-1.md)** | the admin: you install them as **Supervisor Services**, then wire the pipeline |
+| **VKS — they already exist** | **[Scenario 2](docs/scenario-2.md)** | a **tenant**: you *discover* the endpoints and *request* the grants you need |
 
 Then: **[Access the UIs](docs/access-uis.md)** — URLs, logins, passwords.
 

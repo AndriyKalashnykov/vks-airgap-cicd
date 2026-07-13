@@ -17,7 +17,7 @@ VKS cluster:
   TLS on its own LB IP** (published as `ARGOCD_LB_IP`); the real lab serves the same posture at
   the lab's own URLs. The KinD-vs-lab gap shrinks to "we mint the cert locally".
 
-| Service | Local KinD | Real VKS lab | Login |
+| Service | Local KinD | VKS | Login |
 |---------|------------|--------------|-------|
 | **Gitea** (we install) | <http://gitea.vks.local> | `http://gitea.vks.local` once the ingress is in place (install, or attach with `INGRESS_CONTROLLER=istio-existing`), else `kubectl -n gitea port-forward svc/gitea-http 3000:3000` | `gitea_admin` / `GITEA_ADMIN_PASSWORD` |
 | **Tekton Dashboard** (we install) | <http://tekton.vks.local> | same — ingress or `port-forward` | — (read-only) |

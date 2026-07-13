@@ -1,4 +1,4 @@
-# Real VKS lab — Scenario 2: Harbor & ArgoCD already installed
+# VKS — Scenario 2: Harbor & ArgoCD already exist (you are a tenant)
 
 <br>
 

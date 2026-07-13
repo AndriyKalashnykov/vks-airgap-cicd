@@ -1,4 +1,4 @@
-# Real VKS lab — Scenario 1: Harbor & ArgoCD need to be installed
+# VKS — Scenario 1: you install Harbor & ArgoCD
 
 <br>
 
