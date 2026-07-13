@@ -1,7 +1,7 @@
 # VKS — Scenario 1: you install Harbor & ArgoCD
 
 You are given a **Supervisor** endpoint, a login, and a password. Nothing else. You install **Harbor**
-and **ArgoCD** as **VCF Supervisor Services**, provision a **workload (guest) VKS cluster**, then run
+and **ArgoCD** as **Supervisor Services**, provision a **workload (guest) VKS cluster**, then run
 the pipeline into it. The jump box is dual-homed (internet + lab).
 
 > **Topology — the thing to keep straight.** Harbor and ArgoCD run on the **Supervisor**. Gitea,

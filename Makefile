@@ -680,7 +680,7 @@ vendor-diagrams: ## Re-download the pinned C4-PlantUML stdlib into docs/diagrams
 	echo "vendor-diagrams: refreshed docs/diagrams/c4/ @ $(C4_PLANTUML_VERSION) — now run 'make diagrams' and verify the offline render"
 
 .PHONY: docs-lint
-docs-lint: check-readme-scenarios check-doc-command-count ## Lint markdown (tracked AND new-but-unignored) + the README-scenario and command-count gates
+docs-lint: check-readme-scenarios check-doc-command-count check-vks-terminology ## Lint markdown + the README-scenario, command-count and VKS-terminology gates
 	@# NOTE: diagrams-check is deliberately NOT a prerequisite here. It `docker run`s the pinned
 	@# PlantUML image (a ~478 MB pull, cold) and re-renders every .puml — so making it unconditional
 	@# meant a README-only PR paid for a full JVM render of seven diagrams it never touched. `make ci`
