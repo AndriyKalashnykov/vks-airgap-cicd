@@ -174,6 +174,26 @@ require_cmd() {
 load_env() {
   local example="${REPO_ROOT}/.env.example" override="${REPO_ROOT}/.env" kind="${REPO_ROOT}/.env.kind"
   [ -f "$example" ] || die ".env.example missing at $example (it is the committed source of truth)"
+
+  # SNAPSHOT the SELECTORS the operator set EXPLICITLY in the environment, before any sourcing.
+  #
+  # Sourcing with `set -a` OVERWRITES the environment, so every file below outranks a per-run
+  # override — including .env.kind, which is DISCOVERED state we wrote ourselves. That made
+  #     make gitops KUBECONFIG=/path/to/other.kubeconfig
+  # a SILENT NO-OP: you ran against the remembered cluster while believing you had switched. It also
+  # made a two-cluster test undrivable (you cannot hand a script a different kubeconfig), which is
+  # precisely why the cross-cluster e2e could never have caught the bugs it existed to catch.
+  #
+  # A variable that selects WHICH CLUSTER you are talking to must be owned by the caller. Config may
+  # supply a DEFAULT; it may not overrule an explicit choice.
+  local _sel _snap_names="" _snap_vals=""
+  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG; do
+    if [ -n "${!_sel:-}" ]; then
+      _snap_names="${_snap_names} ${_sel}"
+      _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'
+    fi
+  done
+
   set -a
   # shellcheck disable=SC1090
   . "$example"
@@ -197,6 +217,25 @@ load_env() {
   # shellcheck disable=SC1090
   [ -f "$kind" ] && . "$kind"
   set +a
+
+  # RESTORE the operator's explicit selectors — they outrank every file, including our own overlay.
+  if [ -n "$_snap_names" ]; then
+    while IFS='=' read -r _k _v; do
+      [ -n "${_k:-}" ] || continue
+      export "$_k=$_v"
+    done <<EOF
+$_snap_vals
+EOF
+  fi
+
+  # KUBECONFIG's default is applied HERE, after the sourcing — never as an uncommented value in
+  # .env.example. `set -a` + sourcing OVERWRITES the environment, so an uncommented default there
+  # silently defeats a per-run override:
+  #     make gitops KUBECONFIG=/tmp/other.kubeconfig     -> was ignored; you targeted ./secrets/vks.kubeconfig
+  # That is the repo's own clobber rule (check-env-clobber), and it was unenforced for the ONE
+  # variable that decides WHICH CLUSTER you are talking to. It also made a two-cluster test
+  # impossible to drive: you cannot hand a script a different KUBECONFIG.
+  export KUBECONFIG="${KUBECONFIG:-${REPO_ROOT}/secrets/vks.kubeconfig}"
 }
 
 # set_env_var KEY VALUE [file] — idempotently upsert KEY=VALUE (default .env.kind).
