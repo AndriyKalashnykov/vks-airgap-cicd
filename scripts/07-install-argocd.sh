@@ -115,9 +115,8 @@ while :; do
 done
 log_info "argocd-server LoadBalancer IP: $ARGOCD_LB_IP  ($([ "$ARGOCD_INSECURE" = "1" ] && echo "http://${ARGOCD_LB_IP}" || echo "https://${ARGOCD_LB_IP} (self-signed; --insecure)"))"
 # Publish to .env.kind (KinD-only; in a real lab ArgoCD is lab-provided and this script never runs).
-set_env_var ARGOCD_LB_IP "$ARGOCD_LB_IP"
-set_env_var ARGOCD_INSECURE "$ARGOCD_INSECURE"
-
+state_set ARGOCD_LB_IP "$ARGOCD_LB_IP"
+state_set ARGOCD_INSECURE "$ARGOCD_INSECURE"
 # 5. Optional: set a deterministic 'admin' password from .env (KinD convenience so the
 # UI login is known + stable, like Gitea/Harbor). Skipped when ARGOCD_ADMIN_PASSWORD is
 # blank — the case on real VKS, where ArgoCD is lab-provided. The bcrypt hash is generated

@@ -115,8 +115,8 @@ case "$ISTIO_ROUTE_API" in
     ;;
 esac
 
-set_env_var INGRESS_LB_IP "$LB_IP"
-set_env_var INGRESS_CONTROLLER "istio-existing"
+state_set INGRESS_LB_IP "$LB_IP"
+state_set INGRESS_CONTROLLER "istio-existing"
 log_info "attached to the existing Istio via ${ISTIO_ROUTE_API}: ${ATTACHED_AT} -> ${LB_IP}"
 log_info "Add ONE line to /etc/hosts on the jump box / your client:"
 log_info ""

@@ -172,7 +172,9 @@ require_cmd() {
 # `set -a` exports everything so child processes (crane, kubectl, curl) see it.
 # ---------------------------------------------------------------------------
 load_env() {
-  local example="${REPO_ROOT}/.env.example" override="${REPO_ROOT}/.env" kind="${REPO_ROOT}/.env.kind"
+  local example="${REPO_ROOT}/.env.example" override="${REPO_ROOT}/.env"
+  local legacy="${REPO_ROOT}/.env.kind"          # read-only back-compat; nothing writes it any more
+  local state; state="$(state_file)"
   [ -f "$example" ] || die ".env.example missing at $example (it is the committed source of truth)"
 
   # SNAPSHOT the SELECTORS the operator set EXPLICITLY in the environment, before any sourcing.
@@ -212,10 +214,27 @@ load_env() {
     # shellcheck disable=SC1090
     [ -f "$override" ] && . "$override"
   fi
-  # .env.kind is written by the KinD flow (discovered LB IP, kubeconfig, ...) and
-  # overrides the above so the normal scripts run unchanged against the kind cluster.
-  # shellcheck disable=SC1090
-  [ -f "$kind" ] && . "$kind"
+  # The STATE OVERLAY holds DISCOVERED state (LB IPs, kubeconfig, generated passwords) and overrides
+  # the above so the normal scripts run unchanged against whatever cluster is up.
+  #
+  # It used to be `.env.kind` — a KinD-named file that carried REAL-LAB state, which is how
+  # `make kind-down` (run at Step 0 of BOTH real-lab runbooks) came to destroy an operator's lab
+  # kubeconfig and Gitea token. It is now a VARIABLE sink, STAMPED with the cluster that wrote it.
+  #
+  # state_check decides whether it belongs to the cluster we are talking to. Note the polarity the
+  # ADVERSARY forced: an UNSTAMPED sink is still SOURCED (refusing would destroy the only copy of the
+  # generated passwords, and the air-gap jumpbox has no cluster to stamp against); only a MISMATCH is
+  # refused, and even then the file is ARCHIVED, never deleted.
+  if state_check; then
+    # shellcheck disable=SC1090
+    [ -f "$state" ] && . "$state"
+  fi
+  # One release of back-compat: a legacy .env.kind is still read (last, so the new sink wins).
+  if [ -f "$legacy" ]; then
+    log_warn "reading legacy .env.kind — run 'make state-migrate' to move it to $(basename "$state")"
+    # shellcheck disable=SC1090
+    . "$legacy"
+  fi
   set +a
 
   # RESTORE the operator's explicit selectors — they outrank every file, including our own overlay.
@@ -247,10 +266,15 @@ EOF
   export ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
 }
 
-# set_env_var KEY VALUE [file] — idempotently upsert KEY=VALUE (default .env.kind).
+# set_env_var KEY VALUE FILE — idempotently upsert KEY=VALUE into an EXPLICIT file.
+#
+# The file argument used to DEFAULT to .env.kind. That default is exactly how real-lab state ended up
+# in a KinD-named file that `make kind-down` deletes. There is no default any more: callers use
+# `state_set` (the stamped overlay) or name their own file. A missing sink is now a loud error, not a
+# silent write to the wrong place.
 # Used by the KinD flow to publish discovered values to the normal scripts.
 set_env_var() {
-  local key="$1" val="$2" file="${3:-${REPO_ROOT}/.env.kind}"
+  local key="$1" val="$2" file="${3:?set_env_var: a SINK is required — use state_set (the stamped overlay) or pass an explicit file}"
   mkdir -p "$(dirname "$file")"; touch "$file"
   if grep -qE "^${key}=" "$file" 2>/dev/null; then
     grep -vE "^${key}=" "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
@@ -366,3 +390,11 @@ run() {
 pick_port() {
   python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()'
 }
+
+# ---------------------------------------------------------------------------
+# The stamped state sink (state_file / state_set / state_check / state_stamp / state_archive).
+# Sourced LAST: state.sh uses log_* from this file. os.sh is the only thing that sources it, so every
+# script that already sources os.sh gets the sink for free.
+# ---------------------------------------------------------------------------
+# shellcheck source=scripts/lib/state.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/state.sh"

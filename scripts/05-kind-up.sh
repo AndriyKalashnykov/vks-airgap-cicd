@@ -92,13 +92,16 @@ kind get kubeconfig --name "$CLUSTER_NAME" > "$KUBECONFIG_PATH"
 # Absolute path so the value works regardless of the caller's CWD.
 KUBECONFIG_ABS="$(cd "$(dirname "$KUBECONFIG_PATH")" && pwd)/$(basename "$KUBECONFIG_PATH")"
 KIND_CONTEXT="kind-${CLUSTER_NAME}"
-set_env_var KUBECONFIG "$KUBECONFIG_ABS"
+# STAMP FIRST: mark this sink as KinD-flow state, so `make kind-down` may remove it and a REAL LAB's
+# discovered state (written by the same helpers, to the same sink) never is.
+state_stamp --kind
+state_set KUBECONFIG "$KUBECONFIG_ABS"
 # Record it separately: `make kind-down` must delete ONLY the kubeconfig THIS flow wrote. It used to
 # delete any kubeconfig under ./secrets — which is where the DOCUMENTED real-lab default lives
 # (secrets/vks.kubeconfig), so a lab operator following Step 0 of their own runbook lost it.
-set_env_var KIND_KUBECONFIG "$KUBECONFIG_ABS"
-set_env_var VKS_AUTH_METHOD kubeconfig
-set_env_var VKS_CONTEXT "$KIND_CONTEXT"
+state_set KIND_KUBECONFIG "$KUBECONFIG_ABS"
+state_set VKS_AUTH_METHOD kubeconfig
+state_set VKS_CONTEXT "$KIND_CONTEXT"
 # Zero-config KinD: generate THROWAWAY test passwords for the local Harbor + Gitea admin
 # (this cluster is destroyed at teardown) so `make e2e-kind` needs NO manual .env. Written
 # only when unset — a real `.env` value still wins (.env.kind is sourced AFTER .env). NOT
@@ -106,8 +109,8 @@ set_env_var VKS_CONTEXT "$KIND_CONTEXT"
 # random, complexity-valid, NON-hardcoded value (lib/os.sh). ArgoCD's admin password stays
 # auto-generated when blank. NOTE: task #13 (env-init/env-populate) will move this into an
 # explicit `.env` populate step; kept here as the validated interim that unblocks #98's smoke.
-[ -n "${HARBOR_PASSWORD:-}" ]      || set_env_var HARBOR_PASSWORD "$(gen_password)"
-[ -n "${GITEA_ADMIN_PASSWORD:-}" ] || set_env_var GITEA_ADMIN_PASSWORD "$(gen_password)"
+[ -n "${HARBOR_PASSWORD:-}" ]      || state_set HARBOR_PASSWORD "$(gen_password)"
+[ -n "${GITEA_ADMIN_PASSWORD:-}" ] || state_set GITEA_ADMIN_PASSWORD "$(gen_password)"
 # ArgoCD too — and it MUST be generated HERE, into .env.kind, not left to `.env`.
 #
 # `make e2e-kind` runs with SKIP_DOTENV=1 (it stands in for a fresh operator / a CI runner, neither
@@ -118,7 +121,7 @@ set_env_var VKS_CONTEXT "$KIND_CONTEXT"
 #
 # .env.kind IS sourced under SKIP_DOTENV, so generating it here means 07 applies it and
 # `make creds-show` prints the password that actually works.
-[ -n "${ARGOCD_ADMIN_PASSWORD:-}" ] || set_env_var ARGOCD_ADMIN_PASSWORD "$(gen_password)"
+[ -n "${ARGOCD_ADMIN_PASSWORD:-}" ] || state_set ARGOCD_ADMIN_PASSWORD "$(gen_password)"
 log_info "published KUBECONFIG/VKS_AUTH_METHOD/VKS_CONTEXT (+ generated KinD Harbor/Gitea/ArgoCD creds; see 'make creds-show') to ${REPO_ROOT}/.env.kind"
 
 # Point subsequent kubectl calls at the kind cluster.

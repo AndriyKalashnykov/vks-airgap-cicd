@@ -49,9 +49,18 @@ else
 fi
 
 # --- 4. Clean the kind overlay so real-VKS runs aren't polluted --------------
-env_kind="${REPO_ROOT}/.env.kind"
-if [ -f "$env_kind" ]; then
-  log_info "removing kind overlay $env_kind"
+# THE DELETE CONTRACT: remove the state overlay ONLY if the KinD flow stamped it as its own.
+#
+# This used to `rm -f .env.kind` unconditionally. The same sink now carries REAL-LAB discovered state
+# (LB IPs, CA paths, the Gitea token) — and BOTH real-lab runbooks tell the operator to run
+# `make kind-down` at Step 0 to clear stale KinD state. Unconditional deletion there destroys the
+# lab's own discoveries. 05-kind-up.sh writes VKS_STATE_KIND=1; nothing else does.
+env_kind="$(state_file)"
+if [ -f "$env_kind" ] && [ "$(grep -m1 '^VKS_STATE_KIND=' "$env_kind" 2>/dev/null | cut -d= -f2)" != "1" ]; then
+  log_warn "NOT removing $(basename "$env_kind") — it is NOT stamped as KinD state (a real lab wrote it)."
+  log_warn "  Inspect it with 'make state-show'."
+elif [ -f "$env_kind" ]; then
+  log_info "removing the KinD state overlay $env_kind"
   run rm -f "$env_kind"
 fi
 

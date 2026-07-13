@@ -101,7 +101,7 @@ LB_IP="$(istio_wait_lb_ip)" || die "istio ingress-gateway has no LoadBalancer ad
 log_info "istio ingress-gateway LoadBalancer address: ${LB_IP}"
 
 # --- 7. Publish + emit the /etc/hosts guidance --------------------------------
-set_env_var INGRESS_LB_IP "$LB_IP"
+state_set INGRESS_LB_IP "$LB_IP"
 log_info "published INGRESS_LB_IP=${LB_IP} to ${REPO_ROOT}/.env.kind"
 log_info "Istio installed. Add ONE line to /etc/hosts on the jump box / your client:"
 log_info ""

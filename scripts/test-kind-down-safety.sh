@@ -42,7 +42,9 @@ else
 fi
 
 # 2. 05-kind-up.sh must actually RECORD it, or the guard above can never fire.
-if grep -q 'set_env_var KIND_KUBECONFIG' "${SCRIPT_DIR}/05-kind-up.sh"; then
+# state_set is set_env_var against the STAMPED sink (lib/state.sh) — the same publish, a sink that
+# says which cluster it belongs to.
+if grep -qE '(set_env_var|state_set) KIND_KUBECONFIG' "${SCRIPT_DIR}/05-kind-up.sh"; then
   ok "05-kind-up.sh records KIND_KUBECONFIG (so teardown knows what it created)"
 else
   bad "05-kind-up.sh does NOT record KIND_KUBECONFIG — kind-down has nothing to key on"

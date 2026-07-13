@@ -20,8 +20,7 @@ load_env
 # choice so a later `make verify-ingress` (a fresh make with no override) reads the
 # controller that was actually installed from .env.kind, not the .env.example default.
 CONTROLLER="${_override:-${INGRESS_CONTROLLER:-istio}}"
-set_env_var INGRESS_CONTROLLER "$CONTROLLER"
-
+state_set INGRESS_CONTROLLER "$CONTROLLER"
 case "$CONTROLLER" in
   istio)
     log_info "INGRESS_CONTROLLER=istio -> installing Istio ingress"
