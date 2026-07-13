@@ -187,7 +187,7 @@ load_env() {
   # A variable that selects WHICH CLUSTER you are talking to must be owned by the caller. Config may
   # supply a DEFAULT; it may not overrule an explicit choice.
   local _sel _snap_names="" _snap_vals=""
-  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME; do
+  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE; do
     if [ -n "${!_sel:-}" ]; then
       _snap_names="${_snap_names} ${_sel}"
       _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'
@@ -236,6 +236,15 @@ EOF
   # variable that decides WHICH CLUSTER you are talking to. It also made a two-cluster test
   # impossible to drive: you cannot hand a script a different KUBECONFIG.
   export KUBECONFIG="${KUBECONFIG:-${REPO_ROOT}/secrets/vks.kubeconfig}"
+
+  # Same story, same fix: ARGOCD_NAMESPACE selects WHICH ArgoCD instance you talk to. It was pinned
+  # UNCOMMENTED in .env.example, so e2e-cross-cluster.sh's env-prefix override
+  #     ARGOCD_NAMESPACE="$ARGOCD_NS" ... 70-configure-argocd.sh
+  # was SILENTLY INERT — it only looked fine because the value happened to equal the default.
+  # It cannot simply be commented out: 70/71/45/99 all read it with `:?` (required), so an unset
+  # value would kill `make gitops`. The default belongs HERE, after the sourcing, where a caller's
+  # explicit choice still wins.
+  export ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
 }
 
 # set_env_var KEY VALUE [file] — idempotently upsert KEY=VALUE (default .env.kind).
