@@ -15,6 +15,11 @@ spec:
       labels:
         app.kubernetes.io/name: gowebapp
     spec:
+      # Harbor image-pull credential, created in this namespace by 70-configure-argocd.sh.
+      # REQUIRED when the Harbor project is private (the tenant default: HARBOR_PUBLIC_PROJECTS=false);
+      # harmless when it is public. Without it every pod here goes ImagePullBackOff.
+      imagePullSecrets:
+        - name: harbor-pull
       securityContext:
         runAsNonRoot: true
         # distroless:nonroot is uid/gid 65532 — NOT the 10001 the Java app creates. Using 10001

@@ -22,6 +22,16 @@ __VKS_ARGOCD_SH_LOADED=1
 # shellcheck disable=SC2034  # consumed by the scripts that source this library (70-configure-argocd.sh)
 ARGOCD_INCLUSTER_SERVER='https://kubernetes.default.svc'
 
+# The Harbor image-PULL Secret created in every app namespace by 70-configure-argocd.sh.
+#
+# A CONSTANT, deliberately not an env var: the same name is written in each app's
+# deploy/<app>/deployment.yaml, and those manifests are the GitOps source of truth — ArgoCD applies
+# them verbatim from the Gitea repo, so they are never envsubst-rendered and CANNOT follow an
+# operator override. Making it settable would let the Secret and the Deployment disagree, and the
+# only symptom would be ImagePullBackOff. `make check-pull-secret-alignment` gates the two.
+# shellcheck disable=SC2034  # consumed by the scripts that source this library
+HARBOR_PULL_SECRET='harbor-pull'
+
 # argocd_api_server <kubeconfig> — the API server URL a kubeconfig points at. Offline: reads the file.
 argocd_api_server() {
   kubectl --kubeconfig "$1" config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true

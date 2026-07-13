@@ -146,6 +146,38 @@ configure_app_argocd() {
   # (ensure_namespace uses the ambient kubectl, i.e. $KUBECONFIG = the GUEST — which is what we want.)
   ensure_namespace "$APP_NAMESPACE" "${PSA_LEVEL_APP:-restricted}"
 
+  # GUEST: the image-PULL credential for Harbor, in the app's own namespace.
+  #
+  # There used to be NO imagePullSecret anywhere in this repo: the only Harbor credential lived in
+  # the `ci` namespace, for kaniko to PUSH with. That is fine while HARBOR_PUBLIC_PROJECTS=true (the
+  # KinD default) and silently fatal otherwise — which is the TENANT default: every app pod goes
+  # ImagePullBackOff, and nothing in the flow says so. kubelet reads pull secrets from the POD's
+  # namespace, so it has to be created per app, here, before ArgoCD's first pod.
+  #
+  # The password never touches argv (no `kubectl create secret --docker-password`): the manifest is
+  # built in a umask-077 temp file and applied over STDIN. See common/security.md.
+  if [ -n "${HARBOR_USERNAME:-}" ] && [ -n "${HARBOR_PASSWORD:-}" ]; then
+    local auth dockercfg
+    auth="$(printf '%s:%s' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" | base64 -w0 2>/dev/null \
+            || printf '%s:%s' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" | base64)"
+    dockercfg="$(printf '{"auths":{"%s":{"auth":"%s"}}}' "$HARBOR_URL" "$auth" | base64 -w0 2>/dev/null \
+            || printf '{"auths":{"%s":{"auth":"%s"}}}' "$HARBOR_URL" "$auth" | base64)"
+    kubectl apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${HARBOR_PULL_SECRET}
+  namespace: ${APP_NAMESPACE}
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: ${dockercfg}
+EOF
+    log_info "  ${app}: image-pull secret '${HARBOR_PULL_SECRET}' created in ns/${APP_NAMESPACE}"
+  else
+    log_warn "  ${app}: no HARBOR_USERNAME/HARBOR_PASSWORD — no image-pull secret."
+    log_warn "    Fine only if the Harbor project is PUBLIC. With a private project every pod will ImagePullBackOff."
+  fi
+
   if [ -n "$TOKEN" ]; then
     log_info "registering ${APP_DEPLOY_REPO} with ArgoCD"
     # The token reaches kubectl on STDIN (a heredoc), never on argv — see common/security.md.

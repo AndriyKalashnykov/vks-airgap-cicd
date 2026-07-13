@@ -479,6 +479,10 @@ validate: ## kustomize build + kubeconform manifests; kubectl dry-run Tekton YAM
 check-image-alignment: ## Fail if any mirrored image tag drifts between k8s/tekton manifests and images/images.txt
 	@$(SCRIPTS)/check-image-alignment.sh
 
+.PHONY: check-pull-secret-alignment
+check-pull-secret-alignment: ## Every app's deploy manifest must reference the image-pull Secret the flow actually creates
+	@$(SCRIPTS)/check-pull-secret-alignment.sh
+
 .PHONY: check-java-alignment
 check-java-alignment: ## Fail if the Java major drifts across pom/mise/ci/Dockerfile/images.txt
 	@$(SCRIPTS)/check-java-alignment.sh
@@ -617,7 +621,7 @@ docs-lint: diagrams-check check-readme-scenarios ## Lint markdown (tracked AND n
 	else echo "markdownlint not installed — skipping (install markdownlint-cli)"; fi
 
 .PHONY: static-check
-static-check: check-toolchain-alignment check-java-alignment check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-image-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: check-toolchain-alignment check-java-alignment check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint ## Full local pipeline (offline-verifiable parts)
