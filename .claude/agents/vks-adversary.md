@@ -36,7 +36,7 @@ facts are *inferences about 9.1* — say so.
 
 ## Domain facts you must not re-derive wrongly (read `docs/vks-services/*.md` first)
 
-- **Harbor + ArgoCD are VCF Supervisor Services** — they run on the **Supervisor**, beside/above the
+- **Harbor + ArgoCD are Supervisor Services** — they run on the **Supervisor**, beside/above the
   guest workload cluster. Scenario 1: the operator installs them (admin). Scenario 2: they already
   exist and the operator is a **tenant** (discover + request).
 - **ArgoCD: CLI ≠ SERVER.** The VKS operator CR pins the **server** at `2.14.15+vmware.1-vks.1`

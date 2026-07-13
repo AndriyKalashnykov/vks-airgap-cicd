@@ -9,7 +9,7 @@ Reference implementation of an end-to-end CI/CD pipeline for a **fully air-gappe
 VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surfaces:
 
 - **Pipeline surface** — self-hosted **Gitea** + **Tekton** (test → **Kaniko** build →
-  **Harbor** push → GitOps tag write-back), wired to **Harbor** + **ArgoCD**, which run as VCF **Supervisor Services** (you install them, or they already exist and you are a tenant).
+  **Harbor** push → GitOps tag write-back), wired to **Harbor** + **ArgoCD**, which run as **Supervisor Services** (you install them, or they already exist and you are a tenant).
 - **Delivery surface** — an OS-portable (Ubuntu / PhotonOS) jump-box image mirror (**crane**,
   dual-homed or sneakernet), a dependency-baked offline **Maven** builder, an **optional** pluggable
   ingress (**Istio** default, **Traefik** optional — or **attach to the Istio a real VKS lab already
@@ -29,7 +29,7 @@ VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surface
 > A developer pushes a change to **Gitea** → **Tekton** runs tests, builds a container
 > image with **Kaniko** and pushes it to **Harbor** → Tekton bumps the image tag in the
 > deploy repo → **ArgoCD** syncs the new version to the cluster → the web UI updates.
-> On a real lab, **Harbor** and **ArgoCD** run as **VCF Supervisor Services** (on the Supervisor —
+> On a real lab, **Harbor** and **ArgoCD** run as **Supervisor Services** (on the Supervisor —
 > you either install them, or they already exist and you're a tenant), and **Istio** is a **VKS
 > Standard Package** in the guest cluster — so this project **attaches** to it rather than
 > installing it. What this project always owns: mirroring every required image into Harbor, and
@@ -41,15 +41,15 @@ VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surface
 New here? Pick the path that matches your situation — each one is self-contained end to end:
 
 1. **KinD** — *see it work.* No VKS cluster, **zero `.env`**, one command.
-2. **Real lab, Scenario 1** — *I install Harbor + ArgoCD* (as VCF **Supervisor Services**), then run the pipeline.
-3. **Real lab, Scenario 2** — *I'm a **tenant***: Harbor + ArgoCD already exist. I **discover** them,
+2. **Real VKS lab, Scenario 1** — *I install Harbor + ArgoCD* (as **Supervisor Services**), then run the pipeline.
+3. **Real VKS lab, Scenario 2** — *I'm a **tenant***: Harbor + ArgoCD already exist. I **discover** them,
    **request** what I'm not allowed to self-service, then run the pipeline.
 
 | I want to… | Path | You need |
 |------------|------|----------|
 | **Just see it work** (no VKS cluster) | [KinD](docs/kind-local.md) — one command, zero `.env` | **Have:** Docker (KinD needs Docker specifically) · internet access<br>**Run:** `make deps` → `make e2e-kind` |
-| **Real lab — I install Harbor + ArgoCD** | [Scenario 1](docs/scenario-1.md) | **Have:** a vSphere login that can install a Supervisor Service, create a vSphere Namespace and provision a guest cluster · cluster-admin on that guest cluster · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md))<br>**Reachable from the jump box:** the internet, the Supervisor API, Harbor — and ArgoCD's cluster must reach your guest API<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make env-check` → `make psa-check` |
-| **Real lab — Harbor + ArgoCD already exist** (I'm a **tenant**) | [Scenario 2](docs/scenario-2.md) | **Have:** cluster-admin on your own guest cluster · Harbor **project-admin** (else ask for robot credentials) · the licensed VCF CLI archives<br>**Ask the platform team for:** your guest cluster **registered** with ArgoCD (admin-only) · an ArgoCD role that lets you create an `Application` · mesh rights — `make istio-preflight` prints exactly what to request<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make harbor-robot` → `make psa-check` |
+| **Real VKS lab — I install Harbor + ArgoCD** | [Scenario 1](docs/scenario-1.md) | **Have:** a vSphere login that can install a Supervisor Service, create a vSphere Namespace and provision a guest cluster · cluster-admin on that guest cluster · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md))<br>**Reachable from the jump box:** the internet, the Supervisor API, Harbor — and ArgoCD's cluster must reach your guest API<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make env-check` → `make psa-check` |
+| **Real VKS lab — Harbor + ArgoCD already exist** (I'm a **tenant**) | [Scenario 2](docs/scenario-2.md) | **Have:** cluster-admin on your own guest cluster · Harbor **project-admin** (else ask for robot credentials) · the licensed VCF CLI archives<br>**Ask the platform team for:** your guest cluster **registered** with ArgoCD (admin-only) · an ArgoCD role that lets you create an `Application` · mesh rights — `make istio-preflight` prints exactly what to request<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make harbor-robot` → `make psa-check` |
 
 The real-lab paths start from the jump-box **[Prerequisites](#prerequisites)** below.
 Run **`make check-tools`** to see which CLIs you have and which are required.
@@ -162,7 +162,7 @@ It needs internet (dual-homed); a fully air-gapped host uses the carried bundle 
 ### Toolchain and access
 
 - A jump box running **Ubuntu** or **PhotonOS** with internet access.
-- Network reach to the VKS Supervisor, Harbor, and (for dual-homed) the workload cluster.
+- Network reach to the Supervisor, Harbor, and (for dual-homed) the workload cluster.
 - The Harbor **CA certificate** (`.env` → `HARBOR_CA_FILE`) — Harbor is self-signed HTTPS; Gitea is served over HTTP (no CA needed).
 - [mise](https://mise.jdx.dev/) for the rest of the toolchain (installed by `make deps`; git must already be present).
 - **Container engine:** image operations (mirror, Maven builder build/push, diagram
@@ -182,8 +182,8 @@ that: `make check-readme-scenarios`.)
 | Path | Document | You are |
 |---|---|---|
 | **See it work, locally** | **[KinD end-to-end](docs/kind-local.md)** | just trying the demo — one command, no lab, no `.env` |
-| **Real lab — I install Harbor + ArgoCD** | **[Scenario 1](docs/scenario-1.md)** | the admin: you install them as VCF **Supervisor Services**, then wire the pipeline |
-| **Real lab — they already exist** | **[Scenario 2](docs/scenario-2.md)** | a **tenant**: you *discover* the endpoints and *request* the grants you need |
+| **Real VKS lab — I install Harbor + ArgoCD** | **[Scenario 1](docs/scenario-1.md)** | the admin: you install them as **Supervisor Services**, then wire the pipeline |
+| **Real VKS lab — they already exist** | **[Scenario 2](docs/scenario-2.md)** | a **tenant**: you *discover* the endpoints and *request* the grants you need |
 
 Then: **[Access the UIs](docs/access-uis.md)** — URLs, logins, passwords.
 

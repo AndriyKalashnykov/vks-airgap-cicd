@@ -26,15 +26,17 @@ in this section — you do not have to read the other scenario.
   [download](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&displayGroup=Harbor&release=2.14.3&os=&servicePk=542081&language=EN)
 
 Reference docs:
-[Installing and Configuring Harbor as a VCF Service](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-harbor-as-vcf-service/installing-and-configuring-harbor-and-contour.html)
+[Installing and Configuring Harbor as a Supervisor Service](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-harbor-as-vcf-service/installing-and-configuring-harbor-and-contour.html)
 ·
 [Install the Argo CD Service](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-argo-cd-service/install-argo-cd-service.html).
 
-> **Doc-provenance note.** Broadcom's **9.1** ArgoCD/Harbor techdoc pages currently **301-redirect
-> to the 9.0 tree**, so the version-specific facts below (the `2.14.15` ArgoCD server example, field
-> names) are **9.0 content taken as authoritative-for-9.1** — an inference, not verified 9.1 ground
-> truth. Confirm against the running lab (`kubectl explain argocd.spec.version`, the actual service
-> YAML) before relying on an exact version.
+> **Doc-provenance note (corrected 2026-07-13).** The **explicit `/9-1/` techdoc URLs serve REAL 9.1
+> content** — fetched live, no redirect. (It is the *older* doc-set path,
+> `vsphere-supervisor-services-and-standalone-components/...`, that 301-redirects to the 9.0 tree —
+> which is what earlier notes here mistook for "9.1 redirects".) The **version-specific** pins below
+> (the `2.14.15` ArgoCD server example) are still **9.0 facts inferred for 9.1** and unconfirmed on a
+> lab — confirm with `kubectl explain argocd.spec.version` and the running instance's image before
+> relying on an exact version.
 
 ## Install Harbor & ArgoCD as Supervisor Services
 

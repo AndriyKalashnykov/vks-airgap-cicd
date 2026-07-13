@@ -40,7 +40,7 @@ portfolio conventions in its own system prompt on purpose. Keep it current when 
 An **air-gapped VKS CI/CD demo**: from an internet-connected jump box (Ubuntu or
 PhotonOS), mirror all required images into **Harbor**, install and wire **Gitea +
 Tekton**, and demonstrate GitOps CD via **ArgoCD**. On a real VKS lab Harbor and ArgoCD
-are installed as **VCF Supervisor Services** (the README real-lab flow documents that,
+are installed as **Supervisor Services** (the README real-lab flow documents that,
 Scenario 1); in Scenario 2 they already exist and you discover them as a tenant. We then install
 Gitea + Tekton and the demo app. The KinD stand-in installs
 Harbor + ArgoCD locally to mimic that.

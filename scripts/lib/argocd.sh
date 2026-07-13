@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/lib/argocd.sh — the two-cluster facts about ArgoCD, as PURE functions.
 #
-# ArgoCD is a VCF Supervisor Service: on a real lab it runs in a DIFFERENT cluster from the workload.
+# ArgoCD is a Supervisor Service: on a real lab it runs in a DIFFERENT cluster from the workload.
 # Two things follow, and BOTH were wrong in this repo until they were made explicit here:
 #
 #   1. WHERE the Applications/repo Secrets are created  -> the ArgoCD cluster, not the guest.

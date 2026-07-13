@@ -5,7 +5,7 @@
 # THE BUGS THESE GUARDS EXIST TO PREVENT (both shipped; neither was reproducible on KinD):
 #
 #   #1  70-configure-argocd.sh applied the ArgoCD Application + repo Secret to $KUBECONFIG — the
-#       GUEST cluster. ArgoCD is a VCF Supervisor SERVICE: it runs on the SUPERVISOR. So `make
+#       GUEST cluster. ArgoCD is a Supervisor SERVICE: it runs on the SUPERVISOR. So `make
 #       gitops` died on a real lab at its own namespace check. Fixing that (apply to the ArgoCD
 #       cluster instead) is necessary — but ON ITS OWN IT IS MORE DANGEROUS THAN THE BUG: the
 #       destination still defaulted to `https://kubernetes.default.svc` = "the cluster ArgoCD runs
