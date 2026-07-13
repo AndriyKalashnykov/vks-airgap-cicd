@@ -32,6 +32,10 @@ spec:
       default: ${APP_BUILDER_IMAGE}
     - name: runtime-image
       default: ${APP_RUNTIME_IMAGE}
+    # This app's LANGUAGE-specific kaniko --build-arg flags (lib/apps.sh app_build_args); renders
+    # EMPTY for a language that needs none, which is exactly what the shared Kaniko task expects.
+    - name: build-args
+      default: "${APP_BUILD_ARGS}"
     - name: registry
       default: ${HARBOR_URL}
     - name: insecure-registry
@@ -55,6 +59,7 @@ spec:
           - { name: image, value: $(tt.params.image) }
           - { name: builder-image, value: $(tt.params.builder-image) }
           - { name: runtime-image, value: $(tt.params.runtime-image) }
+          - { name: build-args, value: $(tt.params.build-args) }
           - { name: registry, value: $(tt.params.registry) }
           - { name: insecure-registry, value: $(tt.params.insecure-registry) }
         workspaces:

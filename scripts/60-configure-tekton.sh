@@ -34,14 +34,15 @@ GITEA_CI_TOKEN="${GITEA_CI_TOKEN:-}"
 
 # ---- Derived values for envsubst rendering ----
 # App-INDEPENDENT tokens. The per-app ones (APP_NAME/APP_IMAGE/APP_BUILDER_IMAGE/APP_RUNTIME_IMAGE/
-# APP_TEST_TASK/APP_REPO_CLONE_URL/DEPLOY_REPO_CLONE_URL) are exported inside the loop below.
+# APP_TEST_TASK/APP_BUILD_ARGS/APP_REPO_CLONE_URL/DEPLOY_REPO_CLONE_URL) are exported inside the
+# loop below (app_export, scripts/lib/apps.sh).
 export CI_NAMESPACE HARBOR_URL HARBOR_INFRA_PROJECT APP_BRANCH ARGOCD_TRACK_BRANCH
 if [ "${HARBOR_INSECURE:-0}" = "1" ]; then export HARBOR_INSECURE_BOOL="true"; else export HARBOR_INSECURE_BOOL="false"; fi
 
 # Single-quoted on purpose: envsubst needs the literal ${VAR} names (an allowlist),
 # not their expansions.
 # shellcheck disable=SC2016
-ALLOWLIST='${CI_NAMESPACE} ${HARBOR_URL} ${HARBOR_INFRA_PROJECT} ${APP_BRANCH} ${APP_REPO_CLONE_URL} ${DEPLOY_REPO_CLONE_URL} ${ARGOCD_TRACK_BRANCH} ${APP_IMAGE} ${APP_NAME} ${APP_TEST_TASK} ${APP_GIT_REPO} ${APP_BUILDER_IMAGE} ${APP_RUNTIME_IMAGE} ${HARBOR_INSECURE_BOOL}'
+ALLOWLIST='${CI_NAMESPACE} ${HARBOR_URL} ${HARBOR_INFRA_PROJECT} ${APP_BRANCH} ${APP_REPO_CLONE_URL} ${DEPLOY_REPO_CLONE_URL} ${ARGOCD_TRACK_BRANCH} ${APP_IMAGE} ${APP_NAME} ${APP_TEST_TASK} ${APP_GIT_REPO} ${APP_BUILDER_IMAGE} ${APP_RUNTIME_IMAGE} ${APP_BUILD_ARGS} ${HARBOR_INSECURE_BOOL}'
 
 require_cmd envsubst "install gettext (provides envsubst)"
 
