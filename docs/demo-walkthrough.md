@@ -8,35 +8,35 @@ change flow from the Gitea web editor all the way to the running web page, entir
 gap**, with each hop visible in its own Web UI. `make verify` does exactly this automatically; the
 steps below are the same loop by hand, so you can watch it happen.
 
-## Before you start — get your URLs, usernames AND passwords
-
-**One command prints all three, with the real values for *your* environment:**
+## Before you start
 
 ```bash
 make creds-show
 ```
 
-It outputs a `Service · URL · Username · Password` table — the passwords are **printed, not named**.
-(You never have to know where they came from: on the KinD path the flow *generates* them; on a real
-lab they are the ones you set in `.env`. `make creds-show` reads them back either way.) It also gives
-you the one-time `/etc/hosts` line the `*.vks.local` hosts need — there is no internet DNS in an air
-gap.
+That prints everything you need to follow this page: the **URL, username and password** for every UI,
+with the real values for *your* environment — plus the one-time `/etc/hosts` line the `*.vks.local`
+hosts need (there is no internet DNS in an air gap). Passwords are **printed, not named**: on the KinD
+path the flow generates them, on a real lab they are the ones you set in `.env`, and `creds-show`
+reads them back either way. ArgoCD's is also available on its own via `make argocd-password`.
 
-| UI | Username | Password | What you'll watch |
-|----|----------|----------|-------------------|
-| **The app** | — | — (no login) | the greeting that changes |
-| **Gitea** | `gitea_admin` | printed by `make creds-show` | edit the source; see the tag write-back |
-| **Tekton Dashboard** | — | — (read-only, no login) | the PipelineRun: test → build → deploy |
-| **Harbor** | `admin` | printed by `make creds-show` | the freshly-built image |
-| **ArgoCD** | `admin` | printed by `make creds-show` (or `make argocd-password` on its own) | the sync that rolls the new image |
+Open these UIs in tabs — each one shows a different hop of the loop:
 
-**Do not copy URLs from this page** — they are *not* the same on all three paths:
+| UI | What you'll watch |
+|----|-------------------|
+| **The app** | the greeting that changes |
+| **Gitea** | you edit the source here; then the tag write-back lands |
+| **Tekton Dashboard** | the PipelineRun: test → build → deploy |
+| **Harbor** | the freshly-built image appears |
+| **ArgoCD** | the sync that rolls the new image out |
+
+**The URLs are not the same on all three paths** — so take them from `creds-show`, not from this page:
 
 | UI | Where its URL comes from |
 |----|--------------------------|
 | **app / Gitea / Tekton** | the **ingress**, at `<app>.${APP_DOMAIN}` / `${GITEA_HOST}` / `${TEKTON_DASHBOARD_HOST}` — **derived**, so they change with `APP_DOMAIN` (default `vks.local`) |
-| **Harbor** | **its OWN LoadBalancer — never the ingress** (its LB IP is load-bearing for the containerd pull path). An LB IP on KinD; your lab's own URL on a real lab |
-| **ArgoCD** | **its OWN LoadBalancer — never the ingress** (mirroring the real lab, where ArgoCD is a **Supervisor Service** in a *different* cluster). An LB IP on KinD; your lab's own URL on a real lab |
+| **Harbor** | **its OWN LoadBalancer — never the ingress** (its LB IP is load-bearing for the containerd pull path) |
+| **ArgoCD** | **its OWN LoadBalancer — never the ingress** (mirroring the real lab, where ArgoCD is a **Supervisor Service** in a *different* cluster) |
 
 See [Access the UIs](access-uis.md). The steps below use `javawebapp` at the **default** domain as the
 worked example; substitute your own from `make creds-show`.
