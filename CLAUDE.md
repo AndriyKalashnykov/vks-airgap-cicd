@@ -277,158 +277,64 @@ the real demo is the live VKS run — so the KinD e2e stays a local `make` targe
 than a CI job. Run it locally (and both ingress controllers via `make verify-ingress-both`)
 when changing the pipeline, ingress, or manifests.
 
-## 🚨 ADVERSARY FINDINGS 2026-07-12 — STATUS (read before touching anything)
+## ✅ ADVERSARY FINDINGS 2026-07-12 — ALL CLOSED (2026-07-13)
 
-The `vks-adversary` review found **two CRITICALs that make the REAL LAB impossible** plus 6 more.
-Grades: `KinD-verified` / `9.0-doc-inferred-for-9.1` / `primary-sourced` / `UNVERIFIED`.
+All 8 findings from the first adversary run are fixed and merged. The two CRITICALs that made the
+REAL LAB impossible are closed **and** covered by a regression test that would have caught them
+(`make e2e-kind-cross-cluster`, which now actually calls `70-configure-argocd.sh`).
 
-| # | What | Status |
+| # | What | Where |
 |---|---|---|
-| **#1** | `make gitops` targets the WRONG CLUSTER | **FIXED** (#153) — KinD-verified; NOT lab-verified |
-| **#2** | the Application's `repoURL` is guest-internal DNS | **FIXED** (#153) — Gitea got its own LoadBalancer |
-| **#3** | the ATTACH-mode e2e was dead code | **DONE + e2e-verified** (#146) |
-| **#4** | `project: default` hardcoded, not even overridable | **FIXED** (#153) — `ARGOCD_PROJECT` |
-| **#5** | private Harbor: NO `imagePullSecret` anywhere | **OPEN** — next |
-| **#6** | app namespaces get PSA labels only from the ingress step | **FIXED** (#153) — `70` labels them at creation |
-| **#7** | the "ONE ROW" gate can't see the 2nd required edit | **FIXED** (#151) — host is DERIVED; one row is now literally true |
-| **#8** | token in argv · language knowledge in a shared task | **half FIXED** (#150 = the build-arg); the argv token is OPEN |
+| #1 | `make gitops` targeted the WRONG CLUSTER | #153 (+ #158, #160) |
+| #2 | the Application's `repoURL` was guest-internal DNS | #153 — Gitea got its OWN LoadBalancer |
+| #3 | the ATTACH-mode e2e was dead code | #146 |
+| #4 | `project: default` hardcoded, not overridable | #153 — `ARGOCD_PROJECT` |
+| #5 | private Harbor: NO `imagePullSecret` anywhere | #153 — `harbor-pull` per app namespace + an alignment gate |
+| #6 | app namespaces got PSA labels only from the ingress step | #153 — `70` labels them at creation |
+| #7 | the "ONE ROW" gate couldn't see the 2nd edit | #151 — the host is DERIVED |
+| #8 | token in argv · language knowledge in a shared task | #150, #153 |
 
-**A SECOND adversary run (on the FIX for #1/#2, before it was written — RULE ZERO trigger 2) refuted
-the first design.** What it changed, and why it matters more than the original bugs:
+### What the ADVERSARY caught that a review would not have
 
-- **Fixing #1 alone is MORE DANGEROUS than the bug.** `70` currently fails fast only *by accident*
-  (the guest has no ArgoCD namespace). Make the apply succeed on the Supervisor while the
-  destination still defaults to `https://kubernetes.default.svc` — "the cluster ArgoCD runs in" —
-  and the first misconfigured lab run deploys the tenant's app **onto the Supervisor**, with
-  prune+selfHeal. The topology is therefore **DERIVED** from the two kubeconfigs, never remembered
-  from `.env.kind` (which `make kind-down` deletes and a fresh checkout never had).
-- **`GITEA_ARGOCD_URL` had NO valid value.** Gitea was `ClusterIP`-only, and the only off-cluster
-  route matches the hostname `gitea.vks.local` — which exists **solely in the operator's
-  `/etc/hosts`**. A Supervisor repo-server can't resolve it, and dialling the ingress IP sends
-  `Host: <ip>` → matches no vhost → **404, not a clone**. Fix: **Gitea gets its own LoadBalancer**,
-  exactly as Harbor and ArgoCD each already have.
-- **"Fail on ComparisonError" is a FALSE-GREEN.** An Application ArgoCD never reconciled has *no
-  status at all*, so absence-of-error passes vacuously; and the seeded repos are **public**, so
-  ArgoCD silently falls back to an **anonymous clone** on a repo-Secret URL miss — a wholly broken
-  credential still Syncs green. The gate now asserts a POSITIVE signal (`.status.sync.revision`,
-  which is only set after repo-server actually fetched the repo).
+It ran **6 times** and **overturned every design brought to it** — including CRITICALs inside the
+session's OWN fixes, an hour old:
 
-**THE LOAD-BEARING UNVERIFIED QUESTION (blocks a real lab; no KinD e2e can ever answer it, because
-both kubeconfigs there are cluster-admin):** may a VKS **tenant** create `Application`s / repo
-Secrets in the ArgoCD instance's vSphere Namespace at all? Broadcom has a **cloud administrator**
-create that instance, and a tenant's realistic grant is **ArgoCD RBAC via `argocd-server`** (an
-AppProject role) — *not* Kubernetes RBAC. If so, `kubectl apply` is the **wrong mechanism**, not an
-incomplete one. Two commands settle it in 30 seconds on a lab:
+- **`.items[0]`** as a deploy destination: on a SHARED (real-lab) ArgoCD that is an **arbitrary
+  cluster**, and the Application carries `prune+selfHeal` — it could have deployed a tenant's app
+  **into another tenant's cluster** (#158).
+- The fix to *that* read the cluster name from **`metadata.name`**, but ArgoCD keeps it in
+  **`data.name`** — so the tiebreak **could never match** (#160). KinD cannot show either (one
+  cluster ⇒ `items[0]` is always right).
+- **`make kind-down` deleted a REAL LAB's kubeconfig and Gitea token** — it keyed on *"is it under
+  `./secrets`"*, and the documented lab default **is** `./secrets/vks.kubeconfig`. Both runbooks told
+  the operator to run it at Step 0 (#167).
+- **`make X KUBECONFIG=/other` was a SILENT NO-OP** — `.env.example` outranked the environment, so
+  you ran against the default cluster believing you had switched. It also made the two-cluster test
+  *undrivable* (#168).
+- My Harbor fallback endpoint **does not exist** on the pinned Harbor (removed in 2.13) — it would
+  have shipped a 404 handler (#161).
+- `kubectl auth can-i` measured **the one axis a tenant is expected to fail**: ArgoCD's
+  `applications`/`repositories` are **project-scoped**, so the tenant's real path is **argocd-server**
+  (#163).
 
-```bash
-kubectl --kubeconfig "$ARGOCD_KUBECONFIG" -n "$ARGOCD_NAMESPACE" auth can-i create applications.argoproj.io
-kubectl --kubeconfig "$ARGOCD_KUBECONFIG" -n "$ARGOCD_NAMESPACE" auth can-i create secrets
-```
+### The mechanism ladder (#163) — the tenant path WORKS
 
-Until then `70-configure-argocd.sh` **measures** it (`auth can-i`) and, if refused, prints exactly
-what to request from the platform team — rather than assuming the write lands.
-Also `UNVERIFIED`: whether a Supervisor can route to a **guest LoadBalancer VIP** (NSX/AVI-dependent;
-NOT implied by Supervisor→guest-API reachability). If it cannot, #2's fix needs another address.
+`ARGOCD_MECHANISM=auto|kubectl|api|request`. **Proven on KinD** (`make e2e-kind-tenant`): a kubeconfig
+with **ZERO Kubernetes RBAC** in the ArgoCD namespace created both Applications through
+**argocd-server** using only an AppProject role.
 
-### #1 CRITICAL — `make gitops` creates the Applications on the WRONG CLUSTER (real lab dead)
+### STILL OPEN
 
-`70-configure-argocd.sh` has never heard of `ARGOCD_KUBECONFIG`; it applies the repo Secret and every
-`Application` to `$KUBECONFIG` (the **guest**) — `:18`, `:31`, `:49`, `:71`. But ArgoCD is a
-**Supervisor Service**, so `ns/argocd-instance-1` does not exist there. `71-argocd-register-guest.sh`
-IS two-cluster aware (`kg()`/`ka()`, `:39-40`) — 70 is not. Both scenarios die at `make gitops` with
-the misleading *"is ArgoCD installed on this VKS cluster?"*.
-**Why no test caught it:** `e2e-cross-cluster.sh:96` HAND-WRITES the Application instead of calling
-`70-configure-argocd.sh` — the only cross-cluster test bypasses the script under test.
-**Fix:** `ARGOCD_KUBECTL=(kubectl --kubeconfig "${ARGOCD_KUBECONFIG:-$KUBECONFIG}")` for the ns check,
-the repo Secret and the Application apply; keep `$KUBECONFIG` for guest-side work. Then make
-`e2e-cross-cluster.sh` CALL `70-configure-argocd.sh` (that is what makes it a regression test).
-Grade: *9.0-doc-inferred-for-9.1*.
-
-### #2 CRITICAL — the Application's `repoURL` is a GUEST-INTERNAL DNS name
-
-`.env.example:101` `GITEA_INTERNAL_URL=http://gitea-http.gitea.svc:3000` → `70-configure-argocd.sh:44`
-→ `k8s/argocd/application.yaml:12`. A Supervisor-hosted ArgoCD's repo-server cannot resolve guest
-cluster-local Service DNS ⇒ every Application: `ComparisonError: dial tcp: lookup gitea-http.gitea.svc`.
-Untested BY CONSTRUCTION: `e2e-cross-cluster.sh:92-94` syncs from a **public GitHub repo** and says so.
-**Fix:** split `GITEA_INTERNAL_URL` (Tekton, in-guest) from `GITEA_ARGOCD_URL` (ingress host/LB IP
-reachable from ArgoCD's cluster; must also be in the repo Secret + AppProject `sourceRepos`), and add a
-preflight that PROVES reachability from ArgoCD's side (a one-shot Job in `ARGOCD_NAMESPACE` curling
-`${GITEA_ARGOCD_URL}/api/healthz`). Stacks on #1 — it is the second wall.
-
-### #3 HIGH — ✅ DONE (#146, e2e VERIFIED)
-
-`90-e2e-istio-existing.sh` used the DELETED globals `APP_NAME`/`ARGOCD_DEST_NAMESPACE` ⇒ `set -u`
-abort ⇒ **the ATTACH path (what a real lab uses) has been dead since the rename**; "both e2e green"
-covered only `make e2e-kind`. Its RED-2 asserted only `!= 200`, so a BROKEN fixture passed for the
-wrong reason. Fixed: `app_export "$PROBE_APP"`; RED-2 now asserts exactly `000`.
-**VERIFIED** — `make e2e-kind-istio-existing` EXIT=0: `RED 1 OK` (attach refuses on a mesh-free
-cluster) · `DISCOVERY OK — platform-ingress/platform-gw, selector istio=platform-gw` · `RED 2 OK`
-(HTTP 000) · attached via **gateway-api** (`vks-ingress/vks-uis` → 172.18.0.6) AND via **classic**
-(`platform-ingress/platform-gw` → 172.18.0.5) · `PSA OK`. Why no gate caught it: shellcheck ignores a
-bare `${VAR}` in a heredoc, and `check-env-coverage` only matches `${VAR:-…}`/`${VAR:?}`.
-
-### #4 HIGH — "adding an app is ONE ROW" is FALSE for a tenant
-
-`k8s/argocd/application.yaml:9` `project: default` is hardcoded AND not in the envsubst allowlist
-(`70-configure-argocd.sh:70`) — it cannot even be overridden. A tenant has their own AppProject and
-needs an ADMIN, PER APP, to add the namespace to `spec.destinations` and the `<app>-deploy` URL to
-`spec.sourceRepos` (*primary-sourced*: argo-cd.readthedocs.io/en/stable/user-guide/projects/).
-So it is "one row **+ an admin ticket, per app**" — `README.md:1446` is untrue in Scenario 2.
-**Fix:** `project: ${ARGOCD_PROJECT:-default}` + allowlist + `.env.example`; an
-`argocd-appproject-preflight` that prints the exact missing `destination`/`sourceRepo` per registry
-row (generate the request, don't remember it); re-word the README claim.
-
-### #5 HIGH — private Harbor: NO `imagePullSecret` exists for any app namespace
-
-`grep -rn imagePullSecret` ⇒ **zero manifest hits**. The push secret lives only in `ci`
-(`60-configure-tekton.sh:83`). With `HARBOR_PUBLIC_PROJECTS=false` (the TENANT default,
-`README.md:970`) every app is `ImagePullBackOff` until you hand-create a Secret and hand-edit
-`deploy/<app>/deployment.yaml` (`README.md:1117-1119`, which still names the DELETED
-`ARGOCD_DEST_NAMESPACE`). The grant table says "Harbor → **Never**, nothing to do" (`README.md:1473`)
-— it contradicts itself. KinD (public projects) can never see this.
-**Fix:** create the robot pull Secret in each app namespace from the `for_each_app` loop; render
-`imagePullSecrets` behind `HARBOR_PUBLIC_PROJECTS` (kustomize patch); fix the grant table; purge
-`ARGOCD_DEST_NAMESPACE` from the README.
-
-### #6 MEDIUM — app namespaces get PSA labels ONLY from the ingress step, which `install-all` never runs
-
-`ensure_namespace <app> ${PSA_LEVEL_APP}` lives only in `istio_apply_routes*` (`lib/istio.sh:181-190`,
-`470-478`) + the Traefik equivalent. `install-all` = mirror → builder-image → vks-login → platform →
-gitops (no `install-ingress`), so ArgoCD's `CreateNamespace=true` creates them **unlabelled**. It works
-today only because both Deployments are genuinely restricted-compliant — the MECHANISM is not in the
-path. **Fix:** `ensure_namespace` in `70-configure-argocd.sh`'s per-app loop, or use the Application's
-`syncPolicy.managedNamespaceMetadata` (works on 2.14 too).
-
-### #7 MEDIUM — the gate that certifies "ONE ROW" cannot see the second required edit
-
-Adding an app also needs `<APP>_HOST` in `.env.example` (`lib/apps.sh:46-51` dies otherwise), but
-`.env.example` is not in `check-app-hardcodes`' scanned set, and `check-env-coverage` exempts `APP_*`.
-**Fix:** assert every registry row's column-5 var exists in `.env.example` — or derive the host
-(`<app>.${APP_DOMAIN}`) and delete the per-app var, making "one row" literally true.
-
-### #8 MINOR
-
-- `e2e-cross-cluster.sh:87` — a bearer token in **argv** (`ps`-visible), against this repo's own rule.
-- `kaniko-build.yaml:55` — `--build-arg=MVN_OFFLINE=-o` is passed to EVERY app incl. Go: language
-  knowledge in a shared task; it belongs in `lib/apps.sh` beside the other per-language hooks.
-
-### What SURVIVED the attack (do not re-litigate)
-
-Go app under PSA `restricted` ("correct by construction, not luck"); the air-gapped Kaniko build with
-the digest-pinned distroless; the shared EventListener + per-app `Trigger` (RBAC verified, Gitea CEL
-field correct); per-app `verify` ("end-result discipline done right — I could not make app A's run
-satisfy app B's check"); `istio_assert_shared_gateway_hosts`; and ArgoCD 2.14-vs-3.x at the manifest
-level (the 2.14→3.0 break is resource-tracking, irrelevant here — *primary-sourced*).
-
-### What the adversary did NOT check
-
-Anything on a real lab; it ran nothing that mutates (#1/#2/#5/#6 are read from the code, not observed
-failing). **UNVERIFIED and the precondition for #1/#4:** whether the VKS ArgoCD operator's RBAC even
-lets a tenant create `Application`s/repo Secrets in `argocd-instance-1`. Settle with:
-`kubectl --kubeconfig $ARGOCD_KUBECONFIG -n $ARGOCD_NAMESPACE auth can-i create applications.argoproj.io`
-and `… can-i create secrets`. Also unchecked: guest-kubelet→Harbor CA trust; the Triggers v0.36 CRD
-schema (KinD evidence accepted); and the new gates' RED (asserted by construction, not demonstrated —
-the brief forbade editing files).
+- **`GITEA_ARGOCD_URL` is PUBLISHED by `40-install-gitea.sh` and READ BACK as an input by `70`** — the
+  publish-then-read-back anti-pattern (a stale value is indistinguishable from a deliberate override).
+  DERIVE it from the live Gitea Service instead, with a `GITEA_ARGOCD_URL_OVERRIDE` for the operator
+  (precedent: `INGRESS_LB_IP_OVERRIDE`).
+- **`.env.kind` still carries REAL-LAB discovered state** despite its KinD name. The sink is hardcoded
+  in `lib/os.sh` (`load_env` + `set_env_var`). Make it a variable; consider stamping it with the
+  cluster it was written for and refusing to source it against a different one.
+- **UNVERIFIED (needs a lab):** may a VKS *tenant* `kubectl` into the ArgoCD instance's namespace at
+  all? The `api` mechanism makes this matter far less — but `70` still MEASURES it rather than
+  assuming, and prints what to request when refused.
 
 ## Naming history
 
@@ -441,490 +347,36 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 ## Backlog / resume state
 
-> ### 💸 BACKLOG — CI COST (runner minutes are BILLED; a wasteful gate never goes red, so nothing surfaces it)
->
-> **DONE (#144):** the `changes` paths-filter **never skipped anything** — its deny-list
-> (`code: ['**', '!**/*.md', …]`) was OR'd by dorny, so `'**'` matched alone and every docs-only PR
-> paid ~2 min for a full Java+Go build (tell: `Filter code = true` with an EMPTY "Matching files:").
-> Replaced by `scripts/classify-changes.sh` + 10 unit cases. Also dropped `actions/setup-java` —
-> mise-action overrode its `JAVA_HOME` anyway, so it downloaded a second JDK for nothing.
->
-> **STILL PAYING, every `static-check` run (~25s each):** the "Install kubeconform, yamllint,
-> hadolint" step `curl`s two binaries and runs `pipx install yamllint` on EVERY run. `.mise.toml`
-> already provides trivy/gitleaks/shellcheck/etc — move these three there too (or cache them), so
-> mise-action installs them from its cache and local `make lint` uses the same pins. Check what mise
-> actually offers for each before assuming (that is why they were curled in the first place).
->
-> **Also worth an audit:** `docs-lint` renders PlantUML through a Docker image on every docs PR —
-> confirm `diagrams-check` short-circuits when no `.puml` changed.
->
-> ### ▶️ HANDOFF 2026-07-12f — START HERE
->
-> `main` @ `7948729` GREEN, **0 open PRs**. Merged this session: **#143** (the adversary's 8 findings,
-> recorded), **#144** (CI cost), **#145** (CI-cost backlog), **#146** (finding **#3** — fixed AND
-> e2e-verified). Skills captured in `claude-config` @ `400c051`.
->
-> **NEXT: findings #1 + #2 — the two CRITICALs. They are the same wall, and they mean the REAL LAB
-> CANNOT WORK: `make gitops` fails, and no app ever deploys.** Neither is reproducible on KinD, which
-> is exactly why they survived. The fix is DESIGNED (below) but NOT WRITTEN.
->
-> | | today | after |
-> |---|---|---|
-> | **which cluster** | `70-configure-argocd.sh` applies the repo Secret (`:49`) + every Application (`:71`) to `$KUBECONFIG` — the **guest**. ArgoCD is a **Supervisor Service**, so `ns/argocd-instance-1` is not there → it dies at its own ns check (`:31`) with the misleading *"is ArgoCD installed on this VKS cluster?"* | `ARGOCD_KUBECTL=(kubectl --kubeconfig "${ARGOCD_KUBECONFIG:-$KUBECONFIG}")` for the ns check, the Secret and the Application; guest-side work keeps `$KUBECONFIG`. On KinD the two are the same file → byte-identical behaviour. (`71-argocd-register-guest.sh` already does this — copy its `kg()`/`ka()` shape.) |
-> | **repo URL** | one `GITEA_INTERNAL_URL` (`gitea-http.gitea.svc:3000`, `.env.example:101`) feeds BOTH Tekton and the Application `repoURL` (`k8s/argocd/application.yaml:12`). A Supervisor-hosted repo-server cannot resolve guest cluster-local DNS → every Application `ComparisonError: dial tcp: lookup gitea-http.gitea.svc` | keep `GITEA_INTERNAL_URL` for Tekton (in-guest); add **`GITEA_ARGOCD_URL`** — reachable from **ArgoCD's** cluster (ingress host / LB IP) — used in the `repoURL`, the repo Secret, and the AppProject `sourceRepos`. Must ship **COMMENTED** in `.env.example` (it falls back to `GITEA_INTERNAL_URL` when ArgoCD is in-cluster; an uncommented value would be exported by `load_env`'s `set -a` and kill the fallback — `check-env-clobber` enforces this). |
-> | **proof it can't regress** | `e2e-cross-cluster.sh` **hand-writes** the Application (`:96`) and syncs from a **public GitHub repo** (`:92-94`) — the only two-cluster test bypasses the script under test and never uses Gitea | make it **CALL `70-configure-argocd.sh`** and sync from Gitea; add a preflight Job in `ARGOCD_NAMESPACE` that curls `${GITEA_ARGOCD_URL}/api/healthz` so "ArgoCD can actually reach the repo" is ASSERTED, not assumed. |
->
-> **UNVERIFIED and the precondition for #1/#4 on a shared lab:** may a VKS *tenant* even create
-> `Application`s / repo Secrets in `argocd-instance-1`? Settle with
-> `kubectl --kubeconfig $ARGOCD_KUBECONFIG -n $ARGOCD_NAMESPACE auth can-i create applications.argoproj.io`
-> and `… can-i create secrets`. If not, the honest fix is a preflight that PRINTS what to request from
-> the platform team rather than failing with a confusing error.
->
-> **Then:** #4 (`ARGOCD_PROJECT` — `project: default` is hardcoded and not even in the envsubst
-> allowlist) · #5 (**no `imagePullSecret` anywhere** → a private-Harbor tenant gets `ImagePullBackOff`
-> while the grant table says "Harbor: nothing to do") · #6 (PSA labels only from the ingress step,
-> which `install-all` never runs) · #7 · #8 · **re-render the diagrams (they still show ONE app;
-> `diagrams-check` will fail if the PNGs aren't regenerated in the same change)** · the CI-cost item.
->
-> **Run the adversary again before calling the next session done (STOPPING RULE, above).**
->
-> #### Traps that bit ME this session (do not repeat)
->
-> - **Never `git checkout` / edit a script while a long run is executing it.** Bash reads scripts
->   incrementally: switching branches mid-e2e made the running attach e2e pick up `main`'s pre-fix
->   line 128 and abort on `ARGOCD_DEST_NAMESPACE: unbound variable`. The failure was MINE, not the
->   code's — and it cost a full ~15-minute re-run to find out.
-> - **A gate that lists files with `git ls-files` is blind to UNTRACKED files** — `check-app-hardcodes`
->   green-lit my own brand-new unit test (which named both apps) locally, then failed in CI after the
->   commit. Fixed with `--others --exclude-standard`.
-> - **A grep-gate must strip comments first**, or it matches the comment that documents it and fails
->   the very file it certifies (`check-java-alignment` did, on its first run).
->
-> ### ✅ MULTI-APP (javawebapp + gowebapp) — MERGED
->
-> ### ✅ THE TWO-APP WALK IS GREEN (2026-07-12, `make e2e-kind`, EXIT=0)
->
-> Both apps completed the FULL walk **independently** — each with its own marker, its own
-> PipelineRun, its own image, its own page:
->
-> | | javawebapp (java) | gowebapp (go) |
-> |---|---|---|
-> | PipelineRun | `javawebapp-ci-bwnzn` ✅ | `gowebapp-ci-9fzls` ✅ |
-> | Image in Harbor | `apps/javawebapp:4f27acb` | `apps/gowebapp:d678d9d` |
-> | Deployed page shows ITS OWN marker | ✅ | ✅ |
-> | Ingress | `javawebapp.vks.local` 200 | `gowebapp.vks.local` 200 |
->
-> `PSA OK` on every namespace. The Go app's Kaniko build ran **offline** against the mirrored
-> `golang` + the DIGEST-pinned distroless — so the air-gap story holds for a second language with
-> no builder image (stdlib-only ⇒ nothing to fetch).
->
-> **Getting there took 4 attempts, and every failure was a REAL multi-app bug the e2e caught:**
->
-> | # | Died at | Cause | Fixed |
-> |---|---|---|---|
-> | 1 | `builder-image` | `app_has_builder "$a" && printf …` — a bare `A && B` returns NON-ZERO when A is false, and gowebapp (no `Dockerfile.builder`) is LAST ⇒ `set -e` killed the script | `if…fi` everywhere |
-> | 2 | `seed-gitea` | leftover `: "${APP_NAME:?}"` require of a global the refactor deleted | + swept every script |
-> | 3 | `gowebapp-ci` | `CouldntGetTask` — the `go-test` Task existed only in a scratchpad | added + **GATE** in `make validate` (RED-proven) |
-> | 4 | — | GREEN | — |
->
-> **The property that made this work:** a green `javawebapp` never once hid a broken `gowebapp`.
-> `verify` proves EACH app (own marker, PipelineRun matched by the `tekton.dev/pipeline=<app>-ci`
-> label, own deployed-image change, own page). Keep it that way.
->
-> #### What shipped (PRs #139 docs-sync, #140 rename+multi-app — MERGED)
->
-> - **`webui` -> `javawebapp`** (a second app arrived; the name must say WHICH app). CLAUDE.md's
->   dated history deliberately still says `webui` — rewriting it would falsify the record.
-> - **`gowebapp`**: Go, **stdlib-only** on purpose — with zero modules the air-gapped build fetches
->   nothing, so it needs NO pre-baked dependency cache (the Maven app needs `Dockerfile.builder`
->   precisely because an in-cluster `mvn` cannot reach Maven Central). distroless/static, uid 65532,
->   digest-pinned base (the `nonroot` tag MOVES).
-> - **`apps/registry.tsv` + `scripts/lib/apps.sh`**: the single source of truth. Seeding, Tekton,
->   ArgoCD, ingress, PSA, preflights, validate, lint, trivy-fs, builder-image, app-test/build/run
->   and verify ALL loop over it. **Adding an app is ONE ROW**; a new LANGUAGE is that row + one
->   `case` branch (test task, marker file, health path, base images).
-> - **Tekton**: ONE shared EventListener (`labelSelector`) discovering a per-app standalone
->   `Trigger` CR (CEL-filtered on `body.repository.name` — VERIFIED against Gitea's docs); ONE
->   pipeline template rendered per app; shared tasks + a shared `apps-ci` ServiceAccount.
-> - **`make verify` proves EACH app independently**: own marker, own PipelineRun (matched by the
->   `tekton.dev/pipeline=<app>-ci` label, not "some new run appeared"), own deployed-image change,
->   own page. A green javawebapp can no longer hide a broken gowebapp.
-> - **NEW GATE `check-app-hardcodes`** (in static-check): no shared file may NAME an app. It found
->   4 REAL bugs on first run — the write-back commit message said "ci: deploy javawebapp" for EVERY
->   app; a route-API switch deleted only javawebapp's routes; hadolint never linted the Go
->   Dockerfile; several hardcoded paths.
-> - `trivy-fs` now scans EVERY app's ARTIFACT (jar + the compiled Go binary — a stdlib-only app has
->   no modules, so scanning go.mod would miss Go-STDLIB CVEs entirely).
->
-> #### 📋 BACKLOG — next session (both are small, self-contained, and verifiable)
->
-> **1. `ARGOCD_PROJECT` — stop hardcoding `project: default`.**
-> `k8s/argocd/application.yaml:9` pins `project: default`. That is correct for KinD and for
-> Scenario 1 (you installed ArgoCD, you are admin, and `default` permits every destination) — but a
-> **tenant** (Scenario 2) is given their OWN AppProject, and the Application will be rejected with
-> *"application destination … is not permitted in project"*.
->
-> - Add `ARGOCD_PROJECT` to `.env.example` (default `default`), render it in
->   `k8s/argocd/application.yaml` + `scripts/70-configure-argocd.sh` (add it to the envsubst
->   allowlist — an UNLISTED var renders EMPTY and the Application silently lands in no project).
-> - Remember the tenant ALSO needs the new `<app>-deploy` repo URL in `spec.sourceRepos` — see the
->   README "Adding an app -> on a REAL lab" table (whose commands are marked **INFERRED**).
-> - Verify: `make e2e-kind` (KinD uses `default`, so it must stay byte-identical in behaviour).
->
-> **2. Re-render the diagrams — they still show ONE app.**
-> `docs/diagrams/*.puml` predate `gowebapp`: the container/deployment/pipeline-flow diagrams show a
-> single app, one Gitea repo pair and one pipeline. Update the `.puml` sources to show BOTH apps
-> (two `<app>-app`/`<app>-deploy` repo pairs, two `<app>-ci` pipelines, two namespaces, two hosts —
-> and the SHARED EventListener that label-selects the per-app Triggers), then `make diagrams` and
-> commit the PNGs. The `diagrams-check` drift gate WILL fail if the PNGs are not regenerated in the
-> same change (it caught exactly that during the rename).
->
-> #### Real-lab facts established this session (no lab needed to re-derive)
->
-> | Concern | Verdict |
-> |---|---|
-> | Harbor robot | **Project-scoped** (`22-harbor-robot.sh:40`) -> a 2nd app needs NO new credential. |
-> | ArgoCD AppProject | A TENANT must have the new namespace in `spec.destinations` AND the new `<app>-deploy` URL in `spec.sourceRepos`. The ONLY universal tenant request. Scenario 1: none (`default` permits all). |
-> | Ingress host | Only an issue on the CLASSIC shared-Gateway path (its `hosts:` belongs to the mesh admin). On the **Gateway-API** path (default; what Broadcom uses) Istio auto-provisions the gateway from OUR Gateway in OUR namespace -> self-service, no request. |
-> | Namespace | One per app (operator's decision). Apps COULD share one; that would remove the AppProject request but weaken isolation. |
->
-> #### 📋 BACKLOG — DEEP-RESEARCH the real-lab grant table, then adversarially verify it
->
-> The README's "Adding an app -> on a REAL lab" table gives commands (ArgoCD AppProject
-> `spec.destinations`/`spec.sourceRepos` patch; Istio shared-Gateway `hosts:` patch). The FACTS are
-> sourced (ArgoCD docs; our own 22-harbor-robot.sh; the Istio Gateway host model) but the **exact
-> invocations are INFERRED and never run on a lab** — and the lab's ArgoCD SERVER is 2.14.x while
-> ours is 3.x. This repo has a gate against exactly this class (`check-how-provenance`), so:
->
-> 1. **Deep-research** each cell against PRIMARY sources for the PINNED versions (ArgoCD 2.14 docs,
->    Broadcom VKS ArgoCD/Harbor/Istio package docs, Istio 1.30 Gateway API + classic).
-> 2. **Run the result past a devil's-advocate SPECIALIST** (VKS/VCF + Kubernetes + ArgoCD + Harbor +
->    Istio) briefed with the portfolio conventions — and note that in this session FOUR agents idled
->    without ever delivering, so do not block on one: verify yourself and use the agent as a check.
-> 3. Correct the table, and grade every cell (lab-verified / doc-cited / INFERRED).
-> Open question to settle: does a 2.14 AppProject reject the Application with a distinguishable
-> error, and does a VKS-managed ArgoCD even let a tenant see their AppProject?
->
-> #### Traps hit this session (do not repeat)
->
-> - **`A && B` as a loop body returns NON-ZERO when A is false** -> under `set -e` the whole script
->   dies. `app_has_builder "$a" && printf ...` killed `builder-image` (gowebapp is last and has no
->   builder). Use `if ...; then ...; fi`.
-> - **A `${VAR}` inside a YAML FLOW mapping is a syntax error** (`{ name: ${X} }`) — block style only.
-> - **Never edit a script while a long run is executing it** (bash reads scripts incrementally).
-> - **Agents idle without reporting**: 4 devil's-advocate/research agents idled with no deliverable.
->   Their key questions were answered directly instead (Gitea payload field, Harbor robot scope,
->   Gateway-API self-service). Do not block on an agent; verify yourself.
+### ▶️ HANDOFF 2026-07-13 — START HERE
 
----|---|---|
-> | istio + secure TLS (default) | `make e2e-kind` | ✅ marker deployed, 3 UIs 200, PSA OK |
-> | both ingress controllers | `make verify-ingress-both` | ✅ istio + traefik routes |
-> | traefik + secure TLS | `make e2e-kind INGRESS_CONTROLLER=traefik` | ✅ |
-> | istio + INSECURE (plain HTTP) | `make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1` | ✅ (mode read from the log banner, not inferred) |
-> | attach to a platform-owned Istio | `make e2e-kind-istio-existing` | ✅ both REDs, DISCOVERY OK, both route APIs |
-> | cross-cluster ArgoCD registration | `make e2e-kind-cross-cluster` | ✅ |
-> | two-box sneakernet | `make e2e-sneakernet` | ✅ `JUMPBOX_SNEAKERNET_OK` |
->
-> **`make deps` now installs `kind`** (pinned in `.mise.toml`) — verified on a bare `ubuntu:26.04`
-> container with no kind on PATH. It previously installed it NOWHERE, so the flagship KinD path was
-> unrunnable on a fresh box and only worked because dev boxes already had it.
->
-> Next session: pick up the backlog below. Re-run any e2e permutation you touch code for.
+`main` GREEN, **0 open PRs**. ~24 PRs merged (#148–#169). All 8 original adversary findings CLOSED,
+plus 4 CRITICALs the adversary found in this session's own work (see the section above).
 
----
+**Every fix ships with a demonstrated RED, and the e2e permutations are green:**
 
-> ### ✅ DONE 2026-07-12c — all three former backlog items shipped (#135–#138)
->
-> **Operator-journey framing + "tenant" defined (#135).** The three paths now say what the operator
-> IS DOING: (1) KinD — *see it work*; (2) real lab — *I install Harbor + ArgoCD*; (3) real lab — *I'm
-> a tenant*. The whole difference between the real-lab paths is **install** vs **discover + request**,
-> and that is what decides the Harbor robot, the ArgoCD registration, and install-vs-attach Istio.
-> "Tenant" is defined in Scenario 2's own section (self-service / must-request / needed-regardless /
-> the surprise: **Istio has no credentials**).
->
-> **The `Needs` column is a real checklist (#135).** Each path now gives **Have: / Reachable: / Run:**
-> — concrete requirements and the commands, no rationale. (Feedback that stuck: *docs say what you
-> need, how to get it, and what to run — the reasoning is not the reader's problem.*)
->
-> **Document-correctness audit, claim-by-claim (#138).** 40 candidate findings, adversarially
-> verified → 29 confirmed / 11 refuted, then each re-checked against the code by hand. It found
-> **three real bugs**, not just prose:
->
-> | Bug | Why it mattered |
-> |---|---|
-> | **`make deps` never installed `kind`** | The flagship KinD path was **unrunnable on a fresh box**. Nothing in the repo installed kind, yet the README promised it and `05-kind-up.sh` does `require_cmd kind`. It only ever worked because dev boxes already had it (CI curled its own copy). Now pinned in `.mise.toml` — **verified on a bare `ubuntu:26.04` container**. |
-> | **`e2e-sneakernet` was broken** | `.env.example` clobbered the per-run `BUNDLE_OUT_DIR` → `tar` archived a directory into itself; fixing that exposed the same bug in `BUNDLE_TARBALL`. |
-> | **`check-env-coverage` was blind to 19 scripts** | Incl. `99-verify.sh` — which is exactly why the `GITEA_LOCAL_PORT` clobber (killing ephemeral-port parallel-safety) survived. |
->
-> Also killed: 12 false "Harbor/ArgoCD are **VKS-provided**" claims (they are Supervisor Services you
-> install, or that already exist), "`make verify` curls app.vks.local" (it port-forwards), "an
-> off-cluster ArgoCD is not supported" (it is — that is what `make argocd-register-guest` does), and
-> a dead `ARGOCD_HOST` knob advertising a route that does not exist.
->
-> **New gates (each RED-proven, in `static-check`):** `check-env-clobber` (three instances of one bug
-> class is a missing gate, not bad luck) and a widened `check-env-coverage` that prints its
-> denominator. `test-scripts` (offline unit tests that **nothing invoked**) is now wired in too.
+| | |
+|---|---|
+| `make e2e-kind` | EXIT=0 — both apps served their own markers, all UIs 200, PSA OK |
+| `make e2e-kind-tenant` | EXIT=0 — a kubeconfig with ZERO k8s RBAC in ns/argocd created both Applications via **argocd-server** |
+| `make e2e-kind-cross-cluster` | EXIT=0 — the Applications land in the HUB (not the GUEST), target the GUEST API, and ArgoCD **actually fetched a revision** from a Gitea it can reach |
 
----
+### NEXT (in order)
 
-> ### ✅ RESOLVED (2026-07-12b) — `ARGOCD_KUBECONFIG` acquisition → `make fetch-argocd-kubeconfig`
->
-> It was briefly recorded as "nothing creates it, command UNKNOWN" — which silently meant **both
-> real-lab scenarios could not complete `make gitops`**. That was a research failure, not a real
-> unknown: one search found it in Broadcom's own docs.
->
-> ArgoCD is a **Supervisor Service**, so registration needs a **Supervisor** kubeconfig (not the
-> workload one `make vks-login` gives you). Per Broadcom (*Connect to the Supervisor as a vCenter SSO
-> User* + *VCF CLI Context, Architecture, and Configuration*): `vcf context create --endpoint
-> https://<SUPERVISOR> --username <u>@<domain> --ca-certificate <ca>` creates a Supervisor context,
-> and *"the VCF CLI respects the KUBECONFIG environment variable for writing to alternate
-> locations"*. `scripts/31-fetch-argocd-kubeconfig.sh` points `KUBECONFIG` at `$ARGOCD_KUBECONFIG`,
-> selects the `<ctx>:<ARGOCD_NAMESPACE>` context, and **proves** `argocd-server` is visible.
->
-> - **Scenario 1** (you are the admin): `make fetch-argocd-kubeconfig` → `make gitops` auto-registers.
-> - **Scenario 2** (tenant): registration is **ADMIN-only** — do NOT set `ARGOCD_KUBECONFIG`;
->   **request** that the platform team register your guest cluster.
->
-> ⚠️ **Provenance: INFERRED** (Broadcom 9.0-tree docs; the 9.1 URLs redirect). Never run on a lab, and
-> **interactive** (the CLI prompts for the password). **Next lab session: run it and upgrade the grade.**
+1. **Kill the `GITEA_ARGOCD_URL` read-back.** `40-install-gitea.sh` publishes it into `.env.kind` and
+   `70` reads it back as an input. A stale value is then indistinguishable from a deliberate
+   override — the exact anti-pattern `lib/argocd.sh` invokes to justify NOT trusting
+   `ARGOCD_DEST_SERVER` from that same file. **Derive it from the live Gitea Service** (`kubectl -n
+   $GITEA_NAMESPACE get svc gitea-http -o jsonpath='{.status.loadBalancer.ingress[0].ip}'`), with a
+   `GITEA_ARGOCD_URL_OVERRIDE` for the operator (precedent: `INGRESS_LB_IP_OVERRIDE`).
+2. **Retire `.env.kind` as the carrier of REAL-LAB state.** The sink is hardcoded in `lib/os.sh`
+   (`load_env` + `set_env_var`). Make it a variable (`VKS_ENV_OVERLAY`), and STAMP it with the cluster
+   it was written for — then refuse to source it against a different one. A rename alone deletes the
+   one cue ("kind") that tells an operator the file is foreign state.
+3. Whatever the **session-end adversary review** surfaces (RULE ZERO trigger 3).
 
----
+### UNVERIFIED — needs a real lab, not reproducible on KinD
 
-> ### 📋 BACKLOG — document-correctness audit (claim-by-claim, NOT a keyword grep)
->
-> **Why it exists:** two doc defects shipped in one session because every README review was scoped
-> to the *feature just built* — a grep for `istio|ingress|gateway` finds only claims that mention
-> those words. The defects it could never have found:
->
-> - the **lead paragraph** said "Harbor and ArgoCD are **provided by VKS**" — contradicting
->   Scenario 1 (where the operator installs them) and omitting Istio entirely;
-> - the **"Choose your path"** table told every newcomer the KinD path *"Needs: Docker"*, with no
->   mention that the repo is **podman-preferred** (`CONTAINER_ENGINE ?= podman || docker`) and that
->   Docker is required **only** by the KinD stand-in.
->
-> Both were caught by the user, not the review. A diff-scoped grep inherits the blind spot of the
-> feature you just wrote; the document's *correctness* is not bounded by your diff.
->
-> **The task:** audit every tracked doc (`README.md`, `CLAUDE.md`, `docs/**/*.md`) by its **CLAIMS**,
-> independent of what was last changed. A README is a set of factual assertions about the system —
-> enumerate them and verify each against the code:
->
-> | Claim type | Verify against |
-> |---|---|
-> | prerequisites / "Needs: X" | the real toolchain — is X *required*, one *option*, the *fallback*, or needed by only one path? |
-> | defaults ("uses Y by default") | the `?=` / `${VAR:-}` default in the Makefile/script — not memory |
-> | commands | the target exists **and** is the right command *in each scenario the doc describes* |
-> | versions / names / endpoints | the pinned value in code |
-> | "X is not needed" | grep that it truly is not invoked |
-> | capability claims ("zero-config", "one command") | run it on a **clean checkout** |
-> | who-installs-what (Supervisor Service vs guest package vs ours) | `docs/vks-services/` |
->
-> **Method (both, not either):** (1) read each doc top-to-bottom *as a stranger*, listing every
-> sentence that asserts a fact, then verify that list; (2) grep for **claim vocabulary**, not feature
-> vocabulary: `grep -niE 'needs?:|requires?|by default|only|must|never|no .* (needed|required)|zero|one command'`.
->
-> Also fold in: every documented settable must have a grep-verified consumer (the dead-`RUN_MODE`
-> lesson), and every `.env`-consuming script's variables must appear in `.env.example` (5 of the 8
-> cross-cluster-registration vars were missing until 2026-07-12).
->
-> Rule captured in the `/readme` skill ("Audit the README by its CLAIMS, never by a keyword grep
-> scoped to your diff").
-
----
-
-> ### ⏳ SESSION HANDOFF 2026-07-12b
->
-> `main` GREEN, **0 open PRs**. Merged **#125–#131**. Both e2e targets PASSED at session end.
->
-> **THE QUESTION ANSWERED:** *how is Istio meant to be used on VKS, and how do we use it if we don't
-> install it?*
->
-> - **There are NO Istio credentials.** No login, no bearer token, no admin API, no UI — mesh access
->   is plain **kubectl RBAC**. The only credential-shaped object is a TLS Secret named by
->   `Gateway.tls.credentialName`, which lives in the GATEWAY's namespace → you **request** it.
->   (Harbor/ArgoCD do have admin passwords; Istio does not. The question was a category error.)
-> - **Configuring a mesh you didn't install = discovery + RBAC + attaching routes** →
->   `INGRESS_CONTROLLER=istio-existing` (#125). `make istio-preflight` tells a tenant what to request.
->
-> **VERIFIED (Broadcom TechDocs + VMware VCF blog; 9.1 URLs 301-redirect to 9.0 — grade accordingly):**
-> Istio IS a **VKS Standard Package on the GUEST cluster** (`istio.kubernetes.vmware.com`,
-> `vcf package install istio` / `vcf addon install create istio`). Its **ingress gateway is DISABLED
-> by default**, air-gap uses `meshConfig.imagePullSecrets`, and **Broadcom routes with the Kubernetes
-> GATEWAY API** (`gatewayClassName: istio`). ⇒ on a real lab the mesh is THEIRS → attach.
-> Harbor + ArgoCD are **Supervisor Services** (beside the workload cluster). Full living record with
-> per-fact provenance grades: **`docs/vks-services/{README,harbor,argocd,istio}.md`**.
->
-> **THE BUG THAT FOUND:** the `istio/gateway` helm chart derives the gateway's `istio:` label from the
-> **HELM RELEASE NAME**, so a hardcoded `selector: {istio: ingressgateway}` binds NOTHING on a foreign
-> mesh — and the API server **accepts it with no error** (→ connection refused, not 404). The selector
-> is now DISCOVERED (the Service exposing port **15021**; istiod has none).
->
-> **SHIPPED:** #125 attach mode · #126 **Gateway API** support (`ISTIO_ROUTE_API=auto|gateway-api|classic`;
-> Istio auto-provisions the proxy AND its LoadBalancer, air-gap-safe for free) · #127 **PSA** (VKS enforces
-> `restricted` by default; **Kaniko and the Istio-provisioned proxy would be REJECTED** — both namespaces
-> need `baseline`; `make psa-check`) + LB diagnostics · #128 handoff · #129 **default-path 404 fix**
-> (`envsubst` renders an UNEXPORTED var EMPTY → the Gateway landed in `default`) + a registry `flock` ·
-> #130 `docs/vks-services/` + `.env` completeness · #131 **README made truly scenario-based**.
->
-> **THREE NEW CI GATES** (rules that were BLOCKING, loaded, and violated anyway — so they became checks):
-> `check-env-coverage` (every operator var must be in `.env.example` — found 8 undocumented) ·
-> `check-how-provenance` (every `# how:` must be runnable-by-us / a real target / provenance-tagged —
-> caught 2 fabricated `vcf` commands) · `check-readme-scenarios` (every scenario must answer every
-> decision in its OWN section). Also `make check-tools` (required vs optional CLIs; records that
-> **istioctl is NOT needed** and the **argocd CLI is optional** — registration is declarative kubectl).
->
-> **BLOCKED — real-lab only:** `ARGOCD_KUBECONFIG` acquisition (nothing creates it; the command is
-> UNKNOWN — see the backlog), vcf-CLI auth (#9), exact 9.1 package version strings.
->
-> ---
->
-> ### ⏳ SESSION HANDOFF 2026-07-11c
->
-> `main` GREEN, **0 open PRs**. Session 2026-07-11c merged **#109, #102, #110, #111, #112, #113**
-> (see the SESSION 2026-07-11c summary below); the ONLY remaining backlog item (vcf-CLI real-lab
-> auth) is blocked on a real VCF/VKS 9.1 lab. Earlier session (2026-07-11b) merged 13 PRs
-> (#93–#107); that history is retained below.
->
-> - **Backlog cleared:** bootstrap curl|bash + bare-OS harness (#95), SIGPIPE robustness
->   sweep (#94), diagram layout + proportions (#93/#105), README readability + collapses
->   (#96/#104), maven-image full-tag alignment (#97), hadolint-builder + prose-secret gate
->   (#99), runtime apt-upgrade CVE fix (#100), offline unit tests for resolve + mirror-cache
->   (#101), real `vcf context` login flow replacing the fictional stub (#103).
-> - **`.env`/README real-lab ergonomics redesign (#107):** every operator-supplied var now
->   carries a stage tag + `# how:` acquisition command (reusing the same var names); README
->   has TWO real-lab scenarios (**Scenario 1** install / **Scenario 2** already-installed
->   tenant), a staged `.env` fill distributed across the install steps, a Quick-Start Step 0,
->   the VKS-auth section moved up, and the KinD zero-`.env` auto-discovery note.
-> - **e2e-kind VALIDATED** end-to-end (kind → Harbor → ArgoCD → mirror-34 → builder
->   [apt-upgrade] → platform → gitops → ingress → pipeline → live app). The one flake found —
->   the Tekton EventListener crash-loops on the clusterInterceptor CaBundle race, so a
->   one-shot webhook pushed during that window is lost — is fixed in `99-verify.sh` (wait for
->   the EL POD Ready + empty-commit re-fire; #106). Codified as `/ci-workflow` K1.6.
->
-> **Corrected real-lab facts (from research; all Broadcom pages are 9.0-via-redirect → 9.1
-> inferences — verify on a lab):**
->
-> - Workload-cluster kubeconfig on VCF 9 = **`vcf cluster kubeconfig get <cluster>
->   --export-file <path>`** (NOT `kubectl vsphere login`, which is legacy vSphere-with-Tanzu 7/8).
-> - Harbor & ArgoCD Supervisor Services run **on the Supervisor** (each in its own vSphere
->   Namespace) — installing them needs Supervisor access; the workload kubeconfig is only
->   needed at `make gitops` deploy time. ArgoCD: svc `argocd-server`, ns `argocd-instance-1`,
->   server `2.14.15+vmware.1-vks.1` (2.x; the CLI `3.0.19-vcf` is 3.x — do NOT infer one from
->   the other).
-> - Shared-lab tenant: a Harbor **project-admin** (direct, not via an SSO group) self-services
->   a robot; the ArgoCD tenant needs an **AppProject** + RBAC (generic ArgoCD — verify on lab).
->
-> **SESSION 2026-07-11c — every in-flight item SHIPPED (`main` green, 0 open PRs):**
->
-> - **#98 / #102 / #109** — `e2e-kind-smoke` dispatched on `main` → **GREEN on a fresh runner** (verifies #109's zero-config throwaway passwords fix the #98 smoke); #102 (sneakernet + mirror-verify-in-e2e + integrity RED test) merged + live-validated.
-> - **#110** — pipeline-flow diagram: was **CLIPPED at PlantUML's 4096px `PLANTUML_LIMIT_SIZE`** (the `webui` node + legend truncated) — folded to a complete 2-lane directional-`Rel` layout (3101×672), `PLANTUML_LIMIT_SIZE=16384` render backstop, click-to-enlarge README embed.
-> - **#111** — real-lab README: **each scenario is now self-contained end-to-end** (no "Part A/Part B / as in Scenario 1" cross-refs; the ~200-line shared run-steps tail is duplicated into each; redundant "Scenario N —" summary prefixes stripped).
-> - **#112** — env-UX (**TASK #13**): `scripts/02-env.sh` + `make env-init`/`env-populate`/`env-check`/`env-validate` + `creds`→`creds-show`; models GENERATE/DISCOVER/user-PROVIDE; Harbor auth in `env-validate` via a `umask 077` `curl -K` file (no argv). Verified on a clean checkout, both gates RED-proven, idempotent; README uses `make env-init` everywhere.
-> - **#113** — faithful **TWO-BOX e2e-sneakernet**: the air-gap half (`bundle-load`→`mirror-push`→`mirror-verify`) runs INSIDE a FRESH `make jumpbox` container (`JUMPBOX_MODE=airgap-half`) with ONLY the carried tarball — no more same-machine `mv` relocate-sim. Fidelity assert (`bundle/` must be empty) guards host-cache leakage; push creds via `-e` name-only. Live run: 34 images reconstructed→pushed→verified intact, `JUMPBOX_SNEAKERNET_OK`.
-> - **Backlog audit:** `bootstrap-jumpbox.sh` + `mirror-prune` (auto in `make mirror-pull`) were already DONE (the old backlog line was stale).
-> - **Skill learnings committed** to `~/projects/claude-config`: architecture-diagrams (4096px silent clip + fold + click-to-enlarge), readme (self-contained scenario collapsibles), work-principles (front-load-parallel / fan-out-at-t0 — after a ~3h no-commit stretch the user flagged as procrastination). Earlier lessons (render-scale, bg-job detect/kill, worktree-gate pollution, `.env` runbook, K1.6 EventListener-CaBundle race) also captured.
->
-> **ONLY remaining — BLOCKED on external infra (cannot do from here):**
->
-> - **vcf-CLI real-lab auth** — `scripts/30-vks-login.sh` ships the verified SHAPE (#103); the open items (non-interactive/stdin password mechanism, exact VCF/VKS 9.1 CLI flags, 9.0→9.1 doc-provenance) ALL require a real VCF/VKS 9.1 lab. NOT reproducible on KinD — see the vcf-CLI research block below.
->
-> **Skill lessons captured this session** (`~/projects/claude-config`, UNCOMMITTED — commit that repo): **faithful-over-convenient** (work-principles) · local-`.env`-hides-CI + verify-zero-config-on-clean-checkout (configuration) · K1.6 EventListener-CaBundle webhook race (ci-workflow) · diagram render-scale (architecture-diagrams) · robust background-job detect/kill (git-workflow) · worktree-agents pollute tree-walking gates (agents) · multi-stage `.env` runbook (configuration).
->
-> ---
-
-`main` is GREEN. KinD self-signed-TLS fidelity + VCF/VKS lab-CLI + **real-lab install runbook &
-helpers** are merged. Design rationale: `docs/decisions/kind-tls-fidelity.md`; real-lab flow:
-README §"Run against a real VKS lab" — Scenario 1 (you install Harbor+ArgoCD as Supervisor Services) and Scenario 2 (they already exist; you are a tenant: discover + request). Each scenario is self-contained end to end.
-
-**✅ COMPLETED 2026-07-11 — the full validation sweep ran GREEN end-to-end (both modes):**
-
-1. `make ci` (offline gate) — green (rc=0).
-2. **Secure e2e-kind** (default, self-signed TLS): full loop green — git push → Tekton PipelineRun →
-   Harbor → tag write-back → ArgoCD sync (`webui:0.1.0`→`:96e22fc`) → rollout → deployed page shows
-   the new marker → end-to-end verified; `verify-ingress` all 3 `*.vks.local` UIs 200 + body markers.
-   - **All 5 README UIs walked to real content** (7 checks): Gitea, App greeting, Tekton Dashboard
-     (via ingress); **Harbor UI portal HTML over CA-trusted HTTPS** (no `-k`, systeminfo `auth_mode`);
-     and **ArgoCD UI SPA + API `v3.4.5`** (own LB, self-signed TLS).
-   - **3 helpers verified:** `argocd-preflight` → TOPOLOGY OK (reads running server image
-     `quay.io/argoproj/argocd:v3.4.5`, not the CLI); `fetch-argocd-ca` → fetches the exact server cert
-     (byte-identical), verifies against a covered SAN (`argocd-server`); the raw-LB-IP gap is ArgoCD's
-     default cert not listing the IP → documented `--insecure` posture. `harbor-robot` → creates
-     `robot$vks-cicd`, creds **authenticate** to the registry and list `apps/webui:96e22fc` (pull scope).
-   - `make jumpbox-both JUMPBOX_VCF_SRC=/home/andriy/Downloads/vcf` — Photon **and** Ubuntu `JUMPBOX_OK`
-     (mise toolchain, rootless podman, Harbor reach 200, VCF CLIs `argocd v3.0.19-vcf` / `vcf v9.1.0.0`
-     and its 6 plugins). Photon `shellcheck` not-packaged is handled gracefully (WARN, lint skips it).
-3. **Insecure e2e-kind** (`HARBOR_INSECURE=1 ARGOCD_INSECURE=1`, plain HTTP): `kind-down` (which also
-   clears `.env.kind`, so the toggle is deterministic) → full loop green, **install-mode log confirmed
-   `Harbor mode: INSECURE` + `ArgoCD mode: INSECURE`** (not silently secure); marker `…1783733627`,
-   image `:4619fa4`. **All 5 UIs 7/7** over plain HTTP. `make jumpbox-both` (no VCF src) — both OSes
-   `JUMPBOX_OK`, Harbor reach `http://…` 200; VCF step correctly SKIPPED.
-4. Ran **sequentially** (no-concurrent-load-during-mirror honored). mirror engine = **crane** (mise).
-
-Re-validated the prior session's changes (lib/harbor.sh refactor, HARBOR_PUBLIC_PROJECTS, the 3 helpers)
-end-to-end. Cluster torn down after the sweep.
-
-**✅ COMPLETED 2026-07-11 (same session, follow-on enhancements — all merged, `main` GREEN):**
-
-- **Traefik ingress matrix** — validated `INGRESS_CONTROLLER=traefik` in BOTH SSL modes (secure self-signed
-  TLS + insecure plain-HTTP), 7/7 UIs each; completes the full istio/traefik × secure/insecure 2×2.
-- **Resumable + verifiable mirror** (PR #87): `make mirror-verify` (crane validate blobs + `images.lock`
-  digest match; proven GREEN 34/34 and RED rc≠0 on a deleted image); `images.lock`; **cache-skip** (a
-  digest-pinned image already fully pulled via a `.mirror-ok` sentinel is skipped → interrupted mirror
-  RESUMES, proven 25/34 skipped in 21s vs ~20min); `MIRROR_RETRIES`/`MIRROR_FORCE_PULL`; `lib/progress.sh`
-  reusable `[i/N] (elapsed)` progress + completion signal. cache-skip composes safely with Renovate
-  (content-addressed refs → a version bump always pulls the new digest).
-- **Interruption-safety / idempotency** (PR #88): `05-kind-up.sh` health-checks an existing cluster and
-  recreates a partial/broken one (name-only guard would skip a dead cluster); `50-seed-gitea-repos.sh`
-  webhook is now idempotent (GET-then-skip; a re-run no longer creates a duplicate hook → proven count=1);
-  **shellcheck pinned via `.mise.toml`** so local `make lint` == CI (fixed an SC2015 green-local/red-CI drift).
-- **Diagram** (PR #86): neutralized the ingress namespace label (`istio-ingress | traefik`).
-- Docs: README documents the mirror interrupt/resume + `mirror-verify`; this file's Common-commands +
-  gates updated.
-
-**✅ Both former "PENDING next" items are SHIPPED** (the block that listed them was stale):
-`bootstrap-jumpbox.sh` exists (curl|bash jump-box entrypoint, OS-gated, validated by the bare-OS
-harness), and cache pruning ships as `mirror_prune_cache` (`lib/mirror.sh`), run automatically by
-`10-mirror-pull.sh` — there is deliberately no separate `make mirror-prune` target.
-
-**Merged this session (real-lab prep):** helpers `make harbor-robot` + `fetch-argocd-ca` +
-`argocd-preflight` (+ `lib/harbor.sh` extraction, `HARBOR_PUBLIC_PROJECTS` toggle, fetch-harbor-ca
-port fix); README merged into ONE install-first real-lab flow with distilled Broadcom Harbor+ArgoCD
-Supervisor-Service steps; CLAUDE.md premise fixed (installed-as-Services, not pre-provided). All
-helpers verified against the (now-torn-down) KinD stand-in.
-
-**Deferred — real-lab-only, NOT KinD-reproducible (verify on a VCF/VKS 9.1 lab):**
-
-- Workload cluster trusts the Harbor CA **declaratively** (Cluster spec `trust.additionalTrustedCAs`
-  plus a double-base64 secret) — and, same-Supervisor, **auto-trusts** it (simpler than KinD `certs.d`);
-  a **private** Harbor project needs `make harbor-robot` creds + an app-namespace `imagePullSecret`
-  (`HARBOR_PUBLIC_PROJECTS=false`); the lab is **FQDN**-addressed (KinD uses LB IP + SAN=IP).
-- **ArgoCD version delta (corrected):** the operator CR pins the **server** at `2.14.15+vmware.1-vks.1`
-  (2.x) while the **CLI** is `3.0.19-vcf` (3.x) — CLI ≠ server; do NOT infer the server from the CLI.
-  KinD runs a 3.x server, so there IS a server-generation delta to reconcile. `make argocd-preflight`
-  surfaces CLI + running server image + `kubectl explain argocd.spec.version`.
-- **ArgoCD topology:** `make gitops` uses the in-cluster destination — confirm ArgoCD runs in / can
-  reach the workload cluster (`make argocd-preflight` → TOPOLOGY OK/MISMATCH).
-
-**VKS `vcf`-CLI auth flow (`--auth-type basic`) — SHIPPED as verified-SHAPE (PR #103) but NOT lab-validated; KEEP RESEARCHING before trusting the automation.** The `vcf` method in `scripts/30-vks-login.sh` now runs the real two-step context flow (it replaced the earlier FICTIONAL `vcf login --server … --kubeconfig …` stub, which NO source supports):
-
-```text
-vcf context create --endpoint https://<SUPERVISOR_HOST> --username <user>@<VKS_SSO_DOMAIN> \
-    [--insecure-skip-tls-verify] --auth-type basic     # INTERACTIVE: prompts for a context NAME + password
-vcf context use <VKS_CONTEXT_NAME>:<VKS_NAMESPACE>     # note the <ctx>:<ns> COLON form
-# kubectl-vsphere plugin (if the guest cluster needs it) — pulled from the Supervisor:
-wget --no-check-certificate https://<SUPERVISOR_HOST>/wcp/plugin/linux-amd64/vsphere-plugin.zip
-# offline plugin bundle install: vcf plugin install all --local-source <bundle-dir>
-```
-
-Open research items — confirm on a real VCF/VKS 9.1 lab before relying on the automation:
-
-1. **Non-interactive / stdin password mechanism** — `vcf context create` is INTERACTIVE (prompts for the ctx name + password); NO `--password`/`--kubeconfig` flag is confirmed in any source. Run `vcf context create --help` on a lab to find a stdin/env mechanism; until then the flow prompts interactively (a password on argv stays forbidden — security.md). `30-vks-login.sh` carries a matching `TODO(verify on a real VKS lab)`.
-2. **Reaching the WORKLOAD (guest) cluster** — ANSWERED by research (documented in #107): on VCF 9 the workload-cluster kubeconfig is obtained via `vcf cluster kubeconfig get <VKS_CLUSTER_NAME> --export-file <path>` (NOT `kubectl vsphere login`, which is legacy vSphere-with-Tanzu 7/8). The Supervisor context ≠ the workload cluster; Harbor + ArgoCD install ON the Supervisor (each in its own vSphere Namespace), and the workload kubeconfig is only needed at `make gitops` deploy time. ArgoCD server pins `2.14.15+vmware.1-vks.1` (svc `argocd-server`, ns `argocd-instance-1`). Still verify the exact 9.1 CLI flags on a real lab.
-3. **`.env` inputs** now documented (commented) in `.env.example` §6: `VKS_AUTH_METHOD=vcf`, `SUPERVISOR_HOST`, `VKS_NAMESPACE`, `VKS_USERNAME`, `VKS_SSO_DOMAIN`, `VKS_CONTEXT_NAME` (the vcf ctx name — DISTINCT from the kubeconfig `VKS_CONTEXT`), `VKS_INSECURE_SKIP_TLS_VERIFY`.
-4. **Doc-provenance caveat** — the Broadcom **9.1** ArgoCD/Harbor techdoc pages 301-REDIRECT to the **9.0** tree, so the version facts (ArgoCD server `2.14.15+vmware.1-vks.1`, Harbor data-values fields) are 9.0 content taken as authoritative-for-9.1 — an INFERENCE; re-verify against a real 9.1 lab.
-5. **Harbor-as-VCF-Service field constraints** (from Broadcom + William Lam, to verify on 9.1): `secretKey` exactly 16 chars, `core.xsrfKey` exactly 32, `tlsSecretLabels: {managed-by: vmware-vRegistry}` REQUIRED for VKS trust; `trust.additionalTrustedCAs` needs a **DOUBLE-base64** cert (`base64 -w0 ca.crt | base64 -w0`); configure Harbor cert+creds BEFORE creating guest clusters.
-
-Primary sources: ogelbric/LAB `VCF-CLI/README.md` (raw.githubusercontent.com — a real working jump-box transcript); ogelbric `Create_Harbor` (Harbor-as-Supervisor-Service); Broadcom `install-argo-cd-service.html` (9-0 redirect); williamlam.com 2025/08 VKS private-registry quick-tip; Broadcom "Integrate VKS with a Private Registry".
-
-**Declined (decision, not a TODO):** ArgoCD Image Updater for registry-driven redeploy — the Tekton
-tag-write-back stays the primary GitOps path; revisit only to demo registry-driven deploys.
+- May a VKS **tenant** `kubectl` into the ArgoCD instance's namespace at all? The **`api`** mechanism
+  makes this matter far less (it needs no k8s RBAC there), and `70` MEASURES it rather than assuming.
+- Can the **Supervisor route to a guest LoadBalancer VIP**? That is what `GITEA_ARGOCD_URL` depends on.
+- The `vcf` CLI auth flow (`30-vks-login.sh`) ships the verified SHAPE but has never run on a lab.
