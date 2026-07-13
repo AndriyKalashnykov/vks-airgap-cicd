@@ -49,6 +49,21 @@ fi
 # walkthrough uses, and it needs NOTHING from the mesh admin (Istio provisions the data plane
 # and the LoadBalancer for the Gateway we create in our own namespace). Report that plainly:
 # it is usually the difference between "I must file a ticket" and "I can just deploy".
+# THE GATEWAY-API CRDs — report them EXPLICITLY. They are the load-bearing precondition for the
+# tenant path, nothing in this repo used to install them, and on KinD they only exist because
+# cloud-provider-kind force-installs its own. An operator must not discover this at attach time.
+if istio_gwapi_crds_present; then
+  log_info "Gateway API CRDs: PRESENT"
+else
+  log_warn "Gateway API CRDs: ABSENT — the Gateway-API route path is NOT available on this cluster."
+  log_warn "  Consequence: we fall back to the CLASSIC path, which needs a SHARED INGRESS GATEWAY —"
+  log_warn "  and the VKS Istio package ships that gateway DISABLED by default, so there may be"
+  log_warn "  NOTHING TO BIND TO."
+  log_warn "  If you OWN this cluster:  make install-ingress   (it installs the CRDs for you)"
+  log_warn "  If you are a TENANT:      ASK THE MESH ADMIN to install the Gateway API CRDs"
+  log_warn "                            (cluster-scoped — a tenant cannot), or to enable the gateway."
+fi
+
 istio_detect_route_api
 
 if [ "$ISTIO_ROUTE_API" = "gateway-api" ]; then
