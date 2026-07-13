@@ -8,11 +8,11 @@ title Air-gap connectivity — the jump box is the only bridge
 System_Ext(net, "Internet", "Upstream registries + Maven Central\ngcr.io · ghcr.io · docker.io · repo.maven.apache.org")
 
 System_Boundary(jbz, "Jump box  ·  dual-homed (internet + air-gapped VKS)") {
-  System(jb, "Mirror + offline builder", "crane copies images into Harbor;\nbuilds the deps-baked Maven builder")
+  System(jb, "Mirror + offline builder", "crane copies images into Harbor;\nbuilds the deps-baked Maven builder\n(only the Java app needs one — the Go app is stdlib-only)")
 }
 
 System_Boundary(agz, "Air-gapped VKS cluster  ·  NO internet access") {
-  System(cluster, "Harbor · Gitea · Tekton · ArgoCD · javawebapp", "The whole CI/CD platform runs here;\npulls images only from Harbor")
+  System(cluster, "Harbor · Gitea · Tekton · ArgoCD · the apps", "The whole CI/CD platform runs here; pulls images only from Harbor.\nOne app per row of apps/registry.tsv — today javawebapp + gowebapp")
 }
 
 Rel(jb, net, "1 · pull images + Maven deps", "HTTPS (internet side)")

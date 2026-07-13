@@ -3,35 +3,53 @@
 !include _style.puml
 LAYOUT_LEFT_RIGHT()
 
-title Container — Air-gapped CI/CD on VMware VKS
+' N apps, ONE walk. Everything below is driven by apps/registry.tsv (scripts/lib/apps.sh): adding an
+' app is one ROW — a Gitea repo pair, a Trigger CR, a rendered Pipeline, an ArgoCD Application, a
+' namespace and a host. Only the TEST task and the base images differ per language, which is why the
+' two app lanes are identical apart from those labels. Grounded in: apps/registry.tsv,
+' k8s/tekton/{eventlistener,trigger-app,pipeline}.yaml, k8s/argocd/application.yaml,
+' apps/java/javawebapp/pom.xml (Spring Boot 4.1 / Java 25), apps/go/gowebapp/go.mod (Go 1.26).
+
+title Container — Air-gapped CI/CD on VMware VKS (N apps from apps/registry.tsv)
+
+' COLLAPSED view: on a REAL lab Harbor + ArgoCD are Supervisor SERVICES that run beside this
+' cluster, not in it (see vks-topology.puml). The KinD stand-in runs them in-cluster, which is what
+' the single boundary below draws.
 
 Person(dev, "Developer")
 
 System_Boundary(jb, "Jump box (internet side)") {
-  Container(mirror, "Mirror + builder", "crane, podman/docker", "Pulls images (images.txt + Tekton manifests), builds the deps-baked Maven builder image, pushes all to Harbor")
+  Container(mirror, "Mirror + builder", "crane, podman/docker", "Pulls images (images.txt + Tekton manifests) and pushes them to Harbor.\nAlso builds the deps-baked Maven builder image — for the JAVA app only\n(the Go app is stdlib-only: its offline build fetches nothing)")
 }
 
-System_Boundary(vks, "Air-gapped VKS cluster") {
-  Container(gitea, "Gitea", "Go, SQLite", "Hosts javawebapp-app + javawebapp-deploy repos; fires push webhooks")
-  Container(el, "Tekton EventListener", "Tekton Triggers", "Turns Gitea push webhooks into PipelineRuns")
-  Container(pipe, "Tekton Pipeline", "Tekton Pipelines", "clone → mvn test (offline) → kaniko build+push → write-back image tag")
-  ContainerDb(harbor, "Harbor", "OCI registry (VKS-provided)", "Stores mirrored + built images", $tags="datastore")
-  Container(argo, "ArgoCD", "GitOps controller (VKS-provided)", "Watches javawebapp-deploy, syncs to the cluster")
-  Container(app, "javawebapp", "Spring Boot 4 / Java 25", "The demo web application")
+System_Boundary(vks, "Air-gapped VKS cluster (COLLAPSED — real lab: Harbor + ArgoCD are Supervisor Services beside it; see vks-topology)") {
+  Container(gitea, "Gitea", "Go, SQLite", "One repo PAIR per app:\njavawebapp-app + javawebapp-deploy\ngowebapp-app + gowebapp-deploy\nFires push webhooks")
+  Container(el, "Tekton EventListener 'apps'", "Tekton Triggers", "ONE listener for EVERY app — no inline trigger list.\nIt label-selects per-app Trigger CRs (vks-airgap-cicd/ci: app),\neach CEL-filtered on body.repository.name")
+  Container(pipe_java, "Pipeline javawebapp-ci", "Tekton Pipelines", "clone → maven-test (offline) → kaniko build+push → write-back tag")
+  Container(pipe_go, "Pipeline gowebapp-ci", "Tekton Pipelines", "clone → go-test → kaniko build+push → write-back tag")
+  ContainerDb(harbor, "Harbor", "OCI registry", "Mirrored images + one repo per app: apps/<app>:<commit>", $tags="datastore")
+  Container(argo, "ArgoCD", "GitOps controller", "One Application per app — each watches its own <app>-deploy repo")
+  Container(app_java, "javawebapp", "Spring Boot 4.1 / Java 25", "namespace javawebapp · javawebapp.vks.local")
+  Container(app_go, "gowebapp", "Go 1.26, net/http (stdlib-only)", "namespace gowebapp · gowebapp.vks.local")
   Container(dash, "Tekton Dashboard", "Tekton", "Read-only web UI for PipelineRuns / TaskRuns / logs")
 }
 
-Rel(dev, gitea, "git push", "HTTP")
+Rel(dev, gitea, "git push to <app>-app", "HTTP")
 Rel(dev, dash, "watch PipelineRuns", "HTTP")
 Rel(dev, argo, "watch sync (own LB)", "HTTPS (self-signed)")
-Rel(mirror, harbor, "push all images", "HTTPS (self-signed + CA)")
-Rel(gitea, el, "push webhook", "HTTP")
-Rel(el, pipe, "creates PipelineRun")
-Rel(pipe, harbor, "build+push app image (kaniko)\npull builder+base (containerd)")
-Rel(pipe, gitea, "commit new image tag to javawebapp-deploy", "git")
-Rel(argo, gitea, "poll javawebapp-deploy", "git")
-Rel(argo, app, "apply manifests", "kubectl")
-Rel(app, harbor, "pull image", "containerd")
+Rel(mirror, harbor, "push mirrored images\n+ the Maven builder image", "HTTPS (self-signed + CA)")
+Rel(gitea, el, "push webhook (one endpoint, all apps)", "HTTP")
+Rel(el, pipe_java, "Trigger javawebapp\nCEL: repository.name == javawebapp-app")
+Rel(el, pipe_go, "Trigger gowebapp\nCEL: repository.name == gowebapp-app")
+Rel(pipe_java, harbor, "push apps/javawebapp:<sha> (kaniko)\npull deps-baked builder + JRE base")
+Rel(pipe_go, harbor, "push apps/gowebapp:<sha> (kaniko)\npull golang + distroless base")
+Rel(pipe_java, gitea, "commit new tag to javawebapp-deploy", "git")
+Rel(pipe_go, gitea, "commit new tag to gowebapp-deploy", "git")
+Rel(argo, gitea, "poll each <app>-deploy", "git")
+Rel(argo, app_java, "apply manifests", "kubectl")
+Rel(argo, app_go, "apply manifests", "kubectl")
+Rel(app_java, harbor, "pull image", "containerd")
+Rel(app_go, harbor, "pull image", "containerd")
 
 SHOW_LEGEND()
 @enduml

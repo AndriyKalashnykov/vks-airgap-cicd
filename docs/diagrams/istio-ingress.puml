@@ -43,9 +43,10 @@ Deployment_Node(s2, "SCENARIO 2 — the platform ALREADY installed Istio   (INGR
   }
 }
 
-Deployment_Node(be, "Backend Services (both scenarios)", "NO sidecars — the gateway proxies straight to each ClusterIP") {
+Deployment_Node(be, "Backend Services (both scenarios)", "NO sidecars — the gateway proxies straight to each ClusterIP.\nOne route per BACKEND, each in its backend's namespace;\nthe APP routes come from apps/registry.tsv (gitea + the dashboard are not apps)") {
   Container(bgitea, "gitea", "gitea.vks.local")
   Container(bapp, "javawebapp", "javawebapp.vks.local")
+  Container(bapp2, "gowebapp", "gowebapp.vks.local")
   Container(btkn, "tekton-dashboard", "tekton.vks.local")
 }
 
@@ -56,9 +57,12 @@ Rel(s1g, s1envoy, "binds (selector matches)")
 Rel(s2g, s2autogw, "Istio AUTO-PROVISIONS this from our Gateway")
 Rel(s2vs, s2envoy, "binds ONLY with the DISCOVERED selector label")
 Rel(s1vs, s1g, "gateways: <gw-ns>/<name>")
-Rel(s1envoy, bapp, "routes to ClusterIP")
-Rel(s2autogw, bapp, "routes to ClusterIP")
-Rel(s2envoy, bapp, "routes to ClusterIP")
+Rel(s1envoy, bapp, "routes to each app's ClusterIP")
+Rel(s1envoy, bapp2, "routes to each app's ClusterIP")
+Rel(s2autogw, bapp, "routes to each app's ClusterIP")
+Rel(s2autogw, bapp2, "routes to each app's ClusterIP")
+Rel(s2envoy, bapp, "routes to each app's ClusterIP")
+Rel(s2envoy, bapp2, "routes to each app's ClusterIP")
 
 SHOW_LEGEND()
 @enduml

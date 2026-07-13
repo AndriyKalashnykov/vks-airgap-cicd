@@ -9,13 +9,13 @@ Person(dev, "Developer", "Pushes application code changes")
 Person(op, "Platform operator", "Runs the jump-box mirror + installers")
 
 System_Boundary(airgap, "Air gap") {
-  System(platform, "VKS CI/CD Platform", "Gitea + Tekton build/test, image to Harbor, ArgoCD GitOps deploy to the VKS cluster")
+  System(platform, "VKS CI/CD Platform", "Gitea + Tekton build/test, image to Harbor, ArgoCD GitOps deploy to the VKS cluster.\nN apps from apps/registry.tsv (today: javawebapp · gowebapp) — same walk for each")
 }
 
 System_Ext(upstream, "Upstream registries + Maven Central", "gcr.io / ghcr.io / docker.io / repo.maven.apache.org")
 
-Rel(dev, platform, "git push (app change)", "HTTPS/git")
-Rel(platform, dev, "serves the running web UI", "HTTP")
+Rel(dev, platform, "git push (change to any app)", "HTTPS/git")
+Rel(platform, dev, "serves each app's running web UI", "HTTP")
 Rel(op, upstream, "pull images/deps on the internet-connected jump box", "HTTPS")
 Rel(op, platform, "mirror images into Harbor, install + wire", "crane / kubectl")
 

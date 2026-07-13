@@ -3,7 +3,10 @@
 !include _style.puml
 LAYOUT_LEFT_RIGHT()
 
-title Deployment — jump box + air-gapped VKS cluster
+' COLLAPSED single-cluster view (what the KinD stand-in actually runs). On a REAL lab Harbor and
+' ArgoCD are Supervisor SERVICES on the Supervisor — beside this cluster, not inside it. Drawing
+' them in here is the KinD topology; vks-topology.puml is the diagram that shows the real split.
+title Deployment — jump box + cluster (COLLAPSED view: on a real lab Harbor + ArgoCD run on the Supervisor — see vks-topology)
 
 Person(op, "Operator", "browses the UIs at *.vks.local")
 
@@ -12,8 +15,8 @@ Deployment_Node(jb, "Jump box", "Ubuntu or PhotonOS · internet-connected") {
   Container(mir, "Mirror + builder", "crane copy · builder image build")
 }
 
-Deployment_Node(vks, "VKS workload cluster", "VMware vSphere Kubernetes Service · air-gapped") {
-  Deployment_Node(ns_harbor, "namespace: harbor (VKS-provided)", "") {
+Deployment_Node(vks, "Cluster (COLLAPSED / KinD stand-in)", "air-gapped · on a REAL lab Harbor + ArgoCD are Supervisor Services\nOUTSIDE this cluster (see vks-topology); everything else is installed here") {
+  Deployment_Node(ns_harbor, "namespace: harbor (real lab: a Supervisor Service, not here)", "") {
     ContainerDb(harbor, "Harbor", "OCI registry, LoadBalancer", $tags="datastore")
   }
   Deployment_Node(ns_gitea, "namespace: gitea", "") {
@@ -24,13 +27,17 @@ Deployment_Node(vks, "VKS workload cluster", "VMware vSphere Kubernetes Service 
     Container(dash, "Tekton Dashboard", "read-only web UI")
   }
   Deployment_Node(ns_ci, "namespace: ci", "") {
-    Container(ci, "Pipeline + EventListener", "PipelineRuns, el-javawebapp")
+    Container(ci, "EventListener 'apps' + one Pipeline per app", "ONE listener (el-apps) label-selects the per-app Trigger CRs;\neach app's TriggerTemplate creates its <app>-ci PipelineRun")
   }
-  Deployment_Node(ns_argo, "namespace: argocd (VKS-provided)", "") {
-    Container(argo, "ArgoCD", "Application controller")
+  Deployment_Node(ns_argo, "namespace: argocd (real lab: a Supervisor Service, not here)", "") {
+    Container(argo, "ArgoCD", "Application controller · one Application per app")
   }
-  Deployment_Node(ns_app, "namespace: javawebapp", "") {
-    Container(app, "javawebapp", "Deployment (2 replicas) + Service")
+  ' One namespace PER APP, named after the app (scripts/lib/apps.sh: APP_NAMESPACE="$name").
+  Deployment_Node(ns_app_java, "namespace: javawebapp", "") {
+    Container(app_java, "javawebapp", "Spring Boot 4.1 / Java 25\nDeployment (2 replicas) + Service")
+  }
+  Deployment_Node(ns_app_go, "namespace: gowebapp", "") {
+    Container(app_go, "gowebapp", "Go 1.26 (stdlib-only)\nDeployment (2 replicas) + Service")
   }
   Deployment_Node(ns_ing, "namespace: istio-ingress | traefik", "") {
     Container(ing, "Ingress gateway", "LoadBalancer · INGRESS_CONTROLLER=istio (we install) | istio-existing (attach to the platform's mesh — the REAL-LAB case) | traefik")
@@ -40,15 +47,18 @@ Deployment_Node(vks, "VKS workload cluster", "VMware vSphere Kubernetes Service 
 Rel(mir, harbor, "push images", "HTTPS (self-signed + CA)")
 Rel(cli, gitea, "install + seed", "kubectl")
 Rel(cli, tk, "install", "kubectl")
-Rel(ci, harbor, "build+push / pull", "kaniko / containerd (TLS + CA)")
-Rel(ci, gitea, "clone + write-back", "git")
-Rel(argo, gitea, "sync from javawebapp-deploy", "git")
-Rel(argo, app, "deploy", "kubectl")
-Rel(app, harbor, "pull image", "containerd (TLS + CA)")
-Rel(op, ing, "browse Gitea / Tekton / app UIs", "*.vks.local / HTTP")
-Rel(ing, gitea, "route", "HTTP")
-Rel(ing, app, "route", "HTTP")
-Rel(ing, dash, "route", "HTTP")
+Rel(ci, harbor, "build+push apps/<app>:<sha> / pull bases", "kaniko / containerd (TLS + CA)")
+Rel(ci, gitea, "clone <app>-app + write tag back to <app>-deploy", "git")
+Rel(argo, gitea, "sync from each <app>-deploy", "git")
+Rel(argo, app_java, "deploy", "kubectl")
+Rel(argo, app_go, "deploy", "kubectl")
+Rel(app_java, harbor, "pull image", "containerd (TLS + CA)")
+Rel(app_go, harbor, "pull image", "containerd (TLS + CA)")
+Rel(op, ing, "browse Gitea / Tekton / the app UIs", "*.vks.local / HTTP")
+Rel(ing, gitea, "route gitea.vks.local", "HTTP")
+Rel(ing, app_java, "route javawebapp.vks.local", "HTTP")
+Rel(ing, app_go, "route gowebapp.vks.local", "HTTP")
+Rel(ing, dash, "route tekton.vks.local", "HTTP")
 Rel(op, argo, "browse ArgoCD (own LB)", "HTTPS (self-signed)")
 Rel(op, harbor, "browse Harbor (own LB)", "HTTPS (self-signed)")
 
