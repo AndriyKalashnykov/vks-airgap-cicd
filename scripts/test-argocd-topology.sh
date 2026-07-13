@@ -253,5 +253,35 @@ for f in 70-configure-argocd.sh 91-e2e-tenant-mechanism.sh; do
   fi
 done
 
+# ---------------------------------------------------------------------------------------------
+# 5. THE TENANT PATH MUST NOT DIE BEFORE IT CAN CHOOSE ITS MECHANISM.
+#
+# 70 used to `die` on the ArgoCD-namespace probe — on Forbidden OR NotFound — at a line that runs
+# BEFORE ARGOCD_MECHANISM is even read. So `ARGOCD_MECHANISM=api`, the TENANT'S ONLY PATH, could never
+# rescue it:
+#   * on a lab the GUEST cluster has no `argocd` namespace at all (ArgoCD is a Supervisor Service in
+#     ANOTHER cluster) -> NotFound -> die.
+#   * a tenant pointing at the Supervisor without k8s RBAC there -> Forbidden -> die.
+# `make gitops` therefore could not complete for a Scenario-2 tenant following our own runbook — and
+# KinD cannot show it, because KinD is ONE cluster where the namespace always exists and is readable.
+#
+# The probe is now a MEASUREMENT that feeds the ladder. Only MECH=kubectl may die on it.
+PF70="${SCRIPT_DIR}/70-configure-argocd.sh"
+if [ "$(sed 's/#.*//' "$PF70" | sed -n '/ka get ns/,/^}/p' | grep -c 'die ' || true)" -gt 0 ]; then
+  bad "70 DIES on the ArgoCD-namespace probe — that runs BEFORE ARGOCD_MECHANISM is read, so the TENANT (api) path can never be reached"
+else
+  ok "70 does not die on the ArgoCD-namespace probe (it MEASURES; the tenant can still reach api/request)"
+fi
+if [ "$(sed 's/#.*//' "$PF70" | grep -c 'argocd_ns_readable' || true)" -gt 0 ]; then
+  ok "the namespace probe feeds the mechanism ladder (argocd_ns_readable)"
+else
+  bad "70 has no argocd_ns_readable measurement — an unreadable namespace cannot fall through to api"
+fi
+if [ "$(sed 's/#.*//' "$PF70" | grep -c 'ARGOCD_MECHANISM=kubectl, but this kubeconfig' || true)" -gt 0 ]; then
+  ok "an EXPLICIT ARGOCD_MECHANISM=kubectl still dies when kubectl is unusable (the guard is intact)"
+else
+  bad "ARGOCD_MECHANISM=kubectl no longer fails loudly when kubectl cannot write — it would silently do nothing"
+fi
+
 [ "$fail" = 0 ] && { echo "test-argocd-topology: OK"; exit 0; }
 echo "test-argocd-topology: FAILED" >&2; exit 1
