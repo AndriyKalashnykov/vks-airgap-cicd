@@ -28,11 +28,29 @@ import sys
 # mutation hidden mid-chain (`grep -q x && git push`) IS. Read-only git (log/diff/show/status/
 # rev-parse/ls-remote/cat-file/grep/blame/worktree list) is deliberately NOT here: it is the
 # adversary's primary evidence tool and removing it is what makes the review worthless.
+# A COMMAND POSITION is not just "start of line". THREE THINGS CAN SIT IN FRONT OF `git` AND DID:
+#
+#   1. ENV-VAR ASSIGNMENTS -- and this is the one that actually escaped, on 2026-07-14 at 14:40:11.
+#      Our OWN git rules prescribe `GIT_AUTHOR_NAME="$(git config user.name)" ... git commit -F msg`
+#      to get authorship right. The subagent followed that recipe, the env prefix meant `git` was not at
+#      a "command position" by this regex's reckoning, and it sailed through: it created a branch,
+#      committed, pushed, and opened a PR -- with the gate installed, wired, firing, and green.
+#      The gate was never blind. It was looking for `git` at position zero while our own convention
+#      puts something in front of it.
+#   2. AN ABSOLUTE PATH: `/usr/bin/git commit`.
+#   3. GIT'S OWN GLOBAL OPTIONS: `git -C <dir> commit`, `git --git-dir=... commit` -- and `-C` is worse
+#      than a bypass, it lets an agent mutate a DIFFERENT repo entirely.
+#
+# All four forms are now blocked, and all are RED-proven. The lesson generalises past this hook: a
+# regex gate is only as good as its model of the SHELL, and the shell is more permissive than you think.
 BLOCKED = re.compile(
     r"""(?:^|[;&|`]|\$\()\s*
         (?:sudo\s+)?
+        (?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\$\([^)]*\)|\S*)\s+)*   # ENV PREFIX (the escape)
+        (?:/\S*/)?                                                            # absolute/relative path
         (?:
-            git\s+(?:commit|push|checkout|switch|reset|restore|stash|rebase|merge|cherry-pick
+            git(?:\s+(?:-C\s+\S+|-c\s+\S+|--git-dir=\S+|--work-tree=\S+|--exec-path=\S+))*
+               \s+(?:commit|push|checkout|switch|reset|restore|stash|rebase|merge|cherry-pick
                      |am|apply|clean|rm|mv|add|tag|branch\s+-[dDmM]|update-ref|gc|prune
                      |filter-branch|worktree\s+(?:add|remove|prune))
           | gh\s+(?:pr\s+(?:create|edit|merge|close|reopen|comment|review|ready)

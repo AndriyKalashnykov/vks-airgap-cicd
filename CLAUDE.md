@@ -78,6 +78,17 @@ across six round-trips, each looking like a fresh surprise:
 
 The tell that you skipped it: you are fixing the SECOND instance of a class you already fixed once.
 
+**🔴 SPAWN EVERY ADVERSARY WITH `isolation: "worktree"`. MANDATORY. NOT NEGOTIABLE.**
+A subagent's Bash runs in **your working directory**. Git's current branch is a fact about `.git/HEAD`
+**on disk**, not a per-process property — so when an agent runs `git checkout -b`, **you are now on its
+branch**, and every commit you make afterwards lands there. That is not a hypothetical: on 2026-07-14 an
+adversary did exactly that at **14:40:11**, and the next ~7 commits (mine) went to *its* branch while I
+believed I was on `gate/doc-target-coverage`. It had already rewritten five files and opened a PR.
+A worktree gives it its own checkout: it **physically cannot** touch your tree or your `HEAD`.
+(It does NOT stop a `push` — same remote, same creds — so it is a complement to the read-only hook, not a
+replacement. And **the hook itself is currently UNVERIFIED against a real subagent** — see the red section
+below before you rely on it.)
+
 **How to run it (NOT optional).** Use a **`Workflow`** (schema-forced output) or a **synchronous
 `Agent`** (`run_in_background: false`). Do **NOT** fire-and-forget a background `Agent`. Measured
 2026-07-12 in this repo: Workflow agents delivered **44/44**; background `Agent`s delivered **0/4**
@@ -356,6 +367,65 @@ When spawning subagents, always pass conventions from the respective skill into 
 The two BLOCKING triggers (before you implement · before you call the session done), how to run it
 (`Workflow` with a schema, or a synchronous `Agent` — never fire-and-forget), and what to do with the
 findings are all in Rule Zero. Do not duplicate them here.
+
+## 🔴 UNVERIFIED CONTROL — THE READ-ONLY HOOK MAY BE BLIND TO SUBAGENTS. TEST IT FIRST. (2026-07-14)
+
+**Do not trust `subagent-readonly-gate.py` until you have run the test below. It has never been proven to
+block a real subagent — only to block a JSON payload I hand-fed it.**
+
+### What is PROVEN
+
+| | |
+|---|---|
+| the hook's LOGIC | ✅ fed a subagent-shaped payload (`agent_type` set + `git commit`), it returns **rc=2, blocked**. 17/17 assertions. |
+| the hook is WIRED AND FIRING | ✅ instrumented it to log every invocation, ran a Bash call: `FIRED tool=Bash agent_id=None agent_type=None`. It runs. |
+| **a subagent is actually BLOCKED by it** | ❌ **NEVER TESTED.** And the evidence says it is not: on 2026-07-14 at **14:40:11** a subagent ran `git checkout -b`, `git commit`, `git push` and `gh pr create` — **while this hook was wired for `Bash`** (`git reflog` has the proof). |
+
+### The suspected defect — a FAIL-OPEN in our own gate
+
+```python
+if not (data.get("agent_id") or data.get("agent_type")):
+    return 0                      # "must be the main agent — allow"
+```
+
+**If the harness does NOT populate `agent_id`/`agent_type` in the PreToolUse payload for subagents, then
+every subagent is indistinguishable from the main agent and the gate waves EVERYTHING through** — while
+looking installed, and green. That is this repo's house failure (*a gate that passes by not looking*)
+committed by the very thing built to prevent it, and it manufactured false confidence: three unbidden
+subagent mutations (two tree-rewrites + a commit/push/PR) happened with the "sandbox" in place.
+
+### THE TEST (5 minutes; do it before relying on any subagent brief)
+
+Hook *wiring* loads at SESSION START, but the hook *script* is re-read from disk on every call — so:
+
+1. Add to the top of `main()` in `subagent-readonly-gate.py`, right after the `json.load`:
+   ```python
+   open("/tmp/hook-fired.log","a").write("FIRED tool=%s agent_id=%s agent_type=%s\n" % (
+       data.get("tool_name"), data.get("agent_id"), data.get("agent_type")))
+   ```
+2. Spawn ANY subagent and have it run **one Bash command** (`git status --short` — read-only).
+3. `grep -v 'agent_id=None' /tmp/hook-fired.log`
+   - **a line appears** → subagents ARE identified → the gate is real; the 14:40 incident needs another explanation (find it).
+   - **nothing** → **the gate is BLIND. It protects nothing.** Fix it, and do not brief another read-only agent until you have.
+4. Remove the probe.
+
+### If it is blind — the two fixes, in order
+
+1. **`isolation: "worktree"` on EVERY adversary spawn, mandatory.** It does not depend on the harness
+   populating any field: the agent gets its own checkout and **physically cannot** touch your working tree
+   or your `HEAD`. It does NOT stop a `push` (same remote, same creds) — but it stops the two things that
+   actually hurt: clobbering in-flight edits, and switching the branch under you.
+   **This session's damage would have been prevented by it, and the rules already said to use it. I did not.**
+2. **Make the hook FAIL CLOSED**: treat an unidentifiable caller as a subagent unless it proves otherwise.
+   A mis-detection then blocks *me*, loudly — instead of letting an agent through, silently. Same
+   failure-polarity argument that settled the `check-tools` design: a false RED is recoverable, a false
+   GREEN is not.
+
+### Also true, and I only said it after shipping
+
+**A hook added mid-session does NOT protect that session** — the `PreToolUse` wiring in
+`.claude/settings.json` is read at session start. `adversary-first-gate.py` (added 2026-07-14) therefore
+protected **nothing** on the day it was written. Say that out loud when shipping a hook.
 
 ## ✅ THE RE-TEST MATRIX IS DONE — 6/6 GREEN (air-gap toolchain session, 2026-07-14 evening)
 
