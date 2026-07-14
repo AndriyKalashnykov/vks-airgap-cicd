@@ -42,18 +42,8 @@ elif [ -n "${ARGOCD_SERVER:-}" ]; then
     *)                  argocd_url="${argo_scheme}://${ARGOCD_SERVER}" ;;
   esac
 else
-  # A SENTENCE IN A URL COLUMN DESTROYS THE TABLE. Keep the cell short and put the instruction in a
-  # footnote under the table — the reader still gets the whole message, and every other row stays legible.
-  #
-  # The note must be right in EVERY flow. Two earlier drafts were not:
-  #   1. "discover it, then set ARGOCD_SERVER in .env (see docs/scenario-2.md)" — TENANT advice, and it
-  #      sent the KinD reader (the likeliest reader of this table) to edit a file they must not edit.
-  #   2. "KinD: run 'make install-argocd'" — an instruction they do not need: the KinD flow installs
-  #      ArgoCD as part of `make e2e-kind` / `make install-all` and PUBLISHES the address itself.
-  # In KinD there is nothing for the operator to DO here, so do not give them a chore — tell them it fills
-  # itself in. Only the real lab needs an action.
+  # A SENTENCE IN A URL COLUMN DESTROYS THE TABLE. Keep the cell short; the instruction goes in a footnote.
   argocd_url="<not set>"
-  argocd_note="ArgoCD's address is not set yet.  KinD: it is discovered and filled in automatically when ArgoCD is installed.  Real lab: set ARGOCD_SERVER in .env."
 fi
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
@@ -164,6 +154,27 @@ done <<EOF
 $rows
 EOF
 
-# Footnotes: anything too long for a cell lives here, so the table stays readable.
-[ -n "${argocd_note:-}" ] && printf '\n  note: %s\n' "$argocd_note"
+# --- footnote: WHAT IS NOT REAL YET, and whose job it is to fix ------------------------
+#
+# ArgoCD used to be the ONLY row with a note, and that made the table LIE BY CONTRAST: ArgoCD honestly
+# printed `<not set>` while Harbor printed `https://harbor.vks.local` / `Harbor12345` — values that are
+# EQUALLY unreal (they are .env.example defaults). A reader concludes "Harbor is configured, ArgoCD is
+# not", when NEITHER is. ArgoCD only looked different because it happens to have no default, which is an
+# accident of .env.example, not a fact about the system.
+#
+# So the footnote is about the STATE, not about one service:
+#   * nothing installed  -> EVERY value here is a default. Say which ones fill themselves in (KinD) and
+#                           which the operator must supply (a real lab).
+#   * installed, but ArgoCD's address still unknown -> that IS a genuine per-service gap; name it.
+if [ "$_have_sink" = 0 ]; then
+  printf '\n  note: nothing is installed yet, so EVERY value above is a default from .env.example —\n'
+  printf '        including Harbor'\''s and Gitea'\''s. None of them exists.\n'
+  printf '          KinD     : the real addresses and passwords are discovered and filled in for you by\n'
+  printf '                     the install (make e2e-kind / make install-all). Set nothing by hand.\n'
+  printf '          Real lab : you supply HARBOR_URL + HARBOR_PASSWORD (and ARGOCD_SERVER) in .env —\n'
+  printf '                     see docs/scenario-1.md (you install) or docs/scenario-2.md (you are a tenant).\n'
+elif [ "$argocd_url" = "<not set>" ]; then
+  printf '\n  note: ArgoCD'\''s address is not set. KinD fills it in automatically when ArgoCD is installed;\n'
+  printf '        on a real lab, set ARGOCD_SERVER in .env.\n'
+fi
 echo
