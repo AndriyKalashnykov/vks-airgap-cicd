@@ -277,11 +277,62 @@ The two BLOCKING triggers (before you implement · before you call the session d
 (`Workflow` with a schema, or a synchronous `Agent` — never fire-and-forget), and what to do with the
 findings are all in Rule Zero. Do not duplicate them here.
 
-## ▶️ HANDOFF 2026-07-13 (evening) — CONTAINER ENGINE — START HERE
+## ▶️ HANDOFF 2026-07-14 — ALL 8 E2E PERMUTATIONS GREEN — START HERE
 
-**PR #199 MERGED** (`fix/podman-default`) — all gates green. **PR #201 open** (this handoff + the
-subagent read-only gate). Note #199 **auto-merged on green between two pushes**, stranding a commit
-on the branch — if a PR seems to be missing part of its content, check for exactly that race.
+`main` clean · **0 open PRs** · 7 PRs merged this session (#213–#218 + follow-ups).
+
+**Every e2e permutation passes, and each was checked against what the log DID, not its exit code:**
+
+| Leg | Proven by |
+|---|---|
+| `e2e-kind` | CPK CRD mgmt **disabled** · CRDs from the **carried bundle** · **SSA field manager** · all 4 hosts served through the ingress |
+| `e2e-kind-istio-existing` | attach mode · 2 demonstrated REDs · foreign selector **discovered** · **both** route APIs |
+| `e2e-kind-tenant` | zero k8s RBAC in `ns/argocd`; Applications via `argocd-server` |
+| `e2e-kind-cross-cluster` | RED refusal + hub/guest registration |
+| `e2e-kind-both` | secure **and** insecure Harbor, each leg reporting its **true mode** |
+| `verify-ingress-both` | istio + traefik |
+| `jumpbox-both` | **Photon AND Ubuntu**, both `HTTP 200` to Harbor over HTTPS |
+| `e2e-sneakernet` | 36 images carried to a fresh box; **36/36 verified intact** on the far side |
+
+### The one thing to internalise from this session
+
+**Every single bug was something that REPORTED SUCCESS WITHOUT DOING THE WORK, with a green gate agreeing.**
+
+- Harbor was **wiped by our own installer**; a surviving Redis descriptor cache HEAD-200'd the missing
+  blobs, so `crane` skipped all 36 uploads and **exited 0** (#213). ⚠️ This also **DISPROVED** the
+  long-standing "concurrent load corrupts Harbor" rule — see the SETTLED section below.
+- The **prose-secret gate could not be reached** by the only PR shape that can add a prose secret
+  (docs-only PRs skip `static-check`), and **nine** gates silently skipped when their tool was absent (#214).
+- The cross-cluster guard was **dead code** for the documented `.env` setup (#215).
+- The **Gateway-API CRD install had never executed** — its acceptance check (`CRDs: PRESENT`) was already
+  true before the code existed, because cloud-provider-kind installed them (#216).
+- **`grep` in a pipeline under `set -e`** killed scripts **4×** — exit **1** on no-match, exit **2** on a
+  **missing file**. Signature every time: **a non-zero exit with NO output** (#217 + follow-ups).
+- **One rename (#192) produced four breakages**, each found by a different runtime path (a stale file on
+  disk, a live cluster, a second OS). Enumerated lists rot; derive them (#218).
+
+**5 of those were found by RUNNING the e2e matrix, not by writing code.** Six of eight legs were green
+immediately; the last two cost five fix rounds. `static-check` was green throughout.
+
+### Still open
+
+1. **The docker-only claim is still unproven** — see the NEXT TASK section below. It is NOT provable with
+   `make e2e-kind` (that target requires docker regardless of `CONTAINER_ENGINE`).
+2. **The jumpbox Makefile block should be a script.** Every silent failure above happened inside one
+   50-line `\`-continued recipe. A recipe cannot be `shellcheck`ed, unit-tested, or coherently
+   `set -euo pipefail`'d. Move it to `scripts/` (portfolio rule now in `/makefile`).
+3. **Sweep the `.env.kind` → `.env.state` rename once more.** It has produced four breakages; comments
+   still claim `kind-down` clears `.env.kind`. Grep the OLD name repo-wide and fix the class.
+4. **A real lab.** Everything about the Supervisor topology, the `vcf` CLI auth flow, and whether a VKS
+   guest cluster ships the Gateway API CRDs remains **UNVERIFIED** — no amount of KinD green changes that.
+
+---
+
+### Previous handoff (2026-07-13, evening) — container engine
+
+**PR #199 MERGED** (`fix/podman-default`) — all gates green. Note #199 **auto-merged on green between two
+pushes**, stranding a commit on the branch — if a PR seems to be missing part of its content, check for
+exactly that race.
 
 ### What landed in #199
 
@@ -512,7 +563,7 @@ TMM catalog lists Harbor/Contour/ArgoCD, not Istio); "Istio has no credentials";
 selector-is-the-helm-release-name discovery via port 15021; `44-install-ingress.sh:16` genuinely
 surviving the `.env.example` clobber; and the ingress-gateway-off-by-default fact (primary-sourced).
 
-### 🔴 THE GATEWAY-API CRD INSTALL COULD NOT HAVE BEEN PROVEN BY THE PLAN WRITTEN HERE — and the plan itself was the trap
+### ✅ PROVEN (#216) — the Gateway-API CRD install now actually RUNS. The plan that "verified" it was the trap
 
 The acceptance list that used to sit here was **unsatisfiable**, and following it would have produced a
 confident **FALSE PROOF**. Keeping the story because the shape of the error is the lesson.
@@ -546,21 +597,38 @@ claim is *we install X*, the assertion must distinguish **our** X from **anyone 
   test pass with CPK's channel off, and *more faithful*: cluster-scoped CRDs belong to the mesh admin,
   never the tenant. It also asserts they are **ABSENT first**, which is the honest tenant starting state.
 
+**PROVEN on a fresh cluster (e2e-kind, rc=0):**
+`cloud-provider-kind: Gateway API CRD management is DISABLED (we install them ourselves), 0 crash lines`
+· `installing Gateway API CRDs v1.5.1 from the carried bundle (air-gap)` — **the air-gap branch executed
+for the first time in this repo's life**; it was dead code (`MANIFEST_DIR` was never set on this path), so
+it had ALWAYS fetched from github.com, and the mirror had been faithfully downloading a file nothing read
+· `established (bundle-version=v1.5.1, SSA field manager: kubectl)` — the assertion **presence could never
+make**. And `make e2e-kind-istio-existing` still passes, because the platform-team fixture now installs the
+CRDs (which is also more faithful: cluster-scoped CRDs are the mesh admin's, never the tenant's).
+
 **Renovate is grouped** (`istio + gateway-api (version-locked)`) so a bot cannot move the CRD version
 alone. Note this is now doubly load-bearing: gateway-api **v1.6**'s bundle ships a
 `ValidatingAdmissionPolicy` denying CRDs older than v1.5.0, and CPK v0.11.1 vendors **v1.5.1** — so if
 CPK's channel were ever re-enabled *and* the pin moved to v1.6, CPK's CRD install would be **denied**,
 it would abort its whole controller, and **every LoadBalancer would silently stop getting an IP**.
 
-### 📋 OPEN — audit EVERY gate for MISPLACEMENT (a gate in the wrong target is green because nobody asked it)
+### ✅ DONE (#214) — the gate-misplacement audit. It found a CRITICAL, and the suspicion was right
 
-`check-vks-terminology` is a **docs** gate that lived only in `static-check` — which CI's paths-filter
-**skips on a docs-only PR**. So a docs PR reintroduced the phantom noun that gate exists to catch, and
-**CI certified it green** (#208 moved it to `docs-lint` and RED-proved it). Assume it is not the only one.
+The suspicion below was correct, and worse than feared. **`prose-secrets` — the gate that exists to catch
+credentials written in PROSE in `*.md`, the class gitleaks provably misses — lived only in `static-check`,
+which CI skips on a docs-only PR. A docs-only PR is the ONLY shape that can add prose to a runbook.**
+100% evasion. Proven: a planted ``admin / <22-char random>`` in a `.md` fails `check-prose-secrets.sh`
+(rc=1) while `make docs-lint` — the only gate CI ran for that PR — exits **0**, and `make secrets` says
+"no leaks found" (gitleaks misses prose, which is the whole point).
 
-**Do:** for every gate in `static-check` / `docs-lint` / `lint`, ask *which files does it protect* and
-*which CI job actually runs it, under which paths-filter?* A gate that guards `docs/**` but runs only
-in the `code`-filtered job is dead. Fix by moving the gate to the job its own paths trigger.
+Fixed: a CI `secrets` job with **no `if:` at all** (every path is code or docs, so `code || docs` is a
+tautology — the security gate is now immune to a future classifier bug). Plus three more from the same
+audit: `gitleaks detect` scans **git history, not the working tree** (CI worked only by ACCIDENT — the
+shallow checkout; `fetch-depth: 0` would have disarmed it); **nine** gates silently skipped when their
+tool was missing (now: warn locally, **DIE in CI**); and `check-doc-make-targets`, because the doc gates
+demanded `make X` commands they never checked existed.
+
+The original note, kept because the reasoning generalises:
 
 **Suspects:** `check-readme-scenarios`, `check-how-provenance`, `check-doc-command-count` (docs gates —
 confirm they are in `docs-lint`, not `static-check`) · `check-env-coverage` / `check-env-clobber` (they
