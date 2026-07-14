@@ -139,8 +139,16 @@ fi
 # that had just prompted the operator for a password — the single most misleading thing this harness
 # could possibly do, since the sudo column IS the deliverable.)
 N_SUDO="$(engine_sudo_calls)"
-SUDO_TXT="NO"
-[ "$N_SUDO" -gt 0 ] && SUDO_TXT="YES (${N_SUDO} call(s))"
+if ! engine_sudo_measurable; then
+  # uid 0: engine_sudo escalated nothing (there was nothing to escalate to) and the /etc write succeeded
+  # anyway. The counter therefore reads 0 — which is NOT "sudo=NO", it is "we could not measure this".
+  # Printing NO here would resurrect the exact lie this harness exists to prevent, so we refuse.
+  SUDO_TXT="UNMEASURABLE (running as root — re-run as a normal user)"
+elif [ "$N_SUDO" -gt 0 ]; then
+  SUDO_TXT="YES (${N_SUDO} call(s))"
+else
+  SUDO_TXT="NO"
+fi
 printf '\n'
 printf 'LEG %-16s engine=%-6s mode=%-16s CA=%-42s sudo=%s\n' \
   "${JUMPBOX_OS:-host}" "$ENGINE" "$MODE" "$CA_METHOD" "$SUDO_TXT"

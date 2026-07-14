@@ -134,6 +134,56 @@ pkg_refresh() {
   esac
 }
 
+# engine_choice — which engine is the BOOTSTRAP going to install? podman unless the operator asked for
+# docker BY NAME. Pure: it prints, it installs nothing, it touches no PATH. Kept separate from
+# container_engine() (which asks "what is INSTALLED on this box?") because the gate must be able to prove
+# the DEFAULT — "CONTAINER_ENGINE unset ⇒ podman, and docker is never even in the package list" — on a
+# machine that happens to have docker installed.
+engine_choice() {
+  local eng="${CONTAINER_ENGINE:-podman}"
+  case "$eng" in
+    podman|docker) printf '%s' "$eng" ;;
+    *) die "CONTAINER_ENGINE='$eng' is not supported (use 'podman' — the default — or 'docker')" ;;
+  esac
+}
+
+# engine_packages <engine> <pkg-mgr> — PRINT the OS packages that <engine> needs on <pkg-mgr>.
+#
+# A PURE FUNCTION: it prints names and installs NOTHING. That is deliberate — it makes the bootstrap's
+# engine choice TESTABLE OFFLINE, which is the only way to keep the project's central invariant honest:
+#
+#     DOCKER IS NEVER *REQUIRED*. It is only ever installed because the operator ASKED for it.
+#
+# The old gate (test-container-engine.sh #5) scanned for docker INVOCATIONS at a command position. It
+# could not see a docker *dependency* — `pkg_install docker` matches none of its alternatives (PROVEN:
+# the regex is silent on that exact string) — so an engine-aware bootstrap would have started installing
+# a docker daemon on every jump box while the gate kept printing "no docker dependency". A gate that goes
+# green on the change it forbids is not a gate. Check 7 now EXECUTES this function and asserts the LIST.
+#
+# VERIFIED PACKAGE FACTS (ran-it, 2026-07-14 — do not "tidy" these from memory):
+#   apt  podman : podman pulls crun (a hard Depends) but uidmap/passt/slirp4netns are *Recommends*, which
+#                 our --no-install-recommends DROPS -> rootless podman breaks without them.
+#   tdnf podman : pulls uidmap + slirp4netns + fuse-overlayfs WITH podman, but NOT crun.
+#   apt  docker : docker.io + rootlesskit + uidmap + dbus-user-session + slirp4netns + fuse-overlayfs.
+#                 *** UBUNTU RELEASE SPLIT *** docker.io is 29.1.3 on BOTH 24.04 and 26.04, but only
+#                 26.04's deb SHIPS the rootless helper (/usr/share/docker.io/contrib/, OFF PATH);
+#                 24.04's deb ships ZERO rootless files. So on 24.04 rootless docker would need
+#                 docker-ce-rootless-extras from download.docker.com -- a THIRD-PARTY REPO, which we
+#                 REFUSE to add to someone else's jump box. There, docker = ROOTFUL = a sudo per registry.
+#   tdnf docker : docker + docker-rootless + rootlesskit all resolve first-class (rc=0, no third-party
+#                 repo), and Photon puts dockerd-rootless.sh ON PATH (/usr/bin). Photon is the EASY OS
+#                 for rootless docker — the opposite of the usual assumption.
+engine_packages() {
+  local eng="${1:?engine}" mgr="${2:?pkg-mgr}"
+  case "${eng}:${mgr}" in
+    podman:apt-get) printf 'podman crun uidmap passt slirp4netns' ;;
+    podman:tdnf|podman:dnf) printf 'podman crun' ;;
+    docker:apt-get) printf 'docker.io rootlesskit uidmap dbus-user-session slirp4netns fuse-overlayfs' ;;
+    docker:tdnf|docker:dnf) printf 'docker docker-rootless rootlesskit shadow fuse-overlayfs slirp4netns' ;;
+    *) die "engine_packages: unsupported engine/pkg-mgr combination '${eng}/${mgr}'" ;;
+  esac
+}
+
 # pkg_install pkg1 [pkg2 ...] — installs packages using the host's manager.
 pkg_install() {
   [ "$#" -gt 0 ] || return 0
