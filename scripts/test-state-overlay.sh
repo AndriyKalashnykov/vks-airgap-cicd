@@ -178,6 +178,27 @@ else
 fi
 rm -rf "$lab"
 
+# 9b. state_claim_kind MUST SURVIVE AN UNSTAMPED SINK — under `set -euo pipefail`, called as a BARE
+#     statement, exactly as 05-kind-up.sh calls it.
+#     THE BUG IT CAUGHT: `kind="$(grep -m1 '^VKS_STATE_KIND=' "$f" | cut ... | tr ...)"`. With
+#     pipefail, a grep that finds NOTHING returns 1 -> the pipeline returns 1 -> the ASSIGNMENT fails
+#     -> set -e kills the caller. An unstamped sink has neither key, which is the very case this
+#     function exists for. `make kind-up` died right after "writing kubeconfig", with no message of
+#     its own. state_check has the same shape and survives only because it is called inside `if ...`,
+#     where set -e is suspended — so the unit that was exercised hid the bug in the one that wasn't.
+un="$(mktemp -d)"
+printf 'INGRESS_CONTROLLER=istio\n' > "${un}/.env.state"     # what a mid-run leg leaves behind
+if VKS_STATE_FILE="${un}/.env.state" bash -c '
+      set -euo pipefail
+      . scripts/lib/os.sh
+      state_claim_kind          # BARE statement — no `if`, no `||`. Exactly like 05-kind-up.sh.
+   ' >/dev/null 2>&1; then
+  ok "state_claim_kind survives an UNSTAMPED sink under set -euo pipefail (kind-up does not die)"
+else
+  bad "state_claim_kind KILLS its caller on an unstamped sink — 'make kind-up' dies after writing the kubeconfig"
+fi
+rm -rf "$un"
+
 # 10. ...and the KinD flow actually CALLS it, before its first write.
 kb="${REPO_ROOT}/scripts/05-kind-up.sh"
 claim_ln="$(sed 's/#.*//' "$kb" | grep -n 'state_claim_kind' | head -1 | cut -d: -f1)"
