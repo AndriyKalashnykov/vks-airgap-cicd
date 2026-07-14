@@ -68,7 +68,7 @@ make check-tools CHECK_TOOLS_PHASE=pre-carry
 **Expect:** the five carried tools report `CARRIED (in the bundle)` — **that is correct, they are not
 supposed to be here yet** — and everything the tarball *cannot* bring must show `OK`:
 
-```
+```text
   kubectl      CARRIED    (in the bundle)      <- the bundle brings these five
   crane        CARRIED    (in the bundle)
   awk          OK         GNU Awk 5.3.1        <- THESE are what you are checking
@@ -111,9 +111,9 @@ make bundle           # → vks-airgap-cicd-bundle-<date>.tar  + its .sha256
 `mirror-pull` **resumes** — re-run it after a dropped connection and it skips what already completed.
 
 > **`builder-build` is not optional for the Java app.** Its Maven dependencies are baked into an image on
-> the internet side, because the in-cluster Kaniko build cannot reach Maven Central. Box B cannot build it
-> (no internet) and the staging box cannot push it (no Harbor) — so it is **carried in the bundle** and
-> pushed on the far side by `make builder-push`.
+> the internet side, because the in-cluster Kaniko build cannot reach Maven Central. The jump box cannot
+> build it (no internet) and the staging box cannot push it (no Harbor) — so it is **carried in the bundle**
+> and pushed on the far side by `make builder-push`.
 
 ## Step 2 — carry
 
@@ -150,14 +150,13 @@ make verify
 **Do NOT run `make install-all` on the jump box** — it starts with `mirror`, which needs the internet.
 Run the steps above instead.
 
-**Ingress:** the default (`istio`) **installs from an internet Helm repo and cannot run here.** On the
-jump box use:
+**Ingress — pick one. All three work here; none needs the internet.**
 
-| | works air-gapped? |
+| | when |
 |---|---|
-| `INGRESS_CONTROLLER=traefik` | ✅ — image comes from Harbor, manifests are in the repo |
-| `INGRESS_CONTROLLER=istio-existing` | ✅ — attaches to a mesh the platform team already installed |
-| `INGRESS_CONTROLLER=istio` (default) | ❌ — `helm repo add istio-release.storage.googleapis.com` |
+| `INGRESS_CONTROLLER=istio` (default) | you install the mesh. Charts are carried in the bundle. |
+| `INGRESS_CONTROLLER=istio-existing` | the platform team already runs Istio — attach, install nothing. **The usual real-lab answer.** |
+| `INGRESS_CONTROLLER=traefik` | you want the smallest thing that routes. |
 
 ---
 

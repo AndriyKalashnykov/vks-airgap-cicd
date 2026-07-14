@@ -796,7 +796,13 @@ docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets
 	@# first lint happens in CI *after* it is pushed — a guaranteed green-local/red-CI round trip
 	@# for every new document. (Exactly how an MD040 shipped: the file was written, `make ci` went
 	@# green because git had never heard of it, and CI failed the moment it was committed.)
-	@files=$$(git ls-files --cached --others --exclude-standard '*.md'); \
+	@# docs/reviews/ is EXCLUDED, and it is not a loophole. Those files are the archived, verbatim output
+	@# of adversarial audits — one finding per heading, quoted as the agent wrote it. Two agents legitimately
+	@# flag the SAME file:line, so headings repeat (MD024); a quoted table cell is a fragment, so column
+	@# counts do not balance (MD056). Reformatting them to appease a linter would FALSIFY THE RECORD, which
+	@# is the one thing an audit archive must not do. Nobody reads them as a runbook. Every OPERATOR-facing
+	@# doc (README + docs/*.md) is still linted.
+	@files=$$(git ls-files --cached --others --exclude-standard '*.md' | grep -v '^docs/reviews/'); \
 	[ -n "$$files" ] || { echo "docs-lint: no markdown"; exit 0; }; \
 	if command -v markdownlint >/dev/null 2>&1; then markdownlint $$files; \
 	elif command -v npx >/dev/null 2>&1; then npx --yes markdownlint-cli@$(MARKDOWNLINT_VERSION) $$files; \

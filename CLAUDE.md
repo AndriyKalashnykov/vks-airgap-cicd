@@ -55,7 +55,7 @@ Before writing code that changes **what one side must provide to another** — t
 format, an API, "what the other machine needs" — the FIRST deliverable is the **contract, enumerated
 from the code**. Not recalled. Not reasoned. **Grepped.**
 
-```
+```text
 what does the far side actually RUN?        (bundle-load, mirror-push, mirror-verify, platform,
                                              gitops, install-ingress, verify)
   ↓ for each, what does it INVOKE?          (grep: binaries; `helm repo add`; https:// fetches;
@@ -63,6 +63,7 @@ what does the far side actually RUN?        (bundle-load, mirror-push, mirror-ve
   ↓ for each, mark it:                       CARRIED | PROVISIONED | *** MISSING ***
   ↓ PRINT THE DENOMINATOR                    ("scanned N scripts") — a gate that cannot tell you
                                              what it looked at cannot be trusted to have looked
+
 ```
 
 **A list you wrote from memory is not the contract; a grep is.** Ten minutes of this, once, up front,
@@ -74,7 +75,7 @@ across six round-trips, each looking like a fresh surprise:
 | bundle carried `helm` (62 MB) and **ZERO CHARTS** → the DEFAULT ingress could never install | `grep 'helm repo add' scripts/` on the air-gap path |
 | `awk` is **not on bare Photon**, and `lib/apps.sh` + `mirror-verify` need it | `grep -w awk scripts/` × what the bare image actually ships |
 | `envsubst`/`gawk` missing from `00-install-prereqs.sh` — the box `make deps` BUILDS | diff "what check-tools calls required" vs "what the bootstrap installs" |
-| a no-internet box retried **>2 min** then blamed googleapis; and `require_cmd crane` told an air-gapped operator to run a script that **downloads from the internet** | `grep -n 'https\?://' ` on every step `install-all` runs |
+| a no-internet box retried **>2 min** then blamed googleapis; and `require_cmd crane` told an air-gapped operator to run a script that **downloads from the internet** | `grep -n 'https\?://'` on every step `install-all` runs |
 
 The tell that you skipped it: you are fixing the SECOND instance of a class you already fixed once.
 
@@ -386,6 +387,7 @@ block a real subagent — only to block a JSON payload I hand-fed it.**
 ```python
 if not (data.get("agent_id") or data.get("agent_type")):
     return 0                      # "must be the main agent — allow"
+
 ```
 
 **If the harness does NOT populate `agent_id`/`agent_type` in the PreToolUse payload for subagents, then
@@ -399,10 +401,12 @@ subagent mutations (two tree-rewrites + a commit/push/PR) happened with the "san
 Hook *wiring* loads at SESSION START, but the hook *script* is re-read from disk on every call — so:
 
 1. Add to the top of `main()` in `subagent-readonly-gate.py`, right after the `json.load`:
+
    ```python
    open("/tmp/hook-fired.log","a").write("FIRED tool=%s agent_id=%s agent_type=%s\n" % (
        data.get("tool_name"), data.get("agent_id"), data.get("agent_type")))
    ```
+
 2. Spawn ANY subagent and have it run **one Bash command** (`git status --short` — read-only).
 3. `grep -v 'agent_id=None' /tmp/hook-fired.log`
    - **a line appears** → subagents ARE identified → the gate is real; the 14:40 incident needs another explanation (find it).
@@ -461,7 +465,7 @@ then prove which, because the converse error (dismissing a real bug as "just my 
 
 **The permutation matrix the owner asked for (2026-07-14) — none of it has been run since the changes:**
 
-```
+```text
 make bootstrap-engine-test      # 6 legs — REQUIRED: 00-install-prereqs.sh changed
 make e2e-kind                   # default ingress = istio -> now exercises the carried-chart path
 make e2e-kind-both              # secure + insecure Harbor
@@ -470,6 +474,7 @@ make jumpbox-matrix             # {photon,ubuntu} x {podman,docker}
 make verify-ingress-both        # istio + traefik
 make e2e-kind-istio-existing    # attach mode (2 REDs + both route APIs)
 make e2e-kind-tenant / -cross-cluster   # unchanged code, but they source lib/os.sh
+
 ```
 
 **Run them SERIALLY** — they mutate a shared cluster + registry, and parallel runs make any failure
@@ -649,6 +654,7 @@ For an operator on a rootful box, the honest command is:
 ```bash
 make trust-harbor              # prints the ONE sudo line; run it, then:
 make e2e-kind CONTAINER_ENGINE=docker
+
 ```
 
 ### NEXT
@@ -794,7 +800,7 @@ re-type one, or go read a script to know what should have happened — that step
   `vcf package install istio …` command that has not been verified against a primary source.
 - Anything else that assumes state a greenfield admin cluster does not have.
 
-### ✅ REFUTED 2026-07-14 — "the Gateway-API path is a KinD ARTEFACT" was WRONG. VKS SHIPS the CRDs.
+### ✅ REFUTED 2026-07-14 — "the Gateway-API path is a KinD ARTEFACT" was WRONG. VKS SHIPS the CRDs
 
 **The 2026-07-13 BLOCKING finding below is OVERTURNED by primary 9.1 sources** (deep-research +
 adversarial refutation, 2026-07-14; full record with URLs and quotes in

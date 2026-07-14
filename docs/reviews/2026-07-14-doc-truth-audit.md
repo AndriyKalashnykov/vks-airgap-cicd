@@ -10,6 +10,7 @@ against the code before you act on it. (That is the same discipline the findings
 a plausible-looking claim carrying the authority of having supposedly been checked is the failure mode.)
 
 Fixed on 2026-07-14, both CONFIRMED CRITICALs:
+
 - `README.md` Prerequisites ran `make fetch-harbor-ca` **before Harbor exists** — it dialled the
   placeholder `harbor.vks.local`, died, and the two steps after it never ran.
 - `docs/sneakernet.md` told the operator to expect `make check-tools` to be clean **before the carry**,
@@ -20,7 +21,6 @@ Still owed (a `scripts/` change, deferred while the e2e matrix was executing tha
 `03-check-tools.sh` should know the five carried tools are **carried**, not missing, and must not print
 "run `make deps`" on a box that has no internet.
 
-
 ## CRITICAL (13)
 
 ### `docs/prerequisites-manual.md:60-63`  — docs/prerequisites-manual.md
@@ -29,6 +29,7 @@ Still owed (a `scripts/` change, deferred while the e2e matrix was executing tha
 - **reality:** `~/.local/bin` holds the mise BINARY, not the tools mise manages (those need `mise activate` or ~/.local/share/mise/shims on PATH). crane, helm, yq, kustomize, kind and trivy come from mise and from NOWHERE else, so after following this doc verbatim they are not on PATH. `make deps` still exits 0 — 00-install-prereqs.sh:170-173 prints `crane MISSING` / `helm MISSING` / `kustomize MISSING` / `yq MISSING` as warnings and returns 0 (kubectl survives only because install_kubectl backfills it into BIN_DIR). The next command the operator runs dies: `make mirror` -> 10-mirror-pull.sh:36 `require_cmd crane`; `make check-tools` -> 03-check-tools.sh:29-35 lists helm/yq/crane as REQUIRED; `make e2e-kind` -> no kind. WORSE: the doc's own `export PATH` makes `command -v mise` succeed, which SUPPRESSES the Makefile's only remediation hint (Makefile:88-93 prints the `eval "$(mise activate bash)"` NOTE only when mise is NOT on PATH), and 00-install-prereqs.sh:173's advice ("ensure mise ran and $BIN_DIR is on PATH") is wrong for this exact case. The repo's own tooling does what the doc omits: bootstrap-jumpbox.sh:119 exports the shims dir; scripts/jumpbox-run.sh:140 runs `eval "$(mise activate bash)"`.
 - **proof:** Makefile:87 (mise install) + .mise.toml:crane/helm/yq/kustomize/kind + scripts/00-install-prereqs.sh:170-173 + scripts/03-check-tools.sh:29-35 + scripts/10-mirror-pull.sh:36 + bootstrap-jumpbox.sh:119 + scripts/jumpbox-run.sh:140 + Makefile:88-93
 - **fix:** Replace lines 60-63 with:
+
 ```bash
 curl -fsSL https://mise.run | sh
 eval "$(mise activate bash)"                       # THIS shell: puts the mise-managed TOOLS on PATH
@@ -58,14 +59,14 @@ make check-tools   # gate: must print "all REQUIRED tools present" (crane/helm/y
 - **proof:** scripts/fetch-ca.sh:41-43 (die "could not connect to ${host}:${port}"); Makefile:265-266 (fetch-harbor-ca → fetch-ca.sh "$(HARBOR_URL)"); .env.example:78 (HARBOR_URL=harbor.vks.local); scripts/02-env.sh:76-83 (env-populate cannot discover HARBOR_URL without a cluster); docs/scenario-1.md:213 (correct placement, after Harbor exists)
 - **fix:** DELETE `make fetch-harbor-ca` from the Prerequisites block (README.md:201). It is not a prerequisite — it is a post-Harbor-install step and both scenario docs already place it correctly. If you want to keep a pointer, make it a sentence: "After Harbor exists (Scenario 1 step 6 / Scenario 2 discovery), run `make fetch-harbor-ca`."
 
-### `README.md:203 (same block) — `make env-check # gate: fail now if anything required is still missing``  — README.md
+### `README.md:203 (same block) —`make env-check # gate: fail now if anything required is still missing``  — README.md
 
 - **doc claims:** Run `make env-check` as the sixth jump-box prerequisite; it is the gate that tells you you are ready.
 - **reality:** On a fresh jump box it FAILS for a reason the operator cannot fix at that point: `env_check`'s required list is `(HARBOR_URL HARBOR_USERNAME HARBOR_PASSWORD GITEA_ADMIN_PASSWORD KUBECONFIG)` and `.env.example` contains **no uncommented `KUBECONFIG=` line at all** (`grep -c '^KUBECONFIG=' .env.example` → 0; it is deliberately a snapshot-protected SELECTOR). KUBECONFIG is produced by `make vks-login` — which this README block never tells you to run (it appears only inside the scenario docs, e.g. docs/scenario-1.md:188). So the README's own ordered list ends in a red gate. Worse in the other direction: the gate goes GREEN on `HARBOR_URL=harbor.vks.local` because `is_placeholder()` only rejects empty or `<SET-…>` values (scripts/02-env.sh:30) — so the README's promise "fail now if anything required is still missing" is simultaneously over-strict (KUBECONFIG) and over-permissive (a wrong-but-present Harbor default sails through).
 - **proof:** scripts/02-env.sh:105 (`required=(HARBOR_URL HARBOR_USERNAME HARBOR_PASSWORD GITEA_ADMIN_PASSWORD KUBECONFIG)`); scripts/02-env.sh:30 (is_placeholder); .env.example (no `^KUBECONFIG=` line); docs/scenario-1.md:188 (`make vks-login` is what produces KUBECONFIG), docs/scenario-1.md:278-279 (env-populate + env-check run AFTER vks-login)
 - **fix:** Re-order the Prerequisites block to only what a jump box can do with no cluster and no Harbor: `make deps` → `make engine-check` → `make check-tools` → `make env-init` → `make env-populate` (and say plainly that it will report Harbor/ArgoCD as "not discovered" — that is expected). Move `make env-check` / `make fetch-harbor-ca` out of Prerequisites entirely and let the scenario docs (which already order them correctly) own them.
 
-### `README.md:64 (container-engine table row: "**You want docker** | `make deps CONTAINER_ENGINE=docker`, then `make trust-harbor` | rootless: none · rootful: one per registry")`  — README.md
+### `README.md:64 (container-engine table row: "**You want docker** |`make deps CONTAINER_ENGINE=docker`, then`make trust-harbor`| rootless: none · rootful: one per registry")`  — README.md
 
 - **doc claims:** The two-command docker on-ramp for a jump box: install with `CONTAINER_ENGINE=docker`, then run `make trust-harbor`.
 - **reality:** `make trust-harbor` cannot be the second command. The target is `trust-harbor: check-env` (Makefile:280), so it runs `scripts/02-env.sh check` first, which begins with `[ -f "$ENV_FILE" ] || die "no .env yet — run 'make env-init' first"` (scripts/02-env.sh:39 in env_init / the same guard at the head of env_check, line ~100). A box that has just run `make deps` has no `.env`, so `make trust-harbor` dies immediately. Even with a `.env`, `19-trust-harbor.sh` PROVES trust "with a real login handshake" (Makefile:280 help text), so it also requires a **live, reachable Harbor** — which does not exist at the moment this table puts it. The row reads as a jump-box bootstrap step; it is actually a post-Harbor step.
@@ -85,9 +86,11 @@ make check-tools   # gate: must print "all REQUIRED tools present" (crane/helm/y
 - **reality:** FALSE, and it cascades into install-all. `ARGOCD_KUBECONFIG` is COMMENTED in .env.example and the doc never tells the operator to set it. `31-fetch-argocd-kubeconfig.sh:41` defaults it to `${REPO_ROOT}/secrets/argocd.kubeconfig` for its OWN process only and NEVER persists it (no `env_set`/`state_set` anywhere in that script — grepped, zero hits). Every other consumer defaults it to the GUEST kubeconfig: `23-argocd-preflight.sh:40` `ARGOCD_KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}"`, same at `70-configure-argocd.sh:50` and `71-argocd-register-guest.sh:32`. So the very next command, `make argocd-preflight`, runs against the GUEST cluster: it prints "ARGOCD_KUBECONFIG is unset -> assuming ArgoCD runs IN the workload cluster" (`:61`), sets OFF=0 so the promised "ArgoCD is OFF-CLUSTER" line NEVER prints (`:70`), and then hits `block "namespace 'argocd-instance-1' not found on the ArgoCD cluster"` (`:108`) → `exit 1` (`:230`). Because `install-all: preflight …` (Makefile:446) and `preflight: check-tools argocd-preflight lab-preflight psa-check` (Makefile:292), **Step 5's `make install-all` dies at its first prerequisite, before the mirror.** The irony: `31`'s own comment (lines 36-41) documents this exact cascade as a bug it fixed — but the fix only lives inside `31`.
 - **proof:** scripts/23-argocd-preflight.sh:40,60-63,70,108,230 · scripts/31-fetch-argocd-kubeconfig.sh:41 (defaults, never persists) · .env.example:336 (`# ARGOCD_KUBECONFIG=./secrets/argocd.kubeconfig` — commented) · Makefile:446,292
 - **fix:** Add to A2's "→ now set in `.env`" block (docs/scenario-1.md:141-146):
+
 ```bash
 ARGOCD_KUBECONFIG=./secrets/argocd.kubeconfig   # written by Step 4; every other target reads it from .env
 ```
+
 Better (belt and braces): make `31-fetch-argocd-kubeconfig.sh` PERSIST the path it wrote — `state_set ARGOCD_KUBECONFIG "$ARGOCD_KUBECONFIG"` after the `argocd-server is visible` proof at :90 — so the value cannot be lost between two `make` invocations. It is a SELECTOR (`lib/os.sh:306`), so it is snapshot-protected and an operator override still wins.
 
 ### `docs/scenario-1.md:255-258`  — docs/scenario-1.md
@@ -96,36 +99,44 @@ Better (belt and braces): make `31-fetch-argocd-kubeconfig.sh` PERSIST the path 
 - **reality:** FALSE — it dies before it prompts for anything. `31-fetch-argocd-kubeconfig.sh:53-68` REQUIRES a TLS decision: if `VKS_CA_CERT_FILE` is not set-and-present AND `VKS_INSECURE_SKIP_TLS_VERIFY` is not truthy, it hits `die "set VKS_CA_CERT_FILE=<path to the Supervisor CA cert> …, or set VKS_INSECURE_SKIP_TLS_VERIFY=true to skip verification."`. NEITHER variable appears anywhere in scenario-1.md (grepped: zero hits) — not in Step 0's four-var block (:43-46), not in A1's, A2's or A3's set-these blocks. So Step 4's only command fails on a clean `.env` built by following this doc exactly. (Both vars ARE documented in .env.example:343 / :761, but the runbook is supposed to be executable without opening another file.)
 - **proof:** scripts/31-fetch-argocd-kubeconfig.sh:53-68 (`die "set VKS_CA_CERT_FILE=… or set VKS_INSECURE_SKIP_TLS_VERIFY=true"`)
 - **fix:** Add to Step 0's `.env` block (docs/scenario-1.md:42-47), next to SUPERVISOR_HOST:
+
 ```bash
 VKS_CA_CERT_FILE=./secrets/supervisor-ca.crt   # the Supervisor's CA — ask your vSphere admin
 # ...or, if you don't have it:
 VKS_INSECURE_SKIP_TLS_VERIFY=true              # skips TLS verification of the Supervisor endpoint
 ```
+
 and say in Step 4's **For:** line that one of the two is REQUIRED before `fetch-argocd-kubeconfig` will even connect.
 
-### `docs/scenario-1.md:44 — `VKS_USERNAME=administrator@vsphere.local``  — docs/scenario-1.md
+### `docs/scenario-1.md:44 —`VKS_USERNAME=<administrator@vsphere.local>``  — docs/scenario-1.md
 
 - **doc claims:** Step 0 instructs the operator to put the FULLY-QUALIFIED SSO user (with `@vsphere.local`) in `VKS_USERNAME`. .env.example:755 agrees (`'user@SSO.DOMAIN'`).
 - **reality:** That is correct for `make vks-login` and WRONG for `make fetch-argocd-kubeconfig` (Step 4), because the two scripts disagree. `30-vks-login.sh:55-64` appends `@$VKS_SSO_DOMAIN` ONLY when the username has no `@` (`case "$user" in *@*) : ;; …`). `31-fetch-argocd-kubeconfig.sh:77` appends it UNCONDITIONALLY: `--username "${VKS_USERNAME}@${SSO_DOMAIN}"` with `SSO_DOMAIN="${VKS_SSO_DOMAIN:-vsphere.local}"` (:47). Following this doc verbatim, Step 4 therefore sends `--username administrator@vsphere.local@vsphere.local` to `vcf context create` — an authentication failure the operator will read as "wrong password". The doc's own instruction is what guarantees the malformed value.
 - **proof:** scripts/31-fetch-argocd-kubeconfig.sh:47,77 (unconditional append) vs scripts/30-vks-login.sh:55-64 (conditional append) · .env.example:755
 - **fix:** CODE fix (the doc and `30` are right; `31` is wrong). In `scripts/31-fetch-argocd-kubeconfig.sh`, replace line 77's `--username "${VKS_USERNAME}@${SSO_DOMAIN}"` with the same guard `30` uses:
+
 ```bash
 user="$VKS_USERNAME"; case "$user" in *@*) : ;; *) user="${VKS_USERNAME}@${SSO_DOMAIN}" ;; esac
 … --username "$user" …
 ```
+
 Better: hoist that into a single `vks_sso_user()` helper in `lib/os.sh` and call it from BOTH scripts — two copies of one rule is how they drifted.
 
 ### `docs/scenario-1.md:154-162 (A3), and again at :269`  — docs/scenario-1.md
 
 - **doc claims:** A3 hands the operator raw shell to paste:
+
 ```bash
 vcf context use $VKS_CONTEXT_NAME:$VKS_NAMESPACE
 vcf cluster kubeconfig get $VKS_CLUSTER_NAME --export-file ./secrets/vks.kubeconfig
 ```
+
 and Step 4's verification block uses `kubectl --kubeconfig $ARGOCD_KUBECONFIG get pods -A …`.
+
 - **reality:** These `$VARS` live in `.env`, which the operator's SHELL never sources. `make` reads `.env` (`Makefile:19-20 -include .env`) and `load_env` reads it inside scripts (`lib/os.sh`) — but a command the operator PASTES INTO A TERMINAL sees none of it. Nothing in scenario-1.md tells them to `set -a; . ./.env; set +a` (grepped the whole doc: no `source`, no `. ./.env`). Pasted as printed, `vcf context use $VKS_CONTEXT_NAME:$VKS_NAMESPACE` becomes `vcf context use :` and `vcf cluster kubeconfig get --export-file ./secrets/vks.kubeconfig` loses its cluster argument. Compounding it: **`VKS_CONTEXT_NAME` is never listed in ANY of the doc's four "→ now set in `.env`" blocks** — Step 0 lists SUPERVISOR_HOST / VKS_USERNAME / VKS_NAMESPACE / VKS_CLUSTER_NAME (:43-46); A3's own prose note (:164-166) says `30-vks-login.sh` "**requires** it" and to "set it in `.env`", but the set-these block right below (:176-181) omits it. And A2's `vcf context create` (:104) never names a context, so the operator has no idea what value `<context-name>` should be — `30-vks-login.sh:76` reveals the CLI *prompts* for it interactively, which the doc never says.
 - **proof:** Makefile:19-20 (`-include .env` — make only) · scripts/lib/os.sh `load_env` (scripts only) · scripts/30-vks-login.sh:52 (`: "${VKS_CONTEXT_NAME:?set VKS_CONTEXT_NAME in .env …}"`), :76 ("INTERACTIVE: at the prompt, enter the context name") · docs/scenario-1.md:43-46, 176-181 (VKS_CONTEXT_NAME absent from both)
 - **fix:** Three edits. (a) Put `VKS_CONTEXT_NAME=<a name you choose; you will TYPE it at the vcf prompt>` into Step 0's `.env` block (:42-47) — it is chosen, not discovered, so it belongs with the other four. (b) In A2's step 3, say that `vcf context create` PROMPTS for the context name and that it must equal `$VKS_CONTEXT_NAME`. (c) Before the first raw-shell block that uses a `.env` value (A3, :154), add:
+
 ```bash
 set -a; . ./.env; set +a   # the commands below use .env values; your SHELL does not read .env (only `make` does)
 ```
@@ -144,14 +155,13 @@ set -a; . ./.env; set +a   # the commands below use .env values; your SHELL does
 - **proof:** scripts/70-configure-argocd.sh:169,186-192,195-204,455-461 · .env.example:377-389
 - **fix:** Move ARGOCD_MECHANISM / ARGOCD_AUTH_TOKEN / ARGOCD_DEST_SERVER into the Step-3 `.env` block (docs/scenario-2.md:81-95), with the token recipe (`argocd login <server> --sso` → `argocd account generate-token --account <you>`) there, and add an explicit `Expect:` to Step 6: `make gitops` must log `write mechanism: api` — if it logs `request`, nothing was applied. Also state that `install-all` exits 0 on the `request` path.
 
-
 ## HIGH (27)
 
 ### `docs/prerequisites-manual.md:61-62`  — docs/prerequisites-manual.md
 
 - **doc claims:** "(the installer also adds `mise activate` to your profile for new shells)"
-- **reality:** FALSE, primary-sourced from the installer itself (https://mise.run, fetched 2026-07-14): its `after_finish_help()` only PRINTS `mise: run the following to activate mise in your shell:` followed by the `echo "eval ..." >> ~/.zshrc` line for the USER to run. It modifies no profile. The repo's own Makefile:92 instructs the operator to append that line by hand — i.e. the code already assumes the opposite of what this doc asserts. This false parenthetical is the reason finding #1 exists: it tells the operator activation is already handled.
-- **proof:** Makefile:88-93 (tells the user to add `eval "$(mise activate bash)"` to ~/.bashrc themselves) + https://mise.run `after_finish_help()`
+- **reality:** FALSE, primary-sourced from the installer itself (<https://mise.run>, fetched 2026-07-14): its `after_finish_help()` only PRINTS `mise: run the following to activate mise in your shell:` followed by the `echo "eval ..." >> ~/.zshrc` line for the USER to run. It modifies no profile. The repo's own Makefile:92 instructs the operator to append that line by hand — i.e. the code already assumes the opposite of what this doc asserts. This false parenthetical is the reason finding #1 exists: it tells the operator activation is already handled.
+- **proof:** Makefile:88-93 (tells the user to add `eval "$(mise activate bash)"` to ~/.bashrc themselves) + <https://mise.run> `after_finish_help()`
 - **fix:** Delete the parenthetical on :61-62 and replace with the explicit `eval "$(mise activate bash)"` + `>> ~/.bashrc` lines from finding #1.
 
 ### `docs/prerequisites-manual.md:1-6 (and the whole file)`  — docs/prerequisites-manual.md
@@ -217,7 +227,7 @@ set -a; . ./.env; set +a   # the commands below use .env values; your SHELL does
 - **proof:** scripts/psa-check.sh:33,51 (kubectl + server-side dry-run against the live cluster); scripts/99-verify.sh:87,156 (kubectl port-forward svc/gitea-http and svc/<app>); Makefile:446 (install-all → platform → gitops, all kubectl-driven); docs/sneakernet.md:11-13 (the jump box reaches the cluster and NOT the internet)
 - **fix:** Rewrite as: "…with network reach to the Supervisor, Harbor and the workload cluster — **plus the internet if it is dual-homed**. If no single box has all of those, see [sneakernet](docs/sneakernet.md)."
 
-### `README.md:52 and README.md:53 — the "You need / **Run:**" cells of the two VKS rows: `… → make psa-check` (Scenario 1) and `… → make harbor-robot → make psa-check` (Scenario 2)`  — README.md
+### `README.md:52 and README.md:53 — the "You need / **Run:**" cells of the two VKS rows:`… → make psa-check` (Scenario 1) and `… → make harbor-robot → make psa-check`(Scenario 2)`  — README.md
 
 - **doc claims:** These command sequences are jump-box **prerequisites** — what you run to get ready, before opening the scenario doc.
 - **reality:** The last one or two commands in each sequence cannot run at prerequisite time. `make psa-check` requires a LIVE cluster: `scripts/psa-check.sh:33` does `require_cmd kubectl` and `:51` runs `kubectl label --dry-run=server --overwrite namespace …` — a server-side admission evaluation against a real API server. In Scenario 1 the guest cluster does not exist yet (the admin provisions it inside the doc), and in both scenarios `$KUBECONFIG` is only produced by `make vks-login`, which appears in NEITHER "Run:" cell. `make harbor-robot` (Scenario 2) likewise needs a reachable Harbor and project-admin credentials — neither of which exists before the operator has discovered Harbor inside the scenario doc.
@@ -294,7 +304,7 @@ and change Step 4 line 121 to plain `make install-ingress` (the default), noting
 `vcf cluster kubeconfig get $VKS_CLUSTER_NAME --export-file ./secrets/vks.kubeconfig`
 - **reality:** Both are DOC-INFERRED and the repo says so ELSEWHERE. `docs/lab-validation-plan.md:204` states in terms: "**Why:** `vcf cluster kubeconfig get --export-file` is a doc-inferred flag shape" and gives it a fallback ("⚠️ if this errors: send us `vcf cluster kubeconfig get --help`", :212). `30-vks-login.sh:77-80` carries `# TODO(verify on a real VKS lab): confirm 'vcf context create --help' …`. scenario-1 strips all of that and presents them as fact. Worse, the doc's own A2 invocation does not match ANY invocation the repo actually runs: `30-vks-login.sh:70` uses `--auth-type basic` with the context name supplied INTERACTIVELY (no positional), while `31-fetch-argocd-kubeconfig.sh:75-79` uses a POSITIONAL context name plus `--type k8s` (not `--auth-type basic`). Three different shapes of the same vendor command in one repo, one of them unmarked in the runbook the admin executes. This repo has already shipped a fabricated `vcf` command once — `check-how-provenance.sh:6-11` exists because of it, but it gates ONLY `.env.example`, not `docs/`.
 - **proof:** docs/lab-validation-plan.md:204,211-212 (the same flag graded doc-inferred, with a fallback) · scripts/30-vks-login.sh:70,77-80 (`--auth-type basic`, interactive ctx name, TODO(verify)) · scripts/31-fetch-argocd-kubeconfig.sh:21-24 ("documented for 9.0 and INFERRED for 9.1"), :75-79 (positional ctx + `--type k8s`) · scripts/check-how-provenance.sh:6-20 (gate scoped to .env.example only)
-- **fix:** Tag both blocks `⚠️ UNVERIFIED-COMMAND (9.0-doc-inferred-for-9.1)` — the marker the sibling doc already uses — and give each the fallback lab-validation-plan.md already writes: "if this errors, run `vcf context create --help` / `vcf cluster kubeconfig get --help` and send us the output". Then reconcile the three invocations (`30` vs `31` vs the doc) to ONE shape, or state plainly why they differ. Follow-up worth filing: extend `check-how-provenance.sh` to scan `docs/**.md` for bare `vcf ` commands — the gate that exists for this failure cannot currently see the document where it happened.
+- **fix:** Tag both blocks `⚠️ UNVERIFIED-COMMAND (9.0-doc-inferred-for-9.1)` — the marker the sibling doc already uses — and give each the fallback lab-validation-plan.md already writes: "if this errors, run `vcf context create --help` / `vcf cluster kubeconfig get --help` and send us the output". Then reconcile the three invocations (`30` vs `31` vs the doc) to ONE shape, or state plainly why they differ. Follow-up worth filing: extend `check-how-provenance.sh` to scan `docs/**.md` for bare `vcf` commands — the gate that exists for this failure cannot currently see the document where it happened.
 
 ### `docs/scenario-1.md:208-220 (Step 2)`  — docs/scenario-1.md
 
@@ -345,7 +355,6 @@ and change Step 4 line 121 to plain `make install-ingress` (the default), noting
 - **reality:** The gate passes by not looking, in the most likely failure case. 02-env.sh:169-170: the `--cacert` argument is added ONLY if HARBOR_CA_FILE is non-empty AND the file exists; otherwise, on https, it falls back to **`-k`** (skip verification entirely). So a tenant who mistyped HARBOR_CA_FILE, or who has not fetched the CA yet (the doc's own Step 2 could have failed), gets a GREEN env-validate that proves nothing about the CA — and then discovers it "inside Kaniko an hour later", which is exactly what the doc promises will not happen. A present-but-WRONG CA does fail, but is reported as "Harbor unreachable at https://… (HTTP 000)" (02-env.sh:189) — an error naming the wrong cause.
 - **proof:** scripts/02-env.sh:168-172 (the `-k` fallback), :189 (the misattributed error message)
 - **fix:** CODE: in env_validate, when scheme=https and HARBOR_INSECURE!=1, DIE if HARBOR_CA_FILE is unset/missing rather than silently `-k` (or add a loud `log_warn "CA NOT EXERCISED — this check proves nothing about your trust anchor"`), and distinguish a TLS-verification failure (curl exit 60) from an unreachable host in the error text. DOC: until then, weaken the Expect line at :308-310 — it is currently a promise the gate cannot keep.
-
 
 ## MEDIUM (28)
 
@@ -419,28 +428,28 @@ and change Step 4 line 121 to plain `make install-ingress` (the default), noting
 - **proof:** Makefile:99 (install-vcf-clis → 01-install-vcf-clis.sh); scripts/03-check-tools.sh:40 (`vcf|lab-only|Supervisor login … Installed by 'make install-vcf-clis'`); docs/scenario-1.md:188,213,278,279
 - **fix:** Keep ONE authoritative sequence in the README (the bare-jump-box one) and say explicitly that everything after it lives in the scenario doc. Delete the phrase "Nothing else on this page requires action" — it is false for both VKS paths.
 
-### `README.md:196 — "`make deps` # toolchain: mise + podman (git must already be present)"`  — README.md
+### `README.md:196 — "`make deps`# toolchain: mise + podman (git must already be present)"`  — README.md
 
 - **doc claims:** `make deps` installs mise and podman, and git must already be there.
 - **reality:** Understated and half-false. `deps` → `deps-prereqs` → `scripts/00-install-prereqs.sh:48`, which runs `pkg_install ca-certificates curl git jq tar gzip findutils gawk openssl "$GETTEXT_PKG"` — it INSTALLS git, and as of today it also installs **gawk, openssl and gettext(-base)**, which are precisely the packages a bare `photon:5.0` lacks and without which the flow dies later (at `mirror-verify`, or in any per-app loop in `lib/apps.sh`). The parenthetical is true only in the trivial sense that you need git to have cloned the repo. A reader tuning a minimal jump-box image from this line will under-provision it.
 - **proof:** scripts/00-install-prereqs.sh:44-48 (GETTEXT_PKG selection + the pkg_install line); scripts/00-install-prereqs.sh:32-43 (the measured "photon:5.0 LACKS awk, openssl, envsubst, git, make" comment); Makefile:95-96 (deps-prereqs → 00-install-prereqs.sh)
 - **fix:** "`make deps` # mise-managed tools (kubectl, helm, kind, crane, jq, yq…) + OS packages (git, curl, gawk, openssl, gettext/envsubst, tar) + the container engine (podman by default)."
 
-### `README.md:16-17 ("an **optional** pluggable ingress (**Istio** default…)") and README.md:23 ("Add one when you want `*.vks.local` URLs (`make install-ingress`…)")`  — README.md
+### `README.md:16-17 ("an **optional** pluggable ingress (**Istio** default…)") and README.md:23 ("Add one when you want`*.vks.local`URLs (`make install-ingress`…)")`  — README.md
 
 - **doc claims:** `make install-ingress` is presented with no air-gap caveat; Istio is the default.
 - **reality:** On an air-gapped box the DEFAULT ingress works only if the bundle happens to carry the Istio charts. `scripts/46-install-istio.sh:64-78` uses `bundle/charts/*.tgz` when present, and otherwise falls back to `helm repo add https://istio-release.storage.googleapis.com/charts` — "this needs the internet". The charts are carried by `scripts/10-mirror-pull.sh:138-151` ONLY if helm is installed on the staging box AND `ISTIO_VERSION` is set; otherwise it logs `the air-gapped box will only be able to use INGRESS_CONTROLLER=traefik or istio-existing`. The README — the front door, and the place that names Istio as the default — says nothing about this dependency, so an operator whose bundle predates today's chart-carrying change (or was cut with `ISTIO_VERSION` unset) will find the default ingress silently reaching for storage.googleapis.com from a box with no internet.
 - **proof:** scripts/46-install-istio.sh:64-78 (carried charts preferred, else `helm repo add` — "this needs the internet"); scripts/10-mirror-pull.sh:138-151 (charts carried only if helm present AND ISTIO_VERSION set; warns otherwise)
 - **fix:** Add one sentence to the ingress paragraph (README:20-24): "Air-gapped? `make install-ingress` with the default Istio installs from the charts the bundle carries (`bundle/charts/*.tgz`, pulled by `make mirror-pull`). If your bundle has none, only `INGRESS_CONTROLLER=traefik` or `istio-existing` will work there."
 
-### `README.md:170 — "It's idempotent (re-run skips what's present); **pin a ref with `REF=<tag-or-sha>`**."`  — README.md
+### `README.md:170 — "It's idempotent (re-run skips what's present); **pin a ref with`REF=<tag-or-sha>`**."`  — README.md
 
 - **doc claims:** You can pin the bootstrap to a ref by setting `REF=<tag-or-sha>`.
 - **reality:** True for the download-then-run form, but for the **piped** form the README leads with (README:159, `curl … | bash`), `REF=v1 curl … | bash` sets REF in **curl's** environment, not bash's — the script reads `REF="${REF:-main}"` from its own env (bootstrap-jumpbox.sh:24), so it silently checks out `main` and the operator believes they pinned it. The working form is `curl … | REF=v1 bash`.
 - **proof:** bootstrap-jumpbox.sh:24 (`REF="${REF:-main}"`), bootstrap-jumpbox.sh:94-100 (fetch/checkout at $REF); README.md:159 (the piped invocation)
 - **fix:** Show the pinned form literally: `curl -fsSL https://…/bootstrap-jumpbox.sh | REF=v1.2.3 bash` (and note that with the download-then-run form it is `REF=v1.2.3 bash bootstrap-jumpbox.sh`).
 
-### `README.md:232 — sneakernet "…replaces `make mirror` (and `make install-all`, **which starts with it**)"`  — README.md
+### `README.md:232 — sneakernet "…replaces`make mirror` (and `make install-all`, **which starts with it**)"`  — README.md
 
 - **doc claims:** `make install-all` starts with `make mirror`.
 - **reality:** It does not. `install-all: preflight mirror mirror-verify builder-image vks-login platform gitops` (Makefile:446) — it starts with `preflight` (itself `check-tools argocd-preflight lab-preflight psa-check`, Makefile:292). This matters for the air-gap reader: `preflight` does NOT probe the internet (that is exactly why `require_internet()` was added to mirror-pull — see the comment at scripts/lib/os.sh:486-495, "Nothing in `preflight` probes the internet … so `make install-all` on an air-gapped box sails through preflight"), so "install-all starts with mirror" mis-describes both what runs first and where an air-gapped box will actually stop.
@@ -544,4 +553,3 @@ and change Step 4 line 121 to plain `make install-ingress` (the default), noting
 - **reality:** Likely a dead end on the lab, and it is UNVERIFIED. Harbor's registry-certificate download is backed by `/api/v2.0/systeminfo/getcert`, which returns "No certificate found" whenever Harbor does not hold a CA at its core path — the normal case when TLS is terminated by an ingress / cert-manager, which is precisely the Scenario-2 shared-lab shape (goharbor/harbor#6603, #18912; recorded as settled in this repo's CLAUDE.md). The doc offers it as an equal alternative to `make fetch-harbor-ca` with no caveat.
 - **proof:** CLAUDE.md ("ADVERSARY FINDINGS 2026-07-12" — the getcert endpoint exists but returns 'No certificate found' when Harbor holds no CA at its core path) · scripts/fetch-ca.sh (the supported path: read the issuer off the wire and VERIFY it)
 - **fix:** Demote the UI tip to: "(Harbor's project page may offer a **Registry Certificate** download — but it is empty on a Harbor whose TLS is terminated by an ingress/cert-manager, which is the usual shared-lab shape. `make fetch-harbor-ca` is the reliable path; if neither works, ask the platform team for the issuing CA PEM.)"
-

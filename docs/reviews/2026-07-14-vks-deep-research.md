@@ -5,7 +5,6 @@ second adversary tasked with REFUTING it (fetch the URL yourself; is it really 9
 
 Every source records `url_requested` AND `url_landed`, so a redirect cannot launder 9.0 content as 9.1.
 
-
 ---
 
 ## [NINE_ZERO_DOC_READ_AS_9_1] On VMware VKS (TKr/VKr v1.26+): is the Pod Security Standard "restricted" ENFORCED by default on non-system namespaces of a guest cluster, and which system namespaces are exempt? Is the repo right to label its `ci` namespace (Kaniko runs as root) and the Istio gateway namespace (proxy sets no seccompProfile) as `baseline`?
@@ -29,38 +28,55 @@ VERDICT: no change required. The belief is right, the exempt list is right, the 
 
 **Would settle it:** Run this on a REAL VKS guest cluster. It is TENANT-runnable (needs only namespace-create plus pod-create RBAC) and creates nothing durable — the pod is a server-side dry-run:
 
-  # 1. Does an UNLABELLED namespace inherit `restricted`?  (the psa-check assumption)
+# 1. Does an UNLABELLED namespace inherit `restricted`?  (the psa-check assumption)
+
   kubectl create namespace psa-probe
   kubectl get ns psa-probe -o jsonpath='{.metadata.labels}'; echo
-  #   EXPECT: NO pod-security.kubernetes.io/* labels at all — VKS does not label it; the default
-  #   comes from the apiserver's cluster-wide PodSecurityConfiguration, which is invisible here.
 
-  # 2. Is that default `restricted`, and does it REJECT a root pod?
+# EXPECT: NO pod-security.kubernetes.io/* labels at all — VKS does not label it; the default
+
+# comes from the apiserver's cluster-wide PodSecurityConfiguration, which is invisible here
+
+# 2. Is that default `restricted`, and does it REJECT a root pod?
+
   kubectl -n psa-probe run probe --image=busybox --restart=Never --dry-run=server \
     --overrides='{"spec":{"containers":[{"name":"probe","image":"busybox","securityContext":{"runAsUser":0}}]}}'
-  #   EXPECT REJECTION: Error from server (Forbidden): pods "probe" is forbidden: violates
-  #   PodSecurity "restricted:latest": allowPrivilegeEscalation != false, runAsNonRoot != true,
-  #   seccompProfile ... must be RuntimeDefault or Localhost
-  #   If it is instead ADMITTED, the cluster default is NOT restricted (a platform team changed
-  #   podSecurityStandard). Our explicit labels still hold; only psa-check's pessimism changes.
 
-  # 3. Does `baseline` admit it — i.e. are PSA_LEVEL_CI / PSA_LEVEL_INGRESS sufficient?
+# EXPECT REJECTION: Error from server (Forbidden): pods "probe" is forbidden: violates
+
+# PodSecurity "restricted:latest": allowPrivilegeEscalation != false, runAsNonRoot != true
+
+# seccompProfile ... must be RuntimeDefault or Localhost
+
+# If it is instead ADMITTED, the cluster default is NOT restricted (a platform team changed
+
+# podSecurityStandard). Our explicit labels still hold; only psa-check's pessimism changes
+
+# 3. Does `baseline` admit it — i.e. are PSA_LEVEL_CI / PSA_LEVEL_INGRESS sufficient?
+
   kubectl label --overwrite ns psa-probe pod-security.kubernetes.io/enforce=baseline
   kubectl -n psa-probe run probe --image=busybox --restart=Never --dry-run=server \
     --overrides='{"spec":{"containers":[{"name":"probe","image":"busybox","securityContext":{"runAsUser":0}}]}}'
-  #   EXPECT: "pod/probe created (server dry run)"  == baseline admits root. Confirms ci + ingress.
+
+# EXPECT: "pod/probe created (server dry run)"  == baseline admits root. Confirms ci + ingress
 
   kubectl delete namespace psa-probe
 
-  # 4. Confirm the exempt set on THIS cluster:
+# 4. Confirm the exempt set on THIS cluster
+
   for ns in kube-system tkg-system vmware-system-cloud-provider; do
     kubectl get ns "$ns" -o jsonpath="{.metadata.name}{'\t'}{.metadata.labels}{'\n'}" 2>/dev/null
   done
-  #   Exemptions live in the apiserver config, NOT in labels, so expect NO pod-security labels on
-  #   them — their exemption is invisible from the namespace object. The definitive read needs
-  #   control-plane (cluster-ADMIN/SSH) access:
-  #       cat /etc/kubernetes/extra-config/admission-control-config.yaml
-  #   which prints the PodSecurityConfiguration defaults + exemptions.namespaces verbatim.
+
+# Exemptions live in the apiserver config, NOT in labels, so expect NO pod-security labels on
+
+# them — their exemption is invisible from the namespace object. The definitive read needs
+
+# control-plane (cluster-ADMIN/SSH) access
+
+# cat /etc/kubernetes/extra-config/admission-control-config.yaml
+
+# which prints the PodSecurityConfiguration defaults + exemptions.namespaces verbatim
 
 PAGE STILL TO OBTAIN: a genuinely 9.1-scoped PSA page. It appears NOT to exist — the 9.1 tree publishes release notes but not the PSA page, and the 9-1 PSA URL returns HTTP 404 while every reachable vendor page 301s into the 9-0 tree. Steps 1–4 above are therefore the ONLY way to raise this finding from 9.0-doc-read-as-9.1 to lab-verified.
 
@@ -68,7 +84,7 @@ PAGE STILL TO OBTAIN: a genuinely 9.1-scoped PSA page. It appears NOT to exist �
 
 - requested: `https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vsphere-supervisor-services-and-standalone-components/latest/managing-vsphere-kuberenetes-service-clusters-and-workloads/managing-security-for-tkg-service-clusters/configure-psa-for-tkr-1-25-and-later.html`
   landed: `http://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/managing-security-for-tkg-service-clusters/configure-psa-for-tkr-1-25-and-later.html` ⚠️ **REDIRECTED**  (retrieved 2026-07-14)
-  > VKr releases v1.26 and later have the PSA mode enforce set to restricted for non-system namespaces. || VKr v1.25 have PSA modes warn and audit set to restricted for non-system namespaces. || Some system pods running in the kube-system, tkg-system, and vmware-system-cloud-provider namespaces require elevated privileges. These namespaces are excluded from pod security. || The PSA controller enforces pod security at the Kubernetes namespace level. You use namespace labels to define the PSA modes and levels. || kubectl label --overwrite ns default pod-security.kubernetes.io/enforce=baseline  [301 
+  > VKr releases v1.26 and later have the PSA mode enforce set to restricted for non-system namespaces. || VKr v1.25 have PSA modes warn and audit set to restricted for non-system namespaces. || Some system pods running in the kube-system, tkg-system, and vmware-system-cloud-provider namespaces require elevated privileges. These namespaces are excluded from pod security. || The PSA controller enforces pod security at the Kubernetes namespace level. You use namespace labels to define the PSA modes and levels. || kubectl label --overwrite ns default pod-security.kubernetes.io/enforce=baseline  [301
 
 - requested: `https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/managing-vsphere-kuberenetes-service-clusters-and-workloads/managing-security-for-tkg-service-clusters/configure-psa-for-tkr-1-25-and-later.html`
   landed: `HTTP 404 Not Found — no 9-1 version of this page exists at this path`  (retrieved 2026-07-14)
@@ -97,7 +113,6 @@ PAGE STILL TO OBTAIN: a genuinely 9.1-scoped PSA page. It appears NOT to exist �
 - requested: `https://blog.ukotic.net/2024/05/29/tanzu-pod-security-admission-psa/`
   landed: `https://blog.ukotic.net/2024/05/29/tanzu-pod-security-admission-psa/`  (retrieved 2026-07-14)
   > COMMUNITY: 'From Tanzu Kubernetes release v1.26 and onwards, the default security mode changed to enforce with the pod standard set to restricted.' ... 'basically, nothing will want to run out of the box when you deploy a new pod on a TKr v1.26+ cluster.' Observed error: violates PodSecurity 'restricted:latest': allowPrivilegeEscalation != false ... runAsNonRoot != true ... seccompProfile (pod or container must set securityContext.seccompProfile.type to 'RuntimeDefault' or 'Localhost').
-
 
 ---
 
@@ -130,7 +145,7 @@ No Broadcom page addresses it. The mechanism, from the vSphere Namespace permiss
 === 4. IS REGISTRATION ADMIN-ONLY? YES — BUT BOTH REASONS WE SHIP ARE WRONG. THIS IS THE FINDING. ===
 
 (4a) argocd.md:42 says: "ArgoCD's `clusters` is a **global** RBAC resource — only applications/applicationsets/logs/exec are grantable through a tenant AppProject role."
-    ** THIS IS FALSE. ** Refuted by ArgoCD's own source:
+    **THIS IS FALSE.** Refuted by ArgoCD's own source:
         util/rbac/rbac.go:
             var ProjectScoped = map[string]bool{
                 ResourceApplications: true, ResourceApplicationSets: true,
@@ -144,7 +159,7 @@ No Broadcom page addresses it. The mechanism, from the vSphere Namespace permiss
 
 (4b) argocd.md:43 says: "Kubernetes privilege-escalation prevention only permits a caller who already holds cluster-admin there."
     The K8s rule is real ("A user can only create or update a RoleBinding or ClusterRoleBinding if they already have ... permission to grant ... all of the permissions referenced by the binding"), and `argocd cluster add` does mint a cluster-admin SA ("installs a ServiceAccount (argocd-manager) into the kube-system namespace ... and binds the service account to an admin-level ClusterRole").
-    ** BUT ON VKS THAT GATE IS VACUOUS FOR THE TENANT. ** Broadcom KB 424897: a vSphere Namespace "Can edit" user is "Automatically granted the `cluster-admin` role for all VKS clusters in that vSphere Namespace." A normal VKS tenant ALREADY HOLDS cluster-admin on their own guest cluster, so they CAN create argocd-manager + the ClusterRoleBinding there. The escalation check does not stop them.
+    **BUT ON VKS THAT GATE IS VACUOUS FOR THE TENANT.** Broadcom KB 424897: a vSphere Namespace "Can edit" user is "Automatically granted the `cluster-admin` role for all VKS clusters in that vSphere Namespace." A normal VKS tenant ALREADY HOLDS cluster-admin on their own guest cluster, so they CAN create argocd-manager + the ClusterRoleBinding there. The escalation check does not stop them.
 
 (4c) SO WHAT IS THE REAL GATE? The SUPERVISOR SIDE.
     The `Cluster` Secret (argocd.argoproj.io/secret-type: cluster) must be written into the ARGOCD INSTANCE'S vSphere Namespace on the Supervisor — a DIFFERENT vSphere Namespace on which the tenant has no permission (permissions are per-namespace, see #3). Equivalently, via the ArgoCD API, the tenant needs `clusters, create` — which IS grantable in an AppProject role, but only an ArgoCD admin can grant it (and the object regex scopes it to `<project>/*`).
@@ -208,7 +223,7 @@ TWO CORRECTIONS TO SHIP, one of them a genuine refutation of a claim we assert w
                     stated as a timeless fact about ArgoCD.
     (Cheap offline pre-check while waiting for a lab:
        git -c advice.detachedHead=false clone -q --depth 1 --branch v2.14.15 \
-         https://github.com/argoproj/argo-cd /tmp/acd && grep -n -A8 'ProjectScoped = map' /tmp/acd/util/rbac/rbac.go
+         <https://github.com/argoproj/argo-cd> /tmp/acd && grep -n -A8 'ProjectScoped = map' /tmp/acd/util/rbac/rbac.go
      — that tells you whether ResourceClusters was already in the map on the 2.14 line.)
 
 PAGE TO OBTAIN (not on the public web): the vSphere Supervisor RELEASE NOTES for the ArgoCD Supervisor Service
@@ -232,7 +247,7 @@ release"), and that is the ONLY authoritative statement of the server pin for a 
 
 - requested: `https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-consumption/latest/argo-cd/using-argocd-to-manage-resources-on-the-supervisor.html`
   landed: `https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-consumption/latest/argo-cd/using-argocd-to-manage-resources-on-the-supervisor.html`  (retrieved 2026-07-14)
-  > Prerequisites: Install the Argo CD Operator on the Supervisor, deploy an Argo CD instance, and Argo CD CLI. || argocd cluster add ArgoCD-vks-demo-admin@ArgoCD-vks-demo --kubeconfig vks.kubeconfig || ServiceAccount 'argocd-manager' created in namespace 'kube-system'; ClusterRole 'argocd-manager-role' created; ClusterRoleBinding 'argocd-manager-role-binding' created; Created bearer token secret for ServiceAccount 'argocd-manager' || This will create a service account 'argocd-manager' on the cluster ... with full cluster level privileges. || argocd app create guestbook ... --dest-server https://1
+  > Prerequisites: Install the Argo CD Operator on the Supervisor, deploy an Argo CD instance, and Argo CD CLI. || argocd cluster add ArgoCD-vks-demo-admin@ArgoCD-vks-demo --kubeconfig vks.kubeconfig || ServiceAccount 'argocd-manager' created in namespace 'kube-system'; ClusterRole 'argocd-manager-role' created; ClusterRoleBinding 'argocd-manager-role-binding' created; Created bearer token secret for ServiceAccount 'argocd-manager' || This will create a service account 'argocd-manager' on the cluster ... with full cluster level privileges. || argocd app create guestbook ... --dest-server <https://1>
 
 - requested: `https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-consumption/latest/argo-cd/argocd-custom-resrouce-reference.html`
   landed: `https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-consumption/latest/argo-cd/argocd-custom-resrouce-reference.html`  (retrieved 2026-07-14)
@@ -245,12 +260,12 @@ release"), and that is the ONLY authoritative statement of the server pin for a 
 - requested: `https://raw.githubusercontent.com/argoproj/argo-cd/master/util/rbac/rbac.go`
   landed: `https://raw.githubusercontent.com/argoproj/argo-cd/master/util/rbac/rbac.go`  (retrieved 2026-07-14)
   > var ProjectScoped = map[string]bool{
-	ResourceApplications:    true,
-	ResourceApplicationSets: true,
-	ResourceLogs:            true,
-	ResourceExec:            true,
-	ResourceClusters:        true,
-	ResourceRepositories:    true,
+ ResourceApplications:    true,
+ ResourceApplicationSets: true,
+ ResourceLogs:            true,
+ ResourceExec:            true,
+ ResourceClusters:        true,
+ ResourceRepositories:    true,
 }   [PRIMARY SOURCE, ArgoCD's own code: 'clusters' IS project-scopeable. This REFUTES docs/vks-services/argocd.md:42.]
 
 - requested: `https://raw.githubusercontent.com/argoproj/argo-cd/master/pkg/apis/application/v1alpha1/types.go`
@@ -259,6 +274,7 @@ release"), and that is the ONLY authoritative statement of the server pin for a 
 
 - requested: `https://argo-cd.readthedocs.io/en/stable/operator-manual/rbac/`
   landed: `https://argo-cd.readthedocs.io/en/stable/operator-manual/rbac/`  (retrieved 2026-07-14)
+
   > ### Application-Specific Policy — Some policy only have meaning within an application. It is the case with the following resources: applications, applicationsets, logs, exec. While they can be set in the global configuration, they can also be configured in AppProject's roles.   [THIS IS THE SENTENCE THAT MISLED US. It lists 4 resources and is silent on 'clusters'/'repositories' — but the CODE (above) accepts 6. The docs are INCOMPLETE relative to the implementation; they never actually say clusters is un-grantable.]
 
 - requested: `https://argo-cd.readthedocs.io/en/stable/getting_started/`
@@ -269,14 +285,14 @@ release"), and that is the ONLY authoritative statement of the server pin for a 
   landed: `https://kubernetes.io/docs/reference/access-authn-authz/rbac/`  (retrieved 2026-07-14)
   > A user can only create or update a RoleBinding or ClusterRoleBinding if they already have: [1] Permission to create/update the binding object itself, AND [2] Permission to grant (via a role or cluster role) all of the permissions referenced by the binding. ... grant them the `bind` verb on the referenced Role or ClusterRole.   [The rule is REAL — but see KB 424897: on VKS the tenant already holds cluster-admin on their own guest cluster, so this gate does not bind them.]
 
-
 ---
 
-## [PRIMARY_SOURCED_9_1] Does a VMware VKS 9.1 GUEST (workload) cluster ship the Kubernetes Gateway API CRDs (gateway.networking.k8s.io) by default — or must we install them ourselves (as this repo's istio_ensure_gwapi_crds does, pinned v1.5.1)? If it does NOT ship them, our Gateway-API route path degrades to classic Istio, which needs the shared ingress gateway that the VKS Istio package ships DISABLED by default.
+## [PRIMARY_SOURCED_9_1] Does a VMware VKS 9.1 GUEST (workload) cluster ship the Kubernetes Gateway API CRDs (gateway.networking.k8s.io) by default — or must we install them ourselves (as this repo's istio_ensure_gwapi_crds does, pinned v1.5.1)? If it does NOT ship them, our Gateway-API route path degrades to classic Istio, which needs the shared ingress gateway that the VKS Istio package ships DISABLED by default
 
 YES — a VKS 9.1 guest/workload cluster SHIPS THE GATEWAY API CRDs BY DEFAULT. The feared degradation does not happen, and the repo's central worry ("the Gateway-API path is a KinD artefact that will not exist on a real lab") is REFUTED by primary 9.1 sources.
 
 THE MECHANISM (this is the part that matters, and it is not the Istio add-on):
+
 1. `gateway-api` is a COMPONENT OF THE VKr — the VMware Kubernetes release that IS the guest cluster image. Broadcom's VKr Release Notes (a 9-1 URL, 200, zero redirects) list it per VKr with an explicit version:
      VKr 1.36.1 -> gateway-api 1.5.1     <-- EXACTLY our pin
      VKr 1.35.5 / 1.35.2 / 1.35.0 -> gateway-api 1.4.0
@@ -287,6 +303,7 @@ THE MECHANISM (this is the part that matters, and it is not the Istio add-on):
 3. The Istio add-on is a RED HERRING. It does NOT ship the CRDs, and it does not need to — Broadcom's Istio Package Reference says: "Support for K8s Gateway APIs is limited by the DELIVERED gateway-api version FOR A GIVEN VKr." The VKr delivers them; the mesh consumes them. This is also why Broadcom can ship the shared ingress gateway disabled ("gateways.ingress.enabled ... the default value is false" — same page): they expect you to use the Gateway API, which auto-provisions its own gateway. Our gateway-api route path is not a workaround — it is BROADCOM'S RECOMMENDED PATH.
 
 THE CONTRADICTION I HAD TO RESOLVE (two sources disagree; do not let the next session re-open this):
+
 - VMware's own VCF blog (Andrechak, 2026-03-28) states flatly: "Gateway API CRDs are not included in the Istio add-on and must be installed separately on each workload cluster", and does `kubectl apply --server-side ... v1.4.0/standard-install.yaml`. This is the source that would have vindicated our fear.
 - Bob Bauer (Medium, 2026-04-16, on VKS 3.6.0 / VKr v1.35.0 / Istio 1.28.2+vmware.1-vks.1) states: "Gateway API CRDs (Built-in): Newer VKS clusters include these by default."
 RESOLUTION: Bauer is right, and the blog's FIRST CLAUSE is also right — it is the second clause that over-reaches. "Not included in the ISTIO ADD-ON" is TRUE (the add-on genuinely does not ship them). "Therefore you must install them on each workload cluster" is the non-sequitur: the VKr already did. Note the blog pins v1.4.0 — which is EXACTLY what VKr 1.35.x already delivers, so his `kubectl apply` was very likely a no-op/re-apply he never checked. A blog does not outrank the VKr component list and the VKS release notes. I also ruled out the other candidate installer: Avi's AKO (auto-installed in VKS) explicitly does NOT install them — "The GatewayClass, Gateway, and Route CRD definitions must be installed on the cluster before enabling the GatewayAPI feature in AKO." So the VKr is the only thing that puts them there, and it does.
@@ -316,25 +333,35 @@ BUT THE RISK INVERTS, AND THIS IS THE ACTIONABLE PART. It is no longer "the CRDs
 
 **Would settle it:** ON A REAL VKS 9.1 GUEST CLUSTER, four commands — the first two settle the headline, the last two settle the version hazard:
 
-  # 1. Are they there at all, and WHO owns them? (The field manager is the forgery-proof part —
-  #    'present' is not the claim; 'VKS put them there' is.)
+# 1. Are they there at all, and WHO owns them? (The field manager is the forgery-proof part —
+
+# 'present' is not the claim; 'VKS put them there' is.)
+
   kubectl get crd | grep gateway.networking.k8s.io
   kubectl get crd httproutes.gateway.networking.k8s.io \
     -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}{"\n"}{range .metadata.managedFields[*]}{.manager}{" "}{.operation}{"\n"}{end}'
-  #    EXPECT: bundle-version v1.5.1 on VKr 1.36.1, or v1.4.0 on VKr 1.35.x.
-  #    A manager like 'kapp'/'tanzu'/an addon controller == VKS-managed => our apply must NOT run.
 
-  # 2. Which VKr is this cluster, and is the gateway-api add-on managed or opted out?
+# EXPECT: bundle-version v1.5.1 on VKr 1.36.1, or v1.4.0 on VKr 1.35.x
+
+# A manager like 'kapp'/'tanzu'/an addon controller == VKS-managed => our apply must NOT run
+
+# 2. Which VKr is this cluster, and is the gateway-api add-on managed or opted out?
+
   kubectl get cluster -A -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.topology.version}{"\t"}{.metadata.labels}{"\n"}{end}'
-  #    Look for  addon.addons.kubernetes.vmware.com/gateway-api: unmanaged  (opt-out => CRDs absent).
 
-  # 3. Does Istio actually accept a Gateway (i.e. is the gateway-api route path live)?
+# Look for  addon.addons.kubernetes.vmware.com/gateway-api: unmanaged  (opt-out => CRDs absent)
+
+# 3. Does Istio actually accept a Gateway (i.e. is the gateway-api route path live)?
+
   kubectl get gatewayclass istio -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}{"\n"}'
 
-  # 4. The version hazard, non-destructively:
+# 4. The version hazard, non-destructively
+
   kubectl apply --server-side --dry-run=server -f gateway-api-v1.5.1/standard-install.yaml
-  #    On a VKr-1.35 (v1.4.0) cluster this is the command that tells you whether we would be
-  #    UPGRADING a platform-managed add-on. If it does not error, that is WORSE, not better.
+
+# On a VKr-1.35 (v1.4.0) cluster this is the command that tells you whether we would be
+
+# UPGRADING a platform-managed add-on. If it does not error, that is WORSE, not better
 
 PAGE STILL WORTH OBTAINING (I could not reach it; it 404s in the 9.1 tree because of the Standard-Package -> VKS-Add-on rename): the 9.1 "Istio Add-on Reference" successor to
 .../9-0/.../standard-package-reference/istio-package-reference.html — to re-confirm, in the 9.1 tree, the "gateways.ingress.enabled default false" line I currently have only from the 9-0 page. Find it by browsing the 9.1 VKS Add-ons TOC (NOT via a /latest/ URL — /latest/ resolves to the 9-0 tree, which is the actual redirect trap).
@@ -381,7 +408,6 @@ PAGE STILL WORTH OBTAINING (I could not reach it; it 404s in the 9.1 tree becaus
   landed: `https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/vmware-tkrs-release-notes.html` ⚠️ **REDIRECTED**  (retrieved 2026-07-14)
   > THE REDIRECT TRAP, CAUGHT IN THE ACT — and it is NOT the shape the repo believes. A `/latest/` URL 301'd into the **9-0** tree (1 redirect). By contrast every `/9-1/` URL I curled returned 200 or 404, NEVER a redirect to 9-0. CONCLUSION: `latest` == 9.0 content. Search engines hand you `/latest/` URLs, which is how 9.0 gets read as 9.1. Hand-editing `/9-1/` into the path is safe and is how the settling sources above were obtained.
 
-
 ---
 
 ## [NINE_ZERO_DOC_READ_AS_9_1] On VMware VKS 9.1: is Istio installed on a GUEST cluster as a "Standard Package" (`vcf package install istio`) or has 9.1 renamed it to a "VKS Add-on" (`vcf addon install create`)? What is the exact CLI sequence (incl. `vcf package repository add` and the default-values-file flow)? Is its ingress gateway enabled or DISABLED by default? And for an AIR-GAPPED cluster: where do the add-on's OWN istiod/proxy images come from, and can they be mirrored/repointed?
@@ -400,14 +426,16 @@ BUT: the underlying artifact is unchanged — it is still a Carvel package named
 (2) THE EXACT SEQUENCE.
 `vcf package repository add` is **NOT required** on 9.1. Verbatim (9-0): "This procedure is required only when using the legacy package management system, and not required when using Add-on management to install standard packages." And: "VKS releases 3.5 and later include an embedded version of the standard package repository installed on all VKS clusters." (If you DO use the legacy path: `vcf package repository add standard-package-repo --url projects.packages.broadcom.com/vsphere/supervisor/packages/<date>/vks-standard-packages:v<ver> -n tkg-system`.)
 Legacy/package path (9.0-doc, verbatim):
+
   1. `vcf package available get istio.kubernetes.vmware.com -n tkg-system`
   2. `vcf package available get istio.kubernetes.vmware.com/1.25.3+vmware.1-vks.1 --default-values-file-output istio-data-values.yaml -n tkg-system`
   3. `kubectl create ns istio-installed`
   4. `vcf package install istio -p istio.kubernetes.vmware.com -v 1.25.3+vmware.1-vks.1 --values-file istio-data-values.yaml -n istio-installed`
 
 THE `-n` DIVERGENCE IS CONFIRMED AND IS A REAL LANDMINE:
-  * `vcf package ... -n` = a namespace INSIDE the guest cluster (`tkg-system` to look up, `istio-installed` to install into). The 9-0 page is explicit.
-  * `vcf addon install create ... -n/--namespace` = per the VCF CLI command reference, verbatim: "**Namespace for the workload cluster**" — i.e. the vSphere Namespace in which the cluster object lives (it pairs with `--cluster-name`; the CLI targets the Supervisor). NOTE HONESTLY: the reference does not spell out "vSphere Namespace" in so many words; that reading is an INFERENCE from `--cluster-name` + the Supervisor-side `vcf addon repository register/list/get/delete` subcommands. Do not copy a `-n` value between the two CLIs. Same flag, opposite meaning.
+
+- `vcf package ... -n` = a namespace INSIDE the guest cluster (`tkg-system` to look up, `istio-installed` to install into). The 9-0 page is explicit.
+- `vcf addon install create ... -n/--namespace` = per the VCF CLI command reference, verbatim: "**Namespace for the workload cluster**" — i.e. the vSphere Namespace in which the cluster object lives (it pairs with `--cluster-name`; the CLI targets the Supervisor). NOTE HONESTLY: the reference does not spell out "vSphere Namespace" in so many words; that reading is an INFERENCE from `--cluster-name` + the Supervisor-side `vcf addon repository register/list/get/delete` subcommands. Do not copy a `-n` value between the two CLIs. Same flag, opposite meaning.
 
 (3) INGRESS GATEWAY: **DISABLED BY DEFAULT — CONFIRMED.** Istio Package Reference, verbatim: `istio.gateways.ingress.enabled` default **false**; `istio.gateways.egress.enabled` default **false**. Our repo's existing claim is correct and survives. (Provenance: 9.0 content; the 9-1 page 404s.)
 
@@ -462,12 +490,16 @@ WHAT SURVIVES UNCHANGED: the ingress-gateway-DISABLED-by-default fact (`istio.ga
 
 2. IS ISTIO OFFERED AS AN ADD-ON, AND AT WHAT VERSION (settles the 1.30.0+vmware.1-vks.1 string):
    vcf addon available list --cluster-name $VKS_CLUSTER -n $VSPHERE_NAMESPACE
-   # legacy cross-check, run INSIDE the guest cluster:
+
+   # legacy cross-check, run INSIDE the guest cluster
+
    kubectl -n tkg-system get packages | grep istio
 
 3. THE `-n` SEMANTICS (settles the landmine — the ONE thing I could not prove from docs):
    vcf addon install create istio --cluster-name $VKS_CLUSTER -n $VSPHERE_NAMESPACE --dry-run 2>&1 | head
-   # then deliberately pass a GUEST namespace instead and confirm it errors:
+
+   # then deliberately pass a GUEST namespace instead and confirm it errors
+
    vcf addon install create istio --cluster-name $VKS_CLUSTER -n istio-installed --dry-run 2>&1 | head
    Expect: the vSphere-Namespace form resolves the cluster; the guest-namespace form fails to find it.
 
@@ -530,7 +562,6 @@ PAGE I COULD NOT OBTAIN (and would settle item 1-3 without a lab): a 9.1-tree Is
   landed: `https://www.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/.../managing-add-ons-in-vks-clusters.html (host redirect; version stayed 9-0)` ⚠️ **REDIRECTED**  (retrieved 2026-07-14)
   > 'You can update the AddonRepositoryInstall in order to use a different version of the standard packages repository ... or to use a private registry to support an air-gapped installation scenario.' Add-ons are 'a new mechanism for managing add-ons in VKS Clusters' from version 3.5, providing automatic package repository management. Istio is not named on this page.
 
-
 ---
 
 ## [PRIMARY_SOURCED_9_1] On VMware VKS/VCF 9.1: is Harbor a Supervisor Service? How does a GUEST workload cluster trust its CA — auto-injected on the same Supervisor, or must an operator wire it (containerd certs.d / a pull secret)? What endpoint shape does a tenant actually get, and can a tenant mint a robot account without admin?
@@ -543,9 +574,9 @@ Confirmed on a genuine 9-1 page that did NOT redirect (vSphere Supervisor Releas
 (2) CA TRUST — CONDITIONAL AUTO-INJECTION. This is the headline, and the trigger is NOT "same Supervisor".
 The auto-trust mechanism is REAL and PRIMARY-SOURCED, but it is keyed on the CERTIFICATE, not the Supervisor. Broadcom's own Harbor service README documents the data-value `tlsCertificate.tlsSecretLabels: {"managed-by": "vmware-vRegistry"}` verbatim as: "The certificate that vSphere Kubernetes Service uses to install the Harbor CA as a trusted root on vSphere Kubernetes Service clusters."
 
-  - Harbor installed WITH a customized certificate whose TLS secret carries that label => VKS installs the Harbor CA as a trusted root on VKS clusters. AUTO-TRUST WORKS.
-  - Harbor left on its DEFAULT auto-generated self-signed certificate (no `tlsCertificate` block => no label) => NO auto-trust. Guest clusters fail with `x509: certificate signed by unknown authority` / ErrImagePull, and the operator MUST wire the CA explicitly via the Cluster spec `trust.additionalTrustedCAs` — a Secret in the vSphere Namespace holding the CA in PEM, DOUBLE-base64-encoded (`base64 -w 0 ca.crt | base64 -w 0`; "If the contents are not double base64-encoded, the resulting PEM file cannot be processed"). Done at cluster CREATE, or by UPDATING an existing cluster.
-  - THIRD, SILENT FAILURE MODE (Broadcom KB 440607): if the custom `tls.key` is ENCRYPTED, "Harbor is unable to decrypt the key", silently FALLS BACK to an auto-generated self-signed cert, and auto-trust quietly does not happen — you get x509 while the label still looks correct. A green-config/red-runtime trap of exactly this repo's house style.
+- Harbor installed WITH a customized certificate whose TLS secret carries that label => VKS installs the Harbor CA as a trusted root on VKS clusters. AUTO-TRUST WORKS.
+- Harbor left on its DEFAULT auto-generated self-signed certificate (no `tlsCertificate` block => no label) => NO auto-trust. Guest clusters fail with `x509: certificate signed by unknown authority` / ErrImagePull, and the operator MUST wire the CA explicitly via the Cluster spec `trust.additionalTrustedCAs` — a Secret in the vSphere Namespace holding the CA in PEM, DOUBLE-base64-encoded (`base64 -w 0 ca.crt | base64 -w 0`; "If the contents are not double base64-encoded, the resulting PEM file cannot be processed"). Done at cluster CREATE, or by UPDATING an existing cluster.
+- THIRD, SILENT FAILURE MODE (Broadcom KB 440607): if the custom `tls.key` is ENCRYPTED, "Harbor is unable to decrypt the key", silently FALLS BACK to an auto-generated self-signed cert, and auto-trust quietly does not happen — you get x509 while the label still looks correct. A green-config/red-runtime trap of exactly this repo's house style.
 
   Both community sources are right; they describe different branches. virtualhippy (VCF 9 + VKS) says the CA is NOT automatically trusted and you need trust.additionalTrustedCAs — true for the default self-signed cert. Broadcom says VKS installs it as a trusted root — true for the labelled custom cert. The discriminator is the cert, and nobody states it plainly.
 
@@ -577,25 +608,38 @@ THE REPO'S CLAIM IS RIGHT BUT THE REASON IS WRONG — and the wrong reason is lo
 1. WHICH CERT BRANCH IS THIS HARBOR ON? (decides whether auto-trust happens at all)
    kubectl get ns | grep svc-harbor
    kubectl -n <svc-harbor-ns> get secret -l managed-by=vmware-vRegistry
-   # NON-EMPTY => custom cert, labelled => VKS auto-installs the Harbor CA as a trusted root. Auto-trust EXPECTED.
-   # EMPTY     => default auto-generated self-signed cert => NO auto-trust. trust.additionalTrustedCAs is MANDATORY.
-   # Then rule out the KB-440607 silent fallback (encrypted tls.key => Harbor silently self-signs DESPITE the label):
+
+   # NON-EMPTY => custom cert, labelled => VKS auto-installs the Harbor CA as a trusted root. Auto-trust EXPECTED
+
+   # EMPTY     => default auto-generated self-signed cert => NO auto-trust. trust.additionalTrustedCAs is MANDATORY
+
+   # Then rule out the KB-440607 silent fallback (encrypted tls.key => Harbor silently self-signs DESPITE the label)
+
    kubectl -n <svc-harbor-ns> get secret harbor-tls -o jsonpath='{.data.tls\.key}' | base64 -d | head -1
-   #   "-----BEGIN ENCRYPTED PRIVATE KEY-----" => the label lies; auto-trust will NOT happen.
+
+   # "-----BEGIN ENCRYPTED PRIVATE KEY-----" => the label lies; auto-trust will NOT happen
 
 2. DID THE CA ACTUALLY LAND ON A GUEST NODE? (verify the end result, not the label)
-   # the only honest test is a real pull:
+
+   # the only honest test is a real pull
+
    kubectl run t --image=<HARBOR_FQDN>/<project>/<img>:<tag> --restart=Never
    kubectl describe pod t | grep -i x509
-   #   x509 unknown authority => we are on the no-auto-trust branch, whatever any doc says.
-   # Also confirm the endpoint shape bites as predicted — pull by LB IP instead of FQDN:
-   #   expect a SAN mismatch, proving HARBOR_URL must be the FQDN on a lab (repo harbor.md:33).
+
+   # x509 unknown authority => we are on the no-auto-trust branch, whatever any doc says
+
+   # Also confirm the endpoint shape bites as predicted — pull by LB IP instead of FQDN
+
+   # expect a SAN mismatch, proving HARBOR_URL must be the FQDN on a lab (repo harbor.md:33)
 
 3. WHAT DOES A TENANT ACTUALLY GET IN HARBOR? (settles the robot question)
    curl -u '<vsphere-namespace-user>' https://<HARBOR_FQDN>/api/v2.0/users/current
-   #   401 => VKS grants the tenant NO Harbor identity at all (my expectation) => the robot is a REQUEST.
+
+   # 401 => VKS grants the tenant NO Harbor identity at all (my expectation) => the robot is a REQUEST
+
    curl -u '<user>' -X POST https://<HARBOR_FQDN>/api/v2.0/projects/<proj>/robots -d ...
-   #   403 => not project-admin => `make harbor-robot` cannot work; the platform team must mint it.
+
+   # 403 => not project-admin => `make harbor-robot` cannot work; the platform team must mint it
 
 PAGES I COULD NOT OBTAIN (stated, not glossed): the canonical "Install Harbor as a Supervisor Service" techdocs page is BROKEN — its advertised 'latest' URL 301s to a 9-0 URL that returns 404. And there is NO 9-1 version of the Harbor FQDN-mapping page (I requested the 9-1 path explicitly: 404). If anyone has Broadcom support-portal access, the authoritative artifact is the harbor-data-values-<ver>.yml shipped with the Harbor Supervisor Service download — it contains the tlsCertificate/tlsSecretLabels block and would settle check (1) OFFLINE, with no lab at all. That is the cheapest next step.
 
@@ -644,4 +688,3 @@ PAGES I COULD NOT OBTAIN (stated, not glossed): the canonical "Install Harbor as
 - requested: `https://blogs.vmware.com/cloud-foundation/2026/04/21/deploying-harbor-service-in-air-gapped-vmware-cloud-foundation-9-0/`
   landed: `https://blogs.vmware.com/cloud-foundation/2026/04/21/deploying-harbor-service-in-air-gapped-vmware-cloud-foundation-9-0/`  (retrieved 2026-07-14)
   > OFFICIAL VMware/Broadcom blog, 2026-04-21, VCF 9.0 (NOT 9.1). Air-gapped Harbor Supervisor Service needs a two-phase bootstrap: a Bitnami Harbor OVA VM as bootstrap registry, imgpkg-copy the Harbor service bundle to it, repoint the image URL in the Harbor supervisor service YAML. 'we can access the Harbor Supervisor Service UI using the FQDN provided in the data values yaml file'.
-
