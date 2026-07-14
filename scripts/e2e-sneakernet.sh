@@ -64,7 +64,13 @@ log_info "sneakernet e2e — OS matrix: ${SNEAKERNET_OS} · transfer dir: ${TRAN
 log_info "[internet box / host] pulling images into ${BUNDLE_DIR:-./bundle}"
 make mirror-pull
 
-log_info "[internet box / host] bundling into the transfer dir (stages crane into the bundle)"
+# The offline Maven builder: BUILT HERE (this box has Maven Central and no Harbor), carried in the
+# bundle, and PUSHED on the air-gap box. Without this leg the e2e would still pass while `make
+# builder-image` remained unrunnable on both sneakernet boxes — which is exactly how that bug survived.
+log_info "[internet box / host] building the offline Maven builder into the bundle (needs Maven Central; NOT Harbor)"
+make builder-build
+
+log_info "[internet box / host] bundling into the transfer dir (stages crane + the builders into the bundle)"
 make bundle BUNDLE_OUT_DIR="$TRANSFER"
 
 tarball=""

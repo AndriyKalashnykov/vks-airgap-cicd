@@ -120,6 +120,14 @@ if [ "${JUMPBOX_MODE:-validate}" = "airgap-half" ]; then
   make bundle-load BUNDLE_TARBALL="$JUMPBOX_TARBALL"
   echo "### mirror-push — push the loaded images into the internal Harbor ###"
   make mirror-push
+
+  # THE OFFLINE MAVEN BUILDER. This box has NO INTERNET and NO CONTAINER ENGINE — it pushes the builder
+  # that the INTERNET box built and the bundle carried, using the carried crane. Before the split,
+  # `make builder-image` needed Maven Central AND Harbor in one command, so NEITHER sneakernet box could
+  # run it: the air-gapped Java build simply could not be produced. This leg is what proves it now can.
+  echo "### builder-push — push the CARRIED Maven builder into Harbor (no internet; crane, not an engine) ###"
+  make builder-push
+
   echo "### mirror-verify — integrity-check Harbor's copy (the sneakernet assertion) ###"
   make mirror-verify
   echo "JUMPBOX_SNEAKERNET_OK"
