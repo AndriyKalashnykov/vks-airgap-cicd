@@ -369,67 +369,118 @@ The two BLOCKING triggers (before you implement · before you call the session d
 (`Workflow` with a schema, or a synchronous `Agent` — never fire-and-forget), and what to do with the
 findings are all in Rule Zero. Do not duplicate them here.
 
-## 🔴 UNVERIFIED CONTROL — THE READ-ONLY HOOK MAY BE BLIND TO SUBAGENTS. TEST IT FIRST. (2026-07-14)
+## ▶️ HANDOFF 2026-07-14 (air-gap toolchain + the gate-that-lied session) — START HERE
 
-**Do not trust `subagent-readonly-gate.py` until you have run the test below. It has never been proven to
-block a real subagent — only to block a JSON payload I hand-fed it.**
+**Branch `gate/doc-target-coverage` → PR #239 (all checks green, `mergeStateStatus: CLEAN`). NOT MERGED.**
+`main` is untouched. The work is 13 commits on that branch.
 
-### What is PROVEN
+### The one-line summary
+
+The air-gap bundle claimed to give an air-gapped box what it needs. **It did not — and four green tests
+agreed with it.** Every bug this session was found by an adversary or by the owner, never by a test.
+
+### Done and PROVEN (6/6 e2e matrix + the offline gates)
 
 | | |
 |---|---|
-| the hook's LOGIC | ✅ fed a subagent-shaped payload (`agent_type` set + `git commit`), it returns **rc=2, blocked**. 17/17 assertions. |
-| the hook is WIRED AND FIRING | ✅ instrumented it to log every invocation, ran a Bash call: `FIRED tool=Bash agent_id=None agent_type=None`. It runs. |
-| **a subagent is actually BLOCKED by it** | ❌ **NEVER TESTED.** And the evidence says it is not: on 2026-07-14 at **14:40:11** a subagent ran `git checkout -b`, `git commit`, `git push` and `gh pr create` — **while this hook was wired for `Bash`** (`git reflog` has the proof). |
+| bundle carried **gcloud's `kubectl v1.34.4-dispatcher`**, not the pinned `1.36.2` | now resolves via `mise which` and **asserts the pin** |
+| bundle carried **`helm` + ZERO CHARTS** → the **DEFAULT** ingress could never install air-gapped | istio charts carried; `46-install-istio.sh` now **HARD-FAILS** rather than silently fetching (a green install off a broken bundle proves nothing) |
+| **`awk` is not on bare Photon**; `lib/apps.sh` + `mirror-verify` need it | in `check-tools` and in the **real bootstrap** (`00-install-prereqs.sh`), not just the test image |
+| no-internet box retried **>2 min** then blamed googleapis | `require_internet()` — fails in **0s**, names the sneakernet flow |
+| `check-tools` **hung ~130s** dialling the API server, and sent air-gapped boxes to `make deps` | per-tool timeout-wrapped probes; `CHECK_TOOLS_PHASE=pre-carry` |
+| the runbook's *"cheapest failure available"* (`check-tools`) was **executed by NO harness** | `jumpbox-run.sh` now runs it **pre-carry AND post-bundle-load** — the doc's two claims are bound to the harness |
 
-### The suspected defect — a FAIL-OPEN in our own gate
+### 🔴 READ THIS BEFORE YOU TRUST ANY GATE HERE
 
-```python
-if not (data.get("agent_id") or data.get("agent_type")):
-    return 0                      # "must be the main agent — allow"
+**I shipped a hook, "proved" it with hand-fed JSON, and told the owner the repo was protected. It wasn't.**
+A subagent had *already* created a branch, committed, pushed and opened a PR **with the hook wired and
+firing** — and I looked straight past that evidence. Two confident diagnoses ("it never fired", "it fails
+open") were **both wrong**. The hook fired and identified the agent perfectly; its **regex** had the hole:
 
+```text
+git commit -m x                     BLOCKED
+GIT_AUTHOR_NAME=x git commit -m y   *** ALLOWED ***   <- OUR OWN commit recipe
+/usr/bin/git commit -m x            *** ALLOWED ***
+git -C /other/repo commit -m x      *** ALLOWED ***
 ```
 
-**If the harness does NOT populate `agent_id`/`agent_type` in the PreToolUse payload for subagents, then
-every subagent is indistinguishable from the main agent and the gate waves EVERYTHING through** — while
-looking installed, and green. That is this repo's house failure (*a gate that passes by not looking*)
-committed by the very thing built to prevent it, and it manufactured false confidence: three unbidden
-subagent mutations (two tree-rewrites + a commit/push/PR) happened with the "sandbox" in place.
+**Our own git rules prescribe `GIT_AUTHOR_NAME="$(git config user.name)" … git commit`.** The agent followed
+the house recipe and walked through the gate. **Test a regex gate against your own conventions first** —
+they are what your agents actually run. Fixed, RED-proven 17 ways, end-to-end with a real subagent.
 
-### THE TEST (5 minutes; do it before relying on any subagent brief)
+**The general lesson, and it is the one to carry:** *unit-testing a gate's LOGIC proves nothing about the
+GATE.* Prove it through the real harness, with the real actor. The three failure modes — **wired? / sees the
+actor? / blocks?** — fail INDEPENDENTLY, so demand each separately.
 
-Hook *wiring* loads at SESSION START, but the hook *script* is re-read from disk on every call — so:
+### Mechanisms now in place (they load at SESSION START — so they protect YOU, not the session that wrote them)
 
-1. Add to the top of `main()` in `subagent-readonly-gate.py`, right after the `json.load`:
+| hook | blocks |
+|---|---|
+| `subagent-readonly-gate` | subagent `Edit`/`Write` (it used to match `Bash` only — which is how the agents rewrote 5 files), and every mutating git/gh form incl. env-prefixed |
+| `adversary-first-gate` | writes to `scripts/`, `Makefile`, `jumpbox/`, `k8s/`, `apps/`, **and now `docs/` + `README.md`** until an adversary runs. (`docs/` was exempt; I used the exemption to write a mechanism essay into a runbook within the hour.) `CLAUDE.md` stays exempt — it IS the plan. |
+| `mid-run-edit-gate` | editing a file a **running process is executing** (bash reads scripts incrementally; I corrupted a 12 GB build this way) |
+| `no-gate-in-commit-chain` | `make ci \| tail && git commit` and friends |
+| `check-agent-frontmatter` | an agent definition with **unparseable YAML** (`vks-adversary.md` was broken on `main`, unnoticed) |
 
-   ```python
-   open("/tmp/hook-fired.log","a").write("FIRED tool=%s agent_id=%s agent_type=%s\n" % (
-       data.get("tool_name"), data.get("agent_id"), data.get("agent_type")))
-   ```
+**Spawn every adversary with `isolation: "worktree"`.** A subagent shares your `.git/HEAD`: one ran
+`git checkout -b`, and **the next 7 commits I made landed on its branch** while I believed otherwise.
 
-2. Spawn ANY subagent and have it run **one Bash command** (`git status --short` — read-only).
-3. `grep -v 'agent_id=None' /tmp/hook-fired.log`
-   - **a line appears** → subagents ARE identified → the gate is real; the 14:40 incident needs another explanation (find it).
-   - **nothing** → **the gate is BLIND. It protects nothing.** Fix it, and do not brief another read-only agent until you have.
-4. Remove the probe.
+### OWED — in priority order
 
-### If it is blind — the two fixes, in order
+1. **A real lab.** Everything about the Supervisor, the `vcf` CLI auth flow, and tenant RBAC is unverified.
+2. **The INVERTED Gateway-API risk (new, and it matters).** Primary 9.1 sources say **VKS SHIPS the Gateway
+   API CRDs** (VKr 1.36.1 → gateway-api **1.5.1**, our exact pin) — the old "it's a KinD artefact" BLOCKING
+   finding is **REFUTED**. But we `kubectl apply --server-side` **our own** v1.5.1 over a **VKS-MANAGED**
+   add-on whose version the **VKr** chooses (v1.4.0 on VKr 1.35.x). **We may be fighting the add-on
+   manager.** Settle it with one command on a lab (recorded below).
+3. **The runbook's Step 4 is executed by NOTHING.** The adversary measured it: the doc names 12 `make`
+   commands; **5 are never run** — `platform`, `gitops`, `install-ingress`, `verify` (+ `check-tools`, now
+   fixed). `install-ingress` is the command whose doc row **lied for hours** and no test noticed. **Do NOT
+   build a doc-parsing gate** (an adversary killed that design: a sequence gate cannot see a prose claim
+   about a MODE, and would license trust in the uncovered half). **Extend the harness to run Step 4.**
+4. **43 HIGH/MEDIUM doc findings** in `docs/reviews/2026-07-14-doc-truth-audit.md` — labelled **claims, not
+   verdicts** (23 of 68 were refuted and the file does not mark which). Re-check each against the code.
+5. **A `check-vks-provenance` gate** — a grade is not a source. `docs/reviews/2026-07-14-vks-provenance.md`
+   - `-vks-deep-research.md` now carry `url_requested` vs `url_landed` per fact.
 
-1. **`isolation: "worktree"` on EVERY adversary spawn, mandatory.** It does not depend on the harness
-   populating any field: the agent gets its own checkout and **physically cannot** touch your working tree
-   or your `HEAD`. It does NOT stop a `push` (same remote, same creds) — but it stops the two things that
-   actually hurt: clobbering in-flight edits, and switching the branch under you.
-   **This session's damage would have been prevented by it, and the rules already said to use it. I did not.**
-2. **Make the hook FAIL CLOSED**: treat an unidentifiable caller as a subagent unless it proves otherwise.
-   A mis-detection then blocks *me*, loudly — instead of letting an agent through, silently. Same
-   failure-polarity argument that settled the `check-tools` design: a false RED is recoverable, a false
-   GREEN is not.
+**🔴 AND: "Broadcom 9.1 URLs 301 to 9.0" is FALSE.** Measured: **no `/9-1/` URL redirected** (200, or 404 when
+the page was *renamed* — 9.1 renamed *Standard Packages* → *VKS Add-ons*). It is **`/latest/`** that
+redirects, and search engines hand you `/latest/` URLs. **Hand-edit the version to `/9-1/`.** Every
+`9.0-doc (inferred for 9.1)` grade in `docs/vks-services/` was earned under a false premise.
 
-### Also true, and I only said it after shipping
+## ✅ RESOLVED 2026-07-14 — the read-only hook WORKS. The hole was its REGEX, and our own rules dug it
 
-**A hook added mid-session does NOT protect that session** — the `PreToolUse` wiring in
-`.claude/settings.json` is read at session start. `adversary-first-gate.py` (added 2026-07-14) therefore
-protected **nothing** on the day it was written. Say that out loud when shipping a hook.
+**Tested END-TO-END, through the harness, with a real subagent** (not a hand-fed payload — that was the
+original sin). All three facts verified SEPARATELY, because they fail independently:
+
+| | |
+|---|---|
+| is it **wired**? | ✅ instrumented it: `FIRED tool=Bash` on every invocation. |
+| can it **SEE a subagent**? | ✅ **136 invocations** carrying `agent_id=… agent_type=vks-adversary`. The main agent has neither — that IS the discriminator, and it works. |
+| does it **BLOCK** one? | ✅ a live subagent: `git status --short` **ran**; `git commit --dry-run` was **REFUSED** with the hook's own text. |
+
+**Both of my earlier diagnoses were wrong** — it did not "fail to fire", and it does not "fail open on an
+unidentified caller". I asserted each without testing, after already being shown the claim was suspect.
+
+**The hole was the regex's model of the shell.** "Command position" is not "start of line":
+
+```text
+git commit -m x                     BLOCKED
+GIT_AUTHOR_NAME=x git commit -m y   *** ALLOWED ***   <- the escape actually used
+/usr/bin/git commit -m x            *** ALLOWED ***
+git -C /other/repo commit -m x      *** ALLOWED ***   <- mutates a DIFFERENT repo
+```
+
+**`git-workflow.md` PRESCRIBES `GIT_AUTHOR_NAME="$(git config user.name)" … git commit`** for correct
+authorship. The agent followed the house recipe, the env prefix pushed `git` off position zero, and it
+walked through a gate that was installed, wired, firing and green. (Commit `5215165` is authored
+*"Andriy Kalashnykov"* — exactly what that recipe produces.) **Test a regex gate against your OWN
+conventions first — they are what your agents will actually run.** Fixed and RED-proven 17 ways in both
+directions: every mutating form blocked, every read-only evidence tool still allowed.
+
+**Say this out loud whenever you ship a hook:** the `PreToolUse` wiring in `.claude/settings.json` loads at
+**session start**, so *a hook added mid-session protects nothing in that session*. Every gate listed in the
+handoff protects the NEXT session, not the one that wrote it.
 
 ## ✅ THE RE-TEST MATRIX IS DONE — 6/6 GREEN (air-gap toolchain session, 2026-07-14 evening)
 
