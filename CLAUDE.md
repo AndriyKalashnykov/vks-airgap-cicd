@@ -236,7 +236,11 @@ Run a single app test: `cd apps/java/javawebapp && ./mvnw -B -Dtest=<ClassName>#
 - **Version manager:** mise (`.mise.toml`) on the jump box — including `crane`
   (the image-mirror engine, a static Go binary). Air-gap exception:
   `tkn`/`argocd` come from OS packages / pinned releases via
-  `00-install-prereqs.sh`; the air-gapped host gets binaries from the bundle.
+  `00-install-prereqs.sh`. The **bundle carries `crane`** (the mirror engine) — and *only* crane, which
+  is all the mirror half needs (`bundle-load` → `mirror-push` → `mirror-verify`). It used to carry
+  **nothing**, while this line claimed otherwise; the e2e hid that by letting its "air-gap" box run
+  `make deps` over the internet. A **full** air-gapped install additionally needs `kubectl`/`helm`/`jq`/
+  `envsubst` pre-provisioned on the inside box — see [`docs/sneakernet.md`](docs/sneakernet.md).
 - **Secrets never in argv** — PATs/registry creds via stdin / `--password-stdin` /
   env-by-name (see `.env.example` commented secret placeholders).
 - **Java app:** Spring Boot 4 + JUnit/`@SpringBootTest`; Dockerfile follows the

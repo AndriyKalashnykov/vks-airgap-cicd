@@ -233,9 +233,20 @@ engine-trust-check: check-env ## Does THIS engine (podman|docker) actually work 
 engine-trust-check-rootless: check-env ## Is ROOTLESS DOCKER viable? (the ONLY docker mode that matches podman's ergonomics — rootful ALWAYS costs a sudo)
 	@$(SCRIPTS)/17-engine-rootless-docker-check.sh
 
+# The offline Maven builder needs TWO networks — Maven Central (to bake ~/.m2) and Harbor (to push).
+# A DUAL-HOMED box has both, so `builder-image` does it in one shot. A SNEAKERNET split has NEITHER
+# box with both, so it is split: build outside (into the bundle), push inside (with the carried crane).
 .PHONY: builder-image
-builder-image: check-env ## (internet) Build + push the air-gap Maven builder image (deps pre-baked)
+builder-image: check-env ## (dual-homed) Build + push the air-gap Maven builder image (deps pre-baked)
 	@$(SCRIPTS)/15-build-push-builder.sh
+
+.PHONY: builder-build
+builder-build: check-env ## (sneakernet, INTERNET box) Build the Maven builder into the bundle — needs Maven Central, NOT Harbor
+	@$(SCRIPTS)/14-builder-build.sh
+
+.PHONY: builder-push
+builder-push: check-env ## (sneakernet, AIR-GAP box) Push the CARRIED Maven builder into Harbor — needs Harbor, NOT the internet (uses the carried crane; no container engine)
+	@$(SCRIPTS)/22-builder-push.sh
 
 ##@ VKS access
 .PHONY: vks-login
@@ -400,29 +411,23 @@ SNEAKERNET_TRANSFER ?=
 e2e-kind-cross-cluster: ## Faithful 2-KinD-cluster validation of the cross-cluster ArgoCD registration (HUB ArgoCD registers a GUEST cluster + syncs an app INTO it — the real-lab Supervisor→guest topology)
 	@$(SCRIPTS)/e2e-cross-cluster.sh
 
+# The air-gap box's OS — BOTH BY DEFAULT, and that is the point. The far side is where Photon and Ubuntu
+# actually diverge, and every divergence is invisible on the near side: the bundle's COMPRESSOR is chosen
+# by the OUTSIDE box and must be decoded by the INSIDE one (Photon's tar is TOYBOX and has no --zstd AT
+# ALL; zstd ships on neither base image), and the carried `crane` must exec there.
+#
+# This ran Photon-only, which is exactly why a shipping bug survived: the host emitted a .tar.zst that an
+# Ubuntu air-gap box CANNOT OPEN, and the Photon leg passed because that image happens to have GNU tar.
+# A matrix that only ever runs one leg is decoration. Narrow it deliberately if you must: SNEAKERNET_OS=photon
+SNEAKERNET_OS ?= photon ubuntu
+
 .PHONY: e2e-sneakernet
 e2e-sneakernet: ## Faithful TWO-BOX sneakernet on KinD: [host=internet box] mirror-pull → bundle → carry ONLY the tarball → [FRESH jumpbox container=air-gap box] bundle-load → mirror-push → mirror-verify
-	@transfer="$(SNEAKERNET_TRANSFER)"; [ -n "$$transfer" ] || transfer="$$(mktemp -d)"; \
-	 cleanup() { \
-	   if [ -z "$(SNEAKERNET_TRANSFER)" ]; then rm -rf "$$transfer"; fi; \
-	   $(MAKE) kind-down || true; \
-	 }; \
-	 trap cleanup EXIT; \
-	 echo "==> sneakernet e2e: staging transfer dir = $$transfer"; \
-	 $(MAKE) kind-up install-harbor; \
-	 echo "==> [internet box / host] pull images into $(BUNDLE_DIR)"; \
-	 $(MAKE) mirror-pull; \
-	 echo "==> [internet box / host] bundle into the transfer dir"; \
-	 $(MAKE) bundle BUNDLE_OUT_DIR="$$transfer"; \
-	 tarball=""; \
-	 for f in "$$transfer"/vks-airgap-cicd-bundle-*.tar.zst "$$transfer"/vks-airgap-cicd-bundle-*.tar.gz; do \
-	   [ -f "$$f" ] && { tarball="$$f"; break; }; \
-	 done; \
-	 [ -n "$$tarball" ] || { echo "ERROR: bundle produced no tarball in $$transfer"; exit 1; }; \
-	 echo "==> carry ONLY $$(basename "$$tarball") across the air gap into a FRESH jump box"; \
-	 echo "==> [air-gap box] a fresh jumpbox container (only the tarball; host cache excluded) reconstructs the cache, pushes to Harbor, and integrity-verifies"; \
-	 $(MAKE) jumpbox JUMPBOX_TARBALL="$$tarball"; \
-	 echo "e2e-sneakernet: OK — a FRESH air-gap jump box reconstructed the cache from ONLY the carried tarball, pushed it into Harbor, and integrity-verified it (true two-box round-trip, no host-state leakage)"
+	@SNEAKERNET_OS="$(SNEAKERNET_OS)" SNEAKERNET_TRANSFER="$(SNEAKERNET_TRANSFER)" $(SCRIPTS)/e2e-sneakernet.sh
+
+.PHONY: e2e-sneakernet-both
+e2e-sneakernet-both: ## The sneakernet OS matrix: the SAME carried tarball unpacked + pushed by a Photon air-gap box AND an Ubuntu one (each gets a fresh, EMPTY Harbor so its push is a real push)
+	@$(MAKE) e2e-sneakernet SNEAKERNET_OS="photon ubuntu"
 
 ##@ Full pipeline
 .PHONY: install-all

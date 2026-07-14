@@ -284,6 +284,15 @@ make env-validate   # validity gate: does KUBECONFIG reach the cluster, and does
 authenticated over HTTPS with your CA**. `env-validate` is also the honest check on Step 2: if the CA you
 fetched does not actually verify Harbor, it fails **here**, not inside Kaniko an hour later.
 
+**First, one fork — can this jump box reach BOTH the internet and Harbor?** `make install-all` runs
+`make mirror`, which pulls from the internet **and** pushes to Harbor **in the same command**. If your jump
+box cannot do both, that command cannot work, and no amount of `.env` is going to fix it.
+
+| your jump box | what you run |
+|---|---|
+| reaches the internet **and** Harbor (**dual-homed**) | `make install-all` below — nothing else to do |
+| reaches the **internet only** | **[the sneakernet flow](sneakernet.md)** — two boxes: pull + build outside, carry, push + install inside. It replaces `install-all` (which starts with `mirror`); do **not** come back to it. |
+
 **Then install:**
 
 ```bash

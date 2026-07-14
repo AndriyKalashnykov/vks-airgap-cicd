@@ -11,7 +11,8 @@ VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surface
 - **Pipeline surface** — self-hosted **Gitea** + **Tekton** (test → **Kaniko** build →
   **Harbor** push → GitOps tag write-back), wired to **Harbor** + **ArgoCD**, which run as **Supervisor Services** (you install them, or they already exist and you are a tenant).
 - **Delivery surface** — an OS-portable (Ubuntu / PhotonOS) jump-box image mirror (**crane**,
-  dual-homed or sneakernet), a dependency-baked offline **Maven** builder, an **optional** pluggable
+  dual-homed or **[sneakernet](docs/sneakernet.md)** — carry the bundle across on a stick when the jump
+  box has internet but no route to Harbor), a dependency-baked offline **Maven** builder, an **optional** pluggable
   ingress (**Istio** default, **Traefik** optional — or **attach to the Istio a VKS cluster already
   has**, since Istio ships there as a VKS Standard Package) fronting the UIs at `*.vks.local`, and a
   one-command **KinD** end-to-end that proves the whole flow locally.

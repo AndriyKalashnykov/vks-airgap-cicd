@@ -84,15 +84,32 @@ if [ "${JUMPBOX_MODE:-validate}" = "airgap-half" ]; then
     printf 'HARBOR_USERNAME=%s\n' "${HARBOR_USERNAME:-admin}"
     [ -n "${HARBOR_PASSWORD:-}" ] && printf 'HARBOR_PASSWORD=%s\n' "$HARBOR_PASSWORD"
     printf 'HARBOR_CA_FILE=./secrets/harbor-ca.crt\n'
-  } > "$WORK/.env.kind"
-  chmod 600 "$WORK/.env.kind"
+    # `.env.state`, NOT `.env.kind` — the sink was renamed in #192, and writing the legacy name made
+    # load_env emit "reading legacy .env.kind" on every sneakernet run. Sixth site of that rename's rot.
+  } > "$WORK/.env.state"
+  chmod 600 "$WORK/.env.state"
   if [ "${HARBOR_INSECURE:-0}" != "1" ] && [ -f /run/jumpbox/harbor-ca.crt ]; then
     mkdir -p secrets; cp /run/jumpbox/harbor-ca.crt secrets/harbor-ca.crt; chmod 0644 secrets/harbor-ca.crt
   fi
 
-  echo "### make deps — install the mirror engine (crane) on this OS ###"
-  make deps
-  eval "$(mise activate bash)" 2>/dev/null || true; hash -r
+  # NO `make deps` HERE. THAT WAS THE LIE.
+  #
+  # This box is supposed to be AIR-GAPPED. Running `make deps` downloaded crane from the internet (via
+  # mise), so the e2e proved the opposite of its own name: the image cache was genuinely carried, and the
+  # TOOLCHAIN was quietly fetched over the network. A real operator, on a box with no route out, would have
+  # got `crane: command not found` at `make mirror-push` — after carrying an 11 GB tarball across the gap.
+  #
+  # The toolchain now comes from the BUNDLE (11-bundle.sh stages crane; 20-bundle-load.sh installs it).
+  # Removing this line is what makes this e2e a real test: if the bundle stops carrying crane, the
+  # air-gap half dies here, exactly as a real operator would.
+  export PATH="${HOME}/.local/bin:${PATH}"
+  if command -v crane >/dev/null 2>&1; then
+    echo "FATAL: crane is ALREADY on this 'air-gapped' box before the bundle was loaded — the fidelity of"
+    echo "       this test depends on it NOT being here. Something installed it (a stale image layer, a"
+    echo "       leaked mount). Fix that, or this leg proves nothing."
+    exit 1
+  fi
+  echo "### air-gap box: NO internet toolchain. crane must come from the carried bundle. ###"
 
   # Fidelity assert: the image cache MUST be empty here — nothing leaked from the host.
   if [ -n "$(ls -A bundle 2>/dev/null || true)" ]; then
@@ -103,6 +120,14 @@ if [ "${JUMPBOX_MODE:-validate}" = "airgap-half" ]; then
   make bundle-load BUNDLE_TARBALL="$JUMPBOX_TARBALL"
   echo "### mirror-push — push the loaded images into the internal Harbor ###"
   make mirror-push
+
+  # THE OFFLINE MAVEN BUILDER. This box has NO INTERNET and NO CONTAINER ENGINE — it pushes the builder
+  # that the INTERNET box built and the bundle carried, using the carried crane. Before the split,
+  # `make builder-image` needed Maven Central AND Harbor in one command, so NEITHER sneakernet box could
+  # run it: the air-gapped Java build simply could not be produced. This leg is what proves it now can.
+  echo "### builder-push — push the CARRIED Maven builder into Harbor (no internet; crane, not an engine) ###"
+  make builder-push
+
   echo "### mirror-verify — integrity-check Harbor's copy (the sneakernet assertion) ###"
   make mirror-verify
   echo "JUMPBOX_SNEAKERNET_OK"

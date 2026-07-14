@@ -41,14 +41,6 @@ done < <( { grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]
             grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"}]+:[^[:space:]"}]+' scripts/40-install-gitea.sh 2>/dev/null
           } | sed -E 's|\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/||' | sort -u)
 
-# eclipse-temurin's tag is ALSO carried outside the manifests: in .env.example
-# (TEMURIN_JRE_TAG, which feeds the rendered RUNTIME_IMAGE_REF in configure-tekton)
-# and in the app runtime Dockerfile ARG. A grep over manifest literals cannot see
-# those, so check them explicitly against images.txt. (Only the JRE runtime image
-# is mirrored — the build uses the maven:...-temurin image.)
-# `|| true`: this is the function body, consumed by `jre_itag="$(temurin_itag jre)"` (a `set -e`
-# assignment) — a `head -1` SIGPIPE or no-match would otherwise abort the whole script there.
-temurin_itag() { grep -oE "eclipse-temurin:[^[:space:]\"]*-$1-jammy" images/images.txt | head -1 | sed 's|eclipse-temurin:||' || true; }
 check_pinned() { # <label> <actual> <expected-from-images.txt>
   [ -n "$3" ] || return 0
   if [ "$2" != "$3" ]; then
@@ -58,8 +50,45 @@ check_pinned() { # <label> <actual> <expected-from-images.txt>
     echo "ok    ${1}=${2}"
   fi
 }
-jre_itag="$(temurin_itag jre)"
-check_pinned "TEMURIN_JRE_TAG (.env.example)" "$(grep -E '^TEMURIN_JRE_TAG=' .env.example | cut -d= -f2)" "$jre_itag"
+
+# --- .env.example tag vars, DERIVED FROM THEIR CONSUMER (lib/apps.sh) --------------------------
+# This used to be ONE HARDCODED LINE (`check_pinned "TEMURIN_JRE_TAG …"`), and that enumerated list
+# ROTTED THE MOMENT A SECOND LANGUAGE ARRIVED. The Go app added GOLANG_BUILD_TAG and
+# DISTROLESS_STATIC_TAG; neither was ever added here — so when Renovate bumped the distroless DIGEST
+# in images.txt + the Dockerfile but NOT in .env.example, this gate went GREEN on a broken tree, the
+# PR merged, and the mirror pushed a digest the pipeline never asks for. Kaniko then failed with
+# `NOT_FOUND: artifact …@sha256:… not found` at the FAR END of the pipeline, naming the image and not
+# the drift. (A gate whose scope is a hand-typed list is the defect — the same lesson the per-app
+# Dockerfile loop below already learned.)
+#
+# So DERIVE the list from the only thing that actually renders these vars into the refs the pipeline
+# pulls from Harbor: app_builder_image()/app_runtime_image() in lib/apps.sh. Each branch looks like
+#     go)  printf '%s/%s/distroless/static-debian12:%s' "$HARBOR_URL" "$HARBOR_INFRA_PROJECT" "${DISTROLESS_STATIC_TAG:?}"
+# giving us (repo=distroless/static-debian12, var=DISTROLESS_STATIC_TAG). A repo containing a `%s`
+# (`%s-builder`) is an image WE BUILD, not one we mirror — it has no images.txt row, so it is skipped.
+# A new language's var is covered here the day it is written, with zero edits to this gate.
+env_pairs="$(sed -n '/^app_builder_image()/,/^}/p;/^app_runtime_image()/,/^}/p' scripts/lib/apps.sh \
+  | sed -nE "s|.*printf '%s/%s/([^:']+):%s'.*\\\$\{([A-Z_]+):\?\}.*|\1 \2|p" \
+  | grep -v '%s' | sort -u || true)"
+[ -n "$env_pairs" ] || { echo "ERROR check-image-alignment: parsed ZERO tag vars out of lib/apps.sh — the gate has gone BLIND (did app_*_image() change shape?)"; exit 1; }
+
+env_checked=0
+while read -r repo var; do
+  [ -n "$repo" ] || continue
+  # The images.txt row for this repo: match the repo as a whole path segment-suffix (images.txt may
+  # carry a registry prefix, e.g. gcr.io/distroless/static-debian12), then take everything after the
+  # FIRST colon as the tag (which may itself be `tag@sha256:...`).
+  row="$(grep -E "(^|/)${repo}:" images/images.txt | grep -v '^[[:space:]]*#' | head -1 || true)"
+  if [ -z "$row" ]; then
+    echo "WARN  ${var}: '${repo}' is rendered by lib/apps.sh but is absent from images/images.txt (not mirrored?)"
+    continue
+  fi
+  expected="${row#*:}"
+  actual="$(grep -E "^${var}=" .env.example | head -1 | cut -d= -f2- || true)"
+  check_pinned "${var} (.env.example → ${repo})" "$actual" "$expected"
+  env_checked=$((env_checked + 1))
+done <<< "$env_pairs"
+echo "      (checked ${env_checked} .env.example tag var(s), derived from lib/apps.sh)"
 
 # --- EVERY app's Dockerfile base images, DERIVED from the app registry ------------------------
 # NOT one hardcoded block per language. For each app in apps/registry.tsv we read ITS Dockerfile's
@@ -125,10 +154,13 @@ if [ -n "$builder_app" ]; then
   check_pinned "MAVEN_IMAGE (${builder_df})" \
     "$(grep -oE 'MAVEN_IMAGE=maven:[^[:space:]"]+' "$builder_df" | head -1 | sed 's|MAVEN_IMAGE=maven:||' || true)" "$mvn_itag"
 fi
-check_pinned "BUILD_BASE (15-build-push-builder.sh)" \
-  "$(grep -E '^BUILD_BASE=' scripts/15-build-push-builder.sh | grep -oE 'maven:[^[:space:]"]+' | head -1 | sed 's|maven:||' || true)" "$mvn_itag"
-check_pinned "MAVEN_BASE (15-build-push-builder.sh)" \
-  "$(grep -E '^MAVEN_BASE=' scripts/15-build-push-builder.sh | grep -oE 'maven:[^[:space:]"]+' | head -1 | sed 's|maven:||' || true)" "$mvn_itag"
+# The builder's base ref lives in 14-builder-build.sh (MAVEN_SRC). It used to be two vars in
+# 15-build-push-builder.sh (BUILD_BASE / MAVEN_BASE, both a Harbor ref); the builder was split so the
+# INTERNET box can build it without Harbor, and 14 now resolves that ref to a DIGEST via
+# bundle/images.lock. The tag must still match images.txt — it is the key the lock is looked up by, so a
+# drift here means the lookup finds nothing (or the wrong image) rather than an ImagePullBackOff.
+check_pinned "MAVEN_SRC (14-builder-build.sh)" \
+  "$(grep -E '^MAVEN_SRC=' scripts/14-builder-build.sh | grep -oE 'maven:[^[:space:]"]+' | head -1 | sed 's|maven:||' || true)" "$mvn_itag"
 
 if [ "$drift" -ne 0 ]; then
   echo "ERROR: image tag drift between manifests and images/images.txt (BLOCKING)." >&2

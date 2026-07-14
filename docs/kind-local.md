@@ -35,6 +35,10 @@ make e2e-kind                 # cluster → Harbor → ArgoCD → mirror → bui
 make kind-down                # tear everything down (also prunes cloud-provider-kind orphans)
 ```
 
+`make e2e-sneakernet` proves the **[sneakernet](sneakernet.md)** flow locally too (pull → bundle → carry
+into a fresh Photon **and** Ubuntu air-gap container → push → verify). Sneakernet is a *delivery mode* for
+the real lab, not a KinD topic — the runbook is in [`docs/sneakernet.md`](sneakernet.md).
+
 How the local stand-in works:
 
 - **`cloud-provider-kind`** gives Harbor a real `LoadBalancer` IP on the kind docker
