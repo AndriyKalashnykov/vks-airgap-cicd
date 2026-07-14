@@ -504,6 +504,13 @@ jumpbox-image: ## Build the jump-box test image for JUMPBOX_OS x JUMPBOX_ENGINE 
 	 echo "building $(JUMPBOX_IMAGE) from $$df"; \
 	 docker build -f "$$df" -t $(JUMPBOX_IMAGE) .
 
+# Can a REAL air-gapped box do the job? The sneakernet e2e could NOT answer this: its "air-gap box" is
+# the vks-jumpbox image, which runs `make deps` at BUILD time, so it already had kubectl/helm/jq/yq. This
+# runs the bundle-load on a BARE box (OS packages only) with NO NETWORK AT ALL, on both OSes.
+.PHONY: airgap-toolchain-test
+airgap-toolchain-test: ## Can a BARE, network-less jump box (Photon AND Ubuntu) get its whole toolchain from the carried bundle? (asserts the tools are ABSENT first — else the test is rigged)
+	@$(SCRIPTS)/test-airgap-toolchain.sh
+
 .PHONY: bootstrap-engine-test
 bootstrap-engine-test: ## CLAIM 1: does `make deps` actually PRODUCE a docker jump box when asked — and a podman one (with ZERO docker) when not? Runs the REAL bootstrap on BARE Photon/Ubuntu images.
 	@$(SCRIPTS)/test-bootstrap-engine.sh
@@ -720,6 +727,14 @@ sec: secrets-scan trivy-fs trivy-config ## Run all security scanners (gitleaks +
 # output dir; docker does not. Empty for docker.
 PODMAN_USERNS := $(if $(filter podman,$(CONTAINER_ENGINE)),--userns=keep-id,)
 
+# The diagram list is DERIVED from the filesystem, never typed. It used to be typed TWICE — once for
+# the render, once for the drift-check loop — and they had already drifted: `istio-ingress` was in the
+# render list and NOT in the check loop, so its PNG was rendered and then never gated. A new .puml
+# (sneakernet) was in NEITHER, so it was silently not rendered at all. An enumerated list of the things
+# a gate covers is the defect; the gate must discover its own denominator.
+# `_style.puml` is an include, not a diagram — a leading `_` marks it as such and is filtered out.
+DIAGRAMS := $(patsubst docs/diagrams/%.puml,%,$(wildcard docs/diagrams/[!_]*.puml))
+
 # Render helper: $(1) = output subdir under docs/diagrams (created if missing).
 # --network=none + -DRELATIVE_INCLUDE="." force the VENDORED c4/*.puml (offline,
 # deterministic — no fetch from githubusercontent at render time).
@@ -732,7 +747,7 @@ define _render_diagrams
 		-e PLANTUML_SECURITY_PROFILE=UNSECURE -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp \
 		-e PLANTUML_LIMIT_SIZE=16384 \
 		-v "$$PWD/docs/diagrams:/work" -w /work docker.io/plantuml/plantuml:$(PLANTUML_VERSION) \
-		-tpng -o $(1) -DRELATIVE_INCLUDE="." airgap.puml context.puml container.puml deployment.puml pipeline-flow.puml vks-topology.puml istio-ingress.puml
+		-tpng -o $(1) -DRELATIVE_INCLUDE="." $(addsuffix .puml,$(DIAGRAMS))
 endef
 
 .PHONY: diagrams
@@ -744,7 +759,8 @@ diagrams: ## Render docs/diagrams/*.puml → docs/diagrams/out/*.png ($(CONTAINE
 diagrams-check: ## CI drift gate: re-render every .puml and byte-compare vs the committed PNG. The pinned plantuml image + vendored c4/ render byte-deterministically (verified: same image → identical sha256), so a mismatch means the .puml changed without re-rendering. Run `make diagrams` before committing .puml edits.
 	@rm -rf docs/diagrams/.check
 	@$(call _render_diagrams,.check)
-	@rc=0; for d in airgap context container deployment pipeline-flow vks-topology; do \
+	@echo "diagrams-check: checking $(words $(DIAGRAMS)) diagrams — $(DIAGRAMS)"
+	@rc=0; for d in $(DIAGRAMS); do \
 		if [ ! -s docs/diagrams/.check/$$d.png ]; then echo "ERROR: $$d.puml failed to render"; rc=1; \
 		elif [ ! -s docs/diagrams/out/$$d.png ]; then echo "ERROR: committed docs/diagrams/out/$$d.png missing — run 'make diagrams'"; rc=1; \
 		elif ! cmp -s docs/diagrams/.check/$$d.png docs/diagrams/out/$$d.png; then \

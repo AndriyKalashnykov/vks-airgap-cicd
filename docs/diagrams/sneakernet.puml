@@ -1,0 +1,45 @@
+@startuml sneakernet
+!include c4/C4_Context.puml
+!include _style.puml
+LAYOUT_LEFT_RIGHT()
+
+title Sneakernet — no single box reaches BOTH the internet and Harbor, so you use two
+
+' Amber = "this side of the gap has NO internet". The colour IS the air gap.
+AddElementTag("offline", $fontColor="#FFFFFF", $bgColor="#B45309", $borderColor="#78350F")
+
+System_Ext(net, "Internet", "Upstream registries + Maven Central\ngcr.io · ghcr.io · docker.io · repo.maven.apache.org")
+
+System_Boundary(stagez, "STAGING BOX  ·  CAN reach the internet  ·  CANNOT reach Harbor") {
+  System(stage, "Pull · build · bundle", "1. make mirror-pull\n2. make builder-build\n3. make bundle\n\nNeeds NO .env — it never talks\nto Harbor or the cluster.")
+}
+
+System_Boundary(jbz, "JUMP BOX  ·  CANNOT reach the internet  ·  CAN reach Harbor + the cluster") {
+  System(jb, "Load · push · install", "1. make bundle-load\n2. make mirror-push\n3. make builder-push\n4. make mirror-verify\n5. platform → gitops →\n    install-ingress → verify\n\nNeeds its OWN .env:\nHARBOR_URL / USERNAME /\nPASSWORD / CA_FILE, KUBECONFIG", $tags="offline")
+}
+
+System_Boundary(agz, "AIR-GAPPED VKS CLUSTER  ·  CANNOT reach the internet") {
+  System(harbor, "Harbor", "The registry every workload pulls from.\nIf an image was not mirrored here, it does not run.", $tags="offline")
+}
+
+Rel(net, stage, "pull images + Maven deps", "HTTPS")
+Rel(stage, jb, "CARRY on physical media:\nthe bundle .tar (~12 GB) + its .sha256\n+ this git repo", "USB / optical")
+Rel(jb, harbor, "push, then PROVE it by\nFETCHING every blob back", "HTTPS (self-signed CA)")
+
+note bottom of stage
+  You do NOT carry .env across.
+  The staging box cannot know Harbor's
+  address or credentials — it cannot
+  reach Harbor at all.
+end note
+
+note bottom of jb
+  `make deps` CANNOT run here — it downloads.
+  So the bundle carries the TOOLCHAIN too:
+  crane, kubectl, helm, jq, yq.
+  Beyond the OS's own packages, if it is not
+  in the bundle, it does not exist here.
+end note
+
+SHOW_LEGEND()
+@enduml

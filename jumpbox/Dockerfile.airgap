@@ -1,0 +1,64 @@
+# A REAL air-gap box: the OS, its packages, and NOTHING ELSE.
+#
+# WHY THIS IMAGE EXISTS — the sneakernet e2e was RIGGED, and I wrote it that way.
+# Its "air-gap box" was `vks-jumpbox:<os>-<engine>`, which runs `make deps` AT IMAGE BUILD TIME. So the
+# box already had kubectl, helm, jq and yq before the bundle ever arrived. The e2e asserted only that
+# `crane` was absent (the one hole I had just fixed) and never looked at the rest — so the fact that the
+# bundle carried NO toolchain for the INSTALL half was invisible, and the runbook told operators to run
+# steps whose tools could not exist on that box.
+#
+# This image installs ONLY what an air-gapped operator's box genuinely has: its OS packages, from the
+# lab's own package mirror. It deliberately has NO mise, NO kubectl/helm/jq/yq, NO crane. Everything the
+# flow needs beyond the OS must arrive IN THE CARRIED BUNDLE, or the run fails — which is the point.
+ARG BASE=photon:5.0
+FROM ${BASE}
+
+# The OS packages that CANNOT be carried as static binaries (they are not Go binaries, and `git`,
+# `openssl`, `envsubst` and `make` are MISSING from a bare photon:5.0). An air-gapped lab box gets these
+# from its INTERNAL package mirror — not from the internet — so installing them here is faithful.
+# Everything else (crane, kubectl, helm, jq, yq) must come from the bundle.
+#
+# TWO RULES, both learned the hard way, and they pull in opposite directions:
+#
+# 1. DO NOT INSTALL WHAT THE OS ALREADY SHIPS. `bash` is deliberately NOT in this list: BOTH photon:5.0
+#    and ubuntu:26.04 already ship it, and installing it on Photon leaves /bin/sh BROKEN
+#    (`symbol lookup error: undefined symbol: rl_full_quoting_desired` — a toybox/readline collision), so
+#    the NEXT command dies with a 127 pointing at something else entirely. (We cannot drop to plain `sh`
+#    either — lib/mirror.sh uses `mapfile` and `declare -A`.)
+#
+# 2. DO NOT ASSUME WHAT THE OS SHIPS. `awk` is the mirror image of the same mistake: it is NOT on a bare
+#    photon:5.0 (MEASURED), and the flow needs it in two load-bearing places — lib/apps.sh reads
+#    apps/registry.tsv with it (EVERY per-app loop) and 23-mirror-verify.sh does its images.lock digest
+#    lookup with it. It was invisible because the OTHER jump-box image (Dockerfile.photon) pulls awk in
+#    TRANSITIVELY via another package, so e2e-sneakernet is green on a box that was provisioned by
+#    accident. On a real bare Photon jump box, mirror-verify would have died.
+#
+# MEASURED on the bare images (docker run --network none <base> command -v <x>):
+#   photon:5.0    has bash tar gzip find which curl file sha256sum sed grep
+#                 LACKS make awk git openssl envsubst sudo useradd
+#   ubuntu:26.04  has bash tar gzip find which awk sed grep sha256sum useradd
+#                 LACKS make git openssl envsubst sudo curl file
+# The union of what is LACKING is exactly this install list. Everything else the flow needs (crane,
+# kubectl, helm, jq, yq) is a static binary that arrives IN THE CARRIED BUNDLE — this image must NOT have
+# those, or the test proves nothing.
+# hadolint ignore=DL3008
+RUN if command -v tdnf >/dev/null 2>&1; then \
+      tdnf install -qy tar gzip make gawk findutils which shadow sudo \
+                       git openssl gettext curl ca-certificates && tdnf clean all; \
+    else \
+      apt-get update && apt-get install -y --no-install-recommends \
+                       tar gzip make gawk findutils sudo \
+                       git openssl gettext-base curl ca-certificates \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# A non-root operator, as on a real jump box.
+# Absolute paths: Photon's default RUN PATH does NOT include /usr/sbin, so a bare `groupadd` is 127.
+RUN /usr/sbin/groupadd -f vks && /usr/sbin/useradd -g vks -m -s /bin/bash vks
+USER vks
+WORKDIR /home/vks
+# NO `ENV PATH=~/.local/bin:...` HERE, DELIBERATELY. Pre-setting it would hide the very failure this
+# box exists to catch: on a real jump box the carried tools land in ~/.local/bin, which is often NOT on
+# PATH (non-login shell, `sudo make`, cron) — so the next step, `make platform`, dies with
+# `kubectl: command not found`. bundle-load must DIE on that, not warn, and this test must be able to
+# see it. (The test exports PATH itself, AFTER asserting bundle-load handled it.)

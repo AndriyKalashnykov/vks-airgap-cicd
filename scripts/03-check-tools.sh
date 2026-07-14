@@ -30,6 +30,8 @@ helm|required|install Harbor / Istio / Gitea charts
 jq|required|Istio discovery, Harbor API, mirror bookkeeping
 yq|required|manifest edits in the mirror//install path
 envsubst|required|render the \${VAR} tokens in k8s/ manifests (package: gettext)
+awk|required|read apps/registry.tsv — EVERY per-app loop (lib/apps.sh) — and the images.lock digest lookup in mirror-verify. NOT on a bare photon:5.0 (package: gawk), so this box can pass every other check and still die at mirror-verify
+tar|required|unpack the carried sneakernet bundle (bundle-load)
 crane|required|the image-mirror engine (pull/push/validate)
 curl|required|Harbor + UI readiness probes
 git|required|seed the Gitea repos, tag write-back

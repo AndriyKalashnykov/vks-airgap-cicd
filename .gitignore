@@ -62,3 +62,6 @@ token.md
 
 # Rendered ArgoCD Applications for a TENANT to hand to their platform team (ARGOCD_MECHANISM=request).
 /out/
+# the sneakernet bundle + its checksum sidecar (multi-GB; never committed)
+vks-airgap-cicd-bundle-*.tar
+vks-airgap-cicd-bundle-*.tar.*

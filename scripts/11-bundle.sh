@@ -63,61 +63,116 @@ esac
 # --- CARRY THE TOOLCHAIN, NOT JUST THE IMAGES -------------------------------------------------------
 #
 # The bundle used to contain images/ + manifests/ ONLY, while CLAUDE.md claimed "the air-gapped host gets
-# binaries from the bundle". It did not. An operator who followed our own runbook would carry the tarball
-# to a box with NO INTERNET and have NO `crane` — and `make mirror-push` would die on its first line.
+# binaries from the bundle". It did not — and the e2e hid it by letting its "air-gap" box run `make deps`,
+# which downloads them from the internet. A green test proving the opposite of its own name.
 #
-# Our own sneakernet e2e hid this: its "air-gap box" ran `make deps`, which DOWNLOADS crane from the
-# internet via mise. The IMAGE-cache fidelity was real (the box asserts bundle/ is empty and rebuilds only
-# from the carried tarball); the TOOLCHAIN fidelity was fake. A green test that proves the opposite of its
-# name is the exact class this repo keeps finding.
+# WHAT MUST BE CARRIED, derived from what the air-gap box actually RUNS:
+#   mirror half   bundle-load -> mirror-push -> builder-push -> mirror-verify   needs CRANE
+#   install half  platform -> gitops -> install-ingress -> verify               needs KUBECTL, HELM, JQ, YQ
+# `make deps` (mise) cannot run there — it downloads. All five are STATIC Go binaries (measured:
+# kubectl 58M, helm 62M, jq 2.2M, yq 14M, crane 12M = ~148 MB against a multi-GB bundle), so we carry
+# them. Carrying only crane made the MIRROR possible and left the INSTALL impossible — the runbook told
+# operators to run steps whose tools could not exist on that box.
 #
-# The MIRROR half of the gap is ONE static Go binary: bundle-load (tar) -> mirror-push (crane, curl) ->
-# mirror-verify (crane). So stage `crane` INTO the bundle — ~12 MB against an 11 GB tarball.
-#
-# NOTE (do not over-read this): the bundle carries the toolchain for the MIRROR half only. A full
-# air-gapped INSTALL (`make platform` / `gitops` / `install-ingress`) additionally needs kubectl, helm,
-# jq and envsubst on the inside box, and `46-install-istio.sh` fetches its chart from the internet.
-# Those are NOT in the bundle. docs/sneakernet.md says so plainly rather than implying otherwise.
+# What we CANNOT carry, and therefore must be pre-provisioned on the air-gap box (they are OS packages,
+# and `git`/`openssl`/`envsubst`/`make` are MISSING on a bare photon:5.0):
+#   bash tar curl sha256sum make git openssl envsubst(gettext)
+# `make check-tools` on that box lists exactly what is missing — run it BEFORE carrying the bundle.
 TOOLS_DIR="${BUNDLE_DIR}/tools"
 mkdir -p "$TOOLS_DIR"
 
-# `command -v crane` IS NOT ENOUGH — it can resolve to a mise SHIM (a symlink to the ~98 MB, DYNAMICALLY
-# linked `mise` binary). `install` dereferences it, so we would stage MISE, RENAMED `crane`, into the
-# bundle: it copies fine, it is +x, and it fails only on the air-gapped box after the carry. Resolve the
-# symlink, then PROVE the thing actually runs and is statically linked — a file that exists is not a
-# binary that works (the house failure of this repo).
-crane_bin="$(command -v crane 2>/dev/null)" \
-  || die "crane not found on PATH — it is the mirror engine, and the AIR-GAPPED box cannot download it.
-  Install it here first (make deps), then re-run: the bundle must carry it."
-crane_bin="$(readlink -f "$crane_bin")"
+# mise_pin <tool> — the version THIS REPO pins in .mise.toml, or "" if it pins none.
+# .mise.toml is the single source of truth for the toolchain (portfolio version-manager policy), so it is
+# also the source of truth for what we are allowed to carry across the gap.
+mise_pin() {
+  sed 's/#.*//' "${REPO_ROOT}/.mise.toml" 2>/dev/null \
+    | grep -E "^[[:space:]]*$1[[:space:]]*=" | head -1 | cut -d'"' -f2
+}
 
-install -m 0755 "$crane_bin" "${TOOLS_DIR}/crane"
+# stage_tool <name> <version-args...> — resolve the PINNED binary, copy it, then PROVE the copy is the
+# right tool, at the right version, statically linked, and actually runs.
+#
+# THREE ways `command -v <tool>` hands you the WRONG binary, and all three fail only AFTER the carry, on a
+# box that cannot fix them:
+#   1. a mise SHIM — a symlink to the ~94 MB DYNAMICALLY-LINKED `mise` binary. `install` dereferences it,
+#      so we would carry MISE, RENAMED `kubectl`, across the gap.
+#   2. ANOTHER VENDOR'S BUILD, earlier on PATH. MEASURED on the dev box that cut this bundle:
+#      `command -v kubectl` -> ~/google-cloud-sdk/bin/kubectl, a gcloud "dispatcher" reporting
+#      v1.34.4-dispatcher, while .mise.toml pins 1.36.2. It is a real, static, working kubectl — it is just
+#      not OURS, and it is two minors off the pin the rest of the repo gates on. The old guard passed it:
+#      it asked "is it mise?" and "is it static?" and never "is it the tool we pinned?".
+#   3. a STALE copy in ~/.local/bin (including one a previous bundle-load installed).
+# So: resolve through MISE (the pin), not through PATH — and then ASSERT the version matches the pin.
+stage_tool() {
+  local name="$1"; shift
+  local bin ver pin
 
-# 1. it must RUN (this is what catches the mise shim: `mise version` != `crane version`).
-crane_ver="$("${TOOLS_DIR}/crane" version 2>&1 | head -1)" \
-  || die "the crane we staged does not run: ${crane_bin}"
-case "$crane_ver" in
-  ''|*[Mm]ise*) die "the binary on PATH as 'crane' is NOT crane (it reports: '${crane_ver:-<nothing>}') — resolved to ${crane_bin}.
-  This is the mise SHIM trap: ~/.local/share/mise/shims/crane is a symlink to the mise binary. Staging it
-  would carry MISE across the air gap, renamed crane, and fail there with no way to fix it.
-  Run 'mise install crane' / use the real binary, then re-run." ;;
-esac
+  # PIN-FIRST resolution. `mise which` returns the real install path (never a shim).
+  bin=""
+  if have mise; then bin="$(mise which "$name" 2>/dev/null || true)"; fi
+  [ -n "$bin" ] && [ -x "$bin" ] || bin="$(command -v "$name" 2>/dev/null || true)"
+  [ -n "$bin" ] || die "${name} is not installed here, and the AIR-GAPPED box cannot download it.
+  Install the toolchain on THIS box first (make deps), then re-run: the bundle must carry it."
+  bin="$(readlink -f "$bin")"
+  install -m 0755 "$bin" "${TOOLS_DIR}/${name}"
 
-# 2. it must be STATIC — the air-gap box's libc is not ours to assume.
-if have file && ! file -b "${TOOLS_DIR}/crane" | grep -q 'statically linked'; then
-  die "the staged crane is NOT statically linked ($(file -b "${TOOLS_DIR}/crane")) — it will not run on the air-gap box's libc."
-fi
+  # RUN THE COPY. A file that exists and is +x is not a binary that works.
+  ver="$("${TOOLS_DIR}/${name}" "$@" 2>&1 | head -1)" || ver=""
+  case "$ver" in
+    ''|*[Mm]ise*) die "the binary resolved as '${name}' is NOT ${name} (it reports: '${ver:-<nothing>}') — resolved to ${bin}.
+  This is the mise SHIM trap. Staging it would carry MISE across the air gap under another name." ;;
+  esac
 
-# 3. ARCH IS A CROSS-BOX CONTRACT TOO. The staged crane is THIS box's arch, and (separately)
-#    lib/mirror.sh pulls non-digest-pinned images for MIRROR_ARCH (default amd64). Carry BOTH facts so
-#    bundle-load can refuse an arm64 inside box instead of dying with `Exec format error` after the carry.
+  # IS IT THE ONE WE PINNED? This is the check that catches a foreign vendor's build (gcloud's kubectl
+  # dispatcher) — which is static, runs, and is not mise, so every other check waves it through.
+  pin="$(mise_pin "$name")"
+  if [ -n "$pin" ] && ! printf '%s' "$ver" | grep -qF "$pin"; then
+    die "the ${name} we resolved is NOT the version this repo pins.
+  .mise.toml pins : ${pin}
+  resolved binary : ${bin}
+  it reports      : ${ver}
+  Carrying it would put an unpinned ${name} on the air-gapped box, where nobody can replace it.
+  Fix the box: 'mise install' (and check 'type -a ${name}' — another ${name} may shadow mise's on PATH)."
+  fi
+
+  # STATIC? The air-gap box's libc is not ours to assume. Do NOT silently skip this when file(1) is absent
+  # — a check that quietly does not run is the failure this repo keeps shipping.
+  if [ "${BUNDLE_SKIP_STATIC_CHECK:-0}" = "1" ]; then
+    log_warn "  BUNDLE_SKIP_STATIC_CHECK=1 — NOT checking that ${name} is statically linked (you own this)"
+  elif have file; then
+    # `static-pie linked` is ALSO static — file(1) prints that for a static PIE ELF, and matching only
+    # on the exact string 'statically linked' would REJECT a perfectly good binary. (The grep string was
+    # the bug, not file(1).)
+    file -b "${TOOLS_DIR}/${name}" | grep -qE 'statically linked|static-pie' \
+      || die "the staged ${name} is NOT statically linked ($(file -b "${TOOLS_DIR}/${name}")) — it may not run on the air-gap box's libc."
+  else
+    die "file(1) is not installed, so the STATIC-LINKAGE check on the carried binaries cannot run.
+  Install it (apt-get install file / tdnf install file) — a dynamically-linked binary carried across the
+  gap fails there, on the one box that cannot fix it. Override only if you know why: BUNDLE_SKIP_STATIC_CHECK=1."
+  fi
+
+  printf '%s\t%s\t%s\n' "$name" "${pin:-<unpinned>}" "$ver" >> "${TOOLS_DIR}/TOOLS.tsv.tmp"
+  log_info "  staged ${name} $(du -h "${TOOLS_DIR}/${name}" | cut -f1) — pin ${pin:-<none>}, static, runs: ${ver}"
+}
+
+rm -f "${TOOLS_DIR}/TOOLS.tsv.tmp"
+log_info "staging the toolchain the air-gapped box cannot download:"
+stage_tool crane   version
+stage_tool kubectl version --client
+stage_tool helm    version
+stage_tool jq      --version
+stage_tool yq      --version
+sort -u "${TOOLS_DIR}/TOOLS.tsv.tmp" > "${TOOLS_DIR}/TOOLS.tsv"; rm -f "${TOOLS_DIR}/TOOLS.tsv.tmp"
+
+# ARCH IS A CROSS-BOX CONTRACT. The staged binaries are THIS box's arch, and (separately) lib/mirror.sh
+# pulls non-digest-pinned images for MIRROR_ARCH (default amd64). Carry both so bundle-load can REFUSE an
+# arch-mismatched box instead of dying with `Exec format error` after the carry.
 {
-  printf 'BUNDLE_HOST_ARCH=%s\n'  "$(uname -m)"
-  printf 'BUNDLE_CRANE_VER=%s\n'  "$crane_ver"
+  printf 'BUNDLE_HOST_ARCH=%s\n'   "$(uname -m)"
   printf 'BUNDLE_MIRROR_ARCH=%s\n' "${MIRROR_ARCH:-amd64}"
 } > "${TOOLS_DIR}/ARCH"
 
-log_info "staged crane into the bundle ($(du -h "${TOOLS_DIR}/crane" | cut -f1), ${crane_ver}, $(uname -m), static) — the air-gapped box needs it and cannot download it"
+log_info "toolchain staged ($(du -sh "$TOOLS_DIR" | cut -f1), $(uname -m)) — the air-gap box installs it at 'make bundle-load'"
 
 log_info "creating bundle $tarball from $BUNDLE_DIR"
 # -C the parent so the archive unpacks to a predictable 'bundle/' dir name.

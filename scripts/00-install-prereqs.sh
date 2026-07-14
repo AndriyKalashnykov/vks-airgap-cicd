@@ -28,7 +28,24 @@ log_info "detected OS: $(os_id) (pkg manager: $(pkg_mgr))"
 pkg_refresh
 # findutils (`find`) is not in Photon's base image and is used by the archive-extraction in
 # scripts/01-install-vcf-clis.sh (and generally handy); tar/gzip cover the same minimal-image gaps.
-pkg_install ca-certificates curl git jq tar gzip findutils
+#
+# DO NOT ASSUME THE BASE SHIPS THE "OBVIOUS" UNIX TOOLS — MEASURED on the bare images:
+#   photon:5.0    LACKS awk, openssl, envsubst, git, make   (has bash tar gzip find curl sed grep)
+#   ubuntu:26.04  LACKS openssl, envsubst, git, make, curl  (has bash tar gzip find awk sed grep)
+# Two of these are load-bearing and were MISSING from this list, so `make deps` on a real bare Photon
+# jump box produced a box that could not run the flow:
+#   awk      — lib/apps.sh reads apps/registry.tsv with it (EVERY per-app loop), and
+#              23-mirror-verify.sh does its images.lock digest lookup with it.
+#   envsubst — renders the ${VAR} tokens in every k8s/ manifest (03-check-tools calls it REQUIRED).
+# It stayed invisible because the jump-box TEST image (jumpbox/Dockerfile.photon) installs enough
+# packages to pull awk in TRANSITIVELY — so `make jumpbox` was green on a box provisioned by accident,
+# while an operator following the runbook got a box that dies at mirror-verify.
+# `make check-tools` now lists awk explicitly, so a box missing it says so instead of failing later.
+case "$(pkg_mgr)" in
+  apt-get) GETTEXT_PKG=gettext-base ;;   # envsubst lives in gettext-base on Debian/Ubuntu...
+  *)       GETTEXT_PKG=gettext ;;        # ...and in gettext on Photon (tdnf).
+esac
+pkg_install ca-certificates curl git jq tar gzip findutils gawk openssl "$GETTEXT_PKG"
 # ---- container engine -----------------------------------------------------
 # THE INVARIANT, and it is the whole reason this block is shaped the way it is:
 #
