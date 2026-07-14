@@ -98,13 +98,34 @@ ensure_project() {
   code="$(harbor_api POST "projects" "{\"project_name\":\"${name}\",\"public\":${HARBOR_PUBLIC_PROJECTS:-true}}")"
   case "$code" in
     201|409) log_info "project '$name' ready (http $code)" ;;
-    401|403)
+    401)
+      # 401 IS NOT A PERMISSIONS PROBLEM — IT IS A WRONG PASSWORD, and saying otherwise sends the
+      # operator to fix a thing that is not broken. Measured against a live Harbor (2026-07-14):
+      #   wrong password -> 401 (unauthenticated)   ·   authenticated-but-not-admin -> 403 (forbidden)
+      # This branch used to be `401|403`, so a stale credential printed "you are not a Harbor admin"
+      # and the run continued into a cascade of failures whose real cause was three steps back.
+      #
+      # THE COMMON CAUSE, and it is not obvious: Harbor's admin password lives in its DATABASE, seeded
+      # at FIRST install. A re-install (helm upgrade) rotates the SECRET but NOT the database, so if the
+      # cluster survived, Harbor still wants the ORIGINAL password. The classic way to get here is to run
+      # `make install-harbor` with your .env and then `make e2e-kind`, which sets SKIP_DOTENV=1 and
+      # GENERATES fresh credentials — new password in the state sink, old password in Harbor's DB.
+      log_error "Harbor rejected the credentials for '${HARBOR_USERNAME:-<unset>}' (HTTP 401 = UNAUTHENTICATED)."
+      log_error "  This is NOT a permissions problem — Harbor returns 403 for that. The PASSWORD IS WRONG."
+      log_error "  Most likely: Harbor's DATABASE survives from an earlier install and still holds the"
+      log_error "  ORIGINAL admin password, while a later install generated a new one (e.g. 'make"
+      log_error "  install-harbor' with your .env, then 'make e2e-kind', which regenerates credentials)."
+      log_error "  Fix: 'make kind-down' and re-run (a fresh Harbor is seeded with the current password),"
+      log_error "  or set HARBOR_PASSWORD to the password Harbor was FIRST installed with."
+      return 1
+      ;;
+    403)
       # A TENANT is not a Harbor admin and cannot create projects — and a robot account cannot
       # either. This used to `die`, which meant a tenant's `make harbor-robot` (and a `make mirror`
       # run with robot creds against a fresh Harbor) failed here, BEFORE reaching the thing they
       # actually came for. Not being allowed to create a project you were already GRANTED is not
       # an error; only its absence is.
-      log_warn "not permitted to create Harbor project '$name' (http $code) — you are not a Harbor admin."
+      log_warn "not permitted to create Harbor project '$name' (http $code) — you are authenticated, but not a Harbor admin."
       log_warn "  If the project already exists and you were granted it, this is harmless."
       log_warn "  If it does NOT exist, ask your platform team to create it, or point"
       log_warn "  HARBOR_INFRA_PROJECT / HARBOR_APP_PROJECT at the project(s) you were given."
