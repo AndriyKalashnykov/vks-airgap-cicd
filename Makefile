@@ -487,7 +487,11 @@ jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photo
 	@# (`.env.kind` stays as a legacy fallback for one release. state_file() needs REPO_ROOT, which
 	@# os.sh sets — sourcing state.sh alone resolves the sink to "/.env.state".)
 	@sink="$$(bash -c '. scripts/lib/os.sh; state_file' 2>/dev/null || echo .env.state)"; \
-	 sread() { grep -h "^$$1=" "$$sink" .env.kind 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//"; }; \
+	 : "|| true is LOAD-BEARING: a key that is ABSENT makes grep exit 1, so the pipeline exits 1, so the"; \
+	 : "assignment exits 1, so set -e kills the recipe SILENTLY (Error 2, no message). HARBOR_INSECURE"; \
+	 : "and HARBOR_CA_FILE are legitimately absent in insecure mode. Same class as the pipefail bug in"; \
+	 : "state_claim_kind (#217) — written again, in a different file, in the same session."; \
+	 sread() { grep -h "^$$1=" "$$sink" .env.kind 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//" || true; }; \
 	 harbor_url="$$(sread HARBOR_URL)"; \
 	 [ -n "$$harbor_url" ] || { echo "ERROR: HARBOR_URL is not in the state overlay ($$sink) — run 'make install-harbor' first"; exit 1; }; \
 	 harbor_insecure="$$(sread HARBOR_INSECURE)"; harbor_insecure="$${harbor_insecure:-0}"; \
