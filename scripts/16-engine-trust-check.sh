@@ -24,7 +24,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 # shellcheck source=scripts/lib/engine.sh
 . "${SCRIPT_DIR}/lib/engine.sh"
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"
 load_env
+
+# THIS SCRIPT PUSHES — so it takes the registry lock, exactly like 15-build-push-builder.sh. A matrix of
+# engine legs is a QUEUE OF PUSHERS by construction, and a concurrent pusher is what this repo has already
+# blamed for a wrecked Harbor. The second caller fails fast instead of racing.
+if [ -z "${__REGISTRY_LOCK_HELD:-}" ]; then
+  export __REGISTRY_LOCK_HELD=1
+  with_registry_lock "$(basename "$0")" "$0" "$@"
+  exit $?
+fi
+
+# ISOLATE the docker/podman CLI config: `login` writes an auth entry into the operator's SHARED
+# ~/.docker/config.json. We do not touch their file.
+if [ -z "${DOCKER_CONFIG:-}" ]; then
+  DOCKER_CONFIG="$(mktemp -d)"; export DOCKER_CONFIG
+  trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+fi
 
 : "${HARBOR_URL:?run 'make install-harbor' first}"
 : "${HARBOR_PASSWORD:?set HARBOR_PASSWORD (never on argv)}"
@@ -88,11 +106,32 @@ run "$ENGINE" build -t "$TAG" "$WORK"
 log_info "push  ${TAG}"
 run "$ENGINE" push "${TLS_ARGS[@]}" "$TAG"
 
-# --- 6. PULL IT BACK — a push that cannot be pulled is not a push (the Harbor lesson of 2026-07-13:
-#        a registry that HEAD-200s a blob it does not have makes a push a silent no-op that exits 0).
-run "$ENGINE" rmi "$TAG" >/dev/null 2>&1 || true
-log_info "pull-back ${TAG}"
-run "$ENGINE" pull "${TLS_ARGS[@]}" "$TAG"
+# --- 6. VERIFY THE PUSH SERVER-SIDE ------------------------------------------------------------------
+# NOT with an engine pull-back. `$ENGINE rmi <tag>` removes the TAG; the LAYERS stay in the local content
+# store, so a "pull-back" re-fetches the manifest and finds every blob already present LOCALLY — it never
+# re-downloads one. A registry that HEAD-200s blobs it does not have (the exact failure that silently
+# destroyed this Harbor on 2026-07-13) would PASS that check.
+#
+# `crane validate --remote` fetches the manifest AND every blob from the registry. It is what mirror-verify
+# uses, for precisely this reason. (It also needs no engine, so it cannot be fooled by an engine's cache.)
+log_info "verify ${TAG} is RETRIEVABLE from the registry (crane validate --remote — not an engine pull-back:"
+log_info "  an engine pull-back would be satisfied by its own local layer cache and prove nothing)"
+if have crane; then
+  if [ "${HARBOR_INSECURE:-0}" = "1" ]; then
+    run crane validate --remote --insecure "$TAG"
+  else
+    # crane honours SSL_CERT_FILE, and it REPLACES Go's default pool — so the bundle must be
+    # system CAs + our CA, or a public pull in the same process would start failing.
+    CRANE_TMP="$(mktemp -d)"; ca_bundle_with_system "$CA" "${CRANE_TMP}/ca-bundle.crt"
+    SSL_CERT_FILE="${CRANE_TMP}/ca-bundle.crt" run crane validate --remote "$TAG"
+    rm -rf "$CRANE_TMP"
+  fi
+else
+  log_warn "crane not installed — falling back to an engine pull-back, which CANNOT prove the blobs are"
+  log_warn "  actually stored (it is satisfied by the local layer cache). Install crane: make deps"
+  run "$ENGINE" rmi "$TAG" >/dev/null 2>&1 || true
+  run "$ENGINE" pull "${TLS_ARGS[@]}" "$TAG"
+fi
 
 # --- 7. THE PRECONDITION ROW — this is the deliverable ----------------------------------------------
 # Read the counter from the FILE, not a variable: engine_trust_ca runs inside a command substitution,

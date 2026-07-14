@@ -36,15 +36,20 @@
 # bug; only a mechanism does.)
 ENGINE_SUDO_COUNT_FILE="${ENGINE_SUDO_COUNT_FILE:-$(mktemp -t engine-sudo.XXXXXX)}"
 export ENGINE_SUDO_COUNT_FILE
-printf '0' > "$ENGINE_SUDO_COUNT_FILE"
+# Do NOT clobber a counter a parent already started: a matrix driver sources this, then calls 16 as a
+# CHILD — which would re-source engine.sh and zero the parent's count.
+[ -s "$ENGINE_SUDO_COUNT_FILE" ] || printf '0' > "$ENGINE_SUDO_COUNT_FILE"
 
 engine_sudo_calls() { cat "$ENGINE_SUDO_COUNT_FILE" 2>/dev/null || printf '0'; }
 
 # engine_sudo — every escalation goes through here so it is COUNTED, never silent. Works in a subshell.
 engine_sudo() {
+  # Count ACTUAL ESCALATIONS. Already root (the jump-box containers run as root) => no escalation
+  # happened, and reporting sudo=YES there would be as much a lie as the sudo=NO we started with.
+  if [ "$(id -u)" -eq 0 ]; then "$@"; return $?; fi
   local n; n="$(engine_sudo_calls)"
   printf '%s' "$(( n + 1 ))" > "$ENGINE_SUDO_COUNT_FILE"
-  if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi
+  sudo "$@"
 }
 
 # engine_mode <engine> — "podman" | "docker-rootless" | "docker-rootful".
@@ -56,7 +61,7 @@ engine_mode() {
   local eng="${1:?engine}"
   [ "$eng" = podman ] && { printf 'podman'; return 0; }
   local sec
-  sec="$(docker info --format '{{range .SecurityOptions}}{{.}} {{end}}' 2>/dev/null || true)"
+  sec="$(docker info --format '{{range .SecurityOptions}}{{.}} {{end}}' 2>/dev/null || true)"   # docker-ok: only reached when the OPERATOR chose CONTAINER_ENGINE=docker; the air-gap flow is podman + crane.
   case "$sec" in
     *rootless*) printf 'docker-rootless' ;;
     *)          printf 'docker-rootful'  ;;

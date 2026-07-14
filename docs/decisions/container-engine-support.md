@@ -1,7 +1,30 @@
 # Decision — is docker supportable as an alternative to podman?
 
 **Status:** ACCEPTED & MEASURED · 2026-07-14
-**Verdict:** **Yes. Docker is supported — with one precondition that depends on how your daemon runs.**
+**Verdict (scoped, and the scope is the point):**
+**On a developer/CI host — yes, docker works, and rootless docker matches podman exactly.**
+**On a JUMP BOX — no, not today: `make deps` does not install docker at all.**
+
+> ## The finding that actually answers the question
+>
+> **`scripts/00-install-prereqs.sh` installs podman only. There is no `pkg_install docker` anywhere, on
+> either OS** — and the rootless deps it does install (`uidmap`, `passt`, `slirp4netns`) are **gated on
+> `have podman`**. This is not an oversight: `scripts/test-container-engine.sh:83-85` asserts it as an
+> invariant — *"a jump box that ran `make deps` has podman and NOT docker … Docker belongs ONLY to the
+> KinD stand-in and the local test harnesses"* — and there is a **gate enforcing it**.
+>
+> So docker on a jump box is **not "untested"; it is UNSUPPORTED BY OUR BOOTSTRAP.** An operator who
+> follows the README onto a fresh Photon/Ubuntu box and sets `CONTAINER_ENGINE=docker` has no docker to
+> run.
+>
+> **Decision (owner, 2026-07-14): make it supported — option (B).** The real work is an **engine-aware
+> bootstrap** (`00-install-prereqs.sh` learns to install docker + its rootless extras per OS), plus a
+> `make` target that CHECKS the docker prerequisites and one that INSTALLS them, plus a test that asserts
+> it. The jump-box engine matrix then becomes the **test of that bootstrap change** — which is the only
+> thing it can prove that the host legs below did not. **Tracked as its own task; not done here.**
+>
+> Everything below is therefore a **host** result. It proves the *mechanism*. It does not prove the
+> *jump box*, and it must not be quoted as if it did.
 
 ---
 
@@ -51,18 +74,33 @@ podman's ergonomics exactly. Rootful docker works, but bills you a password prom
 - **Rootless docker needs packages that Ubuntu's apt silently drops.** `uidmap` (`newuidmap`),
   `slirp4netns`/`rootlesskit`, `fuse-overlayfs`, plus an `/etc/subuid` entry. Ubuntu omits several of
   these under `--no-install-recommends` — a trap this repo has already hit once.
-- **`docker:dind-rootless` CANNOT run on a modern Ubuntu host**, and this is *not* a fact about rootless
-  docker:
+- **Rootless docker in a container needs `--security-opt apparmor=rootlesskit`** — and I got this wrong
+  first time, which is worth recording because the wrong version is so plausible.
+
+  `docker:dind-rootless` fails to start on an AppArmor-restricting host (Ubuntu 23.10+, which sets
+  `kernel.apparmor_restrict_unprivileged_userns=1`):
 
   ```text
   [rootlesskit:parent] error: failed to start the child: fork/exec /proc/self/exe: operation not permitted
   ```
 
-  Ubuntu 23.10+ sets `kernel.apparmor_restrict_unprivileged_userns=1`, which blocks unprivileged
-  user-namespace creation *inside a container*. `--privileged`, `--security-opt apparmor=unconfined` and
-  `seccomp=unconfined` do **not** lift it (all three tried). **It is a nesting artefact.** We therefore
-  measured rootless docker **natively on the host** — a *stronger* test: a real user (uid≠0), a real
-  rootless daemon, and no outer privilege to accidentally borrow.
+  **The mechanism:** Ubuntu grants the `userns` permission through an AppArmor profile attached **by host
+  path** (`/etc/apparmor.d/rootlesskit` → `/usr/bin/rootlesskit`). Inside a container that binary is a
+  *different file*, the profile does not attach, the process is **`unconfined`** — and `unconfined` is
+  **exactly what `restrict=1` denies**. Which is why `--security-opt apparmor=unconfined` makes it
+  **worse**, not better, and why `--privileged` does not help either.
+
+  **`--security-opt apparmor=rootlesskit` attaches the profile BY NAME and it works** (verified:
+  `AppArmorProfile=rootlesskit`, `Daemon has completed initialization`, `API listen on
+  /run/user/1000/docker.sock`, `id -u` inside = 1000). The profile carries `flags=(unconfined)` **plus
+  `userns,`** — it grants zero capabilities, changes no uid, and therefore **cannot fake rootlessness**.
+
+  I first wrote *"dind-rootless is impossible on a modern Ubuntu host"* into this document. **That was
+  false** — I had simply never tried the one flag that matched the mechanism. Guard the flag on
+  `[ -f /etc/apparmor.d/rootlesskit ]`: on a host without the profile, `docker run` errors outright.
+
+  We still measured rootless docker **natively on the host**, which is the *stronger* test regardless: a
+  real uid, a real rootlesskit, no outer privilege to borrow.
 
 ---
 
