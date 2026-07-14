@@ -19,6 +19,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
+# lib/tls.sh BEFORE lib/harbor.sh — harbor_setup calls ca_bundle_with_system() from tls.sh, and
+# harbor.sh's own header says the CALLER must source it. Omitting it is not a lint error (shellcheck
+# cannot see across a runtime source), it is a `command not found` at the first TLS setup — which is
+# exactly where the e2e caught it.
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"
 # shellcheck source=scripts/lib/harbor.sh
 . "${SCRIPT_DIR}/lib/harbor.sh"
 load_env
