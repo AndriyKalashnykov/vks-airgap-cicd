@@ -710,9 +710,51 @@ re-type one, or go read a script to know what should have happened — that step
   `vcf package install istio …` command that has not been verified against a primary source.
 - Anything else that assumes state a greenfield admin cluster does not have.
 
-### 🚨 ADVERSARY 2026-07-13 (Istio / scenario-1) — the Gateway-API path is a KinD ARTEFACT
+### ✅ REFUTED 2026-07-14 — "the Gateway-API path is a KinD ARTEFACT" was WRONG. VKS SHIPS the CRDs.
 
-**Read this before touching ingress.** Full report in the session transcript; the load-bearing parts:
+**The 2026-07-13 BLOCKING finding below is OVERTURNED by primary 9.1 sources** (deep-research +
+adversarial refutation, 2026-07-14; full record with URLs and quotes in
+[`docs/reviews/2026-07-14-vks-deep-research.md`](docs/reviews/2026-07-14-vks-deep-research.md)).
+
+**A VKS 9.1 guest cluster SHIPS the Gateway API CRDs by default.** They come from the **VKr** — the
+VMware Kubernetes release that *is* the guest-cluster image — not from Istio, and not from us:
+
+| VKr | ships gateway-api |
+|---|---|
+| **1.36.1** | **1.5.1** — *exactly our pin* |
+| 1.35.5 / 1.35.2 / 1.35.0 | 1.4.0 |
+| 1.34.8 | 1.3.0 |
+
+From **VKS 3.7.0 / VKr 1.36**, VKS manages Gateway API through its **Add-on Management framework** and it
+is **no longer in the `ClusterBootstrap` `additionalPackages` list** — but it remains VKS-managed and
+**ON by default**: Broadcom documents an explicit **opt-OUT** label
+(`addon.addons.kubernetes.vmware.com/gateway-api: unmanaged`), and an opt-out is only meaningful if the
+default is opted-IN. The Istio add-on genuinely does **not** ship the CRDs — that part of the old finding
+was right — but "therefore you must install them yourself" is a **non-sequitur**: the VKr already did.
+This is also *why* Broadcom ships Istio's shared ingress gateway **disabled**: they expect the Gateway
+API, which auto-provisions its own gateway. **Our Gateway-API route path is Broadcom's recommended path,
+not a workaround.**
+
+**⚠️ THE RISK INVERTS — and this is now the thing to worry about.** The danger was never "the CRDs are
+absent". It is that they are **PRESENT, VKS-MANAGED, and at a version the VKr chose** (v1.4.0 on VKr
+1.35.x) — while `istio_ensure_gwapi_crds` (`lib/istio.sh`) **server-side-applies our pinned v1.5.1**. On a
+real lab we may be **fighting the VKS add-on manager**, or downgrading/upgrading a CRD we do not own.
+**NOT YET RESOLVED — do not "fix" it blind.** What settles it: on a lab, read
+`kubectl get crd gateways.gateway.networking.k8s.io -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}'`
+and the `addon.addons.kubernetes.vmware.com/gateway-api` label on the Cluster, then decide whether we
+should install at all, or detect-and-defer to the VKr's version.
+
+**🔴 AND THE BELIEF THIS WHOLE PROVENANCE SYSTEM RESTS ON IS FALSE.** This repo says "Broadcom 9.1 doc
+URLs 301-redirect to the 9.0 tree". **Measured with curl, 2026-07-14: NOT ONE `/9-1/` URL redirected.**
+They return **200** (the page exists in the 9.1 tree) or **404** (the page was **renamed** — e.g. 9.1
+renamed *Standard Packages* to *VKS Add-ons*, so `standard-package-reference` 404s). The thing that
+redirects is **`/latest/`** → the **9-0** tree. Since search engines hand you `/latest/` URLs, *that* is
+the 9.0-read-as-9.1 trap. **Hand-editing the version into the path to `/9-1/` is SAFE and is how the 9.1
+facts above were obtained.** Every "9.0-doc (inferred for 9.1)" grade in `docs/vks-services/` was earned
+under a false premise and must be re-checked against a hand-edited `/9-1/` URL.
+
+<details>
+<summary>The original (now-refuted) 2026-07-13 finding, kept for the record</summary>
 
 **BLOCKING — our preferred route API may not exist on a real lab.** **Nothing in this repo installs
 the Gateway API CRDs.** On KinD they appear because **cloud-provider-kind auto-installs them**
@@ -729,6 +771,14 @@ and grade it, and/or (b) install the pinned CRDs ourselves when absent (`kubectl
 — the bundle exceeds the 256 KiB client-side-apply limit). Either way `istio-preflight` must **say**
 the CRDs are missing instead of silently degrading to classic. **Side benefit of (b):** it removes an
 accidental CPK dependency — a CPK bump adding `--gateway-channel disabled` silently kills the leg.
+
+*(Its ONE community-blog source was, in fact, correct. The "only a blog says VKS ships the CRDs"
+dismissal was the error: Broadcom's own VKr release notes say it, on a 9.1 URL that returns 200. The
+finding also over-trusted a VMware blog that said the CRDs "must be installed separately" — its first
+clause is true (the Istio add-on does not ship them) and its conclusion is a non-sequitur. Note (b) was
+implemented anyway, which is why the repo installs v1.5.1 today — hence the inverted risk above.)*
+
+</details>
 
 **HIGH — the runbook argues with its own tool** (my original bug report, corrected). `istio-existing`
 does **not** "attach to nothing": `47-attach-istio.sh:66` **dies loudly** — *"no istiod found … Use
