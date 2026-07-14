@@ -476,15 +476,22 @@ jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photo
 	@mkdir -p .jumpbox
 	@kind_name="$$(grep -h '^KIND_CLUSTER_NAME=' .env .env.example 2>/dev/null | head -1 | cut -d= -f2 || true)"; \
 	 kind get kubeconfig --name "$$kind_name" --internal > .jumpbox/kubeconfig
-	@# Read the STAMPED STATE SINK, not `.env.kind`. #192 renamed the sink to .env.state and nothing has
-	@# written .env.kind since — so this target has been BROKEN ever since, and its error message told
-	@# you to "run make install-harbor first" when you just had. An error that names the wrong cause is
-	@# worse than a crash. (.env.kind is still read as a legacy fallback, one release of back-compat.)
-	@# state_file() needs REPO_ROOT, which os.sh sets — sourcing state.sh alone resolves to "/.env.state".
-	@harbor_url="$$(bash -c '. scripts/lib/os.sh; grep -h "^HARBOR_URL=" "$$(state_file)" .env.kind 2>/dev/null | head -1 | cut -d= -f2-' 2>/dev/null || true)"; \
-	 [ -n "$$harbor_url" ] || { echo "ERROR: HARBOR_URL is not in the state overlay — run 'make install-harbor' first"; exit 1; }; \
-	 harbor_insecure="$$(grep '^HARBOR_INSECURE=' .env.kind 2>/dev/null | cut -d= -f2 || true)"; harbor_insecure="$${harbor_insecure:-0}"; \
-	 harbor_ca="$$(grep '^HARBOR_CA_FILE=' .env.kind 2>/dev/null | cut -d= -f2 || true)"; \
+	@# READ THE STAMPED STATE SINK, NOT `.env.kind` — for EVERY value, not just the first one.
+	@#
+	@# #192 renamed the sink to `.env.state` and nothing has written `.env.kind` since, so all FIVE of
+	@# these reads have been dead: HARBOR_URL (which failed loudly, telling you to "run make
+	@# install-harbor first" when you just had — an error naming the wrong cause), and HARBOR_INSECURE /
+	@# HARBOR_CA_FILE / HARBOR_USERNAME / HARBOR_PASSWORD, which failed SILENTLY: the CA was never
+	@# mounted, so the jump box could not trust the self-signed Harbor and got `HTTP 000`.
+	@# Fixing only the loud one left the quiet ones — resolve the sink ONCE and read them all from it.
+	@# (`.env.kind` stays as a legacy fallback for one release. state_file() needs REPO_ROOT, which
+	@# os.sh sets — sourcing state.sh alone resolves the sink to "/.env.state".)
+	@sink="$$(bash -c '. scripts/lib/os.sh; state_file' 2>/dev/null || echo .env.state)"; \
+	 sread() { grep -h "^$$1=" "$$sink" .env.kind 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//"; }; \
+	 harbor_url="$$(sread HARBOR_URL)"; \
+	 [ -n "$$harbor_url" ] || { echo "ERROR: HARBOR_URL is not in the state overlay ($$sink) — run 'make install-harbor' first"; exit 1; }; \
+	 harbor_insecure="$$(sread HARBOR_INSECURE)"; harbor_insecure="$${harbor_insecure:-0}"; \
+	 harbor_ca="$$(sread HARBOR_CA_FILE)"; \
 	 extra=""; \
 	 if [ "$$harbor_insecure" != "1" ] && [ -n "$$harbor_ca" ] && [ -f "$$harbor_ca" ]; then \
 	   cp "$$harbor_ca" .jumpbox/harbor-ca.crt; chmod 0644 .jumpbox/harbor-ca.crt; \
@@ -498,10 +505,10 @@ jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photo
 	   tbabs="$(abspath $(JUMPBOX_TARBALL))"; tbbase="$$(basename "$$tbabs")"; \
 	   [ -f "$$tbabs" ] || { echo "ERROR: JUMPBOX_TARBALL not found: $$tbabs"; exit 1; }; \
 	   : "harbor-robot writes these single-quoted (the name is robot$$<x>, the secret can hold metachars)."; \
-	   : "cut keeps the quotes, so an unstripped value logs in as \047robot$$...\047 and 401s."; \
-	   huser="$$(grep -h '^HARBOR_USERNAME=' .env.kind .env .env.example 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//")"; \
-	   hpw="$$(grep -h '^HARBOR_PASSWORD=' .env.kind .env 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//")"; \
-	   [ -n "$$hpw" ] || { echo "ERROR: HARBOR_PASSWORD not in .env.kind/.env — the air-gap half needs push creds"; exit 1; }; \
+	   : "cut keeps the quotes, so an unstripped value logs in as \047robot$$...\047 and 401s — sread strips them."; \
+	   huser="$$(grep -h '^HARBOR_USERNAME=' "$$sink" .env.kind .env .env.example 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//")"; \
+	   hpw="$$(grep -h '^HARBOR_PASSWORD=' "$$sink" .env.kind .env 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//")"; \
+	   [ -n "$$hpw" ] || { echo "ERROR: HARBOR_PASSWORD not in the state overlay ($$sink) or .env — the air-gap half needs push creds"; exit 1; }; \
 	   tb_flags="-v $$tbabs:/run/bundle/$$tbbase:ro -e JUMPBOX_MODE=airgap-half -e JUMPBOX_TARBALL=/run/bundle/$$tbbase -e HARBOR_USERNAME=$$huser -e HARBOR_PASSWORD"; \
 	   echo "running $(JUMPBOX_OS) AIR-GAP jump box (sneakernet half) on the kind network (Harbor=$$harbor_url, tarball=$$tbbase)"; \
 	 else \

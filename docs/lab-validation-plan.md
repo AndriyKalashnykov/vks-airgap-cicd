@@ -401,7 +401,7 @@ tar czf /tmp/phase1-evidence.tgz /tmp/*.log /tmp/probe-app.yaml 2>/dev/null; ls 
 **Who needs it:** BOTH.
 **We then:** upgrade the air-gap mirror path to `lab-verified` against a real VMware Harbor. A 403 from `harbor-robot` means our sysadmin detection is wrong on the VMware build — we fix the fallback.
 
-⚠️ **RUN IT ALONE.** No parallel docker/podman/registry work on that box — concurrent pushes **corrupt Harbor's blob store**, and the only reliable recovery is rebuilding the registry.
+⚠️ **RUN IT ALONE.** Not because concurrency corrupts blobs — that was a **misdiagnosis** (corrected 2026-07-13: the mirror was destroyed by our own Harbor install rolling an `emptyDir` registry, while a surviving Redis descriptor cache made the re-push a silent no-op, with **zero** concurrent load). Run it alone because a shared cluster + registry makes any failure unattributable. `make mirror` now ends in `mirror-verify`.
 
 ```bash
 set -a; . ./.env; set +a

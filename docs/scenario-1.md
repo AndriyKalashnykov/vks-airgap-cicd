@@ -22,9 +22,7 @@ the pipeline into it. The jump box is dual-homed (internet + lab).
 | **Harbor** | [download](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&displayGroup=Harbor&release=2.14.3&os=&servicePk=542081&language=EN) |
 
 Drop **all** the archives in one folder (e.g. `~/Downloads/vcf`) — the installer picks the right
-OS/arch and ignores the rest. Reference docs:
-[Harbor](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-harbor-as-vcf-service/installing-and-configuring-harbor-and-contour.html)
-· [ArgoCD](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-argo-cd-service/install-argo-cd-service.html).
+OS/arch and ignores the rest.
 
 ## Step 0 — jump box
 
@@ -56,6 +54,7 @@ overlay is **archived, not deleted** — it may hold that cluster's only passwor
 ## A1 — Harbor as a Supervisor Service · vSphere Client
 
 **For:** the registry everything pulls from. **Not scriptable** — this is browser work.
+**Broadcom's page:** [Installing and configuring Harbor and Contour](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-harbor-as-vcf-service/installing-and-configuring-harbor-and-contour.html).
 
 1. **Install Contour first** — it is itself a Supervisor Service and is Harbor's ingress **on the Supervisor**. (Or configure an NGINX LB for the Supervisor.)
 2. **Supervisor Management → Services → Add New Service** → upload `harbor-service-<ver>.yml`.
@@ -77,6 +76,8 @@ HARBOR_APP_PROJECT=apps
 ```
 
 ## A2 — ArgoCD Operator + an ArgoCD instance · `kubectl`
+
+**Broadcom's page:** [Install Argo CD Service](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-argo-cd-service/install-argo-cd-service.html).
 
 **For:** the GitOps engine. It runs **on the Supervisor**, not in your guest cluster.
 
@@ -246,7 +247,10 @@ make verify        # push a marked change → Tekton → Harbor → ArgoCD → t
 `make gitops` **registers your guest cluster** as an ArgoCD destination and points the `Application`
 at it. It never installs a second ArgoCD, and never deploys onto the Supervisor.
 
-⚠️ **`make mirror` must run alone** — concurrent registry work corrupts Harbor's blob store.
+⚠️ **`make mirror` must run alone** — not because concurrency corrupts anything (that was a
+**misdiagnosis**, corrected 2026-07-13), but because the e2e mutates a shared cluster and registry, so
+parallel work makes any failure unattributable. `make mirror` now ends in `mirror-verify`: a push you
+have not verified is not a mirror.
 
 ## Step 6 — access the UIs
 
