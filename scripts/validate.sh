@@ -156,7 +156,7 @@ EOF
 [ -z "$_missing" ] || log_error "  a pipeline referencing a missing Task fails at RUN time (CouldntGetTask), never at build time."
 
 echo "== kubeconform (k8s/) =="
-if have kubeconform; then
+if require_gate_tool kubeconform; then
   # Enumerate k8s/* DYNAMICALLY: a hardcoded subdir list would silently skip a new one,
   # and a gate that quietly checks a subset is worse than no gate. Print the denominator.
   shopt -s nullglob

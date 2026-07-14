@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 rc=0
 
 echo "== shellcheck (scripts/*.sh + repo-root *.sh) =="
-if have shellcheck; then
+if require_gate_tool shellcheck; then
   # Exclude nothing; lib/os.sh is sourced so give it shell=bash via its directive.
   # Include repo-root *.sh (e.g. bootstrap-jumpbox.sh) — not just scripts/.
   { find "$REPO_ROOT/scripts" -name '*.sh' -print0; \
@@ -22,7 +22,7 @@ else
 fi
 
 echo "== yamllint (manifests) =="
-if have yamllint; then
+if require_gate_tool yamllint; then
   # Relaxed: line-length off (manifests are wide); comma/colon spacing off
   # (we column-align inline maps for readability).
   # NOTE: stderr is NOT silenced. It used to be (`2>/dev/null`), and when a listed
@@ -35,7 +35,7 @@ else
 fi
 
 echo "== hadolint (EVERY app's Dockerfile*, from apps/registry.tsv) =="
-if have hadolint; then
+if require_gate_tool hadolint; then
   # Every app, not one hardcoded path: this glob used to name the Java app, which meant the Go
   # app's Dockerfile was never linted at all. The glob covers the runtime Dockerfile AND any
   # Dockerfile.builder (the air-gapped Maven builder) — both must be lint-clean.
@@ -64,7 +64,7 @@ else
 fi
 
 echo "== hadolint (jumpbox/Dockerfile.*) =="
-if have hadolint; then
+if require_gate_tool hadolint; then
   for df in "$REPO_ROOT"/jumpbox/Dockerfile.*; do
     [ -f "$df" ] && { hadolint "$df" || rc=1; }
   done
