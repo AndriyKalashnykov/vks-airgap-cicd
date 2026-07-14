@@ -19,6 +19,24 @@
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/adversary-first-gate.py\""
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/mid-run-edit-gate.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/no-gate-in-commit-chain.py\""
+          }
+        ]
       }
     ]
   }

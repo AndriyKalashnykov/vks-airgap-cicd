@@ -185,6 +185,10 @@ check-app-hardcodes: ## Gate: no shared script/manifest/Makefile/.env.example ma
 check-app-toolchains: ## Gate: every app's language toolchain must be pinned in .mise.toml, or CI cannot test/scan that app
 	@$(SCRIPTS)/check-app-toolchains.sh
 
+.PHONY: check-agent-frontmatter
+check-agent-frontmatter: ## Gate: every .claude/agents/*.md must have PARSEABLE YAML frontmatter (a broken one silently disables a BLOCKING reviewer)
+	@$(SCRIPTS)/check-agent-frontmatter.sh
+
 .PHONY: check-tools
 check-tools: ## Read-only: is this jump box able to run the flow? (required vs optional CLIs + versions)
 	@$(SCRIPTS)/03-check-tools.sh
@@ -812,7 +816,7 @@ docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets
 	@# having linted nothing. In CI it now DIES instead.
 
 .PHONY: static-check
-static-check: check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: check-agent-frontmatter check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)

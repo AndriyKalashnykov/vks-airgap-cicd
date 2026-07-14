@@ -20,15 +20,22 @@ a no-internet box that retried for >2 MINUTES before failing with an error namin
 Every one of those was findable BEFORE the first line of code. That is the whole point of the rule,
 and prose did not make it happen. This does.
 
-WHAT IT DOES. Writing to the operator-flow code (scripts/, Makefile, jumpbox/, k8s/, tekton/) is
-BLOCKED until an adversary has been engaged in this session. Spawning one clears the gate for the
-rest of the session (it is a "did you think before you typed" gate, not a per-edit tax).
+WHAT IT DOES. Writing to the operator-facing product — the code (scripts/, Makefile, jumpbox/, k8s/,
+tekton/, apps/) AND the operator docs (docs/, README.md) — is BLOCKED until an adversary has been
+engaged in this session. Spawning one clears the gate for the rest of the session (it is a "did you
+think before you typed" gate, not a per-edit tax).
+
+docs/ AND README ARE GATED, AND THAT IS THE CORRECTION. They were exempt in the first version, with
+the reasoning "docs is where you write the plan first". Within the hour I used that exemption to write
+a mechanism essay into an operator runbook and to ship a table telling operators to AVOID the ingress
+mode that actually works. A lying runbook fails an operator exactly as hard as a broken script. The
+exemption's purpose was sound; its blast radius was the whole operator-facing surface.
 
 WHAT IT DELIBERATELY DOES NOT GATE:
-  - docs/, README, CLAUDE.md, .env.example, diagrams — prose and config are where you WRITE UP the
-    plan; gating them would make the rule unfollowable.
+  - CLAUDE.md — it IS the plan/backlog. Gating it would make the rule unfollowable: you must be able
+    to write the design down BEFORE you have run the adversary on it.
+  - .claude/ itself — you must be able to fix a hook that is wrong.
   - subagents — they are already denied all writes by subagent-readonly-gate.py.
-  - .claude/ itself — you must be able to fix the hook when it is wrong.
 
 ESCAPE HATCH: ADVERSARY_GATE_OFF=1 in the environment. Deliberately trivial: this is a reflex aid,
 not a security boundary, and a gate you cannot turn off when it is wrong is a gate people rip out.
@@ -44,6 +51,8 @@ import sys
 # The operator-flow code: the things that RUN on a machine we may not be able to reach again.
 # A mistake here is a mistake on someone's air-gapped jump box. That is what earns the gate.
 GUARDED_PREFIXES = (
+    "docs/",      # operator-facing prose IS a product surface — a lying runbook fails an operator
+    "README.md",
     "scripts/",
     "jumpbox/",
     "k8s/",
@@ -52,12 +61,19 @@ GUARDED_PREFIXES = (
 )
 GUARDED_FILES = ("Makefile",)
 
-# Prose/config: NOT gated. This is where the thinking gets written down.
+# NOT gated: the places you WRITE THE PLAN and FIX THE GATE.
+#
+# `docs/` USED TO BE HERE, and removing it is the point. I carved out that exemption with the reasoning
+# "docs is where you write the plan first" — and then, within the hour, wrote a mechanism essay straight
+# into an operator runbook and shipped a table telling operators to avoid the ingress mode that works.
+# The exemption's stated purpose was sound; its blast radius was the entire operator-facing surface.
+# `CLAUDE.md` remains exempt (it IS the plan/backlog, and gating it would make the rule unfollowable),
+# and so does `.claude/` (you must be able to fix a hook that is wrong).
 EXEMPT_PREFIXES = (
-    "docs/",
     ".claude/",
     ".github/",
 )
+EXEMPT_FILES = ("CLAUDE.md",)
 
 
 def _receipt_path(session_id: str) -> str:
@@ -118,7 +134,7 @@ def main() -> int:
 
     if rel.startswith("../"):          # outside the project — not ours to police
         return 0
-    if rel.startswith(EXEMPT_PREFIXES):
+    if rel.startswith(EXEMPT_PREFIXES) or rel in EXEMPT_FILES:
         return 0
     if not (rel.startswith(GUARDED_PREFIXES) or rel in GUARDED_FILES):
         return 0
@@ -148,7 +164,8 @@ def main() -> int:
         "     A fire-and-forget background agent delivers nothing: measured 0/4.\n"
         "  3. Then write the code.\n"
         "\n"
-        "Docs, README, CLAUDE.md and .env.example are NOT gated — write the plan there first.\n"
+        "CLAUDE.md is NOT gated — write the plan and the backlog there first, then run the adversary.\n"
+        "(docs/ and README ARE gated: a lying runbook fails an operator exactly as hard as broken code.)\n"
         "Override (on the record): ADVERSARY_GATE_OFF=1\n"
     )
     return 2
