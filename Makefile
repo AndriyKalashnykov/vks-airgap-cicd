@@ -214,7 +214,12 @@ mirror-verify-red-test: check-env ## NEGATIVE test (LIVE Harbor): delete one mir
 	@$(SCRIPTS)/24-mirror-verify-red-test.sh
 
 .PHONY: mirror
-mirror: mirror-pull mirror-push ## (dual-homed) Pull + push in one run
+# mirror-verify is a PREREQUISITE, not an optional follow-up. A push you have not verified is not
+# a mirror: `crane push` establishes blob existence with a HEAD, so a registry that 200s a blob it
+# does not actually hold makes the push a SILENT NO-OP that exits 0 (see 06-install-harbor.sh §3 —
+# it happened, 36/36, and only mirror-verify caught it). The mirror's contract is "the images are
+# retrievable from Harbor", and crane validate is the only thing here that asserts it.
+mirror: mirror-pull mirror-push mirror-verify ## (dual-homed) Pull + push + VERIFY in one run
 
 .PHONY: builder-image
 builder-image: check-env ## (internet) Build + push the air-gap Maven builder image (deps pre-baked)

@@ -108,8 +108,19 @@ pull_args=("$MAVEN_BASE")
 [ "$ENGINE" = podman ] && pull_args=(--tls-verify="$TLS_VERIFY" "${CERT_DIR_ARG[@]}" "$MAVEN_BASE")
 if "$ENGINE" pull "${pull_args[@]}" >/dev/null 2>&1; then
   BUILD_BASE="$MAVEN_BASE"; log_info "basing builder on mirrored $MAVEN_BASE"
+elif [ "${ALLOW_PUBLIC_BASE:-0}" = "1" ]; then
+  log_warn "mirrored maven image not pullable; ALLOW_PUBLIC_BASE=1 -> falling back to PUBLIC $BUILD_BASE (NOT air-gap faithful)"
 else
-  log_warn "mirrored maven image not pullable; using public $BUILD_BASE"
+  # This used to be a silent log_warn + fall back to docker.io. On a dual-homed box — which is
+  # exactly where this script runs — that turns a BROKEN MIRROR into a GREEN BUILD: the image is
+  # pulled from Docker Hub, the builder is published, and nothing has proven the air gap. It
+  # would have masked the registry wipe that this branch fixes. A mirror we cannot pull from is
+  # a failure, not a fallback; the escape hatch has to be asked for by name.
+  die "cannot pull the MIRRORED base '$MAVEN_BASE' from Harbor.
+  The builder must be based on the mirrored image — falling back to Docker Hub would build green
+  while proving nothing about the air gap (and would hide a broken Harbor).
+  Fix the mirror first:  make mirror   (it now ends in mirror-verify)
+  Deliberately building against the public base anyway:  ALLOW_PUBLIC_BASE=1 make builder-image"
 fi
 
 for app in $BUILDER_APPS; do

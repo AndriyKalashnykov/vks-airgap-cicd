@@ -70,29 +70,70 @@ log_info "adding/updating helm repo '$CHART_REPO_NAME' ($CHART_REPO_URL)"
 run helm repo add "$CHART_REPO_NAME" "$CHART_REPO_URL" --force-update
 run helm repo update "$CHART_REPO_NAME"
 
-# --- 3. Phase-1 values (TLS OFF for both modes; secure enables TLS in phase 2 once the
-#        LB IP — the cert SAN — is known). umask 077; admin password ONLY in this file.
+# --- 3. Values -----------------------------------------------------------------
+#
+# PERSISTENCE IS LOAD-BEARING. It used to be `enabled: false`, which puts the registry's blob
+# store on an **emptyDir** — so EVERY replacement of the registry pod DESTROYS THE ENTIRE MIRROR.
+# That alone would be loud. What made it silent is the second half:
+#
+#   Harbor's registry caches blob DESCRIPTORS in Redis (cm/harbor-registry: `cache.layerinfo:
+#   redis`, `redis.db: 2`) — and harbor-redis is a DIFFERENT pod that does NOT roll with the
+#   registry. So after the wipe, the cache still answers `HEAD /v2/<repo>/blobs/<digest>` with
+#   **200**. crane (spec-correctly) reads that as "the registry already holds this blob", SKIPS
+#   THE UPLOAD, prints `existing blob:` and exits 0. `make mirror` reports 36/36 pushed. On disk
+#   there were 153 manifest link files and **zero blobs**; a blob GET returned `200 OK` +
+#   Content-Length + **zero bytes of body**. Only `make mirror-verify` (crane validate) saw it.
+#
+# This is very likely the true cause of what this repo has long recorded as "concurrent load
+# corrupts Harbor's blob store": the failing run had NO concurrent load, and a wipe hits 36/36,
+# whereas a write race would damage *some* images. "Recover with kind-down && e2e-kind" worked
+# because it destroys Redis too — not because it avoids concurrency.
+#
+# A PVC (KinD's default `standard` StorageClass; `ci` and `gitea` already use it) makes the
+# store outlive the pod, so the cache can no longer describe a store that isn't there.
 umask 077
 VALUES_FILE="$(mktemp -t harbor-values.XXXXXX.yaml)"
 trap 'rm -f "$VALUES_FILE"' EXIT
 esc_pw="${HARBOR_PW//\'/\'\'}"
-{
-  printf 'expose:\n'
-  printf '  type: loadBalancer\n'
-  printf '  tls:\n'
-  printf '    enabled: false\n'
-  printf 'persistence:\n'
-  printf '  enabled: false\n'
-  printf 'externalURL: %s\n' "$PROVISIONAL_URL"
-  printf "harborAdminPassword: '%s'\n" "$esc_pw"
-} > "$VALUES_FILE"
+harbor_render_values() {  # $1 = tls enabled (true|false), $2 = externalURL
+  {
+    printf 'expose:\n'
+    printf '  type: loadBalancer\n'
+    printf '  tls:\n'
+    printf '    enabled: %s\n' "$1"
+    if [ "$1" = "true" ]; then
+      printf '    certSource: secret\n'
+      printf '    secret:\n'
+      printf '      secretName: %s\n' "$TLS_SECRET"
+    fi
+    printf 'persistence:\n'
+    printf '  enabled: true\n'
+    printf 'externalURL: %s\n' "$2"
+    printf "harborAdminPassword: '%s'\n" "$esc_pw"
+  } > "$VALUES_FILE"
+}
 
-# --- 4a. Install/upgrade (phase 1) -------------------------------------------
-log_info "installing Harbor release '$RELEASE' (chart $CHART_VERSION) into namespace '$NS'"
-run helm upgrade --install "$RELEASE" "${CHART_REPO_NAME}/harbor" \
-  --version "$CHART_VERSION" \
-  --namespace "$NS" --create-namespace \
-  --values "$VALUES_FILE"
+# --- 4a. Phase 1 — ONLY on a first install ------------------------------------
+#
+# It used to run UNCONDITIONALLY, which meant every re-run against a warm cluster helm-upgraded
+# a TLS-ENABLED Harbor back to `expose.tls.enabled: false` (a DOWNGRADE), rolling core/registry/
+# jobservice — and then phase 2 rolled them AGAIN 3 seconds later. Two registry replacements per
+# run, each of which (before the persistence fix above) wiped the mirror. `make e2e-kind` on a
+# warm cluster therefore wiped Harbor and then mirrored into the void, deterministically.
+#
+# Phase 1 exists only to create the Service so cloud-provider-kind can assign the LB IP that
+# becomes the cert's SAN. If the release is already there, the Service is too — skip straight to
+# phase 2, which applies the FULL desired state.
+if helm status "$RELEASE" -n "$NS" >/dev/null 2>&1; then
+  log_info "Harbor release '$RELEASE' already exists — skipping the phase-1 install (it would DOWNGRADE TLS and roll the registry)"
+else
+  harbor_render_values false "$PROVISIONAL_URL"
+  log_info "installing Harbor release '$RELEASE' (chart $CHART_VERSION) into namespace '$NS'"
+  run helm upgrade --install "$RELEASE" "${CHART_REPO_NAME}/harbor" \
+    --version "$CHART_VERSION" \
+    --namespace "$NS" --create-namespace \
+    --values "$VALUES_FILE"
+fi
 
 # --- 4b. Poll for the LoadBalancer IP (assigned by cloud-provider-kind) --------
 log_info "waiting for LoadBalancer IP on svc '$HARBOR_SVC' (timeout ${READY_TIMEOUT}s, poll ${POLL_INTERVAL}s)"
@@ -114,6 +155,12 @@ log_info "Harbor LoadBalancer IP: $LB_IP"
 
 # --- 5. SECURE phase 2: mint the CA + leaf cert (SAN=LB IP), create the TLS secret, and
 #        upgrade Harbor to serve HTTPS on the LB IP with that cert. -----------
+# Phase 2 applies the FULL desired state from a rendered values file — NOT `--reuse-values`.
+# `--reuse-values` inherits whatever the last release happened to carry, so the mode was
+# STICKY: an insecure re-install of a previously-secure Harbor set externalURL=http:// while
+# LEAVING TLS ON. Declaring the whole state makes the mode flip (make e2e-kind-both) honest,
+# and it is idempotent: identical rendered values produce identical manifests, so helm does
+# NOT roll the pods on a no-op re-run.
 if [ "$HARBOR_INSECURE" != "1" ]; then
   log_info "minting self-signed CA + leaf cert (SAN=IP:${LB_IP}) -> ${CERT_DIR}"
   gen_selfsigned_ca_cert "$LB_IP" "$CERT_DIR" "vks-lab-harbor-ca"
@@ -121,18 +168,36 @@ if [ "$HARBOR_INSECURE" != "1" ]; then
     --cert="${CERT_DIR}/tls.crt" --key="${CERT_DIR}/tls.key" \
     --dry-run=client -o yaml | run kubectl apply -f -
   log_info "upgrading Harbor to HTTPS (externalURL=https://${LB_IP}, cert secret=${TLS_SECRET})"
-  run helm upgrade --install "$RELEASE" "${CHART_REPO_NAME}/harbor" \
-    --version "$CHART_VERSION" --namespace "$NS" --reuse-values \
-    --set "expose.tls.enabled=true" \
-    --set "expose.tls.certSource=secret" \
-    --set "expose.tls.secret.secretName=${TLS_SECRET}" \
-    --set "externalURL=https://${LB_IP}"
+  harbor_render_values true "https://${LB_IP}"
 else
   log_info "setting Harbor externalURL to http://${LB_IP}"
-  run helm upgrade --install "$RELEASE" "${CHART_REPO_NAME}/harbor" \
-    --version "$CHART_VERSION" --namespace "$NS" --reuse-values \
-    --set "externalURL=http://${LB_IP}"
+  harbor_render_values false "http://${LB_IP}"
 fi
+run helm upgrade --install "$RELEASE" "${CHART_REPO_NAME}/harbor" \
+  --version "$CHART_VERSION" --namespace "$NS" --values "$VALUES_FILE"
+
+# --- 5b. The registry's Redis descriptor cache must NEVER outlive its blob store -------------
+#
+# Belt-and-braces behind the PVC. A cache that describes blobs the store does not have turns the
+# registry into a LIAR: HEAD 200 on a blob that isn't there => every pusher skips the upload and
+# reports success (see the note at section 3). If the registry pod was replaced by the upgrade
+# above, drop the cache so it re-stats from the real store.
+#
+# The DB index is READ FROM THE CLUSTER (cm/harbor-registry -> `redis: db:`), not guessed — the
+# chart can move it, and a flush of the wrong DB would silently clear someone else's keys.
+harbor_flush_registry_cache() {
+  local db
+  db="$(kubectl -n "$NS" get cm harbor-registry -o jsonpath='{.data.config\.yml}' 2>/dev/null \
+        | awk '/^redis:/{r=1} r && /^[[:space:]]+db:/{print $2; exit}')"
+  case "$db" in ''|*[!0-9]*) log_warn "cannot read the registry's redis DB index from cm/harbor-registry — skipping cache flush"; return 0 ;; esac
+  local pod
+  pod="$(kubectl -n "$NS" get pod -l component=redis -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  [ -n "$pod" ] || { log_warn "no harbor redis pod found — skipping cache flush"; return 0; }
+  log_info "flushing the registry's redis blob-descriptor cache (db ${db}) so it cannot describe blobs the store lacks"
+  kubectl -n "$NS" exec "$pod" -- redis-cli -n "$db" FLUSHDB >/dev/null 2>&1 \
+    || log_warn "redis FLUSHDB failed — if a push reports 'existing blob' for everything, this is why"
+}
+harbor_flush_registry_cache
 
 # --- 6. Wire containerd on EVERY kind node for the LB IP (config_path=/etc/containerd/
 #        certs.d, read per-pull, no restart needed). ---------------------------
