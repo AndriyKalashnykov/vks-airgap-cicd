@@ -59,8 +59,25 @@ your base has them** — measured on the bare images:
 No container engine is needed on the jump box: `crane` pushes images, and the Maven builder is carried
 pre-built.
 
-**Expect:** `make check-tools` on the jump box lists no missing tools. Run it **before** you carry 12 GB
-across a room — it is the cheapest failure available.
+**Expect — and read this carefully, because the obvious reading is wrong.** Run `make check-tools` on the
+jump box **before** you carry 12 GB across a room; it is the cheapest failure available. But it will
+**report the five carried tools as MISSING, and exit non-zero — and that is CORRECT at this point**:
+
+```
+MISSING REQUIRED: kubectl helm jq yq crane     <- expected before the carry. The BUNDLE brings these.
+```
+
+What you are checking for is the **other** column. **Every non-carried required tool must show `OK`** —
+`awk`, `tar`, `curl`, `git`, `openssl`, `envsubst`, `make`, `sha256sum`. If any of *those* is missing,
+fix it **now**, from your lab's package mirror, **before** you carry the bundle: they are OS packages and
+the tarball cannot bring them.
+
+> **Ignore `check-tools`' own remediation line here.** It says *"Install the toolchain with: `make deps`"*
+> — which **downloads from the internet** and therefore cannot work on this box. It is the right advice on
+> the *staging* box and a dead end on this one.
+
+After `make bundle-load` (Step 3), `make check-tools` should report **everything** `OK` — that is the run
+that must be clean, and it is what proves the box can actually run the install.
 
 **Its `.env` must carry:** `HARBOR_URL`, `HARBOR_USERNAME`, `HARBOR_PASSWORD`, and either `HARBOR_CA_FILE`
 (carry the CA) or `HARBOR_INSECURE=1`.

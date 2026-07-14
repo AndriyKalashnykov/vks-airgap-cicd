@@ -198,10 +198,16 @@ make deps            # toolchain: mise + podman (git must already be present)
 make engine-check    # read-only: what engine does this box have, and will it cost you a sudo?
 make env-init        # create .env from .env.example
 make env-populate    # mint the secrets we can, discover cluster values, print what only you can supply
-make fetch-harbor-ca # Harbor is self-signed: write its CA to the path HARBOR_CA_FILE points at
 make env-check       # gate: fail now if anything required is still missing
 make check-tools     # what this box has, and what it still needs
 ```
+
+> **`make fetch-harbor-ca` is NOT a prerequisite — it used to be listed here and it DIED.** It dials
+> `HARBOR_URL` with `openssl s_client`, and at this point Harbor does not exist yet (in Scenario 1 *you*
+> install it) and `HARBOR_URL` is still the committed placeholder, so it failed with "could not connect
+> to harbor.vks.local" and the two steps after it never ran. Fetch the CA **after** Harbor exists — both
+> runbooks already put it in the right place ([Scenario 1](docs/scenario-1.md), [Scenario 2](docs/scenario-2.md)).
+> The KinD stand-in never needs it: `make kind-up` mints the CA and sets `HARBOR_CA_FILE` itself.
 
 Running `make e2e-kind` (the local stand-in)? It **also needs Docker** — kind's nodes run on the
 Docker socket. That is kind, not us. A real air-gap run does **not** need docker: podman is the default
