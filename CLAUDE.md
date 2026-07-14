@@ -311,9 +311,90 @@ The two BLOCKING triggers (before you implement · before you call the session d
 (`Workflow` with a schema, or a synchronous `Agent` — never fire-and-forget), and what to do with the
 findings are all in Rule Zero. Do not duplicate them here.
 
-## ▶️ HANDOFF 2026-07-14 (late) — START HERE
+## ▶️ HANDOFF 2026-07-14 (docker-on-the-jump-box session) — START HERE
 
-`main` GREEN · **0 open PRs** · 9 PRs merged this session · all 8 e2e permutations green (table below).
+Branch `feat/jumpbox-docker-support`. **Docker is now SUPPORTED on a jump box, opt-in, on both OSes.**
+podman remains the default and the only engine that is sudo-free everywhere.
+
+### THE FRAME THAT MADE THIS TRACTABLE
+
+**Docker on a jump box was never "untested" — it was UNSUPPORTED BY OUR OWN BOOTSTRAP.**
+`00-install-prereqs.sh` installed podman only, on both OSes, and a gate asserted that as an invariant. So
+every "docker works" measurement we had was taken on the developer's laptop: **scoped to the wrong
+machine**. Before measuring whether a component works, grep the provisioning path for it — it costs 60
+seconds and it reframed this entire task.
+
+### WHAT IS PROVEN (each by a run, not a claim)
+
+- **CLAIM 1 — the bootstrap PRODUCES the box: 6/6 on LITERALLY BARE images** (`make bootstrap-engine-test`;
+  photon:5.0, ubuntu:26.04, ubuntu:24.04 × {default, docker}). Default ⇒ podman + **zero** docker packages.
+  `CONTAINER_ENGINE=docker` ⇒ docker + rootless prereqs and **not** podman. Asserts **artifacts on the box**,
+  not log lines. It runs the REAL bootstrap on an image with nothing pre-installed — a harness that
+  pre-bakes the engine would hit "already the newest version", exit 0, and test nothing.
+- **Ubuntu 24.04 is the leg that matters**: it has NO distro rootless helper, so the bootstrap installs
+  docker, **discloses "rootful-only ⇒ a sudo per registry"**, and **does not add `download.docker.com`** —
+  asserted, because adding a third-party apt repo to someone else's jump box is not ours to decide.
+- **The engine matrix** (`make jumpbox-matrix`): {photon,ubuntu} × {podman,docker}, each doing
+  login → pull → build → **push** → `crane validate --remote` against the real self-signed Harbor.
+
+### THE FACT THAT INVERTS THE USUAL ASSUMPTION (ran-it)
+
+`docker.io` is **29.1.3 on both Ubuntu 24.04 and 26.04**, but only **26.04's deb ships
+`dockerd-rootless.sh`** (hidden in `/usr/share/docker.io/contrib/`, OFF PATH — `make deps` symlinks it).
+24.04 ships **zero** rootless files. **Photon 5** ships `docker` + `docker-rootless` + `rootlesskit`
+first-class with the helper already on PATH. **Photon is the EASY OS for rootless docker.** Do not
+re-derive this from docs — an adversary and I disagreed here and we were each right about a different
+Ubuntu release.
+
+### WHAT THE ADVERSARIES KILLED (run them FIRST — Rule Zero)
+
+Both delivered, and both demolished my design *before* I wrote it:
+
+- `test-container-engine.sh`'s docker gate was **structurally blind to `pkg_install docker`** (it scans for
+  docker *invocations at a command position*). An engine-aware bootstrap would have put a docker daemon on
+  **every** jump box under a **green** gate. Fixed by making the package list a **pure function**
+  (`engine_packages`) the gate **executes** — RED-proven 4 ways.
+- The dind matrix I planned was the **wrong instrument** (root-in-container makes the sudo column
+  *unmeasurable*; pre-baking the engine makes `make deps`' docker path never run). The bare-image bootstrap
+  test is what actually proves the claim.
+- My own premise P2 ("Ubuntu needs a third-party repo") was **half wrong**, and the vks-adversary's
+  counter-claim was **half wrong too** — see the release split above. **Ran-it beat both.**
+
+### THE BUGS THE MATRIX FOUND (it earned its keep on its first honest run)
+
+All were **silent no-ops** — the house style of this repo's failures:
+
+- **`HARBOR_URL` was not override-able.** `make mirror HARBOR_URL=<other>` pushed to the DEFAULT registry
+  and said nothing: `.env.example`'s uncommented value is sourced back over the caller's. Same for
+  `HARBOR_CA_FILE`. Both are now SELECTORS that `load_env` snapshots and restores.
+- **`make fetch-harbor-ca` wrote the LEAF certificate into a file called `ca.crt`** (`openssl x509` reads
+  only the first PEM block). It works on KinD *only because* our Harbor's leaf is self-signed. On a real
+  lab (cert-manager leaf, separate CA) crane/Kaniko fail `x509: unknown authority`. Now takes the issuer
+  and **`openssl verify`s** it before writing.
+- `jumpbox-image` built the podman Dockerfile for the docker leg — caught by the **single-engine assert**,
+  which is exactly the false green it exists to prevent.
+
+### AND THE ONE I ALMOST SHIPPED
+
+`make jumpbox-matrix | tail` reported **exit 0** while the log said **FAILED** — a pipe replaces the gate's
+status with `tail`'s. I nearly reported a pass. **Read the gate's own rc, on its own line.** It is written
+down in the rules and I still did it.
+
+### NEXT
+
+1. **A real lab.** The Supervisor topology, the `vcf` CLI auth flow, and whether a VKS guest cluster ships
+   the Gateway API CRDs remain **UNVERIFIED**. No amount of KinD green changes that.
+2. `docs/scenario-1.md` had an adversary sweep (verdict was NOT_SHIPPABLE; the CRITICALs are fixed). Its
+   remaining MEDIUMs are in the report: the `vcf context` namespace scope in A3, and folding the three raw
+   `kubectl` preconditions into a `make lab-preflight`.
+3. The `jumpbox` Makefile recipe is still a 50-line `\`-continued block. Every silent failure above lived
+   in one. Move it to `scripts/`.
+
+---
+
+## Previous handoff — 2026-07-14 (early)
+
+`main` GREEN · **0 open PRs** · 9 PRs merged · all 8 e2e permutations green (table below).
 
 ### THE ONE THING TO INTERNALISE
 
