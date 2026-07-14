@@ -1,147 +1,127 @@
-# Sneakernet — when the jump box cannot reach Harbor
+# Sneakernet — two boxes, one carried bundle
 
-**For:** a jump box that has **internet but no route to the Harbor / cluster network**. You pull the images
-on the outside, carry them across the gap on physical media, and push them in from a machine on the inside.
+**Use this when no single box reaches both the internet and Harbor.** One box pulls the images, you carry
+them across on media, the other box pushes them in.
 
-> **You probably do not need this.** If your jump box reaches **both** the internet and Harbor (*dual-homed*),
-> run `make mirror` and stop reading. There is no mode switch — sneakernet is simply *which commands you run*.
+If one box reaches **both**, stop: run `make mirror`. Sneakernet is not a mode, it is just which commands
+you run on which box.
 
-| your jump box | what you run |
-|---|---|
-| reaches the internet **and** Harbor (**dual-homed**) | `make mirror` — pulls and pushes in one go |
-| reaches the internet **only** (**sneakernet**) | the two-box flow below |
-
----
-
-## What you carry, and what the inside box must already have
-
-**Carry three things** (all three, or the trip is wasted):
-
-| | what | size |
+| | box A — **outside** | box B — **inside** |
 |---|---|---|
-| **1.** the bundle | `vks-airgap-cicd-bundle-<date>.tar` — the OCI image cache, the install manifests, **and `crane`** | ~11 GB |
-| **2.** its checksum | the `.sha256` written beside it. **`bundle-load` refuses to run without it** — this archive crossed removable media, which is precisely where a silent bit-flip happens | a few bytes |
-| **3.** this git repo | the scripts and manifests the inside box runs | a few MB |
+| reaches | the internet | Harbor + the cluster |
+| does | `mirror-pull` → `builder-build` → `bundle` | `bundle-load` → `mirror-push` → `builder-push` → `mirror-verify` → the install |
 
-> ⚠️ **A FAT32 stick cannot hold a file larger than 4 GiB, and this bundle is ~11 GB.** That is the single
-> likeliest way a real carry fails, and it fails at *copy* time. Use exFAT, ext4, XFS or NTFS — or
-> `split -b 3G` it and `cat` it back on the far side. `make bundle` warns you.
-
-**The bundle carries `crane`, and only `crane`.** The inside box cannot download it — that is the point of an
-air gap — and it is the mirror engine. `make bundle` refuses to build a bundle without it (and refuses to
-stage a `mise` shim masquerading as it); `make bundle-load` installs it to `~/.local/bin` and **runs it** to
-prove it works on that box.
-
-**But the mirror is not the whole install.** Be honest about what the inside box needs *pre-provisioned*:
-
-| step on the inside box | needs |
-|---|---|
-| `bundle-load` → `mirror-push` → `mirror-verify` | `tar`, `curl`, `sha256sum` (on every Linux) **+ `crane` (carried in the bundle)** |
-| `make platform` / `gitops` / `install-ingress` (the **full** install) | `kubectl`, `helm`, `jq`, `envsubst` — **NOT in the bundle**. Pre-provision them, or run the install from a box that has them. `46-install-istio.sh` also fetches its chart from `istio-release.storage.googleapis.com`, which an air-gapped box cannot reach — use `INGRESS_CONTROLLER=istio-existing` (attach to a mesh the platform team installed) or vendor the chart. |
+*(Mechanism and the measurements behind these choices: [`docs/decisions/sneakernet.md`](decisions/sneakernet.md).)*
 
 ---
 
-## Why the bundle is a plain `.tar` and not compressed
+## Step 0 — set up box A (outside)
 
-Because **compression buys ~1% and can strand you on the far side.**
-
-- The payload is **already-compressed OCI layer blobs**. Measured on the real cache: gzip reaches **99.2%
-  of raw** — while costing *minutes* of single-threaded CPU on an 11 GB bundle.
-- **The compressor is a cross-box contract, and the outside box picks it.** The inside box has to *decode*
-  it, and it cannot install anything to do so. **Photon's `tar` is toybox, which has no `--zstd` option at
-  all** — installing the `zstd` binary does not help — and `zstd` ships on neither a bare `photon:5.0` nor a
-  bare `ubuntu:26.04`.
-
-A plain `.tar` needs **no compressor binary and no tar flag**, so it works on toybox, busybox, GNU tar and
-bsdtar alike. It deletes the failure class rather than relocating it.
-
-`BUNDLE_COMPRESSOR=gzip` is a safe opt-in (verified working on every far-side OS we test). `zstd` is not —
-use it only if you know that box's tar supports it. Either way `bundle-load` **probes tar's real capability**
-and refuses with an actionable message instead of dying inside `tar`.
-
----
-
-## The flow
-
-### On the OUTSIDE box (internet, no Harbor)
+**For:** it needs the full toolchain, and it is the only box that can download one.
 
 ```bash
-make deps            # toolchain (this box has internet)
-make mirror-pull     # pull every image in images/images.txt into ./bundle
-make bundle          # tar it up — stages crane + the arch stamp into the bundle
+git clone <this repo> && cd vks-airgap-cicd
+make deps
 ```
 
-**Expect:** `staged crane into the bundle (12M, <version>, x86_64, static)`, then
-`bundle ready: ./vks-airgap-cicd-bundle-<date>.tar (<size>)` and a `.sha256` beside it.
+**Expect:** `make deps` completes. This is the ordinary jump-box bootstrap — nothing sneakernet-specific.
 
-**Interrupted?** Re-run `make mirror-pull` — it **resumes**. Every digest-pinned image already fully pulled
-is skipped (a `.mirror-ok` marker written only on a *complete* pull), so a dropped connection or a CDN reset
-costs you only the images that had not finished.
+## Step 0b — set up box B (inside)
 
-**Architecture matters.** The bundle stamps the arch it was cut on (the carried `crane`'s, and the
-`MIRROR_ARCH` the images were pulled for — **default `amd64`**). If the inside box or the target cluster is
-`arm64`, set `MIRROR_ARCH=arm64` **before** `mirror-pull`; otherwise `bundle-load` refuses the bundle rather
-than letting you discover it as `exec format error` inside Kubernetes, three steps and one air gap later.
+**For:** `make deps` **cannot run here** — it downloads mise, crane and kubectl from the internet. Box B is
+provisioned by hand, once, before anything is carried.
 
-### Carry it
+**Copy the repo onto it** (tar/scp/the same stick — **not** `git clone`; there is no internet).
 
-Copy the tarball, its `.sha256`, and the git repo. `make bundle-load` verifies the checksum for you and
-**will not proceed without it**.
+**It must already have** — these are on any Linux base, and none of them can be fetched later:
 
-### On the INSIDE box (Harbor, no internet)
+| for | needs |
+|---|---|
+| the **mirror** (`bundle-load` → `mirror-push` → `builder-push` → `mirror-verify`) | `bash` (4+), `tar`, `curl`, `sha256sum`, `make`, `awk`/`sed`/`grep`. **`crane` is carried in the bundle** — do not install it. No container engine, no `jq`, no `kubectl`. |
+| the **install** (`platform`, `gitops`, `install-ingress`, `verify`) | additionally `kubectl`, `helm`, `jq`, `yq`, `envsubst`, `git`, `openssl` |
+
+**Expect:** `make preflight` on box B lists no missing tools. Run it **before** you carry 11 GB across a
+room — it is the cheapest failure available.
+
+**Its `.env` must carry:** `HARBOR_URL`, `HARBOR_USERNAME`, `HARBOR_PASSWORD`, and either `HARBOR_CA_FILE`
+(carry the CA) or `HARBOR_INSECURE=1`.
+
+---
+
+## Step 1 — pull and build, on box A
+
+```bash
+make mirror-pull      # every image in images/images.txt → ./bundle
+make builder-build    # the offline Maven builder → ./bundle/builders/ (needs Maven Central; NOT Harbor)
+make bundle           # → vks-airgap-cicd-bundle-<date>.tar  + its .sha256
+```
+
+**Expect:** `staged crane into the bundle (…, static)`, then `bundle ready: …tar (11G)` and a `.sha256`
+beside it.
+
+`mirror-pull` **resumes** — re-run it after a dropped connection and it skips what already completed.
+
+> **`builder-build` is not optional for the Java app.** Its Maven dependencies are baked into an image on
+> the internet side, because the in-cluster Kaniko build cannot reach Maven Central. Box B cannot build it
+> (no internet) and box A cannot push it (no Harbor) — so it is **carried in the bundle** and pushed on
+> the far side by `make builder-push`.
+
+## Step 2 — carry
+
+Copy **the tarball, its `.sha256`, and the repo**. All three, on the same media.
+
+> **A FAT32 stick cannot hold a file over 4 GiB, and this bundle is ~11 GB.** Use exFAT/ext4/XFS/NTFS, or
+> `split -b 3G` and `cat` it back. `make bundle` warns you.
+
+## Step 3 — push, on box B
 
 ```bash
 make bundle-load BUNDLE_TARBALL=/media/…/vks-airgap-cicd-bundle-<date>.tar
-make mirror-push     # push every image into Harbor
-make mirror-verify   # PROVE it: crane fetches every blob back out of Harbor
+make mirror-push      # every mirrored image → Harbor
+make builder-push     # the carried Maven builder → Harbor
+make mirror-verify    # PROVE it: crane fetches every blob back out of Harbor
 ```
 
-**Expect:** `verifying checksum` → `installed the carried crane -> ~/.local/bin/crane (<version>)` →
+**Expect:** `verifying checksum` → `installed the carried crane -> ~/.local/bin/crane` →
 `✓ mirror-verify: N images intact in Harbor`.
 
-> **`mirror-verify` is not a formality.** A push you have not fetched back is not a mirror: an OCI push asks
-> the registry `HEAD <blob>` and **skips the upload if the registry says it already has it**. A registry that
-> answers "yes" for a blob it cannot actually serve turns your entire mirror into a no-op that **exits 0**.
-> That has happened in this repo. `mirror-verify` is the only thing that can see it.
+> **Do not skip `mirror-verify`.** An OCI push asks the registry `HEAD <blob>` and **skips the upload if
+> the registry says it already has it** — so a registry that lies turns your whole mirror into a no-op that
+> **exits 0**. That has happened here. Verify by *fetching*, never by the pusher's exit code.
+
+## Step 4 — install, on box B
+
+```bash
+make platform gitops                       # Gitea + Tekton, then the ArgoCD Application
+make install-ingress INGRESS_CONTROLLER=traefik   # or istio-existing — see below
+make verify
+```
+
+**Do NOT run `make install-all` on box B** — it starts with `mirror`, which needs the internet, and its
+`preflight` requires the full toolchain. Run the steps above instead.
+
+**Ingress:** the default (`istio`) **installs from an internet Helm repo and cannot run here.** On box B use:
+
+| | works air-gapped? |
+|---|---|
+| `INGRESS_CONTROLLER=traefik` | ✅ — image comes from Harbor, manifests are in the repo |
+| `INGRESS_CONTROLLER=istio-existing` | ✅ — attaches to a mesh the platform team already installed |
+| `INGRESS_CONTROLLER=istio` (default) | ❌ — `helm repo add istio-release.storage.googleapis.com` |
 
 ---
 
-## `MIRROR_FORCE_PULL=1` — when you actually want it
+## `MIRROR_FORCE_PULL=1` — when
 
-The pull is **cached**: a digest-pinned image already in `./bundle` is reused instead of re-downloaded. That
-is safe by construction — a digest is content-addressable, so a cached blob at that digest *is* the right blob
-— and **tag-based refs are always re-pulled**, so a moving tag can never be served stale.
-
-So you rarely need to force. Use `MIRROR_FORCE_PULL=1 make mirror-pull` when:
-
-- you **do not trust the cache** — someone edited `./bundle` by hand, a disk filled mid-write, the box was
-  restored from a snapshot;
-- you are cutting a bundle for a **hand-off you cannot re-do**, and want every byte fetched fresh before a
-  one-way trip;
-- you are **debugging a mirror problem** and want the cache eliminated as a variable.
-
-Not for "just in case": it re-downloads ~11 GB for no benefit.
-
-Related knobs (all commented in `.env.example`): `MIRROR_RETRIES` (per-image retries on CDN resets, default
-5), `MIRROR_ARCH` (default `amd64` — see above), `MIRROR_NO_PRUNE=1`, `BUNDLE_COMPRESSOR`.
-
----
+The pull is cached, and that is safe by construction: digest-pinned images are content-addressed, and
+tag-based refs are always re-pulled. Force it only when you **distrust the cache** (hand-edited, a disk
+filled mid-write, a restored snapshot), when you are cutting a bundle for a **hand-off you cannot re-do**,
+or when you are **debugging the mirror** and want the cache out of the picture. Otherwise it re-downloads
+11 GB for nothing.
 
 ## How this is tested
 
-`make e2e-sneakernet` runs the **real two-box flow** on KinD — and it runs it **on both far-side OSes by
-default** (`SNEAKERNET_OS = photon ubuntu`), because the far side is exactly where they diverge:
-
-- the host plays the outside box (`mirror-pull` → `bundle`);
-- **only the tarball** is carried into a **fresh jump-box container** playing the inside box
-  (`bundle-load` → `mirror-push` → `mirror-verify`);
-- **each OS leg gets a fresh, EMPTY Harbor** — otherwise the second leg would push into a registry that
-  already has every blob, `crane` would `HEAD`-skip all 36 uploads, and the leg would be a green no-op.
-
-The fidelity is *enforced*, not asserted: the inside box asserts `./bundle` is **empty** before loading (so
-the images can only have come from the tarball), asserts `crane` is **not already installed** (so the
-toolchain must have been carried), and ends in `mirror-verify`, which fetches every blob back out of Harbor.
-
-A Photon-only matrix is what let a real bug ship: the host emitted a `.tar.zst` that an **Ubuntu** air-gap box
-cannot open, and the Photon leg passed because that image happens to have GNU tar. A matrix that only ever
-runs one leg is decoration.
+`make e2e-sneakernet` runs the real two-box flow on KinD, on **both** far-side OSes by default
+(`SNEAKERNET_OS = photon ubuntu`): the host plays box A, and **only the tarball** crosses into a fresh
+jump-box container playing box B. Each OS leg gets a **fresh, empty Harbor**, so its push is a real push
+and not a `HEAD`-skip no-op. Box B asserts `./bundle` is empty and that `crane` is **not** already
+installed before loading — so the images and the toolchain can only have come from the carried bundle.

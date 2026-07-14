@@ -233,9 +233,20 @@ engine-trust-check: check-env ## Does THIS engine (podman|docker) actually work 
 engine-trust-check-rootless: check-env ## Is ROOTLESS DOCKER viable? (the ONLY docker mode that matches podman's ergonomics — rootful ALWAYS costs a sudo)
 	@$(SCRIPTS)/17-engine-rootless-docker-check.sh
 
+# The offline Maven builder needs TWO networks — Maven Central (to bake ~/.m2) and Harbor (to push).
+# A DUAL-HOMED box has both, so `builder-image` does it in one shot. A SNEAKERNET split has NEITHER
+# box with both, so it is split: build outside (into the bundle), push inside (with the carried crane).
 .PHONY: builder-image
-builder-image: check-env ## (internet) Build + push the air-gap Maven builder image (deps pre-baked)
+builder-image: check-env ## (dual-homed) Build + push the air-gap Maven builder image (deps pre-baked)
 	@$(SCRIPTS)/15-build-push-builder.sh
+
+.PHONY: builder-build
+builder-build: check-env ## (sneakernet, INTERNET box) Build the Maven builder into the bundle — needs Maven Central, NOT Harbor
+	@$(SCRIPTS)/14-builder-build.sh
+
+.PHONY: builder-push
+builder-push: check-env ## (sneakernet, AIR-GAP box) Push the CARRIED Maven builder into Harbor — needs Harbor, NOT the internet (uses the carried crane; no container engine)
+	@$(SCRIPTS)/22-builder-push.sh
 
 ##@ VKS access
 .PHONY: vks-login

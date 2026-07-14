@@ -291,7 +291,7 @@ box cannot do both, that command cannot work, and no amount of `.env` is going t
 | your jump box | what you run |
 |---|---|
 | reaches the internet **and** Harbor (**dual-homed**) | `make install-all` below — nothing else to do |
-| reaches the **internet only** | **[the sneakernet flow](sneakernet.md)** — pull outside, carry the bundle across, push inside. Come back here for `builder-image` onward. |
+| reaches the **internet only** | **[the sneakernet flow](sneakernet.md)** — two boxes: pull + build outside, carry, push + install inside. It replaces `install-all` (which starts with `mirror`); do **not** come back to it. |
 
 **Then install:**
 

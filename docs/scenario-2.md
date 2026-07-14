@@ -316,7 +316,7 @@ box very often cannot do both.
 | your jump box | what you run |
 |---|---|
 | reaches the internet **and** Harbor (**dual-homed**) | `make install-all` below |
-| reaches the **internet only** | **[the sneakernet flow](sneakernet.md)** — pull outside, carry the bundle across, push into the Harbor project you were granted. Come back here for `builder-image` onward. |
+| reaches the **internet only** | **[the sneakernet flow](sneakernet.md)** — two boxes: pull + build outside, carry, push into your granted Harbor project + install inside. It replaces `install-all` (which starts with `mirror`); do **not** come back to it. |
 
 **Then install:**
 
