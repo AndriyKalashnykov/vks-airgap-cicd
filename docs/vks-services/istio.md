@@ -97,6 +97,19 @@ else falls back to classic.
 > of degrading silently. **A tenant cannot install them** (cluster-scoped) — `istio-preflight` prints
 > that ask.
 >
+> **Update 2026-07-13 — the shim is gone and the install is now genuinely exercised.** The CRD install
+> had *still* never run: it early-returns when the CRDs are already present, and cloud-provider-kind
+> put them there before Istio was ever installed. `05-kind-up.sh` now starts CPK with
+> `--gateway-channel=disabled`, so **we** are the only installer on KinD; and the install asserts a
+> **server-side-apply field manager** on the CRD afterwards — CPK creates with a plain `Create()`
+> (`operation: Update`), so an `Apply` manager is proof our code path ran, which mere *presence* never
+> was. The air-gap branch was also **dead code** (`MANIFEST_DIR` was never set on this path, so it
+> always reached for github.com); it now reads the bundle.
+>
+> **Still UNVERIFIED, and it is the highest-value unknown in this design:** whether a real VKS guest
+> cluster ships the Gateway API CRDs at all. One lab command settles it —
+> `kubectl get crd httproutes.gateway.networking.k8s.io -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}'`.
+>
 > **Grade: the MECHANISM is KinD-verified; "the CRDs are present on a VKS guest cluster" is
 > UNVERIFIED** and only a lab can settle it (`kubectl get crd httproutes.gateway.networking.k8s.io`).
 

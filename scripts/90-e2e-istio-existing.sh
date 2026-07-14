@@ -68,6 +68,26 @@ fi
 # Play the platform team: install Istio with naming we do not control.
 # ---------------------------------------------------------------------------
 log_info "PLATFORM: installing Istio ${ISTIO_VERSION} as a foreign mesh (ns=${PLATFORM_NS}, release=${PLATFORM_RELEASE}, hub=${HUB})"
+
+# THE CRDs ARE THE PLATFORM TEAM'S, NOT THE TENANT'S — and this is now load-bearing, not decoration.
+#
+# The Gateway API CRDs are CLUSTER-SCOPED, so a tenant cannot install them; 47-attach-istio.sh
+# correctly never tries. Until now they appeared anyway, because cloud-provider-kind force-installed
+# them at cluster start — which is exactly the KinD shim that made #209 unverifiable. Now that CPK's
+# channel is disabled (05-kind-up.sh), SOMEONE has to install them, and in the world this fixture is
+# imitating that someone is the mesh admin. So the fixture does it, in the platform-team section,
+# where it belongs. Without this the attach e2e dies at lib/istio.sh's "GatewayClass 'istio' is not
+# Accepted" — a self-inflicted RED that says nothing about the tenant path.
+#
+# It also hands us the honest ABSENT state for free: assert it BEFORE installing.
+if istio_gwapi_crds_present; then
+  die "the Gateway API CRDs are present BEFORE the platform team installed them.
+  Something else is installing them (cloud-provider-kind's --gateway-channel?), which is precisely the
+  shim that made the CRD install untestable. Re-check 05-kind-up.sh."
+fi
+log_info "PLATFORM: Gateway API CRDs are ABSENT (the honest tenant starting state) — installing them as the mesh admin"
+istio_ensure_gwapi_crds
+
 run helm repo add istio https://istio-release.storage.googleapis.com/charts --force-update
 run helm repo update istio
 run helm upgrade --install istio-base istio/base \

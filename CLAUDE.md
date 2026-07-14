@@ -512,31 +512,45 @@ TMM catalog lists Harbor/Contour/ArgoCD, not Istio); "Istio has no credentials";
 selector-is-the-helm-release-name discovery via port 15021; `44-install-ingress.sh:16` genuinely
 surviving the `.env.example` clobber; and the ingress-gateway-off-by-default fact (primary-sourced).
 
-### ⚠️ SHIPPED BUT UNPROVEN — the Gateway API CRD install (#209) has never actually RUN
+### 🔴 THE GATEWAY-API CRD INSTALL COULD NOT HAVE BEEN PROVEN BY THE PLAN WRITTEN HERE — and the plan itself was the trap
 
-`istio_ensure_gwapi_crds` passed `static-check` + `docs-lint`. **That means it lints. It does NOT mean
-the CRDs install.** `make e2e-kind` was not run on it.
+The acceptance list that used to sit here was **unsatisfiable**, and following it would have produced a
+confident **FALSE PROOF**. Keeping the story because the shape of the error is the lesson.
 
-**Run `make e2e-kind`** (~20–40 min, and **alone** — run the e2es serially; they mutate a shared
-cluster + registry, so parallel work makes a failure unattributable. Note: the old claim that
-"concurrent registry work **corrupts Harbor**" was a **MISDIAGNOSIS** — see the Harbor section below).
-It must show:
+`istio_ensure_gwapi_crds` **early-returns** when the CRDs are already present — and
+**cloud-provider-kind force-installed them at cluster start** (its `--gateway-channel` defaults to
+`standard`), long before Istio is ever installed. So the `kubectl apply --server-side` line had
+**never executed on any machine**. The old acceptance list asked for `istio-preflight` to print
+`Gateway API CRDs: PRESENT` — which was **already true before the code was written**. It measured the
+KinD shim that the install exists to *remove*.
 
-1. the CRDs are applied with **`--server-side`** — required, not a preference: the bundle exceeds the
-   256 KiB `last-applied-configuration` limit that client-side apply writes;
-2. **`--force-conflicts` takes ownership from cloud-provider-kind's bundle.** CPK force-installs its
-   own Gateway API CRDs at startup — *that* is what used to make our gateway-api e2e leg green, and it
-   is precisely the takeover this fix depends on. **A pre-existing KinD cluster already has CPK's CRDs,
-   so it is a GOOD test of the takeover** — but start from `kind-up` anyway;
-3. `istio-preflight` prints **`Gateway API CRDs: PRESENT`**, and the attach picks **gateway-api**.
+**The lesson, generalised: "the thing is present" is not "our code put it there."** When the whole
+claim is *we install X*, the assertion must distinguish **our** X from **anyone else's** X.
 
-**Then RED-prove it:** delete the CRDs, re-run `make istio-preflight`, and confirm it now prints
-**ABSENT** with the tenant-vs-admin ask — instead of silently degrading to classic. Until that RED is
-demonstrated, the honest-failure path is itself unverified.
+**What now enforces it:**
+
+- `05-kind-up.sh` runs CPK with **`--gateway-channel=disabled`** (source-verified safe: CRD install is
+  a separate gated path from the Service-LoadBalancer controller), and then **asserts CPK logged that
+  it skipped the CRD install** and has **zero crash lines** — counting log lines, not trusting
+  `docker ps`, because `--restart unless-stopped` shows `Up` between crash-loop cycles.
+- `istio_ensure_gwapi_crds` asserts a **server-side-apply field manager** on the installed CRD. CPK
+  creates with a plain dynamic `Create()` → `operation: Update`; a server-side apply →
+  `operation: Apply`. **That signature cannot be forged by presence**, and it simultaneously proves
+  `--server-side` was genuinely used. It also asserts the `bundle-version` annotation equals our pin.
+- The **air-gap branch was dead code** (`MANIFEST_DIR` is a local in two *other* scripts and was never
+  set on this path, so `make install-ingress` always reached for github.com — on an air-gapped box it
+  died *before* the helm fetch the runbook warns about). It now reads the carried bundle, and **dies
+  with a useful message** if the bundle exists but predates the CRDs, rather than silently reaching
+  for the internet.
+- The **attach e2e's "platform team" fixture now installs the CRDs** — which is both what makes the
+  test pass with CPK's channel off, and *more faithful*: cluster-scoped CRDs belong to the mesh admin,
+  never the tenant. It also asserts they are **ABSENT first**, which is the honest tenant starting state.
 
 **Renovate is grouped** (`istio + gateway-api (version-locked)`) so a bot cannot move the CRD version
-alone — it must land with the Istio bump and be judged by CI as a unit. PR #210 (a solo bump to
-v1.6.0) is exactly the thing that group exists to prevent; close it or let the group re-open it paired.
+alone. Note this is now doubly load-bearing: gateway-api **v1.6**'s bundle ships a
+`ValidatingAdmissionPolicy` denying CRDs older than v1.5.0, and CPK v0.11.1 vendors **v1.5.1** — so if
+CPK's channel were ever re-enabled *and* the pin moved to v1.6, CPK's CRD install would be **denied**,
+it would abort its whole controller, and **every LoadBalancer would silently stop getting an IP**.
 
 ### 📋 OPEN — audit EVERY gate for MISPLACEMENT (a gate in the wrong target is green because nobody asked it)
 
