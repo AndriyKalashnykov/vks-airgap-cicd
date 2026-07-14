@@ -25,8 +25,17 @@ load_env
 # Harbor keeps its OWN LB (not behind the ingress); http when HARBOR_INSECURE=1 (KinD).
 harbor_scheme="https"; [ "${HARBOR_INSECURE:-0}" = "1" ] && harbor_scheme="http"
 harbor_url="${harbor_scheme}://${HARBOR_URL:-harbor.vks.local}"
-# Gitea/app/Tekton are fronted by the ingress at their *.vks.local hosts (http in the demo).
-gitea_url="${GITEA_URL:-http://${GITEA_HOST:-gitea.vks.local}}"
+# GITEA / TEKTON / THE APPS ARE ONLY REACHABLE AT *.vks.local IF THE INGRESS EXISTS.
+# The ingress is OPTIONAL in this repo (`make verify` proves the whole GitOps loop over a port-forward,
+# precisely so it needs none). Printing `http://gitea.vks.local` on a cluster with no ingress is a LIE:
+# nothing serves that host, and no /etc/hosts entry can make it. The script already knew this — it hides
+# the /etc/hosts hint when INGRESS_LB_IP is unset — and printed the URLs anyway.
+# Harbor and ArgoCD are NOT affected: they keep their own LoadBalancers.
+_ing="${INGRESS_LB_IP:-}"
+ingress_url() {  # ingress_url <host> -> the URL, or an honest marker when no ingress exists
+  if [ -n "$_ing" ]; then printf 'http://%s' "$1"; else printf '<needs ingress>'; fi
+}
+gitea_url="${GITEA_URL:-$(ingress_url "${GITEA_HOST:-gitea.vks.local}")}"
 # ArgoCD is on its OWN LoadBalancer (like real VKS): KinD publishes ARGOCD_LB_IP to .env.kind
 # (scheme https unless ARGOCD_INSECURE=1); a real lab uses the lab's own ArgoCD URL.
 argo_scheme="https"; [ "${ARGOCD_INSECURE:-0}" = "1" ] && argo_scheme="http"
@@ -47,7 +56,7 @@ else
 fi
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
-tekton_url="http://${TEKTON_DASHBOARD_HOST:-tekton.vks.local}"  # Tekton Dashboard (read-only UI)
+tekton_url="$(ingress_url "${TEKTON_DASHBOARD_HOST:-tekton.vks.local}")"  # Tekton Dashboard (read-only UI)
 
 # --- resolve logins -------------------------------------------------------------------
 harbor_user="${HARBOR_USERNAME:-admin}"
@@ -125,7 +134,7 @@ add_row "Harbor" "$harbor_url" "$harbor_user" "$harbor_pw"
 add_row "ArgoCD" "$argocd_url" "admin"        "$argo_pw"
 while read -r _a; do
   [ -n "$_a" ] || continue
-  add_row "$_a" "http://$(app_host "$_a")" "-" "(no login; health at $(app_health_path "$_a"))"
+  add_row "$_a" "$(ingress_url "$(app_host "$_a")")" "-" "(no login; health at $(app_health_path "$_a"))"
 done <<EOF
 $(app_names)
 EOF
@@ -173,8 +182,16 @@ if [ "$_have_sink" = 0 ]; then
   printf '                     the install (make e2e-kind / make install-all). Set nothing by hand.\n'
   printf '          Real lab : you supply HARBOR_URL + HARBOR_PASSWORD (and ARGOCD_SERVER) in .env —\n'
   printf '                     see docs/scenario-1.md (you install) or docs/scenario-2.md (you are a tenant).\n'
-elif [ "$argocd_url" = "<not set>" ]; then
-  printf '\n  note: ArgoCD'\''s address is not set. KinD fills it in automatically when ArgoCD is installed;\n'
-  printf '        on a real lab, set ARGOCD_SERVER in .env.\n'
+else
+  if [ -z "$_ing" ]; then
+    printf '\n  note: no ingress is installed, so Gitea / Tekton / the apps have NO *.vks.local URL —\n'
+    printf '        nothing serves those hosts. Reach them with a port-forward:\n'
+    printf '            kubectl -n <namespace> port-forward svc/<service> 8080:<port>\n'
+    printf '        or install one: make install-ingress   (Harbor and ArgoCD are unaffected — own LBs).\n'
+  fi
+  if [ "$argocd_url" = "<not set>" ]; then
+    printf '\n  note: ArgoCD'\''s address is not set. KinD fills it in automatically when ArgoCD is installed;\n'
+    printf '        on a real lab, set ARGOCD_SERVER in .env.\n'
+  fi
 fi
 echo
