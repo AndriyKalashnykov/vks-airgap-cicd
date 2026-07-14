@@ -265,8 +265,12 @@ trust-harbor: check-env ## Make YOUR engine trust the self-signed Harbor — and
 harbor-robot: ## Create a least-privilege Harbor CI robot account (push+pull) → secrets/harbor-robot.env; copy into .env
 	@$(SCRIPTS)/22-harbor-robot.sh
 
+.PHONY: lab-preflight
+lab-preflight: ## Read-only: three cluster preconditions that each kill the run LATER (CRD-create · a DEFAULT StorageClass · a working LoadBalancer provider)
+	@$(SCRIPTS)/24-lab-preflight.sh
+
 .PHONY: preflight argocd-preflight
-preflight: check-tools argocd-preflight psa-check ## Read-only: can this lab actually run the flow? Run it BEFORE the 20-minute mirror (first prereq of install-all)
+preflight: check-tools argocd-preflight lab-preflight psa-check ## Read-only: can this lab actually run the flow? Run it BEFORE the 20-minute mirror (first prereq of install-all)
 
 .PHONY: argocd-preflight
 argocd-preflight: ## ArgoCD version + TOPOLOGY + write-mechanism + AppProject + Gitea reachability (two-cluster aware; non-zero on a blocking finding)

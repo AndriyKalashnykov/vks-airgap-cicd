@@ -185,15 +185,14 @@ GITEA_ADMIN_PASSWORD=<choose one>  # Gitea is OURS to install — you pick the p
 **For:** four preconditions that each kill the run later if missing. **Check them now, before you spend 20 minutes mirroring.**
 
 ```bash
-make vks-login                                                             # validates KUBECONFIG + context
-export KUBECONFIG=$PWD/secrets/vks.kubeconfig
-kubectl auth can-i create customresourcedefinitions.apiextensions.k8s.io   # Tekton needs this
-kubectl get storageclass                                                   # Gitea's PVC needs a DEFAULT
-kubectl get svc -A --field-selector spec.type=LoadBalancer                 # Gitea needs an LB VIP
-make psa-check                                                             # (see the caveat below)
+make vks-login       # validates KUBECONFIG + context
+make lab-preflight   # CRD-create · a DEFAULT StorageClass · a working LoadBalancer provider
+make psa-check       # (see the caveat below)
 ```
 
-**Expect:** `yes` · one StorageClass marked `(default)` · a working LB provider · and `psa-check` printing
+**Expect:** `lab-preflight` printing **`LAB PREFLIGHT OK`** (it checks all three and names the real cause of
+each failure — every one of them otherwise kills the run *after* the 20-minute mirror, with an error that
+mentions none of this) · and `psa-check` printing
 **`measured 0 namespace(s) … PSA UNPROVEN`** — which is the *correct* answer here, and is **not** a pass.
 
 > **VKS enforces the `restricted` Pod Security Standard by default** (VKr v1.26+), which **rejects** our
