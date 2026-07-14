@@ -82,6 +82,11 @@ for app in $BUILDER_APPS; do
   # is assumed to be a docker-style tarball."). Both podman and docker `save` produce exactly this — so
   # the air-gap box needs NO CONTAINER ENGINE to push it, only the crane the bundle already carries.
   log_info "[${app}] saving -> ${tarball} (carried in the bundle; pushed by 'make builder-push' on the air-gap box)"
+  # `rm -f` FIRST: `podman save -o <existing-file>` fails with "docker-archive doesn't support modifying
+  # existing images" (it will not overwrite), so a SECOND run dies while the first succeeded — a re-run
+  # bug that a single green run cannot show. docker save overwrites, so this is podman-specific and
+  # would have shipped on a docker-only test.
+  rm -f "$tarball"
   run "$ENGINE" save -o "$tarball" "$local_ref"
 
   # Record the tag the image was built for, so the far side pushes it under the SAME tag the pipeline
