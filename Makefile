@@ -474,8 +474,18 @@ JUMPBOX_ENGINE ?= podman
 # construction. The tag must name every dimension the image varies in.
 JUMPBOX_IMAGE  ?= vks-jumpbox:$(JUMPBOX_OS)-$(JUMPBOX_ENGINE)
 .PHONY: jumpbox-image
-jumpbox-image: ## Build the jump-box test image for JUMPBOX_OS (photon|ubuntu; rootless podman inside)
-	@docker build -f jumpbox/Dockerfile.$(JUMPBOX_OS) -t $(JUMPBOX_IMAGE) .
+jumpbox-image: ## Build the jump-box test image for JUMPBOX_OS x JUMPBOX_ENGINE (photon|ubuntu x podman|docker)
+	@# ENGINE-SPECIFIC DOCKERFILE. The podman images are Dockerfile.<os>; the docker images are
+	@# Dockerfile.<os>-docker. This target used to build Dockerfile.<os> unconditionally, so the "docker"
+	@# leg of the matrix built the PODMAN image, tagged it :<os>-docker, and ran it with
+	@# JUMPBOX_ENGINE=docker — a leg that would have measured the wrong engine entirely. It was caught by
+	@# the single-engine assert in jumpbox-run.sh ("this image has BOTH engines"), which is exactly the
+	@# false green that assert exists to prevent.
+	@df="jumpbox/Dockerfile.$(JUMPBOX_OS)"; \
+	 [ "$(JUMPBOX_ENGINE)" = docker ] && df="jumpbox/Dockerfile.$(JUMPBOX_OS)-docker"; \
+	 [ -f "$$df" ] || { echo "ERROR: no jump-box image for $(JUMPBOX_OS) x $(JUMPBOX_ENGINE) (expected $$df)"; exit 1; }; \
+	 echo "building $(JUMPBOX_IMAGE) from $$df"; \
+	 docker build -f "$$df" -t $(JUMPBOX_IMAGE) .
 
 .PHONY: bootstrap-engine-test
 bootstrap-engine-test: ## CLAIM 1: does `make deps` actually PRODUCE a docker jump box when asked — and a podman one (with ZERO docker) when not? Runs the REAL bootstrap on BARE Photon/Ubuntu images.

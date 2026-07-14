@@ -257,12 +257,26 @@ was detected. (It does *not* print "TOPOLOGY OK"; that string does not exist.)
 > kubectl --kubeconfig $ARGOCD_KUBECONFIG get pods -A | grep argocd-application-controller
 > ```
 
-## Step 5 — install everything, and verify
+## Step 5 — prove your `.env` works, THEN install
 
-**For:** the whole pipeline. `install-all` deliberately does **not** install Harbor or ArgoCD — you did that above.
+**For:** catching a wrong value in **seconds** instead of 20 minutes into the mirror. These three targets
+exist for exactly this and the runbook used to skip them.
+
+```bash
+make env-populate   # DISCOVER what is discoverable (Harbor/ArgoCD endpoints) instead of re-typing it
+make env-check      # presence gate: is every required value set? (fast, no network)
+make env-validate   # validity gate: does KUBECONFIG reach the cluster, and does Harbor really authenticate?
+```
+
+**Expect:** `env-check` → *all required values present*; `env-validate` → Harbor reachable **and
+authenticated over HTTPS with your CA**. `env-validate` is also the honest check on Step 2: if the CA you
+fetched does not actually verify Harbor, it fails **here**, not inside Kaniko an hour later.
+
+**Then install:**
 
 ```bash
 make install-all   # preflight → mirror → mirror-verify → builder-image → vks-login → platform → gitops
+make psa-check     # NOW it can measure something — expect `PSA OK — … (N measured)`, not `PSA UNPROVEN`
 make verify        # push a marked change → Tekton → Harbor → ArgoCD → the live app serves it
 ```
 
@@ -278,12 +292,22 @@ have not verified is not a mirror.
 
 ## Step 6 — access the UIs
 
-Harbor and ArgoCD: the FQDN / LB IP + credentials you set in A1/A2. For **Gitea** and the **app**,
-either use the ingress (Step 7) or port-forward:
+**For:** every URL and login for **this** context, without you re-typing a value you already set.
+
+```bash
+make creds-show
+```
+
+**Expect:** a table with Harbor, ArgoCD, Gitea, the Tekton dashboard, **and one row per app** — it is
+generated from `apps/registry.tsv`, so it lists *every* app the repo ships (today `javawebapp` **and**
+`gowebapp`), not just the one an example happened to name. It also prints the exact `/etc/hosts` line for
+the ingress hosts.
+
+Port-forward instead of the ingress if you prefer (works for any app in the registry):
 
 ```bash
 kubectl -n gitea port-forward svc/gitea-http 3000:3000
-kubectl -n javawebapp port-forward svc/javawebapp 18080:80
+kubectl -n <app> port-forward svc/<app> 18080:80     # <app>: any name in apps/registry.tsv
 ```
 
 ## Step 7 — ingress (optional)

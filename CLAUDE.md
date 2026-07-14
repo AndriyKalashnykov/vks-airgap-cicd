@@ -242,11 +242,37 @@ Run a single app test: `cd apps/java/javawebapp && ./mvnw -B -Dtest=<ClassName>#
 - **Java app:** Spring Boot 4 + JUnit/`@SpringBootTest`; Dockerfile follows the
   multistage temurin / non-root / actuator-`HEALTHCHECK` template.
 - **Manifests:** Kustomize; validated with `kustomize build | kubeconform`.
-- **Container engine split:** `CONTAINER_ENGINE` (podman-preferred, docker fallback)
+- **Container engine split:** `CONTAINER_ENGINE` (podman is the DEFAULT; **docker is SUPPORTED, opt-in**)
   drives image ops — mirror, builder image, diagrams. The **KinD local e2e path
-  requires Docker**: `05-kind-up.sh` (`require_cmd docker`) + cloud-provider-kind use
+  requires Docker regardless**: `05-kind-up.sh` (`require_cmd docker`) + cloud-provider-kind use
   the `kind` Docker network/socket, so node interactions (`crictl` via
-  `docker exec <node>`) use Docker even in this podman-default repo.
+  `docker exec <node>`) use Docker even in this podman-default repo. That is `kind`, not us — and it
+  is why `make e2e-kind CONTAINER_ENGINE=docker` can never prove the *jump-box* docker claim (it runs
+  on the one box required to have docker).
+- **The bootstrap is ENGINE-AWARE, and the invariant is DOCKER IS NEVER *REQUIRED*.** With
+  `CONTAINER_ENGINE` unset, `make deps` installs podman and **zero** docker packages; with
+  `CONTAINER_ENGINE=docker` it installs docker + its rootless prerequisites and **not** podman (both
+  present would silently run podman, since `container_engine()` prefers it). The package list lives in
+  `engine_packages()` — a **pure function** — specifically so `test-container-engine.sh` (check 7) can
+  **execute** it and assert the list in both directions, offline. The previous gate scanned for docker
+  *invocations at a command position* and was **structurally blind to a docker dependency**
+  (`pkg_install docker` matches none of its patterns — proven), so an engine-aware bootstrap would have
+  put a docker daemon on **every** jump box under a **green** gate. RED-proven 4 ways.
+- **What docker COSTS, measured (`make engine-check`, read-only):** podman → **no sudo, ever**
+  (daemonless; CA per command via `--cert-dir`). docker **rootless** → **no sudo** (daemon reads
+  `~/.config/docker/certs.d/<host>/ca.crt`). docker **rootful** → **one sudo PER REGISTRY**
+  (`/etc/docker/certs.d` is root-owned; the `docker` group grants SOCKET access, not write access to
+  `/etc`, so this cannot be engineered away — only disclosed). `make trust-harbor` wires the CA for
+  whichever engine you have and **proves it with a real login handshake** — never by checking that a
+  file exists (docker MERGES `certs.d` with the system store, so a missing `ca.crt` proves nothing;
+  that guard was shipped once and retracted).
+- **Rootless docker from DISTRO repos: Photon ✅ · Ubuntu 26.04 ✅ · Ubuntu 24.04 ❌** (ran-it). `docker.io`
+  is 29.1.3 on both Ubuntus, but only **26.04's deb ships `dockerd-rootless.sh`** (hidden in
+  `/usr/share/docker.io/contrib/`, OFF PATH — `make deps` symlinks it); 24.04's ships **zero** rootless
+  files. Photon ships `docker` + `docker-rootless` + `rootlesskit` first-class with the helper already on
+  PATH — **Photon is the EASY OS for rootless docker**, inverting the usual assumption. On 24.04 we
+  **refuse to add `download.docker.com`** to someone else's jump box (a proxy-allowlist / security-review
+  item an admin may refuse), so docker there is **rootful-only** and we say so out loud.
 - **Image tag alignment:** every mirrored image's tag is duplicated between
   `images/images.txt` (the Renovate-tracked mirror source of truth) and its consumers
   (k8s/tekton manifests, `.env.example` `TEMURIN_*_TAG`, the app `Dockerfile`). `make

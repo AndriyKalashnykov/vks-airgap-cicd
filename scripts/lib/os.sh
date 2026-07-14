@@ -284,7 +284,13 @@ load_env() {
   # A variable that selects WHICH CLUSTER you are talking to must be owned by the caller. Config may
   # supply a DEFAULT; it may not overrule an explicit choice.
   local _sel _snap_names="" _snap_vals=""
-  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT; do
+  # HARBOR_CA_FILE IS A SELECTOR TOO — it names WHICH trust anchor to use, and both .env.example
+  # (`./secrets/harbor-ca.crt`) and the state overlay (an ABSOLUTE HOST path) carry a value for it. So
+  # `HARBOR_CA_FILE=/elsewhere make <target>` was a SILENT NO-OP: the files won, and you verified TLS
+  # against a CA you did not choose. It bit for real in the jump-box matrix — the container is handed the
+  # CA at /run/jumpbox/harbor-ca.crt, load_env overwrote that with the HOST path from .env.state, and the
+  # leg died claiming the CA "not found" while pointing at a path that only exists on the host.
+  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT HARBOR_CA_FILE; do
     if [ -n "${!_sel:-}" ]; then
       _snap_names="${_snap_names} ${_sel}"
       _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'
