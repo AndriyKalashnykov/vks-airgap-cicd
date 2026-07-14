@@ -357,12 +357,26 @@ The two BLOCKING triggers (before you implement · before you call the session d
 (`Workflow` with a schema, or a synchronous `Agent` — never fire-and-forget), and what to do with the
 findings are all in Rule Zero. Do not duplicate them here.
 
-## 🔴 BACKLOG — THE FULL RE-TEST MATRIX IS OWED (air-gap toolchain session, 2026-07-14 evening)
+## ✅ THE RE-TEST MATRIX IS DONE — 6/6 GREEN (air-gap toolchain session, 2026-07-14 evening)
 
-**Branch `gate/doc-target-coverage`. The changes below are VERIFIED OFFLINE (`make static-check` green,
-`make airgap-toolchain-test` green on bare photon+ubuntu with `--network none`) and NOT re-verified
-end-to-end.** They touch the bootstrap, the mirror/bundle path, and the DEFAULT ingress — so they
-invalidate far more than the sneakernet leg, and "static-check is green" is a proxy, not the result.
+**Branch `gate/doc-target-coverage`. Every leg RAN, serially, and each verdict below is the log's OWN
+verdict line — not an exit code** (a `| tail` in a backgrounded call reports `tail`'s status, and that has
+lied here before).
+
+| leg | verdict |
+|---|---|
+| `bootstrap-engine-test` | **PASS** — 6 bare-image legs. Proves `make deps` still builds a working jump box on photon:5.0 / ubuntu:24.04 / ubuntu:26.04 × {podman,docker} **with** the new `gawk`/`openssl`/`gettext` |
+| `e2e-kind` | **PASS** — the DEFAULT ingress now installs from the CARRIED istio charts; `require_internet` on the mirror path |
+| `verify-ingress-both` | **PASS** — istio + traefik |
+| `e2e-kind-istio-existing` | **PASS** — attach mode, both route APIs, 2 demonstrated REDs |
+| `e2e-sneakernet` | **PASS** — photon + ubuntu; each reconstructed the image cache **and** the toolchain from the carried tarball alone |
+| `jumpbox-matrix` | **PASS 4/4** — podman AND docker, on both OSes, each login→pull→build→push→pull-back-verify against the self-signed Harbor, every leg `sudo=NO` |
+| `airgap-toolchain-test` | **PASS** — bare, `--network none`; `check-tools` clean in DEFAULT mode after bundle-load (the contract that proves the bundle carries a toolchain) |
+
+**A harness lesson worth keeping:** `jumpbox-matrix` first came back RED with `HARBOR_PASSWORD is not set`.
+That was **my harness, not the product** — it pushes to a live KinD Harbor, and I had ordered it *after*
+`e2e-sneakernet`, which tears the cluster down. On a red leg, ask "PRODUCT or MY HARNESS?" **first** — and
+then prove which, because the converse error (dismissing a real bug as "just my harness") is worse.
 
 **What changed → what it INVALIDATES (re-run these; do NOT assume):**
 
