@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
-# creds.sh — print the access summary (URLs + logins) for the CURRENT context.
+# creds.sh — print the access summary (URLs + logins) for the CURRENT context, AND SAY WHICH CONTEXT
+# THAT IS.
 #
-# One command for both contexts: it resolves URLs from .env (+ the .env.kind overlay the
-# KinD flow writes) and the ArgoCD password via argocd-password.sh (which self-selects the
-# right source). These are LOCAL DEMO credentials the operator set in .env — printing them
-# to the operator's own terminal is the intended function, not a leak (no value touches argv).
+# One command for every flow: it resolves URLs from `.env` plus the state overlay the installers publish
+# (`.env.state` — NOT `.env.kind`, which was renamed in #192), and the ArgoCD password via
+# argocd-password.sh (which self-selects the right source).
+#
+# It leads with a CONTEXT block, because the table alone is a lie of omission: with nothing installed it
+# prints the `.env.example` DEFAULTS (`harbor.vks.local` / `Gitea12345!`), which look exactly like real,
+# live credentials. The reader must be told whether the values are DISCOVERED or DEFAULT before they read
+# a single row.
+#
+# Printing these to the operator's own terminal is the intended function, not a leak (no value touches
+# argv). On a real lab the passwords are the operator's own or the lab's; they are only "demo" credentials
+# in the KinD stand-in.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,14 +44,16 @@ elif [ -n "${ARGOCD_SERVER:-}" ]; then
 else
   # A SENTENCE IN A URL COLUMN DESTROYS THE TABLE. Keep the cell short and put the instruction in a
   # footnote under the table — the reader still gets the whole message, and every other row stays legible.
+  #
+  # The note must be right in EVERY flow. Two earlier drafts were not:
+  #   1. "discover it, then set ARGOCD_SERVER in .env (see docs/scenario-2.md)" — TENANT advice, and it
+  #      sent the KinD reader (the likeliest reader of this table) to edit a file they must not edit.
+  #   2. "KinD: run 'make install-argocd'" — an instruction they do not need: the KinD flow installs
+  #      ArgoCD as part of `make e2e-kind` / `make install-all` and PUBLISHES the address itself.
+  # In KinD there is nothing for the operator to DO here, so do not give them a chore — tell them it fills
+  # itself in. Only the real lab needs an action.
   argocd_url="<not set>"
-  # The note must be right in EVERY flow, and the first draft was not: it said "discover it, then set
-  # ARGOCD_SERVER in .env (see docs/scenario-2.md)" — which is TENANT advice. In KinD you never set it by
-  # hand (`make install-argocd` discovers the LB IP and publishes it), and as the admin of Scenario 1 you
-  # read it off your own install. Advice that is wrong in two of three flows is worse than no advice: it
-  # sends the KinD reader — the most likely reader of this table — to edit a file they must not edit.
-  # So: say WHAT TO RUN, per flow, and name no scenario.
-  argocd_note="ArgoCD's address is not known yet.  KinD: run 'make install-argocd' (it discovers and publishes it).  Real lab: set ARGOCD_SERVER in .env."
+  argocd_note="ArgoCD's address is not set yet.  KinD: it is discovered and filled in automatically when ArgoCD is installed.  Real lab: set ARGOCD_SERVER in .env."
 fi
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
