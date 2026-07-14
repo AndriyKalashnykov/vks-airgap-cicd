@@ -2,77 +2,70 @@
 
 <br>
 
-> **You want to *see it work*.** No VKS cluster, **zero `.env`**, two commands.
+> **You want to *see it work*.** No VKS cluster, no `.env`, three commands.
 
-You don't need a VKS cluster to exercise the whole pipeline. `make e2e-kind` stands up a
-local [KinD](https://kind.sigs.k8s.io/) cluster, installs the Supervisor-Service pieces
-(**Harbor** + **ArgoCD**) into it, then runs the exact same
-`mirror → builder → platform → gitops → verify` flow the real environment uses. This path
-is verified end-to-end (git push → Tekton build → Harbor → ArgoCD → the live app serves
-the new version).
+`make e2e-kind` stands up a local [KinD](https://kind.sigs.k8s.io/) cluster, installs the pieces a real
+VKS provides as Supervisor Services (**Harbor** + **ArgoCD**), and runs the **same**
+`mirror → builder → platform → gitops → verify` flow the real lab uses — ending with a git push that
+travels through Tekton, Harbor and ArgoCD to a live page.
 
-> **Zero `.env` setup — and the e2e ENFORCES it.** The kind steps **auto-discover and write
-> `.env.state`** for you — `KUBECONFIG`, `HARBOR_URL` (the Harbor LB IP), `HARBOR_CA_FILE`, the
-> ArgoCD LB IP — and **generate** the passwords for the components we install. Run
-> `make creds-show` for the effective URLs, logins and passwords.
->
-> `make e2e-kind` deliberately **ignores your `.env`** (`SKIP_DOTENV=1`, set by
-> `E2E_SKIP_DOTENV ?= 1`). It is a stand-in for a brand-new operator and for a CI runner —
-> neither of which has a `.env` — so the secrets **must be generated**, exactly as they will be
-> on your machine. Without this, a local run silently reads values only *your* box has and the
-> fresh-box path is never exercised: that is how a CI smoke job once died on an empty
-> `HARBOR_PASSWORD` while every local run was green. Use your own `.env` with
-> `make e2e-kind E2E_SKIP_DOTENV=0`.
->
-> The VKS discovery (Scenario 1/2) is the manual parallel of the same thing.
+## Run it
 
 ```bash
-make env-init                 # OPTIONAL for KinD (it discovers its own state); pins known demo secrets if you want them
-make deps                     # kind, helm, kubectl, crane, etc.
-make e2e-kind                 # cluster → Harbor → ArgoCD → mirror → build → deploy → ingress → verify
-# open the UIs (see "Access the UIs" below) and drive the pipeline by hand:
-# → "Demo walkthrough" below walks a code change from Gitea to the live page
-make kind-down                # tear everything down (also prunes cloud-provider-kind orphans)
+make deps        # kind, helm, kubectl, crane, …
+make e2e-kind    # cluster → Harbor → ArgoCD → mirror → build → deploy → ingress → verify
+make creds-show  # every URL + login for what you just installed
 ```
 
-`make e2e-sneakernet` proves the **[sneakernet](sneakernet.md)** flow locally too (pull → bundle → carry
-into a fresh Photon **and** Ubuntu air-gap container → push → verify). Sneakernet is a *delivery mode* for
-the real lab, not a KinD topic — the runbook is in [`docs/sneakernet.md`](sneakernet.md).
+**Expect:** it exits **0**, and the last lines read
 
-How the local stand-in works:
+```text
+✓ mirror-verify: 36 images intact in Harbor
+SUCCESS — all UIs reachable through the istio ingress at <LB-IP> (*.vks.local)
+```
 
-- **`cloud-provider-kind`** gives Harbor a real `LoadBalancer` IP on the kind docker
-  network — reachable by the *same IP* from the host (push), Kaniko pods (push), and
-  containerd (pull), which is what makes one image ref work everywhere.
-- Harbor runs **self-signed HTTPS on its LB IP** by default (mimicking the VCF/VKS lab —
-  see [KinD TLS fidelity](decisions/kind-tls-fidelity.md)); `install-harbor` mints a
-  self-signed CA + leaf (SAN = the LB IP) and wires each node's containerd
-  (`/etc/containerd/certs.d/<ip>/`) with that **CA** so pulls verify over TLS. The CA is
-  trusted at every consumer **sudo-free** — jump-box `crane`/`curl` via `SSL_CERT_FILE`, the
-  builder push via podman `--cert-dir`, in-cluster Kaniko via the `harbor-ca` ConfigMap. It
-  writes the discovered `HARBOR_URL` (the LB IP) + `HARBOR_CA_FILE` + `KUBECONFIG` into a
-  gitignored **`.env.state`** overlay so the normal scripts target the kind cluster unchanged.
-  Harbor **and** ArgoCD both default to secure (self-signed TLS, mimicking the VCF/VKS 9.1
-  lab). For the original plain-HTTP fast-iteration mode, flip both switches:
-  `make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1`. Both modes are validated locally.
-- `make vks-login` uses the kind kubeconfig (`VKS_AUTH_METHOD=kubeconfig`), so no VCF auth
-  is needed for the local run.
-- **Ingress — the KinD stand-in has NO mesh, so we install one.** `make install-ingress` installs
-  **Istio** (`INGRESS_CONTROLLER=istio`, the default — control plane + gateway, images from Harbor;
-  `traefik` is the lighter option) as one LoadBalancer
-  that fronts the Gitea/app/Tekton-Dashboard UIs at `*.vks.local`, so
-  you reach them by hostname instead of `kubectl port-forward`. **Harbor and ArgoCD each keep
-  their own direct LB** — Harbor's IP is load-bearing for the containerd pull path, and ArgoCD
-  gets its own self-signed-TLS LB (like the VKS, which does not front ArgoCD behind
-  the shared ingress). Both ingress images are mirrored into Harbor.
+Then: **[open the UIs](access-uis.md)** · **[walk a code change from Gitea to the live page](demo-walkthrough.md)**
 
-> **This is the only path where we install Istio.** A VKS already has it (Istio ships as a
-> **VKS Standard Package** in the guest cluster), so both VKS scenarios **attach** to the
-> existing mesh instead — see their ingress step. Full reference:
-> [`docs/vks-services/istio.md`](vks-services/istio.md).
+```bash
+make kind-down   # tear it all down (also prunes cloud-provider-kind orphans)
+```
 
-Individual targets: `make kind-up`, `make install-harbor`, `make install-argocd`,
-`make install-ingress` (or `make install-istio` / `make install-traefik`).
+**You do not need a `.env`.** The KinD steps **discover** what they can (`KUBECONFIG`, Harbor's LB IP and
+CA, ArgoCD's LB IP) and **generate** the passwords for the components they install, writing both into a
+gitignored `.env.state`. `make creds-show` prints the result.
+
+## Re-run one step
+
+`e2e-kind` is those steps in order. When a run dies partway, re-run the piece — you don't need the
+whole thing. (`make help` lists them all.)
+
+| step | what it does here |
+|---|---|
+| `make env-init` | **optional** — KinD needs no `.env` (it discovers its own state and generates its own secrets). Run it only to pin your own demo passwords. |
+| `make kind-up` | the cluster + `cloud-provider-kind`, which is what gives Harbor a real LoadBalancer IP |
+| `make install-harbor` | the registry everything pulls from — self-signed HTTPS on that LB IP, mimicking the lab |
+| `make install-argocd` | the GitOps engine, on **its own** LB (the real VKS doesn't put it behind the ingress either) |
+| `make install-ingress` | the UIs at `*.vks.local`. **KinD has no service mesh, so this is the one path that *installs* one** — `INGRESS_CONTROLLER=istio` (default, `make install-istio`) or the lighter `traefik`. A real VKS guest cluster already ships Istio, so **both VKS scenarios attach to the existing mesh** (`INGRESS_CONTROLLER=istio-existing`) and never install it. |
+| `make verify` | the actual proof: a git push → Tekton → Harbor → ArgoCD → the live page serves the new marker |
+
+## Knobs
+
+| | |
+|---|---|
+| `make e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1` | plain HTTP instead of self-signed TLS — faster to iterate against. Both modes are validated. |
+| `make e2e-kind E2E_SKIP_DOTENV=0` | use **your** `.env`. By default the e2e **ignores it** (`SKIP_DOTENV=1`) so it reproduces a fresh operator and a CI runner — neither has a `.env`, so the secrets must be *generated*. Without that a local run silently reads values only your box has: a CI job once died on an empty `HARBOR_PASSWORD` while every local run was green. |
+| `make e2e-sneakernet` | proves the **[sneakernet](sneakernet.md)** flow locally (pull → bundle → carry into a fresh Photon *and* Ubuntu air-gap container → push → verify). Sneakernet is a delivery mode for the **real lab**, not a KinD topic. |
+
+## What the stand-in fakes, and what it doesn't
+
+- **`cloud-provider-kind`** gives Harbor a real `LoadBalancer` IP on the kind docker network — reachable
+  at the **same IP** from the host (push), from Kaniko pods (push), and from containerd (pull). That is
+  what makes one image ref work everywhere, exactly as in the lab.
+- **Harbor serves self-signed HTTPS on that IP by default**, mimicking VCF/VKS. The CA is trusted at every
+  consumer **without sudo**. Mechanism: [KinD TLS fidelity](decisions/kind-tls-fidelity.md).
+- **Harbor and ArgoCD each keep their own LB**, not the shared ingress — Harbor's IP is load-bearing for
+  the containerd pull path, and the real VKS does not front ArgoCD behind the ingress either.
+- **`make vks-login` is a no-op here** (`VKS_AUTH_METHOD=kubeconfig`) — there is no VCF to authenticate to.
 
 ---
 
