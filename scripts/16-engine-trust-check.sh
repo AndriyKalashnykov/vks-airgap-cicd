@@ -68,6 +68,33 @@ fi
 
 log_info "engine-trust-check: engine=${ENGINE} mode=${MODE} registry=${HARBOR_URL}"
 
+# --- 0. THE -CA RED: prove the CA is LOAD-BEARING before crediting ourselves with installing it -----
+#
+# Without this, the "CA method" column is an ASSERTION. Docker MERGES certs.d with the host SYSTEM STORE,
+# so on a box whose CA is already trusted (an operator who ran update-ca-certificates, or a leftover
+# certs.d from a previous run) the entire CA step is a NO-OP that still prints a confident method — and a
+# green leg would be measuring nothing. A gate that was already green before the code ran cannot fail for
+# the right reason.
+#
+# So: BEFORE wiring anything, try to log in with NO CA. It MUST fail (x509). If it SUCCEEDS, the CA was
+# already trusted here and we say so loudly rather than taking credit for a step that did nothing.
+CA_LOADBEARING="not tested"
+if [ "${HARBOR_INSECURE:-0}" != "1" ] && [ "${ENGINE_SKIP_CA_RED:-0}" != "1" ]; then
+  red_args=()
+  [ "$ENGINE" = podman ] && red_args=(--tls-verify=true)   # podman: no --cert-dir == no CA. Clean test.
+  if printf '%s' "${HARBOR_PASSWORD:-}" | "$ENGINE" login "${red_args[@]}" \
+        --username "$HARBOR_USERNAME" --password-stdin "$HARBOR_URL" >/dev/null 2>&1; then
+    CA_LOADBEARING="NO — already trusted without us"
+    log_warn "-CA RED FAILED TO GO RED: ${ENGINE} logged in to ${HARBOR_URL} with NO CA wired."
+    log_warn "  The CA is ALREADY trusted on this box (docker merges certs.d with the system store; or a"
+    log_warn "  certs.d entry survives from an earlier run). So the 'CA method' below is a NO-OP and this"
+    log_warn "  leg proves NOTHING about our CA handling. Clear the stale trust to make it meaningful."
+  else
+    CA_LOADBEARING="YES (login without the CA fails, as it must)"
+    log_info "-CA RED ok: without the CA, ${ENGINE} CANNOT reach ${HARBOR_URL} — so what follows is real"
+  fi
+fi
+
 # --- 1. Trust: make THIS engine trust the self-signed CA (and count any sudo) -----------------------
 CERT_ARGS=()
 CA_METHOD="none (insecure)"
@@ -150,7 +177,7 @@ else
   SUDO_TXT="NO"
 fi
 printf '\n'
-printf 'LEG %-16s engine=%-6s mode=%-16s CA=%-42s sudo=%s\n' \
-  "${JUMPBOX_OS:-host}" "$ENGINE" "$MODE" "$CA_METHOD" "$SUDO_TXT"
+printf 'LEG %-16s engine=%-6s mode=%-16s CA=%-42s sudo=%-28s CA-load-bearing=%s\n' \
+  "${JUMPBOX_OS:-host}" "$ENGINE" "$MODE" "$CA_METHOD" "$SUDO_TXT" "$CA_LOADBEARING"
 printf '\n'
 log_info "engine-trust-check PASSED: ${ENGINE} (${MODE}) can login+pull+build+push+pull-back against ${HARBOR_URL}"

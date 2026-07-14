@@ -377,10 +377,10 @@ e2e-kind: ## Full local end-to-end in KinD (+ ingress route check + PSA/VKS admi
 .PHONY: e2e-kind-both
 e2e-kind-both: ## Matrix: run the full KinD e2e in BOTH SSL modes (secure self-signed TLS, then insecure plain-HTTP)
 	@echo "==> e2e-kind matrix [1/2]: SECURE mode (self-signed TLS — the default)"
-	@$(MAKE) kind-down          # clear any stale .env.kind so the mode is deterministic
+	@$(MAKE) kind-down          # clear the stale STATE SINK (.env.state) so the mode is deterministic
 	@$(MAKE) e2e-kind
 	@echo "==> e2e-kind matrix [2/2]: INSECURE mode (HARBOR_INSECURE=1 ARGOCD_INSECURE=1 — plain HTTP)"
-	@$(MAKE) kind-down          # kind-down clears .env.kind → the insecure toggle is not clobbered by a persisted HARBOR_INSECURE=0
+	@$(MAKE) kind-down          # kind-down clears the STATE SINK → the insecure toggle is not clobbered by a persisted HARBOR_INSECURE=0
 	@$(MAKE) e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1
 	@$(MAKE) kind-down
 	@echo "e2e-kind-both: both SSL modes verified end-to-end"
@@ -451,7 +451,7 @@ e2e-kind-tenant: ## Prove the TENANT write path (argocd-server, zero k8s RBAC in
 e2e-kind-istio-existing: export SKIP_DOTENV = $(E2E_SKIP_DOTENV)
 e2e-kind-istio-existing: ## KinD e2e for the ATTACH mode: a "platform team" installs Istio (foreign naming) -> we attach, installing nothing
 	@echo "==> e2e-kind-istio-existing: fresh cluster, platform-owned Istio, attach-only"
-	@$(MAKE) kind-down          # clear stale .env.kind so the ingress mode is deterministic
+	@$(MAKE) kind-down          # clear the stale STATE SINK (.env.state) so the ingress mode is deterministic
 	@$(MAKE) kind-up install-harbor install-argocd install-all
 	@$(SCRIPTS)/90-e2e-istio-existing.sh   # RED 1 + RED 2 + install Istio as the "platform team"
 	@$(MAKE) istio-preflight
