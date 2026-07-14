@@ -440,158 +440,16 @@ make e2e-kind CONTAINER_ENGINE=docker
 
 ---
 
-## Previous handoff — 2026-07-14 (early)
+## Previous sessions — what is SETTLED (details in git history; do not re-derive)
 
-`main` GREEN · **0 open PRs** · 9 PRs merged · all 8 e2e permutations green (table below).
+**2026-07-14 (early):** all 8 e2e permutations green (`e2e-kind` · `e2e-kind-istio-existing` ·
+`e2e-kind-tenant` · `e2e-kind-cross-cluster` · `e2e-kind-both` · `verify-ingress-both` · `jumpbox-both` ·
+`e2e-sneakernet`). Its theme — **every bug REPORTED SUCCESS WITHOUT DOING THE WORK, and a green gate
+agreed** — is the house style of this repo's failures. Assume that class by default.
 
-### THE ONE THING TO INTERNALISE
-
-**Every single bug this session was something that REPORTED SUCCESS WITHOUT DOING THE WORK — and a green
-gate agreed with it.** A push that skipped all 36 uploads and exited 0. A security gate CI structurally
-could not run. A CRD install whose acceptance check was *already true before the code existed*. A harness
-that printed `sudo=NO` while sudo was prompting. Assume this class by default; it is the house style of
-this repo's failures.
-
-### NEXT UP (in order)
-
-1. **Task: make docker genuinely supported on the jump box** (owner's decision, option B). This is the
-   next substantial piece of work and it is fully specced in the task list. The kernel of it:
-   **`00-install-prereqs.sh` installs PODMAN ONLY** — there is no `pkg_install docker` anywhere, on either
-   OS, and `test-container-engine.sh:83-85` **asserts that as an invariant with a gate enforcing it**. So
-   docker on a jump box is *not untested — it is unsupported by our own bootstrap.* The work: an
-   engine-aware bootstrap + a `make` target that CHECKS the docker prereqs + one that INSTALLS them + a
-   test; the jump-box matrix then tests **that change**. Traps already found: Ubuntu's `docker.io` ships
-   **no rootlesskit** (only Docker's third-party repo does — a real ask for an air-gapped box) while
-   **Photon has a first-class `docker-rootless` package** (it is the EASIER OS, which inverts the usual
-   assumption); `JUMPBOX_IMAGE` is **not engine-qualified**, so a matrix would silently reuse the wrong
-   image.
-2. **Task: run every e2e permutation with `CONTAINER_ENGINE=docker`.** Every green e2e so far ran on
-   podman. Assert `using container engine: docker` in each leg — do not eyeball it.
-3. **A real lab.** The Supervisor topology, the `vcf` CLI auth flow, and whether a VKS guest cluster ships
-   the Gateway API CRDs remain **UNVERIFIED**. No amount of KinD green changes that.
-
-### The option-B spec, inline (do NOT rely on the task list surviving)
-
-The jump-box docker work has four traps that will each produce a confident false green. They are the
-reason this is a real task and not an afternoon:
-
-1. **Do NOT pre-bake the deps into the harness image.** `Dockerfile.ubuntu` deliberately OMITS
-   `uidmap`/`slirp4netns` so `make deps` has to install them. Pre-baking proves *"rootless works if the
-   packages are already there"* — which nobody doubts — while leaving the actual question (**does OUR
-   bootstrap install them?**) unanswered. This repo has already been burned by a fix that landed only in
-   the harness image.
-2. **ONE ENGINE PER IMAGE.** `container_engine()` falls back to podman if it is present, so a "docker leg"
-   on a both-engines image would **silently run podman** and look green. Assert at build time that the
-   other engine is ABSENT.
-3. **`JUMPBOX_IMAGE ?= vks-jumpbox:$(JUMPBOX_OS)` is not engine-qualified** — building photon+podman then
-   photon+docker overwrites the same tag, so a matrix runs whichever was built last for BOTH legs and
-   reports two engines from one image. Must become `…:$(JUMPBOX_OS)-$(JUMPBOX_ENGINE)`. Fix this FIRST.
-4. **The CA must be RED-PROVEN load-bearing** (no-CA ⇒ x509 error; +CA ⇒ pass; −CA ⇒ x509 again). Docker
-   MERGES `certs.d` with the system store, so a CA that was *already* trusted would let the harness
-   publish a "CA method" that was never actually exercised.
-
-Anti-fake assertions per leg: **rootful** — `id -u != 0`, the un-sudo'd write to `/etc/docker/certs.d`
-must fail EACCES, and `engine_sudo_calls == 1`. **rootless** — `ps -o user=` on the dockerd PID (the
-process owner is ground truth; `SecurityOptions` is derived), `DockerRootDir` under `$HOME`, `DOCKER_HOST`
-on the user's own socket, `engine_sudo_calls == 0`. **All** — `docker info {{.Name}}` == the container
-hostname, never the host's daemon.
-
-Ubuntu is the hard OS and it is a **bootstrap-policy decision, not a harness detail**: `docker.io` ships
-no rootlesskit and hides `dockerd-rootless.sh` in `/usr/share/docker.io/contrib/` (off PATH), so either
-add Docker's third-party apt repo + GPG key (a real ask for an air-gapped lab box) or use distro packages
-and point at the contrib path explicitly. Photon is the EASY one — `tdnf install docker docker-rootless
-rootlesskit` — which inverts the usual assumption and belongs in the doc.
-
-### On the adversaries — they will LOAD; nothing FORCES me to use them
-
-Both `.claude/agents/*.md` are committed, so they are dispatchable from turn one (unlike this session,
-where `docker-adversary` was written mid-session and came back `Agent type not found`). The
-`subagent-readonly-gate.py` hook is committed and wired, so an adversary that tries to `git commit`/`push`
-is blocked — which this repo needed after one of them opened a PR unbidden.
-
-But **RULE ZERO is prose**, and prose has already failed here: it was loaded this session and I still made
-unilateral pivots (a dind→host-native switch, a Dockerfile layout, a whole harness) that the adversary then
-demolished. By this repo's own doctrine that should become a gate — and **there is no honest gate to
-build**: a design decision leaves no artefact to grep at the moment it is made. A `SessionStart` hook
-re-injecting RULE ZERO would be decoration (CLAUDE.md already loads it; the failure was skipping the rule
-under momentum, not being ignorant of it), and shipping a fake gate is the exact pattern this session spent
-itself killing. So this is recorded as an **acknowledged gap**, not a solved problem. The tripwire is the
-sentence *"I decided X on my own"* — and the control that actually worked, every time, was the owner asking
-*"did you run that past the adversary?"*
-
-### Container engine — SETTLED, and the doc is `docs/decisions/container-engine-support.md`
-
-Measured against the KinD Harbor (login → pull → build → push → `crane validate --remote`):
-
-| engine | CA method | sudo |
-|---|---|---|
-| **podman** (default) | `--cert-dir`, per command | **no — ever** (daemonless) |
-| **docker rootless** | `~/.config/docker/certs.d/<host>/ca.crt` | **no** — matches podman exactly |
-| **docker rootful** | `/etc/docker/certs.d/<host>/ca.crt` | **YES, one per registry** — and the KinD LB IP changes every `kind-up`, so a prompt **per cluster** |
-
-Facts people get wrong, all verified here: **`certs.d` MERGES with the system store** (a missing `ca.crt`
-does NOT mean docker fails — never gate on the file, gate on a TLS handshake; a guard that did the former
-was shipped and retracted). A `certs.d` drop-in needs **no daemon restart** (read per request).
-`HARBOR_INSECURE=1` is **podman-only**. `make e2e-kind` needs **docker regardless of `CONTAINER_ENGINE`**
-(kind's nodes are docker containers) — so a podman-only box cannot run the local KinD e2e.
-
-**`--security-opt apparmor=rootlesskit`** makes rootless-docker-in-a-container work on an
-AppArmor-restricting host (Ubuntu 23.10+). I first wrote *"impossible"* into the decision doc after trying
-three flags — **none of which acted on the mechanism I had myself just described.** Ubuntu attaches the
-`userns` permission by **host path**; inside a container the binary is a different file, the profile does
-not attach, the process is `unconfined` — and `unconfined` is exactly what the kernel denies. Which is why
-`apparmor=unconfined` makes it *worse*.
-
-### The 8 e2e permutations (all green, each verified by what the log DID, not its exit code)
-
-`main` clean · **0 open PRs** · 7 PRs merged this session (#213–#218 + follow-ups).
-
-**Every e2e permutation passes, and each was checked against what the log DID, not its exit code:**
-
-| Leg | Proven by |
-|---|---|
-| `e2e-kind` | CPK CRD mgmt **disabled** · CRDs from the **carried bundle** · **SSA field manager** · all 4 hosts served through the ingress |
-| `e2e-kind-istio-existing` | attach mode · 2 demonstrated REDs · foreign selector **discovered** · **both** route APIs |
-| `e2e-kind-tenant` | zero k8s RBAC in `ns/argocd`; Applications via `argocd-server` |
-| `e2e-kind-cross-cluster` | RED refusal + hub/guest registration |
-| `e2e-kind-both` | secure **and** insecure Harbor, each leg reporting its **true mode** |
-| `verify-ingress-both` | istio + traefik |
-| `jumpbox-both` | **Photon AND Ubuntu**, both `HTTP 200` to Harbor over HTTPS |
-| `e2e-sneakernet` | 36 images carried to a fresh box; **36/36 verified intact** on the far side |
-
-### The one thing to internalise from this session
-
-**Every single bug was something that REPORTED SUCCESS WITHOUT DOING THE WORK, with a green gate agreeing.**
-
-- Harbor was **wiped by our own installer**; a surviving Redis descriptor cache HEAD-200'd the missing
-  blobs, so `crane` skipped all 36 uploads and **exited 0** (#213). ⚠️ This also **DISPROVED** the
-  long-standing "concurrent load corrupts Harbor" rule — see the SETTLED section below.
-- The **prose-secret gate could not be reached** by the only PR shape that can add a prose secret
-  (docs-only PRs skip `static-check`), and **nine** gates silently skipped when their tool was absent (#214).
-- The cross-cluster guard was **dead code** for the documented `.env` setup (#215).
-- The **Gateway-API CRD install had never executed** — its acceptance check (`CRDs: PRESENT`) was already
-  true before the code existed, because cloud-provider-kind installed them (#216).
-- **`grep` in a pipeline under `set -e`** killed scripts **4×** — exit **1** on no-match, exit **2** on a
-  **missing file**. Signature every time: **a non-zero exit with NO output** (#217 + follow-ups).
-- **One rename (#192) produced four breakages**, each found by a different runtime path (a stale file on
-  disk, a live cluster, a second OS). Enumerated lists rot; derive them (#218).
-
-**5 of those were found by RUNNING the e2e matrix, not by writing code.** Six of eight legs were green
-immediately; the last two cost five fix rounds. `static-check` was green throughout.
-
-### Still open
-
-1. **The docker-only claim is still unproven** — see the NEXT TASK section below. It is NOT provable with
-   `make e2e-kind` (that target requires docker regardless of `CONTAINER_ENGINE`).
-2. **The jumpbox Makefile block should be a script.** Every silent failure above happened inside one
-   50-line `\`-continued recipe. A recipe cannot be `shellcheck`ed, unit-tested, or coherently
-   `set -euo pipefail`'d. Move it to `scripts/` (portfolio rule now in `/makefile`).
-3. **Sweep the `.env.kind` → `.env.state` rename once more.** It has produced four breakages; comments
-   still claim `kind-down` clears `.env.kind`. Grep the OLD name repo-wide and fix the class.
-4. **A real lab.** Everything about the Supervisor topology, the `vcf` CLI auth flow, and whether a VKS
-   guest cluster ships the Gateway API CRDs remains **UNVERIFIED** — no amount of KinD green changes that.
-
----
+The **option-B docker spec** that lived here is **implemented and merged** (#228 + #232); the
+**container-engine decision** is in `docs/decisions/container-engine-support.md`, and the operator-facing
+answer is in the README's engine table. Do not re-open either from an old handoff.
 
 ### Previous handoff (2026-07-13, evening) — container engine
 
@@ -629,65 +487,17 @@ untested docker path**: every e2e auto-detects podman, so it had never once run.
 - **`DOCKER_CERT_PATH` is NOT a registry CA** (it's CLI↔daemon socket TLS). Podman/skopeo's identically-named `DockerCertPath` **is** one. This is the #1 confusion in the wild.
 - **A trusted CA is NOT sufficient — the leaf needs a SAN.** Since Go 1.15 a no-SAN leaf is rejected *even with a trusted CA*, and Go 1.17 **removed** the `GODEBUG=x509ignoreCN=0` escape hatch. For a bare-IP registry it must be an **IP SAN** (goharbor/harbor#19994). **Our KinD Harbor mints `SAN=IP` (`06-install-harbor.sh:118`) — correct, and it must never regress.**
 
-### 📋 PLANNED REVIEW — "mechanism essay" prose in operator docs (repo-wide; a PATTERN, not a one-off)
+### ✅ DONE (#233) — the "mechanism essay" review, including the specimen it named
 
-**The defect.** An operator doc explains **how the internals work** where it should state **the
-operator's CHOICE and the ONE COMMAND to run**. It reads as thorough and is actually a burden: the
-reader has to *derive* their action from a mechanism description we could have just automated.
+The planned review is finished. The named specimen — the README/`.env.example` container-engine blurb that
+explained docker's daemon TLS model and made the operator hand-type `sudo install -D …` CA commands — is
+replaced by a **choice table + `make trust-harbor` / `make engine-check`**. `docs/vks-services/harbor.md`'s
+CA-trust table gained its missing docker rows.
 
-**The specimen** (README, container-engine blurb — caught by the owner 2026-07-13). It explained
-docker's daemon TLS model, `certs.d` ownership, the OS store, daemon restarts, and rootless — three
-sentences of mechanism — and never once told the reader *what to type*. What it should say:
-
-| Your situation | What you run |
-|---|---|
-| Default (podman) | nothing — `make deps` installs it |
-| docker, **rootless** | `make trust-harbor` (sudo-free) |
-| docker, **rootful** | `make trust-harbor` → prints the `sudo` lines |
-| `make e2e-kind` | docker required regardless — that is kind, not us |
-
-**Why it is a PATTERN and not a typo.** Every hard-won fact in this repo arrives as a *mechanism*
-(that is what the adversaries and the research produce), and the reflex is to write the mechanism
-down where it was learned — which is usually an operator doc. The knowledge belongs in `CLAUDE.md` /
-`docs/decisions/` / `docs/vks-services/`; the **operator** doc gets the choice and the command.
-The rule already exists (*docs say WHAT, not WHY*) and it was violated anyway — by me, in the same
-session that quoted it. Prose did not hold. That is the signature of a missing gate.
-
-**The review (do this as its own PR, not folded into feature work):**
-
-1. **Audit** every operator-facing surface — `README.md`, `.env.example` comments, `make help`
-   strings, `docs/*.md` runbooks — for a paragraph that explains a MECHANISM without naming an
-   ACTION. Detection heuristic: a block of ≥2 sentences containing *how/because/so that/it works
-   by/the daemon/per-command* and **no** imperative + **no** `make` target.
-2. **For each hit, decide**: (a) automate it into a `make` target and reduce the doc to one line
-   pointing at the target — **preferred**; (b) move the mechanism to `CLAUDE.md`/`docs/decisions/`
-   and leave a choice-table row; (c) it is genuinely a decision the operator must reason about →
-   keep it, but lead with the action.
-3. **Gate it if a mechanical signal exists** (the repo's standing rule: a violated rule becomes a
-   gate, not another paragraph). Candidate: `check-readme-actionable` — every `##` section of the
-   README that describes an operator task must contain at least one `make` invocation or a fenced
-   command block. RED-prove it by hollowing a section into pure prose. If no honest mechanical
-   signal exists, say so and leave it a review checklist item — do NOT ship a gate that passes by
-   not looking (this repo has shipped that twice).
-
-**Known first target**: the container-engine blurb above, together with the `make engine-check` /
-`make trust-harbor` targets it should point at (designed, adversary-review pending, NOT yet built).
-
-> **These two targets run ON THE JUMP BOX, so they must be proven on BOTH OS images — `make jumpbox-both`
-> (`photon:5.0` + `ubuntu:26.04`), not just the dev box.** This is not ceremony; the two OSes differ in
-> exactly the places these targets touch:
->
-> - **Photon's coreutils are toybox, not GNU.** A `gzip -t` gate already false-failed on it for this
->   reason. **`install -D -m0644` was CHECKED and WORKS on Photon 5 (toybox 0.8.9)** — verified
->   2026-07-13, so the CA-placement command in `.env.example` is safe on both OSes. Do not re-open
->   this; DO keep checking any *new* GNU-ism the same way.
-> - **Rootless podman needs different packages per OS** (`crun` + an active `unqualified-search-registries`
->   on Photon; `uidmap`/`passt`/`slirp4netns` on Ubuntu, which apt omits from a default podman install).
-> - **Docker may not exist on either image at all** — the jump-box images install **podman only**, which
->   is the whole point. A docker leg needs its own image (see the NEXT TASK below); do not assume the
->   host's docker, and do NOT mount the host docker socket.
-> - The uid-1000-vs-1001 asymmetry between the images has already broken CA *readability* once
->   (a 0600 CA the Ubuntu `vks` user could not read → a TLS error that named trust, not permissions).
+**The durable rule (it recurs, and I walked past this very specimen once):** an operator doc states the
+**CHOICE and the COMMAND**; the *mechanism* goes to `CLAUDE.md` / `docs/decisions/`. Anything typed twice is
+a missing `make` target. And a **capability change is not done until the operator docs say so** — see the
+section of that name in the current handoff (recorded as a checklist item, deliberately **not** a fake gate).
 
 ### ✅ DONE (#205) — every step of `docs/lab-validation-plan.md` now answers Why · Where · Who-needs-it · We-then · Run · Expect · Send-back
 
@@ -899,33 +709,18 @@ The original note, kept because the reasoning generalises:
 confirm they are in `docs-lint`, not `static-check`) · `check-env-coverage` / `check-env-clobber` (they
 guard `.env.example` **and** scripts — which filter fires?).
 
-### ⛔ NEXT TASK — prove the docker-only claim, and DO NOT do it with `make e2e-kind`
+### ✅ DONE (#228, #232) — the docker claim is MEASURED, not argued
 
-The owner wants: *"we use podman by default; prove the e2e ALSO works with docker only, then claim it in `*.md`."*
+The task that used to sit here ("prove the docker-only claim, and do NOT do it with `make e2e-kind`") is
+finished. `make jumpbox-matrix` runs {photon,ubuntu} × {podman,docker} and each leg makes the engine
+**log in, pull, build, push and pull-back-verify against the real self-signed Harbor** — 4/4, every leg
+`sudo=NO`. `make bootstrap-engine-test` proves the other half on **bare** images: `make deps` yields podman
+with **zero docker** by default, and docker only when asked. The old note's claim that "the PODMAN claim is
+ALSO unproven for the disputed step" was true then and is false now.
 
-**`make e2e-kind CONTAINER_ENGINE=docker` CANNOT prove that. It is circular** — `make e2e-kind`
-hard-requires docker regardless of `CONTAINER_ENGINE` (kind node containers, `docker exec`,
-cloud-provider-kind on the docker socket). It would prove *"docker works on the one box that is
-required to have docker."* It also **cannot currently go green**: nothing wires the Harbor CA into the
-**host docker daemon** (`06-install-harbor.sh` wires the kind nodes' *containerd*, a different
-format/consumer; podman gets `--cert-dir`). And the CA is minted with **SAN = the LB IP**, which
-changes on every `kind-up` — so any manual `sudo` fix is non-reproducible.
-
-**The converse gap is real and currently unstated: the PODMAN claim is ALSO unproven for the disputed
-step.** `make jumpbox` is our only docker-free environment (its Photon/Ubuntu images install podman
-only) — but it **never calls `15-build-push-builder.sh`**, the one script that builds *and pushes to
-Harbor over self-signed TLS with an engine*. Everything it does run is **crane** (no engine at all).
-
-**The honest harness** (this is the task):
-
-1. Extend `jumpbox-run.sh` to actually run `make builder-image` (+ a Harbor pull) — for **both** engines. Without this, neither claim is tested.
-2. Add a docker-capable jump-box image (`Dockerfile.ubuntu-docker`, dind — the harness already runs `--privileged`). **Do NOT mount the host docker socket**: that puts you back on the host daemon (which has kind's containers), so the "docker-only jump box" would be running against the very box it is supposed to be independent of — it proves nothing. (The old second reason given here — "it re-opens the concurrent-registry-mutation hazard that has already corrupted a Harbor" — was based on a **misdiagnosis**; see the SETTLED Harbor section. The first reason is the real one and is sufficient.)
-3. Install the CA **the way a real operator would**, per engine, *inside* the container, and record which method was needed. Root-inside-a-container is what makes the sudo question **honest** rather than hidden.
-4. Replace the fail-fast with a **pre-build `$ENGINE login` probe** (before the `pull` at `15:~65`, not after a 20-minute build). It tests whether trust *works* instead of guessing from a filename, cannot false-fire, and needs no knowledge of where the daemon reads certs.
-
-5. **Run the matrix on BOTH OSes, not just the dev box: `make jumpbox-both` (`photon:5.0` + `ubuntu:26.04`) × both engines.** The engine/CA code paths are exactly where the two OSes diverge (toybox vs GNU `install -D`; `crun` + `unqualified-search-registries` on Photon vs `uidmap`/`passt`/`slirp4netns` on Ubuntu; the uid-1000-vs-1001 CA-readability trap). A green Ubuntu-only run has already been mistaken for a proof in this repo. The full grid is **4 legs** — {photon, ubuntu} × {podman, docker} — and the docker legs need the dind image from (2), because the stock jump-box images install **podman only**.
-
-**Only then** publish the claim — and publish it with its preconditions (rootful⇒sudo; system-store counts; rootless is sudo-free; insecure mode is podman-only; kind ≠ jump box). "Docker works" unqualified would be a lie.
+The one thing still unprovable here: **`make e2e-kind CONTAINER_ENGINE=docker` on a ROOTFUL-docker host
+needs a sudo** (root-owned `/etc/docker/certs.d`) — that is the disclosed cost, not a defect. See "THE ONE
+THING I COULD NOT PROVE" in the current handoff.
 
 ### 🩸 PROCESS FAILURE THIS SESSION — fix this before running another adversary
 
