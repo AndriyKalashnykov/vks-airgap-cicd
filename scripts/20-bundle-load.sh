@@ -30,6 +30,11 @@ case "$tarball" in
 esac
 
 [ -d "${BUNDLE_DIR}/images" ] || die "extraction did not produce ${BUNDLE_DIR}/images"
+# The manifests are as load-bearing as the images on an air-gapped box: Tekton's install YAML AND the
+# Gateway API CRDs are carried here. A bundle with images but no manifests gets all the way to
+# `make install-ingress` before dying — and until recently it died reaching for github.com, which on
+# an air-gapped box is a network timeout that names nothing useful.
+[ -d "${BUNDLE_DIR}/manifests" ] || die "extraction did not produce ${BUNDLE_DIR}/manifests — this bundle carries images but no manifests (Tekton install YAML, Gateway API CRDs). Re-cut it: make mirror-pull && make bundle"
 n="$(find "${BUNDLE_DIR}/images" -maxdepth 1 -type d | wc -l)"
 log_info "bundle loaded: $((n-1)) cached images under ${BUNDLE_DIR}/images"
 log_info "next: make mirror-push"

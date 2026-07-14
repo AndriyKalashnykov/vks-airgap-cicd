@@ -152,12 +152,30 @@ fi
 log_info "starting $CPK_CONTAINER ($CPK_IMAGE) — manages LB via the docker socket"
 # Per the cloud-provider-kind README: run with --network host + the docker socket;
 # it creates the per-Service envoy sidecars on the kind network itself via the API.
+#
+# --gateway-channel=disabled IS LOAD-BEARING — it is what lets the e2e test our OWN Gateway API CRD
+# install at all. CPK's default channel is `standard`, so it FORCE-INSTALLS the Gateway API CRDs at
+# cluster start (cmd/app.go: default "standard"; controller.go: `if GatewayReleaseChannel != Disabled
+# { InstallCRDs(...) }`). istio_ensure_gwapi_crds then found the CRDs already present, logged
+# "already present" and returned — so the code path that installs them HAS NEVER RUN, on any machine.
+# A green e2e printing "Gateway API CRDs: PRESENT" was measuring CPK's KinD shim, which is the very
+# thing that install exists to remove. It was a FALSE PROOF.
+#
+# Disabling the channel is safe and source-verified: CRD installation is a SEPARATE, gated code path
+# from the Service-LoadBalancer controller, so LB IPs keep working (asserted in the e2e).
+#
+# It also defuses a live time-bomb: gateway-api v1.6's bundle ships a ValidatingAdmissionPolicy
+# (safe-upgrades) whose CEL DENIES installing CRDs older than v1.5.0 — and CPK v0.11.1 vendors
+# v1.5.1 and installs them with a plain Create(). The moment the istio+gateway-api Renovate group
+# lands v1.6, CPK's CRD install would be DENIED, it aborts the whole controller, and every
+# LoadBalancer in the cluster silently stops getting an IP — surfacing as "Harbor LB did not get an
+# external IP", an error that points nowhere near an admission policy.
 run docker run -d \
   --name "$CPK_CONTAINER" \
   --network host \
   --restart unless-stopped \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  "$CPK_IMAGE"
+  "$CPK_IMAGE" --gateway-channel=disabled
 
 # --- 4. Readiness: poll until all nodes are Ready (bounded, with delay) -------
 log_info "waiting for all nodes to become Ready (timeout ${READY_TIMEOUT}s, poll ${POLL_INTERVAL}s)"
@@ -173,6 +191,26 @@ until kubectl wait --for=condition=Ready nodes --all \
   sleep "$POLL_INTERVAL"
 done
 log_info "all nodes Ready"
+
+# --- 4b. ASSERT the CPK flag actually took effect -----------------------------
+#
+# Positive proof, from CPK's own log (controller.go logs this on the disabled branch). Without it we
+# would only know the flag was PASSED, not that it was parsed and honoured.
+#
+# And count CRASH lines rather than trusting `docker ps`: the container runs with
+# `--restart unless-stopped`, so a crash-looping CPK shows `Up` BETWEEN cycles — status false-greens.
+sleep 2
+cpk_log="$(docker logs "$CPK_CONTAINER" 2>&1 || true)"
+if ! printf '%s' "$cpk_log" | grep -q 'Gateway API CRDs installation skipped'; then
+  log_error "cloud-provider-kind did NOT log that it skipped the Gateway API CRD install."
+  log_error "  Either --gateway-channel=disabled was not honoured by this CPK version, or CPK is"
+  log_error "  installing the CRDs anyway — which makes our own CRD install untestable (a FALSE PROOF)."
+  printf '%s\n' "$cpk_log" | tail -20 >&2
+  die "cloud-provider-kind is still managing the Gateway API CRDs"
+fi
+crashes="$(printf '%s' "$cpk_log" | grep -c 'Failed to start\|Failed to install Gateway API CRDs' || true)"
+[ "${crashes:-0}" -eq 0 ] || die "cloud-provider-kind is crash-looping (${crashes} failure lines) — LoadBalancers will never get an IP"
+log_info "cloud-provider-kind: Gateway API CRD management is DISABLED (we install them ourselves), 0 crash lines"
 
 # --- 5. Summary --------------------------------------------------------------
 kubectl get nodes >&2 || true

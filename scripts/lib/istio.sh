@@ -123,28 +123,66 @@ istio_discover() {
 # --server-side is REQUIRED, not a preference: the CRD bundle exceeds the 256 KiB
 # last-applied-configuration annotation limit that client-side apply writes.
 #
-# We only do this when we OWN the cluster (the install path). A tenant attaching to someone
-# else's mesh cannot install cluster-scoped CRDs — istio_require_gwapi_crds below tells them
-# so in those words instead of silently degrading to a path that cannot work.
+# We only do this when we OWN the cluster (the install path). A tenant attaching to someone else's
+# mesh cannot install cluster-scoped CRDs — istio_detect_route_api (below) tells them so in those
+# words instead of silently degrading to a path that cannot work.
+#
+# (That sentence used to name `istio_require_gwapi_crds`, a function THAT DOES NOT EXIST — a comment
+# asserting a control that was never written. Same class as the phantom noun #208 removed from the
+# docs, one level down: in the code, where it is even easier to believe.)
 istio_ensure_gwapi_crds() {
   local ver="${GATEWAY_API_VERSION:?GATEWAY_API_VERSION must be set (.env.example)}"
   if kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
     log_info "Gateway API CRDs already present"
     return 0
   fi
-  local src="${MANIFEST_DIR:-}/gateway-api-${ver}.yaml"
+  # MANIFEST_DIR is a LOCAL in 10-mirror-pull.sh and 41-install-tekton.sh — it is NOT an .env var and
+  # nothing sets it on this path. So `${MANIFEST_DIR:-}` was EMPTY here, `[ -f "/gateway-api-X.yaml" ]`
+  # was always false, and the "air-gap" branch was DEAD CODE: `make install-ingress` reached for
+  # github.com every single time, on an air-gapped jump box included — where it dies BEFORE the helm
+  # fetch the runbook warns about, so the operator hits a failure the docs never mention. Meanwhile
+  # 10-mirror-pull.sh has been faithfully downloading this exact file into the bundle, and nothing
+  # ever read it. Derive the dir the same way lib/mirror.sh already does.
+  local mdir="${MANIFEST_DIR:-${BUNDLE_DIR:-}/manifests}"
+  local src="${mdir}/gateway-api-${ver}.yaml"
   if [ -f "$src" ]; then
-    log_info "installing Gateway API CRDs ${ver} from the carried bundle (air-gap)"
+    log_info "installing Gateway API CRDs ${ver} from the carried bundle (air-gap): $src"
+  elif [ -d "$mdir" ]; then
+    # The bundle EXISTS but does not carry the CRDs — that means an air-gapped box with a bundle cut
+    # before this file was added. Reaching for the internet here is the wrong default: it will hang or
+    # fail with a network error that says nothing useful. Say what is actually wrong.
+    die "the bundle at '$mdir' has no gateway-api-${ver}.yaml.
+  Your bundle predates the Gateway API CRDs (or was cut for a different GATEWAY_API_VERSION).
+  Re-cut it on the internet side:  make mirror-pull && make bundle
+  (Refusing to silently fetch from github.com: on an air-gapped box that cannot work, and on a
+   dual-homed box it would hide the fact that your bundle is incomplete.)"
   else
     src="https://github.com/kubernetes-sigs/gateway-api/releases/download/${ver}/standard-install.yaml"
-    log_info "installing Gateway API CRDs ${ver} from upstream (needs internet)"
+    log_info "installing Gateway API CRDs ${ver} from upstream (needs internet; no bundle at $mdir)"
   fi
-  # --force-conflicts: idempotent re-runs, and it takes ownership from any bundle a
-  # component (e.g. cloud-provider-kind) force-installed first.
+  # --server-side is REQUIRED, not a preference (the bundle is ~17.5k lines — far over the 256 KiB
+  # last-applied-configuration annotation limit that CLIENT-side apply writes).
+  # --force-conflicts: idempotent re-runs, and it takes ownership from any bundle a component
+  # (e.g. cloud-provider-kind) force-installed first.
   run kubectl apply --server-side --force-conflicts -f "$src"
   kubectl wait --for=condition=Established --timeout=60s \
     crd/httproutes.gateway.networking.k8s.io crd/gateways.gateway.networking.k8s.io >/dev/null
-  log_info "Gateway API CRDs ${ver} established"
+
+  # POST-CONDITION: prove WE installed them — "the CRDs are present" is NOT the claim, and it was
+  # already TRUE before this code ever ran (cloud-provider-kind put them there). That is exactly how
+  # #209 shipped "verified" without ever executing. The forgery-proof signature is the FIELD MANAGER:
+  # CPK creates CRDs with a plain dynamic Create() -> managedFields operation `Update`. A server-side
+  # apply produces operation `Apply`. So an `Apply` manager proves both that our code path ran AND
+  # that --server-side was genuinely used. The bundle-version annotation proves it is OUR pinned
+  # version and not somebody else's.
+  local got_ver got_apply
+  got_ver="$(kubectl get crd httproutes.gateway.networking.k8s.io \
+               -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}' 2>/dev/null || true)"
+  got_apply="$(kubectl get crd httproutes.gateway.networking.k8s.io \
+                 -o jsonpath='{range .metadata.managedFields[?(@.operation=="Apply")]}{.manager}{"\n"}{end}' 2>/dev/null || true)"
+  [ "$got_ver" = "$ver" ] || die "Gateway API CRDs report bundle-version '${got_ver:-<none>}', expected '${ver}' — something else owns these CRDs"
+  [ -n "$got_apply" ]     || die "Gateway API CRDs have NO server-side-apply field manager — they were created by something else (cloud-provider-kind?), not by us. 'Present' is not 'installed by us'."
+  log_info "Gateway API CRDs ${ver} established (bundle-version=${got_ver}, SSA field manager: $(printf '%s' "$got_apply" | tr '\n' ' '))"
 }
 
 # istio_gwapi_crds_present — cheap, honest boolean.

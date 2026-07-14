@@ -279,9 +279,13 @@ make istio-preflight     # read-only. On a fresh cluster: "NO Istio detected →
 
 Then add the printed `INGRESS_LB_IP` to `/etc/hosts` (see [Access the UIs](access-uis.md)).
 
-Two things to know about `make install-ingress` (the default): it fetches the Istio **helm chart** from
-the internet (fine on this dual-homed jump box; **not** on a fully air-gapped one — the *images* are
-already in Harbor), and it is a **demo ingress**, not the Broadcom-supported mesh.
+Two things to know about `make install-ingress` (the default):
+
+- **It still needs internet on the jump box — for the Istio helm CHART** (`istio-release.storage.googleapis.com`).
+  Fine on this dual-homed jump box; **not** on a fully air-gapped one. Its **images** come from your
+  Harbor and its **Gateway API CRDs** come from the carried bundle, so those two are air-gap clean —
+  the chart is the one remaining gap.
+- It is a **demo ingress**, not the Broadcom-supported mesh.
 
 <details><summary><b>Alternative: install the VKS Istio package, then attach (VKS-faithful — NOT validated by us)</b></summary>
 
