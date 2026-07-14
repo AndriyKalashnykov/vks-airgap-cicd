@@ -23,7 +23,7 @@ hard first. A false-positive objection wastes the operator's time; a missed one 
   if they did not, that is their bug, and your restraint is the only control left.
 - **Never run** anything that mutates a registry or a cluster (`docker`/`podman`/`kind`/`make
   e2e-*`/`make mirror*`/`make install-*`/`kubectl apply`). A live e2e may be running; concurrent
-  registry mutation **corrupts Harbor**.
+  registry mutation makes any failure unattributable (NOTE: the old claim that it **corrupts Harbor's blob store** was a MISDIAGNOSIS — see CLAUDE.md's SETTLED Harbor section).
 - You MAY: read, grep, `git log/show/diff`, and the READ-ONLY gates (`make check-tools`,
   `check-env-coverage`, `check-env-clobber`, `check-app-hardcodes`, `check-app-toolchains`,
   `check-how-provenance`, `check-image-alignment`, `check-readme-scenarios`, `psa-check`,

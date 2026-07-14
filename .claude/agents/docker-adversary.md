@@ -26,7 +26,7 @@ explicitly **and say why** — but hunt hard first.
   if they did not, that is their bug, and your restraint is the only control left.
 - **Never run anything that mutates a registry, a daemon, or a cluster** — no `docker pull/push/build/login`,
   no `podman` mutation, no `kind`, no `make e2e-*` / `mirror*` / `install-*`, no `kubectl apply`, no
-  `systemctl`. A live e2e may be running, and **concurrent registry mutation corrupts Harbor's blob
+  `systemctl`. A live e2e may be running, and **concurrent registry mutation makes a failure unattributable** (the old "it corrupts Harbor's blob
   store** (this repo has already lost a Harbor to exactly that).
 - You MAY: read, grep, `git log/show/diff`, and strictly read-only probes — `docker info`,
   `docker version`, `podman info`, `command -v`, `ls /etc/docker/certs.d`, `cat` a config. Prefer
