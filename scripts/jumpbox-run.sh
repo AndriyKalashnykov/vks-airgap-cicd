@@ -22,10 +22,20 @@ rm -rf "$WORK"; mkdir -p "$WORK"
 # cannot read the 0600 files — so copying them fails the tar. `.env.example` is KEPT (load_env needs it).
 # NB: GNU tar's --exclude-vcs-ignores is NOT usable here — it ignores git's leading-slash-anchored
 # patterns (`/secrets/`, `/bundle/`), verified on this repo — so the excludes are explicit.
-tar -C /src --exclude='./.git' --exclude='./.env' --exclude='./.env.kind' \
-    --exclude='./secrets' --exclude='./bundle' \
-    --exclude='*/target' --exclude='./.jumpbox' \
-    -cf - . | tar -C "$WORK" -xf -
+# The `.env*` excludes are DERIVED from what is actually on disk, not enumerated. The enumerated list
+# is exactly what rotted: it named `./.env` and `./.env.kind`, then #192 renamed the sink to
+# `.env.state` — and the ubuntu leg started dying with
+#     tar: ./.env.state: Cannot open: Permission denied
+# because that 0600 file is owned by the host's uid 1000 and the container's `vks` is uid 1001. The
+# comment above described this trap perfectly and the list still went stale. Deriving it means the
+# next rename cannot reintroduce the bug. (`.env.example` is KEPT — load_env needs it.)
+EXCL="$(mktemp)"
+{
+  printf './.git\n./secrets\n./bundle\n*/target\n./.jumpbox\n'
+  ( cd /src && find . -maxdepth 1 -name '.env*' ! -name '.env.example' -print )
+} > "$EXCL"
+tar -C /src --exclude-from="$EXCL" -cf - . | tar -C "$WORK" -xf -
+rm -f "$EXCL"
 cd "$WORK"
 
 . /etc/os-release
