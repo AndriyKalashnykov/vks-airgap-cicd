@@ -235,7 +235,7 @@ above is self-contained end to end (a CI gate enforces that: `make check-readme-
 | [Prerequisites — the manual path](docs/prerequisites-manual.md) | the step-by-step the bootstrap automates |
 | [Sizing](docs/sizing.md) | jump-box disk + guest-cluster resources |
 | [Repository layout](docs/repository-layout.md) | where things live |
-| [Make targets](docs/make-targets.md) | every target, grouped |
+| [Make targets](docs/make-targets.md) | the catalogue, with context (`make help` prints the same list straight from the Makefile). A CI gate fails if an operator-invocable target is documented **nowhere** |
 | [CI/CD](docs/ci-cd.md) | what CI actually gates (and what it deliberately does not) |
 | [VKS authentication](docs/vks-authentication.md) | how `$KUBECONFIG` is produced on VKS (`VKS_AUTH_METHOD`, the `vcf` CLI flow), and **why Scenario 1 needs a second kubeconfig**. Both VKS scenarios run `make vks-login` themselves; **the KinD path skips it entirely** |
 | [Demo walkthrough](docs/demo-walkthrough.md) | drive the GitOps loop by hand |

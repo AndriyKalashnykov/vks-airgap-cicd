@@ -132,6 +132,14 @@ check-doc-command-count: ## Gate: a doc that COUNTS commands ("two commands") mu
 check-doc-make-targets: ## Gate: every `make X` a runbook tells the operator to run must EXIST in the Makefile
 	@$(SCRIPTS)/check-doc-make-targets.sh
 
+# The OTHER direction, and the one that kept failing: check-doc-make-targets proves a doc names no DEAD
+# command; this proves a LIVE capability is not INVISIBLE. `make builder-build`/`builder-push`/
+# `e2e-sneakernet-both` shipped and were merged while appearing in no document a user reads — the third
+# time in one day that "a capability change is not done until the operator docs say so" failed as prose.
+.PHONY: check-doc-target-coverage
+check-doc-target-coverage: ## Gate: every operator-invocable target must be named in SOME doc (CI gates exempt themselves via `## Gate:`)
+	@$(SCRIPTS)/check-doc-target-coverage.sh
+
 .PHONY: check-gwapi-istio-alignment
 check-gwapi-istio-alignment: ## Gate: GATEWAY_API_VERSION == the version the pinned ISTIO vendors (ground truth: istio's go.mod)
 	@$(SCRIPTS)/check-gwapi-istio-alignment.sh
@@ -760,7 +768,7 @@ vendor-diagrams: ## Re-download the pinned C4-PlantUML stdlib into docs/diagrams
 	echo "vendor-diagrams: refreshed docs/diagrams/c4/ @ $(C4_PLANTUML_VERSION) — now run 'make diagrams' and verify the offline render"
 
 .PHONY: docs-lint
-docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets check-vks-terminology ## Lint markdown + the README-scenario, command-count and VKS-terminology gates
+docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets check-doc-target-coverage check-vks-terminology ## Lint markdown + the README-scenario, command-count, target-coverage and VKS-terminology gates
 	@# NOTE: diagrams-check is deliberately NOT a prerequisite here. It `docker run`s the pinned
 	@# PlantUML image (a ~478 MB pull, cold) and re-renders every .puml — so making it unconditional
 	@# meant a README-only PR paid for a full JVM render of seven diagrams it never touched. `make ci`
