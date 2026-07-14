@@ -315,6 +315,55 @@ this repo's failures.
 3. **A real lab.** The Supervisor topology, the `vcf` CLI auth flow, and whether a VKS guest cluster ships
    the Gateway API CRDs remain **UNVERIFIED**. No amount of KinD green changes that.
 
+### The option-B spec, inline (do NOT rely on the task list surviving)
+
+The jump-box docker work has four traps that will each produce a confident false green. They are the
+reason this is a real task and not an afternoon:
+
+1. **Do NOT pre-bake the deps into the harness image.** `Dockerfile.ubuntu` deliberately OMITS
+   `uidmap`/`slirp4netns` so `make deps` has to install them. Pre-baking proves *"rootless works if the
+   packages are already there"* — which nobody doubts — while leaving the actual question (**does OUR
+   bootstrap install them?**) unanswered. This repo has already been burned by a fix that landed only in
+   the harness image.
+2. **ONE ENGINE PER IMAGE.** `container_engine()` falls back to podman if it is present, so a "docker leg"
+   on a both-engines image would **silently run podman** and look green. Assert at build time that the
+   other engine is ABSENT.
+3. **`JUMPBOX_IMAGE ?= vks-jumpbox:$(JUMPBOX_OS)` is not engine-qualified** — building photon+podman then
+   photon+docker overwrites the same tag, so a matrix runs whichever was built last for BOTH legs and
+   reports two engines from one image. Must become `…:$(JUMPBOX_OS)-$(JUMPBOX_ENGINE)`. Fix this FIRST.
+4. **The CA must be RED-PROVEN load-bearing** (no-CA ⇒ x509 error; +CA ⇒ pass; −CA ⇒ x509 again). Docker
+   MERGES `certs.d` with the system store, so a CA that was *already* trusted would let the harness
+   publish a "CA method" that was never actually exercised.
+
+Anti-fake assertions per leg: **rootful** — `id -u != 0`, the un-sudo'd write to `/etc/docker/certs.d`
+must fail EACCES, and `engine_sudo_calls == 1`. **rootless** — `ps -o user=` on the dockerd PID (the
+process owner is ground truth; `SecurityOptions` is derived), `DockerRootDir` under `$HOME`, `DOCKER_HOST`
+on the user's own socket, `engine_sudo_calls == 0`. **All** — `docker info {{.Name}}` == the container
+hostname, never the host's daemon.
+
+Ubuntu is the hard OS and it is a **bootstrap-policy decision, not a harness detail**: `docker.io` ships
+no rootlesskit and hides `dockerd-rootless.sh` in `/usr/share/docker.io/contrib/` (off PATH), so either
+add Docker's third-party apt repo + GPG key (a real ask for an air-gapped lab box) or use distro packages
+and point at the contrib path explicitly. Photon is the EASY one — `tdnf install docker docker-rootless
+rootlesskit` — which inverts the usual assumption and belongs in the doc.
+
+### On the adversaries — they will LOAD; nothing FORCES me to use them
+
+Both `.claude/agents/*.md` are committed, so they are dispatchable from turn one (unlike this session,
+where `docker-adversary` was written mid-session and came back `Agent type not found`). The
+`subagent-readonly-gate.py` hook is committed and wired, so an adversary that tries to `git commit`/`push`
+is blocked — which this repo needed after one of them opened a PR unbidden.
+
+But **RULE ZERO is prose**, and prose has already failed here: it was loaded this session and I still made
+unilateral pivots (a dind→host-native switch, a Dockerfile layout, a whole harness) that the adversary then
+demolished. By this repo's own doctrine that should become a gate — and **there is no honest gate to
+build**: a design decision leaves no artefact to grep at the moment it is made. A `SessionStart` hook
+re-injecting RULE ZERO would be decoration (CLAUDE.md already loads it; the failure was skipping the rule
+under momentum, not being ignorant of it), and shipping a fake gate is the exact pattern this session spent
+itself killing. So this is recorded as an **acknowledged gap**, not a solved problem. The tripwire is the
+sentence *"I decided X on my own"* — and the control that actually worked, every time, was the owner asking
+*"did you run that past the adversary?"*
+
 ### Container engine — SETTLED, and the doc is `docs/decisions/container-engine-support.md`
 
 Measured against the KinD Harbor (login → pull → build → push → `crane validate --remote`):
