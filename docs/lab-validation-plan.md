@@ -243,7 +243,7 @@ kubectl get ns
 
 ### 9. Produce `$ARGOCD_KUBECONFIG` · CHEAP · ⚠️ UNVERIFIED
 
-**Why:** the artifact the whole cross-cluster design consumes. Its script carries the *second* contradictory `vcf` shape **and** an undocumented requirement: it FATALs unless `VKS_CA_CERT_FILE` or `VKS_INSECURE_SKIP_TLS_VERIFY=1` is set — **which the doc never tells you**.
+**Why:** the artifact the whole cross-cluster design consumes. Its script carries the *second* contradictory `vcf` shape **and** an undocumented requirement: it FATALs unless `VKS_CA_CERT_FILE` or `VKS_INSECURE_SKIP_TLS_VERIFY` is set. (The value used to have to be exactly `1` here while `30-vks-login.sh` demanded `true` and `.env.example` documented `true` — so setting the DOCUMENTED value still failed. One truthiness rule now: `1|true|yes|on`.)
 **Where:** jump box → **Supervisor**. Writes one file under `./secrets/`.
 **Who needs it:** BOTH.
 **We then:** document the `VKS_CA_CERT_FILE` requirement the runbook never mentions, and — if the CLI writes to `~/.kube/config` instead — make the script extract the context rather than trust the flag.

@@ -243,7 +243,7 @@ make harbor-robot     # → secrets/harbor-robot.env (0600, never printed)
 
 **Expect:** a `robot$vks-cicd` account scoped to the `cicd` + `apps` projects.
 
-`make mirror` creates those projects (public by default). Private is fine too — set
+`make harbor-robot` (and `make mirror`) create those projects if you may — public by default. Private is fine too — set
 `HARBOR_PUBLIC_PROJECTS=false`; `make gitops` creates the `harbor-pull` secret in every app namespace
 either way, and `make check-pull-secret-alignment` gates that the Deployment asks for the secret the
 flow actually creates.
