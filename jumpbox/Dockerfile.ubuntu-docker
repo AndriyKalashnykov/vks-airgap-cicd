@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1
+# jumpbox/Dockerfile.ubuntu-docker — an Ubuntu jump box running ROOTLESS DOCKER, for the engine matrix
+# (`make jumpbox JUMPBOX_OS=ubuntu JUMPBOX_ENGINE=docker`). The podman counterpart is Dockerfile.ubuntu.
+#
+# ONE ENGINE PER IMAGE — and it is ASSERTED, not assumed. container_engine() (lib/os.sh) prefers podman
+# whenever podman is present, so an image carrying BOTH engines would silently run PODMAN on the "docker"
+# leg of the matrix and report a green that measured the wrong engine. The RUN below fails the build if
+# podman is here at all.
+#
+# NON-ROOT ON PURPOSE. A dind image that runs as root makes the sudo column — the entire deliverable of
+# the engine matrix — VACUOUS: as root nothing escalates, and the un-sudo'd write into /etc/docker/certs.d
+# succeeds anyway, so the harness would print sudo=NO for a path that genuinely costs one. (lib/engine.sh
+# refuses to print a sudo verdict at uid 0 for exactly this reason.) We run as `vks`, like the podman
+# images, so the measurement is real.
+#
+# UBUNTU 26.04, NOT 24.04, AND THAT IS LOAD-BEARING: docker.io is version 29.1.3 on both, but only 26.04's
+# deb ships the rootless helper (in /usr/share/docker.io/contrib/, OFF PATH — `make deps` symlinks it).
+# 24.04's deb ships ZERO rootless files, so rootless docker there would need download.docker.com, a
+# third-party repo we refuse to add to a jump box. (`make bootstrap-engine-test` covers 24.04 and asserts
+# we DISCLOSE that instead of silently adding the repo.)
+FROM ubuntu:26.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+# Bootstrap set ONLY — the engine's own rootless prerequisites (rootlesskit, uidmap, dbus-user-session,
+# slirp4netns, fuse-overlayfs) are deliberately NOT pre-installed: installing them is `make deps`' job
+# (scripts/00-install-prereqs.sh), and pre-baking them here would make the stage-1 run hit "already the
+# newest version", exit 0, and INSTALL NOTHING — so the docker path of the bootstrap, the very thing this
+# leg exists to exercise, would never execute. Same discipline as Dockerfile.ubuntu's omission of the
+# podman Recommends.
+# hadolint ignore=DL3008
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl git openssh-client make tar gzip sudo iproute2 procps \
+      docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ! command -v podman >/dev/null 2>&1 || { echo "FATAL: podman is present in a DOCKER image — container_engine() would prefer it and this leg would silently measure the WRONG engine"; exit 1; }
+
+RUN groupadd vks && useradd -g vks -m -s /bin/bash vks && \
+    printf 'vks:100000:65536\n' > /etc/subuid && \
+    printf 'vks:100000:65536\n' > /etc/subgid && \
+    printf 'vks ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/vks && chmod 0440 /etc/sudoers.d/vks
+
+# XDG_RUNTIME_DIR must exist and be writable by vks BEFORE dockerd-rootless.sh runs (on a real VM systemd
+# creates it; in a container we must). DERIVE the uid — do NOT hardcode 1000: ubuntu:26.04 ships a default
+# `ubuntu` user that already holds 1000, so vks lands on 1001, and a hardcoded /run/user/1000 is unwritable.
+RUN uid="$(id -u vks)" && install -d -o vks -g vks -m 0700 "/run/user/${uid}"
+
+USER vks
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN curl -fsSL https://mise.run | sh
+ENV PATH="/home/vks/.local/bin:/home/vks/.local/share/mise/shims:/usr/local/bin:${PATH}"
+WORKDIR /home/vks
+CMD ["bash"]

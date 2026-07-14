@@ -44,12 +44,31 @@ mapfile -t UNCOMMENTED < <(grep -oE '^[A-Z][A-Z0-9_]*=' "$ENV_EXAMPLE" | tr -d '
 # Anything added here needs the same treatment: an empirical check, and the reason written down.
 EXEMPT='APP_DEV_PORT|INGRESS_CONTROLLER'
 
-# (c) SELECTOR VARS — a var that chooses WHICH SYSTEM you are talking to must never be pinned here.
-# KUBECONFIG was UNCOMMENTED, so `make <target> KUBECONFIG=/other` was silently ignored: load_env
-# sources this file with `set -a` AFTER make put the override in the environment, and the sourced
-# value wins. You would run against the default cluster while believing you had switched. It also
-# made a two-cluster test undrivable. These must be COMMENTED, with their default applied in code.
-SELECTORS='KUBECONFIG|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_CONTEXT|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE'
+# (c) SELECTOR VARS — a var that chooses WHICH SYSTEM you are talking to (which cluster, which
+# registry, which trust anchor). KUBECONFIG was UNCOMMENTED, so `make <target> KUBECONFIG=/other` was
+# silently ignored and you ran against the default cluster believing you had switched.
+#
+# THERE ARE NOW **TWO** VALID WAYS TO BE SAFE, and the gate must accept both — or it lies:
+#   1. COMMENT it here (the default is applied in code), OR
+#   2. be SNAPSHOT-PROTECTED: load_env captures the caller's explicit value BEFORE sourcing and
+#      RESTORES it after, so the override wins even though this file carries a default. That is what
+#      makes `HARBOR_URL=<other> make mirror` work while .env.example still documents a sensible
+#      default (many scripts read HARBOR_URL with `:?`, so it cannot simply be left unset).
+#
+# So the invariant is: EVERY selector is commented OR in load_env's snapshot list. Nothing else passes.
+#
+# THE PROTECTED LIST IS DERIVED FROM lib/os.sh, NOT COPIED. A second hand-typed list is exactly the
+# enumerated-list rot this repo keeps getting bitten by: it would drift the first time someone adds a
+# selector to load_env and not here, and the gate would then reject a variable that is, in fact, safe.
+SELECTORS='KUBECONFIG|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_CONTEXT|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_CA_FILE'
+
+# Read the snapshot list out of load_env itself: `for _sel in A B C ...; do`
+PROTECTED="$(sed -n 's/^[[:space:]]*for _sel in \(.*\); do$/\1/p' "${REPO_ROOT}/scripts/lib/os.sh" | head -1)"
+[ -n "$PROTECTED" ] || die "cannot find load_env's selector snapshot list in lib/os.sh (did it move?) —
+  refusing to guess: this gate would then either pass everything or reject safe variables."
+log_info "load_env snapshot-protects: ${PROTECTED}"
+
+is_protected() { case " $PROTECTED " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 rc=0
 checked=0
@@ -57,13 +76,18 @@ for v in "${UNCOMMENTED[@]}"; do
   [[ "$v" =~ ^(${EXEMPT})$ ]] && continue
   checked=$((checked + 1))
 
-  # (c) a SELECTOR var pinned uncommented -> a per-run override can never win.
+  # (c) a SELECTOR var pinned uncommented -> the override loses, UNLESS load_env restores it.
   if [[ "$v" =~ ^(${SELECTORS})$ ]]; then
-    log_error "CLOBBER: '${v}' is UNCOMMENTED in .env.example, but it SELECTS WHICH CLUSTER/SYSTEM you talk to."
-    log_error "    load_env sources this file with 'set -a' AFTER a per-run override is in the environment,"
-    log_error "    so 'make <target> ${v}=...' would be SILENTLY IGNORED — you would run against the default"
-    log_error "    while believing you had switched. Comment it out; apply the default in code."
-    rc=1
+    if is_protected "$v"; then
+      log_info "  ok  '${v}' is uncommented but SNAPSHOT-PROTECTED by load_env — a per-run override survives"
+    else
+      log_error "CLOBBER: '${v}' is UNCOMMENTED in .env.example, but it SELECTS WHICH CLUSTER/SYSTEM you talk to,"
+      log_error "    and load_env does NOT snapshot-protect it. load_env sources this file with 'set -a' AFTER a"
+      log_error "    per-run override is in the environment, so 'make <target> ${v}=...' is SILENTLY IGNORED —"
+      log_error "    you would run against the default while believing you had switched."
+      log_error "    Fix: comment it out (default in code), or add it to load_env's selector snapshot list."
+      rc=1
+    fi
   fi
 
   # (a) DYNAMIC fallback in any script: ${VAR:-$(...)} or ${VAR:-${OTHER}}
@@ -101,6 +125,16 @@ for v in "${UNCOMMENTED[@]}"; do
   ovr2="$(grep -rlE "^[[:space:]]*${v}=(\"[^\"]*\"|'[^']*'|[^[:space:]\"']+)([[:space:]]+[^[:space:]=#]|[[:space:]]*\\\\$)" \
             "${REPO_ROOT}/scripts" 2>/dev/null | xargs -r -n1 basename | tr '\n' ' ')"
   [ -n "$ovr2" ] && ovr="${ovr}${ovr2}"
+  # SNAPSHOT-PROTECTED vars are exempt from (b) for the same reason as (c): load_env restores the
+  # caller's explicit value AFTER sourcing, so a per-run override DOES win. Without this, the gate
+  # false-flags HARBOR_URL and cites `os.sh` as the evidence — where the only match is load_env's OWN
+  # restore line (`export "$k=$val"` reconstructing `HARBOR_URL=...`). A gate that flags the mechanism
+  # that makes the variable safe is a gate arguing with itself, and the only way to satisfy it would be
+  # to DELETE the protection.
+  if [ -n "$ovr" ] && is_protected "$v"; then
+    log_info "  ok  '${v}' is passed as a per-run override AND snapshot-protected by load_env — the override wins"
+    ovr=""
+  fi
   if [ -n "$ovr" ]; then
     log_error "CLOBBER: '${v}' is UNCOMMENTED in .env.example, but it is passed as a PER-RUN OVERRIDE"
     log_error "    in: ${ovr}"

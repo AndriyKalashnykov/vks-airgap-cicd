@@ -42,11 +42,24 @@ export ENGINE_SUDO_COUNT_FILE
 
 engine_sudo_calls() { cat "$ENGINE_SUDO_COUNT_FILE" 2>/dev/null || printf '0'; }
 
+# AT uid 0 THE SUDO COLUMN IS NOT MEASURABLE — IT IS NOT "NO".
+#
+# As root, `engine_sudo` performs no escalation (there is nothing to escalate to) and the un-sudo'd write
+# into /etc/docker/certs.d SUCCEEDS. So a harness run as root reports the rootful path as `sudo=NO` — which
+# is precisely the lie this library was written after (the counter that died in a subshell and printed
+# sudo=NO while sudo was prompting). A different mechanism, the identical false claim.
+#
+# The old comment here even PRE-COMMITTED to the lie: it said "(the jump-box containers run as root)". They
+# do not — jumpbox/Dockerfile.{ubuntu,photon} both end `USER vks`. Had a root-running image ever been added,
+# the sudo row would have silently inverted with nothing to catch it.
+#
+# So: measuring is only meaningful as a NON-ROOT user, and the harness must SAY SO rather than print a
+# number it did not earn. Callers that publish the sudo column MUST call engine_sudo_measurable first.
+engine_sudo_measurable() { [ "$(id -u)" -ne 0 ]; }
+
 # engine_sudo — every escalation goes through here so it is COUNTED, never silent. Works in a subshell.
 engine_sudo() {
-  # Count ACTUAL ESCALATIONS. Already root (the jump-box containers run as root) => no escalation
-  # happened, and reporting sudo=YES there would be as much a lie as the sudo=NO we started with.
-  if [ "$(id -u)" -eq 0 ]; then "$@"; return $?; fi
+  if [ "$(id -u)" -eq 0 ]; then "$@"; return $?; fi   # no escalation happened; the caller must not call this "sudo=NO" (see above)
   local n; n="$(engine_sudo_calls)"
   printf '%s' "$(( n + 1 ))" > "$ENGINE_SUDO_COUNT_FILE"
   sudo "$@"
@@ -57,11 +70,27 @@ engine_sudo() {
 # `docker info` is asked for the field DIRECTLY (--format), never piped to `grep -q`: under
 # `set -o pipefail` a grep that exits early SIGPIPEs docker and the pipeline reports failure. (This repo
 # has been bitten by that exact shape; see rules/common/coding-style.md.)
+#
+# IT MUST FAIL CLOSED. The first version did `sec="$(docker info ... || true)"` and then treated ANY
+# non-rootless answer as `docker-rootful` — including the EMPTY answer you get when `docker info` itself
+# FAILED (daemon not up yet, DOCKER_HOST not exported, socket not ready). A rootless box caught one second
+# early was therefore classified ROOTFUL, and the caller (engine_trust_ca) went on to `engine_sudo install`
+# into the operator's /etc/docker/certs.d — a real, unnecessary escalation, a stale trust anchor left on
+# their box, and a precondition row reporting `sudo=YES` for a path that needs none. The sudo column IS the
+# deliverable here, so the classification that produces it may not be a fall-through.
+#
+# ROOTFUL IS A POSITIVE DETERMINATION: we only conclude it when the daemon ANSWERED and did not say rootless.
 engine_mode() {
   local eng="${1:?engine}"
   [ "$eng" = podman ] && { printf 'podman'; return 0; }
-  local sec
-  sec="$(docker info --format '{{range .SecurityOptions}}{{.}} {{end}}' 2>/dev/null || true)"   # docker-ok: only reached when the OPERATOR chose CONTAINER_ENGINE=docker; the air-gap flow is podman + crane.
+  local sec rc=0
+  sec="$(docker info --format '{{range .SecurityOptions}}{{.}} {{end}}' 2>/dev/null)" || rc=$?   # docker-ok: only reached when the OPERATOR chose CONTAINER_ENGINE=docker; the air-gap flow is podman + crane.
+  if [ $rc -ne 0 ]; then
+    die "cannot classify the docker daemon: \`docker info\` failed (rc=$rc).
+  This is NOT 'assume rootful' — guessing rootful makes us sudo-install a CA into your /etc/docker/certs.d.
+  Start the daemon (rootful: 'sudo systemctl start docker' · rootless: 'systemctl --user start docker'),
+  or use podman (the default, no daemon, no sudo): unset CONTAINER_ENGINE"
+  fi
   case "$sec" in
     *rootless*) printf 'docker-rootless' ;;
     *)          printf 'docker-rootful'  ;;

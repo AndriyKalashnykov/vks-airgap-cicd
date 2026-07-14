@@ -29,41 +29,64 @@ pkg_refresh
 # findutils (`find`) is not in Photon's base image and is used by the archive-extraction in
 # scripts/01-install-vcf-clis.sh (and generally handy); tar/gzip cover the same minimal-image gaps.
 pkg_install ca-certificates curl git jq tar gzip findutils
-# podman is the default container engine (build/push the Maven builder, render
-# diagrams); docker also works if already present. Best-effort — some minimal
-# images lack it in the default repos.
-pkg_install podman || log_warn "podman unavailable via package manager; install podman or docker manually"
-# Rootless podman needs more than the podman binary: an OCI runtime (crun), the userns-mapping
-# setuid helpers newuidmap/newgidmap (pkg `uidmap`), and a rootless network backend
-# (slirp4netns) — without them a `podman build` of the short-named Maven builder base fails.
-# WHICH of these podman pulls in differs by distro (verified on photon:5.0 / ubuntu:24.04), so
-# install only the gaps explicitly. All steps are best-effort + idempotent:
-#   • Photon (tdnf): pulls uidmap + slirp4netns + fuse-overlayfs WITH podman, but NOT crun.
-#   • Ubuntu (apt):  pulls crun (a hard Depends) but uidmap + the rootless network backends (pasta,
-#     via `passt`, and slirp4netns) are podman *Recommends*, which lib/os.sh's --no-install-recommends
-#     drops — so rootless breaks ("newuidmap: command not found"; or on podman 5.x / Ubuntu 26.04
-#     "could not find pasta") until we add them back.
-# Photon also ships only a COMMENTED unqualified-search-registries example (a `podman build` of a
-# short-named base then fails "short-name … did not resolve"), so add an active one if none is set.
-if have podman; then
-  have crun || pkg_install crun || log_warn "crun unavailable — rootless podman builds may fail (install crun manually)"
-  # Ubuntu/Debian only: re-add the podman Recommends that --no-install-recommends dropped. tdnf
-  # already pulls these with podman, so this is apt-only (gated to keep it a no-op on Photon).
-  #   uidmap      — newuidmap/newgidmap for the userns mapping (all podman versions).
-  #   passt       — provides `pasta`, the DEFAULT rootless net backend on podman 5.x (Ubuntu 26.04);
-  #                 without it a rootless build dies "could not find pasta … executable not found".
-  #   slirp4netns — the default rootless net backend on podman 4.x (Ubuntu 24.04) + the fallback.
-  # Installing BOTH backends keeps rootless podman working across the podman 4.x <-> 5.x split.
-  if [ "$(pkg_mgr)" = "apt-get" ]; then
-    pkg_install uidmap passt slirp4netns || log_warn "uidmap/passt/slirp4netns unavailable — rootless podman may fail (install them manually)"
-  fi
-  # Match only an ACTIVE (uncommented) setting — Photon's default registries.conf ships a
-  # commented `# unqualified-search-registries = […]` example that a loose grep would match.
+# ---- container engine -----------------------------------------------------
+# THE INVARIANT, and it is the whole reason this block is shaped the way it is:
+#
+#     DOCKER IS NEVER *REQUIRED*. It is only ever installed because the operator ASKED for it
+#     (CONTAINER_ENGINE=docker). With CONTAINER_ENGINE unset, this script installs PODMAN AND NOTHING
+#     ELSE — a jump box that ran `make deps` has no docker daemon, and the air-gap flow (crane + podman)
+#     does not want one.
+#
+# The package list is NOT written here — it comes from `engine_packages` (lib/os.sh), a PURE function
+# that prints names and installs nothing. That is what lets scripts/test-container-engine.sh (check 7)
+# EXECUTE it and assert the list offline, in both directions, instead of grepping for a docker
+# invocation it structurally cannot see.
+ENGINE_CHOICE="$(engine_choice)"
+if [ "$ENGINE_CHOICE" = docker ]; then
+  log_warn "CONTAINER_ENGINE=docker — installing DOCKER instead of podman, because you asked."
+  log_warn "  podman remains the default and the recommended engine: it is daemonless, so it needs NO"
+  log_warn "  sudo to trust a self-signed registry (--cert-dir, per command). See 'make engine-check'."
+else
+  log_info "container engine: podman (the default — daemonless, sudo-free registry trust)"
+fi
+# shellcheck disable=SC2046  # word-splitting the package list is exactly the intent here
+pkg_install $(engine_packages "$ENGINE_CHOICE" "$(pkg_mgr)") \
+  || log_warn "some ${ENGINE_CHOICE} packages were unavailable via the package manager — run 'make engine-check'"
+
+# Photon ships only a COMMENTED unqualified-search-registries example, so a `podman build` of a
+# short-named base fails "short-name … did not resolve". Match only an ACTIVE (uncommented) setting —
+# a loose grep matches the commented example and wrongly concludes it is already configured.
+if [ "$ENGINE_CHOICE" = podman ] && have podman; then
   if ! grep -qsE '^[[:space:]]*unqualified-search-registries' /etc/containers/registries.conf 2>/dev/null; then
     log_info "configuring podman unqualified-search-registries = [\"docker.io\"]"
     printf 'unqualified-search-registries = ["docker.io"]\n' \
       | $SUDO tee -a /etc/containers/registries.conf >/dev/null \
       || log_warn "could not write /etc/containers/registries.conf — short image names may not resolve"
+  fi
+fi
+
+# UBUNTU ROOTLESS-DOCKER RELEASE SPLIT (ran-it, 2026-07-14). docker.io is version 29.1.3 on BOTH 24.04
+# and 26.04, but only 26.04's deb actually SHIPS the rootless helper — and it hides it in
+# /usr/share/docker.io/contrib/, which is OFF PATH. 24.04's deb ships ZERO rootless files.
+#
+# WE DO NOT ADD A THIRD-PARTY APT REPO TO SOMEONE ELSE'S JUMP BOX. Getting rootless docker on 24.04
+# means download.docker.com + a GPG key (docker-ce-rootless-extras), which on a real corporate jump box
+# is a proxy-allowlist / security-review item an admin may simply refuse. So we tell the truth instead:
+# there, docker is ROOTFUL-ONLY, and rootful docker costs a SUDO PER REGISTRY to trust a self-signed
+# Harbor (root-owned /etc/docker/certs.d; the `docker` group grants SOCKET access, not write access to
+# /etc). podman costs none, on every box. Photon needs none of this: it puts dockerd-rootless.sh in
+# /usr/bin, on PATH, from its own repos.
+if [ "$ENGINE_CHOICE" = docker ] && [ "$(pkg_mgr)" = "apt-get" ]; then
+  if ! have dockerd-rootless.sh && [ -x /usr/share/docker.io/contrib/dockerd-rootless.sh ]; then
+    log_info "linking dockerd-rootless.sh onto PATH (Ubuntu hides it in /usr/share/docker.io/contrib)"
+    $SUDO ln -sf /usr/share/docker.io/contrib/dockerd-rootless.sh /usr/local/bin/dockerd-rootless.sh || true
+    $SUDO ln -sf /usr/share/docker.io/contrib/dockerd-rootless-setuptool.sh /usr/local/bin/dockerd-rootless-setuptool.sh || true
+  fi
+  if ! have dockerd-rootless.sh; then
+    log_warn "this Ubuntu's docker.io ships NO rootless helper (true on 24.04; 26.04+ ships it)."
+    log_warn "  => docker here is ROOTFUL-ONLY, which costs a SUDO PER REGISTRY to trust a self-signed Harbor."
+    log_warn "  => podman needs no sudo at all, on any box. Reconsider: unset CONTAINER_ENGINE"
+    log_warn "  (We deliberately do NOT add download.docker.com to your apt sources.)"
   fi
 fi
 # The shellcheck linter is best-effort (dev/lint convenience; not required at runtime).

@@ -42,7 +42,23 @@ cd "$WORK"
 # Container engine — mirror the repo's CONTAINER_ENGINE (podman-preferred, docker fallback);
 # override with JUMPBOX_ENGINE. This harness targets the README's rootless-podman path.
 ENGINE="${JUMPBOX_ENGINE:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}"
+# EXPORT IT. This file is a SECOND engine chooser: `make deps` and 16-engine-trust-check inside the box
+# call container_engine() (lib/os.sh), a THIRD one. On a one-engine image the two agree by luck; the day
+# an image carries both, the harness would print engine=docker in its banner while the work underneath
+# ran on podman — a leg reporting an engine it never used. One choice, exported, so they cannot diverge.
+export CONTAINER_ENGINE="$ENGINE"
 echo "### jump box: ${PRETTY_NAME} · user=$(whoami) · engine=${ENGINE} ($(command -v "$ENGINE")) ###"
+
+# ASSERT the image is single-engine. The banner above is only honest if the OTHER engine is absent:
+# container_engine() prefers podman whenever it is present, so a docker leg on a both-engines image
+# silently runs podman and looks green. Fail loudly rather than measure the wrong engine.
+_other="podman"; [ "$ENGINE" = podman ] && _other="docker"
+if command -v "$_other" >/dev/null 2>&1; then
+  echo "FATAL: this image has BOTH engines (${ENGINE} and ${_other}). A matrix leg must run the engine it" >&2
+  echo "       claims: container_engine() prefers podman when present, so a 'docker' leg here would run" >&2
+  echo "       PODMAN and report a green that measured the wrong engine. Build a single-engine image." >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # MODE=airgap-half — the AIR-GAP half of the two-box sneakernet (make e2e-sneakernet).
@@ -104,6 +120,28 @@ for t in kubectl helm kustomize yq jq crane tkn argocd; do
 done
 
 echo "### 2/4 rootless ${ENGINE} build + run smoke, and crane (mirror engine, mise) ###"
+# DOCKER LEGS: bring up a ROOTLESS daemon, as the `vks` user, and MEASURE that it really is rootless.
+# (podman is daemonless — nothing to start, which is precisely why it is the default.)
+if [ "$ENGINE" = docker ]; then
+  _uid="$(id -u)"                                # derived; it is 1001 on ubuntu:26.04 (a default `ubuntu`
+  export XDG_RUNTIME_DIR="/run/user/${_uid}"     # user already holds 1000) — never hardcode it
+  export DOCKER_HOST="unix://${XDG_RUNTIME_DIR}/docker.sock"
+  command -v dockerd-rootless.sh >/dev/null 2>&1 \
+    || { echo "FATAL: dockerd-rootless.sh not on PATH — 'make deps' should have installed/symlinked it"; exit 1; }
+  echo "starting ROOTLESS dockerd as $(whoami) (uid $(id -u))"
+  setsid dockerd-rootless.sh --storage-driver=fuse-overlayfs >/tmp/dockerd.log 2>&1 &
+  for _ in $(seq 1 45); do docker info >/dev/null 2>&1 && break; sleep 1; done   # docker-ok: this harness's engine IS docker on this leg, by explicit operator choice (JUMPBOX_ENGINE=docker)
+  docker info >/dev/null 2>&1 || { echo "FATAL: rootless dockerd did not start:"; tail -20 /tmp/dockerd.log; exit 1; }  # docker-ok: same
+  # MEASURE it — do not assert it. The PROCESS OWNER is ground truth; SecurityOptions is derived from it.
+  dpid="$(pgrep -x dockerd | head -1)"
+  downer="$(ps -o user= -p "$dpid" | tr -d ' ')"
+  droot="$(docker info --format '{{.DockerRootDir}}')"   # docker-ok: same
+  echo "  dockerd owner    = ${downer}   (must NOT be root — else the sudo column is unmeasurable)"
+  echo "  DockerRootDir    = ${droot}"
+  echo "  docker info Name = $(docker info --format '{{.Name}}')  (must be THIS container: $(hostname))"  # docker-ok: same
+  [ "$downer" != root ] || { echo "FATAL: dockerd is running as ROOT — this leg would report sudo=NO for a path that costs one"; exit 1; }
+  case "$droot" in "$HOME"/*) : ;; *) echo "FATAL: DockerRootDir ${droot} is not under \$HOME — that is not a rootless daemon"; exit 1 ;; esac
+fi
 ctx="$(mktemp -d)"
 # A short-named base (alpine) exercises unqualified-search-registries resolution + a rootless
 # overlay build — the exact things Photon's podman lacks by default — on either OS variant.
@@ -127,6 +165,26 @@ harbor_code="$(curl -s -o /dev/null -w '%{http_code}' "${harbor_ca_args[@]}" --m
   "${harbor_scheme}://${HARBOR_URL}/api/v2.0/systeminfo" 2>/dev/null || echo 000)"
 echo "Harbor (${harbor_scheme}://${HARBOR_URL}) systeminfo -> HTTP ${harbor_code}"
 [ "$harbor_code" = "200" ] || { echo "ERROR: Harbor not reachable from the jump box over ${harbor_scheme}"; exit 1; }
+
+# --- THE ENGINE ACTUALLY PUSHING TO HARBOR -------------------------------------------------------
+# Until now this harness NEVER exercised an engine against Harbor: it built from alpine:3 on docker.io
+# and merely CURLED Harbor. So the disputed step — "can this engine, on this OS, trust a self-signed
+# registry and push to it" — was untested for docker AND for podman. curl proves the network and the CA
+# for *curl*; it proves nothing about what the ENGINE's daemon (or podman's per-command --cert-dir) does.
+#
+# 16-engine-trust-check.sh is the whole registry-TLS surface — login + pull + build + push + a `crane
+# validate --remote` pull-back — in ~60s, pushing a UNIQUE tag. We run THAT, not `make builder-image`:
+# builder-image would take ~20 min baking a Maven cache (which tests `mvn` reaching Maven Central inside
+# the build, not the engine) and would overwrite the SHARED builder tag the real pipeline consumes, from
+# four matrix legs, leaving the infra project in an unattributable state.
+if [ -n "${HARBOR_PASSWORD:-}" ]; then
+  echo "### 5/5 ${ENGINE} -> Harbor: login + pull + build + push + verify (the disputed step) ###"
+  make engine-trust-check
+else
+  echo "### 5/5 SKIPPED — no HARBOR_PASSWORD in this container, so the engine never touches Harbor."
+  echo "###      That is the ONE claim this harness exists to prove. Do not read this run as proof."
+  exit 1
+fi
 
 # 4/4 — OPTIONAL: install the VCF/VKS lab CLIs (argocd-vcf + vcf + plugins) when the operator
 # mounts the licensed artifacts (VCF_CLI_SRC_DIR). Proves the install targets work on THIS OS.

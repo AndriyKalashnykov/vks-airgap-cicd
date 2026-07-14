@@ -35,6 +35,7 @@ curl|required|Harbor + UI readiness probes
 git|required|seed the Gitea repos, tag write-back
 openssl|required|mint the self-signed Harbor/ArgoCD certs
 argocd|optional|REPORT the client version in argocd-preflight. NOT needed to install or register: bcrypt runs in-pod, registration uses kubectl
+vcf|lab-only|Supervisor login + workload-cluster kubeconfig (VKS_AUTH_METHOD=vcf). Installed by 'make install-vcf-clis' from operator-supplied licensed archives; the KinD stand-in does not need it
 tkn|optional|inspect PipelineRuns by hand; the flow uses kubectl
 docker|kind-only|the KinD stand-in (cloud-provider-kind + node exec) requires docker specifically
 kind|kind-only|create the local stand-in cluster

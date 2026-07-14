@@ -60,9 +60,24 @@ overlay is **archived, not deleted** — it may hold that cluster's only passwor
 2. **Supervisor Management → Services → Add New Service** → upload `harbor-service-<ver>.yml`.
 3. **Edit `harbor-data-values-<ver>.yml`:** `hostname` (the Harbor **FQDN**) · `harborAdminPassword` · `secretKey` (**exactly 16 chars**) · `database.password` · `core.xsrfKey` (**32 chars**) · the five storage classes · and the ingress toggle (`enableContourHttpProxy: true`, or `enableNginxLoadBalancer: true`). **Leave `tlsCertificate` alone** — cert-manager self-issues, and the `managed-by: vmware-vRegistry` label is required for VKS trust.
 4. **Actions → Manage Service** → pick version + Supervisor → paste the values → **Finish**.
-5. **Map the FQDN:** `kubectl get svc -n <harbor-ns>` (or the Contour Envoy Service) → get the ingress IP → add a DNS record, or an `/etc/hosts` entry on the jump box.
+5. **Map the FQDN — with a real DNS record. An `/etc/hosts` entry on the jump box is NOT an alternative.**
+   `kubectl get svc -n <harbor-ns>` (or the Contour Envoy Service) → take the ingress IP → **create a DNS
+   record that the GUEST CLUSTER'S NODES can resolve.**
 
-**Expect:** Harbor's UI answers at the FQDN you chose.
+   > **Why this is not a nit.** The jump box is not the only thing that pulls from Harbor — every
+   > **kubelet/containerd on the guest cluster** pulls each workload image from `$HARBOR_URL`, and they
+   > cannot see the jump box's `/etc/hosts`. With only a hosts entry, `make mirror` **succeeds** (the jump
+   > box resolves it fine) and then every workload `ImagePullBackOff`s much later, at the far end of the
+   > pipeline, with an error that points at the image, not at DNS.
+   >
+   > **No DNS available?** Then use Harbor's **LB IP as `HARBOR_URL`** — but the cert must then carry an
+   > **IP SAN**, not just a DNS SAN. Since Go 1.15 a certificate with no matching SAN is rejected *even by
+   > a client that trusts the CA*, and Go 1.17 removed the escape hatch — so a DNS-only cert on an IP URL
+   > fails in crane, podman, containerd and Kaniko alike. (Our KinD stand-in mints `SAN=IP` for exactly
+   > this reason.)
+
+**Expect:** Harbor's UI answers at the FQDN you chose, **and** a pod on the guest cluster can resolve it:
+`kubectl run dns-probe --rm -it --restart=Never --image=<mirrored-busybox> -- nslookup <harbor-fqdn>`
 
 **→ now set in `.env`:**
 
@@ -137,9 +152,22 @@ ARGOCD_TRACK_BRANCH=main
 Create a vSphere Namespace, provision a VKS cluster in it, then:
 
 ```bash
+# SWITCH THE vcf CONTEXT TO THE WORKLOAD NAMESPACE FIRST. A2 left it pointed at the ArgoCD
+# instance's vSphere Namespace, where this cluster does not exist — without this line the next
+# command cannot see $VKS_CLUSTER_NAME and fails in a way that looks like the cluster is missing.
+vcf context use $VKS_CONTEXT_NAME:$VKS_NAMESPACE
+
 vcf cluster kubeconfig get $VKS_CLUSTER_NAME --export-file ./secrets/vks.kubeconfig
 kubectl --kubeconfig ./secrets/vks.kubeconfig get nodes -o wide
 ```
+
+> `$VKS_CONTEXT_NAME` is the name you gave the context in A2. `scripts/30-vks-login.sh` **requires** it
+> for `VKS_AUTH_METHOD=vcf`, so set it in `.env` alongside `$VKS_NAMESPACE` (the **workload** vSphere
+> Namespace — *not* the ArgoCD one).
+>
+> ⚠️ **`-n` MEANS DIFFERENT THINGS IN DIFFERENT `vcf` SUBCOMMANDS.** In `vcf package` it is a
+> **guest-cluster** namespace; in `vcf addon` it is the **vSphere Namespace** of the workload cluster.
+> Same flag, opposite meaning — never copy one invocation's `-n` into the other.
 
 **Expect:** nodes listed.
 
@@ -162,14 +190,21 @@ export KUBECONFIG=$PWD/secrets/vks.kubeconfig
 kubectl auth can-i create customresourcedefinitions.apiextensions.k8s.io   # Tekton needs this
 kubectl get storageclass                                                   # Gitea's PVC needs a DEFAULT
 kubectl get svc -A --field-selector spec.type=LoadBalancer                 # Gitea needs an LB VIP
-make psa-check                                                             # will PSA admit our pods?
+make psa-check                                                             # (see the caveat below)
 ```
 
-**Expect:** `yes` · one StorageClass marked `(default)` · a working LB provider · `psa-check` green.
+**Expect:** `yes` · one StorageClass marked `(default)` · a working LB provider · and `psa-check` printing
+**`measured 0 namespace(s) … PSA UNPROVEN`** — which is the *correct* answer here, and is **not** a pass.
 
-> **VKS enforces the `restricted` Pod Security Standard by default** (VKr v1.26+), which **rejects**
-> our Kaniko build pods unless their namespaces are labelled `baseline`. Our installers apply the
-> measured labels; `psa-check` proves the cluster will admit them.
+> **VKS enforces the `restricted` Pod Security Standard by default** (VKr v1.26+), which **rejects** our
+> Kaniko build pods unless their namespaces are labelled `baseline`. Our installers apply the measured
+> labels.
+>
+> **`psa-check` cannot prove that yet, and it will tell you so.** At this point none of our namespaces
+> exist, so there is nothing to admit and nothing to measure — a green here would be true *before any of
+> our code had run*, which is no evidence at all. The run that actually proves it is the one **after
+> `make platform`** (Step 5), and `psa-check` is wired into `make preflight` there. Re-run it then and
+> look for `PSA OK — … (N measured)`.
 
 ## Step 2 — Harbor's CA
 
@@ -208,7 +243,7 @@ make harbor-robot     # → secrets/harbor-robot.env (0600, never printed)
 
 **Expect:** a `robot$vks-cicd` account scoped to the `cicd` + `apps` projects.
 
-`make mirror` creates those projects (public by default). Private is fine too — set
+`make harbor-robot` (and `make mirror`) create those projects if you may — public by default. Private is fine too — set
 `HARBOR_PUBLIC_PROJECTS=false`; `make gitops` creates the `harbor-pull` secret in every app namespace
 either way, and `make check-pull-secret-alignment` gates that the Deployment asks for the secret the
 flow actually creates.
@@ -220,10 +255,12 @@ A3 gave you the guest one. This gives you the Supervisor one.
 
 ```bash
 make fetch-argocd-kubeconfig    # interactive: prompts for your password
-make argocd-preflight           # versions + a TOPOLOGY OK/MISMATCH verdict
+make argocd-preflight           # CLI vs SERVER versions + is ArgoCD even able to deploy to your cluster?
 ```
 
-**Expect:** `$ARGOCD_KUBECONFIG` is written, and `argocd-preflight` prints **TOPOLOGY OK**.
+**Expect:** `$ARGOCD_KUBECONFIG` is written, and `argocd-preflight` prints **`PREFLIGHT OK`** and
+**`ArgoCD is OFF-CLUSTER (the real-lab shape)`** — the line that actually proves the two-cluster topology
+was detected. (It does *not* print "TOPOLOGY OK"; that string does not exist.)
 
 > **Confirming `ARGOCD_NAMESPACE`:** it is the vSphere Namespace from **A2**. If you want to verify it,
 > query the **Supervisor** — ArgoCD is **not** in your guest cluster, so a `kubectl get pods -A` against
@@ -233,12 +270,26 @@ make argocd-preflight           # versions + a TOPOLOGY OK/MISMATCH verdict
 > kubectl --kubeconfig $ARGOCD_KUBECONFIG get pods -A | grep argocd-application-controller
 > ```
 
-## Step 5 — install everything, and verify
+## Step 5 — prove your `.env` works, THEN install
 
-**For:** the whole pipeline. `install-all` deliberately does **not** install Harbor or ArgoCD — you did that above.
+**For:** catching a wrong value in **seconds** instead of 20 minutes into the mirror. These three targets
+exist for exactly this and the runbook used to skip them.
+
+```bash
+make env-populate   # DISCOVER what is discoverable (Harbor/ArgoCD endpoints) instead of re-typing it
+make env-check      # presence gate: is every required value set? (fast, no network)
+make env-validate   # validity gate: does KUBECONFIG reach the cluster, and does Harbor really authenticate?
+```
+
+**Expect:** `env-check` → *all required values present*; `env-validate` → Harbor reachable **and
+authenticated over HTTPS with your CA**. `env-validate` is also the honest check on Step 2: if the CA you
+fetched does not actually verify Harbor, it fails **here**, not inside Kaniko an hour later.
+
+**Then install:**
 
 ```bash
 make install-all   # preflight → mirror → mirror-verify → builder-image → vks-login → platform → gitops
+make psa-check     # NOW it can measure something — expect `PSA OK — … (N measured)`, not `PSA UNPROVEN`
 make verify        # push a marked change → Tekton → Harbor → ArgoCD → the live app serves it
 ```
 
@@ -254,12 +305,22 @@ have not verified is not a mirror.
 
 ## Step 6 — access the UIs
 
-Harbor and ArgoCD: the FQDN / LB IP + credentials you set in A1/A2. For **Gitea** and the **app**,
-either use the ingress (Step 7) or port-forward:
+**For:** every URL and login for **this** context, without you re-typing a value you already set.
+
+```bash
+make creds-show
+```
+
+**Expect:** a table with Harbor, ArgoCD, Gitea, the Tekton dashboard, **and one row per app** — it is
+generated from `apps/registry.tsv`, so it lists *every* app the repo ships (today `javawebapp` **and**
+`gowebapp`), not just the one an example happened to name. It also prints the exact `/etc/hosts` line for
+the ingress hosts.
+
+Port-forward instead of the ingress if you prefer (works for any app in the registry):
 
 ```bash
 kubectl -n gitea port-forward svc/gitea-http 3000:3000
-kubectl -n javawebapp port-forward svc/javawebapp 18080:80
+kubectl -n <app> port-forward svc/<app> 18080:80     # <app>: any name in apps/registry.tsv
 ```
 
 ## Step 7 — ingress (optional)

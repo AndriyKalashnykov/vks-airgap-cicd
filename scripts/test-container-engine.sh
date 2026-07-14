@@ -157,6 +157,62 @@ check_impl scripts/jumpbox-run.sh  "jumpbox-run.sh JUMPBOX_ENGINE"
 [ "$impls" -eq 2 ] || bad "expected 2 non-os.sh engine implementations, found ${impls} — a new one appeared, or one moved (the gate must cover EVERY chooser)"
 ok "engine choosers covered: os.sh (checks 1-3) + ${impls} others"
 
+# 7. THE BOOTSTRAP'S PACKAGE LIST — MEASURED, not grepped.
+#
+#    Check 5 scans for docker INVOCATIONS at a command position. It is structurally blind to a docker
+#    DEPENDENCY: `pkg_install docker` matches none of its alternatives. So when the bootstrap became
+#    engine-aware, check 5 would have stayed GREEN while `make deps` started putting a docker daemon on
+#    every jump box — a gate going green on the very change it exists to forbid. (This repo has shipped
+#    that exact shape before: the verb-list gate that passed on the commit adding `docker info`.)
+#
+#    The fix is not a cleverer regex — it is to measure the thing that actually decides. engine_choice()
+#    and engine_packages() are PURE (they print; they install nothing), so we can EXECUTE them and assert
+#    the real package list, in both directions, offline.
+#
+#    THE INVARIANT: docker is never REQUIRED. It appears only because the operator asked by name.
+for mgr in apt-get tdnf; do
+  # CONTAINER_ENGINE UNSET = the default jump box. podman, and NOT ONE docker token.
+  def_eng="$(env -u CONTAINER_ENGINE /bin/bash -c '. scripts/lib/os.sh; engine_choice')"
+  def_pkgs="$(env -u CONTAINER_ENGINE /bin/bash -c ". scripts/lib/os.sh; engine_packages \"\$(engine_choice)\" $mgr")"
+  if [ "$def_eng" != podman ]; then
+    bad "default engine on ${mgr} is '${def_eng}', not podman — CONTAINER_ENGINE unset MUST mean podman"
+  elif printf '%s' "$def_pkgs" | grep -qE '(^| )(docker|docker\.io|docker-ce[a-z-]*|docker-rootless|rootlesskit)( |$)'; then
+    bad "DEFAULT bootstrap on ${mgr} would install a DOCKER package: '${def_pkgs}' — docker must NEVER be installed unless the operator asked (CONTAINER_ENGINE=docker)"
+  elif ! printf '%s' "$def_pkgs" | grep -qE '(^| )podman( |$)'; then
+    bad "DEFAULT bootstrap on ${mgr} does not install podman: '${def_pkgs}'"
+  else
+    ok "${mgr}: CONTAINER_ENGINE unset -> installs podman, ZERO docker packages (${def_pkgs})"
+  fi
+
+  # CONTAINER_ENGINE=docker = the operator asked. docker, and NOT podman (one engine, by choice).
+  dk_pkgs="$(CONTAINER_ENGINE=docker /bin/bash -c ". scripts/lib/os.sh; engine_packages \"\$(engine_choice)\" $mgr")"
+  if ! printf '%s' "$dk_pkgs" | grep -qE '(^| )(docker|docker\.io)( |$)'; then
+    bad "CONTAINER_ENGINE=docker on ${mgr} does not install docker: '${dk_pkgs}'"
+  elif printf '%s' "$dk_pkgs" | grep -qE '(^| )podman( |$)'; then
+    bad "CONTAINER_ENGINE=docker on ${mgr} ALSO installs podman ('${dk_pkgs}') — container_engine() prefers podman when present, so the box would silently run PODMAN while the operator believes they chose docker"
+  else
+    ok "${mgr}: CONTAINER_ENGINE=docker -> installs docker, NOT podman (${dk_pkgs})"
+  fi
+done
+
+# 7b. BACKSTOP: nobody may bypass engine_packages by naming an engine package literally.
+#     Without this, a future edit adding `pkg_install docker.io` straight into a script would satisfy
+#     nothing above (the pure functions would still look correct) and reinstate the bug.
+lit_offenders=""; lit_scanned=0
+for f in scripts/[0-9][0-9]-*.sh scripts/lib/*.sh; do
+  [ -f "$f" ] || continue
+  [ "$(basename "$f")" = os.sh ] && continue   # os.sh DEFINES engine_packages — the one file allowed to name them
+  lit_scanned=$((lit_scanned + 1))
+  if sed 's/#.*//' "$f" | grep -qE 'pkg_install[^|]*(^| )(podman|docker|docker\.io|docker-ce[a-z-]*|docker-rootless)( |$)'; then
+    lit_offenders="${lit_offenders} $(basename "$f")"
+  fi
+done
+if [ -z "$lit_offenders" ]; then
+  ok "no script pkg_installs an engine package literally in ${lit_scanned} scripts (the list comes from engine_packages, so the gate above can SEE it)"
+else
+  bad "script(s) pkg_install an engine package literally:${lit_offenders} — route it through engine_packages() or check 7 goes blind"
+fi
+
 if [ "$fail" = 0 ]; then
   echo "test-container-engine: OK"
   exit 0

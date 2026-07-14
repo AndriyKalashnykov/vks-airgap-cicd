@@ -68,7 +68,7 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     # context name AND the password, so neither ever touches argv/procfs (security.md:
     # secrets never in argv). The endpoint + username are non-secret.
     create_args=(--endpoint "https://${SUPERVISOR_HOST}" --username "$user" --auth-type basic)
-    if [ "${VKS_INSECURE_SKIP_TLS_VERIFY:-false}" = "true" ]; then
+    if is_true "${VKS_INSECURE_SKIP_TLS_VERIFY:-}"; then   # one truthiness rule, repo-wide (lib/os.sh)
       create_args+=(--insecure-skip-tls-verify)
     fi
 
@@ -103,7 +103,7 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
       --tanzu-kubernetes-cluster-namespace "$VKS_NAMESPACE" \
       --tanzu-kubernetes-cluster-name "$VKS_CLUSTER_NAME" \
       --vsphere-username "$VKS_USERNAME" \
-      --insecure-skip-tls-verify="${VKS_INSECURE_SKIP_TLS_VERIFY:-false}"
+      --insecure-skip-tls-verify="$(bool_word "${VKS_INSECURE_SKIP_TLS_VERIFY:-}")"
     ;;
 
   *)

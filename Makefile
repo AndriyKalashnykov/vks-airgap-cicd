@@ -243,28 +243,23 @@ vks-login: check-env ## Authenticate to VKS (VCF 9 + Supervisor) → writes KUBE
 	@$(SCRIPTS)/30-vks-login.sh
 
 .PHONY: fetch-harbor-ca
-fetch-harbor-ca: ## Fetch a self-signed lab Harbor's CA cert → HARBOR_CA_FILE (for HTTPS mirror/Kaniko trust)
-	@hostport="$$(printf '%s' "$(HARBOR_URL)" | sed -E 's#^https?://##; s#/.*##')"; \
-	 host="$${hostport%%:*}"; port="$${hostport##*:}"; [ "$$port" = "$$host" ] && port=443; \
-	 out="$(HARBOR_CA_FILE)"; mkdir -p "$$(dirname "$$out")"; \
-	 echo "fetching Harbor CA from $$host:$$port -> $$out"; \
-	 openssl s_client -connect "$$host:$$port" -showcerts </dev/null 2>/dev/null \
-	   | openssl x509 -outform PEM > "$$out" \
-	   && echo "wrote $$out (now set HARBOR_CA_FILE=$$out in .env)" \
-	   || { echo "ERROR: could not fetch a CA from $$host:$$port — is the lab Harbor reachable over HTTPS?"; exit 1; }
+fetch-harbor-ca: ## Fetch the CA that ISSUED the lab Harbor's cert → HARBOR_CA_FILE, and VERIFY it (for HTTPS mirror/Kaniko trust)
+	@$(SCRIPTS)/fetch-ca.sh "$(HARBOR_URL)" "$(HARBOR_CA_FILE)" harbor
 
 .PHONY: fetch-argocd-ca
-fetch-argocd-ca: ## Fetch a self-signed ArgoCD server CA cert → ARGOCD_CA_FILE (endpoint: ARGOCD_LB_IP or ARGOCD_SERVER)
+fetch-argocd-ca: ## Fetch the CA that ISSUED the ArgoCD server's cert → ARGOCD_CA_FILE, and VERIFY it (endpoint: ARGOCD_LB_IP or ARGOCD_SERVER)
 	@ep="$(if $(ARGOCD_LB_IP),$(ARGOCD_LB_IP),$(ARGOCD_SERVER))"; \
-	 [ -n "$$ep" ] || { echo "ERROR: set ARGOCD_LB_IP (kind, from .env.kind) or ARGOCD_SERVER (lab argocd-server LB IP) first"; exit 1; }; \
-	 hostport="$$(printf '%s' "$$ep" | sed -E 's#^https?://##; s#/.*##')"; \
-	 host="$${hostport%%:*}"; port="$${hostport##*:}"; [ "$$port" = "$$host" ] && port=443; \
-	 out="$(if $(ARGOCD_CA_FILE),$(ARGOCD_CA_FILE),./secrets/argocd-ca.crt)"; mkdir -p "$$(dirname "$$out")"; \
-	 echo "fetching ArgoCD CA from $$host:$$port -> $$out"; \
-	 openssl s_client -connect "$$host:$$port" -showcerts </dev/null 2>/dev/null \
-	   | openssl x509 -outform PEM > "$$out" \
-	   && echo "wrote $$out (now set ARGOCD_CA_FILE=$$out in .env)" \
-	   || { echo "ERROR: could not fetch a CA from $$host:$$port — is ArgoCD reachable over HTTPS?"; exit 1; }
+	 [ -n "$$ep" ] || { echo "ERROR: set ARGOCD_LB_IP (kind, from the state overlay) or ARGOCD_SERVER (lab argocd-server LB IP) first"; exit 1; }; \
+	 $(SCRIPTS)/fetch-ca.sh "$$ep" "$(if $(ARGOCD_CA_FILE),$(ARGOCD_CA_FILE),./secrets/argocd-ca.crt)" argocd
+
+##@ Container engine (podman is the default; docker is supported when you ask for it)
+.PHONY: engine-check
+engine-check: ## READ-ONLY: does this box have what your engine needs, and will it cost you a sudo? (no cluster, no registry)
+	@$(SCRIPTS)/18-engine-check.sh
+
+.PHONY: trust-harbor
+trust-harbor: check-env ## Make YOUR engine trust the self-signed Harbor — and PROVE it with a real login handshake
+	@$(SCRIPTS)/19-trust-harbor.sh
 
 .PHONY: harbor-robot
 harbor-robot: ## Create a least-privilege Harbor CI robot account (push+pull) → secrets/harbor-robot.env; copy into .env
@@ -382,10 +377,10 @@ e2e-kind: ## Full local end-to-end in KinD (+ ingress route check + PSA/VKS admi
 .PHONY: e2e-kind-both
 e2e-kind-both: ## Matrix: run the full KinD e2e in BOTH SSL modes (secure self-signed TLS, then insecure plain-HTTP)
 	@echo "==> e2e-kind matrix [1/2]: SECURE mode (self-signed TLS — the default)"
-	@$(MAKE) kind-down          # clear any stale .env.kind so the mode is deterministic
+	@$(MAKE) kind-down          # clear the stale STATE SINK (.env.state) so the mode is deterministic
 	@$(MAKE) e2e-kind
 	@echo "==> e2e-kind matrix [2/2]: INSECURE mode (HARBOR_INSECURE=1 ARGOCD_INSECURE=1 — plain HTTP)"
-	@$(MAKE) kind-down          # kind-down clears .env.kind → the insecure toggle is not clobbered by a persisted HARBOR_INSECURE=0
+	@$(MAKE) kind-down          # kind-down clears the STATE SINK → the insecure toggle is not clobbered by a persisted HARBOR_INSECURE=0
 	@$(MAKE) e2e-kind HARBOR_INSECURE=1 ARGOCD_INSECURE=1
 	@$(MAKE) kind-down
 	@echo "e2e-kind-both: both SSL modes verified end-to-end"
@@ -456,7 +451,7 @@ e2e-kind-tenant: ## Prove the TENANT write path (argocd-server, zero k8s RBAC in
 e2e-kind-istio-existing: export SKIP_DOTENV = $(E2E_SKIP_DOTENV)
 e2e-kind-istio-existing: ## KinD e2e for the ATTACH mode: a "platform team" installs Istio (foreign naming) -> we attach, installing nothing
 	@echo "==> e2e-kind-istio-existing: fresh cluster, platform-owned Istio, attach-only"
-	@$(MAKE) kind-down          # clear stale .env.kind so the ingress mode is deterministic
+	@$(MAKE) kind-down          # clear the stale STATE SINK (.env.state) so the ingress mode is deterministic
 	@$(MAKE) kind-up install-harbor install-argocd install-all
 	@$(SCRIPTS)/90-e2e-istio-existing.sh   # RED 1 + RED 2 + install Istio as the "platform team"
 	@$(MAKE) istio-preflight
@@ -471,11 +466,30 @@ e2e-kind-istio-existing: ## KinD e2e for the ATTACH mode: a "platform team" inst
 	@echo "==> e2e-kind-istio-existing PASSED — the UIs route through an Istio we did not install (BOTH route APIs)"
 
 ##@ Jump-box validation (Photon / Ubuntu container, rootless podman)
-JUMPBOX_OS    ?= photon
-JUMPBOX_IMAGE ?= vks-jumpbox:$(JUMPBOX_OS)
+JUMPBOX_OS     ?= photon
+JUMPBOX_ENGINE ?= podman
+# ENGINE-QUALIFIED, and it must stay that way. `vks-jumpbox:$(JUMPBOX_OS)` was a live footgun: building
+# photon+podman and then photon+docker OVERWRITES THE SAME TAG, so a matrix runs whichever image was
+# built last for BOTH legs and cheerfully reports two engines from one image — a false green by
+# construction. The tag must name every dimension the image varies in.
+JUMPBOX_IMAGE  ?= vks-jumpbox:$(JUMPBOX_OS)-$(JUMPBOX_ENGINE)
 .PHONY: jumpbox-image
-jumpbox-image: ## Build the jump-box test image for JUMPBOX_OS (photon|ubuntu; rootless podman inside)
-	@docker build -f jumpbox/Dockerfile.$(JUMPBOX_OS) -t $(JUMPBOX_IMAGE) .
+jumpbox-image: ## Build the jump-box test image for JUMPBOX_OS x JUMPBOX_ENGINE (photon|ubuntu x podman|docker)
+	@# ENGINE-SPECIFIC DOCKERFILE. The podman images are Dockerfile.<os>; the docker images are
+	@# Dockerfile.<os>-docker. This target used to build Dockerfile.<os> unconditionally, so the "docker"
+	@# leg of the matrix built the PODMAN image, tagged it :<os>-docker, and ran it with
+	@# JUMPBOX_ENGINE=docker — a leg that would have measured the wrong engine entirely. It was caught by
+	@# the single-engine assert in jumpbox-run.sh ("this image has BOTH engines"), which is exactly the
+	@# false green that assert exists to prevent.
+	@df="jumpbox/Dockerfile.$(JUMPBOX_OS)"; \
+	 [ "$(JUMPBOX_ENGINE)" = docker ] && df="jumpbox/Dockerfile.$(JUMPBOX_OS)-docker"; \
+	 [ -f "$$df" ] || { echo "ERROR: no jump-box image for $(JUMPBOX_OS) x $(JUMPBOX_ENGINE) (expected $$df)"; exit 1; }; \
+	 echo "building $(JUMPBOX_IMAGE) from $$df"; \
+	 docker build -f "$$df" -t $(JUMPBOX_IMAGE) .
+
+.PHONY: bootstrap-engine-test
+bootstrap-engine-test: ## CLAIM 1: does `make deps` actually PRODUCE a docker jump box when asked — and a podman one (with ZERO docker) when not? Runs the REAL bootstrap on BARE Photon/Ubuntu images.
+	@$(SCRIPTS)/test-bootstrap-engine.sh
 
 .PHONY: jumpbox
 jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photon|ubuntu): make deps + rootless podman + cluster reach, vs the running KinD cluster
@@ -512,7 +526,16 @@ jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photo
 	 if [ -n "$(JUMPBOX_VCF_SRC)" ] && [ -d "$(JUMPBOX_VCF_SRC)" ]; then \
 	   extra="$$extra -v $(abspath $(JUMPBOX_VCF_SRC)):/run/vcf-artifacts:ro -e VCF_CLI_SRC_DIR=/run/vcf-artifacts"; \
 	 fi; \
-	 tb_flags=""; hpw=""; \
+	 : "HARBOR CREDS ON EVERY RUN, not just the sneakernet branch. Stage 5 (16-engine-trust-check) is"; \
+	 : "the ONLY thing in this harness that makes an ENGINE talk to Harbor — the disputed step. Without"; \
+	 : "the creds it cannot run, and a jump-box leg that skips it proves nothing about the engine."; \
+	 huser="$$(grep -h '^HARBOR_USERNAME=' "$$sink" .env .env.example 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//" || true)"; \
+	 hpass="$$(grep -h '^HARBOR_PASSWORD=' "$$sink" .env 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//" || true)"; \
+	 [ -n "$$hpass" ] || { echo "ERROR: HARBOR_PASSWORD not in the state overlay ($$sink) or .env — the engine cannot push"; exit 1; }; \
+	 : "The CA is mounted; NAME it too, or 16 cannot find it (HARBOR_CA_FILE was never exported here —"; \
+	 : "the same class of bug as the 5 dead .env.kind reads above: mounted but never named)."; \
+	 [ -f .jumpbox/harbor-ca.crt ] && extra="$$extra -e HARBOR_CA_FILE=/run/jumpbox/harbor-ca.crt"; \
+	 tb_flags=""; hpw="$$hpass"; \
 	 if [ -n "$(JUMPBOX_TARBALL)" ]; then \
 	   tbabs="$(abspath $(JUMPBOX_TARBALL))"; tbbase="$$(basename "$$tbabs")"; \
 	   [ -f "$$tbabs" ] || { echo "ERROR: JUMPBOX_TARBALL not found: $$tbabs"; exit 1; }; \
@@ -529,17 +552,38 @@ jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photo
 	 else \
 	   echo "running $(JUMPBOX_OS) jump box on the kind network (Harbor=$$harbor_url, insecure=$$harbor_insecure)"; \
 	 fi; \
+	 : "-e HARBOR_PASSWORD (NAME ONLY) — the VALUE is inherited from the env prefix, never placed on argv,"; \
+	 : "where ps/procfs would expose it (security.md: secrets never in argv)."; \
 	 HARBOR_PASSWORD="$$hpw" docker run --rm --privileged --network kind \
 	   -e HARBOR_URL="$$harbor_url" -e HARBOR_INSECURE="$$harbor_insecure" \
+	   -e HARBOR_USERNAME="$$huser" -e HARBOR_PASSWORD \
+	   -e JUMPBOX_ENGINE="$(JUMPBOX_ENGINE)" -e JUMPBOX_OS="$(JUMPBOX_OS)" \
 	   -v "$(PWD):/src:ro" \
 	   -v "$(PWD)/.jumpbox/kubeconfig:/run/jumpbox/kubeconfig:ro" \
 	   $$extra $$tb_flags \
 	   $(JUMPBOX_IMAGE) bash /src/scripts/jumpbox-run.sh
 
 .PHONY: jumpbox-both
-jumpbox-both: ## Validate the jump-box flow on BOTH Photon and Ubuntu (matrix)
-	@$(MAKE) jumpbox JUMPBOX_OS=photon
-	@$(MAKE) jumpbox JUMPBOX_OS=ubuntu
+jumpbox-both: ## Validate the jump-box flow on BOTH Photon and Ubuntu (podman)
+	@$(MAKE) jumpbox JUMPBOX_OS=photon JUMPBOX_ENGINE=podman
+	@$(MAKE) jumpbox JUMPBOX_OS=ubuntu JUMPBOX_ENGINE=podman
+
+.PHONY: jumpbox-matrix
+jumpbox-matrix: ## THE ENGINE MATRIX: {photon,ubuntu} x {podman,docker}, each pushing to the real Harbor. Same expected outcome, 4/4.
+	@# SEQUENTIAL, and that is deliberate: every leg PUSHES to the same Harbor and takes the registry
+	@# lock — but the lock lives in the repo copy INSIDE each container, so it does not serialize across
+	@# containers. Parallel legs would not corrupt Harbor (that story was a misdiagnosis; see CLAUDE.md),
+	@# but a failure would be unattributable, which costs more than the wall-clock saves.
+	@rc=0; \
+	 for os in photon ubuntu; do \
+	   for eng in podman docker; do \
+	     echo ""; echo "=================== LEG: $$os x $$eng ==================="; \
+	     $(MAKE) jumpbox JUMPBOX_OS=$$os JUMPBOX_ENGINE=$$eng || { echo "LEG FAILED: $$os x $$eng"; rc=1; }; \
+	   done; \
+	 done; \
+	 echo ""; \
+	 [ $$rc -eq 0 ] && echo "JUMPBOX MATRIX: 4/4 PASSED — podman and docker each build and push to the self-signed Harbor, on Photon and Ubuntu" \
+	                || { echo "JUMPBOX MATRIX: FAILED"; exit 1; }
 
 .PHONY: bootstrap-test
 bootstrap-test: ## Validate bootstrap-jumpbox.sh from-nothing on BARE OS images (BOOTSTRAP_TEST_OSES matrix) + unsupported-OS reject

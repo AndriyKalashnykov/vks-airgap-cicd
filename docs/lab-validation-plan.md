@@ -243,7 +243,7 @@ kubectl get ns
 
 ### 9. Produce `$ARGOCD_KUBECONFIG` · CHEAP · ⚠️ UNVERIFIED
 
-**Why:** the artifact the whole cross-cluster design consumes. Its script carries the *second* contradictory `vcf` shape **and** an undocumented requirement: it FATALs unless `VKS_CA_CERT_FILE` or `VKS_INSECURE_SKIP_TLS_VERIFY=1` is set — **which the doc never tells you**.
+**Why:** the artifact the whole cross-cluster design consumes. Its script carries the *second* contradictory `vcf` shape **and** an undocumented requirement: it FATALs unless `VKS_CA_CERT_FILE` or `VKS_INSECURE_SKIP_TLS_VERIFY` is set. (The value used to have to be exactly `1` here while `30-vks-login.sh` demanded `true` and `.env.example` documented `true` — so setting the DOCUMENTED value still failed. One truthiness rule now: `1|true|yes|on`.)
 **Where:** jump box → **Supervisor**. Writes one file under `./secrets/`.
 **Who needs it:** BOTH.
 **We then:** document the `VKS_CA_CERT_FILE` requirement the runbook never mentions, and — if the CLI writes to `~/.kube/config` instead — make the script extract the context rather than trust the flag.
@@ -373,7 +373,7 @@ make env-validate 2>&1 | tee /tmp/14-env-validate.log; echo "EXIT=$?"
 make preflight    2>&1 | tee /tmp/14-preflight.log;    echo "EXIT=$?"
 ```
 
-**Expect:** `preflight` **EXIT=0**, and `argocd-preflight` prints **TOPOLOGY OK** (agreeing with step 8).
+**Expect:** `preflight` **EXIT=0**, and `argocd-preflight` prints **`PREFLIGHT OK`** + **`ArgoCD is OFF-CLUSTER (the real-lab shape)`** (agreeing with step 8).
 **Send back:** all three logs + exit codes — **and any var `env-check` demands that the runbook never told you to set** (a known suspect: `VKS_CA_CERT_FILE`).
 
 > **If preflight blocks on a value that only exists later — STOP AND REPORT. Do not work around it.** The ordering regression is back.

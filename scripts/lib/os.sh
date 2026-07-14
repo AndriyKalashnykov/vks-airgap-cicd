@@ -134,6 +134,82 @@ pkg_refresh() {
   esac
 }
 
+# is_true <value> — ONE truthiness rule for the whole repo.
+#
+# There was not one. `VKS_INSECURE_SKIP_TLS_VERIFY` was tested three different ways:
+#   30-vks-login.sh:71            [ "${V:-false}" = "true" ]
+#   31-fetch-argocd-kubeconfig.sh [ "${V:-0}" = "1" ]
+#   .env.example                  documents `VKS_INSECURE_SKIP_TLS_VERIFY=true`  (and its own comment
+#                                 shows `=1` in the example invocation)
+# So an operator who set the value THE REPO DOCUMENTS got a working vks-login and a fetch-argocd-kubeconfig
+# that died demanding the value they had already set — a flag whose accepted spelling depends on which
+# script reads it. Accept every spelling a human plausibly types; normalise at the ONE place a CLI needs
+# a canonical word (bool_word).
+is_true() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|y|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+# bool_word <value> — "true"/"false", for a CLI flag that demands the word (e.g. --insecure-skip-tls-verify=).
+bool_word() { if is_true "${1:-}"; then printf 'true'; else printf 'false'; fi; }
+
+# engine_choice — which engine is the BOOTSTRAP going to install? podman unless the operator asked for
+# docker BY NAME. Pure: it prints, it installs nothing, it touches no PATH. Kept separate from
+# container_engine() (which asks "what is INSTALLED on this box?") because the gate must be able to prove
+# the DEFAULT — "CONTAINER_ENGINE unset ⇒ podman, and docker is never even in the package list" — on a
+# machine that happens to have docker installed.
+engine_choice() {
+  local eng="${CONTAINER_ENGINE:-podman}"
+  case "$eng" in
+    podman|docker) printf '%s' "$eng" ;;
+    *) die "CONTAINER_ENGINE='$eng' is not supported (use 'podman' — the default — or 'docker')" ;;
+  esac
+}
+
+# engine_packages <engine> <pkg-mgr> — PRINT the OS packages that <engine> needs on <pkg-mgr>.
+#
+# A PURE FUNCTION: it prints names and installs NOTHING. That is deliberate — it makes the bootstrap's
+# engine choice TESTABLE OFFLINE, which is the only way to keep the project's central invariant honest:
+#
+#     DOCKER IS NEVER *REQUIRED*. It is only ever installed because the operator ASKED for it.
+#
+# The old gate (test-container-engine.sh #5) scanned for docker INVOCATIONS at a command position. It
+# could not see a docker *dependency* — `pkg_install docker` matches none of its alternatives (PROVEN:
+# the regex is silent on that exact string) — so an engine-aware bootstrap would have started installing
+# a docker daemon on every jump box while the gate kept printing "no docker dependency". A gate that goes
+# green on the change it forbids is not a gate. Check 7 now EXECUTES this function and asserts the LIST.
+#
+# VERIFIED PACKAGE FACTS (ran-it, 2026-07-14 — do not "tidy" these from memory):
+#   apt  podman : podman pulls crun (a hard Depends) but uidmap/passt/slirp4netns are *Recommends*, which
+#                 our --no-install-recommends DROPS -> rootless podman breaks without them.
+#   tdnf podman : pulls uidmap + slirp4netns + fuse-overlayfs WITH podman, but NOT crun.
+#   apt  docker : docker.io + rootlesskit + uidmap + dbus-user-session + slirp4netns + fuse-overlayfs.
+#                 *** UBUNTU RELEASE SPLIT *** docker.io is 29.1.3 on BOTH 24.04 and 26.04, but only
+#                 26.04's deb SHIPS the rootless helper (/usr/share/docker.io/contrib/, OFF PATH);
+#                 24.04's deb ships ZERO rootless files. So on 24.04 rootless docker would need
+#                 docker-ce-rootless-extras from download.docker.com -- a THIRD-PARTY REPO, which we
+#                 REFUSE to add to someone else's jump box. There, docker = ROOTFUL = a sudo per registry.
+#   tdnf docker : docker + docker-rootless + rootlesskit all resolve first-class (rc=0, no third-party
+#                 repo), and Photon puts dockerd-rootless.sh ON PATH (/usr/bin). Photon is the EASY OS
+#                 for rootless docker — the opposite of the usual assumption.
+engine_packages() {
+  local eng="${1:?engine}" mgr="${2:?pkg-mgr}"
+  case "${eng}:${mgr}" in
+    podman:apt-get) printf 'podman crun uidmap passt slirp4netns' ;;
+    podman:tdnf|podman:dnf) printf 'podman crun' ;;
+    docker:apt-get) printf 'docker.io rootlesskit uidmap dbus-user-session slirp4netns fuse-overlayfs' ;;
+    # util-linux is NOT optional on Photon: rootlesskit shells out to `unshare` to build the detached
+    # netns, and Photon's base image does not ship it. Without it rootless dockerd dies with
+    #   failed to execute [unshare -n mount --bind /proc/self/ns/net ...]: exec: "unshare": not found
+    # — an error that names a binary, not a package, so it reads like a broken daemon rather than a
+    # missing dependency. (Ubuntu has util-linux as an Essential package, which is precisely why only the
+    # Photon leg of the matrix failed and why testing on one OS would have shipped this.)
+    docker:tdnf|docker:dnf) printf 'docker docker-rootless rootlesskit shadow util-linux fuse-overlayfs slirp4netns' ;;
+    *) die "engine_packages: unsupported engine/pkg-mgr combination '${eng}/${mgr}'" ;;
+  esac
+}
+
 # pkg_install pkg1 [pkg2 ...] — installs packages using the host's manager.
 pkg_install() {
   [ "$#" -gt 0 ] || return 0
@@ -214,7 +290,20 @@ load_env() {
   # A variable that selects WHICH CLUSTER you are talking to must be owned by the caller. Config may
   # supply a DEFAULT; it may not overrule an explicit choice.
   local _sel _snap_names="" _snap_vals=""
-  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT; do
+  # HARBOR_CA_FILE IS A SELECTOR TOO — it names WHICH trust anchor to use, and both .env.example
+  # (`./secrets/harbor-ca.crt`) and the state overlay (an ABSOLUTE HOST path) carry a value for it. So
+  # `HARBOR_CA_FILE=/elsewhere make <target>` was a SILENT NO-OP: the files won, and you verified TLS
+  # against a CA you did not choose. It bit for real in the jump-box matrix — the container is handed the
+  # CA at /run/jumpbox/harbor-ca.crt, load_env overwrote that with the HOST path from .env.state, and the
+  # leg died claiming the CA "not found" while pointing at a path that only exists on the host.
+  # HARBOR_URL IS THE REGISTRY SELECTOR — it decides WHICH REGISTRY every image is pushed to and pulled
+  # from, which makes it the most consequential selector in the repo. It was NOT protected, so
+  # `make mirror HARBOR_URL=<other>` was a SILENT NO-OP: .env.example's `HARBOR_URL=harbor.vks.local`
+  # (uncommented, line 73) was sourced back over it and you mirrored to the default while believing you
+  # had switched — the same shape as the KUBECONFIG bug that let a command run against the wrong cluster.
+  # It surfaced in the jump-box matrix: the container is handed `-e HARBOR_URL=<the LB IP>`, load_env
+  # replaced it with `harbor.vks.local`, and all four legs died resolving a hostname that exists nowhere.
+  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT HARBOR_CA_FILE HARBOR_URL; do
     if [ -n "${!_sel:-}" ]; then
       _snap_names="${_snap_names} ${_sel}"
       _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'

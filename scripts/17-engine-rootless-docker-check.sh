@@ -13,15 +13,25 @@
 # the `docker` group grants SOCKET access, not write access to /etc). So rootless is the ONLY docker mode
 # that matches podman's ergonomics.
 #
-# WHY ON THE HOST AND NOT IN dind
-# `docker:dind-rootless` will not start on an AppArmor-restricting host (Ubuntu 23.10+ sets
-# kernel.apparmor_restrict_unprivileged_userns=1). The mechanism: Ubuntu grants userns via a profile
-# ATTACHED BY HOST PATH (/etc/apparmor.d/rootlesskit -> /usr/bin/rootlesskit). Inside a container that
-# binary is a DIFFERENT file, the profile does not attach, the process is `unconfined` — and unconfined is
-# exactly what `restrict=1` denies. (Which is why `--security-opt apparmor=unconfined` makes it WORSE, not
-# better.) See docs/decisions/container-engine-support.md for the untried escape hatch.
+# WHY ON THE HOST — and a CORRECTION, because the claim that used to sit here was FALSE.
 #
-# Host-native is also the STRONGER test: a real uid, a real rootlesskit, no outer privilege to borrow.
+# This header used to say rootless-docker-in-a-container "will not start on an AppArmor-restricting host"
+# (Ubuntu 23.10+ sets kernel.apparmor_restrict_unprivileged_userns=1). RAN IT, 2026-07-14, on exactly such
+# a host: it STARTS — with AND without `--security-opt apparmor=rootlesskit`. dockerd came up as `vks`
+# (uid 1001), SecurityOptions reported `name=rootless`, DockerRootDir landed under $HOME, and it built and
+# ran an image.
+#
+# The mechanism the old text described is real but was mis-scoped: Ubuntu grants userns via a profile
+# ATTACHED BY HOST PATH (/etc/apparmor.d/rootlesskit -> /usr/bin/rootlesskit); inside a container that
+# binary is a different file, the profile does not attach, the process is `unconfined` — and unconfined is
+# what restrict=1 denies. That kills an UNPRIVILEGED dind-rootless. Our jump-box harness runs
+# `--privileged`, which grants CAP_SYS_ADMIN, so the userns is permitted regardless and the AppArmor path
+# never gates it. "I tried three flags and none worked" is not a proof of impossibility — none of those
+# flags acted on the mechanism. (See rules: name the mechanism, then ask which thing you tried acts on it.)
+#
+# So dind-rootless IS available, and `make jumpbox-matrix` uses it for the docker legs on both OSes.
+# THIS script stays HOST-NATIVE anyway, because host-native is the STRONGER test: a real uid, a real
+# rootlesskit, and no outer privilege to borrow.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh

@@ -65,10 +65,21 @@ echo >&2
 printf "  %-22s %-8s %-12s %-12s %s\n" NAMESPACE PODS "NEEDS(min)" "ACTUAL" VERDICT >&2
 
 rc=0
+# COUNT THE DENOMINATOR. This gate used to exit 0 on a fresh cluster having measured NOTHING: every
+# namespace was `absent (skipped)`, and `absent` never touched rc. So `make psa-check` was GREEN BY
+# CONSTRUCTION before any of our code had run — and scenario-1 instructed it as a Step-1 precondition
+# with the words "psa-check proves the cluster will admit them". It proved nothing; it could not.
+#
+# A green that was already true before the change exists cannot fail for the right reason. So: count what
+# we actually measured, and say so. (We still exit 0 when there is genuinely nothing to measure — a fresh
+# cluster is a legitimate state, and `preflight` runs here before `platform` — but the OUTPUT must not
+# read as proof, and it must say when to come back.)
+measured=0; skipped=0; unproven=0
 while IFS='|' read -r ns labelled; do
   [ -z "$ns" ] && continue
-  kubectl get namespace "$ns" >/dev/null 2>&1 || { printf '  %-22s %-8s %-12s %-12s %s\n' "$ns" '-' '-' "${labelled:-<none>}" 'absent (skipped)' >&2; continue; }
+  kubectl get namespace "$ns" >/dev/null 2>&1 || { printf '  %-22s %-8s %-12s %-12s %s\n' "$ns" '-' '-' "${labelled:-<none>}" 'absent (skipped)' >&2; skipped=$((skipped+1)); continue; }
   pods="$(kubectl -n "$ns" get pods --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "$pods" = "0" ]; then unproven=$((unproven+1)); else measured=$((measured+1)); fi
   need="$(psa_min_level "$ns" || true)"
   cur="$(kubectl get namespace "$ns" -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}' 2>/dev/null || true)"
 
@@ -122,8 +133,16 @@ $(printf '%s' "$NS_SPEC")
 EOF
 
 echo >&2
-if [ "$rc" -eq 0 ]; then
-  log_info "PSA OK — every namespace we create is labelled at a level that admits its pods."
+# THE DENOMINATOR IS PART OF THE VERDICT. A gate that cannot tell you what it looked at cannot be
+# trusted to have looked.
+log_info "measured ${measured} namespace(s) with running pods · ${unproven} present-but-empty · ${skipped} absent"
+if [ "$rc" -eq 0 ] && [ "$measured" -eq 0 ]; then
+  log_warn "PSA UNPROVEN — this run measured NOTHING. Every namespace is absent or has no pods yet, so PSA"
+  log_warn "  admission was never actually exercised. This is the EXPECTED state before 'make platform'; it is"
+  log_warn "  NOT evidence that the cluster will admit our workloads."
+  log_warn "  Come back and re-run 'make psa-check' AFTER 'make platform' — that run is the one that proves it."
+elif [ "$rc" -eq 0 ]; then
+  log_info "PSA OK — every namespace we create is labelled at a level that admits its pods (${measured} measured)."
 else
   log_error "PSA FINDINGS above — on a real VKS guest cluster (enforce=restricted by default) those pods would be REJECTED."
   log_error "  Fix by setting the level in .env (PSA_LEVEL_GITEA / _TEKTON / _CI / _APP / _INGRESS / _ISTIO_SYSTEM),"

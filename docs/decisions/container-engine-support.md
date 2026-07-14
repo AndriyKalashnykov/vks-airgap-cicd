@@ -1,30 +1,49 @@
 # Decision — is docker supportable as an alternative to podman?
 
-**Status:** ACCEPTED & MEASURED · 2026-07-14
-**Verdict (scoped, and the scope is the point):**
-**On a developer/CI host — yes, docker works, and rootless docker matches podman exactly.**
-**On a JUMP BOX — no, not today: `make deps` does not install docker at all.**
+**Status:** ACCEPTED & MEASURED · updated 2026-07-14 (option B implemented)
+**Verdict:** **Yes — docker is now SUPPORTED on a jump box, on both OSes, and it is opt-in.**
+**podman remains the DEFAULT, and it remains the only engine that is sudo-free on every box.**
 
-> ## The finding that actually answers the question
+> ## What was actually wrong (and it was not "docker is untested")
 >
-> **`scripts/00-install-prereqs.sh` installs podman only. There is no `pkg_install docker` anywhere, on
-> either OS** — and the rootless deps it does install (`uidmap`, `passt`, `slirp4netns`) are **gated on
-> `have podman`**. This is not an oversight: `scripts/test-container-engine.sh:83-85` asserts it as an
-> invariant — *"a jump box that ran `make deps` has podman and NOT docker … Docker belongs ONLY to the
-> KinD stand-in and the local test harnesses"* — and there is a **gate enforcing it**.
+> `scripts/00-install-prereqs.sh` installed **podman only** — there was no `pkg_install docker` anywhere,
+> on either OS — and `scripts/test-container-engine.sh` asserted that as an **invariant**. So docker on a
+> jump box was **not "untested"; it was UNSUPPORTED BY OUR OWN BOOTSTRAP.** An operator who followed the
+> README onto a fresh Photon/Ubuntu box and set `CONTAINER_ENGINE=docker` had **no docker to run**. Every
+> "docker works" measurement we had was taken on the developer's laptop — i.e. **scoped to the wrong
+> machine**.
 >
-> So docker on a jump box is **not "untested"; it is UNSUPPORTED BY OUR BOOTSTRAP.** An operator who
-> follows the README onto a fresh Photon/Ubuntu box and sets `CONTAINER_ENGINE=docker` has no docker to
-> run.
+> **Now (option B, implemented):** the bootstrap is engine-aware. `CONTAINER_ENGINE=docker` installs
+> docker + its rootless prerequisites; `CONTAINER_ENGINE` unset installs podman and **zero** docker
+> packages. The package list lives in `engine_packages()` — a **pure function** — precisely so the gate can
+> **execute** it and assert the list in both directions, offline. That matters: the old gate scanned for
+> docker *invocations* at a command position and was **structurally blind to a docker dependency**
+> (`pkg_install docker` matches none of its patterns — proven), so an engine-aware bootstrap would have
+> started putting a docker daemon on **every** jump box under a **green** gate.
 >
-> **Decision (owner, 2026-07-14): make it supported — option (B).** The real work is an **engine-aware
-> bootstrap** (`00-install-prereqs.sh` learns to install docker + its rootless extras per OS), plus a
-> `make` target that CHECKS the docker prerequisites and one that INSTALLS them, plus a test that asserts
-> it. The jump-box engine matrix then becomes the **test of that bootstrap change** — which is the only
-> thing it can prove that the host legs below did not. **Tracked as its own task; not done here.**
->
-> Everything below is therefore a **host** result. It proves the *mechanism*. It does not prove the
-> *jump box*, and it must not be quoted as if it did.
+> **The invariant survives, and is now enforceable:** docker is never *required*. It appears only because
+> the operator asked for it by name.
+
+## THE FACT THAT CHANGES THE UBUNTU STORY (ran-it, 2026-07-14)
+
+Ubuntu's `docker.io` is version **29.1.3 on both 24.04 and 26.04** — but only **26.04's deb actually ships
+the rootless helper**:
+
+| | `docker.io` | `dockerd-rootless.sh` in the deb? | rootless docker from distro repos? |
+|---|---|---|---|
+| **Photon 5** | 29.5.3 (`docker` + `docker-rootless` + `rootlesskit`) | **yes — `/usr/bin`, ON PATH** | ✅ **Photon is the EASY OS** |
+| **Ubuntu 26.04** | 29.1.3 | **yes** — but hidden in `/usr/share/docker.io/contrib/` (OFF PATH; `make deps` symlinks it) | ✅ |
+| **Ubuntu 24.04** | 29.1.3 | **NO — zero rootless files** | ❌ rootful only |
+
+Two consequences, and both are stated in the operator's face rather than discovered on the lab:
+
+- **Photon is the easier OS for rootless docker**, which inverts the usual assumption.
+- **On Ubuntu 24.04 there is no distro path to rootless docker.** Getting it means adding
+  `download.docker.com` + a GPG key (`docker-ce-rootless-extras`) — on a real corporate jump box that is a
+  **proxy-allowlist / security-review item an admin may simply refuse**. **We do not add a third-party apt
+  repo to someone else's jump box.** So there, docker is **rootful-only = a sudo per registry**, and
+  `make deps` / `make engine-check` say exactly that. `make bootstrap-engine-test` asserts we disclose it
+  (and asserts we did **not** add the repo).
 
 ---
 
