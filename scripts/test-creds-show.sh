@@ -38,6 +38,7 @@ bad() { printf 'FAIL  %s\n' "$1" >&2; fail=1; }
 SINK="$(bash -c '. scripts/lib/os.sh; state_file' 2>/dev/null || echo .env.state)"
 SAVED=""
 if [ -f "$SINK" ]; then SAVED="$(mktemp)"; cp "$SINK" "$SAVED"; fi
+# shellcheck disable=SC2329  # invoked by the EXIT trap below
 restore() {
   if [ -n "$SAVED" ]; then cp "$SAVED" "$SINK"; rm -f "$SAVED"; else rm -f "$SINK"; fi
 }
@@ -47,11 +48,19 @@ render() { rm -f "$SINK"; [ -n "${1:-}" ] && printf '%s' "$1" > "$SINK"; ./scrip
 
 # ---- STATE 1: nothing installed. Every value is a default; the output must SAY SO. -------------------
 out="$(render "")"
-if printf '%s' "$out" | grep -qiE 'NOTHING IS INSTALLED YET|are a default|DEFAULTS from'; then
-  ok "no overlay -> the output declares the values are DEFAULTS (they are placeholders, not credentials)"
+# Key on the CANONICAL TOKEN, never on prose. The first version of this check grepped three English
+# phrasings — so when I mutated two of them the gate stayed GREEN and reported the defect as caught. A
+# gate that greps prose is testing the prose.
+if printf '%s' "$out" | grep -q 'values-provenance: DEFAULT'; then
+  ok "no overlay -> declares values-provenance: DEFAULT (placeholders, not credentials)"
 else
-  bad "no overlay -> the output does NOT say the values are defaults. It prints harbor.vks.local/Harbor12345
-      as if they were real. That is the exact lie this gate exists to prevent."
+  bad "no overlay -> the output does NOT declare values-provenance: DEFAULT. It prints
+      harbor.vks.local / Harbor12345 as if they were real. That is the exact lie this gate exists for."
+fi
+if printf '%s' "$out" | grep -qiE 'NOTHING IS INSTALLED YET|are a default'; then
+  ok "no overlay -> and it says so in words a human will read, not only in the token"
+else
+  bad "no overlay -> the token says DEFAULT but nothing tells the HUMAN. Both must be true."
 fi
 
 # ---- STATE 2: installed, but NO INGRESS. The *.vks.local hosts do not exist. --------------------------
@@ -92,6 +101,11 @@ if printf '%s' "$out" | grep -qiE 'NOTHING IS INSTALLED YET|<not set>|<needs ing
       $(printf '%s' "$out" | grep -oiE 'NOTHING IS INSTALLED YET|<not set>|<needs ingress>' | head -2 | tr '\n' ' ')"
 else
   ok "fully installed -> no stale 'not set' / 'needs ingress' / 'defaults' markers remain"
+fi
+if printf '%s' "$out" | grep -q 'values-provenance: DISCOVERED'; then
+  ok "fully installed -> declares values-provenance: DISCOVERED (the token FLIPS; it is not a constant)"
+else
+  bad "fully installed -> still claims values-provenance: DEFAULT. A token that never changes proves nothing."
 fi
 if printf '%s' "$out" | grep -q '10.0.0.3'; then
   ok "ingress present -> the /etc/hosts line is printed with the real LB IP"

@@ -59,6 +59,13 @@ fi
 tekton_url="$(ingress_url "${TEKTON_DASHBOARD_HOST:-tekton.vks.local}")"  # Tekton Dashboard (read-only UI)
 
 # --- resolve logins -------------------------------------------------------------------
+#
+# NOTE (a fix I wrote and then DELETED, so nobody re-writes it): I added a "still the .env.example
+# default" marker for the passwords. It is DEAD CODE — HARBOR_PASSWORD and GITEA_ADMIN_PASSWORD are
+# COMMENTED in .env.example (they are you-choose secrets), so there is no default to compare against and
+# the marker can never fire. The values shown come either from the operator's OWN .env (legitimately
+# theirs) or from the state overlay (discovered), and the Context block already distinguishes those.
+# Shipping a check that cannot fire is worse than shipping nothing: it looks like a guarantee.
 harbor_user="${HARBOR_USERNAME:-admin}"
 harbor_pw="${HARBOR_PASSWORD:-<set HARBOR_PASSWORD in .env>}"
 gitea_user="${GITEA_ADMIN_USER:-gitea_admin}"
@@ -66,6 +73,22 @@ gitea_pw="${GITEA_ADMIN_PASSWORD:-<set GITEA_ADMIN_PASSWORD in .env>}"
 # ArgoCD via the context-aware resolver; exit 3 => VKS-provided / not knowable locally.
 if argo_pw="$("${SCRIPT_DIR}/argocd-password.sh" 2>/dev/null)"; then :; else
   argo_pw="<VKS-provided — get it from your lab>"
+fi
+
+# THE ArgoCD USERNAME WAS HARDCODED TO `admin`, AND THAT IS FALSE FOR A TENANT.
+# Found by READING the table as each persona, which no grep would have surfaced:
+#   * KinD / Scenario 1 (you install ArgoCD)  -> you ARE admin. Fine.
+#   * Scenario 2 (you are a TENANT)           -> you are NOT. The platform team grants you an AppProject
+#                                                role, and this repo's own tenant path authenticates with
+#                                                ARGOCD_AUTH_TOKEN. Handing them "admin" is a login they do
+#                                                not have and cannot use — and it quietly teaches the wrong
+#                                                mental model of who owns ArgoCD.
+# So: report the credential THEY will actually use.
+if [ -n "${ARGOCD_AUTH_TOKEN:-}" ]; then
+  argo_user="(token)"
+  argo_pw="<ARGOCD_AUTH_TOKEN from .env — not a password>"
+else
+  argo_user="${ARGOCD_USERNAME:-admin}"
 fi
 
 # --- CONTEXT: where do these values COME FROM? ----------------------------------------
@@ -99,7 +122,9 @@ if [ -n "${KUBECONFIG:-}" ] && have kubectl \
   _cluster="reachable — context '$(kubectl config current-context 2>/dev/null || echo '?')'"
 fi
 
-printf '\n  Context\n'
+# CANONICAL PROVENANCE TOKEN — the machine-checkable claim, independent of any wording around it.
+printf '\n  values-provenance: %s\n' "$([ "$_have_sink" = 1 ] && echo DISCOVERED || echo DEFAULT)"
+printf '  Context\n'
 printf '    values below : %s\n' \
   "$([ "$_have_sink" = 1 ] \
      && echo "DISCOVERED — read from the state overlay written by the installers" \
@@ -131,7 +156,7 @@ add_row() { rows="${rows}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\n'; }
 add_row "Gitea"  "$gitea_url"  "$gitea_user"  "$gitea_pw"
 add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)"
 add_row "Harbor" "$harbor_url" "$harbor_user" "$harbor_pw"
-add_row "ArgoCD" "$argocd_url" "admin"        "$argo_pw"
+add_row "ArgoCD" "$argocd_url" "$argo_user"   "$argo_pw"
 while read -r _a; do
   [ -n "$_a" ] || continue
   add_row "$_a" "$(ingress_url "$(app_host "$_a")")" "-" "(no login; health at $(app_health_path "$_a"))"
