@@ -23,7 +23,7 @@ FROM photon:5.0
 # Refresh the cache first — the stale-cache openssl/TLS trap documented in the README.
 RUN tdnf clean all && tdnf makecache && \
     tdnf install -y \
-      ca-certificates openssl curl git openssh-clients make tar gzip which \
+      ca-certificates openssl curl git openssh-clients make tar gzip which gawk gettext \
       shadow sudo procps-ng iproute2 \
       docker && \
     tdnf clean all

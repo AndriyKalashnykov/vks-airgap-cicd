@@ -425,28 +425,164 @@ actor? / blocks?** — fail INDEPENDENTLY, so demand each separately.
 **Spawn every adversary with `isolation: "worktree"`.** A subagent shares your `.git/HEAD`: one ran
 `git checkout -b`, and **the next 7 commits I made landed on its branch** while I believed otherwise.
 
-### OWED — in priority order
+### 🔴 BACKLOG — READ THIS WHOLE SECTION BEFORE DOING ANYTHING (2026-07-14, end of session)
 
-1. **A real lab.** Everything about the Supervisor, the `vcf` CLI auth flow, and tenant RBAC is unverified.
-2. **The INVERTED Gateway-API risk (new, and it matters).** Primary 9.1 sources say **VKS SHIPS the Gateway
-   API CRDs** (VKr 1.36.1 → gateway-api **1.5.1**, our exact pin) — the old "it's a KinD artefact" BLOCKING
-   finding is **REFUTED**. But we `kubectl apply --server-side` **our own** v1.5.1 over a **VKS-MANAGED**
-   add-on whose version the **VKr** chooses (v1.4.0 on VKr 1.35.x). **We may be fighting the add-on
-   manager.** Settle it with one command on a lab (recorded below).
-3. **The runbook's Step 4 is executed by NOTHING.** The adversary measured it: the doc names 12 `make`
-   commands; **5 are never run** — `platform`, `gitops`, `install-ingress`, `verify` (+ `check-tools`, now
-   fixed). `install-ingress` is the command whose doc row **lied for hours** and no test noticed. **Do NOT
-   build a doc-parsing gate** (an adversary killed that design: a sequence gate cannot see a prose claim
-   about a MODE, and would license trust in the uncovered half). **Extend the harness to run Step 4.**
-4. **43 HIGH/MEDIUM doc findings** in `docs/reviews/2026-07-14-doc-truth-audit.md` — labelled **claims, not
-   verdicts** (23 of 68 were refuted and the file does not mark which). Re-check each against the code.
-5. **A `check-vks-provenance` gate** — a grade is not a source. `docs/reviews/2026-07-14-vks-provenance.md`
-   - `-vks-deep-research.md` now carry `url_requested` vs `url_landed` per fact.
+Each item is self-contained: what, why, what to run, and what settles it. Do not re-derive.
 
-**🔴 AND: "Broadcom 9.1 URLs 301 to 9.0" is FALSE.** Measured: **no `/9-1/` URL redirected** (200, or 404 when
-the page was *renamed* — 9.1 renamed *Standard Packages* → *VKS Add-ons*). It is **`/latest/`** that
-redirects, and search engines hand you `/latest/` URLs. **Hand-edit the version to `/9-1/`.** Every
-`9.0-doc (inferred for 9.1)` grade in `docs/vks-services/` was earned under a false premise.
+---
+
+#### B0. FINISH THE LANDING — PR #239 is GREEN but INCOMPLETE. Do this first
+
+**State:** branch `gate/doc-target-coverage` → **PR #239**, 13 commits, all 6 CI checks green,
+`mergeStateStatus: CLEAN`. **`main` is untouched.** PR #240 was closed as superseded.
+
+**DO NOT MERGE IT YET.** It is missing the fix for the gap its own new gate found:
+
+- `jumpbox/Dockerfile.{photon,photon-docker,ubuntu,ubuntu-docker}` — **uncommitted at session end** —
+  add `gawk` + `gettext(-base)`. Without them the jump-box image has **no `envsubst`**, and the newly
+  wired `make check-tools` in `jumpbox-run.sh` goes **RED**. So merging #239 as-is gives you a `main`
+  where **`make e2e-sneakernet` fails**.
+- **CI cannot see this.** CI is offline gates only; it never runs the e2e. The green checks are
+  structurally incapable of catching it — the exact "green CI, broken e2e" gap this session is about.
+
+**Sequence:** `make e2e-sneakernet` green → commit the 4 Dockerfiles → push → CI green → merge.
+(An `e2e-sneakernet` run was in flight at session end; it had already cleared the `check-tools` gate with
+`all REQUIRED tools present`, i.e. the `envsubst` fix works. Confirm it ran to `OK —`.)
+
+---
+
+#### B1. RE-RUN THE MATRIX LEGS THAT TODAY'S LATER CHANGES INVALIDATED
+
+The 6/6 matrix was run **before** several scripts changed. **It is stale for these legs.** Do not cite it.
+
+| leg | why it is stale now |
+|---|---|
+| `make e2e-kind` | `46-install-istio.sh` changed **after** the matrix: it now **HARD-FAILS** when a bundle exists but carries no istio charts (it used to silently fetch from the internet). istio is the **DEFAULT** ingress — this is the main path. |
+| `make verify-ingress-both` | same reason. |
+| `make jumpbox-matrix` | the 4 jump-box Dockerfiles changed (gawk + gettext). |
+| `make e2e-sneakernet` | `jumpbox-run.sh` now runs `check-tools` twice; the Dockerfiles changed. |
+| `make bootstrap-engine-test` | **still valid** — `00-install-prereqs.sh` changed *before* the matrix ran. |
+
+**Run them SERIALLY.** `jumpbox-matrix` needs a live KinD cluster + Harbor — **run it BEFORE any leg that
+tears the cluster down** (I got this wrong and mis-diagnosed the red as a product bug for a minute).
+
+---
+
+#### B1b. THE PERMUTATION MATRIX HAS ONE HOLE: `e2e-sneakernet` IS PODMAN-ONLY
+
+Measured, do not re-derive:
+
+| leg | OS | engine |
+|---|---|---|
+| `jumpbox-matrix` | photon × ubuntu | podman × docker — **4/4** ✅ |
+| `bootstrap-engine-test` | photon, ubuntu-24.04, ubuntu-26.04 | default × docker — **6/6** ✅ |
+| `e2e-kind` | n/a | docker (kind's nodes ARE docker containers) + podman for mirror/builder |
+| **`e2e-sneakernet`** | photon × ubuntu | **PODMAN ONLY** — it never sets `JUMPBOX_ENGINE` ❌ |
+
+**The hole:** the sneakernet *flow* under **docker** is never exercised — specifically the STAGING box's
+`builder-build`. It is narrow (the air-gap box uses `crane`, not an engine, so the engine barely
+participates on the far side, and `jumpbox-matrix` covers login/pull/build/push under both engines) — but
+it is not zero.
+
+**Fix:** parameterise `e2e-sneakernet` on `SNEAKERNET_ENGINE` the way `jumpbox-matrix` does, or add an
+`e2e-sneakernet-both` engine loop. Cost: one more ~25-min leg per engine, so gate it behind a variable
+rather than making it the default.
+
+---
+
+#### B2. THE INVERTED GATEWAY-API RISK — the highest-value unknown. One command settles it
+
+**The old BLOCKING finding ("the Gateway-API path is a KinD artefact") is REFUTED** by primary 9.1 sources:
+a VKS 9.1 guest cluster **SHIPS** the Gateway API CRDs, from the **VKr** (the cluster image), not Istio:
+**VKr 1.36.1 → gateway-api 1.5.1** (our exact pin); VKr 1.35.x → 1.4.0. From VKS 3.7.0 they are managed by
+the **Add-on Management framework** and are **ON by default** (Broadcom documents an *opt-OUT* label).
+
+**So the risk INVERTS, and it is now un-analysed:** the CRDs are **PRESENT, VKS-MANAGED, and at the VKr's
+chosen version** — while `istio_ensure_gwapi_crds` (`scripts/lib/istio.sh`) **server-side-applies OUR pinned
+v1.5.1**. On a real lab we may be **fighting the VKS add-on manager**, or up/down-grading a CRD we do not own.
+
+**What settles it, on a lab:**
+
+```bash
+kubectl get crd gateways.gateway.networking.k8s.io \
+  -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}'   # the VKr's version
+kubectl get cluster <name> -o jsonpath='{.metadata.labels.addon\.addons\.kubernetes\.vmware\.com/gateway-api}'
+```
+
+Then decide: **detect-and-defer** to the VKr's version, or keep installing ours. **Do not "fix" it blind.**
+Full record + URLs: `docs/reviews/2026-07-14-vks-deep-research.md`.
+
+---
+
+#### B3. THE RUNBOOK'S STEP 4 IS EXECUTED BY NOTHING — extend the HARNESS (and do NOT build a parser)
+
+**Measured by an adversary:** `docs/sneakernet.md` names **12** `make` commands. **7 are exercised. 5 are
+not** — `platform`, `gitops`, `install-ingress`, `verify` (+ `check-tools`, **now fixed**). `install-ingress`
+is the command whose doc row **lied for hours** while every test stayed green.
+
+**DO NOT build the "doc IS the test" parser.** Two adversaries killed that design:
+`would_it_have_caught_the_istio_lie: false`. A sequence gate cannot see a **prose claim about a MODE**, and
+it goes green over the covered half while **licensing trust in the uncovered half** — strictly worse than no
+gate. Executing the doc's blocks directly is theatre (the substitutions become a new place for fidelity to
+die, and you'd have to *suppress* `make deps` — the very bug the harness exists to prevent).
+
+**Do this instead:** extend the air-gap harness to actually run Step 4 (`platform` → `gitops` →
+`install-ingress` → `verify`) on the jump box. That is the coverage gap; close it with coverage.
+
+The rule is written up in `claude-config` `rules/common/testing.md` ("BINDING DOCS TO CODE").
+
+---
+
+#### B4. 43 HIGH/MEDIUM DOC FINDINGS — they are CLAIMS, NOT VERDICTS
+
+`docs/reviews/2026-07-14-doc-truth-audit.md` holds **68 raw findings** from an adversarial audit
+(one agent per doc, every claim checked against the code). **45 survived refutation; 23 were REFUTED —
+and the file does not mark which.** So **re-check each against the code before acting.** (Both CRITICALs
+are already fixed: the README told operators to fetch the Harbor CA *before Harbor exists*; sneakernet told
+them to expect a clean `check-tools` *before* the carry.)
+
+---
+
+#### B5. PROVENANCE — a grade is not a source, and every "9.0-doc" grade was earned under a FALSE premise
+
+**The belief that "Broadcom 9.1 URLs 301-redirect to the 9.0 tree" is FALSE.** Measured with curl across
+7+ URLs: **no `/9-1/` URL redirected** — they return **200**, or **404** when the page was *renamed* (9.1
+renamed *Standard Packages* → *VKS Add-ons*). What **does** redirect is **`/latest/` → the 9-0 tree**, and
+search engines hand you `/latest/` URLs. **Hand-edit the version to `/9-1/` and you get real 9.1 content.**
+
+⇒ **Every `9.0-doc (inferred for 9.1)` grade in `docs/vks-services/` must be re-checked** against a
+hand-edited `/9-1/` URL. Records (with `url_requested` vs `url_landed` per fact):
+`docs/reviews/2026-07-14-vks-provenance.md`, `-vks-deep-research.md`.
+
+**Owed:** a **`check-vks-provenance`** gate — every load-bearing fact must carry a resolvable reference
+(URL + retrieval date + the quoted sentence, or a command + its real output, or `FILE:LINE`, or an explicit
+`NOT ESTABLISHED` naming what was tried). RED-prove it by stripping one citation. Without a gate this rots
+back to vibes on the first hurried edit.
+
+**Also:** 3 `argocd.md` refutation agents died on API rate limits — those facts are cited but **not
+adversarially verified**. Two FALSE claims in `argocd.md` were already fixed (the `clusters`-is-global-RBAC
+reason; the "x509 is the shape of a `vcf cluster kubeconfig get` kubeconfig" claim — it is **token**-based).
+
+---
+
+#### B6. VERIFY THE HOOKS ACTUALLY FIRE — they load at SESSION START, so they were INERT the day they were written
+
+Five gates were added today (`subagent-readonly`, `adversary-first`, `mid-run-edit`, `no-gate-in-commit-chain`,
+`check-agent-frontmatter`). **The `PreToolUse` wiring in `.claude/settings.json` is read at session start**, so
+none of them protected the session that wrote them. **They protect YOU.**
+
+**Do not assume they work — that is the exact sin of this session.** The test (5 min):
+instrument the hook to log every call, spawn a real subagent, have it run one read-only and one mutating
+command, and confirm the log shows `agent_id=…` **and** the subagent reports the refusal. The procedure is in
+the "RESOLVED" section below.
+
+---
+
+#### B7. A REAL LAB — everything below is reasoned, gated, and NOT RUN
+
+The Supervisor topology, the `vcf` CLI auth flow (`30-vks-login.sh`), whether a tenant may `kubectl` into
+the ArgoCD namespace at all, and whether the Supervisor can route to a guest LoadBalancer VIP. No amount of
+KinD green changes any of it.
 
 ## ✅ RESOLVED 2026-07-14 — the read-only hook WORKS. The hole was its REGEX, and our own rules dug it
 

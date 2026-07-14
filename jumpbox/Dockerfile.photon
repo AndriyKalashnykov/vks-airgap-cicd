@@ -12,7 +12,7 @@ FROM photon:5.0
 # openssl/TLS trap documented in the README.
 RUN tdnf clean all && tdnf makecache && \
     tdnf install -y \
-      ca-certificates openssl curl git openssh-clients make tar gzip which \
+      ca-certificates openssl curl git openssh-clients make tar gzip which gawk gettext \
       shadow sudo \
       podman fuse-overlayfs slirp4netns && \
     tdnf clean all
