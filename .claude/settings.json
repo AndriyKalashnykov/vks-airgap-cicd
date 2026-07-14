@@ -3,11 +3,20 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|Edit|Write|NotebookEdit|MultiEdit",
         "hooks": [
           {
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/subagent-readonly-gate.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|Workflow|Edit|Write|NotebookEdit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/adversary-first-gate.py\""
           }
         ]
       }

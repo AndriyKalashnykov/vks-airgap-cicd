@@ -36,6 +36,48 @@ yourself writing "I decided X on my own", you have already failed.
 Triggers 1 and 2 collapse into one run when the session opens on a known task (brief it with the
 backlog **and** the design). What is NOT acceptable is starting work with no adversary running.
 
+**Trigger 2 IS NOW A HOOK, because prose did not hold — it was skipped on 2026-07-14 by the very
+session that had just re-read it.** `.claude/hooks/adversary-first-gate.py` (wired in
+`.claude/settings.json`) **BLOCKS `Edit`/`Write` to `scripts/`, `Makefile`, `jumpbox/`, `k8s/`,
+`tekton/`, `apps/` until an adversary has been spawned in this session.** `docs/`, `CLAUDE.md` and
+`.env.example` are deliberately NOT gated — that is where you write the plan down first. Escape hatch,
+on the record: `ADVERSARY_GATE_OFF=1`. RED/GREEN-proven 11 ways.
+
+Its sibling, `subagent-readonly-gate.py`, shipped with a HOLE it took a real incident to find: it
+matched **`Bash` only**, so it blocked a subagent's `git push` and happily let it **rewrite the tree
+with `Edit`/`Write`** — which is exactly how two READ-ONLY-briefed adversaries edited five files on
+2026-07-14, one of them *while the main agent was executing the script*. It now blocks subagent writes
+outright. **A sandbox with a door in it is worse than none: it manufactures confidence.**
+
+### RULE ZERO-A — DERIVE THE CONTRACT FROM THE CODE BEFORE YOU CHANGE IT (BLOCKING)
+
+Before writing code that changes **what one side must provide to another** — the air gap, a wire
+format, an API, "what the other machine needs" — the FIRST deliverable is the **contract, enumerated
+from the code**. Not recalled. Not reasoned. **Grepped.**
+
+```
+what does the far side actually RUN?        (bundle-load, mirror-push, mirror-verify, platform,
+                                             gitops, install-ingress, verify)
+  ↓ for each, what does it INVOKE?          (grep: binaries; `helm repo add`; https:// fetches;
+                                             awk/envsubst/git/openssl; a container engine)
+  ↓ for each, mark it:                       CARRIED | PROVISIONED | *** MISSING ***
+  ↓ PRINT THE DENOMINATOR                    ("scanned N scripts") — a gate that cannot tell you
+                                             what it looked at cannot be trusted to have looked
+```
+
+**A list you wrote from memory is not the contract; a grep is.** Ten minutes of this, once, up front,
+would have produced *in a single pass* every bug the 2026-07-14 session instead found one at a time
+across six round-trips, each looking like a fresh surprise:
+
+| found the hard way | the grep that would have shown it |
+|---|---|
+| bundle carried `helm` (62 MB) and **ZERO CHARTS** → the DEFAULT ingress could never install | `grep 'helm repo add' scripts/` on the air-gap path |
+| `awk` is **not on bare Photon**, and `lib/apps.sh` + `mirror-verify` need it | `grep -w awk scripts/` × what the bare image actually ships |
+| `envsubst`/`gawk` missing from `00-install-prereqs.sh` — the box `make deps` BUILDS | diff "what check-tools calls required" vs "what the bootstrap installs" |
+| a no-internet box retried **>2 min** then blamed googleapis; and `require_cmd crane` told an air-gapped operator to run a script that **downloads from the internet** | `grep -n 'https\?://' ` on every step `install-all` runs |
+
+The tell that you skipped it: you are fixing the SECOND instance of a class you already fixed once.
+
 **How to run it (NOT optional).** Use a **`Workflow`** (schema-forced output) or a **synchronous
 `Agent`** (`run_in_background: false`). Do **NOT** fire-and-forget a background `Agent`. Measured
 2026-07-12 in this repo: Workflow agents delivered **44/44**; background `Agent`s delivered **0/4**
@@ -314,6 +356,69 @@ When spawning subagents, always pass conventions from the respective skill into 
 The two BLOCKING triggers (before you implement · before you call the session done), how to run it
 (`Workflow` with a schema, or a synchronous `Agent` — never fire-and-forget), and what to do with the
 findings are all in Rule Zero. Do not duplicate them here.
+
+## 🔴 BACKLOG — THE FULL RE-TEST MATRIX IS OWED (air-gap toolchain session, 2026-07-14 evening)
+
+**Branch `gate/doc-target-coverage`. The changes below are VERIFIED OFFLINE (`make static-check` green,
+`make airgap-toolchain-test` green on bare photon+ubuntu with `--network none`) and NOT re-verified
+end-to-end.** They touch the bootstrap, the mirror/bundle path, and the DEFAULT ingress — so they
+invalidate far more than the sneakernet leg, and "static-check is green" is a proxy, not the result.
+
+**What changed → what it INVALIDATES (re-run these; do NOT assume):**
+
+| changed | why it invalidates | must re-run |
+|---|---|---|
+| `scripts/00-install-prereqs.sh` — now installs `gawk`, `openssl`, `gettext`/`gettext-base` | it is the script that BUILDS every jump box | `make bootstrap-engine-test` (photon/ubuntu-24.04/ubuntu-26.04 × default/docker = 6 legs) |
+| `scripts/10-mirror-pull.sh` — `require_internet` probe + carries the Istio charts | first step of `mirror`; runs in every mirror path | `make e2e-kind`, `make e2e-sneakernet` |
+| `scripts/11-bundle.sh` — `stage_tool` now resolves via `mise which` + ASSERTS the `.mise.toml` pin | it decides what crosses the gap | `make e2e-sneakernet` (+ `e2e-sneakernet-both`) |
+| `scripts/20-bundle-load.sh` — installs 5 tools, KEEPs the box's own, dies if `BIN_DIR` off PATH | the far side's entry point | `make e2e-sneakernet` |
+| `scripts/46-install-istio.sh` — installs from CARRIED charts when present | **istio is the DEFAULT ingress** — this is on the main path | `make e2e-kind`, `make verify-ingress-both`, `make e2e-kind-istio-existing` |
+| `scripts/lib/os.sh` — `require_internet()` | sourced by everything (probe only fires in mirror-pull) | covered by the above |
+
+**The permutation matrix the owner asked for (2026-07-14) — none of it has been run since the changes:**
+
+```
+make bootstrap-engine-test      # 6 legs — REQUIRED: 00-install-prereqs.sh changed
+make e2e-kind                   # default ingress = istio -> now exercises the carried-chart path
+make e2e-kind-both              # secure + insecure Harbor
+make e2e-sneakernet             # photon + ubuntu; the whole carry
+make jumpbox-matrix             # {photon,ubuntu} x {podman,docker}
+make verify-ingress-both        # istio + traefik
+make e2e-kind-istio-existing    # attach mode (2 REDs + both route APIs)
+make e2e-kind-tenant / -cross-cluster   # unchanged code, but they source lib/os.sh
+```
+
+**Run them SERIALLY** — they mutate a shared cluster + registry, and parallel runs make any failure
+unattributable. Read each log's OWN verdict line; the harness's "exit code 0" is not one (a `| tail`
+in a backgrounded call reports `tail`'s status, and it has lied here before).
+
+**Known-stale docs to fix in the same pass:** `docs/sneakernet.md`'s ingress table still says
+`INGRESS_CONTROLLER=istio` (default) ❌ cannot run air-gapped. **That is now FALSE** — the charts are
+carried and `helm template` renders them offline on a `--network none` box. Fix the table, and say
+where the charts come from.
+
+**Also owed:** the two adversaries went idle and NEVER delivered written reports (their findings exist
+only as code, which was reviewed and one defect fixed — `helm repo update` ran unconditionally, failing
+on the exact no-network path the carried charts exist to fix). If you want the reports, re-run them.
+
+### THEN — and only then — RE-VALIDATE THE DOCS WITH ADVERSARIES (owner's instruction, 2026-07-14)
+
+**Order is deliberate: the e2e matrix FIRST, the doc audit AFTER.** A doc audit run against code the
+matrix is about to change is wasted — and worse, it produces "confirmed" findings that the next commit
+falsifies. Run the matrix, fix what it reds, THEN audit the docs against the code that actually shipped.
+
+Every operator-facing doc gets adversarially re-validated **against the code**, claim by claim:
+`README.md`, `docs/sneakernet.md`, `docs/scenario-1.md`, `docs/scenario-2.md`,
+`docs/prerequisites-manual.md`, `CLAUDE.md`.
+
+Use a **`Workflow` with a schema** (one agent per doc → adversarial verify per finding → synthesize).
+A fire-and-forget background `Agent` delivers NOTHING — measured 0/4 in this very session, while a
+schema-forced Workflow delivered 44/44. A preliminary run exists (`doc-truth-audit`); treat it as a
+SIGNAL, not a verdict, because it ran before the matrix.
+
+The docs are where today's bugs were **stated as facts** — "the air-gapped host gets binaries from the
+bundle" (it got none), "these are on any Linux base" (`awk` is not on Photon), "run `make preflight`"
+(it needs a live cluster). A doc claim is a CLAIM. Grade each: does the operator FOLLOW it and FAIL?
 
 ## ▶️ HANDOFF 2026-07-14 (docker-on-the-jump-box session) — START HERE
 

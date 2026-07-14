@@ -16,8 +16,24 @@ load_env
 # shellcheck source=scripts/lib/progress.sh
 . "${SCRIPT_DIR}/lib/progress.sh"
 
-require_cmd crane
 require_cmd curl
+
+# THE INTERNET CHECK COMES FIRST — BEFORE require_cmd crane — AND THE ORDER IS THE WHOLE POINT.
+#
+# This step is the first thing that actually needs the internet. Two failures used to happen here, and
+# both told the operator something false:
+#   1. WITH crane installed: `preflight` passes (it probes tools and the CLUSTER, never the network), then
+#      http_get_retry — which is deliberately patient with a FLAKY network (curl --retry 3 inside 5 outer
+#      attempts, 10s connect timeout) — grinds against an ABSENT one. MEASURED: >2 minutes of retries on a
+#      SINGLE manifest URL, then a curl error naming storage.googleapis.com.
+#   2. WITHOUT crane (a real air-gapped jump box before bundle-load): `require_cmd crane` fired first and
+#      said "run scripts/00-install-prereqs.sh" — A SCRIPT THAT DOWNLOADS FROM THE INTERNET. It sent an
+#      air-gapped operator to a dead end, confidently.
+# Neither ever said the true thing: this box has no internet, so it is on the wrong flow entirely. Probing
+# first means the diagnosis is right regardless of which tools happen to be present.
+require_internet "'make mirror-pull' (it downloads the Tekton manifests, the Istio charts and every image)"
+
+require_cmd crane
 require_cmd jq
 
 : "${BUNDLE_DIR:?}"; : "${IMAGE_CACHE_DIR:?}"

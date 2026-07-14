@@ -481,6 +481,44 @@ gen_password() {
 # ---------------------------------------------------------------------------
 # Network
 # ---------------------------------------------------------------------------
+# require_internet <what-needs-it> — FAIL FAST, and name the real problem, on a box with no internet.
+#
+# WITHOUT THIS, A NO-INTERNET BOX GETS THE WORST POSSIBLE FAILURE. Nothing in `preflight` probes the
+# internet (it checks tool PRESENCE and CLUSTER reachability), so `make install-all` on an air-gapped box
+# sails through preflight and then enters mirror-pull's http_get_retry, which is built to survive
+# githubusercontent 429s: curl --retry 3 (with backoff) inside 5 outer attempts with 5s delays and a 10s
+# connect timeout. MEASURED: >2 minutes of retrying on a SINGLE manifest URL, and there are several of
+# them before the first image is even touched. The operator then gets a curl error naming
+# storage.googleapis.com — never "this box has no internet, you want the sneakernet flow".
+#
+# The resilience is correct for a FLAKY network and exactly wrong for an ABSENT one. So: probe once,
+# cheaply, up front, and say the thing that is actually true.
+require_internet() {
+  local what="${1:-this step}" host rc=1
+  # Two hosts, so one provider being down is not read as "no internet". HEAD only, short timeouts.
+  for host in https://storage.googleapis.com https://github.com; do
+    if curl -sSf -o /dev/null --head \
+         --connect-timeout "${INTERNET_PROBE_TIMEOUT_SECONDS:-5}" \
+         --max-time "${INTERNET_PROBE_MAX_TIME_SECONDS:-10}" \
+         --retry 0 "$host" 2>/dev/null; then
+      rc=0; break
+    fi
+  done
+  [ "$rc" -eq 0 ] && return 0
+  die "NO INTERNET on this box — and ${what} needs it.
+
+  You are on the wrong flow for this box. Nothing here can download anything.
+
+  If NO SINGLE BOX reaches both the internet and Harbor, use the SNEAKERNET flow (docs/sneakernet.md):
+      on a box WITH the internet :  make mirror-pull && make builder-build && make bundle
+      carry the .tar + .sha256 + this repo across
+      on THIS box               :  make bundle-load BUNDLE_TARBALL=... && make mirror-push && make mirror-verify
+                                   then: make platform gitops && make install-ingress && make verify
+
+  Do NOT run 'make install-all' here: it starts with 'mirror', which downloads from the internet.
+  (If you believe this box IS online, check your proxy: this probe HEADs storage.googleapis.com and github.com.)"
+}
+
 # http_get_retry <url> <dest> — download <url> to <dest>, resilient to transient
 # failures (notably raw.githubusercontent.com HTTP 429 rate-limiting). Combines
 # curl's own transient-error retry with an outer exponential-backoff loop, so a
