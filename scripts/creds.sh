@@ -138,8 +138,11 @@ if [ -n "${KUBECONFIG:-}" ] && have kubectl \
 fi
 
 # CANONICAL PROVENANCE TOKEN — the machine-checkable claim, independent of any wording around it.
-printf '\n  values-provenance: %s\n' "$([ "$_have_sink" = 1 ] && echo DISCOVERED || echo DEFAULT)"
-printf '  Context\n'
+# MACHINE-ONLY: the gate asks for it (CREDS_TOKEN=1); a human should not have to read a token to learn
+# something the Context block below tells them in words. A test's needs do not get to clutter the product.
+[ "${CREDS_TOKEN:-0}" = "1" ] && \
+  printf 'values-provenance: %s\n' "$([ "$_have_sink" = 1 ] && echo DISCOVERED || echo DEFAULT)"
+printf '\n  Context\n'
 printf '    values below : %s\n' \
   "$([ "$_have_sink" = 1 ] \
      && echo "DISCOVERED — read from the state overlay written by the installers" \

@@ -44,7 +44,7 @@ restore() {
 }
 trap restore EXIT
 
-render() { rm -f "$SINK"; [ -n "${1:-}" ] && printf '%s' "$1" > "$SINK"; ./scripts/creds.sh 2>/dev/null; }
+render() { rm -f "$SINK"; [ -n "${1:-}" ] && printf '%s' "$1" > "$SINK"; CREDS_TOKEN=1 ./scripts/creds.sh 2>/dev/null; }
 
 # ---- STATE 1: nothing installed. Every value is a default; the output must SAY SO. -------------------
 out="$(render "")"
