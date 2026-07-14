@@ -243,28 +243,23 @@ vks-login: check-env ## Authenticate to VKS (VCF 9 + Supervisor) → writes KUBE
 	@$(SCRIPTS)/30-vks-login.sh
 
 .PHONY: fetch-harbor-ca
-fetch-harbor-ca: ## Fetch a self-signed lab Harbor's CA cert → HARBOR_CA_FILE (for HTTPS mirror/Kaniko trust)
-	@hostport="$$(printf '%s' "$(HARBOR_URL)" | sed -E 's#^https?://##; s#/.*##')"; \
-	 host="$${hostport%%:*}"; port="$${hostport##*:}"; [ "$$port" = "$$host" ] && port=443; \
-	 out="$(HARBOR_CA_FILE)"; mkdir -p "$$(dirname "$$out")"; \
-	 echo "fetching Harbor CA from $$host:$$port -> $$out"; \
-	 openssl s_client -connect "$$host:$$port" -showcerts </dev/null 2>/dev/null \
-	   | openssl x509 -outform PEM > "$$out" \
-	   && echo "wrote $$out (now set HARBOR_CA_FILE=$$out in .env)" \
-	   || { echo "ERROR: could not fetch a CA from $$host:$$port — is the lab Harbor reachable over HTTPS?"; exit 1; }
+fetch-harbor-ca: ## Fetch the CA that ISSUED the lab Harbor's cert → HARBOR_CA_FILE, and VERIFY it (for HTTPS mirror/Kaniko trust)
+	@$(SCRIPTS)/fetch-ca.sh "$(HARBOR_URL)" "$(HARBOR_CA_FILE)" harbor
 
 .PHONY: fetch-argocd-ca
-fetch-argocd-ca: ## Fetch a self-signed ArgoCD server CA cert → ARGOCD_CA_FILE (endpoint: ARGOCD_LB_IP or ARGOCD_SERVER)
+fetch-argocd-ca: ## Fetch the CA that ISSUED the ArgoCD server's cert → ARGOCD_CA_FILE, and VERIFY it (endpoint: ARGOCD_LB_IP or ARGOCD_SERVER)
 	@ep="$(if $(ARGOCD_LB_IP),$(ARGOCD_LB_IP),$(ARGOCD_SERVER))"; \
-	 [ -n "$$ep" ] || { echo "ERROR: set ARGOCD_LB_IP (kind, from .env.kind) or ARGOCD_SERVER (lab argocd-server LB IP) first"; exit 1; }; \
-	 hostport="$$(printf '%s' "$$ep" | sed -E 's#^https?://##; s#/.*##')"; \
-	 host="$${hostport%%:*}"; port="$${hostport##*:}"; [ "$$port" = "$$host" ] && port=443; \
-	 out="$(if $(ARGOCD_CA_FILE),$(ARGOCD_CA_FILE),./secrets/argocd-ca.crt)"; mkdir -p "$$(dirname "$$out")"; \
-	 echo "fetching ArgoCD CA from $$host:$$port -> $$out"; \
-	 openssl s_client -connect "$$host:$$port" -showcerts </dev/null 2>/dev/null \
-	   | openssl x509 -outform PEM > "$$out" \
-	   && echo "wrote $$out (now set ARGOCD_CA_FILE=$$out in .env)" \
-	   || { echo "ERROR: could not fetch a CA from $$host:$$port — is ArgoCD reachable over HTTPS?"; exit 1; }
+	 [ -n "$$ep" ] || { echo "ERROR: set ARGOCD_LB_IP (kind, from the state overlay) or ARGOCD_SERVER (lab argocd-server LB IP) first"; exit 1; }; \
+	 $(SCRIPTS)/fetch-ca.sh "$$ep" "$(if $(ARGOCD_CA_FILE),$(ARGOCD_CA_FILE),./secrets/argocd-ca.crt)" argocd
+
+##@ Container engine (podman is the default; docker is supported when you ask for it)
+.PHONY: engine-check
+engine-check: ## READ-ONLY: does this box have what your engine needs, and will it cost you a sudo? (no cluster, no registry)
+	@$(SCRIPTS)/18-engine-check.sh
+
+.PHONY: trust-harbor
+trust-harbor: check-env ## Make YOUR engine trust the self-signed Harbor — and PROVE it with a real login handshake
+	@$(SCRIPTS)/19-trust-harbor.sh
 
 .PHONY: harbor-robot
 harbor-robot: ## Create a least-privilege Harbor CI robot account (push+pull) → secrets/harbor-robot.env; copy into .env
@@ -471,11 +466,20 @@ e2e-kind-istio-existing: ## KinD e2e for the ATTACH mode: a "platform team" inst
 	@echo "==> e2e-kind-istio-existing PASSED — the UIs route through an Istio we did not install (BOTH route APIs)"
 
 ##@ Jump-box validation (Photon / Ubuntu container, rootless podman)
-JUMPBOX_OS    ?= photon
-JUMPBOX_IMAGE ?= vks-jumpbox:$(JUMPBOX_OS)
+JUMPBOX_OS     ?= photon
+JUMPBOX_ENGINE ?= podman
+# ENGINE-QUALIFIED, and it must stay that way. `vks-jumpbox:$(JUMPBOX_OS)` was a live footgun: building
+# photon+podman and then photon+docker OVERWRITES THE SAME TAG, so a matrix runs whichever image was
+# built last for BOTH legs and cheerfully reports two engines from one image — a false green by
+# construction. The tag must name every dimension the image varies in.
+JUMPBOX_IMAGE  ?= vks-jumpbox:$(JUMPBOX_OS)-$(JUMPBOX_ENGINE)
 .PHONY: jumpbox-image
 jumpbox-image: ## Build the jump-box test image for JUMPBOX_OS (photon|ubuntu; rootless podman inside)
 	@docker build -f jumpbox/Dockerfile.$(JUMPBOX_OS) -t $(JUMPBOX_IMAGE) .
+
+.PHONY: bootstrap-engine-test
+bootstrap-engine-test: ## CLAIM 1: does `make deps` actually PRODUCE a docker jump box when asked — and a podman one (with ZERO docker) when not? Runs the REAL bootstrap on BARE Photon/Ubuntu images.
+	@$(SCRIPTS)/test-bootstrap-engine.sh
 
 .PHONY: jumpbox
 jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photon|ubuntu): make deps + rootless podman + cluster reach, vs the running KinD cluster

@@ -42,7 +42,23 @@ cd "$WORK"
 # Container engine — mirror the repo's CONTAINER_ENGINE (podman-preferred, docker fallback);
 # override with JUMPBOX_ENGINE. This harness targets the README's rootless-podman path.
 ENGINE="${JUMPBOX_ENGINE:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}"
+# EXPORT IT. This file is a SECOND engine chooser: `make deps` and 16-engine-trust-check inside the box
+# call container_engine() (lib/os.sh), a THIRD one. On a one-engine image the two agree by luck; the day
+# an image carries both, the harness would print engine=docker in its banner while the work underneath
+# ran on podman — a leg reporting an engine it never used. One choice, exported, so they cannot diverge.
+export CONTAINER_ENGINE="$ENGINE"
 echo "### jump box: ${PRETTY_NAME} · user=$(whoami) · engine=${ENGINE} ($(command -v "$ENGINE")) ###"
+
+# ASSERT the image is single-engine. The banner above is only honest if the OTHER engine is absent:
+# container_engine() prefers podman whenever it is present, so a docker leg on a both-engines image
+# silently runs podman and looks green. Fail loudly rather than measure the wrong engine.
+_other="podman"; [ "$ENGINE" = podman ] && _other="docker"
+if command -v "$_other" >/dev/null 2>&1; then
+  echo "FATAL: this image has BOTH engines (${ENGINE} and ${_other}). A matrix leg must run the engine it" >&2
+  echo "       claims: container_engine() prefers podman when present, so a 'docker' leg here would run" >&2
+  echo "       PODMAN and report a green that measured the wrong engine. Build a single-engine image." >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # MODE=airgap-half — the AIR-GAP half of the two-box sneakernet (make e2e-sneakernet).
