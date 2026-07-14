@@ -64,6 +64,11 @@ make deps                                  # installs the full jump-box toolchai
                                            # scripts/00-install-prereqs.sh); it also sets up rootless
                                            # podman for the builder-image build — crun + registries on
                                            # Photon, uidmap + slirp4netns on Ubuntu
+                                           #
+                                           # Prefer docker? `make deps CONTAINER_ENGINE=docker` installs
+                                           # docker + its rootless prerequisites instead (and NOTHING of
+                                           # podman). Then `make trust-harbor`, and `make engine-check`
+                                           # to see whether it costs you a sudo on this box.
 ```
 
 ---

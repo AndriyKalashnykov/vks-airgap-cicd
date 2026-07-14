@@ -54,9 +54,18 @@ New here? Pick the path that matches your situation — each one is self-contain
 The VKS paths start from the jump-box **[Prerequisites](#prerequisites)** below.
 Run **`make check-tools`** to see which CLIs you have and which are required.
 
-> **Container engine:** you do nothing — `make deps` installs **podman** and the flow uses it.
-> Only if you must use **docker** instead: set `CONTAINER_ENGINE=docker` and make its daemon trust the
-> Harbor CA (`.env.example` → `CONTAINER_ENGINE` has the commands). `make e2e-kind` needs Docker either way.
+> **Container engine — podman is the default and you do nothing.** `make deps` installs it, and it is the
+> only engine that needs **no sudo on any box**. **Docker is supported too, opt-in.**
+>
+> | your situation | what you run | sudo? |
+> |---|---|---|
+> | **Default (podman)** | nothing — `make deps` installs it | **never** |
+> | **You want docker** | `make deps CONTAINER_ENGINE=docker`, then `make trust-harbor` | **rootless: none** · **rootful: one per registry** |
+> | Not sure what your box has | `make engine-check` (read-only — tells you the engine, the mode, and what it will cost) | — |
+> | `make e2e-kind` (the KinD stand-in) | needs Docker **regardless** — kind's nodes *are* docker containers. That is kind, not us. | — |
+>
+> Rootful docker's sudo cannot be engineered away: `/etc/docker/certs.d` is root-owned and the `docker`
+> group grants socket access, not write access to `/etc`. `make trust-harbor` prints the exact line.
 
 ## Demo apps
 
@@ -164,11 +173,16 @@ It needs internet (dual-homed); a fully air-gapped host uses the carried bundle 
 > **`curl` must already be present** for the pipe form above. Ubuntu images ship it; a **bare
 > Photon OS 5** box does **not** — run `sudo tdnf install -y curl` first, then re-run the command.
 >
-> The **`make deps` toolchain install + rootless-podman engine + cluster reachability** are
-> validated end-to-end by `make jumpbox` — it runs them on a fresh jump-box container
-> (`JUMPBOX_OS=photon` on `photon:5.0`, the default, or `JUMPBOX_OS=ubuntu` on `ubuntu:26.04`;
-> `make jumpbox-both` runs the matrix), joined to a local KinD cluster with rootless podman, and
-> fails if `make deps` or the container-engine setup breaks on a real jump box of that OS.
+> The **`make deps` toolchain install + the container engine + cluster reachability** are validated
+> end-to-end by `make jumpbox` — it runs them on a fresh jump-box container (`JUMPBOX_OS=photon` on
+> `photon:5.0`, the default, or `JUMPBOX_OS=ubuntu` on `ubuntu:26.04`), joined to a local KinD cluster,
+> and fails if `make deps` or the engine setup breaks on a real jump box of that OS.
+>
+> **`make jumpbox-matrix` runs all four permutations** — {photon, ubuntu} × {podman, docker} — and each
+> leg makes the engine actually **log in, pull, build, push and pull-back-verify against the real
+> self-signed Harbor**. `make bootstrap-engine-test` proves the other half: that `make deps` *produces*
+> the box you asked for, on **literally bare** OS images (podman by default with **zero** docker; docker
+> only when you ask for it).
 
 ### Toolchain and access
 
@@ -179,6 +193,8 @@ and (dual-homed only) the workload cluster.
 
 ```bash
 make deps            # toolchain: mise + podman (git must already be present)
+                     #   want docker instead?  make deps CONTAINER_ENGINE=docker
+make engine-check    # read-only: what engine does this box have, and will it cost you a sudo?
 make env-init        # create .env from .env.example
 make env-populate    # mint the secrets we can, discover cluster values, print what only you can supply
 make fetch-harbor-ca # Harbor is self-signed: write its CA to the path HARBOR_CA_FILE points at
@@ -187,7 +203,9 @@ make check-tools     # what this box has, and what it still needs
 ```
 
 Running `make e2e-kind` (the local stand-in)? It **also needs Docker** — kind's nodes run on the
-Docker socket. A real air-gap run does not: it is podman-only.
+Docker socket. That is kind, not us. A real air-gap run does **not** need docker: podman is the default
+and is sudo-free everywhere. Docker is supported if you prefer it (`CONTAINER_ENGINE=docker`), and
+`make engine-check` will tell you what it costs on *your* box before you commit to it.
 
 ## The three paths
 

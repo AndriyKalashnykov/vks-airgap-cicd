@@ -47,9 +47,17 @@ repo trusts it **per consumer** instead (all KinD-verified, and the same mechani
 | Consumer | Mechanism |
 |---|---|
 | `crane` (the mirror engine) | `SSL_CERT_FILE=<bundle>` — build the bundle as **system CAs + the Harbor CA**, since Go *replaces* its trust pool rather than augmenting it |
-| `podman` (builder push) | `--cert-dir <dir>` containing **only** `ca.crt` |
+| `podman` (builder push, the DEFAULT) | `--cert-dir <dir>` containing **only** `ca.crt` — per command, **no sudo, ever** |
+| `docker` **rootless** | the daemon reads `~/.config/docker/certs.d/<host>/ca.crt` — **no sudo** |
+| `docker` **rootful** | the daemon reads `/etc/docker/certs.d/<host>/ca.crt` — **root-owned, so ONE SUDO PER REGISTRY.** The `docker` group grants socket access, not write access to `/etc`; this cannot be engineered away, only disclosed |
 | each node's **containerd** | `/etc/containerd/certs.d/<host>/hosts.toml` with an explicit `ca = …` line |
 | in-cluster **Kaniko** | the CA mounted at `/kaniko/ssl/certs/additional-ca-cert-bundle.crt` |
+
+> **`make trust-harbor` does whichever of these applies to your engine — and PROVES it with a real login
+> handshake** rather than placing a file and hoping. Do not gate on the file's existence: docker **merges**
+> `certs.d` with the host system store, so a *missing* `ca.crt` does **not** mean docker will fail (an
+> operator who ran `update-ca-certificates` already works). The only honest test of trust is a trust
+> operation. `make engine-check` tells you which mode you are in before you start.
 
 On a real lab the guest cluster's trust comes from the Cluster spec (`trust.additionalTrustedCAs`,
 double-base64) or same-Supervisor auto-trust — the containerd wiring above is the KinD stand-in's
