@@ -229,7 +229,7 @@ above is self-contained end to end (a CI gate enforces that: `make check-readme-
 
 | | |
 |---|---|
-| [Sneakernet](docs/sneakernet.md) | **your jump box reaches the internet but NOT Harbor** — pull the images on one box, carry the bundle across on a stick, push them in from the other. Applies to **both** VKS scenarios; it replaces `make mirror` (and `make install-all`, which starts with it) |
+| [Sneakernet](docs/sneakernet.md) | **no single box reaches BOTH the internet and Harbor** — so you use two: pull the images on the internet-side box, carry the bundle across on a stick, push them in from the box that can reach Harbor. Applies to **both** VKS scenarios; it replaces `make mirror` (and `make install-all`, which starts with it) |
 | [Architecture](docs/architecture.md) | system context, containers, deployment, pipeline flow |
 | [Tech stack](docs/tech-stack.md) | what the demo is built from |
 | [Prerequisites — the manual path](docs/prerequisites-manual.md) | the step-by-step the bootstrap automates |
