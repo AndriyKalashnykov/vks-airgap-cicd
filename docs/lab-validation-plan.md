@@ -373,7 +373,7 @@ make env-validate 2>&1 | tee /tmp/14-env-validate.log; echo "EXIT=$?"
 make preflight    2>&1 | tee /tmp/14-preflight.log;    echo "EXIT=$?"
 ```
 
-**Expect:** `preflight` **EXIT=0**, and `argocd-preflight` prints **TOPOLOGY OK** (agreeing with step 8).
+**Expect:** `preflight` **EXIT=0**, and `argocd-preflight` prints **`PREFLIGHT OK`** + **`ArgoCD is OFF-CLUSTER (the real-lab shape)`** (agreeing with step 8).
 **Send back:** all three logs + exit codes — **and any var `env-check` demands that the runbook never told you to set** (a known suspect: `VKS_CA_CERT_FILE`).
 
 > **If preflight blocks on a value that only exists later — STOP AND REPORT. Do not work around it.** The ordering regression is back.

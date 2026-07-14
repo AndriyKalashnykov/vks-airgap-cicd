@@ -60,9 +60,24 @@ overlay is **archived, not deleted** — it may hold that cluster's only passwor
 2. **Supervisor Management → Services → Add New Service** → upload `harbor-service-<ver>.yml`.
 3. **Edit `harbor-data-values-<ver>.yml`:** `hostname` (the Harbor **FQDN**) · `harborAdminPassword` · `secretKey` (**exactly 16 chars**) · `database.password` · `core.xsrfKey` (**32 chars**) · the five storage classes · and the ingress toggle (`enableContourHttpProxy: true`, or `enableNginxLoadBalancer: true`). **Leave `tlsCertificate` alone** — cert-manager self-issues, and the `managed-by: vmware-vRegistry` label is required for VKS trust.
 4. **Actions → Manage Service** → pick version + Supervisor → paste the values → **Finish**.
-5. **Map the FQDN:** `kubectl get svc -n <harbor-ns>` (or the Contour Envoy Service) → get the ingress IP → add a DNS record, or an `/etc/hosts` entry on the jump box.
+5. **Map the FQDN — with a real DNS record. An `/etc/hosts` entry on the jump box is NOT an alternative.**
+   `kubectl get svc -n <harbor-ns>` (or the Contour Envoy Service) → take the ingress IP → **create a DNS
+   record that the GUEST CLUSTER'S NODES can resolve.**
 
-**Expect:** Harbor's UI answers at the FQDN you chose.
+   > **Why this is not a nit.** The jump box is not the only thing that pulls from Harbor — every
+   > **kubelet/containerd on the guest cluster** pulls each workload image from `$HARBOR_URL`, and they
+   > cannot see the jump box's `/etc/hosts`. With only a hosts entry, `make mirror` **succeeds** (the jump
+   > box resolves it fine) and then every workload `ImagePullBackOff`s much later, at the far end of the
+   > pipeline, with an error that points at the image, not at DNS.
+   >
+   > **No DNS available?** Then use Harbor's **LB IP as `HARBOR_URL`** — but the cert must then carry an
+   > **IP SAN**, not just a DNS SAN. Since Go 1.15 a certificate with no matching SAN is rejected *even by
+   > a client that trusts the CA*, and Go 1.17 removed the escape hatch — so a DNS-only cert on an IP URL
+   > fails in crane, podman, containerd and Kaniko alike. (Our KinD stand-in mints `SAN=IP` for exactly
+   > this reason.)
+
+**Expect:** Harbor's UI answers at the FQDN you chose, **and** a pod on the guest cluster can resolve it:
+`kubectl run dns-probe --rm -it --restart=Never --image=<mirrored-busybox> -- nslookup <harbor-fqdn>`
 
 **→ now set in `.env`:**
 
@@ -162,14 +177,21 @@ export KUBECONFIG=$PWD/secrets/vks.kubeconfig
 kubectl auth can-i create customresourcedefinitions.apiextensions.k8s.io   # Tekton needs this
 kubectl get storageclass                                                   # Gitea's PVC needs a DEFAULT
 kubectl get svc -A --field-selector spec.type=LoadBalancer                 # Gitea needs an LB VIP
-make psa-check                                                             # will PSA admit our pods?
+make psa-check                                                             # (see the caveat below)
 ```
 
-**Expect:** `yes` · one StorageClass marked `(default)` · a working LB provider · `psa-check` green.
+**Expect:** `yes` · one StorageClass marked `(default)` · a working LB provider · and `psa-check` printing
+**`measured 0 namespace(s) … PSA UNPROVEN`** — which is the *correct* answer here, and is **not** a pass.
 
-> **VKS enforces the `restricted` Pod Security Standard by default** (VKr v1.26+), which **rejects**
-> our Kaniko build pods unless their namespaces are labelled `baseline`. Our installers apply the
-> measured labels; `psa-check` proves the cluster will admit them.
+> **VKS enforces the `restricted` Pod Security Standard by default** (VKr v1.26+), which **rejects** our
+> Kaniko build pods unless their namespaces are labelled `baseline`. Our installers apply the measured
+> labels.
+>
+> **`psa-check` cannot prove that yet, and it will tell you so.** At this point none of our namespaces
+> exist, so there is nothing to admit and nothing to measure — a green here would be true *before any of
+> our code had run*, which is no evidence at all. The run that actually proves it is the one **after
+> `make platform`** (Step 5), and `psa-check` is wired into `make preflight` there. Re-run it then and
+> look for `PSA OK — … (N measured)`.
 
 ## Step 2 — Harbor's CA
 
@@ -220,10 +242,12 @@ A3 gave you the guest one. This gives you the Supervisor one.
 
 ```bash
 make fetch-argocd-kubeconfig    # interactive: prompts for your password
-make argocd-preflight           # versions + a TOPOLOGY OK/MISMATCH verdict
+make argocd-preflight           # CLI vs SERVER versions + is ArgoCD even able to deploy to your cluster?
 ```
 
-**Expect:** `$ARGOCD_KUBECONFIG` is written, and `argocd-preflight` prints **TOPOLOGY OK**.
+**Expect:** `$ARGOCD_KUBECONFIG` is written, and `argocd-preflight` prints **`PREFLIGHT OK`** and
+**`ArgoCD is OFF-CLUSTER (the real-lab shape)`** — the line that actually proves the two-cluster topology
+was detected. (It does *not* print "TOPOLOGY OK"; that string does not exist.)
 
 > **Confirming `ARGOCD_NAMESPACE`:** it is the vSphere Namespace from **A2**. If you want to verify it,
 > query the **Supervisor** — ArgoCD is **not** in your guest cluster, so a `kubectl get pods -A` against

@@ -8,7 +8,7 @@
 > **The trap this page exists for.** An ArgoCD `Application` whose destination is
 > `https://kubernetes.default.svc` deploys into **the cluster ArgoCD itself runs in**. On VKS that
 > is the **Supervisor**, *not* your workload cluster. The sync goes **green** and the workload never
-> appears where you expect. `make argocd-preflight` reports `TOPOLOGY OK` / `TOPOLOGY MISMATCH`
+> appears where you expect. `make argocd-preflight` reports `PREFLIGHT OK` / `PREFLIGHT FAILED`
 > for exactly this.
 
 ## What Broadcom ships
@@ -152,7 +152,7 @@ make gitops        # auto-invokes `make argocd-register-guest` when ARGOCD_KUBEC
 
 | Command | Does |
 |---|---|
-| `make argocd-preflight` | CLI vs **server** version, and `TOPOLOGY OK / MISMATCH` (is ArgoCD even in a position to deploy to your cluster?) |
+| `make argocd-preflight` | CLI vs **server** version, and `PREFLIGHT OK / FAILED` + whether ArgoCD is OFF-CLUSTER (is it even in a position to deploy to your cluster?) |
 | `make fetch-argocd-kubeconfig` | obtain the **Supervisor** kubeconfig (where ArgoCD runs) → `ARGOCD_KUBECONFIG`, and prove it reaches `argocd-server` |
 | `make argocd-register-guest` | the registration above (admin-only). Auto-invoked by `make gitops`. |
 | `make gitops` | register (if needed) → create/point the `Application` |
