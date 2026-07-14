@@ -431,7 +431,10 @@ Each item is self-contained: what, why, what to run, and what settles it. Do not
 
 ---
 
-#### B0. FINISH THE LANDING — PR #239 is GREEN but INCOMPLETE. Do this first
+#### B0. ✅ DONE — PR #239 MERGED (main @ dfd0b18), jump-box images fixed, 6 e2e legs green
+
+**Landed 2026-07-14:** PR #239 (13 commits) + PR #241 (B6). `main` @ f7bfaa4. B0 and B6 are the
+only completed items; everything below (B1–B5, B7, B8) is genuinely OPEN for the next session.
 
 **State:** branch `gate/doc-target-coverage` → **PR #239**, 13 commits, all 6 CI checks green,
 `mergeStateStatus: CLEAN`. **`main` is untouched.** PR #240 was closed as superseded.
@@ -451,20 +454,23 @@ Each item is self-contained: what, why, what to run, and what settles it. Do not
 
 ---
 
-#### B1. RE-RUN THE MATRIX LEGS THAT TODAY'S LATER CHANGES INVALIDATED
+#### B1. ✅ DONE — the stale legs were re-run as the PR #239 merge gate, all GREEN
 
-The 6/6 matrix was run **before** several scripts changed. **It is stale for these legs.** Do not cite it.
+The 6/6 matrix was run *before* several scripts changed; those legs were **re-run before merging #239**,
+and each verdict was read from the log's own line (never an exit code):
 
-| leg | why it is stale now |
-|---|---|
-| `make e2e-kind` | `46-install-istio.sh` changed **after** the matrix: it now **HARD-FAILS** when a bundle exists but carries no istio charts (it used to silently fetch from the internet). istio is the **DEFAULT** ingress — this is the main path. |
-| `make verify-ingress-both` | same reason. |
-| `make jumpbox-matrix` | the 4 jump-box Dockerfiles changed (gawk + gettext). |
-| `make e2e-sneakernet` | `jumpbox-run.sh` now runs `check-tools` twice; the Dockerfiles changed. |
-| `make bootstrap-engine-test` | **still valid** — `00-install-prereqs.sh` changed *before* the matrix ran. |
+| leg | verdict | proved |
+|---|---|---|
+| `make e2e-sneakernet` | **OK** — photon + ubuntu | `jumpbox-run.sh`'s new `check-tools` (pre-carry + post-load); the Dockerfile `envsubst` fix |
+| `make e2e-kind` | **PASS** | `46-install-istio.sh` now HARD-FAILS on a chart-less bundle; the DEFAULT ingress installs from carried charts |
+| `make verify-ingress-both` | **PASS** | istio + traefik both route |
+| `make jumpbox-matrix` | **4/4 PASSED** | podman AND docker, on Photon AND Ubuntu, against the self-signed Harbor |
 
-**Run them SERIALLY.** `jumpbox-matrix` needs a live KinD cluster + Harbor — **run it BEFORE any leg that
-tears the cluster down** (I got this wrong and mis-diagnosed the red as a product bug for a minute).
+`bootstrap-engine-test` (6 legs) was valid from the original matrix (`00-install-prereqs.sh` changed
+*before* it ran). **The only re-test still owed is B1b** (the podman/docker sneakernet hole).
+> **When you DO re-run legs (B1b, or after any script change): run them SERIALLY**, and run
+> `jumpbox-matrix` **BEFORE** any leg that tears the cluster down — it needs a live KinD cluster + Harbor.
+> (I got that ordering wrong and mis-diagnosed the red as a product bug for a minute.)
 
 ---
 
@@ -590,6 +596,23 @@ hook's `main()`, do the real action, read the log — it shows tool_name + agent
 The Supervisor topology, the `vcf` CLI auth flow (`30-vks-login.sh`), whether a tenant may `kubectl` into
 the ArgoCD namespace at all, and whether the Supervisor can route to a guest LoadBalancer VIP. No amount of
 KinD green changes any of it.
+
+---
+
+#### B8. FIX the `no-gate-in-commit-chain` hook's FALSE POSITIVE on `-m`/`-F` message text
+
+`.claude/hooks/no-gate-in-commit-chain.py` matches its forbidden pattern (a gate token near a `git commit`)
+**inside the commit MESSAGE itself**. So a commit whose *message* quotes `make static-check && git commit`
+is refused even though the actual command is a single, legitimate `git commit`. **Verified live 2026-07-14
+— it blocked the very commit that documented this bug**, until the message moved to `-F <file>`.
+
+**Fix:** before matching, strip the message argument — everything after `-m <str>` / `--message …` and the
+`-F <file>` / `--file` operand — so only the *command structure* is inspected, not prose. Then RED/GREEN
+prove BOTH: (a) `git commit -m "make ci && git commit"` (message quotes the pattern) → **ALLOWED**;
+(b) `make ci && git commit -m x` (real chain) → still **BLOCKED**.
+
+Workaround until then (already the house rule): pass commit messages via `-F <file>`, never inline `-m`
+with special text. This is the same file-not-argv discipline the backtick/`$(…)` rules already mandate.
 
 ## ✅ RESOLVED 2026-07-14 — the read-only hook WORKS. The hole was its REGEX, and our own rules dug it
 
