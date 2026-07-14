@@ -79,7 +79,14 @@ fi
 if [ -n "$TARBALL" ]; then
   [ -f "$TARBALL" ] || die "JUMPBOX_TARBALL not found: ${TARBALL}"
   tb_abs="$(cd "$(dirname "$TARBALL")" && pwd)/$(basename "$TARBALL")"
-  MOUNTS+=(-v "${tb_abs}:/run/bundle/$(basename "$tb_abs"):ro")
+  # CARRY THE CHECKSUM TOO. The e2e used to mount ONLY the tarball — so it was not faithful to its own
+  # runbook ("carry the tarball, its .sha256, and the repo"), and the far side could not verify what had
+  # crossed the gap. bundle-load now REQUIRES the checksum (an archive that crossed removable media is
+  # the one place a silent bit-flip is plausible), and it caught this the first time it ran.
+  [ -f "${tb_abs}.sha256" ] || die "the bundle has no checksum beside it: ${tb_abs}.sha256
+  'make bundle' writes it; the air-gap box requires it. Re-cut the bundle."
+  MOUNTS+=(-v "${tb_abs}:/run/bundle/$(basename "$tb_abs"):ro"
+           -v "${tb_abs}.sha256:/run/bundle/$(basename "$tb_abs").sha256:ro")
   ENVS+=(-e JUMPBOX_MODE=airgap-half -e "JUMPBOX_TARBALL=/run/bundle/$(basename "$tb_abs")")
   log_info "running ${JUMPBOX_OS} AIR-GAP jump box (sneakernet half) — Harbor=${HARBOR_URL}, tarball=$(basename "$tb_abs")"
 else

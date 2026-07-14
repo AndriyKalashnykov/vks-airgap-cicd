@@ -84,8 +84,10 @@ if [ "${JUMPBOX_MODE:-validate}" = "airgap-half" ]; then
     printf 'HARBOR_USERNAME=%s\n' "${HARBOR_USERNAME:-admin}"
     [ -n "${HARBOR_PASSWORD:-}" ] && printf 'HARBOR_PASSWORD=%s\n' "$HARBOR_PASSWORD"
     printf 'HARBOR_CA_FILE=./secrets/harbor-ca.crt\n'
-  } > "$WORK/.env.kind"
-  chmod 600 "$WORK/.env.kind"
+    # `.env.state`, NOT `.env.kind` — the sink was renamed in #192, and writing the legacy name made
+    # load_env emit "reading legacy .env.kind" on every sneakernet run. Sixth site of that rename's rot.
+  } > "$WORK/.env.state"
+  chmod 600 "$WORK/.env.state"
   if [ "${HARBOR_INSECURE:-0}" != "1" ] && [ -f /run/jumpbox/harbor-ca.crt ]; then
     mkdir -p secrets; cp /run/jumpbox/harbor-ca.crt secrets/harbor-ca.crt; chmod 0644 secrets/harbor-ca.crt
   fi
