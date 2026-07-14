@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1
+# jumpbox/Dockerfile.photon-docker — a VMware Photon OS jump box running ROOTLESS DOCKER, for the engine
+# matrix (`make jumpbox JUMPBOX_OS=photon JUMPBOX_ENGINE=docker`). The podman counterpart is
+# Dockerfile.photon.
+#
+# PHOTON IS THE *EASY* OS FOR ROOTLESS DOCKER — the opposite of the usual assumption, and worth stating
+# because it inverts where you would expect the friction. Photon 5 ships `docker`, `docker-rootless` and
+# `rootlesskit` first-class from its own repos (no third-party repo, no GPG key), and it puts
+# dockerd-rootless.sh straight onto PATH at /usr/bin. Ubuntu hides its copy in
+# /usr/share/docker.io/contrib (and 24.04 does not ship one at all). Verified by running it, 2026-07-14.
+#
+# ONE ENGINE PER IMAGE, ASSERTED: container_engine() prefers podman when present, so a both-engines image
+# would silently run PODMAN on this "docker" leg and report a green that measured the wrong engine.
+#
+# NON-ROOT (`vks`) ON PURPOSE: at uid 0 the sudo column — the deliverable of the engine matrix — is not
+# merely wrong, it is UNMEASURABLE (nothing escalates, and the /etc write succeeds anyway). See
+# lib/engine.sh, which refuses to print a sudo verdict as root.
+FROM photon:5.0
+
+# Bootstrap set only. The rootless prerequisites (docker-rootless, rootlesskit, ...) are NOT pre-installed
+# here — installing them is `make deps`' job, and pre-baking them would make the bootstrap's docker path a
+# no-op ("already the newest version") so the thing this leg exists to test would never run.
+# Refresh the cache first — the stale-cache openssl/TLS trap documented in the README.
+RUN tdnf clean all && tdnf makecache && \
+    tdnf install -y \
+      ca-certificates openssl curl git openssh-clients make tar gzip which \
+      shadow sudo procps-ng iproute2 \
+      docker && \
+    tdnf clean all
+
+RUN ! command -v podman >/dev/null 2>&1 || { echo "FATAL: podman is present in a DOCKER image — container_engine() would prefer it and this leg would silently measure the WRONG engine"; exit 1; }
+
+RUN groupadd vks && useradd -g vks -m -s /bin/bash vks && \
+    printf 'vks:100000:65536\n' > /etc/subuid && \
+    printf 'vks:100000:65536\n' > /etc/subgid && \
+    printf 'vks ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/vks && chmod 0440 /etc/sudoers.d/vks
+
+# XDG_RUNTIME_DIR, derived (never hardcoded — see the Ubuntu image's note on the uid-1000/1001 trap).
+RUN uid="$(id -u vks)" && install -d -o vks -g vks -m 0700 "/run/user/${uid}"
+
+USER vks
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN curl -fsSL https://mise.run | sh
+ENV PATH="/home/vks/.local/bin:/home/vks/.local/share/mise/shims:/usr/local/bin:${PATH}"
+WORKDIR /home/vks
+CMD ["bash"]

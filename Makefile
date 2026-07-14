@@ -516,7 +516,16 @@ jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photo
 	 if [ -n "$(JUMPBOX_VCF_SRC)" ] && [ -d "$(JUMPBOX_VCF_SRC)" ]; then \
 	   extra="$$extra -v $(abspath $(JUMPBOX_VCF_SRC)):/run/vcf-artifacts:ro -e VCF_CLI_SRC_DIR=/run/vcf-artifacts"; \
 	 fi; \
-	 tb_flags=""; hpw=""; \
+	 : "HARBOR CREDS ON EVERY RUN, not just the sneakernet branch. Stage 5 (16-engine-trust-check) is"; \
+	 : "the ONLY thing in this harness that makes an ENGINE talk to Harbor — the disputed step. Without"; \
+	 : "the creds it cannot run, and a jump-box leg that skips it proves nothing about the engine."; \
+	 huser="$$(grep -h '^HARBOR_USERNAME=' "$$sink" .env .env.example 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//" || true)"; \
+	 hpass="$$(grep -h '^HARBOR_PASSWORD=' "$$sink" .env 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//" || true)"; \
+	 [ -n "$$hpass" ] || { echo "ERROR: HARBOR_PASSWORD not in the state overlay ($$sink) or .env — the engine cannot push"; exit 1; }; \
+	 : "The CA is mounted; NAME it too, or 16 cannot find it (HARBOR_CA_FILE was never exported here —"; \
+	 : "the same class of bug as the 5 dead .env.kind reads above: mounted but never named)."; \
+	 [ -f .jumpbox/harbor-ca.crt ] && extra="$$extra -e HARBOR_CA_FILE=/run/jumpbox/harbor-ca.crt"; \
+	 tb_flags=""; hpw="$$hpass"; \
 	 if [ -n "$(JUMPBOX_TARBALL)" ]; then \
 	   tbabs="$(abspath $(JUMPBOX_TARBALL))"; tbbase="$$(basename "$$tbabs")"; \
 	   [ -f "$$tbabs" ] || { echo "ERROR: JUMPBOX_TARBALL not found: $$tbabs"; exit 1; }; \
@@ -533,17 +542,38 @@ jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photo
 	 else \
 	   echo "running $(JUMPBOX_OS) jump box on the kind network (Harbor=$$harbor_url, insecure=$$harbor_insecure)"; \
 	 fi; \
+	 : "-e HARBOR_PASSWORD (NAME ONLY) — the VALUE is inherited from the env prefix, never placed on argv,"; \
+	 : "where ps/procfs would expose it (security.md: secrets never in argv)."; \
 	 HARBOR_PASSWORD="$$hpw" docker run --rm --privileged --network kind \
 	   -e HARBOR_URL="$$harbor_url" -e HARBOR_INSECURE="$$harbor_insecure" \
+	   -e HARBOR_USERNAME="$$huser" -e HARBOR_PASSWORD \
+	   -e JUMPBOX_ENGINE="$(JUMPBOX_ENGINE)" \
 	   -v "$(PWD):/src:ro" \
 	   -v "$(PWD)/.jumpbox/kubeconfig:/run/jumpbox/kubeconfig:ro" \
 	   $$extra $$tb_flags \
 	   $(JUMPBOX_IMAGE) bash /src/scripts/jumpbox-run.sh
 
 .PHONY: jumpbox-both
-jumpbox-both: ## Validate the jump-box flow on BOTH Photon and Ubuntu (matrix)
-	@$(MAKE) jumpbox JUMPBOX_OS=photon
-	@$(MAKE) jumpbox JUMPBOX_OS=ubuntu
+jumpbox-both: ## Validate the jump-box flow on BOTH Photon and Ubuntu (podman)
+	@$(MAKE) jumpbox JUMPBOX_OS=photon JUMPBOX_ENGINE=podman
+	@$(MAKE) jumpbox JUMPBOX_OS=ubuntu JUMPBOX_ENGINE=podman
+
+.PHONY: jumpbox-matrix
+jumpbox-matrix: ## THE ENGINE MATRIX: {photon,ubuntu} x {podman,docker}, each pushing to the real Harbor. Same expected outcome, 4/4.
+	@# SEQUENTIAL, and that is deliberate: every leg PUSHES to the same Harbor and takes the registry
+	@# lock — but the lock lives in the repo copy INSIDE each container, so it does not serialize across
+	@# containers. Parallel legs would not corrupt Harbor (that story was a misdiagnosis; see CLAUDE.md),
+	@# but a failure would be unattributable, which costs more than the wall-clock saves.
+	@rc=0; \
+	 for os in photon ubuntu; do \
+	   for eng in podman docker; do \
+	     echo ""; echo "=================== LEG: $$os x $$eng ==================="; \
+	     $(MAKE) jumpbox JUMPBOX_OS=$$os JUMPBOX_ENGINE=$$eng || { echo "LEG FAILED: $$os x $$eng"; rc=1; }; \
+	   done; \
+	 done; \
+	 echo ""; \
+	 [ $$rc -eq 0 ] && echo "JUMPBOX MATRIX: 4/4 PASSED — podman and docker each build and push to the self-signed Harbor, on Photon and Ubuntu" \
+	                || { echo "JUMPBOX MATRIX: FAILED"; exit 1; }
 
 .PHONY: bootstrap-test
 bootstrap-test: ## Validate bootstrap-jumpbox.sh from-nothing on BARE OS images (BOOTSTRAP_TEST_OSES matrix) + unsupported-OS reject

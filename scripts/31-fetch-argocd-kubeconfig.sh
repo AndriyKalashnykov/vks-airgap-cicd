@@ -33,7 +33,14 @@ load_env
 require_cmd vcf "install the VCF Consumption CLI (make install-vcf-clis)"
 require_cmd kubectl
 
-: "${ARGOCD_KUBECONFIG:?ARGOCD_KUBECONFIG must be set in .env — the path to write the SUPERVISOR kubeconfig to (e.g. ./secrets/argocd.kubeconfig)}"
+# DEFAULTED, not `:?`. This was a hard `:?` on a variable the runbook never told the operator to set, so
+# Scenario 1's Step 4 died on its only command — and then cascaded: with ARGOCD_KUBECONFIG unset,
+# `make install-all`'s first prereq (preflight -> argocd-preflight) fell back to the GUEST kubeconfig and
+# BLOCKED on "namespace 'argocd-...' not found on the ArgoCD cluster". The one command both runbooks tell
+# you to run could not start. A path we can choose for you is not a question to ask you.
+ARGOCD_KUBECONFIG="${ARGOCD_KUBECONFIG:-${REPO_ROOT}/secrets/argocd.kubeconfig}"
+export ARGOCD_KUBECONFIG
+log_info "SUPERVISOR kubeconfig -> ${ARGOCD_KUBECONFIG} (override with ARGOCD_KUBECONFIG in .env)"
 : "${SUPERVISOR_HOST:?SUPERVISOR_HOST must be set in .env (the Supervisor IP/FQDN)}"
 : "${VKS_USERNAME:?VKS_USERNAME must be set in .env (the vCenter SSO user)}"
 : "${ARGOCD_NAMESPACE:?ARGOCD_NAMESPACE must be set in .env (the vSphere Namespace the ArgoCD instance runs in, e.g. argocd-instance-1)}"
@@ -46,11 +53,16 @@ mkdir -p "$(dirname "$ARGOCD_KUBECONFIG")"
 TLS_ARGS=()
 if [ -n "${VKS_CA_CERT_FILE:-}" ] && [ -f "${VKS_CA_CERT_FILE}" ]; then
   TLS_ARGS+=(--ca-certificate "$VKS_CA_CERT_FILE")
-elif [ "${VKS_INSECURE_SKIP_TLS_VERIFY:-0}" = "1" ]; then
-  log_warn "VKS_INSECURE_SKIP_TLS_VERIFY=1 — skipping TLS verification of the Supervisor endpoint"
+elif is_true "${VKS_INSECURE_SKIP_TLS_VERIFY:-}"; then
+  # is_true, not `= "1"`. This tested `= "1"` while .env.example and docs/vks-authentication.md both
+  # document `VKS_INSECURE_SKIP_TLS_VERIFY=true` (and 30-vks-login.sh tested `= "true"`), so an operator
+  # who set the value THE REPO DOCUMENTS hit the die below demanding the value they had just set.
+  log_warn "VKS_INSECURE_SKIP_TLS_VERIFY is set — skipping TLS verification of the Supervisor endpoint"
   TLS_ARGS+=(--insecure-skip-tls-verify)
 else
-  die "set VKS_CA_CERT_FILE=<path to the Supervisor CA cert>, or VKS_INSECURE_SKIP_TLS_VERIFY=1 to skip verification"
+  die "set VKS_CA_CERT_FILE=<path to the Supervisor CA cert> (how: ask the platform team, or
+  'openssl s_client -connect \${SUPERVISOR_HOST}:443 -showcerts' and take the issuer), or set
+  VKS_INSECURE_SKIP_TLS_VERIFY=true to skip verification."
 fi
 
 log_info "creating a SUPERVISOR context '${CTX}' at ${SUPERVISOR_HOST} as ${VKS_USERNAME}@${SSO_DOMAIN}"

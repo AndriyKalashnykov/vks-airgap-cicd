@@ -134,6 +134,26 @@ pkg_refresh() {
   esac
 }
 
+# is_true <value> — ONE truthiness rule for the whole repo.
+#
+# There was not one. `VKS_INSECURE_SKIP_TLS_VERIFY` was tested three different ways:
+#   30-vks-login.sh:71            [ "${V:-false}" = "true" ]
+#   31-fetch-argocd-kubeconfig.sh [ "${V:-0}" = "1" ]
+#   .env.example                  documents `VKS_INSECURE_SKIP_TLS_VERIFY=true`  (and its own comment
+#                                 shows `=1` in the example invocation)
+# So an operator who set the value THE REPO DOCUMENTS got a working vks-login and a fetch-argocd-kubeconfig
+# that died demanding the value they had already set — a flag whose accepted spelling depends on which
+# script reads it. Accept every spelling a human plausibly types; normalise at the ONE place a CLI needs
+# a canonical word (bool_word).
+is_true() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|y|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+# bool_word <value> — "true"/"false", for a CLI flag that demands the word (e.g. --insecure-skip-tls-verify=).
+bool_word() { if is_true "${1:-}"; then printf 'true'; else printf 'false'; fi; }
+
 # engine_choice — which engine is the BOOTSTRAP going to install? podman unless the operator asked for
 # docker BY NAME. Pure: it prints, it installs nothing, it touches no PATH. Kept separate from
 # container_engine() (which asks "what is INSTALLED on this box?") because the gate must be able to prove
