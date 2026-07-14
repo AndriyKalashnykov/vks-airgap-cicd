@@ -614,11 +614,15 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-subagent-readonly-gate ## Run all offline script-logic unit tests
+test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-subagent-readonly-gate ## Run all offline script-logic unit tests
 
 .PHONY: test-subagent-readonly-gate
 test-subagent-readonly-gate: ## Offline: subagents are MECHANICALLY read-only (git/gh mutations blocked); the main agent is untouched
 	@./scripts/test-subagent-readonly-gate.sh
+
+.PHONY: test-creds-show
+test-creds-show: ## creds-show must not claim anything the state does not support (renders it in every state)
+	@$(SCRIPTS)/test-creds-show.sh
 
 .PHONY: test-container-engine
 test-container-engine: ## Offline: podman is the DEFAULT engine (docker only as fallback); no operator-flow script requires docker

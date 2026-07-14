@@ -25,8 +25,24 @@ load_env
 # Harbor keeps its OWN LB (not behind the ingress); http when HARBOR_INSECURE=1 (KinD).
 harbor_scheme="https"; [ "${HARBOR_INSECURE:-0}" = "1" ] && harbor_scheme="http"
 harbor_url="${harbor_scheme}://${HARBOR_URL:-harbor.vks.local}"
-# Gitea/app/Tekton are fronted by the ingress at their *.vks.local hosts (http in the demo).
-gitea_url="${GITEA_URL:-http://${GITEA_HOST:-gitea.vks.local}}"
+# Harbor's cert is SELF-SIGNED too (minted with an IP SAN by 06-install-harbor.sh), so a browser warns —
+# exactly as it does for ArgoCD, whose row has always said so. Saying it for one and not the other is the
+# same lie-by-contrast that made the ArgoCD/Harbor rows inconsistent before: the reader concludes Harbor's
+# cert is trusted and ArgoCD's is not. Found by reading the REAL post-install table, not a simulated one.
+if [ "${HARBOR_INSECURE:-0}" != "1" ] && [ -n "${HARBOR_CA_FILE:-}" ]; then
+  harbor_url="${harbor_url} (self-signed; --insecure)"
+fi
+# GITEA / TEKTON / THE APPS ARE ONLY REACHABLE AT *.vks.local IF THE INGRESS EXISTS.
+# The ingress is OPTIONAL in this repo (`make verify` proves the whole GitOps loop over a port-forward,
+# precisely so it needs none). Printing `http://gitea.vks.local` on a cluster with no ingress is a LIE:
+# nothing serves that host, and no /etc/hosts entry can make it. The script already knew this — it hides
+# the /etc/hosts hint when INGRESS_LB_IP is unset — and printed the URLs anyway.
+# Harbor and ArgoCD are NOT affected: they keep their own LoadBalancers.
+_ing="${INGRESS_LB_IP:-}"
+ingress_url() {  # ingress_url <host> -> the URL, or an honest marker when no ingress exists
+  if [ -n "$_ing" ]; then printf 'http://%s' "$1"; else printf '<needs ingress>'; fi
+}
+gitea_url="${GITEA_URL:-$(ingress_url "${GITEA_HOST:-gitea.vks.local}")}"
 # ArgoCD is on its OWN LoadBalancer (like real VKS): KinD publishes ARGOCD_LB_IP to .env.kind
 # (scheme https unless ARGOCD_INSECURE=1); a real lab uses the lab's own ArgoCD URL.
 argo_scheme="https"; [ "${ARGOCD_INSECURE:-0}" = "1" ] && argo_scheme="http"
@@ -42,31 +58,61 @@ elif [ -n "${ARGOCD_SERVER:-}" ]; then
     *)                  argocd_url="${argo_scheme}://${ARGOCD_SERVER}" ;;
   esac
 else
-  # A SENTENCE IN A URL COLUMN DESTROYS THE TABLE. Keep the cell short and put the instruction in a
-  # footnote under the table — the reader still gets the whole message, and every other row stays legible.
-  #
-  # The note must be right in EVERY flow. Two earlier drafts were not:
-  #   1. "discover it, then set ARGOCD_SERVER in .env (see docs/scenario-2.md)" — TENANT advice, and it
-  #      sent the KinD reader (the likeliest reader of this table) to edit a file they must not edit.
-  #   2. "KinD: run 'make install-argocd'" — an instruction they do not need: the KinD flow installs
-  #      ArgoCD as part of `make e2e-kind` / `make install-all` and PUBLISHES the address itself.
-  # In KinD there is nothing for the operator to DO here, so do not give them a chore — tell them it fills
-  # itself in. Only the real lab needs an action.
+  # A SENTENCE IN A URL COLUMN DESTROYS THE TABLE. Keep the cell short; the instruction goes in a footnote.
   argocd_url="<not set>"
-  argocd_note="ArgoCD's address is not set yet.  KinD: it is discovered and filled in automatically when ArgoCD is installed.  Real lab: set ARGOCD_SERVER in .env."
 fi
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
-tekton_url="http://${TEKTON_DASHBOARD_HOST:-tekton.vks.local}"  # Tekton Dashboard (read-only UI)
+tekton_url="$(ingress_url "${TEKTON_DASHBOARD_HOST:-tekton.vks.local}")"  # Tekton Dashboard (read-only UI)
+
+_sink="$(state_file)"
+_have_sink=0; [ -f "$_sink" ] && _have_sink=1
 
 # --- resolve logins -------------------------------------------------------------------
+#
+# NOTE (a fix I wrote and then DELETED, so nobody re-writes it): I added a "still the .env.example
+# default" marker for the passwords. It is DEAD CODE — HARBOR_PASSWORD and GITEA_ADMIN_PASSWORD are
+# COMMENTED in .env.example (they are you-choose secrets), so there is no default to compare against and
+# the marker can never fire. The values shown come either from the operator's OWN .env (legitimately
+# theirs) or from the state overlay (discovered), and the Context block already distinguishes those.
+# Shipping a check that cannot fire is worse than shipping nothing: it looks like a guarantee.
+# AN UNSET PASSWORD IS NOT AUTOMATICALLY "YOU MUST SET IT".
+# The placeholder used to read `<set HARBOR_PASSWORD in .env>` — which is WRONG for the KinD flow, where
+# 05-kind-up.sh GENERATES these (gen_password) whenever they are unset and publishes them to the state
+# overlay. Telling a KinD operator to go and set a password is inventing a chore for them, and it is the
+# same defect as the old ArgoCD note. Only a REAL LAB must supply one (there, Harbor/ArgoCD are given to
+# you, not created by us).
+_unset_pw() {  # _unset_pw <VAR> -> what an unset password actually means, per flow
+  if [ "$_have_sink" = 1 ]; then printf '<not published — check the state overlay>'
+  else printf '<generated at install (KinD) — or set %s in .env for a real lab>' "$1"; fi
+}
 harbor_user="${HARBOR_USERNAME:-admin}"
-harbor_pw="${HARBOR_PASSWORD:-<set HARBOR_PASSWORD in .env>}"
+harbor_pw="${HARBOR_PASSWORD:-$(_unset_pw HARBOR_PASSWORD)}"
 gitea_user="${GITEA_ADMIN_USER:-gitea_admin}"
-gitea_pw="${GITEA_ADMIN_PASSWORD:-<set GITEA_ADMIN_PASSWORD in .env>}"
+gitea_pw="${GITEA_ADMIN_PASSWORD:-$(_unset_pw GITEA_ADMIN_PASSWORD)}"
 # ArgoCD via the context-aware resolver; exit 3 => VKS-provided / not knowable locally.
 if argo_pw="$("${SCRIPT_DIR}/argocd-password.sh" 2>/dev/null)"; then :; else
-  argo_pw="<VKS-provided — get it from your lab>"
+  # SAME CLASS AS THE TWO ABOVE, third row: "<VKS-provided — get it from your lab>" is only true on a real
+  # lab. On a KinD box ArgoCD's password is GENERATED at install like the others, so telling the operator
+  # to go and get it from a lab they do not have is a third invented chore. Answer per flow.
+  argo_pw="$(_unset_pw ARGOCD_ADMIN_PASSWORD)"
+  [ "$_have_sink" = 1 ] && argo_pw="<VKS-provided — get it from your lab>"
+fi
+
+# THE ArgoCD USERNAME WAS HARDCODED TO `admin`, AND THAT IS FALSE FOR A TENANT.
+# Found by READING the table as each persona, which no grep would have surfaced:
+#   * KinD / Scenario 1 (you install ArgoCD)  -> you ARE admin. Fine.
+#   * Scenario 2 (you are a TENANT)           -> you are NOT. The platform team grants you an AppProject
+#                                                role, and this repo's own tenant path authenticates with
+#                                                ARGOCD_AUTH_TOKEN. Handing them "admin" is a login they do
+#                                                not have and cannot use — and it quietly teaches the wrong
+#                                                mental model of who owns ArgoCD.
+# So: report the credential THEY will actually use.
+if [ -n "${ARGOCD_AUTH_TOKEN:-}" ]; then
+  argo_user="(token)"
+  argo_pw="<ARGOCD_AUTH_TOKEN from .env — not a password>"
+else
+  argo_user="${ARGOCD_USERNAME:-admin}"
 fi
 
 # --- CONTEXT: where do these values COME FROM? ----------------------------------------
@@ -79,8 +125,6 @@ fi
 #
 # So: say which state sink is in effect, whose it is, whether the cluster answers, and — the line that
 # actually matters — whether the values below are DISCOVERED or DEFAULT.
-_sink="$(state_file)"
-_have_sink=0; [ -f "$_sink" ] && _have_sink=1
 
 # Whose state is it? The KinD flow STAMPS the sink (VKS_STATE_KIND=1); a real lab's does not.
 if [ "$_have_sink" = 1 ] && grep -q '^VKS_STATE_KIND=1' "$_sink" 2>/dev/null; then
@@ -100,6 +144,11 @@ if [ -n "${KUBECONFIG:-}" ] && have kubectl \
   _cluster="reachable — context '$(kubectl config current-context 2>/dev/null || echo '?')'"
 fi
 
+# CANONICAL PROVENANCE TOKEN — the machine-checkable claim, independent of any wording around it.
+# MACHINE-ONLY: the gate asks for it (CREDS_TOKEN=1); a human should not have to read a token to learn
+# something the Context block below tells them in words. A test's needs do not get to clutter the product.
+[ "${CREDS_TOKEN:-0}" = "1" ] && \
+  printf 'values-provenance: %s\n' "$([ "$_have_sink" = 1 ] && echo DISCOVERED || echo DEFAULT)"
 printf '\n  Context\n'
 printf '    values below : %s\n' \
   "$([ "$_have_sink" = 1 ] \
@@ -132,10 +181,10 @@ add_row() { rows="${rows}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\n'; }
 add_row "Gitea"  "$gitea_url"  "$gitea_user"  "$gitea_pw"
 add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)"
 add_row "Harbor" "$harbor_url" "$harbor_user" "$harbor_pw"
-add_row "ArgoCD" "$argocd_url" "admin"        "$argo_pw"
+add_row "ArgoCD" "$argocd_url" "$argo_user"   "$argo_pw"
 while read -r _a; do
   [ -n "$_a" ] || continue
-  add_row "$_a" "http://$(app_host "$_a")" "-" "(no login; health at $(app_health_path "$_a"))"
+  add_row "$_a" "$(ingress_url "$(app_host "$_a")")" "-" "(no login; health at $(app_health_path "$_a"))"
 done <<EOF
 $(app_names)
 EOF
@@ -164,6 +213,35 @@ done <<EOF
 $rows
 EOF
 
-# Footnotes: anything too long for a cell lives here, so the table stays readable.
-[ -n "${argocd_note:-}" ] && printf '\n  note: %s\n' "$argocd_note"
+# --- footnote: WHAT IS NOT REAL YET, and whose job it is to fix ------------------------
+#
+# ArgoCD used to be the ONLY row with a note, and that made the table LIE BY CONTRAST: ArgoCD honestly
+# printed `<not set>` while Harbor printed `https://harbor.vks.local` / `Harbor12345` — values that are
+# EQUALLY unreal (they are .env.example defaults). A reader concludes "Harbor is configured, ArgoCD is
+# not", when NEITHER is. ArgoCD only looked different because it happens to have no default, which is an
+# accident of .env.example, not a fact about the system.
+#
+# So the footnote is about the STATE, not about one service:
+#   * nothing installed  -> EVERY value here is a default. Say which ones fill themselves in (KinD) and
+#                           which the operator must supply (a real lab).
+#   * installed, but ArgoCD's address still unknown -> that IS a genuine per-service gap; name it.
+if [ "$_have_sink" = 0 ]; then
+  printf '\n  note: nothing is installed yet, so EVERY value above is a default from .env.example —\n'
+  printf '        including Harbor'\''s and Gitea'\''s. None of them exists.\n'
+  printf '          KinD     : the real addresses and passwords are discovered and filled in for you by\n'
+  printf '                     the install (make e2e-kind / make install-all). Set nothing by hand.\n'
+  printf '          Real lab : you supply HARBOR_URL + HARBOR_PASSWORD (and ARGOCD_SERVER) in .env —\n'
+  printf '                     see docs/scenario-1.md (you install) or docs/scenario-2.md (you are a tenant).\n'
+else
+  if [ -z "$_ing" ]; then
+    printf '\n  note: no ingress is installed, so Gitea / Tekton / the apps have NO *.vks.local URL —\n'
+    printf '        nothing serves those hosts. Reach them with a port-forward:\n'
+    printf '            kubectl -n <namespace> port-forward svc/<service> 8080:<port>\n'
+    printf '        or install one: make install-ingress   (Harbor and ArgoCD are unaffected — own LBs).\n'
+  fi
+  if [ "$argocd_url" = "<not set>" ]; then
+    printf '\n  note: ArgoCD'\''s address is not set. KinD fills it in automatically when ArgoCD is installed;\n'
+    printf '        on a real lab, set ARGOCD_SERVER in .env.\n'
+  fi
+fi
 echo
