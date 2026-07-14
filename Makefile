@@ -496,76 +496,14 @@ bootstrap-engine-test: ## CLAIM 1: does `make deps` actually PRODUCE a docker ju
 	@$(SCRIPTS)/test-bootstrap-engine.sh
 
 .PHONY: jumpbox
-jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photon|ubuntu): make deps + rootless podman + cluster reach, vs the running KinD cluster
-	@command -v kind >/dev/null 2>&1 || { echo "ERROR: 'kind' not found — the KinD cluster must be up (make kind-up install-harbor ...)"; exit 1; }
-	@docker network inspect kind >/dev/null 2>&1 || { echo "ERROR: kind Docker network not found — bring the cluster up first (make kind-up)"; exit 1; }
-	@mkdir -p .jumpbox
-	@kind_name="$$(grep -h '^KIND_CLUSTER_NAME=' .env .env.example 2>/dev/null | head -1 | cut -d= -f2 || true)"; \
-	 kind get kubeconfig --name "$$kind_name" --internal > .jumpbox/kubeconfig
-	@# READ THE STAMPED STATE SINK, NOT `.env.kind` — for EVERY value, not just the first one.
-	@#
-	@# #192 renamed the sink to `.env.state` and nothing has written `.env.kind` since, so all FIVE of
-	@# these reads have been dead: HARBOR_URL (which failed loudly, telling you to "run make
-	@# install-harbor first" when you just had — an error naming the wrong cause), and HARBOR_INSECURE /
-	@# HARBOR_CA_FILE / HARBOR_USERNAME / HARBOR_PASSWORD, which failed SILENTLY: the CA was never
-	@# mounted, so the jump box could not trust the self-signed Harbor and got `HTTP 000`.
-	@# Fixing only the loud one left the quiet ones — resolve the sink ONCE and read them all from it.
-	@# (`.env.kind` stays as a legacy fallback for one release. state_file() needs REPO_ROOT, which
-	@# os.sh sets — sourcing state.sh alone resolves the sink to "/.env.state".)
-	@sink="$$(bash -c '. scripts/lib/os.sh; state_file' 2>/dev/null || echo .env.state)"; \
-	 : "|| true is LOAD-BEARING: a key that is ABSENT makes grep exit 1, so the pipeline exits 1, so the"; \
-	 : "assignment exits 1, so set -e kills the recipe SILENTLY (Error 2, no message). HARBOR_INSECURE"; \
-	 : "and HARBOR_CA_FILE are legitimately absent in insecure mode. Same class as the pipefail bug in"; \
-	 : "state_claim_kind (#217) — written again, in a different file, in the same session."; \
-	 sread() { grep -h "^$$1=" "$$sink" .env.kind 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//" || true; }; \
-	 harbor_url="$$(sread HARBOR_URL)"; \
-	 [ -n "$$harbor_url" ] || { echo "ERROR: HARBOR_URL is not in the state overlay ($$sink) — run 'make install-harbor' first"; exit 1; }; \
-	 harbor_insecure="$$(sread HARBOR_INSECURE)"; harbor_insecure="$${harbor_insecure:-0}"; \
-	 harbor_ca="$$(sread HARBOR_CA_FILE)"; \
-	 extra=""; \
-	 if [ "$$harbor_insecure" != "1" ] && [ -n "$$harbor_ca" ] && [ -f "$$harbor_ca" ]; then \
-	   cp "$$harbor_ca" .jumpbox/harbor-ca.crt; chmod 0644 .jumpbox/harbor-ca.crt; \
-	   extra="$$extra -v $(PWD)/.jumpbox/harbor-ca.crt:/run/jumpbox/harbor-ca.crt:ro"; \
-	 fi; \
-	 if [ -n "$(JUMPBOX_VCF_SRC)" ] && [ -d "$(JUMPBOX_VCF_SRC)" ]; then \
-	   extra="$$extra -v $(abspath $(JUMPBOX_VCF_SRC)):/run/vcf-artifacts:ro -e VCF_CLI_SRC_DIR=/run/vcf-artifacts"; \
-	 fi; \
-	 : "HARBOR CREDS ON EVERY RUN, not just the sneakernet branch. Stage 5 (16-engine-trust-check) is"; \
-	 : "the ONLY thing in this harness that makes an ENGINE talk to Harbor — the disputed step. Without"; \
-	 : "the creds it cannot run, and a jump-box leg that skips it proves nothing about the engine."; \
-	 huser="$$(grep -h '^HARBOR_USERNAME=' "$$sink" .env .env.example 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//" || true)"; \
-	 hpass="$$(grep -h '^HARBOR_PASSWORD=' "$$sink" .env 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//" || true)"; \
-	 [ -n "$$hpass" ] || { echo "ERROR: HARBOR_PASSWORD not in the state overlay ($$sink) or .env — the engine cannot push"; exit 1; }; \
-	 : "The CA is mounted; NAME it too, or 16 cannot find it (HARBOR_CA_FILE was never exported here —"; \
-	 : "the same class of bug as the 5 dead .env.kind reads above: mounted but never named)."; \
-	 [ -f .jumpbox/harbor-ca.crt ] && extra="$$extra -e HARBOR_CA_FILE=/run/jumpbox/harbor-ca.crt"; \
-	 tb_flags=""; hpw="$$hpass"; \
-	 if [ -n "$(JUMPBOX_TARBALL)" ]; then \
-	   tbabs="$(abspath $(JUMPBOX_TARBALL))"; tbbase="$$(basename "$$tbabs")"; \
-	   [ -f "$$tbabs" ] || { echo "ERROR: JUMPBOX_TARBALL not found: $$tbabs"; exit 1; }; \
-	   : "harbor-robot writes these single-quoted (the name is robot$$<x>, the secret can hold metachars)."; \
-	   : "cut keeps the quotes, so an unstripped value logs in as \047robot$$...\047 and 401s — sread strips them."; \
-	   : "|| true again: grep exits 2 when a FILE IS MISSING (.env.kind normally does not exist) — that is"; \
-	   : "an ERROR, not a no-match, and set -e then killed this recipe SILENTLY. 4th instance of this"; \
-	   : "class today. The tell every time: a non-zero exit with NO output."; \
-	   huser="$$(grep -h '^HARBOR_USERNAME=' "$$sink" .env.kind .env .env.example 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//" || true)"; \
-	   hpw="$$(grep -h '^HARBOR_PASSWORD=' "$$sink" .env.kind .env 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//" || true)"; \
-	   [ -n "$$hpw" ] || { echo "ERROR: HARBOR_PASSWORD not in the state overlay ($$sink) or .env — the air-gap half needs push creds"; exit 1; }; \
-	   tb_flags="-v $$tbabs:/run/bundle/$$tbbase:ro -e JUMPBOX_MODE=airgap-half -e JUMPBOX_TARBALL=/run/bundle/$$tbbase -e HARBOR_USERNAME=$$huser -e HARBOR_PASSWORD"; \
-	   echo "running $(JUMPBOX_OS) AIR-GAP jump box (sneakernet half) on the kind network (Harbor=$$harbor_url, tarball=$$tbbase)"; \
-	 else \
-	   echo "running $(JUMPBOX_OS) jump box on the kind network (Harbor=$$harbor_url, insecure=$$harbor_insecure)"; \
-	 fi; \
-	 : "-e HARBOR_PASSWORD (NAME ONLY) — the VALUE is inherited from the env prefix, never placed on argv,"; \
-	 : "where ps/procfs would expose it (security.md: secrets never in argv)."; \
-	 HARBOR_PASSWORD="$$hpw" docker run --rm --privileged --network kind \
-	   -e HARBOR_URL="$$harbor_url" -e HARBOR_INSECURE="$$harbor_insecure" \
-	   -e HARBOR_USERNAME="$$huser" -e HARBOR_PASSWORD \
-	   -e JUMPBOX_ENGINE="$(JUMPBOX_ENGINE)" -e JUMPBOX_OS="$(JUMPBOX_OS)" \
-	   -v "$(PWD):/src:ro" \
-	   -v "$(PWD)/.jumpbox/kubeconfig:/run/jumpbox/kubeconfig:ro" \
-	   $$extra $$tb_flags \
-	   $(JUMPBOX_IMAGE) bash /src/scripts/jumpbox-run.sh
+jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS x JUMPBOX_ENGINE against the running KinD cluster
+	@# The launcher is a SCRIPT, not a recipe. Every silent failure this harness ever had lived in the
+	@# 50-line `\`-continued block that used to be here: five reads of a renamed state file, four
+	@# `grep`-under-`set -e` deaths with no output, a CA mounted but never named. A recipe cannot be
+	@# shellcheck'd, unit-tested, or coherently `set -euo pipefail`'d; scripts/jumpbox-launch.sh can.
+	@JUMPBOX_OS="$(JUMPBOX_OS)" JUMPBOX_ENGINE="$(JUMPBOX_ENGINE)" JUMPBOX_IMAGE="$(JUMPBOX_IMAGE)" \
+	 JUMPBOX_VCF_SRC="$(JUMPBOX_VCF_SRC)" JUMPBOX_TARBALL="$(JUMPBOX_TARBALL)" \
+	 $(SCRIPTS)/jumpbox-launch.sh
 
 .PHONY: jumpbox-both
 jumpbox-both: ## Validate the jump-box flow on BOTH Photon and Ubuntu (podman)
