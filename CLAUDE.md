@@ -380,6 +380,26 @@ All were **silent no-ops** — the house style of this repo's failures:
 status with `tail`'s. I nearly reported a pass. **Read the gate's own rc, on its own line.** It is written
 down in the rules and I still did it.
 
+### THE ONE THING I COULD NOT PROVE, AND WHY (state it; do not quietly retry it)
+
+**`make e2e-kind CONTAINER_ENGINE=docker` cannot be run to completion on a ROOTFUL-docker host without a
+sudo password**, and an agent has no tty. This is not a defect — it IS the disclosed cost: rootful docker
+must write the Harbor CA into root-owned `/etc/docker/certs.d`, and the `docker` group grants socket
+access, not write access to `/etc`. On a **rootless**-docker host it needs no sudo and should just run.
+
+Do not read that gap as "docker is unproven": `make jumpbox-matrix` proves docker **logs in, pulls,
+builds, pushes and pull-back-verifies against the real self-signed Harbor, sudo-free, on BOTH OSes**
+(4/4). What `e2e-kind CONTAINER_ENGINE=docker` would add is the engine driving the *full pipeline* — and
+note it is partly circular anyway, since `kind`'s nodes ARE docker containers, so that target requires
+docker regardless of `CONTAINER_ENGINE`.
+
+For an operator on a rootful box, the honest command is:
+
+```bash
+make trust-harbor              # prints the ONE sudo line; run it, then:
+make e2e-kind CONTAINER_ENGINE=docker
+```
+
 ### NEXT
 
 1. **A real lab.** The Supervisor topology, the `vcf` CLI auth flow, and whether a VKS guest cluster ships
