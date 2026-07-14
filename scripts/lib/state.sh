@@ -105,8 +105,48 @@ state_check() {
   log_error "    you selected: ${want}  (KUBECONFIG=${_VKS_EXPLICIT_KUBECONFIG})"
   log_error "  NOT sourcing it — its LB IPs, CA paths and passwords belong to the other cluster, and a"
   log_error "  stale value here is indistinguishable from a deliberate override."
-  state_archive "written for ${stamped_server}, you selected ${want}"
+  log_error "  Leaving the file ALONE. Inspect it with 'make state-show'."
+  # DELIBERATELY NOT state_archive HERE. state_check runs inside load_env, i.e. on EVERY script,
+  # including read-only ones. Archiving from a READ path means a single
+  #     KUBECONFIG=/tmp/other make creds-show
+  # RENAMES the operator's sink — and the next command against the ORIGINAL cluster then finds no
+  # overlay and silently falls back to .env.example defaults (LB IPs, CA paths, passwords all gone),
+  # while `.env.state.stale-*` files pile up. Declining to source is already sufficient; the rename
+  # bought nothing and cost the operator their state. Archiving belongs on a WRITE path only
+  # (state_claim_kind, below), where we are about to overwrite the file anyway.
   return 1
+}
+
+# state_claim_kind — called by the KinD flow BEFORE its first state_set.
+#
+# THE BUG THIS EXISTS TO KILL: 05-kind-up.sh used to upsert its values into WHATEVER sink was there
+# and then state_stamp --kind it. On a box where a real lab had written the sink, that re-stamped the
+# LAB's state as KinD state — and `make kind-down` (which BOTH lab runbooks tell the operator to run
+# at Step 0) then deleted it, taking the lab's discovered state and its generated passwords with it.
+# The archive-never-delete promise never got a chance to fire, because nothing checked ownership on
+# the WRITE path; state_check only guards the READ path, and only when the caller set KUBECONFIG.
+#
+# So: the KinD flow writes into a sink IT created, or into a fresh one. Never into someone else's.
+state_claim_kind() {
+  local f; f="$(state_file)"
+  [ -f "$f" ] || return 0
+
+  local kind srv
+  kind="$(grep -m1 '^VKS_STATE_KIND='   "$f" 2>/dev/null | cut -d= -f2- | tr -d '"')"
+  srv="$( grep -m1 '^VKS_STATE_SERVER=' "$f" 2>/dev/null | cut -d= -f2- | tr -d '"')"
+  [ "${kind:-0}" = "1" ] && return 0        # ours: a re-run of the KinD flow. Reuse it.
+
+  # UNSET everything the foreign sink exported into THIS process first. load_env has already sourced
+  # it, so without this the "generate the password only if unset" logic in 05-kind-up.sh would
+  # silently REUSE a real lab's HARBOR_PASSWORD for the throwaway KinD Harbor. The key list is DERIVED
+  # from the file — not a hardcoded list that rots the moment someone publishes a new value.
+  local k
+  while IFS= read -r k; do
+    [ -n "$k" ] || continue
+    case "$k" in VKS_STATE_*) ;; *) unset "$k" ;; esac
+  done < <(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$f")
+
+  state_archive "the KinD flow will NOT write into a sink it did not create (this one is stamped for ${srv:-<unstamped>})"
 }
 
 # state_show — what is in the sink, and WHOSE it is. The cue the rename would have destroyed

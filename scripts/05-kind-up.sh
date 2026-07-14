@@ -89,6 +89,15 @@ mkdir -p "$(dirname "$KUBECONFIG_PATH")"
 log_info "writing kubeconfig -> $KUBECONFIG_PATH"
 kind get kubeconfig --name "$CLUSTER_NAME" > "$KUBECONFIG_PATH"
 
+# CLAIM THE SINK BEFORE THE FIRST WRITE — the KinD flow must never write into a sink it did not
+# create. It used to upsert its values into WHATEVER file was there and then stamp it `--kind`; on a
+# box where a real lab had written that sink, this re-stamped the LAB's state as KinD state, and
+# `make kind-down` — which BOTH lab runbooks tell the operator to run at Step 0 — then DELETED it,
+# taking the lab's discovered state and its generated passwords with it. state_claim_kind archives a
+# foreign sink (never `rm`) and unsets what it had already exported into this process, so the
+# "generate the password only if unset" lines below cannot silently reuse a real lab's credential.
+state_claim_kind
+
 # Absolute path so the value works regardless of the caller's CWD.
 KUBECONFIG_ABS="$(cd "$(dirname "$KUBECONFIG_PATH")" && pwd)/$(basename "$KUBECONFIG_PATH")"
 KIND_CONTEXT="kind-${CLUSTER_NAME}"

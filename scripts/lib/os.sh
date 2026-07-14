@@ -256,7 +256,20 @@ load_env() {
   # state_check decides whether it belongs to the cluster we are talking to. Note the polarity the
   # ADVERSARY forced: an UNSTAMPED sink is still SOURCED (refusing would destroy the only copy of the
   # generated passwords, and the air-gap jumpbox has no cluster to stamp against); only a MISMATCH is
-  # refused, and even then the file is ARCHIVED, never deleted.
+  # refused — and it is now left ALONE rather than archived, because state_check runs on EVERY script
+  # including read-only ones, and archiving from a read path renames the operator's sink out from
+  # under them (see lib/state.sh).
+  #
+  # A KUBECONFIG set in `.env` IS AN EXPLICIT OPERATOR CHOICE — it is simply not in the environment.
+  # The snapshot above only sees the environment, so for the operator who did the DOCUMENTED thing
+  # (uncomment KUBECONFIG in .env, per .env.example) `_VKS_EXPLICIT_KUBECONFIG` was EMPTY — and
+  # state_check's mismatch branch short-circuits on exactly that (`[ -n ... ] || return 0`). So the
+  # whole cross-cluster refusal was DEAD CODE for the one operator it was written to protect: a lab's
+  # sink was sourced unconditionally into a KinD run. Fold the sourced value in before the check.
+  # (.env.example deliberately leaves KUBECONFIG COMMENTED, so anything set by now came from the
+  # environment or from `.env` — both are the operator choosing, neither is a default.)
+  export _VKS_EXPLICIT_KUBECONFIG="${_VKS_EXPLICIT_KUBECONFIG:-${KUBECONFIG:-}}"
+
   if state_check; then
     # shellcheck disable=SC1090
     [ -f "$state" ] && . "$state"
