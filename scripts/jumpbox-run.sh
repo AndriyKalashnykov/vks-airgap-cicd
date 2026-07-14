@@ -116,8 +116,26 @@ if [ "${JUMPBOX_MODE:-validate}" = "airgap-half" ]; then
     echo "ERROR: bundle/ is not empty in the air-gap box — host cache leaked (fidelity broken)"; exit 1
   fi
 
+  # THE RUNBOOK'S OWN PRE-CARRY GATE — and until 2026-07-14 NOTHING RAN IT.
+  # docs/sneakernet.md Step 0b tells the operator to run exactly this BEFORE carrying 12 GB across a room,
+  # and calls it "the cheapest failure available". `grep -c check-tools scripts/jumpbox-run.sh` was 0: the
+  # doc staked its safety gate on a command no test had ever executed, so a regression in the CARRIED
+  # classification or the PRE-CARRY exit path would ship silently. Now the harness runs the doc's command,
+  # on the doc's box, at the doc's moment.
+  #
+  # It must PASS here: the five carried tools are legitimately absent (the bundle brings them), and every
+  # OS package the tarball cannot carry is present on this image.
+  echo "### check-tools (PRE-CARRY) — the runbook's Step 0b gate, on the air-gap box, before the carry ###"
+  make check-tools CHECK_TOOLS_PHASE=pre-carry
+
   echo "### bundle-load — reconstruct the image cache from ONLY the carried tarball ###"
   make bundle-load BUNDLE_TARBALL="$JUMPBOX_TARBALL"
+
+  # And the doc's OTHER claim (Step 3): "After bundle-load, run a plain `make check-tools`: it must be
+  # FULLY CLEAN. That run is the one that proves this box can actually run the install." Assert it.
+  echo "### check-tools (DEFAULT) — after bundle-load it must be FULLY clean: the box can run the install ###"
+  make check-tools
+
   echo "### mirror-push — push the loaded images into the internal Harbor ###"
   make mirror-push
 

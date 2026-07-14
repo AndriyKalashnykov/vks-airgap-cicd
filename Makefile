@@ -132,6 +132,14 @@ check-doc-command-count: ## Gate: a doc that COUNTS commands ("two commands") mu
 check-doc-make-targets: ## Gate: every `make X` a runbook tells the operator to run must EXIST in the Makefile
 	@$(SCRIPTS)/check-doc-make-targets.sh
 
+# The OTHER direction, and the one that kept failing: check-doc-make-targets proves a doc names no DEAD
+# command; this proves a LIVE capability is not INVISIBLE. `make builder-build`/`builder-push`/
+# `e2e-sneakernet-both` shipped and were merged while appearing in no document a user reads — the third
+# time in one day that "a capability change is not done until the operator docs say so" failed as prose.
+.PHONY: check-doc-target-coverage
+check-doc-target-coverage: ## Gate: every operator-invocable target must be named in SOME doc (CI gates exempt themselves via `## Gate:`)
+	@$(SCRIPTS)/check-doc-target-coverage.sh
+
 .PHONY: check-gwapi-istio-alignment
 check-gwapi-istio-alignment: ## Gate: GATEWAY_API_VERSION == the version the pinned ISTIO vendors (ground truth: istio's go.mod)
 	@$(SCRIPTS)/check-gwapi-istio-alignment.sh
@@ -176,6 +184,10 @@ check-app-hardcodes: ## Gate: no shared script/manifest/Makefile/.env.example ma
 .PHONY: check-app-toolchains
 check-app-toolchains: ## Gate: every app's language toolchain must be pinned in .mise.toml, or CI cannot test/scan that app
 	@$(SCRIPTS)/check-app-toolchains.sh
+
+.PHONY: check-agent-frontmatter
+check-agent-frontmatter: ## Gate: every .claude/agents/*.md must have PARSEABLE YAML frontmatter (a broken one silently disables a BLOCKING reviewer)
+	@$(SCRIPTS)/check-agent-frontmatter.sh
 
 .PHONY: check-tools
 check-tools: ## Read-only: is this jump box able to run the flow? (required vs optional CLIs + versions)
@@ -496,6 +508,13 @@ jumpbox-image: ## Build the jump-box test image for JUMPBOX_OS x JUMPBOX_ENGINE 
 	 echo "building $(JUMPBOX_IMAGE) from $$df"; \
 	 docker build -f "$$df" -t $(JUMPBOX_IMAGE) .
 
+# Can a REAL air-gapped box do the job? The sneakernet e2e could NOT answer this: its "air-gap box" is
+# the vks-jumpbox image, which runs `make deps` at BUILD time, so it already had kubectl/helm/jq/yq. This
+# runs the bundle-load on a BARE box (OS packages only) with NO NETWORK AT ALL, on both OSes.
+.PHONY: airgap-toolchain-test
+airgap-toolchain-test: ## Can a BARE, network-less jump box (Photon AND Ubuntu) get its whole toolchain from the carried bundle? (asserts the tools are ABSENT first — else the test is rigged)
+	@$(SCRIPTS)/test-airgap-toolchain.sh
+
 .PHONY: bootstrap-engine-test
 bootstrap-engine-test: ## CLAIM 1: does `make deps` actually PRODUCE a docker jump box when asked — and a podman one (with ZERO docker) when not? Runs the REAL bootstrap on BARE Photon/Ubuntu images.
 	@$(SCRIPTS)/test-bootstrap-engine.sh
@@ -712,6 +731,14 @@ sec: secrets-scan trivy-fs trivy-config ## Run all security scanners (gitleaks +
 # output dir; docker does not. Empty for docker.
 PODMAN_USERNS := $(if $(filter podman,$(CONTAINER_ENGINE)),--userns=keep-id,)
 
+# The diagram list is DERIVED from the filesystem, never typed. It used to be typed TWICE — once for
+# the render, once for the drift-check loop — and they had already drifted: `istio-ingress` was in the
+# render list and NOT in the check loop, so its PNG was rendered and then never gated. A new .puml
+# (sneakernet) was in NEITHER, so it was silently not rendered at all. An enumerated list of the things
+# a gate covers is the defect; the gate must discover its own denominator.
+# `_style.puml` is an include, not a diagram — a leading `_` marks it as such and is filtered out.
+DIAGRAMS := $(patsubst docs/diagrams/%.puml,%,$(wildcard docs/diagrams/[!_]*.puml))
+
 # Render helper: $(1) = output subdir under docs/diagrams (created if missing).
 # --network=none + -DRELATIVE_INCLUDE="." force the VENDORED c4/*.puml (offline,
 # deterministic — no fetch from githubusercontent at render time).
@@ -724,7 +751,7 @@ define _render_diagrams
 		-e PLANTUML_SECURITY_PROFILE=UNSECURE -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp \
 		-e PLANTUML_LIMIT_SIZE=16384 \
 		-v "$$PWD/docs/diagrams:/work" -w /work docker.io/plantuml/plantuml:$(PLANTUML_VERSION) \
-		-tpng -o $(1) -DRELATIVE_INCLUDE="." airgap.puml context.puml container.puml deployment.puml pipeline-flow.puml vks-topology.puml istio-ingress.puml
+		-tpng -o $(1) -DRELATIVE_INCLUDE="." $(addsuffix .puml,$(DIAGRAMS))
 endef
 
 .PHONY: diagrams
@@ -736,7 +763,8 @@ diagrams: ## Render docs/diagrams/*.puml → docs/diagrams/out/*.png ($(CONTAINE
 diagrams-check: ## CI drift gate: re-render every .puml and byte-compare vs the committed PNG. The pinned plantuml image + vendored c4/ render byte-deterministically (verified: same image → identical sha256), so a mismatch means the .puml changed without re-rendering. Run `make diagrams` before committing .puml edits.
 	@rm -rf docs/diagrams/.check
 	@$(call _render_diagrams,.check)
-	@rc=0; for d in airgap context container deployment pipeline-flow vks-topology; do \
+	@echo "diagrams-check: checking $(words $(DIAGRAMS)) diagrams — $(DIAGRAMS)"
+	@rc=0; for d in $(DIAGRAMS); do \
 		if [ ! -s docs/diagrams/.check/$$d.png ]; then echo "ERROR: $$d.puml failed to render"; rc=1; \
 		elif [ ! -s docs/diagrams/out/$$d.png ]; then echo "ERROR: committed docs/diagrams/out/$$d.png missing — run 'make diagrams'"; rc=1; \
 		elif ! cmp -s docs/diagrams/.check/$$d.png docs/diagrams/out/$$d.png; then \
@@ -760,7 +788,7 @@ vendor-diagrams: ## Re-download the pinned C4-PlantUML stdlib into docs/diagrams
 	echo "vendor-diagrams: refreshed docs/diagrams/c4/ @ $(C4_PLANTUML_VERSION) — now run 'make diagrams' and verify the offline render"
 
 .PHONY: docs-lint
-docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets check-vks-terminology ## Lint markdown + the README-scenario, command-count and VKS-terminology gates
+docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets check-doc-target-coverage check-vks-terminology ## Lint markdown + the README-scenario, command-count, target-coverage and VKS-terminology gates
 	@# NOTE: diagrams-check is deliberately NOT a prerequisite here. It `docker run`s the pinned
 	@# PlantUML image (a ~478 MB pull, cold) and re-renders every .puml — so making it unconditional
 	@# meant a README-only PR paid for a full JVM render of seven diagrams it never touched. `make ci`
@@ -772,7 +800,13 @@ docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets
 	@# first lint happens in CI *after* it is pushed — a guaranteed green-local/red-CI round trip
 	@# for every new document. (Exactly how an MD040 shipped: the file was written, `make ci` went
 	@# green because git had never heard of it, and CI failed the moment it was committed.)
-	@files=$$(git ls-files --cached --others --exclude-standard '*.md'); \
+	@# docs/reviews/ is EXCLUDED, and it is not a loophole. Those files are the archived, verbatim output
+	@# of adversarial audits — one finding per heading, quoted as the agent wrote it. Two agents legitimately
+	@# flag the SAME file:line, so headings repeat (MD024); a quoted table cell is a fragment, so column
+	@# counts do not balance (MD056). Reformatting them to appease a linter would FALSIFY THE RECORD, which
+	@# is the one thing an audit archive must not do. Nobody reads them as a runbook. Every OPERATOR-facing
+	@# doc (README + docs/*.md) is still linted.
+	@files=$$(git ls-files --cached --others --exclude-standard '*.md' | grep -v '^docs/reviews/'); \
 	[ -n "$$files" ] || { echo "docs-lint: no markdown"; exit 0; }; \
 	if command -v markdownlint >/dev/null 2>&1; then markdownlint $$files; \
 	elif command -v npx >/dev/null 2>&1; then npx --yes markdownlint-cli@$(MARKDOWNLINT_VERSION) $$files; \
@@ -782,7 +816,7 @@ docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets
 	@# having linted nothing. In CI it now DIES instead.
 
 .PHONY: static-check
-static-check: check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: check-agent-frontmatter check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)

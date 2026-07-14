@@ -198,10 +198,16 @@ make deps            # toolchain: mise + podman (git must already be present)
 make engine-check    # read-only: what engine does this box have, and will it cost you a sudo?
 make env-init        # create .env from .env.example
 make env-populate    # mint the secrets we can, discover cluster values, print what only you can supply
-make fetch-harbor-ca # Harbor is self-signed: write its CA to the path HARBOR_CA_FILE points at
 make env-check       # gate: fail now if anything required is still missing
 make check-tools     # what this box has, and what it still needs
 ```
+
+> **`make fetch-harbor-ca` is NOT a prerequisite — it used to be listed here and it DIED.** It dials
+> `HARBOR_URL` with `openssl s_client`, and at this point Harbor does not exist yet (in Scenario 1 *you*
+> install it) and `HARBOR_URL` is still the committed placeholder, so it failed with "could not connect
+> to harbor.vks.local" and the two steps after it never ran. Fetch the CA **after** Harbor exists — both
+> runbooks already put it in the right place ([Scenario 1](docs/scenario-1.md), [Scenario 2](docs/scenario-2.md)).
+> The KinD stand-in never needs it: `make kind-up` mints the CA and sets `HARBOR_CA_FILE` itself.
 
 Running `make e2e-kind` (the local stand-in)? It **also needs Docker** — kind's nodes run on the
 Docker socket. That is kind, not us. A real air-gap run does **not** need docker: podman is the default
@@ -229,13 +235,13 @@ above is self-contained end to end (a CI gate enforces that: `make check-readme-
 
 | | |
 |---|---|
-| [Sneakernet](docs/sneakernet.md) | **your jump box reaches the internet but NOT Harbor** — pull the images on one box, carry the bundle across on a stick, push them in from the other. Applies to **both** VKS scenarios; it replaces `make mirror` (and `make install-all`, which starts with it) |
+| [Sneakernet](docs/sneakernet.md) | **no single box reaches BOTH the internet and Harbor** — so you use two: pull the images on the internet-side box, carry the bundle across on a stick, push them in from the box that can reach Harbor. Applies to **both** VKS scenarios; it replaces `make mirror` (and `make install-all`, which starts with it) |
 | [Architecture](docs/architecture.md) | system context, containers, deployment, pipeline flow |
 | [Tech stack](docs/tech-stack.md) | what the demo is built from |
 | [Prerequisites — the manual path](docs/prerequisites-manual.md) | the step-by-step the bootstrap automates |
 | [Sizing](docs/sizing.md) | jump-box disk + guest-cluster resources |
 | [Repository layout](docs/repository-layout.md) | where things live |
-| [Make targets](docs/make-targets.md) | every target, grouped |
+| [Make targets](docs/make-targets.md) | the catalogue, with context (`make help` prints the same list straight from the Makefile). A CI gate fails if an operator-invocable target is documented **nowhere** |
 | [CI/CD](docs/ci-cd.md) | what CI actually gates (and what it deliberately does not) |
 | [VKS authentication](docs/vks-authentication.md) | how `$KUBECONFIG` is produced on VKS (`VKS_AUTH_METHOD`, the `vcf` CLI flow), and **why Scenario 1 needs a second kubeconfig**. Both VKS scenarios run `make vks-login` themselves; **the KinD path skips it entirely** |
 | [Demo walkthrough](docs/demo-walkthrough.md) | drive the GitOps loop by hand |

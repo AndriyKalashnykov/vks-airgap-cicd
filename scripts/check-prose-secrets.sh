@@ -35,7 +35,22 @@ hits="$(git grep --untracked -nEi "$PATTERN" -- '*.md' 2>/dev/null |
   # Env-var NAME references (SNAKE_CASE). gitleaks owns real KEY=value secrets;
   # this gate targets prose, so a bare env-var name (HARBOR_PASSWORD, OSS_INDEX_TOKEN,
   # GPG_PASSPHRASE, …) is a reference, not a leak.
-  grep -vE '\b[A-Z][A-Z0-9]*_(PASSWORD|PASSWD|PWD|TOKEN|SECRET|KEY|PASSPHRASE)\b' |
+  # NOTE the `_` inside the character class. It used to be `[A-Z][A-Z0-9]*_(TOKEN|…)`, which CANNOT match
+  # a var name carrying a SECOND underscore: `ARGOCD_AUTH_TOKEN` fails, because the segment before
+  # `_TOKEN` is `ARGOCD_AUTH` and `[A-Z0-9]*` does not admit `_`. So the allowlist silently missed exactly
+  # the multi-word names this repo uses, and the gate flagged honest var-name REFERENCES as leaks.
+  grep -vE '\b[A-Z][A-Z0-9_]*_(PASSWORD|PASSWD|PWD|TOKEN|SECRET|KEY|PASSPHRASE)\b' |
+  # A slash-separated PROSE LIST OF NOUNS is not a credential: "Istio exposes no login/token/admin API",
+  # "control-plane (cluster-ADMIN/SSH) access". The `token ?[:/]` and `admin ?/ ?[A-Za-z0-9]` patterns
+  # match the separator, not a value — and there IS no value: the next token is another English noun in
+  # the list. Kept deliberately tight (letters only, then a word boundary), so `admin / Harbor12345` — a
+  # real leak — still trips the gate, because a digit-bearing value does not match `[A-Za-z]+\b`.
+  grep -vE '\b(login|token|admin|secret|password)/(login|token|admin|secret|password|ssh|sso|rbac|api)\b' |
+  grep -vE '\b[A-Z]+/(SSH|SSO|API|RBAC|TLS)\b' |
+  # "…`--kubeconfig` swallows the next token: `kubectl …`" — "token" here is a SHELL WORD, not a
+  # credential, and the colon is prose punctuation introducing a code span. What follows is a backtick,
+  # never a value.
+  grep -vE '\bnext token: *`' |
   # `$PWD/` is the shell's working-directory variable, not a password. The `pwd ?[:/]` pattern (which
   # hunts for prose like `pwd: hunter2`) matches it, and every `export KUBECONFIG=$PWD/secrets/...` in
   # a runbook trips the gate. A path is not a credential.

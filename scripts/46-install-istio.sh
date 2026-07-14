@@ -61,18 +61,50 @@ log_info "adding/updating helm repo '${CHART_REPO_NAME}' (${CHART_REPO_URL})"
 # e2e leg green for a KinD-only reason. We own this cluster on this path, so install them.
 istio_ensure_gwapi_crds
 
-run helm repo add "$CHART_REPO_NAME" "$CHART_REPO_URL" --force-update
-run helm repo update "$CHART_REPO_NAME"
+# AIR-GAP FIRST. A carried chart (bundle/charts/*.tgz, put there by 10-mirror-pull.sh) is used in
+# preference to the network — because on an air-gapped box `helm repo add` cannot work at all, and this
+# is the DEFAULT ingress. CHART_REF() resolves each chart to a local .tgz or the repo alias.
+CHART_DIR="${BUNDLE_DIR:-./bundle}/charts"
+CHART_LOCAL=0
+if [ -d "$CHART_DIR" ] && [ -n "$(find "$CHART_DIR" -name 'base-*.tgz' -print -quit 2>/dev/null)" ]; then
+  CHART_LOCAL=1
+  log_info "installing istio from the CARRIED charts in ${CHART_DIR} (no network)"
+elif [ -d "${BUNDLE_DIR:-./bundle}/images" ] && [ "${ALLOW_PUBLIC_CHARTS:-0}" != "1" ]; then
+  # A BUNDLE EXISTS BUT CARRIES NO CHARTS -> DO NOT SILENTLY REACH FOR THE INTERNET.
+  # On a dual-homed box that turns a BROKEN BUNDLE into a GREEN INSTALL that proves nothing about the air
+  # gap — the same false-green class as the builder image silently falling back to the public base. The
+  # air-gapped operator then discovers it on the box that cannot fix it.
+  die "the bundle at ${BUNDLE_DIR:-./bundle} carries NO istio charts (${CHART_DIR} is empty or absent),
+  and istio is the DEFAULT ingress. Your bundle predates the carried charts.
+  Re-cut it on the internet side:  make mirror-pull && make bundle
+  (Refusing to fetch from ${CHART_REPO_URL}: on an air-gapped box that cannot work at all, and on a
+   dual-homed box it would HIDE the fact that your bundle is incomplete.)
+  If you are deliberately installing from the internet, say so: ALLOW_PUBLIC_CHARTS=1"
+else
+  log_info "no carried charts in ${CHART_DIR} — fetching from ${CHART_REPO_URL} (this needs the internet)"
+  run helm repo add "$CHART_REPO_NAME" "$CHART_REPO_URL" --force-update
+  # INSIDE the else. It used to sit below this if/else, unconditionally — so on the air-gapped box (where
+  # the repo was never added, and could not be) `helm repo update istio-release` fails, breaking the exact
+  # path the carried charts exist to make work. A network call on the no-network path.
+  run helm repo update "$CHART_REPO_NAME"
+fi
+chart_ref() {   # chart_ref <base|istiod|gateway> -> a local .tgz, or the repo alias
+  if [ "$CHART_LOCAL" = 1 ]; then
+    find "$CHART_DIR" -name "${1}-*.tgz" -print -quit
+  else
+    printf '%s/%s' "$CHART_REPO_NAME" "$1"
+  fi
+}
 
 # --- 2. CRDs (istio/base) -----------------------------------------------------
 log_info "installing istio-base (CRDs) v${ISTIO_VERSION} into ${ISTIO_NAMESPACE}"
-run helm upgrade --install istio-base "${CHART_REPO_NAME}/base" \
+run helm upgrade --install istio-base "$(chart_ref base)" \
   --namespace "$ISTIO_NAMESPACE" --create-namespace \
   --version "$ISTIO_VERSION" --wait --timeout "${READY_TIMEOUT_SECONDS}s"
 
 # --- 3. Control plane (istiod), images from Harbor ----------------------------
 log_info "installing istiod v${ISTIO_VERSION} (hub=${HUB})"
-run helm upgrade --install istiod "${CHART_REPO_NAME}/istiod" \
+run helm upgrade --install istiod "$(chart_ref istiod)" \
   --namespace "$ISTIO_NAMESPACE" \
   --version "$ISTIO_VERSION" --wait --timeout "${READY_TIMEOUT_SECONDS}s" \
   --set global.hub="$HUB" \
@@ -83,7 +115,7 @@ run helm upgrade --install istiod "${CHART_REPO_NAME}/istiod" \
 
 # --- 4. Ingress gateway (LoadBalancer), images from Harbor --------------------
 log_info "installing istio ingress gateway (LoadBalancer) into ${ISTIO_GATEWAY_NAMESPACE}"
-run helm upgrade --install "$GW_RELEASE" "${CHART_REPO_NAME}/gateway" \
+run helm upgrade --install "$GW_RELEASE" "$(chart_ref gateway)" \
   --namespace "$ISTIO_GATEWAY_NAMESPACE" --create-namespace \
   --version "$ISTIO_VERSION" --wait --timeout "${READY_TIMEOUT_SECONDS}s" \
   --set service.type=LoadBalancer \

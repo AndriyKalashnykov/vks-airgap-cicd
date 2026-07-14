@@ -16,17 +16,38 @@ load_env
 # shellcheck source=scripts/lib/progress.sh
 . "${SCRIPT_DIR}/lib/progress.sh"
 
-require_cmd crane
 require_cmd curl
+
+# THE INTERNET CHECK COMES FIRST — BEFORE require_cmd crane — AND THE ORDER IS THE WHOLE POINT.
+#
+# This step is the first thing that actually needs the internet. Two failures used to happen here, and
+# both told the operator something false:
+#   1. WITH crane installed: `preflight` passes (it probes tools and the CLUSTER, never the network), then
+#      http_get_retry — which is deliberately patient with a FLAKY network (curl --retry 3 inside 5 outer
+#      attempts, 10s connect timeout) — grinds against an ABSENT one. MEASURED: >2 minutes of retries on a
+#      SINGLE manifest URL, then a curl error naming storage.googleapis.com.
+#   2. WITHOUT crane (a real air-gapped jump box before bundle-load): `require_cmd crane` fired first and
+#      said "run scripts/00-install-prereqs.sh" — A SCRIPT THAT DOWNLOADS FROM THE INTERNET. It sent an
+#      air-gapped operator to a dead end, confidently.
+# Neither ever said the true thing: this box has no internet, so it is on the wrong flow entirely. Probing
+# first means the diagnosis is right regardless of which tools happen to be present.
+require_internet "'make mirror-pull' (it downloads the Tekton manifests, the Istio charts and every image)"
+
+require_cmd crane
 require_cmd jq
 
 : "${BUNDLE_DIR:?}"; : "${IMAGE_CACHE_DIR:?}"
 MANIFEST_DIR="${BUNDLE_DIR}/manifests"
+# CHARTS ARE AS AIR-GAP-CRITICAL AS IMAGES, AND WE WERE NOT CARRYING ANY.
+# The bundle carried `helm` (62 MB) and not one chart — so on the air-gapped box `make install-ingress`
+# (whose DEFAULT is istio) still died at `helm repo add https://istio-release.storage.googleapis.com`.
+# A helm with no charts is dead weight. `helm pull` them here, on the box that has the internet.
+CHART_DIR="${BUNDLE_DIR}/charts"
 # images.lock — the resolved source digest of every mirrored image, recorded at
 # pull time. Travels with the bundle (sneakernet) and is what 'make mirror-verify'
 # checks Harbor against, so re-mirrors are reproducible + verifiable.
 LOCK_FILE="${BUNDLE_DIR}/images.lock"
-mkdir -p "$MANIFEST_DIR" "$IMAGE_CACHE_DIR"
+mkdir -p "$MANIFEST_DIR" "$IMAGE_CACHE_DIR" "$CHART_DIR"
 
 # ---- 1. Download the Tekton install manifests (also feed the image list) ----
 tk_pipe="${TEKTON_PIPELINES_VERSION:?}"
@@ -109,3 +130,23 @@ pruned="$(mirror_prune_cache)"
 [ "$pruned" -gt 0 ] && log_info "pruned $pruned orphaned cache dir(s) from $IMAGE_CACHE_DIR (stale digests/tags)"
 log_info "wrote $LOCK_FILE ($(wc -l < "$LOCK_FILE") digests) — used by 'make mirror-verify'"
 log_info "next: dual-homed -> 'make mirror-push'  |  sneakernet -> 'make bundle'"
+
+# --- CHARTS (the air-gap box cannot `helm repo add`) -------------------------------------------------
+# Pinned to ISTIO_VERSION, the same var 46-install-istio.sh installs with — so the carried chart and the
+# installed version cannot drift.
+if have helm; then
+  ISTIO_CHART_REPO="${ISTIO_CHART_REPO:-https://istio-release.storage.googleapis.com/charts}"
+  log_info "pulling the istio charts v${ISTIO_VERSION:-<unset>} into ${CHART_DIR} (the air-gap box cannot fetch them)"
+  if [ -n "${ISTIO_VERSION:-}" ]; then
+    run helm repo add istio-airgap "$ISTIO_CHART_REPO" --force-update >/dev/null
+    run helm repo update istio-airgap >/dev/null
+    for c in base istiod gateway; do
+      run helm pull "istio-airgap/${c}" --version "$ISTIO_VERSION" --destination "$CHART_DIR"
+    done
+    log_info "charts carried: $(find "$CHART_DIR" -name '*.tgz' -printf '%f ' 2>/dev/null)"
+  else
+    log_warn "ISTIO_VERSION is unset — NOT carrying the istio charts. The air-gapped box will only be able to use INGRESS_CONTROLLER=traefik or istio-existing."
+  fi
+else
+  log_warn "helm is not installed here, so the istio charts are NOT being carried. On the air-gap box only INGRESS_CONTROLLER=traefik / istio-existing will work."
+fi

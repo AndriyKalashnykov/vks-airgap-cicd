@@ -16,9 +16,16 @@ ENV DEBIAN_FRONTEND=noninteractive
 # actually VALIDATE that real path, instead of passing on packages the image pre-baked (a false
 # green). Ubuntu's apt is the counterpart to Photon's tdnf — running both exercises the
 # lib/os.sh apt/tdnf abstraction on a real box of each family.
+# gawk + gettext(-base) are NOT decoration. `envsubst` (gettext) renders the ${VAR} tokens in every k8s/
+# manifest and `03-check-tools.sh` marks it REQUIRED; `awk` is read by lib/apps.sh (EVERY per-app loop) and
+# by 23-mirror-verify.sh. Neither was installed here. e2e-sneakernet passed anyway for months because NO
+# harness ever ran `make check-tools` on this box — the runbook's own pre-carry gate. The moment
+# jumpbox-run.sh was made to run it (2026-07-14), this image failed with `MISSING REQUIRED: envsubst`,
+# which is the gate working: our own test box could not have performed the install half it documents.
+# (`awk` had been arriving TRANSITIVELY via another package — provisioned by accident. Now explicit.)
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl git openssh-client make tar gzip sudo \
+      ca-certificates curl git openssh-client make tar gzip sudo gawk gettext-base \
       podman fuse-overlayfs \
     && rm -rf /var/lib/apt/lists/*
 

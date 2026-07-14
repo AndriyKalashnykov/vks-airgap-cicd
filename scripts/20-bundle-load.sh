@@ -72,48 +72,143 @@ esac
 # an air-gapped box is a network timeout that names nothing useful.
 [ -d "${BUNDLE_DIR}/manifests" ] || die "extraction did not produce ${BUNDLE_DIR}/manifests — this bundle carries images but no manifests (Tekton install YAML, Gateway API CRDs). Re-cut it: make mirror-pull && make bundle"
 # --- INSTALL THE CARRIED TOOLCHAIN ------------------------------------------------------------------
-# The air-gapped box cannot download crane (that is the whole point), so the bundle carries it. Install it
-# onto PATH here — this is the step that makes `make mirror-push` possible on a box with no internet.
+# This box cannot download ANY of it — that is what "air-gapped" means. The bundle carries the static
+# binaries the flow needs (crane for the mirror; kubectl/helm/jq/yq for the install), and this is the step
+# that puts them on PATH. It used to install crane ONLY, which made the mirror possible and left the
+# install impossible while the runbook cheerfully told operators to run it.
 BIN_DIR="${BIN_DIR:-${HOME}/.local/bin}"
-if [ -x "${BUNDLE_DIR}/tools/crane" ]; then
-  # ARCH IS A CROSS-BOX CONTRACT. The staged crane is the INTERNET box's arch, and (separately) the
-  # cached images were pulled for MIRROR_ARCH. Compare both against THIS box now — an arch mismatch
-  # otherwise surfaces as `Exec format error` at mirror-push, or (worse) as `exec format error` inside
-  # Kubernetes three steps later, with nothing pointing back at the carry.
-  if [ -f "${BUNDLE_DIR}/tools/ARCH" ]; then
+TOOLS_DIR="${BUNDLE_DIR}/tools"
+
+if [ ! -d "$TOOLS_DIR" ]; then
+  # Not fatal only if the tools are somehow already here (a pre-provisioned box). Otherwise say the real
+  # cause NOW, not three commands later when mirror-push dies with 'crane: command not found'.
+  have crane || die "this bundle carries no toolchain (${TOOLS_DIR} is missing) and crane is not installed
+  on this box. The air-gapped host CANNOT download it. Re-cut the bundle on the internet side with a
+  current 'make bundle' — it stages crane, kubectl, helm, jq and yq — and carry that."
+  log_warn "bundle carries no tools/, but the toolchain is already on this box — continuing with $(command -v crane)"
+else
+  # ARCH IS A CROSS-BOX CONTRACT. The staged binaries are the INTERNET box's arch, and (separately) the
+  # cached images were pulled for MIRROR_ARCH. Compare both against THIS box now — a mismatch otherwise
+  # surfaces as `Exec format error` at mirror-push, or (worse) as `exec format error` inside Kubernetes
+  # three steps later, with nothing pointing back at the carry.
+  if [ -f "${TOOLS_DIR}/ARCH" ]; then
     # shellcheck disable=SC1091
-    . "${BUNDLE_DIR}/tools/ARCH"
+    . "${TOOLS_DIR}/ARCH"
     if [ "${BUNDLE_HOST_ARCH:-}" != "$(uname -m)" ]; then
       die "ARCH MISMATCH: this bundle was cut on ${BUNDLE_HOST_ARCH} but this box is $(uname -m).
-  The carried crane will not execute here, and the cached images were pulled for
+  The carried binaries will not execute here, and the cached images were pulled for
   MIRROR_ARCH=${BUNDLE_MIRROR_ARCH:-amd64}. Re-cut the bundle on a ${BUNDLE_HOST_ARCH:-<other>} box (or set
-  MIRROR_ARCH=$(uname -m) there) and carry that."
+  MIRROR_ARCH=<amd64|arm64> there — NOT $(uname -m): OCI platforms are 'amd64'/'arm64', so
+  'linux/aarch64' or 'linux/x86_64' would make the pull fail) and carry that."
     fi
   fi
 
   mkdir -p "$BIN_DIR"
-  install -m 0755 "${BUNDLE_DIR}/tools/crane" "${BIN_DIR}/crane"
+  installed=0
+  kept=0
+  for t in "$TOOLS_DIR"/*; do
+    name="$(basename "$t")"
+    case "$name" in ARCH|TOOLS.tsv) continue ;; esac
+    [ -f "$t" ] || continue
 
-  # RUN IT. This used to be `$(… version 2>/dev/null | head -1)` inside a log line — which swallowed the
-  # failure, logged an EMPTY version, and carried on. A file that exists and is +x is not a binary that
-  # works: `command -v crane` on the internet box can resolve to a mise SHIM (a symlink to the mise
-  # binary), so what got staged could be MISE, RENAMED crane. That fails HERE, on a box with no internet.
-  crane_ver="$("${BIN_DIR}/crane" version 2>&1 | head -1)" \
-    || die "the carried crane does not execute on this box ($(uname -m)): ${BIN_DIR}/crane
-  If the bundle was cut on a different architecture, re-cut it on a $(uname -m) box."
-  case "$crane_ver" in
-    ''|*[Mm]ise*) die "the carried 'crane' is NOT crane (it reports: '${crane_ver:-<nothing>}').
-  The internet box staged a mise SHIM instead of the real binary. Re-cut the bundle there." ;;
+    # DO NOT CLOBBER A TOOL THIS BOX ALREADY HAS. ~/.local/bin comes FIRST on PATH, so installing ours
+    # unconditionally would SHADOW the operator's — and their kubectl is very likely the one their lab
+    # pinned to their cluster's version. Silently overriding it is a version-skew bug we would have
+    # introduced ourselves, on the one box that cannot easily undo it.
+    #
+    # So: if the tool is already here AND RUNS, keep theirs and say so. Ours is only for what is MISSING.
+    # BUNDLE_TOOLS_FORCE=1 overrides (e.g. the box's copy is broken or the wrong arch).
+    # what WE carry, per the bundle's own manifest (no network needed to know it)
+    carried_ver="$(awk -F'\t' -v n="$name" '$1==n{print $3}' "${TOOLS_DIR}/TOOLS.tsv" 2>/dev/null | head -1 || true)"
+    why=""
+    if [ "${BUNDLE_TOOLS_FORCE:-0}" != "1" ] && existing="$(command -v "$name" 2>/dev/null)"; then
+      case "$name" in
+        crane)   ev="$("$existing" version 2>&1 | head -1)" ;;
+        kubectl) ev="$("$existing" version --client 2>&1 | head -1)" ;;
+        helm)    ev="$("$existing" version --short 2>&1 | head -1)" ;;
+        *)       ev="$("$existing" --version 2>&1 | head -1)" ;;
+      esac
+      # A FLOOR. `[ -n "$ev" ]` alone was not a policy: **helm 2** prints `Client: v2.x` (non-empty), so an
+      # ancient helm would be silently PREFERRED over the pinned one we carried, and then fail at
+      # `helm upgrade --install` with a nonsense error. We have no network to look versions up — but we do
+      # not need one: the bundle carries TOOLS.tsv (name / pin / version), so compare against that.
+      keep_it=1
+      case "$name" in
+        helm)    printf '%s' "$ev" | grep -qE 'v?3\.' || { keep_it=0; why="helm 2 (or unrecognised) — this flow needs helm 3" ; } ;;
+        kubectl) # within one minor of what we carry, else skew bites at apply time
+                 have_mm="$(printf '%s' "$ev"     | grep -oE 'v[0-9]+\.[0-9]+' | head -1)"
+                 ours_mm="$(printf '%s' "$carried_ver" | grep -oE 'v[0-9]+\.[0-9]+' | head -1)"
+                 if [ -n "$have_mm" ] && [ -n "$ours_mm" ] && [ "$have_mm" != "$ours_mm" ]; then
+                   h="${have_mm#v}"; o="${ours_mm#v}"
+                   hmin="${h#*.}"; omin="${o#*.}"
+                   d=$(( hmin > omin ? hmin - omin : omin - hmin ))
+                   [ "${h%%.*}" = "${o%%.*}" ] && [ "$d" -le 1 ] || { keep_it=0; why="${ev} is more than one minor from the carried ${carried_ver}"; }
+                 fi ;;
+      esac
+      if [ "$keep_it" = 1 ] && [ -n "$ev" ]; then
+        log_info "  KEPT ${name} — this box already has a working one (${existing}: ${ev}); not overriding it"
+        kept=$((kept + 1))
+        continue
+      fi
+      [ -n "$ev" ] && log_warn "  ${name} on this box is TOO OLD to use (${existing}: ${ev}) — ${why}. Installing the carried one."
+      log_warn "  ${name} exists at ${existing} but does not run — installing the carried one over it"
+    fi
+
+    install -m 0755 "$t" "${BIN_DIR}/${name}"
+
+    # RUN IT. A file that exists and is +x is not a binary that works: `command -v` on the internet box
+    # can resolve to a mise SHIM, so what got staged could be MISE under another name. That fails HERE,
+    # on a box with no internet. (This check used to hide inside a log line with `2>/dev/null`, which
+    # swallowed the failure and logged an EMPTY version.)
+    case "$name" in
+      crane)   probe=(version) ;;
+      kubectl) probe=(version --client) ;;
+      helm)    probe=(version) ;;
+      jq|yq)   probe=(--version) ;;
+      *)       probe=(--version) ;;
+    esac
+    ver="$("${BIN_DIR}/${name}" "${probe[@]}" 2>&1 | head -1)" || ver=""
+    case "$ver" in
+      ''|*[Mm]ise*) die "the carried '${name}' does not run on this box $(uname -m) (it reports: '${ver:-<nothing>}').
+  Either the bundle was cut on a different architecture, or the internet box staged a mise SHIM instead of
+  the real binary. Re-cut the bundle there." ;;
+    esac
+    log_info "  installed ${name} -> ${BIN_DIR}/${name}"
+    installed=$((installed + 1))
+  done
+  log_info "carried toolchain: ${installed} installed, ${kept} already present and kept (this box could not have downloaded any of them)"
+  [ "${BUNDLE_TOOLS_FORCE:-0}" = "1" ] || [ "$kept" -eq 0 ] \
+    || log_info "  (BUNDLE_TOOLS_FORCE=1 replaces the box's copies with the carried ones)"
+  # FAIL, do not warn. The very next step is `make platform`, which runs kubectl — and on this box a
+  # `command not found` cannot be fixed by installing anything. A warning at the end of a 12 GB load is
+  # not where an operator is looking.
+  case ":$PATH:" in
+    *":$BIN_DIR:"*) : ;;
+    *) die "the carried toolchain is installed in ${BIN_DIR}, but that is NOT on your PATH — so the next
+  steps (make platform / gitops / verify) will not find kubectl/helm/jq/yq. Add it and re-run:
+      export PATH=\"${BIN_DIR}:\$PATH\"
+  (Or set BIN_DIR to a directory already on your PATH: make bundle-load BIN_DIR=/usr/local/bin ...)" ;;
   esac
-  log_info "installed the carried crane -> ${BIN_DIR}/crane (${crane_ver})"
-  case ":$PATH:" in *":$BIN_DIR:"*) : ;; *) log_warn "add $BIN_DIR to your PATH so 'make mirror-push' can find crane" ;; esac
-else
-  # Not fatal ONLY if crane is somehow already here (a pre-provisioned box). Otherwise say the real cause
-  # now, not three commands later when mirror-push dies with 'crane: command not found'.
-  have crane || die "this bundle carries no toolchain (${BUNDLE_DIR}/tools/crane is missing) and crane is
-  not installed on this box. The air-gapped host CANNOT download it. Re-cut the bundle on the internet
-  side with a current 'make bundle' — it stages crane — and carry that."
-  log_warn "bundle carries no tools/crane, but crane is already on this box — continuing with $(command -v crane)"
+fi
+
+# The tools we CANNOT carry: OS packages. On a bare photon:5.0, `make`, `awk`, `git`, `openssl` and
+# `envsubst` are ALL missing, and this box cannot install them from the internet. Say so HERE, before the
+# operator gets three steps into an install that cannot finish.
+#
+# `awk` was missing from this list, and it is not cosmetic: lib/apps.sh reads apps/registry.tsv with it
+# (EVERY per-app loop) and 23-mirror-verify.sh does its images.lock digest lookup with it. So a bare Photon
+# jump box loaded the bundle happily and then died at mirror-verify — with nothing here having warned it.
+missing_os=""
+for t in bash tar curl sha256sum make awk git openssl envsubst; do
+  command -v "$t" >/dev/null 2>&1 || missing_os="${missing_os} ${t}"
+done
+if [ -n "$missing_os" ]; then
+  log_warn "these are NOT in the bundle (they are OS packages) and are MISSING on this box:${missing_os}"
+  log_warn "  the mirror (mirror-push / mirror-verify) may still work; the INSTALL (platform/gitops/verify) will not."
+  log_warn "  Install them from your lab's package mirror:"
+  log_warn "    apt-get install -y git openssl gettext-base make gawk tar curl   # Debian/Ubuntu"
+  log_warn "    tdnf install -y git openssl gettext make gawk tar curl           # Photon"
+  log_warn "  'make check-tools' lists everything the flow needs."
 fi
 
 n="$(find "${BUNDLE_DIR}/images" -maxdepth 1 -type d | wc -l)"

@@ -39,8 +39,17 @@ registration is skipped automatically.
 
 | Why | Confidence |
 |---|---|
-| ArgoCD's `clusters` is a **global** RBAC resource — only `applications`/`applicationsets`/`logs`/`exec` are grantable through a tenant AppProject role | research (adversarially verified) |
-| Registration mints a **cluster-admin** ServiceAccount on the guest; Kubernetes privilege-escalation prevention only permits a caller who *already* holds cluster-admin there | KinD-verified |
+| To put a `clusters` policy in an AppProject role you must be able to **UPDATE the AppProject** — upstream: *"In order to create roles in a project and add policies to a role, a user will need permission to update a project"* ([argo-cd `projects.md`](https://github.com/argoproj/argo-cd/blob/master/docs/user-guide/projects.md)). `projects, update` is not something a tenant holds, so a tenant cannot grant itself `clusters, create`. | primary-sourced (upstream docs, 2026-07-14) |
+| Registration mints a **cluster-admin** ServiceAccount on the guest (Broadcom's own `argocd cluster add` warns: *"will create a service account `argocd-manager` … with full cluster level privileges"*), and Kubernetes **privilege-escalation prevention** only permits a caller who *already* holds those permissions: *"You can only create/update a role binding if you already have all the permissions contained in the referenced role"* ([k8s RBAC](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#privilege-escalation-prevention-and-bootstrapping)). | primary-sourced (k8s RBAC + vendor, 2026-07-14) |
+
+> **Corrected 2026-07-14.** This table used to give the first reason as *"ArgoCD's `clusters` is a **global**
+> RBAC resource — only `applications`/`applicationsets`/`logs`/`exec` are grantable through a tenant
+> AppProject role"*, graded *"research (adversarially verified)"*. **That is FALSE.** Upstream explicitly
+> lists `clusters` among the resources usable in an AppProject role policy (`projects.md`, Note 2). The
+> `applications`/`applicationsets`/`logs`/`exec` list in `rbac.md` is the **"Application-Specific Policy"**
+> set — the resources whose `<object>` is *rewritten* to `<app-project>/<app-name>` — and it says nothing
+> about `clusters` being global-only. The conclusion (registration is admin-only) survives; the **reason**
+> did not. Both replacement reasons are now cited to primary sources.
 
 A pure VKS tenant therefore **requests** registration from the platform team.
 
@@ -77,11 +86,19 @@ A pure VKS tenant therefore **requests** registration from the platform team.
 
 4. **Publish `ARGOCD_DEST_SERVER`**, so the `Application` targets the guest instead of in-cluster.
 
-**Why not `argocd cluster add`?** It does exactly the same thing internally — but it stores an
-**expiring** credential when the source kubeconfig authenticates with an **x509 client cert**
-([argo-cd#13175](https://github.com/argoproj/argo-cd/issues/13175)), which is precisely the shape of
-a `vcf cluster kubeconfig get` kubeconfig. The registered cluster then silently flips to `Unknown`
-later. Creating the `type: kubernetes.io/service-account-token` Secret explicitly sidesteps that.
+**Why not `argocd cluster add`?** It does the same thing internally — but when the **source kubeconfig is
+cert-based**, it stores that **expiring x509 client cert** instead of the durable SA token
+([argo-cd#13175](https://github.com/argoproj/argo-cd/issues/13175), still open), and the registered cluster
+silently flips to `Unknown` later.
+
+> **Corrected 2026-07-14.** This used to add *"which is precisely the shape of a `vcf cluster kubeconfig get`
+> kubeconfig"*. **That is FALSE.** `vcf cluster kubeconfig get` produces a **token**-based kubeconfig
+> (community: [vrealize.it, 2026-01-30](https://vrealize.it/2026/01/30/vcf-automation-9-accessing-vks-clusters/) —
+> *"the authentication happens through the vcf cli command a valid token"*). The **cert**-based shape is the
+> one you get from the **UI download** / the `<cluster>-kubeconfig` admin Secret.
+
+Creating the `type: kubernetes.io/service-account-token` Secret explicitly means the credential is durable
+**whichever kubeconfig shape the operator supplies** — which is the reason that actually survives.
 Secondary benefit: the token never touches `argv` (it goes in over stdin), and the `argocd` CLI is
 not required at all.
 

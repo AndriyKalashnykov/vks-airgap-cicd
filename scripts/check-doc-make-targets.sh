@@ -28,7 +28,15 @@ cd "$REPO_ROOT"
 # not yet built ("make engine-check / make trust-harbor ... NOT yet built"). Those are mentions, not
 # instructions — nobody executes CLAUDE.md. The harm this gate prevents is an OPERATOR being told to
 # run a command that does not exist, and that only happens in a runbook.
-docs=$(git ls-files --cached --others --exclude-standard 'README.md' 'docs/*.md')
+#
+# docs/reviews/ is excluded for the SAME reason, and it is not a loophole. Those files are the archived
+# output of adversarial audits: they QUOTE findings, and a finding legitimately PROPOSES a target that
+# does not exist yet ("add a `make lab-trust-harbor`") or quotes a shell line the parser reads as one
+# ("install gawk" -> `make gawk`). They are a RECORD, not a runbook — nobody executes a review. Rewriting
+# an audit's own words to appease a doc gate would falsify the record, which is worse than the gate's
+# green. Every OPERATOR-facing doc (README + the runbooks) is still checked.
+docs=$(git ls-files --cached --others --exclude-standard 'README.md' 'docs/*.md' \
+        | grep -v '^docs/reviews/')
 [ -n "$docs" ] || { log_info "check-doc-make-targets: no docs"; exit 0; }
 
 missing=""
