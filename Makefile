@@ -476,8 +476,13 @@ jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photo
 	@mkdir -p .jumpbox
 	@kind_name="$$(grep -h '^KIND_CLUSTER_NAME=' .env .env.example 2>/dev/null | head -1 | cut -d= -f2 || true)"; \
 	 kind get kubeconfig --name "$$kind_name" --internal > .jumpbox/kubeconfig
-	@harbor_url="$$(grep '^HARBOR_URL=' .env.kind 2>/dev/null | cut -d= -f2 || true)"; \
-	 [ -n "$$harbor_url" ] || { echo "ERROR: HARBOR_URL not in .env.kind — run 'make install-harbor' first"; exit 1; }; \
+	@# Read the STAMPED STATE SINK, not `.env.kind`. #192 renamed the sink to .env.state and nothing has
+	@# written .env.kind since — so this target has been BROKEN ever since, and its error message told
+	@# you to "run make install-harbor first" when you just had. An error that names the wrong cause is
+	@# worse than a crash. (.env.kind is still read as a legacy fallback, one release of back-compat.)
+	@# state_file() needs REPO_ROOT, which os.sh sets — sourcing state.sh alone resolves to "/.env.state".
+	@harbor_url="$$(bash -c '. scripts/lib/os.sh; grep -h "^HARBOR_URL=" "$$(state_file)" .env.kind 2>/dev/null | head -1 | cut -d= -f2-' 2>/dev/null || true)"; \
+	 [ -n "$$harbor_url" ] || { echo "ERROR: HARBOR_URL is not in the state overlay — run 'make install-harbor' first"; exit 1; }; \
 	 harbor_insecure="$$(grep '^HARBOR_INSECURE=' .env.kind 2>/dev/null | cut -d= -f2 || true)"; harbor_insecure="$${harbor_insecure:-0}"; \
 	 harbor_ca="$$(grep '^HARBOR_CA_FILE=' .env.kind 2>/dev/null | cut -d= -f2 || true)"; \
 	 extra=""; \
