@@ -420,6 +420,36 @@ The docs are where today's bugs were **stated as facts** — "the air-gapped hos
 bundle" (it got none), "these are on any Linux base" (`awk` is not on Photon), "run `make preflight`"
 (it needs a live cluster). A doc claim is a CLAIM. Grade each: does the operator FOLLOW it and FAIL?
 
+### AND: `docs/vks-services/*.md` — A GRADE IS NOT A SOURCE (owner's instruction, 2026-07-14)
+
+`docs/vks-services/{harbor,argocd,istio}.md` carry a provenance TAXONOMY — `lab-verified` /
+`KinD-verified` / `9.1-doc` / `9.0-doc (inferred for 9.1)` / `community` / `UNVERIFIED`. **That is not
+good enough, and the owner is right.** A grade describes the *shape* of the evidence; it does not let
+anyone **check** it. `9.0-doc (inferred for 9.1)` names no page, no sentence, no date — so the fact
+cannot be re-verified, cannot decay, and cannot be argued with. It is an opinion wearing a badge.
+
+**What is owed: every load-bearing fact must be REFERENCEABLE.** Keep the grade (it is a useful
+one-glance signal) but it is now a *summary of a citation*, never a substitute for one. Each fact
+carries the evidence that produced it:
+
+| the fact came from | what MUST be recorded beside it |
+|---|---|
+| a vendor doc | the **exact URL**, the **retrieval date**, and the **quoted sentence** that says it. If the 9.1 URL 301-redirected to the 9.0 tree, record BOTH URLs and say so — that redirect is itself the evidence for the grade |
+| a lab / a cluster | the **exact command** and its **actual output** (not a paraphrase) |
+| our own code | `FILE:LINE` |
+| a blog / field source | URL + **date** + author, and why it is credible |
+| nothing | **NOT ESTABLISHED** — plus *what was tried* and *what would settle it*. "UNVERIFIED" alone is a non-deliverable: absence of verification is not evidence of falsehood, and publishing doubt is itself a claim (see `version-discipline.md` — a prior session "corrected" a TRUE Istio fact to UNVERIFIED and shipped the retraction into four files) |
+
+**How to do it:** run it AFTER the e2e matrix, as a `Workflow` (schema-forced) combining **`vks-adversary`**
+with the **`deep-research`** skill — one agent per service doc, each required to return, per fact, a
+resolvable citation or an explicit NOT ESTABLISHED. Then an adversarial verify pass that tries to
+**refute each citation** (does the URL still say that? does it serve 9.1 or 9.0? is the quote real?).
+
+**The gate that makes it stick:** a `check-vks-provenance` script — every fact row in
+`docs/vks-services/*.md` must carry a resolvable reference (URL+date+quote, a command+output, or
+`FILE:LINE`), else RED. RED-prove it by stripping one citation. Without the gate this rots back to
+vibes on the first hurried edit, exactly like every other prose rule in this file did.
+
 ## ▶️ HANDOFF 2026-07-14 (docker-on-the-jump-box session) — START HERE
 
 Branch `feat/jumpbox-docker-support`. **Docker is now SUPPORTED on a jump box, opt-in, on both OSes.**
