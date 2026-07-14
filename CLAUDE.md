@@ -380,6 +380,34 @@ All were **silent no-ops** — the house style of this repo's failures:
 status with `tail`'s. I nearly reported a pass. **Read the gate's own rc, on its own line.** It is written
 down in the rules and I still did it.
 
+### A CAPABILITY CHANGE IS NOT DONE UNTIL THE OPERATOR DOCS SAY SO (and this is NOT a gate — see why)
+
+I shipped docker support, updated CLAUDE.md + the decision doc, and **announced it** — while `README.md`,
+`.env.example`, `docs/vks-services/harbor.md` and `docs/prerequisites-manual.md` still told the operator
+that docker was unsupported and made them hand-type `sudo install -D …` CA commands. The owner caught it,
+not me, and nothing in the code could have.
+
+**The rule:** when a change alters *what the project can do* (what `make deps` installs, which engines
+work, what a target now automates), the deliverable includes **re-deriving the operator docs from the
+post-change state** — README, `.env.example` comments, the per-service reference tables, the prereqs page.
+Not "check they still parse": re-read them as someone who only reads *that* page. A new `make` target that
+appears only in CLAUDE.md is reachable **from nowhere an operator reads**.
+
+Specific traps this hit, all of which recur:
+
+- the docs described the **old workaround** (hand-typed CA install) that the new target now automates —
+  a "mechanism essay" the backlog had *already flagged as a specimen*, and I walked past it;
+- a canonical **reference table** ("how does each consumer trust the CA") silently omitted the new
+  consumer — a table is exactly where an addition is easiest to forget;
+- the negative claims (*"a real air-gap run is podman-only"*) are the ones that rot, because they read
+  as background rather than as claims.
+
+**Why there is no gate for this, stated plainly rather than faked:** the only mechanical signal available
+("every `##`-documented target must appear in some `.md`") would be permanently red on internal targets,
+and a gate that is always red is worse than no gate. `check-doc-make-targets` covers the *other* direction
+(a `make X` in a doc must exist). So this one is a **checklist item, not a check** — and it is written down
+as such because pretending otherwise is how the fake-green rules get violated.
+
 ### THE ONE THING I COULD NOT PROVE, AND WHY (state it; do not quietly retry it)
 
 **`make e2e-kind CONTAINER_ENGINE=docker` cannot be run to completion on a ROOTFUL-docker host without a
