@@ -90,9 +90,24 @@ if [ "${JUMPBOX_MODE:-validate}" = "airgap-half" ]; then
     mkdir -p secrets; cp /run/jumpbox/harbor-ca.crt secrets/harbor-ca.crt; chmod 0644 secrets/harbor-ca.crt
   fi
 
-  echo "### make deps — install the mirror engine (crane) on this OS ###"
-  make deps
-  eval "$(mise activate bash)" 2>/dev/null || true; hash -r
+  # NO `make deps` HERE. THAT WAS THE LIE.
+  #
+  # This box is supposed to be AIR-GAPPED. Running `make deps` downloaded crane from the internet (via
+  # mise), so the e2e proved the opposite of its own name: the image cache was genuinely carried, and the
+  # TOOLCHAIN was quietly fetched over the network. A real operator, on a box with no route out, would have
+  # got `crane: command not found` at `make mirror-push` — after carrying an 11 GB tarball across the gap.
+  #
+  # The toolchain now comes from the BUNDLE (11-bundle.sh stages crane; 20-bundle-load.sh installs it).
+  # Removing this line is what makes this e2e a real test: if the bundle stops carrying crane, the
+  # air-gap half dies here, exactly as a real operator would.
+  export PATH="${HOME}/.local/bin:${PATH}"
+  if command -v crane >/dev/null 2>&1; then
+    echo "FATAL: crane is ALREADY on this 'air-gapped' box before the bundle was loaded — the fidelity of"
+    echo "       this test depends on it NOT being here. Something installed it (a stale image layer, a"
+    echo "       leaked mount). Fix that, or this leg proves nothing."
+    exit 1
+  fi
+  echo "### air-gap box: NO internet toolchain. crane must come from the carried bundle. ###"
 
   # Fidelity assert: the image cache MUST be empty here — nothing leaked from the host.
   if [ -n "$(ls -A bundle 2>/dev/null || true)" ]; then
