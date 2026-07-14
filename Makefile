@@ -557,7 +557,7 @@ jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photo
 	 HARBOR_PASSWORD="$$hpw" docker run --rm --privileged --network kind \
 	   -e HARBOR_URL="$$harbor_url" -e HARBOR_INSECURE="$$harbor_insecure" \
 	   -e HARBOR_USERNAME="$$huser" -e HARBOR_PASSWORD \
-	   -e JUMPBOX_ENGINE="$(JUMPBOX_ENGINE)" \
+	   -e JUMPBOX_ENGINE="$(JUMPBOX_ENGINE)" -e JUMPBOX_OS="$(JUMPBOX_OS)" \
 	   -v "$(PWD):/src:ro" \
 	   -v "$(PWD)/.jumpbox/kubeconfig:/run/jumpbox/kubeconfig:ro" \
 	   $$extra $$tb_flags \

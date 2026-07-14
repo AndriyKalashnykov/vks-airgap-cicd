@@ -152,9 +152,22 @@ ARGOCD_TRACK_BRANCH=main
 Create a vSphere Namespace, provision a VKS cluster in it, then:
 
 ```bash
+# SWITCH THE vcf CONTEXT TO THE WORKLOAD NAMESPACE FIRST. A2 left it pointed at the ArgoCD
+# instance's vSphere Namespace, where this cluster does not exist — without this line the next
+# command cannot see $VKS_CLUSTER_NAME and fails in a way that looks like the cluster is missing.
+vcf context use $VKS_CONTEXT_NAME:$VKS_NAMESPACE
+
 vcf cluster kubeconfig get $VKS_CLUSTER_NAME --export-file ./secrets/vks.kubeconfig
 kubectl --kubeconfig ./secrets/vks.kubeconfig get nodes -o wide
 ```
+
+> `$VKS_CONTEXT_NAME` is the name you gave the context in A2. `scripts/30-vks-login.sh` **requires** it
+> for `VKS_AUTH_METHOD=vcf`, so set it in `.env` alongside `$VKS_NAMESPACE` (the **workload** vSphere
+> Namespace — *not* the ArgoCD one).
+>
+> ⚠️ **`-n` MEANS DIFFERENT THINGS IN DIFFERENT `vcf` SUBCOMMANDS.** In `vcf package` it is a
+> **guest-cluster** namespace; in `vcf addon` it is the **vSphere Namespace** of the workload cluster.
+> Same flag, opposite meaning — never copy one invocation's `-n` into the other.
 
 **Expect:** nodes listed.
 

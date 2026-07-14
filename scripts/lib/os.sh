@@ -199,7 +199,13 @@ engine_packages() {
     podman:apt-get) printf 'podman crun uidmap passt slirp4netns' ;;
     podman:tdnf|podman:dnf) printf 'podman crun' ;;
     docker:apt-get) printf 'docker.io rootlesskit uidmap dbus-user-session slirp4netns fuse-overlayfs' ;;
-    docker:tdnf|docker:dnf) printf 'docker docker-rootless rootlesskit shadow fuse-overlayfs slirp4netns' ;;
+    # util-linux is NOT optional on Photon: rootlesskit shells out to `unshare` to build the detached
+    # netns, and Photon's base image does not ship it. Without it rootless dockerd dies with
+    #   failed to execute [unshare -n mount --bind /proc/self/ns/net ...]: exec: "unshare": not found
+    # — an error that names a binary, not a package, so it reads like a broken daemon rather than a
+    # missing dependency. (Ubuntu has util-linux as an Essential package, which is precisely why only the
+    # Photon leg of the matrix failed and why testing on one OS would have shipped this.)
+    docker:tdnf|docker:dnf) printf 'docker docker-rootless rootlesskit shadow util-linux fuse-overlayfs slirp4netns' ;;
     *) die "engine_packages: unsupported engine/pkg-mgr combination '${eng}/${mgr}'" ;;
   esac
 }
