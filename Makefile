@@ -128,6 +128,10 @@ env-validate: ## Validity gate — format + KUBECONFIG/Harbor connectivity+auth 
 check-doc-command-count: ## Gate: a doc that COUNTS commands ("two commands") must list exactly that many
 	@$(SCRIPTS)/check-doc-command-count.sh
 
+.PHONY: check-doc-make-targets
+check-doc-make-targets: ## Gate: every `make X` a runbook tells the operator to run must EXIST in the Makefile
+	@$(SCRIPTS)/check-doc-make-targets.sh
+
 .PHONY: check-gwapi-istio-alignment
 check-gwapi-istio-alignment: ## Gate: GATEWAY_API_VERSION == the version the pinned ISTIO vendors (ground truth: istio's go.mod)
 	@$(SCRIPTS)/check-gwapi-istio-alignment.sh
@@ -612,10 +616,48 @@ test-state-overlay: ## Offline: the stamped state overlay (unstamped=source, mis
 	@./scripts/test-state-overlay.sh
 
 ##@ Security scanning (internet/CI side; not part of the air-gap install)
+# A GATE THAT SKIPS BECAUSE ITS TOOL IS MISSING IS A GATE THAT PASSES BY NOT LOOKING.
+# Locally, warn + skip (a dev box may lack a scanner). In CI ($(CI) is set by GitHub), DIE — CI
+# installs every one of these from .mise.toml, so a missing tool means the toolchain step is broken,
+# and a scanner that reports success without running is worse than no scanner at all.
+# The script-side gates use require_gate_tool() (scripts/lib/os.sh); these recipes are inline shell.
+#
+# NOTE the shape: ONE logical line. A multi-line `define` expands RAW NEWLINES into the recipe, so
+# make hands each line to a SEPARATE shell — which splits the `{ ... }` block and made the local
+# skip path exit 2 instead of 0. Caught by actually running it; it looked fine.
+gate_tool_missing = if [ -n "$${CI:-}" ]; then echo "GATE TOOL MISSING IN CI: '$(1)' — run 'make deps' (mise installs it from .mise.toml)."; echo "Refusing to skip: a gate that reports success without running is worse than no gate."; exit 1; else echo "$(1) not installed — this gate is SKIPPED locally (run 'make deps'). It FAILS, not skips, in CI."; exit 0; fi
+
 .PHONY: secrets
-secrets: ## gitleaks — scan git history + working tree for committed secrets
-	@if command -v gitleaks >/dev/null 2>&1; then gitleaks detect --no-banner --redact; \
-	else echo "gitleaks not installed — run 'make deps' (mise) — skipping"; fi
+secrets: ## gitleaks — scan git HISTORY *and* the working tree for secrets
+# `gitleaks detect` scans git HISTORY ONLY. That meant `make secrets` could not catch a secret you
+# were ABOUT TO COMMIT — only one already committed, at which point it must be rotated, which is the
+# very failure a pre-commit gate exists to prevent. (Proven: a planted high-entropy ghp_ token in an
+# untracked file → "no leaks found", rc=0.) CI only worked by ACCIDENT: actions/checkout is shallow,
+# so the root commit is diffed against the empty tree and the whole worktree is scanned as additions.
+#
+# So there are two legs. The second (--no-git) scans the files on disk and needs .gitleaks.toml,
+# which allowlists the gitignored operator-local artifacts (self-signed CA/leaf keys, kubeconfigs) —
+# without it, it reports 5 private keys on every real box, and a gate that is always red gets ignored.
+	@# ONE recipe line (backslash-continued): each Makefile line runs in its OWN shell, so a guard
+	@# that `exit 0`s on a separate line only ends the GUARD's shell — make then runs the scan anyway.
+	@if ! command -v gitleaks >/dev/null 2>&1; then $(call gate_tool_missing,gitleaks); fi; \
+	 gitleaks detect --no-banner --redact && \
+	 gitleaks detect --no-git --no-banner --redact --config .gitleaks.toml
+
+.PHONY: check-secrets-untracked
+check-secrets-untracked: ## Gate: the paths .gitleaks.toml allowlists must NEVER be tracked by git
+# The allowlist above is what lets the working-tree scan be green on a real box. Its one hole is a
+# deliberate `git add -f .env` — which would then be INVISIBLE to gitleaks. Close it mechanically
+# rather than by trust: those paths are gitignored, so if git is tracking one, something is wrong.
+	@bad=""; for p in .env secrets .env.state .jumpbox; do \
+	   git ls-files --error-unmatch "$$p" >/dev/null 2>&1 && bad="$$bad $$p"; \
+	 done; \
+	 if [ -n "$$bad" ]; then \
+	   echo "ERROR: these are gitleaks-allowlisted (so NOT scanned) and MUST NOT be tracked:$$bad"; \
+	   echo "       Untrack with: git rm --cached -r <path>   (and rotate anything that leaked)"; \
+	   exit 1; \
+	 fi; \
+	 echo "check-secrets-untracked: OK — no allowlisted secret path is tracked"
 
 .PHONY: trivy-fs
 trivy-fs: app-build ## trivy — scan EVERY app's built artifact (jar / Go binary) for fixable HIGH/CRITICAL CVEs
@@ -623,18 +665,25 @@ trivy-fs: app-build ## trivy — scan EVERY app's built artifact (jar / Go binar
 
 .PHONY: trivy-config
 trivy-config: ## trivy — scan k8s/Tekton manifests for HIGH/CRITICAL misconfigurations (.trivyignore documents accepted findings)
-	@if command -v trivy >/dev/null 2>&1; then \
-	  trivy config --severity HIGH,CRITICAL --exit-code 1 --quiet \
+	@if ! command -v trivy >/dev/null 2>&1; then $(call gate_tool_missing,trivy); fi; \
+	 trivy config --severity HIGH,CRITICAL --exit-code 1 --quiet \
 	    --skip-dirs bundle --skip-dirs apps --skip-dirs docs --skip-dirs .claude \
-	    --skip-files jumpbox/Dockerfile.bootstrap .; \
-	else echo "trivy not installed — run 'make deps' (mise) — skipping"; fi
+	    --skip-files jumpbox/Dockerfile.bootstrap .
 
 .PHONY: prose-secrets
 prose-secrets: ## grep *.md for prose credentials gitleaks misses (natural-language secrets in runbooks)
 	@bash scripts/check-prose-secrets.sh
 
+.PHONY: secrets-scan
+# The secret gates guard *.md every bit as much as they guard code — so CI must be able to reach them
+# from a DOCS-ONLY PR, which skips static-check entirely (classify-changes.sh: docs=true, code=false).
+# That is the ONLY PR shape that can add a prose credential to a runbook, which is precisely what
+# prose-secrets exists to catch. Grouped here so the CI `secrets` job can run them WITHOUT dragging in
+# trivy-fs's full Java+Go build. `sec` still contains them, so `make static-check` is unchanged.
+secrets-scan: check-secrets-untracked secrets prose-secrets ## gitleaks + prose-credential scan (cheap; no build)
+
 .PHONY: sec
-sec: secrets prose-secrets trivy-fs trivy-config ## Run all security scanners (gitleaks + prose-secrets + trivy fs/config)
+sec: secrets-scan trivy-fs trivy-config ## Run all security scanners (gitleaks + prose-secrets + trivy fs/config)
 
 ##@ Diagrams & composite gates
 # podman rootless needs --userns=keep-id so the mapped uid can write the mounted
@@ -689,7 +738,7 @@ vendor-diagrams: ## Re-download the pinned C4-PlantUML stdlib into docs/diagrams
 	echo "vendor-diagrams: refreshed docs/diagrams/c4/ @ $(C4_PLANTUML_VERSION) — now run 'make diagrams' and verify the offline render"
 
 .PHONY: docs-lint
-docs-lint: check-readme-scenarios check-doc-command-count check-vks-terminology ## Lint markdown + the README-scenario, command-count and VKS-terminology gates
+docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets check-vks-terminology ## Lint markdown + the README-scenario, command-count and VKS-terminology gates
 	@# NOTE: diagrams-check is deliberately NOT a prerequisite here. It `docker run`s the pinned
 	@# PlantUML image (a ~478 MB pull, cold) and re-renders every .puml — so making it unconditional
 	@# meant a README-only PR paid for a full JVM render of seven diagrams it never touched. `make ci`
@@ -705,10 +754,13 @@ docs-lint: check-readme-scenarios check-doc-command-count check-vks-terminology 
 	[ -n "$$files" ] || { echo "docs-lint: no markdown"; exit 0; }; \
 	if command -v markdownlint >/dev/null 2>&1; then markdownlint $$files; \
 	elif command -v npx >/dev/null 2>&1; then npx --yes markdownlint-cli@$(MARKDOWNLINT_VERSION) $$files; \
-	else echo "markdownlint not installed — skipping (install markdownlint-cli)"; fi
+	else $(call gate_tool_missing,markdownlint); fi
+	@# ^ this branch is INSIDE docs-lint, the one job whose only toolchain step is setup-node. If
+	@# someone ever drops that step, markdownlint would vanish and this gate would report SUCCESS
+	@# having linted nothing. In CI it now DIES instead.
 
 .PHONY: static-check
-static-check: check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)

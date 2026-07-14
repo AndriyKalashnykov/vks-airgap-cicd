@@ -167,6 +167,31 @@ require_cmd() {
   have "$cmd" || die "required command '$cmd' not found — $hint"
 }
 
+# require_gate_tool <binary> [how-to-get-it]
+#
+# A GATE THAT SKIPS BECAUSE ITS TOOL IS MISSING IS A GATE THAT PASSES BY NOT LOOKING.
+#
+# Nine places in this repo used to do `command -v X || { echo "X not installed — skipping"; }` and
+# then exit 0 — gitleaks, trivy (x2), shellcheck, yamllint, hadolint (x2), kubeconform, markdownlint.
+# Locally that is a kindness (a dev box may genuinely lack a scanner). In CI it is a FALSE GREEN: the
+# check reports success having scanned nothing, and nobody reads the line that says so.
+#
+# So: warn locally, DIE in CI (GitHub sets $CI). CI installs every one of these from .mise.toml, so a
+# missing tool there means the toolchain step is broken — which is exactly what we want to hear about.
+#
+# Returns 1 (not 0) when the tool is absent locally, so the caller can skip its body:
+#   require_gate_tool shellcheck "make deps" || return 0
+require_gate_tool() {
+  local cmd="$1" hint="${2:-run 'make deps' (mise installs it from .mise.toml)}"
+  have "$cmd" && return 0
+  if [ -n "${CI:-}" ]; then
+    die "GATE TOOL MISSING IN CI: '$cmd' — $hint.
+  Refusing to skip: a gate that reports success without running is worse than no gate."
+  fi
+  log_warn "$cmd not installed — this gate is SKIPPED locally ($hint). It will FAIL, not skip, in CI."
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # Environment loading — .env.example (committed defaults) then .env (overrides).
 # `set -a` exports everything so child processes (crane, kubectl, curl) see it.

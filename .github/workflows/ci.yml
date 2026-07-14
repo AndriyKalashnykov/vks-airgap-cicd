@@ -147,10 +147,45 @@ jobs:
       - name: make diagrams-check
         run: make diagrams-check
 
+  # Secret scanning guards *.md as much as it guards code — so it must NOT hang off `code == true`.
+  #
+  # It used to live only in `sec` -> `static-check`, which runs `if: code == 'true'`. A DOCS-ONLY PR
+  # classifies as code=false/docs=true, so static-check is SKIPPED — and a docs-only PR is the ONLY
+  # shape that can introduce a prose credential into a runbook, which is precisely what
+  # `prose-secrets` exists to catch (gitleaks misses natural-language secrets). The gate was
+  # unreachable from the one PR shape it was written for. Proven: a planted `admin / <random>` line
+  # in a .md fails scripts/check-prose-secrets.sh (rc=1) while `make docs-lint` — the only gate that
+  # PR ran — exits 0.
+  #
+  # Deliberately NO `if:` — every changed path classifies as code or docs (and an empty list forces
+  # both true), so `code || docs` is a tautology. Running unconditionally makes the SECURITY gate
+  # structurally immune to a future classifier bug, and the classifier has already been wrong once
+  # (the dorny/paths-filter deny-list, see scripts/classify-changes.sh).
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 1 is LOAD-BEARING for gitleaks. `gitleaks detect` scans git HISTORY, not the
+      # working tree; with a shallow checkout the single root commit has no parent, so it is diffed
+      # against the empty tree — i.e. the whole worktree is scanned as additions. `fetch-depth: 0`
+      # (which gitleaks' own docs suggest) would silently turn this into a history-only scan of a
+      # history that is already clean: a gate that passes by not looking. Do not "fix" this.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      # Only gitleaks — still pinned by .mise.toml (one source of truth), but without dragging in
+      # the JDK/Go/kubectl/helm toolchain that static-check needs. cache:false so we don't restore
+      # (or save) that job's much larger cache just to obtain one Go binary.
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4
+        with:
+          install_args: gitleaks
+          cache: false
+
+      - name: make secrets-scan
+        run: make secrets-scan
+
   # Single required status check: fails if any needed job failed/cancelled,
   # passes if they succeeded or were legitimately skipped by paths-filter.
   ci-pass:
-    needs: [changes, static-check, docs-lint, diagrams-check]
+    needs: [changes, static-check, docs-lint, diagrams-check, secrets]
     if: always()
     runs-on: ubuntu-latest
     steps:

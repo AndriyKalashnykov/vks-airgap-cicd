@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
 
-if ! have trivy; then
+if ! require_gate_tool trivy; then
   log_warn "trivy not installed — run 'make deps' (mise) — skipping"
   exit 0
 fi
