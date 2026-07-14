@@ -25,6 +25,13 @@ load_env
 # Harbor keeps its OWN LB (not behind the ingress); http when HARBOR_INSECURE=1 (KinD).
 harbor_scheme="https"; [ "${HARBOR_INSECURE:-0}" = "1" ] && harbor_scheme="http"
 harbor_url="${harbor_scheme}://${HARBOR_URL:-harbor.vks.local}"
+# Harbor's cert is SELF-SIGNED too (minted with an IP SAN by 06-install-harbor.sh), so a browser warns —
+# exactly as it does for ArgoCD, whose row has always said so. Saying it for one and not the other is the
+# same lie-by-contrast that made the ArgoCD/Harbor rows inconsistent before: the reader concludes Harbor's
+# cert is trusted and ArgoCD's is not. Found by reading the REAL post-install table, not a simulated one.
+if [ "${HARBOR_INSECURE:-0}" != "1" ] && [ -n "${HARBOR_CA_FILE:-}" ]; then
+  harbor_url="${harbor_url} (self-signed; --insecure)"
+fi
 # GITEA / TEKTON / THE APPS ARE ONLY REACHABLE AT *.vks.local IF THE INGRESS EXISTS.
 # The ingress is OPTIONAL in this repo (`make verify` proves the whole GitOps loop over a port-forward,
 # precisely so it needs none). Printing `http://gitea.vks.local` on a cluster with no ingress is a LIE:
