@@ -58,6 +58,9 @@ fi
 . "${SCRIPT_DIR}/lib/apps.sh"
 tekton_url="$(ingress_url "${TEKTON_DASHBOARD_HOST:-tekton.vks.local}")"  # Tekton Dashboard (read-only UI)
 
+_sink="$(state_file)"
+_have_sink=0; [ -f "$_sink" ] && _have_sink=1
+
 # --- resolve logins -------------------------------------------------------------------
 #
 # NOTE (a fix I wrote and then DELETED, so nobody re-writes it): I added a "still the .env.example
@@ -66,13 +69,27 @@ tekton_url="$(ingress_url "${TEKTON_DASHBOARD_HOST:-tekton.vks.local}")"  # Tekt
 # the marker can never fire. The values shown come either from the operator's OWN .env (legitimately
 # theirs) or from the state overlay (discovered), and the Context block already distinguishes those.
 # Shipping a check that cannot fire is worse than shipping nothing: it looks like a guarantee.
+# AN UNSET PASSWORD IS NOT AUTOMATICALLY "YOU MUST SET IT".
+# The placeholder used to read `<set HARBOR_PASSWORD in .env>` — which is WRONG for the KinD flow, where
+# 05-kind-up.sh GENERATES these (gen_password) whenever they are unset and publishes them to the state
+# overlay. Telling a KinD operator to go and set a password is inventing a chore for them, and it is the
+# same defect as the old ArgoCD note. Only a REAL LAB must supply one (there, Harbor/ArgoCD are given to
+# you, not created by us).
+_unset_pw() {  # _unset_pw <VAR> -> what an unset password actually means, per flow
+  if [ "$_have_sink" = 1 ]; then printf '<not published — check the state overlay>'
+  else printf '<generated at install (KinD) — or set %s in .env for a real lab>' "$1"; fi
+}
 harbor_user="${HARBOR_USERNAME:-admin}"
-harbor_pw="${HARBOR_PASSWORD:-<set HARBOR_PASSWORD in .env>}"
+harbor_pw="${HARBOR_PASSWORD:-$(_unset_pw HARBOR_PASSWORD)}"
 gitea_user="${GITEA_ADMIN_USER:-gitea_admin}"
-gitea_pw="${GITEA_ADMIN_PASSWORD:-<set GITEA_ADMIN_PASSWORD in .env>}"
+gitea_pw="${GITEA_ADMIN_PASSWORD:-$(_unset_pw GITEA_ADMIN_PASSWORD)}"
 # ArgoCD via the context-aware resolver; exit 3 => VKS-provided / not knowable locally.
 if argo_pw="$("${SCRIPT_DIR}/argocd-password.sh" 2>/dev/null)"; then :; else
-  argo_pw="<VKS-provided — get it from your lab>"
+  # SAME CLASS AS THE TWO ABOVE, third row: "<VKS-provided — get it from your lab>" is only true on a real
+  # lab. On a KinD box ArgoCD's password is GENERATED at install like the others, so telling the operator
+  # to go and get it from a lab they do not have is a third invented chore. Answer per flow.
+  argo_pw="$(_unset_pw ARGOCD_ADMIN_PASSWORD)"
+  [ "$_have_sink" = 1 ] && argo_pw="<VKS-provided — get it from your lab>"
 fi
 
 # THE ArgoCD USERNAME WAS HARDCODED TO `admin`, AND THAT IS FALSE FOR A TENANT.
@@ -101,8 +118,6 @@ fi
 #
 # So: say which state sink is in effect, whose it is, whether the cluster answers, and — the line that
 # actually matters — whether the values below are DISCOVERED or DEFAULT.
-_sink="$(state_file)"
-_have_sink=0; [ -f "$_sink" ] && _have_sink=1
 
 # Whose state is it? The KinD flow STAMPS the sink (VKS_STATE_KIND=1); a real lab's does not.
 if [ "$_have_sink" = 1 ] && grep -q '^VKS_STATE_KIND=1' "$_sink" 2>/dev/null; then
