@@ -285,7 +285,60 @@ The two BLOCKING triggers (before you implement · before you call the session d
 (`Workflow` with a schema, or a synchronous `Agent` — never fire-and-forget), and what to do with the
 findings are all in Rule Zero. Do not duplicate them here.
 
-## ▶️ HANDOFF 2026-07-14 — ALL 8 E2E PERMUTATIONS GREEN — START HERE
+## ▶️ HANDOFF 2026-07-14 (late) — START HERE
+
+`main` GREEN · **0 open PRs** · 9 PRs merged this session · all 8 e2e permutations green (table below).
+
+### THE ONE THING TO INTERNALISE
+
+**Every single bug this session was something that REPORTED SUCCESS WITHOUT DOING THE WORK — and a green
+gate agreed with it.** A push that skipped all 36 uploads and exited 0. A security gate CI structurally
+could not run. A CRD install whose acceptance check was *already true before the code existed*. A harness
+that printed `sudo=NO` while sudo was prompting. Assume this class by default; it is the house style of
+this repo's failures.
+
+### NEXT UP (in order)
+
+1. **Task: make docker genuinely supported on the jump box** (owner's decision, option B). This is the
+   next substantial piece of work and it is fully specced in the task list. The kernel of it:
+   **`00-install-prereqs.sh` installs PODMAN ONLY** — there is no `pkg_install docker` anywhere, on either
+   OS, and `test-container-engine.sh:83-85` **asserts that as an invariant with a gate enforcing it**. So
+   docker on a jump box is *not untested — it is unsupported by our own bootstrap.* The work: an
+   engine-aware bootstrap + a `make` target that CHECKS the docker prereqs + one that INSTALLS them + a
+   test; the jump-box matrix then tests **that change**. Traps already found: Ubuntu's `docker.io` ships
+   **no rootlesskit** (only Docker's third-party repo does — a real ask for an air-gapped box) while
+   **Photon has a first-class `docker-rootless` package** (it is the EASIER OS, which inverts the usual
+   assumption); `JUMPBOX_IMAGE` is **not engine-qualified**, so a matrix would silently reuse the wrong
+   image.
+2. **Task: run every e2e permutation with `CONTAINER_ENGINE=docker`.** Every green e2e so far ran on
+   podman. Assert `using container engine: docker` in each leg — do not eyeball it.
+3. **A real lab.** The Supervisor topology, the `vcf` CLI auth flow, and whether a VKS guest cluster ships
+   the Gateway API CRDs remain **UNVERIFIED**. No amount of KinD green changes that.
+
+### Container engine — SETTLED, and the doc is `docs/decisions/container-engine-support.md`
+
+Measured against the KinD Harbor (login → pull → build → push → `crane validate --remote`):
+
+| engine | CA method | sudo |
+|---|---|---|
+| **podman** (default) | `--cert-dir`, per command | **no — ever** (daemonless) |
+| **docker rootless** | `~/.config/docker/certs.d/<host>/ca.crt` | **no** — matches podman exactly |
+| **docker rootful** | `/etc/docker/certs.d/<host>/ca.crt` | **YES, one per registry** — and the KinD LB IP changes every `kind-up`, so a prompt **per cluster** |
+
+Facts people get wrong, all verified here: **`certs.d` MERGES with the system store** (a missing `ca.crt`
+does NOT mean docker fails — never gate on the file, gate on a TLS handshake; a guard that did the former
+was shipped and retracted). A `certs.d` drop-in needs **no daemon restart** (read per request).
+`HARBOR_INSECURE=1` is **podman-only**. `make e2e-kind` needs **docker regardless of `CONTAINER_ENGINE`**
+(kind's nodes are docker containers) — so a podman-only box cannot run the local KinD e2e.
+
+**`--security-opt apparmor=rootlesskit`** makes rootless-docker-in-a-container work on an
+AppArmor-restricting host (Ubuntu 23.10+). I first wrote *"impossible"* into the decision doc after trying
+three flags — **none of which acted on the mechanism I had myself just described.** Ubuntu attaches the
+`userns` permission by **host path**; inside a container the binary is a different file, the profile does
+not attach, the process is `unconfined` — and `unconfined` is exactly what the kernel denies. Which is why
+`apparmor=unconfined` makes it *worse*.
+
+### The 8 e2e permutations (all green, each verified by what the log DID, not its exit code)
 
 `main` clean · **0 open PRs** · 7 PRs merged this session (#213–#218 + follow-ups).
 
