@@ -59,25 +59,33 @@ your base has them** — measured on the bare images:
 No container engine is needed on the jump box: `crane` pushes images, and the Maven builder is carried
 pre-built.
 
-**Expect — and read this carefully, because the obvious reading is wrong.** Run `make check-tools` on the
-jump box **before** you carry 12 GB across a room; it is the cheapest failure available. But it will
-**report the five carried tools as MISSING, and exit non-zero — and that is CORRECT at this point**:
+**Check it BEFORE you carry 12 GB across a room** — it is the cheapest failure available:
 
-```
-MISSING REQUIRED: kubectl helm jq yq crane     <- expected before the carry. The BUNDLE brings these.
+```bash
+make check-tools CHECK_TOOLS_PHASE=pre-carry
 ```
 
-What you are checking for is the **other** column. **Every non-carried required tool must show `OK`** —
-`awk`, `tar`, `curl`, `git`, `openssl`, `envsubst`, `make`, `sha256sum`. If any of *those* is missing,
-fix it **now**, from your lab's package mirror, **before** you carry the bundle: they are OS packages and
-the tarball cannot bring them.
+**Expect:** the five carried tools report `CARRIED (in the bundle)` — **that is correct, they are not
+supposed to be here yet** — and everything the tarball *cannot* bring must show `OK`:
 
-> **Ignore `check-tools`' own remediation line here.** It says *"Install the toolchain with: `make deps`"*
-> — which **downloads from the internet** and therefore cannot work on this box. It is the right advice on
-> the *staging* box and a dead end on this one.
+```
+  kubectl      CARRIED    (in the bundle)      <- the bundle brings these five
+  crane        CARRIED    (in the bundle)
+  awk          OK         GNU Awk 5.3.1        <- THESE are what you are checking
+  envsubst     OK         ...
+  PRE-CARRY OK — everything the bundle CANNOT bring is present on this box.
+```
 
-After `make bundle-load` (Step 3), `make check-tools` should report **everything** `OK` — that is the run
-that must be clean, and it is what proves the box can actually run the install.
+If an **OS package** is missing (`awk`, `tar`, `curl`, `git`, `openssl`, `envsubst`, `make`,
+`sha256sum`) it exits non-zero and points you at your lab's package mirror. Fix it **now** — the tarball
+cannot carry it.
+
+> **The `CHECK_TOOLS_PHASE=pre-carry` flag is not decoration.** Without it, `check-tools` treats the five
+> as missing (correct on every *other* box) and tells you to run `make deps` — **which downloads from the
+> internet**, and this box has none.
+
+**After `make bundle-load`** (Step 3), run a plain `make check-tools`: it must be **fully clean**. That
+run is the one that proves this box can actually run the install.
 
 **Its `.env` must carry:** `HARBOR_URL`, `HARBOR_USERNAME`, `HARBOR_PASSWORD`, and either `HARBOR_CA_FILE`
 (carry the CA) or `HARBOR_INSECURE=1`.
