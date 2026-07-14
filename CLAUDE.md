@@ -565,18 +565,25 @@ reason; the "x509 is the shape of a `vcf cluster kubeconfig get` kubeconfig" cla
 
 ---
 
-#### B6. VERIFY THE HOOKS ACTUALLY FIRE — they load at SESSION START, so they were INERT the day they were written
+#### B6. ✅ THE FIVE HOOKS FIRE AND BLOCK — VERIFIED LIVE 2026-07-14 (and a false assumption corrected)
 
-Five gates were added today (`subagent-readonly`, `adversary-first`, `mid-run-edit`, `no-gate-in-commit-chain`,
-`check-agent-frontmatter`). **The `PreToolUse` wiring in `.claude/settings.json` is read at session start**, so
-none of them protected the session that wrote them. **They protect YOU.**
+**Verified END-TO-END, through the real harness, with real actions (not hand-fed payloads):**
 
-**Do not assume they work — that is the exact sin of this session.** The test (5 min):
-instrument the hook to log every call, spawn a real subagent, have it run one read-only and one mutating
-command, and confirm the log shows `agent_id=…` **and** the subagent reports the refusal. The procedure is in
-the "RESOLVED" section below.
+| hook | fires live? | blocks a real action? |
+|---|---|---|
+| `subagent-readonly-gate` | ✅ | ✅ live subagent refused on `git commit` |
+| `adversary-first-gate` | ✅ | ✅ |
+| `no-gate-in-commit-chain` | ✅ | ✅ the harness refused a real `make static-check && git commit` |
+| `mid-run-edit-gate` | ✅ | ✅ refused a real Edit, naming the live pid executing the file |
+| `check-agent-frontmatter` | (make gate in static-check) | ✅ RED-proven by re-breaking the YAML |
 
----
+**CORRECTION for whoever reads this:** I claimed repeatedly that *"a hook added mid-session is inert —
+`settings.json` loads at session start"*. **That is FALSE.** Instrumenting each script and doing the real
+action proved that `no-gate-in-commit-chain` and `mid-run-edit-gate` — BOTH added the same session —
+fired within it. The harness re-reads the wiring live. This was the THIRD wrong "loads at session start"
+assumption of the day; the lesson is that assumptions about the harness are unreliable and only the
+instrumented live test settles it (the method: add `open('/tmp/x','a').write(...)` at the top of the
+hook's `main()`, do the real action, read the log — it shows tool_name + agent fields per invocation).
 
 #### B7. A REAL LAB — everything below is reasoned, gated, and NOT RUN
 
