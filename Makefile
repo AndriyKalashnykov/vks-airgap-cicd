@@ -510,8 +510,11 @@ jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS (photo
 	   [ -f "$$tbabs" ] || { echo "ERROR: JUMPBOX_TARBALL not found: $$tbabs"; exit 1; }; \
 	   : "harbor-robot writes these single-quoted (the name is robot$$<x>, the secret can hold metachars)."; \
 	   : "cut keeps the quotes, so an unstripped value logs in as \047robot$$...\047 and 401s — sread strips them."; \
-	   huser="$$(grep -h '^HARBOR_USERNAME=' "$$sink" .env.kind .env .env.example 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//")"; \
-	   hpw="$$(grep -h '^HARBOR_PASSWORD=' "$$sink" .env.kind .env 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//")"; \
+	   : "|| true again: grep exits 2 when a FILE IS MISSING (.env.kind normally does not exist) — that is"; \
+	   : "an ERROR, not a no-match, and set -e then killed this recipe SILENTLY. 4th instance of this"; \
+	   : "class today. The tell every time: a non-zero exit with NO output."; \
+	   huser="$$(grep -h '^HARBOR_USERNAME=' "$$sink" .env.kind .env .env.example 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//" || true)"; \
+	   hpw="$$(grep -h '^HARBOR_PASSWORD=' "$$sink" .env.kind .env 2>/dev/null | head -1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]$$//" || true)"; \
 	   [ -n "$$hpw" ] || { echo "ERROR: HARBOR_PASSWORD not in the state overlay ($$sink) or .env — the air-gap half needs push creds"; exit 1; }; \
 	   tb_flags="-v $$tbabs:/run/bundle/$$tbbase:ro -e JUMPBOX_MODE=airgap-half -e JUMPBOX_TARBALL=/run/bundle/$$tbbase -e HARBOR_USERNAME=$$huser -e HARBOR_PASSWORD"; \
 	   echo "running $(JUMPBOX_OS) AIR-GAP jump box (sneakernet half) on the kind network (Harbor=$$harbor_url, tarball=$$tbbase)"; \
