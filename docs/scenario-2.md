@@ -294,11 +294,28 @@ The Kubernetes secret is built from your Harbor **login/password**; Harbor's **R
 used only to create a robot account (if you self-service one) — it does not create this cluster
 secret.
 
-**Step 6 — install everything and verify end-to-end:**
+**Step 6 — prove your `.env` works, then install:**
+
+Catch a wrong value in **seconds** instead of 20 minutes into the mirror. As a tenant you were *given*
+most of these values, so this is exactly where a typo or a stale endpoint shows up:
+
+```bash
+make env-populate   # DISCOVER what is discoverable (Harbor / ArgoCD endpoints) instead of re-typing it
+make env-check      # presence gate: is every required value set? (fast, no network)
+make env-validate   # validity gate: does KUBECONFIG reach the cluster, and does Harbor really authenticate?
+```
+
+**Expect:** `env-check` → *all required values present*; `env-validate` → Harbor reachable **and
+authenticated over HTTPS with your CA**. If the CA you were handed does not actually verify Harbor, it
+fails **here**, not inside Kaniko an hour later.
+
+**Then install:**
 
 ```bash
 make install-all   # preflight → mirror → mirror-verify → builder-image → vks-login → platform → gitops
+make psa-check     # NOW it can measure something — expect `PSA OK — … (N measured)`, not `PSA UNPROVEN`
 make verify        # push a marked change → Tekton → Harbor → ArgoCD → live app serves it
+make creds-show    # every URL + login for THIS context — one row per app in apps/registry.tsv
 ```
 
 `install-all` deliberately does **not** install Harbor or ArgoCD — the platform team already
@@ -350,11 +367,15 @@ deployed **app**, either front them with the ingress at `*.vks.local`, or `kubec
 > Add the printed `INGRESS_LB_IP` line to `/etc/hosts`
 > (see [Access the UIs](../README.md#access-the-uis-urls-logins-passwords)).
 >
-> **Run `make psa-check` before installing anything.** A VKS guest cluster enforces the
-> `restricted` Pod Security Standard **by default** (VKr v1.26+), which **rejects** our Kaniko build
-> pods and the Istio-provisioned gateway proxy unless their namespaces are labelled `baseline`. The
-> installers apply the measured labels; `psa-check` proves the cluster will admit the workloads
-> *before* you spend 20 minutes mirroring.
+> **PSA: `make psa-check` cannot prove anything *before* you install — and it will say so.** A VKS guest
+> cluster enforces the `restricted` Pod Security Standard **by default** (VKr v1.26+), which **rejects**
+> our Kaniko build pods and the Istio-provisioned gateway proxy unless their namespaces are labelled
+> `baseline`. The installers apply the measured labels.
+>
+> But run it too early and every namespace is *absent*, so it measures nothing and prints
+> **`measured 0 namespace(s) … PSA UNPROVEN`**. That is the correct answer at that point, and it is
+> **not a pass** — a green there would have been true before any of our code ran. The run that proves it
+> is the one **after `make platform`**; look for `PSA OK — … (N measured)`.
 
 <br>
 
