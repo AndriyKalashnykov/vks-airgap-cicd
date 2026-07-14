@@ -170,11 +170,33 @@ log_info "starting $CPK_CONTAINER ($CPK_IMAGE) — manages LB via the docker soc
 # lands v1.6, CPK's CRD install would be DENIED, it aborts the whole controller, and every
 # LoadBalancer in the cluster silently stops getting an IP — surfacing as "Harbor LB did not get an
 # external IP", an error that points nowhere near an admission policy.
+# THE HOST SOCKET IS DERIVED, NOT HARDCODED.
+#
+# It used to be `-v /var/run/docker.sock:/var/run/docker.sock`. ROOTLESS DOCKER HAS NO SUCH FILE — its
+# socket is $XDG_RUNTIME_DIR/docker.sock (e.g. /run/user/1000/docker.sock). So for an operator running
+# rootless docker (a supported configuration: it is the ONLY docker mode that is sudo-free, and it is
+# measured green in docs/decisions/container-engine-support.md), docker would create an EMPTY DIRECTORY at
+# /var/run/docker.sock, cloud-provider-kind would find no daemon, and NO LoadBalancer would ever get an
+# IP — surfacing as "Harbor LoadBalancer did not get an external IP", an error that points nowhere near a
+# socket path.
+#
+# DOCKER_HOST is the authority (it is what the rootless setup exports); fall back to the rootful default.
+# We still mount it AT /var/run/docker.sock inside the container, because that is where CPK looks.
+CPK_HOST_SOCK="/var/run/docker.sock"
+case "${DOCKER_HOST:-}" in
+  unix://*) CPK_HOST_SOCK="${DOCKER_HOST#unix://}" ;;
+  "")       [ -S "${XDG_RUNTIME_DIR:-/nonexistent}/docker.sock" ] && CPK_HOST_SOCK="${XDG_RUNTIME_DIR}/docker.sock" ;;
+esac
+[ -S "$CPK_HOST_SOCK" ] || die "no docker socket at '$CPK_HOST_SOCK' (DOCKER_HOST='${DOCKER_HOST:-<unset>}').
+  cloud-provider-kind talks to the docker daemon through this socket; without it NO LoadBalancer gets an IP.
+  Rootless docker: it lives at \$XDG_RUNTIME_DIR/docker.sock — make sure DOCKER_HOST is exported."
+log_info "cloud-provider-kind will use the docker socket at ${CPK_HOST_SOCK}"
+
 run docker run -d \
   --name "$CPK_CONTAINER" \
   --network host \
   --restart unless-stopped \
-  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "${CPK_HOST_SOCK}:/var/run/docker.sock" \
   "$CPK_IMAGE" --gateway-channel=disabled
 
 # --- 4. Readiness: poll until all nodes are Ready (bounded, with delay) -------

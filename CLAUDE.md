@@ -17,6 +17,14 @@ the ground it hunts on.
 entry in the handoff, where a "fail-fast" guard shipped a docker behaviour that **docker's own docs
 contradict**.
 
+**Owner's standing instruction (2026-07-14): USE THEM ALL THE TIME — not just at the triggers below.**
+Every design decision, every implementation of a fix (including a fix THEY prescribed), every change of
+approach mid-task, goes past the relevant adversary BEFORE it runs. The rule is not "review at
+boundaries"; it is "you do not decide alone." This was added after I repeatedly made unilateral pivots —
+a dind→host-native switch, a Dockerfile-layout choice, a whole harness — each of which the adversary then
+demolished, and each of which cost a cycle that a five-minute review would have saved. If you find
+yourself writing "I decided X on my own", you have already failed.
+
 **They have THREE mandatory triggers. All are BLOCKING.**
 
 | # | Trigger | When | Why |

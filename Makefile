@@ -225,6 +225,14 @@ mirror-verify-red-test: check-env ## NEGATIVE test (LIVE Harbor): delete one mir
 # retrievable from Harbor", and crane validate is the only thing here that asserts it.
 mirror: mirror-pull mirror-push mirror-verify ## (dual-homed) Pull + push + VERIFY in one run
 
+.PHONY: engine-trust-check
+engine-trust-check: check-env ## Does THIS engine (podman|docker) actually work against the self-signed Harbor? Prints its PRECONDITION ROW (CA method + whether sudo was needed). ~60s.
+	@$(SCRIPTS)/16-engine-trust-check.sh
+
+.PHONY: engine-trust-check-rootless
+engine-trust-check-rootless: check-env ## Is ROOTLESS DOCKER viable? (the ONLY docker mode that matches podman's ergonomics — rootful ALWAYS costs a sudo)
+	@$(SCRIPTS)/17-engine-rootless-docker-check.sh
+
 .PHONY: builder-image
 builder-image: check-env ## (internet) Build + push the air-gap Maven builder image (deps pre-baked)
 	@$(SCRIPTS)/15-build-push-builder.sh
