@@ -109,6 +109,22 @@ jobs:
           path: ~/.cache/kubeconform
           key: kubeconform-schemas-v1
 
+      # Persist the Maven local repo across runs — static-check runs mvn twice (app-test's `mvnw test`
+      # AND, via sec→trivy-fs→app-build, `mvnw package`), and both cold-download the whole Spring Boot
+      # dependency tree. Cache `~/.m2` (not just `repository/`) so it also grabs the ~9.6 MB Maven
+      # distribution the only-script `mvnw` downloads into `~/.m2/wrapper/dists/`. Key = pom hash, so a
+      # BOM/parent/dependency bump busts it and mvn re-resolves the delta from Central — a warm cache
+      # cannot mask an unresolvable dep (the poms pin exact versions; no ranges/SNAPSHOTs).
+      # (Reviewed by java-adversary + docker-adversary 2026-07-14: the trivy-DB cache was DROPPED — it
+      # would silently serve a DB up to trivy's 24h client interval, missing same-day CVEs, for ~10s;
+      # and the job-split was skipped as marginal ROI + a ruleset-rename risk.)
+      - name: Cache Maven ~/.m2 (deps + mvnw-downloaded Maven)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.m2
+          key: maven-${{ hashFiles('apps/**/pom.xml') }}
+          restore-keys: maven-
+
       - name: make static-check
         run: make static-check
 
