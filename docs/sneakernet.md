@@ -131,6 +131,11 @@ make builder-push     # the carried Maven builder → Harbor
 make mirror-verify    # PROVE it: crane fetches every blob back out of Harbor
 ```
 
+> **The carried tools land in `~/.local/bin`, which must be on your `PATH`.** `bundle-load` installs them
+> there and then, if that directory is not on your `PATH`, stops at the end with the exact `export
+> PATH="$HOME/.local/bin:$PATH"` line to add (or re-run with `BIN_DIR=/usr/local/bin`, a directory already
+> on it) — do that and re-run. It checks this during `bundle-load`, before `mirror-push` needs `crane`.
+
 **Expect:** `verifying checksum` → `installed crane -> ~/.local/bin/crane` (and the same for any of
 `kubectl`/`helm`/`jq`/`yq` this box did not already have) → `carried toolchain: N installed, M already
 present and kept` → `✓ mirror-verify: N images intact in Harbor`.
@@ -143,7 +148,7 @@ present and kept` → `✓ mirror-verify: N images intact in Harbor`.
 
 ```bash
 make platform gitops                       # Gitea + Tekton, then the ArgoCD Application
-make install-ingress INGRESS_CONTROLLER=traefik   # or istio-existing — see below
+make install-ingress   # default: install istio from the CARRIED charts (no internet). On a REAL VKS mesh use istio-existing — see the table below.
 make verify
 ```
 
