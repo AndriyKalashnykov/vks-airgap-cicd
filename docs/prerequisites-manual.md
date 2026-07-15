@@ -57,18 +57,25 @@ git clone git@github.com:AndriyKalashnykov/vks-airgap-cicd.git
 # git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git
 cd vks-airgap-cicd
 
-curl https://mise.run | sh                 # installs mise to ~/.local/bin
-export PATH="$HOME/.local/bin:$PATH"       # put mise on PATH for THIS shell (the installer also
-                                           # adds `mise activate` to your profile for new shells)
+curl -fsSL https://mise.run | sh           # installs mise to ~/.local/bin (it PRINTS an
+                                           # activation hint; it does NOT edit your shell profile)
+export PATH="$HOME/.local/bin:$PATH"       # put the mise BINARY on PATH for THIS shell
 make deps                                  # installs the full jump-box toolchain (mise tools +
                                            # scripts/00-install-prereqs.sh); it also sets up rootless
                                            # podman for the builder-image build — crun + registries on
                                            # Photon, uidmap + slirp4netns on Ubuntu
+eval "$(mise activate bash)"               # NOW put the mise-MANAGED tools (kubectl, helm, yq,
+                                           # crane, …) on PATH — only takes effect AFTER `make deps`
+                                           # installed them.  zsh: eval "$(mise activate zsh)"
+echo 'eval "$(mise activate bash)"' >> ~/.bashrc   # …and for every future shell
+                                           # (zsh: append `eval "$(mise activate zsh)"` to ~/.zshrc)
+make check-tools                           # verify every REQUIRED CLI is now on PATH
                                            #
                                            # Prefer docker? `make deps CONTAINER_ENGINE=docker` installs
                                            # docker + its rootless prerequisites instead (and NOTHING of
-                                           # podman). Then `make trust-harbor`, and `make engine-check`
-                                           # to see whether it costs you a sudo on this box.
+                                           # podman). `make engine-check` (read-only) shows whether it
+                                           # costs a sudo on this box. Run `make trust-harbor` LATER —
+                                           # once Harbor exists and HARBOR_URL/HARBOR_PASSWORD are in .env.
 ```
 
 ---
