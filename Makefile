@@ -646,7 +646,7 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-subagent-readonly-gate test-adversary-gate-rearm test-no-gate-in-commit-chain ## Run all offline script-logic unit tests
+test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-subagent-readonly-gate test-adversary-gate-rearm test-no-gate-in-commit-chain ## Run all offline script-logic unit tests
 
 .PHONY: test-subagent-readonly-gate
 test-subagent-readonly-gate: ## Offline: subagents are MECHANICALLY read-only (git/gh mutations blocked); the main agent is untouched
@@ -671,6 +671,10 @@ test-container-engine: ## Offline: podman is the DEFAULT engine (docker only as 
 .PHONY: test-state-overlay
 test-state-overlay: ## Offline: the stamped state overlay (unstamped=source, mismatch=ARCHIVE not delete, kind-down's delete contract)
 	@./scripts/test-state-overlay.sh
+
+.PHONY: test-env-check
+test-env-check: ## Offline: env-check is a PRESENCE gate — it must FAIL on the HARBOR_URL sentinel + an absent kubeconfig
+	@./scripts/test-env-check.sh
 
 ##@ Security scanning (internet/CI side; not part of the air-gap install)
 # A GATE THAT SKIPS BECAUSE ITS TOOL IS MISSING IS A GATE THAT PASSES BY NOT LOOKING.

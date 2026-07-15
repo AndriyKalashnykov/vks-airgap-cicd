@@ -6,7 +6,7 @@ Legend: **[offline]** verifiable without a cluster · **[cluster]** runs against
 
 | # | Command | Mode | What happens |
 |---|---------|------|--------------|
-| 1 | `make env-init` → `make env-populate` → `make env-check` | [offline] | `env-init` copies `.env.example`→`.env` (backs up any existing); `env-populate` mints the secrets we can (Gitea/Harbor/ArgoCD) + prints the values only you can provide (Harbor/Gitea URLs, VKS auth, CA files); `env-check` verifies presence. `make env-validate` adds format + connectivity checks. |
+| 1 | `make env-init` → `make env-populate` | [offline] | `env-init` copies `.env.example`→`.env` (backs up any existing); `env-populate` mints the secrets we can (Gitea/Harbor/ArgoCD) + prints the values only you can provide (Harbor/Gitea URLs, VKS auth, CA files). `make env-check` (presence) + `make env-validate` (format + connectivity) come **later** — they require the real `HARBOR_URL` + the workload kubeconfig, so the scenario runbooks run them after the cluster + Harbor exist. |
 | 2 | `make deps` | [offline] | `mise install` (kubectl, helm, crane, jq, yq, …) + `scripts/00-install-prereqs.sh` (tkn, argocd). |
 | 3 | `make ci` | [offline] | toolchain/image alignment + shellcheck + yamllint + hadolint + kubeconform + gitleaks + trivy fs/config + `mvn test` + docs/diagram checks. |
 | 4 | `make mirror` | [cluster] | `10-mirror-pull.sh` pulls all images (+ Tekton release manifests) then `21-mirror-push.sh` pushes them into Harbor. Resumable (cache-skip) — see the note below. Then **`make mirror-verify`** confirms every image is intact in Harbor. **Sneakernet:** `make mirror-pull && make bundle`, carry the bundle, then `make bundle-load BUNDLE_TARBALL=… && make mirror-push` inside. |
@@ -47,8 +47,10 @@ ARGOCD_NAMESPACE=argocd-instance-1       # the ns YOUR ArgoCD instance runs in (
 KUBECONFIG=./secrets/vks.kubeconfig      # produced by `make vks-login`
 ```
 
-Then `make env-check` (presence) and `make env-validate` (format + reachability/auth) before you run
-anything. The KinD path needs **none** of this — it discovers and generates everything.
+Once you have fetched the workload kubeconfig (`make vks-login`), run `make env-check` (presence) and
+`make env-validate` (format + reachability/auth) before the mirror — both require the real `HARBOR_URL`
+and the kubeconfig FILE, so they cannot pass on a bare jump box. The KinD path needs **none** of this —
+it discovers and generates everything.
 
 ---
 
