@@ -9,49 +9,48 @@ a DECISION, a root-cause CLAIM, or a plan ... Always *before* writing the code."
 
 It was ignored. A session designed "carry the whole toolchain across the air gap", wrote the code,
 built a test, and reported it GREEN — with no adversary anywhere. The user had to type "spin
-adversary" by hand. The adversaries then immediately found, among other things:
-  - the bundle carried helm (62 MB) and ZERO CHARTS, so the DEFAULT ingress could never install
-    on the air-gapped box;
-  - the new test was a FALSE GREEN (`docker run` without `-i` -> bash read an empty script,
-    exited 0, and every assertion was silently skipped);
-and a plain enumeration found `awk` missing from Photon, `envsubst` missing from the bootstrap, and
-a no-internet box that retried for >2 MINUTES before failing with an error naming the wrong thing.
-
-Every one of those was findable BEFORE the first line of code. That is the whole point of the rule,
-and prose did not make it happen. This does.
+adversary" by hand. The adversaries then immediately found real, shipped-in defects.
 
 WHAT IT DOES. Writing to the operator-facing product — the code (scripts/, Makefile, jumpbox/, k8s/,
-tekton/, apps/) AND the operator docs (docs/, README.md) — is BLOCKED until an adversary has been
-engaged in this session. Spawning one clears the gate for the rest of the session (it is a "did you
-think before you typed" gate, not a per-edit tax).
+tekton/, apps/) AND the operator docs (docs/, README.md) — is BLOCKED unless an adversary has been
+engaged SINCE THE LAST COMMIT.
 
-docs/ AND README ARE GATED, AND THAT IS THE CORRECTION. They were exempt in the first version, with
-the reasoning "docs is where you write the plan first". Within the hour I used that exemption to write
-a mechanism essay into an operator runbook and to ship a table telling operators to AVOID the ingress
-mode that actually works. A lying runbook fails an operator exactly as hard as a broken script. The
-exemption's purpose was sound; its blast radius was the whole operator-facing surface.
+RE-ARM ON COMMIT (2026-07-14, second correction). The first version cleared the gate for the WHOLE
+SESSION the instant any adversary ran once — so a design review of task A authorized the unrelated
+implementation of task B, three tasks later, that no adversary ever saw. That is exactly how a batch
+of provenance-doc facts got re-graded and rewritten with zero review: three opening design reviews
+had written a session-lifetime receipt, and every write after that sailed through a gate that was
+mechanically satisfied and substantively blind.
+
+The fix: the receipt records the WALL-CLOCK TIME of the adversary engagement, and a guarded write is
+allowed only when that time is NEWER than the repo's HEAD commit. Committing therefore invalidates
+the receipt — the next unit of work needs its own adversary pass. "Reviewed the design three commits
+ago" no longer authorizes "the code I am typing now".
+
+Residual this deliberately does NOT close (named, not hidden): within a single commit's worth of work
+one review authorizes every edit, including unrelated ones (scoping the receipt to the reviewed files
+would close it — not built yet); CLAUDE.md is exempt (you must be able to write the plan first); and
+no gate can verify the review was actually INTEGRATED, only that it happened.
 
 WHAT IT DELIBERATELY DOES NOT GATE:
-  - CLAUDE.md — it IS the plan/backlog. Gating it would make the rule unfollowable: you must be able
-    to write the design down BEFORE you have run the adversary on it.
+  - CLAUDE.md — it IS the plan/backlog.
   - .claude/ itself — you must be able to fix a hook that is wrong.
   - subagents — they are already denied all writes by subagent-readonly-gate.py.
 
-ESCAPE HATCH: ADVERSARY_GATE_OFF=1 in the environment. Deliberately trivial: this is a reflex aid,
-not a security boundary, and a gate you cannot turn off when it is wrong is a gate people rip out.
-Using it is a choice you are making on the record.
+ESCAPE HATCH: ADVERSARY_GATE_OFF=1 in the environment. A reflex aid, not a security boundary; using
+it is a choice on the record.
 
 Exit 0 = allow. Exit 2 = BLOCK (stderr is fed back to the calling agent).
 Fails OPEN on anything unexpected: a hook that crashes must never wedge a session.
 """
 import json
 import os
+import subprocess
 import sys
+import time
 
-# The operator-flow code: the things that RUN on a machine we may not be able to reach again.
-# A mistake here is a mistake on someone's air-gapped jump box. That is what earns the gate.
 GUARDED_PREFIXES = (
-    "docs/",      # operator-facing prose IS a product surface — a lying runbook fails an operator
+    "docs/",
     "README.md",
     "scripts/",
     "jumpbox/",
@@ -61,14 +60,6 @@ GUARDED_PREFIXES = (
 )
 GUARDED_FILES = ("Makefile",)
 
-# NOT gated: the places you WRITE THE PLAN and FIX THE GATE.
-#
-# `docs/` USED TO BE HERE, and removing it is the point. I carved out that exemption with the reasoning
-# "docs is where you write the plan first" — and then, within the hour, wrote a mechanism essay straight
-# into an operator runbook and shipped a table telling operators to avoid the ingress mode that works.
-# The exemption's stated purpose was sound; its blast radius was the entire operator-facing surface.
-# `CLAUDE.md` remains exempt (it IS the plan/backlog, and gating it would make the rule unfollowable),
-# and so does `.claude/` (you must be able to fix a hook that is wrong).
 EXEMPT_PREFIXES = (
     ".claude/",
     ".github/",
@@ -76,22 +67,46 @@ EXEMPT_PREFIXES = (
 EXEMPT_FILES = ("CLAUDE.md",)
 
 
+def _project_root() -> str:
+    return os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+
+
 def _receipt_path(session_id: str) -> str:
-    root = os.environ.get("CLAUDE_PROJECT_DIR") or "."
-    d = os.path.join(root, ".claude", "state")
+    d = os.path.join(_project_root(), ".claude", "state")
     os.makedirs(d, exist_ok=True)
     return os.path.join(d, f"adversary-{session_id or 'nosession'}.receipt")
 
 
+def _receipt_epoch(session_id: str):
+    """The wall-clock time of the last adversary engagement this session, or None if there is no
+    valid receipt (missing, or an old content-free 'engaged' receipt from before the re-arm fix)."""
+    try:
+        with open(_receipt_path(session_id)) as f:
+            return float(f.read().strip())
+    except Exception:
+        return None
+
+
+def _head_commit_epoch() -> int:
+    """HEAD's committer timestamp, or 0 if it cannot be determined (empty repo / no git). 0 means a
+    valid receipt always passes — we fail OPEN on git uncertainty, and fail CLOSED (below) only on a
+    receipt that is missing, unparseable, or provably older than a real commit."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", _project_root(), "log", "-1", "--format=%ct"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return int(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else 0
+    except Exception:
+        return 0
+
+
 def _is_adversary_spawn(data: dict) -> bool:
-    """An Agent spawn whose subagent_type is an adversary, or a Workflow that runs one."""
     ti = data.get("tool_input") or {}
     tool = data.get("tool_name")
     if tool == "Agent":
         return "adversary" in str(ti.get("subagent_type", "")).lower()
     if tool == "Workflow":
-        # A workflow script that spawns adversary agents counts — it is the sanctioned way to run
-        # them (schema-forced output; a fire-and-forget background Agent delivers nothing).
         blob = f"{ti.get('script','')}{ti.get('name','')}{ti.get('prompt','')}".lower()
         return "adversary" in blob
     return False
@@ -111,21 +126,21 @@ def main() -> int:
         return 0
 
     session = str(data.get("session_id") or "")
-    tool = data.get("tool_name")
 
-    # 1. Engaging an adversary CLEARS the gate for this session.
+    # Engaging an adversary STAMPS the receipt with the current time. This is what a later guarded
+    # write is checked against: valid only until the next commit moves HEAD past it.
     if _is_adversary_spawn(data):
         try:
-            open(_receipt_path(session), "w").write("engaged\n")
+            open(_receipt_path(session), "w").write(f"{time.time()}\n")
         except Exception:
             pass  # fail OPEN: never block a legitimate spawn because we could not write a file
         return 0
 
-    if tool not in ("Edit", "Write", "NotebookEdit", "MultiEdit"):
+    if data.get("tool_name") not in ("Edit", "Write", "NotebookEdit", "MultiEdit"):
         return 0
 
     path = (data.get("tool_input") or {}).get("file_path") or ""
-    root = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    root = _project_root()
     try:
         rel = os.path.relpath(os.path.abspath(path), os.path.abspath(root))
     except Exception:
@@ -139,34 +154,37 @@ def main() -> int:
     if not (rel.startswith(GUARDED_PREFIXES) or rel in GUARDED_FILES):
         return 0
 
-    if os.path.exists(_receipt_path(session)):
+    # The gate: a guarded write needs an adversary engaged SINCE the HEAD commit.
+    rc_epoch = _receipt_epoch(session)
+    if rc_epoch is not None and rc_epoch > _head_commit_epoch():
         return 0
 
+    committed_since = rc_epoch is not None  # a receipt exists but a commit moved past it
     sys.stderr.write(
-        "BLOCKED by adversary-first-gate: no adversary has been run in this session.\n"
-        f"  refused: write to {rel}\n"
+        "BLOCKED by adversary-first-gate: "
+        + ("you have COMMITTED since the last adversary review.\n"
+           if committed_since else
+           "no adversary has been engaged since the last commit.\n")
+        + f"  refused: write to {rel}\n"
         "\n"
-        "This is CLAUDE.md RULE ZERO, trigger 2, made mechanical: the adversary reviews the DESIGN,\n"
-        "BEFORE the code exists. It is a gate because prose did not hold — the last session that\n"
-        "skipped it shipped a bundle whose default ingress could never install, and a test that\n"
-        "passed while executing NOTHING.\n"
+        "This is CLAUDE.md RULE ZERO, trigger 2, made mechanical AND re-armed per commit: a review\n"
+        "authorizes writes only until the next commit. 'Reviewed the design three commits ago' does\n"
+        "NOT authorize the code you are typing now — that is the exact hole that let a batch of\n"
+        "provenance facts get rewritten unreviewed on the back of a design review from three tasks\n"
+        "earlier.\n"
         "\n"
         "Before you write operator-flow code:\n"
-        "  1. DERIVE THE CONTRACT FROM THE CODE, do not recall it. If this change alters what one\n"
-        "     side must provide to the other (the air gap, a wire format, an API), enumerate every\n"
-        "     consumer and everything it invokes -- grep for the binaries, the `helm repo add`s, the\n"
-        "     https:// fetches -- and mark each one carried / provisioned / MISSING. Print the\n"
-        "     denominator. A list written from memory is not a contract; a grep is.\n"
-        "  2. RUN THE ADVERSARY ON THAT DESIGN:\n"
+        "  1. DERIVE THE CONTRACT FROM THE CODE (grep it, do not recall it). If this change alters\n"
+        "     what one side must provide to another, enumerate every consumer and mark each\n"
+        "     carried / provisioned / MISSING. Print the denominator.\n"
+        "  2. RUN THE ADVERSARY ON THIS CHANGE:\n"
         "       vks-adversary     — VKS/K8s/ArgoCD/Harbor/Istio/Tekton, the REAL LAB\n"
         "       docker-adversary  — docker/podman/containerd/registry trust, the DAEMON and a COLD box\n"
         "     Use a Workflow (schema-forced) or a SYNCHRONOUS Agent (run_in_background: false).\n"
         "     A fire-and-forget background agent delivers nothing: measured 0/4.\n"
-        "  3. Then write the code.\n"
+        "  3. Then write the code — before your next commit.\n"
         "\n"
-        "CLAUDE.md is NOT gated — write the plan and the backlog there first, then run the adversary.\n"
-        "(docs/ and README ARE gated: a lying runbook fails an operator exactly as hard as broken code.)\n"
-        "Override (on the record): ADVERSARY_GATE_OFF=1\n"
+        "CLAUDE.md is NOT gated — write the plan there first. Override (on the record): ADVERSARY_GATE_OFF=1\n"
     )
     return 2
 

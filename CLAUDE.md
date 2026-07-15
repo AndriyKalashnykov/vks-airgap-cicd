@@ -417,10 +417,19 @@ actor? / blocks?** — fail INDEPENDENTLY, so demand each separately.
 | hook | blocks |
 |---|---|
 | `subagent-readonly-gate` | subagent `Edit`/`Write` (it used to match `Bash` only — which is how the agents rewrote 5 files), and every mutating git/gh form incl. env-prefixed |
-| `adversary-first-gate` | writes to `scripts/`, `Makefile`, `jumpbox/`, `k8s/`, `apps/`, **and now `docs/` + `README.md`** until an adversary runs. (`docs/` was exempt; I used the exemption to write a mechanism essay into a runbook within the hour.) `CLAUDE.md` stays exempt — it IS the plan. |
+| `adversary-first-gate` | writes to `docs/`, `README.md`, `scripts/`, `Makefile`, `jumpbox/`, `k8s/`, `tekton/`, `apps/` unless an adversary has run **SINCE THE LAST COMMIT** (re-arms per commit — see below). `CLAUDE.md` + `.claude/` exempt (write the plan / fix the gate). |
 | `mid-run-edit-gate` | editing a file a **running process is executing** (bash reads scripts incrementally; I corrupted a 12 GB build this way) |
 | `no-gate-in-commit-chain` | `make ci \| tail && git commit` and friends |
 | `check-agent-frontmatter` | an agent definition with **unparseable YAML** (`vks-adversary.md` was broken on `main`, unnoticed) |
+
+**`adversary-first-gate` re-arms per commit (2026-07-14).** It first cleared for the WHOLE session the
+instant any adversary ran once — so a design review of one task authorized the unreviewed implementation
+of another three tasks later (exactly how a batch of provenance-doc facts got re-graded and rewritten
+with zero review). The receipt now records the adversary-engagement wall-clock time; a guarded write
+passes only when that time is newer than HEAD's commit — committing invalidates it. Residual (named, not
+hidden): within one commit's work a single review still authorizes every edit; scoping the receipt to the
+reviewed files would close that, not built yet. Proven by `make test-adversary-gate-rearm` (13 cases incl.
+the re-arm; RED-proven that a stale/old/absent receipt blocks).
 
 **Spawn every adversary with `isolation: "worktree"`.** A subagent shares your `.git/HEAD`: one ran
 `git checkout -b`, and **the next 7 commits I made landed on its branch** while I believed otherwise.
