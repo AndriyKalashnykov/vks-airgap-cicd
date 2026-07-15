@@ -57,6 +57,20 @@ COMMIT = re.compile(
     re.VERBOSE | re.IGNORECASE,
 )
 
+# A commit MESSAGE is DATA, not command structure. `git commit -m "make ci && git commit"` is ONE
+# commit, not a chain — the gate/commit tokens inside the message must not be matched. Strip the
+# argument of every message-bearing flag (-m/--message string, -F/--file operand, combined shorts
+# like -am) BEFORE the GATE/COMMIT search. A gate token that survives is a real execution; one that
+# was inside a message is correctly erased.
+MESSAGE_ARG = re.compile(
+    r"""(?:^|\s)
+        (?:--message|--file|-[A-Za-z]*[mF])   # --message/--file, or a short cluster ending in m/F (-m,-am,-F)
+        (?:=|\s+)
+        (?:"[^"]*"|'[^']*'|\S+)               # quoted string or a bare token
+    """,
+    re.VERBOSE,
+)
+
 
 def main() -> int:
     try:
@@ -74,6 +88,10 @@ def main() -> int:
     # A heredoc body is DATA, not commands — a commit message quoting `make ci && git commit` must not
     # trip the gate. Strip heredoc bodies before matching.
     stripped = re.sub(r"<<-?\s*'?\w+'?\n.*?\n\w+\n", "\n", command, flags=re.DOTALL)
+
+    # ...and strip commit-message arguments, so a message that QUOTES `make ci && git commit` is not
+    # read as a chain (the live false-positive this hook shipped with — it blocked its own bug report).
+    stripped = MESSAGE_ARG.sub(" ", stripped)
 
     gate = GATE.search(stripped)
     commit = COMMIT.search(stripped)

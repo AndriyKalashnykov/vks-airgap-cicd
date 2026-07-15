@@ -638,7 +638,7 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-subagent-readonly-gate test-adversary-gate-rearm ## Run all offline script-logic unit tests
+test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-subagent-readonly-gate test-adversary-gate-rearm test-no-gate-in-commit-chain ## Run all offline script-logic unit tests
 
 .PHONY: test-subagent-readonly-gate
 test-subagent-readonly-gate: ## Offline: subagents are MECHANICALLY read-only (git/gh mutations blocked); the main agent is untouched
@@ -647,6 +647,10 @@ test-subagent-readonly-gate: ## Offline: subagents are MECHANICALLY read-only (g
 .PHONY: test-adversary-gate-rearm
 test-adversary-gate-rearm: ## Offline: the adversary-first gate RE-ARMS on every commit (a review authorizes only until the next commit)
 	@./scripts/test-adversary-gate-rearm.sh
+
+.PHONY: test-no-gate-in-commit-chain
+test-no-gate-in-commit-chain: ## Offline: the gate blocks a real gate+commit chain but not a message that QUOTES one (B8)
+	@./scripts/test-no-gate-in-commit-chain.sh
 
 .PHONY: test-creds-show
 test-creds-show: ## creds-show must not claim anything the state does not support (renders it in every state)
