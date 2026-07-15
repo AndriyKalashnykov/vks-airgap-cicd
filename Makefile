@@ -7,8 +7,9 @@
 # the `?=` defaults below (mirrors .env.example). `.env` wins for `make` too.
 
 # Load operator overrides FIRST so they win over the ?= defaults. `-include`
-# (leading '-') silently skips a missing file. .env.kind is written by the KinD
-# flow and overrides .env for local end-to-end testing.
+# (leading '-') silently skips a missing file. The KinD flow writes discovered
+# state to the stamped `.env.state` overlay (below); `.env.kind` is read-only
+# back-compat only — nothing writes it any more.
 #
 # SKIP_DOTENV=1 ignores `.env` — at the MAKE level here, and inside every script
 # (scripts/lib/os.sh `load_env`). The KinD e2e passes it (E2E_SKIP_DOTENV below) so a
@@ -366,7 +367,7 @@ kind-up: check-env ## Create the KinD cluster + cloud-provider-kind LoadBalancer
 	@$(SCRIPTS)/05-kind-up.sh
 
 .PHONY: install-harbor
-install-harbor: check-env ## Install Harbor into KinD (LoadBalancer; self-signed HTTPS+CA by default, HTTP with HARBOR_INSECURE=1); wire containerd + .env.kind
+install-harbor: check-env ## Install Harbor into KinD (LoadBalancer; self-signed HTTPS+CA by default, HTTP with HARBOR_INSECURE=1); wire containerd + the .env.state overlay
 	@$(SCRIPTS)/06-install-harbor.sh
 
 .PHONY: install-argocd
@@ -462,7 +463,7 @@ verify: check-env ## e2e: push a change → Tekton build → Harbor → ArgoCD s
 	@$(SCRIPTS)/99-verify.sh
 
 .PHONY: verify-ingress
-verify-ingress: check-env ## Assert the *.vks.local UIs route through the ingress LB (reads INGRESS_LB_IP from .env.kind)
+verify-ingress: check-env ## Assert the *.vks.local UIs route through the ingress LB (reads INGRESS_LB_IP from the .env.state overlay)
 	@$(SCRIPTS)/98-verify-ingress.sh
 
 .PHONY: verify-ingress-both

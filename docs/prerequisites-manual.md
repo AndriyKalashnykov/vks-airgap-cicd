@@ -2,6 +2,11 @@
 
 <br>
 
+> **This page provisions the INTERNET-side (dual-homed) jump box** — every step here needs the
+> internet (`git clone`, `curl mise.run`, `make deps`). A **fully air-gapped box cannot run
+> `make deps`**: provision its toolchain by hand from your internal package mirror and deliver the
+> rest via the carried bundle — see [Sneakernet](sneakernet.md).
+
 Everything else (mise, `make deps`, the toolchain) runs from a clone of this repo, so first
 get **git + SSH + make** working on a fresh box. Do this once, manually.
 
@@ -62,8 +67,10 @@ curl -fsSL https://mise.run | sh           # installs mise to ~/.local/bin (it P
 export PATH="$HOME/.local/bin:$PATH"       # put the mise BINARY on PATH for THIS shell
 make deps                                  # installs the full jump-box toolchain (mise tools +
                                            # scripts/00-install-prereqs.sh); it also sets up rootless
-                                           # podman for the builder-image build — crun + registries on
-                                           # Photon, uidmap + slirp4netns on Ubuntu
+                                           # podman for the builder-image build (its rootless
+                                           # prerequisites for your OS + podman's search-registries —
+                                           # `make deps` installs them; `make engine-check` reports what
+                                           # your box needs and the sudo cost)
 eval "$(mise activate bash)"               # NOW put the mise-MANAGED tools (kubectl, helm, yq,
                                            # crane, …) on PATH — only takes effect AFTER `make deps`
                                            # installed them.  zsh: eval "$(mise activate zsh)"
@@ -72,10 +79,12 @@ echo 'eval "$(mise activate bash)"' >> ~/.bashrc   # …and for every future she
 make check-tools                           # verify every REQUIRED CLI is now on PATH
                                            #
                                            # Prefer docker? `make deps CONTAINER_ENGINE=docker` installs
-                                           # docker + its rootless prerequisites instead (and NOTHING of
-                                           # podman). `make engine-check` (read-only) shows whether it
-                                           # costs a sudo on this box. Run `make trust-harbor` LATER —
-                                           # once Harbor exists and HARBOR_URL/HARBOR_PASSWORD are in .env.
+                                           # docker (and NOTHING of podman) + its rootless prerequisites
+                                           # WHERE the distro provides them — on Ubuntu 24.04 there is no
+                                           # distro rootless helper, so docker there is rootful-only (one
+                                           # sudo per registry). `make engine-check` (read-only) tells you
+                                           # which box you are on. Run `make trust-harbor` LATER — once
+                                           # Harbor exists and HARBOR_URL/HARBOR_PASSWORD are in .env.
 ```
 
 ---

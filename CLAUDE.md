@@ -124,41 +124,44 @@ Harbor + ArgoCD locally to mimic that.
 
 End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag write-back) → ArgoCD sync → web UI`.
 
+**"Jump box" names up to three DIFFERENT machines — prefer *internet box* / *air-gap box* when it matters.** In a **dual-homed** run there is one box that reaches both the internet and the lab. In a **sneakernet** run there are two: the **internet box** (`mirror-pull`/`builder-build`/`bundle`) and the **air-gap box** (`bundle-load`/`mirror-push`/`builder-push`/`platform` — it CANNOT run `make deps`; see RULE ZERO-A). Separately, `make jumpbox*` builds a **test** jump-box container that itself needs the internet (it runs `make deps`). Note `docs/sneakernet.md` calls its inside box the "jump box" and the internet one the "staging box" — the opposite of Scenario 1's usage.
+
 ## Common commands
 
 | Command | What it does |
 |---------|--------------|
 | `make help` | List all targets (grouped) |
 | `make deps` | Install jump-box toolchain (mise + `scripts/00-install-prereqs.sh`) |
-| `make ci` | Offline gate: `static-check` + `docs-lint` |
-| `make static-check` | `check-toolchain-alignment` + `check-java-alignment` + `check-env` + `check-env-coverage` + `check-how-provenance` + `check-image-alignment` + `lint` + `validate` + `sec` + `test-scripts` (offline script unit tests) + `app-test` |
+| `make ci` | Offline gate: `static-check` + `docs-lint` + `diagrams-check` (PlantUML render drift) |
+| `make static-check` | Composite offline code gate — the **authoritative** prereq list is the `static-check:` line in the Makefile (alignment + `check-agent-frontmatter` + doc/terminology gates + env/app gates + `lint` + `validate` + `sec` + `test-scripts` + `app-test`). Do NOT re-enumerate it here — a hand-typed subset rots on the first Makefile edit. |
 | `make sec` | Security scans: `secrets` (gitleaks) + `prose-secrets` (credential-shaped prose in docs) + `trivy-fs` (built-jar deps) + `trivy-config` (manifests) |
-| `make app-test` / `app-build` / `app-run` | Spring Boot app dev (in `apps/java/javawebapp/`, uses `./mvnw`) |
+| `make app-test` / `app-build` / `app-run` | Build/test **every** app (java: `./mvnw`, go: `go test`/`go build`); one app: `APP=javawebapp\|gowebapp` (`app-run` defaults to javawebapp). Apps are the rows of `apps/registry.tsv`. |
 | `make mirror` | (dual-homed) pull images → push to Harbor. **Resumable:** a re-run cache-skips digest-pinned images already fully pulled (`.mirror-ok` sentinel), so an interrupted/CDN-flaky mirror resumes in seconds. `MIRROR_RETRIES` (default 5), `MIRROR_FORCE_PULL=1` |
 | `make mirror-pull` / `bundle` / `bundle-load` / `mirror-push` | sneakernet phases |
 | `make mirror-verify` | Verify every mirrored image is INTACT in Harbor (`crane validate` blobs + `images.lock` digest match) — read-only; run after `make mirror` |
-| `make builder-image` | build+push the offline Maven builder image (deps pre-baked) |
+| `make builder-image` | (dual-homed) build+push the offline Maven builder image (deps pre-baked) |
+| `make builder-build` / `builder-push` | sneakernet builder split: `builder-build` builds the Maven builder INTO the bundle on the internet box (needs Maven Central, NOT Harbor); `builder-push` pushes the CARRIED builder into Harbor on the air-gap box (carried crane, no container engine) |
 | `make vks-login` | Authenticate to VKS → writes `$KUBECONFIG` + context |
 | `make install-vcf-clis` | On a real-VKS-lab jump box: install the Broadcom lab CLIs (`argocd-vcf` + `vcf` + plugins), OS/arch-aware + sudo-free, from operator-supplied licensed archives in `VCF_CLI_SRC_DIR=<dir>`. (The local KinD e2e doesn't need these — it uses the upstream `argocd` from `deps`.) Granular: `install-argocd-vcf` / `install-vcf-cli` / `install-vcf-plugins` |
 | `make platform` | Install + wire Gitea and Tekton |
-| `make gitops` | Create the ArgoCD Application |
+| `make gitops` | Wire ArgoCD to each `<app>-deploy` repo (one Application per app; registers the guest cluster first when that is actually needed AND permitted) |
 | `make creds-show` (alias `creds`) / `make argocd-password` | Print access URLs+logins / the ArgoCD admin password (context-aware, self-resolves kubeconfig) |
 | `make env-init` / `env-populate` / `env-check` / `env-validate` | `.env` lifecycle: create from `.env.example` → GENERATE the secrets we can + DISCOVER cluster values (and print the user-PROVIDE list) → presence gate → validity gate (format + KUBECONFIG/Harbor auth) |
 | `make harbor-robot` / `fetch-harbor-ca` / `fetch-argocd-ca` / `fetch-argocd-kubeconfig` / `argocd-preflight` | Real-lab helpers: mint a Harbor robot (needs project-admin) · fetch a self-signed CA · fetch the Supervisor kubeconfig for ArgoCD registration · report ArgoCD CLI vs RUNNING SERVER vs supported versions |
 | `make test-scripts` | Offline script-logic unit tests (mirror cache-skip/resume/prune; VCF-CLI archive resolve). Part of `static-check` |
-| `make e2e-kind-both` / `verify-ingress-both` / `e2e-cross-cluster` / `e2e-sneakernet` | e2e permutations: both SSL modes · both ingress controllers · 2-cluster ArgoCD registration · two-box sneakernet |
+| `make e2e-kind-both` / `verify-ingress-both` / `e2e-kind-cross-cluster` / `e2e-sneakernet` | e2e permutations: both SSL modes · both ingress controllers · 2-cluster ArgoCD registration · two-box sneakernet |
 | `make install-ingress` | Install the ingress (`INGRESS_CONTROLLER=istio` default / `istio-existing` = attach to a platform-owned mesh / `traefik`) fronting the UIs at `*.vks.local` |
 | `make install-istio` / `install-traefik` | Install a specific ingress controller directly |
 | `make psa-check` | Read-only: would our pods survive a real VKS guest cluster? VKS **enforces PSA `restricted` by default** (VKr v1.26+) while KinD enforces nothing — so `ci` (Kaniko builds as root) and the Gateway namespace (Istio's auto-provisioned proxy sets no seccompProfile) need `baseline` or their pods are REJECTED on the lab. Levels are MEASURED via a server-side dry-run label, not guessed. Wired into both e2e targets |
 | `make istio-preflight` | Read-only: is Istio here, what `Gateway` selector does it require, what may this kubeconfig do, and what must the mesh admin grant? Run before touching a cluster you don't own |
 | `make attach-istio` | Attach to an Istio the platform team ALREADY installed (`INGRESS_CONTROLLER=istio-existing`) — installs nothing, applies routes only. `ISTIO_ROUTE_API=auto` (default) prefers the Kubernetes **Gateway API** (Istio auto-provisions the proxy + LB; nothing needed from the mesh admin) and falls back to `classic` (discovered `istio:` selector + VirtualServices) |
 | `make e2e-kind-istio-existing` | KinD regression test for the attach mode: a "platform team" installs Istio under FOREIGN naming, we attach with zero install (+ both REDs), then verify BOTH route APIs (gateway-api leg + classic leg) |
-| `make install-all` | Full air-gap install: `mirror → builder-image → vks-login → platform → gitops` |
+| `make install-all` | Full air-gap install: `preflight → mirror → mirror-verify → builder-image → vks-login → platform → gitops`. `preflight` runs FIRST and is read-only — it stops a 20-min mirror on a box that can't finish; `mirror-verify` is the blob-integrity gate. |
 | `make verify` | End-to-end smoke test (LIVE cluster) |
 | `make verify-ingress` / `verify-ingress-both` | Assert the `*.vks.local` UIs route through the ingress LB (one controller / both) |
 | `make e2e-kind` | Full local end-to-end in KinD (cluster → Harbor → ArgoCD → pipeline → ingress → verify) |
 | `make kind-up` / `install-harbor` / `install-argocd` / `install-ingress` / `kind-down` | Individual KinD steps |
-| `make jumpbox` / `jumpbox-both` | Validate the README jump-box bootstrap on a real jump-box container — `JUMPBOX_OS=photon` (default, `photon:5.0`) or `JUMPBOX_OS=ubuntu` (`ubuntu:26.04`); rootless podman, joined to the kind network: runs `make deps` + engine + cluster/Harbor reach. `jumpbox-both` runs the OS matrix. Needs the KinD cluster up |
+| `make jumpbox` / `jumpbox-both` / `jumpbox-matrix` | Validate the README jump-box bootstrap in a **test** jump-box container (itself needs the internet — it runs `make deps`), joined to the kind network, on `JUMPBOX_OS` × `JUMPBOX_ENGINE` (photon\|ubuntu × podman\|docker; defaults photon+podman): runs `make deps` + engine + cluster/Harbor reach. `jumpbox-both` = the OS matrix (podman); `jumpbox-matrix` = the full 4-cell OS×engine matrix. Needs the KinD cluster up |
 
 Run a single app test: `cd apps/java/javawebapp && ./mvnw -B -Dtest=<ClassName>#<method> test`.
 
@@ -184,8 +187,10 @@ Run a single app test: `cd apps/java/javawebapp && ./mvnw -B -Dtest=<ClassName>#
   the `javawebapp-app` repo. Do not nest `deploy/` inside `apps/java/javawebapp/` — that dir IS the app
   repo, so the manifests would land in it and collapse the two-repo GitOps split.
 - **Mirror mode is not a variable** — dual-homed vs sneakernet is simply which mirror
-  commands you run: dual-homed → `make mirror`; sneakernet → `make mirror-pull && make
-  bundle` (carry the bundle) then `make bundle-load && make mirror-push`.
+  commands you run: dual-homed → `make mirror && make builder-image`; sneakernet →
+  `make mirror-pull && make builder-build && make bundle` (carry the bundle) then
+  `make bundle-load && make mirror-push && make builder-push`. The builder image is
+  part of the mode split too — `builder-build`/`builder-push` are its sneakernet halves.
 - **Two Git repos** in Gitea: `javawebapp-app` (source + Dockerfile + trigger binding)
   and `javawebapp-deploy` (kustomize manifests ArgoCD watches). CI writes the new image
   tag back to `javawebapp-deploy`; ArgoCD deploys from it.
@@ -204,11 +209,13 @@ Run a single app test: `cd apps/java/javawebapp && ./mvnw -B -Dtest=<ClassName>#
   `BUILDER_IMAGE_TAG` when `apps/java/javawebapp/pom.xml` deps change.
 - **KinD local e2e**: `kind/kind-config.yaml` enables containerd `config_path`;
   `05-kind-up.sh` runs cloud-provider-kind (LoadBalancer) and writes `KUBECONFIG` +
-  `VKS_AUTH_METHOD=kubeconfig` to `.env.kind`; `06-install-harbor.sh` exposes Harbor as a
+  `VKS_AUTH_METHOD=kubeconfig` (via `state_set`) to the **stamped state overlay `.env.state`**
+  (`VKS_STATE_FILE`; `.env.kind` is read-only back-compat only, nothing writes it);
+  `06-install-harbor.sh` exposes Harbor as a
   **self-signed-HTTPS LoadBalancer on the LB IP** (default; two-phase: install TLS-off →
   discover LB IP → mint CA+leaf with SAN=IP → upgrade to TLS), wires each node's containerd
-  with the CA (`certs.d/<ip>/`), and writes `HARBOR_URL`(LB IP)+`HARBOR_INSECURE=0`+
-  `HARBOR_CA_FILE` to `.env.kind` (`HARBOR_INSECURE=1` selects the original plain-HTTP mode).
+  with the CA (`certs.d/<ip>/`), and `state_set`s `HARBOR_URL`(LB IP)+`HARBOR_INSECURE=0`+
+  `HARBOR_CA_FILE` to `.env.state` (`HARBOR_INSECURE=1` selects the original plain-HTTP mode).
   `07-install-argocd.sh` exposes ArgoCD on its **own** LB with self-signed TLS (default) and
   publishes `ARGOCD_LB_IP`. That overlay (loaded last by `load_env` / `-include`) makes the
   normal flow run against kind unchanged. `kind-down.sh` prunes cloud-provider-kind + `kindccm-*` orphans.
@@ -239,8 +246,8 @@ Run a single app test: `cd apps/java/javawebapp && ./mvnw -B -Dtest=<ClassName>#
   `47-attach-istio.sh` (discover + attach only), or
   `45-install-traefik.sh` (single-binary LB). All expose the SAME `*.vks.local` hosts
   (`GITEA_HOST`/`JAVAWEBAPP_HOST`/`TEKTON_DASHBOARD_HOST` — **not** ArgoCD, which has its own LB) behind ONE LoadBalancer and
-  publish `INGRESS_LB_IP` + the chosen `INGRESS_CONTROLLER` to `.env.kind`. `44-install-ingress.sh`
-  lets an explicit `INGRESS_CONTROLLER` override win over the persisted `.env.kind` value (so
+  publish `INGRESS_LB_IP` + the chosen `INGRESS_CONTROLLER` to `.env.state` (via `state_set`). `44-install-ingress.sh`
+  lets an explicit `INGRESS_CONTROLLER` override win over the persisted `.env.state` value (so
   `verify-ingress-both` actually flips controllers). Hostnames resolve via
   `/etc/hosts` → the LB IP (no internet DNS). **Harbor and ArgoCD each keep their OWN direct LB**
   — Harbor's LB IP is load-bearing for the containerd registry pull path (self-signed HTTPS +
@@ -405,7 +412,10 @@ idea→adversary→incorporate→implement→adversary→incorporate loop with a
 - **C6** (`README.md:64`): `make trust-harbor` tagged post-Harbor, KEPT in the row so the `sudo?` column still maps (adversary row-coherence fix). CORRECT failure mechanism (adversary MEDIUM — the prior note had it wrong twice): on a bare box `HARBOR_URL:?` does NOT fire (`.env.example:78` commits the `harbor.vks.local` sentinel, `set -a`-exported) — the first hard failure is `HARBOR_PASSWORD:?` (`19-trust-harbor.sh:25`), then the live login handshake. Sibling bug fixed in the same pass: `prerequisites-manual.md:68-70` also listed trust-harbor at bootstrap.
 - **Residuals (adversary-flagged, NOT in this PR — backlog):** (a) `19-trust-harbor.sh:23`'s `HARBOR_URL:?` guard is **vacuous** — the committed `harbor.vks.local` sentinel always satisfies it, so its "run install-harbor / set it in .env" error can never show (same sentinel-defeats-presence class as C13/env-check; fix: reject the sentinel as `env_check` now does). (b) `HARBOR_USERNAME=admin` (`.env.example:138`, committed) is a wrong-for-tenant default that trust-harbor would use in Scenario 2 unless overridden with a robot account.
 
-**2. The ~50 remaining HIGH/MEDIUM doctruth findings** (full table in the doctruth-audit transcript). Biggest: `docs/scenario-2.md` is entirely un-remediated (~15 live findings — wants a user-perspective walkthrough PR like #251 did for scenario-1; incl. the HIGH-2 don't-set-ARGOCD_KUBECONFIG contradiction + `ARGOCD_REGISTER=never`, and the G5-class dead-command at `:68/:278` that greps a guest kubeconfig for a Supervisor-only service). Also `docs/prerequisites-manual.md` (7 live), and CLAUDE.md gate-list/command-table drift (M3-M9: `ci` omits diagrams-check; `static-check` lists ~11 of 20 prereqs; `make e2e-cross-cluster` should be `e2e-kind-cross-cluster`; the install-all row omits preflight/mirror-verify; `.env.kind` is now `.env.state`; the jumpbox row is engine-blind).
+**2. The remaining HIGH/MEDIUM doctruth findings** (audit: `docs/reviews/2026-07-14-doc-truth-audit.md`; each re-verified against current code — the audit does NOT mark survivors, and #248/#251/#256/#258/#260 fixed most CRITICALs + scenario-1/README/sneakernet).
+
+- **✅ DONE (this session) — CLAUDE.md command-table/gate-list drift (F1–F7 + 2 new) + `prerequisites-manual` (3 of 7 live; 4 fixed by #260).** Design-reviewed by `shell-adversary` (CLAUDE.md, all claims grounded to `Makefile:LINE`) + `adversary-bash-git-cli` (prereqs). Fixed: `ci` +`diagrams-check`; `static-check` list → pointer (stop enumerating); `e2e-cross-cluster`→`e2e-kind-cross-cluster`; install-all row +`preflight`/`mirror-verify`; `builder-build`/`builder-push` table row + sneakernet recipe; `.env.kind`→`.env.state` in Architecture + 2 Makefile help strings; jumpbox engine-axis + the "jump box"=3-machines disambiguation; app-* multi-app; gitops multi-app+registration. prereqs: scope banner (internet-side, pointer to sneakernet) + the 2 engine-package descriptions → `make engine-check` pointer (Ubuntu-24.04 docker is rootful-only). **Deferred straggler (same F4 class, own follow-up):** the INTERNAL header comments in `scripts/05-kind-up.sh` / `06-install-harbor.sh` / `44-install-ingress.sh` still say `.env.kind` where the code now `state_set`s to `.env.state` — ~11 nuanced comment lines (some describe source-precedence, need per-line care), so swept separately rather than risked in this doc PR.
+- **🔴 scenario-2.md — ~13 LIVE doc findings + 4 code-side (vks-adversary-reviewed).** Recommendation: **TARGETED FIXES + a separate code PR, NOT a walkthrough rewrite** — both scenario-2 CRITICALs (C12/C13) are already fixed by #258, so a rewrite only risks regressing that wiring. DOC (one PR): delete the 2 dead `kubectl --kubeconfig $ARGOCD_KUBECONFIG` commands (they expand to empty; use `make argocd-preflight`) + the leaf-as-CA `openssl s_client|x509` snippet (use `make fetch-harbor-ca`); caveat the Harbor-UI cert download, `env-populate` (can't discover a Supervisor Harbor from a guest kubeconfig), `env-validate` (https falls back to `-k`), `HARBOR_PUBLIC_PROJECTS` (no-op on an existing project), and the harbor project-create 403; add `ARGOCD_REGISTER=never` + the istio two-branch ("you own the cluster → you CAN install the CRDs"); fix the stale namespace list (missing `gowebapp`) → per-app, the robot chicken-and-egg, the dual-"Step 2" numbering collision, and the jump-box term. CODE (separate PR, some lab-gated): `ensure_project||true` guard in `21-mirror-push.sh`/`22-builder-push.sh` (project-403 under `set -e`; robot-HEAD behaviour is UNVERIFIED → lab), `env-validate` https-CA `-k`→die, `env-populate` DISCOVER placeholder-guard, `48-istio-preflight.sh:67` soften "(cluster-scoped — a tenant cannot)".
 
 **3. Agents + hooks GLOBAL refactor (user-initiated).** WARNING: the owner has PARTIALLY done this from ANOTHER repo's session — `~/projects/claude-config` already has changes to `agents.md` etc. So this is a TWO-REPO MERGE, not a fresh write: INSPECT claude-config's current state FIRST (`git -C ~/projects/claude-config status/log`, `ls ~/projects/claude-config/agents/`) before adding anything. Plan (mechanism doc-verified against code.claude.com/docs/sub-agents.md): move the general adversaries into `~/projects/claude-config/agents/` + a `setup.sh` copy-block into `~/.claude/agents/` (user-level resolves in ALL projects; a project `.claude/agents/` file OVERRIDES a user one of the same name, so REMOVE the local copies; first-time creation of `~/.claude/agents/` needs a session RESTART). vks-adversary may go global too (owner confirmed). Move the 3 GENERAL hooks (subagent-readonly-gate, no-gate-in-commit-chain, mid-run-edit-gate) global; adversary-first-gate STAYS project-local (it encodes this repo's RULE ZERO — global would block edits in every other repo). Hook wiring must be merged by hand into `~/.claude/settings.json` (setup.sh will not overwrite it) — portfolio-wide blast radius, verify end-to-end. Then in THIS repo: remove `.claude/agents/*`, change RULE ZERO's path-refs to name-refs, and relocate the check-agent-frontmatter validation to claude-config. (Five global adversaries appeared live mid-session, so the mechanism is confirmed working.)
 
