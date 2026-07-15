@@ -12,14 +12,14 @@ Istio's `pilot`/`proxyv2`, and the app itself — must be mirrored into it first
 
 | Fact | Value | Confidence |
 |---|---|---|
-| Packaging | **Supervisor Service**, installed on the **Supervisor** into its own vSphere Namespace | 9.1-doc |
-| Exposure | LoadBalancer, **self-signed TLS** by default (an internal CA) | 9.0-doc + community |
-| Ingress prereq | **Contour** is the paired ingress for the Harbor Supervisor Service (`enableContourHttpProxy: true`) — *not* Istio | 9.0-doc |
-| `secretKey` | must be **exactly 16 chars** | community (Broadcom + William Lam) |
-| `core.xsrfKey` | must be **exactly 32 chars** | community |
-| `tlsSecretLabels` | `{managed-by: vmware-vRegistry}` is **REQUIRED** for VKS to trust it | community |
-| CA trust for guest clusters | the Cluster spec's `trust.additionalTrustedCAs` — the cert must be **DOUBLE-base64** (`base64 -w0 ca.crt \| base64 -w0`) | community |
-| Ordering | configure Harbor's cert + credentials **BEFORE** creating guest clusters | community |
+| Packaging | **Supervisor Service**, installed on the **Supervisor** into its own vSphere Namespace | 9.1-doc [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-harbor-as-vcf-service/installing-and-configuring-harbor-and-contour.html date=2026-07-15 quote="You can deploy Harbor as a Supervisor Service in your Supervisor environment."] |
+| Exposure | LoadBalancer, **self-signed TLS** by default (an internal CA) | 8.0-doc (LB) + community (TLS) [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vsphere/vsphere-supervisor/8-0/vsphere-supervisor-services-and-workloads-8-0/installing-and-configuring-harbor-and-contour.html date=2026-07-15 quote="Harbor requires a load balancer or an Ingress controller. You can use either an NGINX-based load balancer or Contour."] |
+| Ingress prereq | **Contour** is the paired ingress for the Harbor Supervisor Service (`enableContourHttpProxy: true`) — *not* Istio | 8.0-doc (inferred for 9.1) [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vsphere/vsphere-supervisor/8-0/vsphere-supervisor-services-and-workloads-8-0/installing-and-configuring-harbor-and-contour.html date=2026-07-15 quote="If you use Contour as an Ingress controller, install it before installing Harbor on the same Supervisor where you want to install Harbor."] |
+| `secretKey` | must be **exactly 16 chars** | 8.0-doc (inferred for 9.1) [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vsphere/vsphere-supervisor/8-0/using-tkg-service-with-vsphere-supervisor/installing-standard-packages-on-tkg-service-clusters/standard-package-reference/harbor-components--configuration--data-values/harbor.html date=2026-07-15 quote="The secret key used for encryption. Must be a string of 16 chars."] |
+| `core.xsrfKey` | must be **exactly 32 chars** | 8.0-doc (inferred for 9.1) [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vsphere/vsphere-supervisor/8-0/using-tkg-service-with-vsphere-supervisor/installing-standard-packages-on-tkg-service-clusters/standard-package-reference/harbor-components--configuration--data-values/harbor.html date=2026-07-15 quote="The XSRF key. Must be a string of 32 chars."] |
+| `tlsSecretLabels` | the Supervisor-Service page carries `{managed-by: vmware-vRegistry}` with **"keep as is"** guidance (VKS trust is the inferred reason, not stated) | community [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vsphere/vsphere-supervisor/8-0/using-tkg-service-with-vsphere-supervisor/using-private-registries-with-tkg-service-clusters/install-the-harbor-supervisor-service.html date=2026-07-15 quote="managed-by: vmware-vRegistry (verify this value but keep as is)"] |
+| CA trust for guest clusters | the Cluster spec's `trust.additionalTrustedCAs` — the cert must be **DOUBLE-base64** (`base64 -w0 ca.crt \| base64 -w0`) | 8.0-doc (inferred for 9.1) [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vsphere/vsphere-supervisor/8-0/using-tkg-service-with-vsphere-supervisor/using-private-registries-with-tkg-service-clusters/integrate-tkg-service-clusters-with-a-private-container-registry.html date=2026-07-15 quote="The v1beta1 API requires the certificate contents to be double base64-encoded."] |
+| Ordering | trusting the CA can happen **at cluster creation or later** (`kubectl edit cluster`); configuring Harbor before creating guest clusters is operational convenience, **not a documented prerequisite** | community [src: NOT-ESTABLISHED tried="WebFetched williamlam 2025-08 + Broadcom 8-0 integrate-private-registry + install-the-harbor-supervisor-service — none states a hard BEFORE ordering; the integrate page allows adding CAs at creation or via kubectl edit later"] |
 
 > **Same-Supervisor auto-trust.** A guest cluster created under the **same Supervisor** as the
 > Harbor Supervisor Service is reported to trust its CA automatically — simpler than the KinD
@@ -30,9 +30,9 @@ Istio's `pilot`/`proxyv2`, and the app itself — must be mirrored into it first
 
 | Value | How | Confidence |
 |---|---|---|
-| `HARBOR_URL` | the FQDN you set, or `kubectl get svc -n <harbor-ns> -o jsonpath='{.status.loadBalancer.ingress[0].ip}'` | 9.0-doc |
-| `HARBOR_CA_FILE` | `make fetch-harbor-ca` (pulls the self-signed CA off the endpoint) | KinD-verified |
-| `HARBOR_USERNAME` / `HARBOR_PASSWORD` | a **robot account**. `make harbor-robot` creates one **only if you are a Harbor SYSTEM-admin**; otherwise **request** it from the platform team | CODE: `scripts/22-harbor-robot.sh:46-107` |
+| `HARBOR_URL` | the FQDN you set, or `kubectl get svc -n <harbor-ns> -o jsonpath='{.status.loadBalancer.ingress[0].ip}'` | code [src: code:scripts/02-env.sh:75] |
+| `HARBOR_CA_FILE` | `make fetch-harbor-ca` (pulls the self-signed CA off the endpoint) | KinD-verified [src: code:Makefile:273-274] |
+| `HARBOR_USERNAME` / `HARBOR_PASSWORD` | a **robot account**. `make harbor-robot` creates one **only if you are a Harbor SYSTEM-admin**; otherwise **request** it from the platform team | code [src: code:scripts/22-harbor-robot.sh:62-107] |
 
 **Robot accounts are the tenant path — and a project-admin CANNOT self-service one in the default
 config.** The default flow uses **two** projects (`HARBOR_INFRA_PROJECT=cicd` + `HARBOR_APP_PROJECT=apps`,

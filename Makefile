@@ -177,6 +177,10 @@ check-doc-novels: ## Gate: no multi-line re-litigation blockquotes ("this page u
 check-how-provenance: ## Gate: every `# how:` acquisition command must be runnable-by-us, a real make target, or provenance-tagged
 	@$(SCRIPTS)/check-how-provenance.sh
 
+.PHONY: check-vks-provenance
+check-vks-provenance: ## Gate: every fact row in a docs/vks-services Confidence table carries a resolvable [src:] citation token (code refs are opened + verified)
+	@$(SCRIPTS)/check-vks-provenance.sh
+
 .PHONY: check-env-clobber
 check-env-clobber: ## Gate: an UNCOMMENTED .env.example value must not shadow a dynamic fallback or a per-run override
 	@$(SCRIPTS)/check-env-clobber.sh
@@ -828,7 +832,7 @@ docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets
 	@# having linted nothing. In CI it now DIES instead.
 
 .PHONY: static-check
-static-check: check-agent-frontmatter check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: check-agent-frontmatter check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)
