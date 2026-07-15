@@ -42,7 +42,7 @@
 | Istio version | the running **istiod image tag** — ground truth, never a doc | KinD-verified [src: code:scripts/lib/istio.sh:56-57] |
 | **Ingress gateway Service** | a Service exposing **port 15021** (the istio-proxy status-port) **and** carrying a `spec.selector.istio` key | KinD-verified [src: code:scripts/lib/istio.sh:69-70] |
 | **Gateway selector label** | `kubectl -n <ns> get svc <svc> -o jsonpath='{.spec.selector.istio}'` | KinD-verified [src: code:scripts/90-e2e-istio-existing.sh:112] |
-| Route API in use | is there an **Accepted `GatewayClass` named `istio`**? → Gateway API. Else classic. | KinD-verified [src: code:scripts/lib/istio.sh:219-221] |
+| Route API in use | is there an **Accepted `GatewayClass` named `istio`**? → Gateway API. Else classic. | KinD-verified [src: code:scripts/lib/istio.sh:222-224] |
 
 The **15021** signature matters: istiod does **not** expose it (it serves 15010/15012/443/15014),
 so this cleanly excludes the control plane. A naive `app.kubernetes.io/part-of=istio` label match
@@ -68,7 +68,7 @@ did not install — and **the API server accepts it without any error**. (KinD-v
 | Mistake | Symptom | Confidence |
 |---|---|---|
 | `Gateway.spec.selector` matches no workload | Envoy never gets a listener → **connection refused** (no HTTP at all) | KinD-verified [src: code:scripts/90-e2e-istio-existing.sh:177-180] |
-| `VirtualService` names the Gateway by **bare name** from another namespace | the name resolves **namespace-locally** → **404** | KinD-verified [src: code:scripts/lib/istio.sh:384-387] |
+| `VirtualService` names the Gateway by **bare name** from another namespace | the name resolves **namespace-locally** → **404** | KinD-verified [src: code:scripts/lib/istio.sh:387-390] |
 
 Nothing validates that a Gateway's selector matches a real workload. That is why discovery — not
 documentation — is the mechanism.
@@ -78,8 +78,8 @@ documentation — is the mechanism.
 | | **gateway-api** (preferred) | **classic** |
 |---|---|---|
 | Needs a pre-existing gateway workload? | **No** — Istio **auto-provisions** the proxy *and* its LoadBalancer | Yes, and its selector must be discovered |
-| Needs anything from the mesh admin? | **No** — only rights in your own namespaces | Usually (rights in the gateway ns, or a shared Gateway to reference) |
-| Air-gap | **free** — the auto-provisioned proxy inherits istiod's image hub, so it pulls `proxyv2` from Harbor with no extra config | already configured by whoever installed the mesh |
+| Needs anything from the mesh admin? | **For routing, no** — only rights in your own namespaces. **On an air-gapped mesh whose proxy registry needs auth, yes** — a gateway pull-secret (see the Air-gap row). | Usually (rights in the gateway ns, or a shared Gateway to reference) |
+| Air-gap | **Free only when WE install** (`INGRESS_CONTROLLER=istio`: we set `global.hub=<Harbor>` and the infra project is anonymous-pull). **On an ATTACHED VKS-package mesh: NOT automatic** — the auto-provisioned `<gw>-istio` proxy takes its image from the *mesh's* istiod hub, so pulling depends on the mesh's registry. See the note below. | already configured by whoever installed the mesh |
 | Works when the VKS package's shared gateway is OFF (the default)? | **Yes** | **No — nothing to bind to** |
 
 `ISTIO_ROUTE_API=auto` (default) picks the Gateway API whenever Istio is an Accepted `GatewayClass`,
@@ -105,6 +105,33 @@ else falls back to classic.
 > column was once mis-graded `KinD-verified` for a false reason; arc in
 > [`docs/reviews/2026-07-14-vks-provenance.md`](../reviews/2026-07-14-vks-provenance.md).
 > <!-- arc-ok: 2026-07-14 -->
+
+<!-- -->
+
+> **Air-gap on an ATTACHED mesh — the pull-secret you may owe (9.0-doc).**
+> The `<gw>-istio` proxy Istio auto-provisions in `vks-ingress` (`ISTIO_GWAPI_NAMESPACE`)
+> takes its image from the **mesh's** istiod hub — whatever the platform team set, NOT your
+> Harbor. If that registry requires authentication, the proxy pod **ImagePullBackOffs** and the
+> Gateway never programs, unless a `kubernetes.io/dockerconfigjson` Secret — whose name is listed
+> in the mesh's `istio.meshConfig.imagePullSecrets` — exists in `vks-ingress`. That is two objects:
+>
+> | Object | Owner |
+> |---|---|
+> | the dockerconfigjson **Secret**, in `vks-ingress` (your own namespace) | **you** create it |
+> | that Secret's **name** in `istio.meshConfig.imagePullSecrets` (mesh-global) | **mesh admin** (usually already set for the mesh to run air-gapped at all) |
+>
+> **What to do:** ask the mesh admin — (1) does the mesh pull `proxyv2` from an authenticated
+> registry? If anonymous-pull, you need nothing. (2) If authenticated: the imagePullSecret **name**
+> in `istio.meshConfig.imagePullSecrets`, plus credentials for that registry. Then create that Secret
+> (that exact name) in `vks-ingress` yourself. The KinD e2e never exercises this: the fixture installs
+> the platform istiod with `global.hub=<Harbor>` (`scripts/90-e2e-istio-existing.sh`) **and** Harbor's
+> infra project is anonymous-pull, so the auto-provisioned proxy pulls with no secret.
+>
+> **Grade: 9.0-doc** (Istio *Package Reference*, `/9-0/`; the `/9-1/` page 404s — same source as the
+> **Air-gap / private registry** row of the confidence table above). Whether
+> `istio.meshConfig.imagePullSecrets` propagates onto the **Gateway-API-provisioned** Deployment
+> specifically (vs. classic sidecar/gateway injection) is **lab-unverified** — the doc says "sidecar
+> **or** gateway injection".
 
 ### 5. RBAC — this *is* the access model
 

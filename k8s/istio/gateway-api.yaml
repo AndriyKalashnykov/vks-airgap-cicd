@@ -9,8 +9,10 @@
 #     LoadBalancer Service named `<gateway-name>-istio` in THIS namespace. We therefore need
 #     no rights in the mesh's namespaces, no gateway Service to find, and no `istio:` selector
 #     label to discover.
-#   * Air-gap safe for free: the auto-provisioned proxy inherits istiod's image hub, so on our
-#     cluster it pulls `<harbor>/<project>/istio/proxyv2` — verified, no extra configuration.
+#   * Air-gap: free ONLY when WE install the mesh (we set global.hub=<Harbor>, anonymous-pull). On an
+#     ATTACHED VKS-package mesh the proxy inherits the MESH's hub, and if that registry needs auth it
+#     needs a dockerconfigjson Secret in this namespace named in the mesh's istio.meshConfig.imagePullSecrets
+#     (9.0-doc; see docs/vks-services/istio.md §4). KinD is the free case: we own the mesh + Harbor is public.
 #
 # The HTTPRoutes live in their BACKEND's namespace and attach cross-namespace via parentRefs.
 # That is allowed by the listener's `allowedRoutes.namespaces.from: Selector` below; a

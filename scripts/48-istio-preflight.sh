@@ -46,8 +46,9 @@ fi
 
 # --- 1b. Which route API will we use? -----------------------------------------
 # Gateway API is preferred when Istio is an accepted GatewayClass — it is what Broadcom's VKS
-# walkthrough uses, and it needs NOTHING from the mesh admin (Istio provisions the data plane
-# and the LoadBalancer for the Gateway we create in our own namespace). Report that plainly:
+# walkthrough uses, and for ROUTING it needs no gateway from the mesh admin — Istio provisions the
+# data plane and the LoadBalancer for the Gateway we create in our own namespace (air-gap pull-secret
+# aside — see the gateway-api branch below). Report that plainly:
 # it is usually the difference between "I must file a ticket" and "I can just deploy".
 # THE GATEWAY-API CRDs — report them EXPLICITLY. They are the load-bearing precondition for the
 # tenant path, nothing in this repo used to install them, and on KinD they only exist because
@@ -68,10 +69,16 @@ istio_detect_route_api
 
 if [ "$ISTIO_ROUTE_API" = "gateway-api" ]; then
   log_info "MODE: Kubernetes GATEWAY API (GatewayClass '${ISTIO_GATEWAY_CLASS:-istio}' is Accepted)."
-  log_info "  -> INGRESS_CONTROLLER=istio-existing installs nothing and needs NOTHING from the mesh admin:"
+  log_info "  -> INGRESS_CONTROLLER=istio-existing installs nothing and needs no GATEWAY from the mesh admin:"
   log_info "     we create a Gateway in '${ISTIO_GWAPI_NAMESPACE:-vks-ingress}' and HTTPRoutes in our own"
-  log_info "     namespaces; Istio auto-provisions the proxy + its LoadBalancer (image inherited from"
-  log_info "     istiod's hub, so it pulls from Harbor on an air-gapped cluster)."
+  log_info "     namespaces; Istio auto-provisions the proxy + its LoadBalancer."
+  log_warn "  AIR-GAP CAVEAT: the '${ISTIO_GATEWAY_NAME:-vks-uis}-istio' proxy takes its image from the MESH's"
+  log_warn "     istiod hub (whatever the platform set), NOT your Harbor. If that registry needs auth it"
+  log_warn "     ImagePullBackOffs unless a dockerconfigjson Secret — named in the mesh's"
+  log_warn "     istio.meshConfig.imagePullSecrets — exists in '${ISTIO_GWAPI_NAMESPACE:-vks-ingress}'."
+  log_warn "     ASK THE MESH ADMIN: (1) is proxyv2 pulled from an authenticated registry? If not, nothing to do."
+  log_warn "     (2) if so: the imagePullSecret NAME in istio.meshConfig.imagePullSecrets + its credentials —"
+  log_warn "     then create that Secret in '${ISTIO_GWAPI_NAMESPACE:-vks-ingress}' yourself (your own namespace)."
   log_info "  RBAC you need (own namespaces only):"
   for ns in "${ISTIO_GWAPI_NAMESPACE:-vks-ingress}" "$GITEA_NAMESPACE" "$TEKTON_NAMESPACE" $(app_names | tr '\n' ' '); do
     printf '    %-46s gateways=%s httproutes=%s\n' "$ns" \

@@ -200,11 +200,14 @@ istio_gwapi_crds_present() {
 #
 #   classic     : needs a shared gateway to exist + its selector label + (usually) rights
 #                 in the gateway namespace, or a platform-owned Gateway to reference.
-#   gateway-api : needs NOTHING outside our own namespaces. We create a Gateway with
-#                 gatewayClassName=istio and Istio AUTO-PROVISIONS the data plane and a
-#                 LoadBalancer for us — and the provisioned proxy inherits istiod's image
-#                 hub, so on an air-gapped cluster it pulls from Harbor with no extra config
-#                 (verified: the auto-created pod ran <harbor>/cicd/istio/proxyv2).
+#   gateway-api : needs NOTHING outside our own namespaces for ROUTING. We create a Gateway with
+#                 gatewayClassName=istio and Istio AUTO-PROVISIONS the data plane + a LoadBalancer.
+#                 AIR-GAP CAVEAT (attach mode): the provisioned proxy takes its image from the MESH's
+#                 istiod hub — NOT ours — so on an attached VKS-package mesh with an authenticated
+#                 proxy registry it needs a dockerconfigjson Secret in ISTIO_GWAPI_NAMESPACE, named in
+#                 the mesh's istio.meshConfig.imagePullSecrets, or the <gw>-istio pod ImagePullBackOffs.
+#                 (In our OWN install we set global.hub=<Harbor> + anonymous-pull, so it is free there —
+#                 which is the only case the KinD e2e exercises.)
 #
 # Sets ISTIO_ROUTE_API to: gateway-api | classic | none
 # Honours an explicit ISTIO_ROUTE_API=gateway-api|classic to override the preference.
