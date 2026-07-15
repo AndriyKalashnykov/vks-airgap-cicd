@@ -202,9 +202,16 @@ make deps            # toolchain: mise + podman (git must already be present)
 make engine-check    # read-only: what engine does this box have, and will it cost you a sudo?
 make env-init        # create .env from .env.example
 make env-populate    # mint the secrets we can, discover cluster values, print what only you can supply
-make env-check       # gate: fail now if anything required is still missing
 make check-tools     # what this box has, and what it still needs
 ```
+
+> **`make env-check` is NOT a prerequisite either — it is a PRESENCE gate that needs the real
+> `HARBOR_URL` and the workload kubeconfig, neither of which exists on a bare jump box** (`HARBOR_URL`
+> is still the committed `harbor.vks.local` placeholder, and there is no kubeconfig yet). It **correctly
+> fails** here now. Run it in the scenario runbooks, after the cluster and Harbor exist — they already
+> place it correctly ([Scenario 1](docs/scenario-1.md), [Scenario 2](docs/scenario-2.md)).
+
+<!-- -->
 
 > **`make fetch-harbor-ca` is NOT a prerequisite — it used to be listed here and it DIED.** It dials
 > `HARBOR_URL` with `openssl s_client`, and at this point Harbor does not exist yet (in Scenario 1 *you*

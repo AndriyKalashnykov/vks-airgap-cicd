@@ -29,6 +29,13 @@ EXAMPLE_FILE="${REPO_ROOT}/.env.example"
 # A value is "unset" for our purposes if empty OR still a committed placeholder.
 is_placeholder() { case "$1" in ''|'<SET-IN-.env>'|*'<SET-'*) return 0 ;; *) return 1 ;; esac; }
 
+# HARBOR_URL's committed .env.example default is a real-looking hostname that MEANS "not configured
+# yet" (the real value is the discovered LB IP for KinD, or your lab's Harbor FQDN). is_placeholder
+# cannot catch it — it is neither empty nor a <SET-*> token — so env_check AND env_validate test it
+# via this helper. The sentinel literal lives ONCE, inside this function body: a function def is
+# immune to load_env's `set -a; . .env` (a top-level var would be clobbered by it).
+harbor_url_is_placeholder() { case "${1:-}" in ''|harbor.vks.local) return 0 ;; *) return 1 ;; esac; }
+
 # Upsert KEY=VALUE into .env (idempotent — replaces an existing line, else appends).
 env_set() { set_env_var "$1" "$2" "$ENV_FILE"; }
 
@@ -103,7 +110,9 @@ env_populate() {
 env_check() {
   [ -f "$ENV_FILE" ] || die "no .env yet — run 'make env-init' first"
   load_env
-  local missing=() required=(HARBOR_URL HARBOR_USERNAME HARBOR_PASSWORD GITEA_ADMIN_PASSWORD KUBECONFIG)
+  # HARBOR_URL + KUBECONFIG are checked explicitly below (sentinel / file-existence), not in this
+  # generic placeholder loop — so they are intentionally absent here.
+  local missing=() required=(HARBOR_USERNAME HARBOR_PASSWORD GITEA_ADMIN_PASSWORD)
   # method-specific requirements
   case "${VKS_AUTH_METHOD:-kubeconfig}" in
     vcf)     required+=(SUPERVISOR_HOST VKS_USERNAME VKS_NAMESPACE VKS_CONTEXT_NAME) ;;
@@ -114,6 +123,14 @@ env_check() {
     v="$(eval "printf '%s' \"\${$k:-}\"")"
     is_placeholder "$v" && missing+=("$k")
   done
+  # HARBOR_URL: the committed default 'harbor.vks.local' is a real-looking sentinel is_placeholder
+  # cannot catch (env_validate special-cases it via the same helper) — so check it explicitly.
+  harbor_url_is_placeholder "${HARBOR_URL:-}" && missing+=("HARBOR_URL (unset or still the committed placeholder — set your real Harbor host; the KinD path fills it via .env.kind)")
+  # KUBECONFIG: load_env DEFAULTS it to secrets/vks.kubeconfig, so "set" != "the file exists". env-check
+  # is deliberately the STRICTER PRESENCE gate — the kubeconfig FILE must be here. env-validate is the
+  # REACHABILITY gate; it assumes presence and only WARNs when the file is absent, so it can be run
+  # standalone before you have fetched the workload kubeconfig.
+  [ -f "${KUBECONFIG:-/nonexistent}" ] || missing+=("KUBECONFIG (file not found: '${KUBECONFIG:-}' — fetch the workload kubeconfig first)")
   if [ "${#missing[@]}" -gt 0 ]; then
     log_error "env-check: ${#missing[@]} required value(s) missing/placeholder:"
     printf '  - %s\n' "${missing[@]}"
@@ -162,9 +179,9 @@ env_validate() {
   fi
 
   # --- Harbor reachability + auth (secret via umask-077 curl -K, never argv) -
-  case "${HARBOR_URL:-}" in
-    ''|harbor.vks.local) log_warn "HARBOR_URL is the placeholder default — skipping Harbor reachability (real value comes from discovery/.env.kind)" ;;
-    *)
+  if harbor_url_is_placeholder "${HARBOR_URL:-}"; then
+    log_warn "HARBOR_URL is the placeholder default — skipping Harbor reachability (real value comes from discovery/.env.kind)"
+  else
       local scheme=https; [ "${HARBOR_INSECURE:-0}" = 1 ] && scheme=http
       local cafg=(); [ "$scheme" = https ] && [ -n "${HARBOR_CA_FILE:-}" ] && [ -f "${HARBOR_CA_FILE}" ] && cafg=(--cacert "${HARBOR_CA_FILE}")
       [ "$scheme" = https ] && [ "${HARBOR_INSECURE:-0}" != 1 ] && [ "${#cafg[@]}" -eq 0 ] && cafg=(-k)
@@ -188,8 +205,7 @@ env_validate() {
       else
         log_error "Harbor unreachable at $scheme://$HARBOR_URL/api/v2.0/systeminfo (HTTP $code)"; errs=$((errs+1))
       fi
-      ;;
-  esac
+  fi
 
   if [ "$errs" -gt 0 ]; then log_error "env-validate: $errs problem(s) — fix them before running the pipeline"; exit 1; fi
   log_info "env-validate: format + reachable connectivity checks passed"

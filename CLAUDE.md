@@ -424,12 +424,19 @@ confirms `clusters` IS grantable in an AppProject role, so `argocd.md` is right 
   Re-walk it for residual confirmed findings.
 - **Scenario 2 (tenant) + README + the other reference docs were NOT walked** from a user perspective (this
   session did kind-local + Scenario 1, as named). Reuse the `doc-walkthrough-userperspective` 2-agent method.
-- **`env-check` passes on placeholders (code fix, discovered while applying B4).** `load_env` defaults
-  `KUBECONFIG` (`scripts/lib/os.sh:391`) and `is_placeholder` is presence-only (`scripts/02-env.sh:30`), so
-  at bare-jump-box-prereq time `make env-check` reports *"all required present"* on the committed
-  `HARBOR_URL=harbor.vks.local` sentinel **and** a defaulted-nonexistent kubeconfig path (empirically rc=0).
-  Fix: reject the `harbor.vks.local` sentinel and/or existence-check the kubeconfig, then tighten README's
-  "fail now if anything required is still missing".
+- **✅ DONE — `env-check` no longer passes on placeholders.** `env_check` (`scripts/02-env.sh`) now
+  rejects the committed `HARBOR_URL=harbor.vks.local` sentinel (via a `harbor_url_is_placeholder` helper
+  that single-sources the literal in one function body — `env_validate`'s old `case` was refactored to
+  call it too) AND existence-checks the kubeconfig FILE (a value can be "set" via the `load_env` default
+  yet not exist). env-check is documented as the stricter PRESENCE gate; env-validate stays the
+  reachability gate that WARNs on an absent kubeconfig. New `scripts/test-env-check.sh` (wired into
+  `test-scripts`) proves RED on sentinel+absent-kubeconfig and GREEN on real values — demonstrated-RED
+  verified (stripping the checks fails the test). `make env-check` was **moved out of the bare-jump-box
+  prereqs** (README:205 + `detailed-steps.md:9,:50`) — a bare box has neither a real HARBOR_URL nor a
+  kubeconfig, so it correctly fails there; the scenario runbooks run it after the cluster + Harbor exist
+  (verified: scenario-1/2 set the real values first). **shell-adversary-reviewed twice** (design → SHIP-WITH-CHANGES; implementation → SHIP). **Deferred (LOW):** `scripts/creds.sh:27` independently hardcodes
+  `${HARBOR_URL:-harbor.vks.local}` as a *display* fallback (a different concern from the placeholder
+  check; not single-sourced) — fix opportunistically if creds.sh's fallback should track the same sentinel.
 - **B1b: the docker sneakernet e2e leg is untested** — `e2e-sneakernet` is podman-only; parameterize on
   `SNEAKERNET_ENGINE` (or add `e2e-sneakernet-both`).
 - **check-vks-provenance residuals (documented in the script header):** covers Confidence-TABLE rows only,
