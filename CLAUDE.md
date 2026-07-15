@@ -371,7 +371,49 @@ The two BLOCKING triggers (before you implement · before you call the session d
 (`Workflow` with a schema, or a synchronous `Agent` — never fire-and-forget), and what to do with the
 findings are all in Rule Zero. Do not duplicate them here.
 
-## ▶️ HANDOFF 2026-07-14 (air-gap toolchain + the gate-that-lied session) — START HERE
+## ▶️ HANDOFF 2026-07-15 (re-arm gate · B5 provenance · CI cache · adversary roster) — START HERE
+
+**All shipped to `main`; `main` is green.** Four PRs this session:
+
+| PR | What |
+|---|---|
+| **#244** | **Re-arm the adversary-first gate per commit** — closes the session-lifetime-receipt hole (a design review of task A was silently authorizing the unreviewed implementation of task B). `make test-adversary-gate-rearm` (13 cases). **NOW LIVE + ENFORCING** — see the ⚠️ below. |
+| **#243** | **B8** — `no-gate-in-commit-chain` no longer trips on a commit message that QUOTES a chain (a backtick code-span). |
+| **#245** | **B5** — corrected the false "9.1 URLs 301-redirect to 9.0" premise across `docs/vks-services/*` + decision docs + the topology diagram; re-graded with real citations (Harbor/ArgoCD packaging → 9.1-doc; ArgoCD server 2.14.15 → **2.14.13**; Istio Gateway-API CRDs confirmed shipped-by-default + opt-out label `addon.addons.kubernetes.vmware.com/gateway-api: unmanaged`). **vks-adversary-reviewed** — it caught a false Harbor claim I'd introduced + the entirely-skipped `argocd.md`. |
+| **#246** | **CI: cache `~/.m2`** (the real speedup) + **added `java-adversary`**. docker+java-adversary-reviewed: DROPPED the trivy-DB cache (net-negative — trivy's 24h client interval serves a stale DB, missing same-day CVEs) + the job-split (marginal ROI + ruleset-rename risk). |
+
+**⚠️ THE RE-ARM GATE IS LIVE — it changes how you work.** `adversary-first-gate` now clears only until the
+NEXT commit. If you're blocked editing a guarded file (`scripts/`, `Makefile`, `k8s/`, `tekton/`, `apps/`,
+`jumpbox/`, `docs/`, `README.md`), run the right-domain adversary, then edit **before** you commit. `CLAUDE.md` and
+`.claude/` stay exempt (write the plan / fix the gate). Escape hatch, on the record: `ADVERSARY_GATE_OFF=1`.
+
+**Adversary roster (grew this session, still thin):** `vks-adversary` · `docker-adversary` ·
+**`java-adversary`** (new — Maven/Gradle/reactor/`~/.m2`/JUnit-TUnit/JVM-CI) · **`shell-adversary`** (new —
+bash/zsh/git/Makefile/sed/awk/grep correctness; arguably the highest-value, since shell/git bugs bite every
+session). Pick the domain adversary that fits the change; CREATE a new one when none does (that is how java +
+shell were added — `shell-adversary` is not yet committed to `main`; it rides in the handoff PR).
+
+**Open backlog (none need a lab except where noted):**
+
+- **B4 doc-audit — UNAPPLIED, real, in `docs/reviews/2026-07-14-doc-truth-audit.md`.** A 5-agent Workflow
+  re-audited the operator docs against code. Confirmed findings NOT yet applied: README Scenario-1/2 Run
+  cells list `psa-check`/`harbor-robot` (un-runnable at jump-box-prereq time — see B12); `sneakernet.md`
+  Step 3 `bundle-load` has an unmentioned `~/.local/bin`-on-PATH precondition (it `die`s at the end of the
+  longest step); `sneakernet.md:146` install-ingress hardcodes `traefik`, dropping the default `istio`
+  (which DOES install air-gapped from carried charts); the `curl … | bash` `REF=` pin form is shown wrong.
+  Re-verify each against code, then fix (vks-adversary-review the operator-facing ones).
+- **B9** facts-not-novels doc sweep · **B10** access-uis relevance · **B11** sneakernet diagram quality ·
+  **B12** README Scenario-1/2 cell trim (this session — folds with B4).
+- **`check-vks-provenance` GATE** (owed from B5) — the correction landed; the enforcement gate
+  (citation-token schema, RED-proven, atomic with a full row re-grade) is the follow-up.
+- **A real lab** — Supervisor topology, the `vcf` auth flow, tenant RBAC into `ns/argocd`, and the B2
+  Gateway-API CRD-version question all remain lab-only.
+
+**Learnings reflected into portfolio skills/rules this session (in `~/projects/claude-config` — COMMIT THEM):**
+`commands/ci-workflow.md` (cache deps, never the scanner DB; keep the pre-merge gate; a required-check rename
+breaks the ruleset) · `rules/common/hooks.md` (the re-arm-per-commit review gate).
+
+## ▶️ HANDOFF 2026-07-14 (air-gap toolchain + the gate-that-lied session)
 
 **Branch `gate/doc-target-coverage` → PR #239 (all checks green, `mergeStateStatus: CLEAN`). NOT MERGED.**
 `main` is untouched. The work is 13 commits on that branch.
@@ -697,6 +739,27 @@ change the render). If it's already fine, say so and state what you checked (ope
 legible at the embedded width). A PlantUML/C4 render is the right tool (the repo renders it
 byte-deterministically); the open question is only whether the current one earns its space or should be
 sharper. Source: owner, 2026-07-14 — "at sneakernet.md would a PUML diagram be better, more clear/bigger?"
+
+---
+
+#### B12. Trim the README "which path?" cells for Scenario 1 & 2 — defer the sneakernet branch + the cluster-dependent Run steps
+
+`README.md:52-53` (Scenario 1 / Scenario 2) overload one table cell with Have + Reachable + an inline
+sneakernet networking-decision + a Run list — and the Run list ends in commands that CANNOT run at
+jump-box-prereq time. Two fixes, folded together:
+
+- **Sneakernet clutter (owner, 2026-07-14):** the "Can't reach both the internet and Harbor? → sneakernet"
+  branch is an edge-case decision that belongs in the scenario doc (already in `scenario-1.md:294`), not the
+  compact summary cell. The "just see it work" path is the KinD row above (`README.md:51`); Scenario 1 is
+  the real-lab **admin** path. Trim the networking branch out of the summary; keep it in the scenario doc.
+- **Un-runnable Run steps (B4 finding, CONFIRMED):** `:52` Run ends in `make psa-check`, `:53` in
+  `make harbor-robot` + `psa-check` — but `psa-check` needs a LIVE cluster (`49-psa-check.sh` →
+  `kubectl label --dry-run=server`) and `harbor-robot` a REACHABLE Harbor; neither exists at prereq time.
+  Trim the Run list to what a bare jump box can do (`make deps → install-vcf-clis → env-init → env-populate`)
+  and move `psa-check`/`harbor-robot` into the scenario docs (which have a cluster + Harbor by then).
+
+Operator-facing README edit → **vks-adversary-review before shipping**; folds with the other unapplied B4
+findings (see the current handoff's "B4 doc-audit — UNAPPLIED" note). Source: owner 2026-07-14 + the B4 audit.
 
 ## ✅ RESOLVED 2026-07-14 — the read-only hook WORKS. The hole was its REGEX, and our own rules dug it
 
