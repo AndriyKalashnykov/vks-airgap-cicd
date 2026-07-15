@@ -8,8 +8,10 @@ uncommitted work; another ran `git commit` + `git push` + `gh pr create` and ope
 
 A PROMPT IS NOT A SANDBOX. This is the sandbox.
 
-Note that `isolation: "worktree"` does NOT solve this on its own: a worktree shares the same remote
-and the same credentials, so a subagent can still push from inside one. The CAPABILITY has to go.
+Note on `isolation: "worktree"`: it gives a subagent its OWN checkout, so FILE writes INSIDE that
+worktree (.claude/worktrees/agent-<id>/) are ALLOWED here — a legitimate migration/scaffolding agent
+still works. But a worktree shares the same remote + credentials, so git/gh PUSH from inside one still
+reaches your remote — that capability stays blocked regardless of worktree.
 
 HOW IT DISCRIMINATES. PreToolUse's stdin JSON carries `agent_id` / `agent_type` ONLY for subagents
 (https://code.claude.com/docs/en/hooks.md). The main agent has neither — so it keeps full git/gh
@@ -20,6 +22,7 @@ Fails OPEN on malformed input: a hook that crashes must not wedge the session. I
 for a mistake, not a security boundary against a hostile actor.
 """
 import json
+import os
 import re
 import sys
 
@@ -95,16 +98,38 @@ def main() -> int:
     # them also edited a script WHILE the main agent had a job executing it — bash reads scripts
     # incrementally, so the running job executed a fragment and died with a nonsense error.)
     if tool in ("Edit", "Write", "NotebookEdit", "MultiEdit"):
+        path = (data.get("tool_input") or {}).get("file_path") or ""
+        # WORKTREE EXEMPTION. A subagent spawned with isolation:"worktree" gets its OWN checkout under
+        # .claude/worktrees/agent-<id>/ and legitimately writes THERE (parallel migrations, scaffolding).
+        # Allow writes INSIDE a worktree; block writes to the caller's MAIN tree — the clobber this hook
+        # exists to stop. (git/gh PUSH stays blocked below regardless: a worktree shares remote+creds, so
+        # the mutation capability that reaches the remote must still go.)
+        #
+        # CANONICALISE FIRST. A raw substring test is defeated by `..`: adversary-proven that
+        # `/repo/.claude/worktrees/../../scripts/x` matches the substring (ALLOW) yet realpath lands in
+        # the MAIN tree. Resolve `..`+symlinks, then require an actual `worktrees/<segment>/` — so a
+        # traversal that escapes the worktree no longer has the segment and is blocked. Deliberately NOT
+        # anchored to a hardcoded repo root: that would false-block if the harness relocates worktrees,
+        # and it stays location-agnostic for a portfolio-wide rollout.
+        # Residual (mistake-net, not a hostile-actor boundary): this keys on the TARGET path, not on the
+        # agent being the worktree's owner — so a write into ANOTHER agent's worktree is still allowed.
+        # Closing that needs a cwd-anchored check, which requires the hook to run with the subagent's cwd
+        # (unverified — see the backlog).
+        rp = os.path.realpath(path)
+        if re.search(r"/\.claude/worktrees/[^/]+/", rp + "/"):
+            return 0
         who = data.get("agent_type") or data.get("agent_id") or "subagent"
-        path = (data.get("tool_input") or {}).get("file_path") or "<unknown>"
         sys.stderr.write(
-            f"BLOCKED by subagent-readonly-gate: '{who}' is READ-ONLY and may not write files.\n"
-            f"  refused: {tool} {path}\n"
+            f"BLOCKED by subagent-readonly-gate: '{who}' is READ-ONLY and may not write the caller's tree.\n"
+            f"  refused: {tool} {path or '<unknown>'}\n"
             f"\n"
             f"You are a REVIEWER. Your deliverable is your REPORT, not a patch.\n"
             f"Findings expressed as code are NOT a deliverable: they arrive unreviewed, they can\n"
             f"clobber the caller's in-flight work, and editing a script the caller is currently\n"
             f"executing corrupts that run.\n"
+            f"\n"
+            f"(A worktree-isolated subagent MAY write inside its own .claude/worktrees/ checkout — this\n"
+            f"path is in the caller's MAIN tree, so it is blocked.)\n"
             f"\n"
             f"Instead, for each finding give: FILE:LINE, the defect, the failure it causes, and the\n"
             f"exact edit you would make. The caller will apply and verify it.\n"

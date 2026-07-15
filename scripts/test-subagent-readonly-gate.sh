@@ -42,6 +42,17 @@ probe 2 "subagent: mutation HIDDEN MID-CHAIN"  "$(sub '"make static-check && git
 probe 2 "subagent: mutation in a subshell"     "$(sub '"echo $(git commit -m x)"')"
 probe 2 "subagent: sudo-prefixed"              "$(sub '"sudo git clean -fd"')"
 
+echo "--- SUBAGENT: FILE writes to the caller's MAIN tree BLOCKED; writes INSIDE its worktree ALLOWED ---"
+edit() { printf '{"agent_type":"adversary-go","agent_id":"a1","tool_name":"%s","tool_input":{"file_path":%s}}' "$1" "$2"; }
+probe 2 "subagent: Edit a MAIN-tree file"            "$(edit Edit  '"/home/u/proj/scripts/x.sh"')"
+probe 2 "subagent: Write a MAIN-tree file"           "$(edit Write '"/home/u/proj/README.md"')"
+probe 2 "subagent: MultiEdit a MAIN-tree file"       "$(edit MultiEdit '"/home/u/proj/Makefile"')"
+probe 0 "subagent: Edit INSIDE its .claude/worktrees checkout" "$(edit Edit  '"/home/u/proj/.claude/worktrees/agent-a1/scripts/x.sh"')"
+probe 0 "subagent: Write INSIDE its worktree"        "$(edit Write '"/home/u/proj/.claude/worktrees/agent-a1/new.txt"')"
+# TRAVERSAL: a raw substring test would ALLOW these (adversary-proven); realpath collapses .. and BLOCKS.
+probe 2 "subagent: worktrees/../.. escape to MAIN tree" "$(edit Edit '"/home/u/proj/.claude/worktrees/../../scripts/x.sh"')"
+probe 2 "subagent: worktrees/../../../.. escape the repo" "$(edit Write '"/home/u/proj/.claude/worktrees/agent-Z/../../../../etc/cron.d/x"')"
+
 echo "--- SUBAGENT: read-only work must still be ALLOWED (rc=0) — else the review is worthless ---"
 probe 0 "subagent: git log"                    "$(sub '"git log --oneline -5"')"
 probe 0 "subagent: git diff"                   "$(sub '"git diff origin/main --stat"')"
