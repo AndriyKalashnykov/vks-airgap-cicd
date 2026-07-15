@@ -371,7 +371,45 @@ The two BLOCKING triggers (before you implement · before you call the session d
 (`Workflow` with a schema, or a synchronous `Agent` — never fire-and-forget), and what to do with the
 findings are all in Rule Zero. Do not duplicate them here.
 
-## ▶️ HANDOFF 2026-07-15 (backlog cleanup: B4/B9/B10/B12 + check-vks-provenance gate + the doc walkthrough) — START HERE
+## ▶️ HANDOFF 2026-07-15 (evening — 8-PR adversary-loop session + 2 audits) — START HERE
+
+**`main` is green @ `e25017b`; 0 open PRs.** 8 PRs merged this session, each through the full
+idea→adversary→incorporate→implement→adversary→incorporate loop with a demonstrated-RED test at every gate:
+
+| PR | Fix |
+|---|---|
+| #253 | istio "prefer the Gateway API" air-gap claim → CONDITIONAL (attach-mesh proxy inherits the *mesh's* hub; pull-secret you may owe) |
+| #254 | `puml:41` CRDs "UNVERIFIED" → "VKS 9.1 SHIPS them by default; risk is the VERSION (B2)" |
+| #255 | `puml:10` packaging "(verified)" → "doc-sourced (TechDocs /9-0/), NOT lab-verified; renamed VKS Add-on in 3.7.0" |
+| #256 | `env-check` now a real PRESENCE gate (rejects the `harbor.vks.local` sentinel + existence-checks the kubeconfig); moved OUT of bare-jump-box prereqs |
+| #257 | B1b: the "docker sneakernet leg" was REFUTED as vacuous (air-gap box is crane-only); shipped a `make test-builder-save-crane` guard for the REAL gap (internet-box `<engine> save → crane push`) |
+| #258 | **3 CRITICAL tenant-path code bugs** — C10 double-`@domain` (`vks_sso_user()` helper), C12 `argocd-preflight` false-block (gated on `MECHANISM=kubectl` + a destination warn), C13 scenario-2 api-var ordering |
+
+**Two parallel doc-vs-code audits ran** (findings in the agent transcripts + `docs/reviews/2026-07-14-doc-truth-audit.md`): doctruth = **57 still-confirmed / 10 fixed-this-session / 1 can't-verify**; scenario-2 = un-remediated. C10/C12/C13 (3 of the 7 CRITICALs) are now fixed.
+
+### 🔴 REMAINING BACKLOG — in priority order (all fixes below are code-verified; a real lab is NOT needed unless noted)
+
+**1. The 4 remaining CRITICAL bootstrap-doc-drift fixes** (locations + fixes READ this session — apply directly). A fresh branch `fix/critical-bootstrap-doc-drift` exists (no commits). These are the next PR:
+
+- **C1** — `docs/prerequisites-manual.md:60-62`: the `export PATH=...local/bin...` line puts the mise **binary** on PATH, not the tools mise manages, so crane/helm/yq/kind are NOT on PATH after; the comment claiming "the installer also adds mise activate to your profile" is **FALSE** (mise.run only *prints* the line — finding H1). **Fix:** after the mise install, run `eval "$(mise activate bash)"` and append it to `~/.bashrc`, then add a `make check-tools` verify step. Also add a scope banner (H2: every step needs the internet; this is the on-ramp `make deps` automates) and `-fsSL` on the curl-pipe-sh (M1).
+- **C2** — `CLAUDE.md:293` (Conventions): the phrase "the bundle carries crane — and only crane" is STALE; `scripts/11-bundle.sh` now `stage_tool`s **5** tools (crane/kubectl/helm/jq/yq) + the Istio charts + Tekton manifests. **Fix:** rewrite the bullet to the real bundle contents.
+- **C3** — `CLAUDE.md:290-293` (Conventions): the tkn/argocd-only bootstrap exception omits that `00-install-prereqs.sh` now also installs gawk/openssl/gettext (a bare Photon lacks awk/envsubst → dies at `mirror-verify`). **Fix:** add the OS-package floor to the bullet.
+- **C6** — `README.md:64`: the docker-engine row lists `make trust-harbor` as a **bootstrap** step, but `scripts/19-trust-harbor.sh` proves trust with a **real login handshake** → needs a **live, reachable Harbor**, which does not exist at bootstrap. **Fix:** move the trust step to "once Harbor exists" (like fetch-harbor-ca was moved). Audit correction to carry: it does NOT die on "no .env" — the `trust-harbor: check-env` prereq is the `.env.example`-exists STOPPER (`Makefile:109`), not `env_check`; the conclusion holds, the ".env death" reasoning was a check-env-vs-env-check conflation.
+- Domain adversary: shell/toolchain/Harbor-trust → `adversary-bash-git-cli` (now global) or `docker-adversary` for C6. Mostly doc-accuracy; CLAUDE.md is adversary-first-gate-exempt but STILL run the design past an adversary per the owner's standing rule.
+
+**2. The ~50 remaining HIGH/MEDIUM doctruth findings** (full table in the doctruth-audit transcript). Biggest: `docs/scenario-2.md` is entirely un-remediated (~15 live findings — wants a user-perspective walkthrough PR like #251 did for scenario-1; incl. the HIGH-2 don't-set-ARGOCD_KUBECONFIG contradiction + `ARGOCD_REGISTER=never`, and the G5-class dead-command at `:68/:278` that greps a guest kubeconfig for a Supervisor-only service). Also `docs/prerequisites-manual.md` (7 live), and CLAUDE.md gate-list/command-table drift (M3-M9: `ci` omits diagrams-check; `static-check` lists ~11 of 20 prereqs; `make e2e-cross-cluster` should be `e2e-kind-cross-cluster`; the install-all row omits preflight/mirror-verify; `.env.kind` is now `.env.state`; the jumpbox row is engine-blind).
+
+**3. Agents + hooks GLOBAL refactor (user-initiated).** WARNING: the owner has PARTIALLY done this from ANOTHER repo's session — `~/projects/claude-config` already has changes to `agents.md` etc. So this is a TWO-REPO MERGE, not a fresh write: INSPECT claude-config's current state FIRST (`git -C ~/projects/claude-config status/log`, `ls ~/projects/claude-config/agents/`) before adding anything. Plan (mechanism doc-verified against code.claude.com/docs/sub-agents.md): move the general adversaries into `~/projects/claude-config/agents/` + a `setup.sh` copy-block into `~/.claude/agents/` (user-level resolves in ALL projects; a project `.claude/agents/` file OVERRIDES a user one of the same name, so REMOVE the local copies; first-time creation of `~/.claude/agents/` needs a session RESTART). vks-adversary may go global too (owner confirmed). Move the 3 GENERAL hooks (subagent-readonly-gate, no-gate-in-commit-chain, mid-run-edit-gate) global; adversary-first-gate STAYS project-local (it encodes this repo's RULE ZERO — global would block edits in every other repo). Hook wiring must be merged by hand into `~/.claude/settings.json` (setup.sh will not overwrite it) — portfolio-wide blast radius, verify end-to-end. Then in THIS repo: remove `.claude/agents/*`, change RULE ZERO's path-refs to name-refs, and relocate the check-agent-frontmatter validation to claude-config. (Five global adversaries appeared live mid-session, so the mechanism is confirmed working.)
+
+**4. B1b-remainders / lab-only:** the heavy `make e2e-sneakernet CONTAINER_ENGINE=docker` was NOT run (needs a KinD stack). Real-lab-only: whether vcf/argocd-server accept the C10 principal / C13 token, and the real guest registration. Plus `docs/reviews/2026-07-15-istio-gwapi-critical-fix.md`'s deeper items.
+
+### Learnings reflected into claude-config this session (committed as f750890)
+
+- `rules/common/testing.md` gained 4 verification-loop rules: a SKIP-guard checked BEFORE the fail-check yields an exit-0 false-green (fail-check must win); a TEST-MATRIX LEG on a dimension the code path does not exercise is a vacuous green (adversary the idea first — the docker sneakernet refutation); a PREFLIGHT/gate that BLOCKS on a condition the real operation tolerates is a false gate that kills a valid flow (C12); and a FIX can introduce a NEW bug in the OPPOSITE direction, caught only by the implementation-review adversary round (C12 round-3 caught the admin false-positive round-2 introduced).
+- STILL TO CAPTURE next session (documented here so nothing is lost): a presence gate must existence-check file-path values + reject real-looking committed sentinels (env-check/C13, → `configuration.md`); an idempotent normalizer single-sourced with NO silent default for a security-relevant principal (C10 `vks_sso_user`, → `coding-style.md`); the markdown-nits that recur (MD028 needs a comment separator between adjacent blockquotes; a wrapped line beginning with a plus-and-space is read as an MD004 list item; nested backticks in a code span break MD038).
+- Project memory: `sneakernet-engine-axis` (air-gap box crane-only/engine-agnostic; both engines bare-save to docker-archive).
+
+## ▶️ HANDOFF 2026-07-15 (backlog cleanup: B4/B9/B10/B12 + check-vks-provenance gate + the doc walkthrough) — earlier same day
 
 **All shipped to `main`; `main` is green.** Four PRs this session, each **adversary-reviewed BEFORE
 implementing** (the pattern held throughout; several caught real bugs that would otherwise have shipped):
