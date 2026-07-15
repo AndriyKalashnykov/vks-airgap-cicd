@@ -46,6 +46,14 @@ VKS_NAMESPACE=<vsphere-namespace>
 VKS_CLUSTER_NAME=<the guest cluster you create in A3>
 ```
 
+**Load `.env` into your shell** so the `$VAR` references in the raw commands below resolve (`.env` is
+sourced automatically by `make` targets, but **not** by your interactive shell — re-run this whenever you
+edit `.env`):
+
+```bash
+set -a; . ./.env; set +a
+```
+
 **Also — if you ever ran the local KinD flow on this box:** `make state-show` (whose state is this?)
 then `make kind-down`. A stale overlay is sourced *after* `.env` and would silently redirect
 everything at a kind cluster. It is deleted only if the KinD flow wrote it; a *different* cluster's
@@ -76,8 +84,10 @@ overlay is **archived, not deleted** — it may hold that cluster's only passwor
    > fails in crane, podman, containerd and Kaniko alike. (Our KinD stand-in mints `SAN=IP` for exactly
    > this reason.)
 
-**Expect:** Harbor's UI answers at the FQDN you chose, **and** a pod on the guest cluster can resolve it:
-`kubectl run dns-probe --rm -it --restart=Never --image=<mirrored-busybox> -- nslookup <harbor-fqdn>`
+**Expect:** Harbor's UI answers at the FQDN you chose. (The other half — that the **guest cluster's nodes**
+can resolve *and trust* this FQDN — is proven later, when Step 5's `make verify` pulls the app image from
+Harbor into the guest; a bare `kubectl run` DNS probe would be rejected by the guest's `restricted` PSA, so
+it is not a reliable check here.)
 
 **→ now set in `.env`:**
 
@@ -101,12 +111,18 @@ HARBOR_APP_PROJECT=apps
 3. **Authenticate to the Supervisor** (interactive — it prompts for the password; no secret on argv):
 
    ```bash
-   vcf context create --endpoint https://<supervisor-IP> --username <user>@<SSO-DOMAIN> \
+   vcf context create --endpoint https://$SUPERVISOR_HOST --username $VKS_USERNAME \
        --insecure-skip-tls-verify --auth-type basic
-   vcf context use <context-name>:<vsphere-namespace>      # note the <ctx>:<ns> COLON form
+   vcf context use <context-name>:$VKS_NAMESPACE      # <context-name> = what `vcf context create` produced; note the <ctx>:<ns> COLON form
    ```
 
-   *(vSphere 8: `kubectl vsphere login --server <IP>` instead.)*
+   *(vSphere 8: `kubectl vsphere login --server $SUPERVISOR_HOST` instead.)*
+
+   **→ record the context name** that `vcf context create` produced (see its output, or `vcf context list`)
+   as `VKS_CONTEXT_NAME=<name>` in `.env` — A3's `vcf context use` and `make vks-login` both need it. It is
+   **distinct** from `VKS_CONTEXT` (the *kubeconfig* context, set in A3). Full auth mechanism (the
+   `VKS_CONTEXT_NAME`/`vcf` flow, and why Scenario 1 needs a second kubeconfig):
+   [VKS authentication](vks-authentication.md).
 
 4. **Pick a supported version, then apply the CR:**
 
@@ -252,6 +268,18 @@ flow actually creates.
 **For:** `make gitops` must talk to **both** clusters — ArgoCD on the Supervisor, your app in the guest.
 A3 gave you the guest one. This gives you the Supervisor one.
 
+**→ set these in `.env` FIRST** — both `make` commands below consume them. Unset, `ARGOCD_KUBECONFIG`
+defaults to the *guest* kubeconfig, so `argocd-preflight` mis-reports ArgoCD as in-cluster **and `make
+gitops` (Step 5) would deploy to the Supervisor** — the wrong cluster. And `fetch-argocd-kubeconfig`
+**dies** without a Supervisor-TLS setting:
+
+```bash
+ARGOCD_KUBECONFIG=./secrets/argocd.kubeconfig    # where fetch-argocd-kubeconfig writes; make gitops reads it
+VKS_INSECURE_SKIP_TLS_VERIFY=true                # OR VKS_CA_CERT_FILE=./secrets/supervisor-ca.crt (preferred)
+```
+
+(Re-source after editing `.env`: `set -a; . ./.env; set +a`.)
+
 ```bash
 make fetch-argocd-kubeconfig    # interactive: prompts for your password
 make argocd-preflight           # CLI vs SERVER versions + is ArgoCD even able to deploy to your cluster?
@@ -305,6 +333,11 @@ make verify        # push a marked change → Tekton → Harbor → ArgoCD → t
 
 `make gitops` **registers your guest cluster** as an ArgoCD destination and points the `Application`
 at it. It never installs a second ArgoCD, and never deploys onto the Supervisor.
+
+> **Real-lab caveat:** if ArgoCD reaches your guest by a VIP that differs from your kubeconfig's server
+> URL, `make gitops` cannot match the registered destination unambiguously — it **stops with a clear
+> message** rather than guessing. Set `ARGOCD_DEST_CLUSTER_NAME=<the name ArgoCD registered the cluster
+> under>` in `.env` and re-run.
 
 ⚠️ **`make mirror` must run alone** — not because concurrency corrupts anything (that was a
 **misdiagnosis**, corrected 2026-07-13), but because the e2e mutates a shared cluster and registry, so
