@@ -85,40 +85,26 @@ documentation — is the mechanism.
 `ISTIO_ROUTE_API=auto` (default) picks the Gateway API whenever Istio is an Accepted `GatewayClass`,
 else falls back to classic.
 
-> ⚠️ **The gateway-api column was "KinD-verified" for a FALSE reason — corrected 2026-07-13.**
-> **Nothing in this repo installed the Gateway API CRDs**, and Istio does not ship them. On KinD they
-> existed only because **cloud-provider-kind force-installs its own bundle**. So the green that graded
-> this column *KinD-verified* was produced by a **KinD-only shim**, and on a real VKS cluster the CRDs
-> may simply be **absent** — in which case we fall back to **classic**, which needs the shared ingress
-> gateway that the VKS package ships **disabled by default**: nothing to bind to.
+> **Gateway API CRDs.** We install them when we own the cluster (`istio_ensure_gwapi_crds`,
+> `GATEWAY_API_VERSION`), carry them in the air-gap bundle, and **say so** when they are absent rather than
+> degrading silently to the classic path (whose shared gateway the VKS package ships **disabled**). **A
+> tenant cannot install them** (cluster-scoped) — `istio-preflight` prints that ask.
 >
-> We now install the CRDs ourselves when we own the cluster (`istio_ensure_gwapi_crds`,
-> `GATEWAY_API_VERSION`), carry them in the air-gap bundle, and **say so** when they are absent instead
-> of degrading silently. **A tenant cannot install them** (cluster-scoped) — `istio-preflight` prints
-> that ask.
+> **CONFIRMED 9.1-doc (2026-07-14): a VKS 9.1 guest cluster SHIPS the Gateway API CRDs by default** — from
+> the VKr (the cluster image), not Istio; from VKS 3.7.0 / VKr 1.36 they are a VKS-**managed** add-on, ON
+> by default, with an opt-OUT label `addon.addons.kubernetes.vmware.com/gateway-api: unmanaged` (VKS 3.7
+> Add-ons RN, `/9-1/`, 200).
 >
-> **Update 2026-07-13 — the shim is gone and the install is now genuinely exercised.** The CRD install
-> had *still* never run: it early-returns when the CRDs are already present, and cloud-provider-kind
-> put them there before Istio was ever installed. `05-kind-up.sh` now starts CPK with
-> `--gateway-channel=disabled`, so **we** are the only installer on KinD; and the install asserts a
-> **server-side-apply field manager** on the CRD afterwards — CPK creates with a plain `Create()`
-> (`operation: Update`), so an `Apply` manager is proof our code path ran, which mere *presence* never
-> was. The air-gap branch was also **dead code** (`MANIFEST_DIR` was never set on this path, so it
-> always reached for github.com); it now reads the bundle.
->
-> **CONFIRMED 9.1-doc (2026-07-14): a VKS 9.1 guest cluster SHIPS the Gateway API CRDs by default.**
-> They come from the VKr (the cluster image), not from Istio; from VKS 3.7.0 / VKr 1.36 they are a
-> VKS-**managed** add-on, ON by default, with an explicit **opt-OUT** label on the Cluster resource —
-> `addon.addons.kubernetes.vmware.com/gateway-api: unmanaged` (VKS 3.7 Add-ons RN, `/9-1/`, 200).
->
-> **So the risk INVERTS — the remaining unknown is the VERSION, not the presence** (handoff **B2**):
-> the CRDs are present and VKS-managed at the VKr's chosen version, while `istio_ensure_gwapi_crds`
-> server-side-applies OUR pinned `GATEWAY_API_VERSION` — so on a real lab we may be up/down-grading a
-> CRD the VKS add-on manager owns. The VKr→gateway-api version map is **not published** in any Broadcom
-> doc; only the cluster answers it —
+> **So the risk is the VERSION, not the presence** (handoff **B2**): the CRDs are VKS-managed at the VKr's
+> chosen version while `istio_ensure_gwapi_crds` server-side-applies our pinned `GATEWAY_API_VERSION`, so
+> on a real lab we may up/down-grade a CRD the add-on manager owns. The VKr→gateway-api version map is not
+> published in any Broadcom doc; only the cluster answers it —
 > `kubectl get crd gateways.gateway.networking.k8s.io -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}'`
-> plus the `addon.addons.kubernetes.vmware.com/gateway-api` label. **Grade: MECHANISM KinD-verified;
-> "CRDs present by default" 9.1-doc; the exact version + whether to defer to it is lab-only (B2).**
+> plus the `addon.addons.kubernetes.vmware.com/gateway-api` label. **Grade: mechanism KinD-verified;
+> "CRDs present by default" 9.1-doc; the exact version + whether to defer to it is lab-only (B2).** This
+> column was once mis-graded `KinD-verified` for a false reason; arc in
+> [`docs/reviews/2026-07-14-vks-provenance.md`](../reviews/2026-07-14-vks-provenance.md).
+> <!-- arc-ok: 2026-07-14 -->
 
 ### 5. RBAC — this *is* the access model
 
