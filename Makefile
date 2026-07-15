@@ -676,6 +676,10 @@ test-state-overlay: ## Offline: the stamped state overlay (unstamped=source, mis
 test-env-check: ## Offline: env-check is a PRESENCE gate — it must FAIL on the HARBOR_URL sentinel + an absent kubeconfig
 	@./scripts/test-env-check.sh
 
+.PHONY: test-builder-save-crane
+test-builder-save-crane: ## DEEP (needs docker + a network registry:2; NOT in static-check): guards the sneakernet builder's '<engine> save' -> 'crane push' round-trip for docker AND podman (skips loudly if a prereq is absent)
+	@./scripts/test-builder-save-crane.sh
+
 ##@ Security scanning (internet/CI side; not part of the air-gap install)
 # A GATE THAT SKIPS BECAUSE ITS TOOL IS MISSING IS A GATE THAT PASSES BY NOT LOOKING.
 # Locally, warn + skip (a dev box may lack a scanner). In CI ($(CI) is set by GitHub), DIE — CI

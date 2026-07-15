@@ -115,6 +115,15 @@ make bundle           # → vks-airgap-cicd-bundle-<date>.tar  + its .sha256
 > build it (no internet) and the staging box cannot push it (no Harbor) — so it is **carried in the bundle**
 > and pushed on the far side by `make builder-push`.
 
+<!-- -->
+
+> **Container engine — only the STAGING box's matters.** `builder-build` runs `<engine> build` + `<engine>
+> save` under `CONTAINER_ENGINE` (podman by default; `make builder-build CONTAINER_ENGINE=docker` uses
+> docker). Both `podman save` and `docker save` emit the same crane-readable `docker-archive`, which is why
+> the **jump box needs no engine at all** — `crane` pushes the carried tarball. To exercise the whole
+> sneakernet under docker: `make e2e-sneakernet CONTAINER_ENGINE=docker`; for a fast, deterministic check
+> of just the `<engine> save` → `crane push` round-trip (docker AND podman): `make test-builder-save-crane`.
+
 ## Step 2 — carry
 
 Copy **the tarball, its `.sha256`, and the repo**. All three, on the same media.

@@ -31,6 +31,18 @@
 # WHY A SCRIPT AND NOT A RECIPE: it was a ~45-line `\`-continued Makefile block. A recipe cannot be
 # linted, cannot be `set -euo pipefail`'d coherently, and hides its failures — which is how every
 # silent bug in the sibling jump-box harness got in.
+#
+# WHICH CONTAINER ENGINE VARIES THE OUTCOME (spoiler: NOT the jump box)
+# --------------------------------------------------------------------
+# The AIR-GAP box is engine-AGNOSTIC. Its whole job — bundle-load -> mirror-push -> builder-push ->
+# mirror-verify — is done by `crane` (a static binary, daemonless), and the container itself is ALWAYS
+# run by the HOST's docker (jumpbox-launch.sh: `require_cmd docker` + `docker run --network kind`). So a
+# "docker vs podman jump box" makes no difference to the sneakernet result, and the docker ENGINE inside
+# the box is already covered separately by `make jumpbox-matrix` (validation mode). The one engine that
+# genuinely changes what is tested is the INTERNET box's builder engine: `make builder-build` runs
+# `<CONTAINER_ENGINE> build` + `<CONTAINER_ENGINE> save` (podman default). Run this whole e2e under docker
+# with `make e2e-sneakernet CONTAINER_ENGINE=docker` (the honest deep check); the fast deterministic guard
+# for JUST that `save` -> `crane push` round-trip is `make test-builder-save-crane`.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

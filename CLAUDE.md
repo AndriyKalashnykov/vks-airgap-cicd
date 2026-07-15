@@ -437,8 +437,24 @@ confirms `clusters` IS grantable in an AppProject role, so `argocd.md` is right 
   (verified: scenario-1/2 set the real values first). **shell-adversary-reviewed twice** (design → SHIP-WITH-CHANGES; implementation → SHIP). **Deferred (LOW):** `scripts/creds.sh:27` independently hardcodes
   `${HARBOR_URL:-harbor.vks.local}` as a *display* fallback (a different concern from the placeholder
   check; not single-sourced) — fix opportunistically if creds.sh's fallback should track the same sentinel.
-- **B1b: the docker sneakernet e2e leg is untested** — `e2e-sneakernet` is podman-only; parameterize on
-  `SNEAKERNET_ENGINE` (or add `e2e-sneakernet-both`).
+- **✅ DONE (reframed) — B1b: the "docker sneakernet leg" premise was REFUTED, the real gap closed.**
+  docker-adversary (idea review) proved a `SNEAKERNET_ENGINE`-on-the-jumpbox leg would be **vacuous**: the
+  sneakernet AIR-GAP box is engine-AGNOSTIC — `bundle-load → mirror-push → builder-push → mirror-verify` is
+  all `crane` (static binary), and the container is always run by the HOST's docker (`jumpbox-launch.sh`);
+  the docker *engine* is already covered by `jumpbox-matrix` (validation mode). The genuine untested thing
+  is the INTERNET box's `<engine> save → crane push` builder round-trip — `22-builder-push.sh:8` asserts
+  "both podman-save and docker-save are crane-readable" but only the **podman** path was ever exercised.
+  Shipped: (1) `scripts/test-builder-save-crane.sh` + standalone `make test-builder-save-crane` (NOT in
+  `static-check` — needs docker + a network `registry:2`) proving `docker save`/`podman save → crane push →
+  crane validate` for real (skip-guarded, honestly framed: both engines bare-save to the SAME docker-archive
+  so it's a regression guard, not a format test); (2) `e2e-sneakernet` builder engine documented as the only
+  meaningful axis — `make e2e-sneakernet CONTAINER_ENGINE=docker` is the honest deep run; (3) doc notes
+  (e2e-sneakernet.sh header + `docs/sneakernet.md`) correcting the "docker air-gap" misconception. **Two
+  docker-adversary rounds** (idea REFUTED → revised design SHIP-WITH-CHANGES). The demonstrated-RED caught a
+  false-green in the test itself (a `ran==0` skip-guard that exited 0 while printing FAIL — fail-check now
+  wins). The **heavy full `make e2e-sneakernet CONTAINER_ENGINE=docker`** run (real builder + real Harbor)
+  was NOT executed this session (needs a KinD stack bring-up); the focused round-trip guard is the
+  proportionate proof of the actual gap.
 - **check-vks-provenance residuals (documented in the script header):** covers Confidence-TABLE rows only,
   not load-bearing PROSE claims (phase-2); `url=` tokens are shape-checked, not fetched in CI; the cited
   tables are now WIDE (rigor-vs-readability tradeoff); LOW shell items left (exactly-one-token, `]`-in-quote,
