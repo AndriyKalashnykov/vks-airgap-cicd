@@ -60,8 +60,8 @@ with_registry_lock() {
   if ! flock -n 9; then
     local holder; holder="$(cat "$lock" 2>/dev/null || true)"
     log_error "another registry-mutating operation is already running${holder:+ (${holder})}."
-    log_error "  Concurrent pushes CORRUPT the registry's blob store (MANIFEST_UNKNOWN/BLOB_UNKNOWN later,"
-    log_error "  recoverable only by rebuilding it). Wait for it to finish, then re-run."
+    log_error "  These share a cluster + registry, so running two at once makes any failure unattributable."
+    log_error "  Wait for it to finish, then re-run."
     log_error "  Lock: $lock   (stale after a hard kill? remove it: rm -f '$lock')"
     exit 1
   fi

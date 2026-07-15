@@ -169,6 +169,10 @@ state-migrate: ## Move a legacy .env.kind to the stamped overlay
 check-vks-terminology: ## Gate: Broadcom's product nouns (the vendor says "Supervisor Service"; phantom hybrids are banned)
 	@./scripts/check-vks-terminology.sh
 
+.PHONY: check-doc-novels
+check-doc-novels: ## Gate: no multi-line re-litigation blockquotes ("this page used to say X … that was FALSE") in operator/reference docs
+	@$(SCRIPTS)/check-doc-novels.sh
+
 .PHONY: check-how-provenance
 check-how-provenance: ## Gate: every `# how:` acquisition command must be runnable-by-us, a real make target, or provenance-tagged
 	@$(SCRIPTS)/check-how-provenance.sh
@@ -796,7 +800,7 @@ vendor-diagrams: ## Re-download the pinned C4-PlantUML stdlib into docs/diagrams
 	echo "vendor-diagrams: refreshed docs/diagrams/c4/ @ $(C4_PLANTUML_VERSION) — now run 'make diagrams' and verify the offline render"
 
 .PHONY: docs-lint
-docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets check-doc-target-coverage check-vks-terminology ## Lint markdown + the README-scenario, command-count, target-coverage and VKS-terminology gates
+docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets check-doc-target-coverage check-vks-terminology check-doc-novels ## Lint markdown + the README-scenario, command-count, target-coverage, VKS-terminology and doc-novels gates
 	@# NOTE: diagrams-check is deliberately NOT a prerequisite here. It `docker run`s the pinned
 	@# PlantUML image (a ~478 MB pull, cold) and re-renders every .puml — so making it unconditional
 	@# meant a README-only PR paid for a full JVM render of seven diagrams it never touched. `make ci`

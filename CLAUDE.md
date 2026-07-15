@@ -411,6 +411,13 @@ shell were added — `shell-adversary` is not yet committed to `main`; it rides 
   rc=0). So README's `# gate: fail now if anything required is still missing` (prereq block) slightly
   overstates. Fix (code, not a doc tweak): make `env-check` reject the `harbor.vks.local` sentinel and/or
   existence-check the kubeconfig; then tighten that comment.
+- **`docs/reviews/2026-07-14-vks-provenance.md:L112-119` contradicts `argocd.md`'s current correction
+  (surfaced by B9's adversary).** That entry still asserts the *refuted* reasoning (*"`clusters` is NOT
+  among [AppProject-grantable resources] … cluster registration cannot be delegated to a tenant"*), which
+  `argocd.md:45` now corrects (upstream `projects.md` Note 2 lists `clusters` as grantable). The admin-only
+  *conclusion* holds either way, so nothing operator-facing is wrong — but the review file will re-poison a
+  future session. Resolve by WebFetching upstream `projects.md`/`rbac.md` to adjudicate, then annotate the
+  review entry `SUPERSEDED` (append-to-history). Not done here: I did not assert a side blind.
 - **`check-vks-provenance` GATE** (owed from B5) — the correction landed; the enforcement gate
   (citation-token schema, RED-proven, atomic with a full row re-grade) is the follow-up.
 - **A real lab** — Supervisor topology, the `vcf` auth flow, tenant RBAC into `ns/argocd`, and the B2

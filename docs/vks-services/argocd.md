@@ -42,14 +42,13 @@ registration is skipped automatically.
 | To put a `clusters` policy in an AppProject role you must be able to **UPDATE the AppProject** — upstream: *"In order to create roles in a project and add policies to a role, a user will need permission to update a project"* ([argo-cd `projects.md`](https://github.com/argoproj/argo-cd/blob/master/docs/user-guide/projects.md)). `projects, update` is not something a tenant holds, so a tenant cannot grant itself `clusters, create`. | primary-sourced (upstream docs, 2026-07-14) |
 | Registration mints a **cluster-admin** ServiceAccount on the guest (Broadcom's own `argocd cluster add` warns: *"will create a service account `argocd-manager` … with full cluster level privileges"*), and Kubernetes **privilege-escalation prevention** only permits a caller who *already* holds those permissions: *"You can only create/update a role binding if you already have all the permissions contained in the referenced role"* ([k8s RBAC](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#privilege-escalation-prevention-and-bootstrapping)). | primary-sourced (k8s RBAC + vendor, 2026-07-14) |
 
-> **Corrected 2026-07-14.** This table used to give the first reason as *"ArgoCD's `clusters` is a **global**
-> RBAC resource — only `applications`/`applicationsets`/`logs`/`exec` are grantable through a tenant
-> AppProject role"*, graded *"research (adversarially verified)"*. **That is FALSE.** Upstream explicitly
-> lists `clusters` among the resources usable in an AppProject role policy (`projects.md`, Note 2). The
-> `applications`/`applicationsets`/`logs`/`exec` list in `rbac.md` is the **"Application-Specific Policy"**
-> set — the resources whose `<object>` is *rewritten* to `<app-project>/<app-name>` — and it says nothing
-> about `clusters` being global-only. The conclusion (registration is admin-only) survives; the **reason**
-> did not. Both replacement reasons are now cited to primary sources.
+> Corrected 2026-07-14 — the two reasons above are the current, primary-sourced fact. An earlier grading
+> gave the reason as *"`clusters` is a global-only RBAC resource, not grantable in an AppProject role"*;
+> that was wrong — upstream `projects.md` (Note 2) lists `clusters` among the resources an AppProject role
+> may grant, and the `applications`/`applicationsets`/`logs`/`exec` list in `rbac.md` is the
+> "Application-Specific Policy" (object-rewrite) set, not a global-only list. The admin-only conclusion
+> survives on the two reasons above.
+> <!-- arc-ok: 2026-07-14 -->
 
 A pure VKS tenant therefore **requests** registration from the platform team.
 
@@ -91,11 +90,12 @@ cert-based**, it stores that **expiring x509 client cert** instead of the durabl
 ([argo-cd#13175](https://github.com/argoproj/argo-cd/issues/13175), still open), and the registered cluster
 silently flips to `Unknown` later.
 
-> **Corrected 2026-07-14.** This used to add *"which is precisely the shape of a `vcf cluster kubeconfig get`
-> kubeconfig"*. **That is FALSE.** `vcf cluster kubeconfig get` produces a **token**-based kubeconfig
-> (community: [vrealize.it, 2026-01-30](https://vrealize.it/2026/01/30/vcf-automation-9-accessing-vks-clusters/) —
-> *"the authentication happens through the vcf cli command a valid token"*). The **cert**-based shape is the
-> one you get from the **UI download** / the `<cluster>-kubeconfig` admin Secret.
+> Corrected 2026-07-14 — `vcf cluster kubeconfig get` produces a **token**-based kubeconfig
+> (community: [vrealize.it, 2026-01-30](https://vrealize.it/2026/01/30/vcf-automation-9-accessing-vks-clusters/));
+> the **cert**-based shape is the UI download / the `<cluster>-kubeconfig` admin Secret. An earlier note
+> calling `vcf cluster kubeconfig get` cert-shaped was wrong — and the durable-token Secret we create
+> makes it moot either way.
+> <!-- arc-ok: 2026-07-14 -->
 
 Creating the `type: kubernetes.io/service-account-token` Secret explicitly means the credential is durable
 **whichever kubeconfig shape the operator supplies** — which is the reason that actually survives.
