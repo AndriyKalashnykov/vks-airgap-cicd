@@ -22,15 +22,18 @@ whatever `make creds-show` printed.
 
 ## The loop
 
-1. **See the current greeting.** Open the **app** URL. It shows a greeting —
-   `Hello from vks-airgap-cicd` by default — with the app version and git commit. This is what will
-   change.
+1. **See the current greeting.** Open the **app** URL. It shows a greeting with the app version and git
+   commit — this is what will change. (If you arrived straight from `make e2e-kind`, its own `make verify`
+   step already deployed a marker like `vks-airgap-cicd-verify-<epoch>`, so you'll see **that**, not the
+   `Hello from vks-airgap-cicd` default. Either is fine — you're about to change it.)
 
-2. **Edit it in Gitea.** Open **`demo/javawebapp-app`** → `src/main/resources/application.yml`, click
-   the **pencil**, and change the greeting on line 18:
+2. **Sign in to Gitea first** (username `gitea_admin` + the password `make creds-show` printed — editing
+   requires auth), then **edit it in Gitea.** Open **`demo/javawebapp-app`** →
+   `src/main/resources/application.yml`, click the **pencil**, and change the greeting on line 18 (edit
+   whatever text is currently after `${APP_MESSAGE:` — it may already be a verify marker):
 
    ```yaml
-   # from:
+   # e.g. from:
      message: ${APP_MESSAGE:Hello from vks-airgap-cicd}
    # to (any text):
      message: ${APP_MESSAGE:Hello from the air-gapped pipeline}

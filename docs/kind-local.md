@@ -17,11 +17,13 @@ make e2e-kind    # cluster → Harbor → ArgoCD → mirror → build → deploy
 make creds-show  # every URL + login for what you just installed
 ```
 
-**Expect:** it exits **0**, and the last lines read
+**Expect:** it exits **0**. Among the lines you'll see (the count is dynamic; the real lines are prefixed
+`level=INFO msg=…`, so this is the gist, not byte-for-byte):
 
 ```text
-✓ mirror-verify: 36 images intact in Harbor
+✓ mirror-verify: N images intact in Harbor          (mid-run, during install-all)
 SUCCESS — all UIs reachable through the istio ingress at <LB-IP> (*.vks.local)
+PSA OK — our namespaces are labelled at a level the cluster admits              (the final line)
 ```
 
 Then: **[open the UIs](access-uis.md)** · **[walk a code change from Gitea to the live page](demo-walkthrough.md)**
@@ -65,7 +67,8 @@ whole thing. (`make help` lists them all.)
   consumer **without sudo**. Mechanism: [KinD TLS fidelity](decisions/kind-tls-fidelity.md).
 - **Harbor and ArgoCD each keep their own LB**, not the shared ingress — Harbor's IP is load-bearing for
   the containerd pull path, and the real VKS does not front ArgoCD behind the ingress either.
-- **`make vks-login` is a no-op here** (`VKS_AUTH_METHOD=kubeconfig`) — there is no VCF to authenticate to.
+- **`make vks-login` is effectively a no-op here** (`VKS_AUTH_METHOD=kubeconfig`) — it only checks that
+  `$KUBECONFIG` points at the KinD kubeconfig `kind-up` wrote; there is no VCF to authenticate to.
 
 ---
 
