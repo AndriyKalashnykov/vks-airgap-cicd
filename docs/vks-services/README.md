@@ -44,15 +44,16 @@ Everything the repo *does* install (Gitea, Tekton, the app) is ours in both worl
 | **lab-verified** | observed on a real VCF/VKS 9.1 lab |
 | **KinD-verified** | proven empirically here, on the local stand-in — generic-Kubernetes/Istio mechanics that hold regardless of who installed the thing |
 | **9.1-doc** | stated by a Broadcom page that genuinely served 9.1 content |
-| **9.0-doc (inferred for 9.1)** | from Broadcom docs — but the **9.1 URLs 301-redirect to the 9.0 tree** (verified live, 2026-07-12), so it is 9.0 content read as 9.1 |
+| **9.0-doc (inferred for 9.1)** | the fact's Broadcom page resolves **only** to the `/9-0/` tree — its `/9-1/` path 404s, or it is reachable only via `/latest/` (which 301s into `/9-0/`). 9.0 content; re-check on a lab. |
 | **community** | a blog/field source, dated |
 | **UNVERIFIED** | plausible, no source. Never act on it without checking. |
 
-> **The redirect matters.** Broadcom's 9.1 documentation URLs return `301 Moved Permanently` to the
-> 9.0 tree. Anything below tagged *9.0-doc (inferred for 9.1)* is therefore an **inference about
-> 9.1** — most likely correct, but version strings especially should be re-checked on a real lab.
-> A prior session's claim here was first asserted, then wrongly retracted as "unverified", then
-> confirmed against primary sources. Grade the row; don't trust the memory.
+> **How Broadcom's URLs resolve** (measured 2026-07-14, `curl -w`). Explicit `/9-1/` URLs return
+> **200** (genuine 9.1, zero redirects) or **404** (page 9.1-absent or renamed — *Standard Packages*
+> → *VKS Add-ons*). Only **`/latest/` 301s → the `/9-0/` tree**; search engines surface `/latest/`
+> URLs, which is the trap. So the VKS **9.1 release notes are 9.1-primary** at real `/9-1/` URLs;
+> some **package-reference / `vcf`-CLI** pages resolve only to `/9-0/`. Grade each row by the URL it
+> actually resolves to. *(Evidence table: `docs/reviews/2026-07-14-vks-provenance.md`.)*
 
 ## Updating these pages
 

@@ -342,8 +342,10 @@ Run a single app test: `cd apps/java/javawebapp && ./mvnw -B -Dtest=<ClassName>#
 `docs/vks-services/` is the tracked, updatable record of what VMware/Broadcom actually ships and how
 we consume it: [`harbor.md`](docs/vks-services/harbor.md), [`argocd.md`](docs/vks-services/argocd.md),
 [`istio.md`](docs/vks-services/istio.md). Each fact carries a **provenance grade** (lab-verified /
-KinD-verified / 9.0-doc-inferred-for-9.1 / community / UNVERIFIED) — the Broadcom 9.1 doc URLs
-301-redirect to the 9.0 tree, so most vendor facts are *inferences about 9.1*. **When a lab run
+KinD-verified / 9.1-doc / 9.0-doc-inferred-for-9.1 / community / UNVERIFIED) — explicit Broadcom
+`/9-1/` URLs serve genuine 9.1 content (200) or 404; only `/latest/` 301s into the `/9-0/` tree (the
+"9.1 URLs redirect to 9.0" belief was measured FALSE 2026-07-14), so the 9.1 **release notes** are
+9.1-primary while some **package-reference/`vcf`-CLI** pages resolve only to `/9-0/`. **When a lab run
 confirms or refutes something, update the grade in place** (and correct the fact, with a note) rather
 than re-deriving it next session. The load-bearing split: Harbor + ArgoCD are **Supervisor Services**
 (they run beside your workload cluster → discover + request + register); Istio is a **guest-cluster

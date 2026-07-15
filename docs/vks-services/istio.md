@@ -106,12 +106,19 @@ else falls back to classic.
 > was. The air-gap branch was also **dead code** (`MANIFEST_DIR` was never set on this path, so it
 > always reached for github.com); it now reads the bundle.
 >
-> **Still UNVERIFIED, and it is the highest-value unknown in this design:** whether a real VKS guest
-> cluster ships the Gateway API CRDs at all. One lab command settles it —
-> `kubectl get crd httproutes.gateway.networking.k8s.io -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}'`.
+> **CONFIRMED 9.1-doc (2026-07-14): a VKS 9.1 guest cluster SHIPS the Gateway API CRDs by default.**
+> They come from the VKr (the cluster image), not from Istio; from VKS 3.7.0 / VKr 1.36 they are a
+> VKS-**managed** add-on, ON by default, with an explicit **opt-OUT** label on the Cluster resource —
+> `addon.addons.kubernetes.vmware.com/gateway-api: unmanaged` (VKS 3.7 Add-ons RN, `/9-1/`, 200).
 >
-> **Grade: the MECHANISM is KinD-verified; "the CRDs are present on a VKS guest cluster" is
-> UNVERIFIED** and only a lab can settle it (`kubectl get crd httproutes.gateway.networking.k8s.io`).
+> **So the risk INVERTS — the remaining unknown is the VERSION, not the presence** (handoff **B2**):
+> the CRDs are present and VKS-managed at the VKr's chosen version, while `istio_ensure_gwapi_crds`
+> server-side-applies OUR pinned `GATEWAY_API_VERSION` — so on a real lab we may be up/down-grading a
+> CRD the VKS add-on manager owns. The VKr→gateway-api version map is **not published** in any Broadcom
+> doc; only the cluster answers it —
+> `kubectl get crd gateways.gateway.networking.k8s.io -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}'`
+> plus the `addon.addons.kubernetes.vmware.com/gateway-api` label. **Grade: MECHANISM KinD-verified;
+> "CRDs present by default" 9.1-doc; the exact version + whether to defer to it is lab-only (B2).**
 
 ### 5. RBAC — this *is* the access model
 
@@ -158,7 +165,8 @@ Measured minimums (KinD-verified, via a server-side dry-run label — `make psa-
 
 ## Open / unverified
 
-- Exact VKS 9.1 Istio package **version strings** (the 9.1 docs redirect to 9.0).
+- Exact VKS 9.1 Istio package **version strings** (the Istio *Package Reference* page resolves only to
+  the `/9-0/` tree — its `/9-1/` path 404s — so the version strings are 9.0-sourced).
 - Does the **VMware-built** Istio set `seccompProfile` on istiod / the provisioned proxy? If it
   does, the ingress namespace could tighten to `restricted`. `make psa-check` measures it on the
   actual cluster.
@@ -167,7 +175,9 @@ Measured minimums (KinD-verified, via a server-side dry-run label — `make psa-
 
 ## Sources
 
-- Broadcom TechDocs — *Istio Package Reference*, *Install Istio* (9.1 URLs → 9.0 tree)
+- Broadcom TechDocs — *Istio Package Reference*, *Install Istio* (these pages resolve only to the
+  `/9-0/` tree today; the VKS **Add-ons** release notes are genuine 9.1 at `/9-1/`, and confirm Istio
+  is a guest-cluster package and that *Standard Packages* was renamed to *VKS Add-ons* in 3.7.0)
 - Broadcom TechDocs — *Configure PSA for VKr 1.25 and Later*
 - VMware VCF blog — *Istio on vSphere Kubernetes Service (VKS): A Walkthrough* (2025-03, VKS 3.5)
 - This repo: `docs/decisions/istio-on-vks.md` (the decision + the full verification matrix)

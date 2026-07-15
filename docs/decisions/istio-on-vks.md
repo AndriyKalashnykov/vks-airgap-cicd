@@ -167,10 +167,12 @@ otherwise rots into folklore.
 | Air-gap / private registry | `meshConfig.imagePullSecrets` — "the secrets to access the private registry must be provided in the air-gapped environment" | package reference |
 | **Route API Broadcom demonstrates** | the **Kubernetes Gateway API** — `gatewayClassName: istio`, which auto-provisions a gateway whose Service is `<gateway-name>-istio`, type LoadBalancer, **in the app's own namespace** | VMware VCF blog walkthrough |
 
-**Provenance caveat (verified live, 2026-07-12):** the 9.1 techdoc URLs **301-redirect to the 9.0
-tree** — confirmed by an actual `301 Moved Permanently` on fetch. The blog walkthrough targets VKS
-3.5 (March 2025). So all of the above is **documented for 9.0 / VKS 3.5 and inferred for 9.1**;
-re-verify against a real 9.1 lab before treating any version string as exact.
+**Provenance (measured 2026-07-14, `curl -w`):** the Istio **Package Reference** and **Install Istio**
+pages resolve only to the `/9-0/` tree (their `/9-1/` paths 404), so the **version strings** above are
+9.0-sourced. The VKS **Add-ons** release notes are genuine 9.1 (`/9-1/`, 200) and confirm Istio is a
+guest-cluster package. The blog walkthrough targets VKS 3.5 (March 2025). So the *packaging/route-API*
+facts are 9.1-confirmed; the exact *version strings* are 9.0-sourced — re-verify those on a real 9.1
+lab. (Evidence: `docs/reviews/2026-07-14-vks-provenance.md`.)
 
 ### What this means for us (two consequences, one of them a real gap)
 
