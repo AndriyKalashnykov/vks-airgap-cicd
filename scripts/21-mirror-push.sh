@@ -53,8 +53,12 @@ printf '%s' "$HARBOR_PASSWORD" | run crane auth login "$HARBOR_URL" \
 
 # Guard the public/private toggle up front (malformed value → invalid Harbor JSON otherwise).
 case "${HARBOR_PUBLIC_PROJECTS:-true}" in true|false) ;; *) die "HARBOR_PUBLIC_PROJECTS must be 'true' or 'false' (got '${HARBOR_PUBLIC_PROJECTS}')" ;; esac
-ensure_project "$HARBOR_INFRA_PROJECT"
-ensure_project "$HARBOR_APP_PROJECT"
+# A project-scoped robot may be unable to HEAD Harbor's system /projects endpoint, so ensure_project
+# falls through to a create POST that 403s even when the project EXISTS. Don't let that kill the push
+# under `set -e` — the push proceeds and fails loudly at crane-push if the project is TRULY absent.
+# (The `*) die` branch in ensure_project still exits on genuinely unexpected HTTP codes.)
+ensure_project "$HARBOR_INFRA_PROJECT" || log_warn "ensure_project('$HARBOR_INFRA_PROJECT') non-zero — a 403 on an EXISTING project is the known project-scoped-robot gap; continuing"
+ensure_project "$HARBOR_APP_PROJECT"   || log_warn "ensure_project('$HARBOR_APP_PROJECT') non-zero — a 403 on an EXISTING project is the known project-scoped-robot gap; continuing"
 
 # ---- Push each cached image ----
 mapfile -t IMAGES < <(mirror_collect_images)

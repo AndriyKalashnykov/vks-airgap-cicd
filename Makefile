@@ -647,7 +647,7 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-vks-sso-user test-argocd-preflight-ns test-subagent-readonly-gate test-adversary-gate-rearm test-no-gate-in-commit-chain ## Run all offline script-logic unit tests
+test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-subagent-readonly-gate test-adversary-gate-rearm test-no-gate-in-commit-chain ## Run all offline script-logic unit tests
 
 .PHONY: test-subagent-readonly-gate
 test-subagent-readonly-gate: ## Offline: subagents are MECHANICALLY read-only (git/gh mutations blocked); the main agent is untouched
@@ -676,6 +676,10 @@ test-state-overlay: ## Offline: the stamped state overlay (unstamped=source, mis
 .PHONY: test-env-check
 test-env-check: ## Offline: env-check is a PRESENCE gate — it must FAIL on the HARBOR_URL sentinel + an absent kubeconfig
 	@./scripts/test-env-check.sh
+
+.PHONY: test-env-validate
+test-env-validate: ## Offline: env-validate FAILS on an untrusted-TLS Harbor (no silent -k); env-populate won't clobber a granted URL
+	@./scripts/test-env-validate.sh
 
 .PHONY: test-vks-sso-user
 test-vks-sso-user: ## Offline: vks_sso_user() is idempotent on '@' (no double SSO domain) and dies on a bare user with no VKS_SSO_DOMAIN (C10)
