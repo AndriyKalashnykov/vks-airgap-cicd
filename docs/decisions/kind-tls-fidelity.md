@@ -75,8 +75,8 @@ builder push, `verify`, `creds`) keys off the same flags so the two modes never 
   [vSphere Supervisor 9.1 release notes](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/release-notes/vmware-vsphere-supervisor-release-notes.html),
   [Argo CD upstream TLS docs](https://argo-cd.readthedocs.io/en/stable/operator-manual/tls/).
 
-**Honesty note:** the 9.1-exact cert internals are not published field-by-field (9.1 docs
-are redirect-gated; field detail is the 8.0 package reference + 9.0 pages, behaviorally
+**Honesty note:** the 9.1-exact cert internals are not published field-by-field (the cert pages
+resolve only to the `/9-0/` tree; field detail is the 8.0 package reference + 9.0 pages, behaviorally
 identical for Harbor/ArgoCD). Both models rest on the cert-manager-self-signed default +
 upstream defaults. A given lab *may* have been handed a custom/CA-signed instance — the
 design below trusts a **CA we control**, which covers both (a self-signed leaf under our CA
@@ -217,8 +217,8 @@ holds (installed via `make install-vcf-clis`).
 > **CORRECTION (2026-07-11) — read this before trusting the version claims below.**
 > This section originally argued: "the 9.0 docs imply a 2.14.x ArgoCD, but the real 9.1 `argocd`
 > CLI is 3.x, so our KinD ArgoCD is the *right generation*." **That inference was wrong.** A
-> client/server tool's **CLI version is not its SERVER version**: the Broadcom install doc pins the
-> ArgoCD **server** via the operator CR at **`2.14.15+vmware.1-vks.1`** (a **2.x** line), while the
+> client/server tool's **CLI version is not its SERVER version**: the ArgoCD **server** is a **2.14.x**
+> line (the 9.1 Supervisor RN cites **v2.14.13**; `2.14.15` was only the 9.0 doc's example), while the
 > shipped **CLI** is `v3.0.19-vcf` (**3.x**). Both facts are true; they describe *different things*.
 > Our KinD stand-in runs a **3.x server**, so a real server-generation delta DOES exist — it is a
 > known fidelity gap, not a match. `make argocd-preflight` reports all three (CLI, running server
@@ -237,7 +237,7 @@ Harbor ≈ **2.14.3** (`_vmware` build); ArgoCD provisioned by the Broadcom Argo
 - **ArgoCD exposure/auth**: own LoadBalancer reached by IP, self-signed TLS on 443,
   `argocd login <ip> --insecure` (IP-SAN warning), admin from `argocd-initial-admin-secret` —
   all match VKS 9.1. **NOT the server generation**: KinD runs ArgoCD **3.x** while the lab's
-  operator CR pins the server at **2.14.15** (2.x) — see the CORRECTION above.
+  operator CR pins a **2.14.x** server (the 9.1 RN cites v2.14.13) — see the CORRECTION above.
 - **The GitOps loop shape**: push → Tekton → Harbor → tag write-back → ArgoCD sync → app roll.
 
 **What a green KinD run does NOT prove (residual lab risk — verify on the real lab):**

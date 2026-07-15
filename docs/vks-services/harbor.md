@@ -12,7 +12,7 @@ Istio's `pilot`/`proxyv2`, and the app itself — must be mirrored into it first
 
 | Fact | Value | Confidence |
 |---|---|---|
-| Packaging | **Supervisor Service**, installed on the **Supervisor** into its own vSphere Namespace | 9.0-doc (inferred for 9.1) |
+| Packaging | **Supervisor Service**, installed on the **Supervisor** into its own vSphere Namespace | 9.1-doc |
 | Exposure | LoadBalancer, **self-signed TLS** by default (an internal CA) | 9.0-doc + community |
 | Ingress prereq | **Contour** is the paired ingress for the Harbor Supervisor Service (`enableContourHttpProxy: true`) — *not* Istio | 9.0-doc |
 | `secretKey` | must be **exactly 16 chars** | community (Broadcom + William Lam) |
@@ -140,7 +140,8 @@ the deterministic backstop; a Renovate customManager bumps the consumers in lock
 
 ## Sources
 
-- Broadcom TechDocs — Harbor Supervisor Service install / *Integrate VKS with a Private Registry*
-  (9.1 URLs → 9.0 tree)
+- Broadcom TechDocs — *Install Harbor as a Supervisor Service* (`/9-1/` URL, HTTP 200, Product
+  Version 9.1 → 9.1-primary for the packaging) / *Integrate VKS with a Private Registry* (config
+  specifics resolve only to `/9-0/`)
 - williamlam.com (2025-08) — VKS private-registry quick-tip
 - ogelbric/LAB — `Create_Harbor` (a working jump-box transcript)

@@ -38,8 +38,8 @@ Deployment_Node(guest, "Guest / workload VKS cluster (VKS_CLUSTER_NAME)", "Tanzu
   ' On a real lab Istio is a VKS STANDARD PACKAGE installed into the GUEST cluster
   ' (istio.kubernetes.vmware.com, vcf package install / vcf addon install) — so the mesh is
   ' NOT ours and INGRESS_CONTROLLER=istio-existing is the correct mode there. This repo's
-  ' KinD stand-in helm-installs upstream Istio instead. Broadcom docs are 9.0-via-redirect;
-  ' see docs/decisions/istio-on-vks.md.
+  ' KinD stand-in helm-installs upstream Istio instead. Broadcom package refs resolve to the /9-0/
+  ' tree; the 9.1 add-on release notes are genuine 9.1. See docs/decisions/istio-on-vks.md.
   Deployment_Node(ns_ing, "namespace: istio-system + istio-ingress | traefik", "") {
     Container(ing, "Ingress gateway", "real lab: Istio = a VKS Standard Package (theirs) -> INGRESS_CONTROLLER=istio-existing (attach only)\nlocal/KinD: we helm-install it (INGRESS_CONTROLLER=istio) | traefik")
   }

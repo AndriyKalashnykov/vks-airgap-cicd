@@ -15,10 +15,10 @@
 
 | Fact | Value | Confidence |
 |---|---|---|
-| Packaging | **Supervisor Service** (operator + an ArgoCD instance CR), on the **Supervisor** | 9.0-doc (inferred for 9.1) |
+| Packaging | **Supervisor Service** (operator + an ArgoCD instance CR), on the **Supervisor** | 9.1-doc |
 | Namespace | a vSphere Namespace, e.g. `argocd-instance-1` | 9.0-doc |
 | Service | `argocd-server` (LoadBalancer, self-signed TLS) | 9.0-doc |
-| **Server version** | pinned by the operator's CR at **`2.14.15+vmware.1-vks.1`** (a **2.x** line) | 9.0-doc — re-check on a lab |
+| **Server version** | a `2.14.x+vmware.1-vks.N` line — the 9.1 Supervisor RN cites Argo CD **v2.14.13** (Argo CD Service 1.0.0). `2.14.15` was only the 9.0 doc's *example*, never lab-observed; read the real pin from the CR (`argocd.spec.version`) | 9.1-RN (v2.14.13); exact pin lab-only |
 | **CLI version** | the lab's `argocd` binary reported **`v3.0.19+d67e6eb90-vcf`** (a **3.x** line) | lab-verified |
 
 > **CLI ≠ server.** Those last two rows are *different facts* and were confounded once already. A
@@ -147,15 +147,13 @@ ARGOCD_DEST_CLUSTER_NAME=vks-guest              # name the destination appears u
 >
 > - **VERIFIED 2026-07-13** (`curl -L`): the **explicit `/9-1/` URLs return HTTP 200 with NO redirect**
 >   — the final URL is still `/9-1/`. So a `/9-1/` page **may be cited as 9.1**.
-> - **NOT reproduced**: a prior session reported that the *older* doc-set path
->   (`vsphere-supervisor-services-and-standalone-components/…`) 301-redirects to the 9.0 tree. Probing
->   a guessed URL on that path returned **404**, not a redirect, so this half is **UNVERIFIED** — do
->   not repeat it as fact. To settle it, `curl -sSL -o /dev/null -w '%{url_effective}'` a *real* URL
->   from that doc set and see where it lands.
+> - **CONFIRMED 2026-07-14** (`curl -w`): only the **`/latest/`** alias 301s → the `/9-0/` tree; a
+>   `/9-1/` page either serves 200 (genuine 9.1) or 404 (absent/renamed). The Argo CD service page's
+>   `/9-1/` path 404s, so its content is 9.0-sourced (via `/latest/`→`/9-0/`).
 >
-> Either way, the **version-specific pins** (the `2.14.15` server example) are **not stated by the doc
-> at all** — the server version is pinned by the **operator's CR**. Only the cluster can answer it:
-> `make argocd-preflight`.
+> The server version: the 9.1 Supervisor RN cites Argo CD **v2.14.13** (Service 1.0.0); `2.14.15` was
+> only the 9.0 doc's *example*. The exact per-release CR pin (`argocd.spec.version`) is answered by the
+> cluster: `make argocd-preflight`.
 >
 > *(An earlier version of this page said "nothing creates this file and the command is unknown". That
 > was true of the repo but false of the world: the flow is documented, and was found by actually
@@ -200,6 +198,8 @@ kubectl --kubeconfig $ARGOCD_KUBECONFIG -n $ARGOCD_NAMESPACE \
 
 ## Sources
 
-- Broadcom TechDocs — *Install the Argo CD Operator / Instance* (9.1 URLs → 9.0 tree)
+- Broadcom TechDocs — *Install the Argo CD Operator / Instance* (the `/9-1/` Argo CD page 404s; content
+  lives in `/9-0/`, reachable via `/latest/` which 301s to `/9-0/` — so 9.0-sourced). Supervisor RN 9.1
+  (`/9-1/`, 200) confirms Argo CD Service 1.0.0 → server v2.14.13
 - `argoproj/argo-cd#13175` — `cluster add` stores an expiring cert with x509 kubeconfigs
 - This repo: `scripts/71-argocd-register-guest.sh`, `make e2e-kind-cross-cluster`
