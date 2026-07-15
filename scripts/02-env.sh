@@ -81,8 +81,14 @@ env_populate() {
     local hip aip
     hip="$(kubectl -n "${HARBOR_NAMESPACE:-harbor}" get svc -o jsonpath='{range .items[?(@.spec.type=="LoadBalancer")]}{.status.loadBalancer.ingress[0].ip}{"\n"}{end}' 2>/dev/null | grep -m1 -E '^[0-9]' || true)"
     aip="$(kubectl -n "${ARGOCD_NAMESPACE:-argocd}" get svc argocd-server -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
-    if [ -n "$hip" ]; then env_set HARBOR_URL "$hip"; echo "  + HARBOR_URL  = $hip  (discovered)"; else echo "  - HARBOR_URL  not discovered (Harbor LB not up yet)"; fi
-    if [ -n "$aip" ]; then env_set ARGOCD_SERVER "$aip"; echo "  + ARGOCD_SERVER = $aip  (discovered)"; else echo "  - ARGOCD_SERVER not discovered (ArgoCD LB not up yet)"; fi
+    # Only WRITE a discovered value over a PLACEHOLDER — never clobber a tenant's GRANTED HARBOR_URL /
+    # ARGOCD_SERVER with a guest LB IP that happens to match the query (e.g. a guest svc named 'harbor').
+    if   [ -n "$hip" ] && harbor_url_is_placeholder "${HARBOR_URL:-}"; then env_set HARBOR_URL "$hip"; echo "  + HARBOR_URL  = $hip  (discovered)";
+    elif [ -n "$hip" ]; then echo "  = HARBOR_URL  already set (${HARBOR_URL}) — not overwriting with discovered $hip";
+    else echo "  - HARBOR_URL  not discovered (Harbor LB not up yet)"; fi
+    if   [ -n "$aip" ] && is_placeholder "${ARGOCD_SERVER:-}"; then env_set ARGOCD_SERVER "$aip"; echo "  + ARGOCD_SERVER = $aip  (discovered)";
+    elif [ -n "$aip" ]; then echo "  = ARGOCD_SERVER already set (${ARGOCD_SERVER}) — not overwriting with discovered $aip";
+    else echo "  - ARGOCD_SERVER not discovered (ArgoCD LB not up yet)"; fi
   else
     echo "  (no reachable cluster — skipping. The KinD flow auto-writes these to .env.kind;"
     echo "   on a real lab discover them after install:)"
@@ -184,9 +190,13 @@ env_validate() {
   else
       local scheme=https; [ "${HARBOR_INSECURE:-0}" = 1 ] && scheme=http
       local cafg=(); [ "$scheme" = https ] && [ -n "${HARBOR_CA_FILE:-}" ] && [ -f "${HARBOR_CA_FILE}" ] && cafg=(--cacert "${HARBOR_CA_FILE}")
-      [ "$scheme" = https ] && [ "${HARBOR_INSECURE:-0}" != 1 ] && [ "${#cafg[@]}" -eq 0 ] && cafg=(-k)
-      local code
-      code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time "${CURL_MAX_TIME_SECONDS:-10}" "${cafg[@]}" "$scheme://$HARBOR_URL/api/v2.0/systeminfo" 2>/dev/null || echo 000)"
+      # NO -k fallback: over https with no CA file, use curl's DEFAULT system trust (correct for a
+      # publicly-trusted Harbor). A self-signed Harbor with no HARBOR_CA_FILE then FAILS honestly on
+      # TLS (curl exit 60) instead of a silent skip-verify that proved nothing about the trust anchor.
+      # `local` MUST be on its own line: `local x=$(...)` makes the exit status local's (always 0),
+      # masking curl's real exit — the classic local-masks-substitution trap.
+      local code rc=0
+      code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time "${CURL_MAX_TIME_SECONDS:-10}" "${cafg[@]}" "$scheme://$HARBOR_URL/api/v2.0/systeminfo" 2>/dev/null)" || rc=$?
       if [ "$code" = 200 ]; then
         log_info "Harbor reachable ($scheme://$HARBOR_URL)"
         # auth probe: password goes into a 0600 curl config file, NOT argv
@@ -202,8 +212,10 @@ env_validate() {
             *)       log_warn "Harbor auth probe inconclusive (HTTP $acode) — verify at mirror time" ;;
           esac
         fi
+      elif [ "$scheme" = https ] && { [ "$rc" = 60 ] || [ "$rc" = 35 ] || [ "$rc" = 51 ] || [ "$rc" = 83 ]; }; then
+        log_error "Harbor TLS not trusted at $scheme://$HARBOR_URL (curl exit $rc) — set HARBOR_CA_FILE for a self-signed Harbor, or the cert is not publicly trusted"; errs=$((errs+1))
       else
-        log_error "Harbor unreachable at $scheme://$HARBOR_URL/api/v2.0/systeminfo (HTTP $code)"; errs=$((errs+1))
+        log_error "Harbor unreachable at $scheme://$HARBOR_URL/api/v2.0/systeminfo (HTTP $code, curl exit $rc)"; errs=$((errs+1))
       fi
   fi
 

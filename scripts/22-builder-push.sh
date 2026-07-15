@@ -65,7 +65,10 @@ CRANE_INSECURE=()
 
 printf '%s' "$HARBOR_PASSWORD" | run crane auth login "$HARBOR_URL" \
   --username "$HARBOR_USERNAME" --password-stdin "${CRANE_INSECURE[@]}"
-ensure_project "$HARBOR_INFRA_PROJECT"
+# A project-scoped robot may be unable to HEAD Harbor's system /projects endpoint → ensure_project 403s
+# even when the project EXISTS. Don't let that kill the push under `set -e`; it fails loudly at
+# builder-push if the project is truly absent.
+ensure_project "$HARBOR_INFRA_PROJECT" || log_warn "ensure_project('$HARBOR_INFRA_PROJECT') non-zero — a 403 on an EXISTING project is the known project-scoped-robot gap; continuing"
 
 pushed=0
 for app in $(app_names); do

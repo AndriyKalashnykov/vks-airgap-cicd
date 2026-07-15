@@ -62,7 +62,7 @@ else
   log_warn "  NOTHING TO BIND TO."
   log_warn "  If you OWN this cluster:  make install-ingress   (it installs the CRDs for you)"
   log_warn "  If you are a TENANT:      ASK THE MESH ADMIN to install the Gateway API CRDs"
-  log_warn "                            (cluster-scoped — a tenant cannot), or to enable the gateway."
+  log_warn "                            (cluster-scoped — you need cluster-admin on the cluster the mesh runs in), or to enable the gateway."
 fi
 
 istio_detect_route_api
