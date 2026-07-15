@@ -371,7 +371,63 @@ The two BLOCKING triggers (before you implement · before you call the session d
 (`Workflow` with a schema, or a synchronous `Agent` — never fire-and-forget), and what to do with the
 findings are all in Rule Zero. Do not duplicate them here.
 
-## ▶️ HANDOFF 2026-07-15 (re-arm gate · B5 provenance · CI cache · adversary roster) — START HERE
+## ▶️ HANDOFF 2026-07-15 (backlog cleanup: B4/B9/B10/B12 + check-vks-provenance gate + the doc walkthrough) — START HERE
+
+**All shipped to `main`; `main` is green.** Four PRs this session, each **adversary-reviewed BEFORE
+implementing** (the pattern held throughout; several caught real bugs that would otherwise have shipped):
+
+| PR | What |
+|---|---|
+| **#248** | **B4/B12 + B10.** Trimmed the README Choose-your-path Run cells to the bare-jump-box prefix (empirically only `harbor-robot` errors at prereq time, rc=2; `psa-check`/`env-check` are premature/vacuous, rc=0); fixed sneakernet Step 4 (istio is the air-gap-clean default via carried charts), the Step 3 `~/.local/bin`-on-PATH note, the `REF=` pipe placement; rewrote `access-uis.md` to reference `make creds-show` (deleted the drifted static table that hardcoded ArgoCD `admin`, wrong for a tenant). **Empirical correction bounced back to the adversary:** `env-check` PASSES on a bare box (`load_env` defaults `KUBECONFIG`; `is_placeholder` is presence-only) — both my and the adversary's code-reads were wrong; the run settled it, it conceded, and the prereq-block edit was dropped. |
+| **#249** | **B9** — `check-doc-novels.sh` (docs-lint) + collapsed the 4 vks-services re-litigation blockquotes to concise dated `arc-ok`-tagged pointers. Caught: **mawk ignores gawk `IGNORECASE`** → the gate shipped detecting NOTHING until switched to `tolower()`; a **vacuous-green** (git-ls-files empty → scanned 0 → green, now `die`s); a **poison pointer** (a collapse cannot point at a review file that still asserts the refuted claim → kept the refutation inline). |
+| **#250** | **B5 / `check-vks-provenance.sh`** (static-check) — the owed gate + `[src:]` citation tokens on all **35** Confidence-table fact rows. 3-agent WebFetch citation pass + spot-checks. Caught a **HIGH false-pass** (a "confidence" DATA cell re-read as a header, swallowing rows → now anchors on the separator row) + **grade inflation** (harbor rows cited **8.0** URLs while grading `9.1-doc` → honest re-grade to `8.0-doc (inferred for 9.1)`; the one row whose /9-1/ page IS live kept `9.1-doc`). No fabricated citations; 1 honest `NOT-ESTABLISHED` (+ a softened "before-ordering" fact). |
+| **#251** | **Doc walkthrough** (kind-local + Scenario 1, user perspective). **HIGH fix:** Scenario-1 Step 4 never set `ARGOCD_KUBECONFIG` → every ArgoCD script defaulted it to the GUEST → `make gitops` would deploy to the Supervisor (wrong cluster). Adversary caught my fix was incomplete (also needs `VKS_INSECURE_SKIP_TLS_VERIFY`; the block must precede the commands) + a landmine (raw-shell `$VAR` needs a `set -a; . ./.env` line — `.env` is not sourced in the operator's shell). Plus A1's PSA-rejected probe, `VKS_CONTEXT_NAME` recording, the TOPOLOGY-OK drift in `.env.example`, and KinD Expect/marker-greeting/Gitea-login. |
+
+**B11** — evaluated → **keep-as-is** (the sneakernet diagram is complementary to the table; click-to-enlarge mitigates the 960px scale).
+
+**Two new gates are now LIVE + RED-proven:** `check-doc-novels` (docs-lint), `check-vks-provenance`
+(static-check). **Argocd-vs-provenance contradiction RESOLVED** — the WebFetched upstream `projects.md`
+confirms `clusters` IS grantable in an AppProject role, so `argocd.md` is right and
+`docs/reviews/2026-07-14-vks-provenance.md:L112-119` is annotated `SUPERSEDED`.
+
+**Open backlog (none need a lab except where noted):**
+
+- **`istio.md`'s "prefer the Gateway API" comparison table (~L78-83) — a LIVE CRITICAL, real-lab
+  correctness. Highest-value remaining fix.** It grades gateway-api "Air-gap: **free** — pulls proxyv2 from
+  Harbor with no extra config" and "Needs anything from the mesh admin? **No**". That grade came from OUR
+  helm Istio (where WE set `global.hub=<harbor>`). On the VKS **Standard-Package** mesh (`istio-existing`
+  targets it) proxyv2 comes from Broadcom's registry, not your Harbor → "air-gap free" is contradicted for
+  the exact mesh the table is about. Flagged by the provenance review + `2026-07-14-vks-provenance.md:L25-27`.
+  vks-adversary-review the fix.
+- **`docs/reviews/2026-07-14-doc-truth-audit.md` (555 lines, ~45 survived findings) was NOT exhaustively
+  applied** — only the handoff-named B4 subset + everything the kind/Scenario-1 walkthrough surfaced.
+  Re-walk it for residual confirmed findings.
+- **Scenario 2 (tenant) + README + the other reference docs were NOT walked** from a user perspective (this
+  session did kind-local + Scenario 1, as named). Reuse the `doc-walkthrough-userperspective` 2-agent method.
+- **`env-check` passes on placeholders (code fix, discovered while applying B4).** `load_env` defaults
+  `KUBECONFIG` (`scripts/lib/os.sh:391`) and `is_placeholder` is presence-only (`scripts/02-env.sh:30`), so
+  at bare-jump-box-prereq time `make env-check` reports *"all required present"* on the committed
+  `HARBOR_URL=harbor.vks.local` sentinel **and** a defaulted-nonexistent kubeconfig path (empirically rc=0).
+  Fix: reject the `harbor.vks.local` sentinel and/or existence-check the kubeconfig, then tighten README's
+  "fail now if anything required is still missing".
+- **B1b: the docker sneakernet e2e leg is untested** — `e2e-sneakernet` is podman-only; parameterize on
+  `SNEAKERNET_ENGINE` (or add `e2e-sneakernet-both`).
+- **check-vks-provenance residuals (documented in the script header):** covers Confidence-TABLE rows only,
+  not load-bearing PROSE claims (phase-2); `url=` tokens are shape-checked, not fetched in CI; the cited
+  tables are now WIDE (rigor-vs-readability tradeoff); LOW shell items left (exactly-one-token, `]`-in-quote,
+  mawk-1.3.3 `[[:space:]]`).
+- **A real lab (VKS-blocked):** Supervisor topology, the `vcf` auth flow, tenant RBAC into `ns/argocd`, the
+  B2 Gateway-API CRD-version question, and **KB 424897** (does VKS auto-grant a tenant cluster-admin, making
+  the argocd row-43 k8s-RBAC gate vacuous?).
+
+**Learnings reflected into portfolio skills/rules this session (`~/projects/claude-config`, committed +
+pushed as `0cd0db3`):** `rules/common/testing.md` — a case-insensitive awk gate leaning on gawk `IGNORECASE`
+ships detecting NOTHING under mawk (Ubuntu/CI default); use `tolower()` and RED-prove under the real box
+awk. `rules/common/version-discipline.md` — a provenance GRADE must match the SOURCE its citation resolves
+to (don't launder an 8.0 URL as 9.1-doc; soften a fact the primary source contradicts). Project memory:
+`vks-services-provenance-citations` (which Broadcom /9-1/ URLs WebFetch; the `clusters`-grantable resolution).
+
+## ▶️ HANDOFF 2026-07-15 (re-arm gate · B5 provenance · CI cache · adversary roster)
 
 **All shipped to `main`; `main` is green.** Four PRs this session:
 
@@ -393,35 +449,9 @@ bash/zsh/git/Makefile/sed/awk/grep correctness; arguably the highest-value, sinc
 session). Pick the domain adversary that fits the change; CREATE a new one when none does (that is how java +
 shell were added — `shell-adversary` is not yet committed to `main`; it rides in the handoff PR).
 
-**Open backlog (none need a lab except where noted):**
-
-- **B4 doc-audit — UNAPPLIED, real, in `docs/reviews/2026-07-14-doc-truth-audit.md`.** A 5-agent Workflow
-  re-audited the operator docs against code. Confirmed findings NOT yet applied: README Scenario-1/2 Run
-  cells list `psa-check`/`harbor-robot` (un-runnable at jump-box-prereq time — see B12); `sneakernet.md`
-  Step 3 `bundle-load` has an unmentioned `~/.local/bin`-on-PATH precondition (it `die`s at the end of the
-  longest step); `sneakernet.md:146` install-ingress hardcodes `traefik`, dropping the default `istio`
-  (which DOES install air-gapped from carried charts); the `curl … | bash` `REF=` pin form is shown wrong.
-  Re-verify each against code, then fix (vks-adversary-review the operator-facing ones).
-- **B9** facts-not-novels doc sweep · **B10** access-uis relevance · **B11** sneakernet diagram quality ·
-  **B12** README Scenario-1/2 cell trim (this session — folds with B4).
-- **`env-check` passes on placeholders (code fix, discovered while applying B4).** `load_env` defaults
-  `KUBECONFIG` (`scripts/lib/os.sh:391`) and `is_placeholder` is presence-only (`scripts/02-env.sh:30`),
-  so at bare-jump-box-prereq time `make env-check` reports *"all required present"* on the committed
-  `HARBOR_URL=harbor.vks.local` sentinel **and** a defaulted-but-nonexistent kubeconfig path (empirically
-  rc=0). So README's `# gate: fail now if anything required is still missing` (prereq block) slightly
-  overstates. Fix (code, not a doc tweak): make `env-check` reject the `harbor.vks.local` sentinel and/or
-  existence-check the kubeconfig; then tighten that comment.
-- **`docs/reviews/2026-07-14-vks-provenance.md:L112-119` contradicts `argocd.md`'s current correction
-  (surfaced by B9's adversary).** That entry still asserts the *refuted* reasoning (*"`clusters` is NOT
-  among [AppProject-grantable resources] … cluster registration cannot be delegated to a tenant"*), which
-  `argocd.md:45` now corrects (upstream `projects.md` Note 2 lists `clusters` as grantable). The admin-only
-  *conclusion* holds either way, so nothing operator-facing is wrong — but the review file will re-poison a
-  future session. Resolve by WebFetching upstream `projects.md`/`rbac.md` to adjudicate, then annotate the
-  review entry `SUPERSEDED` (append-to-history). Not done here: I did not assert a side blind.
-- **`check-vks-provenance` GATE** (owed from B5) — the correction landed; the enforcement gate
-  (citation-token schema, RED-proven, atomic with a full row re-grade) is the follow-up.
-- **A real lab** — Supervisor topology, the `vcf` auth flow, tenant RBAC into `ns/argocd`, and the B2
-  Gateway-API CRD-version question all remain lab-only.
+**Open backlog:** superseded — the current backlog lives in the newer handoff above. Everything here landed
+this session (B4 named subset / B9 / B10 / B11 / B12 / `check-vks-provenance`); the `env-check`-placeholder
+item was carried forward and the argocd-vs-provenance contradiction was resolved (`SUPERSEDED`-annotated).
 
 **Learnings reflected into portfolio skills/rules this session (in `~/projects/claude-config` — COMMIT THEM):**
 `commands/ci-workflow.md` (cache deps, never the scanner DB; keep the pre-merge gate; a required-check rename
