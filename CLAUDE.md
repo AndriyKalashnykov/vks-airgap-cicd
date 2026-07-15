@@ -413,10 +413,12 @@ confirms `clusters` IS grantable in an AppProject role, so `argocd.md` is right 
     fact — *"VKS 9.1 guest clusters SHIP them by default (VKr-managed, 9.1-doc); open risk (B2) is the
     VERSION we pin vs the VKr's, not presence"*; the unconditional "tenant must ASK" is now the CRDs-**absent**
     fallback (code-confirmed: `48-istio-preflight.sh:56-66` emits the ask only in the `else` branch).
-    vks-adversary-reviewed (SHIP-VERBATIM). **New remaining nit (out of scope, non-rendered):**
-    `docs/diagrams/istio-ingress.puml:10` code comment calls Istio a "STANDARD PACKAGE … (verified)", but
-    packaging is graded `9.0-doc (inferred for 9.1)` and VKS 3.7.0 renamed *Standard Packages*→*VKS Add-ons*
-    (`istio.md:18,193`) — a comment, doesn't render; fix opportunistically.
+    vks-adversary-reviewed (SHIP-VERBATIM). **✅ And the follow-up nit itself is now CLOSED too:**
+    `docs/diagrams/istio-ingress.puml:10` no longer overclaims — the header comment now reads "guest-cluster
+    VKS Standard Package (renamed 'VKS Add-on' in VKS 3.7.0) — doc-sourced (TechDocs /9-0/, inferred for 9.1),
+    NOT lab-verified" (matches the `9.0-doc (inferred for 9.1)` grade at `istio.md:18`). vks-adversary-reviewed
+    (SHIP-VERBATIM). The PNG was regenerated (PlantUML embeds source in a metadata chunk, so the drift gate
+    reds on a comment edit) — pixel-diff confirmed the render is byte-identical.
 - **`docs/reviews/2026-07-14-doc-truth-audit.md` (555 lines, ~45 survived findings) was NOT exhaustively
   applied** — only the handoff-named B4 subset + everything the kind/Scenario-1 walkthrough surfaced.
   Re-walk it for residual confirmed findings.

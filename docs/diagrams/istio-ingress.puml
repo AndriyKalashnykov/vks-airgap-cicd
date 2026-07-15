@@ -7,9 +7,10 @@ title Istio ingress — two scenarios: we INSTALL the mesh, or we ATTACH to one 
 
 ' ---------------------------------------------------------------------------
 ' Every label here describes what the REPO actually does (scripts/46, scripts/47, k8s/istio/*).
-' Broadcom ships Istio as a VKS STANDARD PACKAGE on the guest cluster (verified: TechDocs +
-' the VMware VCF blog) — so on a real lab Scenario 2 is the one that applies, and the KinD
-' stand-in is what exercises Scenario 1. See docs/decisions/istio-on-vks.md.
+' Broadcom ships Istio as a guest-cluster VKS Standard Package (renamed "VKS Add-on" in VKS 3.7.0)
+' — doc-sourced (Broadcom TechDocs /9-0/, inferred for 9.1), NOT lab-verified. So on a real lab
+' Scenario 2 applies and the KinD stand-in exercises Scenario 1. See docs/decisions/istio-on-vks.md
+' + docs/vks-services/istio.md.
 ' ---------------------------------------------------------------------------
 
 Person(op, "Operator / browser", "resolves *.vks.local via /etc/hosts -> INGRESS_LB_IP")
