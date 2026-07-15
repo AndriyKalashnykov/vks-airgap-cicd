@@ -2,7 +2,7 @@
 
 <br>
 
-Run **`make creds`** — it self-resolves the kubeconfig and prints the URLs, logins, and (when an
+Run **`make creds-show`** — it self-resolves the kubeconfig and prints the URLs, logins, and (when an
 ingress is installed) the one-time `/etc/hosts` line for the `*.vks.local` hosts. **Which URLs are
 correct depends on the context** — Harbor and ArgoCD are *ours* in KinD but the *lab's* on a real
 VKS cluster:
@@ -17,19 +17,15 @@ VKS cluster:
   TLS on its own LB IP** (published as `ARGOCD_LB_IP`); VKS serves the same posture at
   the lab's own URLs. The KinD-vs-lab gap shrinks to "we mint the cert locally".
 
-| Service | Local KinD | VKS | Login |
-|---------|------------|--------------|-------|
-| **Gitea** (we install) | <http://gitea.vks.local> | `http://gitea.vks.local` once the ingress is in place (install, or attach with `INGRESS_CONTROLLER=istio-existing`), else `kubectl -n gitea port-forward svc/gitea-http 3000:3000` | `gitea_admin` / `GITEA_ADMIN_PASSWORD` |
-| **Tekton Dashboard** (we install) | <http://tekton.vks.local> | same — ingress or `port-forward` | — (read-only) |
-| **App (javawebapp)** (we deploy) | <http://javawebapp.vks.local/> | same — ingress or `port-forward svc/javawebapp` | — (health at `/actuator/health`) |
-| **Harbor** | its own LB IP, **self-signed HTTPS** (`https://<ip>`, our CA) | the **lab's** Harbor URL, **HTTPS** | `admin` / `HARBOR_PASSWORD` |
-| **ArgoCD** | its own LB IP, **self-signed TLS** (`https://<ARGOCD_LB_IP>`, `--insecure`) — **not** behind the ingress | the **lab's own ArgoCD** URL/IP, self-signed TLS | `admin` / `make argocd-password` |
+For the concrete URLs, usernames and passwords in *your* context, run **`make creds-show`** — it is the
+single source of truth (it resolves KinD-vs-lab and the tenant-vs-admin login for you), so this page keeps
+only the model, not a static table that would drift out of date.
 
 **ArgoCD password** — **`make argocd-password`** prints it, in every context. It asks the **cluster**
 first, so what it prints is the password that actually works.
 
 - **KinD:** the flow generates one for you (`.env.state`) and applies it at install — nothing to set.
-- **VKS:** ArgoCD is the platform's's. If you set `ARGOCD_ADMIN_PASSWORD` in `.env`, that is what you
+- **VKS:** ArgoCD is the platform's. If you set `ARGOCD_ADMIN_PASSWORD` in `.env`, that is what you
   get; otherwise the command reads the initial-admin secret, or points you at your lab.
 
 > Setting `ARGOCD_ADMIN_PASSWORD` in `.env` does **not** affect `make e2e-kind` — that path runs with

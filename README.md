@@ -49,8 +49,8 @@ New here? Pick the path that matches your situation — each one is self-contain
 | I want to… | Path | You need |
 |------------|------|----------|
 | **Just see it work** (no VKS cluster) | [KinD](docs/kind-local.md) — two commands, zero `.env` | **Have:** Docker (KinD needs Docker specifically) · internet access<br>**Run:** `make deps` → `make e2e-kind` |
-| **VKS — I install Harbor + ArgoCD** (I am the admin) | [Scenario 1](docs/scenario-1.md) | **Have:** a vSphere login that can install a Supervisor Service, create a vSphere Namespace and provision a guest cluster · cluster-admin on that guest cluster · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md))<br>**Reachable from the jump box:** the internet, the Supervisor API, Harbor — and ArgoCD's cluster must reach your guest API. *Can't reach both the internet and Harbor from one box? → [sneakernet](docs/sneakernet.md)*<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make env-check` → `make psa-check` |
-| **VKS — Harbor + ArgoCD already exist** (I am a **tenant**) | [Scenario 2](docs/scenario-2.md) | **Have:** cluster-admin on your own guest cluster · Harbor **project-admin** (else ask for robot credentials) · the licensed VCF CLI archives<br>**Ask the platform team for:** your guest cluster **registered** with ArgoCD (admin-only) · an ArgoCD role that lets you create an `Application` · mesh rights — `make istio-preflight` prints exactly what to request<br>**Reachable from the jump box:** the internet and Harbor. *Can't reach both from one box? → [sneakernet](docs/sneakernet.md)*<br>**Run:** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate` → `make harbor-robot` → `make psa-check` |
+| **VKS — I install Harbor + ArgoCD** (I am the admin) | [Scenario 1](docs/scenario-1.md) | **Have:** a vSphere login that can install a Supervisor Service, create a vSphere Namespace and provision a guest cluster · cluster-admin on that guest cluster · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md))<br>**Reachable from the jump box:** the internet, the Supervisor API, Harbor — and ArgoCD's cluster must reach your guest API.<br>**Run (bare jump box):** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate`. Then follow [Scenario 1](docs/scenario-1.md) — it fills in `.env`, gates it, and installs once your cluster + Harbor exist. |
+| **VKS — Harbor + ArgoCD already exist** (I am a **tenant**) | [Scenario 2](docs/scenario-2.md) | **Have:** cluster-admin on your own guest cluster · Harbor **project-admin** (else ask for robot credentials) · the licensed VCF CLI archives<br>**Ask the platform team for:** your guest cluster **registered** with ArgoCD (admin-only) · an ArgoCD role that lets you create an `Application` · mesh rights — `make istio-preflight` prints exactly what to request<br>**Reachable from the jump box:** the internet and Harbor.<br>**Run (bare jump box):** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate`. Then follow [Scenario 2](docs/scenario-2.md) — it discovers the endpoints, mints the Harbor robot, and installs once you're wired to your cluster + Harbor. |
 
 The VKS paths start from the jump-box **[Prerequisites](#prerequisites)** below.
 Run **`make check-tools`** to see which CLIs you have and which are required.
@@ -167,7 +167,9 @@ less bootstrap-jumpbox.sh
 bash bootstrap-jumpbox.sh
 ```
 
-It's idempotent (re-run skips what's present); pin a ref with `REF=<tag-or-sha>`. It installs
+It's idempotent (re-run skips what's present). Pin a ref by setting `REF` **for the shell that runs the
+script**: `curl -fsSL … | REF=<tag-or-sha> bash` (pipe form) or `REF=<tag-or-sha> bash bootstrap-jumpbox.sh`
+(download form) — putting `REF=` *before* `curl` sets it on `curl`, where it is lost. It installs
 only the **open** toolchain — the licensed VCF CLIs stay operator-supplied (`make install-vcf-clis`).
 It needs internet (dual-homed); a fully air-gapped host uses the carried bundle instead.
 

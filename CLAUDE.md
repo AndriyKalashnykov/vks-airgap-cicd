@@ -404,6 +404,13 @@ shell were added — `shell-adversary` is not yet committed to `main`; it rides 
   Re-verify each against code, then fix (vks-adversary-review the operator-facing ones).
 - **B9** facts-not-novels doc sweep · **B10** access-uis relevance · **B11** sneakernet diagram quality ·
   **B12** README Scenario-1/2 cell trim (this session — folds with B4).
+- **`env-check` passes on placeholders (code fix, discovered while applying B4).** `load_env` defaults
+  `KUBECONFIG` (`scripts/lib/os.sh:391`) and `is_placeholder` is presence-only (`scripts/02-env.sh:30`),
+  so at bare-jump-box-prereq time `make env-check` reports *"all required present"* on the committed
+  `HARBOR_URL=harbor.vks.local` sentinel **and** a defaulted-but-nonexistent kubeconfig path (empirically
+  rc=0). So README's `# gate: fail now if anything required is still missing` (prereq block) slightly
+  overstates. Fix (code, not a doc tweak): make `env-check` reject the `harbor.vks.local` sentinel and/or
+  existence-check the kubeconfig; then tighten that comment.
 - **`check-vks-provenance` GATE** (owed from B5) — the correction landed; the enforcement gate
   (citation-token schema, RED-proven, atomic with a full row re-grade) is the follow-up.
 - **A real lab** — Supervisor topology, the `vcf` auth flow, tenant RBAC into `ns/argocd`, and the B2
