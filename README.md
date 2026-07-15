@@ -61,7 +61,7 @@ Run **`make check-tools`** to see which CLIs you have and which are required.
 > | your situation | what you run | sudo? |
 > |---|---|---|
 > | **Default (podman)** | nothing — `make deps` installs it | **never** |
-> | **You want docker** | `make deps CONTAINER_ENGINE=docker`, then `make trust-harbor` | **rootless: none** · **rootful: one per registry** |
+> | **You want docker** | `make deps CONTAINER_ENGINE=docker` (bootstrap) — then, **once Harbor exists**, `make trust-harbor` | **rootless: none** · **rootful: one per registry** (at `trust-harbor` time) |
 > | Not sure what your box has | `make engine-check` (read-only — tells you the engine, the mode, and what it will cost) | — |
 > | `make e2e-kind` (the KinD stand-in) | needs Docker **regardless** — kind's nodes *are* docker containers. That is kind, not us. | — |
 >

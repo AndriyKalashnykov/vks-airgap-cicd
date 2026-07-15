@@ -287,14 +287,23 @@ Run a single app test: `cd apps/java/javawebapp && ./mvnw -B -Dtest=<ClassName>#
 
 ## Conventions
 
-- **Version manager:** mise (`.mise.toml`) on the jump box — including `crane`
-  (the image-mirror engine, a static Go binary). Air-gap exception:
-  `tkn`/`argocd` come from OS packages / pinned releases via
-  `00-install-prereqs.sh`. The **bundle carries `crane`** (the mirror engine) — and *only* crane, which
-  is all the mirror half needs (`bundle-load` → `mirror-push` → `mirror-verify`). It used to carry
-  **nothing**, while this line claimed otherwise; the e2e hid that by letting its "air-gap" box run
-  `make deps` over the internet. A **full** air-gapped install additionally needs `kubectl`/`helm`/`jq`/
-  `envsubst` pre-provisioned on the inside box — see [`docs/sneakernet.md`](docs/sneakernet.md).
+- **Version manager:** mise (`.mise.toml`) on the internet-side jump box — including
+  `crane` (the image-mirror engine, a static Go binary). Air-gap exception:
+  `tkn`/`argocd` come from OS packages / pinned releases via `00-install-prereqs.sh`,
+  which (INTERNET-side only) ALSO installs the floor packages a bare `photon:5.0`
+  lacks: `gawk`, `openssl`, `gettext`(envsubst), `git`, `curl` (NOT `make` — that
+  script is invoked BY `make`, so make must pre-exist). The
+  **bundle carries 5 pinned static binaries** — `crane`, `kubectl`, `helm`, `jq`, `yq`
+  (`11-bundle.sh`) — the **Istio helm charts** and the **Tekton + Gateway-API manifests**
+  (`10-mirror-pull.sh`), and the image cache (`bundle-load` → `mirror-push` →
+  `mirror-verify` → `install-*`). It used to carry **nothing** (then, briefly, *only*
+  crane), while this line claimed otherwise; the e2e hid that by letting its "air-gap"
+  box run `make deps` over the internet. What the bundle CANNOT stage is the **OS-package
+  floor** (git, make, openssl, gettext/envsubst, gawk, curl, tar, coreutils) — the
+  air-gap box provisions those from its **internal package mirror**, NOT by running
+  `00-install-prereqs.sh` (internet-side only). Per-tool: without `awk` `mirror-verify`
+  dies, without `envsubst` the manifest render dies, without `openssl` cert minting dies.
+  See [`docs/sneakernet.md`](docs/sneakernet.md).
 - **Secrets never in argv** — PATs/registry creds via stdin / `--password-stdin` /
   env-by-name (see `.env.example` commented secret placeholders).
 - **Java app:** Spring Boot 4 + JUnit/`@SpringBootTest`; Dockerfile follows the
@@ -389,13 +398,12 @@ idea→adversary→incorporate→implement→adversary→incorporate loop with a
 
 ### 🔴 REMAINING BACKLOG — in priority order (all fixes below are code-verified; a real lab is NOT needed unless noted)
 
-**1. The 4 remaining CRITICAL bootstrap-doc-drift fixes** (locations + fixes READ this session — apply directly). A fresh branch `fix/critical-bootstrap-doc-drift` exists (no commits). These are the next PR:
+**1. ✅ DONE (this session) — the 4 remaining CRITICAL bootstrap-doc-drift fixes (C1/C2/C3/C6).** Branch `fix/critical-bootstrap-doc-drift`; design AND implementation adversary-reviewed (`adversary-bash-git-cli` on C1/C2/C3 → H1 confirmed via mise.run primary source; `docker-adversary` on C6, both `cleared-with-changes`). Each re-verified against the CURRENT tree, not applied from the notes.
 
-- **C1** — `docs/prerequisites-manual.md:60-62`: the `export PATH=...local/bin...` line puts the mise **binary** on PATH, not the tools mise manages, so crane/helm/yq/kind are NOT on PATH after; the comment claiming "the installer also adds mise activate to your profile" is **FALSE** (mise.run only *prints* the line — finding H1). **Fix:** after the mise install, run `eval "$(mise activate bash)"` and append it to `~/.bashrc`, then add a `make check-tools` verify step. Also add a scope banner (H2: every step needs the internet; this is the on-ramp `make deps` automates) and `-fsSL` on the curl-pipe-sh (M1).
-- **C2** — `CLAUDE.md:293` (Conventions): the phrase "the bundle carries crane — and only crane" is STALE; `scripts/11-bundle.sh` now `stage_tool`s **5** tools (crane/kubectl/helm/jq/yq) + the Istio charts + Tekton manifests. **Fix:** rewrite the bullet to the real bundle contents.
-- **C3** — `CLAUDE.md:290-293` (Conventions): the tkn/argocd-only bootstrap exception omits that `00-install-prereqs.sh` now also installs gawk/openssl/gettext (a bare Photon lacks awk/envsubst → dies at `mirror-verify`). **Fix:** add the OS-package floor to the bullet.
-- **C6** — `README.md:64`: the docker-engine row lists `make trust-harbor` as a **bootstrap** step, but `scripts/19-trust-harbor.sh` proves trust with a **real login handshake** → needs a **live, reachable Harbor**, which does not exist at bootstrap. **Fix:** move the trust step to "once Harbor exists" (like fetch-harbor-ca was moved). Audit correction to carry: it does NOT die on "no .env" — the `trust-harbor: check-env` prereq is the `.env.example`-exists STOPPER (`Makefile:109`), not `env_check`; the conclusion holds, the ".env death" reasoning was a check-env-vs-env-check conflation.
-- Domain adversary: shell/toolchain/Harbor-trust → `adversary-bash-git-cli` (now global) or `docker-adversary` for C6. Mostly doc-accuracy; CLAUDE.md is adversary-first-gate-exempt but STILL run the design past an adversary per the owner's standing rule.
+- **C1** (`prerequisites-manual.md`): removed the FALSE "the installer adds `mise activate` to your profile" comment (mise.run only PRINTS the hint); relabelled `export PATH=…/.local/bin` as "the mise BINARY"; added `eval "$(mise activate bash)"` **AFTER** `make deps` (adversary MEDIUM: activating BEFORE deps false-REDs `check-tools` in a non-interactive run — the one-shot hook fires when tools aren't installed yet; verified empirically that an eval-time activate DOES expose already-installed tools) + `~/.bashrc` append + explicit **zsh** form (`mise activate zsh`) + a `make check-tools` verify step; `-fsSL` on the curl-pipe; docker note preserved.
+- **C2+C3** (one CLAUDE.md Conventions bullet, folded): the bundle carries **5 static tools** (crane/kubectl/helm/jq/yq) + Istio charts + Tekton/Gateway-API manifests + the image cache — not "only crane"; the remaining gap is the **OS-package floor** (git/make/openssl/gettext-envsubst/gawk/curl/tar/coreutils), which the air-gap box provisions from its **internal mirror**, NOT `00-install-prereqs.sh` (internet-side only); per-tool failure scoped (awk→mirror-verify, envsubst→render, openssl→cert-mint).
+- **C6** (`README.md:64`): `make trust-harbor` tagged post-Harbor, KEPT in the row so the `sudo?` column still maps (adversary row-coherence fix). CORRECT failure mechanism (adversary MEDIUM — the prior note had it wrong twice): on a bare box `HARBOR_URL:?` does NOT fire (`.env.example:78` commits the `harbor.vks.local` sentinel, `set -a`-exported) — the first hard failure is `HARBOR_PASSWORD:?` (`19-trust-harbor.sh:25`), then the live login handshake. Sibling bug fixed in the same pass: `prerequisites-manual.md:68-70` also listed trust-harbor at bootstrap.
+- **Residuals (adversary-flagged, NOT in this PR — backlog):** (a) `19-trust-harbor.sh:23`'s `HARBOR_URL:?` guard is **vacuous** — the committed `harbor.vks.local` sentinel always satisfies it, so its "run install-harbor / set it in .env" error can never show (same sentinel-defeats-presence class as C13/env-check; fix: reject the sentinel as `env_check` now does). (b) `HARBOR_USERNAME=admin` (`.env.example:138`, committed) is a wrong-for-tenant default that trust-harbor would use in Scenario 2 unless overridden with a robot account.
 
 **2. The ~50 remaining HIGH/MEDIUM doctruth findings** (full table in the doctruth-audit transcript). Biggest: `docs/scenario-2.md` is entirely un-remediated (~15 live findings — wants a user-perspective walkthrough PR like #251 did for scenario-1; incl. the HIGH-2 don't-set-ARGOCD_KUBECONFIG contradiction + `ARGOCD_REGISTER=never`, and the G5-class dead-command at `:68/:278` that greps a guest kubeconfig for a Supervisor-only service). Also `docs/prerequisites-manual.md` (7 live), and CLAUDE.md gate-list/command-table drift (M3-M9: `ci` omits diagrams-check; `static-check` lists ~11 of 20 prereqs; `make e2e-cross-cluster` should be `e2e-kind-cross-cluster`; the install-all row omits preflight/mirror-verify; `.env.kind` is now `.env.state`; the jumpbox row is engine-blind).
 
