@@ -387,6 +387,36 @@ The two BLOCKING triggers (before you implement · before you call the session d
 (`Workflow` with a schema, or a synchronous `Agent` — never fire-and-forget), and what to do with the
 findings are all in Rule Zero. Do not duplicate them here.
 
+## ▶️ HANDOFF 2026-07-16 (item-3 agents/hooks GLOBAL refactor — IN PROGRESS; decisions locked, hook fix LANDED, cross-repo promotion PENDING) — START HERE FOR ITEM 3
+
+**Session (2026-07-15/16) recap:** items 1 (#260) + 2 (#261/#262/#263) DONE; backlog research item (#265) DONE; item-3 **decisions made + the hardest technical piece merged (#266)**. `main` green @ `92b669a` (or later), 0 open PRs. The remaining item-3 cross-repo promotion is teed up below — it edits the **LIVE `~/.claude/settings.json` (affects every project)** + needs a **live hook test**, so it was deliberately deferred to a fresh session with full context budget. RULE ZERO still applies: run the design past an adversary before implementing.
+
+### DECISIONS (owner-confirmed)
+
+1. **Roster:** promote `java-adversary`→`adversary-java` + `docker-adversary`→`adversary-docker` into `~/projects/claude-config/agents/` (global); DROP `shell-adversary` — dedupe into the global `adversary-bash-git-cli` (widen its `description:` to name Makefile + sed/awk); `vks-adversary` STAYS project-local.
+2. **Harbor/VKS docker specifics → `vks-adversary`.** When genericizing docker-adversary, MOVE the lab-specific bits into `vks-adversary`: the "this repo lost a Harbor to blob-store corruption" incident, `HARBOR_URL`=LB-IP-in-KinD / FQDN-on-lab, VCF/corporate PKI trust, this repo's `docker exec`-into-kind-nodes, the `certs.d`-for-`$HARBOR_URL` checks. KEEP GENERAL docker/registry-trust in `adversary-docker` (certs.d mechanism, rootless/rootful, insecure-registries, kind coupling, buildkit, the blob-corruption CLASS, self-signed-registry TLS with Harbor/Zot/`registry:2` as GENERIC examples).
+3. **Global read-only hook = worktree-exemption flavor.** ✅ DONE + merged (#266): the validated hook is `.claude/hooks/subagent-readonly-gate.py` — realpath-anchored (`os.path.realpath(path)` then `re.search(r"/\.claude/worktrees/[^/]+/", rp+"/")`; the adversary caught that a raw substring is defeated by `..` traversal, RED-proven). **THIS file is the version to promote as `subagent-readonly.py`** (replacing claude-config's Bash-only one).
+
+### GROUNDED FACTS (verified this session — do NOT re-derive)
+
+- **Settings hooks MERGE** (user + project both run; deduped ONLY by identical command STRING). This repo's wirings use `$CLAUDE_PROJECT_DIR/.claude/hooks/…`; the global uses `$HOME/.claude/hooks/…` → different strings → NOT deduped. ⇒ After moving the 3 general hooks global + deleting this repo's copies, you MUST remove this repo's 3 now-global hook WIRINGS from `.claude/settings.json` (else broken refs + double-fire). KEEP the `adversary-first-gate` wiring (its file stays project-local). Source: code.claude.com/docs/en/hooks.
+- **claude-config has NO test harness / Makefile / CI** (pure config-sync repo). The promoted hooks' tests need a home there → add a minimal `run-tests.sh`.
+- **`~/.claude/settings.json` currently:** wires only `warn-bg-pr-watch-merge.py` (Bash|Monitor) + `subagent-readonly.py` (Bash); `defaultMode: plan`; `Bash(*)/Edit(*)/Write(*)/Agent(*)` allowed. `~/.claude/hooks` = `subagent-readonly.py` (OLD Bash-only) + `warn-bg-pr-watch-merge.py`. `~/.claude/agents` = the 5 general. This repo: `.claude/agents/{docker,java,shell,vks}-adversary.md`; `.claude/hooks/{adversary-first-gate,mid-run-edit-gate,no-gate-in-commit-chain,subagent-readonly-gate}.py`; `.claude/settings.json` wires all 4.
+- **setup.sh** copies commands/rules/hooks/agents into `~/.claude/` but does NOT overwrite an existing `settings.json` → the hooks-wiring merge into `~/.claude/settings.json` is BY HAND.
+
+### REMAINING STEPS (in order)
+
+1. **claude-config** (reversible): create `agents/adversary-docker.md` (genericized per decision 2) + `agents/adversary-java.md` (from java-adversary, drop "in this repo"); widen `agents/adversary-bash-git-cli.md` description (Makefile + sed/awk); `cp` this repo's `subagent-readonly-gate.py` → `hooks/subagent-readonly.py`; add `hooks/{mid-run-edit-gate,no-gate-in-commit-chain}.py`; move `test-subagent-readonly-gate.sh` + `test-no-gate-in-commit-chain.sh` in + add `run-tests.sh`; update `settings.json` template hooks (subagent-readonly matcher `Bash|Edit|Write|NotebookEdit|MultiEdit`; mid-run-edit-gate `Edit|Write|NotebookEdit|MultiEdit`; no-gate-in-commit-chain `Bash`). Commit to claude-config.
+2. **`vks-adversary`** (this repo, `.claude/agents/` — not gated): add a "Docker/registry-trust for THIS lab" section absorbing the Harbor/VKS docker specifics (decision 2).
+3. **`~/.claude/` (LIVE, high blast radius):** `cp ~/.claude/settings.json{,.bak}`; copy the new agents + updated hooks; hand-merge the hook wiring into `~/.claude/settings.json`; `python3 -c 'import json;json.load(open(...))'` validate; `py_compile` all hooks; **LIVE-TEST**: spawn a real subagent, confirm a git mutation BLOCKS + a `.claude/worktrees/` write ALLOWS + a main-tree write BLOCKS (per hooks.md "test the GATE not the instrument").
+4. **this repo (PR):** `rm .claude/agents/{docker,java,shell}-adversary.md` + `.claude/hooks/{subagent-readonly-gate,mid-run-edit-gate,no-gate-in-commit-chain}.py`; edit `.claude/settings.json` to keep ONLY the adversary-first-gate wiring; drop `test-subagent-readonly-gate` + `test-no-gate-in-commit-chain` from `test-scripts` + their recipes; update RULE ZERO refs (`docker-adversary`→`adversary-docker`, `shell-adversary`→`adversary-bash-git-cli`, path-refs→name-refs); `make ci`; PR; merge. `test-adversary-gate-rearm` STAYS (tests the project-local adversary-first-gate).
+
+### RESIDUALS → backlog
+
+- Hook exemption keys on the TARGET path, not on the agent OWNING that worktree → a subagent could write into ANOTHER agent's worktree. Closing it needs a cwd-anchored check, which requires verifying the PreToolUse hook runs with the subagent's cwd (instrument `os.getcwd()` from a real `isolation:"worktree"` subagent).
+
+---
+
 ## ▶️ HANDOFF 2026-07-15 (evening — 8-PR adversary-loop session + 2 audits) — START HERE
 
 **`main` is green @ `e25017b`; 0 open PRs.** 8 PRs merged this session, each through the full
