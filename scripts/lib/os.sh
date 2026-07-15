@@ -154,6 +154,21 @@ is_true() {
 # bool_word <value> — "true"/"false", for a CLI flag that demands the word (e.g. --insecure-skip-tls-verify=).
 bool_word() { if is_true "${1:-}"; then printf 'true'; else printf 'false'; fi; }
 
+# vks_sso_user <username> — normalise a VKS SSO username to 'user@SSO.DOMAIN'. IDEMPOTENT: a value that
+# already contains '@' is returned unchanged (so a doc that ships VKS_USERNAME=administrator@vsphere.local
+# is not double-domained into administrator@vsphere.local@vsphere.local — the C10 bug); a BARE user gets
+# @VKS_SSO_DOMAIN appended. A bare user with no VKS_SSO_DOMAIN is a HARD ERROR, not a silent 'vsphere.local'
+# default: real VCF workload domains use a custom SSO domain (e.g. WLD.SSO), so a silent default would send
+# the WRONG principal and fail auth as "wrong password" — the same failure class this fixes. One place, so
+# 30-vks-login (interactive) and 31-fetch-argocd-kubeconfig (Supervisor context) cannot drift.
+vks_sso_user() {
+  case "$1" in
+    *@*) printf '%s' "$1" ;;
+    *)   if [ -n "${VKS_SSO_DOMAIN:-}" ]; then printf '%s@%s' "$1" "$VKS_SSO_DOMAIN"
+         else die "VKS_USERNAME must be 'user@SSO.DOMAIN' (e.g. administrator@WLD.SSO), or set VKS_SSO_DOMAIN in .env"; fi ;;
+  esac
+}
+
 # engine_choice — which engine is the BOOTSTRAP going to install? podman unless the operator asked for
 # docker BY NAME. Pure: it prints, it installs nothing, it touches no PATH. Kept separate from
 # container_engine() (which asks "what is INSTALLED on this box?") because the gate must be able to prove

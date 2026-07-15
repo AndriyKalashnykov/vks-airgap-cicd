@@ -89,10 +89,25 @@ HARBOR_PUBLIC_PROJECTS=false            # tenant projects are typically private 
 ARGOCD_SERVER=<discovered-argocd-server-LB-IP>
 ARGOCD_NAMESPACE=<namespace the shared ArgoCD instance watches>
 ARGOCD_TRACK_BRANCH=main
+# --- ArgoCD WRITE PATH — set these NOW, before `make install-all`. Miss them and `make gitops` either
+#     DIES on a guard (you are off-cluster with no destination) or SILENTLY renders to ./out/ and
+#     deploys NOTHING while reporting success. ---
+ARGOCD_MECHANISM=api                      # create the Application via argocd-server (no k8s RBAC needed there)
+ARGOCD_PROJECT=<your granted AppProject>  # NOT 'default' — your project role must permit the destination
+ARGOCD_AUTH_TOKEN=<mint it first — see the note below>
+ARGOCD_DEST_SERVER=<your GUEST cluster API URL>  # your guest must be REGISTERED as an ArgoCD destination FIRST (admin-only — request it; see the cross-cluster note below)
 # ARGOCD_CA_FILE=./secrets/argocd-ca.crt   # optional; fetched in Step 2 (make fetch-argocd-ca)
 KUBECONFIG=./secrets/vks.kubeconfig
 VKS_CONTEXT=<context-name-in-that-kubeconfig>
 ```
+
+> **Mint `ARGOCD_AUTH_TOKEN` FIRST — it is a precondition, not just a value.** `argocd login <ARGOCD_SERVER> --sso`
+> establishes both the token **and** the CLI's TLS trust for the self-signed argocd-server (there is no
+> `ARGOCD_CA_FILE` wired into the CLI path), then `argocd account generate-token --account <you>` prints the
+> token you paste above. Order: discover `ARGOCD_SERVER` → `argocd login` → `generate-token` → set
+> `ARGOCD_AUTH_TOKEN`. Skip the login and a pasted token yields an opaque TLS failure. (`api` is the tenant
+> happy-path — granted an AppProject role; the `request` fallback, for a tenant granted nothing, renders the
+> Application for the admin to apply. Full mechanism table in the reference below.)
 
 ### Wire the repo & run the pipeline
 
@@ -326,6 +341,10 @@ make psa-check     # NOW it can measure something — expect `PSA OK — … (N 
 make verify        # push a marked change → Tekton → Harbor → ArgoCD → live app serves it
 make creds-show    # every URL + login for THIS context — one row per app in apps/registry.tsv
 ```
+
+**Expect:** `make gitops` logs **`write mechanism: api`** (not `request`). If it logs `write mechanism:
+request`, your `ARGOCD_AUTH_TOKEN`/`ARGOCD_DEST_SERVER` are missing — the Application was only **rendered
+to `./out/`** and **nothing deployed**; fix the vars above and re-run before `make verify`.
 
 `install-all` deliberately does **not** install Harbor or ArgoCD — the platform team already
 did. It mirrors all images into that Harbor, builds + pushes the offline Maven builder image,
