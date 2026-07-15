@@ -192,8 +192,8 @@ Gateway API** whenever Istio is an **Accepted GatewayClass**, else falls back to
 |---|---|---|
 | What we create | a `Gateway` (`gatewayClassName: istio`) in `ISTIO_GWAPI_NAMESPACE` + one `HTTPRoute` per UI in its backend's namespace | a `Gateway` bound by the discovered `istio:` selector + `VirtualService`s |
 | Needs a pre-existing gateway workload? | **No** — Istio **auto-provisions** the proxy *and* its LoadBalancer | **Yes** — and its selector label must be discovered |
-| Needs anything from the mesh admin? | **No** — only rights in our own namespaces | usually yes (rights in the gateway ns, or a shared Gateway to reference) |
-| Air-gap | **free** — the auto-provisioned proxy inherits istiod's image hub, so it pulls `<harbor>/…/istio/proxyv2` with no extra config (verified) | the platform's gateway already pulls from wherever it was configured |
+| Needs anything from the mesh admin? | **For routing, no** — only rights in our own namespaces. **On an air-gapped mesh whose proxy registry needs auth, yes** — a gateway pull-secret (see Air-gap) | usually yes (rights in the gateway ns, or a shared Gateway to reference) |
+| Air-gap | **Free only when WE install** (`INGRESS_CONTROLLER=istio`: we set `global.hub=<Harbor>`, anonymous-pull). **On an ATTACHED VKS-package mesh: NOT automatic** — the auto-provisioned `<gw>-istio` proxy inherits the *mesh's* istiod hub, so pulling depends on the mesh's registry; an authenticated one needs a `dockerconfigjson` Secret in `ISTIO_GWAPI_NAMESPACE` named in the mesh's `istio.meshConfig.imagePullSecrets` (9.0-doc; see [istio.md §4](../vks-services/istio.md#4-attach-prefer-the-gateway-api)) | the platform's gateway already pulls from wherever it was configured |
 
 Why this matters on a real VKS cluster: the Standard Package ships its shared ingress gateway
 **disabled by default**, so the classic path may have *nothing to bind to* — while the Gateway-API

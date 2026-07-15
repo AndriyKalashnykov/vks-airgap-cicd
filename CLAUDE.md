@@ -392,13 +392,27 @@ confirms `clusters` IS grantable in an AppProject role, so `argocd.md` is right 
 
 **Open backlog (none need a lab except where noted):**
 
-- **`istio.md`'s "prefer the Gateway API" comparison table (~L78-83) — a LIVE CRITICAL, real-lab
-  correctness. Highest-value remaining fix.** It grades gateway-api "Air-gap: **free** — pulls proxyv2 from
-  Harbor with no extra config" and "Needs anything from the mesh admin? **No**". That grade came from OUR
-  helm Istio (where WE set `global.hub=<harbor>`). On the VKS **Standard-Package** mesh (`istio-existing`
-  targets it) proxyv2 comes from Broadcom's registry, not your Harbor → "air-gap free" is contradicted for
-  the exact mesh the table is about. Flagged by the provenance review + `2026-07-14-vks-provenance.md:L25-27`.
-  vks-adversary-review the fix.
+- **✅ DONE (this session) — istio "prefer the Gateway API" air-gap CRITICAL applied.** The gateway-api
+  route path was graded *"Air-gap: free / needs nothing from the mesh admin"* — TRUE only for **we-install**
+  (`INGRESS_CONTROLLER=istio`, `global.hub=<Harbor>`, `scripts/46-install-istio.sh`), FALSE on an **attached**
+  VKS-package mesh (`istio-existing` → `47-attach-istio.sh` → `istio_apply_routes_gwapi`), where the
+  auto-provisioned `<gw>-istio` proxy in `vks-ingress` inherits the *mesh's* istiod hub (our code creates NO
+  pull-secret there; KinD was green only because the e2e fixture installs the mesh istiod with
+  `global.hub=<Harbor>` AND Harbor is anonymous-pull). Corrected across all **7** surfaces to the
+  **CONDITIONAL** claim + a **9.0-doc** note documenting the two-object pull-secret mechanism (TENANT creates
+  the dockerconfigjson Secret in `vks-ingress`; MESH-ADMIN owns its name in `istio.meshConfig.imagePullSecrets`;
+  GW-API-specific propagation is lab-unverified). **we-install stays air-gap-free.** Design + full drop-in:
+  [`docs/reviews/2026-07-15-istio-gwapi-critical-fix.md`](docs/reviews/2026-07-15-istio-gwapi-critical-fix.md).
+  **Re-reviewed by `vks-adversary` THIS session** (verdict SHIP-WITH-CHANGES) — C1–C5 folded, notably
+  **C1 (HIGH, missed by the first review): the `scripts/lib/istio.sh:203-207` edit (+3 lines) shifted two
+  `[src: code:…istio.sh:219-221 / :384-387]` citations in `istio.md`; the provenance gate only RANGE-checks,
+  so they were silently rot-prone — re-pointed to `:222-224` / `:387-390` and verified by opening the cited
+  lines.** `make diagrams` regenerated `istio-ingress.png`; `docs-lint` + `static-check` green.
+  - **Follow-up found this session (deliberately OUT of scope — belongs to B2):** `docs/diagrams/istio-ingress.puml:41`
+    still says *"UNVERIFIED whether a VKS guest cluster ships [the Gateway API CRDs]"*, which `istio.md`'s
+    §4 note now contradicts (CONFIRMED 9.1-doc: shipped by default from the VKr). Correct it when B2 (the
+    CRD-**version** question) is worked — it carries the version nuance, so it was not folded into this
+    unrelated pull-secret PR.
 - **`docs/reviews/2026-07-14-doc-truth-audit.md` (555 lines, ~45 survived findings) was NOT exhaustively
   applied** — only the handoff-named B4 subset + everything the kind/Scenario-1 walkthrough surfaced.
   Re-walk it for residual confirmed findings.

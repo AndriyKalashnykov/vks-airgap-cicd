@@ -130,7 +130,9 @@ granted. What that means concretely:
 
 **On the Gateway-API path the hostname needs nobody:** Istio
 auto-provisions the gateway from a `Gateway` we create in **our own** namespace, so its `hosts:`
-list is ours. That leaves the AppProject destination as the only universal tenant request.
+list is ours. The AppProject destination is the only **always-required** tenant request; on an
+attached **air-gapped** VKS-package mesh whose proxy registry needs auth, a gateway pull-secret is an
+additional one (see [Istio on VKS](docs/vks-services/istio.md#4-attach-prefer-the-gateway-api)).
 
 > **Provenance.** The *mechanism* is **KinD-verified** (`make e2e-kind-istio-existing` — Istio
 > auto-provisioned the gateway and its LB from our own `Gateway`). That **Broadcom's Istio routes with
