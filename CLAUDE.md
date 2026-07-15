@@ -608,20 +608,25 @@ KinD green changes any of it.
 
 ---
 
-#### B8. FIX the `no-gate-in-commit-chain` hook's FALSE POSITIVE on `-m`/`-F` message text
+#### B8. ✅ DONE — the `no-gate-in-commit-chain` hook no longer trips on a commit MESSAGE that quotes a chain
 
-`.claude/hooks/no-gate-in-commit-chain.py` matches its forbidden pattern (a gate token near a `git commit`)
-**inside the commit MESSAGE itself**. So a commit whose *message* quotes `make static-check && git commit`
-is refused even though the actual command is a single, legitimate `git commit`. **Verified live 2026-07-14
-— it blocked the very commit that documented this bug**, until the message moved to `-F <file>`.
+**Fixed 2026-07-14.** `.claude/hooks/no-gate-in-commit-chain.py` matched its forbidden pattern (a gate
+token near a `git commit`) **inside the commit MESSAGE itself** — so a commit whose *message* quoted
+`` `make static-check && git commit` `` in a **backtick code-span** was refused, because a backtick is a
+command-position char and the gate token inside the message read as a real execution. (That backtick
+code-span is the actual reproduction — a message where the gate token merely follows an opening quote
+never tripped it.) The fix adds a `MESSAGE_ARG` strip: before the GATE/COMMIT search, it removes the
+argument of every message-bearing flag (`-m`/`--message` string, `-F`/`--file` operand, combined shorts
+like `-am`), so only *command structure* is inspected, not prose.
 
-**Fix:** before matching, strip the message argument — everything after `-m <str>` / `--message …` and the
-`-F <file>` / `--file` operand — so only the *command structure* is inspected, not prose. Then RED/GREEN
-prove BOTH: (a) `git commit -m "make ci && git commit"` (message quotes the pattern) → **ALLOWED**;
-(b) `make ci && git commit -m x` (real chain) → still **BLOCKED**.
+Proven BOTH directions and RED-proven that the fix is load-bearing:
 
-Workaround until then (already the house rule): pass commit messages via `-F <file>`, never inline `-m`
-with special text. This is the same file-not-argv discipline the backtick/`$(…)` rules already mandate.
+- `scripts/test-no-gate-in-commit-chain.sh` (wired into `make test-scripts` → `static-check`): 20 cases —
+  every message-quoting form (incl. the backtick reproduction, `-am`, `--message=`, multi-`-m`, heredoc)
+  is **ALLOWED**; every real chain (`&&`, `| tail &&`, `grep||echo &&`, `; commit`, `&& push`) still
+  **BLOCKED**; benign singletons allowed.
+- RED-proof: the unfixed hook (strip line removed) **BLOCKS** the backtick reproduction (rc=2) — the bug
+  was real and the strip is what fixes it.
 
 ## ✅ RESOLVED 2026-07-14 — the read-only hook WORKS. The hole was its REGEX, and our own rules dug it
 
