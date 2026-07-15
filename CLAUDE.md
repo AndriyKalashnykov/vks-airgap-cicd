@@ -408,11 +408,15 @@ confirms `clusters` IS grantable in an AppProject role, so `argocd.md` is right 
   `[src: code:…istio.sh:219-221 / :384-387]` citations in `istio.md`; the provenance gate only RANGE-checks,
   so they were silently rot-prone — re-pointed to `:222-224` / `:387-390` and verified by opening the cited
   lines.** `make diagrams` regenerated `istio-ingress.png`; `docs-lint` + `static-check` green.
-  - **Follow-up found this session (deliberately OUT of scope — belongs to B2):** `docs/diagrams/istio-ingress.puml:41`
-    still says *"UNVERIFIED whether a VKS guest cluster ships [the Gateway API CRDs]"*, which `istio.md`'s
-    §4 note now contradicts (CONFIRMED 9.1-doc: shipped by default from the VKr). Correct it when B2 (the
-    CRD-**version** question) is worked — it carries the version nuance, so it was not folded into this
-    unrelated pull-secret PR.
+  - **✅ Follow-up CLOSED (this session, separate PR):** `docs/diagrams/istio-ingress.puml:41`'s stale
+    *"UNVERIFIED whether a VKS guest cluster ships [the CRDs]"* is corrected to match the istio.md §4 graded
+    fact — *"VKS 9.1 guest clusters SHIP them by default (VKr-managed, 9.1-doc); open risk (B2) is the
+    VERSION we pin vs the VKr's, not presence"*; the unconditional "tenant must ASK" is now the CRDs-**absent**
+    fallback (code-confirmed: `48-istio-preflight.sh:56-66` emits the ask only in the `else` branch).
+    vks-adversary-reviewed (SHIP-VERBATIM). **New remaining nit (out of scope, non-rendered):**
+    `docs/diagrams/istio-ingress.puml:10` code comment calls Istio a "STANDARD PACKAGE … (verified)", but
+    packaging is graded `9.0-doc (inferred for 9.1)` and VKS 3.7.0 renamed *Standard Packages*→*VKS Add-ons*
+    (`istio.md:18,193`) — a comment, doesn't render; fix opportunistically.
 - **`docs/reviews/2026-07-14-doc-truth-audit.md` (555 lines, ~45 survived findings) was NOT exhaustively
   applied** — only the handoff-named B4 subset + everything the kind/Scenario-1 walkthrough surfaced.
   Re-walk it for residual confirmed findings.
