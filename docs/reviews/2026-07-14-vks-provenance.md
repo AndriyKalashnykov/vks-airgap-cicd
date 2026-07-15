@@ -119,6 +119,8 @@ So **`latest` IS `9-0`** for VKS standard packages, and the 9-1 path does not ex
 - **quote:** ""Some policy only have meaning within an application" — the page enumerates applications, applicationsets, logs and exec as the policies that "can also be configured in [AppProject's] roles". `clusters` is NOT among them, i.e. it exists only in the global RBAC policy → cluster registration cannot be delegated to a tenant AppProject role."
 - **code:** Makefile:328 (`argocd-register-guest … ADMIN-only; needs ARGOCD_KUBECONFIG + KUBECONFIG`); k8s/argocd/*.yaml:20-24 (destination is a variable, with the comment "on a real lab the guest must be a REGISTERED destination or ArgoCD would deploy onto the Supervisor"); scripts/70-configure-argocd.sh:237-253 (a tenant may be Forbidden from LISTING registered clusters — handled, not assumed)
 
+> **SUPERSEDED 2026-07-15.** The **quote** above reads the WRONG upstream page (`operator-manual/rbac/`, which lists the *Application-Specific* policy set), not `user-guide/projects.md`. `user-guide/projects.md` (Note 2) lists `clusters` among the resources an AppProject role MAY grant (verified by WebFetch 2026-07-15: *"other types of resources can also be used: applicationsets, repositories, clusters, logs and exec"*). So the "`clusters` is global-only → registration cannot be delegated" reasoning is wrong; the admin-only conclusion survives on the **`projects, update`** requirement instead. Current fact: [`docs/vks-services/argocd.md`](../vks-services/argocd.md) (the "clusters/UPDATE the AppProject" row).
+
 ### `docs/vks-services/README.md:22-24`
 
 - **fact:** "there are no 'Istio credentials' to fetch" — mesh access is Kubernetes RBAC; Istio exposes no login/token/admin API.
