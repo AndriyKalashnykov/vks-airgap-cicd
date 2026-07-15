@@ -41,7 +41,9 @@ make check-tools                                     # what you have, what is mi
 
 ```bash
 SUPERVISOR_HOST=<supervisor-control-plane-IP>   # vCenter → Workload Management → Supervisors
-VKS_USERNAME=administrator@vsphere.local
+VKS_USERNAME=administrator@vsphere.local        # the Supervisor PASSWORD is NOT stored here — you enter it
+                                                # INTERACTIVELY at `vcf context create` (step A2 below). Only the
+                                                # VKS_AUTH_METHOD=vsphere fallback keeps VKS_PASSWORD in .env.
 VKS_NAMESPACE=<vsphere-namespace>
 VKS_CLUSTER_NAME=<the guest cluster you create in A3>
 ```

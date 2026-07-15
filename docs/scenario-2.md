@@ -21,11 +21,13 @@ cluster's namespaces and the workloads in them.
 | **The surprise** | there are **no Istio credentials** — no login, no token, no admin API. Mesh access is plain kubectl RBAC; `make istio-preflight` reports what you may do and what to ask for. |
 
 Everything you need is in this section — you do not have to read the other scenario. Dual-homed:
-the jump box reaches both the internet and the lab (Supervisor API + Harbor).
+the jump box reaches both the internet and the lab (Supervisor API + Harbor). (Note: `docs/sneakernet.md`
+uses "jump box" for the *air-gapped* inside box and "staging box" for the internet one — the opposite of
+here; when it matters, say *internet box* / *air-gap box*.)
 
 ## Discover Harbor & ArgoCD + request grants
 
-**1 — Discover the endpoints** (read-only; you need at least read access to the Services'
+**Discover the endpoints** (read-only; you need at least read access to the Services'
 namespaces, or ask the platform team for the values):
 
 ```bash
@@ -37,7 +39,7 @@ kubectl get svc -n <argocd-namespace> argocd-server \
   -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
 ```
 
-**2 — Request grants from the platform team:**
+**Request grants from the platform team:**
 
 - **A Harbor project you can push to, plus a robot account.** Here the number of projects decides
   what you can do for yourself, because **Harbor scopes robots by level**:
@@ -64,13 +66,15 @@ kubectl get svc -n <argocd-namespace> argocd-server \
   `spec.sourceRepos`. **UNVERIFIED and load-bearing:** a tenant may not be able to `kubectl apply`
   into the ArgoCD instance's (admin-owned) vSphere Namespace at all — a tenant's grant may be
   *ArgoCD* RBAC (via `argocd-server`) rather than *Kubernetes* RBAC. `make gitops` MEASURES this
-  (`kubectl auth can-i`) and, if refused, prints exactly what to request. Settle it on your lab:
-  `kubectl --kubeconfig $ARGOCD_KUBECONFIG -n $ARGOCD_NAMESPACE auth can-i create applications.argoproj.io`.
+  (`kubectl auth can-i`) and, if refused, prints exactly what to request. Settle it with
+  **`make argocd-preflight`** — it reports the write mechanism, the namespace and your AppProject, and
+  needs no `kubectl` access to the ArgoCD side (the tenant `api` path).
 - **The workload cluster kubeconfig** — `vcf cluster kubeconfig get <cluster> --export-file
   ./secrets/vks.kubeconfig` for the cluster you run the demo in. You need **cluster-admin** on
-  it (the flow creates the `gitea` / `ci` / `javawebapp` namespaces and installs Tekton CRDs).
+  it (the flow creates `gitea`, `ci`, and one namespace per app in `apps/registry.tsv` — today
+  `javawebapp` + `gowebapp` — and installs Tekton CRDs).
 
-**3 — Record what you discovered / were granted in `.env`.** `.env` is gitignored — create it first:
+**Record what you discovered / were granted in `.env`.** `.env` is gitignored — create it first:
 
 ```bash
 make env-init      # creates .env from .env.example (backs up any existing one)
@@ -85,7 +89,7 @@ HARBOR_PASSWORD=<robot-secret>          # never on argv
 HARBOR_CA_FILE=./secrets/harbor-ca.crt  # fetched in Step 2 below (make fetch-harbor-ca)
 HARBOR_INFRA_PROJECT=<granted-project>  # may be ONE shared project, not a cicd/apps split
 HARBOR_APP_PROJECT=<granted-project>
-HARBOR_PUBLIC_PROJECTS=false            # tenant projects are typically private (see Step 4)
+HARBOR_PUBLIC_PROJECTS=false            # tenant projects are typically private; NO-OP on an existing project (only sets public: at project creation)
 ARGOCD_SERVER=<discovered-argocd-server-LB-IP>
 ARGOCD_NAMESPACE=<namespace the shared ArgoCD instance watches>
 ARGOCD_TRACK_BRANCH=main
@@ -159,14 +163,18 @@ from the running Harbor with **`make fetch-harbor-ca`** (reads `HARBOR_URL`, wri
 `HARBOR_CA_FILE`), or by hand:
 
 ```bash
-make fetch-harbor-ca                         # convenience: HARBOR_URL → HARBOR_CA_FILE
-# …or the equivalent by hand:
-mkdir -p secrets
-openssl s_client -connect <harbor-host>:443 -showcerts </dev/null 2>/dev/null \
-  | openssl x509 -outform PEM > secrets/harbor-ca.crt
+make fetch-harbor-ca     # HARBOR_URL → HARBOR_CA_FILE; it takes the ISSUER cert of the chain and openssl-verifies it before writing
 ```
 
-(Or download it from the Harbor UI → your project → **Registry Certificate**.) The CA is
+Do **not** hand-roll this with `openssl s_client … | openssl x509` — that pipes only the first PEM (the
+server **leaf**), not the issuing CA, so it *passes* on a self-signed KinD Harbor but *fails* on a
+cert-manager Harbor (the real lab) with `x509: certificate signed by unknown authority`. If you must do it
+by hand, extract the **last** cert of the chain and `openssl verify -CAfile` the leaf against it.
+
+(You may also see a **Registry Certificate** download on the Harbor project page, but it is **empty** on a
+Harbor whose TLS is terminated by an ingress / cert-manager — the usual shared-lab shape — so treat
+`make fetch-harbor-ca` as the reliable path, and ask the platform team for the issuing CA PEM if neither
+works.) The CA is
 consumed in **two** places, both handled for you: `make mirror` builds a **sudo-free** trust
 bundle (`SSL_CERT_FILE` = the system CAs + your Harbor CA) so `crane` pushes over HTTPS
 **without** touching the jump box's system trust store, and `make platform` creates an
@@ -256,13 +264,18 @@ Reference: [William Lam — using a VKS cluster with a private container registr
 reproducible on the KinD stand-in.)
 
 **Step 4 — Harbor projects + the image-pull secret.** Point `HARBOR_INFRA_PROJECT` /
-`HARBOR_APP_PROJECT` at the project(s) you were **granted** (Step 2) — they already exist, so
-`make mirror` (run in Step 6) just pushes to them (it does **not** need to create them). Because a
-tenant project is typically **private** (`HARBOR_PUBLIC_PROJECTS=false`), the workload's kubelet
-cannot pull the app image anonymously — so `make gitops` creates the image-pull secret
-(`harbor-pull`) in **every app's namespace** from `HARBOR_USERNAME`/`HARBOR_PASSWORD`, and each
-app's Deployment already references it. The pipeline's push secret (`harbor-dockerconfig` in `ci`,
-Step 5) authorizes **pushes only**, never the workload's pull — two different credentials, two
+`HARBOR_APP_PROJECT` at the project(s) you were **granted** (in the *Request grants* step above) — they
+already exist. `make mirror` (run in Step 6) pushes to them; internally it first does a HEAD to confirm the
+project exists, but if your credential is a **project-scoped robot** that cannot query Harbor's system
+`/projects` endpoint, that HEAD is denied and it falls through to a project-CREATE `POST` that **403s even
+though the project exists and your push is authorized** — a known gap (an `ensure_project || true` guard is
+tracked). If you hit a 403 on an existing project, that is this, not your push credential. Because a tenant
+project is typically **private**, the workload's kubelet cannot pull the app image anonymously — so
+`make gitops` creates the image-pull secret (`harbor-pull`) in **every app's namespace** whenever
+`HARBOR_USERNAME`/`HARBOR_PASSWORD` are set, and each app's Deployment already references it (that is what
+makes a private tenant project work — `HARBOR_PUBLIC_PROJECTS` only sets `public:` at project *creation*
+and is a no-op on a project that already exists). The pipeline's push secret (`harbor-dockerconfig` in
+`ci`, Step 5) authorizes **pushes only**, never the workload's pull — two different credentials, two
 different namespaces. You supply the robot you were granted; the wiring is automatic:
 
 ```bash
@@ -270,16 +283,22 @@ make harbor-robot                                  # → secrets/harbor-robot.en
 # then copy its two lines (HARBOR_USERNAME='robot$<name>' / HARBOR_PASSWORD=…) into .env
 ```
 
+`make harbor-robot` authenticates with the **current** `HARBOR_USERNAME`/`HARBOR_PASSWORD` and asks Harbor
+*"am I project/system-admin?"* (`GET /users/current`) before minting a robot — **a robot cannot mint a
+robot.** So to self-service one, put a **USER** credential (with project- or system-admin) in `.env`
+**first**, run `make harbor-robot`, **then** replace the two lines with the robot's. If you were simply
+*handed* a robot, skip this step — just set the robot's two lines.
+
 Confirm the namespace the shared ArgoCD watches (for `ARGOCD_NAMESPACE`). **ArgoCD is a Supervisor
-Service — it does NOT run in your guest cluster**, so this must query the ArgoCD side, not your
-`KUBECONFIG`:
+Service — it runs on the Supervisor, not your guest cluster**, so this needs a **Supervisor** kubeconfig,
+which a locked-down tenant usually does **not** have:
 
 ```bash
-kubectl --kubeconfig $ARGOCD_KUBECONFIG get pods -A | grep argocd-application-controller
+kubectl --kubeconfig <your-supervisor-kubeconfig> get pods -A | grep argocd-application-controller
 ```
 
-If you have no kubeconfig for it (a locked-down tenant often does not), **ask the platform team for
-the namespace** — or use `ARGOCD_MECHANISM=api`, which needs no Kubernetes access there at all.
+If you have no Supervisor kubeconfig (the common tenant case), **ask the platform team for the namespace**
+— or use `ARGOCD_MECHANISM=api`, which needs no Kubernetes access there at all.
 
 **Step 5 — verify (or create) the in-cluster registry secret.** The pipeline pushes the
 built image to Harbor from inside the cluster, which needs a Docker-config secret.
@@ -315,14 +334,16 @@ Catch a wrong value in **seconds** instead of 20 minutes into the mirror. As a t
 most of these values, so this is exactly where a typo or a stale endpoint shows up:
 
 ```bash
-make env-populate   # DISCOVER what is discoverable (Harbor / ArgoCD endpoints) instead of re-typing it
+make env-populate   # mints the Gitea secrets; it CANNOT discover a Supervisor-hosted Harbor/ArgoCD from your GUEST kubeconfig (you set those above) — skip it if you set everything by hand
 make env-check      # presence gate: is every required value set? (fast, no network)
 make env-validate   # validity gate: does KUBECONFIG reach the cluster, and does Harbor really authenticate?
 ```
 
-**Expect:** `env-check` → *all required values present*; `env-validate` → Harbor reachable **and
-authenticated over HTTPS with your CA**. If the CA you were handed does not actually verify Harbor, it
-fails **here**, not inside Kaniko an hour later.
+**Expect:** `env-check` → *all required values present*; `env-validate` → Harbor reachable and
+authenticated. **Note:** over HTTPS `env-validate` currently falls back to `-k` (skip-verify) when
+`HARBOR_CA_FILE` is unset or the file is missing — so a green here does **not** prove your CA trusts
+Harbor; confirm `HARBOR_CA_FILE` points at a real file. (A present-but-wrong CA *does* fail, but it is
+reported as *HTTP 000 / unreachable* — the wrong cause.)
 
 **First, one fork — can this jump box reach BOTH the internet and Harbor?** `make install-all` runs
 `make mirror`, which pulls from the internet **and** pushes to Harbor **in the same command**. A tenant jump
@@ -353,8 +374,10 @@ were granted).
 
 > **Cross-cluster ArgoCD deploy.** The shared ArgoCD runs on the **Supervisor**, so it must be
 > told where your **guest** workload cluster is — and **registering a cluster is an ArgoCD-ADMIN
-> operation** you cannot self-service as a tenant. Do **not** set `ARGOCD_KUBECONFIG` (you lack
-> Supervisor/ArgoCD-admin access, so `make gitops`'s auto-registration would fail). Instead
+> operation** you cannot self-service as a tenant. Set **`ARGOCD_REGISTER=never`** in `.env` — that is
+> the tenant setting; registration is the platform team's job. (Do **not** set `ARGOCD_KUBECONFIG`
+> either; leaving it unset also skips registration, but only because ArgoCD then *looks* in-cluster —
+> `ARGOCD_REGISTER=never` is the explicit signal.) Instead
 > **request** that the platform team register your guest cluster as an ArgoCD destination (they
 > run `make argocd-register-guest` / `argocd cluster add`, or wire it via the argocd-attach-service
 > CRs), then set **`ARGOCD_DEST_SERVER`** to your guest cluster's API URL in `.env` so the
@@ -364,8 +387,8 @@ were granted).
 **Step 7 — access the UIs.** Harbor and ArgoCD are the **shared** instances — use the endpoints
 you discovered + the credentials you were granted. For **Gitea** (which you installed) and the
 deployed **app**, either front them with the ingress at `*.vks.local`, or `kubectl port-forward`
-(`kubectl -n gitea port-forward svc/gitea-http 3000:3000`,
-`kubectl -n javawebapp port-forward svc/javawebapp 18080:80`).
+(`kubectl -n gitea port-forward svc/gitea-http 3000:3000`, and one per app —
+`kubectl -n <app> port-forward svc/<app> 18080:80` for each of `javawebapp`, `gowebapp`).
 
 > **Ingress — ASK the cluster whether a mesh is there. Do not assume.** A platform team *may* have
 > shipped your cluster with the VKS Istio package (possibly at cluster-creation time) — but
@@ -387,10 +410,13 @@ deployed **app**, either front them with the ingress at `*.vks.local`, or `kubec
 > the proxy *and* its LoadBalancer — nothing needed from the platform team), else the classic
 > `Gateway`/`VirtualService` path.
 >
-> ⚠️ **As a tenant you cannot install the Gateway API CRDs.** If they are absent, you are on the
-> classic path — and the VKS package ships its shared gateway **off by default**, so there may be
-> nothing to bind to. In that case you must **ask the mesh admin** to enable a gateway.
-> `istio-preflight` says so in those words.
+> **Gateway API CRDs — you MAY be able to install them yourself.** You hold **cluster-admin on your own
+> guest cluster**, and the Gateway API CRDs are cluster-scoped resources of *that* cluster — so
+> `make install-ingress INGRESS_CONTROLLER=istio-existing` installs them if absent, and Istio then
+> auto-provisions the proxy + LB from the `Gateway` you create. Only **ask the mesh admin** if you do
+> **not** own the cluster the mesh runs in. (If you end up on the classic path — no Gateway API — and the
+> VKS package ships its shared gateway **off by default**, then there is nothing to bind to and you
+> request a gateway.) `istio-preflight` reports which case you are in.
 >
 > Add the printed `INGRESS_LB_IP` line to `/etc/hosts`
 > (see [Access the UIs](../README.md#access-the-uis-urls-logins-passwords)).
@@ -439,7 +465,7 @@ deployed **app**, either front them with the ingress at `*.vks.local`, or `kubec
   `Host: <ip>`, which matches no vhost (404, not a clone). `make gitops` refuses to build an
   unreachable repoURL rather than let every Application fail silently.
 - **cluster-admin** on the workload cluster is required — the flow creates namespaces
-  (`gitea`, `ci`, `javawebapp`) and installs Tekton CRDs.
+  (`gitea`, `ci`, and one per app in `apps/registry.tsv` — `javawebapp`, `gowebapp`) and installs Tekton CRDs.
 - **StorageClass:** Gitea uses a PVC (`GITEA_STORAGE_SIZE`, default `5Gi`). Ensure the
   cluster has a default StorageClass (or set one explicitly).
 - **Harbor project(s)** you were granted must exist and you must hold **push** on them; a
