@@ -560,7 +560,17 @@ them to expect a clean `check-tools` *before* the carry.)
 
 ---
 
-#### B5. PROVENANCE — a grade is not a source, and every "9.0-doc" grade was earned under a FALSE premise
+#### B5. ✅ DONE (correction, adversary-reviewed) — the false premise is purged; the `check-vks-provenance` GATE is still owed
+
+**Done 2026-07-14:** the "9.1 URLs 301-redirect to 9.0" premise is corrected across
+`docs/vks-services/*.md`, `docs/decisions/*.md`, the topology diagram + CLAUDE.md, re-graded with real
+citations (Harbor/ArgoCD packaging → 9.1-doc; ArgoCD server 2.14.15→**2.14.13** [9.1-RN], with 2.14.15
+flagged as the 9.0 example; Istio Gateway-API CRDs confirmed shipped-by-default + the opt-out label).
+`vks-adversary`-reviewed before shipping — it caught a false Harbor claim I'd introduced + the entirely
+skipped `argocd.md`. **STILL OWED: the `check-vks-provenance` GATE** — the correction landed first; the
+enforcement gate (a citation-token schema so every fact row carries a resolvable reference, RED-proven,
+landed atomically with a full row re-grade; only `code:FILE:LINE` refs are offline-verifiable — the URL
+arm is shape-only) is the follow-up. The original task description follows. ↓
 
 **The belief that "Broadcom 9.1 URLs 301-redirect to the 9.0 tree" is FALSE.** Measured with curl across
 7+ URLs: **no `/9-1/` URL redirected** — they return **200**, or **404** when the page was *renamed* (9.1
@@ -624,6 +634,64 @@ prove BOTH: (a) `git commit -m "make ci && git commit"` (message quotes the patt
 
 Workaround until then (already the house rule): pass commit messages via `-F <file>`, never inline `-m`
 with special text. This is the same file-not-argv discipline the backtick/`$(…)` rules already mandate.
+
+---
+
+#### B9. Sweep ALL docs for FACTS, not NOVELS — no historical excursions in reference/runbook prose
+
+A reference or runbook doc states the **fact** (measured, cited), never the **arc** (what it used to
+say, "a prior session claimed X, that was wrong"). The arc lives in git + the cited `docs/reviews/*`
+file, not the doc body. Sweep every operator/reference doc — `README.md`, `docs/**` (incl.
+`docs/vks-services/*.md`, `docs/decisions/*.md`), diagram captions — and rewrite retrospective narrative
+to fact-forward: the current fact + a one-line dated citation.
+
+**Detector to build (a real gate candidate):** grep `docs/**` + `README.md` for retrospective markers
+(`a prior session`, `an earlier note`, `used to say`, `was wrong`, `was false`, `corrected 20`,
+`we then`, `originally`, `the premise was`) and flag for a human decision (a one-line dated correction
+is fine; a paragraph re-litigating the old belief is the novel). **EXEMPT:** `CLAUDE.md` (agent
+instructions — the anti-re-retraction guard has value) and `docs/reviews/*` (those files ARE the arc).
+Source: owner, 2026-07-14 — the B5 provenance callout first shipped as a multi-line "the premise was
+WRONG, an earlier note claimed…" excursion instead of the one-line measured fact.
+
+---
+
+#### B10. Validate whether `docs/access-uis.md` earns its place — check EACH referrer's context
+
+`docs/access-uis.md` (URLs / logins / passwords for the UIs) is linked from three docs + one gate:
+
+- `README.md:229` — "Access the UIs — URLs, logins, passwords"
+- `docs/scenario-1.md:353` — inside the `/etc/hosts` step
+- `docs/kind-local.md:27` — "open the UIs"
+- `scripts/check-readme-scenarios.sh:80` — a gate token (`access-uis`)
+
+For EACH referrer, read the surrounding context and judge whether `access-uis.md` is actually RELEVANT
+there — does it give the reader something they need *at that point*, or is it redundant / stale / aimed
+at the wrong persona? Specifically:
+
+- Does its content duplicate `make creds-show` (the single source of truth for access info)? If so, does
+  it **reference** that command or **re-state credential literals** (the credentials-in-docs rule → it
+  must reference, not restate)?
+- Is it relevant to the **real-lab** scenarios (scenario-1/2), or only the KinD stand-in? A doc linked
+  from scenario-1 that only makes sense on KinD is mis-referenced.
+- Verdict: if it earns its place, keep it; if redundant/stale, fold it into the referrers or delete it
+  and drop all four links (incl. the gate token). Whatever you decide, say WHY per referrer.
+
+Source: owner, 2026-07-14 — "is access-uis.md ever relevant to anything?"
+
+---
+
+#### B11. Is the sneakernet.md diagram clear/big enough? — evaluate (and maybe redesign) the EXISTING `sneakernet.puml`
+
+`docs/sneakernet.md:9` **already** embeds a PlantUML-rendered diagram (`docs/diagrams/out/sneakernet.png`
+from `docs/diagrams/sneakernet.puml`, `width=960`, click-to-enlarge), beside a two-box table (staging vs
+jump box). So this is a **quality** question, not existence: judge whether that diagram is actually CLEAR
+and LEGIBLE — big enough, readable labels, and does it convey the two-box + carry-the-bundle-on-media flow
+*better than the table already does*? If a redesign helps, edit `sneakernet.puml`, `make diagrams` to
+re-render, and commit the PNG (the `diagrams-check` drift gate enforces regeneration — label changes DO
+change the render). If it's already fine, say so and state what you checked (open the PNG, confirm labels
+legible at the embedded width). A PlantUML/C4 render is the right tool (the repo renders it
+byte-deterministically); the open question is only whether the current one earns its space or should be
+sharper. Source: owner, 2026-07-14 — "at sneakernet.md would a PUML diagram be better, more clear/bigger?"
 
 ## ✅ RESOLVED 2026-07-14 — the read-only hook WORKS. The hole was its REGEX, and our own rules dug it
 
