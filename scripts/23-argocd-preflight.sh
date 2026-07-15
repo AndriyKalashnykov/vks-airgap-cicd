@@ -104,8 +104,20 @@ ns_err="$(ka get ns "$NS" 2>&1 >/dev/null)"; ns_rc=$?
 if [ "$ns_rc" != 0 ]; then
   if printf '%s' "$ns_err" | grep -qi forbidden; then
     warn "you may not even READ namespace '$NS' on the ArgoCD cluster (Forbidden) — a PERMISSION problem, not a missing install."
+  elif [ "${ARGOCD_MECHANISM:-auto}" = kubectl ]; then
+    # kubectl is the ONE write path that must read+write this namespace (70-configure-argocd.sh dies here
+    # too for MECH=kubectl). For it, catching a NotFound BEFORE the 20-minute mirror is this preflight's
+    # whole point — so this stays a hard block.
+    block "namespace '$NS' not found on the ArgoCD cluster ($ARGOCD_API), and ARGOCD_MECHANISM=kubectl requires it. Wrong ARGOCD_NAMESPACE? On VKS the instance namespace is typically 'argocd-instance-N', not 'argocd'."
+  elif [ "$ARGOCD_KUBECONFIG" = "$KUBECONFIG" ]; then
+    # Defaulted to the GUEST. ArgoCD is a Supervisor Service on ANOTHER cluster, so NotFound is EXPECTED
+    # and kubectl is NOT the tenant's write path (api/request is) — 70 continues here too. Do NOT block,
+    # or `make install-all` dies before the mirror for exactly the tenant this scenario targets (C12).
+    warn "namespace '$NS' not found on the ArgoCD cluster ($ARGOCD_API) — NORMAL for a tenant: ArgoCD is a Supervisor Service on a different cluster and ARGOCD_KUBECONFIG defaults to the GUEST. kubectl is not your write path; the api/request mechanism is. Continuing."
   else
-    block "namespace '$NS' not found on the ArgoCD cluster ($ARGOCD_API). Wrong ARGOCD_NAMESPACE? On VKS the instance namespace is typically 'argocd-instance-N', not 'argocd'."
+    # ARGOCD_KUBECONFIG was set explicitly but the ns still isn't there — likely a wrong ARGOCD_NAMESPACE.
+    # Still not fatal unless MECH=kubectl (handled above): api/request bypass kubectl. Warn, don't block.
+    warn "namespace '$NS' not found on the ArgoCD cluster ($ARGOCD_API). Wrong ARGOCD_NAMESPACE? On VKS it's typically 'argocd-instance-N'. Not fatal for ARGOCD_MECHANISM=${ARGOCD_MECHANISM:-auto} (kubectl is not the write path); continuing."
   fi
 fi
 can_kubectl=0
@@ -127,6 +139,17 @@ else
 fi
 if [ "$can_kubectl" = 0 ] && [ "$can_api" != yes ]; then
   warn "NO write mechanism is confirmed. As a tenant, request an ArgoCD AppProject role permitting 'applications, create' — or ask for the Applications to be created for you."
+fi
+
+# A CREDENTIALED api tenant on a DEFAULTED (guest) kubeconfig who forgot the DESTINATION passes every
+# check above (can_api=yes → no "no write mechanism" warn) yet `make gitops` will `die` at
+# 70-configure-argocd.sh:150 — OFF=0 (in-cluster) + an unreadable ArgoCD ns + no destination means the
+# default in-cluster destination is the SUPERVISOR, which it refuses. This warn is the EXACT mirror of
+# that guard (OFF=0 && ns-unreadable && no dest). The OFF=1 case is section 4 below (and 70's off-cluster
+# path) — must NOT be included here, or the Scenario-1 ADMIN (OFF=1, dest auto-derived by
+# 71-argocd-register-guest) gets a false "gitops will REFUSE" warning.
+if [ "$OFF" = 0 ] && [ "$ns_rc" != 0 ] && [ -z "${ARGOCD_DEST_SERVER:-}${ARGOCD_DEST_CLUSTER_NAME:-}" ]; then
+  warn "no deploy destination set: 'make gitops' will REFUSE (the default in-cluster destination is the Supervisor). Set ARGOCD_DEST_SERVER to your GUEST cluster's API URL — and have your guest REGISTERED as an ArgoCD destination (admin-only; see below)."
 fi
 
 # ---- 4. is the guest a REGISTERED destination, unambiguously? ------------------------------------

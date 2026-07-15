@@ -392,6 +392,18 @@ confirms `clusters` IS grantable in an AppProject role, so `argocd.md` is right 
 
 **Open backlog (none need a lab except where noted):**
 
+- **✅ DONE (this session) — 3 CRITICAL tenant-path code bugs (C10/C12/C13) fixed.** From two parallel
+  adversary audits (2026-07-15). **C10**: `31-fetch-argocd-kubeconfig.sh` double-appended the SSO domain
+  (`administrator@vsphere.local@vsphere.local`) → fixed via an idempotent `vks_sso_user()` in `lib/os.sh`
+  (no silent `vsphere.local` default), single-sourced into 30+31. **C12**: `23-argocd-preflight.sh` blocked
+  `install-all` on the ArgoCD ns-NotFound (tenant's guest lacks it) → now blocks only for
+  `ARGOCD_MECHANISM=kubectl`, plus a destination-warn so a credentialed api tenant who forgot
+  `ARGOCD_DEST_SERVER` is caught pre-mirror not at a green-preflight→gitops-die. **C13**: `scenario-2.md`
+  introduced the api token vars after `install-all` → moved the 6-var recipe, the `argocd login`
+  precondition, and the `write mechanism: api` Expect ahead of it. Two RED-proven offline tests (`test-vks-sso-user`,
+  `test-argocd-preflight-ns`) in `static-check`. vks-adversary 3 rounds.
+- **🔴 REMAINING audit backlog (2026-07-15, NOT applied — findings in the agent transcripts + `docs/reviews/2026-07-14-doc-truth-audit.md`):** the doctruth re-verification found **57 STILL-CONFIRMED / 10 already-fixed-by-this-session / 1 can't-verify**. Beyond C10/C12/C13, the remaining **CRITICALs** are: **C1** (`prerequisites-manual.md:60` mise on-ramp puts the mise binary on PATH, not the managed tools — needs `mise activate`), **C6** (`README.md:64` `make trust-harbor` as a bootstrap step needs a live Harbor), **C2/C3** (CLAUDE.md Conventions stale: "bundle carries only crane" — now 5 tools+charts; omits the `gawk/openssl/gettext` OS floor). Plus **24 HIGH / 26 MEDIUM** (mostly `scenario-2.md` [~15 live, un-remediated — needs a walkthrough PR like #251 did for scenario-1], `prerequisites-manual.md` [7 live], and CLAUDE.md gate-list/command-table drift). Adjacent G5-class bug flagged by the C13 review: `scenario-2.md:68,278` run `kubectl --kubeconfig $ARGOCD_KUBECONFIG` while telling the tenant to leave it unset (`:278` greps the guest for `argocd-application-controller`, which is on the Supervisor).
+- **⏸️ Agents+hooks GLOBAL refactor (user-initiated, mechanism verified):** move the general adversaries + the 3 general hooks (subagent-readonly / no-gate-in-commit-chain / mid-run-edit) to `~/projects/claude-config/{agents,hooks}/` + a `setup.sh` block → `~/.claude/`. Docs-confirmed: user-level `~/.claude/agents/` resolve in all projects, project overrides user, first-time dir needs a session restart. `adversary-first-gate` stays project-local (encodes this repo's RULE ZERO). Hooks need the `~/.claude/settings.json` wiring merged by hand (setup.sh won't overwrite it) — blast radius is portfolio-wide, verify end-to-end. (Global adversaries appeared live mid-session, so this is partly underway.)
 - **✅ DONE (this session) — istio "prefer the Gateway API" air-gap CRITICAL applied.** The gateway-api
   route path was graded *"Air-gap: free / needs nothing from the mesh admin"* — TRUE only for **we-install**
   (`INGRESS_CONTROLLER=istio`, `global.hub=<Harbor>`, `scripts/46-install-istio.sh`), FALSE on an **attached**

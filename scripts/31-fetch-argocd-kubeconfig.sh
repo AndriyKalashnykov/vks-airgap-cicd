@@ -44,7 +44,9 @@ log_info "SUPERVISOR kubeconfig -> ${ARGOCD_KUBECONFIG} (override with ARGOCD_KU
 : "${SUPERVISOR_HOST:?SUPERVISOR_HOST must be set in .env (the Supervisor IP/FQDN)}"
 : "${VKS_USERNAME:?VKS_USERNAME must be set in .env (the vCenter SSO user)}"
 : "${ARGOCD_NAMESPACE:?ARGOCD_NAMESPACE must be set in .env (the vSphere Namespace the ArgoCD instance runs in, e.g. argocd-instance-1)}"
-SSO_DOMAIN="${VKS_SSO_DOMAIN:-vsphere.local}"
+# 'user@SSO.DOMAIN', idempotent (lib/os.sh) — a VKS_USERNAME that already carries '@' is NOT re-domained
+# (the C10 double-domain bug); a bare user needs VKS_SSO_DOMAIN (no silent 'vsphere.local' default).
+VCF_USER="$(vks_sso_user "$VKS_USERNAME")"
 CTX="${ARGOCD_SUPERVISOR_CONTEXT:-argocd-supervisor}"
 
 mkdir -p "$(dirname "$ARGOCD_KUBECONFIG")"
@@ -65,7 +67,7 @@ else
   VKS_INSECURE_SKIP_TLS_VERIFY=true to skip verification."
 fi
 
-log_info "creating a SUPERVISOR context '${CTX}' at ${SUPERVISOR_HOST} as ${VKS_USERNAME}@${SSO_DOMAIN}"
+log_info "creating a SUPERVISOR context '${CTX}' at ${SUPERVISOR_HOST} as ${VCF_USER}"
 log_info "  -> the kubeconfig is written to ARGOCD_KUBECONFIG=${ARGOCD_KUBECONFIG}"
 log_info "  (interactive: the VCF CLI will prompt for the password — a password on argv is forbidden)"
 
@@ -74,7 +76,7 @@ log_info "  (interactive: the VCF CLI will prompt for the password — a passwor
 # ~/.kube/config and silently mix the Supervisor in with the guest-cluster context.
 KUBECONFIG="$ARGOCD_KUBECONFIG" run vcf context create "$CTX" \
   --endpoint "https://${SUPERVISOR_HOST}" \
-  --username "${VKS_USERNAME}@${SSO_DOMAIN}" \
+  --username "$VCF_USER" \
   --type k8s \
   "${TLS_ARGS[@]}"
 

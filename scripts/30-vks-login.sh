@@ -51,18 +51,9 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     : "${VKS_USERNAME:?set VKS_USERNAME in .env (user@SSO.DOMAIN, or set VKS_SSO_DOMAIN)}"
     : "${VKS_CONTEXT_NAME:?set VKS_CONTEXT_NAME in .env (the vcf context NAME to type at the prompt)}"
 
-    # Username must be 'user@SSO.DOMAIN'. Append VKS_SSO_DOMAIN if the bare form was given.
-    user="$VKS_USERNAME"
-    case "$user" in
-      *@*) : ;;
-      *)
-        if [ -n "${VKS_SSO_DOMAIN:-}" ]; then
-          user="${VKS_USERNAME}@${VKS_SSO_DOMAIN}"
-        else
-          die "VKS_USERNAME must be 'user@SSO.DOMAIN' (e.g. administrator@WLD.SSO), or set VKS_SSO_DOMAIN in .env"
-        fi
-        ;;
-    esac
+    # Username must be 'user@SSO.DOMAIN' — single-sourced with 31-fetch-argocd-kubeconfig.sh via
+    # vks_sso_user() (lib/os.sh): idempotent on '@', dies on a bare user with no VKS_SSO_DOMAIN.
+    user="$(vks_sso_user "$VKS_USERNAME")"
 
     # Build argv WITHOUT any secret. `vcf context create` prompts interactively for the
     # context name AND the password, so neither ever touches argv/procfs (security.md:
