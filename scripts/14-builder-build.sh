@@ -81,7 +81,7 @@ for app in $BUILDER_APPS; do
   # crane 0.21.7: "If the PATH is a directory, it will be read as an OCI image layout. Otherwise, PATH
   # is assumed to be a docker-style tarball."). Both podman and docker `save` produce exactly this — so
   # the air-gap box needs NO CONTAINER ENGINE to push it, only the crane the bundle already carries.
-  log_info "[${app}] saving -> ${tarball} (carried in the bundle; pushed by 'make builder-push' on the air-gap box)"
+  log_info "[${app}] saving via '${ENGINE} save' -> ${tarball} (carried in the bundle; pushed by 'make builder-push' on the air-gap box)"
   # `rm -f` FIRST: `podman save -o <existing-file>` fails with "docker-archive doesn't support modifying
   # existing images" (it will not overwrite), so a SECOND run dies while the first succeeded — a re-run
   # bug that a single green run cannot show. docker save overwrites, so this is podman-specific and
