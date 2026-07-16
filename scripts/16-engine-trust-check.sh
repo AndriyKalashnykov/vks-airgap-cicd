@@ -147,8 +147,15 @@ if have crane; then
   if [ "${HARBOR_INSECURE:-0}" = "1" ]; then
     run crane validate --remote --insecure "$TAG"
   else
-    # crane honours SSL_CERT_FILE, and it REPLACES Go's default pool — so the bundle must be
-    # system CAs + our CA, or a public pull in the same process would start failing.
+    # crane honours SSL_CERT_FILE. Bundle system CAs + our CA — it is the form that stays correct
+    # when SSL_CERT_DIR is set by the image/environment, or the cert layout is non-standard.
+    # CORRECTED 2026-07-16: this comment used to say SSL_CERT_FILE "REPLACES Go's default pool".
+    # It does NOT — it overrides only Go's default FILE list; certDirectories (/etc/ssl/certs,
+    # /etc/pki/tls/certs) are still read and appended unless SSL_CERT_DIR is ALSO set.
+    # Measured, Go 1.26.5, x509.SystemCertPool(): none -> 122 roots; SSL_CERT_FILE=<one-ca> -> 123
+    # (AUGMENTED); + SSL_CERT_DIR=/nonexistent -> 1. So a bare CA file would NOT have broken public
+    # pulls here — and, more importantly, SSL_CERT_FILE is NOT a way to make this box trust ONLY
+    # our CA. See claude-config rules/common/version-discipline.md.
     CRANE_TMP="$(mktemp -d)"; ca_bundle_with_system "$CA" "${CRANE_TMP}/ca-bundle.crt"
     SSL_CERT_FILE="${CRANE_TMP}/ca-bundle.crt" run crane validate --remote "$TAG"
     rm -rf "$CRANE_TMP"
