@@ -58,7 +58,7 @@ jobs:
       # Provides the jump-box toolchain from .mise.toml (kubectl/helm/crane/jq/yq/
       # kustomize/java/…) — the SAME setup ci.yml's static-check job uses, so local
       # `make` targets run against the pinned versions.
-      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4
+      - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4
 
       # `kind` comes from .mise.toml (the mise-action above), like crane/kubectl/helm/jq —
       # so CI and a real jump box get the SAME pinned version from ONE source of truth.
