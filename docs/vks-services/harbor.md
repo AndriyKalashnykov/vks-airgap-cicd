@@ -58,7 +58,7 @@ repo trusts it **per consumer** instead (all KinD-verified, and the same mechani
 
 | Consumer | Mechanism |
 |---|---|
-| `crane` (the mirror engine) | `SSL_CERT_FILE=<bundle>` — build the bundle as **system CAs + the Harbor CA**, since Go *replaces* its trust pool rather than augmenting it |
+| `crane` (the mirror engine) | `SSL_CERT_FILE=<bundle>` — build the bundle as **system CAs + the Harbor CA** (`ca_bundle_with_system`). **Corrected 2026-07-16:** this said Go *"replaces"* its trust pool. It **augments** — `SSL_CERT_FILE` overrides only Go's default *file* list; `certDirectories` (`/etc/ssl/certs`, `/etc/pki/tls/certs`) are still appended unless `SSL_CERT_DIR` is **also** set. Measured (Go 1.26.5, `x509.SystemCertPool()`): none → **122** roots · `SSL_CERT_FILE=<one-ca>` → **123** · `+ SSL_CERT_DIR=/nonexistent` → **1**. Bundle anyway — it is the form that survives `SSL_CERT_DIR` being set or a non-standard layout. **`SSL_CERT_FILE` is NOT a way to trust only our CA.** |
 | `podman` (builder push, the DEFAULT) | `--cert-dir <dir>` containing **only** `ca.crt` — per command, **no sudo, ever** |
 | `docker` **rootless** | the daemon reads `~/.config/docker/certs.d/<host>/ca.crt` — **no sudo** |
 | `docker` **rootful** | the daemon reads `/etc/docker/certs.d/<host>/ca.crt` — **root-owned, so ONE SUDO PER REGISTRY.** The `docker` group grants socket access, not write access to `/etc`; this cannot be engineered away, only disclosed |
