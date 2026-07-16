@@ -52,10 +52,16 @@ run kubectl -n "$TRAEFIK_NAMESPACE" rollout status deploy/traefik \
   --timeout="${READY_TIMEOUT_SECONDS}s"
 
 # --- 2. Ingress objects live in each backend's namespace; ensure they exist ---
-# gitea + argocd already exist; the app namespace is created by ArgoCD with
-# CreateNamespace, but the app Ingress may be applied before the first sync, so
-# pre-create it (ArgoCD adopts an existing namespace).
-for ns in "$GITEA_NAMESPACE" "$ARGOCD_NAMESPACE" $(app_names | tr '\n' ' '); do
+# The app namespace is created by ArgoCD with CreateNamespace, but the app Ingress may be applied
+# before the first sync, so pre-create it (ArgoCD adopts an existing namespace).
+#
+# NOT $ARGOCD_NAMESPACE. That was VESTIGIAL: nothing here routes ArgoCD — `ingress.yaml` exposes
+# only gitea + the Tekton dashboard, and ArgoCD keeps its OWN LoadBalancer (see CLAUDE.md). So the
+# creation bought nothing and cost three things: on a REAL lab this script runs against the GUEST
+# kubeconfig, and ArgoCD is a Supervisor Service — so it conjured a phantom empty `argocd` namespace
+# on the wrong cluster; in Scenario 2 that is a namespace the tenant does not own; and `create` is a
+# wider RBAC verb than the `patch` this flow otherwise needs.
+for ns in "$GITEA_NAMESPACE" $(app_names | tr '\n' ' '); do
   run bash -c "kubectl create namespace \"$ns\" --dry-run=client -o yaml | kubectl apply -f -"
 done
 

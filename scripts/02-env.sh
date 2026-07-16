@@ -201,8 +201,12 @@ env_validate() {
         log_info "Harbor reachable ($scheme://$HARBOR_URL)"
         # auth probe: password goes into a 0600 curl config file, NOT argv
         if ! is_placeholder "${HARBOR_PASSWORD:-}"; then
+          # esc_curlk (lib/os.sh): a bare `"` in the password truncates it, a `\` is eaten, a
+          # newline injects a curl directive. Without it this probe reports a FALSE 401 on a
+          # perfectly good password — the exact wrong answer for a gate whose job is to tell the
+          # operator whether their credentials work.
           local cfg; cfg="$(mktemp)"; chmod 600 "$cfg"
-          printf 'user = "%s:%s"\n' "${HARBOR_USERNAME:-admin}" "${HARBOR_PASSWORD}" > "$cfg"
+          printf 'user = "%s:%s"\n' "$(esc_curlk "${HARBOR_USERNAME:-admin}")" "$(esc_curlk "${HARBOR_PASSWORD}")" > "$cfg"
           local acode
           acode="$(curl -sS -o /dev/null -w '%{http_code}' --max-time "${CURL_MAX_TIME_SECONDS:-10}" "${cafg[@]}" -K "$cfg" "$scheme://$HARBOR_URL/api/v2.0/users/current" 2>/dev/null || echo 000)"
           rm -f "$cfg"

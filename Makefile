@@ -622,10 +622,14 @@ check-toolchain-alignment: ## Fail if kubectl pinned in .mise.toml disagrees wit
 	fi; \
 	echo "check-toolchain-alignment: go aligned ($$go_mise)"
 
-##@ Offline script tests (unit tests for script logic; NOT in static-check/ci)
+##@ Offline script tests (unit tests for script logic; RUN BY static-check)
 # Fast, fully-offline (no network/cluster/registry) unit tests for script logic that
-# otherwise only breaks on a real lab box / mid-mirror. Deliberately NOT wired into
-# static-check/ci so the core gate stays fast — run explicitly via `make test-scripts`.
+# otherwise only breaks on a real lab box / mid-mirror.
+#
+# This header used to say "Deliberately NOT wired into static-check/ci so the core gate stays
+# fast". That was FALSE: `static-check` depends on `test-scripts` (see its prereq list), and has
+# for a while. A comment that tells you a gate does not run is worse than no comment — someone
+# trusts it and skips the run.
 .PHONY: test-vcf-cli-resolve
 test-vcf-cli-resolve: ## Unit-test 01-install-vcf-clis.sh archive resolve + tar-vs-gz branch logic (offline, synthetic fixtures)
 	@$(SCRIPTS)/test-vcf-cli-resolve.sh
@@ -651,7 +655,7 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm ## Run all offline script-logic unit tests
 
 # NOTE: subagent-readonly + no-gate-in-commit-chain hooks (and their tests) are now GLOBAL
 # (~/projects/claude-config, installed into ~/.claude); this repo keeps only the project-local
@@ -659,6 +663,10 @@ test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-
 .PHONY: test-adversary-gate-rearm
 test-adversary-gate-rearm: ## Offline: the adversary-first gate RE-ARMS on every commit (a review authorizes only until the next commit)
 	@./scripts/test-adversary-gate-rearm.sh
+
+.PHONY: test-secret-quoting
+test-secret-quoting: ## Offline: a secret reaching a curl -K config / a .env line must round-trip and cannot inject
+	@$(SCRIPTS)/test-secret-quoting.sh
 
 .PHONY: test-creds-show
 test-creds-show: ## creds-show must not claim anything the state does not support (renders it in every state)

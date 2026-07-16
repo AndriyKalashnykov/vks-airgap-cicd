@@ -423,6 +423,39 @@ EOF
   export VKS_CONTEXT="${VKS_CONTEXT:-vks-workload}"
 }
 
+# --- Quoting a SECRET for a sink that PARSES it -------------------------------------------------
+#
+# Two sinks in this repo take a credential and parse it. Both were interpolating it RAW. Neither
+# failure is exotic: an ordinary strong password containing a `"` is enough.
+#
+# esc_curlk <value> — make a value safe inside a curl -K config's double-quoted directive.
+#
+#   Measured against a real HTTP server decoding the Authorization header (NOT `--libcurl`, which
+#   C-escapes its OWN output and misled three separate attempts at this):
+#       user = "admin:ab"cd"   ->  curl sends  admin:ab     <- TRUNCATED at the bare quote
+#       user = "admin:ab\cd"   ->  curl sends  admin:abcd   <- backslash EATEN
+#   -> Harbor 401, and lib/harbor.sh's diagnostic then blames the PASSWORD and the install order,
+#      sending the operator to fix a thing that is not broken. `pw_weak` (02-env.sh) mirrors
+#      Harbor's own IsValidSec — length + case + digit, NO charset limit — so `ab"cd` passes every
+#      local gate we have.
+#   A newline is worse than mangling: it opens a NEW config line, so the value becomes a curl
+#   DIRECTIVE (`upload-file = ...` was demonstrably settable). Reachable via Harbor's robot-secret
+#   ROTATE endpoint, whose validator permits any charset.
+#
+#   curl's config parser understands \\ \" \t \n \r \v inside a quoted value. Escape the backslash
+#   FIRST or you double-escape what you just inserted.
+esc_curlk() { local s=$1; s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}; printf '%s' "$s"; }
+
+# esc_sq <value> — make a value safe INSIDE single quotes: it's -> it'\''s
+#
+#   For a `.env` line that load_env sources with `set -a`. Single-quoting alone is not inert: a `'`
+#   in the value TERMINATES the quote, so the rest is parsed as CODE. Graded LOW, and fixed anyway:
+#   Harbor cannot currently emit a `'` (its secrets are [a-zA-Z0-9] and robot names are validated
+#   `^[a-z0-9]+(?:[._-][a-z0-9]+)*$`, both verified in goharbor v2.15.0 source), so the injection is
+#   NOT reachable today. It is one upstream charset change from being reachable, and a stray `'`
+#   already yields `unmatched '` -> the var ends up UNSET -> a 401 that blames the password.
+esc_sq() { local s=$1; s=${s//\'/\'\\\'\'}; printf '%s' "$s"; }
+
 # set_env_var KEY VALUE FILE — idempotently upsert KEY=VALUE into an EXPLICIT file.
 #
 # The file argument used to DEFAULT to .env.kind. That default is exactly how real-lab state ended up
