@@ -90,6 +90,19 @@ change here:
   `[ -f /etc/docker/certs.d/$HARBOR_URL/… ]` test is wrong the moment `HARBOR_URL` carries `https://`, a
   trailing `/`, a port, or a project path. Interrogate the SHAPE in each flow; the honest test is a
   login/pull handshake, not a file's existence.
+- **`kapp-controller` is a CA consumer nobody remembers, and it fails SILENTLY.** VKS uses Carvel's
+  kapp-controller for its own packages; if those live behind the internal CA it must trust it, via a
+  Secret named **exactly** `kapp-controller-config` in **its own** namespace (`tkg-system` on VKS), key
+  `caCerts`. It changes **no ConfigMap**, so the natural "check the configmap" verification shows
+  nothing and reads as failure; it also takes minutes to reconcile. The VKS-only path is a
+  `KappControllerConfig` in the **vSphere Namespace** named **exactly**
+  `<clustername>-kapp-controller-package` — wrong name, silently ignored. Any design that trusts the CA
+  for the engine and stops has covered ONE consumer. Table + traps:
+  `~/projects/claude-config/reference/internal-ca-trust.md`.
+- **Harbor's `getcert` is not a reliable CA source** — `GET /api/v2.0/systeminfo/getcert` exists but
+  returns "No certificate found" when Harbor holds no CA at its core path (the normal case with
+  ingress/cert-manager TLS — the Scenario-2 shape). Community walkthroughs use it with no caveat and
+  with `--no-check-certificate`, i.e. fetching a trust anchor over an unverified connection.
 - **Same-Supervisor auto-trust.** On a real VKS lab a guest cluster in the SAME Supervisor already trusts
   the Supervisor Harbor's CA (VCF / corporate PKI in the system store) — so "no `certs.d` file" does NOT
   mean "untrusted" there, while on KinD you must wire the CA yourself (per-node containerd
