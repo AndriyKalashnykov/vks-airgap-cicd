@@ -49,12 +49,11 @@ VKS_USERNAME=administrator@vsphere.local        # the Supervisor PASSWORD is NOT
                                                 # INTERACTIVELY at `vcf context create` (step A2 below). Only the
                                                 # VKS_AUTH_METHOD=vsphere fallback keeps VKS_PASSWORD in .env.
 VKS_NAMESPACE=<vsphere-namespace>
-VKS_CLUSTER_NAME=<the guest cluster you create in A3>
+VKS_CLUSTER_NAME=<the guest cluster you create in step A3>
 ```
 
-**Load `.env` into your shell** so the `$VAR` references in the raw commands below resolve (`.env` is
-sourced automatically by `make` targets, but **not** by your interactive shell — re-run this whenever you
-edit `.env`):
+**Load `.env` into your shell** so the raw `$VAR` commands below resolve (`make` sources it for you; your
+shell doesn't). Re-run after editing `.env`:
 
 ```bash
 set -a; . ./.env; set +a
@@ -70,10 +69,29 @@ overlay is **archived, not deleted** — it may hold that cluster's only passwor
 **For:** the registry everything pulls from. **Not scriptable** — this is browser work.
 **Broadcom's page:** [Installing and configuring Harbor and Contour](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-harbor-as-vcf-service/installing-and-configuring-harbor-and-contour.html).
 
-1. **Install Contour first** — it is itself a Supervisor Service and is Harbor's ingress **on the Supervisor**. (Or configure an NGINX LB for the Supervisor.)
-2. **Supervisor Management → Services → Add New Service** → upload `harbor-service-<ver>.yml`.
-3. **Edit `harbor-data-values-<ver>.yml`:** `hostname` (the Harbor **FQDN**) · `harborAdminPassword` · `secretKey` (**exactly 16 chars**) · `database.password` · `core.xsrfKey` (**32 chars**) · the five storage classes · and the ingress toggle (`enableContourHttpProxy: true`, or `enableNginxLoadBalancer: true`). **Leave `tlsCertificate` alone** — cert-manager self-issues, and the `managed-by: vmware-vRegistry` label is required for VKS trust.
-4. **Actions → Manage Service** → pick version + Supervisor → paste the values → **Finish**.
+1. **Expose Harbor** — it needs a load balancer or ingress controller. Pick **one**: an **NGINX-based load balancer**, or **Contour** (itself a Supervisor Service). If you choose Contour, **install it before Harbor** on the same Supervisor.
+2. **Register the service:** **Supervisor Management → Services → Add New Service** → upload `harbor-service-<ver>.yml`.
+3. **Edit the data-values file.** Copy `supervisor-service-harbor-data-values-<ver>.yml` and set the fields. These placeholders are **verified against v2.14.3** — a later version may rename keys, and `sed` changes *nothing* on a non-match (no error), so re-check if your version differs or you'll upload an **unedited** file.
+
+   ```bash
+   cp supervisor-service-harbor-data-values-v2.14.3.yml harbor-values.yaml
+   # v2.14.3 defaults to Contour (enableContourHttpProxy: true). This example flips to NGINX LB.
+   # The two toggles are mutually exclusive; set BOTH false for a plain Ingress instead.
+   sed -i \
+     -e 's/hostname: yourdomain.com/hostname: harbor.vcf.lab/' \
+     -e 's/enableNginxLoadBalancer: false/enableNginxLoadBalancer: true/' \
+     -e 's/enableContourHttpProxy: true/enableContourHttpProxy: false/' \
+     -e 's/insert-storage-class-name-here/vsan-default-storage-policy/' \
+     harbor-values.yaml
+   ```
+
+   Then replace **every `[Required]` secret placeholder by hand** (not `sed` — make them distinct):
+   `harborAdminPassword` (ships the known default `Harbor12345`) · `secretKey` (**exactly 16 chars**) ·
+   `core.xsrfKey` (**exactly 32 chars**) · and the **four** `change-it` values: `database.password`,
+   `core.secret`, `jobservice.secret`, `registry.secret`. **Do not touch `tlsCertificate.tlsSecretLabels`**
+   (`managed-by: vmware-vRegistry` — required for VKS trust); leave `tls.crt`/`tls.key`/`ca.crt` empty so
+   cert-manager self-issues.
+4. **Apply it (browser):** Burger Menu → **Supervisor Management → Services → Harbor → Actions → Manage Service** → pick version + Supervisor → **paste `harbor-values.yaml`** at the wizard's data-values step → **Finish**.
 5. **Map the FQDN — with a real DNS record. An `/etc/hosts` entry on the jump box is NOT an alternative.**
    `kubectl get svc -n <harbor-ns>` (or the Contour Envoy Service) → take the ingress IP → **create a DNS
    record that the GUEST CLUSTER'S NODES can resolve.**
@@ -240,6 +258,10 @@ make fetch-harbor-ca      # HARBOR_URL → HARBOR_CA_FILE
 Both consumers are handled for you: `make mirror` builds a **sudo-free** trust bundle
 (`SSL_CERT_FILE`), and `make platform` creates the in-cluster `harbor-ca` ConfigMap. If Harbor has a
 publicly-trusted cert, leave `HARBOR_CA_FILE` empty.
+
+**Manual alternative (no `make`, straight from the UI):** in Harbor open your project → **Registry
+Certificate** → it downloads `ca.crt`; save it as `HARBOR_CA_FILE`. If you paste it into a file by hand,
+**strip any trailing `<CR>`** — a stray carriage return breaks the PEM parse.
 
 <details><summary><b>If Harbor is on a DIFFERENT Supervisor, or its project is PRIVATE</b></summary>
 
