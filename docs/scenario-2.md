@@ -183,8 +183,8 @@ presents a publicly-trusted cert, leave `HARBOR_CA_FILE` empty.
 
 For **ArgoCD**'s self-signed CA (only needed if you drive `argocd login` with verification, or
 to trust its UI), fetch it the same way — `ARGOCD_SERVER` is already set from discovery, so run
-**`make fetch-argocd-ca`** (writes `ARGOCD_CA_FILE`). The pipeline wires ArgoCD via `kubectl`
-(not the `argocd` CLI), so this is optional for the demo itself.
+**`make fetch-argocd-ca`** (writes `ARGOCD_CA_FILE`). The tenant `api` path establishes the CLI's TLS
+trust via `argocd login` (the Step-3 token recipe), so `ARGOCD_CA_FILE` is optional for the demo itself.
 
 **Step 3 — install prereqs and log in to VKS:**
 
@@ -268,8 +268,8 @@ reproducible on the KinD stand-in.)
 already exist. `make mirror` (run in Step 6) pushes to them; internally it first does a HEAD to confirm the
 project exists, but if your credential is a **project-scoped robot** that cannot query Harbor's system
 `/projects` endpoint, that HEAD is denied and it falls through to a project-CREATE `POST` that **403s even
-though the project exists and your push is authorized** — a known gap (an `ensure_project || true` guard is
-tracked). If you hit a 403 on an existing project, that is this, not your push credential. Because a tenant
+though the project exists and your push is authorized** — the guard for this is **in place**: a 403 on an
+existing project logs a warning and the push continues. If you see that 403, that is this, not your push credential. Because a tenant
 project is typically **private**, the workload's kubelet cannot pull the app image anonymously — so
 `make gitops` creates the image-pull secret (`harbor-pull`) in **every app's namespace** whenever
 `HARBOR_USERNAME`/`HARBOR_PASSWORD` are set, and each app's Deployment already references it (that is what
@@ -340,10 +340,12 @@ make env-validate   # validity gate: does KUBECONFIG reach the cluster, and does
 ```
 
 **Expect:** `env-check` → *all required values present*; `env-validate` → Harbor reachable and
-authenticated. **Note:** over HTTPS `env-validate` currently falls back to `-k` (skip-verify) when
-`HARBOR_CA_FILE` is unset or the file is missing — so a green here does **not** prove your CA trusts
-Harbor; confirm `HARBOR_CA_FILE` points at a real file. (A present-but-wrong CA *does* fail, but it is
-reported as *HTTP 000 / unreachable* — the wrong cause.)
+authenticated. Over HTTPS `env-validate` **verifies the TLS chain — there is no `-k` skip-verify**:
+with `HARBOR_CA_FILE` set it trusts that CA, without it curl's default **system trust**. So a green
+here **does** mean the CA is good — a self-signed Harbor with a missing **or wrong** `HARBOR_CA_FILE`
+**fails here** with `Harbor TLS not trusted (curl exit 60)`, caught now instead of an hour later inside
+Kaniko. Set `HARBOR_CA_FILE` for a self-signed lab Harbor; leave it empty only if Harbor's cert is
+publicly trusted (or set `HARBOR_INSECURE=1` for plain HTTP).
 
 **First, one fork — can this jump box reach BOTH the internet and Harbor?** `make install-all` runs
 `make mirror`, which pulls from the internet **and** pushes to Harbor **in the same command**. A tenant jump
