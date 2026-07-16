@@ -16,9 +16,10 @@ The two headline adversaries for THIS repo are below. Both are BLOCKING. Each ex
 | **`adversary-docker`** (global) | Docker Engine + containerd + registry TLS trust (`certs.d`, `insecure-registries`, rootless, credential stores, BuildKit, kind's Docker coupling, Kaniko, crane, podman's per-command trust) | **the DAEMON, and a COLD box.** Your box has a warm `~/.docker/config.json`, a stale login, a CA possibly already in the system store, a rootful daemon, and BOTH engines installed. A fresh air-gapped jump box has none of that. |
 
 **Run EVERY docker/podman/engine/registry-trust design past `adversary-docker` BEFORE implementing it**
-(owner's standing instruction, 2026-07-13). It has already earned its keep: see the `fix/podman-default`
-entry in the handoff, where a "fail-fast" guard shipped a docker behaviour that **docker's own docs
-contradict**.
+(owner's standing instruction, 2026-07-13). It has already earned its keep: a "fail-fast" guard that
+died when `/etc/docker/certs.d/<host>/ca.crt` was missing was **retracted** on its evidence — docker
+MERGES `certs.d` with the system store, so the guard would have hard-blocked working operators. Full
+mechanism: `docs/decisions/container-engine-support.md` §"Three facts that are routinely gotten wrong".
 
 **Owner's standing instruction (2026-07-14): USE THEM ALL THE TIME — not just at the triggers below.**
 Every design decision, every implementation of a fix (including a fix THEY prescribed), every change of
@@ -41,10 +42,20 @@ backlog **and** the design). What is NOT acceptable is starting work with no adv
 
 **Trigger 2 IS NOW A HOOK, because prose did not hold — it was skipped on 2026-07-14 by the very
 session that had just re-read it.** `.claude/hooks/adversary-first-gate.py` (wired in
-`.claude/settings.json`) **BLOCKS `Edit`/`Write` to `scripts/`, `Makefile`, `jumpbox/`, `k8s/`,
-`tekton/`, `apps/` until an adversary has been spawned in this session.** `docs/`, `CLAUDE.md` and
-`.env.example` are deliberately NOT gated — that is where you write the plan down first. Escape hatch,
-on the record: `ADVERSARY_GATE_OFF=1`. RED/GREEN-proven 11 ways.
+`.claude/settings.json`) **BLOCKS `Edit`/`Write`** until an adversary has run. Read the truth from its
+own constants, not from prose — they are `GUARDED_PREFIXES` / `EXEMPT_*` at the top of the file:
+
+| | |
+|---|---|
+| **GUARDED** | `docs/` · `README.md` · `scripts/` · `jumpbox/` · `k8s/` · `tekton/` · `apps/` · `Makefile` |
+| **EXEMPT** | `.claude/` · `.github/` · `CLAUDE.md` — this file IS the plan/backlog, so you can always write it down first |
+
+**It clears only until your NEXT COMMIT, not for the session.** The receipt records the adversary's
+wall-clock time and a guarded write passes only while that time is newer than HEAD's commit — so
+committing re-arms it. That is deliberate (#244): a session-lifetime receipt meant one design review of
+task A silently authorized the unreviewed implementation of task B three tasks later. Proven by
+`make test-adversary-gate-rearm` (13 cases, including the re-arm). Escape hatch, on the record:
+`ADVERSARY_GATE_OFF=1`.
 
 Its sibling — the subagent read-only gate, now GLOBAL as `~/.claude/hooks/subagent-readonly.py` (a
 merged superset; the old repo-local `subagent-readonly-gate.py` was promoted + merged into it) —
@@ -92,8 +103,10 @@ adversary did exactly that at **14:40:11**, and the next ~7 commits (mine) went 
 believed I was on `gate/doc-target-coverage`. It had already rewritten five files and opened a PR.
 A worktree gives it its own checkout: it **physically cannot** touch your tree or your `HEAD`.
 (It does NOT stop a `push` — same remote, same creds — so it is a complement to the read-only hook, not a
-replacement. And **the hook itself is currently UNVERIFIED against a real subagent** — see the red section
-below before you rely on it.)
+replacement — it stops file writes the hook cannot see.) The hook itself is **live-verified end-to-end
+against a real subagent** (2026-07-14: it fired, carried `agent_id`, and REFUSED a real `git commit`;
+re-confirmed 2026-07-16 after it went global). Check it yourself in seconds:
+`python3 ~/.claude/hooks/subagent-readonly.py --selftest` → 90/90.
 
 **How to run it (NOT optional).** Use a **`Workflow`** (schema-forced output) or a **synchronous
 `Agent`** (`run_in_background: false`). Do **NOT** fire-and-forget a background `Agent`. Measured
@@ -488,9 +501,10 @@ history that produced them is in git and in `docs/reviews/` — this list is the
 | **B3** | **The sneakernet runbook's Step 4 is executed by NOTHING.** `docs/sneakernet.md` names `platform` / `gitops` / `install-ingress` / `verify`; neither `scripts/e2e-sneakernet.sh` nor `scripts/jumpbox-run.sh` runs any of them — so the half an operator performs *after carrying 11 GB* has never run. This is the condition under which `install-ingress`'s doc row once lied for hours while every test stayed green. Close it by **extending the harness**. Do **not** build a doc-parser: that design was adversary-killed twice (it cannot see a prose claim about a MODE, and it goes green over the covered half — `rules/common/testing.md` §"BINDING DOCS TO CODE"). |
 | **B13** | `19-trust-harbor.sh`'s `HARBOR_URL:?` guard is **vacuous** — `.env.example` commits the `harbor.vks.local` sentinel and `load_env` exports it, so the guard can never fire and its "run `make install-harbor`" advice can never print. Reject the sentinel, as `env_check` now does (`harbor_url_is_placeholder`). |
 | **B14** | `HARBOR_USERNAME=admin` is committed uncommented in `.env.example` — wrong for a **tenant**, who must use a robot account (`secrets/harbor-robot.env`). `19-trust-harbor.sh` consumes it. |
-| **B15** | `INGRESS_LB_IP` is **published and read back as an input** (`45-install-traefik.sh` / `46-install-istio.sh` `state_set` it; `98-verify-ingress.sh` reads it with `:?`). A stale value is indistinguishable from a deliberate override. Derive it live and keep `INGRESS_LB_IP_OVERRIDE` for the operator — the pattern `40-install-gitea.sh:59-64` already applies and cites, but was never back-ported here. |
-| **B16** | `98-verify-ingress.sh:27,111` still say `.env.kind` in their error text — an unlisted member of the stale-comment class the `d3ba8ec` sweep fixed in `05`/`06`/`44`. |
+| **B15** | `INGRESS_LB_IP` is **published and read back as an input** by ONE remaining reader: `98-verify-ingress.sh:27` takes it with `:?` (`45-install-traefik.sh` / `46-install-istio.sh` `state_set` it). A stale value is indistinguishable from a deliberate override. The fix pattern is already applied in `47-attach-istio.sh:51-52` (`unset INGRESS_LB_IP` + `INGRESS_LB_IP_OVERRIDE`) and cited by `40-install-gitea.sh:59-64` — it just needs back-porting to `98`. |
+| **B16** | `98-verify-ingress.sh:11,27,111` still say `.env.kind` in a comment and two operator-facing messages — an unlisted member of the stale-comment class the `d3ba8ec` sweep fixed in `05`/`06`/`44` (`47-attach-istio.sh:42` has it too). |
 | **B17** | The doc-truth audit's HIGH/MEDIUM remainder — concentrated in `scenario-2.md`, `prerequisites-manual.md`, and CLAUDE.md gate-list drift. Status table: `docs/reviews/2026-07-14-doc-truth-audit.md` §"Remediation status". |
+| **B21** | The global subagent-readonly hook **false-positives on `git merge-base`** — a READ-ONLY command, blocked because `merge-base` matches the `merge` verb at a `\b` boundary. Found 2026-07-16 when it blocked an adversary's own evidence commands. Blocking an evidence tool is how a gate gets ripped out (`hooks.md`); fix in `claude-config` (`~/.claude/hooks/subagent-readonly.py`) with its own RED-proof, and check the sibling verbs (`git restore --source`? `git branch --show-current`?) for the same shape. |
 | **B18** | The subagent-readonly hook's worktree exemption keys on the **target path**, not the owning agent — a subagent could write into *another* agent's worktree by absolute path. Needs a live `getcwd()` probe from a real `isolation:"worktree"` subagent before a cwd-anchored fix is safe; blunted meanwhile by worktree isolation itself. |
 
 **Needs a real lab or a heavy run:**

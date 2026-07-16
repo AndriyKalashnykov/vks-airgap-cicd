@@ -166,12 +166,16 @@ log_info "starting $CPK_CONTAINER ($CPK_IMAGE) — manages LB via the docker soc
 # Disabling the channel is safe and source-verified: CRD installation is a SEPARATE, gated code path
 # from the Service-LoadBalancer controller, so LB IPs keep working (asserted in the e2e).
 #
-# It also defuses a live time-bomb: gateway-api v1.6's bundle ships a ValidatingAdmissionPolicy
-# (safe-upgrades) whose CEL DENIES installing CRDs older than v1.5.0 — and CPK v0.11.1 vendors
-# v1.5.1 and installs them with a plain Create(). The moment the istio+gateway-api Renovate group
-# lands v1.6, CPK's CRD install would be DENIED, it aborts the whole controller, and every
-# LoadBalancer in the cluster silently stops getting an IP — surfacing as "Harbor LB did not get an
-# external IP", an error that points nowhere near an admission policy.
+# It is also what keeps CPK clear of an admission policy that is ALREADY IN THIS CLUSTER. The
+# gateway-api STANDARD bundle we install ships the `safe-upgrades` ValidatingAdmissionPolicy (see
+# bundle/manifests/gateway-api-v1.5.1.yaml — channel: standard), whose CEL DENIES any gateway-api CRD
+# whose bundle-version matches v1.[0-4].\d+ or v0 (i.e. anything before v1.5.0). CPK force-reconciles
+# its EMBEDDED CRDs at startup with a plain Create(), so it is subject to that policy — the CPK pinned
+# by CLOUD_PROVIDER_KIND_VERSION vendors v1.5.1 today and PASSES. What keeps this safe is CPK's
+# vendored version PLUS this flag; it is NOT our GATEWAY_API_VERSION pin. If the flag were dropped and
+# CPK vendored an older bundle, its CRD install would be DENIED, it aborts the WHOLE controller, and
+# every LoadBalancer silently stops getting an IP — surfacing as "Harbor LB did not get an external
+# IP", an error that points nowhere near an admission policy. Hence the crash-line assert below.
 # THE HOST SOCKET IS DERIVED, NOT HARDCODED.
 #
 # It used to be `-v /var/run/docker.sock:/var/run/docker.sock`. ROOTLESS DOCKER HAS NO SUCH FILE — its
