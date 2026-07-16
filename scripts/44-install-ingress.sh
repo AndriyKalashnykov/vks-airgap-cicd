@@ -2,7 +2,7 @@
 # 44-install-ingress.sh — install the selected ingress controller (ONE
 # LoadBalancer fronting the browser UIs at *.vks.local). Dispatches on
 # INGRESS_CONTROLLER: `istio` (default) or `traefik`. Both expose the same
-# *.vks.local hostnames and publish INGRESS_LB_IP to .env.kind.
+# *.vks.local hostnames and publish INGRESS_LB_IP to .env.state.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,15 +10,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 
 # Capture an EXPLICIT override (env / `make install-ingress INGRESS_CONTROLLER=...`)
-# BEFORE load_env sources .env.kind — otherwise the persisted .env.kind value would
+# BEFORE load_env sources .env.state — otherwise the persisted .env.state value would
 # clobber the override, so `make verify-ingress-both` (which flips the controller per
 # leg) would silently install the same controller twice.
 _override="${INGRESS_CONTROLLER:-}"
 load_env
 
-# Precedence: explicit override > persisted .env.kind/.env value > default. Persist the
+# Precedence: explicit override > persisted .env.state/.env value > default. Persist the
 # choice so a later `make verify-ingress` (a fresh make with no override) reads the
-# controller that was actually installed from .env.kind, not the .env.example default.
+# controller that was actually installed from .env.state, not the .env.example default.
 CONTROLLER="${_override:-${INGRESS_CONTROLLER:-istio}}"
 state_set INGRESS_CONTROLLER "$CONTROLLER"
 case "$CONTROLLER" in

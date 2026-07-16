@@ -16,7 +16,7 @@
 #   insecure (HARBOR_INSECURE=1) — plain HTTP LoadBalancer at the LB IP, containerd
 #            skip_verify. The original fast-iteration posture; kept + still tested.
 #
-# The discovered registry (LB IP) is published to .env.kind so all downstream scripts
+# The discovered registry (LB IP) is published to .env.state so all downstream scripts
 # (mirror-push, builder-image, Tekton) target it unchanged.
 #
 # Idempotent: safe to re-run (helm upgrade --install; guarded docker exec; stable CA).
@@ -253,7 +253,7 @@ until curl -fsS "${curl_ca[@]}" --max-time "$CURL_MAX_TIME" "$health_url" >/dev/
 done
 log_info "Harbor is routable at $health_url"
 
-# --- 8. Publish the discovered registry to downstream scripts (.env.kind) -----
+# --- 8. Publish the discovered registry to downstream scripts (.env.state) -----
 state_set HARBOR_URL "$LB_IP"
 if [ "$HARBOR_INSECURE" = "1" ]; then
   state_set HARBOR_INSECURE 1
