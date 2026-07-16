@@ -4,15 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 🛑 RULE ZERO — the adversaries review your DESIGN, not just your diff (BLOCKING, read first)
 
-There are **TWO** adversaries. Both are BLOCKING. Each exists because a green run *here* cannot see
-the ground it hunts on.
+The two headline adversaries for THIS repo are below. Both are BLOCKING. Each exists because a green run
+*here* cannot see the ground it hunts on. `vks-adversary` is **project-local** (`.claude/agents/`);
+`adversary-docker` and the rest of the roster (`adversary-java`, `adversary-bash-git-cli`, `adversary-go`,
+`adversary-k8s`, `adversary-identity-auth`, `adversary-security-secrets`) are now **GLOBAL** (live in
+`~/projects/claude-config/agents`, installed into `~/.claude/agents`) — dispatch any of them by name.
 
 | Agent | Specialism | Its hunting ground — what a green run here CANNOT show |
 |---|---|---|
-| **`.claude/agents/vks-adversary.md`** | VMware VCF/VKS 9.1 + Kubernetes + ArgoCD + Harbor + Istio + Tekton | **the REAL LAB.** A green KinD run proves nothing about a Supervisor, a tenant's RBAC, a corporate PKI, or PSA `restricted`. |
-| **`.claude/agents/docker-adversary.md`** | Docker Engine + containerd + registry TLS trust (`certs.d`, `insecure-registries`, rootless, credential stores, BuildKit, kind's Docker coupling, Kaniko, crane, podman's per-command trust) | **the DAEMON, and a COLD box.** Your box has a warm `~/.docker/config.json`, a stale login, a CA possibly already in the system store, a rootful daemon, and BOTH engines installed. A fresh air-gapped jump box has none of that. |
+| **`vks-adversary`** (project-local) | VMware VCF/VKS 9.1 + Kubernetes + ArgoCD + Harbor + Istio + Tekton | **the REAL LAB.** A green KinD run proves nothing about a Supervisor, a tenant's RBAC, a corporate PKI, or PSA `restricted`. It also carries the Docker/registry-trust facts SPECIFIC to this lab (`HARBOR_URL` shape, the `certs.d`-keyed guard trap, the real Harbor blob-store incident). |
+| **`adversary-docker`** (global) | Docker Engine + containerd + registry TLS trust (`certs.d`, `insecure-registries`, rootless, credential stores, BuildKit, kind's Docker coupling, Kaniko, crane, podman's per-command trust) | **the DAEMON, and a COLD box.** Your box has a warm `~/.docker/config.json`, a stale login, a CA possibly already in the system store, a rootful daemon, and BOTH engines installed. A fresh air-gapped jump box has none of that. |
 
-**Run EVERY docker/podman/engine/registry-trust design past `docker-adversary` BEFORE implementing it**
+**Run EVERY docker/podman/engine/registry-trust design past `adversary-docker` BEFORE implementing it**
 (owner's standing instruction, 2026-07-13). It has already earned its keep: see the `fix/podman-default`
 entry in the handoff, where a "fail-fast" guard shipped a docker behaviour that **docker's own docs
 contradict**.
@@ -30,7 +33,7 @@ yourself writing "I decided X on my own", you have already failed.
 | # | Trigger | When | Why |
 |---|---|---|---|
 | 1 | **START OF EVERY SESSION on this repo** | your FIRST substantive act — before you read your way into the code, before you plan, before you touch a file. Brief it with the handoff/backlog state and whatever you are about to do. | the inherited state is *itself* a set of claims (a prior session's findings, grades, "DONE" notes), and they are exactly the things that are wrong. It runs while you read — it costs you nothing to start it first. |
-| 2 | **BEFORE you implement** | the moment you have a DESIGN, a DECISION, a root-cause CLAIM, or a plan. Touching VKS/ArgoCD/Harbor/Istio/Tekton/the air gap → **vks-adversary**. Touching docker/podman/the engine/registry trust/image builds → **docker-adversary**. Touching both (e.g. "make docker work against the lab's Harbor") → **BOTH**. Always *before* writing the code. | refuting a design costs one agent run; refuting shipped code costs a session. This trigger exists because it was MISSED: a fix for two CRITICALs was designed, and coding started, with no adversary in sight. |
+| 2 | **BEFORE you implement** | the moment you have a DESIGN, a DECISION, a root-cause CLAIM, or a plan. Touching VKS/ArgoCD/Harbor/Istio/Tekton/the air gap → **vks-adversary**. Touching docker/podman/the engine/registry trust/image builds → **adversary-docker**. Touching both (e.g. "make docker work against the lab's Harbor") → **BOTH**. Always *before* writing the code. | refuting a design costs one agent run; refuting shipped code costs a session. This trigger exists because it was MISSED: a fix for two CRITICALs was designed, and coding started, with no adversary in sight. |
 | 3 | **BEFORE you call the session done** | the stopping rule — no session is DONE without it | the findings are part of the deliverable |
 
 Triggers 1 and 2 collapse into one run when the session opens on a known task (brief it with the
@@ -387,33 +390,33 @@ The two BLOCKING triggers (before you implement · before you call the session d
 (`Workflow` with a schema, or a synchronous `Agent` — never fire-and-forget), and what to do with the
 findings are all in Rule Zero. Do not duplicate them here.
 
-## ▶️ HANDOFF 2026-07-16 (item-3 agents/hooks GLOBAL refactor — IN PROGRESS; decisions locked, hook fix LANDED, cross-repo promotion PENDING) — START HERE FOR ITEM 3
+## ▶️ HANDOFF 2026-07-16 (item-3 agents/hooks GLOBAL refactor — ✅ DONE, all 4 phases)
 
-**Session (2026-07-15/16) recap:** items 1 (#260) + 2 (#261/#262/#263) DONE; backlog research item (#265) DONE; item-3 **decisions made + the hardest technical piece merged (#266)**. `main` green @ `92b669a` (or later), 0 open PRs. The remaining item-3 cross-repo promotion is teed up below — it edits the **LIVE `~/.claude/settings.json` (affects every project)** + needs a **live hook test**, so it was deliberately deferred to a fresh session with full context budget. RULE ZERO still applies: run the design past an adversary before implementing.
+Item 3 is complete. The adversary roster + read-only/gate hooks are now GLOBAL; this repo keeps only the
+project-local `vks-adversary` + `adversary-first-gate`.
 
-### DECISIONS (owner-confirmed)
+**What landed:**
 
-1. **Roster:** promote `java-adversary`→`adversary-java` + `docker-adversary`→`adversary-docker` into `~/projects/claude-config/agents/` (global); DROP `shell-adversary` — dedupe into the global `adversary-bash-git-cli` (widen its `description:` to name Makefile + sed/awk); `vks-adversary` STAYS project-local.
-2. **Harbor/VKS docker specifics → `vks-adversary`.** When genericizing docker-adversary, MOVE the lab-specific bits into `vks-adversary`: the "this repo lost a Harbor to blob-store corruption" incident, `HARBOR_URL`=LB-IP-in-KinD / FQDN-on-lab, VCF/corporate PKI trust, this repo's `docker exec`-into-kind-nodes, the `certs.d`-for-`$HARBOR_URL` checks. KEEP GENERAL docker/registry-trust in `adversary-docker` (certs.d mechanism, rootless/rootful, insecure-registries, kind coupling, buildkit, the blob-corruption CLASS, self-signed-registry TLS with Harbor/Zot/`registry:2` as GENERIC examples).
-3. **Global read-only hook = worktree-exemption flavor.** ✅ DONE + merged (#266): the validated hook is `.claude/hooks/subagent-readonly-gate.py` — realpath-anchored (`os.path.realpath(path)` then `re.search(r"/\.claude/worktrees/[^/]+/", rp+"/")`; the adversary caught that a raw substring is defeated by `..` traversal, RED-proven). **THIS file is the version to promote as `subagent-readonly.py`** (replacing claude-config's Bash-only one).
+- **claude-config** (`~/projects/claude-config`, committed + pushed to origin/main): new `agents/adversary-docker.md` + `agents/adversary-java.md` (genericized), widened `agents/adversary-bash-git-cli.md` description+body (Makefile + sed/awk + GNU-vs-BusyBox), a MERGED `hooks/subagent-readonly.py` (see deviation below) + `hooks/{mid-run-edit-gate,no-gate-in-commit-chain}.py`, `tests/` (the 2 moved hook tests + a new `check-agent-frontmatter.py`) + `run-tests.sh` (`run-tests: ALL PASS`), updated `settings.json` template (4 hooks). The 15-min `sync.sh` cron swept these into `23d5bac`/`4f823e0`; a follow-up commit untracked+gitignored `__pycache__`.
+- **live `~/.claude`**: `hooks/{subagent-readonly,mid-run-edit-gate,no-gate-in-commit-chain}.py` installed (agents/ is a symlink to claude-config, so the new adversaries were already live); `settings.json` hand-merged to 4 hooks (backup at `~/.claude/settings.json.bak`). **LIVE-VERIFIED end-to-end** with a real subagent (probe log): the global `subagent-readonly` FIRED, SAW the subagent (agent_id populated), BLOCKED `git commit --dry-run`, ALLOWED reads, left the main agent untouched; `mid-run-edit-gate` fired live too (new wiring is live this session).
+- **this repo** (this PR): removed `.claude/agents/{docker,java,shell}-adversary.md` + `.claude/hooks/{subagent-readonly-gate,mid-run-edit-gate,no-gate-in-commit-chain}.py`; `.claude/settings.json` → only `adversary-first-gate`; Makefile dropped 2 test recipes+prereqs (kept `test-adversary-gate-rearm`); `vks-adversary.md` absorbed the Docker/registry-trust lab-specifics + the corrected Harbor incident; RULE ZERO refs `docker-adversary`→`adversary-docker`.
 
-### GROUNDED FACTS (verified this session — do NOT re-derive)
-
-- **Settings hooks MERGE** (user + project both run; deduped ONLY by identical command STRING). This repo's wirings use `$CLAUDE_PROJECT_DIR/.claude/hooks/…`; the global uses `$HOME/.claude/hooks/…` → different strings → NOT deduped. ⇒ After moving the 3 general hooks global + deleting this repo's copies, you MUST remove this repo's 3 now-global hook WIRINGS from `.claude/settings.json` (else broken refs + double-fire). KEEP the `adversary-first-gate` wiring (its file stays project-local). Source: code.claude.com/docs/en/hooks.
-- **claude-config has NO test harness / Makefile / CI** (pure config-sync repo). The promoted hooks' tests need a home there → add a minimal `run-tests.sh`.
-- **`~/.claude/settings.json` currently:** wires only `warn-bg-pr-watch-merge.py` (Bash|Monitor) + `subagent-readonly.py` (Bash); `defaultMode: plan`; `Bash(*)/Edit(*)/Write(*)/Agent(*)` allowed. `~/.claude/hooks` = `subagent-readonly.py` (OLD Bash-only) + `warn-bg-pr-watch-merge.py`. `~/.claude/agents` = the 5 general. This repo: `.claude/agents/{docker,java,shell,vks}-adversary.md`; `.claude/hooks/{adversary-first-gate,mid-run-edit-gate,no-gate-in-commit-chain,subagent-readonly-gate}.py`; `.claude/settings.json` wires all 4.
-- **setup.sh** copies commands/rules/hooks/agents into `~/.claude/` but does NOT overwrite an existing `settings.json` → the hooks-wiring merge into `~/.claude/settings.json` is BY HAND.
-
-### REMAINING STEPS (in order)
-
-1. **claude-config** (reversible): create `agents/adversary-docker.md` (genericized per decision 2) + `agents/adversary-java.md` (from java-adversary, drop "in this repo"); widen `agents/adversary-bash-git-cli.md` description (Makefile + sed/awk); `cp` this repo's `subagent-readonly-gate.py` → `hooks/subagent-readonly.py`; add `hooks/{mid-run-edit-gate,no-gate-in-commit-chain}.py`; move `test-subagent-readonly-gate.sh` + `test-no-gate-in-commit-chain.sh` in + add `run-tests.sh`; update `settings.json` template hooks (subagent-readonly matcher `Bash|Edit|Write|NotebookEdit|MultiEdit`; mid-run-edit-gate `Edit|Write|NotebookEdit|MultiEdit`; no-gate-in-commit-chain `Bash`). Commit to claude-config.
-2. **`vks-adversary`** (this repo, `.claude/agents/` — not gated): add a "Docker/registry-trust for THIS lab" section absorbing the Harbor/VKS docker specifics (decision 2).
-3. **`~/.claude/` (LIVE, high blast radius):** `cp ~/.claude/settings.json{,.bak}`; copy the new agents + updated hooks; hand-merge the hook wiring into `~/.claude/settings.json`; `python3 -c 'import json;json.load(open(...))'` validate; `py_compile` all hooks; **LIVE-TEST**: spawn a real subagent, confirm a git mutation BLOCKS + a `.claude/worktrees/` write ALLOWS + a main-tree write BLOCKS (per hooks.md "test the GATE not the instrument").
-4. **this repo (PR):** `rm .claude/agents/{docker,java,shell}-adversary.md` + `.claude/hooks/{subagent-readonly-gate,mid-run-edit-gate,no-gate-in-commit-chain}.py`; edit `.claude/settings.json` to keep ONLY the adversary-first-gate wiring; drop `test-subagent-readonly-gate` + `test-no-gate-in-commit-chain` from `test-scripts` + their recipes; update RULE ZERO refs (`docker-adversary`→`adversary-docker`, `shell-adversary`→`adversary-bash-git-cli`, path-refs→name-refs); `make ci`; PR; merge. `test-adversary-gate-rearm` STAYS (tests the project-local adversary-first-gate).
+**KEY DEVIATION from the original decision-3 (adversary-driven, RULE ZERO working as intended).** The
+decision said "OVERWRITE the global `subagent-readonly.py` with this repo's `subagent-readonly-gate.py`."
+`adversary-bash-git-cli` REFUTED it with run-it evidence: **neither hook was a superset** — the global's
+Bash regex was STRONGER (newline `\n\r` command-position, gh global-flags, `gh api graphql …mutation`, ~20
+verbs, a 62-case selftest) while this repo's added Edit/Write+worktree+`gh api -f` implicit-POST but had a
+WEAKER Bash regex. Overwriting either way LOST coverage. The correct fix was a **MERGE** (global's Bash gate
+and this repo's file-tool dispatch), which a 2nd adversary round then further hardened (it caught that a
+graphql mutation from a file/variable/newline and `git --exec-path=/x commit` still bypassed → dropped the
+graphql exclusion, made git-globals generic). Final merged hook: 90/90 selftest, both shell tests, a
+demonstrated-RED, an over/under-block scan, and the live subagent test — all green.
 
 ### RESIDUALS → backlog
 
-- Hook exemption keys on the TARGET path, not on the agent OWNING that worktree → a subagent could write into ANOTHER agent's worktree. Closing it needs a cwd-anchored check, which requires verifying the PreToolUse hook runs with the subagent's cwd (instrument `os.getcwd()` from a real `isolation:"worktree"` subagent).
+- The worktree exemption keys on the TARGET path, not on the owning agent → a subagent could write into ANOTHER agent's worktree. Needs a cwd-anchored check (verify the PreToolUse hook runs with the subagent's cwd).
+- **NEW: `mid-run-edit-gate` self-blocks editing a WIRED hook file via the Edit tool** — editing `~/.claude/hooks/subagent-readonly.py` triggers the PreToolUse batch, which runs that hook, and mid-run-edit-gate detects the running process and blocks. Workaround: edit a wired hook via Bash (sed/python) or `MID_RUN_EDIT_GATE_OFF=1`. A clean fix would exclude sibling PreToolUse-hook processes.
+- The global `subagent-readonly` FILE-TOOL block for a subagent Edit to the main tree was proven OFFLINE (90/90, incl. Edit/Write/NotebookEdit worktree/main/empty cases) but not isolated LIVE this session (worktree-isolation + the project hook both block it too). A clean live check needs a non-worktree subagent in a repo without the project hook.
 
 ---
 

@@ -9,7 +9,7 @@
 # whose job is to REFUTE the design on REAL-LAB grounds: …"), and YAML reads that as a nested mapping.
 # GitHub renders the error instead of the file. Worse, the agent definition is what makes the BLOCKING
 # adversary loadable at session start — a repo-wide control, silently malformed, and nothing was
-# checking it. The sibling docker-adversary.md happened to be fine, which is exactly how it hid.
+# checking it. A sibling agent definition happened to be fine, which is exactly how it hid.
 #
 # The lesson is the house one: a file that is CONFIG for a control is part of the control. If it can be
 # malformed, it needs a gate. Prose in a YAML scalar must be quoted.
