@@ -77,6 +77,10 @@ if have argocd; then
 else
   log_warn "argocd CLI not on PATH — it is REQUIRED on the tenant path (argocd-server is the only writer a tenant may have)."
 fi
+# The CLI version is NOT the server version — print this WITH the CLI number, in EVERY branch. The
+# RUNNING server (below) needs a live cluster and may not print at all, so a reader on a dead/absent
+# cluster would otherwise see only the 3.x CLI + 3.x pin and mistake them for "the ArgoCD version".
+log_info "  NOTE: the CLI version is NOT the ArgoCD *server* version — the lab pins a 2.x SERVER while the KinD stand-in + CLI are 3.x. The number that matters on your lab is the RUNNING server, below."
 if ka get crd "$VKS_ARGOCD_CRD" >/dev/null 2>&1; then
   log_info "VKS ArgoCD operator present. Supported server versions:"
   ka explain argocd.spec.version 2>/dev/null | sed 's/^/    /'
@@ -86,10 +90,9 @@ else
 fi
 img="$(ka -n "$NS" get deploy argocd-server -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
 if [ -n "$img" ]; then
-  log_info "RUNNING argocd-server image: $img"
-  log_info "  (the CLI's version is NOT the server's — the lab pins a 2.x server while the KinD stand-in runs 3.x)"
+  log_info "RUNNING argocd-server image: $img   <- THE version that matters on a real lab"
 else
-  log_warn "cannot read the argocd-server Deployment in ns/$NS — ArgoCD is elsewhere, or you may not read it (tenant)."
+  log_warn "RUNNING server version: UNAVAILABLE — no cluster reachable in ns/$NS (ArgoCD is elsewhere, you may not read it as a tenant, or your cluster is down). On a real lab THIS (a 2.x line) is the number that matters; the CLI + pin above are 3.x and are NOT it."
 fi
 log_info "this repo's KinD pin: ARGOCD_VERSION=${ARGOCD_VERSION:-?}"
 
