@@ -508,8 +508,8 @@ flight and what to distrust" belongs here.
 **It merges ITSELF on green** — `automerge: true` / `automergeType: pr`, and `platformAutomerge: false`
 deliberately so Renovate re-confirms green rather than racing `ci-pass` registration. Per policy only
 **majors** of the cluster-only tools need Dependency-Dashboard approval; patches ride CI. **Nothing for
-you to do — but know what its green means and does not:** CI runs the **offline gates only**, so a green
-#282 proves the alignment gate and the lint, **not that Istio 1.30.3 works**. Istio is exercised solely
+you to do — but know what its green means and does not:** CI runs the **offline gates only**, so its
+green proves the alignment gate and the lint, **not that Istio 1.30.3 works**. Istio is exercised solely
 by `make e2e-kind`, which CI never runs (`verification-honesty`). If a mesh thing breaks next session,
 suspect this bump first. The gateway-api `<v1.6.0` cap is unaffected: 1.30.3 is the same minor, so it
 still vendors gateway-api v1.5.1.
