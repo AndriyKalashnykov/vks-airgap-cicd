@@ -32,6 +32,11 @@ ARGOCD_INCLUSTER_SERVER='https://kubernetes.default.svc'
 # shellcheck disable=SC2034  # consumed by the scripts that source this library
 HARBOR_PULL_SECRET='harbor-pull'
 
+# The VKS ArgoCD operator CRD — a fixed string. It lives here (not inline in 23-argocd-preflight.sh) so
+# argocd_print_versions() below is self-contained and can be reused by the read-only `make argocd-version`.
+# shellcheck disable=SC2034  # consumed by argocd_print_versions() and the scripts that source this library
+VKS_ARGOCD_CRD='argocds.argocd-service.vsphere.vmware.com'
+
 # argocd_api_server <kubeconfig> — the API server URL a kubeconfig points at. Offline: reads the file.
 argocd_api_server() {
   kubectl --kubeconfig "$1" config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true
@@ -162,4 +167,50 @@ gitea_clone_url() {
     printf 'http://%s:3000' "$lb"; return 0
   fi
   printf '%s' "${GITEA_INTERNAL_URL:-}"
+}
+
+# argocd_print_versions <argocd-kubeconfig> <namespace> [kubectl-timeout]
+# READ-ONLY. Prints the ArgoCD CLI (client), the CLI≠server caveat, the operator/CRD info, the RUNNING
+# server image (or a loud UNAVAILABLE), and this repo's pin. Self-contained — reads only its args +
+# ARGOCD_VERSION + the VKS_ARGOCD_CRD constant, builds its OWN kubectl invocation (does NOT close over
+# 23-argocd-preflight.sh's ka()), and NEVER exits (degrades gracefully with no cluster). Shared by
+# `make argocd-preflight` (the gate) and the read-only `make argocd-version`.
+#
+# The server probe runs ONLY against a present, EXISTING kubeconfig FILE — so it can never fall through
+# to kubectl's default resolution ($KUBECONFIG → ~/.kube/config) and print an UNRELATED cluster's server
+# as "the version that matters". --request-timeout bounds a black-hole endpoint so a version peek can't hang.
+argocd_print_versions() {
+  local kc="${1:-}" ns="${2:-argocd}" to="${3:-3s}"
+  if have argocd; then
+    log_info "argocd CLI (client): $(argocd version --client --short 2>/dev/null || echo unknown)"
+  else
+    log_warn "argocd CLI not on PATH — it is REQUIRED on the tenant path (argocd-server is the only writer a tenant may have)."
+  fi
+  log_info "  NOTE: the CLI version is NOT the ArgoCD *server* version — the lab pins a 2.x SERVER while the KinD stand-in + CLI are 3.x. The number that matters on your lab is the RUNNING server, below."
+  if [ -z "$kc" ] || [ ! -f "$kc" ] || ! have kubectl; then
+    local why
+    if   [ -z "$kc" ];   then why="no kubeconfig set (KUBECONFIG / ARGOCD_KUBECONFIG)"
+    elif [ ! -f "$kc" ]; then why="kubeconfig file not found: $kc"
+    else                     why="kubectl not installed"
+    fi
+    log_warn "RUNNING server version: UNAVAILABLE — $why. On a real lab the running SERVER (a 2.x line) is the number that matters; the CLI + pin are 3.x and are NOT it."
+    log_info "this repo's KinD pin: ARGOCD_VERSION=${ARGOCD_VERSION:-?}"
+    return 0
+  fi
+  local ka=(kubectl --kubeconfig "$kc" --request-timeout="$to")
+  if "${ka[@]}" get crd "$VKS_ARGOCD_CRD" >/dev/null 2>&1; then
+    log_info "VKS ArgoCD operator present. Supported server versions:"
+    "${ka[@]}" explain argocd.spec.version 2>/dev/null | sed 's/^/    /' || true
+    "${ka[@]}" get argocd -A -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name,VERSION:.spec.version' 2>/dev/null | sed 's/^/    /' || true
+  else
+    log_info "no VKS ArgoCD operator CRD on the ArgoCD cluster — upstream ArgoCD (the KinD stand-in), or you are a tenant who may not read CRDs."
+  fi
+  local img
+  img="$("${ka[@]}" -n "$ns" get deploy argocd-server -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+  if [ -n "$img" ]; then
+    log_info "RUNNING argocd-server image: $img   <- THE version that matters on a real lab"
+  else
+    log_warn "RUNNING server version: UNAVAILABLE — no cluster reachable in ns/$ns (ArgoCD is elsewhere, you may not read it as a tenant, or your cluster is down). On a real lab THIS (a 2.x line) is the number that matters; the CLI + pin above are 3.x and are NOT it."
+  fi
+  log_info "this repo's KinD pin: ARGOCD_VERSION=${ARGOCD_VERSION:-?}"
 }
