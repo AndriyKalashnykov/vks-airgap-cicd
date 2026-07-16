@@ -501,7 +501,18 @@ record is the PR number. If your session's outcome is a *fact*, it belongs in th
 *task*, it belongs in the Backlog below; if it is *history*, it belongs in git. Only "what is in
 flight and what to distrust" belongs here.
 
-**State: `main` green, 0 open PRs, no cluster up, tree clean.** Nothing is half-done.
+**State: `main` green, no cluster up, tree clean, nothing half-done.**
+
+**IN FLIGHT — the only thing that is:** Renovate **#282**, Istio **1.30.2 → 1.30.3** (a patch; it bumps
+`ISTIO_VERSION` + `istio/pilot` + `istio/proxyv2` together, which is `check-image-alignment` working).
+**It merges ITSELF on green** — `automerge: true` / `automergeType: pr`, and `platformAutomerge: false`
+deliberately so Renovate re-confirms green rather than racing `ci-pass` registration. Per policy only
+**majors** of the cluster-only tools need Dependency-Dashboard approval; patches ride CI. **Nothing for
+you to do — but know what its green means and does not:** CI runs the **offline gates only**, so its
+green proves the alignment gate and the lint, **not that Istio 1.30.3 works**. Istio is exercised solely
+by `make e2e-kind`, which CI never runs (`verification-honesty`). If a mesh thing breaks next session,
+suspect this bump first. The gateway-api `<v1.6.0` cap is unaffected: 1.30.3 is the same minor, so it
+still vendors gateway-api v1.5.1.
 
 Merged here: **#276** (prune) · **#277** (Istio field evidence) · **#278** (unattended sweep) ·
 **#279** (`SSL_CERT_FILE`) · **#280/#281** (this handoff). In the **private** `claude-config`: the
