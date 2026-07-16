@@ -392,6 +392,50 @@ The two BLOCKING triggers (before you implement · before you call the session d
 (`Workflow` with a schema, or a synchronous `Agent` — never fire-and-forget), and what to do with the
 findings are all in Rule Zero. Do not duplicate them here.
 
+## ▶️ HANDOFF 2026-07-16 (argocd-preflight version framing + live verify) — newest
+
+**#272 (merged, main CI green) — `make argocd-preflight` version framing.** A user ran it with no
+cluster up (for version numbers, per the scenario-1 disclaimer) and got a scary `PREFLIGHT FAILED` +
+`make Error 1`. Two fixes (vks-adversary ship-with-changes):
+
+- **The real trap (script):** the `CLI ≠ server version` caveat was TRAPPED inside the `[ -n "$img" ]`
+  branch, so on a dead/absent cluster it never printed — leaving two 3.x numbers (CLI + KinD pin) and
+  no caveat (the CLI≠server confound this repo burned itself on once). Hoisted the caveat to print WITH
+  the CLI number in every branch; the unreachable branch now SHOUTS `RUNNING server version:
+  UNAVAILABLE … THIS (a 2.x line) is the number that matters`.
+- **Doc:** reframed `scenario-1.md:12-13` (it's the full install-preflight; the pre-cluster BLOCK/exit
+  non-zero is EXPECTED) + realigned the Step-0 bootstrap block's `#` comments.
+- **User-live-verified the dead-cluster path** — their run showed the exact new NOTE + UNAVAILABLE
+  lines. That closes the "I couldn't do a live run (kubectl hung on my box)" honest-note gap for the
+  negative path.
+
+### POSITIVE path — ✅ VERIFIED live this session
+
+Spun KinD + ArgoCD (`SKIP_DOTENV=1 make kind-up install-argocd` — upstream ArgoCD manifest, no
+Harbor/mirror; `install-argocd` deps only `check-env`) and ran `make argocd-preflight` against the live
+cluster: `RUNNING argocd-server image: quay.io/argoproj/argocd:v3.4.5   <- THE version that matters` +
+`PREFLIGHT OK`. Both paths now proven (dead-cluster = user's run; live = this run). KinD is left UP for
+the `argocd-version` jumpbox test; tear down with `make kind-down` (prunes cloud-provider-kind + `kindccm-*`).
+
+### PENDING — read-only `make argocd-version` target (adversary-approved, build in progress)
+
+The disclaimer points a version-curious user at a GATING install-preflight. Extract the version block
+(23-argocd-preflight.sh:73-97) into `argocd_print_versions()` in `lib/argocd.sh` (read-only, no `exit`,
+`--request-timeout` hang-guard, gate the server probe on a present+existing kubeconfig FILE so it never
+dials `~/.kube/config`), move `VKS_ARGOCD_CRD` into the lib, add an un-numbered `scripts/argocd-version.sh`
+plus a `make argocd-version` target (exits 0 always), and make the disclaimer ADDITIVE (keep Step 4, add
+"or `make argocd-version`"). vks-adversary returned **ship-with-changes** — 6 findings: `set -e` breaks
+exit-0 (bare `| sed` pipelines); the hang-guard must cover the gating call at lines 65-66 too; the degrade
+path must not fall through to the default kubeconfig; self-contained signature (no dynamic-scope closure);
+un-numbered script; additive disclaimer. Build + clean jumpbox verification next.
+
+### CLEAN-TEST METHODOLOGY (operator note, 2026-07-16)
+
+The version command's clean test is a **fresh photon/ubuntu jumpbox with deps**, NOT the dev host (a
+long-lived box carries a stale kubeconfig — the `127.0.0.1:34585` the user saw). Verify `argocd-version`
+(and `argocd-preflight`) on the jumpbox: bare (no cluster = the version-curious/dead-cluster path) AND
+joined to the KinD cluster (positive path).
+
 ## ▶️ HANDOFF 2026-07-16 (item-3 agents/hooks GLOBAL refactor — ✅ DONE, all 4 phases)
 
 Item 3 is complete. The adversary roster + read-only/gate hooks are now GLOBAL; this repo keeps only the
