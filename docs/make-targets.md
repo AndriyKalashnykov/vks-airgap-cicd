@@ -51,4 +51,33 @@ ship invisible again.
 
 ---
 
+## Testing a target CLEANLY — the dev host is not a clean box
+
+A long-lived dev host carries state a fresh operator does not have: an installed toolchain, a `.env`, and
+— the one that bites — a **stale kubeconfig** left by an old cluster. A target that "works here" can still
+fail for everyone else, and a target that *fails* here (dialling a dead `127.0.0.1:<port>`) can be
+perfectly fine. So the clean test for anything an operator runs on a jump box is a **fresh jump-box
+container**, not this machine.
+
+```bash
+# 1. Build a bare jump-box image for the OS you care about.
+make jumpbox-image JUMPBOX_OS=photon          # or JUMPBOX_OS=ubuntu
+
+# 2. BARE leg — no cluster, no kubeconfig. This is the "version-curious / first-run" operator.
+docker run --rm -v "$(git rev-parse --show-toplevel)":/src:ro <image> \
+  bash -c 'cd /src && make deps && make <target>'
+
+# 3. JOINED leg — against a live KinD cluster. Use the --internal kubeconfig: the host-facing one
+#    points at 127.0.0.1:<random>, which resolves to nothing inside the container.
+kind get kubeconfig --internal > /tmp/kubeconfig.internal
+docker run --rm --network kind -v "$(git rev-parse --show-toplevel)":/src:ro \
+  -v /tmp/kubeconfig.internal:/tmp/kc:ro -e KUBECONFIG=/tmp/kc <image> \
+  bash -c 'cd /src && make deps && make <target>'
+```
+
+Run **both** legs: the bare one proves the target degrades honestly with nothing configured; the joined one
+proves the positive path. `make bootstrap-test` does this for the bootstrap itself on literally bare images.
+
+---
+
 [← back to the README](../README.md)

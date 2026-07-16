@@ -10,6 +10,14 @@
 #   * A MISMATCHED sink is ARCHIVED (renamed), never deleted — it may still hold the only credentials
 #     of a cluster that is STILL RUNNING.
 #
+# Two designs that sound better and are WRONG (also frozen here so they are not re-proposed):
+#   * "Two sinks, split by key lifetime" — lifetime is a property of the CLUSTER, not of the key. The
+#     same key (INGRESS_LB_IP) is ephemeral when the KinD flow wrote it and persistent when a lab did,
+#     so ANY static per-key bucketing is wrong half the time.
+#   * "Derive everything, publish nothing" — on a real lab that would silently MINT a random
+#     HARBOR_PASSWORD, where Harbor is a Supervisor Service whose credential we CONSUME, not create.
+#     A generated password turns a loud "not set" into a permanent, self-inflicted 401.
+#
 # Offline by construction: `kubectl config view` PARSES a kubeconfig file — it never dials an API
 # server and needs no RBAC, which is also why a locked-down TENANT can use it.
 set -uo pipefail

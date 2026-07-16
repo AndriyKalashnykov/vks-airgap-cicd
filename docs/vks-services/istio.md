@@ -108,6 +108,20 @@ else falls back to classic.
 
 <!-- -->
 
+> **The `GATEWAY_API_VERSION` pin is coupled to cloud-provider-kind — moving it alone can silently kill
+> every LoadBalancer (KinD-verified mechanism).** Two facts collide: gateway-api **v1.6**'s CRD bundle ships
+> a `ValidatingAdmissionPolicy` (`safe-upgrades`) that **denies installing any gateway-api CRD older than
+> v1.5.0**, and **cloud-provider-kind v0.11.1 vendors v1.5.1** and force-reconciles its embedded CRDs at
+> startup. We run CPK with `--gateway-channel=disabled` (`scripts/05-kind-up.sh`) precisely so it never
+> tries — but if that flag were ever dropped (a CPK bump, a refactor) **and** this pin moved to v1.6, CPK's
+> CRD install would be denied, it would abort its **whole** controller, and **every Service of type
+> LoadBalancer would silently stop getting an IP**. Nothing would name the CRDs; you would see only
+> pending LBs. This is why `renovate.json` groups istio + gateway-api as version-locked, and why
+> `05-kind-up.sh` asserts CPK logged the skip and counts its **crash lines** rather than trusting
+> `docker ps` (a `--restart unless-stopped` container shows `Up` *between* crash-loop cycles).
+
+<!-- -->
+
 > **Air-gap on an ATTACHED mesh — the pull-secret you may owe (9.0-doc).**
 > The `<gw>-istio` proxy Istio auto-provisions in `vks-ingress` (`ISTIO_GWAPI_NAMESPACE`)
 > takes its image from the **mesh's** istiod hub — whatever the platform team set, NOT your

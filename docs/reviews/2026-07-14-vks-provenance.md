@@ -1,5 +1,9 @@
 # VKS-services provenance — 2026-07-14
 
+> **`CLAUDE.md:LINE` refs below are against `CLAUDE.md@28631c5`**, before the 2026-07-16 prune removed
+> its dated handoff sections. Read them with `git show 28631c5:CLAUDE.md`. They are deliberately NOT
+> renumbered: this file is an archive of what was checked, when.
+
 Owner's instruction: *"a grade cannot be that way — we need exact sources and referenceable facts."*
 Every graded fact in `docs/vks-services/*.md` was handed to an agent tasked with finding a **resolvable**
 source (URL + retrieval date + the quoted sentence; or a command + its real output; or `FILE:LINE`), or
