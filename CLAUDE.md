@@ -25,6 +25,23 @@ died when `/etc/docker/certs.d/<host>/ca.crt` was missing was **retracted** on i
 MERGES `certs.d` with the system store, so the guard would have hard-blocked working operators. Full
 mechanism: `docs/decisions/container-engine-support.md` §"Three facts that are routinely gotten wrong".
 
+**INVENTING A NEW CONTROL is the act that most needs the idea-round — and it is the one that feels
+exempt (DISCIPLINE, not a gate; 2026-07-16).** Writing a `check-*.sh`, a hook, or a new gate does not
+feel like new design — it feels like *following through* on a reviewed fix, because "violated rules
+become gates" is a correct reflex here. It is new design, it is usually the riskiest thing in the
+diff, and the receipt from the *previous* design review authorizes it (the gate is scoped to TIME,
+not CONTENT — its own header, line ~31, names that residual). Measured: a review of design X cleared
+a 109-line shell-grammar gate nobody had ever seen; an implementation adversary later scored it
+**7/20** (10 bypasses — `Passw0rd$1`→`Passw0rd`, the docs' own `robot$<name>`, every indented line —
+and it could not express its own counter-example, so filing the review that found it would have
+reddened `static-check`). **Do not try to gate this.** `agents.md:762` already settled it,
+adversary-vetted: idea-first is enforceable only by a human, and a path-scoped receipt was
+**refuted** on 2026-07-16 by running its own extractor against the very prompt asking for the review
+— the prompt that names the file to review **authorizes** it (negations authorize too), it stamps at
+spawn not delivery, it clears the *refuted* design while blocking the *prescribed* fix, and it
+false-blocks 34% of commits. The residual is real, un-gateable, and the thing that caught it was the
+owner asking "are you running your designs by adversaries?".
+
 **Owner's standing instruction (2026-07-14): USE THEM ALL THE TIME — not just at the triggers below.**
 Every design decision, every implementation of a fix (including a fix THEY prescribed), every change of
 approach mid-task, goes past the relevant adversary BEFORE it runs. The rule is not "review at
@@ -495,151 +512,84 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-07-16 — READ, THEN REPLACE (do not append)
+## ▶️ HANDOFF 2026-07-16 (evening) — READ, THEN REPLACE (do not append)
 
-**There is exactly ONE handoff section, and the next session OVERWRITES it.** This file used to carry
-**20** of them (1,464 lines / 78% of the file) and they were pruned on 2026-07-16 — closed work whose
-record is the PR number. If your session's outcome is a *fact*, it belongs in the docs; if it is a
-*task*, it belongs in the Backlog below; if it is *history*, it belongs in git. Only "what is in
-flight and what to distrust" belongs here.
+**There is exactly ONE handoff section, and the next session OVERWRITES it.** This file once carried
+**20** of them (1,464 lines / 71% of the file). If your outcome is a *fact*, it belongs in the docs; a
+*task* → the Backlog; *history* → git. Only "what is in flight and what to distrust" belongs here.
 
-**State: `main` green, no cluster up, tree clean, nothing half-done.**
+**State: `main` green at the #288 squash, tree clean, no cluster, nothing in flight, nothing
+half-done.** Branches: `main` only, local and remote. CI runs pruned to 3.
 
-**IN FLIGHT — two Renovate PRs, both of which merge THEMSELVES on green; nothing for you to do:**
-**#282** Istio **1.30.2 → 1.30.3** (a patch; it bumps `ISTIO_VERSION` + `istio/pilot` + `istio/proxyv2`
-together, which is `check-image-alignment` working) and **#285** a `jdx/mise-action` digest.
-`automerge: true` / `automergeType: pr`, with `platformAutomerge: false` deliberately so Renovate
-re-confirms green rather than racing `ci-pass` registration. Per policy only **majors** of the
-cluster-only tools need Dependency-Dashboard approval; patches ride CI. **Know what #282's green means
-and does not:** CI runs the **offline gates only**, so its green proves the alignment gate and the
-lint, **not that Istio 1.30.3 works**. Istio is exercised solely by `make e2e-kind`, which CI never
-runs (`verification-honesty`). If a mesh thing breaks next session, suspect this bump first. The
-gateway-api `<v1.6.0` cap is unaffected: 1.30.3 is the same minor, so it still vendors v1.5.1.
+### What happened
 
-Merged here: **#276** (prune) · **#277** (Istio field evidence) · **#278** (unattended sweep) ·
-**#279** (`SSL_CERT_FILE`) · **#280/#281/#283** (handoff) · **#284** (the selftest count RULE ZERO
-quotes was already stale). In the **private** `claude-config`: the `merge-base` hook fix ·
-`vks-adversary` **went global**, specifics intact · two new **references** (`istio-on-vks.md`,
-`internal-ca-trust.md`) · the `SSL_CERT_FILE`/podman/containerd rule corrections · **4 new rules** +
-the round that refuted them · **HOOK-001…005** filed · then **HOOK-005 fixed** (`ded9ab0`), its two
-shipped bypasses **fixed** (`4f76bea`), and **HOOK-006** filed.
+A machine freeze killed the prior session; it cost **nothing** (both Renovate PRs — #282 Istio
+1.30.3, #285 mise-action — had merged themselves, as that handoff predicted).
 
-### START HERE — the best-shaped work available
+**Shipped: #288** — two characters. `docs/detailed-steps.md:41` told operators to write
+`HARBOR_USERNAME=robot$vks-cicd` **unquoted**, under a heading that says "Minimum `.env` you must
+set". `load_env` sources `.env` with `set -a` → `[robot-cicd]` → Harbor 401 → and our own error names
+the *credentials*, so the operator hunts the wrong password. Found **independently by two
+adversaries**, reproduced before fixing. **It was not in the backlog.**
 
-**`B25`** (Istio, this repo) — the biggest product value, and it wants a fresh session. The hook arc
-below is **finished**; do not start there.
+### 🔴 The backlog LIED, and I believed it — re-derive before you act on any line below
 
-**The `subagent-readonly` gate is DONE for now** (2026-07-16, `claude-config`, installed live).
-HOOK-005, **001, 006, 007, 009** all closed; measured against bash on a 65-case corpus:
-**27 bypasses / 4 false-blocks → 1 / 0**. The one survivor is `xargs -I{} git push` — consumer
-semantics, the same documented residual class as `bash -c`, not shell grammar, not fixable there.
-Open: **HOOK-002/003/004** (smaller), and **HOOK-008** — `run-tests.sh` is wired into **no CI**, so
-the gate guarding every project's hooks fires only when a human types it, while a 15-min cron
-auto-commits *and pushes* that repo. That is the highest-value hook item left.
+Six items were re-derived from the code. **Every one was wrong or understated.** Corrections are in
+the Backlog table; the two that would have cost you a session:
 
-**Read `claude-config/BACKLOG.md` §HOOK-00X before touching that gate again.** Its whole point is
-what was refuted: the obvious fixes ("add `)` to the class", "add a keyword group"), *and my own
-skeleton design* (2 bypasses but **13** false blocks — it traded 25 bypasses for +9 FPs). The model
-that shipped is a command-word **state machine** — one boolean, *am I still awaiting the command
-word?* — with the verb patterns `.match()`ed at its offsets on the **raw** string.
+- **B13/B14 are NOT coupled the way B13 says.** `19-trust-harbor.sh` is in **neither** `e2e-kind` nor
+  `install-all` (verify: `install-all: preflight mirror …`; `preflight: check-tools argocd-preflight
+  lab-preflight psa-check`). First death if you comment `HARBOR_USERNAME` is `21-mirror-push.sh:36`,
+  and **B14 is lethal alone — B13 has nothing to do with it.**
+- **`state_set HARBOR_USERNAME` (the obvious KinD fix) CLOBBERS a tenant's `.env`.** Measured:
+  `.env`=`robot$vks-cicd` + `.env.state`=`admin` → **`admin`**. `.env.state` is sourced *after* `.env`
+  and `HARBOR_USERNAME` is not snapshot-protected. It moves the bug from a **gated** file to an
+  **ungated** one.
+
+### Three designs died before becoming code — two of them the adversary's OWN
+
+That is the loop working; do not read it as noise.
+
+| design | verdict |
+|---|---|
+| mine: B13+B14 as one PR | **refuted** (above) |
+| mine: `check-doc-env-quoting` gate | **refuted — 7/20.** `Passw0rd$1`→`Passw0rd` ($ + non-letter), the docs' own `robot$<name>`, every **indented** line; and it could not express its own counter-example, so filing the review that found it would have reddened the static-check gate. Prototype in the verdict scores 19/20 (two-stage quote-aware scanner). |
+| vks-adversary's **own** F2 (PASS-2 terminator) | **refuted, 23 false positives.** Premise wrong: the welded block resolves to *"defaults were MEASURED … re-derive with `make psa-check`"* — a **real** acquisition path. **B22 needs NO gate change.** |
+| vks-adversary's **own** F1 (`psa_level()`) | **refuted, fatally.** `local r="$1" v="PSA_LEVEL_${r}"` expands `${r}` **before** `local` runs → unset → `set -u`. And it fixed **a bug that does not exist** (`:-` already treats empty as unset; both source orders identical). **B22's original `:=` shape is right.** |
+
+**Both adversaries caught their own instruments first** — mawk ignoring `{2,}` (a vacuous "0
+regressions" on a comparison that never ran); a corpus oracle scoring false-blocks as correct; a
+`--limit 40` saturating at 40/40. Distrust the instrument before the product, *including your own*.
 
 ### The one thing to carry forward
 
-**Four adversary rounds refuted me today, and every refutation was right.** Not on style — on facts I
-had asserted with confidence:
+**A human asking is what caught the miss.** I shipped a 109-line gate nobody reviewed, because the
+adversary receipt is scoped to **TIME, not CONTENT** — a review of design X authorized it. That
+residual is documented **in the hook's own header (~line 31)** and `hooks.md:123`, and a fix for it
+(path-scoped receipt) was **refuted on 2026-07-16**: the prompt that names the file to review
+*authorizes* it. `agents.md:762` already settled it — **idea-first is human-gated only; do not build a
+hook for it, do not report it "handled."** See RULE ZERO's new discipline note.
 
-| I said | Truth |
-|---|---|
-| "operators CANNOT raise PSA" — CRITICAL | **False.** The documented `.env` path works. I tested the one form nobody uses. |
-| "their `privileged` does NOT transfer" | **False.** It transfers as *partial* evidence. |
-| "it proves our `baseline` is too low" | **False in the other direction.** |
-| *(the truth, which I never reached)* | **Their datapoint never tests `baseline`** — only `restricted` (fails) vs `privileged` (works). It corroborates that `restricted` is too strict and is **silent** on the rest. |
-| "`SSL_CERT_FILE` REPLACES Go's pool" | **False, and dangerous.** The claim's inverse is a security hole: it is the sentence someone uses to *restrict* trust while 122 public roots stay silently trusted. It lived in **4 homes** — one the trust-check harness's own comment, one an **auto-loaded portfolio rule**. |
-| *(and the truth is a FOURTH thing here too)* | It does **not** "augment" either: `SSL_CERT_FILE` **replaces the FILE list**; the `certDirectories` scan is an **independent source** that still runs. 122 → 123 is the *observable*, not the mechanism — with `SSL_CERT_DIR` set it is **1 root**. |
-| **the 4 rules I wrote about all this** | **One violated another, in the same commit.** I "corrected" *replaces* → *augments* — an **inversion**, not a re-derivation — inside the commit that added the rule saying *don't invert, re-derive*. An adversary caught it. My evidence was also non-reproducible (a squash-merge citation showing the *opposite*) and one number was wrong (71%, not 78%). |
+### What is UNREVIEWED or owed (be honest; do not imply otherwise)
 
-The pattern, stated once: **every claim I got wrong was reasoned from a source; every one took ~2
-minutes to settle empirically.** A doc whose thesis is "verify with a handshake, never by the presence
-of a file" had two rows that were never measured. Measure it.
+- **The `subagent-readonly` state-machine rewrite still has NO adversary round.** Heavily verified by
+  its author (198/198; 1 bypass/0 false-blocks vs bash on 65 cases) — which is exactly what the
+  version that shipped two bypasses also was. Review before trusting it further.
+- **`.env.example` is in NEITHER `GUARDED_PREFIXES` nor `GUARDED_FILES`** (verified today). The repo's
+  declared single source of truth for every tunable — the file at the centre of B13/B14/B16/B22 — is
+  **ungated**. Deliberately NOT fixed unreviewed: changing a control needs the idea-round.
+- `claude-config/reference/internal-ca-trust.md` — kapp-controller half is `[community]`, unverified.
+- Every VKS-specific fact in both references is **lab-gated**. Never promote on a KinD green.
+- The heredoc false-block in `subagent-readonly` is the reviewers' #1 practical obstacle (refused an
+  adversary 3×). Deliberate, fail-closed; any fix must key on the **consuming command**.
 
-**The HOOK-005 session (later the same day) is the same pattern, three more times — and the third is
-the one to internalise:**
+### Next: B26, and it is READY (primary-sourced, not inferred)
 
-| | |
-|---|---|
-| **the BACKLOG ITEM was wrong twice** | Its repro (`grep -c "…<bt>gh pr create" f.md`) is a bash **syntax error** — it could never run, so it was not the bug. And *"the fix already exists in the sibling — port `MESSAGE_ARG`"* fixes **nothing** (it strips only flag-bearing args; a grep pattern is positional) **and creates a bypass** (`gh api graphql -F query=@f` → allowed). A written-down fix is an untested hypothesis **even when a prior session's adversary wrote it**. |
-| **an AUTO-LOADED RULE prescribed the bypass** | `hooks.md` said *"strip quoted string arguments … echo text"*. A backtick inside **double** quotes **executes**, so stripping those regions un-blocks `echo "<bt>git push<bt>"`. That sentence sat in every agent's context telling the next implementer to open the hole. |
-| **🔴 MY FIX SHIPPED TWO BYPASSES — and I pushed and installed it** | The **design** review cleared-with-changes; the **implementation** review refuted it. The one thing I added beyond the reviewed design was wrong: I neutralised backslash-escaped metachars, reasoning `\;` `\&` `` \` `` are literal — true, **except newline**, where `\`⏎ is a line *continuation* bash **deletes**, not an escaped literal. Plus a `#` word-start set missing `)`. Parent blocked all 5 shapes; my HEAD allowed all 5. |
-
-**Then the design round for HOOK-001/006/007 refuted MY design too — before a line was written, which
-is exactly what that round is for:**
-
-| | |
-|---|---|
-| my **skeleton** (blank the quoted TEXT, keep the CODE) | **2 bypasses but 13 FALSE BLOCKS** (vs 4 shipped). It traded 25 bypasses for +9 FPs — the trade `hooks.md` already refused once. |
-| why it was wrong | the root cause is **COMMAND vs ARGUMENT**, not CODE vs TEXT — `echo if git push` has **no quotes to blank**. And blanking **destroys the discriminator**: `"${x}" git push` must be ALLOWED (empty **WORD** → becomes the command) while `${x} git push` must be BLOCKED (no **field** → the verb is the command). My design doc asserted both *"match the skeleton"* and *"the quotes are still visible"* one paragraph apart. |
-| what shipped | a command-word **state machine**: 27 bypasses / 4 FPs → **1 / 0**. |
-| and I lied about it | the commit message said *"NET DELETION … smaller than what ships today"*. Measured after: **+77 lines**. I relayed the reviewer's line-count claim **without measuring it** — the session's own most-repeated failure, committed in the commit that boasts about catching it. |
-
-**Four lessons, in order of value:**
-
-1. **Both rounds are mandatory and they catch DIFFERENT things.** Design-review validated the idea and
-   still could not see the newline delta — because that delta did not exist yet. Skipping the
-   implementation round would have left two live bypasses in the gate that makes subagents read-only.
-2. **A green selftest is not evidence about a case the selftest does not contain.** The corpus scored
-   **138/138 while allowing a real `git push`** — the *same* vacuity trap the commit message one commit
-   earlier had just recorded about the 117-case corpus. Pin new behaviour in **both** directions or the
-   number is theatre.
-3. **Distrust your own instrument first.** My differential oracle treated *"bash printed a syntax
-   error"* as *"nothing ran"* — false: **bash executes each complete command as it parses**, so a later
-   unterminated quote reports EOF *after* `git push` already ran. It scored a real bypass as a pass.
-   (`run-tests.sh`'s `py_compile` had the same shape: green over an invalid escape that turned the
-   hook's rc from 2 to 1 under `PYTHONWARNINGS=error` — i.e. **the gate silently OFF**. It now runs
-   `-W error::SyntaxWarning`, RED-proved.) It recurred **twice more the same day**: my corpus oracle
-   fired on a mutating word *anywhere in argv*, so `git stash list` and `git tag -l` scored as
-   mutations — it indicted the gate for doing its job; and my RED-prover had no timeout, so a mutation
-   that made the scanner **loop forever** hung it, got killed, and **left the hook mutated on disk**.
-   A prover with no timeout does not merely fail to prove — it corrupts the thing it is proving.
-
-4. **A HANG is worse than a CRASH, and `fail-open` cannot save you from it.** That hang was the best
-   find of the arc: the scanner's `i` advances only because every char in the word loop's break set is
-   handled above it. There is no exception to catch — PreToolUse would simply wedge the session. One
-   line (`i = j if j > i else i + 1`) turns it into a RED instead. When a control's failure mode is
-   "stops responding", the fail-open contract is silent about it.
-
-### What is UNREVIEWED or owed (be honest about this, do not imply otherwise)
-
-- `claude-config/reference/internal-ca-trust.md` — reviewed **once** (refuted with 2 HIGH factual
-  errors, fixed, fixes re-reviewed). Its kapp-controller half remains `[community]`, unverified by us.
-- The **4 new rules** were reviewed (`cleared-with-changes`, all findings applied, every example now
-  citable). Everything else I wrote unreviewed today came back **refuted** — that is not a coincidence,
-  it is the session's most repeated result.
-- `claude-config/reference/istio-on-vks.md` — design-reviewed; the M6 correction landed late.
-- Every VKS-specific fact in both references is **lab-gated**. Grade honestly; do not promote on a
-  KinD green.
-- **The regression fix HAS since been reviewed** (cleared-with-changes: 0 new bypasses vs both its
-  parent and grandparent, 62 false-blocks fixed; it refuted `\<CR>`-as-a-continuation and a FALSE
-  fact in a code comment, and found the best thing in that commit — an ordinary indented multi-line
-  indented `git push` split by a backslash-newline, which RUNS and had been a bypass in every prior
-  revision).
-- **The state-machine rewrite has had NO adversary round.** It is heavily verified (198/198; 1
-  bypass / 0 false-blocks vs bash on 65 cases; all 7 decisions RED-proved) — but *verified-by-me* is
-  exactly what the version that shipped two bypasses also was. Review it before trusting it further.
-- **The heredoc false-block is now the reviewers' #1 practical obstacle** — it refused the
-  implementation adversary 3× (`cat <<'EOF'` … `git push` … `EOF` is 100% literal in bash, but is
-  indistinguishable from `bash <<'EOF'`, which executes). Deliberate and fail-closed; it costs
-  evidence, not safety. Any future fix must key on the **consuming command**, never the heredoc alone.
-
-### Traps that bit ME today — expect them
-
-- **A backgrounded `gh pr merge` chained to `git checkout main && git reset --hard`.** Forbidden by
-  the rules; no damage only because the tree happened to be clean. Never background tree-mutating git.
-- **The backtick trap in `gh pr create --body "…"`** — command-substituted a value out of the PR body;
-  `gh` created it happily with a gap. Use `--body-file` / `gh api -F body=@file`.
-- **`cat $DEST` does not word-split in zsh** — my fact-token check reported `LOST=28` (everything)
-  before I noticed the instrument was broken, not the product.
-- **A RED-proof that passes** usually means your *mutation* missed, not that the gate is blind. Mine
-  did, twice.
+vks-adversary rendered the **carried** chart (`bundle/charts/istiod-1.30.2.tgz`) offline — no network,
+no `repo add` — and settled the injector selectors. Its ordering: **B26 → F8 → B22/B23 (blocked on a
+decision, not code)**. See the Backlog rows. Its parting residual: VKS ships
+`1.28.2+vmware.1-vks.1` [community] and Broadcom may patch the injector template — one lab command
+settles it (`kubectl get mutatingwebhookconfiguration -o yaml | grep -A8 namespaceSelector`).
 
 ## Backlog / resume state
 
@@ -653,16 +603,19 @@ was pruned to end.
 | ID | Item |
 |----|------|
 | **B3** | **The sneakernet runbook's Step 4 is executed by NOTHING.** `docs/sneakernet.md` names `platform` / `gitops` / `install-ingress` / `verify`; neither `scripts/e2e-sneakernet.sh` nor `scripts/jumpbox-run.sh` runs any of them — so the half an operator performs *after carrying 11 GB* has never run. This is the condition under which `install-ingress`'s doc row once lied for hours while every test stayed green. Close it by **extending the harness**. Do **not** build a doc-parser: that design was adversary-killed twice (it cannot see a prose claim about a MODE, and it goes green over the covered half — `rules/common/testing.md` §"BINDING DOCS TO CODE"). |
-| **B13** | `19-trust-harbor.sh`'s `HARBOR_URL:?` guard is **vacuous** — `.env.example` commits the `harbor.vks.local` sentinel and `load_env` exports it, so the guard can never fire and its "run `make install-harbor`" advice can never print. Reject the sentinel, as `env_check` now does (`harbor_url_is_placeholder`). |
-| **B14** | `HARBOR_USERNAME=admin` is committed uncommented in `.env.example` — wrong for a **tenant**, who must use a robot account (`secrets/harbor-robot.env`). `19-trust-harbor.sh` consumes it. |
+| **B13** | **A CLASS of 7 vacuous guards, not one.** `.env.example` commits `HARBOR_URL=harbor.vks.local` + `HARBOR_USERNAME=admin` UNCOMMENTED and `load_env` exports them, so `: "${HARBOR_URL:?}"` can never fire — in `19-trust-harbor.sh:23,24`, `21-mirror-push.sh:35,36`, `22-builder-push.sh`, `22-harbor-robot.sh:25,26`, `60-configure-tekton.sh:20,21`, `jumpbox-launch.sh:41,42`, `lib/harbor.sh:13`. Fixing only `19-` ships the class. `harbor_url_is_placeholder` lives in **`02-env.sh:37`, NOT `lib/`**, so no caller outside that file can reach it — moving it into `lib/harbor.sh` is step one (keep the sentinel literal INSIDE a function body: a top-level var is clobbered by `load_env`'s `set -a`). ⚠️ **Blocked on a DECISION, not code:** rejecting the sentinel is a real FALSE-BLOCK — `.vks.local` is *this repo's own* domain (`gitea.vks.local`…), so an operator following our own convention lands on `harbor.vks.local` legitimately, and it is byte-identical to the sentinel. Settle first: a `<SET-IN-.env>`-shaped sentinel, or key on PROVENANCE (came-from-`.env.example`) rather than value. |
+| **B14** | `HARBOR_USERNAME=admin` is committed UNCOMMENTED in `.env.example:138` (`HARBOR_PASSWORD` is correctly commented). A tenant who sets only `HARBOR_PASSWORD=<robot-secret>` gets `admin`+robot-secret → **401 across ~40 read-sites**. Nothing sources `secrets/harbor-robot.env` — it is manual copy-paste. **The deeper bug: ONE var, TWO identities** — `22-harbor-robot.sh` consumes it as the **admin** (to MINT the robot), `21-mirror-push.sh`/`60-configure-tekton.sh` as the **robot** (to push). 🔴 **The 2026-07-16 corrections — do not re-derive these wrong:** (1) **B14 is lethal ALONE**; commenting it FATALs `make e2e-kind` (SKIP_DOTENV=1) at **`21-mirror-push.sh:36`** — `19-trust-harbor.sh` is in NEITHER `e2e-kind` NOR `install-all`, so **B13 is irrelevant to it**. (2) **`state_set HARBOR_USERNAME` in `05-kind-up.sh` is NOT the fix** — measured, it CLOBBERS a tenant's `.env` from the ungated `.env.state` (sourced later; not snapshot-protected). (3) An adversary argues B14 is **not live as filed** (`.env` beats `.env.example`; `scenario-2.md:87` says "set in .env only") while another calls it deterministic — **the axis is WHICH DOC the tenant follows**: `scenario-1.md:121` says `HARBOR_USERNAME=admin  # or a robot account`. The real defect is **three docs disagreeing**; fix that and both readings resolve. |
 | **B15** | `INGRESS_LB_IP` is **published and read back as an input** by ONE remaining reader: `98-verify-ingress.sh:27` takes it with `:?` (`45-install-traefik.sh` / `46-install-istio.sh` `state_set` it). A stale value is indistinguishable from a deliberate override. The fix pattern is already applied in `47-attach-istio.sh:51-52` (`unset INGRESS_LB_IP` + `INGRESS_LB_IP_OVERRIDE`) and cited by `40-install-gitea.sh:59-64` — it just needs back-porting to `98`. |
 | **B16** | `98-verify-ingress.sh:11,27,111` still say `.env.kind` in a comment and two operator-facing messages — an unlisted member of the stale-comment class the `d3ba8ec` sweep fixed in `05`/`06`/`44` (`47-attach-istio.sh:42` has it too). |
 | **B17** | The doc-truth audit's HIGH/MEDIUM remainder — concentrated in `scenario-2.md`, `prerequisites-manual.md`, and CLAUDE.md gate-list drift. Status table: `docs/reviews/2026-07-14-doc-truth-audit.md` §"Remediation status". |
 | **B22** | **PSA defaults live in THREE places** and drift silently: `lib/psa.sh` (`:=` empty), the installers (`${PSA_LEVEL_X:-baseline}` / `:-restricted`), and `.env.example` (uncommented literals). Single-source them in `lib/psa.sh` (`: "${PSA_LEVEL_INGRESS:=baseline}"` …), let every consumer read `$PSA_LEVEL_X` bare, and comment the six `.env.example` lines as `# PSA_LEVEL_X=<default>`. **Do NOT just comment them** — `49-psa-check.sh` reads `${PSA_LEVEL_X:-}` with an **empty** default, so commenting alone silently kills its drift hint ("configured level is X but the namespace carries Y") while the gate stays green. Fixing the triplication is what makes both work. (`PSA_LEVEL_*` is in `check-env-coverage`'s INTERNAL exempt list, so commenting breaks no gate.) Side-effect: the per-run `make X PSA_LEVEL_Y=z` clobber goes away too — today only the **`.env`** path works, and that is the only path any doc prescribes, so this is hardening, **not** a live bug. |
-| **B23** | `PSA_LEVEL_*` is classified **INTERNAL** ("never operator-facing") in `check-env-coverage.sh` while `49-psa-check.sh` tells the operator to set it — so a future `PSA_LEVEL_NEW` would never be required to be documented. Move it out of INTERNAL, but **only together with B22**, or coverage will demand an uncommented line and re-create the shadowing. |
+| **B23** | `PSA_LEVEL_*` is exempted as INTERNAL by a **wildcard** (`check-env-coverage.sh:42` `PSA_LEVEL_[A-Z_]*`), so a future `PSA_LEVEL_NEW` is never required to be documented, while `49-psa-check.sh:148` TELLS the operator to set it. 🔴 **This row's ORIGINAL rationale was FACTUALLY WRONG and is retracted (2026-07-16):** it claimed "coverage will demand an uncommented line and re-create the shadowing" — but `check-env-coverage.sh:80` matches `^#?[[:space:]]*${v}=` and **explicitly accepts a commented line** (its own comment says "Documented = a `VAR=` line, commented or not"). Nor is PASS 2 a problem: an adversary MEASURED that the six PSA lines pass on `.env.example:559-560` (*"defaults were MEASURED … re-derive with `make psa-check`"*) — a **real** acquisition path, so the gate passing them is **CORRECT**. **B22 needs NO gate change.** The true coupling reason is B22's drift hint alone. |
 | **B24** | **Enrich the Istio knowledge of `vks-adversary` and the skills** beyond what the two 2026 community walkthroughs gave us (folded in 2026-07-16: `docs/vks-services/istio.md` §"Field evidence"). Open gaps: **multi-primary multi-cluster has ZERO coverage** (no script, no e2e, no graded fact); the `-n istio-installed` vs `-n tkg-system` variant is unresolved; the gateway-ns PSA minimum is lab-only. The **manifests and the air-gap delta live in `~/projects/claude-config/reference/istio-on-vks.md`** (private — this repo is public, and unrun manifests do not belong in a provenance-graded record). Three things in it are flagged **UNVERIFIED-BY-US** and a lab settles each in one command: whether cert-manager's `cacerts` (`tls.crt`/`tls.key`/`ca.crt`) is even readable by istiod (upstream documents `ca-cert.pem`/`ca-key.pem`/`root-cert.pem`/`cert-chain.pem`); whether `clusterProfile` exists in the VKS package schema (`vcf package available get … --default-values-file-output` dumps it); and the gateway-ns PSA minimum (`make psa-check`). |
 | **B25** | **Validate Scenario 1's Istio material end-to-end with the enriched `vks-adversary` — and land it as EXECUTABLE AUTOMATION, not prose.** Every Istio claim in `scenario-1.md` + `istio.md` + the install/attach scripts gets re-judged against the enriched brief and `~/projects/claude-config/reference/istio-on-vks.md`. **The deliverable is code**: each verifiable claim becomes an assertion in `make istio-preflight` / `verify-ingress` / a new gate — not a paragraph. Concrete candidates already identified: assert `server: istio-envoy` on the response (the PATH, not just the body marker); assert the route **PROGRAMMED** into the proxy (`istioctl proxy-config routes …`), not merely `Accepted`; report mTLS mode from `istioctl x describe pod`; assert the mirrored-image alignment for any istioctl-rendered image. Anything that cannot become an assertion goes to `lab-validation-plan.md` as a numbered step with its command, its expected observable, and what to send back — never as a doc sentence. |
-| **B26** | **ATTACH mode may inject sidecars we never account for — a real breakage path.** `PSA_LEVEL_APP=restricted` (`lib/istio.sh`) applies in **both** modes, but `global.proxy.autoInject=disabled` lives in `46-install-istio.sh`, which does **not** run when `INGRESS_CONTROLLER=istio-existing`. A platform mesh with `sidecarInjectorWebhook.enableNamespacesByDefault=true` (or a revision tag) injects with **no namespace label** → `istio-init` needs `NET_ADMIN` → **every app pod rejected on a real lab**. Fix: `make istio-preflight` must REPORT whether the mesh injects by default (`kubectl get mutatingwebhookconfiguration` + the injector's `namespaceSelector`/`objectSelector`), and the PSA level for app namespaces must follow that answer. `docs/vks-services/istio.md` §PSA promises this report; it does not exist yet. |
+| **B26** | **ATTACH mode may inject sidecars we never account for — READY TO SHIP, and now PRIMARY-SOURCED (2026-07-16).** `global.proxy.autoInject=disabled` lives in `46-install-istio.sh:112`, which does NOT run when `INGRESS_CONTROLLER=istio-existing`, while `PSA_LEVEL_APP=restricted` (`lib/istio.sh:284,572`) applies in BOTH modes → an injecting platform mesh gets `istio-init` (needs `NET_ADMIN`) → **every app pod rejected on a real lab**. vks-adversary rendered the **CARRIED** chart (`bundle/charts/istiod-1.30.2.tgz`) offline — no network, no `repo add` — and settled it: **`istio-injection: disabled` DOES defeat a revision tag** (`rev.namespace.sidecar-injector.istio.io` itself demands `istio-injection DoesNotExist`). **But the POD ANNOTATION is the load-bearing half**: `sidecar.istio.io/inject: "false"` defeats **all 5** webhook rules AND is **race-free** — ArgoCD's `CreateNamespace=true` can create the ns and sync pods **before** `70-configure-argocd.sh:362` labels it. **The fix (in order):** (1) `sidecar.istio.io/inject: "false"` on our pod templates (`deploy/*/deployment.yaml`, `k8s/gitea/gitea.yaml`) — the robust half; (2) `istio-injection=disabled` **inside `ensure_namespace`** — the convenient half, **no new RBAC** (it already runs `kubectl label`), and that boundary automatically excludes `istio-system`, which we must never touch in attach mode; (3) an **offline `helm template` gate** in `static-check` rendering the carried chart under all 3 configs, asserting every rule is defeated — RED-proves on the chart bump that matters; (4) **flip `90-e2e-istio-existing.sh:100` to injection-ON** — a ONE-LINE change (it already helm-installs istio), because today our attach regression test simulates a platform mesh with injection **OFF**, i.e. the safe case, never the hazard. **NOT** a second e2e leg. ⚠️ **Lab-gated residual:** all of the above is upstream **1.30.2**; VKS ships `1.28.2+vmware.1-vks.1` [community] and Broadcom could patch the injector template. One command settles it: `kubectl get mutatingwebhookconfiguration -o yaml \| grep -A8 namespaceSelector`. |
+| **B28** | **The `check-doc-env-quoting` gate, built PROPERLY** (drafted + CUT from #288 at 7/20). The class is real and recurs by construction — a Harbor robot is always `robot$<name>`. Do NOT rebuild the v1 shape. The refuted bypasses, all measured: `$` + **non-letter** (`Passw0rd$1`→`Passw0rd`, `$@ $* $$ $! $?` — **passwords are where `$` lives**); the docs' own `robot$<name>` (5× in `scenario-2.md`; `<name>` parses as a redirect → var UNSET); **every INDENTED** prescription (the anchor traded v1's false-blocks for blindness); backticks; `'robot'$vks'-cicd'` (the single-quote test is a prefix/suffix test). False-BLOCKS on already-correct forms: `robot\$vks-cicd`, `robot'$vks'-cicd`, `"a"'$b'`. And it **could not express its own counter-example** — filing the review that found it would red `static-check`. The prescribed shape (prototyped at 19/20): a **two-stage quote-aware scanner** — (1) does the first value token, respecting quotes, consume the rest of the line? → it is a COMMAND, skip; (2) else walk the value tracking quote state, flag any `$`/`` ` `` outside single quotes and not backslash-escaped. Plus: allow indentation, an `# env-expand-ok:` marker (`KUBECONFIG=$PWD/secrets/x` is LEGITIMATE), and `scripts/test-doc-env-quoting.sh` pinning **all 20 shapes both directions** (18 sibling gates have a test; this had none). Alternative if that is too much: narrow it to `check-doc-robot-quoting`, scanning `robot$` only — ~100% on the class that actually recurs. |
+| **F8** | **The traefik path leaves gitea/argocd/app namespaces UNLABELLED — it is not just "Traefik has no PSA".** `45-install-traefik.sh:59` bare-creates `$GITEA_NAMESPACE`, `$ARGOCD_NAMESPACE` **and every app namespace** with no PSA, violating `lib/psa.sh`'s own docstring. PSA labelling of gitea/tekton lives **only** in `lib/istio.sh:278-279,566-567`, so with `INGRESS_CONTROLLER=traefik` it **never runs**; `TRAEFIK_NAMESPACE` is absent from `49-psa-check.sh`'s NS_SPEC → never measured. Today it survives **by luck**: unlabelled → VKS default `restricted` → and gitea/tekton/traefik all happen to be restricted-clean. The day a chart bump makes gitea need `baseline`, the **istio path works and the traefik path silently rejects, on the lab only**. Fix: route those 5 creations through `ensure_namespace`; add `PSA_LEVEL_TRAEFIK` (default `restricted` — **not** `PSA_LEVEL_INGRESS`, whose `baseline` is an Istio-proxy artefact); add a NS_SPEC row. ⚠️ Traefik's restricted-cleanliness is **chart-REASONED, not measured** (`k8s/traefik/controller.yaml:73-96`: non-root, seccomp RuntimeDefault, caps dropped, binds `:8000` not `:80`) — **the NS_SPEC row is what converts reasoning into a measurement**. |
+| **B27** | **Harbor's runnable artifact was never saved.** `docs/vks-services/harbor.md` cites a working third-party jump-box transcript (`ogelbric/LAB — Create_Harbor`) as a Source and keeps **ZERO code blocks**, while `argocd.md` keeps 6. The paths we implement are fine — the scripts ARE the artifact, which is better. What is missing is the runnable form of the community-graded rows we do NOT implement and cannot settle without a lab (16/32-char key constraints, `tlsSecretLabels`, the double-base64 CA, same-Supervisor auto-trust). There is a B24 for Istio; there is no equivalent for Harbor. Per `agents.md` §"A research pass that saves GRADED CLAIMS and not the ARTIFACT", it is owed — likely `claude-config/reference/harbor-on-vks.md` (private: third-party-derived and unrun). |
 | **B18** | The subagent-readonly hook's worktree exemption keys on the **target path**, not the owning agent — a subagent could write into *another* agent's worktree by absolute path. Needs a live `getcwd()` probe from a real `isolation:"worktree"` subagent before a cwd-anchored fix is safe; blunted meanwhile by worktree isolation itself. |
 
 **Needs a real lab or a heavy run:**
