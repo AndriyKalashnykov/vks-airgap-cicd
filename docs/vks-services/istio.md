@@ -191,6 +191,40 @@ Measured minimums (KinD-verified, via a server-side dry-run label — `make psa-
 | **`ci`** (build TaskRuns) | **`baseline`** | **Kaniko builds as root** (`runAsUser=0`, unrestricted caps, no `seccompProfile`) |
 | **the namespace holding your `Gateway`** | **`baseline`** | the proxy Istio **auto-provisions** sets no `seccompProfile` — and **the platform's istiod creates that pod, not you**, so you cannot make it compliant |
 
+**Community field evidence: their `privileged` CORROBORATES that `restricted` is too strict, and is
+SILENT on `baseline` vs `privileged` — because they never tested `baseline`.** Two VKS lab
+walkthroughs (community, 2026, see Sources) label Istio namespaces `privileged`. Read what each one
+actually labels, and why — the three cases are not the same case:
+
+| Article | labels `privileged` on | Their mechanism | Applies to us? |
+|---|---|---|---|
+| multi-cluster | the **app** namespace (`sample`) | its label set also carries **`istio-injection=enabled`** → injected sidecars; `istio-init` needs `NET_ADMIN`, which `baseline` forbids | **Not in install mode** (`46-install-istio.sh` sets `global.proxy.autoInject=disabled`). **In ATTACH mode the platform's istiod owns injection** — see the warning below. |
+| multi-cluster | **`istio-system`** | the **`istio-cni-node` DaemonSet** (hostPath + `NET_ADMIN`) — their pod list shows it running **even for a sidecar install** | **No.** We install no CNI, and in attach mode `psa-check` marks `istio-system` **not ours** — the platform owns it. |
+| **single-cluster** | **the gateway namespace ONLY** (their `istio-ingress`; role-wise **our `vks-ingress`** / `ISTIO_GWAPI_NAMESPACE` — the auto-provisioned `<gw>-istio` topology. Note the **name collision**: our `istio-ingress` / `ISTIO_GATEWAY_NAMESPACE` is the *classic* shared gateway. One knob, `PSA_LEVEL_INGRESS`, covers both) | annotated *"Required in VKS to allow Istio proxies to run"* — **the proxy itself**. No sidecar, no CNI in that causal chain | **This is the transferable one — and it is UNDER-DETERMINED.** |
+
+**Why it does not settle our `baseline`.** Their datapoint distinguishes exactly two states: the VKS
+default (`restricted`) → the proxy fails, and `privileged` → it runs. **They never tested the middle
+rung.** The annotation is an assertion in a YAML comment, not a measurement — and it is exactly the
+artifact a practitioner produces when a rejection sends them for the biggest hammer. So it
+**corroborates** what this page already said (the gateway namespace needs *more than* `restricted`)
+and says **nothing** about `baseline` vs `privileged`. Our `baseline` is a **server-side dry-run
+measurement of the actual pod spec**; theirs is an unmeasured assertion consistent with skipping a rung.
+
+**And the residual is narrower than "the image".** PSA evaluates the **pod SPEC** — `securityContext`,
+capabilities, `hostPath`, `hostNetwork`, `seccompProfile` — never what the binary does. So a
+*VMware-built proxy image* cannot move the PSA answer; only a different **istiod injection template**
+can, by emitting a less compliant spec. Mechanically nothing in the shape argues for `privileged`: a
+Gateway-API-provisioned proxy has **no `istio-init`**, so no `NET_ADMIN`/`NET_RAW`, and
+`NET_BIND_SERVICE` is a capability `baseline` permits. The articles say nothing about VMware's
+template — so this residual is **unchanged** by their evidence.
+
+⚠️ **Attach mode: injection is the PLATFORM's policy, not ours.** `global.proxy.autoInject=disabled`
+lives in `46-install-istio.sh`, which **does not run** when `INGRESS_CONTROLLER=istio-existing`. A
+platform mesh with `sidecarInjectorWebhook.enableNamespacesByDefault=true` (or a revision tag) injects
+with **no namespace label at all** — and `PSA_LEVEL_APP=restricted` (`lib/istio.sh`) then **rejects
+every app pod**. `make istio-preflight` should report whether the mesh injects by default; it does not
+yet (backlog).
+
 ## What we run
 
 | Command | Does |
@@ -203,13 +237,57 @@ Measured minimums (KinD-verified, via a server-side dry-run label — `make psa-
 
 ![Istio ingress — install vs attach](../diagrams/out/istio-ingress.png)
 
+## Field evidence — two community VKS walkthroughs (2026)
+
+The only end-to-end **real-VKS** Istio evidence we have. A practitioner's lab, not Broadcom docs and
+not ours — so **`community` grade throughout**, and it loses to any primary-sourced fact above.
+
+| Fact | Value | Confidence |
+|---|---|---|
+| Package repository must be **added first** | `vcf package repository add vks-standard --url projects.packages.broadcom.com/vsphere/supervisor/vks-standard-packages/3.6.0-20260416/vks-standard-packages:3.6.0-20260416 -n tkg-system` — the step our own `vcf package` sequence omits | community [src: url=https://medium.com/@bob-bauer/multi-primary-istio-architecture-on-vsphere-kubernetes-service-vks-e704e8f64161 date=2026-07-16 quote="vcf package repository add vks-standard --url projects.packages.broadcom.com/vsphere/supervisor/vks-standard-packages/3.6.0-20260416/vks-standard-packages:3.6.0-20260416 -n tkg-system"] |
+| Repo version determines the Istio version | repo `v2025.6.17` → Istio 1.25; repo `3.6.0-20260320` → Istio 1.28. `kubectl get pkgr -n tkg-system` | community [src: url=https://medium.com/@bob-bauer/istio-on-vmware-vks-single-cluster-install-a574a3c95bbb date=2026-07-16 quote="Note: v2025.6.17 supports Istio 1.25. For this guide, I recommend the 3.6.0-20260320 repository, which offers Istio 1.28."] |
+| Install namespace **variant** | both walkthroughs use `vcf package install istio … -n tkg-system`. Our `-n istio-installed` is **9.0-doc with a live quote**, so it is the better-graded fact — record this as a variant, do **not** replace | community [src: url=https://medium.com/@bob-bauer/istio-on-vmware-vks-single-cluster-install-a574a3c95bbb date=2026-07-16 quote="vcf package install istio -p istio.kubernetes.vmware.com -v 1.28.2+vmware.1-vks.1 --values-file istio-data-values.yaml -n tkg-system"] |
+| Gateway API CRDs ship by default | corroborates **B2**'s premise from a second, independent direction | community [src: url=https://medium.com/@bob-bauer/istio-on-vmware-vks-single-cluster-install-a574a3c95bbb date=2026-07-16 quote="Gateway API CRDs (Built-in): Newer VKS clusters include these by default."] |
+| VCF CLI on 8.x Supervisors | package management works, but it **does not do authentication or context creation** — bears on Backlog **B20** | community [src: url=https://medium.com/@bob-bauer/istio-on-vmware-vks-single-cluster-install-a574a3c95bbb date=2026-07-16 quote="The VCF CLI can be used on 8.x Supervisors for package management, however it currently does not handle authentication or context creation."] |
+| Their ingress best practice **is our tenant model** | `Gateway` in a dedicated namespace owned by platform admins (`allowedRoutes.namespaces.from: All`, wildcard host); `HTTPRoute` in the app's namespace via cross-namespace `parentRefs`; auto-provisioned `<gw>-istio` + LB | community [src: url=https://medium.com/@bob-bauer/istio-on-vmware-vks-single-cluster-install-a574a3c95bbb date=2026-07-16 quote="We'll create this in a dedicated istio-ingress namespace, which is a best practice that allows Platform Admins to own the Gateway while developers manage their own routes."] |
+| **Multi-primary multi-cluster exists** | shared root CA → cert-manager `ClusterIssuer` → per-cluster intermediate `Certificate` (secret `cacerts`); `meshConfig.multiCluster` with a shared `meshID` + unique `clusterName`/`network`; east-west gateway installed with **upstream `istioctl`, not the VKS package**; `istioctl create-remote-secret` for endpoint discovery. **The floor is the VKS PACKAGE's — `1.28.2+vmware.1-vks.1` — not Istio's**: upstream has shipped multi-primary for many releases | community [src: url=https://medium.com/@bob-bauer/istio-on-vmware-vks-single-cluster-install-a574a3c95bbb date=2026-07-16 quote="Multi-cluster was released in early 2026 and requires you to use Istio package 1.28.2+vmware.1-vks.1 or newer."] |
+
+**Verification commands worth stealing** — they assert the **path**, where ours assert the payload:
+`curl -vI <host>` → look for the **`server: istio-envoy`** header (proves the response came through the
+mesh gateway, not from something else answering); `istioctl x describe pod <pod> -n <ns>` → *"Workload
+mTLS mode: STRICT"*; `istioctl proxy-config routes deployment/<gw>-istio -n <ns> --name http.80 -o
+json` → the `virtualHost` for your host, proving the route **programmed** into the proxy rather than
+merely being `Accepted`.
+
+**Do not copy one thing from them:** the multi-cluster walkthrough labels **both** clusters' app
+namespace `topology.istio.io/network=vks-ist02-net`. Cluster 1's must be `vks-ist01-net` — its own
+prose says the network must be unique "or you will not get cross-cluster traffic". It is a
+copy-paste slip, and copying it breaks the very thing the article teaches.
+
 ## Open / unverified
 
 - Exact VKS 9.1 Istio package **version strings** (the Istio *Package Reference* page resolves only to
   the `/9-0/` tree — its `/9-1/` path 404s — so the version strings are 9.0-sourced).
-- Does the **VMware-built** Istio set `seccompProfile` on istiod / the provisioned proxy? If it
-  does, the ingress namespace could tighten to `restricted`. `make psa-check` measures it on the
-  actual cluster.
+- **Multi-primary / multi-cluster Istio on VKS: we have ZERO coverage.** No script, no e2e, no graded
+  fact beyond the community row above. Treat any multi-cluster claim from this repo as UNVERIFIED.
+- **The gateway namespace's true PSA minimum.** Does **VMware's istiod injection template** emit a
+  spec less compliant than upstream's? (Not its proxy *image* — PSA reads the **spec**, never the
+  binary.) If it emits a `seccompProfile` the namespace could **tighten** to `restricted`; if it emits
+  something `baseline` forbids, `PSA_LEVEL_INGRESS` must rise. The community walkthroughs cannot
+  answer this: they only ever tested `restricted` (fails) and `privileged` (works).
+
+  🔴 **`make psa-check` CANNOT settle it by itself, and it fails DECEPTIVELY.** `psa_min_level`
+  dry-runs against **existing pods**. If the level is too low the proxy is **rejected at admission** →
+  **zero pods** → nothing violates → it reports **`NEEDS(min)=restricted`** — the *opposite* of the
+  truth — then `no pods yet — level unproven`, and **exits green**. Read the admission event instead:
+  the ReplicaSet's `FailedCreate … violates PodSecurity "baseline:latest"`.
+
+  **The procedure that works** — only for a namespace **we own** (`vks-ingress`, or install mode):
+  create it `enforce=privileged` **with `warn=baseline`**, let the proxy start, then read the warning
+  (it surfaces the violation with no rejection and no loosen/tighten dance) and `make psa-check` to
+  measure the minimum against the *running* pod. Then tighten to what was measured.
+  **In ATTACH mode you cannot do this** — the gateway namespace may be platform-owned, and a tenant
+  cannot loosen it. There, the prescription is to hand the mesh admin the `FailedCreate` event.
 - Ambient mode (`istioCNI.enabled: true`) on VKS with Antrea — untested here.
 - Whether a platform-supplied mesh in *your* lab exposes the shared gateway at all.
 
@@ -220,4 +298,9 @@ Measured minimums (KinD-verified, via a server-side dry-run label — `make psa-
   is a guest-cluster package and that *Standard Packages* was renamed to *VKS Add-ons* in 3.7.0)
 - Broadcom TechDocs — *Configure PSA for VKr 1.25 and Later*
 - VMware VCF blog — *Istio on vSphere Kubernetes Service (VKS): A Walkthrough* (2025-03, VKS 3.5)
+- Community (Bob Bauer, Medium) — [*Single Cluster Istio on VKS*](https://medium.com/@bob-bauer/istio-on-vmware-vks-single-cluster-install-a574a3c95bbb)
+  (2026-04-16) and [*Multi-Cluster Istio architecture on VKS*](https://medium.com/@bob-bauer/multi-primary-istio-architecture-on-vsphere-kubernetes-service-vks-e704e8f64161)
+  (2026-05-11). Read 2026-07-16; both carry a "lab environments only, opinions my own" disclaimer.
+  Env: vSphere 9.0.2, Supervisor 1.32.9, VKS 3.6.2+v1.35, vKR 1.35.2, repo 3.6.0-20260416,
+  Istio 1.28.5, cert-manager 1.19.2.
 - This repo: `docs/decisions/istio-on-vks.md` (the decision + the full verification matrix)
