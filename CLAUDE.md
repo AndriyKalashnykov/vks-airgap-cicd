@@ -46,7 +46,9 @@ session that had just re-read it.** `.claude/hooks/adversary-first-gate.py` (wir
 `.env.example` are deliberately NOT gated — that is where you write the plan down first. Escape hatch,
 on the record: `ADVERSARY_GATE_OFF=1`. RED/GREEN-proven 11 ways.
 
-Its sibling, `subagent-readonly-gate.py`, shipped with a HOLE it took a real incident to find: it
+Its sibling — the subagent read-only gate, now GLOBAL as `~/.claude/hooks/subagent-readonly.py` (a
+merged superset; the old repo-local `subagent-readonly-gate.py` was promoted + merged into it) —
+shipped with a HOLE it took a real incident to find: it
 matched **`Bash` only**, so it blocked a subagent's `git push` and happily let it **rewrite the tree
 with `Edit`/`Write`** — which is exactly how two READ-ONLY-briefed adversaries edited five files on
 2026-07-14, one of them *while the main agent was executing the script*. It now blocks subagent writes
