@@ -224,6 +224,14 @@ LoadBalancer address (NSX ALB / Avi) and any IP-pool prerequisite; exact 9.1 pac
 
 ## Pod Security Admission — the other thing a real VKS cluster does that KinD does not
 
+> **This section records the decision as taken on 2026-07-12. The LIVING record is
+> [`docs/vks-services/istio.md`](../vks-services/istio.md) § *Pod Security Admission* — read that for the
+> current position.** It has since gained community field evidence (2026-07-16) that narrows the open
+> question: their `privileged` corroborates that `restricted` is too strict but never tested `baseline`,
+> and PSA reads the pod **spec**, not the proxy *image* — so the residual is VMware's **injection
+> template**, not its binary. This ADR is not rewritten; that is what an ADR is for.
+> <!-- arc-ok: 2026-07-16 -->
+
 A VKS guest cluster runs the PSA controller and **enforces the `restricted` Pod Security Standard
 by DEFAULT from VKS/TKr v1.26** — "pods violating security are rejected unless namespace
 configuration is changed" (Broadcom, *Configure PSA for VKr 1.25 and Later*). Only `kube-system`,
