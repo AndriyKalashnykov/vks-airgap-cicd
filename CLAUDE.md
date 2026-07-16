@@ -503,9 +503,23 @@ flight and what to distrust" belongs here.
 
 **State: `main` green, 0 open PRs, no cluster up, tree clean.** Nothing is half-done.
 
-Merged today: **#276** (prune) · **#277** (Istio field evidence) · **#278** (unattended sweep) ·
-**#279** (`SSL_CERT_FILE`). Plus, in the **private** `claude-config`: the `merge-base` hook fix,
-`vks-adversary` going global, two new references, and the `SSL_CERT_FILE`/podman rule corrections.
+Merged here: **#276** (prune) · **#277** (Istio field evidence) · **#278** (unattended sweep) ·
+**#279** (`SSL_CERT_FILE`) · **#280/#281** (this handoff). In the **private** `claude-config`: the
+`merge-base` hook fix (117 tests, RED-proven) · `vks-adversary` **went global**, specifics intact, and
+the placement rule it contradicted was corrected · two new **references** (`istio-on-vks.md`,
+`internal-ca-trust.md`) · the `SSL_CERT_FILE`/podman/containerd rule corrections · **4 new rules** +
+the adversary round that refuted them · **HOOK-001…005** filed.
+
+### START HERE — the best-shaped work available
+
+**`HOOK-005`** (`claude-config/BACKLOG.md`). It is HIGH, it is currently **blinding the reviewers**
+(this portfolio documents every trap in backticks, so grepping for a documented trap is a *blocked
+command* — an adversary's first move), **the fix already exists** in the sibling hook
+(`no-gate-in-commit-chain.py`'s `MESSAGE_ARG` strip — it is a port, not a design), and it is
+RED-provable in both directions against a 117-case selftest that already exists.
+Then **HOOK-001** (12 shell-keyword forms bypass the gate — *mutations getting through*), which is
+higher severity but genuinely needs its own design round: the obvious fix false-positives on
+`echo "!git push"`. **B25** is the biggest product value and wants a fresh session.
 
 ### The one thing to carry forward
 
@@ -518,7 +532,9 @@ had asserted with confidence:
 | "their `privileged` does NOT transfer" | **False.** It transfers as *partial* evidence. |
 | "it proves our `baseline` is too low" | **False in the other direction.** |
 | *(the truth, which I never reached)* | **Their datapoint never tests `baseline`** — only `restricted` (fails) vs `privileged` (works). It corroborates that `restricted` is too strict and is **silent** on the rest. |
-| "`SSL_CERT_FILE` REPLACES Go's pool" | **False, and dangerous.** It **augments** (measured: 122 → 123 roots). The claim's inverse is a security hole: it is the sentence someone uses to *restrict* trust while 122 public roots stay silently trusted. It lived in **4 homes**, one of them the trust-check harness's own comment, one of them an **auto-loaded portfolio rule**. |
+| "`SSL_CERT_FILE` REPLACES Go's pool" | **False, and dangerous.** The claim's inverse is a security hole: it is the sentence someone uses to *restrict* trust while 122 public roots stay silently trusted. It lived in **4 homes** — one the trust-check harness's own comment, one an **auto-loaded portfolio rule**. |
+| *(and the truth is a FOURTH thing here too)* | It does **not** "augment" either: `SSL_CERT_FILE` **replaces the FILE list**; the `certDirectories` scan is an **independent source** that still runs. 122 → 123 is the *observable*, not the mechanism — with `SSL_CERT_DIR` set it is **1 root**. |
+| **the 4 rules I wrote about all this** | **One violated another, in the same commit.** I "corrected" *replaces* → *augments* — an **inversion**, not a re-derivation — inside the commit that added the rule saying *don't invert, re-derive*. An adversary caught it. My evidence was also non-reproducible (a squash-merge citation showing the *opposite*) and one number was wrong (71%, not 78%). |
 
 The pattern, stated once: **every claim I got wrong was reasoned from a source; every one took ~2
 minutes to settle empirically.** A doc whose thesis is "verify with a handshake, never by the presence
@@ -526,8 +542,11 @@ of a file" had two rows that were never measured. Measure it.
 
 ### What is UNREVIEWED or owed (be honest about this, do not imply otherwise)
 
-- `claude-config/reference/internal-ca-trust.md` — reviewed **once** (refuted, fixed). Its **fixes**
-  had a second round; its kapp-controller half remains `[community]` and unverified by us.
+- `claude-config/reference/internal-ca-trust.md` — reviewed **once** (refuted with 2 HIGH factual
+  errors, fixed, fixes re-reviewed). Its kapp-controller half remains `[community]`, unverified by us.
+- The **4 new rules** were reviewed (`cleared-with-changes`, all findings applied, every example now
+  citable). Everything else I wrote unreviewed today came back **refuted** — that is not a coincidence,
+  it is the session's most repeated result.
 - `claude-config/reference/istio-on-vks.md` — design-reviewed; the M6 correction landed late.
 - Every VKS-specific fact in both references is **lab-gated**. Grade honestly; do not promote on a
   KinD green.
