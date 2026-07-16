@@ -32,6 +32,12 @@ spec:
   template:
     metadata:
       labels:
+        # istio-injection=disabled on the NAMESPACE is the primary control (lib/psa.sh,
+        # ensure_namespace). This pod-level LABEL is the race guard: ArgoCD's
+        # CreateNamespace=true can create the ns and sync this pod before the installer
+        # labels it. A LABEL, not an annotation -- a webhook objectSelector is a
+        # LabelSelector and never matches annotations (Backlog B26).
+        sidecar.istio.io/inject: "false"
         app.kubernetes.io/name: gitea
     spec:
       securityContext:
