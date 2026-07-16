@@ -27,9 +27,12 @@ harbor_setup() {
   [ "$HARBOR_TLS_VERIFY" = "false" ] && CURL_CACERT=(--insecure)
   # HTTP for an insecure (kind) Harbor, HTTPS otherwise.
   SCHEME="https"; [ "$HARBOR_TLS_VERIFY" = "false" ] && SCHEME="http"
-  # Curl auth in a real umask-077 config FILE (kept out of argv).
+  # Curl auth in a real umask-077 config FILE (kept out of argv). esc_curlk (lib/os.sh) is not
+  # cosmetic: a bare `"` in the password TRUNCATES it at that character and a `\` is EATEN, so an
+  # ordinary strong password 401s and the diagnostic below blames the wrong thing. A newline would
+  # inject a curl DIRECTIVE outright.
   HARBOR_CURL_CFG="${tmp}/curl.cfg"
-  ( umask 077; printf 'user = "%s:%s"\n' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" > "$HARBOR_CURL_CFG" )
+  ( umask 077; printf 'user = "%s:%s"\n' "$(esc_curlk "$HARBOR_USERNAME")" "$(esc_curlk "$HARBOR_PASSWORD")" > "$HARBOR_CURL_CFG" )
   # Where harbor_api_body records the HTTP status. A FILE, not a global: callers read the body via
   # a command substitution (a subshell), and a global set in there never reaches them.
   HARBOR_TMP_DIR="$tmp"
