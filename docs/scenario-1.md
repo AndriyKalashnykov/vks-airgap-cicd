@@ -9,8 +9,12 @@ the pipeline into it. The jump box is dual-homed (internet + lab).
 > commands below need a kubeconfig for each. Istio is **not** a Supervisor Service — it is a
 > guest-cluster package (see Step 7).
 
-**Do not trust version numbers in this document.** Get the real ones from your cluster:
-`make argocd-preflight`.
+**Version numbers in this document are illustrative.** The one that matters on your lab is your
+Supervisor's **running ArgoCD *server*** (a 2.x line) — *not* the `argocd` **CLI** or this repo's KinD
+**pin**, which are a different, 3.x fact. **Step 4**'s `make argocd-preflight` prints all three (its
+`── ArgoCD version ──` section) once your cluster is up and `ARGOCD_KUBECONFIG` is set. It is the full
+install-preflight, so run before your clusters answer it **BLOCKs and exits non-zero — that is
+expected, not a defect**; it still prints the CLI and pin, but the server number needs a live cluster.
 
 ## Downloads (each needs your Broadcom entitlement)
 
@@ -29,10 +33,10 @@ OS/arch and ignores the rest.
 **For:** the toolchain, and the licensed `vcf` CLI. **A2 below uses `vcf`, so install it first.**
 
 ```bash
-make env-init                                        # creates .env from .env.example
-make deps                                            # mise toolchain (kind, crane, tkn, kubectl, helm…)
+make env-init                                         # creates .env from .env.example
+make deps                                             # mise toolchain (kind, crane, tkn, kubectl, helm…)
 make install-vcf-clis VCF_CLI_SRC_DIR=~/Downloads/vcf # the licensed argocd-vcf + vcf + plugins (sudo-free)
-make check-tools                                     # what you have, what is missing
+make check-tools                                      # what you have, what is missing
 ```
 
 **Expect:** `check-tools` lists no missing **required** CLI.
