@@ -493,10 +493,62 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
+## ▶️ HANDOFF 2026-07-16 — READ, THEN REPLACE (do not append)
+
+**There is exactly ONE handoff section, and the next session OVERWRITES it.** This file used to carry
+**20** of them (1,464 lines / 78% of the file) and they were pruned on 2026-07-16 — closed work whose
+record is the PR number. If your session's outcome is a *fact*, it belongs in the docs; if it is a
+*task*, it belongs in the Backlog below; if it is *history*, it belongs in git. Only "what is in
+flight and what to distrust" belongs here.
+
+**State: `main` green, 0 open PRs, no cluster up, tree clean.** Nothing is half-done.
+
+Merged today: **#276** (prune) · **#277** (Istio field evidence) · **#278** (unattended sweep) ·
+**#279** (`SSL_CERT_FILE`). Plus, in the **private** `claude-config`: the `merge-base` hook fix,
+`vks-adversary` going global, two new references, and the `SSL_CERT_FILE`/podman rule corrections.
+
+### The one thing to carry forward
+
+**Four adversary rounds refuted me today, and every refutation was right.** Not on style — on facts I
+had asserted with confidence:
+
+| I said | Truth |
+|---|---|
+| "operators CANNOT raise PSA" — CRITICAL | **False.** The documented `.env` path works. I tested the one form nobody uses. |
+| "their `privileged` does NOT transfer" | **False.** It transfers as *partial* evidence. |
+| "it proves our `baseline` is too low" | **False in the other direction.** |
+| *(the truth, which I never reached)* | **Their datapoint never tests `baseline`** — only `restricted` (fails) vs `privileged` (works). It corroborates that `restricted` is too strict and is **silent** on the rest. |
+| "`SSL_CERT_FILE` REPLACES Go's pool" | **False, and dangerous.** It **augments** (measured: 122 → 123 roots). The claim's inverse is a security hole: it is the sentence someone uses to *restrict* trust while 122 public roots stay silently trusted. It lived in **4 homes**, one of them the trust-check harness's own comment, one of them an **auto-loaded portfolio rule**. |
+
+The pattern, stated once: **every claim I got wrong was reasoned from a source; every one took ~2
+minutes to settle empirically.** A doc whose thesis is "verify with a handshake, never by the presence
+of a file" had two rows that were never measured. Measure it.
+
+### What is UNREVIEWED or owed (be honest about this, do not imply otherwise)
+
+- `claude-config/reference/internal-ca-trust.md` — reviewed **once** (refuted, fixed). Its **fixes**
+  had a second round; its kapp-controller half remains `[community]` and unverified by us.
+- `claude-config/reference/istio-on-vks.md` — design-reviewed; the M6 correction landed late.
+- Every VKS-specific fact in both references is **lab-gated**. Grade honestly; do not promote on a
+  KinD green.
+
+### Traps that bit ME today — expect them
+
+- **A backgrounded `gh pr merge` chained to `git checkout main && git reset --hard`.** Forbidden by
+  the rules; no damage only because the tree happened to be clean. Never background tree-mutating git.
+- **The backtick trap in `gh pr create --body "…"`** — command-substituted a value out of the PR body;
+  `gh` created it happily with a gap. Use `--body-file` / `gh api -F body=@file`.
+- **`cat $DEST` does not word-split in zsh** — my fact-token check reported `LOST=28` (everything)
+  before I noticed the instrument was broken, not the product.
+- **A RED-proof that passes** usually means your *mutation* missed, not that the gate is blind. Mine
+  did, twice.
+
 ## Backlog / resume state
 
 Every item below was **re-verified against the tree on 2026-07-16**, not carried forward on trust. The
 history that produced them is in git and in `docs/reviews/` — this list is the open set only.
+**B21 was removed today because it was FIXED** — carrying a closed item forward is the class this file
+was pruned to end.
 
 **Code — no lab needed:**
 
