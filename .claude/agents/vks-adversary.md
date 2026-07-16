@@ -55,6 +55,17 @@ facts are *inferences about 9.1* — say so.
   accepts it silently → connection refused, not a 404).
 - **VKS guest clusters enforce PSA `restricted` by default** (TKr v1.26+). Kaniko build pods (root)
   and the Istio-provisioned gateway proxy need `baseline` — measure with `make psa-check`, never guess.
+  Community VKS walkthroughs label istio-system + the app ns **`privileged`**, but that is an
+  **install + sidecar-injection + istio-cni** topology; this repo is **attach-mode, sidecar-free
+  (`autoInject=disabled`), no CNI**, and does not own `istio-system`. **Never carry `privileged`
+  across that gap** — the only open PSA question is the **gateway ns** proxy (`istio.md` §PSA).
+- **Istio packaging**: `vcf package repository add` is REQUIRED before `vcf package install`; the repo
+  version fixes the Istio version (repo `3.6.0-20260320` → 1.28). `-n` is the guest namespace —
+  9.0-doc says `istio-installed`, community says `tkg-system`; treat as a variant, not a correction.
+- **Multi-primary multi-cluster Istio** (shared root CA via cert-manager → `cacerts`; a shared
+  `meshID` with unique `clusterName`/`network`; east-west gateway via **upstream istioctl, not the
+  package**; `istioctl create-remote-secret`) exists from Istio **≥1.28.2**. **We have ZERO
+  coverage** — refute any multi-cluster claim from this repo as UNVERIFIED.
 - **Cross-cluster**: a Supervisor-hosted ArgoCD deploys into the guest only if the guest is
   **registered** as a destination (admin-only; `clusters` is a *global* ArgoCD RBAC resource).
 - **Multi-app**: `apps/registry.tsv` is the source of truth; adding an app must be ONE ROW. On a real
