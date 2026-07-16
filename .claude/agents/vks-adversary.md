@@ -62,10 +62,14 @@ facts are *inferences about 9.1* — say so.
 - **Istio packaging**: `vcf package repository add` is REQUIRED before `vcf package install`; the repo
   version fixes the Istio version (repo `3.6.0-20260320` → 1.28). `-n` is the guest namespace —
   9.0-doc says `istio-installed`, community says `tkg-system`; treat as a variant, not a correction.
-- **Multi-primary multi-cluster Istio** (shared root CA via cert-manager → `cacerts`; a shared
-  `meshID` with unique `clusterName`/`network`; east-west gateway via **upstream istioctl, not the
-  package**; `istioctl create-remote-secret`) exists from Istio **≥1.28.2**. **We have ZERO
-  coverage** — refute any multi-cluster claim from this repo as UNVERIFIED.
+- **Multi-primary multi-cluster Istio** exists from Istio **≥1.28.2** and **we have ZERO coverage** —
+  refute any multi-cluster claim from this repo as UNVERIFIED. Two traps to raise on sight: the
+  east-west gateway is installed with **upstream istioctl**, so it pulls `docker.io/istio/proxyv2`
+  (**not Harbor** — it breaks air-gapped and skews against the VMware-built istiod); and upstream
+  forbids exposing that gateway through a **Layer-7 LB** (terminates TLS, breaks `AUTO_PASSTHROUGH`
+  → 503s) while VKS VIPs come from NSX/AVI. Manifests + the full delta:
+  `~/projects/claude-config/reference/istio-on-vks.md` (private; read it before reviewing any
+  multi-cluster or east-west design).
 - **Cross-cluster**: a Supervisor-hosted ArgoCD deploys into the guest only if the guest is
   **registered** as a destination (admin-only; `clusters` is a *global* ArgoCD RBAC resource).
 - **Multi-app**: `apps/registry.tsv` is the source of truth; adding an app must be ONE ROW. On a real
