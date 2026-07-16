@@ -23,7 +23,7 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/kubectl" <<'STUB'
 #!/usr/bin/env bash
 args=("$@"); i=0; sub=""; kc=""
-while [ $i -lt ${#args[@]} ]; do case "${args[$i]}" in --kubeconfig) kc="${args[$((i+1))]}"; i=$((i+2));; *) sub="${args[$i]}"; break;; esac; done
+while [ $i -lt ${#args[@]} ]; do case "${args[$i]}" in --kubeconfig) kc="${args[$((i+1))]}"; i=$((i+2));; --request-timeout=*) i=$((i+1));; --request-timeout) i=$((i+2));; *) sub="${args[$i]}"; break;; esac; done
 rest=("${args[@]:$((i+1))}")
 case "$sub" in
   version) echo '{}' ;;

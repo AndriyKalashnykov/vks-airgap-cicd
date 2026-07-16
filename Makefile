@@ -308,6 +308,10 @@ preflight: check-tools argocd-preflight lab-preflight psa-check ## Read-only: ca
 argocd-preflight: ## ArgoCD version + TOPOLOGY + write-mechanism + AppProject + Gitea reachability (two-cluster aware; non-zero on a blocking finding)
 	@$(SCRIPTS)/23-argocd-preflight.sh
 
+.PHONY: argocd-version
+argocd-version: ## Read-only: ArgoCD CLI vs RUNNING-server vs repo-pin versions (never gates; exits 0 even with no cluster)
+	@$(SCRIPTS)/argocd-version.sh
+
 ##@ Platform install (Gitea + Tekton)
 .PHONY: install-gitea
 install-gitea: check-env ## Install Gitea on VKS (images from Harbor)
@@ -647,7 +651,7 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-adversary-gate-rearm ## Run all offline script-logic unit tests
+test-scripts: test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm ## Run all offline script-logic unit tests
 
 # NOTE: subagent-readonly + no-gate-in-commit-chain hooks (and their tests) are now GLOBAL
 # (~/projects/claude-config, installed into ~/.claude); this repo keeps only the project-local
@@ -683,6 +687,10 @@ test-vks-sso-user: ## Offline: vks_sso_user() is idempotent on '@' (no double SS
 .PHONY: test-argocd-preflight-ns
 test-argocd-preflight-ns: ## Offline: argocd-preflight must NOT block install-all on a guest-default ns-NotFound unless ARGOCD_MECHANISM=kubectl (C12)
 	@./scripts/test-argocd-preflight-ns.sh
+
+.PHONY: test-argocd-version
+test-argocd-version: ## Offline: argocd_print_versions is exit-0 + never dials a default cluster (read-only version peek)
+	@./scripts/test-argocd-version.sh
 
 .PHONY: test-builder-save-crane
 test-builder-save-crane: ## DEEP (needs docker + a network registry:2; NOT in static-check): guards the sneakernet builder's '<engine> save' -> 'crane push' round-trip for docker AND podman (skips loudly if a prereq is absent)

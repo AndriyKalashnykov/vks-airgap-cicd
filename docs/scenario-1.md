@@ -15,6 +15,7 @@ Supervisor's **running ArgoCD *server*** (a 2.x line) — *not* the `argocd` **C
 `── ArgoCD version ──` section) once your cluster is up and `ARGOCD_KUBECONFIG` is set. It is the full
 install-preflight, so run before your clusters answer it **BLOCKs and exits non-zero — that is
 expected, not a defect**; it still prints the CLI and pin, but the server number needs a live cluster.
+For just the versions (no gate, exits 0 even with no cluster), use **`make argocd-version`**.
 
 ## Downloads (each needs your Broadcom entitlement)
 

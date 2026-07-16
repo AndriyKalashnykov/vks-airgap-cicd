@@ -37,15 +37,17 @@ require_cmd kubectl
 : "${KUBECONFIG:?KUBECONFIG must be set (path to the GUEST/workload-cluster kubeconfig)}"; export KUBECONFIG
 
 NS="${ARGOCD_NAMESPACE:-argocd}"
-ARGOCD_KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}"
-VKS_ARGOCD_CRD="argocds.argocd-service.vsphere.vmware.com"
+ARGOCD_KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}"   # VKS_ARGOCD_CRD now lives in lib/argocd.sh
 blocking=0
 warned=0
 dest=""
 
 # ka = the cluster ArgoCD RUNS IN. kg = the GUEST/workload cluster. On KinD they are the same file.
-ka() { kubectl --kubeconfig "$ARGOCD_KUBECONFIG" "$@"; }
-kg() { kubectl --kubeconfig "$KUBECONFIG" "$@"; }
+# --request-timeout=15s: on a black-hole endpoint `kubectl version` HANGS (>2 min) instead of
+# failing fast — the gate `block`s on failure anyway, so a bounded timeout just makes the block quick.
+# 15s is generous enough not to false-block a live-but-slow Supervisor (the version PEEK uses 3s).
+ka() { kubectl --kubeconfig "$ARGOCD_KUBECONFIG" --request-timeout=15s "$@"; }
+kg() { kubectl --kubeconfig "$KUBECONFIG" --request-timeout=15s "$@"; }
 block() { log_error "BLOCKING: $*"; blocking=1; }
 warn()  { log_warn "$*"; warned=$((warned + 1)); }
 
@@ -72,29 +74,9 @@ else                   log_info "ArgoCD is IN the workload cluster."; fi
 
 # ---- 2. versions (asked on the ARGOCD cluster — that is where ArgoCD lives) ----------------------
 echo "── ArgoCD version ──"
-if have argocd; then
-  log_info "argocd CLI (client): $(argocd version --client --short 2>/dev/null || echo unknown)"
-else
-  log_warn "argocd CLI not on PATH — it is REQUIRED on the tenant path (argocd-server is the only writer a tenant may have)."
-fi
-# The CLI version is NOT the server version — print this WITH the CLI number, in EVERY branch. The
-# RUNNING server (below) needs a live cluster and may not print at all, so a reader on a dead/absent
-# cluster would otherwise see only the 3.x CLI + 3.x pin and mistake them for "the ArgoCD version".
-log_info "  NOTE: the CLI version is NOT the ArgoCD *server* version — the lab pins a 2.x SERVER while the KinD stand-in + CLI are 3.x. The number that matters on your lab is the RUNNING server, below."
-if ka get crd "$VKS_ARGOCD_CRD" >/dev/null 2>&1; then
-  log_info "VKS ArgoCD operator present. Supported server versions:"
-  ka explain argocd.spec.version 2>/dev/null | sed 's/^/    /'
-  ka get argocd -A -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name,VERSION:.spec.version' 2>/dev/null | sed 's/^/    /'
-else
-  log_info "no VKS ArgoCD operator CRD on the ArgoCD cluster — upstream ArgoCD (the KinD stand-in), or you are a tenant who may not read CRDs."
-fi
-img="$(ka -n "$NS" get deploy argocd-server -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
-if [ -n "$img" ]; then
-  log_info "RUNNING argocd-server image: $img   <- THE version that matters on a real lab"
-else
-  log_warn "RUNNING server version: UNAVAILABLE — no cluster reachable in ns/$NS (ArgoCD is elsewhere, you may not read it as a tenant, or your cluster is down). On a real lab THIS (a 2.x line) is the number that matters; the CLI + pin above are 3.x and are NOT it."
-fi
-log_info "this repo's KinD pin: ARGOCD_VERSION=${ARGOCD_VERSION:-?}"
+# Shared with the read-only `make argocd-version`. 15s: this is the GATE, so it wants headroom (the
+# standalone peek uses the 3s default). Self-contained in lib/argocd.sh — no verdict state touched.
+argocd_print_versions "$ARGOCD_KUBECONFIG" "$NS" 15s
 
 # ---- 3. WHICH WRITE MECHANISM IS OPEN TO ME? ----------------------------------------------------
 # The single most valuable thing a tenant can learn before spending 20 minutes on a mirror.
