@@ -38,7 +38,9 @@ can, discovers what the cluster already knows). These are the values only **you*
 
 ```bash
 HARBOR_URL=harbor.<lab-host-or-ip>       # the Harbor Supervisor Service's endpoint (discover: its LB IP/FQDN)
-HARBOR_USERNAME=robot$vks-cicd           # `make harbor-robot` writes this pair to secrets/harbor-robot.env
+HARBOR_USERNAME='robot$vks-cicd'         # SINGLE-quote it: load_env sources .env with `set -a`, so an
+                                         # unquoted robot$vks-cicd expands $vks away -> robot-cicd -> 401.
+                                         # `make harbor-robot` writes this pair to secrets/harbor-robot.env
 HARBOR_PASSWORD=<robot-secret>           # never committed, never on argv
 HARBOR_CA_FILE=./secrets/harbor-ca.crt   # `make fetch-harbor-ca` (self-signed lab Harbor)
 GITEA_HOST=gitea.<lab-host-or-ip>        # the ingress hostname; GITEA_URL DERIVES from it
