@@ -65,3 +65,7 @@ token.md
 # the sneakernet bundle + its checksum sidecar (multi-GB; never committed)
 vks-airgap-cicd-bundle-*.tar
 vks-airgap-cicd-bundle-*.tar.*
+
+# Python bytecode
+__pycache__/
+*.pyc

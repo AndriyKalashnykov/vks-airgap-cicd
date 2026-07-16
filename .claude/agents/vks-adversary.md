@@ -61,6 +61,40 @@ facts are *inferences about 9.1* — say so.
   lab a **tenant** may additionally need the new namespace in their **AppProject** `spec.destinations`
   **and** the new `<app>-deploy` URL in `spec.sourceRepos`.
 
+## Docker / registry-trust for THIS lab (the lab-specifics the generic `adversary-docker` does NOT carry)
+
+The general docker/registry-trust mechanics — `certs.d` resolution, rootless vs rootful, the OS
+system-store trust path, kind's Docker coupling, crane/Kaniko/BuildKit — live in the global
+`adversary-docker`. What is SPECIFIC to this lab, and what you must check on any Harbor / registry-trust
+change here:
+
+- **`HARBOR_URL` is shaped DIFFERENTLY per flow, and a `certs.d`/`curl` guard keyed on it is a frequent
+  silent bug.** The KinD stand-in writes an **LB IP** (e.g. `172.18.0.3`) into `HARBOR_URL`; a real VKS
+  lab has an **FQDN**, possibly on `:443`. Docker's `certs.d` directory is the registry ref *as the client
+  writes it* — no scheme, no trailing `/`, no path, port only when non-default — so any
+  `[ -f /etc/docker/certs.d/$HARBOR_URL/… ]` test is wrong the moment `HARBOR_URL` carries `https://`, a
+  trailing `/`, a port, or a project path. Interrogate the SHAPE in each flow; the honest test is a
+  login/pull handshake, not a file's existence.
+- **Same-Supervisor auto-trust.** On a real VKS lab a guest cluster in the SAME Supervisor already trusts
+  the Supervisor Harbor's CA (VCF / corporate PKI in the system store) — so "no `certs.d` file" does NOT
+  mean "untrusted" there, while on KinD you must wire the CA yourself (per-node containerd
+  `certs.d/<ip>/`, crane `SSL_CERT_FILE`, podman `--cert-dir`, Kaniko ConfigMap). A guard that equates
+  "no `certs.d` file" with "will fail" is wrong on the lab and right on KinD — grade which environment it
+  is judging.
+- **`docker exec` into kind nodes is a KinD implementation detail with NO lab equivalent.** kind node
+  containers on the kind Docker network, `crictl`/containerd `certs.d` wiring via `docker exec` — none of
+  that exists on a real guest cluster. Do not let "the KinD e2e needs docker" leak into a claim that the
+  air-gap / mirror flow needs docker (the mirror is `crane`, a static binary — see `adversary-docker`).
+- **The Harbor "blob corruption" incident was a MISDIAGNOSIS — know the REAL cause.** It was NOT concurrent
+  registry mutation. An `emptyDir`-backed registry was WIPED by unconditional helm-upgrades (the pod
+  rolled), while a SURVIVING Redis descriptor cache kept answering `HEAD /v2/…/blobs/<digest>` with 200 —
+  so `crane` read "already present", skipped every upload, and reported success (a green mirror over an
+  empty store; only `mirror-verify` caught it). The fixes were a PVC for the blob store, an idempotent
+  install, and `mirror` depending on `mirror-verify`. Attack any registry change against THAT failure
+  shape (a registry that HEAD-200s a blob it does not actually have), and verify a mirror by FETCHING
+  (`crane validate --remote`), never by the pusher's exit code. Still run e2es serially — for
+  attributability of a shared cluster + registry, not because of blob corruption.
+
 ## Conventions you judge against (they are NOT inherited — they are here on purpose)
 
 - **`.env.example` clobber**: `load_env` sources it with `set -a`, so an **uncommented** value is
