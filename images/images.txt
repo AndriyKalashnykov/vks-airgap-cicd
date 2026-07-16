@@ -55,6 +55,6 @@ traefik:v3.7.8
 
 # ---- Istio (default ingress: control plane + ingress gateway; air-gap hub=Harbor) ----
 # renovate: datasource=docker depName=istio/pilot
-istio/pilot:1.30.2
+istio/pilot:1.30.3
 # renovate: datasource=docker depName=istio/proxyv2
-istio/proxyv2:1.30.2
+istio/proxyv2:1.30.3
