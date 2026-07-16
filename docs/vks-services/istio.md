@@ -95,7 +95,7 @@ else falls back to classic.
 > by default, with an opt-OUT label `addon.addons.kubernetes.vmware.com/gateway-api: unmanaged` (VKS 3.7
 > Add-ons RN, `/9-1/`, 200).
 >
-> **So the risk is the VERSION, not the presence** (handoff **B2**): the CRDs are VKS-managed at the VKr's
+> **So the risk is the VERSION, not the presence** (Backlog **B2**): the CRDs are VKS-managed at the VKr's
 > chosen version while `istio_ensure_gwapi_crds` server-side-applies our pinned `GATEWAY_API_VERSION`, so
 > on a real lab we may up/down-grade a CRD the add-on manager owns. The VKr→gateway-api version map is not
 > published in any Broadcom doc; only the cluster answers it —
@@ -105,6 +105,33 @@ else falls back to classic.
 > column was once mis-graded `KinD-verified` for a false reason; arc in
 > [`docs/reviews/2026-07-14-vks-provenance.md`](../reviews/2026-07-14-vks-provenance.md).
 > <!-- arc-ok: 2026-07-14 -->
+
+<!-- -->
+
+> **`--gateway-channel=disabled` on cloud-provider-kind is load-bearing: drop it and a CPK that vendors
+> gateway-api < v1.5.0 silently kills every LoadBalancer.** The `safe-upgrades`
+> `ValidatingAdmissionPolicy` ships in the **standard** bundle **we already install** — it is in the
+> cluster today, not a future hazard (`bundle/manifests/gateway-api-v1.5.1.yaml`, `channel: standard`).
+> Its CEL denies any gateway-api CRD whose `bundle-version` matches `v1.[0-4].\d+` or `v0` (i.e. anything
+> before v1.5.0), and denies experimental-on-standard. CPK force-reconciles its **embedded** CRDs at
+> startup with a plain `Create()`, so it is subject to that policy: **CPK v0.11.1 vendors v1.5.1 and
+> passes**. What defuses this is CPK's vendored version **plus** the flag — not our pin. If the flag were
+> ever dropped (a refactor, a CPK bump) **and** CPK vendored an older bundle, its CRD install would be
+> DENIED, it aborts its **whole** controller, and every Service of type LoadBalancer silently stops
+> getting an IP — surfacing as "Harbor LB did not get an external IP", which points nowhere near an
+> admission policy. This is why `05-kind-up.sh` asserts CPK logged the skip and counts its **crash
+> lines** rather than trusting `docker ps` (a `--restart unless-stopped` container shows `Up` *between*
+> crash-loop cycles).
+>
+> Two separate controls are often confused with this one, and neither is about the VAP: `renovate.json`
+> **groups** istio + gateway-api because a solo CRD bump re-introduces the `supportedFeatures`
+> `[]string`→`[]object` skew that crash-loops controllers; and it **caps** gateway-api at
+> `allowedVersions: <v1.6.0` because v1.5.1 is the newest any Istio vendors (remove the cap when an
+> Istio release vendors v1.6+ — the condition is inline there).
+>
+> **Grade: the policy, its CEL and the channel are source-verified from the on-disk bundle
+> (2026-07-16); CPK's vendored version and the LB-death consequence are asserted by
+> `scripts/05-kind-up.sh`'s startup checks, not observed as a failure here.**
 
 <!-- -->
 

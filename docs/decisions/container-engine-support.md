@@ -75,7 +75,7 @@ podman's ergonomics exactly. Rootful docker works, but bills you a password prom
     measured and disclosed.
   - **rootless** → `$HOME/.config/docker/certs.d/<host>/ca.crt` — your own home directory. No root.
 
-### Two facts that are routinely gotten wrong
+### Three facts that are routinely gotten wrong
 
 1. **`certs.d` MERGES with the host system store — it does not replace it.** (moby `loadTLSConfig` seeds
    `RootCAs` from `x509.SystemCertPool()` and *appends*.) So **a missing `ca.crt` does NOT mean docker will
@@ -84,7 +84,19 @@ podman's ergonomics exactly. Rootful docker works, but bills you a password prom
    was shipped here once and **retracted** — it would have hard-blocked working operators.)
 2. **A `certs.d` drop-in needs NO daemon restart** — it is read **per request**. *Measured:* the `pull`
    succeeded immediately after the CA was installed. (The **system store** is the opposite: Go caches the
-   pool once per process, so *that* route does need a restart. This asymmetry is why we use `certs.d`.)
+   pool once per process — `crypto/x509` `sync.Once`, upstream `moby/moby#39869` — so *that* route does
+   need a `systemctl restart docker`. This asymmetry is why we use `certs.d`.)
+3. **`DOCKER_CERT_PATH` is NOT a registry CA — and podman's identically-named setting IS one.** This is the
+   single most-confused knob in the ecosystem, because the same name means opposite things:
+   - **docker's `DOCKER_CERT_PATH`** configures **CLI↔daemon socket TLS**. It has nothing to do with
+     trusting a registry. Neither does `DOCKER_CONFIG` / `docker --config`, which only relocates
+     `config.json` (auth). Reaching for either to fix a registry-trust error is a dead end.
+   - **podman/skopeo's `DockerCertPath`** genuinely **is** a registry cert dir (the `--cert-dir` we use).
+
+   Two smaller traps in the same directory: **any `*.crt` in `certs.d/<host>/` is loaded as a CA** (not
+   just a file literally named `ca.crt`), while a **`*.cert` is a CLIENT cert and errors without its
+   matching `*.key`. And no CA drop-in ever enables plain HTTP** — that needs `insecure-registries` in
+   `daemon.json` plus a daemon reload, which is why `HARBOR_INSECURE=1` is podman-only.
 
 ---
 
@@ -139,8 +151,10 @@ Docker was not merely untested — it was **unwired**:
 3. **The login probe now branches on the REAL error.** It used to discard stderr and branch on the *engine
    name*, so a wrong password, an unwired LoadBalancer, a dead daemon and a **missing IP SAN** all printed
    *"install the CA"* — advice that is wrong in four of five cases. (Since Go 1.15 a leaf with no matching
-   SAN is rejected **even with a trusted CA**, and Go 1.17 removed the escape hatch — for that failure,
-   installing the CA cannot possibly help.)
+   SAN is rejected **even with a trusted CA**, and Go 1.17 removed the `GODEBUG=x509ignoreCN=0` escape
+   hatch — for that failure, installing the CA cannot possibly help. For a registry addressed by **IP**
+   the SAN must be an **IP SAN**, not a DNS SAN: Harbor's own published `v3.ext` sample shows only `DNS.n`
+   entries, which is why this recurs — `goharbor/harbor#19994`.)
 
 ---
 

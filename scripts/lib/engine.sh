@@ -17,7 +17,9 @@
 # jump-box images give `vks` NOPASSWD:ALL — meaning a leg can sudo SILENTLY and a naive harness would
 # report "sudo-free" for a path that is not.
 #
-# TWO FACTS THAT ARE EASY TO GET WRONG (both source-verified; see CLAUDE.md "engine facts"):
+# TWO FACTS THAT ARE EASY TO GET WRONG (both source-verified; the full set — including the third,
+# DOCKER_CERT_PATH vs podman's identically-named DockerCertPath — is in
+# docs/decisions/container-engine-support.md §"Three facts that are routinely gotten wrong"):
 #   * docker MERGES certs.d with the HOST SYSTEM STORE (moby: loadTLSConfig seeds RootCAs from
 #     SystemCertPool() and APPENDS). So a MISSING ca.crt does NOT mean docker will fail — an operator who
 #     ran `update-ca-certificates` already works. Never gate on the FILE's existence; gate on a real TLS

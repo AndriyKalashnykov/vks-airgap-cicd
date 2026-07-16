@@ -1,5 +1,9 @@
 # VKS 9.1 deep research — 2026-07-14
 
+> **`CLAUDE.md:LINE` refs below are against `CLAUDE.md@28631c5`**, before the 2026-07-16 prune removed
+> its dated handoff sections. Read them with `git show 28631c5:CLAUDE.md`. They are deliberately NOT
+> renumbered: this file is an archive of what was checked, when.
+
 Five load-bearing questions we BUILD against. Each researched from primary sources, then handed to a
 second adversary tasked with REFUTING it (fetch the URL yourself; is it really 9.1; is the quote real).
 

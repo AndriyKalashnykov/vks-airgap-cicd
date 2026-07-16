@@ -1,5 +1,9 @@
 # Doc truth audit — 2026-07-14
 
+> **`CLAUDE.md:LINE` refs below are against `CLAUDE.md@28631c5`**, before the 2026-07-16 prune removed
+> its dated handoff sections. Read them with `git show 28631c5:CLAUDE.md`. They are deliberately NOT
+> renumbered: this file is an archive of what was checked, when.
+
 Every claim in the operator docs, checked against the CODE by an adversary (one per doc), then each
 finding handed to a SECOND adversary whose job was to REFUTE it.
 
@@ -8,6 +12,32 @@ finding handed to a SECOND adversary whose job was to REFUTE it.
 file does not yet mark which is which, so **a row here is a CLAIM, not a verdict.** Re-check a finding
 against the code before you act on it. (That is the same discipline the findings themselves are about:
 a plausible-looking claim carrying the authority of having supposedly been checked is the failure mode.)
+
+## Remediation status (as of 2026-07-16)
+
+A re-verification pass on 2026-07-15 re-checked every row against the tree: **57 still-confirmed · 10
+fixed by that session · 1 could-not-verify**. This section is the record of what is CLOSED — it lives
+here because this file is the audit, and a claim-list with no verdict-list is what sent readers back to
+re-derive the same answers. It was previously kept in `CLAUDE.md`.
+
+**CRITICALs now FIXED** (each verified against the tree at the time of the fix, not applied from notes):
+
+| ID | What | Fixed by |
+|----|------|----------|
+| C1 | `prerequisites-manual.md` claimed the mise installer adds `mise activate` to your profile (it only PRINTS the hint) — so the managed tools were never on PATH | PR #260 |
+| C2 / C3 | `CLAUDE.md` Conventions said the bundle carries "only crane" (it carries 5 static tools + Istio charts + Tekton/Gateway-API manifests) and omitted the OS-package floor the air-gap box needs from its internal mirror | PR #260 |
+| C6 | `README.md` listed `make trust-harbor` as a bootstrap step, but it needs a live Harbor | PR #260 |
+| C10 | `31-fetch-argocd-kubeconfig.sh` double-appended the SSO domain (`administrator@vsphere.local@vsphere.local`) | PR #258 |
+| C12 | `23-argocd-preflight.sh` blocked `install-all` on an ArgoCD-namespace NotFound — which a tenant's guest cluster legitimately has (ArgoCD is a Supervisor Service) | PR #258 |
+| C13 | `scenario-2.md` introduced the api-token vars AFTER `install-all`, which consumes them | PR #258 |
+
+**Still open** (the un-remediated remainder): the HIGH/MEDIUM rows — concentrated in `scenario-2.md`,
+`prerequisites-manual.md`, and CLAUDE.md gate-list drift. The two named residuals are
+`19-trust-harbor.sh`'s vacuous `HARBOR_URL:?` guard (the committed `harbor.vks.local` sentinel always
+satisfies it, so its error can never fire) and the committed `HARBOR_USERNAME=admin`, which is wrong for
+a tenant.
+
+---
 
 Fixed on 2026-07-14, both CONFIRMED CRITICALs:
 
