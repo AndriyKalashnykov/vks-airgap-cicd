@@ -4,8 +4,8 @@
 # by the SAME IP from host, pods, and containerd. This simulates the
 # "VKS-provided" Harbor + ArgoCD locally for `make e2e-kind`.
 #
-# It publishes the discovered kubeconfig + context to a gitignored .env.kind
-# overlay (via set_env_var) so `make vks-login` and every downstream script
+# It publishes the discovered kubeconfig + context to a gitignored .env.state
+# overlay (via state_set) so `make vks-login` and every downstream script
 # target the kind cluster unchanged.
 #
 # Idempotent: safe to re-run. Teardown is scripts/kind-down.sh.
@@ -110,14 +110,16 @@ state_set VKS_AUTH_METHOD kubeconfig
 state_set VKS_CONTEXT "$KIND_CONTEXT"
 # Zero-config KinD: generate THROWAWAY test passwords for the local Harbor + Gitea admin
 # (this cluster is destroyed at teardown) so `make e2e-kind` needs NO manual .env. Written
-# only when unset — a real `.env` value still wins (.env.kind is sourced AFTER .env). NOT
-# used by the real lab (no .env.kind there). Revealed via `make creds`. gen_password is a
+# only when unset — a real `.env` value still wins (it is the only-when-unset guard, not
+# sourcing order, that ensures this — the .env.state overlay is sourced AFTER .env). NOT
+# generated HERE on the real lab (05-kind-up.sh runs only for the KinD stand-in).
+# Revealed via `make creds`. gen_password is a
 # random, complexity-valid, NON-hardcoded value (lib/os.sh). ArgoCD's admin password stays
 # auto-generated when blank. NOTE: task #13 (env-init/env-populate) will move this into an
 # explicit `.env` populate step; kept here as the validated interim that unblocks #98's smoke.
 [ -n "${HARBOR_PASSWORD:-}" ]      || state_set HARBOR_PASSWORD "$(gen_password)"
 [ -n "${GITEA_ADMIN_PASSWORD:-}" ] || state_set GITEA_ADMIN_PASSWORD "$(gen_password)"
-# ArgoCD too — and it MUST be generated HERE, into .env.kind, not left to `.env`.
+# ArgoCD too — and it MUST be generated HERE, into the state overlay .env.state, not left to `.env`.
 #
 # `make e2e-kind` runs with SKIP_DOTENV=1 (it stands in for a fresh operator / a CI runner, neither
 # of which has a .env). So an ARGOCD_ADMIN_PASSWORD sitting in `.env` is NOT seen by
@@ -125,7 +127,7 @@ state_set VKS_CONTEXT "$KIND_CONTEXT"
 # `make argocd-password` does NOT skip .env, so it would happily print the .env value: a password
 # that does not work. The user is told a password and cannot log in.
 #
-# .env.kind IS sourced under SKIP_DOTENV, so generating it here means 07 applies it and
+# .env.state IS sourced under SKIP_DOTENV, so generating it here means 07 applies it and
 # `make creds-show` prints the password that actually works.
 [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ] || state_set ARGOCD_ADMIN_PASSWORD "$(gen_password)"
 log_info "published KUBECONFIG/VKS_AUTH_METHOD/VKS_CONTEXT (+ generated KinD Harbor/Gitea/ArgoCD creds; see 'make creds-show') to $(state_file)"
