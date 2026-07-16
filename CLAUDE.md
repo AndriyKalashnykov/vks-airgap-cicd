@@ -505,34 +505,40 @@ flight and what to distrust" belongs here.
 
 **State: `main` green, no cluster up, tree clean, nothing half-done.**
 
-**IN FLIGHT — the only thing that is:** Renovate **#282**, Istio **1.30.2 → 1.30.3** (a patch; it bumps
-`ISTIO_VERSION` + `istio/pilot` + `istio/proxyv2` together, which is `check-image-alignment` working).
-**It merges ITSELF on green** — `automerge: true` / `automergeType: pr`, and `platformAutomerge: false`
-deliberately so Renovate re-confirms green rather than racing `ci-pass` registration. Per policy only
-**majors** of the cluster-only tools need Dependency-Dashboard approval; patches ride CI. **Nothing for
-you to do — but know what its green means and does not:** CI runs the **offline gates only**, so its
-green proves the alignment gate and the lint, **not that Istio 1.30.3 works**. Istio is exercised solely
-by `make e2e-kind`, which CI never runs (`verification-honesty`). If a mesh thing breaks next session,
-suspect this bump first. The gateway-api `<v1.6.0` cap is unaffected: 1.30.3 is the same minor, so it
-still vendors gateway-api v1.5.1.
+**IN FLIGHT — two Renovate PRs, both of which merge THEMSELVES on green; nothing for you to do:**
+**#282** Istio **1.30.2 → 1.30.3** (a patch; it bumps `ISTIO_VERSION` + `istio/pilot` + `istio/proxyv2`
+together, which is `check-image-alignment` working) and **#285** a `jdx/mise-action` digest.
+`automerge: true` / `automergeType: pr`, with `platformAutomerge: false` deliberately so Renovate
+re-confirms green rather than racing `ci-pass` registration. Per policy only **majors** of the
+cluster-only tools need Dependency-Dashboard approval; patches ride CI. **Know what #282's green means
+and does not:** CI runs the **offline gates only**, so its green proves the alignment gate and the
+lint, **not that Istio 1.30.3 works**. Istio is exercised solely by `make e2e-kind`, which CI never
+runs (`verification-honesty`). If a mesh thing breaks next session, suspect this bump first. The
+gateway-api `<v1.6.0` cap is unaffected: 1.30.3 is the same minor, so it still vendors v1.5.1.
 
 Merged here: **#276** (prune) · **#277** (Istio field evidence) · **#278** (unattended sweep) ·
-**#279** (`SSL_CERT_FILE`) · **#280/#281** (this handoff). In the **private** `claude-config`: the
-`merge-base` hook fix (117 tests, RED-proven) · `vks-adversary` **went global**, specifics intact, and
-the placement rule it contradicted was corrected · two new **references** (`istio-on-vks.md`,
+**#279** (`SSL_CERT_FILE`) · **#280/#281/#283** (handoff) · **#284** (the selftest count RULE ZERO
+quotes was already stale). In the **private** `claude-config`: the `merge-base` hook fix ·
+`vks-adversary` **went global**, specifics intact · two new **references** (`istio-on-vks.md`,
 `internal-ca-trust.md`) · the `SSL_CERT_FILE`/podman/containerd rule corrections · **4 new rules** +
-the adversary round that refuted them · **HOOK-001…005** filed.
+the round that refuted them · **HOOK-001…005** filed · then **HOOK-005 fixed** (`ded9ab0`), its two
+shipped bypasses **fixed** (`4f76bea`), and **HOOK-006** filed.
 
 ### START HERE — the best-shaped work available
 
-**`HOOK-005`** (`claude-config/BACKLOG.md`). It is HIGH, it is currently **blinding the reviewers**
-(this portfolio documents every trap in backticks, so grepping for a documented trap is a *blocked
-command* — an adversary's first move), **the fix already exists** in the sibling hook
-(`no-gate-in-commit-chain.py`'s `MESSAGE_ARG` strip — it is a port, not a design), and it is
-RED-provable in both directions against a 117-case selftest that already exists.
-Then **HOOK-001** (12 shell-keyword forms bypass the gate — *mutations getting through*), which is
-higher severity but genuinely needs its own design round: the obvious fix false-positives on
-`echo "!git push"`. **B25** is the biggest product value and wants a fresh session.
+**`HOOK-001` + `HOOK-006` TOGETHER** (`claude-config/BACKLOG.md`) — they are the same gap from two
+sides, and one command-position model plus one false-positive sweep serves both. HOOK-001: 12
+shell-**keyword** forms (`if git push; then`, `( git push )`, `! git push`) bypass the gate.
+HOOK-006 (filed 2026-07-16): 8 **null-expansion** prefixes (`$( ) git push`, `${x} git push`,
+`$x git push`) bypass it. Both are **mutations getting through a security control**. Neither is a
+one-liner: the obvious keyword fix false-positives on `echo "!git push"`, and the obvious
+null-expansion fix (add `)` to the class) does not even catch `${x}`/`$x`. Design round first.
+**B25** is the biggest product value and wants a fresh session.
+
+**HOOK-005 is DONE** (2026-07-16, `claude-config` `ded9ab0` + `4f76bea`, installed live). Read its
+closed backlog entry before HOOK-001 — **every prescription it shipped with was refuted**, including
+the one this handoff used to repeat: *"the fix already exists in the sibling — it is a port, not a
+design."* It was not. See below.
 
 ### The one thing to carry forward
 
@@ -553,6 +559,31 @@ The pattern, stated once: **every claim I got wrong was reasoned from a source; 
 minutes to settle empirically.** A doc whose thesis is "verify with a handshake, never by the presence
 of a file" had two rows that were never measured. Measure it.
 
+**The HOOK-005 session (later the same day) is the same pattern, three more times — and the third is
+the one to internalise:**
+
+| | |
+|---|---|
+| **the BACKLOG ITEM was wrong twice** | Its repro (`grep -c "…<bt>gh pr create" f.md`) is a bash **syntax error** — it could never run, so it was not the bug. And *"the fix already exists in the sibling — port `MESSAGE_ARG`"* fixes **nothing** (it strips only flag-bearing args; a grep pattern is positional) **and creates a bypass** (`gh api graphql -F query=@f` → allowed). A written-down fix is an untested hypothesis **even when a prior session's adversary wrote it**. |
+| **an AUTO-LOADED RULE prescribed the bypass** | `hooks.md` said *"strip quoted string arguments … echo text"*. A backtick inside **double** quotes **executes**, so stripping those regions un-blocks `echo "<bt>git push<bt>"`. That sentence sat in every agent's context telling the next implementer to open the hole. |
+| **🔴 MY FIX SHIPPED TWO BYPASSES — and I pushed and installed it** | The **design** review cleared-with-changes; the **implementation** review refuted it. The one thing I added beyond the reviewed design was wrong: I neutralised backslash-escaped metachars, reasoning `\;` `\&` `` \` `` are literal — true, **except newline**, where `\`⏎ is a line *continuation* bash **deletes**, not an escaped literal. Plus a `#` word-start set missing `)`. Parent blocked all 5 shapes; my HEAD allowed all 5. |
+
+**Three lessons, in order of value:**
+
+1. **Both rounds are mandatory and they catch DIFFERENT things.** Design-review validated the idea and
+   still could not see the newline delta — because that delta did not exist yet. Skipping the
+   implementation round would have left two live bypasses in the gate that makes subagents read-only.
+2. **A green selftest is not evidence about a case the selftest does not contain.** The corpus scored
+   **138/138 while allowing a real `git push`** — the *same* vacuity trap the commit message one commit
+   earlier had just recorded about the 117-case corpus. Pin new behaviour in **both** directions or the
+   number is theatre.
+3. **Distrust your own instrument first.** My differential oracle treated *"bash printed a syntax
+   error"* as *"nothing ran"* — false: **bash executes each complete command as it parses**, so a later
+   unterminated quote reports EOF *after* `git push` already ran. It scored a real bypass as a pass.
+   (`run-tests.sh`'s `py_compile` had the same shape: green over an invalid escape that turned the
+   hook's rc from 2 to 1 under `PYTHONWARNINGS=error` — i.e. **the gate silently OFF**. It now runs
+   `-W error::SyntaxWarning`, RED-proved.)
+
 ### What is UNREVIEWED or owed (be honest about this, do not imply otherwise)
 
 - `claude-config/reference/internal-ca-trust.md` — reviewed **once** (refuted with 2 HIGH factual
@@ -563,6 +594,14 @@ of a file" had two rows that were never measured. Measure it.
 - `claude-config/reference/istio-on-vks.md` — design-reviewed; the M6 correction landed late.
 - Every VKS-specific fact in both references is **lab-gated**. Grade honestly; do not promote on a
   KinD green.
+- **HOOK-005's regression fix (`4f76bea`) has had NO adversary round.** The round that found the
+  bypasses reviewed `ded9ab0`; the fix for its findings is unreviewed. It is verified (144/144, a
+  26-shape differential oracle at 0 bypasses, three RED-proofs, live-probed) — but verified-by-me is
+  exactly what `ded9ab0` also was. Re-review it when you next touch the hook.
+- **The heredoc false-block is now the reviewers' #1 practical obstacle** — it refused the
+  implementation adversary 3× (`cat <<'EOF'` … `git push` … `EOF` is 100% literal in bash, but is
+  indistinguishable from `bash <<'EOF'`, which executes). Deliberate and fail-closed; it costs
+  evidence, not safety. Any future fix must key on the **consuming command**, never the heredoc alone.
 
 ### Traps that bit ME today — expect them
 
