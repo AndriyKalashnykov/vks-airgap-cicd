@@ -223,7 +223,7 @@ lives in `46-install-istio.sh`, which **does not run** when `INGRESS_CONTROLLER=
 platform mesh with `sidecarInjectorWebhook.enableNamespacesByDefault=true` (or a revision tag) injects
 with **no namespace label at all** — and `PSA_LEVEL_APP=restricted` (`lib/istio.sh`) then **rejects
 every app pod**. `make istio-preflight` should report whether the mesh injects by default; it does not
-yet (backlog).
+yet — **Backlog B26**.
 
 ## What we run
 
