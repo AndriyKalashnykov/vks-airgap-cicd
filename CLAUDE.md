@@ -110,7 +110,9 @@ A worktree gives it its own checkout: it **physically cannot** touch your tree o
 replacement — it stops file writes the hook cannot see.) The hook itself is **live-verified end-to-end
 against a real subagent** (2026-07-14: it fired, carried `agent_id`, and REFUSED a real `git commit`;
 re-confirmed 2026-07-16 after it went global). Check it yourself in seconds:
-`python3 ~/.claude/hooks/subagent-readonly.py --selftest` → 90/90.
+`python3 ~/.claude/hooks/subagent-readonly.py --selftest` → ALL PASS (138 cases as of 2026-07-16 —
+the count grows; read the tail line, not this number, which was already stale at 90/90 when the real
+corpus was 117).
 
 **How to run it (NOT optional).** Use a **`Workflow`** (schema-forced output) or a **synchronous
 `Agent`** (`run_in_background: false`). Do **NOT** fire-and-forget a background `Agent`. Measured
