@@ -67,6 +67,18 @@ psa_label_namespace() {
 #   + NET_RAW -> PSA REJECTS every app pod on a real VKS guest (which enforces `restricted` by
 #   default). We run no sidecars by design, so declining injection is not a workaround.
 #
+#   ⚠️ THE NET_ADMIN HALF IS CONDITIONAL, and this comment used to state it flatly. Rendered:
+#       capabilities:
+#       {{- if not .Values.pilot.cni.enabled }}
+#           add: [NET_ADMIN, NET_RAW]
+#       {{- end }}
+#   A platform mesh running **istio-cni** injects a sidecar with NEITHER capability, and in attach
+#   mode that is THEIR choice — `grep -rn cni scripts/` returns nothing; we neither set nor check it.
+#   So "PSA rejects every app pod" is true for a NON-CNI mesh and UNVERIFIED-BY-US for the lab's.
+#   Stated flatly it invites the wrong inference — "the platform runs CNI, so B26 is moot, delete
+#   the label". It is not moot: we run no sidecars BY DESIGN, so declining injection is right either
+#   way, and `failurePolicy: Fail` couples our pod creation to their istiod's health regardless.
+#
 # YOU CANNOT PSA YOUR WAY OUT OF THIS. `baseline` does NOT admit an injected pod either: NET_ADMIN
 # and NET_RAW are both outside PSS-baseline's allowed-capability list, so only `privileged` would
 # take it. Relaxing PSA_LEVEL_APP is the instinctive fix and it does not work.
@@ -78,22 +90,71 @@ psa_label_namespace() {
 # platform istiod's health. Upstream agrees — istiod's own gateway template
 # (istiod/files/kube-gateway.yaml) sets inject=false as a LABEL, not an annotation.
 #
-# THE MECHANISM — RENDERED from the carried chart, not recalled. This comment previously claimed
-# "each rule requires one of `NotIn [disabled]`, `In [enabled]`, or `DoesNotExist`". There is NO
-# `NotIn` rule. That was a false fact, shipped in #290, caught by an adversary:
+# THE MECHANISM — RENDERED from the PINNED chart, not recalled. This comment has been wrong TWICE,
+# in OPPOSITE directions, which is why the full table is here now:
+#   #290 claimed "each rule requires one of `NotIn [disabled]`, `In [enabled]`, or `DoesNotExist`".
+#   Its correction over-shot to "There is NO `NotIn` rule" — ALSO false. There is no
+#   `NotIn [disabled]`; there IS `NotIn ['false']`, on the objectSelector, in three rules. The
+#   correction omitted every objectSelector row — exactly the half where the POD label works.
 #
-#   rev.namespace.sidecar-injector    istio-injection DoesNotExist
-#   rev.object.sidecar-injector       istio-injection DoesNotExist
-#   namespace.sidecar-injector        istio-injection In ['enabled']
-#   object.sidecar-injector           istio-injection DoesNotExist
+# Rendered under `sidecarInjectorWebhook.enableNamespacesByDefault=true`, DELIBERATELY: that is the
+# HAZARD config this comment exists to explain. The base chart renders only FOUR rules, under which
+# nothing matches an unlabelled pod at all — so a table rendered from the base cannot show how the
+# hazard fires, and a GATE built by rendering the base is vacuous over the exact case it is for.
 #
-# Three rules require the key ABSENT, so ANY value defeats them — `disabled` is not magic. The
-# fourth requires exactly `enabled`, so any other value defeats it too. What would NOT be safe is
-# an `Exists` rule: our label would make the key exist, and MATCH. A gate for this must therefore
-# check the OPERATOR, not merely that a rule mentions `istio-injection`.
+#   rev.namespace  ns  istio.io/rev                In           ['default']
+#                  ns  istio-injection             DoesNotExist
+#                  obj sidecar.istio.io/inject     NotIn        ['false']
+#   rev.object     ns  istio.io/rev                DoesNotExist
+#                  ns  istio-injection             DoesNotExist
+#                  obj sidecar.istio.io/inject     NotIn        ['false']
+#                  obj istio.io/rev                In           ['default']
+#   namespace      ns  istio-injection             In           ['enabled']
+#                  obj sidecar.istio.io/inject     NotIn        ['false']
+#   object         ns  istio-injection             DoesNotExist
+#                  ns  istio.io/rev                DoesNotExist
+#                  obj sidecar.istio.io/inject     In           ['true']
+#                  obj istio.io/rev                DoesNotExist
+#   auto           ns  istio-injection             DoesNotExist         <-- ONLY under the knob.
+#                  ns  istio.io/rev                DoesNotExist             THIS IS THE HAZARD.
+#                  ns  kubernetes.io/metadata.name NotIn ['kube-system','kube-public',
+#                                                         'kube-node-lease','local-path-storage']
+#                  obj sidecar.istio.io/inject     DoesNotExist
+#                  obj istio.io/rev                DoesNotExist
 #
-# Grade: upstream-1.30.2-rendered. The lab runs VMware's `1.28.2+vmware.1-vks.1`, which we cannot
-# render — whether it ships these selectors is UNVERIFIED-BY-US (docs/lab-validation-plan.md).
+# TWO INDEPENDENT DEFEATS — the redundancy IS the design:
+#   - NAMESPACE label (this file): four rules need `istio-injection` ABSENT, so ANY value defeats
+#     them — `disabled` is not magic; `namespace` needs exactly `enabled`, so any other value
+#     defeats it too.
+#   - POD label `sidecar.istio.io/inject: "false"` (k8s/*, deploy/*, enforced by
+#     check-pod-inject-label.sh): fails `NotIn['false']` for three, `In['true']` for `object`,
+#     `DoesNotExist` for `auto` — all five defeated on the OBJECT alone, whatever the namespace
+#     says, with no window for ArgoCD's CreateNamespace=true to sync a pod before its ns is labelled.
+#
+# NotIn MATCHES AN ABSENT KEY — the false-green trap in any hand-rolled evaluator.
+# apimachinery/pkg/labels/selector.go:
+#     case selection.NotIn, selection.NotEquals:
+#         val, exists := ls.Lookup(r.key); if !exists { return true }   // ABSENT => MATCH
+#     case selection.In, selection.Equals:  if !exists { return false }
+# So for an UNLABELLED pod `NotIn['false']` PASSES, and only the namespaceSelector saves us. Read
+# "the pod label defeats three via NotIn" as true FOR A LABELLED POD — never as "that row protects
+# us generally". And an `Exists` rule would NOT be safe: our label makes the key exist, and MATCH.
+# A gate here must check the OPERATOR, not merely that a rule mentions `istio-injection`.
+#
+# A SECOND GATE EXISTS AND IS NOT A SUBSTITUTE. `global.proxy.autoInject` sets `policy:` in the
+# istio-sidecar-injector ConfigMap, evaluated INSIDE istiod's /inject AFTER the selector matched
+# (rendered: knob-only -> auto-rule=1/policy=enabled; BOTH -> 1/disabled — the webhook FIRES and
+# istiod DECLINES). In attach mode it is the PLATFORM's knob, not ours — and even at `disabled` the
+# `auto` rule still MATCHES, so `failurePolicy: Fail` still couples our pod creation to the platform
+# istiod's health. The label is what stops the match. The 4-cell matrix lives in
+# 90-e2e-istio-existing.sh, where it is the fixture's rationale.
+#
+# Grade: upstream-1.30.3-rendered (the pin, .env.example). This previously self-graded 1.30.2 while
+# the repo pinned 1.30.3 — a rendered claim citing a version we do not install. The lab runs
+# VMware's `1.28.2+vmware.1-vks.1`, which we cannot render — whether it ships these selectors AND
+# this `policy` field is UNVERIFIED-BY-US (docs/lab-validation-plan.md). One lab visit settles both:
+#   kubectl get mutatingwebhookconfiguration -o yaml | grep -A8 namespaceSelector
+#   kubectl -n istio-system get cm istio-sidecar-injector -o jsonpath='{.data.config}' | grep policy
 istio_no_inject_label() {
   local ns="$1"
   run kubectl label --overwrite namespace "$ns" istio-injection=disabled
