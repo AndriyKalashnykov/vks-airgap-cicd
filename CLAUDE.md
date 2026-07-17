@@ -539,6 +539,21 @@ A KinD cluster is UP (`vks-airgap-cicd`) with istio+traefik both installed and b
   declares it. Masked today only because `PSA_LEVEL_TEKTON` defaults to the same value;
   `PSA_LEVEL_TEKTON=baseline` would give enforce=restricted + audit/warn=baseline. PSA is now
   re-asserted AFTER `apply_manifest`. `istio-injection` survives (upstream never declares it).
+- **F1 IS DEAD — SETTLED EMPIRICALLY 2026-07-17, RAISED AND REFUTED TWICE. Do not re-raise; the
+  cost is ~750k tokens per round.** THE PROOF, on a live cluster: `make e2e-kind-istio-existing`
+  leg 1 (`ISTIO_ROUTE_API=gateway-api`) PASSED with `vks-ingress` carrying
+  `istio-injection: disabled` (verified on the ns object). Istio programmed the auto-provisioned
+  Gateway anyway and the UIs served — `47-attach-istio.sh:88`'s
+  `die "Istio did not program the Gateway"` fired **0 times**. THE ARTIFACT, in the chart we
+  install (`bundle/charts/istiod-1.30.3.tgz` → `istiod/files/kube-gateway.yaml`): `image: auto`
+  **0 hits**; `image: "{{ .ProxyImage }}"` at :91 (istiod renders the real image SERVER-SIDE, no
+  webhook); `"sidecar.istio.io/inject" "false"` at :62 (the pod declines injection anyway). Both
+  reasons hold. **BOTH raisings were the SAME error — grepping the wrong artifact:** round 1
+  "verified" it against istio.io's gateway page, which documents the **istio/gateway HELM CHART**
+  (`gateway/templates/deployment.yaml:73` — THAT is where `image: auto` lives, and its namespace
+  never goes through `ensure_namespace`); round 2 filed a CRITICAL that `kube-gateway.yaml` "does
+  not exist" after grepping `k8s/istio/` — OUR manifests — for an **istiod chart file**. Same
+  words, different mechanism, both times. That is B38.
 - **F1 IS DEAD — do not re-raise** (backlog B-F1/#7). "ensure_namespace breaks the gwapi gateway via
   `image: auto`" was REFUTED: `kube-gateway.yaml` has ZERO `image: auto`, renders `.ProxyImage`, and
   sets `sidecar.istio.io/inject:"false"` on the pod itself. `image: auto` is the OTHER chart
