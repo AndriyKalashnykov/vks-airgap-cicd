@@ -39,7 +39,7 @@ load_env
 
 # INGRESS_LB_IP is OUR OWN PUBLISHED STATE, never an input here.
 #
-# Every install/attach writes the address it resolved into .env.kind (set_env_var INGRESS_LB_IP);
+# Every install/attach writes the address it resolved into .env.state (state_set INGRESS_LB_IP);
 # load_env sources that back, and 44-install-ingress.sh (which load_envs and then exec's us)
 # EXPORTS it into our environment. So after any previous run INGRESS_LB_IP is always set, and it
 # is indistinguishable from a deliberate operator override. Consuming it produced a FALSE GREEN:

@@ -11,7 +11,7 @@
 # runner time for a full Java + Go build it did not need. It never failed, so nothing surfaced
 # it; it just quietly cost money.
 #
-# Logic that costs money is logic that gets a unit test (tests/test-classify-changes.sh, run by
+# Logic that costs money is logic that gets a unit test (scripts/test-classify-changes.sh, run by
 # `make test-scripts` in static-check). Inline YAML cannot be tested.
 #
 # The DENY-LIST semantics are deliberate and must be preserved: anything that is NOT pure docs
