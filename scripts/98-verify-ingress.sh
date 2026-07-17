@@ -8,7 +8,7 @@
 #   client -> INGRESS_LB_IP (Host: <host>) -> controller route -> backend Service.
 #
 # It is controller-agnostic: whichever ingress installed last published INGRESS_LB_IP
-# to .env.kind, and the route assertion (curl with a Host header) is identical for
+# to .env.state, and the route assertion (curl with a Host header) is identical for
 # Istio (Gateway/VirtualService) and Traefik (Ingress).
 #
 # K1.5 (assigned != routable): cloud-provider-kind wires the LB data path (the
@@ -24,7 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 
 require_cmd curl
-: "${INGRESS_LB_IP:?INGRESS_LB_IP not set — run 'make install-ingress' first (it writes the LB IP to .env.kind)}"
+: "${INGRESS_LB_IP:?INGRESS_LB_IP not set — run 'make install-ingress' first (it writes the LB IP to .env.state)}"
 : "${GITEA_HOST:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
 # Every app's host comes from the registry — a hardcoded list would silently stop checking a new app.
 # shellcheck source=scripts/lib/apps.sh
@@ -108,7 +108,7 @@ fi
 
 if [ "$rc" -ne 0 ]; then
   log_error "ingress verification FAILED — diagnostics:"
-  log_error "  INGRESS_LB_IP=${INGRESS_LB_IP} (from .env.kind); check the controller + its route objects:"
+  log_error "  INGRESS_LB_IP=${INGRESS_LB_IP} (from .env.state); check the controller + its route objects:"
   case "${INGRESS_CONTROLLER}" in
     istio|istio-existing)
       log_error "    kubectl get gateway,virtualservice -A          # our routes (VSes live in the BACKEND namespaces)"

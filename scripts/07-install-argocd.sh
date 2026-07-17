@@ -127,7 +127,7 @@ while :; do
   sleep "$POLL_INTERVAL_SECONDS"
 done
 log_info "argocd-server LoadBalancer IP: $ARGOCD_LB_IP  ($([ "$ARGOCD_INSECURE" = "1" ] && echo "http://${ARGOCD_LB_IP}" || echo "https://${ARGOCD_LB_IP} (self-signed; --insecure)"))"
-# Publish to .env.kind (KinD-only; in a real lab ArgoCD is lab-provided and this script never runs).
+# Publish to .env.state (KinD-only; in a real lab ArgoCD is lab-provided and this script never runs).
 state_set ARGOCD_LB_IP "$ARGOCD_LB_IP"
 state_set ARGOCD_INSECURE "$ARGOCD_INSECURE"
 # 5. Optional: set a deterministic 'admin' password from .env (KinD convenience so the

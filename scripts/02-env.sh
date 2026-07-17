@@ -7,7 +7,7 @@
 #                  Harbor/ArgoCD password for the local KinD stand-in). env-populate mints them.
 #   DISCOVER     — only knowable AFTER install (Harbor/ArgoCD LB IPs, workload kubeconfig).
 #                  env-populate reads them from a reachable cluster; the KinD flow also
-#                  auto-writes them to .env.kind. Real lab: kubectl/vcf per the how: comments.
+#                  auto-writes them to .env.state. Real lab: kubectl/vcf per the how: comments.
 #   user-PROVIDE — only the operator knows (vCenter/SSO specifics, the real Harbor admin/robot
 #                  secret, where the licensed VCF CLIs were dropped). env-populate PRINTS these.
 #
@@ -90,7 +90,7 @@ env_populate() {
     elif [ -n "$aip" ]; then echo "  = ARGOCD_SERVER already set (${ARGOCD_SERVER}) — not overwriting with discovered $aip";
     else echo "  - ARGOCD_SERVER not discovered (ArgoCD LB not up yet)"; fi
   else
-    echo "  (no reachable cluster — skipping. The KinD flow auto-writes these to .env.kind;"
+    echo "  (no reachable cluster — skipping. The KinD flow auto-writes these to .env.state;"
     echo "   on a real lab discover them after install:)"
     echo "     HARBOR_URL:    kubectl -n <harbor-ns>  get svc -o jsonpath='{...loadBalancer.ingress[0].ip}'"
     echo "     ARGOCD_SERVER: kubectl -n <argocd-ns>  get svc argocd-server -o jsonpath='{...loadBalancer.ingress[0].ip}'"

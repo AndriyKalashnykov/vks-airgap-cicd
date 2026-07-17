@@ -45,6 +45,16 @@ t "root config only (renovate.json)" true false "renovate.json"
 t "root config only (.trivyignore)"  true false ".trivyignore"
 t "workflow only"                    true false ".github/workflows/ci.yml"
 
+# .claude/** carries the project-local RULE-ZERO gate (adversary-first-gate.py + settings.json wiring),
+# exercised by static-check → test-scripts → test-adversary-gate-rearm. A hook / settings change MUST
+# run code gates, so it must classify code=true — a future edit routing it to docs-only would silently
+# skip the gate that enforces the adversary-first review. Pin the code direction with SPECIFIC patterns
+# (NOT `.claude/*` — a tracked `.claude/agents/*.md` is legitimately docs, pinned below).
+t "claude hook (.py)"                true false ".claude/hooks/adversary-first-gate.py"
+t "claude settings.json"             true false ".claude/settings.json"
+# The intentional carve-out, pinned in the OTHER direction: an agent-definition .md is docs-only.
+t "claude agent (.md)"               false true ".claude/agents/vks-adversary.md"
+
 # Unknown file list (workflow_dispatch / tag / first push) -> run everything, never guess cheap.
 t "empty list"                     true  true  ""
 
@@ -65,4 +75,4 @@ if [ "$fail" -ne 0 ]; then
   echo "test-classify-changes: FAILED" >&2
   exit 1
 fi
-echo "test-classify-changes: OK — 16 case(s); a docs-only change does not pay for a build."
+echo "test-classify-changes: OK — 19 case(s); a docs-only change does not pay for a build."

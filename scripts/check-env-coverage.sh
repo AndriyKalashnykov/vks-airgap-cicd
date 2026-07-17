@@ -11,7 +11,7 @@
 #
 # WHAT COUNTS as operator-settable: a variable read with a default — `${VAR:-...}` or `: "${VAR:=...}"`
 # — or asserted as required (`: "${VAR:?}"`). Those are INPUTS. Internal locals and values the repo
-# DISCOVERS and publishes itself (set_env_var -> .env.kind) are not, and are listed below explicitly
+# DISCOVERS and publishes itself (state_set -> .env.state) are not, and are listed below explicitly
 # so the exemption is auditable rather than accidental.
 set -uo pipefail
 
@@ -22,7 +22,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${REPO_ROOT}/.env.example"
 [ -f "$ENV_FILE" ] || die "no .env.example"
 
-# Values the repo DISCOVERS/GENERATES and writes to .env.kind itself — an operator never sets them.
+# Values the repo DISCOVERS/GENERATES and writes to .env.state itself — an operator never sets them.
 # (They are still described in .env.example prose; they just need no `VAR=` line.)
 PUBLISHED='HARBOR_URL|HARBOR_PASSWORD|HARBOR_CA_FILE|HARBOR_INSECURE|GITEA_ADMIN_PASSWORD|GITEA_CI_PASSWORD|GITEA_CI_TOKEN|ARGOCD_LB_IP|ARGOCD_INSECURE|ARGOCD_DEST_SERVER|INGRESS_LB_IP|INGRESS_CONTROLLER|KUBECONFIG|VKS_AUTH_METHOD|VKS_CONTEXT|ISTIO_GATEWAY_REF|ISTIO_DISCOVERED_VERSION|WEBHOOK_TOKEN'
 # Shell/library internals and CI-only knobs — never operator-facing.
@@ -94,7 +94,7 @@ done
 #
 # So each documented value must carry one of:
 #   how:/acquire:  an explicit acquisition command or `make` target
-#   auto/discover  the repo discovers it (and writes .env.kind) — the operator supplies nothing
+#   auto/discover  the repo discovers it (and writes .env.state) — the operator supplies nothing
 #   choose/you set you invent it (a password for something WE install)
 #   request        you must ask the platform admin (a legitimate, explicit end-state)
 #   a real default the value ships with (nothing to obtain)
