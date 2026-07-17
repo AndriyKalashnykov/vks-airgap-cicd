@@ -517,9 +517,19 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog.
 History → git. Only "what is in flight and what to distrust" belongs here.
 
-**State: `main` green, tree clean, everything pushed. PRs #295 + #296 merged. NOTHING is half-done.**
-A KinD cluster `vks-airgap-cicd` is UP (istio + traefik, both verified) — `make kind-down` when done.
-Nothing was written outside the repo: no sudo, no `/etc`, no system CA store.
+**State: `main` @ `e6473bf` GREEN, tree clean, everything pushed. NOTHING is half-done.**
+Merged: **#295, #296, #297** (this session's work) + **#294, #299** (Renovate). **No cluster is up** —
+`kind-down` ran and was verified BY ARTIFACT: 0 clusters, 0 `kindccm-*` orphans, 0
+cloud-provider-kind, kind network empty. It deleted only what it created (`.env.state`,
+`secrets/kind.kubeconfig`, the two cluster-scoped tokens) and **preserved** `.env` and
+`secrets/vks.kubeconfig` — the real-lab state it must never touch. **Nothing was written outside the
+repo**: no sudo, no `/etc/docker/certs.d`, no system CA store.
+
+**Two Renovate PRs are deliberately OPEN**: **#298** (markdownlint-cli 0.49.1) and **#300** (uv
+0.11.29). Every CI check on #298 passes — both are held by **`renovate/stability-days`**, the
+minimum-release-age gate. They are NOT broken and must NOT be force-merged: that gate quarantines a
+release until a compromised publish would have surfaced. They merge themselves when the cooldown
+elapses.
 
 ### Shipped, each verified on a REAL cluster (not a green gate)
 
