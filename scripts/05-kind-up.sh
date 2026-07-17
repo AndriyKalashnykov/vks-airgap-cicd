@@ -108,6 +108,12 @@ state_set KUBECONFIG "$KUBECONFIG_ABS"
 state_set KIND_KUBECONFIG "$KUBECONFIG_ABS"
 state_set VKS_AUTH_METHOD kubeconfig
 state_set VKS_CONTEXT "$KIND_CONTEXT"
+# B42: record whether this run REUSED a warm cluster (need_create=0) or created a fresh one. The e2e
+# reads it at the END (scripts/e2e-ordering-verdict.sh) to print a loud stdout verdict — a reused
+# cluster tests an idempotent re-apply and CANNOT prove namespace CREATE-ordering (a missing/late
+# `ensure_namespace` label is invisible once the namespace already exists). A mid-run log_warn here
+# would be buried on stderr; the fact is CARRIED to the final line where the operator actually looks.
+if [ "$need_create" = 1 ]; then state_set KIND_REUSED 0; else state_set KIND_REUSED 1; fi
 # Zero-config KinD: generate THROWAWAY test passwords for the local Harbor + Gitea admin
 # (this cluster is destroyed at teardown) so `make e2e-kind` needs NO manual .env. Written
 # only when unset — a real `.env` value still wins (it is the only-when-unset guard, not
