@@ -29,6 +29,15 @@ endif
 # of a claim that happens to hold on the author's box. Opt back in with E2E_SKIP_DOTENV=0.
 E2E_SKIP_DOTENV ?= 1
 
+# E2E_FRESH=1 forces `make e2e-kind` to `kind-down` FIRST, so it runs on a freshly-created cluster and
+# actually exercises namespace CREATE-ordering (B42). Default 0 keeps the fast dev loop (a warm reuse)
+# — but a reused run now says so LOUDLY at the end (scripts/e2e-ordering-verdict.sh), it is no longer
+# a silent pass. For `make e2e-kind` directly: e2e-kind-both and e2e-kind-istio-existing already
+# `kind-down` first (always cold), so E2E_FRESH is moot there — and they run the sub-steps directly
+# rather than `$(MAKE) e2e-kind`, so they do NOT print the ordering verdict (they are always cold, so
+# there is nothing to warn about).
+E2E_FRESH ?= 0
+
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
@@ -407,7 +416,8 @@ kind-down: ## Tear down the KinD cluster (prunes cloud-provider-kind + kindccm-*
 # environment variable as a make variable, so the sub-make's `ifneq ($(SKIP_DOTENV),1)` sees it.
 .PHONY: e2e-kind
 e2e-kind: export SKIP_DOTENV = $(E2E_SKIP_DOTENV)
-e2e-kind: ## Full local end-to-end in KinD (+ ingress route check + PSA/VKS admission check). Runs with .env IGNORED (fresh-box fidelity); E2E_SKIP_DOTENV=0 to use yours
+e2e-kind: ## Full local end-to-end in KinD (+ ingress route check + PSA/VKS admission check). .env IGNORED (fresh-box fidelity; E2E_SKIP_DOTENV=0 to use yours). E2E_FRESH=1 forces a COLD cluster (proves create-ordering)
+	@if [ "$(E2E_FRESH)" = "1" ]; then echo "==> E2E_FRESH=1: COLD run — tearing down first so namespace create-ordering is actually exercised"; $(MAKE) kind-down; fi
 	@$(MAKE) kind-up install-harbor install-argocd install-all install-ingress verify verify-ingress
 # psa-check in a SEPARATE make invocation, deliberately. It is also a prerequisite of `preflight`
 # (:301), which `install-all` (:459) needs — so in ONE invocation make runs it EARLY, against an
@@ -418,6 +428,9 @@ e2e-kind: ## Full local end-to-end in KinD (+ ingress route check + PSA/VKS admi
 # psa-check's own output had said it: "Come back and re-run 'make psa-check' AFTER 'make platform'
 # — that run is the one that proves it." A second invocation is what does that.
 	@$(MAKE) psa-check
+# The LAST line the operator reads: did this run prove namespace create-ordering, or reuse a warm
+# cluster? (B42 — 05-kind-up.sh published KIND_REUSED; this reads it back, loudly, on stdout.)
+	@$(SCRIPTS)/e2e-ordering-verdict.sh
 
 .PHONY: e2e-kind-both
 e2e-kind-both: ## Matrix: run the full KinD e2e in BOTH SSL modes (secure self-signed TLS, then insecure plain-HTTP)
@@ -668,7 +681,7 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-e2e-fresh ## Run all offline script-logic unit tests
 
 # NOTE: subagent-readonly + no-gate-in-commit-chain hooks (and their tests) are now GLOBAL
 # (~/projects/claude-config, installed into ~/.claude); this repo keeps only the project-local
@@ -680,6 +693,10 @@ test-adversary-gate-rearm: ## Offline: the adversary-first gate RE-ARMS on every
 .PHONY: test-namespace-gates
 test-namespace-gates: ## Offline: RED-prove check-namespace-labelled + check-pod-inject-label catch a deleted ensure_namespace CALL / pod-label (B30c)
 	@./scripts/test-namespace-gates.sh
+
+.PHONY: test-e2e-fresh
+test-e2e-fresh: ## Offline: E2E_FRESH=1 makes e2e-kind cold (kind-down first) + the reuse verdict banner is wired (B42)
+	@./scripts/test-e2e-fresh.sh
 
 .PHONY: test-secret-quoting
 test-secret-quoting: ## Offline: a secret reaching a curl -K config / a .env line must round-trip and cannot inject
