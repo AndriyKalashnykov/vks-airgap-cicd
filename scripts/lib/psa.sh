@@ -72,12 +72,28 @@ psa_label_namespace() {
 # take it. Relaxing PSA_LEVEL_APP is the instinctive fix and it does not work.
 #
 # WHY A LABEL AND NOT THE ANNOTATION: a MutatingWebhookConfiguration's `objectSelector`/
-# `namespaceSelector` are LabelSelectors — they match `metadata.labels` and NEVER annotations. The
-# label defeats all of istiod's injector rules AT THE API SERVER (each rule requires one of
-# `istio-injection NotIn [disabled]`, `In [enabled]`, or `DoesNotExist`), so the webhook is never
-# called. That also matters because every rule ships `failurePolicy: Fail`: a rule that MATCHES
-# couples our pod creation to the platform istiod's health. Upstream agrees — istiod's own
-# gateway template (istiod/files/kube-gateway.yaml) sets inject=false as a LABEL, not an annotation.
+# `namespaceSelector` are LabelSelectors — they match `metadata.labels` and NEVER annotations. So
+# the decision happens AT THE API SERVER and the webhook is never called, which matters because
+# every rule ships `failurePolicy: Fail`: a rule that MATCHES couples our pod creation to the
+# platform istiod's health. Upstream agrees — istiod's own gateway template
+# (istiod/files/kube-gateway.yaml) sets inject=false as a LABEL, not an annotation.
+#
+# THE MECHANISM — RENDERED from the carried chart, not recalled. This comment previously claimed
+# "each rule requires one of `NotIn [disabled]`, `In [enabled]`, or `DoesNotExist`". There is NO
+# `NotIn` rule. That was a false fact, shipped in #290, caught by an adversary:
+#
+#   rev.namespace.sidecar-injector    istio-injection DoesNotExist
+#   rev.object.sidecar-injector       istio-injection DoesNotExist
+#   namespace.sidecar-injector        istio-injection In ['enabled']
+#   object.sidecar-injector           istio-injection DoesNotExist
+#
+# Three rules require the key ABSENT, so ANY value defeats them — `disabled` is not magic. The
+# fourth requires exactly `enabled`, so any other value defeats it too. What would NOT be safe is
+# an `Exists` rule: our label would make the key exist, and MATCH. A gate for this must therefore
+# check the OPERATOR, not merely that a rule mentions `istio-injection`.
+#
+# Grade: upstream-1.30.2-rendered. The lab runs VMware's `1.28.2+vmware.1-vks.1`, which we cannot
+# render — whether it ships these selectors is UNVERIFIED-BY-US (docs/lab-validation-plan.md).
 istio_no_inject_label() {
   local ns="$1"
   run kubectl label --overwrite namespace "$ns" istio-injection=disabled
