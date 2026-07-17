@@ -26,6 +26,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 # shellcheck source=scripts/lib/istio.sh
 . "${SCRIPT_DIR}/lib/istio.sh"
+# shellcheck source=scripts/lib/psa.sh
+. "${SCRIPT_DIR}/lib/psa.sh"
 load_env
 
 require_cmd kubectl
@@ -97,7 +99,113 @@ run helm upgrade --install istiod istio/istiod \
   --namespace "$PLATFORM_ISTIOD_NS" \
   --version "$ISTIO_VERSION" --wait --timeout "${READY_TIMEOUT_SECONDS}s" \
   --set global.hub="$HUB" --set global.tag="$ISTIO_VERSION" \
-  --set global.proxy.autoInject=disabled --set pilot.autoscaleEnabled=false
+  --set sidecarInjectorWebhook.enableNamespacesByDefault=true --set pilot.autoscaleEnabled=false
+# ^ THE SIMULATED PLATFORM MESH INJECTS BY DEFAULT. That is the whole point of this leg: B26's
+# hazard is a mesh we do not own whose injector reaches into OUR namespaces. This fixture used to
+# pass `global.proxy.autoInject=disabled` — i.e. it simulated the SAFE case and never once
+# exercised the thing the leg exists to test.
+#
+# THERE ARE TWO INDEPENDENT GATES, and conflating them is easy — rendered from the pinned chart
+# (bundle/charts/istiod-1.30.3.tgz), not recalled:
+#
+#     --set                                                  auto-rule   policy:
+#     global.proxy.autoInject=disabled            (before)       0       disabled
+#     sidecarInjectorWebhook.enableNamespacesByDefault=true (now) 1       enabled
+#     BOTH                                                       1       disabled   <- fires, then DECLINES
+#     neither                                                    0       enabled
+#
+#   1. the WEBHOOK — `enableNamespacesByDefault` adds a 5th rule (`auto.sidecar-injector.istio.io`,
+#      failurePolicy: Fail) matching an UNLABELLED namespace's UNANNOTATED pod. Without it the
+#      webhook is never called for such a pod.
+#   2. the POLICY — `global.proxy.autoInject` sets `policy:` in the `istio-sidecar-injector`
+#      ConfigMap, a SECOND gate evaluated INSIDE istiod's /inject handler, after the selector has
+#      already matched.
+# Injection needs BOTH. So this is a REPLACE, not a delete: setting both yields a webhook that
+# fires and an istiod that declines — a leg that looks armed and injects nothing.
+#
+# ⚠️ Do NOT read "the webhook is byte-identical with or without autoInject" (true — rendered and
+# diffed) as "autoInject is a no-op" (FALSE — it flips `policy`). That inference would also invite
+# deleting `global.proxy.autoInject=disabled` from 46-install-istio.sh, where we set it on OUR OWN
+# mesh: there it is a real second-layer defence, not noise.
+# ---------------------------------------------------------------------------
+# THE INJECTION MATRIX — 3 cells, and cell 1 is a POSITIVE CONTROL.
+#
+# WHY A CONTROL AND NOT JUST "our pods have 1 container": because that assertion is GREEN WHEN
+# INJECTION SILENTLY FAILS. Measured — helm ACCEPTS a typo'd --set key without a word:
+#     helm template ... --set sidecarInjectorWebhook.enableNamespacesByDefaults=true   (note the s)
+#     -> exit 0, no warning, no error, and ZERO `auto` rules rendered.
+# A typo, a chart bump renaming the value, or B35's revision-tag shape (which renders only 2 rules
+# and ignores this knob entirely) all yield: nothing injects, every pod has 1 container, the leg
+# reports success, and it tested NOTHING. Cell 1 is the only thing standing between us and that.
+#
+# WHAT PROVES B26 END-TO-END IS `verify`, NOT THIS MATRIX. `verify` runs after install-ingress and
+# waits on `rollout status`, so ArgoCD syncs FRESH app pods and Tekton creates FRESH TaskRun pods —
+# through the live webhook, in the real namespaces. Delete istio_no_inject_label and those pods get
+# istio-init (NET_ADMIN), PSA `restricted` rejects them, and `verify` times out. THAT is the
+# load-bearing coverage. This matrix isolates the mechanism and, via cell 1, proves the leg is armed
+# at all. Do not read it as the B26 test; it is the anti-vacuity control for the B26 test.
+log_info "injection matrix: proving the fixture INJECTS, and that our two labels each defeat it"
+MATRIX_NS_BARE=inject-probe-bare
+MATRIX_NS_NSLBL=inject-probe-nslabel
+MATRIX_NS_PODLBL=inject-probe-podlabel
+# A `die` below would otherwise leave an injected pod + a live Envoy behind, making the next
+# `kubectl get pods -A` triage noisier for whoever debugs this.
+trap 'kubectl delete ns "$MATRIX_NS_BARE" "$MATRIX_NS_NSLBL" "$MATRIX_NS_PODLBL" --ignore-not-found --wait=false >/dev/null 2>&1 || true' EXIT
+
+# containers <ns> — count containers + initContainers. istio-init is an INIT container and is the
+# one PSA rejects (NET_ADMIN), so counting only .spec.containers would miss the thing that matters.
+_matrix_containers() {
+  kubectl -n "$1" get pod p -o jsonpath='{.spec.containers[*].name} {.spec.initContainers[*].name}' 2>/dev/null
+}
+_matrix_run() { # <ns> [extra kubectl run args...]
+  local ns="$1"; shift
+  kubectl -n "$ns" run p --image="${PROBE_IMAGE:-curlimages/curl:8.18.0}" --restart=Never \
+    "$@" --command -- sleep 300 >/dev/null 2>&1
+  kubectl -n "$ns" wait --for=jsonpath='{.metadata.name}'=p pod/p --timeout=60s >/dev/null 2>&1 || true
+}
+
+# CELL 1 — THE CONTROL. A bare ns + a bare pod must match `auto` on every selector:
+#   nsSel  istio-injection DoesNotExist ✓ · istio.io/rev DoesNotExist ✓ · metadata.name NotIn[kube-*] ✓
+#   objSel sidecar.istio.io/inject DoesNotExist ✓ · istio.io/rev DoesNotExist ✓
+run kubectl create namespace "$MATRIX_NS_BARE" >/dev/null
+_matrix_run "$MATRIX_NS_BARE"
+ctl="$(_matrix_containers "$MATRIX_NS_BARE")"
+case "$ctl" in
+  *istio-proxy*|*istio-init*) log_info "  CONTROL ok — the platform mesh injects a bare namespace [$ctl]" ;;
+  *) die "INJECTION MATRIX CONTROL FAILED: a bare pod in a bare namespace was NOT injected [got: '${ctl}'].
+  The fixture is NOT injecting, so this leg proves NOTHING about B26 — every 'our pods are clean'
+  assertion below would pass for the wrong reason. Check that --set
+  sidecarInjectorWebhook.enableNamespacesByDefault=true is spelled correctly and still exists in
+  istio ${ISTIO_VERSION} (helm accepts an unknown --set key SILENTLY), and that the injector
+  ConfigMap says 'policy: enabled' (global.proxy.autoInject would flip it to disabled)." ;;
+esac
+
+# CELL 2 — the NAMESPACE label (lib/psa.sh's istio_no_inject_label) must defeat all five rules.
+ensure_namespace "$MATRIX_NS_NSLBL"
+_matrix_run "$MATRIX_NS_NSLBL"
+ctl="$(_matrix_containers "$MATRIX_NS_NSLBL")"
+case "$ctl" in
+  *istio-proxy*|*istio-init*) die "INJECTION MATRIX: the NAMESPACE label istio-injection=disabled did NOT defeat injection [$ctl].
+  ensure_namespace (lib/psa.sh) is the control B26 depends on for every namespace we own." ;;
+  *) log_info "  ns-label ok — istio-injection=disabled defeats the injector [$ctl]" ;;
+esac
+
+# CELL 3 — the POD label (k8s/*, deploy/*) must defeat all five on the OBJECT alone, in a namespace
+# with no label at all. This is the race-free half: ArgoCD's CreateNamespace=true can sync a pod
+# before any installer labels its namespace.
+run kubectl create namespace "$MATRIX_NS_PODLBL" >/dev/null
+_matrix_run "$MATRIX_NS_PODLBL" --labels=sidecar.istio.io/inject=false
+ctl="$(_matrix_containers "$MATRIX_NS_PODLBL")"
+case "$ctl" in
+  *istio-proxy*|*istio-init*) die "INJECTION MATRIX: the POD label sidecar.istio.io/inject=false did NOT defeat injection [$ctl].
+  check-pod-inject-label.sh enforces this label on every workload we ship; if it no longer works,
+  that gate is guarding nothing." ;;
+  *) log_info "  pod-label ok — sidecar.istio.io/inject=false defeats the injector [$ctl]" ;;
+esac
+log_info "injection matrix PASSED — the mesh injects, and BOTH of our labels defeat it independently"
+kubectl delete ns "$MATRIX_NS_BARE" "$MATRIX_NS_NSLBL" "$MATRIX_NS_PODLBL" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+trap - EXIT
+
 # NOTE: deliberately NO `--set labels.istio=...` — the chart derives the label from the
 # release name, which is precisely the condition our old hardcoded selector could not handle.
 run helm upgrade --install "$PLATFORM_RELEASE" istio/gateway \
@@ -136,7 +244,17 @@ PROBE_NS=istio-probe
 # pulled from upstream rather than mirrored into Harbor — it is never used by an air-gapped
 # install path. PROBE_IMAGE is overridable if a mirror is preferred.
 PROBE_IMAGE="${PROBE_IMAGE:-curlimages/curl:8.18.0}"
-kubectl create namespace "$PROBE_NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+# ensure_namespace, NOT a bare create — MANDATORY now that the fixture injects, not hygiene.
+# A bare namespace matches the `auto` rule, so the probe would get a sidecar; iptables REDIRECT then
+# makes curl's TCP connect SUCCEED into Envoy, which finds no upstream listener and returns 503.
+# RED 2 asserts EXACTLY `000` (deliberately — "the SPECIFIC failure, not merely 'not 200'"), so it
+# would die on every run, with a message sending the operator to debug the SELECTOR.
+#
+# NO LEVEL ARGUMENT: psa_label_namespace returns early on an empty level, so the namespace gets
+# `istio-injection=disabled` and NO PSA label — right for a bare `kubectl run`, which sets no
+# seccompProfile and would be rejected by `restricted`. Same precedent as 07-install-argocd.sh.
+# The ns label alone defeats all five rules; a pod label would be redundant here.
+ensure_namespace "$PROBE_NS"
 kubectl -n "$PROBE_NS" get pod probe >/dev/null 2>&1 || \
   kubectl -n "$PROBE_NS" run probe --image="$PROBE_IMAGE" --restart=Never --command -- sleep infinity >/dev/null
 kubectl -n "$PROBE_NS" wait --for=condition=Ready pod/probe --timeout=180s

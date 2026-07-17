@@ -129,6 +129,26 @@ if helm status "$RELEASE" -n "$NS" >/dev/null 2>&1; then
 else
   harbor_render_values false "$PROVISIONAL_URL"
   log_info "installing Harbor release '$RELEASE' (chart $CHART_VERSION) into namespace '$NS'"
+  # The namespace BEFORE helm, so it carries istio-injection=disabled. Helm's --create-namespace is
+  # kept and stays correct: it creates-if-absent and never adopts or deletes the namespace.
+  #
+  # WHY THIS LANDS WITH THE INJECTION-ON FIXTURE, not later: `harbor` was the ONE namespace we own
+  # that is unlabelled AND outside the `auto` rule's exclusion list (kube-system, kube-public,
+  # kube-node-lease, local-path-storage) AND hosts pods. Everything else is covered —
+  # gitea/tekton/tekton-pipelines-resolvers/ci/apps/vks-ingress via ensure_namespace, istio-system
+  # by istiod self-labelling its own pod, platform-ingress by the gateway's inject:"true".
+  # Flipping 90-e2e-istio-existing.sh's fixture to inject-by-default is what ARMS it: any harbor pod
+  # RECREATION after that mesh is up (eviction, OOM, node pressure, a rollout) would be injected,
+  # Envoy would intercept registry traffic, and the mirror/pull would fail with an error naming
+  # HARBOR and never naming injection. Low probability, high impact, nondeterministic — the worst
+  # shape to debug, and this change is what creates it.
+  #
+  # No PSA level: upstream's Harbor chart is not ours to make restricted-clean, and this script is
+  # KinD-only (on a real lab Harbor is a Supervisor Service we discover, never install). Same
+  # precedent as 07-install-argocd.sh.
+  # shellcheck source=scripts/lib/psa.sh
+  . "${SCRIPT_DIR}/lib/psa.sh"
+  ensure_namespace "$NS"
   run helm upgrade --install "$RELEASE" "${CHART_REPO_NAME}/harbor" \
     --version "$CHART_VERSION" \
     --namespace "$NS" --create-namespace \
