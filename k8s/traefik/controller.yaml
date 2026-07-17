@@ -6,10 +6,10 @@
 # ${VAR} tokens are rendered by scripts/45-install-traefik.sh via a restricted
 # envsubst allowlist. Non-root, read-only rootfs, all caps dropped; Traefik binds
 # the unprivileged :8000 (web) / :9000 (ping) and the Service maps :80 -> :8000.
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: ${TRAEFIK_NAMESPACE}
+# NO `kind: Namespace` HERE, deliberately — 45-install-traefik.sh creates it via ensure_namespace
+# (lib/psa.sh) BEFORE this manifest is applied. A namespace declared alongside its own workloads is
+# created WITH them, so any later label lands after the pods it exists to protect (admission webhooks
+# fire on CREATE). Every object below carries an explicit `namespace: ${TRAEFIK_NAMESPACE}`.
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -67,7 +67,14 @@ spec:
     matchLabels: { app: traefik }
   template:
     metadata:
-      labels: { app: traefik }
+      # sidecar.istio.io/inject=false is the RACE-FREE half of the B26 control, and traefik was the
+      # only one of our four workloads carrying NEITHER it nor a namespace label. It defeats all four
+      # injector rules on the OBJECT alone (three are `NotIn ['false']`, the fourth `In ['true']`),
+      # so it holds whatever the namespace says and whenever the namespace gets labelled. It must be
+      # a LABEL: objectSelector is a LabelSelector and never matches annotations.
+      # An injected traefik would get istio-init (NET_ADMIN + NET_RAW) and PSA would reject the pod
+      # on a real VKS guest — and neither `restricted` nor `baseline` admits it.
+      labels: { app: traefik, sidecar.istio.io/inject: "false" }
     spec:
       serviceAccountName: traefik
       securityContext:

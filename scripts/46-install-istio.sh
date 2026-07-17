@@ -88,23 +88,67 @@ else
   # path the carried charts exist to make work. A network call on the no-network path.
   run helm repo update "$CHART_REPO_NAME"
 fi
-chart_ref() {   # chart_ref <base|istiod|gateway> -> a local .tgz, or the repo alias
-  if [ "$CHART_LOCAL" = 1 ]; then
-    find "$CHART_DIR" -name "${1}-*.tgz" -print -quit
-  else
-    printf '%s/%s' "$CHART_REPO_NAME" "$1"
-  fi
+# chart_ref <base|istiod|gateway> -> the local .tgz at the PINNED version, or the repo alias.
+#
+# B36 — THE VERSION LIVES IN THE FILENAME, AND `--version` CANNOT SAVE YOU. This used to glob
+# `${1}-*.tgz` version-agnostically while every call site passed `--version "$ISTIO_VERSION"` to
+# helm. That looks like a pin and is not: for a LOCAL .tgz path helm IGNORES `--version` —
+# measured, `helm template ./istiod-1.30.2.tgz --version 1.30.3` renders `helm.sh/chart:
+# istiod-1.30.2` with rc=0 and an EMPTY stderr, not even a warning.
+#
+# It is not a hypothetical: on the box this was written, `bundle/charts/` held base-1.30.2,
+# istiod-1.30.3 and gateway-1.30.2 against a 1.30.3 pin — so the glob would have installed a MIXED
+# MESH (1.30.2 CRDs + 1.30.3 istiod + 1.30.2 gateway) against 1.30.3 images, silently. Charts
+# accumulate forever: mirror_prune_cache (10-mirror-pull.sh) prunes the IMAGE cache only.
+#
+# `${ISTIO_VERSION#v}`: `helm pull --version v1.30.3` warns, falls back, and writes
+# `istiod-1.30.3.tgz` — so a leading `v` in the pin would false-block a correctly-cut bundle.
+# (`+build.metadata` needs no handling: helm preserves it in the filename verbatim.)
+#
+# PURE: it prints or it dies. NEVER call it inside a helm argument — see the plain assignments below.
+chart_ref() {
+  local want v="${ISTIO_VERSION#v}"
+  if [ "$CHART_LOCAL" != 1 ]; then printf '%s/%s' "$CHART_REPO_NAME" "$1"; return; fi
+  want="${CHART_DIR}/${1}-${v}.tgz"
+  # `ls`, not `find -printf`: -printf is GNU-only and this script runs on the AIR-GAP box, which may
+  # be Photon/toybox. There, find would fail, and a `|| echo none` fallback would tell an operator
+  # "carried: none" while the charts sit right there — sending them to re-cut an 11 GB bundle that is
+  # fine. (That fallback is also unreachable on GNU: find exits 0 on no-match.)
+  # shellcheck disable=SC2012  # `ls` is DELIBERATE: SC2012 says use find, but `find -printf` is
+  # GNU-only and this runs on the air-gap box (Photon/toybox). Chart filenames are helm-generated
+  # (`<name>-<semver>.tgz`), so the non-alphanumeric case SC2012 guards against cannot arise.
+  [ -f "$want" ] || die "the bundle carries no ${1} chart at the PINNED version ${v}
+  (looked for ${want})
+  (carried: $(cd "$CHART_DIR" 2>/dev/null && ls -1 "${1}"-*.tgz 2>/dev/null | tr '\n' ' ' || true))
+  Your bundle predates the ISTIO_VERSION pin. Re-cut it on the internet side:
+      make mirror-pull && make bundle
+  (Refusing to fall back to whatever version is on disk: helm IGNORES --version for a local .tgz, so
+   that fallback installs the WRONG chart against ${v} images and reports success.)"
+  printf '%s' "$want"
 }
+
+# Resolve ALL THREE UP FRONT, as PLAIN assignments. Both halves are load-bearing:
+#   - PLAIN ASSIGNMENT, never `helm ... "$(chart_ref x)"`: chart_ref's `die` runs inside the command
+#     substitution's SUBSHELL, so at a helm call site it exits only that subshell — the script
+#     continues and helm gets an EMPTY argument. It "works" today only because real helm happens to
+#     reject it, and `DRY_RUN=1` swallows it entirely (exit 0). An assignment's rc IS the
+#     substitution's rc, so `set -e` fires on the die, DRY_RUN or not.
+#   - UP FRONT, before any helm call: otherwise base installs its CRDs, THEN istiod dies on a stale
+#     chart, leaving a half-installed control plane for the operator to unpick.
+# Do NOT write `local x="$(chart_ref …)"` — `local` returns 0 and swallows the failure.
+CHART_BASE="$(chart_ref base)"
+CHART_ISTIOD="$(chart_ref istiod)"
+CHART_GATEWAY="$(chart_ref gateway)"
 
 # --- 2. CRDs (istio/base) -----------------------------------------------------
 log_info "installing istio-base (CRDs) v${ISTIO_VERSION} into ${ISTIO_NAMESPACE}"
-run helm upgrade --install istio-base "$(chart_ref base)" \
+run helm upgrade --install istio-base "$CHART_BASE" \
   --namespace "$ISTIO_NAMESPACE" --create-namespace \
   --version "$ISTIO_VERSION" --wait --timeout "${READY_TIMEOUT_SECONDS}s"
 
 # --- 3. Control plane (istiod), images from Harbor ----------------------------
 log_info "installing istiod v${ISTIO_VERSION} (hub=${HUB})"
-run helm upgrade --install istiod "$(chart_ref istiod)" \
+run helm upgrade --install istiod "$CHART_ISTIOD" \
   --namespace "$ISTIO_NAMESPACE" \
   --version "$ISTIO_VERSION" --wait --timeout "${READY_TIMEOUT_SECONDS}s" \
   --set global.hub="$HUB" \
@@ -115,7 +159,7 @@ run helm upgrade --install istiod "$(chart_ref istiod)" \
 
 # --- 4. Ingress gateway (LoadBalancer), images from Harbor --------------------
 log_info "installing istio ingress gateway (LoadBalancer) into ${ISTIO_GATEWAY_NAMESPACE}"
-run helm upgrade --install "$GW_RELEASE" "$(chart_ref gateway)" \
+run helm upgrade --install "$GW_RELEASE" "$CHART_GATEWAY" \
   --namespace "$ISTIO_GATEWAY_NAMESPACE" --create-namespace \
   --version "$ISTIO_VERSION" --wait --timeout "${READY_TIMEOUT_SECONDS}s" \
   --set service.type=LoadBalancer \

@@ -36,6 +36,25 @@ LB_TIMEOUT_SECONDS="${GITEA_LB_TIMEOUT_SECONDS:-180}"
 ALLOWLIST='${GITEA_NAMESPACE} ${HARBOR_URL} ${HARBOR_INFRA_PROJECT} ${GITEA_URL} ${GITEA_STORAGE_SIZE} ${GITEA_SERVICE_TYPE} ${GITEA_IMAGE}'
 
 log_info "installing Gitea into namespace '$GITEA_NAMESPACE' (Service type: ${GITEA_SERVICE_TYPE})"
+
+# Create the namespace WITH its PSA + no-inject labels, HERE, before the manifest that carries its
+# pods. Two bugs, one fix:
+#
+#   1. `make install-all` does NOT run `install-ingress` (Makefile:459) — and until now the ONLY
+#      ensure_namespace calls for gitea lived inside lib/istio.sh's route functions (:278, :566),
+#      reachable only from that target. So on the documented real-lab install the label landed
+#      NEVER, not late. `make e2e-kind` runs install-ingress explicitly, which is precisely what
+#      hid it: the e2e's own target list made gitea look labelled while an operator got nothing.
+#   2. Even when install-ingress DID run, k8s/gitea/gitea.yaml used to declare `kind: Namespace`
+#      alongside this Deployment, so the ns and its pods were created together and any later label
+#      arrived after the pods it exists to protect. Admission webhooks fire on CREATE.
+#
+# This mirrors 70-configure-argocd.sh:362, which already fixed exactly this for the app namespaces
+# and says so in its own comment — gitea and tekton were simply left behind.
+# shellcheck source=scripts/lib/psa.sh
+. "${SCRIPT_DIR}/lib/psa.sh"
+ensure_namespace "$GITEA_NAMESPACE" "${PSA_LEVEL_GITEA:-restricted}"
+
 # shellcheck disable=SC2016
 envsubst "$ALLOWLIST" < "${REPO_ROOT}/k8s/gitea/gitea.yaml" | run kubectl apply -f -
 

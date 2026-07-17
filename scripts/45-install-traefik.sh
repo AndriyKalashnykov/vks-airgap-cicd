@@ -23,7 +23,10 @@ require_cmd envsubst "install gettext (provides envsubst)"
 : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"
 : "${TRAEFIK_NAMESPACE:?}"
 : "${GITEA_NAMESPACE:?}"; : "${GITEA_HOST:?}"
-: "${ARGOCD_NAMESPACE:?}"
+# B33a: no ARGOCD_NAMESPACE guard here. Nothing in this script uses it — the ArgoCD namespace
+# creation it once guarded was removed as VESTIGIAL (see the comment further down), and the guard
+# outlived it. It was also vacuous: lib/os.sh's load_env unconditionally exports
+# ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}", so the `:?` could never have fired.
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
 : "${TEKTON_NAMESPACE:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
@@ -44,6 +47,21 @@ APP_ING_ALLOWLIST='${APP_NAME} ${APP_NAMESPACE} ${APP_HOST}'
 
 # --- 1. Install the controller (namespace, RBAC, IngressClass, Deployment, LB) ---
 log_info "installing Traefik controller into namespace '${TRAEFIK_NAMESPACE}'"
+
+# The namespace, WITH its labels, BEFORE the manifest that carries traefik's pods — controller.yaml
+# no longer declares it. `restricted` is the level its own securityContext already satisfies
+# (controller.yaml: runAsNonRoot, runAsUser 65532, seccompProfile RuntimeDefault, caps drop ALL,
+# read-only rootfs, and it binds :8000 rather than :80 so it needs no NET_BIND_SERVICE). That is
+# REASONING, not measurement — the NS_SPEC row added to 49-psa-check.sh is what measures it, via a
+# server-side dry-run, on every `make psa-check`.
+#
+# NOT PSA_LEVEL_INGRESS: that var's `baseline` exists for the ISTIO gwapi namespace, whose
+# auto-provisioned proxy sets no seccompProfile. Reusing it here would silently loosen traefik to
+# baseline for a reason that has nothing to do with traefik.
+# shellcheck source=scripts/lib/psa.sh
+. "${SCRIPT_DIR}/lib/psa.sh"
+ensure_namespace "$TRAEFIK_NAMESPACE" "${PSA_LEVEL_TRAEFIK:-restricted}"
+
 # shellcheck disable=SC2016
 envsubst "$CTRL_ALLOWLIST" < "${K8S_DIR}/controller.yaml" | run kubectl apply -f -
 
@@ -61,8 +79,19 @@ run kubectl -n "$TRAEFIK_NAMESPACE" rollout status deploy/traefik \
 # kubeconfig, and ArgoCD is a Supervisor Service — so it conjured a phantom empty `argocd` namespace
 # on the wrong cluster; in Scenario 2 that is a namespace the tenant does not own; and `create` is a
 # wider RBAC verb than the `patch` this flow otherwise needs.
+#
+# Through ensure_namespace, not a hand-rolled copy of its create line: this is the ONLY place a
+# namespace we own gets its PSA level and its istio-injection=disabled label, and the bare create
+# here gave neither. Idempotent and conflict-free — the levels are byte-identical to the ones
+# 70-configure-argocd.sh:362 and lib/istio.sh:278,284 use for the same namespaces, and
+# `kubectl label --overwrite` does not care who ran first. ArgoCD adopts an existing namespace by
+# design, so pre-creating it does not disturb CreateNamespace=true.
 for ns in "$GITEA_NAMESPACE" $(app_names | tr '\n' ' '); do
-  run bash -c "kubectl create namespace \"$ns\" --dry-run=client -o yaml | kubectl apply -f -"
+  if [ "$ns" = "$GITEA_NAMESPACE" ]; then
+    ensure_namespace "$ns" "${PSA_LEVEL_GITEA:-restricted}"
+  else
+    ensure_namespace "$ns" "${PSA_LEVEL_APP:-restricted}"
+  fi
 done
 
 log_info "applying Ingress objects for the shared UIs (gitea/tekton -> *.vks.local)"

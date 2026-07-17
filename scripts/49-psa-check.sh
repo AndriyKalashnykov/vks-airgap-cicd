@@ -39,6 +39,7 @@ ${GITEA_NAMESPACE:-gitea}|${PSA_LEVEL_GITEA:-}
 ${TEKTON_NAMESPACE:-tekton-pipelines}|${PSA_LEVEL_TEKTON:-}
 ${CI_NAMESPACE:-ci}|${PSA_LEVEL_CI:-}
 $(app_names | while read -r a; do if [ -n "$a" ]; then printf "%s|${PSA_LEVEL_APP:-}\n" "$a"; fi; done)
+${TRAEFIK_NAMESPACE:-traefik}|${PSA_LEVEL_TRAEFIK:-}
 ${ISTIO_GWAPI_NAMESPACE:-vks-ingress}|${PSA_LEVEL_INGRESS:-}
 ${ISTIO_GATEWAY_NAMESPACE:-istio-ingress}|${PSA_LEVEL_INGRESS:-}
 ${ISTIO_NAMESPACE:-istio-system}|${PSA_LEVEL_ISTIO_SYSTEM:-}
