@@ -512,84 +512,129 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-07-16 (evening) — READ, THEN REPLACE (do not append)
+## ▶️ HANDOFF 2026-07-17 — READ, THEN REPLACE (do not append)
 
-**There is exactly ONE handoff section, and the next session OVERWRITES it.** This file once carried
-**20** of them (1,464 lines / 71% of the file). If your outcome is a *fact*, it belongs in the docs; a
-*task* → the Backlog; *history* → git. Only "what is in flight and what to distrust" belongs here.
+**ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog.
+History → git. Only "what is in flight and what to distrust" belongs here.
 
-**State: `main` green at the #288 squash, tree clean, no cluster, nothing in flight, nothing
-half-done.** Branches: `main` only, local and remote. CI runs pruned to 3.
+**State: `main` @ the #291 squash, green, tree clean, no cluster, nothing half-done.** Branches:
+`main` only, local and remote. CI runs pruned to 3.
 
-### What happened
+### Shipped (4 PRs)
 
-A machine freeze killed the prior session; it cost **nothing** (both Renovate PRs — #282 Istio
-1.30.3, #285 mise-action — had merged themselves, as that handoff predicted).
-
-**Shipped: #288** — two characters. `docs/detailed-steps.md:41` told operators to write
-`HARBOR_USERNAME=robot$vks-cicd` **unquoted**, under a heading that says "Minimum `.env` you must
-set". `load_env` sources `.env` with `set -a` → `[robot-cicd]` → Harbor 401 → and our own error names
-the *credentials*, so the operator hunts the wrong password. Found **independently by two
-adversaries**, reproduced before fixing. **It was not in the backlog.**
-
-### 🔴 The backlog LIED, and I believed it — re-derive before you act on any line below
-
-Six items were re-derived from the code. **Every one was wrong or understated.** Corrections are in
-the Backlog table; the two that would have cost you a session:
-
-- **B13/B14 are NOT coupled the way B13 says.** `19-trust-harbor.sh` is in **neither** `e2e-kind` nor
-  `install-all` (verify: `install-all: preflight mirror …`; `preflight: check-tools argocd-preflight
-  lab-preflight psa-check`). First death if you comment `HARBOR_USERNAME` is `21-mirror-push.sh:36`,
-  and **B14 is lethal alone — B13 has nothing to do with it.**
-- **`state_set HARBOR_USERNAME` (the obvious KinD fix) CLOBBERS a tenant's `.env`.** Measured:
-  `.env`=`robot$vks-cicd` + `.env.state`=`admin` → **`admin`**. `.env.state` is sourced *after* `.env`
-  and `HARBOR_USERNAME` is not snapshot-protected. It moves the bug from a **gated** file to an
-  **ungated** one.
-
-### Three designs died before becoming code — two of them the adversary's OWN
-
-That is the loop working; do not read it as noise.
-
-| design | verdict |
+| | |
 |---|---|
-| mine: B13+B14 as one PR | **refuted** (above) |
-| mine: `check-doc-env-quoting` gate | **refuted — 7/20.** `Passw0rd$1`→`Passw0rd` ($ + non-letter), the docs' own `robot$<name>`, every **indented** line; and it could not express its own counter-example, so filing the review that found it would have reddened the static-check gate. Prototype in the verdict scores 19/20 (two-stage quote-aware scanner). |
-| vks-adversary's **own** F2 (PASS-2 terminator) | **refuted, 23 false positives.** Premise wrong: the welded block resolves to *"defaults were MEASURED … re-derive with `make psa-check`"* — a **real** acquisition path. **B22 needs NO gate change.** |
-| vks-adversary's **own** F1 (`psa_level()`) | **refuted, fatally.** `local r="$1" v="PSA_LEVEL_${r}"` expands `${r}` **before** `local` runs → unset → `set -u`. And it fixed **a bug that does not exist** (`:-` already treats empty as unset; both source orders identical). **B22's original `:=` shape is right.** |
+| **#288** | two characters. `docs/detailed-steps.md:41` told operators to write `HARBOR_USERNAME=robot$vks-cicd` **unquoted** → `set -a` eats `$vks` → `[robot-cicd]` → Harbor 401 whose message blames the *password*. |
+| **#289** | handoff replaced; **4 false backlog rows** corrected; B27/B28/F8 added. |
+| **#290** | **curl `-K`**: an ordinary password with a `"` is TRUNCATED (`ab"cd`→`ab`), a `\` is EATEN → 401 → our diagnostic blames the operator. Plus **B26** attach-mode injection (a LABEL, not the prescribed annotation). |
+| **#291** | **three gates that never ran on the changes they exist to catch.** |
 
-**Both adversaries caught their own instruments first** — mawk ignoring `{2,}` (a vacuous "0
-regressions" on a comparison that never ran); a corpus oracle scoring false-blocks as correct; a
-`--limit 40` saturating at 40/40. Distrust the instrument before the product, *including your own*.
+### 🔴 The rule that keeps paying: A GATE'S TRIGGER MUST COVER ITS INPUTS
+
+PR #291's audit of **all 21 gates** found the defect **three times**, and the repo had **already solved
+it twice without generalising** (`check-doc-make-targets.sh`'s header explains the exact reasoning
+and IS in both lists; `ci.yml`'s `secrets` job was made unconditional for the same discovery).
+
+- `check-vks-provenance` had **NEVER graded a docs-only PR** — the only shape that can edit its
+  inputs. Proven on **#277** (+89 lines to `docs/vks-services/istio.md`; gate never looked).
+- `check-doc-target-coverage` had the **mirror** defect (ground truth = the Makefile; lived only in
+  `docs-lint`) — blind on the one PR shape it was written for.
+- `check-agent-frontmatter` **scanned a directory that does not exist**, exited 0, and was killed by
+  **#277 — which it could not see**. It never went red about its own death. Deleted; the roster is
+  `claude-config`'s now (its `run-tests.sh` is wired into NO CI — HOOK-008).
+
+**The classifier is NOT the bug** — `test-classify-changes.sh` PINS `docs/vks-services/*.md →
+code=false` as correct. Do not "fix" it; every docs PR would pay a full Java+Go build.
+
+### 🔴 B26 IS NOT FIXED — #290 shipped a partial fix and I reported it as done
+
+`istio_no_inject_label` is reachable ONLY through `ensure_namespace` — 8 call sites (`60-`:CI,
+`70-`:APP, `lib/istio.sh`:GITEA/TEKTON/apps/GWAPI ×2 paths). **Every other namespace we own is
+created by a path that bypasses it**, and `grep -rn istio-injection scripts/ k8s/ deploy/` outside
+`psa.sh` returns **NOTHING** — there is no second path:
+
+| namespace | created by | labelled? |
+|---|---|---|
+| `gitea` | **`k8s/gitea/gitea.yaml:3` — `kind: Namespace` in a MANIFEST** | **too late** — `lib/istio.sh:278` labels it at `install-ingress`, LONG after `install-gitea` created the ns *and its pods*. **Webhooks fire on CREATE.** |
+| `traefik` | `k8s/traefik/controller.yaml:10` manifest | **NO** — and its Deployment has no pod-label either (3/4 workloads carry it; traefik is the miss) |
+| `argocd` | `07-install-argocd.sh:65` hand-rolled `kubectl create ns` | **NO** |
+| `harbor` | `06-install-harbor.sh:134` helm `--create-namespace` | **NO** — decide in/out explicitly, don't leave it silent |
+| `istio-system`, gateway ns | `46-install-istio.sh:102,119` helm | **correctly OUT** — never label the platform's own |
+
+**Gitea survives today ONLY on its pod-template label** — the control `psa.sh`'s own comment calls
+*secondary*, while calling the namespace label "the primary control" that gitea never receives in
+time. And `psa.sh`'s docstring asserts "Use this everywhere instead of a bare `kubectl create
+namespace`" while two scripts contain exactly that.
+
+**Fix the bypasses BEFORE writing any test.** A test for a fix that does not work is the worst
+outcome available — and a gate over the covered half would LICENSE trust in the uncovered half. The
+prescribed order: (1) route the hand-rolled copies through `ensure_namespace`; (2) label the two
+manifest-declared namespaces *at creation*, not later; (3) decide harbor explicitly; (4) THEN ship
+`check-namespace-chokepoint` (RED = a new bare `kubectl create namespace`) — that gate's RED is the
+LIKELY regression, far more than deleting a line under a 40-line comment; (5) then the argv test,
+named `test-ensure-namespace-labels` (NOT `test-psa-labels` — the name must not claim B26 generally).
+
+**The argv test is NOT a tautology** (the FORBIDDEN-mock rule targets a stub that PRODUCES the
+asserted value; a fake `kubectl` is a SPY — it cannot make the assertion pass). `run` honours PATH,
+so it works — but `DRY_RUN=1` is a better seam that already exists (`os.sh`: `run` echoes instead of
+executing), needing no fake binary at all.
+
+### 🔴 ...and its e2e is vacuous for a THIRD reason
+
+Delete `istio_no_inject_label` from `ensure_namespace` tomorrow: **nothing goes red.** No test names
+it; no `static-check` gate covers it; the attach e2e pins injection OFF. It surfaces only as "every
+app pod rejected" on a real VKS guest.
+
+And the prescribed un-vacuuming is **still not enough**. `Makefile`'s `e2e-kind-istio-existing` runs
+`install-all` — creating every namespace and pod — **BEFORE** it installs the platform istiod.
+**Webhooks fire on CREATE only.** So every pod the hazard concerns already exists and is never
+re-admitted: both prescribed flags land and the leg goes green **with or without the fix**. It needs
+a **third** change — `kubectl rollout restart deploy/<app>` after the mesh is up.
+
+**Corrections to things this file previously asserted:**
+
+- **"KinD enforces no PSA, so the e2e can never prove the rejection" is FALSE.** PSA is built-in
+  since 1.25; KinD enforces nothing *by default* only because no namespace carries labels — and
+  `ensure_namespace` labels **ours** `enforce=restricted`. The leg CAN reproduce the full hazard.
+- **The chart-fixture design is refuted.** `bundle/charts/` is gitignored → unshippable in CI. And a
+  hand-rolled selector evaluator's most likely bug is a FALSE GREEN over the exact hazard
+  (`NotIn['false']` vs an **absent** key returns **true**; a naive evaluator returns false → calls an
+  unlabelled pod "safe"). Use the `check-gwapi-istio-alignment` precedent: `helm pull` at the pinned
+  `ISTIO_VERSION` over the network, loud honest SKIP, assert the **operator** structurally
+  (`DoesNotExist`/`In` → defeated; **`Exists` → RED**; unknown → DIE). Never re-implement
+  LabelSelector semantics.
+
+### Distrust these — measured, not reasoned
+
+- **`.env.example` is guarded by NOTHING** (not in `GUARDED_PREFIXES`, not `GUARDED_FILES`). The
+  declared source of truth for every tunable, at the centre of B13/B14/B16/B22, is ungated.
+- **B22 may NOT be "blocked on a decision"** (measured, UNREVIEWED): the hint's `[ -n "$labelled" ]`
+  guard depends on `""` meaning "not configured" — but `.env.example` ships the six levels
+  **uncommented**, so `load_env` always exports them (`PSA_LEVEL_GITEA=[restricted]`). That semantic
+  is **already dead**, so B22's proper shape leaves the hint unchanged. Give it its own round.
+- **A whole class B13 would MISS**: a `:?` guard defeated by a `load_env` **code default**, not by an
+  uncommented `.env.example` line. `45-install-traefik.sh:26`'s `: "${ARGOCD_NAMESPACE:?}"` is one —
+  `.env.example:243` has it COMMENTED. Denominator unknown; that count is owed.
+- Every VKS fact is **lab-gated**. Everything about Istio's injector here is **upstream 1.30.2
+  rendered**; the lab runs VMware's `1.28.2+vmware.1-vks.1`, which we cannot render. Whether it even
+  ships `enableNamespacesByDefault=true` — **B26's entire premise** — is UNVERIFIED-BY-US.
+- The `subagent-readonly` state-machine rewrite still has **NO adversary round**.
 
 ### The one thing to carry forward
 
-**A human asking is what caught the miss.** I shipped a 109-line gate nobody reviewed, because the
-adversary receipt is scoped to **TIME, not CONTENT** — a review of design X authorized it. That
-residual is documented **in the hook's own header (~line 31)** and `hooks.md:123`, and a fix for it
-(path-scoped receipt) was **refuted on 2026-07-16**: the prompt that names the file to review
-*authorizes* it. `agents.md:762` already settled it — **idea-first is human-gated only; do not build a
-hook for it, do not report it "handled."** See RULE ZERO's new discipline note.
+**Nothing I reasoned my way to today survived; only what I measured did.** Refuted, in order: my
+B13/B14 coupling; my `check-doc-env-quoting` gate (**7/20**); my path-scoped-receipt fix
+(`do-not-build` — its extractor authorised the very smuggle it was reviewing); my **CRITICAL** grade
+on an unreachable injection (I had reproduced *my own input*: Harbor's secrets are `[a-zA-Z0-9]` and
+robot names are validated — **goharbor v2.15.0 source**); my "KinD enforces no PSA" premise; and a
+**false fact I had already shipped to `main`** (`psa.sh` claimed a `NotIn [disabled]` rule that does
+not exist). Two of the **adversary's own** prescriptions were refuted by the next round (F2: 23 false
+positives; F1: a fatal `local` expansion fixing a bug that did not exist).
 
-### What is UNREVIEWED or owed (be honest; do not imply otherwise)
-
-- **The `subagent-readonly` state-machine rewrite still has NO adversary round.** Heavily verified by
-  its author (198/198; 1 bypass/0 false-blocks vs bash on 65 cases) — which is exactly what the
-  version that shipped two bypasses also was. Review before trusting it further.
-- **`.env.example` is in NEITHER `GUARDED_PREFIXES` nor `GUARDED_FILES`** (verified today). The repo's
-  declared single source of truth for every tunable — the file at the centre of B13/B14/B16/B22 — is
-  **ungated**. Deliberately NOT fixed unreviewed: changing a control needs the idea-round.
-- `claude-config/reference/internal-ca-trust.md` — kapp-controller half is `[community]`, unverified.
-- Every VKS-specific fact in both references is **lab-gated**. Never promote on a KinD green.
-- The heredoc false-block in `subagent-readonly` is the reviewers' #1 practical obstacle (refused an
-  adversary 3×). Deliberate, fail-closed; any fix must key on the **consuming command**.
-
-### Next: B26, and it is READY (primary-sourced, not inferred)
-
-vks-adversary rendered the **carried** chart (`bundle/charts/istiod-1.30.2.tgz`) offline — no network,
-no `repo add` — and settled the injector selectors. Its ordering: **B26 → F8 → B22/B23 (blocked on a
-decision, not code)**. See the Backlog rows. Its parting residual: VKS ships
-`1.28.2+vmware.1-vks.1` [community] and Broadcom may patch the injector template — one lab command
-settles it (`kubectl get mutatingwebhookconfiguration -o yaml | grep -A8 namespaceSelector`).
+**Every instrument lied at least once** — mawk ignoring `{2,}`; `--libcurl` C-escaping its own output
+(three wrong readings); a `--limit 40` saturating at 40/40; a zsh-vs-bash escape test; a `pkill -f`
+that self-matched and killed its own shell; my own `sed` in a verification. **Distrust the
+instrument before the product, including your own.**
 
 ## Backlog / resume state
 
