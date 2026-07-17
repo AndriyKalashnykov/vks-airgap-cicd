@@ -408,7 +408,16 @@ kind-down: ## Tear down the KinD cluster (prunes cloud-provider-kind + kindccm-*
 .PHONY: e2e-kind
 e2e-kind: export SKIP_DOTENV = $(E2E_SKIP_DOTENV)
 e2e-kind: ## Full local end-to-end in KinD (+ ingress route check + PSA/VKS admission check). Runs with .env IGNORED (fresh-box fidelity); E2E_SKIP_DOTENV=0 to use yours
-	@$(MAKE) kind-up install-harbor install-argocd install-all install-ingress verify verify-ingress psa-check
+	@$(MAKE) kind-up install-harbor install-argocd install-all install-ingress verify verify-ingress
+# psa-check in a SEPARATE make invocation, deliberately. It is also a prerequisite of `preflight`
+# (:301), which `install-all` (:459) needs — so in ONE invocation make runs it EARLY, against an
+# empty cluster, and then reports `Nothing to be done for 'psa-check'` at the end. Measured
+# 2026-07-17: the early run said "measured 0 namespace(s) with running pods · 9 absent · PSA
+# UNPROVEN — this run measured NOTHING", and the run that would have proven anything never
+# happened. The e2e advertised "+ PSA/VKS admission check" and checked nothing.
+# psa-check's own output had said it: "Come back and re-run 'make psa-check' AFTER 'make platform'
+# — that run is the one that proves it." A second invocation is what does that.
+	@$(MAKE) psa-check
 
 .PHONY: e2e-kind-both
 e2e-kind-both: ## Matrix: run the full KinD e2e in BOTH SSL modes (secure self-signed TLS, then insecure plain-HTTP)
@@ -597,6 +606,14 @@ check-pull-secret-alignment: ## Every app's deploy manifest must reference the i
 .PHONY: check-java-alignment
 check-java-alignment: ## Fail if the Java major drifts across pom/mise/ci/Dockerfile/images.txt
 	@$(SCRIPTS)/check-java-alignment.sh
+
+.PHONY: check-namespace-labelled
+check-namespace-labelled: ## Gate: every namespace we OWN reaches an ensure_namespace call (PSA + no-inject); keyed on the INVENTORY, not on grepping for `kubectl create`
+	@$(SCRIPTS)/check-namespace-labelled.sh
+
+.PHONY: check-pod-inject-label
+check-pod-inject-label: ## Gate: every workload we ship declines sidecar injection in its POD TEMPLATE (a label, not an annotation)
+	@$(SCRIPTS)/check-pod-inject-label.sh
 
 .PHONY: check-toolchain-alignment
 check-toolchain-alignment: ## Fail if kubectl pinned in .mise.toml disagrees with .env.example KUBECTL_VERSION
@@ -860,7 +877,7 @@ docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets
 	@# having linted nothing. In CI it now DIES instead.
 
 .PHONY: static-check
-static-check: check-doc-target-coverage check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: check-namespace-labelled check-pod-inject-label check-doc-target-coverage check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)

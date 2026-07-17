@@ -1,8 +1,9 @@
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: ${GITEA_NAMESPACE}
+# NO `kind: Namespace` HERE, deliberately. A namespace declared alongside its own workloads is
+# created WITH them, so any label applied later lands after the pods it exists to protect —
+# admission webhooks fire on CREATE. 40-install-gitea.sh now creates it via ensure_namespace
+# (lib/psa.sh) BEFORE this manifest is applied, which is the only place a namespace we own gets its
+# PSA level and its istio-injection=disabled label. Every object below carries an explicit
+# `namespace: ${GITEA_NAMESPACE}`, so nothing here depends on the deleted document.
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

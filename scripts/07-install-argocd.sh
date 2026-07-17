@@ -60,9 +60,22 @@ wait_ready() {
   done
 }
 
-# 1. Namespace (idempotent).
+# 1. Namespace (idempotent), through the one chokepoint rather than a hand-rolled copy of its
+#    create line. This script is KinD-ONLY (Makefile: "Install ArgoCD into KinD"; it is not in
+#    install-all, and on a real lab ArgoCD is a Supervisor Service we discover, never install) — so
+#    routing it fixes no lab hazard and no claim is made that it does. It is here because a second
+#    copy of `kubectl create namespace | kubectl apply` is how the chokepoint erodes: the next person
+#    to need a namespace copies the nearest example, and the nearest example should be the right one.
+# shellcheck source=scripts/lib/psa.sh
+. "${SCRIPT_DIR}/lib/psa.sh"
+#    Deliberately NO PSA level. `PSA_LEVEL_ARGOCD` does not exist — inventing it here would have
+#    given it exactly one occurrence repo-wide (its own use site), always empty, silently meaning
+#    "no label" while LOOKING like a configured knob, and check-env-coverage would not have caught
+#    it (PSA_LEVEL_* is wildcard-exempt). Passing no level is the same behaviour, honestly.
+#    It is correct here for the reason above: KinD-only, and upstream's ArgoCD manifest is not ours
+#    to make restricted-clean. On a real lab ArgoCD is a Supervisor Service we never install.
 log_info "ensuring namespace ${ARGOCD_NAMESPACE}"
-run bash -c "kubectl create namespace \"$ARGOCD_NAMESPACE\" --dry-run=client -o yaml | kubectl apply -f -"
+ensure_namespace "$ARGOCD_NAMESPACE"
 
 # 2. Install ArgoCD from the pinned upstream manifest via server-side apply.
 #    Download to a per-version cache with retry/backoff first: raw.githubusercontent.com
