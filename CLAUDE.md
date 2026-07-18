@@ -517,7 +517,7 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog.
 History → git. Only "what is in flight and what to distrust" belongs here.
 
-**State: this repo `main` GREEN @ `#326`, tree clean. `claude-config` `main` GREEN (PRs #32–#43). `claude-config` `main` GREEN, 8 PRs merged
+**State: this repo `main` GREEN @ `#327`, tree clean. `claude-config` `main` GREEN (PRs #32–#43). `claude-config` `main` GREEN, 8 PRs merged
 (#32–#38). Nothing half-done; no cluster/containers/parked agents (verified BY ARTIFACT — 0 agent
 processes, 0 swarm servers, with a SELF-EXCLUDING pgrep, since the naive one matches itself).**
 
@@ -575,19 +575,27 @@ Shipped across #33/#36: **34/34 must-block and 14/14 must-allow** now correct on
   writes, 0/8 blocked — is the largest open control gap and needs its own idea-round: the honest
   options are a bounded redirection/in-place-writer model with a containment check, or accepting and
   DOCUMENTING the scope. An enumerated "which commands write" blocklist is refused in advance.
-- **B19 is a QUESTION FOR THE OWNER, not a judgement call.** It sits on the LAB-GATED leave-alone
-  list but needs **docker + KinD, not a VKS lab** — plausibly mislabeled. If genuinely open, closing
-  it is ONE command (`make e2e-sneakernet CONTAINER_ENGINE=docker`, ~40 min, destroys and recreates
-  the cluster per leg), not a driver.
+- **START HERE — B19 is APPROVED and scheduled for THIS session** (owner ruling 2026-07-18: not
+  lab-gated). Run `make e2e-sneakernet CONTAINER_ENGINE=docker`. **Confirm nothing needs the KinD
+  cluster first** — it runs `kind-down` per leg and in its exit trap, so it destroys the cluster and
+  the mirrored Harbor and leaves a bare box (~40 min). One invocation covers both remaining cells,
+  because `SNEAKERNET_OS` already defaults to both OSes and the engine delta lives only on the
+  host/internet box. Rebuild afterwards (`make kind-up install-harbor mirror`) and record the result
+  in the B19 row. Do NOT re-ask for permission.
 - **B43 is REFUTED as specified** and the row now records the measured topology (6 invocations / 8
   legs / 3 groups; the cube is a category error). What remains of it is optional convenience.
 - **B17 is CLOSED** — all nine descoped rows landed (#322, #323, #325).
 - **LAB-GATED — leave alone:** B2, B20, B24, B25, B27.
 - Needing their own idea-round: **B3** (and note B43 would double its cost), **B22**, **B26**, **B35**,
   **B38**, **B39**.
-- **OBSERVED, unexplained:** one `check-namespace-labelled` failure that did not reproduce on two
-  subsequent runs of the identical tree. Ruled out the diff and `test-namespace-gates` (it mutates a
-  `$TMP` copy). A worktree adversary was running at that moment; if it recurs, test that correlation.
+- **OBSERVED, STILL UNEXPLAINED** — one `check-namespace-labelled` failure that did not reproduce on
+  two subsequent runs of the identical tree, and passes on clean `main`. **Four hypotheses tested and
+  ALL REJECTED:** (1) my diff — it touched a one-word comment in a different file; (2)
+  `test-namespace-gates` mutating the tree — it mutates a `$TMP` copy and restores *from* the real
+  tree; (3) `make` parallelism — `MAKEFLAGS` is unset, prereqs run sequentially; (4) an adversary's
+  `.claude/worktrees/` copy being scanned — the gate greps `scripts/` scoped, not the whole tree, and
+  0 worktrees survive. No test writes the real tree. **If it recurs, capture the failing output and
+  `git stash list` IMMEDIATELY** — it was already gone by the time I looked.
 
 ### The one thing to carry forward
 
@@ -651,7 +659,7 @@ carrying a closed item forward is the class this file was pruned to end.
 | ID | Item |
 |----|------|
 | **B2** | **The Gateway-API CRD version, not its presence.** A VKS 9.1 guest ships the CRDs from the VKr (ON by default, opt-out label), while `istio_ensure_gwapi_crds` server-side-applies our pinned `GATEWAY_API_VERSION` — so we may be fighting the VKS add-on manager. Settle with the `bundle-version` jsonpath + the add-on label. Full grading: `docs/vks-services/istio.md` §4. |
-| **B19** | `make e2e-sneakernet CONTAINER_ENGINE=docker` has never been run (the leg is podman-only; the engine axis that matters is the internet box's `<engine> save → crane push`, guarded in miniature by `make test-builder-save-crane`). |
+| **B19** | 🟢 **OWNER-RULED 2026-07-18: NOT lab-gated, APPROVED TO RUN, deferred to the NEXT session.** Do not re-ask; just run it. `make e2e-sneakernet CONTAINER_ENGINE=docker` has never been run. It needs **docker + KinD on this box, not a VKS lab** — which is why it was mislabeled. **It is DESTRUCTIVE and takes ~40 min:** `e2e-sneakernet` runs `kind-down` at the start of each leg AND in its EXIT trap (on success too), so it destroys the KinD cluster and the mirrored Harbor and leaves a bare box. Confirm nothing else needs that cluster before starting. **What it actually covers** (B43's review measured this): the air-gap box is crane-only and engine-agnostic — `jumpbox-run.sh` hits `exit 0` at :152 before every `"$ENGINE"` call — so the ONLY real engine delta is the **internet/host box's** builder `<engine> build → <engine> save → crane push` (`14-builder-build.sh`). Since `SNEAKERNET_OS ?= photon ubuntu`, that ONE invocation covers both remaining cells. `make test-builder-save-crane` already guards the same round-trip in miniature. **Afterwards:** rebuild whatever you tore down (`make kind-up install-harbor mirror`) and record the result in this row. |
 | **B20** | Research whether `vcf context create` accepts a password via **stdin or an env var** (never argv), so the operator does not re-enter it at every `make vks-login` / `make fetch-argocd-kubeconfig`. If not, document `VKS_AUTH_METHOD=vsphere` as the sanctioned store-once path. TODO at `scripts/30-vks-login.sh:68`. |
 
 **The rest of the real-lab unknowns** — the Supervisor topology, the `vcf` auth flow, tenant RBAC into
