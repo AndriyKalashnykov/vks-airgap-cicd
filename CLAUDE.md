@@ -517,12 +517,21 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog.
 History → git. Only "what is in flight and what to distrust" belongs here.
 
-**State: this repo `main` GREEN @ `#328`, tree clean. `claude-config` `main` GREEN (PRs #32–#44). `claude-config` `main` GREEN, 8 PRs merged
-(#32–#38). Nothing half-done; no cluster/containers/parked agents (verified BY ARTIFACT — 0 agent
-processes, 0 swarm servers, with a SELF-EXCLUDING pgrep, since the naive one matches itself).**
+**State: both repos GREEN on `main`, trees clean, no branches but `main`, no parked agents.**
+Verified BY ARTIFACT, with a self-excluding `pgrep` (the naive one matches its own command line) and
+with **absolute paths** (`make -C`, `git -C`) — a `cd` from an earlier compound persists and will
+silently run the next `make`/`gh` against the other repo, which produced two false alarms today.
 
-**This session ran almost entirely in `claude-config`, on the `subagent-readonly` hook — the control
-RULE ZERO depends on.** In this repo only `CLAUDE.md` changed (#320, three rotted command-table rows).
+*(This line deliberately names NO PR number. It is written INSIDE a PR, so any number it names is
+stale the moment that PR merges — it was wrong twice for exactly that reason. Read the state from
+`git log`.)*
+
+**Most of this session ran in `claude-config`, on the `subagent-readonly` hook — the control RULE ZERO
+depends on** (13 PRs: CI, 34 closed bypasses, HOOK-004 containment, the installer fix, and the rules).
+In THIS repo: #320 (three rotted command-table rows), #322 (Photon's toybox `file` false-died
+`make bundle` on every carried binary), #323 (six doc-truth rows, two of which an adversary refuted
+before they shipped), #325 (a false rationale living inside a control's own header), #326
+(`jumpbox-matrix`'s verdict is now COMPUTED; B43's framing recorded as refuted), #327–#329 (handoff).
 
 ### What happened, and the part worth carrying
 
