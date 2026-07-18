@@ -24,6 +24,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 
 require_cmd curl
+# INGRESS_LB_IP is OUR OWN PUBLISHED STATE (each installer state_sets it: 45/46/47), read back here
+# via the .env.state overlay. Reading published state back as an input is the trap that bit
+# 47-attach-istio.sh (INGRESS_LB_IP_OVERRIDE exists there for exactly that) — but this script is a
+# PURE CONSUMER: it never state_sets INGRESS_LB_IP/INGRESS_CONTROLLER, so it cannot poison state, and
+# every caller (e2e-kind, verify-ingress-both, e2e-kind-istio-existing, the lab runbook) runs
+# `install-ingress` IMMEDIATELY before `verify-ingress`, freshly publishing the value for the current
+# mode. So the read is never stale in any orchestrated/documented path. A stale STANDALONE read is the
+# SAFE direction: a dead/reassigned IP yields a loud route FAIL below (a false-RED, self-diagnosed at
+# line ~112), never a false-green — a false-green would require the "stale" IP to actually route these
+# hosts to these backends serving the right body markers, i.e. it is not stale. The real-lab standalone
+# case is further guarded by state_check's cluster stamp (an explicit KUBECONFIG refuses a mismatched
+# overlay → INGRESS_LB_IP unset → the :? aborts loudly). So do NOT "fix" this into a re-resolve
+# dispatcher: it would duplicate installer logic and depend on INGRESS_CONTROLLER, which is published
+# state with the identical read-back class — no net gain. (Verification-disproved backlog item B15.)
 : "${INGRESS_LB_IP:?INGRESS_LB_IP not set — run 'make install-ingress' first (it writes the LB IP to .env.state)}"
 : "${GITEA_HOST:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
 # Every app's host comes from the registry — a hardcoded list would silently stop checking a new app.
@@ -108,7 +122,10 @@ fi
 
 if [ "$rc" -ne 0 ]; then
   log_error "ingress verification FAILED — diagnostics:"
-  log_error "  INGRESS_LB_IP=${INGRESS_LB_IP} (from .env.state); check the controller + its route objects:"
+  log_error "  INGRESS_LB_IP=${INGRESS_LB_IP} (PUBLISHED state from .env.state, not resolved live)."
+  log_error "  If you rebuilt the cluster (or switched controllers) without re-running install-ingress,"
+  log_error "  this IP is stale — re-run 'make install-ingress' to re-resolve + republish it. Otherwise,"
+  log_error "  check the controller + its route objects:"
   case "${INGRESS_CONTROLLER}" in
     istio|istio-existing)
       log_error "    kubectl get gateway,virtualservice -A          # our routes (VSes live in the BACKEND namespaces)"
