@@ -512,64 +512,37 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-07-18 — READ, THEN REPLACE (do not append)
+## ▶️ HANDOFF 2026-07-18 (session 2) — READ, THEN REPLACE (do not append)
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog.
 History → git. Only "what is in flight and what to distrust" belongs here.
 
-**State: `main` GREEN @ `9cc81a3`, tree clean, everything pushed. NOTHING is half-done. No cluster/containers/parked agents left (verified BY ARTIFACT — 0 kind clusters, 0 `kindccm-*`, 0 adversary agents/swarm).**
-**This session (2026-07-18):** SEVEN PRs merged (six backlog items + a loose-ends pass), each code change
-through the RULE ZERO adversary loop (idea-round before implementing; impl-round on the diff). **THREE of
-the six were backlog HYPOTHESES that verification DISPROVED** — shipped as documented negative results, not
-invented code. The IMPLEMENTATION round earned its keep TWICE, catching a real defect the idea-round
-approved (B13's env-validate regression; B45's vacuous derivation guard):
+**State: this repo `main` GREEN @ `#320`, tree clean. `claude-config` `main` GREEN, 8 PRs merged
+(#32–#38). Nothing half-done; no cluster/containers/parked agents (verified BY ARTIFACT — 0 agent
+processes, 0 swarm servers, with a SELF-EXCLUDING pgrep, since the naive one matches itself).**
 
-- **B15 → #312 (DISPROVED).** `98-verify-ingress` is a PURE CONSUMER of `INGRESS_LB_IP` (never `state_set`s
-  it, always runs after install) → no reachable false-green. Shipped an anti-"fix" comment + a
-  published-not-live diagnostic; do NOT back-port the 47-attach re-resolve.
-- **B32 gate → #313 (DISPROVED-as-gate).** The vacuous-`:?` gate would flag 41 DEFENSIVE guards; the one
-  real defect (KUBECONFIG C13) is LOW and already fronted by `env-check`'s `[ -f ]`. Shipped an `os.sh` NB
-  comment instead.
-- **B28 → #314 (SHIPPED).** New `check-doc-robot-quoting` gate — narrow `robot$` scope proven COMPLETE
-  (goharbor robot secrets carry no `$`); pure classifier `doc_robot_line_is_bad` in `lib/os.sh` with an
-  odd-single-quote-count SPAN test (not a prefix test); scans docs + `.env.example`; RED-proven; in `docs-lint`.
-- **B32 residual → #315 (SHIPPED).** `kubeconfig_ready` `[ -f ]` helper at the 6 producer-first consumers
-  (the 16-site sweep was REFUTED — would regress the read-only preflight accumulators 23/49) + fixed the
-  stale `.env.kind` hint at 6 more; impl-round caught a colon-merged-`KUBECONFIG` false-die edge (fixed).
-  RED-proven + a regression guard that 23/49/30/71/06 never call the helper.
-- **B13 → #317 (SHIPPED — with a caught regression).** Commented `HARBOR_URL` in `.env.example` (the B14
-  parallel) so its ~18 `:?` guards are non-vacuous; the "can't comment — no safe default" objection was the
-  REASON to comment. The idea-round dissolved the "blocked on a decision" framing (it conflated the vacuous
-  guards with the SEPARATE, pre-existing `harbor.vks.local`-sentinel false-block). The **impl-round caught a
-  real regression**: commenting made `env-validate` hard-error `HARBOR_URL is empty` on a partial `.env`
-  (dead code while the value shipped, activated by commenting) — fixed to a WARN-skip, RED-proven.
-- **Loose ends → #316 (docs).** Refreshed the stale HANDOFF; noted `jumpbox-matrix` needs a mirrored Harbor.
-- **B45 → #318 (SHIPPED — control change, both rounds).** The adversary-first gate's re-arm was scoped to
-  TIME, so a docs/handoff commit stranded a still-valid code review (hit twice this session). Now
-  `_last_nonexempt_commit_epoch()` — an EXEMPT-only commit no longer re-arms. Adversary-vetted that keying on
-  git's OWN file-list (unfalsifiable) does NOT re-enter the refuted prompt-scoped-receipt trap. Impl-round
-  caught a **vacuous** derivation guard (grepped the constant NAME, present in the docstring) — fixed to grep
-  the code form, RED-proven.
+**This session ran almost entirely in `claude-config`, on the `subagent-readonly` hook — the control
+RULE ZERO depends on.** In this repo only `CLAUDE.md` changed (#320, three rotted command-table rows).
 
-Each post-merge `main` CI run watched to green. **B15, B28, B32 (+ residual), B13, B45 are DONE**, plus the
-handoff/jumpbox loose ends. Session learnings captured in `claude-config` (`testing.md` grep-the-code-form,
-`configuration.md` commenting-activates-empty-branches, `hooks.md` re-arm-keys-on-git-file-list).
+### What happened, and the part worth carrying
 
-**Three Renovate PRs are deliberately OPEN**: **#298** (markdownlint-cli 0.49.1, CLEAN), **#303**
-(renovate v43.263.6, CLEAN) and **#300** (uv 0.11.29). Held by **`renovate/stability-days`**, the
-minimum-release-age gate. They are NOT broken and must NOT be force-merged: that gate quarantines a
-release until a compromised publish would have surfaced. They merge themselves when the cooldown
-elapses.
+I set out to implement `BACKLOG.md`'s HOOK-001/006/007 and found them **already fixed** — three rows
+said `proposed` over shipped work, a fourth said "designed, NOT implemented" over a shipped design.
+I verified 19 of 20 documented bypass forms now blocked and wrote **DONE**.
 
-### Prior session (s3, 2026-07-17) — shipped, verified on a real cluster (git; PRs #295–#310)
+**That was wrong, and an adversary refuted it.** I had measured *the enumeration*, not the class —
+the exact defect the row I was reading warns about (*"not 'the N forms block' — the enumerated list
+is the defect"*). It found **22 further bypasses in the same classes**, and I confirmed **22 of 22
+by execution**:
 
-| | |
+| class | examples |
 |---|---|
-| **B29/B30** | `make install-all` labelled **neither gitea nor tekton** — the label landed **never**, not late. On a VKS guest: every pod rejected. Their only `ensure_namespace` calls lived in `lib/istio.sh`, reachable only from `install-ingress`, which `install-all` does not run. |
-| **B36** | the carried-chart pin was **decorative** — helm IGNORES `--version` for a local `.tgz`; the tree was installing a **MIXED MESH**. |
-| **B44** | the attach e2e simulated a mesh that injects **NOTHING**. It now proves B26: `CONTROL ok — [p istio-init istio-proxy]`, then `[p ]` in a labelled ns. |
-| **B41** | `psa.sh`'s comment was wrong TWICE in opposite directions, and omitted the rule that IS the hazard. |
-| also | `tekton-pipelines-resolvers` (never labelled by anything), the SSA `enforce` takeover, traefik's missing controls, and an e2e `psa-check` that measured **0** and reported nothing. |
+| modifier FLAGS | `sudo -u root git push`, `time -p git push`, `nice -n 10 …` |
+| redirections | `>/dev/null git push`, `2>&1 git push` |
+| plumbing mutators | `git symbolic-ref HEAD refs/heads/x` (**switches the caller's branch**), `git read-tree -u --reset` |
+
+Shipped across #33/#36: **34/34 must-block and 14/14 must-allow** now correct on `main`, selftest
+**198 → 270**, each fix RED-proven *in isolation*, 0 false blocks on a 34-command realistic corpus.
 
 ### 🔴 Distrust these — measured, not reasoned
 
@@ -586,33 +559,44 @@ elapses.
 - Every VKS injector fact is **upstream-1.30.3-rendered**. `1.28.2+vmware.1-vks.1` is
   **UNVERIFIED-BY-US** — and the injector `policy` field is load-bearing too, so the lab visit needs
   BOTH commands, named in `psa.sh`'s grade block.
+- **NEW — a backlog row's STATUS is a claim.** It was wrong 4× in one file this session. Run the
+  thing the row describes against the live artifact before planning work on it. Applies to **this
+  file's backlog too** — B17 was re-scoped for exactly that reason (25 of 29 already fixed).
+- **NEW — `claude-config` has a 15-min auto-commit cron.** It caught a mid-edit rewrite of the
+  security hook and pushed it to `main` with **none** of its 39 proving cases, bypassing PR + CI +
+  adversary review. Its gate then read **198/198 — the same count as before the change**, so it was
+  blind to what it carried. Fixed two ways (#37 excludes control paths; and **branch BEFORE editing**
+  there). The generalisable tell is in `testing.md`: *a gate green at the same count as before your
+  change is blind to it.*
 
 ### Next
 
-- **B32 (gate + residual), B28, and B13 are DONE this session.** B13 commented HARBOR_URL in
-  `.env.example` (the B14 parallel; the "no safe default" objection was the REASON to comment). Its
-  impl-round caught + fixed a real `env-validate`-on-empty regression. **Residual (B13-B, separate, LOW):**
-  whether `harbor_url_is_placeholder` should reject `harbor.vks.local` — a genuine false-block for a
-  self-hosted Harbor literally named that; needs a `<SET-IN-.env>`-shaped sentinel or provenance-keying.
-  No clearly-unblocked code-now item remains; the rest need their own idea-round or a lab.
-- **Need their OWN idea-round — do NOT build naively:** **B22** (PSA single-source — DEFERRED, silent-
-  label-drop risk if a consumer doesn't source `psa.sh` first), **B37** (REFUTED — do NOT rebuild
-  `make red-prove`; flip-detection is blind to a coverage gap), **B39** (instrument-known-answer — may be
-  un-gateable), **B38/B40/B18** (deep-design), **B3** (sneakernet Step-4 harness — heavy: makes the sneakernet e2e a full
-  end-to-end), **B26-fix-3** (offline helm-template inject gate — may not be CI-doable, `bundle/charts`
-  gitignored).
-- **LAB-GATED — leave alone (owner instruction):** B2, B19, B20, B24, B25, B27 — need a real VKS lab.
+- **Nothing is in flight.** The `claude-config` HOOK backlog is now accurate: HOOK-001/002/003/005/
+  006/007/008/009/010 are DONE; **HOOK-004** (worktree exemption keys on the target path, = **B18**
+  here) is the only open one, and it still needs a live `getcwd()` probe from a real
+  `isolation:"worktree"` subagent before a cwd-anchored fix is safe.
+- **In this repo**, the ready work is the **nine doc-truth rows re-scoped out of B17** —
+  `docs/scenario-1.md:419` first (it asserts an air-gap limitation that no longer exists), then the
+  ungated `file(1)` dependency in `11-bundle.sh:149`.
+- **B43** (the 8-cell engine × OS × flow matrix) is mapped and ready, with two corrections to the row
+  itself: cells 7+8 collapse into **one** invocation (the engine axis lives on the host/internet box,
+  the same machine for both OS legs), and `jumpbox-matrix` ⟂ `e2e-sneakernet` have a **hard
+  prerequisite conflict** — the first needs a mirrored Harbor, the second destroys the cluster and
+  demands an empty one. They cannot share a cluster.
+- **LAB-GATED — leave alone:** B2, B19, B20, B24, B25, B27.
 
 ### The one thing to carry forward
 
-The two-round adversary loop paid off exactly as designed. The **idea-round cheaply DISPROVED two bad
-designs** (B15's re-resolve dispatcher, B32's vacuous gate — both would have been wasted code) and REFUTED
-a third's naive scope (B32's 16-site sweep would have regressed the read-only preflight accumulators). The
-**impl-round then caught a real edge the idea-round could not see** (a colon-merged `KUBECONFIG` false-dying
-on `[ -f ]`). Every load-bearing adversary claim was spot-checked by hand before acting — and when an
-adversary CONFIRMS you (B15), trust it LESS, not more; the greps take 30 seconds and cost nothing. **Two of
-three "items" ending as documented disproofs is not the loop underperforming — it is the loop doing its
-job, before the code was written instead of after.**
+**Both adversary rounds earned their keep, in opposite directions.** The idea round refuted my
+premise (*"these are DONE"*) and my design (a line-wide `-X GET` lookahead that would have been
+**fail-open**: `gh api …pulls -f title=x && gh api -X GET rate_limit` would have suppressed the block
+on the PR-creating command). The implementation round then **cleared** the code on real measurements
+— 0 new false blocks / 396, 0 fail-open regressions / 540 — and still found three real gaps,
+including one I had just introduced.
+
+And the counter-lesson, which is new: **an adversary's proposed FIX is a separate claim from the BUG
+it found.** Its `hash-object` patch still missed `-wt` — its own measured case. Verify the remedy,
+not just the finding.
 
 ## Backlog / resume state
 
@@ -629,7 +613,7 @@ carrying a closed item forward is the class this file was pruned to end.
 | **B3** | **The sneakernet runbook's Step 4 is executed by NOTHING.** `docs/sneakernet.md` names `platform` / `gitops` / `install-ingress` / `verify`; neither `scripts/e2e-sneakernet.sh` nor `scripts/jumpbox-run.sh` runs any of them — so the half an operator performs *after carrying 11 GB* has never run. This is the condition under which `install-ingress`'s doc row once lied for hours while every test stayed green. Close it by **extending the harness**. Do **not** build a doc-parser: that design was adversary-killed twice (it cannot see a prose claim about a MODE, and it goes green over the covered half — `rules/common/testing.md` §"BINDING DOCS TO CODE"). |
 | **B13** | ✅ **DONE (s cont.) — HARBOR_URL COMMENTED in `.env.example`** (the B14 parallel). The "can't comment it — no safe default" objection was REFUTED (adversary idea-round): the "no safe default" is the REASON to comment (an unset value SHOULD `:?`-error with guidance, not silently become a non-resolving placeholder). `06-install-harbor` only WRITES HARBOR_URL (`state_set` the LB IP before any consumer), `load_env` sets no code default, and `harbor.vks.local` is NEVER a working Harbor address (the FQDN-via-`/etc/hosts` variant was superseded — `kind-tls-fidelity.md`) — exactly the HARBOR_USERNAME shape, no helper needed. The ~18 `:?` guards are now non-vacuous; behaviorally inert for the e2e (effective value was always the `.env.state` LB IP). **Impl-round caught a REAL regression** — `env-validate` hard-errored on an empty HARBOR_URL (dead code while `.env.example` shipped the value; activated by commenting); fixed to WARN-skip like KUBECONFIG + the reachability block, `test-env-validate.sh` RED-proves it — plus stale-comment corrections + opportunistic `.env.kind`→`.env.state` in `02-env.sh` (a B32-hygiene miss). **Residual (B — separate, pre-existing, LOW):** whether `harbor_url_is_placeholder` should reject `harbor.vks.local` — a genuine false-block for a self-hosted Harbor literally named `harbor.vks.local`; needs a `<SET-IN-.env>`-shaped sentinel or provenance-keying, unaffected by this fix. |
 | **B15** | 🔴 **DISPROVED — do NOT back-port the 47-attach re-resolve into `98-verify-ingress.sh` (vks-adversary idea-round, 2026-07-17 s3; correction now lives in the code comment near `98-verify-ingress.sh:27`).** `98-verify` is a **PURE CONSUMER** of `INGRESS_LB_IP` — it never `state_set`s it (grep-confirmed), so it structurally cannot reproduce the 47 resolve-then-publish-stale false-green. Every caller (`Makefile:421` e2e-kind, `:493-494` verify-ingress-both, `:513/516` istio-existing, `docs/lab-validation-plan.md:561→565`) runs `install-ingress` immediately before `verify-ingress`, republishing the value for the current mode → never stale in any orchestrated/documented path. A stale STANDALONE read is the SAFE direction (a dead IP → loud route FAIL, self-diagnosed at `~98:112`; a false-green would need the "stale" IP to actually route the current hosts to the current backends serving the right markers, i.e. not stale), and the real-lab standalone case is further guarded by `state_check`'s cluster stamp. Back-porting the 47 pattern would DUPLICATE installer logic and depend on `INGRESS_CONTROLLER`, which has the identical read-back class — no net gain. Shipped: the anti-"fix" comment + a published-not-live hint in the failure diagnostic. |
-| **B17** | The doc-truth audit's HIGH/MEDIUM remainder — concentrated in `scenario-2.md`, `prerequisites-manual.md`, and CLAUDE.md gate-list drift. Status table: `docs/reviews/2026-07-14-doc-truth-audit.md` §"Remediation status". |
+| **B17** | 🔵 **RE-SCOPED 2026-07-18 — as written this row is STALE, and its own audit's "Still open" paragraph is a CLAIM that no longer holds.** Re-verified 39 of the audit's 68 findings against the current tree (all 29 in the named scope): **25 of 29 are FIXED**, 2 were moot. `prerequisites-manual.md` (6/6) and `scenario-2.md` (13/13) are **DONE**. The "CLAUDE.md gate-list drift" half is structurally dead for `static-check` (that row now points at the Makefile as authoritative) and the two rows that HAD rotted — `sec` omitting `check-secrets-untracked`, `mirror` omitting `mirror-verify` — landed in **#320**. **So the named scope is CLOSED.** What survives is a *different*, still-real set of **nine rows found OUTSIDE that scope**, listed in the audit; the highest-value is `docs/scenario-1.md:419` claiming the Istio helm chart still needs internet, which the carried-charts branch in `46-install-istio.sh` and `docs/sneakernet.md:115` both refute — it states a limitation that no longer exists, in the direction a reader will believe. Others: `file(1)` used by `11-bundle.sh:149` but neither installed by `00-install-prereqs.sh` nor gated by `03-check-tools.sh` (HIGH); the scenario-1 SAN `Expect:` line; "install-all starts with mirror" (it starts with `preflight`); the four-vs-three preconditions count; the sneakernet `make deps` rationale; a 12 GB/11 GB bundle-size drift; exFAT listed in both the cannot-use and use-this lists. **Re-file those nine as their own row before working them** — do not work this one as written. |
 | **B22** | **PSA defaults live in THREE places** and drift silently: `lib/psa.sh` (`:=` empty), the installers (`${PSA_LEVEL_X:-baseline}` / `:-restricted`), and `.env.example` (uncommented literals). Single-source them in `lib/psa.sh` (`: "${PSA_LEVEL_INGRESS:=baseline}"` …), let every consumer read `$PSA_LEVEL_X` bare, and comment the six `.env.example` lines as `# PSA_LEVEL_X=<default>`. **Do NOT just comment them** — `49-psa-check.sh` reads `${PSA_LEVEL_X:-}` with an **empty** default, so commenting alone silently kills its drift hint ("configured level is X but the namespace carries Y") while the gate stays green. Fixing the triplication is what makes both work. (`PSA_LEVEL_*` is in `check-env-coverage`'s INTERNAL exempt list, so commenting breaks no gate.) Side-effect: the per-run `make X PSA_LEVEL_Y=z` clobber goes away too — today only the **`.env`** path works, and that is the only path any doc prescribes, so this is hardening, **not** a live bug. **(Was B23, resolved 2026-07-16: NO gate change needed — `check-env-coverage.sh:80` matches `^#?[[:space:]]*${v}=`, i.e. it accepts a commented line, and the six PSA lines pass PASS 2 legitimately; the only coupling is the drift hint above.)** |
 | **B24** | **Enrich the Istio knowledge of `vks-adversary` and the skills** beyond what the two 2026 community walkthroughs gave us (folded in 2026-07-16: `docs/vks-services/istio.md` §"Field evidence"). Open gaps: **multi-primary multi-cluster has ZERO coverage** (no script, no e2e, no graded fact); the `-n istio-installed` vs `-n tkg-system` variant is unresolved; the gateway-ns PSA minimum is lab-only. The **manifests and the air-gap delta live in `~/projects/claude-config/reference/istio-on-vks.md`** (private — this repo is public, and unrun manifests do not belong in a provenance-graded record). Three things in it are flagged **UNVERIFIED-BY-US** and a lab settles each in one command: whether cert-manager's `cacerts` (`tls.crt`/`tls.key`/`ca.crt`) is even readable by istiod (upstream documents `ca-cert.pem`/`ca-key.pem`/`root-cert.pem`/`cert-chain.pem`); whether `clusterProfile` exists in the VKS package schema (`vcf package available get … --default-values-file-output` dumps it); and the gateway-ns PSA minimum (`make psa-check`). |
 | **B25** | **Validate Scenario 1's Istio material end-to-end with the enriched `vks-adversary` — and land it as EXECUTABLE AUTOMATION, not prose.** Every Istio claim in `scenario-1.md` + `istio.md` + the install/attach scripts gets re-judged against the enriched brief and `~/projects/claude-config/reference/istio-on-vks.md`. **The deliverable is code**: each verifiable claim becomes an assertion in `make istio-preflight` / `verify-ingress` / a new gate — not a paragraph. Concrete candidates already identified: assert `server: istio-envoy` on the response (the PATH, not just the body marker); assert the route **PROGRAMMED** into the proxy (`istioctl proxy-config routes …`), not merely `Accepted`; report mTLS mode from `istioctl x describe pod`; assert the mirrored-image alignment for any istioctl-rendered image. Anything that cannot become an assertion goes to `lab-validation-plan.md` as a numbered step with its command, its expected observable, and what to send back — never as a doc sentence. |
