@@ -37,7 +37,7 @@ if [ -z "${__REGISTRY_LOCK_HELD:-}" ]; then
   exit $?
 fi
 
-: "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"; : "${HARBOR_USERNAME:?}"
+: "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"; : "${HARBOR_USERNAME:?set HARBOR_USERNAME in .env (admin for scenario 1, your robot for scenario 2)}"
 : "${HARBOR_PASSWORD:?set HARBOR_PASSWORD in .env (never on argv)}"
 : "${BUNDLE_DIR:?}"
 require_cmd crane "it is carried in the bundle — run 'make bundle-load' first"

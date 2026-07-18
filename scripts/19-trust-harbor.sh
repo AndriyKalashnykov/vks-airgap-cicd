@@ -21,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 
 : "${HARBOR_URL:?HARBOR_URL is not set — run 'make install-harbor' (KinD) or set it in .env (real lab)}"
-: "${HARBOR_USERNAME:?}"
+: "${HARBOR_USERNAME:?set HARBOR_USERNAME in .env (admin for scenario 1, your robot for scenario 2)}"
 : "${HARBOR_PASSWORD:?set HARBOR_PASSWORD in .env (never on argv)}"
 
 ENGINE="$(container_engine)"

@@ -23,7 +23,7 @@ require_cmd curl
 require_cmd jq
 
 : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"; : "${HARBOR_APP_PROJECT:?}"
-: "${HARBOR_USERNAME:?}"
+: "${HARBOR_USERNAME:?set HARBOR_USERNAME in .env to the Harbor ADMIN (or project-admin) that will MINT the robot — 'admin' for scenario 1}"
 : "${HARBOR_PASSWORD:?set HARBOR_PASSWORD in .env (never passed on argv)}"
 
 ROBOT_NAME="${HARBOR_ROBOT_NAME:-vks-cicd}"

@@ -39,7 +39,7 @@ docker network inspect kind >/dev/null 2>&1 \
   || die "the kind Docker network does not exist — bring the cluster up first (make kind-up)"   # docker-ok: same — KinD-only harness.
 
 : "${HARBOR_URL:?HARBOR_URL is not set — run 'make install-harbor' first}"
-: "${HARBOR_USERNAME:?}"
+: "${HARBOR_USERNAME:?set HARBOR_USERNAME in .env (admin for scenario 1, your robot for scenario 2)}"
 : "${HARBOR_PASSWORD:?HARBOR_PASSWORD is not set (state overlay or .env) — the engine cannot push to Harbor}"
 HARBOR_INSECURE="${HARBOR_INSECURE:-0}"
 

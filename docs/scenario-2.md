@@ -280,7 +280,7 @@ different namespaces. You supply the robot you were granted; the wiring is autom
 
 ```bash
 make harbor-robot                                  # → secrets/harbor-robot.env (if you hold project-admin)
-# then copy its two lines (HARBOR_USERNAME='robot$<name>' / HARBOR_PASSWORD=…) into .env
+# then copy its two lines (the HARBOR_USERNAME + HARBOR_PASSWORD it wrote) into .env
 ```
 
 `make harbor-robot` authenticates with the **current** `HARBOR_USERNAME`/`HARBOR_PASSWORD` and asks Harbor
