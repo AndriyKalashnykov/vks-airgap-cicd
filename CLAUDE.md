@@ -517,11 +517,12 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog.
 History → git. Only "what is in flight and what to distrust" belongs here.
 
-**State: `main` GREEN @ `0d2c3c4`+, tree clean, everything pushed. NOTHING is half-done. No cluster/containers/parked agents left (verified BY ARTIFACT — 0 kind clusters, 0 `kindccm-*`, 0 adversary agents/swarm).**
-**This session (2026-07-18):** four backlog items, each through the RULE ZERO adversary loop (idea-round
-before implementing; impl-round on the diff). **Two of the three were backlog HYPOTHESES that verification
-DISPROVED** — shipped as documented negative results, not invented code (the loop doing its job *before* the
-code was written):
+**State: `main` GREEN @ `9cc81a3`, tree clean, everything pushed. NOTHING is half-done. No cluster/containers/parked agents left (verified BY ARTIFACT — 0 kind clusters, 0 `kindccm-*`, 0 adversary agents/swarm).**
+**This session (2026-07-18):** SEVEN PRs merged (six backlog items + a loose-ends pass), each code change
+through the RULE ZERO adversary loop (idea-round before implementing; impl-round on the diff). **THREE of
+the six were backlog HYPOTHESES that verification DISPROVED** — shipped as documented negative results, not
+invented code. The IMPLEMENTATION round earned its keep TWICE, catching a real defect the idea-round
+approved (B13's env-validate regression; B45's vacuous derivation guard):
 
 - **B15 → #312 (DISPROVED).** `98-verify-ingress` is a PURE CONSUMER of `INGRESS_LB_IP` (never `state_set`s
   it, always runs after install) → no reachable false-green. Shipped an anti-"fix" comment + a
@@ -536,8 +537,23 @@ code was written):
   (the 16-site sweep was REFUTED — would regress the read-only preflight accumulators 23/49) + fixed the
   stale `.env.kind` hint at 6 more; impl-round caught a colon-merged-`KUBECONFIG` false-die edge (fixed).
   RED-proven + a regression guard that 23/49/30/71/06 never call the helper.
+- **B13 → #317 (SHIPPED — with a caught regression).** Commented `HARBOR_URL` in `.env.example` (the B14
+  parallel) so its ~18 `:?` guards are non-vacuous; the "can't comment — no safe default" objection was the
+  REASON to comment. The idea-round dissolved the "blocked on a decision" framing (it conflated the vacuous
+  guards with the SEPARATE, pre-existing `harbor.vks.local`-sentinel false-block). The **impl-round caught a
+  real regression**: commenting made `env-validate` hard-error `HARBOR_URL is empty` on a partial `.env`
+  (dead code while the value shipped, activated by commenting) — fixed to a WARN-skip, RED-proven.
+- **Loose ends → #316 (docs).** Refreshed the stale HANDOFF; noted `jumpbox-matrix` needs a mirrored Harbor.
+- **B45 → #318 (SHIPPED — control change, both rounds).** The adversary-first gate's re-arm was scoped to
+  TIME, so a docs/handoff commit stranded a still-valid code review (hit twice this session). Now
+  `_last_nonexempt_commit_epoch()` — an EXEMPT-only commit no longer re-arms. Adversary-vetted that keying on
+  git's OWN file-list (unfalsifiable) does NOT re-enter the refuted prompt-scoped-receipt trap. Impl-round
+  caught a **vacuous** derivation guard (grepped the constant NAME, present in the docstring) — fixed to grep
+  the code form, RED-proven.
 
-Each post-merge `main` CI run watched to green. **B15, B28, B32 (+ residual) are DONE.**
+Each post-merge `main` CI run watched to green. **B15, B28, B32 (+ residual), B13, B45 are DONE**, plus the
+handoff/jumpbox loose ends. Session learnings captured in `claude-config` (`testing.md` grep-the-code-form,
+`configuration.md` commenting-activates-empty-branches, `hooks.md` re-arm-keys-on-git-file-list).
 
 **Three Renovate PRs are deliberately OPEN**: **#298** (markdownlint-cli 0.49.1, CLEAN), **#303**
 (renovate v43.263.6, CLEAN) and **#300** (uv 0.11.29). Held by **`renovate/stability-days`**, the
