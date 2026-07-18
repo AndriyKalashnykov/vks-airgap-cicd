@@ -30,12 +30,23 @@ __VKS_PSA_SH_LOADED=1
 #   restricted  — the k8s default on VKS; non-root, no caps, seccomp RuntimeDefault
 #   baseline    — permits running as root and common non-hostile settings
 #   privileged  — unrestricted
-: "${PSA_LEVEL_GITEA:=}"
-: "${PSA_LEVEL_TEKTON:=}"
-: "${PSA_LEVEL_CI:=}"
-: "${PSA_LEVEL_APP:=}"
-: "${PSA_LEVEL_INGRESS:=}"
-: "${PSA_LEVEL_ISTIO_SYSTEM:=}"
+#
+# B22 — THERE ARE DELIBERATELY NO DEFAULTS HERE, and re-adding them is a REGRESSION.
+# This block used to assign-if-unset for six of the keys (it never covered the seventh, TRAEFIK —
+# an enumerated list that had already rotted). Three things were measured before deleting it:
+#   1. It was BEHAVIOURALLY INERT. The assignments were empty, and every one of the 27 references in
+#      the tree uses a `:-` form, which substitutes on set-but-EMPTY exactly as it does on unset. So
+#      no consumer's result ever differed.
+#   2. Re-adding a NON-empty default here would be actively dangerous, because it moves evaluation
+#      from the use site to SOURCE time — and the sourcing order is split across the tree
+#      (this file first in 46/47/49/60; load_env first in 07/40/41/45/70). With this file first and
+#      an empty value in .env, psa_label_namespace's "empty is a no-op" path below applies NO LABEL
+#      and returns 0, silently. On a VKS guest the ci namespace then falls back to the cluster
+#      default `restricted` and Kaniko (runAsUser=0) is REJECTED. Same .env, opposite behaviour
+#      depending on which file was sourced first.
+#   3. The defaults that DO run live at the use sites, and `make check-psa-defaults` gates that they
+#      agree with .env.example — including that no reference hides from it in a form it cannot parse.
+# So: the default belongs at the use site, and the agreement belongs in the gate.
 
 # psa_label_namespace <ns> <level>
 # Sets enforce + audit + warn to the same level. A missing/empty level is a no-op (so an
