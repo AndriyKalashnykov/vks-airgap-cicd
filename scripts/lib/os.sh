@@ -314,8 +314,9 @@ load_env() {
   # HARBOR_URL IS THE REGISTRY SELECTOR — it decides WHICH REGISTRY every image is pushed to and pulled
   # from, which makes it the most consequential selector in the repo. It was NOT protected, so
   # `make mirror HARBOR_URL=<other>` was a SILENT NO-OP: .env.example's `HARBOR_URL=harbor.vks.local`
-  # (uncommented, line 73) was sourced back over it and you mirrored to the default while believing you
-  # had switched — the same shape as the KUBECONFIG bug that let a command run against the wrong cluster.
+  # (then shipped UNCOMMENTED — now COMMENTED per B13, but this snapshot-protection still guards a
+  # per-run / `.env` / `-e` override) was sourced back over it and you mirrored to the default while
+  # believing you had switched — the same shape as the KUBECONFIG bug against the wrong cluster.
   # It surfaced in the jump-box matrix: the container is handed `-e HARBOR_URL=<the LB IP>`, load_env
   # replaced it with `harbor.vks.local`, and all four legs died resolving a hostname that exists nowhere.
   for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT HARBOR_CA_FILE HARBOR_URL; do

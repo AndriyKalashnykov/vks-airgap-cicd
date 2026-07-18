@@ -52,8 +52,9 @@ EXEMPT='APP_DEV_PORT|INGRESS_CONTROLLER'
 #   1. COMMENT it here (the default is applied in code), OR
 #   2. be SNAPSHOT-PROTECTED: load_env captures the caller's explicit value BEFORE sourcing and
 #      RESTORES it after, so the override wins even though this file carries a default. That is what
-#      makes `HARBOR_URL=<other> make mirror` work while .env.example still documents a sensible
-#      default (many scripts read HARBOR_URL with `:?`, so it cannot simply be left unset).
+#      makes `HARBOR_URL=<other> make mirror` work. (Since B13 HARBOR_URL is COMMENTED in .env.example —
+#      provided by discovery/.env.state (KinD) or the operator's .env (lab); unset -> a `:?` guard fires
+#      with guidance. The snapshot-protection still guards an explicit override.)
 #
 # So the invariant is: EVERY selector is commented OR in load_env's snapshot list. Nothing else passes.
 #
