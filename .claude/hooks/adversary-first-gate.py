@@ -13,7 +13,7 @@ adversary" by hand. The adversaries then immediately found real, shipped-in defe
 
 WHAT IT DOES. Writing to the operator-facing product — the code (scripts/, Makefile, jumpbox/, k8s/,
 tekton/, apps/) AND the operator docs (docs/, README.md) — is BLOCKED unless an adversary has been
-engaged SINCE THE LAST COMMIT.
+engaged SINCE THE LAST NON-EXEMPT COMMIT (B45 — an exempt-only docs/handoff/CI/plan commit does not re-arm).
 
 RE-ARM ON COMMIT (2026-07-14, second correction). The first version cleared the gate for the WHOLE
 SESSION the instant any adversary ran once — so a design review of task A authorized the unrelated
@@ -23,14 +23,20 @@ had written a session-lifetime receipt, and every write after that sailed throug
 mechanically satisfied and substantively blind.
 
 The fix: the receipt records the WALL-CLOCK TIME of the adversary engagement, and a guarded write is
-allowed only when that time is NEWER than the repo's HEAD commit. Committing therefore invalidates
-the receipt — the next unit of work needs its own adversary pass. "Reviewed the design three commits
-ago" no longer authorizes "the code I am typing now".
+allowed only when that time is NEWER than the repo's most recent NON-EXEMPT commit (B45). Committing
+GUARDED (or neither) work therefore invalidates the receipt — the next unit needs its own adversary
+pass — while an EXEMPT-only commit (.claude/, .github/, CLAUDE.md — the ritual "refresh the HANDOFF,
+commit, continue") does NOT re-arm, so it no longer strands a still-valid code review. "Reviewed the
+design three commits ago" no longer authorizes "the code I am typing now".
 
-Residual this deliberately does NOT close (named, not hidden): within a single commit's worth of work
-one review authorizes every edit, including unrelated ones (scoping the receipt to the reviewed files
-would close it — not built yet); CLAUDE.md is exempt (you must be able to write the plan first); and
-no gate can verify the review was actually INTEGRATED, only that it happened.
+Residual this deliberately does NOT close (named, not hidden): within a unit of work — now spanning any
+intervening EXEMPT-only commits (B45) — one review authorizes every guarded edit, including unrelated
+ones. Guarded code still enters HISTORY only via a non-exempt commit (the re-arm event), so no
+unreviewed guarded code SHIPS on a stale receipt; the window is only wider in TIME, not in kind.
+Scoping the receipt to the reviewed FILES would close it, but a prompt-file-scoped receipt was REFUTED
+2026-07-16 (the prompt that names a file authorises it) — do not attempt it. CLAUDE.md is exempt (you
+must be able to write the plan first); and no gate can verify the review was INTEGRATED, only that it
+happened.
 
 WHAT IT DELIBERATELY DOES NOT GATE:
   - CLAUDE.md — it IS the plan/backlog.
@@ -101,6 +107,32 @@ def _head_commit_epoch() -> int:
         return 0
 
 
+def _last_nonexempt_commit_epoch() -> int:
+    """The committer time of the most recent commit that touched a NON-EXEMPT path — the boundary a
+    guarded-write receipt is checked against (B45). A commit whose diff is ENTIRELY exempt (.claude/,
+    .github/, CLAUDE.md — a handoff / CI / plan commit) does NOT re-arm the gate: it is not new guarded
+    design, so it must not strand a code review from before it. The re-arm still fires for any commit
+    touching a guarded OR neither path, and guarded code enters history ONLY via such a commit — so no
+    unreviewed guarded code can SHIP on a stale receipt (the residual is a wider WRITE window within a
+    unit of work, unchanged in KIND from the note above; the file-scoped receipt that would close it was
+    REFUTED 2026-07-16, so do not attempt it). This keys on git's OWN recorded file-list, NOT any prompt
+    — an agent can choose what to commit but cannot make git record `scripts/x.sh` as an exempt path, so
+    it does not re-enter the refuted prompt-authorises-the-file trap. The exclude pathspec is DERIVED
+    from EXEMPT_PREFIXES/EXEMPT_FILES, never hand-typed. Falls back to _head_commit_epoch() (conservative
+    — identical to pre-B45) on an empty result or git failure."""
+    excludes = [f":(exclude){p.rstrip('/')}" for p in EXEMPT_PREFIXES] + [f":(exclude){f}" for f in EXEMPT_FILES]
+    try:
+        out = subprocess.run(
+            ["git", "-C", _project_root(), "log", "-1", "--format=%ct", "--", ".", *excludes],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return int(out.stdout.strip())
+    except Exception:
+        pass
+    return _head_commit_epoch()
+
+
 def _is_adversary_spawn(data: dict) -> bool:
     ti = data.get("tool_input") or {}
     tool = data.get("tool_name")
@@ -128,7 +160,7 @@ def main() -> int:
     session = str(data.get("session_id") or "")
 
     # Engaging an adversary STAMPS the receipt with the current time. This is what a later guarded
-    # write is checked against: valid only until the next commit moves HEAD past it.
+    # write is checked against: valid only until the next NON-EXEMPT commit moves the boundary past it (B45).
     if _is_adversary_spawn(data):
         try:
             open(_receipt_path(session), "w").write(f"{time.time()}\n")
@@ -154,9 +186,10 @@ def main() -> int:
     if not (rel.startswith(GUARDED_PREFIXES) or rel in GUARDED_FILES):
         return 0
 
-    # The gate: a guarded write needs an adversary engaged SINCE the HEAD commit.
+    # The gate: a guarded write needs an adversary engaged SINCE the last NON-EXEMPT commit (B45 — an
+    # exempt-only docs/handoff/CI/plan commit does not re-arm).
     rc_epoch = _receipt_epoch(session)
-    if rc_epoch is not None and rc_epoch > _head_commit_epoch():
+    if rc_epoch is not None and rc_epoch > _last_nonexempt_commit_epoch():
         return 0
 
     committed_since = rc_epoch is not None  # a receipt exists but a commit moved past it
@@ -164,11 +197,12 @@ def main() -> int:
         "BLOCKED by adversary-first-gate: "
         + ("you have COMMITTED since the last adversary review.\n"
            if committed_since else
-           "no adversary has been engaged since the last commit.\n")
+           "no adversary has been engaged since the last non-exempt commit.\n")
         + f"  refused: write to {rel}\n"
         "\n"
-        "This is CLAUDE.md RULE ZERO, trigger 2, made mechanical AND re-armed per commit: a review\n"
-        "authorizes writes only until the next commit. 'Reviewed the design three commits ago' does\n"
+        "This is CLAUDE.md RULE ZERO, trigger 2, made mechanical AND re-armed per NON-EXEMPT commit: a\n"
+        "review authorizes writes only until the next non-exempt commit (an exempt-only docs/CI/plan\n"
+        "commit does not re-arm). 'Reviewed the design three commits ago' does\n"
         "NOT authorize the code you are typing now — that is the exact hole that let a batch of\n"
         "provenance facts get rewritten unreviewed on the back of a design review from three tasks\n"
         "earlier.\n"
