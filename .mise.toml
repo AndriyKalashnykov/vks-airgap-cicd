@@ -67,7 +67,7 @@ yamllint    = "1.38.0"
 # to install yamllint. Without it on PATH mise errors `pipx may be required but was
 # not found` (verified). Pinning it here means the yamllint install does not depend
 # on whatever pipx/python the runner (or the operator's box) happens to ship.
-uv       = "0.11.28"
+uv       = "0.11.29"
 
 [settings]
 # Reproducible: never auto-bump; pin via this file + Renovate.
