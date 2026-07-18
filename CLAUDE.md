@@ -512,123 +512,101 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-07-18 (session 2) — READ, THEN REPLACE (do not append)
+## ▶️ HANDOFF 2026-07-18 (session 3) — READ, THEN REPLACE (do not append)
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog.
 History → git. Only "what is in flight and what to distrust" belongs here.
 
-**State: both repos GREEN on `main`, trees clean, no branches but `main`, no parked agents.**
-Verified BY ARTIFACT, with a self-excluding `pgrep` (the naive one matches its own command line) and
-with **absolute paths** (`make -C`, `git -C`) — a `cd` from an earlier compound persists and will
-silently run the next `make`/`gh` against the other repo, which produced two false alarms today.
+**State: both repos GREEN on `main`, trees clean, no branches but `main`, no cluster, no parked
+agents.** Verified by artifact with absolute paths (`make -C`, `git -C`) — a persisted `cd` produced
+two false alarms in the previous session.
 
-*(This line deliberately names NO PR number. It is written INSIDE a PR, so any number it names is
-stale the moment that PR merges — it was wrong twice for exactly that reason. Read the state from
-`git log`.)*
+*(No PR number is named here. This line lives inside a PR, so any number it names is stale the moment
+that PR merges — read the state from `git log`.)*
 
-**Most of this session ran in `claude-config`, on the `subagent-readonly` hook — the control RULE ZERO
-depends on** (13 PRs: CI, 34 closed bypasses, HOOK-004 containment, the installer fix, and the rules).
-In THIS repo: #320 (three rotted command-table rows), #322 (Photon's toybox `file` false-died
-`make bundle` on every carried binary), #323 (six doc-truth rows, two of which an adversary refuted
-before they shipped), #325 (a false rationale living inside a control's own header), #326
-(`jumpbox-matrix`'s verdict is now COMPUTED; B43's framing recorded as refuted), #327–#329 (handoff).
+### What shipped
 
-### What happened, and the part worth carrying
+**B19 is DONE and it paid for itself twice.** `make e2e-sneakernet CONTAINER_ENGINE=docker
+SNEAKERNET_OS=photon` ran green: a builder produced by `docker build` + `docker save` travelled
+inside the 12 G bundle tar and was pushed into a fresh TLS Harbor by the **carried crane** on a
+photon air-gap box with **no container engine**, then validated intact; `mirror-verify` 36/36. Then
+it **refuted a claim inside `test-builder-save-crane.sh`** — its honesty block said both engines
+default to the SAME archive format, and they do not: `docker save` 29.6.2 emits **oci-layout +
+gzip** at 287 MB, `podman save` 4.9.3 emits **docker-archive v1 + plain tar** at 623 MB, **2.17×**
+for identical content. That became **B46**, an owner decision (this repo defaults to podman, so it
+carries ~336 MB more per builder than it needs to). **B47/B48** were filed from the same run; B48 is
+closed.
 
-I set out to implement `BACKLOG.md`'s HOOK-001/006/007 and found them **already fixed** — three rows
-said `proposed` over shipped work, a fourth said "designed, NOT implemented" over a shipped design.
-I verified 19 of 20 documented bypass forms now blocked and wrote **DONE**.
+**B22 is DONE, as the third design.** The row's own prescription was refuted twice — both variants
+would have caused a **silent no-label** on the Kaniko namespace, which a VKS guest rejects. What
+shipped instead: literals stay at the use sites, `lib/psa.sh`'s six assign-if-unset lines are gone
+(measured inert), `49-psa-check.sh` stops enumerating six key names (that list had already rotted —
+`_TRAEFIK` was missing), and **`make check-psa-defaults`** now gates that every fallback agrees with
+`.env.example`, names a real level, and that **no reference hides from it**. `make test-psa-defaults`
+pins 12 RED-proofs.
 
-**That was wrong, and an adversary refuted it.** I had measured *the enumeration*, not the class —
-the exact defect the row I was reading warns about (*"not 'the N forms block' — the enumerated list
-is the defect"*). It found **22 further bypasses in the same classes**, and I confirmed **22 of 22
-by execution**:
-
-| class | examples |
-|---|---|
-| modifier FLAGS | `sudo -u root git push`, `time -p git push`, `nice -n 10 …` |
-| redirections | `>/dev/null git push`, `2>&1 git push` |
-| plumbing mutators | `git symbolic-ref HEAD refs/heads/x` (**switches the caller's branch**), `git read-tree -u --reset` |
-
-Shipped across #33/#36: **34/34 must-block and 14/14 must-allow** now correct on `main`, selftest
-**198 → 270**, each fix RED-proven *in isolation*, 0 false blocks on a 34-command realistic corpus.
+**B26, B35 and B38 are resolved as REFUTATIONS**, each recorded in its row with the measurement. No
+gate was built for any of them, and that is the right outcome — see below.
 
 ### 🔴 Distrust these — measured, not reasoned
 
-- **F1 IS DEAD. Raised twice, refuted twice, ~750k tokens a round.** Recorded in **B38**: our path is
-  istiod's auto-provisioned template (`istiod/files/kube-gateway.yaml`, `image: auto` → 0 hits, sets
-  `sidecar.istio.io/inject:"false"` on the pod), NOT the `istio/gateway` HELM CHART the claim quoted.
-  **Both raisings were the same error — grepping the WRONG ARTIFACT** (a doc about a different chart;
-  then our manifests for an istiod chart file). Do not re-raise.
-- **`make e2e-kind` reuses a warm cluster by default** (fast) — this is now LOUD (a final stdout
-  verdict says "create-ordering NOT proven"; B42 FIXED s3), and `E2E_FRESH=1` forces a cold run. A
-  reused run still exits 0, so for guaranteed create-ordering evidence use `E2E_FRESH=1`.
-- **`--watch` HANGS on a code-only PR** — `docs-lint`/`diagrams-check` register as `skipping`, which
-  `--watch` never treats as terminal, while the PR is already `CLEAN`. Gate on `mergeStateStatus`.
-- Every VKS injector fact is **upstream-1.30.3-rendered**. `1.28.2+vmware.1-vks.1` is
-  **UNVERIFIED-BY-US** — and the injector `policy` field is load-bearing too, so the lab visit needs
-  BOTH commands, named in `psa.sh`'s grade block.
-- **NEW — a backlog row's STATUS is a claim.** It was wrong 4× in one file this session. Run the
-  thing the row describes against the live artifact before planning work on it. Applies to **this
-  file's backlog too** — B17 was re-scoped for exactly that reason (25 of 29 already fixed).
-- **NEW — `claude-config` has a 15-min auto-commit cron.** It caught a mid-edit rewrite of the
-  security hook and pushed it to `main` with **none** of its 39 proving cases, bypassing PR + CI +
-  adversary review. Its gate then read **198/198 — the same count as before the change**, so it was
-  blind to what it carried. Fixed two ways (#37 excludes control paths; and **branch BEFORE editing**
-  there). The generalisable tell is in `testing.md`: *a gate green at the same count as before your
-  change is blind to it.*
+- **F1 IS DEAD** (B38). Raised twice, refuted twice. Independently re-confirmed this session from the
+  carried chart: `istiod/files/kube-gateway.yaml:62` sets `inject "false"` and uses `.ProxyImage` —
+  **zero** `image: auto`. Do not re-raise.
+- **`bundle/` IS GITIGNORED** (`git ls-files bundle/` → 0). Any gate you design that renders the
+  carried charts **cannot run in CI**. This killed one design already; check it before designing the
+  next.
+- **A safe DEFAULT is not coverage.** The B26 gate would have been green with **both** defences
+  deleted, in 6 of 7 configs — one non-zero cell in twenty-eight. Assert **discrimination**, never
+  "the bad thing is blocked".
+- **A gate is part of its own input.** Twice this session a checker matched its own prose — once in
+  the gate, once in its test. Compose the token; never exclude the file by name.
+- **`make e2e-kind` reuses a warm cluster** by default (loud now); `E2E_FRESH=1` forces cold.
+- **`--watch` HANGS on a code-only PR** — gate on `mergeStateStatus`.
+- Every VKS injector fact remains **upstream-1.30.3-rendered**; `1.28.2+vmware.1-vks.1` is
+  UNVERIFIED-BY-US, one lab command (recorded at `psa.sh`).
+
+**Carried forward from session 2 — still true, deliberately not pruned** (a cut that keeps a claim
+and drops its correction is how this file rots):
+
+- **A backlog row's STATUS is a claim.** It was wrong 4× in one file last session (rows saying
+  `proposed` over shipped work). Run the thing the row describes against the live artifact before
+  planning off it. This session closed several rows; treat those as claims too.
+- **`claude-config` has a 15-minute auto-commit cron.** `git switch -c` is the FIRST keystroke of any
+  edit there — not the last before a commit. It caught the previous session three times, twice after
+  the rule was written down.
+- **OBSERVED, STILL UNEXPLAINED:** one `check-namespace-labelled` failure that did not reproduce on
+  two later runs of the identical tree and passes on clean `main`. **Four hypotheses tested and all
+  REJECTED:** the diff (touched a one-word comment elsewhere), `test-namespace-gates` mutating the
+  tree (it mutates a `$TMP` copy), `make` parallelism (`MAKEFLAGS` unset), and an adversary worktree
+  being scanned (the gate greps `scripts/` scoped; 0 worktrees survive). **If it recurs, capture the
+  failing output and `git stash list` IMMEDIATELY** — it was gone by the time it was looked at. Do
+  not re-derive the four rejected hypotheses.
 
 ### Next
 
-- ✅ **B19 is DONE (2026-07-18) — ran green, see its row.** It also produced **B46**, a new
-  owner-decision row: `podman save` emits a **2.17× larger** archive than `docker save` for identical
-  content, and this repo defaults to podman. Two of its incidental findings are filed as **B47/B48**.
-  The old text here claimed "one invocation covers both remaining cells" — **that was wrong** and the
-  correction is now a portfolio rule; `make builder-build` runs *before* the OS loop, so both legs
-  share one tarball.
-- **B18/HOOK-004 is done for the file tools** (above). Its successor **HOOK-011** — subagent Bash
-  writes, 0/8 blocked — is the largest open control gap and needs its own idea-round: the honest
-  options are a bounded redirection/in-place-writer model with a containment check, or accepting and
-  DOCUMENTING the scope. An enumerated "which commands write" blocklist is refused in advance.
-- **B43 is REFUTED as specified** and the row now records the measured topology (6 invocations / 8
-  legs / 3 groups; the cube is a category error). What remains of it is optional convenience.
-- **B17 is CLOSED** — all nine descoped rows landed (#322, #323, #325).
-- **LAB-GATED — leave alone:** B2, B20, B24, B25, B27.
-- Needing their own idea-round: **B3** (and note B43 would double its cost), **B22**, **B26**, **B35**,
-  **B38**, **B39**.
-- **OBSERVED, STILL UNEXPLAINED** — one `check-namespace-labelled` failure that did not reproduce on
-  two subsequent runs of the identical tree, and passes on clean `main`. **Four hypotheses tested and
-  ALL REJECTED:** (1) my diff — it touched a one-word comment in a different file; (2)
-  `test-namespace-gates` mutating the tree — it mutates a `$TMP` copy and restores *from* the real
-  tree; (3) `make` parallelism — `MAKEFLAGS` is unset, prereqs run sequentially; (4) an adversary's
-  `.claude/worktrees/` copy being scanned — the gate greps `scripts/` scoped, not the whole tree, and
-  0 worktrees survive. No test writes the real tree. **If it recurs, capture the failing output and
-  `git stash list` IMMEDIATELY** — it was already gone by the time I looked.
+- **B39** has a measured target now: of 20 `check-*.sh`, **10 print a denominator, 5 die on zero, 5
+  do both** — so 5 print a number that gates nothing and 10 print none. A meta-gate over the gates is
+  buildable and narrow. (The numbers are heuristic; re-verify per script.) Needs an idea-round.
+- **B40** (namespace chokepoint) and **B3** (the sneakernet runbook's Step 4 is executed by nothing)
+  are the other open code items. B3 is heavy and should be landed before any matrix work.
+- **B46** is an owner decision, not an agent one: switching the builder engine trades the sudo-free
+  podman default against ~336 MB of bundle weight, and interacts with the "docker is opt-in, never
+  required" invariant.
+- **LAB-GATED, leave alone:** B2, B20, B24, B25, B27.
 
 ### The one thing to carry forward
 
-**Two rules in this corpus were WRONG about how to instrument a control, and fixing that is what
-unblocked a row that had been stuck for two days.** `hooks.md` says — repeatedly and correctly — that
-assumptions about the harness are unreliable and only an instrumented end-to-end test settles them.
-It then tells you to add a trace line *inside the hook*. A safety classifier refuses that on a
-security control, and it is right to: an agent editing the security hook is indistinguishable from
-tampering.
+**Three of four proposed gates were refuted, and the refutations were worth more than the gate that
+shipped.** Each failed a different way, and all three failures were invisible to reading — only to
+running: one was green with its defences deleted, one went green on the incident that motivated it,
+one was red on a clean tree because it matched its own docstring. The pattern is that **a gate's
+plausibility is uncorrelated with its power**, and the only thing that separates them is executing it
+against a state where the defect is actually present.
 
-The answer is an **additive, log-only hook wired alongside** — it decides nothing, always exits 0,
-and cannot leave the control subtly broken. It settled B18 in minutes. And because it dumped
-`payload_keys`, it found a **better anchor than the one I set out to measure**: the payload carries
-an explicit `cwd`, independent of the hook process's cwd.
-
-The session's other repeated lesson is less flattering and more useful: **three separate times I
-reported or nearly reported something that measurement then contradicted** — a "red main" that was my
-own `make` running in the wrong repo; a gate failure I attributed to my diff that did not reproduce;
-and a fail-closed test case that passed because `${3:-$WT}` treats *empty* as *unset*, so it silently
-received the default. In every case the honest check was seconds away, and in every case the
-*instrument* was wrong, not the product.
-
-**And the cron caught me three times, each because I edited before branching.** Vigilance did not
-work; only ordering does. `git switch -c` is the first keystroke of an edit in `claude-config`, not
-the last before a commit.
+Corollary worth keeping: **the idea-round is not the expensive part.** Four rounds cost ~25 minutes of
+wall-clock each, ran in parallel with other work, and prevented three gates that would have shipped
+green and measured nothing — plus one that would have laundered a false CRITICAL into a cited fact.
 
 ## Backlog / resume state
 
