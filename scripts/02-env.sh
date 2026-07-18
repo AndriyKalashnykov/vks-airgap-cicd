@@ -29,11 +29,12 @@ EXAMPLE_FILE="${REPO_ROOT}/.env.example"
 # A value is "unset" for our purposes if empty OR still a committed placeholder.
 is_placeholder() { case "$1" in ''|'<SET-IN-.env>'|*'<SET-'*) return 0 ;; *) return 1 ;; esac; }
 
-# HARBOR_URL's committed .env.example default is a real-looking hostname that MEANS "not configured
-# yet" (the real value is the discovered LB IP for KinD, or your lab's Harbor FQDN). is_placeholder
-# cannot catch it — it is neither empty nor a <SET-*> token — so env_check AND env_validate test it
-# via this helper. The sentinel literal lives ONCE, inside this function body: a function def is
-# immune to load_env's `set -a; . .env` (a top-level var would be clobbered by it).
+# HARBOR_URL is COMMENTED in .env.example (B13), so it is UNSET by default — is_placeholder catches
+# that (empty). But an operator may still type `harbor.vks.local` (this repo's own `.vks.local`
+# convention) as a "not configured yet" value; the real value is the discovered LB IP (KinD) or the
+# lab's Harbor host. That sentinel is neither empty nor a <SET-*> token, so env_check AND env_validate
+# test BOTH cases via this helper. The sentinel literal lives ONCE, inside this function body: a
+# function def is immune to load_env's `set -a; . .env` (a top-level var would be clobbered by it).
 harbor_url_is_placeholder() { case "${1:-}" in ''|harbor.vks.local) return 0 ;; *) return 1 ;; esac; }
 
 # Upsert KEY=VALUE into .env (idempotent — replaces an existing line, else appends).
@@ -61,7 +62,7 @@ env_init() {
 # ---------------------------------------------------------------------------
 env_populate() {
   [ -f "$ENV_FILE" ] || die "no .env yet — run 'make env-init' first"
-  load_env   # so we can see which values are already set (and honor .env.kind)
+  load_env   # so we can see which values are already set (and honor the .env.state overlay)
 
   echo "== GENERATE (secrets for the components we install — minted only if unset) =="
   # Gitea is ALWAYS ours → always safe to generate.
@@ -130,9 +131,9 @@ env_check() {
     v="$(eval "printf '%s' \"\${$k:-}\"")"
     is_placeholder "$v" && missing+=("$k")
   done
-  # HARBOR_URL: the committed default 'harbor.vks.local' is a real-looking sentinel is_placeholder
-  # cannot catch (env_validate special-cases it via the same helper) — so check it explicitly.
-  harbor_url_is_placeholder "${HARBOR_URL:-}" && missing+=("HARBOR_URL (unset or still the committed placeholder — set your real Harbor host; the KinD path fills it via .env.kind)")
+  # HARBOR_URL: commented in .env.example (B13) so unset by default; and an operator may still type the
+  # `harbor.vks.local` sentinel, which is_placeholder catches (env_validate uses the same helper).
+  harbor_url_is_placeholder "${HARBOR_URL:-}" && missing+=("HARBOR_URL (unset or still the harbor.vks.local placeholder — set your real Harbor host; the KinD path fills it via .env.state)")
   # KUBECONFIG: load_env DEFAULTS it to secrets/vks.kubeconfig, so "set" != "the file exists". env-check
   # is deliberately the STRICTER PRESENCE gate — the kubeconfig FILE must be here. env-validate is the
   # REACHABILITY gate; it assumes presence and only WARNs when the file is absent, so it can be run
@@ -166,8 +167,12 @@ env_validate() {
   local errs=0
 
   # --- format ---------------------------------------------------------------
+  # Empty is a WARN-skip, not an error: HARBOR_URL is commented in .env.example (B13), so it is unset
+  # until discovery/the operator sets it. env-check ENFORCES its presence; env-validate is the
+  # REACHABILITY gate and is standalone-runnable on a partial .env — same warn-skip as KUBECONFIG below
+  # and the Harbor-reachability block (an empty value hard-erroring here contradicted that WARN).
   case "${HARBOR_URL:-}" in
-    '')        log_error "HARBOR_URL is empty"; errs=$((errs+1)) ;;
+    '')        log_warn  "HARBOR_URL not set yet — skipping format+reachability (env-check enforces presence; set it after Harbor install)" ;;
     *://*)     log_error "HARBOR_URL must be a host or host:port with NO scheme (got '$HARBOR_URL')"; errs=$((errs+1)) ;;
     *)         log_info  "HARBOR_URL format ok ($HARBOR_URL)" ;;
   esac
@@ -187,7 +192,7 @@ env_validate() {
 
   # --- Harbor reachability + auth (secret via umask-077 curl -K, never argv) -
   if harbor_url_is_placeholder "${HARBOR_URL:-}"; then
-    log_warn "HARBOR_URL is the placeholder default — skipping Harbor reachability (real value comes from discovery/.env.kind)"
+    log_warn "HARBOR_URL is unset or the placeholder — skipping Harbor reachability (real value comes from discovery/.env.state or your .env)"
   else
       local scheme=https; [ "${HARBOR_INSECURE:-0}" = 1 ] && scheme=http
       local cafg=(); [ "$scheme" = https ] && [ -n "${HARBOR_CA_FILE:-}" ] && [ -f "${HARBOR_CA_FILE}" ] && cafg=(--cacert "${HARBOR_CA_FILE}")

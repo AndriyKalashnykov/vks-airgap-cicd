@@ -69,6 +69,26 @@ run_validate
 if grep -qi "TLS not trusted" "$TMP/out"; then bad "Fix2 GREEN: env-validate wrongly said TLS-not-trusted WITH the CA (CA not exercised)"; cat "$TMP/out" >&2
 else ok "Fix2 GREEN: with the CA the TLS handshake verifies (no TLS-not-trusted) — the CA is exercised"; fi
 
+# RED (B13): with HARBOR_URL UNSET, env-validate must WARN-skip, not hard-error "HARBOR_URL is empty".
+# The old format block errored on '' — dead code while .env.example shipped harbor.vks.local, ACTIVATED
+# once B13 commented it (env-validate went PASS->FAIL on a partial .env). env-validate is the standalone
+# reachability gate; env-check enforces presence. Revert the format-block '' branch to log_error and
+# this case goes RED.
+cat > "$TMP/.env" <<EOF
+HARBOR_USERNAME=admin
+HARBOR_PASSWORD=Sup3rStr0ngPw
+GITEA_ADMIN_PASSWORD=Sup3rStr0ngPw
+VKS_AUTH_METHOD=kubeconfig
+EOF
+run_validate
+if grep -qi 'HARBOR_URL is empty' "$TMP/out"; then
+  bad "B13 RED: env-validate HARD-ERRORED on an unset HARBOR_URL (the regression) — must WARN-skip"; cat "$TMP/out" >&2
+elif grep -qiE 'HARBOR_URL not set yet|skipping.*reachability' "$TMP/out"; then
+  ok "B13: env-validate WARN-skips an unset HARBOR_URL (standalone-runnable on a partial .env)"
+else
+  bad "B13: env-validate neither errored nor warn-skipped on an unset HARBOR_URL"; cat "$TMP/out" >&2
+fi
+
 kill "$SRV" 2>/dev/null; SRV=""
 
 # --- Fix 3: env-populate DISCOVER must not clobber a GRANTED value -------------------------------------
