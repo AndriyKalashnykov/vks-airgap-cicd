@@ -128,7 +128,7 @@ make bundle           # → vks-airgap-cicd-bundle-<date>.tar  + its .sha256
 
 Copy **the tarball, its `.sha256`, and the repo**. All three, on the same media.
 
-> **A FAT32 stick cannot hold a file over 4 GiB, and this bundle is ~11 GB.** Use exFAT/ext4/XFS/NTFS, or
+> **A FAT32 stick cannot hold a file over 4 GiB, and this bundle is ~12 GB.** Use exFAT/ext4/XFS/NTFS, or
 > `split -b 3G` and `cat` it back. `make bundle` warns you.
 
 ## Step 3 — push, on the jump box
@@ -180,7 +180,7 @@ The pull is cached, and that is safe by construction: digest-pinned images are c
 tag-based refs are always re-pulled. Force it only when you **distrust the cache** (hand-edited, a disk
 filled mid-write, a restored snapshot), when you are cutting a bundle for a **hand-off you cannot re-do**,
 or when you are **debugging the mirror** and want the cache out of the picture. Otherwise it re-downloads
-11 GB for nothing.
+12 GB for nothing.
 
 ## How this is tested
 

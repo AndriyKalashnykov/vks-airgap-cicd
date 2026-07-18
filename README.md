@@ -197,7 +197,7 @@ and (dual-homed only) the workload cluster.
 **Then run these, in order. Nothing else on this page requires action.**
 
 ```bash
-make deps            # toolchain: mise + podman (git must already be present)
+make deps            # toolchain: mise + podman (git/make/curl come from bootstrap-jumpbox.sh)
                      #   want docker instead?  make deps CONTAINER_ENGINE=docker
 make engine-check    # read-only: what engine does this box have, and will it cost you a sudo?
 make env-init        # create .env from .env.example
@@ -246,7 +246,7 @@ above is self-contained end to end (a CI gate enforces that: `make check-readme-
 
 | | |
 |---|---|
-| [Sneakernet](docs/sneakernet.md) | **no single box reaches BOTH the internet and Harbor** — so you use two: pull the images on the internet-side box, carry the bundle across on a stick, push them in from the box that can reach Harbor. Applies to **both** VKS scenarios; it replaces `make mirror` (and `make install-all`, which starts with it) |
+| [Sneakernet](docs/sneakernet.md) | **no single box reaches BOTH the internet and Harbor** — so you use two: pull the images on the internet-side box, carry the bundle across on a stick, push them in from the box that can reach Harbor. Applies to **both** VKS scenarios; it replaces `make mirror` (and `make install-all`, which mirrors in-line) |
 | [Architecture](docs/architecture.md) | system context, containers, deployment, pipeline flow |
 | [Tech stack](docs/tech-stack.md) | what the demo is built from |
 | [Prerequisites — the manual path](docs/prerequisites-manual.md) | the step-by-step the bootstrap automates |

@@ -223,7 +223,7 @@ GITEA_ADMIN_PASSWORD=<choose one>  # Gitea is OURS to install — you pick the p
 
 ## Step 1 — will this cluster accept our install?
 
-**For:** four preconditions that each kill the run later if missing. **Check them now, before you spend 20 minutes mirroring.**
+**For:** four preconditions that each kill the run later if missing — cluster access, plus the three `lab-preflight` checks. **Check them now, before you spend 20 minutes mirroring.**
 
 ```bash
 make vks-login       # validates KUBECONFIG + context
@@ -254,7 +254,10 @@ mentions none of this) · and `psa-check` printing
 make fetch-harbor-ca      # HARBOR_URL → HARBOR_CA_FILE
 ```
 
-**Expect:** `secrets/harbor-ca.crt` exists and its SAN covers `HARBOR_URL`.
+**Expect:** `VERIFIED: the file we wrote actually validates <host>'s certificate` — the script keeps
+the **issuer** from the presented chain and then `openssl verify`s the leaf against it, deleting the file
+and dying if that fails. (Chain validation only; it does not check the hostname, and a CA cert carries
+no SAN.)
 
 Both consumers are handled for you: `make mirror` builds a **sudo-free** trust bundle
 (`SSL_CERT_FILE`), and `make platform` creates the in-cluster `harbor-ca` ConfigMap. If Harbor has a
@@ -348,7 +351,7 @@ box cannot do both, that command cannot work, and no amount of `.env` is going t
 | your jump box | what you run |
 |---|---|
 | reaches the internet **and** Harbor (**dual-homed**) | `make install-all` below — nothing else to do |
-| reaches the **internet only** | **[the sneakernet flow](sneakernet.md)** — two boxes: pull + build outside, carry, push + install inside. It replaces `install-all` (which starts with `mirror`); do **not** come back to it. |
+| reaches the **internet only** | **[the sneakernet flow](sneakernet.md)** — two boxes: pull + build outside, carry, push + install inside. It replaces `install-all` (which mirrors in-line); do **not** come back to it. |
 
 **Then install:**
 
