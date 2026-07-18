@@ -183,6 +183,10 @@ check-vks-terminology: ## Gate: Broadcom's product nouns (the vendor says "Super
 check-doc-novels: ## Gate: no multi-line re-litigation blockquotes ("this page used to say X … that was FALSE") in operator/reference docs
 	@$(SCRIPTS)/check-doc-novels.sh
 
+.PHONY: check-doc-robot-quoting
+check-doc-robot-quoting: ## Gate: a Harbor robot credential (robot$<name>) in docs or .env.example must be SINGLE-QUOTED or set -a expands $<name> away -> 401 (B28)
+	@$(SCRIPTS)/check-doc-robot-quoting.sh
+
 .PHONY: check-how-provenance
 check-how-provenance: ## Gate: every `# how:` acquisition command must be runnable-by-us, a real make target, or provenance-tagged
 	@$(SCRIPTS)/check-how-provenance.sh
@@ -681,7 +685,7 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-e2e-fresh ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-doc-robot-quoting test-e2e-fresh ## Run all offline script-logic unit tests
 
 # NOTE: subagent-readonly + no-gate-in-commit-chain hooks (and their tests) are now GLOBAL
 # (~/projects/claude-config, installed into ~/.claude); this repo keeps only the project-local
@@ -693,6 +697,10 @@ test-adversary-gate-rearm: ## Offline: the adversary-first gate RE-ARMS on every
 .PHONY: test-namespace-gates
 test-namespace-gates: ## Offline: RED-prove check-namespace-labelled + check-pod-inject-label catch a deleted ensure_namespace CALL / pod-label (B30c)
 	@./scripts/test-namespace-gates.sh
+
+.PHONY: test-doc-robot-quoting
+test-doc-robot-quoting: ## Offline: RED-prove check-doc-robot-quoting flags an unquoted Harbor robot credential (both directions) (B28)
+	@./scripts/test-doc-robot-quoting.sh
 
 .PHONY: test-e2e-fresh
 test-e2e-fresh: ## Offline: E2E_FRESH=1 makes e2e-kind cold (kind-down first) + the reuse verdict banner is wired (B42)
@@ -870,7 +878,7 @@ vendor-diagrams: ## Re-download the pinned C4-PlantUML stdlib into docs/diagrams
 	echo "vendor-diagrams: refreshed docs/diagrams/c4/ @ $(C4_PLANTUML_VERSION) — now run 'make diagrams' and verify the offline render"
 
 .PHONY: docs-lint
-docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets check-doc-target-coverage check-vks-terminology check-doc-novels check-vks-provenance ## Lint markdown + the README-scenario, command-count, target-coverage, VKS-terminology and doc-novels gates
+docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets check-doc-target-coverage check-vks-terminology check-doc-novels check-doc-robot-quoting check-vks-provenance ## Lint markdown + the README-scenario, command-count, target-coverage, VKS-terminology, doc-novels and robot-quoting gates
 	@# NOTE: diagrams-check is deliberately NOT a prerequisite here. It `docker run`s the pinned
 	@# PlantUML image (a ~478 MB pull, cold) and re-renders every .puml — so making it unconditional
 	@# meant a README-only PR paid for a full JVM render of seven diagrams it never touched. `make ci`

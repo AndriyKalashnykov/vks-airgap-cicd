@@ -462,6 +462,32 @@ esc_curlk() { local s=$1; s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}; p
 #   already yields `unmatched '` -> the var ends up UNSET -> a 401 that blames the password.
 esc_sq() { local s=$1; s=${s//\'/\'\\\'\'}; printf '%s' "$s"; }
 
+# doc_robot_line_is_bad LINE — return 0 (BAD) iff LINE is a shell assignment whose value EXPOSES a
+# Harbor robot-name expansion `robot$<letter>` OUTSIDE a single-quoted span, so a `set -a` source
+# would expand it away (`HARBOR_USERNAME=robot$vks-cicd` -> `robot-cicd` -> Harbor 401). A robot
+# USERNAME is always `robot$<name>` (goharbor v2.15.0), and its SECRET is [a-zA-Z0-9] with NO `$` —
+# so `robot$` is the COMPLETE key for the class, not a heuristic (a HARBOR_PASSWORD cannot carry a
+# `$`). Single-quoted (`'robot$vks-cicd'`) is safe; double-quoted (`"robot$…"`) or bare is not. This
+# powers check-doc-robot-quoting.sh and lives here (like esc_sq/esc_curlk) so the gate's TEST can
+# EXECUTE it rather than grep for it. The span test COUNTS single quotes before the match (a prefix
+# test is not a span test — see rules/common/hooks.md); the narrow `robot$` scope keeps it tractable.
+# Accepted, documented residuals (NOT chased): an adjacency-break (`'robot'$vks`) has no literal
+# `robot$` -> missed; `robot$<digit>` / `robot$<non-letter>` / `robot${braced}` are not flagged (the
+# letter-requirement is LOAD-BEARING — it is what skips the `robot$<name>` placeholder and comment
+# forms); a blockquote/list-prefixed assignment (`> KEY=`) is not matched. A deliberate bad-form
+# example is exempted with a `# env-quote-ok:` marker on the line.
+doc_robot_line_is_bad() {
+  local line="$1" val before qs re
+  case "$line" in *'# env-quote-ok:'*) return 1 ;; esac                    # marker on the RAW line (it IS a comment)
+  [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*= ]] || return 1  # a shell assignment
+  val="${line#*=}"; val="${val%%#*}"                                       # value, trailing `# comment` stripped
+  re='robot\$[A-Za-z_]'; [[ "$val" =~ $re ]] || return 1                   # a REAL robot-name expansion
+  before="${val%%robot\$[A-Za-z_]*}"                                       # the value substring before the match
+  qs="${before//[^\']/}"                                                   # keep only single-quote characters
+  if (( ${#qs} % 2 == 1 )); then return 1; fi                             # ODD -> inside a '…' span -> SAFE
+  return 0                                                                 # EVEN -> exposed -> BAD
+}
+
 # set_env_var KEY VALUE FILE — idempotently upsert KEY=VALUE into an EXPLICIT file.
 #
 # The file argument used to DEFAULT to .env.kind. That default is exactly how real-lab state ended up
