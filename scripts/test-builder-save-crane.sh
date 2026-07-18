@@ -10,12 +10,31 @@
 # is only ever exercised for PODMAN on the tested path (e2e-sneakernet runs builder-build under the
 # host's default engine = podman). This proves it for DOCKER too (and podman, for parity).
 #
-# HONESTY (do not over-trust this green): both `podman save` and `docker save`, used BARE (no --format,
-# exactly as 14-builder-build.sh:90 does), default to the SAME docker-archive format — so there is NO
-# format divergence to catch. This test guards that each engine's actual bytes still round-trip through
-# the pinned crane, and that a re-save to the same path works (the 14-builder-build.sh `rm -f` re-run
-# guard, which is podman-specific). It does NOT prove "docker sneakernet works" end-to-end — that is
-# `make e2e-sneakernet CONTAINER_ENGINE=docker` (real builder, real Harbor).
+# HONESTY (do not over-trust this green): this test guards that each engine's actual bytes still
+# round-trip through the pinned crane, and that a re-save to the same path works (the
+# 14-builder-build.sh `rm -f` re-run guard, which is podman-specific). It does NOT prove "docker
+# sneakernet works" end-to-end — that is `make e2e-sneakernet CONTAINER_ENGINE=docker` (real builder,
+# real Harbor). That successor run was executed 2026-07-18 (B19) and PASSED: 36/36 intact, the carried
+# builder pushed + `crane validate --remote`'d from a photon air-gap box with no container engine.
+#
+# CORRECTED 2026-07-18 — this block used to claim "both default to the SAME docker-archive format, so
+# there is NO format divergence to catch". THAT WAS FALSE, and it told every reader not to look.
+# Measured, same Dockerfile, same source, back to back:
+#
+#     docker save 29.6.2  ->  oci-layout + index.json + blobs/sha256/, layers GZIP (magic 1f 8b)
+#                             286,969,856 bytes
+#     podman save 4.9.3   ->  <hash>.tar, docker-archive v1, layers PLAIN TAR (magic 65 74)
+#                             623,348,736 bytes   <-- 2.17x LARGER
+#
+# They default to DIFFERENT formats. The round-trip still works because crane reads both — which is
+# exactly why the old claim survived: a successful `crane push` proves crane handles both, and says
+# NOTHING about them being the same. So the test's VALUE is higher than the old block implied: it is
+# the only thing standing between us and a format change on either engine. (`docker save` emitting
+# OCI-layout is a VERSION fact, not a permanent one — re-measure it on an engine major bump.)
+#
+# OPERATIONAL CONSEQUENCE, tracked as a backlog row: this repo DEFAULTS to podman, so the carried
+# builder is ~336 MB larger than the docker-produced one for identical content. On a sneakernet
+# bundle that is real weight. Choosing the builder engine is an owner decision, not a test's.
 #
 # NOT in the offline test-scripts/static-check gate: it needs a running docker, a network-pulled
 # registry:2, and the engines under test — none offline. It is a standalone `make test-builder-save-crane`.
