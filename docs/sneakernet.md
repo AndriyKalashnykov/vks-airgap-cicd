@@ -190,9 +190,12 @@ fresh container playing the jump box. Each OS leg gets a **fresh, empty Harbor**
 push and not a `HEAD`-skip no-op. The jump box asserts `./bundle` is empty and that `crane` is **not**
 already installed before loading — so the images can only have come from the carried bundle.
 
-`make airgap-toolchain-test` proves the **toolchain** half, which `e2e-sneakernet` cannot: its jump-box
-image runs `make deps` at build time, so it already has `kubectl`/`helm`/`jq`/`yq` and could never notice
-if the bundle failed to carry them. The toolchain test uses a **genuinely bare** box
-(`jumpbox/Dockerfile.airgap` — OS packages only) with **`--network none`**, asserts all five tools are
-**absent first** (a pre-provisioned box proves nothing), and then that each one is installed **and
-executes**, on both Photon and Ubuntu.
+`make airgap-toolchain-test` hardens the **toolchain** half beyond what `e2e-sneakernet` asserts. The
+e2e's air-gap box does exercise all five — `jumpbox-run.sh` runs `make check-tools` after
+`bundle-load`, and `03-check-tools.sh` lists `crane`/`kubectl`/`helm`/`jq`/`yq` as **`carried`**
+(treated as required) and *executes* each one — so a bundle that dropped a tool would fail there. What
+the e2e does **not** do is prove where they came from: it asserts only that **crane** was absent
+beforehand, and its box sits on the `kind` network. The toolchain test closes exactly that gap — a box
+with **no mise at all** (`jumpbox/Dockerfile.airgap` — OS packages only) and **`--network none`**, so
+nothing can arrive from anywhere; it asserts **all five** are absent first (a pre-provisioned box
+proves nothing), then that each is installed **and executes**, on both Photon and Ubuntu.
