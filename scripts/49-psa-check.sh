@@ -146,7 +146,13 @@ elif [ "$rc" -eq 0 ]; then
   log_info "PSA OK — every namespace we create is labelled at a level that admits its pods (${measured} measured)."
 else
   log_error "PSA FINDINGS above — on a real VKS guest cluster (enforce=restricted by default) those pods would be REJECTED."
-  log_error "  Fix by setting the level in .env (PSA_LEVEL_GITEA / _TEKTON / _CI / _APP / _INGRESS / _ISTIO_SYSTEM),"
+  # The var names are NOT enumerated here on purpose. This line used to list six of them and had
+  # already rotted: PSA_LEVEL_TRAEFIK was missing, so an operator with a traefik finding was handed
+  # six names, none of them the one they needed. `.env.example` is the authoritative set, and
+  # `make check-psa-defaults` is what keeps it authoritative — point at those instead of copying
+  # them, which is the whole lesson of B22.
+  log_error "  Fix by setting the matching PSA_LEVEL_* for the namespace named above in .env"
+  log_error "  (the authoritative list is in .env.example; 'make check-psa-defaults' keeps it honest),"
   log_error "  or by making the workload restricted-compliant (runAsNonRoot, drop ALL caps, seccompProfile RuntimeDefault)."
 fi
 echo "=====================================================" >&2

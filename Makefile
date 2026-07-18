@@ -638,6 +638,10 @@ check-pull-secret-alignment: ## Every app's deploy manifest must reference the i
 check-java-alignment: ## Fail if the Java major drifts across pom/mise/ci/Dockerfile/images.txt
 	@$(SCRIPTS)/check-java-alignment.sh
 
+.PHONY: check-psa-defaults
+check-psa-defaults: ## Gate: every PSA level a script falls back to matches .env.example, names a real level, and no reference hides from the check
+	@$(SCRIPTS)/check-psa-defaults.sh
+
 .PHONY: check-namespace-labelled
 check-namespace-labelled: ## Gate: every namespace we OWN reaches an ensure_namespace call (PSA + no-inject); keyed on the INVENTORY, not on grepping for `kubectl create`
 	@$(SCRIPTS)/check-namespace-labelled.sh
@@ -699,7 +703,7 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh ## Run all offline script-logic unit tests
 
 # NOTE: subagent-readonly + no-gate-in-commit-chain hooks (and their tests) are now GLOBAL
 # (~/projects/claude-config, installed into ~/.claude); this repo keeps only the project-local
@@ -711,6 +715,10 @@ test-adversary-gate-rearm: ## Offline: the adversary-first gate RE-ARMS on every
 .PHONY: test-namespace-gates
 test-namespace-gates: ## Offline: RED-prove check-namespace-labelled + check-pod-inject-label catch a deleted ensure_namespace CALL / pod-label (B30c)
 	@./scripts/test-namespace-gates.sh
+
+.PHONY: test-psa-defaults
+test-psa-defaults: ## Offline: RED-prove check-psa-defaults (12 cases, incl. the 3 vacuous greens an adversary measured in an earlier draft) (B22)
+	@./scripts/test-psa-defaults.sh
 
 .PHONY: test-doc-robot-quoting
 test-doc-robot-quoting: ## Offline: RED-prove check-doc-robot-quoting flags an unquoted Harbor robot credential (both directions) (B28)
@@ -924,7 +932,7 @@ docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets
 	@# having linted nothing. In CI it now DIES instead.
 
 .PHONY: static-check
-static-check: check-namespace-labelled check-pod-inject-label check-doc-target-coverage check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: check-namespace-labelled check-pod-inject-label check-psa-defaults check-doc-target-coverage check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)
