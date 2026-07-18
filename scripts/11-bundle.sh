@@ -140,10 +140,21 @@ stage_tool() {
   if [ "${BUNDLE_SKIP_STATIC_CHECK:-0}" = "1" ]; then
     log_warn "  BUNDLE_SKIP_STATIC_CHECK=1 — NOT checking that ${name} is statically linked (you own this)"
   elif have file; then
-    # `static-pie linked` is ALSO static — file(1) prints that for a static PIE ELF, and matching only
-    # on the exact string 'statically linked' would REJECT a perfectly good binary. (The grep string was
-    # the bug, not file(1).)
-    file -b "${TOOLS_DIR}/${name}" | grep -qE 'statically linked|static-pie' \
+    # THREE DIALECTS, because file(1) is not one program:
+    #   GNU     "ELF 64-bit LSB executable, …, statically linked, …"
+    #   GNU/PIE "… static-pie linked …"   (a static PIE ELF — still static)
+    #   TOYBOX  "ELF executable, 64-bit LSB x86-64, static, BuildID=…, bad shdr 14?"
+    # PhotonOS — the DEFAULT JUMPBOX_OS — has no GNU file: /usr/bin/file is a symlink to
+    # /usr/bin/toybox (measured on photon:5.0). So `have file` is TRUE there and the actionable
+    # "file(1) is not installed" branch below NEVER fires; instead the grep missed toybox's spelling
+    # and this die claimed a perfectly good static binary was "NOT statically linked" — while quoting
+    # output containing the word `static`. An error that names the wrong cause is worse than a crash.
+    # Measured: ALL FIVE staged binaries (crane, kubectl, helm, jq, yq) failed it on Photon, so
+    # `make bundle` could not complete there at all. The PRESENCE of file(1) was never the
+    # discriminator — its DIALECT is.
+    # `\b` (not `, static,`) so a trailing `, static` at end-of-string also matches; verified to work
+    # under toybox's own grep, which is what runs on that box, and to still REJECT a dynamic binary.
+    file -b "${TOOLS_DIR}/${name}" | grep -qE 'statically linked|static-pie|, static\b' \
       || die "the staged ${name} is NOT statically linked ($(file -b "${TOOLS_DIR}/${name}")) — it may not run on the air-gap box's libc."
   else
     die "file(1) is not installed, so the STATIC-LINKAGE check on the carried binaries cannot run.

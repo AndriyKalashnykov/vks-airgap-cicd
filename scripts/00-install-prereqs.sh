@@ -45,7 +45,12 @@ case "$(pkg_mgr)" in
   apt-get) GETTEXT_PKG=gettext-base ;;   # envsubst lives in gettext-base on Debian/Ubuntu...
   *)       GETTEXT_PKG=gettext ;;        # ...and in gettext on Photon (tdnf).
 esac
-pkg_install ca-certificates curl git jq tar gzip findutils gawk openssl "$GETTEXT_PKG"
+# `file` is used by 11-bundle.sh to assert the carried binaries are STATICALLY linked. On Ubuntu it is
+# absent from the base image; on Photon /usr/bin/file is a symlink to toybox, whose output the check
+# now understands — but installing GNU file REPLACES that symlink (measured: `tdnf install -y file`
+# exits 0, installs file-5.47, no conflict with toybox despite both owning /usr/bin/file), which is
+# strictly better. Internet-side only: `make bundle` runs on the staging box, never the air-gap one.
+pkg_install ca-certificates curl file git jq tar gzip findutils gawk openssl "$GETTEXT_PKG"
 # ---- container engine -----------------------------------------------------
 # THE INVARIANT, and it is the whole reason this block is shaped the way it is:
 #
