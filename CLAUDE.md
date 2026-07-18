@@ -517,7 +517,7 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog.
 History → git. Only "what is in flight and what to distrust" belongs here.
 
-**State: this repo `main` GREEN @ `#327`, tree clean. `claude-config` `main` GREEN (PRs #32–#43). `claude-config` `main` GREEN, 8 PRs merged
+**State: this repo `main` GREEN @ `#328`, tree clean. `claude-config` `main` GREEN (PRs #32–#44). `claude-config` `main` GREEN, 8 PRs merged
 (#32–#38). Nothing half-done; no cluster/containers/parked agents (verified BY ARTIFACT — 0 agent
 processes, 0 swarm servers, with a SELF-EXCLUDING pgrep, since the naive one matches itself).**
 
