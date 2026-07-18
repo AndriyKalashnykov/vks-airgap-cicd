@@ -585,9 +585,16 @@ and drops its correction is how this file rots):
 
 ### Next
 
-- **B39** has a measured target now: of 20 `check-*.sh`, **10 print a denominator, 5 die on zero, 5
-  do both** — so 5 print a number that gates nothing and 10 print none. A meta-gate over the gates is
-  buildable and narrow. (The numbers are heuristic; re-verify per script.) Needs an idea-round.
+- **B39's meta-gate is REFUTED — do not build it** (its idea-round ran after this handoff's first
+  draft, which wrongly called it "buildable and narrow"; that sentence was the stale one). The
+  adversary implemented it and measured **67% accuracy, wrong about 7 of 21 gates in both
+  directions**. The numbers in the earlier draft were also wrong in both directions — see the row.
+  **What IS buildable is narrower and must be named honestly: a vacuity harness via CORPUS
+  STARVATION.** The original class (throwaway shell instruments) stays **discipline**.
+- 🔴 **B49 is NEW and live**: `check-doc-novels` and `check-doc-robot-quoting` both report **rc=0 on
+  a corpus of empty files** — their zero-guards fire on the FILE count while the ITEM count is zero.
+  Reproduction is in the row. The fix is a design question (for these gates, zero *violations* is the
+  success condition), so do not paper over it with `checked 1`.
 - **B40** (namespace chokepoint) and **B3** (the sneakernet runbook's Step 4 is executed by nothing)
   are the other open code items. B3 is heavy and should be landed before any matrix work.
 - **B46** is an owner decision, not an agent one: switching the builder engine trades the sudo-free
