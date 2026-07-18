@@ -416,10 +416,20 @@ Then add the printed `INGRESS_LB_IP` to `/etc/hosts` (see [Access the UIs](acces
 
 Two things to know about `make install-ingress` (the default):
 
-- **It still needs internet on the jump box — for the Istio helm CHART** (`istio-release.storage.googleapis.com`).
-  Fine on this dual-homed jump box; **not** on a fully air-gapped one. Its **images** come from your
-  Harbor and its **Gateway API CRDs** come from the carried bundle, so those two are air-gap clean —
-  the chart is the one remaining gap.
+- **It does NOT need internet once `make mirror` has run.** `make mirror-pull` (part of `make mirror`)
+  helm-pulls the Istio charts into `bundle/charts`, and `install-ingress` prefers them — **including on
+  a fully air-gapped box**, which is what they exist for. Images come from your Harbor and the Gateway
+  API CRDs from the carried bundle, so the whole path is air-gap clean. Three states, all deliberate:
+
+  | state | behaviour |
+  |---|---|
+  | charts carried in `bundle/charts` | installs from them, **no network** |
+  | a bundle exists but carries no charts | **dies**, telling you to re-cut with `make mirror-pull && make bundle` — it will not silently reach for the internet, because on a dual-homed box that would turn a broken bundle into a green install that proves nothing |
+  | no bundle at all | fetches from `istio-release.storage.googleapis.com` (needs internet, and says so) |
+
+  Carriage has **two** preconditions, and both only warn: `helm` must be present (`make deps` supplies
+  it) and `ISTIO_VERSION` must be set (`.env.example` sets it). A box that ran `mirror` *before* `deps`
+  gets an empty `bundle/charts` and hits the die above.
 - It is a **demo ingress**, not the Broadcom-supported mesh.
 
 <details><summary><b>Alternative: install the VKS Istio package, then attach (VKS-faithful — NOT validated by us)</b></summary>
