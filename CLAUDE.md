@@ -208,7 +208,7 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 | `make verify-ingress` / `verify-ingress-both` | Assert the `*.vks.local` UIs route through the ingress LB (one controller / both) |
 | `make e2e-kind` | Full local end-to-end in KinD (cluster → Harbor → ArgoCD → pipeline → ingress → verify). Reuses a warm cluster by default (fast) and says so LOUDLY at the end; **`E2E_FRESH=1`** forces a cold cluster (`kind-down` first — proves namespace create-ordering) |
 | `make kind-up` / `install-harbor` / `install-argocd` / `install-ingress` / `kind-down` | Individual KinD steps |
-| `make jumpbox` / `jumpbox-both` / `jumpbox-matrix` | Validate the README jump-box bootstrap in a **test** jump-box container (itself needs the internet — it runs `make deps`), joined to the kind network, on `JUMPBOX_OS` × `JUMPBOX_ENGINE` (photon\|ubuntu × podman\|docker; defaults photon+podman): runs `make deps` + engine + cluster/Harbor reach. `jumpbox-both` = the OS matrix (podman); `jumpbox-matrix` = the full 4-cell OS×engine matrix. Needs the KinD cluster up |
+| `make jumpbox` / `jumpbox-both` / `jumpbox-matrix` | Validate the README jump-box bootstrap in a **test** jump-box container (itself needs the internet — it runs `make deps`), joined to the kind network, on `JUMPBOX_OS` × `JUMPBOX_ENGINE` (photon\|ubuntu × podman\|docker; defaults photon+podman): runs `make deps` + engine + cluster/Harbor reach. `jumpbox-both` = the OS matrix (podman); `jumpbox-matrix` = the full 4-cell OS×engine matrix. Needs the KinD cluster up **AND a mirrored Harbor** — `jumpbox-matrix` pulls `cicd/maven`, so run `make mirror` first or it fails 4/4 at `engine-trust-check` (auth/trust work; only the un-mirrored base pull fails) |
 
 Run a single app test: `cd apps/java/javawebapp && ./mvnw -B -Dtest=<ClassName>#<method> test`.
 
@@ -512,48 +512,40 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-07-17 (session 3) — READ, THEN REPLACE (do not append)
+## ▶️ HANDOFF 2026-07-18 — READ, THEN REPLACE (do not append)
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog.
 History → git. Only "what is in flight and what to distrust" belongs here.
 
-**State: `main` GREEN @ `9bf7586`+, tree clean, everything pushed. NOTHING is half-done.**
-**This session (s3):** (1) confirmed **B29, B30(a/b), F8, B41, B44** were already SHIPPED in #295–#297
-(the backlog still listed them OPEN — two consecutive picks landed on already-done rows, so the backlog
-itself was the bug), pruned those five + collapsed **B26/B33** + folded B23 into B22 (PR #302); (2) ran
-the **B37 idea-round → REFUTED** `make red-prove` (below); (3) shipped **B30c** — `test-namespace-gates.sh`,
-the honest unit test for the two namespace/inject gates (PR #304, two adversary rounds, post-merge CI
-green); (4) ran the **cold `make kind-down && make e2e-kind` (B34) → GREEN end to end** — `PSA OK, 7
-namespaces measured` on a FRESH cluster (every namespace labelled at creation → the B29 ordering fix
-holds on a real cluster), both apps' GitOps pipelines SUCCESS, mirror 36/36, ingress reachable; (5)
-fixed **B42** — a warm `make e2e-kind` now prints a LOUD final stdout verdict that create-ordering was
-NOT proven, and `E2E_FRESH=1` forces a cold run (05-kind-up publishes `KIND_REUSED`, a verdict script
-reads it, `test-e2e-fresh` gates it — two adversary rounds); (6) shipped the **B16/B33e hygiene batch**
-(stale `.env.kind` *write*-comments → `.env.state` across the full class; pinned `.claude/hooks|settings`
-→ code and `.claude/agents/*.md` → docs in the classify-changes test; PR #308); (7) ran the **full COLD e2e MATRIX
-→ 6/6 GREEN**: `jumpbox-matrix` **4/4** (photon/ubuntu × podman/docker dual-homed, each build+push to the
-self-signed Harbor; docker legs ran docker-ROOTLESS) + `e2e-sneakernet-both` **2/2** (photon+ubuntu, two-box
-air-gap, mirror-verified). ⚠️ **jumpbox-matrix requires a MIRRORED Harbor** (it pulls `cicd/maven`) — the
-first run failed 4/4 at `engine-trust-check` because the orchestration skipped `make mirror`; auth/trust
-worked, only the pull of the un-mirrored base failed. The jumpbox `##` help says "needs the cluster up" but
-not "and a mirrored Harbor" — a small doc-fix worth doing. (8) shipped **B14** (fc7a76b, PR #310) — commented
-`HARBOR_USERNAME` in `.env.example` so a password-only tenant is no longer silently `admin` (401); `05-kind-up`
-`state_set`s `admin` for the KinD flow (symmetric with the password); 7 `:?` guards now teach the tenant;
-verified cold e2e-kind GREEN (Harbor login `as admin` from state_set). Two adversary rounds — the impl-round
-caught a real `env-populate` lifecycle regression the idea-round missed. Closes B14/B31/B33d; B13 collapsed to
-the HARBOR_URL-sentinel decision. **Session learnings captured** in `claude-config` (`testing.md` gate-harness
-lies, `agents.md` two-round-loop + symmetry-argument, `coding-style.md` markdown-`+` trap). **B30, B34, B42,
-B16, B33e, B14, B31, B33d are now DONE.** **No
-cluster is up** — torn down + verified BY ARTIFACT (0 clusters, 0 `kindccm-*`, 0 cloud-provider-kind, 0
-leftover jumpbox containers), preserved `.env` + `secrets/vks.kubeconfig`, nothing written outside the repo.
+**State: `main` GREEN @ `0d2c3c4`+, tree clean, everything pushed. NOTHING is half-done. No cluster/containers/parked agents left (verified BY ARTIFACT — 0 kind clusters, 0 `kindccm-*`, 0 adversary agents/swarm).**
+**This session (2026-07-18):** four backlog items, each through the RULE ZERO adversary loop (idea-round
+before implementing; impl-round on the diff). **Two of the three were backlog HYPOTHESES that verification
+DISPROVED** — shipped as documented negative results, not invented code (the loop doing its job *before* the
+code was written):
 
-**Two Renovate PRs are deliberately OPEN**: **#298** (markdownlint-cli 0.49.1) and **#300** (uv
-0.11.29). Every CI check on #298 passes — both are held by **`renovate/stability-days`**, the
+- **B15 → #312 (DISPROVED).** `98-verify-ingress` is a PURE CONSUMER of `INGRESS_LB_IP` (never `state_set`s
+  it, always runs after install) → no reachable false-green. Shipped an anti-"fix" comment + a
+  published-not-live diagnostic; do NOT back-port the 47-attach re-resolve.
+- **B32 gate → #313 (DISPROVED-as-gate).** The vacuous-`:?` gate would flag 41 DEFENSIVE guards; the one
+  real defect (KUBECONFIG C13) is LOW and already fronted by `env-check`'s `[ -f ]`. Shipped an `os.sh` NB
+  comment instead.
+- **B28 → #314 (SHIPPED).** New `check-doc-robot-quoting` gate — narrow `robot$` scope proven COMPLETE
+  (goharbor robot secrets carry no `$`); pure classifier `doc_robot_line_is_bad` in `lib/os.sh` with an
+  odd-single-quote-count SPAN test (not a prefix test); scans docs + `.env.example`; RED-proven; in `docs-lint`.
+- **B32 residual → #315 (SHIPPED).** `kubeconfig_ready` `[ -f ]` helper at the 6 producer-first consumers
+  (the 16-site sweep was REFUTED — would regress the read-only preflight accumulators 23/49) + fixed the
+  stale `.env.kind` hint at 6 more; impl-round caught a colon-merged-`KUBECONFIG` false-die edge (fixed).
+  RED-proven + a regression guard that 23/49/30/71/06 never call the helper.
+
+Each post-merge `main` CI run watched to green. **B15, B28, B32 (+ residual) are DONE.**
+
+**Three Renovate PRs are deliberately OPEN**: **#298** (markdownlint-cli 0.49.1, CLEAN), **#303**
+(renovate v43.263.6, CLEAN) and **#300** (uv 0.11.29). Held by **`renovate/stability-days`**, the
 minimum-release-age gate. They are NOT broken and must NOT be force-merged: that gate quarantines a
 release until a compromised publish would have surfaced. They merge themselves when the cooldown
 elapses.
 
-### Shipped, each verified on a REAL cluster (not a green gate)
+### Prior session (s3, 2026-07-17) — shipped, verified on a real cluster (git; PRs #295–#310)
 
 | | |
 |---|---|
@@ -581,41 +573,31 @@ elapses.
 
 ### Next
 
-- **Harbor-credential cluster — B14/B31/B33d SHIPPED (fc7a76b, cold-e2e-verified).** Remaining: **B13**
-  (now the HARBOR_URL-sentinel decision only — a `.vks.local` sentinel false-blocks, since it is this repo's
-  own domain) and **B32** (widen the vacuous-`:?`-guard detector to catch BOTH the uncommented-`.env.example`
-  class AND the code-default-export class — a detection task, independent of B14). Caveat #2 ("state_set
-  HARBOR_USERNAME clobbers") was resolved as OVERSTATED: it is mechanically identical to the shipped
-  `state_set HARBOR_PASSWORD`, no worse (agents.md §symmetry).
-- **B22 (PSA single-source) — DEFERRED.** Hardening, not a live bug (its own row says so); the clean form
-  (bare `$PSA_LEVEL_X` consumer reads) risks SILENTLY dropping PSA labels if a consumer doesn't source
-  `psa.sh` first. Not worth that risk without a careful loop.
-- **B39** (an instrument must reproduce a known answer first) needs its OWN idea-round — the cheapest
-  remaining discipline item; it may be un-gateable (like idea-first). **B26-fix-3** (offline helm-template
-  inject gate) may not be CI-doable (`bundle/charts` is gitignored). **B3** (sneakernet Step-4 harness
-  coverage) is real but heavy (it'd make the sneakernet e2e a full end-to-end).
+- **B32 (gate + residual) and B28 are DONE this session.** Remaining code-now: **B13** — the HARBOR_URL
+  half only (HARBOR_USERNAME was closed by B14). `.env.example` commits `HARBOR_URL=harbor.vks.local`
+  UNCOMMENTED, so its `:?` guards are vacuous; blocked on a DECISION — rejecting a `harbor.vks.local`
+  sentinel FALSE-BLOCKS (it is this repo's own domain), so it needs a `<SET-IN-.env>`-shaped sentinel OR
+  provenance-keying (came-from-`.env.example`), NOT a value-match. `env-check`'s `harbor_url_is_placeholder`
+  already partly covers presence — likely another LOW/disprove outcome, same class as the B32 residual.
+- **Need their OWN idea-round — do NOT build naively:** **B22** (PSA single-source — DEFERRED, silent-
+  label-drop risk if a consumer doesn't source `psa.sh` first), **B37** (REFUTED — do NOT rebuild
+  `make red-prove`; flip-detection is blind to a coverage gap), **B39** (instrument-known-answer — may be
+  un-gateable), **B45** (gate re-arm — must NOT be a content-scoped receipt, refuted 2026-07-16),
+  **B38/B40/B18** (deep-design), **B3** (sneakernet Step-4 harness — heavy: makes the sneakernet e2e a full
+  end-to-end), **B26-fix-3** (offline helm-template inject gate — may not be CI-doable, `bundle/charts`
+  gitignored).
 - **LAB-GATED — leave alone (owner instruction):** B2, B19, B20, B24, B25, B27 — need a real VKS lab.
-- **B37 is REFUTED — do NOT rebuild `make red-prove`** (idea-round this session; flip-detection is
-  blind to a coverage gap → it would certify the blind test it is named after; full record in the B37
-  row). **B45** (the gate's time-vs-content re-arm) is real but must NOT be a content-scoped receipt
-  (refuted 2026-07-16). **B28/B38/B40/B18** are deep-design/discipline — each needs its own idea-round.
 
 ### The one thing to carry forward
 
-**Every gate I wrote this session was green on its own bug at first draft — three for three** — and
-each was caught by an **implementation round** *after* the design round had approved it. The
-`check-namespace-labelled` first draft grepped `scripts/` repo-wide; an adversary deleted BOTH
-installers' calls (restoring the bug exactly) and it reported **OK rc=0**. My RED-proofs passed only
-because I mutated **the code I had just written** instead of the defect as it shipped.
-
-Nine instrument failures were counted — self-matching `pgrep` ×3, a zsh no-word-split, `RC=$?` lost
-in a subshell, a grep matching the log line that *explains* the label, a `die` killing its own test,
-a doc about the wrong mechanism, a RED-proof against my own mutation. **All nine were rules already
-loaded.** Prose does not fire at keystroke time; that is what B37/B39 are for.
-
-And the mirror image, worth equal weight: **I refuted the adversaries twice** (F1, F-A) — both times
-because they reasoned from the wrong artifact, the same error I made first. A round's verdict is a
-claim. Render it yourself; it takes thirty seconds and it settled every dispute this session.
+The two-round adversary loop paid off exactly as designed. The **idea-round cheaply DISPROVED two bad
+designs** (B15's re-resolve dispatcher, B32's vacuous gate — both would have been wasted code) and REFUTED
+a third's naive scope (B32's 16-site sweep would have regressed the read-only preflight accumulators). The
+**impl-round then caught a real edge the idea-round could not see** (a colon-merged `KUBECONFIG` false-dying
+on `[ -f ]`). Every load-bearing adversary claim was spot-checked by hand before acting — and when an
+adversary CONFIRMS you (B15), trust it LESS, not more; the greps take 30 seconds and cost nothing. **Two of
+three "items" ending as documented disproofs is not the loop underperforming — it is the loop doing its
+job, before the code was written instead of after.**
 
 ## Backlog / resume state
 
