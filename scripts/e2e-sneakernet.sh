@@ -63,11 +63,15 @@ TRANSFER="${SNEAKERNET_TRANSFER:-}"
 _transfer_owned=0
 if [ -z "$TRANSFER" ]; then TRANSFER="$(mktemp -d)"; _transfer_owned=1; fi
 
+# B48 — do NOT add `local rc=$?` + `return $rc` here. It looks load-bearing and is a NO-OP: bash
+# preserves the shell's exit status across an EXIT trap unless the trap itself calls `exit`. MEASURED
+# 2026-07-18 (bash 5.2): a trap body of `return $rc` -> rc 7; `return 0` -> STILL 7 (returning 0 does
+# not mask a failure either); only `exit 3` -> 3. So the status below is correct on its own, and the
+# hazard to avoid is an `exit` in here — which would SILENTLY OVERRIDE a real failure with the
+# teardown's status. Keep this trap free of `exit`.
 cleanup() {
-  local rc=$?
   [ "$_transfer_owned" = 1 ] && rm -rf "$TRANSFER"
   make kind-down >/dev/null 2>&1 || true
-  return $rc
 }
 trap cleanup EXIT
 
