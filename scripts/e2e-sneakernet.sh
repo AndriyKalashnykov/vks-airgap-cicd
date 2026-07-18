@@ -9,13 +9,16 @@
 # -------------------------------------
 # The far side is exactly where the two OSes diverge, and every divergence is invisible on the
 # near side:
-#   * the COMPRESSOR IS CHOSEN BY THE OUTSIDE BOX (11-bundle.sh: zstd if present, else gzip) and
-#     must be DECODED BY THE INSIDE BOX. `zstd` is absent from BOTH base images (photon:5.0,
-#     ubuntu:26.04) — this only works because the jump-box images install it. Nothing else tests
-#     that coupling, and a bundle you cannot unpack is a wasted trip across an air gap.
-#   * Photon's coreutils are TOYBOX, not GNU (`tar`, and the `gzip -t` that already false-failed
-#     here once).
+#   * Photon's coreutils are TOYBOX, not GNU — `tar`, the `gzip -t` that already false-failed here
+#     once, and the `file` whose 'static' spelling false-died `make bundle` on every carried binary
+#     until 2026-07-18. This is the richest source of far-side-only breakage.
 #   * the CARRIED `crane` must actually exec on the target OS.
+#
+# RETIRED JUSTIFICATION, recorded so it is not re-derived: this block used to lead with "the
+# COMPRESSOR IS CHOSEN BY THE OUTSIDE BOX (zstd if present, else gzip) and must be DECODED BY THE
+# INSIDE BOX". That stopped being true when `BUNDLE_COMPRESSOR` defaulted to `none`
+# (11-bundle.sh:54) — a plain .tar, chosen precisely so the far side needs no decoder it may not
+# have. One of the three original reasons is gone; the two above still stand on their own.
 #
 # WHY A FRESH CLUSTER PER LEG (this is the load-bearing bit)
 # ---------------------------------------------------------

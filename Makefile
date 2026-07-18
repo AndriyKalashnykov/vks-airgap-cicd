@@ -459,9 +459,11 @@ e2e-kind-cross-cluster: ## Faithful 2-KinD-cluster validation of the cross-clust
 	@$(SCRIPTS)/e2e-cross-cluster.sh
 
 # The air-gap box's OS — BOTH BY DEFAULT, and that is the point. The far side is where Photon and Ubuntu
-# actually diverge, and every divergence is invisible on the near side: the bundle's COMPRESSOR is chosen
-# by the OUTSIDE box and must be decoded by the INSIDE one (Photon's tar is TOYBOX and has no --zstd AT
-# ALL; zstd ships on neither base image), and the carried `crane` must exec there.
+# actually diverge, and every divergence is invisible on the near side: Photon's coreutils are TOYBOX,
+# not GNU (its `tar`, the `gzip -t` that false-failed here once, and the `file` whose 'static' spelling
+# false-died `make bundle` on every carried binary until 2026-07-18), and the carried `crane` must exec
+# there. (The bundle's COMPRESSOR used to be a third reason — chosen outside, decoded inside — but
+# BUNDLE_COMPRESSOR now defaults to `none`, a plain .tar, so there is no decoder to lack.)
 #
 # This ran Photon-only, which is exactly why a shipping bug survived: the host emitted a .tar.zst that an
 # Ubuntu air-gap box CANNOT OPEN, and the Photon leg passed because that image happens to have GNU tar.
@@ -575,16 +577,28 @@ jumpbox-matrix: ## THE ENGINE MATRIX: {photon,ubuntu} x {podman,docker}, each pu
 	@# lock — but the lock lives in the repo copy INSIDE each container, so it does not serialize across
 	@# containers. Parallel legs would not corrupt Harbor (that story was a misdiagnosis; see CLAUDE.md),
 	@# but a failure would be unattributable, which costs more than the wall-clock saves.
-	@rc=0; \
+	@# The verdict COUNTS the legs; it does not assert them. `4/4 PASSED` used to be a hardcoded
+	@# STRING while the loop tracked only rc — so a run that executed three legs, or a loop whose
+	@# axes were later edited, would still have printed "4/4". That is this repo's own "the measured
+	@# column must be MEASURED" failure, in the summary line of its own matrix.
+	@rc=0; pass=0; total=0; \
 	 for os in photon ubuntu; do \
 	   for eng in podman docker; do \
+	     total=$$((total + 1)); \
 	     echo ""; echo "=================== LEG: $$os x $$eng ==================="; \
-	     $(MAKE) jumpbox JUMPBOX_OS=$$os JUMPBOX_ENGINE=$$eng || { echo "LEG FAILED: $$os x $$eng"; rc=1; }; \
+	     if $(MAKE) jumpbox JUMPBOX_OS=$$os JUMPBOX_ENGINE=$$eng; then \
+	       pass=$$((pass + 1)); \
+	     else \
+	       echo "LEG FAILED: $$os x $$eng"; rc=1; \
+	     fi; \
 	   done; \
 	 done; \
 	 echo ""; \
-	 [ $$rc -eq 0 ] && echo "JUMPBOX MATRIX: 4/4 PASSED — podman and docker each build and push to the self-signed Harbor, on Photon and Ubuntu" \
-	                || { echo "JUMPBOX MATRIX: FAILED"; exit 1; }
+	 if [ $$rc -eq 0 ] && [ $$pass -eq $$total ]; then \
+	   echo "JUMPBOX MATRIX: $$pass/$$total PASSED — podman and docker each build and push to the self-signed Harbor, on Photon and Ubuntu"; \
+	 else \
+	   echo "JUMPBOX MATRIX: $$pass/$$total passed — FAILED"; exit 1; \
+	 fi
 
 .PHONY: bootstrap-test
 bootstrap-test: ## Validate bootstrap-jumpbox.sh from-nothing on BARE OS images (BOOTSTRAP_TEST_OSES matrix) + unsupported-OS reject
