@@ -13,7 +13,7 @@ Measured:
 
 | | |
 |---|---|
-| compression gain | **~1%** — the payload is already-compressed OCI layer blobs (gzip reached 99.2% of raw on the real cache), for *minutes* of single-threaded CPU on 11 GB |
+| compression gain | **~1%** — the payload is already-compressed OCI layer blobs (gzip reached 99.2% of raw on the real cache), for *minutes* of single-threaded CPU on ~12 GB |
 | `zstd` on a bare `photon:5.0` / `ubuntu:26.04` | **absent** |
 | Photon's `tar` | **toybox** — has **no `--zstd` option at all**, so installing the zstd binary does not help (`tar: Unknown option 'zstd'`) |
 | plain `.tar` on toybox / busybox / GNU / bsdtar | **works** — no compressor binary, no tar flag |

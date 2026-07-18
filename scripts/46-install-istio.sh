@@ -112,7 +112,7 @@ chart_ref() {
   want="${CHART_DIR}/${1}-${v}.tgz"
   # `ls`, not `find -printf`: -printf is GNU-only and this script runs on the AIR-GAP box, which may
   # be Photon/toybox. There, find would fail, and a `|| echo none` fallback would tell an operator
-  # "carried: none" while the charts sit right there — sending them to re-cut an 11 GB bundle that is
+  # "carried: none" while the charts sit right there — sending them to re-cut a ~12 GB bundle that is
   # fine. (That fallback is also unreachable on GNU: find exits 0 on no-match.)
   # shellcheck disable=SC2012  # `ls` is DELIBERATE: SC2012 says use find, but `find -printf` is
   # GNU-only and this runs on the air-gap box (Photon/toybox). Chart filenames are helm-generated

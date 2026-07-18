@@ -43,7 +43,7 @@ base="vks-airgap-cicd-bundle-${stamp}"
 #      the bundle. The capability is tar's, not the binary's.
 #   2. COMPRESSION BUYS ~1%. The payload is already-compressed OCI layer blobs (`mediaType:
 #      …tar.gzip`). Measured on a 300 MB slice of the real cache: gzip 99.2%, zstd 99.9% of raw — and
-#      gzip costs ~25 s/GB of single-threaded CPU, i.e. MINUTES on an 11 GB bundle, to save ~1%.
+#      gzip costs ~25 s/GB of single-threaded CPU, i.e. MINUTES on a ~12 GB bundle, to save ~1%.
 #
 # So the answer is not "pick the universal compressor" — it is DON'T COMPRESS. A plain `.tar` needs no
 # compressor binary and no tar compression flag, so it works on toybox, busybox, GNU tar and bsdtar
@@ -199,11 +199,11 @@ have sha256sum || die "sha256sum is missing on this box — the bundle crosses r
 log_info "checksum: $(cat "${tarball}.sha256")"
 
 size="$(du -h "$tarball" | cut -f1)"
-# A FAT32 stick cannot hold a file >4 GiB. This bundle is ~11 GB. It is the single likeliest way a real
+# A FAT32 stick cannot hold a file >4 GiB. This bundle is ~12 GB. It is the single likeliest way a real
 # sneakernet carry fails, and it fails at COPY time, on the operator's floor, with a useless error.
 sz_bytes="$(stat -c%s "$tarball")"
 if [ "$sz_bytes" -gt 4294967295 ]; then
-  log_warn "this bundle is ${size} — it CANNOT be copied to a FAT32 / exFAT-formatted stick with a 4 GiB file limit. Use exFAT (no limit), ext4, XFS, or NTFS, or split it (split -b 3G) and cat it back."
+  log_warn "this bundle is ${size} — it CANNOT be copied to a FAT32-formatted stick (4 GiB per-file limit). Use exFAT, ext4, XFS, or NTFS, or split it (split -b 3G) and cat it back."
 fi
 log_info "bundle ready: $tarball ($size)"
 log_info "carry it (and this git repo) into the air gap, then:"
