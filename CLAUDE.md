@@ -580,10 +580,6 @@ Shipped across #33/#36: **34/34 must-block and 14/14 must-allow** now correct on
 
 ### Next
 
-- **B18/HOOK-004 is done for the file tools** (above). Its successor **HOOK-011** — subagent Bash
-  writes, 0/8 blocked — is the largest open control gap and needs its own idea-round: the honest
-  options are a bounded redirection/in-place-writer model with a containment check, or accepting and
-  DOCUMENTING the scope. An enumerated "which commands write" blocklist is refused in advance.
 - **START HERE — B19 is APPROVED and scheduled for THIS session** (owner ruling 2026-07-18: not
   lab-gated). Run `make e2e-sneakernet CONTAINER_ENGINE=docker`. **Confirm nothing needs the KinD
   cluster first** — it runs `kind-down` per leg and in its exit trap, so it destroys the cluster and
@@ -591,6 +587,10 @@ Shipped across #33/#36: **34/34 must-block and 14/14 must-allow** now correct on
   because `SNEAKERNET_OS` already defaults to both OSes and the engine delta lives only on the
   host/internet box. Rebuild afterwards (`make kind-up install-harbor mirror`) and record the result
   in the B19 row. Do NOT re-ask for permission.
+- **B18/HOOK-004 is done for the file tools** (above). Its successor **HOOK-011** — subagent Bash
+  writes, 0/8 blocked — is the largest open control gap and needs its own idea-round: the honest
+  options are a bounded redirection/in-place-writer model with a containment check, or accepting and
+  DOCUMENTING the scope. An enumerated "which commands write" blocklist is refused in advance.
 - **B43 is REFUTED as specified** and the row now records the measured topology (6 invocations / 8
   legs / 3 groups; the cube is a category error). What remains of it is optional convenience.
 - **B17 is CLOSED** — all nine descoped rows landed (#322, #323, #325).
