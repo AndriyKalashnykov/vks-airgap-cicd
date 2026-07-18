@@ -1,11 +1,24 @@
 #!/usr/bin/env bash
 # test-airgap-toolchain.sh — can a REAL air-gapped box (no internet, no toolchain) actually do the job?
 #
-# WHAT THIS EXISTS TO CATCH, because the sneakernet e2e could not:
-#   its "air-gap box" is `vks-jumpbox:<os>-<engine>`, which runs `make deps` AT IMAGE BUILD TIME — so it
-#   already had kubectl/helm/jq/yq before the bundle arrived. The e2e asserted only that CRANE was absent.
-#   The bundle therefore carried no toolchain for the INSTALL half, the runbook told operators to run
-#   `make platform`/`gitops`/`verify` on a box whose tools could not exist, and every test was green.
+# WHAT THIS EXISTS TO CATCH.
+#   ORIGINALLY (and this is why the test was written): the sneakernet e2e's "air-gap box"
+#   `vks-jumpbox:<os>-<engine>` ran `make deps`, so it already had kubectl/helm/jq/yq before the bundle
+#   arrived; the e2e asserted only that CRANE was absent. The bundle therefore carried no toolchain for
+#   the INSTALL half, the runbook told operators to run `make platform`/`gitops`/`verify` on a box whose
+#   tools could not exist, and every test was green.
+#
+#   THAT IS NO LONGER TRUE, and saying it here was a false rationale on a control — corrected
+#   2026-07-18. `jumpbox-run.sh` no longer runs `make deps` on the sneakernet path ("NO `make deps`
+#   HERE. THAT WAS THE LIE."), and MEASURED on the built images: crane, kubectl, helm, jq and yq are
+#   ALL ABSENT from `vks-jumpbox:photon-podman` and `vks-jumpbox:ubuntu-podman`. The e2e also now runs
+#   `make check-tools` after bundle-load, which lists all five as `carried` and EXECUTES each — so it
+#   WOULD notice a bundle that dropped one.
+#
+#   WHAT THIS STILL ADDS, precisely: the e2e asserts only that CRANE was absent beforehand, and its box
+#   sits on the `kind` network. This test proves PROVENANCE — a box with no mise at all
+#   (Dockerfile.airgap) and NO NETWORK AT ALL, asserting all five absent first, so the five that appear
+#   can only have come from the carried bundle.
 #
 # This test runs the bundle-load on a box that is BARE (jumpbox/Dockerfile.airgap: OS packages only) and
 # has NO NETWORK AT ALL (`--network none`, so not even a package mirror can save it), on BOTH supported
