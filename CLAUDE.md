@@ -571,32 +571,49 @@ Shipped across #33/#36: **34/34 must-block and 14/14 must-allow** now correct on
 
 ### Next
 
-- **Nothing is in flight.** The `claude-config` HOOK backlog is now accurate: HOOK-001/002/003/005/
-  006/007/008/009/010 are DONE; **HOOK-004** (worktree exemption keys on the target path, = **B18**
-  here) is the only open one, and it still needs a live `getcwd()` probe from a real
-  `isolation:"worktree"` subagent before a cwd-anchored fix is safe.
-- **In this repo**, the ready work is the **nine doc-truth rows re-scoped out of B17** —
-  `docs/scenario-1.md:419` first (it asserts an air-gap limitation that no longer exists), then the
-  ungated `file(1)` dependency in `11-bundle.sh:149`.
+- **Nothing is in flight.** Both repos green, trees clean. `claude-config` HOOK backlog is accurate:
+  HOOK-001/002/003/005/006/007/008/009/010 DONE; **HOOK-004** (worktree exemption keys on the target
+  path, = **B18** here) is the only open one and still needs a live `getcwd()` probe — **which I could
+  not run: the classifier blocks writing a trace into the live global hook, so an instrumented
+  end-to-end test needs an explicit permission from you.** Do not "fix" HOOK-004 without it; a wrong
+  assumption there false-blocks legitimate worktree writes.
+- **B17 is now genuinely closed** except one row, deliberately deferred (below). Its nine descoped
+  rows landed across #322 (the Photon toybox bug) and #323 (six doc-truth rows).
 - **B43** (the 8-cell engine × OS × flow matrix) is mapped and ready, with two corrections to the row
   itself: cells 7+8 collapse into **one** invocation (the engine axis lives on the host/internet box,
   the same machine for both OS legs), and `jumpbox-matrix` ⟂ `e2e-sneakernet` have a **hard
   prerequisite conflict** — the first needs a mirrored Harbor, the second destroys the cluster and
   demands an empty one. They cannot share a cluster.
+- **DEFERRED, and do NOT guess it:** `docs/sneakernet.md:193` says the e2e jump-box image "runs
+  `make deps` at build time, so it could never notice a missing carried tool". **Both clauses are
+  false** (`Dockerfile.photon:6` says container start; `jumpbox-run.sh:95` says the sneakernet branch
+  runs it NOT AT ALL) — **and so is the obvious replacement**, because `jumpbox-run.sh:137` runs
+  `make check-tools` and `03-check-tools.sh:59-66` marks kubectl/helm/jq/yq as `carried` (≈required),
+  so the e2e *would* notice. The same false claim seeds `scripts/test-airgap-toolchain.sh:5`, a
+  control's own rationale. It reads as a historical artifact from before the "NO `make deps` HERE.
+  THAT WAS THE LIE." fix. Settle what `airgap-toolchain-test` actually adds over the e2e before
+  rewriting either site.
 - **LAB-GATED — leave alone:** B2, B19, B20, B24, B25, B27.
+- **OBSERVED, unexplained:** one `check-namespace-labelled` failure that did not reproduce on two
+  subsequent runs of the identical tree (and passes on clean `main`). Not caused by the diff it
+  appeared on. `test-namespace-gates` mutates a `$TMP` copy, not the real tree, so that is not the
+  mechanism. A worktree-isolated adversary was running at that moment. Recorded, not dismissed — if
+  it recurs, that correlation is the first thing to test.
 
 ### The one thing to carry forward
 
-**Both adversary rounds earned their keep, in opposite directions.** The idea round refuted my
-premise (*"these are DONE"*) and my design (a line-wide `-X GET` lookahead that would have been
-**fail-open**: `gh api …pulls -f title=x && gh api -X GET rate_limit` would have suppressed the block
-on the PR-creating command). The implementation round then **cleared** the code on real measurements
-— 0 new false blocks / 396, 0 fail-open regressions / 540 — and still found three real gaps,
-including one I had just introduced.
+**"The repo is green" is not "the control is live", and it took a permission denial to notice.**
+This session closed 34 bypasses in `subagent-readonly.py` with per-fix RED-proofs, an adversary
+round and green CI — while the hook actually gating every session on this box was **205 lines
+behind and blocked 0 of 7 of them**. Root cause: `~/.claude/{commands,rules,agents}` are SYMLINKS to
+the repo (so those edits are live instantly, which HID the problem) while `hooks/` is a real COPY,
+and `setup.sh` had been dying at its **first file** under `set -e` — `cp` calls "same file" an
+error — so it installed **nothing**, ever. Fixed in claude-config #39/#40, and the fixes are now
+verifiably live (930 lines, 34/34 must-block, 12/12 must-allow, measured on `~/.claude/hooks/`).
 
-And the counter-lesson, which is new: **an adversary's proposed FIX is a separate claim from the BUG
-it found.** Its `hash-object` patch still missed `-wt` — its own measured case. Verify the remedy,
-not just the finding.
+The pattern underneath it, which `testing.md` now carries: **a number that is real can describe the
+wrong artifact.** `main`'s gate read 198/198 — *the same count as before* a parser rewrite it was
+already carrying. Green, and blind.
 
 ## Backlog / resume state
 
