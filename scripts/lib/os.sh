@@ -403,6 +403,12 @@ EOF
   # That is the repo's own clobber rule (check-env-clobber), and it was unenforced for the ONE
   # variable that decides WHICH CLUSTER you are talking to. It also made a two-cluster test
   # impossible to drive: you cannot hand a script a different KUBECONFIG.
+  #
+  # NB (C13): this default is a PATH THAT MAY NOT EXIST. A `${KUBECONFIG:?}` guard proves only that the
+  # var is SET — which this line always makes true — NOT that the file is present, so it can never be
+  # the "you have no kubeconfig" gate (kubectl then silently falls back to http://localhost:8080). The
+  # PRESENCE gate is env-check's `[ -f ]` (scripts/02-env.sh). Do NOT add a bare `:?` on a path-valued
+  # load_env default expecting it to catch a missing file — existence-check the file instead.
   export KUBECONFIG="${KUBECONFIG:-${REPO_ROOT}/secrets/vks.kubeconfig}"
 
   # Same story, same fix: ARGOCD_NAMESPACE selects WHICH ArgoCD instance you talk to. It was pinned
