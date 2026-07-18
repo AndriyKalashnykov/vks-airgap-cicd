@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # test-adversary-gate-rearm.sh — the adversary-first gate RE-ARMS on every commit.
 #
-# A review authorizes guarded writes only until the next commit: the receipt records the wall-clock
-# time an adversary was engaged, and a guarded write is allowed only when that time is NEWER than the
-# repo's HEAD commit. Committing moves HEAD past the receipt, so the next unit of work needs its own
-# adversary pass. This is the fix for the session-lifetime-receipt hole (one design review authorizing
-# every later write for the whole session).
+# A review authorizes guarded writes only until the next NON-EXEMPT commit (B45): the receipt records
+# the wall-clock time an adversary was engaged, and a guarded write is allowed only when that time is
+# NEWER than the repo's most recent NON-EXEMPT commit. A guarded/neither commit re-arms; an exempt-only
+# (docs/handoff/CI/plan) commit does NOT. This is the fix for the session-lifetime-receipt hole (one
+# design review authorizing every later write) + B45 (a docs commit no longer strands a code review).
 #
 # Hermetic: a throwaway git repo with a commit at a KNOWN committer epoch; synthetic PreToolUse JSON.
 set -uo pipefail
@@ -69,6 +69,44 @@ AFTER="$(python3 -c "print(int(float('$R'))+10)")"
 : > "$TMP/f2"; git -C "$TMP" add f2
 GIT_COMMITTER_DATE="@$AFTER +0000" GIT_AUTHOR_DATE="@$AFTER +0000" git -C "$TMP" commit -qm after-review
 probe 2 "guarded write after a post-review commit -> BLOCK (re-arm works)" "$(gwrite)"
+
+echo "--- B45: an EXEMPT-only commit does NOT re-arm; guarded / mixed / neither DO ---"
+# Baseline = the last NON-EXEMPT commit (f2 above). A review just after it, then an EXEMPT-only commit:
+# the baseline must NOT advance, so the guarded write stays allowed (the B45 fix).
+NEX="$(git -C "$TMP" log -1 --format=%ct -- . ':(exclude).claude' ':(exclude).github' ':(exclude)CLAUDE.md')"
+REV="$((NEX+50))"; echo "$REV" > "$RECEIPT"
+DOCS="$((REV+50))"; : > "$TMP/CLAUDE.md"; git -C "$TMP" add CLAUDE.md
+GIT_COMMITTER_DATE="@$DOCS +0000" GIT_AUTHOR_DATE="@$DOCS +0000" git -C "$TMP" commit -qm docs-only
+probe 0 "B45 THE FIX: guarded write after a DOCS-ONLY (CLAUDE.md) commit -> ALLOW (exempt does not re-arm)" "$(gwrite)"
+
+CLD="$((DOCS+50))"; mkdir -p "$TMP/.claude/hooks"; : > "$TMP/.claude/hooks/z.py"; git -C "$TMP" add .claude/hooks/z.py
+GIT_COMMITTER_DATE="@$CLD +0000" GIT_AUTHOR_DATE="@$CLD +0000" git -C "$TMP" commit -qm claude-only
+probe 0 "B45: guarded write after a .claude/-only commit -> ALLOW"                            "$(gwrite)"
+
+GRD="$((CLD+50))"; : > "$TMP/scripts/foo.sh"; git -C "$TMP" add scripts/foo.sh
+GIT_COMMITTER_DATE="@$GRD +0000" GIT_AUTHOR_DATE="@$GRD +0000" git -C "$TMP" commit -qm guarded
+probe 2 "B45 RE-ARM: guarded write after a scripts/ commit -> BLOCK"                          "$(gwrite)"
+
+echo "$((GRD+50))" > "$RECEIPT"; MIX="$((GRD+100))"
+: > "$TMP/scripts/bar.sh"; : > "$TMP/CLAUDE.md"; git -C "$TMP" add scripts/bar.sh CLAUDE.md
+GIT_COMMITTER_DATE="@$MIX +0000" GIT_AUTHOR_DATE="@$MIX +0000" git -C "$TMP" commit -qm mixed
+probe 2 "B45 MIXED: guarded write after a scripts+CLAUDE.md commit -> BLOCK (guarded file re-arms)" "$(gwrite)"
+
+echo "$((MIX+50))" > "$RECEIPT"; NTH="$((MIX+100))"
+: > "$TMP/.env.example"; git -C "$TMP" add .env.example
+GIT_COMMITTER_DATE="@$NTH +0000" GIT_AUTHOR_DATE="@$NTH +0000" git -C "$TMP" commit -qm neither
+probe 2 "B45 (b): guarded write after a NEITHER (.env.example) commit -> BLOCK (only ALL-exempt commits skip)" "$(gwrite)"
+
+echo "--- B45: the exclude pathspec is DERIVED from the EXEMPT constants (no third hand-typed list) ---"
+awk '/^def _last_nonexempt_commit_epoch/{f=1;next} f&&/^def /{f=0} f' "$HOOK" > "$TMP/fn.txt"
+# Grep the CODE form (`for p in EXEMPT_PREFIXES`), NOT the bare names — those also appear in the
+# function's DOCSTRING, so grepping the names is vacuous (a hand-typed exclude with the docstring intact
+# would false-pass). The comprehension is what proves the pathspec is derived, not hand-typed.
+if [ -s "$TMP/fn.txt" ] && grep -q 'for p in EXEMPT_PREFIXES' "$TMP/fn.txt" && grep -q 'for f in EXEMPT_FILES' "$TMP/fn.txt"; then
+  ok "B45: _last_nonexempt_commit_epoch builds its exclude from EXEMPT_PREFIXES/EXEMPT_FILES"
+else
+  bad "B45: the exclude pathspec is not derived from the EXEMPT constants (enumerated-list-rot risk)"
+fi
 
 if [ "$fail" -eq 0 ]; then echo "PASS: adversary-first gate re-arms on every commit"
 else echo "FAIL: re-arm gate has a hole" >&2; fi
