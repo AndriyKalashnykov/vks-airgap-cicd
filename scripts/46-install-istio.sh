@@ -23,7 +23,7 @@ load_env
 
 require_cmd kubectl
 require_cmd helm
-: "${KUBECONFIG:?KUBECONFIG must be set (see .env.example / .env.kind)}"; export KUBECONFIG
+: "${KUBECONFIG:?KUBECONFIG must be set (see .env.example; produced by make vks-login or make kind-up)}"; export KUBECONFIG
 : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"
 : "${ISTIO_VERSION:?}"; : "${ISTIO_NAMESPACE:?}"
 # The gateway namespace is OUR install's default and lives here, not in .env.example:

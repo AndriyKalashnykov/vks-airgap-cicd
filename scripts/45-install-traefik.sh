@@ -19,7 +19,7 @@ load_env
 
 require_cmd kubectl
 require_cmd envsubst "install gettext (provides envsubst)"
-: "${KUBECONFIG:?KUBECONFIG must be set (see .env.example / .env.kind)}"; export KUBECONFIG
+: "${KUBECONFIG:?KUBECONFIG must be set (see .env.example; produced by make vks-login or make kind-up)}"; export KUBECONFIG
 : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"
 : "${TRAEFIK_NAMESPACE:?}"
 : "${GITEA_NAMESPACE:?}"; : "${GITEA_HOST:?}"

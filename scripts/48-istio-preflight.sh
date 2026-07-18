@@ -22,7 +22,7 @@ load_env
 
 require_cmd kubectl
 require_cmd jq
-: "${KUBECONFIG:?KUBECONFIG must be set (see .env.example / .env.kind)}"; export KUBECONFIG
+: "${KUBECONFIG:?KUBECONFIG must be set (see .env.example; produced by make vks-login or make kind-up)}"; export KUBECONFIG
 : "${GITEA_HOST:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
 : "${GITEA_NAMESPACE:?}"; : "${TEKTON_NAMESPACE:?}"
 # Every app has its own namespace + host — both come from the registry.

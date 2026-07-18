@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 
 require_cmd kubectl; require_cmd git; require_cmd curl
-: "${KUBECONFIG:?}"; export KUBECONFIG
+kubeconfig_ready
 : "${GITEA_NAMESPACE:?}"; : "${GITEA_ADMIN_USER:?}"; : "${GITEA_ORG:?}"
 : "${APP_BRANCH:?}"; : "${CI_NAMESPACE:?}"; : "${ARGOCD_NAMESPACE:?}"
 # Per-app values come from the registry — verify runs the SAME proof for EVERY app.

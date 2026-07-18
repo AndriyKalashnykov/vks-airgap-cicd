@@ -27,7 +27,7 @@ load_env
 
 require_cmd kubectl
 require_cmd envsubst "install gettext (provides envsubst)"
-: "${KUBECONFIG:?}"; export KUBECONFIG
+kubeconfig_ready
 : "${ARGOCD_NAMESPACE:?}"
 : "${ARGOCD_TRACK_BRANCH:?}"; : "${GITEA_INTERNAL_URL:?}"; : "${GITEA_ORG:?}"
 : "${GITEA_CI_USER:?}"

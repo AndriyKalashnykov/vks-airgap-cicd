@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 
 require_cmd kubectl
-: "${KUBECONFIG:?}"; export KUBECONFIG
+kubeconfig_ready
 : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"; : "${BUNDLE_DIR:?}"
 : "${TEKTON_PIPELINES_VERSION:?}"; : "${TEKTON_TRIGGERS_VERSION:?}"; : "${TEKTON_DASHBOARD_VERSION:?}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"

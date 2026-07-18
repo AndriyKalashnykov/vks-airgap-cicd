@@ -429,6 +429,30 @@ EOF
   export VKS_CONTEXT="${VKS_CONTEXT:-vks-workload}"
 }
 
+# kubeconfig_ready — the PRESENCE gate for a script about to run kubectl. load_env DEFAULTS KUBECONFIG
+# to a PATH THAT MAY NOT EXIST (secrets/vks.kubeconfig), so a bare `: "${KUBECONFIG:?}"` proves the var
+# is SET (always true), NOT that the file is present (C13) — and kubectl then silently dials
+# http://localhost:8080, giving an error that points nowhere near "produce a kubeconfig first". This
+# adds the `[ -f ]` the `:?` cannot. `env-check` already covers the sanctioned path; this makes an
+# install-time CONSUMER self-sufficient when run standalone against no cluster.
+#
+# CALL AS A BARE TOP-LEVEL STATEMENT ONLY (not in $(...) or an `if` — die's exit semantics change).
+# Do NOT call it from a read-only preflight ACCUMULATOR (23-argocd-preflight, 49-psa-check): those run
+# BEFORE the kubeconfig producer and must stay tolerant (they collect all findings, not die early).
+# It is for the workload KUBECONFIG only — a CREATOR path (30-vks-login writes it) must not use it, and
+# a different-file check (71's GUEST_KUBECONFIG) does its own `[ -f ]`.
+kubeconfig_ready() {
+  : "${KUBECONFIG:?KUBECONFIG must be set (path to the workload-cluster kubeconfig)}"
+  # A colon-merged KUBECONFIG (kubectl merges multiple files, e.g. ~/.kube/config:~/.kube/lab) is not a
+  # single path — `[ -f ]` on the whole string is meaningless. That is a deliberate operator choice, so
+  # defer to kubectl and only presence-check the SINGLE-path case (the one load_env's default produces).
+  case "$KUBECONFIG" in
+    *:*) : ;;
+    *)   [ -f "$KUBECONFIG" ] || die "KUBECONFIG='$KUBECONFIG' does not exist — produce it first: 'make vks-login' (real lab) or 'make kind-up' (KinD), or point KUBECONFIG at your kubeconfig." ;;
+  esac
+  export KUBECONFIG
+}
+
 # --- Quoting a SECRET for a sink that PARSES it -------------------------------------------------
 #
 # Two sinks in this repo take a credential and parse it. Both were interpolating it RAW. Neither

@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 
 require_cmd kubectl; require_cmd git; require_cmd curl; require_cmd yq
-: "${KUBECONFIG:?}"; export KUBECONFIG
+kubeconfig_ready
 : "${GITEA_NAMESPACE:?}"; : "${GITEA_ADMIN_USER:?}"
 : "${GITEA_ADMIN_PASSWORD:?set GITEA_ADMIN_PASSWORD in .env}"
 : "${GITEA_ORG:?}"
