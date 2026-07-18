@@ -19,7 +19,7 @@ load_env
 
 require_cmd kubectl
 
-: "${KUBECONFIG:?KUBECONFIG must be set (see .env.example / .env.kind)}"; export KUBECONFIG
+: "${KUBECONFIG:?KUBECONFIG must be set (see .env.example; produced by make vks-login or make kind-up)}"; export KUBECONFIG
 : "${ARGOCD_VERSION:?ARGOCD_VERSION must be set in .env.example}"
 ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"

@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 
 require_cmd kubectl
-: "${KUBECONFIG:?}"; export KUBECONFIG
+kubeconfig_ready
 : "${CI_NAMESPACE:?}"; : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"; : "${HARBOR_APP_PROJECT:?}"
 : "${HARBOR_USERNAME:?set HARBOR_USERNAME in .env (admin for scenario 1, your robot for scenario 2)}"; : "${HARBOR_PASSWORD:?set HARBOR_PASSWORD in .env}"
 : "${GITEA_INTERNAL_URL:?}"; : "${GITEA_ORG:?}"

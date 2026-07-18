@@ -10,7 +10,7 @@ load_env
 
 require_cmd kubectl
 require_cmd envsubst "install gettext (provides envsubst)"
-: "${KUBECONFIG:?}"; export KUBECONFIG
+kubeconfig_ready
 : "${GITEA_NAMESPACE:?}"; : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"
 # GITEA_URL DERIVES from GITEA_HOST (the ingress hostname) so the hostname has ONE source of
 # truth. It used to be a second literal in .env.example kept in sync with GITEA_HOST by a prose

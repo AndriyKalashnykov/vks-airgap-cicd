@@ -685,7 +685,7 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-doc-robot-quoting test-e2e-fresh ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh ## Run all offline script-logic unit tests
 
 # NOTE: subagent-readonly + no-gate-in-commit-chain hooks (and their tests) are now GLOBAL
 # (~/projects/claude-config, installed into ~/.claude); this repo keeps only the project-local
@@ -701,6 +701,10 @@ test-namespace-gates: ## Offline: RED-prove check-namespace-labelled + check-pod
 .PHONY: test-doc-robot-quoting
 test-doc-robot-quoting: ## Offline: RED-prove check-doc-robot-quoting flags an unquoted Harbor robot credential (both directions) (B28)
 	@./scripts/test-doc-robot-quoting.sh
+
+.PHONY: test-kubeconfig-ready
+test-kubeconfig-ready: ## Offline: kubeconfig_ready gates on the FILE existing (C13), and the preflight accumulators/creator do NOT call it (B32)
+	@./scripts/test-kubeconfig-ready.sh
 
 .PHONY: test-e2e-fresh
 test-e2e-fresh: ## Offline: E2E_FRESH=1 makes e2e-kind cold (kind-down first) + the reuse verdict banner is wired (B42)

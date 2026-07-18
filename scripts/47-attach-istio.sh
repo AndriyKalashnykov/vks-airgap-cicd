@@ -53,7 +53,7 @@ LB_OVERRIDE="${INGRESS_LB_IP_OVERRIDE:-}"
 
 require_cmd kubectl
 require_cmd jq
-: "${KUBECONFIG:?KUBECONFIG must be set (see .env.example / .env.kind)}"; export KUBECONFIG
+: "${KUBECONFIG:?KUBECONFIG must be set (see .env.example; produced by make vks-login or make kind-up)}"; export KUBECONFIG
 : "${GITEA_NAMESPACE:?}"; : "${GITEA_HOST:?}"
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
