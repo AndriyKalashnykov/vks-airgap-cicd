@@ -33,7 +33,7 @@ require_cmd crane
 require_cmd curl
 
 : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"; : "${HARBOR_APP_PROJECT:?}"
-: "${HARBOR_USERNAME:?}"
+: "${HARBOR_USERNAME:?set HARBOR_USERNAME in .env (admin for scenario 1, your robot for scenario 2)}"
 : "${HARBOR_PASSWORD:?set HARBOR_PASSWORD in .env (never passed on argv)}"
 : "${IMAGE_CACHE_DIR:?}"
 

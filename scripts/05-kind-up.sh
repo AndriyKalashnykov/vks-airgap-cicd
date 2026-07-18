@@ -123,6 +123,10 @@ if [ "$need_create" = 1 ]; then state_set KIND_REUSED 0; else state_set KIND_REU
 # random, complexity-valid, NON-hardcoded value (lib/os.sh). ArgoCD's admin password stays
 # auto-generated when blank. NOTE: task #13 (env-init/env-populate) will move this into an
 # explicit `.env` populate step; kept here as the validated interim that unblocks #98's smoke.
+# HARBOR_USERNAME is the KinD Harbor admin (`admin`). Published to the state overlay exactly like the
+# generated password (only-if-unset), so the SKIP_DOTENV KinD flow has it after HARBOR_USERNAME was
+# commented in .env.example (B14) — same clobber exposure as HARBOR_PASSWORD, no worse.
+[ -n "${HARBOR_USERNAME:-}" ]      || state_set HARBOR_USERNAME admin
 [ -n "${HARBOR_PASSWORD:-}" ]      || state_set HARBOR_PASSWORD "$(gen_password)"
 [ -n "${GITEA_ADMIN_PASSWORD:-}" ] || state_set GITEA_ADMIN_PASSWORD "$(gen_password)"
 # ArgoCD too — and it MUST be generated HERE, into the state overlay .env.state, not left to `.env`.

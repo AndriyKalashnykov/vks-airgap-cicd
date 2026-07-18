@@ -10,7 +10,7 @@
 #   HARBOR_CURL_CFG (path); exports SSL_CERT_FILE when a CA bundle is built (crane honors it).
 harbor_setup() {
   local tmp="$1"
-  : "${HARBOR_URL:?}"; : "${HARBOR_USERNAME:?}"
+  : "${HARBOR_URL:?}"; : "${HARBOR_USERNAME:?set HARBOR_USERNAME in .env (admin for scenario 1, your robot for scenario 2)}"
   : "${HARBOR_PASSWORD:?set HARBOR_PASSWORD in .env (never passed on argv)}"
   HARBOR_TLS_VERIFY="true"
   if [ "${HARBOR_INSECURE:-0}" = "1" ]; then

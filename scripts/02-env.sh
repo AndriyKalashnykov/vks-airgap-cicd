@@ -104,6 +104,7 @@ env_populate() {
   echo "    VKS_NAMESPACE        the vSphere Namespace name"
   echo "    VKS_USERNAME         your vSphere SSO admin (e.g. administrator@vsphere.local)"
   echo "    VKS_CLUSTER_NAME     the VKS workload cluster name"
+  echo "    HARBOR_USERNAME      'admin' if you installed Harbor (Scenario 1); the robot login robot\$<name> for a tenant (Scenario 2) — the local KinD flow sets this itself"
   echo "    HARBOR_PASSWORD      OVERRIDE the generated value with the lab's admin/robot secret"
   echo "    VCF_CLI_SRC_DIR      folder holding the licensed VCF/argocd-vcf CLI archives (make install-vcf-clis)"
   echo
