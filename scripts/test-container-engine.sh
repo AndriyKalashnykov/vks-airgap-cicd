@@ -123,7 +123,7 @@ for f in scripts/[0-9][0-9]-*.sh scripts/lib/*.sh scripts/creds.sh scripts/argoc
   # NOTE the marker DELETES THE WHOLE LINE (`/d`), it does not just strip the comment: the docker call
   # sits BEFORE the `#`, so blanking only the comment would leave the call behind and the exemption
   # would silently do nothing. (First draft did exactly that — caught by the RED test, not by reading.)
-  if sed '/#[[:space:]]*docker-ok:/d' "$f" | sed 's/#.*//' | grep -qE \
+  if sed '/#[[:space:]]*docker-ok:/d' "$f" | sed 's/#.*//' | grep -E \
        '(require_cmd|command -v|have|run|sudo)[[:space:]]+docker([[:space:]]|$)|(^|[;&|]|\$\()[[:space:]]*docker[[:space:]]+[a-z]|docker\.sock'; then
     offenders="${offenders} ${b}"
   fi
@@ -203,7 +203,7 @@ for f in scripts/[0-9][0-9]-*.sh scripts/lib/*.sh; do
   [ -f "$f" ] || continue
   [ "$(basename "$f")" = os.sh ] && continue   # os.sh DEFINES engine_packages — the one file allowed to name them
   lit_scanned=$((lit_scanned + 1))
-  if sed 's/#.*//' "$f" | grep -qE 'pkg_install[^|]*(^| )(podman|docker|docker\.io|docker-ce[a-z-]*|docker-rootless)( |$)'; then
+  if sed 's/#.*//' "$f" | grep -E 'pkg_install[^|]*(^| )(podman|docker|docker\.io|docker-ce[a-z-]*|docker-rootless)( |$)' >/dev/null; then
     lit_offenders="${lit_offenders} $(basename "$f")"
   fi
 done

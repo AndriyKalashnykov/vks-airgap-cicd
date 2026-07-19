@@ -162,7 +162,7 @@ verify_app() {
   # first match and SIGPIPE curl (141), which under `set -o pipefail` reads as "marker absent" —
   # a false failure on a page that DID show it.
   # shellcheck disable=SC2329  # invoked indirectly (for_each_app / wait_for)
-  marker_visible() { local b; b="$(curl -fsS "${url}/" 2>/dev/null || true)"; printf '%s' "$b" | grep -q "$marker"; }
+  marker_visible() { local b; b="$(curl -fsS "${url}/" 2>/dev/null || true)"; grep -q "$marker" <<< "$b"; }
   if wait_for "[${app}] deployed page shows marker ${marker}" marker_visible; then
     log_info "[${app}] SUCCESS — the deployed page shows '${marker}'"
   else

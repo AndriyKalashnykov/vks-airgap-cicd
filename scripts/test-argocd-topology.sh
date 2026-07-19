@@ -206,12 +206,12 @@ fi
 # 40-install-gitea.sh used to publish GITEA_ARGOCD_URL and 70 read it back as an input — so a STALE
 # address was indistinguishable from a deliberate override, and a rebuilt Gitea would be cloned from
 # the OLD LB IP. (Same trap INGRESS_LB_IP_OVERRIDE already exists to avoid.)
-if sed 's/#.*//' "${SCRIPT_DIR}/40-install-gitea.sh" | grep -qE 'set_env_var[[:space:]]+GITEA_ARGOCD_URL'; then
+if sed 's/#.*//' "${SCRIPT_DIR}/40-install-gitea.sh" | grep -E 'set_env_var[[:space:]]+GITEA_ARGOCD_URL' >/dev/null; then
   bad "40-install-gitea.sh PUBLISHES GITEA_ARGOCD_URL — 70 would read back its own previous answer (a stale address is then indistinguishable from an override)"
 else
   ok "40-install-gitea.sh does not publish GITEA_ARGOCD_URL as an input"
 fi
-if sed 's/#.*//' "${SCRIPT_DIR}/70-configure-argocd.sh" | grep -qE 'GITEA_ARGOCD_URL="\$\{GITEA_ARGOCD_URL:-'; then
+if sed 's/#.*//' "${SCRIPT_DIR}/70-configure-argocd.sh" | grep -E 'GITEA_ARGOCD_URL="\$\{GITEA_ARGOCD_URL:-' >/dev/null; then
   bad "70-configure-argocd.sh READS BACK GITEA_ARGOCD_URL as an input instead of resolving it from the live Gitea Service"
 else
   ok "70-configure-argocd.sh resolves the clone URL from the live Gitea Service (override: GITEA_ARGOCD_URL_OVERRIDE)"

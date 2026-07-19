@@ -126,7 +126,7 @@ else
 fi
 
 # 7. the last publish-then-read-back is gone (70 re-derives the destination from the live cluster).
-if sed 's/#.*//' "${REPO_ROOT}/scripts/71-argocd-register-guest.sh" | grep -q 'state_set ARGOCD_DEST_SERVER'; then
+if sed 's/#.*//' "${REPO_ROOT}/scripts/71-argocd-register-guest.sh" | grep 'state_set ARGOCD_DEST_SERVER' >/dev/null; then
   bad "71 still PUBLISHES ARGOCD_DEST_SERVER — a stale pointer survives into the NEXT cluster"
 else
   ok "71 does not publish ARGOCD_DEST_SERVER (70 re-derives it from the live ArgoCD Cluster Secrets)"
