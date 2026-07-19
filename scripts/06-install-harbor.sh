@@ -148,7 +148,12 @@ else
   # precedent as 07-install-argocd.sh.
   # shellcheck source=scripts/lib/psa.sh
   . "${SCRIPT_DIR}/lib/psa.sh"
-  ensure_namespace "$NS"
+  # Spelled $HARBOR_NAMESPACE, not the $NS alias used elsewhere in this file, ON PURPOSE: the
+  # derived cross-check in check-namespace-labelled.sh resolves this argument by NAME, and a local
+  # alias is unresolvable -> it would need a permanent allowlist entry (enumerated-list rot) to say
+  # something the global name states for free. If anyone "tidies" this back to "$NS", that gate goes
+  # RED as unresolvable-and-unallowlisted, which is the correct loud signal.
+  ensure_namespace "$HARBOR_NAMESPACE"
   run helm upgrade --install "$RELEASE" "${CHART_REPO_NAME}/harbor" \
     --version "$CHART_VERSION" \
     --namespace "$NS" --create-namespace \
