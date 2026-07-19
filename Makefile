@@ -494,6 +494,10 @@ verify: check-env ## e2e: push a change → Tekton build → Harbor → ArgoCD s
 verify-ingress: check-env ## Assert the *.vks.local UIs route through the ingress LB (reads INGRESS_LB_IP from the .env.state overlay)
 	@$(SCRIPTS)/98-verify-ingress.sh
 
+.PHONY: verify-ingress-rendered
+verify-ingress-rendered: check-env ## Assert the ingress ROUTES were RENDERED where app backends deliberately do not exist (air-gap leg; additive to verify-ingress, never a replacement) (B50)
+	@./scripts/97-verify-ingress-rendered.sh
+
 .PHONY: verify-ingress-both
 verify-ingress-both: check-env ## Matrix: install + route-verify BOTH ingress controllers against the running cluster
 	@$(MAKE) install-ingress verify-ingress INGRESS_CONTROLLER=istio

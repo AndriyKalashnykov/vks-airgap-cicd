@@ -182,6 +182,15 @@ if [ "${JUMPBOX_MODE:-validate}" = "airgap-half" ]; then
   echo "### Step 4b — install-ingress: the CARRIED helm installs the CARRIED istio charts ###"
   make install-ingress
 
+  # 98-verify-ingress asserts every host reaches a LIVE backend, which CANNOT pass here: `gitops` is
+  # out of scope, so the apps have no pods. Narrowing 98 to make it pass was refuted (B50) — that is
+  # loosening a gate to obtain green. This is an ADDITIVE check with its own fixed scope, and it
+  # proves something nothing else does: that the CARRIED yq/envsubst/kubectl actually RENDERED the
+  # per-app Gateway hosts and VirtualServices. A 503 is the evidence (Envoy matched a route and found
+  # no endpoints); a 404 would mean the route was never rendered at all.
+  echo "### Step 4b2 — verify the CARRIED toolchain RENDERED the routes (apps intentionally unbacked) ###"
+  make verify-ingress-rendered
+
   # The carried builder is the one artifact whose RUNNABILITY nothing had ever tested. mirror-verify
   # and test-builder-save-crane both prove blob integrity; neither executes the image, so a mangled
   # CONFIG blob (entrypoint/user/PATH) survives every check and fails later inside a TaskRun.

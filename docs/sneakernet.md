@@ -164,6 +164,15 @@ make verify
 **Do NOT run `make install-all` on the jump box** — it starts with `mirror`, which needs the internet.
 Run the steps above instead.
 
+**If you stop before `gitops`** — as the automated air-gap leg does — the apps have no pods yet, so
+`make verify` and `make verify-ingress` cannot pass: they assert every host reaches a *live* backend.
+Run **`make verify-ingress-rendered`** instead. It checks something narrower and, at that point, more
+useful: that the **carried** `yq`/`envsubst`/`kubectl` actually rendered the per-app Gateway hosts and
+VirtualServices. Each app host must answer **5xx** — a 503 means Envoy matched a rendered route and
+found no endpoints, whereas a 404 would mean the route was never rendered at all. It is *additive*:
+it never replaces `verify-ingress`, and narrowing that gate to make it pass here would be loosening a
+verification gate to obtain green.
+
 **Ingress — pick one. All three work here; none needs the internet.**
 
 | | when |
