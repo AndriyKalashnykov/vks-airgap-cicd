@@ -40,15 +40,48 @@ load_env
 : "${INGRESS_LB_IP:?INGRESS_LB_IP not set — run 'make install-ingress' first (it publishes the LB IP to .env.state)}"
 : "${GITEA_HOST:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
 : "${INGRESS_CONTROLLER:=istio}"
+require_cmd curl "this gate probes the ingress over HTTP"
+
+# THE SPLIT IS MEASURED ON ISTIO ONLY, so refuse to assert it elsewhere rather than assert it
+# blindly. Traefik DOES render a per-app route (45-install-traefik.sh:107), but a plain k8s Ingress
+# whose backend Service is absent makes Traefik not expose the router at all -> 404, which would
+# invert this gate's meaning and fail every app host with a diagnosis blaming the carried toolchain
+# for a bug it does not have. A header sentence saying "re-measure on a new controller" is not a
+# control; this is. Widen the case ONLY after measuring a no-route host on that controller.
+case "${INGRESS_CONTROLLER}" in
+  istio|istio-existing) : ;;
+  *) die "97-verify-ingress-rendered: the 404-vs-503 split is MEASURED only on istio; INGRESS_CONTROLLER='${INGRESS_CONTROLLER}' is unmeasured. Re-measure with a host that has NO route on that controller, then widen this guard — do not assume the split holds." ;;
+esac
+# RED-PROOF for the guard above, and note WHICH form works. `INGRESS_CONTROLLER=traefik ./97...` does
+# NOT fire it: load_env sources .env.state AFTER the environment, so the PUBLISHED value wins (the
+# state-overlay clobber this repo documents). That is correct for this gate — it must check what was
+# actually installed, not what the caller claims — but it means the proof has to change the PUBLISHED
+# value:
+#   T=$(mktemp -d); git archive HEAD | tar -x -C "$T"; cp -a scripts/. "$T/scripts/"; cp .env.state "$T/"
+#   sed -i 's/^INGRESS_CONTROLLER=.*/INGRESS_CONTROLLER=traefik/' "$T/.env.state"
+#   ( cd "$T" && ./scripts/97-verify-ingress-rendered.sh ); echo "rc=$?"   # -> rc=1, FATAL ... unmeasured
+# Verified 2026-07-19. The env-var form was tried first and silently PASSED — a recorded RED-proof
+# that cannot fire is worse than none.
+
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
 CURL_MAX_TIME_SECONDS="${CURL_MAX_TIME_SECONDS:-10}"
 
-route_code() { curl -s -o /dev/null -w '%{http_code}' -H "Host: $1" \
-  --max-time "$CURL_MAX_TIME_SECONDS" "http://${INGRESS_LB_IP}/" 2>/dev/null || echo "000"; }
+# `curl -w '%{http_code}'` already PRINTS 000 on a connect failure AND exits non-zero, so the
+# idiomatic `|| echo "000"` appends a SECOND one and yields `000000` (measured, len 6) — which no
+# `case` arm matches, making the most diagnostic branch dead code. Normalise instead.
+# NOTE the same bug is inherited from 98-verify-ingress.sh:56-59, where it also degrades its
+# `000|50[234]` retry arm; worth fixing there too.
+route_code() {
+  local c
+  c="$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $1" \
+        --max-time "$CURL_MAX_TIME_SECONDS" "http://${INGRESS_LB_IP}/" 2>/dev/null)" || true
+  case "$c" in ''|*[!0-9]*) c=000 ;; esac
+  printf '%s' "$c"
+}
 
 rc=0
-infra_checked=0
+infra_checked=0   # reported, not guarded — see the note at the bottom
 app_checked=0
 
 # --- the infra hosts DO have backends here: they must route AND serve their own marker -----------
@@ -79,7 +112,19 @@ done
 while read -r a; do
   [ -n "$a" ] || continue
   host="$(app_host "$a")"
-  code="$(route_code "$host")"
+  # POLL. The infra poll above does NOT cover these: lib/istio.sh applies the shared-UI
+  # VirtualServices (:599) BEFORE the per-app ones (:604), so the infra hosts can be routing while an
+  # app's VS has not yet been programmed into Envoy. A single shot here would make this gate flaky-RED
+  # in the air-gap leg (it runs immediately after install-ingress) with a diagnosis blaming the
+  # carried toolchain — the K1.5 reconcile-race class 98-verify-ingress.sh already documents.
+  # 5xx/2xx/3xx are TERMINAL (route programmed); 404/000 mean "not programmed yet" — keep waiting and
+  # only emit the "never rendered" verdict at timeout.
+  code=""; _end=$((SECONDS + READY_TIMEOUT_SECONDS))
+  while [ "$SECONDS" -lt "$_end" ]; do
+    code="$(route_code "$host")"
+    case "$code" in 5??|2??|3??) break ;; esac
+    sleep "$POLL_INTERVAL_SECONDS"
+  done
   app_checked=$((app_checked + 1))
   case "$code" in
     000) log_error "  FAIL  ${host} -> 000: nothing answered at ${INGRESS_LB_IP}. The gateway itself is not serving."; rc=1 ;;
@@ -92,10 +137,17 @@ done <<EOF
 $(app_names)
 EOF
 
-# ITEM counts, guarded. A run that checked nothing must not report OK — the failure this repo spent a
-# session removing from its gates. Both counts, because they go to zero independently: an empty app
-# registry zeroes app_checked while infra_checked stays healthy.
-[ "$infra_checked" -gt 0 ] || die "97-verify-ingress-rendered: checked 0 infra host(s) — the gate has gone BLIND."
+# KNOWN LIMIT, stated rather than implied: istio returns 503 for a missing Service, for zero
+# endpoints, AND for all-endpoints-unhealthy, and curl cannot separate them (the response carries no
+# x-envoy-response-flags). So if `gitops` HAD run and an app were crash-looping, this gate would
+# report "backend absent as expected" over a deployed-and-broken app. It is green for a reason it
+# does not claim. Narrow in practice — the wiring is a scope where gitops never runs — and closing it
+# would need kubectl, re-importing the very dependency B50 refused. Do not widen the claim.
+#
+# ITEM count, guarded. `app_checked` is the real denominator: it goes to zero when apps/registry.tsv
+# empties or app_names breaks. There is deliberately NO infra_checked guard — the infra list is two
+# hardcoded entries, so that count is structurally always 2 and a guard on it COULD NEVER FIRE. A
+# guard that cannot fire is worse than none: it reads as a guarantee it does not give.
 [ "$app_checked" -gt 0 ] || die "97-verify-ingress-rendered: checked 0 app host(s) — apps/registry.tsv is empty or app_names is broken. The gate has gone BLIND."
 
 if [ "$rc" -ne 0 ]; then

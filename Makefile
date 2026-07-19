@@ -495,7 +495,7 @@ verify-ingress: check-env ## Assert the *.vks.local UIs route through the ingres
 	@$(SCRIPTS)/98-verify-ingress.sh
 
 .PHONY: verify-ingress-rendered
-verify-ingress-rendered: ## Assert the ingress ROUTES were RENDERED where app backends deliberately do not exist (air-gap leg; additive to verify-ingress, never a replacement) (B50)
+verify-ingress-rendered: check-env ## Assert the ingress ROUTES were RENDERED where app backends deliberately do not exist (air-gap leg; additive to verify-ingress, never a replacement) (B50)
 	@./scripts/97-verify-ingress-rendered.sh
 
 .PHONY: verify-ingress-both
