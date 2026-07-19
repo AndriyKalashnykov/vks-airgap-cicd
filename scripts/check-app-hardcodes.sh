@@ -89,7 +89,9 @@ done
 [ "$pairs" -gt 0 ] || die "check-app-hardcodes: 0 (file,app) comparison(s) across ${checked} file(s) — the FILE count is healthy but the ITEM count is zero, so the registry is empty or app_names is broken. The gate has gone BLIND."
 
 if [ "$rc" -eq 0 ]; then
-  log_info "check-app-hardcodes: OK — none of the ${checked} shared files names an app ($(app_names | tr '\n' ' ')); adding an app stays ONE ROW in apps/registry.tsv."
+  # Print the denominator the VERDICT is over. The guard is on `pairs`, so advertising only
+  # `checked` (the file count that was blind) would let a reader judge coverage by the wrong number.
+  log_info "check-app-hardcodes: OK — ${pairs} (file,app) comparison(s) across ${checked} shared file(s); none names an app ($(app_names | tr '\n' ' ')); adding an app stays ONE ROW in apps/registry.tsv."
 else
   log_error "check-app-hardcodes: a shared file names a specific app."
   log_error "  Derive it from apps/registry.tsv instead (scripts/lib/apps.sh: app_names/app_src/app_host/"

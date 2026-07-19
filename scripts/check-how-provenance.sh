@@ -69,7 +69,7 @@ while IFS= read -r line; do
 done < <(grep -n '# *how' "$ENV_FILE")
 
 if [ "$rc" -eq 0 ]; then
-  [ "$n" -gt 0 ] || die "check-how-provenance: examined 0 '# how:' commands in .env.example — the gate has gone BLIND (the file is empty or the grep no longer matches the convention)."
+  [ "$n" -gt 0 ] || die "check-how-provenance: examined 0 '# how:' commands in .env.example — EITHER the '# how:' convention moved out of .env.example (in which case RETIRE this gate, do not weaken it) OR the file is empty / the grep no longer matches. Naming both: a zero here is not automatically blindness."
   log_info "check-how-provenance: OK — all ${n} '# how:' commands are runnable-by-us, a real make target, or provenance-tagged."
 else
   log_error "check-how-provenance: an acquisition command is an UNMARKED GUESS. Fix it or grade it."
