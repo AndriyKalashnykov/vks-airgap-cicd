@@ -239,6 +239,11 @@ assert_starved check-java-alignment.sh    "check-java-alignment dies with no app
 # and the harness emits a FALSE RED against a healthy gate. Observed exactly that, once, here.
 # A single NAMED non-lib script is permitted by the blast-radius rule (cf. 49-psa-check.sh above).
 assert_starved check-image-alignment.sh   "check-image-alignment dies with no k8s image refs"      'k8s/' 'scripts/40-install-gitea.sh'
+# check-ns-chokepoint: starving k8s/ removes the one declared ArgoCD syncOption hit, so its
+# both-directions reconciliation fires ("allowed for 1 but has NONE"). Its scripts/ corpus is NOT
+# starvable — it sources lib/os.sh, the blast-radius rule — so this covers the k8s side only, which
+# is the honest scope rather than an implied whole-gate proof.
+assert_starved check-ns-chokepoint.sh     "check-ns-chokepoint dies when a declared hit vanishes"  'k8s/'
 
 # Coverage, DERIVED — never a literal hand-typed beside the calls, which is a two-numbers-that-must-
 # agree problem with nothing asserting it. Both figures come from the SAME listing, so the count and
