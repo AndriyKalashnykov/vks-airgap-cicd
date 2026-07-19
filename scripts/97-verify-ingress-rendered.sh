@@ -70,8 +70,22 @@ CURL_MAX_TIME_SECONDS="${CURL_MAX_TIME_SECONDS:-10}"
 # `curl -w '%{http_code}'` already PRINTS 000 on a connect failure AND exits non-zero, so the
 # idiomatic `|| echo "000"` appends a SECOND one and yields `000000` (measured, len 6) — which no
 # `case` arm matches, making the most diagnostic branch dead code. Normalise instead.
-# NOTE the same bug is inherited from 98-verify-ingress.sh:56-59, where it also degrades its
-# `000|50[234]` retry arm; worth fixing there too.
+# NOTE ON 98-verify-ingress.sh, CORRECTED: an earlier version of this comment said the doubled string
+# "degrades its `000|50[234]` retry arm" there. That was WRONG -- in 98 that arm and its `*)` are both
+# `: ;`, so nothing was degraded and the harm was a nonsense `000000` in the failure line. Here the
+# arms ARE materially distinct (000 / 404 / 2??-3?? / 5??), which is why the fix was load-bearing in
+# THIS file. 98 is now fixed for a DIFFERENT and larger reason -- see its route_code header.
+#
+# WE DELIBERATELY DO NOT COPY 98'S TRANSPORT-STATUS NORMALISATION, because the two files ask different
+# questions. 98 asks "is this host SERVING?", so a response truncated by --max-time is NOT a success
+# and must collapse to 000. THIS file asks "is the route RENDERED?", and a backend that answered at all
+# -- even partially -- has already proven the route exists. Collapsing that to 000 here would report
+# "nothing answered at the LB; the gateway itself is not serving", which is the opposite of what
+# happened. Same primitive, opposite correct normalisation.
+#
+# `|| true` below is REDUNDANT, kept deliberately: `set -e` is not inherited into a command
+# substitution unless `shopt -s inherit_errexit` is set, and this repo sets it nowhere (verified).
+# It is defence if that ever changes, not a live requirement -- an earlier comment claimed it was.
 route_code() {
   local c
   c="$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $1" \
