@@ -47,6 +47,12 @@ mapfile -t TARGETS < <(
 
 rc=0
 checked=0
+# `checked` counts FILES (the outer loop). The registry drives the INNER loop, so an empty
+# apps/registry.tsv leaves `checked` at its healthy 136 while ZERO comparisons happen -- this gate
+# was itself an instance of the file-vs-item bug it helps enforce elsewhere. `pairs` counts the
+# actual (file, app) comparisons, which is the item the verdict is over. MEASURED: with the
+# registry starved, a `checked`-based guard does NOT fire (rc=0); the `pairs` guard does.
+pairs=0
 for f in "${TARGETS[@]}"; do
   [ -f "$f" ] || continue
   case "$f" in
@@ -56,6 +62,7 @@ for f in "${TARGETS[@]}"; do
   checked=$((checked + 1))
   while read -r app; do
     [ -n "$app" ] || continue
+    pairs=$((pairs + 1))
     # DOCUMENTATION may name an app (a comment explaining why, a `make help` line, a YAML
     # `description:` giving an example). CODE may not. So strip the documentation first, then look:
     #   - whole-line shell/YAML comments        (^ #)
@@ -75,6 +82,11 @@ for f in "${TARGETS[@]}"; do
 $(app_names)
 EOF
 done
+
+# Both denominators, because they fail independently: an empty TARGETS list zeroes `checked`
+# (the registry starvation cannot reach that), an empty registry zeroes `pairs`.
+[ "$checked" -gt 0 ] || die "check-app-hardcodes: examined 0 shared file(s) — the TARGETS pathspec is broken; a clean result would mean nothing."
+[ "$pairs" -gt 0 ] || die "check-app-hardcodes: 0 (file,app) comparison(s) across ${checked} file(s) — the FILE count is healthy but the ITEM count is zero, so the registry is empty or app_names is broken. The gate has gone BLIND."
 
 if [ "$rc" -eq 0 ]; then
   log_info "check-app-hardcodes: OK — none of the ${checked} shared files names an app ($(app_names | tr '\n' ' ')); adding an app stays ONE ROW in apps/registry.tsv."

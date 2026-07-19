@@ -37,7 +37,9 @@ cd "$REPO_ROOT"
 # green. Every OPERATOR-facing doc (README + the runbooks) is still checked.
 docs=$(git ls-files --cached --others --exclude-standard 'README.md' 'docs/*.md' \
         | grep -v '^docs/reviews/')
-[ -n "$docs" ] || { log_info "check-doc-make-targets: no docs"; exit 0; }
+# WRONG POLARITY until 2026-07-19: this exited 0 when the doc list was empty, so a broken pathspec
+# was indistinguishable from a clean repo. An empty operator-doc set is not a valid state here.
+[ -n "$docs" ] || die "check-doc-make-targets: the doc pathspec matched 0 files — the gate has gone BLIND."
 
 missing=""
 checked=0
@@ -67,4 +69,7 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 
+# B39 called this gate "the cleanest proof" of the file-vs-item bug: it prints BOTH numbers and
+# gated on the wrong one, so 25 EMPTY docs read as `0 command(s) across 25 doc(s)` -- rc=0.
+[ "$checked" -gt 0 ] || die "check-doc-make-targets: examined 0 'make <target>' command(s) across ${scanned} doc(s) — the FILE count is healthy but the ITEM count is zero. The gate has gone BLIND."
 log_info "check-doc-make-targets: OK — ${checked} 'make <target>' command(s) across ${scanned} doc(s) all exist in the Makefile"

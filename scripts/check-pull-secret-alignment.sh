@@ -56,6 +56,7 @@ $(app_names)
 EOF
 
 if [ "$rc" = 0 ]; then
+  [ "$n" -gt 0 ] || die "check-pull-secret-alignment: checked 0 app(s) — apps/registry.tsv is empty or app_names is broken. The gate has gone BLIND."
   log_info "check-pull-secret-alignment: OK — all ${n} app(s) reference the pull Secret the flow actually creates."
 else
   log_error "check-pull-secret-alignment: FAILED (checked ${n} app(s))"

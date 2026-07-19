@@ -65,6 +65,22 @@ hits="$(git grep --untracked -nEi "$PATTERN" -- '*.md' 2>/dev/null |
   grep -vE '/ token / network' ||
   true)"
 
+# ITEM count. This gate had NO denominator at all: it is a pure "no hits => green" grep, so an
+# empty corpus and a clean corpus were byte-identical in its output. Counting MATCHES is wrong in
+# the other direction (zero matches is the HEALTHY state); the item the verdict is actually over is
+# LINES SEARCHED, mirroring check-doc-robot-quoting. NOTE: `die` is deliberately NOT used -- this
+# gate does not source lib/os.sh, so it would be `command not found` -> rc 127, which the vacuity
+# harness classifies as INCONCLUSIVE (never a pass) rather than a demonstrated RED.
+# `|| true` INSIDE the braces, before the pipe: with every doc empty, `git grep` matches nothing and
+# exits 1, and under `set -euo pipefail` that non-zero propagates through the pipeline to the
+# ASSIGNMENT, killing the script silently (rc=1, no output) -- the documented `x=$(grep ...)` trap.
+# The vacuity harness caught exactly that here and reported INCONCLUSIVE rather than banking a pass.
+lines="$( { git grep --untracked -I -n '' -- '*.md' 2>/dev/null || true; } | wc -l | tr -d ' ')"
+if [ "${lines:-0}" -eq 0 ]; then
+  echo "check-prose-secrets: examined 0 line(s) of *.md — the gate has gone BLIND (pathspec broken or every doc empty). A clean result here would mean nothing." >&2
+  exit 1
+fi
+
 if [ -n "$hits" ]; then
   echo "ERROR: credential-shaped PROSE found in markdown (gitleaks does NOT catch these):"
   echo "$hits"
@@ -76,4 +92,4 @@ if [ -n "$hits" ]; then
   echo "scripts/check-prose-secrets.sh with a comment naming exactly why."
   exit 1
 fi
-echo "check-prose-secrets: OK (no prose credentials in *.md)"
+echo "check-prose-secrets: OK — examined ${lines} line(s) of *.md, no prose credentials"
