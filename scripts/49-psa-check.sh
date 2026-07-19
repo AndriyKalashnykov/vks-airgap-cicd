@@ -33,17 +33,39 @@ load_env
 require_cmd kubectl
 : "${KUBECONFIG:?KUBECONFIG must be set (see .env.example; produced by make vks-login or make kind-up)}"; export KUBECONFIG
 
-# The namespaces we own, paired with the level this repo labels them with.
+# The namespaces this repo touches: <ns>|<level we label it with>|<ownership>.
+#
+# OWNERSHIP is the third field and it decides whether a row can FAIL this gate:
+#   ours       we create it via ensure_namespace from an installer `install-all` reaches, and we
+#              label it. Gated: a level that would reject its pods on VKS is a RED.
+#   mesh       istio-system / the istio gateway ns. Created by helm --create-namespace and labelled
+#              via psa_label_namespace, NOT ensure_namespace (stamping istio-injection=disabled on
+#              the platform's namespace is exactly what we must never do), which is why they are
+#              absent from check-namespace-labelled.sh's OWNED list.
+#              ⚠️ MODE-DEPENDENT, and this is NOT a detail. In the DEFAULT `INGRESS_CONTROLLER=istio`
+#              mode WE INSTALL THE MESH, so those namespaces ARE ours and a too-strict level MUST go
+#              red. Only in `istio-existing` do they belong to the platform team. Making this column
+#              statically non-gating would disarm a guard that fires today, in the mode everyone
+#              runs — so the column removes the hardcoded NAMES from the case below, never the mode
+#              test.
+#   kind-only  we create it in the KinD stand-in, but on a real VKS lab it is a Supervisor Service
+#              we neither own nor install. Never gating, in any mode.
+#              These rows are NOT here to measure anything: on KinD, PSA is not enforced so the
+#              measurement changes nothing, and on a lab the namespace is absent and skipped. They
+#              are here so that a namespace we deliberately do NOT own stops being indistinguishable
+#              from one we FORGOT — which is exactly what tekton-pipelines-resolvers was.
 NS_SPEC="
-${GITEA_NAMESPACE:-gitea}|${PSA_LEVEL_GITEA:-}
-${TEKTON_NAMESPACE:-tekton-pipelines}|${PSA_LEVEL_TEKTON:-}
-tekton-pipelines-resolvers|${PSA_LEVEL_TEKTON:-}
-${CI_NAMESPACE:-ci}|${PSA_LEVEL_CI:-}
-$(app_names | while read -r a; do if [ -n "$a" ]; then printf "%s|${PSA_LEVEL_APP:-}\n" "$a"; fi; done)
-${TRAEFIK_NAMESPACE:-traefik}|${PSA_LEVEL_TRAEFIK:-}
-${ISTIO_GWAPI_NAMESPACE:-vks-ingress}|${PSA_LEVEL_INGRESS:-}
-${ISTIO_GATEWAY_NAMESPACE:-istio-ingress}|${PSA_LEVEL_INGRESS:-}
-${ISTIO_NAMESPACE:-istio-system}|${PSA_LEVEL_ISTIO_SYSTEM:-}
+${GITEA_NAMESPACE:-gitea}|${PSA_LEVEL_GITEA:-}|ours
+${TEKTON_NAMESPACE:-tekton-pipelines}|${PSA_LEVEL_TEKTON:-}|ours
+tekton-pipelines-resolvers|${PSA_LEVEL_TEKTON:-}|ours
+${CI_NAMESPACE:-ci}|${PSA_LEVEL_CI:-}|ours
+$(app_names | while read -r a; do if [ -n "$a" ]; then printf "%s|${PSA_LEVEL_APP:-}|ours\n" "$a"; fi; done)
+${TRAEFIK_NAMESPACE:-traefik}|${PSA_LEVEL_TRAEFIK:-}|ours
+${ISTIO_GWAPI_NAMESPACE:-vks-ingress}|${PSA_LEVEL_INGRESS:-}|ours
+${ISTIO_GATEWAY_NAMESPACE:-istio-ingress}|${PSA_LEVEL_INGRESS:-}|mesh
+${ISTIO_NAMESPACE:-istio-system}|${PSA_LEVEL_ISTIO_SYSTEM:-}|mesh
+${HARBOR_NAMESPACE:-harbor}|${PSA_LEVEL_HARBOR:-}|kind-only
+${ARGOCD_NAMESPACE:-argocd}|${PSA_LEVEL_ARGOCD:-}|kind-only
 "
 
 # Lowest level that admits every existing pod in <ns>, or "" if even privileged complains.
@@ -76,12 +98,28 @@ rc=0
 # we actually measured, and say so. (We still exit 0 when there is genuinely nothing to measure — a fresh
 # cluster is a legitimate state, and `preflight` runs here before `platform` — but the OUTPUT must not
 # read as proof, and it must say when to come back.)
-measured=0; skipped=0; unproven=0
-while IFS='|' read -r ns labelled; do
+measured=0; skipped=0; unproven=0; measured_ours=0
+# THREE variables. With only two, `read` gives the LAST one every remaining field INCLUDING the
+# delimiters — `gitea|baseline|ours` yields labelled='baseline|ours' (measured), which prints a
+# corrupt ACTUAL column and fires the configured-vs-carried warning on every row, every run, while
+# rc stays 0. A green that is blind.
+while IFS='|' read -r ns labelled own; do
   [ -z "$ns" ] && continue
+  # `${own:-}` is not enough: an unknown value must be LOUD, not defaulted. The column is
+  # operator-typed, so a typo (`ourss`) or a dropped field would silently un-gate a namespace —
+  # an escape hatch from this gate's own drift check.
+  case "${own:-}" in
+    ours|mesh|kind-only) ;;
+    *) die "49-psa-check: NS_SPEC row '${ns}' has ownership '${own:-<empty>}' — expected ours|mesh|kind-only. A namespace must not be un-gated by a typo." ;;
+  esac
   kubectl get namespace "$ns" >/dev/null 2>&1 || { printf '  %-22s %-8s %-12s %-12s %s\n' "$ns" '-' '-' "${labelled:-<none>}" 'absent (skipped)' >&2; skipped=$((skipped+1)); continue; }
   pods="$(kubectl -n "$ns" get pods --no-headers 2>/dev/null | wc -l | tr -d ' ')"
   if [ "$pods" = "0" ]; then unproven=$((unproven+1)); else measured=$((measured+1)); fi
+  # `measured` counts every namespace with pods, and it is incremented HERE — before `ours` is
+  # known. The closing verdict keys off it, so a non-ours row with pods would flip an honest
+  # "measured NOTHING" into "PSA OK (1 measured)" where the ONE measured namespace is the one we
+  # just declared not ours. Count them separately.
+  case "${own}" in ours) [ "$pods" = "0" ] || measured_ours=$((measured_ours+1)) ;; esac
   need="$(psa_min_level "$ns" || true)"
   cur="$(kubectl get namespace "$ns" -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}' 2>/dev/null || true)"
 
@@ -94,12 +132,13 @@ while IFS='|' read -r ns labelled; do
   # green this repo has now hit twice.)
   # In istio-existing mode the mesh namespaces belong to the PLATFORM TEAM. We must not judge
   # (or relabel) what we do not own — report them for information only.
-  ours=1
-  if [ "${INGRESS_CONTROLLER:-istio}" = "istio-existing" ]; then
-    case "$ns" in
-      "${ISTIO_NAMESPACE:-istio-system}"|"${ISTIO_GATEWAY_NAMESPACE:-istio-ingress}") ours=0 ;;
-    esac
-  fi
+  # The hardcoded namespace NAMES that used to live here are now the ownership column; the MODE
+  # test is not, and must not be — see the NS_SPEC header.
+  case "$own" in
+    ours)      ours=1 ;;
+    kind-only) ours=0 ;;
+    mesh)      if [ "${INGRESS_CONTROLLER:-istio}" = "istio-existing" ]; then ours=0; else ours=1; fi ;;
+  esac
 
   eff="${cur:-restricted}"           # unlabelled => VKS's default
   verdict="OK"
@@ -108,7 +147,10 @@ while IFS='|' read -r ns labelled; do
   elif [ "$pods" = "0" ]; then
     verdict="no pods yet — level unproven"
   elif [ "$ours" -eq 0 ]; then
-    verdict="platform-owned (needs ${need}) — informational, not ours to label"
+    case "$own" in
+      kind-only) verdict="KinD stand-in only (needs ${need}) — a Supervisor Service on a real lab, not ours" ;;
+      *)         verdict="platform-owned (needs ${need}) — informational, not ours to label" ;;
+    esac
   elif [ "$(psa_rank "$eff")" -lt "$(psa_rank "$need")" ]; then
     if [ -z "$cur" ]; then
       verdict="UNLABELLED -> VKS default 'restricted' REJECTS these pods (need ${need})"
@@ -137,14 +179,18 @@ EOF
 echo >&2
 # THE DENOMINATOR IS PART OF THE VERDICT. A gate that cannot tell you what it looked at cannot be
 # trusted to have looked.
-log_info "measured ${measured} namespace(s) with running pods · ${unproven} present-but-empty · ${skipped} absent"
-if [ "$rc" -eq 0 ] && [ "$measured" -eq 0 ]; then
+log_info "measured ${measured} namespace(s) with running pods (${measured_ours} of them ours) · ${unproven} present-but-empty · ${skipped} absent"
+# Gate on measured_OURS, not `measured`. A kind-only namespace (harbor on KinD) has pods and would
+# otherwise satisfy this, flipping an honest "measured NOTHING" into "PSA OK" where the ONE measured
+# namespace is the one NS_SPEC declares not ours. Reporting a number that gates nothing is the
+# failure this repo keeps naming; this is the gating one.
+if [ "$rc" -eq 0 ] && [ "$measured_ours" -eq 0 ]; then
   log_warn "PSA UNPROVEN — this run measured NOTHING. Every namespace is absent or has no pods yet, so PSA"
   log_warn "  admission was never actually exercised. This is the EXPECTED state before 'make platform'; it is"
   log_warn "  NOT evidence that the cluster will admit our workloads."
   log_warn "  Come back and re-run 'make psa-check' AFTER 'make platform' — that run is the one that proves it."
 elif [ "$rc" -eq 0 ]; then
-  log_info "PSA OK — every namespace we create is labelled at a level that admits its pods (${measured} measured)."
+  log_info "PSA OK — every namespace we create is labelled at a level that admits its pods (${measured_ours} of ours measured)."
 else
   log_error "PSA FINDINGS above — on a real VKS guest cluster (enforce=restricted by default) those pods would be REJECTED."
   # The var names are NOT enumerated here on purpose. This line used to list six of them and had
