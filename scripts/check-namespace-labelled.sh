@@ -185,6 +185,15 @@ _ours=$(printf '%s\n' "$_spec_body" | grep -c '|ours$' || true)
 _mesh=$(printf '%s\n' "$_spec_body" | grep -c '|mesh$' || true)
 _kind=$(printf '%s\n' "$_spec_body" | grep -c '|kind-only$' || true)
 
+# The `$(`-prefixed generator row is excluded from BOTH sides identically, so it cannot unbalance
+# the sum — but the namespaces it declares are outside this arithmetic entirely. That is deliberate
+# and documented for the app-loop row; a SECOND generator would be a silent gap, so refuse it.
+# shellcheck disable=SC2016  # a literal '$(' being matched, not an expression to expand.
+_gen_rows=$(sed -n '/^NS_SPEC="/,/^"$/p' scripts/49-psa-check.sh 2>/dev/null | grep -c '^\$(' || true)
+if [ "$_gen_rows" -gt 1 ]; then
+  die "check-namespace-labelled: NS_SPEC has ${_gen_rows} generated \$(...) rows. Only the app-loop row is accounted for; a second generator's namespaces would sit outside every count in this gate."
+fi
+
 # RECONCILIATION. The ownership column is operator-typed, so a typo (`ourss`) or a dropped third
 # field would silently shrink the `ours` count — un-gating a namespace by accident, and handing
 # anyone a one-word escape hatch from this gate. Every row must be accounted for by exactly one
@@ -240,7 +249,7 @@ while IFS= read -r _f; do
 $(sed 's/#.*//' "$_f" 2>/dev/null | grep -E '^[[:space:]]*ensure_namespace[[:space:]]' || true)
 INNER
 done <<OUTER
-$(git ls-files 'scripts/*.sh' 'scripts/lib/*.sh' | grep -vE '/(check|test)-' || true)
+$(git ls-files 'scripts/*.sh' | grep -vE '/(check|test)-' || true)
 OUTER
 
 # Reconcile the two denominators. A NEW unquoted call — prose or a genuinely unquoted namespace
@@ -268,21 +277,56 @@ _spec_names="$(printf '%s\n' "$_spec_body" | cut -d'|' -f1 \
   | sed -E 's/^\$\{([A-Za-z_][A-Za-z0-9_]*)(:[-?][^}]*)?\}$/\1/; s/^\$([A-Za-z_][A-Za-z0-9_]*)$/\1/')"
 
 _checked_calls=0; _exempt_calls=0
+DERIVED_HITS=()
 while IFS= read -r _n; do
   [ -n "$_n" ] || continue
-  if printf '%s\n' "$_UNRESOLVABLE" | grep -qE "^${_n}[[:space:]]"; then
+  # `grep -qF` on the FIRST FIELD, never an ERE with the name interpolated: `$_n` came from the
+  # source, and an ERE would let a metacharacter name EXEMPT ITSELF. Measured: a call site spelled
+  # "${SNEAKY}|a" normalises to a name containing `|`, which as an ERE alternates and matches the
+  # `a` entry — the gate went GREEN and reported 6 exempt against a 5-entry list. Unreachable for a
+  # real k8s namespace (DNS-1123 has no `|`), but a silent exemption is the wrong failure direction.
+  # The trailing-field match also avoids prefix collisions (`ns` must not match a future `nsfoo`).
+  if printf '%s\n' "$_UNRESOLVABLE" | awk '{print $1}' | grep -qxF "$_n"; then
     _exempt_calls=$((_exempt_calls + 1)); continue
   fi
   _checked_calls=$((_checked_calls + 1))
   # Set MEMBERSHIP on the normalised name, not a substring search of the raw block: a substring test
   # would pass on `PSA_LEVEL_APP` when looking for `APP_NAMESPACE`, and fail for the right answer.
   printf '%s\n' "$_spec_names" | grep -qxF "$_n" || \
-    HITS+=("${_n}: reached by an ensure_namespace call but declared in NEITHER NS_SPEC nor the exempt list — a namespace missing from both inventories is invisible to the two checks above, which is exactly how tekton-pipelines-resolvers went unmeasured. Add it to NS_SPEC with an ownership, or to the unresolvable list with a reason.")
+    DERIVED_HITS+=("${_n}: reached by an ensure_namespace call but declared in NEITHER NS_SPEC nor the exempt list — a namespace missing from both inventories is invisible to the two checks above, which is exactly how tekton-pipelines-resolvers went unmeasured. Add it to NS_SPEC with an ownership, or to the unresolvable list with a reason.")
 done <<EOF
 $(printf '%s' "$_derived" | sort -u)
 EOF
 
-[ "$_checked_calls" -gt 0 ] || die "check-namespace-labelled: the derived cross-check resolved 0 call sites — the extraction is broken, and a green here would mean nothing."
+# RECONCILE THE EXEMPT LIST IN BOTH DIRECTIONS, the same way _PROSE_EXCEPTIONS is reconciled above.
+# Without this it rots silently and in both directions: measured, deleting the `ensure_namespace
+# "$PROBE_NS"` call site leaves its entry behind (5 listed, 4 used) and the gate stays GREEN, so a
+# dead entry reads as live documentation of a call site that no longer exists.
+_exempt_entries=$(printf '%s\n' "$_UNRESOLVABLE" | grep -c . || true)
+if [ "$_exempt_calls" -ne "$_exempt_entries" ]; then
+  die "check-namespace-labelled: the unresolvable-name list has ${_exempt_entries} entries but ${_exempt_calls} were used. An unused entry documents a call site that no longer exists; a name exempted without an entry would be a silent skip. Update the list."
+fi
+
+# Reachable, not decorative: forcing every derived name into the exempt list fires it. The message
+# names BOTH causes, because 0 asserted does not by itself say which — and the units are NAMES.
+[ "$_checked_calls" -gt 0 ] || die "check-namespace-labelled: 0 of $((_checked_calls + _exempt_calls)) derived name(s) were asserted against NS_SPEC — either the extraction is broken or the exempt list has swallowed everything. A green here would mean nothing."
+
+# The two hit sets are reported SEPARATELY because their causes and their fixes are OPPOSITE, and a
+# shared header states the wrong one. A derived hit means the call EXISTS and the inventory does not
+# — printing it under "reach no ensure_namespace call", with advice to "add the call to the
+# installer", sends the operator to add a DUPLICATE call. An error that names the wrong cause is
+# worse than a crash.
+if [ "${#DERIVED_HITS[@]}" -gt 0 ]; then
+  log_error "check-namespace-labelled: ${#DERIVED_HITS[@]} namespace(s) are CREATED by an ensure_namespace call but declared in no inventory:"
+  for h in "${DERIVED_HITS[@]}"; do printf '  - %s\n' "$h"; done
+  echo
+  echo "  The call already exists — do NOT add another. The missing piece is the DECLARATION:"
+  echo "  add a row to NS_SPEC in scripts/49-psa-check.sh with an ownership (ours|mesh|kind-only),"
+  echo "  and, if it is 'ours', a matching row in this gate's OWNED list. A namespace in neither"
+  echo "  inventory is invisible to both of the checks above — that is how tekton-pipelines-resolvers,"
+  echo "  argocd and harbor went unmeasured."
+  exit 1
+fi
 
 if [ "${#HITS[@]}" -gt 0 ]; then
   log_error "check-namespace-labelled: ${#HITS[@]} owned namespace(s) reach no ensure_namespace call (checked ${checked}; NS_SPEC declares ${spec_rows} rows):"
