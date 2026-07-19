@@ -215,6 +215,31 @@ assert_starved check-app-toolchains.sh    "check-app-toolchains dies with no too
 assert_starved check-pull-secret-alignment.sh "check-pull-secret-alignment dies with no apps"      'apps/registry.tsv'
 assert_starved check-env-clobber.sh       "check-env-clobber dies with nothing uncommented"        '.env.example'
 
+# check-java-alignment: DECLARABLE only since its two zero-states were separated (a registry with
+# apps but no java app is honest emptiness -> exit 0; a registry yielding ZERO apps is blindness ->
+# die). Before that split it died SILENTLY on an empty registry (rc=1, zero output) and this case
+# would have scored INCONCLUSIVE rather than ok.
+assert_starved check-java-alignment.sh    "check-java-alignment dies with no apps in the registry"  'apps/registry.tsv'
+# check-image-alignment: `k8s/` NOT 'k8s/**/*.yaml' — the arm greps k8s/ RECURSIVELY WITH NO
+# EXTENSION FILTER, so an extension glob is complete only until someone adds a .yml/.json carrying a
+# Harbor ref, at which point the declaration silently goes short and the harness emits a FALSE RED
+# against a healthy gate. A bare directory pathspec is extension-proof by construction (measured:
+# identical 19 files today).
+#
+# ⚠️ THIS DECLARATION COVERS ONE OF FIVE ARMS. Arm 1 (k8s/ + gitea refs) is what `k8s/` starves.
+# Arm 2 (.env.example tag vars) got its own guard in the same change but is not starved here. Arms
+# 4 and 5 route through check_pinned(), whose `[ -n "$3" ] || return 0` returns SUCCESS when the
+# expected value is absent — vacuous by construction, source-read, not yet addressed. Do not read
+# this line as "check-image-alignment is covered".
+#
+# The pathspec MUST also name 40-install-gitea.sh. Arm 1's feed is `{ grep k8s/ ; grep gitea-script ; }`
+# and the `|| true` fix landed in the SAME change: before it, `set -e` killed the group when the k8s
+# grep found nothing, so the gitea grep never ran and `k8s/` alone starved the arm to zero. Fixing
+# that correctly means the gitea ref now SURVIVES a k8s-only starvation, the guard does not fire,
+# and the harness emits a FALSE RED against a healthy gate. Observed exactly that, once, here.
+# A single NAMED non-lib script is permitted by the blast-radius rule (cf. 49-psa-check.sh above).
+assert_starved check-image-alignment.sh   "check-image-alignment dies with no k8s image refs"      'k8s/' 'scripts/40-install-gitea.sh'
+
 # Coverage, DERIVED — never a literal hand-typed beside the calls, which is a two-numbers-that-must-
 # agree problem with nothing asserting it. Both figures come from the SAME listing, so the count and
 # the named list cannot disagree; a harness whose own two numbers drift is what this exists to catch.

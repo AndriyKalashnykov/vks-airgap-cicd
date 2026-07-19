@@ -15,8 +15,15 @@ ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$ROOT"
 
 drift=0
+# The ITEM count for arm 1: every ref this arm actually JUDGED, including the WARN branch (a WARN is
+# a judgment about that ref). NOT `drift` — zero drift is the healthy state, so guarding it would be
+# backwards. Measured 2026-07-19: with k8s/ emptied this arm ran ZERO iterations and the gate still
+# printed "all mirrored image tags aligned", rc=0. The `gate has gone BLIND` guard further down
+# covers a DIFFERENT arm's derivation, which is exactly why this one read as covered.
+refs_examined=0
 while read -r ref; do
   [ -n "$ref" ] || continue
+  refs_examined=$((refs_examined + 1))
   repo="${ref%:*}"
   mtag="${ref##*:}"
   # `|| true`: `head -1` closes the pipe → `grep` SIGPIPEs (141), and a repo absent from
@@ -33,13 +40,27 @@ while read -r ref; do
   else
     echo "ok    ${repo}=${mtag}"
   fi
-done < <( { grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"]+:[^[:space:]"]+' k8s/ 2>/dev/null
+done < <( { grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"]+:[^[:space:]"]+' k8s/ 2>/dev/null || true
             # Gitea's ref lives in the SCRIPT's default, not the manifest: the manifest carries
             # ${GITEA_IMAGE} so a Harbor-less test (e2e-cross-cluster) can override it. A gate that
             # only greps k8s/ would have gone BLIND to the gitea tag the moment that changed — the
             # gate must follow its content. (Same treatment as eclipse-temurin below.)
-            grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"}]+:[^[:space:]"}]+' scripts/40-install-gitea.sh 2>/dev/null
+            #
+            # `|| true` on BOTH greps is load-bearing under `set -euo pipefail`: when the FIRST grep
+            # finds nothing it exits 1, `set -e` terminates this brace group, and the SECOND grep
+            # NEVER RUNS — so the gitea mitigation directly above was defeated by exactly the
+            # scenario it was written for. Measured 2026-07-19: k8s/ emptied -> 0 iterations, while
+            # running the gitea grep alone still yields its ref.
+            grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"}]+:[^[:space:]"}]+' scripts/40-install-gitea.sh 2>/dev/null || true
           } | sed -E 's|\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/||' | sort -u)
+
+# `die` is NOT available here — lib/os.sh is sourced further down (see the source line below), so a
+# `die` at this point would be `command not found` -> rc 127, which the vacuity harness classifies
+# as INCONCLUSIVE (never a pass) rather than a demonstrated RED. Inline the failure.
+if [ "$refs_examined" -eq 0 ]; then
+  echo "ERROR check-image-alignment: examined 0 mirrored image ref(s) from k8s/ + 40-install-gitea.sh — the gate has gone BLIND on this arm." >&2
+  exit 1
+fi
 
 check_pinned() { # <label> <actual> <expected-from-images.txt>
   [ -n "$3" ] || return 0
@@ -89,6 +110,14 @@ while read -r repo var; do
   env_checked=$((env_checked + 1))
 done <<< "$env_pairs"
 echo "      (checked ${env_checked} .env.example tag var(s), derived from lib/apps.sh)"
+# The `gate has gone BLIND` guard above is on the DERIVATION (env_pairs parsed out of lib/apps.sh),
+# not on the checks PERFORMED. env_checked was printed and never compared to zero — the same
+# FILE-vs-ITEM confusion this effort exists to kill, one arm over. (Still before lib/os.sh, so
+# inline rather than die.)
+if [ "$env_checked" -eq 0 ]; then
+  echo "ERROR check-image-alignment: derived tag vars but checked 0 of them — the gate has gone BLIND on this arm." >&2
+  exit 1
+fi
 
 # --- EVERY app's Dockerfile base images, DERIVED from the app registry ------------------------
 # NOT one hardcoded block per language. For each app in apps/registry.tsv we read ITS Dockerfile's
@@ -148,7 +177,12 @@ check_pinned "istio/proxyv2 (images.txt)" "$proxyv2_itag" "$istio_itag"
 mvn_itag="$(grep -oE '^maven:[^[:space:]"]+' images/images.txt | head -1 | sed 's|maven:||' || true)"
 # The builder Dockerfile belongs to whichever app SHIPS one (see app_has_builder) — found via the
 # registry, never by hardcoding which app is the Java one.
-builder_app="$(app_names | while read -r a; do app_has_builder "$a" && { printf '%s' "$a"; break; }; done)"
+# `if…fi`, NOT `app_has_builder "$a" && { …; }`: as a loop-body TAIL that `A && B` returns non-zero
+# when the LAST app has no builder, the `$( )` returns non-zero, the ASSIGNMENT returns non-zero,
+# and `set -euo pipefail` kills the script HERE — making the `if [ -n "$builder_app" ]` guard on the
+# next line unreachable dead code. Measured 2026-07-19 with the registry emptied: rc=1, output
+# truncated mid-run, ZERO bytes of stderr. The twin of check-java-alignment.sh's line 40.
+builder_app="$(app_names | while read -r a; do if app_has_builder "$a"; then printf '%s' "$a"; break; fi; done)"
 if [ -n "$builder_app" ]; then
   builder_df="$(app_src "$builder_app")/Dockerfile.builder"
   check_pinned "MAVEN_IMAGE (${builder_df})" \
