@@ -672,8 +672,36 @@ run() {
 # like a RANDOM + `ss -tln` poll). Used for LOCAL `kubectl port-forward` aliases so
 # two e2e runs (parallel CI matrix, dev + CI on one host, sibling project) don't
 # collide on a fixed local port. The REMOTE port (the Service's port) stays literal.
+#
+# B3 — python3 IS NOT ON THE AIR-GAP BOX, so this MUST degrade rather than die. A bare `photon:5.0`
+# has no python3, and neither `00-install-prereqs.sh` (internet-side only) nor the bundle supplies
+# one. Before this fallback existed, the first thing the air-gap box did after installing Gitea was
+# `seed-gitea` -> `pick_port` -> `python3: command not found` -> `make: *** [seed-gitea] Error 127`,
+# with `check-tools` having reported the box FULLY CLEAN moments earlier — it does not know this
+# dependency exists. Adding python3 to the documented OS floor was rejected: it is a large dependency
+# to carry across an air gap for one helper, and the floor is the thing an operator must provision by
+# hand on a box with no internet.
 pick_port() {
-  python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()'
+  if have python3; then
+    # PREFERRED: race-free. The kernel assigns the port atomically at bind time.
+    python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()'
+    return
+  fi
+  # FALLBACK, and its weakness is stated rather than hidden: this probes a candidate instead of
+  # binding it, so there IS a TOCTOU window between "nothing answered" and the caller's bind. That is
+  # strictly better than not running at all, and the callers are local `kubectl port-forward` aliases
+  # where a collision is a loud, immediate bind error rather than silent corruption. A connect that is
+  # REFUSED means nothing is listening; the subshell keeps the fd from leaking into the caller.
+  local p n=0
+  while [ "$n" -lt 50 ]; do
+    p=$(( 40000 + (RANDOM % 20000) ))
+    if ! (exec 3<>"/dev/tcp/127.0.0.1/${p}") 2>/dev/null; then
+      printf '%s' "$p"
+      return 0
+    fi
+    n=$((n + 1))
+  done
+  die "pick_port: no free local port found in 50 attempts in 40000-59999 (and python3, the race-free path, is absent)."
 }
 
 # ---------------------------------------------------------------------------

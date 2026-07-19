@@ -148,6 +148,46 @@ if [ "${JUMPBOX_MODE:-validate}" = "airgap-half" ]; then
 
   echo "### mirror-verify — integrity-check Harbor's copy (the sneakernet assertion) ###"
   make mirror-verify
+
+  # ------------------------------------------------------------------------------------------------
+  # STEP 4 (B3) — the half an operator performs AFTER carrying 12 GB, which NOTHING used to execute.
+  #
+  # WHY THIS IS HERE AND NOT IN e2e-kind: the bundle carries FIVE tools, and until this block the
+  # air-gap box exercised exactly ONE of them — crane. kubectl, helm and yq were carried, installed by
+  # bundle-load, version-probed by check-tools, and then never used to DO anything; envsubst likewise,
+  # despite the runbook going to some length about it. `make e2e-kind` cannot close that gap: it drives
+  # the HOST's mise-installed tools under a GNU userland, not the carried binaries on the far-side OS.
+  # So this block's value is not "the targets work" (e2e-kind proves that) — it is "the CARRIED
+  # toolchain works, on this OS, from the tarball alone".
+  #
+  # SCOPE IS DELIBERATE, and the omissions are not oversights:
+  #   * `gitops` and `verify` are NOT here. Both need ArgoCD, which e2e-sneakernet.sh never installs
+  #     (it runs `kind-up install-harbor` only), so adding them changes the HOST-side cluster setup and
+  #     roughly triples the leg. Their marginal delta over e2e-kind is mostly more kubectl — except for
+  #     one genuine thing, which the probe below buys for ~30s instead of ~10min.
+  #   * `verify-ingress` is NOT here, and the reason is worth reading before adding it back. It is
+  #     network-FEASIBLE from this container (it sends `Host:` headers to the LB IP on the kind
+  #     network, no /etc/hosts needed) — but its ASSERTION SET cannot pass in this scope. MEASURED on
+  #     the first run of this block: gitea.vks.local -> 200 and tekton.vks.local -> 200 (so the
+  #     CARRIED helm really did install a mesh that routes), while javawebapp/gowebapp -> 503 after a
+  #     300s poll each, because those backends are deployed by ArgoCD via `gitops`, which is out of
+  #     scope above. Feasibility is not the same as "the assertions can pass".
+  #     Do NOT "fix" this by adding a host-subset knob to 98-verify-ingress.sh: narrowing a
+  #     verification gate to obtain green is the anti-pattern this repo exists to prevent. See B50.
+  export KUBECONFIG=/run/jumpbox/kubeconfig
+
+  echo "### Step 4a — platform: Gitea + Tekton, driven by the CARRIED kubectl/yq/envsubst/git ###"
+  make platform
+
+  echo "### Step 4b — install-ingress: the CARRIED helm installs the CARRIED istio charts ###"
+  make install-ingress
+
+  # The carried builder is the one artifact whose RUNNABILITY nothing had ever tested. mirror-verify
+  # and test-builder-save-crane both prove blob integrity; neither executes the image, so a mangled
+  # CONFIG blob (entrypoint/user/PATH) survives every check and fails later inside a TaskRun.
+  echo "### Step 4c — builder-probe: the CARRIED builder must RUN, not merely fetch ###"
+  make builder-probe
+
   echo "JUMPBOX_SNEAKERNET_OK"
   exit 0
 fi
