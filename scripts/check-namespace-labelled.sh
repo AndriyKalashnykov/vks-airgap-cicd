@@ -95,8 +95,17 @@ cd "$REPO_ROOT" || die "cannot cd to repo root"
 # at 46-install-istio.sh:130-131 via psa_label_namespace (NOT ensure_namespace), because stamping
 # istio-injection=disabled on the platform's namespace is exactly what we must never do. That is the
 # +2 in the drift arithmetic below.
+#
+# A row's first field is a VAR when it looks like one (UPPER_SNAKE) and a LITERAL namespace name
+# otherwise. No new syntax is needed to tell them apart: a Kubernetes namespace is DNS-1123
+# (lowercase alphanumeric and dashes), so it can NEVER be mistaken for a shell variable name. That
+# matters because 41-install-tekton.sh:90 passes `tekton-pipelines-resolvers` as a LITERAL, and
+# inventing a TEKTON_RESOLVERS_NAMESPACE var purely to satisfy a var-keyed regex would mean four
+# coordinated edits (a var in .env.example that nothing else reads, an NS_SPEC row, a call-site
+# rewrite, and this row) to record a fact the call site already states plainly.
 OWNED='GITEA_NAMESPACE:40-install-gitea.sh
 TEKTON_NAMESPACE:41-install-tekton.sh
+tekton-pipelines-resolvers:41-install-tekton.sh
 CI_NAMESPACE:60-configure-tekton.sh
 TRAEFIK_NAMESPACE:45-install-traefik.sh
 ISTIO_GWAPI_NAMESPACE:lib/istio.sh'
@@ -112,11 +121,18 @@ while IFS=: read -r v script; do
   # Anchored to a COMMAND POSITION and comment-stripped: an unanchored grep matches its own
   # commented-out corpse (`# TODO re-enable: ensure_namespace "$TRAEFIK_NAMESPACE"`), which is the
   # MOST likely regression — commenting-out while debugging — and the first draft was blind to it.
+  # VAR rows match `ensure_namespace "${VAR}"`; LITERAL rows match the name verbatim. The shape of
+  # the field decides, so neither form needs to be declared.
+  case "$v" in
+    [A-Z_]*) _pat="\\\$\{?${v}\}?" ;;   # UPPER_SNAKE -> a shell variable
+    *)       _pat="${v}" ;;                  # DNS-1123 -> a literal namespace name
+  esac
   if sed 's/#.*//' "scripts/${script}" 2>/dev/null \
-       | grep -qE "^[[:space:]]*ensure_namespace[[:space:]]+\"?\\\$\{?${v}\}?\"?"; then
+       | grep -qE "^[[:space:]]*ensure_namespace[[:space:]]+\"?${_pat}\"?"; then
     continue
   fi
-  HITS+=("\$${v}: no ensure_namespace call at a command position in scripts/${script} — the installer that 'make install-all' reaches. A call elsewhere (e.g. lib/istio.sh, reached only by install-ingress) does NOT count: that IS the F2 bug.")
+  case "$v" in [A-Z_]*) _label="\$${v}" ;; *) _label="${v}" ;; esac
+  HITS+=("${_label}: no ensure_namespace call at a command position in scripts/${script} — the installer that 'make install-all' reaches. A call elsewhere (e.g. lib/istio.sh, reached only by install-ingress) does NOT count: that IS the F2 bug.")
 done <<EOF
 $OWNED
 EOF
