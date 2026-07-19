@@ -20,7 +20,7 @@ CPK_CONTAINER="cloud-provider-kind"
 require_cmd docker
 
 # --- 1. Stop + remove the cloud-provider-kind controller ---------------------
-if docker ps -a --format '{{.Names}}' | grep -qxF "$CPK_CONTAINER"; then
+if docker ps -a --format '{{.Names}}' | grep -xF "$CPK_CONTAINER" >/dev/null; then
   log_info "removing $CPK_CONTAINER container"
   run docker rm -f "$CPK_CONTAINER"
 else
@@ -40,7 +40,7 @@ fi
 
 # --- 3. Delete the kind cluster ----------------------------------------------
 KIND_CLUSTER_REMOVED=0
-if have kind && kind get clusters 2>/dev/null | grep -qxF "$CLUSTER_NAME"; then
+if have kind && kind get clusters 2>/dev/null | grep -xF "$CLUSTER_NAME" >/dev/null; then
   log_info "deleting kind cluster '$CLUSTER_NAME'"
   run kind delete cluster --name "$CLUSTER_NAME"
   KIND_CLUSTER_REMOVED=1

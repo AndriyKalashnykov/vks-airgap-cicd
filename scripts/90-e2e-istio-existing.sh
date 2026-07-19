@@ -56,7 +56,7 @@ READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 # ---------------------------------------------------------------------------
 # RED 1 — no mesh yet: the attach path MUST fail, not quietly succeed.
 # ---------------------------------------------------------------------------
-if kubectl get deploy -A -l app=istiod -o name 2>/dev/null | grep -q .; then
+if kubectl get deploy -A -l app=istiod -o name 2>/dev/null | grep . >/dev/null; then
   log_warn "an Istio control plane is ALREADY present — skipping RED 1 (it only means something on a mesh-free cluster)"
 else
   log_info "RED 1: 'attach' with no Istio installed must FAIL"

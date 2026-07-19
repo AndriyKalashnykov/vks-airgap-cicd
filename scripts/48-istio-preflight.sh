@@ -36,7 +36,7 @@ log_info "cluster: $(kubectl config current-context 2>/dev/null || echo '<unknow
 
 # --- 1. Is Istio installed at all? --------------------------------------------
 if ! kubectl get crd virtualservices.networking.istio.io >/dev/null 2>&1 \
-   && ! kubectl get deploy -A -l app=istiod -o name 2>/dev/null | grep -q .; then
+   && ! kubectl get deploy -A -l app=istiod -o name 2>/dev/null | grep . >/dev/null; then
   log_warn "NO Istio detected on this cluster."
   log_warn "  -> Use INGRESS_CONTROLLER=istio (the default) and 'make install-ingress' to INSTALL it,"
   log_warn "     or INGRESS_CONTROLLER=traefik for the lighter option."
