@@ -43,7 +43,13 @@ require_cmd curl
 # Every app's host comes from the registry — a hardcoded list would silently stop checking a new app.
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
-APP_HOSTS="$(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)"
+# `|| true` + an EXPLICIT count guard, deliberately in that order. Without the `|| true` this is
+# protected only BY ACCIDENT: on a comments-only registry `app_names`' grep exits 1, `pipefail` fails
+# the assignment, and `set -e` kills the script -- silently, with no diagnostic naming the cause. With
+# the `|| true` alone the vacuity becomes REACHABLE and still silent. The guard is what makes it neither.
+APP_HOSTS="$(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done || true)"
+[ "$(printf '%s' "$APP_HOSTS" | wc -w)" -gt 0 ] \
+  || die "98-verify-ingress: the registry yielded ZERO app hosts. This gate would then check only the two hardcoded infra hosts and report all UIs reachable having verified no app at all."
 : "${INGRESS_CONTROLLER:=istio}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
@@ -53,15 +59,40 @@ CURL_MAX_TIME_SECONDS="${CURL_MAX_TIME_SECONDS:-10}"
 # 3xx = a backend redirect (e.g. ArgoCD /) — both mean the route works. 5xx and
 # 000 (connection reset / no response) mean the data path is NOT yet ready or the
 # route is broken.
-route_code() { # <host> — echo the HTTP status of GET / through the ingress LB
-  curl -s -o /dev/null -w '%{http_code}' \
-    -H "Host: $1" --max-time "$CURL_MAX_TIME_SECONDS" \
-    "http://${INGRESS_LB_IP}/" 2>/dev/null || echo "000"
+route_code() { # <host> — echo the HTTP status of GET / through the ingress LB, or 000 if NOT SERVED
+  # THIS FUNCTION ANSWERS "is this host SERVING?", which is NOT the same question 97 asks (see below),
+  # and that difference decides the normalisation. Two bugs were here, and the second is the dangerous
+  # one -- it was found only because an adversary attacked the FIX for the first.
+  #
+  # (1) `curl -w '%{http_code}'` ALREADY prints 000 on a connect failure AND exits non-zero, so the
+  #     idiomatic `|| echo "000"` appended a SECOND one and this returned `000000` (measured, len 6).
+  #     That matched no `case` arm in wait_route, so the `000|50[234]` retry arm was DEAD CODE.
+  #     Cosmetic today only because that arm and `*)` are both `: ;` -- but it is one edit away from
+  #     mattering, and the failure line printed a nonsense `000000`.
+  #
+  # (2) NORMALISING TO THE PRINTED CODE ALONE IS A FALSE GREEN, and it is worse than the bug it fixes.
+  #     `--max-time` expiring MID-RESPONSE prints the REAL code and exits 28. So a backend that sends
+  #     `200` headers and then hangs yields a bare `200`, which hits wait_route's `2??|3??` arm and
+  #     RETURNS 0 -- the route is declared OK. Today the doubled string falls through to `*)` and the
+  #     poll eventually FAILs. Measured end-to-end against a threaded stalling server: the whole gate
+  #     went GREEN, body marker and all, over a backend that never completes a response.
+  #     So the transport status is load-bearing and must be preserved, not just the printed digits.
+  #
+  # `&& r=0 || r=$?`, NOT `; r=$?`: the latter dies under `set -e` if this is ever called bare.
+  local c r
+  c="$(curl -s -o /dev/null -w '%{http_code}' \
+        -H "Host: $1" --max-time "$CURL_MAX_TIME_SECONDS" \
+        "http://${INGRESS_LB_IP}/" 2>/dev/null)" && r=0 || r=$?
+  [ "$r" -eq 0 ] || c=000          # connect refused / timeout / truncated mid-response => NOT serving
+  case "$c" in ''|*[!0-9]*) c=000 ;; esac
+  printf '%s' "$c"
 }
 
 # Poll a host until its route is live (K1.5 data-path readiness), then return the code.
 wait_route() { # <host> — 0 + echo code when routed; 1 on timeout
-  local host="$1" code end=$((SECONDS + READY_TIMEOUT_SECONDS))
+  # `code=000`, not unassigned: with READY_TIMEOUT_SECONDS=0 the loop never runs and the `echo "$code"`
+  # below would trip `set -u` with `code: unbound variable` instead of reporting a failed host.
+  local host="$1" code=000 end=$((SECONDS + READY_TIMEOUT_SECONDS))
   while [ "$SECONDS" -lt "$end" ]; do
     code="$(route_code "$host")"
     case "$code" in
@@ -76,7 +107,9 @@ wait_route() { # <host> — 0 + echo code when routed; 1 on timeout
 
 log_info "verifying ingress routing via INGRESS_CONTROLLER=${INGRESS_CONTROLLER} at ${INGRESS_LB_IP}"
 rc=0
+_routes_checked=0
 for host in "$GITEA_HOST" "$TEKTON_DASHBOARD_HOST" $APP_HOSTS; do
+  _routes_checked=$((_routes_checked + 1))
   log_info "  route-readiness poll: ${host} (timeout ${READY_TIMEOUT_SECONDS}s)"
   if code="$(wait_route "$host")"; then
     log_info "  OK    ${host} -> HTTP ${code} (routed through the ingress LB)"
@@ -145,4 +178,6 @@ if [ "$rc" -ne 0 ]; then
   esac
   die "ingress routing not verified"
 fi
-log_info "SUCCESS — all UIs reachable through the ${INGRESS_CONTROLLER} ingress at ${INGRESS_LB_IP} (*.vks.local)"
+# State the DENOMINATOR: "all UIs reachable" over an unstated count is the shape that lets a
+# shrunken host list read as a full pass. Reconcile it against the registry, not against memory.
+log_info "SUCCESS — all ${_routes_checked} UI(s) reachable through the ${INGRESS_CONTROLLER} ingress at ${INGRESS_LB_IP} (*.vks.local)"
