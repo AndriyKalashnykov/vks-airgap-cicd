@@ -170,9 +170,34 @@ fi
 # owned rows + the 2 the mesh owns (istio-system, the istio gateway ns), which psa-check measures and
 # this gate deliberately does not cover.
 owned_rows=$(printf '%s\n' "$OWNED" | grep -c .)
-want=$((owned_rows + 2))
-if [ "$spec_rows" -ne "$want" ]; then
-  die "check-namespace-labelled: NS_SPEC drift — 49-psa-check.sh declares ${spec_rows} rows, this gate covers ${owned_rows} + 2 mesh-owned = ${want}. A namespace added to one inventory and not the other is invisible to whichever lacks it (that is exactly how tekton-pipelines-resolvers went unlabelled). Update BOTH."
+
+# The `+2` magic constant is GONE. It encoded "istio-system + the istio gateway ns are in NS_SPEC but
+# not in OWNED", a fact that now lives in NS_SPEC's own ownership column where a reader meets it,
+# instead of as a bare 2 in a different file. `want` is simply how many rows declare themselves ours.
+#
+# The `^\$\(` exclusion stays as the FIRST filter (it drops the `$(app_names ...)` loop row, which
+# expands to N app rows and is deliberately outside this comparison on both sides). Do not let the
+# fact that an anchored count would also give the right answer today become load-bearing — that is
+# an accident of the printf, not a property.
+_spec_body="$(sed -n '/^NS_SPEC="/,/^"$/p' scripts/49-psa-check.sh 2>/dev/null \
+                | grep -vE '^NS_SPEC="|^"$|^[[:space:]]*$|^\$\(' || true)"
+_ours=$(printf '%s\n' "$_spec_body" | grep -c '|ours$' || true)
+_mesh=$(printf '%s\n' "$_spec_body" | grep -c '|mesh$' || true)
+_kind=$(printf '%s\n' "$_spec_body" | grep -c '|kind-only$' || true)
+
+# RECONCILIATION. The ownership column is operator-typed, so a typo (`ourss`) or a dropped third
+# field would silently shrink the `ours` count — un-gating a namespace by accident, and handing
+# anyone a one-word escape hatch from this gate. Every row must be accounted for by exactly one
+# ownership value; if the parts do not sum to the whole, refuse rather than compute a smaller `want`.
+if [ $((_ours + _mesh + _kind)) -ne "$spec_rows" ]; then
+  die "check-namespace-labelled: NS_SPEC ownership does not reconcile — ${spec_rows} row(s) but ours=${_ours} + mesh=${_mesh} + kind-only=${_kind} = $((_ours + _mesh + _kind)). A row with a missing or misspelled ownership field would silently un-gate that namespace."
+fi
+want=$_ours
+# Compare LIKE WITH LIKE: how many rows call themselves ours, against how many this gate covers.
+# (It used to compare spec_rows against owned_rows+2, which only worked because every non-ours row
+# was one of the two mesh ones. Adding kind-only rows breaks that identity — and did, loudly.)
+if [ "$owned_rows" -ne "$want" ]; then
+  die "check-namespace-labelled: NS_SPEC drift — 49-psa-check.sh declares ${spec_rows} row(s) of which ${_ours} are 'ours' (${_mesh} mesh, ${_kind} kind-only), but this gate covers ${owned_rows}. A namespace added to one inventory and not the other is invisible to whichever lacks it (that is exactly how tekton-pipelines-resolvers went unlabelled). Update BOTH."
 fi
 
 if [ "${#HITS[@]}" -gt 0 ]; then
