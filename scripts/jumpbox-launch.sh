@@ -57,6 +57,14 @@ ENVS=(
   -e "HARBOR_USERNAME=${HARBOR_USERNAME}"
   -e HARBOR_PASSWORD                      # NAME ONLY — the value is inherited from the environment,
                                           # never placed on argv where ps/procfs would expose it.
+  -e GITEA_ADMIN_PASSWORD                 # ditto. B3: the air-gap half now runs the runbook's Step 4,
+                                          # and 50-seed-gitea-repos.sh hard-requires this. It is NOT
+                                          # generated in the container: `.env` is deliberately excluded
+                                          # from the /src copy, .env.example ships it COMMENTED, and the
+                                          # synthetic .env.state carries only HARBOR_*. 05-kind-up.sh
+                                          # already state_set it on the HOST, so passing it through is
+                                          # both the faithful shape (a real operator sets it in .env)
+                                          # and the only one that works.
   -e "JUMPBOX_ENGINE=${JUMPBOX_ENGINE}"
   -e "JUMPBOX_OS=${JUMPBOX_OS}"
 )
@@ -94,6 +102,7 @@ else
 fi
 
 export HARBOR_PASSWORD
+export GITEA_ADMIN_PASSWORD="${GITEA_ADMIN_PASSWORD:-}"
 exec docker run --rm --privileged --network kind \
   "${ENVS[@]}" \
   -v "${REPO_ROOT}:/src:ro" \

@@ -638,6 +638,10 @@ check-pull-secret-alignment: ## Every app's deploy manifest must reference the i
 check-java-alignment: ## Fail if the Java major drifts across pom/mise/ci/Dockerfile/images.txt
 	@$(SCRIPTS)/check-java-alignment.sh
 
+.PHONY: builder-probe
+builder-probe: ## Prove the CARRIED builder image is RUNNABLE, not merely fetchable (one pod, ~30s; the cheap half of what `verify` proves)
+	@$(SCRIPTS)/24-builder-probe.sh
+
 .PHONY: check-psa-defaults
 check-psa-defaults: ## Gate: every PSA level a script falls back to matches .env.example, names a real level, and no reference hides from the check
 	@$(SCRIPTS)/check-psa-defaults.sh
