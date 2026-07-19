@@ -31,10 +31,17 @@
 #
 # SCOPE, STATED HONESTLY — this covers the UNBOUNDED case only. A producer that READS A FILE can owe
 # arbitrarily many bytes, so it is always a latent lie; that is what is banned here. A `printf '%s'
-# "$var" | grep -q` is bounded by the variable and is usually tiny — but it is NOT safe in principle
-# (bash forks the builtin into a subshell that takes the signal; a large page or log reproduces it),
-# and 60 such sites remain unconverted (counted). They are a backlog row, not a silent exemption. Do not read
-# this gate's green as "the repo is free of this class".
+# "$var" | grep -q` is bounded by the variable, and MEASURED that boundary is structural, not a
+# hope: below the 64KB pipe buffer the producer's write COMPLETES and SIGPIPE cannot occur
+# (4KB: 0/120), and data with NO NEWLINES is immune at ANY size (3MB single-line: 0/120) because
+# grep buffers hunting a line terminator and thereby drains the producer. Risk needs >32KB AND
+# multiline (82KB multiline: 120/120). ~70 such sites remain and NONE qualifies, so they are
+# deliberately NOT converted -- see backlog B52, closed on that measurement.
+#
+# DO NOT "fix" them with a `<<<` herestring sweep: `printf '%s' "$v"` on an EMPTY value emits zero
+# bytes (rc=1) while `<<< "$v"` emits ONE EMPTY LINE, so every nullable pattern ('' ^$ .* ^ $ x*)
+# flips rc 1 -> 0. Several of those sites are `if`-conditions in TESTS, where that flip is a silent
+# verdict change -- a false green in a test, the worst place for one.
 #
 # THE FIX, both forms measured 400/400 clean under the same race:
 #   grep -q PAT <<< "$(producer)"      # bash spools the herestring; nothing to SIGPIPE
@@ -54,6 +61,12 @@ cd "$REPO_ROOT" || die "cannot cd to repo root"
 # blind it to every future real finding here.
 _Q="$(printf 'grep -%s' 'q')"
 _FILE_READERS='sed|awk|cut|cat|head|tail|tr|sort|uniq|grep'
+# EXTERNAL producers whose output size we do NOT control: a cluster's object list, a box's container
+# list. Added 2026-07-19 after an adversary showed the gate was aimed BACKWARDS -- it banned the
+# file readers (all converted, all small) while waving through `kubectl get -A | grep -q` and
+# `docker ps -a | grep -q`, the only sites in the repo that can plausibly cross the threshold.
+# These need no path argument to be unbounded, so they are matched on the command alone.
+_EXTERNAL='kubectl|docker|kind|helm|crane|curl|argocd|tkn|podman'
 
 scanned=0; hits=0
 while IFS= read -r f; do
@@ -75,8 +88,9 @@ while IFS= read -r f; do
     # variable, which this gate deliberately does not judge (see SCOPE above).
     # The prefix is a NON-WORD boundary, not a command separator: the producer is routinely preceded
     # by `if `/`elif `/`! `/`while `, and requiring `[|;&(]` missed every one of them (RED-proven).
-    if printf '%s' "$line" | grep -qE "(^|[^a-zA-Z0-9_-])(${_FILE_READERS})[^|]*(\"[^\"]*/[^\"]*\"|[A-Za-z0-9_./-]*/[A-Za-z0-9_.-]+)[^|]*\| *${_Q}"; then
-      log_error "  ${f}: a FILE-READING producer pipes into ${_Q} — under pipefail this reports a FOUND pattern as ABSENT, at random, and reports a real violation as CLEAN."
+    if printf '%s' "$line" | grep -qE "(^|[^a-zA-Z0-9_-])(${_FILE_READERS})[^|]*(\"[^\"]*/[^\"]*\"|[A-Za-z0-9_./-]*/[A-Za-z0-9_.-]+)[^|]*\| *${_Q}" \
+    || printf '%s' "$line" | grep -qE "(^|[^a-zA-Z0-9_-])(${_EXTERNAL})[[:space:]][^|]*\| *${_Q}"; then
+      log_error "  ${f}: an UNBOUNDED producer (a file reader, or kubectl/docker/kind/helm/crane/curl) pipes into ${_Q} — under pipefail this reports a FOUND pattern as ABSENT, at random, and reports a real violation as CLEAN."
       log_error "      ${line}"
       n=$((n + 1))
     fi
@@ -97,4 +111,4 @@ if [ "$hits" -gt 0 ]; then
   log_error "    producer | grep PAT >/dev/null       # no -q: grep drains, producer never SIGPIPEs"
   exit 1
 fi
-log_info "check-grep-q-pipe: OK — no file-reading producer pipes into ${_Q} (scanned ${scanned} script(s)). SCOPE: bounded \$var producers are NOT judged here; 60 remain, none large (see the header)."
+log_info "check-grep-q-pipe: OK — no FILE-READING or EXTERNAL (kubectl/docker/kind/helm/crane/curl) producer pipes into ${_Q} (scanned ${scanned} script(s)). SCOPE: bounded \$var producers are NOT judged — measured structurally safe (<32KB or single-line); see the header before \"fixing\" them."

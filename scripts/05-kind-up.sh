@@ -52,7 +52,7 @@ require_cmd kubectl
 # name exists, health-check the control-plane and only skip create if a node is
 # actually Ready; otherwise delete + recreate.
 need_create=1
-if kind get clusters 2>/dev/null | grep -qxF "$CLUSTER_NAME"; then
+if kind get clusters 2>/dev/null | grep -xF "$CLUSTER_NAME" >/dev/null; then
   kc="$(mktemp)"
   # Capture the node list first, THEN grep the variable: piping `kubectl … | grep -q` directly
   # lets `grep -q` close the pipe on its first match, SIGPIPE-killing `kubectl` (exit 141), which
@@ -157,7 +157,7 @@ state_stamp --kind
 
 # --- 3. Start cloud-provider-kind (detached) for LoadBalancer IPs ------------
 # It watches the `kind` docker network and assigns external IPs to LB Services.
-if docker ps -a --format '{{.Names}}' | grep -qxF "$CPK_CONTAINER"; then
+if docker ps -a --format '{{.Names}}' | grep -xF "$CPK_CONTAINER" >/dev/null; then
   log_info "removing existing '$CPK_CONTAINER' container before (re)start"
   run docker rm -f "$CPK_CONTAINER"
 fi
