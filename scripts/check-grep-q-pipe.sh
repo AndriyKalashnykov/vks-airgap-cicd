@@ -33,7 +33,7 @@
 # arbitrarily many bytes, so it is always a latent lie; that is what is banned here. A `printf '%s'
 # "$var" | grep -q` is bounded by the variable and is usually tiny — but it is NOT safe in principle
 # (bash forks the builtin into a subshell that takes the signal; a large page or log reproduces it),
-# and ~70 such sites remain unconverted. They are a backlog row, not a silent exemption. Do not read
+# and 60 such sites remain unconverted (counted). They are a backlog row, not a silent exemption. Do not read
 # this gate's green as "the repo is free of this class".
 #
 # THE FIX, both forms measured 400/400 clean under the same race:
@@ -97,4 +97,4 @@ if [ "$hits" -gt 0 ]; then
   log_error "    producer | grep PAT >/dev/null       # no -q: grep drains, producer never SIGPIPEs"
   exit 1
 fi
-log_info "check-grep-q-pipe: OK — no file-reading producer pipes into ${_Q} (scanned ${scanned} script(s)). SCOPE: bounded \$var producers are NOT judged here; ~70 remain (see the header)."
+log_info "check-grep-q-pipe: OK — no file-reading producer pipes into ${_Q} (scanned ${scanned} script(s)). SCOPE: bounded \$var producers are NOT judged here; 60 remain, none large (see the header)."
