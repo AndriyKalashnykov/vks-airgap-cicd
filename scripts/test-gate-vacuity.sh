@@ -58,6 +58,17 @@
 #   check-gwapi-istio-alignment — its corpus is an upstream go.mod fetched over the network; it
 #                               loud-SKIPs green when offline by design. Starving the repo does
 #                               nothing to it.
+#   check-doc-command-count   — CONDITIONAL BY DESIGN: it cross-checks any "N command(s)" prose
+#                               claim against the commands beside it, and a docs set that makes NO
+#                               such claim is a legitimate state with nothing to contradict. Its
+#                               real coverage today is ONE intentional line (README.md); a second
+#                               apparent hit is prose warning you not to run something as one
+#                               command, which passes by coincidence. Guarding its claim count would
+#                               convert a contradiction-detector into a permanent prose MANDATE —
+#                               rewording that one README cell would redden CI, and the only way to
+#                               satisfy the gate would be to re-introduce an "N commands" phrase.
+#                               Same shape as check-java-alignment's "no java app — nothing to
+#                               check": the emptiness is honest, so a die would be a FALSE BLOCK.
 #
 # shellcheck shell=bash
 set -uo pipefail
@@ -191,6 +202,18 @@ assert_starved check-env-coverage.sh      "check-env-coverage dies with nothing 
 # Ground truth is a SINGLE named script, not a wildcard over scripts/ — permitted by the blast-radius
 # rule in the header (it cannot reach scripts/lib/ or this gate's own source).
 assert_starved check-namespace-labelled.sh "check-namespace-labelled dies with no NS_SPEC inventory" 'scripts/49-psa-check.sh'
+
+# These seven were MEASURED VACUOUS (2026-07-19) — each reported OK over an empty corpus. The
+# declarations land in their OWN commit, BEFORE the fixes, so the harness records seven real
+# `VACUOUS` lines in CI. A case that is `ok` from birth is indistinguishable from one that was
+# never blind; this ordering is what makes the demonstrated RED an observation instead of a claim.
+assert_starved check-doc-make-targets.sh  "check-doc-make-targets dies with no commands examined"  'README.md' 'docs/*.md'
+assert_starved check-prose-secrets.sh     "check-prose-secrets dies with no lines examined"        '*.md'
+assert_starved check-how-provenance.sh    "check-how-provenance dies with no '# how:' lines"       '.env.example'
+assert_starved check-app-hardcodes.sh     "check-app-hardcodes dies with no (file,app) pairs"      'apps/registry.tsv'
+assert_starved check-app-toolchains.sh    "check-app-toolchains dies with no toolchains checked"   'apps/registry.tsv'
+assert_starved check-pull-secret-alignment.sh "check-pull-secret-alignment dies with no apps"      'apps/registry.tsv'
+assert_starved check-env-clobber.sh       "check-env-clobber dies with nothing uncommented"        '.env.example'
 
 # Coverage, DERIVED — never a literal hand-typed beside the calls, which is a two-numbers-that-must-
 # agree problem with nothing asserting it. Both figures come from the SAME listing, so the count and

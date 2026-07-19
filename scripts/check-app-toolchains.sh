@@ -42,6 +42,7 @@ $(app_names)
 EOF
 
 if [ "$rc" -eq 0 ]; then
+  [ "$checked" -gt 0 ] || die "check-app-toolchains: checked 0 toolchain(s) — apps/registry.tsv is empty or app_names is broken. The gate has gone BLIND."
   log_info "check-app-toolchains: OK — every app's toolchain (${checked} tool(s)) is pinned in .mise.toml, so CI can actually test and scan it."
 else
   log_error "check-app-toolchains: pin the missing tool(s) in .mise.toml (and align the version with the image the pipeline builds with — check-toolchain-alignment)."

@@ -146,6 +146,7 @@ for v in "${UNCOMMENTED[@]}"; do
 done
 
 if [ "$rc" -eq 0 ]; then
+  [ "$checked" -gt 0 ] || die "check-env-clobber: examined 0 uncommented .env.example value(s) — the gate has gone BLIND."
   log_info "check-env-clobber: OK — none of the ${checked} uncommented .env.example values shadows a dynamic fallback or a per-run override."
 else
   log_error "check-env-clobber: .env.example has value(s) that silently defeat the code above."
