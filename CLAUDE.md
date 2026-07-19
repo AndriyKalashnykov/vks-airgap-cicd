@@ -513,94 +513,80 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-07-19 (session 4) — READ, THEN REPLACE (do not append)
+## ▶️ HANDOFF 2026-07-19 (session 5) — READ, THEN REPLACE (do not append)
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog.
 History → git. Only "what is in flight and what to distrust" belongs here.
 
-**State: both repos GREEN on `main`, trees clean, no branches but `main`, no cluster, no parked
-agents.**
+**State: both repos GREEN on `main`, trees clean, no branches but `main` + a Renovate one, no
+cluster, no parked agents.**
 
 ### What shipped
 
-Eight PRs here (#343–#350) and two in `claude-config` (#52, #54). One thread — **extend the vacuity
-harness from 4 declared gates to 18, and fix what that exposed** — then two backlog items that were
-blocked on measurements, taken on a live cluster.
+Four PRs here (#355–#358) and five in `claude-config` (#56–#60). One thread the whole way:
+**a CI failure I could not reproduce turned out to be a race that also produces FALSE GREENS.**
 
-- **#343** — hardened the harness *before* trusting it to judge: a third `INCONCLUSIVE` verdict, a
-  derived coverage count, undeclared gates NAMED, and the blast-radius rule written down.
-- **#344** — seven gates that reported `OK` over an EMPTY corpus. Two commits, declarations first,
-  so the seven `VACUOUS` lines are recorded in CI rather than asserted.
-- **#345** — the `A && B` silent death exists **twice**, and `check-image-alignment` had a blind ARM.
-- **#346** (B47) — the end-of-work sentinel nothing had ever read.
-- **#347** — the `NS_SPEC` row counter cannot see a literal row; a header certifying coverage it lacks.
-- **#349** (B50) — verify the CARRIED toolchain RENDERED the routes. The 404-vs-503 split is now
-  MEASURED, not inferred; five implementation-round defects fixed.
-- **#350** (B51-C3) — `tekton-pipelines-resolvers` into both inventories, measured safe first.
+- **#355** — B40's namespace chokepoint gate (4 of 10 mechanisms, coverage stated not implied).
+- **#356** — `route_code`: a stalled backend was one merge away from being declared OK.
+- **#357** — the SIGPIPE root cause: 12 sites, `make check-grep-q-pipe`, B40 closed, B52 filed.
+- **#358** — three silent `set -e` deaths, one killing `bundle-load` on the **air-gap box**.
 
-**Coverage that session: 4 → 18 of 21 `check-*.sh`** (now **19 of 22**, since B40 added a gate and
-declared it). Do NOT restate this number anywhere — it moves whenever a gate is added, and a restated
-count is exactly the drift this repo keeps getting bitten by. **Read the harness's own last line.**
-The undeclared ones are exactly those it documents as NOT STARVABLE — every gate that *can* be starved is.
+### 🔴 THE FINDING — and it is a class, not an incident
+
+`grep -q` exits at its FIRST match. The producer still owing writes takes **SIGPIPE (141)**, and
+`pipefail` promotes that to the pipeline status — **so a pattern that WAS FOUND reports as ABSENT.**
+
+**It produces FALSE GREENS, which is why it matters.** When the match is the OFFENDER (any scanner
+or policy gate grepping for a forbidden pattern), SIGPIPE silently un-records a real violation.
+Measured on the gate enforcing this repo's headline *"docker is NEVER required"* invariant:
+**7/300 runs reported CLEAN** over a script that plainly required docker.
+
+**You cannot refute it on an idle machine, and I did exactly that.** I dismissed the correct
+diagnosis with *"200/200 rc=0; 39 KB fits the 64 KB pipe buffer so sed never blocks"* — both facts
+true, conclusion false. The producer needn't BLOCK, only owe a write when grep leaves. Idle
+24-core: **0/200**. `taskset -c 0` (a 2-vCPU-runner analogue): **11/400 = 2.75%**. At ~9
+invocations per CI job that is tens of percent — which reads exactly like flake.
+
+**Exposure is predictable**: the bytes the producer still owes AFTER the match. The one row that
+ever failed owed **13,802**; its four siblings owed 932–2,730. Not special — just wider.
 
 ### 🔴 Distrust these — measured, not reasoned
 
-- **`rc != 0` IS NOT A VERDICT.** A gate can die under starvation for a reason unrelated to its
-  denominator. `rc in {126,127}` **or zero output** is INCONCLUSIVE, not a pass. This caught my own
-  fix within the hour (below), and a two-verdict harness would have banked it as `ok`.
-- **An INCOMPLETE declaration produces a FALSE RED, not a false ok** — the harness *accuses* a
-  healthy gate, and the cheapest way to silence that is to weaken the accused gate. Hit twice.
-- **A gate is SEVERAL denominators, not one.** `check-image-alignment` has five arms; two were
-  vacuous while a third's explicit `gate has gone BLIND` guard made the whole gate *look* covered.
-  The current declaration covers **1 of 5 arms** and says so.
-- **`harbor` / `argocd` must NOT be added to `NS_SPEC` as `ours`.** Measured: both are deliberately
-  passed NO level, psa-check reads an absent label as `restricted`, and psa-check is the FIRST
-  prerequisite of `install-all` — the naive fix turns a reporting gap into a broken install.
-  Inventing `PSA_LEVEL_HARBOR` is worse (the label would land before `helm install` and can reject
-  harbor's own pods; `check-env-coverage` wildcard-exempts `PSA_LEVEL_*` so the var would never be
-  required in `.env.example`).
-- **A recorded RED-proof that cannot fire is worse than none.** `check-vks-terminology`'s first one
-  said "run it from a non-git directory" — that does nothing, because the gate resolves `REPO_ROOT`
-  from its own `BASH_SOURCE` and cd's back. The working form COPIES the gate and its lib out.
-- **B47's original justification was wrong**: a `|| true` does NOT suppress the sentinel (execution
-  continues and it prints). The catchable class is early-exit-with-status-0, nothing wider.
-- The `adversary-first-gate` re-arms on every non-exempt commit, so a two-commit sequence prescribed
-  BY an adversary re-arms against its own second half. Used the documented override, on the record.
+- **A "cosmetic" cleanup must be verified against the FAILURE states.** My `route_code` fix
+  normalised `000000` → a clean status. For a response truncated mid-flight `curl` prints the REAL
+  code and exits 28, so a hung backend yielded a bare `200`, hit the `2??` arm, and the route was
+  declared **OK**. The old garbage fell through and was safe **by accident**.
+- **The same primitive can need OPPOSITE normalisation in two callers.** 98 asks "is this host
+  SERVING?" (truncated ⇒ `000`); 97 asks "is the route RENDERED?" (truncated ⇒ keep the code — a
+  backend that answered at all proves the route exists). Do not copy one into the other.
+- **`|| true` is a POLICY DECISION.** It restores the guard's reachability, but falling through
+  means the empty case now proceeds — and in `20-bundle-load.sh` the branch ONE LINE ABOVE
+  **replaces** an unparseable helm while the patched branch would have **kept** an unparseable
+  kubectl. Read the sibling before choosing.
+- **A guard can be inert in the case it was written for.** `check-doc-make-targets`' blindness die,
+  added 2026-07-18, could never print: an empty pathspec made `grep -v` exit 1 and kill the gate
+  first. When you ADD a guard, EXECUTE the condition it guards.
+- **`grep -c` prints `0` and EXITS 1** on a zero count — a counting assignment dies on the empty set
+  it exists to count.
+- **A restated number rots within a day.** "18 of 21" was correct until #355 made it 22. The live
+  claim now says to read the harness's own last line.
 
-### The two things worth carrying forward
+### The instruments that lied, again
 
-**1. RAN-IT outranks a source-read prediction, including a good one.** The first adversary had
-`bash` denied, disclosed it up front, and graded everything `source-read` — and **three of its
-predictions were wrong on measurement** (a gate it called vacuous was healthy; one it predicted
-would `exit 0` actually died silently at rc=1; one of my own probes was an incomplete starvation).
-Every later round had `bash` and measured; those held up. The disclosure is what made the wrong ones
-recoverable.
-
-**2. An adversary's PRESCRIPTION is a hypothesis too.** Its fixes were refuted twice: the
-`check-vks-terminology` RED-proof above, and a k8s-only starvation pathspec that my own `|| true`
-fix silently made incomplete. Verify the patch, not just the finding.
-
-### 🔴 Two mistakes I made with a live cluster, both nearly reported as product failures
-
-- **My measurement script used bare `kubectl` and hit a DEAD context** (`kind-cc-guest`, left by an
-  earlier session's cross-cluster e2e). It reported zero namespaces and no LoadBalancers over a run
-  that had fully succeeded. This repo's own C13 hazard: resolve `KUBECONFIG` through `load_env`, and
-  when a result is alarming, check *where you are* before you check the product.
-- **A RED-proof I wrote silently PASSED.** `INGRESS_CONTROLLER=traefik ./97…` cannot fire the
-  controller guard, because `load_env` sources `.env.state` after the environment. Correct behaviour;
-  wrong proof. That is the rule added to `claude-config` (#54) — *a recorded RED-proof that cannot
-  fire is worse than none* — violated within the hour of writing it.
+Every one caught by making it disagree with itself: my SIGPIPE refutation (idle machine); my new
+gate's first draft (line-by-line, so blind to the `\`-continued form that IS the real defect —
+it passed **both** RED-proofs catching nothing); a false-green repro that used comment filler
+(`sed` strips it, so nothing was owed); a `pgrep -af agent-id` that matched itself; and a Monitor
+that reported "main failed" without filtering by SHA — it was reading the previous merge.
 
 ### Next
 
-- ✅ **The namespace-inventory remediation (C1–C5) is COMPLETE** — #347, #350, #352, #353. The
-  original gating note follows, for the arc: it was **gated on one live-cluster measurement**: `make kind-up && make platform`, then
-  `kubectl label --dry-run=server ns tekton-pipelines-resolvers pod-security.kubernetes.io/enforce=restricted`.
-  Three namespaces (`tekton-pipelines-resolvers`, `argocd`, `harbor`) reach `ensure_namespace` and are
-  measured by NEITHER inventory; the drift check is structurally blind because it compares counts.
-- **B50** still needs its 404-vs-503 measurement on an air-gap run.
-- **B40** — the mechanism inventory is now BUILT and verified (see its row). The gate is still not.
-- **LAB-GATED, leave alone:** B2, B20, B24, B25, B27.
+- **B52** — 60 bounded `printf | grep -q` sites remain. A scan for large-producer variables found
+  **zero**, so priority is low; it is a crude heuristic, not a proof. Its trap is named in the row:
+  do NOT gate it by marking all 60 exempt.
+- **#303** (Renovate) is green but BEHIND `main`; Renovate rebases itself. Left alone deliberately.
+- **LAB-GATED, leave alone:** B2, B20, B24, B25, B27. **REFUTED, do not rebuild:** B26 fix 3, B37,
+  B38, B39's meta-gate, B43.
 
 ## Backlog / resume state
 
