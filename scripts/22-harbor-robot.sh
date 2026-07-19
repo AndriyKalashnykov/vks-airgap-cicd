@@ -35,7 +35,11 @@ harbor_setup "$HARBOR_TMP"
 # The projects the robot needs push+pull on. DISTINCT: a tenant is often granted ONE project and
 # points both vars at it, and Harbor rejects a project-level robot that names the same project twice.
 PROJECTS="$(printf '%s\n%s\n' "$HARBOR_INFRA_PROJECT" "$HARBOR_APP_PROJECT" | sort -u)"
-N_PROJECTS="$(printf '%s\n' "$PROJECTS" | grep -c .)"
+# `grep -c` prints 0 and EXITS 1 on a zero count, which under pipefail+set -e would kill this
+# script silently. UNREACHABLE today — the `${HARBOR_INFRA_PROJECT:?}` / `${HARBOR_APP_PROJECT:?}`
+# guards above fire on EMPTY as well as unset, so PROJECTS always has >=1 line. Kept as
+# defence-in-depth against someone weakening those guards; graded LOW, not a live fix.
+N_PROJECTS="$(printf '%s\n' "$PROJECTS" | grep -c . || true)"
 
 # Create them if we can. A tenant CANNOT (403) — that is not fatal here: they were granted an
 # existing project, and `ensure_project` now says so instead of dying before we ever reach the robot.
