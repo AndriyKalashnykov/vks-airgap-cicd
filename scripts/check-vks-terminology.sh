@@ -78,6 +78,27 @@ while IFS=$'\t' read -r pat fix || [ -n "${pat:-}" ]; do
 done <<< "$(printf '%b' "$BANNED")"
 
 n="$(printf '%s\n' "$files" | grep -c . || true)"
+# `n` is a file count, which is normally the metric this repo calls "the bug" — but here it IS the
+# item count, because the `grep -Iq .` filter above EXCLUDES a zero-byte file (measured), so `files`
+# is files-WITH-CONTENT, not files-opened. The other dimension (BANNED) is a script constant and
+# cannot independently go to zero, so `n` is the only starvable axis.
+#
+# This gate is NOT STARVABLE by the vacuity harness — its corpus is every tracked text file, which
+# necessarily includes scripts/lib/os.sh, so a full starvation would empty the gate's own library
+# (blast radius) and a partial one leaves a real corpus and yields a false RED. So this guard is a
+# CLAIM the harness cannot demonstrate. RED-PROVE IT BY HAND — COPY the gate and its lib into a
+# directory that is NOT a git repo, and run it THERE:
+#
+#   T=$(mktemp -d); mkdir -p "$T/scripts/lib"
+#   cp scripts/check-vks-terminology.sh "$T/scripts/"; cp scripts/lib/*.sh "$T/scripts/lib/"
+#   ( cd "$T" && bash scripts/check-vks-terminology.sh ); echo "rc=$?"   # -> rc=1, FATAL ... BLIND
+#
+# NOTE the COPY. Merely `cd`-ing elsewhere and invoking this script by its repo path does NOT work:
+# it resolves REPO_ROOT from its own BASH_SOURCE and cd's back here, so it happily scans all 225
+# files and prints OK. That was the first RED-proof written into this comment, and it silently
+# proved nothing — a recorded RED-proof that cannot fire is worse than none, because the next reader
+# runs it, sees green, and concludes the guard works.
+[ "$n" -gt 0 ] || die "check-vks-terminology: scanned 0 files — git ls-files returned nothing or the text filter excluded everything. The gate has gone BLIND; a clean result here would mean nothing."
 if [ "$rc" -eq 0 ]; then
   log_info "check-vks-terminology: OK — scanned ${n} files; no phantom Broadcom nouns."
 else

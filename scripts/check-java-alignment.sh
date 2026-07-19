@@ -37,8 +37,20 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; export REPO_ROOT
 . "${REPO_ROOT}/scripts/lib/os.sh"
 # shellcheck source=scripts/lib/apps.sh
 . "${REPO_ROOT}/scripts/lib/apps.sh"
-JAVA_APP="$(app_names | while read -r a; do [ "$(app_lang "$a")" = java ] && { printf '%s' "$a"; break; }; done)"
-[ -n "$JAVA_APP" ] || { echo "check-java-alignment: no java app in apps/registry.tsv — nothing to check"; exit 0; }
+# TWO different zero states, and until 2026-07-19 they were indistinguishable:
+#   "the registry has apps, none of them java"  -> HONEST emptiness, nothing to check, exit 0
+#   "the registry yielded ZERO apps"            -> BLINDNESS, the ground truth is gone, must be RED
+# So count the apps first, and only then decide.
+app_total="$(app_names | grep -c . || true)"
+[ "$app_total" -gt 0 ] || die "check-java-alignment: apps/registry.tsv yielded 0 apps — the ground truth is gone and a green here would mean nothing. The gate has gone BLIND."
+
+# `if…fi`, NOT `[ … ] = java && { …; }`: as a loop-body TAIL that `A && B` returns non-zero when the
+# LAST app is not java, the `$( )` returns non-zero, the ASSIGNMENT returns non-zero, and
+# `set -euo pipefail` kills the script HERE — making the guard on the next line UNREACHABLE DEAD
+# CODE, in exactly the case it was written for. Measured: registry emptied -> rc=1 with ZERO bytes
+# of output, an error naming nothing. The trigger is not exotic: removing an app is ONE ROW.
+JAVA_APP="$(app_names | while read -r a; do if [ "$(app_lang "$a")" = java ]; then printf '%s' "$a"; break; fi; done)"
+[ -n "$JAVA_APP" ] || { echo "check-java-alignment: no java app among ${app_total} registry app(s) — nothing to check"; exit 0; }
 JAVA_SRC="$(app_src "$JAVA_APP")"
 pom="$(grep -oE '<java\.version>[0-9]+' "${JAVA_SRC}/pom.xml" | grep -oE '[0-9]+' | head -1 || true)"
 [ -n "$pom" ] || { echo "ERROR: could not read <java.version> from ${JAVA_SRC}/pom.xml" >&2; exit 1; }
