@@ -8,15 +8,44 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+  # A weekly full run over main, and it is NOT redundant with the push runs. It is the only thing
+  # that covers a DROPPED PUSH EVENT: 7d90aa9 (a real code merge, 2026-07-19) has ZERO runs of any
+  # workflow -- verified via `gh api actions/runs?head_sha=`, and it is the only one of the last 60
+  # main commits missing. Nothing was in-flight to cancel it and the next run was a `pull_request`
+  # (a different concurrency group), so concurrency cannot explain it and the `cancel-in-progress`
+  # change below CANNOT cover it. Unexplained, and recorded as unexplained rather than folded into
+  # the concurrency story. A schedule also re-runs the scanners against a drifted vuln DB, which a
+  # push-only repo never does.
+  schedule:
+    - cron: '17 6 * * 1'
 
 # Least privilege: jobs only read the repo.
 permissions:
   contents: read
 
-# One in-flight run per ref; newer pushes cancel older runs.
+# One in-flight run per ref. Cancel superseded runs on a PR BRANCH (only the tip matters there);
+# NEVER on main, where each commit deserves its own verification.
+#
+# WHY, measured 2026-07-19: with `cancel-in-progress: true` on main, merging code and then a
+# docs-only commit minutes later LOSES the code commit's static-check -- the code run is cancelled,
+# and the superseding run legitimately SKIPS static-check because ITS OWN diff is docs-only
+# (the `changes` filter working as designed). It happened THREE times in one day
+# (4fad575, bf82e7f, d0a091a). The immediate, certain benefit is not the re-verification, though:
+# it is that every cancelled run leaves main showing `ci-pass: failure` for a NON-failure, which
+# trains readers to ignore main's status.
+#
+# Cost is negligible and was measured, not assumed: docs runs ~50s, code runs 2:46-8:00; not
+# cancelling costs roughly 15 extra runner-minutes across 60 commits.
+#
+# NOTE a SECOND mechanism this does NOT touch: `concurrency.queue` defaults to `single`, so a
+# PENDING run is still discarded when a newer one queues. It did not fire in the observed window
+# (no third push arrived inside any run), so it is latent. `queue: max` would close it, but the
+# docs say `queue: max` + `cancel-in-progress: true` is a validation error, and whether that check
+# fires against an EXPRESSION that evaluates true on PRs is UNVERIFIED -- so it is deliberately NOT
+# combined here. Test it on a throwaway branch before adding.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # Which gates does this change actually need? Runner minutes are BILLED, so a docs-only
