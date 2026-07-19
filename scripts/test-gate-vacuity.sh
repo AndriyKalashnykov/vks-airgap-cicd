@@ -88,12 +88,25 @@ SB="$(mktemp -d)"; trap 'rm -rf "$SB"' EXIT
 # so a fix you have not committed yet is invisible and the harness reports your just-fixed gate as
 # still vacuous. (It did exactly that, quoting the pre-fix message — the same "measuring the wrong
 # artifact" class this file exists to catch.)
+# EVERY STEP IS CHECKED, and the result is asserted. An unguarded fresh() that half-populates the
+# sandbox does not fail here — it fails LATER, as a gate going RED on its supposedly-pristine
+# baseline, which reads as "that gate is broken" and sends you to the wrong file entirely. It cost a
+# CI-only failure that reproduced nowhere locally (2026-07-19). The setup of a test harness is part
+# of the instrument: if it can fail, it must say so itself.
+_setup_die() { echo "test-gate-vacuity: SANDBOX SETUP FAILED — $1" >&2; echo "  This is the HARNESS, not the gate under test. Do not go looking at the gate." >&2; exit 1; }
 fresh() {
-  rm -rf "${SB:?}/repo"; mkdir -p "$SB/repo"
-  git archive HEAD | tar -x -C "$SB/repo"
-  cp -a "${REPO_ROOT}/scripts/." "$SB/repo/scripts/"
+  rm -rf "${SB:?}/repo"; mkdir -p "$SB/repo" || _setup_die "cannot create the sandbox dir"
+  git archive HEAD | tar -x -C "$SB/repo" || _setup_die "git archive HEAD | tar failed"
+  cp -a "${REPO_ROOT}/scripts/." "$SB/repo/scripts/" || _setup_die "could not overlay the working tree's scripts/"
   ( cd "$SB/repo" && git init -q . && git add -A >/dev/null 2>&1 \
-      && git -c user.email=t@t -c user.name=t commit -qm starve >/dev/null 2>&1 )
+      && git -c user.email=t@t -c user.name=t commit -qm starve >/dev/null 2>&1 ) \
+    || _setup_die "could not re-init the sandbox as a git repo (several gates drive off git ls-files)"
+  # Assert the sandbox actually HOLDS the tree. Cheap, and the only thing that distinguishes a
+  # half-copied sandbox from a genuinely failing gate.
+  [ -s "$SB/repo/scripts/lib/os.sh" ]      || _setup_die "scripts/lib/os.sh is missing or empty in the sandbox"
+  [ -s "$SB/repo/scripts/49-psa-check.sh" ] || _setup_die "scripts/49-psa-check.sh is missing or empty in the sandbox"
+  _n="$(cd "$SB/repo" && git ls-files | grep -c . || true)"
+  [ "${_n:-0}" -gt 50 ] || _setup_die "the sandbox tracks only ${_n:-0} file(s) — the archive/overlay did not populate it"
 }
 
 # starve <pathspec...> — empty every tracked file matching, leaving it TRACKED. Emptying rather than
@@ -117,7 +130,7 @@ assert_starved() {
   ( cd "$SB/repo" && bash "scripts/${gate}" ) >"$SB/base.log" 2>&1
   base_rc=$?
   if [ "$base_rc" -ne 0 ]; then
-    bad "${label} — the gate is RED on an UNSTARVED corpus, so this case proves nothing about vacuity"
+    bad "${label} — the gate is RED on its UNSTARVED baseline, so this case proves nothing about vacuity. Suspect the SANDBOX before the gate: fresh() asserts its own setup above, but a gate reading state outside \$REPO_ROOT (an exported var, an absolute path) would also land here."
     sed 's/^/        /' "$SB/base.log" >&2
     return
   fi
