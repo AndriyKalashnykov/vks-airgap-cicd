@@ -200,6 +200,90 @@ if [ "$owned_rows" -ne "$want" ]; then
   die "check-namespace-labelled: NS_SPEC drift — 49-psa-check.sh declares ${spec_rows} row(s) of which ${_ours} are 'ours' (${_mesh} mesh, ${_kind} kind-only), but this gate covers ${owned_rows}. A namespace added to one inventory and not the other is invisible to whichever lacks it (that is exactly how tekton-pipelines-resolvers went unlabelled). Update BOTH."
 fi
 
+# --- THIRD ASSERTION: every ensure_namespace CALL SITE must be declared in NS_SPEC ---------------
+#
+# WHY A THIRD ONE. The two assertions above both start from an inventory a human typed, so a
+# namespace missing from BOTH is invisible to them — the arithmetic stays balanced and nothing looks
+# wrong. That is exactly how tekton-pipelines-resolvers, argocd and harbor went unmeasured. The only
+# thing that can see it is a ground truth INDEPENDENT of both lists: the call sites themselves.
+#
+# IT IS ADDITIVE, NOT A REPLACEMENT, and the divergence is proven in both directions:
+#   * a new installer creating a namespace in NEITHER inventory  -> THIS check flags it; OWNED and
+#     the row-count check are blind.
+#   * deleting the gitea call from 40-install-gitea.sh (the F2 regression this gate exists for)
+#     -> OWNED flags it; THIS check is blind, because lib/istio.sh still calls it.
+# Deriving OWNED from the call sites would make it tautological and un-catch F2. Keep both.
+_calls_cmdpos=0; _calls_quoted=0; _derived=""
+while IFS= read -r _f; do
+  [ -n "$_f" ] || continue          # same empty-heredoc trap, one level up
+  while IFS= read -r _line; do
+    # A command substitution that matched NOTHING still yields ONE EMPTY LINE inside a heredoc, so
+    # counting before this test inflates the denominator by one per file that has no calls at all
+    # (measured: 82 instead of 20 across 118 files). The denominator is the thing this gate reports;
+    # an inflated one is a lie in the direction of looking thorough.
+    [ -n "$_line" ] || continue
+    _calls_cmdpos=$((_calls_cmdpos + 1))
+    # Require a QUOTED first argument. This structurally drops prose that merely mentions the
+    # function inside a die "..." message (there is exactly one such line today), and an UNQUOTED
+    # namespace argument is its own bug worth failing on. The two counts are reconciled below so the
+    # exclusion is never silent.
+    _arg="$(printf '%s' "$_line" | sed -nE 's/^[[:space:]]*ensure_namespace[[:space:]]+"([^"]+)".*/\1/p')"
+    [ -n "$_arg" ] || continue
+    _calls_quoted=$((_calls_quoted + 1))
+    # Normalise to a NAME: ${FOO:-default} -> FOO, $FOO -> FOO, a literal stays itself.
+    # shellcheck disable=SC2016  # the $ here are REGEX anchors and the literal $ of shell-variable
+    # syntax being matched — single quotes are exactly right; expanding them would break the pattern.
+    _name="$(printf '%s' "$_arg" | sed -E 's/^\$\{([A-Za-z_][A-Za-z0-9_]*)(:[-?][^}]*)?\}$/\1/; s/^\$([A-Za-z_][A-Za-z0-9_]*)$/\1/')"
+    _derived="${_derived}${_name}
+"
+  done <<INNER
+$(sed 's/#.*//' "$_f" 2>/dev/null | grep -E '^[[:space:]]*ensure_namespace[[:space:]]' || true)
+INNER
+done <<OUTER
+$(git ls-files 'scripts/*.sh' 'scripts/lib/*.sh' | grep -vE '/(check|test)-' || true)
+OUTER
+
+# Reconcile the two denominators. A NEW unquoted call — prose or a genuinely unquoted namespace
+# argument — changes this difference and goes RED, so the structural exclusion above can never
+# quietly widen.
+_PROSE_EXCEPTIONS=1   # 90-e2e-istio-existing.sh: the function is named inside a die "..." message
+if [ $((_calls_cmdpos - _calls_quoted)) -ne "$_PROSE_EXCEPTIONS" ]; then
+  die "check-namespace-labelled: ${_calls_cmdpos} ensure_namespace call(s) at a command position but ${_calls_quoted} with a quoted argument — expected exactly ${_PROSE_EXCEPTIONS} unquoted (prose inside a die message). A new unquoted call is either prose that must be declared here, or an unquoted namespace argument, which is its own bug."
+fi
+
+# Names that CANNOT be resolved statically, each with the reason it is exempt. This is an enumerated
+# list and it will rot — so a name that is neither resolvable NOR listed here is a HARD FAILURE
+# demanding an entry, never a silent skip. The annoyance is once per new local; a silent skip is
+# permanent blindness, and this repo has shipped that gate twice.
+_UNRESOLVABLE='ns             45-install-traefik.sh: loop over the shared-UI namespaces
+a              lib/istio.sh: loop over app_names; covered by the app-loop assert above
+APP_NAMESPACE  70-configure-argocd.sh: per-app loop variable; covered by the app-loop assert above
+MATRIX_NS_NSLBL 90-e2e-istio-existing.sh: ephemeral injection-probe fixture, must NEVER enter NS_SPEC
+PROBE_NS       90-e2e-istio-existing.sh: ephemeral probe namespace, must NEVER enter NS_SPEC'
+
+# The NS_SPEC name set, normalised the same way. The `$(` filter drops the app-loop row (it expands
+# to N app rows and is deliberately outside this comparison, as it is for the counts above).
+# shellcheck disable=SC2016  # same: regex anchors and a literal $, not an unexpanded expression.
+_spec_names="$(printf '%s\n' "$_spec_body" | cut -d'|' -f1 \
+  | sed -E 's/^\$\{([A-Za-z_][A-Za-z0-9_]*)(:[-?][^}]*)?\}$/\1/; s/^\$([A-Za-z_][A-Za-z0-9_]*)$/\1/')"
+
+_checked_calls=0; _exempt_calls=0
+while IFS= read -r _n; do
+  [ -n "$_n" ] || continue
+  if printf '%s\n' "$_UNRESOLVABLE" | grep -qE "^${_n}[[:space:]]"; then
+    _exempt_calls=$((_exempt_calls + 1)); continue
+  fi
+  _checked_calls=$((_checked_calls + 1))
+  # Set MEMBERSHIP on the normalised name, not a substring search of the raw block: a substring test
+  # would pass on `PSA_LEVEL_APP` when looking for `APP_NAMESPACE`, and fail for the right answer.
+  printf '%s\n' "$_spec_names" | grep -qxF "$_n" || \
+    HITS+=("${_n}: reached by an ensure_namespace call but declared in NEITHER NS_SPEC nor the exempt list — a namespace missing from both inventories is invisible to the two checks above, which is exactly how tekton-pipelines-resolvers went unmeasured. Add it to NS_SPEC with an ownership, or to the unresolvable list with a reason.")
+done <<EOF
+$(printf '%s' "$_derived" | sort -u)
+EOF
+
+[ "$_checked_calls" -gt 0 ] || die "check-namespace-labelled: the derived cross-check resolved 0 call sites — the extraction is broken, and a green here would mean nothing."
+
 if [ "${#HITS[@]}" -gt 0 ]; then
   log_error "check-namespace-labelled: ${#HITS[@]} owned namespace(s) reach no ensure_namespace call (checked ${checked}; NS_SPEC declares ${spec_rows} rows):"
   for h in "${HITS[@]}"; do printf '  - %s\n' "$h"; done
@@ -212,4 +296,4 @@ if [ "${#HITS[@]}" -gt 0 ]; then
   exit 1
 fi
 
-log_info "check-namespace-labelled: OK — ${checked} owned namespace(s) each reach an ensure_namespace call; NS_SPEC declares ${spec_rows} rows."
+log_info "check-namespace-labelled: OK — ${checked} owned namespace(s) each reach an ensure_namespace call; NS_SPEC declares ${spec_rows} row(s) (${_ours} ours, ${_mesh} mesh, ${_kind} kind-only); the derived cross-check saw ${_calls_cmdpos} call site(s) (${_calls_quoted} quoted, ${_PROSE_EXCEPTIONS} prose) yielding $((_checked_calls + _exempt_calls)) distinct name(s): ${_checked_calls} asserted against NS_SPEC, ${_exempt_calls} exempt-with-a-reason."
