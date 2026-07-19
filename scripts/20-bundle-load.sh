@@ -135,10 +135,25 @@ else
       keep_it=1
       case "$name" in
         helm)    printf '%s' "$ev" | grep -qE 'v?3\.' || { keep_it=0; why="helm 2 (or unrecognised) — this flow needs helm 3" ; } ;;
-        kubectl) # within one minor of what we carry, else skew bites at apply time
-                 have_mm="$(printf '%s' "$ev"     | grep -oE 'v[0-9]+\.[0-9]+' | head -1)"
-                 ours_mm="$(printf '%s' "$carried_ver" | grep -oE 'v[0-9]+\.[0-9]+' | head -1)"
-                 if [ -n "$have_mm" ] && [ -n "$ours_mm" ] && [ "$have_mm" != "$ours_mm" ]; then
+        kubectl) # within one minor of what we carry, else skew bites at apply time.
+                 # `|| true` is LOAD-BEARING, not defensive: `grep -oE` exits 1 when it matches
+                 # nothing, `pipefail` promotes that to the assignment, and `set -e` (line 6) then
+                 # kills bundle-load SILENTLY — rc=1, zero output, on the AIR-GAP box. The
+                 # `[ -n "$have_mm" ]` guard below was written for exactly that case and was
+                 # UNREACHABLE DEAD CODE without this. Measured: 4 of 6 realistic
+                 # `kubectl version --client` outputs kill it (an `unknown flag` error, a mise-shim
+                 # error, a version with no leading `v`, and empty). `ours_mm` is worse still: it
+                 # reads TOOLS.tsv field 3, which 11-bundle.sh:15 leaves EMPTY when the staged
+                 # binary would not run — so a slightly-bad bundle killed the far side, silently.
+                 have_mm="$(printf '%s' "$ev"     | grep -oE 'v[0-9]+\.[0-9]+' | head -1 || true)"
+                 ours_mm="$(printf '%s' "$carried_ver" | grep -oE 'v[0-9]+\.[0-9]+' | head -1 || true)"
+                 # POLARITY, deliberately matching the helm branch one line above: an UNPARSEABLE
+                 # version is a REJECT, not a keep. Absorbing the failure with a bare `|| true` and
+                 # falling through would KEEP an unreadable kubectl while helm REPLACES an unreadable
+                 # helm — two adjacent branches with opposite policies for the same condition.
+                 if [ -z "$have_mm" ]; then
+                   keep_it=0; why="cannot parse a version from '${ev}' — refusing to trust it over the carried ${carried_ver}"
+                 elif [ -n "$ours_mm" ] && [ "$have_mm" != "$ours_mm" ]; then
                    h="${have_mm#v}"; o="${ours_mm#v}"
                    hmin="${h#*.}"; omin="${o#*.}"
                    d=$(( hmin > omin ? hmin - omin : omin - hmin ))

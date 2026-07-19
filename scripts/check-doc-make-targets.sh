@@ -35,8 +35,12 @@ cd "$REPO_ROOT"
 # ("install gawk" -> `make gawk`). They are a RECORD, not a runbook — nobody executes a review. Rewriting
 # an audit's own words to appease a doc gate would falsify the record, which is worse than the gate's
 # green. Every OPERATOR-facing doc (README + the runbooks) is still checked.
+# `|| true` is what makes the guard BELOW reachable. Without it, an empty pathspec feeds `grep -v`
+# empty input, grep exits 1, `pipefail` promotes it, and `set -e` kills this gate SILENTLY at rc=1 —
+# so the die never prints and the blindness the guard exists to announce is announced by nothing.
+# Found 2026-07-19 by an adversary, ONE DAY after the guard was added, in the exact case it targets.
 docs=$(git ls-files --cached --others --exclude-standard 'README.md' 'docs/*.md' \
-        | grep -v '^docs/reviews/')
+        | grep -v '^docs/reviews/' || true)
 # WRONG POLARITY until 2026-07-19: this exited 0 when the doc list was empty, so a broken pathspec
 # was indistinguishable from a clean repo. An empty operator-doc set is not a valid state here.
 [ -n "$docs" ] || die "check-doc-make-targets: the doc pathspec matched 0 files — the gate has gone BLIND."
