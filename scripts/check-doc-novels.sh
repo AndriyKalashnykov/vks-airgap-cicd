@@ -61,23 +61,29 @@ is_exempt() {
 # Emit "<file>:<startline>" for every MULTI-LINE (>=2 line) blockquote block that carries a marker AND
 # a wrong-word AND is not arc-ok-tagged. A blockquote block = a maximal run of consecutive lines each
 # beginning (after optional spaces) with '>'. Fenced code is skipped. Match on tolower() for mawk.
+# Also emits a final `@@BLOCKS:<n>` line — the number of multi-line blockquote BLOCKS this file
+# actually offered up for judging. That is the ITEM count, and it is the one that matters: see the
+# guard below for why `scanned` (a FILE count) is not enough.
 scan_one() {
   awk -v MARK="$MARK" -v WRONG="$WRONG" -v FILE="$1" '
-    BEGIN { bn = 0; bq = ""; bstart = 0; infence = 0 }
+    BEGIN { bn = 0; bq = ""; bstart = 0; infence = 0; blocks = 0 }
     function flush() {
-      if (bn >= 2 && bq ~ MARK && bq ~ WRONG && bq !~ /arc-ok/)
-        printf "%s:%d\n", FILE, bstart
+      if (bn >= 2) {
+        blocks++
+        if (bq ~ MARK && bq ~ WRONG && bq !~ /arc-ok/)
+          printf "%s:%d\n", FILE, bstart
+      }
       bn = 0; bq = ""; bstart = 0
     }
     /^[[:space:]]*(```|~~~)/ { flush(); infence = !infence; next }
     infence { next }
     /^[[:space:]]*>/ { if (bn == 0) bstart = FNR; bq = bq "\n" tolower($0); bn++; next }
     { flush() }
-    END { flush() }
+    END { flush(); printf "@@BLOCKS:%d\n", blocks }
   ' "$1"
 }
 
-scanned=0; novels=0
+scanned=0; novels=0; blocks=0
 declare -a HITS=()
 for f in "${DOCS[@]}"; do
   [ -f "$f" ] || continue
@@ -85,6 +91,9 @@ for f in "${DOCS[@]}"; do
   scanned=$((scanned + 1))
   while IFS= read -r hit; do
     [ -n "$hit" ] || continue
+    case "$hit" in
+      @@BLOCKS:*) blocks=$(( blocks + ${hit#@@BLOCKS:} )); continue ;;
+    esac
     HITS+=("$hit")
     novels=$((novels + 1))
   done < <(scan_one "$f")
@@ -93,6 +102,16 @@ done
 # A gate that scanned nothing is a BROKEN gate, not a green one — README.md always matches the pathspec,
 # so scanned==0 means git ls-files / the pathspec broke (the "passes by not looking" failure mode).
 [ "$scanned" -gt 0 ] || die "check-doc-novels: scanned 0 docs — git ls-files/pathspec is broken (README.md must always match)."
+
+# B49 — THE FILE COUNT IS NOT THE ITEM COUNT, and guarding only the former left this gate BLIND.
+# MEASURED: empty every tracked .md (leaving them tracked) and the guard above still passed — it
+# reported `OK — scanned 21 doc(s)` with rc=0 over a corpus containing NOTHING. `scanned` counts files
+# OPENED; `blocks` counts the blockquotes actually EXAMINED, which is the quantity this gate's verdict
+# is about. Zero of them across the whole corpus does not mean "clean", it means the extractor found
+# nothing to judge — a broken awk, a fence-handling regression, or an empty corpus.
+# If a future corpus legitimately has no multi-line blockquotes at all, this dies LOUDLY and someone
+# makes a deliberate decision. That is the correct direction for a gate to fail.
+[ "$blocks" -gt 0 ] || die "check-doc-novels: examined 0 blockquote block(s) across ${scanned} doc(s) — the file count is healthy but the ITEM count is zero, so this gate judged nothing. Suspect the awk extractor (fences, the '>' match) or an empty corpus."
 
 if [ "$novels" -gt 0 ]; then
   log_error "check-doc-novels: $novels re-litigation blockquote(s) in operator/reference docs (scanned $scanned):"
@@ -104,5 +123,5 @@ if [ "$novels" -gt 0 ]; then
   exit 1
 fi
 
-log_info "check-doc-novels: OK — scanned $scanned doc(s); no un-tagged re-litigation blockquotes (docs/reviews/* + docs/decisions/* exempt)."
+log_info "check-doc-novels: OK — examined $blocks blockquote block(s) across $scanned doc(s); no un-tagged re-litigation (docs/reviews/* + docs/decisions/* exempt)."
 exit 0
