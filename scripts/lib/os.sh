@@ -706,6 +706,30 @@ pick_port() {
 
 # ---------------------------------------------------------------------------
 # The stamped state sink (state_file / state_set / state_check / state_stamp / state_archive).
+# ---------------------------------------------------------------------------
+# assert_run_sentinel <log> <expected> — a positive control for "the run reached its END".
+#
+# WHAT IT CATCHES, AND WHAT IT DOES NOT. An exit code says "no command failed". It CANNOT say "the
+# script did the work": a run that takes an early `exit 0` -- a shortcut added while debugging a
+# 40-minute leg, a truncated flow -- exits 0 having skipped everything after it. The end-of-work
+# sentinel is the only signal that separates those, and it is worthless unless something READS it.
+#
+# It does NOT catch a `|| true` swallowing a mid-script failure: execution continues, the sentinel
+# still prints, and this returns 0. B47's original justification claimed otherwise and was wrong.
+# The catchable class is early-exit-with-status-0, nothing wider. Do not over-trust it.
+#
+# `grep -qx` (whole-line anchored) is load-bearing, not hygiene: the harness bind-mounts the repo at
+# /src, so the sentinel's own SOURCE line is reachable, and an xtrace run would echo `+ echo <token>`.
+# Anchoring rejects both (measured: 0 of 5 realistic contaminants match, 1 of 1 genuine line does).
+assert_run_sentinel() {
+  local log="$1" expect="$2"
+  [ -f "$log" ] || { log_error "assert_run_sentinel: no log at ${log} — cannot tell a completed run from a truncated one."; return 1; }
+  grep -qx "$expect" "$log" && return 0
+  log_error "the run exited 0 but never printed its end-of-work sentinel '${expect}'."
+  log_error "  It did not reach its documented end: an early 'exit 0', a truncated run, or a shortcut."
+  return 1
+}
+
 # Sourced LAST: state.sh uses log_* from this file. os.sh is the only thing that sources it, so every
 # script that already sources os.sh gets the sink for free.
 # ---------------------------------------------------------------------------

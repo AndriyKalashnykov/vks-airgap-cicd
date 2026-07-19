@@ -707,7 +707,7 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh ## Run all offline script-logic unit tests
 
 # NOTE: subagent-readonly + no-gate-in-commit-chain hooks (and their tests) are now GLOBAL
 # (~/projects/claude-config, installed into ~/.claude); this repo keeps only the project-local
@@ -723,6 +723,10 @@ test-namespace-gates: ## Offline: RED-prove check-namespace-labelled + check-pod
 .PHONY: test-gate-vacuity
 test-gate-vacuity: ## Offline: STARVE each declared gate's corpus and require it to go RED — a gate that judged nothing must not report OK (B39/B49)
 	@./scripts/test-gate-vacuity.sh
+
+.PHONY: test-run-sentinel
+test-run-sentinel: ## Offline: RED-prove assert_run_sentinel against fixture logs — the jump-box harness's real RED costs a 40-min container run (B47)
+	@./scripts/test-run-sentinel.sh
 
 .PHONY: test-psa-defaults
 test-psa-defaults: ## Offline: RED-prove check-psa-defaults (12 cases, incl. the 3 vacuous greens an adversary measured in an earlier draft) (B22)
