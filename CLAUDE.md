@@ -530,6 +530,15 @@ Four PRs here (#355–#358) and five in `claude-config` (#56–#60). One thread 
 - **#356** — `route_code`: a stalled backend was one merge away from being declared OK.
 - **#357** — the SIGPIPE root cause: 12 sites, `make check-grep-q-pipe`, B40 closed, B52 filed.
 - **#358** — three silent `set -e` deaths, one killing `bundle-load` on the **air-gap box**.
+- **#360** — stop cancelling `main`'s runs (`cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}`)
+  plus a weekly run. Three post-merge verifications were lost in one day: merge code, then a docs-only
+  commit minutes later, and the code run is cancelled while the superseding run legitimately SKIPS
+  static-check (its own diff is docs-only). The **certain** benefit is not the re-verification — it
+  is that a cancelled run leaves `main` showing `ci-pass: failure` for a NON-failure, reddening the
+  README badge. ⚠️ One of the four affected commits (`7d90aa9`) has **ZERO runs of any workflow** —
+  a **dropped GitHub event**, which no concurrency setting can explain and this fix cannot cover;
+  the weekly schedule is the only thing that covers that class.
+- **#362** (B52) — the sweep was **refuted and aimed backwards**; see the row.
 
 ### 🔴 THE FINDING — and it is a class, not an incident
 
@@ -581,12 +590,17 @@ that reported "main failed" without filtering by SHA — it was reading the prev
 
 ### Next
 
-- **B52** — 60 bounded `printf | grep -q` sites remain. A scan for large-producer variables found
+- **B52 is CLOSED** (#362) — do NOT reopen it as a conversion sweep; the row records why, with the
+  measurements. The superseded note follows: ~~60 bounded `printf | grep -q` sites remain.~~ A scan for large-producer variables found
   **zero**, so priority is low; it is a crude heuristic, not a proof. Its trap is named in the row:
   do NOT gate it by marking all 60 exempt.
 - **#303** (Renovate) is green but BEHIND `main`; Renovate rebases itself. Left alone deliberately.
 - **LAB-GATED, leave alone:** B2, B20, B24, B25, B27. **REFUTED, do not rebuild:** B26 fix 3, B37,
-  B38, B39's meta-gate, B43.
+  B38, B39's meta-gate, B43, **and B52's conversion sweep**.
+- **`concurrency.queue` defaults to `single`**, so a PENDING run is still discarded when a newer one
+  queues — latent, not fired. `queue: max` closes it, but the docs call `queue: max` +
+  `cancel-in-progress: true` a validation error and whether that fires against an EXPRESSION is
+  UNVERIFIED. Test on a throwaway branch before combining; the note is in `ci.yml`.
 
 ## Backlog / resume state
 
