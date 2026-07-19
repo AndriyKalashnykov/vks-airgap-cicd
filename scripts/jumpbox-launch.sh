@@ -96,16 +96,45 @@ if [ -n "$TARBALL" ]; then
   MOUNTS+=(-v "${tb_abs}:/run/bundle/$(basename "$tb_abs"):ro"
            -v "${tb_abs}.sha256:/run/bundle/$(basename "$tb_abs").sha256:ro")
   ENVS+=(-e JUMPBOX_MODE=airgap-half -e "JUMPBOX_TARBALL=/run/bundle/$(basename "$tb_abs")")
+  # Which end-of-work sentinel this run must print, decided HERE because this is where mode is
+  # already decided. A second `if` elsewhere would be two places that must agree — an enumerated
+  # list of two, which is enough to drift.
+  EXPECT=JUMPBOX_SNEAKERNET_OK
   log_info "running ${JUMPBOX_OS} AIR-GAP jump box (sneakernet half) — Harbor=${HARBOR_URL}, tarball=$(basename "$tb_abs")"
 else
+  EXPECT=JUMPBOX_OK
   log_info "running ${JUMPBOX_OS} jump box · engine=${JUMPBOX_ENGINE} · Harbor=${HARBOR_URL} (insecure=${HARBOR_INSECURE})"
 fi
 
 export HARBOR_PASSWORD
 export GITEA_ADMIN_PASSWORD="${GITEA_ADMIN_PASSWORD:-}"
-exec docker run --rm --privileged --network kind \
+# The log is this control's evidence, and it must NOT live in ${WORK} (= ${REPO_ROOT}/.jumpbox):
+# .gitleaks.toml allowlists `^\.jumpbox/`, so anything landing there is invisible to the repo's own
+# secret scanner, and nothing ever cleans that directory. The container's environment carries
+# HARBOR_PASSWORD and GITEA_ADMIN_PASSWORD, so a captured log is a standing hazard even though every
+# known secret site today is redirected or uses --password-stdin. mktemp OUTSIDE the repo, 0600,
+# removed on exit. (`exec` is what made a cleanup trap impossible before.)
+RUNLOG="$(mktemp)"; chmod 600 "$RUNLOG"
+trap 'rm -f "$RUNLOG"' EXIT
+
+# NOT `exec` any more: exec replaces this process, so nothing downstream could inspect the result.
+# Safe to drop -- there is no trap to destroy (the one above is the first), `--rm` is daemon-side,
+# and there is no -t/-i, so stdout was already a pipe and no tty behaviour changes.
+#
+# The pipeline is the `if` CONDITION, so `set -e` does not abort it and its status is read directly
+# -- no `rc=$?` on a following line, which under `set -euo pipefail` would be unreachable dead code
+# that a later reader might "repair" with `|| true`, turning fail-closed into fail-open.
+if ! docker run --rm --privileged --network kind \
   "${ENVS[@]}" \
   -v "${REPO_ROOT}:/src:ro" \
   -v "${WORK}/kubeconfig:/run/jumpbox/kubeconfig:ro" \
   "${MOUNTS[@]}" \
-  "$JUMPBOX_IMAGE" bash /src/scripts/jumpbox-run.sh
+  "$JUMPBOX_IMAGE" bash /src/scripts/jumpbox-run.sh 2>&1 | tee "$RUNLOG"; then
+  # pipefail makes this docker's status -- but `tee` can also fail (full disk, unwritable target),
+  # which would fail a HEALTHY leg with a message pointing at the jump box instead of the harness.
+  [ -s "$RUNLOG" ] || log_error "the run log is EMPTY: if the container produced output then 'tee' itself failed (full disk / unwritable ${RUNLOG}) and this leg's failure is the HARNESS, not the jump box."
+  exit 1
+fi
+
+# The run exited 0. That says no command failed; it does not say the run reached its end.
+assert_run_sentinel "$RUNLOG" "$EXPECT" || exit 1
