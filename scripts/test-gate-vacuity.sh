@@ -19,9 +19,45 @@
 #
 # THE RESIDUAL, STATED NOT HIDDEN: the per-gate corpus declaration below is an ENUMERATED LIST, and
 # enumerated lists rot. A WRONG declaration makes a starvation vacuous — the same failure class this
-# harness exists to catch, one level up. Two mitigations, both partial: the self-check below proves
-# the harness can still tell blind from healthy, and the coverage denominator is PRINTED so the gates
-# nobody has declared a corpus for are visible rather than silently implied.
+# harness exists to catch, one level up. Three mitigations, all partial: the self-check below proves
+# the harness can still tell blind from healthy; the coverage denominator is PRINTED and the
+# UNDECLARED gates are NAMED, so a newly-added gate surfaces as a named gap rather than a silently
+# moved number; and the declared count is DERIVED from the calls, not hand-typed beside them.
+#
+# THE THREE VERDICTS, and why `rc != 0` alone is not one of them. A gate can die under starvation for
+# a reason that has nothing to do with its denominator — a missing interpreter (rc 127), an anchor
+# file gone, a `set -e` trip on an empty read. Accepting any non-zero would then report `ok` over a
+# gate that never judged a thing, which is this harness's own failure mode. A gate that JUDGED and
+# REFUSED always says why; a gate that merely DIED is usually silent. So:
+#     rc == 0                          -> VACUOUS      (or an INCOMPLETE declaration — see below)
+#     rc in {126,127} or NO output     -> INCONCLUSIVE (not a proof of anything; fix or drop the case)
+#     rc != 0 with output              -> ok
+# This is deliberately NOT "assert the message mentions emptiness": the gates' emptiness messages
+# share no common token, so that would be a per-gate list of expected strings — the rot class again.
+#
+# WHY A FALSE GREEN HERE READS AS "VACUOUS" AND MAY BE A LIE IN THE OTHER DIRECTION. If a declaration
+# MISSES part of a gate's corpus, the gate legitimately still has something to judge, exits 0, and
+# this harness accuses it of being vacuous. That FALSE RED is the more dangerous error, because the
+# cheapest way to silence it is to weaken the accused gate. The failure message therefore names both
+# hypotheses and puts the declaration first. (Lived through on check-doc-robot-quoting, whose corpus
+# also includes .env.example; and again on check-vks-terminology — see NOT STARVABLE below.)
+#
+# BLAST RADIUS — a pathspec must never empty the gate's own dependencies. Every gate here sources
+# scripts/lib/os.sh, so a wildcard over scripts/ empties that lib (and often the gate itself); bash
+# then runs an empty file and exits 0, which this harness would report as VACUOUS when in truth the
+# gate never ran. So: no pathspec may use a WILDCARD over scripts/ or name anything under
+# scripts/lib/. Naming a SINGLE non-lib script as a gate's ground truth is fine and sometimes the
+# only option (see check-namespace-labelled below). Where a gate's primary corpus IS scripts/, starve
+# its ground truth instead — apps/registry.tsv, .env.example, images/images.txt.
+#
+# NOT STARVABLE, and why they are absent rather than forgotten:
+#   check-vks-terminology     — its corpus is EVERY tracked text file, which necessarily includes its
+#                               own lib. Starving less than all of it leaves a real corpus and yields
+#                               a false RED; starving all of it hits the blast radius above. Its
+#                               zero-guard is asserted in the gate itself instead.
+#   check-gwapi-istio-alignment — its corpus is an upstream go.mod fetched over the network; it
+#                               loud-SKIPs green when offline by design. Starving the repo does
+#                               nothing to it.
 #
 # shellcheck shell=bash
 set -uo pipefail
@@ -54,21 +90,41 @@ fresh() {
 # file keeps every file-count healthy and is exactly the state that fooled two gates.
 starve() { ( cd "$SB/repo" && git ls-files "$@" | while read -r f; do : > "$f"; done ); }
 
+# Every gate a case is DECLARED for, recorded at the top of assert_starved so the coverage figure
+# counts ATTEMPTS. A failing case must still count as declared, or the number drops precisely when a
+# gate breaks — the moment you most want it to be honest. `ran` stays separate; it counts passes.
+DECLARED_GATES=()
+
 # assert_starved <gate> <label> <pathspec...>
 assert_starved() {
   local gate="$1" label="$2"; shift 2
+  DECLARED_GATES+=("$gate")          # BEFORE any early return
+  local base_rc st_rc sz
   fresh
-  # Exit status read DIRECTLY off each run, never via a later `$?` — the house rule, and the reason
-  # is that `$?` silently becomes the status of whatever ran most recently.
-  if ! ( cd "$SB/repo" && bash "scripts/${gate}" ) >"$SB/base.log" 2>&1; then
+  # Exit status read DIRECTLY off each run onto its own line, never via a later `$?` — the house
+  # rule, and the reason is that `$?` silently becomes the status of whatever ran most recently.
+  ( cd "$SB/repo" && bash "scripts/${gate}" ) >"$SB/base.log" 2>&1
+  base_rc=$?
+  if [ "$base_rc" -ne 0 ]; then
     bad "${label} — the gate is RED on an UNSTARVED corpus, so this case proves nothing about vacuity"
     sed 's/^/        /' "$SB/base.log" >&2
     return
   fi
   starve "$@"
-  if ( cd "$SB/repo" && bash "scripts/${gate}" ) >"$SB/starved.log" 2>&1; then
-    bad "${label} — VACUOUS: green with an EMPTY corpus. It reported:"
+  ( cd "$SB/repo" && bash "scripts/${gate}" ) >"$SB/starved.log" 2>&1
+  st_rc=$?
+  sz=$(wc -c < "$SB/starved.log" | tr -d ' ')
+  if [ "$st_rc" -eq 0 ]; then
+    # Declaration first: a false RED here is likelier — and costlier — than a real vacuity.
+    bad "${label} — GREEN on the declared-empty corpus. EITHER this declaration is INCOMPLETE (check
+        for a second corpus component BEFORE touching the gate) OR the gate is genuinely VACUOUS. It reported:"
     tail -2 "$SB/starved.log" | sed 's/^/        /' >&2
+    return
+  fi
+  if [ "$st_rc" -eq 126 ] || [ "$st_rc" -eq 127 ] || [ "$sz" -eq 0 ]; then
+    bad "${label} — INCONCLUSIVE: died SILENTLY (rc=${st_rc}, ${sz} bytes of output). A gate that
+        judged and refused says why; this one just died, so the case proves nothing about the
+        denominator. Fix the gate's error path, or drop the case rather than bank a false pass."
     return
   fi
   ok "${label}"
@@ -125,11 +181,40 @@ assert_starved check-vks-provenance.sh    "check-vks-provenance dies with no fac
 # gate under test measures nothing; when a gate's corpus overlaps its own source, starve the OTHER side.
 assert_starved check-psa-defaults.sh      "check-psa-defaults dies with nothing documented"     '.env.example'
 
-DECLARED=4
-TOTAL=$(find "${REPO_ROOT}/scripts" -maxdepth 1 -name 'check-*.sh' | wc -l)
+# These four were MEASURED healthy before being declared (2026-07-19): each already guards its ITEM
+# count and goes RED with a named diagnostic under starvation. They are pure regression protection —
+# they pin behaviour that is correct today so it cannot silently rot into the class above.
+assert_starved check-pod-inject-label.sh  "check-pod-inject-label dies with no workloads parsed"  'k8s/*.yaml' 'k8s/**/*.yaml' 'deploy/**/*.yaml'
+assert_starved check-readme-scenarios.sh  "check-readme-scenarios dies on empty scenario docs"    'docs/*.md'
+assert_starved check-doc-target-coverage.sh "check-doc-target-coverage dies with no Makefile targets" 'Makefile'
+assert_starved check-env-coverage.sh      "check-env-coverage dies with nothing documented"       '.env.example'
+# Ground truth is a SINGLE named script, not a wildcard over scripts/ — permitted by the blast-radius
+# rule in the header (it cannot reach scripts/lib/ or this gate's own source).
+assert_starved check-namespace-labelled.sh "check-namespace-labelled dies with no NS_SPEC inventory" 'scripts/49-psa-check.sh'
+
+# Coverage, DERIVED — never a literal hand-typed beside the calls, which is a two-numbers-that-must-
+# agree problem with nothing asserting it. Both figures come from the SAME listing, so the count and
+# the named list cannot disagree; a harness whose own two numbers drift is what this exists to catch.
+ALL_GATES=$(find "${REPO_ROOT}/scripts" -maxdepth 1 -name 'check-*.sh' | sed 's#.*/##' | sort)
+TOTAL=$(printf '%s\n' "$ALL_GATES" | grep -c .)
+DECLARED=${#DECLARED_GATES[@]}
+UNDECLARED=""
+while read -r g; do
+  [ -n "$g" ] || continue
+  case " ${DECLARED_GATES[*]} " in *" ${g} "*) ;; *) UNDECLARED="${UNDECLARED}${UNDECLARED:+ }${g}" ;; esac
+done <<EOF
+$ALL_GATES
+EOF
 
 # Fail-check FIRST: `ran` counts only PASSING cases, so if everything failed, ran==0 AND fail==1 —
 # checking a "nothing ran" skip first would exit 0 on a run that printed nothing but FAIL.
 if [ "$fail" -ne 0 ]; then echo "test-gate-vacuity: FAILED" >&2; exit 1; fi
 [ "$ran" -gt 0 ] || { echo "test-gate-vacuity: no case ran — the harness is broken, not the gates" >&2; exit 1; }
-echo "test-gate-vacuity: OK (${ran} case(s); starvation declared for ${DECLARED} of ${TOTAL} check-*.sh — the rest are UNAUDITED for vacuity, not proven healthy)"
+echo "test-gate-vacuity: OK (${ran} case(s); starvation declared for ${DECLARED} of ${TOTAL} check-*.sh SCRIPTS)"
+echo "  This is NOT a fraction of all gates: static-check/docs-lint/sec also run five inline Makefile"
+echo "  recipes (check-env, check-toolchain-alignment, check-secrets-untracked, gitleaks, trivy-config)"
+echo "  plus lint.sh, validate.sh, trivy-fs.sh and diagrams-check — none of which are counted here."
+if [ -n "$UNDECLARED" ]; then
+  echo "  UNDECLARED — UNAUDITED for vacuity, NOT proven healthy:"
+  printf '%s\n' "$UNDECLARED" | tr ' ' '\n' | sed 's/^/    /'
+fi
