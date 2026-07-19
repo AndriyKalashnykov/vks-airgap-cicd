@@ -43,7 +43,24 @@
 #   the inventory is hand-typed below. An adversary proved it — `tekton-pipelines-resolvers` (declared
 #   by tekton's UPSTREAM manifest, mechanism 4; we even `wait` on it at 41-install-tekton.sh:72) was
 #   absent from NS_SPEC, from this list, and from .env.example, so nothing labelled it and this gate
-#   could not see it. It is now listed. The next such namespace will be invisible the same way until
+#   could not see it.
+#
+#   ⚠️ CORRECTED 2026-07-19: this line used to read "It is now listed." IT IS NOT. `tekton-pipelines-
+#   resolvers` is STILL in neither NS_SPEC nor the OWNED list below — the sentence certified a
+#   coverage the gate does not have, which is the manufactured-confidence failure one level up from a
+#   vacuous green: a future session greps for the namespace, finds this claim, and stops looking.
+#   Two more are in the same state: `argocd` (07-install-argocd.sh:78) and `harbor`
+#   (06-install-harbor.sh:151). All three reach ensure_namespace and are measured by neither
+#   inventory.
+#
+#   AND THE DRIFT CHECK BELOW CANNOT SEE THEM. It compares `owned_rows + 2` against `spec_rows`, so a
+#   namespace missing from BOTH lists keeps the arithmetic balanced and is structurally invisible.
+#   Only a THIRD, independent ground truth can catch that — the ensure_namespace CALL SITES. Adding
+#   them is NOT a one-liner and is tracked as its own backlog row: adding argocd/harbor to NS_SPEC as
+#   `ours` would make psa-check RED (both are deliberately UNLABELLED, and an unlabelled namespace
+#   evaluates as `restricted`), and psa-check is the first prerequisite of `install-all` — so the
+#   naive fix converts a reporting gap into a broken install. The next such namespace will be
+#   invisible the same way until
 #   the owned set is DERIVED (parse `kind: Namespace` out of bundle/manifests/* + the in-tree
 #   manifests) rather than typed — which bundle/ being gitignored currently prevents in CI.
 #
@@ -122,7 +139,15 @@ checked=$((checked+1))
 # This check ONCE only died on 0 while the header promised it "fails when they drift" — a number
 # printed as decoration, gating nothing. An adversary added an 8th NS_SPEC row and the gate happily
 # printed "declares 8 rows" and passed. A number you print that gates nothing is worse than no number.
-spec_rows=$(sed -n '/^NS_SPEC="/,/^"$/p' scripts/49-psa-check.sh 2>/dev/null | grep -cE '^\$\{[A-Z_]+' || true)
+# Count LOGICAL rows, not `${VAR`-prefixed ones. The old regex could not see a row whose namespace
+# is a LITERAL (`tekton-pipelines-resolvers|...`), so adding one — the very row this gate's own
+# header says is needed — made the arithmetic below DIE on a correct change. Behaviour-preserving
+# today (still 7): the only non-`${VAR` row right now is the `$(app_names ...)` loop, which expands
+# to N app rows and is deliberately excluded from BOTH sides of the comparison (the app namespaces
+# get their own assert further up). Excluding it by its `$(` prefix, rather than by requiring `${`,
+# is what makes a future literal row countable.
+spec_rows=$(sed -n '/^NS_SPEC="/,/^"$/p' scripts/49-psa-check.sh 2>/dev/null \
+  | grep -vE '^NS_SPEC="|^"$|^[[:space:]]*$|^\$\(' | grep -c . || true)
 if [ "${spec_rows:-0}" -eq 0 ]; then
   die "check-namespace-labelled: could not read NS_SPEC from 49-psa-check.sh — the inventory this gate mirrors is unreadable, so a green here would mean nothing."
 fi
