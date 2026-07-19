@@ -46,7 +46,7 @@ is_exempt() {
   esac
 }
 
-scanned=0; bad=0
+scanned=0; bad=0; lines=0
 declare -a HITS=()
 for f in "${DOCS[@]}"; do
   [ -f "$f" ] || continue
@@ -55,6 +55,7 @@ for f in "${DOCS[@]}"; do
   lineno=0
   while IFS= read -r line || [ -n "$line" ]; do
     lineno=$((lineno + 1))
+    lines=$((lines + 1))
     if doc_robot_line_is_bad "$line"; then
       HITS+=("${f}:${lineno}")
       bad=$((bad + 1))
@@ -66,6 +67,13 @@ done
 # pathspec, so scanned==0 means git ls-files / the pathspec broke ("passes by not looking").
 [ "$scanned" -gt 0 ] || die "check-doc-robot-quoting: scanned 0 files — git ls-files/pathspec is broken (README.md must always match)."
 
+# B49 — THE FILE COUNT IS NOT THE ITEM COUNT. MEASURED: empty every tracked .md (leaving them
+# tracked) and the guard above still passed, reporting `OK — scanned 22 file(s)` with rc=0 over a
+# corpus containing NOTHING. `scanned` counts files OPENED; `lines` counts the lines actually fed to
+# the classifier, which is what the verdict is about. Zero lines across the corpus is not "clean" —
+# it is "this gate judged nothing", and it is indistinguishable from clean without this check.
+[ "$lines" -gt 0 ] || die "check-doc-robot-quoting: examined 0 line(s) across ${scanned} file(s) — the file count is healthy but the ITEM count is zero, so this gate judged nothing. Suspect an empty corpus or a broken read loop."
+
 if [ "$bad" -gt 0 ]; then
   log_error "check-doc-robot-quoting: $bad unquoted Harbor robot credential(s) in docs/.env.example (scanned $scanned):"
   for h in "${HITS[@]}"; do printf '  - %s\n' "$h"; done
@@ -76,5 +84,5 @@ if [ "$bad" -gt 0 ]; then
   exit 1
 fi
 
-log_info "check-doc-robot-quoting: OK — scanned $scanned file(s); every Harbor robot credential in docs/.env.example is single-quoted (docs/reviews/* + docs/decisions/* exempt)."
+log_info "check-doc-robot-quoting: OK — examined $lines line(s) across $scanned file(s); every Harbor robot credential is single-quoted (docs/reviews/* + docs/decisions/* exempt)."
 exit 0
