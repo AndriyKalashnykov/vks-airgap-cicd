@@ -518,102 +518,78 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 History → git. Only "what is in flight and what to distrust" belongs here.
 
 **State: both repos GREEN on `main`, trees clean, no branches but `main`, no cluster, no parked
-agents.** Verified by artifact with absolute paths (`make -C`, `git -C`) — a persisted `cd` produced
-two false alarms in the previous session.
+agents.** Verified by artifact, with absolute paths (`make -C`, `git -C`) and a **self-excluding**
+process check — a bare `pgrep -f <pattern>` matches the shell running it and cost this session 300
+seconds of waiting on a job that had already finished.
 
 *(No PR number is named here. This line lives inside a PR, so any number it names is stale the moment
-that PR merges — read the state from `git log`.)*
+that PR merges.)*
 
 ### What shipped
 
-**B19 is DONE and it paid for itself twice.** `make e2e-sneakernet CONTAINER_ENGINE=docker
-SNEAKERNET_OS=photon` ran green: a builder produced by `docker build` + `docker save` travelled
-inside the 12 G bundle tar and was pushed into a fresh TLS Harbor by the **carried crane** on a
-photon air-gap box with **no container engine**, then validated intact; `mirror-verify` 36/36. Then
-it **refuted a claim inside `test-builder-save-crane.sh`** — its honesty block said both engines
-default to the SAME archive format, and they do not: `docker save` 29.6.2 emits **oci-layout +
-gzip** at 287 MB, `podman save` 4.9.3 emits **docker-archive v1 + plain tar** at 623 MB, **2.17×**
-for identical content. That became **B46**, an owner decision (this repo defaults to podman, so it
-carries ~336 MB more per builder than it needs to). **B47/B48** were filed from the same run; B48 is
-closed.
+**B19** (sneakernet under docker), **B22** (PSA-default alignment gate + 12 RED-proofs), **B48**,
+**B46** (declined on evidence), **B3** (the air-gap box now runs the runbook's Step 4), **B49** (two
+blind gates fixed + `make test-gate-vacuity`). **B26, B35, B38, B39, B50** are closed as
+**refutations**, each with its measurement in its row. New rows: **B47**, **B50**.
 
-**B22 is DONE, as the third design.** The row's own prescription was refuted twice — both variants
-would have caused a **silent no-label** on the Kaniko namespace, which a VKS guest rejects. What
-shipped instead: literals stay at the use sites, `lib/psa.sh`'s six assign-if-unset lines are gone
-(measured inert), `49-psa-check.sh` stops enumerating six key names (that list had already rotted —
-`_TRAEFIK` was missing), and **`make check-psa-defaults`** now gates that every fallback agrees with
-`.env.example`, names a real level, and that **no reference hides from it**. `make test-psa-defaults`
-pins 12 RED-proofs.
-
-**B26, B35 and B38 are resolved as REFUTATIONS**, each recorded in its row with the measurement. No
-gate was built for any of them, and that is the right outcome — see below.
+**The headline is that the refutations were worth more than the code.** Five gate designs were
+proposed this session and **four were refuted** — one was green with its defences deleted (1 non-zero
+cell in 28), one went green *on the incident that motivated it*, one measured **67% accurate** when
+its reviewer implemented it, and one would have converted a curl-only gate into one that cannot tell
+"absent" from "I could not ask".
 
 ### 🔴 Distrust these — measured, not reasoned
 
-- **F1 IS DEAD** (B38). Raised twice, refuted twice. Independently re-confirmed this session from the
-  carried chart: `istiod/files/kube-gateway.yaml:62` sets `inject "false"` and uses `.ProxyImage` —
-  **zero** `image: auto`. Do not re-raise.
-- **`bundle/` IS GITIGNORED** (`git ls-files bundle/` → 0). Any gate you design that renders the
-  carried charts **cannot run in CI**. This killed one design already; check it before designing the
-  next.
-- **A safe DEFAULT is not coverage.** The B26 gate would have been green with **both** defences
-  deleted, in 6 of 7 configs — one non-zero cell in twenty-eight. Assert **discrimination**, never
-  "the bad thing is blocked".
-- **A gate is part of its own input.** Twice this session a checker matched its own prose — once in
-  the gate, once in its test. Compose the token; never exclude the file by name.
-- **`make e2e-kind` reuses a warm cluster** by default (loud now); `E2E_FRESH=1` forces cold.
+- **F1 IS DEAD** (B38). Raised twice, refuted twice, re-confirmed from the carried chart:
+  `istiod/files/kube-gateway.yaml:62` sets `inject "false"` and uses `.ProxyImage` — **zero**
+  `image: auto`. Do not re-raise.
+- **`bundle/` IS GITIGNORED** (`git ls-files bundle/` → 0). Any gate that renders the carried charts
+  **cannot run in CI**. This killed one design already.
+- **A safe DEFAULT is not coverage.** Assert **discrimination** (verdict with vs without your
+  defence must DIFFER), never "the bad thing is blocked".
+- **A gate is part of its own input.** Three times now a checker matched its own prose — in a gate,
+  in its test, and in a harness. Compose the token; never exclude the file by name.
+- **A backlog row's STATUS is a claim** — wrong 4× in one file in a prior session. Run the thing the
+  row describes before planning off it. That applies to the rows *this* session closed, too.
+- **`claude-config` has a 15-minute auto-commit cron**, and other sessions write to it concurrently
+  (two PRs appeared there mid-session that were not mine). `git switch -c` is the FIRST keystroke of
+  any edit there, and `reset --hard` can race.
+- **`make e2e-kind` reuses a warm cluster** by default; `E2E_FRESH=1` forces cold.
 - **`--watch` HANGS on a code-only PR** — gate on `mergeStateStatus`.
-- Every VKS injector fact remains **upstream-1.30.3-rendered**; `1.28.2+vmware.1-vks.1` is
+- Every VKS injector fact is **upstream-1.30.3-rendered**; `1.28.2+vmware.1-vks.1` is
   UNVERIFIED-BY-US, one lab command (recorded at `psa.sh`).
-
-**Carried forward from session 2 — still true, deliberately not pruned** (a cut that keeps a claim
-and drops its correction is how this file rots):
-
-- **A backlog row's STATUS is a claim.** It was wrong 4× in one file last session (rows saying
-  `proposed` over shipped work). Run the thing the row describes against the live artifact before
-  planning off it. This session closed several rows; treat those as claims too.
-- **`claude-config` has a 15-minute auto-commit cron.** `git switch -c` is the FIRST keystroke of any
-  edit there — not the last before a commit. It caught the previous session three times, twice after
-  the rule was written down.
 - **OBSERVED, STILL UNEXPLAINED:** one `check-namespace-labelled` failure that did not reproduce on
   two later runs of the identical tree and passes on clean `main`. **Four hypotheses tested and all
-  REJECTED:** the diff (touched a one-word comment elsewhere), `test-namespace-gates` mutating the
-  tree (it mutates a `$TMP` copy), `make` parallelism (`MAKEFLAGS` unset), and an adversary worktree
-  being scanned (the gate greps `scripts/` scoped; 0 worktrees survive). **If it recurs, capture the
-  failing output and `git stash list` IMMEDIATELY** — it was gone by the time it was looked at. Do
-  not re-derive the four rejected hypotheses.
+  REJECTED** (the diff; `test-namespace-gates` mutating the tree; `make` parallelism; an adversary
+  worktree being scanned). **If it recurs, capture the failing output and `git stash list`
+  IMMEDIATELY.** Do not re-derive the four.
 
 ### Next
 
-- **B39's meta-gate is REFUTED — do not build it** (its idea-round ran after this handoff's first
-  draft, which wrongly called it "buildable and narrow"; that sentence was the stale one). The
-  adversary implemented it and measured **67% accuracy, wrong about 7 of 21 gates in both
-  directions**. The numbers in the earlier draft were also wrong in both directions — see the row.
-  **What IS buildable is narrower and must be named honestly: a vacuity harness via CORPUS
-  STARVATION.** The original class (throwaway shell instruments) stays **discipline**.
-- 🔴 **B49 is NEW and live**: `check-doc-novels` and `check-doc-robot-quoting` both report **rc=0 on
-  a corpus of empty files** — their zero-guards fire on the FILE count while the ITEM count is zero.
-  Reproduction is in the row. The fix is a design question (for these gates, zero *violations* is the
-  success condition), so do not paper over it with `checked 1`.
-- **B40** (namespace chokepoint) and **B3** (the sneakernet runbook's Step 4 is executed by nothing)
-  are the other open code items. B3 is heavy and should be landed before any matrix work.
-- **B46** is an owner decision, not an agent one: switching the builder engine trades the sudo-free
-  podman default against ~336 MB of bundle weight, and interacts with the "docker is opt-in, never
-  required" invariant.
+- **B50 has a BUILD waiting, and one measurement gates it.** The skip design is refuted; the
+  replacement is an **additive** check in the air-gap leg asserting the app hosts are **NOT 404, NOT
+  000, NOT 2xx** — which proves the carried `yq`/`envsubst`/`kubectl` rendered the routes, something
+  nothing checks today. **First**, on the next air-gap run, `curl` a host with NO VirtualService
+  (`nosuch.vks.local`) and confirm it is 404/000 while `javawebapp` is 503. If both are 503 the
+  assertion collapses to "not 000" and is much weaker. Leave `98-verify-ingress.sh` untouched.
+- **B40** is the last untouched original row. Its prior design caught **0 of 8** namespace-creating
+  forms; it needs the 7-mechanism model before anything is built.
+- **B49's harness covers 4 of 21 gates** and says so in its own output. Extending it is cheap; the
+  per-gate corpus declaration is an enumerated list that will rot, which is stated in the file.
 - **LAB-GATED, leave alone:** B2, B20, B24, B25, B27.
 
 ### The one thing to carry forward
 
-**Three of four proposed gates were refuted, and the refutations were worth more than the gate that
-shipped.** Each failed a different way, and all three failures were invisible to reading — only to
-running: one was green with its defences deleted, one went green on the incident that motivated it,
-one was red on a clean tree because it matched its own docstring. The pattern is that **a gate's
-plausibility is uncorrelated with its power**, and the only thing that separates them is executing it
-against a state where the defect is actually present.
+**Run the idea past an adversary before building, and give it the PREMISE, not just the design.** Six
+rounds ran this session; they cost ~7 minutes each in parallel with other work, and they prevented
+four gates that would have shipped green and measured nothing — including one that would have
+laundered a false CRITICAL into a cited fact.
 
-Corollary worth keeping: **the idea-round is not the expensive part.** Four rounds cost ~25 minutes of
-wall-clock each, ran in parallel with other work, and prevented three gates that would have shipped
-green and measured nothing — plus one that would have laundered a false CRITICAL into a cited fact.
+The counterpart, equally load-bearing: **an adversary's prescription is a hypothesis too.** B3's
+scope came from a round, and its `verify-ingress` half still failed on first run — because the round
+and I both verified the check was *feasible* and neither checked whether its *assertions could pass*.
+The harness extension then earned its keep immediately by finding a real `python3` dependency that
+`check-tools` had declared clean seconds earlier.
 
 ## Backlog / resume state
 
