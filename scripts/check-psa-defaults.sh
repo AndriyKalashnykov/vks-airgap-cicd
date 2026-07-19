@@ -157,11 +157,11 @@ documented=$(grep -c . "$TMP/b" || true)
 # The durable win: check-env-coverage.sh wildcard-exempts PSA_LEVEL_*, so a NEW key added to a script
 # is invisible to it. That is how a key came to be used by a script while lib/psa.sh listed only six.
 while IFS=$'\t' read -r k _; do
-  cut -f1 "$TMP/b" | grep -qxF "$k" || { log_error "PSA_LEVEL_${k}: used in scripts/ but NOT documented in .env.example — an operator cannot discover or override it."; bad=$((bad + 1)); }
+  grep -qxF "$k" <<< "$(cut -f1 "$TMP/b")" || { log_error "PSA_LEVEL_${k}: used in scripts/ but NOT documented in .env.example — an operator cannot discover or override it."; bad=$((bad + 1)); }
 done < "$TMP/a"
 
 while IFS=$'\t' read -r k _; do
-  cut -f1 "$TMP/a" | grep -qxF "$k" || { log_error "PSA_LEVEL_${k}: documented in .env.example but no script falls back to it — dead config, or a use site was deleted and the doc left behind."; bad=$((bad + 1)); }
+  grep -qxF "$k" <<< "$(cut -f1 "$TMP/a")" || { log_error "PSA_LEVEL_${k}: documented in .env.example but no script falls back to it — dead config, or a use site was deleted and the doc left behind."; bad=$((bad + 1)); }
 done < "$TMP/b"
 
 # --- value drift, per key --------------------------------------------------------------------------

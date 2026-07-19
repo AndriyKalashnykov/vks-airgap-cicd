@@ -658,6 +658,10 @@ check-namespace-labelled: ## Gate: every namespace we OWN reaches an ensure_name
 check-ns-chokepoint: ## Offline: no NEW namespace-creating call outside the ensure_namespace chokepoint (4 of 10 mechanisms; see the header) (B40)
 	@./scripts/check-ns-chokepoint.sh
 
+.PHONY: check-grep-q-pipe
+check-grep-q-pipe: ## Gate: no FILE-READING producer pipes into `grep -q` (SIGPIPE+pipefail turns a FOUND match into ABSENT, at random)
+	@./scripts/check-grep-q-pipe.sh
+
 .PHONY: check-pod-inject-label
 check-pod-inject-label: ## Gate: every workload we ship declines sidecar injection in its POD TEMPLATE (a label, not an annotation)
 	@$(SCRIPTS)/check-pod-inject-label.sh
@@ -952,7 +956,7 @@ docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets
 	@# having linted nothing. In CI it now DIES instead.
 
 .PHONY: static-check
-static-check: check-namespace-labelled check-ns-chokepoint check-pod-inject-label check-psa-defaults check-doc-target-coverage check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)

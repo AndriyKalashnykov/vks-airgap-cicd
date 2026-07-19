@@ -239,7 +239,7 @@ log_info "all nodes Ready"
 # `--restart unless-stopped`, so a crash-looping CPK shows `Up` BETWEEN cycles — status false-greens.
 sleep 2
 cpk_log="$(docker logs "$CPK_CONTAINER" 2>&1 || true)"
-if ! printf '%s' "$cpk_log" | grep -q 'Gateway API CRDs installation skipped'; then
+if ! grep -q 'Gateway API CRDs installation skipped' <<< "$cpk_log"; then
   log_error "cloud-provider-kind did NOT log that it skipped the Gateway API CRD install."
   log_error "  Either --gateway-channel=disabled was not honoured by this CPK version, or CPK is"
   log_error "  installing the CRDs anyway — which makes our own CRD install untestable (a FALSE PROOF)."

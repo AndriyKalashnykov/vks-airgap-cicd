@@ -56,7 +56,7 @@ fi
 #     accidental shield, not a design.
 # `sed 's/#.*//'` is load-bearing: a grep-gate that does not strip comments matches the comment that
 # EXPLAINS it, and fails the very file it certifies. (It did, on this test's first run.)
-if sed 's/#.*//' "${SCRIPT_DIR}/05-kind-up.sh" | grep -qE 'KUBECONFIG_PATH="\$\{KUBECONFIG[:?]'; then
+if sed 's/#.*//' "${SCRIPT_DIR}/05-kind-up.sh" | grep -E 'KUBECONFIG_PATH="\$\{KUBECONFIG[:?]' >/dev/null; then
   bad "05-kind-up.sh writes its kubeconfig to the CALLER's \$KUBECONFIG — it will truncate (and kind-down will then delete) a developer's ~/.kube/config"
 else
   ok "05-kind-up.sh writes its kubeconfig to a path IT owns, not to the caller's \$KUBECONFIG"

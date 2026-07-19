@@ -128,7 +128,7 @@ while IFS=: read -r v script; do
     *)       _pat="${v}" ;;                  # DNS-1123 -> a literal namespace name
   esac
   if sed 's/#.*//' "scripts/${script}" 2>/dev/null \
-       | grep -qE "^[[:space:]]*ensure_namespace[[:space:]]+\"?${_pat}\"?"; then
+       | grep -E "^[[:space:]]*ensure_namespace[[:space:]]+\"?${_pat}\"?" >/dev/null; then
     continue
   fi
   case "$v" in [A-Z_]*) _label="\$${v}" ;; *) _label="${v}" ;; esac
@@ -286,7 +286,7 @@ while IFS= read -r _n; do
   # `a` entry — the gate went GREEN and reported 6 exempt against a 5-entry list. Unreachable for a
   # real k8s namespace (DNS-1123 has no `|`), but a silent exemption is the wrong failure direction.
   # The trailing-field match also avoids prefix collisions (`ns` must not match a future `nsfoo`).
-  if printf '%s\n' "$_UNRESOLVABLE" | awk '{print $1}' | grep -qxF "$_n"; then
+  if grep -qxF "$_n" <<< "$(printf '%s\n' "$_UNRESOLVABLE" | awk '{print $1}')"; then
     _exempt_calls=$((_exempt_calls + 1)); continue
   fi
   _checked_calls=$((_checked_calls + 1))

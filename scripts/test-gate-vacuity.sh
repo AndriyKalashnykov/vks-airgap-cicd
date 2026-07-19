@@ -117,6 +117,28 @@ starve() { ( cd "$SB/repo" && git ls-files "$@" | while read -r f; do : > "$f"; 
 # Every gate a case is DECLARED for, recorded at the top of assert_starved so the coverage figure
 # counts ATTEMPTS. A failing case must still count as declared, or the number drops precisely when a
 # gate breaks — the moment you most want it to be honest. `ran` stays separate; it counts passes.
+# FORENSICS for a baseline-RED. The gate's own output says WHAT it concluded; this says what the
+# SANDBOX actually contained when it concluded it — which is the evidence you need to tell "the gate
+# is broken" from "the gate was handed a tree that is not the one you think it read". Added after a
+# CI-only baseline-RED that could not be reproduced locally in five attempts: four hypotheses were
+# tested and all four were wrong, which is the point at which guessing must stop and instrumenting
+# must start. Everything here is `|| true` — forensics must never become a second failure mode.
+sandbox_forensics() {
+  echo "    ---- SANDBOX FORENSICS (this is the harness reporting on ITSELF) ----"
+  echo "      cwd=$(pwd)  REPO_ROOT=${REPO_ROOT:-<unset>}  SB=${SB}"
+  echo "      git HEAD here: $(git rev-parse --short HEAD 2>/dev/null || echo '<none>')"
+  echo "      sandbox tracked files: $( (cd "$SB/repo" && git ls-files | grep -c .) 2>/dev/null || echo '?')"
+  echo "      sandbox scripts/*.sh:  $( (cd "$SB/repo" && git ls-files 'scripts/*.sh' | grep -c .) 2>/dev/null || echo '?')"
+  local f
+  for f in scripts/lib/os.sh scripts/lib/istio.sh scripts/49-psa-check.sh scripts/lib/apps.sh apps/registry.tsv .env.example; do
+    printf '      %-28s sandbox=%-8s real=%s\n' "$f" \
+      "$(wc -c <"$SB/repo/$f" 2>/dev/null || echo MISSING)" \
+      "$(wc -c <"${REPO_ROOT}/$f" 2>/dev/null || echo MISSING)"
+  done
+  echo "      ensure_namespace call sites in the sandbox's lib/istio.sh: $(grep -c 'ensure_namespace' "$SB/repo/scripts/lib/istio.sh" 2>/dev/null || echo '?')"
+  echo "    ---- end forensics ----"
+} 2>/dev/null
+
 DECLARED_GATES=()
 
 # assert_starved <gate> <label> <pathspec...>
@@ -132,6 +154,7 @@ assert_starved() {
   if [ "$base_rc" -ne 0 ]; then
     bad "${label} — the gate is RED on its UNSTARVED baseline, so this case proves nothing about vacuity. Suspect the SANDBOX before the gate: fresh() asserts its own setup above, but a gate reading state outside \$REPO_ROOT (an exported var, an absolute path) would also land here."
     sed 's/^/        /' "$SB/base.log" >&2
+    sandbox_forensics >&2
     return
   fi
   starve "$@"
