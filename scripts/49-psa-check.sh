@@ -184,7 +184,12 @@ while IFS='|' read -r ns labelled own; do
   # names the wrong cause is the very class this line exists to cure.
   #
   # The last sentence is the one that actually unblocks someone: the obvious remedy does NOT work.
-  if [ "$own" = mesh ] && [ "$ours" -eq 1 ]; then
+  # GUARDED ON A FINDING, not merely on the mode. The first version tested only
+  # `own = mesh && ours = 1`, so in the DEFAULT istio mode with both mesh namespaces healthy and
+  # correctly labelled it printed six lines advising `istio-existing` over a gate that had just said
+  # PSA OK — and an operator who followed that advice would set ours=0 for the two namespaces we DO
+  # own, silently UN-GATING them. Advice attached to a non-finding is worse than silence.
+  if [ "$own" = mesh ] && [ "$ours" -eq 1 ] && [ "$pods" != "0" ] && [ "$verdict" != "OK" ]; then
     printf '      judged OURS because INGRESS_CONTROLLER resolved to %s. If this mesh is PLATFORM-owned,\n' \
       "'${INGRESS_CONTROLLER:-istio}'" >&2
     printf '      set INGRESS_CONTROLLER=istio-existing in .env or .env.state — an override on the make\n' >&2

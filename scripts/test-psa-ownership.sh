@@ -32,6 +32,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 cd "$REPO_ROOT" || die "cannot cd to repo root"
 
+# ISOLATION, asserted rather than assumed. SKIP_DOTENV=1 covers `.env` ONLY. The legacy `.env.kind`
+# is sourced LAST by load_env and beats .env.example, .env AND the state file — measured: dropping
+# `INGRESS_CONTROLLER=istio-existing` into it fails 4 of 6 cases. It is gitignored, so it never shows
+# in `git status`, and older versions of this repo wrote it: a long-lived tree plausibly has one.
+[ ! -f "${REPO_ROOT}/.env.kind" ] || die "legacy .env.kind is present — load_env sources it LAST, so it beats this harness's fixture and would produce a FALSE RED. Move it aside before running this test."
+
 BIN="$(mktemp -d)"; OUT="$(mktemp)"; trap 'rm -rf "$BIN" "$OUT"' EXIT
 fail=0; ran=0
 
@@ -89,8 +95,9 @@ case_is() { # <label> <controller> <want-rc: 0|nonzero> <grep-ERE or ""> [state-
 # an absent VKS_STATE_FILE remove .env and .env.state; .env.example still supplies `istio`, so the
 # istio-existing case must publish through a state file rather than the environment.
 STATE="${BIN}/state.env"; printf 'INGRESS_CONTROLLER=istio-existing\n' > "$STATE"
+STATE_TR="${BIN}/state-traefik.env"; printf 'INGRESS_CONTROLLER=traefik\n' > "$STATE_TR"
 
-case_is "istio mode: a mesh namespace is judged OURS and GATES" istio 1 'istio-system'
+case_is "istio mode: a mesh namespace is judged OURS and GATES" istio 1 'REJECTS these pods'
 case_is "istio mode: the wrong-mode diagnostic names the EFFECTIVE value" istio 1 "resolved to 'istio'"
 case_is "istio mode: it says an env override will NOT work (the actionable half)" istio 1 'will NOT work here'
 
@@ -104,24 +111,75 @@ case_is "istio-existing: the SAME row is informational, NOT gated" istio-existin
 # review, before it could certify anything.
 ran=$((ran + 1))
 run_gate istio-existing "$STATE"
-if grep -qE 'resolved to|will NOT work here' "$OUT"; then
+# POSITIVE CONTROL FIRST. A bare negative match passes when the gate produced NOTHING: replacing
+# 49-psa-check.sh with `exit 127` made this case report ok. Demand the row exists before believing
+# the absence of the diagnostic means anything.
+if ! grep -q 'platform-owned' "$OUT"; then
+  printf 'FAIL  istio-existing: the gate produced NO judged row — the negative match below would be vacuous\n'
+  sed 's/^/        /' "$OUT"; fail=1
+elif grep -qE 'resolved to|will NOT work here' "$OUT"; then
   printf 'FAIL  istio-existing: the wrong-mode diagnostic FIRED when the mode was correct\n'
   sed 's/^/        /' "$OUT"; fail=1
 else
   printf 'ok    istio-existing: the wrong-mode diagnostic is ABSENT (proven by a NEGATIVE match)\n'
 fi
 
+# THE DISCRIMINATOR for case 2. Measured: hardcoding "'istio'" into the diagnostic instead of
+# "${INGRESS_CONTROLLER:-istio}" passes 6/6, because in the only mode case 2 exercises the effective
+# value IS "istio" — so that case cannot test the one property its label, and the eight-line comment
+# block above the diagnostic, are entirely about. Driving a THIRD mode settles it.
+case_is "the diagnostic prints the EFFECTIVE value, not a literal (traefik)" traefik 1 "resolved to 'traefik'" "$STATE_TR"
+
+# THE HIGH FIX, PINNED. The diagnostic used to key on `own = mesh && ours = 1` with no test on the
+# VERDICT, so in the default istio mode with mesh namespaces healthy and correctly labelled it
+# printed six lines advising `istio-existing` over a gate that had just said PSA OK — advice which,
+# followed, sets ours=0 for namespaces we DO own and silently UN-GATES them. A second fixture whose
+# istio-system is correctly labelled `baseline` proves the guard: same mode, no finding, no advice.
+cat > "${BIN}/kubectl" <<'HEALTHY'
+#!/usr/bin/env bash
+args="$*"
+case "$args" in
+  *"config current-context"*) echo "fake-cluster"; exit 0 ;;
+  *"get namespace istio-system"*|*"get ns istio-system"*)
+      case "$args" in *jsonpath*) printf 'baseline' ;; esac   # CORRECTLY LABELLED
+      exit 0 ;;
+  *"get namespace"*|*"get ns "*) exit 1 ;;
+  *"-n istio-system get pods"*) printf 'istiod-x 1/1 Running 0 1m\n'; exit 0 ;;
+  *"get pods"*) exit 0 ;;
+  *"label --dry-run=server"*enforce=restricted*)
+      echo "Warning: violates PodSecurity \"restricted:latest\"" >&2; exit 0 ;;
+esac
+exit 0
+HEALTHY
+chmod +x "${BIN}/kubectl"
+ran=$((ran + 1))
+run_gate istio
+if ! grep -qE '^[[:space:]]+istio-system' "$OUT"; then
+  printf 'FAIL  healthy-row guard: no istio-system row — the negative match would be vacuous\n'
+  sed 's/^/        /' "$OUT"; fail=1
+elif grep -qE 'resolved to|will NOT work here' "$OUT"; then
+  printf 'FAIL  healthy-row guard: the diagnostic FIRED on a correctly-labelled row — its advice would UN-GATE a namespace we own\n'
+  sed 's/^/        /' "$OUT"; fail=1
+else
+  printf 'ok    healthy-row guard: no advice attached to a non-finding\n'
+fi
+
 # F2 regression: the counter must agree with the table. In istio mode the mesh row IS ours, so the
 # summary must NOT claim zero were ours while having just judged one.
 run_gate istio
 ran=$((ran + 1))
-if grep -qE 'measured .*\(0 of them ours\)' "$OUT" && grep -qE '^\s+istio-system' "$OUT"; then
+# Same positive control, and POSIX `[[:space:]]` not `\s` (a GNU extension that would silently
+# never match under toybox/busybox, making this permanently vacuous).
+if ! grep -qE '^[[:space:]]+istio-system' "$OUT"; then
+  printf 'FAIL  F2: the gate produced no istio-system row — this counter check would be vacuous\n'
+  sed 's/^/        /' "$OUT"; fail=1
+elif grep -qE 'measured .*\(0 of them ours\)' "$OUT"; then
   printf 'FAIL  F2: the summary says "0 of them ours" while the table judged istio-system\n'
   sed 's/^/        /' "$OUT"; fail=1
 else
   printf 'ok    F2: the counter agrees with the table (no "0 of them ours" over a judged row)\n'
 fi
 
-[ "$ran" -eq 6 ] || die "expected 6 cases, ran ${ran} — this harness lost track of itself"
+[ "$ran" -eq 8 ] || die "expected 8 cases, ran ${ran} — NOTE: this counts CASES RUN, not properties proven (it read 6/6 while one case was vacuous)"
 [ "$fail" -eq 0 ] || { log_error "psa ownership: FAILED"; exit 1; }
 log_info "psa ownership: OK — ${ran} cases (decision logic only; a real cluster presenting this shape is UNVERIFIED — see the handoff)"
