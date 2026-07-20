@@ -422,7 +422,7 @@ kind-down: ## Tear down the KinD cluster (prunes cloud-provider-kind + kindccm-*
 e2e-kind: export SKIP_DOTENV = $(E2E_SKIP_DOTENV)
 e2e-kind: ## Full local end-to-end in KinD (+ ingress route check + PSA/VKS admission check). .env IGNORED (fresh-box fidelity; E2E_SKIP_DOTENV=0 to use yours). E2E_FRESH=1 forces a COLD cluster (proves create-ordering)
 	@if [ "$(E2E_FRESH)" = "1" ]; then echo "==> E2E_FRESH=1: COLD run — tearing down first so namespace create-ordering is actually exercised"; $(MAKE) kind-down; fi
-	@$(MAKE) kind-up install-harbor install-argocd install-all install-ingress verify verify-ingress
+	@$(MAKE) kind-up install-harbor install-argocd install-all install-ingress verify-gateway-image verify verify-ingress
 # psa-check in a SEPARATE make invocation, deliberately. It is also a prerequisite of `preflight`
 # (:301), which `install-all` (:459) needs — so in ONE invocation make runs it EARLY, against an
 # empty cluster, and then reports `Nothing to be done for 'psa-check'` at the end. Measured
@@ -719,7 +719,7 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image ## Run all offline script-logic unit tests
 
 # NOTE: subagent-readonly + no-gate-in-commit-chain hooks (and their tests) are now GLOBAL
 # (~/projects/claude-config, installed into ~/.claude); this repo keeps only the project-local
@@ -727,6 +727,14 @@ test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-cl
 .PHONY: test-adversary-gate-rearm
 test-adversary-gate-rearm: ## Offline: the adversary-first gate RE-ARMS on every commit (a review authorizes only until the next commit)
 	@./scripts/test-adversary-gate-rearm.sh
+
+.PHONY: verify-gateway-image
+verify-gateway-image: ## LIVE: every running Istio container image came from OUR Harbor (catches a silently-ignored --set global.hub on a dual-homed box)
+	@./scripts/96-verify-gateway-image.sh
+
+.PHONY: test-gateway-image
+test-gateway-image: ## Offline: RED/GREEN-prove 96-verify-gateway-image.sh's classifier via fixtures (no cluster)
+	@./scripts/test-gateway-image.sh
 
 .PHONY: test-ingress-state-ordering
 test-ingress-state-ordering: ## Offline: INGRESS_CONTROLLER + INGRESS_LB_IP are published by the SAME script (a failed install must not leave the new controller beside the old IP)
