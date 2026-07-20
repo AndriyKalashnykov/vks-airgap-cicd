@@ -736,6 +736,10 @@ test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-cl
 test-adversary-gate-rearm: ## Offline: the adversary-first gate RE-ARMS on every commit (a review authorizes only until the next commit)
 	@./scripts/test-adversary-gate-rearm.sh
 
+.PHONY: handoff-status
+handoff-status: ## PRINTS ONLY (never gates, always exits 0): what merged since the handoff was last edited — read it against what the handoff CLAIMS
+	@./scripts/handoff-status.sh
+
 .PHONY: test-psa-ownership
 test-psa-ownership: ## Offline: 49-psa-check's mesh-OWNERSHIP branch via a fake kubectl (it had ZERO behavioural coverage)
 	@./scripts/test-psa-ownership.sh

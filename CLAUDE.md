@@ -56,7 +56,7 @@ yourself writing "I decided X on my own", you have already failed.
 |---|---|---|---|
 | 1 | **START OF EVERY SESSION on this repo** | your FIRST substantive act — before you read your way into the code, before you plan, before you touch a file. Brief it with the handoff/backlog state and whatever you are about to do. | the inherited state is *itself* a set of claims (a prior session's findings, grades, "DONE" notes), and they are exactly the things that are wrong. It runs while you read — it costs you nothing to start it first. |
 | 2 | **BEFORE you implement** | the moment you have a DESIGN, a DECISION, a root-cause CLAIM, or a plan. Touching VKS/ArgoCD/Harbor/Istio/Tekton/the air gap → **vks-adversary**. Touching docker/podman/the engine/registry trust/image builds → **adversary-docker**. Touching both (e.g. "make docker work against the lab's Harbor") → **BOTH**. Always *before* writing the code. | refuting a design costs one agent run; refuting shipped code costs a session. This trigger exists because it was MISSED: a fix for two CRITICALs was designed, and coding started, with no adversary in sight. |
-| 3 | **BEFORE you call the session done** | the stopping rule — no session is DONE without it | the findings are part of the deliverable |
+| 3 | **BEFORE you call the session done** | the stopping rule — no session is DONE without it. **Also run `make handoff-status`** here: it prints what merged since the handoff was last edited, and a handoff written before the last merge is stale by construction. Measured: at session START it reads 0 (the previous session wrote it as its last act); at the moment this repo's handoff was actually stale it read **31**. | the findings are part of the deliverable |
 
 Triggers 1 and 2 collapse into one run when the session opens on a known task (brief it with the
 backlog **and** the design). What is NOT acceptable is starting work with no adversary running.
@@ -517,6 +517,14 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog.
 History → git. Only "what is in flight and what to distrust" belongs here.
+
+> 🔴 **NO BUILD-STATUS CLAIMS IN THIS SECTION — "unbuilt", "not yet done", "no code change made".**
+> That is a **task** status, and the line above already says tasks go to the **Backlog**. It matters
+> because such a claim is TRUE when written and FALSIFIED by a later commit: this section once said a
+> fix was *"Unbuilt"* and the very next PR built it, so the handoff asserted the opposite of the code
+> beside it. **No commit-time gate can catch that** (four were implemented and measured — see
+> `scripts/handoff-status.sh`), and a backlog row would have been updated by the work itself, which is
+> what B49/B51/B52 all did. Write the STATE you are handing over, never the status of a task.
 
 **State: both repos GREEN on `main`, trees clean, `main` only in both, zero open PRs, no parked
 agents, no cluster (torn down after the measurements below).**
