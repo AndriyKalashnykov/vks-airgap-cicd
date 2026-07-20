@@ -526,98 +526,71 @@ History → git. Only "what is in flight and what to distrust" belongs here.
 > `scripts/handoff-status.sh`), and a backlog row would have been updated by the work itself, which is
 > what B49/B51/B52 all did. Write the STATE you are handing over, never the status of a task.
 
-**State: both repos GREEN on `main`, trees clean, `main` only in both, zero open PRs, no parked
-agents, no cluster (torn down after the measurements below).**
+**State: both repos GREEN on `main`, trees clean, `main` only (local and remote), zero open PRs, no
+cluster, no parked agents, no worktrees.** Written as the LAST act of the session, which is the only
+ordering under which it is true when you read it.
+
+### Run this first
+
+`make handoff-status` — prints what merged since this section was last edited. It **never gates**
+(exits 0 always). Its count is **not** a signal; the list is for reading against the claims below.
 
 ### What shipped
 
-**13 PRs** merged: vks #361 #364–#369 #370–#371, claude-config #62–#66. The non-lab backlog is
-**exhausted**; every remaining row needs hardware or is open by design.
+**20 PRs.** The non-lab backlog is **exhausted** — everything that remains needs hardware or is open
+by design. Highlights, all with their evidence in git:
 
-- **B20** — the `vcf` password mechanism is `VCF_CLI_VSPHERE_PASSWORD` (no `--password` flag, no
-  stdin form). The highest-value line is a **prohibition**: `vcf config set env.…` writes it
-  **plaintext to `$HOME/.config/vcf/config.yaml`**, invisible to gitleaks, surviving teardown.
-- **B24** — multi-cluster Istio: ZERO coverage → `9.0-doc`. `clusterProfile` **exists** (a standing
-  `[UNVERIFIED-BY-US]`, resolved — our *doubt* was the error, the third time that has happened here).
-- **B25** — the audit **refuted my premise**: B24 touched `CLAUDE.md | 2 +-` and **never landed in
-  `istio.md`**. Seven deltas fixed; `scenario-1.md` reviewed with **no** deltas.
-- **#368 / #369** — ingress state-ordering, and the first gate in this repo's history to assert a
-  **RUNNING pod's image**.
+- **B20 / B24 / B25 / B27** — the `vcf` password mechanism, Istio multi-cluster (ZERO coverage →
+  `9.0-doc`), the `istio.md` audit, and Harbor's runnable artifact.
+- **`96-verify-gateway-image`** — the first gate here to assert a **RUNNING pod's image**. Proven live.
+- **`49-psa-check`** — a counter that contradicted its own table, and a gate with zero behavioural
+  coverage. Now `make test-psa-ownership`, 8 cases, both directions.
+- **`scripts/handoff-status.sh`** — a printer, not a gate, carrying the refutation of four gate
+  designs so nobody rebuilds one.
 
 ### 🔴 Distrust these — measured this session, not reasoned
 
-- **The harness notification's "exit code 0" lied THREE times** for a gate that exited 2. Cause: the
-  trailing `; echo "RC=$?"` in a **backgrounded** call makes the *echo* the last command. Read
-  `STATIC_RC=` out of the log, never the notification. (Rule sharpened in `git-workflow.md` — and I
-  still walked into it three times after writing it.)
-- **A grep that FINDS the string can be about a different KIND of thing.** `istio-envoy` in the chart
-  = **8 hits, all `emptyDir` volume names**. ⚠️ And note the twist measured below: the header *does*
-  exist — so that grep would have "confirmed" a TRUE fact by an INVALID method. The lesson is about
-  the METHOD, not the answer.
+- **The harness notification's "exit code 0" LIED four times** for gates that exited 2. Cause: a
+  trailing `; echo "RC=$?"` in a **backgrounded** call makes the *echo* the last command. **Read
+  `STATIC_RC=` out of the log, never the notification.** Sharpened in `git-workflow.md` — and I still
+  walked into it repeatedly after writing it.
+- **A grep that FINDS the string can be about a different KIND of thing.** `istio-envoy` in the chart:
+  **8 hits, all `emptyDir` volume names.** ⚠️ The header **does** exist (measured) — so that grep would
+  have "confirmed" a TRUE fact by an INVALID method. **You cannot validate a method by its outcome.**
 - **A gate can be mis-filed into an EXEMPT group.** `verify-gateway-image` shipped under
-  `##@ Offline script tests`, which `check-doc-target-coverage` exempts — so the gate that catches
-  "operators cannot find this" skipped it, on the day it shipped.
+  `##@ Offline script tests`, which `check-doc-target-coverage` exempts, so the gate that catches
+  "operators cannot find this" skipped it on the day it shipped.
+- **"Proven by the e2e" can name a run nobody performs.** `e2e-kind-smoke` stops after `mirror-verify`
+  and never reaches `install-ingress`.
+- **Every gate written this session was green-over-a-subset on first draft — three for three**, each
+  proven by an adversary's *mutation*, never by argument.
 
-### Measurements taken on the live cluster (so nobody re-derives them)
+### Measurements taken on a live cluster (do not re-derive)
 
 | question | answer |
 |---|---|
-| `96-verify-gateway-image` live | **PASSES** — `control-plane 1, data-plane 1`, i.e. the per-workload denominator found **both** halves, so it was not blind. CRI reported the `${HARBOR_URL}/` prefix intact; the `imageID` fallback was not needed. |
-| **B52's "INFERRED, not measured"** | `kubectl get deploy -A -o name` = **941 bytes / 27 deployments**; `docker ps -a` = **174 bytes**. Both nowhere near the 32 KB risk threshold (~35 B/deployment → you would need ~900 deployments). Those six conversions were **defensive, not urgent**. |
-| **Does Istio 1.30.3 emit `server: istio-envoy`?** | **YES** — plus `x-envoy-upstream-service-time`. |
-| **Is it a discriminator?** (the half nobody runs) | **YES** — traefik emits **no** `server`/`via`/`x-envoy` header at all. |
-| Do the controllers get different LB IPs? | **YES, measured** — istio `172.18.0.6`, traefik `172.18.0.7`. This is why the header assertion was *redundant* for controller identity; previously only reasoned. |
+| `96-verify-gateway-image` live | **PASSES** — `control-plane 1, data-plane 1`; the per-workload denominator found **both** halves. CRI reported the `${HARBOR_URL}/` prefix intact. |
+| B52's 32 KB question | `kubectl get deploy -A -o name` = **941 B / 27 deployments**; `docker ps -a` = **174 B**. ~35 B per deployment ⇒ ~**900** deployments to reach the threshold. Those conversions were **defensive, not urgent**. |
+| Does Istio 1.30.3 emit `server: istio-envoy`? | **YES**, plus `x-envoy-upstream-service-time`. |
+| Is it a discriminator? | **YES** — traefik emits **no** `server`/`via`/`x-envoy` header. |
+| Do controllers get distinct LB IPs? | **YES** — istio `172.18.0.6`, traefik `172.18.0.7`. |
 
-### Loose end that was in NO file until now
+### Two carried unknowns — name them, do not let them become assumptions
 
-`49-psa-check.sh:140` reads `${INGRESS_CONTROLLER:-istio}` **after** `load_env`. Filed as a loose end,
-then **investigated 2026-07-20 — and it is SMALLER than filed, and deliberate.** Measured:
+1. **`test-psa-ownership` proves the DECISION, not that a real cluster ever presents the triggering
+   shape** (a platform `istio-system` with pods, no enforce label, `restricted` refused). `inferred`.
+2. **`traefik`-mode ownership is an OWNER DECISION, deliberately not made.** A leftover `istio-system`
+   is judged ours and now draws the wrong-mode diagnostic. That is pre-existing logic; an adversary
+   flagged it as a judgement call, not a defect, so it was not silently altered.
 
-- `INGRESS_CONTROLLER` is **not** in `load_env`'s SELECTORS snapshot (`lib/os.sh:296` — the list is
-  `KUBECONFIG ARGOCD_* VKS_CONTEXT HARBOR_CA_FILE HARBOR_URL`), so `.env.state`/`.env.example` beat an
-  env override. Proven: `INGRESS_CONTROLLER=istio-existing … load_env` → **effective `istio`**.
-- The two scripts differ **on purpose**. `44-install-ingress.sh:16` snapshots `_override` *before*
-  `load_env` — its own comment says why (otherwise `verify-ingress-both` would install the same
-  controller twice). `49-psa-check.sh` does **not**, so it evaluates **what was INSTALLED, not what
-  the caller claims** — the correct choice for a verifier.
-- So the usual "stale" case is **not stale at all**: after a failed attach the previously-installed
-  mesh is still the one running, so `istio` is the TRUTHFUL value and gating those namespaces is
-  RIGHT.
+### Next — all of it needs a lab
 
-**The one genuinely wrong case, narrow:** a *first-ever* attach that FAILS on a cluster carrying a
-platform mesh, with nothing yet published — `.env.example:447`'s uncommented `INGRESS_CONTROLLER=istio`
-then makes psa-check treat the **platform's** `istio-system` as ours and gate it. That is a **loud
-BLOCK naming a namespace the tenant cannot fix** — the "error message names the wrong cause" class,
-never a false green.
-
-✅ **BUILT AND MERGED (#374) — this paragraph previously said "No code change made… Unbuilt", which
-became FALSE the moment #374 landed beside it.** The idea round got its own review, then the diff got
-a second, and between them they found more than the residual that started it:
-
-- **The real bug was elsewhere.** `measured_ours` was keyed on the `own` COLUMN while GATING keys on
-  the mode-derived `$ours` — they diverge on exactly the `mesh` rows. Measured: two namespaces judged
-  and printed OK, then *"0 of them ours"*, then *"measured NOTHING"*, rc=0 — a verdict its own table
-  disproved three lines above. Never a false green; still a gate nobody would trust.
-- **My provenance-reporter design was refuted BY MEASUREMENT.** An adversary implemented it and
-  watched it lie: `load_env` sources FOUR files and `state_check` can REFUSE `.env.state`, so it named
-  `.env.example` for a value that came from `.env`. Ships instead as the EFFECTIVE VALUE plus the one
-  sentence that actually unblocks someone — *an env override on the make line will NOT work here*.
-- **My first diagnostic fired on HEALTHY rows and its advice would have UN-GATED namespaces we own.**
-  Guarded on `pods != 0 && verdict != OK`, pinned by a correctly-labelled fixture.
-- **The gate had ZERO behavioural coverage** (`grep -rln 49-psa-check` found only parsers). Now
-  `make test-psa-ownership`: 8 cases, both directions, every fix RED-proven.
-
-**Still true and still lab-gated:** whether a real cluster ever presents the triggering shape (a
-platform `istio-system` with pods, no enforce label, `restricted` refused) is **inferred**. The
-harness proves the DECISION, not that the decision is ever reached — its header says so.
-**Owner decision left open, deliberately:** in `traefik` mode a leftover `istio-system` is judged ours
-and now draws the diagnostic. That comes from pre-existing ownership logic this change did not touch;
-an adversary flagged it as a judgement call rather than a defect, so it was not silently altered.
-
-### Next
-
-Only lab-gated work remains: **B2**, **B24's `cacerts` data keys + the gateway-ns PSA minimum**, and
-**B38** (open BY DESIGN — un-gateable; a citation-resolving gate goes green on an interpretive error).
+| row | the one command |
+|---|---|
+| **B2** | `kubectl get crd gateways.gateway.networking.k8s.io -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}'` + the add-on label |
+| **B24** | `kubectl get secret cacerts -n istio-system -o jsonpath='{.data}'` — cert-manager keys vs upstream's four |
+| **B24 / PSA** | `make psa-check` on a guest cluster — the gateway-namespace minimum |
+| **B38** | open **BY DESIGN** — a citation-resolving gate goes green on an interpretive error |
 
 ## Backlog / resume state
 
