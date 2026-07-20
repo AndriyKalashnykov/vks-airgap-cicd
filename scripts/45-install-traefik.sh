@@ -123,6 +123,9 @@ log_info "Traefik LoadBalancer IP: ${LB_IP}"
 
 # --- 4. Publish the IP + emit the /etc/hosts guidance --------------------------
 state_set INGRESS_LB_IP "$LB_IP"
+# Published HERE, not in 44's dispatcher — see the note there. The controller and the IP are one
+# fact and must not be split across a failure boundary.
+state_set INGRESS_CONTROLLER "traefik"
 log_info "published INGRESS_LB_IP=${LB_IP} to $(state_file)"
 
 log_info "Traefik installed. Add ONE line to /etc/hosts on the jump box / your client:"

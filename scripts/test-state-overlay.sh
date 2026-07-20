@@ -195,7 +195,7 @@ rm -rf "$lab"
 #     its own. state_check has the same shape and survives only because it is called inside `if ...`,
 #     where set -e is suspended — so the unit that was exercised hid the bug in the one that wasn't.
 un="$(mktemp -d)"
-printf 'INGRESS_CONTROLLER=istio\n' > "${un}/.env.state"     # what a mid-run leg leaves behind
+printf 'INGRESS_CONTROLLER=istio\n' > "${un}/.env.state"     # an UNSTAMPED sink (this is a stamp test)
 if VKS_STATE_FILE="${un}/.env.state" bash -c '
       set -euo pipefail
       . scripts/lib/os.sh

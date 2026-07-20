@@ -183,6 +183,9 @@ log_info "istio ingress-gateway LoadBalancer address: ${LB_IP}"
 
 # --- 7. Publish + emit the /etc/hosts guidance --------------------------------
 state_set INGRESS_LB_IP "$LB_IP"
+# Published HERE, not in 44's dispatcher, so the controller and the IP land together: a run that
+# died earlier must not leave "istio" beside the PREVIOUS controller's IP (47:119 does the same).
+state_set INGRESS_CONTROLLER "istio"
 log_info "published INGRESS_LB_IP=${LB_IP} to $(state_file)"
 log_info "Istio installed. Add ONE line to /etc/hosts on the jump box / your client:"
 log_info ""
