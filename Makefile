@@ -719,7 +719,7 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering ## Run all offline script-logic unit tests
 
 # NOTE: subagent-readonly + no-gate-in-commit-chain hooks (and their tests) are now GLOBAL
 # (~/projects/claude-config, installed into ~/.claude); this repo keeps only the project-local
@@ -727,6 +727,10 @@ test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-cl
 .PHONY: test-adversary-gate-rearm
 test-adversary-gate-rearm: ## Offline: the adversary-first gate RE-ARMS on every commit (a review authorizes only until the next commit)
 	@./scripts/test-adversary-gate-rearm.sh
+
+.PHONY: test-ingress-state-ordering
+test-ingress-state-ordering: ## Offline: INGRESS_CONTROLLER + INGRESS_LB_IP are published by the SAME script (a failed install must not leave the new controller beside the old IP)
+	@./scripts/test-ingress-state-ordering.sh
 
 .PHONY: test-namespace-gates
 test-namespace-gates: ## Offline: RED-prove check-namespace-labelled + check-pod-inject-label catch a deleted ensure_namespace CALL / pod-label (B30c)

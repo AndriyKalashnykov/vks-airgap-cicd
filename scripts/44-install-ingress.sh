@@ -20,7 +20,13 @@ load_env
 # choice so a later `make verify-ingress` (a fresh make with no override) reads the
 # controller that was actually installed from .env.state, not the .env.example default.
 CONTROLLER="${_override:-${INGRESS_CONTROLLER:-istio}}"
-state_set INGRESS_CONTROLLER "$CONTROLLER"
+# NOTE: the controller is published by the INSTALLER, next to its `state_set INGRESS_LB_IP`, NOT here.
+# Publishing it before the `exec` split the two halves of one fact across a failure boundary: an
+# install that died before resolving its LB IP left .env.state carrying the NEW controller with the
+# PREVIOUS controller's IP, so a standalone `make verify-ingress` then passed while reporting
+# "reachable through the <new> ingress at <old controller's IP>" — the UIs really were reachable, so
+# nothing looked broken; only the label was a lie. 47-attach-istio.sh:119 already published them
+# together; 45 and 46 now do too, so the pair is written atomically-enough or not at all.
 case "$CONTROLLER" in
   istio)
     log_info "INGRESS_CONTROLLER=istio -> installing Istio ingress"
