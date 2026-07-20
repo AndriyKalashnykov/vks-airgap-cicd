@@ -55,20 +55,64 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     # vks_sso_user() (lib/os.sh): idempotent on '@', dies on a bare user with no VKS_SSO_DOMAIN.
     user="$(vks_sso_user "$VKS_USERNAME")"
 
-    # Build argv WITHOUT any secret. `vcf context create` prompts interactively for the
-    # context name AND the password, so neither ever touches argv/procfs (security.md:
-    # secrets never in argv). The endpoint + username are non-secret.
+    # Build argv WITHOUT any secret (security.md: secrets never in argv). Endpoint + username
+    # are non-secret.
+    #
+    # 🔴 THE "it prompts for the context name" CLAIM IS REFUTED [9.0-doc]. Broadcom's command
+    # reference gives the synopsis `vcf context create CONTEXT_NAME [flags]` — CONTEXT_NAME is a
+    # REQUIRED POSITIONAL, there is no --name flag, and all four documented examples pass it
+    # positionally. Nothing documents a name prompt. So this call is missing a required argument
+    # and most likely errors `accepts 1 arg(s), received 0`.
+    # Our OWN sibling gets it right: 31-fetch-argocd-kubeconfig.sh:77 is
+    #   `vcf context create "$CTX" --endpoint … --type k8s`
+    # — positional AND `--type k8s` (--username is documented "only applicable for 'kubernetes'
+    # context type"). This file has neither. The two forms contradict each other and NEITHER HAS
+    # EVER RUN, which is exactly what docs/lab-validation-plan.md step 3 exists to settle — so the
+    # argv is deliberately NOT changed here on doc evidence alone. Fix both scripts together from
+    # the real `--help`, per that step.
+    # `--auth-type basic` IS valid (the reference lists 'oidc'|'basic'|empty) — do not "fix" it.
     create_args=(--endpoint "https://${SUPERVISOR_HOST}" --username "$user" --auth-type basic)
     if is_true "${VKS_INSECURE_SKIP_TLS_VERIFY:-}"; then   # one truthiness rule, repo-wide (lib/os.sh)
       create_args+=(--insecure-skip-tls-verify)
     fi
 
     log_info "creating a VCF context for the Supervisor at https://${SUPERVISOR_HOST} (user: ${user})"
-    log_warn "INTERACTIVE: at the prompt, enter the context name '${VKS_CONTEXT_NAME}' (must match VKS_CONTEXT_NAME) and your password."
-    # TODO(verify on a real VKS lab): confirm `vcf context create --help` for a
-    # non-interactive / stdin password mechanism before automating further. No such
-    # flag is confirmed in any primary source, so this runs interactively today; do
-    # NOT add a --password flag (a password on argv is forbidden — security.md).
+    log_warn "INTERACTIVE: expect a PASSWORD prompt. To avoid it, export VCF_CLI_VSPHERE_PASSWORD"
+    log_warn "  (the only supported mechanism — there is no --password flag and no stdin form)."
+    log_warn "  Do NOT use 'vcf config set env.…' — it writes the password in plaintext to disk."
+    log_warn "UNVERIFIED: this call passes NO context-name positional, but Broadcom documents"
+    log_warn "  'vcf context create CONTEXT_NAME [flags]' as required. If it errors with"
+    log_warn "  'accepts 1 arg(s), received 0', that is the known bug — see lab-validation-plan step 3,"
+    log_warn "  and re-run with: vcf context create '${VKS_CONTEXT_NAME}' --endpoint https://${SUPERVISOR_HOST} --username '${user}' --auth-type basic"
+    # THE PASSWORD MECHANISM IS NOW ESTABLISHED [9.0-doc] — the old TODO here is answered:
+    #   * There is NO --password flag. Confirmed by the command reference and by a practitioner
+    #     ("The vcf CLI doesn't include a way to provide this password through parameters").
+    #     Do not add one — a password on argv is forbidden (security.md).
+    #   * There is NO documented STDIN mechanism. NOT STATED anywhere reachable; do not invent one.
+    #   * The ONE supported way is the env var `VCF_CLI_VSPHERE_PASSWORD`. Verbatim: "You can also
+    #     set an environment variable VCF_CLI_VSPHERE_PASSWORD with the password value." It reaches
+    #     the CLI through execve's envp, never argv, so it satisfies security.md.
+    #
+    # 🔴 NEVER run `vcf config set env.VCF_CLI_VSPHERE_PASSWORD <value>`. The same page documents it,
+    # and it writes the password IN PLAINTEXT to $HOME/.config/vcf/config.yaml where it "persists
+    # until you unset" it — outside the repo, invisible to gitleaks and to check-secrets-untracked
+    # (which only sees tracked paths), and surviving every teardown. Same residue class as the
+    # /etc/docker/certs.d incident. Export it for the session, or inject it from a secret manager
+    # (`op run -- …`, `vault exec -- …`); do not persist it to disk.
+    #
+    # NOT WIRED HERE, DELIBERATELY. The correct wiring is a COMMAND-SCOPED prefix reusing the
+    # VKS_PASSWORD that already exists (.env.example:805), mirroring line ~92 below:
+    #     [ -n "${VKS_PASSWORD:-}" ] && pw=(VCF_CLI_VSPHERE_PASSWORD="$VKS_PASSWORD")
+    #     env "${pw[@]}" vcf context create "$VKS_CONTEXT_NAME" …
+    # Command-scoped, not exported: a bare `export` would put a vCenter SSO admin password in the
+    # environment of every kubectl/helm/crane/git this script later spawns, readable in each
+    # /proc/<pid>/environ. The non-empty guard is NOT optional — an unguarded empty assignment
+    # CLOBBERS an operator who exported the var themselves, turning a working non-interactive
+    # login into an auth failure. It lands together with the positional-name fix above, after lab
+    # step 3, because wiring a password into a call that is missing a required argument would only
+    # make a broken path LOOK automated.
+    # Note also: the prompt recurs at token refresh [community], so a long `make install-all` can
+    # block mid-run; that is the case for exporting it for the session, deliberately.
     vcf context create "${create_args[@]}"
 
     log_info "activating context '${VKS_CONTEXT_NAME}' at namespace '${VKS_NAMESPACE}'"
