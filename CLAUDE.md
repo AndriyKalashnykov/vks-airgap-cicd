@@ -562,11 +562,32 @@ agents, no cluster (torn down after the measurements below).**
 
 ### Loose end that was in NO file until now
 
-`49-psa-check.sh:140` reads `${INGRESS_CONTROLLER:-istio}`. After a **failed attach** it therefore
-sees the **previous** controller and treats mesh namespaces as ours — **gating** instead of
-informational. It fails toward **BLOCK** (loud), never toward a false green, which is why it was
-allowed to pass; but it existed only in a subagent transcript, which is exactly how a finding gets
-lost. Filed here deliberately, unverified against a live failed-attach.
+`49-psa-check.sh:140` reads `${INGRESS_CONTROLLER:-istio}` **after** `load_env`. Filed as a loose end,
+then **investigated 2026-07-20 — and it is SMALLER than filed, and deliberate.** Measured:
+
+- `INGRESS_CONTROLLER` is **not** in `load_env`'s SELECTORS snapshot (`lib/os.sh:296` — the list is
+  `KUBECONFIG ARGOCD_* VKS_CONTEXT HARBOR_CA_FILE HARBOR_URL`), so `.env.state`/`.env.example` beat an
+  env override. Proven: `INGRESS_CONTROLLER=istio-existing … load_env` → **effective `istio`**.
+- The two scripts differ **on purpose**. `44-install-ingress.sh:16` snapshots `_override` *before*
+  `load_env` — its own comment says why (otherwise `verify-ingress-both` would install the same
+  controller twice). `49-psa-check.sh` does **not**, so it evaluates **what was INSTALLED, not what
+  the caller claims** — the correct choice for a verifier.
+- So the usual "stale" case is **not stale at all**: after a failed attach the previously-installed
+  mesh is still the one running, so `istio` is the TRUTHFUL value and gating those namespaces is
+  RIGHT.
+
+**The one genuinely wrong case, narrow:** a *first-ever* attach that FAILS on a cluster carrying a
+platform mesh, with nothing yet published — `.env.example:447`'s uncommented `INGRESS_CONTROLLER=istio`
+then makes psa-check treat the **platform's** `istio-system` as ours and gate it. That is a **loud
+BLOCK naming a namespace the tenant cannot fix** — the "error message names the wrong cause" class,
+never a false green.
+
+**No code change made, deliberately.** Honoring an override here would let a caller *claim*
+`istio-existing` and skip gating namespaces that really are theirs — trading a loud wrong-cause block
+for a silent wrong-pass, which is the worse direction. The proportionate fix is a **diagnostic**: when
+psa-check gates a `mesh` row, print WHERE the controller value came from (`.env.state` / `.env.example`
+default), so a wrong block is self-diagnosing. Unbuilt — it touches a gate, so it wants its own
+adversary round rather than a late one-liner.
 
 ### Next
 
