@@ -119,7 +119,6 @@ while IFS='|' read -r ns labelled own; do
   # known. The closing verdict keys off it, so a non-ours row with pods would flip an honest
   # "measured NOTHING" into "PSA OK (1 measured)" where the ONE measured namespace is the one we
   # just declared not ours. Count them separately.
-  case "${own}" in ours) [ "$pods" = "0" ] || measured_ours=$((measured_ours+1)) ;; esac
   need="$(psa_min_level "$ns" || true)"
   cur="$(kubectl get namespace "$ns" -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}' 2>/dev/null || true)"
 
@@ -139,6 +138,14 @@ while IFS='|' read -r ns labelled own; do
     kind-only) ours=0 ;;
     mesh)      if [ "${INGRESS_CONTROLLER:-istio}" = "istio-existing" ]; then ours=0; else ours=1; fi ;;
   esac
+
+  # COUNT ON THE EFFECTIVE OWNERSHIP, NOT THE COLUMN. This used to sit above, keyed on `$own`, so it
+  # and the GATING test (`$ours`, mode-derived) disagreed on exactly the `mesh` rows. Measured output
+  # of that bug: two mesh namespaces judged and printed OK, then "measured 2 namespace(s) ... (0 of
+  # them ours)", then "PSA UNPROVEN — this run measured NOTHING" — a verdict contradicted by its own
+  # table three lines above. It never produced a false green (the under-count is the safe direction),
+  # but a gate that states something its own output disproves is not one anybody will trust.
+  if [ "$ours" -eq 1 ] && [ "$pods" != "0" ]; then measured_ours=$((measured_ours+1)); fi
 
   eff="${cur:-restricted}"           # unlabelled => VKS's default
   verdict="OK"
@@ -165,6 +172,29 @@ while IFS='|' read -r ns labelled own; do
   [ "$ours" -eq 1 ] && [ -n "$labelled" ] && [ "$labelled" != "$cur" ] && \
     printf '      configured level is %s but the namespace carries %s — re-run the installer to apply it\n' \
       "$labelled" "${cur:-<none>}" >&2
+  # A `mesh` row judged OURS means the MODE said we installed this mesh. When that is wrong the
+  # operator gets a loud BLOCK naming a namespace they cannot fix — and the line above cheerfully
+  # tells them to "re-run the installer" against someone else's namespace. So say what the mode
+  # actually resolved to.
+  #
+  # DELIBERATELY the EFFECTIVE VALUE, never the SOURCE. An adversary implemented the source-reporting
+  # version and MEASURED it lying: load_env sources FOUR files (.env.example -> .env -> .env.state
+  # -> legacy .env.kind), and state_check REFUSES .env.state on a cluster-stamp mismatch, so a
+  # re-parsing reporter named `.env.example` for a value that came from `.env`. A diagnostic that
+  # names the wrong cause is the very class this line exists to cure.
+  #
+  # The last sentence is the one that actually unblocks someone: the obvious remedy does NOT work.
+  # GUARDED ON A FINDING, not merely on the mode. The first version tested only
+  # `own = mesh && ours = 1`, so in the DEFAULT istio mode with both mesh namespaces healthy and
+  # correctly labelled it printed six lines advising `istio-existing` over a gate that had just said
+  # PSA OK — and an operator who followed that advice would set ours=0 for the two namespaces we DO
+  # own, silently UN-GATING them. Advice attached to a non-finding is worse than silence.
+  if [ "$own" = mesh ] && [ "$ours" -eq 1 ] && [ "$pods" != "0" ] && [ "$verdict" != "OK" ]; then
+    printf '      judged OURS because INGRESS_CONTROLLER resolved to %s. If this mesh is PLATFORM-owned,\n' \
+      "'${INGRESS_CONTROLLER:-istio}'" >&2
+    printf '      set INGRESS_CONTROLLER=istio-existing in .env or .env.state — an override on the make\n' >&2
+    printf '      line will NOT work here: load_env sources those files AFTER the environment.\n' >&2
+  fi
 
   # When a namespace cannot run restricted, SAY WHY — a bare level is not actionable.
   if [ -n "$need" ] && [ "$need" != "restricted" ] && [ "$pods" != "0" ]; then
