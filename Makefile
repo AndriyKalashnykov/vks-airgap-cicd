@@ -490,6 +490,10 @@ install-all: preflight mirror mirror-verify builder-image vks-login platform git
 verify: check-env ## e2e: push a change → Tekton build → Harbor → ArgoCD sync → HTTP check (LIVE cluster)
 	@$(SCRIPTS)/99-verify.sh
 
+.PHONY: verify-gateway-image
+verify-gateway-image: ## LIVE: every running Istio container image came from OUR Harbor (catches a silently-ignored --set global.hub on a dual-homed box)
+	@./scripts/96-verify-gateway-image.sh
+
 .PHONY: verify-ingress
 verify-ingress: check-env ## Assert the *.vks.local UIs route through the ingress LB (reads INGRESS_LB_IP from the .env.state overlay)
 	@$(SCRIPTS)/98-verify-ingress.sh
@@ -727,10 +731,6 @@ test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-cl
 .PHONY: test-adversary-gate-rearm
 test-adversary-gate-rearm: ## Offline: the adversary-first gate RE-ARMS on every commit (a review authorizes only until the next commit)
 	@./scripts/test-adversary-gate-rearm.sh
-
-.PHONY: verify-gateway-image
-verify-gateway-image: ## LIVE: every running Istio container image came from OUR Harbor (catches a silently-ignored --set global.hub on a dual-homed box)
-	@./scripts/96-verify-gateway-image.sh
 
 .PHONY: test-gateway-image
 test-gateway-image: ## Offline: RED/GREEN-prove 96-verify-gateway-image.sh's classifier via fixtures (no cluster)

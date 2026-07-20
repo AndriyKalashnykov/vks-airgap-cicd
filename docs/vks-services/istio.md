@@ -15,7 +15,7 @@
 
 | Fact | Value | Confidence |
 |---|---|---|
-| Packaging | Carvel **Standard Package**, installed into the **guest cluster** | 9.0-doc (inferred for 9.1) [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/installing-standard-packages-on-tkg-cluster-using-tkr-for-vsphere-8-x/installaing-and-using-istio/install-istio.html date=2026-07-15 quote="Follow these instructions to install the Istio carvel package on a VKS cluster that is running VKr 1.29 and later."] |
+| Packaging | Carvel **Standard Package**, installed into the **guest cluster**; requires **VKr 1.29 or later** | 9.0-doc (inferred for 9.1) [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/installing-standard-packages-on-tkg-cluster-using-tkr-for-vsphere-8-x/installaing-and-using-istio/install-istio.html date=2026-07-15 quote="Follow these instructions to install the Istio carvel package on a VKS cluster that is running VKr 1.29 and later."] |
 | Package name | `istio.kubernetes.vmware.com` | 9.0-doc (inferred for 9.1) [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/installing-standard-packages-on-tkg-cluster-using-tkr-for-vsphere-8-x/installaing-and-using-istio/install-istio.html date=2026-07-15 quote="istio.kubernetes.vmware.com"] |
 | Versions | VMware-built, e.g. `1.25.3+vmware.1-vks.1`, `1.28.2+vmware.1-vks.1` | 9.0-doc — **re-check the exact strings on a lab** [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/installing-standard-packages-on-tkg-cluster-using-tkr-for-vsphere-8-x/installaing-and-using-istio/install-istio.html date=2026-07-15 quote="1.25.3+vmware.1-vks.1"] |
 | Install (package CLI) | `vcf package install istio -p istio.kubernetes.vmware.com -v <ver> --values-file istio-data-values.yaml -n istio-installed` | 9.0-doc [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/installing-standard-packages-on-tkg-cluster-using-tkr-for-vsphere-8-x/installaing-and-using-istio/install-istio.html date=2026-07-15 quote="vcf package install istio -p istio.kubernetes.vmware.com -v 1.25.3+vmware.1-vks.1 --values-file istio-data-values.yaml -n istio-installed"] |
@@ -79,7 +79,7 @@ documentation — is the mechanism.
 |---|---|---|
 | Needs a pre-existing gateway workload? | **No** — Istio **auto-provisions** the proxy *and* its LoadBalancer | Yes, and its selector must be discovered |
 | Needs anything from the mesh admin? | **For routing, no** — only rights in your own namespaces. **On an air-gapped mesh whose proxy registry needs auth, yes** — a gateway pull-secret (see the Air-gap row). | Usually (rights in the gateway ns, or a shared Gateway to reference) |
-| Air-gap | **Free only when WE install** (`INGRESS_CONTROLLER=istio`: we set `global.hub=<Harbor>` and the infra project is anonymous-pull). **On an ATTACHED VKS-package mesh: NOT automatic** — the auto-provisioned `<gw>-istio` proxy takes its image from the *mesh's* istiod hub, so pulling depends on the mesh's registry. See the note below. | already configured by whoever installed the mesh |
+| Air-gap | **Free only when WE install** (`INGRESS_CONTROLLER=istio`: we set `global.hub=<Harbor>` and the infra project is anonymous-pull — but that is **only with the default `HARBOR_PUBLIC_PROJECTS=true`**. With `=false`, which `check-pull-secret-alignment.sh` calls **the tenant default**, install mode needs the *same* pull secret as the attach row below, and istiod/the gateway `ImagePullBackOff` without it). **On an ATTACHED VKS-package mesh: NOT automatic** — the auto-provisioned `<gw>-istio` proxy takes its image from the *mesh's* istiod hub, so pulling depends on the mesh's registry. See the note below. | already configured by whoever installed the mesh |
 | Works when the VKS package's shared gateway is OFF (the default)? | **Yes** | **No — nothing to bind to** |
 
 `ISTIO_ROUTE_API=auto` (default) picks the Gateway API whenever Istio is an Accepted `GatewayClass`,
@@ -173,8 +173,12 @@ Measured with `kubectl auth can-i --as=system:serviceaccount:…` for a tenant h
 | **read the gateway Service** (i.e. run discovery at all) | **no** |
 
 So a locked-down tenant cannot even *discover* the mesh — the values must be handed over. Set
-`ISTIO_GATEWAY_NAMESPACE` / `ISTIO_GATEWAY_SERVICE` / `ISTIO_GATEWAY_LABEL` in `.env` and discovery
-is skipped entirely.
+`ISTIO_GATEWAY_NAMESPACE` / `ISTIO_GATEWAY_SERVICE` / `ISTIO_GATEWAY_LABEL` in `.env` and the
+**gateway-Service** discovery is skipped. ⚠️ **Not discovery *entirely*** (measured): `istio_discover`
+still `require_cmd`s **`kubectl` AND `jq`**, and still attempts one **cluster-scoped**
+`kubectl get deploy -A -l app=istiod` for the istiod version. A `Forbidden` there is non-fatal — the
+version simply reports `<unknown>` — but the RBAC table above says a locked-down tenant may not run
+discovery at all, so do not read this as "needs no cluster read".
 
 ## Pod Security Admission — it will reject your pods
 
@@ -187,7 +191,7 @@ Measured minimums (KinD-verified, via a server-side dry-run label — `make psa-
 
 | Namespace | Minimum | Why |
 |---|---|---|
-| `gitea`, `tekton-pipelines`, `javawebapp` | `restricted` | compliant as they ship |
+| `gitea`, `tekton-pipelines` (+ `-resolvers`), `traefik`, **and every app namespace in `apps/registry.tsv`** (today `javawebapp`, `gowebapp`) | `restricted` | compliant as they ship. The app set is **derived**, not enumerated — `49-psa-check.sh` reads the registry, so do not hand-list apps here |
 | **`ci`** (build TaskRuns) | **`baseline`** | **Kaniko builds as root** (`runAsUser=0`, unrestricted caps, no `seccompProfile`) |
 | **the namespace holding your `Gateway`** | **`baseline`** | the proxy Istio **auto-provisions** sets no `seccompProfile` — and **the platform's istiod creates that pod, not you**, so you cannot make it compliant |
 
@@ -234,6 +238,7 @@ yet — **Backlog B26**.
 | `make psa-check` | would this cluster even admit our pods? |
 | `make install-ingress` (default `istio`) | **install** the mesh — KinD / a mesh-free cluster **only** |
 | `make e2e-kind-istio-existing` | regression test: a "platform team" installs Istio under **foreign naming**, we attach, **both** route APIs |
+| `make verify-gateway-image` | **LIVE**: every RUNNING Istio container image came from **our Harbor**. Catches a silently-ignored `--set global.hub` — helm accepts an unknown `--set` key with rc=0 and no output, so on a **dual-homed** box the mesh falls back to `docker.io`, `helm --wait` succeeds and `verify-ingress` returns 200 over a mesh that never touched Harbor. Asserts in `istio` mode only; **skips loudly** in `istio-existing` (the hub is the platform's) and `traefik`. |
 
 ![Istio ingress — install vs attach](../diagrams/out/istio-ingress.png)
 
@@ -241,6 +246,17 @@ yet — **Backlog B26**.
 
 The only end-to-end **real-VKS** Istio evidence we have. A practitioner's lab, not Broadcom docs and
 not ours — so **`community` grade throughout**, and it loses to any primary-sourced fact above.
+
+> ⚠️ **Both Medium URLs below return HTTP 403 from this box** (measured 2026-07-20, with *and* without
+> a browser User-Agent; every other cited URL in this file returns 200). That is **NOT** evidence the
+> citation is fabricated — worth stating explicitly, because this repo *has* shipped a fabricated
+> `vcf` command once, so a reader hitting 403 may reasonably suspect it again. What a 403 cannot
+> distinguish from here: Medium blocking a datacenter IP, member-only content, or a removed article.
+> **The durable evidence is the verbatim `quote=` inside each `[src:]` token** — which is why the
+> convention stores it: a citation whose URL rots still carries what it claimed.
+> Do **not** build a URL-liveness gate for this. It needs the network (so it fails open or flakes),
+> and 403-vs-removed is exactly the interpretive call a gate cannot make — the same reason B38's
+> citation-resolving gate was refuted.
 
 | Fact | Value | Confidence |
 |---|---|---|
@@ -250,7 +266,9 @@ not ours — so **`community` grade throughout**, and it loses to any primary-so
 | Gateway API CRDs ship by default | corroborates **B2**'s premise from a second, independent direction | community [src: url=https://medium.com/@bob-bauer/istio-on-vmware-vks-single-cluster-install-a574a3c95bbb date=2026-07-16 quote="Gateway API CRDs (Built-in): Newer VKS clusters include these by default."] |
 | VCF CLI on 8.x Supervisors | package management works, but it **does not do authentication or context creation** — bears on Backlog **B20** | community [src: url=https://medium.com/@bob-bauer/istio-on-vmware-vks-single-cluster-install-a574a3c95bbb date=2026-07-16 quote="The VCF CLI can be used on 8.x Supervisors for package management, however it currently does not handle authentication or context creation."] |
 | Their ingress best practice **is our tenant model** | `Gateway` in a dedicated namespace owned by platform admins (`allowedRoutes.namespaces.from: All`, wildcard host); `HTTPRoute` in the app's namespace via cross-namespace `parentRefs`; auto-provisioned `<gw>-istio` + LB | community [src: url=https://medium.com/@bob-bauer/istio-on-vmware-vks-single-cluster-install-a574a3c95bbb date=2026-07-16 quote="We'll create this in a dedicated istio-ingress namespace, which is a best practice that allows Platform Admins to own the Gateway while developers manage their own routes."] |
-| **Multi-primary multi-cluster exists** | shared root CA → cert-manager `ClusterIssuer` → per-cluster intermediate `Certificate` (secret `cacerts`); `meshConfig.multiCluster` with a shared `meshID` + unique `clusterName`/`network`; east-west gateway installed with **upstream `istioctl`, not the VKS package**; `istioctl create-remote-secret` for endpoint discovery. **The floor is the VKS PACKAGE's — `1.28.2+vmware.1-vks.1` — not Istio's**: upstream has shipped multi-primary for many releases | community [src: url=https://medium.com/@bob-bauer/istio-on-vmware-vks-single-cluster-install-a574a3c95bbb date=2026-07-16 quote="Multi-cluster was released in early 2026 and requires you to use Istio package 1.28.2+vmware.1-vks.1 or newer."] |
+| **Multi-cluster is supported, and BROADCOM documents it** | Both topologies — *"Primary-remote on different networks"* and *"Multi-primary on different networks"*. ⚠️ **SIDECAR MODE ONLY** — *"the upstream ambient multi-cluster feature has not yet reached GA"* — so this **excludes** the ambient row above, it is not an orthogonal axis. Schema: `meshConfig.{meshID,network,multiCluster.{enabled,clusterName,clusterProfile,primaryClusterNames,remotePilotAddress}}` + `externalIstiod: true` on primaries. Trust: a shared **`cacerts`** Secret in the **root namespace of each PRIMARY**. Floor `1.28.2+vmware.1-vks.1` *("including 1.28.1+vmware.1-vks.1")* — still the **PACKAGE's** floor, not Istio's. | 9.0-doc [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/installing-standard-packages-on-tkg-cluster-using-tkr-for-vsphere-8-x/installaing-and-using-istio/using-istio/configure-istio-multi-clusters.html date=2026-07-19 quote="Starting from version 1.28.2+vmware.1-vks.1 (including 1.28.1+vmware.1-vks.1), the Istio package supports the multi-cluster feature"] |
+| **NOT STATED by Broadcom** (do not read the row above as covering these) | The `cacerts` **DATA KEYS**; the **east-west gateway's creation method** (Broadcom defers to upstream); **inter-cluster network reachability**. | 9.0-doc, by ABSENCE [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/installing-standard-packages-on-tkg-cluster-using-tkr-for-vsphere-8-x/installaing-and-using-istio/using-istio/configure-istio-multi-clusters.html date=2026-07-19 quote="Install the east-west gateway in the primary cluster that is required to expose the control plane and the application services"] |
+| Multi-cluster recipe (community) | shared root CA → cert-manager `ClusterIssuer` → per-cluster intermediate `Certificate` (secret `cacerts`); east-west gateway installed with **upstream `istioctl`**; `istioctl create-remote-secret` for endpoint discovery. 🔴 **TWO AIR-GAP TRAPS, and they are ours:** upstream `istioctl` renders **`docker.io/istio/proxyv2`** — *not* Harbor — which breaks the air gap AND skews against the VMware-built istiod; and upstream **forbids** exposing the east-west gateway through a **Layer-7 LB** (it terminates TLS → breaks `AUTO_PASSTHROUGH` → 503s), while **VKS VIPs come from NSX/AVI**. Ask which layer the VIP operates at *before* designing anything multi-cluster. | community — the creation method is the walkthrough's, **not** Broadcom's [src: url=https://medium.com/@bob-bauer/istio-on-vmware-vks-single-cluster-install-a574a3c95bbb date=2026-07-16 quote="Multi-cluster was released in early 2026 and requires you to use Istio package 1.28.2+vmware.1-vks.1 or newer."] |
 
 **Verification commands worth stealing** — they assert the **path**, where ours assert the payload:
 `curl -vI <host>` → look for the **`server: istio-envoy`** header (proves the response came through the
@@ -268,8 +286,15 @@ copy-paste slip, and copying it breaks the very thing the article teaches.
 
 - Exact VKS 9.1 Istio package **version strings** (the Istio *Package Reference* page resolves only to
   the `/9-0/` tree — its `/9-1/` path 404s — so the version strings are 9.0-sourced).
-- **Multi-primary / multi-cluster Istio on VKS: we have ZERO coverage.** No script, no e2e, no graded
-  fact beyond the community row above. Treat any multi-cluster claim from this repo as UNVERIFIED.
+- **Multi-cluster Istio: no script and no e2e — but no longer UNVERIFIED.** Broadcom ships a
+  *Configure Istio multi-clusters* page, so the schema, the floor and both topologies are `9.0-doc`
+  (see the row above). What is still genuinely open is narrower and worth naming precisely:
+  the **`cacerts` DATA KEYS** (Broadcom names the Secret and its namespace but **NOT its keys**, so
+  cert-manager's `tls.crt`/`tls.key` vs upstream's `ca-cert.pem`/`ca-key.pem`/`root-cert.pem`/
+  `cert-chain.pem` is unresolved — one `kubectl get secret cacerts -o jsonpath='{.data}'` settles it);
+  the east-west gateway's **creation method** (**NOT STATED** — Broadcom defers to upstream, which is
+  exactly where the two air-gap traps bite); and **inter-cluster network reachability** (**NOT
+  STATED** — an unknown, not a satisfied prerequisite).
 - **The gateway namespace's true PSA minimum.** Does **VMware's istiod injection template** emit a
   spec less compliant than upstream's? (Not its proxy *image* — PSA reads the **spec**, never the
   binary.) If it emits a `seccompProfile` the namespace could **tighten** to `restricted`; if it emits
