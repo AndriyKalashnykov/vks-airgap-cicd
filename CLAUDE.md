@@ -582,12 +582,29 @@ then makes psa-check treat the **platform's** `istio-system` as ours and gate it
 BLOCK naming a namespace the tenant cannot fix** — the "error message names the wrong cause" class,
 never a false green.
 
-**No code change made, deliberately.** Honoring an override here would let a caller *claim*
-`istio-existing` and skip gating namespaces that really are theirs — trading a loud wrong-cause block
-for a silent wrong-pass, which is the worse direction. The proportionate fix is a **diagnostic**: when
-psa-check gates a `mesh` row, print WHERE the controller value came from (`.env.state` / `.env.example`
-default), so a wrong block is self-diagnosing. Unbuilt — it touches a gate, so it wants its own
-adversary round rather than a late one-liner.
+✅ **BUILT AND MERGED (#374) — this paragraph previously said "No code change made… Unbuilt", which
+became FALSE the moment #374 landed beside it.** The idea round got its own review, then the diff got
+a second, and between them they found more than the residual that started it:
+
+- **The real bug was elsewhere.** `measured_ours` was keyed on the `own` COLUMN while GATING keys on
+  the mode-derived `$ours` — they diverge on exactly the `mesh` rows. Measured: two namespaces judged
+  and printed OK, then *"0 of them ours"*, then *"measured NOTHING"*, rc=0 — a verdict its own table
+  disproved three lines above. Never a false green; still a gate nobody would trust.
+- **My provenance-reporter design was refuted BY MEASUREMENT.** An adversary implemented it and
+  watched it lie: `load_env` sources FOUR files and `state_check` can REFUSE `.env.state`, so it named
+  `.env.example` for a value that came from `.env`. Ships instead as the EFFECTIVE VALUE plus the one
+  sentence that actually unblocks someone — *an env override on the make line will NOT work here*.
+- **My first diagnostic fired on HEALTHY rows and its advice would have UN-GATED namespaces we own.**
+  Guarded on `pods != 0 && verdict != OK`, pinned by a correctly-labelled fixture.
+- **The gate had ZERO behavioural coverage** (`grep -rln 49-psa-check` found only parsers). Now
+  `make test-psa-ownership`: 8 cases, both directions, every fix RED-proven.
+
+**Still true and still lab-gated:** whether a real cluster ever presents the triggering shape (a
+platform `istio-system` with pods, no enforce label, `restricted` refused) is **inferred**. The
+harness proves the DECISION, not that the decision is ever reached — its header says so.
+**Owner decision left open, deliberately:** in `traefik` mode a leftover `istio-system` is judged ours
+and now draws the diagnostic. That comes from pre-existing ownership logic this change did not touch;
+an adversary flagged it as a judgement call rather than a defect, so it was not silently altered.
 
 ### Next
 
