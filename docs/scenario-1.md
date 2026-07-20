@@ -412,7 +412,7 @@ make istio-preflight     # read-only. On a fresh cluster: "NO Istio detected →
 
 | It says | You run |
 |---|---|
-| **NO Istio detected** (the normal case) | `make install-ingress` — installs Istio (control plane + one gateway LB). **Its images come from your Harbor**, so the cluster needs no internet. Or `INGRESS_CONTROLLER=traefik` for a lighter option. |
+| **NO Istio detected** (the normal case) | `make install-ingress` — installs Istio (control plane + one gateway LB). **Its images come from your Harbor**, so the cluster needs no internet — and `make verify-gateway-image` PROVES it did, by reading each RUNNING Istio container's image. Worth running on a **dual-homed** jump box especially: there the nodes *can* still reach `docker.io`, so a silently-ignored `--set global.hub` (helm accepts an unknown `--set` key with rc=0 and no output) leaves the mesh working, the routes green, and the air gap unproven. Or `INGRESS_CONTROLLER=traefik` for a lighter option. |
 | **Istio is already here** (you or a template installed the VKS package) | `make install-ingress INGRESS_CONTROLLER=istio-existing` — installs **nothing**, attaches routes only. |
 
 Then add the printed `INGRESS_LB_IP` to `/etc/hosts` (see [Access the UIs](access-uis.md)).

@@ -247,6 +247,17 @@ yet — **Backlog B26**.
 The only end-to-end **real-VKS** Istio evidence we have. A practitioner's lab, not Broadcom docs and
 not ours — so **`community` grade throughout**, and it loses to any primary-sourced fact above.
 
+> ⚠️ **Both Medium URLs below return HTTP 403 from this box** (measured 2026-07-20, with *and* without
+> a browser User-Agent; every other cited URL in this file returns 200). That is **NOT** evidence the
+> citation is fabricated — worth stating explicitly, because this repo *has* shipped a fabricated
+> `vcf` command once, so a reader hitting 403 may reasonably suspect it again. What a 403 cannot
+> distinguish from here: Medium blocking a datacenter IP, member-only content, or a removed article.
+> **The durable evidence is the verbatim `quote=` inside each `[src:]` token** — which is why the
+> convention stores it: a citation whose URL rots still carries what it claimed.
+> Do **not** build a URL-liveness gate for this. It needs the network (so it fails open or flakes),
+> and 403-vs-removed is exactly the interpretive call a gate cannot make — the same reason B38's
+> citation-resolving gate was refuted.
+
 | Fact | Value | Confidence |
 |---|---|---|
 | Package repository must be **added first** | `vcf package repository add vks-standard --url projects.packages.broadcom.com/vsphere/supervisor/vks-standard-packages/3.6.0-20260416/vks-standard-packages:3.6.0-20260416 -n tkg-system` — the step our own `vcf package` sequence omits | community [src: url=https://medium.com/@bob-bauer/multi-primary-istio-architecture-on-vsphere-kubernetes-service-vks-e704e8f64161 date=2026-07-16 quote="vcf package repository add vks-standard --url projects.packages.broadcom.com/vsphere/supervisor/vks-standard-packages/3.6.0-20260416/vks-standard-packages:3.6.0-20260416 -n tkg-system"] |
