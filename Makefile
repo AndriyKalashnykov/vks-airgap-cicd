@@ -528,7 +528,11 @@ e2e-kind-istio-existing: ## KinD e2e for the ATTACH mode: a "platform team" inst
 	@echo "==> leg 2/2: attach via the CLASSIC Gateway/VirtualService API (shared platform gateway)"
 	@$(MAKE) install-ingress INGRESS_CONTROLLER=istio-existing ISTIO_ROUTE_API=classic
 	@$(MAKE) verify-ingress
-	@$(MAKE) psa-check INGRESS_CONTROLLER=istio-existing
+# The INGRESS_CONTROLLER= here is DECORATIVE and kept only for readability: psa-check reads the
+# variable AFTER load_env, whose files beat the environment, so this override is EATEN. It works
+# because `install-ingress` two lines up already PUBLISHED istio-existing to .env.state — that
+# publication, not this argument, is what puts psa-check in attach mode.
+	@$(MAKE) psa-check
 	@echo "==> e2e-kind-istio-existing PASSED — the UIs route through an Istio we did not install (BOTH route APIs)"
 
 ##@ Jump-box validation (Photon / Ubuntu container, rootless podman)
@@ -723,7 +727,7 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership ## Run all offline script-logic unit tests
 
 # NOTE: subagent-readonly + no-gate-in-commit-chain hooks (and their tests) are now GLOBAL
 # (~/projects/claude-config, installed into ~/.claude); this repo keeps only the project-local
@@ -731,6 +735,10 @@ test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-cl
 .PHONY: test-adversary-gate-rearm
 test-adversary-gate-rearm: ## Offline: the adversary-first gate RE-ARMS on every commit (a review authorizes only until the next commit)
 	@./scripts/test-adversary-gate-rearm.sh
+
+.PHONY: test-psa-ownership
+test-psa-ownership: ## Offline: 49-psa-check's mesh-OWNERSHIP branch via a fake kubectl (it had ZERO behavioural coverage)
+	@./scripts/test-psa-ownership.sh
 
 .PHONY: test-gateway-image
 test-gateway-image: ## Offline: RED/GREEN-prove 96-verify-gateway-image.sh's classifier via fixtures (no cluster)
