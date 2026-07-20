@@ -137,6 +137,19 @@ vcf addon   --help 2>&1 | head -40
 **Expect:** nothing to "pass" — this is pure evidence.
 **Send back:** **every `--help` block VERBATIM.** Do not summarise; the flag lists ARE the deliverable. If a subcommand does not exist, paste the error — that is also an answer.
 
+**THREE SPECIFIC ANSWERS this step now owes us** (2026-07-19: the docs let us pre-state what we
+expect, so the `--help` either confirms or refutes each in seconds):
+
+| # | What we expect, from `9.0-doc` | What it decides |
+|---|---|---|
+| a | The synopsis is **`vcf context create CONTEXT_NAME [flags]`** — a required positional, no `--name` flag | `30-vks-login.sh` passes **no** positional and is probably broken; `31-fetch-argocd-kubeconfig.sh:77` passes one and is probably right. Confirm and we fix `30` to match. |
+| b | **`--type k8s`** exists and `--username` is "only applicable for 'kubernetes' context type" | `31` passes `--type k8s`, `30` does not. If (b) holds, `30` needs it too. |
+| c | There is **no `--password` flag** and **no stdin form**; the only mechanism is the env var `VCF_CLI_VSPHERE_PASSWORD` | If a `--password` flag DOES appear, do **not** use it (argv leak) — but tell us, because our comment says it does not exist. |
+
+Also worth one line if it is cheap: does `vcf context create` **prompt** when the positional is
+omitted, or does it error `accepts 1 arg(s), received 0`? We assume it errors; that assumption is
+the only thing standing between our current `30` and a working login.
+
 ### 4. Install Harbor as a Supervisor Service · YOUR OWN vSPHERE WORK (~30–60 min)
 
 **Why:** our whole §A1 is 9.0-doc-inferred prose nobody has executed (Contour first? the `harbor-data-values` field set? the 16/32-char key limits?).
