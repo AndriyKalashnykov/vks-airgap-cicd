@@ -513,94 +513,65 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-07-19 (session 5) — READ, THEN REPLACE (do not append)
+## ▶️ HANDOFF 2026-07-20 (session 6) — READ, THEN REPLACE (do not append)
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog.
 History → git. Only "what is in flight and what to distrust" belongs here.
 
-**State: both repos GREEN on `main`, trees clean, no branches but `main` + a Renovate one, no
-cluster, no parked agents.**
+**State: both repos GREEN on `main`, trees clean, `main` only in both, zero open PRs, no parked
+agents, no cluster (torn down after the measurements below).**
 
 ### What shipped
 
-Four PRs here (#355–#358) and five in `claude-config` (#56–#60). One thread the whole way:
-**a CI failure I could not reproduce turned out to be a race that also produces FALSE GREENS.**
+**13 PRs** merged: vks #361 #364–#369 #370–#371, claude-config #62–#66. The non-lab backlog is
+**exhausted**; every remaining row needs hardware or is open by design.
 
-- **#355** — B40's namespace chokepoint gate (4 of 10 mechanisms, coverage stated not implied).
-- **#356** — `route_code`: a stalled backend was one merge away from being declared OK.
-- **#357** — the SIGPIPE root cause: 12 sites, `make check-grep-q-pipe`, B40 closed, B52 filed.
-- **#358** — three silent `set -e` deaths, one killing `bundle-load` on the **air-gap box**.
-- **#360** — stop cancelling `main`'s runs (`cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}`)
-  plus a weekly run. Three post-merge verifications were lost in one day: merge code, then a docs-only
-  commit minutes later, and the code run is cancelled while the superseding run legitimately SKIPS
-  static-check (its own diff is docs-only). The **certain** benefit is not the re-verification — it
-  is that a cancelled run leaves `main` showing `ci-pass: failure` for a NON-failure, reddening the
-  README badge. ⚠️ One of the four affected commits (`7d90aa9`) has **ZERO runs of any workflow** —
-  a **dropped GitHub event**, which no concurrency setting can explain and this fix cannot cover;
-  the weekly schedule is the only thing that covers that class.
-- **#362** (B52) — the sweep was **refuted and aimed backwards**; see the row.
+- **B20** — the `vcf` password mechanism is `VCF_CLI_VSPHERE_PASSWORD` (no `--password` flag, no
+  stdin form). The highest-value line is a **prohibition**: `vcf config set env.…` writes it
+  **plaintext to `$HOME/.config/vcf/config.yaml`**, invisible to gitleaks, surviving teardown.
+- **B24** — multi-cluster Istio: ZERO coverage → `9.0-doc`. `clusterProfile` **exists** (a standing
+  `[UNVERIFIED-BY-US]`, resolved — our *doubt* was the error, the third time that has happened here).
+- **B25** — the audit **refuted my premise**: B24 touched `CLAUDE.md | 2 +-` and **never landed in
+  `istio.md`**. Seven deltas fixed; `scenario-1.md` reviewed with **no** deltas.
+- **#368 / #369** — ingress state-ordering, and the first gate in this repo's history to assert a
+  **RUNNING pod's image**.
 
-### 🔴 THE FINDING — and it is a class, not an incident
+### 🔴 Distrust these — measured this session, not reasoned
 
-`grep -q` exits at its FIRST match. The producer still owing writes takes **SIGPIPE (141)**, and
-`pipefail` promotes that to the pipeline status — **so a pattern that WAS FOUND reports as ABSENT.**
+- **The harness notification's "exit code 0" lied THREE times** for a gate that exited 2. Cause: the
+  trailing `; echo "RC=$?"` in a **backgrounded** call makes the *echo* the last command. Read
+  `STATIC_RC=` out of the log, never the notification. (Rule sharpened in `git-workflow.md` — and I
+  still walked into it three times after writing it.)
+- **A grep that FINDS the string can be about a different KIND of thing.** `istio-envoy` in the chart
+  = **8 hits, all `emptyDir` volume names**. ⚠️ And note the twist measured below: the header *does*
+  exist — so that grep would have "confirmed" a TRUE fact by an INVALID method. The lesson is about
+  the METHOD, not the answer.
+- **A gate can be mis-filed into an EXEMPT group.** `verify-gateway-image` shipped under
+  `##@ Offline script tests`, which `check-doc-target-coverage` exempts — so the gate that catches
+  "operators cannot find this" skipped it, on the day it shipped.
 
-**It produces FALSE GREENS, which is why it matters.** When the match is the OFFENDER (any scanner
-or policy gate grepping for a forbidden pattern), SIGPIPE silently un-records a real violation.
-Measured on the gate enforcing this repo's headline *"docker is NEVER required"* invariant:
-**7/300 runs reported CLEAN** over a script that plainly required docker.
+### Measurements taken on the live cluster (so nobody re-derives them)
 
-**You cannot refute it on an idle machine, and I did exactly that.** I dismissed the correct
-diagnosis with *"200/200 rc=0; 39 KB fits the 64 KB pipe buffer so sed never blocks"* — both facts
-true, conclusion false. The producer needn't BLOCK, only owe a write when grep leaves. Idle
-24-core: **0/200**. `taskset -c 0` (a 2-vCPU-runner analogue): **11/400 = 2.75%**. At ~9
-invocations per CI job that is tens of percent — which reads exactly like flake.
+| question | answer |
+|---|---|
+| `96-verify-gateway-image` live | **PASSES** — `control-plane 1, data-plane 1`, i.e. the per-workload denominator found **both** halves, so it was not blind. CRI reported the `${HARBOR_URL}/` prefix intact; the `imageID` fallback was not needed. |
+| **B52's "INFERRED, not measured"** | `kubectl get deploy -A -o name` = **941 bytes / 27 deployments**; `docker ps -a` = **174 bytes**. Both nowhere near the 32 KB risk threshold (~35 B/deployment → you would need ~900 deployments). Those six conversions were **defensive, not urgent**. |
+| **Does Istio 1.30.3 emit `server: istio-envoy`?** | **YES** — plus `x-envoy-upstream-service-time`. |
+| **Is it a discriminator?** (the half nobody runs) | **YES** — traefik emits **no** `server`/`via`/`x-envoy` header at all. |
+| Do the controllers get different LB IPs? | **YES, measured** — istio `172.18.0.6`, traefik `172.18.0.7`. This is why the header assertion was *redundant* for controller identity; previously only reasoned. |
 
-**Exposure is predictable**: the bytes the producer still owes AFTER the match. The one row that
-ever failed owed **13,802**; its four siblings owed 932–2,730. Not special — just wider.
+### Loose end that was in NO file until now
 
-### 🔴 Distrust these — measured, not reasoned
-
-- **A "cosmetic" cleanup must be verified against the FAILURE states.** My `route_code` fix
-  normalised `000000` → a clean status. For a response truncated mid-flight `curl` prints the REAL
-  code and exits 28, so a hung backend yielded a bare `200`, hit the `2??` arm, and the route was
-  declared **OK**. The old garbage fell through and was safe **by accident**.
-- **The same primitive can need OPPOSITE normalisation in two callers.** 98 asks "is this host
-  SERVING?" (truncated ⇒ `000`); 97 asks "is the route RENDERED?" (truncated ⇒ keep the code — a
-  backend that answered at all proves the route exists). Do not copy one into the other.
-- **`|| true` is a POLICY DECISION.** It restores the guard's reachability, but falling through
-  means the empty case now proceeds — and in `20-bundle-load.sh` the branch ONE LINE ABOVE
-  **replaces** an unparseable helm while the patched branch would have **kept** an unparseable
-  kubectl. Read the sibling before choosing.
-- **A guard can be inert in the case it was written for.** `check-doc-make-targets`' blindness die,
-  added 2026-07-18, could never print: an empty pathspec made `grep -v` exit 1 and kill the gate
-  first. When you ADD a guard, EXECUTE the condition it guards.
-- **`grep -c` prints `0` and EXITS 1** on a zero count — a counting assignment dies on the empty set
-  it exists to count.
-- **A restated number rots within a day.** "18 of 21" was correct until #355 made it 22. The live
-  claim now says to read the harness's own last line.
-
-### The instruments that lied, again
-
-Every one caught by making it disagree with itself: my SIGPIPE refutation (idle machine); my new
-gate's first draft (line-by-line, so blind to the `\`-continued form that IS the real defect —
-it passed **both** RED-proofs catching nothing); a false-green repro that used comment filler
-(`sed` strips it, so nothing was owed); a `pgrep -af agent-id` that matched itself; and a Monitor
-that reported "main failed" without filtering by SHA — it was reading the previous merge.
+`49-psa-check.sh:140` reads `${INGRESS_CONTROLLER:-istio}`. After a **failed attach** it therefore
+sees the **previous** controller and treats mesh namespaces as ours — **gating** instead of
+informational. It fails toward **BLOCK** (loud), never toward a false green, which is why it was
+allowed to pass; but it existed only in a subagent transcript, which is exactly how a finding gets
+lost. Filed here deliberately, unverified against a live failed-attach.
 
 ### Next
 
-- **B52 is CLOSED** (#362) — do NOT reopen it as a conversion sweep; the row records why, with the
-  measurements. The superseded note follows: ~~60 bounded `printf | grep -q` sites remain.~~ A scan for large-producer variables found
-  **zero**, so priority is low; it is a crude heuristic, not a proof. Its trap is named in the row:
-  do NOT gate it by marking all 60 exempt.
-- **#303** (Renovate) is green but BEHIND `main`; Renovate rebases itself. Left alone deliberately.
-- **LAB-GATED, leave alone:** B2, B20, B24, B25, B27. **REFUTED, do not rebuild:** B26 fix 3, B37,
-  B38, B39's meta-gate, B43, **and B52's conversion sweep**.
-- **`concurrency.queue` defaults to `single`**, so a PENDING run is still discarded when a newer one
-  queues — latent, not fired. `queue: max` closes it, but the docs call `queue: max` +
-  `cancel-in-progress: true` a validation error and whether that fires against an EXPRESSION is
-  UNVERIFIED. Test on a throwaway branch before combining; the note is in `ci.yml`.
+Only lab-gated work remains: **B2**, **B24's `cacerts` data keys + the gateway-ns PSA minimum**, and
+**B38** (open BY DESIGN — un-gateable; a citation-resolving gate goes green on an interpretive error).
 
 ## Backlog / resume state
 
