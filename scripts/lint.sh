@@ -17,7 +17,10 @@ if require_gate_tool shellcheck; then
   # PARALLEL FOR THE PASS, SERIAL FOR THE REPORT. shellcheck was MEASURED at 37.3s of lint's 38.5s
   # (97%) — it is CPU-bound, not fork-bound: `-x` re-parses lib/os.sh for each of 126 scripts, so
   # the existing single xargs batch was already optimal shape and simply slow. Fanning it across
-  # cores measures 10.3s.
+  # cores measures 10.3s on 24 cores — and, because the objection is always "but CI has 2 vCPUs",
+  # MEASURED there too: `-P 2 -n 4` is 19.3s vs 35.7s serial, still 1.85x faster. The red path costs
+  # both passes (24-core 45.5s, 2-vCPU 55.0s); the static-check job sets no timeout-minutes.
+  # `-n` is load-bearing: `-P N` WITHOUT it runs a single batch and buys nothing (measured 35.1s).
   #
   # ⚠️ DO NOT print from the parallel run. `xargs -P` gives every concurrent shellcheck the SAME
   # stdout, and writes above PIPE_BUF (4096 B) interleave MID-LINE. MEASURED: at ~21.8 KB per
@@ -36,8 +39,23 @@ if require_gate_tool shellcheck; then
   # error, and `set -e` does not fire on a failed substitution in argument position.
   _sc_files() { find "$REPO_ROOT/scripts" -name '*.sh' -print0; \
                 find "$REPO_ROOT" -maxdepth 1 -name '*.sh' -print0; }
-  if ! _sc_files | xargs -0 -P "$(nproc 2>/dev/null || echo 4)" -n 4 shellcheck -x >/dev/null 2>&1; then
-    log_warn "shellcheck found issues — re-running serially for a readable report (parallel output interleaves)"
+  # >/dev/null, NOT >/dev/null 2>&1: splicing is a STDOUT problem (the findings), while xargs's own
+  # failure — "invalid number for -P", a usage error — is a single small write on STDERR. Discard
+  # the first, KEEP the second, or the diagnostic below can only guess at the cause.
+  # CAPPED AT 8, and the cap is MEASURED, not superstition: on a 24-thread box `-P $(nproc)` is
+  # SLOWER than `-P 8` in wall time and burns ~4x the CPU (interleaved A/B, 6 pairs: -P 8 ~6.5s,
+  # -P 24 ~9.9s; sweep P=4 11.1s, P=8 7.25s, P=16 9.5s, P=24 10.7s — a peak then decay). It is a
+  # no-op on CI by construction, since min(nproc,8) == nproc on a 4-vCPU runner, so it cannot
+  # regress the runner while it stops `make static-check` saturating a developer box — which this
+  # repo cares about, because heavy jobs run concurrently make any failure unattributable.
+  # It also bounds the cgroup case: `nproc` reports HOST cores under `--cpus` (measured: 24 inside
+  # `--cpus=2`), since it reads sched_getaffinity, which sees cpuset but not cpu.max.
+  # `if`, NOT `[ … ] && _p=8`: as a standalone statement that returns NON-ZERO whenever the cap
+  # does not apply (i.e. on every 4-vCPU CI runner), and this file runs `set -euo pipefail`.
+  _p="$(nproc 2>/dev/null || echo 4)"
+  if [ "$_p" -gt 8 ]; then _p=8; fi
+  if ! _sc_files | xargs -0 -P "$_p" -n 4 shellcheck -x >/dev/null; then
+    log_warn "the parallel shellcheck pass exited non-zero — re-running serially to find out why (parallel output interleaves, so it cannot be printed)"
     # The SERIAL pass is AUTHORITATIVE for what is wrong. The parallel pass can go non-zero for a
     # reason that is not a finding — a bad -P (empty nproc), an xargs usage error, or pipefail on
     # the producer — and then printing "shellcheck found issues" above a report containing NOTHING

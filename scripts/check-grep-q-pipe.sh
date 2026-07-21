@@ -71,6 +71,11 @@ _EXTERNAL='kubectl|docker|kind|helm|crane|curl|argocd|tkn|podman'
 # The two matchers are named ONCE, here, so the positive control below and the scan loop provably
 # use the SAME regex. A control that tested a COPY of the pattern would stay green while the real
 # matcher rotted — the copy is the thing that drifts.
+# The fold is a FUNCTION, named ONCE, so the loop below and its positive control provably use the
+# SAME sed expression. A control that tested a COPY of the expression would stay green while the
+# real one rotted — the copy is the thing that drifts (same reason the three regexes are named once).
+_fold() { sed -e :a -e '/\\$/N; s/\\\n//; ta' "$@"; }
+
 _RE_PIPE="\| *${_Q}"
 _RE_FILE="(^|[^a-zA-Z0-9_-])(${_FILE_READERS})[^|]*(\"[^\"]*/[^\"]*\"|[A-Za-z0-9_./-]*/[A-Za-z0-9_.-]+)[^|]*\| *${_Q}"
 _RE_EXT="(^|[^a-zA-Z0-9_-])(${_EXTERNAL})[[:space:]][^|]*\| *${_Q}"
@@ -111,6 +116,45 @@ if [[ $_ctl_ok  =~ $_RE_FILE ]] || [[ $_ctl_ok  =~ $_RE_EXT ]] \
 || [[ $_ctl_ok2 =~ $_RE_FILE ]] || [[ $_ctl_ok2 =~ $_RE_EXT ]]; then
   die "check-grep-q-pipe: POSITIVE CONTROL FAILED — the matcher fired on a bounded \$var producer, which this gate deliberately does NOT judge (see SCOPE). It would now flag safe code."
 fi
+# FOURTH CONTROL — THE FOLD ITSELF. The three above prove the MATCHERS are alive; none of them
+# proves the fold still JOINS, and the fold is what makes a two-line violation visible at all.
+# The gap is not theoretical: a fold that keeps EMITTING but stops JOINING (drop the `s/\\\n//`,
+# keep `:a … ta`) leaves every matcher healthy AND raises `items`, so the denominator guard below
+# passes MORE comfortably while the continuation-line violation is silently missed — MEASURED
+# (2026-07-21): real fold -> items=3 HITS=1 (caught); rotted fold -> items=4 HITS=0 (MISSED).
+# That is exactly the decorative state line 125 warns about, so it gets a control like the rest.
+# THREE lines, not two, and that is load-bearing: a TWO-line fixture cannot distinguish "joins ONE
+# continuation" from "joins ALL of them", so the realistic rot of dropping the `:a`/`ta` LOOP (which
+# still joins exactly one) slips through. MEASURED across three rots — join-removed, loop-removed,
+# sed-dead — a 2-line fixture MISSES loop-removed; a 3-line fixture catches all three.
+# THROUGH A FILE ARGUMENT, NOT STDIN — this is not stylistic, it is the whole point of the control.
+# The scan loop calls `_fold "$f"`; piping the fixture in would exercise a DIFFERENT invocation mode,
+# so a rot in the file-argument path would be invisible to every control here. MEASURED: dropping
+# `"$@"` from _fold (the likeliest slip in a fresh extraction) makes `_fold "$f"` read STDIN — which
+# inside the outer `while … done <<EOF` is THE HEREDOC HOLDING THE FILE LIST. The gate then reports
+# `OK — scanned 1 script(s), 125 lines examined` (it "scanned" the filenames), with all four controls
+# green, both denominator guards green, and a planted two-line violation MISSED. Routing the fixture
+# through a real file is what makes this control cover the invocation as well as the expression.
+_ctl_tmp="$(mktemp)"
+printf '  cat \\\n     scripts/foo.sh 2>/dev/null \\\n       | %s pattern\n' "$_Q" > "$_ctl_tmp"
+_ctl_fold="$(_fold "$_ctl_tmp")"
+rm -f "$_ctl_tmp"
+# ⚠️ THE NEWLINE TEST IS THE LOAD-BEARING HALF, and asserting only the regex is DECORATIVE — proven
+# by RED-proof, 2026-07-21. `_RE_FILE`'s `[^|]*` matches a NEWLINE too, so the UNJOINED two-line
+# fixture still satisfies the regex and the control passes on a fold that has stopped joining.
+# What actually discriminates is that the fold collapsed the two lines into ONE.
+# EMPTINESS FIRST, and the order is load-bearing. Without this arm a MISSING or broken sed reaches
+# the newline test, finds no newline in an EMPTY string, falls through to the regex arm, and dies
+# telling the operator the fold EXPRESSION rotted — while explicitly telling them the items guard
+# "CANNOT catch this", when the items guard is exactly what was built for it. An error that names
+# the wrong cause is worse than a crash, and this control sits ABOVE that guard so it preempts it.
+[ -n "$_ctl_fold" ] || die "check-grep-q-pipe: POSITIVE CONTROL FAILED — the fold produced NO OUTPUT AT ALL for a file it was handed. This is NOT an expression rot; it is one of two things: (a) sed is missing, not executable, or failing outright — check it is on PATH and runnable; or (b) _fold has lost its \"\$@\", so it reads STDIN instead of the file it was given (in the scan loop that STDIN is the heredoc holding the FILE LIST, and the gate then 'scans' filenames while missing every real violation)."
+case $_ctl_fold in
+  *$'\n'*) die "check-grep-q-pipe: POSITIVE CONTROL FAILED — the FOLD no longer JOINS backslash-continuations (its output still contains a newline), so a violation written across two lines (which is how the real CI failure was written) is INVISIBLE. The 'items' guard CANNOT catch this — a non-joining fold still emits lines and raises items. Do NOT satisfy this by editing the fixture." ;;
+esac
+if ! [[ $_ctl_fold =~ $_RE_FILE ]]; then
+  die "check-grep-q-pipe: POSITIVE CONTROL FAILED — the FOLD no longer JOINS backslash-continuations, so a violation written across two lines (which is how the real CI failure was written) is INVISIBLE to every matcher. The 'items' guard below CANNOT catch this — a non-joining fold still emits lines and raises items. Do NOT satisfy this by editing the fixture."
+fi
 
 scanned=0; hits=0; items=0
 while IFS= read -r f; do
@@ -147,7 +191,7 @@ while IFS= read -r f; do
       log_error "      ${line}"
       n=$((n + 1))
     fi
-  done < <(sed -e :a -e '/\\$/N; s/\\\n//; ta' "$f")
+  done < <(_fold "$f")
   hits=$((hits + n))
 done <<EOF
 $(git ls-files '*.sh' 2>/dev/null)
@@ -156,16 +200,26 @@ EOF
 # bootstrap-jumpbox.sh, which lint.sh explicitly DOES lint and which carries `set -euo pipefail` —
 # the precondition for the exact bug this gate exists to catch, on the bare Photon/Ubuntu box where
 # it is most expensive to debug. Latent when found (that file had no `| grep` of any kind), so this
-# is a scope fix, not a bug fix. If the denominator below is not 126, the pathspec did not take.
+# is a scope fix, not a bug fix. If the FILE count below is not 126, the pathspec did not take.
+# Do NOT pin the LINE count anywhere durable: this gate's corpus contains its own source and its
+# siblings, so editing them moves it — it drifted 9552 -> 9575 during this very change. The file
+# count is the stable claim; the line count is self-referential.
 
 # TWO DENOMINATORS, AND THEY PROVE DIFFERENT THINGS. Read this before "strengthening" either.
 #
 #   scanned — files opened. Guards a BROKEN PATHSPEC.
-#   items   — lines that reached the matchers, post-fold and post-comment-skip. Guards the FOLD
-#             PIPELINE: if `sed` is missing or its expression rots, the process substitution feeding
-#             the inner loop yields NOTHING, every file contributes zero lines, and the gate reports
-#             a serene green over ZERO examined lines. MEASURED (2026-07-21, `sed` shimmed to exit
-#             127): before this guard, `scanned 125, items 0, rc=0`.
+#   items   — lines that reached the matchers, post-fold and post-comment-skip. Guards TOTAL FOLD
+#             DEATH ONLY: `sed` absent, or an expression so broken it emits nothing. Then the
+#             process substitution yields NOTHING, every file contributes zero lines, and the gate
+#             reports a serene green over ZERO examined lines. MEASURED (2026-07-21, `sed` shimmed
+#             to exit 127): before this guard, `scanned 125, items 0, rc=0`.
+#             ⚠️ It does NOT prove the fold still JOINS. A fold that keeps emitting but stops
+#             joining RAISES `items` and passes this guard MORE comfortably while the two-line
+#             violation goes missed (measured; the exact counts are fixture-shaped, the RELATION
+#             is the point — items up, HITS to 0). That is the FOURTH CONTROL's job, not this one.
+#             ⚠️ It does NOT prove the loop READ THE FILES either: with `"$@"` dropped from _fold,
+#             `items` was 125 — it had counted the FILENAMES out of the heredoc, not file content.
+#             ⚠️ And it does NOT prove the corpus has content (see below).
 #
 # ⚠️ NEITHER GUARD PROVES THE CORPUS HAS CONTENT, and `items` CANNOT be made to — do not try.
 # This gate's corpus contains its OWN SOURCE and lib/os.sh (which it sources), so it can only run at
