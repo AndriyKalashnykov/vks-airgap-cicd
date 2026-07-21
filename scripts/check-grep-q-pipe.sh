@@ -112,7 +112,7 @@ if [[ $_ctl_ok  =~ $_RE_FILE ]] || [[ $_ctl_ok  =~ $_RE_EXT ]] \
   die "check-grep-q-pipe: POSITIVE CONTROL FAILED — the matcher fired on a bounded \$var producer, which this gate deliberately does NOT judge (see SCOPE). It would now flag safe code."
 fi
 
-scanned=0; hits=0
+scanned=0; hits=0; items=0
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   [ -f "$f" ] || continue
@@ -131,6 +131,9 @@ while IFS= read -r f; do
     # literal bug form, so a broken strip makes the gate flag itself (loud, safe).
     _s=${line#"${line%%[![:space:]]*}"}
     case $_s in '#'*) continue ;; esac
+    # Counted HERE — after the fold and after the comment skip — so `items` is the number of lines
+    # that actually reached the matchers. See the guard below for what this does and does NOT prove.
+    items=$((items + 1))
     [[ $line =~ $_RE_PIPE ]] || continue
     # A file-reading producer with a PATH-shaped argument before the pipe. `"$x"`/`$x` alone is a
     # variable, which this gate deliberately does not judge (see SCOPE above).
@@ -147,18 +150,38 @@ while IFS= read -r f; do
   done < <(sed -e :a -e '/\\$/N; s/\\\n//; ta' "$f")
   hits=$((hits + n))
 done <<EOF
-$(git ls-files 'scripts/*.sh' 2>/dev/null)
+$(git ls-files '*.sh' 2>/dev/null)
 EOF
+# CORPUS IS EVERY TRACKED *.sh, not 'scripts/*.sh'. The narrower pathspec missed
+# bootstrap-jumpbox.sh, which lint.sh explicitly DOES lint and which carries `set -euo pipefail` —
+# the precondition for the exact bug this gate exists to catch, on the bare Photon/Ubuntu box where
+# it is most expensive to debug. Latent when found (that file had no `| grep` of any kind), so this
+# is a scope fix, not a bug fix. If the denominator below is not 126, the pathspec did not take.
 
-# Denominator + zero-guard on the ITEM count, not the file count — the distinction B49 exists over.
+# TWO DENOMINATORS, AND THEY PROVE DIFFERENT THINGS. Read this before "strengthening" either.
+#
+#   scanned — files opened. Guards a BROKEN PATHSPEC.
+#   items   — lines that reached the matchers, post-fold and post-comment-skip. Guards the FOLD
+#             PIPELINE: if `sed` is missing or its expression rots, the process substitution feeding
+#             the inner loop yields NOTHING, every file contributes zero lines, and the gate reports
+#             a serene green over ZERO examined lines. MEASURED (2026-07-21, `sed` shimmed to exit
+#             127): before this guard, `scanned 125, items 0, rc=0`.
+#
+# ⚠️ NEITHER GUARD PROVES THE CORPUS HAS CONTENT, and `items` CANNOT be made to — do not try.
+# This gate's corpus contains its OWN SOURCE and lib/os.sh (which it sources), so it can only run at
+# all when those two are non-empty, and those two alone supply items. MEASURED: with every other
+# tracked *.sh emptied, `items` floors at 372, so an items-based vacuity guard is unfireable by
+# construction — "a comment with an if in front of it". That is also why this gate is listed
+# NOT STARVABLE in test-gate-vacuity.sh; read the note there before declaring it.
 [ "$scanned" -gt 0 ] || die "check-grep-q-pipe: scanned 0 files — the pathspec is broken and a green here would mean nothing."
+[ "$items" -gt 0 ] || die "check-grep-q-pipe: examined 0 lines across ${scanned} file(s) — the fold pipeline (sed) produced nothing, so no line ever reached the matchers. A green here would be vacuous. Check that sed exists and its expression still folds backslash-continuations."
 
 # SELF-TEST: this file must contribute zero hits, or the runtime composition has been undone.
 if [ "$hits" -gt 0 ]; then
-  log_error "check-grep-q-pipe: FAILED — ${hits} site(s) across ${scanned} scanned file(s)."
+  log_error "check-grep-q-pipe: FAILED — ${hits} site(s) across ${scanned} scanned file(s) (${items} lines examined)."
   log_error "  Fix with EITHER form (both measured 400/400 clean under the race):"
   log_error "    grep -q PAT <<< \"\$(producer)\"       # bash spools it; nothing to SIGPIPE"
   log_error "    producer | grep PAT >/dev/null       # no -q: grep drains, producer never SIGPIPEs"
   exit 1
 fi
-log_info "check-grep-q-pipe: OK — no FILE-READING or EXTERNAL (kubectl/docker/kind/helm/crane/curl) producer pipes into ${_Q} (scanned ${scanned} script(s)). SCOPE: bounded \$var producers are NOT judged — measured structurally safe (<32KB or single-line); see the header before \"fixing\" them."
+log_info "check-grep-q-pipe: OK — no FILE-READING or EXTERNAL (kubectl/docker/kind/helm/crane/curl) producer pipes into ${_Q} (scanned ${scanned} script(s), ${items} lines examined). SCOPE: bounded \$var producers are NOT judged — measured structurally safe (<32KB or single-line); see the header before \"fixing\" them."

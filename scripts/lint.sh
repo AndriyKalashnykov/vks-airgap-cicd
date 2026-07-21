@@ -14,9 +14,40 @@ echo "== shellcheck (scripts/*.sh + repo-root *.sh) =="
 if require_gate_tool shellcheck; then
   # Exclude nothing; lib/os.sh is sourced so give it shell=bash via its directive.
   # Include repo-root *.sh (e.g. bootstrap-jumpbox.sh) — not just scripts/.
-  { find "$REPO_ROOT/scripts" -name '*.sh' -print0; \
-    find "$REPO_ROOT" -maxdepth 1 -name '*.sh' -print0; } \
-    | xargs -0 shellcheck -x || rc=1
+  # PARALLEL FOR THE PASS, SERIAL FOR THE REPORT. shellcheck was MEASURED at 37.3s of lint's 38.5s
+  # (97%) — it is CPU-bound, not fork-bound: `-x` re-parses lib/os.sh for each of 126 scripts, so
+  # the existing single xargs batch was already optimal shape and simply slow. Fanning it across
+  # cores measures 10.3s.
+  #
+  # ⚠️ DO NOT print from the parallel run. `xargs -P` gives every concurrent shellcheck the SAME
+  # stdout, and writes above PIPE_BUF (4096 B) interleave MID-LINE. MEASURED: at ~21.8 KB per
+  # invocation, 20/20 runs spliced (e.g. "echo $undefinedvar46e to prevent globbing and word
+  # splitting."); below PIPE_BUF, 0/20. The threshold is ~a dozen findings — i.e. it garbles exactly
+  # when the gate fires and somebody needs to read it. BOTH obvious mitigations are REFUTED, do not
+  # re-try them: `-f gcc` still garbled 20/20 (one finding per line does not make the WRITE atomic),
+  # and `stdbuf -oL` is a no-op because shellcheck is Haskell and GHC does its own buffering.
+  # So: discard parallel output, and on failure re-run SERIALLY to produce an unspliced report.
+  # Green costs 10s; red costs 10s + 37s once, which is the right trade for a legible diagnostic.
+  #
+  # rc propagation is unaffected: xargs returns 123 when a child exits 1-125, serial AND parallel.
+  # Batching does NOT hide findings — `-x` resolves `# shellcheck source=` from the FILESYSTEM, not
+  # from batch membership (proven with an SC1091 control, not by diffing two empty outputs).
+  # nproc is present on bare photon:5.0, but degrade rather than die: an empty -P is a hard xargs
+  # error, and `set -e` does not fire on a failed substitution in argument position.
+  _sc_files() { find "$REPO_ROOT/scripts" -name '*.sh' -print0; \
+                find "$REPO_ROOT" -maxdepth 1 -name '*.sh' -print0; }
+  if ! _sc_files | xargs -0 -P "$(nproc 2>/dev/null || echo 4)" -n 4 shellcheck -x >/dev/null 2>&1; then
+    log_warn "shellcheck found issues — re-running serially for a readable report (parallel output interleaves)"
+    # The SERIAL pass is AUTHORITATIVE for what is wrong. The parallel pass can go non-zero for a
+    # reason that is not a finding — a bad -P (empty nproc), an xargs usage error, or pipefail on
+    # the producer — and then printing "shellcheck found issues" above a report containing NOTHING
+    # is precisely the "gate that cannot say why it failed" this file already warns about for
+    # yamllint. Still fail (something IS broken), but say WHICH thing.
+    if _sc_files | xargs -0 shellcheck -x; then
+      log_error "the PARALLEL shellcheck pass failed but the SERIAL pass found nothing. The scripts are clean — the parallel invocation itself is broken (suspect nproc/-P/xargs). Failing so this cannot hide as a silent 4x slowdown."
+    fi
+    rc=1
+  fi
 else
   log_warn "shellcheck not installed — skipped"
 fi
