@@ -68,6 +68,36 @@ _FILE_READERS='sed|awk|cut|cat|head|tail|tr|sort|uniq|grep'
 # These need no path argument to be unbounded, so they are matched on the command alone.
 _EXTERNAL='kubectl|docker|kind|helm|crane|curl|argocd|tkn|podman'
 
+# The two matchers are named ONCE, here, so the positive control below and the scan loop provably
+# use the SAME regex. A control that tested a COPY of the pattern would stay green while the real
+# matcher rotted — the copy is the thing that drifts.
+_RE_PIPE="\| *${_Q}"
+_RE_FILE="(^|[^a-zA-Z0-9_-])(${_FILE_READERS})[^|]*(\"[^\"]*/[^\"]*\"|[A-Za-z0-9_./-]*/[A-Za-z0-9_.-]+)[^|]*\| *${_Q}"
+_RE_EXT="(^|[^a-zA-Z0-9_-])(${_EXTERNAL})[[:space:]][^|]*\| *${_Q}"
+
+# --- POSITIVE CONTROL -----------------------------------------------------------------------
+# This gate's only other assertion is `hits == 0` — a NEGATIVE, which passes just as happily when
+# the matcher is DEAD as when the tree is clean. MEASURED 2026-07-21 by an adversary: setting
+# _FILE_READERS to a string matching nothing still returned rc=0, "OK — scanned 125 script(s)".
+# The gate is also UNDECLARED in test-gate-vacuity, so nothing else covers it. So: assert the
+# matcher FIRES on a known-bad line and STAYS SILENT on a line this gate deliberately allows,
+# before any scan result is trusted. (testing.md: a negative assertion needs a positive control —
+# otherwise "the defence worked" and "the threat never fired" are the same green.)
+# The fixtures are built from ${_Q} rather than written literally, for the same reason the patterns
+# are composed at runtime: this file must not contain the form it hunts, or it flags itself.
+_ctl_file="  cat scripts/foo.sh | ${_Q} pattern"
+_ctl_ext="  kubectl get pods -A | ${_Q} pattern"
+_ctl_ok="  printf '%s' \"\$v\" | ${_Q} pattern"
+if ! [[ $_ctl_file =~ $_RE_FILE ]]; then
+  die "check-grep-q-pipe: POSITIVE CONTROL FAILED — the file-reader matcher did not fire on a known-bad line. The matcher is dead; every result below would be a vacuous green."
+fi
+if ! [[ $_ctl_ext =~ $_RE_EXT ]]; then
+  die "check-grep-q-pipe: POSITIVE CONTROL FAILED — the external-producer matcher did not fire on a known-bad line. The matcher is dead; every result below would be a vacuous green."
+fi
+if [[ $_ctl_ok =~ $_RE_FILE ]] || [[ $_ctl_ok =~ $_RE_EXT ]]; then
+  die "check-grep-q-pipe: POSITIVE CONTROL FAILED — the matcher fired on a bounded \$var producer, which this gate deliberately does NOT judge (see SCOPE). It would now flag safe code."
+fi
+
 scanned=0; hits=0
 while IFS= read -r f; do
   [ -n "$f" ] || continue
@@ -82,14 +112,20 @@ while IFS= read -r f; do
   # `sed -e :a -e '/\\$/N; s/\\\n//; ta'` joins each continued logical line into one.
   while IFS= read -r line; do
     [ -n "$line" ] || continue
-    case "$(printf '%s' "$line" | sed 's/^[[:space:]]*//' | cut -c1)" in '#') continue ;; esac
-    printf '%s' "$line" | grep -qE "\| *${_Q}" || continue
+    # Builtins, not `printf | sed | cut` + `printf | grep` — that forked FOUR processes per line.
+    # The strip is correctness-critical here, not just speed: this file's own header contains the
+    # literal bug form, so a broken strip makes the gate flag itself (loud, safe).
+    _s=${line#"${line%%[![:space:]]*}"}
+    case $_s in '#'*) continue ;; esac
+    [[ $line =~ $_RE_PIPE ]] || continue
     # A file-reading producer with a PATH-shaped argument before the pipe. `"$x"`/`$x` alone is a
     # variable, which this gate deliberately does not judge (see SCOPE above).
     # The prefix is a NON-WORD boundary, not a command separator: the producer is routinely preceded
     # by `if `/`elif `/`! `/`while `, and requiring `[|;&(]` missed every one of them (RED-proven).
-    if printf '%s' "$line" | grep -qE "(^|[^a-zA-Z0-9_-])(${_FILE_READERS})[^|]*(\"[^\"]*/[^\"]*\"|[A-Za-z0-9_./-]*/[A-Za-z0-9_.-]+)[^|]*\| *${_Q}" \
-    || printf '%s' "$line" | grep -qE "(^|[^a-zA-Z0-9_-])(${_EXTERNAL})[[:space:]][^|]*\| *${_Q}"; then
+    # RHS UNQUOTED — a quoted RHS is a LITERAL comparison, which matches nothing and would make this
+    # gate a vacuous green. The POSITIVE CONTROL above is what catches that; it did not exist before
+    # 2026-07-21, and a dead matcher here returned rc=0 "OK — scanned 125 script(s)".
+    if [[ $line =~ $_RE_FILE ]] || [[ $line =~ $_RE_EXT ]]; then
       log_error "  ${f}: an UNBOUNDED producer (a file reader, or kubectl/docker/kind/helm/crane/curl) pipes into ${_Q} — under pipefail this reports a FOUND pattern as ABSENT, at random, and reports a real violation as CLEAN."
       log_error "      ${line}"
       n=$((n + 1))

@@ -63,7 +63,10 @@ scripts/90-e2e-istio-existing.sh|4|e2e fixtures: two namespaces are left DELIBER
 scripts/e2e-cross-cluster.sh|1|the wrapper form, for the cross-cluster e2e ArgoCD ns — a throwaway hub cluster, not an owned workload namespace
 k8s/argocd/application.yaml|1|the ArgoCD create-ns syncOption: the app namespace is ALSO created by ensure_namespace in 70-configure-argocd.sh, which is what labels it'
 
-is_comment_line() { case "$(printf '%s' "$1" | sed 's/^[[:space:]]*//' | cut -c1)" in '#') return 0 ;; *) return 1 ;; esac; }
+# PURE BUILTINS, no forks. This ran `printf | sed | cut` (3 processes) per LINE; across the corpus
+# that alone measured 26.1s of the gate's 61.3s. `${1%%[![:space:]]*}` is the leading whitespace,
+# so `${1#...}` strips it. Verdicts are identical (7617 comment lines, both forms).
+is_comment_line() { local s=${1#"${1%%[![:space:]]*}"}; case $s in '#'*) return 0 ;; *) return 1 ;; esac; }
 
 scanned=0; hits=0; flagged=0
 declare -A FILE_HITS=()
@@ -76,9 +79,15 @@ while IFS= read -r f; do
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     is_comment_line "$line" && continue
-    if printf '%s' "$line" | grep -qE "$PAT_CALL"  \
-    || printf '%s' "$line" | grep -qF -- "$PAT_HELM" \
-    || printf '%s' "$line" | grep -qF -- "$PAT_ARGO"; then
+    # Builtins, not `printf | grep` — this forked THREE processes per line and was 61% of the whole
+    # static-check span (62s here, plus ~119s more because test-gate-vacuity runs this gate twice).
+    # The `=~` RHS MUST stay UNQUOTED: a quoted RHS is compared as a LITERAL, which silently matches
+    # nothing and would make this gate a vacuous green. The -qF cases are fixed strings, so they use
+    # a glob with a QUOTED var (literal) — the opposite rule. Differential-oracled against the grep
+    # form: 0 divergences over 18,330 real lines plus 11 adversarial cases.
+    if [[ $line =~ $PAT_CALL ]] \
+    || [[ $line == *"$PAT_HELM"* ]] \
+    || [[ $line == *"$PAT_ARGO"* ]]; then
       n=$((n + 1))
     fi
   done < "$f"
