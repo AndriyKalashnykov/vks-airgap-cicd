@@ -88,13 +88,27 @@ _RE_EXT="(^|[^a-zA-Z0-9_-])(${_EXTERNAL})[[:space:]][^|]*\| *${_Q}"
 _ctl_file="  cat scripts/foo.sh | ${_Q} pattern"
 _ctl_ext="  kubectl get pods -A | ${_Q} pattern"
 _ctl_ok="  printf '%s' \"\$v\" | ${_Q} pattern"
+# A SECOND allowed fixture, carrying a PATH-shaped token. Measured: with only the fixture above,
+# widening _FILE_READERS to a bounded producer (adding `printf`) leaves the negative control
+# GREEN while the gate starts flagging safe code — it fired only when TWO regressions landed at
+# once. This one is sensitive to the reader-list widening on its own.
+_ctl_ok2="  printf '%s' \"\$HOME/x\" | ${_Q} pattern"
+# The PREFILTER first: it gates the loop, so if it dies no line reaches the two matchers below
+# and THEIR controls pass anyway. RED-proven 2026-07-21 with a planted violation: prefilter
+# live -> rc=1 "FAILED — 1 site(s)"; prefilter dead -> rc=0 "OK — scanned 1 script(s)".
+# Note an INVALID ere makes [[ =~ ]] return 2, which `|| continue` on the prefilter line
+# swallows silently under `set -uo pipefail` — so a typo there is fatal-and-quiet too.
+if ! [[ $_ctl_file =~ $_RE_PIPE ]]; then
+  die "check-grep-q-pipe: POSITIVE CONTROL FAILED — the PREFILTER did not fire on a known-bad line. No line can reach the matchers, so every result below is a vacuous green. Do NOT satisfy this by editing the fixture."
+fi
 if ! [[ $_ctl_file =~ $_RE_FILE ]]; then
-  die "check-grep-q-pipe: POSITIVE CONTROL FAILED — the file-reader matcher did not fire on a known-bad line. The matcher is dead; every result below would be a vacuous green."
+  die "check-grep-q-pipe: POSITIVE CONTROL FAILED — the file-reader matcher did not fire on a known-bad line. The matcher is dead; every result below would be a vacuous green. Do NOT satisfy this by editing the fixture."
 fi
 if ! [[ $_ctl_ext =~ $_RE_EXT ]]; then
-  die "check-grep-q-pipe: POSITIVE CONTROL FAILED — the external-producer matcher did not fire on a known-bad line. The matcher is dead; every result below would be a vacuous green."
+  die "check-grep-q-pipe: POSITIVE CONTROL FAILED — the external-producer matcher did not fire on a known-bad line. The matcher is dead; every result below would be a vacuous green. Do NOT satisfy this by editing the fixture."
 fi
-if [[ $_ctl_ok =~ $_RE_FILE ]] || [[ $_ctl_ok =~ $_RE_EXT ]]; then
+if [[ $_ctl_ok  =~ $_RE_FILE ]] || [[ $_ctl_ok  =~ $_RE_EXT ]] \
+|| [[ $_ctl_ok2 =~ $_RE_FILE ]] || [[ $_ctl_ok2 =~ $_RE_EXT ]]; then
   die "check-grep-q-pipe: POSITIVE CONTROL FAILED — the matcher fired on a bounded \$var producer, which this gate deliberately does NOT judge (see SCOPE). It would now flag safe code."
 fi
 

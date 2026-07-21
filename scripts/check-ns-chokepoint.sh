@@ -84,7 +84,13 @@ while IFS= read -r f; do
     # The `=~` RHS MUST stay UNQUOTED: a quoted RHS is compared as a LITERAL, which silently matches
     # nothing and would make this gate a vacuous green. The -qF cases are fixed strings, so they use
     # a glob with a QUOTED var (literal) — the opposite rule. Differential-oracled against the grep
-    # form: 0 divergences over 18,330 real lines plus 11 adversarial cases.
+    # form: ZERO divergences, plus zero over 16 crafted cases (tabs, CRLF, whitespace-only, `%`,
+    # backslashes). The DIVERGENCE COUNT is the claim; a corpus size is only context and is NOT
+    # reproducible without its counting rule -- over `git ls-files 'scripts/*.sh' 'k8s/*.yaml'` it
+    # is 19,813 counting every line and 18,390 counting non-empty ones, and both drift as the repo
+    # grows. An earlier revision asserted a bare line count taken from a review and never verified
+    # here; two readers then measured two different "right" numbers. Re-run the oracle if either
+    # matcher changes.
     if [[ $line =~ $PAT_CALL ]] \
     || [[ $line == *"$PAT_HELM"* ]] \
     || [[ $line == *"$PAT_ARGO"* ]]; then
