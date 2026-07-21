@@ -40,22 +40,22 @@
     },
     {
       "customType": "regex",
-      "description": "Air-gap image inventory: each image ref on the line below its # renovate: comment.",
+      "description": "Air-gap image inventory: each image ref on the line below its # renovate: comment. currentValue is the TAG and currentDigest the optional @sha256 — captured separately so a digest-pinned row (distroless, whose `nonroot` tag MOVES and has no semver) is bump-able. Capturing them together made currentValue the bare 64-hex, which the docker datasource cannot version, so the row was skipped (skipReason invalid-value) and only the Dockerfile half of a digest bump ever landed. The sha256: prefix MUST stay INSIDE the group: the datasource emits newDigest as sha256:<hex>, so capturing bare hex yields a permanent currentDigest/newDigest mismatch that retries forever.",
       "managerFilePatterns": [
         "/^images/images\\.txt$/"
       ],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)(?: versioning=(?<versioning>[^\\s]+))?\\n[^\\s:]+(?::[^\\s:]+)*:(?<currentValue>[^\\s]+)"
+        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)(?: versioning=(?<versioning>[^\\s]+))?\\n[^\\s@]+:(?<currentValue>[^\\s:@]+)(?:@(?<currentDigest>sha256:[0-9a-f]{64}))?"
       ]
     },
     {
       "customType": "regex",
-      "description": "Consumed release/tool versions pinned in .env.example (Tekton, kubectl, tkn, argocd CLI+manifest, cloud-provider-kind, harbor chart). Only # renovate:-annotated lines are matched. The optional extractVersion + registryUrl groups mirror every annotation shape used (extractVersion for tkn's v-prefix strip, registryUrl for the harbor helm datasource).",
+      "description": "Consumed release/tool versions pinned in .env.example (Tekton, kubectl, tkn, argocd CLI+manifest, cloud-provider-kind, harbor chart). Only # renovate:-annotated lines are matched. The optional extractVersion + registryUrl groups mirror every annotation shape used (extractVersion for tkn's v-prefix strip, registryUrl for the harbor helm datasource). currentValue/currentDigest are split for the same reason as the images.txt manager above — DISTROLESS_STATIC_TAG is `nonroot@sha256:...`, and capturing it whole made it unversionable and therefore untracked, so images.txt would bump while this file silently did not and check-image-alignment's env arm would fail. Deliberately NO versioning group: the docker datasource's defaultVersioning is already `docker`, so `versioning=docker` in an annotation is inert AND would not match this pattern, silently untracking whatever it annotates.",
       "managerFilePatterns": [
         "/^\\.env\\.example$/"
       ],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)(?: extractVersion=(?<extractVersion>[^\\s]+))?(?: registryUrl=(?<registryUrl>[^\\s]+))?\\n[A-Z_]+=(?<currentValue>[^\\s]+)"
+        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)(?: extractVersion=(?<extractVersion>[^\\s]+))?(?: registryUrl=(?<registryUrl>[^\\s]+))?\\n[A-Z_]+=(?<currentValue>[^\\s@]+)(?:@(?<currentDigest>sha256:[0-9a-f]{64}))?"
       ]
     },
     {
@@ -137,7 +137,7 @@
       "groupName": "Spring Boot"
     },
     {
-      "description": "Group all docker-datasource images (Dockerfile ARG bases + images/images.txt inventory) into one PR so the same image pinned in multiple files bumps together. pinDigests off: images.txt carries tag-only refs (no digest capture), and a mix of digest-pinned + tag-only refs would collide and silently drop bumps; these are build/mirror images for a demo, not a published runtime artifact.",
+      "description": "Group all docker-datasource images (Dockerfile ARG bases + images/images.txt inventory) into one PR so the same image pinned in multiple files bumps together. pinDigests off: it governs ADDING a digest to a ref that has none, NOT updating one that exists (renovate lookup: the currentDigest path never consults pinDigests), so the digest-pinned distroless row still bumps normally; these are build/mirror images for a demo, not a published runtime artifact. Do NOT add a {matchUpdateTypes:[digest], enabled:false} companion here: that guard exists for SEMVER-tagged images where a digest refresh can mask a version bump, and distroless is the documented opposite — `nonroot` MOVES and has no semver, so the digest refresh is the ONLY update path. Scoped to docker it would also kill digest updates for every app Dockerfile's digest-pinned base-image ARG.",
       "matchDatasources": [
         "docker"
       ],
