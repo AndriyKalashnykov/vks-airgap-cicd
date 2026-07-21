@@ -55,6 +55,29 @@
 #                               own lib. Starving less than all of it leaves a real corpus and yields
 #                               a false RED; starving all of it hits the blast radius above. Its
 #                               zero-guard is asserted in the gate itself instead.
+#   check-grep-q-pipe         — its corpus is EVERY tracked *.sh, which contains both its own source
+#                               AND lib/os.sh (which it sources), so there is no pathspec that
+#                               starves a meaningful corpus while leaving the gate able to run.
+#                               ⚠️ DO NOT "fix" this by excluding the gate from the pathspec. All
+#                               three options were MEASURED (2026-07-21):
+#                                 (1) preserve gate + lib      -> rc=0, "OK — scanned 125" -> false RED
+#                                                                 (12 real files survive; a true
+#                                                                 statement about a corpus that is
+#                                                                 not actually empty)
+#                                 (2) ':(exclude)…check-grep-q-pipe.sh'  -> rc=1, 67 bytes:
+#                                                                 "REPO_ROOT: unbound variable"
+#                                                                 -> assert_starved scores it **ok**.
+#                                                                 A FALSE PASS: the gate died
+#                                                                 sourcing an emptied lib, having
+#                                                                 judged nothing, and this harness
+#                                                                 certifies it non-vacuous. This is
+#                                                                 the trap; option (2) is the one a
+#                                                                 future session will reach for.
+#                                 (3) starve everything        -> rc=0, 0 bytes -> INCONCLUSIVE
+#                               Its denominators are asserted in the gate itself instead (a `scanned`
+#                               file guard and an `items` line guard), and the vacuity class that
+#                               actually bit it — a DEAD MATCHER, #386 — is covered there by a
+#                               POSITIVE CONTROL, which starvation could never have caught anyway.
 #   check-gwapi-istio-alignment — its corpus is an upstream go.mod fetched over the network; it
 #                               loud-SKIPs green when offline by design. Starving the repo does
 #                               nothing to it.
@@ -74,6 +97,12 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# ABSOLUTE self path, captured BEFORE the cd. The header-reason assertion below greps this file;
+# using `$0` there reads a RELATIVE path that no longer resolves after the cd, so invoking the
+# script as `cd scripts && ./test-gate-vacuity.sh` produced `grep: ./test-gate-vacuity.sh: No such
+# file` plus FOUR accusations that the NOT_STARVABLE entries "carry NO reason" — about four entries
+# that each have one. A failure naming the wrong cause, in the file that argues against those.
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 cd "$REPO_ROOT" || exit 1
 
 fail=0; ran=0
@@ -161,17 +190,23 @@ assert_starved() {
   ( cd "$SB/repo" && bash "scripts/${gate}" ) >"$SB/starved.log" 2>&1
   st_rc=$?
   sz=$(wc -c < "$SB/starved.log" | tr -d ' ')
+  # SILENCE IS TESTED FIRST, AND THE ORDER IS LOAD-BEARING. This block used to lead with
+  # `st_rc -eq 0`, which made the `sz -eq 0` clause below UNREACHABLE for rc=0 — so the commonest
+  # silent death of all (a starvation that empties the gate's OWN source, leaving bash to run an
+  # empty file: measured rc=0, 0 bytes) was labelled VACUOUS. That sends the reader to fix a gate
+  # that never ran, instead of to fix the case. A gate that judged and refused always SAYS SO;
+  # producing nothing at all is never a verdict, whatever the exit code.
+  if [ "$sz" -eq 0 ] || [ "$st_rc" -eq 126 ] || [ "$st_rc" -eq 127 ]; then
+    bad "${label} — INCONCLUSIVE: died SILENTLY (rc=${st_rc}, ${sz} bytes of output). A gate that
+        judged and refused says why; this one just died, so the case proves nothing about the
+        denominator. Fix the gate's error path, or drop the case rather than bank a false pass."
+    return
+  fi
   if [ "$st_rc" -eq 0 ]; then
     # Declaration first: a false RED here is likelier — and costlier — than a real vacuity.
     bad "${label} — GREEN on the declared-empty corpus. EITHER this declaration is INCOMPLETE (check
         for a second corpus component BEFORE touching the gate) OR the gate is genuinely VACUOUS. It reported:"
     tail -2 "$SB/starved.log" | sed 's/^/        /' >&2
-    return
-  fi
-  if [ "$st_rc" -eq 126 ] || [ "$st_rc" -eq 127 ] || [ "$sz" -eq 0 ]; then
-    bad "${label} — INCONCLUSIVE: died SILENTLY (rc=${st_rc}, ${sz} bytes of output). A gate that
-        judged and refused says why; this one just died, so the case proves nothing about the
-        denominator. Fix the gate's error path, or drop the case rather than bank a false pass."
     return
   fi
   ok "${label}"
@@ -287,13 +322,55 @@ assert_starved check-ns-chokepoint.sh     "check-ns-chokepoint dies when a decla
 ALL_GATES=$(find "${REPO_ROOT}/scripts" -maxdepth 1 -name 'check-*.sh' | sed 's#.*/##' | sort)
 TOTAL=$(printf '%s\n' "$ALL_GATES" | grep -c .)
 DECLARED=${#DECLARED_GATES[@]}
+# RATCHET. Nothing above can tell whether a NOT_STARVABLE entry is genuinely un-starvable or merely
+# PARKED there to silence it — MEASURED: a gate this repo had already found vacuous was moved into
+# the array with two lines (an entry plus a header comment reading "parked here because I said so")
+# and every assertion passed, stderr was empty, DECLARED silently fell 19 -> 18, and the closing
+# line still read "UNDECLARED: none". The count is the only thing that notices, so it ratchets:
+# it may only ever go UP, and lowering the floor has to be a deliberate, visible edit.
+MIN_DECLARED=19
+if [ "$DECLARED" -lt "$MIN_DECLARED" ]; then
+  echo "test-gate-vacuity: DECLARED fell to ${DECLARED} (floor ${MIN_DECLARED}) — a starvation case was REMOVED, or a gate was PARKED in NOT_STARVABLE to silence it. Restore the case, or lower the floor deliberately and say why." >&2
+  fail=1
+fi
+# A gate that is UNDECLARED because starvation CANNOT judge it is not the same as one nobody has
+# looked at, and printing both under "UNAUDITED — NOT proven healthy" was a false statement about
+# four gates that each carry a written, measured reason in the header. Splitting them keeps the
+# claim honest in BOTH directions: the reasoned ones stop reading as debt, and a genuinely new gate
+# still surfaces as a named gap instead of hiding among them.
+# This list is hand-typed, so it CAN drift from the header block it summarises — the guard below
+# fails if a name here is not a real gate, which is the drift that actually bites (a rename).
+NOT_STARVABLE=(check-vks-terminology.sh check-gwapi-istio-alignment.sh check-doc-command-count.sh check-grep-q-pipe.sh)
 UNDECLARED=""
+DOCUMENTED=""
 while read -r g; do
   [ -n "$g" ] || continue
-  case " ${DECLARED_GATES[*]} " in *" ${g} "*) ;; *) UNDECLARED="${UNDECLARED}${UNDECLARED:+ }${g}" ;; esac
+  case " ${DECLARED_GATES[*]} " in *" ${g} "*) continue ;; esac
+  case " ${NOT_STARVABLE[*]} " in
+    *" ${g} "*) DOCUMENTED="${DOCUMENTED}${DOCUMENTED:+ }${g}" ;;
+    *)          UNDECLARED="${UNDECLARED}${UNDECLARED:+ }${g}" ;;
+  esac
 done <<EOF
 $ALL_GATES
 EOF
+# Every NOT_STARVABLE name must BE a gate, or the list is documenting something that no longer
+# exists and the split above silently stops covering a real gate.
+# Three assertions, because the summary label claims three things. A SUBSTRING match was measured
+# to pass 'check-doc'/'check-env'/'check-vks' as if they were gates, so the name test is anchored to
+# a WHOLE LINE; the label also promises "a written, measured reason in this file's header", which
+# nothing checked; and a name in BOTH arrays would be silently swallowed by the `continue` above,
+# vanishing from both lists.
+for g in "${NOT_STARVABLE[@]}"; do
+  printf '%s\n' "$ALL_GATES" | grep -qxF "$g" \
+    || { echo "test-gate-vacuity: NOT_STARVABLE names '${g}', which is not a check-*.sh — the list has rotted (a rename?)." >&2; fail=1; }
+  # The header reason is what makes the exclusion legitimate rather than a place to park an
+  # inconvenient gate. Match the documented '#   <gate-name-without-.sh>' block in this file.
+  grep -q "^#[[:space:]]\+${g%.sh}[[:space:]]" "$SELF" \
+    || { echo "test-gate-vacuity: NOT_STARVABLE names '${g}' but this file's header carries NO reason for it. The summary line claims 'a written, measured reason' — write one, or declare the gate." >&2; fail=1; }
+  case " ${DECLARED_GATES[*]} " in
+    *" ${g} "*) echo "test-gate-vacuity: '${g}' is in BOTH DECLARED_GATES and NOT_STARVABLE — it would be starved AND excused, and would print in neither list." >&2; fail=1 ;;
+  esac
+done
 
 # Fail-check FIRST: `ran` counts only PASSING cases, so if everything failed, ran==0 AND fail==1 —
 # checking a "nothing ran" skip first would exit 0 on a run that printed nothing but FAIL.
@@ -303,7 +380,35 @@ echo "test-gate-vacuity: OK (${ran} case(s); starvation declared for ${DECLARED}
 echo "  This is NOT a fraction of all gates: static-check/docs-lint/sec also run five inline Makefile"
 echo "  recipes (check-env, check-toolchain-alignment, check-secrets-untracked, gitleaks, trivy-config)"
 echo "  plus lint.sh, validate.sh, trivy-fs.sh and diagrams-check — none of which are counted here."
+if [ -n "$DOCUMENTED" ]; then
+  echo "  NOT STARVABLE — a written reason in this file's header (this harness does NOT verify that"
+  echo "  the reason is TRUE). It gives these gates NO coverage. Whether anything ELSE covers them"
+  echo "  differs per gate, so it is stated per gate rather than blanket-claimed:"
+  # Blanket-claiming "each is guarded INSIDE the gate instead" was FALSE for half of them, measured:
+  # check-doc-command-count exits 0 on an emptied corpus BY DESIGN (a docs set making no "N
+  # command(s)" claim is a legitimate state — this file's own header says a die there would be a
+  # FALSE BLOCK), and check-gwapi-istio-alignment exits 0 on a loud network SKIP while its own text
+  # says a green static-check without it does NOT prove the CRD pin. A reader ticking four gates off
+  # a coverage list would have banked two that nothing covers.
+  while read -r _g; do
+    [ -n "$_g" ] || continue
+    case "$_g" in
+      check-vks-terminology.sh|check-grep-q-pipe.sh)
+        echo "    ${_g}  — guarded INSIDE the gate (its own denominator/zero-guard)" ;;
+      check-doc-command-count.sh)
+        echo "    ${_g}  — NOT guarded: exits 0 on an empty corpus BY DESIGN (honest emptiness)" ;;
+      check-gwapi-istio-alignment.sh)
+        echo "    ${_g}  — NOT guarded: exits 0 on a network SKIP; a green here does not prove the pin" ;;
+      *)
+        echo "    ${_g}  — coverage UNSTATED: add it to the case in $(basename "$SELF")" ;;
+    esac
+  done <<EOF
+$(printf '%s\n' "$DOCUMENTED" | tr ' ' '\n')
+EOF
+fi
 if [ -n "$UNDECLARED" ]; then
   echo "  UNDECLARED — UNAUDITED for vacuity, NOT proven healthy:"
   printf '%s\n' "$UNDECLARED" | tr ' ' '\n' | sed 's/^/    /'
+else
+  echo "  UNDECLARED: none — every check-*.sh is either starved above or reasoned NOT STARVABLE."
 fi
