@@ -583,10 +583,17 @@ the `/renovate` skill).
    (only 9 files). shellcheck was already batched through one `xargs`; it is simply CPU-bound,
    because `-x` re-parses `lib/os.sh` for each of 126 scripts. Now fanned across cores → **10.3s**.
    ⚠️ The parallel run writes to `/dev/null` and a failure triggers a **serial re-run** for the
-   report: `xargs -P` shares one stdout and writes above PIPE_BUF interleave mid-line (**20/20**
-   spliced at ~21.8 KB, 0/20 below 4096 B) — i.e. it garbles exactly when the gate fires. Both
-   obvious mitigations are **REFUTED, do not re-try**: `-f gcc` still garbled 20/20, and
-   `stdbuf -oL` is a no-op against GHC's own buffering.
+   report, because `xargs -P` shares one stdout and a report taking MORE THAN ONE `write()`
+   interleaves mid-line — i.e. it garbles exactly when the gate fires. ⚠️ **CORRECTED 2026-07-21:
+   this entry first blamed `PIPE_BUF` and declared `-f gcc` refuted; both were measurements at ONE
+   load written up as a mechanism and a universal.** `strace -e trace=write`: 7,532 B in **one**
+   write → **0/20** spliced (far ABOVE PIPE_BUF's 4096); 12,644 B in **two** writes (8192+4452) →
+   20/20; ~38 KB in five → 20/20. GHC block-buffers at **8192**, so the real lever is **`-n`**
+   (`-n 1` gave 0/20 at the same `-P 8`). `stdbuf -oL` IS a no-op (identical write pattern with and
+   without it). **`-f gcc` is NOT refuted** — it shrinks output ~40%, which helps only if that drops
+   the invocation under the buffer (0/20 at 7.5 KB/inv, 20/20 at ~38 KB). The serial re-run stays
+   because it is load-independent. See `rules/common/testing.md` "ONE OPERATING POINT IS AN
+   OBSERVATION, NEVER A MECHANISM".
 
 ### Next — all of it needs a lab
 
