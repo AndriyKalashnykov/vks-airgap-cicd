@@ -544,13 +544,16 @@ Written as the LAST act.
 ### This session was about the RULES CORPUS, not this repo's product
 
 Almost all of it landed in `claude-config`. What touched **this** repo: `CLAUDE.md` shrank
-139,688 → 55,133 B (the backlog moved to `BACKLOG.md`), and one measurably-false claim was
+by ~85 KB — the backlog moved to `BACKLOG.md` (`wc -c CLAUDE.md` for the current size; an
+absolute here rots the moment anyone edits this file, which is what happened twice on the day it
+was written) — and one measurably-false claim was
 corrected. Nothing about the air-gap product changed.
 
 ### 🔴 Distrust these — measured, not reasoned
 
 - **Subagents DO inherit the full rules corpus.** `CLAUDE.md` said the opposite for months. Proof:
-  the corpus is 232,152 tokens and a `claude-code-guide` subagent died at **~315,296 tokens with
+  the corpus is **~232k tokens** (re-measure: `tiktoken` over `rules/common/*.md`; it grows) and a
+  `claude-code-guide` subagent died at **~315,296 tokens with
   ~936 tokens of conversation** — it cannot reach that without the corpus. Consequence: a subagent
   on a **200k-window model cannot start at all**; the 8 roster adversaries work only because each
   declares `model: opus`, and built-ins cannot be given a model.
