@@ -144,8 +144,22 @@ Its findings are part of the deliverable: **fix them, or record each in the back
 evidence. If it produces nothing, that is a **blocker to report** — never quietly substitute your own
 review and move on.
 
-Subagents do **not** inherit skills or rules: each adversary carries its domain brief and the
-portfolio conventions in its own system prompt on purpose. Keep them current when a fact changes.
+Subagents do **not** inherit SKILLS, so each adversary carries its domain brief in its own system
+prompt on purpose. Keep them current when a fact changes.
+
+⚠️ **CORRECTED 2026-07-22 — this line used to say subagents inherit neither "skills or rules". The
+RULES half is measurably FALSE, and it is expensive in both directions.** Subagents **DO** inherit
+the full `~/.claude/rules/**` corpus. Two independent measurements: an adversary reported
+first-person that its own context contained the whole corpus; and a `claude-code-guide` subagent
+died at **~315,296 tokens with only ~936 tokens of conversation** — the ungated corpus is 903,003 B
+≈ 311k tokens at the ratio that failure implies, which accounts for essentially the entire payload.
+A subagent cannot reach 315k unless the corpus is injected into it.
+
+Consequences, both live: (1) a subagent on a **200k-window model cannot start at all** — the eight
+roster adversaries work only because each declares `model: opus`, and built-ins like
+`claude-code-guide` cannot be given a model, so they are unusable here; (2) any portfolio convention
+re-stated inside an adversary brief **because of this false belief** is duplicated bloat paid on
+every dispatch — the brief should carry only what the corpus does not.
 
 **A newly-written `.claude/agents/*.md` may or may not be dispatchable in the session that created it —
 TRY IT, do not assume.** It was once believed that definitions load at SESSION START (observed
