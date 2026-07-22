@@ -49,8 +49,8 @@ New here? Pick the path that matches your situation — each one is self-contain
 | I want to… | Path | You need |
 |------------|------|----------|
 | **Just see it work** (no VKS cluster) | [KinD](docs/kind-local.md) — two commands, zero `.env` | **Have:** Docker (KinD needs Docker specifically) · internet access<br>**Run:** `make deps` → `make e2e-kind` |
-| **VKS — I install Harbor + ArgoCD** (I am the admin) | [Scenario 1](docs/scenario-1.md) | **Have:** a vSphere login that can install a Supervisor Service, create a vSphere Namespace and provision a guest cluster · cluster-admin on that guest cluster · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md))<br>**Reachable from the jump box:** the internet, the Supervisor API, Harbor — and ArgoCD's cluster must reach your guest API.<br>**Run (bare jump box):** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate`. Then follow [Scenario 1](docs/scenario-1.md) — it fills in `.env`, gates it, and installs once your cluster + Harbor exist. |
-| **VKS — Harbor + ArgoCD already exist** (I am a **tenant**) | [Scenario 2](docs/scenario-2.md) | **Have:** cluster-admin on your own guest cluster · Harbor **project-admin** (else ask for robot credentials) · the licensed VCF CLI archives<br>**Ask the platform team for:** your guest cluster **registered** with ArgoCD (admin-only) · an ArgoCD role that lets you create an `Application` · mesh rights — `make istio-preflight` prints exactly what to request<br>**Reachable from the jump box:** the internet and Harbor.<br>**Run (bare jump box):** `make deps` → `make install-vcf-clis` → `make env-init` → `make env-populate`. Then follow [Scenario 2](docs/scenario-2.md) — it discovers the endpoints, mints the Harbor robot, and installs once you're wired to your cluster + Harbor. |
+| **VKS — I install Harbor + ArgoCD** (I am the admin) | [Scenario 1](docs/scenario-1.md) | **Have:** a vSphere login that can install a Supervisor Service, create a vSphere Namespace and provision a guest cluster · cluster-admin on that guest cluster · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md))<br>**Reachable from the jump box:** the internet, the Supervisor API, Harbor — and ArgoCD's cluster must reach your guest API.<br>**Run (fresh jump box, after cloning):** `make deps` → `make install-vcf-clis` → `make env-init`. Then follow [Scenario 1](docs/scenario-1.md) — it populates `.env`, gates it, and installs once your cluster + Harbor exist. |
+| **VKS — Harbor + ArgoCD already exist** (I am a **tenant**) | [Scenario 2](docs/scenario-2.md) | **Have:** cluster-admin on your own guest cluster · Harbor **project-admin** (else ask for robot credentials) · the licensed VCF CLI archives<br>**Ask the platform team for:** your guest cluster **registered** with ArgoCD (admin-only) · an ArgoCD role that lets you create an `Application` · mesh rights — `make istio-preflight` prints exactly what to request<br>**Reachable from the jump box:** the internet and Harbor.<br>**Run (fresh jump box, after cloning):** `make deps` → `make install-vcf-clis` → `make env-init`. Then follow [Scenario 2](docs/scenario-2.md) — it discovers the endpoints, mints the Harbor robot, and installs once you're wired to your cluster + Harbor. |
 
 The VKS paths start from the jump-box **[Prerequisites](#prerequisites)** below.
 Run **`make check-tools`** to see which CLIs you have and which are required.
@@ -152,7 +152,7 @@ additional one (see [Istio on VKS](docs/vks-services/istio.md#4-attach-prefer-th
 
 ## Prerequisites
 
-### Bootstrap a bare jump box (before you can clone this repo)
+### Bootstrap an unprovisioned jump box (before you can clone this repo)
 
 **Fast path (dual-homed Ubuntu/Photon)** — one command OS-gates, installs git/curl/make +
 mise, clones this repo, runs `make deps`, and prints a toolchain report:
@@ -200,13 +200,17 @@ and (dual-homed only) the workload cluster.
 make deps            # toolchain: mise + podman (git/make/curl come from bootstrap-jumpbox.sh)
                      #   want docker instead?  make deps CONTAINER_ENGINE=docker
 make engine-check    # read-only: what engine does this box have, and will it cost you a sudo?
-make env-init        # create .env from .env.example
-make env-populate    # mint the secrets we can, discover cluster values, print what only you can supply
+make env-init        # a blank .env from .env.example
 make check-tools     # what this box has, and what it still needs
 ```
 
+> Stop here. Your scenario runbook runs `env-populate` itself (once the cluster + Harbor exist) —
+> running it now would only be re-done, and re-running `env-init` later would discard it.
+
+<!-- -->
+
 > **`make env-check` is NOT a prerequisite either — it is a PRESENCE gate that needs the real
-> `HARBOR_URL` and the workload kubeconfig, neither of which exists on a bare jump box** (`HARBOR_URL`
+> `HARBOR_URL` and the workload kubeconfig, neither of which exists before your cluster and Harbor are up** (`HARBOR_URL`
 > is still the committed `harbor.vks.local` placeholder, and there is no kubeconfig yet). It **correctly
 > fails** here now. Run it in the scenario runbooks, after the cluster and Harbor exist — they already
 > place it correctly ([Scenario 1](docs/scenario-1.md), [Scenario 2](docs/scenario-2.md)).

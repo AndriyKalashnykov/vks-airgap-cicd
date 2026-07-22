@@ -235,17 +235,36 @@ The `wait` block at `:24-29` keys on `status.conditions[2].reason` — a **posit
 conditions array**, with the author's own comment admitting the status field is unreliable. Cite
 only as an anti-pattern.
 
-### Harbor
+### Harbor — there is no robot mechanism to compare against
 
 Installed as a Supervisor Service (`supervisor-services/services.yaml:25-28`) with a config file
-supplying its FQDN, an admin credential and a storage class — **and then never used again**. No
-robot account, no CA trust wiring, no mirroring, no pull. Nothing in the automation
-authenticates to it.
+supplying its FQDN, an admin credential and a storage class — **and then never used again**.
+
+Measured: grepping all three repositories for `harbor|registry|robot|imagepull|pull-secret`
+returns **zero** matching file paths. The only Harbor artifact anywhere is that one install row.
+(Scope of that measurement: paths across all three repos, and file *contents* for
+`lab-automation` itself. For the two dependency repos the conclusion rests on the image
+references actually read — every one points at `ghcr.io`, `projects.packages.broadcom.com` or
+`github.com`.)
+
+Side by side, per scenario:
+
+| | Scenario 1 — the admin installs | Scenario 2 — a tenant consumes |
+|---|---|---|
+| **Them** | install the Supervisor Service with an **admin** credential in a config YAML. Stop. | **does not exist** — nothing ever authenticates to Harbor, so there is no tenant path to have |
+| **Us** | `install-harbor` → `fetch-harbor-ca` + `19-trust-harbor.sh` (per-engine CA trust) → **`harbor-robot`** mints a least-privilege robot scoped to the two mirror projects, `0600`, never on argv → `mirror` → **`mirror-verify`** (blob integrity, because a push's exit code cannot see a lying registry) | the tenant requests robot credentials, or mints one with project-admin; `HARBOR_USERNAME=robot$<name>`, with a gate enforcing the single-quoting that `$` demands |
+
+**The asymmetry is structural, not a maturity gap.** Their workloads pull from public registries,
+so a private registry has no job in that stack and is installed as a lab fixture. Ours exists
+*because* of the air gap. This is the sharpest instance of the no-air-gap framing at the top of
+this page: the component both projects install is the component only one of them uses.
 
 Note the package YAMLs themselves are **not in the repository**: at `86fadb6` the only files
 under `supervisor-services/` are `services.yaml` and `argo-attach.yaml`. Everything else arrives
-in a password-protected Box bundle (`setup-lab.sh:181-219`), so the catalogue is unreviewable
-from the repo alone.
+in a password-protected Box bundle (`setup-lab.sh:181-219`) — its shared-link password is
+**prompted, not in the repo** (and not the reused lab credential; verified), so the catalogue —
+including whatever `harbor-service-config.yaml` really contains — is unreviewable from the repo
+alone.
 
 So there is nothing to borrow *about Harbor*. There is something to borrow about the
 **mechanism** that installs it — see §5.
