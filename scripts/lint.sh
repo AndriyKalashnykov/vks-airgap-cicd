@@ -23,12 +23,19 @@ if require_gate_tool shellcheck; then
   # `-n` is load-bearing: `-P N` WITHOUT it runs a single batch and buys nothing (measured 35.1s).
   #
   # ⚠️ DO NOT print from the parallel run. `xargs -P` gives every concurrent shellcheck the SAME
-  # stdout, and writes above PIPE_BUF (4096 B) interleave MID-LINE. MEASURED: at ~21.8 KB per
-  # invocation, 20/20 runs spliced (e.g. "echo $undefinedvar46e to prevent globbing and word
-  # splitting."); below PIPE_BUF, 0/20. The threshold is ~a dozen findings — i.e. it garbles exactly
-  # when the gate fires and somebody needs to read it. BOTH obvious mitigations are REFUTED, do not
-  # re-try them: `-f gcc` still garbled 20/20 (one finding per line does not make the WRITE atomic),
-  # and `stdbuf -oL` is a no-op because shellcheck is Haskell and GHC does its own buffering.
+  # stdout, and a report that takes MORE THAN ONE write() interleaves MID-LINE (e.g. "echo
+  # $undefinedvar46e to prevent globbing and word splitting."). It garbles exactly when the gate
+  # fires and somebody needs to read it, and is pristine on the clean tree where you test it.
+  #
+  # THE BOUNDARY IS SHELLCHECK'S OWN BUFFER, NOT PIPE_BUF — an earlier version of this comment said
+  # PIPE_BUF (4096) and that points at the wrong lever. `strace -e trace=write` measured: 7,532 B in
+  # ONE write -> 0/20 spliced (far ABOVE 4096); 12,644 B in TWO writes (8192+4452) -> 20/20; ~38 KB
+  # in 5 writes -> 20/20. GHC block-buffers at 8192. So the lever that actually works is `-n`, which
+  # sets per-invocation output size (`-n 1` gave 0/20 at the same -P 8).
+  # `stdbuf -oL` IS a no-op (identical write pattern with and without it — it reaches glibc stdio
+  # only, and shellcheck is GHC). `-f gcc` is NOT refuted, contrary to what this comment used to say:
+  # it shrinks output ~40%, which helps only if that drops the invocation under the buffer (0/20 at
+  # 7.5 KB/inv, 20/20 at ~38 KB/inv). We keep the serial re-run because it is load-independent.
   # So: discard parallel output, and on failure re-run SERIALLY to produce an unspliced report.
   # Green costs 10s; red costs 10s + 37s once, which is the right trade for a legible diagnostic.
   #
@@ -56,7 +63,9 @@ if require_gate_tool shellcheck; then
   if [ "$_p" -gt 8 ]; then _p=8; fi
   if ! _sc_files | xargs -0 -P "$_p" -n 4 shellcheck -x >/dev/null; then
     log_warn "the parallel shellcheck pass exited non-zero — re-running serially to find out why (parallel output interleaves, so it cannot be printed)"
-    # The SERIAL pass is AUTHORITATIVE for what is wrong. The parallel pass can go non-zero for a
+    # The SERIAL pass is AUTHORITATIVE for the REPORT — not for the verdict, which fails EITHER way:
+    # a fast path that broke is untrustworthy even when the slow path finds nothing, which is why
+    # rc=1 is set unconditionally below. The parallel pass can go non-zero for a
     # reason that is not a finding — a bad -P (empty nproc), an xargs usage error, or pipefail on
     # the producer — and then printing "shellcheck found issues" above a report containing NOTHING
     # is precisely the "gate that cannot say why it failed" this file already warns about for
