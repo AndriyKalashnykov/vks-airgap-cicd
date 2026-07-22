@@ -42,11 +42,14 @@ ARGOCD_KUBECONFIG="${ARGOCD_KUBECONFIG:-${REPO_ROOT}/secrets/argocd.kubeconfig}"
 export ARGOCD_KUBECONFIG
 log_info "SUPERVISOR kubeconfig -> ${ARGOCD_KUBECONFIG} (override with ARGOCD_KUBECONFIG in .env)"
 : "${SUPERVISOR_HOST:?SUPERVISOR_HOST must be set in .env (the Supervisor IP/FQDN)}"
-: "${VKS_USERNAME:?VKS_USERNAME must be set in .env (the vCenter SSO user)}"
 : "${ARGOCD_NAMESPACE:?ARGOCD_NAMESPACE must be set in .env (the vSphere Namespace the ArgoCD instance runs in, e.g. argocd-instance-1)}"
-# 'user@SSO.DOMAIN', idempotent (lib/os.sh) — a VKS_USERNAME that already carries '@' is NOT re-domained
-# (the C10 double-domain bug); a bare user needs VKS_SSO_DOMAIN (no silent 'vsphere.local' default).
-VCF_USER="$(vks_sso_user "$VKS_USERNAME")"
+# VKS_USERNAME is NOT `:?`-required here. It used to be — an unconditional guard with no default —
+# while 30-vks-login.sh applied a default privately, so `.env.example` could document the variable as
+# OPTIONAL and be RIGHT for `make vks-login` and WRONG for `make fetch-argocd-kubeconfig`, which
+# Scenario 1 Step 4 runs regardless of VKS_AUTH_METHOD. vks_username() (lib/os.sh) is the shared
+# default + announce + normalise, so the documented contract is now true for BOTH callers.
+# Still idempotent on '@' (the C10 double-domain bug) and still no silent 'vsphere.local'.
+VCF_USER="$(vks_username)"
 CTX="${ARGOCD_SUPERVISOR_CONTEXT:-argocd-supervisor}"
 
 mkdir -p "$(dirname "$ARGOCD_KUBECONFIG")"
