@@ -515,7 +515,7 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-07-21 (session 7) — READ, THEN REPLACE (do not append)
+## ▶️ HANDOFF 2026-07-21 (session 8) — READ, THEN REPLACE (do not append)
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog.
 History → git. Only "what is in flight and what to distrust" belongs here.
@@ -525,12 +525,11 @@ History → git. Only "what is in flight and what to distrust" belongs here.
 > because such a claim is TRUE when written and FALSIFIED by a later commit: this section once said a
 > fix was *"Unbuilt"* and the very next PR built it, so the handoff asserted the opposite of the code
 > beside it. **No commit-time gate can catch that** (four were implemented and measured — see
-> `scripts/handoff-status.sh`), and a backlog row would have been updated by the work itself, which is
-> what B49/B51/B52 all did. Write the STATE you are handing over, never the status of a task.
+> `scripts/handoff-status.sh`), and a backlog row would have been updated by the work itself. Write
+> the STATE you are handing over, never the status of a task.
 
-**State: both repos GREEN on `main`, trees clean, `main` only, zero open PRs, no cluster, no
-parked agents, no worktrees, no out-of-repo residue** (`certs.d`, `/etc/hosts`, kind clusters all
-0; one pre-existing April buildx container deliberately left). Written as the LAST act.
+**State: `main` green and clean in BOTH repos, zero open PRs, no branches, no worktrees, no parked
+agents, no out-of-repo residue.** Written as the LAST act.
 
 ### Run this first
 
@@ -539,61 +538,56 @@ the claims below.
 
 ### What shipped
 
-**7 PRs.** #383 taught Renovate to track the distroless digest in all THREE files (it was tracking
-1 of 3, which is why #381 sat red); #381 then rebased itself to carry all three and merged.
-PR #385 took `make static-check` from 298s to 77s local, **8m31s → ~3m in CI**, and PR #386 then
-fixed a HIGH defect in that PR's own positive control. PR #384 bumped the renovate CLI pin. In
-`claude-config`: #82 (a portfolio tool-selection rule) and #83 (four lessons, one a correction to
-the `/renovate` skill).
+**4 PRs, 2 repos.** #388 refuted backlog B53 (`check-grep-q-pipe` is NOT STARVABLE) and took
+`static-check` 77s → 53s; #389 corrected the splice mechanism in `lint.sh` **and** in this file.
+In `claude-config`: #85 (four measured lessons) and #86 (correcting three claims #85 got wrong, plus
+the reflex now in all 7 adversary briefs).
 
 ### 🔴 Distrust these — measured this session, not reasoned
 
-- **A slow harness is usually slow because of what it CALLS.** `test-gate-vacuity` looked slow
-  because it rebuilds a sandbox per case. That is **~8s**; it was slow because it ran one slow gate
-  **twice** (~119s of 136s). My structural reading was wrong by **17×**. Ablate — delete one case
-  and re-time — do not reason from the code.
-- **A positive control can cover PART of a matcher chain and read as complete.** #385 added a
-  control for 2 of `check-grep-q-pipe`'s 3 regexes. The uncovered one was the **prefilter**, which
-  gates the loop — kill it and nothing reaches the other two, so their controls pass and the gate
-  reports `OK`. RED-proven with a planted violation. Fixed in #386.
-- **A quoted `[[ =~ ]]` RHS is a LITERAL**, so the match becomes impossible and the gate is a
-  vacuous green. The fixed-string form (`*"$S"*`) needs the opposite — a QUOTED var. Converting a
-  mixed `grep -qE`/`-qF` loop means two opposite quoting rules on adjacent lines.
-- **A RED-proof can trip a DIFFERENT guard than the one you are testing.** Three mutations of one
-  gate all gave rc=1; only the third (breaking a pattern's INPUT, composition intact) proved the
-  matcher. The others hit an unbound-variable path and the self-composition guard. Read the
-  failure MESSAGE and name which guard fired.
-- **A borrowed measurement in a code comment is not reproducible and drifts.** A cited line count
-  could not be reproduced by its own author OR by a reviewer — both were "right" for different
-  counting rules. Cite the STABLE claim (zero divergences) plus the counting rule, not a bare
-  number.
-- **The task notification's "exit code 0" lied again**, on a `cmd > log; echo RC=$?` shape — the
-  echo is the last command. The `{ cmd; rc=$?; echo; exit $rc; }` form is the one that stays honest.
+- **ONE OPERATING POINT IS AN OBSERVATION, NEVER A MECHANISM.** The session's defining failure. Four
+  claims were measured honestly at one load and written up as mechanisms/universals: *"a write above
+  `PIPE_BUF` is not atomic"* (the boundary is the tool's **own** buffer and the **write COUNT** —
+  7,532 B in ONE write spliced **0/20**, far above 4096; so the lever is **`-n`**), *"`-f gcc` —
+  20/20 garbled, do not re-try"* (**0/20** at 7.5 KB/inv; load-dependent), and *"below the 64 KB pipe
+  buffer SIGPIPE cannot occur"* (a **continuous gradient**: 8 KB 2.0%, 20 KB 5.5%, 32 KB 8.0% — **no
+  safe floor**). ⚠️ **Two of them were fully annotated with byte sizes and still wrong** — the defect
+  lives in the *mechanism sentence*, not the ratio. Full rule + the refuted gates:
+  `rules/common/testing.md`.
+- **DO NOT build a gate for that class.** Three were implemented and measured against the real
+  corpus: 89% false-RED with **discrimination INVERTED** (more flags on the *corrected* text than the
+  defective one); 100% FP with **zero** discrimination; and a data-loss-command list that is
+  **identical to the prescribed-recipe list**. Recorded refuted so nobody rebuilds them.
+- **A positive control can test the wrong INVOCATION MODE.** The fold control fed its fixture through
+  **stdin** while the scan loop passes a **file argument**; dropping `"$@"` from `_fold` made it read
+  the heredoc holding the FILE LIST, and the gate reported `OK — scanned 1 script(s), 125 lines`
+  (it counted *filenames*) with all four controls green and a planted violation missed.
+- **That control took three attempts, each failing differently:** a regex-only assertion is
+  decorative (`[^|]*` matches newlines, so an unjoined fixture passes); a 2-line fixture cannot tell
+  "joins one" from "joins all"; and the stdin/file-argument split above. It now catches four rots.
+- **`-P $(nproc)` is WORSE than `-P 8`** on a many-core box — 9.9s vs 6.5s and ~4.2× the CPU
+  (`make ci` user-CPU fell 236s → 86s once capped). `nproc` also reports HOST cores under `--cpus`.
+- **The auto-commit cron swept my edits TWICE**, and both times the edits were **committed on a
+  branch**, not lost — `git log --stat` on your branch before re-applying anything. Commit after each
+  coherent edit rather than batching.
+- **A background adversary delivered NOTHING until chased**; a `SendMessage` demanding the structured
+  verdict retrieved a full report each time. An undelivered agent is an action item, not a status.
 
-### Two carried unknowns — name them, do not let them become assumptions
+### Carried unknowns — name them, do not let them become assumptions
 
-1. **`.env.example`'s new Renovate tracking is proven by EXTRACTION, not by a bump.** Renovate
-   resolves it (`currentValue=nonroot` + `currentDigest`, no `skipReason`) and the `images.txt`
-   half demonstrably bumped — but this session's `.env.example` edit came from the alignment gate,
-   not from Renovate rewriting it. The next distroless digest proves the write path. Same for
-   `GOLANG_BUILD_TAG`, newly annotated and never yet exercised.
-2. ~~**`lint` at 37s is now the largest single item in `static-check`**~~ — **MEASURED AND RESOLVED
-   2026-07-21, and the guessed cause was wrong.** Ablated: shellcheck **37.3s of 38.5s (97%)**,
-   hadolint ×9 **176ms**, yamllint **120ms** — so it was never the per-Dockerfile hadolint loop
-   (only 9 files). shellcheck was already batched through one `xargs`; it is simply CPU-bound,
-   because `-x` re-parses `lib/os.sh` for each of 126 scripts. Now fanned across cores → **10.3s**.
-   ⚠️ The parallel run writes to `/dev/null` and a failure triggers a **serial re-run** for the
-   report, because `xargs -P` shares one stdout and a report taking MORE THAN ONE `write()`
-   interleaves mid-line — i.e. it garbles exactly when the gate fires. ⚠️ **CORRECTED 2026-07-21:
-   this entry first blamed `PIPE_BUF` and declared `-f gcc` refuted; both were measurements at ONE
-   load written up as a mechanism and a universal.** `strace -e trace=write`: 7,532 B in **one**
-   write → **0/20** spliced (far ABOVE PIPE_BUF's 4096); 12,644 B in **two** writes (8192+4452) →
-   20/20; ~38 KB in five → 20/20. GHC block-buffers at **8192**, so the real lever is **`-n`**
-   (`-n 1` gave 0/20 at the same `-P 8`). `stdbuf -oL` IS a no-op (identical write pattern with and
-   without it). **`-f gcc` is NOT refuted** — it shrinks output ~40%, which helps only if that drops
-   the invocation under the buffer (0/20 at 7.5 KB/inv, 20/20 at ~38 KB). The serial re-run stays
-   because it is load-independent. See `rules/common/testing.md` "ONE OPERATING POINT IS AN
-   OBSERVATION, NEVER A MECHANISM".
+1. **`.env.example`'s Renovate tracking is proven by EXTRACTION, not by a bump** (unchanged from
+   session 7). Renovate resolves it (`currentValue=nonroot` + `currentDigest`, no `skipReason`) and
+   the `images.txt` half demonstrably bumped, but no bump has yet rewritten `.env.example` itself.
+   The next distroless digest proves the write path. Same for `GOLANG_BUILD_TAG`.
+2. **The fold's behaviour under toybox/BusyBox `sed`** (bare Photon) is unverified — exposure is low
+   since `static-check` is the internet/CI side. Settle with:
+   `docker run --rm -v <repo>:/r photon:5.0 sh -c 'cd /r && ./scripts/check-grep-q-pipe.sh'`.
+3. **The "data with NO newlines is immune at ANY size" claim is GNU-grep-3.11-specific.** The agent
+   harness's `grep` may resolve to **ugrep**, which was never tested. Substitute the real binary into
+   the same loop to settle it.
+4. **The corpus sweep for unscoped measurements covered `rules/` + `agents/` only.** `commands/`,
+   `hooks/` and `reference/` were checked for *these* claims (clean) but not audited for the general
+   defect class.
 
 ### Next — all of it needs a lab
 
