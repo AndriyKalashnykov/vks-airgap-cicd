@@ -529,83 +529,66 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-07-22 (session 9) — READ, THEN REPLACE (do not append)
+## ▶️ HANDOFF 2026-07-22 (session 10) — READ, THEN REPLACE (do not append)
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog
-(now [`BACKLOG.md`](BACKLOG.md), no longer inline). History → git. Only "what is in flight and what
-to distrust" belongs here.
+([`BACKLOG.md`](BACKLOG.md)). History → git. Only "what is in flight and what to distrust" belongs here.
 
-> 🔴 **NO BUILD-STATUS CLAIMS IN THIS SECTION** — see the session-8 wording, unchanged in intent: a
-> task-status claim here is TRUE when written and FALSIFIED by the next commit. Write the STATE.
+> 🔴 **NO BUILD-STATUS CLAIMS IN THIS SECTION.** A task status is true when written and falsified by
+> the next commit. Write the STATE. Query anything that moves.
 
-**State: `main` clean in every repo touched, nothing unpushed, no parked agents, no worktrees.**
-Written as the LAST act.
+**State: `main` clean, nothing unpushed, no worktrees, no parked agents. PR #400 merged, post-merge
+CI green.** Written as the LAST act.
 
-### This session was about the RULES CORPUS, not this repo's product
+### What this session did
 
-Almost all of it landed in `claude-config`. What touched **this** repo: `CLAUDE.md` shrank
-by ~85 KB — the backlog moved to `BACKLOG.md` (`wc -c CLAUDE.md` for the current size; an
-absolute here rots the moment anyone edits this file, which is what happened twice on the day it
-was written) — and one measurably-false claim was
-corrected. Nothing about the air-gap product changed.
+Documented `NiranEC77/lab-automation` — a different automation of the SAME VCF/VKS lab (Terraform +
+PowerCLI + Carvel, vs our shell + helm + crane) — in [`docs/lab-automation.md`](docs/lab-automation.md),
+and corrected four of our own claims that reading it exposed. The survey was the ask; the corrections
+turned out to be worth more.
 
 ### 🔴 Distrust these — measured, not reasoned
 
-- **Subagents DO inherit the full rules corpus.** `CLAUDE.md` said the opposite for months. Proof:
-  the corpus is **~232k tokens** (re-measure: `tiktoken` over `rules/common/*.md`; it grows) and a
-  `claude-code-guide` subagent died at **~315,296 tokens with
-  ~936 tokens of conversation** — it cannot reach that without the corpus. Consequence: a subagent
-  on a **200k-window model cannot start at all**; the 8 roster adversaries work only because each
-  declares `model: opus`, and built-ins cannot be given a model.
-- **A subagent's system-prompt copy of a file can be STALE while a mid-run injection delivers the
-  NEWER one** — two contradicting copies in one context, observed twice. If an agent cites a rule
-  that contradicts the file in front of you, suspect the snapshot before "fixing" the file.
-- **Rules load by `paths:` frontmatter, and the mechanism is TWO-LAYERED**: the repo `CLAUDE.md`
-  rides along on the **first** `Read` of a session whatever the file type; `rules/<domain>/**` fires
-  only on a path match and delivers the **whole directory**. Both deduplicate. Recorded in
-  `hooks.md`. Still NOT established: whether `Edit`/`Grep` also trigger it, and whether the key is
-  the extension or a path prefix.
-- **My token figures were ~33% too high all session** until measured. Real ratio is **3.87 B/token**
-  (tiktoken), not the 2.9 I inferred from one failure trace. Byte counts were right throughout.
-- **A green adversary report is not a measured one.** Three adversaries this session were DENIED
-  `bash` and measured nothing; two had a shell and produced the decisive findings. Read their Step-0
-  disclosure before believing a number.
+- **A `--username` + `--type kubernetes` pairing now ships on the DEFAULT `vcf` login path and is
+  NOT lab-verified.** What IS verified (real 9.1 Supervisor, 2026-07-22): a POSITIONAL context name,
+  a BARE endpoint with no scheme, `--auth-type basic`, `--insecure-skip-tls-verify`, and that
+  `vcf context use <ctx>:<ns>` alone yields a working `kubectl`. The two extra flags come from a
+  third-party script. `30-vks-login.sh` prints the known-good minimal form as a fallback if the CLI
+  rejects either. **This is the most likely thing to bite on a real lab.**
+- **`vcf cluster kubeconfig get` is NOT on the path to Supervisor-namespace `kubectl`** — it is the
+  GUEST-cluster step. Our docs implied otherwise until now.
+- **Nothing in that other stack is evidence about PSA `restricted`** — it deactivates Pod Security
+  Admission on the guest cluster outright.
+- **`istioCNI.enabled` DEFAULTS TO `true`**, so the CNI DaemonSet ships on a sidecar install too.
+  This softens **B26** (no `istio-init` ⇒ no `NET_ADMIN` ask; residual narrows to `seccompProfile`) —
+  but that softening is INFERRED from the documented default, not measured. Step 13 of the lab plan
+  now checks it.
+- **A real VKS mesh may run a second (egress) gateway**, which makes `make attach-istio` fail loudly
+  on ambiguity by design. `gateways.egress.enabled` defaults `false`, so this is a mesh-admin choice,
+  not a universal. Whether VMware's egress template exposes 15021 is **unsettled** — one `kubectl`.
 
-### What is now GATED in claude-config (it will bind on you)
+### What the adversary rounds caught that gates did not
 
-`rules/common` is **ratcheted at 905,706 B with ZERO headroom** (`tests/check-rules-budget.py`).
-Your next addition there **will fail `run-tests`**. That is the design: collapse something, or route
-it to `rules/<domain>/` with `paths:` frontmatter. **A CORRECTION is a legitimate reason to raise the
-ceiling** — never delete a correction to stay green; the gate says so in its own docstring.
+Three rounds ran (two idea, one implementation). The implementation round had a **shell**, so it
+measured rather than inferred, and it found the one that mattered: `make env-check` would have
+hard-failed on a correctly-configured lab `.env`, and the operator's obvious remedy would have
+**permanently disabled** the namespace discovery this session added. That branch had zero test
+coverage. Separately, `check-env-clobber` was **vacuous** for both new variables while two comments
+claimed it covered them — its detector matched only `${VAR:-$(…)}`, not the guard-then-assign form.
+Both are fixed and RED-proven; the gate now has the missing detector.
 
-### Open, and NOT mine
-
-**A CONCURRENT SESSION is working in `threeport-rest-api`.** It has its own branch checked out, its
-own dirty tree, and it opens and merges its own PRs on a timescale of minutes. I used a `git
-worktree` there so I never touched its HEAD, and **the local sync after merging was deliberately
-SKIPPED** — `git checkout main` / `reset --hard` against a dirty tree belonging to someone else
-destroys their uncommitted work. Do the same. **Query its open PRs live; do not trust any list.**
-
-Renovate PRs churn in every repo. Query, don't enumerate.
-
-⚠️ **This subsection previously listed a specific PR as "CLEAN and unmerged" and asked someone to
-merge it. It merged four minutes later, and the claim was false for the rest of the handoff's life
-— in the very section whose own rule at the top says NO BUILD-STATUS CLAIMS.** That is the rule
-being violated by the person who wrote it, one screen below writing it. The failure is structural,
-not careless: **a PR number with a state attached is a task status**, and task statuses are true
-when written and false shortly after. Name the *situation* that persists (a concurrent session is
-active here) and let the reader query the state that does not.
+**Process note worth keeping:** an idea-round adversary refuted a proposal to install Istio as the
+VKS Carvel package as a fourth ingress mode — recorded with its reasoning in
+[`docs/decisions/istio-via-vks-package.md`](docs/decisions/istio-via-vks-package.md) so nobody
+rebuilds it. The VMware way for Scenario 1 is the vendor's own `vcf package install`, after which
+our existing `istio-existing` attach handles it. Zero new code.
 
 ### Next
 
-Unchanged from session 8 — every open row needs a lab. See [`BACKLOG.md`](BACKLOG.md); **B2**,
-**B24** and the PSA row are each one command on a guest cluster.
-
-The corpus work has two remaining options, both deliberately NOT taken: relocating mechanism rules
-to gated siblings (viable — a probe cleared it — but buys ~9 days and still will not let a 200k
-subagent start), and a tiered heading-index (the only thing that gets under 200k, and the one both
-adversaries called an act of faith with a silent failure mode). The ratchet removed the deadline, so
-neither is urgent.
+Every open row still needs a lab. See [`BACKLOG.md`](BACKLOG.md). The highest-value single command
+is now step 13 of [`docs/lab-validation-plan.md`](docs/lab-validation-plan.md): list Services with
+port 15021 and an `istio` selector key — it settles the egress-ambiguity risk, and it is the only
+open item that changes shipping-code behaviour.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
