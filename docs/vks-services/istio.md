@@ -22,7 +22,9 @@
 | Install (VCF 9 addon CLI) | `vcf addon install create istio --cluster-name $VKS_CLUSTER -y` · update: `vcf addon install update istio --cluster-name $VKS_CLUSTER -f values.yaml` | community (VMware VCF blog, 2025-03, VKS 3.5) [src: url=https://blogs.vmware.com/cloud-foundation/2025/03/06/istio-on-vsphere-kubernetes-service-vks-a-walkthrough/ date=2026-07-15 quote="vcf addon install create istio --cluster-name $VKS_CLUSTER -y"] |
 | Control-plane namespace | `istio-system` (configurable) | 9.0-doc [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/standard-package-reference/istio-package-reference.html date=2026-07-15 quote="The namespace in which to install Istio. It is also the root namespace in the mesh."] |
 | **Ingress gateway** | **DISABLED by default** (`istio.gateways.ingress.enabled: false`); namespace `istio-ingress` when enabled | 9.0-doc [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/standard-package-reference/istio-package-reference.html date=2026-07-15 quote="It is auto deployed if istio.gateways.ingress.enabled is true in the data values, the default value is false."] |
-| Data plane | **sidecar** by default; **ambient** supported (needs `istioCNI.enabled: true`) | 9.0-doc (ambient half cited; sidecar-default is inferred) [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/standard-package-reference/istio-package-reference.html date=2026-07-15 quote="A DaemonSet to power Istio's ambient data plane mode, which is responsible for securely connecting and authenticating workloads within the mesh."] |
+| Data plane | **sidecar** by default; **ambient** supported (requires `istioCNI.enabled`) | 9.0-doc (ambient half cited; sidecar-default is inferred) [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/standard-package-reference/istio-package-reference.html date=2026-07-15 quote="A DaemonSet to power Istio's ambient data plane mode, which is responsible for securely connecting and authenticating workloads within the mesh."] |
+| **`istio.istioCNI.enabled`** | **defaults to `true`** — so the `istio-cni-node` DaemonSet ships on a **sidecar** install too, not only in ambient mode. Do **not** read CNI as an ambient-only opt-in | 9.0-doc (inferred for 9.1) [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/standard-package-reference/istio-package-reference.html date=2026-07-22 quote="The flag to install istio-cni or not. DaemonSet istio-cni-node is deployed if it is true. It must be true if ambient mode is enabled."] |
+| **`istio.gateways.egress.enabled`** | **defaults to `false`** — but a mesh admin may enable it, giving the cluster a **SECOND** gateway in `istio-egress`. See the attach-discovery warning below | 9.0-doc (inferred for 9.1) [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/standard-package-reference/istio-package-reference.html date=2026-07-22 quote="The flag to install Istio gateway static component."] |
 | Air-gap / private registry | a Secret with registry credentials named in `istio.meshConfig.imagePullSecrets` | 9.0-doc [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/standard-package-reference/istio-package-reference.html date=2026-07-15 quote="Enabling Istio sidecar or gateway injection requires a Secret with registry credential in the application's namespace, and its name must be specified in istio.meshConfig.imagePullSecrets."] |
 | **Route API Broadcom demonstrates** | the **Kubernetes Gateway API** (`gatewayClassName: istio`) → auto-provisioned Service `<gateway-name>-istio`, type LoadBalancer, **in the app's own namespace** | community (VMware VCF blog) [src: url=https://blogs.vmware.com/cloud-foundation/2025/03/06/istio-on-vsphere-kubernetes-service-vks-a-walkthrough/ date=2026-07-15 quote="gatewayClassName: istio"] |
 
@@ -72,6 +74,19 @@ did not install — and **the API server accepts it without any error**. (KinD-v
 
 Nothing validates that a Gateway's selector matches a real workload. That is why discovery — not
 documentation — is the mechanism.
+
+**A third outcome, and this one is LOUD by design: two gateways.** `istio.gateways.egress.enabled`
+defaults to `false`, but a mesh admin may turn it on — a real VKS values file in the wild does
+exactly that, putting an egress gateway in `istio-egress` alongside the ingress one. If that
+egress Service also exposes **15021** with an `istio` selector key, discovery finds **two**
+candidates and `make attach-istio` **refuses to guess**: it fails, prints both, and tells you
+which two variables to pin [src: code:scripts/lib/istio.sh:85-89]. That is correct behaviour, not
+a bug — but it is a failure an operator on a mesh they did not install can hit on the first run,
+so expect it and set `ISTIO_GATEWAY_NAMESPACE` + `ISTIO_GATEWAY_SERVICE`.
+
+Whether VMware's egress template actually exposes 15021 is **NOT-ESTABLISHED** — it is one
+`kubectl` away on a real cluster and is tracked in
+[the lab validation plan](../lab-validation-plan.md).
 
 ### 4. Attach: prefer the Gateway API
 
@@ -281,6 +296,24 @@ merely being `Accepted`.
 namespace `topology.istio.io/network=vks-ist02-net`. Cluster 1's must be `vks-ist01-net` — its own
 prose says the network must be unique "or you will not get cross-cluster traffic". It is a
 copy-paste slip, and copying it breaks the very thing the article teaches.
+
+### A third, independent corroboration — a GitOps-driven package install (2026-07-22)
+
+A separate automation of this same lab family installs the package **declaratively through Argo
+CD** rather than with `vcf package install`. It is third-party (not Broadcom), so it is graded
+`community` — but it corroborates the package name and the repository namespace from a direction
+neither walkthrough covers, and it exposes the values schema of a mesh we might attach to. Full
+context in [lab-automation.md](../lab-automation.md); the question of whether *we* should install
+this way is settled in [the decision record](../decisions/istio-via-vks-package.md) (**rejected**).
+
+| Fact | Value | Confidence |
+|---|---|---|
+| The package installs via a Carvel `PackageInstall` CR | `vcf package install` is a CLI wrapper over kapp-controller; the CR can be driven by Argo CD | community [src: url=https://github.com/warroyo/vks-argocd-examples/blob/main/istio/source/istio.yml date=2026-07-22 quote="refName: istio.kubernetes.vmware.com"] |
+| A **`-vks.2`** build exists | `1.25.3+vmware.1-vks.2` — our Versions row records `-vks.1`. The `+vmware.N-vks.M` suffix increments on no published schedule, so treat any recorded string as an example | community [src: url=https://github.com/warroyo/vks-argocd-examples/blob/main/istio/source/istio.yml date=2026-07-22 quote="constraints: 1.25.3+vmware.1-vks.2"] |
+| A **third** `PackageRepository` URL shape | structurally unlike the one recorded above — different path segments, not just a different version. **Read the URL off the lab; never copy one** | community [src: url=https://github.com/warroyo/vks-argocd-examples/blob/main/vks-standard-repo/source/repo.yml date=2026-07-22 quote="projects.packages.broadcom.com/vsphere/supervisor/packages/2025.8.19/vks-standard-packages:v2025.8.19"] |
+| Repository namespace confirmed | `tkg-system`, matching the `vcf package repository add … -n tkg-system` row above | community [src: url=https://github.com/warroyo/vks-argocd-examples/blob/main/vks-standard-repo/source/repo.yml date=2026-07-22 quote="namespace: tkg-system"] |
+| Installing the package needs **cluster-admin-equivalent** RBAC | their install ServiceAccount holds a cluster-wide all-verbs ClusterRole. Istio's resources are cluster-scoped (CRDs, ClusterRoles, webhooks, namespaces, the CNI DaemonSet), so no namespace-scoped ServiceAccount suffices — **a tenant cannot install this package** | community [src: url=https://github.com/warroyo/vks-argocd-examples/blob/main/package-rbac/source/rbac.yml date=2026-07-22 quote="name: carvel-sa-cluster-role"] |
+| ⚠️ That mesh runs with **PSA switched off** | its cluster topology sets the guest cluster's Pod Security Standard to deactivated, so **nothing about that deployment is evidence for our `restricted`/`baseline` question** | community [src: url=https://github.com/warroyo/vcfa-terraform-examples/blob/main/modules/vks-cluster/main.tf date=2026-07-22 quote="podSecurityStandard"] |
 
 ## Open / unverified
 

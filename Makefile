@@ -727,7 +727,11 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership ## Run all offline script-logic unit tests
+
+.PHONY: test-vks-discover-namespace
+test-vks-discover-namespace: ## Offline: VKS_NAMESPACE discovery resolves the single case and REFUSES to guess when ambiguous (no head -1)
+	@./scripts/test-vks-discover-namespace.sh
 
 # NOTE: subagent-readonly + no-gate-in-commit-chain hooks (and their tests) are now GLOBAL
 # (~/projects/claude-config, installed into ~/.claude); this repo keeps only the project-local

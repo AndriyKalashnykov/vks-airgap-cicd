@@ -35,18 +35,32 @@ VKS_CONTEXT_NAME=sup66                    # the vcf context NAME you type at the
 VKS_INSECURE_SKIP_TLS_VERIFY=true         # skip verifying the Supervisor's self-signed cert
 ```
 
-`make vks-login` then runs (interactively — the CLI **prompts** for the context name and the
-password, so no secret ever touches argv):
+`make vks-login` then runs (the context NAME is **positional**; the CLI prompts for the
+**password**, so no secret ever touches argv):
 
 ```bash
-vcf context create --endpoint https://<SUPERVISOR_HOST> --username <user>@<SSO-DOMAIN> \
-    --insecure-skip-tls-verify --auth-type basic     # enter the context name (VKS_CONTEXT_NAME) + password when prompted
+vcf context create <VKS_CONTEXT_NAME> --endpoint <SUPERVISOR_HOST> \
+    --insecure-skip-tls-verify --auth-type basic     # bare host, NO scheme; password prompted
 vcf context use <VKS_CONTEXT_NAME>:<VKS_NAMESPACE>   # note the <ctx>:<ns> COLON form
-vcf cluster kubeconfig get <VKS_CLUSTER_NAME> --export-file <KUBECONFIG>   # write the workload-cluster kubeconfig to $KUBECONFIG
+vcf cluster kubeconfig get <VKS_CLUSTER_NAME> --export-file <KUBECONFIG>   # GUEST cluster only — see below
 ```
 
-`vcf cluster kubeconfig get` is the **primary** VKS 9 way to obtain the **workload-cluster**
-kubeconfig (verify the exact 9.1 flags on your lab). The legacy `kubectl vsphere login --server
+**Lab-verified 2026-07-22** on a real VCF 9.1 Supervisor (`10.1.8.132`). The first two commands
+were run exactly as above and worked; `--username` was **omitted** and login still succeeded, so
+it is optional when the CLI can resolve the user interactively:
+
+```bash
+vcf context create sup --endpoint 10.1.8.132 --insecure-skip-tls-verify --auth-type basic
+vcf context use sup:<vsphere-namespace>
+kubectl get nodes          # worked immediately — no `vcf cluster kubeconfig get` needed
+```
+
+**`vcf context use` alone produces a working kubectl context.** The third command,
+`vcf cluster kubeconfig get`, is therefore **not** on the path to Supervisor-namespace access —
+it is how you obtain the **guest/workload** cluster's kubeconfig, which is what
+`VKS_AUTH_METHOD=vcf` ultimately wants. Do not read it as a prerequisite for `kubectl` to work.
+
+The legacy `kubectl vsphere login --server
 <ip> --vsphere-username <u> --tanzu-kubernetes-cluster-name <c> --tanzu-kubernetes-cluster-namespace
 <ns> [--insecure-skip-tls-verify]` form (the `vsphere` method) is the **vSphere-with-Tanzu 7/8
 fallback** — present only where the `vcf` CLI is unavailable.
@@ -57,13 +71,25 @@ If the workload cluster needs the kubectl-vsphere plugin, fetch it from the Supe
 wget --no-check-certificate https://<SUPERVISOR_HOST>/wcp/plugin/linux-amd64/vsphere-plugin.zip
 ```
 
-> **Not yet lab-validated.** The `vcf` flow is written to the command **shape** verified from
-> primary sources (the ogelbric/LAB VCF-CLI transcript and Broadcom's "Install the Argo CD
-> Service" techdoc), but it has **not** been run end-to-end against a VKS cluster in this repo.
-> The login is interactive today: no non-interactive/stdin password mechanism is confirmed for
-> `vcf context create`, so `30-vks-login.sh` carries a `TODO(verify on a VKS cluster)` to
-> confirm one before automating further. A password is never placed on argv either way.
-> `kubeconfig` (bring the lab's exported kubeconfig) is the simplest working method.
+> **Validation status — partial (2026-07-22).**
+>
+> **Verified on a real VCF 9.1 Supervisor:** `vcf context create <name> --endpoint <bare-host>
+> --insecure-skip-tls-verify --auth-type basic`, then `vcf context use <ctx>:<ns>`, then a
+> working `kubectl`. Positional context name, no scheme on the endpoint, `--username` optional.
+> Independently corroborated by a second automation of the same lab — see
+> [lab-automation](lab-automation.md) §3.2.
+>
+> **Still unverified:** `vcf cluster kubeconfig get <cluster> --export-file …` (the guest-cluster
+> half) has not been run here; and it is **not established** whether the `kubectl` reached above
+> was the Supervisor or a guest cluster, nor under which account — which matters, because
+> Scenario 2 is about what a *tenant* may do and listing nodes usually is not. Settle both with
+> `kubectl config current-context` on the next lab visit; tracked in
+> [the lab validation plan](lab-validation-plan.md).
+>
+> The login remains interactive for the password — no non-interactive/stdin mechanism is confirmed
+> for `vcf context create`, so `30-vks-login.sh` still carries its `TODO(verify on a VKS
+> cluster)`. A password never reaches argv either way. `kubeconfig` (bring the lab's exported
+> kubeconfig) remains the simplest working method.
 
 ---
 
