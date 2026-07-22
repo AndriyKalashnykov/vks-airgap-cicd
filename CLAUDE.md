@@ -529,92 +529,69 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-07-22 (session 8) — READ, THEN REPLACE (do not append)
+## ▶️ HANDOFF 2026-07-22 (session 9) — READ, THEN REPLACE (do not append)
 
-**ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog.
-History → git. Only "what is in flight and what to distrust" belongs here.
+**ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog
+(now [`BACKLOG.md`](BACKLOG.md), no longer inline). History → git. Only "what is in flight and what
+to distrust" belongs here.
 
-> 🔴 **NO BUILD-STATUS CLAIMS IN THIS SECTION — "unbuilt", "not yet done", "no code change made".**
-> That is a **task** status, and the line above already says tasks go to the **Backlog**. It matters
-> because such a claim is TRUE when written and FALSIFIED by a later commit: this section once said a
-> fix was *"Unbuilt"* and the very next PR built it, so the handoff asserted the opposite of the code
-> beside it. **No commit-time gate can catch that** (four were implemented and measured — see
-> `scripts/handoff-status.sh`), and a backlog row would have been updated by the work itself. Write
-> the STATE you are handing over, never the status of a task.
+> 🔴 **NO BUILD-STATUS CLAIMS IN THIS SECTION** — see the session-8 wording, unchanged in intent: a
+> task-status claim here is TRUE when written and FALSIFIED by the next commit. Write the STATE.
 
-**State: `main` green and clean in BOTH repos, zero open PRs, no branches, no worktrees, no parked
-agents, no out-of-repo residue.** Written as the LAST act.
+**State: `main` clean in every repo touched, nothing unpushed, no parked agents, no worktrees.**
+Written as the LAST act.
 
-### Run this first
+### This session was about the RULES CORPUS, not this repo's product
 
-`make handoff-status`. It never gates. Its COUNT is not a signal; the list is for reading against
-the claims below.
+Almost all of it landed in `claude-config`. What touched **this** repo: `CLAUDE.md` shrank
+139,688 → 55,133 B (the backlog moved to `BACKLOG.md`), and one measurably-false claim was
+corrected. Nothing about the air-gap product changed.
 
-### What shipped
+### 🔴 Distrust these — measured, not reasoned
 
-⚠️ **No PR COUNT here, deliberately — a count in a handoff is self-falsifying**: the handoff's own
-merge, and any fix to it, each increment the number it states. (Same defect as pinning a line count
-in a gate whose corpus contains itself. `git log <prev-handoff-sha>..main` is the enumeration.)
+- **Subagents DO inherit the full rules corpus.** `CLAUDE.md` said the opposite for months. Proof:
+  the corpus is 232,152 tokens and a `claude-code-guide` subagent died at **~315,296 tokens with
+  ~936 tokens of conversation** — it cannot reach that without the corpus. Consequence: a subagent
+  on a **200k-window model cannot start at all**; the 8 roster adversaries work only because each
+  declares `model: opus`, and built-ins cannot be given a model.
+- **A subagent's system-prompt copy of a file can be STALE while a mid-run injection delivers the
+  NEWER one** — two contradicting copies in one context, observed twice. If an agent cites a rule
+  that contradicts the file in front of you, suspect the snapshot before "fixing" the file.
+- **Rules load by `paths:` frontmatter, and the mechanism is TWO-LAYERED**: the repo `CLAUDE.md`
+  rides along on the **first** `Read` of a session whatever the file type; `rules/<domain>/**` fires
+  only on a path match and delivers the **whole directory**. Both deduplicate. Recorded in
+  `hooks.md`. Still NOT established: whether `Edit`/`Grep` also trigger it, and whether the key is
+  the extension or a path prefix.
+- **My token figures were ~33% too high all session** until measured. Real ratio is **3.87 B/token**
+  (tiktoken), not the 2.9 I inferred from one failure trace. Byte counts were right throughout.
+- **A green adversary report is not a measured one.** Three adversaries this session were DENIED
+  `bash` and measured nothing; two had a shell and produced the decisive findings. Read their Step-0
+  disclosure before believing a number.
 
-By substance: **#388** refuted backlog B53 (`check-grep-q-pipe` is NOT STARVABLE) and took
-`static-check` 77s → 53s; **#389** corrected the splice mechanism in `lint.sh` **and** in this file.
-In `claude-config`: **#85** (four measured lessons) and **#86** (correcting three claims #85 got
-wrong, plus the reflex now in all 7 adversary briefs).
+### What is now GATED in claude-config (it will bind on you)
 
-### 🔴 Distrust these — measured this session, not reasoned
+`rules/common` is **ratcheted at 905,706 B with ZERO headroom** (`tests/check-rules-budget.py`).
+Your next addition there **will fail `run-tests`**. That is the design: collapse something, or route
+it to `rules/<domain>/` with `paths:` frontmatter. **A CORRECTION is a legitimate reason to raise the
+ceiling** — never delete a correction to stay green; the gate says so in its own docstring.
 
-- **ONE OPERATING POINT IS AN OBSERVATION, NEVER A MECHANISM.** The session's defining failure. Four
-  claims were measured honestly at one load and written up as mechanisms/universals: *"a write above
-  `PIPE_BUF` is not atomic"* (the boundary is the tool's **own** buffer and the **write COUNT** —
-  7,532 B in ONE write spliced **0/20**, far above 4096; so the lever is **`-n`**), *"`-f gcc` —
-  20/20 garbled, do not re-try"* (**0/20** at 7.5 KB/inv; load-dependent), and *"below the 64 KB pipe
-  buffer SIGPIPE cannot occur"* (a **continuous gradient**: 8 KB 2.0%, 20 KB 5.5%, 32 KB 8.0% — **no
-  safe floor**). ⚠️ **Two of them were fully annotated with byte sizes and still wrong** — the defect
-  lives in the *mechanism sentence*, not the ratio. Full rule + the refuted gates:
-  `rules/common/testing.md`.
-- **DO NOT build a gate for that class.** Three were implemented and measured against the real
-  corpus: 89% false-RED with **discrimination INVERTED** (more flags on the *corrected* text than the
-  defective one); 100% FP with **zero** discrimination; and a data-loss-command list that is
-  **identical to the prescribed-recipe list**. Recorded refuted so nobody rebuilds them.
-- **A positive control can test the wrong INVOCATION MODE.** The fold control fed its fixture through
-  **stdin** while the scan loop passes a **file argument**; dropping `"$@"` from `_fold` made it read
-  the heredoc holding the FILE LIST, and the gate reported `OK — scanned 1 script(s), 125 lines`
-  (it counted *filenames*) with all four controls green and a planted violation missed.
-- **That control took three attempts, each failing differently:** a regex-only assertion is
-  decorative (`[^|]*` matches newlines, so an unjoined fixture passes); a 2-line fixture cannot tell
-  "joins one" from "joins all"; and the stdin/file-argument split above. It now catches four rots.
-- **`-P $(nproc)` is WORSE than `-P 8`** on a many-core box — 9.9s vs 6.5s and ~4.2× the CPU
-  (`make ci` user-CPU fell 236s → 86s once capped). `nproc` also reports HOST cores under `--cpus`.
-- **The auto-commit cron swept my edits TWICE**, and both times the edits were **committed on a
-  branch**, not lost — `git log --stat` on your branch before re-applying anything. Commit after each
-  coherent edit rather than batching.
-- **A background adversary delivered NOTHING until chased**; a `SendMessage` demanding the structured
-  verdict retrieved a full report each time. An undelivered agent is an action item, not a status.
+### Open, and NOT mine
 
-### Carried unknowns — name them, do not let them become assumptions
+- `threeport-rest-api` **PR #216** (mermaid-lint removal) — created by a **concurrent session** at
+  10:10 today, **CLEAN and unmerged**. Its branch is still checked out there. I used a worktree so I
+  never touched it. Someone should merge or close it.
+- Renovate PRs in this repo (#393, #395) and in `go-face-recognition` (#129, #130).
 
-1. **`.env.example`'s Renovate tracking is proven by EXTRACTION, not by a bump** (unchanged from
-   session 7). Renovate resolves it (`currentValue=nonroot` + `currentDigest`, no `skipReason`) and
-   the `images.txt` half demonstrably bumped, but no bump has yet rewritten `.env.example` itself.
-   The next distroless digest proves the write path. Same for `GOLANG_BUILD_TAG`.
-2. **The fold's behaviour under toybox/BusyBox `sed`** (bare Photon) is unverified — exposure is low
-   since `static-check` is the internet/CI side. Settle with:
-   `docker run --rm -v <repo>:/r photon:5.0 sh -c 'cd /r && ./scripts/check-grep-q-pipe.sh'`.
-3. **The "data with NO newlines is immune at ANY size" claim is GNU-grep-3.11-specific.** The agent
-   harness's `grep` may resolve to **ugrep**, which was never tested. Substitute the real binary into
-   the same loop to settle it.
-4. **The corpus sweep for unscoped measurements covered `rules/` + `agents/` only.** `commands/`,
-   `hooks/` and `reference/` were checked for *these* claims (clean) but not audited for the general
-   defect class.
+### Next
 
-### Next — all of it needs a lab
+Unchanged from session 8 — every open row needs a lab. See [`BACKLOG.md`](BACKLOG.md); **B2**,
+**B24** and the PSA row are each one command on a guest cluster.
 
-| row | the one command |
-|---|---|
-| **B2** | `kubectl get crd gateways.gateway.networking.k8s.io -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}'` + the add-on label |
-| **B24** | `kubectl get secret cacerts -n istio-system -o jsonpath='{.data}'` — cert-manager keys vs upstream's four |
-| **B24 / PSA** | `make psa-check` on a guest cluster — the gateway-namespace minimum |
-| **B38** | open **BY DESIGN** — a citation-resolving gate goes green on an interpretive error |
+The corpus work has two remaining options, both deliberately NOT taken: relocating mechanism rules
+to gated siblings (viable — a probe cleared it — but buys ~9 days and still will not let a 200k
+subagent start), and a tiered heading-index (the only thing that gets under 200k, and the one both
+adversaries called an act of faith with a silent failure mode). The ratchet removed the deadline, so
+neither is urgent.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
