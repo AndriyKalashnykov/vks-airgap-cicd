@@ -360,7 +360,13 @@ export KUBECONFIG=$PWD/secrets/vks.kubeconfig
 vcf package available list -A 2>&1 | grep -i istio || vcf addon list --cluster-name "$VKS_CLUSTER_NAME" 2>&1 | grep -i istio
 kubectl -n istio-system get deploy istiod -o jsonpath='{.spec.template.spec.containers[0].image}'; echo
 # is there any shared gateway? (a Service on port 15021 with a spec.selector.istio key)
+# COUNT THE LINES. 0 = no shared gateway. 1 = discovery works. **2+ = `make attach-istio` will REFUSE
+# to guess** and demand ISTIO_GATEWAY_NAMESPACE + ISTIO_GATEWAY_SERVICE — see below.
 kubectl get svc -A -o json | jq -r '.items[] | select(any(.spec.ports[]?; .port==15021)) | "\(.metadata.namespace)/\(.metadata.name) selector.istio=\(.spec.selector.istio)"'
+# is the CNI DaemonSet present? (istioCNI.enabled DEFAULTS TO TRUE, so expect YES even for sidecar mode)
+kubectl -n istio-system get ds istio-cni-node 2>&1 | tail -2
+# does this guest cluster even have kapp-controller? (load-bearing for the package-install path)
+kubectl api-resources 2>/dev/null | grep packaging.carvel.dev || echo "NO kapp-controller packaging API"
 # THE QUESTION:
 kubectl get crd | grep gateway.networking.k8s.io
 kubectl get gatewayclass istio -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}'; echo
@@ -368,8 +374,10 @@ make istio-preflight 2>&1 | tee /tmp/13-istio-preflight.log
 ```
 
 **Expect:** most likely **Istio is not installed at all** (it is a package *you* install) — that is a legitimate answer, and it means (b) and (c) cannot be settled until you install it.
-**Send back:** the package/addon listing **with exact name + version strings** · the Gateway-API CRD list · the GatewayClass Accepted status · the 15021 result (**empty = the shared gateway really is off**) · the istio-preflight log.
+**Send back:** the package/addon listing **with exact name + version strings** · the Gateway-API CRD list · the GatewayClass Accepted status · the 15021 result (**empty = the shared gateway really is off**; **two or more lines = the ambiguity case, and we need to know**) · whether `istio-cni-node` exists · whether the carvel packaging API is present · the istio-preflight log.
 
+> **Why the 15021 count matters more than it looks.** `istio.gateways.egress.enabled` defaults to `false`, but a mesh admin can enable it — and a real VKS values file in the wild does. That puts a **second** gateway in `istio-egress`. If its Service also exposes 15021 with an `istio` selector key, our discovery finds two candidates and **fails loudly by design** (`scripts/lib/istio.sh:85-89`) rather than picking one. We do not know whether VMware's egress template exposes 15021; **this one command settles it**, and it is the only item in this plan that changes shipping-code behaviour.
+>
 > **If the Gateway-API CRDs are ABSENT**, the gateway-api path is impossible here — and combined with the shared gateway being off, **a tenant is blocked** and must request a gateway from the mesh admin. That forces a README rewrite. It is the answer we most need.
 
 ### 14. Does `make preflight` actually pass on a real lab? · CHEAP

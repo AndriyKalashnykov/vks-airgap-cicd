@@ -20,6 +20,7 @@
 | Service | `argocd-server` (LoadBalancer, self-signed TLS) | 9.0-doc [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/using-supervisor-services/using-argo-cd-service/install-argo-cd-service.html date=2026-07-15 quote="argocd-server        LoadBalancer   <IP address>"] |
 | **Server version** | a `2.14.x+vmware.1-vks.N` line — the 9.1 Supervisor RN cites Argo CD **v2.14.13** (Argo CD Service 1.0.0). `2.14.15` was only the 9.0 doc's *example*, never lab-observed; read the real pin from the CR (`argocd.spec.version`) | 9.1-RN (v2.14.13); exact pin lab-only [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/release-notes/vmware-vsphere-supervisor-release-notes.html date=2026-07-15 quote="Argo CD Service 1.0.0 supports creating and configuring an Argo CD v2.14.13 instance."] |
 | **CLI version** | the lab's `argocd` binary reported **`v3.0.19+d67e6eb90-vcf`** (a **3.x** line) | lab-verified [src: code:docs/decisions/kind-tls-fidelity.md:227] |
+| **`spec.version` is operator-SELECTABLE, not a constant** | it is the **Carvel package** version, constrained to `X.Y.Z+vmware.W-vks.V`. Broadcom's own API reference uses a **3.x** value as its example, so the field is not bound to the 2.14.x line — **any single value recorded anywhere is an example at a point in time.** Read the pin from the CR on the lab | primary-sourced (Broadcom API reference) [src: url=https://developer.broadcom.com/xapis/argocd-service-api/latest/api-docs.html date=2026-07-22 quote="Version specifies the ArgoCD Carvel Package version to deploy. The version must follow the pattern: X.Y.Z+vmware.W-vks.V"] |
 
 > **CLI ≠ server.** Those last two rows are *different facts* and were confounded once already. A
 > client/server tool's CLI version tells you **nothing** about the server. Verify each against its
@@ -96,6 +97,20 @@ silently flips to `Unknown` later.
 > calling `vcf cluster kubeconfig get` cert-shaped was wrong — and the durable-token Secret we create
 > makes it moot either way.
 > <!-- arc-ok: 2026-07-14 -->
+
+**Three registration shapes are observable in the wild.** A separate automation of this same lab
+family (see [lab-automation.md](../lab-automation.md) §3.4) writes the cluster Secret directly
+from Terraform and shows all three, which is more than this section previously recorded:
+
+| Shape | `server` | Credential | Note |
+|---|---|---|---|
+| **remote guest, mTLS** | the guest API endpoint | `caData`/`certData`/`keyData` lifted from the guest's admin kubeconfig Secret | this is the **expiring** shape #13175 describes — that automation ships it as its default and pairs it with a 15-day cert-rotation window. Our durable-SA-token path exists precisely to avoid it |
+| **remote guest, bearer token** | the guest API endpoint | a token, with TLS verification **off** | the same module's non-default branch |
+| **self-registration** | `https://kubernetes.default.svc.cluster.local:443` | a **legacy** `kubernetes.io/service-account-token` Secret — durable, non-expiring | registers the Argo CD instance's *own* vSphere Namespace as a destination, scoped by a `namespaces` key. Not remote attachment; its `insecure: true` is harmless because the endpoint is the in-cluster loopback |
+
+The third shape is worth knowing because it is easy to mistake for a remote-attach recipe. It is
+not: both ends are the same namespace, and adapting it to a genuine remote cluster would require
+supplying that cluster's CA — the thing the loopback lets it skip.
 
 Creating the `type: kubernetes.io/service-account-token` Secret explicitly means the credential is durable
 **whichever kubeconfig shape the operator supplies** — which is the reason that actually survives.

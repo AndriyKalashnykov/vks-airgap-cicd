@@ -169,6 +169,74 @@ vks_sso_user() {
   esac
 }
 
+# vks_discover_namespace <context-name> — print the vSphere namespace to activate when VKS_NAMESPACE is
+# not set. The vcf CLI exposes ONE context per namespace, named '<ctx>:<namespace>' — lab-verified
+# 2026-07-22 (`vcf context use sup:<namespace>` on a real 9.1 Supervisor).
+#
+# WHY NOT `… | head -1`: another automation of this same lab greps its context list for a HARDCODED
+# namespace and then takes the first match. That silently picks an arbitrary namespace whenever more
+# than one exists — the "pick an arbitrary one" bug coding-style.md records. Here, ambiguity is a HARD
+# STOP that prints every candidate, mirroring istio_discover (lib/istio.sh:85-89): a discovery helper
+# may resolve the unambiguous case, never guess the ambiguous one.
+#
+# Requires a CREATED context, so callers must invoke it AFTER `vcf context create`.
+vks_discover_namespace() {
+  # ${1:-} not $1: under `set -u` a bare $1 dies with "unbound variable" BEFORE the friendly guard
+  # below could ever run, making that guard dead code.
+  local ctx="${1:-}" n ns json names cands="" count=0
+  [ -n "$ctx" ] || die "vks_discover_namespace: no context name given"
+  command -v jq >/dev/null 2>&1 \
+    || die "jq is required to auto-discover VKS_NAMESPACE — install it, or set VKS_NAMESPACE in .env"
+
+  # `|| true`: `vcf context list` exits non-zero when no context exists, and a bare command
+  # substitution failure would kill the caller under `set -e` before the friendly die below.
+  json="$(vcf context list -o json 2>/dev/null || true)"
+  names="$(printf '%s' "$json" | jq -r '.[]?.name // empty' 2>/dev/null || true)"
+
+  # A heredoc fed by an EMPTY expansion still yields one blank line, so skip empties explicitly
+  # (testing.md: "an empty $(…) inside a HEREDOC still yields ONE EMPTY LINE").
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    case "$n" in
+      "${ctx}:"?*) ns="${n#"${ctx}:"}"; cands="${cands}${ns}"$'\n'; count=$((count + 1)) ;;
+    esac
+  done <<EOF
+$names
+EOF
+
+  # DISTINGUISH THE CAUSES. One message for four different failures is a message that names the wrong
+  # one: this runs two lines after `vcf context create` SUCCEEDED, so "no context exists" sends the
+  # operator to `vcf context list` where they will SEE the context and disbelieve the error.
+  if [ -z "$names" ]; then
+    log_error "could not parse any context name out of \`vcf context list -o json\`."
+    log_error "  This is NOT 'no context exists' — the context was just created. Either the CLI"
+    log_error "  emitted something jq could not read, or its JSON shape changed."
+    log_error "  Raw output was: ${json:-<empty>}"
+    die "set VKS_NAMESPACE in .env to skip discovery entirely"
+  fi
+  if [ "$count" -eq 0 ]; then
+    log_error "no context named '${ctx}:<namespace>' among the ones the CLI reported:"
+    while IFS= read -r n; do [ -n "$n" ] && log_error "    ${n}"; done <<EOF
+$names
+EOF
+    log_error "  Namespace contexts may hang off a DIFFERENT parent context than '${ctx}'"
+    log_error "  (VKS_CONTEXT_NAME). If one above is the namespace you want, set VKS_NAMESPACE to the"
+    log_error "  part after the colon — or set VKS_CONTEXT_NAME to that parent."
+    die "set VKS_NAMESPACE in .env"
+  fi
+  if [ "$count" -gt 1 ]; then
+    log_error "found ${count} namespace contexts under '${ctx}' — ambiguous, refusing to guess. Pin one in .env:"
+    while IFS= read -r ns; do
+      [ -n "$ns" ] || continue
+      log_error "    VKS_NAMESPACE=${ns}"
+    done <<EOF
+$cands
+EOF
+    die "set VKS_NAMESPACE and re-run"
+  fi
+  printf '%s' "${cands%$'\n'}"
+}
+
 # engine_choice — which engine is the BOOTSTRAP going to install? podman unless the operator asked for
 # docker BY NAME. Pure: it prints, it installs nothing, it touches no PATH. Kept separate from
 # container_engine() (which asks "what is INSTALLED on this box?") because the gate must be able to prove

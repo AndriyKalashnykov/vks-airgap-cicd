@@ -47,43 +47,60 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     # primary sources; confirm on a lab before relying on it (see the TODO below).
     require_cmd vcf "install the VCF CLI (make install-vcf-clis) on this jump box"
     : "${SUPERVISOR_HOST:?set SUPERVISOR_HOST in .env (Supervisor endpoint, host/IP, no scheme)}"
-    : "${VKS_NAMESPACE:?set VKS_NAMESPACE (vSphere namespace) in .env}"
-    : "${VKS_USERNAME:?set VKS_USERNAME in .env (user@SSO.DOMAIN, or set VKS_SSO_DOMAIN)}"
-    : "${VKS_CONTEXT_NAME:?set VKS_CONTEXT_NAME in .env (the vcf context NAME to type at the prompt)}"
+    : "${VKS_CONTEXT_NAME:?set VKS_CONTEXT_NAME in .env (the vcf context NAME, passed positionally)}"
+    # NOTE: VKS_NAMESPACE is deliberately NOT required here — it is discovered after the context
+    # exists (see below). VKS_USERNAME is defaulted, loudly.
 
     # Username must be 'user@SSO.DOMAIN' — single-sourced with 31-fetch-argocd-kubeconfig.sh via
     # vks_sso_user() (lib/os.sh): idempotent on '@', dies on a bare user with no VKS_SSO_DOMAIN.
+    #
+    # The default is ANNOUNCED, never silent. configuration.md forbids a silent default for a
+    # security-relevant PRINCIPAL: authenticating as a plausible-but-wrong identity is worse than a
+    # hard stop, because it fails somewhere else (or, worse, succeeds as the wrong user). The value
+    # below is the vCenter SSO admin used by the field labs this repo targets — it is a STARTING
+    # GUESS, not a fact about your lab.
+    if [ -z "${VKS_USERNAME:-}" ]; then
+      VKS_USERNAME="administrator@wld.sso"
+      log_warn "VKS_USERNAME is unset — defaulting to '${VKS_USERNAME}' (a vCenter SSO admin)."
+      log_warn "  If your lab uses a different SSO domain or a tenant user, set VKS_USERNAME in .env."
+    fi
     user="$(vks_sso_user "$VKS_USERNAME")"
 
     # Build argv WITHOUT any secret (security.md: secrets never in argv). Endpoint + username
     # are non-secret.
     #
-    # 🔴 THE "it prompts for the context name" CLAIM IS REFUTED [9.0-doc]. Broadcom's command
-    # reference gives the synopsis `vcf context create CONTEXT_NAME [flags]` — CONTEXT_NAME is a
-    # REQUIRED POSITIONAL, there is no --name flag, and all four documented examples pass it
-    # positionally. Nothing documents a name prompt. So this call is missing a required argument
-    # and most likely errors `accepts 1 arg(s), received 0`.
-    # Our OWN sibling gets it right: 31-fetch-argocd-kubeconfig.sh:77 is
-    #   `vcf context create "$CTX" --endpoint … --type k8s`
-    # — positional AND `--type k8s` (--username is documented "only applicable for 'kubernetes'
-    # context type"). This file has neither. The two forms contradict each other and NEITHER HAS
-    # EVER RUN, which is exactly what docs/lab-validation-plan.md step 3 exists to settle — so the
-    # argv is deliberately NOT changed here on doc evidence alone. Fix both scripts together from
-    # the real `--help`, per that step.
-    # `--auth-type basic` IS valid (the reference lists 'oidc'|'basic'|empty) — do not "fix" it.
-    create_args=(--endpoint "https://${SUPERVISOR_HOST}" --username "$user" --auth-type basic)
+    # ✅ SETTLED ON A REAL LAB 2026-07-22 (VCF 9.1 Supervisor). What was previously deferred to
+    # docs/lab-validation-plan.md step 3 is now measured, and this argv reflects it:
+    #
+    #   vcf context create sup --endpoint 10.1.8.132 --insecure-skip-tls-verify --auth-type basic
+    #   vcf context use sup:<namespace>            → plain `kubectl` worked immediately
+    #
+    #   * CONTEXT_NAME is a REQUIRED POSITIONAL — it is not prompted for. The old form passed none
+    #     and would have errored `accepts 1 arg(s), received 0`. FIXED below.
+    #   * --endpoint takes a BARE host/IP with NO scheme. The old `https://…` form is unverified;
+    #     the bare form is what ran, and it is also what a second, independent automation of these
+    #     same labs uses. FIXED below.
+    #   * --auth-type basic and --insecure-skip-tls-verify are both accepted (do not "fix" them).
+    #   * --username was OMITTED in the verified run and login still succeeded, so it is optional.
+    #     We still pass it: an explicit principal beats an interactively-resolved one, and the
+    #     operator asked for it to come from .env. Broadcom documents --username as applying to the
+    #     'kubernetes' context type, and the working third-party automation pairs it with
+    #     `-t kubernetes`, so we pair them too rather than sending --username bare.
+    #
+    # STILL UNVERIFIED: the --username + --type pairing itself was not in the lab-verified run. If
+    # this call rejects either flag, the minimal form above is known-good — fall back to it and
+    # tell us, per lab-validation-plan step 3.
+    create_args=("$VKS_CONTEXT_NAME" --endpoint "$SUPERVISOR_HOST" --username "$user" --type kubernetes --auth-type basic)
     if is_true "${VKS_INSECURE_SKIP_TLS_VERIFY:-}"; then   # one truthiness rule, repo-wide (lib/os.sh)
       create_args+=(--insecure-skip-tls-verify)
     fi
 
-    log_info "creating a VCF context for the Supervisor at https://${SUPERVISOR_HOST} (user: ${user})"
+    log_info "creating VCF context '${VKS_CONTEXT_NAME}' for the Supervisor at ${SUPERVISOR_HOST} (user: ${user})"
     log_warn "INTERACTIVE: expect a PASSWORD prompt. To avoid it, export VCF_CLI_VSPHERE_PASSWORD"
     log_warn "  (the only supported mechanism — there is no --password flag and no stdin form)."
     log_warn "  Do NOT use 'vcf config set env.…' — it writes the password in plaintext to disk."
-    log_warn "UNVERIFIED: this call passes NO context-name positional, but Broadcom documents"
-    log_warn "  'vcf context create CONTEXT_NAME [flags]' as required. If it errors with"
-    log_warn "  'accepts 1 arg(s), received 0', that is the known bug — see lab-validation-plan step 3,"
-    log_warn "  and re-run with: vcf context create '${VKS_CONTEXT_NAME}' --endpoint https://${SUPERVISOR_HOST} --username '${user}' --auth-type basic"
+    log_warn "If this call rejects --username or --type, fall back to the LAB-VERIFIED minimal form:"
+    log_warn "  vcf context create '${VKS_CONTEXT_NAME}' --endpoint '${SUPERVISOR_HOST}' --insecure-skip-tls-verify --auth-type basic"
     # THE PASSWORD MECHANISM IS NOW ESTABLISHED [9.0-doc] — the old TODO here is answered:
     #   * There is NO --password flag. Confirmed by the command reference and by a practitioner
     #     ("The vcf CLI doesn't include a way to provide this password through parameters").
@@ -114,6 +131,18 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     # Note also: the prompt recurs at token refresh [community], so a long `make install-all` can
     # block mid-run; that is the case for exporting it for the session, deliberately.
     vcf context create "${create_args[@]}"
+
+    # Namespace: pinned in .env, or DISCOVERED from the contexts the create above just produced.
+    # Discovery must run AFTER `vcf context create` — there is nothing to list before it.
+    #
+    # ⚠️ VKS_NAMESPACE has a DYNAMIC FALLBACK now, so it MUST stay COMMENTED in .env.example.
+    # load_env sources that file with `set -a`; an uncommented placeholder would be exported and
+    # would silently defeat this discovery for every operator. `make check-env-clobber` gates it.
+    if [ -z "${VKS_NAMESPACE:-}" ]; then
+      log_info "VKS_NAMESPACE is unset — discovering it from 'vcf context list'"
+      VKS_NAMESPACE="$(vks_discover_namespace "$VKS_CONTEXT_NAME")"
+      log_info "  discovered namespace: ${VKS_NAMESPACE}"
+    fi
 
     log_info "activating context '${VKS_CONTEXT_NAME}' at namespace '${VKS_NAMESPACE}'"
     vcf context use "${VKS_CONTEXT_NAME}:${VKS_NAMESPACE}"

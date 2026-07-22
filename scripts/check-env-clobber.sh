@@ -100,6 +100,25 @@ for v in "${UNCOMMENTED[@]}"; do
     rc=1
   fi
 
+  # (a2) the IMPERATIVE dynamic fallback: `if [ -z "${VAR:-}" ]; then VAR=<computed>; fi`.
+  #
+  # (a) matches only the EXPANSION form `${VAR:-$(...)}`. A guard-then-assign is the SAME defect — a
+  # sourced value makes the branch unreachable, so the computed default can never fire — but it is
+  # invisible to (a)'s regex. Found VACUOUS 2026-07-22: VKS_NAMESPACE (discovered from `vcf context
+  # list`) and VKS_USERNAME (defaulted) are both written this way, and the gate passed with BOTH
+  # uncommented while two comments in the tree claimed it covered them.
+  #
+  # grep -F: the pattern is a literal, so nothing here needs regex escaping (the previous attempt at
+  # an ERE for this shape is exactly where a stray \{ would have silently matched nothing).
+  imp="$(grep -rlF -- "[ -z \"\${${v}:-}\" ]" "${REPO_ROOT}/scripts" 2>/dev/null | xargs -r -n1 basename | tr '\n' ' ')"
+  if [ -n "$imp" ]; then
+    log_error "CLOBBER: '${v}' is UNCOMMENTED in .env.example, but the code applies a default via an"
+    log_error "    'if [ -z \"\${${v}:-}\" ]' guard in: ${imp}"
+    log_error "    The sourced value is exported, so that branch is UNREACHABLE and the computed"
+    log_error "    default/discovery can never run. Comment it out."
+    rc=1
+  fi
+
   # (b) per-run override — TWO forms, and the second one is how ARGOCD_SERVER got through.
   #
   #   b1. a sub-make / make invocation:      $(MAKE) foo VAR=x     |  make foo VAR=x

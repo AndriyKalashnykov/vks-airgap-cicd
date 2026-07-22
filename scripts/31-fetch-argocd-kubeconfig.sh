@@ -74,10 +74,15 @@ log_info "  (interactive: the VCF CLI will prompt for the password — a passwor
 # KUBECONFIG scopes WHERE the VCF CLI writes the context (Broadcom: it "respects the KUBECONFIG
 # environment variable for writing to alternate locations"). Without this it would land in
 # ~/.kube/config and silently mix the Supervisor in with the guest-cluster context.
+# Kept IN LOCKSTEP with 30-vks-login.sh's create call — these two drifted once (this one used an
+# `https://` endpoint and `--type k8s`; that one passed no positional name at all) and the comment
+# recording the contradiction said to fix them TOGETHER. Lab-verified 2026-07-22: the endpoint is a
+# BARE host with no scheme, and the context name is positional.
 KUBECONFIG="$ARGOCD_KUBECONFIG" run vcf context create "$CTX" \
-  --endpoint "https://${SUPERVISOR_HOST}" \
+  --endpoint "${SUPERVISOR_HOST}" \
   --username "$VCF_USER" \
-  --type k8s \
+  --type kubernetes \
+  --auth-type basic \
   "${TLS_ARGS[@]}"
 
 # A Supervisor context auto-creates per-vSphere-Namespace contexts as `<ctx>:<namespace>`.
