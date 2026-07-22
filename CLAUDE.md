@@ -538,10 +538,14 @@ the claims below.
 
 ### What shipped
 
-**4 PRs, 2 repos.** #388 refuted backlog B53 (`check-grep-q-pipe` is NOT STARVABLE) and took
-`static-check` 77s → 53s; #389 corrected the splice mechanism in `lint.sh` **and** in this file.
-In `claude-config`: #85 (four measured lessons) and #86 (correcting three claims #85 got wrong, plus
-the reflex now in all 7 adversary briefs).
+⚠️ **No PR COUNT here, deliberately — a count in a handoff is self-falsifying**: the handoff's own
+merge, and any fix to it, each increment the number it states. (Same defect as pinning a line count
+in a gate whose corpus contains itself. `git log <prev-handoff-sha>..main` is the enumeration.)
+
+By substance: **#388** refuted backlog B53 (`check-grep-q-pipe` is NOT STARVABLE) and took
+`static-check` 77s → 53s; **#389** corrected the splice mechanism in `lint.sh` **and** in this file.
+In `claude-config`: **#85** (four measured lessons) and **#86** (correcting three claims #85 got
+wrong, plus the reflex now in all 7 adversary briefs).
 
 ### 🔴 Distrust these — measured this session, not reasoned
 
