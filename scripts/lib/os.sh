@@ -169,6 +169,58 @@ vks_sso_user() {
   esac
 }
 
+# vks_username_default — the ONE place a concrete SSO principal is written down.
+#
+# Every other mention in the repo is a placeholder ('administrator@<YOUR-SSO-DOMAIN>'), an EXAMPLE, or
+# a regression fixture. That is deliberate: the same value once existed in three spellings
+# (vsphere.local / WLD.SSO / wld.sso) across docs and code with nothing asserting they agreed. Not
+# duplicating it beats gating that they match — an alignment gate for this was measured at ~89%
+# false-RED, because it cannot tell a DEFAULT from an EXAMPLE from the C10 test fixture.
+#
+# 'wld.sso' not 'vsphere.local': this repo targets VCF WORKLOAD DOMAINS, which carry a custom SSO
+# domain — 'vsphere.local' is the stock single-vCenter default and is wrong here more often than not.
+# A FUNCTION, not a variable, on purpose. As a plain assignment it was overridable from `.env`:
+# load_env sources that file with `set -a` AFTER this lib, so `VKS_USERNAME_DEFAULT=x` in .env WON —
+# an undocumented knob silently steering a security principal. `readonly` is not the fix either: the
+# later `set -a` source would then ERROR and kill load_env. A function cannot be reassigned by
+# sourcing a KEY=value file, so the default has exactly one definition site.
+vks_username_default() { printf '%s' 'administrator@wld.sso'; }
+
+# vks_username — print the effective SSO principal, applying vks_username_default (ANNOUNCED) when the
+# operator set nothing, then normalising through vks_sso_user.
+#
+# SHARED ON PURPOSE. The default first shipped as a local assignment inside 30-vks-login.sh's `vcf`
+# case — so it reached nothing else, while 31-fetch-argocd-kubeconfig.sh kept an unconditional
+# `${VKS_USERNAME:?}`. That made .env.example's "OPTIONAL, defaults to …" FALSE for anyone running
+# `make fetch-argocd-kubeconfig`, which Scenario 1 does regardless of VKS_AUTH_METHOD. A default that
+# is not shared by every consumer is not a default; it is a per-script accident.
+#
+# configuration.md forbids a SILENT default for a security-relevant principal, hence the warn: a
+# plausible-but-wrong identity fails somewhere else, or succeeds as the wrong user.
+# VKS_SSO_DOMAIN IS HONOURED ON THE DEFAULT PATH. The first version printed the default and returned
+# WITHOUT calling vks_sso_user, so an operator who set VKS_SSO_DOMAIN — the documented way to say "my
+# lab's SSO domain is not the default", and set by exactly the operator this default serves — had it
+# SILENTLY DISCARDED, then typed a real password at an interactive prompt against a principal from
+# someone else's lab. Routing the default through vks_sso_user also keeps its C10 guard live for this
+# path instead of only for the operator-supplied one.
+vks_username() {
+  if [ -z "${VKS_USERNAME:-}" ]; then
+    if [ -n "${VKS_SSO_DOMAIN:-}" ]; then
+      # Hand vks_sso_user the BARE user so it appends the operator's domain.
+      log_warn "VKS_USERNAME is unset — defaulting to '$(vks_username_default)' with YOUR VKS_SSO_DOMAIN"
+      log_warn "  applied: '$(vks_username_default | sed 's/@.*//')@${VKS_SSO_DOMAIN}'. Set VKS_USERNAME in .env to override."
+      vks_sso_user "$(vks_username_default | sed 's/@.*//')"
+    else
+      log_warn "VKS_USERNAME is unset — defaulting to '$(vks_username_default)' (a vCenter SSO admin)."
+      log_warn "  Your lab's SSO domain is almost certainly different. Set VKS_USERNAME (or"
+      log_warn "  VKS_SSO_DOMAIN) in .env — read the real value off vCenter, do not guess."
+      vks_sso_user "$(vks_username_default)"
+    fi
+    return
+  fi
+  vks_sso_user "$VKS_USERNAME"
+}
+
 # vks_discover_namespace <context-name> — print the vSphere namespace to activate when VKS_NAMESPACE is
 # not set. The vcf CLI exposes ONE context per namespace, named '<ctx>:<namespace>' — lab-verified
 # 2026-07-22 (`vcf context use sup:<namespace>` on a real 9.1 Supervisor).

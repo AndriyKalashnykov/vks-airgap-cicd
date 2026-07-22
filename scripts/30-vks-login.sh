@@ -51,20 +51,20 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     # NOTE: VKS_NAMESPACE is deliberately NOT required here — it is discovered after the context
     # exists (see below). VKS_USERNAME is defaulted, loudly.
 
-    # Username must be 'user@SSO.DOMAIN' — single-sourced with 31-fetch-argocd-kubeconfig.sh via
-    # vks_sso_user() (lib/os.sh): idempotent on '@', dies on a bare user with no VKS_SSO_DOMAIN.
+    # vks_username() (lib/os.sh) resolves the effective SSO principal: it applies the shared default,
+    # ANNOUNCES it, honours VKS_SSO_DOMAIN, and normalises through vks_sso_user (idempotent on '@',
+    # dies on a bare user with no domain — the C10 guard).
     #
-    # The default is ANNOUNCED, never silent. configuration.md forbids a silent default for a
-    # security-relevant PRINCIPAL: authenticating as a plausible-but-wrong identity is worse than a
-    # hard stop, because it fails somewhere else (or, worse, succeeds as the wrong user). The value
-    # below is the vCenter SSO admin used by the field labs this repo targets — it is a STARTING
-    # GUESS, not a fact about your lab.
-    if [ -z "${VKS_USERNAME:-}" ]; then
-      VKS_USERNAME="administrator@wld.sso"
-      log_warn "VKS_USERNAME is unset — defaulting to '${VKS_USERNAME}' (a vCenter SSO admin)."
-      log_warn "  If your lab uses a different SSO domain or a tenant user, set VKS_USERNAME in .env."
-    fi
-    user="$(vks_sso_user "$VKS_USERNAME")"
+    # SHARED with 31-fetch-argocd-kubeconfig.sh on purpose. The default first lived here as a local
+    # assignment, so it reached nothing else while that script kept an unconditional `:?` — which made
+    # .env.example's "OPTIONAL" claim true for `make vks-login` and FALSE for
+    # `make fetch-argocd-kubeconfig`. A default not shared by every consumer is not a default.
+    #
+    # The announce is required, not decorative: configuration.md forbids a SILENT default for a
+    # security-relevant PRINCIPAL — a plausible-but-wrong identity fails somewhere else, or succeeds
+    # as the wrong user. The value is a STARTING GUESS for the field labs this repo targets, never a
+    # fact about your lab. Covered by `make test-vks-username`.
+    user="$(vks_username)"
 
     # Build argv WITHOUT any secret (security.md: secrets never in argv). Endpoint + username
     # are non-secret.
