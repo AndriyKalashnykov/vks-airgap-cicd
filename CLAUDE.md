@@ -577,10 +577,21 @@ ceiling** — never delete a correction to stay green; the gate says so in its o
 
 ### Open, and NOT mine
 
-- `threeport-rest-api` **PR #216** (mermaid-lint removal) — created by a **concurrent session** at
-  10:10 today, **CLEAN and unmerged**. Its branch is still checked out there. I used a worktree so I
-  never touched it. Someone should merge or close it.
-- Renovate PRs in this repo (#393, #395) and in `go-face-recognition` (#129, #130).
+**A CONCURRENT SESSION is working in `threeport-rest-api`.** It has its own branch checked out, its
+own dirty tree, and it opens and merges its own PRs on a timescale of minutes. I used a `git
+worktree` there so I never touched its HEAD, and **the local sync after merging was deliberately
+SKIPPED** — `git checkout main` / `reset --hard` against a dirty tree belonging to someone else
+destroys their uncommitted work. Do the same. **Query its open PRs live; do not trust any list.**
+
+Renovate PRs churn in every repo. Query, don't enumerate.
+
+⚠️ **This subsection previously listed a specific PR as "CLEAN and unmerged" and asked someone to
+merge it. It merged four minutes later, and the claim was false for the rest of the handoff's life
+— in the very section whose own rule at the top says NO BUILD-STATUS CLAIMS.** That is the rule
+being violated by the person who wrote it, one screen below writing it. The failure is structural,
+not careless: **a PR number with a state attached is a task status**, and task statuses are true
+when written and false shortly after. Name the *situation* that persists (a concurrent session is
+active here) and let the reader query the state that does not.
 
 ### Next
 
