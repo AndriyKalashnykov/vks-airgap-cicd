@@ -40,10 +40,15 @@ VKS_INSECURE_SKIP_TLS_VERIFY=true         # skip verifying the Supervisor's self
 
 ```bash
 vcf context create <VKS_CONTEXT_NAME> --endpoint <SUPERVISOR_HOST> \
-    --insecure-skip-tls-verify --auth-type basic     # bare host, NO scheme; password prompted
-vcf context use <VKS_CONTEXT_NAME>:<VKS_NAMESPACE>   # note the <ctx>:<ns> COLON form
+    --username <user>@<SSO-DOMAIN> --type kubernetes --auth-type basic \
+    [--insecure-skip-tls-verify]                     # bare host, NO scheme; password prompted
+vcf context use <VKS_CONTEXT_NAME>:<VKS_NAMESPACE>   # <ns> discovered when unset — see below
 vcf cluster kubeconfig get <VKS_CLUSTER_NAME> --export-file <KUBECONFIG>   # GUEST cluster only — see below
 ```
+
+`VKS_NAMESPACE` is **optional**: when unset, the script lists the contexts the create above produced
+and takes the single `<ctx>:<ns>` match, failing with every candidate printed if there is more than
+one. `VKS_USERNAME` is also optional and defaults, announced in the log.
 
 **Lab-verified 2026-07-22** on a real VCF 9.1 Supervisor (`10.1.8.132`). The first two commands
 were run exactly as above and worked; `--username` was **omitted** and login still succeeded, so
@@ -73,11 +78,16 @@ wget --no-check-certificate https://<SUPERVISOR_HOST>/wcp/plugin/linux-amd64/vsp
 
 > **Validation status — partial (2026-07-22).**
 >
-> **Verified on a real VCF 9.1 Supervisor:** `vcf context create <name> --endpoint <bare-host>
-> --insecure-skip-tls-verify --auth-type basic`, then `vcf context use <ctx>:<ns>`, then a
-> working `kubectl`. Positional context name, no scheme on the endpoint, `--username` optional.
-> Independently corroborated by a second automation of the same lab — see
-> [lab-automation](lab-automation.md) §3.2.
+> **Verified on a real VCF 9.1 Supervisor**, in exactly this minimal form:
+> `vcf context create <name> --endpoint <bare-host> --insecure-skip-tls-verify --auth-type basic`,
+> then `vcf context use <ctx>:<ns>`, then a working `kubectl`. Positional context name, no scheme on
+> the endpoint, `--username` **omitted and still successful**. Independently corroborated by a second
+> automation of the same lab — see [lab-automation](lab-automation.md) §3.2.
+>
+> The script additionally sends `--username` and `--type kubernetes` (an explicit principal beats an
+> interactively-resolved one, and Broadcom documents `--username` as applying to the `kubernetes`
+> context type). **That pairing was not in the verified run** — if the CLI rejects either flag, the
+> minimal form above is known-good and `30-vks-login.sh` prints it as the fallback.
 >
 > **Still unverified:** `vcf cluster kubeconfig get <cluster> --export-file …` (the guest-cluster
 > half) has not been run here; and it is **not established** whether the `kubectl` reached above

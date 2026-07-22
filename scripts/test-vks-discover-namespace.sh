@@ -31,7 +31,10 @@ trap 'rm -rf "$STUB_DIR"' EXIT
 # fails LOUDLY here instead of silently returning canned data for a call we no longer make.
 cat > "$STUB_DIR/vcf" <<'STUB'
 #!/usr/bin/env bash
-if [ "$1" != context ] || [ "$2" != list ] || [ "$3" != -o ] || [ "$4" != json ]; then
+# Assert the WHOLE argv, not just the first four words. Asserting positionally let an ADDED TRAILING
+# FLAG through silently — measured — which would have made every case below pass against a call we
+# no longer make.
+if [ "$*" != "context list -o json" ]; then
   echo "STUB: unexpected argv: $*" >&2; exit 64
 fi
 [ -n "${STUB_CONTEXTS:-}" ] || exit 1        # no contexts -> the CLI exits non-zero
@@ -74,12 +77,35 @@ fi
 err="$(unset STUB_CONTEXTS; vks_discover_namespace sup 2>&1 >/dev/null)"; rc=$?
 if [ "$rc" -ne 0 ] && [ -n "$err" ]; then ok "vcf failure dies with a message"; else bad "vcf failure: rc=$rc err='$err'"; fi
 
-# 6. the stub is REAL: prove it rejects an argv we do not send, so cases 1-5 are not passing on canned
-#    data for an unasserted call. Without this, the stub could be a no-op and every case above vacuous.
-if "$STUB_DIR/vcf" context list >/dev/null 2>&1; then
-  bad "the stub accepted a WRONG argv — it is not asserting anything"
+# 6. UNPARSEABLE output must NOT be reported as "no context exists" — the context was just created,
+#    so that message names the wrong cause and sends the operator somewhere that contradicts it.
+err="$(STUB_CONTEXTS='not json at all' vks_discover_namespace sup 2>&1 >/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ]; then
+  bad "unparseable context list returned a value"
 else
-  ok "stub rejects a wrong argv (cases above really exercised 'context list -o json')"
+  case "$err" in
+    *"could not parse"*) ok "unparseable output is reported as a PARSE failure, not as 'no context'" ;;
+    *) bad "unparseable output blamed the wrong cause: $err" ;;
+  esac
+fi
+
+# 7. the no-match message must NAME the contexts it did see (so the operator can pick one), because
+#    namespace contexts may hang off a different parent than VKS_CONTEXT_NAME.
+err="$(STUB_CONTEXTS="$(j 'vcfa:e2e-ns')" vks_discover_namespace sup 2>&1 >/dev/null)"; rc=$?
+if [ "$rc" -ne 0 ] && case "$err" in *vcfa:e2e-ns*) true ;; *) false ;; esac; then
+  ok "no-match lists the contexts it actually saw"
+else
+  bad "no-match did not name the observed contexts: $err"
+fi
+
+# 8. the stub is REAL: prove it rejects both a wrong subcommand AND an added trailing flag, so every
+#    case above really exercised the argv the product sends. Without this the stub could be a no-op.
+if "$STUB_DIR/vcf" context list >/dev/null 2>&1; then
+  bad "the stub accepted a TRUNCATED argv — it is not asserting anything"
+elif "$STUB_DIR/vcf" context list -o json --extra >/dev/null 2>&1; then
+  bad "the stub accepted an ADDED FLAG — argv drift would pass silently"
+else
+  ok "stub rejects wrong argv AND an added flag (cases above exercised the real call)"
 fi
 
 if [ "$fail" -eq 0 ]; then echo "test-vks-discover-namespace: OK"; else echo "test-vks-discover-namespace: FAILED"; exit 1; fi

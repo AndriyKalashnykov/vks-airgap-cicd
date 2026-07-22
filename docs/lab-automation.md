@@ -13,10 +13,23 @@ Scenario 1 / Scenario 2, what is worth borrowing, and what is not.
 > not have. Almost everything below is "interesting, and unavailable to us" for exactly that
 > reason.
 
-Pinned at commit **`86fadb6`** (13 files, ~100 KB; Shell + PowerShell + Python). Every
-`file:line` below was read at that commit. Its two dependencies —
-`warroyo/vcfa-terraform-examples` and `warroyo/vks-argocd-examples` — were read at `main`, so
-their line numbers may drift.
+**How to read the citations below — they span THREE repositories.** A bare path resolves against
+`NiranEC77/lab-automation` at commit **`86fadb6`** (13 files, ~100 KB; Shell + PowerShell +
+Python). Paths from its two dependencies are cited with a leading marker and were read at `main`,
+so those line numbers may drift:
+
+| Prefix in a citation | Repository | Read at |
+|---|---|---|
+| `setup-lab.sh`, `ctx-lib.sh`, `vcfa-token.py`, `install-supervisor-services.ps1`, `supervisor-services/…`, `README.md` | `NiranEC77/lab-automation` | **`86fadb6`** |
+| `argo-e2e/…`, `modules/…` | `warroyo/vcfa-terraform-examples` | `main` |
+| `cluster-bootstrap/…`, `istio/…`, `package-rbac/…`, `vks-standard-repo/…` | `warroyo/vks-argocd-examples` | `main` |
+
+Resolving one at the pin (note `?ref=` — quote the URL, `?` is a zsh glob character):
+
+```bash
+gh api -H "Accept: application/vnd.github.raw" \
+  "repos/NiranEC77/lab-automation/contents/ctx-lib.sh?ref=86fadb6"
+```
 
 ---
 

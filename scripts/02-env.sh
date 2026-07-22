@@ -102,8 +102,8 @@ env_populate() {
   echo "== user-PROVIDE (only YOU know — set these in .env by hand) =="
   echo "  Real VKS lab (skip for the local KinD flow):"
   echo "    SUPERVISOR_HOST      vCenter → Workload Management → Supervisors → Control Plane IP"
-  echo "    VKS_NAMESPACE        the vSphere Namespace name"
-  echo "    VKS_USERNAME         your vSphere SSO admin (e.g. administrator@vsphere.local)"
+  echo "    VKS_NAMESPACE        OPTIONAL on the vcf path — discovered from 'vcf context list'; set it only to PIN one"
+  echo "    VKS_USERNAME         OPTIONAL on the vcf path — defaults to administrator@wld.sso (announced); set it if your SSO domain differs"
   echo "    VKS_CLUSTER_NAME     the VKS workload cluster name"
   echo "    HARBOR_USERNAME      'admin' if you installed Harbor (Scenario 1); the robot login robot\$<name> for a tenant (Scenario 2) — the local KinD flow sets this itself"
   echo "    HARBOR_PASSWORD      OVERRIDE the generated value with the lab's admin/robot secret"
@@ -123,7 +123,12 @@ env_check() {
   local missing=() required=(HARBOR_USERNAME HARBOR_PASSWORD GITEA_ADMIN_PASSWORD)
   # method-specific requirements
   case "${VKS_AUTH_METHOD:-kubeconfig}" in
-    vcf)     required+=(SUPERVISOR_HOST VKS_USERNAME VKS_NAMESPACE VKS_CONTEXT_NAME) ;;
+    # VKS_USERNAME and VKS_NAMESPACE are NOT required on the `vcf` path: 30-vks-login.sh defaults the
+    # first (announced) and DISCOVERS the second from `vcf context list` after the context exists.
+    # Requiring them here would do worse than nag — the operator's obvious remedy (set VKS_NAMESPACE)
+    # takes the `if [ -z … ]` branch and permanently disables discovery for anyone who follows the
+    # runbook. They stay required on the `vsphere` path, which has neither mechanism.
+    vcf)     required+=(SUPERVISOR_HOST VKS_CONTEXT_NAME) ;;
     vsphere) required+=(SUPERVISOR_HOST VKS_USERNAME VKS_NAMESPACE VKS_CLUSTER_NAME VKS_PASSWORD) ;;
   esac
   local k v

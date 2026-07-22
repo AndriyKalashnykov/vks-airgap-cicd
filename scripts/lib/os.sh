@@ -181,7 +181,9 @@ vks_sso_user() {
 #
 # Requires a CREATED context, so callers must invoke it AFTER `vcf context create`.
 vks_discover_namespace() {
-  local ctx="$1" n ns json names cands="" count=0
+  # ${1:-} not $1: under `set -u` a bare $1 dies with "unbound variable" BEFORE the friendly guard
+  # below could ever run, making that guard dead code.
+  local ctx="${1:-}" n ns json names cands="" count=0
   [ -n "$ctx" ] || die "vks_discover_namespace: no context name given"
   command -v jq >/dev/null 2>&1 \
     || die "jq is required to auto-discover VKS_NAMESPACE — install it, or set VKS_NAMESPACE in .env"
@@ -202,8 +204,25 @@ vks_discover_namespace() {
 $names
 EOF
 
+  # DISTINGUISH THE CAUSES. One message for four different failures is a message that names the wrong
+  # one: this runs two lines after `vcf context create` SUCCEEDED, so "no context exists" sends the
+  # operator to `vcf context list` where they will SEE the context and disbelieve the error.
+  if [ -z "$names" ]; then
+    log_error "could not parse any context name out of \`vcf context list -o json\`."
+    log_error "  This is NOT 'no context exists' — the context was just created. Either the CLI"
+    log_error "  emitted something jq could not read, or its JSON shape changed."
+    log_error "  Raw output was: ${json:-<empty>}"
+    die "set VKS_NAMESPACE in .env to skip discovery entirely"
+  fi
   if [ "$count" -eq 0 ]; then
-    die "no vcf context named '${ctx}:<namespace>' exists — set VKS_NAMESPACE in .env (or check \`vcf context list\`)"
+    log_error "no context named '${ctx}:<namespace>' among the ones the CLI reported:"
+    while IFS= read -r n; do [ -n "$n" ] && log_error "    ${n}"; done <<EOF
+$names
+EOF
+    log_error "  Namespace contexts may hang off a DIFFERENT parent context than '${ctx}'"
+    log_error "  (VKS_CONTEXT_NAME). If one above is the namespace you want, set VKS_NAMESPACE to the"
+    log_error "  part after the colon — or set VKS_CONTEXT_NAME to that parent."
+    die "set VKS_NAMESPACE in .env"
   fi
   if [ "$count" -gt 1 ]; then
     log_error "found ${count} namespace contexts under '${ctx}' — ambiguous, refusing to guess. Pin one in .env:"
