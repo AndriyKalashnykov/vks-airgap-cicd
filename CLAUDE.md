@@ -495,8 +495,11 @@ images (a *wipe*; a write race damages *some*), and the failing run had **no con
   `crane` establishes blob existence with a **HEAD**, so a lying registry makes the push a no-op.
 - `15-build-push-builder.sh` no longer **silently falls back to the public Docker Hub base** when the
   mirrored one won't pull. On a dual-homed box that turns a broken mirror into a **green build** that
-  proves nothing about the air gap — it would have masked exactly this bug. It is now a hard failure
-  unless you ask for it by name (`ALLOW_PUBLIC_BASE=1`).
+  proves nothing about the air gap — it would have masked exactly this bug. (The original fix gated the
+  fallback behind an explicit `ALLOW_PUBLIC_BASE=1`; **superseded 2026-07-14** by the
+  `14-builder-build.sh` + `22-builder-push.sh` split — the builder base is now pulled **public by
+  DIGEST from `images.lock`**, aligned to the mirror by construction, so the tag-pull escape hatch was
+  retired.)
 
 **PROVEN:** cold cluster → `make mirror` green → `kubectl -n harbor rollout restart deploy/harbor-registry`
 with **zero concurrent load** → `make mirror-verify` still reports **36/36 intact**. Before the fix,
