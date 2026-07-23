@@ -80,30 +80,37 @@ kubectl get svc -n <argocd-namespace> argocd-server \
 make env-init      # creates .env from .env.example (backs up any existing one)
 ```
 
-Then set:
+Then edit `.env` (these keys are already there, commented, from `.env.example` — uncomment and set;
+**do not paste a `<…>` line into `.env`** — an unedited `<…>` is a shell redirection that truncates
+the rest of the file when it is sourced):
 
-```bash
-HARBOR_URL=<discovered-harbor-LB-IP-or-FQDN>
-HARBOR_USERNAME='robot$<name>'          # the robot you were granted; set in .env only
-HARBOR_PASSWORD=<robot-secret>          # never on argv
-HARBOR_CA_FILE=./secrets/harbor-ca.crt  # fetched in Step 2 below (make fetch-harbor-ca)
-HARBOR_INFRA_PROJECT=<granted-project>  # may be ONE shared project, not a cicd/apps split
-HARBOR_APP_PROJECT=<granted-project>
-HARBOR_PUBLIC_PROJECTS=false            # tenant projects are typically private; NO-OP on an existing project (only sets public: at project creation)
-ARGOCD_SERVER=<discovered-argocd-server-LB-IP>
-ARGOCD_NAMESPACE=<namespace the shared ArgoCD instance watches>
-ARGOCD_TRACK_BRANCH=main
-# --- ArgoCD WRITE PATH — set these NOW, before `make install-all`. Miss them and `make gitops` either
-#     DIES on a guard (you are off-cluster with no destination) or SILENTLY renders to ./out/ and
-#     deploys NOTHING while reporting success. ---
-ARGOCD_MECHANISM=api                      # create the Application via argocd-server (no k8s RBAC needed there)
-ARGOCD_PROJECT=<your granted AppProject>  # NOT 'default' — your project role must permit the destination
-ARGOCD_AUTH_TOKEN=<mint it first — see the note below>
-ARGOCD_DEST_SERVER=<your GUEST cluster API URL>  # your guest must be REGISTERED as an ArgoCD destination FIRST (admin-only — request it; see the cross-cluster note below)
-# ARGOCD_CA_FILE=./secrets/argocd-ca.crt   # optional; fetched in Step 2 (make fetch-argocd-ca)
-KUBECONFIG=./secrets/vks.kubeconfig
-VKS_CONTEXT=<context-name-in-that-kubeconfig>
-```
+| key | value |
+|---|---|
+| `HARBOR_URL` | the discovered Harbor LB IP or FQDN |
+| `HARBOR_USERNAME` | the robot you were granted, single-quoted: `'robot$<name>'` — `.env` only |
+| `HARBOR_PASSWORD` | the robot secret — never on argv |
+| `HARBOR_CA_FILE` | `./secrets/harbor-ca.crt` (fetched in Step 2, `make fetch-harbor-ca`) |
+| `HARBOR_INFRA_PROJECT` / `HARBOR_APP_PROJECT` | your granted project(s) — may be **one** shared project, not a `cicd`/`apps` split |
+| `HARBOR_PUBLIC_PROJECTS` | `false` — tenant projects are typically private (no-op on an existing project) |
+| `ARGOCD_SERVER` | the discovered argocd-server LB IP |
+| `ARGOCD_NAMESPACE` | the namespace the shared ArgoCD instance watches |
+| `ARGOCD_TRACK_BRANCH` | `main` |
+| `KUBECONFIG` | `./secrets/vks.kubeconfig` |
+| `VKS_CONTEXT` | the context name inside that kubeconfig |
+| `ARGOCD_CA_FILE` | *optional* — `./secrets/argocd-ca.crt` (`make fetch-argocd-ca`) |
+
+> **The ArgoCD WRITE PATH — set these NOW, before `make install-all`.** Miss them and `make gitops`
+> either **dies** on a guard (off-cluster with no destination) or **silently renders to `./out/` and
+> deploys nothing while reporting success**:
+>
+> | key | value |
+> |---|---|
+> | `ARGOCD_MECHANISM` | `api` — create the Application via argocd-server (no k8s RBAC needed there) |
+> | `ARGOCD_PROJECT` | your granted AppProject — **not** `default`; your project role must permit the destination |
+> | `ARGOCD_AUTH_TOKEN` | mint it first — see the note below |
+> | `ARGOCD_DEST_SERVER` | your **guest** cluster API URL — the guest must be **registered** as an ArgoCD destination first (admin-only; request it) |
+
+<!-- -->
 
 > **Mint `ARGOCD_AUTH_TOKEN` FIRST — it is a precondition, not just a value.** `argocd login <ARGOCD_SERVER> --sso`
 > establishes both the token **and** the CLI's TLS trust for the self-signed argocd-server (there is no
@@ -140,13 +147,10 @@ cluster's generated passwords. `make kind-down` removes it **only if the KinD fl
 `ARGOCD_NAMESPACE`, and `KUBECONFIG` / `VKS_CONTEXT`. Only the **Gitea password** (a login for
 the component **we** install) and the **VKS auth method** remain:
 
-```bash
-# --- Gitea (WE install it — you choose the password) ---
-GITEA_ADMIN_PASSWORD=<choose-one>        # set in .env only
-
-# --- VKS access method ---
-VKS_AUTH_METHOD=kubeconfig               # simplest: use the KUBECONFIG you fetched above as-is
-```
+| key | value |
+|---|---|
+| `GITEA_ADMIN_PASSWORD` | you choose it — Gitea is the one component **we** install; `.env` only |
+| `VKS_AUTH_METHOD` | `kubeconfig` — use the `KUBECONFIG` you fetched above as-is |
 
 For VKS auth, `kubeconfig` (the kubeconfig `vcf cluster kubeconfig get` wrote) is the simplest
 working method. To have `make vks-login` run the VCF Consumption CLI login itself, set
