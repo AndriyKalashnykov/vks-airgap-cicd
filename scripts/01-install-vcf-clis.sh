@@ -61,7 +61,11 @@ resolve_archive() {
   case "$cli" in
     argocd)  name="$argocd_file";  glob="argocd-cli-${os}-${go_arch}-${ARGOCD_VCF_VERSION}*" ;;
     vcf)     name="$vcf_file";     glob="VCF-Consumption-CLI-*${VCF_CLI_VERSION}*.tar.gz" ;;
-    plugins) name="$plugins_file"; glob="VCF-Consumption-CLI-*Plugin*${VCF_PLUGINS_VERSION}*.tar.gz" ;;
+    # plugins glob is arch-BOUND (unlike vcf, which stays arch-blind so the arch-agnostic
+    # "…-Binaries-…" bundle matches): there is NO arch-agnostic plugin bundle, so an arch-blind
+    # glob would sort-pick the AMD64 bundle on an arm64 box (M<R). Binding it to Linux_${vcf_arch}
+    # makes a wrong-arch-only folder fail-safe (die "no artifact") instead of mis-installing.
+    plugins) name="$plugins_file"; glob="VCF-Consumption-CLI-*Plugin*Linux_${vcf_arch}*${VCF_PLUGINS_VERSION}*.tar.gz" ;;
     *) die "resolve_archive: unknown cli '$cli'" ;;
   esac
   out="${WORK}/${cli}-archive"
@@ -93,6 +97,14 @@ resolve_archive() {
 install_argocd_vcf() {
   log_info "installing argocd (VCF ${ARGOCD_VCF_VERSION}, ${os}/${go_arch}) -> ${BIN_DIR}/argocd"
   log_warn "this is the VCF-flavored argocd for a real lab; it shadows any upstream argocd in ${BIN_DIR}"
+  # argocd-vcf is amd64-only (Broadcom ships no linux-arm64). If this arch's archive isn't in the
+  # folder, point at the upstream argocd `make deps` installs — the generic resolve die would tell
+  # the operator to fetch a file that does not exist. (Skipped if an arch build IS present, so a
+  # future arm64 argocd-vcf still installs normally.)
+  if [ "$go_arch" != amd64 ] && [ ! -f "${SRC_DIR}/${argocd_file}" ] \
+     && [ -z "$(find "$SRC_DIR" -maxdepth 1 -type f -name "argocd-cli-${os}-${go_arch}-${ARGOCD_VCF_VERSION}*" -print -quit 2>/dev/null)" ]; then
+    die "the VCF-flavored argocd is amd64-only — no ${os}/${go_arch} build exists. Use the upstream argocd from 'make deps' and run 'make install-vcf-cli' + 'make install-vcf-plugins' (not 'all'). See docs/vks-authentication.md#acquiring-the-licensed-vcf-cli-archives"
+  fi
   local ar d bin; resolve_archive argocd; ar="$RESOLVED_ARCHIVE"
   # The argocd artifact is either a bare .gz of the binary OR a tarball/bundle. Detect
   # robustly: try to extract it as a tar.gz — if that yields at least one file, it's a bundle
@@ -132,6 +144,11 @@ install_vcf_plugins() {
   log_info "installing vcf plugins (bundle ${VCF_PLUGINS_VERSION}, ${os}/${go_arch})"
   local ar pdir src; resolve_archive plugins; ar="$RESOLVED_ARCHIVE"
   pdir="${WORK}/plugins"; mkdir -p "$pdir"; tar -xzf "$ar" -C "$pdir"
+  # Fail-safe (mirrors install_vcf_cli's exact-arch check): a wrong-arch plugin bundle would install
+  # binaries that only fail at plugin-exec time. Assert the extracted bundle holds linux_${go_arch}
+  # binaries (named vcf-<plugin>-linux_<arch>) before `plugin install all`.
+  [ -n "$(find "$pdir" -type f -name "vcf-*-linux_${go_arch}" -print -quit 2>/dev/null)" ] \
+    || die "the plugin bundle in ${SRC_DIR} holds no linux_${go_arch} binaries (wrong-arch bundle?) — supply the Linux_${vcf_arch} plugin bundle"
   # A multi-arch bundle nests the plugins under <os>/<arch>/...; point --local-source there.
   src="$pdir"
   local archdir; archdir="$(find "$pdir" -type d -path "*/${os}/${go_arch}" -print -quit)"
