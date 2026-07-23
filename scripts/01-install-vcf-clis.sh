@@ -27,8 +27,8 @@ SRC_DIR="${VCF_CLI_SRC_DIR:?set VCF_CLI_SRC_DIR to the directory holding the dow
 # Pinned versions (operator-supplied — track whatever licensed artifacts you hold; Renovate
 # cannot bump a licensed download, so they live in .env.example, not renovate).
 ARGOCD_VCF_VERSION="${ARGOCD_VCF_VERSION:?set ARGOCD_VCF_VERSION in .env.example (e.g. v3.0.19-vcf)}"
-VCF_CLI_VERSION="${VCF_CLI_VERSION:?set VCF_CLI_VERSION in .env.example (e.g. 9.1.0.0.25296329)}"
-VCF_PLUGINS_VERSION="${VCF_PLUGINS_VERSION:?set VCF_PLUGINS_VERSION in .env.example (e.g. 9.1.0.0300.25509668)}"
+VCF_CLI_VERSION="${VCF_CLI_VERSION:?set VCF_CLI_VERSION in .env.example (e.g. 9.1.0.0400.25509669)}"
+VCF_PLUGINS_VERSION="${VCF_PLUGINS_VERSION:?set VCF_PLUGINS_VERSION in .env.example (e.g. 9.1.0.0400.25509793)}"
 
 [ -d "$SRC_DIR" ] || die "VCF_CLI_SRC_DIR '$SRC_DIR' is not a directory"
 mkdir -p "$BIN_DIR"

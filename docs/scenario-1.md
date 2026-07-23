@@ -18,14 +18,17 @@ server**, not the `argocd` CLI or this repo's KinD pin. `make argocd-version` pr
 
 ## Downloads (each needs your Broadcom entitlement)
 
-| Artifact | |
-|---|---|
-| **VCF Consumption CLI** 9.1.0.0 | [download](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20Cloud%20Foundation%209&release=9.1.0.0&os=&servicePk=540528&language=EN&groupId=540529&viewGroup=true) |
-| **VCF Consumption CLI Plugins** 9.1.0.0 | [download](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20Cloud%20Foundation%209&release=9.1.0.0&os=&servicePk=540528&language=EN&groupId=540672&viewGroup=true) |
-| **ArgoCD Service** | [download](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&displayGroup=ArgoCD%20Service&release=1.1.0&os=&servicePk=538499&language=EN) |
-| **Harbor** | [download](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&displayGroup=Harbor&release=2.14.3&os=&servicePk=542081&language=EN) |
+| Artifact | Version | |
+|---|---|---|
+| **VCF Consumption CLI** — the Linux `_AMD64`/`_ARM64` archive for your jump box | **9.1.0.0400** | [download](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20Cloud%20Foundation%209&release=9.1.0.0400&os=&servicePk=540528&language=EN&groupId=540529&viewGroup=true) |
+| **VCF Consumption CLI Plugins** — the Linux `_AMD64`/`_ARM64` bundle | **9.1.0.0400** | [download](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20Cloud%20Foundation%209&release=9.1.0.0400&os=&servicePk=540528&language=EN&groupId=540672&viewGroup=true) |
+| **ArgoCD Service** — the `-legacy` manifest + the amd64 `argocd` CLI (`v3.0.19-vcf`) | **1.1.0** | [download](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&displayGroup=ArgoCD%20Service&release=1.1.0&os=&servicePk=538499&language=EN) |
+| **Harbor** — the `-legacy` manifest + its data-values file | **2.14.3** | [download](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&displayGroup=Harbor&release=2.14.3&os=&servicePk=542081&language=EN) |
 
-Drop **all** archives in one folder (e.g. `~/Downloads/vcf`) — the installer picks the right OS/arch.
+**Where each download goes — they are NOT all "one folder for the installer":**
+
+- **CLI + Plugins** (and the amd64 `argocd` CLI from the ArgoCD Service download) → drop the archives in one folder (e.g. `~/Downloads/vcf`), point `VCF_CLI_SRC_DIR` at it; `make install-vcf-clis` picks the archive matching your jump box's **OS/arch** (§1). On an **arm64** jump box the VCF `argocd` is amd64-only — use the upstream `argocd` from `make deps` ([details](vks-authentication.md#acquiring-the-licensed-vcf-cli-archives)).
+- **ArgoCD Service + Harbor** → **Supervisor-Service YAML manifests** (not OS/arch-specific, not consumed by `install-vcf-clis`); you upload them in **§2 (Harbor)** and **§3 (ArgoCD)**. Each ships two variants — use **`-legacy`** (`supervisor-service-{harbor,argocd}-legacy-…yml`) for a **disconnected/air-gapped** Supervisor (this lab's default), or **`-depot`** if the Supervisor reaches the Broadcom depot. *(Which one a given Supervisor requires is lab-pending; the basis is the portal's own "disconnected/airgapped VCF 9.1" label on the `-legacy` files.)*
 
 ## 1. Jump box
 
@@ -68,7 +71,7 @@ archived, not deleted, if it belongs to a *different* cluster — it may hold th
 
 1. **Expose it** — Harbor needs an LB/ingress. Pick an **NGINX LB** or **Contour** (a Supervisor
    Service; install it *before* Harbor).
-2. **Register:** Supervisor Management → Services → Add New Service → upload `harbor-service-<ver>.yml`.
+2. **Register:** Supervisor Management → Services → Add New Service → upload the Harbor manifest — `supervisor-service-harbor-legacy-*.yml` for a disconnected/air-gapped Supervisor (or the `-depot` variant if it reaches the Broadcom depot).
 3. **Edit the data-values file** (placeholders verified against **v2.14.3**; a later version may rename
    keys, and `sed` silently changes nothing on a non-match — re-check if your version differs):
 
