@@ -55,6 +55,10 @@ New here? Pick the path that matches your situation — each one is self-contain
 The VKS paths start from the jump-box **[Prerequisites](#prerequisites)** below.
 Run **`make check-tools`** to see which CLIs you have and which are required.
 
+**Delivery (both VKS paths):** if no single box reaches **both** the internet *and* Harbor, mirror via
+**[sneakernet](docs/sneakernet.md)** — pull on the internet box, carry the bundle across, push from the
+air-gap box. (KinD is dual-homed — no bundle to carry.)
+
 > **Container engine — podman is the default and you do nothing.** `make deps` installs it, and it is the
 > only engine that needs **no sudo on any box**. **Docker is supported too, opt-in.**
 >
