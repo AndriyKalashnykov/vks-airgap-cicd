@@ -538,7 +538,9 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 > the next commit. Write the STATE; query anything that moves.
 
 **State: `main` clean at the B57-fix merge (`18f9d1e`, #407), post-merge CI green, nothing unpushed,
-no open PRs, no parked agents, no worktrees.** Written as the LAST act.
+no parked agents, no worktrees.** In flight: this handoff (PR #408); and **#404** — a green,
+mergeable Renovate bump (`renovate` → v43.272.0, no auto-merge configured) that predates this
+session, left for the owner to merge/triage. Written as the LAST act.
 
 ### What this session did
 
