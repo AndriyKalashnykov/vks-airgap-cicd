@@ -231,9 +231,9 @@ and is sudo-free everywhere. Docker is supported if you prefer it (`CONTAINER_EN
 
 ## The three paths
 
-Pick **one** and follow it end to end. Each document is **self-contained** — every command you need
-is in it, and nothing you must *run* is hidden behind a further link. (A CI gate enforces exactly
-that: `make check-readme-scenarios`.)
+Pick **one** and follow it end to end — each document is **self-contained**, so you never need
+another to run the flow. A CI gate checks that each scenario answers its key decisions in place:
+`make check-readme-scenarios`.
 
 | Path | Document | You are |
 |---|---|---|
@@ -243,14 +243,21 @@ that: `make check-readme-scenarios`.)
 
 Then: **[Access the UIs](docs/access-uis.md)** — URLs, logins, passwords.
 
+**Delivery:** if no single box reaches **both** the internet *and* Harbor, use
+**[sneakernet](docs/sneakernet.md)** — pull the images on the **internet box**, carry the bundle
+across on a stick, then push them in from the **air-gap box**. It applies to **both** VKS scenarios
+and replaces `make mirror` (and `make install-all`, which mirrors in-line). (Naming caution:
+elsewhere this README says "jump box" for the internet-connected box, while `docs/sneakernet.md` uses
+"jump box" for the air-gap box and "staging box" for the internet one — so this note sticks to
+"internet box" / "air-gap box".)
+
 ## Reference
 
-Background and deep-dives. **Nothing you have to *run* lives behind these links** — each scenario
-above is self-contained end to end (a CI gate enforces that: `make check-readme-scenarios`).
+Background and deep-dives — each scenario above is already self-contained end to end
+(`make check-readme-scenarios` gates that), so you never need these to run the flow.
 
 | | |
 |---|---|
-| [Sneakernet](docs/sneakernet.md) | **no single box reaches BOTH the internet and Harbor** — so you use two: pull the images on the internet-side box, carry the bundle across on a stick, push them in from the box that can reach Harbor. Applies to **both** VKS scenarios; it replaces `make mirror` (and `make install-all`, which mirrors in-line) |
 | [Architecture](docs/architecture.md) | system context, containers, deployment, pipeline flow |
 | [Tech stack](docs/tech-stack.md) | what the demo is built from |
 | [Prerequisites — the manual path](docs/prerequisites-manual.md) | the step-by-step the bootstrap automates |
