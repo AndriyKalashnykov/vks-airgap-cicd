@@ -532,7 +532,7 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-07-23 (session 12) — READ, THEN REPLACE (do not append)
+## ▶️ HANDOFF 2026-07-23 (session 13) — READ, THEN REPLACE (do not append)
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog
 ([`BACKLOG.md`](BACKLOG.md)). History → git. Only "what is in flight and what to distrust" here.
@@ -540,27 +540,31 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 > 🔴 **NO BUILD-STATUS CLAIMS IN THIS SECTION** — a task status is true when written and falsified by
 > the next commit. Write the STATE; query anything that moves.
 
-**State: `main` clean at the B57-fix merge (`18f9d1e`, #407), post-merge CI green, nothing unpushed,
-no parked agents, no worktrees.** In flight: this handoff (PR #408); and **#404** — a green,
-mergeable Renovate bump (`renovate` → v43.272.0, no auto-merge configured) that predates this
-session, left for the owner to merge/triage. Written as the LAST act.
+**State: `main` clean at `bb7d72b` (#419), post-merge CI green, nothing unpushed, no open PRs, no
+parked agents, no worktrees.** In flight: nothing. `origin/renovate/renovate-43.x` is Renovate's
+**reusable** branch (its latest bump is already on `main` — `git cherry` patch-id match; a two-dot
+diff shows this session's doc files as "removed" only because the branch is stale-behind-main). It is
+bot-owned — **leave it**, Renovate re-points or prunes it. Written as the LAST act.
 
 ### What this session did
 
-Fixed **B57** (#407) — a README honesty bug. The README twice cited `make check-readme-scenarios` as
-"a CI gate enforces this," but that gate scans `docs/{kind-local,scenario-1,scenario-2}.md` and never
-opens `README.md` (by design). **The gate is correct and unchanged; the fix is to the README's claims
-about it:** dropped the false "nothing you have to run lives behind these [Reference] links" claim,
-kept the true "each scenario is self-contained" one, softened `## The three paths`'s "enforces exactly
-that", and **relocated** the runnable Sneakernet row out of `## Reference` into a delivery-mode fork by
-the paths — relocated, not deleted, so it stays findable in a nav position (the rule
-`check-doc-target-coverage` records), with "internet box"/"air-gap box" naming and the
-`docs/sneakernet.md` "jump box" inversion disclosed. Both adversary rounds ran: the idea round refuted
-the first cut (my true/false split was imprecise and a bare removal would have regressed
-discoverability); the implementation round cleared the committed diff (measured instrument) with one
-MEDIUM fixed here and one LOW deferred. The two "related, still open" sub-items were split into
-**B58** (duplicate path-selectors + a first-selector delivery pointer) and **B59** (full
-`docs/sneakernet.md` "jump box" rename); owner scoped this session to core B57 only.
+Cleared the **buildable-without-a-lab** backlog, each design through both adversary rounds:
+
+- **#419 (B2/B26)** — folded two read-only lab probes into **step 13** of `docs/lab-validation-plan.md`:
+  the Gateway-API CRD version + who owns it (do we fight the VKS add-on manager), and whether the
+  shipped `1.28.2+vmware` Istio injector honours our `istio-injection=disabled` labels. Idea-round
+  corrected the design (key CRD on `httproutes` to match `scripts/lib/istio.sh`; `2>&1` not
+  `2>/dev/null` so an RBAC-Forbidden can't read as "absent"; full injector YAML to
+  `/tmp/13-injector.yaml`; B26 conditional on istiod running; VAP framed as "does one exist?").
+  Impl-round (shell permitted → **measured**) cleared it; its two LOW polish fixes applied.
+- **B59 (#417/#418)** — reconciled the "jump box" naming inversion **at its source** in
+  `docs/sneakernet.md` (internet box / air-gap box), swept 3 residual "staging box" stragglers.
+- **B58 (#409)** — surfaced the sneakernet delivery fork on `## Choose your path` (selector 1).
+- **B56 (#413)** — removed the dead `ALLOW_PUBLIC_BASE` settable; recorded the `14-builder-build.sh`
+  digest-pin supersession in the SETTLED-2026-07-13 note (rewrite, not delete — dated-history rule).
+- **#416** — added the missing manual `git clone` step for a provisioned box.
+- **B54** — idea-round → **DON'T build** an ApplicationSet (recorded, not shipped). **B17** done.
+  **B60** recorded (outside/inside-box third vocabulary — owner call).
 
 ### 🔴 Distrust these — measured, not reasoned
 
@@ -571,13 +575,13 @@ MEDIUM fixed here and one LOW deferred. The two "related, still open" sub-items 
 - **A `<…>` placeholder on a line inside a sourced `.env` block is a shell redirection that silently
   truncates the file.** Use tables in operator `.env` docs, not `.env` code blocks.
 
-### Next
+### Next — the autonomous runway is EXHAUSTED; every open row is owner- or lab-gated
 
-**B58/B59** are small, no-lab README-structure follow-ups (both flagged by the B57 adversary rounds).
-Every other open row needs a real lab or an idea-round (**B54**). `docs/lab-validation-plan.md` step 13
-(Services with port 15021 + an `istio` selector key) remains the highest-value single command — it
-settles the egress-gateway discovery-ambiguity risk and is the only open item touching shipping-code
-behaviour. **B55** stays blocked on the Box password (owner to supply).
+- **Lab `docs/lab-validation-plan.md` step 13** (Services on port 15021 with an `istio` selector key,
+  now carrying B2/B26) is the highest-value single command — it settles the egress-gateway
+  discovery-ambiguity risk and is the only open item touching shipping-code behaviour.
+- **B55** blocked on the Box password (owner to supply). **B60** and **B59-alternative** (retire
+  "jump box" from `make jumpbox*`/`JUMPBOX_OS`) are naming decisions, owner's call — not defects.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
