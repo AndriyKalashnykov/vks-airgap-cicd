@@ -584,6 +584,11 @@ branch — **leave it**.
   Gateway-API CRD ownership + injector-selector risk, the only open item touching shipping behaviour.
 - **B60** (third box vocabulary in 8 script comments) and **B59-alternative** (retire "jump box" from
   `make jumpbox*`/`JUMPBOX_OS`) are naming decisions — owner's call, not defects.
+- **B61 / B62 / B63 — the session-end adversary's findings (2026-07-23), all measured, none fixed.**
+  B61 is the highest-value and is in *claude-config*, not here: a measured-false zsh claim in the
+  always-loaded corpus, so it misinforms every session in every repo (and fixing it SHRINKS the
+  corpus). B62 carries a ⛔ guard — the adversary's own HIGH finding was refuted by measuring the
+  operator's real portal folder, so do not "fix" the plugins glob. B63 is this section's own SHA.
 - **Operator-machine residue `git status` cannot see:** `~/.config/box-pw` (mode 0600) is left over
   from the DROPPED Mode-2 Box download. Nothing in this repo reads it. It is the owner's secret, so
   it was neither read nor removed — delete it with `rm ~/.config/box-pw` when convenient.
