@@ -11,7 +11,8 @@
 # measured in this repo's own B26 notes), so a chart major that renames `global.hub` fails without a
 # word, images fall back to docker.io, and on a DUAL-HOMED KinD box the nodes CAN reach docker.io —
 # so `helm --wait` succeeds and `98-verify-ingress` returns 200 over a mesh that never touched Harbor.
-# That is the same class `15-build-push-builder.sh` closed with ALLOW_PUBLIC_BASE, one component over.
+# That is the same class the builder closes one component over — `14-builder-build.sh` pins its base
+# image public by DIGEST from `images.lock`, so a broken mirror can't be papered over by a public pull.
 # Delete `--set global.hub` and this gate reddens: it discriminates (it is not testing the vendor).
 #
 # 🔴 DO NOT "OPTIMISE" THIS INTO AN OFFLINE `helm template` GATE. The charts live in `bundle/charts/`,
