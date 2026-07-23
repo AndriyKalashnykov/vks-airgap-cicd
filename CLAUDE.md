@@ -540,11 +540,10 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 > 🔴 **NO BUILD-STATUS CLAIMS IN THIS SECTION** — a task status is true when written and falsified by
 > the next commit. Write the STATE; query anything that moves.
 
-**State: `main` at `1d61fe8` (session-13 + post-reboot recovery all merged, CI green).** In flight:
-branch `chore/b55-vcf-cli-acquisition` — B55 close + the VCF-CLI acquisition docs + a plugins
-arch-safety fix; `static-check` GREEN locally; three idea-round adversaries (vks/bash/secrets)
-cleared the design; implementation-round + PR pending. `origin/renovate/renovate-43.x` is Renovate's
-bot-owned reusable branch — **leave it**.
+**State: `main` at `c8ae5ac`. NOTHING in flight** — no open PRs, no local branch but `main`, clean
+tree. The whole B55 + VCF-CLI arc landed (PR #424 bump + acquisition docs, PR #426 doc trim), then
+two Renovate PRs merged on top. `origin/renovate/renovate-43.x` is Renovate's bot-owned reusable
+branch — **leave it**.
 
 ### What this session did
 
@@ -558,6 +557,10 @@ bot-owned reusable branch — **leave it**.
   [Acquiring the VCF CLI archives](docs/vks-authentication.md#acquiring-the-licensed-vcf-cli-archives)
   (portal source + per-arch manifest + the arm64 argocd fallback); README's broken "where to get
   them" link repointed; scenario-1/2 + `.env.example` cross-linked.
+- **Pinned CLI + Plugins to 9.1.0.0400** (`.env.example`) after checking the Broadcom portal in the
+  operator's own browser — the previously-pinned build was already superseded there. Proven end to
+  end on the real artifacts, not inferred: `vcf version` reported v9.1.0.0400.25509669 and an
+  offline `vcf plugin install all` installed all 11 plugins from the folder.
 - **Plugins arch-safety fix** (`scripts/01-install-vcf-clis.sh`): the plugins glob was arch-blind
   (latent wrong-arch mis-pick on a partial arm64 folder). Bound it to `Linux_${vcf_arch}` + added a
   pre-install `vcf-*-linux_${go_arch}` assertion (mirrors `install_vcf_cli`). RED-proven in
@@ -581,6 +584,9 @@ bot-owned reusable branch — **leave it**.
   Gateway-API CRD ownership + injector-selector risk, the only open item touching shipping behaviour.
 - **B60** (third box vocabulary in 8 script comments) and **B59-alternative** (retire "jump box" from
   `make jumpbox*`/`JUMPBOX_OS`) are naming decisions — owner's call, not defects.
+- **Operator-machine residue `git status` cannot see:** `~/.config/box-pw` (mode 0600) is left over
+  from the DROPPED Mode-2 Box download. Nothing in this repo reads it. It is the owner's secret, so
+  it was neither read nor removed — delete it with `rm ~/.config/box-pw` when convenient.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
