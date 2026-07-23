@@ -529,66 +529,62 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-07-22 (session 10) — READ, THEN REPLACE (do not append)
+## ▶️ HANDOFF 2026-07-22 (session 11) — READ, THEN REPLACE (do not append)
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog
-([`BACKLOG.md`](BACKLOG.md)). History → git. Only "what is in flight and what to distrust" belongs here.
+([`BACKLOG.md`](BACKLOG.md)). History → git. Only "what is in flight and what to distrust" here.
 
-> 🔴 **NO BUILD-STATUS CLAIMS IN THIS SECTION.** A task status is true when written and falsified by
-> the next commit. Write the STATE. Query anything that moves.
+> 🔴 **NO BUILD-STATUS CLAIMS IN THIS SECTION** — a task status is true when written and falsified by
+> the next commit. Write the STATE; query anything that moves.
 
-**State: `main` clean, nothing unpushed, no worktrees, no parked agents. PR #400 merged, post-merge
-CI green.** Written as the LAST act.
+**State: `main` clean at `3a302d1`, post-merge CI green, nothing unpushed, no open PRs, no parked
+agents, no worktrees.** Written as the LAST act.
 
 ### What this session did
 
-Documented `NiranEC77/lab-automation` — a different automation of the SAME VCF/VKS lab (Terraform +
-PowerCLI + Carvel, vs our shell + helm + crane) — in [`docs/lab-automation.md`](docs/lab-automation.md),
-and corrected four of our own claims that reading it exposed. The survey was the ask; the corrections
-turned out to be worth more.
+Studied `NiranEC77/lab-automation` (a different automation of the same VCF/VKS lab) and folded the
+findings into our docs, then rewrote **Scenario 1** and hardened the auth path. Five PRs merged
+(#400–#403 + the session-10 handoff #401). New reference: [`docs/lab-automation.md`](docs/lab-automation.md).
 
 ### 🔴 Distrust these — measured, not reasoned
 
-- **A `--username` + `--type kubernetes` pairing now ships on the DEFAULT `vcf` login path and is
-  NOT lab-verified.** What IS verified (real 9.1 Supervisor, 2026-07-22): a POSITIONAL context name,
-  a BARE endpoint with no scheme, `--auth-type basic`, `--insecure-skip-tls-verify`, and that
-  `vcf context use <ctx>:<ns>` alone yields a working `kubectl`. The two extra flags come from a
-  third-party script. `30-vks-login.sh` prints the known-good minimal form as a fallback if the CLI
-  rejects either. **This is the most likely thing to bite on a real lab.**
-- **`vcf cluster kubeconfig get` is NOT on the path to Supervisor-namespace `kubectl`** — it is the
-  GUEST-cluster step. Our docs implied otherwise until now.
-- **Nothing in that other stack is evidence about PSA `restricted`** — it deactivates Pod Security
-  Admission on the guest cluster outright.
-- **`istioCNI.enabled` DEFAULTS TO `true`**, so the CNI DaemonSet ships on a sidecar install too.
-  This softens **B26** (no `istio-init` ⇒ no `NET_ADMIN` ask; residual narrows to `seccompProfile`) —
-  but that softening is INFERRED from the documented default, not measured. Step 13 of the lab plan
-  now checks it.
-- **A real VKS mesh may run a second (egress) gateway**, which makes `make attach-istio` fail loudly
-  on ambiguity by design. `gateways.egress.enabled` defaults `false`, so this is a mesh-admin choice,
-  not a universal. Whether VMware's egress template exposes 15021 is **unsettled** — one `kubectl`.
+- **The `vcf context create` `--username`+`--type kubernetes` pairing that `make vks-login` /
+  `31-fetch-argocd-kubeconfig.sh` send is NOT lab-verified.** What IS (real 9.1 Supervisor,
+  2026-07-22): positional context name, **bare** endpoint (no scheme), `--auth-type basic`,
+  `--insecure-skip-tls-verify`, and `vcf context use <ctx>:<ns>` alone → working `kubectl`. The
+  scripts print the known-good minimal form as a fallback. **Most likely thing to bite on a lab.**
+- **A `<…>` placeholder on a line inside a sourced `.env` block is a shell redirection that silently
+  truncates the file.** Fixed in scenario-1/2 by converting every `.env` block to a table; captured
+  as a `/readme` skill rule (claude-config). If you edit an operator `.env` doc, use tables.
+- **`ALLOW_PUBLIC_BASE` is DEAD** (documented in `.env.example`/CLAUDE.md, read by nothing since
+  `15-build-push-builder.sh` became a thin orchestrator). Not fixed this session — a real stale-doc
+  bug on `main`. The live flag for the same idea is `ALLOW_PUBLIC_CHARTS` (charts only).
+- **`check-readme-scenarios` never opens `README.md`** — the README's "a CI gate enforces this"
+  claims are false; that is why the sneakernet-in-Reference contradiction sat green. Not fixed.
 
-### What the adversary rounds caught that gates did not
+### Self-caught failure worth noting (not a new rule — an existing one, violated)
 
-Three rounds ran (two idea, one implementation). The implementation round had a **shell**, so it
-measured rather than inferred, and it found the one that mattered: `make env-check` would have
-hard-failed on a correctly-configured lab `.env`, and the operator's obvious remedy would have
-**permanently disabled** the namespace discovery this session added. That branch had zero test
-coverage. Separately, `check-env-clobber` was **vacuous** for both new variables while two comments
-claimed it covered them — its detector matched only `${VAR:-$(…)}`, not the guard-then-assign form.
-Both are fixed and RED-proven; the gate now has the missing detector.
+I lost an uncommitted `docs/lab-automation.md` edit (the Harbor comparison) to a `git reset --hard
+origin/main` while syncing after a merge — the exact data-loss the git-workflow rules warn about. No
+permanent loss (I had the text and re-applied it), but the lesson is behavioural: **commit or stash
+before `reset --hard`, every time**, and do not carry an uncommitted edit across a branch-switch.
 
-**Process note worth keeping:** an idea-round adversary refuted a proposal to install Istio as the
-VKS Carvel package as a fourth ingress mode — recorded with its reasoning in
-[`docs/decisions/istio-via-vks-package.md`](docs/decisions/istio-via-vks-package.md) so nobody
-rebuilds it. The VMware way for Scenario 1 is the vendor's own `vcf package install`, after which
-our existing `istio-existing` attach handles it. Zero new code.
+### Open — parked, NOT dropped (both need a real lab / an idea-round)
+
+- **B55** — verify the OS/arch coverage of lab-automation's Box CLI bundle. **BLOCKED on the Box
+  password**, which is private (not the reused lab credential; tested `VMware123!VMware123!` +
+  variants, all rejected by Box). Owner to supply the password. Everything knowable without it is in
+  the row: our `install-vcf-clis` already covers Linux amd64+arm64, local (`~/.local/bin`), sudo-free,
+  same version pins.
+- **B54** — declarative ArgoCD `ApplicationSet` attach for Scenario 1 (maybe 2). NOT built; needs its
+  own adversary idea-round (does it beat `make gitops` at N=1; the Scenario-2 ApplicationSet-RBAC
+  surface; no re-introduction of the expiring-credential shape). Owner chose "record it," not build.
 
 ### Next
 
-Every open row still needs a lab. See [`BACKLOG.md`](BACKLOG.md). The highest-value single command
-is now step 13 of [`docs/lab-validation-plan.md`](docs/lab-validation-plan.md): list Services with
-port 15021 and an `istio` selector key — it settles the egress-ambiguity risk, and it is the only
-open item that changes shipping-code behaviour.
+Every other open row still needs a lab. `docs/lab-validation-plan.md` step 13 (Services with port
+15021 + an `istio` selector key) remains the highest-value single command — it settles the egress-
+gateway discovery-ambiguity risk and is the only open item touching shipping-code behaviour.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
