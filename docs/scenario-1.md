@@ -38,6 +38,8 @@ make install-vcf-clis VCF_CLI_SRC_DIR=~/Downloads/vcf # the licensed argocd-vcf 
 make check-tools                                      # what you have, what is missing
 ```
 
+> Don't have the archives yet? See [Acquiring the licensed VCF CLI archives](vks-authentication.md#acquiring-the-licensed-vcf-cli-archives) — portal source, the per-arch manifest, and the arm64 argocd fallback.
+
 **Result:** `check-tools` lists no missing **required** CLI.
 
 **Then edit `.env`** — these keys already exist there (commented, from `.env.example`); uncomment and set:

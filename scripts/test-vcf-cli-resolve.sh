@@ -8,9 +8,10 @@
 # `main`-guard (it runs load_env + a dispatch case at the top level), so it can't be sourced in
 # isolation — we DRIVE it as a subprocess against a fixture VCF_CLI_SRC_DIR + a throwaway
 # BIN_DIR and assert the CORRECT binary landed. DRY_RUN=1 stubs the one mutating call
-# (`vcf plugin install`); no network path is reached (we only exercise `argocd` and `vcf`, not
-# `plugins`). Each fake binary is a shell script that echoes a unique MARKER, so running the
-# installed binary proves WHICH source archive / arch resolve_archive selected.
+# (`vcf plugin install`), and a fake `vcf` binary stands in for the plugins path's prerequisite,
+# so `plugins` resolve + arch-safety is exercised offline too. Each fake binary is a shell script
+# that echoes a unique MARKER, so running the installed binary proves WHICH source archive / arch
+# resolve_archive selected.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -38,6 +39,7 @@ ev() {
 }
 AV="$(ev ARGOCD_VCF_VERSION)"
 VV="$(ev VCF_CLI_VERSION)"
+PV="$(ev VCF_PLUGINS_VERSION)"
 
 pass=0; fail=0
 ok()  { pass=$((pass+1)); printf 'ok   - %s\n' "$1"; }
@@ -122,6 +124,49 @@ elif grep -q "no vcf artifact" "$err"; then
   ok "resolve_archive dies with an actionable 'no vcf artifact' message"
 else
   bad "empty source dir: failed but with an unexpected error"; sed 's/^/      /' "$err"
+fi
+
+echo "== plugins: correct-arch bundle → resolves, arch-asserts, installs (plugin install stubbed) =="
+fresh
+mkfake "$bin/vcf" "VCF-STUB"                                     # install_vcf_plugins needs vcf present
+mkdir -p "$d/cluster/v3.7.0"
+mkfake "$d/cluster/v3.7.0/vcf-cluster-linux_${arch}" "PLUGIN-${ARCH}"
+tar -C "$d" -czf "${src}/VCF-Consumption-CLI-PluginBundle-Linux_${ARCH}-${PV}.tar.gz" cluster
+if run_installer plugins "$src" "$bin" "$err"; then
+  ok "installs from the correct-arch (Linux_${ARCH}) plugin bundle"
+else
+  bad "correct-arch plugin bundle: installer exited non-zero"; sed 's/^/      /' "$err"
+fi
+
+echo "== NEGATIVE plugins: only the WRONG-arch bundle present → arch-bound glob refuses it (die) =="
+fresh
+mkfake "$bin/vcf" "VCF-STUB"
+mkdir -p "$d/cluster/v3.7.0"
+mkfake "$d/cluster/v3.7.0/vcf-cluster-linux_arm64" "PLUGIN-ARM64"
+# ONLY the ARM64-named bundle present; the exact AMD64 name is absent → resolve falls to the glob,
+# which (arch-bound) must NOT match the ARM64 file. Without the fix an arch-blind glob would pick it.
+tar -C "$d" -czf "${src}/VCF-Consumption-CLI-PluginBundle-Linux_ARM64-${PV}.tar.gz" cluster
+if run_installer plugins "$src" "$bin" "$err"; then
+  bad "wrong-arch-only plugin folder: installer should FAIL (no ${arch} bundle) but succeeded"
+elif grep -q "no plugins artifact" "$err"; then
+  ok "arch-bound glob refuses the wrong-arch plugin bundle (fails safe, no mis-install)"
+else
+  bad "wrong-arch-only plugin folder: failed but with an unexpected error"; sed 's/^/      /' "$err"
+fi
+
+echo "== NEGATIVE plugins: correct-arch FILENAME but wrong-arch CONTENTS → pre-install arch assertion (die) =="
+fresh
+mkfake "$bin/vcf" "VCF-STUB"
+mkdir -p "$d/cluster/v3.7.0"
+mkfake "$d/cluster/v3.7.0/vcf-cluster-linux_arm64" "PLUGIN-MISLABELED"   # arm64 contents…
+# …inside an AMD64-named bundle: exact-name matches so resolve SUCCEEDS; only the arch assertion catches it.
+tar -C "$d" -czf "${src}/VCF-Consumption-CLI-PluginBundle-Linux_${ARCH}-${PV}.tar.gz" cluster
+if run_installer plugins "$src" "$bin" "$err"; then
+  bad "mislabeled plugin bundle: installer should FAIL (no ${arch} contents) but succeeded"
+elif grep -q "no linux_${arch} binaries" "$err"; then
+  ok "pre-install arch assertion catches a mislabeled (wrong-content) plugin bundle"
+else
+  bad "mislabeled plugin bundle: failed but with an unexpected error"; sed 's/^/      /' "$err"
 fi
 
 echo

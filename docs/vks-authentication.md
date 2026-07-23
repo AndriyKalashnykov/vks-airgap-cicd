@@ -101,6 +101,40 @@ wget --no-check-certificate https://<SUPERVISOR_HOST>/wcp/plugin/linux-amd64/vsp
 > cluster)`. A password never reaches argv either way. `kubeconfig` (bring the lab's exported
 > kubeconfig) remains the simplest working method.
 
+## Acquiring the licensed VCF CLI archives
+
+`make install-vcf-clis` installs three Broadcom-**licensed**, operator-supplied artifacts a
+real-lab jump box needs (the local KinD flow needs none of them). Download them yourself with your
+entitlement, drop them **all in one folder**, and point `VCF_CLI_SRC_DIR` at it — the
+air-gap-correct path (carry the folder in; no download client, token, or network at install time).
+The installer auto-selects the archive matching this box's OS/arch and the pinned versions, so a
+mixed folder (every arch, plus the multi-arch `…-Binaries-…` bundle) resolves deterministically.
+Scenario 2's [Step 3b](scenario-2.md) has the full "just dump everything in there" walkthrough.
+
+**What to download** — the version pins live in `.env.example`:
+
+| Artifact | Filename shape | Arches |
+|---|---|---|
+| VCF Consumption CLI (`vcf`) | `VCF-Consumption-CLI-Linux_<ARCH>-<VCF_CLI_VERSION>.tar.gz`, or the multi-arch `…-Binaries-…` bundle | linux amd64 + arm64 |
+| Plugin bundle | `VCF-Consumption-CLI-PluginBundle-Linux_<ARCH>-<VCF_PLUGINS_VERSION>.tar.gz` | linux amd64 + arm64 (Linux only) |
+| VCF-flavored argocd | `argocd-cli-linux-<arch>-<ARGOCD_VCF_VERSION>.gz` | **amd64 only** (see below) |
+
+**Where — the portal (9.1+ is entitled).** The 9.1 artifacts come from the
+**[Broadcom support portal](https://support.broadcom.com)** (with your entitlement) or the
+**Supervisor** (`https://<SUPERVISOR_HOST>/wcp/vcf-cli/…`). Broadcom's public artifactory
+(`packages.broadcom.com/artifactory/vcf-distro/vcf-cli/`) serves the CLI only through **≤ 9.0.x**
+and does not carry our pinned 9.1 (measured 2026-07-23), so there is no no-auth public download for
+9.1 — use the portal, and keep `.env.example`'s pins in sync with what you place in the folder.
+
+**arm64 jump box — the VCF-flavored argocd is amd64-only.** Broadcom ships `argocd-vcf` for
+`linux-amd64` (and `darwin-amd64`), not `linux-arm64`, so on an arm64 box `make install-vcf-clis`
+dies at `install-argocd-vcf` with "no argocd artifact for linux/arm64". Use the **upstream argocd
+that `make deps` already installs** (arm64-native; Broadcom itself pairs a **3.x** argocd CLI with
+the 2.14.x server, so a 3.x CLI is the intended generation — this specific upstream build against
+the lab server is not lab-verified), and install the rest with `make install-vcf-cli` +
+`make install-vcf-plugins` instead of `all`. The `vcf` CLI and plugin bundle are available for both
+linux amd64 and arm64.
+
 ---
 
 [← back to the README](../README.md)

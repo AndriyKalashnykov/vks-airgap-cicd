@@ -232,6 +232,8 @@ make install-vcf-clis VCF_CLI_SRC_DIR=~/Downloads/vcf   # argocd-vcf + vcf + vcf
 # keep them in sync with the artifacts you place in the folder.
 ```
 
+> **Where to get them, per arch:** see [Acquiring the licensed VCF CLI archives](vks-authentication.md#acquiring-the-licensed-vcf-cli-archives). The 9.1 artifacts are entitled (Broadcom portal / Supervisor) — the public artifactory serves only ≤ 9.0.x. **On an arm64 jump box** the VCF-flavored `argocd-vcf` is amd64-only; use the upstream argocd `make deps` already installs and run `make install-vcf-cli` + `make install-vcf-plugins` instead of `all`.
+
 **Packages this step needs** (`tar`, `gzip`/`gunzip`, `find`, `install`) — **`make deps`
 already provides them** (`scripts/00-install-prereqs.sh` installs `tar`, `gzip`, `findutils`),
 so if you ran the bootstrap you're covered. The installer also checks for them and errors
