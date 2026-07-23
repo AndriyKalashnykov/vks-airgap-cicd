@@ -346,12 +346,12 @@ kubectl delete namespace psa-probe
 **Expect:** **REJECTED** before the label, **ACCEPTED** after. That RED→GREEN pair is the whole point.
 **Send back:** both dry-run outputs **verbatim**, and `--show-labels` on the fresh namespace.
 
-### 13. Istio — and the Gateway-API question · CHEAP, READ-ONLY
+### 13. Istio — Gateway-API path, CRD version, and the shipped injector (B2, B26) · CHEAP, READ-ONLY
 
 **Why:** our README asserts Broadcom routes with the **Kubernetes Gateway API**. That decides whether a tenant can just deploy, or must **ask the mesh admin** for a gateway. It also decides whether the KinD e2e proves anything at all.
 **Where:** jump box → **guest cluster** (Istio is a *guest*-cluster package, not a Supervisor Service).
 **Who needs it:** **US, badly** — this is the biggest open risk in the repo.
-**We then:** if the Gateway-API CRDs are **absent**, our README's central tenant claim is **wrong** — we rewrite it and build an `ISTIO_SHARED_GATEWAY` flow where the tenant must request a gateway. **We also learn whether our KinD e2e proves anything at all**: on KinD those CRDs are installed by cloud-provider-kind, not by us, so the path we advertise as verified may not exist on a lab.
+**We then:** if the Gateway-API CRDs are **absent**, our README's central tenant claim is **wrong** — we rewrite it and build an `ISTIO_SHARED_GATEWAY` flow where the tenant must request a gateway. **We also learn whether our KinD e2e proves anything at all**: on KinD those CRDs are installed by cloud-provider-kind, not by us, so the path we advertise as verified may not exist on a lab. **For B2** (the CRD *version*): if the VKS add-on manager owns the Gateway-API CRDs at a **different** `bundle-version` than our pinned `v1.5.1`, we stop SSA-force-applying our pin and reconcile with the add-on (respect its version, or set the `addon.addons.kubernetes.vmware.com/gateway-api: unmanaged` opt-out deliberately) — today `istio_ensure_gwapi_crds` may silently fight it. **For B26** (only if Istio is installed): if the shipped injector's `namespaceSelector`/`objectSelector` does **not** key on `istio-injection` / `sidecar.istio.io/inject`, our anti-injection defence is a no-op on the lab build and the PSA hazard (istio-init's `NET_ADMIN`) is live — we re-target the defence to whatever the VMware template matches.
 
 ```bash
 set -a; . ./.env; set +a
@@ -367,6 +367,20 @@ kubectl get svc -A -o json | jq -r '.items[] | select(any(.spec.ports[]?; .port=
 kubectl -n istio-system get ds istio-cni-node 2>&1 | tail -2
 # does this guest cluster even have kapp-controller? (load-bearing for the package-install path)
 kubectl api-resources 2>/dev/null | grep packaging.carvel.dev || echo "NO kapp-controller packaging API"
+# --- B2: the Gateway-API CRD's real bundle-VERSION + who OWNS it (do we FIGHT the VKS add-on manager?) ---
+# istio_ensure_gwapi_crds SSA-force-applies our pinned GATEWAY_API_VERSION=v1.5.1; from VKS 3.7.0 / VKr 1.36
+# the CRDs are a VKS-MANAGED add-on (ON by default, opt-out label), so our apply may up/downgrade a CRD it
+# owns. (keyed on httproutes to match scripts/lib/istio.sh; the bundle-version annotation is bundle-wide.)
+kubectl get crd httproutes.gateway.networking.k8s.io \
+  -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}{"\n"}' 2>&1; echo
+kubectl get crd httproutes.gateway.networking.k8s.io -o yaml 2>&1 | head -40   # if bundle-version is empty, this shows how the add-on versions/labels it
+kubectl get validatingadmissionpolicy 2>&1 | tee /tmp/13-vap.txt | grep -iE 'safe-upgrade|gateway' || echo "(no match — see /tmp/13-vap.txt: a Forbidden means we could NOT read, NOT that none exists)"
+# --- B26: IF istiod is running (per the image line above), does the SHIPPED injector honour our disable labels? ---
+# We suppress injection via ns istio-injection=disabled + pod sidecar.istio.io/inject=false; the shipped
+# 1.28.2+vmware injector's selectors decide whether those work (and thus suppress istio-init's NET_ADMIN,
+# which PSA restricted rejects). If /tmp/13-injector.yaml has NO istio-sidecar-injector webhook, Istio is not installed yet = DEFERRED, not a failure.
+kubectl get mutatingwebhookconfiguration -o yaml 2>&1 | tee /tmp/13-injector.yaml | \
+  grep -nE 'name:|namespaceSelector|objectSelector|matchExpressions|istio-injection|sidecar.istio.io/inject|istio.io/rev' | head -40
 # THE QUESTION:
 kubectl get crd | grep gateway.networking.k8s.io
 kubectl get gatewayclass istio -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}'; echo
@@ -374,7 +388,7 @@ make istio-preflight 2>&1 | tee /tmp/13-istio-preflight.log
 ```
 
 **Expect:** most likely **Istio is not installed at all** (it is a package *you* install) — that is a legitimate answer, and it means (b) and (c) cannot be settled until you install it.
-**Send back:** the package/addon listing **with exact name + version strings** · the Gateway-API CRD list · the GatewayClass Accepted status · the 15021 result (**empty = the shared gateway really is off**; **two or more lines = the ambiguity case, and we need to know**) · whether `istio-cni-node` exists · whether the carvel packaging API is present · the istio-preflight log.
+**Send back:** the package/addon listing **with exact name + version strings** · the Gateway-API CRD list · the GatewayClass Accepted status · the 15021 result (**empty = the shared gateway really is off**; **two or more lines = the ambiguity case, and we need to know**) · whether `istio-cni-node` exists · whether the carvel packaging API is present · the istio-preflight log · the Gateway-API CRD **`bundle-version`** + its full label set + whether a gateway-api `ValidatingAdmissionPolicy` exists (**B2**) · **if Istio is installed**, the full `/tmp/13-injector.yaml` (`mutatingwebhookconfiguration` YAML) **raw, uncropped** — the `inject NotIn ['false']` selector line often sits deep in the block (**B26**).
 
 > **Why the 15021 count matters more than it looks.** `istio.gateways.egress.enabled` defaults to `false`, but a mesh admin can enable it — and a real VKS values file in the wild does. That puts a **second** gateway in `istio-egress`. If its Service also exposes 15021 with an `istio` selector key, our discovery finds two candidates and **fails loudly by design** (`scripts/lib/istio.sh:85-89`) rather than picking one. We do not know whether VMware's egress template exposes 15021; **this one command settles it**, and it is the only item in this plan that changes shipping-code behaviour.
 >
