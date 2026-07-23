@@ -179,6 +179,13 @@ script**: `curl -fsSL … | REF=<tag-or-sha> bash` (pipe form) or `REF=<tag-or-s
 only the **open** toolchain — the licensed VCF CLIs stay operator-supplied (`make install-vcf-clis`).
 It needs internet (dual-homed); a fully air-gapped host uses the carried bundle instead.
 
+**On a box that already has `git` and `make`** you don't need the one-liner — clone and enter the repo,
+then go to [Toolchain and access](#toolchain-and-access) below:
+
+```bash
+git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git && cd vks-airgap-cicd
+```
+
 > **`curl` must already be present** for the pipe form above. Ubuntu images ship it; a **bare
 > Photon OS 5** box does **not** — run `sudo tdnf install -y curl` first, then re-run the command.
 >
