@@ -556,11 +556,11 @@ findings into our docs, then rewrote **Scenario 1** and hardened the auth path. 
 - **A `<…>` placeholder on a line inside a sourced `.env` block is a shell redirection that silently
   truncates the file.** Fixed in scenario-1/2 by converting every `.env` block to a table; captured
   as a `/readme` skill rule (claude-config). If you edit an operator `.env` doc, use tables.
-- **`ALLOW_PUBLIC_BASE` is DEAD** (documented in `.env.example`/CLAUDE.md, read by nothing since
-  `15-build-push-builder.sh` became a thin orchestrator). Not fixed this session — a real stale-doc
-  bug on `main`. The live flag for the same idea is `ALLOW_PUBLIC_CHARTS` (charts only).
+- **`ALLOW_PUBLIC_BASE` is DEAD** (documented, read by nothing). Verified + tracked as **B56**. The
+  live flag for the same idea is `ALLOW_PUBLIC_CHARTS` (charts only).
 - **`check-readme-scenarios` never opens `README.md`** — the README's "a CI gate enforces this"
-  claims are false; that is why the sneakernet-in-Reference contradiction sat green. Not fixed.
+  claims are false; that is why the sneakernet-in-Reference contradiction sat green. Verified +
+  tracked as **B57**.
 
 ### Self-caught failure worth noting (not a new rule — an existing one, violated)
 
