@@ -529,7 +529,7 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-07-22 (session 11) — READ, THEN REPLACE (do not append)
+## ▶️ HANDOFF 2026-07-23 (session 12) — READ, THEN REPLACE (do not append)
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog
 ([`BACKLOG.md`](BACKLOG.md)). History → git. Only "what is in flight and what to distrust" here.
@@ -537,54 +537,44 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 > 🔴 **NO BUILD-STATUS CLAIMS IN THIS SECTION** — a task status is true when written and falsified by
 > the next commit. Write the STATE; query anything that moves.
 
-**State: `main` clean at `3a302d1`, post-merge CI green, nothing unpushed, no open PRs, no parked
-agents, no worktrees.** Written as the LAST act.
+**State: `main` clean at the B57-fix merge (`18f9d1e`, #407), post-merge CI green, nothing unpushed,
+no parked agents, no worktrees.** In flight: this handoff (PR #408); and **#404** — a green,
+mergeable Renovate bump (`renovate` → v43.272.0, no auto-merge configured) that predates this
+session, left for the owner to merge/triage. Written as the LAST act.
 
 ### What this session did
 
-Studied `NiranEC77/lab-automation` (a different automation of the same VCF/VKS lab) and folded the
-findings into our docs, then rewrote **Scenario 1** and hardened the auth path. Five PRs merged
-(#400–#403 + the session-10 handoff #401). New reference: [`docs/lab-automation.md`](docs/lab-automation.md).
+Fixed **B57** (#407) — a README honesty bug. The README twice cited `make check-readme-scenarios` as
+"a CI gate enforces this," but that gate scans `docs/{kind-local,scenario-1,scenario-2}.md` and never
+opens `README.md` (by design). **The gate is correct and unchanged; the fix is to the README's claims
+about it:** dropped the false "nothing you have to run lives behind these [Reference] links" claim,
+kept the true "each scenario is self-contained" one, softened `## The three paths`'s "enforces exactly
+that", and **relocated** the runnable Sneakernet row out of `## Reference` into a delivery-mode fork by
+the paths — relocated, not deleted, so it stays findable in a nav position (the rule
+`check-doc-target-coverage` records), with "internet box"/"air-gap box" naming and the
+`docs/sneakernet.md` "jump box" inversion disclosed. Both adversary rounds ran: the idea round refuted
+the first cut (my true/false split was imprecise and a bare removal would have regressed
+discoverability); the implementation round cleared the committed diff (measured instrument) with one
+MEDIUM fixed here and one LOW deferred. The two "related, still open" sub-items were split into
+**B58** (duplicate path-selectors + a first-selector delivery pointer) and **B59** (full
+`docs/sneakernet.md` "jump box" rename); owner scoped this session to core B57 only.
 
 ### 🔴 Distrust these — measured, not reasoned
 
 - **The `vcf context create` `--username`+`--type kubernetes` pairing that `make vks-login` /
-  `31-fetch-argocd-kubeconfig.sh` send is NOT lab-verified.** What IS (real 9.1 Supervisor,
-  2026-07-22): positional context name, **bare** endpoint (no scheme), `--auth-type basic`,
-  `--insecure-skip-tls-verify`, and `vcf context use <ctx>:<ns>` alone → working `kubectl`. The
-  scripts print the known-good minimal form as a fallback. **Most likely thing to bite on a lab.**
+  `31-fetch-argocd-kubeconfig.sh` send is NOT lab-verified.** The known-good minimal form (positional
+  context name, **bare** endpoint, `--auth-type basic`, `--insecure-skip-tls-verify`, then
+  `vcf context use <ctx>:<ns>`) is printed as a fallback. **Most likely thing to bite on a lab.**
 - **A `<…>` placeholder on a line inside a sourced `.env` block is a shell redirection that silently
-  truncates the file.** Fixed in scenario-1/2 by converting every `.env` block to a table; captured
-  as a `/readme` skill rule (claude-config). If you edit an operator `.env` doc, use tables.
-- **`ALLOW_PUBLIC_BASE` is DEAD** (documented, read by nothing). Verified + tracked as **B56**. The
-  live flag for the same idea is `ALLOW_PUBLIC_CHARTS` (charts only).
-- **`check-readme-scenarios` never opens `README.md`** — the README's "a CI gate enforces this"
-  claims are false; that is why the sneakernet-in-Reference contradiction sat green. Verified +
-  tracked as **B57**.
-
-### Self-caught failure worth noting (not a new rule — an existing one, violated)
-
-I lost an uncommitted `docs/lab-automation.md` edit (the Harbor comparison) to a `git reset --hard
-origin/main` while syncing after a merge — the exact data-loss the git-workflow rules warn about. No
-permanent loss (I had the text and re-applied it), but the lesson is behavioural: **commit or stash
-before `reset --hard`, every time**, and do not carry an uncommitted edit across a branch-switch.
-
-### Open — parked, NOT dropped (both need a real lab / an idea-round)
-
-- **B55** — verify the OS/arch coverage of lab-automation's Box CLI bundle. **BLOCKED on the Box
-  password**, which is private (not the reused lab credential; tested `VMware123!VMware123!` +
-  variants, all rejected by Box). Owner to supply the password. Everything knowable without it is in
-  the row: our `install-vcf-clis` already covers Linux amd64+arm64, local (`~/.local/bin`), sudo-free,
-  same version pins.
-- **B54** — declarative ArgoCD `ApplicationSet` attach for Scenario 1 (maybe 2). NOT built; needs its
-  own adversary idea-round (does it beat `make gitops` at N=1; the Scenario-2 ApplicationSet-RBAC
-  surface; no re-introduction of the expiring-credential shape). Owner chose "record it," not build.
+  truncates the file.** Use tables in operator `.env` docs, not `.env` code blocks.
 
 ### Next
 
-Every other open row still needs a lab. `docs/lab-validation-plan.md` step 13 (Services with port
-15021 + an `istio` selector key) remains the highest-value single command — it settles the egress-
-gateway discovery-ambiguity risk and is the only open item touching shipping-code behaviour.
+**B58/B59** are small, no-lab README-structure follow-ups (both flagged by the B57 adversary rounds).
+Every other open row needs a real lab or an idea-round (**B54**). `docs/lab-validation-plan.md` step 13
+(Services with port 15021 + an `istio` selector key) remains the highest-value single command — it
+settles the egress-gateway discovery-ambiguity risk and is the only open item touching shipping-code
+behaviour. **B55** stays blocked on the Box password (owner to supply).
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
