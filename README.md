@@ -257,10 +257,7 @@ Then: **[Access the UIs](docs/access-uis.md)** — URLs, logins, passwords.
 **Delivery:** if no single box reaches **both** the internet *and* Harbor, use
 **[sneakernet](docs/sneakernet.md)** — pull the images on the **internet box**, carry the bundle
 across on a stick, then push them in from the **air-gap box**. It applies to **both** VKS scenarios
-and replaces `make mirror` (and `make install-all`, which mirrors in-line). (Naming caution:
-elsewhere this README says "jump box" for the internet-connected box, while `docs/sneakernet.md` uses
-"jump box" for the air-gap box and "staging box" for the internet one — so this note sticks to
-"internet box" / "air-gap box".)
+and replaces `make mirror` (and `make install-all`, which mirrors in-line).
 
 ## Reference
 

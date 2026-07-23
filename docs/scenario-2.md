@@ -21,9 +21,7 @@ cluster's namespaces and the workloads in them.
 | **The surprise** | there are **no Istio credentials** — no login, no token, no admin API. Mesh access is plain kubectl RBAC; `make istio-preflight` reports what you may do and what to ask for. |
 
 Everything you need is in this section — you do not have to read the other scenario. Dual-homed:
-the jump box reaches both the internet and the lab (Supervisor API + Harbor). (Note: `docs/sneakernet.md`
-uses "jump box" for the *air-gapped* inside box and "staging box" for the internet one — the opposite of
-here; when it matters, say *internet box* / *air-gap box*.)
+the jump box reaches both the internet and the lab (Supervisor API + Harbor).
 
 ## Discover Harbor & ArgoCD + request grants
 
