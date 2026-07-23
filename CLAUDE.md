@@ -532,7 +532,7 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-07-23 (session 13) — READ, THEN REPLACE (do not append)
+## ▶️ HANDOFF 2026-07-23 (session 13 + post-reboot recovery) — READ, THEN REPLACE (do not append)
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog
 ([`BACKLOG.md`](BACKLOG.md)). History → git. Only "what is in flight and what to distrust" here.
@@ -540,11 +540,21 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 > 🔴 **NO BUILD-STATUS CLAIMS IN THIS SECTION** — a task status is true when written and falsified by
 > the next commit. Write the STATE; query anything that moves.
 
-**State: `main` clean at `bb7d72b` (#419), post-merge CI green, nothing unpushed, no open PRs, no
-parked agents, no worktrees.** In flight: nothing. `origin/renovate/renovate-43.x` is Renovate's
-**reusable** branch (its latest bump is already on `main` — `git cherry` patch-id match; a two-dot
-diff shows this session's doc files as "removed" only because the branch is stale-behind-main). It is
-bot-owned — **leave it**, Renovate re-points or prunes it. Written as the LAST act.
+**State: `main` clean at `49b9a7b` (#420 — the session-13 handoff commit itself merged, superseding
+the `bb7d72b`/#419 this paragraph first described), post-merge CI green, nothing unpushed, no open
+PRs, no parked agents, no worktrees.** In flight: nothing.
+
+**Post-reboot recovery (this continuation):** a reboot interrupted the session *after* all session-13
+work had merged — recovery verified #419 and #420 both MERGED with green CI, working tree clean,
+`local main == origin/main`, nothing lost or stranded. The only artifact was a leftover fully-merged
+local branch `chore/backlog-b26-step13` (its content shipped under `docs/session-13-handoff`
+in PR #420), now pruned.
+
+`origin/renovate/renovate-43.x` is Renovate's **reusable** branch (its latest bump is already on
+`main` — `git cherry` patch-id match; a two-dot diff shows this session's doc files as "removed" only
+because the branch is stale-behind-main). It is bot-owned — **leave it**, Renovate re-points or
+prunes it. Recovery note added post-reboot; the session-13 sections below are unchanged and still
+accurate.
 
 ### What this session did
 
