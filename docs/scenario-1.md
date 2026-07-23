@@ -25,10 +25,10 @@ server**, not the `argocd` CLI or this repo's KinD pin. `make argocd-version` pr
 | **ArgoCD Service** — the `-legacy` manifest + the amd64 `argocd` CLI (`v3.0.19-vcf`) | **1.1.0** | [download](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&displayGroup=ArgoCD%20Service&release=1.1.0&os=&servicePk=538499&language=EN) |
 | **Harbor** — the `-legacy` manifest + its data-values file | **2.14.3** | [download](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&displayGroup=Harbor&release=2.14.3&os=&servicePk=542081&language=EN) |
 
-**Where each download goes — they are NOT all "one folder for the installer":**
+**Where each goes:**
 
-- **CLI + Plugins** (and the amd64 `argocd` CLI from the ArgoCD Service download) → drop the archives in one folder (e.g. `~/Downloads/vcf`), point `VCF_CLI_SRC_DIR` at it; `make install-vcf-clis` picks the archive matching your jump box's **OS/arch** (§1). On an **arm64** jump box the VCF `argocd` is amd64-only — use the upstream `argocd` from `make deps` ([details](vks-authentication.md#acquiring-the-licensed-vcf-cli-archives)).
-- **ArgoCD Service + Harbor** → **Supervisor-Service YAML manifests** (not OS/arch-specific, not consumed by `install-vcf-clis`); you upload them in **§2 (Harbor)** and **§3 (ArgoCD)**. Each ships two variants — use **`-legacy`** (`supervisor-service-{harbor,argocd}-legacy-…yml`) for a **disconnected/air-gapped** Supervisor (this lab's default), or **`-depot`** if the Supervisor reaches the Broadcom depot. *(Which one a given Supervisor requires is lab-pending; the basis is the portal's own "disconnected/airgapped VCF 9.1" label on the `-legacy` files.)*
+- **CLI + Plugins + the `argocd` CLI** → one folder (e.g. `~/Downloads/vcf`); set **`VCF_CLI_SRC_DIR=<folder>`** — `make install-vcf-clis` reads it and picks your OS/arch (§1). *(arm64: the VCF `argocd` is amd64-only — use the upstream one from `make deps`; [details](vks-authentication.md#acquiring-the-licensed-vcf-cli-archives).)*
+- **ArgoCD Service + Harbor** are Supervisor-Service YAMLs — uploaded in **§2**/**§3**, not via the installer.
 
 ## 1. Jump box
 
@@ -76,7 +76,7 @@ archived, not deleted, if it belongs to a *different* cluster — it may hold th
    keys, and `sed` silently changes nothing on a non-match — re-check if your version differs):
 
    ```bash
-   cp supervisor-service-harbor-data-values-v2.14.3.yml harbor-values.yaml
+   cp ~/Downloads/vcf/supervisor-service-harbor-data-values-v2.14.3.yml harbor-values.yaml
    sed -i \
      -e 's/hostname: yourdomain.com/hostname: harbor.vcf.lab/' \
      -e 's/enableNginxLoadBalancer: false/enableNginxLoadBalancer: true/' \
@@ -119,7 +119,7 @@ proven later, by Step 9's `make verify` pulling the app image into the guest.)
 **Goal:** the GitOps engine, running **on the Supervisor**.
 [Broadcom: Install Argo CD Service](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-argo-cd-service/install-argo-cd-service.html).
 
-1. Install the **ArgoCD Operator** Service (same flow as Harbor).
+1. Install the **ArgoCD Operator** Service — same flow as Harbor (upload `supervisor-service-argocd-legacy-*.yml` for a disconnected/air-gapped Supervisor, or the `-depot` variant if it reaches the Broadcom depot).
 2. Create a **vSphere Namespace** for the instance (e.g. `argocd-instance-1`) with VM + storage classes.
 3. **Load `.env` into your shell** so the raw `$VAR` commands in this step and Step 4 resolve —
    `make` sources `.env` for you, an interactive shell does **not**. Re-run after any `.env` edit:
