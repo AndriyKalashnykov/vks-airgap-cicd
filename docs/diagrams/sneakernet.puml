@@ -10,11 +10,11 @@ AddElementTag("offline", $fontColor="#FFFFFF", $bgColor="#B45309", $borderColor=
 
 System_Ext(net, "Internet", "Upstream registries + Maven Central\ngcr.io · ghcr.io · docker.io · repo.maven.apache.org")
 
-System_Boundary(stagez, "STAGING BOX  ·  CAN reach the internet  ·  CANNOT reach Harbor") {
+System_Boundary(stagez, "INTERNET BOX  ·  CAN reach the internet  ·  CANNOT reach Harbor") {
   System(stage, "Pull · build · bundle", "1. make mirror-pull\n2. make builder-build\n3. make bundle\n\nNeeds NO .env — it never talks\nto Harbor or the cluster.")
 }
 
-System_Boundary(jbz, "JUMP BOX  ·  CANNOT reach the internet  ·  CAN reach Harbor + the cluster") {
+System_Boundary(jbz, "AIR-GAP BOX  ·  CANNOT reach the internet  ·  CAN reach Harbor + the cluster") {
   System(jb, "Load · push · install", "1. make bundle-load\n2. make mirror-push\n3. make builder-push\n4. make mirror-verify\n5. platform → gitops →\n    install-ingress → verify\n\nNeeds its OWN .env:\nHARBOR_URL / USERNAME /\nPASSWORD / CA_FILE, KUBECONFIG", $tags="offline")
 }
 
@@ -28,7 +28,7 @@ Rel(jb, harbor, "push, then PROVE it by\nFETCHING every blob back", "HTTPS (self
 
 note bottom of stage
   You do NOT carry .env across.
-  The staging box cannot know Harbor's
+  The internet box cannot know Harbor's
   address or credentials — it cannot
   reach Harbor at all.
 end note
