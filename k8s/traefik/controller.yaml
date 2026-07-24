@@ -85,7 +85,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: traefik
-          image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/traefik:v3.7.8
+          image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/traefik:v3.7.9
           args:
             - "--global.checknewversion=false"
             - "--global.sendanonymoususage=false"
