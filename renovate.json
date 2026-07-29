@@ -60,12 +60,13 @@
     },
     {
       "customType": "regex",
-      "description": "Image tags in k8s + Tekton manifests, referenced as ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/<repo>:<tag> (a ${VAR}-prefixed ref the built-in docker manager can't parse). depName/currentValue are extracted from the ref so these bump in lockstep with images/images.txt; the check-image-alignment gate is the deterministic backstop.",
+      "description": "Image tags in k8s + Tekton manifests AND in scripts/ shell defaults, referenced as ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/<repo>:<tag> (a ${VAR}-prefixed ref the built-in docker manager can't parse). depName/currentValue are extracted from the ref so these bump in lockstep with images/images.txt; the check-image-alignment gate is the deterministic backstop. scripts/ IS IN SCOPE because gitea's tag lives in 40-install-gitea.sh's default (the manifest carries ${GITEA_IMAGE} so the Harbor-less cross-cluster e2e can override it) — with only k8s/ in scope the bot bumped images.txt and could not reach the consumer, so EVERY gitea bump landed RED on check-image-alignment (measured: PR #443, 2026-07-28). The char classes exclude `}` AND `<>`, both load-bearing: without `}` the shell default's closing brace of ${GITEA_IMAGE:-...} is captured into currentValue (measured: currentValue='1.27.0-rootless}'), which the docker datasource cannot version, so the row is SKIPPED SILENTLY — green config, zero coverage, the same invisible-untracking failure documented on the images.txt and .env.example managers above. Without `<>` the regex also extracts placeholder prose from COMMENTS (measured over scripts/: 4 deps instead of 1 — `<repo>:<tag>)` from check-image-alignment.sh's own docstring and `<app>-builder:<tag>,` from 14-builder-build.sh + 22-builder-push.sh), producing chronic failed docker lookups on the Dependency Dashboard — the same class as the kaniko registryUrl rule below. No legal Docker repo or tag contains `}`, `<` or `>`, so neither exclusion can drop a real ref.",
       "managerFilePatterns": [
-        "/^k8s/.+\\.yaml$/"
+        "/^k8s/.+\\.yaml$/",
+        "/^scripts/.+\\.sh$/"
       ],
       "matchStrings": [
-        "\\$\\{HARBOR_URL\\}/\\$\\{HARBOR_INFRA_PROJECT\\}/(?<depName>[^:\\s\"]+):(?<currentValue>[^\\s\"]+)"
+        "\\$\\{HARBOR_URL\\}/\\$\\{HARBOR_INFRA_PROJECT\\}/(?<depName>[^:\\s\"}<>]+):(?<currentValue>[^\\s\"}<>]+)"
       ],
       "datasourceTemplate": "docker"
     }

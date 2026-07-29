@@ -40,25 +40,58 @@ while read -r ref; do
   else
     echo "ok    ${repo}=${mtag}"
   fi
-done < <( { grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"]+:[^[:space:]"]+' k8s/ 2>/dev/null || true
+done < <( { grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"}<>]+:[^[:space:]"}<>]+' k8s/ 2>/dev/null || true
             # Gitea's ref lives in the SCRIPT's default, not the manifest: the manifest carries
             # ${GITEA_IMAGE} so a Harbor-less test (e2e-cross-cluster) can override it. A gate that
             # only greps k8s/ would have gone BLIND to the gitea tag the moment that changed — the
             # gate must follow its content. (Same treatment as eclipse-temurin below.)
+            #
+            # SCOPE is scripts/ — NOT a named file. Naming 40-install-gitea.sh was an enumerated
+            # list of one: the next script to gain a Harbor ref would drift silently, and Renovate's
+            # manager (renovate.json, widened in the same change) would not track it either. Measured
+            # 2026-07-28: broad and narrow yield the IDENTICAL ref set (arm 1 total = 5), so the
+            # widening is behaviour-neutral today and rot-proof tomorrow.
+            #
+            # BOTH classes exclude `}` AND `<>`. The `<>` half is LOAD-BEARING, not tidiness: this
+            # file's OWN docstring (line 3) carries the pattern UNESCAPED, and 14-builder-build.sh +
+            # 22-builder-push.sh carry `<app>-builder:<tag>` in prose. Without `<>` those COMMENTS
+            # become refs, which (a) emits permanent false WARNs, and (b) silently DISABLES the
+            # `refs_examined -eq 0` blind-guard below, because the comments alone hold the count at 2.
+            # Measured 2026-07-28 with k8s/ AND 40-install-gitea.sh emptied: without `<>` the gate
+            # printed "all mirrored image tags aligned" rc=0 (BLIND, undetected); with `<>` it printed
+            # the BLIND error, rc=1. No legal Docker repo or tag contains `<` or `>`, so excluding
+            # them can never drop a real ref. (adversary-bash-git-cli F1/F2, 2026-07-28.)
             #
             # `|| true` on BOTH greps is load-bearing under `set -euo pipefail`: when the FIRST grep
             # finds nothing it exits 1, `set -e` terminates this brace group, and the SECOND grep
             # NEVER RUNS — so the gitea mitigation directly above was defeated by exactly the
             # scenario it was written for. Measured 2026-07-19: k8s/ emptied -> 0 iterations, while
             # running the gitea grep alone still yields its ref.
-            grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"}]+:[^[:space:]"}]+' scripts/40-install-gitea.sh 2>/dev/null || true
+            grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"}<>]+:[^[:space:]"}<>]+' scripts/ 2>/dev/null || true
           } | sed -E 's|\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/||' | sort -u)
 
 # `die` is NOT available here — lib/os.sh is sourced further down (see the source line below), so a
 # `die` at this point would be `command not found` -> rc 127, which the vacuity harness classifies
 # as INCONCLUSIVE (never a pass) rather than a demonstrated RED. Inline the failure.
 if [ "$refs_examined" -eq 0 ]; then
-  echo "ERROR check-image-alignment: examined 0 mirrored image ref(s) from k8s/ + 40-install-gitea.sh — the gate has gone BLIND on this arm." >&2
+  echo "ERROR check-image-alignment: examined 0 mirrored image ref(s) from k8s/ + scripts/ — the gate has gone BLIND on this arm." >&2
+  exit 1
+fi
+
+# SELF-HIT ASSERTION. Arm 1 greps scripts/, and THIS FILE lives in scripts/ — so the gate reads its
+# own source. Its docstring and the comments above spell the pattern out in prose; the `<>` exclusion
+# in both char classes is the ONLY reason those do not register as refs. Assert that directly, so a
+# future edit that reintroduces a matching literal here fails LOUDLY instead of silently inflating
+# refs_examined and disabling the blind-guard above.
+#
+# ⚠️ DO NOT "FIX" A FAILURE HERE BY EXCLUDING THIS FILE FROM THE GREP. Excluding it blinds the gate
+# to every future REAL ref in it. Fix the literal instead (write it escaped, or with <> around the
+# placeholders, exactly as lines 3 and 43-55 do).
+self_hits="$(grep -cE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"}<>]+:[^[:space:]"}<>]+' "${SCRIPT_DIR}/check-image-alignment.sh" || true)"
+if [ "${self_hits:-0}" -ne 0 ]; then
+  echo "ERROR check-image-alignment: this gate's OWN source contributes ${self_hits} ref(s) to arm 1." >&2
+  echo "       That inflates refs_examined and DISABLES the blind-guard above. Fix the literal in" >&2
+  echo "       check-image-alignment.sh (escape it, or use <> placeholders) — do NOT exclude the file." >&2
   exit 1
 fi
 
