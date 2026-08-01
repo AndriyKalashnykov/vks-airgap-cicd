@@ -51,7 +51,7 @@ gitea/gitea:1.27.1-rootless
 
 # ---- Traefik (single ingress controller fronting the UIs at *.vks.local) ----
 # renovate: datasource=docker depName=traefik
-traefik:v3.7.9
+traefik:v3.7.10
 
 # ---- Istio (default ingress: control plane + ingress gateway; air-gap hub=Harbor) ----
 # renovate: datasource=docker depName=istio/pilot
