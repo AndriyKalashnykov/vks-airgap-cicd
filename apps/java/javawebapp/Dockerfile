@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.25
+# syntax=docker/dockerfile:1.26
 # Multi-stage build for the air-gapped VKS CI/CD demo web UI.
 # Built by the Tekton pipeline (kaniko) and pushed to the VKS-provided Harbor.
 
