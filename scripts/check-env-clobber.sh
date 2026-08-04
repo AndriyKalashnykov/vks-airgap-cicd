@@ -61,7 +61,7 @@ EXEMPT='APP_DEV_PORT|INGRESS_CONTROLLER'
 # THE PROTECTED LIST IS DERIVED FROM lib/os.sh, NOT COPIED. A second hand-typed list is exactly the
 # enumerated-list rot this repo keeps getting bitten by: it would drift the first time someone adds a
 # selector to load_env and not here, and the gate would then reject a variable that is, in fact, safe.
-SELECTORS='KUBECONFIG|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_CONTEXT|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_CA_FILE'
+SELECTORS='KUBECONFIG|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_SUPERVISOR_KUBECONFIG|VKS_CONTEXT|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_CA_FILE'
 
 # Read the snapshot list out of load_env itself: `for _sel in A B C ...; do`
 PROTECTED="$(sed -n 's/^[[:space:]]*for _sel in \(.*\); do$/\1/p' "${REPO_ROOT}/scripts/lib/os.sh" | head -1)"

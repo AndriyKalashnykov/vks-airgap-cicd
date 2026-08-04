@@ -203,7 +203,59 @@ proven later, by Step 9's `make verify` pulling the app image into the guest.)
 
 **Goal:** where Gitea, Tekton and your app run. You need **cluster-admin** on it.
 
-Create a vSphere Namespace, provision a VKS cluster in it, then export its kubeconfig:
+**Already have a namespace and a cluster?** Skip to *"Export its kubeconfig"* below.
+
+### 4a. Create the vSphere Namespace
+
+Two mechanisms exist and they are **not** interchangeable:
+
+| | who can run it | notes |
+|---|---|---|
+| **vCenter REST** (`POST /api/vcenter/namespaces/instances`) | vCenter admin — **which is this scenario's persona** (see the README: *"I am the admin"*) | creates an **unquota'd** namespace |
+| `kubectl create namespace` (self-service) | any user in the namespace-template's allowlist | **cannot be your first step** — see below |
+
+> ⚠️ **Self-service is NOT a tenant alternative to the REST call — it is downstream of it.**
+> Turning it on requires a vCenter SSO-admin session, a storage-policy id, a network, a
+> `namespace-templates` POST and an `activate` POST — and the network is resolved by reading an
+> **existing** namespace. So on a bare Supervisor, `kubectl create namespace` returns
+> `Error from server (Forbidden)`. Treat it as an optional, one-time **platform enablement** your
+> admin performs, not as a step in this runbook.
+>
+> ⚠️ **If your platform team's template sets quotas, size them for the cluster.** MEASURED on one
+> 9.1 lab: a 2-node guest cluster consumes **~48 GiB** in its namespace — 40 GiB of node root disks
+> (which appear as **PVCs**, 20 GiB each) plus ~8 GiB attributed to VM Operator. A template
+> defaulting to 20 GiB is under-provisioned before a single application PVC.
+> *(On a stock VCF install there may be no quota at all — measured here: a self-service namespace
+> came back with `appliedLimit` unlimited, identical to a REST-created one. Check yours; do not
+> assume either way.)*
+
+### 4b. Provision the guest cluster — DISCOVER, then pin
+
+Neither the ClusterClass nor the Kubernetes version is a constant. **Read them off your own
+Supervisor** and put the answers in `.env`:
+
+```bash
+# Newest READY ClusterClass (one lab had SIX: builtin-generic-v3.1.0 … v3.6.0)
+kubectl get clusterclass -n vmware-system-vks-public
+# TKrs that are BOTH Ready and Compatible — anything else will be rejected at admission
+kubectl get kubernetesreleases
+```
+
+→ `.env`: `VKS_CLUSTERCLASS`, `VKS_K8S_VERSION`, `VKS_VM_CLASS`, `VKS_STORAGE_CLASS`,
+`VKS_CONTROL_PLANE_COUNT`, `VKS_NODE_COUNT`.
+
+> ⚠️ **`.status.phase == Provisioned` is NOT readiness.** A cluster reports `Provisioned` before its
+> nodes join, and a real one has been observed sitting there with **zero** available nodes. Gate on
+> the conditions instead, then on nodes:
+>
+> ```bash
+> kubectl -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" \
+>   -o jsonpath='{range .status.conditions[*]}{.type}={.status}{"\n"}{end}'
+> # require ControlPlaneInitialized=True AND RemoteConnectionProbe=True, then:
+> kubectl --kubeconfig ./secrets/vks.kubeconfig get nodes
+> ```
+
+### Export its kubeconfig
 
 ```bash
 vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"    # Step 3 left the context on the ArgoCD ns; switch it

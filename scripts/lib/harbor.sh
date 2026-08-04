@@ -11,6 +11,19 @@
 harbor_setup() {
   local tmp="$1"
   : "${HARBOR_URL:?}"; : "${HARBOR_USERNAME:?set HARBOR_USERNAME in .env (admin for scenario 1, your robot for scenario 2)}"
+  # HARBOR_URL is a BARE HOST — every call below builds "${SCHEME}://${HARBOR_URL}/…". A scheme here
+  # produces https://https://host/… and curl fails with `(6) Could not resolve host: https`, which
+  # names neither the variable nor the file. MEASURED 2026-08-04: fetch-ca.sh accepts a scheme (it
+  # parses host/port), so §6 of scenario-1 passes and the failure lands two steps later in §7 —
+  # far from the mistake. Normalise, and SAY SO: silently accepting both spellings would leave the
+  # operator's .env wrong for every other consumer.
+  case "$HARBOR_URL" in
+    http://*|https://*)
+      log_warn "HARBOR_URL='${HARBOR_URL}' carries a scheme; HARBOR_URL is a BARE HOST. Stripping it —"
+      log_warn "  fix .env, because other consumers read it verbatim."
+      HARBOR_URL="${HARBOR_URL#http://}"; HARBOR_URL="${HARBOR_URL#https://}" ;;
+  esac
+  HARBOR_URL="${HARBOR_URL%/}"          # a trailing slash yields //api/v2.0/… on some proxies
   : "${HARBOR_PASSWORD:?set HARBOR_PASSWORD in .env (never passed on argv)}"
   HARBOR_TLS_VERIFY="true"
   if [ "${HARBOR_INSECURE:-0}" = "1" ]; then

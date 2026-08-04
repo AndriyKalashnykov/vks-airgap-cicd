@@ -439,7 +439,7 @@ load_env() {
   # believing you had switched — the same shape as the KUBECONFIG bug against the wrong cluster.
   # It surfaced in the jump-box matrix: the container is handed `-e HARBOR_URL=<the LB IP>`, load_env
   # replaced it with `harbor.vks.local`, and all four legs died resolving a hostname that exists nowhere.
-  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT HARBOR_CA_FILE HARBOR_URL; do
+  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT HARBOR_CA_FILE HARBOR_URL; do
     if [ -n "${!_sel:-}" ]; then
       _snap_names="${_snap_names} ${_sel}"
       _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'

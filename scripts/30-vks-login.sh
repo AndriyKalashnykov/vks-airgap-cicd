@@ -195,7 +195,26 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # DOWNLOAD recommended plugins. On the air-gapped jump box this repo exists for, that is
     # a hang or a confusing failure AT THE AUTH STEP, which reads as a credential fault.
     # </dev/null: a non-tty then gets a deterministic error instead of blocking on the prompt.
-    VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 \
+    # --- ISOLATION: do NOT let the vcf CLI write into the GUEST kubeconfig -------------
+    # MEASURED 2026-08-04: `vcf context create` snapshots $KUBECONFIG, writes its Supervisor
+    # contexts INTO that file, and repoints its current-context at the Supervisor:
+    #     secrets/vks.kubeconfig  current-context: lab-gc1 (guest, :6443)
+    #                         ->  current-context: vks-cicd:lab (SUPERVISOR, :443)
+    # Nothing in this repo passes `--context` (0 hits), so every later kubectl — and
+    # `make platform` / `make gitops` — would silently target vSphere's CONTROL PLANE
+    # instead of the workload cluster. Give the CLI its own file.
+    #
+    # COMMAND-SCOPED, not a subshell: matches 31-fetch-argocd-kubeconfig.sh's idiom, cannot
+    # leak, and keeps the create's own exit status (a subshell would merge create+use).
+    # `--kubeconfig` is NOT an option here — MEASURED, the CLI enforces
+    # [endpoint kubeconfig] as an exclusive group, so the env var is the only route.
+    # ABSOLUTE path on purpose: the chosen path is PERSISTED into ~/.config/vcf/config.yaml
+    # and resolved at USE time, so a relative one breaks from any other cwd.
+    SUP_KUBECONFIG="${VKS_SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}"
+    mkdir -p "$(dirname "$SUP_KUBECONFIG")"
+    log_info "vcf contexts -> ${SUP_KUBECONFIG} (KUBECONFIG=${KUBECONFIG} is left untouched)"
+
+    KUBECONFIG="$SUP_KUBECONFIG" VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 \
       vcf context create "${create_args[@]}" </dev/null
 
     # Namespace: pinned in .env, or DISCOVERED from the contexts the create above just produced.
@@ -229,9 +248,29 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # ~/.config/vcf/config.yaml, a DIFFERENT state store from the kubeconfig, and the two were
     # measured DISAGREEING — `iscurrent=true` for a kubecontext absent from the very file the
     # same record names. Only the artifact settles it.
-    VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 \
+    KUBECONFIG="$SUP_KUBECONFIG" VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 \
       vcf context use "${VKS_CONTEXT_NAME}:${VKS_NAMESPACE}" </dev/null \
       || log_warn "'vcf context use' exited non-zero — verifying the end result before judging it"
+
+    # VERIFY THE ARTIFACT, because the status above cannot be trusted and neither can
+    # `vcf context list`'s `.iscurrent`: that lives in ~/.config/vcf/config.yaml, a DIFFERENT
+    # store from the kubeconfig, and the two were MEASURED disagreeing — `iscurrent=true` for a
+    # kubecontext absent from the very file the same record names. Only a read settles it.
+    kubectl --kubeconfig "$SUP_KUBECONFIG" -n "$VKS_NAMESPACE" get ns >/dev/null 2>&1 \
+      || die "the Supervisor context did not come up: ${SUP_KUBECONFIG} cannot list namespaces in
+'${VKS_NAMESPACE}'. Inspect: KUBECONFIG='${SUP_KUBECONFIG}' vcf context list"
+    log_info "Supervisor context verified via ${SUP_KUBECONFIG}"
+
+    # PUBLISH IT — this pairing is MANDATORY, not a nicety. 70-configure-argocd.sh does
+    # `ARGOCD_KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}"`, and `install-all` does NOT run
+    # `fetch-argocd-kubeconfig`. Until now ArgoCD ops reached the Supervisor BY ACCIDENT — via
+    # the very pollution isolated above. Remove the pollution without publishing this and the
+    # fallback lands on the GUEST, where argocd-server does not exist.
+    if [ -z "${ARGOCD_KUBECONFIG:-}" ]; then
+      state_set ARGOCD_KUBECONFIG "$SUP_KUBECONFIG"
+      log_info "published ARGOCD_KUBECONFIG=${SUP_KUBECONFIG} (ArgoCD runs on the SUPERVISOR;"
+      log_info "  without this 'make gitops' would fall back to the GUEST kubeconfig)"
+    fi
 
     # The kubectl-vsphere plugin (for `kubectl vsphere`-style access, if the workload
     # cluster needs it) is fetched from the Supervisor at:
