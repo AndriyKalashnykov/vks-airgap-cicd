@@ -91,9 +91,34 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     # this call rejects either flag, the minimal form above is known-good — fall back to it and
     # tell us, per lab-validation-plan step 3.
     create_args=("$VKS_CONTEXT_NAME" --endpoint "$SUPERVISOR_HOST" --username "$user" --type kubernetes --auth-type basic)
-    if is_true "${VKS_INSECURE_SKIP_TLS_VERIFY:-}"; then   # one truthiness rule, repo-wide (lib/os.sh)
+    # TLS: prefer a VERIFIED CA over skipping verification. MEASURED 2026-08-04 —
+    # `vcf context create --help` documents BOTH:
+    #     --ca-certificate string     Path to the endpoint public certificate file
+    #     --insecure-skip-tls-verify  Skip TLS certificate verification for endpoint
+    # The old code offered only the second, so the only documented path in scenario-1 §3
+    # turned verification OFF — against a Supervisor whose CA this repo already knows how to
+    # fetch and pin (VKS_CA_CERT_FILE, and the same VERIFIED pattern as fetch-harbor-ca).
+    # A sibling automation of these same labs passes --ca-certificate with the VMCA root.
+    #
+    # The elif is REQUIRED, not merely tidy: MEASURED 2026-08-04, the CLI enforces these as an
+    # EXCLUSIVE flag group — passing both fails with
+    #   [x] : … [ca-certificate insecure-skip-tls-verify] were all set
+    # Order is deliberate: an explicitly-set CA WINS, so setting both cannot silently downgrade
+    # you to unverified TLS.
+    if [ -n "${VKS_CA_CERT_FILE:-}" ] && [ -s "${VKS_CA_CERT_FILE}" ]; then
+      create_args+=(--ca-certificate "$VKS_CA_CERT_FILE")
+      log_info "TLS: verifying the Supervisor against ${VKS_CA_CERT_FILE}"
+    elif is_true "${VKS_INSECURE_SKIP_TLS_VERIFY:-}"; then   # one truthiness rule, repo-wide (lib/os.sh)
       create_args+=(--insecure-skip-tls-verify)
+      log_warn "TLS: verification is OFF (VKS_INSECURE_SKIP_TLS_VERIFY). Prefer VKS_CA_CERT_FILE —"
+      log_warn "  a credential is submitted over this connection."
+    elif [ -n "${VKS_CA_CERT_FILE:-}" ]; then
+      die "VKS_CA_CERT_FILE='${VKS_CA_CERT_FILE}' is set but missing or empty. Refusing to fall
+back to skipping TLS verification: that would silently downgrade a connection you asked to verify."
     fi
+    # Neither set: the CLI verifies against the system trust store and fails closed with
+    # 'x509: certificate signed by unknown authority' — the correct outcome, and it costs NO
+    # auth attempt (it fails before authenticating). MEASURED 2026-08-04.
 
     log_info "creating VCF context '${VKS_CONTEXT_NAME}' for the Supervisor at ${SUPERVISOR_HOST} (user: ${user})"
     log_warn "INTERACTIVE: expect a PASSWORD prompt. To avoid it, export VCF_CLI_VSPHERE_PASSWORD"
@@ -130,7 +155,48 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     # make a broken path LOOK automated.
     # Note also: the prompt recurs at token refresh [community], so a long `make install-all` can
     # block mid-run; that is the case for exporting it for the session, deliberately.
-    vcf context create "${create_args[@]}"
+    # --- IDEMPOTENCE: `vcf context create` REFUSES a duplicate name -------------------
+    # Measured (nested-vsphere-lab B209): a second run dies with `context "<name>" already
+    # exists`, and the error text talks about CREDENTIALS — it sent an operator to check a
+    # password that was fine. The context store is ~/.config/vcf/config.yaml: OUTSIDE this
+    # repo and outside any teardown, so it survives every destroy and blocks every rebuild.
+    #
+    # Delete-then-create, NOT reuse. Reuse was designed and REFUTED: the obvious probe
+    # (`kubectl get ns`) reads $KUBECONFIG — the GUEST cluster — while `vcf context use`
+    # acts on the context's OWN kubeconfigpath. A reuse predicate built on that reports
+    # "healthy, no password needed" while pointing at the wrong cluster. Do not add it back
+    # without a probe that reads the context's OWN kubeconfig. ⚠️ The field is
+    # `.clusterOpts.path` (+ `.clusterOpts.context`) — MEASURED: `vcf context get` and
+    # `vcf context list` return DIFFERENT SCHEMAS, and `get` has no `.kubeconfigpath` key at
+    # all, so a `jq .kubeconfigpath` probe returns null forever and reads as "no kubeconfig".
+    #
+    # We only ever delete OUR OWN $VKS_CONTEXT_NAME — "delete only what you created".
+    #   -y                            : else it PROMPTS (hangs a tty run, errors in CI)
+    #   --skip-delete-kubeconfig-context : -y otherwise also mutates the caller's kubeconfig
+    # An unconditional delete needs no existence check, so it cannot get one wrong: a
+    # substring `case` matches `vks-cicd` inside `vks-cicd-old`, and a `$(…)` capture of
+    # `vcf context list` trips `set -e` when no context exists.
+    log_info "removing any pre-existing vcf context named '${VKS_CONTEXT_NAME}' (create refuses duplicates)"
+    vcf context delete "$VKS_CONTEXT_NAME" -y --skip-delete-kubeconfig-context >/dev/null 2>&1 || true
+
+    # --- PASSWORD: presence only, never the value (security.md) ------------------------
+    # VCF_CLI_VSPHERE_PASSWORD is the ONLY supported mechanism (no --password flag, no stdin
+    # form) and it reaches the CLI through execve's envp, never argv — so an already-exported
+    # value needs NO wiring here. Do NOT read it from .env: docs/scenario-1.md §1 forbids the
+    # Supervisor password in .env, and .env.example scopes VKS_PASSWORD to the legacy
+    # `vsphere` method only.
+    if [ -z "${VCF_CLI_VSPHERE_PASSWORD:-}" ]; then
+      log_warn "VCF_CLI_VSPHERE_PASSWORD is not exported — this run will PROMPT, and will FAIL in CI."
+      log_warn "  export it for the session (docs/scenario-1.md §1). NEVER 'vcf config set env.…',"
+      log_warn "  which writes it in plaintext to ~/.config/vcf/config.yaml, outside every teardown."
+    fi
+
+    # VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1: create otherwise tries to
+    # DOWNLOAD recommended plugins. On the air-gapped jump box this repo exists for, that is
+    # a hang or a confusing failure AT THE AUTH STEP, which reads as a credential fault.
+    # </dev/null: a non-tty then gets a deterministic error instead of blocking on the prompt.
+    VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 \
+      vcf context create "${create_args[@]}" </dev/null
 
     # Namespace: pinned in .env, or DISCOVERED from the contexts the create above just produced.
     # Discovery must run AFTER `vcf context create` — there is nothing to list before it.
@@ -145,7 +211,27 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     fi
 
     log_info "activating context '${VKS_CONTEXT_NAME}' at namespace '${VKS_NAMESPACE}'"
-    vcf context use "${VKS_CONTEXT_NAME}:${VKS_NAMESPACE}"
+    # ⚠️ `vcf context use` EXITS NON-ZERO AFTER SUCCEEDING. MEASURED 2026-08-04 on a live 9.1
+    # Supervisor — it activates the context and THEN fails a post-activation step:
+    #   [i] Successfully activated context 'vks-cicd:lab' (Type: kubernetes)
+    #   [x] : failed to discover plugin sources from the system Harbor registry: the system
+    #         Harbor registry could not be discovered from the Supervisor cluster.
+    # A Supervisor only has a "system Harbor registry" if one is registered AS SUCH; installing
+    # Harbor as a Supervisor Service does NOT make it that. So this fails on a perfectly good
+    # lab, and on an air-gapped one it reaches for a registry that is not there at all.
+    #
+    # ⚠️ VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 DOES **NOT** SUPPRESS IT — that
+    # was tried and MEASURED not to work, and `vcf context use --help` has no skip flag. It is
+    # set below only for symmetry with `create`; do not read it as the fix.
+    #
+    # So the status cannot be the verdict. Tolerate it and VERIFY THE END RESULT below.
+    # ⚠️ Do NOT verify via `vcf context list`'s `.iscurrent`: that lives in
+    # ~/.config/vcf/config.yaml, a DIFFERENT state store from the kubeconfig, and the two were
+    # measured DISAGREEING — `iscurrent=true` for a kubecontext absent from the very file the
+    # same record names. Only the artifact settles it.
+    VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 \
+      vcf context use "${VKS_CONTEXT_NAME}:${VKS_NAMESPACE}" </dev/null \
+      || log_warn "'vcf context use' exited non-zero — verifying the end result before judging it"
 
     # The kubectl-vsphere plugin (for `kubectl vsphere`-style access, if the workload
     # cluster needs it) is fetched from the Supervisor at:

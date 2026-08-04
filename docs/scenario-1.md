@@ -131,11 +131,37 @@ proven later, by Step 9's `make verify` pulling the app image into the guest.)
 4. **Authenticate to the Supervisor** (interactive password prompt; nothing secret on argv):
 
    ```bash
+   # PREFER a verified CA over skipping verification — a password is submitted over this
+   # connection. --ca-certificate takes the Supervisor's VMCA root (see §8 for getting it).
    vcf context create "$VKS_CONTEXT_NAME" --endpoint "$SUPERVISOR_HOST" \
-       --insecure-skip-tls-verify --auth-type basic
+       --ca-certificate ./secrets/supervisor-ca.crt --auth-type basic
+   # ...only if you have no CA yet:  --insecure-skip-tls-verify   (instead of --ca-certificate)
    vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"     # note the <ctx>:<ns> COLON form
    ```
 
+   > ⚠️ **`--ca-certificate` and `--insecure-skip-tls-verify` are an ENFORCED EXCLUSIVE PAIR** —
+   > passing both fails with `[x] : … [ca-certificate insecure-skip-tls-verify] were all set`
+   > (measured 2026-08-04). Pick one.
+   >
+   > ⚠️ **`vcf context create` REFUSES a duplicate context name** (`context "<name>" already
+   > exists`) and its store — `~/.config/vcf/config.yaml` — lives **outside this repo and outside
+   > every teardown**, so it survives a lab rebuild and then blocks you while pointing at a DEAD
+   > endpoint. Delete before creating:
+   > `vcf context delete "$VKS_CONTEXT_NAME" -y --skip-delete-kubeconfig-context 2>/dev/null || true`
+   > (`make vks-login` does this for you.)
+   >
+   > ⚠️ **`vcf context create` WRITES ITS CONTEXTS INTO `$KUBECONFIG` and repoints that file's
+   > current-context at the Supervisor.** If `$KUBECONFIG` is your *guest*-cluster kubeconfig, every
+   > later `kubectl` — and `make platform` / `make gitops` — silently targets the **Supervisor**
+   > instead of your workload cluster. Point `KUBECONFIG` at a Supervisor-only file for these two
+   > commands (`KUBECONFIG=./secrets/supervisor.kubeconfig vcf context create …`), as
+   > `make fetch-argocd-kubeconfig` does.
+   >
+   > ⚠️ **`vcf context use` can exit NON-ZERO after succeeding** — it prints
+   > `Successfully activated context …` and then fails plugin discovery against a "system Harbor
+   > registry" that a Supervisor only has if one is registered as such. Judge it by the artifact
+   > (`kubectl … get ns`), not by the exit status. No env var or flag suppresses it.
+   >
    > ⚠️ **TWO FORMS.** The form above is the one **lab-verified** on a 9.1 Supervisor (positional
    > name, bare endpoint). The repo's `make vks-login` additionally passes `--username`+`--type
    > kubernetes`, which is **not** lab-verified — if either flag is rejected, the form above is
@@ -191,12 +217,31 @@ kubectl --kubeconfig ./secrets/vks.kubeconfig get nodes -o wide
 
 **Result:** nodes listed.
 
+> ✅ **PREFER the Supervisor secret — it is self-contained and needs no `vcf` CLI:**
+>
+> ```bash
+> kubectl -n "$VKS_NAMESPACE" get secret "${VKS_CLUSTER_NAME}-kubeconfig" \
+>   -o jsonpath='{.data.value}' | base64 -d > ./secrets/vks.kubeconfig
+> ```
+>
+> MEASURED 2026-08-04: this yields a kubeconfig with **inline `certificate-authority-data`** and
+> **zero** file references, so it can be copied anywhere. It is also minted fresh by CAPI, so it
+> cannot be a stale on-disk copy.
+>
+> ⚠️ **A kubeconfig written by the login flow is NOT portable by copying.** That one references its
+> CAs by **relative** path (measured: `certificate-authority: vmca-root.pem` and `ca-lab-gc1.pem`),
+> which `kubectl` resolves against **the kubeconfig's own directory**. Copy it without those PEMs
+> beside it and every command fails with
+> `unable to read certificate-authority …/ca-<cluster>.pem: no such file or directory` — which reads
+> like a broken cluster, not a missing file. Carry the PEMs with it, or flatten it
+> (`kubectl config view --flatten --raw`). The secret above avoids the problem entirely.
+
 **→ `.env`:**
 
 | key | value |
 |---|---|
 | `KUBECONFIG` | `./secrets/vks.kubeconfig` |
-| `VKS_CONTEXT` | the context name inside that kubeconfig |
+| `VKS_CONTEXT` | the context name **as it appears inside that kubeconfig** — check with `kubectl --kubeconfig ./secrets/vks.kubeconfig config get-contexts -o name`. ⚠️ The built-in default is `vks-workload`, which **nothing creates**; leave it wrong and `make vks-login` warns `context 'vks-workload' not found … using current context` and silently proceeds against whatever that is. |
 | `VKS_AUTH_METHOD` | `kubeconfig` — the pipeline runs against the kubeconfig you just exported |
 | `GITEA_ADMIN_PASSWORD` | you choose it — Gitea is ours to install |
 
@@ -210,13 +255,27 @@ make lab-preflight   # CRD-create · a DEFAULT StorageClass · a working LoadBal
 make psa-check       # (see below)
 ```
 
-**Result:** `lab-preflight` → **`LAB PREFLIGHT OK`**; `psa-check` → **`PSA UNPROVEN`** — which is the
-**correct** answer now, not a pass.
+**Result:** `lab-preflight` → **`LAB PREFLIGHT OK`**.
 
+`psa-check` gives one of two answers, and **both are correct here**:
+
+| you see | when | meaning |
+|---|---|---|
+| **`PSA UNPROVEN`** | a bare cluster — none of our namespaces exist yet | the expected answer, **not** a pass |
+| **`PSA OK — … (N of ours measured)`** | the cluster already runs something we label (e.g. a pre-installed Istio) | also fine — it measured what was there |
+
+> ⚠️ **`PSA OK` at this step does NOT mean our namespaces are proven.** It means every namespace
+> *we* create that currently exists is labelled correctly — which on a bare cluster is none, and on
+> a cluster with Istio already installed may be one. The real proof is after `make platform`
+> (Step 9), where `psa-check` is wired into `make preflight`.
+>
 > **PSA.** VKS enforces the `restricted` Pod Security Standard by default (VKr v1.26+), which rejects
 > our Kaniko build pods unless their namespaces are labelled `baseline`. Our installers apply the
-> measured labels — but none of our namespaces exist yet, so `psa-check` has nothing to measure. It
-> proves itself only **after `make platform`** (Step 9), where it is wired into `make preflight`.
+> measured labels.
+>
+> *Measured 2026-08-04 on a VCF 9.1 Supervisor with Istio pre-installed: `PSA OK … (1 of ours
+> measured)`, listing `istio-system` as `privileged` with its per-pod reasons. An earlier revision
+> of this doc promised only `PSA UNPROVEN`, which is right for a bare cluster and wrong for a real one.*
 
 ## 6. Harbor's CA
 
@@ -231,8 +290,43 @@ issuer from the presented chain and `openssl verify`s the leaf, deleting the fil
 fails. `make mirror` and `make platform` then wire it into `SSL_CERT_FILE` and the in-cluster
 `harbor-ca` ConfigMap for you. (Publicly-trusted cert? Leave `HARBOR_CA_FILE` empty.)
 
-> **Manual alternative:** Harbor UI → project → Registry Certificate downloads `ca.crt`; save it as
-> `HARBOR_CA_FILE` and strip any trailing `<CR>` (it breaks the PEM parse).
+> ⚠️ **This only works if your Harbor SERVES its issuer.** A Harbor installed as a **Supervisor
+> Service** does not — MEASURED 2026-08-04: it presents **one** certificate (`subject=CN = harbor`,
+> `issuer=CN = Harbor CA`, `Verify return code: 21`). Its CA is simply not on the wire, so it cannot
+> be fetched from there by any tool. `fetch-harbor-ca` detects exactly this and refuses:
+>
+> ```text
+> FATAL: <host>:443 presents ONE certificate that is NOT self-signed (subject != issuer).
+>   Its CA is not on the wire … Ask the platform team for the issuing CA … and point
+>   HARBOR_CA_FILE at it.
+> ```
+>
+> **That refusal is correct, not a bug** — deriving a "CA" from a leaf would install a trust anchor
+> that verifies nothing. Get the CA out-of-band instead (either route below), then set
+> `HARBOR_CA_FILE` and continue; everything downstream works unchanged.
+
+**Getting the CA when it is not on the wire** — pick either:
+
+```bash
+# A. From the cluster (scriptable; needs read on Harbor's namespace).
+#    The namespace is the Supervisor Service's, e.g. svc-harbor-<suffix> — find it with:
+#      kubectl get ns | grep harbor
+kubectl -n <harbor-ns> get secret harbor-ca-key-pair \
+  -o jsonpath='{.data.ca\.crt}' | base64 -d > "$HARBOR_CA_FILE"
+
+# B. From the UI: Harbor → project → Registry Certificate downloads ca.crt.
+#    Strip any trailing <CR> — it breaks the PEM parse.
+
+# VERIFY it either way — a file that exists is not a trust anchor that works:
+openssl s_client -connect "$HARBOR_URL:443" -servername "$HARBOR_URL" </dev/null 2>/dev/null \
+  | openssl x509 -outform PEM > /tmp/leaf.pem
+openssl verify -CAfile "$HARBOR_CA_FILE" /tmp/leaf.pem      # must print: OK
+curl -sS --cacert "$HARBOR_CA_FILE" -o /dev/null -w '%{http_code}\n' \
+  "https://$HARBOR_URL/api/v2.0/systeminfo"                 # must print: 200
+```
+
+*Measured 2026-08-04: route A yielded a self-signed `CN = Harbor CA`; `openssl verify` → `OK` and
+the `curl` → `200`.*
 
 <details><summary><b>If Harbor is on a DIFFERENT Supervisor, or its project is PRIVATE</b></summary>
 
@@ -264,7 +358,8 @@ Step 4 gave you the guest one; this gives you the Supervisor one.
 | key | value |
 |---|---|
 | `ARGOCD_KUBECONFIG` | `./secrets/argocd.kubeconfig` — where `fetch-argocd-kubeconfig` writes; `make gitops` reads it. **Unset, it defaults to the *guest* kubeconfig → `gitops` deploys onto the Supervisor.** |
-| `VKS_INSECURE_SKIP_TLS_VERIFY` | `true` — or set `VKS_CA_CERT_FILE=./secrets/supervisor-ca.crt` (preferred). `fetch-argocd-kubeconfig` **dies** without one. |
+| `VKS_INSECURE_SKIP_TLS_VERIFY` | `true` — or set `VKS_CA_CERT_FILE=./secrets/supervisor-ca.crt` (**preferred**; it is the Supervisor's VMCA root). `fetch-argocd-kubeconfig` **dies** without one. ⚠️ They are an **enforced exclusive pair** — setting both fails with `[x] : … [ca-certificate insecure-skip-tls-verify] were all set`. |
+| `ARGOCD_NAMESPACE` | **the vSphere Namespace your ArgoCD INSTANCE runs in — DISCOVER it, do not assume.** The default (`argocd`) and §3's suggested `argocd-instance-1` are both just examples; an instance may equally live in your *workload* namespace. Find it with `kubectl get argocd -A` (measured on one 9.1 lab: `lab/argocd-1`, i.e. `ARGOCD_NAMESPACE=lab`). Get this wrong and `fetch-argocd-kubeconfig` writes the file, then fails with `argocd-server is NOT visible in ns/<x>`. |
 
 ```bash
 make fetch-argocd-kubeconfig    # interactive: prompts for your password
