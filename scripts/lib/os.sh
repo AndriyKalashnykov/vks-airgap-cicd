@@ -439,7 +439,15 @@ load_env() {
   # believing you had switched — the same shape as the KUBECONFIG bug against the wrong cluster.
   # It surfaced in the jump-box matrix: the container is handed `-e HARBOR_URL=<the LB IP>`, load_env
   # replaced it with `harbor.vks.local`, and all four legs died resolving a hostname that exists nowhere.
-  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT HARBOR_CA_FILE HARBOR_URL; do
+  # INGRESS_CONTROLLER is a SELECTOR (it names WHICH ingress implementation) and was missing here.
+  # MEASURED 2026-08-04: `make install-ingress INGRESS_CONTROLLER=istio-existing` (scenario-1 §11,
+  # a documented, supported action) state_sets it into .env.state — which load_env sources LAST, so
+  # from then on `INGRESS_CONTROLLER=istio make …` is silently CLOBBERED and cannot be set back.
+  # It also reddened `make static-check` permanently: test-gateway-image pins
+  # `INGRESS_CONTROLLER=istio` as a command-scoped prefix, the overlay overwrote it, and the
+  # classifier's self-tests then ran in the foreign-mesh mode where provenance CANNOT be asserted
+  # (6 cases wanted rc=1 and got 0). Proven: with an empty overlay the same gate is rc=0, 7/7.
+  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT INGRESS_CONTROLLER HARBOR_CA_FILE HARBOR_URL; do
     if [ -n "${!_sel:-}" ]; then
       _snap_names="${_snap_names} ${_sel}"
       _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'

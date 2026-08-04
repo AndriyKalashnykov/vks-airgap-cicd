@@ -40,6 +40,16 @@ mapfile -t UNCOMMENTED < <(grep -oE '^[A-Z][A-Z0-9_]*=' "$ENV_EXAMPLE" | tr -d '
 #   INGRESS_CONTROLLER  44-install-ingress.sh:16 deliberately CAPTURES the explicit override into
 #                       _override BEFORE calling load_env, precisely so the persisted .env.kind /
 #                       .env.example value cannot win (verified: the traefik e2e permutation passes).
+#                       ⚠️ THAT REASON WAS INCOMPLETE, and the gap was real. The capture lives in
+#                       ONE script; every OTHER consumer was still clobbered. MEASURED 2026-08-04:
+#                       after `make install-ingress INGRESS_CONTROLLER=istio-existing` (§11, a
+#                       supported action) published it to .env.state, 96-verify-gateway-image.sh —
+#                       which has no such capture — could no longer be overridden, so
+#                       test-gateway-image ran in foreign-mesh mode and `make static-check` was
+#                       permanently RED (6 of 7 cases wanted rc=1, got 0; with an empty overlay the
+#                       same gate is rc=0, 7/7). FIXED GLOBALLY: it is now in load_env's selector
+#                       snapshot list, so an explicit override survives for EVERY consumer. This
+#                       exemption is therefore belt-and-braces now, not the mechanism.
 #
 # Anything added here needs the same treatment: an empirical check, and the reason written down.
 EXEMPT='APP_DEV_PORT|INGRESS_CONTROLLER'
@@ -61,7 +71,7 @@ EXEMPT='APP_DEV_PORT|INGRESS_CONTROLLER'
 # THE PROTECTED LIST IS DERIVED FROM lib/os.sh, NOT COPIED. A second hand-typed list is exactly the
 # enumerated-list rot this repo keeps getting bitten by: it would drift the first time someone adds a
 # selector to load_env and not here, and the gate would then reject a variable that is, in fact, safe.
-SELECTORS='KUBECONFIG|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_SUPERVISOR_KUBECONFIG|VKS_CONTEXT|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_CA_FILE'
+SELECTORS='KUBECONFIG|INGRESS_CONTROLLER|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_SUPERVISOR_KUBECONFIG|VKS_CONTEXT|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_CA_FILE'
 
 # Read the snapshot list out of load_env itself: `for _sel in A B C ...; do`
 PROTECTED="$(sed -n 's/^[[:space:]]*for _sel in \(.*\); do$/\1/p' "${REPO_ROOT}/scripts/lib/os.sh" | head -1)"
