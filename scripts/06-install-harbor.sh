@@ -32,6 +32,15 @@ load_env
 NS="${HARBOR_NAMESPACE:?HARBOR_NAMESPACE must be set in .env.example}"
 CHART_VERSION="${HARBOR_CHART_VERSION:?HARBOR_CHART_VERSION must be set in .env.example}"
 CLUSTER_NAME="${KIND_CLUSTER_NAME:?KIND_CLUSTER_NAME must be set in .env.example}"
+
+# ⚠️ REFUSE A NON-KinD TARGET, BEFORE ANYTHING IS CREATED. This script's only prerequisite is
+# `check-env`; nothing else here checks WHERE it is pointing. The first KinD-shaped call is the
+# `kind get nodes` loop far below — long AFTER `ensure_namespace` and `helm upgrade --install harbor` —
+# and MEASURED it cannot fail: `kind get nodes --name <nonexistent>` exits rc=0, and a failing process
+# substitution does not trip `set -euo pipefail`, so that loop runs zero times and execution continues
+# to `state_set HARBOR_URL`. Against a customer kubeconfig this installs into their cluster, takes one
+# of their LoadBalancer VIPs, repoints our registry selector at it, and EXITS 0.
+require_kind_target "install-harbor"
 KUBECONFIG_PATH="${KUBECONFIG:?KUBECONFIG must be set in .env.example}"
 READY_TIMEOUT="${READY_TIMEOUT_SECONDS:-300}"
 POLL_INTERVAL="${POLL_INTERVAL_SECONDS:-5}"

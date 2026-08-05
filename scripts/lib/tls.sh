@@ -126,6 +126,46 @@ ca_verifies_endpoint() {
 # ONE definition, because the normalisation is the drift-prone part: fetch-ca.sh and 30-vks-login.sh
 # both route through here rather than each re-deriving "strip colons, lowercase, is it 64 hex".
 
+# ── require_kind_target <what> — refuse to run a KinD-ONLY installer at a cluster that is not ours ──
+# MEASURED 2026-08-05 (design round on B66, which was itself refuted — the real defect was one file over):
+# `make install-harbor` has ONE prerequisite, `check-env`. Nothing in 06-install-harbor.sh checks that the
+# target is KinD. Against a customer kubeconfig it would `ensure_namespace` + `helm upgrade --install
+# harbor` into THEIR cluster, consume one of THEIR LoadBalancer VIPs, and then `state_set HARBOR_URL` to
+# it — repointing the registry selector every downstream script reads. And it can EXIT 0:
+#   * `kind get nodes --name <nonexistent>` returns **rc=0** (MEASURED)
+#   * a failing process substitution does NOT trip `set -euo pipefail` (MEASURED: the loop body runs
+#     zero times and the script CONTINUES, rc=0)
+# so the one KinD-shaped step, `done < <(kind get nodes …)`, silently does nothing and execution reaches
+# the state_set. The installer is verb-identical to `install-gitea`/`install-tekton`, which ARE on the
+# customer chain, and the only thing distinguishing it is prose in `make help`.
+#
+# ⚠️ GUARD ON THE TARGET, NEVER ON THE LOCAL RUNTIME. `kind get clusters` queries the container runtime,
+# not the kubeconfig — MEASURED: with KUBECONFIG pointed at a nonexistent path it still returns rc=0 and
+# does not even read it. So on the ONE machine where this matters (an operator laptop with a local KinD
+# cluster AND a customer kubeconfig loaded) that check PASSES while KUBECONFIG points at the customer.
+# It also returns rc=0 on "No kind clusters found" — the same rc=0-on-nothing shape as the bug itself.
+require_kind_target() {
+  local what="${1:-this step}" want cur
+  : "${KIND_CLUSTER_NAME:?KIND_CLUSTER_NAME must be set (it names the KinD cluster this is scoped to)}"
+  want="kind-${KIND_CLUSTER_NAME}"
+  # Fails CLOSED: an unset KUBECONFIG, an empty file, or no current-context all yield '' and refuse.
+  # MEASURED: `kubectl config current-context` errors with "current-context is not set" in that state.
+  cur="$(kubectl config current-context 2>/dev/null)" || true
+  [ "$cur" = "$want" ] && return 0
+  die "${what} is KinD-ONLY and the current context is NOT this repo's KinD cluster — REFUSING.
+
+    current context: ${cur:-<none set>}
+    required:        ${want}
+
+  This is not a formality. Run against another cluster it would install Harbor/ArgoCD INTO it,
+  consume one of its LoadBalancer addresses, and repoint this repo's registry selector at it —
+  and it would exit 0 while doing so.
+
+  If you meant the local stand-in:  make kind-up            (then re-run this)
+  If you are on a real lab:         you do NOT run this — the lab PROVIDES Harbor/ArgoCD as
+                                    Supervisor Services. See docs/scenario-1.md."
+}
+
 # ca_fingerprint <ca-file> — prints the cert's SHA-256 as colon-hex. rc 1 if it cannot be read.
 ca_fingerprint() {
   local f="$1" fp

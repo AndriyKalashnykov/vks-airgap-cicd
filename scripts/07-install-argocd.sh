@@ -20,6 +20,19 @@ load_env
 require_cmd kubectl
 
 : "${KUBECONFIG:?KUBECONFIG must be set (see .env.example; produced by make vks-login or make kind-up)}"; export KUBECONFIG
+
+# ⚠️ REFUSE A NON-KinD TARGET, BEFORE ANYTHING IS CREATED. Same class as 06-install-harbor.sh, and this
+# one is WORSE: MEASURED 2026-08-05, this script does not reference KIND_CLUSTER_NAME AT ALL, so there was
+# not even a token KinD-shaped step anywhere in it. `install-argocd: check-env` is a standalone target
+# whose help says "Install ArgoCD into KinD" — prose — and it is verb-identical to `install-gitea` and
+# `install-tekton`, which ARE on the customer chain (`platform`). Pointed at a customer kubeconfig it
+# would `ensure_namespace` and `kubectl apply --server-side` the full ArgoCD manifest into THEIR cluster
+# and take a LoadBalancer address for argocd-server.
+# The KIND_ONLY set is already classified in test-container-engine.sh (05-kind-up, 06-install-harbor,
+# 07-install-argocd, kind-down) — this is the second of the two that create things.
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"
+require_kind_target "install-argocd"
 : "${ARGOCD_VERSION:?ARGOCD_VERSION must be set in .env.example}"
 ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
