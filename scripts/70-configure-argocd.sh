@@ -212,23 +212,38 @@ argocd_reconciler_ready() {
          -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
   [ "${rr:-0}" -ge 1 ]
 }
-# ⚠️ `can` is FALSE for two different reasons and only one of them is about you. Surface the other
-# one here — a silent false is what made a transport fault look like an RBAC denial and silently
-# downgrade the write mechanism. can_why is empty on a real yes/no and carries the class otherwise.
-if [ "$argocd_ns_readable" = yes ] && ! can create applications.argoproj.io && [ -n "$can_why" ]; then
-  log_warn "the kubectl write probe FAILED TO ANSWER (${can_why}) — this is NOT a denial. It never
-  reached the cluster, so no RBAC grant will change it. Not selecting the kubectl path on a
-  capability nobody measured."
+# ⚠️ PROBE ONCE. The first version of this warn called `can` a SECOND time, so the message and the
+# decision read two DIFFERENT measurements and could contradict each other — measured, probe1=yes
+# with probe2=unknown gave can_kubectl=no with NO warning, i.e. the exact silent downgrade this
+# block exists to prevent, still reachable. It also doubled the latency (up to 30 s against a
+# blackholed endpoint). One probe, one variable, then branch.
+_app_state=skip
+if [ "$argocd_ns_readable" = yes ]; then
+  _ra_k="$(k_can_i --kubeconfig "$ARGOCD_KUBECONFIG" --request-timeout=15s \
+            auth can-i create applications.argoproj.io -n "$ARGOCD_NAMESPACE")"
+  _app_state="${_ra_k%%|*}"
+  [ "$_app_state" = unknown ] && log_warn "the kubectl write probe FAILED TO ANSWER (${_ra_k#*|}) —
+  this is NOT a denial. It never reached the cluster, so no RBAC grant will change it. Not
+  selecting the kubectl path on a capability nobody measured."
 fi
-if [ "$argocd_ns_readable" = yes ] && can create applications.argoproj.io; then
+if [ "$_app_state" = yes ]; then
   if ! argocd_reconciler_ready; then
     log_warn "the argoproj.io CRDs exist, but NO ArgoCD reconciler is running in '${ARGOCD_NAMESPACE}'."
     log_warn "  StatefulSet argocd-application-controller is absent or has 0 ready replicas, so an"
     log_warn "  Application written here would never sync. The ArgoCD Supervisor SERVICE installs the"
     log_warn "  CRDs; the ArgoCD INSTANCE is a separate step that provides the controller."
     log_warn "  Create the instance first (scenario-1 §3), then re-run — not selecting the kubectl path."
-  elif [ "$GITEA_DEPLOY_PRIVATE" != "true" ] || can create secrets; then
+  elif [ "$GITEA_DEPLOY_PRIVATE" != "true" ]; then
     can_kubectl=yes
+  elif can create secrets; then
+    can_kubectl=yes
+  elif [ -n "$can_why" ]; then
+    # ⚠️ Same asymmetry as the Applications probe above: a FALSE here is either "you are refused"
+    # or "nobody asked". Silently leaving can_kubectl=no on the second is how a transport fault
+    # became a permissions verdict. can_why is empty on a real yes/no and carries the class
+    # otherwise — it is the ONLY reader, which is why `can()` still populates it.
+    log_warn "the kubectl Secret probe FAILED TO ANSWER (${can_why}) — this is NOT a denial, so no
+  RBAC grant will change it. Not selecting the kubectl path on a capability nobody measured."
   fi
 fi
 

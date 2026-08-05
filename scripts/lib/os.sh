@@ -958,14 +958,23 @@ argocd_can_i() {
   # can_api=yes; fi` therefore recorded a REFUSED tenant as permitted, and the `>/dev/null` threw
   # away the one thing carrying the answer. Compare the OUTPUT; never branch on rc alone.
   if [ "$_rc" -ne 0 ]; then
-    # argocd emits JSON on stderr, a different vocabulary from kubectl's plain text — classify what
-    # we can and fall back to a transport-shaped guess rather than asserting a permissions answer.
-    K_CAN_I_CLASS="$(classify_kube_failure "$_err")"
-    [ "$K_CAN_I_CLASS" = UNKNOWN ] && command grep -qiE 'failed to establish connection|connection refused|x509|tls' "$_err"       && K_CAN_I_CLASS=UNREACHABLE
-    rm -f "$_err"; printf 'unknown'; return 0
+    # ⚠️ argocd is a THIRD vendor vocabulary — JSON, not kubectl's plain text — so the shared
+    # classifier misses its shapes. An EXPIRED ARGOCD_AUTH_TOKEN is the most common argocd fault
+    # and has a trivial remedy, yet it classified UNKNOWN; its text is
+    #   rpc error: code = Unauthenticated desc = invalid session token: token is expired
+    # Auth is tested BEFORE transport so a token message is not swallowed by the connection arm.
+    local _cls; _cls="$(classify_kube_failure "$_err")"
+    if [ "$_cls" = UNKNOWN ]; then
+      if command grep -qiE 'Unauthenticated|invalid session token|token is expired|Unauthorized' "$_err"; then
+        _cls=UNAUTHORIZED
+      elif command grep -qiE 'failed to establish connection|connection refused|x509|tls' "$_err"; then
+        _cls=UNREACHABLE
+      fi
+    fi
+    rm -f "$_err"; printf 'unknown|%s' "$_cls"; return 0
   fi
-  rm -f "$_err"; K_CAN_I_CLASS=""
-  case "$_out" in yes) printf 'yes' ;; no) printf 'no' ;; *) printf 'unknown' ;; esac
+  rm -f "$_err"
+  case "$_out" in yes) printf 'yes|' ;; no) printf 'no|' ;; *) printf 'unknown|UNPARSEABLE' ;; esac
 }
 
 classify_kube_failure() {
