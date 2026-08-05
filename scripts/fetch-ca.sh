@@ -113,10 +113,23 @@ cp "$last" "$OUT"
 # and the failure it produces ("error adding trust anchors from file") names TRUST, not PERMISSIONS.
 chmod 0644 "$OUT"
 
-# ---- THE PROOF. We do not ship a trust anchor we have not verified is one. ----------------------------
-# `openssl verify -CAfile <what we wrote> <the leaf>` is the same question every consumer will ask.
+# ---- CONSISTENCY, WHICH IS NOT AUTHENTICITY. -----------------------------------------------------------
+# This check is worth keeping and it is NOT proof of anything about WHO we are talking to. It catches a
+# broken EXTRACTION (we grabbed the wrong PEM out of the chain), and nothing else.
+#
+# ⚠️ MEASURED 2026-08-05 with a live oracle: two independent self-signed certs for the same CN, serve the
+# EVIL one, run this script unmodified -> it wrote the EVIL CA and printed "VERIFIED". A MITM's chain is
+# self-consistent BY CONSTRUCTION, so verifying a leaf against an issuer taken off the SAME WIRE can only
+# ever succeed. Worse, in the n==1 branch $OUT is copied FROM the leaf, so this reduces to verify(X,X) --
+# `openssl verify -CAfile ss.crt ss.crt` -> OK, rc=0 for ANY self-signed cert, attacker's included.
+# The word "VERIFIED" was the laundering: it is the sentence an operator quotes when their security team
+# asks how the anchor was validated. Only the fingerprint comparison below can answer that.
 if openssl verify -CAfile "$OUT" "$leaf" >/dev/null 2>&1; then
-  log_info "VERIFIED: the file we wrote actually validates ${host}'s certificate"
+  if [ "$n" -eq 1 ]; then
+    log_info "SELF-SIGNED — self-consistent by construction, NOT authenticated"
+  else
+    log_info "chain is internally consistent — note an attacker supplies BOTH halves of it"
+  fi
 else
   rm -f "$OUT"
   die "the certificate we extracted does NOT verify ${host}'s leaf — refusing to write a trust anchor that
@@ -124,6 +137,75 @@ else
   authority', pointing you at the wrong thing). Ask the platform team for ${LABEL}'s issuing CA."
 fi
 
+# ---- AUTHENTICITY: an out-of-band fingerprint is the ONLY thing that provides it. -----------------------
+# ⚠️ PIN THE CA, NOT THE LEAF. lib/tls.sh keeps the CA stable across runs (3650d) and REGENERATES the leaf
+# every run (825d), so a leaf pin would false-fire on every rebuild. And 30-vks-login.sh records a MEASURED
+# incident where a message compared a stored CA fingerprint against a live LEAF fingerprint -- two
+# different objects that can never match. Every digest we print is therefore LABELLED with its object.
+UPPER="$(printf '%s' "$LABEL" | tr '[:lower:]' '[:upper:]')"
+fp_colon="$(openssl x509 -in "$OUT" -noout -fingerprint -sha256 2>/dev/null | sed 's/^.*Fingerprint=//')" || true
+[ -n "$fp_colon" ] || { rm -f "$OUT"; die "could not compute a SHA-256 fingerprint for the CA we extracted."; }
+fp_bare="$(printf '%s' "$fp_colon" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+
+# ⚠️ THE PIN MUST BE PASSED EXPLICITLY BY THE CALLER. This script does NOT call load_env, and the Makefile's
+# `-include .env` creates MAKE variables, NOT environment. MEASURED: with HARBOR_CA_SHA256 set in .env, a
+# recipe sees make-var=[AA:BB:CC] while the script it invokes sees []. So a pin written to .env alone is
+# SILENTLY INERT -- the operator would conclude pinning is broken and stop using it. The Makefile recipe
+# exports it; see the `fetch-harbor-ca` / `fetch-argocd-ca` targets.
+pin_var="${UPPER}_CA_SHA256"
+# Indirect expansion, NOT `eval "pin=\${${pin_var}}"`. Same result, and it avoids evaluating a
+# constructed variable name — plus shellcheck can SEE this one (an eval is opaque to it, which
+# cost an SC2154 on the assignment below).
+pin="${!pin_var:-}"
+pin_norm="$(printf '%s' "$pin" | tr -d ': ' | tr '[:upper:]' '[:lower:]')"
+
+if [ -n "$pin_norm" ]; then
+  if [ "$pin_norm" = "$fp_bare" ]; then
+    log_info "CA fingerprint MATCHES the expected value from ${pin_var}"
+  else
+    rm -f "$OUT"
+    die "CA FINGERPRINT MISMATCH for ${host}:${port} — REFUSING to write a trust anchor.
+
+    expected (${pin_var}): ${pin_norm}
+    served by ${host}:     ${fp_bare}
+
+  Either the endpoint's CA was legitimately rotated, or something is intercepting this connection.
+  Do NOT proceed by clearing ${pin_var}. Confirm the correct fingerprint with whoever operates
+  ${LABEL} — by a channel that is not this connection — and re-run."
+  fi
+else
+  # NO PIN. This is trust-on-first-use, so make the operator SEE it and CONSENT to it.
+  # ⚠️ The consent text names what a wrong anchor costs, because it is NOT just image trust:
+  # lib/harbor.sh writes `user = "$HARBOR_USERNAME:$HARBOR_PASSWORD"` into a curl -K config and every
+  # harbor_api call submits it over the connection this file anchors; 22-harbor-robot.sh mints the robot
+  # with the ADMIN credential over the same channel and the robot secret returns on it. A MITM here
+  # therefore harvests credentials, not merely serves bad images.
+  printf '\n'
+  printf '  ⚠️  NOT AUTHENTICATED. This CA was taken off the same connection it is meant to protect,\n'
+  printf '      so nothing here proves it belongs to %s rather than to something intercepting it.\n' "$host"
+  printf '\n'
+  printf '      CA SHA-256: %s\n' "$fp_colon"
+  printf '                  %s\n' "$fp_bare"
+  printf '\n'
+  printf '      Anything trusting this file will submit %s credentials over it.\n' "$LABEL"
+  printf '      Confirm the digest with whoever operates %s, by some channel OTHER than this one.\n' "$LABEL"
+  printf '\n'
+  if [ -t 0 ]; then
+    printf '  Does that digest match what they told you? [y/N] '
+    ans=''; read -r ans || true
+    case "$ans" in
+      y|Y|yes|YES) log_info "operator confirmed the fingerprint out of band" ;;
+      *) rm -f "$OUT"; die "not confirmed — no trust anchor written. Re-run with ${pin_var}=<digest> once you have it." ;;
+    esac
+  else
+    rm -f "$OUT"
+    die "refusing to write an unauthenticated trust anchor with no terminal to confirm it on.
+  Pass the expected digest explicitly:  make ${LABEL}-ca ${pin_var}=<sha256>
+  (MEASURED: no target depends on this one and no CI workflow invokes it, so this refusal breaks
+  no automated path — it only stops an unattended run from silently pinning whatever answered.)"
+  fi
+fi
+
 printf 'wrote %s\n' "$OUT"
-printf '  subject: %s\n' "$(openssl x509 -in "$OUT" -noout -subject | sed 's/^subject=//')"
-printf '  set it in .env, e.g.  %s_CA_FILE=%s\n' "$(printf '%s' "$LABEL" | tr '[:lower:]' '[:upper:]')" "$OUT"
+printf '  CA SHA-256: %s\n' "$fp_colon"
+printf '  set it in .env, e.g.  %s_CA_FILE=%s\n' "$UPPER" "$OUT"
