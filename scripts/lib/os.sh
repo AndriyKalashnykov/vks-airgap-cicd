@@ -603,7 +603,16 @@ kubeconfig_ready() {
 #
 #   curl's config parser understands \\ \" \t \n \r \v inside a quoted value. Escape the backslash
 #   FIRST or you double-escape what you just inserted.
-esc_curlk() { local s=$1; s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}; printf '%s' "$s"; }
+#
+#   \r WAS MISSING, for the life of this function, while the line above already NAMED it. Its
+#   failure mode is NOT the newline's: measured against a real listener, a bare \r does not INJECT
+#   a directive (the header arrived intact and the injected upload-file never ran) -- it TRUNCATES.
+#   So the damage is the QUIET one this whole comment block is about: a silently mangled credential
+#   producing a 401 that reads as "wrong password", sending the operator to fix a correct password.
+#   MEASURED here 2026-08-05, `pw\rupload-file = /etc/passwd` through od -c:
+#       before -> p w \r u p l o a d ...   (a raw 0x0D reaches the config file)
+#       after  -> p w  \  r u p l o a d ...(the two-character escape curl expects)
+esc_curlk() { local s=$1; s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}; s=${s//$'\r'/\\r}; printf '%s' "$s"; }
 
 # esc_sq <value> — make a value safe INSIDE single quotes: it's -> it'\''s
 #
