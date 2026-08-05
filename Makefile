@@ -46,6 +46,14 @@ export PATH := $(shell cd $(CURDIR) && mise bin-paths 2>/dev/null | tr '\n' ':')
 # so a re-run still cache-skips the mirror (no re-download).
 ifneq ($(SKIP_DOTENV),1)
 -include .env
+
+# ⚠️ EXPORTED, because `-include .env` above creates MAKE variables, NOT environment — MEASURED: a recipe
+# sees make-var=[AA:BB:CC] while the script it invokes sees []. fetch-ca.sh does not call load_env, so
+# without this an out-of-band CA pin written to .env is SILENTLY INERT and the operator concludes pinning
+# is broken. This replaces a per-recipe `VAR='$(VAR)'` prefix, which MEASURED broke on a value containing
+# a single quote (`bash -n` -> unexpected EOF) and silently ate a `$`. A command-line override still wins.
+export HARBOR_CA_SHA256
+export ARGOCD_CA_SHA256
 endif
 # The STAMPED state overlay (was `.env.kind` — a KinD-named file that carried REAL-LAB state, which is
 # how `make kind-down` came to destroy a lab's kubeconfig). VKS_STATE_FILE overrides the path.
@@ -313,13 +321,12 @@ vks-login: check-env ## Authenticate to VKS (VCF 9 + Supervisor) → writes KUBE
 
 .PHONY: fetch-harbor-ca
 fetch-harbor-ca: ## Fetch the CA that ISSUED the lab Harbor's cert → HARBOR_CA_FILE, and VERIFY it (for HTTPS mirror/Kaniko trust)
-	@HARBOR_CA_SHA256='$(HARBOR_CA_SHA256)' $(SCRIPTS)/fetch-ca.sh "$(HARBOR_URL)" "$(HARBOR_CA_FILE)" harbor
+	@$(SCRIPTS)/fetch-ca.sh "$(HARBOR_URL)" "$(HARBOR_CA_FILE)" harbor
 
 .PHONY: fetch-argocd-ca
 fetch-argocd-ca: ## Fetch the CA that ISSUED the ArgoCD server's cert → ARGOCD_CA_FILE, and VERIFY it (endpoint: ARGOCD_LB_IP or ARGOCD_SERVER)
 	@ep="$(if $(ARGOCD_LB_IP),$(ARGOCD_LB_IP),$(ARGOCD_SERVER))"; \
 	 [ -n "$$ep" ] || { echo "ERROR: set ARGOCD_LB_IP (kind, from the state overlay) or ARGOCD_SERVER (lab argocd-server LB IP) first"; exit 1; }; \
-	 ARGOCD_CA_SHA256='$(ARGOCD_CA_SHA256)' \
 	 $(SCRIPTS)/fetch-ca.sh "$$ep" "$(if $(ARGOCD_CA_FILE),$(ARGOCD_CA_FILE),./secrets/argocd-ca.crt)" argocd
 
 ##@ Container engine (podman is the default; docker is supported when you ask for it)

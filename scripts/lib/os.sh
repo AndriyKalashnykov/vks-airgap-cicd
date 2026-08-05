@@ -458,7 +458,14 @@ load_env() {
   # `INGRESS_CONTROLLER=istio` as a command-scoped prefix, the overlay overwrote it, and the
   # classifier's self-tests then ran in the foreign-mesh mode where provenance CANNOT be asserted
   # (6 cases wanted rc=1 and got 0). Proven: with an empty overlay the same gate is rc=0, 7/7.
-  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT INGRESS_CONTROLLER HARBOR_CA_FILE HARBOR_URL; do
+  # THE CA PINS ARE SELECTORS TOO, and the consequence of clobbering one is the worst in this list.
+  # HARBOR_CA_FILE (above) names WHICH anchor; *_CA_SHA256 names which anchor is CORRECT. If a stale pin
+  # in .env / .env.state wins over `make vks-login VKS_CA_SHA256=<new>`, the check silently compares
+  # against the OLD digest — so it either refuses a legitimate rotation, or (worse) an operator who has
+  # been given the right digest is told it does not match, and reaches for the skip-verify escape.
+  # Latent today because all three ship COMMENTED, so check-env-clobber passes; protected here so that
+  # uncommenting one — the natural thing to do with a value you want to persist — cannot arm it.
+  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT INGRESS_CONTROLLER HARBOR_CA_FILE HARBOR_URL VKS_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256; do
     if [ -n "${!_sel:-}" ]; then
       _snap_names="${_snap_names} ${_sel}"
       _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'

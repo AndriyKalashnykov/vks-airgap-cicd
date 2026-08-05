@@ -21,7 +21,13 @@ set -uo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 FETCH="${SCRIPT_DIR}/fetch-ca.sh"
 [ -x "$FETCH" ] || { echo "INSTRUMENT MISSING: $FETCH is absent or not executable"; exit 1; }
-command -v openssl >/dev/null 2>&1 || { echo "SKIP: openssl not available"; exit 0; }
+# ⚠️ INCONCLUSIVE EXITS NON-ZERO. MEASURED 2026-08-05: these paths used `exit 0`, so forcing the
+# free-port skip produced "SKIP: no free port" with rc 0 and ZERO assertions — and `make test-scripts`
+# reads that as a pass. A harness that tested nothing must not be indistinguishable from one that
+# tested everything. (The script(1)/pty skip further down stays rc 0: it is a PARTIAL skip of one
+# case, not "the harness never ran".)
+inconclusive() { echo "test-fetch-ca-pin: INCONCLUSIVE — $1 (nothing was asserted)"; exit 1; }
+command -v openssl >/dev/null 2>&1 || inconclusive "openssl not available"
 
 TMP="$(mktemp -d)"; PORT=""; SRV_PID=""
 # shellcheck disable=SC2329  # invoked by the `trap ... EXIT` below; shellcheck cannot see trap dispatch
@@ -41,17 +47,17 @@ bad()  { fail=$((fail+1)); printf '  FAIL  %s\n' "$1"; [ -n "${2:-}" ] && printf
 for p in $(seq 18443 18470); do
   if ! (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then PORT="$p"; break; fi
 done
-[ -n "$PORT" ] || { echo "SKIP: no free port in 18443-18470"; exit 0; }
+[ -n "$PORT" ] || inconclusive "no free port in 18443-18470"
 
 # --- the oracle: a self-signed cert (the shape the lab Harbor actually presents) -------------------------
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$TMP/k.pem" -out "$TMP/c.pem" -days 1 \
   -subj "/CN=127.0.0.1/O=ORACLE" -addext "subjectAltName=IP:127.0.0.1" >/dev/null 2>&1 \
-  || { echo "SKIP: could not mint a test certificate"; exit 0; }
+  || inconclusive "could not mint a test certificate"
 
 openssl s_server -cert "$TMP/c.pem" -key "$TMP/k.pem" -accept "$PORT" -www >/dev/null 2>&1 &
 SRV_PID=$!
 for _ in $(seq 1 40); do (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && break; sleep 0.1; done
-kill -0 "$SRV_PID" 2>/dev/null || { echo "SKIP: test TLS server did not start"; exit 0; }
+kill -0 "$SRV_PID" 2>/dev/null || inconclusive "the test TLS server did not start"
 
 REAL="$(openssl x509 -in "$TMP/c.pem" -noout -fingerprint -sha256 | sed 's/^.*Fingerprint=//' \
         | tr -d ':' | tr '[:upper:]' '[:lower:]')"
@@ -92,15 +98,68 @@ else bad "an unconfirmed fetch must not leave a trust anchor behind"; fi
 # The interactive branch needs a real pty; `printf 'n\n' | ...` would make [ -t 0 ] FALSE and silently
 # re-test case 3 instead. `script` allocates one. Skipped, not faked, when it is unavailable.
 if command -v script >/dev/null 2>&1; then
+  # ⚠️ ASSERT THE DISCRIMINATOR, NOT rc + absence-of-file. MEASURED 2026-08-05: with the old assertion
+  # (`rc != 0 && no file`) I mutated `if [ -t 0 ]` -> `if false`, killing the ENTIRE interactive consent
+  # branch, and this file still reported 7/7 PASS rc 0 — because the non-tty branch satisfies exactly the
+  # same two conditions. The comment above already named this hazard and then failed to guard it. The
+  # only thing that separates the branches is WHICH MESSAGE APPEARS, so assert on that. $TMP/tty.log was
+  # also captured and never read, which is what made it invisible.
   rm -f "$TMP/out.crt"
   script -qec "HARBOR_CA_SHA256= '$FETCH' '127.0.0.1:${PORT}' '$TMP/out.crt' harbor" /dev/null \
     </dev/null >"$TMP/tty.log" 2>&1
   trc=$?
-  if [ "$trc" -ne 0 ] && [ ! -e "$TMP/out.crt" ]; then ok "no pin + tty + declined refuses"
-  else bad "a declined confirmation must refuse and write nothing" "rc=$trc"; fi
+  if [ "$trc" -ne 0 ] && [ ! -e "$TMP/out.crt" ] \
+     && grep -q 'Does that digest match' "$TMP/tty.log" \
+     && ! grep -q 'no terminal to confirm' "$TMP/tty.log"; then
+    ok "no pin + tty + declined refuses VIA THE INTERACTIVE BRANCH"
+  else
+    bad "a declined confirmation must refuse via the PROMPT, not the no-tty path" \
+        "rc=$trc prompt=$(grep -c 'Does that digest match' "$TMP/tty.log") no-tty=$(grep -c 'no terminal' "$TMP/tty.log")"
+  fi
+  # The ACCEPT branch had NO case at all: if `y|Y|yes|YES` were mistyped, every interactive operator
+  # would be refused and nothing would notice. It fails closed, so this is completeness, not a hole.
+  rm -f "$TMP/out.crt"
+  printf 'y\n' | script -qec "HARBOR_CA_SHA256= '$FETCH' '127.0.0.1:${PORT}' '$TMP/out.crt' harbor" /dev/null \
+    >"$TMP/tty2.log" 2>&1
+  arc=$?
+  if [ "$arc" -eq 0 ] && [ -s "$TMP/out.crt" ]; then ok "no pin + tty + ACCEPTED writes the anchor"
+  else bad "an accepted confirmation must write the anchor" "rc=$arc"; fi
+  # ...and it must SAY it is unauthenticated, or the success text reads like a verification.
+  if grep -q 'NOT AUTHENTICATED — accepted on your confirmation alone' "$TMP/tty2.log"; then
+    ok "the accepted path states the anchor is NOT authenticated"
+  else bad "an accepted-on-consent anchor must not report like a verified one"; fi
 else
-  printf '  SKIP  no pin + tty case (script(1) unavailable — cannot allocate a pty)\n'
+  printf '  SKIP  no pin + tty cases (script(1) unavailable — cannot allocate a pty)\n'
 fi
+
+# --- 4b. A REFUSAL MUST NOT DESTROY AN EXISTING ANCHOR ---------------------------------------------------
+# MEASURED 2026-08-05 (CRITICAL): fetch-ca.sh copied the candidate to $OUT ~50 lines BEFORE the first
+# check, and every refusal path then `rm -f "$OUT"`. Planting a good CA and triggering a MISMATCH left
+# `ls: cannot access` — DETECTING AN INTERCEPTOR DESTROYED THE OPERATOR'S GOOD ANCHOR, in ./secrets/,
+# which is gitignored and untracked, so unrecoverable. The die even said "refusing to WRITE".
+for scenario in "mismatch|$WRONG" "no-pin|" "malformed|:::"; do
+  what="${scenario%%|*}"; pin="${scenario#*|}"
+  printf 'PRECIOUS-EXISTING-ANCHOR\n' > "$TMP/out.crt"
+  run "$pin" /dev/null
+  if [ -e "$TMP/out.crt" ] && grep -q 'PRECIOUS-EXISTING-ANCHOR' "$TMP/out.crt"; then
+    ok "a $what refusal leaves an EXISTING anchor untouched"
+  else
+    bad "a $what refusal DESTROYED the operator's existing anchor" \
+        "$([ -e "$TMP/out.crt" ] && echo 'file was overwritten' || echo 'file was DELETED')"
+  fi
+done
+rm -f "$TMP/out.crt"
+
+# --- 4c. AN UNUSABLE LABEL MUST NOT FAIL OPEN ------------------------------------------------------------
+# MEASURED 2026-08-05: the label becomes a variable name (${LABEL^^}_CA_SHA256, read by indirect
+# expansion), so `fetch-ca.sh <ep> <out> my-registry` died with `invalid variable name` — AFTER writing
+# the anchor and BEFORE any refusal path, leaving 1135 bytes of UNAUTHENTICATED 0644 trust material.
+rm -f "$TMP/lbl.crt"
+"$FETCH" "127.0.0.1:${PORT}" "$TMP/lbl.crt" my-registry </dev/null >/dev/null 2>&1
+lrc=$?
+if [ "$lrc" -ne 0 ] && [ ! -e "$TMP/lbl.crt" ]; then ok "an unusable label refuses and writes NOTHING"
+else bad "an unusable label must not fail open" \
+     "rc=$lrc anchor=$([ -e "$TMP/lbl.crt" ] && echo LEFT-BEHIND || echo none)"; fi
 
 # --- 5. MALFORMED pin -> hard error, NEVER a silent downgrade to TOFU ------------------------------------
 # MEASURED 2026-08-05, before the fix: a pin of ':::' normalised to EMPTY and took the trust-on-first-use
