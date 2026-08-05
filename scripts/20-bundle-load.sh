@@ -120,6 +120,25 @@ else
     # BUNDLE_TOOLS_FORCE=1 overrides (e.g. the box's copy is broken or the wrong arch).
     # what WE carry, per the bundle's own manifest (no network needed to know it)
     carried_ver="$(awk -F'\t' -v n="$name" '$1==n{print $3}' "${TOOLS_DIR}/TOOLS.tsv" 2>/dev/null | head -1 || true)"
+    # ⚠️ FIELD 2 (the PIN) WAS WRITE-ONLY. 11-bundle.sh:215 writes `name \t pin \t version`, and this was
+    # the only reader — of `$3` alone. So the whole mise_pin assertion chain hardened on the internet side
+    # produced a value that influenced NOTHING on the side where it matters.
+    # Field 2 is the better discriminator: mise_pin returns a RESOLVED CLEAN SEMVER (yq -> 4.53.3,
+    # helm -> 4.2.3), whereas field 3 is vendor PROSE that differs per tool — `yq (https://…) version
+    # v4.53.3`, `Client Version: v1.36.3`, `jq-1.8.1`. Prose also breaks whenever a vendor rewords
+    # `--version`; a pin does not.
+    carried_pin="$(awk -F'\t' -v n="$name" '$1==n{print $2}' "${TOOLS_DIR}/TOOLS.tsv" 2>/dev/null | head -1 || true)"
+    # `<unpinned>` is 11-bundle.sh's sentinel for "the pin could not be read". The new fail-closed
+    # mise_pin makes it unreachable for NEW bundles, but an OLDER bundle can still carry it, and it must
+    # mean NO DISCRIMINATOR — never a silent keep. Normalise it to empty so the fallback below fires.
+    [ "$carried_pin" = "<unpinned>" ] && carried_pin=""
+    # ⚠️ ONE normaliser for BOTH shapes, because they differ in exactly the way that disarms a floor:
+    # field 2 has NO leading `v`. MEASURED: the existing `grep -oE 'v[0-9]+\.[0-9]+'` yields `v1.36` on
+    # field 3's `Client Version: v1.36.3` and EMPTY on field 2's `1.36.3`. So naively repointing kubectl
+    # at field 2 would make `ours_mm` empty, the `[ -n "$ours_mm" ]` guard skip, and keep_it stay 1 —
+    # the both-sides-parse-to-empty vacuity, delivered BY the repair. `v?` plus stripping the `v` makes
+    # the two comparable; the callers then compare like with like.
+    mm() { printf '%s' "${1:-}" | grep -oE 'v?[0-9]+\.[0-9]+' | head -1 | tr -d 'v' || true; }
     why=""
     if [ "${BUNDLE_TOOLS_FORCE:-0}" != "1" ] && existing="$(command -v "$name" 2>/dev/null)"; then
       case "$name" in
@@ -144,8 +163,9 @@ else
         # side the same day (a `yq = "4"` pin matched python-yq 3.4.3) — the lesson had not crossed the gap.
         # Compare MAJORS NUMERICALLY against what the bundle carries. Polarity matches the kubectl arm
         # below: an unparseable version is a REJECT, never a keep.
-        helm)    have_maj="$(printf '%s' "$ev"          | grep -oE '[0-9]+' | head -1 || true)"
-                 ours_maj="$(printf '%s' "$carried_ver" | grep -oE '[0-9]+' | head -1 || true)"
+        # PIN FIRST here too — `4.2.3` is unambiguous where `v4.1.4+g05fa379` needs parsing.
+        helm)    have_maj="$(mm "$ev" | cut -d. -f1)"
+                 ours_maj="$(mm "${carried_pin:-$carried_ver}" | cut -d. -f1)"
                  if [ -z "$have_maj" ]; then
                    keep_it=0; why="cannot parse a version from '${ev}' — refusing to trust it over the carried ${carried_ver}"
                  elif [ -n "$ours_maj" ] && [ "$have_maj" -lt "$ours_maj" ]; then
@@ -170,8 +190,10 @@ else
                  # error, a version with no leading `v`, and empty). `ours_mm` is worse still: it
                  # reads TOOLS.tsv field 3, which 11-bundle.sh:15 leaves EMPTY when the staged
                  # binary would not run — so a slightly-bad bundle killed the far side, silently.
-                 have_mm="$(printf '%s' "$ev"     | grep -oE 'v[0-9]+\.[0-9]+' | head -1 || true)"
-                 ours_mm="$(printf '%s' "$carried_ver" | grep -oE 'v[0-9]+\.[0-9]+' | head -1 || true)"
+                 # PIN FIRST (clean semver), prose only as a fallback. Both through mm() so a missing
+                 # leading `v` cannot silently empty one side — see the normaliser's note above.
+                 have_mm="$(mm "$ev")"
+                 ours_mm="$(mm "${carried_pin:-$carried_ver}")"
                  # POLARITY, deliberately matching the helm branch one line above: an UNPARSEABLE
                  # version is a REJECT, not a keep. Absorbing the failure with a bare `|| true` and
                  # falling through would KEEP an unreadable kubectl while helm REPLACES an unreadable
