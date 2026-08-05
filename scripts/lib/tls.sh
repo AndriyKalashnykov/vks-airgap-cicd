@@ -120,6 +120,14 @@ ca_verifies_endpoint() {
   # missing one is set. 02-env.sh already had to work around this with its own `_ca_verdict=9`
   # sentinel; a caller that did not know to would print the wrong cause.
   [ -s "$ca" ] || return 5
+  # ⚠️ `-s` IS NOT "USABLE". MEASURED against a healthy TLS endpoint, FIVE distinct broken
+  # anchors all satisfy `-s` and all returned **2** ("the endpoint is unreachable"): a
+  # DIRECTORY, a mode-000 file, whitespace-only, a truncated PEM, and plain garbage text.
+  # openssl fails to LOAD the CA and so never prints `CONNECTED(`, and the check below then
+  # reads that absence as a network fault. An anchor problem reported as a reachability
+  # problem is the exact class this function exists to delete — and 02-env.sh compounds it by
+  # replying "this is NOT evidence the anchor is wrong."
+  openssl x509 -in "$ca" -noout >/dev/null 2>&1 || return 5
   # An IPv4 literal needs -verify_ip; a name needs -verify_hostname. Passing the wrong one silently
   # verifies nothing, which is the defect this is fixing.
   case "$host" in
@@ -155,7 +163,20 @@ ca_verifies_endpoint() {
   # Plaintext is precisely the case where verification "passed" VACUOUSLY — it succeeded because
   # there was nothing to verify. So: require the ok line AND the absence of a certificate.
   if printf '%s' "$out" | command grep -q 'Verify return code: 0 (ok)'; then
-    printf '%s' "$out" | command grep -q 'no peer certificate available' && return 4
+    if printf '%s' "$out" | command grep -q 'no peer certificate available'; then
+      # ⚠️ "NO CERTIFICATE" IS TWO DIFFERENT FAULTS, and they need OPPOSITE handling.
+      # MEASURED — the outputs are cleanly distinct:
+      #   accept-then-close : `unexpected eof while reading` / `handshake has read 0 bytes`
+      #   plaintext/banner  : `wrong version number`         / `handshake has read 5 bytes`
+      # A listener that ACCEPTS then CLOSES with zero bytes is what an LB VIP looks like while
+      # its backend is still coming up — a Supervisor apiserver mid-start. That is RETRYABLE,
+      # and verdict 2 already says exactly the right thing ("NOT evidence the anchor is wrong
+      # — retry"). Reporting it as 4 hard-stopped the operator and told them to change a
+      # SUPERVISOR_HOST that was correct. Deterministic, 6/6 — not a race.
+      printf '%s' "$out" | command grep -qE 'unexpected eof while reading|handshake has read 0 bytes' \
+        && return 2
+      return 4
+    fi
     return 0
   fi
   printf '%s' "$out" | command grep -q 'CONNECTED(' || return 2
@@ -198,6 +219,17 @@ ca_verifies_endpoint() {
 # does not even read it. So on the ONE machine where this matters (an operator laptop with a local KinD
 # cluster AND a customer kubeconfig loaded) that check PASSES while KUBECONFIG points at the customer.
 # It also returns rc=0 on "No kind clusters found" — the same rc=0-on-nothing shape as the bug itself.
+#
+# ⚠️ B231: THE REFUSAL IS CORRECT AND ITS REMEDY USED TO LOOP. `make kind-up` writes its own kubeconfig
+# at its OWN path (05-kind-up.sh: `secrets/kind.kubeconfig`) and `state_set KUBECONFIG` to it — but
+# KUBECONFIG is the FIRST entry in load_env's selector snapshot (lib/os.sh), so a value the caller
+# EXPORTED outranks everything any file records. And the nested lab actively TEACHES the operator to
+# export it: `make kubectl-login` prints "use it with:  export KUBECONFIG=<path>" and its README repeats
+# it three times. Follow that instruction, then run a KinD-only step in the same shell, and this guard
+# refuses — correctly. Run the `make kind-up` it used to recommend as the only remedy, which CANNOT
+# clear a variable in the CALLER's shell, and the next attempt refuses IDENTICALLY: the operator loops.
+# The third arm below names the real fix. No tracker id in the PRINTED text — an operator cannot
+# resolve a private index; that is what this comment is for.
 require_kind_target() {
   local what="${1:-this step}" want cur
   : "${KIND_CLUSTER_NAME:?KIND_CLUSTER_NAME must be set (it names the KinD cluster this is scoped to)}"
@@ -217,7 +249,11 @@ require_kind_target() {
 
   If you meant the local stand-in:  make kind-up            (then re-run this)
   If you are on a real lab:         you do NOT run this — the lab PROVIDES Harbor/ArgoCD as
-                                    Supervisor Services. See docs/scenario-1.md."
+                                    Supervisor Services. See docs/scenario-1.md.
+  If it STILL refuses after that:   unset KUBECONFIG        — you have it EXPORTED in this shell.
+                                    A login prints an 'export KUBECONFIG=...' line and people follow
+                                    it; an exported value OUTRANKS the path 'make kind-up' records,
+                                    so kind-up cannot clear it and re-running refuses identically."
 }
 
 # ca_fingerprint <ca-file> — prints the cert's SHA-256 as colon-hex. rc 1 if it cannot be read.

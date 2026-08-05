@@ -111,7 +111,13 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     #   [x] : … [ca-certificate insecure-skip-tls-verify] were all set
     # Order is deliberate: an explicitly-set CA WINS, so setting both cannot silently downgrade
     # you to unverified TLS.
-    if [ -n "${VKS_CA_CERT_FILE:-}" ] && [ -s "${VKS_CA_CERT_FILE}" ]; then
+    # ⚠️ NO `-s` HERE — it is the exact NEGATION of ca_verifies_endpoint's `[ -s "$ca" ] || return 5`,
+    # so keeping it made that verdict's arm below UNREACHABLE: a non-empty file could never return 5,
+    # and an empty one skipped this block entirely. Let the FUNCTION classify; it distinguishes
+    # absent/empty/unparseable (5) from a wrong anchor (1) from a name mismatch (3), and each has a
+    # different remedy. A guard that pre-filters the input to a classifier deletes the classes it
+    # filters on.
+    if [ -n "${VKS_CA_CERT_FILE:-}" ]; then
       # ⚠️ EXISTS AND NON-EMPTY IS NOT "IS A TRUST ANCHOR FOR THIS ENDPOINT". MEASURED 2026-08-05:
       # after a lab rebuild this file still held the DESTROYED lab's VMCA (stored SHA-256 EF:19:5E:…
       # vs live B0:E5:E6:…). Every consumer then failed with `x509: certificate signed by unknown

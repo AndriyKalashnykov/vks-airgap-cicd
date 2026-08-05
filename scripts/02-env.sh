@@ -232,7 +232,14 @@ env_validate() {
             *)       log_warn "Harbor auth probe inconclusive (HTTP $acode) — verify at mirror time" ;;
           esac
         fi
-      elif [ "$scheme" = https ] && { [ "$rc" = 60 ] || [ "$rc" = 35 ] || [ "$rc" = 51 ] || [ "$rc" = 83 ]; }; then
+      # ⚠️ 77 IS REQUIRED, and without it the arms below are DEAD CODE. MEASURED against a healthy
+      # TLS oracle: curl handed an EMPTY (or unparseable) --cacert returns **77**
+      # (CURLE_SSL_CACERT_BADFILE), not 60. 77 was absent from this set, so the whole block was
+      # skipped and execution fell through to the outer else — reporting "Harbor unreachable
+      # (HTTP 000, curl exit 77)" for a purely LOCAL anchor problem, against a Harbor that was
+      # answering. An anchor fault reported as a reachability fault is the exact class this
+      # function exists to delete, committed by the function itself.
+      elif [ "$scheme" = https ] && { [ "$rc" = 60 ] || [ "$rc" = 35 ] || [ "$rc" = 51 ] || [ "$rc" = 77 ] || [ "$rc" = 83 ]; }; then
         # ⚠️ THIS USED TO CONFLATE THREE CAUSES AND NAME ONLY ONE OF THEM. The message was "set
         # HARBOR_CA_FILE for a self-signed Harbor, or the cert is not publicly trusted" — which is right
         # when the variable is UNSET, and actively misleading in the case that actually happens most: the

@@ -912,11 +912,48 @@ assert_run_sentinel() {
 classify_kube_failure() {
   local errfile="${1:-/dev/null}" e=""
   [ -r "$errfile" ] && e="$(cat "$errfile" 2>/dev/null || true)"
+  # ⚠️ ARM ORDER IS PART OF THE CONTRACT. First match wins, so an arm that can match text belonging
+  # to another class SHADOWS every arm below it. UNAUTHORIZED used to sit second and did exactly
+  # that — see the 401 note below; a genuine FORBIDDEN was classified UNAUTHORIZED.
   case "$e" in
     *"x509"*|*"certificate signed by unknown authority"*|*"certificate is valid for"*) printf 'STALE_CA' ;;
-    *"Unauthorized"*|*"401"*)                                                          printf 'UNAUTHORIZED' ;;
+
+    # PLAINTEXT: the endpoint is not speaking TLS at all. Its own class because every CA remedy is
+    # wrong here — there is nothing for an anchor to verify, so re-fetching or re-pinning cannot
+    # help. Almost always a wrong scheme or port. (The numeric sibling of this verdict is
+    # ca_verifies_endpoint's rc=4; keep the two remedy texts saying the same thing.)
+    *"first record does not look like a TLS handshake"*|*"server gave HTTP response to HTTPS client"*) \
+                                                                                       printf 'PLAINTEXT' ;;
+
+    # ⚠️ NETWORK BEFORE AUTH, and `401` ANCHORED. BOTH are required; neither alone is enough.
+    #
+    # `*"401"*` was unanchored and sat ABOVE this arm. It does not collide with ports (that was the
+    # theory) — it collides with kubectl's KLOG MICROSECOND TIMESTAMP. MEASURED: 60 invocations
+    # against a refused endpoint on port 9999, with no `401` anywhere in the address — 4 of 60
+    # (6.7%) contained `401` from fields like `.380401`, and those 4 classified UNAUTHORIZED while
+    # the other 56 classified UNREACHABLE. Same command, same endpoint, different verdict: a
+    # heisenbug a rerun "fixes". Treat the rate as "single-digit percent", not as 6.7 — it scales
+    # with how many klog retry lines a given failure emits.
+    #
+    # Anchoring alone leaves the ordering fragile; reordering alone still lets a 401-bearing
+    # UNKNOWN misfire. `401` is the ONLY purely-numeric token in this function, so it is the only
+    # one that can collide with machine-generated digits (timestamps, PIDs, `file.go:NNN` lines) —
+    # every other token is alphabetic and needs no anchor.
+    *"no route to host"*|*"connection refused"*|*"i/o timeout"*|*"dial tcp"*|*"no such host"*) \
+                                                                                       printf 'UNREACHABLE' ;;
+
+    # ⚠️ kubectl TRANSLATES a 401 — its stderr contains neither "Unauthorized" NOR "401".
+    # MEASURED against a server returning HTTP 401 with body {"reason":"Unauthorized","code":401}:
+    #   error: You must be logged in to the server (the server has asked for the client to provide credentials)
+    # Both phrasings are matched: the second survives if the final summary line is ever truncated,
+    # since it also appears in the klog lines. Without these, the arm NEVER fired on the real
+    # credential-expiry case — a perfect inversion with the 401 collision above, which fired only
+    # when it was wrong.
+    *"You must be logged in to the server"*|*"asked for the client to provide credentials"*) \
+                                                                                       printf 'UNAUTHORIZED' ;;
+    *"Unauthorized"*|*" 401 "*|*"(401)"*|*'"code":401'*|*"code: 401"*)                  printf 'UNAUTHORIZED' ;;
+
     *"forbidden"*|*"Forbidden"*|*"cannot list resource"*)                              printf 'FORBIDDEN' ;;
-    *"no route to host"*|*"connection refused"*|*"i/o timeout"*|*"dial tcp"*|*"no such host"*) printf 'UNREACHABLE' ;;
     *)                                                                                 printf 'UNKNOWN' ;;
   esac
 }

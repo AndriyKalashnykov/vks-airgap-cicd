@@ -23,7 +23,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pass=0; fail=0
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"; [ -n "${TLS_PID:-}" ] && kill "$TLS_PID" 2>/dev/null; [ -n "${PLAIN_PID:-}" ] && kill "$PLAIN_PID" 2>/dev/null' EXIT
 
+OBSERVED=""
 ck() { # <label> <want-rc> <got-rc>
+  OBSERVED="${OBSERVED}${3}\n"   # accumulate what was ACTUALLY returned — see the distinctness check
   if [ "$2" = "$3" ]; then printf 'ok   - %s (rc=%s)\n' "$1" "$3"; pass=$((pass+1))
   else printf 'FAIL - %s: want rc=%s got rc=%s\n' "$1" "$2" "$3"; fail=$((fail+1)); fi
 }
@@ -43,8 +45,8 @@ import socket
 s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()
 PY
 }
-TLS_PORT="$(pick_port)"; PLAIN_PORT="$(pick_port)"; DEAD_PORT="$(pick_port)"
-[ "$TLS_PORT" != 0 ] && [ "$PLAIN_PORT" != 0 ] && [ "$DEAD_PORT" != 0 ] \
+TLS_PORT="$(pick_port)"; PLAIN_PORT="$(pick_port)"; DEAD_PORT="$(pick_port)"; AC_PORT="$(pick_port)"
+[ "$TLS_PORT" != 0 ] && [ "$PLAIN_PORT" != 0 ] && [ "$DEAD_PORT" != 0 ] && [ "$AC_PORT" != 0 ] \
   || { echo "FAIL - could not allocate ephemeral ports — broken test, not a clean tree"; exit 1; }
 
 openssl s_server -accept "$TLS_PORT" -cert "$TMP/ca.pem" -key "$TMP/k.pem" -quiet >/dev/null 2>&1 &
@@ -69,12 +71,53 @@ r=0; ca_verifies_endpoint 127.0.0.1 "$TLS_PORT"   "$TMP/nope.pem"  || r=$?; ck "
 r=0; ca_verifies_endpoint 127.0.0.1 "$TLS_PORT"   "$TMP/empty.pem" || r=$?; ck "anchor file EMPTY -> NOT CONFIGURED"         5 "$r"
 r=0; ca_verifies_endpoint 127.0.0.1 "$DEAD_PORT"  "$TMP/ca.pem"    || r=$?; ck "nothing listening -> UNREACHABLE"            2 "$r"
 
-# ⚠️ THE VERDICTS MUST BE MUTUALLY DISTINCT, or a caller's `case` cannot branch on them. This is
-# the check that would have caught my first fix collapsing three of them onto 4 — the per-case
-# assertions above catch it too, but only because the regression arm exists; this catches it
-# structurally, without depending on anyone remembering to keep those cases.
-seen="$(printf '0\n1\n2\n3\n4\n5\n' | sort -u | wc -l)"
-[ "$seen" = 6 ] || { echo "FAIL - the verdict set is not 6 distinct values"; fail=$((fail+1)); }
+# ⚠️ ACCEPT-THEN-CLOSE IS NOT PLAINTEXT, and conflating them hard-stopped a RETRYABLE state.
+# A listener that accepts and closes with zero bytes is what an LB VIP looks like while its
+# backend is still starting. MEASURED, deterministic 6/6, and the shapes are cleanly distinct:
+#   accept-close: `unexpected eof while reading` / `handshake has read 0 bytes`
+#   plaintext:    `wrong version number`         / `handshake has read 5 bytes`
+python3 -c "
+import socket,time
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(('127.0.0.1',$AC_PORT)); s.listen(5)
+end=time.time()+20
+while time.time()<end:
+    try:
+        s.settimeout(2); c,_=s.accept(); c.close()
+    except Exception: pass
+" >/dev/null 2>&1 &
+AC_PID=$!
+sleep 1
+r=0; ca_verifies_endpoint 127.0.0.1 "$AC_PORT" "$TMP/ca.pem" || r=$?; ck "accept-then-close -> RETRYABLE, not plaintext" 2 "$r"
+kill "$AC_PID" 2>/dev/null
+
+# ⚠️ `-s` IS NOT "USABLE": five broken-but-nonempty anchors all used to report the ENDPOINT
+# as unreachable, because openssl never prints CONNECTED( when it cannot load the CA.
+printf 'not a certificate at all\n' > "$TMP/garbage.pem"
+r=0; ca_verifies_endpoint 127.0.0.1 "$TLS_PORT" "$TMP/garbage.pem" || r=$?; ck "GARBAGE anchor -> NOT CONFIGURED, not unreachable" 5 "$r"
+mkdir -p "$TMP/adir"
+r=0; ca_verifies_endpoint 127.0.0.1 "$TLS_PORT" "$TMP/adir" || r=$?; ck "anchor is a DIRECTORY -> NOT CONFIGURED" 5 "$r"
+
+# ⚠️ THIS CHECK WAS THEATRE, AND ITS COMMENT WAS WORSE THAN THE CHECK.
+# It read `printf '0\n1\n2\n3\n4\n5\n' | sort -u | wc -l` — a CONSTANT. Always 6, reading
+# nothing from what the function actually returned. RED-PROVEN by an adversary: reverting the
+# function to the refuted "no peer certificate available ALONE" test turned the suite red on the
+# two per-case regression arms and this check emitted NOTHING.
+# The comment claimed it "catches it structurally, without depending on anyone remembering to
+# keep those cases" — measured FALSE, and that sentence is an invitation to delete the only
+# cases that work. A vacuous check is bad; a vacuous check that licenses deleting the real ones
+# is how the original bug comes back.
+# It now asserts over the OBSERVED verdicts, so it fails the moment two collapse onto one.
+# ⚠️ NOT "all distinct" — two cases legitimately share verdict 5 (absent anchor and empty
+# anchor), so an all-distinct assertion could never hold and would be a second piece of
+# theatre. The real invariant is COVERAGE: every verdict this function can return must have
+# been produced by at least one case. If two collapse onto one, the other goes MISSING here.
+_missing=""
+for _want in 0 1 2 3 4 5; do
+  printf '%b' "$OBSERVED" | command grep -qx "$_want" || _missing="${_missing} ${_want}"
+done
+[ -z "$_missing" ] || { printf 'FAIL - verdict(s)%s were produced by NO case — two have collapsed. observed: %s\n' \
+  "$_missing" "$(printf '%b' "$OBSERVED" | tr '\n' ' ')"; fail=$((fail+1)); }
 
 printf 'test-ca-verifies-endpoint: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
