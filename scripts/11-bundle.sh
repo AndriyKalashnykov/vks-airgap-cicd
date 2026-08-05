@@ -11,6 +11,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+
+# ⚠️ DECLARED because mise_pin() below now asks mise for the RESOLVED pin instead of hand-parsing
+# .mise.toml. Both run on the INTERNET side (this script cuts the bundle), so needing them here does not
+# add an air-gap dependency — `jq` remains a CARRIED tool that 03-check-tools.sh correctly expects to be
+# absent on the far side. Declared rather than assumed: without this, a missing jq makes the lookup return
+# empty, which the pin check would report as "cannot determine the version this repo pins" — true, but it
+# names the symptom instead of the missing tool.
+require_cmd mise jq
 load_env
 
 : "${BUNDLE_DIR:?}"
@@ -84,9 +92,34 @@ mkdir -p "$TOOLS_DIR"
 # mise_pin <tool> — the version THIS REPO pins in .mise.toml, or "" if it pins none.
 # .mise.toml is the single source of truth for the toolchain (portfolio version-manager policy), so it is
 # also the source of truth for what we are allowed to carry across the gap.
+# ⚠️ ASK MISE, DO NOT PARSE ITS CONFIG. The hand-rolled parser this replaces was wrong in BOTH directions,
+# and the false-green half was LIVE and air-gap-breaking. All MEASURED 2026-08-05:
+#
+#   FALSE GREEN (live): it returned the REQUESTED pin string, and `.mise.toml` pins `yq = "4"`. The
+#     assertion below is a SUBSTRING match, so `yq (…kislyuk/yq/) 3.4.3` and `yq version 2.4.0` BOTH
+#     matched "4" and were carried. The install path uses yq-v4-ONLY syntax (`strenv()`/`fromjson`, at
+#     lib/istio.sh:297 and :593), so a v3 or python-yq breaks `install-ingress` on the one box that has
+#     no internet to fix it. Asking mise gives the RESOLVED version (4.53.3) and the substring vacuity
+#     disappears with it.
+#   FALSE GREEN (latent): three mise-VALID configs made it return EMPTY, which the caller then treated as
+#     "no pin, skip the check" — a `[tools.crane]` sub-table, a backend-explicit key
+#     (`"aqua:google/go-containerregistry" = "..."`), and a tool present only in the operator's GLOBAL
+#     config. That last one is the worst: `mise which` reads the MERGED config while this read only the
+#     repo file, so such a tool staged with ZERO version assertion — exactly the gcloud-dispatcher case
+#     the comment below says this check exists to catch.
+#   FALSE RED: a single-quoted TOML literal (`crane = '0.21.7'`, valid, mise resolves it) has no `"` for
+#     `cut -d'"'`, and cut without -s emits the WHOLE LINE; and a non-semver pin (`latest`, `lts`) can
+#     never satisfy a substring assertion against a resolved version.
+#
+# `.source.path` is the part no hand parser can reproduce: it says WHICH config the pin came from, so we
+# refuse to vouch for a tool this repo does not actually pin.
+# ⚠️ `.installed` is LOAD-BEARING, not decoration: a pinned-but-UNINSTALLED tool appears in the JSON with
+# `.version` equal to the REQUESTED string — so without this predicate `yq = "4"` would return "4" again
+# and re-open the vacuity in a new costume.
 mise_pin() {
-  sed 's/#.*//' "${REPO_ROOT}/.mise.toml" 2>/dev/null \
-    | grep -E "^[[:space:]]*$1[[:space:]]*=" | head -1 | cut -d'"' -f2
+  mise ls --current --json 2>/dev/null \
+    | jq -r --arg t "$1" --arg cfg "${REPO_ROOT}/.mise.toml" \
+        '(.[$t] // [])[0] | select(.source.path == $cfg and .installed) | .version' 2>/dev/null
 }
 
 # stage_tool <name> <version-args...> — resolve the PINNED binary, copy it, then PROVE the copy is the
@@ -125,8 +158,25 @@ stage_tool() {
 
   # IS IT THE ONE WE PINNED? This is the check that catches a foreign vendor's build (gcloud's kubectl
   # dispatcher) — which is static, runs, and is not mise, so every other check waves it through.
+  # ⚠️ FAIL CLOSED. This was `[ -n "$pin" ] && ! …`, which SILENTLY DISARMED the whole check whenever the
+  # pin could not be read — and MEASURED, three mise-VALID configs made that happen (a `[tools.x]`
+  # sub-table, a backend-explicit key, and a tool present only in the operator's GLOBAL config). The
+  # end-to-end consequence: pin="", assertion skipped, "PASSED", and TOOLS.tsv recorded `<unpinned>` —
+  # for exactly the gcloud-dispatcher binary the comment above says this check exists to catch.
+  # An unreadable pin is now an ERROR. It must never be an implicit permission.
   pin="$(mise_pin "$name")"
-  if [ -n "$pin" ] && ! printf '%s' "$ver" | grep -qF "$pin"; then
+  [ -n "$pin" ] || die "cannot determine the version this repo pins for '${name}' — REFUSING to carry it.
+
+  Nothing here is safe to assume: an unreadable pin used to mean 'skip the check', which is how an
+  unpinned binary reaches a box with no internet to replace it.
+
+  'mise ls --current --json' must report ${name} as INSTALLED and sourced from
+  ${REPO_ROOT}/.mise.toml. Most likely one of:
+    * it is not installed yet          -> mise install
+    * it is pinned in your GLOBAL config, not this repo's -> add it to .mise.toml
+    * jq is unavailable, so the lookup returned nothing   -> mise install jq"
+
+  if ! printf '%s' "$ver" | grep -qF "$pin"; then
     die "the ${name} we resolved is NOT the version this repo pins.
   .mise.toml pins : ${pin}
   resolved binary : ${bin}
