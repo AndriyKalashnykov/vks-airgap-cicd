@@ -270,6 +270,17 @@ env_validate() {
   Address Harbor by a name the certificate carries (HARBOR_URL), or reissue the cert with a SAN for
   the address you use. A self-signed Harbor minted for an IP will not validate by FQDN, and vice versa."
              errs=$((errs+1)) ;;
+          # 4 = the endpoint served NO CERTIFICATE. Its own arm because every CA remedy is wrong:
+          # there is nothing for an anchor to verify. MEASURED — this used to return 0, so a
+          # plaintext endpoint read as "the CA verifies it".
+          4) log_error "${_h}:${_p} answered but served NO TLS CERTIFICATE — it is not speaking TLS.
+  Do NOT re-fetch the CA; there is nothing for it to verify. Check HARBOR_URL: this is usually a
+  plain-HTTP endpoint or the wrong port. If this Harbor is deliberately HTTP, it must not be
+  addressed as https."; errs=$((errs+1)) ;;
+          # 5 = HARBOR_CA_FILE exists but is EMPTY (the `-f` guard above passed, `-s` did not).
+          # Distinct from 9 (not configured at all) and from 1 (configured and wrong).
+          5) log_error "HARBOR_CA_FILE='${HARBOR_CA_FILE}' exists but is EMPTY, so nothing can be
+  verified. This is NOT a stale anchor — re-fetch it:  make fetch-harbor-ca"; errs=$((errs+1)) ;;
           *) log_error "Harbor TLS not trusted at $scheme://$HARBOR_URL (curl exit $rc) — set HARBOR_CA_FILE for a self-signed Harbor, or the cert is not publicly trusted"; errs=$((errs+1)) ;;
         esac
       else

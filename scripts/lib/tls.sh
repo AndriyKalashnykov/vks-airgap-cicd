@@ -115,7 +115,11 @@ ca_bundle_with_system() {
 #      Hence rc 3 — chain OK, NAME wrong — as its own verdict, so callers stop reporting it as staleness.
 ca_verifies_endpoint() {
   local host="$1" port="${2:-443}" ca="$3" out rc=0 namearg
-  [ -s "$ca" ] || return 1
+  # ⚠️ 5, NOT 1. Returning 1 here said "connected, and the anchor does NOT verify" — i.e. STALE — for
+  # an operator who has configured NO CA AT ALL. Opposite remedies: a stale anchor is re-fetched, a
+  # missing one is set. 02-env.sh already had to work around this with its own `_ca_verdict=9`
+  # sentinel; a caller that did not know to would print the wrong cause.
+  [ -s "$ca" ] || return 5
   # An IPv4 literal needs -verify_ip; a name needs -verify_hostname. Passing the wrong one silently
   # verifies nothing, which is the defect this is fixing.
   case "$host" in
@@ -126,7 +130,34 @@ ca_verifies_endpoint() {
           -connect "${host}:${port}" -servername "$host" \
           -CAfile "$ca" -verify_return_error "$namearg" "$host" 2>&1) || rc=$?
   [ "$rc" -eq 124 ] && return 2                              # timed out: the endpoint, not the anchor
-  printf '%s' "$out" | command grep -q 'Verify return code: 0 (ok)' && return 0
+  # ⚠️ THIS TEST MUST PRECEDE THE "ok" TEST, and that ordering is the whole fix.
+  # MEASURED (OpenSSL 3.0.13, plain-HTTP port, valid CA file): s_client prints BOTH
+  #   line  4: no peer certificate available
+  #   line 17: Verify return code: 0 (ok)
+  # — there is no certificate, so nothing FAILS verification — and this function returned **0**.
+  # An endpoint serving PLAINTEXT was reported as "the CA verifies it". That is the worst possible
+  # direction for a trust check, and it is silent.
+  #
+  # It also poisons anything built on top: a caller refining a TLS diagnosis through this function
+  # concludes "transport is fine, so it must be permissions" — which is the exact wrong diagnosis
+  # this whole class of fix exists to eliminate.
+  #
+  # ⚠️ Do NOT switch this to the `Verification:` line instead. On 3.0.13 that reads `Verification: OK`
+  # for the SAME plaintext connection, so it is equally useless here, and it is a DIFFERENT string
+  # from the `Verify return code:` one below — two spellings, one meaning, neither of them evidence.
+  # ⚠️ THE CONJUNCTION IS LOAD-BEARING. `no peer certificate available` ALONE is NOT a plaintext
+  # signal: with `-verify_return_error` a FAILED verification aborts the handshake, so no peer cert
+  # is stored and that line appears for a wrong anchor and a name mismatch too. MEASURED — testing
+  # it alone collapsed THREE verdicts into one (wrong CA 1->4, name mismatch 3->4), i.e. the "fix"
+  # was strictly worse than the bug it fixed. Only the plaintext-only test would have missed that;
+  # the regression arm is what caught it.
+  #
+  # Plaintext is precisely the case where verification "passed" VACUOUSLY — it succeeded because
+  # there was nothing to verify. So: require the ok line AND the absence of a certificate.
+  if printf '%s' "$out" | command grep -q 'Verify return code: 0 (ok)'; then
+    printf '%s' "$out" | command grep -q 'no peer certificate available' && return 4
+    return 0
+  fi
   printf '%s' "$out" | command grep -q 'CONNECTED(' || return 2
   # CONNECTED but not ok. Separate "the anchor is wrong" from "the anchor is right, the NAME is not" —
   # they have opposite remedies (re-fetch the CA vs address the endpoint by its FQDN).

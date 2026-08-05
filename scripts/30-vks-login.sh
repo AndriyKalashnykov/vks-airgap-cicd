@@ -170,6 +170,25 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
   A vSphere certificate commonly carries DNS names and NO IP SAN, so addressing the Supervisor by IP
   fails name verification even with a perfect trust anchor. Set SUPERVISOR_HOST to the FQDN the
   certificate names (and make sure it resolves), or have the platform team reissue with an IP SAN." ;;
+        # 4 = the endpoint served NO CERTIFICATE AT ALL. Its own arm because every CA remedy is wrong
+        # here — there is nothing for an anchor to verify, so re-fetching or re-pinning one cannot
+        # help. MEASURED: this used to return 0 ("the CA verifies"), because s_client reports
+        # `Verify return code: 0 (ok)` when there is no certificate to fail on. A credential is
+        # submitted over this connection, so a plaintext endpoint must be a hard stop, not a pass.
+        4) die "${SUPERVISOR_HOST}:443 answered, but it served NO TLS CERTIFICATE — it is not
+  speaking TLS. Do NOT re-fetch or re-pin the CA: there is nothing for an anchor to verify, and no
+  certificate change can fix this.
+
+  This is almost always the wrong ADDRESS or the wrong PORT — a plain-HTTP endpoint, a proxy, or a
+  service that is not the Supervisor API. Check SUPERVISOR_HOST, and that 443 is the API port.
+  REFUSING to continue: a credential would otherwise be submitted over an unencrypted connection." ;;
+        # 5 = no readable anchor CONFIGURED. Distinct from 1 (an anchor that is present and wrong):
+        # one is set, the other re-fetched, and telling an operator their anchor is "stale" when they
+        # never configured one sends them to re-fetch a file they do not have.
+        5) die "VKS_CA_CERT_FILE='${VKS_CA_CERT_FILE}' is empty or unreadable, so the certificate
+  ${SUPERVISOR_HOST} presents cannot be verified at all. This is NOT a stale anchor — there is no
+  anchor. Point VKS_CA_CERT_FILE at the Supervisor's CA (make vks-ca, or ask the platform team for
+  it), then re-run. REFUSING to continue: a credential is submitted over this connection." ;;
         *) die "the CA at ${VKS_CA_CERT_FILE} does NOT verify the certificate ${SUPERVISOR_HOST}
   presents. The endpoint ANSWERED, so this is not a reachability problem — the anchor is for a
   different (usually a DESTROYED and rebuilt) Supervisor. A rebuild mints a new VMCA.

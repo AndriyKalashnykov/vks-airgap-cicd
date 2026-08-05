@@ -763,11 +763,15 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint ## Run all offline script-logic unit tests
 
 .PHONY: test-fetch-ca-pin
 test-fetch-ca-pin: ## Offline: fetch-ca.sh REFUSES a CA whose fingerprint does not match the out-of-band pin (real TLS oracle)
 	@./scripts/test-fetch-ca-pin.sh
+
+.PHONY: test-ca-verifies-endpoint
+test-ca-verifies-endpoint: ## RED-proof ca_verifies_endpoint's six verdicts against a real TLS oracle
+	@bash scripts/test-ca-verifies-endpoint.sh
 
 .PHONY: test-vks-username
 test-vks-username: ## Offline: the SHARED VKS SSO principal resolver — default, VKS_SSO_DOMAIN, C10 idempotency, and that BOTH consumers use it
