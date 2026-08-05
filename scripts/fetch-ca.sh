@@ -26,6 +26,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# ⚠️ REQUIRED for ca_fingerprint / ca_pin_verdict below — os.sh does NOT pull tls.sh in. Without this
+# line those calls are `command not found` (rc 127), which under `set -e` kills the script with no
+# message at all. tls.sh has an idempotent load guard and no source-time side effects.
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"
 
 EP="${1:?usage: fetch-ca.sh <endpoint> <out-file> [label]}"
 OUT="${2:?usage: fetch-ca.sh <endpoint> <out-file> [label]}"
@@ -143,8 +148,11 @@ fi
 # incident where a message compared a stored CA fingerprint against a live LEAF fingerprint -- two
 # different objects that can never match. Every digest we print is therefore LABELLED with its object.
 UPPER="$(printf '%s' "$LABEL" | tr '[:lower:]' '[:upper:]')"
-fp_colon="$(openssl x509 -in "$OUT" -noout -fingerprint -sha256 2>/dev/null | sed 's/^.*Fingerprint=//')" || true
-[ -n "$fp_colon" ] || { rm -f "$OUT"; die "could not compute a SHA-256 fingerprint for the CA we extracted."; }
+# ONE definition of "compute the digest / compare it to a pin", in lib/tls.sh, shared with
+# 30-vks-login.sh. The normalisation ("strip colons, lowercase, is it 64 hex") is the drift-prone
+# part; two copies of it would diverge, which is the class check-*-alignment gates exist for.
+fp_colon="$(ca_fingerprint "$OUT")" \
+  || { rm -f "$OUT"; die "could not compute a SHA-256 fingerprint for the CA we extracted."; }
 fp_bare="$(printf '%s' "$fp_colon" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
 
 # ⚠️ THE PIN MUST BE PASSED EXPLICITLY BY THE CALLER. This script does NOT call load_env, and the Makefile's
@@ -157,15 +165,19 @@ pin_var="${UPPER}_CA_SHA256"
 # constructed variable name — plus shellcheck can SEE this one (an eval is opaque to it, which
 # cost an SC2154 on the assignment below).
 pin="${!pin_var:-}"
-pin_norm="$(printf '%s' "$pin" | tr -d ': ' | tr '[:upper:]' '[:lower:]')"
 
-# ⚠️ BRANCH ON THE RAW VALUE, NOT THE NORMALISED ONE, AND VALIDATE THE FORMAT.
-# MEASURED 2026-08-05: keying the `if` on $pin_norm meant a pin of ':::' or '   ' normalised to EMPTY and
-# fell through to the trust-on-first-use branch — the operator SUPPLIED a pin and it was silently ignored.
-# Unattended that still refused (safe by accident), but ON A TERMINAL they would get the y/N prompt, type
-# y, and believe they were pinned when they were not. A control that can be silently disabled by a typo in
-# its own input is not a control. A set-but-unusable pin is now a HARD ERROR, never a downgrade.
-if [ -n "$pin" ] && ! [[ "$pin_norm" =~ ^[0-9a-f]{64}$ ]]; then
+# ⚠️ `verdict=0; cmd || verdict=$?` — NOT `cmd; verdict=$?`. Under `set -e` a non-zero return from
+# ca_pin_verdict (which is its NORMAL way of reporting a mismatch) would kill the script before the
+# case could run, so every actionable message below would be unreachable exactly when it is needed.
+# Same trap the `|| true` on the subject/issuer reads above exists for.
+verdict=0; ca_pin_verdict "$OUT" "$pin" || verdict=$?
+
+# 4 = SET BUT UNUSABLE, and it must never collapse into 3 (= not set). MEASURED 2026-08-05: an earlier
+# version normalised first and branched on the result, so ':::' became empty and took the
+# trust-on-first-use path — the operator supplied a pin and it was silently ignored. Unattended that
+# still refused (safe by accident); on a TERMINAL they would have been asked y/N and would have
+# believed they were pinned.
+if [ "$verdict" -eq 4 ]; then
   rm -f "$OUT"
   die "${pin_var} is set but is not a SHA-256 digest — REFUSING (a malformed pin must never silently
   downgrade to trust-on-first-use).
@@ -178,14 +190,14 @@ if [ -n "$pin" ] && ! [[ "$pin_norm" =~ ^[0-9a-f]{64}$ ]]; then
     openssl x509 -in <their-ca.crt> -noout -fingerprint -sha256"
 fi
 
-if [ -n "$pin_norm" ]; then
-  if [ "$pin_norm" = "$fp_bare" ]; then
+if [ "$verdict" -ne 3 ]; then
+  if [ "$verdict" -eq 0 ]; then
     log_info "CA fingerprint MATCHES the expected value from ${pin_var}"
   else
     rm -f "$OUT"
     die "CA FINGERPRINT MISMATCH for ${host}:${port} — REFUSING to write a trust anchor.
 
-    expected (${pin_var}): ${pin_norm}
+    expected (${pin_var}): $(printf '%s' "$pin" | tr -d ': ' | tr '[:upper:]' '[:lower:]')
     served by ${host}:     ${fp_bare}
 
   Either the endpoint's CA was legitimately rotated, or something is intercepting this connection.

@@ -119,6 +119,40 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
       # while the actual cause is that the anchor belongs to a lab that no longer exists. Nothing in
       # this repo re-fetches it, so the whole flow stopped here and never said why.
       # Check it BEFORE the credential is submitted; it costs one connection.
+      # ⚠️ TWO DIFFERENT QUESTIONS, AND ca_verifies_endpoint ANSWERS ONLY THE FIRST.
+      #   ca_verifies_endpoint -> "is this anchor for the lab that is RUNNING?"  (staleness)
+      #   ca_pin_verdict       -> "is this anchor the one they TOLD me about?"   (authenticity)
+      # A MITM's CA verifies a MITM's leaf perfectly, so the staleness check returns 0 and we would
+      # proceed to submit the vCenter credential over an intercepted connection. Only a digest obtained
+      # over a DIFFERENT channel separates them. Checked FIRST, because it is offline and costs nothing,
+      # and because there is no point reaching the network if the anchor is already the wrong one.
+      _pv=0; ca_pin_verdict "$VKS_CA_CERT_FILE" "${VKS_CA_SHA256:-}" || _pv=$?
+      case "$_pv" in
+        0) log_info "TLS: the CA at ${VKS_CA_CERT_FILE} matches VKS_CA_SHA256" ;;
+        # 3 = no pin. DELIBERATELY SILENT, not a warning.
+        # ⚠️ This is NOT the same situation as fetch-ca.sh. There, the CA is pulled off the very wire it
+        # is meant to authenticate, so it is inherently trust-on-first-use and a pin is the only thing
+        # that redeems it. HERE the operator has already pointed VKS_CA_CERT_FILE at a file they obtained
+        # THEMSELVES — which is the out-of-band path, and strictly better than any digest (no
+        # transcription, no partial compare). Demanding a pin on top would nag every correct user for
+        # nothing, and this repo has a recorded defect where a gate printed advice on a NON-finding.
+        # The pin is an optional cross-check for operators who were handed a digest as well as a file.
+        3) : ;;
+        4) die "VKS_CA_SHA256 is set but is not a SHA-256 digest — REFUSING (a malformed pin must never
+  silently downgrade to an unauthenticated anchor).
+    got:      '${VKS_CA_SHA256:-}'
+    expected: 64 hex characters, with or without colons
+  Recompute it:  openssl x509 -in ${VKS_CA_CERT_FILE} -noout -fingerprint -sha256" ;;
+        5) die "could not read a certificate from VKS_CA_CERT_FILE='${VKS_CA_CERT_FILE}'." ;;
+        *) die "VKS CA FINGERPRINT MISMATCH — REFUSING to submit a credential over this connection.
+
+    expected (VKS_CA_SHA256): $(printf '%s' "${VKS_CA_SHA256:-}" | tr -d ': ' | tr '[:upper:]' '[:lower:]')
+    the file you pointed at:  $(ca_fingerprint "$VKS_CA_CERT_FILE" 2>/dev/null | tr -d ':' | tr '[:upper:]' '[:lower:]')
+
+  Both are the CA's digest (comparable objects — see the SUBJECT-vs-ISSUER note below for why that
+  matters). Either VKS_CA_CERT_FILE is the wrong file, or the digest you were given is stale.
+  Confirm it with the platform team over a channel that is NOT this connection." ;;
+      esac
       case "$( ca_verifies_endpoint "$SUPERVISOR_HOST" 443 "$VKS_CA_CERT_FILE" >/dev/null 2>&1; echo $? )" in
         0) : ;;   # verifies — proceed
         2) log_warn "TLS: could not reach ${SUPERVISOR_HOST}:443 to check the CA — proceeding, and

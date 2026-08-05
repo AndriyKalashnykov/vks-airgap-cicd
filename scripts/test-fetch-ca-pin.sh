@@ -121,6 +121,32 @@ for badpin in ':::' '   ' 'nothex' "$(printf '%s' "$REAL" | cut -c1-32)"; do
   [ -e "$TMP/out.crt" ] && bad "$label left an anchor on disk"
 done
 
+# --- 6. the SHARED helper's five return codes, directly ---------------------------------------------------
+# ca_pin_verdict is used by BOTH fetch-ca.sh and 30-vks-login.sh (the vCenter-credential path). Testing it
+# through fetch-ca.sh alone would leave the login path's behaviour asserted only by inspection.
+# ⚠️ 3 (not set) and 4 (set but unusable) MUST stay distinct — collapsing them is the exact defect that
+# let ':::' be read as "no pin". And 2 is deliberately never returned: ca_verifies_endpoint uses it for
+# UNREACHABLE and callers share `case` statements.
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"
+vd() { local rc=0; ca_pin_verdict "$1" "${2:-}" || rc=$?; printf '%s' "$rc"; }
+REAL_COLON="$(openssl x509 -in "$TMP/c.pem" -noout -fingerprint -sha256 | sed 's/^.*Fingerprint=//')"
+for spec in "0|$REAL_COLON|colon-hex matches" \
+            "0|$REAL|bare-hex matches" \
+            "0|$(printf '%s' "$REAL" | tr '[:lower:]' '[:upper:]')|UPPERCASE matches" \
+            "1|$WRONG|a valid-but-wrong digest MISMATCHES" \
+            "3||an unset pin is NOT-SET (never a silent pass)" \
+            "4|:::|a pin that normalises to empty is UNUSABLE, not unset" \
+            "4|deadbeef|a short hex pin is UNUSABLE" ; do
+  want="${spec%%|*}"; rest="${spec#*|}"; pin="${rest%%|*}"; desc="${rest#*|}"
+  got="$(vd "$TMP/c.pem" "$pin")"
+  if [ "$got" = "$want" ]; then ok "ca_pin_verdict: $desc (rc=$got)"
+  else bad "ca_pin_verdict: $desc" "want rc=$want got rc=$got"; fi
+done
+got="$(vd "$TMP/definitely-absent.pem" "$REAL")"
+if [ "$got" = "5" ]; then ok "ca_pin_verdict: an unreadable CA file is rc=5, distinct from a mismatch"
+else bad "ca_pin_verdict: unreadable CA should be rc=5" "got rc=$got"; fi
+
 echo
 if [ "$fail" -eq 0 ]; then echo "test-fetch-ca-pin: OK (${pass} passed)"; exit 0; fi
 echo "test-fetch-ca-pin: FAILED (${fail} failed, ${pass} passed)"; exit 1

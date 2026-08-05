@@ -110,3 +110,47 @@ ca_verifies_endpoint() {
   printf '%s' "$out" | command grep -q 'CONNECTED(' || return 2
   return 1
 }
+
+# ── OUT-OF-BAND PIN: the only thing that can AUTHENTICATE a self-signed anchor ──────────────────────
+# ⚠️ ca_verifies_endpoint (above) and these two answer DIFFERENT QUESTIONS, and neither substitutes for
+# the other:
+#   ca_verifies_endpoint -> "is this anchor for the lab that is RUNNING?"  (catches a stale/rebuilt lab)
+#   ca_pin_verdict       -> "is this anchor the one they TOLD me about?"   (catches an interceptor)
+# A MITM's CA verifies a MITM's leaf perfectly, so ca_verifies_endpoint returns 0 and proceeds. Only a
+# digest obtained over a DIFFERENT channel can tell the two apart.
+#
+# MEASURED 2026-08-05 with a live oracle: fetch-ca.sh used to take the CA off the wire, openssl-verify
+# the leaf against it and print "VERIFIED". Served an evil self-signed cert, it wrote the evil CA and
+# reported success. Self-consistency is not authenticity.
+#
+# ONE definition, because the normalisation is the drift-prone part: fetch-ca.sh and 30-vks-login.sh
+# both route through here rather than each re-deriving "strip colons, lowercase, is it 64 hex".
+
+# ca_fingerprint <ca-file> — prints the cert's SHA-256 as colon-hex. rc 1 if it cannot be read.
+ca_fingerprint() {
+  local f="$1" fp
+  [ -s "$f" ] || return 1
+  fp="$(openssl x509 -in "$f" -noout -fingerprint -sha256 2>/dev/null | sed 's/^.*Fingerprint=//')" || true
+  [ -n "$fp" ] || return 1
+  printf '%s' "$fp"
+}
+
+# ca_pin_verdict <ca-file> <raw-pin> — compare a CA against an out-of-band digest.
+#   0 = pin set and MATCHES        1 = pin set and MISMATCHES
+#   3 = pin NOT set                4 = pin SET but not a SHA-256 digest
+#   5 = the CA file could not be read
+# ⚠️ 3 and 4 are DELIBERATELY DISTINCT, and 2 is deliberately unused (ca_verifies_endpoint uses it for
+# UNREACHABLE, and callers share `case` statements). MEASURED 2026-08-05: an earlier fetch-ca.sh keyed
+# its branch on the NORMALISED pin, so ':::' stripped to empty and was treated as "no pin" — the
+# operator supplied one and it was silently ignored. Unattended that still refused, but on a terminal
+# they would have been asked y/N and would have believed they were pinned. A control a typo in its own
+# input can disable is not a control, so "set but unusable" must never collapse into "not set".
+ca_pin_verdict() {
+  local f="$1" raw="${2:-}" norm fp
+  fp="$(ca_fingerprint "$f")" || return 5
+  [ -n "$raw" ] || return 3
+  norm="$(printf '%s' "$raw" | tr -d ': ' | tr '[:upper:]' '[:lower:]')"
+  [[ "$norm" =~ ^[0-9a-f]{64}$ ]] || return 4
+  [ "$norm" = "$(printf '%s' "$fp" | tr -d ':' | tr '[:upper:]' '[:lower:]')" ] && return 0
+  return 1
+}

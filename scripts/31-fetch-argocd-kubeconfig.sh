@@ -65,9 +65,22 @@ elif is_true "${VKS_INSECURE_SKIP_TLS_VERIFY:-}"; then
   log_warn "VKS_INSECURE_SKIP_TLS_VERIFY is set — skipping TLS verification of the Supervisor endpoint"
   TLS_ARGS+=(--insecure-skip-tls-verify)
 else
-  die "set VKS_CA_CERT_FILE=<path to the Supervisor CA cert> (how: ask the platform team, or
-  'openssl s_client -connect \${SUPERVISOR_HOST}:443 -showcerts' and take the issuer), or set
-  VKS_INSECURE_SKIP_TLS_VERIFY=true to skip verification."
+  # ⚠️ THIS MESSAGE USED TO PRESCRIBE TOFU. It said: "ask the platform team, OR
+  #   'openssl s_client -connect ${SUPERVISOR_HOST}:443 -showcerts' and take the issuer".
+  # That second option reads the anchor off the very connection it is meant to authenticate, so it
+  # cannot distinguish the real Supervisor from anything intercepting it — and this is the connection
+  # that carries the vCenter CREDENTIAL (the vcf CLI submits it during `context create`). Recommending
+  # it in an error message is worse than doing it silently: the operator follows the instruction
+  # believing the tool vetted the approach. MEASURED 2026-08-05 on fetch-ca.sh's equivalent path: an
+  # evil self-signed cert was accepted and reported "VERIFIED". Removed, not softened — an
+  # out-of-band file is the only correct answer here, so it is the only one offered.
+  die "set VKS_CA_CERT_FILE=<path to the Supervisor CA cert>, or set
+  VKS_INSECURE_SKIP_TLS_VERIFY=true to skip verification (NOT for an environment you do not own —
+  a credential is submitted over this connection).
+
+  how: obtain the Supervisor's CA from the platform team as a FILE, over a channel that is not this
+  connection. If they give you a SHA-256 digest instead, set VKS_CA_SHA256 and 'make vks-login' will
+  check the anchor against it."
 fi
 
 log_info "creating a SUPERVISOR context '${CTX}' at ${SUPERVISOR_HOST} as ${VCF_USER}"
