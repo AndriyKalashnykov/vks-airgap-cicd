@@ -179,8 +179,36 @@ can_kubectl=no
 if [ "$argocd_ns_readable" = no ]; then
   log_info "kubectl write path: NOT AVAILABLE (the ArgoCD namespace is unreadable from this kubeconfig)"
 fi
+# ⚠️ THE CRD IS NOT THE CONTROLLER. `auth can-i create applications.argoproj.io` is a pure RBAC
+# question — it is TRUE the moment the CRD is registered, and says nothing about whether anything
+# is running to reconcile what we write. On a Supervisor those are SEPARATE INSTALLS, minutes
+# apart: MEASURED 2026-08-05, the argocd Supervisor SERVICE created applications/applicationsets/
+# appprojects.argoproj.io at 00:59:38, and the ArgoCD INSTANCE only became ready at 01:02:46.
+# scenario-1 §3 has the reader do those as separate steps, so the window is not exotic — it is
+# what the runbook instructs. Inside it, this probe used to answer "kubectl", we would write an
+# Application into a cluster with no reconciler, and the run would exit 0 having deployed NOTHING.
+# So require a LIVE reconciler, not merely the schema for one.
+#
+# `${rr:-0}` is load-bearing: Kubernetes OMITS .status.readyReplicas when it is zero, so a
+# StatefulSet that exists with no ready pods yields an EMPTY string while kubectl still exits 0
+# (the `|| true` never fires). `[ "" -ge 1 ]` then dies with `integer expression expected`.
+# MEASURED all three states — ready => true; absent => false; field-omitted => false, no stderr.
+argocd_reconciler_ready() {
+  local rr
+  rr=$(ka -n "$ARGOCD_NAMESPACE" get sts argocd-application-controller \
+         -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
+  [ "${rr:-0}" -ge 1 ]
+}
 if [ "$argocd_ns_readable" = yes ] && can create applications.argoproj.io; then
-  if [ "$GITEA_DEPLOY_PRIVATE" != "true" ] || can create secrets; then can_kubectl=yes; fi
+  if ! argocd_reconciler_ready; then
+    log_warn "the argoproj.io CRDs exist, but NO ArgoCD reconciler is running in '${ARGOCD_NAMESPACE}'."
+    log_warn "  StatefulSet argocd-application-controller is absent or has 0 ready replicas, so an"
+    log_warn "  Application written here would never sync. The ArgoCD Supervisor SERVICE installs the"
+    log_warn "  CRDs; the ArgoCD INSTANCE is a separate step that provides the controller."
+    log_warn "  Create the instance first (scenario-1 §3), then re-run — not selecting the kubectl path."
+  elif [ "$GITEA_DEPLOY_PRIVATE" != "true" ] || can create secrets; then
+    can_kubectl=yes
+  fi
 fi
 
 can_api=no
