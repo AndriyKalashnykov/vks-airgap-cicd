@@ -159,6 +159,25 @@ pin_var="${UPPER}_CA_SHA256"
 pin="${!pin_var:-}"
 pin_norm="$(printf '%s' "$pin" | tr -d ': ' | tr '[:upper:]' '[:lower:]')"
 
+# ⚠️ BRANCH ON THE RAW VALUE, NOT THE NORMALISED ONE, AND VALIDATE THE FORMAT.
+# MEASURED 2026-08-05: keying the `if` on $pin_norm meant a pin of ':::' or '   ' normalised to EMPTY and
+# fell through to the trust-on-first-use branch — the operator SUPPLIED a pin and it was silently ignored.
+# Unattended that still refused (safe by accident), but ON A TERMINAL they would get the y/N prompt, type
+# y, and believe they were pinned when they were not. A control that can be silently disabled by a typo in
+# its own input is not a control. A set-but-unusable pin is now a HARD ERROR, never a downgrade.
+if [ -n "$pin" ] && ! [[ "$pin_norm" =~ ^[0-9a-f]{64}$ ]]; then
+  rm -f "$OUT"
+  die "${pin_var} is set but is not a SHA-256 digest — REFUSING (a malformed pin must never silently
+  downgrade to trust-on-first-use).
+
+    got:      '${pin}'
+    expected: 64 hex characters, with or without colons, e.g.
+              AB:CD:...  or  abcd...
+
+  Recompute it from the CA file the platform team gave you:
+    openssl x509 -in <their-ca.crt> -noout -fingerprint -sha256"
+fi
+
 if [ -n "$pin_norm" ]; then
   if [ "$pin_norm" = "$fp_bare" ]; then
     log_info "CA fingerprint MATCHES the expected value from ${pin_var}"

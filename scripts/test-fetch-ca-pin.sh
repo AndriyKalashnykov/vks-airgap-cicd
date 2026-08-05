@@ -102,6 +102,25 @@ else
   printf '  SKIP  no pin + tty case (script(1) unavailable — cannot allocate a pty)\n'
 fi
 
+# --- 5. MALFORMED pin -> hard error, NEVER a silent downgrade to TOFU ------------------------------------
+# MEASURED 2026-08-05, before the fix: a pin of ':::' normalised to EMPTY and took the trust-on-first-use
+# branch. Unattended it still refused (safe by accident) — but on a TERMINAL the operator would have been
+# asked y/N and would have believed they were pinned. The DISCRIMINATOR is which message appears, so assert
+# on that and not merely on the exit code, or this case passes for the wrong reason.
+for badpin in ':::' '   ' 'nothex' "$(printf '%s' "$REAL" | cut -c1-32)"; do
+  rm -f "$TMP/out.crt"; run "$badpin" /dev/null
+  label="malformed pin '$(printf '%.12s' "$badpin")'"
+  if [ "$RC" -ne 0 ] && printf '%s' "$OUTPUT" | grep -qi "not a SHA-256 digest"; then
+    ok "$label is a FORMAT error"
+  elif [ "$RC" -ne 0 ]; then
+    bad "$label refused, but via the TOFU branch — a supplied pin was silently ignored" \
+        "$(printf '%s' "$OUTPUT" | grep -i 'NOT AUTHENTICATED' | head -1)"
+  else
+    bad "$label MUST refuse" "rc=0"
+  fi
+  [ -e "$TMP/out.crt" ] && bad "$label left an anchor on disk"
+done
+
 echo
 if [ "$fail" -eq 0 ]; then echo "test-fetch-ca-pin: OK (${pass} passed)"; exit 0; fi
 echo "test-fetch-ca-pin: FAILED (${fail} failed, ${pass} passed)"; exit 1
