@@ -262,6 +262,14 @@ env_validate() {
              errs=$((errs+1)) ;;
           2) log_error "could not reach ${_h}:${_p} to check HARBOR_CA_FILE — this is NOT evidence the anchor is wrong.
   Harbor is unreachable or still starting; retry before touching the certificate."; errs=$((errs+1)) ;;
+          # 3 = right anchor, wrong NAME. Opposite remedy to staleness, so it must not share that arm —
+          # `make fetch-harbor-ca` cannot fix a SAN mismatch and would send the operator in a circle.
+          3) log_error "the CA at ${HARBOR_CA_FILE} is the RIGHT anchor, but Harbor's certificate is NOT
+  VALID FOR '${_h}'. Do NOT re-fetch the CA — it is correct.
+    the cert names: $(printf '' | timeout 15 openssl s_client -connect "${_h}:${_p}" 2>/dev/null | openssl x509 -noout -ext subjectAltName 2>/dev/null | tail -1 | tr -d ' ')
+  Address Harbor by a name the certificate carries (HARBOR_URL), or reissue the cert with a SAN for
+  the address you use. A self-signed Harbor minted for an IP will not validate by FQDN, and vice versa."
+             errs=$((errs+1)) ;;
           *) log_error "Harbor TLS not trusted at $scheme://$HARBOR_URL (curl exit $rc) — set HARBOR_CA_FILE for a self-signed Harbor, or the cert is not publicly trusted"; errs=$((errs+1)) ;;
         esac
       else

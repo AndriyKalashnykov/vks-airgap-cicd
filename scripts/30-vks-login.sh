@@ -157,6 +157,19 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
         0) : ;;   # verifies — proceed
         2) log_warn "TLS: could not reach ${SUPERVISOR_HOST}:443 to check the CA — proceeding, and
   the CLI will fail closed if it cannot verify. This is NOT evidence the anchor is wrong." ;;
+        # 3 = the CHAIN is fine and the NAME is not. Its own arm because the remedy is the OPPOSITE of
+        # staleness: re-fetching the CA cannot help, and the old message told you to do exactly that.
+        # MEASURED 2026-08-05: ca_verifies_endpoint used to return 0 here — it checked the chain only —
+        # so this case reported success and the connection then failed later with curl rc 60.
+        3) die "the CA at ${VKS_CA_CERT_FILE} is the RIGHT anchor, but the certificate ${SUPERVISOR_HOST}
+  presents is NOT VALID FOR THAT ADDRESS. Do NOT re-fetch the CA — it is correct.
+
+    you addressed:  ${SUPERVISOR_HOST}
+    the cert names: $(printf '' | timeout 15 openssl s_client -connect "${SUPERVISOR_HOST}:443" 2>/dev/null | openssl x509 -noout -ext subjectAltName 2>/dev/null | tail -1 | tr -d ' ')
+
+  A vSphere certificate commonly carries DNS names and NO IP SAN, so addressing the Supervisor by IP
+  fails name verification even with a perfect trust anchor. Set SUPERVISOR_HOST to the FQDN the
+  certificate names (and make sure it resolves), or have the platform team reissue with an IP SAN." ;;
         *) die "the CA at ${VKS_CA_CERT_FILE} does NOT verify the certificate ${SUPERVISOR_HOST}
   presents. The endpoint ANSWERED, so this is not a reachability problem — the anchor is for a
   different (usually a DESTROYED and rebuilt) Supervisor. A rebuild mints a new VMCA.

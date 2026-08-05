@@ -99,15 +99,38 @@ ca_bundle_with_system() {
 #   3. Even with the flag, parse `Verify return code:` rather than trusting rc alone, and require
 #      `CONNECTED(` before calling it a verification failure — otherwise a refused connection and a
 #      wrong CA produce the same verdict.
+# ⚠️ 4. `-verify_return_error` CHECKS THE CHAIN AND NOT THE NAME. This is the trap that made this
+#      function STRICTLY WEAKER than the transport it gates. MEASURED 2026-08-05 with an oracle — a CA,
+#      a leaf carrying `DNS:vcsa.env1.lab.test` and NO IP SAN (the shape lib/govc.sh records for the real
+#      VCSA), served on 127.0.0.1:
+#        openssl s_client -CAfile ca.crt -verify_return_error   -> "Verify return code: 0 (ok)"   PASS
+#        curl --cacert ca.crt https://127.0.0.1/                -> exit 60                        FAIL
+#      So a green here meant "the chain is good", NOT "this connection will work" and NOT "this endpoint
+#      is who it claims". Two live consequences: 30-vks-login.sh printed "TLS: verifying the Supervisor
+#      against <file>" after a check that never verified the name, and its failure text blamed "a
+#      DESTROYED and rebuilt Supervisor" — the WRONG diagnosis for a SAN mismatch, sending the operator
+#      to re-fetch an anchor that was already correct.
+#      There is a security edge too: VMCA signs EVERY ESXi host's certificate in the same vCenter, so a
+#      leaf issued by the pinned CA for a DIFFERENT host passed this check.
+#      Hence rc 3 — chain OK, NAME wrong — as its own verdict, so callers stop reporting it as staleness.
 ca_verifies_endpoint() {
-  local host="$1" port="${2:-443}" ca="$3" out rc=0
+  local host="$1" port="${2:-443}" ca="$3" out rc=0 namearg
   [ -s "$ca" ] || return 1
+  # An IPv4 literal needs -verify_ip; a name needs -verify_hostname. Passing the wrong one silently
+  # verifies nothing, which is the defect this is fixing.
+  case "$host" in
+    *[!0-9.]*) namearg="-verify_hostname" ;;
+    *)         namearg="-verify_ip" ;;
+  esac
   out=$(printf '' | timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client \
           -connect "${host}:${port}" -servername "$host" \
-          -CAfile "$ca" -verify_return_error 2>&1) || rc=$?
+          -CAfile "$ca" -verify_return_error "$namearg" "$host" 2>&1) || rc=$?
   [ "$rc" -eq 124 ] && return 2                              # timed out: the endpoint, not the anchor
   printf '%s' "$out" | command grep -q 'Verify return code: 0 (ok)' && return 0
   printf '%s' "$out" | command grep -q 'CONNECTED(' || return 2
+  # CONNECTED but not ok. Separate "the anchor is wrong" from "the anchor is right, the NAME is not" —
+  # they have opposite remedies (re-fetch the CA vs address the endpoint by its FQDN).
+  printf '%s' "$out" | command grep -qiE 'Hostname mismatch|IP address mismatch' && return 3
   return 1
 }
 
