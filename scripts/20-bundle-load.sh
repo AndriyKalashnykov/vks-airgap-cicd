@@ -134,7 +134,32 @@ else
       # not need one: the bundle carries TOOLS.tsv (name / pin / version), so compare against that.
       keep_it=1
       case "$name" in
-        helm)    printf '%s' "$ev" | grep -qE 'v?3\.' || { keep_it=0; why="helm 2 (or unrecognised) — this flow needs helm 3" ; } ;;
+        # ⚠️ WAS `grep -qE 'v?3\.'` — an UNANCHORED SUBSTRING, wrong in BOTH directions, and it rejected
+        # the version we actually carry. MEASURED 2026-08-05:
+        #     'Client: v2.13.0+g0' -> MATCHED (contains "3.")  -> helm 2 KEPT      <- the exact case
+        #     'v2.3.1'             -> MATCHED                  -> KEPT                the comment above
+        #     'v4.1.4+g05fa379'    -> no match                 -> REJECTED           says it prevents
+        # and .mise.toml pins helm = 4.2.3, so the floor announced our own carried helm as
+        # "helm 2 (or unrecognised)". This is the identical substring-vacuity class fixed on the INTERNET
+        # side the same day (a `yq = "4"` pin matched python-yq 3.4.3) — the lesson had not crossed the gap.
+        # Compare MAJORS NUMERICALLY against what the bundle carries. Polarity matches the kubectl arm
+        # below: an unparseable version is a REJECT, never a keep.
+        helm)    have_maj="$(printf '%s' "$ev"          | grep -oE '[0-9]+' | head -1 || true)"
+                 ours_maj="$(printf '%s' "$carried_ver" | grep -oE '[0-9]+' | head -1 || true)"
+                 if [ -z "$have_maj" ]; then
+                   keep_it=0; why="cannot parse a version from '${ev}' — refusing to trust it over the carried ${carried_ver}"
+                 elif [ -n "$ours_maj" ] && [ "$have_maj" -lt "$ours_maj" ]; then
+                   keep_it=0; why="helm ${have_maj}.x is OLDER than the carried helm ${ours_maj}.x — this flow needs the carried one"
+                 fi ;;
+        # ⚠️ CAPABILITY, NOT VERSION — strictly stronger than any floor, and this file already uses the
+        # pattern 70 lines up (`tar_supports()` probes tar rather than inferring from its presence).
+        # The install path needs yq-v4-only syntax (`strenv()`/`fromjson` at lib/istio.sh:297,:593 and
+        # 50-seed-gitea-repos.sh:185). MEASURED: real v4 -> rc 0; python-yq -> rc 2. A probe catches
+        # python-yq, yq v3, AND a hypothetical v5 that dropped strenv, with NO version parsing at all —
+        # so no substring vacuity is even reachable. That is why this is a probe and not a major floor.
+        yq)      if ! printf 'a: 1\n' | X=probe "$existing" '.b = strenv(X)' >/dev/null 2>&1; then
+                   keep_it=0; why="this yq does not support strenv() — it is python-yq or v3, and the install path needs mikefarah yq v4"
+                 fi ;;
         kubectl) # within one minor of what we carry, else skew bites at apply time.
                  # `|| true` is LOAD-BEARING, not defensive: `grep -oE` exits 1 when it matches
                  # nothing, `pipefail` promotes that to the assignment, and `set -e` (line 6) then
@@ -158,6 +183,17 @@ else
                    hmin="${h#*.}"; omin="${o#*.}"
                    d=$(( hmin > omin ? hmin - omin : omin - hmin ))
                    [ "${h%%.*}" = "${o%%.*}" ] && [ "$d" -le 1 ] || { keep_it=0; why="${ev} is more than one minor from the carried ${carried_ver}"; }
+                 fi ;;
+        # ⚠️ THE MISSING ARM. Without it crane/jq reached `[ -n "$ev" ]` as their ONLY test — which
+        # accepts ANY output, including an error message. MEASURED 2026-08-05, the real script against a
+        # real bundle: a foreign binary reporting the literal string `no-such-command version` was
+        # reported as `KEPT crane — this box already has a working one`.
+        # crane is the one tool handed a CREDENTIAL: 21-mirror-push.sh pipes $HARBOR_PASSWORD on stdin
+        # into whatever is named `crane`, and lib/harbor.sh's SSL_CERT_FILE is its only trust anchor
+        # (which works only because crane is go-containerregistry). Preferring an unvetted binary there
+        # is a trust-boundary widening, so its default is stricter than the others by design.
+        *)       if ! printf '%s' "$ev" | grep -qE '[0-9]+\.[0-9]+'; then
+                   keep_it=0; why="cannot parse a version from '${ev}' — refusing to trust it over the carried ${carried_ver}"
                  fi ;;
       esac
       if [ "$keep_it" = 1 ] && [ -n "$ev" ]; then
