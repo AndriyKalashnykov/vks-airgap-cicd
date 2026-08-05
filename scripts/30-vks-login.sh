@@ -18,6 +18,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# ⚠️ REQUIRED for ca_verifies_endpoint below. Without it that call is `command not found` (rc 127),
+# which falls into the catch-all arm and DIES ON A HEALTHY ANCHOR — a false block introduced by the
+# very check meant to prevent a confusing failure. Caught before it shipped by checking the source
+# block rather than assuming the helper was in scope.
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"
 load_env
 
 : "${KUBECONFIG:?KUBECONFIG must be set in .env (path to write/read the kubeconfig)}"
@@ -106,6 +112,28 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     # Order is deliberate: an explicitly-set CA WINS, so setting both cannot silently downgrade
     # you to unverified TLS.
     if [ -n "${VKS_CA_CERT_FILE:-}" ] && [ -s "${VKS_CA_CERT_FILE}" ]; then
+      # ⚠️ EXISTS AND NON-EMPTY IS NOT "IS A TRUST ANCHOR FOR THIS ENDPOINT". MEASURED 2026-08-05:
+      # after a lab rebuild this file still held the DESTROYED lab's VMCA (stored SHA-256 EF:19:5E:…
+      # vs live B0:E5:E6:…). Every consumer then failed with `x509: certificate signed by unknown
+      # authority` — a message that names TLS, so the operator hunts a certificate or network fault
+      # while the actual cause is that the anchor belongs to a lab that no longer exists. Nothing in
+      # this repo re-fetches it, so the whole flow stopped here and never said why.
+      # Check it BEFORE the credential is submitted; it costs one connection.
+      case "$( ca_verifies_endpoint "$SUPERVISOR_HOST" 443 "$VKS_CA_CERT_FILE" >/dev/null 2>&1; echo $? )" in
+        0) : ;;   # verifies — proceed
+        2) log_warn "TLS: could not reach ${SUPERVISOR_HOST}:443 to check the CA — proceeding, and
+  the CLI will fail closed if it cannot verify. This is NOT evidence the anchor is wrong." ;;
+        *) die "the CA at ${VKS_CA_CERT_FILE} does NOT verify the certificate ${SUPERVISOR_HOST}
+  presents. The endpoint ANSWERED, so this is not a reachability problem — the anchor is for a
+  different (usually a DESTROYED and rebuilt) Supervisor. A rebuild mints a new VMCA.
+    your anchor is:            $(openssl x509 -in "$VKS_CA_CERT_FILE" -noout -subject 2>/dev/null | sed 's/^subject=//')
+    the endpoint's cert issuer: $(printf '' | timeout 15 openssl s_client -connect "${SUPERVISOR_HOST}:443" 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | sed 's/^issuer=//')
+  (⚠️ these are SUBJECT vs ISSUER on purpose. An earlier version of this message printed the stored
+   CA's fingerprint beside the live LEAF's fingerprint — two different objects, which would never
+   match even when the anchor is correct. Comparable things, or the message misleads.)
+  Re-pin it from the lab that is actually running, then re-run. Do NOT reach for
+  VKS_INSECURE_SKIP_TLS_VERIFY: a credential is submitted over this connection." ;;
+      esac
       create_args+=(--ca-certificate "$VKS_CA_CERT_FILE")
       log_info "TLS: verifying the Supervisor against ${VKS_CA_CERT_FILE}"
     elif is_true "${VKS_INSECURE_SKIP_TLS_VERIFY:-}"; then   # one truthiness rule, repo-wide (lib/os.sh)

@@ -76,3 +76,37 @@ ca_bundle_with_system() {
   printf '\n' >> "$out"
   cat "$ca" >> "$out"
 }
+
+# ---------------------------------------------------------------------------
+# ca_verifies_endpoint <host> <port> <ca-file>
+#   0 = the CA verifies what the endpoint presents
+#   1 = connected, but it does NOT verify  (a STALE or WRONG anchor)
+#   2 = could not connect at all           (NOT an anchor problem)
+#
+# WHY THIS EXISTS. Checking that a CA file EXISTS and is non-empty is not checking that it is a
+# trust anchor for THIS endpoint. MEASURED 2026-08-05: after a lab rebuild, secrets/supervisor-ca.crt
+# still held the DESTROYED lab's VMCA (stored SHA-256 EF:19:5E:… vs live B0:E5:E6:…), and every
+# consumer failed with `x509: certificate signed by unknown authority` — a message that names TLS,
+# not staleness, so the operator goes hunting for a certificate or network fault. Nothing in the repo
+# re-fetches it, so the walk simply could not proceed and did not say why.
+#
+# THREE THINGS ARE LOAD-BEARING, and the naive form gets all three wrong:
+#   1. `openssl s_client` EXITS 0 ON VERIFICATION FAILURE. Only `-verify_return_error` makes the rc
+#      meaningful — so a plain `s_client … && echo ok` reports a stale anchor as fine.
+#   2. It HANGS on a black-holed endpoint — precisely the case a caller most wants distinguished.
+#      `timeout` is mandatory, and rc 124 means UNREACHABLE, never "bad anchor". Conflating those
+#      tells an operator whose lab is down that their certificate is wrong.
+#   3. Even with the flag, parse `Verify return code:` rather than trusting rc alone, and require
+#      `CONNECTED(` before calling it a verification failure — otherwise a refused connection and a
+#      wrong CA produce the same verdict.
+ca_verifies_endpoint() {
+  local host="$1" port="${2:-443}" ca="$3" out rc=0
+  [ -s "$ca" ] || return 1
+  out=$(printf '' | timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client \
+          -connect "${host}:${port}" -servername "$host" \
+          -CAfile "$ca" -verify_return_error 2>&1) || rc=$?
+  [ "$rc" -eq 124 ] && return 2                              # timed out: the endpoint, not the anchor
+  printf '%s' "$out" | command grep -q 'Verify return code: 0 (ok)' && return 0
+  printf '%s' "$out" | command grep -q 'CONNECTED(' || return 2
+  return 1
+}
