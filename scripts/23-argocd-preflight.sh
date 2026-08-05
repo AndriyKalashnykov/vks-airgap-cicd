@@ -28,6 +28,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
 load_env
+argocd_tls_opts   # ARGOCD_CA_FILE -> --server-crt, once, for every argocd call below
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
 # shellcheck source=scripts/lib/argocd.sh

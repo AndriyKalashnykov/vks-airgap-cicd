@@ -24,6 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
 load_env
+argocd_tls_opts   # ARGOCD_CA_FILE -> --server-crt, once, for every argocd call below
 
 require_cmd kubectl
 require_cmd envsubst "install gettext (provides envsubst)"

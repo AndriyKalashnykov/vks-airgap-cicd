@@ -192,7 +192,25 @@ for _ in $(seq 1 60); do
 done
 [ "$ok" = 1 ] || die "argocd-server never answered on https://${argocd_lb} after the restart"
 
-export ARGOCD_OPTS="--insecure"
+# ⚠️ THIS `--insecure` IS WHY AN ENTIRE DEFECT CLASS HID. This is the ONLY test exercising the
+# argocd (`api`) mechanism, and it disabled the exact verification the real operator path leaves
+# ON — so `ARGOCD_CA_FILE` sat with one producer and ZERO consumers, and a TLS-trust failure
+# reported as an RBAC denial was invisible to CI. A gate that turns off the thing that breaks in
+# production is not a gate.
+#
+# Prefer the CA. Fall back to --insecure only when there is none, and say so LOUDLY — a silent
+# fallback would recreate exactly the blind spot this comment exists to describe.
+if [ -n "${ARGOCD_CA_FILE:-}" ] && [ -s "${ARGOCD_CA_FILE}" ]; then
+  export ARGOCD_OPTS="--server-crt ${ARGOCD_CA_FILE}"
+  log_info "argocd TLS: VERIFYING against ${ARGOCD_CA_FILE} (this leg covers the operator's path)"
+  _e2e_tls="--server-crt ${ARGOCD_CA_FILE}"
+else
+  export ARGOCD_OPTS="--insecure"
+  log_warn "argocd TLS: NOT VERIFIED (--insecure) — no ARGOCD_CA_FILE. This leg therefore does NOT
+  cover the trust-anchor path, which is the one that fails on a real lab. To close that gap:
+  make fetch-argocd-ca, then re-run with ARGOCD_CA_FILE set."
+  _e2e_tls="--insecure"
+fi
 # `argocd login` offers ONLY `--password <string>` — i.e. the secret on ARGV, which this repo forbids
 # (ps -ef / /proc/<pid>/cmdline). There is no --password-stdin. So mint the admin JWT through the
 # session API with the body on STDIN (curl --data @-), and drive the CLI with ARGOCD_AUTH_TOKEN
@@ -251,7 +269,7 @@ ARGOCD_MECHANISM=api \
 ARGOCD_PROJECT="$PROJ" \
 ARGOCD_SERVER="$argocd_lb" \
 ARGOCD_AUTH_TOKEN="$TENANT_TOKEN" \
-ARGOCD_OPTS="--insecure" \
+ARGOCD_OPTS="$_e2e_tls" \
   "${SCRIPT_DIR}/70-configure-argocd.sh"
 
 # ---- 5. assert the Applications EXIST and are in the TENANT'S project ----------------------------

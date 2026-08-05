@@ -927,6 +927,34 @@ assert_run_sentinel() {
 # reason was silently lost at every single site. A global cannot cross a subshell; the return
 # value can. Callers split: `ans="${r%%|*}"; why="${r#*|}"`.
 
+# argocd_tls_opts — make EVERY argocd invocation verify TLS, in one place.
+#
+# ⚠️ ARGOCD_CA_FILE had ONE producer (`make fetch-argocd-ca`) and ZERO consumers. The fetch was
+# even pinnable via ARGOCD_CA_SHA256 — so the repo verified the anchor it then never used.
+# `argocd` exposes a global `--server-crt`, and it reads extra global flags from ARGOCD_OPTS, so
+# setting it here covers can-i, `app create`, `app wait` and anything added later — rather than
+# threading a flag through every call site and missing the next one.
+#
+# ⚠️ WHY NOBODY NOTICED: the only e2e exercising the argocd (`api`) mechanism exported
+# ARGOCD_OPTS="--insecure". The test was green precisely because it disabled the verification the
+# real operator path leaves ON. A gate that turns off the thing that breaks in production is not
+# a gate. That override is now gone; this function is what replaces it.
+#
+# APPENDS — never clobbers. An operator who set ARGOCD_OPTS keeps it.
+argocd_tls_opts() {
+  [ -n "${ARGOCD_CA_FILE:-}" ] || return 0
+  if [ ! -s "$ARGOCD_CA_FILE" ]; then
+    log_warn "ARGOCD_CA_FILE is set to '${ARGOCD_CA_FILE}' but that file is empty or missing — argocd
+  will fall back to the system trust store and will NOT verify a self-signed ArgoCD. Re-fetch it:
+  make fetch-argocd-ca"
+    return 0
+  fi
+  case " ${ARGOCD_OPTS:-} " in
+    *" --server-crt "*) : ;;                                  # already set by the caller — respect it
+    *) export ARGOCD_OPTS="${ARGOCD_OPTS:+${ARGOCD_OPTS} }--server-crt ${ARGOCD_CA_FILE}" ;;
+  esac
+}
+
 # k_can_i <kubectl-args...> -> prints yes|no|unknown
 k_can_i() {
   local _out _err _rc=0
