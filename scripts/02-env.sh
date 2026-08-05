@@ -22,6 +22,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# ⚠️ REQUIRED for ca_verifies_endpoint in the Harbor TLS arm below — os.sh does NOT pull tls.sh in, and
+# without this the call is `command not found` (rc 127), which would turn a diagnostic into a crash on the
+# exact path an operator hits after a rebuild. tls.sh has an idempotent load guard and no side effects.
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"
 
 ENV_FILE="${REPO_ROOT}/.env"
 EXAMPLE_FILE="${REPO_ROOT}/.env.example"
@@ -228,7 +233,37 @@ env_validate() {
           esac
         fi
       elif [ "$scheme" = https ] && { [ "$rc" = 60 ] || [ "$rc" = 35 ] || [ "$rc" = 51 ] || [ "$rc" = 83 ]; }; then
-        log_error "Harbor TLS not trusted at $scheme://$HARBOR_URL (curl exit $rc) — set HARBOR_CA_FILE for a self-signed Harbor, or the cert is not publicly trusted"; errs=$((errs+1))
+        # ⚠️ THIS USED TO CONFLATE THREE CAUSES AND NAME ONLY ONE OF THEM. The message was "set
+        # HARBOR_CA_FILE for a self-signed Harbor, or the cert is not publicly trusted" — which is right
+        # when the variable is UNSET, and actively misleading in the case that actually happens most: the
+        # variable IS set, to a CA from a lab that no longer exists. MEASURED elsewhere in this repo
+        # (30-vks-login.sh:115-120) for the Supervisor's VMCA — after a rebuild the stored anchor was the
+        # DESTROYED lab's, and every consumer failed with `x509: certificate signed by unknown authority`,
+        # a message naming TLS, so the operator hunts a certificate or network fault while the real cause
+        # is a rebuild. That script already distinguishes the cases with ca_verifies_endpoint; this one
+        # did not, so the SAME rebuild produced a good diagnosis for the Supervisor and a wrong one for
+        # Harbor. An error that names the wrong cause sends the operator to fix something that is not broken.
+        _ca_verdict=0
+        if [ -n "${HARBOR_CA_FILE:-}" ] && [ -f "${HARBOR_CA_FILE}" ]; then
+          _h="${HARBOR_URL%%/*}"; _p="${_h##*:}"; [ "$_p" = "$_h" ] && _p=443; _h="${_h%%:*}"
+          ca_verifies_endpoint "$_h" "$_p" "$HARBOR_CA_FILE" >/dev/null 2>&1 || _ca_verdict=$?
+        else
+          _ca_verdict=9   # not set at all — the original message IS the right one
+        fi
+        case "$_ca_verdict" in
+          1) log_error "the CA at ${HARBOR_CA_FILE} does NOT verify the certificate ${HARBOR_URL} presents.
+  The endpoint ANSWERED, so this is not a reachability problem — the anchor is for a DIFFERENT (usually a
+  destroyed and rebuilt) Harbor. A rebuild mints a new CA, and nothing in this repo re-fetches it for you.
+    your anchor is:            $(openssl x509 -in "$HARBOR_CA_FILE" -noout -subject 2>/dev/null | sed 's/^subject=//')
+    the endpoint's cert issuer: $(printf '' | timeout 15 openssl s_client -connect "${_h}:${_p}" 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | sed 's/^issuer=//')
+  Re-fetch it from the lab that is actually running:  make fetch-harbor-ca
+  (⚠️ SUBJECT vs ISSUER on purpose — comparing a stored CA's fingerprint to a live LEAF's is the mistake
+   30-vks-login.sh records; they are different objects and can never match even when the anchor is right.)"
+             errs=$((errs+1)) ;;
+          2) log_error "could not reach ${_h}:${_p} to check HARBOR_CA_FILE — this is NOT evidence the anchor is wrong.
+  Harbor is unreachable or still starting; retry before touching the certificate."; errs=$((errs+1)) ;;
+          *) log_error "Harbor TLS not trusted at $scheme://$HARBOR_URL (curl exit $rc) — set HARBOR_CA_FILE for a self-signed Harbor, or the cert is not publicly trusted"; errs=$((errs+1)) ;;
+        esac
       else
         log_error "Harbor unreachable at $scheme://$HARBOR_URL/api/v2.0/systeminfo (HTTP $code, curl exit $rc)"; errs=$((errs+1))
       fi
