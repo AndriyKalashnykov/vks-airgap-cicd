@@ -51,7 +51,10 @@ ARGOCD_KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}"
 [ -f "$ARGOCD_KUBECONFIG" ] || die "ARGOCD_KUBECONFIG not found: $ARGOCD_KUBECONFIG"
 
 # The cluster ArgoCD RUNS IN. Guest-side work just uses the ambient kubectl ($KUBECONFIG).
-ka() { kubectl --kubeconfig "$ARGOCD_KUBECONFIG" "$@"; }
+# --request-timeout matches the sibling wrapper in 23-argocd-preflight.sh. Without it every OTHER
+# ka() call in this file (the reconciler check, the cluster-Secret listing) hangs forever against a
+# blackholed endpoint — the explicit flags at the k_can_i sites closed only half of that.
+ka() { kubectl --kubeconfig "$ARGOCD_KUBECONFIG" --request-timeout=15s "$@"; }
 
 ARGOCD_API="$(argocd_api_server "$ARGOCD_KUBECONFIG")"
 GUEST_API="$(argocd_api_server "$KUBECONFIG")"
@@ -276,6 +279,18 @@ case "$ARGOCD_MECHANISM" in
   auto)
     if   [ "$can_kubectl" = yes ]; then MECH=kubectl
     elif [ "$can_api"     = yes ]; then MECH=api
+    # ⚠️ `request` IS ONLY SAFE WHEN CHOSEN BECAUSE A CAPABILITY WAS MEASURED ABSENT. Its exit is
+    # `exit 0` (below), and the Makefile runs this script bare — so on `unknown` the chain was:
+    # TLS fault -> both probes unknown -> MECH=request -> "ask your platform team" -> rc 0.
+    # `make gitops` SUCCEEDS having applied NOTHING, and any e2e gating on that rc goes green over
+    # a non-deployment. Of the three branches it is the one whose failure mode is SILENT SUCCESS,
+    # so it is the worst possible default for "we could not tell".
+    elif [ "$_app_state" = unknown ] || [ "$can_api" = unknown ]; then
+      die "cannot choose a write mechanism: a capability probe did not ANSWER
+  (kubectl=${_app_state}${can_why:+/${can_why}}, api=${can_api}).
+  Refusing to fall back to 'request' — that path exits 0 having applied nothing, so a caller would
+  read this run as a success. This is NOT a permissions result: fix the connection or the trust
+  anchor and re-run, or set ARGOCD_MECHANISM explicitly to state what you intend."
     else                                MECH=request
     fi ;;
   *) die "ARGOCD_MECHANISM must be auto|kubectl|api|request (got '$ARGOCD_MECHANISM')" ;;
@@ -539,7 +554,10 @@ fi
 # ⚠️ MECH=api here is an EXPLICIT operator choice (or one `auto` already made), so an unanswerable
 # probe must not be read as "kubectl cannot see them" — that is the api path's normal shape AND the
 # shape of a broken connection. Distinguish them: only a real `no` means "use argocd-server".
-_rv="$(k_can_i --kubeconfig "$ARGOCD_KUBECONFIG" --request-timeout=15s \
+# Probed INSIDE the guard: the kubectl path was paying a round trip whose result both branches
+# below then discarded.
+_rv=""
+[ "$MECH" = api ] && _rv="$(k_can_i --kubeconfig "$ARGOCD_KUBECONFIG" --request-timeout=15s \
         auth can-i get applications.argoproj.io -n "$ARGOCD_NAMESPACE")"
 if [ "$MECH" = api ] && [ "${_rv%%|*}" = unknown ]; then
   die "cannot verify the Applications: the probe did not reach the cluster (${_rv#*|}).

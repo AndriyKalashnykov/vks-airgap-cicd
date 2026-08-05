@@ -92,7 +92,9 @@ ARGOCD_MANAGER_NS="${ARGOCD_MANAGER_NS:-kube-system}"
 [ -f "$ARGOCD_KUBECONFIG" ] || die "ARGOCD_KUBECONFIG not found: $ARGOCD_KUBECONFIG"
 
 kg() { kubectl --kubeconfig "$GUEST_KUBECONFIG" "$@"; }   # guest cluster
-ka() { kubectl --kubeconfig "$ARGOCD_KUBECONFIG" "$@"; }  # ArgoCD cluster
+# --request-timeout matches the sibling wrapper in 23-argocd-preflight.sh: without it this probe
+# hangs forever against a blackholed endpoint, and a classifier cannot help a probe that never returns.
+ka() { kubectl --kubeconfig "$ARGOCD_KUBECONFIG" --request-timeout=15s "$@"; }  # ArgoCD cluster
 
 # A stable name for the registered destination (the guest cluster's context name).
 DEST_NAME="${ARGOCD_DEST_CLUSTER_NAME:-$(kg config current-context 2>/dev/null || echo guest)}"

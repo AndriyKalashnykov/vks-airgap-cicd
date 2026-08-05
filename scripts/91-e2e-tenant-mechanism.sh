@@ -123,7 +123,20 @@ subjects: [ { kind: ServiceAccount, name: tenant, namespace: default } ]
 EOF
 tok="$(kubectl -n default create token tenant --duration=1h)"
 api="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
+# ⚠️ THIS RETURNS EMPTY WITH rc=0 when the source kubeconfig uses the FILE form
+# (`certificate-authority: /path`) — `--raw` does NOT convert file->data, and `set -e` cannot fire
+# on a successful command that produced nothing. The fixture then wrote an EMPTY
+# certificate-authority-data, and an empty-CA kubeconfig makes `auth can-i` fail for TRANSPORT
+# reasons — which the old `|| echo no` turned into "no", so RED-1 PASSED and asserted "(Forbidden)"
+# about a probe that never reached a server. A second, independent path to the same false green.
 ca="$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')"
+if [ -z "$ca" ]; then
+  caf="$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority}')"
+  [ -n "$caf" ] && [ -r "$caf" ] && ca="$(base64 -w0 < "$caf")"
+fi
+[ -n "$ca" ] || die "cannot build the tenant fixture: this kubeconfig carries neither
+  certificate-authority-data nor a readable certificate-authority file. A fixture with an empty CA
+  fails for TRANSPORT reasons, which this test would then report as a permissions boundary."
 TENANT_KC="${WORK}/tenant.kubeconfig"
 ( umask 077; cat > "$TENANT_KC" <<EOF
 apiVersion: v1
@@ -134,6 +147,15 @@ current-context: c
 users: [ { name: tenant, user: { token: ${tok} } } ]
 EOF
 )
+
+# ⚠️ POSITIVE CONTROL, and it must come FIRST. Dying on an `unknown` RED-1 closes one path to a
+# false green; it does not close the other. The fixture's ClusterRole grants `*`/`*` on the core and
+# apps groups, so a WORKING tenant kubeconfig MUST be able to create configmaps. If this says
+# anything but `yes`, the fixture is broken and every assertion after it is measuring the fixture.
+_pc="$(k_can_i --kubeconfig "$TENANT_KC" --request-timeout=15s auth can-i create configmaps -n "$NS")"
+[ "${_pc%%|*}" = yes ] || die "FAIL: the tenant fixture is not a working kubeconfig — it cannot even
+  create configmaps, which its own ClusterRole grants (got '${_pc%%|*}', reason '${_pc#*|}').
+  Every assertion below would be measuring the FIXTURE, not a tenant boundary."
 
 # RED-1: the tenant must NOT be able to create Applications with kubectl. If they can, this test
 # proves nothing — it would be exercising the kubectl path under a different name.
