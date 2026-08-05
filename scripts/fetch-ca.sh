@@ -43,10 +43,18 @@ openssl s_client -connect "${host}:${port}" -servername "$host" -showcerts </dev
   || die "could not connect to ${host}:${port} — is ${LABEL} reachable over HTTPS?"
 
 # Split the chain into one file per certificate, in the order the server sent them (leaf first).
+# ⚠️ `inc` is LOAD-BEARING — without it this splitter DESTROYS the certificate it just wrote.
+# In awk, `print > f` holds the stream open, but after `close(f)` a later `> f` REOPENS IT
+# TRUNCATED. The old catch-all `n && f { print > f }` kept matching the session text that
+# s_client prints AFTER the last -----END CERTIFICATE-----, so each of those ~22 lines wiped
+# and rewrote cert-NN.pem. MEASURED 2026-08-04: cert-01.pem ended up containing
+# "--- / Server certificate / subject=… / issuer=…" and ZERO PEM, so `openssl x509` failed —
+# and because line 58 assigns it in `$( )`, `set -e` killed the script with NO message at all,
+# never reaching the informative die below. Gate printing on being INSIDE a certificate.
 awk -v d="$tmp" '
-  /-----BEGIN CERTIFICATE-----/ { n++; f = sprintf("%s/cert-%02d.pem", d, n) }
-  n && f { print > f }
-  /-----END CERTIFICATE-----/   { close(f) }
+  /-----BEGIN CERTIFICATE-----/ { n++; f = sprintf("%s/cert-%02d.pem", d, n); inc = 1 }
+  inc { print > f }
+  /-----END CERTIFICATE-----/   { close(f); inc = 0 }
 ' "${tmp}/chain.txt"
 
 n="$(find "$tmp" -maxdepth 1 -name 'cert-*.pem' | wc -l | tr -d ' ')"
@@ -55,8 +63,14 @@ n="$(find "$tmp" -maxdepth 1 -name 'cert-*.pem' | wc -l | tr -d ' ')"
 leaf="${tmp}/cert-01.pem"
 last="$(find "$tmp" -maxdepth 1 -name 'cert-*.pem' | sort | tail -1)"
 
-subj="$(openssl x509 -in "$last" -noout -subject 2>/dev/null | sed 's/^subject=//')"
-issu="$(openssl x509 -in "$last" -noout -issuer  2>/dev/null | sed 's/^issuer=//')"
+# `|| true` is REQUIRED, not defensive noise: under `set -euo pipefail` a failing `openssl x509`
+# makes the ASSIGNMENT non-zero and kills the script SILENTLY — no message, just rc=1 — so every
+# actionable die below becomes unreachable exactly when it is needed. MEASURED 2026-08-04.
+subj="$(openssl x509 -in "$last" -noout -subject 2>/dev/null | sed 's/^subject=//' || true)"
+issu="$(openssl x509 -in "$last" -noout -issuer  2>/dev/null | sed 's/^issuer=//' || true)"
+[ -n "$subj" ] && [ -n "$issu" ] || die "could not parse the certificate ${host}:${port} presented.
+  This is usually a DEFECT IN THIS SCRIPT (the chain splitter), not in the server — check that
+  ${last} contains a PEM block. Re-check with: openssl s_client -connect ${host}:${port} -showcerts"
 
 if [ "$n" -eq 1 ]; then
   # A single cert. It is a legitimate trust anchor ONLY if it is self-signed (subject == issuer);

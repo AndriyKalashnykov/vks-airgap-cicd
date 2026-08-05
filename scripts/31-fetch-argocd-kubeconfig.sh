@@ -81,6 +81,16 @@ log_info "  (interactive: the VCF CLI will prompt for the password — a passwor
 # `https://` endpoint and `--type k8s`; that one passed no positional name at all) and the comment
 # recording the contradiction said to fix them TOGETHER. Lab-verified 2026-07-22: the endpoint is a
 # BARE host with no scheme, and the context name is positional.
+# IDEMPOTENCE — same class as 30-vks-login.sh, and kept in the lockstep this comment demands.
+# `vcf context create` REFUSES a duplicate name; MEASURED 2026-08-04, a second `make
+# fetch-argocd-kubeconfig` dies with `context "argocd-supervisor" already exists`. The context
+# store is ~/.config/vcf/config.yaml — OUTSIDE the repo and outside every teardown — so it
+# survives `make kind-down`, a destroy, and a lab rebuild, and then blocks every later run while
+# pointing at a DEAD endpoint. We only delete OUR OWN $CTX ("delete only what you created").
+#   -y                               : else it PROMPTS (hangs a tty run, errors in CI)
+#   --skip-delete-kubeconfig-context : -y otherwise also mutates the caller's kubeconfig
+run vcf context delete "$CTX" -y --skip-delete-kubeconfig-context >/dev/null 2>&1 || true
+
 KUBECONFIG="$ARGOCD_KUBECONFIG" run vcf context create "$CTX" \
   --endpoint "${SUPERVISOR_HOST}" \
   --username "$VCF_USER" \
