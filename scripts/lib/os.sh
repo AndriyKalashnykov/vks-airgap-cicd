@@ -394,7 +394,18 @@ require_cmd() {
 #   require_gate_tool shellcheck "make deps" || return 0
 require_gate_tool() {
   local cmd="$1" hint="${2:-run 'make deps' (mise installs it from .mise.toml)}"
-  have "$cmd" && return 0
+  if have "$cmd"; then
+    # ⚠️ PRINT WHERE IT RESOLVED, not just that it exists. MEASURED 2026-08-05, twice: a shell
+    # carrying a FOREIGN mise activation had this repo's pinned tools absent from PATH entirely,
+    # so `have` said yes and a STRAY binary ran — hadolint 2.12.0 instead of the pinned 2.14.0,
+    # reporting a false DL3006 on a file nobody had touched. A presence check cannot tell those
+    # apart; the PATH is the only thing that can. The Makefile now exports mise's bin-paths, but
+    # that `$(shell …)` yields EMPTY on any mise error and PATH is silently left as it was — so
+    # without this line you are back to the original bug with a fix sitting in the git log.
+    # One line per gate tool, and it turns a 20-minute misdiagnosis into a 5-second read.
+    log_info "  using $cmd: $(command -v "$cmd")"
+    return 0
+  fi
   if [ -n "${CI:-}" ]; then
     die "GATE TOOL MISSING IN CI: '$cmd' — $hint.
   Refusing to skip: a gate that reports success without running is worse than no gate."
