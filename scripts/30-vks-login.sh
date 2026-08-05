@@ -335,9 +335,42 @@ if [ -n "${VKS_CONTEXT:-}" ]; then
 fi
 
 log_info "verifying cluster reachability..."
-if kubectl cluster-info >/dev/null 2>&1 && kubectl get nodes >/dev/null 2>&1; then
+# ⚠️ CAPTURE stderr to its OWN file — do NOT merge the streams. The old form discarded everything
+# with `>/dev/null 2>&1` and then GUESSED ("check network + auth"), which is how a rebuilt lab told
+# an operator to check two things that were both fine. MEASURED 2026-08-05: the guest kubeconfig's
+# address still MATCHED (the LB IPs repeated across the rebuild) while its embedded `kubernetes` CA
+# belonged to the destroyed cluster. Right address, wrong CA — it reads as correctly configured.
+# Merging with 2>&1 is not an option: it makes the capture non-empty and inverts emptiness tests
+# downstream, which this repo has measured turning a WARN into a BLOCK asserting the opposite.
+_vks_err="$(mktemp)"; trap 'rm -f "$_vks_err"' EXIT
+if kubectl cluster-info >/dev/null 2>"$_vks_err" && kubectl get nodes >/dev/null 2>"$_vks_err"; then
   log_info "connected. Current context: $(kubectl config current-context)"
   kubectl get nodes -o wide >&2
 else
-  die "cannot reach the VKS cluster with the current kubeconfig/context — check network + auth"
+  case "$(classify_kube_failure "$_vks_err")" in
+    STALE_CA)
+      die "the kubeconfig's CA does not match what ${KUBECONFIG:-the current kubeconfig} is talking to.
+  The server ANSWERED — this is NOT a network or auth problem. A REBUILT cluster mints a new CA, and
+  the address often stays the same, so a stale kubeconfig looks correctly configured.
+    context: $(kubectl config current-context 2>/dev/null || echo '<none>')
+    server:  $(kubectl config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)
+  Re-fetch the kubeconfig from the cluster that is actually running, then re-run." ;;
+    UNAUTHORIZED)
+      die "the credential in this kubeconfig was REJECTED (Unauthorized) by
+  $(kubectl config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null).
+  The server answered, so it is reachable — the token or certificate has EXPIRED or belongs to a
+  cluster that no longer exists. Log in again and re-fetch the kubeconfig." ;;
+    FORBIDDEN)
+      die "authenticated, but this identity is not permitted to list nodes on
+  $(kubectl config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null).
+  That is an RBAC grant, not a broken kubeconfig — ask for the role, or use an identity that has it." ;;
+    UNREACHABLE)
+      die "cannot reach $(kubectl config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)
+  — no HTTP response. This one genuinely IS network: check the address is right, the cluster is up,
+  and that this host can route to it." ;;
+    *)
+      die "cannot reach the VKS cluster with the current kubeconfig/context. The error was not one
+  this script recognises, so it is printed verbatim rather than guessed at:
+$(sed 's/^/    /' "$_vks_err" 2>/dev/null | head -6)" ;;
+  esac
 fi

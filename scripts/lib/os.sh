@@ -883,3 +883,33 @@ assert_run_sentinel() {
 # ---------------------------------------------------------------------------
 # shellcheck source=scripts/lib/state.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/state.sh"
+
+# ---------------------------------------------------------------------------
+# classify_kube_failure <stderr-file> -> prints one token
+#   STALE_CA | UNAUTHORIZED | FORBIDDEN | UNREACHABLE | UNKNOWN
+#
+# WHY. `kubectl … >/dev/null 2>&1 || die "check network + auth"` throws away the answer and then
+# guesses. MEASURED 2026-08-05, walking scenario-1 against a REBUILT lab: the guest kubeconfig's
+# address still matched (the LB IPs repeated) but its embedded `kubernetes` CA belonged to the
+# DESTROYED cluster, and the operator was told to check network and auth — neither of which was
+# wrong. A rebuild invalidates stored trust material; nothing in the message said so.
+#
+# ⚠️ NEVER MERGE THE STREAMS to capture this. `2>&1` makes the capture non-empty, which inverts any
+# `[ -z … ]` emptiness test downstream — measured elsewhere in this repo to turn a WARN into a BLOCK
+# asserting the opposite of what it saw. Capture stderr to its OWN file and branch on rc first.
+#
+# ⚠️ MATCH THE SPECIFIC SUBSTRING, NOT THE PREFIX. "Unable to connect to the server: tls: failed to
+# verify certificate: x509…" and "Unable to connect to the server: dial tcp …: no route to host"
+# SHARE their prefix, so an "Unable to connect" matcher conflates a stale CA with a dead lab —
+# reintroducing exactly the confusion this exists to remove.
+classify_kube_failure() {
+  local errfile="${1:-/dev/null}" e=""
+  [ -r "$errfile" ] && e="$(cat "$errfile" 2>/dev/null || true)"
+  case "$e" in
+    *"x509"*|*"certificate signed by unknown authority"*|*"certificate is valid for"*) printf 'STALE_CA' ;;
+    *"Unauthorized"*|*"401"*)                                                          printf 'UNAUTHORIZED' ;;
+    *"forbidden"*|*"Forbidden"*|*"cannot list resource"*)                              printf 'FORBIDDEN' ;;
+    *"no route to host"*|*"connection refused"*|*"i/o timeout"*|*"dial tcp"*|*"no such host"*) printf 'UNREACHABLE' ;;
+    *)                                                                                 printf 'UNKNOWN' ;;
+  esac
+}
