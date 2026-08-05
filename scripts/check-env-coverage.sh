@@ -62,6 +62,7 @@ for f in "${REPO_ROOT}"/scripts/[0-9][0-9]-*.sh \
          "${REPO_ROOT}"/scripts/creds.sh \
          "${REPO_ROOT}"/scripts/argocd-password.sh \
          "${REPO_ROOT}"/scripts/kind-down.sh \
+         "${REPO_ROOT}"/scripts/fetch-ca.sh \
          "${REPO_ROOT}"/scripts/lib/*.sh; do
   [ -f "$f" ] || continue
   case "$(basename "$f")" in
