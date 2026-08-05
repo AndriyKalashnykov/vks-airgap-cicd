@@ -24,6 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
 load_env
+argocd_tls_opts   # ARGOCD_CA_FILE -> --server-crt, once, for every argocd call below
 
 require_cmd kubectl
 require_cmd envsubst "install gettext (provides envsubst)"
@@ -51,7 +52,10 @@ ARGOCD_KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}"
 [ -f "$ARGOCD_KUBECONFIG" ] || die "ARGOCD_KUBECONFIG not found: $ARGOCD_KUBECONFIG"
 
 # The cluster ArgoCD RUNS IN. Guest-side work just uses the ambient kubectl ($KUBECONFIG).
-ka() { kubectl --kubeconfig "$ARGOCD_KUBECONFIG" "$@"; }
+# --request-timeout matches the sibling wrapper in 23-argocd-preflight.sh. Without it every OTHER
+# ka() call in this file (the reconciler check, the cluster-Secret listing) hangs forever against a
+# blackholed endpoint — the explicit flags at the k_can_i sites closed only half of that.
+ka() { kubectl --kubeconfig "$ARGOCD_KUBECONFIG" --request-timeout=15s "$@"; }
 
 ARGOCD_API="$(argocd_api_server "$ARGOCD_KUBECONFIG")"
 GUEST_API="$(argocd_api_server "$KUBECONFIG")"
@@ -173,7 +177,20 @@ ARGOCD_MECHANISM="${ARGOCD_MECHANISM:-auto}"
 # likely to hold — for a repo that needs no credential is how the old gate failed them twice over.
 GITEA_DEPLOY_PRIVATE="${GITEA_DEPLOY_PRIVATE:-false}"
 
-can() { [ "$(ka auth can-i "$1" "$2" -n "$ARGOCD_NAMESPACE" 2>/dev/null || echo no)" = yes ]; }
+# ⚠️ THREE STATES, and the flags are passed EXPLICITLY. `|| echo no` collapsed "you are refused"
+# onto "the probe never reached the cluster", so a TLS or CA fault silently downgraded the write
+# mechanism. `can` keeps its boolean contract for callers; `can_why` carries the reason.
+# --request-timeout is added here: the sibling wrapper in 23-argocd-preflight.sh has it and this
+# one did not, so against a blackholed endpoint this probe HUNG rather than failing — and a
+# classifier cannot help a probe that never returns.
+can_why=""
+can() {
+  local _r
+  _r="$(k_can_i --kubeconfig "$ARGOCD_KUBECONFIG" --request-timeout=15s \
+          auth can-i "$1" "$2" -n "$ARGOCD_NAMESPACE")"
+  can_why="${_r#*|}"
+  [ "${_r%%|*}" = yes ]
+}
 can_kubectl=no
 # A namespace we cannot even READ is a namespace we cannot apply into. Short-circuit the probes.
 if [ "$argocd_ns_readable" = no ]; then
@@ -199,15 +216,38 @@ argocd_reconciler_ready() {
          -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
   [ "${rr:-0}" -ge 1 ]
 }
-if [ "$argocd_ns_readable" = yes ] && can create applications.argoproj.io; then
+# ⚠️ PROBE ONCE. The first version of this warn called `can` a SECOND time, so the message and the
+# decision read two DIFFERENT measurements and could contradict each other — measured, probe1=yes
+# with probe2=unknown gave can_kubectl=no with NO warning, i.e. the exact silent downgrade this
+# block exists to prevent, still reachable. It also doubled the latency (up to 30 s against a
+# blackholed endpoint). One probe, one variable, then branch.
+_app_state=skip
+if [ "$argocd_ns_readable" = yes ]; then
+  _ra_k="$(k_can_i --kubeconfig "$ARGOCD_KUBECONFIG" --request-timeout=15s \
+            auth can-i create applications.argoproj.io -n "$ARGOCD_NAMESPACE")"
+  _app_state="${_ra_k%%|*}"
+  [ "$_app_state" = unknown ] && log_warn "the kubectl write probe FAILED TO ANSWER (${_ra_k#*|}) —
+  this is NOT a denial. It never reached the cluster, so no RBAC grant will change it. Not
+  selecting the kubectl path on a capability nobody measured."
+fi
+if [ "$_app_state" = yes ]; then
   if ! argocd_reconciler_ready; then
     log_warn "the argoproj.io CRDs exist, but NO ArgoCD reconciler is running in '${ARGOCD_NAMESPACE}'."
     log_warn "  StatefulSet argocd-application-controller is absent or has 0 ready replicas, so an"
     log_warn "  Application written here would never sync. The ArgoCD Supervisor SERVICE installs the"
     log_warn "  CRDs; the ArgoCD INSTANCE is a separate step that provides the controller."
     log_warn "  Create the instance first (scenario-1 §3), then re-run — not selecting the kubectl path."
-  elif [ "$GITEA_DEPLOY_PRIVATE" != "true" ] || can create secrets; then
+  elif [ "$GITEA_DEPLOY_PRIVATE" != "true" ]; then
     can_kubectl=yes
+  elif can create secrets; then
+    can_kubectl=yes
+  elif [ -n "$can_why" ]; then
+    # ⚠️ Same asymmetry as the Applications probe above: a FALSE here is either "you are refused"
+    # or "nobody asked". Silently leaving can_kubectl=no on the second is how a transport fault
+    # became a permissions verdict. can_why is empty on a real yes/no and carries the class
+    # otherwise — it is the ONLY reader, which is why `can()` still populates it.
+    log_warn "the kubectl Secret probe FAILED TO ANSWER (${can_why}) — this is NOT a denial, so no
+  RBAC grant will change it. Not selecting the kubectl path on a capability nobody measured."
   fi
 fi
 
@@ -217,7 +257,20 @@ if have argocd && [ -n "${ARGOCD_SERVER:-}" ] && [ -n "${ARGOCD_AUTH_TOKEN:-}" ]
   argocd_api_ready=yes
   # ARGOCD_AUTH_TOKEN reaches the CLI through the ENVIRONMENT (the argocd CLI reads it by name) —
   # never `argocd login --password`, which would put the secret in argv.
-  if argocd account can-i create applications "${ARGOCD_PROJECT}/*" >/dev/null 2>&1; then can_api=yes; fi
+  # ⚠️ A DENIAL EXITS 0. Upstream argo-cd v3.4.5 (the installed version) returns
+  # `&CanIResponse{Value:"no"}, nil` for a refusal, and the CLI prints that value and exits 0 — so
+  # branching on rc recorded a REFUSED tenant as PERMITTED, and `>/dev/null` binned the answer.
+  _rl="$(argocd_can_i create applications "${ARGOCD_PROJECT}/*")"
+  case "${_rl%%|*}" in
+    yes) can_api=yes ;;
+    no)  can_api=no ;;
+    *)   can_api=unknown
+         # Loud, and it does NOT select the mechanism. Falling through to `request` is correct
+         # under `auto` — the operator asked us to choose — but doing it SILENTLY was the defect.
+         log_warn "the argocd API probe FAILED TO ANSWER (${_rl#*|}) — this is NOT a denial.
+  argocd-server never received the request, so no AppProject role will change it. Not selecting the
+  api mechanism on a capability nobody measured." ;;
+  esac
 fi
 
 case "$ARGOCD_MECHANISM" in
@@ -227,6 +280,18 @@ case "$ARGOCD_MECHANISM" in
   auto)
     if   [ "$can_kubectl" = yes ]; then MECH=kubectl
     elif [ "$can_api"     = yes ]; then MECH=api
+    # ⚠️ `request` IS ONLY SAFE WHEN CHOSEN BECAUSE A CAPABILITY WAS MEASURED ABSENT. Its exit is
+    # `exit 0` (below), and the Makefile runs this script bare — so on `unknown` the chain was:
+    # TLS fault -> both probes unknown -> MECH=request -> "ask your platform team" -> rc 0.
+    # `make gitops` SUCCEEDS having applied NOTHING, and any e2e gating on that rc goes green over
+    # a non-deployment. Of the three branches it is the one whose failure mode is SILENT SUCCESS,
+    # so it is the worst possible default for "we could not tell".
+    elif [ "$_app_state" = unknown ] || [ "$can_api" = unknown ]; then
+      die "cannot choose a write mechanism: a capability probe did not ANSWER
+  (kubectl=${_app_state}${can_why:+/${can_why}}, api=${can_api}).
+  Refusing to fall back to 'request' — that path exits 0 having applied nothing, so a caller would
+  read this run as a success. This is NOT a permissions result: fix the connection or the trust
+  anchor and re-run, or set ARGOCD_MECHANISM explicitly to state what you intend."
     else                                MECH=request
     fi ;;
   *) die "ARGOCD_MECHANISM must be auto|kubectl|api|request (got '$ARGOCD_MECHANISM')" ;;
@@ -487,7 +552,20 @@ if [ "$MECH" = request ]; then
   log_info "ArgoCD Applications RENDERED (not applied): $(app_names | tr '\n' ' ')"
   exit 0
 fi
-if [ "$MECH" = api ] && ! ka auth can-i get applications.argoproj.io -n "$ARGOCD_NAMESPACE" >/dev/null 2>&1; then
+# ⚠️ MECH=api here is an EXPLICIT operator choice (or one `auto` already made), so an unanswerable
+# probe must not be read as "kubectl cannot see them" — that is the api path's normal shape AND the
+# shape of a broken connection. Distinguish them: only a real `no` means "use argocd-server".
+# Probed INSIDE the guard: the kubectl path was paying a round trip whose result both branches
+# below then discarded.
+_rv=""
+[ "$MECH" = api ] && _rv="$(k_can_i --kubeconfig "$ARGOCD_KUBECONFIG" --request-timeout=15s \
+        auth can-i get applications.argoproj.io -n "$ARGOCD_NAMESPACE")"
+if [ "$MECH" = api ] && [ "${_rv%%|*}" = unknown ]; then
+  die "cannot verify the Applications: the probe did not reach the cluster (${_rv#*|}).
+  Refusing to report a sync I did not observe. This is NOT a permissions problem — fix the
+  connection or the trust anchor, then re-run."
+fi
+if [ "$MECH" = api ] && [ "${_rv%%|*}" = no ]; then
   # The tenant path writes through argocd-server and may not read the Application object with
   # kubectl at all. `argocd app wait` is the equivalent check.
   log_info "verifying via argocd-server that each Application syncs (kubectl cannot read them on this path)"

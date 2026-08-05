@@ -6,6 +6,34 @@
 # Every tunable comes from .env (gitignored) via `-include .env`, falling back to
 # the `?=` defaults below (mirrors .env.example). `.env` wins for `make` too.
 
+# ---------------------------------------------------------------------------------------------
+# PUT THE PINNED TOOLCHAIN ON PATH. One line, and it is load-bearing for more than lint.
+#
+# THE BUG IT FIXES (measured 2026-08-05, twice, hours apart): a shell that carries a FOREIGN mise
+# activation — another repo's tools, or the global ~/.config/mise/config.toml, snapshotted into the
+# environment — does not have THIS repo's pinned tools on PATH at all. Nine of thirteen diverged,
+# and `crane` was **not on PATH in any form** while installed at installs/crane/0.21.7. `crane` is
+# REQUIRED by `make mirror`, so `make install-all` died with "MISSING REQUIRED: crane" on a box that
+# had it. `hadolint` resolved to a stray 2.12.0 in ~/.local/bin instead of the pinned 2.14.0 and
+# reported a FALSE DL3006 on jumpbox/Dockerfile.airgap — a red on a file nobody had touched, which
+# reads exactly like the "diagnose main, not the PR" class and nearly got main reported broken.
+#
+# ⚠️ IT IS NOT PATH *SHADOWING* between two candidates — that was my first diagnosis and it was
+# wrong. The pinned binaries are ABSENT from PATH; ~/.local/bin merely fills the vacuum. That
+# matters, because the obvious fix (rewrite the linter call sites to use `mise which`) aims at the
+# wrong layer: the linters are invoked from scripts/lint.sh, not from a recipe, and it would still
+# leave crane and the build toolchain (java, maven) resolving to the wrong install tree.
+#
+# WHY THIS FORM: `mise bin-paths` is cwd-sensitive and returns every pinned tool's dir (22 here) in
+# 0.01 s. On a box with no mise it prints nothing, so PATH is unchanged and this degrades to a
+# NO-OP with no branch to get wrong — which is what the air-gap jump box needs. `:=` so it is
+# evaluated once, not per-recipe.
+# ⚠️ A SILENT FAILURE HERE IS INVISIBLE, which is why scripts/lint.sh now PRINTS the resolved path
+# and version of each linter before running it. If mise ever errors (an untrusted config in a
+# non-tty recipe), $(shell) yields empty, PATH is untouched, and you are back to the original bug
+# with a fix sitting in the git log. The print is what makes that self-diagnosing in five seconds.
+export PATH := $(shell cd $(CURDIR) && mise bin-paths 2>/dev/null | tr '\n' ':')$(PATH)
+
 # Load operator overrides FIRST so they win over the ?= defaults. `-include`
 # (leading '-') silently skips a missing file. The KinD flow writes discovered
 # state to the stamped `.env.state` overlay (below); `.env.kind` is read-only
@@ -18,6 +46,14 @@
 # so a re-run still cache-skips the mirror (no re-download).
 ifneq ($(SKIP_DOTENV),1)
 -include .env
+
+# ⚠️ EXPORTED, because `-include .env` above creates MAKE variables, NOT environment — MEASURED: a recipe
+# sees make-var=[AA:BB:CC] while the script it invokes sees []. fetch-ca.sh does not call load_env, so
+# without this an out-of-band CA pin written to .env is SILENTLY INERT and the operator concludes pinning
+# is broken. This replaces a per-recipe `VAR='$(VAR)'` prefix, which MEASURED broke on a value containing
+# a single quote (`bash -n` -> unexpected EOF) and silently ate a `$`. A command-line override still wins.
+export HARBOR_CA_SHA256
+export ARGOCD_CA_SHA256
 endif
 # The STAMPED state overlay (was `.env.kind` — a KinD-named file that carried REAL-LAB state, which is
 # how `make kind-down` came to destroy a lab's kubeconfig). VKS_STATE_FILE overrides the path.
@@ -727,7 +763,15 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint ## Run all offline script-logic unit tests
+
+.PHONY: test-fetch-ca-pin
+test-fetch-ca-pin: ## Offline: fetch-ca.sh REFUSES a CA whose fingerprint does not match the out-of-band pin (real TLS oracle)
+	@./scripts/test-fetch-ca-pin.sh
+
+.PHONY: test-ca-verifies-endpoint
+test-ca-verifies-endpoint: ## RED-proof ca_verifies_endpoint's six verdicts against a real TLS oracle
+	@bash scripts/test-ca-verifies-endpoint.sh
 
 .PHONY: test-vks-username
 test-vks-username: ## Offline: the SHARED VKS SSO principal resolver — default, VKS_SSO_DOMAIN, C10 idempotency, and that BOTH consumers use it

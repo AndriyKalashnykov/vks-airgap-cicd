@@ -123,7 +123,20 @@ subjects: [ { kind: ServiceAccount, name: tenant, namespace: default } ]
 EOF
 tok="$(kubectl -n default create token tenant --duration=1h)"
 api="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
+# ⚠️ THIS RETURNS EMPTY WITH rc=0 when the source kubeconfig uses the FILE form
+# (`certificate-authority: /path`) — `--raw` does NOT convert file->data, and `set -e` cannot fire
+# on a successful command that produced nothing. The fixture then wrote an EMPTY
+# certificate-authority-data, and an empty-CA kubeconfig makes `auth can-i` fail for TRANSPORT
+# reasons — which the old `|| echo no` turned into "no", so RED-1 PASSED and asserted "(Forbidden)"
+# about a probe that never reached a server. A second, independent path to the same false green.
 ca="$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')"
+if [ -z "$ca" ]; then
+  caf="$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority}')"
+  [ -n "$caf" ] && [ -r "$caf" ] && ca="$(base64 -w0 < "$caf")"
+fi
+[ -n "$ca" ] || die "cannot build the tenant fixture: this kubeconfig carries neither
+  certificate-authority-data nor a readable certificate-authority file. A fixture with an empty CA
+  fails for TRANSPORT reasons, which this test would then report as a permissions boundary."
 TENANT_KC="${WORK}/tenant.kubeconfig"
 ( umask 077; cat > "$TENANT_KC" <<EOF
 apiVersion: v1
@@ -135,11 +148,30 @@ users: [ { name: tenant, user: { token: ${tok} } } ]
 EOF
 )
 
+# ⚠️ POSITIVE CONTROL, and it must come FIRST. Dying on an `unknown` RED-1 closes one path to a
+# false green; it does not close the other. The fixture's ClusterRole grants `*`/`*` on the core and
+# apps groups, so a WORKING tenant kubeconfig MUST be able to create configmaps. If this says
+# anything but `yes`, the fixture is broken and every assertion after it is measuring the fixture.
+_pc="$(k_can_i --kubeconfig "$TENANT_KC" --request-timeout=15s auth can-i create configmaps -n "$NS")"
+[ "${_pc%%|*}" = yes ] || die "FAIL: the tenant fixture is not a working kubeconfig — it cannot even
+  create configmaps, which its own ClusterRole grants (got '${_pc%%|*}', reason '${_pc#*|}').
+  Every assertion below would be measuring the FIXTURE, not a tenant boundary."
+
 # RED-1: the tenant must NOT be able to create Applications with kubectl. If they can, this test
 # proves nothing — it would be exercising the kubectl path under a different name.
-if [ "$(kubectl --kubeconfig "$TENANT_KC" auth can-i create applications.argoproj.io -n "$NS" 2>/dev/null || echo no)" = yes ]; then
-  die "FAIL: the tenant kubeconfig CAN kubectl-create Applications in ns/${NS} — this fixture does not reproduce a tenant."
-fi
+# ⚠️ THIS IS A NEGATIVE CONTROL, SO "COULD NOT ASK" IS A HARD FAILURE, NOT A PASS. The old
+# `|| echo no` made ANY transport failure produce exactly "no" — byte-identical to a real denial —
+# so the `= yes` test was false and the script logged "RED 1 OK". It went GREEN having never asked,
+# and then claimed to reproduce a tenant boundary that was never measured. A control that cannot
+# fail is not a control.
+_rt="$(k_can_i --kubeconfig "$TENANT_KC" --request-timeout=15s \
+        auth can-i create applications.argoproj.io -n "$NS")"
+case "${_rt%%|*}" in
+  yes) die "FAIL: the tenant kubeconfig CAN kubectl-create Applications in ns/${NS} — this fixture does not reproduce a tenant." ;;
+  no)  : ;;   # the assertion genuinely held
+  *)   die "FAIL: the RED-1 probe never reached the cluster (${_rt#*|}), so it proved NOTHING about
+  the tenant boundary. Refusing to report a control I did not observe." ;;
+esac
 log_info "RED 1 OK — the tenant CANNOT create Applications in ns/${NS} with kubectl (Forbidden), as on a real lab."
 
 # ---- 3. the tenant's argocd-server token --------------------------------------------------------
@@ -160,7 +192,25 @@ for _ in $(seq 1 60); do
 done
 [ "$ok" = 1 ] || die "argocd-server never answered on https://${argocd_lb} after the restart"
 
-export ARGOCD_OPTS="--insecure"
+# ⚠️ THIS `--insecure` IS WHY AN ENTIRE DEFECT CLASS HID. This is the ONLY test exercising the
+# argocd (`api`) mechanism, and it disabled the exact verification the real operator path leaves
+# ON — so `ARGOCD_CA_FILE` sat with one producer and ZERO consumers, and a TLS-trust failure
+# reported as an RBAC denial was invisible to CI. A gate that turns off the thing that breaks in
+# production is not a gate.
+#
+# Prefer the CA. Fall back to --insecure only when there is none, and say so LOUDLY — a silent
+# fallback would recreate exactly the blind spot this comment exists to describe.
+if [ -n "${ARGOCD_CA_FILE:-}" ] && [ -s "${ARGOCD_CA_FILE}" ]; then
+  export ARGOCD_OPTS="--server-crt ${ARGOCD_CA_FILE}"
+  log_info "argocd TLS: VERIFYING against ${ARGOCD_CA_FILE} (this leg covers the operator's path)"
+  _e2e_tls="--server-crt ${ARGOCD_CA_FILE}"
+else
+  export ARGOCD_OPTS="--insecure"
+  log_warn "argocd TLS: NOT VERIFIED (--insecure) — no ARGOCD_CA_FILE. This leg therefore does NOT
+  cover the trust-anchor path, which is the one that fails on a real lab. To close that gap:
+  make fetch-argocd-ca, then re-run with ARGOCD_CA_FILE set."
+  _e2e_tls="--insecure"
+fi
 # `argocd login` offers ONLY `--password <string>` — i.e. the secret on ARGV, which this repo forbids
 # (ps -ef / /proc/<pid>/cmdline). There is no --password-stdin. So mint the admin JWT through the
 # session API with the body on STDIN (curl --data @-), and drive the CLI with ARGOCD_AUTH_TOKEN
@@ -219,7 +269,7 @@ ARGOCD_MECHANISM=api \
 ARGOCD_PROJECT="$PROJ" \
 ARGOCD_SERVER="$argocd_lb" \
 ARGOCD_AUTH_TOKEN="$TENANT_TOKEN" \
-ARGOCD_OPTS="--insecure" \
+ARGOCD_OPTS="$_e2e_tls" \
   "${SCRIPT_DIR}/70-configure-argocd.sh"
 
 # ---- 5. assert the Applications EXIST and are in the TENANT'S project ----------------------------

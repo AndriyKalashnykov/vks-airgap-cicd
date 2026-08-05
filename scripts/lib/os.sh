@@ -394,7 +394,18 @@ require_cmd() {
 #   require_gate_tool shellcheck "make deps" || return 0
 require_gate_tool() {
   local cmd="$1" hint="${2:-run 'make deps' (mise installs it from .mise.toml)}"
-  have "$cmd" && return 0
+  if have "$cmd"; then
+    # ⚠️ PRINT WHERE IT RESOLVED, not just that it exists. MEASURED 2026-08-05, twice: a shell
+    # carrying a FOREIGN mise activation had this repo's pinned tools absent from PATH entirely,
+    # so `have` said yes and a STRAY binary ran — hadolint 2.12.0 instead of the pinned 2.14.0,
+    # reporting a false DL3006 on a file nobody had touched. A presence check cannot tell those
+    # apart; the PATH is the only thing that can. The Makefile now exports mise's bin-paths, but
+    # that `$(shell …)` yields EMPTY on any mise error and PATH is silently left as it was — so
+    # without this line you are back to the original bug with a fix sitting in the git log.
+    # One line per gate tool, and it turns a 20-minute misdiagnosis into a 5-second read.
+    log_info "  using $cmd: $(command -v "$cmd")"
+    return 0
+  fi
   if [ -n "${CI:-}" ]; then
     die "GATE TOOL MISSING IN CI: '$cmd' — $hint.
   Refusing to skip: a gate that reports success without running is worse than no gate."
@@ -447,7 +458,14 @@ load_env() {
   # `INGRESS_CONTROLLER=istio` as a command-scoped prefix, the overlay overwrote it, and the
   # classifier's self-tests then ran in the foreign-mesh mode where provenance CANNOT be asserted
   # (6 cases wanted rc=1 and got 0). Proven: with an empty overlay the same gate is rc=0, 7/7.
-  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT INGRESS_CONTROLLER HARBOR_CA_FILE HARBOR_URL; do
+  # THE CA PINS ARE SELECTORS TOO, and the consequence of clobbering one is the worst in this list.
+  # HARBOR_CA_FILE (above) names WHICH anchor; *_CA_SHA256 names which anchor is CORRECT. If a stale pin
+  # in .env / .env.state wins over `make vks-login VKS_CA_SHA256=<new>`, the check silently compares
+  # against the OLD digest — so it either refuses a legitimate rotation, or (worse) an operator who has
+  # been given the right digest is told it does not match, and reaches for the skip-verify escape.
+  # Latent today because all three ship COMMENTED, so check-env-clobber passes; protected here so that
+  # uncommenting one — the natural thing to do with a value you want to persist — cannot arm it.
+  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT INGRESS_CONTROLLER HARBOR_CA_FILE HARBOR_URL VKS_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256; do
     if [ -n "${!_sel:-}" ]; then
       _snap_names="${_snap_names} ${_sel}"
       _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'
@@ -872,3 +890,166 @@ assert_run_sentinel() {
 # ---------------------------------------------------------------------------
 # shellcheck source=scripts/lib/state.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/state.sh"
+
+# ---------------------------------------------------------------------------
+# classify_kube_failure <stderr-file> -> prints one token
+#   STALE_CA | UNAUTHORIZED | FORBIDDEN | UNREACHABLE | UNKNOWN
+#
+# WHY. `kubectl … >/dev/null 2>&1 || die "check network + auth"` throws away the answer and then
+# guesses. MEASURED 2026-08-05, walking scenario-1 against a REBUILT lab: the guest kubeconfig's
+# address still matched (the LB IPs repeated) but its embedded `kubernetes` CA belonged to the
+# DESTROYED cluster, and the operator was told to check network and auth — neither of which was
+# wrong. A rebuild invalidates stored trust material; nothing in the message said so.
+#
+# ⚠️ NEVER MERGE THE STREAMS to capture this. `2>&1` makes the capture non-empty, which inverts any
+# `[ -z … ]` emptiness test downstream — measured elsewhere in this repo to turn a WARN into a BLOCK
+# asserting the opposite of what it saw. Capture stderr to its OWN file and branch on rc first.
+#
+# ⚠️ MATCH THE SPECIFIC SUBSTRING, NOT THE PREFIX. "Unable to connect to the server: tls: failed to
+# verify certificate: x509…" and "Unable to connect to the server: dial tcp …: no route to host"
+# SHARE their prefix, so an "Unable to connect" matcher conflates a stale CA with a dead lab —
+# reintroducing exactly the confusion this exists to remove.
+# ── three-state capability probes ───────────────────────────────────────────────────────────────
+#
+# ⚠️ TWO STATES IS THE BUG. `$(cmd 2>/dev/null || echo no)` collapses "you are refused" and
+# "the question never reached the server" onto the same token, so a TLS/CA/network fault is
+# reported to a customer as an RBAC denial and they go request a grant they already have.
+# These return a THIRD state, `unknown`, and leave the reason in K_CAN_I_CLASS.
+#
+# Callers must decide what `unknown` MEANS for them — it is not one behaviour:
+#   a capability LADDER   -> warn loudly, do NOT select that mechanism
+#   an EXPLICIT choice    -> die; an operator's explicit request must never be silently downgraded
+#   a NEGATIVE CONTROL    -> die; "could not ask" is a hard failure, never a passing assertion
+#   a report/table        -> print it; a report may legitimately say "could not determine"
+#
+# ⚠️ THEY PRINT "state|class", NOT a state plus a GLOBAL. The first draft set K_CAN_I_CLASS and
+# every caller reads these through `$( )` — a SUBSHELL — so the global could never escape and the
+# reason was silently lost at every single site. A global cannot cross a subshell; the return
+# value can. Callers split: `ans="${r%%|*}"; why="${r#*|}"`.
+
+# argocd_tls_opts — make EVERY argocd invocation verify TLS, in one place.
+#
+# ⚠️ ARGOCD_CA_FILE had ONE producer (`make fetch-argocd-ca`) and ZERO consumers. The fetch was
+# even pinnable via ARGOCD_CA_SHA256 — so the repo verified the anchor it then never used.
+# `argocd` exposes a global `--server-crt`, and it reads extra global flags from ARGOCD_OPTS, so
+# setting it here covers can-i, `app create`, `app wait` and anything added later — rather than
+# threading a flag through every call site and missing the next one.
+#
+# ⚠️ WHY NOBODY NOTICED: the only e2e exercising the argocd (`api`) mechanism exported
+# ARGOCD_OPTS="--insecure". The test was green precisely because it disabled the verification the
+# real operator path leaves ON. A gate that turns off the thing that breaks in production is not
+# a gate. That override is now gone; this function is what replaces it.
+#
+# APPENDS — never clobbers. An operator who set ARGOCD_OPTS keeps it.
+argocd_tls_opts() {
+  [ -n "${ARGOCD_CA_FILE:-}" ] || return 0
+  if [ ! -s "$ARGOCD_CA_FILE" ]; then
+    log_warn "ARGOCD_CA_FILE is set to '${ARGOCD_CA_FILE}' but that file is empty or missing — argocd
+  will fall back to the system trust store and will NOT verify a self-signed ArgoCD. Re-fetch it:
+  make fetch-argocd-ca"
+    return 0
+  fi
+  case " ${ARGOCD_OPTS:-} " in
+    *" --server-crt "*) : ;;                                  # already set by the caller — respect it
+    *) export ARGOCD_OPTS="${ARGOCD_OPTS:+${ARGOCD_OPTS} }--server-crt ${ARGOCD_CA_FILE}" ;;
+  esac
+}
+
+# k_can_i <kubectl-args...> -> prints yes|no|unknown
+k_can_i() {
+  local _out _err _rc=0
+  _err="$(mktemp)"
+  # ⚠️ stderr to its OWN FILE, never `2>&1`. classify_kube_failure's header states the reason:
+  # merging makes the capture non-empty, which inverts any `[ -z ]` emptiness test downstream.
+  # It also keeps kubectl's yes/no (stdout) out of the text being classified.
+  _out="$(kubectl "$@" 2>"$_err")" || _rc=$?
+  if [ "$_rc" -ne 0 ] && [ -s "$_err" ] && ! printf '%s' "$_out" | command grep -qx 'no'; then
+    # rc!=0 with no usable answer on stdout: the probe did not get to ask.
+    local _cls; _cls="$(classify_kube_failure "$_err")"; rm -f "$_err"
+    printf 'unknown|%s' "$_cls"; return 0
+  fi
+  rm -f "$_err"
+  # ⚠️ kubectl prints its answer to STDOUT and exits 1 on a denial, so rc alone cannot be trusted
+  # in EITHER direction. Read the answer.
+  case "$_out" in *yes*) printf 'yes|' ;; *no*) printf 'no|' ;; *) printf 'unknown|UNPARSEABLE' ;; esac
+}
+
+# argocd_can_i <can-i args...> -> prints yes|no|unknown
+argocd_can_i() {
+  local _out _err _rc=0
+  _err="$(mktemp)"
+  _out="$(argocd account can-i "$@" 2>"$_err")" || _rc=$?
+  # ⚠️ THE EXIT CODE FILES A DENIAL AS PERMITTED. Verified in upstream argo-cd at the INSTALLED
+  # version v3.4.5: server/account/account.go returns `&CanIResponse{Value:"no"}, nil` — a NIL
+  # error — and cmd/argocd/commands/account.go does `CheckError(err); fmt.Println(response.Value)`,
+  # so a refusal PRINTS "no" and EXITS 0. The old `if argocd account can-i … >/dev/null; then
+  # can_api=yes; fi` therefore recorded a REFUSED tenant as permitted, and the `>/dev/null` threw
+  # away the one thing carrying the answer. Compare the OUTPUT; never branch on rc alone.
+  if [ "$_rc" -ne 0 ]; then
+    # ⚠️ argocd is a THIRD vendor vocabulary — JSON, not kubectl's plain text — so the shared
+    # classifier misses its shapes. An EXPIRED ARGOCD_AUTH_TOKEN is the most common argocd fault
+    # and has a trivial remedy, yet it classified UNKNOWN; its text is
+    #   rpc error: code = Unauthenticated desc = invalid session token: token is expired
+    # Auth is tested BEFORE transport so a token message is not swallowed by the connection arm.
+    local _cls; _cls="$(classify_kube_failure "$_err")"
+    if [ "$_cls" = UNKNOWN ]; then
+      if command grep -qiE 'Unauthenticated|invalid session token|token is expired|Unauthorized' "$_err"; then
+        _cls=UNAUTHORIZED
+      elif command grep -qiE 'failed to establish connection|connection refused|x509|tls' "$_err"; then
+        _cls=UNREACHABLE
+      fi
+    fi
+    rm -f "$_err"; printf 'unknown|%s' "$_cls"; return 0
+  fi
+  rm -f "$_err"
+  case "$_out" in yes) printf 'yes|' ;; no) printf 'no|' ;; *) printf 'unknown|UNPARSEABLE' ;; esac
+}
+
+classify_kube_failure() {
+  local errfile="${1:-/dev/null}" e=""
+  [ -r "$errfile" ] && e="$(cat "$errfile" 2>/dev/null || true)"
+  # ⚠️ ARM ORDER IS PART OF THE CONTRACT. First match wins, so an arm that can match text belonging
+  # to another class SHADOWS every arm below it. UNAUTHORIZED used to sit second and did exactly
+  # that — see the 401 note below; a genuine FORBIDDEN was classified UNAUTHORIZED.
+  case "$e" in
+    *"x509"*|*"certificate signed by unknown authority"*|*"certificate is valid for"*) printf 'STALE_CA' ;;
+
+    # PLAINTEXT: the endpoint is not speaking TLS at all. Its own class because every CA remedy is
+    # wrong here — there is nothing for an anchor to verify, so re-fetching or re-pinning cannot
+    # help. Almost always a wrong scheme or port. (The numeric sibling of this verdict is
+    # ca_verifies_endpoint's rc=4; keep the two remedy texts saying the same thing.)
+    *"first record does not look like a TLS handshake"*|*"server gave HTTP response to HTTPS client"*) \
+                                                                                       printf 'PLAINTEXT' ;;
+
+    # ⚠️ NETWORK BEFORE AUTH, and `401` ANCHORED. BOTH are required; neither alone is enough.
+    #
+    # `*"401"*` was unanchored and sat ABOVE this arm. It does not collide with ports (that was the
+    # theory) — it collides with kubectl's KLOG MICROSECOND TIMESTAMP. MEASURED: 60 invocations
+    # against a refused endpoint on port 9999, with no `401` anywhere in the address — 4 of 60
+    # (6.7%) contained `401` from fields like `.380401`, and those 4 classified UNAUTHORIZED while
+    # the other 56 classified UNREACHABLE. Same command, same endpoint, different verdict: a
+    # heisenbug a rerun "fixes". Treat the rate as "single-digit percent", not as 6.7 — it scales
+    # with how many klog retry lines a given failure emits.
+    #
+    # Anchoring alone leaves the ordering fragile; reordering alone still lets a 401-bearing
+    # UNKNOWN misfire. `401` is the ONLY purely-numeric token in this function, so it is the only
+    # one that can collide with machine-generated digits (timestamps, PIDs, `file.go:NNN` lines) —
+    # every other token is alphabetic and needs no anchor.
+    *"no route to host"*|*"connection refused"*|*"i/o timeout"*|*"dial tcp"*|*"no such host"*) \
+                                                                                       printf 'UNREACHABLE' ;;
+
+    # ⚠️ kubectl TRANSLATES a 401 — its stderr contains neither "Unauthorized" NOR "401".
+    # MEASURED against a server returning HTTP 401 with body {"reason":"Unauthorized","code":401}:
+    #   error: You must be logged in to the server (the server has asked for the client to provide credentials)
+    # Both phrasings are matched: the second survives if the final summary line is ever truncated,
+    # since it also appears in the klog lines. Without these, the arm NEVER fired on the real
+    # credential-expiry case — a perfect inversion with the 401 collision above, which fired only
+    # when it was wrong.
+    *"You must be logged in to the server"*|*"asked for the client to provide credentials"*) \
+                                                                                       printf 'UNAUTHORIZED' ;;
+    *"Unauthorized"*|*" 401 "*|*"(401)"*|*'"code":401'*|*"code: 401"*)                  printf 'UNAUTHORIZED' ;;
+
+    *"forbidden"*|*"Forbidden"*|*"cannot list resource"*)                              printf 'FORBIDDEN' ;;
+    *)                                                                                 printf 'UNKNOWN' ;;
+  esac
+}

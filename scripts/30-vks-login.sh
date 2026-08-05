@@ -18,6 +18,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# ⚠️ REQUIRED for ca_verifies_endpoint below. Without it that call is `command not found` (rc 127),
+# which falls into the catch-all arm and DIES ON A HEALTHY ANCHOR — a false block introduced by the
+# very check meant to prevent a confusing failure. Caught before it shipped by checking the source
+# block rather than assuming the helper was in scope.
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"
 load_env
 
 : "${KUBECONFIG:?KUBECONFIG must be set in .env (path to write/read the kubeconfig)}"
@@ -105,7 +111,101 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     #   [x] : … [ca-certificate insecure-skip-tls-verify] were all set
     # Order is deliberate: an explicitly-set CA WINS, so setting both cannot silently downgrade
     # you to unverified TLS.
-    if [ -n "${VKS_CA_CERT_FILE:-}" ] && [ -s "${VKS_CA_CERT_FILE}" ]; then
+    # ⚠️ NO `-s` HERE — it is the exact NEGATION of ca_verifies_endpoint's `[ -s "$ca" ] || return 5`,
+    # so keeping it made that verdict's arm below UNREACHABLE: a non-empty file could never return 5,
+    # and an empty one skipped this block entirely. Let the FUNCTION classify; it distinguishes
+    # absent/empty/unparseable (5) from a wrong anchor (1) from a name mismatch (3), and each has a
+    # different remedy. A guard that pre-filters the input to a classifier deletes the classes it
+    # filters on.
+    if [ -n "${VKS_CA_CERT_FILE:-}" ]; then
+      # ⚠️ EXISTS AND NON-EMPTY IS NOT "IS A TRUST ANCHOR FOR THIS ENDPOINT". MEASURED 2026-08-05:
+      # after a lab rebuild this file still held the DESTROYED lab's VMCA (stored SHA-256 EF:19:5E:…
+      # vs live B0:E5:E6:…). Every consumer then failed with `x509: certificate signed by unknown
+      # authority` — a message that names TLS, so the operator hunts a certificate or network fault
+      # while the actual cause is that the anchor belongs to a lab that no longer exists. Nothing in
+      # this repo re-fetches it, so the whole flow stopped here and never said why.
+      # Check it BEFORE the credential is submitted; it costs one connection.
+      # ⚠️ TWO DIFFERENT QUESTIONS, AND ca_verifies_endpoint ANSWERS ONLY THE FIRST.
+      #   ca_verifies_endpoint -> "is this anchor for the lab that is RUNNING?"  (staleness)
+      #   ca_pin_verdict       -> "is this anchor the one they TOLD me about?"   (authenticity)
+      # A MITM's CA verifies a MITM's leaf perfectly, so the staleness check returns 0 and we would
+      # proceed to submit the vCenter credential over an intercepted connection. Only a digest obtained
+      # over a DIFFERENT channel separates them. Checked FIRST, because it is offline and costs nothing,
+      # and because there is no point reaching the network if the anchor is already the wrong one.
+      _pv=0; ca_pin_verdict "$VKS_CA_CERT_FILE" "${VKS_CA_SHA256:-}" || _pv=$?
+      case "$_pv" in
+        0) log_info "TLS: the CA at ${VKS_CA_CERT_FILE} matches VKS_CA_SHA256" ;;
+        # 3 = no pin. DELIBERATELY SILENT, not a warning.
+        # ⚠️ This is NOT the same situation as fetch-ca.sh. There, the CA is pulled off the very wire it
+        # is meant to authenticate, so it is inherently trust-on-first-use and a pin is the only thing
+        # that redeems it. HERE the operator has already pointed VKS_CA_CERT_FILE at a file they obtained
+        # THEMSELVES — which is the out-of-band path, and strictly better than any digest (no
+        # transcription, no partial compare). Demanding a pin on top would nag every correct user for
+        # nothing, and this repo has a recorded defect where a gate printed advice on a NON-finding.
+        # The pin is an optional cross-check for operators who were handed a digest as well as a file.
+        3) : ;;
+        4) die "VKS_CA_SHA256 is set but is not a SHA-256 digest — REFUSING (a malformed pin must never
+  silently downgrade to an unauthenticated anchor).
+    got:      '${VKS_CA_SHA256:-}'
+    expected: 64 hex characters, with or without colons
+  Recompute it:  openssl x509 -in ${VKS_CA_CERT_FILE} -noout -fingerprint -sha256" ;;
+        5) die "could not read a certificate from VKS_CA_CERT_FILE='${VKS_CA_CERT_FILE}'." ;;
+        *) die "VKS CA FINGERPRINT MISMATCH — REFUSING to submit a credential over this connection.
+
+    expected (VKS_CA_SHA256): $(printf '%s' "${VKS_CA_SHA256:-}" | tr -d ': ' | tr '[:upper:]' '[:lower:]')
+    the file you pointed at:  $(ca_fingerprint "$VKS_CA_CERT_FILE" 2>/dev/null | tr -d ':' | tr '[:upper:]' '[:lower:]')
+
+  Both are the CA's digest (comparable objects — see the SUBJECT-vs-ISSUER note below for why that
+  matters). Either VKS_CA_CERT_FILE is the wrong file, or the digest you were given is stale.
+  Confirm it with the platform team over a channel that is NOT this connection." ;;
+      esac
+      case "$( ca_verifies_endpoint "$SUPERVISOR_HOST" 443 "$VKS_CA_CERT_FILE" >/dev/null 2>&1; echo $? )" in
+        0) : ;;   # verifies — proceed
+        2) log_warn "TLS: could not reach ${SUPERVISOR_HOST}:443 to check the CA — proceeding, and
+  the CLI will fail closed if it cannot verify. This is NOT evidence the anchor is wrong." ;;
+        # 3 = the CHAIN is fine and the NAME is not. Its own arm because the remedy is the OPPOSITE of
+        # staleness: re-fetching the CA cannot help, and the old message told you to do exactly that.
+        # MEASURED 2026-08-05: ca_verifies_endpoint used to return 0 here — it checked the chain only —
+        # so this case reported success and the connection then failed later with curl rc 60.
+        3) die "the CA at ${VKS_CA_CERT_FILE} is the RIGHT anchor, but the certificate ${SUPERVISOR_HOST}
+  presents is NOT VALID FOR THAT ADDRESS. Do NOT re-fetch the CA — it is correct.
+
+    you addressed:  ${SUPERVISOR_HOST}
+    the cert names: $(printf '' | timeout 15 openssl s_client -connect "${SUPERVISOR_HOST}:443" 2>/dev/null | openssl x509 -noout -ext subjectAltName 2>/dev/null | tail -1 | tr -d ' ')
+
+  A vSphere certificate commonly carries DNS names and NO IP SAN, so addressing the Supervisor by IP
+  fails name verification even with a perfect trust anchor. Set SUPERVISOR_HOST to the FQDN the
+  certificate names (and make sure it resolves), or have the platform team reissue with an IP SAN." ;;
+        # 4 = the endpoint served NO CERTIFICATE AT ALL. Its own arm because every CA remedy is wrong
+        # here — there is nothing for an anchor to verify, so re-fetching or re-pinning one cannot
+        # help. MEASURED: this used to return 0 ("the CA verifies"), because s_client reports
+        # `Verify return code: 0 (ok)` when there is no certificate to fail on. A credential is
+        # submitted over this connection, so a plaintext endpoint must be a hard stop, not a pass.
+        4) die "${SUPERVISOR_HOST}:443 answered, but it served NO TLS CERTIFICATE — it is not
+  speaking TLS. Do NOT re-fetch or re-pin the CA: there is nothing for an anchor to verify, and no
+  certificate change can fix this.
+
+  This is almost always the wrong ADDRESS or the wrong PORT — a plain-HTTP endpoint, a proxy, or a
+  service that is not the Supervisor API. Check SUPERVISOR_HOST, and that 443 is the API port.
+  REFUSING to continue: a credential would otherwise be submitted over an unencrypted connection." ;;
+        # 5 = no readable anchor CONFIGURED. Distinct from 1 (an anchor that is present and wrong):
+        # one is set, the other re-fetched, and telling an operator their anchor is "stale" when they
+        # never configured one sends them to re-fetch a file they do not have.
+        5) die "VKS_CA_CERT_FILE='${VKS_CA_CERT_FILE}' is empty or unreadable, so the certificate
+  ${SUPERVISOR_HOST} presents cannot be verified at all. This is NOT a stale anchor — there is no
+  anchor. Point VKS_CA_CERT_FILE at the Supervisor's CA (make vks-ca, or ask the platform team for
+  it), then re-run. REFUSING to continue: a credential is submitted over this connection." ;;
+        *) die "the CA at ${VKS_CA_CERT_FILE} does NOT verify the certificate ${SUPERVISOR_HOST}
+  presents. The endpoint ANSWERED, so this is not a reachability problem — the anchor is for a
+  different (usually a DESTROYED and rebuilt) Supervisor. A rebuild mints a new VMCA.
+    your anchor is:            $(openssl x509 -in "$VKS_CA_CERT_FILE" -noout -subject 2>/dev/null | sed 's/^subject=//')
+    the endpoint's cert issuer: $(printf '' | timeout 15 openssl s_client -connect "${SUPERVISOR_HOST}:443" 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | sed 's/^issuer=//')
+  (⚠️ these are SUBJECT vs ISSUER on purpose. An earlier version of this message printed the stored
+   CA's fingerprint beside the live LEAF's fingerprint — two different objects, which would never
+   match even when the anchor is correct. Comparable things, or the message misleads.)
+  Re-pin it from the lab that is actually running, then re-run. Do NOT reach for
+  VKS_INSECURE_SKIP_TLS_VERIFY: a credential is submitted over this connection." ;;
+      esac
       create_args+=(--ca-certificate "$VKS_CA_CERT_FILE")
       log_info "TLS: verifying the Supervisor against ${VKS_CA_CERT_FILE}"
     elif is_true "${VKS_INSECURE_SKIP_TLS_VERIFY:-}"; then   # one truthiness rule, repo-wide (lib/os.sh)
@@ -307,9 +407,42 @@ if [ -n "${VKS_CONTEXT:-}" ]; then
 fi
 
 log_info "verifying cluster reachability..."
-if kubectl cluster-info >/dev/null 2>&1 && kubectl get nodes >/dev/null 2>&1; then
+# ⚠️ CAPTURE stderr to its OWN file — do NOT merge the streams. The old form discarded everything
+# with `>/dev/null 2>&1` and then GUESSED ("check network + auth"), which is how a rebuilt lab told
+# an operator to check two things that were both fine. MEASURED 2026-08-05: the guest kubeconfig's
+# address still MATCHED (the LB IPs repeated across the rebuild) while its embedded `kubernetes` CA
+# belonged to the destroyed cluster. Right address, wrong CA — it reads as correctly configured.
+# Merging with 2>&1 is not an option: it makes the capture non-empty and inverts emptiness tests
+# downstream, which this repo has measured turning a WARN into a BLOCK asserting the opposite.
+_vks_err="$(mktemp)"; trap 'rm -f "$_vks_err"' EXIT
+if kubectl cluster-info >/dev/null 2>"$_vks_err" && kubectl get nodes >/dev/null 2>"$_vks_err"; then
   log_info "connected. Current context: $(kubectl config current-context)"
   kubectl get nodes -o wide >&2
 else
-  die "cannot reach the VKS cluster with the current kubeconfig/context — check network + auth"
+  case "$(classify_kube_failure "$_vks_err")" in
+    STALE_CA)
+      die "the kubeconfig's CA does not match what ${KUBECONFIG:-the current kubeconfig} is talking to.
+  The server ANSWERED — this is NOT a network or auth problem. A REBUILT cluster mints a new CA, and
+  the address often stays the same, so a stale kubeconfig looks correctly configured.
+    context: $(kubectl config current-context 2>/dev/null || echo '<none>')
+    server:  $(kubectl config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)
+  Re-fetch the kubeconfig from the cluster that is actually running, then re-run." ;;
+    UNAUTHORIZED)
+      die "the credential in this kubeconfig was REJECTED (Unauthorized) by
+  $(kubectl config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null).
+  The server answered, so it is reachable — the token or certificate has EXPIRED or belongs to a
+  cluster that no longer exists. Log in again and re-fetch the kubeconfig." ;;
+    FORBIDDEN)
+      die "authenticated, but this identity is not permitted to list nodes on
+  $(kubectl config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null).
+  That is an RBAC grant, not a broken kubeconfig — ask for the role, or use an identity that has it." ;;
+    UNREACHABLE)
+      die "cannot reach $(kubectl config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)
+  — no HTTP response. This one genuinely IS network: check the address is right, the cluster is up,
+  and that this host can route to it." ;;
+    *)
+      die "cannot reach the VKS cluster with the current kubeconfig/context. The error was not one
+  this script recognises, so it is printed verbatim rather than guessed at:
+$(sed 's/^/    /' "$_vks_err" 2>/dev/null | head -6)" ;;
+  esac
 fi

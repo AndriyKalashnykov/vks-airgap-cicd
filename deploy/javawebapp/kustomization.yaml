@@ -20,3 +20,23 @@ images:
 replicas:
   - name: javawebapp
     count: 2
+
+# Carry the DEPLOYED image tag into the app's own version/commit display.
+# ⚠️ Sourced from the container image AFTER the `images` transformer above applies newTag, so it
+# always matches what is really running. `delimiter: ":"` + `index: 1` takes the tag off
+# `<registry>/<project>/javawebapp:<tag>`.
+replacements:
+  - source:
+      kind: Deployment
+      name: javawebapp
+      fieldPath: spec.template.spec.containers.[name=javawebapp].image
+      options:
+        delimiter: ":"
+        index: 1
+    targets:
+      - select:
+          kind: Deployment
+          name: javawebapp
+        fieldPaths:
+          - spec.template.spec.containers.[name=javawebapp].env.[name=APP_VERSION].value
+          - spec.template.spec.containers.[name=javawebapp].env.[name=APP_COMMIT].value

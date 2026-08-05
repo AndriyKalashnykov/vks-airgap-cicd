@@ -68,16 +68,44 @@ EXEMPT='APP_DEV_PORT|INGRESS_CONTROLLER'
 #
 # So the invariant is: EVERY selector is commented OR in load_env's snapshot list. Nothing else passes.
 #
-# THE PROTECTED LIST IS DERIVED FROM lib/os.sh, NOT COPIED. A second hand-typed list is exactly the
-# enumerated-list rot this repo keeps getting bitten by: it would drift the first time someone adds a
-# selector to load_env and not here, and the gate would then reject a variable that is, in fact, safe.
-SELECTORS='KUBECONFIG|INGRESS_CONTROLLER|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_SUPERVISOR_KUBECONFIG|VKS_CONTEXT|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_CA_FILE'
+# THE PROTECTED LIST IS DERIVED FROM lib/os.sh, NOT COPIED (see PROTECTED below). ⚠️ THIS COMMENT SAT
+# DIRECTLY ABOVE THE HAND-TYPED `SELECTORS` AND READ AS IF IT DESCRIBED IT. It does not, and SELECTORS
+# HAD ALREADY DRIFTED: MEASURED 2026-08-05, load_env's list gained VKS_CA_SHA256 / HARBOR_CA_SHA256 /
+# ARGOCD_CA_SHA256 the same day and this line had ZERO of them. The arm below is
+# `if [[ "$v" =~ ^(${SELECTORS})$ ]]`, so a variable in os.sh but absent HERE is never recognized as a
+# selector and its check NEVER RUNS — the gate FAILS OPEN, silently, in the direction nobody looks.
+#
+# ⚠️⚠️ DO NOT "FIX" THIS BY DERIVING SELECTORS FROM PROTECTED. An adversary prescribed exactly that and
+# it would make the gate VACUOUS: the check is "is a SELECTOR **and** is NOT protected", so if the two
+# lists are the same set by construction, `is_protected` is always true and the error branch becomes
+# UNREACHABLE. The two must stay INDEPENDENT — SELECTORS is our JUDGEMENT about which variables select a
+# system, PROTECTED is the MECHANISM that actually survives a per-run override. The gate's whole value is
+# the gap between them.
+#
+# So: keep SELECTORS hand-curated, and ASSERT that it never falls behind the mechanism (below).
+SELECTORS='KUBECONFIG|INGRESS_CONTROLLER|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_SUPERVISOR_KUBECONFIG|VKS_CONTEXT|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_CA_FILE|VKS_CA_SHA256|HARBOR_CA_SHA256|ARGOCD_CA_SHA256'
 
 # Read the snapshot list out of load_env itself: `for _sel in A B C ...; do`
 PROTECTED="$(sed -n 's/^[[:space:]]*for _sel in \(.*\); do$/\1/p' "${REPO_ROOT}/scripts/lib/os.sh" | head -1)"
 [ -n "$PROTECTED" ] || die "cannot find load_env's selector snapshot list in lib/os.sh (did it move?) —
   refusing to guess: this gate would then either pass everything or reject safe variables."
 log_info "load_env snapshot-protects: ${PROTECTED}"
+
+# ⚠️ THE DRIFT ASSERTION. PROTECTED must be a SUBSET of SELECTORS: anything load_env bothers to snapshot
+# is, by that act, a selector — so if it is not in our recognizer, its clobber check never runs and this
+# gate reports OK over an unchecked variable. This is the failure that already happened (see above), and
+# it is invisible because the missing case simply does not execute. Deliberately NOT the reverse subset:
+# SELECTORS may legitimately name something load_env does not protect — that is precisely the defect the
+# gate exists to report, not an inconsistency to assert away.
+_drift=""
+for _p in $PROTECTED; do
+  [[ "$_p" =~ ^(${SELECTORS})$ ]] || _drift="${_drift} ${_p}"
+done
+[ -z "$_drift" ] || die "SELECTORS has FALLEN BEHIND load_env's snapshot list — this gate would silently
+  skip:${_drift}
+  Add them to SELECTORS in this file. Do NOT derive SELECTORS from PROTECTED to make this go away:
+  the check is 'is a selector AND is not protected', so identical lists make the error branch
+  unreachable and the gate vacuous."
 
 is_protected() { case " $PROTECTED " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 

@@ -34,6 +34,12 @@ problems=0
 ok()   { printf '  ok       %s\n' "$*" >&2; }
 bad()  { printf '  PROBLEM  %s\n' "$*" >&2; problems=$((problems + 1)); }
 note() { printf '           %s\n' "$*" >&2; }
+# ⚠️ A FOURTH state, and the file already had the pattern — check #3 (LoadBalancer) says
+# "This is NOT a pass" for something it cannot observe, while checks 1 and 2 did not.
+# An unknown carries the SAME downstream cost as a `no` (this whole file exists so a missing
+# permission does not kill the run 20 minutes into the mirror), so it must stay BLOCKING —
+# but it must not assert a permissions verdict nobody obtained.
+unk()  { printf '  UNKNOWN  %s\n' "$*" >&2; problems=$((problems + 1)); }
 
 printf '\n===================== lab preflight =====================\n' >&2
 log_info "cluster: $(kubectl config current-context 2>/dev/null || echo '<unknown>')"
@@ -41,7 +47,19 @@ kubectl version -o json >/dev/null 2>&1 \
   || die "cannot reach the cluster with the current KUBECONFIG — run 'make vks-login' first"
 
 # 1. CRDs — Tekton installs its own. Without this permission its install dies midway.
-if [ "$(kubectl auth can-i create customresourcedefinitions.apiextensions.k8s.io 2>/dev/null)" = yes ]; then
+# ⚠️ A reachability gate above already died if the cluster were unreachable, so `unknown` HERE
+# means something changed between the two calls (a credential expiring mid-run is the realistic
+# one). It must not print "may NOT create CRDs" — that is a claim about the operator's permissions
+# derived from a question nobody answered, and it sends them to their platform team for a grant
+# they may already hold.
+_rc="$(k_can_i auth can-i create customresourcedefinitions.apiextensions.k8s.io)"
+if [ "${_rc%%|*}" = unknown ]; then
+  unk "could not determine whether you may create CustomResourceDefinitions (${_rc#*|})"
+  note "This is NOT a permissions answer, so the cluster-admin remedy below does not apply. The"
+  note "reachability gate above already passed, so the likely causes are a credential expiring"
+  note "mid-run, or a cluster where SelfSubjectAccessReview itself is refused."
+  note "Re-run 'make vks-login', then this preflight."
+elif [ "${_rc%%|*}" = yes ]; then
   ok "may create CustomResourceDefinitions (Tekton installs its own)"
 else
   bad "may NOT create CustomResourceDefinitions — Tekton cannot be installed."

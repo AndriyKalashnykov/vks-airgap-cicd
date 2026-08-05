@@ -81,9 +81,11 @@ if [ "$ISTIO_ROUTE_API" = "gateway-api" ]; then
   log_warn "     then create that Secret in '${ISTIO_GWAPI_NAMESPACE:-vks-ingress}' yourself (your own namespace)."
   log_info "  RBAC you need (own namespaces only):"
   for ns in "${ISTIO_GWAPI_NAMESPACE:-vks-ingress}" "$GITEA_NAMESPACE" "$TEKTON_NAMESPACE" $(app_names | tr '\n' ' '); do
-    printf '    %-46s gateways=%s httproutes=%s\n' "$ns" \
-      "$(kubectl auth can-i create gateways.gateway.networking.k8s.io -n "$ns" 2>/dev/null || echo no)" \
-      "$(kubectl auth can-i create httproutes.gateway.networking.k8s.io -n "$ns" 2>/dev/null || echo no)" >&2
+    # ⚠️ A TABLE MAY SAY "unknown". `|| echo no` printed a PERMISSIONS ANSWER for a question that
+    # never reached the cluster — the operator then reads a grant they hold as one they lack.
+    _g="$(k_can_i auth can-i create gateways.gateway.networking.k8s.io -n "$ns")"
+    _h="$(k_can_i auth can-i create httproutes.gateway.networking.k8s.io -n "$ns")"
+    printf '    %-46s gateways=%s httproutes=%s\n' "$ns" "${_g%%|*}" "${_h%%|*}" >&2
   done
   echo >&2
   log_info "PREFLIGHT OK — 'make install-ingress INGRESS_CONTROLLER=istio-existing' will use the Gateway API."
@@ -121,14 +123,29 @@ echo >&2
 log_info "RBAC — what this kubeconfig may do (the mesh has no credentials; this IS the access model):"
 check() { # <what> <kubectl auth can-i args...>
   local what="$1"; shift
-  local ans; ans="$(kubectl auth can-i "$@" 2>/dev/null || echo no)"
-  printf '  %-58s %s\n' "$what" "$ans" >&2
+  # Three states. Callers keep the `= yes` boolean contract — every one of them tests `= yes` or
+  # `!= yes`, so a third token changes DISPLAY only and no control flow (verified across all call
+  # sites below). What it buys is that "could not ask" stops being printed as "no".
+  local _r; _r="$(k_can_i auth can-i "$@")"
+  local ans="${_r%%|*}" why="${_r#*|}"
+  # ⚠️ THE RETURN VALUE, NOT THE TOKEN, IS WHAT DRIVES CONTROL FLOW. Splitting the printed token
+  # without exposing the state changes NOTHING: `[ "$ans" = yes ]` compares identically for `no`
+  # and `unknown`, so a transport fault produced the same CAN_MAKE_GW=0; gw_state= as a denial and fired the
+  # "ASK THE MESH ADMIN to expose your hosts on a shared Gateway" remedy — a specific, wrong ask
+  # aimed at a person who cannot help. Callers that issue a REMEDY must gate on `no` specifically.
+  check_state="$ans"
+  if [ "$ans" = unknown ] && [ -n "$why" ]; then
+    printf '  %-58s %s (%s)\n' "$what" "$ans" "$why" >&2
+  else
+    printf '  %-58s %s\n' "$what" "$ans" >&2
+  fi
   [ "$ans" = "yes" ]
 }
 CAN_MAKE_GW=0
 check "read the gateway Service (${ISTIO_GATEWAY_NAMESPACE})"  get svc     -n "$ISTIO_GATEWAY_NAMESPACE" || \
   log_warn "  (discovery still worked above — but a kubeconfig that cannot read it must be HANDED ISTIO_GATEWAY_* values)"
 check "create a Gateway in ${ISTIO_GATEWAY_NAMESPACE}"         create gateways.networking.istio.io -n "$ISTIO_GATEWAY_NAMESPACE" && CAN_MAKE_GW=1
+gw_state="$check_state"   # captured BEFORE any later check() overwrites it
 check "create VirtualServices in ${GITEA_NAMESPACE}"           create virtualservices.networking.istio.io -n "$GITEA_NAMESPACE" || rc=1
 while read -r _a; do [ -n "$_a" ] || continue
   check "create VirtualServices in ${_a}" create virtualservices.networking.istio.io -n "$_a" || rc=1
@@ -140,6 +157,10 @@ check "create VirtualServices in ${TEKTON_NAMESPACE}"          create virtualser
 echo >&2
 if [ "$CAN_MAKE_GW" -eq 1 ]; then
   log_info "PLAN: you may create your own Gateway -> leave ISTIO_SHARED_GATEWAY unset."
+elif [ "$gw_state" = unknown ]; then
+  log_warn "PLAN: COULD NOT DETERMINE whether you may create a Gateway in ${ISTIO_GATEWAY_NAMESPACE}."
+  log_warn "  The probe did not reach the cluster, so this is NOT a permissions result and the mesh"
+  log_warn "  admin cannot help. Fix the connection or the trust anchor, then re-run this preflight."
 else
   log_warn "PLAN: you may NOT create a Gateway in ${ISTIO_GATEWAY_NAMESPACE}."
   log_warn "  -> ASK THE MESH ADMIN to expose your hosts on a shared Gateway, then set:"

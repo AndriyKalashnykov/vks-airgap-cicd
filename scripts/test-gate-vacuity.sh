@@ -126,7 +126,22 @@ _setup_die() { echo "test-gate-vacuity: SANDBOX SETUP FAILED — $1" >&2; echo "
 fresh() {
   rm -rf "${SB:?}/repo"; mkdir -p "$SB/repo" || _setup_die "cannot create the sandbox dir"
   git archive HEAD | tar -x -C "$SB/repo" || _setup_die "git archive HEAD | tar failed"
-  cp -a "${REPO_ROOT}/scripts/." "$SB/repo/scripts/" || _setup_die "could not overlay the working tree's scripts/"
+  # ⚠️ OVERLAY EVERY TRACKED FILE, NOT JUST scripts/.
+  # The overlay used to be `cp -a scripts/.` alone, which made the sandbox a CHIMERA: the working
+  # tree's scripts paired with HEAD's everything-else. MEASURED 2026-08-05: a change that adds a new
+  # operator variable must touch BOTH a script (which reads it) and .env.example (which documents it) —
+  # the sandbox then saw the new read against the OLD .env.example and reported
+  # "VKS_CA_SHA256 is READ by the scripts but is NOT in .env.example", while the real
+  # check-env-coverage said OK. A false RED on the harness whose entire job is judging gates.
+  # Naming .env.example here as a second special case would just move the rot one file along
+  # (apps/registry.tsv, images/images.txt and k8s/** are all somebody's ground truth), so overlay the
+  # working-tree version of everything git tracks. `git archive HEAD` still seeds the tree, so files
+  # you have DELETED but not committed stay present rather than vanishing mid-run, and untracked
+  # scratch never leaks in.
+  git ls-files -z \
+    | tar --null -T - -cf - 2>/dev/null \
+    | tar -x -C "$SB/repo" \
+    || _setup_die "could not overlay the working tree's tracked files"
   ( cd "$SB/repo" && git init -q . && git add -A >/dev/null 2>&1 \
       && git -c user.email=t@t -c user.name=t commit -qm starve >/dev/null 2>&1 ) \
     || _setup_die "could not re-init the sandbox as a git repo (several gates drive off git ls-files)"
