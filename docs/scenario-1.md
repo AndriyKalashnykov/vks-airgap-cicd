@@ -244,6 +244,32 @@ kubectl get kubernetesreleases
 → `.env`: `VKS_CLUSTERCLASS`, `VKS_K8S_VERSION`, `VKS_VM_CLASS`, `VKS_STORAGE_CLASS`,
 `VKS_CONTROL_PLANE_COUNT`, `VKS_NODE_COUNT`.
 
+> ⚠️ **These six keys are DOCUMENTED BUT NOT YET READ by any script** (measured: 0 readers each).
+> They record your intent and are the input the §4a/§4b automation will consume — but today the
+> cluster is created by whatever you apply by hand, so set the counts THERE.
+>
+> 🔴 **SIZING — provision at least TWO workers.** The platform install requests **~1.9 CPU** on a
+> worker, and a single 2-CPU node (`best-effort-small`) **will not fit it**. MEASURED 2026-08-05 on
+> a real 9.1 lab:
+>
+> | | |
+> |---|---|
+> | worker allocatable | **1930m** (a 2-CPU node after system reserve) |
+> | requested by the platform | **1840m (95%)** |
+> | `tekton-pipelines-webhook` wants | **100m** |
+> | → | **short by 10m**, `FailedScheduling` |
+>
+> The control plane does **not** help: the platform's pods carry no control-plane toleration, so a
+> 2-node cluster gives you exactly **one** schedulable node. And 95% was measured *before any
+> pipeline ran* — Tekton tasks need burst capacity, not just steady-state fit.
+>
+> Prefer **more workers** over a larger `VKS_VM_CLASS`: you cannot be sure a given VM class is
+> offered in your namespace, but a node count always works. If you get this wrong the install
+> proceeds for ~20 minutes and then fails at `install-tekton` — and it will report **four** timed-out
+> deployments when only **one** is genuinely stuck, because the other three come up after
+> `kubectl wait` gives up. Scaling afterwards is cheap (a second node went Ready in 19 s), but the
+> 20 minutes are not.
+>
 > ⚠️ **`.status.phase == Provisioned` is NOT readiness.** A cluster reports `Provisioned` before its
 > nodes join, and a real one has been observed sitting there with **zero** available nodes. Gate on
 > the conditions instead, then on nodes:
