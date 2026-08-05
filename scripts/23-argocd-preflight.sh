@@ -106,19 +106,38 @@ if [ "$ns_rc" != 0 ]; then
   fi
 fi
 can_kubectl=0
-if [ "$(ka auth can-i create applications.argoproj.io -n "$NS" 2>/dev/null || echo no)" = yes ]; then
-  can_kubectl=1
-  log_info "kubectl  : YES — you may create Applications in ns/$NS (the Scenario 1 / KinD path)."
-else
-  log_info "kubectl  : no  — you may NOT create Applications in ns/$NS with kubectl."
-fi
+# ⚠️ THE FLAGS ARE PASSED EXPLICITLY, not via ka(). k_can_i runs `kubectl "$@"`, so routing a
+# ka() call through it would DROP --kubeconfig and silently probe the WRONG CLUSTER — a far worse
+# failure than the one being fixed. Keep them here, where they are visible.
+_r="$(k_can_i --kubeconfig "$ARGOCD_KUBECONFIG" --request-timeout=15s \
+        auth can-i create applications.argoproj.io -n "$NS")"
+case "${_r%%|*}" in
+  yes) can_kubectl=1
+       log_info "kubectl  : YES — you may create Applications in ns/$NS (the Scenario 1 / KinD path)." ;;
+  no)  log_info "kubectl  : no  — you may NOT create Applications in ns/$NS with kubectl." ;;
+  # This is a REPORT, so it may legitimately say "could not determine" — but it must not print
+  # "no", which is an answer about YOUR PERMISSIONS that nobody obtained.
+  *)   log_info "kubectl  : COULD NOT DETERMINE (${_r#*|}) — the probe did not reach the cluster, so
+             this is NOT a permissions answer. Fix the connection, then re-run." ;;
+esac
 can_api=unknown
 if have argocd && [ -n "${ARGOCD_SERVER:-}" ] && [ -n "${ARGOCD_AUTH_TOKEN:-}" ]; then
-  if argocd account can-i create applications "${ARGOCD_PROJECT:-default}/*" >/dev/null 2>&1; then
-    can_api=yes; log_info "argocd API: YES — argocd-server permits you to create Applications in project '${ARGOCD_PROJECT:-default}'."
-  else
-    can_api=no;  log_info "argocd API: no  — argocd-server refuses (check your AppProject role)."
-  fi
+  # ⚠️ `if argocd … ; then can_api=yes` FILED A DENIAL AS PERMITTED. Verified in upstream argo-cd
+  # at the INSTALLED version v3.4.5: a refusal returns `&CanIResponse{Value:"no"}, nil` — a NIL
+  # error — and the CLI does `CheckError(err); fmt.Println(response.Value)`, so it PRINTS "no" and
+  # EXITS 0. The `>/dev/null` then discarded the only thing carrying the answer. Compare the
+  # OUTPUT; rc alone says the RPC completed, never that you may.
+  _ra="$(argocd_can_i create applications "${ARGOCD_PROJECT:-default}/*")"
+  case "${_ra%%|*}" in
+    yes) can_api=yes; log_info "argocd API: YES — argocd-server permits you to create Applications in project '${ARGOCD_PROJECT:-default}'." ;;
+    no)  can_api=no;  log_info "argocd API: no  — argocd-server refuses (check your AppProject role)." ;;
+    # ⚠️ NOT "refuses". argocd-server never saw the request, so an AppProject role is the wrong
+    # remedy — that message sent operators to request a grant they already held.
+    *)   can_api=unknown
+         log_info "argocd API: COULD NOT DETERMINE (${_ra#*|}) — argocd-server never received the
+             request, so this is NOT a permissions answer and an AppProject role will not fix it.
+             If the reason is a trust anchor: make fetch-argocd-ca, then set ARGOCD_CA_FILE." ;;
+  esac
 else
   log_info "argocd API: not probed — set ARGOCD_SERVER + ARGOCD_AUTH_TOKEN (and install the argocd CLI) to test the tenant path."
 fi

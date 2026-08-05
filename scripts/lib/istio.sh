@@ -215,6 +215,20 @@ istio_gwapi_crds_present() {
 istio_detect_route_api() {
   local have_classic=0 have_gwapi=0 gwclass_ok=""
 
+  # ⚠️ A PRESENCE CHECK COLLAPSES "ABSENT" ONTO "UNREACHABLE" exactly the way a capability check
+  # collapses "denied" onto "unreachable" — and here the consequence is a `die` naming the wrong
+  # cause: "the VirtualService CRD is absent" for a cluster that never answered. Establish the
+  # transport ONCE, up front, so every check below is a genuine statement about the cluster's
+  # CONTENTS. This is a presence question, not a permissions one, so it does not use k_can_i.
+  local _perr; _perr="$(mktemp)"
+  if ! kubectl api-resources --request-timeout=15s >/dev/null 2>"$_perr"; then
+    local _cls; _cls="$(classify_kube_failure "$_perr")"; rm -f "$_perr"
+    die "cannot read the cluster's API resources (${_cls}), so nothing below is a statement about
+  what is INSTALLED — it would only be a statement about the connection. Refusing to report a
+  route API I could not observe. Fix the connection or the trust anchor, then re-run."
+  fi
+  rm -f "$_perr"
+
   kubectl get crd virtualservices.networking.istio.io >/dev/null 2>&1 && have_classic=1
   if kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
     # The CRDs alone are not enough — Istio must actually be the controller for a

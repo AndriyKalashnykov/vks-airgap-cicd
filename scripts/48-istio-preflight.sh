@@ -81,9 +81,11 @@ if [ "$ISTIO_ROUTE_API" = "gateway-api" ]; then
   log_warn "     then create that Secret in '${ISTIO_GWAPI_NAMESPACE:-vks-ingress}' yourself (your own namespace)."
   log_info "  RBAC you need (own namespaces only):"
   for ns in "${ISTIO_GWAPI_NAMESPACE:-vks-ingress}" "$GITEA_NAMESPACE" "$TEKTON_NAMESPACE" $(app_names | tr '\n' ' '); do
-    printf '    %-46s gateways=%s httproutes=%s\n' "$ns" \
-      "$(kubectl auth can-i create gateways.gateway.networking.k8s.io -n "$ns" 2>/dev/null || echo no)" \
-      "$(kubectl auth can-i create httproutes.gateway.networking.k8s.io -n "$ns" 2>/dev/null || echo no)" >&2
+    # ⚠️ A TABLE MAY SAY "unknown". `|| echo no` printed a PERMISSIONS ANSWER for a question that
+    # never reached the cluster — the operator then reads a grant they hold as one they lack.
+    _g="$(k_can_i auth can-i create gateways.gateway.networking.k8s.io -n "$ns")"
+    _h="$(k_can_i auth can-i create httproutes.gateway.networking.k8s.io -n "$ns")"
+    printf '    %-46s gateways=%s httproutes=%s\n' "$ns" "${_g%%|*}" "${_h%%|*}" >&2
   done
   echo >&2
   log_info "PREFLIGHT OK — 'make install-ingress INGRESS_CONTROLLER=istio-existing' will use the Gateway API."
@@ -121,8 +123,16 @@ echo >&2
 log_info "RBAC — what this kubeconfig may do (the mesh has no credentials; this IS the access model):"
 check() { # <what> <kubectl auth can-i args...>
   local what="$1"; shift
-  local ans; ans="$(kubectl auth can-i "$@" 2>/dev/null || echo no)"
-  printf '  %-58s %s\n' "$what" "$ans" >&2
+  # Three states. Callers keep the `= yes` boolean contract — every one of them tests `= yes` or
+  # `!= yes`, so a third token changes DISPLAY only and no control flow (verified across all call
+  # sites below). What it buys is that "could not ask" stops being printed as "no".
+  local _r; _r="$(k_can_i auth can-i "$@")"
+  local ans="${_r%%|*}" why="${_r#*|}"
+  if [ "$ans" = unknown ] && [ -n "$why" ]; then
+    printf '  %-58s %s (%s)\n' "$what" "$ans" "$why" >&2
+  else
+    printf '  %-58s %s\n' "$what" "$ans" >&2
+  fi
   [ "$ans" = "yes" ]
 }
 CAN_MAKE_GW=0

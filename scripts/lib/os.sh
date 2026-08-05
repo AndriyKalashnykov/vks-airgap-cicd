@@ -909,6 +909,65 @@ assert_run_sentinel() {
 # verify certificate: x509…" and "Unable to connect to the server: dial tcp …: no route to host"
 # SHARE their prefix, so an "Unable to connect" matcher conflates a stale CA with a dead lab —
 # reintroducing exactly the confusion this exists to remove.
+# ── three-state capability probes ───────────────────────────────────────────────────────────────
+#
+# ⚠️ TWO STATES IS THE BUG. `$(cmd 2>/dev/null || echo no)` collapses "you are refused" and
+# "the question never reached the server" onto the same token, so a TLS/CA/network fault is
+# reported to a customer as an RBAC denial and they go request a grant they already have.
+# These return a THIRD state, `unknown`, and leave the reason in K_CAN_I_CLASS.
+#
+# Callers must decide what `unknown` MEANS for them — it is not one behaviour:
+#   a capability LADDER   -> warn loudly, do NOT select that mechanism
+#   an EXPLICIT choice    -> die; an operator's explicit request must never be silently downgraded
+#   a NEGATIVE CONTROL    -> die; "could not ask" is a hard failure, never a passing assertion
+#   a report/table        -> print it; a report may legitimately say "could not determine"
+#
+# ⚠️ THEY PRINT "state|class", NOT a state plus a GLOBAL. The first draft set K_CAN_I_CLASS and
+# every caller reads these through `$( )` — a SUBSHELL — so the global could never escape and the
+# reason was silently lost at every single site. A global cannot cross a subshell; the return
+# value can. Callers split: `ans="${r%%|*}"; why="${r#*|}"`.
+
+# k_can_i <kubectl-args...> -> prints yes|no|unknown
+k_can_i() {
+  local _out _err _rc=0
+  _err="$(mktemp)"
+  # ⚠️ stderr to its OWN FILE, never `2>&1`. classify_kube_failure's header states the reason:
+  # merging makes the capture non-empty, which inverts any `[ -z ]` emptiness test downstream.
+  # It also keeps kubectl's yes/no (stdout) out of the text being classified.
+  _out="$(kubectl "$@" 2>"$_err")" || _rc=$?
+  if [ "$_rc" -ne 0 ] && [ -s "$_err" ] && ! printf '%s' "$_out" | command grep -qx 'no'; then
+    # rc!=0 with no usable answer on stdout: the probe did not get to ask.
+    local _cls; _cls="$(classify_kube_failure "$_err")"; rm -f "$_err"
+    printf 'unknown|%s' "$_cls"; return 0
+  fi
+  rm -f "$_err"
+  # ⚠️ kubectl prints its answer to STDOUT and exits 1 on a denial, so rc alone cannot be trusted
+  # in EITHER direction. Read the answer.
+  case "$_out" in *yes*) printf 'yes|' ;; *no*) printf 'no|' ;; *) printf 'unknown|UNPARSEABLE' ;; esac
+}
+
+# argocd_can_i <can-i args...> -> prints yes|no|unknown
+argocd_can_i() {
+  local _out _err _rc=0
+  _err="$(mktemp)"
+  _out="$(argocd account can-i "$@" 2>"$_err")" || _rc=$?
+  # ⚠️ THE EXIT CODE FILES A DENIAL AS PERMITTED. Verified in upstream argo-cd at the INSTALLED
+  # version v3.4.5: server/account/account.go returns `&CanIResponse{Value:"no"}, nil` — a NIL
+  # error — and cmd/argocd/commands/account.go does `CheckError(err); fmt.Println(response.Value)`,
+  # so a refusal PRINTS "no" and EXITS 0. The old `if argocd account can-i … >/dev/null; then
+  # can_api=yes; fi` therefore recorded a REFUSED tenant as permitted, and the `>/dev/null` threw
+  # away the one thing carrying the answer. Compare the OUTPUT; never branch on rc alone.
+  if [ "$_rc" -ne 0 ]; then
+    # argocd emits JSON on stderr, a different vocabulary from kubectl's plain text — classify what
+    # we can and fall back to a transport-shaped guess rather than asserting a permissions answer.
+    K_CAN_I_CLASS="$(classify_kube_failure "$_err")"
+    [ "$K_CAN_I_CLASS" = UNKNOWN ] && command grep -qiE 'failed to establish connection|connection refused|x509|tls' "$_err"       && K_CAN_I_CLASS=UNREACHABLE
+    rm -f "$_err"; printf 'unknown'; return 0
+  fi
+  rm -f "$_err"; K_CAN_I_CLASS=""
+  case "$_out" in yes) printf 'yes' ;; no) printf 'no' ;; *) printf 'unknown' ;; esac
+}
+
 classify_kube_failure() {
   local errfile="${1:-/dev/null}" e=""
   [ -r "$errfile" ] && e="$(cat "$errfile" 2>/dev/null || true)"

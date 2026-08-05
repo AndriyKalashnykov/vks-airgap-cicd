@@ -67,7 +67,18 @@ if [ "$ARGOCD_REGISTER" != force ]; then
   # Registration mints a cluster-admin ClusterRoleBinding on the guest AND writes a Secret into the
   # ArgoCD namespace. A tenant can do neither. Say so plainly instead of failing with a stack of
   # Forbidden errors.
-  if [ "$(kubectl --kubeconfig "$ARGOCD_KUBECONFIG" auth can-i create secrets -n "$ARGOCD_NAMESPACE" 2>/dev/null || echo no)" != yes ]; then
+  # ⚠️ THE "ADMIN-ONLY" REMEDY IS CORRECT ONLY FOR A REAL DENIAL. On a transport failure the old
+  # `!= yes` printed it anyway, sending the operator to request a grant they already held — and
+  # then `exit 0`, so the guest silently stayed unregistered and the Application failed later with
+  # a destination error pointing nowhere near the cause.
+  _rs="$(k_can_i --kubeconfig "$ARGOCD_KUBECONFIG" --request-timeout=15s \
+          auth can-i create secrets -n "$ARGOCD_NAMESPACE")"
+  if [ "${_rs%%|*}" = unknown ]; then
+    die "cannot tell whether you may register the guest cluster: the probe never reached the ArgoCD
+  cluster (${_rs#*|}). This is NOT a permissions problem, so asking your platform team for a grant
+  will not fix it. Refusing to skip registration on a capability nobody measured."
+  fi
+  if [ "${_rs%%|*}" != yes ]; then
     log_warn "you may not create Secrets in ns/${ARGOCD_NAMESPACE} on the ArgoCD cluster — registration is ADMIN-only."
     log_warn "  REQUEST from your platform team: register guest cluster '$(kubectl --kubeconfig "$GUEST_KUBECONFIG" config current-context 2>/dev/null || echo guest)' ($guest_api) as an ArgoCD destination."
     log_warn "  Then set ARGOCD_DEST_CLUSTER_NAME (the name they registered it under) and re-run 'make gitops'."

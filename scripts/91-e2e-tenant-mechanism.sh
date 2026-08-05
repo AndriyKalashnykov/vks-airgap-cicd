@@ -137,9 +137,19 @@ EOF
 
 # RED-1: the tenant must NOT be able to create Applications with kubectl. If they can, this test
 # proves nothing — it would be exercising the kubectl path under a different name.
-if [ "$(kubectl --kubeconfig "$TENANT_KC" auth can-i create applications.argoproj.io -n "$NS" 2>/dev/null || echo no)" = yes ]; then
-  die "FAIL: the tenant kubeconfig CAN kubectl-create Applications in ns/${NS} — this fixture does not reproduce a tenant."
-fi
+# ⚠️ THIS IS A NEGATIVE CONTROL, SO "COULD NOT ASK" IS A HARD FAILURE, NOT A PASS. The old
+# `|| echo no` made ANY transport failure produce exactly "no" — byte-identical to a real denial —
+# so the `= yes` test was false and the script logged "RED 1 OK". It went GREEN having never asked,
+# and then claimed to reproduce a tenant boundary that was never measured. A control that cannot
+# fail is not a control.
+_rt="$(k_can_i --kubeconfig "$TENANT_KC" --request-timeout=15s \
+        auth can-i create applications.argoproj.io -n "$NS")"
+case "${_rt%%|*}" in
+  yes) die "FAIL: the tenant kubeconfig CAN kubectl-create Applications in ns/${NS} — this fixture does not reproduce a tenant." ;;
+  no)  : ;;   # the assertion genuinely held
+  *)   die "FAIL: the RED-1 probe never reached the cluster (${_rt#*|}), so it proved NOTHING about
+  the tenant boundary. Refusing to report a control I did not observe." ;;
+esac
 log_info "RED 1 OK — the tenant CANNOT create Applications in ns/${NS} with kubectl (Forbidden), as on a real lab."
 
 # ---- 3. the tenant's argocd-server token --------------------------------------------------------

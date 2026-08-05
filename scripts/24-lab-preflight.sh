@@ -41,7 +41,17 @@ kubectl version -o json >/dev/null 2>&1 \
   || die "cannot reach the cluster with the current KUBECONFIG — run 'make vks-login' first"
 
 # 1. CRDs — Tekton installs its own. Without this permission its install dies midway.
-if [ "$(kubectl auth can-i create customresourcedefinitions.apiextensions.k8s.io 2>/dev/null)" = yes ]; then
+# ⚠️ A reachability gate above already died if the cluster were unreachable, so `unknown` HERE
+# means something changed between the two calls (a credential expiring mid-run is the realistic
+# one). It must not print "may NOT create CRDs" — that is a claim about the operator's permissions
+# derived from a question nobody answered, and it sends them to their platform team for a grant
+# they may already hold.
+_rc="$(k_can_i auth can-i create customresourcedefinitions.apiextensions.k8s.io)"
+if [ "${_rc%%|*}" = unknown ]; then
+  bad "could not determine whether you may create CustomResourceDefinitions (${_rc#*|})"
+  note "The cluster answered a moment ago, so this is not a permissions result — a credential may have"
+  note "expired mid-run. Re-run 'make vks-login', then this preflight."
+elif [ "${_rc%%|*}" = yes ]; then
   ok "may create CustomResourceDefinitions (Tekton installs its own)"
 else
   bad "may NOT create CustomResourceDefinitions — Tekton cannot be installed."
