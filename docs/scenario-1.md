@@ -386,14 +386,44 @@ fails. `make mirror` and `make platform` then wire it into `SSL_CERT_FILE` and t
 **Getting the CA when it is not on the wire** — pick either:
 
 ```bash
-# A. From the cluster (scriptable; needs read on Harbor's namespace).
-#    The namespace is the Supervisor Service's, e.g. svc-harbor-<suffix> — find it with:
-#      kubectl get ns | grep harbor
-kubectl -n <harbor-ns> get secret harbor-ca-key-pair \
-  -o jsonpath='{.data.ca\.crt}' | base64 -d > "$HARBOR_CA_FILE"
-
-# B. From the UI: Harbor → project → Registry Certificate downloads ca.crt.
+# A. From the UI — PREFER THIS. Harbor → project → Registry Certificate downloads ca.crt.
+#    It needs only a Harbor login: NO Kubernetes access, and no admin grant (see B).
 #    Strip any trailing <CR> — it breaks the PEM parse.
+
+# B. From the cluster (scriptable) — but read the grant it costs, first.
+#
+#    🔴 `get secret harbor-ca-key-pair` ALSO RETURNS THE CA's PRIVATE SIGNING KEY.
+#       MEASURED: it is type kubernetes.io/tls with keys ca.crt / tls.crt / tls.key, and
+#       tls.crt is byte-identical to ca.crt (self-signed, CA:TRUE). Kubernetes RBAC has no
+#       field-level read, so whoever can run this can MINT a certificate for anything that
+#       every HARBOR_CA_FILE consumer (crane, podman, Kaniko) trusts. That is an admin-level
+#       grant, not a read-only one. Route A above needs none of it.
+#
+#    ⚠️ Three things below are load-bearing; the naive one-liner gets all three wrong and
+#       TRUNCATES A WORKING CA TO 0 BYTES AT rc=0 (measured, twice — see the notes).
+t=$(mktemp)
+ns=$(kubectl --kubeconfig ./secrets/supervisor.kubeconfig \
+       get ns -l appplatform.vmware.com/serviceId=harbor -o name)   # 1. authoritative selector,
+[ "$(printf '%s\n' "$ns" | wc -l)" = 1 ] || { echo "expected exactly ONE harbor namespace, got: $ns"; }
+kubectl --kubeconfig ./secrets/supervisor.kubeconfig \
+        -n "${ns#namespace/}" get secret harbor-ca-key-pair \
+        -o jsonpath='{.data.ca\.crt}' | base64 -d > "$t" \
+  && [ -s "$t" ] \
+  && openssl x509 -in "$t" -noout -subject >/dev/null \
+  && mv "$t" "$HARBOR_CA_FILE"                                      # 3. validate, THEN move
+rm -f "$t"
+#    1. `kubectl get ns | grep harbor` is enumerated-list rot: 0 matches yields an EMPTY
+#       namespace and kubectl silently runs against `default`; 2+ matches (a tenant namespace
+#       called my-harbor-apps, a second Harbor) feeds it a multi-line value. Neither is
+#       detected. The label is authoritative and returns exactly one.
+#    2. `--kubeconfig ./secrets/supervisor.kubeconfig` is REQUIRED. Harbor runs on the
+#       SUPERVISOR, but .env sets KUBECONFIG to the GUEST cluster, which has no harbor
+#       namespace at all. MEASURED: ambient kubectl gives "Error from server (NotFound)"
+#       with rc=0, so the redirect below would truncate your working CA to 0 bytes.
+#    3. NEVER `> "$HARBOR_CA_FILE"` directly. A jsonpath miss on an EXISTING secret yields
+#       rc=0 and empty output; `base64 -d` on empty yields rc=0 and a 0-byte file; the whole
+#       pipeline under `set -euo pipefail` is rc=0. So a renamed key, a different Harbor
+#       version, or the wrong cluster REPLACES a good CA and reports success.
 
 # VERIFY it either way — a file that exists is not a trust anchor that works:
 openssl s_client -connect "$HARBOR_URL:443" -servername "$HARBOR_URL" </dev/null 2>/dev/null \
