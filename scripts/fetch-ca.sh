@@ -76,9 +76,31 @@ if [ "$n" -eq 1 ]; then
   # A single cert. It is a legitimate trust anchor ONLY if it is self-signed (subject == issuer);
   # otherwise the server is not sending its issuer and we cannot derive the CA from the wire at all.
   if [ "$subj" != "$issu" ]; then
+    # ⚠️ THIS die IS SHARED. Makefile calls this script for BOTH harbor and argocd, and there is one
+    # die here — so any Harbor-specific recipe printed below would also print on an ArgoCD CA failure,
+    # naming a Harbor UI page that has nothing to do with what just failed. The die stays GENERIC and
+    # the per-service recipe lives in docs/scenario-1.md, which is already per-service.
+    #
+    # ⚠️ AND THE ORDER OF THE TWO ROUTES IS THE WHOLE POINT. The scriptable route (reading Harbor's
+    # `harbor-ca-key-pair` Secret) ALSO returns the CA's PRIVATE SIGNING KEY: measured, it is
+    # kubernetes.io/tls with ca.crt(1540)/tls.crt(1540)/tls.key(2236), sha256(ca.crt)==sha256(tls.crt),
+    # self-signed CA:TRUE — and Kubernetes RBAC has no field-level read, so whoever can run it can MINT
+    # a certificate every consumer of this file trusts. The UI route needs only a service login and no
+    # Kubernetes access at all. Printing the privileged route first, with a disclosure underneath, IS
+    # the laundering: a disclosure only changes behaviour when a CHEAPER path sits beside it.
     die "${host}:${port} presents ONE certificate that is NOT self-signed (subject != issuer).
-  Its CA is not on the wire, so it cannot be fetched from here. Ask the platform team for the issuing CA
-  (subject: ${subj} / issuer: ${issu}) and point ${LABEL^^}_CA_FILE at it."
+  Its CA is not on the wire, so it cannot be fetched from here.
+    subject: ${subj}
+    issuer:  ${issu}
+
+  Get the issuing CA the cheap way FIRST — it needs only a login to ${LABEL}, no Kubernetes access
+  and no cluster RBAC: open ${LABEL}'s own UI and download its registry/root certificate.
+
+  Only if that is unavailable, ask the platform team for the issuing CA directly. There is also a
+  read-it-from-the-cluster route, but it costs an ADMIN-level grant (the Secret carries the CA's
+  private key, not just the certificate) — docs/scenario-1.md §6 documents it, and what it costs.
+
+  Either way, point ${LABEL^^}_CA_FILE at the file you obtain."
   fi
   log_info "server presents a single SELF-SIGNED certificate — it is its own CA"
 else
