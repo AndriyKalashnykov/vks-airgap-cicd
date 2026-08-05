@@ -38,8 +38,28 @@ fi
 # nothing serves that host, and no /etc/hosts entry can make it. The script already knew this — it hides
 # the /etc/hosts hint when INGRESS_LB_IP is unset — and printed the URLs anyway.
 # Harbor and ArgoCD are NOT affected: they keep their own LoadBalancers.
+# ⚠️ PRESENCE IS NOT LIVENESS, and this variable is the worst place for that confusion because it is
+# published to the state overlay by an install and SURVIVES A REBUILD. MEASURED 2026-08-05 after a
+# rebuild: .env.state carried INGRESS_LB_IP=192.168.101.135 from a lab that no longer existed — no
+# ping, tcp/80 closed, no such LoadBalancer in the cluster — and this report printed an /etc/hosts
+# line for it plus four http://*.vks.local URLs. The operator pastes a hosts entry pointing at
+# nothing and then debugs their browser.
+# So: a bounded TCP connect decides whether the ingress is real. One connect, 2s, no dependency on
+# kubectl or a cluster round-trip. It can only DOWNGRADE the claim — an ingress that answers is
+# reported exactly as before.
+# ⚠️ A FALSE 'dead' IS THE RISK TO AVOID: this deliberately probes the ADVERTISED port and treats
+# anything other than a refused/timed-out connect as alive. If it cannot decide, it keeps the value.
 _ing="${INGRESS_LB_IP:-}"
+_ing_live=1
+if [ -n "$_ing" ]; then
+  timeout 2 bash -c "exec 3<>/dev/tcp/${_ing}/${INGRESS_PROBE_PORT:-80}" 2>/dev/null || _ing_live=0
+fi
 ingress_url() {  # ingress_url <host> -> the URL, or an honest marker when no ingress exists
+  # ⚠️ DO NOT WITHHOLD THE URL WHEN THE PROBE FAILS. A first version printed
+  # "<ingress NOT ANSWERING>" in the URL column, and test-creds-show refused it with the argument
+  # that settles it: "Over-correcting into silence is its own defect: with an ingress, those URLs
+  # are exactly what the operator wants." The URL is still the right answer; the liveness warning
+  # belongs ABOVE the table, once, not smeared across every row where it destroys the column.
   if [ -n "$_ing" ]; then printf 'http://%s' "$1"; else printf '<needs ingress>'; fi
 }
 gitea_url="${GITEA_URL:-$(ingress_url "${GITEA_HOST:-gitea.vks.local}")}"
@@ -58,8 +78,28 @@ elif [ -n "${ARGOCD_SERVER:-}" ]; then
     *)                  argocd_url="${argo_scheme}://${ARGOCD_SERVER}" ;;
   esac
 else
-  # A SENTENCE IN A URL COLUMN DESTROYS THE TABLE. Keep the cell short; the instruction goes in a footnote.
-  argocd_url="<not set>"
+  # DISCOVER IT before giving up. MEASURED 2026-08-05: this printed `<not set>` and a footnote telling
+  # the operator to "set ARGOCD_SERVER in .env" — while `kubectl -n <ns> get svc argocd-server` returned
+  # 192.168.101.131 in one call. Asking someone to look up a value we can read ourselves is the same
+  # defect the ARGOCD_SERVER branch above was already written to fix, one level down.
+  # ⚠️ BOUNDED and NON-FATAL: --request-timeout, `|| true` on every leg, and it must never turn a
+  # read-only summary into a hang or a die on an unreachable cluster. Failure just leaves <not set>.
+  _argo_ip=""
+  if [ -n "${ARGOCD_KUBECONFIG:-}${KUBECONFIG:-}" ] && have kubectl; then
+    _argo_ns="${ARGOCD_NAMESPACE:-}"
+    [ -n "$_argo_ns" ] || _argo_ns="$(KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s \
+        get svc -A -o jsonpath='{range .items[?(@.metadata.name=="argocd-server")]}{.metadata.namespace}{end}' 2>/dev/null || true)"
+    if [ -n "$_argo_ns" ]; then
+      _argo_ip="$(KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s -n "$_argo_ns" \
+          get svc argocd-server -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+    fi
+  fi
+  if [ -n "$_argo_ip" ]; then
+    argocd_url="${argo_scheme}://${_argo_ip} (discovered from the cluster)"
+  else
+    # A SENTENCE IN A URL COLUMN DESTROYS THE TABLE. Keep the cell short; the instruction goes in a footnote.
+    argocd_url="<not set>"
+  fi
 fi
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
@@ -147,13 +187,39 @@ fi
 # CANONICAL PROVENANCE TOKEN — the machine-checkable claim, independent of any wording around it.
 # MACHINE-ONLY: the gate asks for it (CREDS_TOKEN=1); a human should not have to read a token to learn
 # something the Context block below tells them in words. A test's needs do not get to clutter the product.
-[ "${CREDS_TOKEN:-0}" = "1" ] && \
-  printf 'values-provenance: %s\n' "$([ "$_have_sink" = 1 ] && echo DISCOVERED || echo DEFAULT)"
+# ⚠️ THIS WAS A BINARY AND NEEDED A THIRD STATE. "An overlay exists" was reported as DISCOVERED —
+# but an overlay SURVIVES A REBUILD, so its values may belong to a cluster that no longer exists.
+# MEASURED 2026-08-05 after a lab rebuild, all three from ONE run of this report:
+#   * the ArgoCD password printed as current was REJECTED by the live API (HTTP 401);
+#   * INGRESS_LB_IP 192.168.101.135 had no ping, tcp/80 closed, and no such LoadBalancer;
+#   * ArgoCD's address printed <not set> while `kubectl get svc argocd-server` returned .131.
+# A report that DISPLAYS a stale credential is worse than one that fails: you copy it, get 401, and
+# nothing says why. The repo already had the discriminator — state.sh stamps VKS_STATE_SERVER — it
+# just was not used here.
+#   STAMPED + matches the reachable cluster -> DISCOVERED (this cluster wrote it)
+#   overlay present, UNSTAMPED or mismatched -> STORED    (may predate this cluster)
+#   no overlay                               -> DEFAULT   (placeholders; nothing is installed)
+# ⚠️ `|| true` IS REQUIRED. An UNSTAMPED overlay is the COMMON case and the one this tri-state
+# exists for — grep then exits 1, the assignment returns 1, and `set -e` kills the report before it
+# prints anything. Measured: `make creds` died with "Error 1" and no output at all.
+_stamp="$(grep -m1 '^VKS_STATE_SERVER=' "$_sink" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)"
+_live_srv="$(kubectl --request-timeout=3s config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)"
+if   [ "$_have_sink" != 1 ];                                   then _prov=DEFAULT
+elif grep -q '^VKS_STATE_KIND=1' "$_sink" 2>/dev/null;                 then _prov=DISCOVERED
+elif [ -n "$_stamp" ] && [ "$_stamp" = "${_live_srv:-__none__}" ]; then _prov=DISCOVERED
+else                                                                _prov=STORED
+fi
+[ "${CREDS_TOKEN:-0}" = "1" ] && printf 'values-provenance: %s\n' "$_prov"
 printf '\n  Context\n'
-printf '    values below : %s\n' \
-  "$([ "$_have_sink" = 1 ] \
-     && echo "DISCOVERED — read from the state overlay written by the installers" \
-     || echo "DEFAULTS from .env / .env.example — NOTHING IS INSTALLED YET, these are placeholders")"
+case "$_prov" in
+  DISCOVERED) printf '    values below : DISCOVERED — the overlay is stamped for the cluster you are talking to\n' ;;
+  STORED)     printf '    values below : STORED — read from a state overlay that is NOT confirmed to belong to\n'
+              printf '                   this cluster. An overlay SURVIVES A REBUILD, so a password or an IP\n'
+              printf '                   here may be from a lab that no longer exists. Run: make state-stamp\n'
+              printf '                   after an install to make it self-identifying; re-run any value that\n'
+              printf '                   is rejected rather than assuming it is wrong.\n' ;;
+  *)          printf '    values below : DEFAULTS from .env / .env.example — NOTHING IS INSTALLED YET, these are placeholders\n' ;;
+esac
 printf '    state overlay: %s\n' \
   "$([ "$_have_sink" = 1 ] && echo "$_sink" || echo "none — no installer has published anything")"
 printf '    flow         : %s\n' "$_flow"
@@ -163,7 +229,14 @@ echo
 echo "Access the UIs:"
 
 # --- /etc/hosts helper (only when an ingress LB actually exists) -----------------------
-if [ -n "${INGRESS_LB_IP:-}" ]; then
+if [ -n "${INGRESS_LB_IP:-}" ] && [ "$_ing_live" != 1 ]; then
+  echo
+  echo "  ⚠️  the recorded ingress ${INGRESS_LB_IP} is NOT ANSWERING on port ${INGRESS_PROBE_PORT:-80}."
+  echo "      It is a STORED value and survives a rebuild, so it is probably a previous lab's."
+  echo "      NOT printing an /etc/hosts line for it — a hosts entry pointing at nothing sends you"
+  echo "      to debug your browser. Re-run the ingress install, or reach the services on their own"
+  echo "      LoadBalancers (shown in the table)."
+elif [ -n "${INGRESS_LB_IP:-}" ]; then
   echo
   echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"
   echo "    ${INGRESS_LB_IP}  ${GITEA_HOST:-gitea.vks.local} ${TEKTON_DASHBOARD_HOST:-tekton.vks.local} $(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)"

@@ -46,6 +46,17 @@ spec:
             # Structured JSON logs in-cluster (see application.yml `json` profile).
             - name: SPRING_PROFILES_ACTIVE
               value: "json"
+            # ⚠️ PLACEHOLDERS — kustomize `replacements` (see kustomization.yaml) overwrites BOTH from
+            # the image reference after the `images` transformer has applied newTag. The Tekton
+            # write-back bumps newTag to the commit SHA on every successful build, so these end up
+            # showing the commit that is ACTUALLY deployed. Before this, both apps showed only their
+            # in-code defaults — javawebapp "0.1.0", gowebapp "dev", both "unknown" for the commit —
+            # while the running image was :ecae614. The information existed and never reached the app.
+            # The two defaults also disagreed, which read as "the apps are on different versions".
+            - name: APP_VERSION
+              value: "dev"
+            - name: APP_COMMIT
+              value: "unknown"
             - name: APP_INTERNAL_PORT
               value: "8080"
           startupProbe:
