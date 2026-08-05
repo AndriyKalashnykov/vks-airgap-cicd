@@ -39,6 +39,27 @@ require_cmd kubectl
 # BLOCKED on "namespace 'argocd-...' not found on the ArgoCD cluster". The one command both runbooks tell
 # you to run could not start. A path we can choose for you is not a question to ask you.
 ARGOCD_KUBECONFIG="${ARGOCD_KUBECONFIG:-${REPO_ROOT}/secrets/argocd.kubeconfig}"
+
+# ⚠️ CANONICALISE TO AN ABSOLUTE PATH. `vcf context create` RECORDS whatever KUBECONFIG holds into
+# ~/.config/vcf/config.yaml — a GLOBAL file — so a relative value becomes a context that only resolves
+# when the operator's cwd happens to be the repo root.
+# MEASURED 2026-08-05, all three contexts in the live config, three different shapes:
+#   argocd-supervisor       path: ./secrets/argocd.kubeconfig                      <- RELATIVE. From
+#                             /home/andriy/projects/vks-airgap-cicd it RESOLVES; from /tmp it is MISSING.
+#   nested-lab              path: <state-dir>/kubeconfig.new                       <- absolute, but MISSING
+#   (a sibling)             path: <repo>/secrets/supervisor.kubeconfig             <- absolute, EXISTS
+# So the repo already produces the CORRECT shape in one place and the wrong one here: an inconsistency,
+# not a hard problem. The default above is absolute; it is the documented `.env` value
+# (`ARGOCD_KUBECONFIG=./secrets/argocd.kubeconfig`) that is relative and wins over it.
+# The failure is intermittent-by-cwd, which is the worst kind to debug: `vcf context use argocd-supervisor`
+# works from the repo and silently does not from anywhere else.
+# Done BEFORE the export so every consumer — and the recorded context — gets the absolute form.
+# `cd … && pwd` rather than realpath(1): POSIX, and toybox's realpath is not guaranteed on Photon.
+case "$ARGOCD_KUBECONFIG" in
+  /*) : ;;
+  *)  mkdir -p "$(dirname "$ARGOCD_KUBECONFIG")"
+      ARGOCD_KUBECONFIG="$(cd "$(dirname "$ARGOCD_KUBECONFIG")" && pwd)/$(basename "$ARGOCD_KUBECONFIG")" ;;
+esac
 export ARGOCD_KUBECONFIG
 log_info "SUPERVISOR kubeconfig -> ${ARGOCD_KUBECONFIG} (override with ARGOCD_KUBECONFIG in .env)"
 : "${SUPERVISOR_HOST:?SUPERVISOR_HOST must be set in .env (the Supervisor IP/FQDN)}"
