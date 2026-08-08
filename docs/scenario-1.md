@@ -801,6 +801,46 @@ can still reach the destination.
 > It ends by printing **what it deliberately left alone** — a half-done teardown you can see beats a
 > clean-looking one that quietly skipped things.
 
+## Measured timings (§4b onward)
+
+MEASURED 2026-08-08 against a real VCF 9.1 lab. **§1–§3 are not timed here** — the jump box, and
+Harbor and ArgoCD as Supervisor Services, are largely browser and one-time platform work; do not
+budget the whole runbook from this table.
+
+⚠️ **WHAT THESE NUMBERS ARE OF.** The mirror ran with a **WARM** cache (34 of 44 images already in
+`bundle/images`) against a Harbor that **already held those images**, so `crane` skipped most blob
+uploads. A first run on an empty Harbor with a cold cache is bounded by your bandwidth, not by this
+box, and is not represented here at all.
+
+Hardware: i9-14900KF (24C/32T), 188 GiB, NVMe — **running the nested ESXi lab on the same box**, so
+every number is under self-contention. Guest: 1 CP + 2 workers of `best-effort-small` on a single
+nested host already running the Supervisor and another 3-VM cluster.
+
+| Step | Command | Measured | |
+|---|---|---|---|
+| §5 | `make preflight` | 2 s | |
+| §9 | `make env-check`, `make env-validate` | <1 s each | |
+| §4b | `make vks-cluster-create` | <1 s | it APPLIES and returns; provisioning is asynchronous |
+| §4b | cluster → all 3 nodes `Ready` | **3 m 45 s** | budget this, not the row above |
+| §6 | `make harbor-ca-from-cluster` | <1 s | |
+| §9 | `make install-all` | **10 m 26 s** | WARM — see above |
+| ↳ | `mirror-pull` | 22 s | WARM: 34/44 cache-skipped |
+| ↳ | `mirror-push` | 2 m 38 s | WARM: Harbor already held most blobs |
+| ↳ | `mirror-verify` | 5 m 46 s | re-fetches every blob |
+| ↳ | `builder-image` + `platform` + `gitops` | ≈1 m 40 s | |
+| §9 | `make psa-check` | 1 s | the `ci` row measures; the gateway row is absent until §11 |
+| §9 | `make verify` | **3 m 6 s** | sum of 2 apps, sequential; the Java Kaniko build dominates |
+| §12 | `make lab-down` | 1 m 12 s | |
+| — | `make static-check` | 55–67 s | composite code gate; warm `~/.m2` + warm trivy DB |
+
+`mirror-verify` is the one row a warmer run would **not** improve — it re-fetches every blob rather
+than skipping. It still scales with the image count (44 here) and your Harbor's throughput, and
+`MIRROR_VERIFY_FAST=1` trades layer verification for speed.
+
+Two rows carry warmth this table cannot see: the cluster's 3 m 45 s assumes the Supervisor already
+has the TKr image cached (a first-ever cluster from a cold content library is a different number),
+and `static-check` assumes a populated `~/.m2` and a current trivy DB.
+
 ## Preconditions, in one place
 
 - **cluster-admin** on the guest cluster (we create namespaces and install Tekton CRDs).
