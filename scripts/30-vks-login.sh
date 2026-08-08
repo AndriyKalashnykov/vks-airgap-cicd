@@ -419,25 +419,32 @@ if kubectl cluster-info >/dev/null 2>"$_vks_err" && kubectl get nodes >/dev/null
   log_info "connected. Current context: $(kubectl config current-context)"
   kubectl get nodes -o wide >&2
 else
+  # ⚠️ `--minify`, and computed ONCE. `.clusters[0]` without it is the FIRST cluster in the FILE,
+  # not the one the current context uses, and a real VKS kubeconfig always holds several (Supervisor
+  # + guest). MEASURED 2026-08-08: context `lab-gc1` resolves to https://192.168.101.132:6443 while
+  # the un-minified form reports the SUPERVISOR at https://192.168.101.128:443 — so every arm below
+  # named an endpoint that was not the one that failed. Four copies of one expression is also how
+  # they drifted from lib/state.sh's `state_kubeconfig_server`, which had `--minify` all along.
+  _vks_srv="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)"
   case "$(classify_kube_failure "$_vks_err")" in
     STALE_CA)
       die "the kubeconfig's CA does not match what ${KUBECONFIG:-the current kubeconfig} is talking to.
   The server ANSWERED — this is NOT a network or auth problem. A REBUILT cluster mints a new CA, and
   the address often stays the same, so a stale kubeconfig looks correctly configured.
     context: $(kubectl config current-context 2>/dev/null || echo '<none>')
-    server:  $(kubectl config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)
+    server:  ${_vks_srv:-<unknown>}
   Re-fetch the kubeconfig from the cluster that is actually running, then re-run." ;;
     UNAUTHORIZED)
       die "the credential in this kubeconfig was REJECTED (Unauthorized) by
-  $(kubectl config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null).
+  ${_vks_srv:-<unknown>}.
   The server answered, so it is reachable — the token or certificate has EXPIRED or belongs to a
   cluster that no longer exists. Log in again and re-fetch the kubeconfig." ;;
     FORBIDDEN)
       die "authenticated, but this identity is not permitted to list nodes on
-  $(kubectl config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null).
+  ${_vks_srv:-<unknown>}.
   That is an RBAC grant, not a broken kubeconfig — ask for the role, or use an identity that has it." ;;
     UNREACHABLE)
-      die "cannot reach $(kubectl config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)
+      die "cannot reach ${_vks_srv:-<unknown>}
   — no HTTP response. This one genuinely IS network: check the address is right, the cluster is up,
   and that this host can route to it." ;;
     *)

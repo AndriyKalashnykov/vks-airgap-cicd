@@ -190,12 +190,58 @@ env_validate() {
   if pw_weak "${GITEA_ADMIN_PASSWORD:-}";   then log_error "GITEA_ADMIN_PASSWORD is weak/unset (need >=8 with upper+lower+digit)"; errs=$((errs+1)); fi
 
   # --- KUBECONFIG connectivity (only if the file is configured & present) ---
+  # ⚠️ CAPTURE stderr to its OWN FILE — do NOT `2>&1` and do NOT `2>/dev/null`.
+  #   * `2>/dev/null` is what this block used to do, and it threw away the ONLY evidence that
+  #     distinguishes a REBUILT lab from a down one. Every failure read "unreachable" — the wrong
+  #     cause, with no remedy — for the case docs/scenario-1.md §9 promises we separate.
+  #   * merging with `2>&1` makes the capture non-empty even on success and inverts emptiness tests
+  #     downstream; 30-vks-login.sh:415 records that this repo has measured that turning a WARN into
+  #     a BLOCK asserting the opposite.
+  # The classifier + these arms mirror 30-vks-login.sh:417-448 deliberately: same evidence, same
+  # vocabulary, so an operator who has seen one recognises the other.
   if [ -n "${KUBECONFIG:-}" ] && [ -f "${KUBECONFIG}" ]; then
-    if kubectl cluster-info >/dev/null 2>&1; then
+    local _kerr; _kerr="$(mktemp)"
+    if kubectl cluster-info >/dev/null 2>"$_kerr"; then
       log_info "KUBECONFIG reachable ($(kubectl config current-context 2>/dev/null || echo '?'))"
     else
-      log_error "KUBECONFIG=$KUBECONFIG exists but the cluster is unreachable"; errs=$((errs+1))
+      local _kctx _ksrv
+      _kctx="$(kubectl config current-context 2>/dev/null || echo '<none>')"
+      # ⚠️ `--minify` IS LOAD-BEARING. Without it `.clusters[0]` is the FIRST cluster in the FILE,
+      # not the one the current context uses — and a real VKS kubeconfig always holds several
+      # (Supervisor + guest). MEASURED on this lab: context `lab-gc1` resolves to
+      # https://192.168.101.132:6443, while `.clusters[0]` reports the SUPERVISOR at
+      # https://192.168.101.128:443. An error that names the wrong server is worse than one that
+      # names none — it sends the operator to debug a healthy endpoint.
+      _ksrv="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)"
+      case "$(classify_kube_failure "$_kerr")" in
+        STALE_CA)
+          log_error "the CA embedded in KUBECONFIG='$KUBECONFIG' does not match what ${_ksrv:-that server} presents.
+  The server ANSWERED, so this is NOT a network or auth problem. A REBUILT cluster mints a new CA and
+  the ADDRESS usually stays the same, so a dead kubeconfig looks correctly configured.
+    context: ${_kctx}
+    server:  ${_ksrv:-<unknown>}
+  Re-export it from the cluster that is actually running:  make vks-login"; errs=$((errs+1)) ;;
+        UNAUTHORIZED)
+          log_error "${_ksrv:-the cluster} rejected this kubeconfig's credentials (they expired, or the account changed).
+  This is NOT a stale CA — the TLS chain verified. Re-authenticate:  make vks-login"; errs=$((errs+1)) ;;
+        FORBIDDEN)
+          log_error "authenticated to ${_ksrv:-the cluster}, but this identity may not read it.
+  That is an RBAC GRANT, not a broken kubeconfig — do NOT re-fetch it. Ask your platform team for
+  cluster-admin on '${_kctx}' (we create namespaces and install CRDs)."; errs=$((errs+1)) ;;
+        PLAINTEXT)
+          log_error "${_ksrv:-the server} is not speaking TLS on that port — every CA remedy is wrong here.
+  Check the scheme/port in KUBECONFIG='$KUBECONFIG'."; errs=$((errs+1)) ;;
+        UNREACHABLE)
+          log_error "could not reach ${_ksrv:-the cluster} (KUBECONFIG='$KUBECONFIG').
+  This is NOT evidence the kubeconfig is stale — the endpoint never answered. Is the lab up, and is
+  it routable from this jump box? Retry before re-fetching anything."; errs=$((errs+1)) ;;
+        *)
+          # Do NOT guess. Print kubectl's own words — they beat any advice we could invent.
+          log_error "KUBECONFIG='$KUBECONFIG' did not work, and the error is one we do not classify:"
+          sed 's/^/    /' "$_kerr" >&2; errs=$((errs+1)) ;;
+      esac
     fi
+    rm -f "$_kerr"
   else
     log_warn "KUBECONFIG not present yet (${KUBECONFIG:-unset}) — skipping cluster reachability (set it after you get the workload kubeconfig)"
   fi
