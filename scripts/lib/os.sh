@@ -465,7 +465,18 @@ load_env() {
   # been given the right digest is told it does not match, and reaches for the skip-verify escape.
   # Latent today because all three ship COMMENTED, so check-env-clobber passes; protected here so that
   # uncommenting one — the natural thing to do with a value you want to persist — cannot arm it.
-  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT INGRESS_CONTROLLER HARBOR_CA_FILE HARBOR_URL VKS_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256; do
+  # VKS_CLUSTER_NAME / VKS_NAMESPACE ARE THE MOST LITERAL SELECTORS IN THIS FILE — they name WHICH
+  # CLUSTER, in WHICH vSphere Namespace — and they were missing, so this list contradicted its own
+  # doctrine four lines above ("a variable that selects WHICH CLUSTER you are talking to must be owned
+  # by the caller"). MEASURED 2026-08-08 with VKS_CLUSTER_NAME=cicd-gc1 uncommented in .env (the
+  # NORMAL state — the operator is told to set it there):
+  #     VKS_CLUSTER_NAME=cicd-gc2 …load_env… -> effective VKS_CLUSTER_NAME=cicd-gc1
+  # So `make vks-cluster-create VKS_CLUSTER_NAME=cicd-gc2` silently targets cicd-gc1 and, if it
+  # exists, prints "ALREADY EXISTS — not re-applying" — the operator believes they created gc2 while
+  # every later step (status, login, gitops, lab-down) addresses gc1. Nothing says otherwise.
+  # check-env-clobber cannot see this: it reads .env.example (where these ship COMMENTED and it is
+  # correctly green); the clobber is armed by the operator doing the DOCUMENTED thing in their .env.
+  for _sel in KUBECONFIG ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT VKS_CLUSTER_NAME VKS_NAMESPACE INGRESS_CONTROLLER HARBOR_CA_FILE HARBOR_URL VKS_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256; do
     if [ -n "${!_sel:-}" ]; then
       _snap_names="${_snap_names} ${_sel}"
       _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'

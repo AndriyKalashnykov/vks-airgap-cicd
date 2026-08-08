@@ -96,6 +96,113 @@ sys.exit(0 if ready else 1)
 '
 }
 
+# endpoint_report — PRINTS ONLY. Never gates, never dies, never changes this script's exit code.
+#
+# WHY IT EXISTS. MEASURED on this lab across FOUR incarnations of the same cluster name: the address
+# the Cluster ADVERTISES (spec.controlPlaneEndpoint.host) is the PREVIOUS incarnation's load-balancer
+# IP, lagging by exactly one allocation, and such a cluster NEVER converges — CAPI dials an address
+# nothing serves.
+#     #1 (fresh lab) adv .134 / lb .134  -> AGREE, Ready in 3m45s
+#     #2            adv .134 / lb .136  -> never converged in 25 min
+#     #3            adv .136 / lb .137  -> never converged
+#     #4            adv .137 / lb .138  -> PREDICTED from the pattern, then confirmed
+# On #3 the advertised address answered nothing on 6443 while the LB address was OPEN, every
+# VirtualMachine condition was True, and the Service endpoints correctly listed the control-plane VM.
+# So the VM and the LB are healthy and only the ADVERTISED value is wrong. It did not self-heal.
+# nodes_ready() already FAILS in this state — this adds the WHY, so nobody spends 25 minutes
+# watching conditions that cannot go True.
+#
+# WHY IT IS NOT A GATE. This script promises above to exit 0 when not asked to wait, and the cases
+# below (a name-vs-IP endpoint, an LB that reports a hostname, a namespace we cannot fully read) are
+# legitimate elsewhere. A diagnostic that can false-RED gets ignored; nodes_ready stays the verdict.
+#
+# HOW THE CONTROL-PLANE LB IS IDENTIFIED — measured, and NOT by name. In this shared vSphere
+# Namespace the object carrying the label `run.tanzu.vmware.com/cluster.name: <cluster>` is ANOTHER
+# tenant workload port-80 LB projected up from inside the guest; the actual control-plane LB does not
+# carry that label at all. Selecting on it would compare our endpoint against a foreign VIP and print
+# a confident lie. The discriminator that held on BOTH a healthy and a divergent cluster is:
+# type=LoadBalancer AND port 6443 AND ownerReferences -> kind VirtualMachineService named <cluster>.
+# If that does not resolve to exactly ONE Service we print the candidates and DECLINE to judge.
+endpoint_report() {
+  local adv advport adv_rc svc_json svc_rc err
+  err="$(mktemp)"; trap 'rm -f "$err"' RETURN
+
+  # Read the host AND the port from the SAME object. The port is not hardcoded: the Cluster that
+  # names the address also names the port, so there is nothing to keep in sync and nothing that
+  # breaks on a control plane published somewhere other than the usual 6443. (Proven by the fixture
+  # suite: with the fixture port overridden, a literal-6443 matcher found ZERO candidate Services
+  # and the whole diagnostic went silent.)
+  adv="$(k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" \
+           -o jsonpath='{.spec.controlPlaneEndpoint.host}' 2>"$err")" && adv_rc=0 || adv_rc=$?
+  if [ "$adv_rc" -ne 0 ]; then
+    echo "  endpoint     : CANNOT READ the Cluster (rc=$adv_rc: $(head -1 "$err"))"
+    return 0
+  fi
+  advport="$(k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" \
+               -o jsonpath='{.spec.controlPlaneEndpoint.port}' 2>/dev/null || true)"
+
+  svc_json="$(k -n "$VKS_NAMESPACE" get svc -o json 2>"$err")" && svc_rc=0 || svc_rc=$?
+  if [ "$svc_rc" -ne 0 ]; then
+    echo "  endpoint     : advertised ${adv:-<not set yet>}; CANNOT READ Services (rc=$svc_rc: $(head -1 "$err"))"
+    echo "                 (a read-only tenant may lack get/services here — this is not a failure)"
+    return 0
+  fi
+
+  # shellcheck disable=SC2016
+  printf '%s' "$svc_json" | ADV="$adv" ADVPORT="$advport" CL="$VKS_CLUSTER_NAME" NS="$VKS_NAMESPACE" python3 -c '
+import json,os,sys
+adv=os.environ.get("ADV",""); cl=os.environ.get("CL","")
+# The port comes from the Cluster. If it has not been published yet we do not invent one -- we
+# accept any port and let the ownerRef do the identifying, rather than silently matching nothing.
+try: advport=int(os.environ.get("ADVPORT","") or 0)
+except ValueError: advport=0
+svcs=json.load(sys.stdin).get("items",[])
+cands=[]
+for s in svcs:
+    if s.get("spec",{}).get("type")!="LoadBalancer": continue
+    ports=[p.get("port") for p in s.get("spec",{}).get("ports",[])]
+    if advport and advport not in ports: continue
+    owners=s.get("metadata",{}).get("ownerReferences",[]) or []
+    if not any(o.get("kind")=="VirtualMachineService" and o.get("name")==cl for o in owners): continue
+    cands.append(s)
+def ing(s):
+    i=(s.get("status",{}).get("loadBalancer",{}).get("ingress") or [{}])[0]
+    return i.get("ip") or i.get("hostname") or ""
+if not adv and not cands:
+    print("  endpoint     : NOT YET KNOWABLE (no advertised endpoint, no control-plane LB yet)"); sys.exit(0)
+if len(cands)!=1:
+    names=", ".join(s["metadata"]["name"] for s in cands) or "none"
+    print("  endpoint     : advertised %s; CANNOT IDENTIFY the control-plane LB" % (adv or "<not set yet>"))
+    print("                 %d candidate Service(s) matched [%s] -- declining to judge" % (len(cands),names))
+    sys.exit(0)
+lb=ing(cands[0]); name=cands[0]["metadata"]["name"]
+if not adv or not lb:
+    print("  endpoint     : NOT YET KNOWABLE (advertised=%s  svc/%s=%s)" % (adv or "-", name, lb or "-"))
+    sys.exit(0)
+if any(ch.isalpha() for ch in adv):
+    print("  endpoint     : advertised %s is a NAME; svc/%s holds %s -- not comparable, reporting both" % (adv,name,lb))
+    sys.exit(0)
+if adv==lb:
+    print("  endpoint     : AGREE (%s == svc/%s)" % (adv,name)); sys.exit(0)
+print("  endpoint     : *** DIVERGENT *** advertises %s but svc/%s holds %s" % (adv,name,lb))
+print("                 MEASURED on this lab (4 incarnations): a cluster in this state did not")
+print("                 converge in 25 min and did not self-heal.  The advertised value has each")
+print("                 time been the PREVIOUS incarnation of this cluster NAME.")
+print("                 spec.controlPlaneEndpoint is set by the platform, so this is very likely")
+print("                 unrecoverable -- but do NOT just delete and recreate under the SAME name,")
+print("                 which reproduced it three times running.")
+print("                 1. CAPTURE THE EVIDENCE FIRST (deleting destroys the only copy):")
+print("                      kubectl -n %s get cluster %s -o yaml > /tmp/diverged-cluster.yaml" % (os.environ.get("NS","<ns>"),cl))
+print("                      kubectl -n %s get svc,endpoints -o yaml > /tmp/diverged-svc.yaml" % os.environ.get("NS","<ns>"))
+print("                 2. THEN recreate under a DIFFERENT name, which is also the experiment:")
+print("                      make vks-cluster-create VKS_CLUSTER_NAME=%s2" % cl)
+print("                    converges  -> stale state tied to the reused name")
+print("                    lags again -> the platform VIP allocator; send your platform team")
+print("                                  the two files above and this table")
+' 2>/dev/null || true
+  return 0
+}
+
 if [ "$WAIT_SECONDS" -gt 0 ]; then
   end=$((SECONDS + WAIT_SECONDS))
   while [ "$SECONDS" -lt "$end" ]; do
@@ -108,6 +215,8 @@ if [ "$WAIT_SECONDS" -gt 0 ]; then
   done
   if ! { report >/dev/null 2>&1 && nodes_ready; }; then
     log_warn "still not ready after ${WAIT_SECONDS}s — reporting the state as it stands, not a pass."
+    # The single most useful line when a cluster is not converging, and the reason this ran long.
+    endpoint_report
     # ⚠️ EXIT NON-ZERO. The header promises this, and without it the target could NOT fail:
     # `make vks-cluster-status VKS_CLUSTER_WAIT_SECONDS=1800 && make install-all` would run
     # ON A NOT-READY CLUSTER, landing in the ~20-min install-tekton failure scenario-1 §4b
@@ -116,6 +225,7 @@ if [ "$WAIT_SECONDS" -gt 0 ]; then
   fi
 else
   report || true
+  endpoint_report
 fi
 
 # Nodes are the end result. A cluster whose conditions are green and whose nodes are absent is
