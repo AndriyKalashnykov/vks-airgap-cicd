@@ -83,7 +83,12 @@ EXEMPT='APP_DEV_PORT|INGRESS_CONTROLLER'
 # the gap between them.
 #
 # So: keep SELECTORS hand-curated, and ASSERT that it never falls behind the mechanism (below).
-SELECTORS='KUBECONFIG|INGRESS_CONTROLLER|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_SUPERVISOR_KUBECONFIG|VKS_CONTEXT|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_CA_FILE|VKS_CA_SHA256|HARBOR_CA_SHA256|ARGOCD_CA_SHA256'
+# VKS_CLUSTER_NAME / VKS_NAMESPACE added 2026-08-08: they name WHICH cluster, in WHICH vSphere
+# Namespace, so they are selectors by this file's own definition. MEASURED before protecting them:
+# with VKS_CLUSTER_NAME set in .env (the documented place), `make vks-cluster-create
+# VKS_CLUSTER_NAME=other` silently targeted the .env value — and, if that cluster existed, printed
+# "ALREADY EXISTS" while the operator believed they had created a different one.
+SELECTORS='KUBECONFIG|VKS_AUTH_METHOD|INGRESS_CONTROLLER|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_SUPERVISOR_KUBECONFIG|VKS_CONTEXT|VKS_CLUSTER_NAME|VKS_NAMESPACE|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_CA_FILE|VKS_CA_SHA256|HARBOR_CA_SHA256|ARGOCD_CA_SHA256'
 
 # Read the snapshot list out of load_env itself: `for _sel in A B C ...; do`
 PROTECTED="$(sed -n 's/^[[:space:]]*for _sel in \(.*\); do$/\1/p' "${REPO_ROOT}/scripts/lib/os.sh" | head -1)"

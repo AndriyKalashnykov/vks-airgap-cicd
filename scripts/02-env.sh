@@ -183,7 +183,20 @@ env_check() {
   # is deliberately the STRICTER PRESENCE gate — the kubeconfig FILE must be here. env-validate is the
   # REACHABILITY gate; it assumes presence and only WARNs when the file is absent, so it can be run
   # standalone before you have fetched the workload kubeconfig.
-  [ -f "${KUBECONFIG:-/nonexistent}" ] || missing+=("KUBECONFIG (file not found: '${KUBECONFIG:-}' — fetch the workload kubeconfig first)")
+  # ...but ONLY when the operator is the one supplying it. With VKS_AUTH_METHOD=vcf it is
+  # `make vks-login` that FETCHES the kubeconfig, and install-all runs `preflight` BEFORE
+  # `vks-login` — so requiring the file unconditionally would FALSE-BLOCK the vcf flow on a
+  # first run, before the step that creates the thing being demanded. Gate it on the method.
+  if [ "${VKS_AUTH_METHOD:-kubeconfig}" = kubeconfig ]; then
+    # -f, not -e/-s: a DIRECTORY at this path satisfies -e and -s but is not a kubeconfig, and
+    # kubectl then fails with `error loading config file ...: is a directory` far downstream.
+    case "${KUBECONFIG:-}" in
+      # kubectl accepts a colon-separated LIST of files; treat that as the operator's business
+      # rather than reporting a legitimate multi-file config as "not found".
+      *:*) : ;;
+      *) [ -f "${KUBECONFIG:-/nonexistent}" ] || missing+=("KUBECONFIG (file not found: '${KUBECONFIG:-}' — fetch the workload kubeconfig first; a cluster you just created writes ./secrets/\${VKS_CLUSTER_NAME}.kubeconfig)") ;;
+    esac
+  fi
   if [ "${#missing[@]}" -gt 0 ]; then
     log_error "env-check: ${#missing[@]} required value(s) missing/placeholder:"
     printf '  - %s\n' "${missing[@]}"
