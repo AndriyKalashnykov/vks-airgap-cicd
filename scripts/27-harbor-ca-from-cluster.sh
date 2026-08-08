@@ -39,7 +39,11 @@ require_cmd openssl
 # HARBOR_CA_FILE is UNCOMMENTED in .env.example, so load_env exports it and a dynamic fallback
 # here could never fire — check-env-clobber flags precisely that. The Makefile passes the value.
 OUT="${1:?usage: 27-harbor-ca-from-cluster.sh <out-file>   (the Makefile passes $(HARBOR_CA_FILE))}"
-SUP="${SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}"
+# ⚠️ VKS_SUPERVISOR_KUBECONFIG FIRST — that is the name the WRITER (30-vks-login.sh)
+# honours. These readers used only SUPERVISOR_KUBECONFIG; the defaults coincide, so the
+# split was invisible on the box that measured it and would have split the moment an
+# operator set either one.
+SUP="${VKS_SUPERVISOR_KUBECONFIG:-${SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}}"
 [ -f "$SUP" ] || die "no Supervisor kubeconfig at '$SUP' — run 'make vks-login' first.
   Harbor is a SUPERVISOR Service; the guest cluster has no harbor namespace at all."
 

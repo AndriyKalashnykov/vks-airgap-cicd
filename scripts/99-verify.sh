@@ -140,12 +140,19 @@ verify_app() {
   log_info "[${app}] PipelineRun succeeded"
 
   # ---- ArgoCD: force the write-back to reconcile NOW, then wait for the image to CHANGE -------
-  kubectl -n "$ARGOCD_NAMESPACE" annotate application "$app" \
-    argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
+  # ⚠️ --kubeconfig "$ARGOCD_KUBECONFIG", NOT the ambient one. ArgoCD's Applications live on the
+  # cluster ARGOCD runs in, which on a real lab is the SUPERVISOR while $KUBECONFIG is the GUEST.
+  # MEASURED 2026-08-08: without this the annotate silently no-opped (it is `|| true`) so ArgoCD was
+  # never nudged, and the diagnostic below printed `error: the server doesn't have a resource type
+  # "application"` — the guest has no ArgoCD CRDs at all. On KinD the two are the same file, which
+  # is why this survived: the bug is invisible in the only topology the local e2e exercises.
+  kubectl --kubeconfig "${ARGOCD_KUBECONFIG:-$KUBECONFIG}" -n "$ARGOCD_NAMESPACE" \
+    annotate application "$app" argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
   if ! wait_for "[${app}] ArgoCD rolls a new image (was ${pre_img:-none})" \
        sh -c "[ \"\$(kubectl -n $ns get deploy $app -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)\" != '${pre_img}' ]"; then
     log_error "[${app}] ArgoCD did not roll a new image (still ${pre_img:-none})"
-    kubectl -n "$ARGOCD_NAMESPACE" get application "$app" -o wide >&2 || true
+    kubectl --kubeconfig "${ARGOCD_KUBECONFIG:-$KUBECONFIG}" -n "$ARGOCD_NAMESPACE" \
+      get application "$app" -o wide >&2 || true
     die "[${app}] ArgoCD did not converge on the new build"
   fi
   local img; img="$(kubectl -n "$ns" get deploy "$app" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)"

@@ -22,7 +22,11 @@ require_cmd kubectl
 
 : "${VKS_CLUSTER_NAME:?set VKS_CLUSTER_NAME in .env}"
 : "${VKS_NAMESPACE:?set VKS_NAMESPACE in .env}"
-SUP="${SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}"
+# ⚠️ VKS_SUPERVISOR_KUBECONFIG FIRST — that is the name the WRITER (30-vks-login.sh)
+# honours. These readers used only SUPERVISOR_KUBECONFIG; the defaults coincide, so the
+# split was invisible on the box that measured it and would have split the moment an
+# operator set either one.
+SUP="${VKS_SUPERVISOR_KUBECONFIG:-${SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}}"
 [ -f "$SUP" ] || die "no Supervisor kubeconfig at '$SUP' — run 'make vks-login' first."
 k() { kubectl --kubeconfig "$SUP" "$@"; }
 
@@ -104,6 +108,11 @@ if [ "$WAIT_SECONDS" -gt 0 ]; then
   done
   if ! { report >/dev/null 2>&1 && nodes_ready; }; then
     log_warn "still not ready after ${WAIT_SECONDS}s — reporting the state as it stands, not a pass."
+    # ⚠️ EXIT NON-ZERO. The header promises this, and without it the target could NOT fail:
+    # `make vks-cluster-status VKS_CLUSTER_WAIT_SECONDS=1800 && make install-all` would run
+    # ON A NOT-READY CLUSTER, landing in the ~20-min install-tekton failure scenario-1 §4b
+    # documents. A gate whose green is unconditional is not a gate.
+    exit 1
   fi
 else
   report || true

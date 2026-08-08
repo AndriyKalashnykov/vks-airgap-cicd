@@ -53,7 +53,11 @@ export VKS_SERVICE_CIDR="${VKS_SERVICE_CIDR:-172.21.0.0/16}"
 # it is routinely the stale one while secrets/supervisor.kubeconfig was just refreshed by
 # `make vks-login`. Preferring it would apply the Cluster through a dead credential and report a
 # TLS error that names neither file.
-SUP="${SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}"
+# ⚠️ VKS_SUPERVISOR_KUBECONFIG FIRST — that is the name the WRITER (30-vks-login.sh)
+# honours. These readers used only SUPERVISOR_KUBECONFIG; the defaults coincide, so the
+# split was invisible on the box that measured it and would have split the moment an
+# operator set either one.
+SUP="${VKS_SUPERVISOR_KUBECONFIG:-${SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}}"
 [ -f "$SUP" ] || die "no Supervisor kubeconfig at '$SUP' — run 'make vks-login' first (it writes one)."
 k() { kubectl --kubeconfig "$SUP" "$@"; }
 
@@ -129,5 +133,6 @@ rm -f "${RENDERED}.err"
 log_info "dry-run accepted."
 
 k apply -f "$RENDERED"
-log_info "applied. Provisioning takes ~10-25 min on a single-host lab."
+log_info "applied. MEASURED 2026-08-08 on a single-host 9.1 lab: all 3 nodes Ready in ~3m45s"
+log_info "  (1 CP + 2 best-effort-small workers). Yours varies with host load and image pulls."
 log_info "next: make vks-cluster-status   (it gates on the CONDITIONS, not on phase=Provisioned)"

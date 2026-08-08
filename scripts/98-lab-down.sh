@@ -52,7 +52,11 @@ done
   This removes what scenario-1 created on a REAL, SHARED lab. Re-run with the cluster name:
     make lab-down CONFIRM=${VKS_CLUSTER_NAME}"
 
-SUP="${SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}"
+# ⚠️ VKS_SUPERVISOR_KUBECONFIG FIRST — that is the name the WRITER (30-vks-login.sh)
+# honours. These readers used only SUPERVISOR_KUBECONFIG; the defaults coincide, so the
+# split was invisible on the box that measured it and would have split the moment an
+# operator set either one.
+SUP="${VKS_SUPERVISOR_KUBECONFIG:-${SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}}"
 [ -f "$SUP" ] || die "no Supervisor kubeconfig at '$SUP' — run 'make vks-login' first."
 k() { kubectl --kubeconfig "$SUP" "$@"; }
 
@@ -190,12 +194,19 @@ left "secrets/ and the /etc/hosts line (manual; /etc/hosts needs sudo)"
 
 # --- verdict ------------------------------------------------------------------------------------
 echo >&2
-log_info "lab-down: deleted ${DELETED} object(s); left ${SKIPPED} thing(s) alone."
+# ⚠️ DELETED counts what we ATTEMPTED, not what went away: every delete above is `|| true`, so a
+# rejection (RBAC, a webhook, a finalizer) still increments it. The number is a proxy; the RE-LIST
+# below is the result. Same discipline as mirror-verify: never report a bulk mutation off its own
+# counter.
+log_info "lab-down: ATTEMPTED ${DELETED} deletion(s); left ${SKIPPED} thing(s) alone."
+log_info "VERIFY IT — re-list rather than trusting the count above:"
+log_info "  kubectl --kubeconfig $SUP -n $VKS_NAMESPACE get cluster $VKS_CLUSTER_NAME      # want: NotFound"
+log_info "  kubectl --kubeconfig $SUP -n $ARGOCD_NAMESPACE get applications                # want: ours absent"
 if [ "${#LEFT[@]}" -gt 0 ]; then
   log_warn "DELIBERATELY LEFT ALONE — this teardown is NOT complete, and that is the honest state:"
   printf '    - %s\n' "${LEFT[@]}" >&2
 fi
 if [ "$DELETED" = 0 ]; then
   log_warn "nothing was deleted. That is indistinguishable from 'my label selector matched nothing',"
-  log_warn "so treat it as UNPROVEN rather than clean: re-check with 'make lab-status'."
+  log_warn "so treat it as UNPROVEN rather than clean: re-check with 'make vks-cluster-status'."
 fi

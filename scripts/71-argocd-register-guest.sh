@@ -181,6 +181,12 @@ metadata:
   namespace: ${ARGOCD_NAMESPACE}
   labels:
     argocd.argoproj.io/secret-type: cluster
+    # ⚠️ THE OWNERSHIP STAMP 'make lab-down' SELECTS ON. Without it the teardown's Secret pass
+    # matches nothing and LEAVES a cluster-registration Secret pointing at a cluster it just
+    # deleted — in a SHARED namespace, where a stale registration is someone else's problem.
+    # It is also the only thing distinguishing this Secret from another tool's: measured on a real
+    # lab, the same namespace held a registration Secret labelled nested-lab.local/managed-by.
+    vks-airgap-cicd.local/owned-by: vks-airgap-cicd
 stringData:
   name: "${DEST_NAME}"
   server: "${SERVER}"
