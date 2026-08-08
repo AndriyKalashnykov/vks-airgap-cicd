@@ -246,7 +246,7 @@ else
     esac
   else
     die "refusing to write an unauthenticated trust anchor with no terminal to confirm it on.
-  Pass the expected digest explicitly:  make ${LABEL}-ca ${pin_var}=<sha256>
+  Pass the expected digest explicitly:  make fetch-${LABEL}-ca ${pin_var}=<sha256>
   (MEASURED: no target depends on this one and no CI workflow invokes it, so this refusal breaks
   no automated path — it only stops an unattended run from silently pinning whatever answered.)"
   fi

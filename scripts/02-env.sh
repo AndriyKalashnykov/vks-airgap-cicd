@@ -83,7 +83,48 @@ env_populate() {
 
   echo
   echo "== DISCOVER (values only knowable after install — read from a reachable cluster) =="
-  if have kubectl && [ -f "${KUBECONFIG:-/nonexistent}" ] && kubectl cluster-info >/dev/null 2>&1; then
+  # ⚠️ FOUR CONDITIONS, FOUR ANSWERS. This was one `&&` chain with a single `else`, so "kubectl is
+  # not installed", "there is no kubeconfig yet", "no context is selected" and "the kubeconfig is
+  # from a lab that was destroyed" all printed the identical "(no reachable cluster — skipping)".
+  # They need different remedies, and `2>&1` on the probe threw away the only evidence separating
+  # the last two. The no-context case is not hypothetical: with no current-context kubectl silently
+  # targets http://localhost:8080 and "fails to reach the cluster" while never dialling the lab.
+  local _disc=0
+  if ! have kubectl; then
+    echo "  (kubectl is not on PATH — skipping discovery. Install the toolchain:)"
+    echo "     make deps"
+  elif [ ! -f "${KUBECONFIG:-/nonexistent}" ]; then
+    echo "  (no kubeconfig at '${KUBECONFIG:-unset}' — skipping discovery. Get one:)"
+    echo "     make vks-login    # real lab — authenticates and writes KUBECONFIG"
+    echo "     make kind-up      # the local KinD stand-in"
+  elif ! kubectl config current-context >/dev/null 2>&1; then
+    echo "  (the kubeconfig at '${KUBECONFIG}' has NO CURRENT CONTEXT — skipping discovery."
+    echo "   Nothing was probed: with no context kubectl targets http://localhost:8080, so any"
+    echo "   verdict here would describe this machine, not the lab. Select one:)"
+    echo "     kubectl config use-context <name>   # $(kubectl config get-contexts -o name 2>/dev/null | tr '\n' ' ' || true)"
+  else
+    local _perr; _perr="$(mktemp)"
+    if kubectl cluster-info >/dev/null 2>"$_perr"; then
+      _disc=1
+    elif [ "$(classify_kube_failure "$_perr")" = STALE_CA ]; then
+      # The case an operator cannot diagnose unaided: right address, dead credentials.
+      echo "  (the kubeconfig at '${KUBECONFIG}' does NOT match the cluster it points at — skipping"
+      echo "   discovery. The server ANSWERED, so this is not a network fault: a REBUILT cluster mints"
+      echo "   a new CA while the address stays the same. Re-export it, then re-run this:)"
+      echo "     make vks-login"
+    else
+      echo "  (no reachable cluster — skipping. The KinD flow auto-writes these to .env.state;"
+      echo "   on a real lab, re-authenticate or discover them after install:)"
+      echo "     make vks-login"
+      echo "     HARBOR_URL:    kubectl -n <harbor-ns>  get svc -o jsonpath='{...loadBalancer.ingress[0].ip}'"
+      echo "     ARGOCD_SERVER: kubectl -n <argocd-ns>  get svc argocd-server -o jsonpath='{...loadBalancer.ingress[0].ip}'"
+      echo "     KUBECONFIG:    vcf cluster kubeconfig get <cluster> --export-file ./secrets/vks.kubeconfig"
+    fi
+    # `rm` precedes all die-capable code in this function; if the discovery block below is ever
+    # moved INSIDE this else, env_set can die and this leaks — use a RETURN trap then.
+    rm -f "$_perr"
+  fi
+  if [ "$_disc" = 1 ]; then
     local hip aip
     hip="$(kubectl -n "${HARBOR_NAMESPACE:-harbor}" get svc -o jsonpath='{range .items[?(@.spec.type=="LoadBalancer")]}{.status.loadBalancer.ingress[0].ip}{"\n"}{end}' 2>/dev/null | grep -m1 -E '^[0-9]' || true)"
     aip="$(kubectl -n "${ARGOCD_NAMESPACE:-argocd}" get svc argocd-server -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
@@ -95,12 +136,6 @@ env_populate() {
     if   [ -n "$aip" ] && is_placeholder "${ARGOCD_SERVER:-}"; then env_set ARGOCD_SERVER "$aip"; echo "  + ARGOCD_SERVER = $aip  (discovered)";
     elif [ -n "$aip" ]; then echo "  = ARGOCD_SERVER already set (${ARGOCD_SERVER}) — not overwriting with discovered $aip";
     else echo "  - ARGOCD_SERVER not discovered (ArgoCD LB not up yet)"; fi
-  else
-    echo "  (no reachable cluster — skipping. The KinD flow auto-writes these to .env.state;"
-    echo "   on a real lab discover them after install:)"
-    echo "     HARBOR_URL:    kubectl -n <harbor-ns>  get svc -o jsonpath='{...loadBalancer.ingress[0].ip}'"
-    echo "     ARGOCD_SERVER: kubectl -n <argocd-ns>  get svc argocd-server -o jsonpath='{...loadBalancer.ingress[0].ip}'"
-    echo "     KUBECONFIG:    vcf cluster kubeconfig get <cluster> --export-file ./secrets/vks.kubeconfig"
   fi
 
   echo
@@ -201,7 +236,22 @@ env_validate() {
   # vocabulary, so an operator who has seen one recognises the other.
   if [ -n "${KUBECONFIG:-}" ] && [ -f "${KUBECONFIG}" ]; then
     local _kerr; _kerr="$(mktemp)"
-    if kubectl cluster-info >/dev/null 2>"$_kerr"; then
+    # ⚠️ A FOURTH STATE, AND IT MISFIRED IN THE FIRST VERSION OF THIS BLOCK. With no current-context
+    # set, `kubectl cluster-info` does NOT fail against the configured cluster — it falls back to
+    # http://localhost:8080 and reports "connection refused", which classifies UNREACHABLE and made
+    # this arm ask "Is the lab up, and is it routable from this jump box?". The endpoint that never
+    # answered was LOCALHOST; the lab was irrelevant and the real fault was an unset context.
+    # `config view --minify` also returns rc 1 + EMPTY here ("current-context must exist in order to
+    # minify"), so the server line would have been blank too. Check it BEFORE probing anything.
+    if ! kubectl config current-context >/dev/null 2>&1; then
+      log_error "KUBECONFIG='$KUBECONFIG' exists and parses, but has NO CURRENT CONTEXT set.
+  Nothing was probed: with no context, kubectl silently targets http://localhost:8080, so any
+  reachability verdict here would describe your own machine rather than the lab.
+    contexts in that file: $(kubectl config get-contexts -o name 2>/dev/null | tr '\n' ' ' || true)
+  Select one, or re-export the kubeconfig:
+    kubectl config use-context <one of the above>
+    make vks-login"; errs=$((errs+1))
+    elif kubectl cluster-info >/dev/null 2>"$_kerr"; then
       log_info "KUBECONFIG reachable ($(kubectl config current-context 2>/dev/null || echo '?'))"
     else
       local _kctx _ksrv
@@ -296,14 +346,40 @@ env_validate() {
         # is a rebuild. That script already distinguishes the cases with ca_verifies_endpoint; this one
         # did not, so the SAME rebuild produced a good diagnosis for the Supervisor and a wrong one for
         # Harbor. An error that names the wrong cause sends the operator to fix something that is not broken.
+        local _ca_verdict _h _p          # these three leaked to GLOBAL scope until 2026-08-08
         _ca_verdict=0
         if [ -n "${HARBOR_CA_FILE:-}" ] && [ -f "${HARBOR_CA_FILE}" ]; then
-          _h="${HARBOR_URL%%/*}"; _p="${_h##*:}"; [ "$_p" = "$_h" ] && _p=443; _h="${_h%%:*}"
+          # ⚠️ Strip an IPv6 bracket form BEFORE splitting on ':', or `%%:*` cuts "[fd00" out of
+          # "[fd00::1]:443" and ca_verifies_endpoint returns 2 ("could not reach") — a wrong cause
+          # for a perfectly good anchor.
+          _h="${HARBOR_URL%%/*}"
+          case "$_h" in
+            \[*\]:*) _p="${_h##*]:}"; _h="${_h%%]*}"; _h="${_h#\[}" ;;
+            \[*\])   _p=443;          _h="${_h%%]*}"; _h="${_h#\[}" ;;
+            *)       _p="${_h##*:}"; [ "$_p" = "$_h" ] && _p=443;  _h="${_h%%:*}" ;;
+          esac
           ca_verifies_endpoint "$_h" "$_p" "$HARBOR_CA_FILE" >/dev/null 2>&1 || _ca_verdict=$?
         else
           _ca_verdict=9   # not set at all — the original message IS the right one
         fi
         case "$_ca_verdict" in
+          # 0 = the anchor VERIFIES this endpoint (chain AND name), yet curl still failed. Until
+          # 2026-08-08 this fell through to `*)`, which told the operator to "set HARBOR_CA_FILE" —
+          # advice for an UNSET variable, printed to someone whose variable is set and CORRECT.
+          #
+          # ⚠️ NO RED WAS CONSTRUCTED FOR THIS ARM, and that is recorded deliberately so nobody
+          # "fixes" it by widening the elif set above. MEASURED against a local TLS oracle: a DEAD
+          # proxy yields curl rc 7, which is NOT in {60,35,51,77,83} and so never reaches this block
+          # at all. The two mechanisms that DO reach it are a TLS-INTERCEPTING proxy (curl honours
+          # https_proxy and sees the interceptor's cert -> 60, while ca_verifies_endpoint's
+          # openssl s_client ignores the proxy and reaches the origin -> 0) and a certificate
+          # rotated between the two sequential probes.
+          0) log_error "HARBOR_CA_FILE='${HARBOR_CA_FILE}' VERIFIES ${_h}:${_p} correctly — chain and name both.
+  So this is NOT a certificate problem: do NOT re-fetch the CA and do NOT set HARBOR_CA_FILE.
+  curl failed (exit $rc) where a direct TLS check succeeded. Two things do that:
+    - a TLS-INTERCEPTING proxy — curl honours https_proxy/HTTPS_PROXY, the direct check does not.
+      Check:  env | grep -i _proxy      (and whether ${_h} belongs in NO_PROXY)
+    - the certificate was rotated between the two probes — simply retry."; errs=$((errs+1)) ;;
           1) log_error "the CA at ${HARBOR_CA_FILE} does NOT verify the certificate ${HARBOR_URL} presents.
   The endpoint ANSWERED, so this is not a reachability problem — the anchor is for a DIFFERENT (usually a
   destroyed and rebuilt) Harbor. A rebuild mints a new CA, and nothing in this repo re-fetches it for you.

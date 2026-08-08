@@ -207,10 +207,15 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
   ${SUPERVISOR_HOST} presents cannot be verified at all. This is NOT a stale anchor — there is no
   anchor, so there is nothing to re-fetch or re-pin.
   The Supervisor serves only its LEAF, so its CA cannot be taken off this connection. Get the VMCA
-  root from vCenter (replace <vcenter> with your vCenter FQDN, NOT the Supervisor address):
+  root from vCenter (replace <vcenter> with your vCenter FQDN, NOT the Supervisor address).
+  Needs 'unzip' — 'make deps' installs it; on an air-gap box use your internal package mirror:
     curl -sk -o /tmp/vmca.zip https://<vcenter>/certs/download.zip
-    unzip -j -o /tmp/vmca.zip 'certs/lin/*.0' -d ./secrets/
-    mv ./secrets/*.0 ./secrets/supervisor-ca.crt && chmod 0644 ./secrets/supervisor-ca.crt
+    unzip -j -o /tmp/vmca.zip 'certs/lin/*.0' -d ./secrets/vmca/
+  A vCenter with more than one trusted root yields SEVERAL files, so do NOT blind-copy — print the
+  subjects and take the one whose CN matches the issuer named above:
+    for f in ./secrets/vmca/*.0; do echo \"\$f\"; openssl x509 -in \"\$f\" -noout -subject; done
+    cp ./secrets/vmca/<the matching one> ./secrets/supervisor-ca.crt
+    chmod 0644 ./secrets/supervisor-ca.crt
   then set VKS_CA_CERT_FILE=./secrets/supervisor-ca.crt and re-run. Confirm its SHA-256 with the
   platform team over a channel that is NOT this connection:
     openssl x509 -in ./secrets/supervisor-ca.crt -noout -fingerprint -sha256
