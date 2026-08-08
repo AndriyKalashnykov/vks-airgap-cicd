@@ -237,6 +237,21 @@ if k -n "$VKS_NAMESPACE" get secret "${VKS_CLUSTER_NAME}-kubeconfig" >/dev/null 
   if [ -s "$KC" ]; then
     echo "  nodes:"
     kubectl --kubeconfig "$KC" get nodes -o wide 2>&1 | sed 's/^/    /' || true
+    # This script MINTS a kubeconfig and used to tell nobody, so after creating a replacement
+    # cluster the operator's .env still named the previous one — and `make vks-login` then died on
+    # a file that had been removed with it. PRINT the line rather than writing it: this command
+    # advertises itself read-only, .env.state is sourced LAST (so writing KUBECONFIG here would
+    # repoint the selector for every later command), and someone running this merely to LOOK at
+    # another cluster must not have their environment silently retargeted.
+    if [ "$(printf '%s' "${KUBECONFIG:-}")" != "$KC" ]; then
+      echo
+      echo "  This cluster's kubeconfig is at:  $KC"
+      echo "  Your KUBECONFIG currently points at: ${KUBECONFIG:-<unset>}"
+      echo "  To make the rest of the walk use THIS cluster, set it in .env:"
+      echo "      KUBECONFIG=./secrets/${VKS_CLUSTER_NAME}.kubeconfig"
+      echo "  (then: make env-check   -- it now runs inside 'make preflight', so a stale value is"
+      echo "   caught before the 20-minute mirror rather than after it)"
+    fi
   fi
 else
   echo "  (no ${VKS_CLUSTER_NAME}-kubeconfig Secret yet — the control plane has not been minted)"

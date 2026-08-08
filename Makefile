@@ -363,7 +363,7 @@ lab-preflight: ## Read-only: three cluster preconditions that each kill the run 
 	@$(SCRIPTS)/24-lab-preflight.sh
 
 .PHONY: preflight argocd-preflight
-preflight: check-tools argocd-preflight lab-preflight psa-check ## Read-only: can this lab actually run the flow? Run it BEFORE the 20-minute mirror (first prereq of install-all)
+preflight: check-tools env-check argocd-preflight lab-preflight psa-check ## Read-only: can this lab actually run the flow? Run it BEFORE the 20-minute mirror (first prereq of install-all)
 
 .PHONY: argocd-preflight
 argocd-preflight: ## ArgoCD version + TOPOLOGY + write-mechanism + AppProject + Gitea reachability (two-cluster aware; non-zero on a blocking finding)
