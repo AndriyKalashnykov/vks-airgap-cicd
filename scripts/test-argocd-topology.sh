@@ -140,13 +140,40 @@ else
   ok  "AMBIGUOUS destination REFUSED (no registered cluster is ours) — the tenant-safety guard holds"
 fi
 
-# Exactly one registered cluster is unambiguous even if the URL differs (a VIP vs a hostname).
+# ⚠️ THIS CASE ASSERTED THE OPPOSITE UNTIL 2026-08-08, AND THE OLD ASSERTION SHIPPED A REAL
+# CROSS-CLUSTER DEPLOY. The rationale for taking a lone registered cluster was genuine — ArgoCD may
+# register the guest under a VIP that differs from your kubeconfig's URL — but "exactly one
+# registered cluster" does NOT mean "that one is ours". MEASURED on a real 9.1 lab: our freshly
+# created guest was https://192.168.101.134:6443, the shared ArgoCD had exactly ONE registered
+# cluster (the LAB's own, at .132), and this returned it. The app deployed into the lab's cluster,
+# reported Synced/Healthy there, and `make verify` failed pointing nowhere near the cause.
+#
+# docs/scenario-1.md §9 already promised the safe behaviour — "make gitops STOPS rather than guess;
+# set ARGOCD_DEST_CLUSTER_NAME=<the name ArgoCD registered>" — so the code was contradicting its own
+# runbook. The VIP case is still served, by that explicit name (asserted immediately below).
 ONE="$(printf 'cluster-guest\thttps://vip.example:6443\n')"
 got="$(printf '%s' "$ONE" | argocd_pick_dest_server "$GUEST_API" "" || true)"
-if [ "$got" = "https://vip.example:6443" ]; then
-  ok  "single registered cluster: unambiguous, taken (ArgoCD may dial a VIP, not your kubeconfig's URL)"
+if [ -z "$got" ]; then
+  ok  "a lone registered cluster whose server is NOT ours is REFUSED (it may be someone else's)"
 else
-  bad "single registered cluster was refused (got '$got') — this breaks the normal cross-cluster case"
+  bad "a lone NON-MATCHING registered cluster was adopted ('$got') — this deploys into someone else's cluster"
+fi
+
+# ...and the documented escape hatch must still work: naming it explicitly resolves the VIP case.
+got="$(printf '%s' "$ONE" | argocd_pick_dest_server "$GUEST_API" "cluster-guest" || true)"
+if [ "$got" = "https://vip.example:6443" ]; then
+  ok  "ARGOCD_DEST_CLUSTER_NAME still resolves a VIP-registered guest (the documented remedy)"
+else
+  bad "naming the registered cluster no longer works (got '$got') — the VIP case has no path left"
+fi
+
+# A tenant who cannot read a guest kubeconfig passes an EMPTY guest_api; the lone cluster is then
+# the only sensible answer and the fallback is still correct.
+got="$(printf '%s' "$ONE" | argocd_pick_dest_server "" "" || true)"
+if [ "$got" = "https://vip.example:6443" ]; then
+  ok  "with NO guest_api (the tenant path), a lone registered cluster is still taken"
+else
+  bad "the tenant path lost its fallback (got '$got')"
 fi
 
 # --- 4. the cluster-list template must read the RIGHT FIELD --------------------------------------

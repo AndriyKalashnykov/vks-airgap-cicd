@@ -203,7 +203,16 @@ fi
 # exists for — grep then exits 1, the assignment returns 1, and `set -e` kills the report before it
 # prints anything. Measured: `make creds` died with "Error 1" and no output at all.
 _stamp="$(grep -m1 '^VKS_STATE_SERVER=' "$_sink" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)"
-_live_srv="$(kubectl --request-timeout=3s config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)"
+# ⚠️ Read the live server through THE SAME FUNCTION THAT WROTE THE STAMP (state.sh's
+# state_kubeconfig_server), not a hand-rolled jsonpath. The stamp is minified and this read was NOT,
+# so on any multi-cluster kubeconfig they compared DIFFERENT servers and could never be equal —
+# MEASURED on a real lab: the writer resolves https://192.168.101.132:6443 (the current context)
+# while the un-minified read returns https://192.168.101.128:443 (the Supervisor, merely first in
+# the file). A real VKS kubeconfig ALWAYS holds both, so provenance could never reach DISCOVERED:
+# every `make creds-show` printed the alarming "may be from a lab that no longer exists" banner over
+# a correctly-stamped, current overlay. One definition, because the normalisation is the drift-prone
+# part. (It parses the file and never dials, so it needs no --request-timeout.)
+_live_srv="$(state_kubeconfig_server "${KUBECONFIG:-}" || true)"
 if   [ "$_have_sink" != 1 ];                                   then _prov=DEFAULT
 elif grep -q '^VKS_STATE_KIND=1' "$_sink" 2>/dev/null;                 then _prov=DISCOVERED
 elif [ -n "$_stamp" ] && [ "$_stamp" = "${_live_srv:-__none__}" ]; then _prov=DISCOVERED

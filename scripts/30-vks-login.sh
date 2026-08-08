@@ -191,10 +191,37 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
         # 5 = no readable anchor CONFIGURED. Distinct from 1 (an anchor that is present and wrong):
         # one is set, the other re-fetched, and telling an operator their anchor is "stale" when they
         # never configured one sends them to re-fetch a file they do not have.
+        # ⚠️ THE REMEDY BELOW IS A VERIFIED COMMAND, NOT A TARGET NAME. This message used to say
+        # "(make vks-ca, …)" — a target that HAS NEVER EXISTED. Commit d6f8ede fixed exactly that
+        # string in the DOCS and left it here, so the second-most-likely reader of this die (an
+        # operator whose anchor is missing) was sent to run something that cannot work.
+        #
+        # There is deliberately NO fetch-supervisor-ca target, and that is not an oversight:
+        # MEASURED 2026-08-08 — the Supervisor presents ONE certificate (its leaf), so its issuer is
+        # NOT on the wire and cannot be extracted from the endpoint the way fetch-harbor-ca and
+        # fetch-argocd-ca extract theirs. It has to come out-of-band, from vCenter.
+        #
+        # The curl+unzip below was RUN against a live 9.1 lab: it returned HTTP 200 / 6926 bytes and
+        # the extracted root's SHA-256 matched the working secrets/supervisor-ca.crt exactly.
         5) die "VKS_CA_CERT_FILE='${VKS_CA_CERT_FILE}' is empty or unreadable, so the certificate
   ${SUPERVISOR_HOST} presents cannot be verified at all. This is NOT a stale anchor — there is no
-  anchor. Point VKS_CA_CERT_FILE at the Supervisor's CA (make vks-ca, or ask the platform team for
-  it), then re-run. REFUSING to continue: a credential is submitted over this connection." ;;
+  anchor, so there is nothing to re-fetch or re-pin.
+  The Supervisor serves only its LEAF, so its CA cannot be taken off this connection. Get the VMCA
+  root from vCenter (replace <vcenter> with your vCenter FQDN, NOT the Supervisor address).
+  Needs 'unzip' — 'make deps' installs it; on an air-gap box use your internal package mirror:
+    curl -sk -o /tmp/vmca.zip https://<vcenter>/certs/download.zip
+    unzip -j -o /tmp/vmca.zip 'certs/lin/*.0' -d ./secrets/vmca/
+  A vCenter with more than one trusted root yields SEVERAL files, so do NOT blind-copy — print the
+  subjects and take the one whose CN matches the issuer named above:
+    for f in ./secrets/vmca/*.0; do echo \"\$f\"; openssl x509 -in \"\$f\" -noout -subject; done
+    cp ./secrets/vmca/<the matching one> ./secrets/supervisor-ca.crt
+    chmod 0644 ./secrets/supervisor-ca.crt
+  then set VKS_CA_CERT_FILE=./secrets/supervisor-ca.crt and re-run. Confirm its SHA-256 with the
+  platform team over a channel that is NOT this connection:
+    openssl x509 -in ./secrets/supervisor-ca.crt -noout -fingerprint -sha256
+  (-k on that curl is deliberate and safe: you are FETCHING a trust anchor you then verify
+   out-of-band by fingerprint — the fingerprint is what authenticates it, not the transport.)
+  REFUSING to continue: a credential is submitted over this connection." ;;
         *) die "the CA at ${VKS_CA_CERT_FILE} does NOT verify the certificate ${SUPERVISOR_HOST}
   presents. The endpoint ANSWERED, so this is not a reachability problem — the anchor is for a
   different (usually a DESTROYED and rebuilt) Supervisor. A rebuild mints a new VMCA.
@@ -419,25 +446,32 @@ if kubectl cluster-info >/dev/null 2>"$_vks_err" && kubectl get nodes >/dev/null
   log_info "connected. Current context: $(kubectl config current-context)"
   kubectl get nodes -o wide >&2
 else
+  # ⚠️ `--minify`, and computed ONCE. `.clusters[0]` without it is the FIRST cluster in the FILE,
+  # not the one the current context uses, and a real VKS kubeconfig always holds several (Supervisor
+  # + guest). MEASURED 2026-08-08: context `lab-gc1` resolves to https://192.168.101.132:6443 while
+  # the un-minified form reports the SUPERVISOR at https://192.168.101.128:443 — so every arm below
+  # named an endpoint that was not the one that failed. Four copies of one expression is also how
+  # they drifted from lib/state.sh's `state_kubeconfig_server`, which had `--minify` all along.
+  _vks_srv="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)"
   case "$(classify_kube_failure "$_vks_err")" in
     STALE_CA)
       die "the kubeconfig's CA does not match what ${KUBECONFIG:-the current kubeconfig} is talking to.
   The server ANSWERED — this is NOT a network or auth problem. A REBUILT cluster mints a new CA, and
   the address often stays the same, so a stale kubeconfig looks correctly configured.
     context: $(kubectl config current-context 2>/dev/null || echo '<none>')
-    server:  $(kubectl config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)
+    server:  ${_vks_srv:-<unknown>}
   Re-fetch the kubeconfig from the cluster that is actually running, then re-run." ;;
     UNAUTHORIZED)
       die "the credential in this kubeconfig was REJECTED (Unauthorized) by
-  $(kubectl config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null).
+  ${_vks_srv:-<unknown>}.
   The server answered, so it is reachable — the token or certificate has EXPIRED or belongs to a
   cluster that no longer exists. Log in again and re-fetch the kubeconfig." ;;
     FORBIDDEN)
       die "authenticated, but this identity is not permitted to list nodes on
-  $(kubectl config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null).
+  ${_vks_srv:-<unknown>}.
   That is an RBAC grant, not a broken kubeconfig — ask for the role, or use an identity that has it." ;;
     UNREACHABLE)
-      die "cannot reach $(kubectl config view -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null)
+      die "cannot reach ${_vks_srv:-<unknown>}
   — no HTTP response. This one genuinely IS network: check the address is right, the cluster is up,
   and that this host can route to it." ;;
     *)

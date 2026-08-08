@@ -1,0 +1,67 @@
+# k8s/vks/cluster.yaml — the guest VKS cluster scenario-1 §4b provisions.
+#
+# WHY THIS FILE EXISTS: .env.example has documented VKS_CLUSTERCLASS / VKS_K8S_VERSION /
+# VKS_VM_CLASS / VKS_STORAGE_CLASS / VKS_CONTROL_PLANE_COUNT / VKS_NODE_COUNT since the runbook was
+# written, with the note "DOCUMENTED BUT NOT YET READ by any script (measured: 0 readers each)".
+# This template + scripts/25-vks-cluster-create.sh are their first reader.
+#
+# ⚠️ BLOCK STYLE ONLY — NEVER a flow mapping. `${VAR}` inside `{ }` is a YAML syntax error (the `{`
+# of `${` opens a nested flow map), so the file could not even be linted, let alone rendered.
+#
+# ⚠️ EVERY FIELD HERE IS ONE AN OPERATOR AUTHORS. The live lab-gc1 object carries a further ~20
+# controller-set fields — spec.controlPlaneRef / infrastructureRef / controlPlaneEndpoint, the
+# topology.cluster.x-k8s.io/owned + run.tanzu.vmware.com/tkr labels, the resolved-kr-data and
+# tkr-spec annotations, finalizers, uid — and copying any of them from a running cluster is wrong:
+# they name THAT cluster's random suffixes. Mirror what was APPLIED, never what is STORED.
+#
+# ⚠️ topology.variables.kubernetes is DELIBERATELY ABSENT. MEASURED via a server-side dry-run: the
+# admission webhook DEFAULTS it (a manifest that never contained it came back carrying
+# certificateRotation). Setting it here would be declaring a value we do not own.
+#
+# ⚠️ spec.topology.version is a PREFIX SELECTOR, not an exact version, and admission REWRITES it.
+# MEASURED, 4 operating points: `v1.32.10+vmware.1-fips-vkr.2` and `v1.32.10+vmware.1-fips` and even
+# a bare `v1.32` are all ACCEPTED and all store as `v1.32.10+vmware.1-fips`; only a version no TKr
+# matches (`v1.99.99+...`) is denied, and the denial names the mechanism: `k8sVersionPrefix`.
+# CONSEQUENCES: (a) do NOT gate on exact membership of the Ready+Compatible TKr list — the value in
+# .env is admissible and is NOT in that list; (b) do NOT use a bare prefix in an air-gap repo, it
+# FLOATS to the newest matching patch; (c) the ground truth for "which TKr am I on" is the
+# run.tanzu.vmware.com/tkr LABEL on the created object, never spec.topology.version.
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  name: ${VKS_CLUSTER_NAME}
+  namespace: ${VKS_NAMESPACE}
+  labels:
+    # The ownership stamp lab-down keys on. Namespaced to THIS repo on purpose: the shared lab
+    # already carries a different tool's `nested-lab.local/managed-by`, and `app.kubernetes.io/
+    # managed-by` is far too collidable to authorise a delete.
+    vks-airgap-cicd.local/owned-by: vks-airgap-cicd
+spec:
+  clusterNetwork:
+    services:
+      cidrBlocks:
+        - ${VKS_SERVICE_CIDR}
+    pods:
+      cidrBlocks:
+        - ${VKS_POD_CIDR}
+  topology:
+    classRef:
+      name: ${VKS_CLUSTERCLASS}
+      namespace: ${VKS_CLUSTERCLASS_NAMESPACE}
+    version: ${VKS_K8S_VERSION}
+    controlPlane:
+      replicas: ${VKS_CONTROL_PLANE_COUNT}
+    workers:
+      machineDeployments:
+        - name: np1
+          class: node-pool
+          replicas: ${VKS_NODE_COUNT}
+    variables:
+      - name: vmClass
+        value: ${VKS_VM_CLASS}
+      - name: storageClass
+        value: ${VKS_STORAGE_CLASS}
+      - name: vsphereOptions
+        value:
+          persistentVolumes:
+            defaultStorageClass: ${VKS_STORAGE_CLASS}

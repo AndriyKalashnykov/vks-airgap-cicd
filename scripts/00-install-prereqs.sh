@@ -50,7 +50,11 @@ esac
 # now understands — but installing GNU file REPLACES that symlink (measured: `tdnf install -y file`
 # exits 0, installs file-5.47, no conflict with toybox despite both owning /usr/bin/file), which is
 # strictly better. Internet-side only: `make bundle` runs on the internet box, never the air-gap one.
-pkg_install ca-certificates curl file git jq tar gzip findutils gawk openssl "$GETTEXT_PKG"
+# `unzip` is here because 30-vks-login.sh's missing-anchor die PRESCRIBES it: vCenter serves the
+# Supervisor's VMCA root only as certs/download.zip, and the Supervisor presents just its leaf, so
+# there is no way to obtain that anchor without unzipping. A remedy that names a binary we never
+# install is the same defect as a remedy that names a target that does not exist.
+pkg_install ca-certificates curl file git jq tar gzip unzip findutils gawk openssl "$GETTEXT_PKG"
 # ---- container engine -----------------------------------------------------
 # THE INVARIANT, and it is the whole reason this block is shaped the way it is:
 #

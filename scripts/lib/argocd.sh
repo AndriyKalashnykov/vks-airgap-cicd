@@ -107,7 +107,23 @@ argocd_pick_dest_server() {
   done
   if   [ -n "$by_name" ];   then printf '%s' "$by_name";   return 0
   elif [ -n "$by_server" ]; then printf '%s' "$by_server"; return 0
-  elif [ "$count" = 1 ];    then printf '%s' "$only_s";    return 0
+  # ⚠️ THE count==1 FALLBACK IS ONLY VALID WHEN WE DO NOT KNOW OUR OWN GUEST. It used to fire
+  # unconditionally, and that is the "pick an arbitrary cluster" bug this function was written to
+  # kill — merely narrowed to the single-cluster case, which is the NORMAL shape of a shared lab.
+  #
+  # MEASURED 2026-08-08 on a real 9.1 lab, and it deployed into someone else's cluster: our guest
+  # was https://192.168.101.134:6443 (a cluster we had just created), the ArgoCD on the Supervisor
+  # had exactly ONE registered cluster — the LAB's own lab-gc1 at https://192.168.101.132:6443 —
+  # and with no name match and no server match this returned lab-gc1. 71-argocd-register-guest.sh
+  # then logged "ALREADY registered — nothing to do", never registered our cluster, and the
+  # Application deployed javawebapp INTO THE LAB'S CLUSTER. It reported Synced/Healthy the whole
+  # time, because it was genuinely healthy — in the wrong place. Our own namespace stayed empty and
+  # `make verify` failed with "ArgoCD did not roll a new image", naming nothing near the cause.
+  #
+  # When the caller HAS a guest_api, "no match" is the honest answer: it makes the caller register
+  # the guest instead of adopting a stranger. The fallback survives only for the tenant who cannot
+  # read a guest kubeconfig at all and passes an empty guest_api.
+  elif [ "$count" = 1 ] && [ -z "$guest_api" ]; then printf '%s' "$only_s"; return 0
   fi
   return 1
 }

@@ -65,8 +65,37 @@ if [ "$ARGOCD_KUBECONFIG" = "$KUBECONFIG" ]; then
   log_info "  On a real VKS lab ArgoCD is a Supervisor SERVICE — a DIFFERENT cluster. If that is your lab,"
   log_info "  set ARGOCD_KUBECONFIG ('make fetch-argocd-kubeconfig') or gitops will look in the wrong place."
 fi
-kg version -o json >/dev/null 2>&1 || block "the GUEST cluster does not answer (\$KUBECONFIG)"
-ka version -o json >/dev/null 2>&1 || block "the ARGOCD cluster does not answer (\$ARGOCD_KUBECONFIG)"
+# ⚠️ CLASSIFY, do not guess. These two used to discard stderr and say "does not answer" for every
+# failure — which is the WRONG CAUSE for the most common one on a real lab: a REBUILT Supervisor
+# mints a new CA while the address stays the same, so the kubeconfig looks configured and the
+# endpoint answers fine. "Does not answer" sends the operator to check the network.
+#
+# ⚠️ NO `local` HERE. This file is `set -uo pipefail` with NO `-e`, and these lines are TOP-LEVEL:
+# `local` outside a function is an error, the assignment silently does not happen, and the next
+# use trips `set -u` for rc=127 — a crash whose message names the variable, not the cluster.
+_pf_err="$(mktemp)"
+_pf_classify() {   # _pf_classify <label> <var-name-for-the-message>
+  case "$(classify_kube_failure "$_pf_err")" in
+    STALE_CA)     block "the $1 cluster's kubeconfig CA does not match what it points at ($2).
+    The server ANSWERED — not a network fault. A REBUILT cluster mints a new CA while the address
+    stays the same. Re-fetch it: $3" ;;
+    UNAUTHORIZED) block "the $1 cluster REJECTED this kubeconfig's credentials ($2) — expired, or
+    from a cluster that no longer exists. Re-authenticate: $3" ;;
+    FORBIDDEN)    block "authenticated to the $1 cluster, but this identity may not read it ($2).
+    That is an RBAC grant, not a broken kubeconfig — do NOT re-fetch it." ;;
+    UNREACHABLE)  block "the $1 cluster never answered ($2). This is NOT evidence the kubeconfig is
+    stale — check the address and that this box can route to it." ;;
+    *)            block "the $1 cluster did not answer ($2), and the error is not one we classify:
+$(sed 's/^/      /' "$_pf_err" | head -4)" ;;
+  esac
+}
+# The VARIABLE NAME is the message — the operator needs to know WHICH kubeconfig to fix, so these
+# stay single-quoted deliberately (expanding them would print the path and never the name).
+# shellcheck disable=SC2016
+kg version -o json >/dev/null 2>"$_pf_err" || _pf_classify GUEST  '$KUBECONFIG'        "make vks-login"
+# shellcheck disable=SC2016
+ka version -o json >/dev/null 2>"$_pf_err" || _pf_classify ARGOCD '$ARGOCD_KUBECONFIG' "make fetch-argocd-kubeconfig"
+rm -f "$_pf_err"
 
 OFF=0
 if argocd_is_off_cluster "$ARGOCD_KUBECONFIG" "$KUBECONFIG" 2>/dev/null; then OFF=1; fi

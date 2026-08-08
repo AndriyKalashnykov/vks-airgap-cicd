@@ -43,8 +43,36 @@ unk()  { printf '  UNKNOWN  %s\n' "$*" >&2; problems=$((problems + 1)); }
 
 printf '\n===================== lab preflight =====================\n' >&2
 log_info "cluster: $(kubectl config current-context 2>/dev/null || echo '<unknown>')"
-kubectl version -o json >/dev/null 2>&1 \
-  || die "cannot reach the cluster with the current KUBECONFIG — run 'make vks-login' first"
+# ⚠️ CAPTURE stderr and CLASSIFY it. This used to be `2>&1` + one guess ("run 'make vks-login'"),
+# which is the wrong remedy for four of the five ways it fails — a stale CA is not fixed by logging
+# in again, and an RBAC refusal is not fixed by anything this script can name.
+#
+# ⚠️ `version` is deliberate here (it is the cheapest possible probe) but it is ALSO the one kubectl
+# verb whose stderr is TERSE — it skips discovery, so it emits neither "connection refused" nor
+# "dial tcp". That is why classify_kube_failure carries the format-string suffix arm; this call site
+# is the ONLY one in the repo that produces the terse form, so without this wiring that arm would be
+# unreachable — a classifier branch no caller can hit is a branch that measures nothing.
+_lp_err="$(mktemp)"
+if ! kubectl version -o json >/dev/null 2>"$_lp_err"; then
+  _lp_srv="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)"
+  case "$(classify_kube_failure "$_lp_err")" in
+    STALE_CA)     die "the kubeconfig's CA does not match ${_lp_srv:-the server it points at}.
+  The server ANSWERED — this is NOT a network fault. A REBUILT cluster mints a new CA while the
+  address stays the same, so a dead kubeconfig looks correctly configured.
+  Re-export it from the cluster that is actually running:  make vks-login" ;;
+    UNAUTHORIZED) die "${_lp_srv:-the cluster} REJECTED this kubeconfig's credentials — they expired,
+  or they belong to a cluster that no longer exists. Re-authenticate:  make vks-login" ;;
+    FORBIDDEN)    die "authenticated to ${_lp_srv:-the cluster}, but this identity may not read it.
+  That is an RBAC GRANT, not a broken kubeconfig — do NOT re-fetch it. Ask your platform team for
+  cluster-admin (this flow creates namespaces and installs CRDs)." ;;
+    UNREACHABLE)  die "cannot reach ${_lp_srv:-the cluster} — it never answered.
+  This is NOT evidence your kubeconfig is stale. Is the lab up, and routable from this jump box?" ;;
+    *)            die "cannot reach the cluster with the current KUBECONFIG, and the error is not one
+  this script classifies — printed verbatim rather than guessed at:
+$(sed 's/^/    /' "$_lp_err" | head -6)" ;;
+  esac
+fi
+rm -f "$_lp_err"
 
 # 1. CRDs — Tekton installs its own. Without this permission its install dies midway.
 # ⚠️ A reachability gate above already died if the cluster were unreachable, so `unknown` HERE

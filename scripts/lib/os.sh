@@ -1035,7 +1035,19 @@ classify_kube_failure() {
     # UNKNOWN misfire. `401` is the ONLY purely-numeric token in this function, so it is the only
     # one that can collide with machine-generated digits (timestamps, PIDs, `file.go:NNN` lines) —
     # every other token is alphabetic and needs no anchor.
-    *"no route to host"*|*"connection refused"*|*"i/o timeout"*|*"dial tcp"*|*"no such host"*) \
+    # ⚠️ THE LAST TOKEN IS kubectl's TERSE FORM, AND IT IS NOT REDUNDANT. `kubectl version` skips
+    # discovery, so it prints ONLY "The connection to the server H:P was refused - did you specify
+    # the right host or port?" — which contains NEITHER "connection refused" (kubectl writes
+    # "was refused") NOR "dial tcp". MEASURED: that string classified UNKNOWN while the klog form
+    # from `cluster-info`/`get nodes`/`auth can-i`/`api-resources` classified UNREACHABLE.
+    #
+    # ⚠️ MATCH THE FORMAT-STRING SUFFIX, *NOT* "was refused". MEASURED over a 13-case corpus: the
+    # suffix is identical to the old behaviour on every input except the target one, while adding
+    # "was refused" INVERTS an auth verdict — this arm sits ABOVE UNAUTHORIZED/FORBIDDEN, so any
+    # auth text containing that generic English substring flips to a network cause. The suffix is a
+    # kubectl internal format string and cannot appear in prose; "was refused" can.
+    *"no route to host"*|*"connection refused"*|*"i/o timeout"*|*"dial tcp"*|*"no such host"*|\
+    *"did you specify the right host or port"*) \
                                                                                        printf 'UNREACHABLE' ;;
 
     # ⚠️ kubectl TRANSLATES a 401 — its stderr contains neither "Unauthorized" NOR "401".

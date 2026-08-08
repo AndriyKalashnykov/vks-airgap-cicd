@@ -3,6 +3,18 @@ kind: Application
 metadata:
   name: ${APP_NAME}
   namespace: ${ARGOCD_NAMESPACE}
+  labels:
+    # ⚠️ THE STAMP `make lab-down` DELETES BY, AND IT IS LOAD-BEARING FOR SAFETY, NOT TIDINESS.
+    # APP_NAME comes from apps/registry.tsv and is a generic demo name (javawebapp / gowebapp).
+    # ARGOCD_NAMESPACE on a real lab is a SHARED namespace — measured on one 9.1 lab, it is the same
+    # namespace as VKS_NAMESPACE and already contained a foreign Application plus another tool's
+    # cluster Secret. Combine a generic name with the finalizer + prune:true below and a
+    # delete-by-name teardown would CASCADE-DELETE ANOTHER TENANT'S RUNNING WORKLOADS. So teardown
+    # selects on this label and refuses anything that lacks it.
+    #
+    # Namespaced to THIS repo deliberately: `app.kubernetes.io/managed-by` collides with everything,
+    # and the shared lab already carries `nested-lab.local/managed-by` from a different tool.
+    vks-airgap-cicd.local/owned-by: vks-airgap-cicd
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:

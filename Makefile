@@ -319,9 +319,25 @@ builder-push: check-env ## (sneakernet, AIR-GAP box) Push the CARRIED Maven buil
 vks-login: check-env ## Authenticate to VKS (VCF 9 + Supervisor) → writes KUBECONFIG/context
 	@$(SCRIPTS)/30-vks-login.sh
 
+.PHONY: vks-cluster-create
+vks-cluster-create: ## Provision the guest VKS cluster from the VKS_* topology keys (scenario-1 §4b); server-side dry-run gates it
+	@$(SCRIPTS)/25-vks-cluster-create.sh
+
+.PHONY: vks-cluster-status
+vks-cluster-status: ## Read-only: is the guest cluster ACTUALLY ready? (conditions + observedGeneration + nodes — phase=Provisioned is NOT readiness)
+	@$(SCRIPTS)/26-vks-cluster-status.sh
+
 .PHONY: fetch-harbor-ca
 fetch-harbor-ca: ## Fetch the CA that ISSUED the lab Harbor's cert → HARBOR_CA_FILE, and VERIFY it (for HTTPS mirror/Kaniko trust)
 	@$(SCRIPTS)/fetch-ca.sh "$(HARBOR_URL)" "$(HARBOR_CA_FILE)" harbor
+
+.PHONY: lab-down
+lab-down: ## DESTRUCTIVE (real lab): remove what scenario-1 created — ours only, by ownership label, never by name. Requires CONFIRM=<VKS_CLUSTER_NAME>
+	@$(SCRIPTS)/98-lab-down.sh
+
+.PHONY: harbor-ca-from-cluster
+harbor-ca-from-cluster: ## Get the lab Harbor's CA from the Supervisor when it is NOT on the wire (scenario-1 §6 route B; costs an ADMIN-level read — see the header)
+	@$(SCRIPTS)/27-harbor-ca-from-cluster.sh "$(if $(HARBOR_CA_FILE),$(HARBOR_CA_FILE),./secrets/harbor-ca.crt)"
 
 .PHONY: fetch-argocd-ca
 fetch-argocd-ca: ## Fetch the CA that ISSUED the ArgoCD server's cert → ARGOCD_CA_FILE, and VERIFY it (endpoint: ARGOCD_LB_IP or ARGOCD_SERVER)
