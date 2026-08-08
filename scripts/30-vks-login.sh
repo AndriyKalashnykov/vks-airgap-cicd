@@ -191,10 +191,32 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
         # 5 = no readable anchor CONFIGURED. Distinct from 1 (an anchor that is present and wrong):
         # one is set, the other re-fetched, and telling an operator their anchor is "stale" when they
         # never configured one sends them to re-fetch a file they do not have.
+        # ⚠️ THE REMEDY BELOW IS A VERIFIED COMMAND, NOT A TARGET NAME. This message used to say
+        # "(make vks-ca, …)" — a target that HAS NEVER EXISTED. Commit d6f8ede fixed exactly that
+        # string in the DOCS and left it here, so the second-most-likely reader of this die (an
+        # operator whose anchor is missing) was sent to run something that cannot work.
+        #
+        # There is deliberately NO fetch-supervisor-ca target, and that is not an oversight:
+        # MEASURED 2026-08-08 — the Supervisor presents ONE certificate (its leaf), so its issuer is
+        # NOT on the wire and cannot be extracted from the endpoint the way fetch-harbor-ca and
+        # fetch-argocd-ca extract theirs. It has to come out-of-band, from vCenter.
+        #
+        # The curl+unzip below was RUN against a live 9.1 lab: it returned HTTP 200 / 6926 bytes and
+        # the extracted root's SHA-256 matched the working secrets/supervisor-ca.crt exactly.
         5) die "VKS_CA_CERT_FILE='${VKS_CA_CERT_FILE}' is empty or unreadable, so the certificate
   ${SUPERVISOR_HOST} presents cannot be verified at all. This is NOT a stale anchor — there is no
-  anchor. Point VKS_CA_CERT_FILE at the Supervisor's CA (make vks-ca, or ask the platform team for
-  it), then re-run. REFUSING to continue: a credential is submitted over this connection." ;;
+  anchor, so there is nothing to re-fetch or re-pin.
+  The Supervisor serves only its LEAF, so its CA cannot be taken off this connection. Get the VMCA
+  root from vCenter (replace <vcenter> with your vCenter FQDN, NOT the Supervisor address):
+    curl -sk -o /tmp/vmca.zip https://<vcenter>/certs/download.zip
+    unzip -j -o /tmp/vmca.zip 'certs/lin/*.0' -d ./secrets/
+    mv ./secrets/*.0 ./secrets/supervisor-ca.crt && chmod 0644 ./secrets/supervisor-ca.crt
+  then set VKS_CA_CERT_FILE=./secrets/supervisor-ca.crt and re-run. Confirm its SHA-256 with the
+  platform team over a channel that is NOT this connection:
+    openssl x509 -in ./secrets/supervisor-ca.crt -noout -fingerprint -sha256
+  (-k on that curl is deliberate and safe: you are FETCHING a trust anchor you then verify
+   out-of-band by fingerprint — the fingerprint is what authenticates it, not the transport.)
+  REFUSING to continue: a credential is submitted over this connection." ;;
         *) die "the CA at ${VKS_CA_CERT_FILE} does NOT verify the certificate ${SUPERVISOR_HOST}
   presents. The endpoint ANSWERED, so this is not a reachability problem — the anchor is for a
   different (usually a DESTROYED and rebuilt) Supervisor. A rebuild mints a new VMCA.
