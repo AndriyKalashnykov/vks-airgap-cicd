@@ -171,6 +171,32 @@ fi
 CONFIG_JSON="{\"bearerToken\":\"${TOKEN}\",${TLS_CFG}}"
 SECRET_NAME="cluster-$(printf '%s' "$DEST_NAME" | tr -c 'a-z0-9-' '-' | cut -c1-40)"
 
+# ⚠️ REFUSE TO OVERWRITE A REGISTRATION THAT IS NOT OURS. SECRET_NAME is DERIVED and LOSSY — it
+# lowercases nothing, maps every non-[a-z0-9-] byte to '-', and TRUNCATES TO 40 CHARS, so it is not
+# injective. Measured:
+#     tenant-a-very-long-guest-cluster-name-number-one -> cluster-tenant-a-very-long-guest-cluster-name-nu
+#     tenant-a-very-long-guest-cluster-name-number-two -> cluster-tenant-a-very-long-guest-cluster-name-nu
+# Identical. `ka apply` on a collision would REPOINT ANOTHER TENANT'S registration at our cluster
+# with our token, in a namespace measured to hold foreign registrations (one labelled
+# nested-lab.local/managed-by) — and would stamp it with OUR owned-by label, so `make lab-down`
+# would later DELETE it as if it were ours. Two destructive acts from one truncation.
+if _existing_owner="$(ka -n "$ARGOCD_NAMESPACE" get secret "$SECRET_NAME" \
+      -o jsonpath='{.metadata.labels.vks-airgap-cicd\.local/owned-by}' 2>/dev/null)"; then
+  if [ "$_existing_owner" != "vks-airgap-cicd" ]; then
+    die "Cluster Secret '$SECRET_NAME' already exists in ns/$ARGOCD_NAMESPACE and is NOT ours
+  (owned-by='${_existing_owner:-<no ownership label>}').
+
+  Refusing to overwrite it. The Secret name is derived from the destination name and TRUNCATED to
+  40 characters, so two different clusters can map to the same name. Overwriting would repoint
+  someone else's ArgoCD destination at your cluster.
+
+  Register under a distinct name instead:
+      make argocd-register-guest ARGOCD_DEST_CLUSTER_NAME=<a-short-distinct-name>
+  Or, if that Secret really is a leftover of yours, delete it first after confirming what it points at:
+      kubectl --kubeconfig \$ARGOCD_KUBECONFIG -n $ARGOCD_NAMESPACE get secret $SECRET_NAME -o jsonpath='{.data.server}' | base64 -d"
+  fi
+fi
+
 log_info "argocd: creating Cluster Secret '$SECRET_NAME' (secret-type=cluster) in ns/$ARGOCD_NAMESPACE"
 # Manifest (with the token) goes over STDIN — never argv.
 ka apply -f - >/dev/null <<EOF
@@ -199,5 +225,12 @@ EOF
 # redundancy — plus a stale pointer that survives into the NEXT cluster, which is the publish-then-
 # read-back trap this repo has already removed twice (INGRESS_LB_IP_OVERRIDE, GITEA_ARGOCD_URL).
 # An operator who must force it has ARGOCD_DEST_SERVER as an explicit env override.
-log_info "registered. ARGOCD_DEST_SERVER=$SERVER written to $(state_file) — 'make gitops' will now deploy to the guest cluster."
+# ⚠️ THIS LINE USED TO CLAIM THE VALUE WAS "written to $(state_file)" — CONTRADICTING THE COMMENT
+# DIRECTLY ABOVE IT, and it is false: there is no state_set in this file, and test-state-overlay
+# gates that there never is. MEASURED 2026-08-08: after a successful registration, .env.state
+# contained no ARGOCD_DEST_SERVER at all. An operator who greps for it concludes the registration
+# failed and runs it again. Say what actually happened, and where the destination really comes from.
+log_info "registered as '$DEST_NAME' ($SERVER)."
+log_info "  Nothing was written to $(state_file) — 'make gitops' RE-DERIVES the destination from the"
+log_info "  live ArgoCD Cluster Secrets, so it will pick this up with no further configuration."
 log_info "verify: kubectl --kubeconfig \$ARGOCD_KUBECONFIG -n $ARGOCD_NAMESPACE get secret -l argocd.argoproj.io/secret-type=cluster"

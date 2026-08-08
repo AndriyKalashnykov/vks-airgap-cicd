@@ -841,6 +841,40 @@ Two rows carry warmth this table cannot see: the cluster's 3 m 45 s assumes the 
 has the TKr image cached (a first-ever cluster from a cold content library is a different number),
 and `static-check` assumes a populated `~/.m2` and a current trivy DB.
 
+### A SECOND full run, same box, same day — where it differed and why
+
+The walk was run end to end **twice**. Quoting only one set of numbers would present a single
+operating point as "the" figure, and the two runs disagree in *both* directions:
+
+| | run 1 | run 2 | why |
+|---|---|---|---|
+| cluster → all nodes `Ready` | 3 m 45 s | **≈ 6 m** | run 2 provisioned **beside** the lab's own 3-VM cluster; more contention |
+| `make install-all` | 10 m 26 s | **8 m 14 s** | Harbor was warmer still — fewer blobs moved |
+| `make verify` (2 apps) | 3 m 6 s | **3 m 27 s** | |
+| `make lab-down` | 1 m 12 s | **1 m 12 s** | identical |
+
+So **provisioning is the variable row, not the mirror** — the opposite of the intuition, because the
+mirror gets monotonically warmer while the host gets busier. Budget the cluster generously.
+
+### ⚠️ Do NOT recreate a guest cluster under a NAME YOU JUST DELETED
+
+MEASURED across four incarnations on this lab: a cluster recreated under a recently-deleted name
+advertises the **previous** incarnation's control-plane VIP — `spec.controlPlaneEndpoint.host` lags
+by exactly one allocation — and then **never converges**, because CAPI dials an address nothing
+serves. It does not self-heal.
+
+| | advertised | its load balancer |
+|---|---|---|
+| 1st (fresh lab) | .134 | **.134** — agreed, Ready in 3 m 45 s |
+| 2nd, same name | .134 | .136 — never converged in 25 min |
+| 3rd, same name | .136 | .137 — never converged |
+| 4th, same name | .137 | .138 — predicted from the pattern, then confirmed |
+| **5th, a NEW name** | **.139** | **.139** — agreed, Ready, walk completed |
+
+`make vks-cluster-status` now reports this directly (`endpoint : *** DIVERGENT ***`, naming both
+addresses) instead of leaving you to watch conditions that cannot go True. If you hit it, **use a
+different cluster name** — that is the remedy that was measured to work.
+
 ## Preconditions, in one place
 
 - **cluster-admin** on the guest cluster (we create namespaces and install Tekton CRDs).
