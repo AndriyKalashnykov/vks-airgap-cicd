@@ -328,9 +328,33 @@ kubectl get kubernetesreleases
 → `.env`: `VKS_CLUSTERCLASS`, `VKS_K8S_VERSION`, `VKS_VM_CLASS`, `VKS_STORAGE_CLASS`,
 `VKS_CONTROL_PLANE_COUNT`, `VKS_NODE_COUNT`.
 
-> ⚠️ **These six keys are DOCUMENTED BUT NOT YET READ by any script** (measured: 0 readers each).
-> They record your intent and are the input the §4a/§4b automation will consume — but today the
-> cluster is created by whatever you apply by hand, so set the counts THERE.
+Then create it, and wait for it properly:
+
+```bash
+make vks-cluster-create   # renders k8s/vks/cluster.yaml from those keys and applies it
+make vks-cluster-status   # conditions + observedGeneration + NODES (see the readiness note below)
+```
+
+> **These six keys are now READ** — `make vks-cluster-create` is their reader (they had none when
+> this runbook was written). Three of them default in code if you leave them unset:
+> `VKS_CLUSTERCLASS` → `builtin-generic-v3.6.0`, `VKS_CONTROL_PLANE_COUNT` → `1`,
+> `VKS_NODE_COUNT` → **2** (the measured floor below, not the `1` the example line shows).
+>
+> ⚠️ **`VKS_K8S_VERSION` is a PREFIX, not an exact version, and admission REWRITES it.** MEASURED
+> 2026-08-08 with four server-side dry-runs: `v1.32.10+vmware.1-fips-vkr.2`, `v1.32.10+vmware.1-fips`
+> and even a bare `v1.32` are **all accepted** and all store as `v1.32.10+vmware.1-fips`; only a
+> version no TKr matches is denied, and the denial names the mechanism (`k8sVersionPrefix`). Three
+> consequences: a value **absent from `kubectl get kubernetesreleases`' Ready+Compatible list can
+> still be perfectly admissible** (so do not gate on that list); a bare prefix **floats** to the
+> newest matching patch, which an air-gap repo does not want; and the ground truth for *which* TKr
+> you got is the `run.tanzu.vmware.com/tkr` **label on the created object**, never
+> `spec.topology.version`.
+>
+> `vks-cluster-create` validates with **`kubectl apply --dry-run=server`** before applying — that
+> runs the real webhooks and rejects a misspelled variable, a VM/storage class that does not exist
+> in *your* namespace, and an unresolvable version, with the server's own wording. The one thing it
+> does **not** catch is an *empty* value (measured: an empty `replicas` is accepted silently), so the
+> script checks the rendered manifest for empty substitutions itself.
 >
 > 🔴 **SIZING — provision at least TWO workers.** The platform install requests **~1.9 CPU** on a
 > worker, and a single 2-CPU node (`best-effort-small`) **will not fit it**. MEASURED 2026-08-05 on
@@ -381,9 +405,21 @@ kubectl --kubeconfig ./secrets/vks.kubeconfig get nodes -o wide
 
 > ✅ **PREFER the Supervisor secret — it is self-contained and needs no `vcf` CLI:**
 >
+> **`make vks-cluster-status` already does this for you** — it writes
+> `./secrets/<cluster>.kubeconfig` from that Secret every time it runs. By hand:
+>
 > ```bash
-> kubectl -n "$VKS_NAMESPACE" get secret "${VKS_CLUSTER_NAME}-kubeconfig" \
->   -o jsonpath='{.data.value}' | base64 -d > ./secrets/vks.kubeconfig
+> # NOTE the --kubeconfig and the temp file. Both are load-bearing, and the obvious one-liner
+> # (ambient kubectl, redirecting straight onto ./secrets/vks.kubeconfig) DESTROYS the kubeconfig
+> # it is meant to produce: the Secret lives on the SUPERVISOR while .env points KUBECONFIG at the
+> # GUEST, and the shell TRUNCATES a redirect target before kubectl ever runs. You end up with
+> # neither the old file nor a new one, and secrets/ is gitignored, so it is unrecoverable.
+> t=$(mktemp)
+> kubectl --kubeconfig ./secrets/supervisor.kubeconfig \
+>   -n "$VKS_NAMESPACE" get secret "${VKS_CLUSTER_NAME}-kubeconfig" \
+>   -o jsonpath='{.data.value}' | base64 -d > "$t"
+> [ -s "$t" ] || { rm -f "$t"; echo "extracted nothing — NOT overwriting your kubeconfig"; false; }
+> chmod 0600 "$t" && mv "$t" "./secrets/${VKS_CLUSTER_NAME}.kubeconfig"   # 0600: it is a CREDENTIAL
 > ```
 >
 > MEASURED 2026-08-04: this yields a kubeconfig with **inline `certificate-authority-data`** and
@@ -487,7 +523,18 @@ the in-cluster `harbor-ca` ConfigMap for you. (Publicly-trusted cert? Leave `HAR
 > that verifies nothing. Get the CA out-of-band instead (either route below), then set
 > `HARBOR_CA_FILE` and continue; everything downstream works unchanged.
 
-**Getting the CA when it is not on the wire** — pick either:
+**Getting the CA when it is not on the wire** — route B is automated:
+
+```bash
+make harbor-ca-from-cluster   # scenario-1 §6 route B, with the four safety properties below baked in
+```
+
+⚠️ It costs the **admin-level grant** described in route B (the Secret also carries the CA's private
+signing key). Route A — the Harbor UI download — needs only a Harbor login and no Kubernetes access;
+prefer it when you can. Either way, `make env-validate` afterwards is what proves the anchor
+actually verifies the live endpoint.
+
+Or by hand — pick either:
 
 ```bash
 # A. From the UI — PREFER THIS. Harbor → project → Registry Certificate downloads ca.crt.
@@ -719,6 +766,40 @@ Kubernetes Gateway API and lets Istio provision the proxy + LB), which needs the
 present (`kubectl get crd httproutes.gateway.networking.k8s.io`). See
 [the decision record](decisions/istio-via-vks-package.md) for why we do not install this way.
 </details>
+
+## 12. Removing it again
+
+**Goal:** put the lab back. Until now this runbook had no teardown at all — `make clean` removes
+only local build output, and `make kind-down` is KinD-only and deliberately refuses to touch
+real-lab state.
+
+```bash
+make lab-down CONFIRM=<your VKS_CLUSTER_NAME>    # the cluster name is the confirmation
+```
+
+**What it removes, and what it will not.** Deleting the guest cluster removes everything *inside*
+it in one step, so `lab-down` does **not** walk the guest cluster's namespaces or CRDs — that is
+pure risk for no benefit, and on a mesh you attached to (`istio-existing`) deleting `istio-system`
+would remove the platform team's mesh. What survives a cluster deletion is the half that lands on
+**shared** infrastructure, and that is what it targets: your ArgoCD Applications, the repo
+credential, the guest-cluster registration, and then the Cluster CR itself, in that order —
+Applications first, because an Application's `resources-finalizer` can only complete while ArgoCD
+can still reach the destination.
+
+> 🔴 **It deletes ONLY objects carrying our ownership label, and REFUSES anything that lacks it.**
+> That is not fastidiousness. On a real lab `ARGOCD_NAMESPACE` is frequently the *same* namespace as
+> `VKS_NAMESPACE` — measured on one 9.1 lab, it held the ArgoCD instance itself, the lab's own
+> cluster, a **foreign Application**, and a cluster Secret bearing a *different tool's* ownership
+> label. Our Applications are named from `apps/registry.tsv` (`javawebapp`, `gowebapp`) and carry
+> `prune: true`, so a delete-by-name teardown could **cascade-delete another tenant's running
+> workloads**. Anything unlabelled is listed and left alone.
+>
+> **Harbor is deliberately manual.** Harbor refuses to delete a project that still holds
+> repositories, and that refusal is the only thing standing between a stale `HARBOR_*_PROJECT` and
+> someone else's images. `lab-down` prints the exact API calls rather than forcing them.
+>
+> It ends by printing **what it deliberately left alone** — a half-done teardown you can see beats a
+> clean-looking one that quietly skipped things.
 
 ## Preconditions, in one place
 
