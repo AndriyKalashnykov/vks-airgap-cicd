@@ -48,12 +48,30 @@ Each step ends with a table of the keys it sets, with an example and where the v
 
 Everything below runs **from the repo root**. Nothing works from another directory.
 
+A stock Ubuntu or Photon box has **neither `git` nor `make`** (measured on `ubuntu:24.04` and
+`photon:5.0`), so install them first.
+
+```bash
+# Ubuntu / Debian
+apt-get update && apt-get install -y --no-install-recommends git make ca-certificates
+# Photon OS 5
+tdnf install -y git make
+```
+
+Prefix with `sudo` if you are not root.
+
 ```bash
 git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git
 cd vks-airgap-cicd
 pwd                            # sanity check: should end in /vks-airgap-cicd
 make env-init                  # creates ./.env from the template .env.example
 ```
+
+> **Shortcut:** the repo ships a one-command bootstrap that installs those packages, clones the repo
+> and runs Step 1's `make deps` for you — see
+> [Bootstrap an unprovisioned jump box](../README.md#bootstrap-an-unprovisioned-jump-box-before-you-can-clone-this-repo)
+> in the README. It does **not** create `.env`, so afterwards
+> still run `cd vks-airgap-cicd && make env-init` and continue from Step 1's `make install-vcf-clis`.
 
 **Expect:** `./.env` exists. Open it in your editor — it is the one file you edit for the rest of
 this runbook, and every step below ends with a table of the keys it wants you to set in it.
@@ -101,60 +119,45 @@ Your password has no key here — you type it at a prompt in Step 3.
 
 ## 1b. The vSphere Namespace
 
-`VKS_NAMESPACE` must name a namespace that **already exists** and has a storage policy and a VM class
-attached to it. Nothing in this repo creates one.
+Your cluster goes in a vSphere Namespace. Use your own — not one shared with other workloads,
+because teardown deletes **by name** and this repo's app names are generic.
 
-> **If your namespace was created for you, skip this section.** Put its name in `VKS_NAMESPACE` and
-> go to Step 2. Creating a namespace needs the **Owner** role; with *Can Edit* you cannot, and do not
-> need to.
+### If you already have one
 
-**Create it in vCenter** — this is the supported route and the only one that works everywhere:
+Put its name in `VKS_NAMESPACE` and go to Step 2.
 
-1. **Workload Management → Namespaces → Create Namespace**, pick your Supervisor, name it.
-2. Open it → **Storage** → *Add Storage* → select a storage policy (e.g. `wcp-vmfs`, or
-   `vsan-default-storage-policy` on vSAN).
-3. → **VM Service** → *Add VM Class* → select at least one (e.g. `best-effort-small`).
+### If you don't — create it
 
-You do **not** attach a content library for this. Guest-cluster node images come from a library
-associated at the *Supervisor* level, not per namespace.
+**vCenter → Workload Management → Namespaces → Create Namespace.** Pick your Supervisor, name it.
+Then, in the namespace you just created:
 
-**Confirm it is usable** (both must be non-empty — this is the check that actually predicts
-scheduling):
+1. **Storage** → *Add Storage* → pick a storage policy — `wcp-vmfs`, or
+   `vsan-default-storage-policy` on vSAN.
+2. **VM Service** → *Add VM Class* → pick at least one — `best-effort-small` is enough.
+
+Do not add a content library; guest-cluster node images do not come from one.
+
+No permission to create namespaces? Ask your vSphere admin for one, with those two things attached.
+
+### Check it before Step 4
+
+Run this once you have the Supervisor kubeconfig (Step 3). **Both must print something.**
 
 ```bash
 cd vks-airgap-cicd
-export KUBECONFIG=./secrets/supervisor.kubeconfig     # you have this after Step 3; skip until then
-kubectl -n "$VKS_NAMESPACE" get storagepolicyquotas   # the storage policy landed
-kubectl -n "$VKS_NAMESPACE" get virtualmachineclass   # must list your VKS_VM_CLASS
+export KUBECONFIG=./secrets/supervisor.kubeconfig
+kubectl -n "$VKS_NAMESPACE" get storagepolicyquotas
+kubectl -n "$VKS_NAMESPACE" get virtualmachineclass
 ```
 
-⚠️ **A namespace missing these is still accepted.** The Cluster object passes admission — verified by
-server-side dry-run — and then fails ~20 minutes later at scheduling, with an error that names
-neither storage nor VM class. The two commands above are the cheap check; the apply is not.
+| result | what to do |
+|---|---|
+| both list something | you are ready for Step 4 |
+| `storagepolicyquotas` empty | go back and add the storage policy |
+| `virtualmachineclass` empty | go back and add the VM class |
 
-<details>
-<summary>Creating it with <code>kubectl</code> instead (only if your admin enabled it)</summary>
-
-`kubectl create namespace` on the Supervisor works **only** where an administrator has configured
-**vSphere Namespace Self-Service** with a template, and only for the **Owner** role. It is off by
-default. Ask first:
-
-```bash
-kubectl --kubeconfig ./secrets/supervisor.kubeconfig auth can-i create namespaces
-#  no   -> use the vCenter UI above (the normal case)
-#  yes  -> self-service is on: kubectl create namespace <name> works, and the template
-#          attaches the storage policy and VM class for you
-```
-
-Verified on a lab with self-service on: the namespace came up carrying
-`vmware-system-self-service-namespace: true` plus its own storage-policy quota, and provisioned a
-guest cluster end to end. A vCenter-created namespace carries no such annotation.
-</details>
-
-**Prefer a namespace of your own** rather than sharing one with other workloads — not because it
-prevents any deployment bug, but because teardown targets objects **by name**, and this repo's demo
-apps have generic names. `make lab-down` in a shared namespace is how you delete someone else's
-`smoketest`.
+Worth the 10 seconds: a namespace missing either still **accepts** the cluster in Step 4, then never
+finishes provisioning it.
 
 ---
 
