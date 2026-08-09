@@ -200,6 +200,11 @@ A namespace missing either still accepts the cluster in Step 4, then never finis
 The registry every image comes from.
 [Broadcom docs](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-harbor-as-vcf-service/installing-and-configuring-harbor-and-contour.html)
 
+> **Already have Harbor?** Many labs ship it. Check first — vCenter → Workload Management →
+> **Supervisor Services**, or `kubectl get ns | grep harbor`. If it is there, **skip the install
+> below** and go straight to the `.env` table at the end of this step; you need its FQDN and an
+> account, not a second installation.
+
 1. Give Harbor an **NGINX LoadBalancer** (`enableNginxLoadBalancer: true`, set in 2.4 below).
    Contour is not covered by this runbook.
 2. vCenter → Workload Management → Supervisor Services → **Add New Service** → upload
@@ -267,6 +272,10 @@ The registry every image comes from.
 
 The GitOps engine, running on the Supervisor.
 [Broadcom docs](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-argo-cd-service/install-argo-cd-service.html)
+
+> **Already have ArgoCD?** Check: `kubectl get argocd -A`, or vCenter → Workload Management →
+> **Supervisor Services**. If it is there, skip sub-steps 1, 2 and 5 — you still need **3.3** (the
+> Supervisor CA), **3.4** (log in) and the `.env` table at the end.
 
 1. Supervisor Services → **Add New Service** → upload `supervisor-service-argocd-legacy-*.yml`.
 2. Create a vSphere Namespace for the instance — **same procedure as [1b](#1b-the-vsphere-namespace)**
