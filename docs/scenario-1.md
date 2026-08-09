@@ -8,9 +8,6 @@ as Supervisor Services, creates a guest VKS cluster, and runs an air-gapped CI/C
 **What you end up with:** `git push` → Tekton builds → image to Harbor → tag written back → ArgoCD
 syncs → the app serves the change. Two demo apps (Java and Go), proven by `make verify`.
 
-**Topology — two clusters, two kubeconfigs.** Harbor and ArgoCD run on the **Supervisor**. Gitea,
-Tekton and your apps run in the **guest cluster**.
-
 > Background for when a step surprises you → [scenario-1-notes.md](scenario-1-notes.md).
 
 ## The whole sequence
@@ -22,8 +19,8 @@ Run these in this order. Steps 2 and 3 are browser work; everything else is a co
 | **0** | [Get the repo](#0-get-the-repo) | clone it, `cd` into it, create `.env` |
 | **1** | [Jump box](#1-jump-box) | install the toolchain; set 8 values in `.env` |
 | **1b** | [vSphere Namespace](#1b-the-vsphere-namespace) | browser: create it, attach storage + a VM class |
-| **2** | [Harbor](#2-harbor-browser) | browser: install it; set 5 values |
-| **3** | [ArgoCD](#3-argocd-supervisor) | browser + CLI: install it, get the CA, log in; set 4 values |
+| **2** | [Harbor](#2-harbor) | browser: install it; set 5 values |
+| **3** | [ArgoCD](#3-argocd) | browser + CLI: install it, get the CA, log in; set 4 values |
 | **4** | [Guest cluster](#4-guest-cluster) | create it; set 1 value, then 3 more after it is up |
 | **5** | [Preflight](#5-preflight) | check the cluster will accept the install |
 | **6** | [Harbor's CA](#6-harbors-ca) | fetch it |
@@ -161,7 +158,7 @@ A namespace missing either still accepts the cluster in Step 4, then never finis
 
 ---
 
-## 2. Harbor (browser)
+## 2. Harbor
 
 The registry every image comes from.
 [Broadcom docs](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-harbor-as-vcf-service/installing-and-configuring-harbor-and-contour.html)
@@ -229,7 +226,7 @@ The registry every image comes from.
 
 ---
 
-## 3. ArgoCD (Supervisor)
+## 3. ArgoCD
 
 The GitOps engine, running on the Supervisor.
 [Broadcom docs](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-argo-cd-service/install-argo-cd-service.html)
