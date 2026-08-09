@@ -108,8 +108,15 @@ SCRIPTS := ./scripts
 # ---------------------------------------------------------------------------
 .PHONY: help
 help: ## Show this help
-	@awk 'BEGIN{FS=":.*##"; printf "\nvks-airgap-cicd targets\n\n"} \
-	  /^[a-zA-Z0-9_-]+:.*##/ {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2} \
+	@# Take the text after the FIRST '##', not a regex FS. `FS=":.*##"` is leftmost-LONGEST, so it
+	@# swallowed through to the LAST '##' on the line: check-doc-target-coverage's help ends with a
+	@# literal `## Gate:` (it documents its own exemption marker) and rendered as the bare string
+	@# "Gate:`)". MEASURED before/after. check-doc-target-coverage.sh already does it this way.
+	@# %-28s, not %-20s: MEASURED 35 target names exceed 20 chars (longest 27,
+	@# check-gwapi-istio-alignment), so descriptions started at a ragged offset for a third of them.
+	@awk 'BEGIN{printf "\nvks-airgap-cicd targets\n\n"} \
+	  /^[a-zA-Z0-9_-]+:.*##/ {i=index($$0,"##"); n=$$0; sub(/:.*/,"",n); \
+	                          printf "  \033[36m%-28s\033[0m %s\n", n, substr($$0,i+2)} \
 	  /^##@/ {printf "\n\033[1m%s\033[0m\n", substr($$0,5)}' $(MAKEFILE_LIST)
 	@echo ""
 
