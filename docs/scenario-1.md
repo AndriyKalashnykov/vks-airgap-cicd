@@ -82,23 +82,37 @@ below lists the keys it needs before the commands that read them.
 
 All of these are **entitled** downloads — you need a Broadcom account with a vSphere
 Foundation entitlement. Get them now: Steps 1-3 read them off disk and will not tell
-you to fetch them.
+you to fetch them. Versions move; match yours to what your entitlement offers.
 
-| what | from | put it in |
+| file | from | put it in |
 |---|---|---|
-| the `vcf` CLI archive (`vcf-cli-linux_*`) | VCF CLI, on your entitled downloads page | `VCF_CLI_SRC_DIR` (you set it in Step 1) |
-| the `argocd-vcf` CLI (`argocd-cli-linux-amd64-*`) — **amd64 only** | [ArgoCD service page](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=538499) | same folder |
-| `supervisor-service-harbor-legacy-*.yml` | [Harbor service page](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=542081) | anywhere — you upload it in vCenter in Step 2 |
-| `supervisor-service-harbor-data-values-*.yml` | same Harbor page | the folder Step 2's `src=` points at (`~/Downloads/vcf` in the example) |
-| `supervisor-service-argocd-legacy-*.yml` | [ArgoCD service page](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=538499) | anywhere — you upload it in vCenter in Step 3 |
+| `VCF-Consumption-CLI-Linux_AMD64-9.1.0.0400.25509669.tar.gz` | [VCF CLI](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20vSphere%20Foundation%209&release=9.1.0.0&os=&servicePk=542815&language=EN&viewGroup=true&groupId=540529) | `VCF_CLI_SRC_DIR` (you set it in Step 1) |
+| `VCF-Consumption-CLI-PluginBundle-Linux_AMD64-9.1.0.0400.25509793.tar.gz` | [Plugins](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20vSphere%20Foundation%209&release=9.1.0.0&os=&servicePk=542815&language=EN&viewGroup=true&groupId=540672) | same folder |
+| the amd64 `argocd` CLI | [ArgoCD](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=538499) | same folder |
+| `supervisor-service-argocd-legacy-1.1.0-25100889.yml` | same ArgoCD page | anywhere — you upload it in vCenter in Step 3 |
+| `supervisor-service-harbor-legacy-v2.14.3+vmware.2-vks.1-25292931.yml` | [Harbor](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=542081) | anywhere — you upload it in vCenter in Step 2 |
+| `supervisor-service-harbor-data-values-v2.14.3.yml` | same Harbor page | the folder Step 2's `src=` points at |
 
-The two CLI archives and the two Harbor files can share one folder; the example throughout
-this runbook uses `~/Downloads/vcf`. Version numbers move — match the `*` to whatever your
-entitlement offers, and use the **`-legacy`** variant of each service YAML for a
-disconnected Supervisor.
+The example throughout this runbook uses `~/Downloads/vcf` for all of them.
 
-> The `vcf` CLI has no direct link here. Search your entitled downloads for **VCF CLI**
-> under the same vSphere Foundation entitlement that gives you the service YAMLs above.
+⚠️ **Take the `-legacy` service files.** The non-legacy ones install "successfully" and
+then die at reconcile, because a Supervisor without a Software Depot cannot fetch what
+they reference.
+
+⚠️ **Take only the `Linux_AMD64` rows** (uppercase). The un-suffixed `-Binaries-`,
+`-PluginBundle-` and `-OCI-` archives are multi-platform supersets the installer will
+not use.
+
+**Istio is not on this list.** Step 10 installs it *from your own Harbor*, or attaches to
+the one your Supervisor already has — nothing to download.
+
+**Portal gotchas, all of which fail silently:**
+
+- **Tick "I agree to the Terms and Conditions"** or the download icons do nothing. On the
+  VCF CLI pages the checkbox stays **inert until you open both Terms links first**, and the
+  gate is **per page** — ticking it on one page does not carry to the next.
+- **Patch builds appear only once you open a group.** The parent page lists `9.1.0.0` alone.
+- **A `release=` in the URL is ignored** — use the on-page selector.
 
 ---
 
