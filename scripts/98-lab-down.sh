@@ -58,7 +58,37 @@ done
 # operator set either one.
 SUP="${VKS_SUPERVISOR_KUBECONFIG:-${SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}}"
 [ -f "$SUP" ] || die "no Supervisor kubeconfig at '$SUP' — run 'make vks-login' first."
-k() { kubectl --kubeconfig "$SUP" "$@"; }
+# </dev/null and --request-timeout are LOAD-BEARING, not hygiene. MEASURED: kubectl against an
+# endpoint it cannot authenticate to emits `Please enter Username:` — an INTERACTIVE PROMPT. Every
+# call here is `>/dev/null 2>&1`, so the prompt is INVISIBLE, and the step-4 wait loop polls for up
+# to LAB_DOWN_CLUSTER_WAIT_SECONDS (900) with a tty on stdin: the teardown would sit there,
+# apparently working, blocked on a prompt nobody can see. An expired Supervisor token is the normal
+# state of a lab kubeconfig the next morning, and this script is necessarily interactive (it
+# requires a typed CONFIRM), so a tty is always present.
+k() { kubectl --kubeconfig "$SUP" --request-timeout=15s "$@" </dev/null; }
+
+# read_state <args...> — run a read and DISCRIMINATE its three outcomes, which a bare `if ! k …`
+# collapses into one. kubectl exits 1 for NotFound, for unreachable, AND for forbidden, so
+# `if ! k get X >/dev/null 2>&1; then "absent"` ASSERTS ABSENCE FROM ANY FAILURE. In a teardown
+# that is the worst direction to be wrong in: it reports an object gone when the truth is that we
+# could not look. Sets _RS_RC and _RS_ERR; returns 0 only when the object genuinely exists.
+_RS_RC=0; _RS_ERR=""
+read_state() {
+  local _e; _e="$(mktemp)"
+  if k "$@" >/dev/null 2>"$_e"; then _RS_RC=0; _RS_ERR=""; rm -f "$_e"; return 0; fi
+  _RS_RC=$?; _RS_ERR="$(head -1 "$_e" 2>/dev/null)"; rm -f "$_e"
+  return 1
+}
+# absent_or_unknown <label> — the honest print for a failed read. A genuine NotFound says the
+# object is gone; anything else says we could not tell, and is recorded as NOT DONE.
+absent_or_unknown() {
+  case "$_RS_ERR" in
+    *NotFound*|*"not found"*) note "- ${1}: absent" ;;
+    "")                       note "- ${1}: absent" ;;
+    *) note "! ${1}: CANNOT READ — ${_RS_ERR}"
+       left "${1} (could not be checked: ${_RS_ERR})" ;;
+  esac
+}
 
 # --- the plan, printed BEFORE the first destructive call ----------------------------------------
 echo >&2
@@ -84,8 +114,8 @@ echo >&2
 # whoever does own it.
 log_info "1/5  ArgoCD Applications (ours only)"
 for app in $(app_names); do
-  if ! k -n "$ARGOCD_NAMESPACE" get application "$app" >/dev/null 2>&1; then
-    note "- ${app}: absent"; continue
+  if ! read_state -n "$ARGOCD_NAMESPACE" get application "$app"; then
+    absent_or_unknown "$app"; continue
   fi
   owner="$(k -n "$ARGOCD_NAMESPACE" get application "$app" \
              -o jsonpath='{.metadata.labels.vks-airgap-cicd\.local/owned-by}' 2>/dev/null || true)"
@@ -120,8 +150,22 @@ fi
 
 # --- 2. the guest-cluster registration + repo credential ----------------------------------------
 log_info "2/5  ArgoCD cluster registration + repo credential (ours only)"
-for s in $(k -n "$ARGOCD_NAMESPACE" get secret -l "$OWNER_LABEL" -o name 2>/dev/null || true); do
-  note "- ${s}: deleting (ours)"; k -n "$ARGOCD_NAMESPACE" delete "$s" >/dev/null 2>&1 || true; deleted
+# This step used to print its heading and then, when nothing matched, NOTHING — so an empty result
+# was indistinguishable from a failed read. _acted tracks whether any verdict was printed.
+_acted=0
+# ⚠️ SCOPED TO THIS CLUSTER, not just to our label. The label says "we made it"; it does NOT say
+# "for THIS cluster". This box has run cicd-gc1 and cicd-gc2, and an unscoped sweep would make
+# `make lab-down CONFIRM=cicd-gc2` delete the cicd-gc1 REGISTRATION — leaving that cluster's
+# Applications pointing at a destination that no longer exists, while the counter reported a
+# successful deletion. A teardown must remove what the operator CONFIRMED, and nothing else.
+_secrets="$(k -n "$ARGOCD_NAMESPACE" get secret -l "$OWNER_LABEL" -o name 2>/dev/null || true)"
+for s in $_secrets; do
+  _nm="$(k -n "$ARGOCD_NAMESPACE" get "$s" -o jsonpath='{.data.name}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  if [ -n "$_nm" ] && [ "$_nm" != "$VKS_CLUSTER_NAME" ]; then
+    note "! ${s}: ours, but it registers '${_nm}' — NOT '${VKS_CLUSTER_NAME}'. LEAVING IT."
+    left "${s} (ours, but belongs to cluster '${_nm}')"; _acted=1; continue
+  fi
+  note "- ${s}: deleting (ours)"; k -n "$ARGOCD_NAMESPACE" delete "$s" >/dev/null 2>&1 || true; deleted; _acted=1
 done
 # The registration Secret written by 71-argocd-register-guest.sh predates the ownership stamp on
 # some labs; identify it by the cluster NAME it registers and confirm it is not another tool's.
@@ -132,9 +176,24 @@ for s in $(k -n "$ARGOCD_NAMESPACE" get secret -l argocd.argoproj.io/secret-type
     note "- ${s}: deleting (registers ${nm}, labelled ours)"; k -n "$ARGOCD_NAMESPACE" delete "$s" >/dev/null 2>&1 || true; deleted
   elif [ "$nm" = "$VKS_CLUSTER_NAME" ]; then
     left "$s registers ${nm} but is NOT labelled ours (owned-by='${own:-none}')"
-    note "! ${s}: registers ${nm} but is not labelled ours — LEAVING IT."
+    note "! ${s}: registers ${nm} but is not labelled ours — LEAVING IT."; _acted=1
   fi
 done
+[ "$_acted" -eq 1 ] || note "- no registration Secret of ours for '${VKS_CLUSTER_NAME}' (nothing to delete)"
+# ⚠️ THE HEADING SAYS "repo credential" AND THIS STEP CANNOT SELECT ONE. 70-configure-argocd.sh
+# creates it with `argocd.argoproj.io/secret-type: repository` and NO ownership label, and the
+# `argocd repo add` path does not stamp it either — so neither loop above can ever match it. Say so
+# rather than letting the heading imply it was handled; a repository Secret holds a Gitea CI token
+# with push rights to the deploy repos.
+_repo="$(k -n "$ARGOCD_NAMESPACE" get secret -l argocd.argoproj.io/secret-type=repository \
+           -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)"
+if [ -n "$_repo" ]; then
+  note "! repo credential(s) present and NOT selectable by ownership (they carry no owned-by label):"
+  printf '%s\n' "$_repo" | while read -r _r; do [ -n "$_r" ] && note "    ${_r}"; done
+  note "  Inspect and remove the ones that are yours — they hold a git token:"
+  note "    kubectl --kubeconfig '${SUP}' -n '${ARGOCD_NAMESPACE}' get secret <name> -o jsonpath='{.data.url}' | base64 -d"
+  left "repo credential Secret(s) in ${ARGOCD_NAMESPACE} (unlabelled — cannot be selected safely)"
+fi
 
 # --- 3. Harbor projects + robot -----------------------------------------------------------------
 log_info "3/5  Harbor (${HARBOR_INFRA_PROJECT}, ${HARBOR_APP_PROJECT})"
@@ -161,7 +220,7 @@ left "Harbor projects ${HARBOR_INFRA_PROJECT}/${HARBOR_APP_PROJECT} + robot ${HA
 # a mesh we attached to rather than installed, deleting istio-system would remove the platform
 # team's mesh.
 log_info "4/5  the guest cluster ${VKS_NAMESPACE}/${VKS_CLUSTER_NAME}"
-if k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" >/dev/null 2>&1; then
+if read_state -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME"; then
   own="$(k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" \
            -o jsonpath='{.metadata.labels.vks-airgap-cicd\.local/owned-by}' 2>/dev/null || true)"
   if [ "$own" != "vks-airgap-cicd" ]; then
