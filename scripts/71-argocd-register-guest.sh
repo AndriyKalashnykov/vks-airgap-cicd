@@ -178,7 +178,7 @@ SECRET_NAME="cluster-$(printf '%s' "$DEST_NAME" | tr -c 'a-z0-9-' '-' | cut -c1-
 #     tenant-a-very-long-guest-cluster-name-number-two -> cluster-tenant-a-very-long-guest-cluster-name-nu
 # Identical. `ka apply` on a collision would REPOINT ANOTHER TENANT'S registration at our cluster
 # with our token, in a namespace measured to hold foreign registrations (one labelled
-# nested-lab.local/managed-by) — and would stamp it with OUR owned-by label, so `make lab-down`
+# nested-lab.local/managed-by) — and would stamp it with OUR owned-by label, so `make uninstall-all`
 # would later DELETE it as if it were ours. Two destructive acts from one truncation.
 if _existing_owner="$(ka -n "$ARGOCD_NAMESPACE" get secret "$SECRET_NAME" \
       -o jsonpath='{.metadata.labels.vks-airgap-cicd\.local/owned-by}' 2>/dev/null)"; then
@@ -207,7 +207,7 @@ metadata:
   namespace: ${ARGOCD_NAMESPACE}
   labels:
     argocd.argoproj.io/secret-type: cluster
-    # ⚠️ THE OWNERSHIP STAMP 'make lab-down' SELECTS ON. Without it the teardown's Secret pass
+    # ⚠️ THE OWNERSHIP STAMP 'make uninstall-all' SELECTS ON. Without it the teardown's Secret pass
     # matches nothing and LEAVES a cluster-registration Secret pointing at a cluster it just
     # deleted — in a SHARED namespace, where a stale registration is someone else's problem.
     # It is also the only thing distinguishing this Secret from another tool's: measured on a real

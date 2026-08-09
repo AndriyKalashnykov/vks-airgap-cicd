@@ -20,19 +20,19 @@ Run these in this order. Steps 2 and 3 are browser work; everything else is a co
 | | Step | You do |
 |---|---|---|
 | **0** | [Get the repo](#0-get-the-repo) | clone it, `cd` into it, create `.env` |
-| **1** | [Jump box](#1-jump-box) | install the toolchain; fill in 7 values in `.env` |
+| **1** | [Jump box](#1-jump-box) | install the toolchain; set 8 values in `.env` |
 | **1b** | [vSphere Namespace](#1b-the-vsphere-namespace) | browser: create it, attach storage + a VM class |
-| **2** | [Harbor](#2-harbor-browser) | browser: install it; fill in 6 values |
-| **3** | [ArgoCD](#3-argocd-supervisor) | browser + CLI: install it, get the CA, log in; fill in 4 values |
-| **4** | [Guest cluster](#4-guest-cluster) | create it; fill in 4 values |
+| **2** | [Harbor](#2-harbor-browser) | browser: install it; set 5 values |
+| **3** | [ArgoCD](#3-argocd-supervisor) | browser + CLI: install it, get the CA, log in; set 4 values |
+| **4** | [Guest cluster](#4-guest-cluster) | create it; set 1 value, then 3 more after it is up |
 | **5** | [Preflight](#5-preflight) | check the cluster will accept the install |
 | **6** | [Harbor's CA](#6-harbors-ca) | fetch it |
 | **7** | [Harbor robot](#7-harbor-robot-recommended) | create it; replace 2 values |
-| **8** | [ArgoCD's kubeconfig](#8-the-supervisor-kubeconfig-argocd-needs) | fetch it; fill in 3 values |
+| **8** | [ArgoCD's kubeconfig](#8-the-supervisor-kubeconfig-argocd-needs) | fetch it; set 2 values |
 | **9** | [Install](#9-validate-then-install) | `make install-all`, then `make verify` |
-| **10** | [Access the UIs](#10-access-the-uis) | `make creds-show` |
-| **11** | [Ingress](#11-ingress-optional) | optional |
-| **12** | [Remove it again](#12-removing-it-again) | `make lab-down` |
+| **10** | [Ingress](#10-ingress-optional) | optional: reach the UIs at `*.vks.local` |
+| **11** | [Access the UIs](#11-access-the-uis) | `make creds-show` |
+| **12** | [Uninstall](#12-uninstall) | `make uninstall-all` |
 
 **Everything you configure goes in ONE file: `.env`, at the root of the repo.** Each step has a
 table of the keys it needs, with an example and where the value comes from.
@@ -119,9 +119,13 @@ because teardown deletes **by name** and this repo's app names are generic.
 
 ### If you already have one
 
-Put its name in `VKS_NAMESPACE` and go to Step 2.
+Put its name in `VKS_NAMESPACE`, then go to Step 2 — but come back to *Check it before Step 4*
+below once you have finished Step 3.
 
 ### If you don't — create it
+
+Do this **now, before Step 3** — the login in Step 3 activates a context at this namespace and
+fails if it does not exist yet.
 
 **vCenter → Workload Management → Namespaces → Create Namespace.** Pick your Supervisor, name it.
 Then, in the namespace you just created:
@@ -161,7 +165,7 @@ A namespace missing either still accepts the cluster in Step 4, then never finis
 The registry every image comes from.
 [Broadcom docs](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-harbor-as-vcf-service/installing-and-configuring-harbor-and-contour.html)
 
-1. Give Harbor an **NGINX LoadBalancer** (`enableNginxLoadBalancer: true`, set in step 4 below).
+1. Give Harbor an **NGINX LoadBalancer** (`enableNginxLoadBalancer: true`, set in 2.4 below).
    Contour is not covered by this runbook.
 2. vCenter → Workload Management → Supervisor Services → **Add New Service** → upload
    `supervisor-service-harbor-legacy-*.yml` (use the `-legacy` file for a disconnected Supervisor).
@@ -169,7 +173,7 @@ The registry every image comes from.
 
    | | example | how to get it |
    |---|---|---|
-   | Harbor's FQDN | `harbor.env1.lab.test` | **you choose it.** It must be a name your real DNS can answer, because the guest cluster's nodes resolve it — see step 6 below. |
+   | Harbor's FQDN | `harbor.env1.lab.test` | **you choose it.** It must be a name your real DNS can answer, because the guest cluster's nodes resolve it — see 2.6 below. |
    | Harbor's storage class | `wcp-vmfs` (single-host VMFS)<br>`vsan-default-storage-policy` (vSAN) | `kubectl get storageclass` against the Supervisor. No access yet? vCenter → your Namespace → **Storage** tab, then lowercase the policy name and replace spaces with `-`. |
 
 4. Edit the data-values file you downloaded:
@@ -270,15 +274,15 @@ The GitOps engine, running on the Supervisor.
    vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"      # note the <ctx>:<ns> colon form
    ```
 
-   `vcf context use` can print an error about a "system Harbor
-   registry" **and still have worked** — judge it by the next command, not its exit code.
+   `vcf context use` can print an error about a "system Harbor registry" **and still have
+   worked** — judge it by the next command, not its exit code.
 
 5. Apply the instance CR. `kubectl explain argocd.spec.version` lists what your operator supports:
 
    ```yaml
    apiVersion: argocd-service.vsphere.vmware.com/v1alpha1
    kind: ArgoCD
-   metadata: { name: argocd-1, namespace: <the namespace from step 2> }
+   metadata: { name: argocd-1, namespace: <the namespace from 3.2> }
    spec: { version: <a supported version> }
    ```
 
@@ -298,9 +302,9 @@ The GitOps engine, running on the Supervisor.
 
 | key | example | how to get the value |
 |---|---|---|
-| `ARGOCD_NAMESPACE` | `lab` | the namespace your ArgoCD **instance** runs in. **Discover it — do not assume:** `kubectl get argocd -A` (on one real lab this was `lab`, not the `argocd-instance-1` from step 2) |
-| `ARGOCD_SERVER` | `192.168.101.131` | the `argocd-server` EXTERNAL-IP from step 6 |
-| `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | the file you created in step 3 above |
+| `ARGOCD_NAMESPACE` | `lab` | the namespace your ArgoCD **instance** runs in. **Discover it — do not assume:** `kubectl get argocd -A` (on one real lab this was `lab`, not the `argocd-instance-1` from 3.2) |
+| `ARGOCD_SERVER` | `192.168.101.131` | the `argocd-server` EXTERNAL-IP from 3.6 |
+| `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | the file you created in 3.3 above |
 | `VKS_AUTH_METHOD` | `vcf` | **set this to `vcf` now.** It selects how you log in, and `vcf` is the Supervisor login this step is doing. Step 4 changes it to `kubeconfig`. |
 
 Log in, which writes the Supervisor kubeconfig every later step reads:
@@ -317,7 +321,7 @@ make vks-login                # writes ./secrets/supervisor.kubeconfig
 ## 4. Guest cluster
 
 Where Gitea, Tekton and your apps run. You need cluster-admin on it.
-*Already have a cluster? Skip to "Export its kubeconfig".*
+*Already have a cluster? Skip to "Get its kubeconfig" below.*
 
 **→ set in `./.env`:**
 
@@ -391,7 +395,6 @@ Supervisor kubeconfig, use the Secret route — it is the same credential.
 | `KUBECONFIG` | `./secrets/cicd-gc1.kubeconfig` | `./secrets/<your VKS_CLUSTER_NAME>.kubeconfig` — the file above |
 | `VKS_CONTEXT` | `cicd-gc1-admin@cicd-gc1` | `kubectl --kubeconfig ./secrets/<cluster>.kubeconfig config get-contexts -o name` |
 | `VKS_AUTH_METHOD` | `kubeconfig` | **change it back from `vcf`** (Step 3 set that for the Supervisor login). From here on the pipeline runs against the guest-cluster kubeconfig above. |
-| `GITEA_ADMIN_PASSWORD` | *your value* | **you choose it** — Gitea is installed by this repo, so you set its admin password |
 
 ---
 
@@ -401,7 +404,7 @@ Catches what would otherwise kill the run *after* a 20-minute mirror.
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
-make vks-login
+make vks-login                # now checks the GUEST kubeconfig (Step 4 set VKS_AUTH_METHOD=kubeconfig)
 make lab-preflight
 make psa-check
 ```
@@ -502,7 +505,7 @@ server is the one that matters. *(~2 min)*
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
-make env-populate     # generates the Gitea secret; discovers anything you left blank
+make env-populate     # generates Gitea's admin password; discovers anything you left blank
 make env-check        # every required value set? (fast, no network)
 make env-validate     # does KUBECONFIG reach the cluster? does Harbor authenticate?
 
@@ -515,26 +518,7 @@ make verify           # pushes a marked change and follows it to the running app
 
 ---
 
-## 10. Access the UIs
-
-```bash
-cd vks-airgap-cicd            # from Step 0
-make creds-show
-```
-
-**Expect:** every URL and login — Harbor, ArgoCD, Gitea, Tekton, one row per app. Each value is
-labelled **DISCOVERED** (read live) or **STORED** (remembered).
-
-No ingress yet? Reach a service directly:
-
-```bash
-kubectl -n gitea port-forward svc/gitea-http 3000:3000     # then http://localhost:3000
-kubectl -n javawebapp port-forward svc/javawebapp 18080:80 # then http://localhost:18080
-```
-
----
-
-## 11. Ingress (optional)
+## 10. Ingress (optional)
 
 Reach the UIs at `*.vks.local` instead of port-forwarding.
 
@@ -553,10 +537,32 @@ On a real lab Istio is usually already present as a Standard Package — attach,
 
 ---
 
-## 12. Removing it again
+## 11. Access the UIs
 
 ```bash
-make lab-down CONFIRM=<your VKS_CLUSTER_NAME>
+cd vks-airgap-cicd            # from Step 0
+make creds-show
+```
+
+**Expect:** every URL and login — Harbor, ArgoCD, Gitea, Tekton, one row per app. Each value is
+labelled **DISCOVERED** (read live) or **STORED** (remembered).
+
+Skipped Step 10? The `*.vks.local` URLs will not resolve — reach a service directly instead:
+
+```bash
+kubectl -n gitea port-forward svc/gitea-http 3000:3000     # then http://localhost:3000
+kubectl -n javawebapp port-forward svc/javawebapp 18080:80 # then http://localhost:18080
+```
+
+---
+
+## 12. Uninstall
+
+Removes what this runbook installed. It does not touch the vSphere lab.
+
+```bash
+cd vks-airgap-cicd            # from Step 0
+make uninstall-all CONFIRM=<your VKS_CLUSTER_NAME>
 ```
 
 **Expect:** it deletes only objects carrying our ownership label, and **prints what it left alone**.
@@ -584,4 +590,14 @@ under self-contention. Where the runs disagree, both are shown.
 | ↳ | `mirror-pull` / `mirror-push` / `mirror-verify` | 22 s / 2 m 38 s / 5 m 46 s | — |
 | ↳ | `builder-image` + `platform` + `gitops` | ≈1 m 40 s | — |
 | 9 | `make verify` (2 apps) | **3 m 6 s** | **3 m 27 s** |
-| 12 | `make lab-down` | 1 m 12 s | 1 m 12 s |
+| 12 | `make uninstall-all` | 1 m 12 s | 1 m 12 s |
+
+From a **bare Photon jump box** (fresh box, nothing cached — so the mirror pulls every image), the
+same lab, measured start to `End-to-end verified`:
+
+| | |
+|---|---|
+| Step 0–1 install `git`/`make`, clone, `make deps`, install the CLIs | ≈ 2 m 30 s |
+| Step 4 cluster created → every node `Ready` | **8 m 49 s** |
+| Step 9 `make install-all` + `make verify` | **10 m 08 s** |
+| **whole run, clone → verified** | **21 m 31 s** |
