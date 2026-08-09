@@ -78,6 +78,28 @@ below lists the keys it needs before the commands that read them.
 | your SSO domain | `vsphere.local` | same screen, the *Domain* dropdown |
 | your SSO password | — | for that login — you put it in `.env` in Step 1 |
 
+### Download the Broadcom artifacts
+
+All of these are **entitled** downloads — you need a Broadcom account with a vSphere
+Foundation entitlement. Get them now: Steps 1-3 read them off disk and will not tell
+you to fetch them.
+
+| what | from | put it in |
+|---|---|---|
+| the `vcf` CLI archive (`vcf-cli-linux_*`) | VCF CLI, on your entitled downloads page | `VCF_CLI_SRC_DIR` (you set it in Step 1) |
+| the `argocd-vcf` CLI (`argocd-cli-linux-amd64-*`) — **amd64 only** | [ArgoCD service page](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=538499) | same folder |
+| `supervisor-service-harbor-legacy-*.yml` | [Harbor service page](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=542081) | anywhere — you upload it in vCenter in Step 2 |
+| `supervisor-service-harbor-data-values-*.yml` | same Harbor page | the folder Step 2's `src=` points at (`~/Downloads/vcf` in the example) |
+| `supervisor-service-argocd-legacy-*.yml` | [ArgoCD service page](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=538499) | anywhere — you upload it in vCenter in Step 3 |
+
+The two CLI archives and the two Harbor files can share one folder; the example throughout
+this runbook uses `~/Downloads/vcf`. Version numbers move — match the `*` to whatever your
+entitlement offers, and use the **`-legacy`** variant of each service YAML for a
+disconnected Supervisor.
+
+> No verified deep link for the `vcf` CLI archive is recorded here. It is on the same
+> entitled downloads area as the service YAMLs above; if you find the direct page, add it.
+
 ---
 
 ## 1. Jump box
