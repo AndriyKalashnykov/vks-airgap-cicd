@@ -66,6 +66,12 @@ EXPOSE ${APP_INTERNAL_PORT}
 # HEALTHCHECK flag durations are parsed at build time and are NOT variable-expanded
 # (they must be literals); the CMD body runs under /bin/sh and DOES honor ${ENV}.
 # 127.0.0.1 (not localhost) avoids the IPv6 ::1-first resolution trap.
+# DL3025 (new in hadolint 2.15) wants JSON/exec notation. It MUST NOT be applied here: the
+# exec form does NOT expand variables, and this CMD interpolates ${APP_INTERNAL_PORT}. It
+# would curl a LITERAL '${APP_INTERNAL_PORT}' and fail forever. Shell form is deliberate.
+# NOTE: the ignore comment must be the LINE IMMEDIATELY BEFORE the instruction -- an
+# intervening comment silently detaches it (measured: the finding came straight back).
+# hadolint ignore=DL3025
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
     CMD curl -sf "http://127.0.0.1:${APP_INTERNAL_PORT}/actuator/health/liveness" || exit 1
 

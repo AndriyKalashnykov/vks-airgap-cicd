@@ -55,6 +55,12 @@ RUN if command -v tdnf >/dev/null 2>&1; then \
 # A non-root operator, as on a real jump box.
 # Absolute paths: Photon's default RUN PATH does NOT include /usr/sbin, so a bare `groupadd` is 127.
 RUN /usr/sbin/groupadd -f vks && /usr/sbin/useradd -g vks -m -s /bin/bash vks
+# DL3066 (new in hadolint 2.15) wants a numeric uid. The uid here is assigned by
+# `useradd` with no -u and DIFFERS by base image: Ubuntu ships a default user at
+# 1000 so `vks` lands on 1001; Photon has none so `vks` gets 1000. Hardcoding a
+# number would be a behaviour change that breaks bind-mount permissions on one
+# of the two -- not a lint fix.
+# hadolint ignore=DL3066
 USER vks
 WORKDIR /home/vks
 # NO `ENV PATH=~/.local/bin:...` HERE, DELIBERATELY. Pre-setting it would hide the very failure this
