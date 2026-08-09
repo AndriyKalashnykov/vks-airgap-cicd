@@ -800,9 +800,6 @@ test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-cl
 test-env-lifecycle: ## Offline: the .env lifecycle a new operator walks first (init/populate/check)
 	@bash $(SCRIPTS)/test-env-lifecycle.sh
 
-.PHONY: doc-harness-coverage
-doc-harness-coverage: ## Report: which runbook commands does any test/e2e actually RUN? (prints, never gates)
-	@bash $(SCRIPTS)/doc-harness-coverage.sh
 
 .PHONY: test-classify-kube-failure
 test-classify-kube-failure: ## Offline: classify_kube_failure names ONE cause per message, and its arm order holds
