@@ -222,10 +222,31 @@ istio_detect_route_api() {
   # CONTENTS. This is a presence question, not a permissions one, so it does not use k_can_i.
   local _perr; _perr="$(mktemp)"
   if ! kubectl api-resources --request-timeout=15s >/dev/null 2>"$_perr"; then
-    local _cls; _cls="$(classify_kube_failure "$_perr")"; rm -f "$_perr"
+    # ⚠️ CAPTURE THE TEXT BEFORE THE rm. The classify and the delete used to sit on ONE line, so the
+    # message could only print a bare class token — the operator never learned WHICH file or address
+    # failed, unlike every other consumer, which seds kubectl's own words into the message.
+    local _cls _ptxt _fix
+    _cls="$(classify_kube_failure "$_perr")"
+    _ptxt="$(sed 's/^/    /' "$_perr" 2>/dev/null | head -4)"
+    rm -f "$_perr"
+    # ⚠️ AND THE REMEDY IS PER-CLASS. The single sentence "fix the connection or the trust anchor"
+    # was wrong for FORBIDDEN (an RBAC grant is neither), UNAUTHORIZED, PLAINTEXT (every CA remedy
+    # is wrong there) and both config classes (nothing was dialled at all).
+    case "$_cls" in
+      NO_KUBE_TARGET)      _fix="kubectl had NO TARGET (it fell back to localhost:8080): \$KUBECONFIG names a file that does not exist, or sets no current-context." ;;
+      KUBECONFIG_UNUSABLE) _fix="a file named in your kube configuration is missing, unreadable or malformed — nothing was dialled." ;;
+      PLAINTEXT)           _fix="that endpoint is not speaking TLS on this port; every CA remedy is wrong here — check the scheme and port." ;;
+      FORBIDDEN)           _fix="authenticated, but not permitted to list API resources. That is an RBAC grant to request — do NOT re-fetch the kubeconfig." ;;
+      UNAUTHORIZED)        _fix="the credential was rejected. Re-authenticate:  make vks-login" ;;
+      STALE_CA)            _fix="the server answered but its CA does not match — re-fetch the kubeconfig from the cluster that is actually running." ;;
+      UNREACHABLE)         _fix="the endpoint never answered. Check it is up and routable from here." ;;
+      *)                   _fix="the error is one we do not classify — it is printed above verbatim." ;;
+    esac
     die "cannot read the cluster's API resources (${_cls}), so nothing below is a statement about
   what is INSTALLED — it would only be a statement about the connection. Refusing to report a
-  route API I could not observe. Fix the connection or the trust anchor, then re-run."
+  route API I could not observe.
+${_ptxt}
+  ${_fix}"
   fi
   rm -f "$_perr"
 

@@ -65,6 +65,11 @@ if ! kubectl version -o json >/dev/null 2>"$_lp_err"; then
     FORBIDDEN)    die "authenticated to ${_lp_srv:-the cluster}, but this identity may not read it.
   That is an RBAC GRANT, not a broken kubeconfig — do NOT re-fetch it. Ask your platform team for
   cluster-admin (this flow creates namespaces and installs CRDs)." ;;
+    NO_KUBE_TARGET) die "kubectl had NO TARGET — it fell back to localhost:8080, which is never your
+  lab. Either \$KUBECONFIG names a file that does not exist, or that file sets no current-context.
+  Nothing was dialled, so this says NOTHING about whether the lab is up.  Fix it:  make vks-login" ;;
+    PLAINTEXT)    die "${_lp_srv:-the server} is not speaking TLS on that port — EVERY CA remedy is
+  wrong here, so do not re-fetch a trust anchor. Check the scheme and port in your kubeconfig." ;;
     UNREACHABLE)  die "cannot reach ${_lp_srv:-the cluster} — it never answered.
   This is NOT evidence your kubeconfig is stale. Is the lab up, and routable from this jump box?" ;;
     KUBECONFIG_UNUSABLE) die "a file named in your kube configuration is missing, unreadable or

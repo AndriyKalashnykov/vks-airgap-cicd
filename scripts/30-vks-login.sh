@@ -470,6 +470,19 @@ else
       die "authenticated, but this identity is not permitted to list nodes on
   ${_vks_srv:-<unknown>}.
   That is an RBAC grant, not a broken kubeconfig — ask for the role, or use an identity that has it." ;;
+    KUBECONFIG_UNUSABLE)
+      die "a file named in your kube configuration is missing, unreadable or malformed, so NOTHING
+  WAS DIALLED — this says nothing about whether the cluster is up. It may be \$KUBECONFIG itself, or
+  a certificate-authority / client-cert it points at, or an absent exec credential-plugin binary.
+  kubectl names which:
+$(sed 's/^/    /' "$_vks_err" | head -4)" ;;
+    NO_KUBE_TARGET)
+      die "kubectl had NO TARGET — it fell back to localhost:8080, which is never your cluster.
+  Either \$KUBECONFIG names a file that does not exist, or that file sets no current-context.
+  Nothing was dialled, so this is not evidence about the cluster's health." ;;
+    PLAINTEXT)
+      die "${_vks_srv:-<unknown>} is not speaking TLS on that port — EVERY CA remedy is wrong here.
+  Do not re-fetch a trust anchor; check the scheme and port." ;;
     UNREACHABLE)
       die "cannot reach ${_vks_srv:-<unknown>}
   — no HTTP response. This one genuinely IS network: check the address is right, the cluster is up,

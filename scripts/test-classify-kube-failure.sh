@@ -45,6 +45,19 @@ t KUBECONFIG_UNUSABLE 'error: error loading config file "/x": yaml: line 3: mapp
 t FORBIDDEN    "Error from server (Forbidden): namespaces is forbidden; open /gone: no such file or directory"
 t UNAUTHORIZED "error: You must be logged in to the server; open /gone: no such file or directory"
 
+# NO_KUBE_TARGET — kubectl NEVER HAD A TARGET. ⚠️ THIS IS WHY KUBECONFIG_UNUSABLE ALONE WAS NOT
+# ENOUGH, and the asymmetry is measured (kubectl 1.36.3):
+#     --kubeconfig <missing>  -> "error: stat …: no such file"      -> KUBECONFIG_UNUSABLE
+#     KUBECONFIG=<missing>    -> "…server localhost:8080 was refused" -> UNREACHABLE  ← the old lie
+# Three of the four consumers use the ENV form, so the class added to stop a filesystem error being
+# reported as a network claim could not fire at the sites that needed it most.
+t NO_KUBE_TARGET "The connection to the server localhost:8080 was refused - did you specify the right host or port?"
+t NO_KUBE_TARGET 'E0809 memcache.go:265] "Unhandled Error" err="couldn'"'"'t get current server API group list: Get \"http://localhost:8080/api?timeout=32s\": dial tcp 127.0.0.1:8080: connect: connection refused"'
+
+# ⚠️ THE NEGATIVE CONTROL FOR IT: a REAL endpoint refusing must stay UNREACHABLE. Without this case
+# the localhost arm could be widened to swallow every "was refused" and nobody would notice.
+t UNREACHABLE "The connection to the server 192.168.101.128:6443 was refused - did you specify the right host or port?"
+
 # UNREACHABLE — the negative control for the narrowing above: `no such host` must stay a network
 # verdict. Without this case the narrowing has no guard. The third form is kubectl's own
 # format-string, which contains NEITHER "connection refused" NOR "dial tcp".
