@@ -14,76 +14,58 @@ Tekton and your apps run in the **guest cluster**.
 > **Why a step is shaped the way it is** → [scenario-1-notes.md](scenario-1-notes.md). You do not
 > need it for a normal install. Read it when a step surprises you, or before you simplify one.
 
-## Before you start — read this once
+## The whole sequence
 
-**Where you run everything.** Clone this repo on the jump box and run **every command in this
-runbook from the repo root**. Nothing here works from another directory.
+Run these in this order. Steps 2 and 3 are browser work; everything else is a command.
+
+| | Step | You do |
+|---|---|---|
+| **0** | [Get the repo](#0-get-the-repo) | clone it, `cd` into it, create `.env` |
+| **1** | [Jump box](#1-jump-box) | install the toolchain; fill in 7 values in `.env` |
+| **2** | [Harbor](#2-harbor-browser) | browser: install it; fill in 6 values |
+| **3** | [ArgoCD](#3-argocd-supervisor) | browser + CLI: install it, get the CA, log in; fill in 4 values |
+| **4** | [Guest cluster](#4-guest-cluster) | create it; fill in 4 values |
+| **5** | [Preflight](#5-preflight) | check the cluster will accept the install |
+| **6** | [Harbor's CA](#6-harbors-ca) | fetch it |
+| **7** | [Harbor robot](#7-harbor-robot-recommended) | create it; replace 2 values |
+| **8** | [ArgoCD's kubeconfig](#8-the-supervisor-kubeconfig-argocd-needs) | fetch it; fill in 3 values |
+| **9** | [Install](#9-validate-then-install) | `make install-all`, then `make verify` |
+| **10** | [Access the UIs](#10-access-the-uis) | `make creds-show` |
+| **11** | [Ingress](#11-ingress-optional) | optional |
+| **12** | [Remove it again](#12-removing-it-again) | `make lab-down` |
+
+**Everything you configure goes in ONE file: `.env`, at the root of the repo you clone in Step 0.**
+Each step ends with a table of the keys it sets, with an example and where the value comes from.
+
+**Jump-box OS:** Ubuntu or VMware Photon OS — the two the tooling installs packages for
+(`apt` / `tdnf`). The jump box must reach **both** the internet and the lab. Internet-only? Use
+[the sneakernet flow](sneakernet.md) instead; it replaces Step 9.
+
+---
+
+## 0. Get the repo
+
+Everything below runs **from the repo root**. Nothing works from another directory.
 
 ```bash
 git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git
-cd vks-airgap-cicd            # every command below assumes you are here
-pwd                           # sanity: .../vks-airgap-cicd
+cd vks-airgap-cicd
+pwd                            # sanity check: should end in /vks-airgap-cicd
+make env-init                  # creates ./.env from the template .env.example
 ```
 
-**What `.env` is.** A single file at the repo root — `vks-airgap-cicd/.env` — holding every value
-you configure. `make env-init` creates it from the committed template `.env.example`. Every key in
-this runbook goes in **that** file; `make` reads it automatically, and paths like
-`./secrets/harbor-ca.crt` are relative to the repo root.
+**Expect:** `./.env` exists. That is the one file you edit for the rest of this runbook.
 
 ```bash
-make env-init                 # creates ./.env (backs up any existing one to .env.bak)
-${EDITOR:-vi} .env            # this is the file every "→ set in .env" table below means
+${EDITOR:-vi} .env             # open it now; Step 1 tells you what to put in it
 ```
 
-**Jump-box OS.** **Ubuntu** or **VMware Photon OS** — those are the two the tooling detects and
-installs packages for (`apt` / `tdnf`). Anything else is unsupported and `make deps` will say so.
-
-**Network.** The jump box must reach **both** the internet and the lab. Internet-only? Use
-[the sneakernet flow](sneakernet.md) instead — it replaces Step 9.
-
-**Example values.** Every table below has an *Example* column showing what a real 9.1 lab used.
-They are illustrations, not defaults — yours will differ. Copy the **shape**, not the value.
-
-## Time
-
-About **35–50 minutes** of hands-on work, plus waiting. Measured on a real 9.1 lab (see
-[Timings](#timings) for the full table and a second run):
-
-| | |
-|---|---|
-| Steps 1–3 (browser + uploads) | ~20–30 min, one-time |
-| Guest cluster becomes Ready | **4–6 min** |
-| `make install-all` | **8–10 min** |
-| `make verify` | **3–4 min** |
-| `make lab-down` | **~1 min** |
-
-## Requirements
-
-**Downloads** — each needs your Broadcom entitlement:
-
-| Artifact | Version | |
-|---|---|---|
-| **VCF Consumption CLI** — the Linux `_AMD64`/`_ARM64` archive | 9.1.0.0400 | [download](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20Cloud%20Foundation%209&release=9.1.0.0400&os=&servicePk=540528&language=EN&groupId=540529&viewGroup=true) |
-| **VCF Consumption CLI Plugins** — the Linux bundle | 9.1.0.0400 | [download](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20Cloud%20Foundation%209&release=9.1.0.0400&os=&servicePk=540528&language=EN&groupId=540672&viewGroup=true) |
-| **ArgoCD Service** — the `-legacy` manifest + the `argocd` CLI | 1.1.0 | [download](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&displayGroup=ArgoCD%20Service&release=1.1.0&os=&servicePk=538499&language=EN) |
-| **Harbor** — the `-legacy` manifest + its data-values file | 2.14.3 | [download](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&displayGroup=Harbor&release=2.14.3&os=&servicePk=542081&language=EN) |
-
-**Where to put each download:**
-
-| Artifact | Where | What you do with it |
-|---|---|---|
-| VCF CLI + Plugins + the `argocd` CLI | any one folder on the jump box, e.g. `~/Downloads/vcf` | put the path in **`.env`** as `VCF_CLI_SRC_DIR=/home/you/Downloads/vcf`, then `make install-vcf-clis` reads it |
-| ArgoCD Service YAML + Harbor YAML + Harbor data-values | leave them where they downloaded | you **upload** them in a browser (Steps 2–3); nothing on the jump box reads them |
-
-*arm64: the VCF `argocd` is amd64-only — use the upstream one from `make deps`.
-[Details](vks-authentication.md#acquiring-the-licensed-vcf-cli-archives).*
-
-**Collect from your lab before you start** — you will paste these into `.env` in Step 1:
+**Collect these from your lab before Step 1** — you paste them into `.env`:
 
 | What | Example | Where to find it |
 |---|---|---|
 | Supervisor IP | `192.168.101.128` | vCenter → Workload Management → Supervisors → *Control Plane Node IP* |
-| vCenter FQDN | `vcsa.env1.lab.test` | the address you log into vCenter with (needed in Step 3 for the CA) |
+| vCenter FQDN | `vcsa.env1.lab.test` | the address you log into vCenter with (Step 3 needs it for the CA) |
 | your SSO user | `administrator@vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups |
 | your SSO domain | `vsphere.local` | same screen, the *Domain* dropdown |
 | the password | — | **never goes in `.env`** — you type it at a prompt in Step 3 |
@@ -95,7 +77,7 @@ About **35–50 minutes** of hands-on work, plus waiting. Measured on a real 9.1
 Install the toolchain and the licensed CLIs.
 
 ```bash
-cd ~/vks-airgap-cicd          # or wherever you cloned it
+cd vks-airgap-cicd            # the repo you cloned in Step 0
 make deps                     # toolchain: kubectl, helm, crane, tkn, jq, yq…
 make install-vcf-clis         # reads VCF_CLI_SRC_DIR from .env
 make check-tools              # what you have, what is missing
@@ -137,7 +119,7 @@ The registry every image comes from.
 4. Edit the data-values file you downloaded:
 
    ```bash
-   cd ~/vks-airgap-cicd
+   cd vks-airgap-cicd            # from Step 0
    src=~/Downloads/vcf/supervisor-service-harbor-data-values-v2.14.3.yml
    HARBOR_FQDN='harbor.env1.lab.test'      # <- your value from the table above
    HARBOR_STORAGE_CLASS='wcp-vmfs'         # <- your value from the table above
@@ -196,7 +178,7 @@ The GitOps engine, running on the Supervisor.
    from **vCenter**, not the Supervisor (the Supervisor serves only its leaf certificate):
 
    ```bash
-   cd ~/vks-airgap-cicd
+   cd vks-airgap-cicd            # from Step 0
    VCENTER=vcsa.env1.lab.test          # <- YOUR vCenter FQDN, NOT the Supervisor IP
 
    # -k is deliberate: you are FETCHING a trust anchor that you then authenticate OUT OF BAND by
@@ -219,7 +201,7 @@ The GitOps engine, running on the Supervisor.
 4. **Log in.** `make` reads `.env` for you; an interactive shell does not, so load it first:
 
    ```bash
-   cd ~/vks-airgap-cicd
+   cd vks-airgap-cicd            # from Step 0
    set -a; . ./.env; set +a          # loads SUPERVISOR_HOST, VKS_CONTEXT_NAME, VKS_NAMESPACE
 
    vcf context create "$VKS_CONTEXT_NAME" --endpoint "$SUPERVISOR_HOST" \
@@ -268,7 +250,7 @@ Where Gitea, Tekton and your apps run. You need cluster-admin on it.
 *Already have a cluster? Skip to "Export its kubeconfig".*
 
 ```bash
-cd ~/vks-airgap-cicd
+cd vks-airgap-cicd            # from Step 0
 make vks-cluster-create      # applies the Cluster; provisioning is asynchronous
 make vks-cluster-status      # waits, then reports
 ```
@@ -294,7 +276,7 @@ the notes for the measurement.
 straight from the cluster's own Secret. Use it:
 
 ```bash
-cd ~/vks-airgap-cicd
+cd vks-airgap-cicd            # from Step 0
 set -a; . ./.env; set +a
 kubectl --kubeconfig "./secrets/${VKS_CLUSTER_NAME}.kubeconfig" get nodes -o wide
 ```
@@ -304,7 +286,7 @@ kubectl --kubeconfig "./secrets/${VKS_CLUSTER_NAME}.kubeconfig" get nodes -o wid
 <details><summary>No Supervisor access (the Scenario-2 tenant)? Ask the <code>vcf</code> CLI instead</summary>
 
 ```bash
-cd ~/vks-airgap-cicd
+cd vks-airgap-cicd            # from Step 0
 set -a; . ./.env; set +a
 vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"
 vcf cluster kubeconfig get "$VKS_CLUSTER_NAME" --export-file "./secrets/${VKS_CLUSTER_NAME}.kubeconfig"
@@ -331,7 +313,7 @@ Supervisor kubeconfig, use the Secret route — it is the same credential.
 Catches what would otherwise kill the run *after* a 20-minute mirror.
 
 ```bash
-cd ~/vks-airgap-cicd
+cd vks-airgap-cicd            # from Step 0
 make vks-login
 make lab-preflight
 make psa-check
@@ -353,7 +335,7 @@ Harbor → your project → **Registry Certificate** → download `ca.crt` → s
 **Route B — from the cluster** (needs Supervisor access *and* an admin-level grant — see notes):
 
 ```bash
-cd ~/vks-airgap-cicd
+cd vks-airgap-cicd            # from Step 0
 make harbor-ca-from-cluster
 ```
 
@@ -361,7 +343,7 @@ make harbor-ca-from-cluster
 is not this connection:
 
 ```bash
-cd ~/vks-airgap-cicd
+cd vks-airgap-cicd            # from Step 0
 make fetch-harbor-ca HARBOR_CA_SHA256='<the digest they gave you>'
 ```
 
@@ -374,7 +356,7 @@ make fetch-harbor-ca HARBOR_CA_SHA256='<the digest they gave you>'
 CI pushes with a scoped credential instead of `admin`.
 
 ```bash
-cd ~/vks-airgap-cicd
+cd vks-airgap-cicd            # from Step 0
 make harbor-robot            # writes ./secrets/harbor-robot.env (mode 0600)
 cat ./secrets/harbor-robot.env
 ```
@@ -399,7 +381,7 @@ cat ./secrets/harbor-robot.env
 | `ARGOCD_NAMESPACE` | `lab` | already set in Step 3 — confirm with `kubectl get argocd -A` |
 
 ```bash
-cd ~/vks-airgap-cicd
+cd vks-airgap-cicd            # from Step 0
 make fetch-argocd-kubeconfig    # prompts for your password
 make argocd-preflight           # CLI vs running-server versions; can ArgoCD reach your cluster?
 ```
@@ -418,7 +400,7 @@ side. The running server is the one that matters. *(~2 min)*
 ## 9. Validate, then install
 
 ```bash
-cd ~/vks-airgap-cicd
+cd vks-airgap-cicd            # from Step 0
 make env-populate     # generates the Gitea secret; discovers anything you left blank
 make env-check        # every required value set? (fast, no network)
 make env-validate     # does KUBECONFIG reach the cluster? does Harbor authenticate?
@@ -435,7 +417,7 @@ make verify           # pushes a marked change and follows it to the running app
 ## 10. Access the UIs
 
 ```bash
-cd ~/vks-airgap-cicd
+cd vks-airgap-cicd            # from Step 0
 make creds-show
 ```
 
@@ -457,7 +439,7 @@ kubectl -n javawebapp port-forward svc/javawebapp 18080:80 # then http://localho
 Reach the UIs at `*.vks.local` instead of port-forwarding.
 
 ```bash
-cd ~/vks-airgap-cicd
+cd vks-airgap-cicd            # from Step 0
 make istio-preflight
 ```
 
