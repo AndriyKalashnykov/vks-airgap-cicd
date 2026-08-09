@@ -298,6 +298,20 @@ env_validate() {
           log_error "could not reach ${_ksrv:-the cluster} (KUBECONFIG='$KUBECONFIG').
   This is NOT evidence the kubeconfig is stale — the endpoint never answered. Is the lab up, and is
   it routable from this jump box? Retry before re-fetching anything."; errs=$((errs+1)) ;;
+        KUBECONFIG_UNUSABLE)
+          # ⚠️ WORDED FOR THIS SITE. The two shapes you might expect CANNOT reach here: the guard
+          # above already proved $KUBECONFIG exists, and a MALFORMED file is caught earlier by the
+          # current-context check. What is left is a file the kubeconfig POINTS AT — its CA, a
+          # client cert/key, or an exec credential-plugin binary.
+          log_error "a file your kubeconfig POINTS AT is missing or unreadable, so NOTHING WAS DIALLED —
+  this says nothing about whether ${_ksrv:-the cluster} is up. KUBECONFIG='$KUBECONFIG' itself exists.
+  kubectl names the file:"
+          sed 's/^/    /' "$_kerr" >&2; errs=$((errs+1)) ;;
+        NO_KUBE_TARGET)
+          log_error "kubectl had NO TARGET — it fell back to localhost:8080, which is never your lab.
+  Either KUBECONFIG names a file that does not exist, or that file sets no current-context.
+    KUBECONFIG='$KUBECONFIG'
+  Fix the path or select a context; nothing was dialled at ${_ksrv:-the cluster}."; errs=$((errs+1)) ;;
         *)
           # Do NOT guess. Print kubectl's own words — they beat any advice we could invent.
           log_error "KUBECONFIG='$KUBECONFIG' did not work, and the error is one we do not classify:"

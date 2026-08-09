@@ -1003,7 +1003,11 @@ argocd_can_i() {
     #   rpc error: code = Unauthenticated desc = invalid session token: token is expired
     # Auth is tested BEFORE transport so a token message is not swallowed by the connection arm.
     local _cls; _cls="$(classify_kube_failure "$_err")"
-    if [ "$_cls" = UNKNOWN ]; then
+    # KUBECONFIG_UNUSABLE / NO_KUBE_TARGET are KUBECTL verdicts and mean nothing for an argocd probe
+    # (argocd uses no kubeconfig), so they must not BYPASS the refinement the way a relevant class
+    # would. Without this, an argocd config error reading "stat …: no such file" would be reported
+    # to the operator as a problem with their KUBE configuration.
+    if [ "$_cls" = UNKNOWN ] || [ "$_cls" = KUBECONFIG_UNUSABLE ] || [ "$_cls" = NO_KUBE_TARGET ]; then
       if command grep -qiE 'Unauthenticated|invalid session token|token is expired|Unauthorized' "$_err"; then
         _cls=UNAUTHORIZED
       elif command grep -qiE 'failed to establish connection|connection refused|x509|tls' "$_err"; then
@@ -1075,6 +1079,17 @@ classify_kube_failure() {
     # "was refused" INVERTS an auth verdict — this arm sits ABOVE UNAUTHORIZED/FORBIDDEN, so any
     # auth text containing that generic English substring flips to a network cause. The suffix is a
     # kubectl internal format string and cannot appear in prose; "was refused" can.
+    # NO_KUBE_TARGET — kubectl NEVER HAD A TARGET. It falls back to http://localhost:8080 when the
+    # config is missing/empty or no current-context is set, then reports a connection failure to it.
+    # ⚠️ THIS ARM MUST SIT ABOVE UNREACHABLE, and it is why the KUBECONFIG_UNUSABLE arm alone was
+    # not enough. MEASURED (kubectl 1.36.3), and the asymmetry is the whole point:
+    #     --kubeconfig <missing>   -> "error: stat …: no such file or directory"  -> KUBECONFIG_UNUSABLE
+    #     KUBECONFIG=<missing>     -> "…server localhost:8080 was refused"        -> UNREACHABLE  ← WRONG
+    # Three of the four consumers use the ENV form, so the class added to fix "a filesystem error
+    # reported as a network claim" could not fire at the sites that needed it most.
+    # A real lab endpoint is never localhost:8080; the one false positive is an operator genuinely
+    # using `kubectl proxy`, so the message hedges rather than asserting.
+    *"localhost:8080"*|*"127.0.0.1:8080"*)                                       printf 'NO_KUBE_TARGET' ;;
     *"no route to host"*|*"connection refused"*|*"i/o timeout"*|*"dial tcp"*|*"no such host"*|\
     *"did you specify the right host or port"*) \
                                                                                        printf 'UNREACHABLE' ;;

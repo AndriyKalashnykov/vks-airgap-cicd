@@ -83,6 +83,11 @@ _pf_classify() {   # _pf_classify <label> <var-name-for-the-message>
     from a cluster that no longer exists. Re-authenticate: $3" ;;
     FORBIDDEN)    block "authenticated to the $1 cluster, but this identity may not read it ($2).
     That is an RBAC grant, not a broken kubeconfig — do NOT re-fetch it." ;;
+    NO_KUBE_TARGET) block "kubectl had NO TARGET for the $1 cluster — it fell back to localhost:8080,
+    which is never your lab. Either $2 names a file that does not exist, or that file sets no
+    current-context. Nothing was dialled, so this says NOTHING about whether it is up: $3" ;;
+    PLAINTEXT)    block "the $1 endpoint ($2) is not speaking TLS on that port — EVERY CA remedy is
+    wrong here. Do not re-fetch a trust anchor; check the scheme and port." ;;
     UNREACHABLE)  block "the $1 cluster never answered ($2). This is NOT evidence the kubeconfig is
     stale — check the address and that this box can route to it." ;;
     KUBECONFIG_UNUSABLE) block "a file named in the $1 kube configuration ($2) is missing,
