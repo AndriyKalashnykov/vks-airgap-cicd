@@ -441,21 +441,12 @@ make psa-check
 
 ## 6. Harbor's CA
 
-`crane` on the jump box and Kaniko in-cluster must trust Harbor's self-signed certificate.
+Harbor uses a self-signed certificate. Save its CA here so the jump box and the cluster trust it.
 
-**Route A — the Harbor UI (prefer this; needs only a Harbor login):**
-Harbor → your project → **Registry Certificate** → download `ca.crt` → save it as
-`./secrets/harbor-ca.crt`.
+**Download it from Harbor:** Harbor → your project → **Registry Certificate** → download `ca.crt`
+→ save as `./secrets/harbor-ca.crt`.
 
-**Route B — from the cluster** (needs Supervisor access *and* an admin-level grant — see notes):
-
-```bash
-cd vks-airgap-cicd            # from Step 0
-make harbor-ca-from-cluster
-```
-
-**Verify it either way** — ask whoever runs Harbor for the CA's SHA-256 first, over a channel that
-is not this connection:
+Ask whoever runs Harbor for the certificate's SHA-256, then check what you downloaded:
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
@@ -463,6 +454,17 @@ make fetch-harbor-ca HARBOR_CA_SHA256='<the digest they gave you>'
 ```
 
 **Expect:** `./secrets/harbor-ca.crt` exists, is `0644`, and its SHA-256 matches. *(<1 min)*
+
+<details><summary>No Harbor login? Read it from the cluster instead</summary>
+
+Needs Supervisor access and an admin-level grant, because the Secret holds the CA's private key:
+
+```bash
+cd vks-airgap-cicd            # from Step 0
+make harbor-ca-from-cluster
+```
+
+</details>
 
 ---
 
