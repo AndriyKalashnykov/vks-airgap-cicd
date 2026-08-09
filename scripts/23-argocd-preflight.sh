@@ -85,6 +85,13 @@ _pf_classify() {   # _pf_classify <label> <var-name-for-the-message>
     That is an RBAC grant, not a broken kubeconfig — do NOT re-fetch it." ;;
     UNREACHABLE)  block "the $1 cluster never answered ($2). This is NOT evidence the kubeconfig is
     stale — check the address and that this box can route to it." ;;
+    KUBECONFIG_UNUSABLE) block "a file named in the $1 kube configuration ($2) is missing,
+    unreadable or malformed — so NOTHING WAS DIALLED, and this says NOTHING about whether that
+    cluster is up. It is not always the kubeconfig itself: measured causes include a missing
+    certificate-authority or client-cert it points at, an absent exec credential-plugin binary, and
+    a present-but-invalid file. The error names which one:
+$(sed 's/^/      /' "$_pf_err" | head -4)
+    Then fix that file, or re-create the kubeconfig: $3" ;;
     *)            block "the $1 cluster did not answer ($2), and the error is not one we classify:
 $(sed 's/^/      /' "$_pf_err" | head -4)" ;;
   esac
@@ -271,11 +278,18 @@ fi
 echo "── app namespaces (guest) ──"
 while read -r app; do
   [ -n "$app" ] || continue
-  if kg get ns "$app" >/dev/null 2>&1; then
+  # ⚠️ NOT a bare rc test. kubectl exits 1 for NotFound, for unreachable AND for forbidden, and
+  # `block` above does NOT exit — it only sets blocking=1 — so this section runs even when the guest
+  # was just reported unreachable, and would print "absent" for a cluster nobody could see.
+  _ns_err="$(mktemp)"
+  if kg get ns "$app" >/dev/null 2>"$_ns_err"; then
     log_info "  ${app}: exists"
-  else
+  elif grep -qiE 'notfound|not found' "$_ns_err"; then
     log_info "  ${app}: absent (make gitops creates it, PSA-labelled)"
+  else
+    log_warn "  ${app}: could not check ($(classify_kube_failure "$_ns_err")) — NOT reporting it absent."
   fi
+  rm -f "$_ns_err"
 done <<EOF
 $(app_names)
 EOF
