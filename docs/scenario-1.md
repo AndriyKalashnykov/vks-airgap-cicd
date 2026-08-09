@@ -75,7 +75,7 @@ below lists the keys it needs before the commands that read them.
 | Supervisor IP | `192.168.101.128` | vCenter → Workload Management → Supervisors → *Control Plane Node IP* |
 | vCenter FQDN | `vcsa.env1.lab.test` | the address you log into vCenter with (Step 3 needs it for the CA). **Your jump box must resolve it** — check: `getent hosts vcsa.env1.lab.test` |
 | your SSO user | `administrator@vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups |
-| your SSO domain | `vsphere.local` | same screen, the *Domain* dropdown |
+| your SSO domain | `vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups, the *Domain* dropdown |
 | your SSO password | — | for that login — you put it in `.env` in Step 1 |
 
 ### Download the Broadcom artifacts
@@ -87,11 +87,11 @@ you to fetch them. Versions move; match yours to what your entitlement offers.
 | file | from | put it in |
 |---|---|---|
 | `VCF-Consumption-CLI-Linux_AMD64-9.1.0.0400.25509669.tar.gz` | [VCF CLI](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20vSphere%20Foundation%209&release=9.1.0.0&os=&servicePk=542815&language=EN&viewGroup=true&groupId=540529) | `VCF_CLI_SRC_DIR` (you set it in Step 1) |
-| `VCF-Consumption-CLI-PluginBundle-Linux_AMD64-9.1.0.0400.25509793.tar.gz` | [Plugins](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20vSphere%20Foundation%209&release=9.1.0.0&os=&servicePk=542815&language=EN&viewGroup=true&groupId=540672) | same folder |
-| the amd64 `argocd` CLI | [ArgoCD](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=538499) | same folder |
-| `supervisor-service-argocd-legacy-1.1.0-25100889.yml` | same ArgoCD page | anywhere — you upload it in vCenter in Step 3 |
+| `VCF-Consumption-CLI-PluginBundle-Linux_AMD64-9.1.0.0400.25509793.tar.gz` | [Plugins](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20vSphere%20Foundation%209&release=9.1.0.0&os=&servicePk=542815&language=EN&viewGroup=true&groupId=540672) | `VCF_CLI_SRC_DIR` |
+| the amd64 `argocd` CLI | [ArgoCD](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=538499) | `VCF_CLI_SRC_DIR` |
+| `supervisor-service-argocd-legacy-1.1.0-25100889.yml` | [ArgoCD](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=538499) | anywhere — you upload it in vCenter in Step 3 |
 | `supervisor-service-harbor-legacy-v2.14.3+vmware.2-vks.1-25292931.yml` | [Harbor](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=542081) | anywhere — you upload it in vCenter in Step 2 |
-| `supervisor-service-harbor-data-values-v2.14.3.yml` | same Harbor page | the folder Step 2's `src=` points at |
+| `supervisor-service-harbor-data-values-v2.14.3.yml` | [Harbor](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=542081) | `~/Downloads/vcf` |
 
 The example throughout this runbook uses `~/Downloads/vcf` for all of them.
 
