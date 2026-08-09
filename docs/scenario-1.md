@@ -97,8 +97,8 @@ this runbook uses `~/Downloads/vcf`. Version numbers move — match the `*` to w
 entitlement offers, and use the **`-legacy`** variant of each service YAML for a
 disconnected Supervisor.
 
-> No verified deep link for the `vcf` CLI archive is recorded here. It is on the same
-> entitled downloads area as the service YAMLs above; if you find the direct page, add it.
+> The `vcf` CLI has no direct link here. Search your entitled downloads for **VCF CLI**
+> under the same vSphere Foundation entitlement that gives you the service YAMLs above.
 
 ---
 
