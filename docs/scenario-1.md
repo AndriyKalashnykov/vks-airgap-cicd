@@ -20,19 +20,19 @@ Run these in this order. Steps 2 and 3 are browser work; everything else is a co
 | | Step | You do |
 |---|---|---|
 | **0** | [Get the repo](#0-get-the-repo) | clone it, `cd` into it, create `.env` |
-| **1** | [Jump box](#1-jump-box) | install the toolchain; fill in 7 values in `.env` |
+| **1** | [Jump box](#1-jump-box) | install the toolchain; set 8 values in `.env` |
 | **1b** | [vSphere Namespace](#1b-the-vsphere-namespace) | browser: create it, attach storage + a VM class |
-| **2** | [Harbor](#2-harbor-browser) | browser: install it; fill in 6 values |
-| **3** | [ArgoCD](#3-argocd-supervisor) | browser + CLI: install it, get the CA, log in; fill in 4 values |
-| **4** | [Guest cluster](#4-guest-cluster) | create it; fill in 4 values |
+| **2** | [Harbor](#2-harbor-browser) | browser: install it; set 5 values |
+| **3** | [ArgoCD](#3-argocd-supervisor) | browser + CLI: install it, get the CA, log in; set 4 values |
+| **4** | [Guest cluster](#4-guest-cluster) | create it; set 1 value |
 | **5** | [Preflight](#5-preflight) | check the cluster will accept the install |
 | **6** | [Harbor's CA](#6-harbors-ca) | fetch it |
 | **7** | [Harbor robot](#7-harbor-robot-recommended) | create it; replace 2 values |
-| **8** | [ArgoCD's kubeconfig](#8-the-supervisor-kubeconfig-argocd-needs) | fetch it; fill in 3 values |
+| **8** | [ArgoCD's kubeconfig](#8-the-supervisor-kubeconfig-argocd-needs) | fetch it; set 2 values |
 | **9** | [Install](#9-validate-then-install) | `make install-all`, then `make verify` |
 | **10** | [Ingress](#10-ingress-optional) | optional: reach the UIs at `*.vks.local` |
 | **11** | [Access the UIs](#11-access-the-uis) | `make creds-show` |
-| **12** | [Remove it again](#12-removing-it-again) | `make uninstall-all` |
+| **12** | [Uninstall](#12-uninstall) | `make uninstall-all` |
 
 **Everything you configure goes in ONE file: `.env`, at the root of the repo.** Each step has a
 table of the keys it needs, with an example and where the value comes from.
@@ -556,9 +556,12 @@ kubectl -n javawebapp port-forward svc/javawebapp 18080:80 # then http://localho
 
 ---
 
-## 12. Removing it again
+## 12. Uninstall
+
+Removes what this runbook installed. It does not touch the vSphere lab.
 
 ```bash
+cd vks-airgap-cicd            # from Step 0
 make uninstall-all CONFIRM=<your VKS_CLUSTER_NAME>
 ```
 
