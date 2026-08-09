@@ -2,28 +2,26 @@
 
 ## What this is
 
-You have a **Supervisor** endpoint, a login and a password. This runbook installs Harbor and ArgoCD
-as Supervisor Services, creates a guest VKS cluster, and runs an air-gapped CI/CD pipeline into it.
+You have a **Supervisor** endpoint, a login and a password. This runbook creates a vSphere Namespace
+(or uses one you already have), installs Harbor and ArgoCD as Supervisor Services, creates a guest
+VKS cluster, and runs an air-gapped CI/CD pipeline into it.
 
 **What you end up with:** `git push` → Tekton builds → image to Harbor → tag written back → ArgoCD
 syncs → the app serves the change. Two demo apps (Java and Go), proven by `make verify`.
-
-**Topology — two clusters, two kubeconfigs.** Harbor and ArgoCD run on the **Supervisor**. Gitea,
-Tekton and your apps run in the **guest cluster**.
 
 > Background for when a step surprises you → [scenario-1-notes.md](scenario-1-notes.md).
 
 ## The whole sequence
 
-Run these in this order. Steps 2 and 3 are browser work; everything else is a command.
+Run these in this order. Steps 1b, 2 and 3 are browser work; everything else is a command.
 
 | | Step | You do |
 |---|---|---|
 | **0** | [Get the repo](#0-get-the-repo) | clone it, `cd` into it, create `.env` |
 | **1** | [Jump box](#1-jump-box) | install the toolchain; set 8 values in `.env` |
 | **1b** | [vSphere Namespace](#1b-the-vsphere-namespace) | browser: create it, attach storage + a VM class |
-| **2** | [Harbor](#2-harbor-browser) | browser: install it; set 5 values |
-| **3** | [ArgoCD](#3-argocd-supervisor) | browser + CLI: install it, get the CA, log in; set 4 values |
+| **2** | [Harbor](#2-harbor) | browser: install it; set 5 values |
+| **3** | [ArgoCD](#3-argocd) | browser + CLI: install it, get the CA, log in; set 4 values |
 | **4** | [Guest cluster](#4-guest-cluster) | create it; set 1 value, then 3 more after it is up |
 | **5** | [Preflight](#5-preflight) | check the cluster will accept the install |
 | **6** | [Harbor's CA](#6-harbors-ca) | fetch it |
@@ -48,11 +46,12 @@ Internet-only? Use [the sneakernet flow](sneakernet.md) instead; it replaces Ste
 
 Everything below runs **from the repo root**. Nothing works from another directory.
 
-A stock Ubuntu or Photon box has neither `git` nor `make`. Install them first.
+A stock Ubuntu or Photon box has neither `git` nor `make`. Ubuntu has no `curl` either, and
+`make deps` needs it. Install them first.
 
 ```bash
 # Ubuntu / Debian
-apt-get update && apt-get install -y --no-install-recommends git make ca-certificates
+apt-get update && apt-get install -y --no-install-recommends git make curl ca-certificates
 # Photon OS 5
 tdnf install -y git make
 ```
@@ -78,6 +77,42 @@ below lists the keys it needs before the commands that read them.
 | your SSO user | `administrator@vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups |
 | your SSO domain | `vsphere.local` | same screen, the *Domain* dropdown |
 | your SSO password | — | for that login — you put it in `.env` in Step 1 |
+
+### Download the Broadcom artifacts
+
+All of these are **entitled** downloads — you need a Broadcom account with a vSphere
+Foundation entitlement. Get them now: Steps 1-3 read them off disk and will not tell
+you to fetch them. Versions move; match yours to what your entitlement offers.
+
+| file | from | put it in |
+|---|---|---|
+| `VCF-Consumption-CLI-Linux_AMD64-9.1.0.0400.25509669.tar.gz` | [VCF CLI](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20vSphere%20Foundation%209&release=9.1.0.0&os=&servicePk=542815&language=EN&viewGroup=true&groupId=540529) | `VCF_CLI_SRC_DIR` (you set it in Step 1) |
+| `VCF-Consumption-CLI-PluginBundle-Linux_AMD64-9.1.0.0400.25509793.tar.gz` | [Plugins](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20vSphere%20Foundation%209&release=9.1.0.0&os=&servicePk=542815&language=EN&viewGroup=true&groupId=540672) | same folder |
+| the amd64 `argocd` CLI | [ArgoCD](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=538499) | same folder |
+| `supervisor-service-argocd-legacy-1.1.0-25100889.yml` | same ArgoCD page | anywhere — you upload it in vCenter in Step 3 |
+| `supervisor-service-harbor-legacy-v2.14.3+vmware.2-vks.1-25292931.yml` | [Harbor](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=542081) | anywhere — you upload it in vCenter in Step 2 |
+| `supervisor-service-harbor-data-values-v2.14.3.yml` | same Harbor page | the folder Step 2's `src=` points at |
+
+The example throughout this runbook uses `~/Downloads/vcf` for all of them.
+
+⚠️ **Take the `-legacy` service files.** The non-legacy ones install "successfully" and
+then die at reconcile, because a Supervisor without a Software Depot cannot fetch what
+they reference.
+
+⚠️ **Take only the `Linux_AMD64` rows** (uppercase). The un-suffixed `-Binaries-`,
+`-PluginBundle-` and `-OCI-` archives are multi-platform supersets the installer will
+not use.
+
+**Istio is not on this list.** Step 10 installs it *from your own Harbor*, or attaches to
+the one your Supervisor already has — nothing to download.
+
+**Portal gotchas, all of which fail silently:**
+
+- **Tick "I agree to the Terms and Conditions"** or the download icons do nothing. On the
+  VCF CLI pages the checkbox stays **inert until you open both Terms links first**, and the
+  gate is **per page** — ticking it on one page does not carry to the next.
+- **Patch builds appear only once you open a group.** The parent page lists `9.1.0.0` alone.
+- **A `release=` in the URL is ignored** — use the on-page selector.
 
 ---
 
@@ -160,7 +195,7 @@ A namespace missing either still accepts the cluster in Step 4, then never finis
 
 ---
 
-## 2. Harbor (browser)
+## 2. Harbor
 
 The registry every image comes from.
 [Broadcom docs](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-harbor-as-vcf-service/installing-and-configuring-harbor-and-contour.html)
@@ -228,7 +263,7 @@ The registry every image comes from.
 
 ---
 
-## 3. ArgoCD (Supervisor)
+## 3. ArgoCD
 
 The GitOps engine, running on the Supervisor.
 [Broadcom docs](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-argo-cd-service/install-argo-cd-service.html)
