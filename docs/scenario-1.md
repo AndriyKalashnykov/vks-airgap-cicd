@@ -24,7 +24,7 @@ Run these in this order. Steps 2 and 3 are browser work; everything else is a co
 | **1b** | [vSphere Namespace](#1b-the-vsphere-namespace) | browser: create it, attach storage + a VM class |
 | **2** | [Harbor](#2-harbor-browser) | browser: install it; set 5 values |
 | **3** | [ArgoCD](#3-argocd-supervisor) | browser + CLI: install it, get the CA, log in; set 4 values |
-| **4** | [Guest cluster](#4-guest-cluster) | create it; set 1 value |
+| **4** | [Guest cluster](#4-guest-cluster) | create it; set 1 value, then 3 more after it is up |
 | **5** | [Preflight](#5-preflight) | check the cluster will accept the install |
 | **6** | [Harbor's CA](#6-harbors-ca) | fetch it |
 | **7** | [Harbor robot](#7-harbor-robot-recommended) | create it; replace 2 values |
@@ -119,7 +119,8 @@ because teardown deletes **by name** and this repo's app names are generic.
 
 ### If you already have one
 
-Put its name in `VKS_NAMESPACE` and go to Step 2.
+Put its name in `VKS_NAMESPACE`, then go to Step 2 — but come back to *Check it before Step 4*
+below once you have finished Step 3.
 
 ### If you don't — create it
 
@@ -164,7 +165,7 @@ A namespace missing either still accepts the cluster in Step 4, then never finis
 The registry every image comes from.
 [Broadcom docs](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-harbor-as-vcf-service/installing-and-configuring-harbor-and-contour.html)
 
-1. Give Harbor an **NGINX LoadBalancer** (`enableNginxLoadBalancer: true`, set in step 4 below).
+1. Give Harbor an **NGINX LoadBalancer** (`enableNginxLoadBalancer: true`, set in 2.4 below).
    Contour is not covered by this runbook.
 2. vCenter → Workload Management → Supervisor Services → **Add New Service** → upload
    `supervisor-service-harbor-legacy-*.yml` (use the `-legacy` file for a disconnected Supervisor).
@@ -172,7 +173,7 @@ The registry every image comes from.
 
    | | example | how to get it |
    |---|---|---|
-   | Harbor's FQDN | `harbor.env1.lab.test` | **you choose it.** It must be a name your real DNS can answer, because the guest cluster's nodes resolve it — see step 6 below. |
+   | Harbor's FQDN | `harbor.env1.lab.test` | **you choose it.** It must be a name your real DNS can answer, because the guest cluster's nodes resolve it — see 2.6 below. |
    | Harbor's storage class | `wcp-vmfs` (single-host VMFS)<br>`vsan-default-storage-policy` (vSAN) | `kubectl get storageclass` against the Supervisor. No access yet? vCenter → your Namespace → **Storage** tab, then lowercase the policy name and replace spaces with `-`. |
 
 4. Edit the data-values file you downloaded:
@@ -273,15 +274,15 @@ The GitOps engine, running on the Supervisor.
    vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"      # note the <ctx>:<ns> colon form
    ```
 
-   `vcf context use` can print an error about a "system Harbor
-   registry" **and still have worked** — judge it by the next command, not its exit code.
+   `vcf context use` can print an error about a "system Harbor registry" **and still have
+   worked** — judge it by the next command, not its exit code.
 
 5. Apply the instance CR. `kubectl explain argocd.spec.version` lists what your operator supports:
 
    ```yaml
    apiVersion: argocd-service.vsphere.vmware.com/v1alpha1
    kind: ArgoCD
-   metadata: { name: argocd-1, namespace: <the namespace from step 2> }
+   metadata: { name: argocd-1, namespace: <the namespace from 3.2> }
    spec: { version: <a supported version> }
    ```
 
@@ -301,9 +302,9 @@ The GitOps engine, running on the Supervisor.
 
 | key | example | how to get the value |
 |---|---|---|
-| `ARGOCD_NAMESPACE` | `lab` | the namespace your ArgoCD **instance** runs in. **Discover it — do not assume:** `kubectl get argocd -A` (on one real lab this was `lab`, not the `argocd-instance-1` from step 2) |
-| `ARGOCD_SERVER` | `192.168.101.131` | the `argocd-server` EXTERNAL-IP from step 6 |
-| `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | the file you created in step 3 above |
+| `ARGOCD_NAMESPACE` | `lab` | the namespace your ArgoCD **instance** runs in. **Discover it — do not assume:** `kubectl get argocd -A` (on one real lab this was `lab`, not the `argocd-instance-1` from 3.2) |
+| `ARGOCD_SERVER` | `192.168.101.131` | the `argocd-server` EXTERNAL-IP from 3.6 |
+| `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | the file you created in 3.3 above |
 | `VKS_AUTH_METHOD` | `vcf` | **set this to `vcf` now.** It selects how you log in, and `vcf` is the Supervisor login this step is doing. Step 4 changes it to `kubeconfig`. |
 
 Log in, which writes the Supervisor kubeconfig every later step reads:
@@ -320,7 +321,7 @@ make vks-login                # writes ./secrets/supervisor.kubeconfig
 ## 4. Guest cluster
 
 Where Gitea, Tekton and your apps run. You need cluster-admin on it.
-*Already have a cluster? Skip to "Export its kubeconfig".*
+*Already have a cluster? Skip to "Get its kubeconfig" below.*
 
 **→ set in `./.env`:**
 
@@ -394,7 +395,6 @@ Supervisor kubeconfig, use the Secret route — it is the same credential.
 | `KUBECONFIG` | `./secrets/cicd-gc1.kubeconfig` | `./secrets/<your VKS_CLUSTER_NAME>.kubeconfig` — the file above |
 | `VKS_CONTEXT` | `cicd-gc1-admin@cicd-gc1` | `kubectl --kubeconfig ./secrets/<cluster>.kubeconfig config get-contexts -o name` |
 | `VKS_AUTH_METHOD` | `kubeconfig` | **change it back from `vcf`** (Step 3 set that for the Supervisor login). From here on the pipeline runs against the guest-cluster kubeconfig above. |
-| `GITEA_ADMIN_PASSWORD` | *your value* | **you choose it** — Gitea is installed by this repo, so you set its admin password |
 
 ---
 
@@ -404,7 +404,7 @@ Catches what would otherwise kill the run *after* a 20-minute mirror.
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
-make vks-login
+make vks-login                # now checks the GUEST kubeconfig (Step 4 set VKS_AUTH_METHOD=kubeconfig)
 make lab-preflight
 make psa-check
 ```
@@ -505,7 +505,7 @@ server is the one that matters. *(~2 min)*
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
-make env-populate     # generates the Gitea secret; discovers anything you left blank
+make env-populate     # generates Gitea's admin password; discovers anything you left blank
 make env-check        # every required value set? (fast, no network)
 make env-validate     # does KUBECONFIG reach the cluster? does Harbor authenticate?
 
