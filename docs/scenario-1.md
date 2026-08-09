@@ -490,6 +490,7 @@ cat ./secrets/harbor-robot.env
 | `ARGOCD_KUBECONFIG` | `./secrets/argocd.kubeconfig` | the file the next command writes. **Set it explicitly** — left unset it falls back to your *guest* kubeconfig, and `make gitops` then looks for ArgoCD in the wrong cluster. |
 | `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | already set in Step 3. If you skipped that, set `VKS_INSECURE_SKIP_TLS_VERIFY=true` instead — but the CA is preferred, because a password crosses this connection. |
 | `ARGOCD_NAMESPACE` | `lab` | already set in Step 3 — confirm with `kubectl get argocd -A` |
+| `ARGOCD_DEST_CLUSTER_NAME` | `vks-guest` | the name your guest cluster is registered under in ArgoCD: `argocd cluster list`. **Required on any lab with more than one registered cluster** — otherwise the next command stops with `AMBIGUOUS destination`, because deploying into the wrong tenant's cluster would prune their workloads. |
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
