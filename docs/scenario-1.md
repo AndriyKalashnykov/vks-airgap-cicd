@@ -92,16 +92,9 @@ this runbook, and every step below ends with a table of the keys it wants you to
 
 Install the toolchain and the licensed CLIs.
 
-```bash
-cd vks-airgap-cicd            # the repo you cloned in Step 0
-make deps                     # toolchain: kubectl, helm, crane, tkn, jq, yq…
-make install-vcf-clis         # reads VCF_CLI_SRC_DIR from .env
-make check-tools              # what you have, what is missing
-```
-
-**Expect:** `check-tools` prints `all REQUIRED tools present.` *(~5 min, mostly downloads)*
-
-**→ set in `./.env`:**
+**→ set in `./.env` before you run the commands below.** `VCF_CLI_SRC_DIR` is read by
+`make install-vcf-clis` in this step — without it that command **fails**. The other six are read
+from Step 3 onward; you collected four of them in Step 0, and you invent two.
 
 | key | example | how to get the value |
 |---|---|---|
@@ -114,6 +107,17 @@ make check-tools              # what you have, what is missing
 | `VKS_SSO_DOMAIN` | `vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups → *Domain* |
 
 Your password has no key here — you type it at a prompt in Step 3.
+
+Now run:
+
+```bash
+cd vks-airgap-cicd            # the repo you cloned in Step 0
+make deps                     # toolchain: kubectl, helm, crane, tkn, jq, yq…
+make install-vcf-clis         # reads VCF_CLI_SRC_DIR, which you set above
+make check-tools              # what you have, what is missing
+```
+
+**Expect:** `check-tools` prints `all REQUIRED tools present.` *(~5 min, mostly downloads)*
 
 ---
 
@@ -141,7 +145,8 @@ No permission to create namespaces? Ask your vSphere admin for one, with those t
 
 ### Check it before Step 4
 
-Run this once you have the Supervisor kubeconfig (Step 3). **Both must print something.**
+Run this **after Step 3** — that is where `make vks-login` writes the Supervisor kubeconfig this
+check reads. **Both must print something.**
 
 ```bash
 cd vks-airgap-cicd
@@ -205,6 +210,9 @@ The registry every image comes from.
 
 5. Supervisor Services → Harbor → **Manage Service** → paste `harbor-values.yaml` → Finish.
 6. Get the ingress IP and create a **real DNS A record** for your FQDN:
+
+   Read it in vCenter (**Workload Management → Supervisor Services → Harbor**), or with `kubectl`
+   **once you have finished Step 3** — nothing before Step 3 has written a Supervisor kubeconfig:
 
    ```bash
    kubectl --kubeconfig ./secrets/supervisor.kubeconfig get svc -A | grep -i harbor
@@ -330,12 +338,33 @@ The GitOps engine, running on the Supervisor.
 | `ARGOCD_TRACK_BRANCH` | `main` | the branch ArgoCD follows in the deploy repos — leave as-is unless you renamed it |
 | `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | the file you created in step 3 above — leave as-is |
 
+Finally, log in through the repo so it writes the Supervisor kubeconfig everything after this reads:
+
+```bash
+cd vks-airgap-cicd
+make vks-login                # prompts for your password; writes ./secrets/supervisor.kubeconfig
+```
+
+**Expect:** `./secrets/supervisor.kubeconfig` exists. Step 1b's namespace check and Step 4 both need it.
+
 ---
 
 ## 4. Guest cluster
 
 Where Gitea, Tekton and your apps run. You need cluster-admin on it.
 *Already have a cluster? Skip to "Export its kubeconfig".*
+
+**→ set in `./.env` before you run this.** Only `VKS_K8S_VERSION` is **required** — the command
+aborts without it. The rest already have working defaults; set one only to override it.
+
+| key | required? | example | how to get the value |
+|---|---|---|---|
+| `VKS_K8S_VERSION` | **yes** | `v1.32.10+vmware.1-fips` | `kubectl get kubernetesreleases` — one that is both Ready and Compatible |
+| `VKS_CLUSTERCLASS` | no — defaults | `builtin-generic-v3.6.0` | `kubectl get clusterclass -A` on the Supervisor — the newest Ready one |
+| `VKS_VM_CLASS` | no — defaults | `best-effort-small` | `kubectl get virtualmachineclass` |
+| `VKS_STORAGE_CLASS` | no — defaults | `wcp-vmfs` | `kubectl get storageclass` |
+| `VKS_CONTROL_PLANE_COUNT` | no — defaults to `1` | `1` | how many control-plane nodes |
+| `VKS_NODE_COUNT` | no — defaults to `2` | `2` | how many workers. Leave it unset; `.env.example`'s commented `=1` is deliberately **not** the default, and one worker is too small for the platform. |
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
@@ -347,16 +376,6 @@ make vks-cluster-status      # waits, then reports
 
 ⚠️ **Do not reuse a cluster name you deleted recently** — it never converges. Pick a new one. See
 the notes for the measurement.
-
-**→ optionally set in `./.env`** (defaults suit most labs):
-
-| key | example | how to get the value |
-|---|---|---|
-| `VKS_CLUSTERCLASS` | `builtin-generic-v3.6.0` | `kubectl get clusterclass -A` on the Supervisor — take the newest Ready one |
-| `VKS_K8S_VERSION` | `v1.32.10+vmware.1-fips` | `kubectl get kubernetesreleases` — one that is both Ready and Compatible |
-| `VKS_VM_CLASS` | `best-effort-small` | `kubectl get virtualmachineclass` |
-| `VKS_STORAGE_CLASS` | `wcp-vmfs` | `kubectl get storageclass` |
-| `VKS_WORKER_COUNT` | `2` | how many workers you want |
 
 ### Get its kubeconfig
 
