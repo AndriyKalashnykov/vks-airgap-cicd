@@ -54,11 +54,8 @@ pwd                            # sanity check: should end in /vks-airgap-cicd
 make env-init                  # creates ./.env from the template .env.example
 ```
 
-**Expect:** `./.env` exists. That is the one file you edit for the rest of this runbook.
-
-```bash
-${EDITOR:-vi} .env             # open it now; Step 1 tells you what to put in it
-```
+**Expect:** `./.env` exists. Open it in your editor — it is the one file you edit for the rest of
+this runbook, and every step below ends with a table of the keys it wants you to set in it.
 
 **Collect these from your lab before Step 1** — you paste them into `.env`:
 
