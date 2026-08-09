@@ -59,10 +59,42 @@ before=$(grep -E '^GITEA_ADMIN_PASSWORD=' "$WORK/.env")
 try "env-populate NEVER clobbers a value already set (re-run is idempotent)" \
     '[ "$(grep -E "^GITEA_ADMIN_PASSWORD=" "$WORK/.env")" = "$before" ]'
 
-# --- env-check: must REJECT the shipped placeholder ----------------------------------
-sed -i 's|^HARBOR_URL=.*|HARBOR_URL=harbor.vks.local|' "$WORK/.env" 2>/dev/null || true
-( cd "$WORK" && ENV_FILE=.env REPO_ROOT="$WORK" bash "$REPO/scripts/02-env.sh" check >/dev/null 2>&1 )
-try "env-check FAILS on the shipped HARBOR_URL placeholder (not merely 'set')" '[ $? -ne 0 ]'
+# --- env-check: the HARBOR_URL placeholder must CHANGE the exit code ---------------
+# WHY A PAIR, NOT A SINGLE ASSERTION: env-check accumulates EVERY missing required value,
+# so a fixture that is short of anything else exits 1 whether HARBOR_URL is a placeholder
+# or not -- defect present -> 1, defect absent -> 1, ZERO discrimination. The first
+# assertion below is the POSITIVE CONTROL: it proves the fixture satisfies everything
+# else, which is the only thing that makes the second assertion mean anything.
+# Note the placeholder is the LITERAL harbor.vks.local (02-env.sh harbor_url_is_placeholder),
+# and that .env.example ships HARBOR_URL *commented*, so it must be APPENDED, not sed'd.
+touch "$WORK/fake.kubeconfig"
+cat >> "$WORK/.env" <<EOF
+HARBOR_USERNAME=admin
+HARBOR_PASSWORD=x
+GITEA_ADMIN_PASSWORD=x
+SUPERVISOR_HOST=sup.example.com
+VKS_CONTEXT_NAME=ctx
+VKS_USERNAME=u
+VKS_NAMESPACE=ns
+VKS_CLUSTER_NAME=c
+VKS_PASSWORD=p
+KUBECONFIG=$WORK/fake.kubeconfig
+EOF
+cp "$WORK/.env" "$WORK/.env.base"
+
+_check_with() {  # $1 = HARBOR_URL value; echoes env-check's rc
+  cp "$WORK/.env.base" "$WORK/.env"
+  printf 'HARBOR_URL=%s\n' "$1" >> "$WORK/.env"
+  ( cd "$WORK" && ENV_FILE=.env REPO_ROOT="$WORK" bash "$REPO/scripts/02-env.sh" check >/dev/null 2>&1 )
+  echo $?
+}
+rc_real=$(_check_with harbor.real.example.com)
+rc_ph=$(_check_with harbor.vks.local)
+
+try "POSITIVE CONTROL: env-check PASSES when every required value is real" '[ "$rc_real" -eq 0 ]'
+try "env-check FAILS on the harbor.vks.local placeholder" '[ "$rc_ph" -ne 0 ]'
+try "the rc actually CHANGES with HARBOR_URL (the assertion discriminates)" \
+    '[ "$rc_real" -ne "$rc_ph" ]'
 
 printf '\n%s: %d checks, %d failed\n' "$(basename "$0")" "$n" "$fail"
 [ "$fail" -eq 0 ] || exit 1
