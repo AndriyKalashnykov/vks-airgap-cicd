@@ -30,8 +30,8 @@ Run these in this order. Steps 2 and 3 are browser work; everything else is a co
 | **7** | [Harbor robot](#7-harbor-robot-recommended) | create it; replace 2 values |
 | **8** | [ArgoCD's kubeconfig](#8-the-supervisor-kubeconfig-argocd-needs) | fetch it; fill in 3 values |
 | **9** | [Install](#9-validate-then-install) | `make install-all`, then `make verify` |
-| **10** | [Access the UIs](#10-access-the-uis) | `make creds-show` |
-| **11** | [Ingress](#11-ingress-optional) | optional |
+| **10** | [Ingress](#10-ingress-optional) | optional: reach the UIs at `*.vks.local` |
+| **11** | [Access the UIs](#11-access-the-uis) | `make creds-show` |
 | **12** | [Remove it again](#12-removing-it-again) | `make uninstall-all` |
 
 **Everything you configure goes in ONE file: `.env`, at the root of the repo.** Each step has a
@@ -518,26 +518,7 @@ make verify           # pushes a marked change and follows it to the running app
 
 ---
 
-## 10. Access the UIs
-
-```bash
-cd vks-airgap-cicd            # from Step 0
-make creds-show
-```
-
-**Expect:** every URL and login — Harbor, ArgoCD, Gitea, Tekton, one row per app. Each value is
-labelled **DISCOVERED** (read live) or **STORED** (remembered).
-
-No ingress yet? Reach a service directly:
-
-```bash
-kubectl -n gitea port-forward svc/gitea-http 3000:3000     # then http://localhost:3000
-kubectl -n javawebapp port-forward svc/javawebapp 18080:80 # then http://localhost:18080
-```
-
----
-
-## 11. Ingress (optional)
+## 10. Ingress (optional)
 
 Reach the UIs at `*.vks.local` instead of port-forwarding.
 
@@ -553,6 +534,25 @@ make istio-preflight
 
 On a real lab Istio is usually already present as a Standard Package — attach, do not install.
 *(~5 min)*
+
+---
+
+## 11. Access the UIs
+
+```bash
+cd vks-airgap-cicd            # from Step 0
+make creds-show
+```
+
+**Expect:** every URL and login — Harbor, ArgoCD, Gitea, Tekton, one row per app. Each value is
+labelled **DISCOVERED** (read live) or **STORED** (remembered).
+
+Skipped Step 10? The `*.vks.local` URLs will not resolve — reach a service directly instead:
+
+```bash
+kubectl -n gitea port-forward svc/gitea-http 3000:3000     # then http://localhost:3000
+kubectl -n javawebapp port-forward svc/javawebapp 18080:80 # then http://localhost:18080
+```
 
 ---
 
