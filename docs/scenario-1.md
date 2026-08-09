@@ -70,8 +70,8 @@ make env-init                  # creates ./.env from the template .env.example
 > does the packages, the clone and Step 1's `make deps`. It does not create `.env` — afterwards run
 > `cd vks-airgap-cicd && make env-init`, then continue from Step 1's `make install-vcf-clis`.
 
-**Expect:** `./.env` exists. Open it in your editor — it is the one file you edit for the rest of
-this runbook, and every step below ends with a table of the keys it wants you to set in it.
+**Expect:** `./.env` exists. It is the one file you edit for the rest of this runbook; each step
+below lists the keys it needs before the commands that read them.
 
 **Collect these from your lab before Step 1** — you paste them into `.env`:
 
