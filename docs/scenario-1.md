@@ -225,7 +225,6 @@ The registry every image comes from.
 | `HARBOR_URL` | `harbor.env1.lab.test` | the FQDN you chose. **Bare host — no `https://`, no trailing slash.** |
 | `HARBOR_USERNAME` | `admin` | Harbor's built-in admin (Step 7 replaces it with a robot) |
 | `HARBOR_PASSWORD` | *your value* | the `harborAdminPassword` you set in `harbor-values.yaml` above |
-| `HARBOR_CA_FILE` | `./secrets/harbor-ca.crt` | the path Step 6 writes to — leave as-is |
 | `HARBOR_INFRA_PROJECT` | `cicd` | **you choose** — the Harbor project for pipeline images |
 | `HARBOR_APP_PROJECT` | `apps` | **you choose** — the Harbor project for app images |
 
@@ -327,8 +326,7 @@ The GitOps engine, running on the Supervisor.
 |---|---|---|
 | `ARGOCD_NAMESPACE` | `lab` | the namespace your ArgoCD **instance** runs in. **Discover it — do not assume:** `kubectl get argocd -A` (on one real lab this was `lab`, not the `argocd-instance-1` from step 2) |
 | `ARGOCD_SERVER` | `192.168.101.131` | the `argocd-server` EXTERNAL-IP from step 6 |
-| `ARGOCD_TRACK_BRANCH` | `main` | the branch ArgoCD follows in the deploy repos — leave as-is unless you renamed it |
-| `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | the file you created in step 3 above — leave as-is |
+| `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | the file you created in step 3 above |
 | `VKS_AUTH_METHOD` | `vcf` | **set this to `vcf` now.** It selects how you log in, and `vcf` is the Supervisor login this step is doing. Step 4 changes it to `kubeconfig`. |
 
 ⚠️ Leave `VKS_AUTH_METHOD` unset and the next command fails with
@@ -488,9 +486,7 @@ cat ./secrets/harbor-robot.env
 | key | example | how to get the value |
 |---|---|---|
 | `ARGOCD_KUBECONFIG` | `./secrets/argocd.kubeconfig` | the file the next command writes. **Set it explicitly** — left unset it falls back to your *guest* kubeconfig, and `make gitops` then looks for ArgoCD in the wrong cluster. |
-| `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | already set in Step 3. If you skipped that, set `VKS_INSECURE_SKIP_TLS_VERIFY=true` instead — but the CA is preferred, because a password crosses this connection. |
-| `ARGOCD_NAMESPACE` | `lab` | already set in Step 3 — confirm with `kubectl get argocd -A` |
-| `ARGOCD_DEST_CLUSTER_NAME` | `vks-guest` | the name your guest cluster is registered under in ArgoCD: `argocd cluster list`. **Required on any lab with more than one registered cluster** — otherwise the next command stops with `AMBIGUOUS destination`, because deploying into the wrong tenant's cluster would prune their workloads. |
+| `ARGOCD_DEST_CLUSTER_NAME` | `vks-guest` | the name your guest cluster is registered under: `argocd cluster list`. **Required if more than one cluster is registered** — otherwise the next command stops with `AMBIGUOUS destination` rather than risk deploying into another tenant's cluster. |
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
