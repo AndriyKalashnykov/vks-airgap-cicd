@@ -342,9 +342,9 @@ vks-cluster-status: ## Read-only: is the guest cluster ACTUALLY ready? (conditio
 fetch-harbor-ca: ## Fetch the CA that ISSUED the lab Harbor's cert → HARBOR_CA_FILE, and VERIFY it (for HTTPS mirror/Kaniko trust)
 	@$(SCRIPTS)/fetch-ca.sh "$(HARBOR_URL)" "$(HARBOR_CA_FILE)" harbor
 
-.PHONY: lab-down
-lab-down: ## DESTRUCTIVE (real lab): remove what scenario-1 created — ours only, by ownership label, never by name. Requires CONFIRM=<VKS_CLUSTER_NAME>
-	@$(SCRIPTS)/98-lab-down.sh
+.PHONY: uninstall-all
+uninstall-all: ## DESTRUCTIVE (real lab): remove what scenario-1 created — ours only, by ownership label, never by name. Requires CONFIRM=<VKS_CLUSTER_NAME>
+	@$(SCRIPTS)/98-uninstall-all.sh
 
 .PHONY: harbor-ca-from-cluster
 harbor-ca-from-cluster: ## Get the lab Harbor's CA from the Supervisor when it is NOT on the wire (scenario-1 §6 route B; costs an ADMIN-level read — see the header)
@@ -794,15 +794,15 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint test-endpoint-report test-lab-down-honesty test-classify-kube-failure ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint test-endpoint-report test-uninstall-honesty test-classify-kube-failure ## Run all offline script-logic unit tests
 
 .PHONY: test-classify-kube-failure
 test-classify-kube-failure: ## Offline: classify_kube_failure names ONE cause per message, and its arm order holds
 	@bash scripts/test-classify-kube-failure.sh
 
-.PHONY: test-lab-down-honesty
-test-lab-down-honesty: ## Offline: lab-down never asserts a thing is ABSENT from a read that FAILED
-	@bash scripts/test-lab-down-honesty.sh
+.PHONY: test-uninstall-honesty
+test-uninstall-honesty: ## Offline: uninstall-all never asserts a thing is ABSENT from a read that FAILED
+	@bash scripts/test-uninstall-honesty.sh
 
 .PHONY: test-endpoint-report
 test-endpoint-report: ## Offline: endpoint_report names a control-plane VIP divergence, and never gates on one

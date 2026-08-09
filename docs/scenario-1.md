@@ -32,7 +32,7 @@ Run these in this order. Steps 2 and 3 are browser work; everything else is a co
 | **9** | [Install](#9-validate-then-install) | `make install-all`, then `make verify` |
 | **10** | [Access the UIs](#10-access-the-uis) | `make creds-show` |
 | **11** | [Ingress](#11-ingress-optional) | optional |
-| **12** | [Remove it again](#12-removing-it-again) | `make lab-down` |
+| **12** | [Remove it again](#12-removing-it-again) | `make uninstall-all` |
 
 **Everything you configure goes in ONE file: `.env`, at the root of the repo.** Each step has a
 table of the keys it needs, with an example and where the value comes from.
@@ -556,7 +556,7 @@ On a real lab Istio is usually already present as a Standard Package — attach,
 ## 12. Removing it again
 
 ```bash
-make lab-down CONFIRM=<your VKS_CLUSTER_NAME>
+make uninstall-all CONFIRM=<your VKS_CLUSTER_NAME>
 ```
 
 **Expect:** it deletes only objects carrying our ownership label, and **prints what it left alone**.
@@ -584,4 +584,4 @@ under self-contention. Where the runs disagree, both are shown.
 | ↳ | `mirror-pull` / `mirror-push` / `mirror-verify` | 22 s / 2 m 38 s / 5 m 46 s | — |
 | ↳ | `builder-image` + `platform` + `gitops` | ≈1 m 40 s | — |
 | 9 | `make verify` (2 apps) | **3 m 6 s** | **3 m 27 s** |
-| 12 | `make lab-down` | 1 m 12 s | 1 m 12 s |
+| 12 | `make uninstall-all` | 1 m 12 s | 1 m 12 s |

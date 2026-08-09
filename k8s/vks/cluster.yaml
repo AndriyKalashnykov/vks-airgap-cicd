@@ -32,7 +32,7 @@ metadata:
   name: ${VKS_CLUSTER_NAME}
   namespace: ${VKS_NAMESPACE}
   labels:
-    # The ownership stamp lab-down keys on. Namespaced to THIS repo on purpose: the shared lab
+    # The ownership stamp uninstall-all keys on. Namespaced to THIS repo on purpose: the shared lab
     # already carries a different tool's `nested-lab.local/managed-by`, and `app.kubernetes.io/
     # managed-by` is far too collidable to authorise a delete.
     vks-airgap-cicd.local/owned-by: vks-airgap-cicd

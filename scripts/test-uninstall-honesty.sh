@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# scripts/test-lab-down-honesty.sh — 98-lab-down.sh must never ASSERT ABSENCE FROM A FAILED READ.
+# scripts/test-uninstall-honesty.sh — 98-uninstall-all.sh must never ASSERT ABSENCE FROM A FAILED READ.
 #
 # WHY THIS EXISTS. kubectl exits 1 for a genuine NotFound, for an unreachable API, AND for a
-# forbidden read. 98-lab-down.sh used a bare `if ! k get X >/dev/null 2>&1; then "- absent"`, which
+# forbidden read. 98-uninstall-all.sh used a bare `if ! k get X >/dev/null 2>&1; then "- absent"`, which
 # collapses all three into the same sentence — in a TEARDOWN, where the wrong direction to be wrong
 # in is reporting an object gone when the truth is that we could not look. Nothing offline covered
 # this script at all (test-kind-down-safety covers the REVERSIBLE KinD teardown; the irreversible
@@ -14,7 +14,7 @@
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Overridable so the RED-proof can point at a deliberately-broken copy.
-TARGET="${LAB_DOWN_SCRIPT:-${SCRIPT_DIR}/98-lab-down.sh}"
+TARGET="${UNINSTALL_SCRIPT:-${SCRIPT_DIR}/98-uninstall-all.sh}"
 [ -f "$TARGET" ] || { echo "FAIL: $TARGET missing"; exit 1; }
 
 # Extract the two helpers. If extraction ever yields nothing, FAIL LOUDLY rather than proving
@@ -56,7 +56,7 @@ run_case() { # run_case <stub-stderr> <stub-rc>
   ) 2>&1
 }
 
-echo "lab-down honesty — three states must not collapse"
+echo "uninstall-all honesty — three states must not collapse"
 
 # 1. the object genuinely does not exist
 out="$(run_case 'Error from server (NotFound): applications.argoproj.io "demo" not found' 1)"
@@ -99,5 +99,5 @@ refute "blank first line => NEVER says absent" "demo: absent" "$out"
 check  "blank first line => keeps the real cause" "i/o timeout" "$out"
 
 echo
-echo "lab-down honesty: ${pass} passed, ${fail} failed"
+echo "uninstall-all honesty: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ] || exit 1

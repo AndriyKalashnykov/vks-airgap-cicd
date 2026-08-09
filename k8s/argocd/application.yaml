@@ -4,7 +4,7 @@ metadata:
   name: ${APP_NAME}
   namespace: ${ARGOCD_NAMESPACE}
   labels:
-    # ⚠️ THE STAMP `make lab-down` DELETES BY, AND IT IS LOAD-BEARING FOR SAFETY, NOT TIDINESS.
+    # ⚠️ THE STAMP `make uninstall-all` DELETES BY, AND IT IS LOAD-BEARING FOR SAFETY, NOT TIDINESS.
     # APP_NAME comes from apps/registry.tsv and is a generic demo name (javawebapp / gowebapp).
     # ARGOCD_NAMESPACE on a real lab is a SHARED namespace — measured on one 9.1 lab, it is the same
     # namespace as VKS_NAMESPACE and already contained a foreign Application plus another tool's

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/98-lab-down.sh — remove what scenario-1 created on a REAL lab.
+# scripts/98-uninstall-all.sh — remove what scenario-1 created on a REAL lab.
 #
 # ⚠️ READ THIS BEFORE CHANGING ANYTHING. This is the most dangerous script in the repo, and every
 # guard below exists because an adversary round MEASURED the hazard on a live 9.1 lab:
@@ -50,7 +50,7 @@ done
 # The operator must TYPE the cluster name. Not a y/n — a value that proves they know which lab this is.
 [ "${CONFIRM:-}" = "$VKS_CLUSTER_NAME" ] || die "refusing to delete anything without confirmation.
   This removes what scenario-1 created on a REAL, SHARED lab. Re-run with the cluster name:
-    make lab-down CONFIRM=${VKS_CLUSTER_NAME}"
+    make uninstall-all CONFIRM=${VKS_CLUSTER_NAME}"
 
 # ⚠️ VKS_SUPERVISOR_KUBECONFIG FIRST — that is the name the WRITER (30-vks-login.sh)
 # honours. These readers used only SUPERVISOR_KUBECONFIG; the defaults coincide, so the
@@ -61,7 +61,7 @@ SUP="${VKS_SUPERVISOR_KUBECONFIG:-${SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/
 # </dev/null and --request-timeout are LOAD-BEARING, not hygiene. MEASURED: kubectl against an
 # endpoint it cannot authenticate to emits `Please enter Username:` — an INTERACTIVE PROMPT. Every
 # call here is `>/dev/null 2>&1`, so the prompt is INVISIBLE, and the step-4 wait loop polls for up
-# to LAB_DOWN_CLUSTER_WAIT_SECONDS (900) with a tty on stdin: the teardown would sit there,
+# to UNINSTALL_CLUSTER_WAIT_SECONDS (900) with a tty on stdin: the teardown would sit there,
 # apparently working, blocked on a prompt nobody can see. An expired Supervisor token is the normal
 # state of a lab kubeconfig the next morning, and this script is necessarily interactive (it
 # requires a typed CONFIRM), so a tty is always present.
@@ -102,7 +102,7 @@ absent_or_unknown() {
 
 # --- the plan, printed BEFORE the first destructive call ----------------------------------------
 echo >&2
-echo "  ── lab-down plan ──────────────────────────────────────────────" >&2
+echo "  ── uninstall-all plan ──────────────────────────────────────────────" >&2
 note "supervisor      : $SUP"
 note "cluster         : ${VKS_NAMESPACE}/${VKS_CLUSTER_NAME}"
 note "argocd namespace: ${ARGOCD_NAMESPACE}"
@@ -141,7 +141,7 @@ for app in $(app_names); do
 done
 
 # Bounded wait. An unbounded one hangs forever exactly when the destination is already gone.
-_end=$((SECONDS + ${LAB_DOWN_APP_WAIT_SECONDS:-120}))
+_end=$((SECONDS + ${UNINSTALL_APP_WAIT_SECONDS:-120}))
 while [ "$SECONDS" -lt "$_end" ]; do
   # ⚠️ DO NOT "fix" a set -e abort here with a bare `|| true`. That converts a crash into a FALSE
   # CLEAN: with the API unreachable the count is 0, the loop breaks, and the teardown concludes the
@@ -176,7 +176,7 @@ log_info "2/5  ArgoCD cluster registration + repo credential (ours only)"
 _acted=0
 # ⚠️ SCOPED TO THIS CLUSTER, not just to our label. The label says "we made it"; it does NOT say
 # "for THIS cluster". This box has run cicd-gc1 and cicd-gc2, and an unscoped sweep would make
-# `make lab-down CONFIRM=cicd-gc2` delete the cicd-gc1 REGISTRATION — leaving that cluster's
+# `make uninstall-all CONFIRM=cicd-gc2` delete the cicd-gc1 REGISTRATION — leaving that cluster's
 # Applications pointing at a destination that no longer exists, while the counter reported a
 # successful deletion. A teardown must remove what the operator CONFIRMED, and nothing else.
 _secrets="$(k -n "$ARGOCD_NAMESPACE" get secret -l "$OWNER_LABEL" -o name 2>/dev/null || true)"
@@ -253,7 +253,7 @@ if read_state -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME"; then
     note "  tkg.tanzu.vmware.com/addon), so this is asynchronous."
     k -n "$VKS_NAMESPACE" delete cluster "$VKS_CLUSTER_NAME" --wait=false >/dev/null 2>&1 || true
     deleted
-    _end=$((SECONDS + ${LAB_DOWN_CLUSTER_WAIT_SECONDS:-900}))
+    _end=$((SECONDS + ${UNINSTALL_CLUSTER_WAIT_SECONDS:-900}))
     while [ "$SECONDS" -lt "$_end" ]; do
       k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" >/dev/null 2>&1 || break
       sleep "${POLL_INTERVAL_SECONDS:-10}"
@@ -291,7 +291,7 @@ echo >&2
 # rejection (RBAC, a webhook, a finalizer) still increments it. The number is a proxy; the RE-LIST
 # below is the result. Same discipline as mirror-verify: never report a bulk mutation off its own
 # counter.
-log_info "lab-down: ATTEMPTED ${DELETED} deletion(s); left ${SKIPPED} thing(s) alone."
+log_info "uninstall-all: ATTEMPTED ${DELETED} deletion(s); left ${SKIPPED} thing(s) alone."
 log_info "VERIFY IT — re-list rather than trusting the count above:"
 log_info "  kubectl --kubeconfig $SUP -n $VKS_NAMESPACE get cluster $VKS_CLUSTER_NAME      # want: NotFound"
 log_info "  kubectl --kubeconfig $SUP -n $ARGOCD_NAMESPACE get applications                # want: ours absent"

@@ -473,7 +473,7 @@ load_env() {
   #     VKS_CLUSTER_NAME=cicd-gc2 …load_env… -> effective VKS_CLUSTER_NAME=cicd-gc1
   # So `make vks-cluster-create VKS_CLUSTER_NAME=cicd-gc2` silently targets cicd-gc1 and, if it
   # exists, prints "ALREADY EXISTS — not re-applying" — the operator believes they created gc2 while
-  # every later step (status, login, gitops, lab-down) addresses gc1. Nothing says otherwise.
+  # every later step (status, login, gitops, uninstall-all) addresses gc1. Nothing says otherwise.
   # check-env-clobber cannot see this: it reads .env.example (where these ship COMMENTED and it is
   # correctly green); the clobber is armed by the operator doing the DOCUMENTED thing in their .env.
   for _sel in KUBECONFIG VKS_AUTH_METHOD ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT VKS_CLUSTER_NAME VKS_NAMESPACE INGRESS_CONTROLLER HARBOR_CA_FILE HARBOR_URL VKS_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256; do
