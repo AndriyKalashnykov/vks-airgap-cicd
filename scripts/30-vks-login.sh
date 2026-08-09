@@ -307,15 +307,13 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     vcf context delete "$VKS_CONTEXT_NAME" -y --skip-delete-kubeconfig-context >/dev/null 2>&1 || true
 
     # --- PASSWORD: presence only, never the value (security.md) ------------------------
-    # VCF_CLI_VSPHERE_PASSWORD is the ONLY supported mechanism (no --password flag, no stdin
-    # form) and it reaches the CLI through execve's envp, never argv — so an already-exported
-    # value needs NO wiring here. Do NOT read it from .env: docs/scenario-1.md §1 forbids the
-    # Supervisor password in .env, and .env.example scopes VKS_PASSWORD to the legacy
-    # `vsphere` method only.
+    # VCF_CLI_VSPHERE_PASSWORD is the ONLY supported mechanism (no --password flag, no stdin form)
+    # and it reaches the CLI through execve's envp, never argv. It is a documented .env key
+    # (scenario-1 §1), and load_env exports it, so no wiring is needed here either way.
     if [ -z "${VCF_CLI_VSPHERE_PASSWORD:-}" ]; then
-      log_warn "VCF_CLI_VSPHERE_PASSWORD is not exported — this run will PROMPT, and will FAIL in CI."
-      log_warn "  export it for the session (docs/scenario-1.md §1). NEVER 'vcf config set env.…',"
-      log_warn "  which writes it in plaintext to ~/.config/vcf/config.yaml, outside every teardown."
+      log_warn "VCF_CLI_VSPHERE_PASSWORD is not set — this run will PROMPT, and will FAIL in CI."
+      log_warn "  Set it in .env (scenario-1 §1) or export it. NEVER 'vcf config set env.…', which"
+      log_warn "  writes it in plaintext to ~/.config/vcf/config.yaml, outside every teardown here."
     fi
 
     # VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1: create otherwise tries to

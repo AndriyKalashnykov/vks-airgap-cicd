@@ -66,10 +66,6 @@ pwd                            # sanity check: should end in /vks-airgap-cicd
 make env-init                  # creates ./.env from the template .env.example
 ```
 
-> **Shortcut:** [one-command bootstrap](../README.md#bootstrap-an-unprovisioned-jump-box-before-you-can-clone-this-repo)
-> does the packages, the clone and Step 1's `make deps`. It does not create `.env` — afterwards run
-> `cd vks-airgap-cicd && make env-init`, then continue from Step 1's `make install-vcf-clis`.
-
 **Expect:** `./.env` exists. It is the one file you edit for the rest of this runbook; each step
 below lists the keys it needs before the commands that read them.
 
@@ -81,7 +77,7 @@ below lists the keys it needs before the commands that read them.
 | vCenter FQDN | `vcsa.env1.lab.test` | the address you log into vCenter with (Step 3 needs it for the CA). **Your jump box must resolve it** — check: `getent hosts vcsa.env1.lab.test` |
 | your SSO user | `administrator@vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups |
 | your SSO domain | `vsphere.local` | same screen, the *Domain* dropdown |
-| the password | — | **never goes in `.env`** — you type it at a prompt in Step 3 |
+| your SSO password | — | for that login — you put it in `.env` in Step 1 |
 
 ---
 
@@ -90,8 +86,7 @@ below lists the keys it needs before the commands that read them.
 Install the toolchain and the licensed CLIs.
 
 **→ set in `./.env` before you run the commands below.** `VCF_CLI_SRC_DIR` is read by
-`make install-vcf-clis` in this step — without it that command **fails**. The other six are read
-from Step 3 onward; you collected four of them in Step 0, and you invent two.
+`make install-vcf-clis` in this step — without it that command **fails**. The rest are read from Step 3 onward.
 
 | key | example | how to get the value |
 |---|---|---|
@@ -101,9 +96,8 @@ from Step 3 onward; you collected four of them in Step 0, and you invent two.
 | `VKS_NAMESPACE` | `lab` | the vSphere Namespace the cluster goes in. **Create it first — see 1b below.** |
 | `VKS_CLUSTER_NAME` | `cicd-gc1` | **you invent this** — the guest cluster Step 4 creates. Must not be a name you deleted recently (see notes). |
 | `VKS_USERNAME` | `administrator@vsphere.local` | your vCenter SSO login |
+| `VCF_CLI_VSPHERE_PASSWORD` | *your value* | the password for that login |
 | `VKS_SSO_DOMAIN` | `vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups → *Domain* |
-
-Your password has no key here — you type it at a prompt in Step 3.
 
 Now run:
 
@@ -276,28 +270,8 @@ The GitOps engine, running on the Supervisor.
    vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"      # note the <ctx>:<ns> colon form
    ```
 
-   It prompts for your password. `vcf context use` can print an error about a "system Harbor
+   `vcf context use` can print an error about a "system Harbor
    registry" **and still have worked** — judge it by the next command, not its exit code.
-
-   > **The password is typed, never stored.** It has no `.env` key, and this repo will not read one.
-   >
-   > ⛔ **Do not run `vcf config set env.VCF_CLI_VSPHERE_PASSWORD …`.** It writes your SSO password in
-   > **plaintext** to `~/.config/vcf/config.yaml` — outside this repo, outside every secret scan here,
-   > and it survives every teardown in this runbook.
-   >
-   > If you need it non-interactively (re-runs, a long `make install-all` that may re-prompt on token
-   > refresh), put it in the environment for the session only:
-   >
-   > ```bash
-   > read -rs VCF_CLI_VSPHERE_PASSWORD; export VCF_CLI_VSPHERE_PASSWORD   # typed, not echoed
-   > # ... run your steps ...
-   > unset VCF_CLI_VSPHERE_PASSWORD
-   > ```
-   >
-   > Anything running as you, and root, can still read it with `ps eww`. `unset` it when done.
-   >
-   > ⚠️ vCenter SSO locks the account after **5 failed attempts in 3 minutes** by default. Check
-   > your lab's policy before retrying a guess.
 
 5. Apply the instance CR. `kubectl explain argocd.spec.version` lists what your operator supports:
 
@@ -329,14 +303,11 @@ The GitOps engine, running on the Supervisor.
 | `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | the file you created in step 3 above |
 | `VKS_AUTH_METHOD` | `vcf` | **set this to `vcf` now.** It selects how you log in, and `vcf` is the Supervisor login this step is doing. Step 4 changes it to `kubeconfig`. |
 
-⚠️ Leave `VKS_AUTH_METHOD` unset and the next command fails with
-`VKS_AUTH_METHOD=kubeconfig but ./secrets/vks.kubeconfig is empty`.
-
 Log in, which writes the Supervisor kubeconfig every later step reads:
 
 ```bash
 cd vks-airgap-cicd
-make vks-login                # prompts for your password; writes ./secrets/supervisor.kubeconfig
+make vks-login                # writes ./secrets/supervisor.kubeconfig
 ```
 
 **Expect:** `./secrets/supervisor.kubeconfig` exists. Step 1b's namespace check and Step 4 both need it.
@@ -512,7 +483,7 @@ cat ./secrets/harbor-robot.env
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
-make fetch-argocd-kubeconfig    # prompts for your password
+make fetch-argocd-kubeconfig
 make argocd-preflight           # CLI vs running-server versions; can ArgoCD reach your cluster?
 ```
 
