@@ -52,6 +52,12 @@ RUN groupadd vks && useradd -g vks -m -s /bin/bash vks && \
 # `ubuntu` user that already holds 1000, so vks lands on 1001, and a hardcoded /run/user/1000 is unwritable.
 RUN uid="$(id -u vks)" && install -d -o vks -g vks -m 0700 "/run/user/${uid}"
 
+# DL3066 (new in hadolint 2.15) wants a numeric uid. The uid here is assigned by
+# `useradd` with no -u and DIFFERS by base image: Ubuntu ships a default user at
+# 1000 so `vks` lands on 1001; Photon has none so `vks` gets 1000. Hardcoding a
+# number would be a behaviour change that breaks bind-mount permissions on one
+# of the two -- not a lint fix.
+# hadolint ignore=DL3066
 USER vks
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN curl -fsSL https://mise.run | sh
