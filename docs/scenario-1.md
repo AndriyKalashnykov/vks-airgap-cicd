@@ -588,3 +588,13 @@ under self-contention. Where the runs disagree, both are shown.
 | ↳ | `builder-image` + `platform` + `gitops` | ≈1 m 40 s | — |
 | 9 | `make verify` (2 apps) | **3 m 6 s** | **3 m 27 s** |
 | 12 | `make uninstall-all` | 1 m 12 s | 1 m 12 s |
+
+From a **bare Photon jump box** (fresh box, nothing cached — so the mirror pulls every image), the
+same lab, measured start to `End-to-end verified`:
+
+| | |
+|---|---|
+| Step 0–1 install `git`/`make`, clone, `make deps`, install the CLIs | ≈ 2 m 30 s |
+| Step 4 cluster created → every node `Ready` | **8 m 49 s** |
+| Step 9 `make install-all` + `make verify` | **10 m 08 s** |
+| **whole run, clone → verified** | **21 m 31 s** |
