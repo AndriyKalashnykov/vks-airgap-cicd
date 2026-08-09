@@ -258,3 +258,23 @@ Forcing it is the one shortcut that could destroy a shared registry.
 **"Nothing was deleted" is reported as UNPROVEN, not clean** — it is indistinguishable from "my label
 selector matched nothing". If a read fails, the teardown says `CANNOT READ` and counts the object as
 *not done*, rather than claiming it was absent.
+
+---
+
+## Timings — what these numbers do not cover
+
+**The mirror ran WARM.** 34 of 44 images were already in `bundle/images`, against a Harbor that
+already held them, so `crane` skipped most blob uploads. A first run on an empty Harbor with a cold
+cache is bounded by your bandwidth, not by the box, and is not represented in that table at all.
+
+**`mirror-verify` is the one row a warmer run would not improve** — it re-fetches every blob rather
+than skipping. It scales with the image count (44 here) and your Harbor's throughput.
+`MIRROR_VERIFY_FAST=1` trades layer verification for speed.
+
+**Two rows carry warmth the table cannot show.** The cluster's 3 m 45 s assumes the Supervisor
+already has the TKr image cached — a first-ever cluster from a cold content library is a different
+number. And `static-check` assumes a populated `~/.m2` and a current trivy DB.
+
+**Provisioning is the variable row, not the mirror.** Run 2's cluster took ~6 min against run 1's
+3 m 45 s because it provisioned beside the lab's own cluster, while `install-all` got *faster*
+(10 m 26 s → 8 m 14 s) as Harbor warmed. The mirror gets monotonically warmer; the host gets busier.
