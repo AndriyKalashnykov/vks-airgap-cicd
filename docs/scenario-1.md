@@ -232,7 +232,9 @@ The registry every image comes from.
      -e 's/enableContourHttpProxy: true/enableContourHttpProxy: false/' \
      harbor-values.yaml
 
-   diff "$src" harbor-values.yaml          # expect exactly 4 changed lines
+   diff "$src" harbor-values.yaml          # expect 8 changed lines: hostname, the two
+                                           # toggles, and storageClass x5. Fewer means a
+                                           # pattern did not match - do not continue.
    ```
 
    Then open `harbor-values.yaml` and replace **every `[Required]` secret** with a distinct value of
