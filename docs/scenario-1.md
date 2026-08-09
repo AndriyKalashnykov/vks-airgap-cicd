@@ -348,17 +348,23 @@ make vks-login                # prompts for your password; writes ./secrets/supe
 Where Gitea, Tekton and your apps run. You need cluster-admin on it.
 *Already have a cluster? Skip to "Export its kubeconfig".*
 
-**→ set in `./.env` before you run this.** Only `VKS_K8S_VERSION` is **required** — the command
-aborts without it. The rest already have working defaults; set one only to override it.
+**→ set in `./.env`:**
 
-| key | required? | example | how to get the value |
+| key | example | how to get the value |
+|---|---|---|
+| `VKS_K8S_VERSION` | `v1.32.10+vmware.1-fips` | `kubectl get kubernetesreleases` — one that is both Ready and Compatible |
+
+<details><summary>Optional — the cluster's shape. Skip unless you want to change it.</summary>
+
+| key | default | example | how to get the value |
 |---|---|---|---|
-| `VKS_K8S_VERSION` | **yes** | `v1.32.10+vmware.1-fips` | `kubectl get kubernetesreleases` — one that is both Ready and Compatible |
-| `VKS_CLUSTERCLASS` | no — defaults | `builtin-generic-v3.6.0` | `kubectl get clusterclass -A` on the Supervisor — the newest Ready one |
-| `VKS_VM_CLASS` | no — defaults | `best-effort-small` | `kubectl get virtualmachineclass` |
-| `VKS_STORAGE_CLASS` | no — defaults | `wcp-vmfs` | `kubectl get storageclass` |
-| `VKS_CONTROL_PLANE_COUNT` | no — defaults to `1` | `1` | how many control-plane nodes |
-| `VKS_NODE_COUNT` | no — defaults to `2` | `2` | how many workers. Leave it unset; `.env.example`'s commented `=1` is deliberately **not** the default, and one worker is too small for the platform. |
+| `VKS_CLUSTERCLASS` | `builtin-generic-v3.6.0` | `builtin-generic-v3.6.0` | `kubectl get clusterclass -A` — the newest Ready one |
+| `VKS_VM_CLASS` | `best-effort-small` | `best-effort-small` | `kubectl get virtualmachineclass` |
+| `VKS_STORAGE_CLASS` | `wcp-vmfs` | `wcp-vmfs` | `kubectl get storageclass` |
+| `VKS_CONTROL_PLANE_COUNT` | `1` | `1` | how many control-plane nodes |
+| `VKS_NODE_COUNT` | `2` | `2` | how many workers. One is too small for the platform. |
+
+</details>
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
