@@ -141,9 +141,17 @@ log_info "3/5  Harbor (${HARBOR_INFRA_PROJECT}, ${HARBOR_APP_PROJECT})"
 note "NOT automated, on purpose. Harbor REFUSES to delete a project that still holds repositories,"
 note "and that refusal is the only thing standing between a stale HARBOR_*_PROJECT and someone"
 note "else's images. Forcing it is the one shortcut that could destroy a shared registry."
-note "Delete them in the Harbor UI, or with a scoped API call you have read:"
-note "  curl -u <admin> -X DELETE https://${HARBOR_URL:-<harbor>}/api/v2.0/projects/${HARBOR_INFRA_PROJECT}"
-note "  curl -u <admin> -X DELETE https://${HARBOR_URL:-<harbor>}/api/v2.0/projects/${HARBOR_APP_PROJECT}"
+note "Delete them in the Harbor UI (simplest), or with a scoped API call you have read."
+# ⚠️ QUOTE EVERY <PLACEHOLDER>. Unquoted, `<admin>` is a SHELL REDIRECTION, not a word — and this
+# is guidance an operator pastes verbatim. MEASURED:
+#   bash -c 'curl -u <admin> -X DELETE https://h/...'  ->  bash: admin: No such file or directory
+# and with a file named `admin` in the cwd the redirection SUCCEEDS, `-u` swallows `-X`, the server
+# receives a GET instead of a DELETE, curl exits 0, and the operator believes the project was
+# deleted. `${HARBOR_URL:-<harbor>}` carried the same defect on the same line.
+note "  curl gives -u a USERNAME and PROMPTS for the password. Do NOT append ':password' —"
+note "  that would put your Harbor admin credential in ps output and in your shell history."
+note "  curl -u '<admin-username>' -X DELETE 'https://${HARBOR_URL:-<harbor-host>}/api/v2.0/projects/${HARBOR_INFRA_PROJECT}'"
+note "  curl -u '<admin-username>' -X DELETE 'https://${HARBOR_URL:-<harbor-host>}/api/v2.0/projects/${HARBOR_APP_PROJECT}'"
 [ -n "${HARBOR_ROBOT_NAME:-}" ] && note "  and the robot '${HARBOR_ROBOT_NAME}' under Administration -> Robot Accounts"
 left "Harbor projects ${HARBOR_INFRA_PROJECT}/${HARBOR_APP_PROJECT} + robot ${HARBOR_ROBOT_NAME:-<unset>} (manual)"
 
