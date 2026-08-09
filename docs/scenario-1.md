@@ -2,8 +2,9 @@
 
 ## What this is
 
-You have a **Supervisor** endpoint, a login and a password. This runbook installs Harbor and ArgoCD
-as Supervisor Services, creates a guest VKS cluster, and runs an air-gapped CI/CD pipeline into it.
+You have a **Supervisor** endpoint, a login and a password. This runbook creates a vSphere Namespace
+(or uses one you already have), installs Harbor and ArgoCD as Supervisor Services, creates a guest
+VKS cluster, and runs an air-gapped CI/CD pipeline into it.
 
 **What you end up with:** `git push` → Tekton builds → image to Harbor → tag written back → ArgoCD
 syncs → the app serves the change. Two demo apps (Java and Go), proven by `make verify`.
@@ -12,7 +13,7 @@ syncs → the app serves the change. Two demo apps (Java and Go), proven by `mak
 
 ## The whole sequence
 
-Run these in this order. Steps 2 and 3 are browser work; everything else is a command.
+Run these in this order. Steps 1b, 2 and 3 are browser work; everything else is a command.
 
 | | Step | You do |
 |---|---|---|
