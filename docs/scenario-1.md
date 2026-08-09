@@ -452,6 +452,9 @@ chmod 0644 ./secrets/harbor-ca.crt
 openssl x509 -in ./secrets/harbor-ca.crt -noout -subject     # expect: CN = Harbor CA
 ```
 
+If that last command errors instead of printing a subject, this Harbor does not publish its CA
+there — use one of the alternatives below.
+
 Then **check it against a digest you got from whoever runs Harbor**, over some other channel —
 `-k` above means you fetched it over a connection you could not yet verify:
 
