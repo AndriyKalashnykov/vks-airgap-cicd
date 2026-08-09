@@ -22,6 +22,7 @@ Run these in this order. Steps 2 and 3 are browser work; everything else is a co
 |---|---|---|
 | **0** | [Get the repo](#0-get-the-repo) | clone it, `cd` into it, create `.env` |
 | **1** | [Jump box](#1-jump-box) | install the toolchain; fill in 7 values in `.env` |
+| **1b** | [vSphere Namespace](#1b-the-vsphere-namespace) | browser: create it, attach storage + a VM class |
 | **2** | [Harbor](#2-harbor-browser) | browser: install it; fill in 6 values |
 | **3** | [ArgoCD](#3-argocd-supervisor) | browser + CLI: install it, get the CA, log in; fill in 4 values |
 | **4** | [Guest cluster](#4-guest-cluster) | create it; fill in 4 values |
@@ -89,10 +90,71 @@ make check-tools              # what you have, what is missing
 | `VCF_CLI_SRC_DIR` | `/home/you/Downloads/vcf` | the folder you put the two Broadcom archives in |
 | `SUPERVISOR_HOST` | `192.168.101.128` | vCenter → Workload Management → Supervisors → Control Plane Node IP. **Bare host — no `https://`, no trailing slash.** |
 | `VKS_CONTEXT_NAME` | `vks-cicd` | **you invent this** — a short label for the `vcf` login context |
-| `VKS_NAMESPACE` | `lab` | the vSphere Namespace you will create the cluster in (vCenter → Workload Management → Namespaces) |
+| `VKS_NAMESPACE` | `lab` | the vSphere Namespace the cluster goes in. **Create it first — see 1b below.** |
 | `VKS_CLUSTER_NAME` | `cicd-gc1` | **you invent this** — the guest cluster Step 4 creates. Must not be a name you deleted recently (see notes). |
 | `VKS_USERNAME` | `administrator@vsphere.local` | your vCenter SSO login |
 | `VKS_SSO_DOMAIN` | `vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups → *Domain* |
+
+Your password has no key here — you type it at a prompt in Step 3.
+
+---
+
+## 1b. The vSphere Namespace
+
+`VKS_NAMESPACE` must name a namespace that **already exists** and has a storage policy and a VM class
+attached to it. Nothing in this repo creates one.
+
+> **If your namespace was created for you, skip this section.** Put its name in `VKS_NAMESPACE` and
+> go to Step 2. Creating a namespace needs the **Owner** role; with *Can Edit* you cannot, and do not
+> need to.
+
+**Create it in vCenter** — this is the supported route and the only one that works everywhere:
+
+1. **Workload Management → Namespaces → Create Namespace**, pick your Supervisor, name it.
+2. Open it → **Storage** → *Add Storage* → select a storage policy (e.g. `wcp-vmfs`, or
+   `vsan-default-storage-policy` on vSAN).
+3. → **VM Service** → *Add VM Class* → select at least one (e.g. `best-effort-small`).
+
+You do **not** attach a content library for this. Guest-cluster node images come from a library
+associated at the *Supervisor* level, not per namespace.
+
+**Confirm it is usable** (both must be non-empty — this is the check that actually predicts
+scheduling):
+
+```bash
+cd vks-airgap-cicd
+export KUBECONFIG=./secrets/supervisor.kubeconfig     # you have this after Step 3; skip until then
+kubectl -n "$VKS_NAMESPACE" get storagepolicyquotas   # the storage policy landed
+kubectl -n "$VKS_NAMESPACE" get virtualmachineclass   # must list your VKS_VM_CLASS
+```
+
+⚠️ **A namespace missing these is still accepted.** The Cluster object passes admission — verified by
+server-side dry-run — and then fails ~20 minutes later at scheduling, with an error that names
+neither storage nor VM class. The two commands above are the cheap check; the apply is not.
+
+<details>
+<summary>Creating it with <code>kubectl</code> instead (only if your admin enabled it)</summary>
+
+`kubectl create namespace` on the Supervisor works **only** where an administrator has configured
+**vSphere Namespace Self-Service** with a template, and only for the **Owner** role. It is off by
+default. Ask first:
+
+```bash
+kubectl --kubeconfig ./secrets/supervisor.kubeconfig auth can-i create namespaces
+#  no   -> use the vCenter UI above (the normal case)
+#  yes  -> self-service is on: kubectl create namespace <name> works, and the template
+#          attaches the storage policy and VM class for you
+```
+
+Verified on a lab with self-service on: the namespace came up carrying
+`vmware-system-self-service-namespace: true` plus its own storage-policy quota, and provisioned a
+guest cluster end to end. A vCenter-created namespace carries no such annotation.
+</details>
+
+**Prefer a namespace of your own** rather than sharing one with other workloads — not because it
+prevents any deployment bug, but because teardown targets objects **by name**, and this repo's demo
+apps have generic names. `make lab-down` in a shared namespace is how you delete someone else's
+`smoketest`.
 
 ---
 
@@ -169,7 +231,10 @@ The GitOps engine, running on the Supervisor.
 [Broadcom docs](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-argo-cd-service/install-argo-cd-service.html)
 
 1. Supervisor Services → **Add New Service** → upload `supervisor-service-argocd-legacy-*.yml`.
-2. Create a vSphere Namespace for the instance (with VM class + storage class assigned).
+2. Create a vSphere Namespace for the instance — **same procedure as [1b](#1b-the-vsphere-namespace)**
+   (storage policy + VM class). It can be the one from 1b or a separate one; note which, because
+   `ARGOCD_NAMESPACE` below is the namespace the **instance** ends up in, and they are often not the
+   same.
 
 3. **Get the Supervisor's CA.** You need it to log in without disabling TLS verification. It comes
    from **vCenter**, not the Supervisor (the Supervisor serves only its leaf certificate):
@@ -208,6 +273,29 @@ The GitOps engine, running on the Supervisor.
 
    It prompts for your password. `vcf context use` can print an error about a "system Harbor
    registry" **and still have worked** — judge it by the next command, not its exit code.
+
+   > **The password is typed, never stored.** It has no `.env` key, and this repo will not read one.
+   >
+   > ⛔ **Do not run `vcf config set env.VCF_CLI_VSPHERE_PASSWORD …`.** It writes your SSO password in
+   > **plaintext** to `~/.config/vcf/config.yaml` — outside this repo, outside every secret scan here,
+   > and it survives every teardown in this runbook.
+   >
+   > If you need it non-interactively (re-runs, a long `make install-all` that may re-prompt on token
+   > refresh), put it in the environment for the session only:
+   >
+   > ```bash
+   > read -rs VCF_CLI_VSPHERE_PASSWORD; export VCF_CLI_VSPHERE_PASSWORD   # typed, not echoed
+   > # ... run your steps ...
+   > unset VCF_CLI_VSPHERE_PASSWORD
+   > ```
+   >
+   > That keeps it off the command line and out of shell history, but **it is not secret from
+   > yourself**: anything running as your user, and root, can read it with `ps eww`, and every
+   > process the shell spawns inherits it. `unset` it when you are done.
+   >
+   > ⚠️ **Get it right the first time.** vCenter SSO locks an account after **5 failed attempts
+   > within 3 minutes** by default (auto-unlocks after 5 minutes) — but that policy is configurable
+   > and your lab may be stricter. Check yours before looping on a guess.
 
 5. Apply the instance CR. `kubectl explain argocd.spec.version` lists what your operator supports:
 
