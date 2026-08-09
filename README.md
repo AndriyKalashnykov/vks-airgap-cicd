@@ -186,8 +186,15 @@ then go to [Toolchain and access](#toolchain-and-access) below:
 git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git && cd vks-airgap-cicd
 ```
 
-> **`curl` must already be present** for the pipe form above. Ubuntu images ship it; a **bare
-> Photon OS 5** box does **not** — run `sudo tdnf install -y curl` first, then re-run the command.
+> **`curl` must already be present** for the pipe form above. MEASURED 2026-08-09 on stock images:
+> **Photon OS 5 has it; Ubuntu 22.04, 24.04 and 26.04 do NOT.** On Ubuntu, install it first — and
+> `ca-certificates` with it, or the fetch dies `curl: (77) error setting certificate file`:
+>
+> ```bash
+> apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+> ```
+>
+> (Prefix with `sudo` if you are not root. A bare container has neither `sudo` nor `curl`.)
 >
 > The **`make deps` toolchain install + the container engine + cluster reachability** are validated
 > end-to-end by `make jumpbox` — it runs them on a fresh jump-box container (`JUMPBOX_OS=photon` on
