@@ -75,18 +75,28 @@ k() { kubectl --kubeconfig "$SUP" --request-timeout=15s "$@" </dev/null; }
 _RS_RC=0; _RS_ERR=""
 read_state() {
   local _e; _e="$(mktemp)"
-  if k "$@" >/dev/null 2>"$_e"; then _RS_RC=0; _RS_ERR=""; rm -f "$_e"; return 0; fi
-  _RS_RC=$?; _RS_ERR="$(head -1 "$_e" 2>/dev/null)"; rm -f "$_e"
-  return 1
+  _RS_RC=0; _RS_ERR=""
+  # `|| _RS_RC=$?` on the SAME command. Reading $? after `fi` gives the IF COMPOUND's status, which
+  # is 0 when the condition fails and no branch runs — so _RS_RC was ALWAYS 0 (measured) and any
+  # future reader of it would conclude success from a failure.
+  k "$@" >/dev/null 2>"$_e" || _RS_RC=$?
+  # Keep ALL of stderr, not `head -1`. Measured: kubectl can emit a BLANK first line with the real
+  # diagnosis on line 2 ("Error in configuration:" / "* unable to read client-cert …"), and a
+  # first-line-only capture then looks like empty stderr — which used to render as "absent".
+  _RS_ERR="$(tr '\n' ' ' < "$_e" | sed 's/  */ /g; s/^ //; s/ $//')"
+  rm -f "$_e"
+  [ "$_RS_RC" -eq 0 ]
 }
-# absent_or_unknown <label> — the honest print for a failed read. A genuine NotFound says the
-# object is gone; anything else says we could not tell, and is recorded as NOT DONE.
+# absent_or_unknown <label> — the honest print for a failed read.
+# ⚠️ THERE IS NO "EMPTY STDERR MEANS ABSENT" CASE. `k` sends stdout to /dev/null, so a genuine
+# NotFound ALWAYS lands on stderr; rc≠0 with nothing to show is a Ctrl-C, a kill (rc 137), or an
+# error we failed to capture — none of which mean the object is gone. Treating empty as "absent"
+# was measured to report a killed process and a real network fault as a completed deletion.
 absent_or_unknown() {
   case "$_RS_ERR" in
     *NotFound*|*"not found"*) note "- ${1}: absent" ;;
-    "")                       note "- ${1}: absent" ;;
-    *) note "! ${1}: CANNOT READ — ${_RS_ERR}"
-       left "${1} (could not be checked: ${_RS_ERR})" ;;
+    *) note "! ${1}: CANNOT READ (rc=${_RS_RC})${_RS_ERR:+ — ${_RS_ERR}}"
+       left "${1} (could not be checked${_RS_ERR:+: ${_RS_ERR}})" ;;
   esac
 }
 
@@ -133,8 +143,19 @@ done
 # Bounded wait. An unbounded one hangs forever exactly when the destination is already gone.
 _end=$((SECONDS + ${LAB_DOWN_APP_WAIT_SECONDS:-120}))
 while [ "$SECONDS" -lt "$_end" ]; do
-  still="$(k -n "$ARGOCD_NAMESPACE" get applications -l "$OWNER_LABEL" -o name 2>/dev/null | wc -l | tr -d ' ')"
-  [ "$still" = 0 ] && break
+  # ⚠️ DO NOT "fix" a set -e abort here with a bare `|| true`. That converts a crash into a FALSE
+  # CLEAN: with the API unreachable the count is 0, the loop breaks, and the teardown concludes the
+  # Applications are gone. The mid-run case is the dangerous one — reads fine, deletes issued, API
+  # dies during the wait — and then the summary says "ATTEMPTED 2 deletion(s)" and never mentions
+  # them again. An `if` condition already suspends set -e, so no `|| true` is needed at all.
+  if _out="$(k -n "$ARGOCD_NAMESPACE" get applications -l "$OWNER_LABEL" -o name 2>/dev/null)"; then
+    still="$(printf '%s' "$_out" | grep -c . || true)"
+    [ "$still" = 0 ] && break
+  else
+    note "! could not re-list Applications — NOT concluding they are gone."
+    left "Applications in ${ARGOCD_NAMESPACE} (deletion issued, could NOT be verified)"
+    break
+  fi
   sleep "${POLL_INTERVAL_SECONDS:-5}"
 done
 still="$(k -n "$ARGOCD_NAMESPACE" get applications -l "$OWNER_LABEL" -o name 2>/dev/null || true)"
@@ -247,7 +268,12 @@ if read_state -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME"; then
     fi
   fi
 else
-  note "- absent."
+  # NOT a bare "absent". read_state's rc=1 covers NotFound, unreachable AND forbidden alike, and
+  # this is the CLUSTER — the single most consequential thing in the teardown to claim is gone.
+  # MEASURED against an unreachable lab: this branch printed "- absent." for a cluster nobody could
+  # see, while step 1 (already fixed) correctly said CANNOT READ two lines above. Same defect, one
+  # step further down; wiring the helper into the `if` is not enough if the `else` re-implements it.
+  absent_or_unknown "${VKS_NAMESPACE}/${VKS_CLUSTER_NAME}"
 fi
 
 # --- 5. local state -----------------------------------------------------------------------------

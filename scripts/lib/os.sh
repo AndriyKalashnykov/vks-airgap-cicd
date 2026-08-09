@@ -1023,6 +1023,24 @@ classify_kube_failure() {
   # to another class SHADOWS every arm below it. UNAUTHORIZED used to sit second and did exactly
   # that — see the 401 note below; a genuine FORBIDDEN was classified UNAUTHORIZED.
   case "$e" in
+    # KUBECONFIG_UNUSABLE: something the kube configuration NAMES is missing, unreadable or malformed,
+    # so NOTHING WAS EVER DIALLED. This must
+    # not be reported as a reachability verdict. MEASURED against a genuinely down lab: kubectl
+    # emitted `error: stat ./secrets/<x>.kubeconfig: no such file or directory`, no arm matched, and
+    # argocd-preflight rendered it as "the GUEST cluster did not answer ... and the error is not one
+    # we classify" — a claim about the network from an error about the filesystem. Verified against
+    # ⚠️ THE PATTERNS ARE DELIBERATELY NARROW. A bare `*"no such file or directory"*` SHADOWS the
+    # auth classes below: measured, a Forbidden or Unauthorized message carrying any stray
+    # `open /x: no such file or directory` line classified as this instead — the arm sits first, and
+    # first match wins. Anchoring on kubectl's own config vocabulary keeps the position (which is
+    # correct — a config fault precedes any dial) without swallowing anything else. Verified over a
+    # 9-case corpus: Forbidden/Unauthorized-with-stray-file-line now classify correctly, all five
+    # real missing-file shapes still classify here, and `no such host` stays UNREACHABLE.
+    # The NAME says "unusable", not "missing", because it also covers a PRESENT but malformed file
+    # and a missing exec credential plugin — see the consumers' wording.
+    *"stat "*"no such file or directory"*|*"error loading config file"*|\
+    *"unable to read certificate-authority"*|*"unable to read client-cert"*|*"unable to read client-key"*|\
+    *"getting credentials: exec:"*)                                              printf 'KUBECONFIG_UNUSABLE' ;;
     *"x509"*|*"certificate signed by unknown authority"*|*"certificate is valid for"*) printf 'STALE_CA' ;;
 
     # PLAINTEXT: the endpoint is not speaking TLS at all. Its own class because every CA remedy is

@@ -67,6 +67,12 @@ if ! kubectl version -o json >/dev/null 2>"$_lp_err"; then
   cluster-admin (this flow creates namespaces and installs CRDs)." ;;
     UNREACHABLE)  die "cannot reach ${_lp_srv:-the cluster} — it never answered.
   This is NOT evidence your kubeconfig is stale. Is the lab up, and routable from this jump box?" ;;
+    KUBECONFIG_UNUSABLE) die "a file named in your kube configuration is missing, unreadable or
+  malformed, so NOTHING WAS DIALLED — this says NOTHING about whether the lab is up. It is not
+  always \$KUBECONFIG itself: it may be a certificate-authority or client-cert it points at, an
+  absent exec credential-plugin binary, or a present-but-invalid file. The error names which:
+$(sed 's/^/    /' "$_lp_err" | head -4)
+  Fix that file, or re-create the kubeconfig:  make vks-login" ;;
     *)            die "cannot reach the cluster with the current KUBECONFIG, and the error is not one
   this script classifies — printed verbatim rather than guessed at:
 $(sed 's/^/    /' "$_lp_err" | head -6)" ;;
@@ -98,7 +104,7 @@ fi
 #    default, the PVC stays Pending forever and the failure you see is a POD TIMEOUT, which names
 #    nothing. Judge by the annotation the cluster ACTUALLY carries, not by the presence of any SC.
 default_sc="$(kubectl get storageclass -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{" "}{end}' 2>/dev/null || true)"
-n_sc="$(kubectl get storageclass --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+n_sc="$(kubectl get storageclass --no-headers 2>/dev/null | wc -l | tr -d ' ' || true)"
 if [ -n "$default_sc" ]; then
   ok "default StorageClass: ${default_sc}(Gitea's PVC binds to it)"
 elif [ "$n_sc" -gt 0 ]; then
@@ -113,7 +119,7 @@ fi
 #    cannot resolve gitea-http.gitea.svc — Gitea needs its OWN LoadBalancer VIP for ArgoCD to clone from.
 #    We cannot prove a provider exists without creating a Service, and this script is read-only. So we
 #    report the evidence we CAN see and say plainly what it does and does not prove.
-lbs="$(kubectl get svc -A --field-selector spec.type=LoadBalancer --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+lbs="$(kubectl get svc -A --field-selector spec.type=LoadBalancer --no-headers 2>/dev/null | wc -l | tr -d ' ' || true)"
 pending="$(kubectl get svc -A --field-selector spec.type=LoadBalancer \
   -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\t"}{.status.loadBalancer.ingress[0].ip}{"\n"}{end}' 2>/dev/null \
   | awk -F'\t' '$2 == "" {print $1}' | tr '\n' ' ' || true)"

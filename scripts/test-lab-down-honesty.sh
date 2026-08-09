@@ -79,6 +79,25 @@ check  "forbidden => counted as NOT done"    "LEFT:"        "$out"
 out="$(run_case '' 0)"
 check  "exists => reported as existing"      "EXISTS"       "$out"
 
+# 5. rc != 0 with EMPTY stderr. There is no legitimate case where this means "gone": `k` sends
+#    stdout to /dev/null, so a genuine NotFound ALWAYS lands on stderr. Empty means a Ctrl-C, a
+#    kill, or an error we failed to capture. This case FAILED before the helper was rewritten.
+out="$(run_case '' 1)"
+refute "empty stderr => NEVER says absent"   "demo: absent" "$out"
+check  "empty stderr => CANNOT READ"         "CANNOT READ"  "$out"
+
+# 6. a killed process (rc 137), no stderr — the same trap wearing a different exit code.
+out="$(run_case '' 137)"
+refute "rc=137 => NEVER says absent"         "demo: absent" "$out"
+
+# 7. a BLANK first line with the real diagnosis on line 2. kubectl does this
+#    ("Error in configuration:" / "* unable to read client-cert …"), and a head -1 capture then
+#    looks exactly like empty stderr. This case FAILED before the capture kept all of stderr.
+out="$(run_case '
+Unable to connect to the server: dial tcp 192.0.2.1:6443: i/o timeout' 1)"
+refute "blank first line => NEVER says absent" "demo: absent" "$out"
+check  "blank first line => keeps the real cause" "i/o timeout" "$out"
+
 echo
 echo "lab-down honesty: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ] || exit 1
