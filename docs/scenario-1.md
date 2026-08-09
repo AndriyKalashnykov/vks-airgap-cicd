@@ -221,7 +221,7 @@ The GitOps engine, running on the Supervisor.
    spec: { version: <a supported version> }
    ```
 
-6. Get its address, then read the initial admin credential out of its Secret:
+6. Get its address, then read the initial admin login that ArgoCD generated.
 
    ```bash
    kubectl get svc -n <that namespace>                     # argocd-server -> EXTERNAL-IP
