@@ -288,25 +288,40 @@ the notes for the measurement.
 | `VKS_STORAGE_CLASS` | `wcp-vmfs` | `kubectl get storageclass` |
 | `VKS_WORKER_COUNT` | `2` | how many workers you want |
 
-### Export its kubeconfig
+### Get its kubeconfig
+
+**`make vks-cluster-status` already wrote one** — at `./secrets/<VKS_CLUSTER_NAME>.kubeconfig`, read
+straight from the cluster's own Secret. Use it:
+
+```bash
+cd ~/vks-airgap-cicd
+set -a; . ./.env; set +a
+kubectl --kubeconfig "./secrets/${VKS_CLUSTER_NAME}.kubeconfig" get nodes -o wide
+```
+
+**Expect:** your nodes listed, all `Ready`.
+
+<details><summary>No Supervisor access (the Scenario-2 tenant)? Ask the <code>vcf</code> CLI instead</summary>
 
 ```bash
 cd ~/vks-airgap-cicd
 set -a; . ./.env; set +a
 vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"
-vcf cluster kubeconfig get "$VKS_CLUSTER_NAME" --export-file ./secrets/vks.kubeconfig
-kubectl --kubeconfig ./secrets/vks.kubeconfig get nodes -o wide
+vcf cluster kubeconfig get "$VKS_CLUSTER_NAME" --export-file "./secrets/${VKS_CLUSTER_NAME}.kubeconfig"
 ```
 
-**Expect:** your nodes listed.
+MEASURED 2026-08-09: on one 9.1 lab this failed with `Error: failed to get pinniped-info from
+management cluster` while the Secret route above worked. If you hit that and you *do* have a
+Supervisor kubeconfig, use the Secret route — it is the same credential.
+</details>
 
 **→ set in `./.env`:**
 
 | key | example | how to get the value |
 |---|---|---|
-| `KUBECONFIG` | `./secrets/vks.kubeconfig` | the file you just exported — leave as-is |
-| `VKS_CONTEXT` | `cicd-gc1-admin@cicd-gc1` | `kubectl --kubeconfig ./secrets/vks.kubeconfig config get-contexts` — copy the NAME column |
-| `VKS_AUTH_METHOD` | `kubeconfig` | leave as-is: the pipeline runs against the file above |
+| `KUBECONFIG` | `./secrets/cicd-gc1.kubeconfig` | `./secrets/<your VKS_CLUSTER_NAME>.kubeconfig` — the file above |
+| `VKS_CONTEXT` | `cicd-gc1-admin@cicd-gc1` | `kubectl --kubeconfig ./secrets/<cluster>.kubeconfig config get-contexts -o name` |
+| `VKS_AUTH_METHOD` | `kubeconfig` | leave as-is — the pipeline runs against the file above |
 | `GITEA_ADMIN_PASSWORD` | *your value* | **you choose it** — Gitea is installed by this repo, so you set its admin password |
 
 ---
