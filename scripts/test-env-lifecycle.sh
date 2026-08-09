@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016,SC2034
+# ^ assertions are eval'd by try(), so $VARS must NOT expand at definition time; and `out`
+#   is consumed inside those single-quoted strings, which shellcheck cannot see through.
 # test-env-lifecycle.sh — exercise the `.env` lifecycle a NEW OPERATOR walks first.
 #
 # WHY: docs/scenario-1.md tells the reader to run env-init -> env-populate -> env-check ->
