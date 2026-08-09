@@ -441,28 +441,39 @@ make psa-check
 
 ## 6. Harbor's CA
 
-Harbor uses a self-signed certificate. Save its CA here so the jump box and the cluster trust it.
-
-**Download it from Harbor:** Harbor → your project → **Registry Certificate** → download `ca.crt`
-→ save as `./secrets/harbor-ca.crt`.
-
-Ask whoever runs Harbor for the certificate's SHA-256, then check what you downloaded:
+Harbor uses a self-signed certificate. Save its CA so the jump box and the cluster trust it.
+Harbor publishes it — no login needed:
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
-make fetch-harbor-ca HARBOR_CA_SHA256='<the digest they gave you>'
+set -a; . ./.env; set +a
+curl -sk "https://${HARBOR_URL}/api/v2.0/systeminfo/getcert" > ./secrets/harbor-ca.crt
+chmod 0644 ./secrets/harbor-ca.crt
+openssl x509 -in ./secrets/harbor-ca.crt -noout -subject     # expect: CN = Harbor CA
 ```
 
-**Expect:** `./secrets/harbor-ca.crt` exists, is `0644`, and its SHA-256 matches. *(<1 min)*
-
-<details><summary>No Harbor login? Read it from the cluster instead</summary>
-
-Needs Supervisor access and an admin-level grant, because the Secret holds the CA's private key:
+Then **check it against a digest you got from whoever runs Harbor**, over some other channel —
+`-k` above means you fetched it over a connection you could not yet verify:
 
 ```bash
-cd vks-airgap-cicd            # from Step 0
-make harbor-ca-from-cluster
+sha256sum ./secrets/harbor-ca.crt
 ```
+
+**Expect:** the file exists, is `0644`, its subject is a CA, and the digest matches. *(<1 min)*
+
+<details><summary>Alternatives if that endpoint is unavailable</summary>
+
+- Harbor's UI: your project → **Registry Certificate** → download `ca.crt`.
+- From the cluster, if you have Supervisor access:
+
+  ```bash
+  cd vks-airgap-cicd            # from Step 0
+  make harbor-ca-from-cluster
+  ```
+
+`make fetch-harbor-ca` only works when Harbor's certificate is self-signed. If Harbor presents a
+certificate issued by a separate CA — the usual case — the CA is not on the connection and that
+command will tell you so and stop.
 
 </details>
 
