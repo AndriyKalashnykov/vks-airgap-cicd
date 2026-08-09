@@ -48,11 +48,12 @@ Internet-only? Use [the sneakernet flow](sneakernet.md) instead; it replaces Ste
 
 Everything below runs **from the repo root**. Nothing works from another directory.
 
-A stock Ubuntu or Photon box has neither `git` nor `make`. Install them first.
+A stock Ubuntu or Photon box has neither `git` nor `make`. Ubuntu has no `curl` either, and
+`make deps` needs it. Install them first.
 
 ```bash
 # Ubuntu / Debian
-apt-get update && apt-get install -y --no-install-recommends git make ca-certificates
+apt-get update && apt-get install -y --no-install-recommends git make curl ca-certificates
 # Photon OS 5
 tdnf install -y git make
 ```
