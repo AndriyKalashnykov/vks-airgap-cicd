@@ -39,7 +39,11 @@ Run these in this order. Steps 2 and 3 are browser work; everything else is a co
 Each step ends with a table of the keys it sets, with an example and where the value comes from.
 
 **Jump-box OS:** Ubuntu or VMware Photon OS — the two the tooling installs packages for
-(`apt` / `tdnf`). The jump box must reach **both** the internet and the lab. Internet-only? Use
+(`apt` / `tdnf`). The jump box must reach **both** the internet and the lab, and must resolve the
+vCenter FQDN and Supervisor IP you collect in Step 0. Where each `.env` address has to resolve
+differs — most are IPs this repo discovers for you, but **Harbor's FQDN must answer in your real
+DNS, because the guest cluster's nodes resolve it too** (Step 2), and the `*.vks.local` names are
+`/etc/hosts`-only and never resolve in DNS. Internet-only? Use
 [the sneakernet flow](sneakernet.md) instead; it replaces Step 9.
 
 ---
@@ -81,7 +85,7 @@ this runbook, and every step below ends with a table of the keys it wants you to
 | What | Example | Where to find it |
 |---|---|---|
 | Supervisor IP | `192.168.101.128` | vCenter → Workload Management → Supervisors → *Control Plane Node IP* |
-| vCenter FQDN | `vcsa.env1.lab.test` | the address you log into vCenter with (Step 3 needs it for the CA) |
+| vCenter FQDN | `vcsa.env1.lab.test` | the address you log into vCenter with (Step 3 needs it for the CA). **Your jump box must resolve it** — check: `getent hosts vcsa.env1.lab.test` |
 | your SSO user | `administrator@vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups |
 | your SSO domain | `vsphere.local` | same screen, the *Domain* dropdown |
 | the password | — | **never goes in `.env`** — you type it at a prompt in Step 3 |
@@ -373,19 +377,33 @@ aborts without it. The rest already have working defaults; set one only to overr
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
-make vks-cluster-create      # applies the Cluster; provisioning is asynchronous
-make vks-cluster-status      # waits, then reports
+make vks-cluster-create                                # applies the Cluster; provisioning is async
+make vks-cluster-status                                # reports ONCE — read `endpoint :` now
+make vks-cluster-status VKS_CLUSTER_WAIT_SECONDS=1800  # then wait for every node Ready
 ```
 
-**Expect:** every node `Ready`, and `endpoint : AGREE`. *(**4–6 min**)*
+**Run the plain one first, and read its `endpoint :` line before you start waiting.** That line is
+where a doomed cluster announces itself, and the waiting form does not print it until it gives up —
+so starting with the wait means 30 minutes of silence before you learn the cluster was never going
+to converge. `endpoint : AGREE` (or `NOT YET KNOWABLE` on a brand-new one) means carry on;
+`*** DIVERGENT ***` means stop and read what it prints.
+
+**Expect:** the waiting command blocks and reprints a status table every 15 s, then exits `0` with
+every node `Ready`. *(**4–6 min**)* On timeout it exits **non-zero** — that is not a pass, and you
+must not continue to Step 5.
 
 ⚠️ **Do not reuse a cluster name you deleted recently** — it never converges. Pick a new one. See
 the notes for the measurement.
 
 ### Get its kubeconfig
 
-**`make vks-cluster-status` already wrote one** — at `./secrets/<VKS_CLUSTER_NAME>.kubeconfig`, read
-straight from the cluster's own Secret. Use it:
+**If that command exited `0`, it already wrote one** — at `./secrets/<VKS_CLUSTER_NAME>.kubeconfig`,
+read straight from the cluster's own Secret.
+
+⚠️ **The file existing is not proof the cluster is ready.** The platform mints that Secret *before*
+the nodes join, so a kubeconfig can exist for a cluster that cannot schedule anything — and the
+later checks only test that the file is there and the control plane answers, not that you have
+workers. Only the `0` exit above means both. Use it:
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
