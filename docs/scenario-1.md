@@ -337,6 +337,11 @@ The GitOps engine, running on the Supervisor.
 | `ARGOCD_SERVER` | `192.168.101.131` | the `argocd-server` EXTERNAL-IP from step 6 |
 | `ARGOCD_TRACK_BRANCH` | `main` | the branch ArgoCD follows in the deploy repos — leave as-is unless you renamed it |
 | `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | the file you created in step 3 above — leave as-is |
+| `VKS_AUTH_METHOD` | `vcf` | **set this to `vcf` now.** It selects how you log in, and `vcf` is the Supervisor login this step is doing. Step 4 changes it to `kubeconfig`. |
+
+⚠️ `VKS_AUTH_METHOD` defaults to `kubeconfig`, which means *"validate a workload-cluster kubeconfig I
+already have"* — you don't have one yet. Leave it unset here and the next command fails with
+`VKS_AUTH_METHOD=kubeconfig but ./secrets/vks.kubeconfig is empty`.
 
 Finally, log in through the repo so it writes the Supervisor kubeconfig everything after this reads:
 
@@ -410,7 +415,7 @@ Supervisor kubeconfig, use the Secret route — it is the same credential.
 |---|---|---|
 | `KUBECONFIG` | `./secrets/cicd-gc1.kubeconfig` | `./secrets/<your VKS_CLUSTER_NAME>.kubeconfig` — the file above |
 | `VKS_CONTEXT` | `cicd-gc1-admin@cicd-gc1` | `kubectl --kubeconfig ./secrets/<cluster>.kubeconfig config get-contexts -o name` |
-| `VKS_AUTH_METHOD` | `kubeconfig` | leave as-is — the pipeline runs against the file above |
+| `VKS_AUTH_METHOD` | `kubeconfig` | **change it back from `vcf`** (Step 3 set that for the Supervisor login). From here on the pipeline runs against the guest-cluster kubeconfig above. |
 | `GITEA_ADMIN_PASSWORD` | *your value* | **you choose it** — Gitea is installed by this repo, so you set its admin password |
 
 ---

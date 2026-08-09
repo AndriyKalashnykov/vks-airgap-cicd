@@ -427,6 +427,33 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     ;;
 esac
 
+# ---- The `vcf` arm has ALREADY proven its own artifact; the tail below is for the OTHERS ----
+# MEASURED 2026-08-09, bare photon:5.0 jump box, real 9.1 lab, walking docs/scenario-1.md in order:
+# the `vcf` arm logged in, saved every context, wrote and VERIFIED ./secrets/supervisor.kubeconfig
+# (see the `get ns` check ~60 lines above), published ARGOCD_KUBECONFIG — and then this function
+# died FATAL because the tail verifies $KUBECONFIG, the WORKLOAD kubeconfig, which does not exist
+# until the guest cluster is created. That cluster's own creator hard-requires the Supervisor
+# kubeconfig this arm just wrote ("run 'make vks-login' first"), so the documented order was
+# UNSATISFIABLE: login exits non-zero before the cluster, the cluster needs login's output.
+#
+# The tail is not merely early for `vcf` — it is verifying an artifact this arm NEVER writes
+# (the vcf branch says so explicitly: "KUBECONFIG is left untouched"), so it is wrong for `vcf`
+# in EVERY state, not only pre-cluster.
+#
+# ⚠️ SCOPED TO THE METHOD, NOT TO A FILE TEST. The obvious guard — "skip when $KUBECONFIG does not
+# exist" — is defeated by a STALE file: secrets/vks.kubeconfig is the documented real-lab default
+# and `kind-down.sh` DELIBERATELY does not delete it, so any checkout that ever ran the KinD
+# stand-in or a previous lab still has one. The exemption would not fire, and the returning
+# operator would get this same FATAL pointing at a destroyed cluster.
+#
+# The `kubeconfig` arm's own check proves only that the file is NON-EMPTY, so for that method this
+# tail IS the connectivity proof and must not weaken. Same for `vsphere`.
+if [ "$METHOD" = vcf ]; then
+  log_info "Supervisor context is verified above; the workload cluster is verified by"
+  log_info "  'make preflight' once it exists (scenario-1 Step 5). Nothing further to check here."
+  exit 0
+fi
+
 # ---- Select the context if named, then PROVE connectivity -----------------
 if [ -n "${VKS_CONTEXT:-}" ]; then
   kubectl config use-context "$VKS_CONTEXT" >/dev/null 2>&1 \
