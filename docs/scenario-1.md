@@ -123,6 +123,9 @@ Put its name in `VKS_NAMESPACE` and go to Step 2.
 
 ### If you don't — create it
 
+Do this **now, before Step 3** — the login in Step 3 activates a context at this namespace and
+fails if it does not exist yet.
+
 **vCenter → Workload Management → Namespaces → Create Namespace.** Pick your Supervisor, name it.
 Then, in the namespace you just created:
 
