@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# test-env-lifecycle.sh — exercise the `.env` lifecycle a NEW OPERATOR walks first.
+#
+# WHY: docs/scenario-1.md tells the reader to run env-init -> env-populate -> env-check ->
+# env-validate before anything else. Measured 2026-08-09 (scripts/doc-harness-coverage.sh):
+# three of those four were run by NOTHING -- no test, no e2e, no workflow. The first
+# instructions in the runbook were the least verified in the repo.
+#
+# All four are offline-able: 02-env.sh's DISCOVER block is gated on a reachable cluster and
+# prints "(no reachable cluster — skipping)" when there is none, so this needs no lab.
+#
+# NOT COVERED: the DISCOVER path itself (needs a cluster) and env-validate's connectivity
+# leg. This tests the OFFLINE half; the other half is named in doc-harness-coverage's output.
+set -uo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
+REPO=$PWD
+fail=0; n=0
+ok()   { n=$((n+1)); printf '  ok %d - %s\n' "$n" "$1"; }
+bad()  { n=$((n+1)); fail=1; printf '  not ok %d - %s\n' "$n" "$1"; }
+try()  { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/envlc.XXXXXX")
+trap 'rm -rf "$WORK"' EXIT
+cp "$REPO/.env.example" "$WORK/.env.example"
+
+echo "== env lifecycle (offline) =="
+
+# --- env-init: creates .env from the example -----------------------------------------
+( cd "$WORK" && ENV_FILE=.env REPO_ROOT="$WORK" bash "$REPO/scripts/02-env.sh" init >/dev/null 2>&1 )
+try "env-init creates .env from .env.example" '[ -s "$WORK/.env" ]'
+
+# --- env-init again: must BACK UP rather than clobber --------------------------------
+printf '\nMARKER_KEEP=1\n' >> "$WORK/.env"
+( cd "$WORK" && ENV_FILE=.env REPO_ROOT="$WORK" bash "$REPO/scripts/02-env.sh" init >/dev/null 2>&1 )
+try "env-init BACKS UP an existing .env (does not silently clobber)" \
+    'ls "$WORK"/.env.bak* >/dev/null 2>&1 && grep -q MARKER_KEEP "$WORK"/.env.bak*'
+
+# --- env-populate: offline, must SKIP discover and not die ---------------------------
+out=$( cd "$WORK" && ENV_FILE=.env REPO_ROOT="$WORK" KUBECONFIG=/nonexistent \
+       bash "$REPO/scripts/02-env.sh" populate 2>&1 ); rc=$?
+try "env-populate exits 0 with no cluster (it is best-effort by design)" '[ "$rc" -eq 0 ]'
+# 02-env.sh distinguishes "no kubeconfig FILE" from "file present, cluster unreachable" and
+# names the fix for each. Accept either, and require that it NAMES A COMMAND -- a skip that
+# does not tell the operator how to proceed is the defect this asserts against.
+try "env-populate SAYS it skipped discovery rather than failing silently" \
+    'printf "%s" "$out" | grep -qiE "skipping discovery|no reachable cluster"'
+try "the skip message NAMES a command that would fix it" \
+    'printf "%s" "$out" | grep -qE "make (vks-login|kind-up)"'
+
+# --- env-populate MINTS the secrets it can, and does NOT clobber a set one ------------
+try "env-populate generates GITEA_ADMIN_PASSWORD when unset" \
+    'grep -qE "^GITEA_ADMIN_PASSWORD=.+" "$WORK/.env"'
+before=$(grep -E '^GITEA_ADMIN_PASSWORD=' "$WORK/.env")
+( cd "$WORK" && ENV_FILE=.env REPO_ROOT="$WORK" KUBECONFIG=/nonexistent \
+  bash "$REPO/scripts/02-env.sh" populate >/dev/null 2>&1 )
+try "env-populate NEVER clobbers a value already set (re-run is idempotent)" \
+    '[ "$(grep -E "^GITEA_ADMIN_PASSWORD=" "$WORK/.env")" = "$before" ]'
+
+# --- env-check: must REJECT the shipped placeholder ----------------------------------
+sed -i 's|^HARBOR_URL=.*|HARBOR_URL=harbor.vks.local|' "$WORK/.env" 2>/dev/null || true
+( cd "$WORK" && ENV_FILE=.env REPO_ROOT="$WORK" bash "$REPO/scripts/02-env.sh" check >/dev/null 2>&1 )
+try "env-check FAILS on the shipped HARBOR_URL placeholder (not merely 'set')" '[ $? -ne 0 ]'
+
+printf '\n%s: %d checks, %d failed\n' "$(basename "$0")" "$n" "$fail"
+[ "$fail" -eq 0 ] || exit 1
