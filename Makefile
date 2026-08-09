@@ -705,6 +705,10 @@ validate: ## kustomize build + kubeconform manifests; kubectl dry-run Tekton YAM
 check-image-alignment: ## Fail if any mirrored image tag drifts between k8s/tekton manifests and images/images.txt
 	@$(SCRIPTS)/check-image-alignment.sh
 
+.PHONY: check-cluster-template-vars
+check-cluster-template-vars: ## Fail if k8s/vks/cluster.yaml interpolates a $${VAR} that 25-vks-cluster-create.sh never binds
+	@$(SCRIPTS)/check-cluster-template-vars.sh
+
 .PHONY: check-pull-secret-alignment
 check-pull-secret-alignment: ## Every app's deploy manifest must reference the image-pull Secret the flow actually creates
 	@$(SCRIPTS)/check-pull-secret-alignment.sh
@@ -1071,7 +1075,7 @@ docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets
 	@# having linted nothing. In CI it now DIES instead.
 
 .PHONY: static-check
-static-check: check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)

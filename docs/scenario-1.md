@@ -11,8 +11,7 @@ syncs → the app serves the change. Two demo apps (Java and Go), proven by `mak
 **Topology — two clusters, two kubeconfigs.** Harbor and ArgoCD run on the **Supervisor**. Gitea,
 Tekton and your apps run in the **guest cluster**.
 
-> **Why a step is shaped the way it is** → [scenario-1-notes.md](scenario-1-notes.md). You do not
-> need it for a normal install. Read it when a step surprises you, or before you simplify one.
+> Background for when a step surprises you → [scenario-1-notes.md](scenario-1-notes.md).
 
 ## The whole sequence
 
@@ -35,12 +34,13 @@ Run these in this order. Steps 2 and 3 are browser work; everything else is a co
 | **11** | [Ingress](#11-ingress-optional) | optional |
 | **12** | [Remove it again](#12-removing-it-again) | `make lab-down` |
 
-**Everything you configure goes in ONE file: `.env`, at the root of the repo you clone in Step 0.**
-Each step ends with a table of the keys it sets, with an example and where the value comes from.
+**Everything you configure goes in ONE file: `.env`, at the root of the repo.** Each step has a
+table of the keys it needs, with an example and where the value comes from.
 
-**Jump-box OS:** Ubuntu or VMware Photon OS — the two the tooling installs packages for
-(`apt` / `tdnf`). The jump box must reach **both** the internet and the lab. Internet-only? Use
-[the sneakernet flow](sneakernet.md) instead; it replaces Step 9.
+**Jump box:** Ubuntu or Photon OS, reaching both the internet and the lab. It must resolve the
+vCenter FQDN. **Harbor's FQDN must be in real DNS** — the guest nodes resolve it, so `/etc/hosts`
+is not enough. The `*.vks.local` names are `/etc/hosts`-only.
+Internet-only? Use [the sneakernet flow](sneakernet.md) instead; it replaces Step 9.
 
 ---
 
@@ -48,8 +48,7 @@ Each step ends with a table of the keys it sets, with an example and where the v
 
 Everything below runs **from the repo root**. Nothing works from another directory.
 
-A stock Ubuntu or Photon box has **neither `git` nor `make`** (measured on `ubuntu:24.04` and
-`photon:5.0`), so install them first.
+A stock Ubuntu or Photon box has neither `git` nor `make`. Install them first.
 
 ```bash
 # Ubuntu / Debian
@@ -67,21 +66,19 @@ pwd                            # sanity check: should end in /vks-airgap-cicd
 make env-init                  # creates ./.env from the template .env.example
 ```
 
-> **Shortcut:** the repo ships a one-command bootstrap that installs those packages, clones the repo
-> and runs Step 1's `make deps` for you — see
-> [Bootstrap an unprovisioned jump box](../README.md#bootstrap-an-unprovisioned-jump-box-before-you-can-clone-this-repo)
-> in the README. It does **not** create `.env`, so afterwards
-> still run `cd vks-airgap-cicd && make env-init` and continue from Step 1's `make install-vcf-clis`.
+> **Shortcut:** [one-command bootstrap](../README.md#bootstrap-an-unprovisioned-jump-box-before-you-can-clone-this-repo)
+> does the packages, the clone and Step 1's `make deps`. It does not create `.env` — afterwards run
+> `cd vks-airgap-cicd && make env-init`, then continue from Step 1's `make install-vcf-clis`.
 
-**Expect:** `./.env` exists. Open it in your editor — it is the one file you edit for the rest of
-this runbook, and every step below ends with a table of the keys it wants you to set in it.
+**Expect:** `./.env` exists. It is the one file you edit for the rest of this runbook; each step
+below lists the keys it needs before the commands that read them.
 
 **Collect these from your lab before Step 1** — you paste them into `.env`:
 
 | What | Example | Where to find it |
 |---|---|---|
 | Supervisor IP | `192.168.101.128` | vCenter → Workload Management → Supervisors → *Control Plane Node IP* |
-| vCenter FQDN | `vcsa.env1.lab.test` | the address you log into vCenter with (Step 3 needs it for the CA) |
+| vCenter FQDN | `vcsa.env1.lab.test` | the address you log into vCenter with (Step 3 needs it for the CA). **Your jump box must resolve it** — check: `getent hosts vcsa.env1.lab.test` |
 | your SSO user | `administrator@vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups |
 | your SSO domain | `vsphere.local` | same screen, the *Domain* dropdown |
 | the password | — | **never goes in `.env`** — you type it at a prompt in Step 3 |
@@ -161,8 +158,7 @@ kubectl -n "$VKS_NAMESPACE" get virtualmachineclass
 | `storagepolicyquotas` empty | go back and add the storage policy |
 | `virtualmachineclass` empty | go back and add the VM class |
 
-Worth the 10 seconds: a namespace missing either still **accepts** the cluster in Step 4, then never
-finishes provisioning it.
+A namespace missing either still accepts the cluster in Step 4, then never finishes provisioning it.
 
 ---
 
@@ -171,9 +167,8 @@ finishes provisioning it.
 The registry every image comes from.
 [Broadcom docs](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-harbor-as-vcf-service/installing-and-configuring-harbor-and-contour.html)
 
-1. Give Harbor an **NGINX LoadBalancer**. That is what step 4 below configures
-   (`enableNginxLoadBalancer: true`) and the only path tested here. Harbor also supports Contour,
-   but this runbook does not configure it and has not been run that way.
+1. Give Harbor an **NGINX LoadBalancer** (`enableNginxLoadBalancer: true`, set in step 4 below).
+   Contour is not covered by this runbook.
 2. vCenter → Workload Management → Supervisor Services → **Add New Service** → upload
    `supervisor-service-harbor-legacy-*.yml` (use the `-legacy` file for a disconnected Supervisor).
 3. Decide two values:
@@ -230,7 +225,6 @@ The registry every image comes from.
 | `HARBOR_URL` | `harbor.env1.lab.test` | the FQDN you chose. **Bare host — no `https://`, no trailing slash.** |
 | `HARBOR_USERNAME` | `admin` | Harbor's built-in admin (Step 7 replaces it with a robot) |
 | `HARBOR_PASSWORD` | *your value* | the `harborAdminPassword` you set in `harbor-values.yaml` above |
-| `HARBOR_CA_FILE` | `./secrets/harbor-ca.crt` | the path Step 6 writes to — leave as-is |
 | `HARBOR_INFRA_PROJECT` | `cicd` | **you choose** — the Harbor project for pipeline images |
 | `HARBOR_APP_PROJECT` | `apps` | **you choose** — the Harbor project for app images |
 
@@ -300,13 +294,10 @@ The GitOps engine, running on the Supervisor.
    > unset VCF_CLI_VSPHERE_PASSWORD
    > ```
    >
-   > That keeps it off the command line and out of shell history, but **it is not secret from
-   > yourself**: anything running as your user, and root, can read it with `ps eww`, and every
-   > process the shell spawns inherits it. `unset` it when you are done.
+   > Anything running as you, and root, can still read it with `ps eww`. `unset` it when done.
    >
-   > ⚠️ **Get it right the first time.** vCenter SSO locks an account after **5 failed attempts
-   > within 3 minutes** by default (auto-unlocks after 5 minutes) — but that policy is configurable
-   > and your lab may be stricter. Check yours before looping on a guess.
+   > ⚠️ vCenter SSO locks the account after **5 failed attempts in 3 minutes** by default. Check
+   > your lab's policy before retrying a guess.
 
 5. Apply the instance CR. `kubectl explain argocd.spec.version` lists what your operator supports:
 
@@ -335,10 +326,13 @@ The GitOps engine, running on the Supervisor.
 |---|---|---|
 | `ARGOCD_NAMESPACE` | `lab` | the namespace your ArgoCD **instance** runs in. **Discover it — do not assume:** `kubectl get argocd -A` (on one real lab this was `lab`, not the `argocd-instance-1` from step 2) |
 | `ARGOCD_SERVER` | `192.168.101.131` | the `argocd-server` EXTERNAL-IP from step 6 |
-| `ARGOCD_TRACK_BRANCH` | `main` | the branch ArgoCD follows in the deploy repos — leave as-is unless you renamed it |
-| `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | the file you created in step 3 above — leave as-is |
+| `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | the file you created in step 3 above |
+| `VKS_AUTH_METHOD` | `vcf` | **set this to `vcf` now.** It selects how you log in, and `vcf` is the Supervisor login this step is doing. Step 4 changes it to `kubeconfig`. |
 
-Finally, log in through the repo so it writes the Supervisor kubeconfig everything after this reads:
+⚠️ Leave `VKS_AUTH_METHOD` unset and the next command fails with
+`VKS_AUTH_METHOD=kubeconfig but ./secrets/vks.kubeconfig is empty`.
+
+Log in, which writes the Supervisor kubeconfig every later step reads:
 
 ```bash
 cd vks-airgap-cicd
@@ -354,33 +348,48 @@ make vks-login                # prompts for your password; writes ./secrets/supe
 Where Gitea, Tekton and your apps run. You need cluster-admin on it.
 *Already have a cluster? Skip to "Export its kubeconfig".*
 
-**→ set in `./.env` before you run this.** Only `VKS_K8S_VERSION` is **required** — the command
-aborts without it. The rest already have working defaults; set one only to override it.
+**→ set in `./.env`:**
 
-| key | required? | example | how to get the value |
+| key | example | how to get the value |
+|---|---|---|
+| `VKS_K8S_VERSION` | `v1.32.10+vmware.1-fips` | `kubectl get kubernetesreleases` — one that is both Ready and Compatible |
+
+<details><summary>Optional — the cluster's shape. Skip unless you want to change it.</summary>
+
+| key | default | example | how to get the value |
 |---|---|---|---|
-| `VKS_K8S_VERSION` | **yes** | `v1.32.10+vmware.1-fips` | `kubectl get kubernetesreleases` — one that is both Ready and Compatible |
-| `VKS_CLUSTERCLASS` | no — defaults | `builtin-generic-v3.6.0` | `kubectl get clusterclass -A` on the Supervisor — the newest Ready one |
-| `VKS_VM_CLASS` | no — defaults | `best-effort-small` | `kubectl get virtualmachineclass` |
-| `VKS_STORAGE_CLASS` | no — defaults | `wcp-vmfs` | `kubectl get storageclass` |
-| `VKS_CONTROL_PLANE_COUNT` | no — defaults to `1` | `1` | how many control-plane nodes |
-| `VKS_NODE_COUNT` | no — defaults to `2` | `2` | how many workers. Leave it unset; `.env.example`'s commented `=1` is deliberately **not** the default, and one worker is too small for the platform. |
+| `VKS_CLUSTERCLASS` | `builtin-generic-v3.6.0` | `builtin-generic-v3.6.0` | `kubectl get clusterclass -A` — the newest Ready one |
+| `VKS_VM_CLASS` | `best-effort-small` | `best-effort-small` | `kubectl get virtualmachineclass` |
+| `VKS_STORAGE_CLASS` | `wcp-vmfs` | `wcp-vmfs` | `kubectl get storageclass` |
+| `VKS_CONTROL_PLANE_COUNT` | `1` | `1` | how many control-plane nodes |
+| `VKS_NODE_COUNT` | `2` | `2` | how many workers. One is too small for the platform. |
+
+</details>
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
-make vks-cluster-create      # applies the Cluster; provisioning is asynchronous
-make vks-cluster-status      # waits, then reports
+make vks-cluster-create                                # applies the Cluster; provisioning is async
+make vks-cluster-status                                # reports ONCE — read `endpoint :` now
+make vks-cluster-status VKS_CLUSTER_WAIT_SECONDS=1800  # then wait for every node Ready
 ```
 
-**Expect:** every node `Ready`, and `endpoint : AGREE`. *(**4–6 min**)*
+**Read the `endpoint :` line from the first command before starting the wait.** `AGREE` or
+`NOT YET KNOWABLE` → carry on. `*** DIVERGENT ***` → stop and follow what it prints; the waiting
+form will not show it for 30 minutes.
+
+**Expect:** the waiting command reprints a table every 15 s, then exits `0` with every node
+`Ready`. *(**4–6 min**)* A non-zero exit is not a pass — do not continue to Step 5.
 
 ⚠️ **Do not reuse a cluster name you deleted recently** — it never converges. Pick a new one. See
 the notes for the measurement.
 
 ### Get its kubeconfig
 
-**`make vks-cluster-status` already wrote one** — at `./secrets/<VKS_CLUSTER_NAME>.kubeconfig`, read
-straight from the cluster's own Secret. Use it:
+**If that command exited `0`, it already wrote one** — at `./secrets/<VKS_CLUSTER_NAME>.kubeconfig`,
+read straight from the cluster's own Secret.
+
+⚠️ The file existing is not proof the cluster is ready — the Secret is minted before the nodes
+join, and no later check tests for workers. Only the `0` exit above means both. Use it:
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
@@ -410,7 +419,7 @@ Supervisor kubeconfig, use the Secret route — it is the same credential.
 |---|---|---|
 | `KUBECONFIG` | `./secrets/cicd-gc1.kubeconfig` | `./secrets/<your VKS_CLUSTER_NAME>.kubeconfig` — the file above |
 | `VKS_CONTEXT` | `cicd-gc1-admin@cicd-gc1` | `kubectl --kubeconfig ./secrets/<cluster>.kubeconfig config get-contexts -o name` |
-| `VKS_AUTH_METHOD` | `kubeconfig` | leave as-is — the pipeline runs against the file above |
+| `VKS_AUTH_METHOD` | `kubeconfig` | **change it back from `vcf`** (Step 3 set that for the Supervisor login). From here on the pipeline runs against the guest-cluster kubeconfig above. |
 | `GITEA_ADMIN_PASSWORD` | *your value* | **you choose it** — Gitea is installed by this repo, so you set its admin password |
 
 ---
@@ -426,35 +435,50 @@ make lab-preflight
 make psa-check
 ```
 
-**Expect:** `LAB PREFLIGHT OK`. `psa-check` says `PSA UNPROVEN` on a bare cluster — that is the
-expected answer, not a failure. *(~1 min)*
+**Expect:** `LAB PREFLIGHT OK`. `PSA UNPROVEN` on a bare cluster is expected, not a failure. *(~1 min)*
 
 ---
 
 ## 6. Harbor's CA
 
-`crane` on the jump box and Kaniko in-cluster must trust Harbor's self-signed certificate.
-
-**Route A — the Harbor UI (prefer this; needs only a Harbor login):**
-Harbor → your project → **Registry Certificate** → download `ca.crt` → save it as
-`./secrets/harbor-ca.crt`.
-
-**Route B — from the cluster** (needs Supervisor access *and* an admin-level grant — see notes):
+Harbor uses a self-signed certificate. Save its CA so the jump box and the cluster trust it.
+Harbor publishes it — no login needed:
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
-make harbor-ca-from-cluster
+set -a; . ./.env; set +a
+curl -sk "https://${HARBOR_URL}/api/v2.0/systeminfo/getcert" > ./secrets/harbor-ca.crt
+chmod 0644 ./secrets/harbor-ca.crt
+openssl x509 -in ./secrets/harbor-ca.crt -noout -subject     # expect: CN = Harbor CA
 ```
 
-**Verify it either way** — ask whoever runs Harbor for the CA's SHA-256 first, over a channel that
-is not this connection:
+If that last command errors instead of printing a subject, this Harbor does not publish its CA
+there — use one of the alternatives below.
+
+Then **check it against a digest you got from whoever runs Harbor**, over some other channel —
+`-k` above means you fetched it over a connection you could not yet verify:
 
 ```bash
-cd vks-airgap-cicd            # from Step 0
-make fetch-harbor-ca HARBOR_CA_SHA256='<the digest they gave you>'
+sha256sum ./secrets/harbor-ca.crt
 ```
 
-**Expect:** `./secrets/harbor-ca.crt` exists, is `0644`, and its SHA-256 matches. *(<1 min)*
+**Expect:** the file exists, is `0644`, its subject is a CA, and the digest matches. *(<1 min)*
+
+<details><summary>Alternatives if that endpoint is unavailable</summary>
+
+- Harbor's UI: your project → **Registry Certificate** → download `ca.crt`.
+- From the cluster, if you have Supervisor access:
+
+  ```bash
+  cd vks-airgap-cicd            # from Step 0
+  make harbor-ca-from-cluster
+  ```
+
+`make fetch-harbor-ca` only works when Harbor's certificate is self-signed. If Harbor presents a
+certificate issued by a separate CA — the usual case — the CA is not on the connection and that
+command will tell you so and stop.
+
+</details>
 
 ---
 
@@ -484,8 +508,7 @@ cat ./secrets/harbor-robot.env
 | key | example | how to get the value |
 |---|---|---|
 | `ARGOCD_KUBECONFIG` | `./secrets/argocd.kubeconfig` | the file the next command writes. **Set it explicitly** — left unset it falls back to your *guest* kubeconfig, and `make gitops` then looks for ArgoCD in the wrong cluster. |
-| `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | already set in Step 3. If you skipped that, set `VKS_INSECURE_SKIP_TLS_VERIFY=true` instead — but the CA is preferred, because a password crosses this connection. |
-| `ARGOCD_NAMESPACE` | `lab` | already set in Step 3 — confirm with `kubectl get argocd -A` |
+| `ARGOCD_DEST_CLUSTER_NAME` | `vks-guest` | the name your guest cluster is registered under: `argocd cluster list`. **Required if more than one cluster is registered** — otherwise the next command stops with `AMBIGUOUS destination` rather than risk deploying into another tenant's cluster. |
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
@@ -499,8 +522,8 @@ make argocd-preflight           # CLI vs running-server versions; can ArgoCD rea
 make argocd-register-guest      # admin-only; creates an SA in your guest + a Secret in ArgoCD's ns
 ```
 
-`make argocd-version` prints the `argocd` CLI, the **running server** and this repo's pin side by
-side. The running server is the one that matters. *(~2 min)*
+`make argocd-version` prints the CLI, the **running server** and this repo's pin. The running
+server is the one that matters. *(~2 min)*
 
 ---
 
@@ -528,9 +551,8 @@ cd vks-airgap-cicd            # from Step 0
 make creds-show
 ```
 
-**Expect:** every URL and login — Harbor, ArgoCD, Gitea, Tekton, and one row per app. Values are
-labelled **DISCOVERED** (read from the live cluster) or **STORED** (remembered), so you can tell
-current from stale.
+**Expect:** every URL and login — Harbor, ArgoCD, Gitea, Tekton, one row per app. Each value is
+labelled **DISCOVERED** (read live) or **STORED** (remembered).
 
 No ingress yet? Reach a service directly:
 
@@ -569,18 +591,16 @@ make lab-down CONFIRM=<your VKS_CLUSTER_NAME>
 **Expect:** it deletes only objects carrying our ownership label, and **prints what it left alone**.
 *(~1 min)*
 
-**It will not** delete the Harbor projects/robot (Harbor refuses to delete a project holding
-repositories — forcing it could destroy a shared registry) or touch `secrets/` and `/etc/hosts`. It
-prints the commands for those. If a read fails it reports `CANNOT READ` and counts the object as
-**not done** — it never claims something was absent when it could not look.
+**It will not** delete the Harbor projects/robot, `secrets/`, or `/etc/hosts` — it prints those
+commands for you to run. A failed read is reported `CANNOT READ` and counted as not done.
 
 ---
 
 ## Timings
 
-Measured 2026-08-08 on a real 9.1 lab, i9-14900KF / 188 GiB, **running the nested lab on the same
-box** (so every number is under self-contention). Two full runs; where they disagree, both are
-shown. Conditions and what they do not cover: [notes](scenario-1-notes.md#timings--what-these-numbers-do-not-cover).
+Two runs on a 9.1 lab (i9-14900KF / 188 GiB) hosting the nested lab on the same box, so these are
+under self-contention. Where the runs disagree, both are shown.
+[Conditions](scenario-1-notes.md#timings--what-these-numbers-do-not-cover).
 
 | Step | Command | Run 1 | Run 2 |
 |---|---|---|---|

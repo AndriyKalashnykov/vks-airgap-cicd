@@ -82,40 +82,26 @@ fi
 RENDERED="$(mktemp)"; trap 'rm -f "$RENDERED"' EXIT
 envsubst < "${REPO_ROOT}/k8s/vks/cluster.yaml" > "$RENDERED"
 
-# THE EMPTY-SCALAR CHECK — the one thing the server does not do for us (see the header).
+# THE EMPTY-SCALAR CHECK LIVED HERE AND HAS BEEN REMOVED — it was UNREACHABLE, and it cost Photon.
 #
-# ⚠️ Compare ONLY the lines that CARRIED a substitution. A naive "flag any line ending in ':'"
-# flags every legitimate parent key (spec:, metadata:, topology:) and every comment, so it fires on
-# a perfectly good render and teaches the operator to ignore it. Walking template and output in
-# lockstep is exact: a line that held `${VAR}` and now holds nothing after the colon is the defect,
-# and nothing else is.
-_empties="$(python3 - "$RENDERED" "${REPO_ROOT}/k8s/vks/cluster.yaml" <<'PY'
-import sys
-rendered = open(sys.argv[1]).read().splitlines()
-template = open(sys.argv[2]).read().splitlines()
-bad = []
-for i, (t, r) in enumerate(zip(template, rendered), 1):
-    ts = t.lstrip()
-    if ts.startswith('#') or '${' not in t:
-        continue                      # only lines that actually had a substitution
-    # the value is whatever follows the first ':' (or '- ' for a list item)
-    if ':' in r:
-        val = r.split(':', 1)[1].strip()
-    elif r.lstrip().startswith('-'):
-        val = r.lstrip()[1:].strip()
-    else:
-        val = r.strip()
-    if val == '':
-        bad.append('%d: %s' % (i, t.strip()))
-print('\n'.join(bad))
-PY
-)"
-if [ -n "$_empties" ]; then
-  log_error "the rendered manifest has an EMPTY value where a variable should be — envsubst renders"
-  log_error "an unset variable as empty, and admission ACCEPTS an empty replicas without complaint:"
-  printf '%s\n' "$_empties" | sed 's/^/    /' >&2
-  die "set the missing VKS_* value in .env, or let this script default it."
-fi
+# It shelled out to python3 to walk template and render in lockstep looking for a `${VAR}` line that
+# rendered empty. Two measurements retired it:
+#
+#  1. IT COULD NOT FIRE FROM OPERATOR INPUT. Every template variable is bound below with `:?` or
+#     `:-`, and BOTH treat an empty value as unset — so `VKS_NODE_COUNT= VKS_VM_CLASS=` still
+#     renders the defaults. The only state it could detect was TEMPLATE DRIFT (someone adds a
+#     `${VAR}` to k8s/vks/cluster.yaml that this script never binds), which is a commit-time defect,
+#     not a runtime one — and its die told the operator to "set the missing VKS_* value in .env",
+#     advice for a state that cannot occur.
+#  2. python3 IS NOT ON A PHOTON JUMP BOX. MEASURED 2026-08-09 walking scenario-1 on a bare
+#     photon:5.0 container against a real 9.1 lab: `make vks-cluster-create` died
+#     `line 112: python3: command not found` (rc 127) — seconds after `make check-tools` printed
+#     "all REQUIRED tools present." This repo has ALREADY had this incident once (see lib/os.sh's
+#     pick_port note) and recorded the resolution then: DEGRADE, and do NOT add python3 to the
+#     documented OS floor, because that floor is provisioned BY HAND on a box with no internet.
+#
+# Drift is now asserted OFFLINE by scripts/check-cluster-template-vars.sh (wired into static-check),
+# where it can fail the commit that introduces it instead of a lab run twenty minutes in.
 for v in VKS_CLUSTER_NAME VKS_NAMESPACE VKS_CLUSTERCLASS VKS_K8S_VERSION VKS_VM_CLASS \
          VKS_STORAGE_CLASS VKS_CONTROL_PLANE_COUNT VKS_NODE_COUNT; do
   printenv "$v" >/dev/null 2>&1 || die "$v is not EXPORTED — envsubst reads the ENVIRONMENT, so it would render EMPTY."

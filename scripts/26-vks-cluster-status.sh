@@ -56,44 +56,58 @@ nodes_ready() {
 report() {
   local json; json="$(k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" -o json 2>/dev/null || true)"
   [ -n "$json" ] || { echo "  cluster ${VKS_NAMESPACE}/${VKS_CLUSTER_NAME}: NOT FOUND"; return 2; }
-  # Single-quoted ON PURPOSE: this is a python program and the shell must not touch its $-signs.
-  # (It is also why no apostrophe may appear inside it — one did, and it terminated the string,
-  # producing a shell syntax error reported at a line number that is inside the python.)
+  # jq, NOT python3. MEASURED 2026-08-09 walking scenario-1 on a bare photon:5.0 jump box against a
+  # real 9.1 lab: python3 is ABSENT on Photon, so this function died `python3: command not found`
+  # (rc 127) on an OS this repo documents as a supported jump box — and `make check-tools` had
+  # printed "all REQUIRED tools present." moments earlier. jq is already REQUIRED and carried in the
+  # air-gap bundle, so this adds no dependency; adding python3 to the OS floor was rejected when this
+  # repo hit the identical class once before (see lib/os.sh's pick_port note): that floor is
+  # provisioned BY HAND on a box with no internet.
+  #
+  # SEMANTICS PRESERVED EXACTLY: the same four gating conditions, the same observedGeneration
+  # staleness rule, the same "(also)" listing of the rest, the same readiness verdict.
   # shellcheck disable=SC2016
-  printf '%s' "$json" | python3 -c '
-import json,sys
-c=json.load(sys.stdin)
-gen=c["metadata"].get("generation")
-st=c.get("status",{})
-conds={x["type"]:x for x in st.get("conditions",[])}
-# The three that actually say the topology controller finished and the CP answers. Gating on the
-# first two alone is what the runbook prescribes; TopologyReconciled is what says the CLASS was
-# fully applied, and it is present on this lab.
-# ⚠️ `Available` IS IN THIS LIST BECAUSE THE OTHER THREE FLAP. MEASURED on this lab: during
-# provisioning ControlPlaneInitialized/RemoteConnectionProbe/TopologyReconciled were all True for
-# one poll — a waiter gating on just those three BROKE OUT and declared the cluster ready — and the
-# very next reconcile bumped metadata.generation and reset them, with 0 of 2 workers available.
-# observedGeneration catches a STALE read; it cannot catch a LATER regression. `Available` is the CAPI
-# aggregate and was False throughout, so it is the one that does not lie. Nodes are still
-# checked below: a condition is a claim, a Ready node is the end result.
-need=["ControlPlaneInitialized","RemoteConnectionProbe","TopologyReconciled","Available"]
-print("  phase        : %s   (NOT readiness — see the header)" % st.get("phase"))
-print("  generation   : %s" % gen)
-ready=True
-for n in need:
-    c2=conds.get(n)
-    if not c2:
-        print("  %-22s: ABSENT (a fresh cluster has no conditions for a while)" % n); ready=False; continue
-    og=c2.get("observedGeneration")
-    stale=" [STALE gen %s != %s]" % (og,gen) if og is not None and og!=gen else ""
-    ok = c2.get("status")=="True" and not stale
-    print("  %-22s: %s%s" % (n, c2.get("status"), stale))
-    ready = ready and ok
-for n,c2 in sorted(conds.items()):
-    if n not in need:
-        print("    (also) %-18s %s" % (n, c2.get("status")))
-sys.exit(0 if ready else 1)
-'
+  local _rep
+  _rep="$(printf '%s' "$json" | jq -r '
+    def pad($s; $n): $s + (" " * ([0, $n - ($s|length)] | max));
+    . as $c
+    | ($c.metadata.generation) as $gen
+    | ($c.status // {}) as $st
+    | (($st.conditions // []) | map({key: .type, value: .}) | from_entries) as $conds
+    # The three that actually say the topology controller finished and the CP answers, plus
+    # Available. ⚠️ Available IS IN THIS LIST BECAUSE THE OTHER THREE FLAP. MEASURED on this lab:
+    # during provisioning ControlPlaneInitialized/RemoteConnectionProbe/TopologyReconciled were all
+    # True for one poll — a waiter gating on just those three BROKE OUT and declared the cluster
+    # ready — and the very next reconcile bumped metadata.generation and reset them, with 0 of 2
+    # workers available. observedGeneration catches a STALE read; it cannot catch a LATER
+    # regression. Available is the CAPI aggregate and was False throughout, so it is the one that
+    # does not lie. Nodes are still checked below: a condition is a claim, a Ready node is the end
+    # result.
+    | ["ControlPlaneInitialized","RemoteConnectionProbe","TopologyReconciled","Available"] as $need
+    | ($need | map(
+        . as $n
+        | ($conds[$n]) as $c2
+        | if $c2 == null then
+            { line: "  " + pad($n; 22) + ": ABSENT (a fresh cluster has no conditions for a while)",
+              ok: false }
+          else
+            ($c2.observedGeneration) as $og
+            | (if $og != null and $og != $gen then " [STALE gen \($og) != \($gen)]" else "" end) as $stale
+            | { line: "  " + pad($n; 22) + ": \($c2.status)\($stale)",
+                ok: (($c2.status == "True") and ($stale == "")) }
+          end)) as $rows
+    | ( [ "  phase        : \($st.phase)   (NOT readiness — see the header)",
+          "  generation   : \($gen)" ]
+        + ($rows | map(.line))
+        + ( $conds | to_entries | sort_by(.key)
+            | map(select(.key as $k | ($need | index($k)) == null)
+                  | "    (also) " + pad(.key; 18) + " \(.value.status)") )
+        + [ "__READY__ " + (if ($rows | all(.ok)) then "true" else "false" end) ]
+      )[]
+  ' 2>/dev/null)"
+  [ -n "$_rep" ] || { echo "  cluster ${VKS_NAMESPACE}/${VKS_CLUSTER_NAME}: could not parse status JSON"; return 2; }
+  printf '%s\n' "$_rep" | grep -v '^__READY__ '
+  printf '%s\n' "$_rep" | grep -q '^__READY__ true$'
 }
 
 # endpoint_report — PRINTS ONLY. Never gates, never dies, never changes this script's exit code.
@@ -148,58 +162,54 @@ endpoint_report() {
     return 0
   fi
 
+  # jq, NOT python3 — same reason as report() above (python3 is absent on a Photon jump box, and
+  # this is the command scenario-1 Step 4 runs immediately after vks-cluster-create). jq is already
+  # REQUIRED and carried. Semantics preserved exactly, including "declining to judge" whenever the
+  # evidence cannot identify a single control-plane LoadBalancer.
   # shellcheck disable=SC2016
-  printf '%s' "$svc_json" | ADV="$adv" ADVPORT="$advport" CL="$VKS_CLUSTER_NAME" NS="$VKS_NAMESPACE" python3 -c '
-import json,os,sys
-adv=os.environ.get("ADV",""); cl=os.environ.get("CL","")
-# The port comes from the Cluster. If it has not been published yet we do not invent one -- we
-# accept any port and let the ownerRef do the identifying, rather than silently matching nothing.
-try: advport=int(os.environ.get("ADVPORT","") or 0)
-except ValueError: advport=0
-svcs=json.load(sys.stdin).get("items",[])
-cands=[]
-for s in svcs:
-    if s.get("spec",{}).get("type")!="LoadBalancer": continue
-    ports=[p.get("port") for p in s.get("spec",{}).get("ports",[])]
-    if advport and advport not in ports: continue
-    owners=s.get("metadata",{}).get("ownerReferences",[]) or []
-    if not any(o.get("kind")=="VirtualMachineService" and o.get("name")==cl for o in owners): continue
-    cands.append(s)
-def ing(s):
-    i=(s.get("status",{}).get("loadBalancer",{}).get("ingress") or [{}])[0]
-    return i.get("ip") or i.get("hostname") or ""
-if not adv and not cands:
-    print("  endpoint     : NOT YET KNOWABLE (no advertised endpoint, no control-plane LB yet)"); sys.exit(0)
-if len(cands)!=1:
-    names=", ".join(s["metadata"]["name"] for s in cands) or "none"
-    print("  endpoint     : advertised %s; CANNOT IDENTIFY the control-plane LB" % (adv or "<not set yet>"))
-    print("                 %d candidate Service(s) matched [%s] -- declining to judge" % (len(cands),names))
-    sys.exit(0)
-lb=ing(cands[0]); name=cands[0]["metadata"]["name"]
-if not adv or not lb:
-    print("  endpoint     : NOT YET KNOWABLE (advertised=%s  svc/%s=%s)" % (adv or "-", name, lb or "-"))
-    sys.exit(0)
-if any(ch.isalpha() for ch in adv):
-    print("  endpoint     : advertised %s is a NAME; svc/%s holds %s -- not comparable, reporting both" % (adv,name,lb))
-    sys.exit(0)
-if adv==lb:
-    print("  endpoint     : AGREE (%s == svc/%s)" % (adv,name)); sys.exit(0)
-print("  endpoint     : *** DIVERGENT *** advertises %s but svc/%s holds %s" % (adv,name,lb))
-print("                 MEASURED on this lab (4 incarnations): a cluster in this state did not")
-print("                 converge in 25 min and did not self-heal.  The advertised value has each")
-print("                 time been the PREVIOUS incarnation of this cluster NAME.")
-print("                 spec.controlPlaneEndpoint is set by the platform, so this is very likely")
-print("                 unrecoverable -- but do NOT just delete and recreate under the SAME name,")
-print("                 which reproduced it three times running.")
-print("                 1. CAPTURE THE EVIDENCE FIRST (deleting destroys the only copy):")
-print("                      kubectl -n %s get cluster %s -o yaml > /tmp/diverged-cluster.yaml" % (os.environ.get("NS","<ns>"),cl))
-print("                      kubectl -n %s get svc,endpoints -o yaml > /tmp/diverged-svc.yaml" % os.environ.get("NS","<ns>"))
-print("                 2. THEN recreate under a DIFFERENT name, which is also the experiment:")
-print("                      make vks-cluster-create VKS_CLUSTER_NAME=%s2" % cl)
-print("                    converges  -> stale state tied to the reused name")
-print("                    lags again -> the platform VIP allocator; send your platform team")
-print("                                  the two files above and this table")
-' 2>/dev/null || true
+  printf '%s' "$svc_json" | jq -r \
+      --arg adv "$adv" --arg advport "$advport" --arg cl "$VKS_CLUSTER_NAME" --arg ns "$VKS_NAMESPACE" '
+    # The port comes from the Cluster. If it has not been published yet we do not invent one — we
+    # accept any port and let the ownerRef do the identifying, rather than silently matching nothing.
+    ($advport | tonumber? // 0) as $port
+    | [ (.items // [])[]
+        | select(.spec.type == "LoadBalancer")
+        | select($port == 0 or ((.spec.ports // []) | map(.port) | index($port) != null))
+        | select((.metadata.ownerReferences // [])
+                 | any(.kind == "VirtualMachineService" and .name == $cl)) ] as $cands
+    | ( $cands | map(((.status.loadBalancer.ingress // [{}])[0]) | (.ip // .hostname // "")) ) as $ips
+    | if ($adv == "" and ($cands | length) == 0) then
+        "  endpoint     : NOT YET KNOWABLE (no advertised endpoint, no control-plane LB yet)"
+      elif ($cands | length) != 1 then
+        "  endpoint     : advertised \(if $adv == "" then "<not set yet>" else $adv end); CANNOT IDENTIFY the control-plane LB",
+        "                 \($cands|length) candidate Service(s) matched [\(if ($cands|length)==0 then "none" else ($cands|map(.metadata.name)|join(", ")) end)] -- declining to judge"
+      else
+        ($cands[0].metadata.name) as $name | ($ips[0]) as $lb
+        | if ($adv == "" or $lb == "") then
+            "  endpoint     : NOT YET KNOWABLE (advertised=\(if $adv=="" then "-" else $adv end)  svc/\($name)=\(if $lb=="" then "-" else $lb end))"
+          elif ($adv | test("[A-Za-z]")) then
+            "  endpoint     : advertised \($adv) is a NAME; svc/\($name) holds \($lb) -- not comparable, reporting both"
+          elif ($adv == $lb) then
+            "  endpoint     : AGREE (\($adv) == svc/\($name))"
+          else
+            "  endpoint     : *** DIVERGENT *** advertises \($adv) but svc/\($name) holds \($lb)",
+            "                 MEASURED on this lab (4 incarnations): a cluster in this state did not",
+            "                 converge in 25 min and did not self-heal.  The advertised value has each",
+            "                 time been the PREVIOUS incarnation of this cluster NAME.",
+            "                 spec.controlPlaneEndpoint is set by the platform, so this is very likely",
+            "                 unrecoverable -- but do NOT just delete and recreate under the SAME name,",
+            "                 which reproduced it three times running.",
+            "                 1. CAPTURE THE EVIDENCE FIRST (deleting destroys the only copy):",
+            "                      kubectl -n \($ns) get cluster \($cl) -o yaml > /tmp/diverged-cluster.yaml",
+            "                      kubectl -n \($ns) get svc,endpoints -o yaml > /tmp/diverged-svc.yaml",
+            "                 2. THEN recreate under a DIFFERENT name, which is also the experiment:",
+            "                      make vks-cluster-create VKS_CLUSTER_NAME=\($cl)2",
+            "                    converges  -> stale state tied to the reused name",
+            "                    lags again -> the platform VIP allocator; send your platform team",
+            "                                  the two files above and this table"
+          end
+      end
+  ' 2>/dev/null || true
   return 0
 }
 
