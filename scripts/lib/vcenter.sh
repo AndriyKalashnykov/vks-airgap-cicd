@@ -127,6 +127,15 @@ vc_ss_check_content() {
                                (.status // "")] | join("|")' 2>/dev/null
 }
 
+# vc_ss_list -> one "<state>\t<id>\t<display name>" per REGISTERED service.
+# The id is DERIVED BY VCENTER from the service-definition YAML's content, which is why it is
+# dotted (harbor.tanzu.vmware.com) and not the dash-only catalogue key (harbor). You cannot
+# invent it; you read it from here, or from checkContent before registering.
+vc_ss_list() {
+  vc_api GET /api/vcenter/namespace-management/supervisor-services 2>/dev/null \
+    | jq -r '.[]? | [(.state // "?"), (.supervisor_service // "?"), (.display_name // "")] | @tsv' 2>/dev/null
+}
+
 # vc_ss_is_registered <id> -> 0 if vCenter already knows this service
 vc_ss_is_registered() {
   vc_api GET "/api/vcenter/namespace-management/supervisor-services/${1}" >/dev/null 2>&1
