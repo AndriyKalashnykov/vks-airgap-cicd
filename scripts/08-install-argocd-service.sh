@@ -65,6 +65,8 @@ if [ ! -s "${KUBECONFIG:-/nonexistent}" ]; then
   exit 0
 fi
 
+require_cmd kubectl jq   # the CR path needs both; vc_require only covers the REST side
+
 # The operator publishes the CRD only after its own reconcile; wait rather than race it.
 _end=$((SECONDS + ${ARGOCD_CRD_WAIT_SECONDS:-600}))
 until kubectl get crd argocds.argocd-service.vsphere.vmware.com >/dev/null 2>&1; do
@@ -73,12 +75,26 @@ until kubectl get crd argocds.argocd-service.vsphere.vmware.com >/dev/null 2>&1;
 done
 log_info "ArgoCD CRD is present"
 
+# Ask the OPERATOR what it supports rather than hardcoding a version that rots. Prefer the
+# CRD's own schema enum -- structured and unambiguous. `kubectl explain` is PROSE: its output
+# also carries the apiVersion and free text, so a "first number-like token" scrape can pick up
+# something that is not a version at all, and the CR then fails admission for a reason that
+# names the version rather than the scrape that produced it.
 VER="${ARGOCD_INSTANCE_VERSION:-}"
+CRD=argocds.argocd-service.vsphere.vmware.com
 if [ -z "$VER" ]; then
-  # Ask the operator what it supports rather than hardcoding a version that rots.
-  VER="$(kubectl explain argocd.spec.version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^ ]*' | head -1 || true)"
+  VER="$(kubectl get crd "$CRD" -o json 2>/dev/null \
+        | jq -r '[.spec.versions[]?.schema.openAPIV3Schema.properties.spec.properties.version.enum[]?] | last // empty' 2>/dev/null || true)"
+  [ -n "$VER" ] && log_info "version from the CRD schema enum: ${VER}"
 fi
-[ -n "$VER" ] || die "could not determine a supported ArgoCD version; set ARGOCD_INSTANCE_VERSION (see: kubectl explain argocd.spec.version)"
+if [ -z "$VER" ]; then
+  VER="$(kubectl explain "argocd.spec.version" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^[:space:]]*' | head -1 || true)"
+  [ -n "$VER" ] && log_warn "no enum in the CRD schema; scraped '${VER}' from kubectl explain - verify it is a real version"
+fi
+[ -n "$VER" ] || die "could not determine a supported ArgoCD version.
+  Set ARGOCD_INSTANCE_VERSION explicitly. What the operator supports:
+    kubectl get crd ${CRD} -o json | jq '.spec.versions[].schema.openAPIV3Schema.properties.spec.properties.version'
+    kubectl explain argocd.spec.version"
 
 kubectl apply -f - <<YAML
 apiVersion: argocd-service.vsphere.vmware.com/v1alpha1
