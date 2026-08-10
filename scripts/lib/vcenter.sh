@@ -190,25 +190,47 @@ vc_ss_install() {
   # register, vCenter answers 404 "The service account is not ready. Please try again later."
   # -- a TRANSIENT that reads like a missing service and would send an operator hunting for a
   # file that is present and correct. Everything else fails fast.
-  local tries="${VC_SS_INSTALL_RETRIES:-30}" i=1
+  local tries="${VC_SS_INSTALL_RETRIES:-30}" i=1 code
   while :; do
     if out="$(vc_api POST "/api/vcenter/namespace-management/clusters/${moid}/supervisor-services" \
                 --data-binary "@${req}")"; then
       rm -f "$req"; return 0
     fi
+    code="$(vc_last_code)"
     case "$out" in
       *"not ready"*|*"try again later"*)
         [ "$i" -lt "$tries" ] || { rm -f "$req"; die "the service account was still not ready after ${tries} attempts"; }
         [ "$i" = 1 ] && log_info "vCenter: service account not ready yet - retrying (up to ${tries}x)"
         i=$((i + 1)); sleep "${VC_SS_INSTALL_INTERVAL:-10}" ;;
+      *"already exists"*)
+        # IDEMPOTENT. Re-running an install is a normal thing to do -- after a transport error,
+        # after a partial run, or just twice. Dying here made the target non-re-runnable.
+        rm -f "$req"; log_info "${id} is already installed on this cluster - nothing to do"; return 0 ;;
       *)
-        rm -f "$req"; die "install failed (HTTP $(vc_last_code)): $(printf '%s' "$out" | head -c 400)" ;;
+        # ⚠️ VERIFY THE END STATE, do not trust the status code. MEASURED on a clean lab: the
+        # install returned HTTP 500 and HAD CREATED THE SERVICE ANYWAY -- the next run said
+        # "already exists". Failing here reports a failure over a request that worked, and sends
+        # the operator to debug an install that is in fact proceeding.
+        if [ -n "$(vc_ss_state "$moid" "$id")" ]; then
+          rm -f "$req"
+          log_warn "install returned HTTP ${code}, but ${id} IS present on the cluster - treating as installed."
+          log_warn "  vCenter said: $(printf '%s' "$out" | head -c 200)"
+          return 0
+        fi
+        rm -f "$req"; die "install failed (HTTP ${code}): $(printf '%s' "$out" | head -c 400)" ;;
     esac
   done
 }
 
 # vc_ss_state <supervisor-uuid> <service-id> -> config_status string (or empty)
+# vc_ss_state <supervisor-uuid-OR-cluster-moid> <service-id> -> config_status, or empty.
+# Tries the supervisor-scoped route then the cluster-scoped one, because callers legitimately hold
+# one id or the other and the two are DIFFERENT id spaces (a UUID vs domain-cN).
 vc_ss_state() {
-  vc_api GET "/api/vcenter/namespace-management/supervisors/${1}/supervisor-services/${2}" 2>/dev/null \
-    | jq -r '(.config_status // .status // empty)' 2>/dev/null
+  local st
+  st="$(vc_api GET "/api/vcenter/namespace-management/supervisors/${1}/supervisor-services/${2}" 2>/dev/null \
+        | jq -r '(.config_status // .status // empty)' 2>/dev/null || true)"
+  [ -n "$st" ] && { printf '%s' "$st"; return 0; }
+  vc_api GET "/api/vcenter/namespace-management/clusters/${1}/supervisor-services/${2}" 2>/dev/null \
+    | jq -r '(.config_status // .status // empty)' 2>/dev/null || true
 }
