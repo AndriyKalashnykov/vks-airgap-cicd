@@ -331,6 +331,22 @@ make list-supervisor-services
 make uninstall-supervisor-service SERVICE=harbor.tanzu.vmware.com CONFIRM=yes
 ```
 
+**Uninstall and deregister are DIFFERENT, and everyone learns this once.** `uninstall` removes the
+WORKLOAD and its data; the service stays REGISTERED and still shows `ACTIVATED` in the listing.
+`deregister` removes the DEFINITION from vCenter's catalogue:
+
+```bash
+make deregister-supervisor-service SERVICE=harbor.tanzu.vmware.com CONFIRM=yes
+```
+
+The platform enforces the order — deactivate, delete every version, then deregister — and refuses
+to deregister while a workload exists (`400 ... because it has ...`), so uninstall first. To get
+the service back afterwards, `make install-harbor-service` / `install-argocd-service` re-register
+from the `.yml` for you.
+
+MEASURED on a real lab: uninstall took **40 s** (ArgoCD) and **80 s** (Harbor); deregister was
+immediate for both.
+
 ⚠️ It **destroys the service's data** — for Harbor every project and image, for ArgoCD every
 Application — and a Supervisor Service is **shared**: it goes for every tenant on that
 Supervisor, not just your namespace.

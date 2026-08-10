@@ -379,6 +379,10 @@ list-supervisor-services: ## Read-only: list the Supervisor Services vCenter kno
 uninstall-supervisor-service: ## DESTRUCTIVE (SERVICE=<id> CONFIRM=yes): uninstall a Supervisor Service and its DATA — shared, so it removes it for every tenant on that Supervisor
 	@CONFIRM="$(CONFIRM)" $(SCRIPTS)/uninstall-supervisor-service.sh "$(SERVICE)"
 
+.PHONY: deregister-supervisor-service
+deregister-supervisor-service: ## Remove a Supervisor Service's DEFINITION from vCenter (SERVICE=<id> CONFIRM=yes). Uninstall it first — deregister is refused while a workload exists
+	@CONFIRM="$(CONFIRM)" $(SCRIPTS)/deregister-supervisor-service.sh "$(SERVICE)"
+
 .PHONY: unwedge-supervisor-service
 unwedge-supervisor-service: ## BREAK-GLASS (SERVICE=<id> CONFIRM=yes): a Supervisor Service uninstall stuck waiting on workload it never deleted — removes that workload so the platform's reconcile can finish. REFUSES unless vCenter reports it mid-delete
 	@CONFIRM="$(CONFIRM)" $(SCRIPTS)/unwedge-supervisor-service.sh "$(SERVICE)"
