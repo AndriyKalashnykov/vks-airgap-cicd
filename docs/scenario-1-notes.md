@@ -321,6 +321,26 @@ make list-supervisor-services      # what vCenter knows, and the SERVICE=<id> to
 make unwedge-supervisor-service SERVICE=argocd-service.vsphere.vmware.com CONFIRM=yes
 ```
 
+### Removing Harbor or ArgoCD again
+
+`make uninstall-all` removes what this repo deploys INTO a cluster; it does not touch the
+Supervisor Services scenario-1 installs in Steps 2 and 3. Those come out with:
+
+```bash
+make list-supervisor-services
+make uninstall-supervisor-service SERVICE=harbor.tanzu.vmware.com CONFIRM=yes
+```
+
+⚠️ It **destroys the service's data** — for Harbor every project and image, for ArgoCD every
+Application — and a Supervisor Service is **shared**: it goes for every tenant on that
+Supervisor, not just your namespace.
+
+Its wait budget is **1800 s by default, deliberately**: the platform drives the uninstall with
+Carvel `kapp`, which retries in **15-minute rounds**, so anything under two rounds expires
+mid-round and reports failure whether or not it is progressing. It prints the platform's own
+message whenever it CHANGES — a changing message means it is grinding forward, an unchanging one
+across rounds means wedged.
+
 ### When nothing clears it — the full escalation ladder, and where it ends
 
 MEASURED 2026-08-09 against one wedged ArgoCD service, over ~90 minutes. Every rung was
