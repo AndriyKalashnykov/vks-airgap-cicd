@@ -59,8 +59,22 @@ if [ -z "$NS" ]; then
   log_warn "  set ARGOCD_NAMESPACE and re-run, or create the CR yourself (scenario-1 step 3.5)."
   exit 0
 fi
-if [ ! -s "${KUBECONFIG:-/nonexistent}" ]; then
-  log_warn "no Supervisor kubeconfig at '${KUBECONFIG:-<unset>}' - skipping the instance CR."
+# ⚠️ RESOLVE THE SUPERVISOR KUBECONFIG EXPLICITLY -- do NOT read $KUBECONFIG.
+# MEASURED 2026-08-10 walking scenario-1 on a rebuilt lab: this read $KUBECONFIG and there is NO
+# POINT IN THE DOCUMENTED FLOW WHERE THAT IS THE SUPERVISOR. Step 3 (here) runs before the reader
+# is told to set it, and from Step 4 on the doc points it at the GUEST cluster. So `make vks-login`
+# wrote secrets/supervisor.kubeconfig, this step looked for './secrets/<cluster>.kubeconfig', found
+# nothing, and printed "run 'make vks-login' first" -- to an operator who had just run it
+# successfully. The instance CR was then never created, silently, exit 0.
+#
+# The five sibling scripts that need the Supervisor already resolve it this way
+# (25-vks-cluster-create.sh, 26-vks-cluster-status.sh, 27-harbor-ca-from-cluster.sh,
+# 31-fetch-argocd-kubeconfig.sh, 98-uninstall-all.sh) -- 25's own comment notes that $KUBECONFIG
+# "is routinely the stale one while secrets/supervisor.kubeconfig was just refreshed". This file
+# was the odd one out.
+SUP="${VKS_SUPERVISOR_KUBECONFIG:-${SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}}"
+if [ ! -s "$SUP" ]; then
+  log_warn "no Supervisor kubeconfig at '${SUP}' - skipping the instance CR."
   log_warn "  run 'make vks-login' first, then: make install-argocd-instance"
   exit 0
 fi
@@ -77,14 +91,14 @@ require_cmd kubectl jq   # the CR path needs both; vc_require only covers the RE
 # kubeconfig looks valid and is not. Only a genuine NotFound is worth waiting on.
 _crd_err="$(mktemp)"; trap 'rm -f "$_crd_err"; vc_logout' EXIT
 _end=$((SECONDS + ${ARGOCD_CRD_WAIT_SECONDS:-600}))
-until kubectl get crd argocds.argocd-service.vsphere.vmware.com >/dev/null 2>"$_crd_err"; do
+until kubectl --kubeconfig "$SUP" get crd argocds.argocd-service.vsphere.vmware.com >/dev/null 2>"$_crd_err"; do
   case "$(cat "$_crd_err" 2>/dev/null || true)" in
     *NotFound*|*'not found'*) : ;;   # the only reason to keep waiting
     *) _cls="$(classify_kube_failure "$_crd_err" 2>/dev/null || true)"
        log_error "cannot reach the Supervisor to watch for the ArgoCD CRD (${_cls:-unclassified}):"
        sed 's/^/    /' "$_crd_err" >&2
        die "the SERVICE INSTALL SUCCEEDED - this is your kubeconfig, not the install.
-  '${KUBECONFIG}' does not work against this cluster. A REBUILT cluster mints a new CA while the
+  '${SUP}' does not work against this cluster. A REBUILT cluster mints a new CA while the
   address stays the same, so a stale kubeconfig looks valid and is not. Re-issue it, then re-run
   this (it is idempotent and skips straight to the instance CR):
       make vks-login" ;;
@@ -103,7 +117,7 @@ log_info "ArgoCD CRD is present"
 #     installable, whereas the description's example is just prose.
 VER="${ARGOCD_INSTANCE_VERSION:-}"
 CRD=argocds.argocd-service.vsphere.vmware.com
-_crd_json="$(kubectl get crd "$CRD" -o json 2>/dev/null || true)"
+_crd_json="$(kubectl --kubeconfig "$SUP" get crd "$CRD" -o json 2>/dev/null || true)"
 _vschema="$(printf '%s' "$_crd_json" | jq -c '.spec.versions[]?.schema.openAPIV3Schema.properties.spec.properties.version // empty' 2>/dev/null | head -1 || true)"
 _pattern="$(printf '%s' "$_vschema" | jq -r '.pattern // empty' 2>/dev/null || true)"
 
@@ -112,7 +126,7 @@ if [ -z "$VER" ]; then   # 1. an enum, if this operator ever grows one
   [ -n "$VER" ] && log_info "version from the CRD schema enum: ${VER}"
 fi
 if [ -z "$VER" ]; then   # 2. the Carvel Package the operator actually published
-  VER="$(kubectl get packages.data.packaging.carvel.dev -A -o json 2>/dev/null \
+  VER="$(kubectl --kubeconfig "$SUP" get packages.data.packaging.carvel.dev -A -o json 2>/dev/null \
         | jq -r '[.items[]? | select(.spec.refName == "argocd.kubernetes.vmware.com") | .spec.version] | sort | last // empty' 2>/dev/null || true)"
   [ -n "$VER" ] && log_info "version from the published Carvel Package: ${VER}"
 fi
@@ -148,7 +162,7 @@ if [ -n "$_pattern" ]; then
   esac
 fi
 
-kubectl apply -f - <<YAML
+kubectl --kubeconfig "$SUP" apply -f - <<YAML
 apiVersion: argocd-service.vsphere.vmware.com/v1alpha1
 kind: ArgoCD
 metadata:
