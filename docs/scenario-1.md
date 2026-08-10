@@ -169,7 +169,7 @@ fails if it does not exist yet.
 | `VCENTER_HOST` | `vcsa.env1.lab.test` | your vCenter FQDN from Step 0 — **not** the Supervisor IP |
 | `VCENTER_USERNAME` | `administrator@vsphere.local` | the same SSO login as Step 1 |
 | `VCENTER_PASSWORD` | *your value* | the same password as Step 1 |
-| `VKS_STORAGE_POLICY` | `vmfs-storage-policy` | vCenter → **Policies and Profiles → VM Storage Policies** — the policy NAME |
+| `VKS_STORAGE_POLICY` | `wcp-vmfs` (single-host VMFS)<br>`vsan-default-storage-policy` (vSAN) | **Per-lab, not a constant** — those two are what real labs measured. **Already have a namespace? `make vsphere-namespace` prints the policy it uses, by name** — no kubeconfig needed. Otherwise vCenter → **Policies and Profiles → VM Storage Policies**; if you set it wrong the create stops and lists every available policy. |
 | `VKS_VM_CLASSES` | `best-effort-small best-effort-medium` | space-separated; `best-effort-small` alone is enough. Defaults to the example, and the names are **sent to vCenter unchecked** — a class that does not exist fails with an HTTP code that does not mention VM classes. |
 | `VKS_CLUSTER_COMPUTE` | *(leave unset)* | **only if** vCenter has **more than one** cluster. Steps 2 and 3 need it too, not just this one. |
 
@@ -401,7 +401,7 @@ Where Gitea, Tekton and your apps run. You need cluster-admin on it.
 
 | key | example | how to get the value |
 |---|---|---|
-| `VKS_K8S_VERSION` | `v1.32.10+vmware.1-fips` | `kubectl get kubernetesreleases` — one that is both Ready and Compatible |
+| `VKS_K8S_VERSION` | `v1.34.8+vmware.1-vkr.1` | `kubectl get kubernetesreleases` → pick one that is **Ready AND Compatible**, and paste its **full** name. This is a **prefix selector**, not an exact match: admission accepts any prefix that matches at least one release and rewrites it — so a bare `v1.34` is *accepted* and **floats** to whatever matches later, which an air-gap repo must not do. It fails only when **nothing** matches the prefix; a value that was fine on a previous lab can therefore stop matching after a rebuild. You do not have to get this right by inspection: `make vks-cluster-create` server-side dry-runs it first and prints vCenter's own rejection, which names `k8sVersionPrefix`. |
 
 <details><summary>Optional — the cluster's shape. Skip unless you want to change it.</summary>
 

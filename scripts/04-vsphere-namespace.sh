@@ -18,7 +18,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 
 NS="${VKS_NAMESPACE:?VKS_NAMESPACE is not set - the vSphere Namespace to create}"
-POLICY_NAME="${VKS_STORAGE_POLICY:?VKS_STORAGE_POLICY is not set - the storage policy to attach (vCenter name, e.g. 'vmfs-storage-policy')}"
+# ⚠️ NOT `:?` HERE. This script has two paths and only ONE uses the policy: if the namespace
+# already exists we print what is attached and exit 0 without touching it. Binding with `:?`
+# at the top demanded a value on the path documented as scenario-1 1b "If you already have
+# one" -- where it is never read. MEASURED 2026-08-10: that is what sent an operator hunting
+# through a 12-entry policy list for a value nobody wanted. The requirement now fires on the
+# CREATE path only, below.
+POLICY_NAME="${VKS_STORAGE_POLICY:-}"
 CLASSES="${VKS_VM_CLASSES:-best-effort-small best-effort-medium}"
 
 trap vc_logout EXIT
@@ -29,7 +35,23 @@ if body="$(vc_api GET "/api/vcenter/namespaces/instances/${NS}")"; then
   st="$(printf '%s' "$body" | jq -r '.config_status // "UNKNOWN"')"
   log_info "vSphere Namespace '${NS}' already exists (config_status=${st}) - not rewriting it."
   printf '%s' "$body" | jq -r '"  vm_classes : " + ([.vm_service_spec.vm_classes[]?]|join(", "))' 2>/dev/null || true
-  printf '%s' "$body" | jq -r '"  policies   : " + ([.storage_specs[]?.policy]|join(", "))'    2>/dev/null || true
+  # ⚠️ .storage_specs[].policy is an ID, not a name (the create spec below is built from
+  # /api/vcenter/storage/policies' `.policy` field). Printing the raw UUID made the one place that
+  # KNOWS which policies this namespace uses render the answer unusably, so the operator went
+  # hunting anyway. Resolve ID -> NAME, PLURAL (the API takes a list; an admin may attach several).
+  # vCenter REST only, so this works BEFORE any kubeconfig exists -- the whole point at step 1b.
+  _pol_ids="$(printf '%s' "$body" | jq -r '[.storage_specs[]?.policy]|join(" ")' 2>/dev/null || true)"
+  if [ -n "$(printf '%s' "$_pol_ids" | tr -d ' ')" ]; then
+    _all="$(vc_api GET /api/vcenter/storage/policies 2>/dev/null || true)"
+    _names=""
+    for _id in $_pol_ids; do
+      _n="$(printf '%s' "$_all" | jq -r --arg i "$_id" '.[]|select(.policy==$i)|.name' 2>/dev/null | head -1)"
+      _names="${_names}${_names:+, }${_n:-$_id}"
+    done
+    log_info "  policies   : ${_names}"
+    log_info "  -> that is your VKS_STORAGE_POLICY. Do NOT derive it from the storage CLASS name:"
+    log_info "     the class is the policy lowercased with spaces as dashes, and that is NOT invertible."
+  fi
   exit 0
 fi
 # vc_last_code(), NOT $VC_LAST_CODE: the GET above ran inside `body="$(...)"` -- a subshell --
@@ -52,7 +74,14 @@ fi
 log_info "cluster: ${CLUSTER_NAME} (${MOID})"
 
 # ── resolve the storage policy id ────────────────────────────────────────────────────────
+# The CREATE path is the only one that needs a policy -- demand it HERE, not at the top (see above).
 policies="$(vc_api GET /api/vcenter/storage/policies || die "cannot list storage policies (HTTP $(vc_last_code))")"
+[ -n "$POLICY_NAME" ] || die "VKS_STORAGE_POLICY is not set - the vCenter storage policy to attach.
+  It is a PER-LAB value, not a constant: two real labs measured 'wcp-vmfs' (single-host VMFS) and
+  'vsan-default-storage-policy' (vSAN). Yours is one of:
+    $(printf '%s' "$policies" | jq -r '[.[].name]|join(", ")')
+  If a namespace on this vCenter already uses one, run this against it - it prints the attached
+  policy BY NAME."
 PID="$(printf '%s' "$policies" | jq -r --arg n "$POLICY_NAME" '.[]|select(.name==$n)|.policy' | head -1)"
 [ -n "$PID" ] || die "no storage policy named '${POLICY_NAME}'. Available: $(printf '%s' "$policies" | jq -r '[.[].name]|join(", ")')"
 log_info "storage policy: ${POLICY_NAME} (${PID})"
