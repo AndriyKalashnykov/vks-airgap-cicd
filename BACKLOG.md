@@ -103,3 +103,25 @@ carrying a closed item forward is the class this file was pruned to end.
 the ArgoCD namespace, and whether the Supervisor can route to a guest LoadBalancer VIP — are tracked in
 [`docs/lab-validation-plan.md`](docs/lab-validation-plan.md), in a better form than a backlog line: each
 is a numbered step with its command, its expected observable, and what to send back.
+
+## B84 — `export VAR=x; make <target>` is SILENTLY defeated by `-include .env`
+
+MEASURED 2026-08-09. GNU make lets a **makefile assignment beat the environment**, and the
+Makefile's `-include .env` is exactly that. So:
+
+| form | effective value |
+|---|---|
+| `export VKS_NAMESPACE=wld03; make vsphere-namespace` | **`lab`** (from `.env`) |
+| `make vsphere-namespace VKS_NAMESPACE=wld03` | `wld03` |
+
+Only the command-line form wins, and make then EXPORTS its own value to the recipe, so
+`load_env`'s selector snapshot cannot rescue it — the script never sees the operator's value.
+
+scenario-1 already uses the command-line form, so no documented instruction is wrong. The
+hazard is the natural `export`-then-`make` habit, which fails silently. It caught me while
+testing `make vsphere-namespace`: it operated on `lab` while I believed it was creating
+`wld03`. Running the script DIRECTLY (bypassing make) used the override correctly.
+
+Options: document it beside the `.env` clobber rule; or have `load_env` prefer a
+`VKS_*_OVERRIDE`-style key. NOT yet decided - recorded so the next person does not
+re-discover it by having a target act on the wrong namespace.
