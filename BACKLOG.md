@@ -125,3 +125,38 @@ testing `make vsphere-namespace`: it operated on `lab` while I believed it was c
 Options: document it beside the `.env` clobber rule; or have `load_env` prefer a
 `VKS_*_OVERRIDE`-style key. NOT yet decided - recorded so the next person does not
 re-discover it by having a target act on the wrong namespace.
+
+### B85 — kubectl-apply audit: which sites can race a not-ready controller (CLOSED, 2026-08-10)
+
+Prompted by the ArgoCD instance CR failing with `failed calling webhook
+"vargocd-v1alpha1.kb.io"`: the operator publishes its CRD BEFORE its webhook serves, so
+waiting on the CRD is waiting on a proxy. Question: how many other apply sites have that
+shape? Audited all of them; the answer is one, and the rest are guarded.
+
+**Denominator: 30 apply sites** in `scripts/` + `scripts/lib/` (an earlier count of 24 was
+wrong — a looser grep).
+
+| class | sites | verdict |
+|---|---|---|
+| core resources (Namespace, Secret, ConfigMap, ServiceAccount, Deployment, Ingress) | majority | safe by construction — no CR webhook |
+| operator/CRD release manifests (server-side apply) | `07:108`, `41:38`, `istio.sh:167` | they INSTALL the webhook; they do not need it |
+| Tekton CRs (Task/Pipeline/EventListener/Trigger*) | `60:119-133` | **GUARDED** — `41:105` waits `--for=condition=Available deploy --all` in `tekton-pipelines`, and MEASURED, all three webhook-serving deployments live there: `tekton-pipelines-webhook`, `tekton-triggers-webhook`, `tekton-triggers-core-interceptors` |
+| Istio CRs (Gateway/VirtualService/HTTPRoute) | `istio.sh:333,342,629,637,646` | guarded — install path helm-`--wait`s istiod before any route is applied; attach path runs against an istiod that already serves (it is discovered) |
+| ArgoCD instance CR | `08:183` | **WAS UNGUARDED — fixed**, retries on the webhook-not-serving error |
+| dry-run / no cluster | `validate.sh:124-125` | n/a |
+
+**Residual — a limit on the AUDIT METHOD, not on the product.** On the Supervisor,
+`kubectl get validatingwebhookconfiguration` is **Forbidden** for the tenant context
+(`User "sso:Administrator@vsphere.local" cannot list ... at the cluster scope`), so the
+Supervisor-side rows are inferred from observed behaviour rather than from listing. The
+`vks-package.sh:64` PackageInstall is classified on that weaker basis.
+
+MEASURED, so this does NOT affect an operator: the only cluster-scoped read shipped scripts
+issue against the Supervisor is `crd` (4 sites), and the tenant context CAN do it. Every
+cluster-scoped read the runbook asks the reader to run is permitted too — `crd`,
+`storageclass`, `kubernetesreleases`, `clusterclass` all return `can-i: yes`.
+`validatingwebhookconfiguration` is the ONLY denial found, and nothing ships that reads it.
+
+⚠️ Note the guards are three DIFFERENT mechanisms (helm `--wait`, `kubectl wait
+condition=Available`, and one retry-on-error). Nothing asserts a new CR-applying site picks
+one — a future site can be added unguarded and no gate will notice.
