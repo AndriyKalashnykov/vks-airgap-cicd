@@ -29,7 +29,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 
 SERVICE="${1:-${SERVICE:-}}"
-[ -n "$SERVICE" ] || die "usage: unwedge-supervisor-service.sh <service-id>   (e.g. argocd-service.vsphere.vmware.com)"
 require_cmd kubectl jq
 [ -s "${KUBECONFIG:-/nonexistent}" ] || die "no Supervisor kubeconfig at '${KUBECONFIG:-<unset>}' — run 'make vks-login' first"
 
@@ -41,8 +40,20 @@ SUP="$(vc_supervisor_id)"
 # ── GATE 1: the service must actually be mid-DELETE ───────────────────────────────────────
 # Without this the target would happily delete a HEALTHY service's operator. The platform's own
 # message is the signal: a stuck uninstall reports a "Deleting" phase with a kapp timeout.
+# A gate that refuses must NAME the real choices — the id is vCenter's, derived from the
+# service-definition YAML, so an operator cannot reasonably guess it.
+_list_and_die() {
+  log_error "$1"
+  log_error "  registered Supervisor Services on ${VCENTER_HOST}:"
+  vc_ss_list | while IFS=$'\t' read -r st id disp; do
+    [ -n "${id:-}" ] && log_error "    ${id}   (${st}${disp:+, $disp})"
+  done
+  die "re-run with SERVICE=<one of the ids above>   (see also: make list-supervisor-services)"
+}
+[ -n "$SERVICE" ] || _list_and_die "SERVICE is not set."
+
 detail="$(vc_api GET "/api/vcenter/namespace-management/supervisors/${SUP}/supervisor-services/${SERVICE}" || true)"
-[ -n "$detail" ] || die "vCenter does not know a Supervisor Service '${SERVICE}' (or the read failed)"
+[ -n "$detail" ] || _list_and_die "vCenter does not know a Supervisor Service '${SERVICE}'."
 msgs="$(printf '%s' "$detail" | jq -r '[.messages[]?.details.args[]?] | join(" ")' 2>/dev/null || true)"
 case "$msgs" in
   *Deleting*) : ;;
@@ -71,7 +82,7 @@ log_info "namespace: ${NS}"
 log_info "these objects would be DELETED:"
 kubectl -n "$NS" get deploy,statefulset,daemonset,svc,pod 2>/dev/null | sed 's/^/    /' || true
 
-[ "${CONFIRM:-}" = yes ] || die "refusing without CONFIRM=yes. Re-run: make unwedge-service SERVICE='${SERVICE}' CONFIRM=yes"
+[ "${CONFIRM:-}" = yes ] || die "refusing without CONFIRM=yes. Re-run: make unwedge-supervisor-service SERVICE='${SERVICE}' CONFIRM=yes"
 
 # The NAMESPACE is deliberately not deleted (the webhook forbids it; the platform removes it).
 # Workload kinds only: leaving ConfigMaps/Secrets alone costs nothing and keeps the blast radius

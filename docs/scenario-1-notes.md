@@ -317,8 +317,14 @@ Nothing there and no timestamp = the platform is stuck, not busy. The break-glas
 workload the platform is waiting on, so its own reconcile can finish:
 
 ```bash
-make unwedge-service SERVICE=argocd-service.vsphere.vmware.com CONFIRM=yes
+make list-supervisor-services      # what vCenter knows, and the SERVICE=<id> to pass
+make unwedge-supervisor-service SERVICE=argocd-service.vsphere.vmware.com CONFIRM=yes
 ```
+
+**Where a service id comes from:** vCenter DERIVES it from the service-definition YAML's
+content, so it is dotted (`harbor.tanzu.vmware.com`) and *not* the dash-only catalogue key
+(`harbor`). You cannot invent it — read it from `make list-supervisor-services`, or from
+`?action=checkContent`, which returns it before anything is registered.
 
 It **refuses** unless vCenter reports the service mid-delete (otherwise it would delete a healthy
 service's operator), **discovers** the namespace rather than taking a pasted one (the suffix is
