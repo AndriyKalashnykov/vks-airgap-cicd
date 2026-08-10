@@ -57,11 +57,11 @@ previously `9.0-doc (inferred for 9.1)`; they are now observed.
 | Fact | Observed | Confidence |
 |---|---|---|
 | Package name | `istio.kubernetes.vmware.com` — confirmed | lab-verified 9.1 [src: cmd="kubectl get packages -A" out="istio.kubernetes.vmware.com.1.28.5+vmware.1-vks.1" date=2026-08-10] |
-| Versions offered | `1.27.1` `1.27.4` `1.27.5` `1.27.8` `1.28.2` `1.28.5` (all `+vmware.1-vks.1`). The doc's other example, **1.25.3, is NOT offered on 9.1** | lab-verified 9.1 [src: cmd="kubectl get packages -A -o json | jq" out="1.27.1+vmware.1-vks.1 .. 1.28.5+vmware.1-vks.1" date=2026-08-10] |
-| Control-plane namespace | `istio-system`, created by the install; `istiod` 2/2 | lab-verified 9.1 [src: cmd="kubectl get deploy -A | grep istio" out="istio-system istiod 2/2" date=2026-08-10] |
-| **Ingress gateway off by default** | **confirmed** — only `istiod` and `istio-support`; no gateway Deployment and no `istio-ingress` namespace | lab-verified 9.1 [src: cmd="kubectl get deploy -A | grep istio" out="istio-system istiod; istio-system istio-support" date=2026-08-10] |
-| **`istioCNI.enabled` defaults true** | **confirmed** — `istio-cni-node` DaemonSet 3/3 on a **sidecar** install, no ambient mode | lab-verified 9.1 [src: cmd="kubectl get daemonset -A | grep istio" out="istio-system istio-cni-node 3 3 3" date=2026-08-10] |
-| `istio-support` Deployment | ships alongside `istiod`; not mentioned in the package reference | lab-verified 9.1 [src: cmd="kubectl get deploy -A | grep istio" out="istio-system istio-support 1/1" date=2026-08-10] |
+| Versions offered | `1.27.1` `1.27.4` `1.27.5` `1.27.8` `1.28.2` `1.28.5` (all `+vmware.1-vks.1`). The doc's other example, **1.25.3, is NOT offered on 9.1** | lab-verified 9.1 [src: cmd="kubectl get packages -A -o json jq" out="1.27.1+vmware.1-vks.1 .. 1.28.5+vmware.1-vks.1" date=2026-08-10] |
+| Control-plane namespace | `istio-system`, created by the install; `istiod` 2/2 | lab-verified 9.1 [src: cmd="kubectl get deploy -A grep istio" out="istio-system istiod 2/2" date=2026-08-10] |
+| **Ingress gateway off by default** | **confirmed** — only `istiod` and `istio-support`; no gateway Deployment and no `istio-ingress` namespace | lab-verified 9.1 [src: cmd="kubectl get deploy -A grep istio" out="istio-system istiod; istio-system istio-support" date=2026-08-10] |
+| **`istioCNI.enabled` defaults true** | **confirmed** — `istio-cni-node` DaemonSet 3/3 on a **sidecar** install, no ambient mode | lab-verified 9.1 [src: cmd="kubectl get daemonset -A grep istio" out="istio-system istio-cni-node 3 3 3" date=2026-08-10] |
+| `istio-support` Deployment | ships alongside `istiod`; not mentioned in the package reference | lab-verified 9.1 [src: cmd="kubectl get deploy -A grep istio" out="istio-system istio-support 1/1" date=2026-08-10] |
 | Uninstall | `kubectl -n vmware-system-tkg delete pkgi istio` -> **12s**, `istio-system` and every workload gone | lab-verified 9.1 [src: cmd="kubectl -n vmware-system-tkg delete pkgi istio" out="deleted; no istio namespaces remain" date=2026-08-10] |
 
 ⚠️ **The PackageInstall must live in `vmware-system-tkg`.** Carvel `Package` objects are
