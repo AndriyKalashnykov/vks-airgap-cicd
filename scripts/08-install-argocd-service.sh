@@ -139,7 +139,7 @@ fi
 if [ -n "$_pattern" ]; then
   _ere="$(printf '%s' "$_pattern" | sed -e 's/\\d/[0-9]/g' -e 's/\\w/[A-Za-z0-9_]/g' -e 's/\\s/[[:space:]]/g')"
   case "$_ere" in
-    *'\'[A-Za-z]*|*'(?'*)
+    *\\[A-Za-z]*|*"(?"*)
       log_warn "the CRD's version pattern uses constructs POSIX ERE cannot express - skipping local validation" ;;
     *)
       printf '%s' "$VER" | grep -qE "$_ere" || die "resolved ArgoCD version '${VER}' does not match what the CRD accepts (${_pattern}).
