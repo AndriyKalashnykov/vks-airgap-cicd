@@ -476,7 +476,13 @@ load_env() {
   # every later step (status, login, gitops, uninstall-all) addresses gc1. Nothing says otherwise.
   # check-env-clobber cannot see this: it reads .env.example (where these ship COMMENTED and it is
   # correctly green); the clobber is armed by the operator doing the DOCUMENTED thing in their .env.
-  for _sel in KUBECONFIG VKS_AUTH_METHOD ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT VKS_CLUSTER_NAME VKS_NAMESPACE INGRESS_CONTROLLER HARBOR_CA_FILE VKS_CA_CERT_FILE ARGOCD_CA_FILE HARBOR_URL VKS_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256; do
+  # VCF_CLI_SRC_DIR is a SELECTOR ("which directory do I install the licensed CLIs from") and was
+  # missing until 2026-08-10. 01-install-vcf-clis.sh's own usage line documents
+  # `VCF_CLI_SRC_DIR=<dir> scripts/01-install-vcf-clis.sh`, and that override was SILENTLY DEFEATED
+  # whenever .env also set it. Measured via its test, which drives the installer with exactly that
+  # env prefix: after scenario-1 Step 1 wrote VCF_CLI_SRC_DIR into .env, the installer resolved the
+  # operator's REAL archives instead of the fixtures and 8 of 9 cases failed.
+  for _sel in KUBECONFIG VKS_AUTH_METHOD ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT VKS_CLUSTER_NAME VKS_NAMESPACE INGRESS_CONTROLLER HARBOR_CA_FILE VKS_CA_CERT_FILE ARGOCD_CA_FILE HARBOR_URL VCF_CLI_SRC_DIR VKS_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256; do
     if [ -n "${!_sel:-}" ]; then
       _snap_names="${_snap_names} ${_sel}"
       _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'

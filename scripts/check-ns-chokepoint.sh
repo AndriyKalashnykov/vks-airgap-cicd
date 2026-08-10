@@ -58,7 +58,7 @@ PAT_ARGO="$(printf 'C%sN%s=true' 'reate' 'amespace')"
 # appears in an already-allowed file, which keying by filename alone would wave through.
 ALLOWED='scripts/lib/psa.sh|1|THE CHOKEPOINT ITSELF — this is the call every other site must route through
 scripts/06-install-harbor.sh|1|the helm create-ns flag, immediately preceded by ensure_namespace for the same ns
-scripts/46-install-istio.sh|2|the helm create-ns flag for the mesh namespaces, labelled via psa_label_namespace (NOT ensure_namespace: stamping istio-injection=disabled on the platform mesh is exactly what we must never do)
+scripts/46-install-istio.sh|4|two helm create-ns flags plus one explicit form per mesh namespace. NEITHER may route through the chokepoint: it stamps istio-injection=disabled, which two controls say must never touch the mesh namespaces (lib/psa.sh, check-namespace-labelled.sh), and which defeats the injection webhook that rewrites the placeholder image in the gateway chart -> measured 2026-08-10, ImagePullBackOff. PSA labels are applied by psa_label_namespace BEFORE the installs, because the helm flag makes an UNLABELLED ns and VKS enforces restricted by default
 scripts/90-e2e-istio-existing.sh|4|e2e fixtures: two namespaces are left DELIBERATELY BARE so the injection probe has a negative control, plus the platform-mesh helm installs
 scripts/e2e-cross-cluster.sh|1|the wrapper form, for the cross-cluster e2e ArgoCD ns — a throwaway hub cluster, not an owned workload namespace
 k8s/argocd/application.yaml|1|the ArgoCD create-ns syncOption: the app namespace is ALSO created by ensure_namespace in 70-configure-argocd.sh, which is what labels it'

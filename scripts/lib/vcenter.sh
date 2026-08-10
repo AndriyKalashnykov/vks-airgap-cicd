@@ -190,7 +190,15 @@ vc_ss_install() {
   # register, vCenter answers 404 "The service account is not ready. Please try again later."
   # -- a TRANSIENT that reads like a missing service and would send an operator hunting for a
   # file that is present and correct. Everything else fails fast.
-  local tries="${VC_SS_INSTALL_RETRIES:-30}" i=1 code
+  # BUDGET = tries x interval = 60 x 10s = 10 min. Both transients below are ASYNC platform work
+  # whose duration we do not control, so the budget is sized from measurement, not taste:
+  # MEASURED 2026-08-10 on an idle, freshly rebuilt 9.1 lab -- argocd's signature verified in ~10s
+  # (one poll), harbor's in ~107s (17:11:47 refused -> 17:13:34 accepted). 10 min is ~5.6x the worst
+  # observed, on a box under no other load; a busy vCenter is the case nobody has measured, which is
+  # why this is generous rather than tight. The 10s CADENCE is not the cost -- it is one cheap POST
+  # per poll, and a short interval only means faster recovery. Raising the ceiling is free until it
+  # fires; a too-tight ceiling turns a wait into a FATAL that reads like a broken service file.
+  local tries="${VC_SS_INSTALL_RETRIES:-60}" i=1 code
   while :; do
     if out="$(vc_api POST "/api/vcenter/namespace-management/clusters/${moid}/supervisor-services" \
                 --data-binary "@${req}")"; then
@@ -201,6 +209,22 @@ vc_ss_install() {
       *"not ready"*|*"try again later"*)
         [ "$i" -lt "$tries" ] || { rm -f "$req"; die "the service account was still not ready after ${tries} attempts"; }
         [ "$i" = 1 ] && log_info "vCenter: service account not ready yet - retrying (up to ${tries}x)"
+        i=$((i + 1)); sleep "${VC_SS_INSTALL_INTERVAL:-10}" ;;
+      *"signature verification result not found"*)
+        # A SECOND transient, same shape as the one above and a DIFFERENT status (500, not 404).
+        # MEASURED 2026-08-10 on a freshly rebuilt lab: registering a service and installing it in
+        # the same second returns
+        #   HTTP 500 "Failed to run compatibility check ... signature verification result not found
+        #             for Supervisor Service <id>/<ver> on Supervisor <uuid>"
+        # The Supervisor verifies a newly-registered service's signature ASYNCHRONOUSLY; until that
+        # lands, the compatibility check has nothing to read. Re-running by hand ~2 min later
+        # succeeded with no other change.
+        #
+        # It is NOT covered by the end-state check below: the install never happened, so
+        # vc_ss_state is empty and that arm correctly declines to claim success -- it just dies,
+        # naming a 500 that reads like a broken service file rather than a wait.
+        [ "$i" -lt "$tries" ] || { rm -f "$req"; die "the Supervisor had still not verified ${id}'s signature after ${tries} attempts"; }
+        [ "$i" = 1 ] && log_info "vCenter: ${id}'s signature is not verified yet (async, follows registration) - retrying (up to ${tries}x)"
         i=$((i + 1)); sleep "${VC_SS_INSTALL_INTERVAL:-10}" ;;
       *"already exists"*)
         # IDEMPOTENT. Re-running an install is a normal thing to do -- after a transport error,

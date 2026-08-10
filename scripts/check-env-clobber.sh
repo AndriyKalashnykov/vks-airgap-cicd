@@ -88,7 +88,7 @@ EXEMPT='APP_DEV_PORT|INGRESS_CONTROLLER'
 # with VKS_CLUSTER_NAME set in .env (the documented place), `make vks-cluster-create
 # VKS_CLUSTER_NAME=other` silently targeted the .env value — and, if that cluster existed, printed
 # "ALREADY EXISTS" while the operator believed they had created a different one.
-SELECTORS='KUBECONFIG|VKS_AUTH_METHOD|INGRESS_CONTROLLER|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_SUPERVISOR_KUBECONFIG|VKS_CONTEXT|VKS_CLUSTER_NAME|VKS_NAMESPACE|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_CA_FILE|VKS_CA_CERT_FILE|ARGOCD_CA_FILE|VKS_CA_SHA256|HARBOR_CA_SHA256|ARGOCD_CA_SHA256'
+SELECTORS='KUBECONFIG|VKS_AUTH_METHOD|INGRESS_CONTROLLER|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_SUPERVISOR_KUBECONFIG|VKS_CONTEXT|VKS_CLUSTER_NAME|VKS_NAMESPACE|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_CA_FILE|VKS_CA_CERT_FILE|ARGOCD_CA_FILE|VKS_CA_SHA256|HARBOR_CA_SHA256|ARGOCD_CA_SHA256|VCF_CLI_SRC_DIR'
 
 # Read the snapshot list out of load_env itself: `for _sel in A B C ...; do`
 PROTECTED="$(sed -n 's/^[[:space:]]*for _sel in \(.*\); do$/\1/p' "${REPO_ROOT}/scripts/lib/os.sh" | head -1)"
@@ -113,6 +113,25 @@ done
   unreachable and the gate vacuous."
 
 is_protected() { case " $PROTECTED " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+# ⚠️ MUST-PROTECT: variables whose ONLY documented override form is an env PREFIX in a script's own
+# usage line. They ship COMMENTED in .env.example, so the uncommented-value loop below can NEVER
+# reach them -- this gate is otherwise blind to them in BOTH directions, and the drift assertion
+# above is one-directional (removing one SHRINKS PROTECTED, which stays a subset, so it stays green).
+#
+# WHY THIS EXISTS (2026-08-10): VCF_CLI_SRC_DIR was missing from load_env's snapshot, so
+# `VCF_CLI_SRC_DIR=<dir> scripts/01-install-vcf-clis.sh` -- the form that script's usage line
+# documents -- was silently defeated by .env, and the installer resolved the WRONG artifacts. The
+# only thing that detected it was test-vcf-cli-resolve, which drives the installer with exactly that
+# env prefix; that test has since (correctly) been made hermetic with SKIP_DOTENV=1, which removes
+# it as a detector. This assertion is its replacement. RED-proof: delete VCF_CLI_SRC_DIR from
+# load_env's `for _sel in ...` list and confirm this dies.
+MUST_PROTECT="VCF_CLI_SRC_DIR"          # space-separated; grows as more env-prefix overrides appear
+for _must in $MUST_PROTECT; do
+  is_protected "$_must" || die "'${_must}' is documented as an env-prefix override (VAR=<x> scripts/...)
+  but load_env does NOT snapshot-protect it, so .env silently WINS and the override is inert.
+  Add it to the 'for _sel in ...' list in lib/os.sh (and to SELECTORS above)."
+done
 
 rc=0
 checked=0

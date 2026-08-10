@@ -34,7 +34,15 @@ load_env
 . "${SCRIPT_DIR}/lib/argocd.sh"   # gitea_clone_url — the same one 70-configure-argocd.sh uses
 
 require_cmd kubectl
-require_cmd argocd "the tenant path IS the argocd CLI — install it (make deps)"
+# NAME THE STEP THAT ACTUALLY PROVIDES IT. This used to say only "(make deps)", which installs the
+# UPSTREAM argocd -- fine for KinD, but a VCF/VKS lab wants the vendor build (…-vcf), and that one
+# is an ENTITLED DOWNLOAD: scenario-1 Step 0 fetches the amd64 argocd CLI into VCF_CLI_SRC_DIR and
+# Step 1's `make install-vcf-clis` installs it. Sending an operator to `make deps` for the vendor
+# CLI names a command that cannot produce it.
+require_cmd argocd "the tenant path IS the argocd CLI. Get the VENDOR build:
+  1. download the amd64 argocd CLI into VCF_CLI_SRC_DIR  (scenario-1 Step 0 — an ENTITLED download)
+  2. make install-vcf-clis                               (scenario-1 Step 1)
+  Check which one you have with 'make argocd-version' — the supported build reports a '-vcf' suffix."
 : "${KUBECONFIG:?}"; export KUBECONFIG
 NS="${ARGOCD_NAMESPACE:-argocd}"
 PROJ="tenant-a"

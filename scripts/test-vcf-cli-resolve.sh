@@ -51,7 +51,14 @@ mkfake() { { printf '#!/usr/bin/env bash\n'; printf 'echo "%s"\n' "$2"; } > "$1"
 
 # run_installer WHAT SRC BIN ERRFILE — drive the installer offline; returns its exit status.
 run_installer() {
-  VCF_CLI_SRC_DIR="$2" BIN_DIR="$3" DRY_RUN=1 bash "$INSTALLER" "$1" >/dev/null 2>"$4"
+  # ⚠️ SKIP_DOTENV=1 IS LOAD-BEARING. The installer calls load_env, which sources .env with
+  # `set -a` AFTER this env prefix is established -- so a real .env carrying VCF_CLI_SRC_DIR
+  # CLOBBERS the fixture dir and the installer resolves the OPERATOR'S REAL archives instead.
+  # MEASURED 2026-08-10: after scenario-1 Step 1 set VCF_CLI_SRC_DIR in .env, 8 of 9 cases failed
+  # comparing the REAL argocd/vcf help output against fixture sentinels ("want [ARGOCD-BARE-AMD64],
+  # got [argocd controls a Argo CD server...]") -- i.e. the test installed the real 207 MB CLI into
+  # its temp dir. It passed on any box that had NOT followed Step 1, which is what made it latent.
+  SKIP_DOTENV=1 VCF_CLI_SRC_DIR="$2" BIN_DIR="$3" DRY_RUN=1 bash "$INSTALLER" "$1" >/dev/null 2>"$4"
 }
 
 # Per-case scratch (reused; each case cleans up at the end). Registered for the exit trap too.
