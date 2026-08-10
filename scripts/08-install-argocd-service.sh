@@ -162,7 +162,14 @@ if [ -n "$_pattern" ]; then
   esac
 fi
 
-kubectl --kubeconfig "$SUP" apply -f - <<YAML
+# ⚠️ THE CRD IS NOT THE READINESS SIGNAL. The operator publishes the CRD BEFORE its validating
+# webhook is serving, so an apply that races it fails with
+#   Internal error occurred: failed calling webhook "vargocd-v1alpha1.kb.io": failed to call webhook
+# MEASURED 2026-08-10 re-walking scenario-1 from scratch: the CRD wait above passed, this apply then
+# failed immediately, twice in a row. Waiting on the CRD is a PROXY; being able to CALL the webhook
+# is the real thing, and the only way to test it is to attempt the apply.
+_cr="$(mktemp)"; trap 'rm -f "$_crd_err" "$_cr"; vc_logout' EXIT
+cat > "$_cr" <<YAML
 apiVersion: argocd-service.vsphere.vmware.com/v1alpha1
 kind: ArgoCD
 metadata:
@@ -171,5 +178,16 @@ metadata:
 spec:
   version: ${VER}
 YAML
+_tries="${ARGOCD_CR_APPLY_RETRIES:-30}"; _i=1; _aerr="$(mktemp)"
+while :; do
+  if kubectl --kubeconfig "$SUP" apply -f "$_cr" 2>"$_aerr"; then rm -f "$_aerr"; break; fi
+  case "$(cat "$_aerr" 2>/dev/null || true)" in
+    *"failed calling webhook"*|*"failed to call webhook"*|*"connection refused"*|*"no endpoints available"*)
+      [ "$_i" -lt "$_tries" ] || { cat "$_aerr" >&2; rm -f "$_aerr"; die "the ArgoCD operator webhook was still not answering after ${_tries} attempts - the CRD is published but the operator is not serving"; }
+      [ "$_i" = 1 ] && log_info "the ArgoCD operator webhook is not answering yet (it publishes the CRD first) - retrying (up to ${_tries}x)"
+      _i=$((_i + 1)); sleep "${ARGOCD_CR_APPLY_INTERVAL:-10}" ;;
+    *) cat "$_aerr" >&2; rm -f "$_aerr"; die "could not create the ArgoCD instance CR (see the error above)" ;;
+  esac
+done
 log_info "ArgoCD instance ${ARGOCD_INSTANCE_NAME:-argocd-1} requested in namespace ${NS} (version ${VER})"
 log_info "next: make argocd-preflight   (reports CLI vs RUNNING server vs supported versions)"

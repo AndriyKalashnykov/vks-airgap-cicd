@@ -210,6 +210,17 @@ vc_ss_install() {
         [ "$i" -lt "$tries" ] || { rm -f "$req"; die "the service account was still not ready after ${tries} attempts"; }
         [ "$i" = 1 ] && log_info "vCenter: service account not ready yet - retrying (up to ${tries}x)"
         i=$((i + 1)); sleep "${VC_SS_INSTALL_INTERVAL:-10}" ;;
+      *"in terminating status"*)
+        # A THIRD transient, found by re-walking scenario-1 from scratch 2026-08-10. Uninstalling a
+        # Supervisor Service leaves its namespace (svc-<name>-<hash>) TERMINATING for a while, and a
+        # reinstall during that window is refused:
+        #   HTTP 500 "The namespace (svc-harbor-1dgwt) is in terminating status. Please wait for the
+        #             namespace to be fully deleted before attempting to install the service again."
+        # The platform is telling us to retry, in those words. Without this arm the operator gets a
+        # FATAL that reads like a broken service file, on the ordinary uninstall-then-reinstall path.
+        [ "$i" -lt "$tries" ] || { rm -f "$req"; die "the previous install's namespace was still terminating after ${tries} attempts"; }
+        [ "$i" = 1 ] && log_info "vCenter: the previous ${id} namespace is still terminating - retrying (up to ${tries}x)"
+        i=$((i + 1)); sleep "${VC_SS_INSTALL_INTERVAL:-10}" ;;
       *"signature verification result not found"*)
         # A SECOND transient, same shape as the one above and a DIFFERENT status (500, not 404).
         # MEASURED 2026-08-10 on a freshly rebuilt lab: registering a service and installing it in
@@ -241,6 +252,23 @@ vc_ss_install() {
           log_warn "  vCenter said: $(printf '%s' "$out" | head -c 200)"
           return 0
         fi
+        # ⚠️ POLARITY: a 5xx here is RETRYABLE BY DEFAULT, not fatal by default.
+        # The three named arms above are an ENUMERATED LIST of platform strings, and enumerated
+        # lists rot: re-walking scenario-1 from scratch on 2026-08-10 produced THREE distinct
+        # transient 500s in one afternoon ("signature verification result not found", "namespace
+        # ... in terminating status", and the webhook race handled at the CR apply). Each was
+        # patched one string at a time; the FOURTH would still have FATAL-ed.
+        # Installing a Supervisor Service is ASYNC platform work, so "the server had a problem"
+        # is far more often "it is not finished yet" than "your request is wrong". A malformed
+        # request is a 4xx and still fails fast below.
+        # COST, stated: a genuinely permanent 5xx now costs the full budget (10 min) before it
+        # dies -- and it dies quoting vCenter verbatim, so the diagnosis is not lost, only delayed.
+        case "$code" in
+          5??)
+            [ "$i" -lt "$tries" ] || { rm -f "$req"; die "install failed with HTTP ${code} on every one of ${tries} attempts: $(printf '%s' "$out" | head -c 400)"; }
+            [ "$i" = 1 ] && log_info "vCenter returned HTTP ${code} (async platform work is often still in flight) - retrying (up to ${tries}x)"
+            i=$((i + 1)); sleep "${VC_SS_INSTALL_INTERVAL:-10}"; continue ;;
+        esac
         rm -f "$req"; die "install failed (HTTP ${code}): $(printf '%s' "$out" | head -c 400)" ;;
     esac
   done
