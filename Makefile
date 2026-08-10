@@ -371,6 +371,18 @@ wcp-start: ## Start Workload Management after a wcp-stop
 wcp-stop: ## Stop Workload Management (CONFIRM=yes). It STAYS down for every tenant until wcp-start — prefer wcp-restart
 	@CONFIRM="$(CONFIRM)" $(SCRIPTS)/wcp-service.sh stop
 
+.PHONY: list-vks-packages
+list-vks-packages: ## Read-only: VKS Standard Packages available on the GUEST cluster (istio, cert-manager, contour, ...) with their versions
+	@$(SCRIPTS)/vks-package.sh list
+
+.PHONY: install-vks-package
+install-vks-package: ## Install a VKS Standard Package into the GUEST cluster (PACKAGE=<name> [PKG_VERSION=<v>] [PKG_VALUES=<file>]) — latest version by default
+	@$(SCRIPTS)/vks-package.sh install "$(PACKAGE)"
+
+.PHONY: uninstall-vks-package
+uninstall-vks-package: ## Remove a VKS Standard Package and everything it deployed (PACKAGE=<name> CONFIRM=yes)
+	@CONFIRM="$(CONFIRM)" $(SCRIPTS)/vks-package.sh uninstall "$(PACKAGE)"
+
 .PHONY: list-supervisor-services
 list-supervisor-services: ## Read-only: list the Supervisor Services vCenter knows, with the SERVICE=<id> every other target wants
 	@$(SCRIPTS)/list-supervisor-services.sh
@@ -395,6 +407,14 @@ vks-cluster-create: ## Provision the guest VKS cluster from the VKS_* topology k
 .PHONY: vks-cluster-status
 vks-cluster-status: ## Read-only: is the guest cluster ACTUALLY ready? (conditions + observedGeneration + nodes — phase=Provisioned is NOT readiness)
 	@$(SCRIPTS)/26-vks-cluster-status.sh
+
+.PHONY: fetch-supervisor-ca
+fetch-supervisor-ca: ## Fetch the CA that signed the Supervisor's cert FROM VCENTER (scenario-1 §3.3) — picks the right root, verifies it, prints the fingerprint to confirm out of band
+	@$(SCRIPTS)/fetch-supervisor-ca.sh
+
+.PHONY: show-dns-records
+show-dns-records: ## Print the exact DNS A records this install needs, with their live LoadBalancer IPs (scenario-1 §2.6)
+	@$(SCRIPTS)/show-dns-records.sh
 
 .PHONY: fetch-harbor-ca
 fetch-harbor-ca: ## Fetch the CA that ISSUED the lab Harbor's cert → HARBOR_CA_FILE, and VERIFY it (for HTTPS mirror/Kaniko trust)

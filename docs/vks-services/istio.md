@@ -28,6 +28,27 @@
 | Air-gap / private registry | a Secret with registry credentials named in `istio.meshConfig.imagePullSecrets` | 9.0-doc [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/standard-package-reference/istio-package-reference.html date=2026-07-15 quote="Enabling Istio sidecar or gateway injection requires a Secret with registry credential in the application's namespace, and its name must be specified in istio.meshConfig.imagePullSecrets."] |
 | **Route API Broadcom demonstrates** | the **Kubernetes Gateway API** (`gatewayClassName: istio`) → auto-provisioned Service `<gateway-name>-istio`, type LoadBalancer, **in the app's own namespace** | community (VMware VCF blog) [src: url=https://blogs.vmware.com/cloud-foundation/2025/03/06/istio-on-vsphere-kubernetes-service-vks-a-walkthrough/ date=2026-07-15 quote="gatewayClassName: istio"] |
 
+## Installing it yourself (make targets)
+
+Istio is a **VKS Standard Package on the GUEST cluster** — a different family from Harbor and
+ArgoCD, which are Supervisor Services. Point `KUBECONFIG` at the **guest** cluster, then:
+
+```bash
+make list-vks-packages                                              # what this cluster offers
+make install-vks-package   PACKAGE=istio.kubernetes.vmware.com      # latest; PKG_VERSION= to pin
+make uninstall-vks-package PACKAGE=istio.kubernetes.vmware.com CONFIRM=yes
+```
+
+Generic on purpose: the same mechanism installs any of the ~25 Standard Packages (cert-manager,
+contour, prometheus, external-dns, cilium, …). `PKG_VALUES=<file>` supplies data-values — that is
+how you would turn the ingress gateway on, since it ships off.
+
+The install creates a ServiceAccount and cluster-admin binding named after the package (a Standard
+Package deploys CRDs, webhooks and a CNI DaemonSet), and the uninstall removes exactly those.
+
+MEASURED 2026-08-10 on a 9.1 guest cluster: install 20 s, uninstall 11 s, `istio-system` and every
+workload gone afterwards.
+
 ## Lab-verified on 9.1 (2026-08-10)
 
 Installed and uninstalled the package on a real 9.1 guest cluster (VKr v1.32). These rows were

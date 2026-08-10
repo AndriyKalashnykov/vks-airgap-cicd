@@ -243,9 +243,12 @@ Services → Harbor**), or with `kubectl` **once you have finished Step 3** — 
 has written a Supervisor kubeconfig:
 
 ```bash
-kubectl --kubeconfig ./secrets/supervisor.kubeconfig get svc -A | grep -i harbor
-# take the EXTERNAL-IP and create   harbor.env1.lab.test -> that IP   in your DNS
+make show-dns-records      # prints the exact A records, with their live LoadBalancer IPs
 ```
+
+It reads the IPs out of the cluster so you do not have to hunt for them. It deliberately does
+**not** create the records: every site's DNS is different, and a tool that guessed would be wrong
+everywhere.
 
 `/etc/hosts` is **not** enough — the guest cluster's nodes must resolve it too (see notes).
 This is the one part of this step nobody can automate for you: it is your DNS.
@@ -296,24 +299,21 @@ The GitOps engine, running on the Supervisor.
 
    ```bash
    cd vks-airgap-cicd            # from Step 0
-   VCENTER=vcsa.env1.lab.test          # <- YOUR vCenter FQDN, NOT the Supervisor IP
-
-   # -k is deliberate: you are FETCHING a trust anchor that you then authenticate OUT OF BAND by
-   # its SHA-256 fingerprint. The fingerprint authenticates it, not the transport.
-   curl -sk -o /tmp/vmca.zip "https://${VCENTER}/certs/download.zip"
-   unzip -j -o /tmp/vmca.zip 'certs/lin/*.0' -d ./secrets/vmca/
-
-   # A vCenter with more than one trusted root yields SEVERAL files — do NOT blind-copy.
-   # Print the subjects and take the one whose CN matches the issuer your Supervisor presents:
-   for f in ./secrets/vmca/*.0; do echo "$f"; openssl x509 -in "$f" -noout -subject; done
-   printf '' | openssl s_client -connect "${SUPERVISOR_HOST}:443" 2>/dev/null \
-     | openssl x509 -noout -issuer            # <- match this
-
-   cp ./secrets/vmca/<the-matching-file>.0 ./secrets/supervisor-ca.crt
-   chmod 0644 ./secrets/supervisor-ca.crt
-   openssl x509 -in ./secrets/supervisor-ca.crt -noout -fingerprint -sha256
-   # ^ confirm that fingerprint with your platform team over a channel that is NOT this connection
+   make fetch-supervisor-ca
    ```
+
+   It downloads vCenter's trusted roots, picks the one whose subject matches the issuer your
+   Supervisor actually presents (a vCenter with several roots offers several candidates), refuses
+   to install one that does not verify the live endpoint, and prints the SHA-256 fingerprint.
+
+   **Confirm that fingerprint with your platform team over a channel that is NOT this connection.**
+   The download is deliberately unverified TLS — you are fetching a trust anchor and then
+   authenticating it out of band by its fingerprint; the fingerprint is what authenticates it,
+   not the transport.
+
+   > A **rebuilt** lab mints a new CA at the same address, so a stale file looks valid and is not.
+   > That is why this refuses rather than overwriting blindly — and why `make vks-login` fails with
+   > *"the CA at … does NOT verify"* until you re-run it.
 
 4. **Log in.** `make` reads `.env` for you; an interactive shell does not, so load it first:
 
