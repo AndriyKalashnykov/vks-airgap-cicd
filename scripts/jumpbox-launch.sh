@@ -33,10 +33,41 @@ load_env
 VCF_SRC="${JUMPBOX_VCF_SRC:-}"
 TARBALL="${JUMPBOX_TARBALL:-}"
 
-require_cmd kind "the KinD cluster must be up (make kind-up install-harbor ...)"
-require_cmd docker "the jump-box harness runs the container on the kind Docker network"   # docker-ok: this is a LOCAL TEST HARNESS for the KinD stand-in — kind's nodes ARE docker containers. It is never on the air-gap operator path (podman + crane).
-docker network inspect kind >/dev/null 2>&1 \
-  || die "the kind Docker network does not exist — bring the cluster up first (make kind-up)"   # docker-ok: same — KinD-only harness.
+# JUMPBOX_TARGET selects WHICH cluster this harness points at.
+#   kind (default) — the local stand-in: container joins the `kind` docker network.
+#   lab            — the REAL VKS lab: container uses HOST networking.
+#
+# ⚠️ WHY --network host AND NOT --add-host, MEASURED 2026-08-10. The obvious fix is to pin the lab
+# names with --add-host. It works, and it is WRONG twice over:
+#   1. The IPs are DISCOVERED and move on every reinstall (Harbor .130 -> .135, ingress .134 -> .140
+#      in one afternoon), so a pinned entry rots immediately and there is nothing to pin at Step 1,
+#      before any login.
+#   2. --add-host IS a /etc/hosts entry, and show-dns-records.sh says in as many words that
+#      "/etc/hosts on the jump box is NOT enough: the nodes pull images from Harbor and cannot see
+#      it." It would make this harness GREEN while exercising a DNS path the guest nodes never use.
+# Host networking puts the container in the namespace where the lab's real resolution already works:
+# systemd-resolved routes *.env1.lab.test to 192.168.100.1 OUT THE LIBVIRT LINK, and libvirt dnsmasq
+# is bound to that interface -- which is exactly why `--dns 192.168.100.1` from a docker-bridge
+# container does NOT resolve, though the same query from the host does.
+JUMPBOX_TARGET="${JUMPBOX_TARGET:-kind}"
+case "$JUMPBOX_TARGET" in
+  kind)
+    # ⚠️ CHECK THE CLUSTER, NOT THE NETWORK. MEASURED 2026-08-10: the `kind` docker network SURVIVES
+    # cluster deletion, so `docker network inspect kind` passed with ZERO containers attached and the
+    # run died later at `kind get kubeconfig` with "could not locate any control plane nodes" -- a
+    # gate that passes by not looking, naming the wrong thing.
+    require_cmd kind "the KinD cluster must be up (make kind-up install-harbor ...)"
+    require_cmd docker "the jump-box harness runs the container on the kind Docker network"   # docker-ok: LOCAL TEST HARNESS for the KinD stand-in — kind's nodes ARE docker containers. Never on the air-gap operator path (podman + crane).
+    # herestring, NOT `kind get clusters | grep -q`: under `set -o pipefail` grep -q exits at the
+    # first match, the producer takes SIGPIPE, and the pipeline reports the cluster ABSENT when it
+    # is PRESENT. bash spools a herestring to a temp file, so nothing can SIGPIPE.
+    grep -qx "${KIND_CLUSTER_NAME:?}" <<< "$(kind get clusters 2>/dev/null || true)" \
+      || die "no KinD cluster named '${KIND_CLUSTER_NAME}' — bring it up first (make kind-up).
+  NOTE: the 'kind' docker network outlives a deleted cluster, so its presence proves nothing." ;;
+  lab)
+    : ;;   # nothing to require: host networking, and the lab is reached exactly as the host reaches it
+  *) die "JUMPBOX_TARGET must be 'kind' or 'lab' (got '${JUMPBOX_TARGET}')" ;;
+esac
 
 : "${HARBOR_URL:?HARBOR_URL is not set — run 'make install-harbor' first}"
 : "${HARBOR_USERNAME:?set HARBOR_USERNAME in .env (admin for scenario 1, your robot for scenario 2)}"
@@ -48,7 +79,16 @@ mkdir -p "$WORK"
 
 # The kubeconfig the CONTAINER will use: `--internal` gives the address reachable from INSIDE the kind
 # network (the host-facing one points at 127.0.0.1, which in the container is the container itself).
-kind get kubeconfig --name "${KIND_CLUSTER_NAME:?}" --internal > "${WORK}/kubeconfig"
+if [ "$JUMPBOX_TARGET" = lab ]; then
+  # The real lab: the Supervisor kubeconfig `make vks-login` wrote. Host networking means the
+  # address in it is reachable from the container exactly as it is from the host -- no --internal
+  # rewrite, because there is no separate container network to translate for.
+  _sup="${VKS_SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}"
+  [ -s "$_sup" ] || die "no Supervisor kubeconfig at '${_sup}' — run 'make vks-login' (scenario-1 Step 3) first"
+  cp "$_sup" "${WORK}/kubeconfig"
+else
+  kind get kubeconfig --name "${KIND_CLUSTER_NAME:?}" --internal > "${WORK}/kubeconfig"
+fi
 
 MOUNTS=()
 ENVS=(
@@ -124,7 +164,17 @@ trap 'rm -f "$RUNLOG"' EXIT
 # The pipeline is the `if` CONDITION, so `set -e` does not abort it and its status is read directly
 # -- no `rc=$?` on a following line, which under `set -euo pipefail` would be unreachable dead code
 # that a later reader might "repair" with `|| true`, turning fail-closed into fail-open.
-if ! docker run --rm --privileged --network kind \
+# ⚠️ THE NETWORK FLAG IS MODE-GATED. `airgap-half` exists to prove the toolchain came from the
+# CARRIED BUNDLE; host networking would make that box maximally internet-connected and the proof
+# vacuous. So lab mode gets --network host, and every other mode keeps the kind network.
+_NET=(--network kind)
+if [ "$JUMPBOX_TARGET" = lab ]; then
+  [ "${JUMPBOX_MODE:-}" = airgap-half ] \
+    && die "JUMPBOX_TARGET=lab is incompatible with JUMPBOX_MODE=airgap-half: host networking would
+  make the air-gap half internet-connected, so the bundle-provenance proof would be vacuous."
+  _NET=(--network host)
+fi
+if ! docker run --rm --privileged "${_NET[@]}" \
   "${ENVS[@]}" \
   -v "${REPO_ROOT}:/src:ro" \
   -v "${WORK}/kubeconfig:/run/jumpbox/kubeconfig:ro" \

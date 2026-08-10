@@ -508,6 +508,37 @@ that same restart destroyed everything.
 **Still run the e2es serially** — not because of blob corruption, but because they mutate a shared
 cluster + registry and parallel work makes a failure unattributable.
 
+## Validate scenario-1 on a CLEAN BOX, not on the box that wrote it (`make labbox`)
+
+A scenario-1 walk on the author's machine is green partly for reasons the doc never mentions: a warm
+`mise`, a populated `~/.config/vcf`, a `.env` from a previous lab, licensed CLIs already on PATH. The
+walk this repo cares about is the one a stranger does on a fresh box.
+
+**`make labbox`** runs the bootstrap + reach on a clean **Photon** container against the **REAL lab**
+(`make jumpbox` points at the KinD stand-in and cannot reach it). Use it whenever scenario-1's Step 0/1
+changes.
+
+Three things about it are deliberate, and each was measured — do not "improve" them without re-measuring:
+
+- **`--network host`, never `--add-host`.** Pinned host entries rot on every reinstall (Harbor moved
+  `.130 -> .135`, ingress `.134 -> .140` in one afternoon) and there is nothing to pin at Step 1 before
+  any login. Worse, `--add-host` IS a `/etc/hosts` entry — the thing `show-dns-records.sh` says in as
+  many words is "NOT enough", so it would go green while exercising a DNS path the guest nodes never
+  use. `--dns 192.168.100.1` does not work either: systemd-resolved routes `*.env1.lab.test` out the
+  libvirt link and dnsmasq will not answer the docker subnet.
+- **Photon only — an OS matrix here is VACUOUS.** Measured: ZERO post-bootstrap scenario-1 scripts
+  branch on OS; they are kubectl/helm/crane over static binaries. OS differences live in the
+  BOOTSTRAP, and `make jumpbox-matrix` already covers photon x ubuntu x podman x docker there.
+- **Rootless podman, container root, repo mounted read-write.** Under rootless podman container-root
+  maps to the operator's uid, so writes land owned by them. Under **docker** the same mount leaves
+  root-owned files in the working tree — and `--user 1000:1000`, the obvious fix, is BACKWARDS under
+  podman (container uid 1000 maps to host 100999 and cannot write at all).
+
+⚠️ **What it cannot see:** the `vcf` CLI keeps state in `$HOME`, and a recorded failure in
+`docs/scenario-1-notes.md` has that store surviving a lab rebuild and then blocking `vcf context
+create` against a dead endpoint. A throwaway container has a fresh `$HOME` every run, so it is
+**structurally blind** to that class. This proves clean-box bootstrap + reach, not a full walk.
+
 ## Verification honesty
 
 Offline-verifiable (no cluster): app tests, manifest/Tekton YAML validation, script
