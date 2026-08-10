@@ -518,6 +518,12 @@ cat ./secrets/harbor-robot.env
 
 **Expect:** a `robot$vks-cicd` account scoped to your two projects. Needs project-admin. *(<1 min)*
 
+**Already exists?** It stops rather than overwriting — Harbor shows a robot's secret **once**, so
+an existing one cannot be re-read and re-creating it would hand you a credential that does not
+work. That happens on a re-run, or when someone else already ran this against the same Harbor.
+Either reuse the existing `./secrets/harbor-robot.env`, or delete the robot in Harbor
+(**Administration → Robot Accounts**) and run it again.
+
 **→ set in `./.env`:** copy the two lines from `./secrets/harbor-robot.env` over the existing
 `HARBOR_USERNAME` / `HARBOR_PASSWORD`.
 
