@@ -549,8 +549,12 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 scenario-1 was walked end to end **twice** today — once on the rebuilt lab, then again **from scratch**
 (both Supervisor Services deregistered, new namespace, new cluster) to confirm the fixes.
 
-- **vSphere Namespace `cicd`** is the live one. `lab` still exists and is **empty** — a leftover from
-  the first walk. Delete it or reuse it; nothing points at it.
+- **vSphere Namespace `cicd`** is the live one. **`lab` is the LAB's OWN namespace — do NOT delete
+  it.** It is declared at `input.yaml:77` in nested-vsphere-lab and created by `make lab`; the lab
+  repo's `namespace-delete` target refuses it by name (*"it is this lab's own namespace ... tear the
+  lab down with make destroy instead"*). An earlier version of this handoff called it a leftover from
+  the first walk. That was wrong. It is now empty apart from the `kube-root-ca.crt` configmap and the
+  `default` ServiceAccount, which Kubernetes creates in every namespace.
 - **Guest cluster `cicd-gc4`** (v1.34.8+vmware.1), 3 nodes, kubeconfig `./secrets/cicd-gc4.kubeconfig`.
 - Harbor **192.168.101.135**, ArgoCD **192.168.101.136**, ingress LB **192.168.101.139**.
   `harbor.env1.lab.test` resolves via libvirt dnsmasq on `nested-mgmt` + `supwl`.
