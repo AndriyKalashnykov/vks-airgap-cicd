@@ -355,6 +355,22 @@ install-harbor-service: ## Install Harbor as a Supervisor Service (scenario-1 §
 install-argocd-service: ## Install ArgoCD as a Supervisor Service + its instance CR (scenario-1 §3)
 	@$(SCRIPTS)/08-install-argocd-service.sh
 
+.PHONY: wcp-status
+wcp-status: ## Read-only: is vCenter's Workload Management (wcp) service running and healthy?
+	@$(SCRIPTS)/wcp-service.sh status
+
+.PHONY: wcp-restart
+wcp-restart: ## Restart Workload Management (unblocks a Supervisor Service stuck in REMOVING). Whole-vCenter; running workloads keep serving
+	@$(SCRIPTS)/wcp-service.sh restart
+
+.PHONY: wcp-start
+wcp-start: ## Start Workload Management after a wcp-stop
+	@$(SCRIPTS)/wcp-service.sh start
+
+.PHONY: wcp-stop
+wcp-stop: ## Stop Workload Management (CONFIRM=yes). It STAYS down for every tenant until wcp-start — prefer wcp-restart
+	@CONFIRM="$(CONFIRM)" $(SCRIPTS)/wcp-service.sh stop
+
 ##@ VKS access
 .PHONY: vks-login
 vks-login: check-env ## Authenticate to VKS (VCF 9 + Supervisor) → writes KUBECONFIG/context
