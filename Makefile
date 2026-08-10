@@ -375,6 +375,10 @@ wcp-stop: ## Stop Workload Management (CONFIRM=yes). It STAYS down for every ten
 list-supervisor-services: ## Read-only: list the Supervisor Services vCenter knows, with the SERVICE=<id> every other target wants
 	@$(SCRIPTS)/list-supervisor-services.sh
 
+.PHONY: uninstall-supervisor-service
+uninstall-supervisor-service: ## DESTRUCTIVE (SERVICE=<id> CONFIRM=yes): uninstall a Supervisor Service and its DATA — shared, so it removes it for every tenant on that Supervisor
+	@CONFIRM="$(CONFIRM)" $(SCRIPTS)/uninstall-supervisor-service.sh "$(SERVICE)"
+
 .PHONY: unwedge-supervisor-service
 unwedge-supervisor-service: ## BREAK-GLASS (SERVICE=<id> CONFIRM=yes): a Supervisor Service uninstall stuck waiting on workload it never deleted — removes that workload so the platform's reconcile can finish. REFUSES unless vCenter reports it mid-delete
 	@CONFIRM="$(CONFIRM)" $(SCRIPTS)/unwedge-supervisor-service.sh "$(SERVICE)"
