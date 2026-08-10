@@ -302,6 +302,31 @@ Restarting Workload Management makes its reconciler re-evaluate:
 make wcp-restart          # waits until wcp is STARTED/HEALTHY again
 ```
 
+**If that does not clear it, check for a `deletionTimestamp` before assuming "slow".** MEASURED:
+the uninstall reported a kapp timeout *waiting for resources to be deleted* while Kubernetes had
+**no deletionTimestamp on any of them** and the Deployment had been Running for 22 h — vCenter
+was waiting for a deletion it never issued, which is indistinguishable from slowness until you
+look:
+
+```bash
+kubectl -n <the svc-* namespace> get deploy,svc,endpointslice,pod
+kubectl get ns <the svc-* namespace> -o jsonpath='{.metadata.deletionTimestamp}{"\n"}'
+```
+
+Nothing there and no timestamp = the platform is stuck, not busy. The break-glass deletes the
+workload the platform is waiting on, so its own reconcile can finish:
+
+```bash
+make unwedge-service SERVICE=argocd-service.vsphere.vmware.com CONFIRM=yes
+```
+
+It **refuses** unless vCenter reports the service mid-delete (otherwise it would delete a healthy
+service's operator), **discovers** the namespace rather than taking a pasted one (the suffix is
+random per install), and prints what it will delete first. It does **not** delete the namespace:
+the Supervisor's own webhook refuses that for every user including vCenter admin — *"Principal
+administrator ... is not associated with namespace"* — and the platform removes it once its
+reconcile completes.
+
 **Blast radius:** this is Workload Management for the **whole vCenter** — every Supervisor and
 tenant loses provisioning, service install/uninstall and namespace management for the duration.
 **Running workloads are unaffected**: guest clusters, pods and LoadBalancers keep serving.
