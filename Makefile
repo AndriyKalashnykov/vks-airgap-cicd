@@ -325,6 +325,19 @@ builder-build: check-env ## (sneakernet, INTERNET box) Build the Maven builder i
 builder-push: check-env ## (sneakernet, AIR-GAP box) Push the CARRIED Maven builder into Harbor — needs Harbor, NOT the internet (uses the carried crane; no container engine)
 	@$(SCRIPTS)/22-builder-push.sh
 
+##@ Supervisor platform (real lab — replaces scenario-1's browser steps 1b/2/3)
+.PHONY: vsphere-namespace
+vsphere-namespace: ## Create the vSphere Namespace over the vCenter REST API (scenario-1 §1b). Idempotent: reports and does NOT rewrite an existing one
+	@$(SCRIPTS)/04-vsphere-namespace.sh
+
+.PHONY: install-harbor-service
+install-harbor-service: ## Install Harbor as a Supervisor Service (scenario-1 §2). GENERATES all 7 secrets — no hand-edited data-values
+	@$(SCRIPTS)/04-install-harbor-service.sh
+
+.PHONY: install-argocd-service
+install-argocd-service: ## Install ArgoCD as a Supervisor Service + its instance CR (scenario-1 §3)
+	@$(SCRIPTS)/08-install-argocd-service.sh
+
 ##@ VKS access
 .PHONY: vks-login
 vks-login: check-env ## Authenticate to VKS (VCF 9 + Supervisor) → writes KUBECONFIG/context
