@@ -311,3 +311,22 @@ rounds — so give it that long before concluding the restart did not help.
 `make wcp-start` and `make wcp-stop` exist for the rare case you want the service down
 deliberately. `wcp-stop` requires `CONFIRM=yes` because, unlike a restart, it stays down for
 every tenant until someone runs `wcp-start`.
+
+## `kubectl` suddenly says `Unauthorized` — your Supervisor token expired
+
+```text
+error: You must be logged in to the server (Unauthorized)
+```
+
+The Supervisor kubeconfig `make vks-login` writes carries a **time-limited token**, and Steps 5,
+6, 8 and 9 all use it well after Step 3. Take a long enough break — or have anything restart
+vCenter's Workload Management — and it stops working mid-runbook. Nothing is broken and nothing
+is lost:
+
+```bash
+make vks-login          # re-issues the token into the same kubeconfig
+```
+
+Our own scripts name this cause for you (`classify_kube_failure`). The bare message above is
+what you get from a **raw `kubectl`** — the ones this runbook has you run by hand in 1b, 2.6,
+3.6 and 8.
