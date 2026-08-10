@@ -140,6 +140,30 @@ CHART_BASE="$(chart_ref base)"
 CHART_ISTIOD="$(chart_ref istiod)"
 CHART_GATEWAY="$(chart_ref gateway)"
 
+# --- 1b. Namespaces, PSA-LABELLED BEFORE ANYTHING SCHEDULES INTO THEM ---------
+# ⚠️ ORDERING IS THE WHOLE POINT. These labels used to be applied at step 4b, AFTER the three
+# helm installs -- and helm's --create-namespace makes an UNLABELLED namespace, so on a cluster
+# that enforces PSA the pods are rejected before the label ever lands.
+# MEASURED 2026-08-10 on a real VKS 9.1 guest cluster: every istiod pod was refused with
+#   pods "istiod-69dc675d76-..." is forbidden: violates PodSecurity ...
+# helm then sat in --wait until "context deadline exceeded / Replicas: 0/1", and `make
+# install-ingress` failed. istio-system carried NO PSA labels at all, so it inherited the
+# cluster default, which VKS sets to `restricted` (VKr v1.26+).
+# INVISIBLE ON KinD, which enforces nothing -- this is a lab-fidelity gap, not a flake.
+ensure_namespace "$ISTIO_NAMESPACE"         "${PSA_LEVEL_ISTIO_SYSTEM:-baseline}"
+
+# ⚠️ THE GATEWAY NAMESPACE GETS PSA LABELS BUT **NOT** `istio-injection=disabled`.
+# ensure_namespace stamps that label on purpose (lib/psa.sh, Backlog B26) so a platform mesh cannot
+# inject into namespaces we own -- correct for APP namespaces, FATAL here. The istio/gateway chart
+# ships `image: auto`, and ONLY the sidecar-injection webhook rewrites it to <hub>/proxyv2:<ver>.
+# MEASURED 2026-08-10: routing this namespace through ensure_namespace set istio-injection=disabled,
+# the webhook's namespaceSelector then excluded it, `auto` was never rewritten, and the pod sat in
+#   Back-off pulling image "auto"  /  ErrImagePull
+# with a perfectly correct `sidecar.istio.io/inject: "true"` LABEL on the pod itself.
+kubectl create namespace "$ISTIO_GATEWAY_NAMESPACE" --dry-run=client -o yaml 2>/dev/null \
+  | kubectl apply -f - >/dev/null
+psa_label_namespace "$ISTIO_GATEWAY_NAMESPACE" "${PSA_LEVEL_INGRESS:-baseline}"
+
 # --- 2. CRDs (istio/base) -----------------------------------------------------
 log_info "installing istio-base (CRDs) v${ISTIO_VERSION} into ${ISTIO_NAMESPACE}"
 run helm upgrade --install istio-base "$CHART_BASE" \
@@ -167,7 +191,10 @@ run helm upgrade --install "$GW_RELEASE" "$CHART_GATEWAY" \
   --set global.hub="$HUB" \
   --set global.tag="$ISTIO_VERSION"
 
-# --- 4b. PSA labels for the namespaces helm just created ----------------------
+# --- 4b. RE-ASSERT the PSA labels ---------------------------------------------
+# They are applied at 1b, BEFORE anything schedules (that ordering is load-bearing -- see there).
+# This second pass is deliberate belt-and-braces: helm may recreate a namespace it owns, and a
+# re-assert is idempotent and free.
 # VKS enforces `restricted` by default (VKr v1.26+) and istiod/the gateway proxy set no
 # seccompProfile, so both namespaces need `baseline` or their pods are REJECTED on a real
 # guest cluster. Measured with `make psa-check`, not guessed.
