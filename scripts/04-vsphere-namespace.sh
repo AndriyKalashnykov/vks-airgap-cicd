@@ -32,11 +32,14 @@ if body="$(vc_api GET "/api/vcenter/namespaces/instances/${NS}")"; then
   printf '%s' "$body" | jq -r '"  policies   : " + ([.storage_specs[]?.policy]|join(", "))'    2>/dev/null || true
   exit 0
 fi
-[ "$VC_LAST_CODE" = 404 ] || die "GET namespaces/instances/${NS} -> HTTP ${VC_LAST_CODE} (404 means absent; 401 means the session expired, 503 that the vAPI is still warming)"
+# vc_last_code(), NOT $VC_LAST_CODE: the GET above ran inside `body="$(...)"` -- a subshell --
+# so the variable never made it back here.
+code="$(vc_last_code)"
+[ "$code" = 404 ] || die "GET namespaces/instances/${NS} -> HTTP ${code:-<none>} (404 means absent; 401 means the session expired, 503 that the vAPI is still warming)"
 
 # ── resolve the cluster moid ─────────────────────────────────────────────────────────────
 CLUSTER_NAME="${VKS_CLUSTER_COMPUTE:-}"
-clusters="$(vc_api GET /api/vcenter/cluster || die "cannot list clusters (HTTP $VC_LAST_CODE)")"
+clusters="$(vc_api GET /api/vcenter/cluster || die "cannot list clusters (HTTP $(vc_last_code))")"
 if [ -n "$CLUSTER_NAME" ]; then
   MOID="$(printf '%s' "$clusters" | jq -r --arg n "$CLUSTER_NAME" '.[]|select(.name==$n)|.cluster' | head -1)"
   [ -n "$MOID" ] || die "no vSphere cluster named '${CLUSTER_NAME}'. Available: $(printf '%s' "$clusters" | jq -r '[.[].name]|join(", ")')"
@@ -49,7 +52,7 @@ fi
 log_info "cluster: ${CLUSTER_NAME} (${MOID})"
 
 # ── resolve the storage policy id ────────────────────────────────────────────────────────
-policies="$(vc_api GET /api/vcenter/storage/policies || die "cannot list storage policies (HTTP $VC_LAST_CODE)")"
+policies="$(vc_api GET /api/vcenter/storage/policies || die "cannot list storage policies (HTTP $(vc_last_code))")"
 PID="$(printf '%s' "$policies" | jq -r --arg n "$POLICY_NAME" '.[]|select(.name==$n)|.policy' | head -1)"
 [ -n "$PID" ] || die "no storage policy named '${POLICY_NAME}'. Available: $(printf '%s' "$policies" | jq -r '[.[].name]|join(", ")')"
 log_info "storage policy: ${POLICY_NAME} (${PID})"
@@ -63,7 +66,7 @@ spec="$(jq -nc --arg ns "$NS" --arg c "$MOID" --arg p "$PID" --argjson vc "$clas
   '{namespace:$ns, cluster:$c, storage_specs:[{policy:$p}], vm_service_spec:{vm_classes:$vc}}')"
 req="$(mktemp)"; chmod 600 "$req"; printf '%s' "$spec" > "$req"
 vc_api POST /api/vcenter/namespaces/instances --data-binary "@${req}" >/dev/null \
-  || { rm -f "$req"; die "create namespace '${NS}' -> HTTP ${VC_LAST_CODE}"; }
+  || { rm -f "$req"; die "create namespace '${NS}' -> HTTP $(vc_last_code)"; }
 rm -f "$req"
 log_info "created vSphere Namespace '${NS}' with policy ${POLICY_NAME} and classes: ${CLASSES}"
 

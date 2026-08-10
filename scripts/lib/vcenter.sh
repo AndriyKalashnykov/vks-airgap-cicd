@@ -31,7 +31,11 @@ vc_login() {
   VC_TOKEN_FILE="${VC_TOKEN_FILE:-$(mktemp)}"
   VC_CURL_CFG="${VC_CURL_CFG:-$(mktemp)}"
   VC_HDR_FILE="${VC_HDR_FILE:-$(mktemp)}"
-  chmod 600 "$VC_TOKEN_FILE" "$VC_CURL_CFG" "$VC_HDR_FILE"
+  # VC_CODE_FILE, not a variable: vc_api is almost always called as `x="$(vc_api ...)"`, which is a
+  # SUBSHELL -- a global assigned inside it is LOST, so the caller would read a stale or unset
+  # status and branch on it. A file survives the subshell. (common/coding-style.md)
+  VC_CODE_FILE="${VC_CODE_FILE:-$(mktemp)}"
+  chmod 600 "$VC_TOKEN_FILE" "$VC_CURL_CFG" "$VC_HDR_FILE" "$VC_CODE_FILE"
 
   # rm -f FIRST: `umask 077` only applies at CREATION, so a pre-existing 0644 file would KEEP
   # its mode and the credential would land world-readable while this code read as safe.
@@ -60,15 +64,23 @@ vc_login() {
   log_info "vCenter session established (${VCENTER_HOST})"
 }
 
+# vc_last_code — the HTTP status of the most recent vc_api call, readable by a caller that
+# captured vc_api's stdout in a subshell.
+vc_last_code() { cat "${VC_CODE_FILE:-/dev/null}" 2>/dev/null; }
+
 vc_logout() {
   [ -n "${VC_HDR_FILE:-}" ] && [ -s "${VC_HDR_FILE:-/nonexistent}" ] || return 0
   curl -sS -k -o /dev/null -X DELETE --max-time 20 -H "@${VC_HDR_FILE}" \
     "https://${VCENTER_HOST}/api/session" 2>/dev/null || true
-  rm -f "${VC_TOKEN_FILE:-}" "${VC_CURL_CFG:-}" "${VC_HDR_FILE:-}" 2>/dev/null || true
+  rm -f "${VC_TOKEN_FILE:-}" "${VC_CURL_CFG:-}" "${VC_HDR_FILE:-}" "${VC_CODE_FILE:-}" 2>/dev/null || true
   return 0
 }
 
-# vc_api <METHOD> <PATH> [extra curl args...] -> body on stdout; VC_LAST_CODE set.
+# vc_api <METHOD> <PATH> [extra curl args...] -> body on stdout; status via vc_last_code.
+# ⚠️ Read the status with vc_last_code(), NEVER $VC_LAST_CODE: every real call is
+# `x="$(vc_api ...)"` -- a SUBSHELL -- so the variable holds the PREVIOUS call's status and a
+# die message built from it reports a plausible, wrong code (measured: "install failed (HTTP
+# 200)" for a 400, which sends you looking at the wrong thing entirely).
 # Returns non-zero on a non-2xx so callers can branch, WITHOUT dying (some callers expect 404).
 vc_api() {
   local method="$1" path="$2"; shift 2
@@ -78,7 +90,9 @@ vc_api() {
            --connect-timeout "${VC_CONNECT_TIMEOUT:-10}" --max-time "${VC_API_TIMEOUT:-120}" \
            -H "@${VC_HDR_FILE}" -H 'Content-Type: application/json' \
            "$@" "https://${VCENTER_HOST}${path}" 2>/dev/null || true)"
-  VC_LAST_CODE="$code"
+  # DELIBERATELY not also a variable: one that is correct only when the caller avoids a subshell
+  # is a trap, and it already produced a die message reporting HTTP 200 for a 400.
+  printf '%s' "$code" > "${VC_CODE_FILE:-/dev/null}"
   cat "$body"; rm -f "$body"
   case "$code" in 2*) return 0 ;; *) return 1 ;; esac
 }
@@ -129,7 +143,7 @@ vc_ss_register() {
   # 404 "The Supervisor Service create specification cannot be empty." MEASURED.
   jq -n --rawfile c "$b64" '{carvel_spec:{version_spec:{content:$c}}}' > "$req"
   out="$(vc_api POST '/api/vcenter/namespace-management/supervisor-services' \
-           --data-binary "@${req}")" || { rm -f "$b64" "$req"; die "register failed (HTTP $VC_LAST_CODE): $(printf '%s' "$out" | head -c 400)"; }
+           --data-binary "@${req}")" || { rm -f "$b64" "$req"; die "register failed (HTTP $(vc_last_code)): $(printf '%s' "$out" | head -c 400)"; }
   rm -f "$b64" "$req"
   return 0
 }
@@ -179,7 +193,7 @@ vc_ss_install() {
         [ "$i" = 1 ] && log_info "vCenter: service account not ready yet - retrying (up to ${tries}x)"
         i=$((i + 1)); sleep "${VC_SS_INSTALL_INTERVAL:-10}" ;;
       *)
-        rm -f "$req"; die "install failed (HTTP $VC_LAST_CODE): $(printf '%s' "$out" | head -c 400)" ;;
+        rm -f "$req"; die "install failed (HTTP $(vc_last_code)): $(printf '%s' "$out" | head -c 400)" ;;
     esac
   done
 }
