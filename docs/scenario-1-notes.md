@@ -56,11 +56,12 @@ fails it though the file is fine; on a **multi-document** file it passes if *any
 both keys; and it checks a key's **presence**, not the literal `key: false` the `sed` matches — so
 `enableNginxLoadBalancer: "false"` passes the guard while the substitution silently no-ops.
 
-**Confirm the edit landed** — this covers all four substitutions, including the two with no
-precondition at all (`hostname`, the storage class):
+**Confirm the edit landed** — the four `sed` expressions change **eight** lines, because
+`insert-storage-class-name-here` occurs five times (registry, jobservice, database, redis, trivy)
+and the other three targets occur once each:
 
 ```bash
-diff "$src" harbor-values.yaml    # expect exactly 4 changed lines
+diff "$src" ./secrets/harbor-values.yaml    # expect 8 changed lines (1+1+1+5)
 ```
 
 **The `:?` guards in the `sed` are load-bearing.** Without them an unset variable substitutes
@@ -278,3 +279,54 @@ number. And `static-check` assumes a populated `~/.m2` and a current trivy DB.
 **Provisioning is the variable row, not the mirror.** Run 2's cluster took ~6 min against run 1's
 3 m 45 s because it provisioned beside the lab's own cluster, while `install-all` got *faster*
 (10 m 26 s → 8 m 14 s) as Harbor warmed. The mirror gets monotonically warmer; the host gets busier.
+
+## A Supervisor Service stuck in `REMOVING` (or `CONFIGURING`)
+
+Re-issuing the uninstall does nothing, and vCenter refuses to deregister with
+`400 ... still installed`. Check Kubernetes first — if the namespace and pods are already
+gone, the workload really is removed and only **vCenter's record** is stuck:
+
+```bash
+kubectl get ns | grep '^svc-'                 # the service's namespace, if any
+make wcp-status                               # is Workload Management healthy?
+```
+
+MEASURED on a real lab: ArgoCD's uninstall left Carvel's `kapp` reporting
+`Timed out waiting after 15m0s for resources: endpoints/... namespace: svc-argocd-service-...`
+— endpoints in a namespace Kubernetes had **already deleted**. Nothing on the Supervisor side
+was left to delete, so the delete could never observe completion and the record never advanced.
+
+Restarting Workload Management makes its reconciler re-evaluate:
+
+```bash
+make wcp-restart          # waits until wcp is STARTED/HEALTHY again
+```
+
+**Blast radius:** this is Workload Management for the **whole vCenter** — every Supervisor and
+tenant loses provisioning, service install/uninstall and namespace management for the duration.
+**Running workloads are unaffected**: guest clusters, pods and LoadBalancers keep serving.
+A stuck `REMOVING` may need another reconcile cycle afterwards, and `kapp` waits in 15-minute
+rounds — so give it that long before concluding the restart did not help.
+
+`make wcp-start` and `make wcp-stop` exist for the rare case you want the service down
+deliberately. `wcp-stop` requires `CONFIRM=yes` because, unlike a restart, it stays down for
+every tenant until someone runs `wcp-start`.
+
+## `kubectl` suddenly says `Unauthorized` — your Supervisor token expired
+
+```text
+error: You must be logged in to the server (Unauthorized)
+```
+
+The Supervisor kubeconfig `make vks-login` writes carries a **time-limited token**, and Steps 5,
+6, 8 and 9 all use it well after Step 3. Take a long enough break — or have anything restart
+vCenter's Workload Management — and it stops working mid-runbook. Nothing is broken and nothing
+is lost:
+
+```bash
+make vks-login          # re-issues the token into the same kubeconfig
+```
+
+Our own scripts name this cause for you (`classify_kube_failure`). The bare message above is
+what you get from a **raw `kubectl`** — the ones this runbook has you run by hand in 1b, 2.6,
+3.6 and 8.

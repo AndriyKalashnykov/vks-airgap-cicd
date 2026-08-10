@@ -45,7 +45,24 @@ export PATH := $(shell cd $(CURDIR) && mise bin-paths 2>/dev/null | tr '\n' ':')
 # and must be GENERATED. It is deliberately env-only: it does NOT touch the image cache,
 # so a re-run still cache-skips the mirror (no re-download).
 ifneq ($(SKIP_DOTENV),1)
--include .env
+# ENV-PRESERVING INCLUDE (B84). A plain `-include .env` lets the FILE beat the ENVIRONMENT --
+# GNU make gives a makefile assignment precedence over an environment variable -- so
+# `export VAR=x; make <target>` was SILENTLY IGNORED. MEASURED: `export VKS_NAMESPACE=wld03;
+# make vsphere-namespace` operated on `lab` and reported success, because make then EXPORTS its
+# own value to the recipe, so load_env's selector snapshot never sees the operator's.
+#
+# Rewriting each `KEY=` to `KEY ?=` restores environment precedence: `?=` does not assign when
+# the variable is already defined, and environment variables ARE defined. It fixes EVERY key
+# rather than a curated selector list, which would rot.
+#
+# `make <target> VAR=value` still wins over both (a command-line assignment beats `?=`).
+# Generated UNDER secrets/: it is a rewrite of .env, so it carries the same credentials, and
+# secrets/ is already gitignored, gitleaks-allowlisted and asserted-untracked by
+# `make check-secrets-untracked`. At the repo root it tripped the secrets gate, correctly.
+secrets/.env.make: .env
+	@mkdir -p secrets
+	@umask 077; sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$<' > '$@'
+-include secrets/.env.make
 
 # ⚠️ EXPORTED, because `-include .env` above creates MAKE variables, NOT environment — MEASURED: a recipe
 # sees make-var=[AA:BB:CC] while the script it invokes sees []. fetch-ca.sh does not call load_env, so
@@ -324,6 +341,35 @@ builder-build: check-env ## (sneakernet, INTERNET box) Build the Maven builder i
 .PHONY: builder-push
 builder-push: check-env ## (sneakernet, AIR-GAP box) Push the CARRIED Maven builder into Harbor — needs Harbor, NOT the internet (uses the carried crane; no container engine)
 	@$(SCRIPTS)/22-builder-push.sh
+
+##@ Supervisor platform (real lab — replaces scenario-1's browser steps 1b/2/3)
+.PHONY: vsphere-namespace
+vsphere-namespace: ## Create the vSphere Namespace over the vCenter REST API (scenario-1 §1b). Idempotent: reports and does NOT rewrite an existing one
+	@$(SCRIPTS)/04-vsphere-namespace.sh
+
+.PHONY: install-harbor-service
+install-harbor-service: ## Install Harbor as a Supervisor Service (scenario-1 §2). GENERATES all 7 secrets — no hand-edited data-values
+	@$(SCRIPTS)/04-install-harbor-service.sh
+
+.PHONY: install-argocd-service
+install-argocd-service: ## Install ArgoCD as a Supervisor Service + its instance CR (scenario-1 §3)
+	@$(SCRIPTS)/08-install-argocd-service.sh
+
+.PHONY: wcp-status
+wcp-status: ## Read-only: is vCenter's Workload Management (wcp) service running and healthy?
+	@$(SCRIPTS)/wcp-service.sh status
+
+.PHONY: wcp-restart
+wcp-restart: ## Restart Workload Management (unblocks a Supervisor Service stuck in REMOVING). Whole-vCenter; running workloads keep serving
+	@$(SCRIPTS)/wcp-service.sh restart
+
+.PHONY: wcp-start
+wcp-start: ## Start Workload Management after a wcp-stop
+	@$(SCRIPTS)/wcp-service.sh start
+
+.PHONY: wcp-stop
+wcp-stop: ## Stop Workload Management (CONFIRM=yes). It STAYS down for every tenant until wcp-start — prefer wcp-restart
+	@CONFIRM="$(CONFIRM)" $(SCRIPTS)/wcp-service.sh stop
 
 ##@ VKS access
 .PHONY: vks-login

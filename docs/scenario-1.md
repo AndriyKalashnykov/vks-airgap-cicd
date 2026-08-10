@@ -13,15 +13,15 @@ syncs → the app serves the change. Two demo apps (Java and Go), proven by `mak
 
 ## The whole sequence
 
-Run these in this order. Steps 1b, 2 and 3 are browser work; everything else is a command.
+Run these in this order. Every step is a command — nothing here needs the vCenter UI.
 
 | | Step | You do |
 |---|---|---|
 | **0** | [Get the repo](#0-get-the-repo) | clone it, `cd` into it, create `.env` |
 | **1** | [Jump box](#1-jump-box) | install the toolchain; set 8 values in `.env` |
-| **1b** | [vSphere Namespace](#1b-the-vsphere-namespace) | browser: create it, attach storage + a VM class |
-| **2** | [Harbor](#2-harbor) | browser: install it; set 5 values |
-| **3** | [ArgoCD](#3-argocd) | browser + CLI: install it, get the CA, log in; set 4 values |
+| **1b** | [vSphere Namespace](#1b-the-vsphere-namespace) | `make vsphere-namespace`; set 6 values |
+| **2** | [Harbor](#2-harbor) | `make install-harbor-service`; set 2 values, then DNS |
+| **3** | [ArgoCD](#3-argocd) | `make install-argocd-service`, get the CA, log in; set 4 values |
 | **4** | [Guest cluster](#4-guest-cluster) | create it; set 1 value, then 3 more after it is up |
 | **5** | [Preflight](#5-preflight) | check the cluster will accept the install |
 | **6** | [Harbor's CA](#6-harbors-ca) | fetch it |
@@ -162,16 +162,29 @@ below once you have finished Step 3.
 Do this **now, before Step 3** — the login in Step 3 activates a context at this namespace and
 fails if it does not exist yet.
 
-**vCenter → Workload Management → Namespaces → Create Namespace.** Pick your Supervisor, name it.
-Then, in the namespace you just created:
+**→ set in `./.env`:**
 
-1. **Storage** → *Add Storage* → pick a storage policy — `wcp-vmfs`, or
-   `vsan-default-storage-policy` on vSAN.
-2. **VM Service** → *Add VM Class* → pick at least one — `best-effort-small` is enough.
+| key | example | how to get the value |
+|---|---|---|
+| `VCENTER_HOST` | `vcsa.env1.lab.test` | your vCenter FQDN from Step 0 — **not** the Supervisor IP |
+| `VCENTER_USERNAME` | `administrator@vsphere.local` | the same SSO login as Step 1 |
+| `VCENTER_PASSWORD` | *your value* | the same password as Step 1 |
+| `VKS_STORAGE_POLICY` | `vmfs-storage-policy` | vCenter → **Policies and Profiles → VM Storage Policies** — the policy NAME |
+| `VKS_VM_CLASSES` | `best-effort-small best-effort-medium` | space-separated; `best-effort-small` alone is enough |
+| `VKS_CLUSTER_COMPUTE` | *(leave unset)* | only needed when vCenter has **more than one** cluster |
+
+```bash
+make vsphere-namespace
+```
+
+**Expect:** `created vSphere Namespace '<name>' …` then `namespace '<name>' is RUNNING`.
+It is idempotent — run it against a namespace that already exists and it prints what is attached
+and changes nothing.
 
 Do not add a content library; guest-cluster node images do not come from one.
 
-No permission to create namespaces? Ask your vSphere admin for one, with those two things attached.
+No permission to create namespaces? Ask your vSphere admin for one, with a storage policy and a
+VM class attached.
 
 ### Check it before Step 4
 
@@ -200,54 +213,42 @@ A namespace missing either still accepts the cluster in Step 4, then never finis
 The registry every image comes from.
 [Broadcom docs](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-harbor-as-vcf-service/installing-and-configuring-harbor-and-contour.html)
 
-1. Give Harbor an **NGINX LoadBalancer** (`enableNginxLoadBalancer: true`, set in 2.4 below).
-   Contour is not covered by this runbook.
-2. vCenter → Workload Management → Supervisor Services → **Add New Service** → upload
-   `supervisor-service-harbor-legacy-*.yml` (use the `-legacy` file for a disconnected Supervisor).
-3. Decide two values:
+> **Already have Harbor?** Many labs ship it. Check first — vCenter → Workload Management →
+> **Supervisor Services**, or `kubectl get ns | grep harbor`. If it is there, **skip the install
+> below** and go straight to the `.env` table at the end of this step; you need its FQDN and an
+> account, not a second installation.
 
-   | | example | how to get it |
-   |---|---|---|
-   | Harbor's FQDN | `harbor.env1.lab.test` | **you choose it.** It must be a name your real DNS can answer, because the guest cluster's nodes resolve it — see 2.6 below. |
-   | Harbor's storage class | `wcp-vmfs` (single-host VMFS)<br>`vsan-default-storage-policy` (vSAN) | `kubectl get storageclass` against the Supervisor. No access yet? vCenter → your Namespace → **Storage** tab, then lowercase the policy name and replace spaces with `-`. |
+**→ set in `./.env`:**
 
-4. Edit the data-values file you downloaded:
+| key | example | how to get the value |
+|---|---|---|
+| `HARBOR_URL` | `harbor.env1.lab.test` | **you choose it.** It must be a name your real DNS can answer — the guest cluster's nodes resolve it. **Bare host — no `https://`, no trailing slash.** |
+| `HARBOR_STORAGE_CLASS` | `wcp-vmfs` (single-host VMFS)<br>`vsan-default-storage-policy` (vSAN) | `kubectl get storageclass` against the Supervisor. No access yet? vCenter → your Namespace → **Storage** tab, then lowercase the policy name and replace spaces with `-`. |
 
-   ```bash
-   cd vks-airgap-cicd            # from Step 0
-   src=~/Downloads/vcf/supervisor-service-harbor-data-values-v2.14.3.yml
-   HARBOR_FQDN='harbor.env1.lab.test'      # <- your value from the table above
-   HARBOR_STORAGE_CLASS='wcp-vmfs'         # <- your value from the table above
+`VCENTER_HOST` / `VCENTER_USERNAME` / `VCENTER_PASSWORD` are already set from Step 1b.
 
-   cp "$src" harbor-values.yaml
-   sed -i \
-     -e "s/hostname: yourdomain.com/hostname: ${HARBOR_FQDN:?}/" \
-     -e 's/enableNginxLoadBalancer: false/enableNginxLoadBalancer: true/' \
-     -e "s/insert-storage-class-name-here/${HARBOR_STORAGE_CLASS:?}/" \
-     -e 's/enableContourHttpProxy: true/enableContourHttpProxy: false/' \
-     harbor-values.yaml
+```bash
+make install-harbor-service
+```
 
-   diff "$src" harbor-values.yaml          # expect exactly 4 changed lines
-   ```
+**Expect:** `7 secrets generated, 0 placeholders left`, then `install issued for
+harbor.tanzu.vmware.com`. It registers the service, installs it with an NGINX LoadBalancer, and
+**generates every one of Harbor's seven required secrets** — including the admin password, which
+otherwise ships as the published default `Harbor12345`. Nothing is hand-edited and nothing is
+pasted into a browser. `HARBOR_USERNAME` and `HARBOR_PASSWORD` are written to the state overlay
+for you. Re-running is safe: an already-registered service is detected and skipped.
 
-   Then open `harbor-values.yaml` and replace **every `[Required]` secret** with a distinct value of
-   your own: `harborAdminPassword` (ships the known default `Harbor12345` — change it),
-   `secretKey` (exactly 16 chars), `core.xsrfKey` (exactly 32 chars), `database.password`,
-   `core.secret`, `jobservice.secret`, `registry.secret`.
-   Leave `tls.crt` / `tls.key` / `ca.crt` empty. Do not touch `tlsCertificate.tlsSecretLabels`.
+**Then point DNS at it.** Read the ingress IP in vCenter (**Workload Management → Supervisor
+Services → Harbor**), or with `kubectl` **once you have finished Step 3** — nothing before Step 3
+has written a Supervisor kubeconfig:
 
-5. Supervisor Services → Harbor → **Manage Service** → paste `harbor-values.yaml` → Finish.
-6. Get the ingress IP and create a **real DNS A record** for your FQDN:
+```bash
+kubectl --kubeconfig ./secrets/supervisor.kubeconfig get svc -A | grep -i harbor
+# take the EXTERNAL-IP and create   harbor.env1.lab.test -> that IP   in your DNS
+```
 
-   Read it in vCenter (**Workload Management → Supervisor Services → Harbor**), or with `kubectl`
-   **once you have finished Step 3** — nothing before Step 3 has written a Supervisor kubeconfig:
-
-   ```bash
-   kubectl --kubeconfig ./secrets/supervisor.kubeconfig get svc -A | grep -i harbor
-   # take the EXTERNAL-IP and create   harbor.env1.lab.test -> that IP   in your DNS
-   ```
-
-   `/etc/hosts` is **not** enough — the guest cluster's nodes must resolve it too (see notes).
+`/etc/hosts` is **not** enough — the guest cluster's nodes must resolve it too (see notes).
+This is the one part of this step nobody can automate for you: it is your DNS.
 
 **Expect:** Harbor's UI answers at `https://<your FQDN>/`. *(~10 min)*
 
@@ -255,11 +256,12 @@ The registry every image comes from.
 
 | key | example | how to get the value |
 |---|---|---|
-| `HARBOR_URL` | `harbor.env1.lab.test` | the FQDN you chose. **Bare host — no `https://`, no trailing slash.** |
-| `HARBOR_USERNAME` | `admin` | Harbor's built-in admin (Step 7 replaces it with a robot) |
-| `HARBOR_PASSWORD` | *your value* | the `harborAdminPassword` you set in `harbor-values.yaml` above |
 | `HARBOR_INFRA_PROJECT` | `cicd` | **you choose** — the Harbor project for pipeline images |
 | `HARBOR_APP_PROJECT` | `apps` | **you choose** — the Harbor project for app images |
+
+`HARBOR_USERNAME` (`admin`) and `HARBOR_PASSWORD` were **generated and published for you** by
+`make install-harbor-service` — you do not set them, and the admin password is not the vendor
+default. Read them back any time with `make creds-show`.
 
 ---
 
@@ -268,11 +270,26 @@ The registry every image comes from.
 The GitOps engine, running on the Supervisor.
 [Broadcom docs](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-argo-cd-service/install-argo-cd-service.html)
 
-1. Supervisor Services → **Add New Service** → upload `supervisor-service-argocd-legacy-*.yml`.
-2. Create a vSphere Namespace for the instance — **same procedure as [1b](#1b-the-vsphere-namespace)**
-   (storage policy + VM class). It can be the one from 1b or a separate one; note which, because
-   `ARGOCD_NAMESPACE` below is the namespace the **instance** ends up in, and they are often not the
-   same.
+> **Already have ArgoCD?** Check: `kubectl get argocd -A`, or vCenter → Workload Management →
+> **Supervisor Services**. If it is there, skip sub-steps 1 and 2 — you still need **3.3** (the
+> Supervisor CA), **3.4** (log in) and the `.env` table at the end.
+
+1. **Pick the namespace the INSTANCE goes in.** `ARGOCD_NAMESPACE` is where the ArgoCD you log into
+   ends up, and it is often **not** the namespace the guest cluster lives in. Leave it unset to use
+   `VKS_NAMESPACE`; for a separate one, create it exactly as in [1b](#1b-the-vsphere-namespace)
+   (`make vsphere-namespace` with `VKS_NAMESPACE` pointed at it).
+
+2. Install the service and its instance:
+
+   ```bash
+   make install-argocd-service
+   ```
+
+   **Expect:** `install issued for argocd-service.vsphere.vmware.com`, then — once the operator
+   publishes its CRD — `ArgoCD instance argocd-1 requested in namespace <ns>`. It waits for the CRD
+   rather than racing it, and asks the operator which versions it supports instead of hardcoding
+   one. Re-running is safe. If you have no Supervisor kubeconfig yet it installs the service, tells
+   you so, and stops before the instance — run it again after 3.4.
 
 3. **Get the Supervisor's CA.** You need it to log in without disabling TLS verification. It comes
    from **vCenter**, not the Supervisor (the Supervisor serves only its leaf certificate):
@@ -312,13 +329,11 @@ The GitOps engine, running on the Supervisor.
    `vcf context use` can print an error about a "system Harbor registry" **and still have
    worked** — judge it by the next command, not its exit code.
 
-5. Apply the instance CR. `kubectl explain argocd.spec.version` lists what your operator supports:
+5. **Did 3.2 stop before the instance** because there was no kubeconfig yet? Run it again now —
+   it is idempotent and will create the instance this time:
 
-   ```yaml
-   apiVersion: argocd-service.vsphere.vmware.com/v1alpha1
-   kind: ArgoCD
-   metadata: { name: argocd-1, namespace: <the namespace from 3.2> }
-   spec: { version: <a supported version> }
+   ```bash
+   make install-argocd-service
    ```
 
 6. Get its address, then read the initial admin login that ArgoCD generated.
@@ -337,7 +352,7 @@ The GitOps engine, running on the Supervisor.
 
 | key | example | how to get the value |
 |---|---|---|
-| `ARGOCD_NAMESPACE` | `lab` | the namespace your ArgoCD **instance** runs in. **Discover it — do not assume:** `kubectl get argocd -A` (on one real lab this was `lab`, not the `argocd-instance-1` from 3.2) |
+| `ARGOCD_NAMESPACE` | `lab` | the namespace your ArgoCD **instance** runs in. **Discover it — do not assume:** `kubectl get argocd -A` (on one real lab this was `lab`, not the namespace named in 3.1) |
 | `ARGOCD_SERVER` | `192.168.101.131` | the `argocd-server` EXTERNAL-IP from 3.6 |
 | `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | the file you created in 3.3 above |
 | `VKS_AUTH_METHOD` | `vcf` | **set this to `vcf` now.** It selects how you log in, and `vcf` is the Supervisor login this step is doing. Step 4 changes it to `kubeconfig`. |
