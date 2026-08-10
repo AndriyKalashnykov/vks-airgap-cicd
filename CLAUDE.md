@@ -532,66 +532,56 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-07-23 (B55 + VCF CLI acquisition) — READ, THEN REPLACE (do not append)
+## ▶️ HANDOFF 2026-08-10 (the lab was REBUILT; Supervisor Services are now installable) — READ, THEN REPLACE (do not append)
 
-**ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks → the Backlog
-([`BACKLOG.md`](BACKLOG.md)). History → git. Only "what is in flight and what to distrust" here.
+**ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
+[`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
 > 🔴 **NO BUILD-STATUS CLAIMS IN THIS SECTION** — a task status is true when written and falsified by
 > the next commit. Write the STATE; query anything that moves.
 
-**State: `main` at `c8ae5ac`. NOTHING in flight** — no open PRs, no local branch but `main`, clean
-tree. The whole B55 + VCF-CLI arc landed (PR #424 bump + acquisition docs, PR #426 doc trim), then
-two Renovate PRs merged on top. `origin/renovate/renovate-43.x` is Renovate's bot-owned reusable
-branch — **leave it**.
+**State: NOTHING in flight** — no open PRs of ours (only Renovate), no local branch but `main`,
+clean tree. Nine stale branches and a `/tmp/vks-docgate` worktree were pruned, each verified merged
+**by content** first (`git log origin/main..branch` shows squash-merged work as unmerged — trust it
+and you delete on a guess or keep forever). No SHA is written here on purpose: the commit that
+writes one invalidates it (B63). `git log --oneline -5` is the tip.
 
-### What this session did
+### The lab is NOT the one earlier handoffs describe
 
-- **B55 — CLOSED as MOOT.** The literal Box-arch question is un-decidable (password-blocked) and no
-  longer relevant: the operator's portal folder (`~/Downloads/vcf`) already ships the plugin bundle
-  per-arch (Linux AMD64 + ARM64, measured `tar tzf`), and `resolve_archive` picks the right one on
-  both arches (vks + bash adversaries confirmed, measured). See BACKLOG B55.
-- **9.1 CLIs are ENTITLED → Method 2 (password Box) DROPPED (owner decision).** Measured: the public
-  `packages.broadcom.com/artifactory/vcf-distro/vcf-cli` serves only ≤9.0.x; 9.1 comes from the
-  Broadcom portal / Supervisor. New canonical section
-  [Acquiring the VCF CLI archives](docs/vks-authentication.md#acquiring-the-licensed-vcf-cli-archives)
-  (portal source + per-arch manifest + the arm64 argocd fallback); README's broken "where to get
-  them" link repointed; scenario-1/2 + `.env.example` cross-linked.
-- **Pinned CLI + Plugins to 9.1.0.0400** (`.env.example`) after checking the Broadcom portal in the
-  operator's own browser — the previously-pinned build was already superseded there. Proven end to
-  end on the real artifacts, not inferred: `vcf version` reported v9.1.0.0400.25509669 and an
-  offline `vcf plugin install all` installed all 11 plugins from the folder.
-- **Plugins arch-safety fix** (`scripts/01-install-vcf-clis.sh`): the plugins glob was arch-blind
-  (latent wrong-arch mis-pick on a partial arm64 folder). Bound it to `Linux_${vcf_arch}` + added a
-  pre-install `vcf-*-linux_${go_arch}` assertion (mirrors `install_vcf_cli`). RED-proven in
-  `scripts/test-vcf-cli-resolve.sh` (9/9; reverting both fixes → 2 fail).
+It was destroyed and rebuilt on 2026-08-10. Consequences that will bite:
+
+- **A new VMCA.** Every `./secrets/*.crt` and kubeconfig predating the rebuild is dead. `make
+  vks-login` refuses with *"the CA at … does NOT verify"* until `make fetch-supervisor-ca` re-fetches.
+- **`./secrets/supervisor.kubeconfig` is EXPIRED right now** (`Unauthorized`). That is normal — the
+  token is time-limited — and `make vks-login` re-issues it.
+- **Harbor and ArgoCD are NOT installed.** They were installed by the new targets, walked end to
+  end, then uninstalled AND deregistered as the final test. `make list-supervisor-services` shows
+  only `tkg` / `velero` / `cci-ns`.
+- **Guest cluster `istio1` (ns `lab`) is still UP** — nodes Ready, kubeconfig at
+  `./secrets/istio1.kubeconfig`. `nlab1`/`nlab2` were removed by `uninstall-all`.
+- `.env.state` from the previous lab was archived to `.env.state.old-lab-*`.
 
 ### 🔴 Distrust these — measured, not reasoned
 
-- **`argocd-vcf` is amd64-only** (Broadcom ships no linux-arm64) — an arm64 lab box must use the
-  upstream argocd from `make deps` and skip `install-argocd-vcf` (now documented). The `vcf` CLI +
-  plugin bundle are both-arch.
-- **The `vcf context create` `--username`+`--type kubernetes` pairing** that `make vks-login` /
-  `31-fetch-argocd-kubeconfig.sh` send is NOT lab-verified; the minimal form (positional context,
-  **bare** endpoint, `--auth-type basic`, then `vcf context use <ctx>:<ns>`) is printed as fallback.
-  **Most likely thing to bite on a lab.**
-- **A `<…>` placeholder on a line inside a sourced `.env` block is a shell redirection that silently
-  truncates the file.** Use tables in operator `.env` docs, not `.env` code blocks.
+- **`make static-check` does NOT include `docs-lint`.** `make ci` is static-check + docs-lint +
+  diagrams-check. A green static-check after editing docs is not coverage: CI caught a `|` inside a
+  `[src: cmd="…"]` citation that split a markdown table, after static-check had been reported green.
+- **`vcf package install` is UNVERIFIED.** `install-vks-package` creates the `PackageInstall`
+  directly — the same object the CLI creates, but the CLI wrapper itself has never been run here.
+- **The 2026-08-09 wedged-Supervisor-Service incident is NOT reproducible.** On a healthy service the
+  uninstall took **40 s** (ArgoCD) and **80 s** (Harbor). The eight-rung escalation ladder in
+  `docs/scenario-1-notes.md` records a rare failure, not how this behaves — do not read it as the norm.
+- **A Supervisor Service install can return HTTP 500 having SUCCEEDED.** Handled now (a non-2xx
+  verifies the end state before failing), but the platform does it.
+- **Carvel `Package` objects are namespaced to `vmware-system-tkg`.** A `PackageInstall` anywhere
+  else fails `Package … not found`, which reads as a missing package and is a wrong namespace.
 
-### Next — owner- or lab-gated
+### What the lab now proves (re-derive rather than trust if it matters)
 
-- **Lab `docs/lab-validation-plan.md` step 13** (B2/B26) — highest-value single command; settles the
-  Gateway-API CRD ownership + injector-selector risk, the only open item touching shipping behaviour.
-- **B60** (third box vocabulary in 8 script comments) and **B59-alternative** (retire "jump box" from
-  `make jumpbox*`/`JUMPBOX_OS`) are naming decisions — owner's call, not defects.
-- **B61 / B62 / B63 — the session-end adversary's findings (2026-07-23), all measured, none fixed.**
-  B61 is the highest-value and is in *claude-config*, not here: a measured-false zsh claim in the
-  always-loaded corpus, so it misinforms every session in every repo (and fixing it SHRINKS the
-  corpus). B62 carries a ⛔ guard — the adversary's own HIGH finding was refuted by measuring the
-  operator's real portal folder, so do not "fix" the plugins glob. B63 is this section's own SHA.
-- **Operator-machine residue `git status` cannot see:** `~/.config/box-pw` (mode 0600) is left over
-  from the DROPPED Mode-2 Box download. Nothing in this repo reads it. It is the owner's secret, so
-  it was neither read nor removed — delete it with `rm ~/.config/box-pw` when convenient.
+Both scenario-1 walks (Photon, Ubuntu) passed on infrastructure this repo installed itself — Harbor
+and ArgoCD placed by `make install-harbor-service` / `install-argocd-service`, then `git push →
+Tekton → Harbor → write-back → ArgoCD → live page` verified for both apps. Harbor's generated admin
+password authenticates and the vendor default `Harbor12345` is rejected 401.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
