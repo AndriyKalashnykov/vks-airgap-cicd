@@ -321,6 +321,31 @@ make list-supervisor-services      # what vCenter knows, and the SERVICE=<id> to
 make unwedge-supervisor-service SERVICE=argocd-service.vsphere.vmware.com CONFIRM=yes
 ```
 
+### When nothing clears it — the full escalation ladder, and where it ends
+
+MEASURED 2026-08-09 against one wedged ArgoCD service, over ~90 minutes. Every rung was
+refused **by the platform**, not by our tooling. Recorded so nobody re-walks it:
+
+| attempt | platform's answer |
+|---|---|
+| `services-uninstall` x4 | accepted, never completes |
+| `make wcp-restart` | service healthy again, record unchanged |
+| delete the workload objects it waits on | namespace emptied, record unchanged |
+| install | **400** — "already exists" |
+| update (PUT the spec) | **204 accepted** — but nothing reconciled |
+| deregister / delete-version | **400** — "still installed" |
+| delete the `svc-*` namespace | **denied by admission webhook**, for every user incl. vCenter admin |
+| reset the Supervisor control-plane VM | **403 Forbidden** — it is a protected system VM |
+
+**A timing trap that makes all four uninstalls look identical:** the lab tool waits **600 s**
+while `kapp` retries in **15-minute (900 s) rounds**, so it *always* reports failure before a
+round can finish — whether or not anything is progressing. Judge by the message CHANGING
+(`endpoints` -> `endpointslice` means it is advancing), not by the tool's verdict.
+
+**Where it ends:** a service in this state cannot be installed, updated, removed or deregistered,
+and the Supervisor cannot be restarted to clear it. The remaining remedy is rebuilding the
+Supervisor. Worth knowing before spending an hour on the ladder.
+
 **Where a service id comes from:** vCenter DERIVES it from the service-definition YAML's
 content, so it is dotted (`harbor.tanzu.vmware.com`) and *not* the dash-only catalogue key
 (`harbor`). You cannot invent it — read it from `make list-supervisor-services`, or from
