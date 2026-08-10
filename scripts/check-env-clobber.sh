@@ -114,6 +114,25 @@ done
 
 is_protected() { case " $PROTECTED " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
+# ⚠️ MUST-PROTECT: variables whose ONLY documented override form is an env PREFIX in a script's own
+# usage line. They ship COMMENTED in .env.example, so the uncommented-value loop below can NEVER
+# reach them -- this gate is otherwise blind to them in BOTH directions, and the drift assertion
+# above is one-directional (removing one SHRINKS PROTECTED, which stays a subset, so it stays green).
+#
+# WHY THIS EXISTS (2026-08-10): VCF_CLI_SRC_DIR was missing from load_env's snapshot, so
+# `VCF_CLI_SRC_DIR=<dir> scripts/01-install-vcf-clis.sh` -- the form that script's usage line
+# documents -- was silently defeated by .env, and the installer resolved the WRONG artifacts. The
+# only thing that detected it was test-vcf-cli-resolve, which drives the installer with exactly that
+# env prefix; that test has since (correctly) been made hermetic with SKIP_DOTENV=1, which removes
+# it as a detector. This assertion is its replacement. RED-proof: delete VCF_CLI_SRC_DIR from
+# load_env's `for _sel in ...` list and confirm this dies.
+MUST_PROTECT="VCF_CLI_SRC_DIR"          # space-separated; grows as more env-prefix overrides appear
+for _must in $MUST_PROTECT; do
+  is_protected "$_must" || die "'${_must}' is documented as an env-prefix override (VAR=<x> scripts/...)
+  but load_env does NOT snapshot-protect it, so .env silently WINS and the override is inert.
+  Add it to the 'for _sel in ...' list in lib/os.sh (and to SELECTORS above)."
+done
+
 rc=0
 checked=0
 for v in "${UNCOMMENTED[@]}"; do

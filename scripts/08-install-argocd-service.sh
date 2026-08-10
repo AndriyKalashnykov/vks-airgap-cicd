@@ -75,7 +75,7 @@ fi
 SUP="${VKS_SUPERVISOR_KUBECONFIG:-${SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}}"
 if [ ! -s "$SUP" ]; then
   log_warn "no Supervisor kubeconfig at '${SUP}' - skipping the instance CR."
-  log_warn "  run 'make vks-login' first, then: make install-argocd-instance"
+  log_warn "  run 'make vks-login' first, then: make install-argocd-service"
   exit 0
 fi
 
@@ -140,7 +140,7 @@ fi
   Neither the CRD schema nor a published Carvel Package answered, and this deliberately does
   NOT guess from 'kubectl explain' (that is prose, and scraping it has already produced an
   invalid value). Set it explicitly:
-    kubectl get packages.data.packaging.carvel.dev -A | grep argocd.kubernetes
+    kubectl --kubeconfig ${SUP} get packages.data.packaging.carvel.dev -A | grep argocd.kubernetes
     make install-argocd-service ARGOCD_INSTANCE_VERSION=<the VERSION column>"
 
 # VALIDATE before applying. The CRD tells us the exact shape it will accept, so a bad value
@@ -158,7 +158,7 @@ if [ -n "$_pattern" ]; then
     *)
       printf '%s' "$VER" | grep -qE "$_ere" || die "resolved ArgoCD version '${VER}' does not match what the CRD accepts (${_pattern}).
   Set ARGOCD_INSTANCE_VERSION to one of:
-    kubectl get packages.data.packaging.carvel.dev -A | grep argocd.kubernetes" ;;
+    kubectl --kubeconfig ${SUP} get packages.data.packaging.carvel.dev -A | grep argocd.kubernetes" ;;
   esac
 fi
 

@@ -150,7 +150,16 @@ CHART_GATEWAY="$(chart_ref gateway)"
 # install-ingress` failed. istio-system carried NO PSA labels at all, so it inherited the
 # cluster default, which VKS sets to `restricted` (VKr v1.26+).
 # INVISIBLE ON KinD, which enforces nothing -- this is a lab-fidelity gap, not a flake.
-ensure_namespace "$ISTIO_NAMESPACE"         "${PSA_LEVEL_ISTIO_SYSTEM:-baseline}"
+# ⚠️ NEITHER mesh namespace goes through ensure_namespace. That helper is create+psa+
+# istio_no_inject_label, and TWO controls state the third must never touch these namespaces:
+# lib/psa.sh ("istio-system is never passed here, so attach mode cannot touch the platform's own
+# namespace") and check-namespace-labelled.sh. Beyond the invariant it is a live hazard:
+# ISTIO_GATEWAY_NAMESPACE is env-settable and nothing asserts it differs from ISTIO_NAMESPACE, so
+# the classic same-namespace layout would stamp istio-injection=disabled and re-create the
+# ImagePullBackOff below. `run` so DRY_RUN=1 stays a dry run; stderr is NOT suppressed, so an RBAC
+# refusal says so instead of surfacing as an apply error on empty input.
+run bash -c "kubectl create namespace \"$ISTIO_NAMESPACE\" --dry-run=client -o yaml | kubectl apply -f -"
+psa_label_namespace "$ISTIO_NAMESPACE" "${PSA_LEVEL_ISTIO_SYSTEM:-baseline}"
 
 # ⚠️ THE GATEWAY NAMESPACE GETS PSA LABELS BUT **NOT** `istio-injection=disabled`.
 # ensure_namespace stamps that label on purpose (lib/psa.sh, Backlog B26) so a platform mesh cannot
@@ -160,8 +169,7 @@ ensure_namespace "$ISTIO_NAMESPACE"         "${PSA_LEVEL_ISTIO_SYSTEM:-baseline}
 # the webhook's namespaceSelector then excluded it, `auto` was never rewritten, and the pod sat in
 #   Back-off pulling image "auto"  /  ErrImagePull
 # with a perfectly correct `sidecar.istio.io/inject: "true"` LABEL on the pod itself.
-kubectl create namespace "$ISTIO_GATEWAY_NAMESPACE" --dry-run=client -o yaml 2>/dev/null \
-  | kubectl apply -f - >/dev/null
+run bash -c "kubectl create namespace \"$ISTIO_GATEWAY_NAMESPACE\" --dry-run=client -o yaml | kubectl apply -f -"
 psa_label_namespace "$ISTIO_GATEWAY_NAMESPACE" "${PSA_LEVEL_INGRESS:-baseline}"
 
 # --- 2. CRDs (istio/base) -----------------------------------------------------
