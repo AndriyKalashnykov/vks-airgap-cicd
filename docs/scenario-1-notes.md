@@ -56,11 +56,12 @@ fails it though the file is fine; on a **multi-document** file it passes if *any
 both keys; and it checks a key's **presence**, not the literal `key: false` the `sed` matches — so
 `enableNginxLoadBalancer: "false"` passes the guard while the substitution silently no-ops.
 
-**Confirm the edit landed** — this covers all four substitutions, including the two with no
-precondition at all (`hostname`, the storage class):
+**Confirm the edit landed** — the four `sed` expressions change **eight** lines, because
+`insert-storage-class-name-here` occurs five times (registry, jobservice, database, redis, trivy)
+and the other three targets occur once each:
 
 ```bash
-diff "$src" harbor-values.yaml    # expect exactly 4 changed lines
+diff "$src" ./secrets/harbor-values.yaml    # expect 8 changed lines (1+1+1+5)
 ```
 
 **The `:?` guards in the `sed` are load-bearing.** Without them an unset variable substitutes

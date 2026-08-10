@@ -224,26 +224,34 @@ The registry every image comes from.
    HARBOR_FQDN='harbor.env1.lab.test'      # <- your value from the table above
    HARBOR_STORAGE_CLASS='wcp-vmfs'         # <- your value from the table above
 
-   cp "$src" harbor-values.yaml
+   # ./secrets/ is gitignored AND asserted-untracked by `make check-secrets-untracked`.
+   # In a moment this file holds SEVEN plaintext credentials - do not put it anywhere
+   # else in the repo. (gitleaks does not scan ./secrets/; being un-committable is what
+   # protects it, which is why the path matters more than the scan.)
+   mkdir -p ./secrets
+   cp "$src" ./secrets/harbor-values.yaml
+   chmod 0600 ./secrets/harbor-values.yaml   # cp does NOT lower an existing file's mode,
+                                             # and a re-run would leave it world-readable
    sed -i \
      -e "s/hostname: yourdomain.com/hostname: ${HARBOR_FQDN:?}/" \
      -e 's/enableNginxLoadBalancer: false/enableNginxLoadBalancer: true/' \
      -e "s/insert-storage-class-name-here/${HARBOR_STORAGE_CLASS:?}/" \
      -e 's/enableContourHttpProxy: true/enableContourHttpProxy: false/' \
-     harbor-values.yaml
+     ./secrets/harbor-values.yaml
 
-   diff "$src" harbor-values.yaml          # expect 8 changed lines: hostname, the two
-                                           # toggles, and storageClass x5. Fewer means a
-                                           # pattern did not match - do not continue.
+   diff "$src" ./secrets/harbor-values.yaml   # expect 8 changed lines:
+   #   1 hostname + 1 enableNginxLoadBalancer + 1 enableContourHttpProxy
+   # + 5 storageClass  (the placeholder occurs 5x: registry, jobservice, database, redis, trivy)
+   # Fewer than 8? The count tells you which substitution missed.
    ```
 
-   Then open `harbor-values.yaml` and replace **every `[Required]` secret** with a distinct value of
+   Then open `./secrets/harbor-values.yaml` and replace **every `[Required]` secret** with a distinct value of
    your own: `harborAdminPassword` (ships the known default `Harbor12345` — change it),
    `secretKey` (exactly 16 chars), `core.xsrfKey` (exactly 32 chars), `database.password`,
    `core.secret`, `jobservice.secret`, `registry.secret`.
    Leave `tls.crt` / `tls.key` / `ca.crt` empty. Do not touch `tlsCertificate.tlsSecretLabels`.
 
-5. Supervisor Services → Harbor → **Manage Service** → paste `harbor-values.yaml` → Finish.
+5. Supervisor Services → Harbor → **Manage Service** → paste `./secrets/harbor-values.yaml` → Finish.
 6. Get the ingress IP and create a **real DNS A record** for your FQDN:
 
    Read it in vCenter (**Workload Management → Supervisor Services → Harbor**), or with `kubectl`
@@ -264,9 +272,12 @@ The registry every image comes from.
 |---|---|---|
 | `HARBOR_URL` | `harbor.env1.lab.test` | the FQDN you chose. **Bare host — no `https://`, no trailing slash.** |
 | `HARBOR_USERNAME` | `admin` | Harbor's built-in admin (Step 7 replaces it with a robot) |
-| `HARBOR_PASSWORD` | *your value* | the `harborAdminPassword` you set in `harbor-values.yaml` above |
+| `HARBOR_PASSWORD` | *your value* | the `harborAdminPassword` you set in `./secrets/harbor-values.yaml` above |
 | `HARBOR_INFRA_PROJECT` | `cicd` | **you choose** — the Harbor project for pipeline images |
 | `HARBOR_APP_PROJECT` | `apps` | **you choose** — the Harbor project for app images |
+
+**Once `HARBOR_PASSWORD` is in `./.env`,** this file has no further use and it holds seven
+plaintext credentials: `shred -u ./secrets/harbor-values.yaml`
 
 ---
 
