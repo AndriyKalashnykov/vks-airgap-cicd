@@ -170,8 +170,12 @@ fails if it does not exist yet.
 | `VCENTER_USERNAME` | `administrator@vsphere.local` | the same SSO login as Step 1 |
 | `VCENTER_PASSWORD` | *your value* | the same password as Step 1 |
 | `VKS_STORAGE_POLICY` | `vmfs-storage-policy` | vCenter → **Policies and Profiles → VM Storage Policies** — the policy NAME |
-| `VKS_VM_CLASSES` | `best-effort-small best-effort-medium` | space-separated; `best-effort-small` alone is enough |
-| `VKS_CLUSTER_COMPUTE` | *(leave unset)* | only needed when vCenter has **more than one** cluster |
+| `VKS_VM_CLASSES` | `best-effort-small best-effort-medium` | space-separated; `best-effort-small` alone is enough. Defaults to the example, and the names are **sent to vCenter unchecked** — a class that does not exist fails with an HTTP code that does not mention VM classes. |
+| `VKS_CLUSTER_COMPUTE` | *(leave unset)* | **only if** vCenter has **more than one** cluster. Steps 2 and 3 need it too, not just this one. |
+
+⚠️ **`make vsphere-namespace` will not modify a namespace that already exists** — it prints what is
+attached and changes nothing. So if the check below finds a missing storage policy or VM class, fix
+it in vCenter (or delete and recreate the namespace); re-running with a corrected `.env` is a no-op.
 
 ```bash
 make vsphere-namespace
@@ -227,6 +231,10 @@ The registry every image comes from.
 
 `VCENTER_HOST` / `VCENTER_USERNAME` / `VCENTER_PASSWORD` are already set from Step 1b.
 
+**Skipped 1b because you already had a namespace?** If your vCenter has **more than one cluster**,
+set `VKS_CLUSTER_COMPUTE` (1b's table) as well — this step and Step 3 both resolve the cluster and
+stop with *"could not resolve the vSphere cluster moid"* without it.
+
 ```bash
 make install-harbor-service
 ```
@@ -257,10 +265,14 @@ This is the one part of this step nobody can automate for you: it is your DNS.
 
 **→ set in `./.env`:**
 
-| key | example | how to get the value |
-|---|---|---|
-| `HARBOR_INFRA_PROJECT` | `cicd` | **you choose** — the Harbor project for pipeline images |
-| `HARBOR_APP_PROJECT` | `apps` | **you choose** — the Harbor project for app images |
+<details><summary>Optional — both default to working values (<code>cicd</code> / <code>apps</code>). Open only to rename them, or if you are a project-admin rather than a system-admin.</summary>
+
+| key | default | example | how to get the value |
+|---|---|---|---|
+| `HARBOR_INFRA_PROJECT` | `cicd` | `cicd` | **you choose** — the Harbor project for pipeline images |
+| `HARBOR_APP_PROJECT` | `apps` | `apps` | **you choose** — the Harbor project for app images. **Project-admin rather than system-admin?** Set this **equal to `HARBOR_INFRA_PROJECT`** — Step 7's robot can only be scoped to projects you administer. |
+
+</details>
 
 `HARBOR_USERNAME` (`admin`) and `HARBOR_PASSWORD` were **generated and published for you** by
 `make install-harbor-service` — you do not set them, and the admin password is not the vendor
@@ -278,9 +290,14 @@ The GitOps engine, running on the Supervisor.
 > Supervisor CA), **3.4** (log in) and the `.env` table at the end.
 
 1. **Pick the namespace the INSTANCE goes in.** `ARGOCD_NAMESPACE` is where the ArgoCD you log into
-   ends up, and it is often **not** the namespace the guest cluster lives in. Leave it unset to use
-   `VKS_NAMESPACE`; for a separate one, create it exactly as in [1b](#1b-the-vsphere-namespace)
-   (`make vsphere-namespace` with `VKS_NAMESPACE` pointed at it).
+   ends up, and it is often **not** the namespace the guest cluster lives in. For a separate one,
+   create it exactly as in [1b](#1b-the-vsphere-namespace) (`make vsphere-namespace` with
+   `VKS_NAMESPACE` pointed at it).
+
+   ⚠️ **You must set it in `.env` either way.** Only *this* step falls back to `VKS_NAMESPACE`;
+   `make fetch-argocd-kubeconfig` (Step 8), `make verify` (Step 9) and `make uninstall-all`
+   (Step 12) have **no fallback** and stop with `ARGOCD_NAMESPACE must be set`. `make env-check`
+   does **not** catch it, so the first symptom is Step 8 failing.
 
 2. Install the service and its instance:
 
@@ -352,10 +369,17 @@ The GitOps engine, running on the Supervisor.
 
 | key | example | how to get the value |
 |---|---|---|
-| `ARGOCD_NAMESPACE` | `lab` | the namespace your ArgoCD **instance** runs in. **Discover it — do not assume:** `kubectl get argocd -A` (on one real lab this was `lab`, not the namespace named in 3.1) |
-| `ARGOCD_SERVER` | `192.168.101.131` | the `argocd-server` EXTERNAL-IP from 3.6 |
-| `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | the file you created in 3.3 above |
+| `ARGOCD_NAMESPACE` | `lab` | the namespace your ArgoCD **instance** runs in. **Discover it — do not assume:** `kubectl get argocd -A` (on one real lab this was `lab`, not the namespace named in 3.1). Steps 8, 9 and 12 have no fallback for it. |
 | `VKS_AUTH_METHOD` | `vcf` | **set this to `vcf` now.** It selects how you log in, and `vcf` is the Supervisor login this step is doing. Step 4 changes it to `kubeconfig`. |
+
+<details><summary>Optional — both have working defaults. Skip unless yours differ.</summary>
+
+| key | default | example | how to get the value |
+|---|---|---|---|
+| `ARGOCD_SERVER` | *(unset — probes skip)* | `192.168.101.131` | the `argocd-server` EXTERNAL-IP from 3.6. Only used for display and reachability probes; nothing requires it. |
+| `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | `./secrets/supervisor-ca.crt` | the file 3.3 created — the default is already that path, so set it only if you moved it. |
+
+</details>
 
 Log in, which writes the Supervisor kubeconfig every later step reads:
 
@@ -537,8 +561,8 @@ Either reuse the existing `./secrets/harbor-robot.env`, or delete the robot in H
 
 | key | example | how to get the value |
 |---|---|---|
-| `ARGOCD_KUBECONFIG` | `./secrets/argocd.kubeconfig` | the file the next command writes. **Set it explicitly** — left unset it falls back to your *guest* kubeconfig, and `make gitops` then looks for ArgoCD in the wrong cluster. |
-| `ARGOCD_DEST_CLUSTER_NAME` | `vks-guest` | the name your guest cluster is registered under: `argocd cluster list`. **Required if more than one cluster is registered** — otherwise the next command stops with `AMBIGUOUS destination` rather than risk deploying into another tenant's cluster. |
+| `ARGOCD_KUBECONFIG` | `./secrets/argocd.kubeconfig` | the file the next command writes. **Set it explicitly.** The command writes that path either way — but `make gitops` and `make verify` will not *read* it unless this key is set, and silently use your **guest** kubeconfig instead. The file existing is therefore not a sign it is being used. |
+| `ARGOCD_DEST_CLUSTER_NAME` | `vks-guest` | the name your guest cluster is registered under: `argocd cluster list`. **Required whenever ArgoCD's registered API URL for your guest differs from your kubeconfig's — including when only ONE cluster is registered** (that mismatch is common). Symptom: `make install-all` stops with `AMBIGUOUS deploy destination`. Left unset with a mismatch, a run once deployed into another cluster and reported `Synced/Healthy` throughout — it was healthy, in the wrong place. |
 
 ```bash
 cd vks-airgap-cicd            # from Step 0
