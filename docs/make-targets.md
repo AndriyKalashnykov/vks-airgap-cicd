@@ -59,6 +59,28 @@ fail for everyone else, and a target that *fails* here (dialling a dead `127.0.0
 perfectly fine. So the clean test for anything an operator runs on a jump box is a **fresh jump-box
 container**, not this machine.
 
+### `make labbox` — the same clean-box check, against the REAL lab
+
+`make jumpbox` points at the KinD stand-in and **cannot reach a real VKS lab**. `make labbox` is the
+same harness with `JUMPBOX_TARGET=lab`: a clean **Photon** container on **host networking**, using the
+Supervisor kubeconfig `make vks-login` wrote. Run it whenever scenario-1's Step 0/1 changes — a walk on
+the machine that wrote the doc is green partly for reasons the doc never mentions (a warm `mise`, a
+populated `~/.config/vcf`, a `.env` from a previous lab).
+
+```bash
+make vks-login            # writes ./secrets/supervisor.kubeconfig, which labbox mounts
+make labbox
+```
+
+Three design points, each measured — see `CLAUDE.md` for the evidence:
+
+- **`--network host`, never `--add-host`.** Pinned host entries rot on every reinstall, and a hosts
+  entry is precisely what `make show-dns-records` says is "not enough".
+- **Photon only.** No post-bootstrap scenario-1 script branches on OS; `make jumpbox-matrix` already
+  covers the OS × engine matrix where those differences actually live.
+- **It cannot see `$HOME`-persisted state.** The `vcf` CLI's store survives a lab rebuild and can block
+  `vcf context create` against a dead endpoint; a throwaway container has a fresh `$HOME` every run.
+
 ```bash
 # 1. Build a bare jump-box image for the OS you care about.
 make jumpbox-image JUMPBOX_OS=photon          # or JUMPBOX_OS=ubuntu

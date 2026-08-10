@@ -723,6 +723,29 @@ jumpbox: jumpbox-image ## Validate the README jump-box flow on JUMPBOX_OS x JUMP
 	 JUMPBOX_VCF_SRC="$(JUMPBOX_VCF_SRC)" JUMPBOX_TARBALL="$(JUMPBOX_TARBALL)" \
 	 $(SCRIPTS)/jumpbox-launch.sh
 
+.PHONY: labbox
+labbox: jumpbox-image ## Validate the scenario-1 jump-box flow on a CLEAN Photon box against the REAL lab (not KinD)
+	@# WHY THIS EXISTS: `make jumpbox` points at the KinD stand-in and cannot reach the real lab.
+	@# This is the same harness with JUMPBOX_TARGET=lab -- host networking, and the Supervisor
+	@# kubeconfig `make vks-login` wrote. See scripts/jumpbox-launch.sh for why --network host and
+	@# NOT --add-host (the pinned-IP form rots on every reinstall AND tests the wrong DNS path).
+	@#
+	@# ⚠️ PHOTON ONLY, DELIBERATELY. An OS matrix here would be VACUOUS: measured 2026-08-10, ZERO of
+	@# the post-bootstrap scenario-1 scripts (25/26/30/31/40/41/44/50/60/70/99) branch on OS -- they
+	@# are kubectl/helm/crane over static binaries. OS differences live in the BOOTSTRAP, and
+	@# `make jumpbox-matrix` already covers photon x ubuntu x podman x docker there. Two OSes here
+	@# would be 2x the runtime for 1x the evidence. Photon also avoids the uid trap: ubuntu:24.04
+	@# ships a user at uid 1000 so `vks` lands on 1001 and cannot read the operator's 0600 files.
+	@#
+	@# ⚠️ WHAT THIS CANNOT SEE: the `vcf` CLI keeps state in $$HOME (~/.config/vcf), and this repo has
+	@# a RECORDED failure where that store survives a lab rebuild and then blocks `vcf context create`
+	@# while pointing at a dead endpoint. A throwaway container has a fresh $$HOME every run, so it is
+	@# STRUCTURALLY BLIND to that class. This harness proves clean-box bootstrap + reach, not a full walk.
+	@JUMPBOX_OS=photon JUMPBOX_ENGINE="$(JUMPBOX_ENGINE)" JUMPBOX_IMAGE="$(JUMPBOX_IMAGE)" \
+	 JUMPBOX_VCF_SRC="$(JUMPBOX_VCF_SRC)" JUMPBOX_TARBALL="$(JUMPBOX_TARBALL)" \
+	 JUMPBOX_TARGET=lab \
+	 $(SCRIPTS)/jumpbox-launch.sh
+
 .PHONY: jumpbox-both
 jumpbox-both: ## Validate the jump-box flow on BOTH Photon and Ubuntu (podman)
 	@$(MAKE) jumpbox JUMPBOX_OS=photon JUMPBOX_ENGINE=podman
