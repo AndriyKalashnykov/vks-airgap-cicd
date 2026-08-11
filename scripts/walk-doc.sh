@@ -135,9 +135,11 @@ for row in "${PARSED[@]}"; do
   STEP=$((STEP + 1))
   reason="$(should_skip "$B")"
   : > "$UNSAFE_FILE"
-  B="$(neutralize "$(substitute "$B")")"
+  SHOWN="$(neutralize "$B")"          # what the DOCUMENT says -- safe to print
+  B="$(neutralize "$(substitute "$B")")"   # what actually RUNS -- may carry a real credential
   [ -s "$UNSAFE_FILE" ] && [ -z "$reason" ] \
     && reason='a TTY-bound command sits inside a \-continued command - neutralizing one line would delete an argument from the survivor'
+  # $B, not $SHOWN: the guard asks whether a placeholder SURVIVED substitution.
   if [ -z "$reason" ] && has_live_placeholder "$B"; then
     reason='unsubstituted <placeholder> in a COMMAND - a walk must not invent a value'
   fi
@@ -147,7 +149,8 @@ for row in "${PARSED[@]}"; do
     continue
   fi
   printf '\n=== [%02d] %s\n' "$STEP" "$H"
-  printf '%s\n' "${B%$'\n'}" | sed 's/^/    $ /'
+  # SHOWN, never B: B has the placeholder replaced with the real secret.
+  printf '%s\n' "${SHOWN%$'\n'}" | sed 's/^/    $ /'
   t0=$SECONDS
   if [ "${WALK_DRY:-0}" = 1 ]; then printf '    (dry run - not executed)\n'; rc=0
   else

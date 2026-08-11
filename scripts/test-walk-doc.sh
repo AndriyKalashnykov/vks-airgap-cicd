@@ -94,6 +94,16 @@ env -u WALK_ROBOT_EXISTS WALK_DOC="$T/ok1.md" WALK_EXISTS=1 bash "$W" >/dev/null
 if [ "$r" -ne 0 ]; then c=0; else c=1; fi
 assert "WALK_ROBOT_EXISTS must be explicit" "$c" "it defaulted"
 
+# 8c. THE ECHO MUST NOT PRINT THE SECRET. walk-doc echoes each block so the log shows what ran --
+#     and it echoed the SUBSTITUTED text, so the operator's real SSO password was written into every
+#     walk log. Measured: 2 lines per log across two rows. The block must still RECEIVE the value.
+printf '## S\n\n```bash\nexport VCF_CLI_VSPHERE_PASSWORD='"'"'<your SSO password>'"'"'\necho "len=${#VCF_CLI_VSPHERE_PASSWORD}"\n```\n' > "$T/sec.md"
+o="$(VCF_CLI_VSPHERE_PASSWORD='SuperSecret123' WALK_DOC="$T/sec.md" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_MIN_BLOCKS=1 bash "$W" 2>&1)"
+if printf '%s' "$o" | grep -q 'SuperSecret123'; then c=1; else c=0; fi
+assert "the echoed block does NOT leak the secret" "$c" "the real credential was printed into the log"
+if printf '%s' "$o" | grep -q 'len=14'; then c=0; else c=1; fi
+assert "...and the block still RECEIVES it" "$c" "redaction broke the substitution"
+
 # 9. The cwd was interpolated into `cd '...'`; a balanced quote pair in the path was an injection.
 mkdir -p "$T/q"
 WALK_DOC="$T/ok1.md" WALK_EXISTS=1 WALK_MIN_BLOCKS=1 \
