@@ -134,5 +134,41 @@ read -r n_ext n_indep <<< "$e"
 if [ "${n_ext:-0}" = "${n_indep:-x}" ] && [ "${n_ext:-0}" -ge 25 ]; then c=0; else c=1; fi
 assert "the real doc: ${n_ext:-?} extracted == ${n_indep:-?} counted" "$c" "extracted=${n_ext:-?} independent=${n_indep:-?}"
 
+# ── LINE BY LINE, and the DOCUMENT's own claims ─────────────────────────────────────────────────
+# The walk used to run a whole block as ONE `bash -c`: four commands, one exit code, one lump of
+# output. A reader runs them one at a time and looks at each result before typing the next, so the
+# unit must be the STATEMENT -- and the failing command must be identifiable.
+doc perstmt 'echo alpha\nfalse\necho omega'
+o="$(run perstmt)"; r=$?
+if printf '%s' "$o" | grep -q 'omega'; then c=0; else c=1; fi
+assert "a later statement still RUNS after one fails" "$c" "execution stopped at the failure"
+if [ "$(printf '%s' "$o" | grep -c -- '-> rc=')" -ge 3 ]; then c=0; else c=1; fi
+assert "each statement reports its OWN rc" "$c" "results are folded into one block rc"
+if [ "$r" -ne 0 ]; then c=0; else c=1; fi
+assert "...and the block still FAILS" "$c" "a failing statement was swallowed"
+
+# Splitting by statement put the ONE-TERMINAL property at risk, and broke it: `export -p` carries
+# only EXPORTED names, so a plain `V=1` on one line was gone by the next. Measured: `echo "$V"`
+# printed empty where a reader would see the value.
+doc plainvar 'V=carried\necho "value=[$V]"'
+o="$(run plainvar)"
+if printf '%s' "$o" | grep -q 'value=\[carried\]'; then c=0; else c=1; fi
+assert "a NON-EXPORTED variable survives to the next statement" "$c" "only exported names carried"
+doc fn 'greet() { echo "hi $1"; }\ngreet there'
+o="$(run fn)"
+if printf '%s' "$o" | grep -q 'hi there'; then c=0; else c=1; fi
+assert "a FUNCTION survives to the next statement" "$c" "functions were not carried"
+
+# The document's contract. walk-doc.sh had ZERO references to `Expect` -- 24 claims about what the
+# reader would SEE, checked by nothing, while the walk reported rc=0 and called it a pass.
+printf '## S\n\n```bash\necho something else entirely\n```\n\n**Expect:** `all REQUIRED tools present.`\n' > "$T/exp_red.md"
+o="$(WALK_DOC="$T/exp_red.md" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_ISTIO=existing WALK_MIN_BLOCKS=1 bash "$W" 2>&1)"; r=$?
+if [ "$r" -ne 0 ] && printf '%s' "$o" | grep -q '1 UNMET'; then c=0; else c=1; fi
+assert "an UNMET Expect: claim FAILS the walk" "$c" "rc=$r; the document can lie and still pass"
+printf '## S\n\n```bash\nV=present\necho "all REQUIRED tools $V."\n```\n\n**Expect:** `all REQUIRED tools present.`\n' > "$T/exp_green.md"
+o="$(WALK_DOC="$T/exp_green.md" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_ISTIO=existing WALK_MIN_BLOCKS=1 bash "$W" 2>&1)"; r=$?
+if [ "$r" -eq 0 ] && printf '%s' "$o" | grep -q '0 UNMET'; then c=0; else c=1; fi
+assert "...and a claim that HOLDS stays green" "$c" "rc=$r; false-REDs on a truthful document"
+
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
