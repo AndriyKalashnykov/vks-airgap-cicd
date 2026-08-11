@@ -416,10 +416,12 @@ deployed **app**, either front them with the ingress at `*.vks.local`, or `kubec
 > the proxy *and* its LoadBalancer — nothing needed from the platform team), else the classic
 > `Gateway`/`VirtualService` path.
 >
-> **Gateway API CRDs — you MAY be able to install them yourself.** You hold **cluster-admin on your own
-> guest cluster**, and the Gateway API CRDs are cluster-scoped resources of *that* cluster — so
-> `make install-ingress INGRESS_CONTROLLER=istio-existing` installs them if absent, and Istio then
-> auto-provisions the proxy + LB from the `Gateway` you create. Only **ask the mesh admin** if you do
+> **Gateway API CRDs — you MAY be able to install them yourself, but the attach command will NOT do
+> it for you.** You hold **cluster-admin on your own guest cluster**, and the Gateway API CRDs are
+> cluster-scoped resources of *that* cluster, so you are permitted to install them. But
+> `make install-ingress INGRESS_CONTROLLER=istio-existing` **installs nothing** — that is the whole
+> point of the attach path — so if the CRDs are absent you must apply them yourself first. Once they
+> are there, Istio auto-provisions the proxy + LB from the `Gateway` you create. Only **ask the mesh admin** if you do
 > **not** own the cluster the mesh runs in. (If you end up on the classic path — no Gateway API — and the
 > VKS package ships its shared gateway **off by default**, then there is nothing to bind to and you
 > request a gateway.) `istio-preflight` reports which case you are in.

@@ -31,6 +31,12 @@ should_skip() {
   local code; code="$(printf '%s' "$1" | sed 's/#.*//')"
   case "$code" in
     *"make uninstall-all"*)     printf 'teardown - would destroy the lab mid-walk' ;;
+    # ORDER MATTERS: the attach variant's text also contains "make install-ingress", and `case` takes
+    # the FIRST match -- with the general pattern first, BOTH blocks were skipped and Step 12 ran no
+    # install at all, which is the defect the document was just fixed for.
+    *"INGRESS_CONTROLLER=istio-existing"*)
+                                [ "${WALK_ISTIO:-existing}" != existing ] && printf 'attach variant; this row installs' ;;
+    *"make install-ingress"*)   [ "${WALK_ISTIO:-existing}" = existing ] && printf 'install variant; this row attaches to an existing mesh' ;;
     *"install-harbor-service"*) [ "$WALK_EXISTS" = 1 ] && printf 'Harbor already exists (this row)' ;;
     *"install-argocd-service"*) [ "$WALK_EXISTS" = 1 ] && printf 'ArgoCD already exists (this row)' ;;
     *"make vsphere-namespace"*) [ "$WALK_EXISTS" = 1 ] && printf 'namespace already exists (this row)' ;;
