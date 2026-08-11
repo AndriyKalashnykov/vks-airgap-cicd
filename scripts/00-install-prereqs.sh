@@ -207,6 +207,15 @@ if [ "$ENGINE_CHOICE" = podman ] && have podman; then
     log_info "granting ${subid_user} ${start}:65536 in ${f}"
     log_warn "  To undo:  sudo sed -i '/^${subid_user}:${start}:65536\$/d' ${f}"
     printf '%s:%s:65536\n' "$subid_user" "$start" | $SUDO tee -a "$f" >/dev/null || return 1
+    # 0644, ALWAYS. MEASURED 2026-08-11: `sudo tee` CREATES the file with root's umask -> 0600, and
+    # podman runs as the OPERATOR, so it cannot read it:
+    #   level=error msg="cannot find UID/GID for user vks: open /etc/subuid: permission denied"
+    #   level=warning msg="Using rootless single mapping into the namespace."
+    #            0       1000          1
+    # Everything else — the range, newuidmap (04755), `podman system migrate` — was correct and
+    # irrelevant; the build still died with `requested 0:42 for /etc/shadow`. Every distro that ships
+    # these files ships them world-readable: they are public id-allocation metadata, not secrets.
+    $SUDO chmod 0644 "$f" || log_warn "could not chmod 0644 ${f} — podman may not be able to read it"
     return 0
   }
   subid_wrote=0
