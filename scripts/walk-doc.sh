@@ -2,82 +2,124 @@
 # walk-doc.sh — execute docs/scenario-1.md ITSELF, block by block, in document order.
 #
 # WHY THIS REPLACES A HAND-WRITTEN DRIVER. The previous walker carried ~50 hardcoded steps that were
-# a SECOND COPY of the runbook, and second copies drift: it had encoded the OLD document's ordering
-# defects as workarounds, it never opened <details> blocks, and after the doc was renumbered its
-# labels named steps that no longer existed. A walker that does not READ the document cannot
-# validate it — it validates the author's memory of it.
+# a SECOND COPY of the runbook, and second copies drift: it encoded the OLD document's ordering
+# defects as workarounds, never opened <details> blocks, and after a renumbering its labels named
+# steps that no longer existed. A walker that does not READ the document validates the author's
+# memory of it, not the document.
 #
-# So: parse the fenced bash blocks out of the doc, in order, and run them. What it cannot run it
-# reports OUT LOUD, because a walk that silently drops steps claims a coverage it does not have.
-# Two different mechanisms, deliberately:
-#   SKIP        - a whole block a walk must not run (teardown; the branch this row did not take)
-#   NEUTRALIZE  - a single LINE that needs a TTY or blocks forever, commented out so the RUNNABLE
-#                 commands beside it still execute. Block [13] is why: `argocd login` sits next to
-#                 the credential read the walk needs.
+# ⚠️ THE FIRST VERSION OF THIS SCRIPT REPORTED "0 failed" OVER A WALK IN WHICH EVERY BLOCK DIED WITH
+# `make: command not found`. An adversary round measured why, and most of what follows is the fix.
+# Read the numbered notes before "simplifying" any of it.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOC="${WALK_DOC:-${SCRIPT_DIR}/../docs/scenario-1.md}"
 [ -s "$DOC" ] || { echo "no document at $DOC"; exit 1; }
+# (8) NO DEFAULT. `WALK_EXISTS:-1` skipped all four provisioning blocks, so a row meant to exercise
+# the install path scored green having installed nothing. Forgetting must not be the cheap option.
+: "${WALK_EXISTS:?set 0 (install path) or 1 (already-exists path) explicitly}"
 
 STEP=0; RAN=0; FAILED=0; SKIPPED=0
-SKIP_LOG="$(mktemp)"; NEUT_LOG="$(mktemp)"; CWD_FILE="$(mktemp)"
-trap 'rm -f "$SKIP_LOG" "$NEUT_LOG" "$CWD_FILE"' EXIT
+SKIP_LOG="$(mktemp)"; NEUT_LOG="$(mktemp)"; CWD_FILE="$(mktemp)"; RC_FILE="$(mktemp)"; UNSAFE_FILE="$(mktemp)"
+trap 'rm -f "$SKIP_LOG" "$NEUT_LOG" "$CWD_FILE" "$RC_FILE" "$UNSAFE_FILE"' EXIT
 CWD="${WALK_START_DIR:-$PWD}"
 
-# ── Whole-block skips. Each is a block a WALK must not run, never a block that is broken.
+# ── Whole-block skips: a block a WALK must not run, never a block that is broken.
+# (4) Match COMMAND LINES only. Matching the raw block let a comment that merely WARNS about
+# `make uninstall-all` skip the `make verify` beside it -- and label it a teardown block.
 should_skip() {
-  case "$1" in
+  local code; code="$(printf '%s' "$1" | sed 's/#.*//')"
+  case "$code" in
     *"make uninstall-all"*)     printf 'teardown - would destroy the lab mid-walk' ;;
-    *"install-harbor-service"*) [ "${WALK_EXISTS:-1}" = 1 ] && printf 'Harbor already exists (this row)' ;;
-    *"install-argocd-service"*) [ "${WALK_EXISTS:-1}" = 1 ] && printf 'ArgoCD already exists (this row)' ;;
-    *"make vsphere-namespace"*) [ "${WALK_EXISTS:-1}" = 1 ] && printf 'namespace already exists (this row)' ;;
-    *"vks-cluster-create"*)     [ "${WALK_EXISTS:-1}" = 1 ] && printf 'cluster already exists (this row)' ;;
+    *"install-harbor-service"*) [ "$WALK_EXISTS" = 1 ] && printf 'Harbor already exists (this row)' ;;
+    *"install-argocd-service"*) [ "$WALK_EXISTS" = 1 ] && printf 'ArgoCD already exists (this row)' ;;
+    *"make vsphere-namespace"*) [ "$WALK_EXISTS" = 1 ] && printf 'namespace already exists (this row)' ;;
+    *"vks-cluster-create"*)     [ "$WALK_EXISTS" = 1 ] && printf 'cluster already exists (this row)' ;;
     *"git clone https"*)        [ "${WALK_SKIP_CLONE:-0}" = 1 ] && printf 'already cloned by the harness' ;;
   esac
 }
 
-# Exactly ONE placeholder in the doc is a value a walk can supply.
-substitute() { printf '%s' "${1//<your SSO password>/${VCF_CLI_VSPHERE_PASSWORD:-}}"; }
+# (6) Substitute ONLY when the value is non-empty. Replacing the placeholder with "" deleted the
+# evidence the guard keys on, so two blocks ran `export VCF_CLI_VSPHERE_PASSWORD=''` and were counted
+# as RAN -- then failed downstream on an auth error that reads like a document defect. An empty
+# string IS an invented value.
+substitute() {
+  [ -n "${VCF_CLI_VSPHERE_PASSWORD:-}" ] || { printf '%s' "$1"; return; }
+  printf '%s' "${1//<your SSO password>/$VCF_CLI_VSPHERE_PASSWORD}"
+}
 
+# (5) A line a walk cannot run is COMMENTED OUT and counted -- not grounds to drop the whole block,
+# which would also drop the runnable commands beside it (block [13]: `argocd login` sits next to the
+# credential read the walk needs). BUT a matched line inside a `\` continuation cannot be commented
+# out in isolation: doing so silently DELETES an argument from the surviving command and still
+# reports "1 line neutralized". Refuse the block instead -- half-executing is worse than not.
 neutralize() {
-  local out="" line
+  local out="" line prev=""
   while IFS= read -r line; do
     case "$line" in
       *"argocd login"*|*"argocd account update-password"*|*"port-forward"*)
+        case "$line" in *\\) echo 1 > "$UNSAFE_FILE" ;; esac   # continues into the next line
+        case "$prev" in *\\) echo 1 > "$UNSAFE_FILE" ;; esac   # is a continuation of the previous
         out+="# WALK-NEUTRALIZED (needs a TTY / blocks forever): ${line}"$'\n'
         printf '  neutralized: %s\n' "${line# }" >> "$NEUT_LOG" ;;
       *) out+="${line}"$'\n' ;;
     esac
+    prev="$line"
   done <<< "$1"
   printf '%s' "$out"
 }
 
-# A <placeholder> in a COMMENT is prose, not a value. Checking the raw block skipped the LOGIN block
-# — the single most important one — over `# note the <ctx>:<ns> colon form`. Strip comments first.
+# (7) `[a-z]` missed `<EXTERNAL-IP>`, `<NS>`, `<YOUR-TOKEN>` -- every conventional UPPERCASE
+# placeholder. (Comments are prose: checking the raw block skipped the LOGIN block, the most
+# important one in the walk, over `# note the <ctx>:<ns> colon form`.)
 has_live_placeholder() {
-  local code; code="$(printf '%s' "$1" | sed 's/#.*//')"
-  printf '%s' "$code" | grep -q '<[a-z][^>]*>'
+  printf '%s' "$1" | sed 's/#.*//' | grep -q '<[A-Za-z][^>]*>'
 }
 
+# (3) FENCE-AWARE, not regex. A ```bash nested inside another fenced block -- an illustrative
+# snippet, a doc-about-docs example, a command the reader must NOT run -- was extracted and
+# scheduled for execution. Tracking fence state also makes ```sh / ```bash-with-attributes an
+# explicit decision rather than a silent zero.
 mapfile -t PARSED < <(python3 - "$DOC" <<'PY'
-import re, sys, json
-doc = open(sys.argv[1]).read()
-heading = "(preamble)"
-# [^\n]+ not .+ : under re.S a greedy `.` swallows the whole file and yields ZERO blocks.
-# The fence is NOT ^-anchored: block [21] is indented inside a <details> and a naive grep misses it.
-for m in re.finditer(r'^(## [^\n]+)$|```bash\n(.*?)```', doc, re.M | re.S):
-    if m.group(1): heading = m.group(1)[3:].strip()
-    else:          print(json.dumps({"h": heading, "b": m.group(2)}))
+import json, re, sys
+heading, fence, body, out = "(preamble)", None, [], []
+for line in open(sys.argv[1]):
+    # CommonMark: a fence is >=3 backticks and closes on a run of AT LEAST that many with no
+    # info string. Assuming exactly 3 mis-parses the ````markdown wrapper people use to SHOW a
+    # ```bash block -- and the inner one then gets extracted and EXECUTED.
+    m = re.match(r'^(\s*)(`{3,})(\S*)', line)
+    if fence is None:
+        if m: fence = (m.group(3).split(':')[0].lower(), len(m.group(2))); body = []
+        elif line.startswith('## '): heading = line[3:].strip()
+    elif m and not m.group(3) and len(m.group(2)) >= fence[1]:
+        if fence[0] in ('bash', 'sh', 'shell'): out.append({"h": heading, "b": "".join(body)})
+        fence = None
+    else:
+        body.append(line)
+if fence is not None: sys.exit("UNCLOSED fence in the document")
+for o in out: print(json.dumps(o))
 PY
-)
+) || { echo "EXTRACTOR FAILED — refusing to report a walk"; exit 1; }
 
-printf '\n======== walking %s (%d bash blocks, in document order) ========\n' "$(basename "$DOC")" "${#PARSED[@]}"
+# (2) A zero-block extraction reported "0 blocks: 0 ran, 0 failed" and EXIT 0. Three reachable
+# paths measured: a fence attribute, ```sh, and one invalid UTF-8 byte. That state HAS occurred here
+# (a greedy `.` under re.S). The floor is reconciled against an INDEPENDENT count, because a
+# denominator that only the parser produces cannot detect the parser being wrong.
+INDEP="$(grep -c '^[[:space:]]*```bash' "$DOC" || true)"
+printf '\n======== walking %s ========\n' "$(basename "$DOC")"
+printf 'blocks: %d extracted, %d counted independently | row: WALK_EXISTS=%s WALK_SKIP_CLONE=%s\n' \
+  "${#PARSED[@]}" "$INDEP" "$WALK_EXISTS" "${WALK_SKIP_CLONE:-0}"
+[ "${#PARSED[@]}" -ge "${WALK_MIN_BLOCKS:-20}" ] \
+  || { echo "REFUSING: only ${#PARSED[@]} blocks (< ${WALK_MIN_BLOCKS:-20}) — the parser and the document have diverged"; exit 1; }
+
 for row in "${PARSED[@]}"; do
   H="$(printf '%s' "$row" | python3 -c 'import sys,json;print(json.load(sys.stdin)["h"])')"
   B="$(printf '%s' "$row" | python3 -c 'import sys,json;print(json.load(sys.stdin)["b"])')"
   STEP=$((STEP + 1))
   reason="$(should_skip "$B")"
+  : > "$UNSAFE_FILE"
   B="$(neutralize "$(substitute "$B")")"
+  [ -s "$UNSAFE_FILE" ] && [ -z "$reason" ] \
+    && reason='a TTY-bound command sits inside a \-continued command - neutralizing one line would delete an argument from the survivor'
   if [ -z "$reason" ] && has_live_placeholder "$B"; then
     reason='unsubstituted <placeholder> in a COMMAND - a walk must not invent a value'
   fi
@@ -91,17 +133,28 @@ for row in "${PARSED[@]}"; do
   t0=$SECONDS
   if [ "${WALK_DRY:-0}" = 1 ]; then printf '    (dry run - not executed)\n'; rc=0
   else
-    # Each block gets its own `bash -c`, so cwd does NOT persist -- and `cd vks-airgap-cicd` in the
-    # clone block must. Carry it forward explicitly. ENV continuity is deliberately NOT carried: the
-    # doc re-sources ./.env in every block that needs it, and a block that forgot to should FAIL here
-    # rather than be rescued by state the reader's shell would not have.
-    bash -c "cd '$CWD' || exit 1
-$B
-printf '\n__WALK_CWD__%s\n' \"\$PWD\"" 2>&1 | while IFS= read -r l; do
-      case "$l" in __WALK_CWD__*) printf '%s' "${l#__WALK_CWD__}" > "$CWD_FILE" ;;
-                   *) printf '    %s\n' "$l" ;; esac
+    : > "$CWD_FILE"; : > "$RC_FILE"           # (10) never carry a stale marker into the next block
+    # (1) THE CRITICAL FIX. `bash -c` exits with its LAST command's status, and the marker printf I
+    # append ALWAYS succeeds -- so every rc was the printf's. Measured: `make no-such-target` -> rc=0,
+    # `false` -> rc=0, and a 25-block walk in which nothing worked reported "0 failed". Capture the
+    # block's own status FIRST, then emit the markers, then exit with it.
+    # (11) the leading newline is load-bearing: a block ending in `\` would otherwise swallow `__rc=$?`.
+    # (9) the cwd goes in as an ARGUMENT, not interpolated -- a balanced quote pair in a path was a
+    # proven injection.
+    bash -c 'cd "$1" || exit 1
+'"$B"'
+__rc=$?
+printf "\n__WALK_RC__%s\n__WALK_CWD__%s\n" "$__rc" "$PWD"
+exit $__rc' _ "$CWD" 2>&1 | while IFS= read -r l; do
+      case "$l" in
+        __WALK_RC__*)  printf '%s' "${l#__WALK_RC__}"  > "$RC_FILE" ;;
+        __WALK_CWD__*) printf '%s' "${l#__WALK_CWD__}" > "$CWD_FILE" ;;
+        *) printf '    %s\n' "$l" ;;
+      esac
     done
     rc=${PIPESTATUS[0]}
+    mrc="$(cat "$RC_FILE" 2>/dev/null || true)"
+    [ -n "$mrc" ] && rc="$mrc"                # the marker is authoritative when the block ran to its end
     nc="$(cat "$CWD_FILE" 2>/dev/null || true)"
     if [ -n "$nc" ] && [ "$nc" != "$CWD" ]; then printf '    (cwd -> %s)\n' "$nc"; CWD="$nc"; fi
   fi
@@ -109,8 +162,10 @@ printf '\n__WALK_CWD__%s\n' \"\$PWD\"" 2>&1 | while IFS= read -r l; do
   printf -- '--- [%02d] rc=%d (%ds)\n' "$STEP" "$rc" "$((SECONDS - t0))"
 done
 
-printf '\n======== WALK DONE - %d blocks: %d ran, %d failed, %d skipped, %d line(s) neutralized ========\n' \
+printf '\n======== WALK DONE - %d blocks: %d ran, %d FAILED, %d skipped, %d line(s) neutralized ========\n' \
   "$STEP" "$RAN" "$FAILED" "$SKIPPED" "$(wc -l < "$NEUT_LOG")"
 # A coverage number without its exclusions is a claim, not a measurement.
 cat "$SKIP_LOG" "$NEUT_LOG"
+# (2) "nothing failed" and "nothing happened" must not share an exit code.
+[ "$RAN" -gt 0 ] || { echo "REFUSING: the walk executed NOTHING"; exit 1; }
 exit $(( FAILED > 0 ? 1 : 0 ))

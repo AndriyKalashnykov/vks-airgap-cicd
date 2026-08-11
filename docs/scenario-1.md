@@ -52,15 +52,15 @@ A stock Ubuntu or Photon box has neither `git` nor `make`. Ubuntu has no `curl` 
 
 ```bash
 # Ubuntu / Debian
-apt-get update && apt-get install -y --no-install-recommends git make curl ca-certificates
+sudo apt-get update && sudo apt-get install -y --no-install-recommends git make curl ca-certificates
 # Photon OS 5
 # openssh is in this list deliberately: the transaction upgrades openssl-libs, and Photon 5.0's
 # openssh-9.1p1 refuses to start against a different OpenSSL minor. Without it you lose SSH to
 # this box the moment you disconnect, and cannot reconnect.
-tdnf install -y git make curl curl-libs ca-certificates openssh
+sudo tdnf install -y git make curl curl-libs ca-certificates openssh
 ```
 
-Prefix with `sudo` if you are not root.
+Already root? Drop the `sudo`.
 
 ```bash
 git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git
