@@ -300,7 +300,7 @@ walkbox_down() {
 
 # ── the walk itself ─────────────────────────────────────────────────────────────────────────────
 walkbox_run() {
-  local ip="$1" driver="${WALKBOX_DRIVER:-${REPO_ROOT}/scripts/walk-scenario1.sh}"
+  local ip="$1" driver="${WALKBOX_DRIVER:-${REPO_ROOT}/scripts/walk-doc.sh}"
   [ -s "$driver" ] || die "no walk driver at ${driver} (set WALKBOX_DRIVER)"
   scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes \
       -i "$WALKBOX_SSH_KEY" "$driver" "${WALKBOX_USER}@${ip}:/tmp/walk.sh" || die "could not copy the driver"
