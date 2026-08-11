@@ -42,7 +42,7 @@ STEP=0; RAN=0; FAILED=0; SKIPPED=0
 # says the COMMANDS worked; it says nothing about whether the reader saw what they were told
 # they would see. These two numbers answer different questions and must not be conflated.
 EXPECT_TOTAL=0; EXPECT_MISS=0
-SKIP_LOG="$(mktemp)"; NEUT_LOG="$(mktemp)"; CWD_FILE="$(mktemp)"; RC_FILE="$(mktemp)"; UNSAFE_FILE="$(mktemp)"; OUT_FILE="$(mktemp)"; EXPECT_LOG="$(mktemp)"
+SKIP_LOG="$(mktemp)"; NEUT_LOG="$(mktemp)"; CWD_FILE="$(mktemp)"; RC_FILE="$(mktemp)"; UNSAFE_FILE="$(mktemp)"; OUT_FILE="$(mktemp)"; STEP_OUT_FILE="$(mktemp)"; EXPECT_LOG="$(mktemp)"
 ENV_FILE="$(mktemp)"; : > "$ENV_FILE"
 trap 'rm -f "$SKIP_LOG" "$NEUT_LOG" "$CWD_FILE" "$RC_FILE" "$UNSAFE_FILE" "$ENV_FILE"' EXIT
 CWD="${WALK_START_DIR:-$PWD}"
@@ -125,6 +125,22 @@ split_statements() {   # <block text> -> NUL-separated statements on stdout
     acc="${acc}${line}"$'\n'
     # skip blank/comment-only accumulations rather than emitting them as "commands"
     case "$(printf '%s' "$acc" | sed 's/#.*//' | tr -d '[:space:]')" in '') continue ;; esac
+    # ⚠️ `bash -n` accepts a TRAILING BACKSLASH as complete -- the backslash-newline is simply
+    # removed and the command ends at EOF. So the completeness test alone CUTS A CONTINUATION INTO
+    # SEPARATE COMMANDS. MEASURED on a real walk: the runbook's three-line
+    #     vcf context create "$CTX" --endpoint "$SUP" \
+    #         --ca-certificate ./secrets/supervisor-ca.crt \
+    #         --username "$USER" --type kubernetes --auth-type basic
+    # ran as THREE commands -- `[x] : accepts at most 1 arg(s), received 2`, then
+    # `--ca-certificate: command not found`, then `--username: command not found`. The walk was
+    # executing something no reader ever would, which makes every verdict about it worthless.
+    _last="${acc%$'\n'}"
+    case "$_last" in
+      *\\)  # an ODD number of trailing backslashes is a continuation; an EVEN number is an
+             # escaped backslash and the statement really does end here.
+             _bs="${_last##*[!\\]}"
+             [ $(( ${#_bs} % 2 )) -eq 1 ] && continue ;;
+    esac
     if bash -n <<< "$acc" 2>/dev/null; then
       printf '%s\0' "${acc%$'\n'}"
       acc=""
@@ -210,6 +226,12 @@ for row in "${PARSED[@]}"; do
   t0=$SECONDS
   if [ "${WALK_DRY:-0}" = 1 ]; then printf '    (dry run - not executed)\n'; rc=0
   else
+    # The document attaches `Expect:` to a STEP, and a step often has several blocks: Step 4's
+    # claims sit after its SECOND block while describing the FIRST block's output. Checking a claim
+    # against only the block it follows produced a FALSE UNMET on
+    # `7 secrets generated, 0 placeholders left` -- text plainly present in the log. A reader reads
+    # the whole step, so a claim is checked against the whole step.
+    [ "$H" = "${LAST_H:-}" ] || { : > "$STEP_OUT_FILE"; LAST_H="$H"; }
     : > "$OUT_FILE"
     rc=0
     # ONE STATEMENT AT A TIME, each with its own output and its own rc printed underneath it --
@@ -251,7 +273,7 @@ exit $__rc' _ "$CWD" "$ENV_FILE" 2>&1 \
           case "$l" in
             __WALK_RC__*)  printf '%s' "${l#__WALK_RC__}"  > "$RC_FILE" ;;
             __WALK_CWD__*) printf '%s' "${l#__WALK_CWD__}" > "$CWD_FILE" ;;
-            *) printf '    %s\n' "$l"; printf '%s\n' "$l" >> "$OUT_FILE" ;;
+            *) printf '    %s\n' "$l"; printf '%s\n' "$l" >> "$OUT_FILE"; printf '%s\n' "$l" >> "$STEP_OUT_FILE" ;;
           esac
         done
       _src=${PIPESTATUS[0]}
@@ -273,7 +295,7 @@ exit $__rc' _ "$CWD" "$ENV_FILE" 2>&1 \
       _tot=$((_tot + 1))
       if [ "$verdict" = "SEEN" ]; then _seen=$((_seen + 1)); else _missed="${_missed}
       - ${lit}"; fi
-    done < <(EXPECT_TEXT="$E" BLOCK_TEXT="$B" python3 - "$OUT_FILE" <<'PYX'
+    done < <(EXPECT_TEXT="$E" BLOCK_TEXT="$B" python3 - "$STEP_OUT_FILE" <<'PYX'
 import os, re, sys
 out  = open(sys.argv[1], errors='replace').read()
 blk  = os.environ.get('BLOCK_TEXT', '')
