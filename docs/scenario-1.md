@@ -50,13 +50,17 @@ Everything below runs **from the repo root**. Nothing works from another directo
 A stock Ubuntu or Photon box has neither `git` nor `make`. Ubuntu has no `curl` either, and
 `make deps` needs it. Install them first.
 
+**Ubuntu / Debian:**
+
 ```bash
-# Ubuntu / Debian
 sudo apt-get update && sudo apt-get install -y --no-install-recommends git make curl ca-certificates
-# Photon OS 5
-# openssh is in this list deliberately: the transaction upgrades openssl-libs, and Photon 5.0's
-# openssh-9.1p1 refuses to start against a different OpenSSL minor. Without it you lose SSH to
-# this box the moment you disconnect, and cannot reconnect.
+```
+
+**Photon OS 5** — `openssh` is in this list deliberately. The transaction upgrades `openssl-libs`,
+and Photon 5.0's `openssh-9.1p1` refuses to start against a different OpenSSL minor: without it you
+lose SSH to this box the moment you disconnect, and cannot reconnect.
+
+```bash
 sudo tdnf install -y git make curl curl-libs ca-certificates openssh
 ```
 
