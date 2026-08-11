@@ -249,7 +249,7 @@ The registry every image comes from.
 |---|---|---|
 | `HARBOR_URL` | `harbor.env1.lab.test` | **you choose it.** It must be a name your real DNS can answer — the guest cluster's nodes resolve it. **Bare host — no `https://`, no trailing slash.** |
 | `HARBOR_STORAGE_CLASS` | `wcp-vmfs` (single-host VMFS)<br>`vsan-default-storage-policy` (vSAN) | `kubectl get storageclass` against the Supervisor. No access yet? vCenter → your Namespace → **Storage** tab, then lowercase the policy name and replace spaces with `-`. |
-| `HARBOR_USERNAME` | `admin` | **only if you skipped the install** — `make creds-show` on the box that installed Harbor, or ask your platform team |
+| `HARBOR_USERNAME` | `admin` | **only if you skipped the install.** Installed from *this repo* on another box? it is in that box's `.env.state` — `make creds-show` prints it. Installed by your platform team? ask them; there is no local copy. |
 | `HARBOR_PASSWORD` | *your value* | same. **Not** `Harbor12345` — the install generates one |
 
 Skipped the install? Check the credential now, not at Step 9:
