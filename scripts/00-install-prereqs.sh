@@ -86,6 +86,25 @@ esac
 # needs sha256sum. A box provisioned without the engine packages passed every earlier check and then
 # printed `tr: command not found` from lib/state.sh on the operator's very first command.
 pkg_install ca-certificates coreutils curl file git jq tar gzip unzip findutils gawk openssl "$GETTEXT_PKG"
+
+# MEASURED on a fresh Photon 5.0 VM 2026-08-11, off the broken guest's own disk:
+#     MESSAGE=OpenSSL version mismatch. Built against 30000080, you have 30500070
+# (0x30000080 = OpenSSL 3.0.8, 0x30500070 = 3.5.7). The line above upgrades openssl-libs, and Photon
+# 5.0 GA ships openssh-9.1p1 built against 3.0.8. OpenSSH BEFORE 9.4 hard-fails when the runtime
+# OpenSSL MINOR differs from the compile-time one -- ssh_compatible_openssl() masks 0xfff0000f, and
+# the major-only relaxation first appears in V_9_4_P1. It aborts in seed_rng() at entropy.c:103,
+# reached from sshd.c long BEFORE the banner is written.
+#
+# Why it presents as a mystery rather than a service failure: sshd.socket (Accept=yes) is enabled on
+# this image, so SYSTEMD owns the listener and does the accept(). Port 22 stays LISTEN no matter how
+# dead sshd is; every connection spawns a fresh sshd -i from disk that dies instantly. The server
+# accepted and closed WITHOUT READING, so the client's already-sent identification string sits unread
+# and the kernel answers RST -- hence `Connection reset by peer` mid-kex, permanently, with a healthy
+# looking open port. It cost this project two rebuilt VMs and several wrong diagnoses.
+#
+# 10.4p1 is in photon-updates (verified), well past the 9.4 boundary. tdnf only -- on apt the package
+# is openssh-client/-server and Ubuntu does not have the defect.
+if [ "$(pkg_mgr)" = tdnf ]; then pkg_install openssh; fi
 # ---- container engine -----------------------------------------------------
 # THE INVARIANT, and it is the whole reason this block is shaped the way it is:
 #
