@@ -30,6 +30,12 @@ WALK_NS_EXISTS="${WALK_NS_EXISTS:-$WALK_EXISTS}"
 WALK_HARBOR_EXISTS="${WALK_HARBOR_EXISTS:-$WALK_EXISTS}"
 WALK_ARGOCD_EXISTS="${WALK_ARGOCD_EXISTS:-$WALK_EXISTS}"
 WALK_CLUSTER_EXISTS="${WALK_CLUSTER_EXISTS:-$WALK_EXISTS}"
+# NO DEFAULT, and it cost a row to learn why. Step 12 says to run the command `make istio-preflight`
+# PRINTS. With WALK_ISTIO defaulting to `existing`, the walk ran the ATTACH variant on a cluster
+# whose preflight had just said, in the block immediately before, "NO Istio detected -> use
+# 'make install-ingress' to INSTALL it". The walk contradicted the document and then scored the
+# resulting failure against the document. A default here is a silent wrong answer.
+: "${WALK_ISTIO:?set to 'install' or 'existing' — read it off 'make istio-preflight' for THIS cluster, do not guess}"
 
 STEP=0; RAN=0; FAILED=0; SKIPPED=0
 SKIP_LOG="$(mktemp)"; NEUT_LOG="$(mktemp)"; CWD_FILE="$(mktemp)"; RC_FILE="$(mktemp)"; UNSAFE_FILE="$(mktemp)"

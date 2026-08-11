@@ -120,6 +120,41 @@ else
   bad "no StorageClass at all — Gitea's PVC can never bind."
 fi
 
+# 4. HARBOR_URL must actually SERVE. A REINSTALLED Harbor gets a NEW LoadBalancer IP, and an A
+#    record created for a previous install then points at an address with nothing behind it. Every
+#    later step fails against a name that resolves fine, and NONE of them says so.
+#
+#    MEASURED 2026-08-11 on both OS rows of the create-from-nothing walk: Harbor was healthy (9 pods
+#    Running, harbor-nginx on 192.168.101.141) while DNS still said 192.168.101.135 from the previous
+#    install. It cost FIVE failures -- Step 8's CA fetch hung 129s and wrote an EMPTY file before
+#    `openssl` said "Could not find certificate" (naming the file, not the reason), `make
+#    harbor-robot` burned 262s, then env-populate and both ingress steps.
+#
+#    Probed by REACHABILITY, not by comparing to the LoadBalancer object: Harbor's LB lives on the
+#    SUPERVISOR and this script runs against the GUEST cluster, so the object is not ours to read --
+#    and "does it answer?" is the end result anyway, which also catches a down Harbor or a firewall.
+if [ -n "${HARBOR_URL:-}" ]; then
+  _hip="$(getent hosts "${HARBOR_URL%%:*}" 2>/dev/null | awk '{print $1; exit}' || true)"
+  if [ -z "$_hip" ]; then
+    note "HARBOR_URL=${HARBOR_URL} does not resolve yet — expected before you create the A record"
+    note "  that 'make show-dns-records' prints. It must resolve before 'make mirror'."
+  else
+    # --fail: a 4xx from a live Harbor still proves it is SERVING, so accept any HTTP response and
+    # judge only on whether the connection produced one. 000 means nothing answered.
+    _code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 \
+              "https://${HARBOR_URL}/api/v2.0/systeminfo" 2>/dev/null || true)"
+    if [ "${_code:-000}" = 000 ]; then
+      bad "HARBOR_URL=${HARBOR_URL} resolves to ${_hip} but NOTHING is serving there."
+      note "A REINSTALLED Harbor gets a NEW LoadBalancer IP. Compare that address with what"
+      note "  'make show-dns-records' prints now, and update the A record if they differ."
+      note "(Otherwise this surfaces as a 129s hang in Step 8 and a 262s one in 'make harbor-robot',"
+      note "  neither of which mentions DNS.)"
+    else
+      ok "Harbor answers at ${HARBOR_URL} (${_hip}, http ${_code})"
+    fi
+  fi
+fi
+
 # 3. A working LoadBalancer provider. On a real lab ArgoCD is OFF-CLUSTER (a Supervisor Service), so it
 #    cannot resolve gitea-http.gitea.svc — Gitea needs its OWN LoadBalancer VIP for ArgoCD to clone from.
 #    We cannot prove a provider exists without creating a Service, and this script is read-only. So we
