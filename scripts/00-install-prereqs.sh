@@ -217,5 +217,14 @@ done
 # which `make` cannot do for them.
 log_info "done."
 log_info "make targets resolve these automatically. For YOUR OWN shell, put them on PATH:"
-log_info "    export PATH=\"$BIN_DIR:\$PATH\"                            # this shell"
-log_info "    echo 'eval \"\$(mise activate bash)\"' >> ~/.bashrc      # permanently (or ~/.zshrc)"
+log_info "    export PATH=\"$BIN_DIR:\$PATH\"       # this shell, right now"
+# Print the line for the shell they ACTUALLY use. `>> ~/.bashrc  # or ~/.zshrc` makes the reader
+# resolve an ambiguity we can resolve for them, and it is simply wrong for a zsh or fish operator.
+_rc="$(shell_rc_file)"; _act="$(shell_activate_line)"
+if [ -n "$_rc" ] && [ -n "$_act" ]; then
+  log_info "    make shell-init                    # permanently — appends to ${_rc} for your $(basename "$SHELL")"
+else
+  log_warn "    could not identify your shell from SHELL='${SHELL:-unset}' — add mise activation to your"
+  log_warn "    interactive shell's rc file by hand: https://mise.jdx.dev/getting-started.html"
+fi
+unset _rc _act

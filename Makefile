@@ -548,6 +548,10 @@ creds-show: ## Print the access summary (URLs + logins) for the current context
 	@$(SCRIPTS)/creds.sh
 creds: creds-show  ## Alias for creds-show (back-compat)
 
+.PHONY: shell-init
+shell-init: ## Put the pinned toolchain on YOUR interactive shell's PATH, permanently (detects bash/zsh/fish/ksh)
+	@$(SCRIPTS)/shell-init.sh
+
 .PHONY: argocd-password
 argocd-password: ## Print the ArgoCD 'admin' password (self-resolves kubeconfig; .env value or generated)
 	@$(SCRIPTS)/argocd-password.sh

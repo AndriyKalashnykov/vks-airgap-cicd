@@ -145,6 +145,27 @@ make check-tools              # what you have, what is missing
 
 **Expect:** `check-tools` prints `all REQUIRED tools present.` *(~5 min, mostly downloads)*
 
+### Put the toolchain on YOUR shell's PATH
+
+`make` finds these tools by itself, so every `make …` below works right now. The commands that are
+**not** `make` — `kubectl`, `vcf`, `argocd`, starting in 1b — run in *your* shell, which cannot see
+them yet: `make deps` installs into `~/.local/bin` and a `mise` tree, and neither is on a fresh
+box's PATH. Skipping this gives you `kubectl: command not found` at the very next step.
+
+```bash
+make shell-init                        # permanent — detects your shell and edits the right file
+export PATH="$HOME/.local/bin:$PATH"   # this shell, right now (shell-init applies to NEW ones)
+```
+
+`make shell-init` works out whether you are on bash, zsh, fish or ksh and writes to *that* shell's
+rc file — you are not asked to choose. It is idempotent, and it refuses rather than guessing if it
+cannot identify your shell. On an OS that ships no `~/.bash_profile` or `~/.profile` (PhotonOS is
+one) it also creates `~/.bash_profile`, because a **login** bash never reads `~/.bashrc` by itself —
+without that, an SSH session keeps saying `command not found` no matter what is in `~/.bashrc`.
+
+**Expect:** in a **new** shell, `kubectl version --client` answers (and `vcf version`, after
+`make install-vcf-clis`). Verified on PhotonOS and Ubuntu, for bash and zsh.
+
 ---
 
 ## 1b. The vSphere Namespace
@@ -614,6 +635,18 @@ make istio-preflight
 
 On a real lab Istio is usually already present as a Standard Package — attach, do not install.
 *(~5 min)*
+
+Then **check the routes actually work**, before you trust the URLs in Step 11:
+
+```bash
+make verify-ingress           # each *.vks.local host must reach ITS OWN backend
+```
+
+**Expect:** one `OK` per host — `gitea`, `tekton`, and each app. It sends `Host: <name>.vks.local`
+to the ingress LoadBalancer IP directly, so **it needs no DNS and no `/etc/hosts` entry** — and it
+asserts a per-host body marker, not just a 200, because a mis-wired route returns 200 from the
+*wrong* backend. If a host fails here, the URL Step 11 prints for it will not work either, and this
+tells you which one and why. *(~1 min)*
 
 ---
 
