@@ -57,6 +57,14 @@ if [ "$ENGINE" = podman ]; then
   fi
   # -s as well as 2>/dev/null: on a fresh Photon box the file does not EXIST, and -s is what
   # suppresses grep's own message. The `|| prob` keeps it safe under `set -e`.
+  # DISTINGUISH "no entry" from "cannot read it". MEASURED 2026-08-11: `sudo tee` creates
+  # /etc/subuid 0600, podman runs as the operator and gets "permission denied", then silently uses a
+  # single-id map — so a bare grep reports "no entry" and sends you to add one that is already there.
+  if [ -f /etc/subuid ] && [ ! -r /etc/subuid ]; then
+    prob "/etc/subuid exists but is NOT READABLE by $(id -un) — podman falls back to a single-id map
+           and every build that chowns fails. These files are public id-allocation metadata:
+             sudo chmod 0644 /etc/subuid /etc/subgid"
+  fi
   grep -qs "^$(id -un):" /etc/subuid 2>/dev/null \
     || prob "no /etc/subuid entry for $(id -un) — rootless podman cannot map uids, and a build dies
            with 'potentially insufficient UIDs or GIDs available in user namespace'. NOTE: 'usermod'
