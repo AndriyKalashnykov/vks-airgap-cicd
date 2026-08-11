@@ -160,3 +160,47 @@ cluster-scoped read the runbook asks the reader to run is permitted too — `crd
 ⚠️ Note the guards are three DIFFERENT mechanisms (helm `--wait`, `kubectl wait
 condition=Available`, and one retry-on-error). Nothing asserts a new CR-applying site picks
 one — a future site can be added unguarded and no gate will notice.
+
+---
+
+## B86 — `values-provenance` can never read `DISCOVERED` on the real-lab path
+
+**HIGH.** `state_stamp` is called from exactly two places: `scripts/05-kind-up.sh:156` (KinD
+only) and `Makefile:264` (a manual `make state-stamp`). **No real-lab install script calls
+it**, and neither `scenario-1.md` nor `scenario-2.md` mentions `state-stamp`. So every
+real-lab `make creds-show` — including one run minutes after a clean install — prints
+`STORED` plus the five-line *"an overlay SURVIVES A REBUILD, so a password or an IP here may
+be from a lab that no longer exists"* banner.
+
+Reproduced on this box 2026-08-10: `make creds-show` printed exactly that banner, and
+`scenario-1.md:628` promises the reader a state (`DISCOVERED`) the documented path cannot
+reach.
+
+**Why it matters, and it is not cosmetic:** it is alarm fatigue on the one command whose job
+is to tell the operator what is true. A banner that fires on every correct install trains
+them to ignore it — and then the case it exists for (a genuinely stale overlay after a lab
+rebuild) is ignored too, because **the two are byte-identical**.
+
+⚠️ **Design change — `vks-adversary` BEFORE implementing.** `scripts/05-kind-up.sh:148-155`
+documents the trap in detail: `state_stamp` reads the AMBIENT `KUBECONFIG`, so stamping at
+the wrong moment on a lab box can archive a live sink and **destroy the only copy of the
+generated passwords**. It has to go where `KUBECONFIG` already points at the guest cluster.
+
+## B87 — `test-creds-show.sh` has ZERO coverage of the real-lab provenance path
+
+**HIGH.** Its three states are: no overlay, and two overlays that **both** set
+`VKS_STATE_KIND=1` (`scripts/test-creds-show.sh:67,87`). That flag short-circuits at
+`scripts/creds.sh:217`, *before* the stamp comparison at `:218` — so the `STORED` branch,
+the only one a real lab ever reaches, is never rendered, and the `DISCOVERED` assertion at
+`:105` passes through the KinD shortcut rather than the logic under test.
+
+The gate written to keep `creds-show` honest *"in every state"* is blind to the state the
+operator is actually in. Fix: two more states — unstamped non-KinD (expect `STORED`), and a
+matching `VKS_STATE_SERVER` (expect `DISCOVERED`). Fully offline: `state_kubeconfig_server`
+parses the file and never dials (`scripts/lib/state.sh:38-39`).
+
+Both found by an idea-round `vks-adversary` on 2026-08-10 that **refuted** the proposed
+`make creds-check` (measured 67% false-RED — nothing in this repo writes `/etc/hosts`, so
+`*.vks.local` is NXDOMAIN by design, and §11 prints two port-forward URLs live only while a
+port-forward runs). The reachability question it was meant to answer is already answered by
+`verify-ingress` (Host header, no DNS, per-host body marker), now cited in §10.

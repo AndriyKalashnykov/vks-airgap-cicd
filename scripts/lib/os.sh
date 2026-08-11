@@ -1136,6 +1136,8 @@ shell_rc_file() {
   esac
 }
 
+# shellcheck disable=SC2016  # single quotes are the POINT: this string is WRITTEN INTO the
+# operator's rc file and must be expanded by THEIR shell at login, not by us at write time.
 shell_activate_line() {
   case "$(basename "${SHELL:-}" 2>/dev/null)" in
     fish)          printf '%s' 'mise activate fish | source' ;;
