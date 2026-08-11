@@ -249,30 +249,17 @@ The registry every image comes from.
 |---|---|---|
 | `HARBOR_URL` | `harbor.env1.lab.test` | **you choose it.** It must be a name your real DNS can answer — the guest cluster's nodes resolve it. **Bare host — no `https://`, no trailing slash.** |
 | `HARBOR_STORAGE_CLASS` | `wcp-vmfs` (single-host VMFS)<br>`vsan-default-storage-policy` (vSAN) | `kubectl get storageclass` against the Supervisor. No access yet? vCenter → your Namespace → **Storage** tab, then lowercase the policy name and replace spaces with `-`. |
-| `HARBOR_USERNAME` | `admin` | **Only if you SKIPPED the install.** The install below generates this and publishes it for you; a Harbor you did not install has published nothing. See *Where to get them* below. |
-| `HARBOR_PASSWORD` | *your value* | Same — **only if you skipped the install.** MEASURED: without these two, `make harbor-robot` stops with *"set HARBOR_USERNAME in .env to the Harbor ADMIN"*, `make env-check` reports `HARBOR_USERNAME` missing, and `make env-validate` reports *"Harbor rejected HARBOR_USERNAME/HARBOR_PASSWORD (HTTP 401)"*. |
+| `HARBOR_USERNAME` | `admin` | **only if you skipped the install** — `make creds-show` on the box that installed Harbor, or ask your platform team |
+| `HARBOR_PASSWORD` | *your value* | same. **Not** `Harbor12345` — the install generates one |
 
-**Where to get them when you skipped the install.** A Harbor deployed as a Supervisor Service
-**generates** its admin password at install time — it is *not* the vendor default `Harbor12345`,
-which is rejected `401`. In order of preference:
-
-1. **On the box that installed it**, `make creds-show` prints it, and it is in that box's
-   `.env.state`. This is the usual case when the same team ran Step 2 earlier.
-2. **Ask the platform team** for an account with push+pull on your projects. A **system-level
-   robot** is better than `admin` — see Step 7, which needs system-admin to mint one itself.
-3. **Reset it** in Harbor's UI (*Administration → Users → admin → Change Password*) if you own it
-   and nobody has the value.
-
-Check the value before going further — it is two commands and it saves you a failure four steps
-later:
+Skipped the install? Check the credential now, not at Step 9:
 
 ```bash
-printf 'user = "%s:%s"\n' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" > /tmp/h.cfg   # keeps it out of argv
+printf 'user = "%s:%s"\n' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" > /tmp/h.cfg
 curl -sk -o /dev/null -w '%{http_code}\n' -K /tmp/h.cfg "https://${HARBOR_URL}/api/v2.0/users/current"; rm -f /tmp/h.cfg
 ```
 
-**Expect:** `200`. A `401` means the credential is wrong — that is exactly what `make env-validate`
-reports at Step 9, and finding it here costs seconds instead of a failed install.
+**Expect:** `200`. `401` = wrong credential.
 
 `VCENTER_HOST` / `VCENTER_USERNAME` / `VCENTER_PASSWORD` are already set from Step 1b.
 
