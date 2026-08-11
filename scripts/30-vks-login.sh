@@ -117,6 +117,21 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     # absent/empty/unparseable (5) from a wrong anchor (1) from a name mismatch (3), and each has a
     # different remedy. A guard that pre-filters the input to a classifier deletes the classes it
     # filters on.
+    # DEFAULT IT TO WHAT `make fetch-supervisor-ca` WROTE. MEASURED 2026-08-10 by walking
+    # docs/scenario-1.md literally on a clean Ubuntu container against a live Supervisor:
+    # Step 3 says `make fetch-supervisor-ca` and then `make vks-login`, and §3's table states
+    # "the default is already that path, so set it only if you moved it" — but the line in
+    # .env.example is COMMENTED (`# VKS_CA_CERT_FILE=./secrets/supervisor-ca.crt`), so the var was
+    # unset, the branch below never ran, no --ca-certificate was passed, and vks-login died with
+    #   x509: certificate signed by unknown authority
+    # on a Supervisor whose CA had just been fetched successfully two steps earlier. The doc
+    # promised a default that did not exist; this creates it, so the promise is true.
+    # Only when the file is actually THERE — a lab with a publicly-trusted cert must keep working
+    # with no CA at all, and pointing --ca-certificate at a missing file would break it.
+    if [ -z "${VKS_CA_CERT_FILE:-}" ] && [ -s "${REPO_ROOT}/secrets/supervisor-ca.crt" ]; then
+      VKS_CA_CERT_FILE="${REPO_ROOT}/secrets/supervisor-ca.crt"
+      log_info "TLS: using the CA that 'make fetch-supervisor-ca' wrote (${VKS_CA_CERT_FILE})"
+    fi
     if [ -n "${VKS_CA_CERT_FILE:-}" ]; then
       # ⚠️ EXISTS AND NON-EMPTY IS NOT "IS A TRUST ANCHOR FOR THIS ENDPOINT". MEASURED 2026-08-05:
       # after a lab rebuild this file still held the DESTROYED lab's VMCA (stored SHA-256 EF:19:5E:…
