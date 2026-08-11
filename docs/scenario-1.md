@@ -464,9 +464,16 @@ vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"
 vcf cluster kubeconfig get "$VKS_CLUSTER_NAME" --export-file "./secrets/${VKS_CLUSTER_NAME}.kubeconfig"
 ```
 
-MEASURED 2026-08-09: on one 9.1 lab this failed with `Error: failed to get pinniped-info from
-management cluster` while the Secret route above worked. If you hit that and you *do* have a
-Supervisor kubeconfig, use the Secret route — it is the same credential.
+This fallback is the one part of Step 6 that has failed on real labs, twice, in two different ways:
+
+- MEASURED 2026-08-09: `Error: failed to get pinniped-info from management cluster`.
+- MEASURED 2026-08-11: `failed to discover plugin sources from the system Harbor registry: the
+  system Harbor registry could not be discovered from the Supervisor cluster`. The `vcf` CLI is
+  plugin-based and resolves its plugins through a registry the Supervisor advertises; when that is
+  absent the `cluster` subcommand cannot run at all. It is unrelated to *your* Harbor.
+
+In both cases the Secret route above worked. If you have a Supervisor kubeconfig, use it — it is the
+same credential, and it does not go through the CLI's plugin machinery.
 </details>
 
 | key | example | how to get the value |
@@ -632,6 +639,16 @@ make verify           # pushes a marked change and follows it to the running app
 
 **Expect:** `env-validate` reports Harbor reachable **and authenticated**; `install-all` completes;
 `make verify` exits **0** for every app. *(**install-all 8–10 min**, **verify 3–4 min**)*
+
+`install-all` starts with a read-only `lab-preflight`, so anything the lab is missing surfaces in the
+first seconds rather than after the ~20-minute mirror. The one it catches most often is **no default
+StorageClass** — a guest cluster can have four and mark none, and Gitea's PVC would then sit Pending
+forever with an error that never mentions storage. It prints the fix; run it and re-run `install-all`:
+
+```bash
+kubectl get storageclass                                                    # pick one
+kubectl annotate sc <name> storageclass.kubernetes.io/is-default-class=true
+```
 
 ---
 
