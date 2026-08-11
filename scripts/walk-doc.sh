@@ -35,6 +35,8 @@ should_skip() {
     *"make vsphere-namespace"*) [ "$WALK_EXISTS" = 1 ] && printf 'namespace already exists (this row)' ;;
     *"vks-cluster-create"*)     [ "$WALK_EXISTS" = 1 ] && printf 'cluster already exists (this row)' ;;
     *"git clone https"*)        [ "${WALK_SKIP_CLONE:-0}" = 1 ] && printf 'already cloned by the harness' ;;
+    *"apt-get install"*)        [ "${WALK_OS:-}" = photon ] && printf 'Ubuntu block; this box is Photon' ;;
+    *"tdnf install"*)           case "${WALK_OS:-}" in ubuntu|debian) printf 'Photon block; this box is %s' "$WALK_OS" ;; esac ;;
   esac
 }
 
