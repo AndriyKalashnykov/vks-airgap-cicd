@@ -123,7 +123,22 @@ SB="$(mktemp -d)"; trap 'rm -rf "$SB"' EXIT
 # CI-only failure that reproduced nowhere locally (2026-07-19). The setup of a test harness is part
 # of the instrument: if it can fail, it must say so itself.
 _setup_die() { echo "test-gate-vacuity: SANDBOX SETUP FAILED — $1" >&2; echo "  This is the HARNESS, not the gate under test. Do not go looking at the gate." >&2; exit 1; }
+# BUILD ONCE, RESTORE PER CASE. fresh() is called twice per gate (baseline + starved); at ~18 calls
+# the `git archive | tar` + overlay + `git init/add/commit` cost 496ms EACH — measured 2026-08-10,
+# ~9s of a 19.3s test, which was itself 57% of all of test-scripts.
+# The sandbox is a git repo whose HEAD commit is made AFTER the working-tree overlay, so
+# `git checkout -- . && git clean -fd` returns it to EXACTLY what the build produced — including the
+# overlay — for 6ms instead of 496ms (80x). Verified restoring a truncated file, an appended file
+# and a stray untracked file. The post-build assertions below still run on every call, so a restore
+# that silently failed is caught by the same check that catches a half-built sandbox.
+_SANDBOX_BUILT=0
 fresh() {
+  if [ "$_SANDBOX_BUILT" = 1 ]; then
+    ( cd "$SB/repo" && git checkout -q -- . && git clean -qfd ) \
+      || _setup_die "could not restore the sandbox to its pristine commit"
+    _assert_sandbox_populated
+    return 0
+  fi
   rm -rf "${SB:?}/repo"; mkdir -p "$SB/repo" || _setup_die "cannot create the sandbox dir"
   git archive HEAD | tar -x -C "$SB/repo" || _setup_die "git archive HEAD | tar failed"
   # ⚠️ OVERLAY EVERY TRACKED FILE, NOT JUST scripts/.
@@ -145,8 +160,13 @@ fresh() {
   ( cd "$SB/repo" && git init -q . && git add -A >/dev/null 2>&1 \
       && git -c user.email=t@t -c user.name=t commit -qm starve >/dev/null 2>&1 ) \
     || _setup_die "could not re-init the sandbox as a git repo (several gates drive off git ls-files)"
-  # Assert the sandbox actually HOLDS the tree. Cheap, and the only thing that distinguishes a
-  # half-copied sandbox from a genuinely failing gate.
+  _SANDBOX_BUILT=1
+  _assert_sandbox_populated
+}
+
+# Assert the sandbox actually HOLDS the tree. Cheap, and the only thing that distinguishes a
+# half-copied sandbox (or a failed restore) from a genuinely failing gate.
+_assert_sandbox_populated() {
   [ -s "$SB/repo/scripts/lib/os.sh" ]      || _setup_die "scripts/lib/os.sh is missing or empty in the sandbox"
   [ -s "$SB/repo/scripts/49-psa-check.sh" ] || _setup_die "scripts/49-psa-check.sh is missing or empty in the sandbox"
   _n="$(cd "$SB/repo" && git ls-files | grep -c . || true)"
