@@ -20,7 +20,8 @@ DOC="${WALK_DOC:-${SCRIPT_DIR}/../docs/scenario-1.md}"
 
 STEP=0; RAN=0; FAILED=0; SKIPPED=0
 SKIP_LOG="$(mktemp)"; NEUT_LOG="$(mktemp)"; CWD_FILE="$(mktemp)"; RC_FILE="$(mktemp)"; UNSAFE_FILE="$(mktemp)"
-trap 'rm -f "$SKIP_LOG" "$NEUT_LOG" "$CWD_FILE" "$RC_FILE" "$UNSAFE_FILE"' EXIT
+ENV_FILE="$(mktemp)"; : > "$ENV_FILE"
+trap 'rm -f "$SKIP_LOG" "$NEUT_LOG" "$CWD_FILE" "$RC_FILE" "$UNSAFE_FILE" "$ENV_FILE"' EXIT
 CWD="${WALK_START_DIR:-$PWD}"
 
 # ── Whole-block skips: a block a WALK must not run, never a block that is broken.
@@ -108,8 +109,11 @@ PY
 # denominator that only the parser produces cannot detect the parser being wrong.
 INDEP="$(grep -c '^[[:space:]]*```bash' "$DOC" || true)"
 printf '\n======== walking %s ========\n' "$(basename "$DOC")"
-printf 'blocks: %d extracted, %d counted independently | row: WALK_EXISTS=%s WALK_SKIP_CLONE=%s\n' \
-  "${#PARSED[@]}" "$INDEP" "$WALK_EXISTS" "${WALK_SKIP_CLONE:-0}"
+printf 'blocks: %d extracted, %d counted independently | row: WALK_OS=%s WALK_EXISTS=%s WALK_SKIP_CLONE=%s\n' \
+  "${#PARSED[@]}" "$INDEP" "${WALK_OS:-?}" "$WALK_EXISTS" "${WALK_SKIP_CLONE:-0}"
+# Disclosed, because it is a real trade: carrying the environment means a block that forgot to
+# source ./.env is rescued by the previous one -- exactly as it would be for a reader in one terminal.
+printf 'shell: ONE INTERACTIVE bash per block, ENV AND CWD CARRIED FORWARD (a reader has one terminal)\n'
 [ "${#PARSED[@]}" -ge "${WALK_MIN_BLOCKS:-20}" ] \
   || { echo "REFUSING: only ${#PARSED[@]} blocks (< ${WALK_MIN_BLOCKS:-20}) — the parser and the document have diverged"; exit 1; }
 
@@ -143,11 +147,24 @@ for row in "${PARSED[@]}"; do
     # (11) the leading newline is load-bearing: a block ending in `\` would otherwise swallow `__rc=$?`.
     # (9) the cwd goes in as an ARGUMENT, not interpolated -- a balanced quote pair in a path was a
     # proven injection.
-    bash -c 'cd "$1" || exit 1
+    # A READER HAS ONE TERMINAL. The first version gave each block its own non-interactive
+    # `bash -c`, reasoning that the doc re-sources ./.env in every block that needs it -- true for
+    # .env, and WRONG for PATH. Measured: `make shell-init` puts the toolchain on PATH through the
+    # shell's rc file, that shell exited, and the next twelve blocks died `kubectl: command not
+    # found` / `vcf: command not found`, cascading into "vks.kubeconfig does not exist" for every
+    # remaining step. A reader would have hit none of it.
+    #   -i  : $- then contains `i`, so ~/.bashrc's `case $- in *i*` guard passes and rc files load.
+    #         Costs two job-control lines on stderr, filtered below.
+    #   env : `export -p` at the end of each block, sourced at the start of the next. Verified to
+    #         round-trip values containing quotes and newlines.
+    bash -i -c '. "$2" 2>/dev/null; cd "$1" || exit 1
 '"$B"'
 __rc=$?
+export -p > "$2" 2>/dev/null
 printf "\n__WALK_RC__%s\n__WALK_CWD__%s\n" "$__rc" "$PWD"
-exit $__rc' _ "$CWD" 2>&1 | while IFS= read -r l; do
+exit $__rc' _ "$CWD" "$ENV_FILE" 2>&1 \
+      | grep -vE '^bash: (cannot set terminal process group|no job control)' \
+      | while IFS= read -r l; do
       case "$l" in
         __WALK_RC__*)  printf '%s' "${l#__WALK_RC__}"  > "$RC_FILE" ;;
         __WALK_CWD__*) printf '%s' "${l#__WALK_CWD__}" > "$CWD_FILE" ;;

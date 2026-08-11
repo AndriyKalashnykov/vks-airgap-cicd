@@ -100,6 +100,14 @@ o="$(WALK_DOC="$T/cw.md" WALK_EXISTS=1 WALK_MIN_BLOCKS=1 WALK_START_DIR="$T" bas
 if printf '%s' "$o" | grep -q '/sub'; then c=0; else c=1; fi
 assert "cwd carries across blocks" "$c" "it reset"
 
+# 10b. A reader has ONE terminal. Isolating each block lost PATH from `make shell-init`, and the
+#      next twelve blocks died `kubectl: command not found` -- cascading into "vks.kubeconfig does
+#      not exist" for every remaining step. A reader would have hit none of it.
+printf '## t\n\n```bash\nexport WALKVAR=carried\nexport PATH="/opt/probe:$PATH"\n```\n\n```bash\necho "V=$WALKVAR"\ncase "$PATH" in /opt/probe:*) echo PATH-CARRIED;; *) echo PATH-LOST;; esac\n```\n' > "$T/env.md"
+o="$(WALK_DOC="$T/env.md" WALK_EXISTS=1 WALK_MIN_BLOCKS=1 bash "$W" 2>&1)"
+if printf '%s' "$o" | grep -q 'V=carried' && printf '%s' "$o" | grep -q 'PATH-CARRIED'; then c=0; else c=1; fi
+assert "env and PATH carry across blocks" "$c" "each block was isolated; shell-init's PATH would be lost"
+
 # 11. The real document must still extract completely, and the parser's count must agree with an
 #     INDEPENDENT one -- a denominator only the parser produces cannot detect the parser being wrong.
 o="$(WALK_DRY=1 WALK_EXISTS=1 bash "$W" 2>&1)"
