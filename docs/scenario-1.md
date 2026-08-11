@@ -56,12 +56,14 @@ A stock Ubuntu or Photon box has neither `git` nor `make`. Ubuntu has no `curl` 
 sudo apt-get update && sudo apt-get install -y --no-install-recommends git make curl ca-certificates
 ```
 
-**Photon OS 5** — `openssh` is in this list deliberately. The transaction upgrades `openssl-libs`,
-and Photon 5.0's `openssh-9.1p1` refuses to start against a different OpenSSL minor: without it you
-lose SSH to this box the moment you disconnect, and cannot reconnect.
+**Photon OS 5** — `openssh openssh-socket` are in this list deliberately, and both are required.
+The transaction upgrades `openssl-libs`, and Photon 5.0's `openssh-9.1p1` refuses to start against a
+different OpenSSL minor; upgrading `openssh` alone then *removes* `sshd.socket` and `sshd@.service`,
+which moved to `openssh-socket`. Either way you lose SSH to this box and cannot reconnect. Measured
+on a fresh VM: with both, all four units survive and the session stays up through the upgrade.
 
 ```bash
-sudo tdnf install -y git make curl curl-libs ca-certificates openssh
+sudo tdnf install -y git make curl curl-libs ca-certificates openssh openssh-socket
 ```
 
 Already root? Drop the `sudo`.
