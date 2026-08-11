@@ -113,9 +113,19 @@ PY
   # `nested-mgmt` -> `virbr-nmgmt`. Ask libvirt instead of guessing; a wrong name makes `ip neigh`
   # error, `pipefail` fire, and the probe silently never run.
   local br; br="$(virsh net-dumpxml "$WALKBOX_LAB_NET" 2>/dev/null | grep -oE "bridge name='[^']+'" | cut -d"'" -f2 || true)"
+  # ⚠️ OUTSIDE-THE-DECLARED-RANGES IS NECESSARY AND NOT SUFFICIENT. A sibling walkbox picks by the
+  # SAME rule and lands on the SAME octet, and ARP cannot see a VM that has not spoken yet. MEASURED
+  # 2026-08-11: the ubuntu and photon boxes both took .64; the lab route died for both, and it
+  # presented as THIRTEEN unrelated runbook step failures starting at `fetch-supervisor-ca` timing
+  # out after 130s. Nothing in that cascade named an address conflict.
+  # mkphoton.sh keeps a ledger for exactly this; this path never read or wrote it, so the two
+  # allocators could not see each other.
+  local ledger="${WALKBOX_DIR}/lab-ips.txt" inuse=""
+  [ -f "$ledger" ] && inuse="$(grep -v "^${WALKBOX_NAME} " "$ledger" 2>/dev/null | awk '{print $2}' | cut -d/ -f1 | tr '\n' ' ' || true)"
   local o arp
   for o in $(seq 64 127); do
     case " $claimed " in *" $o "*) continue ;; esac
+    case " $inuse " in *" 192.168.101.$o "*) continue ;; esac
     # Herestring again (see walkbox_assert_ours): as a pipe this SIGPIPEs and the pipeline returns
     # 141, so `continue` is SKIPPED and an in-use address is ACCEPTED — measured 22/300 under load.
     # That direction is worse than the guard's: it hands out a duplicate IP.
@@ -123,6 +133,10 @@ PY
       arp="$(ip neigh show dev "$br" 2>/dev/null || true)"
       grep -qF "192.168.101.$o " <<< "$arp" && continue
     fi
+    # Record it BEFORE returning, so a sibling build cannot pick the same octet in the window
+    # before this VM has ever put a frame on the wire.
+    { grep -v "^${WALKBOX_NAME} " "$ledger" 2>/dev/null || true; printf '%s 192.168.101.%s/24\n' "$WALKBOX_NAME" "$o"; } > "${ledger}.tmp"
+    mv "${ledger}.tmp" "$ledger"
     printf '192.168.101.%s/24' "$o"; return 0
   done
   die "no free address in 192.168.101.64-127 outside the declared ranges"

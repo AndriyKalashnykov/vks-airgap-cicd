@@ -408,8 +408,8 @@ argocd account update-password
 
 Where Gitea, Tekton and your apps run. You need cluster-admin on it.
 
-> **Already have a cluster?** Put its name in `VKS_CLUSTER_NAME`, skip the create command, and pick
-> up at *Get its kubeconfig*.
+> **Already have a cluster?** Put its name in `VKS_CLUSTER_NAME` and skip `make vks-cluster-create`
+> below. Everything after it still runs.
 
 **→ set in `./.env`:**
 
@@ -421,7 +421,13 @@ Where Gitea, Tekton and your apps run. You need cluster-admin on it.
 | `VKS_K8S_VERSION` | `v1.34.8+vmware.1-vkr.1` | `kubectl get kubernetesreleases` -> pick one that is **Ready AND Compatible** and paste its **full** name. It is a *prefix* selector, so a bare `v1.34` is accepted and then floats — an air-gap repo must not do that. `make vks-cluster-create` server-side dry-runs it first and prints vCenter own rejection. |
 
 ```bash
-make vks-cluster-create                                # applies the Cluster; provisioning is async
+make vks-cluster-create        # applies the Cluster; provisioning is async
+```
+
+Already have a cluster? Skip **only** that command — the two below still have to run, and the second
+is what writes the kubeconfig every later step needs.
+
+```bash
 make vks-cluster-status                                # reports ONCE — read `endpoint :` now
 make vks-cluster-status VKS_CLUSTER_WAIT_SECONDS=1800  # then wait for every node Ready
 ```
@@ -637,13 +643,31 @@ Reach the UIs at `*.vks.local` instead of port-forwarding.
 make istio-preflight
 ```
 
-| It says | You run |
-|---|---|
-| **NO Istio detected** | `make install-ingress` — installs Istio from your Harbor |
-| **Istio already here** | `make install-ingress INGRESS_CONTROLLER=istio-existing` — attaches routes only, installs nothing |
+**`istio-preflight` is read-only and it ends by naming the exact command to run next — run the one
+it prints.** It has more outcomes than the two obvious ones, so do not guess from the cluster:
 
-On a real lab Istio is usually already present as a Standard Package — attach, do not install.
-*(~5 min)*
+- `PREFLIGHT OK — 'make install-ingress INGRESS_CONTROLLER=istio-existing' …` — a mesh is already
+  here. **Attach; do not install.** This is the normal case on a real lab, where Istio is a Standard
+  Package the platform team owns.
+- `NO Istio detected on this cluster.` — install it from your Harbor with `make install-ingress`.
+- **Non-zero exit** — it names three values (`ISTIO_GATEWAY_NAMESPACE`, `_SERVICE`, `_LABEL`) to
+  request from the mesh admin. That is the answer, not a failure: with them set, the attach command
+  needs no read access at all.
+
+Whichever it names takes about **5 minutes**.
+
+⚠️ **Never run the bare `make install-ingress` against a mesh you did not install.** It helm-installs
+a second istiod over the platform's, and before it gets far enough to fail it relabels the
+`istio-system` namespace's Pod Security level — which breaks the platform's own pods on their next
+restart, across tenants, with nothing naming you as the cause.
+
+```bash
+make install-ingress INGRESS_CONTROLLER=istio-existing   # a mesh is already here — attach only
+```
+
+```bash
+make install-ingress                                     # NO Istio detected — install it
+```
 
 Then **check the routes actually work**, before you rely on those hostnames:
 
