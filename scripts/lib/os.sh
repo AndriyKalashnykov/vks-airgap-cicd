@@ -1115,3 +1115,32 @@ classify_kube_failure() {
     *)                                                                                 printf 'UNKNOWN' ;;
   esac
 }
+
+# ---------------------------------------------------------------------------------------------
+# shell_rc_file / shell_activate_line — do NOT make the operator work out which shell they use.
+#
+# Telling a reader `>> ~/.bashrc   # or ~/.zshrc` hands them a decision they should never have been
+# asked to make, and gets it wrong for anyone on zsh (the default on macOS and on plenty of Linux
+# boxes, including this repo's own author). $SHELL is the login shell from /etc/passwd, which is
+# exactly the right question: "which rc file does MY interactive shell read".
+#
+# fish is not a bourne shell and needs a different activation syntax entirely, which is precisely
+# the kind of thing a generic instruction gets wrong.
+shell_rc_file() {
+  case "$(basename "${SHELL:-}" 2>/dev/null)" in
+    zsh)  printf '%s' "${ZDOTDIR:-$HOME}/.zshrc" ;;
+    bash) printf '%s' "$HOME/.bashrc" ;;
+    fish) printf '%s' "$HOME/.config/fish/config.fish" ;;
+    ksh)  printf '%s' "$HOME/.kshrc" ;;
+    *)    printf '%s' "" ;;          # unknown: the caller must degrade, not guess
+  esac
+}
+
+shell_activate_line() {
+  case "$(basename "${SHELL:-}" 2>/dev/null)" in
+    fish)          printf '%s' 'mise activate fish | source' ;;
+    zsh)           printf '%s' 'eval "$(mise activate zsh)"' ;;
+    bash|ksh)      printf '%s' 'eval "$(mise activate bash)"' ;;
+    *)             printf '%s' "" ;;
+  esac
+}
