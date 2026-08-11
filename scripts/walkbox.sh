@@ -58,9 +58,16 @@ _ssh() { ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o Conn
 # no --yes. This runs on qemu:///system, which on a lab host ALSO carries the nested ESXi that hosts
 # the entire Supervisor. A blocklist of known-real names rots the day someone adds a VM; a POSITIVE
 # marker cannot. Nothing destructive runs unless the domain's own XML says we made it.
+# ⚠️ HERESTRING, not `virsh dumpxml | grep -qF`. MEASURED 2026-08-11: `grep -q` exits at the first
+# match — and the marker is near the TOP of a ~6.4 KB XML — so virsh takes SIGPIPE and `pipefail`
+# promotes 141 to the pipeline status. On an idle box: 0/200 false negatives. Pinned to one core
+# (`taskset -c 0`, the loaded-host analogue): 383/400 = 95.8%. It fails CLOSED, so it is safe — but
+# it makes `walkbox-down` intermittently refuse a domain that DOES carry the marker, which reads as
+# "the marker is broken" and collides with a real marker bug. A herestring spools to a temp file, so
+# there is nothing to SIGPIPE.
 walkbox_assert_ours() {
   local n="${1:?}"
-  virsh dumpxml "$n" 2>/dev/null | grep -qF "$WALKBOX_MARKER" \
+  grep -qF "$WALKBOX_MARKER" <<< "$(virsh dumpxml "$n" 2>/dev/null)" \
     || die "domain '$n' does not carry the ${WALKBOX_MARKER} marker — REFUSING to touch it.
   walkbox only destroys domains it created. If you meant a different VM, that is the point of
   this guard: 'virsh destroy' is a forced power-cut and this connection also hosts the lab."
@@ -80,7 +87,11 @@ walkbox_lab_ip() {
   [ -n "${WALKBOX_LAB_IP:-}" ] && { printf '%s' "$WALKBOX_LAB_IP"; return 0; }
   [ -s "$WALKBOX_LAB_INPUT" ] || die "cannot derive a lab IP: ${WALKBOX_LAB_INPUT} not readable.
   Set WALKBOX_LAB_IP=<addr>/24 explicitly — and check it is outside every range that file declares."
-  local claimed; claimed="$(python3 - "$WALKBOX_LAB_INPUT" <<'PY'
+  # `|| true` on the assignment: without it, a python3 that is missing or raises makes the
+  # substitution non-zero, `set -e` kills the script AT THIS LINE, and the `die` below — written for
+  # exactly that case — NEVER RUNS. You get a bare non-zero with no message. (python3 here resolves
+  # to a mise shim; lib/os.sh already records a `pick_port` -> `python3: command not found` incident.)
+  local claimed; claimed="$(python3 - "$WALKBOX_LAB_INPUT" <<'PY' || true
 import re, sys
 # Deliberately regex, not a YAML parse: this file is another repo's contract and we read only the
 # {start: A.B.C.D, count: N} shape. A missed range must fail CLOSED, so anything unparsed is ignored
@@ -98,10 +109,20 @@ PY
 )"
   [ -n "$claimed" ] || die "parsed NO ranges from ${WALKBOX_LAB_INPUT} — refusing to pick an address blind"
   log_info "lab declares 192.168.101.{${claimed// /,}} — choosing outside that"
-  local o
+  # The bridge device name is NOT derivable from the network name: `supwl` -> `virbr-supwl`, but
+  # `nested-mgmt` -> `virbr-nmgmt`. Ask libvirt instead of guessing; a wrong name makes `ip neigh`
+  # error, `pipefail` fire, and the probe silently never run.
+  local br; br="$(virsh net-dumpxml "$WALKBOX_LAB_NET" 2>/dev/null | grep -oE "bridge name='[^']+'" | cut -d"'" -f2 || true)"
+  local o arp
   for o in $(seq 64 127); do
     case " $claimed " in *" $o "*) continue ;; esac
-    ip neigh show dev "virbr-${WALKBOX_LAB_NET}" 2>/dev/null | grep -q "192.168.101.$o " && continue
+    # Herestring again (see walkbox_assert_ours): as a pipe this SIGPIPEs and the pipeline returns
+    # 141, so `continue` is SKIPPED and an in-use address is ACCEPTED — measured 22/300 under load.
+    # That direction is worse than the guard's: it hands out a duplicate IP.
+    if [ -n "$br" ]; then
+      arp="$(ip neigh show dev "$br" 2>/dev/null || true)"
+      grep -qF "192.168.101.$o " <<< "$arp" && continue
+    fi
     printf '192.168.101.%s/24' "$o"; return 0
   done
   die "no free address in 192.168.101.64-127 outside the declared ranges"
@@ -112,8 +133,10 @@ walkbox_prepare() {
   [ -f "${WALKBOX_SSH_KEY}.pub" ] || ssh-keygen -q -t ed25519 -N '' -f "$WALKBOX_SSH_KEY"
   if [ ! -s "${WALKBOX_DIR}/base.img" ]; then
     log_info "downloading the cloud image (once, ~600 MB): ${WALKBOX_CLOUD_IMG}"
-    curl -sSL --max-time 1800 -o "${WALKBOX_DIR}/base.img" "$WALKBOX_CLOUD_IMG" \
-      || die "cloud-image download failed"
+    # --fail is load-bearing: MEASURED, a 404 without it gives curl_rc=0 and writes a 460-byte HTML
+    # error page as "base.img", so `|| die` never fires and the VM fails much later, opaquely.
+    curl --fail -sSL --max-time 1800 -o "${WALKBOX_DIR}/base.img" "$WALKBOX_CLOUD_IMG" \
+      || die "cloud-image download failed (or the URL 404d): $WALKBOX_CLOUD_IMG"
   fi
   # libvirt's DYNAMIC OWNERSHIP chowns backing files to its own uid. Keeping the pristine download
   # separate from the per-run overlay means a re-run never has to re-download something it can no
@@ -235,8 +258,12 @@ walkbox_wire_lab_net() {
 # secrets to the CONTROLLER's home instead of the VM's — the opposite of the intent.
 walkbox_push_env() {
   local ip="$1" v
+  # `if … fi`, NOT `[ -n … ] && printf`. MEASURED: when the LAST var is unset the loop's exit status
+  # is that failed test, the { } group is the LHS of a pipe, `pipefail` promotes it, this function
+  # returns 1, and main's bare call trips `set -e` — the walk dies BEFORE IT STARTS, with no message.
+  # HARBOR_PASSWORD is a you-choose secret that is routinely unset, so this was reachable every run.
   { for v in VCF_CLI_VSPHERE_PASSWORD VCENTER_PASSWORD HARBOR_PASSWORD; do
-      [ -n "${!v:-}" ] && printf '%s=%s\n' "$v" "${!v}"
+      if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}"; fi
     done; } | _ssh "$ip" 'umask 077; cat > "$HOME/.walk-secrets"'
 }
 
@@ -288,6 +315,7 @@ walkbox_run() {
 
 main() {
   require_cmd virsh; require_cmd qemu-img; require_cmd xorriso; require_cmd ssh; require_cmd scp
+  require_cmd python3   # walkbox_lab_ip parses the lab ranges with it
   case "${1:-up}" in
     down) walkbox_down; return 0 ;;
     up)   : ;;

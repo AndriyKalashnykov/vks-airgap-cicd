@@ -91,108 +91,110 @@ printf '  PATH now begins: %s\n' "${PATH%%:*}"
 
 # ---------------------------------------------------------------- 1b. The vSphere Namespace
 if [ "$WALK_EXISTS" = 1 ]; then
-  note "1b: the namespace ALREADY EXISTS — the doc says put its name in VKS_NAMESPACE and check it"
+  note "2: the namespace ALREADY EXISTS — the doc says put its name in VKS_NAMESPACE and check it"
 else
-  step "1b. vSphere Namespace" "make vsphere-namespace"
+  step "2. vSphere Namespace" "make vsphere-namespace"
 fi
 
-# ---------------------------------------------------------------- 2. Harbor
-setenv "2. Harbor" "HARBOR_URL=${HARBOR_URL}" "HARBOR_STORAGE_CLASS=${HARBOR_STORAGE_CLASS}"
+# ---------------------------------------------------------------- 3. Log in to the Supervisor
+# The doc puts this BEFORE Harbor (reordered 2026-08-11): everything after it reads
+# ./secrets/supervisor.kubeconfig, so doing it first removes three forward references and the
+# "run make install-argocd-service twice" workaround.
+step "3. Log in" "make fetch-supervisor-ca"
+step "3. Log in" "set -a; . ./.env; set +a; vcf context create \"\$VKS_CONTEXT_NAME\" --endpoint \"\$SUPERVISOR_HOST\" --ca-certificate ./secrets/supervisor-ca.crt --username \"\$VKS_USERNAME\" --type kubernetes --auth-type basic"
+# DIAGNOSTIC (not in the doc): when `vcf context use <ctx>:<ns>` says "not found", the first thing
+# an operator needs is what contexts DO exist. If the doc's colon form is wrong, this shows it.
+step "5. ArgoCD (diag)" "vcf context list"
+step "3. Log in" "set -a; . ./.env; set +a; vcf context use \"\$VKS_CONTEXT_NAME:\$VKS_NAMESPACE\""
+if [ "$WALK_EXISTS" = 1 ]; then
+  note "5: ArgoCD ALREADY EXISTS — the doc says find its namespace and set the 4 values"
+else
+  step "3. Log in" "make install-argocd-service"
+fi
+# §3.6, verbatim. ARGOCD_NAMESPACE is DISCOVERED, not assumed — §3's table: "Discover it — do not
+# assume: kubectl get argocd -A".
+step "3. Log in" "export KUBECONFIG=./secrets/supervisor.kubeconfig; kubectl get argocd -A"
+step "3. Log in" "export KUBECONFIG=./secrets/supervisor.kubeconfig; kubectl get svc -n \"\$ARGOCD_NAMESPACE\" | head -5"
+step "3. Log in" "export KUBECONFIG=./secrets/supervisor.kubeconfig; kubectl get secret -n \"\$ARGOCD_NAMESPACE\" argocd-initial-admin-secret -o jsonpath='{.data.password}' >/dev/null && echo 'initial admin secret present'"
+step "3. Log in" "make vks-login"
+step "3. Log in" "export KUBECONFIG=./secrets/supervisor.kubeconfig; kubectl -n \"\$VKS_NAMESPACE\" get storagepolicyquotas"
+step "3. Log in" "export KUBECONFIG=./secrets/supervisor.kubeconfig; kubectl -n \"\$VKS_NAMESPACE\" get virtualmachineclass"
+
+# ---------------------------------------------------------------- 4. Harbor
+setenv "4. Harbor" "HARBOR_URL=${HARBOR_URL}" "HARBOR_STORAGE_CLASS=${HARBOR_STORAGE_CLASS}"
 # §2's table, the two rows marked "only if you SKIPPED the install" — this walk takes that branch.
 if [ "$WALK_EXISTS" = 1 ]; then
-  setenv "2. Harbor" "HARBOR_USERNAME=${HARBOR_USERNAME:-admin}" "HARBOR_PASSWORD=${HARBOR_PASSWORD:-}"
+  setenv "4. Harbor" "HARBOR_USERNAME=${HARBOR_USERNAME:-admin}" "HARBOR_PASSWORD=${HARBOR_PASSWORD:-}"
 fi
 if [ "$WALK_EXISTS" = 1 ]; then
-  note "2: Harbor ALREADY EXISTS — the doc says set HARBOR_URL and skip the install"
+  note "4: Harbor ALREADY EXISTS — the doc says set HARBOR_URL and skip the install"
 else
-  step "2. Harbor" "make install-harbor-service"
+  step "4. Harbor" "make install-harbor-service"
 fi
+step "4. Harbor" "make show-dns-records"
 
 # ---------------------------------------------------------------- 3. ArgoCD
 # §3's table is ARGOCD_NAMESPACE + VKS_AUTH_METHOD. On the EXISTS branch the doc tells the reader
 # to find ArgoCD's namespace and set it; MEASURED on this lab it is the vSphere namespace (`cicd`),
 # NOT the svc-argocd-service-* package namespace — argocd-server's LB lives in `cicd`.
-setenv "3. ArgoCD" "VKS_AUTH_METHOD=${VKS_AUTH_METHOD:-vcf}" "ARGOCD_NAMESPACE=${ARGOCD_NAMESPACE:-}"
-step "3. ArgoCD" "make fetch-supervisor-ca"
-step "3. ArgoCD" "set -a; . ./.env; set +a; vcf context create \"\$VKS_CONTEXT_NAME\" --endpoint \"\$SUPERVISOR_HOST\" --ca-certificate ./secrets/supervisor-ca.crt --username \"\$VKS_USERNAME\" --type kubernetes --auth-type basic"
-# DIAGNOSTIC (not in the doc): when `vcf context use <ctx>:<ns>` says "not found", the first thing
-# an operator needs is what contexts DO exist. If the doc's colon form is wrong, this shows it.
-step "3. ArgoCD (diag)" "vcf context list"
-step "3. ArgoCD" "set -a; . ./.env; set +a; vcf context use \"\$VKS_CONTEXT_NAME:\$VKS_NAMESPACE\""
-if [ "$WALK_EXISTS" = 1 ]; then
-  note "3: ArgoCD ALREADY EXISTS — the doc says find its namespace and set the 4 values"
-else
-  step "3. ArgoCD" "make install-argocd-service"
-fi
-# §3.6, verbatim. ARGOCD_NAMESPACE is DISCOVERED, not assumed — §3's table: "Discover it — do not
-# assume: kubectl get argocd -A".
-step "3. ArgoCD" "export KUBECONFIG=./secrets/supervisor.kubeconfig; kubectl get argocd -A"
-step "3. ArgoCD" "export KUBECONFIG=./secrets/supervisor.kubeconfig; kubectl get svc -n \"\$ARGOCD_NAMESPACE\" | head -5"
-step "3. ArgoCD" "export KUBECONFIG=./secrets/supervisor.kubeconfig; kubectl get secret -n \"\$ARGOCD_NAMESPACE\" argocd-initial-admin-secret -o jsonpath='{.data.password}' >/dev/null && echo 'initial admin secret present'"
-step "3. ArgoCD" "make vks-login"
-# §2's command, run HERE because §2 itself says it needs the Supervisor kubeconfig that only
-# Step 3 writes ("nothing before Step 3 has written a Supervisor kubeconfig").
-step "2. Harbor (deferred)" "make show-dns-records"
-# docs/scenario-1.md "### Check it before Step 4": "Run this AFTER Step 3 — that is where
-# make vks-login writes the Supervisor kubeconfig this check reads."
-step "1b. Check before Step 4" "export KUBECONFIG=./secrets/supervisor.kubeconfig; kubectl -n \"\$VKS_NAMESPACE\" get storagepolicyquotas"
-step "1b. Check before Step 4" "export KUBECONFIG=./secrets/supervisor.kubeconfig; kubectl -n \"\$VKS_NAMESPACE\" get virtualmachineclass"
+setenv "5. ArgoCD" "VKS_AUTH_METHOD=${VKS_AUTH_METHOD:-vcf}" "ARGOCD_NAMESPACE=${ARGOCD_NAMESPACE:-}"
+
 
 # ---------------------------------------------------------------- 4. Guest cluster
-setenv "4. Guest cluster" "VKS_VM_CLASS=${VKS_VM_CLASS:-best-effort-small}" "VKS_STORAGE_CLASS=${VKS_STORAGE_CLASS:-wcp-vmfs}" "VKS_CONTROL_PLANE_COUNT=${VKS_CONTROL_PLANE_COUNT:-1}" "VKS_NODE_COUNT=${VKS_NODE_COUNT:-2}"
+setenv "6. Guest cluster" "VKS_VM_CLASS=${VKS_VM_CLASS:-best-effort-small}" "VKS_STORAGE_CLASS=${VKS_STORAGE_CLASS:-wcp-vmfs}" "VKS_CONTROL_PLANE_COUNT=${VKS_CONTROL_PLANE_COUNT:-1}" "VKS_NODE_COUNT=${VKS_NODE_COUNT:-2}"
 if [ "${WALK_SKIP_CLUSTER:-$WALK_EXISTS}" = 1 ]; then
-  note "4: guest cluster ALREADY EXISTS — skipping create, reading its status"
+  note "6: guest cluster ALREADY EXISTS — skipping create, reading its status"
 else
-  step "4. Guest cluster" "make vks-cluster-create"
+  step "6. Guest cluster" "make vks-cluster-create"
 fi
-step "4. Guest cluster" "make vks-cluster-status"
-step "4. Guest cluster" "make vks-cluster-status VKS_CLUSTER_WAIT_SECONDS=${WALK_CLUSTER_WAIT:-1800}"
-setenv "4. Guest cluster" "KUBECONFIG=./secrets/${VKS_CLUSTER_NAME}.kubeconfig" "VKS_AUTH_METHOD=kubeconfig"
-step "4. Guest cluster" "set -a; . ./.env; set +a; kubectl --kubeconfig \"./secrets/\${VKS_CLUSTER_NAME}.kubeconfig\" get nodes -o wide"
+step "6. Guest cluster" "make vks-cluster-status"
+step "6. Guest cluster" "make vks-cluster-status VKS_CLUSTER_WAIT_SECONDS=${WALK_CLUSTER_WAIT:-1800}"
+setenv "6. Guest cluster" "KUBECONFIG=./secrets/${VKS_CLUSTER_NAME}.kubeconfig" "VKS_AUTH_METHOD=kubeconfig"
+step "6. Guest cluster" "set -a; . ./.env; set +a; kubectl --kubeconfig \"./secrets/\${VKS_CLUSTER_NAME}.kubeconfig\" get nodes -o wide"
 
 # ---------------------------------------------------------------- 5. Preflight
-step "5. Preflight" "make vks-login"
-step "5. Preflight" "make lab-preflight"
-step "5. Preflight" "make psa-check"
+step "7. Preflight" "make vks-login"
+step "7. Preflight" "make lab-preflight"
+step "7. Preflight" "make psa-check"
 
 # ---------------------------------------------------------------- 6. Harbor's CA
-step "6. Harbor CA" "set -a; . ./.env; set +a; curl -sk \"https://\${HARBOR_URL}/api/v2.0/systeminfo/getcert\" > ./secrets/harbor-ca.crt"
-step "6. Harbor CA" "chmod 0644 ./secrets/harbor-ca.crt"
-step "6. Harbor CA" "openssl x509 -in ./secrets/harbor-ca.crt -noout -subject"
-step "6. Harbor CA" "sha256sum ./secrets/harbor-ca.crt"
+step "8. Harbor CA" "set -a; . ./.env; set +a; curl -sk \"https://\${HARBOR_URL}/api/v2.0/systeminfo/getcert\" > ./secrets/harbor-ca.crt"
+step "8. Harbor CA" "chmod 0644 ./secrets/harbor-ca.crt"
+step "8. Harbor CA" "openssl x509 -in ./secrets/harbor-ca.crt -noout -subject"
+step "8. Harbor CA" "sha256sum ./secrets/harbor-ca.crt"
 
 # ---------------------------------------------------------------- 7. Harbor robot
-step "7. Harbor robot" "make harbor-robot"
-step "7. Harbor robot" "cat ./secrets/harbor-robot.env"
+step "9. Harbor robot" "make harbor-robot"
+step "9. Harbor robot" "cat ./secrets/harbor-robot.env"
 
 # ---------------------------------------------------------------- 8. Supervisor kubeconfig for ArgoCD
 # §8's table. The doc is explicit that BOTH must be set: without ARGOCD_KUBECONFIG, gitops/verify
 # "silently use your guest kubeconfig instead"; without ARGOCD_DEST_CLUSTER_NAME a run once
 # "deployed into another cluster and reported Synced/Healthy throughout".
-setenv "8. ArgoCD kubeconfig" "ARGOCD_KUBECONFIG=./secrets/argocd.kubeconfig" "ARGOCD_DEST_CLUSTER_NAME=${ARGOCD_DEST_CLUSTER_NAME:-}"
-step "8. ArgoCD kubeconfig" "make fetch-argocd-kubeconfig"
-step "8. ArgoCD kubeconfig" "make argocd-preflight"
-step "8. ArgoCD kubeconfig" "make argocd-register-guest"
+setenv "10. ArgoCD kubeconfig" "ARGOCD_KUBECONFIG=./secrets/argocd.kubeconfig" "ARGOCD_DEST_CLUSTER_NAME=${ARGOCD_DEST_CLUSTER_NAME:-}"
+step "10. ArgoCD kubeconfig" "make fetch-argocd-kubeconfig"
+step "10. ArgoCD kubeconfig" "make argocd-preflight"
+step "10. ArgoCD kubeconfig" "make argocd-register-guest"
 
 # ---------------------------------------------------------------- 9. Validate, then install
-step "9. Install" "make env-populate"
-step "9. Install" "make env-check"
-step "9. Install" "make env-validate"
-step "9. Install" "make install-all"
-step "9. Install" "make verify"
+step "11. Install" "make env-populate"
+step "11. Install" "make env-check"
+step "11. Install" "make env-validate"
+step "11. Install" "make install-all"
+step "11. Install" "make verify"
 
 # ---------------------------------------------------------------- 10. Ingress
-step "10. Ingress" "make istio-preflight"
+step "12. Ingress" "make istio-preflight"
 if [ "$WALK_EXISTS" = 1 ]; then
-  step "10. Ingress" "make install-ingress INGRESS_CONTROLLER=istio-existing"
+  step "12. Ingress" "make install-ingress INGRESS_CONTROLLER=istio-existing"
 else
-  step "10. Ingress" "make install-ingress"
+  step "12. Ingress" "make install-ingress"
 fi
 
-step "10. Ingress" "make verify-ingress"
+step "12. Ingress" "make verify-ingress"
 
 # ---------------------------------------------------------------- 11. Access the UIs
-step "11. Access the UIs" "make creds-show"
+step "13. Access the UIs" "make creds-show"
 
 printf '\n\033[1m======== WALK DONE os=%s exists=%s steps=%d failed_steps=%d ========\033[0m\n' \
   "$WALK_OS" "$WALK_EXISTS" "$STEP" "$FAILED"
