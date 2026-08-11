@@ -32,7 +32,41 @@
 # and version of each linter before running it. If mise ever errors (an untrusted config in a
 # non-tty recipe), $(shell) yields empty, PATH is untouched, and you are back to the original bug
 # with a fix sitting in the git log. The print is what makes that self-diagnosing in five seconds.
-export PATH := $(shell cd $(CURDIR) && mise bin-paths 2>/dev/null | tr '\n' ':')$(PATH)
+#
+# ⚠️ RESOLVE mise BY ABSOLUTE PATH, AND JOIN WITHOUT `tr` — both measured 2026-08-10 on bare images.
+# `make deps` installs mise to $(HOME)/.local/bin/mise and the pinned tools under mise's install
+# tree, then EXITS 0. On a bare box $(HOME)/.local/bin is NOT on PATH (Photon's profile never adds
+# it; Debian's only does so for a LOGIN shell whose ~/.local/bin already existed at login). So the
+# old bare `mise bin-paths` resolved NOTHING, PATH stayed untouched, and the very next command the
+# runbook tells the reader to type — `make check-tools` — reported
+#     MISSING REQUIRED: kubectl helm yq crane
+#     Install the toolchain with:  make deps
+# i.e. it instructed them to re-run the command they had just run successfully. An infinite loop at
+# Step 1 of docs/scenario-1.md, on the first command a new operator ever types, with every tool
+# sitting on disk. `deps-mise` (below) already resolved mise this way; this line did not.
+#
+# NO `tr`: photon:5.0 does NOT ship coreutils, and 00-install-prereqs.sh does not install it — `tr`
+# arrives only as an unpinned side effect of installing podman/docker. Measured: with the engine
+# packages absent, a `| tr` form still left helm/yq/crane unreachable AND printed
+# `tr: command not found` on every single make invocation. $(shell) already collapses newlines to
+# spaces, so $(subst) joins them with zero processes and works on any box.
+#
+# $(HOME) (make) in BOTH places, never $$HOME (shell): they DIVERGE under `make HOME=/x` (which is
+# exported to recipes but not to $(shell)). The $(if $(HOME),…) guard stops an unset HOME producing
+# a bare `/.local/bin` element. ~/.local/bin goes AFTER the mise paths, so a pinned tool always
+# wins — this does NOT re-create the stray-hadolint shadowing bug described above; when mise is
+# absent ~/.local/bin is the only source and wins by default, which is the pre-existing behaviour.
+#
+# ⚠️ THIS CANNOT FIX `make deps`'s OWN TAIL, and no edit here can: `:=` is evaluated at PARSE time,
+# while `mise trust` runs later inside the deps-mise RECIPE — and `mise bin-paths` against an
+# untrusted .mise.toml exits 1 with ZERO stdout (measured), which the 2>/dev/null hides. The first
+# `make deps` therefore still cannot see the tools it just installed. That is fixed where it lives,
+# in scripts/00-install-prereqs.sh, which now prepends BIN_DIR for its own summary.
+EMPTY :=
+SPACE := $(EMPTY) $(EMPTY)
+MISE_BIN := $(shell command -v mise 2>/dev/null || { [ -x "$(HOME)/.local/bin/mise" ] && printf '%s\n' "$(HOME)/.local/bin/mise"; })
+MISE_PATHS := $(if $(MISE_BIN),$(shell cd '$(CURDIR)' && '$(MISE_BIN)' bin-paths 2>/dev/null))
+export PATH := $(if $(MISE_PATHS),$(subst $(SPACE),:,$(strip $(MISE_PATHS))):,)$(if $(HOME),$(HOME)/.local/bin:,)$(PATH)
 
 # Load operator overrides FIRST so they win over the ?= defaults. `-include`
 # (leading '-') silently skips a missing file. The KinD flow writes discovered

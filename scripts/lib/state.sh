@@ -84,7 +84,10 @@ state_check() {
   [ -f "$f" ] || return 1
 
   local stamped_server
-  stamped_server="$(grep -m1 '^VKS_STATE_SERVER=' "$f" 2>/dev/null | cut -d= -f2- | tr -d '"')"
+  # No `tr`: this library is sourced by 00-install-prereqs.sh itself, i.e. BEFORE coreutils is
+  # installed, and photon:5.0 has no `tr`. ${x//\"/} is a bash builtin and needs nothing.
+  stamped_server="$(grep -m1 '^VKS_STATE_SERVER=' "$f" 2>/dev/null | cut -d= -f2- || true)"
+  stamped_server="${stamped_server//\"/}"
 
   if [ -z "$stamped_server" ]; then
     log_warn "state: $(basename "$f") is UNSTAMPED (legacy .env.kind, a jumpbox file, or hand-written)."
@@ -138,8 +141,9 @@ state_claim_kind() {
   # so `make kind-up` died at exactly this line, right after "writing kubeconfig", with no message of
   # its own. state_check has the same shape and survives ONLY because it is called inside `if ...`,
   # where set -e is suspended; state_claim_kind is called as a bare statement, so it dies.
-  kind="$(grep -m1 '^VKS_STATE_KIND='   "$f" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)"
-  srv="$( grep -m1 '^VKS_STATE_SERVER=' "$f" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)"
+  kind="$(grep -m1 '^VKS_STATE_KIND='   "$f" 2>/dev/null | cut -d= -f2- || true)"   # no `tr` — see state_check
+  srv="$( grep -m1 '^VKS_STATE_SERVER=' "$f" 2>/dev/null | cut -d= -f2- || true)"
+  kind="${kind//\"/}"; srv="${srv//\"/}"
   [ "${kind:-0}" = "1" ] && return 0        # ours: a re-run of the KinD flow. Reuse it.
 
   # UNSET everything the foreign sink exported into THIS process first. load_env has already sourced
