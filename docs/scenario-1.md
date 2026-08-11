@@ -262,9 +262,9 @@ kubectl -n "$VKS_NAMESPACE" get storagepolicyquotas
 kubectl -n "$VKS_NAMESPACE" get virtualmachineclass
 ```
 
-An empty `storagepolicyquotas` means no storage policy; an empty `virtualmachineclass` means no VM
-class. Fix either in vCenter before continuing — a namespace missing one still *accepts* the cluster
-in Step 5 and then never finishes provisioning it.
+**Expect:** both list something. An empty `storagepolicyquotas` means no storage policy attached;
+an empty `virtualmachineclass` means no VM class. Fix either in vCenter before continuing — a
+namespace missing one still *accepts* a cluster and then never finishes provisioning it.
 
 ---
 
@@ -406,18 +406,6 @@ Where Gitea, Tekton and your apps run. You need cluster-admin on it.
 | `VKS_NAMESPACE` | `cicd` | Step 1 — read by the `vcf` fallback below |
 | `VKS_K8S_VERSION` | `v1.34.8+vmware.1-vkr.1` | `kubectl get kubernetesreleases` -> pick one that is **Ready AND Compatible** and paste its **full** name. It is a *prefix* selector, so a bare `v1.34` is accepted and then floats — an air-gap repo must not do that. `make vks-cluster-create` server-side dry-runs it first and prints vCenter own rejection. |
 
-<details><summary>Optional — the cluster's shape. Skip unless you want to change it.</summary>
-
-| key | default | example | how to get the value |
-|---|---|---|---|
-| `VKS_CLUSTERCLASS` | `builtin-generic-v3.6.0` | `builtin-generic-v3.6.0` | `kubectl get clusterclass -A` — the newest Ready one |
-| `VKS_VM_CLASS` | `best-effort-small` | `best-effort-small` | `kubectl get virtualmachineclass` |
-| `VKS_STORAGE_CLASS` | `wcp-vmfs` | `wcp-vmfs` | `kubectl get storageclass` |
-| `VKS_CONTROL_PLANE_COUNT` | `1` | `1` | how many control-plane nodes |
-| `VKS_NODE_COUNT` | `2` | `2` | how many workers. One is too small for the platform. |
-
-</details>
-
 ```bash
 make vks-cluster-create                                # applies the Cluster; provisioning is async
 make vks-cluster-status                                # reports ONCE — read `endpoint :` now
@@ -466,6 +454,18 @@ Supervisor kubeconfig, use the Secret route — it is the same credential.
 | `KUBECONFIG` | `./secrets/cicd-gc1.kubeconfig` | `./secrets/<your VKS_CLUSTER_NAME>.kubeconfig` — the file above |
 | `VKS_CONTEXT` | `cicd-gc1-admin@cicd-gc1` | `kubectl --kubeconfig ./secrets/<cluster>.kubeconfig config get-contexts -o name` |
 | `VKS_AUTH_METHOD` | `kubeconfig` | **change it back from `vcf`** (Step 3 set that for the Supervisor login). From here on the pipeline runs against the guest-cluster kubeconfig above. |
+
+<details><summary>Optional — the cluster's shape. Skip unless you want to change it.</summary>
+
+| key | default | example | how to get the value |
+|---|---|---|---|
+| `VKS_CLUSTERCLASS` | `builtin-generic-v3.6.0` | `builtin-generic-v3.6.0` | `kubectl get clusterclass -A` — the newest Ready one |
+| `VKS_VM_CLASS` | `best-effort-small` | `best-effort-small` | `kubectl get virtualmachineclass` |
+| `VKS_STORAGE_CLASS` | `wcp-vmfs` | `wcp-vmfs` | `kubectl get storageclass` |
+| `VKS_CONTROL_PLANE_COUNT` | `1` | `1` | how many control-plane nodes |
+| `VKS_NODE_COUNT` | `2` | `2` | how many workers. One is too small for the platform. |
+
+</details>
 
 ---
 
@@ -579,8 +579,10 @@ make argocd-preflight           # CLI vs running-server versions; can ArgoCD rea
 make argocd-register-guest      # admin-only; creates an SA in your guest + a Secret in ArgoCD's ns
 ```
 
-`make argocd-version` prints the CLI, the **running server** and this repo's pin. The running
-server is the one that matters. *(~2 min)*
+**Expect:** re-running `make argocd-preflight` now says `PREFLIGHT OK`. *(~2 min)*
+
+`make argocd-version` prints the CLI version, the **running server** version and this repo's pin.
+The running server is the one that matters.
 
 ---
 
@@ -616,7 +618,7 @@ make istio-preflight
 On a real lab Istio is usually already present as a Standard Package — attach, do not install.
 *(~5 min)*
 
-Then **check the routes actually work**, before you trust the URLs in Step 13:
+Then **check the routes actually work**, before you rely on those hostnames:
 
 ```bash
 make verify-ingress           # each *.vks.local host must reach ITS OWN backend
@@ -625,8 +627,7 @@ make verify-ingress           # each *.vks.local host must reach ITS OWN backend
 **Expect:** one `OK` per host — `gitea`, `tekton`, and each app. It sends `Host: <name>.vks.local`
 to the ingress LoadBalancer IP directly, so **it needs no DNS and no `/etc/hosts` entry** — and it
 asserts a per-host body marker, not just a 200, because a mis-wired route returns 200 from the
-*wrong* backend. If a host fails here, the URL Step 13 prints for it will not work either, and this
-tells you which one and why. *(~1 min)*
+*wrong* backend. A host that fails here will not work in a browser either, and this names which one and why. *(~1 min)*
 
 ---
 
@@ -645,6 +646,8 @@ Skipped Step 12? The `*.vks.local` URLs will not resolve — reach a service dir
 kubectl -n gitea port-forward svc/gitea-http 3000:3000     # then http://localhost:3000
 kubectl -n javawebapp port-forward svc/javawebapp 18080:80 # then http://localhost:18080
 ```
+
+**Expect:** the UI answers on `localhost` at the port you forwarded.
 
 ---
 
@@ -672,16 +675,16 @@ under self-contention. Where the runs disagree, both are shown.
 
 | Step | Command | Run 1 | Run 2 |
 |---|---|---|---|
-| 4 | `make vks-cluster-create` | <1 s | <1 s |
-| 4 | cluster → all nodes `Ready` | **3 m 45 s** | **≈ 6 m** |
-| 5 | `make preflight` | 2 s | 2 s |
-| 6 | `make harbor-ca-from-cluster` | <1 s | <1 s |
-| 9 | `make env-check`, `make env-validate` | <1 s each | <1 s each |
-| 9 | `make install-all` | **10 m 26 s** | **8 m 14 s** |
+| 6 | `make vks-cluster-create` | <1 s | <1 s |
+| 6 | cluster → all nodes `Ready` | **3 m 45 s** | **≈ 6 m** |
+| 7 | `make lab-preflight` | 2 s | 2 s |
+| 8 | `make harbor-ca-from-cluster` | <1 s | <1 s |
+| 11 | `make env-check`, `make env-validate` | <1 s each | <1 s each |
+| 11 | `make install-all` | **10 m 26 s** | **8 m 14 s** |
 | ↳ | `mirror-pull` / `mirror-push` / `mirror-verify` | 22 s / 2 m 38 s / 5 m 46 s | — |
 | ↳ | `builder-image` + `platform` + `gitops` | ≈1 m 40 s | — |
-| 9 | `make verify` (2 apps) | **3 m 6 s** | **3 m 27 s** |
-| 12 | `make uninstall-all` | 1 m 12 s | 1 m 12 s |
+| 11 | `make verify` (2 apps) | **3 m 6 s** | **3 m 27 s** |
+| 14 | `make uninstall-all` | 1 m 12 s | 1 m 12 s |
 
 From a **bare Photon jump box** (fresh box, nothing cached — so the mirror pulls every image), the
 same lab, measured start to `End-to-end verified`:
@@ -689,6 +692,6 @@ same lab, measured start to `End-to-end verified`:
 | | |
 |---|---|
 | Step 0–1 install `git`/`make`, clone, `make deps`, install the CLIs | ≈ 2 m 30 s |
-| Step 4 cluster created → every node `Ready` | **8 m 49 s** |
-| Step 9 `make install-all` + `make verify` | **10 m 08 s** |
+| Step 6 cluster created → every node `Ready` | **8 m 49 s** |
+| Step 11 `make install-all` + `make verify` | **10 m 08 s** |
 | **whole run, clone → verified** | **21 m 31 s** |
