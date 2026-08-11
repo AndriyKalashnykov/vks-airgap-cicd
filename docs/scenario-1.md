@@ -359,10 +359,24 @@ The GitOps engine, running on the Supervisor.
    cd vks-airgap-cicd            # from Step 0
    set -a; . ./.env; set +a          # loads SUPERVISOR_HOST, VKS_CONTEXT_NAME, VKS_NAMESPACE
 
+   export VCF_CLI_VSPHERE_PASSWORD='<your SSO password>'   # else it prompts; see the note below
+
    vcf context create "$VKS_CONTEXT_NAME" --endpoint "$SUPERVISOR_HOST" \
-       --ca-certificate ./secrets/supervisor-ca.crt --auth-type basic
+       --ca-certificate ./secrets/supervisor-ca.crt \
+       --username "$VKS_USERNAME" --type kubernetes --auth-type basic
    vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"      # note the <ctx>:<ns> colon form
    ```
+
+   ⚠️ **`--username` is not optional in practice.** Without it `vcf` stops and asks
+   `? Provide Username:`, and in anything non-interactive (a script, a container, a piped shell)
+   that is an immediate `[x] : EOF` — measured on a clean Ubuntu container against a live
+   Supervisor. `$VKS_USERNAME` is already loaded by the `set -a; . ./.env` line above, and
+   `make vks-login` passes exactly these flags for you.
+
+   The **password** is read from `VCF_CLI_VSPHERE_PASSWORD`; without it you get a prompt. Do **not**
+   use `vcf config set env.VCF_CLI_VSPHERE_PASSWORD` — it writes your SSO password in plaintext to
+   `~/.config/vcf/config.yaml`, outside this repo and outside every secret scan, and it survives
+   every teardown here.
 
    `vcf context use` can print an error about a "system Harbor registry" **and still have
    worked** — judge it by the next command, not its exit code.
