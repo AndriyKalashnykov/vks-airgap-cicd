@@ -455,6 +455,19 @@ Supervisor kubeconfig, use the Secret route — it is the same credential.
 | `VKS_CONTEXT` | `cicd-gc1-admin@cicd-gc1` | `kubectl --kubeconfig ./secrets/<cluster>.kubeconfig config get-contexts -o name` |
 | `VKS_AUTH_METHOD` | `kubeconfig` | **change it back from `vcf`** (Step 3 set that for the Supervisor login). From here on the pipeline runs against the guest-cluster kubeconfig above. |
 
+⚠️ **`make vks-login` now renews the GUEST kubeconfig.** The Supervisor one expires too, and Steps
+10 and 14 need it — `kubectl` then says *"the server has asked for the client to provide
+credentials"*. Renew it with:
+
+```bash
+set -a; . ./.env; set +a
+export VCF_CLI_VSPHERE_PASSWORD='<your SSO password>'
+vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"
+VKS_AUTH_METHOD=vcf make vks-login
+```
+
+**Expect:** `Supervisor context verified via ./secrets/supervisor.kubeconfig`.
+
 <details><summary>Optional — the cluster's shape. Skip unless you want to change it.</summary>
 
 | key | default | example | how to get the value |
