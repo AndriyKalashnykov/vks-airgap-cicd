@@ -132,11 +132,24 @@ jobs:
 
       # Persist kubeconform's downloaded JSON schemas across runs (validate.sh
       # points kubeconform -cache here) so githubusercontent isn't re-hit every run.
+      #
+      # ⚠️ THE KEY MUST VARY WITH CONTENT. It used to be the constant `kubeconform-schemas-v1`
+      # with NO restore-keys, and that is a cache that stops working after its first write:
+      # actions/cache DOES NOT SAVE on an exact-key hit, so the entry was frozen at whatever
+      # schemas happened to be in it the first time it ran. Every schema added since — a new
+      # kind, a new CRD, a new k8s version — was re-downloaded on EVERY run, forever, which is
+      # most of what `validate` was spending its time on.
+      # Content-hashing the manifests mints a NEW entry whenever the schema set can have
+      # changed, and `restore-keys` lets an unrelated change still warm-start from the closest
+      # previous entry. (Schema MISSES — datreeio 404s for CRDs it does not carry — can never
+      # be cached and are paid regardless; that is a separate, known cost.)
       - name: Cache kubeconform schemas
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/kubeconform
-          key: kubeconform-schemas-v1
+          key: kubeconform-v2-${{ hashFiles('k8s/**', 'deploy/**', 'tekton/**') }}
+          restore-keys: |
+            kubeconform-v2-
 
       # Persist the Maven local repo across runs — static-check runs mvn twice (app-test's `mvnw test`
       # AND, via sec→trivy-fs→app-build, `mvnw package`), and both cold-download the whole Spring Boot

@@ -25,8 +25,20 @@ mkdir -p "$KC_CACHE"
 # datreeio/CRDs-catalog supplies CRD schemas (e.g. ArgoCD Application) so those validate
 # instead of only being skipped. `default` (the built-in githubusercontent location) stays
 # LAST as a fallback. Override any of these via the KUBECONFORM_SCHEMA_* env vars.
-KC_SCHEMA_K8S="${KUBECONFORM_SCHEMA_K8S:-https://cdn.jsdelivr.net/gh/yannh/kubernetes-json-schema@master/{{ .NormalizedKubernetesVersion }}-standalone{{ .StrictSuffix }}/{{ .ResourceKind }}{{ .KindSuffix }}.json}"
-KC_SCHEMA_CRD="${KUBECONFORM_SCHEMA_CRD:-https://cdn.jsdelivr.net/gh/datreeio/CRDs-catalog@main/{{ .Group }}/{{ .ResourceKind }}_{{ .ResourceAPIVersion }}.json}"
+# ⚠️ DO NOT WRITE THESE AS ${VAR:-<default containing }}>}. MEASURED 2026-08-10: bash ends a
+# ${...:-...} expansion at the FIRST `}` of the first `}}`, so a Go-template URL is silently
+# MANGLED — `{{ .NormalizedKubernetesVersion }}` became `{{ .NormalizedKubernetesVersion }` with a
+# stray `}` appended to the end of the URL:
+#   .../{{ .NormalizedKubernetesVersion }-standalone{{ .StrictSuffix }}/...{{ .KindSuffix }}.json}
+# Every schema fetch then 404s, kubeconform emits no JSON and exits non-zero, and the lenient
+# handler below — correctly designed so a schema-AVAILABILITY problem never reds CI — warns and
+# PASSES. Net effect: `make validate` validated ZERO resources and printed OK, on every run, while
+# spending its time on failing network round-trips. A gate that passes by not looking.
+# Single-quoted assignment, then an explicit override check: no expansion, nothing to mangle.
+KC_SCHEMA_K8S='https://cdn.jsdelivr.net/gh/yannh/kubernetes-json-schema@master/{{ .NormalizedKubernetesVersion }}-standalone{{ .StrictSuffix }}/{{ .ResourceKind }}{{ .KindSuffix }}.json'
+KC_SCHEMA_CRD='https://cdn.jsdelivr.net/gh/datreeio/CRDs-catalog@main/{{ .Group }}/{{ .ResourceKind }}_{{ .ResourceAPIVersion }}.json'
+[ -n "${KUBECONFORM_SCHEMA_K8S:-}" ] && KC_SCHEMA_K8S="$KUBECONFORM_SCHEMA_K8S"
+[ -n "${KUBECONFORM_SCHEMA_CRD:-}" ] && KC_SCHEMA_CRD="$KUBECONFORM_SCHEMA_CRD"
 # Two schema-location sets, chosen per directory:
 #  - CORE (deploy/javawebapp, k8s/): the yannh k8s schemas. Every kind is a built-in k8s type,
 #    so jsDelivr returns 200 and validation is reliable (real violations ARE caught).
@@ -61,8 +73,11 @@ KC_LOCS=("${KC_LOCS_CORE[@]}")
 # and made the gate hang when github throttled). `-cache` (persisted via actions/cache in
 # CI) makes warm runs fast and offline.
 #
-# NOTE: `-output json` only populates the aggregate `.summary` object when `-summary` is
-# ALSO passed, so we count `.resources[]` entries directly (robust regardless of flags).
+# NOTE: `-output json` emits `.resources[]` for NON-VALID resources only — a VALID one appears
+# there just with `-verbose`. MEASURED 2026-08-10 on a 3-document manifest: `-output json` gives
+# `{"resources": []}`, while adding `-summary` gives `summary.valid = 3`. So `.resources[]` is the
+# right place to read FAILURES from, and is USELESS as a denominator — which is why `-summary` is
+# passed and the total is read from `.summary`. An earlier comment here claimed the opposite.
 # Falls back to exit-code gating when jq is unavailable, so it never false-passes on an
 # environment that cannot parse the JSON.
 kc() {
@@ -71,9 +86,15 @@ kc() {
     return $?
   fi
   local out ec invalid errors
-  out="$(kubeconform "${KC_LOCS[@]}" -output json -cache "$KC_CACHE" -kubernetes-version "$KUBERNETES_VERSION" "$@" 2>/dev/null)"; ec=$?
+  out="$(kubeconform "${KC_LOCS[@]}" -output json -summary -cache "$KC_CACHE" -kubernetes-version "$KUBERNETES_VERSION" "$@" 2>/dev/null)"; ec=$?
   invalid="$(printf '%s' "$out" | jq -r '[.resources[]? | select(.status=="statusInvalid")] | length' 2>/dev/null)"
   errors="$(printf '%s'  "$out" | jq -r '[.resources[]? | select(.status=="statusError")]   | length' 2>/dev/null)"
+  # THE DENOMINATOR. Without it this gate can validate ZERO resources and print OK — measured by
+  # an adversary round 2026-08-10: with no network, 8 of 8 kubeconform invocations validated
+  # nothing and `validate: OK` was printed, rc=0. Counting only the FAILURES (invalid/errors) is
+  # the classic gate-that-passes-by-not-looking: 0 invalid is indistinguishable from 0 examined.
+  total="$(printf '%s'  "$out" | jq -r '(.summary.valid // 0) + (.summary.invalid // 0) + (.summary.errors // 0) + (.summary.skipped // 0)' 2>/dev/null)"
+  case "$total" in ''|*[!0-9]*) total=0 ;; esac
   # Empty/unparseable output — e.g. every schema location unreachable (CDN + fallback all
   # down/throttled), so kubeconform emitted no JSON. Cannot validate, but per this gate's
   # design a schema-AVAILABILITY problem must never red CI (malformed YAML is separately
@@ -89,10 +110,21 @@ kc() {
     printf '%s' "$out" | jq -r '.resources[]? | select(.status=="statusInvalid") | "  INVALID: \(.filename): \(.kind)/\(.name): \(.msg)"' 2>/dev/null
     return 1
   fi
+  # A schema-AVAILABILITY problem must never red CI (the design decision above), so `errors`
+  # stays a WARN. But "kubeconform parsed output and yet examined NOTHING, with nothing even
+  # erroring" is not a network condition — it means the input list matched no resources (a glob
+  # that stopped matching, a renamed dir, an empty kustomize render). That is a real defect and
+  # the one case where silence is worse than a red.
+  if [ "$total" -eq 0 ] && [ "$errors" -eq 0 ]; then
+    log_error "kubeconform: examined ZERO resources and reported no errors — the inputs matched"
+    log_error "  nothing. This gate cannot pass by not looking. Check the paths it was given:"
+    log_error "    $*"
+    return 1
+  fi
   if [ "$errors" -gt 0 ]; then
-    log_warn "kubeconform: $errors schema(s) could not be downloaded (CDN/registry unreachable) — those resources were NOT validated; not failing the gate (Invalid=0)"
+    log_warn "kubeconform: $errors of $total resource(s) could not have their schema downloaded (CDN/registry unreachable) — those were NOT validated; not failing the gate (Invalid=0)"
   else
-    log_info "kubeconform: all resolvable schemas valid (Invalid=0)"
+    log_info "kubeconform: $total resource(s) validated, all schemas resolvable (Invalid=0)"
   fi
   return 0
 }
@@ -155,6 +187,48 @@ $(app_names)
 EOF
 [ -z "$_missing" ] || log_error "  a pipeline referencing a missing Task fails at RUN time (CouldntGetTask), never at build time."
 
+# ---------------------------------------------------------------------------------------------
+# RENDER BEFORE VALIDATING. k8s/ manifests are TEMPLATES — 20 of them carry ${VAR} tokens that
+# envsubst fills in at install time. Handing kubeconform the raw template validates something that
+# is never applied, and it fails for reasons that are not defects:
+#   Application/${APP_NAME} ... '${GITEA_HOST}' does not match pattern '^[a-z0-9]...'
+#   /spec/topology/controlPlane/replicas: got string, want integer
+# This was INVISIBLE until 2026-08-10 because a ${VAR:-<default with }}>} quoting bug mangled the
+# schema URLs, so every fetch 404'd and the lenient handler passed the gate having validated ZERO.
+#
+# The placeholder VALUES are derived from the variable's SUFFIX, not from a hand-typed map — a map
+# of 47 names would rot on the first new token. Anything unmatched gets a DNS-1123-safe name, which
+# is what the overwhelming majority of these are.
+# shellcheck disable=SC2016  # the single quotes are literal: grep needs the ERE, and `tr -d` is
+# being given the CHARACTERS $ { } to delete — nothing here is meant to expand.
+render_for_validation() {   # render_for_validation <src.yaml> <dst.yaml>
+  local src="$1" dst="$2" v names=() env_assigns=()
+  mapfile -t names < <(grep -ohE '\$\{[A-Z_][A-Z0-9_]*\}' "$src" | tr -d '${}' | sort -u)
+  for v in "${names[@]}"; do
+    case "$v" in
+      *_COUNT|*_REPLICAS)  env_assigns+=("$v=1") ;;
+      *_CIDR)              env_assigns+=("$v=10.0.0.0/16") ;;
+      *_SIZE)              env_assigns+=("$v=1Gi") ;;
+      *_BOOL)              env_assigns+=("$v=false") ;;
+      *_SERVICE_TYPE)      env_assigns+=("$v=ClusterIP") ;;
+      *_DEST_KEY)          env_assigns+=("$v=server") ;;   # a KEY in spec.destination, not a value
+      *_IMAGE)             env_assigns+=("$v=example.test/placeholder:v1") ;;
+      *_HOST)              env_assigns+=("$v=placeholder.example.test") ;;
+      *_URL)               env_assigns+=("$v=https://placeholder.example.test") ;;  # covers *_CLONE_URL
+      *)                   env_assigns+=("$v=placeholder") ;;
+    esac
+  done
+  # `env -i`-free on purpose: envsubst only replaces the names we list, so the ambient environment
+  # cannot leak a real value (or an empty one) into the rendered copy.
+  local subst_list=""
+  for v in "${names[@]}"; do subst_list="${subst_list}\${${v}}"; done
+  if [ -n "$subst_list" ]; then
+    env "${env_assigns[@]}" envsubst "$subst_list" < "$src" > "$dst"
+  else
+    cp "$src" "$dst"
+  fi
+}
+
 echo "== kubeconform (k8s/) =="
 if require_gate_tool kubeconform; then
   # Enumerate k8s/* DYNAMICALLY: a hardcoded subdir list would silently skip a new one,
@@ -170,8 +244,16 @@ if require_gate_tool kubeconform; then
       # tekton/ + argocd/ are CRD-heavy → CRDs-catalog. The rest (gitea, istio, traefik)
       # is core kinds + a few CRDs → the k8s schema set.
       case "$name" in tekton|argocd) KC_LOCS=("${KC_LOCS_CRD[@]}") ;; *) KC_LOCS=("${KC_LOCS_K8S[@]}") ;; esac
-      log_info "validating k8s/$name/ (${#_files[@]} manifests)"
-      kc -ignore-missing-schemas "${_files[@]}" || rc=1
+      # Render each template into a temp dir and validate THAT — see render_for_validation above.
+      _rdir="$(mktemp -d)"; _rendered=()
+      for _f in "${_files[@]}"; do
+        _out="${_rdir}/$(printf '%s' "${_f#"$REPO_ROOT"/}" | tr '/' '_')"
+        render_for_validation "$_f" "$_out"
+        _rendered+=("$_out")
+      done
+      log_info "validating k8s/$name/ (${#_files[@]} manifests, rendered)"
+      kc -ignore-missing-schemas "${_rendered[@]}" || rc=1
+      rm -rf "$_rdir"
     else
       log_warn "k8s/$name/ has no manifests yet — skipped"
     fi
