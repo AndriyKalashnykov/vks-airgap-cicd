@@ -284,3 +284,22 @@ ca_pin_verdict() {
   [ "$norm" = "$(printf '%s' "$fp" | tr -d ':' | tr '[:upper:]' '[:lower:]')" ] && return 0
   return 1
 }
+
+# vks_ca_default — point VKS_CA_CERT_FILE at what `make fetch-supervisor-ca` wrote, if it is there.
+#
+# MEASURED 2026-08-10 walking docs/scenario-1.md on a clean container: Step 3 runs
+# `make fetch-supervisor-ca` (writes secrets/supervisor-ca.crt) and then commands that need a CA,
+# but .env.example's VKS_CA_CERT_FILE line is COMMENTED, so the var was unset and each consumer
+# died — vks-login with `x509: certificate signed by unknown authority`, fetch-argocd-kubeconfig
+# with `set VKS_CA_CERT_FILE=<path>`. Two scripts, same gap, fixed once here so a third consumer
+# cannot be added without it.
+#
+# Only when the file EXISTS and is non-empty: a Supervisor with a publicly-trusted certificate must
+# keep working with no CA at all, and passing --ca-certificate a missing path would break it.
+vks_ca_default() {
+  [ -n "${VKS_CA_CERT_FILE:-}" ] && return 0
+  local _d="${REPO_ROOT:-.}/secrets/supervisor-ca.crt"
+  [ -s "$_d" ] || return 0
+  VKS_CA_CERT_FILE="$_d"; export VKS_CA_CERT_FILE
+  log_info "TLS: using the CA that 'make fetch-supervisor-ca' wrote (${VKS_CA_CERT_FILE})"
+}

@@ -128,10 +128,7 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     # promised a default that did not exist; this creates it, so the promise is true.
     # Only when the file is actually THERE — a lab with a publicly-trusted cert must keep working
     # with no CA at all, and pointing --ca-certificate at a missing file would break it.
-    if [ -z "${VKS_CA_CERT_FILE:-}" ] && [ -s "${REPO_ROOT}/secrets/supervisor-ca.crt" ]; then
-      VKS_CA_CERT_FILE="${REPO_ROOT}/secrets/supervisor-ca.crt"
-      log_info "TLS: using the CA that 'make fetch-supervisor-ca' wrote (${VKS_CA_CERT_FILE})"
-    fi
+    vks_ca_default   # lib/tls.sh — shared with 31-fetch-argocd-kubeconfig.sh
     if [ -n "${VKS_CA_CERT_FILE:-}" ]; then
       # ⚠️ EXISTS AND NON-EMPTY IS NOT "IS A TRUST ANCHOR FOR THIS ENDPOINT". MEASURED 2026-08-05:
       # after a lab rebuild this file still held the DESTROYED lab's VMCA (stored SHA-256 EF:19:5E:…
