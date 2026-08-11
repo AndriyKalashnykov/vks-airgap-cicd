@@ -71,5 +71,19 @@ o="$(PATH="$TMP/bin:$PATH" KUBECONFIG="$TMP/kc" SKIP_DOTENV=1 timeout 90 \
 if printf '%s' "$o" | grep -q 'NOTHING is serving there'; then bad "unset HARBOR_URL is silent" "it invented a problem"
 else ok "unset HARBOR_URL is silent"; fi
 
+# The SECOND entry point. `make harbor-reachable` is what scenario-1 §4 tells the operator to run --
+# lab-preflight cannot serve that step, because its other three checks are GUEST-cluster preconditions
+# and at §4 the context is the SUPERVISOR (the guest cluster does not exist until §6). Both call the
+# same lib/harbor.sh function, and this asserts the standalone path actually reaches it: a target
+# nobody exercises is decoration, and a shared function with one tested caller is one tested caller.
+# NOTE it needs NO kubectl stub -- that is the point of the split.
+o="$(SKIP_DOTENV=1 HARBOR_URL=127.0.0.1 timeout 90 bash "$SCRIPT_DIR/04-harbor-reachable.sh" 2>&1 || true)"
+if printf '%s' "$o" | grep -q 'NOTHING is serving there'; then ok "make harbor-reachable fires standalone (no cluster)"
+else bad "make harbor-reachable fires standalone (no cluster)" "the standalone entry point did not reach the check"; fi
+o="$(SKIP_DOTENV=1 HARBOR_URL=127.0.0.1 timeout 90 bash "$SCRIPT_DIR/04-harbor-reachable.sh" 2>&1 || true; echo "rc=$?")"
+o2="$(SKIP_DOTENV=1 HARBOR_URL=127.0.0.1 timeout 90 bash "$SCRIPT_DIR/04-harbor-reachable.sh" >/dev/null 2>&1; echo $?)"
+if [ "$o2" != 0 ]; then ok "...and EXITS NON-ZERO, so install-all/CI can gate on it"
+else bad "...and EXITS NON-ZERO" "it printed a PROBLEM and exited 0 — a gate that cannot fail"; fi
+
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

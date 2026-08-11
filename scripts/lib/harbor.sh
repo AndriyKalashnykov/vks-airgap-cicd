@@ -150,3 +150,59 @@ ensure_project() {
     *) die "failed to create Harbor project '$name' (http $code)" ;;
   esac
 }
+
+# harbor_reachable_report — READ-ONLY: does HARBOR_URL actually SERVE? Prints ok/PROBLEM/note lines
+# to stderr in the preflight house style and RETURNS the problem count (0 or 1).
+#
+# WHY IT IS ITS OWN FUNCTION, not three lines inside 24-lab-preflight.sh
+# ---------------------------------------------------------------------
+# scenario-1 needs this answer at STEP 4, right after `install-harbor-service`, when a reinstalled
+# Harbor has taken a NEW LoadBalancer IP and the operator's A record still names the old one. But
+# lab-preflight's other three checks (CRD-create, a DEFAULT StorageClass, a LoadBalancer provider)
+# are GUEST-CLUSTER preconditions, and at Step 4 the current context is the SUPERVISOR -- the guest
+# cluster is not created until Step 6. Pointing Step 4 at `make lab-preflight` therefore reports
+# PROBLEMs on a CORRECT walk, and a gate that is red when nothing is wrong is a gate people learn to
+# ignore. So the check is ADDITIVE and separately scoped (`make harbor-reachable`) rather than
+# lab-preflight being taught to skip: lab-preflight keeps full coverage for `install-all`, and Step 4
+# gets a target that answers exactly the question it is asking.
+#
+# Needs NO cluster and NO kubectl -- it is DNS + one HTTPS request, so it works from the jump box at
+# Step 4 and from a guest-cluster context at install-all time, unchanged.
+#
+# MEASURED 2026-08-11 on both OS rows of the create-from-nothing walk: Harbor was healthy (9 pods
+# Running, harbor-nginx on 192.168.101.141) while DNS still said 192.168.101.135 from the previous
+# install. It cost FIVE failures -- Step 8's CA fetch hung 129s and wrote an EMPTY file before
+# `openssl` said "Could not find certificate" (naming the file, not the reason), `make harbor-robot`
+# burned 262s, then env-populate and both ingress steps.
+#
+# Probed by REACHABILITY, not by comparing to the LoadBalancer object: Harbor's LB lives on the
+# SUPERVISOR while lab-preflight runs against the GUEST cluster, so the object is not ours to read --
+# and "does it answer?" is the end result anyway, which also catches a down Harbor or a firewall.
+harbor_reachable_report() {
+  local ok_p='  ok       ' bad_p='  PROBLEM  ' note_p='           '
+  [ -n "${HARBOR_URL:-}" ] || { printf '%sHARBOR_URL is not set — nothing to check\n' "$note_p" >&2; return 0; }
+
+  local hip
+  hip="$(getent hosts "${HARBOR_URL%%:*}" 2>/dev/null | awk '{print $1; exit}' || true)"
+  if [ -z "$hip" ]; then
+    printf '%sHARBOR_URL=%s does not resolve yet — expected before you create the A record\n' "$note_p" "$HARBOR_URL" >&2
+    printf '%s  that '\''make show-dns-records'\'' prints. It must resolve before '\''make mirror'\''.\n' "$note_p" >&2
+    return 0
+  fi
+
+  # --fail is deliberately ABSENT: a 4xx from a live Harbor still proves it is SERVING. Judge only on
+  # whether the connection produced any HTTP response at all. 000 means nothing answered.
+  local code
+  code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time "${HARBOR_PROBE_TIMEOUT_SECONDS:-10}" \
+            "https://${HARBOR_URL}/api/v2.0/systeminfo" 2>/dev/null || true)"
+  if [ "${code:-000}" = 000 ]; then
+    printf '%sHARBOR_URL=%s resolves to %s but NOTHING is serving there.\n' "$bad_p" "$HARBOR_URL" "$hip" >&2
+    printf '%sA REINSTALLED Harbor gets a NEW LoadBalancer IP. Compare that address with what\n' "$note_p" >&2
+    printf '%s  '\''make show-dns-records'\'' prints now, and update the A record if they differ.\n' "$note_p" >&2
+    printf '%s(Otherwise this surfaces as a 129s hang in Step 8 and a 262s one in '\''make harbor-robot'\'',\n' "$note_p" >&2
+    printf '%s  neither of which mentions DNS.)\n' "$note_p" >&2
+    return 1
+  fi
+  printf '%sHarbor answers at %s (%s, http %s)\n' "$ok_p" "$HARBOR_URL" "$hip" "$code" >&2
+  return 0
+}

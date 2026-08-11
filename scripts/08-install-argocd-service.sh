@@ -126,9 +126,30 @@ if [ -z "$VER" ]; then   # 1. an enum, if this operator ever grows one
   [ -n "$VER" ] && log_info "version from the CRD schema enum: ${VER}"
 fi
 if [ -z "$VER" ]; then   # 2. the Carvel Package the operator actually published
-  VER="$(kubectl --kubeconfig "$SUP" get packages.data.packaging.carvel.dev -A -o json 2>/dev/null \
-        | jq -r '[.items[]? | select(.spec.refName == "argocd.kubernetes.vmware.com") | .spec.version] | sort | last // empty' 2>/dev/null || true)"
-  [ -n "$VER" ] && log_info "version from the published Carvel Package: ${VER}"
+  # ⚠️ POLL, do not single-shot. The CRD and the Package are published by the SAME operator but NOT
+  # at the same moment, and the gap is long enough to lose a race deterministically on a fresh lab.
+  #
+  # MEASURED to the second, 2026-08-11, on a lab built ~30 minutes earlier:
+  #     20:36:02  the argocds CRD is created
+  #     20:36:08  this script logs "ArgoCD CRD is present"
+  #     20:36:10  this script died here
+  #     20:36:11  the Carvel Package appears        <-- ONE SECOND after we gave up
+  # So `make install-argocd-service` failed on a lab where nothing was wrong, and the FATAL sent the
+  # operator to run a kubectl query BY HAND and re-invoke with ARGOCD_INSTANCE_VERSION -- for a value
+  # that would have been there had we blinked. Waiting for the CRD and not for the Package was the
+  # whole bug: the CRD's presence PROVES the operator is mid-publish, so the Package is coming.
+  #
+  # The `die` below still fires if it genuinely never appears, so this trades a deterministic false
+  # failure for a bounded wait, not for a silent guess.
+  _pkg_end=$((SECONDS + ${ARGOCD_PACKAGE_WAIT_SECONDS:-180}))
+  while :; do
+    VER="$(kubectl --kubeconfig "$SUP" get packages.data.packaging.carvel.dev -A -o json 2>/dev/null \
+          | jq -r '[.items[]? | select(.spec.refName == "argocd.kubernetes.vmware.com") | .spec.version] | sort | last // empty' 2>/dev/null || true)"
+    [ -n "$VER" ] && { log_info "version from the published Carvel Package: ${VER}"; break; }
+    [ "$SECONDS" -lt "$_pkg_end" ] || break
+    log_info "waiting for the ArgoCD Carvel Package to be published (the CRD is already here)..."
+    sleep 5
+  done
 fi
 # NO THIRD FALLBACK, deliberately. `kubectl explain` is PROSE formatted for humans: it prints
 # the pattern and a QUOTED example, and scraping it returned `3.0.19+vmware.1-vks.1"` -- with the
@@ -137,8 +158,9 @@ fi
 # avoid stopping is how you ship a wrong value; stopping with the two structured queries is
 # strictly better for the operator.
 [ -n "$VER" ] || die "could not determine which ArgoCD version this operator offers.
-  Neither the CRD schema nor a published Carvel Package answered, and this deliberately does
-  NOT guess from 'kubectl explain' (that is prose, and scraping it has already produced an
+  The CRD schema carried no enum, and no Carvel Package appeared in ${ARGOCD_PACKAGE_WAIT_SECONDS:-180}s
+  (the CRD IS present, so the operator started publishing and then did not finish). This deliberately
+  does NOT guess from 'kubectl explain' (that is prose, and scraping it has already produced an
   invalid value). Set it explicitly:
     kubectl --kubeconfig ${SUP} get packages.data.packaging.carvel.dev -A | grep argocd.kubernetes
     make install-argocd-service ARGOCD_INSTANCE_VERSION=<the VERSION column>"
