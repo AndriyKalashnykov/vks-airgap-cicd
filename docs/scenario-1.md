@@ -249,10 +249,18 @@ The registry every image comes from.
 |---|---|---|
 | `HARBOR_URL` | `harbor.env1.lab.test` | **you choose it.** It must be a name your real DNS can answer — the guest cluster's nodes resolve it. **Bare host — no `https://`, no trailing slash.** |
 | `HARBOR_STORAGE_CLASS` | `wcp-vmfs` (single-host VMFS)<br>`vsan-default-storage-policy` (vSAN) | `kubectl get storageclass` against the Supervisor. No access yet? vCenter → your Namespace → **Storage** tab, then lowercase the policy name and replace spaces with `-`. |
-| `HARBOR_USERNAME` | `admin` | **only if you skipped the install.** Installed from *this repo* on another box? it is in that box's `.env.state` — `make creds-show` prints it. Installed by your platform team? ask them; there is no local copy. |
-| `HARBOR_PASSWORD` | *your value* | same. **Not** `Harbor12345` — the install generates one |
+| `HARBOR_USERNAME` | `admin` | **only if you skipped the install** — read it off the Supervisor, below |
+| `HARBOR_PASSWORD` | *your value* | same. **Not** `Harbor12345` — Harbor generates one at install |
 
-Skipped the install? Check the credential now, not at Step 9:
+Skipped the install? Read the password off the Supervisor:
+
+```bash
+export KUBECONFIG=./secrets/supervisor.kubeconfig     # after Step 3
+NS=$(kubectl get ns -o name | grep -oE 'svc-harbor-[a-z0-9]+' | head -1)
+kubectl -n "$NS" get secret harbor-core-ver-1 -o jsonpath='{.data.HARBOR_ADMIN_PASSWORD}' | base64 -d; echo
+```
+
+Put it in `.env`, then check it now, not at Step 9:
 
 ```bash
 printf 'user = "%s:%s"\n' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" > /tmp/h.cfg
