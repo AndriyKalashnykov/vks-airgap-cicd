@@ -110,6 +110,31 @@ has_live_placeholder() {
   printf '%s' "$1" | sed 's/#.*//' | grep -q '<[A-Za-z][^>]*>'
 }
 
+# LINE BY LINE, as a reader runs it. Executing a whole block as ONE `bash -c` collapses four
+# commands into one exit code and one lump of output -- so a reader who runs them one at a time,
+# looking at each result before typing the next, is NOT what was tested. The unit must be the
+# STATEMENT.
+#
+# Where a statement ENDS is decided by BASH ITSELF (`bash -n` on the accumulated text), not by a
+# regex: `\`-continuations, `if/then/fi`, `for/do/done`, heredocs and multi-line quotes are all
+# incomplete until they are complete, and any hand-rolled splitter gets one of them wrong and then
+# executes a fragment.
+split_statements() {   # <block text> -> NUL-separated statements on stdout
+  local acc="" line
+  while IFS= read -r line || [ -n "$line" ]; do
+    acc="${acc}${line}"$'\n'
+    # skip blank/comment-only accumulations rather than emitting them as "commands"
+    case "$(printf '%s' "$acc" | sed 's/#.*//' | tr -d '[:space:]')" in '') continue ;; esac
+    if bash -n <<< "$acc" 2>/dev/null; then
+      printf '%s\0' "${acc%$'\n'}"
+      acc=""
+    fi
+  done <<< "$1"
+  # An unterminated remainder is a DOC BUG (an unclosed quote or heredoc). Emit it so it runs and
+  # fails loudly, rather than silently dropping the tail of a block.
+  case "$(printf '%s' "$acc" | tr -d '[:space:]')" in '') : ;; *) printf '%s\0' "${acc%$'\n'}" ;; esac
+}
+
 # (3) FENCE-AWARE, not regex. A ```bash nested inside another fenced block -- an illustrative
 # snippet, a doc-about-docs example, a command the reader must NOT run -- was extracted and
 # scheduled for execution. Tracking fence state also makes ```sh / ```bash-with-attributes an
@@ -153,7 +178,7 @@ printf 'row: ns=%s harbor=%s argocd=%s cluster=%s robot=%s clone-skipped=%s isti
   "$WALK_ROBOT_EXISTS" "${WALK_SKIP_CLONE:-0}" "${WALK_ISTIO:-existing}"
 # Disclosed, because it is a real trade: carrying the environment means a block that forgot to
 # source ./.env is rescued by the previous one -- exactly as it would be for a reader in one terminal.
-printf 'shell: ONE INTERACTIVE bash per block, ENV AND CWD CARRIED FORWARD (a reader has one terminal)\n'
+printf 'shell: ONE INTERACTIVE bash per STATEMENT, ENV AND CWD CARRIED FORWARD (a reader has one terminal,\n        and runs one command at a time -- each result is printed under the command that produced it)\n'
 [ "${#PARSED[@]}" -ge "${WALK_MIN_BLOCKS:-20}" ] \
   || { echo "REFUSING: only ${#PARSED[@]} blocks (< ${WALK_MIN_BLOCKS:-20}) — the parser and the document have diverged"; exit 1; }
 
@@ -164,7 +189,11 @@ for row in "${PARSED[@]}"; do
   STEP=$((STEP + 1))
   reason="$(should_skip "$B")"
   : > "$UNSAFE_FILE"
-  SHOWN="$(neutralize "$B" log)"      # what the DOCUMENT says -- safe to print; logs the count
+  RAWB="$B"                           # pre-substitution, so statements are split on the DOCUMENT's text
+  # The RESULT is unused now (each statement renders its own safe text), but the CALL is not: it is
+  # what arms the UNSAFE_FILE guard below on the pre-substitution text. Deliberately WITHOUT `log`,
+  # or every neutralized line would be counted twice -- once here and once per statement.
+  neutralize "$B" >/dev/null
   B="$(neutralize "$(substitute "$B")")"   # what actually RUNS -- may carry a real credential
   [ -s "$UNSAFE_FILE" ] && [ -z "$reason" ] \
     && reason='a TTY-bound command sits inside a \-continued command - neutralizing one line would delete an argument from the survivor'
@@ -178,48 +207,62 @@ for row in "${PARSED[@]}"; do
     continue
   fi
   printf '\n=== [%02d] %s\n' "$STEP" "$H"
-  # SHOWN, never B: B has the placeholder replaced with the real secret.
-  printf '%s\n' "${SHOWN%$'\n'}" | sed 's/^/    $ /'
   t0=$SECONDS
   if [ "${WALK_DRY:-0}" = 1 ]; then printf '    (dry run - not executed)\n'; rc=0
   else
-    : > "$CWD_FILE"; : > "$RC_FILE"; : > "$OUT_FILE"   # (10) never carry a stale marker into the next block
-    # (1) THE CRITICAL FIX. `bash -c` exits with its LAST command's status, and the marker printf I
-    # append ALWAYS succeeds -- so every rc was the printf's. Measured: `make no-such-target` -> rc=0,
-    # `false` -> rc=0, and a 25-block walk in which nothing worked reported "0 failed". Capture the
-    # block's own status FIRST, then emit the markers, then exit with it.
-    # (11) the leading newline is load-bearing: a block ending in `\` would otherwise swallow `__rc=$?`.
-    # (9) the cwd goes in as an ARGUMENT, not interpolated -- a balanced quote pair in a path was a
-    # proven injection.
-    # A READER HAS ONE TERMINAL. The first version gave each block its own non-interactive
-    # `bash -c`, reasoning that the doc re-sources ./.env in every block that needs it -- true for
-    # .env, and WRONG for PATH. Measured: `make shell-init` puts the toolchain on PATH through the
-    # shell's rc file, that shell exited, and the next twelve blocks died `kubectl: command not
-    # found` / `vcf: command not found`, cascading into "vks.kubeconfig does not exist" for every
-    # remaining step. A reader would have hit none of it.
-    #   -i  : $- then contains `i`, so ~/.bashrc's `case $- in *i*` guard passes and rc files load.
-    #         Costs two job-control lines on stderr, filtered below.
-    #   env : `export -p` at the end of each block, sourced at the start of the next. Verified to
-    #         round-trip values containing quotes and newlines.
-    bash -i -c '. "$2" 2>/dev/null; cd "$1" || exit 1
-'"$B"'
+    : > "$OUT_FILE"
+    rc=0
+    # ONE STATEMENT AT A TIME, each with its own output and its own rc printed underneath it --
+    # because that is what the reader sees. Running the block as one `bash -c` produced ONE exit
+    # code for four commands: a reader who runs them individually, reading each result before
+    # typing the next, was never what got tested.
+    #
+    # `done < <(...)` and NOT a pipe: the loop body must run in THIS shell so the cwd it learns
+    # carries to the next statement, exactly as it would in the reader's one terminal.
+    while IFS= read -r -d '' _raw; do
+      _show="$(neutralize "$_raw" log)"
+      _run="$(neutralize "$(substitute "$_raw")")"
+      printf '%s\n' "${_show%$'\n'}" | sed 's/^/    $ /'
+      : > "$CWD_FILE"; : > "$RC_FILE"
+      # (1) `bash -c` exits with its LAST command's status and the marker printf ALWAYS succeeds --
+      # so capture the statement's own status FIRST, then emit the markers, then exit with it.
+      # (11) the leading newline is load-bearing: a statement ending in `\` would swallow `__rc=$?`.
+      # (9) the cwd goes in as an ARGUMENT, never interpolated -- a balanced quote pair in a path
+      # was a proven injection.
+      #   -i  : ~/.bashrc's `case $- in *i*` guard passes, so `make shell-init`'s PATH survives.
+      #   env : `export -p` at the end, sourced at the start of the next -- ONE terminal.
+      bash -i -c '. "$2" 2>/dev/null; cd "$1" || exit 1
+'"$_run"'
 __rc=$?
-export -p > "$2" 2>/dev/null
+# ALL variables, not just exported ones. `export -p` carries only the exported set, so a plain
+# `V=present` on one line was GONE by the next -- measured: `echo "$V"` printed empty where a
+# reader in one terminal would see the value. That is the one-terminal property, and executing
+# statement-by-statement is exactly what put it at risk.
+# The readonly/special names are filtered: re-assigning UID, BASHOPTS, PIPESTATUS et al. errors
+# on the way back in, and one error there would poison every later statement.
+{ declare -p 2>/dev/null | grep -vE "^declare -[a-zA-Z]*r" \
+    | grep -vE "^declare -[a-zA-Z-]+ (BASH|BASHOPTS|BASHPID|BASH_[A-Z]+|COMP_[A-Z]+|DIRSTACK|EPOCH[A-Z]*|EUID|FUNCNAME|GROUPS|HISTCMD|LINENO|OPTARG|OPTIND|PIPESTATUS|PPID|RANDOM|SECONDS|SHELLOPTS|SRANDOM|UID|_)="
+  declare -f 2>/dev/null
+} > "$2" 2>/dev/null
 printf "\n__WALK_RC__%s\n__WALK_CWD__%s\n" "$__rc" "$PWD"
 exit $__rc' _ "$CWD" "$ENV_FILE" 2>&1 \
-      | grep -vE '^bash: (cannot set terminal process group|no job control)' \
-      | while IFS= read -r l; do
-      case "$l" in
-        __WALK_RC__*)  printf '%s' "${l#__WALK_RC__}"  > "$RC_FILE" ;;
-        __WALK_CWD__*) printf '%s' "${l#__WALK_CWD__}" > "$CWD_FILE" ;;
-        *) printf '    %s\n' "$l"; printf '%s\n' "$l" >> "$OUT_FILE" ;;
-      esac
-    done
-    rc=${PIPESTATUS[0]}
-    mrc="$(cat "$RC_FILE" 2>/dev/null || true)"
-    [ -n "$mrc" ] && rc="$mrc"                # the marker is authoritative when the block ran to its end
-    nc="$(cat "$CWD_FILE" 2>/dev/null || true)"
-    if [ -n "$nc" ] && [ "$nc" != "$CWD" ]; then printf '    (cwd -> %s)\n' "$nc"; CWD="$nc"; fi
+        | grep -vE '^bash: (cannot set terminal process group|no job control)' \
+        | while IFS= read -r l; do
+          case "$l" in
+            __WALK_RC__*)  printf '%s' "${l#__WALK_RC__}"  > "$RC_FILE" ;;
+            __WALK_CWD__*) printf '%s' "${l#__WALK_CWD__}" > "$CWD_FILE" ;;
+            *) printf '    %s\n' "$l"; printf '%s\n' "$l" >> "$OUT_FILE" ;;
+          esac
+        done
+      _src=${PIPESTATUS[0]}
+      _mrc="$(cat "$RC_FILE" 2>/dev/null || true)"
+      [ -n "$_mrc" ] && _src="$_mrc"       # the marker is authoritative when the statement finished
+      _nc="$(cat "$CWD_FILE" 2>/dev/null || true)"
+      if [ -n "$_nc" ] && [ "$_nc" != "$CWD" ]; then printf '    (cwd -> %s)\n' "$_nc"; CWD="$_nc"; fi
+      # The per-statement result, printed where the reader would see it -- not folded into a block.
+      printf '      -> rc=%d\n' "$_src"
+      [ "$_src" -ne 0 ] && rc=1
+    done < <(split_statements "$RAWB")
   fi
   RAN=$((RAN + 1)); [ "$rc" -ne 0 ] && FAILED=$((FAILED + 1))
   if [ -n "$E" ] && [ "${WALK_DRY:-0}" != 1 ]; then
