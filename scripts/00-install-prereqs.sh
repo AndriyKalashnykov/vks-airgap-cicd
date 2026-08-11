@@ -102,9 +102,17 @@ pkg_install ca-certificates coreutils curl file git jq tar gzip unzip findutils 
 # and the kernel answers RST -- hence `Connection reset by peer` mid-kex, permanently, with a healthy
 # looking open port. It cost this project two rebuilt VMs and several wrong diagnoses.
 #
+# openssh-socket is NOT optional, and it is a SECOND defect with the same symptom. MEASURED on a
+# fresh VM: upgrading openssh ALONE fixes the version guard (sshd -t rc=0, OpenSSH_10.4p1/OpenSSL
+# 3.5.7) and then DELETES sshd.socket and sshd@.service, which moved to the openssh-socket
+# subpackage that tdnf does not pull on upgrade. systemd keeps the in-memory listener `active`, so
+# port 22 still accepts and then has no template unit to spawn -- `Connection reset by peer` mid-kex
+# again, from a completely different cause. With both packages: all four units survive, versions
+# match, and the SSH session stays up through the 205s upgrade.
+#
 # 10.4p1 is in photon-updates (verified), well past the 9.4 boundary. tdnf only -- on apt the package
 # is openssh-client/-server and Ubuntu does not have the defect.
-if [ "$(pkg_mgr)" = tdnf ]; then pkg_install openssh; fi
+if [ "$(pkg_mgr)" = tdnf ]; then pkg_install openssh openssh-socket; fi
 # ---- container engine -----------------------------------------------------
 # THE INVARIANT, and it is the whole reason this block is shaped the way it is:
 #
