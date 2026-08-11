@@ -654,7 +654,7 @@ it prints.** It has more outcomes than the two obvious ones, so do not guess fro
   request from the mesh admin. That is the answer, not a failure: with them set, the attach command
   needs no read access at all.
 
-*(~5 min)*
+Whichever it names takes about **5 minutes**.
 
 ⚠️ **Never run the bare `make install-ingress` against a mesh you did not install.** It helm-installs
 a second istiod over the platform's, and before it gets far enough to fail it relabels the
