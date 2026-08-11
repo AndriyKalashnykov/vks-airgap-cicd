@@ -300,10 +300,15 @@ walkbox_down() {
 
 # ── the walk itself ─────────────────────────────────────────────────────────────────────────────
 walkbox_run() {
-  local ip="$1" driver="${WALKBOX_DRIVER:-${REPO_ROOT}/scripts/walk-scenario1.sh}"
+  local ip="$1" driver="${WALKBOX_DRIVER:-${REPO_ROOT}/scripts/walk-doc.sh}"
   [ -s "$driver" ] || die "no walk driver at ${driver} (set WALKBOX_DRIVER)"
   scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes \
       -i "$WALKBOX_SSH_KEY" "$driver" "${WALKBOX_USER}@${ip}:/tmp/walk.sh" || die "could not copy the driver"
+  # The DOC travels with the driver: it is the artifact under test, and walk-doc.sh parses the block
+  # list BEFORE the doc's own `git clone` block has produced a checkout to read it from.
+  scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes \
+      -i "$WALKBOX_SSH_KEY" "${WALKBOX_DOC:-${REPO_ROOT}/docs/scenario-1.md}" \
+      "${WALKBOX_USER}@${ip}:/tmp/doc.md" || die "could not copy the document under test"
   if [ -n "${VCF_CLI_SRC_DIR:-}" ] && [ -d "$VCF_CLI_SRC_DIR" ]; then
     scp -qr -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes \
         -i "$WALKBOX_SSH_KEY" "$VCF_CLI_SRC_DIR" "${WALKBOX_USER}@${ip}:/tmp/vcf" || die "could not copy the VCF archives"
@@ -321,6 +326,7 @@ walkbox_run() {
       HARBOR_URL='${HARBOR_URL:-}' HARBOR_STORAGE_CLASS='${HARBOR_STORAGE_CLASS:-}' \
       HARBOR_USERNAME='${HARBOR_USERNAME:-}' ARGOCD_NAMESPACE='${ARGOCD_NAMESPACE:-}' \
       ARGOCD_DEST_CLUSTER_NAME='${ARGOCD_DEST_CLUSTER_NAME:-}' VCF_CLI_SRC_DIR=/tmp/vcf \
+      WALK_DOC=/tmp/doc.md WALK_EXISTS='${WALK_EXISTS:-1}' \
       bash /tmp/walk.sh" </dev/null
 }
 
