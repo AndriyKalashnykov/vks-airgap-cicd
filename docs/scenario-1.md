@@ -305,6 +305,20 @@ make install-harbor-service
 make show-dns-records          # the exact A records to create, with their live LoadBalancer IPs
 ```
 
+⚠️ **A fresh install gets a NEW LoadBalancer IP.** If `harbor.<your domain>` existed before, its A
+record now points at the *old* one, and every later step fails against a name that resolves to
+nothing serving. MEASURED: DNS said `…135` while the new Harbor was on `…141`; Step 8 hung for 129s,
+`make harbor-robot` for 262s, and neither error mentioned DNS. Create or update the A record from
+`show-dns-records` above, then confirm it took:
+
+```bash
+make lab-preflight     # among other things: does HARBOR_URL actually SERVE?
+```
+
+**Expect:** `Harbor answers at <your host>`. If it says `NOTHING is serving there`, the A record is
+still pointing at the previous install. `make install-all` runs this for you, so a wrong record stops
+the run in seconds instead of after the ~20-minute mirror.
+
 **Expect:** `7 secrets generated, 0 placeholders left`, then `install issued for
 harbor.tanzu.vmware.com`. It registers the service, installs it behind an NGINX LoadBalancer and
 generates all seven of Harbor required secrets — **including the admin password, which you do not
@@ -536,13 +550,21 @@ Harbor publishes it, so no login is needed.
 
 ```bash
 set -a; . ./.env; set +a
-curl -sk "https://${HARBOR_URL}/api/v2.0/systeminfo/getcert" > ./secrets/harbor-ca.crt
-chmod 0644 ./secrets/harbor-ca.crt
+curl -sk --fail --max-time 20 -o ./secrets/harbor-ca.crt \
+  "https://${HARBOR_URL}/api/v2.0/systeminfo/getcert" || { rm -f ./secrets/harbor-ca.crt; echo "Harbor is not reachable at ${HARBOR_URL} — check the A record (make show-dns-records)"; }
+chmod 0644 ./secrets/harbor-ca.crt 2>/dev/null
 openssl x509 -in ./secrets/harbor-ca.crt -noout -subject     # expect: CN = Harbor CA
 ```
 
-If that last command errors instead of printing a subject, this Harbor does not publish its CA
-there — use one of the alternatives below.
+`--max-time`, `--fail` and `-o` are all load-bearing, and MEASURED. Without the first two an
+unreachable Harbor makes `curl` hang **129 seconds**; with them it gives up in 21. But `> file`
+truncates *before* `curl` runs, so a failed fetch still leaves an **empty file** and `openssl` still
+says *"Could not read certificate"* — naming the file rather than the reason. `-o` plus removing the
+file on failure is what makes the error say what actually went wrong.
+
+If the `curl` itself fails, **Harbor is not reachable at that name** — go back to Step 4 and check
+the A record against `make show-dns-records`. Only if `curl` succeeds and `openssl` then errors does
+it mean this Harbor does not publish its CA there; use one of the alternatives below.
 
 Then **check it against a digest you got from whoever runs Harbor**, over some other channel —
 `-k` above means you fetched it over a connection you could not yet verify:
