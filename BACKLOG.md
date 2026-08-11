@@ -204,3 +204,29 @@ Both found by an idea-round `vks-adversary` on 2026-08-10 that **refuted** the p
 `*.vks.local` is NXDOMAIN by design, and §11 prints two port-forward URLs live only while a
 port-forward runs). The reachability question it was meant to answer is already answered by
 `verify-ingress` (Host header, no DNS, per-host body marker), now cited in §10.
+
+## B88 — the trivy-DB cache was rejected on a measurement that is 2.5x too small
+
+`.github/workflows/ci.yml:147` records the 2026-07-14 decision to DROP a trivy-DB cache,
+reviewed by java-adversary + docker-adversary, on the grounds that it *"would silently serve
+a DB up to trivy's 24h client interval, missing same-day CVEs, **for ~10s**"*.
+
+The correctness objection stands and this row does NOT propose overturning it. What is wrong
+is the number it was weighed against. MEASURED on run 31451956799, job `static-check`:
+
+    02:20:04  trivy-fs: scanning javawebapp -> .../javawebapp-0.1.0.jar
+    02:20:32  (first Report Summary)                                    <- 27.5s
+    02:20:32  trivy-fs: scanning gowebapp -> /tmp/.../gowebapp
+    02:20:32  trivy-fs: OK - 2 app artifact(s) scanned                  <-  0.07s
+
+Same process family, same machine, same run: the FIRST scan is 27.5s and the SECOND is 0.07s.
+The delta is the vulnerability-DB download. So the trade is **~25s, not ~10s** — 15% of the
+164s `make static-check` step, against a staleness bound trivy's own 24h client interval
+already permits by default.
+
+Whoever revisits it should also weigh a DATE-KEYED cache (`trivy-db-<YYYY-MM-DD>` with a
+`trivy-db-` restore-key), which bounds staleness to <24h explicitly rather than relying on
+trivy's internal interval — that option does not appear in the recorded decision.
+
+⚠️ Do NOT re-add it without a fresh adversary round: the original rejection was a CORRECTNESS
+call about a security gate, and a bigger saving is not by itself a reason to overturn one.
