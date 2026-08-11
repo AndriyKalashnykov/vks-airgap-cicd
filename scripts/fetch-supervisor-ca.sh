@@ -34,9 +34,10 @@ unzip -j -o -q "$tmp/vmca.zip" 'certs/lin/*.0' -d "$tmp/vmca/" 2>/dev/null \
 
 # The issuer the Supervisor ACTUALLY presents is the ground truth: a vCenter with more than one
 # trusted root offers several candidates and only one of them signed this endpoint.
-issuer="$(printf '' | openssl s_client -connect "${SUPERVISOR_HOST}:443" 2>/dev/null \
-          | openssl x509 -noout -issuer 2>/dev/null | sed 's/^issuer=//')"
-[ -n "$issuer" ] || die "could not read the certificate ${SUPERVISOR_HOST}:443 presents - is the Supervisor reachable?"
+issuer="$(timeout "${SUPERVISOR_TLS_TIMEOUT_SECONDS:-10}" \
+            openssl s_client -connect "${SUPERVISOR_HOST}:443" </dev/null 2>/dev/null \
+          | openssl x509 -noout -issuer 2>/dev/null | sed 's/^issuer=//' || true)"
+[ -n "$issuer" ] || die "could not read the certificate ${SUPERVISOR_HOST}:443 presents - is SUPERVISOR_HOST right, and is the Supervisor reachable from this box?"
 log_info "the Supervisor's issuer: ${issuer}"
 
 match=""
