@@ -38,7 +38,11 @@ WALK_CLUSTER_EXISTS="${WALK_CLUSTER_EXISTS:-$WALK_EXISTS}"
 : "${WALK_ISTIO:?set to 'install' or 'existing' — read it off 'make istio-preflight' for THIS cluster, do not guess}"
 
 STEP=0; RAN=0; FAILED=0; SKIPPED=0
-SKIP_LOG="$(mktemp)"; NEUT_LOG="$(mktemp)"; CWD_FILE="$(mktemp)"; RC_FILE="$(mktemp)"; UNSAFE_FILE="$(mktemp)"
+# The DOCUMENT's own claims, counted separately from the commands' exit codes. "32 blocks ran"
+# says the COMMANDS worked; it says nothing about whether the reader saw what they were told
+# they would see. These two numbers answer different questions and must not be conflated.
+EXPECT_TOTAL=0; EXPECT_MISS=0
+SKIP_LOG="$(mktemp)"; NEUT_LOG="$(mktemp)"; CWD_FILE="$(mktemp)"; RC_FILE="$(mktemp)"; UNSAFE_FILE="$(mktemp)"; OUT_FILE="$(mktemp)"; EXPECT_LOG="$(mktemp)"
 ENV_FILE="$(mktemp)"; : > "$ENV_FILE"
 trap 'rm -f "$SKIP_LOG" "$NEUT_LOG" "$CWD_FILE" "$RC_FILE" "$UNSAFE_FILE" "$ENV_FILE"' EXIT
 CWD="${WALK_START_DIR:-$PWD}"
@@ -121,8 +125,12 @@ for line in open(sys.argv[1]):
     if fence is None:
         if m: fence = (m.group(3).split(':')[0].lower(), len(m.group(2))); body = []
         elif line.startswith('## '): heading = line[3:].strip()
+        # The document's CONTRACT WITH THE READER. `**Expect:** ...` states what they will SEE, and
+        # nothing has ever checked it -- a walk that reports rc=0 for every block proves the COMMANDS
+        # ran, not that the DOCUMENT is truthful. Attach it to the block it follows.
+        elif line.startswith('**Expect') and out: out[-1]["e"].append(line.rstrip())
     elif m and not m.group(3) and len(m.group(2)) >= fence[1]:
-        if fence[0] in ('bash', 'sh', 'shell'): out.append({"h": heading, "b": "".join(body)})
+        if fence[0] in ('bash', 'sh', 'shell'): out.append({"h": heading, "b": "".join(body), "e": []})
         fence = None
     else:
         body.append(line)
@@ -152,6 +160,7 @@ printf 'shell: ONE INTERACTIVE bash per block, ENV AND CWD CARRIED FORWARD (a re
 for row in "${PARSED[@]}"; do
   H="$(printf '%s' "$row" | python3 -c 'import sys,json;print(json.load(sys.stdin)["h"])')"
   B="$(printf '%s' "$row" | python3 -c 'import sys,json;print(json.load(sys.stdin)["b"])')"
+  E="$(printf '%s' "$row" | python3 -c 'import sys,json;print("\n".join(json.load(sys.stdin).get("e",[])))')"
   STEP=$((STEP + 1))
   reason="$(should_skip "$B")"
   : > "$UNSAFE_FILE"
@@ -174,7 +183,7 @@ for row in "${PARSED[@]}"; do
   t0=$SECONDS
   if [ "${WALK_DRY:-0}" = 1 ]; then printf '    (dry run - not executed)\n'; rc=0
   else
-    : > "$CWD_FILE"; : > "$RC_FILE"           # (10) never carry a stale marker into the next block
+    : > "$CWD_FILE"; : > "$RC_FILE"; : > "$OUT_FILE"   # (10) never carry a stale marker into the next block
     # (1) THE CRITICAL FIX. `bash -c` exits with its LAST command's status, and the marker printf I
     # append ALWAYS succeeds -- so every rc was the printf's. Measured: `make no-such-target` -> rc=0,
     # `false` -> rc=0, and a 25-block walk in which nothing worked reported "0 failed". Capture the
@@ -203,7 +212,7 @@ exit $__rc' _ "$CWD" "$ENV_FILE" 2>&1 \
       case "$l" in
         __WALK_RC__*)  printf '%s' "${l#__WALK_RC__}"  > "$RC_FILE" ;;
         __WALK_CWD__*) printf '%s' "${l#__WALK_CWD__}" > "$CWD_FILE" ;;
-        *) printf '    %s\n' "$l" ;;
+        *) printf '    %s\n' "$l"; printf '%s\n' "$l" >> "$OUT_FILE" ;;
       esac
     done
     rc=${PIPESTATUS[0]}
@@ -213,13 +222,60 @@ exit $__rc' _ "$CWD" "$ENV_FILE" 2>&1 \
     if [ -n "$nc" ] && [ "$nc" != "$CWD" ]; then printf '    (cwd -> %s)\n' "$nc"; CWD="$nc"; fi
   fi
   RAN=$((RAN + 1)); [ "$rc" -ne 0 ] && FAILED=$((FAILED + 1))
+  if [ -n "$E" ] && [ "${WALK_DRY:-0}" != 1 ]; then
+    _seen=0; _tot=0; _missed=""
+    while IFS=$'\t' read -r verdict lit; do
+      [ -n "${lit:-}" ] || continue
+      printf '    expect: %-56s %s\n' "$lit" "$verdict"
+      _tot=$((_tot + 1))
+      if [ "$verdict" = "SEEN" ]; then _seen=$((_seen + 1)); else _missed="${_missed}
+      - ${lit}"; fi
+    done < <(EXPECT_TEXT="$E" BLOCK_TEXT="$B" python3 - "$OUT_FILE" <<'PYX'
+import os, re, sys
+out  = open(sys.argv[1], errors='replace').read()
+blk  = os.environ.get('BLOCK_TEXT', '')
+for line in os.environ.get('EXPECT_TEXT', '').splitlines():
+    for lit in re.findall(r'`([^`]+)`', line):
+        lit = lit.strip()
+        # A literal carrying a placeholder or an ellipsis cannot be matched verbatim -- the document
+        # is telling the reader the SHAPE, not the text.
+        if len(lit) < 6 or re.search(r'[<>]|\.\.\.|…', lit):      continue
+        # Skip the literals that name the COMMAND the reader just ran: they appear in the block
+        # itself, so finding them in the output proves nothing about the claim.
+        if lit in blk:                                            continue
+        print(("SEEN" if lit in out else "NOT SEEN") + "\t" + lit)
+PYX
+    )
+    # THE UNIT IS THE BLOCK. A single literal missing is prose noise (the doc hedges, abbreviates,
+    # and mixes the command with the output). A block whose claims produced NOTHING is the document
+    # telling the reader they will see something they do not -- which is the whole question this
+    # walk exists to answer, and which an rc-only report is structurally blind to.
+    if [ "$_tot" -gt 0 ]; then
+      EXPECT_TOTAL=$((EXPECT_TOTAL + 1))
+      if [ "$_seen" -eq 0 ]; then
+        EXPECT_MISS=$((EXPECT_MISS + 1))
+        printf '    EXPECT UNMET: the document promises output this block did not produce\n'
+        printf '  expect-unmet: [%02d] %s%s\n' "$STEP" "$H" "$_missed" >> "$EXPECT_LOG"
+      fi
+    fi
+  fi
   printf -- '--- [%02d] rc=%d (%ds)\n' "$STEP" "$rc" "$((SECONDS - t0))"
 done
 
 printf '\n======== WALK DONE - %d blocks: %d ran, %d FAILED, %d skipped, %d line(s) neutralized ========\n' \
   "$STEP" "$RAN" "$FAILED" "$SKIPPED" "$(wc -l < "$NEUT_LOG")"
+# TWO different questions, never one number: did the COMMANDS work, and is the DOCUMENT truthful?
+# A walk that reports only the first is the failure this line exists to make impossible.
+printf '======== DOCUMENT - %d blocks make an Expect: claim, %d UNMET ========\n' \
+  "$EXPECT_TOTAL" "$EXPECT_MISS"
+cat "$EXPECT_LOG"
 # A coverage number without its exclusions is a claim, not a measurement.
 cat "$SKIP_LOG" "$NEUT_LOG"
 # (2) "nothing failed" and "nothing happened" must not share an exit code.
 [ "$RAN" -gt 0 ] || { echo "REFUSING: the walk executed NOTHING"; exit 1; }
+# An UNMET claim fails the walk. WALK_EXPECT_ADVISORY=1 downgrades it -- use it only with a written
+# reason, because "the document says something untrue" is exactly what a doc walk is for.
+if [ "$EXPECT_MISS" -gt 0 ] && [ "${WALK_EXPECT_ADVISORY:-0}" != 1 ]; then
+  exit 1
+fi
 exit $(( FAILED > 0 ? 1 : 0 ))
