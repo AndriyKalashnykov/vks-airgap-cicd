@@ -22,6 +22,14 @@ DOC="${WALK_DOC:-${SCRIPT_DIR}/../docs/scenario-1.md}"
 # ONCE, so `make harbor-robot` CANNOT be re-run to recover it -- stopping is correct, and a walk
 # must not score that as a document defect.
 : "${WALK_ROBOT_EXISTS:?set 0 (mint a robot) or 1 (one already exists elsewhere) explicitly}"
+# PER-RESOURCE AXES. "everything exists" and "nothing exists" are not the only two states a real lab
+# is in, and treating them as such cost a matrix row: Harbor deregistered cleanly while ArgoCD would
+# not, leaving a lab that is genuinely "Harbor absent, ArgoCD present" -- a legitimate cell that one
+# boolean cannot express. Each defaults to WALK_EXISTS, so the simple case stays one knob.
+WALK_NS_EXISTS="${WALK_NS_EXISTS:-$WALK_EXISTS}"
+WALK_HARBOR_EXISTS="${WALK_HARBOR_EXISTS:-$WALK_EXISTS}"
+WALK_ARGOCD_EXISTS="${WALK_ARGOCD_EXISTS:-$WALK_EXISTS}"
+WALK_CLUSTER_EXISTS="${WALK_CLUSTER_EXISTS:-$WALK_EXISTS}"
 
 STEP=0; RAN=0; FAILED=0; SKIPPED=0
 SKIP_LOG="$(mktemp)"; NEUT_LOG="$(mktemp)"; CWD_FILE="$(mktemp)"; RC_FILE="$(mktemp)"; UNSAFE_FILE="$(mktemp)"
@@ -42,11 +50,11 @@ should_skip() {
     *"INGRESS_CONTROLLER=istio-existing"*)
                                 [ "${WALK_ISTIO:-existing}" != existing ] && printf 'attach variant; this row installs' ;;
     *"make install-ingress"*)   [ "${WALK_ISTIO:-existing}" = existing ] && printf 'install variant; this row attaches to an existing mesh' ;;
-    *"install-harbor-service"*) [ "$WALK_EXISTS" = 1 ] && printf 'Harbor already exists (this row)' ;;
-    *"install-argocd-service"*) [ "$WALK_EXISTS" = 1 ] && printf 'ArgoCD already exists (this row)' ;;
-    *"make vsphere-namespace"*) [ "$WALK_EXISTS" = 1 ] && printf 'namespace already exists (this row)' ;;
+    *"install-harbor-service"*) [ "$WALK_HARBOR_EXISTS" = 1 ] && printf 'Harbor already exists (this row)' ;;
+    *"install-argocd-service"*) [ "$WALK_ARGOCD_EXISTS" = 1 ] && printf 'ArgoCD already exists (this row)' ;;
+    *"make vsphere-namespace"*) [ "$WALK_NS_EXISTS" = 1 ] && printf 'namespace already exists (this row)' ;;
     *"make harbor-robot"*)      [ "$WALK_ROBOT_EXISTS" = 1 ] && printf 'a Harbor robot already exists; its secret is shown ONCE and cannot be re-read' ;;
-    *"vks-cluster-create"*)     [ "$WALK_EXISTS" = 1 ] && printf 'cluster already exists (this row)' ;;
+    *"vks-cluster-create"*)     [ "$WALK_CLUSTER_EXISTS" = 1 ] && printf 'cluster already exists (this row)' ;;
     *"git clone https"*)        [ "${WALK_SKIP_CLONE:-0}" = 1 ] && printf 'already cloned by the harness' ;;
     *"apt-get install"*)        [ "${WALK_OS:-}" = photon ] && printf 'Ubuntu block; this box is Photon' ;;
     *"tdnf install"*)           case "${WALK_OS:-}" in ubuntu|debian) printf 'Photon block; this box is %s' "$WALK_OS" ;; esac ;;
@@ -67,6 +75,8 @@ substitute() {
 # credential read the walk needs). BUT a matched line inside a `\` continuation cannot be commented
 # out in isolation: doing so silently DELETES an argument from the surviving command and still
 # reports "1 line neutralized". Refuse the block instead -- half-executing is worse than not.
+# $2 = "log" -> record what was neutralized. Called twice per block (once to build the text that is
+# PRINTED, once to build the text that RUNS), so exactly one caller may log or the count doubles.
 neutralize() {
   local out="" line prev=""
   while IFS= read -r line; do
@@ -75,7 +85,7 @@ neutralize() {
         case "$line" in *\\) echo 1 > "$UNSAFE_FILE" ;; esac   # continues into the next line
         case "$prev" in *\\) echo 1 > "$UNSAFE_FILE" ;; esac   # is a continuation of the previous
         out+="# WALK-NEUTRALIZED (needs a TTY / blocks forever): ${line}"$'\n'
-        printf '  neutralized: %s\n' "${line# }" >> "$NEUT_LOG" ;;
+        [ "${2:-}" = log ] && printf '  neutralized: %s\n' "${line# }" >> "$NEUT_LOG" ;;
       *) out+="${line}"$'\n' ;;
     esac
     prev="$line"
@@ -121,8 +131,12 @@ PY
 # denominator that only the parser produces cannot detect the parser being wrong.
 INDEP="$(grep -c '^[[:space:]]*```bash' "$DOC" || true)"
 printf '\n======== walking %s ========\n' "$(basename "$DOC")"
-printf 'blocks: %d extracted, %d counted independently | row: WALK_OS=%s WALK_EXISTS=%s WALK_ROBOT_EXISTS=%s WALK_SKIP_CLONE=%s\n' \
-  "${#PARSED[@]}" "$INDEP" "${WALK_OS:-?}" "$WALK_EXISTS" "$WALK_ROBOT_EXISTS" "${WALK_SKIP_CLONE:-0}"
+printf 'blocks: %d extracted, %d counted independently | os=%s\n' "${#PARSED[@]}" "$INDEP" "${WALK_OS:-?}"
+# Print the RESOLVED per-resource row, not the WALK_EXISTS shorthand -- the whole point is that they
+# can differ, and a reader of the log must be able to see which cell of the matrix this run was.
+printf 'row: ns=%s harbor=%s argocd=%s cluster=%s robot=%s clone-skipped=%s istio=%s\n' \
+  "$WALK_NS_EXISTS" "$WALK_HARBOR_EXISTS" "$WALK_ARGOCD_EXISTS" "$WALK_CLUSTER_EXISTS" \
+  "$WALK_ROBOT_EXISTS" "${WALK_SKIP_CLONE:-0}" "${WALK_ISTIO:-existing}"
 # Disclosed, because it is a real trade: carrying the environment means a block that forgot to
 # source ./.env is rescued by the previous one -- exactly as it would be for a reader in one terminal.
 printf 'shell: ONE INTERACTIVE bash per block, ENV AND CWD CARRIED FORWARD (a reader has one terminal)\n'
@@ -135,7 +149,7 @@ for row in "${PARSED[@]}"; do
   STEP=$((STEP + 1))
   reason="$(should_skip "$B")"
   : > "$UNSAFE_FILE"
-  SHOWN="$(neutralize "$B")"          # what the DOCUMENT says -- safe to print
+  SHOWN="$(neutralize "$B" log)"      # what the DOCUMENT says -- safe to print; logs the count
   B="$(neutralize "$(substitute "$B")")"   # what actually RUNS -- may carry a real credential
   [ -s "$UNSAFE_FILE" ] && [ -z "$reason" ] \
     && reason='a TTY-bound command sits inside a \-continued command - neutralizing one line would delete an argument from the survivor'
