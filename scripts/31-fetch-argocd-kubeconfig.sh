@@ -77,6 +77,7 @@ mkdir -p "$(dirname "$ARGOCD_KUBECONFIG")"
 
 # TLS: prefer a CA cert; fall back to skip-verify only when the operator explicitly opts in.
 TLS_ARGS=()
+vks_ca_default   # lib/tls.sh — defaults to what `make fetch-supervisor-ca` wrote (Step 3)
 if [ -n "${VKS_CA_CERT_FILE:-}" ] && [ -f "${VKS_CA_CERT_FILE}" ]; then
   TLS_ARGS+=(--ca-certificate "$VKS_CA_CERT_FILE")
 elif is_true "${VKS_INSECURE_SKIP_TLS_VERIFY:-}"; then

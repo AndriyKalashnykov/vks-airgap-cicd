@@ -249,6 +249,8 @@ The registry every image comes from.
 |---|---|---|
 | `HARBOR_URL` | `harbor.env1.lab.test` | **you choose it.** It must be a name your real DNS can answer — the guest cluster's nodes resolve it. **Bare host — no `https://`, no trailing slash.** |
 | `HARBOR_STORAGE_CLASS` | `wcp-vmfs` (single-host VMFS)<br>`vsan-default-storage-policy` (vSAN) | `kubectl get storageclass` against the Supervisor. No access yet? vCenter → your Namespace → **Storage** tab, then lowercase the policy name and replace spaces with `-`. |
+| `HARBOR_USERNAME` | `admin` | **Only if you SKIPPED the install** (Harbor was already there). The install below generates and publishes this for you; a Harbor you did not install has not published anything, so set the account you were given. |
+| `HARBOR_PASSWORD` | *your value* | Same — **only if you skipped the install.** MEASURED: without these two, `make harbor-robot` stops with *"set HARBOR_USERNAME in .env to the Harbor ADMIN"* and `make env-check` reports `HARBOR_USERNAME` missing. |
 
 `VCENTER_HOST` / `VCENTER_USERNAME` / `VCENTER_PASSWORD` are already set from Step 1b.
 
