@@ -17,6 +17,11 @@ DOC="${WALK_DOC:-${SCRIPT_DIR}/../docs/scenario-1.md}"
 # (8) NO DEFAULT. `WALK_EXISTS:-1` skipped all four provisioning blocks, so a row meant to exercise
 # the install path scored green having installed nothing. Forgetting must not be the cheap option.
 : "${WALK_EXISTS:?set 0 (install path) or 1 (already-exists path) explicitly}"
+# A SEPARATE axis from WALK_EXISTS: a Harbor robot can already exist on a lab whose namespace and
+# cluster do not (a previous jump box minted it), and the reverse. Harbor shows a robot secret
+# ONCE, so `make harbor-robot` CANNOT be re-run to recover it -- stopping is correct, and a walk
+# must not score that as a document defect.
+: "${WALK_ROBOT_EXISTS:?set 0 (mint a robot) or 1 (one already exists elsewhere) explicitly}"
 
 STEP=0; RAN=0; FAILED=0; SKIPPED=0
 SKIP_LOG="$(mktemp)"; NEUT_LOG="$(mktemp)"; CWD_FILE="$(mktemp)"; RC_FILE="$(mktemp)"; UNSAFE_FILE="$(mktemp)"
@@ -40,6 +45,7 @@ should_skip() {
     *"install-harbor-service"*) [ "$WALK_EXISTS" = 1 ] && printf 'Harbor already exists (this row)' ;;
     *"install-argocd-service"*) [ "$WALK_EXISTS" = 1 ] && printf 'ArgoCD already exists (this row)' ;;
     *"make vsphere-namespace"*) [ "$WALK_EXISTS" = 1 ] && printf 'namespace already exists (this row)' ;;
+    *"make harbor-robot"*)      [ "$WALK_ROBOT_EXISTS" = 1 ] && printf 'a Harbor robot already exists; its secret is shown ONCE and cannot be re-read' ;;
     *"vks-cluster-create"*)     [ "$WALK_EXISTS" = 1 ] && printf 'cluster already exists (this row)' ;;
     *"git clone https"*)        [ "${WALK_SKIP_CLONE:-0}" = 1 ] && printf 'already cloned by the harness' ;;
     *"apt-get install"*)        [ "${WALK_OS:-}" = photon ] && printf 'Ubuntu block; this box is Photon' ;;
@@ -115,8 +121,8 @@ PY
 # denominator that only the parser produces cannot detect the parser being wrong.
 INDEP="$(grep -c '^[[:space:]]*```bash' "$DOC" || true)"
 printf '\n======== walking %s ========\n' "$(basename "$DOC")"
-printf 'blocks: %d extracted, %d counted independently | row: WALK_OS=%s WALK_EXISTS=%s WALK_SKIP_CLONE=%s\n' \
-  "${#PARSED[@]}" "$INDEP" "${WALK_OS:-?}" "$WALK_EXISTS" "${WALK_SKIP_CLONE:-0}"
+printf 'blocks: %d extracted, %d counted independently | row: WALK_OS=%s WALK_EXISTS=%s WALK_ROBOT_EXISTS=%s WALK_SKIP_CLONE=%s\n' \
+  "${#PARSED[@]}" "$INDEP" "${WALK_OS:-?}" "$WALK_EXISTS" "$WALK_ROBOT_EXISTS" "${WALK_SKIP_CLONE:-0}"
 # Disclosed, because it is a real trade: carrying the environment means a block that forgot to
 # source ./.env is rescued by the previous one -- exactly as it would be for a reader in one terminal.
 printf 'shell: ONE INTERACTIVE bash per block, ENV AND CWD CARRIED FORWARD (a reader has one terminal)\n'

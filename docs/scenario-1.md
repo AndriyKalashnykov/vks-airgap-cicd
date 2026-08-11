@@ -592,7 +592,10 @@ cat ./secrets/harbor-robot.env
 
 ⚠️ **Already exists?** It stops rather than overwriting: Harbor shows a robot secret **once**, so an
 existing one cannot be re-read and re-creating it would hand you a credential that does not work.
-Reuse `./secrets/harbor-robot.env`, or delete the robot in Harbor (**Administration -> Robot
+**Which remedy applies depends on whether `./secrets/harbor-robot.env` is on THIS box** — the command
+says which. If the file is here, reuse it. If it is not, the robot was minted somewhere else and
+there is nothing to read back: get the secret from whoever created it, refresh it in the Harbor UI
+(**Administration -> Robot Accounts -> Refresh Secret**), or delete the robot (**Administration -> Robot
 Accounts**) and run it again.
 
 ---
