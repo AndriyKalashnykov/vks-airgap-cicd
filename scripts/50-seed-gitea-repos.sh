@@ -57,14 +57,72 @@ if [ -s "$TOKEN_FILE" ]; then
   CANDIDATE_TOKEN="$(cat "$TOKEN_FILE")"
 fi
 
+# admin_state <username> — prints exactly one of: missing | notadmin | admin | error
+#
+# EXACT FIELD MATCH, not `grep`. MEASURED 2026-08-11: `gitea admin user list | grep -q admin`
+# returns 0 when the only user is `gitea_admin` — it matches the SUBSTRING, so a check built on it
+# reports the account PRESENT and the run still dies later at generate-access-token, i.e. the gate
+# is green over the exact defect it exists to catch.
+#
+# The IsAdmin column is located FROM THE HEADER rather than hardcoded: `admin user list` lists ALL
+# users, not just admins, so a non-admin account of the same name would pass an existence check and
+# then fail 60 lines later at `create org failed (http 403)` — an error naming authorization and
+# pointing nowhere. Column positions have already moved once (the 2FA column).
+#
+# awk's DEFAULT FS splits on runs of whitespace, which is what tabwriter emits (tabs PLUS padding);
+# an explicit -F'\t' is the thing that breaks on padded output. Always exits 0 and always prints a
+# token, so it can never trip the caller's `set -e`.
+admin_state() {
+  local u="${1:?}" out
+  out="$(kubectl -n "$GITEA_NAMESPACE" exec deploy/gitea -- gitea admin user list 2>&1)" \
+    || { printf 'error'; return 0; }
+  printf '%s\n' "$out" | awk -v u="$u" '
+    NR==1 { for (i=1;i<=NF;i++) { if ($i=="Username") c=i; if ($i=="IsAdmin") a=i }; next }
+    c && $c==u { print (a && tolower($a)=="true") ? "admin" : "notadmin"; f=1; exit }
+    END { if (!f) print "missing" }'
+}
+
 # mint_token — create the admin (idempotent) and generate a fresh CI token.
 mint_token() {
   log_info "creating Gitea admin user '$GITEA_ADMIN_USER' (password via stdin)"
   # Password travels in the heredoc (stdin), not the jump-box argv.
-  kubectl -n "$GITEA_NAMESPACE" exec -i deploy/gitea -- sh <<EOF || log_warn "admin may already exist — continuing"
+  #
+  # CAPTURE the create's own output instead of discarding it behind "may already exist". MEASURED
+  # 2026-08-11 on a live lab: the create failed because `.env.example` ships
+  # GITEA_ADMIN_EMAIL=admin@vks.local (line 809) and the existing admin ALREADY HOLDS that email —
+  # Gitea enforces unique emails, so it rejects on the EMAIL regardless of the username. The old
+  # message blamed the username, and an operator who follows it by choosing a third name hits the
+  # same collision forever. Gitea's own text ("e-mail already in use") says which it is; guessing
+  # cannot. The two coupled keys sit 532 lines apart in .env.example, which is why this shipped.
+  local create_out create_rc=0
+  create_out="$(kubectl -n "$GITEA_NAMESPACE" exec -i deploy/gitea -- sh <<EOF 2>&1
 gitea admin user create --admin --username "$GITEA_ADMIN_USER" \
   --email "$GITEA_ADMIN_EMAIL" --password "$GITEA_ADMIN_PASSWORD" --must-change-password=false
 EOF
+)" || create_rc=$?
+  if [ "$create_rc" -ne 0 ]; then
+    # This file's contract is that the password never leaves stdin, and we are about to PRINT
+    # whatever the remote command said. Scrub it before it can reach a terminal or a CI log.
+    local safe="${create_out//"$GITEA_ADMIN_PASSWORD"/<redacted>}"
+    case "$safe" in
+      *"Error from server"*|*"unable to upgrade connection"*)
+        die "cannot run commands in the Gitea pod (this is a CLUSTER/RBAC problem, not Gitea):
+${safe}" ;;
+    esac
+    if [ "$(admin_state "$GITEA_ADMIN_USER")" = missing ]; then
+      die "could not create the Gitea admin '${GITEA_ADMIN_USER}', and it does not exist.
+Gitea said:
+${safe}
+
+Existing account(s):
+$(kubectl -n "$GITEA_NAMESPACE" exec deploy/gitea -- gitea admin user list 2>&1 | sed 's/^/  /')
+
+Read Gitea's message above: it names which field collided. A duplicate e-mail is the common one —
+GITEA_ADMIN_USER and GITEA_ADMIN_EMAIL in .env.example must BOTH match the existing account, or
+BOTH be new. Changing only the username hits the same collision again."
+    fi
+    log_info "admin '${GITEA_ADMIN_USER}' already exists — continuing"
+  fi
   log_info "generating CI access token"
   TOKEN="$(kubectl -n "$GITEA_NAMESPACE" exec deploy/gitea -- \
     gitea admin user generate-access-token --username "$GITEA_ADMIN_USER" \
@@ -99,10 +157,38 @@ token_works() {
   [ "$(curl -sS -o /dev/null -w '%{http_code}' -K "$cfg" "${base}/api/v1/user" 2>/dev/null)" = "200" ]
 }
 
+# ---- 2c. WHOSE token is it? ------------------------------------------------------------------
+# The identity check is here, OUTSIDE mint_token, because mint_token runs only on the ELSE branch
+# below. On the token-reuse path it would never run at all — and Gitea accepts a valid token
+# whatever username the URL carries, so a stale token minted for a DIFFERENT admin pushes happily
+# while `secrets/gitea-ci-token`, the git credentials written at the end of this script, and
+# `make creds-show` all name an account that does not exist. A green run with a fictional
+# credential is worse than a failed one.
+ADMIN_STATE="$(admin_state "$GITEA_ADMIN_USER")"
+case "$ADMIN_STATE" in
+  error)
+    die "cannot list Gitea users — is the gitea deployment up in namespace '${GITEA_NAMESPACE}'?" ;;
+  notadmin)
+    die "Gitea user '${GITEA_ADMIN_USER}' exists but is NOT an admin.
+Seeding needs admin rights; without them this fails later at 'create org failed (http 403)',
+an error that names authorization and points nowhere. Grant it admin in Gitea, or pick a
+different GITEA_ADMIN_USER in .env." ;;
+esac
+
 TOKEN=""
 if [ -n "$CANDIDATE_TOKEN" ] && token_works "$CANDIDATE_TOKEN"; then
+  [ "$ADMIN_STATE" = admin ] || die "the CI token in ${TOKEN_FILE} authenticates against this Gitea,
+but GITEA_ADMIN_USER='${GITEA_ADMIN_USER}' does not exist here. That token belongs to a different
+account, and Gitea would accept it whatever username we put in the URL — so the push would succeed
+as SOMEONE ELSE while every artifact claims '${GITEA_ADMIN_USER}'.
+
+Existing account(s):
+$(kubectl -n "$GITEA_NAMESPACE" exec deploy/gitea -- gitea admin user list 2>&1 | sed 's/^/  /')
+
+Set GITEA_ADMIN_USER in .env to the account that owns the token, or delete ${TOKEN_FILE} to mint a
+fresh one for '${GITEA_ADMIN_USER}'."
   TOKEN="$CANDIDATE_TOKEN"
-  log_info "reusing the existing CI token (verified against THIS Gitea)"
+  log_info "reusing the existing CI token (verified against THIS Gitea, owned by '${GITEA_ADMIN_USER}')"
 else
   if [ -n "$CANDIDATE_TOKEN" ]; then
     log_warn "the CI token in $TOKEN_FILE does NOT authenticate against this Gitea — it belongs to a"

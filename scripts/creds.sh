@@ -128,7 +128,11 @@ _unset_pw() {  # _unset_pw <VAR> -> what an unset password actually means, per f
 }
 harbor_user="${HARBOR_USERNAME:-admin}"
 harbor_pw="${HARBOR_PASSWORD:-$(_unset_pw HARBOR_PASSWORD)}"
-gitea_user="${GITEA_ADMIN_USER:-gitea_admin}"
+# NOT a `gitea_admin` fallback: it disagreed with .env.example's GITEA_ADMIN_USER=admin, so this
+# printer could name an account the pipeline never used. It is also dead code — load_env sources
+# .env.example unconditionally (SKIP_DOTENV skips only .env), so the value is always set. If it
+# somehow is not, SAY SO rather than inventing a name. This is a printer; it must still exit 0.
+gitea_user="${GITEA_ADMIN_USER:-<unset — see GITEA_ADMIN_USER in .env.example>}"
 gitea_pw="${GITEA_ADMIN_PASSWORD:-$(_unset_pw GITEA_ADMIN_PASSWORD)}"
 # ArgoCD via the context-aware resolver; exit 3 => VKS-provided / not knowable locally.
 if argo_pw="$("${SCRIPT_DIR}/argocd-password.sh" 2>/dev/null)"; then :; else

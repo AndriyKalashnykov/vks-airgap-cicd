@@ -490,7 +490,7 @@ lab-preflight: ## Read-only: three cluster preconditions that each kill the run 
 	@$(SCRIPTS)/24-lab-preflight.sh
 
 .PHONY: preflight argocd-preflight
-preflight: check-tools env-check argocd-preflight lab-preflight psa-check ## Read-only: can this lab actually run the flow? Run it BEFORE the 20-minute mirror (first prereq of install-all)
+preflight: check-tools engine-check env-check argocd-preflight lab-preflight psa-check ## Read-only: can this lab actually run the flow? Run it BEFORE the 20-minute mirror (first prereq of install-all)
 
 .PHONY: argocd-preflight
 argocd-preflight: ## ArgoCD version + TOPOLOGY + write-mechanism + AppProject + Gitea reachability (two-cluster aware; non-zero on a blocking finding)
@@ -547,6 +547,13 @@ gitops: ## Wire ArgoCD to each <app>-deploy repo (registers the guest cluster fi
 creds-show: ## Print the access summary (URLs + logins) for the current context
 	@$(SCRIPTS)/creds.sh
 creds: creds-show  ## Alias for creds-show (back-compat)
+
+.PHONY: walkbox walkbox-down
+walkbox: ## Run docs/scenario-1.md END TO END on a real throwaway VM (a container cannot: no subuid for builder-image)
+	@$(SCRIPTS)/walkbox.sh up
+
+walkbox-down: ## Destroy the walkbox VM (marker-guarded: it refuses any domain it did not create)
+	@$(SCRIPTS)/walkbox.sh down
 
 .PHONY: shell-init
 shell-init: ## Put the pinned toolchain on YOUR interactive shell's PATH, permanently (detects bash/zsh/fish/ksh)

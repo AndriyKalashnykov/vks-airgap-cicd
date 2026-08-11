@@ -27,7 +27,7 @@ whatever `make creds-show` printed.
    step already deployed a marker like `vks-airgap-cicd-verify-<epoch>`, so you'll see **that**, not the
    `Hello from vks-airgap-cicd` default. Either is fine — you're about to change it.)
 
-2. **Sign in to Gitea first** (username `gitea_admin` + the password `make creds-show` printed — editing
+2. **Sign in to Gitea first** (the username **and** password `make creds-show` prints — editing
    requires auth), then **edit it in Gitea.** Open **`demo/javawebapp-app`** →
    `src/main/resources/application.yml`, click the **pencil**, and change the greeting on line 18 (edit
    whatever text is currently after `${APP_MESSAGE:` — it may already be a verify marker):
