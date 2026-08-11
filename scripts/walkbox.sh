@@ -326,7 +326,7 @@ walkbox_run() {
       HARBOR_URL='${HARBOR_URL:-}' HARBOR_STORAGE_CLASS='${HARBOR_STORAGE_CLASS:-}' \
       HARBOR_USERNAME='${HARBOR_USERNAME:-}' ARGOCD_NAMESPACE='${ARGOCD_NAMESPACE:-}' \
       ARGOCD_DEST_CLUSTER_NAME='${ARGOCD_DEST_CLUSTER_NAME:-}' VCF_CLI_SRC_DIR=/tmp/vcf \
-      WALK_DOC=/tmp/doc.md WALK_EXISTS='${WALK_EXISTS:-1}' \
+      WALK_DOC=/tmp/doc.md WALK_EXISTS='${WALK_EXISTS:-1}' WALK_OS='${WALKBOX_OS:-ubuntu}' \
       bash /tmp/walk.sh" </dev/null
 }
 
