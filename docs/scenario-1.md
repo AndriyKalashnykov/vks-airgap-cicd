@@ -59,19 +59,6 @@ tdnf install -y git make curl curl-libs ca-certificates
 
 Prefix with `sudo` if you are not root.
 
-⚠️ **On Photon, install `curl` in the SAME transaction as `git`** — not afterwards, and not omitted.
-`tdnf install git make` alone pulls git from `photon-updates`, which is linked against a newer
-libcurl, while the image's `curl-libs` stays behind. The next command then fails with
-
-```text
-git-remote-https: undefined symbol: curl_global_trace
-fatal: remote helper 'https' aborted session
-```
-
-which names neither curl nor the version skew. Measured on a fresh Photon 5.0 image 2026-08-11:
-installed `curl-libs-8.0.1`, `photon-updates` offering `8.21.0`, and `curl_global_trace` absent from
-the installed library. Adding `curl curl-libs ca-certificates` to the same line fixes it.
-
 ```bash
 git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git
 cd vks-airgap-cicd

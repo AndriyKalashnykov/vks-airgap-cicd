@@ -144,7 +144,14 @@ walkbox_prepare() {
   rm -f "${WALKBOX_DIR}/${WALKBOX_NAME}.qcow2"
   qemu-img create -f qcow2 -b "${WALKBOX_DIR}/base.img" -F qcow2 \
     "${WALKBOX_DIR}/${WALKBOX_NAME}.qcow2" 40G >/dev/null
-  chmod 0644 "${WALKBOX_DIR}/${WALKBOX_NAME}.qcow2" "${WALKBOX_DIR}/base.img"
+  # NOT a bare chmod on base.img: libvirt DYNAMIC OWNERSHIP has already chowned the BACKING file
+  # to its own uid, so chmod fails EPERM and `set -e` kills the build on the SECOND run.
+  # MEASURED 2026-08-11: the retest died here with
+  #   chmod: changing permissions of '/var/tmp/walkbox-andriy/base.img': Operation not permitted
+  # qemu reads it fine (it owns it); only the per-run overlay needs a mode we control. Same
+  # class as the adversary round's MED-3 on the photon path.
+  chmod 0644 "${WALKBOX_DIR}/${WALKBOX_NAME}.qcow2"
+  chmod 0644 "${WALKBOX_DIR}/base.img" 2>/dev/null || true
 }
 
 # WALKBOX_SUDO is an AXIS, not a constant, and this is the most counter-intuitive choice here.
@@ -168,10 +175,14 @@ walkbox_seed() {
     printf '    shell: /bin/bash\n    ssh_authorized_keys:\n      - %s\nssh_pwauth: false\n' \
            "$(cat "${WALKBOX_SSH_KEY}.pub")"
   } > "$seed/user-data"
+  # rm -f FIRST: libvirt's dynamic ownership took the previous run's ISO, so xorriso cannot
+  # overwrite it and dies "could not build the cloud-init seed ISO" on every re-run. Same class as
+  # the base.img chmod above — anything libvirt has touched must be REPLACED, not modified.
+  rm -f "${WALKBOX_DIR}/${WALKBOX_NAME}-seed.iso" 2>/dev/null || true
   xorriso -as mkisofs -output "${WALKBOX_DIR}/${WALKBOX_NAME}-seed.iso" \
     -volid cidata -joliet -rock "$seed/user-data" "$seed/meta-data" >/dev/null 2>&1 \
     || die "could not build the cloud-init seed ISO"
-  chmod 0644 "${WALKBOX_DIR}/${WALKBOX_NAME}-seed.iso"
+  chmod 0644 "${WALKBOX_DIR}/${WALKBOX_NAME}-seed.iso" 2>/dev/null || true
   rm -rf "$seed"
 }
 
