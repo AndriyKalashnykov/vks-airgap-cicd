@@ -305,6 +305,17 @@ make install-harbor-service
 make show-dns-records          # the exact A records to create, with their live LoadBalancer IPs
 ```
 
+⚠️ **A fresh install gets a NEW LoadBalancer IP.** If `harbor.<your domain>` existed before, its A
+record now points at the *old* one, and every later step fails against a name that resolves to
+nothing serving. MEASURED: DNS said `…135` while the new Harbor was on `…141`; Step 8 hung for 129s,
+`make harbor-robot` for 262s, and neither error mentioned DNS. Check before moving on — the two must
+match:
+
+```bash
+set -a; . ./.env; set +a
+getent hosts "$HARBOR_URL"     # must be the IP show-dns-records just printed
+```
+
 **Expect:** `7 secrets generated, 0 placeholders left`, then `install issued for
 harbor.tanzu.vmware.com`. It registers the service, installs it behind an NGINX LoadBalancer and
 generates all seven of Harbor required secrets — **including the admin password, which you do not
@@ -536,13 +547,18 @@ Harbor publishes it, so no login is needed.
 
 ```bash
 set -a; . ./.env; set +a
-curl -sk "https://${HARBOR_URL}/api/v2.0/systeminfo/getcert" > ./secrets/harbor-ca.crt
+curl -sk --fail --max-time 20 "https://${HARBOR_URL}/api/v2.0/systeminfo/getcert" > ./secrets/harbor-ca.crt
 chmod 0644 ./secrets/harbor-ca.crt
 openssl x509 -in ./secrets/harbor-ca.crt -noout -subject     # expect: CN = Harbor CA
 ```
 
-If that last command errors instead of printing a subject, this Harbor does not publish its CA
-there — use one of the alternatives below.
+`--max-time` and `--fail` are load-bearing. Without them an unreachable Harbor makes `curl` hang for
+over two minutes, write an **empty file**, exit `0`, and leave `openssl` to say *"Could not find
+certificate"* — which names the file rather than the reason.
+
+If the `curl` itself fails, **Harbor is not reachable at that name** — go back to Step 4 and check
+the A record against `make show-dns-records`. Only if `curl` succeeds and `openssl` then errors does
+it mean this Harbor does not publish its CA there; use one of the alternatives below.
 
 Then **check it against a digest you got from whoever runs Harbor**, over some other channel —
 `-k` above means you fetched it over a connection you could not yet verify:
