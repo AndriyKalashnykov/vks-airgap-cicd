@@ -282,9 +282,6 @@ make install-harbor-service
 **Expect:** `7 secrets generated, 0 placeholders left`, then `install issued for
 harbor.tanzu.vmware.com`. It registers the service, installs it with an NGINX LoadBalancer, and
 **generates every one of Harbor's seven required secrets** — including the admin password, which
-otherwise ships as the published default `Harbor12345`. Nothing is hand-edited and nothing is
-pasted into a browser. `HARBOR_USERNAME` and `HARBOR_PASSWORD` are written to the state overlay
-for you. Re-running is safe: an already-registered service is detected and skipped.
 
 **Then point DNS at it.** Read the ingress IP in vCenter (**Workload Management → Supervisor
 Services → Harbor**), or with `kubectl` **once you have finished Step 3** — nothing before Step 3
@@ -294,12 +291,7 @@ has written a Supervisor kubeconfig:
 make show-dns-records      # prints the exact A records, with their live LoadBalancer IPs
 ```
 
-It reads the IPs out of the cluster so you do not have to hunt for them. It deliberately does
-**not** create the records: every site's DNS is different, and a tool that guessed would be wrong
-everywhere.
-
 `/etc/hosts` is **not** enough — the guest cluster's nodes must resolve it too (see notes).
-This is the one part of this step nobody can automate for you: it is your DNS.
 
 **Expect:** Harbor's UI answers at `https://<your FQDN>/`. *(~10 min)*
 
@@ -325,60 +317,39 @@ default. Read them back any time with `make creds-show`.
 The GitOps engine, running on the Supervisor.
 [Broadcom docs](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-1/using-argo-cd-service/install-argo-cd-service.html)
 
-> **Already have ArgoCD?** Check: `kubectl get argocd -A`, or vCenter → Workload Management →
-> **Supervisor Services**. If it is there, skip sub-steps 1 and 2 — you still need **3.3** (the
-> Supervisor CA), **3.4** (log in) and the `.env` table at the end.
+> **Already have ArgoCD?** `kubectl get argocd -A`. If it is there, skip 1 and 2 — you still need
+> **3.3** (the CA), **3.4** (log in) and the table at the end.
 
-1. **Pick the namespace the INSTANCE goes in.** `ARGOCD_NAMESPACE` is where the ArgoCD you log into
-   ends up, and it is often **not** the namespace the guest cluster lives in. For a separate one,
-   create it exactly as in [1b](#1b-the-vsphere-namespace) (`make vsphere-namespace` with
-   `VKS_NAMESPACE` pointed at it).
+1. **Pick the namespace the INSTANCE goes in.** For a separate one, create it as in
+   [1b](#1b-the-vsphere-namespace). ⚠️ Set `ARGOCD_NAMESPACE` in `.env` either way — Steps 8, 9 and
+   12 stop with `ARGOCD_NAMESPACE must be set`, and `make env-check` does **not** catch it.
 
-   ⚠️ **You must set it in `.env` either way.** Only *this* step falls back to `VKS_NAMESPACE`;
-   `make fetch-argocd-kubeconfig` (Step 8), `make verify` (Step 9) and `make uninstall-all`
-   (Step 12) have **no fallback** and stop with `ARGOCD_NAMESPACE must be set`. `make env-check`
-   does **not** catch it, so the first symptom is Step 8 failing.
-
-2. Install the service and its instance:
-
-   ```bash
+2. ```bash
    make install-argocd-service
    ```
 
-   **Expect:** `install issued for argocd-service.vsphere.vmware.com`, then — once the operator
-   publishes its CRD — `ArgoCD instance argocd-1 requested in namespace <ns>`. It waits for the CRD
-   rather than racing it, and asks the operator which versions it supports instead of hardcoding
-   one. Re-running is safe. If you have no Supervisor kubeconfig yet it installs the service, tells
-   you so, and stops before the instance — run it again after 3.4.
+   **Expect:** `install issued for argocd-service.vsphere.vmware.com`, then `ArgoCD instance
+   argocd-1 requested in namespace <ns>`. No Supervisor kubeconfig yet? It stops before the
+   instance — re-run after 3.4.
 
-3. **Get the Supervisor's CA.** You need it to log in without disabling TLS verification. It comes
-   from **vCenter**, not the Supervisor (the Supervisor serves only its leaf certificate):
+3. **Get the Supervisor's CA** (it comes from vCenter, not the Supervisor):
 
    ```bash
-   cd vks-airgap-cicd            # from Step 0
    make fetch-supervisor-ca
    ```
 
-   It downloads vCenter's trusted roots, picks the one whose subject matches the issuer your
-   Supervisor actually presents (a vCenter with several roots offers several candidates), refuses
-   to install one that does not verify the live endpoint, and prints the SHA-256 fingerprint.
+   ⚠️ **Confirm the printed SHA-256 with your platform team over another channel.** The download is
+   deliberately unverified TLS; the fingerprint is what authenticates it.
 
-   **Confirm that fingerprint with your platform team over a channel that is NOT this connection.**
-   The download is deliberately unverified TLS — you are fetching a trust anchor and then
-   authenticating it out of band by its fingerprint; the fingerprint is what authenticates it,
-   not the transport.
+   > A rebuilt lab mints a new CA at the same address, so a stale file looks valid and is not.
 
-   > A **rebuilt** lab mints a new CA at the same address, so a stale file looks valid and is not.
-   > That is why this refuses rather than overwriting blindly — and why `make vks-login` fails with
-   > *"the CA at … does NOT verify"* until you re-run it.
-
-4. **Log in.** `make` reads `.env` for you; an interactive shell does not, so load it first:
+4. **Log in.**
 
    ```bash
-   cd vks-airgap-cicd            # from Step 0
-   set -a; . ./.env; set +a          # loads SUPERVISOR_HOST, VKS_CONTEXT_NAME, VKS_NAMESPACE
+   cd vks-airgap-cicd
+   set -a; . ./.env; set +a
 
-   export VCF_CLI_VSPHERE_PASSWORD='<your SSO password>'   # else it prompts; see the note below
+   export VCF_CLI_VSPHERE_PASSWORD='<your SSO password>'
 
    vcf context create "$VKS_CONTEXT_NAME" --endpoint "$SUPERVISOR_HOST" \
        --ca-certificate ./secrets/supervisor-ca.crt \
@@ -386,32 +357,22 @@ The GitOps engine, running on the Supervisor.
    vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"      # note the <ctx>:<ns> colon form
    ```
 
-   ⚠️ **`--username` is not optional in practice.** Without it `vcf` stops and asks
-   `? Provide Username:`, and in anything non-interactive (a script, a container, a piped shell)
-   that is an immediate `[x] : EOF` — measured on a clean Ubuntu container against a live
-   Supervisor. `$VKS_USERNAME` is already loaded by the `set -a; . ./.env` line above, and
-   `make vks-login` passes exactly these flags for you.
+   ⚠️ **`--username` is not optional.** Without it `vcf` asks `? Provide Username:` and dies
+   `[x] : EOF` in anything non-interactive.
 
-   The **password** is read from `VCF_CLI_VSPHERE_PASSWORD`; without it you get a prompt. Do **not**
-   use `vcf config set env.VCF_CLI_VSPHERE_PASSWORD` — it writes your SSO password in plaintext to
-   `~/.config/vcf/config.yaml`, outside this repo and outside every secret scan, and it survives
-   every teardown here.
+   ⚠️ **Do not** use `vcf config set env.VCF_CLI_VSPHERE_PASSWORD` — it writes your SSO password in
+   plaintext to `~/.config/vcf/config.yaml`, outside this repo and every secret scan.
 
-   `vcf context use` can print an error about a "system Harbor registry" **and still have
-   worked** — judge it by the next command, not its exit code.
+   `vcf context use` can print a "system Harbor registry" error **and still have worked** — judge it
+   by the next command, not its exit code.
 
-5. **Did 3.2 stop before the instance** because there was no kubeconfig yet? Run it again now —
-   it is idempotent and will create the instance this time:
+5. **Did 3.2 stop before the instance?** Run `make install-argocd-service` again.
+
+6. **Get its address and initial login:**
 
    ```bash
-   make install-argocd-service
-   ```
-
-6. Get its address, then read the initial admin login that ArgoCD generated.
-
-   ```bash
-   kubectl get svc -n <that namespace>                     # argocd-server -> EXTERNAL-IP
-   kubectl get secret -n <that namespace> argocd-initial-admin-secret \
+   kubectl get svc -n "$ARGOCD_NAMESPACE"                     # argocd-server -> EXTERNAL-IP
+   kubectl get secret -n "$ARGOCD_NAMESPACE" argocd-initial-admin-secret \
      -o jsonpath='{.data.password}' | base64 -d; echo
    argocd login <EXTERNAL-IP>
    argocd account update-password
@@ -423,26 +384,23 @@ The GitOps engine, running on the Supervisor.
 
 | key | example | how to get the value |
 |---|---|---|
-| `ARGOCD_NAMESPACE` | `lab` | the namespace your ArgoCD **instance** runs in. **Discover it — do not assume:** `kubectl get argocd -A` (on one real lab this was `lab`, not the namespace named in 3.1). Steps 8, 9 and 12 have no fallback for it. |
-| `VKS_AUTH_METHOD` | `vcf` | **set this to `vcf` now.** It selects how you log in, and `vcf` is the Supervisor login this step is doing. Step 4 changes it to `kubeconfig`. |
+| `ARGOCD_NAMESPACE` | `lab` | **discover it, do not assume:** `kubectl get argocd -A`. Steps 8, 9 and 12 have no fallback. |
+| `VKS_AUTH_METHOD` | `vcf` | set to `vcf` now; Step 4 changes it to `kubeconfig`. |
 
-<details><summary>Optional — both have working defaults. Skip unless yours differ.</summary>
+<details><summary>Optional — both have working defaults.</summary>
 
-| key | default | example | how to get the value |
-|---|---|---|---|
-| `ARGOCD_SERVER` | *(unset — probes skip)* | `192.168.101.131` | the `argocd-server` EXTERNAL-IP from 3.6. Only used for display and reachability probes; nothing requires it. |
-| `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | `./secrets/supervisor-ca.crt` | the file 3.3 created — the default is already that path, so set it only if you moved it. |
+| key | default | how to get the value |
+|---|---|---|
+| `ARGOCD_SERVER` | *(unset — probes skip)* | the `argocd-server` EXTERNAL-IP. Display and probes only. |
+| `VKS_CA_CERT_FILE` | `./secrets/supervisor-ca.crt` | what 3.3 wrote. Set it only if you moved it. |
 
 </details>
 
-Log in, which writes the Supervisor kubeconfig every later step reads:
-
 ```bash
-cd vks-airgap-cicd
 make vks-login                # writes ./secrets/supervisor.kubeconfig
 ```
 
-**Expect:** `./secrets/supervisor.kubeconfig` exists. Step 1b's namespace check and Step 4 both need it.
+**Expect:** `./secrets/supervisor.kubeconfig` exists.
 
 ---
 

@@ -72,6 +72,27 @@ make vks-login            # writes ./secrets/supervisor.kubeconfig, which labbox
 make labbox
 ```
 
+## `make walkbox` — the WHOLE runbook, on a throwaway VM
+
+`jumpbox`/`labbox` validate the **bootstrap** in a container. They cannot run the whole runbook:
+`install-all` → `builder-image` does a `podman build`, and a container has no subuid range to map
+uids into (measured: `insufficient UIDs or GIDs available in user namespace`, `/etc/subuid` empty).
+On a VM that same step prints `builder images pushed + verified: 1`.
+
+```bash
+make walkbox            # build a throwaway VM, run docs/scenario-1.md on it end to end (~40 min)
+make walkbox-down       # destroy it
+```
+
+- **It refuses any domain it did not create.** Every destructive verb is gated on a
+  `vks-walkbox-managed` marker in the domain XML — `virsh destroy` is a forced power-cut and this
+  libvirt connection also hosts the lab's nested ESXi.
+- **Its lab address is DERIVED from the lab's `input.yaml` ranges**, never hardcoded. A prototype
+  that hardcoded one sat inside the live `workload_node` pool, one address ahead of the allocator.
+- `WALKBOX_SUDO` selects the sudo posture. The default is faster and re-hides the very class the
+  VM exists to expose; the other setting makes sudo ask, which is what a real jump box does.
+- **Nothing lands in `$HOME`** — images live in `/var/tmp/walkbox-<user>`, so no ACL and no pool.
+
 Three design points, each measured — see `CLAUDE.md` for the evidence:
 
 - **`--network host`, never `--add-host`.** Pinned host entries rot on every reinstall, and a hosts

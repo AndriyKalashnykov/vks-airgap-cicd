@@ -548,6 +548,13 @@ creds-show: ## Print the access summary (URLs + logins) for the current context
 	@$(SCRIPTS)/creds.sh
 creds: creds-show  ## Alias for creds-show (back-compat)
 
+.PHONY: walkbox walkbox-down
+walkbox: ## Run docs/scenario-1.md END TO END on a real throwaway VM (a container cannot: no subuid for builder-image)
+	@$(SCRIPTS)/walkbox.sh up
+
+walkbox-down: ## Destroy the walkbox VM (marker-guarded: it refuses any domain it did not create)
+	@$(SCRIPTS)/walkbox.sh down
+
 .PHONY: shell-init
 shell-init: ## Put the pinned toolchain on YOUR interactive shell's PATH, permanently (detects bash/zsh/fish/ksh)
 	@$(SCRIPTS)/shell-init.sh
