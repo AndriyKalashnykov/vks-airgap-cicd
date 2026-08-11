@@ -101,7 +101,18 @@ jobs:
   # Composite code gate: check-env + lint + validate + app-test (Java 25 via mise).
   static-check:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    # ⚠️ DISABLED on request 2026-08-11. It was 2m44s of a 3m03s run — see the profile in
+    # PR #524/#525: shellcheck 46s, test-scripts 40s (now ~30s), trivy 32s, go 20s, java 11s.
+    # The job is left in the graph (and in ci-pass's `needs`) so re-enabling is ONE line:
+    # restore `needs.changes.outputs.code == 'true'`.
+    #
+    # WHAT YOU LOSE WHILE IT IS OFF — ci-pass's condition is only
+    #   contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+    # and a SKIPPED job is neither, so ci-pass stays GREEN with none of this having run:
+    # the alignment gates, lint (shellcheck/yamllint/hadolint), validate (kubeconform),
+    # sec (gitleaks + trivy-fs + trivy-config), the script unit tests, and the app build+tests.
+    # `make static-check` locally is unaffected and still runs all of it.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
