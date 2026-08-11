@@ -86,7 +86,11 @@ run kubectl -n "$TRAEFIK_NAMESPACE" rollout status deploy/traefik \
 # 70-configure-argocd.sh:362 and lib/istio.sh:278,284 use for the same namespaces, and
 # `kubectl label --overwrite` does not care who ran first. ArgoCD adopts an existing namespace by
 # design, so pre-creating it does not disturb CreateNamespace=true.
-for ns in "$GITEA_NAMESPACE" $(app_names | tr '\n' ' '); do
+# NOTE: no `| tr '\n' ' '` — word-splitting an unquoted $( ) already splits on newline, and `tr` is
+# NOT present on a bare photon:5.0 (no coreutils). With `tr` absent the substitution would be EMPTY,
+# so this loop would run ONCE for gitea and silently never ensure_namespace a single app namespace —
+# on a PSA-enforcing lab ArgoCD would then create them unlabelled. Measured 2026-08-10.
+for ns in "$GITEA_NAMESPACE" $(app_names); do
   if [ "$ns" = "$GITEA_NAMESPACE" ]; then
     ensure_namespace "$ns" "${PSA_LEVEL_GITEA:-restricted}"
   else

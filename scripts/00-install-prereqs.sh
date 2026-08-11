@@ -17,7 +17,32 @@ load_env
 
 BIN_DIR="${BIN_DIR:-${HOME}/.local/bin}"
 mkdir -p "$BIN_DIR"
-case ":$PATH:" in *":$BIN_DIR:"*) : ;; *) log_warn "add $BIN_DIR to your PATH" ;; esac
+# PREPEND, do not merely warn. MEASURED 2026-08-10 on bare photon:5.0: this script installs mise to
+# BIN_DIR and the pinned tools under mise's tree, then its OWN summary loop below reported
+# `crane MISSING kubectl MISSING helm MISSING ...` for tools it had just installed — because none of
+# them are on PATH in THIS process. The operator then read `make check-tools`, was told
+# "Install the toolchain with: make deps", and was in a loop on the first command of the runbook.
+# A warning that the reader is not in a position to act on, printed 200 lines above the failure it
+# predicts, is not a remedy. The Makefile prepends the same dirs for every RECIPE, but it cannot
+# help here: its PATH is computed at parse time, before `mise trust` has run.
+case ":$PATH:" in *":$BIN_DIR:"*) : ;; *) PATH="$BIN_DIR:$PATH"; export PATH ;; esac
+# ...and the mise install tree, resolving mise by absolute path (it is in BIN_DIR, which was not on
+# PATH a moment ago). `mise bin-paths` exits 1 with EMPTY stdout against an untrusted .mise.toml, so
+# the guard is on the OUTPUT being non-empty, not on the exit status. No `tr`: photon:5.0 ships no
+# coreutils (it arrives only as a side effect of installing podman), so `tr` cannot be assumed here.
+if ! have mise && [ -x "${BIN_DIR}/mise" ]; then
+  _mp="$( (cd "$REPO_ROOT" && "${BIN_DIR}/mise" bin-paths) 2>/dev/null || true)"
+  if [ -n "$_mp" ]; then
+    while IFS= read -r _d || [ -n "${_d:-}" ]; do
+      [ -n "$_d" ] || continue
+      case ":$PATH:" in *":$_d:"*) : ;; *) PATH="$_d:$PATH" ;; esac
+    done <<EOF
+$_mp
+EOF
+    export PATH
+  fi
+  unset _mp _d
+fi
 
 log_info "detected OS: $(os_id) (pkg manager: $(pkg_mgr))"
 
@@ -54,7 +79,13 @@ esac
 # Supervisor's VMCA root only as certs/download.zip, and the Supervisor presents just its leaf, so
 # there is no way to obtain that anchor without unzipping. A remedy that names a binary we never
 # install is the same defect as a remedy that names a target that does not exist.
-pkg_install ca-certificates curl file git jq tar gzip unzip findutils gawk openssl "$GETTEXT_PKG"
+# `coreutils` is EXPLICIT and load-bearing, not decoration. MEASURED 2026-08-10: photon:5.0 ships no
+# `tr`, `sha256sum` or `paste`, and this list did not install it — it arrived only as a TRANSITIVE
+# side effect of installing podman/docker, pinned by nothing. 19 call sites across scripts/lib depend
+# on `tr` alone (state.sh, mirror.sh, tls.sh, istio.sh, os.sh), and 11-bundle.sh's integrity check
+# needs sha256sum. A box provisioned without the engine packages passed every earlier check and then
+# printed `tr: command not found` from lib/state.sh on the operator's very first command.
+pkg_install ca-certificates coreutils curl file git jq tar gzip unzip findutils gawk openssl "$GETTEXT_PKG"
 # ---- container engine -----------------------------------------------------
 # THE INVARIANT, and it is the whole reason this block is shaped the way it is:
 #
@@ -179,4 +210,12 @@ log_info "prereqs installed. Versions:"
 for c in crane git jq kubectl helm kustomize yq tkn argocd; do
   if have "$c"; then printf '  %-9s %s\n' "$c" "$(command -v "$c")" >&2; else log_warn "  $c MISSING"; fi
 done
-log_info "done. If any tool is MISSING, ensure mise ran (make deps) and $BIN_DIR is on PATH."
+# The remedy must NOT be "run make deps" — the operator is reading this BECAUSE they just ran it.
+# Naming the command they just completed successfully is the loop this script's PATH prepend (top of
+# file) exists to break; if anything is still MISSING here it is a genuine install failure, and the
+# only thing left for the reader to do is make the tools reachable from their own INTERACTIVE shell,
+# which `make` cannot do for them.
+log_info "done."
+log_info "make targets resolve these automatically. For YOUR OWN shell, put them on PATH:"
+log_info "    export PATH=\"$BIN_DIR:\$PATH\"                            # this shell"
+log_info "    echo 'eval \"\$(mise activate bash)\"' >> ~/.bashrc      # permanently (or ~/.zshrc)"

@@ -159,8 +159,13 @@ if [ "$rc" -ne 0 ]; then
     # 10-mirror-pull.sh (require_internet); this is the same dead end, one script over.
     log_error "  These are OS PACKAGES. The bundle CANNOT carry them, and this box cannot download them."
     log_error "  Install them from your lab's INTERNAL package mirror, then re-run:"
-    log_error "      apt-get install -y git openssl gettext-base make gawk tar curl   # Debian/Ubuntu"
-    log_error "      tdnf install -y git openssl gettext make gawk tar curl           # Photon"
+    # coreutils is NOT optional here and was missing from this list: photon:5.0 ships no `tr`,
+    # `sha256sum` or `paste`, and 11-bundle.sh's integrity check + several per-app loops need them.
+    # It reaches an internet box by accident (podman/docker drag it in); the air-gap box never runs
+    # 00-install-prereqs.sh, so nothing else would ever put it there. CLAUDE.md's floor already
+    # listed it — this line, the one an operator copy-pastes, did not.
+    log_error "      apt-get install -y git openssl gettext-base make gawk tar curl coreutils  # Debian/Ubuntu"
+    log_error "      tdnf install -y git openssl gettext make gawk tar curl coreutils          # Photon"
     log_error "  (Do NOT run 'make deps' — it downloads from the internet.)"
   else
     log_error "  Install the toolchain with:  make deps    (mise + scripts/00-install-prereqs.sh)"
