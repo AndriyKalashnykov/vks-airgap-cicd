@@ -47,8 +47,7 @@ Internet-only? Use [the sneakernet flow](sneakernet.md) instead; it replaces Ste
 
 Everything below runs **from the repo root**. Nothing works from another directory.
 
-A stock Ubuntu or Photon box has neither `git` nor `make`. Ubuntu has no `curl` either, and
-`make deps` needs it. Install them first.
+A stock box has neither `git` nor `make`, and `make deps` needs `curl`.
 
 **Ubuntu / Debian:**
 
@@ -56,11 +55,8 @@ A stock Ubuntu or Photon box has neither `git` nor `make`. Ubuntu has no `curl` 
 sudo apt-get update && sudo apt-get install -y --no-install-recommends git make curl ca-certificates
 ```
 
-**Photon OS 5** — `openssh openssh-socket` are in this list deliberately, and both are required.
-The transaction upgrades `openssl-libs`, and Photon 5.0's `openssh-9.1p1` refuses to start against a
-different OpenSSL minor; upgrading `openssh` alone then *removes* `sshd.socket` and `sshd@.service`,
-which moved to `openssh-socket`. Either way you lose SSH to this box and cannot reconnect. Measured
-on a fresh VM: with both, all four units survive and the session stays up through the upgrade.
+**Photon OS 5** — `openssh openssh-socket` are both required. Without them this box loses SSH
+during the install and you cannot reconnect.
 
 ```bash
 sudo tdnf install -y git make curl curl-libs ca-certificates openssh openssh-socket
@@ -157,29 +153,18 @@ make check-tools              # what you have, what is missing
 
 ### Put the toolchain on YOUR shell's PATH
 
-`make` finds these tools by itself, so every `make …` below works right now. The commands that are
-**not** `make` — `kubectl`, `vcf`, `argocd` — run in *your* shell, which cannot see
-them yet: `make deps` installs into `~/.local/bin` and a `mise` tree, and neither is on a fresh
-box's PATH. Skipping this gives you `kubectl: command not found` at the very next step.
+Every `make …` below works already. The commands that are **not** `make` — `kubectl`, `vcf`,
+`argocd` — run in *your* shell, which cannot see them yet.
 
 ```bash
-make shell-init        # permanent — detects your shell and edits the right file
-source ~/.bashrc       # this shell, right now — shell-init prints the exact file for your shell
+make shell-init        # permanent — detects your shell and writes to its rc file
+source ~/.bashrc       # this shell now; shell-init prints the exact file for your shell
 ```
 
-`make shell-init` works out whether you are on bash, zsh, fish or ksh and writes to *that* shell's
-rc file — you are not asked to choose. It is idempotent, and it refuses rather than guessing if it
-cannot identify your shell. On an OS that ships no `~/.bash_profile` or `~/.profile` (PhotonOS is
-one) it also creates `~/.bash_profile`, because a **login** bash never reads `~/.bashrc` by itself —
-without that, an SSH session keeps saying `command not found` no matter what is in `~/.bashrc`.
+Both lines are needed: a bare `export PATH=…` finds `mise`, not the tools it manages.
 
 **Expect:** `kubectl version --client` answers **in this shell** (and `vcf version`, after
-`make install-vcf-clis`). Verified on PhotonOS and Ubuntu, for bash and zsh.
-
-`export PATH="$HOME/.local/bin:$PATH"` is **not** enough on its own: it finds `mise`, not the tools
-mise manages. `shell-init` writes two lines to your rc file — that PATH entry *and*
-`eval "$(mise activate bash)"` — and only the second puts `kubectl` in reach. Sourcing the rc file
-gets you both.
+`make install-vcf-clis`).
 
 ---
 
@@ -305,19 +290,14 @@ make install-harbor-service
 make show-dns-records          # the exact A records to create, with their live LoadBalancer IPs
 ```
 
-⚠️ **A fresh install gets a NEW LoadBalancer IP.** If `harbor.<your domain>` existed before, its A
-record now points at the *old* one, and every later step fails against a name that resolves to
-nothing serving. MEASURED: DNS said `…135` while the new Harbor was on `…141`; Step 8 hung for 129s,
-`make harbor-robot` for 262s, and neither error mentioned DNS. Create or update the A record from
-`show-dns-records` above, then confirm it took:
+⚠️ **Reinstalling?** The LoadBalancer IP changes — update the A record, then:
 
 ```bash
-make lab-preflight     # among other things: does HARBOR_URL actually SERVE?
+make lab-preflight
 ```
 
-**Expect:** `Harbor answers at <your host>`. If it says `NOTHING is serving there`, the A record is
-still pointing at the previous install. `make install-all` runs this for you, so a wrong record stops
-the run in seconds instead of after the ~20-minute mirror.
+**Expect:** `Harbor answers at <your host>`. `NOTHING is serving there` means the record is still on
+the old address. *(`install-all` runs this for you.)*
 
 **Expect:** `7 secrets generated, 0 placeholders left`, then `install issued for
 harbor.tanzu.vmware.com`. It registers the service, installs it behind an NGINX LoadBalancer and
@@ -478,16 +458,8 @@ vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"
 vcf cluster kubeconfig get "$VKS_CLUSTER_NAME" --export-file "./secrets/${VKS_CLUSTER_NAME}.kubeconfig"
 ```
 
-This fallback is the one part of Step 6 that has failed on real labs, twice, in two different ways:
-
-- MEASURED 2026-08-09: `Error: failed to get pinniped-info from management cluster`.
-- MEASURED 2026-08-11: `failed to discover plugin sources from the system Harbor registry: the
-  system Harbor registry could not be discovered from the Supervisor cluster`. The `vcf` CLI is
-  plugin-based and resolves its plugins through a registry the Supervisor advertises; when that is
-  absent the `cluster` subcommand cannot run at all. It is unrelated to *your* Harbor.
-
-In both cases the Secret route above worked. If you have a Supervisor kubeconfig, use it — it is the
-same credential, and it does not go through the CLI's plugin machinery.
+If this errors (`pinniped-info`, or `plugin sources from the system Harbor registry`), use the
+Secret route above instead — it is the same credential.
 </details>
 
 | key | example | how to get the value |
@@ -556,15 +528,10 @@ chmod 0644 ./secrets/harbor-ca.crt 2>/dev/null
 openssl x509 -in ./secrets/harbor-ca.crt -noout -subject     # expect: CN = Harbor CA
 ```
 
-`--max-time`, `--fail` and `-o` are all load-bearing, and MEASURED. Without the first two an
-unreachable Harbor makes `curl` hang **129 seconds**; with them it gives up in 21. But `> file`
-truncates *before* `curl` runs, so a failed fetch still leaves an **empty file** and `openssl` still
-says *"Could not read certificate"* — naming the file rather than the reason. `-o` plus removing the
-file on failure is what makes the error say what actually went wrong.
+If it prints *"Harbor is not reachable"*, fix the A record before continuing.
 
-If the `curl` itself fails, **Harbor is not reachable at that name** — go back to Step 4 and check
-the A record against `make show-dns-records`. Only if `curl` succeeds and `openssl` then errors does
-it mean this Harbor does not publish its CA there; use one of the alternatives below.
+If `openssl` errors *after* a successful `curl`, this Harbor does not publish its CA there — use one
+of the alternatives below.
 
 Then **check it against a digest you got from whoever runs Harbor**, over some other channel —
 `-k` above means you fetched it over a connection you could not yet verify:
@@ -665,10 +632,8 @@ make verify           # pushes a marked change and follows it to the running app
 **Expect:** `env-validate` reports Harbor reachable **and authenticated**; `install-all` completes;
 `make verify` exits **0** for every app. *(**install-all 8–10 min**, **verify 3–4 min**)*
 
-`install-all` starts with a read-only `lab-preflight`, so anything the lab is missing surfaces in the
-first seconds rather than after the ~20-minute mirror. The one it catches most often is **no default
-StorageClass** — a guest cluster can have four and mark none, and Gitea's PVC would then sit Pending
-forever with an error that never mentions storage. It prints the fix; run it and re-run `install-all`:
+`install-all` begins with `lab-preflight`, which stops in the first seconds on anything the lab is
+missing. Most often: **no default StorageClass**. Fix it and re-run `install-all`:
 
 ```bash
 kubectl get storageclass                                                    # pick one
