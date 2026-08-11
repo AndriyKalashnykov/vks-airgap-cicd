@@ -154,6 +154,33 @@ jobs:
           key: maven-${{ hashFiles('apps/**/pom.xml') }}
           restore-keys: maven-
 
+      # GO BUILD + MODULE CACHE. Maven had a cache and Go had NONE, and the asymmetry is the whole
+      # reason Go cost ~2x Java in this job. MEASURED on run 31451956799 (a scripts/docs-only PR):
+      #   go build 11s + go vet/go test 9s = 20s   vs   mvn package 4s + mvn test 7s = 11s
+      # with GOCACHE and GOMODCACHE cold on every single run, so the stdlib is recompiled each time.
+      #
+      # Unlike the trivy-DB cache (deliberately DROPPED above, and left dropped), this one cannot go
+      # stale in a correctness sense: Go's build cache is CONTENT-ADDRESSED — an entry is keyed by the
+      # hash of its inputs, so a changed source or toolchain simply misses and rebuilds. There is no
+      # "serves an old answer" failure mode to trade against.
+      #
+      # WHAT IS ACTUALLY BEING CACHED: gowebapp is STDLIB-ONLY — go.mod has zero `require` lines and
+      # there is NO go.sum — so GOMODCACHE is empty and the 11s is entirely the CGO_ENABLED=0 stdlib
+      # compile. That is precisely what ~/.cache/go-build holds. ~/go/pkg/mod is listed anyway so the
+      # cache keeps working the day a dependency is added; today it contributes nothing.
+      # Key on the toolchain pin + go.mod (go.sum does not exist, and hashFiles tolerates a
+      # non-matching pattern): a Go version bump or a dep change must invalidate it.
+      - name: Cache Go build + modules
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ hashFiles('.mise.toml') }}-${{ hashFiles('apps/**/go.mod', 'apps/**/go.sum') }}
+          restore-keys: |
+            go-${{ hashFiles('.mise.toml') }}-
+            go-
+
       - name: make static-check
         run: make static-check
 
