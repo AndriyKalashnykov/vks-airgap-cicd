@@ -120,6 +120,122 @@ if [ "$ENGINE_CHOICE" = podman ] && have podman; then
       | $SUDO tee -a /etc/containers/registries.conf >/dev/null \
       || log_warn "could not write /etc/containers/registries.conf — short image names may not resolve"
   fi
+
+  # ── ROOTLESS PODMAN PREREQUISITES ─────────────────────────────────────────────────────────────
+  # MEASURED on a fresh Photon OS 5.0 VM 2026-08-11: kernel.unprivileged_userns_clone=0 AND
+  # /etc/subuid ABSENT — so podman, this repo's DEFAULT engine, could not build at all. Before
+  # engine-check was wired into preflight the failure surfaced ~528s into `make install-all`, at
+  # builder-image: "user namespaces are not enabled in /proc/sys/kernel/unprivileged_userns_clone".
+  #
+  # ⚠️ NO CONTAINER TEST CAN SEE THIS. `kernel.*` sysctls are not namespaced, so a Photon CONTAINER
+  # reads the HOST's value (measured 1 on an Ubuntu host, never Photon's 0), and
+  # jumpbox/Dockerfile.photon pre-writes /etc/subuid. Only a real VM observes either.
+  #
+  # ROOT NEEDS NEITHER. Running as root and granting "root" a subuid range PERMANENTLY POISONS the
+  # block for the real operator: run 1 as root writes root:100000:65536, run 2 as the operator then
+  # collides with it and refuses. And docs/scenario-1.md says "Prefix with sudo if you are not root",
+  # so that path is normal, not exotic. Skip the whole stanza. (ran-it, adversary round 2026-08-11)
+  if [ "$(id -u)" -eq 0 ]; then
+    log_info "running as root — rootless-podman subuid/userns setup does not apply"
+  else
+
+  userns_file=/proc/sys/kernel/unprivileged_userns_clone
+  userns_drop=/etc/sysctl.d/99-vks-userns.conf
+  if [ -e "$userns_file" ]; then
+    # PERSISTENCE IS A SEPARATE GOAL FROM THE LIVE VALUE. Gating only on "reads 0" means a box where
+    # someone ran `sysctl -w` is skipped, no drop-in is written, and the next reboot reproduces the
+    # original 20-minute builder-image failure. So: write the drop-in whenever it is missing, and
+    # reload only when the live value is actually 0.
+    if [ ! -f "$userns_drop" ]; then
+      $SUDO mkdir -p /etc/sysctl.d 2>/dev/null || true   # absent on a bare photon image (measured)
+      printf 'kernel.unprivileged_userns_clone=1\n' | $SUDO tee "$userns_drop" >/dev/null \
+        || log_warn "could not write ${userns_drop} — the setting will not survive a reboot"
+    fi
+    if [ "$(cat "$userns_file" 2>/dev/null || echo 1)" = 0 ]; then
+      log_warn "kernel.unprivileged_userns_clone=0 — rootless podman cannot create a user namespace."
+      log_warn "  Enabling it SYSTEM-WIDE (every account on this box). Photon ships this off by policy."
+      log_warn "  To undo:  sudo rm ${userns_drop} && sudo sysctl -w kernel.unprivileged_userns_clone=0"
+      # The NARROW form first (an explicit file), --system only as a fallback: --system reloads EVERY
+      # config file, which on a box whose live values have drifted from its files has side effects we
+      # did not ask for. Never BARE `sysctl -p` — with no argument it reads only /etc/sysctl.conf.
+      $SUDO sysctl -p "$userns_drop" >/dev/null 2>&1 \
+        || $SUDO sysctl --system >/dev/null 2>&1 \
+        || $SUDO sh -c "echo 1 > $userns_file" 2>/dev/null || true
+      # Read the VALUE back. An exit code proves nothing here.
+      if [ "$(cat "$userns_file" 2>/dev/null || echo 0)" = 1 ]; then
+        log_info "  unprivileged_userns_clone is now 1"
+      else
+        log_warn "  STILL 0 — rootless podman will fail. Apply it by hand, then 'make engine-check'."
+      fi
+    fi
+  fi
+
+  # subuid/subgid. Checked and repaired INDEPENDENTLY: the two writes below can succeed and fail
+  # separately, and inferring subgid from subuid means a half-written box is skipped forever.
+  # getsubids consults NSS (a directory-joined box may hold ranges no file carries) — but it is
+  # MISSING on both bare photon:5.0 and ubuntu:26.04, and nothing in engine_packages installs it, so
+  # the file fallback is the path that actually runs on the OS this fix exists for.
+  subid_user="$(id -un)"
+  _has_subid() {  # $1=uid|gid  -> 0 if the user already has a range
+    case "$1" in
+      uid) have getsubids && getsubids    "$subid_user" >/dev/null 2>&1 && return 0
+           grep -qs "^${subid_user}:" /etc/subuid 2>/dev/null ;;
+      gid) have getsubids && getsubids -g "$subid_user" >/dev/null 2>&1 && return 0
+           grep -qs "^${subid_user}:" /etc/subgid 2>/dev/null ;;
+    esac
+  }
+  # NEXT FREE BLOCK, never a hardcoded 100000. MEASURED: ubuntu:26.04 ships
+  # `ubuntu:100000:65536` and /etc/login.defs SUB_UID_MIN=100000 — i.e. the block everyone
+  # allocates first. Hardcoding it makes a COLLISION the common case, and refusing then leaves
+  # rootless podman broken for an operator who did nothing wrong.
+  _next_subid() {  # $1=file -> first free start, or empty if we cannot tell
+    [ -f "$1" ] || { printf '100000'; return 0; }
+    awk -F: 'NF>=3 && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { e=$2+$3; if (e>m) m=e }
+             END { print (m < 100000 ? 100000 : m) }' "$1" 2>/dev/null
+  }
+  _grant_subid() {  # $1=file  $2=uid|gid  -> echoes 1 if it wrote
+    local f="$1" start
+    _has_subid "$2" && { log_info "subuid/subgid: ${subid_user} already has a ${2} range"; return 1; }
+    # FAIL CLOSED. `x="$(awk ... 2>/dev/null)"` maps a missing awk, an awk error and an unreadable
+    # file to the SAME empty string as "no clash" — so an empty result must REFUSE, not proceed.
+    start="$(_next_subid "$f")"
+    case "$start" in ''|*[!0-9]*)
+      log_warn "cannot determine a free subid range from ${f} — REFUSING to write one."
+      log_warn "  Add a non-overlapping range by hand, then re-run 'make deps'."
+      return 1 ;;
+    esac
+    log_info "granting ${subid_user} ${start}:65536 in ${f}"
+    log_warn "  To undo:  sudo sed -i '/^${subid_user}:${start}:65536\$/d' ${f}"
+    printf '%s:%s:65536\n' "$subid_user" "$start" | $SUDO tee -a "$f" >/dev/null || return 1
+    return 0
+  }
+  subid_wrote=0
+  _grant_subid /etc/subuid uid && subid_wrote=1
+  _grant_subid /etc/subgid gid && subid_wrote=1
+  # ONLY when we actually wrote. podman keeps a pause process pinning the OLD mapping and migrate is
+  # what clears it — but it also STOPS the user's running containers, so running it after a FAILED
+  # write (or a no-op) costs the operator their containers for a change that did not happen.
+  if [ "$subid_wrote" = 1 ]; then
+    log_warn "  running 'podman system migrate' — this STOPS running containers (images are kept)"
+    podman system migrate >/dev/null 2>&1 || log_warn "  'podman system migrate' failed — run it by hand"
+  fi
+
+  # VERIFY BY HANDSHAKE, not by reading a file back: the thing that must be true for a build that
+  # chowns is a WIDE uid_map (the measured failure was `requested 0:42 for /etc/shadow`, a MAPPING
+  # failure). The else branch matters most — it is the state you reach when a write failed.
+  if uidmap="$(podman unshare cat /proc/self/uid_map 2>&1)"; then
+    if printf '%s\n' "$uidmap" | awk 'NF>=3 && $3+0 >= 65536 {f=1} END{exit !f}'; then
+      log_info "rootless podman: uid_map carries a 65536-wide range — builds can chown"
+    else
+      log_warn "rootless podman: uid_map has NO wide range — a build that chowns will still fail."
+      log_warn "  Run 'make engine-check' for the remedy."
+    fi
+  else
+    log_warn "rootless podman is NOT usable yet — 'podman unshare' failed:"
+    log_warn "  ${uidmap}"
+  fi
+  unset userns_file userns_drop subid_user subid_wrote uidmap
+  fi
 fi
 
 # UBUNTU ROOTLESS-DOCKER RELEASE SPLIT (ran-it, 2026-07-14). docker.io is version 29.1.3 on BOTH 24.04
