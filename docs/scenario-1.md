@@ -293,7 +293,7 @@ make show-dns-records          # the exact A records to create, with their live 
 ⚠️ **Reinstalling?** The LoadBalancer IP changes — update the A record, then:
 
 ```bash
-make lab-preflight
+make harbor-reachable
 ```
 
 **Expect:** `Harbor answers at <your host>`. `NOTHING is serving there` means the record is still on
