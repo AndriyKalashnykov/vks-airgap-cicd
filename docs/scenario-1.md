@@ -161,8 +161,8 @@ them yet: `make deps` installs into `~/.local/bin` and a `mise` tree, and neithe
 box's PATH. Skipping this gives you `kubectl: command not found` at the very next step.
 
 ```bash
-make shell-init                        # permanent — detects your shell and edits the right file
-export PATH="$HOME/.local/bin:$PATH"   # this shell, right now (shell-init applies to NEW ones)
+make shell-init        # permanent — detects your shell and edits the right file
+source ~/.bashrc       # this shell, right now — shell-init prints the exact file for your shell
 ```
 
 `make shell-init` works out whether you are on bash, zsh, fish or ksh and writes to *that* shell's
@@ -171,8 +171,13 @@ cannot identify your shell. On an OS that ships no `~/.bash_profile` or `~/.prof
 one) it also creates `~/.bash_profile`, because a **login** bash never reads `~/.bashrc` by itself —
 without that, an SSH session keeps saying `command not found` no matter what is in `~/.bashrc`.
 
-**Expect:** in a **new** shell, `kubectl version --client` answers (and `vcf version`, after
+**Expect:** `kubectl version --client` answers **in this shell** (and `vcf version`, after
 `make install-vcf-clis`). Verified on PhotonOS and Ubuntu, for bash and zsh.
+
+`export PATH="$HOME/.local/bin:$PATH"` is **not** enough on its own: it finds `mise`, not the tools
+mise manages. `shell-init` writes two lines to your rc file — that PATH entry *and*
+`eval "$(mise activate bash)"` — and only the second puts `kubectl` in reach. Sourcing the rc file
+gets you both.
 
 ---
 
