@@ -29,6 +29,16 @@ require_cmd jq
 ROBOT_NAME="${HARBOR_ROBOT_NAME:-vks-cicd}"
 OUT_FILE="${HARBOR_ROBOT_OUT:-secrets/harbor-robot.env}"
 
+# Step 9 tells the operator to copy this robot into .env as HARBOR_USERNAME. If they then re-run
+# this target, we authenticate AS THE ROBOT -- and a robot cannot create robots. harbor_is_sysadmin
+# gets 412, returns 1, and the script dies with "you are NOT a Harbor system administrator", which
+# is false: they are, their .env just no longer says so. Name the real cause.
+case "${HARBOR_USERNAME:-}" in
+  'robot$'*) die "HARBOR_USERNAME is '${HARBOR_USERNAME}', a ROBOT — and a robot cannot mint robots.
+       This is the credential Step 9 told you to save, so this is the expected state after a first run.
+       Set HARBOR_USERNAME/HARBOR_PASSWORD back to the Harbor ADMIN for this one command." ;;
+esac
+
 HARBOR_TMP="$(mktemp -d)"; trap 'rm -rf "$HARBOR_TMP"' EXIT
 harbor_setup "$HARBOR_TMP"
 
@@ -110,6 +120,19 @@ EOF
   die "cannot create a robot that spans two projects without Harbor system-admin."
 fi
 
+# The remedy DEPENDS ON WHETHER THE SECRET FILE IS HERE, and the old message assumed it was.
+# MEASURED on a fresh jump box: the robot existed (a PREVIOUS box minted it), $OUT_FILE did not,
+# and the error said "reuse the secret you saved earlier" -- immediately followed by
+# `cat: ./secrets/harbor-robot.env: No such file or directory`. An error that names an unavailable
+# remedy sends the operator to look for a file that was never there.
+robot_exists_message() {
+  if [ -f "$OUT_FILE" ]; then
+    printf "robot '%s' already exists, and %s is here — reuse it. Harbor shows a robot secret ONCE, so re-creating would hand you a credential that does not work." "$ROBOT_NAME" "$OUT_FILE"
+  else
+    printf "robot '%s' already exists but %s is NOT on this box — it was created elsewhere. Harbor shows a robot secret ONCE and cannot re-issue it, so there is nothing to read back. Either get the secret from whoever created it, or refresh it in the Harbor UI (Administration → Robot Accounts → Refresh Secret) and paste the new value into %s." "$ROBOT_NAME" "$OUT_FILE" "$OUT_FILE"
+  fi
+}
+
 resp="$(harbor_api_body POST robots "$payload")"
 
 secret="$(printf '%s' "$resp" | jq -r '.secret // empty')"
@@ -124,10 +147,10 @@ if [ -z "$secret" ] || [ -z "$rname" ]; then
     401|403)
       die "Harbor refused to create robot '$ROBOT_NAME' (http $(harbor_last_code)): you do not have permission. If you are a project-admin, you may only create a robot in a project you administer — see the guidance above."
       ;;
-    409) die "robot '$ROBOT_NAME' already exists — delete it in Harbor (Administration → Robot Accounts) to regenerate, or reuse the secret you saved earlier." ;;
+    409) die "$(robot_exists_message)" ;;
   esac
   case "$msg" in
-    *conflict*|*exists*|*already*) die "robot '$ROBOT_NAME' already exists — delete it in Harbor (Administration → Robot Accounts) to regenerate, or reuse the secret you saved earlier." ;;
+    *conflict*|*exists*|*already*) die "$(robot_exists_message)" ;;
     *) die "failed to create robot '$ROBOT_NAME' (http $(harbor_last_code)): $msg" ;;
   esac
 fi
