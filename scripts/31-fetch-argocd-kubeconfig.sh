@@ -28,6 +28,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"   # vks_ca_default() — shared with 30-vks-login.sh
 load_env
 
 require_cmd vcf "install the VCF Consumption CLI (make install-vcf-clis)"
