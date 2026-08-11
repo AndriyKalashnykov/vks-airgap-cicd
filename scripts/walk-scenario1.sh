@@ -45,7 +45,10 @@ note() { printf '\n\033[36m### %s\033[0m\n' "$*"; }
 if [ "$WALK_OS" = ubuntu ]; then
   step "0. Get the repo" "$SUDO apt-get update && $SUDO apt-get install -y --no-install-recommends git make curl ca-certificates"
 else
-  step "0. Get the repo" "$SUDO tdnf install -y git make"
+# curl MUST be in the SAME transaction as git: tdnf pulls git from photon-updates linked against
+# a newer libcurl while the image keeps curl-libs 8.0.1, and git-remote-https then dies with
+# `undefined symbol: curl_global_trace`. MEASURED on a fresh Photon 5.0 GCE image 2026-08-11.
+  step "0. Get the repo" "$SUDO tdnf install -y git make curl curl-libs ca-certificates"
 fi
 cd "$HOMEDIR" || exit 1
 step "0. Get the repo" "git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git"
