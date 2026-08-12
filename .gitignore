@@ -69,3 +69,6 @@ vks-airgap-cicd-bundle-*.tar.*
 # Python bytecode
 __pycache__/
 *.pyc
+
+# make deps drops this when either half fails, so check-tools can say "deps failed earlier"
+.deps-failed

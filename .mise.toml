@@ -72,3 +72,24 @@ uv       = "0.12.3"
 [settings]
 # Reproducible: never auto-bump; pin via this file + Renovate.
 experimental = true
+
+# ---- download resilience on a fresh jump box -------------------------------------------------
+# MEASURED, walk row 3 (2026-08-12): a cold `mise install` of this file died with
+#     mise ERROR Failed to install core:java@temurin-25.0.3+9.0.LTS:
+#       error sending request: http2 error: stream error received: refused stream
+# 13 of 17 tools had installed; ONLY java — the largest artifact — failed, while 8 downloads ran
+# concurrently. RFC 7540 REFUSED_STREAM means the server refused BEFORE processing, which is both
+# safe to retry AND the classic response to exceeding MAX_CONCURRENT_STREAMS.
+#
+# ⚠️ THE CONCURRENCY EXPLANATION IS A HYPOTHESIS AT ONE OPERATING POINT — one failure, one box, one
+# run. It is consistent with the error semantics and with only-the-largest-artifact failing, but it
+# is NOT established. Do not write it up as the cause without a second measurement at another jobs
+# value. These two settings are cheap either way: a jump-box toolchain install is a one-time cost,
+# and robustness beats speed there.
+#
+# BOTH ARE OVERRIDABLE PER RUN, and the environment WINS over this file (measured: file jobs=4 +
+# MISE_JOBS=2 -> `mise settings get jobs` = 2):
+#     MISE_JOBS=2 make deps            # fewer parallel downloads
+#     MISE_HTTP_RETRIES=8 make deps    # more in-connection retries
+jobs = 4          # was the default 8
+http_retries = 5  # was the default 3 — note mise ALREADY retried 3x before the failure above

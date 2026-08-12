@@ -173,7 +173,32 @@ help: ## Show this help
 
 ##@ Prerequisites
 .PHONY: deps deps-mise deps-prereqs
-deps: deps-mise deps-prereqs ## Install the full jump-box toolchain (mise tools + prereqs script)
+# ORDER IS LOAD-BEARING: the CHEAP, LOCAL OS floor first. deps-prereqs opens with pkg_install from
+# the host's package mirror (git, curl, openssl, gawk, tar, gzip, findutils, ca-certificates,
+# GETTEXT/envsubst) — the floor every later step needs — and deps-mise is 18 pinned downloads
+# including a ~200MB JDK. MEASURED, walk row 3 (2026-08-12): with deps-mise FIRST, a transient
+# `http2 error: refused stream` on the JDK killed the run before the OS floor was ever installed;
+# check-tools then reported `MISSING REQUIRED: envsubst` and 17 blocks failed.
+# ⚠️ This swap ALONE does not fix it — 00-install-prereqs.sh:307 runs `mise install` a SECOND time
+# and used to be fatal, so the same failure just orphaned tkn/argocd/kubectl instead. That line is
+# now `|| log_warn`; the two changes only work together.
+deps: ## Install the full jump-box toolchain (OS floor first, then the mise tools)
+# NOT `deps: deps-prereqs deps-mise`. With prerequisites, make STOPS at the first failure — which is
+# exactly how one transient JDK download cost a whole walk row: the second half never ran, and the
+# operator was left without the half that had not failed. Here BOTH halves always run, the order is
+# still cheap-floor-first, and the exit status is non-zero if EITHER failed. A half-installed box is
+# a fact to report, not a reason to skip the rest of the install.
+	@rc=0; \
+	 $(MAKE) --no-print-directory deps-prereqs || { rc=1; echo "!! deps-prereqs FAILED (see above) - continuing to deps-mise anyway"; }; \
+	 $(MAKE) --no-print-directory deps-mise    || { rc=1; echo "!! deps-mise FAILED (see above)"; }; \
+	 if [ $$rc -ne 0 ]; then \
+	   : > "$(CURDIR)/.deps-failed"; \
+	   echo ""; \
+	   echo "make deps FAILED. The sentinel .deps-failed is set, so 'make check-tools' will tell you"; \
+	   echo "the toolchain is incomplete BECAUSE THIS FAILED - instead of sending you back here."; \
+	   exit 1; \
+	 fi; \
+	 rm -f "$(CURDIR)/.deps-failed"
 
 deps-mise: ## Install mise itself (if absent) + the mise-managed tools from .mise.toml (java, maven, kubectl, helm, trivy, ...)
 # This used to `exit 1` with "mise not found — install it first (see README → Prerequisites)" — while
@@ -188,7 +213,19 @@ deps-mise: ## Install mise itself (if absent) + the mise-managed tools from .mis
 	 fi; \
 	 MISE="$$(command -v mise 2>/dev/null || echo "$$HOME/.local/bin/mise")"; \
 	 [ -x "$$MISE" ] || { echo "mise still not found after install — install it manually: https://mise.jdx.dev/getting-started.html"; exit 1; }; \
-	 "$$MISE" trust "$(CURDIR)/.mise.toml"; "$$MISE" install; \
+	 "$$MISE" trust "$(CURDIR)/.mise.toml"; \
+	 if ! "$$MISE" install; then \
+	   echo ""; \
+	   echo "mise install failed. Retrying ONCE on a fresh connection."; \
+	   echo "  NOTE: this is attempt 2 of 2 — mise ALREADY retried 3x internally (http_retries=3),"; \
+	   echo "  so a repeat is more likely permanent (a bad pin or arch: look for '404 Not Found')"; \
+	   echo "  than transient (look for 'refused stream' / a timeout). A re-run is cheap: mise is"; \
+	   echo "  idempotent and only fetches what is missing (measured: 0.03s when satisfied)."; \
+	   echo "  MISE_JOBS=2 make deps   # if the error mentions http2/refused stream, fewer parallel"; \
+	   echo "                          # downloads may avoid it (UNPROVEN — one observation)"; \
+	   echo ""; \
+	   "$$MISE" install; \
+	 fi; \
 	 command -v mise >/dev/null 2>&1 || { \
 	   echo ""; \
 	   echo "NOTE: mise is installed at $$HOME/.local/bin/mise but is NOT on your PATH."; \

@@ -168,7 +168,18 @@ if [ "$rc" -ne 0 ]; then
     log_error "      tdnf install -y git openssl gettext make gawk tar curl coreutils          # Photon"
     log_error "  (Do NOT run 'make deps' — it downloads from the internet.)"
   else
-    log_error "  Install the toolchain with:  make deps    (mise + scripts/00-install-prereqs.sh)"
+    # ⚠️ NOT an unconditional "run make deps" — that sent five walk blocks to re-run the command
+    # that had just FAILED 30 seconds earlier (MEASURED, row 3 2026-08-12: mise died on a transient
+    # JDK download, so the OS floor never installed, and this line told the operator to run the
+    # thing that died). The pre-carry branch above already models the right idiom. The sentinel is
+    # dropped by `make deps` when either half fails.
+    if [ -f "${REPO_ROOT}/.deps-failed" ]; then
+      log_error "  'make deps' FAILED EARLIER IN THIS RUN — scroll up for the real error, do not"
+      log_error "  re-read this line as the remedy. If it was a transient download, re-run:  make deps"
+      log_error "  (mise is idempotent — it re-fetches only what is missing.)"
+    else
+      log_error "  Install the toolchain with:  make deps    (mise + scripts/00-install-prereqs.sh)"
+    fi
     log_error "  Is this the AIR-GAPPED sneakernet jump box, BEFORE 'make bundle-load'? Then crane/kubectl/"
     log_error "  helm/jq/yq are supposed to be absent — the bundle brings them. Re-run as:"
     log_error "      make check-tools CHECK_TOOLS_PHASE=pre-carry"

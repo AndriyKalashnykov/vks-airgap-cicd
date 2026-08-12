@@ -304,7 +304,17 @@ pkg_install shellcheck || log_warn "shellcheck unavailable via package manager; 
 # ---- mise-provided tools (java/maven/kubectl/helm/kustomize/yq) ------------
 if have mise; then
   log_info "mise present — ensuring toolchain from .mise.toml"
-  ( cd "$REPO_ROOT" && mise install )
+  # ⚠️ NON-FATAL, AND THAT IS THE WHOLE POINT. This is a DUPLICATE of what `deps-mise` already runs
+  # (Makefile: `deps: deps-prereqs deps-mise`), costing 0.028s when the toolchain is satisfied — so
+  # it is invisible in the happy path and lethal in the unhappy one. Under `set -euo pipefail` a
+  # failing subshell kills this script, orphaning EVERYTHING below: tkn, argocd, kubectl, and the
+  # summary that tells the operator what is missing and how to fix their PATH.
+  # MEASURED, walk row 3 (2026-08-12): mise died on a transient
+  #   `http2 error: stream error received: refused stream`  fetching temurin-25.0.3,
+  # and the box was left without envsubst — 17 blocks failed, and the guest cluster was never built.
+  # deps-mise is AUTHORITATIVE for the toolchain and reports the real failure; this line is a
+  # convenience for anyone running the script directly, and must never be able to end the run.
+  ( cd "$REPO_ROOT" && mise install ) || log_warn "mise install failed here — continuing; 'make deps' runs it again (deps-mise) and that one is authoritative"
 else
   log_warn "mise not found — kubectl/helm/kustomize/yq must be on PATH already or installed manually"
 fi
