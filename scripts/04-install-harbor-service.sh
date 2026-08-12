@@ -124,4 +124,7 @@ log_info "install issued for ${SVC_ID}"
 state_set HARBOR_PASSWORD "$H_ADMIN"
 state_set HARBOR_USERNAME admin
 log_info "published HARBOR_USERNAME/HARBOR_PASSWORD to the state overlay"
-log_info "next: watch it come up, then point DNS at its ingress IP - make harbor-service-status"
+# `make harbor-service-status` DOES NOT EXIST — this line named it for months and nobody ran it.
+# The real next step is to wait for the LoadBalancer ADDRESS, which is what the DNS record needs.
+log_info "next: wait for its LoadBalancer address, then create that A record:"
+log_info "        make show-dns-records DNS_RECORDS_WAIT_SECONDS=900"

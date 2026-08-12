@@ -294,7 +294,7 @@ The registry every image comes from.
 
 ```bash
 make install-harbor-service
-make show-dns-records          # the exact A records to create, with their live LoadBalancer IPs
+make show-dns-records DNS_RECORDS_WAIT_SECONDS=900   # waits for the LoadBalancer address, then prints the records
 ```
 
 **Expect:** `7 secrets generated, 0 placeholders left`, then `install issued for
