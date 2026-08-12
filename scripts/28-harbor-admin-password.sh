@@ -54,7 +54,7 @@ fi
 # The SAME chain 27-harbor-ca-from-cluster.sh uses, and VKS_SUPERVISOR_KUBECONFIG FIRST because that
 # is the name the WRITER (30-vks-login.sh) honours. Harbor is a SUPERVISOR Service: $KUBECONFIG from
 # Step 6 onward is the GUEST cluster, which has no harbor namespace at all.
-SUP="${VKS_SUPERVISOR_KUBECONFIG:-${SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}}"
+SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kubeconfig")"   # lib/os.sh: ONE resolver, first that EXISTS
 [ -f "$SUP" ] || die "no Supervisor kubeconfig at '$SUP' - run 'make vks-login' (scenario-1 Step 3) first.
   Harbor is a SUPERVISOR Service; the guest cluster has no harbor namespace."
 

@@ -43,15 +43,39 @@ load_env
 # resolve yet" -- a note, not a problem -- so a loop built on it would exit on the first pass and
 # declare Harbor reachable.
 WAIT="${HARBOR_REACHABLE_WAIT_SECONDS:-900}"
-if [ "$WAIT" -gt 0 ] && ! harbor_reachable_ok; then
-  printf '\n  waiting up to %ss for %s to answer (DNS + Harbor start; the document says ~10 min) ...\n' \
-    "$WAIT" "${HARBOR_URL:-<unset>}" >&2
-  _w=0
-  while [ "$_w" -lt "$WAIT" ]; do
-    sleep 15; _w=$((_w + 15))
-    harbor_reachable_ok && break
-    [ $((_w % 60)) = 0 ] && printf '  still waiting (%s/%ss) ...\n' "$_w" "$WAIT" >&2
-  done
+# WHOLE SECONDS. `15m` is the plausible typo precisely because the document speaks in minutes, and
+# without this it produced `[: 15m: integer expression expected` on stderr, SKIPPED the wait, and
+# exited 0 -- i.e. silently restored the exact behaviour the wait was added to fix. `set -e` cannot
+# catch it: the `[` is inside an `if` condition, where set -e is suspended.
+case "$WAIT" in
+  ''|*[!0-9]*) die "HARBOR_REACHABLE_WAIT_SECONDS must be WHOLE SECONDS, got '${WAIT}' (900, not 15m)" ;;
+esac
+
+if [ "$WAIT" -gt 0 ]; then
+  _state="$(harbor_reachable_state)"
+  # DIAGNOSE AT SECOND ONE, THEN WAIT. `silent` -- the name resolves and nothing answers -- is the
+  # STALE A RECORD this target was written for, and harbor_reachable_report names it in about a
+  # second. Waiting 15 minutes before saying so turns a one-second true positive into a slow one.
+  # So: print the cause NOW, and still wait, because the same state is ALSO what a Harbor that is
+  # merely still booting looks like. The operator gets the actionable line immediately and can stop;
+  # an unattended run keeps its budget. Telling the two apart properly needs the live LoadBalancer
+  # IP, which would cost this script its deliberate no-cluster / no-kubectl property.
+  if [ "$_state" = silent ]; then
+    printf '\n' >&2
+    harbor_reachable_report || true
+    printf '  ^ that is the diagnosis NOW. It is also what a Harbor that is still booting looks\n' >&2
+    printf '    like, so this waits up to %ss anyway. If the address above is the PREVIOUS\n' "$WAIT" >&2
+    printf '    install'"'"'s, stop here and fix the A record -- waiting cannot fix it.\n' >&2
+  fi
+  if [ "$_state" != serving ]; then
+    printf '\n  waiting up to %ss for %s to answer ...\n' "$WAIT" "${HARBOR_URL:-<unset>}" >&2
+    _w=0
+    while [ "$_w" -lt "$WAIT" ]; do
+      sleep 15; _w=$((_w + 15))
+      harbor_reachable_ok && break
+      [ $((_w % 60)) = 0 ] && printf '  still waiting (%s/%ss) ...\n' "$_w" "$WAIT" >&2
+    done
+  fi
 fi
 
 printf '\n=================== harbor reachable ===================\n' >&2
@@ -61,7 +85,7 @@ harbor_reachable_report || rc=$?
 # Without this the target exits 0 after waiting 15 minutes for something that never arrived, and the
 # reader walks on to `make mirror`, which is the failure this wait exists to prevent.
 if [ "$WAIT" -gt 0 ] && ! harbor_reachable_ok; then
-  printf '  it did not answer within %ss — do not continue to '"'"'make mirror'"'"' until it does.\n' "$WAIT" >&2
+  printf '  it did not answer within %ss — do NOT go on to Step 5 until it does.\n' "$WAIT" >&2
   rc=1
 fi
 printf '========================================================\n' >&2

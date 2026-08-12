@@ -179,5 +179,22 @@ esc_secret=${secret//\'/\'\\\'\'}
   } > "$OUT_FILE" )
 
 log_info "robot account '$rname' created."
-log_info "credentials written to $OUT_FILE (mode 0600, gitignored) — copy HARBOR_USERNAME/HARBOR_PASSWORD from it into .env."
-log_warn "the secret is shown only once by Harbor; keep $OUT_FILE safe (or delete it after copying into .env)."
+log_info "credentials written to $OUT_FILE (mode 0600, gitignored)."
+
+# AND PUBLISHED, rather than asking the operator to copy two values a script just generated.
+# scenario-1 Step 9 used to say "Then set in ./.env, copying the two values it just printed" -- a
+# hand-copy of a secret THIS SCRIPT PRODUCED. The same shape cost a walk row 605 seconds when the
+# Harbor admin password was left to a paste that nobody performs (see 28-harbor-admin-password.sh).
+#
+# set_env_var preserves .env's mode (it truncates in place; it does NOT mv a fresh tempfile over it),
+# so a .env the operator chmod 600'd stays 0600.
+#
+# ⚠️ A ROBOT CANNOT MINT ROBOTS, and this overwrites the admin credential that just minted this one.
+# Re-running `make harbor-robot` now stops with that exact message (the guard at the top of this
+# file). The way back is `make harbor-admin-password`, which re-reads the admin credential from the
+# Supervisor secret -- so say that HERE, where the operator is standing, not in a doc they have left.
+set_env_var HARBOR_USERNAME "$rname"  "${REPO_ROOT}/.env"
+set_env_var HARBOR_PASSWORD "$secret" "${REPO_ROOT}/.env"
+log_info "published HARBOR_USERNAME/HARBOR_PASSWORD to ./.env — the pipeline now runs as the ROBOT, not as admin."
+log_info "  to mint another robot later, restore the admin credential first: make harbor-admin-password"
+log_warn "the secret is shown only once by Harbor; $OUT_FILE is your only other copy."

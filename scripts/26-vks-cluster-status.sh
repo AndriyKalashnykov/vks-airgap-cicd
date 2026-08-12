@@ -26,7 +26,7 @@ require_cmd kubectl
 # honours. These readers used only SUPERVISOR_KUBECONFIG; the defaults coincide, so the
 # split was invisible on the box that measured it and would have split the moment an
 # operator set either one.
-SUP="${VKS_SUPERVISOR_KUBECONFIG:-${SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}}"
+SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kubeconfig")"   # lib/os.sh: ONE resolver, first that EXISTS
 [ -f "$SUP" ] || die "no Supervisor kubeconfig at '$SUP' — run 'make vks-login' first."
 k() { kubectl --kubeconfig "$SUP" "$@"; }
 

@@ -368,14 +368,21 @@ requested in namespace <ns>`.
 **Then get its address and log in:**
 
 ```bash
-kubectl get svc -n "$ARGOCD_NAMESPACE"                     # argocd-server -> EXTERNAL-IP
-kubectl get secret -n "$ARGOCD_NAMESPACE" argocd-initial-admin-secret \
-  -o jsonpath='{.data.password}' | base64 -d; echo
-argocd login <EXTERNAL-IP>
+make argocd-address                 # waits for the address, writes ARGOCD_SERVER to ./.env
+set -a; . ./.env; set +a            # so THIS shell has it
+make argocd-password                # prints the initial admin password
+argocd login "$ARGOCD_SERVER" --username admin --insecure
 argocd account update-password
 ```
 
-**Expect:** `argocd-server` has an EXTERNAL-IP and you can log in. *(~10 min)*
+**Expect:** `wrote ARGOCD_SERVER=` and an address. *(~10 min — it waits, printing `still ...` each
+minute.)*
+
+`argocd login` **prompts** for the password, so paste what `make argocd-password` printed. Nothing
+automates that step and nothing tests it — it is the one command in this runbook no harness can run.
+
+A non-zero exit from `make argocd-address` says which of the two things is missing — the ArgoCD
+**instance** (it never reconciled) or its **LoadBalancer address** — and they need different fixes.
 
 <details><summary>Optional — both already work</summary>
 
@@ -402,7 +409,7 @@ Where Gitea, Tekton and your apps run. You need cluster-admin on it.
 | `VKS_CLUSTER_NAME` | `cicd-gc1` | Step 1 (you invented it). **Never reuse a name you deleted recently** — it never converges. |
 | `VKS_CONTEXT_NAME` | `vks-cicd` | Step 1 — read by the `vcf` fallback below |
 | `VKS_NAMESPACE` | `cicd` | Step 1 — read by the `vcf` fallback below |
-| `VKS_K8S_VERSION` | `v1.34.8+vmware.1-vkr.1` | `kubectl get kubernetesreleases` -> pick one that is **Ready AND Compatible** and paste its **full** name. It is a *prefix* selector, so a bare `v1.34` is accepted and then floats — an air-gap repo must not do that. `make vks-cluster-create` server-side dry-runs it first and prints vCenter own rejection. |
+| `VKS_K8S_VERSION` | `v1.34.8+vmware.1-vkr.1` | **`make vks-k8s-version`** writes it — the newest **Ready AND Compatible** release, waiting if a freshly-enabled Supervisor is still syncing them. It writes the **full** name because this is a *prefix* selector: a bare `v1.34` is accepted and then floats, which an air-gap repo must not do. It will not move a version you pinned yourself. |
 
 ```bash
 make vks-cluster-create        # applies the Cluster; provisioning is async
@@ -587,12 +594,11 @@ cat ./secrets/harbor-robot.env
 
 **Expect:** a `robot$vks-cicd` account scoped to your two projects. *(<1 min)*
 
-**Then set in `./.env`,** copying the two values it just printed:
+It writes `HARBOR_USERNAME` and `HARBOR_PASSWORD` into `./.env` itself — nothing to copy. From here
+the pipeline runs as the **robot**, not as admin.
 
-| key | example | how to get the value |
-|---|---|---|
-| `HARBOR_USERNAME` | `robot$vks-cicd` | the `HARBOR_USERNAME` line of `./secrets/harbor-robot.env` — replaces `admin` |
-| `HARBOR_PASSWORD` | *your value* | the `HARBOR_PASSWORD` line of the same file |
+⚠️ A robot cannot mint robots, so re-running `make harbor-robot` now stops and says so. To mint
+another, restore the admin credential first with `make harbor-admin-password`.
 
 ⚠️ **Already exists?** It stops rather than overwriting: Harbor shows a robot secret **once**, so an
 existing one cannot be re-read and re-creating it would hand you a credential that does not work.
