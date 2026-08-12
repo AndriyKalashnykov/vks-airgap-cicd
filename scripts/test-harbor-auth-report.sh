@@ -147,5 +147,46 @@ rc=0; harbor_auth_report >/dev/null 2>&1 || rc=$?
 check "no HARBOR_URL -> silent 0 (reachable_report already said so)" 0 "$rc"
 export HARBOR_URL="$_saved_url"
 
+# ── harbor_auth_ok — a VERIFIER, not a reporter ──────────────────────────────────────────────────
+# These two functions must DISAGREE on the inconclusive case, and that disagreement is the point.
+# A reporter answers "any problems?" (0 = none to report, including "could not tell"); a verifier
+# answers "did Harbor ACCEPT this?" (0 only when it demonstrably did). Measured 2026-08-12: a caller
+# that used the reporter as a verifier concluded a deliberately WRONG password worked, because a
+# stale CA made the probe inconclusive.
+echo
+echo "== harbor_auth_ok =="
+export HARBOR_PASSWORD='Sup3rStr0ngPw'
+
+for st in 200 403; do
+  printf '%s\n' "$st" > "$T/status"
+  rc=0; harbor_auth_ok || rc=$?
+  check "auth_ok: $st -> verified" 0 "$rc"
+done
+for st in 401 500; do
+  printf '%s\n' "$st" > "$T/status"
+  rc=0; harbor_auth_ok || rc=$?
+  check "auth_ok: $st -> NOT verified" 1 "$rc"
+done
+
+# THE DISCRIMINATOR, and the reason both functions exist. Same inputs, opposite answers.
+printf '500\n' > "$T/status"
+rc_ok=0; harbor_auth_ok >/dev/null 2>&1 || rc_ok=$?
+rc_rep=0; harbor_auth_report >/dev/null 2>&1 || rc_rep=$?
+if [ "$rc_ok" = 1 ] && [ "$rc_rep" = 0 ]; then
+  ok "inconclusive: report says 'nothing to report' (0) while auth_ok says 'NOT verified' (1)"
+else
+  bad "the reporter and the verifier agree on an inconclusive probe (report=$rc_rep auth_ok=$rc_ok) - one of them is wrong"
+fi
+
+# No anchor => cannot verify => NOT ok. (The reporter SKIPS here; the verifier must refuse.)
+printf '200\n' > "$T/status"
+rc=0; HARBOR_CA_FILE="$T/does-not-exist" harbor_auth_ok || rc=$?
+check "auth_ok: no CA and not insecure -> NOT verified (cannot check == not ok)" 1 "$rc"
+
+_p="$HARBOR_PASSWORD"; unset HARBOR_PASSWORD
+rc=0; harbor_auth_ok || rc=$?
+check "auth_ok: no password -> NOT verified" 1 "$rc"
+export HARBOR_PASSWORD="$_p"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
