@@ -41,7 +41,7 @@ STEP=0; RAN=0; FAILED=0; SKIPPED=0
 # The DOCUMENT's own claims, counted separately from the commands' exit codes. "32 blocks ran"
 # says the COMMANDS worked; it says nothing about whether the reader saw what they were told
 # they would see. These two numbers answer different questions and must not be conflated.
-EXPECT_TOTAL=0; EXPECT_MISS=0
+EXPECT_TOTAL=0; EXPECT_MISS=0; EXPECT_LINES_PARSED=0; EXPECT_UNSEEN=0
 SKIP_LOG="$(mktemp)"; NEUT_LOG="$(mktemp)"; CWD_FILE="$(mktemp)"; RC_FILE="$(mktemp)"; UNSAFE_FILE="$(mktemp)"; OUT_FILE="$(mktemp)"; STEP_OUT_FILE="$(mktemp)"; EXPECT_LOG="$(mktemp)"
 ENV_FILE="$(mktemp)"; : > "$ENV_FILE"
 trap 'rm -f "$SKIP_LOG" "$NEUT_LOG" "$CWD_FILE" "$RC_FILE" "$UNSAFE_FILE" "$ENV_FILE"' EXIT
@@ -232,6 +232,10 @@ PY
 # (a greedy `.` under re.S). The floor is reconciled against an INDEPENDENT count, because a
 # denominator that only the parser produces cannot detect the parser being wrong.
 INDEP="$(grep -c '^[[:space:]]*```bash' "$DOC" || true)"
+# Claims, counted independently of the parser -- same discipline, different unit. INDENT-TOLERANT
+# on purpose: the parser only sees `**Expect` at COLUMN 0, so a column-0-only grep would share its
+# blindness and an indented claim would be invisible to both. A blockquoted `> **Expect:` still is.
+INDEP_E="$(grep -cE '^[[:space:]]*\*\*Expect' "$DOC" || true)"
 printf '\n======== walking %s ========\n' "$(basename "$DOC")"
 printf 'blocks: %d extracted, %d counted independently | os=%s\n' "${#PARSED[@]}" "$INDEP" "${WALK_OS:-?}"
 # Print the RESOLVED per-resource row, not the WALK_EXISTS shorthand -- the whole point is that they
@@ -252,6 +256,12 @@ for row in "${PARSED[@]}"; do
   DET="$(printf '%s' "$row" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("details",""))')"
   ENVROWS="$(printf '%s' "$row" | python3 -c 'import sys,json;[print(k+"="+v) for k,v in json.load(sys.stdin).get("env",[])]')"
   ENVMANUAL="$(printf '%s' "$row" | python3 -c 'import sys,json;[print(k+"="+v) for k,v in json.load(sys.stdin).get("envmanual",[])]')"
+  # COUNT THE CLAIMS THE PARSER ATTACHED -- here, UNCONDITIONALLY, above should_skip and above the
+  # WALK_DRY gate. 7 of the document's 26 Expect lines sit on blocks a row legitimately SKIPS (two in
+  # EVERY cell: the teardown block and one carrying a live <EXTERNAL-IP> placeholder), so counting
+  # after the skip yields 24 in one row and 20 in another -- a floor at the document's real 26 would
+  # then REFUSE a healthy walk on day one, which is the false-RED shape this file keeps re-learning.
+  EXPECT_LINES_PARSED=$(( EXPECT_LINES_PARSED + $(printf '%s' "$E" | grep -c . || true) ))
   STEP=$((STEP + 1))
   # THE DOCUMENT INSTRUCTS THROUGH TABLES TOO. "set in ./.env:" rows are instructions, not
   # decoration: Step 6's table says to change VKS_AUTH_METHOD back to `kubeconfig`, and a walk that
@@ -393,7 +403,9 @@ exit $__rc' _ "$CWD" "$ENV_FILE" 2>&1 \
   RAN=$((RAN + 1)); [ "$rc" -ne 0 ] && FAILED=$((FAILED + 1))
   if [ -n "$E" ] && [ "${WALK_DRY:-0}" != 1 ]; then
     _seen=0; _tot=0; _missed=""
+    _pyx_ok=0
     while IFS=$'\t' read -r verdict lit; do
+      case "$verdict" in __PYX_OK__) _pyx_ok=1; continue ;; esac
       [ -n "${lit:-}" ] || continue
       printf '    expect: %-56s %s\n' "$lit" "$verdict"
       _tot=$((_tot + 1))
@@ -412,19 +424,44 @@ for line in os.environ.get('EXPECT_TEXT', '').splitlines():
         # Skip the literals that name the COMMAND the reader just ran: they appear in the block
         # itself, so finding them in the output proves nothing about the claim.
         if lit in blk:                                            continue
+        # A COMMAND NAMED IN PROSE IS NOT AN OUTPUT CLAIM. `**Expect:** re-running `make
+        # argocd-preflight` now says `PREFLIGHT OK`` names a thing to RUN; the existing `lit in blk`
+        # filter drops command literals only when they are in THIS block. One SHAPE, not a list of
+        # strings -- a list would rot on the first new command.
+        if re.fullmatch(r'make [a-z][a-z0-9-]*', lit):            continue
         print(("SEEN" if lit in out else "NOT SEEN") + "\t" + lit)
+# LAST, deliberately. Printed first it would already be consumed when the producer dies mid-loop,
+# certifying a TRUNCATED extraction; measured -- a SystemExit after one row still set the flag.
+# It runs in a process substitution and this script has no `set -e`, so a broken extractor otherwise
+# yields _tot=0 and the walk reports "0 UNMET" having checked nothing.
+print("__PYX_OK__")
 PYX
     )
     # THE UNIT IS THE BLOCK. A single literal missing is prose noise (the doc hedges, abbreviates,
     # and mixes the command with the output). A block whose claims produced NOTHING is the document
     # telling the reader they will see something they do not -- which is the whole question this
     # walk exists to answer, and which an rc-only report is structurally blind to.
+    # A BROKEN EXTRACTOR MUST NOT READ AS "NO CLAIMS". It runs in a process substitution and this
+    # script has no `set -e`, so a SystemExit or a syntax error inside PYX yields _tot=0 silently --
+    # and the walk then reports "0 UNMET" having checked nothing. Measured both ways.
+    [ "$_pyx_ok" = 1 ] || { echo "REFUSING: the Expect extractor did not complete for block [$STEP] — a walk must not report 0 claims because its own parser died"; exit 1; }
     if [ "$_tot" -gt 0 ]; then
       EXPECT_TOTAL=$((EXPECT_TOTAL + 1))
       if [ "$_seen" -eq 0 ]; then
         EXPECT_MISS=$((EXPECT_MISS + 1))
         printf '    EXPECT UNMET: the document promises output this block did not produce\n'
         printf '  expect-unmet: [%02d] %s%s\n' "$STEP" "$H" "$_missed" >> "$EXPECT_LOG"
+      elif [ -n "$_missed" ]; then
+        # MASKED, and previously discarded. A block passes when ANY literal matches, so a claim that
+        # was NOT seen vanished whenever a sibling on the same line matched. Measured over two real
+        # rows: 2 and 3 such literals, every one invisible in the report.
+        # PRINTED, NOT RATCHETED -- deliberately. The count varies by CELL, not by document quality:
+        # `PSA UNPROVEN` is correctly absent on a row whose cluster is not bare (the document says so
+        # in the same sentence), so a ratchet would RED a healthy row and would be measuring which
+        # cell ran. Some of these are also permanently unmatchable (a claim that a FILE now exists
+        # can never appear in stdout). A number nobody can act on is not a gate.
+        EXPECT_UNSEEN=$((EXPECT_UNSEEN + 1))
+        printf '  unseen-literal: [%02d] %s%s\n' "$STEP" "$H" "$_missed" >> "$EXPECT_LOG"
       fi
     fi
   fi
@@ -435,8 +472,22 @@ printf '\n======== WALK DONE - %d blocks: %d ran, %d FAILED, %d skipped, %d line
   "$STEP" "$RAN" "$FAILED" "$SKIPPED" "$(wc -l < "$NEUT_LOG")"
 # TWO different questions, never one number: did the COMMANDS work, and is the DOCUMENT truthful?
 # A walk that reports only the first is the failure this line exists to make impossible.
-printf '======== DOCUMENT - %d blocks make an Expect: claim, %d UNMET ========\n' \
-  "$EXPECT_TOTAL" "$EXPECT_MISS"
+# THE DENOMINATOR, not just the numerator. The previous line printed only EXPECT_TOTAL -- blocks
+# with at least one CHECKABLE literal -- and read as "the document makes 13 claims" when it makes 26.
+# Half its claims are unverifiable here (a placeholder, an ellipsis, a literal that is also in the
+# command, a short token), and a coverage number without its exclusions is a claim, not a measurement.
+printf '======== DOCUMENT - %d Expect: lines in the doc, %d parsed, %d blocks CHECKABLE, %d UNMET, %d block(s) with a MASKED literal ========\n' \
+  "$INDEP_E" "$EXPECT_LINES_PARSED" "$EXPECT_TOTAL" "$EXPECT_MISS" "$EXPECT_UNSEEN"
+# THE FLOOR, reconciled against a count the parser did not produce -- the same discipline the block
+# count already uses, because a denominator only the parser can compute cannot detect the parser
+# being wrong. It catches an `**Expect:**` that appears BEFORE the first block (the parser requires
+# a preceding block and drops it silently). It does NOT catch a blockquoted `> **Expect:` -- neither
+# pattern matches that -- so this is a floor on ONE of the three ways a claim can go missing, and
+# saying which one is the point.
+[ "$EXPECT_LINES_PARSED" -ge "$INDEP_E" ] || {
+  echo "REFUSING: the document has ${INDEP_E} Expect: line(s) but the parser attached only ${EXPECT_LINES_PARSED} — a claim was dropped before it could be checked"
+  exit 1
+}
 cat "$EXPECT_LOG"
 # A coverage number without its exclusions is a claim, not a measurement.
 cat "$SKIP_LOG" "$NEUT_LOG"
