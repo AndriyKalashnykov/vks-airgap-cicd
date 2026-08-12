@@ -212,5 +212,34 @@ o="$(WALK_DOC="$T/tbl.md" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_ISTIO=existing 
 if printf '%s' "$o" | grep -q 'mode=\[kubeconfig\]'; then c=0; else c=1; fi
 assert "a value the doc sets in a TABLE reaches the commands" "$c" "table instructions are ignored"
 
+# A LATER ROW MUST OVERRIDE AN EARLIER ONE. Step 5's table sets VKS_AUTH_METHOD=vcf and Step 6 sets
+# it back to kubeconfig. Comparing against "is it set right now" made Step 6 lose to the walker's
+# OWN earlier export, and report it as "the harness supplied vcf" -- a false attribution that sends
+# the reader to debug the harness. So the feature did not do the thing it was built for.
+printf '## A\n\n| key | example | how |\n|---|---|---|\n| `WALK_TBL_SEQ` | `vcf` | first |\n\n```bash\ntrue\n```\n\n## B\n\n| key | example | how |\n|---|---|---|\n| `WALK_TBL_SEQ` | `kubeconfig` | later |\n\n```bash\necho "mode=[$WALK_TBL_SEQ]"\n```\n' > "$T/seq.md"
+o="$(env -u WALK_TBL_SEQ WALK_DOC="$T/seq.md" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_ISTIO=existing WALK_MIN_BLOCKS=2 bash "$W" 2>&1)"
+if printf '%s' "$o" | grep -q 'mode=\[kubeconfig\]'; then c=0; else c=1; fi
+assert "a LATER table row overrides an EARLIER one" "$c" "the doc's later instruction lost to its own earlier row"
+
+# ...but a value the HARNESS supplied before the walk still outranks the document's example.
+o="$(WALK_TBL_SEQ=harness WALK_DOC="$T/seq.md" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_ISTIO=existing WALK_MIN_BLOCKS=2 bash "$W" 2>&1)"
+if printf '%s' "$o" | grep -q 'mode=\[harness\]'; then c=0; else c=1; fi
+assert "...while a PRE-WALK harness value still wins" "$c" "the doc's example overwrote a lab-specific value"
+
+# A VALUE NO DUAL-PARSER .env CAN HOLD MUST NOT BE WRITTEN. .env is read by BOTH `make -include`
+# and a shell `source`, and no quoting satisfies both. MEASURED on the real document: an italic
+# placeholder (`*your value*`) and a LEGITIMATE value with a space both produced a shell syntax
+# error, and a syntax error ABORTS THE REST OF THE FILE -- 20 later keys were never assigned, and
+# every make target that loads the env died `Error 127` naming neither the file nor the variable.
+D="$T/poison"; mkdir -p "$D"; : > "$D/.env"
+printf '## S\n\n| key | example | how |\n|---|---|---|\n| `WALK_TBL_PH` | `*your value*` | supply it |\n| `WALK_TBL_SP` | `a b` | legit, has a space |\n| `WALK_TBL_OK` | `plain` | safe |\n\n```bash\ntrue\n```\n' > "$T/poison.md"
+o="$(WALK_DOC="$T/poison.md" WALK_START_DIR="$D" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_ISTIO=existing WALK_MIN_BLOCKS=1 bash "$W" 2>&1)"
+if bash -c "set -e; . '$D/.env'" 2>/dev/null; then c=0; else c=1; fi
+assert "the written .env still sources under set -e" "$c" "the walk poisoned .env; every later make target dies Error 127"
+if grep -qE '^(WALK_TBL_PH|WALK_TBL_SP)=' "$D/.env"; then c=1; else c=0; fi
+assert "...because unwritable values are NOT written" "$c" "a placeholder or space-bearing value was persisted"
+if printf '%s' "$o" | grep -q 'BY HAND'; then c=0; else c=1; fi
+assert "...and the reader is told to set them by hand" "$c" "the row was dropped silently"
+
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

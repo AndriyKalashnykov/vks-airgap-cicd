@@ -45,6 +45,11 @@ EXPECT_TOTAL=0; EXPECT_MISS=0
 SKIP_LOG="$(mktemp)"; NEUT_LOG="$(mktemp)"; CWD_FILE="$(mktemp)"; RC_FILE="$(mktemp)"; UNSAFE_FILE="$(mktemp)"; OUT_FILE="$(mktemp)"; STEP_OUT_FILE="$(mktemp)"; EXPECT_LOG="$(mktemp)"
 ENV_FILE="$(mktemp)"; : > "$ENV_FILE"
 trap 'rm -f "$SKIP_LOG" "$NEUT_LOG" "$CWD_FILE" "$RC_FILE" "$UNSAFE_FILE" "$ENV_FILE"' EXIT
+# WHO SET IT, snapshotted BEFORE the first block runs. Everything the harness supplies is
+# lab-specific and outranks the document's illustrative examples; everything else is the document's
+# to set, including overriding a value an EARLIER table row set. Taken here because after the walk
+# starts the two are indistinguishable -- see the ENVROWS loop.
+PREENV_FILE="$(mktemp)"; compgen -e > "$PREENV_FILE" 2>/dev/null || : > "$PREENV_FILE"
 CWD="${WALK_START_DIR:-$PWD}"
 
 # ── Whole-block skips: a block a WALK must not run, never a block that is broken.
@@ -167,7 +172,7 @@ details = None
 # The document also instructs through TABLES ("set in ./.env:"), not only through commands. Those
 # rows are instructions: Step 6's table says to change VKS_AUTH_METHOD back to `kubeconfig`, and a
 # walk that ignores it keeps talking to the SUPERVISOR for every step after.
-env_rows, pending = [], []
+env_rows, pending, pending_manual = [], [], []
 for line in open(sys.argv[1]):
     # CommonMark: a fence is >=3 backticks and closes on a run of AT LEAST that many with no
     # info string. Assuming exactly 3 mis-parses the ````markdown wrapper people use to SHOW a
@@ -179,12 +184,30 @@ for line in open(sys.argv[1]):
         elif line.lstrip().startswith('</details>'):
             details = None
         # A `| \`KEY\` | example | ... |` row under a "set in ./.env" heading is an instruction.
-        elif re.match(r'^\s*\|\s*`[A-Z][A-Z0-9_]*`\s*\|', line):
+        elif details is None and re.match(r'^\s*\|\s*`[A-Z][A-Z0-9_]*`\s*\|', line):
+            # `details is None`: a table inside <details> is an ALTERNATIVE, exactly like a code
+            # block inside one -- the walker already refuses to RUN those. Honouring it for blocks
+            # and ignoring it for rows applied 7 rows from sections headed "Optional -- skip unless
+            # you want to change it", including one whose value is the words "(unset -- probes skip)".
             cells = [c.strip() for c in line.strip().strip('|').split('|')]
             k = cells[0].strip('`')
             v = cells[1].strip('`').strip() if len(cells) > 1 else ''
-            if v and not re.search(r'[<>]|\.\.\.|…|,|\s\*\*', v):
+            # A row is an INSTRUCTION only if its value is a literal safe in BOTH parsers that read
+            # .env -- `make -include` AND a shell `source`. There is no quoting that satisfies both
+            # (measured: `U=robot$vks-cicd` -> make `robotks-cicd`, bash `robot-cicd`; single quotes
+            # fix bash and make keeps them literally), so an unsafe value CANNOT be written at all.
+            # MEASURED on this document, where a shell syntax error ABORTS the rest of the file:
+            #   VCF_CLI_VSPHERE_PASSWORD=*your value*       -> `value*: command not found`, Error 127
+            #   VKS_CLUSTER_COMPUTE=*(leave unset)*         -> syntax error; 20 LATER KEYS never assigned
+            #   VKS_VM_CLASSES=a b   (a LEGITIMATE value)   -> the space ends the assignment
+            #   HARBOR_USERNAME=robot$vks-cicd (LEGITIMATE) -> $vks expands to '' -> robot-cicd, SILENTLY
+            # So italics are only half of it: two of those are real values the document means. This
+            # is the same principle the walker already applies to an unsubstituted <placeholder> --
+            # a walk must not invent a value.
+            if v and re.fullmatch(r'[A-Za-z0-9_./:@=+-]+', v):
                 pending.append([k, v])
+            elif v:
+                pending_manual.append([k, v])
         if m: fence = (m.group(3).split(':')[0].lower(), len(m.group(2))); body = []
         elif line.startswith('## '): heading = line[3:].strip()
         # The document's CONTRACT WITH THE READER. `**Expect:** ...` states what they will SEE, and
@@ -194,7 +217,8 @@ for line in open(sys.argv[1]):
     elif m and not m.group(3) and len(m.group(2)) >= fence[1]:
         if fence[0] in ('bash', 'sh', 'shell'):
             out.append({"h": heading, "b": "".join(body), "e": [],
-                        "details": details or "", "env": pending}); pending = []
+                        "details": details or "", "env": pending,
+                        "envmanual": pending_manual}); pending, pending_manual = [], []
         fence = None
     else:
         body.append(line)
@@ -227,6 +251,7 @@ for row in "${PARSED[@]}"; do
   E="$(printf '%s' "$row" | python3 -c 'import sys,json;print("\n".join(json.load(sys.stdin).get("e",[])))')"
   DET="$(printf '%s' "$row" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("details",""))')"
   ENVROWS="$(printf '%s' "$row" | python3 -c 'import sys,json;[print(k+"="+v) for k,v in json.load(sys.stdin).get("env",[])]')"
+  ENVMANUAL="$(printf '%s' "$row" | python3 -c 'import sys,json;[print(k+"="+v) for k,v in json.load(sys.stdin).get("envmanual",[])]')"
   STEP=$((STEP + 1))
   # THE DOCUMENT INSTRUCTS THROUGH TABLES TOO. "set in ./.env:" rows are instructions, not
   # decoration: Step 6's table says to change VKS_AUTH_METHOD back to `kubeconfig`, and a walk that
@@ -240,15 +265,41 @@ for row in "${PARSED[@]}"; do
   if [ -n "${ENVROWS:-}" ]; then
     while IFS='=' read -r _k _v; do
       [ -n "${_k:-}" ] || continue
-      _cur="$(eval "printf '%s' \"\${$_k:-}\"")"
-      if [ -z "$_cur" ]; then
-        printf '    (doc: setting %s=%s in ./.env)\n' "$_k" "$_v"
-        export "$_k=$_v"
-        [ -f "${CWD}/.env" ] && { sed -i "/^${_k}=/d" "${CWD}/.env"; printf '%s=%s\n' "$_k" "$_v" >> "${CWD}/.env"; }
-      elif [ "$_cur" != "$_v" ]; then
-        printf '    (doc says %s=%s; the harness supplied %s — keeping the harness value)\n' "$_k" "$_v" "$_cur"
+      # WHOSE value is already there decides everything, and "is it set right now" cannot tell you:
+      # by Step 6 the walker has itself exported what Step 5's table said. MEASURED -- Step 5 sets
+      # VKS_AUTH_METHOD=vcf, so Step 6's `kubeconfig` (the cell this whole feature exists for, and
+      # the one that cost row 1 its Steps 7-13) was REJECTED as "the harness supplied vcf", a false
+      # attribution that sends the reader to debug the harness. So compare against the PRE-WALK
+      # snapshot: the harness outranks the document, a later row outranks an earlier row.
+      if grep -qxF "$_k" "$PREENV_FILE" 2>/dev/null; then
+        _cur="$(eval "printf '%s' \"\${$_k:-}\"")"
+        [ "$_cur" != "$_v" ] && \
+          printf '    (doc says %s=%s; the harness supplied %s before the walk — keeping it)\n' "$_k" "$_v" "$_cur"
+        continue
+      fi
+      printf '    (doc: setting %s=%s in ./.env)\n' "$_k" "$_v"
+      export "$_k=$_v"
+      # ...and into the CARRIED state, or the export is invisible to the very commands it is for.
+      # Statements run in a child that FIRST sources the previous statement's variable dump, so that
+      # dump outranks anything the parent exported afterwards. MEASURED: Step 5's table set
+      # VKS_AUTH_METHOD=vcf, Step 6's set kubeconfig, ./.env correctly ended up `kubeconfig` -- and
+      # the next command still SAW `vcf`. Checking the file instead of what a command sees is the
+      # proxy-not-result trap; appending here makes the new value win when the child sources it.
+      printf 'declare -x %s=%q\n' "$_k" "$_v" >> "$ENV_FILE"
+      if [ -f "${CWD}/.env" ]; then
+        sed -i "/^${_k}=/d" "${CWD}/.env"; printf '%s=%s\n' "$_k" "$_v" >> "${CWD}/.env"
+      else
+        printf '    (WARNING: no %s/.env yet — exported for this walk, NOT persisted)\n' "$CWD"
       fi
     done <<< "$ENVROWS"
+  fi
+  # Rows the document states but a walk must NOT invent (a placeholder, or a value no dual-parser
+  # .env can hold). Printing them is the honest half: the reader is told to set them by hand.
+  if [ -n "${ENVMANUAL:-}" ]; then
+    while IFS='=' read -r _k _v; do
+      [ -n "${_k:-}" ] || continue
+      printf '    (doc asks you to set %s=%s BY HAND — not a literal a walk can write)\n' "$_k" "$_v"
+    done <<< "$ENVMANUAL"
   fi
   reason="$(should_skip "$B")"
   # A COLLAPSED <details> IS AN ALTERNATIVE, not a step. Its summary says who it is for; a reader
