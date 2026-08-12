@@ -478,7 +478,6 @@ If this errors (`pinniped-info`, or `plugin sources from the system Harbor regis
 Secret route above instead — it is the same credential.
 </details>
 
-
 ⚠️ **`make vks-login` now renews the GUEST kubeconfig.** The Supervisor one expires too, and Steps
 10 and 14 need it — `kubectl` then says *"the server has asked for the client to provide
 credentials"*. Renew it with:
