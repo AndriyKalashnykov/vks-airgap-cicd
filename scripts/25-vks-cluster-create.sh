@@ -121,4 +121,64 @@ log_info "dry-run accepted."
 k apply -f "$RENDERED"
 log_info "applied. MEASURED 2026-08-08 on a single-host 9.1 lab: all 3 nodes Ready in ~3m45s"
 log_info "  (1 CP + 2 best-effort-small workers). Yours varies with host load and image pulls."
+
+# --- FAIL FAST on a stale control-plane endpoint ------------------------------------------------
+# THE FAILURE THIS CATCHES, and why it is worth 90 seconds here: the platform writes
+# spec.controlPlaneEndpoint BEFORE the VirtualMachineService that owns the control-plane LB exists
+# (MEASURED: endpoint at 04:32:17, VMService at 04:32:21 — a 4-second lead), so the value is a
+# PREDICTION. When it predicts wrong, CAPI never revisits it — spec.controlPlaneEndpoint does not
+# self-heal — so the cluster advertises an address nothing serves, the remote-connection probe fails
+# forever, and `make vks-cluster-status` burns its FULL wait (measured: 1807s) before saying so.
+#
+# THE CAUSE IS A REUSED NAME, and that is measured, not inferred. Five incarnations of the SAME name
+# in the same vSphere Namespace: #1 (on a lab where the name was new) agreed and went Ready in
+# 3m45s; #2..#5 each advertised the PREVIOUS incarnation's LB IP and never converged. Then the
+# discriminating experiment, on the SAME already-used lab with NO rebuild: a cluster created under a
+# NEVER-USED name agreed on its first read (adv .142 == svc .142) and the reused name beside it was
+# still diverged. So the fix is the NAME, not lab freshness — which matters because "rebuild the
+# lab" costs 25-45 minutes and is not available to a tenant on someone else's Supervisor.
+#
+# This gate does NOT try to repair it (the field is immutable) and does NOT delete anything: it
+# reports, with the one remedy that is measured to work. It only ever fires on a divergence it can
+# actually see — an unreadable Service list or an unidentifiable LB DECLINES to judge, exactly as
+# endpoint_report does, because a diagnostic that can false-RED gets ignored.
+_cp_endpoint_check() {
+  local i adv lb budget="${VKS_CP_ENDPOINT_WAIT_SECONDS:-90}" _end
+  _end=$((SECONDS + budget))
+  while [ "$SECONDS" -lt "$_end" ]; do
+    adv="$(k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" \
+             -o jsonpath='{.spec.controlPlaneEndpoint.host}' 2>/dev/null || true)"
+    # The VirtualMachineService named for the cluster is what OWNS the control-plane LB. Reading it
+    # directly (rather than scanning Services) keeps this independent of how many other LoadBalancers
+    # the namespace holds. A tenant who cannot read it gets the DECLINE path below, not a false RED.
+    lb="$(k -n "$VKS_NAMESPACE" get virtualmachineservice "$VKS_CLUSTER_NAME" \
+            -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+    if [ -n "$adv" ] && [ -n "$lb" ]; then
+      if [ "$adv" = "$lb" ]; then
+        log_info "control-plane endpoint: AGREE (${adv}) — this cluster can converge."
+        return 0
+      fi
+      log_error "control-plane endpoint is STALE: the Cluster advertises ${adv} but its"
+      log_error "  LoadBalancer holds ${lb}. spec.controlPlaneEndpoint is set by the platform and is"
+      log_error "  NOT revisited, so this cluster will NEVER become Ready — it would fail the full"
+      log_error "  wait (~30 min) instead of failing here."
+      log_error "  CAUSE (measured): the name '${VKS_CLUSTER_NAME}' has been used in namespace"
+      log_error "  '${VKS_NAMESPACE}' before. The advertised address is the PREVIOUS incarnation's."
+      log_error "  FIX: create it under a NAME THAT HAS NEVER BEEN USED here — measured to agree on"
+      log_error "  the first read, on an already-used lab, with no rebuild:"
+      log_error "      make vks-cluster-create VKS_CLUSTER_NAME=<a-new-name>"
+      log_error "  Do NOT delete and recreate under the same name: that reproduced it 4 times running."
+      log_error "  CAPTURE FIRST if you want the platform team to see it (deleting destroys it):"
+      log_error "      kubectl -n ${VKS_NAMESPACE} get cluster ${VKS_CLUSTER_NAME} -o yaml > /tmp/diverged-cluster.yaml"
+      return 1
+    fi
+    sleep 5
+  done
+  log_warn "control-plane endpoint: NOT YET KNOWABLE after ${budget}s (advertised='${adv:--}'"
+  log_warn "  vmservice='${lb:--}') — DECLINING to judge rather than guess. 'make vks-cluster-status'"
+  log_warn "  reports the same comparison, and will say DIVERGENT if it becomes visible."
+  return 0
+}
+_cp_endpoint_check || die "refusing to wait on a cluster that cannot converge (see above)."
+
 log_info "next: make vks-cluster-status   (it gates on the CONDITIONS, not on phase=Provisioned)"
