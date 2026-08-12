@@ -324,30 +324,21 @@ prints — the usual cause on a reinstall, where the old address is still in DNS
 You still need its admin credential — `make install-all` authenticates with it.
 
 ```bash
-export KUBECONFIG=./secrets/supervisor.kubeconfig
-NS=$(kubectl get ns -o name | grep -oE 'svc-harbor-[a-z0-9]+' | head -1)
-kubectl -n "$NS" get secret harbor-core-ver-1 -o jsonpath='{.data.HARBOR_ADMIN_PASSWORD}' | base64 -d; echo
+make harbor-admin-password
 ```
 
-**Then set in `./.env`:**
+**Expect:** `wrote HARBOR_USERNAME and HARBOR_PASSWORD to ./.env`.
 
-| key | example | how to get the value |
-|---|---|---|
-| `HARBOR_USERNAME` | `admin` | the Supervisor-installed Harbor uses `admin` |
-| `HARBOR_PASSWORD` | *your value* | what the command above printed. **Not** `Harbor12345`. |
+It reads the password out of the Harbor service's own secret, **proves it against Harbor before
+writing anything**, and never replaces a credential that already works — so it is safe to re-run,
+and safe to run after Step 9's robot.
 
-Prove it now, while you can still fix it cheaply:
+`does NOT authenticate` means Harbor's password was changed after it was installed (Harbor only
+accepts that secret at first start). Nothing is written; ask whoever installed Harbor for the
+credential, or use a robot from Step 9.
 
-```bash
-printf 'user = "%s:%s"\n' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" > /tmp/h.cfg
-curl -sk -o /dev/null -w '%{http_code}\n' -K /tmp/h.cfg "https://${HARBOR_URL}/api/v2.0/users/current"; rm -f /tmp/h.cfg
-```
-
-**Expect:** `200`. A `401` means the credential is wrong — fix it here, or Step 11 stops with
-`Harbor rejected HARBOR_USERNAME/HARBOR_PASSWORD (HTTP 401)`.
-
-⚠️ If you leave `HARBOR_PASSWORD` unset, `make env-populate` in Step 11 **generates** one, and it
-cannot possibly authenticate against a Harbor that already exists.
+⚠️ Do not skip this. If you leave `HARBOR_PASSWORD` unset, `make env-populate` in Step 11
+**generates** one, and it cannot possibly authenticate against a Harbor that already exists.
 
 <details><summary>Optional — Harbor project names, both already work</summary>
 

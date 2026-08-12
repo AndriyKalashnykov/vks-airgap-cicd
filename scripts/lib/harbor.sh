@@ -175,6 +175,40 @@ ensure_project() {
 # from /users/current, which is a SYSTEM-scoped endpoint. Treating "any non-200" as failure would
 # turn the least-privilege path into a hard stop -- a false RED introduced by a gate meant to help.
 # Only 401 means the credential is wrong; Harbor returns 403 for a permissions problem.
+# _harbor_auth_code <curl-tls-args...> — ONE http code, or 000. The probe, with no opinion.
+# `|| echo 000` is NOT used: curl's -w already prints 000 on a connection failure, so appending
+# another produced the literal `http 000000` in the operator-facing message (measured).
+_harbor_auth_code() {
+  local cfg rc=0 code
+  cfg="$(mktemp)"; chmod 600 "$cfg"
+  printf 'user = "%s:%s"\n' "$(esc_curlk "${HARBOR_USERNAME:-admin}")" "$(esc_curlk "${HARBOR_PASSWORD}")" > "$cfg"
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time "${HARBOR_PROBE_TIMEOUT_SECONDS:-10}" \
+            "$@" -K "$cfg" "https://${HARBOR_URL}/api/v2.0/users/current" 2>/dev/null)" || rc=$?
+  rm -f "$cfg"
+  [ "$rc" = 0 ] || code=000
+  case "${code:-}" in ''|*[!0-9]*) code=000 ;; esac
+  printf '%s' "$code"
+}
+
+# harbor_auth_ok — 0 ONLY when Harbor demonstrably ACCEPTED the credential (200, or 403 from a
+# project-scoped robot). Everything else, INCLUDING an inconclusive probe, is non-zero.
+#
+# ⚠️ DO NOT SUBSTITUTE harbor_auth_report FOR THIS. A REPORTER returns "problems found"; 0 means
+# "nothing to report", which it also returns when it could not tell (no CA yet, a stale CA, a
+# timeout) -- so `if harbor_auth_report; then "the credential works"` is a FAKE GREEN. MEASURED
+# 2026-08-12: with a wrong CA and a deliberately wrong password, harbor_auth_report returned 0 and a
+# caller using it as a verifier concluded the wrong password worked. "Verified" and "could not tell"
+# are different answers and need different functions.
+harbor_auth_ok() {
+  [ -n "${HARBOR_URL:-}" ] || return 1
+  is_placeholder "${HARBOR_PASSWORD:-}" && return 1
+  local -a cafg=()
+  if [ -n "${HARBOR_CA_FILE:-}" ] && [ -s "${HARBOR_CA_FILE}" ]; then cafg=(--cacert "${HARBOR_CA_FILE}")
+  elif [ "${HARBOR_INSECURE:-0}" = 1 ];                          then cafg=(-k)
+  else return 1; fi                       # cannot verify without an anchor -> NOT "ok"
+  case "$(_harbor_auth_code "${cafg[@]}")" in 200|403) return 0 ;; *) return 1 ;; esac
+}
+
 harbor_auth_report() {
   local ok_p='  ok       ' bad_p='  PROBLEM  ' note_p='           '
   [ -n "${HARBOR_URL:-}" ] || return 0                      # reachable_report already said so
@@ -199,12 +233,7 @@ harbor_auth_report() {
   # esc_curlk (lib/os.sh) is REQUIRED, not defensive: a bare `"` in the password truncates it, a `\`
   # is eaten and a newline injects a curl directive -- each of which reports a FALSE 401, the exact
   # wrong answer from a gate whose whole job is to say whether the credential works.
-  local cfg; cfg="$(mktemp)"; chmod 600 "$cfg"
-  printf 'user = "%s:%s"\n' "$(esc_curlk "${HARBOR_USERNAME:-admin}")" "$(esc_curlk "${HARBOR_PASSWORD}")" > "$cfg"
-  local acode                                    # own line: `local x=$(...)` masks the real status
-  acode="$(curl -sS -o /dev/null -w '%{http_code}' --max-time "${HARBOR_PROBE_TIMEOUT_SECONDS:-10}" \
-             "${cafg[@]}" -K "$cfg" "https://${HARBOR_URL}/api/v2.0/users/current" 2>/dev/null || echo 000)"
-  rm -f "$cfg"
+  local acode; acode="$(_harbor_auth_code "${cafg[@]}")"
 
   case "$acode" in
     200) printf '%sHarbor accepts %s (http 200)\n' "$ok_p" "${HARBOR_USERNAME:-admin}" >&2; return 0 ;;
