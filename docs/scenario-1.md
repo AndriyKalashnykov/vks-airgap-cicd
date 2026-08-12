@@ -138,6 +138,7 @@ it uses.
 | `VKS_NAMESPACE` | `lab` | the vSphere Namespace the cluster goes in. **Create it first — Step 2.** |
 | `VKS_CLUSTER_NAME` | `cicd-gc1` | **you invent this** — the guest cluster Step 6 creates. Must not be a name you deleted recently (see notes). |
 | `VKS_USERNAME` | `administrator@vsphere.local` | your vCenter SSO login |
+| `VKS_AUTH_METHOD` | `vcf` | how you log in. `vcf` = log in to the **Supervisor** (Step 3). Step 6 changes it to `kubeconfig` once the guest cluster exists. Unset, it defaults to `kubeconfig` and Step 3 fails looking for a cluster you have not created yet. |
 | `VCF_CLI_VSPHERE_PASSWORD` | *your value* | the password for that login |
 | `VKS_SSO_DOMAIN` | `vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups → *Domain* |
 
@@ -220,6 +221,7 @@ LoadBalancer IPs, the ArgoCD instance. Do it now and those steps run in one pass
 | `VKS_CONTEXT_NAME` | `vks-cicd` | Step 1 (you invented it) |
 | `VKS_USERNAME` | `administrator@vsphere.local` | Step 1 |
 | `VKS_NAMESPACE` | `cicd` | Step 1, created in Step 2 |
+| `VKS_AUTH_METHOD` | `vcf` | Step 1 — must be `vcf` here; Step 6 changes it |
 | `VCF_CLI_VSPHERE_PASSWORD` | *your SSO password* | **exported below, never written to `.env`** |
 
 ```bash
