@@ -200,7 +200,7 @@ and recreate the namespace); re-running with a corrected `.env` is a no-op.
 make vsphere-namespace
 ```
 
-**Expect:** `created vSphere Namespace '<name>' …` then `namespace '<name>' is RUNNING`.
+**Expect:** on a fresh Supervisor, `created vSphere Namespace` then `is RUNNING`. If you already have one, `already exists` and it is **not rewritten** — that is the Step 1b branch, and it is fine.
 
 Do not add a content library; guest-cluster node images do not come from one.
 
@@ -568,7 +568,7 @@ Harbor that was already there.
 make harbor-admin-password
 ```
 
-**Expect:** `wrote HARBOR_USERNAME and HARBOR_PASSWORD to ./.env`.
+**Expect:** if you installed Harbor in Step 4, `already authenticates` — the working credential is left alone. Otherwise `wrote HARBOR_USERNAME and HARBOR_PASSWORD to ./.env`.
 
 It reads the password out of the Harbor service's own secret and **proves it against Harbor before
 writing anything**. It never replaces a credential that already works, so it is safe to re-run and
@@ -576,11 +576,22 @@ safe to run after Step 9's robot.
 
 It is **here, not in Step 4**, because verifying needs Harbor's CA — which is what you just fetched.
 
-- `does NOT authenticate` — Harbor's password was changed after it was installed (Harbor only
-  accepts that secret at its first start). Nothing is written. Ask whoever installed Harbor, or use
-  a robot from Step 9.
+If it stops, it names which of these it hit:
+
+- `does NOT authenticate` **as the last line** — Harbor's password was changed after it was
+  installed (Harbor only accepts that secret at its first start). Nothing is written. Ask whoever
+  installed Harbor, or use a robot from Step 9. ⚠️ The same phrase also appears as a **warning
+  mid-run** (`the HARBOR_PASSWORD currently in your .env does NOT authenticate - reading the
+  installed one`) — that one is not a failure, it is the command doing its job, and it usually
+  succeeds two lines later. Read the LAST line before acting.
 - `could NOT check` — a different thing: nothing was sent to Harbor at all. It says which
   precondition is missing.
+- `no Supervisor kubeconfig` — run `make vks-login` (Step 3) first. Harbor's secret lives on the
+  Supervisor, not in your guest cluster.
+- `refusing to guess` — it found zero, or more than one, Harbor Supervisor Service and will not
+  pick for you. `kubectl get ns -l <harbor label>` shows what it saw.
+- `carries no HARBOR_ADMIN_PASSWORD` — the secret exists but not the key: this Harbor was not
+  installed by the Supervisor Service, so its admin password is not knowable this way.
 
 ---
 
