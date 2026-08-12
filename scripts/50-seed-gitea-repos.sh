@@ -14,6 +14,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 
 require_cmd kubectl; require_cmd git; require_cmd curl; require_cmd yq
+# jq: NEW here as of the webhook reconcile below (this script used jq zero times before). It is
+# carried in the sneakernet bundle (11-bundle.sh) and installed by bundle-load before `platform`,
+# so the air-gap path is satisfied — but a contract the far side must meet is DECLARED, never
+# inherited silently (RULE ZERO-A).
+require_cmd jq
 kubeconfig_ready
 : "${GITEA_NAMESPACE:?}"; : "${GITEA_ADMIN_USER:?}"
 : "${GITEA_ADMIN_PASSWORD:?set GITEA_ADMIN_PASSWORD in .env}"
@@ -121,7 +126,30 @@ Read Gitea's message above: it names which field collided. A duplicate e-mail is
 GITEA_ADMIN_USER and GITEA_ADMIN_EMAIL in .env.example must BOTH match the existing account, or
 BOTH be new. Changing only the username hits the same collision again."
     fi
-    log_info "admin '${GITEA_ADMIN_USER}' already exists — continuing"
+    # RECONCILE THE PASSWORD — "continuing" left it DIVERGED, and creds.sh prints it as fact.
+    # Same class as the webhook secret below, one credential over: 02-env.sh REGENERATES
+    # GITEA_ADMIN_PASSWORD on every fresh clone (secrets are gitignored), Gitea keeps the original,
+    # and nothing reconciles them — so `make creds-show` hands the operator a Gitea login that does
+    # not work, on the payoff step, silently. It stays invisible because this script authenticates
+    # with the TOKEN, which IS validated and re-minted a few lines below; only a human typing the
+    # password into the UI ever finds out.
+    # The password goes in on STDIN, never argv — same contract as the create call above.
+    local pw_out pw_rc=0
+    pw_out="$(kubectl -n "$GITEA_NAMESPACE" exec -i deploy/gitea -- sh -s <<EOF 2>&1
+gitea admin user change-password --username "$GITEA_ADMIN_USER" \
+  --password "$GITEA_ADMIN_PASSWORD" --must-change-password=false
+EOF
+)" || pw_rc=$?
+    if [ "$pw_rc" -eq 0 ]; then
+      log_info "admin '${GITEA_ADMIN_USER}' already exists — password reconciled to the .env value"
+    else
+      # NOT fatal: the token path still works, and a lab may forbid it. But say so loudly, because
+      # the consequence is a printed credential that does not log in.
+      log_warn "admin '${GITEA_ADMIN_USER}' already exists, and its password could NOT be reconciled:"
+      log_warn "  ${pw_out//"$GITEA_ADMIN_PASSWORD"/<redacted>}"
+      log_warn "  -> GITEA_ADMIN_PASSWORD in .env may NOT be the password that works, and"
+      log_warn "     'make creds-show' will print it anyway. Reset it in the Gitea UI if you need it."
+    fi
   fi
   log_info "generating CI access token"
   TOKEN="$(kubectl -n "$GITEA_NAMESPACE" exec deploy/gitea -- \
@@ -282,17 +310,47 @@ seed_app() {
   # `set -o pipefail` reads as "no hook present" -> we would create the duplicate this check exists
   # to prevent.
   local hooks_body; hooks_body="$(api_body -X GET "$hooks_api" || true)"
-  if printf '%s' "$hooks_body" | grep -F "$hook_url" >/dev/null; then
-    log_info "webhook on ${APP_GIT_REPO} -> ${hook_url} already present — skipping (idempotent)"
-  else
-    cat > "${tmp}/hook-${app}.json" <<EOF
+
+  # RECONCILE, DO NOT SKIP — and DELETE+POST, because PATCH CANNOT SET THE SECRET.
+  #
+  # This branch used to log "already present — skipping (idempotent)" whenever a hook with our URL
+  # existed. The reason was right (Gitea does not dedupe hooks, so a blind re-POST fires 2
+  # PipelineRuns per push) and the remedy was wrong: it keys on the URL and is therefore BLIND to a
+  # ROTATED SECRET. MEASURED, walk row 2 (2026-08-12), the EVERYTHING-exists cell:
+  #   row 1: `generated shared secret token` (T1) -> hook created http 201 -> secret CREATED -> verify PASSED
+  #   row 2: `generated shared secret token` (T2) -> "already present — skipping" -> secret CONFIGURED
+  #          -> `no PipelineRun for javawebapp-ci after 2 attempts`
+  # Every row runs on a fresh VM and `secrets/` is gitignored, so ensure_secret_token (lib/os.sh:871)
+  # mints a NEW token; 60-configure-tekton.sh applies it to k8s while Gitea keeps the OLD one. The
+  # core-interceptor's HMAC check then rejects every delivery, silently, forever.
+  #
+  # ⚠️ PATCH IS A SILENT NO-OP FOR THE SECRET. Source-read at the PINNED tag (gitea/gitea:1.27.1,
+  # images/images.txt): in routers/api/v1/utils/hook.go, `Secret:` appears exactly ONCE — line 221,
+  # inside addHook() (the POST path). editHook() (340-398) reads only url, content_type and the
+  # Slack keys, so a PATCH carrying config.secret returns 200 and changes NOTHING. It would also
+  # CLEAR two fields it does not mention: :379 `w.BranchFilter = form.BranchFilter` and :381
+  # SetHeaderAuthorization(...) are both unconditional. And Gitea never RETURNS the stored secret
+  # (services/webhook/general.go:394 ToHook(), with a comment saying so), so we cannot compare and
+  # must rewrite unconditionally. DELETE + POST are the only two verbs whose secret handling is
+  # proven, so that is what this does.
+  local ids; ids="$(printf '%s' "$hooks_body" \
+    | jq -r --arg u "$hook_url" '.[]? | select(.config.url == $u) | .id' 2>/dev/null || true)"
+  if [ -n "$ids" ]; then
+    # ALL of them, not the first: this also repairs a duplicate left by an older run.
+    while IFS= read -r hid; do
+      [ -n "$hid" ] || continue
+      local dcode; dcode="$(api -X DELETE "${hooks_api}/${hid}")"
+      ok "$dcode" || die "could not delete the existing webhook ${hid} on ${APP_GIT_REPO} (http $dcode)"
+      log_info "webhook on ${APP_GIT_REPO}: removed stale hook ${hid} (its HMAC secret cannot be read back, let alone patched)"
+    done <<< "$ids"
+  fi
+  cat > "${tmp}/hook-${app}.json" <<EOF
 {"type":"gitea","active":true,"events":["push"],
  "config":{"url":"${hook_url}","content_type":"json","secret":"${WEBHOOK_TOKEN}"}}
 EOF
-    local code; code="$(api -X POST -d @"${tmp}/hook-${app}.json" "$hooks_api")"
-    ok "$code" || die "webhook registration failed for ${APP_GIT_REPO} (http $code)"
-    log_info "webhook on ${APP_GIT_REPO} -> ${hook_url} (http $code)"
-  fi
+  local code; code="$(api -X POST -d @"${tmp}/hook-${app}.json" "$hooks_api")"
+  ok "$code" || die "webhook registration failed for ${APP_GIT_REPO} (http $code)"
+  log_info "webhook on ${APP_GIT_REPO} -> ${hook_url} (http $code, secret in force)"
 }
 for_each_app seed_app
 
