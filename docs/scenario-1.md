@@ -633,13 +633,21 @@ The running server is the one that matters.
 make env-populate     # generates Gitea's admin password; discovers anything you left blank
 make env-check        # every required value set? (fast, no network)
 make env-validate     # does KUBECONFIG reach the cluster? does Harbor authenticate?
+```
 
+**Expect:** `env-validate` reports Harbor reachable **and authenticated**.
+
+**Do not go on until it does.** `install-all` cannot succeed on a credential `env-validate` has
+rejected, and it takes 8–10 minutes to say so. Fix it here — Step 4 tells you where the password
+comes from.
+
+```bash
 make install-all      # preflight -> mirror -> builder -> platform -> gitops
 make verify           # pushes a marked change and follows it to the running app
 ```
 
-**Expect:** `env-validate` reports Harbor reachable **and authenticated**; `install-all` completes;
-`make verify` exits **0** for every app. *(**install-all 8–10 min**, **verify 3–4 min**)*
+**Expect:** `install-all` completes; `make verify` exits **0** for every app.
+*(**install-all 8–10 min**, **verify 3–4 min**)*
 
 `install-all` begins with `lab-preflight`, which stops in the first seconds on anything the lab is
 missing. Most often: **no default StorageClass**. Fix it and re-run `install-all`:

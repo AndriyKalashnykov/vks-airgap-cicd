@@ -32,7 +32,8 @@ ENV_FILE="${REPO_ROOT}/.env"
 EXAMPLE_FILE="${REPO_ROOT}/.env.example"
 
 # A value is "unset" for our purposes if empty OR still a committed placeholder.
-is_placeholder() { case "$1" in ''|'<SET-IN-.env>'|*'<SET-'*) return 0 ;; *) return 1 ;; esac; }
+# is_placeholder now lives in lib/os.sh (sourced above): lib/harbor.sh's auth probe needs it too,
+# and 24-lab-preflight.sh sources lib/os.sh but not this file. One definition, both consumers.
 
 # HARBOR_URL is COMMENTED in .env.example (B13), so it is UNSET by default — is_placeholder catches
 # that (empty). But an operator may still type `harbor.vks.local` (this repo's own `.vks.local`

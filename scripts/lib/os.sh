@@ -656,6 +656,18 @@ kubeconfig_ready() {
 #       after  -> p w  \  r u p l o a d ...(the two-character escape curl expects)
 esc_curlk() { local s=$1; s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}; s=${s//$'\r'/\\r}; printf '%s' "$s"; }
 
+# is_placeholder <value> — "the operator has not supplied this yet": empty, or a `<SET-…>` token.
+#
+# IT LIVES HERE, NOT IN 02-env.sh, because a second consumer appeared. lib/harbor.sh's auth probe
+# needs it, and 24-lab-preflight.sh sources lib/os.sh + lib/harbor.sh but NOT 02-env.sh -- so the
+# call resolved to `command not found` (127). Inside an `if`, `set -e` is suspended, so it silently
+# read as FALSE and the probe ran with an EMPTY password, reporting "Harbor REJECTED admin (401)"
+# for a credential nobody had set. Caught 2026-08-12 by test-harbor-auth-report.sh on its first run.
+#
+# A FUNCTION, not a variable: load_env sources `.env` with `set -a` AFTER this library, so a
+# top-level `PLACEHOLDER_TOKEN=` would be clobberable from a `.env`. A function definition is not.
+is_placeholder() { case "${1:-}" in ''|'<SET-IN-.env>'|*'<SET-'*) return 0 ;; *) return 1 ;; esac; }
+
 # esc_sq <value> — make a value safe INSIDE single quotes: it's -> it'\''s
 #
 #   For a `.env` line that load_env sources with `set -a`. Single-quoting alone is not inert: a `'`
