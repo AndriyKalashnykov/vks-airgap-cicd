@@ -435,7 +435,16 @@ unwedge-supervisor-service: ## BREAK-GLASS (SERVICE=<id> CONFIRM=yes): a Supervi
 
 ##@ VKS access
 .PHONY: vks-login
-vks-login: check-env ## Authenticate to VKS (VCF 9 + Supervisor) → writes KUBECONFIG/context
+# NO check-env PREREQ. check-env demands the values the WHOLE flow needs -- HARBOR_URL,
+# HARBOR_USERNAME, HARBOR_PASSWORD, GITEA_ADMIN_PASSWORD -- but this target is the SUPERVISOR login
+# and needs none of them. scenario-1 runs it at Step 3, and the document does not introduce Harbor
+# until Step 4 or Gitea until Step 11, so a reader following the document EXACTLY was told to run a
+# command that cannot succeed. MEASURED 2026-08-11 on a .env freshly copied from .env.example:
+# "env-check: 4 required value(s) missing/placeholder" -- with every value Step 3 itself asks for
+# correctly set. Nothing is weakened: install-all still gets env-check via `preflight` (its first
+# prerequisite), and 30-vks-login.sh guards what IT needs (KUBECONFIG, kubectl, and the vcf CLI on
+# the vcf path).
+vks-login: ## Authenticate to VKS (VCF 9 + Supervisor) → writes KUBECONFIG/context
 	@$(SCRIPTS)/30-vks-login.sh
 
 .PHONY: vks-cluster-create
