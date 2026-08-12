@@ -32,16 +32,28 @@ fail=0
 ok()  { printf 'ok    %s\n' "$1"; }
 bad() { printf 'FAIL  %s\n' "$1" >&2; fail=1; }
 
-# The state overlay is the thing under test, so it must be OURS for the duration: stash a real one and put
-# it back, or a developer with a live cluster would have it deleted by a unit test. (A test that destroys
-# the operator's state is a worse bug than the one it checks for.)
-SINK="$(bash -c '. scripts/lib/os.sh; state_file' 2>/dev/null || echo .env.state)"
-SAVED=""
-if [ -f "$SINK" ]; then SAVED="$(mktemp)"; cp "$SINK" "$SAVED"; fi
+# The state overlay is the thing under test, so it must be OURS — and the way to make it ours is to
+# POINT SOMEWHERE ELSE, not to borrow the operator's file and promise to give it back.
+#
+# It used to save/delete/restore the REAL sink, and that save-and-restore had two defects, both
+# measured 2026-08-12:
+#   1. IT DOWNGRADED THE MODE OF A SECRET FILE. `render()` does `rm -f "$SINK"` then recreates it
+#      under the default umask, and `cp "$SAVED" "$SINK"` preserves the DESTINATION's mode — so a
+#      0600 sink came back 0664. Measured exactly: 600 -> 664. `.env.state` holds the GENERATED
+#      Harbor/Gitea/ArgoCD passwords, and this gate runs in `test-scripts` -> `static-check` ->
+#      `make ci`, so every CI run on a box with a real sink left those passwords group- and
+#      world-readable, permanently.
+#   2. It raced anything else using the sink (a live lab walk publishes to it mid-run), and a
+#      `kill -9` between delete and restore lost it outright.
+# `state_file()` honours VKS_STATE_FILE (lib/state.sh), and it ships COMMENTED in .env.example, so
+# exporting it here redirects every reader — the product's `load_env` included — at a temp file.
+# Nothing of the operator's is touched, which is also why this gate is now safe to run during a walk.
+export VKS_STATE_FILE="${VKS_STATE_FILE:-$(mktemp)}"
+SINK="$VKS_STATE_FILE"
+# Nothing to put back any more — the sink IS ours. The old save/restore branch is deliberately gone
+# rather than left inert: a guard that can never fire reads as a guarantee it does not give.
 # shellcheck disable=SC2329  # invoked by the EXIT trap below
-restore() {
-  if [ -n "$SAVED" ]; then cp "$SAVED" "$SINK"; rm -f "$SAVED"; else rm -f "$SINK"; fi
-}
+restore() { rm -f "$SINK"; }
 trap restore EXIT
 
 # SKIP_DOTENV=1 IS LOAD-BEARING. Without it `load_env` sources the operator's real ./.env and

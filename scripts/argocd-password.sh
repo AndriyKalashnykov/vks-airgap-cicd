@@ -39,8 +39,18 @@ ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
 # 1. The auto-generated initial-admin secret — if it EXISTS, it is the password in force.
 if command -v kubectl >/dev/null 2>&1 && [ -n "${KUBECONFIG:-}" ] && [ -f "${KUBECONFIG:-}" ]; then
   export KUBECONFIG
-  if enc="$(kubectl -n "$ARGOCD_NAMESPACE" get secret argocd-initial-admin-secret \
-              -o jsonpath='{.data.password}' 2>/dev/null)" && [ -n "$enc" ]; then
+  # BOUNDED, and stdin CLOSED. This is the single most expensive call in `make creds-show`:
+  # MEASURED 2026-08-12 against a blackholed endpoint it cost 150,061 ms of the report's 168,189 ms
+  # total — 89% — because a bare `kubectl get` RETRIES the dial. `--request-timeout` alone does not
+  # bound it either (measured: `--request-timeout=3s get` still took 15,034 ms, 5x the flag, while
+  # `version` was bounded at 3,033 ms). And without `</dev/null` a kubeconfig whose user has no
+  # credentials makes kubectl print `Please enter Username:` and WAIT — measured, it held a
+  # 6s-delayed stdin for the full 6,004 ms, which on a terminal is an indefinite hang.
+  # A report that hangs is worse than one that says <not set>: the operator Ctrl-Cs and never sees
+  # the Context block explaining why the value is stale.
+  if enc="$(timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl --request-timeout=5s -n "$ARGOCD_NAMESPACE" \
+              get secret argocd-initial-admin-secret \
+              -o jsonpath='{.data.password}' </dev/null 2>/dev/null)" && [ -n "$enc" ]; then
     if [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]; then
       log_warn "ARGOCD_ADMIN_PASSWORD is set, but the cluster still has argocd-initial-admin-secret"
       log_warn "  -> your value was NEVER APPLIED (an install with SKIP_DOTENV=1 does not read .env)."
