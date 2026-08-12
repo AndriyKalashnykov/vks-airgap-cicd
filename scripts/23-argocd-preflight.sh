@@ -37,7 +37,7 @@ argocd_tls_opts   # ARGOCD_CA_FILE -> --server-crt, once, for every argocd call 
 require_cmd kubectl
 : "${KUBECONFIG:?KUBECONFIG must be set (path to the GUEST/workload-cluster kubeconfig)}"; export KUBECONFIG
 
-NS="${ARGOCD_NAMESPACE:-argocd}"
+NS="$(argocd_namespace)"   # lib/os.sh: installer and reader agree
 ARGOCD_KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}"   # VKS_ARGOCD_CRD now lives in lib/argocd.sh
 blocking=0
 warned=0

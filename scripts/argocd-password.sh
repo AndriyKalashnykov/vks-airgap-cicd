@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 load_env
 
-ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
+ARGOCD_NAMESPACE="$(argocd_namespace)"   # lib/os.sh: installer and reader agree
 
 # THE CLUSTER IS THE TRUTH, NOT `.env`.
 #

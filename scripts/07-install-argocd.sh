@@ -34,6 +34,11 @@ require_cmd kubectl
 . "${SCRIPT_DIR}/lib/tls.sh"
 require_kind_target "install-argocd"
 : "${ARGOCD_VERSION:?ARGOCD_VERSION must be set in .env.example}"
+# PINNED, not derived. This is the KinD/self-hosted installer and it creates the namespace itself,
+# so `argocd` is true BY CONSTRUCTION here. It must NOT inherit VKS_NAMESPACE: `.env.example` always
+# sets that (it is the vSphere Namespace of a real lab), so deriving would make a KinD run install
+# into `cicd` and every KinD reader then look in `argocd`. MEASURED 2026-08-12 while fixing the
+# real-lab half of exactly this disagreement.
 ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"

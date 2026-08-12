@@ -520,8 +520,9 @@ Harbor publishes it, so no login is needed.
 ```bash
 set -a; . ./.env; set +a
 curl -sk --fail --max-time 20 -o ./secrets/harbor-ca.crt \
-  "https://${HARBOR_URL}/api/v2.0/systeminfo/getcert" || { rm -f ./secrets/harbor-ca.crt; echo "Harbor is not reachable at ${HARBOR_URL} — check the A record (make show-dns-records)"; }
-chmod 0644 ./secrets/harbor-ca.crt 2>/dev/null
+  "https://${HARBOR_URL}/api/v2.0/systeminfo/getcert" \
+  || { rm -f ./secrets/harbor-ca.crt; echo "Harbor is not reachable at ${HARBOR_URL} — check the A record (make show-dns-records)"; exit 1; }
+chmod 0644 ./secrets/harbor-ca.crt
 openssl x509 -in ./secrets/harbor-ca.crt -noout -subject     # expect: CN = Harbor CA
 ```
 
@@ -589,7 +590,7 @@ CI pushes with a scoped credential instead of `admin`. Needs project-admin.
 
 ```bash
 make harbor-robot            # writes ./secrets/harbor-robot.env (mode 0600)
-cat ./secrets/harbor-robot.env
+ls -l ./secrets/harbor-robot.env
 ```
 
 **Expect:** a `robot$vks-cicd` account scoped to your two projects. *(<1 min)*
