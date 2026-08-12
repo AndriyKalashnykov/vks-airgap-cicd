@@ -128,7 +128,24 @@ verify_app() {
     git -C "$d" push -q origin "$APP_BRANCH" >/dev/null 2>&1 || true
     kill "$PF_PID" 2>/dev/null || true; PF_PID=""
   done
-  [ -n "$pr" ] || die "[${app}] no PipelineRun for ${app}-ci after 2 attempts — check the Gitea webhook + the shared EventListener (kubectl -n $CI_NAMESPACE get el,trigger,pods)"
+  if [ -z "$pr" ]; then
+    # COLLECT THE EVIDENCE BEFORE DYING. This die used to name `kubectl -n ci get el,trigger,pods`
+    # — and every object in that list looks HEALTHY when this fails, so it sent the operator to
+    # inspect things that are all fine. MEASURED (walk row 2, 2026-08-12): the real cause was a
+    # webhook whose HMAC secret had been rotated on one side only, and the rejection is logged by
+    # tekton-triggers-core-interceptors — a SEPARATE deployment in a DIFFERENT namespace that this
+    # message never mentioned. On a throwaway walkbox that evidence dies with the VM.
+    log_error "[${app}] no PipelineRun for ${app}-ci after 2 attempts. Collecting the logs that name the cause:"
+    log_error "--- EventListener sink (${CI_NAMESPACE}/el-apps) ---"
+    kubectl -n "$CI_NAMESPACE" logs deploy/el-apps --tail=50 2>&1 | sed 's/^/    /' >&2 || true
+    log_error "--- Tekton core interceptors (tekton-pipelines) — an HMAC mismatch is logged HERE ---"
+    kubectl -n tekton-pipelines logs deploy/tekton-triggers-core-interceptors --tail=50 2>&1 | sed 's/^/    /' >&2 || true
+    die "[${app}] no PipelineRun for ${app}-ci after 2 attempts.
+  If the interceptor log above shows a signature/HMAC failure, Gitea's webhook secret and the
+  ${CI_NAMESPACE}/gitea-webhook-secret Secret have diverged — re-run 'make seed-gitea', which now
+  rewrites the hook (Gitea cannot patch a webhook secret, so it is deleted and recreated).
+  If it shows nothing at all, the delivery never arrived: check the hook in Gitea itself."
+  fi
   log_info "[${app}] PipelineRun: $pr"
 
   if ! kubectl -n "$CI_NAMESPACE" wait --for=condition=Succeeded --timeout="${READY_TIMEOUT_SECONDS}s" "$pr"; then
