@@ -563,59 +563,84 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-10 (scenario-1 walked TWICE; the lab is INSTALLED) — READ, THEN REPLACE (do not append)
+## ▶️ HANDOFF 2026-08-12 00:30 EDT (walk harness fixed 4x; Step 3 fixed; rows 1+2 RUNNING DETACHED) — READ, THEN REPLACE
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-> 🔴 **NO BUILD-STATUS CLAIMS IN THIS SECTION** — a task status is true when written and falsified by
-> the next commit. Write the STATE; query anything that moves.
+### IN FLIGHT — do not start a second lab operation
 
-**State: NOTHING in flight** — no open PRs of ours, no local branch but `main`, tree clean apart from
-`.env` (gitignored). No SHA here on purpose: the commit that writes one invalidates it (B63);
-`git log --oneline -5` is the tip.
+`/tmp/walk/run-rows.sh` is **detached** (its own session, ppid=systemd, so it survived the session
+that launched it). It runs: `make walk-reset CONFIRM=yes` → `make walk-matrix WALK_ROWS="1 2"`.
+Log: **`/tmp/walk/ROWS12.log`**; per-row: `/tmp/walk/MATRIX-row1-ubuntu.log`, `-row2-photon.log`.
 
-### The lab is INSTALLED, and it is not the layout earlier handoffs describe
+```bash
+# is it alive?  (grep -v 'zsh -c' -- the check's own argv contains the pattern)
+ps -eo pid,args --no-headers | grep -E 'run-rows|walk-matrix\.sh' | grep -v 'zsh -c'
+# the verdict
+grep -E 'WALK DONE|DOCUMENT -|MATRIX|RESET_RC' /tmp/walk/ROWS12.log
+```
 
-scenario-1 was walked end to end **twice** today — once on the rebuilt lab, then again **from scratch**
-(both Supervisor Services deregistered, new namespace, new cluster) to confirm the fixes.
+⚠️ **`pgrep -f` SELF-MATCHES and lied twice tonight** — it reported 2 live walk processes when there
+were none, because the checking command's own argv contains the pattern. Exclude `zsh -c`, or key on
+an artifact (`kind`/`virsh` domain, the log's mtime), never a bare process grep.
 
-- **vSphere Namespace `cicd`** is the live one. **`lab` is the LAB's OWN namespace — do NOT delete
-  it.** It is declared at `input.yaml:77` in nested-vsphere-lab and created by `make lab`; the lab
-  repo's `namespace-delete` target refuses it by name (*"it is this lab's own namespace ... tear the
-  lab down with make destroy instead"*). An earlier version of this handoff called it a leftover from
-  the first walk. That was wrong. It is now empty apart from the `kube-root-ca.crt` configmap and the
-  `default` ServiceAccount, which Kubernetes creates in every namespace.
-- **Guest cluster `cicd-gc4`** (v1.34.8+vmware.1), 3 nodes, kubeconfig `./secrets/cicd-gc4.kubeconfig`.
-- Harbor **192.168.101.135**, ArgoCD **192.168.101.136**, ingress LB **192.168.101.139**.
-  `harbor.env1.lab.test` resolves via libvirt dnsmasq on `nested-mgmt` + `supwl`.
-- Both apps are deployed and were verified end to end; all 4 UIs route through Istio.
-- `.env` points at `cicd` / `cicd-gc4`. `VKS_K8S_VERSION` had to move to a 1.34 release — the old
-  `v1.32.x` pin matches **no** TKr on this Supervisor.
+**Expected duration 60–90 min.** A "MATRIX COMPLETE" in ~6 minutes is a FAILURE, not a pass: that is
+what the two failed runs did. Duration is the signal.
 
-### 🔴 Distrust these — measured, not reasoned
+**Row 2 needs no reset** (it consumes exactly what row 1 builds). **Rows 3/4 need the cell back at
+nothing** — `make walk-reset CONFIRM=yes` in nested-vsphere-lab, ~4 min, proven.
 
-- **The transient-handling work merged WITHOUT an adversary round.** `ADVERSARY_GATE_OFF=1` was used
-  several times to keep the walk moving. Each was a same-class fix inside a case statement an earlier
-  round had cleared — but that is a judgement, not a review. Re-review it before trusting it.
-- **A 5xx from a Supervisor Service install is now RETRYABLE BY DEFAULT** (4xx still fails fast). The
-  stated cost: a genuinely permanent 5xx takes the full 10-minute budget before dying. It dies quoting
-  vCenter verbatim, so the diagnosis is delayed, not lost.
-- **Three guards, no assertion.** CR applies are protected by helm `--wait`, `kubectl wait
-  condition=Available`, and one retry-on-error. Nothing makes a NEW CR-applying site pick one. See B85.
-- **On the Supervisor you cannot enumerate webhooks** — `validatingwebhookconfiguration` is Forbidden
-  for the tenant context. Any Supervisor-side claim about what is webhook-gated is inferred from
-  behaviour. Shipped scripts are unaffected: the only cluster-scoped read they issue there is `crd`,
-  and that is permitted.
-- **`make deps` needs sudo** (apt-get) and scenario-1 does not say so. It dies with a raw sudo error on
-  a non-interactive run.
+### What shipped tonight (5 PRs, all merged)
 
-### What the two walks proved
+| PR | fix |
+|---|---|
+| #559 | walker: a doc TABLE row must be writable, ordered, and visible to the commands |
+| #560 | `fetch-supervisor-ca`: retry the transient, fail fast on a wrong host, name what was observed |
+| #561 | **scenario-1 Step 3 could not succeed for ANY reader** — two walls |
+| #562 | the SSO password lives in `.env`, stated once (owner decision) |
+| lab repo | heredoc prose executed on the host; lease-vs-ARP resolver; `make walk-reset` |
 
-Every documented step 0–12 runs, including the ones that were impossible this morning: the ArgoCD
-instance is created, `install-ingress` returns 0 on the first attempt on a PSA-enforcing cluster, and
-`make verify` exits 0 for both apps. Harbor's generated admin password authenticates and the vendor
-default `Harbor12345` is rejected 401.
+**The Step 3 finding is the headline.** `vks-login: check-env` demanded HARBOR_URL / HARBOR_USERNAME
+/ HARBOR_PASSWORD / GITEA_ADMIN_PASSWORD — which scenario-1 does not introduce until Steps 4 and 11.
+And the doc used `VKS_AUTH_METHOD` at Step 3 while first mentioning it at line 367 (Step 5). Both
+measured on a `.env` freshly copied from `.env.example`; both 100% reproducible; together they
+cascaded into 15 of 30 blocks failing.
+
+### 🔴 Distrust these
+
+- **The harness HIDES defects by supplying values a reader would not have.** `walk_env` still
+  supplies `HARBOR_URL`/`HARBOR_USERNAME`/`HARBOR_PASSWORD`, which is exactly what hid Step 3's
+  first wall from three consecutive walks. `walkbox.sh`'s `VKS_AUTH_METHOD:-vcf` was removed for the
+  same reason. **Any fixture that pre-sets what the artifact should require is a blind spot.**
+- **Steps 6–13 have NEVER been reached this session.** Best progress was block [17] (Step 6, guest
+  cluster). Everything past it — preflight, Harbor CA, robot, ArgoCD kubeconfig, `install-all`
+  (40+ min), verify, ingress — is unexercised. Expect a new defect there; tonight every run died on
+  something nobody had reached before.
+- **`make check` is RED on nested-vsphere-lab's `main`** (`hardcodes`, the walk scripts' literal
+  `vks@`). Mine: the harness was merged there without running that repo's own gate. Not loosened.
+- **`check-env-coverage` is green on files it never opens.** Its file list is ENUMERATED; **23** of
+  the operator scripts reachable from a `##`-documented make target are unscanned, including
+  `fetch-supervisor-ca.sh` and every Supervisor-service script. Deriving it surfaces ~9 genuinely
+  undocumented operator knobs (`ARGOCD_HOST`, `SERVICE`, `PACKAGE`, `WCP_WAIT_SECONDS`,
+  `VKS_PACKAGE_*`, `UNINSTALL_SERVICE_WAIT_SECONDS`).
+
+### Queued, measured, NOT started (batch these — one branch, one push)
+
+1. `check-env-coverage` derives its file list from the Makefile's `##`-documented targets + documents
+   the ~9 knobs that surfaces.
+2. `walk_env` stops supplying `HARBOR_*` so the walk can see what a reader sees.
+3. nested-vsphere-lab `make hardcodes` — decide the shape for the walk boxes' `vks` ssh user.
+
+⚠️ 2 and 3 edit `scripts/walk-matrix.sh` / `walkbox-vm.sh`. **Do not edit them while a row is
+running** — bash reads scripts incrementally and a mid-run edit corrupts the running walk. Prepare in
+a `git worktree`, apply when the rows finish.
+
+### Operator note
+
+`~/remove-the-hook.md` — exact, dry-run-tested instructions to remove the `git push` / `gh pr merge`
+confirmation prompts (BOTH the `permissions.ask` list AND the `ask-on-outward.py` hook; removing one
+leaves you still prompted). Requires a NEW session to take effect. Their other 4 hooks survive.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
