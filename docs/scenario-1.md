@@ -549,9 +549,11 @@ sha256sum ./secrets/harbor-ca.crt
   make harbor-ca-from-cluster
   ```
 
-Note `make fetch-harbor-ca` reads the CA off the live connection, so it works only when Harbor's
-certificate is self-signed. If a separate CA issued it — the usual case — that command stops and
-tells you so.
+Note `make fetch-harbor-ca` derives the CA from the TLS handshake, so it works only when the **last**
+certificate Harbor sends is a self-signed CA that **directly issued** Harbor's certificate — a
+self-signed cert, or a single-level private CA. If there is an **intermediate** in the path (the
+usual corporate PKI) it stops and tells you so: the certificate it extracts cannot verify Harbor's
+leaf on its own. Get the CA from Harbor's UI or from your platform team instead.
 
 </details>
 
@@ -691,7 +693,11 @@ it prints.** It has more outcomes than the two obvious ones, so do not guess fro
   request from the mesh admin. That is the answer, not a failure: with them set, the attach command
   needs no read access at all.
 
-Whichever it names takes about **5 minutes**.
+**How long it takes varies more than anything else in this runbook, so do not use the clock to judge
+it.** Attaching runs no helm at all — usually seconds. Installing runs three helm charts and two
+readiness waits, each with its own deadline: a re-run against a warm cluster is ~10 seconds, a cold
+install on a fresh one is minutes, and the ceiling is ~25. To lengthen a deadline set
+`READY_TIMEOUT_SECONDS` **in `.env`** — on the `make` command line it does nothing.
 
 ⚠️ **Never run the bare `make install-ingress` against a mesh you did not install.** It helm-installs
 a second istiod over the platform's, and before it gets far enough to fail it relabels the
