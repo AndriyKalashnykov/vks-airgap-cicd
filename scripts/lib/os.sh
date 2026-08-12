@@ -654,6 +654,38 @@ kubeconfig_ready() {
 #   MEASURED here 2026-08-05, `pw\rupload-file = /etc/passwd` through od -c:
 #       before -> p w \r u p l o a d ...   (a raw 0x0D reaches the config file)
 #       after  -> p w  \  r u p l o a d ...(the two-character escape curl expects)
+# supervisor_kubeconfig — the ONE resolver for "where is the Supervisor kubeconfig".
+#
+# Harbor and ArgoCD are SUPERVISOR Services, so every script that talks to them needs this, and SEVEN
+# of them had hand-rolled the same chain. Two shapes were in the tree at once:
+#   ${VKS_SUPERVISOR_KUBECONFIG:-${SUPERVISOR_KUBECONFIG:-<default>}}   first that is SET
+#   a loop over candidates                                             first that EXISTS
+# They are NOT the same, and show-dns-records.sh:26-29 records what the difference cost: .env carries
+# ARGOCD_KUBECONFIG for a file Step 10 creates LATER, so the `:-` chain picked that unset-but-
+# configured path, the real file lost, and the die named a file it had never looked at.
+#
+# FIRST THAT EXISTS, therefore. VKS_SUPERVISOR_KUBECONFIG leads because that is the name the WRITER
+# (30-vks-login.sh) honours; $KUBECONFIG is LAST because from scenario-1 Step 6 onward it is the
+# GUEST cluster, which has no harbor or argocd namespace at all -- so preferring it turns "wrong
+# cluster" into "the service does not exist", an error naming the wrong cause.
+supervisor_kubeconfig() {
+  local c
+  for c in "${VKS_SUPERVISOR_KUBECONFIG:-}" "${SUPERVISOR_KUBECONFIG:-}" \
+           "${REPO_ROOT}/secrets/supervisor.kubeconfig" "${ARGOCD_KUBECONFIG:-}" "${KUBECONFIG:-}"; do
+    [ -n "$c" ] && [ -s "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+
+# supervisor_kubeconfig_or_die [what-needs-it]
+supervisor_kubeconfig_or_die() {
+  local k
+  k="$(supervisor_kubeconfig)" || die "no readable Supervisor kubeconfig${1:+ (needed by $1)} — run 'make vks-login' (scenario-1 Step 3).
+  Tried, in order: VKS_SUPERVISOR_KUBECONFIG, SUPERVISOR_KUBECONFIG, ${REPO_ROOT}/secrets/supervisor.kubeconfig, ARGOCD_KUBECONFIG, KUBECONFIG.
+  Harbor and ArgoCD are SUPERVISOR Services; the guest cluster has neither namespace."
+  printf '%s' "$k"
+}
+
 esc_curlk() { local s=$1; s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}; s=${s//$'\r'/\\r}; printf '%s' "$s"; }
 
 # is_placeholder <value> — "the operator has not supplied this yet": empty, or a `<SET-…>` token.
@@ -711,13 +743,34 @@ doc_robot_line_is_bad() {
 # `state_set` (the stamped overlay) or name their own file. A missing sink is now a loud error, not a
 # silent write to the wrong place.
 # Used by the KinD flow to publish discovered values to the normal scripts.
+# TWO BUGS LIVED IN THE PREVIOUS THREE LINES, both measured 2026-08-12, both silent:
+#
+#   grep -vE "^${key}=" "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+#
+# 1. `mv` REPLACES THE INODE, so the destination takes the TMP's mode -- which `>` created under the
+#    caller's umask. Measured with a 0600 .env and umask 022: 600 -> 644. `.env` holds
+#    VCF_CLI_VSPHERE_PASSWORD and HARBOR_PASSWORD, so every rewrite silently un-hardened an operator
+#    who had chmod 600'd it. `cat > "$file"` truncates IN PLACE and keeps mode and ownership.
+# 2. `&&` MEANT THE REWRITE WAS SKIPPED when the file contained ONLY that key: grep -v then emits
+#    nothing and exits 1, so `mv` never ran, the OLD line survived, and the append left BOTH.
+#    Measured: `A=1` and `A=9` in one file, plus an orphaned `.env.tmp`. It happened to work because
+#    both load_env's `set -a` and make's `-include` take the LAST assignment -- luck, not design.
+#
+# The first test I wrote for this used a single-key file, hit bug 2, and reported the mode PRESERVED
+# -- i.e. it could not see bug 1 at all. Hence a fixture with a second key below.
 set_env_var() {
   local key="$1" val="$2" file="${3:?set_env_var: a SINK is required — use state_set (the stamped overlay) or pass an explicit file}"
   mkdir -p "$(dirname "$file")"; touch "$file"
-  if grep -qE "^${key}=" "$file" 2>/dev/null; then
-    grep -vE "^${key}=" "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
-  fi
-  printf '%s=%s\n' "$key" "$val" >> "$file"
+  local tmp; tmp="$(mktemp)"
+  # `|| true`: grep -v exits 1 when it emits NOTHING, which is the normal single-key case.
+  grep -vE "^${key}=" "$file" > "$tmp" 2>/dev/null || true
+  printf '%s=%s\n' "$key" "$val" >> "$tmp"
+  cat "$tmp" > "$file"          # NOT mv — preserves the destination's mode and ownership
+  rm -f "$tmp"
+  # Sweep the LEGACY orphan. The old `> "${file}.tmp" && mv` left one behind on every single-key
+  # rewrite (the && blocked the mv), so an operator's box can be carrying a stale `.env.tmp` —
+  # world-readable, and holding a COPY of the file minus one line, i.e. their other secrets.
+  rm -f "${file}.tmp"
 }
 
 # ---------------------------------------------------------------------------

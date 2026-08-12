@@ -311,14 +311,37 @@ harbor_auth_report() {
 # returns 0 for "nothing to report", which includes "the name does not resolve yet" (a note, not a
 # problem -- correct for a preflight, useless as a predicate). A wait loop keyed on the reporter
 # would exit immediately on an unresolvable name and declare Harbor reachable.
-harbor_reachable_ok() {
-  [ -n "${HARBOR_URL:-}" ] || return 1
-  getent hosts "${HARBOR_URL%%:*}" >/dev/null 2>&1 || return 1
-  local code
+# _harbor_serving_code — the reachability probe, ONCE. Extracted for the same reason
+# _harbor_auth_code and _harbor_ca_args were: the moment two copies drift, one of them judges a
+# different thing from the other. Prints an http code, or 000.
+_harbor_serving_code() {
+  # rc CAPTURED SEPARATELY, never `|| printf 000`: curl's -w ALREADY prints 000 on a refused
+  # connection AND exits non-zero, so the `||` appends a second one and the caller compares
+  # "000000" against "000". Measured twice today -- the identical bug was fixed in
+  # _harbor_auth_code this morning and re-introduced here by copying the wrong shape.
+  local rc=0 code
   code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time "${HARBOR_PROBE_TIMEOUT_SECONDS:-10}" \
-            "https://${HARBOR_URL}/api/v2.0/systeminfo" 2>/dev/null || true)"
-  case "${code:-000}" in 000|'') return 1 ;; *) return 0 ;; esac
+            "https://${HARBOR_URL}/api/v2.0/systeminfo" 2>/dev/null)" || rc=$?
+  [ "$rc" = 0 ] || code=000
+  case "${code:-}" in ''|*[!0-9]*) code=000 ;; esac
+  printf '%s' "$code"
 }
+
+# harbor_reachable_state — THREE states, because a wait loop that cannot tell them apart hides the
+# one this target exists to find:
+#   unresolved | serving | silent          (silent = the name resolves, nothing answers)
+#
+# `silent` is the STALE A RECORD: a reinstalled Harbor takes a NEW LoadBalancer IP and the record
+# still names the old one. MEASURED, walk row 1: DNS said .143 while Harbor was at .146, and it cost
+# FIVE downstream failures. harbor_reachable_report diagnoses it in about a second -- so a wait that
+# treats `silent` and `unresolved` alike turns a one-second true positive into a 15-minute one.
+harbor_reachable_state() {
+  [ -n "${HARBOR_URL:-}" ]                          || { printf 'unresolved'; return; }
+  getent hosts "${HARBOR_URL%%:*}" >/dev/null 2>&1  || { printf 'unresolved'; return; }
+  case "$(_harbor_serving_code)" in 000|'') printf 'silent' ;; *) printf 'serving' ;; esac
+}
+
+harbor_reachable_ok() { [ "$(harbor_reachable_state)" = serving ]; }
 
 harbor_reachable_report() {
   local ok_p='  ok       ' bad_p='  PROBLEM  ' note_p='           '
@@ -334,9 +357,7 @@ harbor_reachable_report() {
 
   # --fail is deliberately ABSENT: a 4xx from a live Harbor still proves it is SERVING. Judge only on
   # whether the connection produced any HTTP response at all. 000 means nothing answered.
-  local code
-  code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time "${HARBOR_PROBE_TIMEOUT_SECONDS:-10}" \
-            "https://${HARBOR_URL}/api/v2.0/systeminfo" 2>/dev/null || true)"
+  local code; code="$(_harbor_serving_code)"
   if [ "${code:-000}" = 000 ]; then
     printf '%sHARBOR_URL=%s resolves to %s but NOTHING is serving there.\n' "$bad_p" "$HARBOR_URL" "$hip" >&2
     printf '%sA REINSTALLED Harbor gets a NEW LoadBalancer IP. Compare that address with what\n' "$note_p" >&2

@@ -506,6 +506,14 @@ harbor-reachable: ## Read-only: is HARBOR_URL actually SERVING? (scenario-1 §4 
 harbor-admin-password: ## Put a WORKING Harbor admin credential in ./.env when Harbor already exists (verifies it against Harbor BEFORE writing; never replaces one that already works)
 	@$(SCRIPTS)/28-harbor-admin-password.sh
 
+.PHONY: argocd-address
+argocd-address: ## Wait for ArgoCD's LoadBalancer address and write ARGOCD_SERVER to ./.env (no more copying an EXTERNAL-IP by hand)
+	@$(SCRIPTS)/09-argocd-address.sh
+
+.PHONY: vks-k8s-version
+vks-k8s-version: ## Pick the newest Ready+Compatible TKr and write VKS_K8S_VERSION to ./.env (waits; a fresh Supervisor syncs them over minutes)
+	@$(SCRIPTS)/24-vks-k8s-version.sh
+
 .PHONY: lab-preflight
 lab-preflight: ## Read-only: three cluster preconditions that each kill the run LATER (CRD-create · a DEFAULT StorageClass · a working LoadBalancer provider)
 	@$(SCRIPTS)/24-lab-preflight.sh

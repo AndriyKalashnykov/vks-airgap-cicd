@@ -72,7 +72,7 @@ fi
 # 31-fetch-argocd-kubeconfig.sh, 98-uninstall-all.sh) -- 25's own comment notes that $KUBECONFIG
 # "is routinely the stale one while secrets/supervisor.kubeconfig was just refreshed". This file
 # was the odd one out.
-SUP="${VKS_SUPERVISOR_KUBECONFIG:-${SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}}"
+SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kubeconfig")"   # lib/os.sh: ONE resolver, first that EXISTS
 if [ ! -s "$SUP" ]; then
   log_warn "no Supervisor kubeconfig at '${SUP}' - skipping the instance CR."
   log_warn "  run 'make vks-login' first, then: make install-argocd-service"

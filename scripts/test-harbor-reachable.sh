@@ -94,8 +94,50 @@ if printf '%s' "$o" | grep -q 'NOTHING is serving there'; then ok "make harbor-r
 else bad "make harbor-reachable fires standalone (no cluster)" "the standalone entry point did not reach the check"; fi
 o="$(SKIP_DOTENV=1 HARBOR_URL=127.0.0.1 HARBOR_REACHABLE_WAIT_SECONDS=0 timeout 90 bash "$SCRIPT_DIR/04-harbor-reachable.sh" 2>&1 || true; echo "rc=$?")"
 o2="$(SKIP_DOTENV=1 HARBOR_URL=127.0.0.1 HARBOR_REACHABLE_WAIT_SECONDS=0 timeout 90 bash "$SCRIPT_DIR/04-harbor-reachable.sh" >/dev/null 2>&1; echo $?)"
-if [ "$o2" != 0 ]; then ok "...and EXITS NON-ZERO, so install-all/CI can gate on it"
+# 124 IS REJECTED EXPLICITLY. Before the WAIT knob was pinned to 0 above, this assertion PASSED on
+# rc=124 -- `timeout 90` killing a 900s wait -- not on the gate. A non-zero that came from the
+# harness is not evidence about the thing under test, and the next person to raise that pinned 0
+# would re-arm it silently.
+if [ "$o2" = 124 ]; then bad "...and EXITS NON-ZERO" "rc=124: the TIMEOUT killed it. That is the harness, not the gate."
+elif [ "$o2" != 0 ]; then ok "...and EXITS NON-ZERO, so install-all/CI can gate on it"
 else bad "...and EXITS NON-ZERO" "it printed a PROBLEM and exited 0 — a gate that cannot fail"; fi
+
+# ── the WAIT itself: it shipped with NO committed RED ─────────────────────────────────────────────
+# The default (900), the loop, the progress line and the rc=1-on-timeout had no test at all, and the
+# only test touching them pinned the knob OFF -- so the shipped default could be broken and this
+# file would still report every case green.
+
+# (1) a budget that expires FAILS, and says so. 127.0.0.1 resolves and answers nothing, which is the
+#     `silent` state -- the same shape as the stale A record.
+t0=$SECONDS
+o3="$(SKIP_DOTENV=1 HARBOR_URL=127.0.0.1 HARBOR_REACHABLE_WAIT_SECONDS=30 timeout 90 bash "$SCRIPT_DIR/04-harbor-reachable.sh" 2>&1; echo "rc=$?")"
+el=$((SECONDS - t0))
+case "$o3" in
+  *"rc=124"*) bad "an expired budget FAILS" "rc=124: the timeout killed it, so this measured the harness" ;;
+  *"rc=0"*)   bad "an expired budget FAILS" "it waited ${el}s and then exited 0 — the wait cannot fail" ;;
+  *)          ok "an expired budget FAILS (waited ${el}s, non-zero)" ;;
+esac
+case "$o3" in
+  *"did not answer within 30s"*) ok "...and names the budget it expired against" ;;
+  *) bad "...and names the budget" "no 'did not answer within 30s' line — the operator is told nothing" ;;
+esac
+
+# (2) THE FINDING THAT PROMPTED THIS FILE'S SECOND ROUND: a name that RESOLVES but does not answer is
+#     the stale-A-record case, and the diagnosis must appear IMMEDIATELY -- not after the budget. A
+#     wait that hides it converts a one-second true positive into a fifteen-minute one.
+case "$o3" in
+  *"NOTHING is serving there"*) ok "the stale-A-record diagnosis is printed, not swallowed by the wait" ;;
+  *) bad "the stale-A-record diagnosis" "the wait swallowed it — that is the failure this target exists to catch" ;;
+esac
+
+# (3) a non-integer budget must DIE, not silently skip the wait. `15m` is the plausible typo because
+#     the document speaks in minutes; it used to print an `integer expression expected` warning,
+#     skip the wait and exit 0 -- restoring the exact behaviour the wait was added to fix.
+o4="$(SKIP_DOTENV=1 HARBOR_URL=127.0.0.1 HARBOR_REACHABLE_WAIT_SECONDS=15m timeout 30 bash "$SCRIPT_DIR/04-harbor-reachable.sh" 2>&1; echo "rc=$?")"
+case "$o4" in
+  *"must be WHOLE SECONDS"*) ok "a non-integer budget DIES instead of silently disabling the wait" ;;
+  *) bad "a non-integer budget dies" "it did not refuse '15m' — the wait is silently off" ;;
+esac
 
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
