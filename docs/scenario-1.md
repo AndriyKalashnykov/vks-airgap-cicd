@@ -521,9 +521,9 @@ Harbor publishes it, so no login is needed.
 set -a; . ./.env; set +a
 curl -sk --fail --max-time 20 -o ./secrets/harbor-ca.crt \
   "https://${HARBOR_URL}/api/v2.0/systeminfo/getcert" \
-  || { rm -f ./secrets/harbor-ca.crt; echo "Harbor is not reachable at ${HARBOR_URL} — check the A record (make show-dns-records)"; exit 1; }
-chmod 0644 ./secrets/harbor-ca.crt
-openssl x509 -in ./secrets/harbor-ca.crt -noout -subject     # expect: CN = Harbor CA
+  || { rm -f ./secrets/harbor-ca.crt; echo "Harbor is not reachable at ${HARBOR_URL} — check the A record (make show-dns-records)"; false; } \
+&& chmod 0644 ./secrets/harbor-ca.crt \
+&& openssl x509 -in ./secrets/harbor-ca.crt -noout -subject     # expect: CN = Harbor CA
 ```
 
 If it prints *"Harbor is not reachable"*, fix the A record before continuing.
@@ -593,7 +593,7 @@ make harbor-robot            # writes ./secrets/harbor-robot.env (mode 0600)
 ls -l ./secrets/harbor-robot.env
 ```
 
-**Expect:** a `robot$vks-cicd` account scoped to your two projects. *(<1 min)*
+**Expect:** `robot account 'robot$vks-cicd' created.`, then a `-rw-------` listing of the file. *(<1 min)*
 
 It writes `HARBOR_USERNAME` and `HARBOR_PASSWORD` into `./.env` itself — nothing to copy. From here
 the pipeline runs as the **robot**, not as admin.

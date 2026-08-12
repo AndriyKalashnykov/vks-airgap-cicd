@@ -34,12 +34,15 @@ require_cmd kubectl
 . "${SCRIPT_DIR}/lib/tls.sh"
 require_kind_target "install-argocd"
 : "${ARGOCD_VERSION:?ARGOCD_VERSION must be set in .env.example}"
-# PINNED, not derived. This is the KinD/self-hosted installer and it creates the namespace itself,
-# so `argocd` is true BY CONSTRUCTION here. It must NOT inherit VKS_NAMESPACE: `.env.example` always
-# sets that (it is the vSphere Namespace of a real lab), so deriving would make a KinD run install
-# into `cicd` and every KinD reader then look in `argocd`. MEASURED 2026-08-12 while fixing the
-# real-lab half of exactly this disagreement.
-ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
+# PINNED, and it must be an UNCONDITIONAL assignment. This is the KinD/self-hosted installer and it
+# creates the namespace itself, so `argocd` is true BY CONSTRUCTION here.
+#
+# `${ARGOCD_NAMESPACE:-argocd}` WAS DEAD CODE and shipped as a fix: load_env already exports
+# ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-${VKS_NAMESPACE:-argocd}}" (lib/os.sh), so by the time this
+# line runs the variable is ALWAYS non-empty and the `:-` never fires. MEASURED 2026-08-12 with the
+# real load_env: VKS_NAMESPACE=cicd -> this installed into `cicd` while every KinD reader looked in
+# `argocd`. Exactly the dead-fallback bug the real-lab half of this same change was fixing.
+ARGOCD_NAMESPACE=argocd
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-300}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
 # Mode: secure (default) = upstream self-signed TLS on 443 (mimics VCF/VKS); insecure
