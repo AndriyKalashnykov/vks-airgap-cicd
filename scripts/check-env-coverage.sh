@@ -52,35 +52,54 @@ PUBLISHED='HARBOR_URL|HARBOR_PASSWORD|HARBOR_CA_FILE|HARBOR_INSECURE|GITEA_ADMIN
 # RIGHT rc file, and documenting them would be actively HARMFUL — load_env sources .env.example with
 # `set -a`, so an uncommented SHELL= there would be EXPORTED and override the operator's real shell,
 # making shell-init edit a file they never read. See rules: the .env.example clobber class.
-INTERNAL='APP_NAME|APP_LANG|APP_SRC|APP_DEPLOY_DIR|APP_HOST|APP_TEST_TASK|APP_NAMESPACE|APP_GIT_REPO|APP_DEPLOY_REPO|APP_IMAGE|APP_BUILDER_IMAGE|APP_RUNTIME_IMAGE|APP_HOSTS_BLOCK|APP_NS_BLOCK|PROBE_HOST|PROBE_APP|APP_ING_ALLOWLIST|REPO_ROOT|SCRIPT_DIR|BASH_SOURCE|PATH|HOME|PWD|IFS|SHELL|ZDOTDIR|SSL_CERT_FILE|TMPDIR|LC_ALL|HARBOR_PW|HARBOR_SVC|HARBOR_TMP|HARBOR_CURL_CFG|HARBOR_CODE_FILE|HARBOR_TMP_DIR|HARBOR_RELEASE|HARBOR_TLS_SECRET|HARBOR_TLS_VERIFY|HARBOR_INSECURE_BOOL|HARBOR_PROVISIONAL_EXTERNAL_URL|HARBOR_ROBOT_OUT|ARGOCD_SVC|ARGOCD_NS|ARGOCD_API|GUEST_API|GITEA_CLONE_URL|GITEA_ARGOCD_URL|ARGOCD_DEST_KEY|ARGOCD_DEST_VALUE|KIND_KUBECONFIG|KIND_CLUSTER_REMOVED|ARGOCD_MANAGER_NS|ARGOCD_MANIFEST_VERSION|ISTIO_ROUTE_API_EFFECTIVE|PLATFORM_ISTIO_NAMESPACE|PLATFORM_ISTIO_RELEASE|PLATFORM_ISTIOD_NAMESPACE|PROBE_IMAGE|REGISTRY_LOCK_FILE|MANIFEST_DIR|DOCKER_HOST|DOCKER_CONFIG|XDG_RUNTIME_DIR|ENGINE_SUDO_COUNT_FILE|CERTD|JUMPBOX_[A-Z_]*|E2E_[A-Z_]*|CI|GITHUB_[A-Z_]*|READY_TIMEOUT_SECONDS|POLL_INTERVAL_SECONDS|CURL_MAX_TIME_SECONDS|MIRROR_RETRIES|MIRROR_FORCE_PULL|NOTIFY|VCF_[A-Z_]*|PSA_LEVEL_[A-Z_]*|DISPLAY|WAYLAND_DISPLAY|DRY_RUN|GW_IP|TOKEN|RED_TEST_SKIP_PRECHECK|CREDS_TOKEN|GATEWAY_IMAGE_FIXTURE|BUNDLE_HOST_ARCH|BUNDLE_CRANE_VER|BUNDLE_MIRROR_ARCH|VC_TOKEN_FILE|VC_CURL_CFG|VC_HDR_FILE|VC_CODE_FILE|SVC_STATUS'
+# SERVICE / PACKAGE — POSITIONAL ARGUMENTS with an env fallback, not configuration, and documenting
+# them would ARM A SILENT DESTRUCTIVE DEFAULT. All three uninstall/deregister/unwedge scripts read
+# `${1:-${SERVICE:-}}` AFTER load_env. PROVEN both directions 2026-08-12: with SERVICE exported,
+#   SERVICE=harbor bash -c 'S="${1:-${SERVICE:-}}"; echo [$S]' _ ""   ->  [harbor]
+#   bash          -c 'S="${1:-${SERVICE:-}}"; echo [$S]' _ ""         ->  []        <- today
+# `make uninstall-supervisor-service CONFIRM=yes` with the arg omitted passes an EMPTY "$(SERVICE)"
+# as $1, and `:-` treats empty as unset — so an uncommented .env value would be picked up and the
+# script would uninstall THAT service, "for every tenant on that Supervisor" (its own help text),
+# with _list_and_die unreachable and the CONFIRM guard already satisfied. Today the fallthrough
+# lands on empty and the script prints the list and refuses. They ARE documented — in `make help`
+# (Makefile:413/425/429/433), which is where a positional argument belongs.
+INTERNAL='SERVICE|PACKAGE|APP_NAME|APP_LANG|APP_SRC|APP_DEPLOY_DIR|APP_HOST|APP_TEST_TASK|APP_NAMESPACE|APP_GIT_REPO|APP_DEPLOY_REPO|APP_IMAGE|APP_BUILDER_IMAGE|APP_RUNTIME_IMAGE|APP_HOSTS_BLOCK|APP_NS_BLOCK|PROBE_HOST|PROBE_APP|APP_ING_ALLOWLIST|REPO_ROOT|SCRIPT_DIR|BASH_SOURCE|PATH|HOME|PWD|IFS|SHELL|ZDOTDIR|SSL_CERT_FILE|TMPDIR|LC_ALL|HARBOR_PW|HARBOR_SVC|HARBOR_TMP|HARBOR_CURL_CFG|HARBOR_CODE_FILE|HARBOR_TMP_DIR|HARBOR_RELEASE|HARBOR_TLS_SECRET|HARBOR_TLS_VERIFY|HARBOR_INSECURE_BOOL|HARBOR_PROVISIONAL_EXTERNAL_URL|HARBOR_ROBOT_OUT|ARGOCD_SVC|ARGOCD_NS|ARGOCD_API|GUEST_API|GITEA_CLONE_URL|GITEA_ARGOCD_URL|ARGOCD_DEST_KEY|ARGOCD_DEST_VALUE|KIND_KUBECONFIG|KIND_CLUSTER_REMOVED|ARGOCD_MANAGER_NS|ARGOCD_MANIFEST_VERSION|ISTIO_ROUTE_API_EFFECTIVE|PLATFORM_ISTIO_NAMESPACE|PLATFORM_ISTIO_RELEASE|PLATFORM_ISTIOD_NAMESPACE|PROBE_IMAGE|REGISTRY_LOCK_FILE|MANIFEST_DIR|DOCKER_HOST|DOCKER_CONFIG|XDG_RUNTIME_DIR|ENGINE_SUDO_COUNT_FILE|CERTD|JUMPBOX_[A-Z_]*|E2E_[A-Z_]*|CI|GITHUB_[A-Z_]*|READY_TIMEOUT_SECONDS|POLL_INTERVAL_SECONDS|CURL_MAX_TIME_SECONDS|MIRROR_RETRIES|MIRROR_FORCE_PULL|NOTIFY|VCF_[A-Z_]*|PSA_LEVEL_[A-Z_]*|DISPLAY|WAYLAND_DISPLAY|DRY_RUN|GW_IP|TOKEN|RED_TEST_SKIP_PRECHECK|CREDS_TOKEN|GATEWAY_IMAGE_FIXTURE|BUNDLE_HOST_ARCH|BUNDLE_CRANE_VER|BUNDLE_MIRROR_ARCH|VC_TOKEN_FILE|VC_CURL_CFG|VC_HDR_FILE|VC_CODE_FILE|SVC_STATUS'
 
-# SCOPE: every script an OPERATOR runs (via a make target), plus the shared libs.
+# SCOPE: every script under scripts/ and scripts/lib/, MINUS the harness/gate classes in the `case`.
 #
-# This used to glob `scripts/[0-8][0-9]-*.sh`, which silently EXCLUDED 98-verify-ingress.sh and
-# 99-verify.sh — those are `make verify-ingress` / `make verify`, squarely operator flow, not test
-# fixtures — as well as creds.sh / argocd-password.sh / kind-down.sh. A gate that quietly checks a
-# subset is worse than no gate: GITEA_LOCAL_PORT is read ONLY by 50-seed + 99-verify, so the gate
-# could not see it, and an uncommented value in .env.example silently clobbered its ephemeral-port
-# fallback for who knows how long.
+# It used to ENUMERATE: the glob `[0-9][0-9]-*.sh` plus FOUR hand-typed basenames. Those four names
+# were the rot surface — every non-numeric operator script added after they were typed was invisible
+# to this gate, silently, forever. Measured 2026-08-12: that hid 16 files, including the WHOLE
+# `##@ Supervisor platform` group (12 documented targets), and with them 9 undocumented knobs.
+#
+# A Makefile-recipe-derived list was designed and REFUTED (idea-round, 2026-08-12): globbing the
+# directory is a strict SUPERSET of it (84 files vs 83) and carries none of its four measured blind
+# spots — recipe COMMENTS harvested as invocations, `$(MAKE)` recursion, a script in a SUBDIRECTORY,
+# and the group exemptions it would not inherit. Reachability also stops being a question a parser
+# has to answer: walk-doc.sh is invoked through the WALKBOX_DRIVER env var, which no static Makefile
+# analysis can ever see.
 #
 # Still excluded (genuinely not operator flow — their knobs are harness-internal, and folding them
 # in would bury the real gaps in noise): the e2e/test harnesses, the jump-box/bootstrap harnesses,
-# and the CI gates themselves.
+# the lab-walk harness (walk-*/walkbox*), and the CI gates themselves.
 FLOW_SCRIPTS=()
-for f in "${REPO_ROOT}"/scripts/[0-9][0-9]-*.sh \
-         "${REPO_ROOT}"/scripts/creds.sh \
-         "${REPO_ROOT}"/scripts/argocd-password.sh \
-         "${REPO_ROOT}"/scripts/kind-down.sh \
-         "${REPO_ROOT}"/scripts/fetch-ca.sh \
-         "${REPO_ROOT}"/scripts/lib/*.sh; do
+for f in "${REPO_ROOT}"/scripts/*.sh "${REPO_ROOT}"/scripts/lib/*.sh; do
   [ -f "$f" ] || continue
   case "$(basename "$f")" in
-    90-e2e-*|e2e-*|test-*|jumpbox-*|bootstrap-*|check-*|lint.sh|validate.sh) continue ;;
+    90-e2e-*|e2e-*|test-*|jumpbox-*|bootstrap-*|check-*|walk-*|walkbox*|lint.sh|validate.sh) continue ;;
   esac
   FLOW_SCRIPTS+=("$f")
 done
 # Print the DENOMINATOR: a gate that cannot say how much it looked at cannot be trusted.
 log_info "check-env-coverage: scanning ${#FLOW_SCRIPTS[@]} operator-flow scripts"
+# FLOOR. The denominator alone does not protect against a SILENT SHRINK: a glob that stops matching
+# or a `case` someone widens leaves a smaller, quieter green that reads exactly like the old
+# enumerated list did. MEASURED 2026-08-12: 82. Raise this when the tree legitimately grows.
+if [ "${#FLOW_SCRIPTS[@]}" -lt 80 ]; then
+  log_error "check-env-coverage: only ${#FLOW_SCRIPTS[@]} scripts matched (floor 80) — the SCOPE broke."
+  log_error "    A shrunk scan is a quieter green, not a pass. Fix the glob or the case above."
+  exit 1
+fi
 
 vars="$(grep -rhoE '\$\{[A-Z][A-Z0-9_]{2,}:[-?=]|: *"\$\{[A-Z][A-Z0-9_]{2,}:[?=]' \
           "${FLOW_SCRIPTS[@]}" 2>/dev/null \
