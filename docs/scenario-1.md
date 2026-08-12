@@ -617,12 +617,7 @@ Accounts**) and run it again.
 
 `make gitops` talks to **both** clusters: ArgoCD on the Supervisor, your apps in the guest.
 
-**Set in `./.env`:**
-
-| key | example | how to get the value |
-|---|---|---|
-| `ARGOCD_KUBECONFIG` | `./secrets/argocd.kubeconfig` | the file the next command writes. **Set it explicitly.** The command writes that path either way — but `make gitops` and `make verify` will not *read* it unless this key is set, and silently use your **guest** kubeconfig instead. The file existing is therefore not a sign it is being used. |
-| `ARGOCD_DEST_CLUSTER_NAME` | `vks-guest` | the name your guest cluster is registered under: `argocd cluster list`. **Required whenever ArgoCD's registered API URL for your guest differs from your kubeconfig's — including when only ONE cluster is registered** (that mismatch is common). Symptom: `make install-all` stops with `AMBIGUOUS deploy destination`. Left unset with a mismatch, a run once deployed into another cluster and reported `Synced/Healthy` throughout — it was healthy, in the wrong place. |
+**Nothing to set here** — Step 3 published `ARGOCD_KUBECONFIG` when you logged in.
 
 ```bash
 make fetch-argocd-kubeconfig
@@ -636,6 +631,12 @@ make argocd-register-guest      # admin-only; creates an SA in your guest + a Se
 ```
 
 **Expect:** re-running `make argocd-preflight` now says `PREFLIGHT OK`. *(~2 min)*
+
+`argocd-preflight` also prints the deploy destination — every cluster registered with this ArgoCD,
+and which one your guest resolves to. If it says **`resolves UNAMBIGUOUSLY`**, there is nothing to
+set. If it reports more than one candidate, set `ARGOCD_DEST_CLUSTER_NAME` in `./.env` to one of the
+names it just listed — the install refuses to guess, because guessing once deployed into a different
+cluster and reported `Synced/Healthy` the whole time.
 
 `make argocd-version` prints the CLI version, the **running server** version and this repo's pin.
 The running server is the one that matters.
