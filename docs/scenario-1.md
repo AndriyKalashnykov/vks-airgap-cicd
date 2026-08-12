@@ -466,7 +466,7 @@ Secret route above instead — it is the same credential.
 |---|---|---|
 | `KUBECONFIG` | `./secrets/cicd-gc1.kubeconfig` | `./secrets/<your VKS_CLUSTER_NAME>.kubeconfig` — the file above |
 | `VKS_CONTEXT` | `cicd-gc1-admin@cicd-gc1` | `kubectl --kubeconfig ./secrets/<cluster>.kubeconfig config get-contexts -o name` |
-| `VKS_AUTH_METHOD` | `kubeconfig` | **change it back from `vcf`** (Step 3 set that for the Supervisor login). From here on the pipeline runs against the guest-cluster kubeconfig above. |
+| `VKS_AUTH_METHOD` | `kubeconfig` | **Set it to `kubeconfig`.** Step 3 set `vcf` to log in to the SUPERVISOR; from here every command targets the GUEST cluster. Leave it on `vcf` and Step 7 silently checks the Supervisor instead — it reports `may NOT create CustomResourceDefinitions` and `NONE is marked default`, both TRUE of the Supervisor and neither about your cluster. |
 
 ⚠️ **`make vks-login` now renews the GUEST kubeconfig.** The Supervisor one expires too, and Steps
 10 and 14 need it — `kubectl` then says *"the server has asked for the client to provide
@@ -479,7 +479,8 @@ vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"
 VKS_AUTH_METHOD=vcf make vks-login
 ```
 
-**Expect:** `Supervisor context verified via ./secrets/supervisor.kubeconfig`.
+**Expect:** `Supervisor context verified via` — followed by the ABSOLUTE path to
+`secrets/supervisor.kubeconfig`, not the `./` form you typed.
 
 <details><summary>Optional — the cluster's shape. Skip unless you want to change it.</summary>
 

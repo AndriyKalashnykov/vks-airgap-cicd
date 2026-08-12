@@ -44,7 +44,13 @@ restore() {
 }
 trap restore EXIT
 
-render() { rm -f "$SINK"; [ -n "${1:-}" ] && printf '%s' "$1" > "$SINK"; CREDS_TOKEN=1 ./scripts/creds.sh 2>/dev/null; }
+# SKIP_DOTENV=1 IS LOAD-BEARING. Without it `load_env` sources the operator's real ./.env and
+# ./.env.state, and the "no overlay" fixture below is no longer a no-overlay state at all: it
+# inherits whatever that box has. MEASURED 2026-08-11 -- 6 of 6 assertions failed on a box whose
+# .env carried HARBOR_URL=harbor.env1.lab.test and whose .env.state still held an INGRESS_LB_IP
+# from a lab that had been DESTROYED. The same test passes in CI, where no .env exists, so the
+# failure looks like a code regression and is a test that reads its own environment.
+render() { rm -f "$SINK"; [ -n "${1:-}" ] && printf '%s' "$1" > "$SINK"; SKIP_DOTENV=1 CREDS_TOKEN=1 ./scripts/creds.sh 2>/dev/null; }
 
 # ---- STATE 1: nothing installed. Every value is a default; the output must SAY SO. -------------------
 out="$(render "")"
