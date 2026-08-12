@@ -191,5 +191,26 @@ o="$(WALK_DOC="$T/step.md" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_ISTIO=existing
 if [ "$r" -eq 0 ] && printf '%s' "$o" | grep -q '0 UNMET'; then c=0; else c=1; fi
 assert "a claim is checked against the whole STEP" "$c" "rc=$r; a claim about an earlier block false-UNMETs"
 
+# A COLLAPSED <details> IS AN ALTERNATIVE, NOT A STEP. Its summary says who it is for, and a reader
+# expands it only if that is them. MEASURED on row 1: the walker ran the block under "No Supervisor
+# access (the Scenario-2 tenant)? Ask the vcf CLI instead" during a Scenario-1 walk; it failed with
+# exactly the `pinniped-info` error the document PREDICTS two lines later, and the route the
+# document actually prescribes had already succeeded.
+printf '## S\n\n<details><summary>Not you? do it another way</summary>\n\n```bash\necho MUST_NOT_RUN\n```\n</details>\n\n```bash\necho main_path\n```\n' > "$T/det.md"
+o="$(WALK_DOC="$T/det.md" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_ISTIO=existing WALK_MIN_BLOCKS=1 bash "$W" 2>&1)"
+if printf '%s' "$o" | grep -q 'MUST_NOT_RUN'; then c=1; else c=0; fi
+assert "a block inside <details> is NOT executed" "$c" "an alternative for another scenario was run"
+if printf '%s' "$o" | grep -q 'main_path'; then c=0; else c=1; fi
+assert "...and the main path still runs" "$c" "skipping the alternative also skipped the real step"
+
+# THE DOCUMENT INSTRUCTS THROUGH TABLES, NOT ONLY COMMANDS. Step 6's "set in ./.env" table says to
+# change VKS_AUTH_METHOD back to `kubeconfig`; ignoring it left every later guest-cluster check
+# pointed at the SUPERVISOR, where they failed with true-but-irrelevant errors that named neither
+# the variable nor the cluster. That one missed cell cost Steps 7-13 of a row.
+printf '## S\n\n**set in `./.env`:**\n\n| key | example | how |\n|---|---|---|\n| `WALK_TBL_DEMO` | `kubeconfig` | set it |\n\n```bash\necho "mode=[$WALK_TBL_DEMO]"\n```\n' > "$T/tbl.md"
+o="$(WALK_DOC="$T/tbl.md" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_ISTIO=existing WALK_MIN_BLOCKS=1 bash "$W" 2>&1)"
+if printf '%s' "$o" | grep -q 'mode=\[kubeconfig\]'; then c=0; else c=1; fi
+assert "a value the doc sets in a TABLE reaches the commands" "$c" "table instructions are ignored"
+
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -38,7 +38,13 @@ esac
 STUB
 chmod +x "$TMP/bin/kubectl"
 
-run() { PATH="$TMP/bin:$PATH" KUBECONFIG="$TMP/kc" HARBOR_URL="$1" \
+# SKIP_DOTENV=1 IS LOAD-BEARING. Without it `load_env` sources the operator's real ./.env AFTER
+# this HARBOR_URL is set, and the fixture's address is silently replaced by whatever that box uses.
+# MEASURED 2026-08-11: the "resolvable + dead" case passed HARBOR_URL=127.0.0.1 and the gate
+# examined harbor.env1.lab.test instead -- which was ANSWERING -- so the gate correctly did not
+# fire and the test reported a failure of the gate. A test that reads its own environment measures
+# the environment.
+run() { PATH="$TMP/bin:$PATH" KUBECONFIG="$TMP/kc" SKIP_DOTENV=1 HARBOR_URL="$1" \
         timeout 90 bash "$SCRIPT_DIR/24-lab-preflight.sh" 2>&1; }
 : > "$TMP/kc"
 

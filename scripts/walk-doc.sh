@@ -158,12 +158,33 @@ split_statements() {   # <block text> -> NUL-separated statements on stdout
 mapfile -t PARSED < <(python3 - "$DOC" <<'PY'
 import json, re, sys
 heading, fence, body, out = "(preamble)", None, [], []
+# <details> is the document's way of saying "this is an ALTERNATIVE, expand it only if the summary
+# describes you". A reader does not run a collapsed block; the walker used to run every one of them.
+# MEASURED: it executed the block under "No Supervisor access (the Scenario-2 tenant)? Ask the vcf
+# CLI instead", which failed with exactly the `pinniped-info` error the document PREDICTS two lines
+# later, and told the reader to use the other route -- which had already worked.
+details = None
+# The document also instructs through TABLES ("set in ./.env:"), not only through commands. Those
+# rows are instructions: Step 6's table says to change VKS_AUTH_METHOD back to `kubeconfig`, and a
+# walk that ignores it keeps talking to the SUPERVISOR for every step after.
+env_rows, pending = [], []
 for line in open(sys.argv[1]):
     # CommonMark: a fence is >=3 backticks and closes on a run of AT LEAST that many with no
     # info string. Assuming exactly 3 mis-parses the ````markdown wrapper people use to SHOW a
     # ```bash block -- and the inner one then gets extracted and EXECUTED.
     m = re.match(r'^(\s*)(`{3,})(\S*)', line)
     if fence is None:
+        if line.lstrip().startswith('<details'):
+            details = line.split('<summary>')[-1].split('</summary>')[0].strip() or 'an alternative'
+        elif line.lstrip().startswith('</details>'):
+            details = None
+        # A `| \`KEY\` | example | ... |` row under a "set in ./.env" heading is an instruction.
+        elif re.match(r'^\s*\|\s*`[A-Z][A-Z0-9_]*`\s*\|', line):
+            cells = [c.strip() for c in line.strip().strip('|').split('|')]
+            k = cells[0].strip('`')
+            v = cells[1].strip('`').strip() if len(cells) > 1 else ''
+            if v and not re.search(r'[<>]|\.\.\.|…|,|\s\*\*', v):
+                pending.append([k, v])
         if m: fence = (m.group(3).split(':')[0].lower(), len(m.group(2))); body = []
         elif line.startswith('## '): heading = line[3:].strip()
         # The document's CONTRACT WITH THE READER. `**Expect:** ...` states what they will SEE, and
@@ -171,7 +192,9 @@ for line in open(sys.argv[1]):
         # ran, not that the DOCUMENT is truthful. Attach it to the block it follows.
         elif line.startswith('**Expect') and out: out[-1]["e"].append(line.rstrip())
     elif m and not m.group(3) and len(m.group(2)) >= fence[1]:
-        if fence[0] in ('bash', 'sh', 'shell'): out.append({"h": heading, "b": "".join(body), "e": []})
+        if fence[0] in ('bash', 'sh', 'shell'):
+            out.append({"h": heading, "b": "".join(body), "e": [],
+                        "details": details or "", "env": pending}); pending = []
         fence = None
     else:
         body.append(line)
@@ -202,8 +225,38 @@ for row in "${PARSED[@]}"; do
   H="$(printf '%s' "$row" | python3 -c 'import sys,json;print(json.load(sys.stdin)["h"])')"
   B="$(printf '%s' "$row" | python3 -c 'import sys,json;print(json.load(sys.stdin)["b"])')"
   E="$(printf '%s' "$row" | python3 -c 'import sys,json;print("\n".join(json.load(sys.stdin).get("e",[])))')"
+  DET="$(printf '%s' "$row" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("details",""))')"
+  ENVROWS="$(printf '%s' "$row" | python3 -c 'import sys,json;[print(k+"="+v) for k,v in json.load(sys.stdin).get("env",[])]')"
   STEP=$((STEP + 1))
+  # THE DOCUMENT INSTRUCTS THROUGH TABLES TOO. "set in ./.env:" rows are instructions, not
+  # decoration: Step 6's table says to change VKS_AUTH_METHOD back to `kubeconfig`, and a walk that
+  # ignores it keeps every later guest-cluster check pointed at the SUPERVISOR -- where they fail
+  # with true-but-irrelevant errors ("may NOT create CustomResourceDefinitions") that name neither
+  # the variable nor the cluster. MEASURED: that one missed cell cost Steps 7-13 of row 1.
+  #
+  # A value the HARNESS supplied wins (it is lab-specific and the doc's example is illustrative),
+  # but the divergence is PRINTED rather than swallowed -- silently overriding the document is how
+  # a walk stops being a walk.
+  if [ -n "${ENVROWS:-}" ]; then
+    while IFS='=' read -r _k _v; do
+      [ -n "${_k:-}" ] || continue
+      _cur="$(eval "printf '%s' \"\${$_k:-}\"")"
+      if [ -z "$_cur" ]; then
+        printf '    (doc: setting %s=%s in ./.env)\n' "$_k" "$_v"
+        export "$_k=$_v"
+        [ -f "${CWD}/.env" ] && { sed -i "/^${_k}=/d" "${CWD}/.env"; printf '%s=%s\n' "$_k" "$_v" >> "${CWD}/.env"; }
+      elif [ "$_cur" != "$_v" ]; then
+        printf '    (doc says %s=%s; the harness supplied %s — keeping the harness value)\n' "$_k" "$_v" "$_cur"
+      fi
+    done <<< "$ENVROWS"
+  fi
   reason="$(should_skip "$B")"
+  # A COLLAPSED <details> IS AN ALTERNATIVE, not a step. Its summary says who it is for; a reader
+  # expands it only if that is them. MEASURED: the walker ran "No Supervisor access (the Scenario-2
+  # tenant)? Ask the vcf CLI instead" during a Scenario-1 walk, it failed with the exact
+  # `pinniped-info` error the document predicts two lines later, and the route the document actually
+  # prescribes had already succeeded.
+  [ -z "$reason" ] && [ -n "${DET:-}" ] && reason="inside a <details> alternative: ${DET}"
   : > "$UNSAFE_FILE"
   RAWB="$B"                           # pre-substitution, so statements are split on the DOCUMENT's text
   # The RESULT is unused now (each statement renders its own safe text), but the CALL is not: it is
