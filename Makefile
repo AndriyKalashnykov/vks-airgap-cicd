@@ -455,6 +455,10 @@ vks-cluster-create: ## Provision the guest VKS cluster from the VKS_* topology k
 vks-cluster-status: ## Read-only: is the guest cluster ACTUALLY ready? (conditions + observedGeneration + nodes — phase=Provisioned is NOT readiness)
 	@$(SCRIPTS)/26-vks-cluster-status.sh
 
+.PHONY: use-guest-kubeconfig
+use-guest-kubeconfig: ## Point the rest of the walk at the GUEST cluster (publishes KUBECONFIG/VKS_CONTEXT/VKS_AUTH_METHOD)
+	@$(SCRIPTS)/27-use-guest-kubeconfig.sh
+
 .PHONY: fetch-supervisor-ca
 fetch-supervisor-ca: ## Fetch the CA that signed the Supervisor's cert FROM VCENTER (scenario-1 §3.3) — picks the right root, verifies it, prints the fingerprint to confirm out of band
 	@$(SCRIPTS)/fetch-supervisor-ca.sh

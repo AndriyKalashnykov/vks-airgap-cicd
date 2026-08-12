@@ -51,7 +51,13 @@ if [ "$ARGOCD_REGISTER" = never ]; then
   exit 0
 fi
 if [ "$ARGOCD_REGISTER" != force ]; then
-  if ! argocd_is_off_cluster "$ARGOCD_KUBECONFIG" "$GUEST_KUBECONFIG" 2>/dev/null; then
+  # NO `2>/dev/null` HERE. argocd_is_off_cluster DIES (lib/argocd.sh: "could not read the guest
+  # cluster's API server from …") when a kubeconfig is unreadable, and `die` writes to STDERR and
+  # exits — so the redirect destroyed the only explanation and this target failed with a bare
+  # `make: *** [argocd-register-guest] Error 1` and nothing else. MEASURED 2026-08-12, walk block
+  # [27], both rows. kubectl's own noise is already redirected inside argocd_api_server, so there is
+  # nothing left here for the redirect to suppress except the diagnostic.
+  if ! argocd_is_off_cluster "$ARGOCD_KUBECONFIG" "$GUEST_KUBECONFIG"; then
     log_info "ArgoCD runs in the SAME cluster as the workload — nothing to register."
     exit 0
   fi
