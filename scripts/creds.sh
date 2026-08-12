@@ -135,12 +135,24 @@ harbor_pw="${HARBOR_PASSWORD:-$(_unset_pw HARBOR_PASSWORD)}"
 gitea_user="${GITEA_ADMIN_USER:-<unset — see GITEA_ADMIN_USER in .env.example>}"
 gitea_pw="${GITEA_ADMIN_PASSWORD:-$(_unset_pw GITEA_ADMIN_PASSWORD)}"
 # ArgoCD via the context-aware resolver; exit 3 => VKS-provided / not knowable locally.
-if argo_pw="$("${SCRIPT_DIR}/argocd-password.sh" 2>/dev/null)"; then :; else
+# `--wait 0` is an ARGUMENT, not an env var: this is a PRINTER and must never block. argocd-password
+# defaults to a 900s wait for the still-reconciling case, and an env-var opt-out would be defeated by
+# the .env.example clobber class (load_env sources it with `set -a` AFTER the caller's environment).
+# Measured cost of getting that wrong: creds.sh renders three times inside `make static-check` ->
+# test-scripts -> test-creds-show, i.e. a 45-minute CI hang.
+_argo_rc=0
+argo_pw="$("${SCRIPT_DIR}/argocd-password.sh" --wait 0 2>/dev/null)" || _argo_rc=$?
+if [ "$_argo_rc" = 0 ]; then :; else
   # SAME CLASS AS THE TWO ABOVE, third row: "<VKS-provided — get it from your lab>" is only true on a real
   # lab. On a KinD box ArgoCD's password is GENERATED at install like the others, so telling the operator
   # to go and get it from a lab they do not have is a third invented chore. Answer per flow.
   argo_pw="$(_unset_pw ARGOCD_ADMIN_PASSWORD)"
-  [ "$_have_sink" = 1 ] && argo_pw="<VKS-provided — get it from your lab>"
+  # NOT "get it from your lab" — that sentence sent an operator to fetch something that was TWELVE
+  # SECONDS away (measured, walk row 1: this printed at 19:42:25Z, the ArgoCD operator created
+  # argocd-initial-admin-secret at 19:42:37Z). This printer passes --wait 0 by design, so "absent
+  # right now" and "absent for good" are indistinguishable HERE; name the target that can tell them
+  # apart rather than inventing a chore.
+  [ "$_have_sink" = 1 ] && argo_pw="<not read — run: make argocd-password (it waits)>"
 fi
 
 # THE ArgoCD USERNAME WAS HARDCODED TO `admin`, AND THAT IS FALSE FOR A TENANT.

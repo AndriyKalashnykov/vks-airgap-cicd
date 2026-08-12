@@ -79,7 +79,25 @@ env_populate() {
   # KinD stand-in / a self-hosted Harbor. On a REAL lab these are given to you — OVERRIDE
   # HARBOR_PASSWORD with the admin/robot secret (env-populate never clobbers a value you set).
   if is_placeholder "${HARBOR_PASSWORD:-}";        then h_pw="$(gen_password)"; env_set HARBOR_PASSWORD        "$h_pw"; echo "  + HARBOR_PASSWORD       (generated — OVERRIDE for a real lab)"; made=1; fi
-  if is_placeholder "${ARGOCD_ADMIN_PASSWORD:-}";  then a_pw="$(gen_password)"; env_set ARGOCD_ADMIN_PASSWORD  "$a_pw"; echo "  + ARGOCD_ADMIN_PASSWORD (generated — KinD only; real lab sets its own)"; made=1; fi
+  # ⚠️ AND ON A REAL LAB IT MUST NOT BE GENERATED AT ALL. This line said "KinD only; real lab sets
+  # its own" and then generated it on a real lab anyway — nothing enforced the comment. MEASURED,
+  # walk row 1 (2026-08-12): minted here at 20:03:46Z, and at 20:16:17Z scenario-1's PAYOFF step
+  # printed `ArgoCD  https://192.168.101.131  admin  Hn2Hnb25luInR4fT` and exited 0. That string was
+  # never set on anything: ArgoCD is a SUPERVISOR Service and the context in that same render is the
+  # GUEST cluster, which has no `cicd` namespace at all — so the live-read path could not have
+  # answered, and argocd-password.sh's fallback presented the invention as ArgoCD's password.
+  # A fabricated credential is indistinguishable from a real one, which is why nobody caught it.
+  # VKS_NAMESPACE is the discriminator: `.env.example:1027` ships it COMMENTED, so it is empty on
+  # KinD (generate, as before) and set from Step 2 on a real lab (never invent).
+  if is_placeholder "${ARGOCD_ADMIN_PASSWORD:-}"; then
+    if [ -n "${VKS_NAMESPACE:-}" ]; then
+      echo "  - ARGOCD_ADMIN_PASSWORD (NOT generated: VKS_NAMESPACE is set, so ArgoCD is lab-provided —"
+      echo "                           inventing one here would be printed as fact by 'make creds-show')"
+    else
+      a_pw="$(gen_password)"; env_set ARGOCD_ADMIN_PASSWORD "$a_pw"
+      echo "  + ARGOCD_ADMIN_PASSWORD (generated — KinD only; real lab reads it with 'make argocd-password')"; made=1
+    fi
+  fi
   [ "$made" = 1 ] || echo "  (all already set — nothing generated)"
 
   echo
