@@ -815,11 +815,24 @@ set_env_var() {
   # value byte-identical, so make is unaffected.
   #
   # A value that needs quoting is SHELL-CORRECT and MAKE-MANGLED. That is a deliberate trade:
-  # verified 2026-08-12 that no recipe expands HARBOR_USERNAME/HARBOR_PASSWORD. If you ever add one,
-  # this is the line that made that choice.
+  # verified 2026-08-12 that no recipe expands HARBOR_USERNAME/HARBOR_PASSWORD. The ONE make-expanded
+  # key that could ever need quoting is HARBOR_CA_FILE (06-install-harbor.sh derives it from
+  # REPO_ROOT, so a space in the checkout path would quote it and make would keep the quotes
+  # literally, Makefile:472). Every other make-expanded writer key — HARBOR_URL, ARGOCD_LB_IP,
+  # ARGOCD_SERVER — is alphanumeric+`.:` and classifies BARE.
+  #
+  # AN ALLOW-LIST, NOT A DENY-LIST. The first version of this listed the characters it knew were
+  # dangerous ($ ` " ' \ and whitespace) and MISSED EIGHT — measured, on this exact function:
+  #     set_env_var K 'a;id;b'   -> K=a;id;b       -> `set -a; . .env` EXECUTED `id`
+  #     set_env_var K 'a>vic'    -> K=a>vic        -> sourcing TRUNCATED ./vic to 0 bytes
+  #     set_env_var K '~/foo'    -> K=~/foo        -> silently became /home/<user>/foo
+  #     a|b, a&b, a(b)c          ->                -> the variable ended up UNSET
+  # A deny-list of shell metacharacters can only ever rot open; the set of SAFE characters cannot.
+  # `""` must stay BARE: Makefile:480's `$(if $(HARBOR_CA_FILE),…)` sees `''` as non-empty and flips.
   case "$val" in
-    *[\$\`\"\'\\]*|*[[:space:]]*) printf "%s='%s'\n" "$key" "$(esc_sq "$val")" >> "$tmp" ;;
-    *)                                 printf '%s=%s\n'  "$key" "$val"              >> "$tmp" ;;
+    "")                        printf '%s=%s\n'  "$key" "$val"              >> "$tmp" ;;
+    *[!A-Za-z0-9_.:/@+=-]*|~*) printf "%s='%s'\n" "$key" "$(esc_sq "$val")" >> "$tmp" ;;
+    *)                         printf '%s=%s\n'  "$key" "$val"              >> "$tmp" ;;
   esac
   cat "$tmp" > "$file"          # NOT mv — preserves the destination's mode and ownership
   rm -f "$tmp"

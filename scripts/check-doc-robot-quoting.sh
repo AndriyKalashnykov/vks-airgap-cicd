@@ -104,10 +104,23 @@ _t="$(mktemp -d)"; trap 'rm -rf "$_t"' EXIT
 set_env_var HARBOR_USERNAME 'robot$vks-cicd'     "$_t/.env"
 set_env_var HARBOR_PASSWORD "p@ss'w0rd \$x"      "$_t/.env"
 set_env_var HARBOR_URL      harbor.env1.lab.test "$_t/.env"
+# THE PROBE SET IS THE GATE'S COVERAGE. The three values above carry only `$`, `'` and a space —
+# so this gate was GREEN while `set_env_var K 'a;id;b'` wrote an unquoted `;` and sourcing EXECUTED
+# `id`, and `a>victim` TRUNCATED a file. A gate certifying a class it cannot see is worse than none.
+# These two are the measured survivors of the old deny-list; keep them, and add to them.
+set_env_var HARBOR_ADMIN_PASSWORD 'a;echo PWNED>x' "$_t/.env"   # command exec + redirection
+# Built, not written literally: a bare '~/k.conf' trips SC2088 ("tilde does not expand in quotes"),
+# which here is the ASSERTION rather than a bug — the `~` must survive the round trip UNEXPANDED.
+_tilde='~'
+set_env_var ARGOCD_KUBECONFIG     "${_tilde}/k.conf"  "$_t/.env"   # leading ~ silently expands
 
 # shellcheck disable=SC2016
-if ( set -u; set -a; . "$_t/.env"; set +a
-     [ "$HARBOR_USERNAME" = 'robot$vks-cicd' ] && [ "$HARBOR_PASSWORD" = "p@ss'w0rd \$x" ] ) 2>/dev/null; then
+# `cd "$_t"` FIRST: if the writer regresses, sourcing performs the `>x` redirection for real, and it
+# must land in the temp dir rather than the repo root.
+if ( cd "$_t"; set -u; set -a; . "$_t/.env"; set +a
+     [ "$HARBOR_USERNAME" = 'robot$vks-cicd' ] && [ "$HARBOR_PASSWORD" = "p@ss'w0rd \$x" ] \
+     && [ "$HARBOR_ADMIN_PASSWORD" = 'a;echo PWNED>x' ] && [ "$ARGOCD_KUBECONFIG" = "${_tilde}/k.conf" ] \
+     && [ ! -e x ] ) 2>/dev/null; then
   log_info "check-doc-robot-quoting: set_env_var round-trips a \$-bearing credential through .env"
 else
   log_error "set_env_var wrote a .env that cannot be SOURCED, or mangled the value:"

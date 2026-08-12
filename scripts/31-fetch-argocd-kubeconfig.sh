@@ -66,6 +66,17 @@ export ARGOCD_KUBECONFIG
 log_info "SUPERVISOR kubeconfig -> ${ARGOCD_KUBECONFIG} (override with ARGOCD_KUBECONFIG in .env)"
 : "${SUPERVISOR_HOST:?SUPERVISOR_HOST must be set in .env (the Supervisor IP/FQDN)}"
 : "${ARGOCD_NAMESPACE:?ARGOCD_NAMESPACE must be set in .env (the vSphere Namespace the ArgoCD instance runs in, e.g. argocd-instance-1)}"
+# ...and that `:?` CAN NO LONGER FIRE, because load_env now derives ARGOCD_NAMESPACE from
+# VKS_NAMESPACE. That derivation is right for the common lab (98-uninstall-all.sh records one where
+# they are equal) and a COIN FLIP in general — line 68 above and 23-argocd-preflight.sh:138 both
+# record the other shape, `argocd-instance-N`. A derived value is worse than an unset one here: it
+# NAMES A NAMESPACE THAT EXISTS, so `vcf context use` succeeds and the failure moves to a later,
+# less obvious `kubectl get deploy argocd-server`. Say so at the point of use.
+if [ -n "${VKS_NAMESPACE:-}" ] && [ "$ARGOCD_NAMESPACE" = "${VKS_NAMESPACE}" ]; then
+  log_warn "ARGOCD_NAMESPACE was DERIVED from VKS_NAMESPACE (${VKS_NAMESPACE}) — not set explicitly."
+  log_warn "  On VKS the ArgoCD instance often lives in its OWN namespace (e.g. argocd-instance-1)."
+  log_warn "  If this fails, set ARGOCD_NAMESPACE in .env:  kubectl get argocd -A"
+fi
 # VKS_USERNAME is NOT `:?`-required here. It used to be — an unconditional guard with no default —
 # while 30-vks-login.sh applied a default privately, so `.env.example` could document the variable as
 # OPTIONAL and be RIGHT for `make vks-login` and WRONG for `make fetch-argocd-kubeconfig`, which
