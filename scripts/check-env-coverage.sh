@@ -151,7 +151,17 @@ while IFS= read -r line; do
   # non-comment line). A wider window would pick up a NEIGHBOURING block's marker and the gate would
   # never fire — which is exactly what it did on its first version.
   blk="$(awk -v n="$ln" 'NR<n { if ($0 ~ /^#/) { b = b "\n" $0 } else { b = "" } } END { print b }' "$ENV_FILE" | tr '[:upper:]' '[:lower:]')"
-  printf '%s' "$blk" | grep -qE "$ACQ_MARKERS" && continue
+  # HERESTRING, not `printf … | grep -q`. This file runs under `set -o pipefail`, and bash forks the
+  # LHS of a pipe into a SUBSHELL — so `grep -q` exiting at its first match SIGPIPEs that subshell
+  # (141), pipefail promotes it, the `&& continue` does not fire, and a variable whose marker IS
+  # present gets reported as having NO acquisition path. A FALSE POSITIVE, in a gate, blaming
+  # whichever PR happens to be in flight.
+  # MEASURED 2026-08-12 on an UNCHANGED tree: idle 24-core 0/20, but `taskset -c 0` (the 2-vCPU CI
+  # runner analogue) 5/25 = 20%. `blk` is why it is reachable here where other sites are not — it
+  # accumulates the whole contiguous comment block above a variable, which in this 1400-line file
+  # runs to hundreds of lines. A herestring is spooled to a temp file, so there is nothing to
+  # SIGPIPE. (check-grep-q-pipe.sh does not catch this: it is scoped to FILE-READING producers.)
+  grep -qE "$ACQ_MARKERS" <<< "$blk" && continue
   log_error ".env.example:${ln}: '${var}' is operator-supplied but states NO acquisition path."
   log_error "    Add 'how:'/'acquire:' (a command or make target), or mark it auto/discover/choose/request."
   log_error "    A value an operator cannot obtain is a HOLE in a scenario's critical path."
