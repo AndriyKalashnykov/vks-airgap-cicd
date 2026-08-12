@@ -42,7 +42,7 @@ if ! is_placeholder "${HARBOR_PASSWORD:-}"; then
   # includes an INCONCLUSIVE probe. Measured 2026-08-12 -- with a stale CA and a deliberately wrong
   # password the reporter returned 0, and this guard would have said the wrong credential works and
   # exited without doing its job.
-  if harbor_auth_ok; then
+  if [ "$(harbor_auth_verdict)" = accepted ]; then
     log_info "HARBOR_USERNAME=${HARBOR_USERNAME:-admin} already authenticates against ${HARBOR_URL} - leaving it alone"
     log_info "  (re-run after 'make harbor-robot' and this stays out of the way: a working credential is never replaced)"
     exit 0
@@ -99,14 +99,26 @@ pw="$(kubectl --kubeconfig "$SUP" -n "$ns" get secret "$sec" \
 # The premise above holds for a Harbor installed and left alone and is NOT proven for one whose
 # password was later changed. So the value is proven against the live Harbor BEFORE it is written:
 # publishing an unverified credential would just move the 401 later, which is the whole defect.
-HARBOR_USERNAME=admin HARBOR_PASSWORD="$pw" harbor_auth_report || true    # print the verdict
-if ! HARBOR_USERNAME=admin HARBOR_PASSWORD="$pw" harbor_auth_ok; then
-  die "the password in ${sec} does NOT authenticate against ${HARBOR_URL}.
+# THREE outcomes, not two. "Harbor said no" and "I could not ask" need DIFFERENT messages: the
+# second one printed as the first tells the operator their password was changed, about a password
+# that was never sent anywhere (measured, row 4 -- see harbor_auth_verdict in lib/harbor.sh).
+verdict="$(HARBOR_USERNAME=admin HARBOR_PASSWORD="$pw" harbor_auth_verdict)"
+case "$verdict" in
+  accepted) HARBOR_USERNAME=admin HARBOR_PASSWORD="$pw" harbor_auth_report || true ;;
+  rejected)
+    die "the password in ${sec} does NOT authenticate against ${HARBOR_URL} (Harbor returned 401).
   Harbor applies HARBOR_ADMIN_PASSWORD only at its FIRST bootstrap, so a Harbor whose password was
   later changed (UI, API, or a re-install over a surviving database) keeps the OLD one and this
   secret is stale. Nothing was written to .env.
-  Ask whoever installed Harbor for the admin credential, or use a robot ('make harbor-robot')."
-fi
+  Ask whoever installed Harbor for the admin credential, or use a robot ('make harbor-robot')." ;;
+  unchecked:*)
+    die "could NOT check the password in ${sec} against ${HARBOR_URL}: ${verdict#unchecked:}.
+  This is NOT a statement about the password - nothing was sent to Harbor, and nothing was written
+  to .env. Run this AFTER 'make fetch-harbor-ca' (scenario-1 Step 8), which is where the CA that
+  verifies Harbor's TLS comes from. On a Harbor with a publicly-trusted certificate, or with
+  HARBOR_INSECURE=1, it can run any time." ;;
+  *) die "internal: unrecognised auth verdict '${verdict}'" ;;
+esac
 
 # ── publish to .env, NOT to the state overlay ────────────────────────────────────────────────────
 # load_env sources .env.state LAST, so a credential written there would outrank .env AND the command

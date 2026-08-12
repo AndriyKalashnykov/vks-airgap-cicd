@@ -83,11 +83,17 @@ else ok "unset HARBOR_URL is silent"; fi
 # same lib/harbor.sh function, and this asserts the standalone path actually reaches it: a target
 # nobody exercises is decoration, and a shared function with one tested caller is one tested caller.
 # NOTE it needs NO kubectl stub -- that is the point of the split.
-o="$(SKIP_DOTENV=1 HARBOR_URL=127.0.0.1 timeout 90 bash "$SCRIPT_DIR/04-harbor-reachable.sh" 2>&1 || true)"
+# HARBOR_REACHABLE_WAIT_SECONDS=0 — this asserts the REPORT's verdict, not the wait. The target
+# defaults to 900 so an operator who types the bare command gets patience; an OFFLINE test against
+# 127.0.0.1 would then burn its whole `timeout 90` at each of these three call sites and assert on
+# timeout's kill code instead of the script's own rc. MEASURED 2026-08-12 the moment that default
+# was introduced: three stacked 90s waits inside static-check, and the assertions silently stopped
+# measuring what they name.
+o="$(SKIP_DOTENV=1 HARBOR_URL=127.0.0.1 HARBOR_REACHABLE_WAIT_SECONDS=0 timeout 90 bash "$SCRIPT_DIR/04-harbor-reachable.sh" 2>&1 || true)"
 if printf '%s' "$o" | grep -q 'NOTHING is serving there'; then ok "make harbor-reachable fires standalone (no cluster)"
 else bad "make harbor-reachable fires standalone (no cluster)" "the standalone entry point did not reach the check"; fi
-o="$(SKIP_DOTENV=1 HARBOR_URL=127.0.0.1 timeout 90 bash "$SCRIPT_DIR/04-harbor-reachable.sh" 2>&1 || true; echo "rc=$?")"
-o2="$(SKIP_DOTENV=1 HARBOR_URL=127.0.0.1 timeout 90 bash "$SCRIPT_DIR/04-harbor-reachable.sh" >/dev/null 2>&1; echo $?)"
+o="$(SKIP_DOTENV=1 HARBOR_URL=127.0.0.1 HARBOR_REACHABLE_WAIT_SECONDS=0 timeout 90 bash "$SCRIPT_DIR/04-harbor-reachable.sh" 2>&1 || true; echo "rc=$?")"
+o2="$(SKIP_DOTENV=1 HARBOR_URL=127.0.0.1 HARBOR_REACHABLE_WAIT_SECONDS=0 timeout 90 bash "$SCRIPT_DIR/04-harbor-reachable.sh" >/dev/null 2>&1; echo $?)"
 if [ "$o2" != 0 ]; then ok "...and EXITS NON-ZERO, so install-all/CI can gate on it"
 else bad "...and EXITS NON-ZERO" "it printed a PROBLEM and exited 0 — a gate that cannot fail"; fi
 

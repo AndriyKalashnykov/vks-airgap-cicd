@@ -190,6 +190,15 @@ _harbor_auth_code() {
   printf '%s' "$code"
 }
 
+# _harbor_ca_args — the TLS anchor, resolved ONCE. Prints the curl args, or nothing and returns 1
+# when we have no way to verify. Three functions were each re-deriving this; the moment they drift,
+# one of them sends a password over a connection another one refused to.
+_harbor_ca_args() {
+  if   [ -n "${HARBOR_CA_FILE:-}" ] && [ -s "${HARBOR_CA_FILE}" ]; then printf '%s\n%s' --cacert "${HARBOR_CA_FILE}"
+  elif [ "${HARBOR_INSECURE:-0}" = 1 ];                            then printf '%s' -k
+  else return 1; fi
+}
+
 # harbor_auth_ok — 0 ONLY when Harbor demonstrably ACCEPTED the credential (200, or 403 from a
 # project-scoped robot). Everything else, INCLUDING an inconclusive probe, is non-zero.
 #
@@ -199,14 +208,32 @@ _harbor_auth_code() {
 # 2026-08-12: with a wrong CA and a deliberately wrong password, harbor_auth_report returned 0 and a
 # caller using it as a verifier concluded the wrong password worked. "Verified" and "could not tell"
 # are different answers and need different functions.
-harbor_auth_ok() {
-  [ -n "${HARBOR_URL:-}" ] || return 1
-  is_placeholder "${HARBOR_PASSWORD:-}" && return 1
-  local -a cafg=()
-  if [ -n "${HARBOR_CA_FILE:-}" ] && [ -s "${HARBOR_CA_FILE}" ]; then cafg=(--cacert "${HARBOR_CA_FILE}")
-  elif [ "${HARBOR_INSECURE:-0}" = 1 ];                          then cafg=(-k)
-  else return 1; fi                       # cannot verify without an anchor -> NOT "ok"
-  case "$(_harbor_auth_code "${cafg[@]}")" in 200|403) return 0 ;; *) return 1 ;; esac
+harbor_auth_ok() { [ "$(harbor_auth_verdict)" = accepted ]; }
+
+# harbor_auth_verdict — THREE outcomes, because two is not enough and the third one lies.
+#   accepted | rejected | unchecked:<why>
+#
+# harbor_auth_ok collapses "Harbor said no" and "I could not ask" into the same non-zero, and a
+# caller that reports the first message for the second condition tells the operator something FALSE.
+# MEASURED 2026-08-12, row 4 of the scenario-1 walk: at Step 4 there is no Harbor CA yet (Step 8
+# fetches it), so the probe SKIPPED -- and 28-harbor-admin-password.sh printed "the password ... does
+# NOT authenticate ... a Harbor whose password was later changed keeps the OLD one and this secret is
+# stale", about a password that had never been sent anywhere. An error that names the wrong cause is
+# worse than a crash: it sends the operator to fix a thing that is not broken.
+harbor_auth_verdict() {
+  [ -n "${HARBOR_URL:-}" ]              || { printf 'unchecked:no HARBOR_URL'; return; }
+  if is_placeholder "${HARBOR_PASSWORD:-}"; then printf 'unchecked:no password'; return; fi
+  local -a cafg=(); local _ca
+  if _ca="$(_harbor_ca_args)"; then
+    while IFS= read -r _a; do cafg+=("$_a"); done <<< "$_ca"
+  else
+    printf 'unchecked:no CA yet (Step 8 fetches it) and HARBOR_INSECURE is not 1'; return
+  fi
+  case "$(_harbor_auth_code "${cafg[@]}")" in
+    200|403) printf 'accepted' ;;
+    401)     printf 'rejected' ;;
+    *)       printf 'unchecked:the probe did not complete' ;;
+  esac
 }
 
 harbor_auth_report() {
@@ -221,9 +248,9 @@ harbor_auth_report() {
   # Verify TLS against our own CA when we have one. A password may not travel over a connection we
   # cannot verify unless the operator has already accepted that (HARBOR_INSECURE=1), so an absent CA
   # is a NOTE, not a silent `-k`: this probe sends a credential, unlike the reachability one.
-  local -a cafg=()
-  if [ -n "${HARBOR_CA_FILE:-}" ] && [ -s "${HARBOR_CA_FILE}" ]; then cafg=(--cacert "${HARBOR_CA_FILE}")
-  elif [ "${HARBOR_INSECURE:-0}" = 1 ];                          then cafg=(-k)
+  local -a cafg=(); local _ca
+  if _ca="$(_harbor_ca_args)"; then
+    while IFS= read -r _a; do cafg+=("$_a"); done <<< "$_ca"
   else
     printf '%sno HARBOR_CA_FILE yet — skipping the auth probe rather than send a password\n' "$note_p" >&2
     printf '%s  over an unverified connection. Step 8 (make fetch-harbor-ca) provides it.\n' "$note_p" >&2
@@ -279,6 +306,20 @@ harbor_auth_report() {
 # Probed by REACHABILITY, not by comparing to the LoadBalancer object: Harbor's LB lives on the
 # SUPERVISOR while lab-preflight runs against the GUEST cluster, so the object is not ours to read --
 # and "does it answer?" is the end result anyway, which also catches a down Harbor or a firewall.
+# harbor_reachable_ok — 0 ONLY when Harbor demonstrably ANSWERED. The verifier counterpart of
+# harbor_reachable_report, and it exists for the same reason harbor_auth_ok does: the REPORTER
+# returns 0 for "nothing to report", which includes "the name does not resolve yet" (a note, not a
+# problem -- correct for a preflight, useless as a predicate). A wait loop keyed on the reporter
+# would exit immediately on an unresolvable name and declare Harbor reachable.
+harbor_reachable_ok() {
+  [ -n "${HARBOR_URL:-}" ] || return 1
+  getent hosts "${HARBOR_URL%%:*}" >/dev/null 2>&1 || return 1
+  local code
+  code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time "${HARBOR_PROBE_TIMEOUT_SECONDS:-10}" \
+            "https://${HARBOR_URL}/api/v2.0/systeminfo" 2>/dev/null || true)"
+  case "${code:-000}" in 000|'') return 1 ;; *) return 0 ;; esac
+}
+
 harbor_reachable_report() {
   local ok_p='  ok       ' bad_p='  PROBLEM  ' note_p='           '
   [ -n "${HARBOR_URL:-}" ] || { printf '%sHARBOR_URL is not set — nothing to check\n' "$note_p" >&2; return 0; }

@@ -26,6 +26,7 @@ Run these in this order. Every step is a command — nothing here needs the vCen
 | **6** | [Guest cluster](#6-guest-cluster) | create it; set 1 value, then 3 more once it is up |
 | **7** | [Preflight](#7-preflight) | check the cluster will accept the install |
 | **8** | [Harbor's CA](#8-harbors-ca) | fetch it |
+| **8.5** | [Harbor's admin credential](#85-harbors-admin-credential) | only if Harbor was already there |
 | **9** | [Harbor robot](#9-harbor-robot-recommended) | create it; replace 2 values |
 | **10** | [ArgoCD's kubeconfig](#10-the-supervisor-kubeconfig-argocd-needs) | fetch it; set 2 values |
 | **11** | [Install](#11-validate-then-install) | `make install-all`, then `make verify` |
@@ -306,38 +307,27 @@ stops with *could not resolve the vSphere cluster moid*.
 
 **Now create the A records `make show-dns-records` just printed.** `/etc/hosts` is **not** enough —
 the guest nodes must resolve the name too. **Reinstalling?** The LoadBalancer IP is new, so update
-the record you already have. Harbor takes about **10 minutes** to answer.
+the record you already have.
 
-Then confirm it:
+Then confirm it — run this as soon as the record is in; it waits:
 
 ```bash
 make harbor-reachable
 ```
 
-**Expect:** `Harbor answers at` followed by your host.
+**Expect:** `Harbor answers at` followed by your host. It prints `still waiting` every minute until
+Harbor comes up — **measured at 7m25s** from `install issued` to first answer, and it waits up to
+15 minutes. A non-zero exit means it never answered — **do not go on to Step 5**.
 
 `NOTHING is serving there` means the record does not point at the address `make show-dns-records`
 prints — the usual cause on a reinstall, where the old address is still in DNS.
 
 ### If Harbor already exists
 
-You still need its admin credential — `make install-all` authenticates with it.
+You still need its admin credential — `make install-all` authenticates with it. **Step 8.5 gets it
+for you**, right after the CA that lets it verify Harbor. Nothing to do here.
 
-```bash
-make harbor-admin-password
-```
-
-**Expect:** `wrote HARBOR_USERNAME and HARBOR_PASSWORD to ./.env`.
-
-It reads the password out of the Harbor service's own secret, **proves it against Harbor before
-writing anything**, and never replaces a credential that already works — so it is safe to re-run,
-and safe to run after Step 9's robot.
-
-`does NOT authenticate` means Harbor's password was changed after it was installed (Harbor only
-accepts that secret at first start). Nothing is written; ask whoever installed Harbor for the
-credential, or use a robot from Step 9.
-
-⚠️ Do not skip this. If you leave `HARBOR_PASSWORD` unset, `make env-populate` in Step 11
+⚠️ Do not skip Step 8.5. If you leave `HARBOR_PASSWORD` unset, `make env-populate` in Step 11
 **generates** one, and it cannot possibly authenticate against a Harbor that already exists.
 
 <details><summary>Optional — Harbor project names, both already work</summary>
@@ -556,6 +546,31 @@ certificate is self-signed. If a separate CA issued it — the usual case — th
 tells you so.
 
 </details>
+
+---
+
+## 8.5 Harbor's admin credential
+
+Skip this if **you** installed Harbor in Step 4 — that already published its password. This is for a
+Harbor that was already there.
+
+```bash
+make harbor-admin-password
+```
+
+**Expect:** `wrote HARBOR_USERNAME and HARBOR_PASSWORD to ./.env`.
+
+It reads the password out of the Harbor service's own secret and **proves it against Harbor before
+writing anything**. It never replaces a credential that already works, so it is safe to re-run and
+safe to run after Step 9's robot.
+
+It is **here, not in Step 4**, because verifying needs Harbor's CA — which is what you just fetched.
+
+- `does NOT authenticate` — Harbor's password was changed after it was installed (Harbor only
+  accepts that secret at its first start). Nothing is written. Ask whoever installed Harbor, or use
+  a robot from Step 9.
+- `could NOT check` — a different thing: nothing was sent to Harbor at all. It says which
+  precondition is missing.
 
 ---
 
