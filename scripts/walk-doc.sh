@@ -35,7 +35,28 @@ WALK_CLUSTER_EXISTS="${WALK_CLUSTER_EXISTS:-$WALK_EXISTS}"
 # whose preflight had just said, in the block immediately before, "NO Istio detected -> use
 # 'make install-ingress' to INSTALL it". The walk contradicted the document and then scored the
 # resulting failure against the document. A default here is a silent wrong answer.
-: "${WALK_ISTIO:?set to 'install' or 'existing' — read it off 'make istio-preflight' for THIS cluster, do not guess}"
+: "${WALK_ISTIO:?set to 'install', 'existing', or 'auto' — 'auto' READS 'make istio-preflight' for THIS cluster, which is what the document tells the reader to do}"
+
+# WALK_ISTIO=auto — NAVIGATE, do not be told.
+#
+# Step 12 says, in bold: "istio-preflight is read-only and it ends by naming the exact command to
+# run next — run the one it prints", and "⚠️ Never run the bare `make install-ingress` against a
+# mesh you did not install." A walk that is HANDED the branch is not walking the document; it is
+# walking a decision someone made outside it.
+#
+# MEASURED 2026-08-12: walk-matrix.sh:257 hardcoded `WALK_ISTIO=install` for EVERY row -- including
+# rows 2 and 4, which walk the guest cluster where rows 1 and 3 had just INSTALLED Istio. So the
+# harness did precisely what that warning forbids, on half the matrix, and scored it.
+#
+# `auto` resolves the same way the reader does: by reading what `make istio-preflight` printed
+# earlier in this step. Undecided is a SKIP, never a guess -- same rule as an unsubstituted
+# <placeholder>.
+_istio_mode() {
+  case "${WALK_ISTIO:-}" in install|existing) printf '%s' "$WALK_ISTIO"; return ;; esac
+  if   grep -q 'NO Istio detected'                "$STEP_OUT_FILE" 2>/dev/null; then printf 'install'
+  elif grep -q 'INGRESS_CONTROLLER=istio-existing' "$STEP_OUT_FILE" 2>/dev/null; then printf 'existing'
+  else printf 'undecided'; fi
+}
 
 STEP=0; RAN=0; FAILED=0; SKIPPED=0
 # The DOCUMENT's own claims, counted separately from the commands' exit codes. "32 blocks ran"
@@ -63,8 +84,16 @@ should_skip() {
     # the FIRST match -- with the general pattern first, BOTH blocks were skipped and Step 12 ran no
     # install at all, which is the defect the document was just fixed for.
     *"INGRESS_CONTROLLER=istio-existing"*)
-                                [ "${WALK_ISTIO:-existing}" != existing ] && printf 'attach variant; this row installs' ;;
-    *"make install-ingress"*)   [ "${WALK_ISTIO:-existing}" = existing ] && printf 'install variant; this row attaches to an existing mesh' ;;
+                                case "$(_istio_mode)" in
+                                  existing)  ;;
+                                  undecided) printf 'istio-preflight has not said which branch this cluster needs — a walk must not guess' ;;
+                                  *)         printf 'attach variant; istio-preflight said this cluster has NO Istio' ;;
+                                esac ;;
+    *"make install-ingress"*)   case "$(_istio_mode)" in
+                                  install)   ;;
+                                  undecided) printf 'istio-preflight has not said which branch this cluster needs — a walk must not guess' ;;
+                                  *)         printf 'install variant; istio-preflight named the ATTACH command for this cluster' ;;
+                                esac ;;
     *"install-harbor-service"*) [ "$WALK_HARBOR_EXISTS" = 1 ] && printf 'Harbor already exists (this row)' ;;
     *"install-argocd-service"*) [ "$WALK_ARGOCD_EXISTS" = 1 ] && printf 'ArgoCD already exists (this row)' ;;
     *"make vsphere-namespace"*) [ "$WALK_NS_EXISTS" = 1 ] && printf 'namespace already exists (this row)' ;;
