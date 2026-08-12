@@ -757,6 +757,31 @@ esc_sq() { local s=$1; s=${s//\'/\'\\\'\'}; printf '%s' "$s"; }
 # letter-requirement is LOAD-BEARING — it is what skips the `robot$<name>` placeholder and comment
 # forms); a blockquote/list-prefixed assignment (`> KEY=`) is not matched. A deliberate bad-form
 # example is exempted with a `# env-quote-ok:` marker on the line.
+# gitea_hook_ids <hooks-json-body> <url> — print the id of every webhook whose config.url is
+# EXACTLY <url>, one per line. rc 0 = parsed (zero or more ids); rc 2 = COULD NOT PARSE.
+#
+# ⚠️ THE TWO OUTCOMES MUST BE DISTINGUISHABLE, and that is the whole reason this is a function.
+# Inline, the caller wrote `ids="$(... | jq ... 2>/dev/null || true)"` and branched on `[ -n "$ids" ]`
+# — which makes "jq failed" look exactly like "there are no hooks". MEASURED 2026-08-12 on jq 1.8.2:
+#   [{"id":3,"config":{"url":"U"}}]                  -> rc 0, prints 3
+#   {"message":"token does not have permission"}     -> rc 5, prints NOTHING
+#   <html>502 Bad Gateway</html>                     -> rc 5, prints NOTHING
+#   ""            (curl failed, `|| true` swallowed) -> rc 0, prints NOTHING
+# The middle two are an ERROR BODY from a failed GET. Treated as "no hooks", the caller skips the
+# DELETE and POSTs anyway — leaving the STALE-SECRET hook in force AND adding a DUPLICATE, i.e. both
+# of the bugs the delete+recreate exists to fix, on a transient blip. Reachable precisely in the
+# EVERYTHING-exists cell, which is where that class already cost a walk row.
+# A pure function so its test can EXECUTE it (the doc_robot_line_is_bad / engine_packages pattern).
+gitea_hook_ids() {
+  local body="$1" url="$2" out
+  # An EMPTY body is not a parse failure — it is what `curl … || true` leaves after a connection
+  # error, and the caller must treat it as "unknown", not "none". Reported as rc 2 for that reason.
+  [ -n "$body" ] || return 2
+  out="$(printf '%s' "$body" | jq -r --arg u "$url" '.[]? | select(.config.url == $u) | .id')" || return 2
+  printf '%s' "$out" | grep -v '^$' || true
+  return 0
+}
+
 doc_robot_line_is_bad() {
   local line="$1" val before qs re
   case "$line" in *'# env-quote-ok:'*) return 1 ;; esac                    # marker on the RAW line (it IS a comment)

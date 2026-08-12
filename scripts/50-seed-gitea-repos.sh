@@ -309,6 +309,13 @@ seed_app() {
   # lets grep close the pipe on its first match and SIGPIPE api_body (exit 141), which under
   # `set -o pipefail` reads as "no hook present" -> we would create the duplicate this check exists
   # to prevent.
+  # STATUS FIRST. `api_body` is `curl -sS` with NO status check, so a 401/403/502 body flows onward
+  # and (see gitea_hook_ids) used to be indistinguishable from "no hooks" — skipping the delete and
+  # POSTing anyway, which restores BOTH bugs this block exists to fix. Refuse instead of guessing.
+  local hooks_code; hooks_code="$(api -X GET "$hooks_api")"
+  ok "$hooks_code" || die "cannot list webhooks on ${APP_GIT_REPO} (http ${hooks_code}).
+  REFUSING to POST a new one: without the existing list this would leave a hook carrying a STALE
+  HMAC secret in force AND add a duplicate that fires the pipeline twice per push."
   local hooks_body; hooks_body="$(api_body -X GET "$hooks_api" || true)"
 
   # RECONCILE, DO NOT SKIP — and DELETE+POST, because PATCH CANNOT SET THE SECRET.
@@ -333,8 +340,12 @@ seed_app() {
   # (services/webhook/general.go:394 ToHook(), with a comment saying so), so we cannot compare and
   # must rewrite unconditionally. DELETE + POST are the only two verbs whose secret handling is
   # proven, so that is what this does.
-  local ids; ids="$(printf '%s' "$hooks_body" \
-    | jq -r --arg u "$hook_url" '.[]? | select(.config.url == $u) | .id' 2>/dev/null || true)"
+  # lib/os.sh: rc 2 means COULD NOT PARSE, which is NOT "no hooks" — see its comment for the four
+  # measured bodies. Dying here is the whole point: the alternative is a silent duplicate.
+  local ids
+  ids="$(gitea_hook_ids "$hooks_body" "$hook_url")" || die "could not parse the webhook list for
+  ${APP_GIT_REPO} (the GET returned ${hooks_code} but the body is not the expected JSON array).
+  REFUSING to POST — see the note above."
   if [ -n "$ids" ]; then
     # ALL of them, not the first: this also repairs a duplicate left by an older run.
     while IFS= read -r hid; do
