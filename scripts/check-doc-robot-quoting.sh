@@ -85,4 +85,46 @@ if [ "$bad" -gt 0 ]; then
 fi
 
 log_info "check-doc-robot-quoting: OK — examined $lines line(s) across $scanned file(s); every Harbor robot credential is single-quoted (docs/reviews/* + docs/decisions/* exempt)."
-exit 0
+# ── AND THE WRITER, not just the documents ───────────────────────────────────────────────────────
+# This gate scanned README.md + docs/** + .env.example and reported OK — 6386 lines — while
+# `make harbor-robot` published an UNQUOTED `robot$vks-cicd` into .env through set_env_var.
+# MEASURED 2026-08-12, row 1 of the walk: the document's own `set -a; . ./.env; set +a` then died
+# with `line 1450: vks: unbound variable`, and SEVEN of the run's eight failed blocks were that one
+# line — Steps 10, 11, 12 and 13 in their entirety.
+#
+# .env is gitignored, so it can never be scanned. The WRITER can be, and it is the thing that
+# decides. So: EXECUTE set_env_var with the credential shape that broke it, and source the result
+# under `set -u` — the same round trip the reader performs.
+_t="$(mktemp -d)"; trap 'rm -rf "$_t"' EXIT
+# lib/os.sh is already sourced at the top of this file, so set_env_var is in scope.
+# SC2016 is DELIBERATE and load-bearing: the literal `$vks` is the entire point. A robot name
+# always contains `$`, and double quotes here would expand it away and test nothing — which is
+# precisely how the first version of my own test for this reported the mode PRESERVED.
+# shellcheck disable=SC2016
+set_env_var HARBOR_USERNAME 'robot$vks-cicd'     "$_t/.env"
+set_env_var HARBOR_PASSWORD "p@ss'w0rd \$x"      "$_t/.env"
+set_env_var HARBOR_URL      harbor.env1.lab.test "$_t/.env"
+
+# shellcheck disable=SC2016
+if ( set -u; set -a; . "$_t/.env"; set +a
+     [ "$HARBOR_USERNAME" = 'robot$vks-cicd' ] && [ "$HARBOR_PASSWORD" = "p@ss'w0rd \$x" ] ) 2>/dev/null; then
+  log_info "check-doc-robot-quoting: set_env_var round-trips a \$-bearing credential through .env"
+else
+  log_error "set_env_var wrote a .env that cannot be SOURCED, or mangled the value:"
+  sed 's/^/    /' "$_t/.env" >&2
+  log_error "  The document runs 'set -a; . ./.env; set +a' at Steps 3, 6, 8 and 10. A robot name"
+  log_error "  always contains '\$' — unquoted, it kills every step after the one that wrote it."
+  rc=1
+fi
+
+# ...and a value that does NOT need quoting must stay BARE, or make's -include breaks: Makefile:471
+# expands $(HARBOR_URL), and make takes the quotes LITERALLY.
+if grep -q "^HARBOR_URL=harbor.env1.lab.test$" "$_t/.env"; then
+  log_info "check-doc-robot-quoting: a plain value is left unquoted (make's -include still reads it)"
+else
+  log_error "set_env_var quoted a value that did not need it — make's \$(HARBOR_URL) breaks:"
+  grep '^HARBOR_URL=' "$_t/.env" | sed 's/^/    /' >&2
+  rc=1
+fi
+
+exit "${rc:-0}"

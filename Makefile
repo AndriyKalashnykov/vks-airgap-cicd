@@ -495,7 +495,7 @@ trust-harbor: check-env ## Make YOUR engine trust the self-signed Harbor — and
 	@$(SCRIPTS)/19-trust-harbor.sh
 
 .PHONY: harbor-robot
-harbor-robot: ## Create a least-privilege Harbor CI robot account (push+pull) → secrets/harbor-robot.env; copy into .env
+harbor-robot: ## Create a least-privilege Harbor CI robot account (push+pull) → secrets/harbor-robot.env AND published to .env (nothing to copy)
 	@$(SCRIPTS)/22-harbor-robot.sh
 
 .PHONY: harbor-reachable

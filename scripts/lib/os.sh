@@ -589,7 +589,21 @@ EOF
   # It cannot simply be commented out: 70/71/45/99 all read it with `:?` (required), so an unset
   # value would kill `make gitops`. The default belongs HERE, after the sourcing, where a caller's
   # explicit choice still wins.
-  export ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
+  # ...and the DEFAULT itself must know about the real lab. MEASURED 2026-08-12: with this line
+  # reading `:-argocd`, every script's own `${ARGOCD_NAMESPACE:-${VKS_NAMESPACE:-}}` fallback was
+  # DEAD CODE -- load_env runs first, so the value was always already set and the second branch
+  # could never be taken. `make argocd-address` and `make argocd-password`, two lines apart in the
+  # document, then disagreed: one found `cicd` (it resolves NS before... no: it did NOT -- it was
+  # equally pre-empted, and only worked because its caller had VKS_NAMESPACE exported), the other
+  # queried `argocd`, a namespace that does not exist on a Supervisor lab, and blamed the lab:
+  #     "No ArgoCD 'admin' password is available locally for this context."
+  # while argocd-initial-admin-secret sat in `cicd` the whole time.
+  #
+  # On a real lab ArgoCD is a SUPERVISOR SERVICE and lives in the vSphere Namespace; on KinD it is
+  # installed as `argocd` and VKS_NAMESPACE is unset. One expression serves both, and it is the SAME
+  # one argocd_namespace() uses -- deliberately, so a script that calls load_env and one that does
+  # not can never disagree.
+  export ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-${VKS_NAMESPACE:-argocd}}"
 
   # VKS_CONTEXT selects WHICH KUBE CONTEXT you talk to (30-vks-login.sh: `kubectl config use-context`).
   # It was pinned UNCOMMENTED in .env.example, so `VKS_CONTEXT=my-lab-ctx make ...` was SILENTLY
@@ -654,6 +668,25 @@ kubeconfig_ready() {
 #   MEASURED here 2026-08-05, `pw\rupload-file = /etc/passwd` through od -c:
 #       before -> p w \r u p l o a d ...   (a raw 0x0D reaches the config file)
 #       after  -> p w  \  r u p l o a d ...(the two-character escape curl expects)
+# argocd_namespace — where ArgoCD LIVES, resolved the SAME way by whoever installs it and whoever
+# reads it. That agreement is the whole point: nine sites resolved this independently and split into
+# two camps, so a READER could look somewhere the INSTALLER never wrote.
+#
+# MEASURED 2026-08-12, row 1 of the walk, first real-lab run of the new Step 5:
+#   `make argocd-address`  -> ${ARGOCD_NAMESPACE:-${VKS_NAMESPACE:-}} -> cicd -> found it, wrote the address
+#   `make argocd-password` -> ${ARGOCD_NAMESPACE:-argocd}             -> argocd -> "No ArgoCD 'admin'
+#                              password is available locally for this context"
+# while `argocd-initial-admin-secret` sat in `cicd` the whole time. Two lines apart in the document,
+# two different answers to "which namespace", and the error blamed the LAB.
+#
+# PRECEDENCE, and each step earns its place:
+#   ARGOCD_NAMESPACE  — explicit, always wins.
+#   VKS_NAMESPACE     — the real lab: ArgoCD is a SUPERVISOR SERVICE and lands in the vSphere
+#                       Namespace, so there IS no `argocd` namespace to find.
+#   argocd            — KinD / self-hosted, where 07-install-argocd.sh installs it by that name and
+#                       VKS_NAMESPACE is unset.
+argocd_namespace() { printf '%s' "${ARGOCD_NAMESPACE:-${VKS_NAMESPACE:-argocd}}"; }
+
 # supervisor_kubeconfig — the ONE resolver for "where is the Supervisor kubeconfig".
 #
 # Harbor and ArgoCD are SUPERVISOR Services, so every script that talks to them needs this, and SEVEN
@@ -764,7 +797,30 @@ set_env_var() {
   local tmp; tmp="$(mktemp)"
   # `|| true`: grep -v exits 1 when it emits NOTHING, which is the normal single-key case.
   grep -vE "^${key}=" "$file" > "$tmp" 2>/dev/null || true
-  printf '%s=%s\n' "$key" "$val" >> "$tmp"
+  # QUOTE ONLY WHAT NEEDS IT, and quote it for the SHELL.
+  #
+  # MEASURED 2026-08-12, row 1 of the walk: `make harbor-robot` published
+  #     HARBOR_USERNAME=robot$vks-cicd
+  # unquoted, and the document's own `set -a; . ./.env; set +a` -- which it runs at Steps 3, 6, 8
+  # and 10 -- then died with `.env: line 1450: vks: unbound variable`. SEVEN of the run's eight
+  # failed blocks were that one line: Steps 10, 11, 12 and 13 in their entirety. 22-harbor-robot.sh
+  # already single-quotes the same credential into its SECRETS file, with a seven-line comment
+  # explaining why; it published to .env through here, twenty lines later, and here did not.
+  #
+  # ONLY WHEN NEEDED, because `.env` has TWO parsers and they disagree. `-include .env` makes these
+  # make variables too, and make takes the quotes LITERALLY (measured: unquoted -> `robotks-cicd`,
+  # single-quoted -> `'robotks-cicd'` — it eats `$vks` either way, so NO shape is make-correct).
+  # Blanket-quoting would therefore break the values make DOES expand, e.g. `$(HARBOR_URL)` at
+  # Makefile:471. Quoting only the values that would otherwise break `source` keeps every plain
+  # value byte-identical, so make is unaffected.
+  #
+  # A value that needs quoting is SHELL-CORRECT and MAKE-MANGLED. That is a deliberate trade:
+  # verified 2026-08-12 that no recipe expands HARBOR_USERNAME/HARBOR_PASSWORD. If you ever add one,
+  # this is the line that made that choice.
+  case "$val" in
+    *[\$\`\"\'\\]*|*[[:space:]]*) printf "%s='%s'\n" "$key" "$(esc_sq "$val")" >> "$tmp" ;;
+    *)                                 printf '%s=%s\n'  "$key" "$val"              >> "$tmp" ;;
+  esac
   cat "$tmp" > "$file"          # NOT mv — preserves the destination's mode and ownership
   rm -f "$tmp"
   # Sweep the LEGACY orphan. The old `> "${file}.tmp" && mv` left one behind on every single-key
