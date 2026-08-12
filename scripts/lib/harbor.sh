@@ -151,6 +151,78 @@ ensure_project() {
   esac
 }
 
+# harbor_auth_report — READ-ONLY: do HARBOR_USERNAME/HARBOR_PASSWORD actually AUTHENTICATE?
+# Same house style and contract as harbor_reachable_report: ok/PROBLEM/note to stderr, returns the
+# problem count (0 or 1). Call it AFTER harbor_reachable_report -- a credential cannot be judged
+# against something that is not serving.
+#
+# WHY IT EXISTS -- a measured 605-second failure
+# ----------------------------------------------
+# MEASURED 2026-08-12, the "Harbor already exists" row of the scenario-1 walk: `make env-validate`
+# reported `Harbor rejected HARBOR_USERNAME/HARBOR_PASSWORD (HTTP 401)` at 15:00:13 and exited 1 --
+# correctly, five minutes before anything else noticed. The walk (and any reader who pastes Step 11's
+# block into one terminal, since the lines are newline-separated and not `&&`-chained) then ran
+# `make install-all` anyway: it mirrored 24 images, built the offline Maven builder, and died 605s
+# later pushing it, on the SAME credential, with an error naming a blob upload.
+#
+# lab-preflight is the thing install-all runs FIRST precisely so a doomed run stops in its first
+# seconds. It checked that Harbor SERVES and never that we can LOG IN -- so the one precondition that
+# was actually wrong was the one it did not look at. This closes that, for every reader and every
+# credential, without depending on anyone reading prose.
+#
+# 403 IS A PASS, and this is not a nicety: a PROJECT-SCOPED ROBOT (what scenario-1 Step 9 tells the
+# reader to create, and what the pipeline should run as) is fully authenticated and still gets 403
+# from /users/current, which is a SYSTEM-scoped endpoint. Treating "any non-200" as failure would
+# turn the least-privilege path into a hard stop -- a false RED introduced by a gate meant to help.
+# Only 401 means the credential is wrong; Harbor returns 403 for a permissions problem.
+harbor_auth_report() {
+  local ok_p='  ok       ' bad_p='  PROBLEM  ' note_p='           '
+  [ -n "${HARBOR_URL:-}" ] || return 0                      # reachable_report already said so
+  if is_placeholder "${HARBOR_PASSWORD:-}"; then
+    printf '%sHARBOR_PASSWORD is unset — cannot check whether Harbor accepts you.\n' "$note_p" >&2
+    printf '%s  (make env-check owns that; this only reports what it can measure.)\n' "$note_p" >&2
+    return 0
+  fi
+
+  # Verify TLS against our own CA when we have one. A password may not travel over a connection we
+  # cannot verify unless the operator has already accepted that (HARBOR_INSECURE=1), so an absent CA
+  # is a NOTE, not a silent `-k`: this probe sends a credential, unlike the reachability one.
+  local -a cafg=()
+  if [ -n "${HARBOR_CA_FILE:-}" ] && [ -s "${HARBOR_CA_FILE}" ]; then cafg=(--cacert "${HARBOR_CA_FILE}")
+  elif [ "${HARBOR_INSECURE:-0}" = 1 ];                          then cafg=(-k)
+  else
+    printf '%sno HARBOR_CA_FILE yet — skipping the auth probe rather than send a password\n' "$note_p" >&2
+    printf '%s  over an unverified connection. Step 8 (make fetch-harbor-ca) provides it.\n' "$note_p" >&2
+    return 0
+  fi
+
+  # esc_curlk (lib/os.sh) is REQUIRED, not defensive: a bare `"` in the password truncates it, a `\`
+  # is eaten and a newline injects a curl directive -- each of which reports a FALSE 401, the exact
+  # wrong answer from a gate whose whole job is to say whether the credential works.
+  local cfg; cfg="$(mktemp)"; chmod 600 "$cfg"
+  printf 'user = "%s:%s"\n' "$(esc_curlk "${HARBOR_USERNAME:-admin}")" "$(esc_curlk "${HARBOR_PASSWORD}")" > "$cfg"
+  local acode                                    # own line: `local x=$(...)` masks the real status
+  acode="$(curl -sS -o /dev/null -w '%{http_code}' --max-time "${HARBOR_PROBE_TIMEOUT_SECONDS:-10}" \
+             "${cafg[@]}" -K "$cfg" "https://${HARBOR_URL}/api/v2.0/users/current" 2>/dev/null || echo 000)"
+  rm -f "$cfg"
+
+  case "$acode" in
+    200) printf '%sHarbor accepts %s (http 200)\n' "$ok_p" "${HARBOR_USERNAME:-admin}" >&2; return 0 ;;
+    403) printf '%sHarbor accepts %s (http 403 from /users/current — a project-scoped robot, authenticated)\n' \
+           "$ok_p" "${HARBOR_USERNAME:-admin}" >&2; return 0 ;;
+    401)
+      printf '%sHarbor REJECTED %s (http 401). install-all cannot succeed on this credential,\n' "$bad_p" "${HARBOR_USERNAME:-admin}" >&2
+      printf '%s  and takes 8-10 minutes to say so — it stops here instead.\n' "$note_p" >&2
+      printf '%s401 is authentication, not permissions (Harbor returns 403 for those). The usual cause\n' "$note_p" >&2
+      printf '%s  is a GENERATED password against a Harbor that already existed: it keeps the password\n' "$note_p" >&2
+      printf '%s  from its FIRST install, and a later data-values submission does not change it.\n' "$note_p" >&2
+      printf '%sSet HARBOR_USERNAME/HARBOR_PASSWORD in .env to the credential that Harbor was\n' "$note_p" >&2
+      printf '%s  installed with, or to a robot from '\''make harbor-robot'\''.\n' "$note_p" >&2
+      return 1 ;;
+    *)   printf '%sHarbor auth probe inconclusive (http %s) — not judging it here\n' "$note_p" "$acode" >&2; return 0 ;;
+  esac
+}
+
 # harbor_reachable_report — READ-ONLY: does HARBOR_URL actually SERVE? Prints ok/PROBLEM/note lines
 # to stderr in the preflight house style and RETURNS the problem count (0 or 1).
 #

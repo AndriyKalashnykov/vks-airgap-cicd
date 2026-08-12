@@ -130,6 +130,13 @@ fi
 #    two entry points — `make harbor-reachable` and this preflight — so they cannot drift.
 harbor_reachable_report || problems=$((problems + 1))
 
+# 4b. ...and it must ACCEPT US. Reachable is not authenticated: MEASURED 2026-08-12, a walk whose
+#     HARBOR_PASSWORD had been GENERATED against a pre-existing Harbor passed 4 (Harbor answered
+#     http 200) and then spent 605s in mirror+builder before failing the push on that credential.
+#     env-validate had already reported the same 401 five minutes earlier and been walked past.
+#     Cheapest failure available; see harbor_auth_report in lib/harbor.sh for why 403 is a PASS.
+harbor_auth_report || problems=$((problems + 1))
+
 # 3. A working LoadBalancer provider. On a real lab ArgoCD is OFF-CLUSTER (a Supervisor Service), so it
 #    cannot resolve gitea-http.gitea.svc — Gitea needs its OWN LoadBalancer VIP for ArgoCD to clone from.
 #    We cannot prove a provider exists without creating a Service, and this script is read-only. So we
