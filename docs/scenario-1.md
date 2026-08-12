@@ -20,7 +20,7 @@ Run these in this order. Every step is a command — nothing here needs the vCen
 | **0** | [Get the repo](#0-get-the-repo) | clone it, `cd` in, `make env-init` |
 | **1** | [Jump box](#1-jump-box) | install the toolchain; set 8 values |
 | **2** | [vSphere Namespace](#2-the-vsphere-namespace) | `make vsphere-namespace`; set 6 values |
-| **3** | [Log in to the Supervisor](#3-log-in-to-the-supervisor) | `vcf context create`, `make vks-login` |
+| **3** | [Log in to the Supervisor](#3-log-in-to-the-supervisor) | `make vks-login` |
 | **4** | [Harbor](#4-harbor) | `make install-harbor-service`; set 2 values, then DNS |
 | **5** | [ArgoCD](#5-argocd) | `make install-argocd-service`, log in; set 2 values |
 | **6** | [Guest cluster](#6-guest-cluster) | create it; set 1 value, then 3 more once it is up |
@@ -234,25 +234,31 @@ at the same address, so a stale file looks valid and is not.
 
 ```bash
 set -a; . ./.env; set +a
+make vks-login
+```
 
+**Expect:** `Supervisor context verified via` — and `./secrets/supervisor.kubeconfig` now exists.
+
+⚠️ **Do not** use `vcf config set env.VCF_CLI_VSPHERE_PASSWORD` — it writes your SSO password in
+plaintext to `~/.config/vcf/config.yaml`, outside this repo and every secret scan. `.env` is where
+it belongs.
+
+<details><summary>Driving the <code>vcf</code> CLI directly instead</summary>
+
+`make vks-login` creates the context and activates it for you. If you would rather run the CLI:
+
+```bash
 vcf context create "$VKS_CONTEXT_NAME" --endpoint "$SUPERVISOR_HOST" \
     --ca-certificate ./secrets/supervisor-ca.crt \
     --username "$VKS_USERNAME" --type kubernetes --auth-type basic
-vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"      # note the <ctx>:<ns> colon form
-
-make vks-login                                          # writes ./secrets/supervisor.kubeconfig
+vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"
 ```
 
-⚠️ **`--username` is not optional.** Without it `vcf` asks `? Provide Username:` and dies
-`[x] : EOF` in anything non-interactive.
+`--username` is not optional — without it `vcf` asks `? Provide Username:` and dies `[x] : EOF` in
+anything non-interactive. And `vcf context use` can print a `system Harbor registry` error **and
+still have worked**: judge it by the next command, not its exit code. `make vks-login` already does.
 
-⚠️ **Do not** use `vcf config set env.VCF_CLI_VSPHERE_PASSWORD` — it writes your SSO password in
-plaintext to `~/.config/vcf/config.yaml`, outside this repo and every secret scan.
-
-`vcf context use` can print a "system Harbor registry" error **and still have worked** — judge it by
-the next command, not its exit code.
-
-**Expect:** `./secrets/supervisor.kubeconfig` exists.
+</details>
 
 Now confirm the namespace can actually hold a cluster. **Both must print something:**
 
@@ -291,25 +297,27 @@ make install-harbor-service
 make show-dns-records          # the exact A records to create, with their live LoadBalancer IPs
 ```
 
-⚠️ **Reinstalling?** The LoadBalancer IP changes — update the A record, then:
+**Expect:** `7 secrets generated, 0 placeholders left`, then `install issued for
+harbor.tanzu.vmware.com`. The admin password is **generated** — you do not choose it and it is not
+`Harbor12345`. Read it back any time with `make creds-show`.
+
+⚠️ If your vCenter has **more than one cluster**, set `VKS_CLUSTER_COMPUTE` as well, or this command
+stops with *could not resolve the vSphere cluster moid*.
+
+**Now create the A records `make show-dns-records` just printed.** `/etc/hosts` is **not** enough —
+the guest nodes must resolve the name too. **Reinstalling?** The LoadBalancer IP is new, so update
+the record you already have. Harbor takes about **10 minutes** to answer.
+
+Then confirm it:
 
 ```bash
 make harbor-reachable
 ```
 
-**Expect:** `Harbor answers at <your host>`. `NOTHING is serving there` means the record is still on
-the old address. *(`install-all` runs this for you.)*
+**Expect:** `Harbor answers at` followed by your host.
 
-**Expect:** `7 secrets generated, 0 placeholders left`, then `install issued for
-harbor.tanzu.vmware.com`. It registers the service, installs it behind an NGINX LoadBalancer and
-generates all seven of Harbor required secrets — **including the admin password, which you do not
-choose and which is not `Harbor12345`**. Read it back any time with `make creds-show`.
-
-Now create those A records. `/etc/hosts` is **not** enough: the guest nodes must resolve the name
-too. Harbor UI then answers at `https://<your FQDN>/`. *(~10 min)*
-
-⚠️ If your vCenter has **more than one cluster**, set `VKS_CLUSTER_COMPUTE` as well, or this command
-stops with *could not resolve the vSphere cluster moid*.
+`NOTHING is serving there` means the record does not point at the address `make show-dns-records`
+prints — the usual cause on a reinstall, where the old address is still in DNS.
 
 ### If Harbor already exists
 
@@ -449,7 +457,14 @@ kubectl --kubeconfig "./secrets/${VKS_CLUSTER_NAME}.kubeconfig" get nodes -o wid
 
 **Expect:** your nodes listed, all `Ready`.
 
-**Now that the cluster exists, set in `./.env`:**
+Point everything after this at the guest cluster:
+
+```bash
+make use-guest-kubeconfig
+set -a; . ./.env; set +a
+```
+
+**Expect:** `wrote to` — then `KUBECONFIG`, `VKS_CONTEXT` and `VKS_AUTH_METHOD=kubeconfig`.
 
 <details><summary>No Supervisor access (the Scenario-2 tenant)? Ask the <code>vcf</code> CLI instead</summary>
 
@@ -463,19 +478,12 @@ If this errors (`pinniped-info`, or `plugin sources from the system Harbor regis
 Secret route above instead — it is the same credential.
 </details>
 
-| key | example | how to get the value |
-|---|---|---|
-| `KUBECONFIG` | `./secrets/cicd-gc1.kubeconfig` | `./secrets/<your VKS_CLUSTER_NAME>.kubeconfig` — the file above |
-| `VKS_CONTEXT` | `cicd-gc1-admin@cicd-gc1` | `kubectl --kubeconfig ./secrets/<cluster>.kubeconfig config get-contexts -o name` |
-| `VKS_AUTH_METHOD` | `kubeconfig` | **Set it to `kubeconfig`.** Step 3 set `vcf` to log in to the SUPERVISOR; from here every command targets the GUEST cluster. Leave it on `vcf` and Step 7 silently checks the Supervisor instead — it reports `may NOT create CustomResourceDefinitions` and `NONE is marked default`, both TRUE of the Supervisor and neither about your cluster. |
-
 ⚠️ **`make vks-login` now renews the GUEST kubeconfig.** The Supervisor one expires too, and Steps
 10 and 14 need it — `kubectl` then says *"the server has asked for the client to provide
 credentials"*. Renew it with:
 
 ```bash
 set -a; . ./.env; set +a
-vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"
 VKS_AUTH_METHOD=vcf make vks-login
 ```
 
