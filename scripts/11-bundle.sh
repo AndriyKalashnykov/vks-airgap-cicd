@@ -39,8 +39,8 @@ base="vks-airgap-cicd-bundle-${stamp}"
 
 # --- THE COMPRESSOR IS A CROSS-BOX CONTRACT, AND IT USED TO BE DECIDED UNILATERALLY ----------------
 #
-# This used to be `if have zstd; then --zstd; else --gzip; fi` — the OUTSIDE box choosing, from its own
-# capabilities, a format the INSIDE box must be able to decode. The inside box gets no say and no warning.
+# This used to be `if have zstd; then --zstd; else --gzip; fi` — the INTERNET box choosing, from its own
+# capabilities, a format the AIR-GAP box must be able to decode. The air-gap box gets no say and no warning.
 # Two measured facts made that a real, shipping bug:
 #
 #   1. `zstd` is ABSENT from a bare photon:5.0 AND a bare ubuntu:26.04. Worse, Photon's tar is TOYBOX,
@@ -57,7 +57,7 @@ base="vks-airgap-cicd-bundle-${stamp}"
 # compressor binary and no tar compression flag, so it works on toybox, busybox, GNU tar and bsdtar
 # alike. It removes the entire capability class instead of relocating it. It is also the fastest.
 #
-# `gzip`/`zstd` remain available for an operator who wants them (and knows their inside box can decode
+# `gzip`/`zstd` remain available for an operator who wants them (and knows their air-gap box can decode
 # them) — bundle-load probes tar's ACTUAL capability and refuses with an actionable message.
 BUNDLE_COMPRESSOR="${BUNDLE_COMPRESSOR:-none}"
 case "$BUNDLE_COMPRESSOR" in

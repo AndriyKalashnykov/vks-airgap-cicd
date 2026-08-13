@@ -9,7 +9,7 @@
 #     in-cluster Kaniko build cannot reach Maven Central, so the deps must be pre-baked).
 #   * HARBOR        — its base was pulled from Harbor, a login probe ran BEFORE the build, and the
 #     result was pushed to Harbor.
-# So on a sneakernet split the OUTSIDE box died at the Harbor login and the INSIDE box died inside
+# So on a sneakernet split the INTERNET box died at the Harbor login and the AIR-GAP box died inside
 # `mvn verify`. The mirror completed and the offline Java build could not be produced — and the e2e
 # could not see it, because its "air-gap box" only did bundle-load -> mirror-push -> mirror-verify
 # while the builder was built by the dual-homed HOST.

@@ -7,8 +7,8 @@
 # ~/.m2, because the in-cluster Kaniko build cannot reach Maven Central) and Harbor (base ref, login,
 # push). A dual-homed jump box has both, so this target still does it in one command.
 #
-# But a SNEAKERNET split has NEITHER box with both — the outside box died at the Harbor login probe and
-# the inside box died inside `mvn verify` — so `make builder-image` was UNRUNNABLE ON EITHER BOX, and the
+# But a SNEAKERNET split has NEITHER box with both — the internet box died at the Harbor login probe and
+# the air-gap box died inside `mvn verify` — so `make builder-image` was UNRUNNABLE ON EITHER BOX, and the
 # air-gapped Java build could not be produced at all. The halves:
 #
 #     14-builder-build.sh   internet only   build -> save into bundle/builders/   (no Harbor)
