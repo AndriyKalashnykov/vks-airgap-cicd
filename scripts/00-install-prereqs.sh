@@ -298,8 +298,14 @@ if [ "$ENGINE_CHOICE" = docker ] && [ "$(pkg_mgr)" = "apt-get" ]; then
     log_warn "  (We deliberately do NOT add download.docker.com to your apt sources.)"
   fi
 fi
-# The shellcheck linter is best-effort (dev/lint convenience; not required at runtime).
-pkg_install shellcheck || log_warn "shellcheck unavailable via package manager; lint will skip it"
+# ⚠️ shellcheck is DELIBERATELY NOT installed from the OS package manager. `.mise.toml` pins
+# the linter at 0.11.0 and says why in its own comment: pinned via mise, NOT the OS package, "so local
+# `make lint` uses the SAME version as CI; an unpinned system shellcheck drifts and flags SC2015
+# that a newer local build doesn't". Installing the distro build here contradicts that pin and puts
+# an unpinned binary on PATH beside it.
+# MEASURED, walk row 3 (2026-08-13): on Photon this line failed anyway — tdnf refused the package
+# because the VMware signing certificate C0B5E0AB66FD4949 EXPIRED 2017-07-25 — and the `|| log_warn`
+# made it look like a tolerated gap rather than a line that should not exist. mise is authoritative.
 
 # ---- mise-provided tools (java/maven/kubectl/helm/kustomize/yq) ------------
 if have mise; then
@@ -316,7 +322,10 @@ if have mise; then
   # convenience for anyone running the script directly, and must never be able to end the run.
   ( cd "$REPO_ROOT" && mise install ) || log_warn "mise install failed here — continuing; 'make deps' runs it again (deps-mise) and that one is authoritative"
 else
-  log_warn "mise not found — kubectl/helm/kustomize/yq must be on PATH already or installed manually"
+  # NOT "install them manually": since the deps order was fixed (deps-prereqs BEFORE deps-mise, so a
+  # transient mise failure cannot orphan the OS floor), this branch fires on EVERY fresh box — mise
+  # is installed moments later by deps-mise. Saying otherwise sends a first-time operator hunting.
+  log_warn "mise is not on PATH yet — 'make deps' installs it next (deps-mise), which provides kubectl/helm/kustomize/yq"
 fi
 
 # ---- Pinned CLIs not covered by mise: tkn, argocd -------------------------
@@ -329,6 +338,10 @@ case "$arch" in
   *) die "unsupported CPU arch '$arch'" ;;
 esac
 
+# The transfer cap for the three LARGE pinned-CLI downloads. Own knob, own default — see the note
+# in install_tkn for why it cannot be HTTP_GET_MAX_TIME_SECONDS.
+prereq_dl_max_time() { printf '%s' "${PREREQ_DOWNLOAD_MAX_TIME_SECONDS:-900}"; }
+
 install_tkn() {
   have tkn && { log_info "tkn present: $(tkn version --client 2>/dev/null | head -1)"; return 0; }
   local v="${TKN_VERSION:?TKN_VERSION unset}" url tmp
@@ -336,7 +349,20 @@ install_tkn() {
   url="https://github.com/tektoncd/cli/releases/download/v${v}/tkn_${v}_Linux_${uname_arch}.tar.gz"
   tmp="$(mktemp -d)"
   log_info "downloading tkn ${v}"
-  curl -fsSL "$url" -o "${tmp}/tkn.tgz"
+  # http_get_retry (lib/os.sh, sourced at the top of this file) — NOT a hand-rolled curl. It already
+  # carries --retry 3 --retry-all-errors plus an outer exponential-backoff loop and the
+  # HTTP_GET_* tunables. MEASURED, walk row 3 (2026-08-13): a bare `curl -fsSL` here died on
+  # `curl: (52) Empty reply from server` fetching tkn, and took deps-prereqs with it.
+  # ⚠️ THE CAP IS OVERRIDDEN ON PURPOSE, VIA ITS OWN KNOB. The helper's 60s default is right for the
+  # small manifests it was written for and WRONG here: argocd is 238 MiB and kubectl 57 MiB
+  # (measured), so 60s demands 33 Mbit/s sustained for argocd — below that EVERY attempt dies
+  # curl 28, and because 28 is retried the whole budget burns before failing. 900s is the transfer
+  # cap, not a delay: a fast link still finishes in seconds.
+  # It is a SEPARATE variable because HTTP_GET_MAX_TIME_SECONDS is UNCOMMENTED in .env.example (=60),
+  # so load_env exports it and `${HTTP_GET_MAX_TIME_SECONDS:-900}` would have resolved to 60 — the
+  # override would have been INERT and argocd would still fail on a slow link. check-env-clobber
+  # caught that; PREREQ_DOWNLOAD_MAX_TIME_SECONDS ships COMMENTED, so a per-run override survives.
+  HTTP_GET_MAX_TIME_SECONDS="$(prereq_dl_max_time)" http_get_retry "$url" "${tmp}/tkn.tgz"
   tar -xzf "${tmp}/tkn.tgz" -C "$tmp" tkn
   install -m 0755 "${tmp}/tkn" "${BIN_DIR}/tkn"
   rm -rf "$tmp"
@@ -347,7 +373,8 @@ install_argocd() {
   local v="${ARGOCD_CLI_VERSION:?ARGOCD_CLI_VERSION unset}" url
   url="https://github.com/argoproj/argo-cd/releases/download/${v}/argocd-linux-${go_arch}"
   log_info "downloading argocd ${v}"
-  curl -fsSL "$url" -o "${BIN_DIR}/argocd"
+  # 238 MiB — see the max-time note above; this is the download that makes the override mandatory.
+  HTTP_GET_MAX_TIME_SECONDS="$(prereq_dl_max_time)" http_get_retry "$url" "${BIN_DIR}/argocd"
   chmod 0755 "${BIN_DIR}/argocd"
 }
 
@@ -359,7 +386,8 @@ install_kubectl() {
   # it rather than carry a second, drift-prone inline default (was the stale `v1.31.4`).
   local v="${KUBECTL_VERSION:?KUBECTL_VERSION unset}"
   log_info "kubectl not found — downloading ${v}"
-  curl -fsSL "https://dl.k8s.io/release/${v}/bin/linux/${go_arch}/kubectl" -o "${BIN_DIR}/kubectl"
+  HTTP_GET_MAX_TIME_SECONDS="$(prereq_dl_max_time)" http_get_retry \
+    "https://dl.k8s.io/release/${v}/bin/linux/${go_arch}/kubectl" "${BIN_DIR}/kubectl"
   chmod 0755 "${BIN_DIR}/kubectl"
 }
 
