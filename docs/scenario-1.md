@@ -253,8 +253,7 @@ it belongs.
 
 <details><summary>Driving the <code>vcf</code> CLI directly instead</summary>
 
-`make vks-login` does four things this form does not, so treat it as a reference, not an
-equivalent. Run it only if you want to see the underlying calls:
+`make vks-login` creates the context and activates it for you. If you would rather run the CLI:
 
 ```bash
 vcf context create "$VKS_CONTEXT_NAME" --endpoint "$SUPERVISOR_HOST" \
@@ -263,27 +262,9 @@ vcf context create "$VKS_CONTEXT_NAME" --endpoint "$SUPERVISOR_HOST" \
 vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"
 ```
 
-**What `make vks-login` does that the above does not:**
-
-- **`--ca-certificate` only when the file is there.** Passing it unconditionally FAILS on a lab
-  whose Supervisor serves a publicly-trusted certificate, because the file was never fetched. Drop
-  the flag on such a lab.
-- **A re-run.** `vcf context create` with a name that already exists dies — and its message talks
-  about **credentials**, which has sent an operator to check a password that was never wrong. Use
-  `vcf context delete "$VKS_CONTEXT_NAME"` first, or just `vcf context use`.
-- **`VKS_NAMESPACE` when unset.** `.env.example` keeps it commented on purpose; unset, the second
-  command renders `vcf context use "name:"`. `make vks-login` discovers it.
-- **A fallback.** If either flag below is rejected, the lab-verified minimal form is
-  `vcf context create "$VKS_CONTEXT_NAME" --endpoint "$SUPERVISOR_HOST" --auth-type basic`.
-
-⚠️ **`--username` is optional interactively and required in anything non-interactive** — omitted, a
-verified lab run succeeded, but a script gets `? Provide Username:` and dies `[x] : EOF`. That is
-why this repo always passes it. ⚠️ The `--username` + `--type kubernetes` **pairing** is
-**UNVERIFIED** — it was not in the lab-verified run; if `vcf` rejects either, use the minimal form
-above.
-
-And `vcf context use` can print a `system Harbor registry` error **and still have worked**: judge it
-by the next command, not its exit code. `make vks-login` already does.
+`--username` is not optional — without it `vcf` asks `? Provide Username:` and dies `[x] : EOF` in
+anything non-interactive (measured 2026-08-13, `vcf` v9.1.0.0400, with and without a pty). And `vcf context use` can print a `system Harbor registry` error **and
+still have worked**: judge it by the next command, not its exit code. `make vks-login` already does.
 
 </details>
 

@@ -87,7 +87,10 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
     #     the bare form is what ran, and it is also what a second, independent automation of these
     #     same labs uses. FIXED below.
     #   * --auth-type basic and --insecure-skip-tls-verify are both accepted (do not "fix" them).
-    #   * --username was OMITTED in the verified run and login still succeeded, so it is optional.
+    #   * --username: the verified run OMITTED it and succeeded — but that was INTERACTIVE.
+    #     MEASURED 2026-08-13 (vcf v9.1.0.0400, live Supervisor): omitted with no tty it prints
+    #     `? Provide Username:` then `[x] : EOF`, rc=1; omitted WITH a pty it prompts and waits.
+    #     So it is not optional for anything scripted, which is every path in this repo.
     #     We still pass it: an explicit principal beats an interactively-resolved one, and the
     #     operator asked for it to come from .env. Broadcom documents --username as applying to the
     #     'kubernetes' context type, and the working third-party automation pairs it with
