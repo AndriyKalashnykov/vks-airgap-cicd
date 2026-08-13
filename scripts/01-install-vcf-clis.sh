@@ -52,54 +52,26 @@ plugins_file="VCF-Consumption-CLI-PluginBundle-Linux_${vcf_arch}-${VCF_PLUGINS_V
 
 RESOLVED_ARCHIVE=""
 
-# _resolve_glob <glob> [fallback-glob] — the first matching file, arch-bound glob FIRST.
-# `sort | head -1` (never `-print -quit`) keeps the pick deterministic across machines, since find
-# order is filesystem-dependent. The `|| true` neutralises ONLY the spurious 141 that `head -1`
-# closing the pipe gives `sort` under pipefail -- `sort` has already buffered all of find's output,
-# so the SELECTED line is correct; without it a legitimate match is misread as "none".
-_resolve_glob() {
-  local g="$1" gf="${2:-}" hit
-  hit="$(find "$SRC_DIR" -maxdepth 1 -type f -name "$g" 2>/dev/null | sort | head -1 || true)"
-  if [ -z "$hit" ] && [ -n "$gf" ]; then
-    hit="$(find "$SRC_DIR" -maxdepth 1 -type f -name "$gf" 2>/dev/null | sort | head -1 || true)"
-  fi
-  printf '%s' "$hit"
-}
-
 # resolve_archive <cli> — locate the <cli> archive in VCF_CLI_SRC_DIR (the exact vendor name for
 # this OS/arch, OR a version glob so the portal's multi-arch "…-Binaries-…" bundle also matches),
 # copy it into $WORK, validate it's a gzip, and set RESOLVED_ARCHIVE. Returns via a global (NOT
 # stdout) so no sub-tool's output can corrupt the path.
 resolve_archive() {
-  local cli="$1" glob="" glob_fallback="" name="" out m _looked
+  local cli="$1" glob="" name="" out m
   case "$cli" in
     argocd)  name="$argocd_file";  glob="argocd-cli-${os}-${go_arch}-${ARGOCD_VCF_VERSION}*" ;;
-    # BOTH vcf and plugins are ARCH-BOUND. The vcf glob used to be arch-BLIND, justified in this
-    # comment as letting "the arch-agnostic …-Binaries-… bundle" match. That rationale was FALSE:
-    # MEASURED 2026-07-23 against the operator's real 9.1.0.0400 portal folder, there is NO
-    # -Binaries- bundle for the CLI *or* the plugins -- Broadcom ships Linux_AMD64 + Linux_ARM64
-    # per-arch for both. So on an arm64 box the blind glob could sort-pick the AMD64 CLI (M<R). It
-    # failed SAFE (the vcf-cli-${os}_${go_arch} content assertion further down dies) but with an
-    # error that names the wrong thing.
-    #
-    # The arch-blind form is kept as a FALLBACK, not deleted: if Broadcom ever does ship an
-    # arch-agnostic bundle, resolving it beats dying. Arch-bound is tried FIRST, so a folder holding
-    # BOTH arches -- which is what the operator's folder actually holds -- picks this box's.
-    #
-    # ⛔ Do NOT "simplify" this by loosening the PLUGINS glob or removing the nested handler. A
-    # session-end adversary graded exactly that HIGH on the premise that a multi-arch plugin bundle
-    # exists; the premise is refuted by measurement -- the real per-arch bundle nests under
-    # <plugin>/<version>/ (cluster/v3.6.1/vcf-cluster-linux_amd64), NOT <os>/<arch>/, so the nested
-    # handler's find never fires for it and its existence proves nothing about an agnostic bundle.
-    vcf)     name="$vcf_file";     glob="VCF-Consumption-CLI-*Linux_${vcf_arch}*${VCF_CLI_VERSION}*.tar.gz"
-                                   glob_fallback="VCF-Consumption-CLI-*${VCF_CLI_VERSION}*.tar.gz" ;;
+    vcf)     name="$vcf_file";     glob="VCF-Consumption-CLI-*${VCF_CLI_VERSION}*.tar.gz" ;;
+    # plugins glob is arch-BOUND (unlike vcf, which stays arch-blind so the arch-agnostic
+    # "…-Binaries-…" bundle matches): there is NO arch-agnostic plugin bundle, so an arch-blind
+    # glob would sort-pick the AMD64 bundle on an arm64 box (M<R). Binding it to Linux_${vcf_arch}
+    # makes a wrong-arch-only folder fail-safe (die "no artifact") instead of mis-installing.
     plugins) name="$plugins_file"; glob="VCF-Consumption-CLI-*Plugin*Linux_${vcf_arch}*${VCF_PLUGINS_VERSION}*.tar.gz" ;;
     *) die "resolve_archive: unknown cli '$cli'" ;;
   esac
   out="${WORK}/${cli}-archive"
   if [ -f "${SRC_DIR}/${name}" ]; then
     log_info "using ${name} from VCF_CLI_SRC_DIR"; cp "${SRC_DIR}/${name}" "$out"
-  elif m="$(_resolve_glob "$glob" "$glob_fallback")" && [ -n "$m" ]; then
+  elif m="$(find "$SRC_DIR" -maxdepth 1 -type f -name "$glob" 2>/dev/null | sort | head -1 || true)" && [ -n "$m" ]; then
     # NB: `-print -quit` can't replace `sort | head -1` here — it would defeat the deterministic
     # pick. `sort` buffers all of `find`'s output, so the SELECTED line is already correct; only
     # the pipe's EXIT STATUS is a spurious 141 (`head -1` closes the pipe → `sort` SIGPIPEs) under
@@ -111,9 +83,7 @@ resolve_archive() {
     # never selected; the wrong-version case dies below, it does not silently pick.
     log_info "using $(basename "$m") from VCF_CLI_SRC_DIR"; cp "$m" "$out"
   else
-    _looked="'${name}', '${glob}'"
-    if [ -n "$glob_fallback" ]; then _looked="${_looked}, then '${glob_fallback}'"; fi
-    die "no ${cli} artifact for ${os}/${go_arch} in ${SRC_DIR} (looked for ${_looked}) — put that archive in the folder"
+    die "no ${cli} artifact for ${os}/${go_arch} in ${SRC_DIR} (looked for '${name}' or '${glob}') — put that archive in the folder"
   fi
   [ -s "$out" ] || die "the ${cli} archive is empty"
   # Portable gzip-validity check: decompress to /dev/null. `gunzip -c` works on GNU gzip AND
