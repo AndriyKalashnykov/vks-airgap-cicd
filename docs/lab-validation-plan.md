@@ -359,6 +359,9 @@ export KUBECONFIG=$PWD/secrets/vks.kubeconfig
 # ⚠️ UNVERIFIED (the vcf forms) — if BOTH error, send us the --help from step 3. Do not guess.
 vcf package available list -A 2>&1 | grep -i istio || vcf addon list --cluster-name "$VKS_CLUSTER_NAME" 2>&1 | grep -i istio
 kubectl -n istio-system get deploy istiod -o jsonpath='{.spec.template.spec.containers[0].image}'; echo
+# Does VMware's istiod carry the label our attach path discovers by? `47-attach-istio.sh:65` does
+# `kubectl get deploy -A -l app=istiod`; if this prints no `app:istiod`, attach dies on a HEALTHY mesh.
+kubectl -n istio-system get deploy istiod -o jsonpath='{.metadata.labels}'; echo
 # is there any shared gateway? (a Service on port 15021 with a spec.selector.istio key)
 # COUNT THE LINES. 0 = no shared gateway. 1 = discovery works. **2+ = `make attach-istio` will REFUSE
 # to guess** and demand ISTIO_GATEWAY_NAMESPACE + ISTIO_GATEWAY_SERVICE — see below.
