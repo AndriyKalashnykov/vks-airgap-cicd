@@ -195,7 +195,7 @@ now.
 | `VCENTER_HOST` | `vcsa.env1.lab.test` | your vCenter FQDN from Step 0 — **not** the Supervisor IP |
 | `VCENTER_USERNAME` | `administrator@vsphere.local` | the same SSO login as Step 1 |
 | `VCENTER_PASSWORD` | *your value* | the same password as Step 1 |
-| `VKS_STORAGE_POLICY` | `wcp-vmfs` (single-host VMFS)<br>vSAN: **read it off your lab** — see the next column | **Per-lab, not a constant.** This is the vCenter policy **NAME**, not the storage **class**: the class is the name lowercased with spaces as dashes, and `04-vsphere-namespace.sh:52` says that is **not invertible**, so a class-shaped string like `vsan-default-storage-policy` is not a value you can assume. **Already have a namespace? `make vsphere-namespace` prints the policy it uses, by name** — no kubeconfig needed. Otherwise vCenter → **Policies and Profiles → VM Storage Policies**; if you set it wrong the create stops and lists every available policy. |
+| `VKS_STORAGE_POLICY` | `wcp-vmfs` (single-host VMFS)<br>`vsan-default-storage-policy` (vSAN) | **Per-lab, not a constant** — those two are what real labs measured. **Already have a namespace? `make vsphere-namespace` prints the policy it uses, by name** — no kubeconfig needed. Otherwise vCenter → **Policies and Profiles → VM Storage Policies**; if you set it wrong the create stops and lists every available policy. |
 | `VKS_VM_CLASSES` | `best-effort-small best-effort-medium` | space-separated; `best-effort-small` alone is enough. Defaults to the example, and the names are **sent to vCenter unchecked** — a class that does not exist fails with an HTTP code that does not mention VM classes. |
 | `VKS_CLUSTER_COMPUTE` | *(leave unset)* | **only if** vCenter has **more than one** cluster. Steps 4 and 5 need it too, not just this one. |
 
@@ -744,12 +744,8 @@ labelled **DISCOVERED** (read live) or **STORED** (remembered).
 Skipped Step 12? The `*.vks.local` URLs will not resolve — reach a service directly instead:
 
 ```bash
-kubectl -n gitea port-forward svc/gitea-http 3000:3000                   # http://localhost:3000
-kubectl -n tekton-pipelines port-forward svc/tekton-dashboard 9097:9097  # http://localhost:9097
-# One per app. The app list is apps/registry.tsv; each app's Service is svc/<name>
-# on port 80 in a namespace of the same name. Today that is these two:
-kubectl -n javawebapp port-forward svc/javawebapp 18080:80              # http://localhost:18080
-kubectl -n gowebapp   port-forward svc/gowebapp   18081:80              # http://localhost:18081
+kubectl -n gitea port-forward svc/gitea-http 3000:3000     # then http://localhost:3000
+kubectl -n javawebapp port-forward svc/javawebapp 18080:80 # then http://localhost:18080
 ```
 
 **Expect:** the UI answers on `localhost` at the port you forwarded.

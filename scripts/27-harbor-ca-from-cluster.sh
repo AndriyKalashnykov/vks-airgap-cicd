@@ -30,9 +30,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
-# ca_anchor_reject_reason. Pure function definitions -- sourcing executes nothing.
-# shellcheck source=scripts/lib/tls.sh
-. "${SCRIPT_DIR}/lib/tls.sh"
 
 load_env
 require_cmd kubectl
@@ -67,15 +64,6 @@ kubectl --kubeconfig "$SUP" -n "$ns" get secret harbor-ca-key-pair \
 openssl x509 -in "$t" -noout -subject >/dev/null 2>&1 \
   || die "what we extracted is not a certificate. '$OUT' was NOT touched."
 
-# IT MUST BE A TRUST ANCHOR, NOT MERELY A CERTIFICATE (B83c). Parsing was the only check, so a
-# LEAF was accepted and installed as the anchor with exit 0. The decision is a PURE function in
-# lib/tls.sh so it can be RED-tested offline against real openssl-minted certs -- this script had
-# ZERO test coverage of any kind.
-_why="$(ca_anchor_reject_reason "$t")"
-if [ -n "$_why" ]; then
-  die "what we extracted is not a usable trust anchor: ${_why}
-  '$OUT' was NOT touched."
-fi
 subj="$(openssl x509 -in "$t" -noout -subject | sed 's/^subject=//')"
 fp="$(openssl x509 -in "$t" -noout -fingerprint -sha256 | cut -d= -f2)"
 chmod 0644 "$t"

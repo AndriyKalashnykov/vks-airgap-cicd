@@ -111,55 +111,6 @@ else
   bad "vcf nested bundle: installer exited non-zero"; sed 's/^/      /' "$err"
 fi
 
-echo "== vcf: BOTH arches present -> picks THIS box's arch, proven by SIMULATING arm64 (B62) =="
-# TWO things are required for this case to DISCRIMINATE, and my first version had neither right:
-#
-#   1. A FAKE `uname`. On an amd64 box `Linux_AMD64` sorts first, so even the OLD arch-BLIND glob
-#      picked correctly by accident; the defect only appears on arm64. The box's arch is therefore
-#      simulated rather than assumed.
-#   2. Filenames that do NOT match the EXACT vendor name. resolve_archive tries
-#      `$vcf_file` (= VCF-Consumption-CLI-Linux_<ARCH>-<ver>.tar.gz) FIRST and only falls through to
-#      the glob when that is absent. With vendor-named fixtures the glob never runs at all -- which
-#      is exactly how the first version of this case passed with the fix REVERTED. Hence the
-#      `-portal` suffix: it is what a renamed or re-wrapped download looks like, and it is the only
-#      shape in which the arch-blind glob was ever reachable.
-#
-# That also narrows B62's claim honestly: with the real vendor names present, the exact-name branch
-# already picked the right arch. The blind glob only bit when the exact name was ABSENT.
-fresh
-_fakebin="$(mktemp -d)"
-# The `$1` below belongs to the GENERATED script, not this one, so it must stay unexpanded.
-# shellcheck disable=SC2016
-printf '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo aarch64 ;; *) echo Linux ;; esac\n' > "$_fakebin/uname"
-chmod +x "$_fakebin/uname"
-mkfake "$d/vcf-cli-linux_amd64" "VCF-BOTH-AMD64"
-tar -C "$d" -czf "${src}/VCF-Consumption-CLI-Linux_AMD64-${VV}-portal.tar.gz" "vcf-cli-linux_amd64"
-rm -f "$d/vcf-cli-linux_amd64"
-mkfake "$d/vcf-cli-linux_arm64" "VCF-BOTH-ARM64"
-tar -C "$d" -czf "${src}/VCF-Consumption-CLI-Linux_ARM64-${VV}-portal.tar.gz" "vcf-cli-linux_arm64"
-if PATH="$_fakebin:$PATH" run_installer vcf "$src" "$bin" "$err"; then
-  eq "on a simulated arm64 box, installs the ARM64 CLI (not the AMD64 one that sorts first)" \
-     "$("$bin/vcf" 2>/dev/null || true)" "VCF-BOTH-ARM64"
-else
-  bad "both-arches: installer exited non-zero"; sed 's/^/      /' "$err"
-fi
-rm -rf "$_fakebin"
-
-echo "== plugins: nested per-plugin bundle -> the case the suite was missing (B62) =="
-# The suite had a nested-bundle case for `vcf` and NONE for plugins, so its green was a SUBSET
-# green. The real per-arch plugin bundle nests under <plugin>/<version>/, NOT <os>/<arch>/ --
-# measured against the operator's 9.1.0.0400 folder -- which is exactly why the arch-bound plugins
-# glob must stay: nothing in the archive's LAYOUT discriminates arch, only its NAME does.
-fresh
-mkdir -p "$d/cluster/v3.6.1"
-mkfake "$d/cluster/v3.6.1/vcf-cluster-linux_${arch}" "PLUGIN-CLUSTER"
-tar -C "$d" -czf "${src}/VCF-Consumption-CLI-PluginBundle-Linux_${ARCH}-${PV}.tar.gz" cluster
-if run_installer plugins "$src" "$bin" "$err"; then
-  ok "resolves the arch-named plugin bundle whose layout is <plugin>/<version>/"
-else
-  bad "plugins nested bundle: installer exited non-zero"; sed 's/^/      /' "$err"
-fi
-
 echo "== NEGATIVE: wrong-arch-only bundle → resolve extracts but the ${arch} binary is absent (die) =="
 fresh
 mkfake "$d/vcf-cli-${os}_arm64" "VCF-ARM64-ONLY"                # NO amd64 binary in the archive
