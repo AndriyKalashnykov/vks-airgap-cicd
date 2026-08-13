@@ -342,7 +342,7 @@ for you**, right after the CA that lets it verify Harbor. Nothing to do here.
 | key | default | how to get the value |
 |---|---|---|
 | `HARBOR_INFRA_PROJECT` | `cicd` | **you choose** — the project for pipeline images |
-| `HARBOR_APP_PROJECT` | `apps` | **you choose** — the project for app images. **Project-admin rather than system-admin?** Set this **equal to `HARBOR_INFRA_PROJECT`**; the robot account later can only be scoped to projects you administer. |
+| `HARBOR_APP_PROJECT` | `apps` | **you choose** — the project for app images. |
 
 </details>
 
@@ -360,7 +360,7 @@ The GitOps engine, running on the Supervisor.
 
 | key | example | how to get the value |
 |---|---|---|
-| `ARGOCD_NAMESPACE` | `cicd` | the vSphere Namespace the ArgoCD **instance** goes in. **Discover it, do not assume:** `kubectl get argocd -A`. ⚠️ Nothing will stop you if you skip this: `load_env` DERIVES it from `VKS_NAMESPACE`, so the guards that look like they would catch it never fire. A derived value is worse than an empty one here — it names a namespace that EXISTS, so the next command succeeds and the failure surfaces three steps later as `kubectl get deploy argocd-server` finding nothing. |
+| `ARGOCD_NAMESPACE` | `cicd` | the vSphere Namespace the ArgoCD **instance** goes in. ⚠️ Nothing will stop you if you skip this: `load_env` DERIVES it from `VKS_NAMESPACE`, so the guards that look like they would catch it never fire. A derived value is worse than an empty one here — it names a namespace that EXISTS, so the next command succeeds and the failure surfaces three steps later as `kubectl get deploy argocd-server` finding nothing. |
 | `VKS_AUTH_METHOD` | `vcf` | leave it `vcf` here; the guest-cluster step changes it to `kubeconfig`. |
 
 **Run:**
@@ -460,18 +460,6 @@ set -a; . ./.env; set +a
 ```
 
 **Expect:** `wrote to` — then `KUBECONFIG`, `VKS_CONTEXT` and `VKS_AUTH_METHOD=kubeconfig`.
-
-<details><summary>No Supervisor access (the Scenario-2 tenant)? Ask the <code>vcf</code> CLI instead</summary>
-
-```bash
-set -a; . ./.env; set +a
-vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"
-vcf cluster kubeconfig get "$VKS_CLUSTER_NAME" --export-file "./secrets/${VKS_CLUSTER_NAME}.kubeconfig"
-```
-
-If this errors (`pinniped-info`, or `plugin sources from the system Harbor registry`), use the
-Secret route above instead — it is the same credential.
-</details>
 
 ⚠️ **`make vks-login` now renews the GUEST kubeconfig.** The Supervisor one expires too, and Steps
 10 and 14 need it — `kubectl` then says *"the server has asked for the client to provide
