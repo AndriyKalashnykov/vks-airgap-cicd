@@ -18,24 +18,31 @@ Run these in this order. Every step is a command — nothing here needs the vCen
 | | Step | You do |
 |---|---|---|
 | **0** | [Get the repo](#0-get-the-repo) | clone it, `cd` in, `make env-init` |
-| **1** | [Jump box](#1-jump-box) | install the toolchain; set 8 values |
-| **2** | [vSphere Namespace](#2-the-vsphere-namespace) | `make vsphere-namespace`; set 6 values |
+| **1** | [Jump box](#1-jump-box) | install the toolchain; fill in its table |
+| **2** | [vSphere Namespace](#2-the-vsphere-namespace) | `make vsphere-namespace`; fill in its table |
 | **3** | [Log in to the Supervisor](#3-log-in-to-the-supervisor) | `make vks-login` |
-| **4** | [Harbor](#4-harbor) | `make install-harbor-service`; set 2 values, then DNS |
-| **5** | [ArgoCD](#5-argocd) | `make install-argocd-service`, log in; set 2 values |
-| **6** | [Guest cluster](#6-guest-cluster) | create it; set 1 value, then 3 more once it is up |
+| **4** | [Harbor](#4-harbor) | `make install-harbor-service`; fill in its table, then DNS |
+| **5** | [ArgoCD](#5-argocd) | `make install-argocd-service`, log in; `make argocd-address` writes the address |
+| **6** | [Guest cluster](#6-guest-cluster) | create it; two commands write four values into `.env` for you |
 | **7** | [Preflight](#7-preflight) | check the cluster will accept the install |
 | **8** | [Harbor's CA](#8-harbors-ca) | fetch it |
 | **8.5** | [Harbor's admin credential](#85-harbors-admin-credential) | only if Harbor was already there |
-| **9** | [Harbor robot](#9-harbor-robot-recommended) | create it; replace 2 values |
-| **10** | [ArgoCD's kubeconfig](#10-the-supervisor-kubeconfig-argocd-needs) | fetch it; set 2 values |
+| **9** | [Harbor robot](#9-harbor-robot-recommended) | create it; it writes both values itself |
+| **10** | [ArgoCD's kubeconfig](#10-the-supervisor-kubeconfig-argocd-needs) | fetch it; nothing to set |
 | **11** | [Install](#11-validate-then-install) | `make install-all`, then `make verify` |
 | **12** | [Ingress](#12-ingress-optional) | optional: reach the UIs at `*.vks.local` |
 | **13** | [Access the UIs](#13-access-the-uis) | `make creds-show` |
 | **14** | [Uninstall](#14-uninstall) | `make uninstall-all` |
 
-**Everything you configure goes in ONE file: `.env`, at the root of the repo.** Each step has a
-table of the keys it needs, with an example and where the value comes from.
+**Everything YOU configure goes in ONE file: `.env`, at the root of the repo.** Each step has a
+table of the keys it needs, with an example and where the value comes from. About **15** values are
+genuinely yours to type; every other key in those tables has a default, or is written for you by the
+command in that step.
+
+Commands also DISCOVER values — LoadBalancer addresses, the guest kubeconfig, generated passwords —
+and those land in **`.env.state`**, a separate file beside `.env`. You do not edit it, and it is
+read last, so it wins over `.env`. If a value you expect is missing from `.env` after a step said it
+published one, look there.
 
 **Jump box:** Ubuntu or Photon OS, reaching both the internet and the lab. It must resolve the
 vCenter FQDN. **Harbor's FQDN must be in real DNS** — the guest nodes resolve it, so `/etc/hosts`
@@ -246,7 +253,8 @@ it belongs.
 
 <details><summary>Driving the <code>vcf</code> CLI directly instead</summary>
 
-`make vks-login` creates the context and activates it for you. If you would rather run the CLI:
+`make vks-login` does four things this form does not, so treat it as a reference, not an
+equivalent. Run it only if you want to see the underlying calls:
 
 ```bash
 vcf context create "$VKS_CONTEXT_NAME" --endpoint "$SUPERVISOR_HOST" \
@@ -255,9 +263,27 @@ vcf context create "$VKS_CONTEXT_NAME" --endpoint "$SUPERVISOR_HOST" \
 vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"
 ```
 
-`--username` is not optional — without it `vcf` asks `? Provide Username:` and dies `[x] : EOF` in
-anything non-interactive. And `vcf context use` can print a `system Harbor registry` error **and
-still have worked**: judge it by the next command, not its exit code. `make vks-login` already does.
+**What `make vks-login` does that the above does not:**
+
+- **`--ca-certificate` only when the file is there.** Passing it unconditionally FAILS on a lab
+  whose Supervisor serves a publicly-trusted certificate, because the file was never fetched. Drop
+  the flag on such a lab.
+- **A re-run.** `vcf context create` with a name that already exists dies — and its message talks
+  about **credentials**, which has sent an operator to check a password that was never wrong. Use
+  `vcf context delete "$VKS_CONTEXT_NAME"` first, or just `vcf context use`.
+- **`VKS_NAMESPACE` when unset.** `.env.example` keeps it commented on purpose; unset, the second
+  command renders `vcf context use "name:"`. `make vks-login` discovers it.
+- **A fallback.** If either flag below is rejected, the lab-verified minimal form is
+  `vcf context create "$VKS_CONTEXT_NAME" --endpoint "$SUPERVISOR_HOST" --auth-type basic`.
+
+⚠️ **`--username` is optional interactively and required in anything non-interactive** — omitted, a
+verified lab run succeeded, but a script gets `? Provide Username:` and dies `[x] : EOF`. That is
+why this repo always passes it. ⚠️ The `--username` + `--type kubernetes` **pairing** is
+**UNVERIFIED** — it was not in the lab-verified run; if `vcf` rejects either, use the minimal form
+above.
+
+And `vcf context use` can print a `system Harbor registry` error **and still have worked**: judge it
+by the next command, not its exit code. `make vks-login` already does.
 
 </details>
 
@@ -353,7 +379,7 @@ The GitOps engine, running on the Supervisor.
 
 | key | example | how to get the value |
 |---|---|---|
-| `ARGOCD_NAMESPACE` | `cicd` | the vSphere Namespace the ArgoCD **instance** goes in. **Discover it, do not assume:** `kubectl get argocd -A`. ⚠️ Three later steps stop with `ARGOCD_NAMESPACE must be set`, and `make env-check` does **not** catch it. |
+| `ARGOCD_NAMESPACE` | `cicd` | the vSphere Namespace the ArgoCD **instance** goes in. **Discover it, do not assume:** `kubectl get argocd -A`. ⚠️ Nothing will stop you if you skip this: `load_env` DERIVES it from `VKS_NAMESPACE`, so the guards that look like they would catch it never fire. A derived value is worse than an empty one here — it names a namespace that EXISTS, so the next command succeeds and the failure surfaces three steps later as `kubectl get deploy argocd-server` finding nothing. |
 | `VKS_AUTH_METHOD` | `vcf` | leave it `vcf` here; the guest-cluster step changes it to `kubeconfig`. |
 
 **Run:**
@@ -428,7 +454,7 @@ make vks-cluster-status VKS_CLUSTER_WAIT_SECONDS=1800  # then wait for every nod
 form will not show it for 30 minutes.
 
 **Expect:** the waiting command reprints a table every 15 s, then exits `0` with every node
-`Ready`. *(**4–6 min**)* A non-zero exit is not a pass — do not continue to Step 7.
+`Ready`. *(**4–9 min** — the Timings table's own runs span 3 m 45 s to 8 m 49 s; the command waits up to 30 min, so give it that before calling it stuck.)* A non-zero exit is not a pass — do not continue to Step 7.
 
 ### Get its kubeconfig
 
@@ -674,7 +700,7 @@ make verify           # pushes a marked change and follows it to the running app
 ```
 
 **Expect:** `install-all` completes; `make verify` exits **0** for every app.
-*(**install-all 8–10 min**, **verify 3–4 min**)*
+*(**install-all 8–11 min** — the Timings table records 10 m 26 s — **verify 3–4 min**)*
 
 `install-all` begins with `lab-preflight`, which stops in the first seconds on anything the lab is
 missing. Most often: **no default StorageClass**. Fix it and re-run `install-all`:
