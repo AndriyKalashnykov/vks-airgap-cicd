@@ -115,6 +115,14 @@ _tilde='~'
 set_env_var ARGOCD_KUBECONFIG     "${_tilde}/k.conf"  "$_t/.env"   # leading ~ silently expands
 
 # shellcheck disable=SC2016
+# SC1091 below: `$_t/.env` is WRITTEN AT RUNTIME by the set_env_var calls above, into a temp
+# dir, so the linter cannot follow it and must not try. Without the directive this gate is RED
+# on any CLEAN CHECKOUT and GREEN on a box carrying an untracked ./.env -- MEASURED 2026-08-13:
+# real repo (has .env) rc=0, fresh worktree (no .env) rc=2. CI could not tell us: the
+# static-check job is disabled (#535), so `make lint` was red for every fresh clone, silently.
+# NB: no continuation line here may START with the linter's own name -- it is then parsed as a
+# malformed DIRECTIVE (SC1073/SC1072), which is how the first version of this fix broke it.
+# shellcheck disable=SC1091
 # `cd "$_t"` FIRST: if the writer regresses, sourcing performs the `>x` redirection for real, and it
 # must land in the temp dir rather than the repo root.
 if ( cd "$_t"; set -u; set -a; . "$_t/.env"; set +a
