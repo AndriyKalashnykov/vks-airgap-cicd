@@ -24,6 +24,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # block rather than assuming the helper was in scope.
 # shellcheck source=scripts/lib/tls.sh
 . "${SCRIPT_DIR}/lib/tls.sh"
+# argocd_kubeconfig_stale_reason (the ARGOCD_KUBECONFIG re-publish decision, B98). This file is
+# pure function definitions -- sourcing it executes nothing.
+# shellcheck source=scripts/lib/argocd.sh
+. "${SCRIPT_DIR}/lib/argocd.sh"
 load_env
 
 : "${KUBECONFIG:?KUBECONFIG must be set in .env (path to write/read the kubeconfig)}"
@@ -406,11 +410,27 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # `fetch-argocd-kubeconfig`. Until now ArgoCD ops reached the Supervisor BY ACCIDENT — via
     # the very pollution isolated above. Remove the pollution without publishing this and the
     # fallback lands on the GUEST, where argocd-server does not exist.
-    if [ -z "${ARGOCD_KUBECONFIG:-}" ]; then
+    # RE-PUBLISH ON A STALE PATH, NOT ONLY AN EMPTY ONE (B98). The decision is a PURE function
+    # in lib/argocd.sh so it can be RED-tested offline from two kubeconfig FILES -- see
+    # scripts/test-argocd-kubeconfig-stale.sh. It re-publishes when the recorded path is unset,
+    # does not exist, or names a DIFFERENT apiserver than the Supervisor just verified.
+    _ak_reason="$(argocd_kubeconfig_stale_reason "${ARGOCD_KUBECONFIG:-}" "$SUP_KUBECONFIG")"
+    if [ -n "$_ak_reason" ]; then
+      # load_env sources .env.state AFTER .env, so state_set here PERMANENTLY SHADOWS an
+      # ARGOCD_KUBECONFIG the operator put in .env -- and 31-fetch-argocd-kubeconfig.sh tells them
+      # to put one there. Their .env still visibly says the old thing, so say it out loud rather
+      # than let them debug a value the file in front of them contradicts. (A `make X VAR=...`
+      # command-line override is NOT affected: it is in load_env's selector snapshot.)
+      if [ -n "${ARGOCD_KUBECONFIG:-}" ]; then
+        log_warn "superseding ARGOCD_KUBECONFIG=${ARGOCD_KUBECONFIG} (${_ak_reason})."
+        log_warn "  If that path was deliberate, it is in .env and .env.state now overrides it —"
+        log_warn "  pass it per-run instead: make <target> ARGOCD_KUBECONFIG=<path>"
+      fi
       state_set ARGOCD_KUBECONFIG "$SUP_KUBECONFIG"
-      log_info "published ARGOCD_KUBECONFIG=${SUP_KUBECONFIG} (ArgoCD runs on the SUPERVISOR;"
-      log_info "  without this 'make gitops' would fall back to the GUEST kubeconfig)"
+      log_info "published ARGOCD_KUBECONFIG=${SUP_KUBECONFIG} (${_ak_reason}). ArgoCD runs on the"
+      log_info "  SUPERVISOR; without this 'make gitops' would fall back to the GUEST kubeconfig."
     fi
+    unset _ak_reason 2>/dev/null || true
 
     # The kubectl-vsphere plugin (for `kubectl vsphere`-style access, if the workload
     # cluster needs it) is fetched from the Supervisor at:

@@ -744,8 +744,12 @@ labelled **DISCOVERED** (read live) or **STORED** (remembered).
 Skipped Step 12? The `*.vks.local` URLs will not resolve — reach a service directly instead:
 
 ```bash
-kubectl -n gitea port-forward svc/gitea-http 3000:3000     # then http://localhost:3000
-kubectl -n javawebapp port-forward svc/javawebapp 18080:80 # then http://localhost:18080
+kubectl -n gitea port-forward svc/gitea-http 3000:3000                   # http://localhost:3000
+kubectl -n tekton-pipelines port-forward svc/tekton-dashboard 9097:9097  # http://localhost:9097
+# One per app. The app list is apps/registry.tsv; each app's Service is svc/<name>
+# on port 80 in a namespace of the same name. Today that is these two:
+kubectl -n javawebapp port-forward svc/javawebapp 18080:80              # http://localhost:18080
+kubectl -n gowebapp   port-forward svc/gowebapp   18081:80              # http://localhost:18081
 ```
 
 **Expect:** the UI answers on `localhost` at the port you forwarded.
