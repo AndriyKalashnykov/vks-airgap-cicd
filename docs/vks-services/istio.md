@@ -18,7 +18,7 @@
 | Packaging | Carvel **Standard Package**, installed into the **guest cluster**; requires **VKr 1.29 or later** | 9.0-doc (inferred for 9.1) [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/installing-standard-packages-on-tkg-cluster-using-tkr-for-vsphere-8-x/installaing-and-using-istio/install-istio.html date=2026-07-15 quote="Follow these instructions to install the Istio carvel package on a VKS cluster that is running VKr 1.29 and later."] |
 | Package name | `istio.kubernetes.vmware.com` | 9.0-doc (inferred for 9.1) [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/installing-standard-packages-on-tkg-cluster-using-tkr-for-vsphere-8-x/installaing-and-using-istio/install-istio.html date=2026-07-15 quote="istio.kubernetes.vmware.com"] |
 | Versions | VMware-built, e.g. `1.25.3+vmware.1-vks.1`, `1.28.2+vmware.1-vks.1` | 9.0-doc — **re-check the exact strings on a lab** [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/installing-standard-packages-on-tkg-cluster-using-tkr-for-vsphere-8-x/installaing-and-using-istio/install-istio.html date=2026-07-15 quote="1.25.3+vmware.1-vks.1"] |
-| Install (package CLI) | `vcf package install istio -p istio.kubernetes.vmware.com -v <ver> --values-file istio-data-values.yaml -n istio-installed` | 9.0-doc [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/installing-standard-packages-on-tkg-cluster-using-tkr-for-vsphere-8-x/installaing-and-using-istio/install-istio.html date=2026-07-15 quote="vcf package install istio -p istio.kubernetes.vmware.com -v 1.25.3+vmware.1-vks.1 --values-file istio-data-values.yaml -n istio-installed"] |
+| Install (package CLI — **LEGACY path**; see the repository-add note below) | `vcf package install istio -p istio.kubernetes.vmware.com -v <ver> --values-file istio-data-values.yaml -n istio-installed` | 9.0-doc [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/installing-standard-packages-on-tkg-cluster-using-tkr-for-vsphere-8-x/installaing-and-using-istio/install-istio.html date=2026-07-15 quote="vcf package install istio -p istio.kubernetes.vmware.com -v 1.25.3+vmware.1-vks.1 --values-file istio-data-values.yaml -n istio-installed"] |
 | Install (VCF 9 addon CLI) | `vcf addon install create istio --cluster-name $VKS_CLUSTER -y` · update: `vcf addon install update istio --cluster-name $VKS_CLUSTER -f values.yaml` | community (VMware VCF blog, 2025-03, VKS 3.5) [src: url=https://blogs.vmware.com/cloud-foundation/2025/03/06/istio-on-vsphere-kubernetes-service-vks-a-walkthrough/ date=2026-07-15 quote="vcf addon install create istio --cluster-name $VKS_CLUSTER -y"] |
 | Control-plane namespace | `istio-system` (configurable) | 9.0-doc [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/standard-package-reference/istio-package-reference.html date=2026-07-15 quote="The namespace in which to install Istio. It is also the root namespace in the mesh."] |
 | **Ingress gateway** | **DISABLED by default** (`istio.gateways.ingress.enabled: false`); namespace `istio-ingress` when enabled | 9.0-doc [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/installing-standard-packages-on-tkg-service-clusters/standard-package-reference/istio-package-reference.html date=2026-07-15 quote="It is auto deployed if istio.gateways.ingress.enabled is true in the data values, the default value is false."] |
@@ -87,10 +87,47 @@ same object; the CLI wrapper itself is still unverified here.
 | What | How | Confidence |
 |---|---|---|
 | istiod namespace | `kubectl get deploy -A -l app=istiod` | KinD-verified [src: code:scripts/lib/istio.sh:52] |
-| Istio version | the running **istiod image tag** — ground truth, never a doc | KinD-verified [src: code:scripts/lib/istio.sh:56-57] |
+| Istio version | the running **istiod image tag** — ground truth, never a doc. **It will not be ours:** we install upstream **1.30.3**; a 9.1 mesh runs a VMware build (measured `1.27.1`–`1.28.5`). See the note below | KinD-verified [src: code:scripts/lib/istio.sh:56-57] |
 | **Ingress gateway Service** | a Service exposing **port 15021** (the istio-proxy status-port) **and** carrying a `spec.selector.istio` key | KinD-verified [src: code:scripts/lib/istio.sh:69-70] |
 | **Gateway selector label** | `kubectl -n <ns> get svc <svc> -o jsonpath='{.spec.selector.istio}'` | KinD-verified [src: code:scripts/90-e2e-istio-existing.sh:112] |
 | Route API in use | is there an **Accepted `GatewayClass` named `istio`**? → Gateway API. Else classic. | KinD-verified [src: code:scripts/lib/istio.sh:222-224] |
+
+> **We install upstream Istio; a real lab runs a VMware-built one, and nothing keeps them in step.**
+> `INGRESS_CONTROLLER=istio` installs **upstream 1.30.3** — charts from
+> `istio-release.storage.googleapis.com`, images mirrored as `istio/pilot` + `istio/proxyv2`
+> (`.env.example:601`, gated by `check-image-alignment`). `istio-existing` attaches to whatever the VKS
+> add-on repository shipped: **measured 2026-08-10 on a 9.1 guest cluster, `1.27.1` `1.27.4` `1.27.5`
+> `1.27.8` `1.28.2` `1.28.5`, all `+vmware.1-vks.1`** (the "Versions offered" row in the Broadcom table).
+> ⚠️ Do **not** quote the `1.25.3` that appears in the 9.0 doc — it is **not offered on 9.1**, and citing
+> it over the measurement is exactly the error the grades exist to prevent.
+>
+> **The gap is structural, not a number to memorise.** Ours is a pin Renovate bumps and a gate enforces;
+> theirs is fixed by the add-on repository the VKr ships, which we neither choose nor track — and **no gate
+> can see it**, because it is knowable only from a live mesh. Re-derive, never assume:
+> `kubectl get packages -A | grep istio`.
+>
+> **What our tests prove:** our routing objects, against a mesh **we** installed. **What they do not:**
+> anything about that mesh. Two things follow, and only one is a worry:
+>
+> - **The Gateway-API attach path is SAFE across the gap.** Istio has served
+>   `gateway.networking.k8s.io/v1` and auto-provisioned `<gw>-<class>` since **1.25**, so
+>   `gatewayClassName: istio` behaves the same at 1.27/1.28 as at 1.30. Measured across the actual
+>   attach range (`go.mod` per release branch, 2026-08-12): **1.25 → gateway-api v1.2.1 · 1.27 →
+>   v1.3.0 · 1.28 → v1.4.1 · 1.30 → v1.5.1**; our manifests use only `v1` GA fields, present since
+>   v1.2.1. This was a suspicion worth **refuting** rather than publishing.
+> - **The real exposure is DISCOVERY, not routing.** `47-attach-istio.sh:65` finds istiod by the label
+>   `app=istiod` — verified on **our** build, **never on VMware's**. If their build omits it, attach
+>   `die`s on a healthy mesh — and it dies *before* the route-API detection, which does not need istiod's
+>   namespace at all. One command settles it, and it is step 13 of the lab plan:
+>   `kubectl -n istio-system get deploy istiod -o jsonpath='{.metadata.labels}'`
+>
+> **Support window, stated carefully:** upstream's active window is 1.29/1.30, so every version a 9.1 lab
+> can offer sits outside it. VMware builds its own and may backport — **whether `+vmware.N-vks.M` carries
+> upstream CVE fixes is UNVERIFIED**, and "outside the window" must not be read as "unpatched".
+>
+> Grade: **ours** repo-verified and observed installing 1.30.3 in a walk (2026-08-12); **theirs**
+> lab-verified 9.1 (2026-08-10); **Gateway-API-since-1.25** upstream-doc-verified (istio.io v1.25 vs
+> latest, 2026-08-12); the **`app=istiod` label on VMware's build UNVERIFIED**.
 
 The **15021** signature matters: istiod does **not** expose it (it serves 15010/15012/443/15014),
 so this cleanly excludes the control plane. A naive `app.kubernetes.io/part-of=istio` label match
@@ -321,7 +358,7 @@ not ours — so **`community` grade throughout**, and it loses to any primary-so
 
 | Fact | Value | Confidence |
 |---|---|---|
-| Package repository must be **added first** | `vcf package repository add vks-standard --url projects.packages.broadcom.com/vsphere/supervisor/vks-standard-packages/3.6.0-20260416/vks-standard-packages:3.6.0-20260416 -n tkg-system` — the step our own `vcf package` sequence omits | community [src: url=https://medium.com/@bob-bauer/multi-primary-istio-architecture-on-vsphere-kubernetes-service-vks-e704e8f64161 date=2026-07-16 quote="vcf package repository add vks-standard --url projects.packages.broadcom.com/vsphere/supervisor/vks-standard-packages/3.6.0-20260416/vks-standard-packages:3.6.0-20260416 -n tkg-system"] |
+| Package repository must be **added first** | `vcf package repository add vks-standard --url projects.packages.broadcom.com/vsphere/supervisor/vks-standard-packages/3.6.0-20260416/vks-standard-packages:3.6.0-20260416 -n tkg-system` — a **LEGACY-path** step, **not** a gap in our sequence: VKS **3.5+** ships an embedded standard-package repository, and our own lab found the packages published in `vmware-system-tkg` (add-on-managed), not `tkg-system` | community [src: url=https://medium.com/@bob-bauer/multi-primary-istio-architecture-on-vsphere-kubernetes-service-vks-e704e8f64161 date=2026-07-16 quote="vcf package repository add vks-standard --url projects.packages.broadcom.com/vsphere/supervisor/vks-standard-packages/3.6.0-20260416/vks-standard-packages:3.6.0-20260416 -n tkg-system"] |
 | Repo version determines the Istio version | repo `v2025.6.17` → Istio 1.25; repo `3.6.0-20260320` → Istio 1.28. `kubectl get pkgr -n tkg-system` | community [src: url=https://medium.com/@bob-bauer/istio-on-vmware-vks-single-cluster-install-a574a3c95bbb date=2026-07-16 quote="Note: v2025.6.17 supports Istio 1.25. For this guide, I recommend the 3.6.0-20260320 repository, which offers Istio 1.28."] |
 | Install namespace **variant** | both walkthroughs use `vcf package install istio … -n tkg-system`. Our `-n istio-installed` is **9.0-doc with a live quote**, so it is the better-graded fact — record this as a variant, do **not** replace | community [src: url=https://medium.com/@bob-bauer/istio-on-vmware-vks-single-cluster-install-a574a3c95bbb date=2026-07-16 quote="vcf package install istio -p istio.kubernetes.vmware.com -v 1.28.2+vmware.1-vks.1 --values-file istio-data-values.yaml -n tkg-system"] |
 | Gateway API CRDs ship by default | corroborates **B2**'s premise from a second, independent direction | community [src: url=https://medium.com/@bob-bauer/istio-on-vmware-vks-single-cluster-install-a574a3c95bbb date=2026-07-16 quote="Gateway API CRDs (Built-in): Newer VKS clusters include these by default."] |

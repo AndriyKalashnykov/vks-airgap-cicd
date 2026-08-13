@@ -399,9 +399,9 @@ istio_wait_gwapi_address() {
       log_error "  kubectl -n ${ISTIO_GWAPI_NAMESPACE} describe gateway ${ISTIO_GATEWAY_NAME}"
       log_error "  Istio provisions the data plane itself — check what it created:"
       kubectl -n "$ISTIO_GWAPI_NAMESPACE" get deploy,svc,pods -l "gateway.networking.k8s.io/gateway-name=${ISTIO_GATEWAY_NAME}" 2>&1 | sed 's/^/      /' >&2 || true
-      if [ "$prog" = "True" ] || kubectl -n "$ISTIO_GWAPI_NAMESPACE" get svc "${ISTIO_GATEWAY_NAME}-istio" >/dev/null 2>&1; then
+      if [ "$prog" = "True" ] || kubectl -n "$ISTIO_GWAPI_NAMESPACE" get svc "${ISTIO_GATEWAY_NAME}-${ISTIO_GATEWAY_CLASS:-istio}" >/dev/null 2>&1; then
         # The proxy exists but has no address -> it is the LoadBalancer, not Istio, that is stuck.
-        istio_diagnose_pending_lb "$ISTIO_GWAPI_NAMESPACE" "${ISTIO_GATEWAY_NAME}-istio"
+        istio_diagnose_pending_lb "$ISTIO_GWAPI_NAMESPACE" "${ISTIO_GATEWAY_NAME}-${ISTIO_GATEWAY_CLASS:-istio}"
       else
         log_error "  No proxy was provisioned at all — Istio did not accept the Gateway. Most likely causes:"
         log_error "    * Pod Security Admission rejected the proxy pod. VKS guest clusters enforce 'restricted'"
