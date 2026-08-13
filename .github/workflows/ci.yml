@@ -139,7 +139,7 @@ jobs:
       # that only CI could see (a local `make lint` used whatever the dev box had).
       # All three ARE in mise's registry (kubeconform + hadolint via aqua, yamllint via
       # pipx/uv); they are pinned in .mise.toml and installed by the step above.
-      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
 
       # Persist kubeconform's downloaded JSON schemas across runs (validate.sh
       # points kubeconform -cache here) so githubusercontent isn't re-hit every run.
@@ -270,7 +270,7 @@ jobs:
       # Only gitleaks — still pinned by .mise.toml (one source of truth), but without dragging in
       # the JDK/Go/kubectl/helm toolchain that static-check needs. cache:false so we don't restore
       # (or save) that job's much larger cache just to obtain one Go binary.
-      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
         with:
           install_args: gitleaks
           cache: false
