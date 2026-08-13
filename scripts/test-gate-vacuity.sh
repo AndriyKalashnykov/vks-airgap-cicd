@@ -332,11 +332,18 @@ assert_starved check-java-alignment.sh    "check-java-alignment dies with no app
 # against a healthy gate. A bare directory pathspec is extension-proof by construction (measured:
 # identical 19 files today).
 #
-# ⚠️ THIS DECLARATION COVERS ONE OF FIVE ARMS. Arm 1 (k8s/ + gitea refs) is what `k8s/` starves.
+# ⚠️ THIS DECLARATION COVERS ONE OF **SIX** ARMS. Arm 1 (k8s/ + gitea refs) is what `k8s/` starves.
 # Arm 2 (.env.example tag vars) got its own guard in the same change but is not starved here. Arms
 # 4 and 5 route through check_pinned(), whose `[ -n "$3" ] || return 0` returns SUCCESS when the
-# expected value is absent — vacuous by construction, source-read, not yet addressed. Do not read
-# this line as "check-image-alignment is covered".
+# expected value is absent — vacuous by construction, source-read, not yet addressed.
+#
+# The SIXTH arm (bare docker.io refs, added 2026-08-13 for B100) is likewise NOT starved here, and
+# starvation could not reach it anyway: arm 1's blind guard exits BEFORE it. It carries its own
+# guard keyed on the INVENTORY (`bare_entries`, 9 today) rather than on refs found — deliberately,
+# because refs-found legitimately falls to zero as refs get derived, which would false-RED the
+# goal state. That guard is RED-proven by mangling images.txt's parse; see the arm's header.
+#
+# Do not read this line as "check-image-alignment is covered".
 #
 # The pathspec MUST also name 40-install-gitea.sh. Arm 1's feed is `{ grep k8s/ ; grep gitea-script ; }`
 # and the `|| true` fix landed in the SAME change: before it, `set -e` killed the group when the k8s

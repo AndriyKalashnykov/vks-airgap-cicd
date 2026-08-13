@@ -136,7 +136,15 @@ guest apply --server-side --force-conflicts -f \
 log_info "installing Gitea into GUEST (NodePort — the HUB's repo-server must be able to clone it)"
 export KUBECONFIG="$GUEST_KC"
 export GITEA_SERVICE_TYPE=NodePort
-export GITEA_IMAGE="gitea/gitea:1.26.4-rootless"      # no Harbor in this e2e (topology test, not air-gap)
+# No Harbor in this e2e (topology test, not air-gap), so this is the plain upstream coordinate.
+# DERIVED from images/images.txt rather than pinned: a literal here drifted silently once
+# (B100) because the alignment gate could only see ${HARBOR_URL}-prefixed refs. It now has a
+# bare-ref arm too, and that arm deliberately SKIPS interpolated tags -- so deriving is drift-proof
+# HERE. It is not a universal rule: `MAVEN_SRC` in 14-builder-build.sh is asserted LITERALLY by
+# another arm of the same gate, so deriving that one turns the gate red. Check before copying.
+GITEA_IMAGE="$(grep -oE '^gitea/gitea:[^[:space:]]+' "${SCRIPT_DIR}/../images/images.txt" | head -1 || true)"
+[ -n "$GITEA_IMAGE" ] || die "no gitea/gitea ref in images/images.txt — cannot pick the image"
+export GITEA_IMAGE
 export GITEA_HOST="gitea.cc.local"
 export GITEA_ADMIN_PASSWORD="${GITEA_ADMIN_PASSWORD:-CrossCluster12345}"
 export GITEA_CI_PASSWORD="${GITEA_CI_PASSWORD:-CrossCluster12345}"

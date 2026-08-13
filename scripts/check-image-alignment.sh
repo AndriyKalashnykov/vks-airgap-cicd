@@ -229,6 +229,87 @@ fi
 check_pinned "MAVEN_SRC (14-builder-build.sh)" \
   "$(grep -E '^MAVEN_SRC=' scripts/14-builder-build.sh | grep -oE 'maven:[^[:space:]"]+' | head -1 | sed 's|maven:||' || true)" "$mvn_itag"
 
+# --- BARE docker.io refs the repo owns, DERIVED from images/images.txt ------------------------
+# ARM 1 sees only refs written as ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/<repo>:<tag>. A ref written
+# WITHOUT that prefix -- the plain upstream coordinate, used where a leg deliberately does not go
+# through Harbor -- scored ZERO, so the inventory could be bumped while such a ref kept the old tag
+# indefinitely. Not hypothetical: it had ALREADY drifted when this arm was written (B100).
+#
+# THIS ARM MUST SIT ABOVE THE `drift` EXIT BELOW. The first version did not, so it printed DRIFT
+# lines and still exited 0 -- a fake-green introduced while closing a fake-green row.
+#
+# FOUR TRAPS, each measured, each of which shipped in a draft of this arm:
+#   1. `[...{}$-]` inside DOUBLE QUOTES: `$-` is a shell parameter (the option flags, measured
+#      `hBc`). It mangled the class, dropped `-`, and truncated every tag at its first dash ->
+#      confident false DRIFT on the shortened tag. `-` is FIRST and `$` is escaped below.
+#   2. `}` in the tag class: `${VAR:-<repo>:<tag>}` then captures a trailing `}` -> false DRIFT on a
+#      CORRECT ref. That shape is live in this repo. The literal class excludes braces; a fully
+#      interpolated tag is matched as its OWN alternative so it can be counted and skipped.
+#   3. `sed 's/#.*//'` is a `#`-TRUNCATOR, not a comment stripper: it also cuts `${VAR#...}` and a
+#      quoted "#", destroying a real ref -> FALSE GREEN. 35 files here use `${VAR#`. Drop
+#      whole-line comments instead; measured to give an identical denominator.
+#   4. The blind guard must key on the INVENTORY, not on refs found. Every ref that gets correctly
+#      DERIVED stops matching, so a found-refs guard falls to 0 exactly when the tree reaches the
+#      GOAL state -- a false RED whose cheapest silencer is to re-hardcode a tag. VERIFIED: with the
+#      last literal derived, arm 4 reports `0 ref(s) found` and does NOT error.
+#
+# ONE REF IS DELIBERATELY EXEMPT FROM THE "just derive it" ADVICE: `MAVEN_SRC` in
+# 14-builder-build.sh. The check_pinned() call at the end of arm 3 asserts that ref LITERALLY -- it
+# greps `^MAVEN_SRC=` and compares the tag -- so deriving it makes ARM 3 red (measured: `DRIFT
+# MAVEN_SRC ... [^[:space:]]+' vs 3.9-eclipse-temurin-25`). Arm 3 is not weakened to accommodate
+# arm 4: it guards the offline-builder apparatus, where the tag is the key `bundle/images.lock` is
+# looked up by. So for THAT ref the literal is correct and arm 4 simply agrees with arm 3.
+#
+# Not flagged, deliberately: an interpolated tag (correct BY CONSTRUCTION -- it derives at runtime);
+# a ref preceded by `/` (that is arm 1's, and double-counting hides a blind arm); a ref in
+# `scripts/test-*.sh` (a unit test's fixture inventory is SYNTHETIC and deployed by nothing).
+bare_entries=0; bare_seen=0; bare_checked=0; bare_excluded=0
+bare_excluded="$(find scripts k8s -type f -name 'test-*.sh' 2>/dev/null | wc -l)"
+while read -r inv; do
+  [ -n "$inv" ] || continue
+  case "$inv" in *"@sha256:"*) inv="${inv%@sha256:*}" ;; esac   # digest-pinned: compare the TAG half
+  case "$inv" in *.*/*) continue ;; esac                        # has a registry host -> not bare
+  case "$inv" in *:*) : ;; *) continue ;; esac                  # tagless -> `${inv%:*}` would be nonsense
+  brepo="${inv%:*}"; binv_tag="${inv##*:}"
+  [ -n "$brepo" ] && [ -n "$binv_tag" ] || continue
+  bare_entries=$((bare_entries + 1))
+  while read -r hit; do
+    [ -n "$hit" ] || continue
+    bare_seen=$((bare_seen + 1))
+    htag="${hit##*:}"
+    case "$htag" in *'$'*) continue ;; esac                     # derived at runtime -> correct
+    bare_checked=$((bare_checked + 1))
+    if [ "$htag" != "$binv_tag" ]; then
+      echo "DRIFT bare ref ${brepo}:${htag} does not match images/images.txt (${binv_tag})"
+      drift=1
+    fi
+  done < <(find scripts k8s -type f ! -name 'test-*.sh' -print0 2>/dev/null \
+             | xargs -0 grep -hvE '^[[:space:]]*#' \
+             | grep -oE "(^|[^A-Za-z0-9./_-])${brepo}:(\\\$\{[A-Za-z_][A-Za-z0-9_]*\}|[-A-Za-z0-9._]+)" \
+             | sed -E 's|^[^A-Za-z0-9$]||' || true)
+done < <(grep -vE '^[[:space:]]*#|^[[:space:]]*$' images/images.txt)
+
+# SELF-HIT ASSERTION, mirroring arm 1's. This gate lives in scripts/, which this arm greps, so its
+# own source can contribute refs and silently inflate the counts. Measured: adding one non-comment
+# line naming a real ref here made a deliberately-blinded arm's error DISAPPEAR.
+# DO NOT "fix" a failure here by excluding this file -- that blinds the arm to every future real ref
+# in it. Write the literal so it cannot match (escaped, or with the placeholders in <>), as above.
+bare_self="$(grep -vE '^[[:space:]]*#' "${SCRIPT_DIR}/check-image-alignment.sh" \
+             | grep -cE "(^|[^A-Za-z0-9./_-])(gitea/gitea|maven|golang|traefik|alpine/git):[-A-Za-z0-9._]+" || true)"
+if [ "${bare_self:-0}" -ne 0 ]; then
+  echo "ERROR check-image-alignment: this gate's OWN source contributes ${bare_self} bare ref(s) to arm 4." >&2
+  exit 1
+fi
+
+# GUARD ON THE INVENTORY, per trap 4 above: this is the number of things the arm set out to judge,
+# and it cannot be driven to zero by the tree becoming correct.
+if [ "$bare_entries" -eq 0 ]; then
+  echo "ERROR check-image-alignment: parsed 0 BARE entries from images/images.txt — arm 4 is BLIND." >&2
+  exit 1
+fi
+echo "      (arm 4: ${bare_entries} bare inventory entr(ies); ${bare_seen} ref(s) found in-tree —" \
+     "${bare_checked} literal, $((bare_seen - bare_checked)) derived; ${bare_excluded} test fixture file(s) excluded)"
+
 if [ "$drift" -ne 0 ]; then
   echo "ERROR: image tag drift between manifests and images/images.txt (BLOCKING)." >&2
   echo "       The mirror pushes the images.txt tag; each manifest pulls its own tag." >&2
