@@ -197,6 +197,9 @@ heading, fence, body, out = "(preamble)", None, [], []
 # MEASURED: it executed the block under "No Supervisor access (the Scenario-2 tenant)? Ask the vcf
 # CLI instead", which failed with exactly the `pinniped-info` error the document PREDICTS two lines
 # later, and told the reader to use the other route -- which had already worked.
+# (That block was REMOVED from scenario-1.md on 2026-08-13 -- Scenario-1 is admin-only -- so a grep
+# for its summary now finds nothing. The rule is GENERIC and unaffected: it skips ANY collapsed
+# <details>. Kept as the incident that motivated it.)
 details = None
 # The document also instructs through TABLES ("set in ./.env:"), not only through commands. Those
 # rows are instructions: Step 6's table says to change VKS_AUTH_METHOD back to `kubeconfig`, and a
