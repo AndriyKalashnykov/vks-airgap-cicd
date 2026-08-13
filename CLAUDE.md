@@ -563,84 +563,76 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-12 00:30 EDT (walk harness fixed 4x; Step 3 fixed; rows 1+2 RUNNING DETACHED) — READ, THEN REPLACE
+## ▶️ HANDOFF 2026-08-13 (matrix went 4/4 GREEN; the path is now FROZEN) — READ, THEN REPLACE
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### IN FLIGHT — do not start a second lab operation
+### The acceptance test PASSED, and then I broke its meaning
 
-`/tmp/walk/run-rows.sh` is **detached** (its own session, ppid=systemd, so it survived the session
-that launched it). It runs: `make walk-reset CONFIRM=yes` → `make walk-matrix WALK_ROWS="1 2"`.
-Log: **`/tmp/walk/ROWS12.log`**; per-row: `/tmp/walk/MATRIX-row1-ubuntu.log`, `-row2-photon.log`.
+`make walk-matrix` ran all four rows on ONE pass with NO corrections mid-flight:
+
+| row | cell | result |
+|---|---|---|
+| 1 | ubuntu / NOTHING | `rc=0` — 31 ran, **0 FAILED**, 7 skipped |
+| 2 | photon / EVERYTHING | `rc=0` — 26 ran, **0 FAILED**, 12 skipped |
+| 3 | photon / NOTHING | `rc=0` — 31 ran, **0 FAILED**, 7 skipped |
+| 4 | ubuntu / EVERYTHING | `rc=0` — 26 ran, **0 FAILED**, 12 skipped |
+
+Verified, not asserted: `main` never moved during the run; both NOTHING cells produced identical
+shapes and both EVERYTHING cells did too; 3.3k–5.6k log lines per row. Tagged **v1.0.1**
+(`d5adb69`) — **that commit is what "green" refers to.**
+
+Then six PRs landed changes to files scenario-1 EXECUTES, so "4/4 green" silently stopped
+describing `main`. The owner caught it. **All six on-path files were reverted** (#603): 46 of 46
+files on the derived execution path are byte-identical to `v1.0.1`.
+
+### 🔴 THE PATH IS FROZEN — owner decision, 2026-08-13
+
+**Do not edit anything scenario-1 executes** without asking. That set is DERIVED, not remembered —
+regenerate it rather than trusting this list:
 
 ```bash
-# is it alive?  (grep -v 'zsh -c' -- the check's own argv contains the pattern)
-ps -eo pid,args --no-headers | grep -E 'run-rows|walk-matrix\.sh' | grep -v 'zsh -c'
-# the verdict
-grep -E 'WALK DONE|DOCUMENT -|MATRIX|RESET_RC' /tmp/walk/ROWS12.log
+tgts=$(grep -oE '\bmake [a-z][a-z0-9-]*' docs/scenario-1.md | awk '{print $2}' | sort -u)
+for t in $tgts; do awk -v t="^$t:" 'BEGIN{f=0} $0~t{f=1;next} /^[a-zA-Z0-9_.-]+:/{f=0} f' Makefile; done \
+  | grep -oE '(\$\(SCRIPTS\)|scripts)/[a-zA-Z0-9_.-]+\.sh' | sed 's|\$(SCRIPTS)|scripts|' | sort -u
+# + all scripts/lib/*.sh (sourced by them) + docs/scenario-1.md   => 46 files
 ```
 
-⚠️ **`pgrep -f` SELF-MATCHES and lied twice tonight** — it reported 2 live walk processes when there
-were none, because the checking command's own argv contains the pattern. Exclude `zsh -c`, or key on
-an artifact (`kind`/`virsh` domain, the log's mtime), never a bare process grep.
+**21 of the 31 open backlog rows touch that set** and are therefore out of reach. That is the real
+price of the freeze, and it is the correct trade while the green state matters.
 
-**Expected duration 60–90 min.** A "MATRIX COMPLETE" in ~6 minutes is a FAILURE, not a pass: that is
-what the two failed runs did. Duration is the signal.
+Off-path and safe: the gates (`check-*.sh`), the tests, CI, `docs/**` except scenario-1, and the
+sibling repo.
 
-**Row 2 needs no reset** (it consumes exactly what row 1 builds). **Rows 3/4 need the cell back at
-nothing** — `make walk-reset CONFIRM=yes` in nested-vsphere-lab, ~4 min, proven.
+### What is HELD, and why it matters
 
-### What shipped tonight (5 PRs, all merged)
+**B108** records five reverted fixes. One is a genuine security fix and should not be left out
+indefinitely: **B83c** — `27-harbor-ca-from-cluster.sh` validated the trust anchor by asking only
+whether it PARSED, so a **LEAF could be installed as the machine's trust anchor at exit 0**, and a
+leaf verifies nothing. Also reverted: B62 (arch-blind vcf CLI pick), B94, B98 (a STALE
+`ARGOCD_KUBECONFIG` surviving a lab rebuild), B105.
 
-| PR | fix |
-|---|---|
-| #559 | walker: a doc TABLE row must be writable, ordered, and visible to the commands |
-| #560 | `fetch-supervisor-ca`: retry the transient, fail fast on a wrong host, name what was observed |
-| #561 | **scenario-1 Step 3 could not succeed for ANY reader** — two walls |
-| #562 | the SSO password lives in `.env`, stated once (owner decision) |
-| lab repo | heredoc prose executed on the host; lease-vs-ARP resolver; `make walk-reset` |
+**Unblocking needs ONE of:** re-run the 4-row matrix on a tree carrying them, or land them
+immediately before the next run so a single run certifies both.
 
-**The Step 3 finding is the headline.** `vks-login: check-env` demanded HARBOR_URL / HARBOR_USERNAME
-/ HARBOR_PASSWORD / GITEA_ADMIN_PASSWORD — which scenario-1 does not introduce until Steps 4 and 11.
-And the doc used `VKS_AUTH_METHOD` at Step 3 while first mentioning it at line 367 (Step 5). Both
-measured on a `.env` freshly copied from `.env.example`; both 100% reproducible; together they
-cascaded into 15 of 30 blocks failing.
+### Distrust these
 
-### 🔴 Distrust these
+- **`git diff --name-only v1.0.1..origin/main` is the only honest answer to "is main certified?"**
+  Nothing else in this repo tracks it, and the drift happened once already, silently, across six
+  reviewed PRs.
+- **A stale log will lie to you.** An adversary reading `/tmp/walk/ROWS12.log` (previous night,
+  `MATRIX_RC=2`) reported row 2 as FAILED while the acceptance run's own `FINAL4.log` said
+  `MATRIX_RC=0`. That is B103 exactly, and B103's fix (a per-invocation `VERDICT-<runid>.txt`,
+  merged in the lab repo) exists because of it. **Cite the per-run verdict file, never a fixed path.**
+- **`endpoint_report` is ASYMMETRIC** — it declines to compare a name-shaped ENDPOINT but reports
+  IP-vs-hostname-LB as DIVERGENT. Nothing acts on that today (the B92 gate was reverted), but any
+  future gate on that sentinel inherits it.
 
-- **The harness HIDES defects by supplying values a reader would not have.** `walk_env` still
-  supplies `HARBOR_URL`/`HARBOR_USERNAME`/`HARBOR_PASSWORD`, which is exactly what hid Step 3's
-  first wall from three consecutive walks. `walkbox.sh`'s `VKS_AUTH_METHOD:-vcf` was removed for the
-  same reason. **Any fixture that pre-sets what the artifact should require is a blind spot.**
-- **Steps 6–13 have NEVER been reached this session.** Best progress was block [17] (Step 6, guest
-  cluster). Everything past it — preflight, Harbor CA, robot, ArgoCD kubeconfig, `install-all`
-  (40+ min), verify, ingress — is unexercised. Expect a new defect there; tonight every run died on
-  something nobody had reached before.
-- **`make check` is RED on nested-vsphere-lab's `main`** (`hardcodes`, the walk scripts' literal
-  `vks@`). Mine: the harness was merged there without running that repo's own gate. Not loosened.
-- **`check-env-coverage` is green on files it never opens.** Its file list is ENUMERATED; **23** of
-  the operator scripts reachable from a `##`-documented make target are unscanned, including
-  `fetch-supervisor-ca.sh` and every Supervisor-service script. Deriving it surfaces ~9 genuinely
-  undocumented operator knobs (`ARGOCD_HOST`, `SERVICE`, `PACKAGE`, `WCP_WAIT_SECONDS`,
-  `VKS_PACKAGE_*`, `UNINSTALL_SERVICE_WAIT_SECONDS`).
+### Still consuming resources
 
-### Queued, measured, NOT started (batch these — one branch, one push)
-
-1. `check-env-coverage` derives its file list from the Makefile's `##`-documented targets + documents
-   the ~9 knobs that surfaces.
-2. `walk_env` stops supplying `HARBOR_*` so the walk can see what a reader sees.
-3. nested-vsphere-lab `make hardcodes` — decide the shape for the walk boxes' `vks` ssh user.
-
-⚠️ 2 and 3 edit `scripts/walk-matrix.sh` / `walkbox-vm.sh`. **Do not edit them while a row is
-running** — bash reads scripts incrementally and a mid-run edit corrupts the running walk. Prepare in
-a `git worktree`, apply when the rows finish.
-
-### Operator note
-
-`~/remove-the-hook.md` — exact, dry-run-tested instructions to remove the `git push` / `gh pr merge`
-confirmation prompts (BOTH the `permissions.ask` list AND the `ask-on-outward.py` hook; removing one
-leaves you still prompted). Requires a NEW session to take effect. Their other 4 hooks survive.
+`esxi01` and a leftover `vks-walkbox-ubuntu` are running under libvirt. The walk box is a leftover
+from row 4 and is safe to destroy; the lab is the operator's call.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
