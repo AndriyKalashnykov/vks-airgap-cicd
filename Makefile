@@ -1010,7 +1010,7 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint test-endpoint-report test-uninstall-honesty test-classify-kube-failure test-env-lifecycle test-walk-doc test-harbor-reachable test-harbor-auth-report test-gitea-hook-ids test-argocd-kubeconfig-stale ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint test-endpoint-report test-uninstall-honesty test-classify-kube-failure test-env-lifecycle test-walk-doc test-harbor-reachable test-harbor-auth-report test-gitea-hook-ids test-argocd-kubeconfig-stale test-ca-anchor-validation ## Run all offline script-logic unit tests
 
 .PHONY: test-env-lifecycle
 test-env-lifecycle: ## Offline: the .env lifecycle a new operator walks first (init/populate/check)
@@ -1023,6 +1023,10 @@ test-gitea-hook-ids: ## Offline: an ERROR BODY from the webhook GET must not rea
 .PHONY: test-argocd-kubeconfig-stale
 test-argocd-kubeconfig-stale: ## Offline: a STALE ARGOCD_KUBECONFIG must be re-published, and --minify must decide it
 	@bash scripts/test-argocd-kubeconfig-stale.sh
+
+.PHONY: test-ca-anchor-validation
+test-ca-anchor-validation: ## Offline: a LEAF or a CA:FALSE cert must never be installed as a trust ANCHOR
+	@bash scripts/test-ca-anchor-validation.sh
 
 .PHONY: test-harbor-reachable
 test-harbor-reachable: ## Offline: lab-preflight must catch a Harbor whose DNS points at the PREVIOUS install's LB IP
