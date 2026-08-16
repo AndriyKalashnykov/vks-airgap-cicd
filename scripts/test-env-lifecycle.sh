@@ -67,7 +67,10 @@ try "env-populate NEVER clobbers a value already set (re-run is idempotent)" \
 # else, which is the only thing that makes the second assertion mean anything.
 # Note the placeholder is the LITERAL harbor.vks.local (02-env.sh harbor_url_is_placeholder),
 # and that .env.example ships HARBOR_URL *commented*, so it must be APPENDED, not sed'd.
-touch "$WORK/fake.kubeconfig"
+# A kubeconfig fixture must have CONTENT: env-check tests `-s`, not `-f`, because a 0-byte
+# kubeconfig passed the gate and kubectl then fell back to localhost:8080 (measured; a real
+# 0-byte secrets/testcluster.kubeconfig was in the tree). An empty fixture here asserts the bug.
+printf 'apiVersion: v1\\nkind: Config\\nclusters: []\\n' > "$WORK/fake.kubeconfig"
 cat >> "$WORK/.env" <<EOF
 HARBOR_USERNAME=admin
 HARBOR_PASSWORD=x

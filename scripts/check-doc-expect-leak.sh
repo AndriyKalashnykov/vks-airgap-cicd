@@ -28,7 +28,7 @@
 #     not a gate, and this does not replace it.
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
+cd "$REPO_ROOT" || exit 1
 
 DOCS="${1:-docs/scenario-1.md docs/scenario-2.md}"
 leaks=0; checked=0; lines=0
@@ -39,6 +39,7 @@ for D in $DOCS; do
     [ -n "${n:-}" ] || continue
     lines=$((lines + 1))
     # every backticked literal on the Expect line -> every UPPER_SNAKE token inside it
+    # shellcheck disable=SC2016  # a markdown backtick literal, not a shell expansion
     for t in $(printf '%s\n' "$rest" | grep -oE '`[^`]+`' | tr -d '`' \
                | grep -oE '\b[A-Z][A-Z0-9]*(_[A-Z0-9]+)+\b' | sort -u); do
       checked=$((checked + 1))

@@ -103,11 +103,17 @@ done
 # rc=2 must NOT increment the stale count. This assertion was VACUOUS in my first version: it
 # grepped a file the block had been moved out of, so "no match" read as "does not count it".
 # Anchor it to the arm that actually exists, and prove the arm that DOES count is rc=1.
+# Deliberate: this greps for the LITERAL text 'stale=$((stale' in the shipped source. Expanding it
+# here would search for this test's own (empty) variable instead.
+# shellcheck disable=SC2016
 if printf '%s' "$blk" | awk '/^      2\)/,/;;/' | grep -q 'stale=\$((stale'; then
   bad "rc=2 does NOT count as stale" "the unreachable arm increments the count — a powered-off lab would fail the preflight"
 else
   ok "rc=2 does NOT count as stale"
 fi
+# Deliberate: this greps for the LITERAL text 'stale=$((stale' in the shipped source. Expanding it
+# here would search for this test's own (empty) variable instead.
+# shellcheck disable=SC2016
 if printf '%s' "$blk" | awk '/^      1\)/,/;;/' | grep -q 'stale=\$((stale'; then
   ok "rc=1 DOES count as stale (the control — an arm that counts nothing is not a check)"
 else
@@ -127,11 +133,14 @@ else bad "lab-preflight folds stale anchors into its problem count" "a stale anc
 # failure ones: the step added to catch the failure scored GREEN on it.
 if grep -q 'CA-STATUS: ALL-MATCH' "$CS"; then ok "the success token exists"
 else bad "the success token exists" "the runbooks quote CA-STATUS: ALL-MATCH"; fi
-tokline="$(grep -n 'CA-STATUS: ALL-MATCH' "$CS" | head -1 | cut -d: -f1)"
-if sed -n "$((tokline-3)),${tokline}p" "$CS" | grep -q 'CA_STATUS_MATCHED:\?-\?0\?.*-eq.*CA_STATUS_CHECKED'; then
+# Find the CONDITION GOVERNING the token, not a fixed window above it. A 3-line window was the
+# first version and it broke the moment the token gained an explanatory comment — a positional
+# assertion about source layout, masquerading as an assertion about behaviour.
+tokgate="$(awk '/^ *(el)?if /{c=$0} /CA-STATUS: ALL-MATCH/{print c; exit}' "$CS")"
+if printf '%s' "$tokgate" | grep -q 'CA_STATUS_MATCHED' && printf '%s' "$tokgate" | grep -q 'CA_STATUS_CHECKED'; then
   ok "the token is gated on matched == checked (no skip, no empty run, can reach it)"
 else
-  bad "the token is gated on matched == checked" "a skipped or empty run could print the success token"
+  bad "the token is gated on matched == checked" "governing branch was: ${tokgate:-<none found>}"
 fi
 
 # THE HOST/PORT PARSER. Extracted from the shipped script, never transcribed. Two of these shapes

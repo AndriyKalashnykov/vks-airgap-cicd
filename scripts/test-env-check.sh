@@ -57,8 +57,20 @@ if run_check "harbor.example.com" "$TMP/nope.kc"; then bad "RED2: env-check PASS
 grep -q KUBECONFIG "$TMP/out" || bad "RED2: failure did not name KUBECONFIG"
 
 # GREEN — real HARBOR_URL + a present kubeconfig file + all secrets -> PASS.
-: > "$TMP/real.kc"
+# ⚠️ THIS FIXTURE USED TO BE `: > "$TMP/real.kc"` — a ZERO-BYTE FILE. The gate tested `-f`, which a
+# 0-byte file satisfies, so the GREEN case was ASSERTING THE BUG: an empty kubeconfig passed
+# env-check, and kubectl then silently fell back to localhost:8080 with an error naming neither the
+# file nor this gate. That is the exact shape row 5 of the VM matrix hit, and a 0-byte
+# secrets/testcluster.kubeconfig was sitting in the tree when it was found. The gate is `-s` now, so
+# the fixture must contain something.
+printf 'apiVersion: v1\nkind: Config\nclusters: []\n' > "$TMP/real.kc"
 if run_check "harbor.example.com" "$TMP/real.kc"; then ok "GREEN: env-check passed with real values + present kubeconfig"; else bad "GREEN: env-check FAILED with real values"; cat "$TMP/out" >&2; fi
+
+# RED2b — an EMPTY kubeconfig must be refused, not merely an absent one. Without this case the
+# `-f` -> `-s` fix has no guard and reverts silently.
+: > "$TMP/empty.kc"
+if run_check "harbor.example.com" "$TMP/empty.kc"; then bad "RED2b: env-check PASSED with a 0-BYTE kubeconfig"; else ok "RED2b: env-check refused a 0-byte kubeconfig"; fi
+grep -qE 'KUBECONFIG.*(EMPTY|missing)' "$TMP/out" || bad "RED2b: the failure did not say the file was empty"
 
 # --- VKS_AUTH_METHOD=vcf ---------------------------------------------------------------------
 # This branch had ZERO coverage, which is how env-check came to hard-require two variables that

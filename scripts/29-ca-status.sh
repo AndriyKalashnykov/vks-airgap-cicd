@@ -36,7 +36,7 @@ load_env
 # copies of one predicate is the shape this repo keeps getting bitten by.)
 # Prints to stderr; returns the number of STALE anchors.
 ca_status_report() {
-  local stale=0 pair label file host port remedy rc
+  local stale=0 label file host port remedy rc
 
   # ⚠️ WITHOUT openssl EVERY probe returns 5 and this reports "your CA is not usable" — the WRONG
   # cause, with a remedy that cannot help. MEASURED with PATH stripped. It matters because a bare
@@ -175,30 +175,36 @@ ca_status_report() {
 }
 
 # Sourced (by lab-preflight) -> provide the function and stop. Executed -> run it and report.
-(return 0 2>/dev/null) && return 0
-
-printf '\n================= CA certificate check =================\n' >&2
-_stale=0; ca_status_report || _stale=$?
-# THE TOKEN IS THE POINT, and it is the fix for a fake-green I shipped hours earlier. The runbooks
-# quote a line from this output as their **Expect:**, and walk-doc PASSES A BLOCK WHEN ANY QUOTED
-# LITERAL MATCHES. My first Expect quoted "Harbor CA" — which every per-certificate line begins
-# with, INCLUDING every failure arm and the file-is-missing arm. So the step added to catch the
-# failure printed a literal that MATCHED ON THAT FAILURE and scored the block green.
-# ALL-MATCH is emitted on exactly one path: at least one certificate checked, and every one matched.
-# No failure arm, no skip, and no empty configuration can produce it.
-if [ "${CA_STATUS_CHECKED:-0}" -eq 0 ]; then
-  log_error "checked nothing — see above. This is NOT a pass."
+#
+# The body lives in a FUNCTION rather than after an early `return`, because an early return at file
+# scope makes shellcheck read EVERY LINE AFTER IT as unreachable (SC2317) — and that propagates into
+# 24-lab-preflight.sh, which sources this file with `# shellcheck source=`. Measured: 6 SC2317s in
+# the SOURCING file, which is what turned `make lint` red. Same guard, no dead-looking code.
+_ca_status_main() {
+  printf '\n================= CA certificate check =================\n' >&2
+  local _stale=0
+  ca_status_report || _stale=$?
+  if [ "${CA_STATUS_CHECKED:-0}" -eq 0 ]; then
+    log_error "checked nothing — see above. This is NOT a pass."
+    printf '========================================================\n' >&2
+    exit 1
+  elif [ "$_stale" -eq 0 ] && [ "${CA_STATUS_MATCHED:-0}" -eq "$CA_STATUS_CHECKED" ]; then
+    # THE TOKEN, and it is the fix for a fake-green shipped hours earlier. The runbooks quote a line
+    # from this output as their **Expect:**, and walk-doc PASSES A BLOCK WHEN ANY QUOTED LITERAL
+    # MATCHES. The first Expect quoted "Harbor CA" — which every per-certificate line begins with,
+    # INCLUDING every failure arm and the file-is-missing arm — so the step added to catch the
+    # failure printed a literal that MATCHED ON THAT FAILURE and scored the block green.
+    # ALL-MATCH is emitted on exactly one path: at least one certificate checked, and every one
+    # matched. No failure arm, no skip, and no empty configuration can produce it.
+    log_info "CA-STATUS: ALL-MATCH n=${CA_STATUS_MATCHED}"
+  elif [ "$_stale" -eq 0 ]; then
+    log_warn "CA-STATUS: INCOMPLETE — ${CA_STATUS_MATCHED} of ${CA_STATUS_CHECKED} checked; the rest were skipped above."
+  else
+    log_error "${_stale} of ${CA_STATUS_CHECKED} CA certificate(s) above are wrong. Each one fails LATER,"
+    log_error "  as an error about TLS rather than about the file — and a rebuilt lab reproduces it."
+  fi
   printf '========================================================\n' >&2
-  exit 1
-elif [ "$_stale" -eq 0 ] && [ "${CA_STATUS_MATCHED:-0}" -eq "$CA_STATUS_CHECKED" ]; then
-  log_info "CA-STATUS: ALL-MATCH n=${CA_STATUS_MATCHED}"
-elif [ "$_stale" -eq 0 ]; then
-  # Everything that ran was fine, but something was SKIPPED (an endpoint did not answer). Not a
-  # failure, and emphatically not ALL-MATCH.
-  log_warn "CA-STATUS: INCOMPLETE — ${CA_STATUS_MATCHED} of ${CA_STATUS_CHECKED} checked; the rest were skipped above."
-else
-  log_error "${_stale} of ${CA_STATUS_CHECKED} CA certificate(s) above are wrong. Each one fails LATER,"
-  log_error "  as an error about TLS rather than about the file — and a rebuilt lab reproduces it."
-fi
-printf '========================================================\n' >&2
-exit "$_stale"
+  exit "$_stale"
+}
+
+(return 0 2>/dev/null) || _ca_status_main "$@"
