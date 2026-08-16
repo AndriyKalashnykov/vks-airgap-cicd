@@ -183,9 +183,10 @@ if [ "$(printf '%s' "$o" | grep -c -- '-> rc=')" -eq 1 ]; then c=0; else c=1; fi
 assert "...and reports ONE rc, not one per line" "$c" "it ran as several statements"
 
 # A CLAIM DESCRIBES THE STEP, NOT ONE BLOCK OF IT. The document attaches Expect: to a step, and a
-# step often has several blocks -- Step 4's claims sit after its SECOND block while describing the
-# FIRST block's output. Checking only the preceding block produced a FALSE UNMET on text plainly
-# present in the log.
+# step often has several blocks; checking only the preceding block produced a FALSE UNMET on text
+# plainly present in the log. (The original example was scenario-1 step 4, whose claim has since been
+# moved to sit directly after the block that produces it -- but the mechanism is still load-bearing
+# for the claims that legitimately describe an EARLIER block in the same step.)
 printf '## S\n\n```bash\necho "seven secrets generated"\n```\n\n```bash\necho "second block"\n```\n\n**Expect:** `seven secrets generated`\n' > "$T/step.md"
 o="$(WALK_DOC="$T/step.md" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_ISTIO=existing WALK_MIN_BLOCKS=1 bash "$W" 2>&1)"; r=$?
 if [ "$r" -eq 0 ] && printf '%s' "$o" | grep -q '0 UNMET'; then c=0; else c=1; fi

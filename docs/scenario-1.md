@@ -310,6 +310,13 @@ The registry every image comes from.
 make install-harbor-service
 ```
 
+**Expect:** `7 secrets generated, 0 placeholders left`, then `install issued for harbor.tanzu.vmware.com`.
+The admin password is **generated** — you do not choose it and it is not Harbor12345. Read it back
+any time with `make creds-show`.
+
+⚠️ If your vCenter has **more than one cluster**, set `VKS_CLUSTER_COMPUTE` as well, or this command
+stops with *could not resolve the vSphere cluster moid*.
+
 Harbor already installed on this Supervisor? Skip that one command — but still run the next block.
 Its LoadBalancer address is what your DNS records point at, whoever installed it.
 
@@ -317,12 +324,8 @@ Its LoadBalancer address is what your DNS records point at, whoever installed it
 make show-dns-records DNS_RECORDS_WAIT_SECONDS=900   # waits for the LoadBalancer address, then prints the records
 ```
 
-**Expect:** `7 secrets generated, 0 placeholders left`, then `install issued for
-harbor.tanzu.vmware.com`. The admin password is **generated** — you do not choose it and it is not
-`Harbor12345`. Read it back any time with `make creds-show`.
-
-⚠️ If your vCenter has **more than one cluster**, set `VKS_CLUSTER_COMPUTE` as well, or this command
-stops with *could not resolve the vSphere cluster moid*.
+**Expect:** a HOSTNAME / IP / SOURCE table with at least one row, then `Create these as A records`.
+If the LoadBalancer has no address yet this waits for it — up to 15 minutes with the value above.
 
 **Now create the A records `make show-dns-records` just printed.** `/etc/hosts` is **not** enough —
 the guest nodes must resolve the name too. **Reinstalling?** The LoadBalancer IP is new, so update
