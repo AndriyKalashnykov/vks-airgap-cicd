@@ -321,5 +321,21 @@ o="$(WALK_DOC="$T/trunc.md" WALK_START_DIR="$T" WALK_EXISTS=1 WALK_ROBOT_EXISTS=
 if [ "$r" -ne 0 ] && printf '%s' "$o" | grep -q 'did not run to completion'; then c=0; else c=1; fi
 assert "a TRUNCATED extractor parse refuses" "$c" "rc=$r; a partial parse was reported as a walk"
 
+# 15. A POSITIONAL argument used to be silently ignored, so `walk-doc.sh docs/scenario-2.md`
+#     walked the DEFAULT document and reported ITS numbers. Measured 2026-08-16: a one-block probe
+#     invoked that way reported scenario-1's "40 extracted, 29 Expect". A wrong answer delivered
+#     confidently is worse than an error, so it must REFUSE -- and the refusal must name WALK_DOC.
+printf '# P\n\n## 1. A\n\n```bash\ntrue\n```\n' > "$T/pos.md"
+o="$(WALK_DOC="$T/pos.md" WALK_START_DIR="$T" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 \
+     WALK_ISTIO=existing WALK_MIN_BLOCKS=1 WALK_DRY=1 bash "$W" "$T/pos.md" 2>&1)"; r=$?
+if [ "$r" -ne 0 ] && printf '%s' "$o" | grep -q 'WALK_DOC'; then c=0; else c=1; fi
+assert "a POSITIONAL argument refuses, and says WALK_DOC" "$c" "rc=$r; it was ignored silently"
+
+# ...and the no-argument form still works, or the guard would have broken every real caller.
+o="$(WALK_DOC="$T/pos.md" WALK_START_DIR="$T" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 \
+     WALK_ISTIO=existing WALK_MIN_BLOCKS=1 WALK_DRY=1 bash "$W" 2>&1)"; r=$?
+if [ "$r" -eq 0 ]; then c=0; else c=1; fi
+assert "...and the NO-argument form still walks" "$c" "rc=$r; the guard broke the real callers"
+
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -378,6 +378,9 @@ kubectl -n ci create secret generic harbor-dockerconfig \
 rm -f /tmp/harbor-config.json
 ```
 
+**Expect:** a line naming `harbor-dockerconfig`, ending in `created` or `configured` — both are
+fine, the apply is idempotent.
+
 The Kubernetes secret is built from your Harbor **login/password**; Harbor's **REST API** is
 used only to create a robot account (if you self-service one) — it does not create this cluster
 secret.
