@@ -68,10 +68,46 @@ MISE_BIN := $(shell command -v mise 2>/dev/null || { [ -x "$(HOME)/.local/bin/mi
 MISE_PATHS := $(if $(MISE_BIN),$(shell cd '$(CURDIR)' && '$(MISE_BIN)' bin-paths 2>/dev/null))
 export PATH := $(if $(MISE_PATHS),$(subst $(SPACE),:,$(strip $(MISE_PATHS))):,)$(if $(HOME),$(HOME)/.local/bin:,)$(PATH)
 
-# Load operator overrides FIRST so they win over the ?= defaults. `-include`
-# (leading '-') silently skips a missing file. The KinD flow writes discovered
-# state to the stamped `.env.state` overlay (below); `.env.kind` is read-only
-# back-compat only — nothing writes it any more.
+# ⚠️ THE INCLUDE ORDER BELOW IS REVERSED RELATIVE TO load_env's, AND THAT IS THE POINT.
+# `load_env` SOURCES the files, so the LAST one read wins (.env.example → .env → .env.state →
+# legacy .env.kind). Every include here is rewritten to `?=`, and `?=` does not assign when the
+# variable is already set — so under `?=` the FIRST include wins. Mirroring shell precedence
+# therefore requires including them in the OPPOSITE order: kind, then state, then .env.
+#
+# MEASURED while fixing B84: rewriting the overlay to `?=` while leaving it BELOW `.env` inverted
+# `.env` vs `.env.state`, so a stale `.env` beat the just-discovered state — a regression the fix
+# itself introduced, and invisible to every gate because both files are gitignored. The proof is
+# `make test-env-precedence`, which lifts THESE blocks out of this file rather than retyping them.
+#
+# Each `-include` is guarded on the SOURCE existing: without that, deleting `.env` leaves the
+# generated `secrets/.env.make` orphaned and still included, so values keep applying from a file
+# the operator has removed.
+-include $(if $(wildcard .env.kind),secrets/.env.kind.make)
+secrets/.env.kind.make: .env.kind
+	@mkdir -p secrets
+	@umask 077; sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$<' > '$@'
+
+# The STAMPED state overlay (was `.env.kind` — a KinD-named file that carried REAL-LAB state, which
+# is how `make kind-down` came to destroy a lab's kubeconfig). VKS_STATE_FILE overrides the path.
+#
+# REWRITTEN TO `?=` FOR THE SAME REASON `.env` IS (B84), and this is the include that matters most:
+# `state_set` writes exactly the SELECTOR class here — KUBECONFIG, HARBOR_URL, HARBOR_CA_FILE,
+# VKS_CONTEXT, INGRESS_CONTROLLER, ARGOCD_KUBECONFIG. MEASURED against this structure before the fix:
+#     export HARBOR_URL=harbor.OPERATOR-CHOSE-THIS   ->   HARBOR_URL=[harbor.from-STATE]
+# and it is not theoretical: `fetch-harbor-ca` passes $(HARBOR_URL)/$(HARBOR_CA_FILE) as ARGV to
+# fetch-ca.sh, which deliberately does NOT call load_env — so load_env's selector snapshot cannot
+# rescue it, and the operator fetches a CA from the overlay's Harbor while believing they named
+# another. `make <target> VAR=value` still wins over both, as it should.
+STATE_SRC := $(if $(VKS_STATE_FILE),$(VKS_STATE_FILE),.env.state)
+-include $(if $(wildcard $(STATE_SRC)),secrets/.env.state.make)
+secrets/.env.state.make: $(STATE_SRC)
+	@mkdir -p secrets
+	@umask 077; sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$<' > '$@'
+
+# Load operator overrides so they win over the `?=` defaults in this file (but NOT over the
+# discovered state above — see the precedence note). `-include` (leading '-') silently skips a
+# missing file. The KinD flow writes discovered state to the stamped `.env.state` overlay;
+# `.env.kind` is read-only back-compat only — nothing writes it any more.
 #
 # SKIP_DOTENV=1 ignores `.env` — at the MAKE level here, and inside every script
 # (scripts/lib/os.sh `load_env`). The KinD e2e passes it (E2E_SKIP_DOTENV below) so a
@@ -93,10 +129,10 @@ ifneq ($(SKIP_DOTENV),1)
 # Generated UNDER secrets/: it is a rewrite of .env, so it carries the same credentials, and
 # secrets/ is already gitignored, gitleaks-allowlisted and asserted-untracked by
 # `make check-secrets-untracked`. At the repo root it tripped the secrets gate, correctly.
+-include $(if $(wildcard .env),secrets/.env.make)
 secrets/.env.make: .env
 	@mkdir -p secrets
 	@umask 077; sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$<' > '$@'
--include secrets/.env.make
 
 # ⚠️ EXPORTED, because `-include .env` above creates MAKE variables, NOT environment — MEASURED: a recipe
 # sees make-var=[AA:BB:CC] while the script it invokes sees []. fetch-ca.sh does not call load_env, so
@@ -106,10 +142,6 @@ secrets/.env.make: .env
 export HARBOR_CA_SHA256
 export ARGOCD_CA_SHA256
 endif
-# The STAMPED state overlay (was `.env.kind` — a KinD-named file that carried REAL-LAB state, which is
-# how `make kind-down` came to destroy a lab's kubeconfig). VKS_STATE_FILE overrides the path.
--include $(if $(VKS_STATE_FILE),$(VKS_STATE_FILE),.env.state)
--include .env.kind
 
 # The KinD e2e is a stand-in for a brand-new operator / a CI runner — neither has a `.env`.
 # Ignoring it by default keeps "make e2e-kind needs zero .env" an ENFORCED property instead
@@ -1028,7 +1060,7 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint test-endpoint-report test-cluster-status-wait-gate test-harbor-admin-ns-classify test-tkr-classify test-state-echo-back test-uninstall-honesty test-classify-kube-failure test-env-lifecycle test-walk-doc test-harbor-reachable test-harbor-auth-report test-gitea-hook-ids test-argocd-kubeconfig-stale test-ca-anchor-validation test-unwedge-transport-refusal test-shell-rc-file test-ca-staleness-check ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint test-endpoint-report test-cluster-status-wait-gate test-harbor-admin-ns-classify test-tkr-classify test-state-echo-back test-uninstall-honesty test-classify-kube-failure test-env-lifecycle test-walk-doc test-harbor-reachable test-harbor-auth-report test-gitea-hook-ids test-argocd-kubeconfig-stale test-ca-anchor-validation test-unwedge-transport-refusal test-shell-rc-file test-ca-staleness-check test-env-precedence ## Run all offline script-logic unit tests
 
 .PHONY: test-ca-staleness-check
 test-ca-staleness-check: ## Offline: the four arms of the trust-anchor probe, incl. unreachable != stale
@@ -1041,6 +1073,10 @@ test-shell-rc-file: ## Offline: the rc-file resolver the runbook calls — the V
 .PHONY: test-unwedge-transport-refusal
 test-unwedge-transport-refusal: ## Offline: a break-glass DELETE must never report success over a no-op (B112)
 	@bash $(SCRIPTS)/test-unwedge-transport-refusal.sh
+
+.PHONY: test-env-precedence
+test-env-precedence: ## Offline: `export VAR=x; make ...` must beat every .env/.env.state file
+	@bash $(SCRIPTS)/test-env-precedence.sh
 
 .PHONY: test-env-lifecycle
 test-env-lifecycle: ## Offline: the .env lifecycle a new operator walks first (init/populate/check)

@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# ============================================================================
+# B84 — the Makefile's env/state includes must preserve TWO precedences at once:
+#
+#     the OPERATOR's environment  >  .env.kind  >  .env.state  >  .env  >  the Makefile's ?= defaults
+#     `make VAR=value`            >  everything
+#
+# WHY THIS EXISTS. A plain `-include <file>` creates MAKEFILE assignments, and in GNU make a
+# makefile assignment BEATS THE ENVIRONMENT. So `export VAR=x; make <target>` was SILENTLY IGNORED
+# (measured: `export VKS_NAMESPACE=wld03; make vsphere-namespace` operated on `lab` and reported
+# success). The fix rewrites every key to `?=`, which does not assign when the variable is already
+# defined — and environment variables ARE defined.
+#
+# But `?=` INVERTS file-vs-file order: `load_env` SOURCES the files so the LAST wins, while under
+# `?=` the FIRST wins. Rewriting the state overlay to `?=` while leaving it BELOW `.env` therefore
+# made a stale `.env` beat the just-discovered state — a regression the fix itself introduced,
+# caught only by this test. Both files are gitignored, so no other gate can see it.
+#
+# THE HARNESS LIFTS THE INCLUDE MACHINERY OUT OF THE REAL Makefile rather than retyping it. A
+# retyped copy proves my typing, not the product: it would keep passing after someone reorders the
+# real includes. The lift is asserted (line count + a STATE_SRC sentinel) so a failed extraction
+# cannot masquerade as a pass.
+# ============================================================================
+# shellcheck disable=SC2016
+#   Every single-quoted `$(...)` below is MAKEFILE syntax being written into a generated Makefile.
+#   Not expanding it is the entire point: `"$(HARBOR_URL)"` must reach make intact, and double-
+#   quoting it (shellcheck's suggestion) would have the SHELL expand it to empty first.
+#   MUST sit above the first COMMAND: placed after `set -uo pipefail` it is silently inert.
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MK="${REPO_ROOT}/Makefile"
+pass=0; fail=0
+
+ok()   { pass=$((pass+1)); printf '  ok    %s\n' "$1"; }
+bad()  { fail=$((fail+1)); printf '  FAIL  %s\n' "$1"; }
+chk()  { # chk <label> <expected> <actual>
+  if [ "$2" = "$3" ]; then ok "$1 -> $3"; else bad "$1: want [$2] got [$3]"; fi
+}
+
+T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
+cd "$T" || exit 1
+mkdir -p secrets
+
+# ---- lift the SHIPPED include blocks -------------------------------------------------------
+# Each block is `-include ...` followed by its rule; take from the -include through its recipe.
+# Each range ends at the block's own recipe line (`@umask 077; ...`), which occurs once per block.
+# Ending on a pattern that does NOT occur (my first attempt anchored on `.env.kind.make`, which the
+# recipe writes as `$@`) makes sed run to EOF — and the lift guard passed on the WHOLE MAKEFILE,
+# because it only had a LOWER bound. Hence the upper bound below: a guard with one open end is not
+# a guard.
+{
+  sed -n '/^-include \$(if \$(wildcard \.env\.kind)/,/^\t@umask 077;/p' "$MK"
+  sed -n '/^STATE_SRC := /,/^\t@umask 077;/p'                          "$MK"
+  sed -n '/^-include \$(if \$(wildcard \.env),/,/^\t@umask 077;/p'     "$MK"
+} > Makefile
+lifted="$(grep -c . Makefile)"
+if [ "$lifted" -ge 10 ] && [ "$lifted" -le 30 ] \
+   && grep -q 'STATE_SRC' Makefile && grep -q 'wildcard \.env\.kind' Makefile \
+   && [ "$(grep -c '@umask 077;' Makefile)" -eq 3 ]; then
+   # ^ NOT `'^\t@umask'`: GNU sed understands \t in a regex, grep's BRE does not — it reads as a
+   #   literal 't', so the anchored form matched nothing and failed a correct lift.
+  ok "lifted ${lifted} non-blank lines of the shipped include machinery (3 blocks)"
+else
+  bad "LIFT FAILED (${lifted} lines) — this harness is not testing the product; fix the sed anchors"
+  printf '\n  %d passed, %d failed\n' "$pass" "$fail"; exit 1
+fi
+printf 'show: ; @printf "%%s|%%s|%%s\\n" "$(HARBOR_URL)" "$(KUBECONFIG)" "$(ONLY_IN_ENV)"\n' >> Makefile
+
+f() { make -s show 2>/dev/null | cut -d'|' -f"$1"; }
+
+# ---- 1. .env alone ---------------------------------------------------------------------------
+printf 'HARBOR_URL=harbor.ENV\nONLY_IN_ENV=yes\n' > .env
+chk 'only .env present: .env supplies the value' 'harbor.ENV' "$(f 1)"
+
+# ---- 2. .env.state must BEAT .env (the regression this test exists for) -----------------------
+printf 'HARBOR_URL=harbor.STATE\nKUBECONFIG=/from/state.kc\n' > .env.state
+chk 'state overlay BEATS .env'                'harbor.STATE'   "$(f 1)"
+chk '  ...and .env still supplies keys state does not' 'yes'   "$(f 3)"
+
+# ---- 3. legacy .env.kind must BEAT .env.state (mirrors load_env sourcing it last) -------------
+printf 'HARBOR_URL=harbor.KIND\n' > .env.kind
+chk 'legacy .env.kind BEATS the state overlay' 'harbor.KIND'   "$(f 1)"
+rm -f .env.kind secrets/.env.kind.make
+
+# ---- 4. THE BUG: the operator's exported value must beat every file ---------------------------
+out="$(HARBOR_URL=harbor.OPERATOR KUBECONFIG=/operator/chose make -s show 2>/dev/null)"
+chk 'export HARBOR_URL beats every file'   'harbor.OPERATOR' "$(printf '%s' "$out" | cut -d'|' -f1)"
+chk 'export KUBECONFIG beats every file'   '/operator/chose' "$(printf '%s' "$out" | cut -d'|' -f2)"
+
+# ---- 5. a command-line assignment still outranks everything ----------------------------------
+chk 'make VAR=... beats the environment too' 'harbor.CMDLINE' \
+  "$(HARBOR_URL=harbor.OPERATOR make -s show HARBOR_URL=harbor.CMDLINE 2>/dev/null | cut -d'|' -f1)"
+
+# ---- 6. ORPHAN GUARD: deleting a source must stop its generated file applying -----------------
+# Without the `$(wildcard ...)` guard the generated secrets/.env.state.make survives the delete and
+# keeps supplying values from a file the operator has REMOVED.
+[ -s secrets/.env.state.make ] || bad "precondition: secrets/.env.state.make was never generated"
+rm -f .env.state
+chk 'deleting .env.state stops its orphan applying' 'harbor.ENV' "$(f 1)"
+[ -f secrets/.env.state.make ] && ok "  (the orphan file still exists — it is EXCLUDED, not deleted)"
+
+# ---- 7. VKS_STATE_FILE relocates the overlay --------------------------------------------------
+printf 'HARBOR_URL=harbor.RELOCATED\n' > custom.state
+chk 'VKS_STATE_FILE relocates the state overlay' 'harbor.RELOCATED' \
+  "$(VKS_STATE_FILE=custom.state make -s show 2>/dev/null | cut -d'|' -f1)"
+
+# ---- 8. the rewrite must not mangle a value containing '=' or spaces --------------------------
+printf 'HARBOR_URL=host:443/path?a=b c\n' > .env.state
+chk 'a value containing = and a space survives the rewrite' 'host:443/path?a=b c' "$(f 1)"
+
+# ---- 9. the generated files must not be world-readable (they carry credentials) ---------------
+mode="$(stat -c %a secrets/.env.make 2>/dev/null || echo '?')"
+case "$mode" in 600|400) ok "generated .env.make is $mode (umask 077 held)";;
+                *) bad "generated .env.make is mode $mode — it carries the same credentials as .env";; esac
+
+# ---- 10. POSITIVE CONTROL — reconstruct the PRE-FIX include shape and require it to FAIL --------
+# Without this, every assertion above could be passing for a reason unrelated to the fix. Running the
+# suite against the real pre-fix Makefile (a git worktree at the parent commit) exits non-zero — but
+# only because the LIFT anchors do not exist there, which is the harness refusing to run, NOT the
+# gate catching the defect. gates.md: a non-zero exit is not a RED; a RED is the gate saying the
+# specific thing it was built to say. So the pre-fix shape is rebuilt here explicitly.
+mkdir -p prefix/secrets && cd prefix || exit 1
+{ printf 'secrets/.env.make: .env\n\t@mkdir -p secrets\n\t@umask 077; sed -E %s %s > %s\n' \
+    "'s/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\\1 ?= /'" "'\$<'" "'\$@'"
+  printf -- '-include secrets/.env.make\n'
+  printf -- '-include $(if $(VKS_STATE_FILE),$(VKS_STATE_FILE),.env.state)\n'   # PLAIN: the B84 bug
+  printf 'show: ; @printf "%%s|%%s\\n" "$(HARBOR_URL)" "$(KUBECONFIG)"\n'; } > Makefile
+printf 'HARBOR_URL=harbor.ENV\n'                                     > .env
+printf 'HARBOR_URL=harbor.STATE\nKUBECONFIG=/from/state.kc\n'        > .env.state
+got="$(HARBOR_URL=harbor.OPERATOR make -s show 2>/dev/null | cut -d'|' -f1)"
+if [ "$got" = 'harbor.OPERATOR' ]; then
+  bad "positive control: the PRE-FIX shape did NOT reproduce B84 — these assertions discriminate nothing"
+else
+  ok "positive control: pre-fix shape still defeats \`export\` (got [$got]) — the assertions do discriminate"
+fi
+cd "$T" || exit 1
+
+printf '\n  %d passed, %d failed\n' "$pass" "$fail"
+[ "$fail" -eq 0 ] || exit 1
