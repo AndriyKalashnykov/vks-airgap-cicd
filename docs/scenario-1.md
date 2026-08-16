@@ -504,8 +504,9 @@ make psa-check
 
 ## 8. Harbor's CA
 
-Harbor uses a self-signed certificate. Save its CA so the jump box and the cluster trust it.
-Harbor publishes it, so no login is needed.
+Harbor's certificate is issued by a private CA (`CN = Harbor CA`), not by a public one, so nothing
+trusts it yet. Save that CA so the jump box and the cluster do. Harbor publishes it on an
+unauthenticated endpoint, so no login is needed.
 
 **The commands below read this — already in `./.env`:**
 
@@ -515,17 +516,30 @@ Harbor publishes it, so no login is needed.
 
 ```bash
 set -a; . ./.env; set +a
-curl -sk --fail --max-time 20 -o ./secrets/harbor-ca.crt \
+tmp=$(mktemp -d)
+curl -sk --fail --max-time 20 -o "$tmp/ca.crt" \
   "https://${HARBOR_URL}/api/v2.0/systeminfo/getcert" \
-  || { rm -f ./secrets/harbor-ca.crt; echo "Harbor is not reachable at ${HARBOR_URL} — check the A record (make show-dns-records)"; false; } \
-&& chmod 0644 ./secrets/harbor-ca.crt \
-&& openssl x509 -in ./secrets/harbor-ca.crt -noout -subject     # expect: CN = Harbor CA
+  || { echo "Harbor is not reachable at ${HARBOR_URL} — check the A record (make show-dns-records)"; false; }
+openssl s_client -connect "${HARBOR_URL}:443" -servername "${HARBOR_URL}" </dev/null 2>/dev/null \
+  | openssl x509 > "$tmp/harbor.crt"
+openssl verify -CAfile "$tmp/ca.crt" "$tmp/harbor.crt" \
+  && install -m0644 "$tmp/ca.crt" ./secrets/harbor-ca.crt && rm -rf "$tmp" \
+  || { echo "that file does not vouch for ${HARBOR_URL} — nothing was saved; use an alternative below"; false; }
 ```
 
-If it prints *"Harbor is not reachable"*, fix the A record before continuing.
+Two details in there are load-bearing, and both were found by running it rather than reading it:
 
-If `openssl` errors *after* a successful `curl`, this Harbor does not publish its CA there — use one
-of the alternatives below.
+- It downloads to a scratch file, **not** straight to `./secrets/harbor-ca.crt`. If Harbor answers
+  with an empty body, `curl` still succeeds, and writing directly would leave you a **zero-byte**
+  file having **destroyed a good one you already had**.
+- It then asks Harbor for its own certificate and requires the downloaded file to **vouch for it**.
+  Checking only the name on the file is not enough: Harbor keeps its own separate certificate
+  authority internally, and on some setups that is what this address hands out — same name, wrong
+  file. It looks right, and then image pulls fail with `certificate signed by unknown authority`
+  long after this step.
+
+If it prints *"Harbor is not reachable"*, fix the A record before continuing. If it prints *"that
+file does not vouch for"*, nothing was saved — use one of the alternatives below.
 
 Then **check it against a digest you got from whoever runs Harbor**, over some other channel —
 `-k` above means you fetched it over a connection you could not yet verify:
@@ -534,7 +548,23 @@ Then **check it against a digest you got from whoever runs Harbor**, over some o
 sha256sum ./secrets/harbor-ca.crt
 ```
 
-**Expect:** the file exists, is `0644`, its subject is a CA, and the digest matches. *(<1 min)*
+**Expect:** `harbor.crt: OK` from the check above, then the file exists, is `0644`, and the digest
+matches. *(<1 min)*
+
+The digest proves it is the file Harbor's operator meant you to have. One more check proves it is the
+right file for **this** Harbor — a certificate left over from an earlier lab is still a perfectly
+valid certificate, and a rebuilt lab issues a new one at the *same address*, so the old file keeps
+looking fine until it fails:
+
+```bash
+make ca-status
+```
+
+**Expect:** `CA-STATUS: ALL-MATCH` — nothing else prints that. *(<1 min)*
+
+Every other outcome names the file, the address and what to do, and exits non-zero. From here on
+`make lab-preflight` repeats this check for you, so a rebuilt lab is caught in the first seconds
+rather than 20 minutes into the mirror.
 
 <details><summary>Alternatives if that endpoint is unavailable</summary>
 
@@ -545,10 +575,10 @@ sha256sum ./secrets/harbor-ca.crt
   make harbor-ca-from-cluster
   ```
 
-Note `make fetch-harbor-ca` derives the CA from the TLS handshake, so it works only when the **last**
-certificate Harbor sends is a self-signed CA that **directly issued** Harbor's certificate — a
-self-signed cert, or a single-level private CA. If there is an **intermediate** in the path (the
-usual corporate PKI) it stops and tells you so: the certificate it extracts cannot verify Harbor's
+Note `make fetch-harbor-ca` takes the CA from the connection Harbor answers on, so it works only when
+the **last** certificate Harbor sends is the one that **directly issued** Harbor's own — a
+self-signed certificate, or a single private CA. If your site puts another certificate in between
+(the usual corporate setup) it stops and tells you so: the certificate it took cannot verify Harbor's
 leaf on its own. Get the CA from Harbor's UI or from your platform team instead.
 
 </details>
@@ -738,7 +768,8 @@ Then **check the routes actually work**, before you rely on those hostnames:
 make verify-ingress           # each *.vks.local host must reach ITS OWN backend
 ```
 
-**Expect:** one `OK` per host — `gitea`, `tekton`, and each app. It sends `Host: <name>.vks.local`
+**Expect:** one OK per host — gitea, tekton and each app — ending in
+`UI(s) reachable through the`. It sends `Host: <name>.vks.local`
 to the ingress LoadBalancer IP directly, so **it needs no DNS and no `/etc/hosts` entry** — and it
 asserts a per-host body marker, not just a 200, because a mis-wired route returns 200 from the
 *wrong* backend. A host that fails here will not work in a browser either, and this names which one and why. *(~1 min)*

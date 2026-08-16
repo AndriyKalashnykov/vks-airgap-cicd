@@ -112,7 +112,7 @@ env_populate() {
   if ! have kubectl; then
     echo "  (kubectl is not on PATH — skipping discovery. Install the toolchain:)"
     echo "     make deps"
-  elif [ ! -f "${KUBECONFIG:-/nonexistent}" ]; then
+  elif [ ! -s "${KUBECONFIG:-/nonexistent}" ]; then
     echo "  (no kubeconfig at '${KUBECONFIG:-unset}' — skipping discovery. Get one:)"
     echo "     make vks-login    # real lab — authenticates and writes KUBECONFIG"
     echo "     make kind-up      # the local KinD stand-in"
@@ -213,7 +213,7 @@ env_check() {
       # kubectl accepts a colon-separated LIST of files; treat that as the operator's business
       # rather than reporting a legitimate multi-file config as "not found".
       *:*) : ;;
-      *) [ -f "${KUBECONFIG:-/nonexistent}" ] || missing+=("KUBECONFIG (file not found: '${KUBECONFIG:-}' — fetch the workload kubeconfig first; a cluster you just created writes ./secrets/\${VKS_CLUSTER_NAME}.kubeconfig)") ;;
+      *) [ -s "${KUBECONFIG:-/nonexistent}" ] || missing+=("KUBECONFIG (file missing or EMPTY: '${KUBECONFIG:-}' — fetch the workload kubeconfig first; a cluster you just created writes ./secrets/\${VKS_CLUSTER_NAME}.kubeconfig)") ;;
     esac
   fi
   if [ "${#missing[@]}" -gt 0 ]; then
@@ -266,7 +266,7 @@ env_validate() {
   #     a BLOCK asserting the opposite.
   # The classifier + these arms mirror 30-vks-login.sh:417-448 deliberately: same evidence, same
   # vocabulary, so an operator who has seen one recognises the other.
-  if [ -n "${KUBECONFIG:-}" ] && [ -f "${KUBECONFIG}" ]; then
+  if [ -n "${KUBECONFIG:-}" ] && [ -s "${KUBECONFIG}" ]; then
     local _kerr; _kerr="$(mktemp)"
     # ⚠️ A FOURTH STATE, AND IT MISFIRED IN THE FIRST VERSION OF THIS BLOCK. With no current-context
     # set, `kubectl cluster-info` does NOT fail against the configured cluster — it falls back to
@@ -347,7 +347,7 @@ env_validate() {
     log_warn "HARBOR_URL is unset or the placeholder — skipping Harbor reachability (real value comes from discovery/.env.state or your .env)"
   else
       local scheme=https; [ "${HARBOR_INSECURE:-0}" = 1 ] && scheme=http
-      local cafg=(); [ "$scheme" = https ] && [ -n "${HARBOR_CA_FILE:-}" ] && [ -f "${HARBOR_CA_FILE}" ] && cafg=(--cacert "${HARBOR_CA_FILE}")
+      local cafg=(); [ "$scheme" = https ] && [ -n "${HARBOR_CA_FILE:-}" ] && [ -s "${HARBOR_CA_FILE}" ] && cafg=(--cacert "${HARBOR_CA_FILE}")
       # NO -k fallback: over https with no CA file, use curl's DEFAULT system trust (correct for a
       # publicly-trusted Harbor). A self-signed Harbor with no HARBOR_CA_FILE then FAILS honestly on
       # TLS (curl exit 60) instead of a silent skip-verify that proved nothing about the trust anchor.
@@ -394,7 +394,7 @@ env_validate() {
         # Harbor. An error that names the wrong cause sends the operator to fix something that is not broken.
         local _ca_verdict _h _p          # these three leaked to GLOBAL scope until 2026-08-08
         _ca_verdict=0
-        if [ -n "${HARBOR_CA_FILE:-}" ] && [ -f "${HARBOR_CA_FILE}" ]; then
+        if [ -n "${HARBOR_CA_FILE:-}" ] && [ -s "${HARBOR_CA_FILE}" ]; then
           # ⚠️ Strip an IPv6 bracket form BEFORE splitting on ':', or `%%:*` cuts "[fd00" out of
           # "[fd00::1]:443" and ca_verifies_endpoint returns 2 ("could not reach") — a wrong cause
           # for a perfectly good anchor.

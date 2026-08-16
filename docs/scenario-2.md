@@ -40,14 +40,28 @@ The Supervisor puts each installed service in its own namespace, named `svc-<ser
 `<id>` is generated, so you read it rather than guess it. These two commands find yours:
 
 ```bash
-HARBOR_NS=$(kubectl get ns -o name | sed 's|namespace/||' | grep '^svc-harbor-' | head -1)
-ARGOCD_NS=$(kubectl get ns -o name | sed 's|namespace/||' | grep '^svc-argocd-service-' | head -1)
+err=$(mktemp)
+all_ns=$(kubectl get ns -o name 2>"$err" | sed 's|namespace/||')
+HARBOR_NS=$(printf '%s\n' "$all_ns" | grep '^svc-harbor-' | head -1)
+ARGOCD_NS=$(printf '%s\n' "$all_ns" | grep '^svc-argocd-service-' | head -1)
 echo "Harbor: ${HARBOR_NS:-NOT FOUND}   ArgoCD: ${ARGOCD_NS:-NOT FOUND}"
+[ -s "$err" ] && echo "the cluster said: $(tail -1 "$err")"
+rm -f "$err"
 ```
 
-**Expect:** two namespace names, each ending in a generated id. If either says it was not found, that
-service is not installed on this Supervisor — you are not a tenant of it yet, so ask your platform
-team before going further.
+**Expect:** two namespace names, each ending in a generated id.
+
+`NOT FOUND` has **three** different causes, and the line beginning *"the cluster said"* — printed
+only when there was an error — tells you which. Read it before you ask anyone for anything:
+
+| what the cluster said | what it means | what to do |
+|---|---|---|
+| nothing | the Supervisor answered, and those services really are not installed | you are not a tenant of them yet — ask your platform team |
+| `is forbidden` | they exist; you are simply not allowed to **list all** namespaces, which is normal for a tenant | ask the platform team for the two namespace **names**, and skip to the next command |
+| `connection refused`, `localhost:8080`, `no such host` | nothing was asked at all — you have no working kubeconfig for the **Supervisor** yet | fix that first; this step cannot tell you anything until then |
+
+That last row is the common one on a fresh jump box: without a kubeconfig, `kubectl` quietly tries
+`localhost:8080`, finds nothing, and every step after this inherits the emptiness.
 
 Now read their LoadBalancer addresses:
 
@@ -131,6 +145,7 @@ deploys nothing while reporting success**:
 | `ARGOCD_PROJECT` | *your granted AppProject* | **not** `default`; your project role must permit the destination |
 | `ARGOCD_AUTH_TOKEN` | *mint it first* | see the note below — it is a precondition, not just a value |
 | `ARGOCD_DEST_SERVER` | *your guest cluster API URL* | the guest must be **registered** as an ArgoCD destination first (admin-only; request it) |
+| `ARGOCD_REGISTER` | `never` | registering a cluster is admin-only. Without this, `make gitops` tries, is refused, and you get an error about permissions instead of the clear "ask your admin to register it" |
 
 <!-- -->
 
@@ -169,7 +184,7 @@ cluster's generated passwords. `make kind-down` removes it **only if the KinD fl
 
 ## 1. Finish your .env
 
- The discovery step above filled the Harbor + ArgoCD values,
+The discovery step above filled the Harbor + ArgoCD values,
 `ARGOCD_NAMESPACE`, and `KUBECONFIG` / `VKS_CONTEXT`. Only the **Gitea password** (a login for
 the component **we** install) and the **VKS auth method** remain:
 
@@ -189,29 +204,44 @@ to the verified shape but not yet lab-validated). For the legacy vSphere plugin,
 
 ## 2. Save the Harbor CA certificate
 
- to `./secrets/harbor-ca.crt` (the
-`HARBOR_CA_FILE` path). If the lab handed you the cert, drop it there. Otherwise fetch it
-from the running Harbor with **`make fetch-harbor-ca`** (reads `HARBOR_URL`, writes
-`HARBOR_CA_FILE`), or by hand:
+Harbor's certificate was issued by your lab's own certificate authority, not by a public one, so
+nothing on your jump box trusts Harbor yet. Save that authority's certificate at
+`./secrets/harbor-ca.crt` — the `HARBOR_CA_FILE` path you set in Step 1. If the platform team
+already sent you that file, save it there and go straight to the check at the end of this step.
+
+Otherwise ask Harbor for it:
 
 ```bash
-make fetch-harbor-ca     # HARBOR_URL → HARBOR_CA_FILE; it takes the ISSUER cert of the chain and openssl-verifies it before writing
+make fetch-harbor-ca     # reads HARBOR_URL, writes HARBOR_CA_FILE
 ```
 
-Do **not** hand-roll this with `openssl s_client … | openssl x509` — that pipes only the first PEM (the
-server **leaf**), not the issuing CA, so it *passes* on a self-signed KinD Harbor but *fails* on a
-cert-manager Harbor (the real lab) with `x509: certificate signed by unknown authority`. If you must do it
-by hand, extract the **last** cert of the chain and `openssl verify -CAfile` the leaf against it.
+Many shared Harbors do not send it, and then this stops and tells you so:
 
-(You may also see a **Registry Certificate** download on the Harbor project page, but it is **empty** on a
-Harbor whose TLS is terminated by an ingress / cert-manager — the usual shared-lab shape — so treat
-`make fetch-harbor-ca` as the reliable path, and ask the platform team for the issuing CA PEM if neither
-works.) The CA is
-consumed in **two** places, both handled for you: `make mirror` builds a **sudo-free** trust
-bundle (`SSL_CERT_FILE` = the system CAs + your Harbor CA) so `crane` pushes over HTTPS
-**without** touching the jump box's system trust store, and `make platform` creates an
-in-cluster ConfigMap **`harbor-ca`** (key `ca.crt`) so Kaniko/Tekton trust it too. If Harbor
-presents a publicly-trusted cert, leave `HARBOR_CA_FILE` empty.
+```text
+FATAL harbor.example:443 presents ONE certificate that is NOT self-signed (subject != issuer).
+      Its CA is not on the wire, so it cannot be fetched from here.
+```
+
+If you see that, the certificate you need really is not available from Harbor's connection, and
+nothing on your side can pull it out of one. **Ask the platform team for the file** and save it
+yourself. There is also a way to read it out of the cluster, but it needs a grant a tenant is not
+given: the same object holds that authority's **private key**, and Kubernetes cannot hand out one
+part of an object without the rest. Scenario 1 covers that route, for the person who installed
+Harbor.
+
+Do **not** build the file by hand from `openssl s_client`: what that gives you is Harbor's own
+certificate rather than the one that issued it, so it appears to work and then fails later with
+`x509: certificate signed by unknown authority`.
+
+You will check that the file is the right one for **this** Harbor in the next step, once the tools
+that can check it are installed. A file that *looks* like a CA but belongs to a different server
+fails much later, as a TLS error naming neither the file nor this step.
+
+The CA is then used in **two** places, both handled for you: `make mirror` builds a **sudo-free**
+trust bundle (`SSL_CERT_FILE` = the system CAs + your Harbor CA) so `crane` pushes over HTTPS
+**without** touching the jump box's system trust store, and `make platform` creates an in-cluster
+ConfigMap **`harbor-ca`** (key `ca.crt`) so Kaniko/Tekton trust it too. If your Harbor presents a
+publicly-trusted certificate, leave `HARBOR_CA_FILE` empty and skip this step.
 
 For **ArgoCD**'s self-signed CA (only needed if you drive `argocd login` with verification, or
 to trust its UI), fetch it the same way — `ARGOCD_SERVER` is already set from discovery, so run
@@ -227,9 +257,22 @@ make vks-login    # validates $KUBECONFIG + context against the lab cluster
 
 **Expect:** `prereqs installed. Versions:` followed by the pinned version of each tool.
 
+`make deps` is also what installs `openssl`, so now you can check the CA certificate you saved in
+Step 2 really is the one that signed **this** Harbor's:
+
+```bash
+make ca-status
+```
+
+**Expect:** `CA-STATUS: ALL-MATCH` — nothing else prints that. *(<1 min)*
+
+If it instead says the certificate is **not valid for this address**, the file is fine and the
+address is wrong: Harbor's certificate is usually issued for its DNS name, not for the IP behind it,
+so put the name in `HARBOR_URL` and give that name an A record pointing at the IP you discovered.
+
 ## 3b. Install the Broadcom VCF/VKS lab CLIs
 
- You need the **licensed** `argocd-vcf` +
+You need the **licensed** `argocd-vcf` +
 `vcf` binaries if **either** applies (both are the normal VKS case):
 
 - you authenticate with `VKS_AUTH_METHOD=vcf` — `scripts/30-vks-login.sh` hard-requires `vcf`; or
@@ -254,16 +297,19 @@ picks the archive matching **this jump box's OS/arch** and the **pinned versions
 `.env.example`) and ignores the rest — a mixed folder resolves deterministically, and if the
 pinned version isn't present it errors clearly rather than ever installing a different version.
 
-`VCF_CLI_SRC_DIR` is **required** — the installer does not guess where you dropped the files. Set
-it on the command line, or uncomment it in `.env` (gitignored) so every `make` invocation picks
-it up. The version pins in `.env.example` already match the current portal artifacts, so normally
-you only set the folder:
+`VCF_CLI_SRC_DIR` is **required** — the installer does not guess where you dropped the files. Set it
+in `./.env` (gitignored) alongside the other values from Step 1, so every `make` invocation picks it
+up and no path of yours ends up pasted into a command:
+
+| key | value |
+|---|---|
+| `VCF_CLI_SRC_DIR` | the folder you put the Broadcom archives in, e.g. `/home/you/Downloads/vcf` |
+
+The version pins in `.env.example` already match the current portal artifacts, so the folder is
+normally the only thing you set:
 
 ```bash
-make install-vcf-clis VCF_CLI_SRC_DIR=~/Downloads/vcf   # argocd-vcf + vcf + vcf plugins
-# or put it in .env once:  VCF_CLI_SRC_DIR=/home/you/Downloads/vcf   → then just `make install-vcf-clis`
-# versions are pinned in .env.example (ARGOCD_VCF_VERSION / VCF_CLI_VERSION / VCF_PLUGINS_VERSION);
-# keep them in sync with the artifacts you place in the folder.
+make install-vcf-clis     # argocd-vcf + vcf + vcf plugins, from VCF_CLI_SRC_DIR
 ```
 
 **Expect:** `VCF/VKS lab CLIs installed to` and the directory they went to.
@@ -291,8 +337,8 @@ clearly if any is missing. On a minimal box where you skipped `make deps`:
 Because your Harbor project is a **tenant** project (typically **private**), the workload cluster
 must trust the Harbor CA **declaratively** — add the CA to the Cluster spec
 `trust.additionalTrustedCAs` (a request to the platform team if you don't own the Cluster
-resource). The value is the CA PEM **encoded twice with base64** (VKS decodes one layer, then the
-node trust store decodes the inner PEM):
+resource). The value is your Harbor CA certificate file **encoded twice with base64** (VKS decodes
+one layer, the cluster nodes decode the second):
 
 ```bash
 # DOUBLE base64: the outer -w0 keeps it a single line for the Cluster YAML.
@@ -339,6 +385,7 @@ Service — it runs on the Supervisor, not your guest cluster**, so this needs a
 which a locked-down tenant usually does **not** have:
 
 ```bash
+set -a; . ./.env; set +a
 SUP="${VKS_SUPERVISOR_KUBECONFIG:-./secrets/supervisor.kubeconfig}"
 if [ -s "$SUP" ]; then kubectl --kubeconfig "$SUP" get pods -A | grep argocd-application-controller
 else echo "no Supervisor kubeconfig at $SUP — ask the platform team for ARGOCD_NAMESPACE"; fi
@@ -354,22 +401,32 @@ If you have no Supervisor kubeconfig (the common tenant case), **ask the platfor
 
 ## 5. Verify (or create) the in-cluster registry secret
 
- The pipeline pushes the
-built image to Harbor from inside the cluster, which needs a Docker-config secret.
-`make platform` (its `configure-tekton` step, run in Step 6) creates it for you as
-**`harbor-dockerconfig`** in the `ci` namespace, from `HARBOR_USERNAME` / `HARBOR_PASSWORD`.
-Check whether it already exists:
+The pipeline pushes the built image to Harbor from inside the cluster, which needs a Docker-config
+secret. **You do not normally create it** — `make platform` (its `configure-tekton` step, in Step 6)
+creates it for you as **`harbor-dockerconfig`** in the `ci` namespace, from `HARBOR_USERNAME` /
+`HARBOR_PASSWORD`.
+
+So on a **first** run this secret does not exist yet, and neither does the `ci` namespace — the check
+below will say so, and that is the correct answer at this point. It is worth running anyway, because
+on a **re-run** it tells you whether the credential you were given is already in place:
 
 ```bash
+set -a; . ./.env; set +a
 kubectl -n ci get secret harbor-dockerconfig
 ```
 
 <br>
 
-Keep the secret **off argv** — build the `config.json` on disk and load it from a file; kaniko
-needs the key named literally `config.json`, not `.dockerconfigjson`:
+**Only if** Step 6 has already run and the secret is missing or holds the wrong credential, write it
+by hand. Keep the secret **off argv** — build the `config.json` on disk and load it from a file;
+kaniko needs the key named literally `config.json`, not `.dockerconfigjson`. The two `:?` guards are
+load-bearing: without them, empty values produce a **valid-looking secret containing no credential**,
+`kubectl` reports `configured`, and the push fails much later with a 401 naming Harbor:
 
 ```bash
+set -a; . ./.env; set +a
+: "${HARBOR_USERNAME:?set it in .env — an empty value writes a secret with no credential in it}"
+: "${HARBOR_PASSWORD:?set it in .env — an empty value writes a secret with no credential in it}"
 umask 077
 auth=$(printf '%s:%s' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" | base64 -w0)
 printf '{"auths":{"%s":{"auth":"%s"}}}' "$HARBOR_URL" "$auth" > /tmp/harbor-config.json
@@ -379,7 +436,7 @@ rm -f /tmp/harbor-config.json
 ```
 
 **Expect:** a line naming `harbor-dockerconfig`, ending in `created` or `configured` — both are
-fine, the apply is idempotent.
+fine, and re-running it is safe.
 
 The Kubernetes secret is built from your Harbor **login/password**; Harbor's **REST API** is
 used only to create a robot account (if you self-service one) — it does not create this cluster

@@ -103,7 +103,10 @@ case "$*" in
 esac
 EOF
 chmod +x "$TMP/bin/kubectl"
-: > "$TMP/fake.kc"
+# A kubeconfig fixture must have CONTENT: env-check tests `-s`, not `-f`, because a 0-byte
+# kubeconfig passed the gate and kubectl then fell back to localhost:8080 (measured; a real
+# 0-byte secrets/testcluster.kubeconfig was in the tree). An empty fixture here asserts the bug.
+printf 'apiVersion: v1\\nkind: Config\\nclusters: []\\n' > "$TMP/fake.kc"
 run_populate() {  # $1 = HARBOR_URL in .env
   cat > "$TMP/.env" <<EOF
 HARBOR_URL=$1

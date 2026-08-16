@@ -157,6 +157,16 @@ else
   ok "${lbs} LoadBalancer Service(s), all with an external IP — a provider is assigning addresses"
 fi
 
+# ── 4. STALE TRUST ANCHORS ────────────────────────────────────────────────────────────────────
+# ONE implementation, in 29-ca-status.sh, sourced here. The first draft of this was an inline copy
+# of the probe loop; two copies of one predicate is the shape this repo keeps getting bitten by, and
+# `make ca-status` needs the same logic standalone. Sourcing gives the function without running the
+# report (the script returns early when sourced).
+# shellcheck source=scripts/29-ca-status.sh
+. "${SCRIPT_DIR}/29-ca-status.sh"
+_stale=0; ca_status_report || _stale=$?
+problems=$((problems + _stale))
+
 printf '\n' >&2
 if [ "$problems" -eq 0 ]; then
   log_info "LAB PREFLIGHT OK — CRDs, storage and load-balancing look right for this flow."
