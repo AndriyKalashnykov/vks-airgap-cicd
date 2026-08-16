@@ -197,8 +197,11 @@ started filling in. Do **not** re-run `make env-init`: it replaces `.env` with a
 a backup), which would discard the Supervisor details you just set.
 
 Then edit `.env` (these keys are already there, commented, from `.env.example` — uncomment and set;
-**do not paste a `<…>` line into `.env`** — an unedited `<…>` is a shell redirection that truncates
-the rest of the file when it is sourced):
+**do not paste a `<…>` line into `.env`** — an unedited `<…>` is a **syntax error**, and sourcing
+STOPS THERE, so every key below it is silently unset. Measured: a `.env` of `FIRST=ok` /
+`HARBOR_PASSWORD=<SET-IN-.env>` / `LAST=survived` yields `bash: syntax error near unexpected token`,
+`FIRST` set, `LAST` **unset** — and the file itself is untouched, so checking it afterwards tells
+you nothing):
 
 | key | value |
 |---|---|
