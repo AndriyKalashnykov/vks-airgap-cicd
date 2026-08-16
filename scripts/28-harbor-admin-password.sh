@@ -63,7 +63,53 @@ SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kub
 # against `default`, and two matches feeds a multi-line value. Neither is detected. (The doc's old
 # hand-run pipeline had exactly this shape, and under `set -euo pipefail` its `grep -oE` also killed
 # the script with no message when it matched nothing.)
-ns="$(kubectl --kubeconfig "$SUP" get ns -l appplatform.vmware.com/serviceId=harbor -o name 2>/dev/null || true)"
+# AN ESCAPE HATCH FIRST. A tenant who legitimately cannot LIST NAMESPACES gets a correct message
+# from the FORBIDDEN arm below and would still be stuck, so give them a way through: the platform
+# team can simply tell them the name.
+if [ -n "${HARBOR_SERVICE_NAMESPACE:-}" ]; then
+  ns="$HARBOR_SERVICE_NAMESPACE"
+  log_info "harbor namespace: ${ns}  (from HARBOR_SERVICE_NAMESPACE — not discovered)"
+else
+# CLASSIFY THE FAILURE OF THE PROBE WE ACTUALLY RAN. This used to be `2>/dev/null || true`, which
+# made "I could not ask" indistinguishable from "the answer is no" — and the zero-match branch then
+# told the operator to INSTALL Harbor. MEASURED on the live lab: same command, same cluster, same
+# selector; a valid kubeconfig returned 1 namespace and an expired one returned 0, and the script
+# said "no Harbor Supervisor Service on this Supervisor" while Harbor was running. An error that
+# names the wrong cause is worse than a crash — this one sends a tenant to ask their platform team
+# to install a service that is already there.
+#
+# --request-timeout: eleven other call sites use it, and 23-argocd-preflight.sh:47 records that an
+# unbounded kubectl HANGS for >2 min on a black-hole endpoint rather than failing.
+_ns_err="$(mktemp)"; trap 'rm -f "$_ns_err"' EXIT
+_ns_rc=0
+ns="$(kubectl --kubeconfig "$SUP" --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-15s}" \
+        get ns -l appplatform.vmware.com/serviceId=harbor -o name 2>"$_ns_err")" || _ns_rc=$?
+if [ "$_ns_rc" -ne 0 ]; then
+  _sup_hint="Re-issue it:  make vks-login   (scenario-1 Step 3)"
+  case "$(classify_kube_failure "$_ns_err")" in
+    STALE_CA)     die "'${SUP}' does not work against this cluster, and the server ANSWERED — so this
+  is NOT Harbor being absent and NOT a network fault. A REBUILT cluster mints a new CA while the
+  address stays the same, which is exactly what a stale kubeconfig looks like. ${_sup_hint}" ;;
+    UNAUTHORIZED) die "the Supervisor REJECTED these credentials, so we could not ask whether Harbor
+  is installed. This says nothing about Harbor. ${_sup_hint}" ;;
+    FORBIDDEN)    die "authenticated to the Supervisor, but this identity may not LIST NAMESPACES, so
+  we cannot tell whether Harbor is installed. That is an RBAC GRANT, not a missing service:
+  do NOT re-fetch your kubeconfig, and do NOT install Harbor.
+  Ask your platform admin for the Harbor service namespace and set HARBOR_SERVICE_NAMESPACE in .env,
+  or ask them for the admin credential directly." ;;
+    UNREACHABLE)  die "could not reach the Supervisor at all, so we could not ask whether Harbor is
+  installed. This is NOT evidence your kubeconfig is stale — check the address and the network." ;;
+    PLAINTEXT)    die "the Supervisor endpoint answered PLAINTEXT where TLS was expected; we could not
+  ask whether Harbor is installed. Check the server URL in '${SUP}' (http:// where https:// belongs)." ;;
+    NO_KUBE_TARGET) die "'${SUP}' names no cluster to talk to, so nothing was asked about Harbor. ${_sup_hint}" ;;
+    KUBECONFIG_UNUSABLE) die "'${SUP}' is unusable — something it NAMES is missing, unreadable or
+  malformed, so nothing was asked about Harbor. ${_sup_hint}" ;;
+    *)            log_error "could not ask the Supervisor whether Harbor is installed:"
+                  sed 's/^/    /' "$_ns_err" >&2
+                  die "refusing to report Harbor absent on the strength of a probe that did not complete." ;;
+  esac
+fi
+# ONLY NOW is an empty result a fact about the world.
 n="$(printf '%s\n' "$ns" | grep -c . || true)"
 if [ "$n" != 1 ]; then
   log_error "expected EXACTLY ONE namespace labelled serviceId=harbor, got ${n}:"
@@ -72,6 +118,7 @@ if [ "$n" != 1 ]; then
   die "refusing to guess - an empty value would silently target the 'default' namespace"
 fi
 ns="${ns#namespace/}"
+fi
 log_info "harbor namespace: ${ns}  (by label, not by grep)"
 
 # ── the secret: harbor-core, HIGHEST -ver-N ──────────────────────────────────────────────────────
