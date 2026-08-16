@@ -1345,7 +1345,16 @@ check-lib-sourcing: ## Gate: a script that CALLS a lib function must SOURCE the 
 	@$(SCRIPTS)/check-lib-sourcing.sh
 
 .PHONY: static-check
-static-check: check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+.PHONY: static-check-fast
+#check-static-fast: @ The CHEAP half of static-check: the alignment/doc/env gates only (~9s, no toolchain)
+static-check-fast: check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
+
+# static-check is the UNION, so there is exactly ONE list. Defining the fast set separately and
+# leaving static-check with its own hand-typed copy is the enumerated-list rot this repo keeps
+# finding: add a check-* to one and not the other and coverage silently drops with nothing red.
+# Prereqs run left-to-right serially, so this is ORDER-PRESERVING — proven, not assumed:
+#   `make -n static-check` is byte-identical before and after (112 lines, md5 37ed5550e16947fbd8a47ae40d19b6b9).
+static-check: static-check-fast lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)

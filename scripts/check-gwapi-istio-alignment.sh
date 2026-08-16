@@ -30,9 +30,22 @@ url="https://raw.githubusercontent.com/istio/istio/${minor}/go.mod"
 
 gomod="$(curl -sSL --max-time "${GWAPI_FETCH_TIMEOUT_SECONDS:-15}" "$url" 2>/dev/null || true)"
 if [ -z "$gomod" ]; then
+  # GWAPI_REQUIRE_FETCH=1 turns the skip into a FAILURE. CI sets it, because CI has network by
+  # definition and this gate is in the fast set that CI's green now stands for: a rate-limited
+  # raw.githubusercontent would otherwise make that job green while this gate covered NOTHING.
+  # MEASURED 2026-08-16 (adversary round on the CI split): with a blackholed proxy this script
+  # exited 0 with three WARN lines — the exact "passes by not looking" shape, in the only gate
+  # standing between us and a guessed CRD version.
+  # Locally (and on a plane) the loud SKIP is still the right behaviour, so the default is unchanged.
+  if [ "${GWAPI_REQUIRE_FETCH:-0}" = 1 ]; then
+    log_error "check-gwapi-istio-alignment: could not fetch ${url} and GWAPI_REQUIRE_FETCH=1."
+    log_error "  Refusing to report a green this gate did not earn. Re-run when the fetch works."
+    exit 1
+  fi
   log_warn "check-gwapi-istio-alignment: SKIPPED — could not fetch ${url} (offline?)."
   log_warn "  This check is the ONLY thing standing between us and a guessed CRD version. It must"
   log_warn "  run in CI. A green static-check WITHOUT it does not prove the pin is right."
+  log_warn "  (CI sets GWAPI_REQUIRE_FETCH=1 so this path is a FAILURE there, not a skip.)"
   exit 0
 fi
 
