@@ -271,7 +271,46 @@ chain otherwise works — `make harbor-ca-from-cluster` rc=0 (route B, the `<det
 walker skips) and `make harbor-admin-password` rc=0 with a live `http 200`. The failure is purely
 the sink precedence.
 
-## B110 — an EXPIRED Supervisor token reads as "Harbor is not installed", and the script says so
+## B112 — `unwedge-supervisor-service.sh:91` is B110's shape in a MUTATING script
+
+**MEDIUM.** Flagged by the B110 idea-round as out of scope there, because the blast radius is
+different: it is the same swallowed `kubectl … 2>/dev/null` read, but in a script that DELETES. On a
+transport failure it would delete nothing and report "deleted" — a success claim over a no-op,
+rather than a wrong diagnosis. Fix with the same `classify_kube_failure` pattern the four B110
+scripts now use (`26`, `27`, `28`, `24-vks-k8s-version` are the worked examples), and note that a
+mutating script wants a louder refusal than a report does.
+
+## B110 — ✅ CLOSED for the enumerated set (4 of 4) — an EXPIRED Supervisor token read as "Harbor is not installed"
+
+**Fixed 2026-08-16, each with a test the script did not have and a demonstrated RED:**
+
+| | script | what it used to claim |
+|---|---|---|
+| #635 | `28-harbor-admin-password.sh` | "no Harbor Supervisor Service — install it (Step 4)" — on the documented Step 8.5 path |
+| #636 | `24-vks-k8s-version.sh` | burned up to **900s**, then "a Supervisor/content-library problem" |
+| #637 | `27-harbor-ca-from-cluster.sh` | same as #635; **proven live before/after** on the lab with the same expired kubeconfig |
+| #638 | `26-vks-cluster-status.sh` | "cluster \<ns\>/\<name\>: NOT FOUND" |
+
+Each now classifies the probe it actually ran and names the specific cause; `--request-timeout` was
+added throughout (an unbounded kubectl hangs >2 min on a black-hole endpoint); and 27/28 carry a
+`HARBOR_SERVICE_NAMESPACE` escape hatch so a tenant who legitimately cannot list namespaces has a way
+forward rather than a correct message and a dead end. `check-classifier-consumers` now counts **7**
+case-form consumers, all classes handled — the gate-visible `case "$(classify_kube_failure …)"` form
+was used deliberately, since a `case` on a variable would have been invisible to it.
+
+⚠️ **CLOSED for the ENUMERATED set, not for the class.** The reviewer's denominator was an explicit
+FLOOR: it hand-classified the Supervisor-touching subset of **65** swallowed `kubectl … 2>/dev/null`
+reads across **27** files and did not walk all 65. See **B112** for the one it named and excluded.
+
+**Two bugs of my own, both caught by the new tests, both from this repo's own rules:** I set a global
+inside `v="$(_newest_ready)"` — a command substitution is a SUBSHELL, so the rc was discarded and
+every classification silently fell through to the 900s wait (only the ELAPSED assertion caught it;
+rc alone could not, because the timeout path also exits non-zero); and a `trap … EXIT` I nearly added
+to `27` would have been REPLACED by the one already at :61 and leaked a temp file every run.
+
+<details><summary>The original write-up and the refutation of my first design (kept — do not rebuild it)</summary>
+
+## B110 (original) — an EXPIRED Supervisor token reads as "Harbor is not installed", and the script says so
 
 **HIGH — measured on the live lab 2026-08-16, both directions, same command and same cluster.**
 
@@ -371,6 +410,8 @@ instance in the class.
 
 **Related, not counted:** `unwedge-supervisor-service.sh:91` is the same shape in a **mutating**
 script — it would delete nothing and report "deleted". Different blast radius; own row.
+
+</details>
 
 ## B88 — the trivy-DB cache was rejected on a measurement that is 2.5x too small
 
