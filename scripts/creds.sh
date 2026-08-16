@@ -140,8 +140,18 @@ gitea_pw="${GITEA_ADMIN_PASSWORD:-$(_unset_pw GITEA_ADMIN_PASSWORD)}"
 # the .env.example clobber class (load_env sources it with `set -a` AFTER the caller's environment).
 # Measured cost of getting that wrong: creds.sh renders three times inside `make static-check` ->
 # test-scripts -> test-creds-show, i.e. a 45-minute CI hang.
-_argo_rc=0
-argo_pw="$("${SCRIPT_DIR}/argocd-password.sh" --wait 0 2>/dev/null)" || _argo_rc=$?
+# ⚠️ `2>/dev/null` DISCARDED THE ONE THING THE READER NEEDS TO KNOW ABOUT THIS VALUE.
+# argocd-password.sh emits, on stderr, "this is the INITIAL admin password — if you have run
+# 'argocd account update-password' it no longer works." Swallowing it handed the operator a bare
+# password with no sign it was the PRE-ROTATION one — on a runbook (scenario-1 §5) that TOLD them
+# to rotate it. That is the confident-wrong-credential shape, and it is exactly why a live auth
+# PROBE was once proposed here: the probe would have reported a true 401 about a value this repo
+# already knew was superseded. Keep the stderr; render the provenance instead of a bare secret.
+_argo_rc=0; _argo_err="$(mktemp)"
+argo_pw="$("${SCRIPT_DIR}/argocd-password.sh" --wait 0 2>"$_argo_err")" || _argo_rc=$?
+_argo_initial=0
+grep -q 'INITIAL admin password' "$_argo_err" 2>/dev/null && _argo_initial=1
+rm -f "$_argo_err"
 if [ "$_argo_rc" = 0 ]; then :; else
   # SAME CLASS AS THE TWO ABOVE, third row: "<VKS-provided — get it from your lab>" is only true on a real
   # lab. On a KinD box ArgoCD's password is GENERATED at install like the others, so telling the operator
@@ -287,6 +297,12 @@ add_row() { rows="${rows}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\n'; }
 add_row "Gitea"  "$gitea_url"  "$gitea_user"  "$gitea_pw"
 add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)"
 add_row "Harbor" "$harbor_url" "$harbor_user" "$harbor_pw"
+# Render the PROVENANCE with the value. A bare secret here reads as "this is your password",
+# and on the primary runbook it is the pre-rotation one from Step 5 onward — which is the state
+# that produced a live 401 and a backlog row proposing a network probe to detect it.
+if [ "${_argo_initial:-0}" = 1 ] && [ -n "$argo_pw" ]; then
+  argo_pw="${argo_pw}   <- INITIAL secret; superseded if you ran 'argocd account update-password'"
+fi
 add_row "ArgoCD" "$argocd_url" "$argo_user"   "$argo_pw"
 while read -r _a; do
   [ -n "$_a" ] || continue
