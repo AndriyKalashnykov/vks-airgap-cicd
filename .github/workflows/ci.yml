@@ -212,6 +212,17 @@ jobs:
             go-
 
       - name: make static-check
+        env:
+          # CI has network by definition, so a schema that could not be FETCHED is a FAILURE here,
+          # not a skip — the same reason static-check-fast sets GWAPI_REQUIRE_FETCH=1 below.
+          # MEASURED 2026-08-16 without it, both schema sources pointed at a black hole:
+          # `make validate` exited 0 printing "validate: OK" while EIGHT directories reported
+          # N-of-N resources could not have their schema downloaded (16/16, 9/9, 8/8, 3/3, 2/2,
+          # 2/2, 1/1, 1/1). A green gate over ZERO validated resources — and on a cold runner
+          # whose kubeconform cache missed and whose CDN call was throttled, that is the live case.
+          # The lenient default stays for local dev (a laptop on a train must not red on a CDN).
+          KUBECONFORM_REQUIRE_SCHEMAS: '1'
+          GWAPI_REQUIRE_FETCH: '1'
         run: make static-check
 
   # Docs gate: markdownlint (via npx) + the README-scenario gate. CHEAP — no Docker.
