@@ -29,6 +29,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
+# engine_build_isolation lives HERE, not in os.sh (which defines container_engine/engine_choice/
+# engine_packages). Calling it without this source dies `command not found`, rc=127 — measured on a
+# real matrix row, and invisible to `make ci` because no offline test executes this build path.
+# shellcheck source=scripts/lib/engine.sh
+. "${SCRIPT_DIR}/lib/engine.sh"
 load_env
 
 : "${BUILDER_IMAGE_TAG:?}"
