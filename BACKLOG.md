@@ -109,29 +109,84 @@ the ArgoCD namespace, and whether the Supervisor can route to a guest LoadBalanc
 [`docs/lab-validation-plan.md`](docs/lab-validation-plan.md), in a better form than a backlog line: each
 is a numbered step with its command, its expected observable, and what to send back.
 
-## B84 — `export VAR=x; make <target>` is SILENTLY defeated by `-include .env`
+## B84 — ✅ CLOSED. `export VAR=x; make <target>` was silently defeated, and the FIX inverted `.env` vs `.env.state`
 
-MEASURED 2026-08-09. GNU make lets a **makefile assignment beat the environment**, and the
-Makefile's `-include .env` is exactly that. So:
+MEASURED 2026-08-09, closed 2026-08-16 (#657). GNU make lets a **makefile assignment beat the
+environment**, and a plain `-include` is exactly that.
 
-| form | effective value |
+`.env` was rewritten to `?=` in 8db2da1. **The state overlay was not** — and it is the include that
+matters most, because `state_set` writes exactly the SELECTOR class there: `KUBECONFIG`,
+`HARBOR_URL`, `HARBOR_CA_FILE`, `VKS_CONTEXT`, `INGRESS_CONTROLLER`, `ARGOCD_KUBECONFIG`.
+
+    export HARBOR_URL=harbor.OPERATOR-CHOSE-THIS   ->   HARBOR_URL=[harbor.from-STATE]
+
+Not theoretical: `fetch-harbor-ca` passes `$(HARBOR_URL)`/`$(HARBOR_CA_FILE)` as **argv** to
+`fetch-ca.sh`, which deliberately does not call `load_env` — so the selector snapshot cannot rescue
+it, and the operator fetches a CA from the overlay's Harbor while believing they named another.
+
+**The fix introduced its own regression, and that is the part worth remembering.** `?=` inverts
+file-vs-file order: `load_env` SOURCES the files so the LAST wins, while under `?=` the FIRST wins.
+Rewriting the overlay in place made a stale `.env` beat the just-discovered state. The includes are
+now in REVERSE order (kind, state, `.env`), each `-include` guarded on its SOURCE existing so a
+deleted `.env` cannot keep applying through its orphaned generated file.
+
+`make test-env-precedence` — 14 cases, and it LIFTS the include blocks out of the real Makefile
+rather than retyping them, so it cannot keep passing after someone reorders the real ones. Case 10
+is a positive control that rebuilds the pre-fix shape and requires it to STILL defeat `export`.
+
+## B86 — ⚠️ REFUTED AS WRITTEN. Do NOT make the real-lab path call `state_stamp`
+
+**The row below asked for something MEASURED to destroy values.** An idea-round (2026-08-16) refuted
+three of its four candidate fixes on one fact the row does not contain: **the sink is written under
+TWO different API servers**, so a scalar `VKS_STATE_SERVER` cannot describe it.
+
+| written by | under which kubeconfig |
 |---|---|
-| `export VKS_NAMESPACE=wld03; make vsphere-namespace` | **`lab`** (from `.env`) |
-| `make vsphere-namespace VKS_NAMESPACE=wld03` | `wld03` |
+| `HARBOR_USERNAME` / `HARBOR_PASSWORD`, `ARGOCD_LB_IP` | **Supervisor** |
+| `INGRESS_LB_IP`, `GITEA_LB_IP` (after `make use-guest-kubeconfig`) | **guest** |
 
-Only the command-line form wins, and make then EXPORTS its own value to the recipe, so
-`load_env`'s selector snapshot cannot rescue it — the script never sees the operator's value.
+Stamping ARMS `state_check`'s mismatch refusal, which is dead code today only because the sink is
+unstamped. MEASURED A/B on the same sink, only the stamp differing:
 
-scenario-1 already uses the command-line form, so no documented instruction is wrong. The
-hazard is the natural `export`-then-`make` habit, which fails silently. It caught me while
-testing `make vsphere-namespace`: it operated on `lab` while I believed it was creating
-`wld03`. Running the script DIRECTLY (bypassing make) used the override correctly.
+| sink state | `HARBOR_PASSWORD` | `HARBOR_URL` | `INGRESS_LB_IP` |
+|---|---|---|---|
+| unstamped (today) | `SupervisorHarborSecret` | `10.0.0.9` | `10.0.0.20` |
+| **stamped for guest** | **LOST** | **LOST** | **LOST** |
 
-Options: document it beside the `.env` clobber rule; or have `load_env` prefer a
-`VKS_*_OVERRIDE`-style key. NOT yet decided - recorded so the next person does not
-re-discover it by having a target act on the wrong namespace.
+And from a Supervisor shell — which scenario-1 says is where everything runs — `creds-show` after
+stamping **keeps the banner AND loses the values**: `values-provenance: STORED`, `Harbor
+https://harbor.vks.local admin <not published>`. It trades a cosmetic over-alarm for silent wrong
+values on half the walk. A mirror push aimed at `harbor.vks.local` instead of the real LB is the
+sharp end.
 
-## B86 — `values-provenance` can never read `DISCOVERED` on the real-lab path
+Two further findings, both measured:
+
+- **`state_stamp` on a box with NO sink CREATES one**, producing a false `DISCOVERED` over pure
+  `.env.example` placeholders — *strictly worse* than the bug this row reports: today's failure
+  over-alarms, that one under-alarms.
+- **The row's stated hazard is FALSE.** `state_stamp` never archives; it is a pure upsert. The real
+  hazard is silent misattribution, not deletion. A wrong hazard misdirects the next session.
+
+**THE DESIGN THAT SURVIVES — no new writes.** Split the ladder and let per-value liveness carry the
+alarm: `STORED` becomes `UNSTAMPED` (expected on a lab; neutral wording) vs `MISMATCHED` (stamped
+AND contradicted — the only state that PROVES staleness, and the only one that keeps the loud
+banner); stop prescribing `make state-stamp` in `creds.sh` and `lib/state.sh:95` (measured: 3 warn
+lines per `load_env`, i.e. per script invocation — a bigger alarm surface than the banner this row
+is about, prescribing the refuted action); and extend the existing bounded TCP probe from
+`INGRESS_LB_IP` to `HARBOR_URL` and the resolved ArgoCD address. No writes means `state_check`'s
+refusal stays disarmed, so the CRITICAL above cannot occur.
+
+**Settle first, in one command on a live lab** (the round could not, and if the answer is "same
+endpoint" the CRITICAL collapses):
+
+    kubectl --kubeconfig secrets/supervisor.kubeconfig config view --minify \
+      -o jsonpath='{.clusters[0].cluster.server}'      # vs the same against the guest kubeconfig
+
+Stale in the original row below: it cites `Makefile:264`; the caller is `Makefile:305`.
+
+---
+
+### B86, as originally written (kept for its evidence — the DESIGN in it is refuted above)
 
 **HIGH.** `state_stamp` is called from exactly two places: `scripts/05-kind-up.sh:156` (KinD
 only) and `Makefile:264` (a manual `make state-stamp`). **No real-lab install script calls
@@ -149,10 +204,12 @@ is to tell the operator what is true. A banner that fires on every correct insta
 them to ignore it — and then the case it exists for (a genuinely stale overlay after a lab
 rebuild) is ignored too, because **the two are byte-identical**.
 
-⚠️ **Design change — `vks-adversary` BEFORE implementing.** `scripts/05-kind-up.sh:148-155`
-documents the trap in detail: `state_stamp` reads the AMBIENT `KUBECONFIG`, so stamping at
-the wrong moment on a lab box can archive a live sink and **destroy the only copy of the
-generated passwords**. It has to go where `KUBECONFIG` already points at the guest cluster.
+⚠️ **This paragraph is the part that was MEASURED FALSE.** `state_stamp` does NOT archive — it is
+a pure upsert (`lib/state.sh:55-64` -> `state_set` -> `set_env_var:826-831`); a re-stamp over a
+populated, mismatched sink left `HARBOR_PASSWORD`/`GITEA_CI_TOKEN` intact and created no `.stale-*`
+file. `state_archive` is reachable only from `state_claim_kind`, the KinD WRITE path. And "put it
+where KUBECONFIG points at the guest cluster" is precisely the stamp that loses the Supervisor half.
+See the refutation above before touching this.
 
 ## B87 — ✅ CLOSED. `test-creds-show.sh` now covers the real-lab provenance path
 
@@ -228,7 +285,39 @@ the lab is up, and a 401 from either is a true finding by construction (it is th
 `<not set>`, so there is a recording gap as well as a testing gap. Settle which script should
 publish `ARGOCD_SERVER` on the real-lab path before writing the probe.
 
-## B111 — Step 8.5 repairs HARBOR_PASSWORD into the sink that LOSES, so the repair never takes effect
+## B111 — ✅ CLOSED (#658). The writers now ASSERT their write took effect — and the round found a worse, SILENT case
+
+All THREE fixes this row proposed were REFUTED, each by measurement, and a fourth survived.
+
+- **repair writes the overlay** — re-creates the exact harm #641 fixed. (The row's objection to it
+  was itself false: `kind-down.sh:59` refuses to prune an unstamped overlay, so on a lab box it is
+  never pruned.)
+- **`load_env` sources `.env` last** — a stale `.env` `HARBOR_URL` then beats the discovered LB IP
+  (measured: `harbor.OLD-LAB.example` vs `172.18.0.5`), and it contradicts
+  `test-env-precedence.sh:76-78`, written the same day. That test is right; the candidate is wrong.
+- **repair deletes the overlay key** — a per-value fix on a 4-of-6-site class, and no `state_unset`
+  exists.
+
+**THE CRITICAL THE ROW WOULD HAVE MISSED, and it does not 401.** Both Harbor keys ship COMMENTED in
+`.env.example`, so at Step 4 `HARBOR_PASSWORD` is unset, `04-install-harbor-service.sh`'s
+`[ -n "${HARBOR_PASSWORD:-}" ] ||` guard is false, and it `state_set`s ADMIN's credential into the
+overlay — on the DEFAULT scenario-1 admin path, every time. Step 9's robot then writes `.env` and is
+shadowed, so `make harbor-robot` prints *"the pipeline now runs as the ROBOT, not as admin"* while
+the pipeline runs as Harbor **admin**. Admin works, so nothing surfaces it; it also defeats
+`22-harbor-robot.sh`'s own `robot$*` re-run guard, minting a second robot unnoticed.
+
+**Shipped:** `assert_env_effective` in `lib/os.sh`, called by both writers. It changes no
+precedence, writes no overlay, deletes nothing, and generalises to every future `set_env_var`
+caller — which had no post-write check at all. ⚠️ The `unset` inside it is the whole test: both keys
+are in `load_env`'s SELECTOR SNAPSHOT, which restores the caller's exported value, so a re-resolve
+without it passes unconditionally on exactly the box where the bug is live. ABLATION-PROVEN —
+deleting the `unset` flips the vacuity case from rc=1 to rc=0 (`make test-env-effective`, 3 cases).
+
+**Deliberately NOT built:** a static gate (it would flag the 4 sites that are correct by design, and
+its only remedy is the refuted candidate 1) and a runtime shadow-warning (semantic — the overlay
+winning is CORRECT for `HARBOR_URL` and WRONG for `HARBOR_PASSWORD`, and no matcher separates them).
+
+<details><summary>the original row, kept for its measurement</summary>
 
 **HIGH — measured end-to-end on the live lab 2026-08-16, and this is why B109's credentials were 401.**
 
@@ -282,6 +371,8 @@ secrets — the warning `load_env` already prints). Run an idea-round before tou
 chain otherwise works — `make harbor-ca-from-cluster` rc=0 (route B, the `<details>` alternative the
 walker skips) and `make harbor-admin-password` rc=0 with a live `http 200`. The failure is purely
 the sink precedence.
+
+</details>
 
 ## B114 — the break-glass unwedge CREATES the next wedge, then gives advice that cannot resolve it
 
@@ -507,9 +598,24 @@ script — it would delete nothing and report "deleted". Different blast radius;
 
 </details>
 
-## B88 — the trivy-DB cache was rejected on a measurement that is 2.5x too small
+## B88 — ✅ CLOSED, no action: the measurement stands and the conclusion it argued for is now much weaker
 
-`.github/workflows/ci.yml:147` records the 2026-07-14 decision to DROP a trivy-DB cache,
+**What changed, 2026-08-16.** `static-check` was restored per-PR — but on a `static-check-pr`
+target that deliberately EXCLUDES trivy (measured: `make -n static-check-pr` -> 0 trivy
+invocations; `make -n static-check` -> 3). So the ~25s this row correctly re-measured is now paid
+**once a week**, not once per PR. That is roughly a 20x reduction in what the cache would buy,
+against a staleness bound on a security gate — and the row's own closing line already said a bigger
+saving is not by itself a reason to overturn a correctness call.
+
+The re-measurement is still worth keeping (the recorded decision's "~10s" was 2.5x too small, and
+the DATE-KEYED cache option genuinely never appeared in it), but nothing should be done about it.
+If per-PR trivy is ever reconsidered, this row is the number to weigh — not before.
+
+Stale citation corrected while here: the decision is at `.github/workflows/ci.yml:194`, not :147.
+
+<details><summary>the original row, kept for the measurement</summary>
+
+`.github/workflows/ci.yml:194` (was :147) records the 2026-07-14 decision to DROP a trivy-DB cache,
 reviewed by java-adversary + docker-adversary, on the grounds that it *"would silently serve
 a DB up to trivy's 24h client interval, missing same-day CVEs, **for ~10s**"*.
 
@@ -532,3 +638,5 @@ trivy's internal interval — that option does not appear in the recorded decisi
 
 ⚠️ Do NOT re-add it without a fresh adversary round: the original rejection was a CORRECTNESS
 call about a security gate, and a bigger saving is not by itself a reason to overturn one.
+
+</details>

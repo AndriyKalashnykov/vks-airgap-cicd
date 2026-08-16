@@ -394,7 +394,7 @@ up and no path of yours ends up pasted into a command:
 | `VCF_CLI_SRC_DIR` | the folder you put the Broadcom archives in, e.g. `/home/you/Downloads/vcf` |
 
 The version pins in `.env.example` already match the current portal artifacts, so the folder is
-normally the only thing you set:
+normally the only thing you set.
 
 Once `VCF_CLI_SRC_DIR` points at that folder, the install itself is the `make install-vcf-clis`
 you already ran in Step 0b — re-running it is safe if you had to fix the folder.
