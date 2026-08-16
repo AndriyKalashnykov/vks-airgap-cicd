@@ -13,6 +13,10 @@
 # a WORKING kubectl with no matching namespace must still say "already gone" and exit 0, or the fix
 # has simply broken the legitimate path.
 # ============================================================================
+# shellcheck disable=SC2016
+#   The single-quoted `$` below is GENERATED shell written into a temp script, not this one.
+#   MUST sit above the first COMMAND: placed after `set -uo pipefail` it is silently inert —
+#   the same placement trap as scripts/test-env-precedence.sh, hit twice in one day.
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="${REPO_ROOT}/scripts/unwedge-supervisor-service.sh"
@@ -21,7 +25,8 @@ T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin"
 
 { echo 'set -euo pipefail'
-  echo 'log_info(){ printf "INFO %s\n" "$*"; }; log_error(){ printf "ERROR %s\n" "$*" >&2; }'
+  # printf, not echo: the \n must land LITERALLY in the generated script (SC2028).
+  printf '%s\n' 'log_info(){ printf "INFO %s\n" "$*"; }; log_error(){ printf "ERROR %s\n" "$*" >&2; }'
   echo 'classify_kube_failure(){ grep -qi "i/o timeout|Unable to connect" -E "$1" && printf UNREACHABLE || printf UNKNOWN; }'
   echo 'SERVICE=harbor.tanzu.vmware.com'
   sed -n '/^prefix="svc-/,/^log_info "namespace/p' "$SRC"
@@ -40,21 +45,26 @@ printf '#!/usr/bin/env bash\necho "Unable to connect to the server: dial tcp 10.
 chmod +x "$T/bin/kubectl"
 out="$(PATH="$T/bin:$PATH" bash "$T/gate2.sh" 2>&1)"; rc=$?
 chk 'a FAILING kubectl must refuse, not report "already gone"' 1 "$rc"
-printf '%s' "$out" | grep -q 'cannot LIST namespaces' \
-  && { pass=$((pass+1)); printf '  ok    ...and it names the cause rather than the symptom\n'; } \
-  || { fail=$((fail+1)); printf '  FAIL  refused, but not with the LIST diagnostic: %s\n' "$out"; }
+if printf '%s' "$out" | grep -q 'cannot LIST namespaces'; then
+  pass=$((pass+1)); printf '  ok    ...and it names the cause rather than the symptom\n'
+else
+  fail=$((fail+1)); printf '  FAIL  refused, but not with the LIST diagnostic: %s\n' "$out"
+fi
 # Anchor on the CLAIM, not the substring: the refusal itself says "refusing to conclude ... is
 # already gone", so a bare `grep 'already gone'` flags the CORRECT message. Second time today I
 # wrote a matcher that cannot tell a claim from its denial; the first was the supervisor reporter.
-printf '%s' "$out" | grep -q 'the workload is already gone' \
-  && { fail=$((fail+1)); printf '  FAIL  it STILL claimed the workload is already gone\n'; }
+if printf '%s' "$out" | grep -q 'the workload is already gone'; then
+  fail=$((fail+1)); printf '  FAIL  it STILL claimed the workload is already gone\n'
+fi
 
 printf '#!/usr/bin/env bash\nprintf "namespace/default\\nnamespace/kube-system\\n"\n' > "$T/bin/kubectl"
 out2="$(PATH="$T/bin:$PATH" bash "$T/gate2.sh" 2>&1)"; rc2=$?
 chk 'a WORKING kubectl with no match must still say "already gone"' 0 "$rc2"
-printf '%s' "$out2" | grep -q 'already gone' \
-  && { pass=$((pass+1)); printf '  ok    ...and the legitimate path is unbroken\n'; } \
-  || { fail=$((fail+1)); printf '  FAIL  the no-match path lost its message: %s\n' "$out2"; }
+if printf '%s' "$out2" | grep -q 'already gone'; then
+  pass=$((pass+1)); printf '  ok    ...and the legitimate path is unbroken\n'
+else
+  fail=$((fail+1)); printf '  FAIL  the no-match path lost its message: %s\n' "$out2"
+fi
 
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
