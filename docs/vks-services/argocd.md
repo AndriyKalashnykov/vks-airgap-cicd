@@ -41,7 +41,7 @@ registration is skipped automatically.
 | Why | Confidence |
 |---|---|
 | To put a `clusters` policy in an AppProject role you must be able to **UPDATE the AppProject** — upstream: *"In order to create roles in a project and add policies to a role, a user will need permission to update a project"* ([argo-cd `projects.md`](https://github.com/argoproj/argo-cd/blob/master/docs/user-guide/projects.md)). `projects, update` is not something a tenant holds, so a tenant cannot grant itself `clusters, create`. (Note: `clusters` *is* grantable in an AppProject role — this is the load-bearing reason, not "`clusters` is global-only".) | primary-sourced (upstream docs, 2026-07-14) [src: url=https://raw.githubusercontent.com/argoproj/argo-cd/master/docs/user-guide/projects.md date=2026-07-15 quote="In order to create roles in a project and add policies to a role, a user will need permission to update a project."] |
-| Registration mints a **cluster-admin** ServiceAccount on the guest (Broadcom's own `argocd cluster add` warns: *"will create a service account `argocd-manager` … with full cluster level privileges"*), and Kubernetes **privilege-escalation prevention** only permits a caller who *already* holds those permissions: *"You can only create/update a role binding if you already have all the permissions contained in the referenced role"* ([k8s RBAC](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#privilege-escalation-prevention-and-bootstrapping)). (**On VKS this k8s gate may not bind** — deep-research reports KB 424897 auto-grants cluster-admin to a tenant, so the AppProject-update reason above is the load-bearing one; lab-only claim.) | primary-sourced (k8s RBAC + vendor, 2026-07-14) [src: url=https://raw.githubusercontent.com/kubernetes/website/main/content/en/docs/reference/access-authn-authz/rbac.md date=2026-07-15 quote="You can only create/update a role binding if you already have all the permissions contained in the referenced role"] |
+| Registration mints a **cluster-admin** ServiceAccount on the guest (Broadcom's own `argocd cluster add` warns: *"will create a service account `argocd-manager` … with full cluster level privileges"*), and Kubernetes **privilege-escalation prevention** only permits a caller who *already* holds those permissions: *"You can only create/update a role binding if you already have all the permissions contained in the referenced role"* ([k8s RBAC](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#privilege-escalation-prevention-and-bootstrapping)). (**On VKS this k8s gate does NOT bind for a tenant who holds "Can edit"** — KB 424897's auto-grant was OBSERVED RUNNING on the lab, so the AppProject-update reason above is the load-bearing one. See the measurement below.) | primary-sourced (k8s RBAC + vendor, 2026-07-14) + lab-verified (2026-08-16) [src: url=https://raw.githubusercontent.com/kubernetes/website/main/content/en/docs/reference/access-authn-authz/rbac.md date=2026-07-15 quote="You can only create/update a role binding if you already have all the permissions contained in the referenced role"] |
 
 > Corrected 2026-07-14 — the two reasons above are the current, primary-sourced fact. An earlier grading
 > gave the reason as *"`clusters` is a global-only RBAC resource, not grantable in an AppProject role"*;
@@ -50,6 +50,47 @@ registration is skipped automatically.
 > "Application-Specific Policy" (object-rewrite) set, not a global-only list. The admin-only conclusion
 > survives on the two reasons above.
 > <!-- arc-ok: 2026-07-14 -->
+
+The second reason's VKS-specific caveat was settled on a real lab, and the measurement is worth keeping
+because it also gives the mechanism, not just the outcome:
+
+> **LAB-VERIFIED 2026-08-16 — KB 424897's auto-grant, observed running, in both directions.**
+> VKS 9.1, guest cluster `cicd-gc0816023508` (TKr `v1.35.5+vmware.1`), vSphere Namespace `cicd`.
+> `vmware-system-auth-sync` reconciles the **vSphere Namespace permission level** into guest RBAC,
+> and the mapping was exactly 1:1 with a natural control already present:
+>
+> | permission on the vSphere Namespace (Supervisor) | resulting guest ClusterRoleBinding |
+> |---|---|
+> | `edit` → `sso:Administrators@vsphere.local` | **`cluster-admin`** |
+> | `edit` → `sso:vcf_reserved_-1@vsphere.local` | **`cluster-admin`** |
+> | `view` → `sso:vcf_reserved_-2@vsphere.local` | **none** |
+>
+> Two of two `edit` principals were granted `cluster-admin`; the `view`-only principal got nothing,
+> which is the KB's *"Can View: the user has no access inside the VKS clusters"* — so the mechanism
+> demonstrably discriminates on the permission level rather than on admin-vs-tenant. `system:authenticated`
+> holds only the k8s stock minimums (`system:basic-user`, `system:discovery`, `system:public-info-viewer`).
+> Since **"Can edit" is the normal VKS tenant grant** (it is what lets a tenant create and manage guest
+> clusters), such a tenant IS `cluster-admin` on their own guest — which is also the prerequisite
+> [`scenario-2.md`](../scenario-2.md) states, and it is confirmed here.
+>
+> ⚠️ **Arc, recorded so it is not re-derived.** The first reading of this measurement was BACKWARDS: it
+> counted only two `cluster-admin` bindings, both to admin-looking groups, and concluded "no auto-grant
+> for a tenant, so the k8s gate DOES bind". The `-edit` in `vmware-system-auth-sync-edit:` is the KB's
+> **vSphere Namespace permission level**, not the Kubernetes `edit` ClusterRole — so that enumeration was
+> the auto-grant *working*, not absent. It also enumerated the reconciler's OUTPUT and inferred a property
+> of its RULE; reading the INPUT (the Supervisor-side permission list above) is what settles it.
+>
+> **What this does NOT establish:** one lab, one TKr, one guest cluster, one vSphere Namespace, at one
+> point in time, read with an admin identity. No non-admin principal holds `edit` anywhere in this
+> system, so the tenant case is confirmed by the *rule* and by the `view` control, not by a tenant
+> principal having been configured and observed. Nor was the priv-esc gate's other bypass checked (the
+> `escalate` verb on `clusterroles`, or `bind` on the referenced ClusterRole).
+>
+> **The admin-only conclusion does not rest on any of this.** Its load-bearing reason is that the ArgoCD
+> `Cluster` Secret must be written into ArgoCD's own vSphere Namespace on the Supervisor, which a tenant
+> holds no permission on. Evidence: `/tmp` is not durable — the raw command output is reproduced above,
+> and both commands are recorded with it.
+> <!-- arc-ok: 2026-08-16 -->
 
 A pure VKS tenant therefore **requests** registration from the platform team.
 
