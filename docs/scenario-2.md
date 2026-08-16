@@ -244,9 +244,9 @@ Now wire the repo and run the pipeline.
 
 ## 0c. Remove any stale KinD overlay
 
- the state overlay is sourced *after* `.env`, so a leftover
-one from a local run would silently redirect everything at a kind cluster. Delete it **before you
-start**:
+If this box has ever run the local KinD flow, it left a state overlay behind. That file is sourced
+*after* `.env`, so it WINS — a leftover one would silently redirect everything you are about to do
+at a kind cluster that is not there. Delete it **before you start**:
 
 ```bash
 make state-show       # WHOSE state is this? (prints the cluster it was written for; redacts secrets)
