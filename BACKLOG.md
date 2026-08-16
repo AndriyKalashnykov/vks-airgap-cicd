@@ -173,6 +173,49 @@ Both found by an idea-round `vks-adversary` on 2026-08-10 that **refuted** the p
 port-forward runs). The reachability question it was meant to answer is already answered by
 `verify-ingress` (Host header, no DNS, per-host body marker), now cited in §10.
 
+## B109 — `creds-show`'s credentials were 2-for-2 REJECTED by the live lab, and nothing tests them
+
+**HIGH.** MEASURED against the running lab 2026-08-16, from this box, with the values
+`make creds-show` had just printed:
+
+| what it printed | live reality |
+|---|---|
+| Harbor `https://harbor.env1.lab.test` | ✅ HTTP 200, genuine Harbor API (`/api/v2.0/systeminfo` answers) |
+| Harbor admin password | ❌ **HTTP 401** on `/api/v2.0/users/current` |
+| ArgoCD URL `<not set>` | ❌ but `192.168.101.131` **is** live — `{"Version":"v3.0.19+d67e6eb-vcf"}` |
+| ArgoCD admin password (`ARGOCD_ADMIN_PASSWORD`) | ❌ **HTTP 401** `Invalid username or password` |
+
+This is **not** B86 (the banner always reads `STORED`) or B87 (the test never renders that
+branch). Those say the warning is noisy. This says that on the one occasion the warning was
+checked, **every testable value behind it was wrong**, and the repo has no way to tell the
+operator so — the owner's standing instruction is that these be verified after each lab cut,
+and today that is a manual curl session.
+
+⚠️ **The broad fix is ALREADY REFUTED — do not re-propose it.** The idea-round on 2026-08-10
+(above, B86/B87) measured `make creds-check` at **67% false-RED**: nothing here writes
+`/etc/hosts`, so `*.vks.local` is NXDOMAIN *by design*, and §11's port-forward URLs are live
+only while a port-forward runs. My measurement deliberately touched **neither** class.
+
+**The narrow proposal that survives that refutation** — Harbor and ArgoCD are the only two
+services with their OWN LoadBalancer and a real auth API, so they are reachable exactly when
+the lab is up, and a 401 from either is a true finding by construction (it is the credential
+`make install-all` would use):
+
+1. `env-validate` **already** probes Harbor auth (`scripts/02-env.sh:369`, and it handles 401
+   explicitly at :373). Today it never gets there: the CA check fails first and it returns.
+   Measured output — it correctly reported *"the CA at ./secrets/harbor-ca.crt does NOT verify
+   the certificate harbor.env1.lab.test presents"*, named both as `CN = Harbor CA` (so a name
+   comparison would have said MATCH), and told the operator `make fetch-harbor-ca`. Excellent
+   gate; it just short-circuits the sibling probe.
+2. Add the **ArgoCD** equivalent (`POST /api/v1/session`, 200 = valid, 401 = rejected) —
+   currently nothing anywhere probes an ArgoCD credential.
+3. Report **UNREACHABLE ≠ REJECTED**. Only a reachable endpoint that refuses the stored
+   credential is RED; anything else is a skip with a reason.
+
+**Scope note:** ArgoCD's address is discoverable (its own LB answered) yet `creds-show` prints
+`<not set>`, so there is a recording gap as well as a testing gap. Settle which script should
+publish `ARGOCD_SERVER` on the real-lab path before writing the probe.
+
 ## B88 — the trivy-DB cache was rejected on a measurement that is 2.5x too small
 
 `.github/workflows/ci.yml:147` records the 2026-07-14 decision to DROP a trivy-DB cache,
