@@ -242,7 +242,72 @@ Both found by an idea-round `vks-adversary` on 2026-08-10 that **refuted** the p
 port-forward runs). The reachability question it was meant to answer is already answered by
 `verify-ingress` (Host header, no DNS, per-host body marker), now cited in §10.
 
-## B109 — `creds-show`'s credentials were 2-for-2 REJECTED by the live lab, and nothing tests them
+## B109 — ⚠️ REFUTED. Both halves of its measurement are stale or misread; the REAL defect is fixed (#661)
+
+**Do not build the probe.** An idea-round measured all three proposals down.
+
+**(a) The Harbor 401 was B111**, which is fixed: the repair now verifies against live Harbor before
+writing and then ASSERTS the write survived `load_env` precedence (`assert_env_effective`).
+
+**(b) The ArgoCD 401 is DOCUMENTED CORRECT BEHAVIOUR, not a defect.** `scenario-1.md` §5 tells the
+operator to run `argocd account update-password`, and says in as many words that `make
+argocd-password` / `make creds-show` can then only show the initial one — *"that is them working,
+not failing."* A gate on it reds on **every correctly-followed scenario-1 run, forever**.
+
+### Why each proposal is refuted
+
+1. **"Let the Harbor auth probe run even when the CA check failed"** is not a sequencing change —
+   it is unimplementable without `-k`, and **`-k` TRANSMITS the admin password to an endpoint whose
+   identity was never verified.** MEASURED against a local TLS oracle logging the Authorization
+   header: with a WRONG CA the server received **nothing** (rc 60, code 000 — there is no auth
+   verdict to obtain, so the short-circuit is the only reachable order); with `-k` the server logged
+   `authorization: Basic YWRtaW46...` — the password, in the clear, to whatever now answers that IP.
+   The CA arm exists precisely for a REBUILT lab reusing the same address. It would also break a
+   RED-proven contract test (the `-k` silent-skip regression) and falsify a published promise
+   (`scenario-2.md`: *"there is no -k skip-verify"*).
+2. **The ArgoCD probe cannot make the claim it exists to make.** argo-cd release-2.14 returns the
+   IDENTICAL string — `Invalid username or password` — for a wrong password and for a THROTTLE
+   (`ARGOCD_SESSION_FAILURE_MAX_FAIL_COUNT` 5 per `ARGOCD_SESSION_FAILURE_WINDOW_SECONDS` 300,
+   per-username). B109's own evidence quotes that exact string, so it cannot tell the two apart —
+   and the budget is SHARED with the human's browser logins. (On the lockout question: ArgoCD
+   `admin` is a LOCAL bcrypt account, so the vCenter SSO 3-strike lockout does not apply — but the
+   throttle is worse for a probe, not better.)
+   FALSE-RED over six real operator states: **2 of 6 are structural**, and one of them is the
+   SUCCESS state of the primary runbook (post-`update-password`). A tenant has no admin password at
+   all — their credential is `ARGOCD_AUTH_TOKEN`.
+3. **UNREACHABLE != REJECTED is the only survivor and IT IS ALREADY BUILT.** `harbor_auth_verdict`
+   in `scripts/lib/harbor.sh` returns exactly `accepted | rejected | unchecked:<reason>`, is
+   RED/GREEN-tested, and already runs inside `make preflight` via `24-lab-preflight.sh` — which is
+   the first prereq of `install-all`. The credential probe RUNS today; it is just not in
+   `env-validate`.
+
+### The real defect — FIXED in #661
+
+`creds.sh` ran `argocd-password.sh` with `2>/dev/null`, discarding its own warning: *"this is the
+INITIAL admin password — if you have run 'argocd account update-password' it no longer works."* So
+the operator got a bare password with no sign it was the pre-rotation one, on a runbook that TOLD
+them to rotate it. The probe would have reported a true 401 about a value the repo already knew was
+superseded. The stderr is now kept and the ArgoCD row renders the provenance.
+
+The same round found a live secret leak while reading the only `/api/v1/session` call in the repo:
+the ArgoCD admin password was in **jq's argv**, inside a 60-iteration retry loop
+(`/proc/<pid>/cmdline` is world-readable; `environ` is not). Also fixed in #661.
+
+### Residual worth acting on later, NOT a probe
+
+- `creds-show` is DISQUALIFIED as a home for any network probe: `test-creds-show.sh` carries no
+  `# ci-tier: manual` marker and the test set is DISCOVERED, so it runs inside `make static-check`.
+  A live probe there puts outbound auth in the offline gate — and `creds.sh`'s own header records a
+  45-minute CI hang from exactly that class.
+- `lib/harbor.sh`'s `_harbor_auth_code` hardcodes `https://` while `02-env.sh` treats
+  `HARBOR_INSECURE=1` as `http` — so in the KinD insecure leg the productized probe is
+  PERMANENTLY `unchecked` (measured: `curl -k https://` against a plain-HTTP listener -> rc 35).
+  Single-source the scheme. Small, real, and independent of everything above.
+- The class denominator is 3, not 2: `creds-show` prints Gitea as well, and Gitea has an auth API —
+  it is out of scope only because it is an ingress `*.vks.local` host, i.e. the NXDOMAIN class the
+  earlier `creds-check` refutation already killed. Say that rather than "the only two".
+
+<details><summary>the original row, kept for its measurement</summary>
 
 **HIGH.** MEASURED against the running lab 2026-08-16, from this box, with the values
 `make creds-show` had just printed:
@@ -720,6 +785,8 @@ trivy's internal interval — that option does not appear in the recorded decisi
 
 ⚠️ Do NOT re-add it without a fresh adversary round: the original rejection was a CORRECTNESS
 call about a security gate, and a bigger saving is not by itself a reason to overturn one.
+
+</details>
 
 </details>
 
