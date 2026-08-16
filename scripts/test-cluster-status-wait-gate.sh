@@ -112,5 +112,42 @@ if grep -q 'rebuilt CA' "$TMP/rep"; then ok "report: names the rebuilt-CA cause"
 else bad "report: names the rebuilt-CA cause" "$(tail -2 "$TMP/rep")"; fi
 
 echo
+echo "== B117: a DEFINITIVE NotFound is an ANSWER — do not wait, and do not call it 'could not ask' =="
+
+# THIS STUB IS DEFINED LAST, on purpose: it overwrites $TMP/bin/kubectl, so it must come AFTER every
+# case above has run. (My first attempt spliced it in the middle and the B92 cases then ran against
+# an always-NotFound kubectl and hung — the harness's own stub ordering is load-bearing.)
+cat > "$TMP/bin/kubectl" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+  *"get cluster"*)
+    echo 'Error from server (NotFound): clusters.cluster.x-k8s.io "'"${STUB_CL:-testcluster}"'" not found' >&2
+    exit 1 ;;
+  *controlPlaneEndpoint.port*) printf '%s' "${STUB_PORT:-6443}" ;;
+  *controlPlaneEndpoint.host*) printf '%s' "${STUB_ADV:-}" ;;
+  *"get svc -o json"*) printf '{"items":[]}' ;;
+  version) echo "Client Version: v1.34.0" ;;
+  *) printf '' ;;
+esac
+exit 0
+STUB
+chmod +x "$TMP/bin/kubectl"
+
+read -r rc el <<<"$(run_wait 192.0.2.137 192.0.2.137)"
+if [ "$rc" -ne 0 ]; then ok "notfound: refuses (rc=$rc)"; else bad "notfound: refuses" "rc=0"; fi
+# THE assertion. rc alone cannot tell a refusal from a full budget burn, and the real defect was
+# 1806 SECONDS spent waiting for a Cluster whose create had already been rejected.
+if [ "$el" -lt 4 ]; then ok "notfound: refuses UP FRONT (${el}s < the 8s budget)"
+else bad "notfound: refuses UP FRONT" "took ${el}s — it burned the budget on an object that does not exist"; fi
+if grep -q 'DOES NOT EXIST' "$TMP/out"; then ok "notfound: says DOES NOT EXIST"
+else bad "notfound: says DOES NOT EXIST" "$(grep -m1 'cluster ' "$TMP/out" || echo '<no verdict line>')"; fi
+# The line that shipped and was FALSE here: every classifier arm ends with it.
+if grep -q "this is NOT 'the cluster does not exist'" "$TMP/out"; then
+  bad "notfound: must not print the 'NOT the cluster does not exist' line" "it did — that claim is false for a NotFound"
+else
+  ok "notfound: does not print the 'NOT the cluster does not exist' line"
+fi
+
+echo
 echo "cluster-status wait gate: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ] || exit 1
