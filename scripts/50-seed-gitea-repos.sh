@@ -28,7 +28,7 @@ kubeconfig_ready
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
 : "${GITEA_CI_USER:?}"
-GITEA_ADMIN_EMAIL="${GITEA_ADMIN_EMAIL:-admin@vks-airgap-cicd.local}"
+GITEA_ADMIN_EMAIL="${GITEA_ADMIN_EMAIL:-admin@vks.local}"
 # Ephemeral by default (pick_port) so parallel runs don't collide on a fixed local
 # port; an operator can still pin it via GITEA_LOCAL_PORT.
 LOCAL_PORT="${GITEA_LOCAL_PORT:-$(pick_port)}"

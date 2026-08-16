@@ -256,7 +256,7 @@ if read_state -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME"; then
     _end=$((SECONDS + ${UNINSTALL_CLUSTER_WAIT_SECONDS:-900}))
     while [ "$SECONDS" -lt "$_end" ]; do
       k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" >/dev/null 2>&1 || break
-      sleep "${POLL_INTERVAL_SECONDS:-10}"
+      sleep "${UNINSTALL_POLL_INTERVAL_SECONDS:-10}"
     done
     if k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" >/dev/null 2>&1; then
       note "! still present after the timeout. NOT stripping finalizers — that orphans VMs and FCDs."

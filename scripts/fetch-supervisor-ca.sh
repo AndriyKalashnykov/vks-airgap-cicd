@@ -30,7 +30,7 @@ require_cmd curl unzip openssl
 
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 log_info "fetching vCenter's trusted roots from ${VCENTER_HOST}"
-curl -sk --max-time "${CURL_MAX_TIME_SECONDS:-30}" -o "$tmp/vmca.zip" "https://${VCENTER_HOST}/certs/download.zip" \
+curl -sk --max-time "${VCENTER_CA_FETCH_TIMEOUT_SECONDS:-30}" -o "$tmp/vmca.zip" "https://${VCENTER_HOST}/certs/download.zip" \
   || die "could not download https://${VCENTER_HOST}/certs/download.zip - is that the vCenter FQDN, and does this box resolve it?"
 [ -s "$tmp/vmca.zip" ] || die "vCenter returned an empty certificate bundle"
 unzip -j -o -q "$tmp/vmca.zip" 'certs/lin/*.0' -d "$tmp/vmca/" 2>/dev/null \

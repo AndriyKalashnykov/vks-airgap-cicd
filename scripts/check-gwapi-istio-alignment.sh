@@ -28,7 +28,7 @@ load_env
 minor="release-$(printf '%s' "$ISTIO_VERSION" | cut -d. -f1,2)"
 url="https://raw.githubusercontent.com/istio/istio/${minor}/go.mod"
 
-gomod="$(curl -sSL --max-time "${CURL_MAX_TIME_SECONDS:-15}" "$url" 2>/dev/null || true)"
+gomod="$(curl -sSL --max-time "${GWAPI_FETCH_TIMEOUT_SECONDS:-15}" "$url" 2>/dev/null || true)"
 if [ -z "$gomod" ]; then
   log_warn "check-gwapi-istio-alignment: SKIPPED — could not fetch ${url} (offline?)."
   log_warn "  This check is the ONLY thing standing between us and a guessed CRD version. It must"
