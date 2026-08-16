@@ -1010,7 +1010,11 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint test-endpoint-report test-cluster-status-wait-gate test-harbor-admin-ns-classify test-tkr-classify test-state-echo-back test-uninstall-honesty test-classify-kube-failure test-env-lifecycle test-walk-doc test-harbor-reachable test-harbor-auth-report test-gitea-hook-ids test-argocd-kubeconfig-stale test-ca-anchor-validation ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint test-endpoint-report test-cluster-status-wait-gate test-harbor-admin-ns-classify test-tkr-classify test-state-echo-back test-uninstall-honesty test-classify-kube-failure test-env-lifecycle test-walk-doc test-harbor-reachable test-harbor-auth-report test-gitea-hook-ids test-argocd-kubeconfig-stale test-ca-anchor-validation test-unwedge-transport-refusal ## Run all offline script-logic unit tests
+
+.PHONY: test-unwedge-transport-refusal
+test-unwedge-transport-refusal: ## Offline: a break-glass DELETE must never report success over a no-op (B112)
+	@bash $(SCRIPTS)/test-unwedge-transport-refusal.sh
 
 .PHONY: test-env-lifecycle
 test-env-lifecycle: ## Offline: the .env lifecycle a new operator walks first (init/populate/check)
