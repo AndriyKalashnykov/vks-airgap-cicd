@@ -189,8 +189,40 @@ split_statements() {   # <block text> -> NUL-separated statements on stdout
 # snippet, a doc-about-docs example, a command the reader must NOT run -- was extracted and
 # scheduled for execution. Tracking fence state also makes ```sh / ```bash-with-attributes an
 # explicit decision rather than a silent zero.
+# ── walk-include: the document may DELEGATE a step to a SHARED file ──────────────────────────────
+# `<!-- walk-include: common-steps.md -->` splices that file in AT THIS POINT, so the walker executes
+# what the reader reads. WITHOUT it, a scenario that LINKS to a shared document walks only its own
+# blocks and every counter still reconciles -- MEASURED: a 2-block doc linking a 2-block+1-claim file
+# walked 2 blocks, printed "2 extracted, 2 counted independently", 0 claims, EXIT 0.
+#
+# The marker is an HTML comment: invisible in rendered markdown, accepted by markdownlint (rc=0), and
+# invisible to the OLD parser -- which is exactly why adding it WITHOUT teaching the parser is the
+# fake-green. Both measured 2026-08-16.
+#
+# ⚠️ THE INCLUDE SET IS RESOLVED TWICE, ON PURPOSE, AND THE FLOORS COUNT THE *SOURCES*.
+# The obvious implementation -- have Python write the expansion and grep THAT -- DESTROYS the only
+# real floor in this script. MEASURED: on an extractor death it yields EXPECT_LINES_PARSED=0 AND
+# INDEP_E=0, so `0 >= 0` PASSES, where counting the SOURCES gives `0 >= 26` and REFUSES. A floor
+# computed from the parser's own output cannot detect the parser being wrong -- that is the whole
+# point of the floor. So bash resolves the list itself, below, and cross-checks it against the set
+# Python actually used.
+DOC_DIR="$(cd "$(dirname "$DOC")" && pwd)"
+DOC_SET=("$DOC")
+_incs="$(sed -nE 's|^[[:space:]]*<!--[[:space:]]*walk-include:[[:space:]]*([^[:space:]]+)[[:space:]]*-->[[:space:]]*$|\1|p' "$DOC" || true)"
+while IFS= read -r _i; do
+  # An empty $() in a herestring STILL yields one empty line -- without this the loop body runs once
+  # on nothing and inflates the set.
+  [ -n "$_i" ] || continue
+  _p="${DOC_DIR}/${_i}"
+  [ -f "$_p" ] || { echo "REFUSING: walk-include names a file that does not exist: ${_i} (from $(basename "$DOC"))"; exit 1; }
+  for _seen in "${DOC_SET[@]}"; do
+    [ "$_seen" = "$_p" ] && { echo "REFUSING: walk-include repeats ${_i} — a walk must not execute a step twice"; exit 1; }
+  done
+  DOC_SET+=("$_p")
+done <<< "$_incs"
+
 mapfile -t PARSED < <(python3 - "$DOC" <<'PY'
-import json, re, sys
+import json, os, re, sys
 heading, fence, body, out = "(preamble)", None, [], []
 # <details> is the document's way of saying "this is an ALTERNATIVE, expand it only if the summary
 # describes you". A reader does not run a collapsed block; the walker used to run every one of them.
@@ -205,7 +237,33 @@ details = None
 # rows are instructions: Step 6's table says to change VKS_AUTH_METHOD back to `kubeconfig`, and a
 # walk that ignores it keeps talking to the SUPERVISOR for every step after.
 env_rows, pending, pending_manual = [], [], []
-for line in open(sys.argv[1]):
+
+# Splice each `<!-- walk-include: <path> -->` in at its own position, so the walk's ORDER is the
+# READER's order by construction rather than by assertion. DEPTH 1 ONLY: a marker inside an included
+# file REFUSES rather than recursing, which keeps "what runs, and when" answerable by reading two
+# files. The resolved set is echoed back as __INCLUDE__ rows so bash can prove it resolved the SAME
+# set -- two independent resolutions that must agree.
+INC = re.compile(r'^\s*<!--\s*walk-include:\s*(\S+?)\s*-->\s*$')
+SRC, used = [], []
+_base = os.path.dirname(os.path.abspath(sys.argv[1]))
+for _ln in open(sys.argv[1]):
+    _m = INC.match(_ln)
+    if not _m:
+        SRC.append(_ln); continue
+    _p = os.path.normpath(os.path.join(_base, _m.group(1)))
+    if not os.path.isfile(_p):
+        sys.exit("walk-include UNRESOLVABLE: %s -> %s" % (_m.group(1), _p))
+    if _p in used:
+        sys.exit("walk-include REPEATS: %s" % _m.group(1))
+    used.append(_p)
+    for _sub in open(_p):
+        if INC.match(_sub):
+            sys.exit("walk-include NESTED inside %s — depth 1 only" % _m.group(1))
+        SRC.append(_sub)
+for _u in used:
+    print(json.dumps({"__INCLUDE__": _u}))
+
+for line in SRC:
     # CommonMark: a fence is >=3 backticks and closes on a run of AT LEAST that many with no
     # info string. Assuming exactly 3 mis-parses the ````markdown wrapper people use to SHOW a
     # ```bash block -- and the inner one then gets extracted and EXECUTED.
@@ -256,18 +314,57 @@ for line in open(sys.argv[1]):
         body.append(line)
 if fence is not None: sys.exit("UNCLOSED fence in the document")
 for o in out: print(json.dumps(o))
+# LAST, deliberately — the same discipline PYX already uses, which this extractor never had.
+# `mapfile`'s exit status is ITS OWN, never the substituted process's, so the `||` below is DEAD
+# CODE and always has been. MEASURED both ways: a sys.exit() before any output yields len=0 and
+# "NOT-CAUGHT", and a sys.exit() after one row yields a TRUNCATED parse that reads as SUCCESS.
+# A terminal sentinel is the only thing that can distinguish "finished" from "died partway".
+print(json.dumps({"__EXTRACTOR_OK__": True}))
 PY
 ) || { echo "EXTRACTOR FAILED — refusing to report a walk"; exit 1; }
 
+# The sentinel must be the LAST row, or the extractor died mid-stream and everything above it is a
+# partial document. This is the check the `||` above only appeared to perform.
+if [ "${#PARSED[@]}" -eq 0 ] || [ "${PARSED[-1]}" != '{"__EXTRACTOR_OK__": true}' ]; then
+  echo "REFUSING: the extractor did not run to completion — a walk must not report on a partial parse"
+  exit 1
+fi
+unset 'PARSED[-1]'
+
+# Pull the resolved include set back out and prove BOTH resolutions agree. Two independent
+# resolutions that must match: if they ever diverge, one of them is wrong and neither can be trusted
+# to have counted the right files.
+_pyincs=()
+for _row in "${PARSED[@]}"; do
+  case "$_row" in '{"__INCLUDE__":'*) _pyincs+=("$(printf '%s' "$_row" | python3 -c 'import sys,json;print(json.load(sys.stdin)["__INCLUDE__"])')") ;; esac
+done
+PARSED=("${PARSED[@]/#\{\"__INCLUDE__\":*/}")
+mapfile -t PARSED < <(printf '%s\n' "${PARSED[@]}" | grep -v '^$' || true)
+if [ "${#_pyincs[@]}" -ne "$(( ${#DOC_SET[@]} - 1 ))" ]; then
+  echo "REFUSING: the parser resolved ${#_pyincs[@]} walk-include(s) but this script resolved $(( ${#DOC_SET[@]} - 1 )) — the two resolutions disagree"
+  exit 1
+fi
+
 # (2) A zero-block extraction reported "0 blocks: 0 ran, 0 failed" and EXIT 0. Three reachable
 # paths measured: a fence attribute, ```sh, and one invalid UTF-8 byte. That state HAS occurred here
-# (a greedy `.` under re.S). The floor is reconciled against an INDEPENDENT count, because a
-# denominator that only the parser produces cannot detect the parser being wrong.
-INDEP="$(grep -c '^[[:space:]]*```bash' "$DOC" || true)"
+# (a greedy `.` under re.S).
+#
+# ⚠️ HONEST ABOUT WHAT THIS NUMBER IS: INDEP is PRINTED, not gated. It cannot equal ${#PARSED[@]}
+# (that counts ```sh and ```shell too, this greps ```bash), so it is a reader's cross-check, not a
+# floor. The block floor is the CONSTANT below. The only real reconciliation in this script is
+# INDEP_E. A previous version of this comment claimed the floor was reconciled against an
+# independent count; it was describing a variable that gates nothing.
+#
+# `cat` and not `grep -c "${DOC_SET[@]}"`: with MORE THAN ONE file grep prints `file:count` per
+# file, so the multi-file form yields text where a total is wanted.
+INDEP="$(cat "${DOC_SET[@]}" | grep -c '^[[:space:]]*```bash' || true)"
 # Claims, counted independently of the parser -- same discipline, different unit. INDENT-TOLERANT
 # on purpose: the parser only sees `**Expect` at COLUMN 0, so a column-0-only grep would share its
 # blindness and an indented claim would be invisible to both. A blockquoted `> **Expect:` still is.
-INDEP_E="$(grep -cE '^[[:space:]]*\*\*Expect' "$DOC" || true)"
+# Counted over the SOURCE files -- $DOC plus each included file -- and NEVER over the parser's own
+# expansion. That distinction is the whole floor: an expansion-side count makes an extractor death
+# read `0 >= 0` PASS, while a source-side count makes the same death read `0 >= 26` and REFUSE.
+INDEP_E="$(cat "${DOC_SET[@]}" | grep -cE '^[[:space:]]*\*\*Expect' || true)"
 printf '\n======== walking %s ========\n' "$(basename "$DOC")"
 printf 'blocks: %d extracted, %d counted independently | os=%s\n' "${#PARSED[@]}" "$INDEP" "${WALK_OS:-?}"
 # Print the RESOLVED per-resource row, not the WALK_EXISTS shorthand -- the whole point is that they

@@ -241,5 +241,56 @@ assert "...because unwritable values are NOT written" "$c" "a placeholder or spa
 if printf '%s' "$o" | grep -q 'BY HAND'; then c=0; else c=1; fi
 assert "...and the reader is told to set them by hand" "$c" "the row was dropped silently"
 
+# 13. walk-include. A scenario that DELEGATES shared steps to a common file must EXECUTE them.
+#     Without expansion the walk silently skipped every shared block AND both counters still
+#     reconciled -- measured: a 2-block doc linking a 2-block file printed
+#     "blocks: 2 extracted, 2 counted independently", 0 claims, EXIT 0.
+I="$T/inc"; mkdir -p "$I"
+# The block must actually PRODUCE the claim's literal, or the walk fails on an UNMET Expect and the
+# case would be measuring its own fixture rather than the include. (It cost two FAILs to learn.)
+printf '## S. Shared\n\n```bash\necho walkincludealpha\n```\n\n**Expect:** `walkincludealpha` somewhere.\n\n```bash\ntrue\n```\n' > "$I/common.md"
+inc_main() { printf '# M\n\n%s\n\n## 1. Own\n\n```bash\ntrue\n```\n' "$1" > "$I/main.md"; }
+inc_run() { WALK_DOC="$I/main.md" WALK_START_DIR="$I" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 \
+            WALK_ISTIO=existing WALK_MIN_BLOCKS=1 bash "$W" 2>&1; }
+
+inc_main '<!-- walk-include: common.md -->'
+o="$(inc_run)"; r=$?
+if [ "$r" -eq 0 ] && printf '%s' "$o" | grep -q 'blocks: 3 extracted'; then c=0; else c=1; fi
+assert "walk-include EXECUTES the shared blocks" "$c" "rc=$r; the include was not followed"
+
+#     THE LOAD-BEARING HALF. The Expect floor must count the SOURCE files, never the parser's own
+#     expansion: an expansion-side count makes an extractor death read `0 >= 0` PASS, where a
+#     source-side count makes the same death read `0 >= N` and REFUSE. main.md carries ZERO Expect
+#     lines, so if the floor read only $DOC this would be 0 and pass vacuously.
+if printf '%s' "$o" | grep -q '1 Expect: lines in the doc'; then c=0; else c=1; fi
+assert "...and the Expect floor counts the INCLUDED file's claims" "$c" "the floor read only \$DOC — it is self-certifying"
+
+inc_main '<!-- walk-include: nope.md -->'
+inc_run >/dev/null 2>&1; r=$?
+if [ "$r" -ne 0 ]; then c=0; else c=1; fi
+assert "an UNRESOLVABLE include refuses" "$c" "rc=0 — a missing shared file was walked past"
+
+printf '## D\n\n<!-- walk-include: deeper.md -->\n\n```bash\ntrue\n```\n' > "$I/nested.md"; : > "$I/deeper.md"
+inc_main '<!-- walk-include: nested.md -->'
+inc_run >/dev/null 2>&1; r=$?
+if [ "$r" -ne 0 ]; then c=0; else c=1; fi
+assert "a NESTED include refuses (depth 1 only)" "$c" "rc=0 — it recursed"
+
+inc_main '<!-- walk-include: common.md -->
+<!-- walk-include: common.md -->'
+inc_run >/dev/null 2>&1; r=$?
+if [ "$r" -ne 0 ]; then c=0; else c=1; fi
+assert "a REPEATED include refuses" "$c" "rc=0 — a step would run twice"
+
+# 14. The extractor's `|| { EXTRACTOR FAILED }` was DEAD CODE: mapfile's exit status is its OWN,
+#     never the substituted process's. Measured both ways -- a death before any output read as
+#     len=0, and a death AFTER one row read as a TRUNCATED PARSE THAT LOOKED LIKE SUCCESS. Only a
+#     terminal sentinel can tell "finished" from "died partway".
+printf '# M\n\n## 1. A\n\n```bash\ntrue\n```\n\n## 2. B\n\n```bash\ntrue\n' > "$T/trunc.md"
+o="$(WALK_DOC="$T/trunc.md" WALK_START_DIR="$T" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 \
+     WALK_ISTIO=existing WALK_MIN_BLOCKS=1 bash "$W" 2>&1)"; r=$?
+if [ "$r" -ne 0 ] && printf '%s' "$o" | grep -q 'did not run to completion'; then c=0; else c=1; fi
+assert "a TRUNCATED extractor parse refuses" "$c" "rc=$r; a partial parse was reported as a walk"
+
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
