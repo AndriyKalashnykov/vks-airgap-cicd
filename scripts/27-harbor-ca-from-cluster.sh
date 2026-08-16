@@ -121,6 +121,47 @@ if [ -n "$_why" ]; then
   die "what we extracted is not a usable trust anchor: ${_why}
   '$OUT' was NOT touched."
 fi
+# B83(a). SHAPE IS NOT PROVENANCE. ca_anchor_reject_reason above proves self-issued + CA:TRUE, and
+# it is SOURCE-BLIND: MEASURED, it ACCEPTS an unrelated `CN=Acme Corporate Root CA` and a STALE
+# `CN=Harbor CA` from a destroyed lab. scenario-1 §8's PRIMARY route already guards this ("same
+# name, wrong file ... image pulls fail with `certificate signed by unknown authority` long after
+# this step") and so does fetch-supervisor-ca.sh; this FALLBACK was the one that did not.
+#
+# ⚠️ SPLIT host FROM port. ca_verifies_endpoint takes them as SEPARATE args, and HARBOR_URL is a
+# BARE host OR host:port (02-env.sh rejects a scheme). Passing it whole repeats B119 exactly: a
+# bare host then reaches openssl as a hostname with no port and connects to nothing.
+#
+# ⚠️ harbor_url_is_placeholder is NOT usable here -- it is defined in 02-env.sh, not a lib, and
+# this script sources only lib/os.sh + lib/tls.sh. Calling it would be `command not found` under
+# `set -euo pipefail`. is_placeholder (lib/os.sh) plus the documented sentinel is the in-scope pair.
+_hu="${HARBOR_URL:-}"
+if is_placeholder "$_hu" || [ "$_hu" = harbor.vks.local ]; then
+  # DO NOT skip silently. A check that prints nothing is the gate that passes by not looking.
+  log_warn "INSTALLED WITHOUT VOUCHING — HARBOR_URL is not set, so this anchor was accepted on its"
+  log_warn "  SHAPE alone (self-issued + CA:TRUE). That does NOT prove it is THIS Harbor's CA: a"
+  log_warn "  corporate root, or a CA left over from a destroyed lab, has the same shape. Set"
+  log_warn "  HARBOR_URL and re-run to have it verified against the live endpoint."
+else
+  _vhost="${_hu%%:*}"
+  case "$_hu" in *:*) _vport="${_hu##*:}" ;; *) _vport=443 ;; esac
+  _vrc=0
+  ca_verifies_endpoint "$_vhost" "$_vport" "$t" || _vrc=$?
+  case "$_vrc" in
+    0) log_info "  vouches for: ${_vhost}:${_vport}" ;;
+    1) die "this CA does NOT verify ${_vhost}:${_vport}'s certificate — it is the wrong CA, or a
+  STALE one from a rebuilt lab. '$OUT' was NOT touched." ;;
+    2) die "${_vhost}:${_vport} did not answer, so the anchor could not be verified. That is a
+  CONNECTION problem, NOT a verdict about the CA. '$OUT' was NOT touched." ;;
+    3) die "the chain verifies but the certificate does not NAME ${_vhost} — is HARBOR_URL the
+  address Harbor actually serves? This is a SAN mismatch, not staleness. '$OUT' was NOT touched." ;;
+    4) die "${_vhost}:${_vport} presented no certificate. '$OUT' was NOT touched." ;;
+    5) die "the extracted file is not usable as an anchor (ca_verifies_endpoint rc=5).
+  '$OUT' was NOT touched." ;;
+    *) die "could not verify against ${_vhost}:${_vport} (ca_verifies_endpoint rc=${_vrc}).
+  '$OUT' was NOT touched." ;;
+  esac
+fi
+
 subj="$(openssl x509 -in "$t" -noout -subject | sed 's/^subject=//')"
 fp="$(openssl x509 -in "$t" -noout -fingerprint -sha256 | cut -d= -f2)"
 chmod 0644 "$t"
