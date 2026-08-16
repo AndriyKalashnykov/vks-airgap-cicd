@@ -374,7 +374,89 @@ the sink precedence.
 
 </details>
 
-## B114 — the break-glass unwedge CREATES the next wedge, then gives advice that cannot resolve it
+## B114 — ⚠️ CAUSAL CLAIM REFUTED (measured). The wedge is REAL; the unwedge does not cause it
+
+**Do not implement the fix as this row originally described it — it would search the wrong
+namespace, find nothing, ship green, and never fire.**
+
+**MEASURED ON THE LIVE LAB 2026-08-16**, which is what settles it:
+
+    kubectl get sts,deploy -A -o wide | grep -i argocd
+      ns=cicd                      statefulset.apps/argocd-application-controller   <- the finalizer's controller
+      ns=cicd                      deployment.apps/argocd-server
+      ns=svc-argocd-service-wpypi  deployment.apps/argocd-service-controller-manager <- the OPERATOR
+    kubectl get ns | grep '^svc-argocd'
+      svc-argocd-service-wpypi                                                       <- all the unwedge can touch
+
+`unwedge-supervisor-service.sh:70` derives `prefix="svc-$(cut -d. -f1 <<<"$SERVICE")-"` and every
+delete is `kubectl -n "$NS"`. The stranded CRs are `application/cicd/*`. **The two namespaces are
+disjoint and the script has no code path into `cicd`** — it never had the ArgoCD application
+controller in scope, so it cannot have stranded anything.
+
+**What actually happens:** the UNINSTALL deletes both `applications.argoproj.io` and the ArgoCD
+instance in the same kapp app, so the package self-deadlocks on its own finalizers. The unwedge
+cleared the FIRST wedge, which let kapp advance far enough to EXPOSE a deadlock that was already
+armed.
+
+**What SURVIVES from the original row:** the observation (two 15-minute rounds, no progress;
+clearing the two CR finalizers made the CRD disappear in under 8 seconds) and the conclusion that
+the closing *"re-issue the uninstall"* advice is WRONG. Only the attribution was wrong — and it is
+the attribution that decides where the fix looks.
+
+### The corrected design
+
+- **Key on TERMINATING CRDs, cluster-wide — never on `$NS`, and never on the service's API group.**
+  There is no derivable relation between them: `SERVICE=argocd-service.vsphere.vmware.com` (group
+  `vsphere.vmware.com`) vs the stranded `applications.argoproj.io` / finalizer
+  `resources-finalizer.argocd.argoproj.io` — **zero token overlap**. Terminating CRDs are normally
+  ZERO, so the per-CRD fan-out is bounded by the wedge, not by the cluster.
+- **Call it from ALL THREE terminal paths**, not just after the delete loop. The path a SECOND
+  invocation takes is `:93` (namespace already gone -> `exit 0`), which prints the same false
+  reassurance — and by then `$NS` does not exist while the stranded CRs in `cicd` very much do.
+  (B112's lesson recurring: fix the CLASS, not the cited line.)
+- **Emit CR patches ONLY. Do NOT patch the CRD.** Removing `customresourcecleanup.apiextensions.k8s.io`
+  while CRs remain deletes the CRD object and leaves the CRs as unreachable garbage in etcd with no
+  API left to serve them — and it is unnecessary: the row's own <8s measurement IS the apiextensions
+  controller clearing it once the last CR goes. Emit `-n <ns>` only for namespaced CRs (from the
+  CRD's `spec.scope`); a stray `-n` on a cluster-scoped CR is a silent no-op-looking error.
+- **The found branch must CONTRADICT the 15-minute line, print LAST, and stay short.** Merely
+  omitting it lets the operator's prior ("re-issue and wait") win by default, and `:165-167` dumps
+  `Remaining in NS` afterwards, which would scroll the finding away.
+- **Read failures must not read as "none found."** A naive `crds="$(kubectl get crd -o json | jq …)"`
+  under this script's `set -euo pipefail` exits AT the kubectl, and a `2>/dev/null` variant renders a
+  transport failure as "no stranded CRs" followed by the reassuring advice — the FOURTH instance of
+  the class this script has been fixed for three times. Use `|| rc=$?` + `classify_kube_failure`.
+- **Second home:** a read-only `make` target as well as inline, because path `:93` cannot run the
+  inline form usefully. Mid-incident the operator reads the inline output; the next day they re-run
+  the target.
+- **`do NOT auto-patch` stands, but NOT on the precedent the row cited.** "It dies on an AMBIGUOUS
+  namespace" is about not knowing WHICH object, not about destructiveness — and this script is
+  emphatically not read-only (it deletes platform-managed workload after `CONFIRM=yes`). The
+  load-bearing argument is ORPHANING: `resources-finalizer.argocd.argoproj.io` exists to
+  cascade-delete the Application's deployed workloads, so dropping it leaves a tenant's real
+  workloads running with no owner and nothing recording that they were abandoned.
+
+### Also worth checking, and NOT in the original row
+
+The delete loop deletes kind `service` (`:142`), and the script's own header names
+`argocd-service-webhook-service-*` in that namespace. A `ValidatingWebhookConfiguration` is
+**cluster-scoped** and survives; with `failurePolicy: Fail` and its backing Service gone, every
+matching create/update/delete fails cluster-wide with *"no endpoints available for service"* —
+potentially including the finalizer patches this design tells the operator to run. Same shape for an
+`APIService` whose `spec.service` points into `$NS`. Report them (never delete them); it is two
+cluster-scoped list calls, cheaper than the CRD scan. PVs are NOT in scope
+(`kubernetes.io/pv-protection` is kube-controller-manager's, which this script never touches).
+
+### Unmeasured, stated rather than hidden
+
+The MECHANISM (why the apiextensions controller requeues forever rather than force-clearing a CR
+finalizer) is upstream-source reasoning, not something anyone ran; the observation and the <8s clear
+are consistent with it and no competing mechanism survives inspection. And the COST of
+`kubectl get crd -o json` on a Supervisor is unweighed — it returns full OpenAPI schemas for every
+CRD. `time kubectl get crd -o json | wc -c` settles it on the next lab trip; kapp's own
+`kapp.k14s.io/app`-labelled ConfigMaps may name the CRD directly for one small list, UNVERIFIED.
+
+<details><summary>the original row, kept for its observation</summary>
 
 **MEDIUM. Observed end-to-end on the lab 2026-08-16, twice in one reset.**
 
@@ -638,5 +720,7 @@ trivy's internal interval — that option does not appear in the recorded decisi
 
 ⚠️ Do NOT re-add it without a fresh adversary round: the original rejection was a CORRECTNESS
 call about a security gate, and a bigger saving is not by itself a reason to overturn one.
+
+</details>
 
 </details>
