@@ -5,12 +5,12 @@
 # Harbor installed as a SUPERVISOR SERVICE that is impossible — MEASURED, it presents exactly ONE
 # certificate (its leaf, issuer CN=Harbor CA), so the CA is simply not on the connection.
 # fetch-harbor-ca detects that and REFUSES, which is correct: deriving a "CA" from a leaf would
-# install a trust anchor that verifies nothing. This is scenario-1 §6 route B, automated.
+# install a trust anchor that verifies nothing. This is scenario-1 §8 route B, automated.
 #
 # 🔴 READ THE GRANT THIS COSTS. `get secret harbor-ca-key-pair` ALSO RETURNS THE CA's PRIVATE
 # SIGNING KEY (type kubernetes.io/tls, keys ca.crt/tls.crt/tls.key). Kubernetes RBAC has no
 # field-level read, so whoever can run this can MINT a certificate for anything every
-# HARBOR_CA_FILE consumer trusts. That is an admin-level grant. §6 route A — downloading ca.crt
+# HARBOR_CA_FILE consumer trusts. That is an admin-level grant. §8 route A — downloading ca.crt
 # from the Harbor UI — needs only a Harbor login and NO Kubernetes access. Prefer it if you can.
 #
 # ⚠️ FOUR THINGS BELOW ARE LOAD-BEARING; the naive one-liner gets all four wrong and TRUNCATES A

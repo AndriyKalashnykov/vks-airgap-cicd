@@ -533,11 +533,11 @@ use-guest-kubeconfig: ## Point the rest of the walk at the GUEST cluster (publis
 	@$(SCRIPTS)/27-use-guest-kubeconfig.sh
 
 .PHONY: fetch-supervisor-ca
-fetch-supervisor-ca: ## Fetch the CA that signed the Supervisor's cert FROM VCENTER (scenario-1 §3.3) — picks the right root, verifies it, prints the fingerprint to confirm out of band
+fetch-supervisor-ca: ## Fetch the CA that signed the Supervisor's cert FROM VCENTER (scenario-1 §3) — picks the right root, verifies it, prints the fingerprint to confirm out of band
 	@$(SCRIPTS)/fetch-supervisor-ca.sh
 
 .PHONY: show-dns-records
-show-dns-records: ## Print the exact DNS A records this install needs, with their live LoadBalancer IPs (scenario-1 §2.6)
+show-dns-records: ## Print the exact DNS A records this install needs, with their live LoadBalancer IPs (scenario-1 §4)
 	@$(SCRIPTS)/show-dns-records.sh
 
 .PHONY: ca-status
@@ -553,7 +553,7 @@ uninstall-all: ## DESTRUCTIVE (real lab): remove what scenario-1 created — our
 	@$(SCRIPTS)/98-uninstall-all.sh
 
 .PHONY: harbor-ca-from-cluster
-harbor-ca-from-cluster: ## Get the lab Harbor's CA from the Supervisor when it is NOT on the wire (scenario-1 §6 route B; costs an ADMIN-level read — see the header)
+harbor-ca-from-cluster: ## Get the lab Harbor's CA from the Supervisor when it is NOT on the wire (scenario-1 §8 route B; costs an ADMIN-level read — see the header)
 	@$(SCRIPTS)/27-harbor-ca-from-cluster.sh "$(if $(HARBOR_CA_FILE),$(HARBOR_CA_FILE),./secrets/harbor-ca.crt)"
 
 .PHONY: fetch-argocd-ca
