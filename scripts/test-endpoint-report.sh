@@ -147,6 +147,12 @@ out="$(run_case "$FX_CLUSTER" "$FX_ADV" "$two")"
 check "two candidates => declines to judge"   "declining to judge" "$out"
 check "two candidates => lists them"          "$FX_CLUSTER_B" "$out"
 
+# The wait-branch GATE that consumes this function's verdict is tested by
+# test-cluster-status-wait-gate.sh, which runs 26-vks-cluster-status.sh itself. It is NOT tested
+# here on purpose: a first attempt asserted a hand-typed COPY of the guard's pattern, and an
+# adversary deleted the whole shipped guard while this file still reported 24/24. A copy of a
+# predicate proves nothing about the predicate that ships.
+
 echo
 echo "endpoint_report: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ] || exit 1

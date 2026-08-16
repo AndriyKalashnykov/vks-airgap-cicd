@@ -446,8 +446,9 @@ make vks-cluster-status VKS_CLUSTER_WAIT_SECONDS=1800  # then wait for every nod
 ```
 
 **Read the `endpoint :` line from the first command before starting the wait.** `AGREE` or
-`NOT YET KNOWABLE` → carry on. `*** DIVERGENT ***` → stop and follow what it prints; the waiting
-form will not show it for 30 minutes.
+`NOT YET KNOWABLE` → carry on. `*** DIVERGENT ***` → stop and follow what it prints. The waiting
+form now reads the endpoint once before it starts, so it refuses immediately rather than after
+30 minutes — but the remedy is the same either way.
 
 **Expect:** the waiting command reprints a table every 15 s, then exits `0` with every node
 `Ready`. *(**4–9 min** — the Timings table's own runs span 3 m 45 s to 8 m 49 s; the command waits up to 30 min, so give it that before calling it stuck.)* A non-zero exit is not a pass — do not continue to the preflight.
