@@ -112,7 +112,13 @@ jobs:
     # the alignment gates, lint (shellcheck/yamllint/hadolint), validate (kubeconform),
     # sec (gitleaks + trivy-fs + trivy-config), the script unit tests, and the app build+tests.
     # `make static-check` locally is unaffected and still runs all of it.
-    if: false
+    #
+    # RESTORED FOR THE SCHEDULE (2026-08-16). `if: false` did not only disable this on PRs — it
+    # silently killed the weekly cron above too, so the FULL gate set (lint, validate, trivy-fs,
+    # trivy-config, test-scripts, app-test) was running NOWHERE: not on PRs, not on main, not
+    # weekly. The cheap half now runs per-PR as `static-check-fast`; this keeps the expensive half
+    # off the PR path while restoring the weekly net at zero PR cost.
+    if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -257,6 +263,31 @@ jobs:
   # both true), so `code || docs` is a tautology. Running unconditionally makes the SECURITY gate
   # structurally immune to a future classifier bug, and the classifier has already been wrong once
   # (the dorny/paths-filter deny-list, see scripts/classify-changes.sh).
+  # UNCONDITIONAL, like `secrets` below and for the same reason: a job that can be SKIPPED cannot
+  # be asserted on, because `ci-pass`'s generic check tests only failure||cancelled and a skip is
+  # neither. That is exactly how PR #605's half-applied Go bump merged green while
+  # check-toolchain-alignment would have caught it. Making the job unconditional turns `skipped`
+  # into an unambiguous defect, which is what lets the explicit assertion in ci-pass work.
+  #
+  # NO mise here. MEASURED 2026-08-16: all 23 gates pass with the mise toolchain OFF PATH (rc=0) —
+  # they are shell/grep/python3/jq, and ubuntu-latest preinstalls python3 and jq. Dragging in the
+  # JDK/Go/kubectl/helm toolchain for them would cost more than the gates do.
+  # `needs: []` on purpose: this job does not consult the change classifier at all.
+  static-check-fast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # check-gwapi-istio-alignment fetches istio's go.mod and, by default, SKIPS with a warning
+      # when the fetch fails — exit 0. Measured against a blackholed proxy it returned rc=0 with
+      # three WARN lines, i.e. this job would go green with the only gate guarding the Gateway-API
+      # CRD pin having covered nothing. CI has network by definition, so here a failed fetch is a
+      # FAILURE. Local runs keep the loud skip.
+      - name: make static-check-fast
+        env:
+          GWAPI_REQUIRE_FETCH: '1'
+        run: make static-check-fast
+
   secrets:
     runs-on: ubuntu-latest
     steps:
@@ -281,7 +312,7 @@ jobs:
   # Single required status check: fails if any needed job failed/cancelled,
   # passes if they succeeded or were legitimately skipped by paths-filter.
   ci-pass:
-    needs: [changes, static-check, docs-lint, diagrams-check, secrets]
+    needs: [changes, static-check, static-check-fast, docs-lint, diagrams-check, secrets]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -292,5 +323,16 @@ jobs:
         run: |
           if ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}; then
             echo "a required job failed or was cancelled"; exit 1
+          fi
+          # static-check-fast is asserted EXPLICITLY, because the generic check above is blind to a
+          # SKIP and this job has no `if:` — so a skip here means something broke, never a
+          # paths-filter decision. Do NOT generalise this to `needs.*`: every other gate job
+          # legitimately skips (measured: a docs-only PR skips static-check + diagrams-check; a
+          # code-only PR skips docs-lint + diagrams-check), so a blanket skip-test would redden
+          # ci-pass — the sole required check — on essentially every PR.
+          if [ "${{ needs.static-check-fast.result }}" != "success" ]; then
+            echo "static-check-fast did not succeed (result: ${{ needs.static-check-fast.result }})"
+            echo "  It is unconditional, so anything other than 'success' is a real defect."
+            exit 1
           fi
           echo "ci-pass: OK"
