@@ -40,14 +40,28 @@ The Supervisor puts each installed service in its own namespace, named `svc-<ser
 `<id>` is generated, so you read it rather than guess it. These two commands find yours:
 
 ```bash
-HARBOR_NS=$(kubectl get ns -o name | sed 's|namespace/||' | grep '^svc-harbor-' | head -1)
-ARGOCD_NS=$(kubectl get ns -o name | sed 's|namespace/||' | grep '^svc-argocd-service-' | head -1)
+err=$(mktemp)
+all_ns=$(kubectl get ns -o name 2>"$err" | sed 's|namespace/||')
+HARBOR_NS=$(printf '%s\n' "$all_ns" | grep '^svc-harbor-' | head -1)
+ARGOCD_NS=$(printf '%s\n' "$all_ns" | grep '^svc-argocd-service-' | head -1)
 echo "Harbor: ${HARBOR_NS:-NOT FOUND}   ArgoCD: ${ARGOCD_NS:-NOT FOUND}"
+[ -s "$err" ] && echo "the cluster said: $(tail -1 "$err")"
+rm -f "$err"
 ```
 
-**Expect:** two namespace names, each ending in a generated id. If either says it was not found, that
-service is not installed on this Supervisor — you are not a tenant of it yet, so ask your platform
-team before going further.
+**Expect:** two namespace names, each ending in a generated id.
+
+`NOT FOUND` has **three** different causes, and the line beginning *"the cluster said"* — printed
+only when there was an error — tells you which. Read it before you ask anyone for anything:
+
+| what the cluster said | what it means | what to do |
+|---|---|---|
+| nothing | the Supervisor answered, and those services really are not installed | you are not a tenant of them yet — ask your platform team |
+| `is forbidden` | they exist; you are simply not allowed to **list all** namespaces, which is normal for a tenant | ask the platform team for the two namespace **names**, and skip to the next command |
+| `connection refused`, `localhost:8080`, `no such host` | nothing was asked at all — you have no working kubeconfig for the **Supervisor** yet | fix that first; this step cannot tell you anything until then |
+
+That last row is the common one on a fresh jump box: without a kubeconfig, `kubectl` quietly tries
+`localhost:8080`, finds nothing, and every step after this inherits the emptiness.
 
 Now read their LoadBalancer addresses:
 
