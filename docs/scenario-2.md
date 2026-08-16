@@ -28,14 +28,28 @@ the jump box reaches both the internet and the lab (Supervisor API + Harbor).
 **Discover the endpoints** (read-only; you need at least read access to the Services'
 namespaces, or ask the platform team for the values):
 
+The Supervisor puts each installed service in its own namespace, named `svc-<service>-<id>` — the
+`<id>` is generated, so you read it rather than guess it. These two commands find yours:
+
 ```bash
-# Harbor LB IP (svc name/namespace vary per lab — verify on your lab):
-kubectl get svc -n <harbor-namespace> <harbor-svc> \
-  -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
-# ArgoCD server LB IP:
-kubectl get svc -n <argocd-namespace> argocd-server \
-  -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+HARBOR_NS=$(kubectl get ns -o name | sed 's|namespace/||' | grep '^svc-harbor-' | head -1)
+ARGOCD_NS=$(kubectl get ns -o name | sed 's|namespace/||' | grep '^svc-argocd-service-' | head -1)
+echo "Harbor: ${HARBOR_NS:-NOT FOUND}   ArgoCD: ${ARGOCD_NS:-NOT FOUND}"
 ```
+
+**Expect:** two namespace names, each ending in a generated id. If either says it was not found, that
+service is not installed on this Supervisor — you are not a tenant of it yet, so ask your platform
+team before going further.
+
+Now read their LoadBalancer addresses:
+
+```bash
+kubectl -n "$HARBOR_NS" get svc -o jsonpath='{range .items[?(@.spec.type=="LoadBalancer")]}{.metadata.name}{"  "}{.status.loadBalancer.ingress[0].ip}{"\n"}{end}'
+kubectl -n "$ARGOCD_NS" get svc argocd-server -o jsonpath='{.status.loadBalancer.ingress[0].ip}{"\n"}'
+```
+
+**Expect:** Harbor's entry is `harbor-nginx` followed by an IP, and ArgoCD prints a bare IP. Those two
+addresses are what you put in `HARBOR_URL` and `ARGOCD_SERVER` below.
 
 **Request grants from the platform team:**
 
