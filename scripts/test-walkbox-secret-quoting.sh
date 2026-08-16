@@ -14,7 +14,10 @@
 # tell intact from mangled.
 # ============================================================================
 set -uo pipefail
-cd /home/andriy/projects/vks-work || exit 1
+# Derive the root from BASH_SOURCE, never a hardcoded path: this line originally `cd`-ed to
+# ANOTHER WORKTREE of this repo (where the test was written), so it ran the wrong tree's
+# lib/os.sh and could not find its own fixtures. The multi-worktree cwd trap, in a test.
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 . scripts/lib/os.sh >/dev/null 2>&1
 pass=0; fail=0; cbad=0; n=0
 while IFS= read -r pw; do
