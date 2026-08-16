@@ -216,6 +216,61 @@ the lab is up, and a 401 from either is a true finding by construction (it is th
 `<not set>`, so there is a recording gap as well as a testing gap. Settle which script should
 publish `ARGOCD_SERVER` on the real-lab path before writing the probe.
 
+## B111 — Step 8.5 repairs HARBOR_PASSWORD into the sink that LOSES, so the repair never takes effect
+
+**HIGH — measured end-to-end on the live lab 2026-08-16, and this is why B109's credentials were 401.**
+
+Two commands, seconds apart, gave opposite verdicts on the same credential against the same Harbor:
+
+    make harbor-admin-password  ->  ok  Harbor accepts admin (http 200)
+                                    wrote HARBOR_USERNAME and HARBOR_PASSWORD to ./.env
+                                    (verified against harbor.env1.lab.test first)
+    make env-validate           ->  ERROR Harbor rejected HARBOR_USERNAME/HARBOR_PASSWORD (HTTP 401)
+
+Both were telling the truth. They are reading **different values**:
+
+| sink | sha256 (first 12) | length |
+|---|---|---|
+| `.env` — what Step 8.5 wrote and verified | `d2c07f3b2a3c` | 16 |
+| `.env.state` — the overlay | `484845762367` | 32 |
+| **what `load_env` actually resolves** | **`484845762367`** | **the overlay wins** |
+
+**The mechanism, from the code:** `load_env` sources `.env.example` (`lib/os.sh` :88) → `.env` (:102)
+→ **`.env.state` (:130, last)**, with `set -a`, and its own comment at :9 says *"every file below
+outranks"*. Meanwhile:
+
+- `04-install-harbor-service.sh:124-125` — the **install** — writes the password to the **overlay**
+  (`state_set HARBOR_PASSWORD`);
+- `28-harbor-admin-password.sh:129-130` — the **repair** — writes it to **`.env`**
+  (`set_env_var … "${REPO_ROOT}/.env"`).
+
+Same logical value, two sinks, different precedence. So on any box where Harbor was ever installed
+by this repo, the overlay holds that install's password and **Step 8.5 cannot override it** — the
+command whose entire purpose is to replace a wrong password with the installed one writes to the
+file that loses. Its success message is true and useless.
+
+**Why it matters beyond a stale box:** `docs/scenario-1.md` §4 says *"Do not skip Step 8.5"* for the
+already-exists persona precisely because `make install-all` must authenticate to Harbor. On a lab
+rebuilt under the same repo checkout, the overlay's password is the PREVIOUS lab's, Step 8.5 reports
+success, and `install-all` then fails to authenticate with no indication that the repair was
+discarded.
+
+**Same family as `check-env-clobber`, one layer up.** That gate polices `.env.example` shadowing a
+fallback or a per-run override. Nothing polices **`.env.state` shadowing `.env`** — which is the
+same defect with a higher-precedence file.
+
+⚠️ **No fix is proposed here on purpose.** The obvious ones each have a plausible failure mode and
+none has been reviewed: making the repair write the overlay instead (the overlay is also the thing
+`kind-down` prunes, and `state_set` on an UNSTAMPED overlay is what B86/B98 are about); making
+`load_env` source `.env` last (inverts a precedence other values rely on); or having the repair
+delete the overlay's key (destructive, and the overlay may hold the only copy of other generated
+secrets — the warning `load_env` already prints). Run an idea-round before touching it.
+
+**Verified as part of the same session:** with a valid Supervisor kubeconfig the whole documented
+chain otherwise works — `make harbor-ca-from-cluster` rc=0 (route B, the `<details>` alternative the
+walker skips) and `make harbor-admin-password` rc=0 with a live `http 200`. The failure is purely
+the sink precedence.
+
 ## B110 — an EXPIRED Supervisor token reads as "Harbor is not installed", and the script says so
 
 **HIGH — measured on the live lab 2026-08-16, both directions, same command and same cluster.**
