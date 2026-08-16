@@ -285,7 +285,39 @@ the lab is up, and a 401 from either is a true finding by construction (it is th
 `<not set>`, so there is a recording gap as well as a testing gap. Settle which script should
 publish `ARGOCD_SERVER` on the real-lab path before writing the probe.
 
-## B111 — Step 8.5 repairs HARBOR_PASSWORD into the sink that LOSES, so the repair never takes effect
+## B111 — ✅ CLOSED (#658). The writers now ASSERT their write took effect — and the round found a worse, SILENT case
+
+All THREE fixes this row proposed were REFUTED, each by measurement, and a fourth survived.
+
+- **repair writes the overlay** — re-creates the exact harm #641 fixed. (The row's objection to it
+  was itself false: `kind-down.sh:59` refuses to prune an unstamped overlay, so on a lab box it is
+  never pruned.)
+- **`load_env` sources `.env` last** — a stale `.env` `HARBOR_URL` then beats the discovered LB IP
+  (measured: `harbor.OLD-LAB.example` vs `172.18.0.5`), and it contradicts
+  `test-env-precedence.sh:76-78`, written the same day. That test is right; the candidate is wrong.
+- **repair deletes the overlay key** — a per-value fix on a 4-of-6-site class, and no `state_unset`
+  exists.
+
+**THE CRITICAL THE ROW WOULD HAVE MISSED, and it does not 401.** Both Harbor keys ship COMMENTED in
+`.env.example`, so at Step 4 `HARBOR_PASSWORD` is unset, `04-install-harbor-service.sh`'s
+`[ -n "${HARBOR_PASSWORD:-}" ] ||` guard is false, and it `state_set`s ADMIN's credential into the
+overlay — on the DEFAULT scenario-1 admin path, every time. Step 9's robot then writes `.env` and is
+shadowed, so `make harbor-robot` prints *"the pipeline now runs as the ROBOT, not as admin"* while
+the pipeline runs as Harbor **admin**. Admin works, so nothing surfaces it; it also defeats
+`22-harbor-robot.sh`'s own `robot$*` re-run guard, minting a second robot unnoticed.
+
+**Shipped:** `assert_env_effective` in `lib/os.sh`, called by both writers. It changes no
+precedence, writes no overlay, deletes nothing, and generalises to every future `set_env_var`
+caller — which had no post-write check at all. ⚠️ The `unset` inside it is the whole test: both keys
+are in `load_env`'s SELECTOR SNAPSHOT, which restores the caller's exported value, so a re-resolve
+without it passes unconditionally on exactly the box where the bug is live. ABLATION-PROVEN —
+deleting the `unset` flips the vacuity case from rc=1 to rc=0 (`make test-env-effective`, 3 cases).
+
+**Deliberately NOT built:** a static gate (it would flag the 4 sites that are correct by design, and
+its only remedy is the refuted candidate 1) and a runtime shadow-warning (semantic — the overlay
+winning is CORRECT for `HARBOR_URL` and WRONG for `HARBOR_PASSWORD`, and no matcher separates them).
+
+<details><summary>the original row, kept for its measurement</summary>
 
 **HIGH — measured end-to-end on the live lab 2026-08-16, and this is why B109's credentials were 401.**
 
@@ -339,6 +371,8 @@ secrets — the warning `load_env` already prints). Run an idea-round before tou
 chain otherwise works — `make harbor-ca-from-cluster` rc=0 (route B, the `<details>` alternative the
 walker skips) and `make harbor-admin-password` rc=0 with a live `http 200`. The failure is purely
 the sink precedence.
+
+</details>
 
 ## B114 — the break-glass unwedge CREATES the next wedge, then gives advice that cannot resolve it
 
@@ -564,9 +598,24 @@ script — it would delete nothing and report "deleted". Different blast radius;
 
 </details>
 
-## B88 — the trivy-DB cache was rejected on a measurement that is 2.5x too small
+## B88 — ✅ CLOSED, no action: the measurement stands and the conclusion it argued for is now much weaker
 
-`.github/workflows/ci.yml:147` records the 2026-07-14 decision to DROP a trivy-DB cache,
+**What changed, 2026-08-16.** `static-check` was restored per-PR — but on a `static-check-pr`
+target that deliberately EXCLUDES trivy (measured: `make -n static-check-pr` -> 0 trivy
+invocations; `make -n static-check` -> 3). So the ~25s this row correctly re-measured is now paid
+**once a week**, not once per PR. That is roughly a 20x reduction in what the cache would buy,
+against a staleness bound on a security gate — and the row's own closing line already said a bigger
+saving is not by itself a reason to overturn a correctness call.
+
+The re-measurement is still worth keeping (the recorded decision's "~10s" was 2.5x too small, and
+the DATE-KEYED cache option genuinely never appeared in it), but nothing should be done about it.
+If per-PR trivy is ever reconsidered, this row is the number to weigh — not before.
+
+Stale citation corrected while here: the decision is at `.github/workflows/ci.yml:194`, not :147.
+
+<details><summary>the original row, kept for the measurement</summary>
+
+`.github/workflows/ci.yml:194` (was :147) records the 2026-07-14 decision to DROP a trivy-DB cache,
 reviewed by java-adversary + docker-adversary, on the grounds that it *"would silently serve
 a DB up to trivy's 24h client interval, missing same-day CVEs, **for ~10s**"*.
 
@@ -589,3 +638,5 @@ trivy's internal interval — that option does not appear in the recorded decisi
 
 ⚠️ Do NOT re-add it without a fresh adversary round: the original rejection was a CORRECTNESS
 call about a security gate, and a bigger saving is not by itself a reason to overturn one.
+
+</details>
