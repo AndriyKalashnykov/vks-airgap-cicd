@@ -469,11 +469,15 @@ for row in "${PARSED[@]}"; do
   t0=$SECONDS
   if [ "${WALK_DRY:-0}" = 1 ]; then printf '    (dry run - not executed)\n'; rc=0
   else
-    # The document attaches `Expect:` to a STEP, and a step often has several blocks: Step 4's
-    # claims sit after its SECOND block while describing the FIRST block's output. Checking a claim
-    # against only the block it follows produced a FALSE UNMET on
+    # The document attaches `Expect:` to a STEP, and a step often has several blocks. Checking a
+    # claim against only the block it follows produced a FALSE UNMET on
     # `7 secrets generated, 0 placeholders left` -- text plainly present in the log. A reader reads
     # the whole step, so a claim is checked against the whole step.
+    #
+    # THE MOTIVATING EXAMPLE IS HISTORICAL: step 4's claim was moved to sit directly after the block
+    # that produces it, so step 4 no longer needs step-scoping. KEEP THE MECHANISM ANYWAY -- two live
+    # instances still depend on it (`PREFLIGHT OK`, whose claim is produced by the PRECEDING block and
+    # not by the one it follows; and the CA step's `0644`), and any new document will grow more.
     [ "$H" = "${LAST_H:-}" ] || { : > "$STEP_OUT_FILE"; LAST_H="$H"; }
     : > "$OUT_FILE"
     rc=0
