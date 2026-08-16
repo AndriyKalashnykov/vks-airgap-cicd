@@ -20,7 +20,7 @@ kubeconfig_ready
 # Per-app values come from the registry — verify runs the SAME proof for EVERY app.
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
-READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-600}"
+READY_TIMEOUT_SECONDS="${VERIFY_READY_TIMEOUT_SECONDS:-600}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
 # LOCAL port-forward aliases — ephemeral by default (pick_port) so parallel runs
 # never collide; an operator can still pin them via the env vars.
