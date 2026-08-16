@@ -74,6 +74,12 @@ Already root? Drop the `sudo`.
 
 ```bash
 git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git
+```
+
+Already have the repo? Skip that one command — but still run the next block, which is what puts you
+**in** the repo.
+
+```bash
 cd vks-airgap-cicd
 pwd                            # sanity check: should end in /vks-airgap-cicd
 make env-init                  # creates ./.env from the template .env.example
@@ -302,6 +308,12 @@ The registry every image comes from.
 
 ```bash
 make install-harbor-service
+```
+
+Harbor already installed on this Supervisor? Skip that one command — but still run the next block.
+Its LoadBalancer address is what your DNS records point at, whoever installed it.
+
+```bash
 make show-dns-records DNS_RECORDS_WAIT_SECONDS=900   # waits for the LoadBalancer address, then prints the records
 ```
 
