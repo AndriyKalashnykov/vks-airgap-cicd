@@ -395,9 +395,13 @@ make verify        # push a marked change → Tekton → Harbor → ArgoCD → l
 make creds-show    # every URL + login for THIS context — one row per app in apps/registry.tsv
 ```
 
-**Expect:** `make gitops` logs **`write mechanism: api`** (not `request`). If it logs `write mechanism:
-request`, your `ARGOCD_AUTH_TOKEN`/`ARGOCD_DEST_SERVER` are missing — the Application was only **rendered
-to `./out/`** and **nothing deployed**; fix the vars above and re-run before `make verify`.
+**Expect:** `make gitops` logs `write mechanism: api`.
+
+⚠️ If it logs *write mechanism: request* instead, your `ARGOCD_AUTH_TOKEN`/`ARGOCD_DEST_SERVER` are
+missing — the Application was only **rendered to `./out/`** and **nothing deployed**; fix the vars
+above and re-run before `make verify`. (That sentence is deliberately NOT on the `**Expect:**` line
+and its literal is deliberately NOT backticked: the checker has no concept of negation, so a
+backticked `request` there would MATCH the failure output and score the block a PASS.)
 
 `install-all` deliberately does **not** install Harbor or ArgoCD — the platform team already
 did. It mirrors all images into that Harbor, builds + pushes the offline Maven builder image,
