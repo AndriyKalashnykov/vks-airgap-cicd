@@ -66,6 +66,26 @@ report() {
   local json _rep_err _rep_rc=0 _why=""
   _rep_err="$(mktemp)"
   json="$(k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" -o json 2>"$_rep_err")" || _rep_rc=$?
+  # A DEFINITIVE NotFound IS AN ANSWER — we asked, and a reachable, authenticated API server told
+  # us. It must NOT go through classify_kube_failure: that taxonomy is about TRANSPORT and AUTH
+  # ("we could not ask"), and every arm of it ends in the line "this is NOT 'the cluster does not
+  # exist'". For a NotFound that line is simply FALSE.
+  #
+  # MEASURED 2026-08-16, matrix row 3: the create was REJECTED outright by the admission webhook, so
+  # the Cluster was never written. This function then printed
+  #     cluster cicd/<name>: COULD NOT ASK — ... (this is NOT 'the cluster does not exist')
+  # on EVERY poll for 1806 SECONDS. Half an hour spent waiting for an object whose creation had
+  # already hard-failed, while telling the reader the opposite of the truth.
+  #
+  # It is handled HERE, not by adding a class to the shared classifier: NotFound is a per-RESOURCE
+  # fact, the classifier is per-CONNECTION, and adding a class would force all seven of its
+  # consumers to grow an arm for a concept most of them cannot encounter.
+  if [ "$_rep_rc" -ne 0 ] && grep -qE 'NotFound|not found' "$_rep_err" 2>/dev/null \
+     && ! grep -qiE 'no such host|connection refused|certificate|Unauthorized|Forbidden|no such file' "$_rep_err" 2>/dev/null; then
+    rm -f "$_rep_err"
+    echo "  cluster ${VKS_NAMESPACE}/${VKS_CLUSTER_NAME}: DOES NOT EXIST — the Supervisor answered, and has no such Cluster."
+    return 3
+  fi
   if [ "$_rep_rc" -ne 0 ]; then
     case "$(classify_kube_failure "$_rep_err")" in
       STALE_CA)            _why="the kubeconfig does not work against this cluster (rebuilt CA?) — make vks-login" ;;
@@ -273,6 +293,24 @@ if [ "$WAIT_SECONDS" -gt 0 ]; then
   the platform and has not been observed to self-correct. Capture the evidence and recreate under a
   DIFFERENT name -- recreating under the same one reproduced this three times running." ;;
   esac
+  # SAME SHAPE AS THE DIVERGENT GUARD ABOVE, for the same reason: read the state ONCE before
+  # spending the budget. A Cluster that DOES NOT EXIST cannot become ready by waiting — the create
+  # either never ran or was rejected, and both are visible right now. MEASURED: row 3 waited the
+  # full 1800s for a Cluster whose create had been rejected 60 seconds earlier.
+  # Only rc=3 (the definitive DOES NOT EXIST) stops here. Every "could not ask" class still falls
+  # through and waits, because those genuinely can resolve while we watch.
+  # `report; rc=$?` would DIE HERE: this script is `set -euo pipefail` and report() returns
+  # non-zero for every not-yet-ready cluster, so the script would exit before the check — refusing
+  # the healthy and provisioning cases it must let through. Caught by the two existing cases going
+  # red, which is what they are for.
+  _rep_first=0; report || _rep_first=$?
+  if [ "$_rep_first" -eq 3 ]; then
+    die "refusing to wait ${WAIT_SECONDS}s for a cluster the Supervisor says does not exist.
+  Nothing was created, so nothing can converge. Either 'make vks-cluster-create' was never run, or
+  it was REJECTED -- re-run it and read its output; a rejection names the field it objected to and
+  costs about a second, because it validates server-side before applying."
+  fi
+
   end=$((SECONDS + WAIT_SECONDS))
   while [ "$SECONDS" -lt "$end" ]; do
     # BOTH, in one predicate. Breaking on conditions alone is what produced a false ready here.
