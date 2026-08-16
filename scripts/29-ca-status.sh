@@ -38,6 +38,15 @@ load_env
 ca_status_report() {
   local stale=0 pair label file host port remedy rc
 
+  # ⚠️ WITHOUT openssl EVERY probe returns 5 and this reports "your CA is not usable" — the WRONG
+  # cause, with a remedy that cannot help. MEASURED with PATH stripped. It matters because a bare
+  # Photon jump box has no openssl until `make deps` runs, and scenario-2 reaches this step first.
+  if ! command -v openssl >/dev/null 2>&1; then
+    log_warn "openssl is not installed, so no certificate can be checked. Run: make deps"
+    CA_STATUS_CHECKED=0
+    return 0
+  fi
+
   # The pairs are DERIVED from the env, not enumerated in a list that rots: each is a *_CA_FILE key
   # and the endpoint key that names what it anchors. Adding a third anchor means adding it here AND
   # to .env.example, which check-env-coverage already enforces.
@@ -57,7 +66,7 @@ ca_status_report() {
   # fine" must not print the same sentence. The first version said "all CA certificates match their
   # servers" with NOTHING configured — a green over zero work, which is the one failure this whole
   # script exists to prevent, committed by the script itself.
-  CA_STATUS_CHECKED=0
+  CA_STATUS_CHECKED=0; CA_STATUS_MATCHED=0
 
   if [ -z "$pairs" ]; then
     log_info "no CA certificate is configured, so there is nothing to check."
@@ -91,8 +100,14 @@ ca_status_report() {
     # "trust anchor" and "STALE" — neither runbook uses those words, and printing them at someone
     # who has only ever been told to "save Harbor's CA certificate" is our jargon leaking out. The
     # internals may keep calling it an anchor; the output may not.
+    # ALL SIX of ca_verifies_endpoint's documented verdicts get an arm. The first version handled
+    # 0/1/2/5 and let 3 and 4 fall through to a catch-all that printed "could not check" and exited
+    # 0 — and rc=3 (chain fine, NAME wrong) is the MODAL shape here, because scenario-2 tells the
+    # tenant to put Harbor's LB *IP* in HARBOR_URL while its certificate usually carries only a DNS
+    # name. So the commonest real failure was being reported as "could not check", with a green exit.
     case "$rc" in
-      0) log_info "${label} (${file}) matches ${host}" ;;
+      0) log_info "${label} (${file}) matches ${host}"
+         CA_STATUS_MATCHED=$((CA_STATUS_MATCHED + 1)) ;;
       1) log_error "${label} (${file}) does NOT match ${host} — this is a leftover certificate."
          log_error "  A rebuilt lab issues a NEW certificate at the SAME address, so the old file"
          log_error "  still looks perfectly valid and is not."
@@ -101,9 +116,19 @@ ca_status_report() {
       2) # ABSTAIN. Without this arm, every certificate reads as wrong whenever the lab is powered
          # off, and the first person to see that rightly deletes the check. rc=1 and rc=2 being
          # DISTINCT is what makes this safe to ship; test-ca-staleness-check.sh asserts they differ.
+         # It is NOT a pass either — see the ALL-MATCH token below, which this arm cannot reach.
          log_warn "${label}: ${host} did not answer — skipping. This says nothing about the certificate." ;;
-      5) log_warn "${label} (${file}) is not a usable CA certificate — run: make ${remedy}" ;;
-      *) log_warn "${label}: could not check it against ${host} (code ${rc})" ;;
+      3) log_error "${label} (${file}) issued the certificate at ${host}, but that certificate is"
+         log_error "  NOT VALID FOR THIS ADDRESS. Your certificate is fine; the address is wrong."
+         log_error "  Use the DNS name the certificate was issued for, not an IP — set it in ./.env."
+         stale=$((stale + 1)) ;;
+      4) log_error "${label}: ${host} answered, but did not present a certificate at all."
+         log_error "  Something other than ${label} is listening there, or it is serving plain HTTP."
+         stale=$((stale + 1)) ;;
+      5) log_error "${label} (${file}) is not a usable CA certificate — run: make ${remedy}"
+         stale=$((stale + 1)) ;;
+      *) log_error "${label}: unrecognised result ${rc} checking ${host} — treat as unchecked."
+         stale=$((stale + 1)) ;;
     esac
   done <<< "$pairs"
   return "$stale"
@@ -114,13 +139,26 @@ ca_status_report() {
 
 printf '\n================= CA certificate check =================\n' >&2
 _stale=0; ca_status_report || _stale=$?
+# THE TOKEN IS THE POINT, and it is the fix for a fake-green I shipped hours earlier. The runbooks
+# quote a line from this output as their **Expect:**, and walk-doc PASSES A BLOCK WHEN ANY QUOTED
+# LITERAL MATCHES. My first Expect quoted "Harbor CA" — which every per-certificate line begins
+# with, INCLUDING every failure arm and the file-is-missing arm. So the step added to catch the
+# failure printed a literal that MATCHED ON THAT FAILURE and scored the block green.
+# ALL-MATCH is emitted on exactly one path: at least one certificate checked, and every one matched.
+# No failure arm, no skip, and no empty configuration can produce it.
 if [ "${CA_STATUS_CHECKED:-0}" -eq 0 ]; then
-  log_info "checked nothing — see above. This is not a pass."
+  log_error "checked nothing — see above. This is NOT a pass."
+  printf '========================================================\n' >&2
+  exit 1
+elif [ "$_stale" -eq 0 ] && [ "${CA_STATUS_MATCHED:-0}" -eq "$CA_STATUS_CHECKED" ]; then
+  log_info "CA-STATUS: ALL-MATCH n=${CA_STATUS_MATCHED}"
 elif [ "$_stale" -eq 0 ]; then
-  log_info "all ${CA_STATUS_CHECKED} CA certificate(s) match their servers."
+  # Everything that ran was fine, but something was SKIPPED (an endpoint did not answer). Not a
+  # failure, and emphatically not ALL-MATCH.
+  log_warn "CA-STATUS: INCOMPLETE — ${CA_STATUS_MATCHED} of ${CA_STATUS_CHECKED} checked; the rest were skipped above."
 else
-  log_error "${_stale} CA certificate(s) above do not match. Each one fails LATER, as an error about"
-  log_error "  TLS rather than about the file — and a rebuilt lab reproduces it every time."
+  log_error "${_stale} of ${CA_STATUS_CHECKED} CA certificate(s) above are wrong. Each one fails LATER,"
+  log_error "  as an error about TLS rather than about the file — and a rebuilt lab reproduces it."
 fi
 printf '========================================================\n' >&2
 exit "$_stale"

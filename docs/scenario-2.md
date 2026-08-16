@@ -218,15 +218,9 @@ Do **not** build the file by hand from `openssl s_client`: what that gives you i
 certificate rather than the one that issued it, so it appears to work and then fails later with
 `x509: certificate signed by unknown authority`.
 
-However you got the file, check it is the right one for **this** Harbor before anything relies on it:
-
-```bash
-make ca-status
-```
-
-**Expect:** a line beginning `Harbor CA` that says it `matches` your Harbor address, and
-`CA certificate(s) match their servers.` A file that *looks* like a CA but belongs to a different
-server fails much later, as a TLS error naming neither the file nor this step. *(<1 min)*
+You will check that the file is the right one for **this** Harbor in the next step, once the tools
+that can check it are installed. A file that *looks* like a CA but belongs to a different server
+fails much later, as a TLS error naming neither the file nor this step.
 
 The CA is then used in **two** places, both handled for you: `make mirror` builds a **sudo-free**
 trust bundle (`SSL_CERT_FILE` = the system CAs + your Harbor CA) so `crane` pushes over HTTPS
@@ -247,6 +241,19 @@ make vks-login    # validates $KUBECONFIG + context against the lab cluster
 ```
 
 **Expect:** `prereqs installed. Versions:` followed by the pinned version of each tool.
+
+`make deps` is also what installs `openssl`, so now you can check the CA certificate you saved in
+Step 2 really is the one that signed **this** Harbor's:
+
+```bash
+make ca-status
+```
+
+**Expect:** `CA-STATUS: ALL-MATCH` — nothing else prints that. *(<1 min)*
+
+If it instead says the certificate is **not valid for this address**, the file is fine and the
+address is wrong: Harbor's certificate is usually issued for its DNS name, not for the IP behind it,
+so put the name in `HARBOR_URL` and give that name an A record pointing at the IP you discovered.
 
 ## 3b. Install the Broadcom VCF/VKS lab CLIs
 
@@ -363,6 +370,7 @@ Service — it runs on the Supervisor, not your guest cluster**, so this needs a
 which a locked-down tenant usually does **not** have:
 
 ```bash
+set -a; . ./.env; set +a
 SUP="${VKS_SUPERVISOR_KUBECONFIG:-./secrets/supervisor.kubeconfig}"
 if [ -s "$SUP" ]; then kubectl --kubeconfig "$SUP" get pods -A | grep argocd-application-controller
 else echo "no Supervisor kubeconfig at $SUP — ask the platform team for ARGOCD_NAMESPACE"; fi
@@ -385,6 +393,7 @@ built image to Harbor from inside the cluster, which needs a Docker-config secre
 Check whether it already exists:
 
 ```bash
+set -a; . ./.env; set +a
 kubectl -n ci get secret harbor-dockerconfig
 ```
 
@@ -394,6 +403,7 @@ Keep the secret **off argv** — build the `config.json` on disk and load it fro
 needs the key named literally `config.json`, not `.dockerconfigjson`:
 
 ```bash
+set -a; . ./.env; set +a
 umask 077
 auth=$(printf '%s:%s' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" | base64 -w0)
 printf '{"auths":{"%s":{"auth":"%s"}}}' "$HARBOR_URL" "$auth" > /tmp/harbor-config.json

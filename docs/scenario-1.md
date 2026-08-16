@@ -560,10 +560,11 @@ looking fine until it fails:
 make ca-status
 ```
 
-**Expect:** a line beginning `Harbor CA` that says it `matches` your Harbor address, then
-`CA certificate(s) match their servers.` From here on `make lab-preflight` repeats this check for
-you, so a rebuilt lab is caught in the first seconds rather than 20 minutes into the mirror.
-*(<1 min)*
+**Expect:** `CA-STATUS: ALL-MATCH` — nothing else prints that. *(<1 min)*
+
+Every other outcome names the file, the address and what to do, and exits non-zero. From here on
+`make lab-preflight` repeats this check for you, so a rebuilt lab is caught in the first seconds
+rather than 20 minutes into the mirror.
 
 <details><summary>Alternatives if that endpoint is unavailable</summary>
 

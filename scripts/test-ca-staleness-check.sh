@@ -91,7 +91,11 @@ else bad "rc=5  a non-anchor file is reported as not usable" "got rc=$r"; fi
 CS="${REPO_ROOT}/scripts/29-ca-status.sh"
 blk="$(awk '/case "\$rc" in/,/esac/' "$CS")"
 [ -n "$blk" ] || { echo "FAILED to extract the case block from $CS — aborting rather than testing nothing"; exit 1; }
-for arm in 0 1 2 5; do
+# ALL SIX documented verdicts (lib/tls.sh:82-84,178,185 -> 0 1 2 3 4 5). The first version of
+# this loop listed 0 1 2 5 and so ASSERTED THE ABSENCE OF NOTHING for 3 and 4 — which were
+# genuinely unhandled, fell through to the catch-all, and exited 0. An enumerated list that
+# rotted at birth. rc=3 is the modal tenant shape (IP in HARBOR_URL vs a DNS-only SAN).
+for arm in 0 1 2 3 4 5; do
   if printf '%s' "$blk" | grep -qE "^      ${arm}\)"; then ok "29-ca-status handles rc=${arm}"
   else bad "29-ca-status handles rc=${arm}" "no case arm — it would fall through to the catch-all"; fi
 done
@@ -116,6 +120,19 @@ if grep -q 'ca_status_report' "$LP"; then ok "lab-preflight calls ca_status_repo
 else bad "lab-preflight calls ca_status_report" "the check exists but nothing runs it"; fi
 if grep -qE 'problems=\$\(\(problems \+ _stale\)\)' "$LP"; then ok "lab-preflight folds stale anchors into its problem count"
 else bad "lab-preflight folds stale anchors into its problem count" "a stale anchor would print and not fail"; fi
+
+# THE TOKEN. The runbooks quote `CA-STATUS: ALL-MATCH` as their Expect, and walk-doc passes a block
+# when ANY quoted literal matches — so the literal MUST be unreachable from every failure arm. An
+# earlier Expect quoted "Harbor CA", which every per-certificate line begins with, including the
+# failure ones: the step added to catch the failure scored GREEN on it.
+if grep -q 'CA-STATUS: ALL-MATCH' "$CS"; then ok "the success token exists"
+else bad "the success token exists" "the runbooks quote CA-STATUS: ALL-MATCH"; fi
+tokline="$(grep -n 'CA-STATUS: ALL-MATCH' "$CS" | head -1 | cut -d: -f1)"
+if sed -n "$((tokline-3)),${tokline}p" "$CS" | grep -q 'CA_STATUS_MATCHED:\?-\?0\?.*-eq.*CA_STATUS_CHECKED'; then
+  ok "the token is gated on matched == checked (no skip, no empty run, can reach it)"
+else
+  bad "the token is gated on matched == checked" "a skipped or empty run could print the success token"
+fi
 
 printf '\ntest-ca-staleness-check: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
