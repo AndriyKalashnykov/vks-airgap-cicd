@@ -250,7 +250,9 @@ credential that authenticates, so the "read the installed one" branch is never t
 design (row 2 log: `skipped: [25] 8. Harbor's CA - inside a <details> alternative`). Both consumers
 sit on paths the matrix does not execute.
 
-### ⚠️ My first design was REFUTED in 3 of 5 parts (`vks-adversary` idea-round, 2026-08-16, shell PERMITTED — every counter-claim below is `ran-it`). Do NOT rebuild it.
+### ⚠️ My first design was REFUTED in 3 of 5 parts — do NOT rebuild it
+
+`vks-adversary` idea-round, 2026-08-16, shell PERMITTED; every counter-claim below is `ran-it`.
 
 I proposed copying `nested-vsphere-lab/walk-matrix.sh`'s *"AUTH BEFORE OBSERVING"* fix — a
 `kubectl auth whoami` precheck that dies naming the **token**. Four measured refutations:
@@ -305,6 +307,7 @@ TKr … a Supervisor/content-library problem"*) from a transport failure. It is 
 instance in the class.
 
 **Two things the fix must carry or it trades one dead end for another:**
+
 - a **FORBIDDEN escape hatch** (`HARBOR_SERVICE_NAMESPACE`), or a tenant who legitimately cannot
   list namespaces gets a correct message and still has no path;
 - **tests** — neither script has any. `test-argocd-preflight-ns.sh` is the pattern, and note its
