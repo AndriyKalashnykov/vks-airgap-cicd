@@ -142,11 +142,14 @@ Every `make …` below works already. The commands that are **not** `make` — `
 `argocd` — run in *your* shell, which cannot see them yet.
 
 ```bash
-make shell-init        # permanent — detects your shell and writes to its rc file
-source ~/.bashrc       # this shell now; shell-init prints the exact file for your shell
+make shell-init                      # future shells: appends to YOUR shell's rc file
+. "$(make -s shell-rc-file)"         # THIS shell: re-reads that same file, whichever it is
 ```
 
-Both lines are needed: a bare `export PATH=…` finds `mise`, not the tools it manages.
+**Two lines because they fix two different things.** The first one edits your shell's startup file,
+which only affects shells you open *later*; the second re-reads it so the shell you are sitting in
+picks it up now. Neither hardcodes `~/.bashrc` — `make shell-rc-file` prints the file for bash, zsh,
+fish or ksh, which is the same resolver `shell-init` used to decide where to write.
 
 **Expect:** `kubectl version --client` answers **in this shell** (and `vcf version`, after
 `make install-vcf-clis`).
@@ -239,7 +242,7 @@ vcf context use "$VKS_CONTEXT_NAME:$VKS_NAMESPACE"
 ```
 
 `--username` is not optional — without it `vcf` asks `? Provide Username:` and dies `[x] : EOF` in
-anything non-interactive (measured 2026-08-13, `vcf` v9.1.0.0400, with and without a pty). And `vcf context use` can print a `system Harbor registry` error **and
+anything non-interactive. And `vcf context use` can print a `system Harbor registry` error **and
 still have worked**: judge it by the next command, not its exit code. `make vks-login` already does.
 
 </details>
@@ -404,8 +407,21 @@ Where Gitea, Tekton and your apps run. You need cluster-admin on it.
 | `VKS_K8S_VERSION` | `v1.34.8+vmware.1-vkr.1` | **`make vks-k8s-version`** writes it — the newest **Ready AND Compatible** release, waiting if a freshly-enabled Supervisor is still syncing them. It writes the **full** name because this is a *prefix* selector: a bare `v1.34` is accepted and then floats, which an air-gap repo must not do. It will not move a version you pinned yourself. |
 
 ```bash
+make vks-k8s-version           # resolve the TKr NOW — see the note below; do not skip this
 make vks-cluster-create        # applies the Cluster; provisioning is async
 ```
+
+**Expect:** a line naming `VKS_K8S_VERSION:` with a full release string such as
+`v1.35.5+vmware.1-vkr.1`. You do **not** copy that value anywhere — `make vks-k8s-version` writes it
+into `./.env` itself, and `make vks-cluster-create` on the next line reads it from there. If it says
+`NOT overwriting it`, you pinned `VKS_K8S_VERSION` yourself earlier and it is respecting that; clear
+the pin if you wanted the newest.
+
+Run the two together, in that order — on a freshly-built Supervisor the answer goes stale in
+minutes. If the create is rejected with `Could not resolve KR/OSImage`, just run both lines again:
+the release is real, its node image has not landed yet. That costs about a second, because the
+create validates server-side before it applies anything.
+[Why](scenario-1-notes.md#step-4--the-guest-cluster).
 
 Already have a cluster? Skip **only** that command — the two below still have to run, and the second
 is what writes the kubeconfig every later step needs.
@@ -416,9 +432,8 @@ make vks-cluster-status VKS_CLUSTER_WAIT_SECONDS=1800  # then wait for every nod
 ```
 
 **Read the `endpoint :` line from the first command before starting the wait.** `AGREE` or
-`NOT YET KNOWABLE` → carry on. `*** DIVERGENT ***` → stop and follow what it prints. The waiting
-form now reads the endpoint once before it starts, so it refuses immediately rather than after
-30 minutes — but the remedy is the same either way.
+`NOT YET KNOWABLE` → carry on. `*** DIVERGENT ***` → stop and follow what it prints; the waiting
+form refuses immediately rather than spending 30 minutes to reach the same answer.
 
 **Expect:** the waiting command reprints a table every 15 s, then exits `0` with every node
 `Ready`. *(**4–9 min** — the Timings table's own runs span 3 m 45 s to 8 m 49 s; the command waits up to 30 min, so give it that before calling it stuck.)* A non-zero exit is not a pass — do not continue to the preflight.
@@ -447,7 +462,7 @@ set -a; . ./.env; set +a
 
 **Expect:** `wrote to` — then `KUBECONFIG`, `VKS_CONTEXT` and `VKS_AUTH_METHOD=kubeconfig`.
 
-⚠️ **`make vks-login` now renews the GUEST kubeconfig.** The Supervisor one expires too, and Steps
+⚠️ **`make vks-login` renews the GUEST kubeconfig.** The Supervisor one expires too, and Steps
 10 and 14 need it — `kubectl` then says *"the server has asked for the client to provide
 credentials"*. Renew it with:
 

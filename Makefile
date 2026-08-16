@@ -621,6 +621,12 @@ walkbox: ## Run docs/scenario-1.md END TO END on a real throwaway VM (a containe
 walkbox-down: ## Destroy the walkbox VM (marker-guarded: it refuses any domain it did not create)
 	@$(SCRIPTS)/walkbox.sh down
 
+.PHONY: shell-rc-file
+shell-rc-file: ## Print the rc file for YOUR shell (bash/zsh/fish/ksh) — so a runbook never hardcodes ~/.bashrc
+	@. $(SCRIPTS)/lib/os.sh; f="$$(shell_rc_file)"; \
+	 [ -n "$$f" ] || { echo "cannot identify your shell from SHELL='$${SHELL:-unset}'" >&2; exit 1; }; \
+	 printf '%s\n' "$$f"
+
 .PHONY: shell-init
 shell-init: ## Put the pinned toolchain on YOUR interactive shell's PATH, permanently (detects bash/zsh/fish/ksh)
 	@$(SCRIPTS)/shell-init.sh

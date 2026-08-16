@@ -157,6 +157,22 @@ count.
 
 ---
 
+### Why the release is resolved in the same block as the create
+
+MEASURED 2026-08-16 on a freshly-built Supervisor. A KubernetesRelease and its OSImage arrive on
+**independent timelines**, and the admission webhook needs BOTH:
+
+| 14:29:13 | KR `v1.34.2+vmware.2-vkr.2` goes Ready+Compatible — the only one at that instant |
+| 14:29:30 | resolved, and pinned |
+| 14:32:15 | two newer releases go Ready (`v1.34.8`, `v1.35.5`) |
+| 14:37:26 | `vks-cluster-create` **REJECTED** — `Could not resolve KR/OSImage` |
+| 14:40:58 | the picked release's photon OSImage is finally created — 3m32s too late |
+
+So `kubectl get kubernetesreleases` showed the release as `True True` while the webhook refused it:
+an error contradicted by the very command a reader would use to check. `make vks-k8s-version` now
+offers only releases that already have an image for the target OS (`VKS_OS_NAME`, default photon),
+and the runbook runs it in the same block as the create so the answer is seconds old.
+
 ## Step 6 — Harbor's CA
 
 **Route A (the Harbor UI) needs only a Harbor login.** Route B needs Kubernetes access to the

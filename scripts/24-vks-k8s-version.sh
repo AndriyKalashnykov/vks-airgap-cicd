@@ -36,7 +36,8 @@ esac
 # THE READ IS SEPARATE FROM THE FILTER, so kubectl's own rc survives. As one pipeline its status was
 # awk's, and `2>/dev/null` threw the reason away — which is how a transport failure became "no
 # releases are Ready yet" (B110). SEE _TKR_RC / _TKR_ERR below.
-_TKR_ERR="$(mktemp)"; _TKR_OUT="$(mktemp)"; trap 'rm -f "$_TKR_ERR" "$_TKR_OUT"' EXIT
+_TKR_ERR="$(mktemp)"; _TKR_OUT="$(mktemp)"; _TKR_OSI="$(mktemp)"
+trap 'rm -f "$_TKR_ERR" "$_TKR_OUT" "$_TKR_OSI"' EXIT
 _TKR_RC=0
 # THE READ RUNS IN THIS SHELL, NOT IN A SUBSTITUTION. A first attempt set _TKR_RC inside a function
 # called as `v="$(_newest_ready)"` — a COMMAND SUBSTITUTION IS A SUBSHELL, so the assignment was
@@ -47,9 +48,34 @@ _tkr_read() {
   _TKR_RC=0
   kubectl --kubeconfig "$SUP" --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-15s}" \
     get kubernetesreleases --no-headers >"$_TKR_OUT" 2>"$_TKR_ERR" || _TKR_RC=$?
+  # The OS IMAGES are read HERE, in the same function, so the wait loop below re-reads BOTH.
+  # A failure is deliberately non-fatal: an empty file makes _newest_ready return nothing, which
+  # the existing wait/classify path already handles as "nothing usable yet".
+  kubectl --kubeconfig "$SUP" --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-15s}" \
+    get osimages -o custom-columns='K8S:.spec.kubernetesVersion,OS:.spec.os.name' --no-headers \
+    >"$_TKR_OSI" 2>/dev/null || : >"$_TKR_OSI"
 }
+# READY + COMPATIBLE IS NOT ENOUGH. The admission webhook resolves a KubernetesRelease AND an
+# OSImage, and the two arrive on INDEPENDENT timelines. MEASURED 2026-08-16: this filter picked
+# v1.34.2+vmware.2-vkr.2 (Ready+Compatible since 14:29:13); the create at 14:37:26 was REJECTED with
+#   admission webhook "tkr-resolver-cluster-webhook.tanzu.vmware.com" denied the request:
+#   Could not resolve KR/OSImage ... {k8sVersionPrefix: v1.34.2+vmware.2-vkr.2, osImageSelector: os-name=photon}
+# because that release's photon OSImage was not created until 14:40:58 — 3m32s AFTER the rejection.
+# Two other releases (v1.34.8, v1.35.5) had theirs and would have worked. So an operator following
+# the runbook got an error naming a release that `kubectl get kubernetesreleases` shows as True True:
+# an error contradicted by the very command the runbook told them to run.
+#
+# The join: an OSImage's spec.kubernetesVersion is the KR's version MINUS its `-vkr.N` suffix
+# (v1.34.2+vmware.2-vkr.2 -> v1.34.2+vmware.2). VERIFIED on a live Supervisor across all 6 usable
+# releases, including the `-fips` shape (v1.33.6+vmware.1-fips-vkr.2 -> v1.33.6+vmware.1-fips).
+# os-name=photon is the builtin-generic ClusterClass default, not ours — hence VKS_OS_NAME.
 _newest_ready() {   # call _tkr_read FIRST; this only filters what it fetched
-  awk '$3=="True" && $4=="True" {print $2}' "$_TKR_OUT" 2>/dev/null | sort -V | tail -1
+  awk -v osi="$_TKR_OSI" -v want_os="${VKS_OS_NAME:-photon}" '
+    BEGIN { while ((getline line < osi) > 0) { n=split(line, f, /[ \t]+/); if (n>=2 && f[2]==want_os) have[f[1]]=1 } }
+    $3=="True" && $4=="True" {
+      base=$2; sub(/-vkr\.[0-9]+$/, "", base)
+      if (base in have) print $2
+    }' "$_TKR_OUT" 2>/dev/null | sort -V | tail -1
 }
 
 _tkr_read
@@ -99,7 +125,10 @@ fi
 
 if [ -z "$v" ]; then
   log_error "no Ready AND Compatible TKr on this Supervisor after ${WAIT}s. Nothing was written."
-  log_error "  Every release is published but unusable, which is a Supervisor/content-library problem,"
+  log_error "  Either every release is published-but-unusable (a Supervisor/content-library problem),"
+  log_error "  OR none of the usable ones has a ${VKS_OS_NAME:-photon} OSImage yet — the webhook needs BOTH."
+  log_error "  Check the second one with:"
+  log_error "    kubectl --kubeconfig ${SUP} get osimages -o custom-columns=K8S:.spec.kubernetesVersion,OS:.spec.os.name"
   log_error "  not something a cluster name can work around. Look at the two boolean columns:"
   log_error "    kubectl --kubeconfig ${SUP} get kubernetesreleases"
   exit 1
