@@ -1010,7 +1010,7 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint test-endpoint-report test-cluster-status-wait-gate test-harbor-admin-ns-classify test-tkr-classify test-uninstall-honesty test-classify-kube-failure test-env-lifecycle test-walk-doc test-harbor-reachable test-harbor-auth-report test-gitea-hook-ids test-argocd-kubeconfig-stale test-ca-anchor-validation ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint test-endpoint-report test-cluster-status-wait-gate test-harbor-admin-ns-classify test-tkr-classify test-state-echo-back test-uninstall-honesty test-classify-kube-failure test-env-lifecycle test-walk-doc test-harbor-reachable test-harbor-auth-report test-gitea-hook-ids test-argocd-kubeconfig-stale test-ca-anchor-validation ## Run all offline script-logic unit tests
 
 .PHONY: test-env-lifecycle
 test-env-lifecycle: ## Offline: the .env lifecycle a new operator walks first (init/populate/check)
@@ -1065,6 +1065,10 @@ test-harbor-admin-ns-classify: ## Offline: a transport failure must never read a
 .PHONY: test-tkr-classify
 test-tkr-classify: ## Offline: a transport failure must not burn the 900s TKr wait and then blame the content library (B110)
 	@bash scripts/test-tkr-classify.sh
+
+.PHONY: test-state-echo-back
+test-state-echo-back: ## Offline: a writer must publish only what it PRODUCED — the overlay must not shadow a .env robot with admin (B111)
+	@bash scripts/test-state-echo-back.sh
 
 .PHONY: test-fetch-ca-pin
 test-fetch-ca-pin: ## Offline: fetch-ca.sh REFUSES a CA whose fingerprint does not match the out-of-band pin (real TLS oracle)
