@@ -621,6 +621,12 @@ walkbox: ## Run docs/scenario-1.md END TO END on a real throwaway VM (a containe
 walkbox-down: ## Destroy the walkbox VM (marker-guarded: it refuses any domain it did not create)
 	@$(SCRIPTS)/walkbox.sh down
 
+.PHONY: shell-rc-file
+shell-rc-file: ## Print the rc file for YOUR shell (bash/zsh/fish/ksh) — so a runbook never hardcodes ~/.bashrc
+	@. $(SCRIPTS)/lib/os.sh; f="$$(shell_rc_file)"; \
+	 [ -n "$$f" ] || { echo "cannot identify your shell from SHELL='$${SHELL:-unset}'" >&2; exit 1; }; \
+	 printf '%s\n' "$$f"
+
 .PHONY: shell-init
 shell-init: ## Put the pinned toolchain on YOUR interactive shell's PATH, permanently (detects bash/zsh/fish/ksh)
 	@$(SCRIPTS)/shell-init.sh
@@ -1010,7 +1016,11 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint test-endpoint-report test-cluster-status-wait-gate test-harbor-admin-ns-classify test-tkr-classify test-state-echo-back test-uninstall-honesty test-classify-kube-failure test-env-lifecycle test-walk-doc test-harbor-reachable test-harbor-auth-report test-gitea-hook-ids test-argocd-kubeconfig-stale test-ca-anchor-validation test-unwedge-transport-refusal ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint test-endpoint-report test-cluster-status-wait-gate test-harbor-admin-ns-classify test-tkr-classify test-state-echo-back test-uninstall-honesty test-classify-kube-failure test-env-lifecycle test-walk-doc test-harbor-reachable test-harbor-auth-report test-gitea-hook-ids test-argocd-kubeconfig-stale test-ca-anchor-validation test-unwedge-transport-refusal test-shell-rc-file ## Run all offline script-logic unit tests
+
+.PHONY: test-shell-rc-file
+test-shell-rc-file: ## Offline: the rc-file resolver the runbook calls — the VM matrix is single-shell and CANNOT catch this
+	@bash $(SCRIPTS)/test-shell-rc-file.sh
 
 .PHONY: test-unwedge-transport-refusal
 test-unwedge-transport-refusal: ## Offline: a break-glass DELETE must never report success over a no-op (B112)

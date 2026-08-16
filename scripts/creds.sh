@@ -87,10 +87,10 @@ else
   _argo_ip=""
   if [ -n "${ARGOCD_KUBECONFIG:-}${KUBECONFIG:-}" ] && have kubectl; then
     _argo_ns="${ARGOCD_NAMESPACE:-}"
-    [ -n "$_argo_ns" ] || _argo_ns="$(KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s \
+    [ -n "$_argo_ns" ] || _argo_ns="$(KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s </dev/null \
         get svc -A -o jsonpath='{range .items[?(@.metadata.name=="argocd-server")]}{.metadata.namespace}{end}' 2>/dev/null || true)"
     if [ -n "$_argo_ns" ]; then
-      _argo_ip="$(KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s -n "$_argo_ns" \
+      _argo_ip="$(KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s </dev/null -n "$_argo_ns" \
           get svc argocd-server -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
     fi
   fi
@@ -195,9 +195,17 @@ fi
 
 # Does the cluster actually answer? Bounded — never hang the summary on an unreachable API server.
 _cluster="not reachable (or KUBECONFIG unset)"
+# </dev/null ON EVERY kubectl HERE, and it is load-bearing. MEASURED 2026-08-16: with stdin an open
+# pipe that never reaches EOF -- which is what this inherits when run from a test harness or a make
+# recipe -- `kubectl version` blocks in unix_stream_data_wait INDEFINITELY. It hung `make ci` for 22
+# and 27 minutes on two occasions. --request-timeout CANNOT bound it: the process never gets far
+# enough to issue a request. Proven by varying ONLY stdin against the same kubeconfig:
+#     stdin=/dev/null -> rc=1 in 0s | stdin=open pipe -> HUNG | open pipe + </dev/null -> rc=1 in 0s
+# I twice mis-diagnosed this as a network/address problem and "fixed" it twice without fixing it;
+# every standalone probe was fast because an interactive shell's stdin is a terminal.
 if [ -n "${KUBECONFIG:-}" ] && have kubectl \
-   && kubectl --request-timeout=3s version -o json >/dev/null 2>&1; then
-  _cluster="reachable — context '$(kubectl config current-context 2>/dev/null || echo '?')'"
+   && kubectl --request-timeout=3s version -o json >/dev/null 2>&1 </dev/null; then
+  _cluster="reachable — context '$(kubectl config current-context </dev/null 2>/dev/null || echo '?')'"
 fi
 
 # CANONICAL PROVENANCE TOKEN — the machine-checkable claim, independent of any wording around it.
