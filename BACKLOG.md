@@ -109,29 +109,84 @@ the ArgoCD namespace, and whether the Supervisor can route to a guest LoadBalanc
 [`docs/lab-validation-plan.md`](docs/lab-validation-plan.md), in a better form than a backlog line: each
 is a numbered step with its command, its expected observable, and what to send back.
 
-## B84 — `export VAR=x; make <target>` is SILENTLY defeated by `-include .env`
+## B84 — ✅ CLOSED. `export VAR=x; make <target>` was silently defeated, and the FIX inverted `.env` vs `.env.state`
 
-MEASURED 2026-08-09. GNU make lets a **makefile assignment beat the environment**, and the
-Makefile's `-include .env` is exactly that. So:
+MEASURED 2026-08-09, closed 2026-08-16 (#657). GNU make lets a **makefile assignment beat the
+environment**, and a plain `-include` is exactly that.
 
-| form | effective value |
+`.env` was rewritten to `?=` in 8db2da1. **The state overlay was not** — and it is the include that
+matters most, because `state_set` writes exactly the SELECTOR class there: `KUBECONFIG`,
+`HARBOR_URL`, `HARBOR_CA_FILE`, `VKS_CONTEXT`, `INGRESS_CONTROLLER`, `ARGOCD_KUBECONFIG`.
+
+    export HARBOR_URL=harbor.OPERATOR-CHOSE-THIS   ->   HARBOR_URL=[harbor.from-STATE]
+
+Not theoretical: `fetch-harbor-ca` passes `$(HARBOR_URL)`/`$(HARBOR_CA_FILE)` as **argv** to
+`fetch-ca.sh`, which deliberately does not call `load_env` — so the selector snapshot cannot rescue
+it, and the operator fetches a CA from the overlay's Harbor while believing they named another.
+
+**The fix introduced its own regression, and that is the part worth remembering.** `?=` inverts
+file-vs-file order: `load_env` SOURCES the files so the LAST wins, while under `?=` the FIRST wins.
+Rewriting the overlay in place made a stale `.env` beat the just-discovered state. The includes are
+now in REVERSE order (kind, state, `.env`), each `-include` guarded on its SOURCE existing so a
+deleted `.env` cannot keep applying through its orphaned generated file.
+
+`make test-env-precedence` — 14 cases, and it LIFTS the include blocks out of the real Makefile
+rather than retyping them, so it cannot keep passing after someone reorders the real ones. Case 10
+is a positive control that rebuilds the pre-fix shape and requires it to STILL defeat `export`.
+
+## B86 — ⚠️ REFUTED AS WRITTEN. Do NOT make the real-lab path call `state_stamp`
+
+**The row below asked for something MEASURED to destroy values.** An idea-round (2026-08-16) refuted
+three of its four candidate fixes on one fact the row does not contain: **the sink is written under
+TWO different API servers**, so a scalar `VKS_STATE_SERVER` cannot describe it.
+
+| written by | under which kubeconfig |
 |---|---|
-| `export VKS_NAMESPACE=wld03; make vsphere-namespace` | **`lab`** (from `.env`) |
-| `make vsphere-namespace VKS_NAMESPACE=wld03` | `wld03` |
+| `HARBOR_USERNAME` / `HARBOR_PASSWORD`, `ARGOCD_LB_IP` | **Supervisor** |
+| `INGRESS_LB_IP`, `GITEA_LB_IP` (after `make use-guest-kubeconfig`) | **guest** |
 
-Only the command-line form wins, and make then EXPORTS its own value to the recipe, so
-`load_env`'s selector snapshot cannot rescue it — the script never sees the operator's value.
+Stamping ARMS `state_check`'s mismatch refusal, which is dead code today only because the sink is
+unstamped. MEASURED A/B on the same sink, only the stamp differing:
 
-scenario-1 already uses the command-line form, so no documented instruction is wrong. The
-hazard is the natural `export`-then-`make` habit, which fails silently. It caught me while
-testing `make vsphere-namespace`: it operated on `lab` while I believed it was creating
-`wld03`. Running the script DIRECTLY (bypassing make) used the override correctly.
+| sink state | `HARBOR_PASSWORD` | `HARBOR_URL` | `INGRESS_LB_IP` |
+|---|---|---|---|
+| unstamped (today) | `SupervisorHarborSecret` | `10.0.0.9` | `10.0.0.20` |
+| **stamped for guest** | **LOST** | **LOST** | **LOST** |
 
-Options: document it beside the `.env` clobber rule; or have `load_env` prefer a
-`VKS_*_OVERRIDE`-style key. NOT yet decided - recorded so the next person does not
-re-discover it by having a target act on the wrong namespace.
+And from a Supervisor shell — which scenario-1 says is where everything runs — `creds-show` after
+stamping **keeps the banner AND loses the values**: `values-provenance: STORED`, `Harbor
+https://harbor.vks.local admin <not published>`. It trades a cosmetic over-alarm for silent wrong
+values on half the walk. A mirror push aimed at `harbor.vks.local` instead of the real LB is the
+sharp end.
 
-## B86 — `values-provenance` can never read `DISCOVERED` on the real-lab path
+Two further findings, both measured:
+
+- **`state_stamp` on a box with NO sink CREATES one**, producing a false `DISCOVERED` over pure
+  `.env.example` placeholders — *strictly worse* than the bug this row reports: today's failure
+  over-alarms, that one under-alarms.
+- **The row's stated hazard is FALSE.** `state_stamp` never archives; it is a pure upsert. The real
+  hazard is silent misattribution, not deletion. A wrong hazard misdirects the next session.
+
+**THE DESIGN THAT SURVIVES — no new writes.** Split the ladder and let per-value liveness carry the
+alarm: `STORED` becomes `UNSTAMPED` (expected on a lab; neutral wording) vs `MISMATCHED` (stamped
+AND contradicted — the only state that PROVES staleness, and the only one that keeps the loud
+banner); stop prescribing `make state-stamp` in `creds.sh` and `lib/state.sh:95` (measured: 3 warn
+lines per `load_env`, i.e. per script invocation — a bigger alarm surface than the banner this row
+is about, prescribing the refuted action); and extend the existing bounded TCP probe from
+`INGRESS_LB_IP` to `HARBOR_URL` and the resolved ArgoCD address. No writes means `state_check`'s
+refusal stays disarmed, so the CRITICAL above cannot occur.
+
+**Settle first, in one command on a live lab** (the round could not, and if the answer is "same
+endpoint" the CRITICAL collapses):
+
+    kubectl --kubeconfig secrets/supervisor.kubeconfig config view --minify \
+      -o jsonpath='{.clusters[0].cluster.server}'      # vs the same against the guest kubeconfig
+
+Stale in the original row below: it cites `Makefile:264`; the caller is `Makefile:305`.
+
+---
+
+### B86, as originally written (kept for its evidence — the DESIGN in it is refuted above)
 
 **HIGH.** `state_stamp` is called from exactly two places: `scripts/05-kind-up.sh:156` (KinD
 only) and `Makefile:264` (a manual `make state-stamp`). **No real-lab install script calls
@@ -149,10 +204,12 @@ is to tell the operator what is true. A banner that fires on every correct insta
 them to ignore it — and then the case it exists for (a genuinely stale overlay after a lab
 rebuild) is ignored too, because **the two are byte-identical**.
 
-⚠️ **Design change — `vks-adversary` BEFORE implementing.** `scripts/05-kind-up.sh:148-155`
-documents the trap in detail: `state_stamp` reads the AMBIENT `KUBECONFIG`, so stamping at
-the wrong moment on a lab box can archive a live sink and **destroy the only copy of the
-generated passwords**. It has to go where `KUBECONFIG` already points at the guest cluster.
+⚠️ **This paragraph is the part that was MEASURED FALSE.** `state_stamp` does NOT archive — it is
+a pure upsert (`lib/state.sh:55-64` -> `state_set` -> `set_env_var:826-831`); a re-stamp over a
+populated, mismatched sink left `HARBOR_PASSWORD`/`GITEA_CI_TOKEN` intact and created no `.stale-*`
+file. `state_archive` is reachable only from `state_claim_kind`, the KinD WRITE path. And "put it
+where KUBECONFIG points at the guest cluster" is precisely the stamp that loses the Supervisor half.
+See the refutation above before touching this.
 
 ## B87 — ✅ CLOSED. `test-creds-show.sh` now covers the real-lab provenance path
 
