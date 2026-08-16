@@ -55,9 +55,12 @@ Point `kubectl` at the wrong one and you get no error — you get **empty result
 like *"the service is not installed"*.
 
 **Most tenants are handed the workload kubeconfig and never touch the Supervisor.** If that is you,
-save it and set `VKS_AUTH_METHOD=kubeconfig` in `./.env`:
+put it at `./secrets/vks.kubeconfig` — that exact path, because it is where every `make` target
+looks by default — and set `VKS_AUTH_METHOD=kubeconfig` in `./.env`:
 
 ```bash
+mkdir -p ./secrets
+cp /path/to/the-kubeconfig-you-were-given ./secrets/vks.kubeconfig
 head -1 ./secrets/vks.kubeconfig
 ```
 
