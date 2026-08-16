@@ -182,6 +182,14 @@ fi
 # state_kubeconfig_server PARSES the kubeconfig and never dials, so a stamped overlay plus a
 # matching kubeconfig is fully offline. This is the branch VKS_STATE_KIND=1 has been standing in
 # for, so the stamp comparison itself has never been exercised by this gate.
+# The server below is a CLOSED LOCAL PORT, deliberately. What this case tests is that a stamp
+# MATCHING the kubeconfig's server yields DISCOVERED — the two strings agreeing is the mechanism;
+# whether anything answers is incidental. It used to be https://127.0.0.1:1, which creds.sh
+# DIALS for real, and twice (2026-08-16) that dial ran 23 MINUTES and blocked `make ci` entirely
+# while the box was saturated by a lab cut.
+#   ⚠️ NOT because that address is slow — measured on an idle box, it, a closed local port and a
+#   TEST-NET black hole all fail in 0s. The defect is that an OFFLINE unit test dialled the network
+#   at all, so its cost is whatever contention makes it. 127.0.0.1:1 cannot leave the box.
 _kc="${TMPDIR:-/tmp}/creds-test-kc.$$"
 cat > "$_kc" <<'KC'
 apiVersion: v1
@@ -190,7 +198,7 @@ current-context: c
 clusters:
 - name: k
   cluster:
-    server: https://10.9.8.7:6443
+    server: https://127.0.0.1:1
 contexts:
 - name: c
   context:
@@ -200,7 +208,7 @@ users:
 - name: u
   user: {}
 KC
-out="$(KUBECONFIG="$_kc" render 'VKS_STATE_SERVER=https://10.9.8.7:6443
+out="$(KUBECONFIG="$_kc" render 'VKS_STATE_SERVER=https://127.0.0.1:1
 HARBOR_URL=10.0.0.1
 HARBOR_PASSWORD=x
 ARGOCD_LB_IP=10.0.0.2

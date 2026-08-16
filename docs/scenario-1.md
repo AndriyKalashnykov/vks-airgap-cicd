@@ -661,12 +661,18 @@ make verify           # pushes a marked change and follows it to the running app
 missing. Most often: **no default StorageClass**. Fix it and re-run `install-all`:
 
 ```bash
-kubectl get storageclass                                                    # pick one
-kubectl annotate sc <name> storageclass.kubernetes.io/is-default-class=true
+kubectl get storageclass
 ```
 
 **Expect:** a table headed `PROVISIONER`, with at least one class. If it is empty the pipeline
 has nowhere to put Gitea's PVC and Step 11 will fail late instead of here.
+
+Then mark one of them default — `<name>` is YOUR choice from the table above, which is why this
+line is not runnable as written:
+
+```bash
+kubectl annotate sc <name> storageclass.kubernetes.io/is-default-class=true
+```
 
 ---
 

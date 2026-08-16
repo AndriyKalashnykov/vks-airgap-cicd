@@ -12,6 +12,19 @@
 # Read the numbered notes before "simplifying" any of it.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The document comes from WALK_DOC, NEVER from $1. A positional argument used to be SILENTLY
+# IGNORED, which is the worst possible behaviour: `walk-doc.sh docs/scenario-2.md` walked
+# scenario-1 and reported scenario-1's numbers with no hint that it had substituted a different
+# document. MEASURED 2026-08-16: a one-block probe document invoked that way reported "40
+# extracted, 29 Expect" — scenario-1's figures exactly — and I believed a scenario-2 measurement
+# that had never looked at scenario-2. Refuse instead; the default stays for the no-argument case.
+if [ "$#" -gt 0 ]; then
+  printf 'walk-doc.sh takes NO positional arguments (got %s: %s).\n' "$#" "$*" >&2
+  printf '  The document is chosen with WALK_DOC. You almost certainly meant:\n' >&2
+  printf '      WALK_DOC=%s bash %s\n' "$1" "$0" >&2
+  printf '  Ignoring it silently would walk the DEFAULT document and report ITS numbers as yours.\n' >&2
+  exit 2
+fi
 DOC="${WALK_DOC:-${SCRIPT_DIR}/../docs/scenario-1.md}"
 [ -s "$DOC" ] || { echo "no document at $DOC"; exit 1; }
 # (8) NO DEFAULT. `WALK_EXISTS:-1` skipped all four provisioning blocks, so a row meant to exercise
