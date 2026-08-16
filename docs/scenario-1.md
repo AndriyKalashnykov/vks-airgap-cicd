@@ -425,9 +425,9 @@ Where Gitea, Tekton and your apps run. You need cluster-admin on it.
 
 | key | example | how to get the value |
 |---|---|---|
-| `VKS_CLUSTER_NAME` | `cicd-gc1` | Step 1 (you invented it). **Never reuse a name you deleted recently** — it never converges. |
-| `VKS_CONTEXT_NAME` | `vks-cicd` | Step 1 — read by the `vcf` fallback below |
-| `VKS_NAMESPACE` | `cicd` | Step 1 — read by the `vcf` fallback below |
+| `VKS_CLUSTER_NAME` | `cicd-gc1` | you invented it when you filled in `.env`. **Never reuse a name you deleted recently** — it never converges. |
+| `VKS_CONTEXT_NAME` | `vks-cicd` | the context name you chose — read by the `vcf` fallback below |
+| `VKS_NAMESPACE` | `cicd` | your vSphere Namespace — read by the `vcf` fallback below |
 | `VKS_K8S_VERSION` | `v1.34.8+vmware.1-vkr.1` | **`make vks-k8s-version`** writes it — the newest **Ready AND Compatible** release, waiting if a freshly-enabled Supervisor is still syncing them. It writes the **full** name because this is a *prefix* selector: a bare `v1.34` is accepted and then floats, which an air-gap repo must not do. It will not move a version you pinned yourself. |
 
 ```bash
@@ -447,7 +447,7 @@ make vks-cluster-status VKS_CLUSTER_WAIT_SECONDS=1800  # then wait for every nod
 form will not show it for 30 minutes.
 
 **Expect:** the waiting command reprints a table every 15 s, then exits `0` with every node
-`Ready`. *(**4–9 min** — the Timings table's own runs span 3 m 45 s to 8 m 49 s; the command waits up to 30 min, so give it that before calling it stuck.)* A non-zero exit is not a pass — do not continue to Step 7.
+`Ready`. *(**4–9 min** — the Timings table's own runs span 3 m 45 s to 8 m 49 s; the command waits up to 30 min, so give it that before calling it stuck.)* A non-zero exit is not a pass — do not continue to the preflight.
 
 ### Get its kubeconfig
 
@@ -672,7 +672,7 @@ make env-validate     # does KUBECONFIG reach the cluster? does Harbor authentic
 **Expect:** `env-validate` reports Harbor reachable **and authenticated**.
 
 **Do not go on until it does.** `install-all` cannot succeed on a credential `env-validate` has
-rejected, and it takes 8–10 minutes to say so. Fix it here — Step 4 tells you where the password
+rejected, and it takes 8–10 minutes to say so. Fix it here — the Harbor step tells you where the password
 comes from.
 
 ```bash
@@ -753,7 +753,7 @@ make creds-show
 **Expect:** every URL and login — Harbor, ArgoCD, Gitea, Tekton, one row per app. Each value is
 labelled **DISCOVERED** (read live) or **STORED** (remembered).
 
-Skipped Step 12? The `*.vks.local` URLs will not resolve — reach a service directly instead:
+Skipped the ingress step? The `*.vks.local` URLs will not resolve — reach a service directly instead:
 
 ```bash
 kubectl -n gitea port-forward svc/gitea-http 3000:3000                   # http://localhost:3000
