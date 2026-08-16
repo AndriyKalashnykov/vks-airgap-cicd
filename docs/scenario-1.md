@@ -409,7 +409,7 @@ Where Gitea, Tekton and your apps run. You need cluster-admin on it.
 | `VKS_CLUSTER_NAME` | `cicd-gc1` | you invented it when you filled in `.env`. **Never reuse a name you deleted recently** — it never converges. |
 | `VKS_CONTEXT_NAME` | `vks-cicd` | the context name you chose — read by the `vcf` fallback below |
 | `VKS_NAMESPACE` | `cicd` | your vSphere Namespace — read by the `vcf` fallback below |
-| `VKS_K8S_VERSION` | `v1.34.8+vmware.1-vkr.1` | **`make vks-k8s-version`** writes it — the newest **Ready AND Compatible** release, waiting if a freshly-enabled Supervisor is still syncing them. It writes the **full** name because this is a *prefix* selector: a bare `v1.34` is accepted and then floats, which an air-gap repo must not do. It will not move a version you pinned yourself. |
+| `VKS_K8S_VERSION` | `v1.35.5+vmware.1-vkr.1` | **`make vks-k8s-version`** writes it — the newest **Ready AND Compatible** release, waiting if a freshly-enabled Supervisor is still syncing them. It writes the **full** name because this is a *prefix* selector: a bare `v1.34` is accepted and then floats, which an air-gap repo must not do. It will not move a version you pinned yourself. |
 
 ```bash
 make vks-k8s-version           # resolve the TKr NOW — see the note below; do not skip this
