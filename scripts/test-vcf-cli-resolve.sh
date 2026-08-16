@@ -154,6 +154,17 @@ fresh
 mkdir -p "$d/cluster/v3.6.1"
 mkfake "$d/cluster/v3.6.1/vcf-cluster-linux_${arch}" "PLUGIN-CLUSTER"
 tar -C "$d" -czf "${src}/VCF-Consumption-CLI-PluginBundle-Linux_${ARCH}-${PV}.tar.gz" cluster
+# ⚠️ HERMETICITY. `01-install-vcf-clis.sh:172` gates the plugins path on
+#     have vcf || [ -x "${BIN_DIR}/vcf" ] || die "install the vcf CLI first"
+# so without this stub the case measures WHETHER THE BOX HAS THE VENDOR CLI, not whether the
+# arch-named plugin bundle resolves. MEASURED 2026-08-16: it passed on my box (which has
+# ~/.local/bin/vcf from real lab work) and FAILED on a clean CI runner with
+# "FATAL install the vcf CLI first" — 10 passed / 1 failed, reproduced locally to the case by
+# hiding that one directory from PATH. It had been latent for as long as `test-scripts` ran only
+# on the weekly schedule; the FIRST per-PR run of static-check found it.
+# `$bin` IS the BIN_DIR run_installer passes, so satisfying the guard there mirrors the real
+# contract ("vcf is installed in BIN_DIR") without touching PATH.
+mkfake "$bin/vcf" "VCF-STUB-FOR-PLUGINS-GUARD"
 if run_installer plugins "$src" "$bin" "$err"; then
   ok "resolves the arch-named plugin bundle whose layout is <plugin>/<version>/"
 else
