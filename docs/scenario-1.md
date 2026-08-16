@@ -777,7 +777,8 @@ it prints.** It has more outcomes than the two obvious ones, so do not guess fro
 it.** Attaching runs no helm at all — usually seconds. Installing runs three helm charts and two
 readiness waits, each with its own deadline: a re-run against a warm cluster is ~10 seconds, a cold
 install on a fresh one is minutes, and the ceiling is ~25. To lengthen a deadline set
-`READY_TIMEOUT_SECONDS` **in `.env`** — on the `make` command line it does nothing.
+`READY_TIMEOUT_SECONDS` — either on the `make` command line
+(`make install-ingress READY_TIMEOUT_SECONDS=900`) or in `.env`.
 
 ⚠️ **Never run the bare `make install-ingress` against a mesh you did not install.** It helm-installs
 a second istiod over the platform's, and before it gets far enough to fail it relabels the
