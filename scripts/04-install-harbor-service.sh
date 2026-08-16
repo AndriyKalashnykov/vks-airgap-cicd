@@ -121,9 +121,29 @@ log_info "install issued for ${SVC_ID}"
 # only the built-in admin, so inheriting a robot name left over from a previous run is wrong
 # twice -- it names an account that does not exist yet, and `robot$name` written unquoted makes
 # the state overlay UNSOURCEABLE (`$name: unbound variable`). Step 7 sets the robot later.
-state_set HARBOR_PASSWORD "$H_ADMIN"
-state_set HARBOR_USERNAME admin
-log_info "published HARBOR_USERNAME/HARBOR_PASSWORD to the state overlay"
+# ONLY-IF-UNSET, exactly as 05-kind-up.sh:129-130 already does. PUBLISH ONLY WHAT WE PRODUCED.
+#
+# These two used to be unconditional, and both harms were measured:
+#
+#   * `H_ADMIN` is `${HARBOR_PASSWORD:-$(gen_password)}` — so when the operator already had a
+#     password in .env we ECHOED IT BACK into the overlay. load_env sources the overlay LAST, so
+#     that frozen copy then outranked .env AND the command line forever. `make harbor-admin-password`
+#     could verify a fresh password against Harbor (http 200), write it to .env, and be discarded;
+#     `make env-validate` returned 401 seconds later. Both commands were telling the truth about
+#     different values. (Proof the copy was never generated: gen_password is 16 chars and the value
+#     found on a real box was 32.)
+#
+#   * WORSE, and silent: `HARBOR_USERNAME admin` shadowed the least-privilege ROBOT that
+#     22-harbor-robot.sh writes to .env — while 22 printed "the pipeline now runs as the ROBOT, not
+#     as admin". That sentence was false on every real-lab box, and unlike the password case it does
+#     not 401: the pipeline just runs as Harbor ADMIN, successfully, claiming otherwise.
+#
+# The guard makes the overlay contain, by construction, only values this script actually generated —
+# which is the same rule the repo already applies in the other direction (never read back your own
+# published state; see INGRESS_LB_IP_OVERRIDE and gitea_clone_url).
+[ -n "${HARBOR_USERNAME:-}" ] || state_set HARBOR_USERNAME admin
+[ -n "${HARBOR_PASSWORD:-}" ] || state_set HARBOR_PASSWORD "$H_ADMIN"
+log_info "published HARBOR_USERNAME/HARBOR_PASSWORD to the state overlay (only the ones not already set)"
 # `make harbor-service-status` DOES NOT EXIST — this line named it for months and nobody ran it.
 # The real next step is to wait for the LoadBalancer ADDRESS, which is what the DNS record needs.
 log_info "next: wait for its LoadBalancer address, then create that A record:"
