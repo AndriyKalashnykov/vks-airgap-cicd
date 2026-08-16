@@ -154,9 +154,21 @@ documents the trap in detail: `state_stamp` reads the AMBIENT `KUBECONFIG`, so s
 the wrong moment on a lab box can archive a live sink and **destroy the only copy of the
 generated passwords**. It has to go where `KUBECONFIG` already points at the guest cluster.
 
-## B87 — `test-creds-show.sh` has ZERO coverage of the real-lab provenance path
+## B87 — ✅ CLOSED. `test-creds-show.sh` now covers the real-lab provenance path
 
-**HIGH.** Its three states are: no overlay, and two overlays that **both** set
+**CLOSED 2026-08-16 — verified by RUNNING the suite, not by reading its section headers.**
+States 4 and 5 exist (`test-creds-show.sh:161,183`) and one run prints:
+
+    ok  unstamped overlay, non-KinD -> declares values-provenance: STORED
+    ok  stamp MATCHES the live kubeconfig -> DISCOVERED (no KinD shortcut involved)
+    ok  fully installed -> declares values-provenance: DISCOVERED (the token FLIPS)
+
+So the branch a real lab actually reaches IS rendered, and the DISCOVERED assertion no longer
+passes through the KinD shortcut. **B86 remains OPEN** and is the reason state 4 matters: nothing
+on the real-lab path calls `state_stamp`, so STORED is the only branch a real lab reaches.
+The original diagnosis is kept below — it is what makes state 4 worth keeping.
+
+**Was HIGH.** Its three states are: no overlay, and two overlays that **both** set
 `VKS_STATE_KIND=1` (`scripts/test-creds-show.sh:67,87`). That flag short-circuits at
 `scripts/creds.sh:217`, *before* the stamp comparison at `:218` — so the `STORED` branch,
 the only one a real lab ever reaches, is never rendered, and the `DISCOVERED` assertion at
