@@ -529,9 +529,18 @@ if [ "${code:-000}" = 000 ]; then
 elif [ "$code" != 200 ]; then
   echo "Harbor answered (HTTP ${code}) but does not publish its CA there — use an alternative below"
 else
-  openssl s_client -connect "${HARBOR_URL}" -servername "${HARBOR_URL%%:*}" </dev/null 2>/dev/null \
-    | openssl x509 > "$tmp/harbor.crt"
-  if openssl verify -CAfile "$tmp/ca.crt" "$tmp/harbor.crt"; then
+  # HARBOR_URL is a BARE host (Step 4 says so), and `s_client -connect` needs host:PORT —
+  # given a bare host it silently tries port 4433 and stalls until the kernel gives up (~2 min).
+  hostport="$HARBOR_URL"; case "$hostport" in *:*) ;; *) hostport="${hostport}:443" ;; esac
+  timeout 15 openssl s_client -connect "$hostport" -servername "${HARBOR_URL%%:*}" </dev/null 2>/dev/null \
+    | openssl x509 > "$tmp/harbor.crt" 2>/dev/null
+  if [ ! -s "$tmp/harbor.crt" ]; then
+    echo "could not read ${hostport}'s certificate (no answer, or it timed out) — nothing was saved."
+    echo "Harbor answered a moment ago, so this is NOT DNS and Harbor is NOT down."
+    echo "Most likely a TLS-intercepting proxy (curl uses https_proxy, openssl does not):"
+    echo "    env | grep -i _proxy"
+    echo "or a stray '/' or space in HARBOR_URL."
+  elif openssl verify -CAfile "$tmp/ca.crt" "$tmp/harbor.crt"; then
     install -m0644 "$tmp/ca.crt" ./secrets/harbor-ca.crt
   else
     echo "that file does not vouch for ${HARBOR_URL} — nothing was saved; use an alternative below"
@@ -551,8 +560,13 @@ Two details in there are load-bearing, and both were found by running it rather 
   file. It looks right, and then image pulls fail with `certificate signed by unknown authority`
   long after this step.
 
-If it prints *"Harbor is not reachable"*, fix the A record before continuing. If it prints *"that
-file does not vouch for"*, nothing was saved — use one of the alternatives below.
+**Expect:** one line ending `harbor.crt: OK` — that is `openssl` confirming the downloaded file
+really does vouch for this Harbor, and the CA is now saved. Any other message means **nothing was
+saved**, and each one names which problem it hit. *(<1 min)*
+
+If it prints *"nothing answered at"*, fix the A record before continuing. If it prints *"could not
+read"*, Harbor answered but its certificate did not arrive — the message lists what to check. If it
+prints *"that file does not vouch for"*, use one of the alternatives below.
 
 Then **check it against a digest you got from whoever runs Harbor**, over some other channel —
 `-k` above means you fetched it over a connection you could not yet verify:
