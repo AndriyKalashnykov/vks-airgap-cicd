@@ -640,13 +640,20 @@ The change classifier is NOT at fault — tested, `.mise.toml` and `images/image
 **Cut A:** S1×NOTHING×ubuntu → S1×EXISTS×photon → S2×EXISTS×photon.
 **Cut B:** S1×NOTHING×photon → S1×EXISTS×ubuntu → S2×EXISTS×ubuntu.
 
-### The prerequisite nobody can skip
+### The prerequisite nobody can skip — ✅ ALREADY SHIPPED (#613). Do NOT rebuild it, and do NOT "fix" its floors
 
-`walk-doc.sh` reads exactly ONE document and will not follow a link — **and both anti-vacuity floors
-(`INDEP`, `INDEP_E`) are computed from `$DOC` alone**, so a naive extraction walks only the
-scenario's own blocks while every counter reconciles perfectly and `EXIT=0`. Confirmed by execution.
-The fix is `<!-- walk-include: <path> -->` expanded in the extractor **with the floors recomputed
-over the EXPANDED text** — the second half is the load-bearing one.
+`walk-doc.sh` used to read exactly ONE document and not follow a link, so a naive extraction would
+walk only the scenario's own blocks while every counter reconciled and `EXIT=0`.
+**`<!-- walk-include: <path> -->` landed in PR #613 and works** — verified end-to-end by an adversary
+round on 2026-08-16: it splices in DOCUMENT ORDER, both floors reconcile across the source set, and
+two independent resolutions are cross-checked (`walk-doc.sh:343`).
+
+⚠️ **This section previously said to recompute the floors "over the EXPANDED text" and called that
+the load-bearing half. That is BACKWARDS and it is the fake-green.** The floors are computed over the
+**SOURCES** (`walk-doc.sh:360,367` — `cat "${DOC_SET[@]}"`), deliberately, and `:202-208` explains
+why at length: an expansion-side floor compares the parser's output against itself, so `0 >= 0`
+passes while `0 >= 26` correctly refuses. A session that followed the old wording literally would
+have re-implemented it wrongly and produced a counter that cannot detect the parser being wrong.
 
 ### Distrust these
 

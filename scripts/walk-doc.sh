@@ -621,6 +621,31 @@ printf '======== DOCUMENT - %d Expect: lines in the doc, %d parsed, %d blocks CH
   echo "REFUSING: the document has ${INDEP_E} Expect: line(s) but the parser attached only ${EXPECT_LINES_PARSED} — a claim was dropped before it could be checked"
   exit 1
 }
+
+# A NEGATED LITERAL ON AN `**Expect:**` LINE IS A FALSE GREEN, AND THE CHECKER CANNOT SEE IT.
+# The check asks only "is this literal in the output?" and a block PASSES on ANY literal matching
+# (`_seen -eq 0` is the only UNMET condition). So `**Expect:** ... `api` (not `request`)` scores a
+# PASS on the very output it is warning about, because `request` IS in that output. MEASURED against
+# the real extractor: feeding it `write mechanism: request  (kubectl=no, argocd-api=no)` -- the
+# documented FAILURE, where the Application is rendered to ./out/ and NOTHING is deployed -- gave
+# `NOT SEEN api` + `SEEN request` -> seen=1 -> PASS.
+#
+# Polarity is undetectable at check time, so it is refused at parse time instead. The pattern is
+# TIGHT on purpose: `not` immediately qualifying a backticked literal. Measured over both documents'
+# 31 Expect lines it matched 1 (the real defect) and nothing else, while a loose "`not` anywhere on
+# the line" would have matched 5 -- four of them legitimate prose.
+# shellcheck disable=SC2016  # the backticks are MARKDOWN code-span delimiters we are searching FOR,
+                            # not command substitution — single quotes are exactly right here.
+_negated="$(grep -hnE '^[[:space:]]*\*\*Expect' "${DOC_SET[@]}" \
+            | grep -oE 'not[[:space:]]+`[^`]{6,}`' || true)"
+[ -z "$_negated" ] || {
+  echo "REFUSING: an **Expect:** line negates a checkable literal — the checker has no concept of"
+  echo "  negation, so that literal MATCHES the failure output and scores the block a PASS:"
+  printf '%s\n' "$_negated" | sed 's/^/    /'
+  echo "  Put the positive claim on the **Expect:** line; move the 'if it says X instead' sentence"
+  echo "  to a following line and do NOT backtick its literal."
+  exit 1
+}
 cat "$EXPECT_LOG"
 # A coverage number without its exclusions is a claim, not a measurement.
 cat "$SKIP_LOG" "$NEUT_LOG"
