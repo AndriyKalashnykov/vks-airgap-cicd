@@ -346,7 +346,10 @@ env_validate() {
   if harbor_url_is_placeholder "${HARBOR_URL:-}"; then
     log_warn "HARBOR_URL is unset or the placeholder — skipping Harbor reachability (real value comes from discovery/.env.state or your .env)"
   else
-      local scheme=https; [ "${HARBOR_INSECURE:-0}" = 1 ] && scheme=http
+      # Single-sourced with the productized probe: lib/harbor.sh's harbor_scheme. The two used to
+      # derive this independently, and the OTHER one hardcoded https — which made harbor_auth_verdict
+      # permanently `unchecked` in the insecure leg. One rule, one place.
+      local scheme; scheme="$(harbor_scheme)"
       local cafg=(); [ "$scheme" = https ] && [ -n "${HARBOR_CA_FILE:-}" ] && [ -s "${HARBOR_CA_FILE}" ] && cafg=(--cacert "${HARBOR_CA_FILE}")
       # NO -k fallback: over https with no CA file, use curl's DEFAULT system trust (correct for a
       # publicly-trusted Harbor). A self-signed Harbor with no HARBOR_CA_FILE then FAILS honestly on

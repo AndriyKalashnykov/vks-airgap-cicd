@@ -183,7 +183,7 @@ _harbor_auth_code() {
   cfg="$(mktemp)"; chmod 600 "$cfg"
   printf 'user = "%s:%s"\n' "$(esc_curlk "${HARBOR_USERNAME:-admin}")" "$(esc_curlk "${HARBOR_PASSWORD}")" > "$cfg"
   code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time "${HARBOR_PROBE_TIMEOUT_SECONDS:-10}" \
-            "$@" -K "$cfg" "https://${HARBOR_URL}/api/v2.0/users/current" 2>/dev/null)" || rc=$?
+            "$@" -K "$cfg" "$(harbor_scheme)://${HARBOR_URL}/api/v2.0/users/current" 2>/dev/null)" || rc=$?
   rm -f "$cfg"
   [ "$rc" = 0 ] || code=000
   case "${code:-}" in ''|*[!0-9]*) code=000 ;; esac
