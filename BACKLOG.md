@@ -216,6 +216,104 @@ the lab is up, and a 401 from either is a true finding by construction (it is th
 `<not set>`, so there is a recording gap as well as a testing gap. Settle which script should
 publish `ARGOCD_SERVER` on the real-lab path before writing the probe.
 
+## B110 — an EXPIRED Supervisor token reads as "Harbor is not installed", and the script says so
+
+**HIGH — measured on the live lab 2026-08-16, both directions, same command and same cluster.**
+
+`scripts/28-harbor-admin-password.sh:67` and `scripts/27-harbor-ca-from-cluster.sh:55` find the
+Harbor service namespace with the **correct** selector — `appplatform.vmware.com/serviceId=harbor`
+is exactly what the namespace carries (verified against `svc-harbor-fz4kh`). The defect is one
+level deeper: the probe is `kubectl … 2>/dev/null || true`, so an **expired or invalid Supervisor
+kubeconfig yields zero matches**, which is indistinguishable from "the service is absent".
+
+| kubeconfig | `auth whoami` | namespaces the script sees |
+|---|---|---|
+| `~/.local/state/nested-lab/kubeconfig` | OK | **1** |
+| `secrets/supervisor.kubeconfig` (expired) | FAILS | **0** |
+
+The script then prints, verbatim:
+
+    no Harbor Supervisor Service on this Supervisor - install it (Step 4) or ask your platform admin.
+    refusing to guess - an empty value would silently target the 'default' namespace
+
+Harbor was running the whole time. **An error that names the wrong cause is worse than a crash** —
+this one sends a tenant to ask their platform admin to install a service that is already there, and
+sends a Scenario-1 operator back to Step 4 to re-install over a healthy Harbor.
+
+**It is on the documented path for the persona who needs it most.** `docs/scenario-1.md` §4 says, of
+the already-exists branch, *"Do not skip Step 8.5"* — and Step 8.5 is `make harbor-admin-password`,
+the command that fails this way.
+
+**Why 4/4 green never caught it:** on a walk the row either installs Harbor itself or is handed a
+credential that authenticates, so the "read the installed one" branch is never taken; and
+`27-harbor-ca-from-cluster.sh` lives inside a `<details>` alternative, which the walker skips by
+design (row 2 log: `skipped: [25] 8. Harbor's CA - inside a <details> alternative`). Both consumers
+sit on paths the matrix does not execute.
+
+### ⚠️ My first design was REFUTED in 3 of 5 parts (`vks-adversary` idea-round, 2026-08-16, shell PERMITTED — every counter-claim below is `ran-it`). Do NOT rebuild it.
+
+I proposed copying `nested-vsphere-lab/walk-matrix.sh`'s *"AUTH BEFORE OBSERVING"* fix — a
+`kubectl auth whoami` precheck that dies naming the **token**. Four measured refutations:
+
+1. **The cause is not an expired token — it is a NEW CA.** The stale kubeconfig fails with
+   `x509: certificate signed by unknown authority … candidate authority certificate "CA"`, i.e.
+   `STALE_CA`: the lab was rebuilt and minted a new CA at the same address. A die naming the token
+   would name the wrong cause — the very sin this row is about, one level down.
+2. **`auth whoami` is a STRICTLY WEAKER precondition than the probe it guards, so it is blind to
+   the persona this row exists for.** I feared it would be *Forbidden* for a tenant and false-RED.
+   Measured, the opposite and worse: it **succeeds** for an identity that is Forbidden on a
+   cluster-scoped list. `auth whoami` needs `create selfsubjectreviews` (broadly granted);
+   `get ns -l …` needs cluster-wide `list namespaces`. So for the low-privilege reader of §4's
+   *"If Harbor already exists"* branch, the precheck passes, the probe still returns 0, and the
+   message is still wrong. `n=0` has **five** causes and the precheck catches two.
+3. **This repo already has a better mechanism, and the design would BYPASS ITS CI GATE.**
+   `lib/os.sh:1195` `classify_kube_failure` returns
+   `STALE_CA|UNAUTHORIZED|FORBIDDEN|UNREACHABLE|PLAINTEXT|NO_KUBE_TARGET|KUBECONFIG_UNUSABLE|UNKNOWN`,
+   each with its own remedy; `lib/os.sh:1142` `k_can_i` is the three-state probe; and
+   `check-classifier-consumers.sh` **fails any `case`-form consumer missing an arm**. It already
+   classifies our exact stderr as `STALE_CA`. `08-install-argocd-service.sh:93-103` is this same
+   fix, for this same `$SUP` kubeconfig. A flat `auth whoami || die "<one message>"` gets zero
+   coverage from that gate, and `24-lab-preflight.sh:52` records why one-guess messaging was
+   already deleted once: *"the wrong remedy for four of the five ways it fails."*
+4. **STALE_CA and FORBIDDEN have OPPOSITE remedies.** `make vks-login` fixes the first and is
+   exactly wrong for the second (`24-lab-preflight.sh:66`: *"an RBAC GRANT, not a broken
+   kubeconfig — do NOT re-fetch it"*).
+
+**What survived:** the defect (reproduced both directions on the live lab), its HIGH severity, and
+*"auth before observing"* as a **principle**. Only the mechanism was wrong.
+
+### The design to build instead
+
+Capture the probe's stderr to its **own** file (never `2>&1` — `lib/os.sh:1086` records that
+merging inverts downstream emptiness tests), branch on its rc, and `case` on
+`classify_kube_failure`, with a per-class remedy. Only after that is `n=0` a fact about the world,
+and today's *"install it (Step 4)"* message becomes correct for the case where it is true. Add
+`--request-timeout=15s` regardless of which fix is taken: neither script passes it, eleven other
+call sites do, and `23-argocd-preflight.sh:47` records that an unbounded call **hangs >2 min** on
+a black-hole endpoint — a precheck would have *doubled* that.
+
+**Denominator — 4 broken of ~11 in the class, not 2.** The reviewer scanned **166** shell files,
+found **65** `kubectl … 2>/dev/null` reads across **27**, and hand-classified the
+Supervisor-touching subset: **~7 already carry the fix**, and **4 are broken** —
+`27-harbor-ca-from-cluster.sh:53`, `28-harbor-admin-password.sh:66`,
+**`24-vks-k8s-version.sh:37,43`**, and `26-vks-cluster-status.sh:57` (a report, returns 2 — lower
+stakes). ⚠️ Sampled, not exhaustive: treat 4 as a **floor**.
+
+**If only two get fixed, `24-vks-k8s-version.sh` must be one of them** — it burns up to **900s**
+(`VKS_TKR_WAIT_SECONDS`) and then makes a confident platform diagnosis (*"no Ready AND Compatible
+TKr … a Supervisor/content-library problem"*) from a transport failure. It is the most expensive
+instance in the class.
+
+**Two things the fix must carry or it trades one dead end for another:**
+- a **FORBIDDEN escape hatch** (`HARBOR_SERVICE_NAMESPACE`), or a tenant who legitimately cannot
+  list namespaces gets a correct message and still has no path;
+- **tests** — neither script has any. `test-argocd-preflight-ns.sh` is the pattern, and note its
+  kubectl stub already skips `--request-timeout` positionally; a new stub that omits that will
+  mis-parse the moment the flag is added, and it will look like a product bug.
+
+**Related, not counted:** `unwedge-supervisor-service.sh:91` is the same shape in a **mutating**
+script — it would delete nothing and report "deleted". Different blast radius; own row.
+
 ## B88 — the trivy-DB cache was rejected on a measurement that is 2.5x too small
 
 `.github/workflows/ci.yml:147` records the 2026-07-14 decision to DROP a trivy-DB cache,
