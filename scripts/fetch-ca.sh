@@ -113,7 +113,7 @@ if [ "$n" -eq 1 ]; then
 
   Only if that is unavailable, ask the platform team for the issuing CA directly. There is also a
   read-it-from-the-cluster route, but it costs an ADMIN-level grant (the Secret carries the CA's
-  private key, not just the certificate) — docs/scenario-1.md §6 documents it, and what it costs.
+  private key, not just the certificate) — docs/scenario-1.md §8 documents it, and what it costs.
 
   Either way, point ${LABEL^^}_CA_FILE at the file you obtain."
   fi
