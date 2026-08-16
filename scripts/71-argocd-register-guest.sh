@@ -67,7 +67,38 @@ if [ "$ARGOCD_REGISTER" != force ]; then
       -o go-template="$ARGOCD_CLUSTER_LIST_TEMPLATE" 2>/dev/null \
     | argocd_pick_dest_server "$guest_api" "${ARGOCD_DEST_CLUSTER_NAME:-}" || true)"
   if [ -n "$already" ]; then
+    # NAME WHAT MATCHED, AND WHEN. This used to print only $already — which is the server URL the
+    # operator just supplied — so the message could not distinguish "our registration, minted four
+    # minutes ago" from "a registration from three labs ago". A guest REBUILT at the same API
+    # address keeps that address, so the by-server match still fires while the stored bearer token
+    # and CA are dead; the Application then never syncs and `make verify` reports "ArgoCD did not
+    # roll a new image", which names nothing near the cause.
+    #
+    # A SEPARATE `kubectl get`, NOT a third column on ARGOCD_CLUSTER_LIST_TEMPLATE. Measured: adding
+    # one makes `IFS=$'\t' read -r n s` put the remainder INCLUDING THE TAB into $s, so the server
+    # comparison in argocd_pick_dest_server can never match, the count==1 fallback is blocked too,
+    # and 70-configure-argocd.sh then dies "AMBIGUOUS deploy destination — refusing to guess" on
+    # EVERY run. test-argocd-topology.sh cannot catch that: its fixtures are hand-written
+    # two-column strings. Do not touch the shared template.
+    # Mirrors the PROVEN syntax of ARGOCD_CLUSTER_LIST_TEMPLATE (lib/argocd.sh:77) rather than
+    # inventing one: `.data.server | base64decode`, not `index .data "server"`.
+    _reg_detail="$(kubectl --kubeconfig "$ARGOCD_KUBECONFIG" -n "$ARGOCD_NAMESPACE" \
+        get secret -l argocd.argoproj.io/secret-type=cluster \
+        -o go-template='{{range .items}}{{.data.server | base64decode}}{{"\t"}}{{.metadata.name}}{{"\t"}}{{.metadata.creationTimestamp}}{{"\n"}}{{end}}' \
+        2>/dev/null | awk -F'\t' -v s="$already" '$1 == s {print; exit}' || true)"
     log_info "the guest cluster is ALREADY registered with this ArgoCD ($already) — nothing to do."
+    if [ -n "$_reg_detail" ]; then
+      log_info "  matched Secret: $(printf '%s' "$_reg_detail" | cut -f2)  (created $(printf '%s' "$_reg_detail" | cut -f3))"
+      log_info "  If the guest was REBUILT since that timestamp, the stored token and CA are STALE and"
+    else
+      # The pick can land on a server we could not then re-read (RBAC narrowed mid-run, or the
+      # count==1 fallback matched a Secret whose data.server differs from what was picked). Say
+      # that, rather than printing "since that timestamp" with no timestamp above it.
+      log_info "  (could not re-read the matching Secret to date it)"
+      log_info "  If the guest was REBUILT since it was registered, the stored token and CA are STALE and"
+    fi
+    log_info "  the Application will never sync. Re-register with:"
+    log_info "      make argocd-register-guest ARGOCD_REGISTER=force"
     exit 0
   fi
   # Registration mints a cluster-admin ClusterRoleBinding on the guest AND writes a Secret into the

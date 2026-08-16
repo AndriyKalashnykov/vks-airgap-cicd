@@ -125,7 +125,16 @@ A pure VKS tenant therefore **requests** registration from the platform team.
      config: '{"bearerToken":"<token>","tlsClientConfig":{"caData":"<ca>"}}'
    ```
 
-4. **Publish `ARGOCD_DEST_SERVER`**, so the `Application` targets the guest instead of in-cluster.
+4. **Nothing is written to the state overlay.** `make gitops` RE-DERIVES the destination from the
+   live ArgoCD Cluster Secrets and validates it against that list, so the registration is picked
+   up with no further configuration. `ARGOCD_DEST_SERVER` exists only as an explicit override.
+
+   > ⚠️ This step used to read *"Publish `ARGOCD_DEST_SERVER`"*, which the code contradicts at
+   > `71-argocd-register-guest.sh:228-241` — deliberately, to avoid a stale pointer surviving into
+   > the NEXT cluster (the publish-then-read-back trap this repo has removed twice). MEASURED
+   > 2026-08-08: after a successful registration `.env.state` contained no `ARGOCD_DEST_SERVER` at
+   > all, so an operator who greps for it concludes the registration FAILED and runs it again.
+   > The script's own output already says this; the doc did not.
 
 **Why not `argocd cluster add`?** It does the same thing internally — but when the **source kubeconfig is
 cert-based**, it stores that **expiring x509 client cert** instead of the durable SA token
