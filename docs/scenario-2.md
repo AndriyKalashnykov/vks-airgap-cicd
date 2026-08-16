@@ -97,16 +97,16 @@ the rest of the file when it is sourced):
 | `VKS_CONTEXT` | the context name inside that kubeconfig |
 | `ARGOCD_CA_FILE` | *optional* — `./secrets/argocd-ca.crt` (`make fetch-argocd-ca`) |
 
-> **The ArgoCD WRITE PATH — set these NOW, before `make install-all`.** Miss them and `make gitops`
-> either **dies** on a guard (off-cluster with no destination) or **silently renders to `./out/` and
-> deploys nothing while reporting success**:
->
-> | key | value |
-> |---|---|
-> | `ARGOCD_MECHANISM` | `api` — create the Application via argocd-server (no k8s RBAC needed there) |
-> | `ARGOCD_PROJECT` | your granted AppProject — **not** `default`; your project role must permit the destination |
-> | `ARGOCD_AUTH_TOKEN` | mint it first — see the note below |
-> | `ARGOCD_DEST_SERVER` | your **guest** cluster API URL — the guest must be **registered** as an ArgoCD destination first (admin-only; request it) |
+**The ArgoCD WRITE PATH — set these NOW, before `make install-all`.** Miss them and `make gitops`
+either **dies** on a guard (off-cluster with no destination) or **silently renders to `./out/` and
+deploys nothing while reporting success**:
+
+| key | value | why |
+|---|---|---|
+| `ARGOCD_MECHANISM` | `api` | create the Application via argocd-server — no Kubernetes RBAC needed there |
+| `ARGOCD_PROJECT` | *your granted AppProject* | **not** `default`; your project role must permit the destination |
+| `ARGOCD_AUTH_TOKEN` | *mint it first* | see the note below — it is a precondition, not just a value |
+| `ARGOCD_DEST_SERVER` | *your guest cluster API URL* | the guest must be **registered** as an ArgoCD destination first (admin-only; request it) |
 
 <!-- -->
 
