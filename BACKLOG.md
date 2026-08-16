@@ -271,9 +271,9 @@ chain otherwise works — `make harbor-ca-from-cluster` rc=0 (route B, the `<det
 walker skips) and `make harbor-admin-password` rc=0 with a live `http 200`. The failure is purely
 the sink precedence.
 
-## B113 — an "offline" unit suite DIALLED the live lab and hung `make ci` for 22 minutes
+## B113 — ✅ CLOSED. An "offline" suite DIALLED the live lab and hung `make ci` for 22 minutes
 
-**MEDIUM — one instance MEASURED and FIXED; the class size is NOT established.**
+**The class is MEASURED at 1 of 48, and that one is fixed.**
 
 `test-creds-show.sh` carefully sandboxes `VKS_STATE_FILE` and sets `SKIP_DOTENV=1`, and its own
 comment explains why (*"a test that reads its own environment"*). It did not sandbox
@@ -293,12 +293,20 @@ re-run would have proved nothing): against the same accept-then-stall listener t
 **0s with the sandbox and 78s without**. Both exit 0 — this was never a failure, it was a silent
 dependency on a live cluster.
 
-**The class is OPEN and the number is unknown.** A grep for "runs a product script and does not pin
-KUBECONFIG" returns 31 of 48 suites, but that is an OVER-approximation — most of those stub
-`kubectl` on `PATH` in forms the pattern does not see. **Do not quote 31.** The experiment that
-settles it is one run: start an accept-then-stall listener, `export KUBECONFIG` at it, run
-`make test-scripts`, and compare per-suite wall time against a baseline. Anything materially slower
-dials. That is a measurement nobody has made yet.
+**THE CLASS IS CLOSED, BY MEASUREMENT, AND IT WAS A CLASS OF ONE.** My grep ("runs a product
+script and does not pin KUBECONFIG") returned **31 of 48** — a **31× over-approximation**, because
+most of those stub `kubectl` on `PATH` in forms the pattern cannot see. **Never quote a grep as a
+class size.** The experiment that settles it ran instead: every one of the 48 suites, twice — once
+with `KUBECONFIG` unset, once pointed at an accept-then-stall listener — comparing wall time.
+
+    0 of 48 suites are materially slower against a stalling endpoint (>2000ms)
+    largest delta: test-walk-doc, 222ms (noise)
+
+**And the zero is not vacuous, because the harness has a POSITIVE CONTROL.** Removing the sandbox
+from the one suite that did dial makes it **77,183ms slower** on the same listener. So the harness
+can see a dialler at 350× the noise floor; "0 of 48" means the remaining 47 genuinely do not dial.
+(This matters: the measurement ran AFTER the fix, so `test-creds-show`'s own 0ms delta is the fix
+working, not evidence it never dialled — the control is what separates those.)
 
 ## B112 — `unwedge-supervisor-service.sh:91` is B110's shape in a MUTATING script
 
