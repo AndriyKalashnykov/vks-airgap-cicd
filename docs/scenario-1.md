@@ -119,7 +119,7 @@ it uses.
 | `VCF_CLI_SRC_DIR` | `/home/you/Downloads/vcf` | the folder you put the two Broadcom archives in |
 | `SUPERVISOR_HOST` | `192.168.101.128` | vCenter → Workload Management → Supervisors → Control Plane Node IP. **Bare host — no `https://`, no trailing slash.** |
 | `VKS_CONTEXT_NAME` | `vks-cicd` | **you invent this** — a short label for the `vcf` login context |
-| `VKS_NAMESPACE` | `lab` | the vSphere Namespace the cluster goes in. **Create it first — Step 2.** |
+| `VKS_NAMESPACE` | `cicd` | the vSphere Namespace the cluster goes in. **Create it first — Step 2.** Pick a name nothing else owns: Step 2's teardown deletes **by name**, and on a nested lab a namespace called `lab` already belongs to the lab itself. |
 | `VKS_CLUSTER_NAME` | `cicd-gc1` | **you invent this** — the guest cluster Step 6 creates. Must not be a name you deleted recently (see notes). |
 | `VKS_USERNAME` | `administrator@vsphere.local` | your vCenter SSO login |
 | `VKS_AUTH_METHOD` | `vcf` | how you log in. `vcf` = log in to the **Supervisor** (Step 3). Step 6 changes it to `kubeconfig` once the guest cluster exists. Unset, it defaults to `kubeconfig` and Step 3 fails looking for a cluster you have not created yet. |
