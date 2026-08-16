@@ -1320,8 +1320,12 @@ docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets
 	@# someone ever drops that step, markdownlint would vanish and this gate would report SUCCESS
 	@# having linted nothing. In CI it now DIES instead.
 
+.PHONY: check-lib-sourcing
+check-lib-sourcing: ## Gate: a script that CALLS a lib function must SOURCE the lib that defines it
+	@$(SCRIPTS)/check-lib-sourcing.sh
+
 .PHONY: static-check
-static-check: check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)
