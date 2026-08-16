@@ -31,6 +31,53 @@ Follow [Common bootstrap](common-bootstrap.md) — install `git`/`make`/`curl`, 
 repo, and `make env-init`. Every `make` below runs from the repo root; on a stock VM none of them
 exist until you have done this.
 
+## 0b. Install the toolchain, then get a kubeconfig
+
+**Everything below this point talks to the cluster, so do this first.** On a stock VM you have
+neither the tools nor a kubeconfig, and without a kubeconfig `kubectl` quietly tries `localhost:8080`
+and every step after it reports nothing found.
+
+```bash
+make deps     # kubectl, crane, tkn, argocd, helm, openssl + the rest of the pinned toolchain
+```
+
+**Expect:** `prereqs installed. Versions:` followed by the pinned version of each tool. *(~3 min)*
+
+Now the **kubeconfig for the workload cluster you were given**. If the platform team sent you the
+file, save it at `./secrets/vks.kubeconfig` and skip to the check below. Otherwise fetch it with the
+licensed `vcf` CLI — which means installing that first:
+
+| key | value | why |
+|---|---|---|
+| `VCF_CLI_SRC_DIR` | the folder holding the Broadcom archives | `make install-vcf-clis` reads it |
+| `VKS_AUTH_METHOD` | `vcf` | drives the login below through the `vcf` CLI |
+| `SUPERVISOR_HOST` | your Supervisor's address | the endpoint `vcf` logs in to |
+| `VKS_USERNAME` | your vSphere SSO user | |
+| `VKS_NAMESPACE` | the vSphere Namespace your cluster lives in | |
+| `VKS_CLUSTER_NAME` | the workload cluster you run the demo in | |
+
+Set those in `./.env` (see [Step 3b](#3b-where-the-broadcom-vcfvks-lab-cli-archives-come-from) for where the archives
+come from), then:
+
+```bash
+make install-vcf-clis     # argocd-vcf + vcf + vcf plugins, from VCF_CLI_SRC_DIR
+make vks-login            # logs in and writes ./secrets/vks.kubeconfig
+```
+
+**Expect:** `VCF/VKS lab CLIs installed to`, then a context name. *(~2 min)*
+
+You need **cluster-admin** on that cluster: the flow creates `gitea`, `ci`, and one namespace per app
+in `apps/registry.tsv` — today `javawebapp` + `gowebapp` — and installs Tekton CRDs.
+
+Confirm it works before going on, because everything below depends on it:
+
+```bash
+kubectl config current-context
+```
+
+**Expect:** your context name. If you instead see `error: current-context is not set`, the kubeconfig
+is missing or empty — fix that here rather than reading `NOT FOUND` at every step below.
+
 ## Discover Harbor and ArgoCD, and request your grants
 
 **Discover the endpoints** (read-only; you need at least read access to the Services'
@@ -103,18 +150,13 @@ addresses are what you put in `HARBOR_URL` and `ARGOCD_SERVER` below.
   (`kubectl auth can-i`) and, if refused, prints exactly what to request. Settle it with
   **`make argocd-preflight`** — it reports the write mechanism, the namespace and your AppProject, and
   needs no `kubectl` access to the ArgoCD side (the tenant `api` path).
-- **The workload cluster kubeconfig** — `vcf cluster kubeconfig get <cluster> --export-file
-  ./secrets/vks.kubeconfig` for the cluster you run the demo in. You need **cluster-admin** on
-  it (the flow creates `gitea`, `ci`, and one namespace per app in `apps/registry.tsv` — today
-  `javawebapp` + `gowebapp` — and installs Tekton CRDs).
+- **The workload cluster kubeconfig** — already done in Step 0b, because discovery below cannot
+  run without it. If you skipped ahead, go back: it is the difference between reading real
+  addresses and reading `NOT FOUND` at every step.
 
-**Record what you discovered / were granted in `.env`.** `.env` is gitignored — create it first:
-
-```bash
-make env-init      # creates .env from .env.example (backs up any existing one)
-```
-
-**Expect:** `wrote a fresh .env from .env.example`. That file is the one you edit from here on.
+**Record what you discovered / were granted in `.env`** — the same file Step 0 created and Step 0b
+started filling in. Do **not** re-run `make env-init`: it replaces `.env` with a fresh copy (keeping
+a backup), which would discard the Supervisor details you just set.
 
 Then edit `.env` (these keys are already there, commented, from `.env.example` — uncomment and set;
 **do not paste a `<…>` line into `.env`** — an unedited `<…>` is a shell redirection that truncates
@@ -159,7 +201,7 @@ deploys nothing while reporting success**:
 
 Now wire the repo and run the pipeline.
 
-## 0. Remove any stale KinD overlay
+## 0c. Remove any stale KinD overlay
 
  the state overlay is sourced *after* `.env`, so a leftover
 one from a local run would silently redirect everything at a kind cluster. Delete it **before you
@@ -248,17 +290,19 @@ to trust its UI), fetch it the same way — `ARGOCD_SERVER` is already set from 
 **`make fetch-argocd-ca`** (writes `ARGOCD_CA_FILE`). The tenant `api` path establishes the CLI's TLS
 trust via `argocd login` (the Step-3 token recipe), so `ARGOCD_CA_FILE` is optional for the demo itself.
 
-## 3. Install prereqs and log in to VKS
+## 3. Re-check your cluster login, and the CA
+
+The toolchain and the kubeconfig were done in Step 0b — everything since then has needed them. This
+step just confirms the login still holds after you finished filling in `.env`:
 
 ```bash
-make deps         # kind, crane, tkn, argocd, kubectl, helm + the rest of the mise toolchain
 make vks-login    # validates $KUBECONFIG + context against the lab cluster
 ```
 
-**Expect:** `prereqs installed. Versions:` followed by the pinned version of each tool.
+**Expect:** a context name, and no error.
 
-`make deps` is also what installs `openssl`, so now you can check the CA certificate you saved in
-Step 2 really is the one that signed **this** Harbor's:
+Step 0b also installed `openssl`, so now you can check the CA certificate you saved in Step 2 really
+is the one that signed **this** Harbor's:
 
 ```bash
 make ca-status
@@ -270,7 +314,10 @@ If it instead says the certificate is **not valid for this address**, the file i
 address is wrong: Harbor's certificate is usually issued for its DNS name, not for the IP behind it,
 so put the name in `HARBOR_URL` and give that name an A record pointing at the IP you discovered.
 
-## 3b. Install the Broadcom VCF/VKS lab CLIs
+## 3b. Where the Broadcom VCF/VKS lab CLI archives come from
+
+You installed these in Step 0b — `make install-vcf-clis`. This section is the reference for
+**obtaining** the archives it reads, and for the cases where you do not need them at all.
 
 You need the **licensed** `argocd-vcf` +
 `vcf` binaries if **either** applies (both are the normal VKS case):
@@ -308,11 +355,8 @@ up and no path of yours ends up pasted into a command:
 The version pins in `.env.example` already match the current portal artifacts, so the folder is
 normally the only thing you set:
 
-```bash
-make install-vcf-clis     # argocd-vcf + vcf + vcf plugins, from VCF_CLI_SRC_DIR
-```
-
-**Expect:** `VCF/VKS lab CLIs installed to` and the directory they went to.
+Once `VCF_CLI_SRC_DIR` points at that folder, the install itself is the `make install-vcf-clis`
+you already ran in Step 0b — re-running it is safe if you had to fix the folder.
 
 > **Where to get them, per arch:** see [Acquiring the licensed VCF CLI archives](vks-authentication.md#acquiring-the-licensed-vcf-cli-archives). The 9.1 artifacts are entitled (Broadcom portal / Supervisor) — the public artifactory serves only ≤ 9.0.x. **On an arm64 jump box** the VCF-flavored `argocd-vcf` is amd64-only; use the upstream argocd `make deps` already installs and run `make install-vcf-cli` + `make install-vcf-plugins` instead of `all`.
 
@@ -561,7 +605,7 @@ is the one **after `make platform`**; look for `PSA OK — … (N measured)`.
 
 <br>
 
-- **No STALE state overlay when you start** (Step 0) — it is sourced after `.env` and silently forces
+- **No STALE state overlay when you start** (Step 0c) — it is sourced after `.env` and silently forces
   kind values.
 - **The shared ArgoCD must be able to deploy into your workload cluster** — i.e. your guest
   cluster must be **registered** as an ArgoCD destination. That is **admin-only** (`clusters` is
