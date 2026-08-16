@@ -96,8 +96,30 @@ fi
 
 # --- classic path: we must FIND the platform's gateway workload ----------------
 if ! istio_discover; then
-  log_error "Istio is present but discovery failed (most likely: no RBAC to read it)."
-  log_error "  -> ASK THE MESH ADMIN for these three values and set them in .env:"
+  # B121. This used to say "Istio is present but discovery failed (most likely: no RBAC to read
+  # it)" -- a CAUSE that was ASSERTED and never tested, and that was FALSE when measured: on the
+  # row-2 walk the cluster had only LEFTOVER CRDs from a timed-out istiod install, RBAC was fine,
+  # and the operator was sent to ask a platform admin for three values that did not exist.
+  # istio_discover has ALREADY printed what it looked for and what to ask for -- do not restate
+  # that as a diagnosis. Keep the phrasing SEARCH-shaped ("not found"), never "does not exist":
+  # discovery requires port 15021 + an `istio` selector, so a gateway that omits the status port
+  # is invisible to it (lib/istio.sh:67-75).
+  #
+  # Deliberately NOT done here, each refuted by the B121 adversary round:
+  #   - do NOT suggest `make install-ingress INGRESS_CONTROLLER=istio` as the remedy. On a real
+  #     lab the COMMON state is istiod PRESENT with the shared gateway disabled by default
+  #     (lib/istio.sh:196-198), and that command helm-installs a second istiod over the
+  #     platform's AND relabels istio-system's PSA level -- breaking the platform's pods ACROSS
+  #     TENANTS (scenario-1.md:775-779, 46-install-istio.sh:162).
+  #   - do NOT branch on `k_can_i`: it returns FOUR shapes (yes|no|unknown|CLASS|UNPARSEABLE,
+  #     os.sh:1189-1205) and a two-way branch turns an UNREACHABLE cluster into a confident claim
+  #     about its contents -- the exact mistake :131-135 below already documents.
+  #   - istio_discover has THREE distinct `return 1` sites (none / AMBIGUOUS / pin-miss,
+  #     lib/istio.sh:83,88,100). An unconditional message here contradicts the ambiguous one.
+  #     Distinguishing them belongs in istio_discover, with a test, not in this caller.
+  log_error "Gateway API / VirtualService CRDs alone do NOT mean a mesh is installed —"
+  log_error "  a failed or partial install leaves the CRDs behind. See what was looked for above."
+  log_error "  -> If a mesh IS here, ASK THE MESH ADMIN for these three values and set them in .env:"
   log_error "       ISTIO_GATEWAY_NAMESPACE=<ns of the ingress-gateway Service>"
   log_error "       ISTIO_GATEWAY_SERVICE=<its Service name>"
   log_error "       ISTIO_GATEWAY_LABEL=<the value of its spec.selector.istio label>"

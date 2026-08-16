@@ -90,9 +90,24 @@ state_check() {
   stamped_server="${stamped_server//\"/}"
 
   if [ -z "$stamped_server" ]; then
-    log_warn "state: $(basename "$f") is UNSTAMPED (legacy .env.kind, a jumpbox file, or hand-written)."
-    log_warn "  Sourcing it anyway — refusing would destroy the only copy of the generated passwords."
-    log_warn "  Run 'make state-stamp' once a cluster is up to make it self-identifying."
+    # B120. This used to be THREE lines naming three causes and prescribing `make state-stamp`.
+    # Every part of it was measured FALSE, and the prescription was ACTIVELY HARMFUL:
+    #   - the causes ("legacy .env.kind, a jumpbox file, or hand-written") are all wrong on the
+    #     real-lab path, where 30-vks-login.sh:447 writes the sink at Step 3;
+    #   - TAKING the advice BREAKS the walk. scenario-1 legitimately runs under TWO API servers
+    #     (Supervisor at §3, then the guest via 27-use-guest-kubeconfig.sh), so stamping for one
+    #     arms state_check to REFUSE the other -- from Step 6 on, HARBOR_USERNAME/HARBOR_PASSWORD/
+    #     ARGOCD_KUBECONFIG/GITEA_LB_IP/INGRESS_LB_IP all vanish. A WARN becomes a hard red.
+    #   - it LAUNDERS the one hazard the warning exists for: stamping silences the alarm while
+    #     KEEPING a stale value from a lab that no longer exists (and flips creds.sh's banner
+    #     from STORED to DISCOVERED over it);
+    #   - "once a cluster is up" is false anyway -- state_stamp only PARSES a kubeconfig, never
+    #     dials, so on an unresolvable path it writes an empty server, exits 0, and still warns.
+    # See BACKLOG B86, which refuted making the real-lab path call state_stamp, with the A/B table.
+    # Warning ONCE PER PROCESS was also measured and is a NO-OP (35 -> 35): every one of the 35
+    # warnings in a scenario-1 walk already comes from a distinct script process.
+    # This keeps the ONE true statement, in the reader's own vocabulary, and prescribes nothing.
+    log_warn "state: $(basename "$f") does not record which cluster it belongs to — using it as-is."
     return 0
   fi
 
