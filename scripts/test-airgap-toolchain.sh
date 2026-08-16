@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ci-tier: manual — needs a container engine and a 12 GB bundle — not offline
 # test-airgap-toolchain.sh — can a REAL air-gapped box (no internet, no toolchain) actually do the job?
 #
 # WHAT THIS EXISTS TO CATCH.

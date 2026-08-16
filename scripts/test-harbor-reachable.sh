@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ci-tier: slow — asserts HARBOR_REACHABLE_WAIT_SECONDS is honoured (~31s)
 # test-harbor-reachable.sh — the demonstrated RED for lab-preflight's Harbor-reachability gate.
 #
 # WHY THE GATE EXISTS. MEASURED 2026-08-11 on both OS rows of the create-from-nothing walk: a

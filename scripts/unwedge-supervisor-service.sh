@@ -68,7 +68,26 @@ printf '%s' "$detail" | jq -r '.messages[]? | "    \(.details.args // [] | join(
 # The suffix is random per install (svc-argocd-service-yzz24, svc-harbor-1vsxx), so a hardcoded
 # name is wrong on the next lab. Derive the prefix from the service id's first label.
 prefix="svc-$(printf '%s' "$SERVICE" | cut -d. -f1)-"
-mapfile -t nss < <(kubectl get ns -o name 2>/dev/null | sed 's|^namespace/||' | grep -E "^${prefix}" || true)
+# B112, THIRD SITE. The two the backlog row names (the confirm listing and the delete loop) are
+# fixed; this one is the same swallowed read and its failure is the most reassuring of the three:
+# `2>/dev/null` makes a transport failure produce an EMPTY array, which lands on case 0 and
+# EXITS 0 saying "the workload is already gone ... re-issue the uninstall". So a wedged operator
+# whose token has just expired is told the wedge cleared, and sent to re-issue an uninstall that
+# will stay stuck — a success claim over a question that was never asked.
+_uw_nserr="$(mktemp)"; _uw_nsrc=0
+# `|| _uw_nsrc=$?` not `; rc=$?`: this script runs under `set -euo pipefail`, so a bare failing
+# kubectl exits AT the kubectl and the refusal below never runs. (Same trap the two sites below
+# record, caught there by the test rather than by reading.)
+_uw_nsout="$(kubectl get ns -o name 2> "$_uw_nserr")" || _uw_nsrc=$?
+if [ "$_uw_nsrc" -ne 0 ]; then
+  log_error "cannot LIST namespaces — $(classify_kube_failure "$_uw_nserr")."
+  log_error "  refusing to conclude '${prefix}*' is already gone from a question the cluster never answered."
+  sed 's/^/    /' < "$_uw_nserr" >&2
+  rm -f "$_uw_nserr"
+  exit 1
+fi
+rm -f "$_uw_nserr"
+mapfile -t nss < <(printf '%s\n' "$_uw_nsout" | sed 's|^namespace/||' | grep -E "^${prefix}" || true)
 case "${#nss[@]}" in
   0) log_info "no namespace matching '${prefix}*' — the workload is already gone."
      log_info "next: re-issue the uninstall; the platform's next reconcile should complete it."

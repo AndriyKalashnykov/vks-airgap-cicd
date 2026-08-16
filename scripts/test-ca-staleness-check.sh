@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ci-tier: slow — asserts a real wait elapses against a dead endpoint (~31s)
 # test-ca-staleness-check.sh — pin the FOUR ARMS of ca_verifies_endpoint that lab-preflight's
 # stale-trust-anchor check depends on.
 #

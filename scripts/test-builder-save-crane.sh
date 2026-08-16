@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ci-tier: manual — needs both container engines and a live registry round-trip
 # test-builder-save-crane.sh — a REGRESSION GUARD for the sneakernet builder round-trip. NOT a
 # format-difference test.
 #

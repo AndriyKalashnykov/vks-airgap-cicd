@@ -288,7 +288,17 @@ walkbox_push_env() {
   # returns 1, and main's bare call trips `set -e` — the walk dies BEFORE IT STARTS, with no message.
   # HARBOR_PASSWORD is a you-choose secret that is routinely unset, so this was reachable every run.
   { for v in VCF_CLI_VSPHERE_PASSWORD VCENTER_PASSWORD HARBOR_PASSWORD; do
-      if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}"; fi
+      # SINGLE-QUOTED + esc_sq. The comment six lines above already names this exact failure --
+      # "a password containing ' or $ is silently MANGLED ... so Harbor answers 401 and the operator
+      # is sent to fix a password that was correct" -- and this line wrote it BARE anyway, directly
+      # underneath. The far side does `set -a; . "$HOME/.walk-secrets"`, so the value is PARSED.
+      # MEASURED 2026-08-16, exactly this printf into exactly that source: 4 of 6 realistic
+      # passwords broken --  P@ssw0rd$1 -> "P@ssw0rd<path-of-the-sourced-file>" ($1 is the sourcing
+      # shell's first positional parameter, NOT empty);  "a b c", "quo'te" and back`tick all
+      # PARSE-FAILED, and the backtick one is command substitution, i.e. a code-execution surface.
+      # No doc advice can fix this: the operator can quote .env perfectly and this path still
+      # mangles it. esc_sq is the repo's existing escaper, used by set_env_var for the same reason.
+      if [ -n "${!v:-}" ]; then printf "%s='%s'\n" "$v" "$(esc_sq "${!v}")"; fi
     done; } | _ssh "$ip" 'umask 077; cat > "$HOME/.walk-secrets"'
 }
 

@@ -354,14 +354,25 @@ can see a dialler at 350× the noise floor; "0 of 48" means the remaining 47 gen
 (This matters: the measurement ran AFTER the fix, so `test-creds-show`'s own 0ms delta is the fix
 working, not evidence it never dialled — the control is what separates those.)
 
-## B112 — `unwedge-supervisor-service.sh:91` is B110's shape in a MUTATING script
+## B112 — ✅ CLOSED, and the row named 2 of 3 sites
 
-**MEDIUM.** Flagged by the B110 idea-round as out of scope there, because the blast radius is
-different: it is the same swallowed `kubectl … 2>/dev/null` read, but in a script that DELETES. On a
-transport failure it would delete nothing and report "deleted" — a success claim over a no-op,
-rather than a wrong diagnosis. Fix with the same `classify_kube_failure` pattern the four B110
-scripts now use (`26`, `27`, `28`, `24-vks-k8s-version` are the worked examples), and note that a
-mutating script wants a louder refusal than a report does.
+**The two it named were already fixed** (the confirm listing and the delete loop, both carrying
+`B112:` comments). Auditing the whole script for the CLASS rather than the two cited lines found a
+**third** swallowed read — the namespace discovery — and its failure is the most reassuring of the
+three: `kubectl get ns -o name 2>/dev/null` makes a transport failure produce an EMPTY array, which
+lands on `case 0` and **EXITS 0** with
+
+    no namespace matching 'svc-harbor-*' — the workload is already gone.
+    next: re-issue the uninstall; the platform's next reconcile should complete it.
+
+So an operator whose Supervisor token has just expired is told the wedge cleared, and sent to
+re-issue an uninstall that will stay stuck. Fixed with the same `classify_kube_failure` pattern;
+`make test-unwedge-ns-discovery` RED-proves both directions (a failing kubectl must refuse; a
+WORKING kubectl with no match must still say "already gone" and exit 0 — the second matters as much
+as the first, or the fix has broken the legitimate path).
+
+**The lesson for the next row like this: fix the CLASS, not the cited line numbers.** A row that
+names sites will be read as an inventory, and this one was two-thirds of the truth.
 
 ## B110 — ✅ CLOSED for the enumerated set (4 of 4) — an EXPIRED Supervisor token read as "Harbor is not installed"
 

@@ -119,11 +119,11 @@ it uses.
 | `VCF_CLI_SRC_DIR` | `/home/you/Downloads/vcf` | the folder you put the two Broadcom archives in |
 | `SUPERVISOR_HOST` | `192.168.101.128` | vCenter → Workload Management → Supervisors → Control Plane Node IP. **Bare host — no `https://`, no trailing slash.** |
 | `VKS_CONTEXT_NAME` | `vks-cicd` | **you invent this** — a short label for the `vcf` login context |
-| `VKS_NAMESPACE` | `lab` | the vSphere Namespace the cluster goes in. **Create it first — Step 2.** |
+| `VKS_NAMESPACE` | `cicd` | the vSphere Namespace the cluster goes in. **Create it first — Step 2.** Pick a name nothing else owns: Step 2's teardown deletes **by name**, and on a nested lab a namespace called `lab` already belongs to the lab itself. |
 | `VKS_CLUSTER_NAME` | `cicd-gc1` | **you invent this** — the guest cluster Step 6 creates. Must not be a name you deleted recently (see notes). |
 | `VKS_USERNAME` | `administrator@vsphere.local` | your vCenter SSO login |
 | `VKS_AUTH_METHOD` | `vcf` | how you log in. `vcf` = log in to the **Supervisor** (Step 3). Step 6 changes it to `kubeconfig` once the guest cluster exists. Unset, it defaults to `kubeconfig` and Step 3 fails looking for a cluster you have not created yet. |
-| `VCF_CLI_VSPHERE_PASSWORD` | *your value* | the password for that login. Set it in `.env` like everything else here; write it **unquoted**. |
+| `VCF_CLI_VSPHERE_PASSWORD` | *your value* | the password for that login. Set it in `.env` like everything else here, **in single quotes** — `VCF_CLI_VSPHERE_PASSWORD='your password'` — and escape an embedded `'` as `'\''`. Written bare, a password containing `$`, a space, a quote or a backtick is silently mangled or fails to parse, and this account **locks out after 3 failed attempts** (Step 3). |
 | `VKS_SSO_DOMAIN` | `vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups → *Domain* |
 
 Now run:
@@ -375,6 +375,11 @@ minute.)*
 
 `argocd login` **prompts** for the password, so paste what `make argocd-password` printed. Nothing
 automates that step and nothing tests it — it is the one command in this runbook no harness can run.
+
+⚠️ **Once you change it, keep it yourself.** `make argocd-password` and `make creds-show` read the
+*generated* secret; the password you just chose is not written anywhere. After `argocd account
+update-password` they can only show the initial one, or say they cannot read it — that is them
+working, not failing. Put your new password in your password manager now.
 
 A non-zero exit from `make argocd-address` says which of the two things is missing — the ArgoCD
 **instance** (it never reconciled) or its **LoadBalancer address** — and they need different fixes.
@@ -792,6 +797,9 @@ make creds-show
 
 **Expect:** every URL and login — Harbor, ArgoCD, Gitea, Tekton, one row per app. Each value is
 labelled **DISCOVERED** (read live) or **STORED** (remembered).
+
+The ArgoCD row is the exception if you changed that password in Step 5: it can only show the
+generated one, or say it cannot read it. Yours is in your password manager.
 
 Skipped the ingress step? The `*.vks.local` URLs will not resolve — reach a service directly instead:
 

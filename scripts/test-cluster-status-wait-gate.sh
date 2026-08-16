@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ci-tier: slow — a never-Ready cluster must run the wait loop to its timeout (~16s)
 # test-cluster-status-wait-gate.sh — the demonstrated RED for B92's wait-branch endpoint gate.
 #
 # WHY IT DRIVES THE REAL SCRIPT. The first version of this test asserted a hand-typed COPY of the

@@ -102,6 +102,12 @@ kc() {
   # confirmed manifest violation (statusInvalid), never on an infra/network condition.
   case "$invalid" in ''|*[!0-9]*)
     if [ "$ec" -eq 0 ]; then log_info "kubeconform: nothing to validate"; return 0; fi
+    if [ "${KUBECONFORM_REQUIRE_SCHEMAS:-0}" = 1 ]; then
+      log_error "kubeconform: no parseable output (exit $ec) — every schema source was unreachable, so"
+      log_error "  ZERO resources were validated, and KUBECONFORM_REQUIRE_SCHEMAS=1 (CI sets this)."
+      log_error "  CI has network by definition: here a failed fetch is a FAILURE, not a skip."
+      return 1
+    fi
     log_warn "kubeconform: no parseable output (exit $ec) — schema sources unreachable; those resources were NOT validated; not failing the gate"
     return 0 ;;
   esac
@@ -122,7 +128,23 @@ kc() {
     return 1
   fi
   if [ "$errors" -gt 0 ]; then
+    # KUBECONFORM_REQUIRE_SCHEMAS=1 turns the skip into a FAILURE, exactly as GWAPI_REQUIRE_FETCH=1
+    # does for check-gwapi-istio-alignment. The lenient default above is a deliberate LOCAL-DEV
+    # decision (a laptop on a train must not red on a CDN), and it was silently the CI behaviour
+    # too. MEASURED 2026-08-16 with both overridable schema sources pointed at a black hole:
+    #   VALIDATE_RC=0, "validate: OK", and EIGHT directories reporting N-of-N could not download
+    #   (16/16, 9/9, 8/8, 3/3, 2/2, 2/2, 1/1, 1/1) — a green gate over ZERO validated resources.
+    # (My first repro of this was VACUOUS: it set KC_SCHEMA_*, which this script overwrites, so it
+    # validated normally against the live CDN and passed for the RIGHT reason. The override names
+    # are KUBECONFORM_SCHEMA_K8S / _CRD.)
+    if [ "${KUBECONFORM_REQUIRE_SCHEMAS:-0}" = 1 ]; then
+      log_error "kubeconform: $errors of $total resource(s) could not have their schema downloaded, and"
+      log_error "  KUBECONFORM_REQUIRE_SCHEMAS=1 (CI sets this). Those resources were NOT validated;"
+      log_error "  passing here would report OK over work the gate did not do. Inputs: $*"
+      return 1
+    fi
     log_warn "kubeconform: $errors of $total resource(s) could not have their schema downloaded (CDN/registry unreachable) — those were NOT validated; not failing the gate (Invalid=0)"
+    log_warn "  (CI sets KUBECONFORM_REQUIRE_SCHEMAS=1 so this path is a FAILURE there, not a skip.)"
   else
     log_info "kubeconform: $total resource(s) validated, all schemas resolvable (Invalid=0)"
   fi

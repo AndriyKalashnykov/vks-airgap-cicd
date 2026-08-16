@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ci-tier: manual — builds bare Photon/Ubuntu images — needs a container engine + network
 # test-bootstrap-engine.sh — CLAIM 1: "our bootstrap can produce a docker jump box" (and, by default,
 # a podman one with NO docker on it at all).
 #

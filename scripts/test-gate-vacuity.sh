@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ci-tier: slow — starves every declared gate corpus and re-runs each one (~11s)
 # test-gate-vacuity.sh — a gate that judged NOTHING must not report OK.
 #
 # WHY THIS EXISTS (B39/B49):

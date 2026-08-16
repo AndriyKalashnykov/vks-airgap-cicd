@@ -55,9 +55,12 @@ Point `kubectl` at the wrong one and you get no error — you get **empty result
 like *"the service is not installed"*.
 
 **Most tenants are handed the workload kubeconfig and never touch the Supervisor.** If that is you,
-save it and set `VKS_AUTH_METHOD=kubeconfig` in `./.env`:
+put it at `./secrets/vks.kubeconfig` — that exact path, because it is where every `make` target
+looks by default — and set `VKS_AUTH_METHOD=kubeconfig` in `./.env`:
 
 ```bash
+mkdir -p ./secrets
+cp /path/to/the-kubeconfig-you-were-given ./secrets/vks.kubeconfig
 head -1 ./secrets/vks.kubeconfig
 ```
 
@@ -194,8 +197,11 @@ started filling in. Do **not** re-run `make env-init`: it replaces `.env` with a
 a backup), which would discard the Supervisor details you just set.
 
 Then edit `.env` (these keys are already there, commented, from `.env.example` — uncomment and set;
-**do not paste a `<…>` line into `.env`** — an unedited `<…>` is a shell redirection that truncates
-the rest of the file when it is sourced):
+**do not paste a `<…>` line into `.env`** — an unedited `<…>` is a **syntax error**, and sourcing
+STOPS THERE, so every key below it is silently unset. Measured: a `.env` of `FIRST=ok` /
+`HARBOR_PASSWORD=<SET-IN-.env>` / `LAST=survived` yields `bash: syntax error near unexpected token`,
+`FIRST` set, `LAST` **unset** — and the file itself is untouched, so checking it afterwards tells
+you nothing):
 
 | key | value |
 |---|---|
@@ -238,9 +244,9 @@ Now wire the repo and run the pipeline.
 
 ## 0c. Remove any stale KinD overlay
 
- the state overlay is sourced *after* `.env`, so a leftover
-one from a local run would silently redirect everything at a kind cluster. Delete it **before you
-start**:
+If this box has ever run the local KinD flow, it left a state overlay behind. That file is sourced
+*after* `.env`, so it WINS — a leftover one would silently redirect everything you are about to do
+at a kind cluster that is not there. Delete it **before you start**:
 
 ```bash
 make state-show       # WHOSE state is this? (prints the cluster it was written for; redacts secrets)
