@@ -665,6 +665,9 @@ kubectl get storageclass                                                    # pi
 kubectl annotate sc <name> storageclass.kubernetes.io/is-default-class=true
 ```
 
+**Expect:** a table headed `PROVISIONER`, with at least one class. If it is empty the pipeline
+has nowhere to put Gitea's PVC and Step 11 will fail late instead of here.
+
 ---
 
 ## 12. Ingress (optional)
@@ -700,6 +703,9 @@ restart, across tenants, with nothing naming you as the cause.
 ```bash
 make install-ingress INGRESS_CONTROLLER=istio-existing   # a mesh is already here — attach only
 ```
+
+**Expect:** `attaching to an Istio we did NOT install` — the attach path installs nothing, which
+is the whole point of it.
 
 ```bash
 make install-ingress                                     # NO Istio detected — install it
