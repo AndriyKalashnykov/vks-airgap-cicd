@@ -195,6 +195,14 @@ log_info "credentials written to $OUT_FILE (mode 0600, gitignored)."
 # Supervisor secret -- so say that HERE, where the operator is standing, not in a doc they have left.
 set_env_var HARBOR_USERNAME "$rname"  "${REPO_ROOT}/.env"
 set_env_var HARBOR_PASSWORD "$secret" "${REPO_ROOT}/.env"
+# ASSERT THE WRITE TOOK EFFECT. `.env` is the LOWEST-precedence sink, and on the DEFAULT admin path
+# `04-install-harbor-service.sh` has already state_set admin's credential into the overlay (both keys
+# ship COMMENTED in .env.example, so its `[ -n "${HARBOR_PASSWORD:-}" ] ||` guard is false at Step 4).
+# The line below then says the pipeline runs as the ROBOT while it runs as Harbor ADMIN -- and it
+# does NOT 401, because admin works, so nothing surfaces it. It also defeats this file's own
+# `robot$*` re-run guard, so a second robot gets minted unnoticed.
+assert_env_effective HARBOR_USERNAME "$rname"  "the robot identity" || exit 1
+assert_env_effective HARBOR_PASSWORD "$secret" "the robot secret"   || exit 1
 log_info "published HARBOR_USERNAME/HARBOR_PASSWORD to ./.env — the pipeline now runs as the ROBOT, not as admin."
 log_info "  to mint another robot later, restore the admin credential first: make harbor-admin-password"
 log_warn "the secret is shown only once by Harbor; $OUT_FILE is your only other copy."

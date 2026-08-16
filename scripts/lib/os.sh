@@ -823,6 +823,46 @@ doc_robot_line_is_bad() {
 #
 # The first test I wrote for this used a single-key file, hit bug 2, and reported the mode PRESERVED
 # -- i.e. it could not see bug 1 at all. Hence a fixture with a second key below.
+# assert_env_effective <KEY> <EXPECTED> [<what-we-wrote-it-for>]
+#
+# "I wrote it" is not "it took effect". `.env` is the LOWEST-precedence sink `load_env` sources:
+# `.env.example` -> `.env` -> `.env.state` -> legacy `.env.kind` (LAST wins). So a writer that
+# publishes a credential to `.env` while a HIGHER sink already holds that key reports success and
+# changes nothing the next process will see.
+#
+# MEASURED 2026-08-16, on the DEFAULT scenario-1 admin path, with the real file shapes:
+#     .env       -> HARBOR_USERNAME=robot$vks-cicd / HARBOR_PASSWORD=robotsecret
+#     .env.state -> HARBOR_USERNAME=admin          / HARBOR_PASSWORD=adminpw
+#     load_env   -> effective identity = [admin] / [adminpw]
+# `make harbor-robot` prints "the pipeline now runs as the ROBOT, not as admin" and the pipeline
+# runs as Harbor ADMIN. It does not 401 -- admin works -- so nothing surfaces it. It also defeats
+# 22-harbor-robot.sh's `robot$*` re-run guard, so a second robot is minted unnoticed.
+#
+# ⚠️ THE `unset` BELOW IS THE WHOLE TEST, not tidiness. HARBOR_USERNAME and HARBOR_PASSWORD are in
+# load_env's SELECTOR SNAPSHOT, which RESTORES the caller's exported value after sourcing. Without
+# the unset, a re-resolve returns what the PARENT already had -- so the assert would pass
+# unconditionally on exactly the box where the bug is live: a gate that cannot fail.
+#
+# It ASSERTS rather than prints: the failure is deterministic and machine-checkable, and a printed
+# "effective value" is a line an operator does not read.
+assert_env_effective() {
+  local key="$1" want="$2" why="${3:-}" got=""
+  got="$( unset "$key"; load_env >/dev/null 2>&1; printf '%s' "${!key:-}" )"
+  [ "$got" = "$want" ] && return 0
+
+  log_error "WROTE ${key} to .env, and it did NOT take effect${why:+ (${why})}."
+  log_error "  a higher-precedence file already sets ${key}, so the next command still reads that one."
+  local f
+  for f in "$(state_file 2>/dev/null || printf '%s' "${REPO_ROOT}/.env.state")" "${REPO_ROOT}/.env.kind"; do
+    [ -f "$f" ] || continue
+    # `|| true`: grep exits 1 when the key is absent, which is the normal case for one of the two.
+    local hit; hit="$(grep -nE "^${key}=" "$f" 2>/dev/null | head -1 || true)"
+    [ -n "$hit" ] && log_error "    ${f}:${hit%%:*}  <- this one wins"
+  done
+  log_error "  remove that line (or fix the writer that put it there) and re-run."
+  return 1
+}
+
 set_env_var() {
   local key="$1" val="$2" file="${3:?set_env_var: a SINK is required — use state_set (the stamped overlay) or pass an explicit file}"
   mkdir -p "$(dirname "$file")"; touch "$file"

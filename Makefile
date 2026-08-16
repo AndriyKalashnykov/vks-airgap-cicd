@@ -1122,6 +1122,10 @@ test-shell-rc-file: ## Offline: the rc-file resolver the runbook calls — the V
 test-unwedge-transport-refusal: ## Offline: a break-glass DELETE must never report success over a no-op
 	@bash $(SCRIPTS)/test-unwedge-transport-refusal.sh
 
+.PHONY: test-env-effective
+test-env-effective: ## Offline: a writer must ASSERT its .env write took effect, not just report it
+	@bash $(SCRIPTS)/test-env-effective.sh
+
 .PHONY: test-env-precedence
 test-env-precedence: ## Offline: `export VAR=x; make ...` must beat every .env/.env.state file
 	@bash $(SCRIPTS)/test-env-precedence.sh

@@ -175,5 +175,12 @@ esac
 # `make env-populate` already writes there today.
 set_env_var HARBOR_USERNAME admin      "${REPO_ROOT}/.env"
 set_env_var HARBOR_PASSWORD "$pw"      "${REPO_ROOT}/.env"
+# ASSERT THE WRITE TOOK EFFECT -- otherwise this whole command is a true, useless success.
+# MEASURED on the lab: `make harbor-admin-password` said "ok Harbor accepts admin (http 200) ...
+# wrote HARBOR_USERNAME and HARBOR_PASSWORD to ./.env" and `make env-validate` said 401 SECONDS
+# LATER. Both were true: they read different sinks. Re-running looped forever -- the overlay value
+# 401s, this falls through, re-reads the secret, re-verifies 200, rewrites .env, still shadowed.
+assert_env_effective HARBOR_USERNAME admin "the repaired admin identity" || exit 1
+assert_env_effective HARBOR_PASSWORD "$pw" "the repaired admin password" || exit 1
 log_info "wrote HARBOR_USERNAME and HARBOR_PASSWORD to ./.env  (verified against ${HARBOR_URL} first)"
 log_info "the password is NOT printed here - read it back with 'make creds-show'"
