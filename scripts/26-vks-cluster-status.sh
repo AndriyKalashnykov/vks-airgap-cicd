@@ -54,7 +54,35 @@ nodes_ready() {
 }
 
 report() {
-  local json; json="$(k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" -o json 2>/dev/null || true)"
+  # "I COULD NOT ASK" IS NOT "IT DOES NOT EXIST" (B110, 4 of 4). This used to be
+  # `2>/dev/null || true`, so a stale CA, a rejected token, a missing grant or an unreachable
+  # endpoint all printed "NOT FOUND" — a factual claim about the cluster derived from a connection
+  # that never succeeded. Terse on purpose: report() runs on every poll iteration, so each class
+  # sets a short reason and there is ONE line of output.
+  #
+  # rc is UNCHANGED (2). Both callers use it as a boolean only (`if report && nodes_ready` at the
+  # wait loop, `report || true` on the report-once path), so a new code would be invented precision
+  # nothing reads.
+  local json _rep_err _rep_rc=0 _why=""
+  _rep_err="$(mktemp)"
+  json="$(k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" -o json 2>"$_rep_err")" || _rep_rc=$?
+  if [ "$_rep_rc" -ne 0 ]; then
+    case "$(classify_kube_failure "$_rep_err")" in
+      STALE_CA)            _why="the kubeconfig does not work against this cluster (rebuilt CA?) — make vks-login" ;;
+      UNAUTHORIZED)        _why="the Supervisor rejected these credentials — make vks-login" ;;
+      FORBIDDEN)           _why="this identity may not read Clusters here — an RBAC grant, not a missing cluster" ;;
+      UNREACHABLE)         _why="the Supervisor could not be reached — check the address and the network" ;;
+      PLAINTEXT)           _why="the endpoint answered plaintext where TLS was expected — check the server URL" ;;
+      NO_KUBE_TARGET)      _why="the kubeconfig names no cluster to talk to — make vks-login" ;;
+      KUBECONFIG_UNUSABLE) _why="the kubeconfig is unusable (something it names is missing) — make vks-login" ;;
+      *)                   _why="$(head -1 "$_rep_err")" ;;
+    esac
+    rm -f "$_rep_err"
+    echo "  cluster ${VKS_NAMESPACE}/${VKS_CLUSTER_NAME}: COULD NOT ASK — ${_why}"
+    echo "                     (this is NOT 'the cluster does not exist')"
+    return 2
+  fi
+  rm -f "$_rep_err"
   [ -n "$json" ] || { echo "  cluster ${VKS_NAMESPACE}/${VKS_CLUSTER_NAME}: NOT FOUND"; return 2; }
   # jq, NOT python3. MEASURED 2026-08-09 walking scenario-1 on a bare photon:5.0 jump box against a
   # real 9.1 lab: python3 is ABSENT on Photon, so this function died `python3: command not found`

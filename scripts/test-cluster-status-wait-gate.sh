@@ -34,6 +34,14 @@ case "$*" in
   *"get svc -o json"*)
     printf '{"items":[{"metadata":{"name":"%s","ownerReferences":[{"kind":"VirtualMachineService","name":"%s"}]},"spec":{"type":"LoadBalancer","ports":[{"port":%s}]},"status":{"loadBalancer":{"ingress":[{"ip":"%s"}]}}}]}' \
       "${STUB_CL:-testcluster}" "${STUB_CL:-testcluster}" "${STUB_PORT:-6443}" "${STUB_LB:-}" ;;
+  *"get cluster"*-o*json*)
+    # B110: a transport failure here used to print "NOT FOUND", a claim about the cluster derived
+    # from a connection that never happened.
+    if [ "${STUB_CLUSTER_FAIL:-}" = x509 ]; then
+      echo 'Unable to connect to the server: tls: failed to verify certificate: x509: certificate signed by unknown authority' >&2
+      exit 1
+    fi
+    printf '{}' ;;
   *"get nodes"*)   printf '' ;;      # never Ready -> the wait loop must run to its timeout
   version)         echo "Client Version: v1.34.0" ;;
   *)               printf '' ;;
@@ -85,6 +93,23 @@ else bad "agree: not refused" "the guard fired on an AGREE verdict"; fi
 read -r rc el <<<"$(run_wait "" 192.0.2.138)"
 if [ "$el" -ge 8 ]; then ok "empty endpoint: falls through and WAITS (${el}s)"
 else bad "empty endpoint: falls through and WAITS" "returned after ${el}s — a provisioning cluster was refused"; fi
+
+# --- B110 (4 of 4): report() must not call a transport failure "NOT FOUND" ---------------------
+# The report-once path (WAIT_SECONDS=0) is where an operator reads this line, and it is advertised
+# read-only, so it must still exit 0 — only the WORDING is at issue.
+(
+  PATH="$TMP/bin:$PATH" STUB_ADV=192.0.2.138 STUB_LB=192.0.2.138 STUB_CL="$CL" STUB_PORT="$PORT" \
+  STUB_CLUSTER_FAIL=x509 SKIP_DOTENV=1 \
+  VKS_SUPERVISOR_KUBECONFIG="$TMP/secrets/sup.kubeconfig" \
+  VKS_CLUSTER_NAME="$CL" VKS_NAMESPACE="$NS" VKS_CLUSTER_WAIT_SECONDS=0 \
+  bash "$SCRIPT_DIR/26-vks-cluster-status.sh"
+) > "$TMP/rep" 2>&1 || true
+if grep -q 'COULD NOT ASK' "$TMP/rep"; then ok "report: a transport failure says COULD NOT ASK"
+else bad "report: a transport failure says COULD NOT ASK" "$(tail -2 "$TMP/rep")"; fi
+if grep -q 'NOT FOUND' "$TMP/rep"; then bad "report: must NOT say NOT FOUND on a transport failure" "it did"
+else ok "report: does NOT say NOT FOUND on a transport failure"; fi
+if grep -q 'rebuilt CA' "$TMP/rep"; then ok "report: names the rebuilt-CA cause"
+else bad "report: names the rebuilt-CA cause" "$(tail -2 "$TMP/rep")"; fi
 
 echo
 echo "cluster-status wait gate: ${pass} passed, ${fail} failed"
