@@ -61,6 +61,13 @@ looks by default — and set `VKS_AUTH_METHOD=kubeconfig` in `./.env`:
 ```bash
 mkdir -p ./secrets
 cp "<path-to-the-kubeconfig-you-were-given>" ./secrets/vks.kubeconfig
+```
+
+Now confirm it actually arrived. Keep this as its own command: an empty or truncated copy is the
+most expensive mistake in this document, because it reports nothing here and then makes **every**
+later step say "not found".
+
+```bash
 head -1 ./secrets/vks.kubeconfig
 ```
 
@@ -427,7 +434,13 @@ one layer, the cluster nodes decode the second):
 
 ```bash
 # DOUBLE base64: the outer -w0 keeps it a single line for the Cluster YAML.
-base64 -w 0 harbor-ca.crt | base64 -w 0
+#
+# The two-step form is deliberate. Written as one pipeline — `base64 -w 0 $CA | base64 -w 0` —
+# a missing file makes the FIRST base64 fail while the pipeline's status is the SECOND one's,
+# so it prints "No such file or directory" and still exits 0: you would paste an EMPTY value
+# into your Cluster spec and nothing would tell you. Measured.
+CA="${HARBOR_CA_FILE:-./secrets/harbor-ca.crt}"
+b64=$(base64 -w 0 "$CA") && printf '%s' "$b64" | base64 -w 0
 ```
 
 Reference: [William Lam — using a VKS cluster with a private container registry](https://williamlam.com/2024/06/using-a-vsphere-kubernetes-service-vks-cluster-with-a-private-container-registry.html).
