@@ -60,7 +60,7 @@ looks by default — and set `VKS_AUTH_METHOD=kubeconfig` in `./.env`:
 
 ```bash
 mkdir -p ./secrets
-cp /path/to/the-kubeconfig-you-were-given ./secrets/vks.kubeconfig
+cp "<path-to-the-kubeconfig-you-were-given>" ./secrets/vks.kubeconfig
 head -1 ./secrets/vks.kubeconfig
 ```
 
