@@ -169,7 +169,7 @@ cluster's generated passwords. `make kind-down` removes it **only if the KinD fl
 
 ## 1. Finish your .env
 
- The discovery step above filled the Harbor + ArgoCD values,
+The discovery step above filled the Harbor + ArgoCD values,
 `ARGOCD_NAMESPACE`, and `KUBECONFIG` / `VKS_CONTEXT`. Only the **Gitea password** (a login for
 the component **we** install) and the **VKS auth method** remain:
 
@@ -189,29 +189,50 @@ to the verified shape but not yet lab-validated). For the legacy vSphere plugin,
 
 ## 2. Save the Harbor CA certificate
 
- to `./secrets/harbor-ca.crt` (the
-`HARBOR_CA_FILE` path). If the lab handed you the cert, drop it there. Otherwise fetch it
-from the running Harbor with **`make fetch-harbor-ca`** (reads `HARBOR_URL`, writes
-`HARBOR_CA_FILE`), or by hand:
+Harbor's certificate was issued by your lab's own certificate authority, not by a public one, so
+nothing on your jump box trusts Harbor yet. Save that authority's certificate at
+`./secrets/harbor-ca.crt` — the `HARBOR_CA_FILE` path you set in Step 1. If the platform team
+already sent you that file, save it there and go straight to the check at the end of this step.
+
+Otherwise ask Harbor for it:
 
 ```bash
-make fetch-harbor-ca     # HARBOR_URL → HARBOR_CA_FILE; it takes the ISSUER cert of the chain and openssl-verifies it before writing
+make fetch-harbor-ca     # reads HARBOR_URL, writes HARBOR_CA_FILE
 ```
 
-Do **not** hand-roll this with `openssl s_client … | openssl x509` — that pipes only the first PEM (the
-server **leaf**), not the issuing CA, so it *passes* on a self-signed KinD Harbor but *fails* on a
-cert-manager Harbor (the real lab) with `x509: certificate signed by unknown authority`. If you must do it
-by hand, extract the **last** cert of the chain and `openssl verify -CAfile` the leaf against it.
+Many shared Harbors do not send it, and then this stops and tells you so:
 
-(You may also see a **Registry Certificate** download on the Harbor project page, but it is **empty** on a
-Harbor whose TLS is terminated by an ingress / cert-manager — the usual shared-lab shape — so treat
-`make fetch-harbor-ca` as the reliable path, and ask the platform team for the issuing CA PEM if neither
-works.) The CA is
-consumed in **two** places, both handled for you: `make mirror` builds a **sudo-free** trust
-bundle (`SSL_CERT_FILE` = the system CAs + your Harbor CA) so `crane` pushes over HTTPS
-**without** touching the jump box's system trust store, and `make platform` creates an
-in-cluster ConfigMap **`harbor-ca`** (key `ca.crt`) so Kaniko/Tekton trust it too. If Harbor
-presents a publicly-trusted cert, leave `HARBOR_CA_FILE` empty.
+```text
+FATAL harbor.example:443 presents ONE certificate that is NOT self-signed (subject != issuer).
+      Its CA is not on the wire, so it cannot be fetched from here.
+```
+
+If you see that, the certificate you need really is not available from Harbor's connection, and
+nothing on your side can pull it out of one. **Ask the platform team for the file** and save it
+yourself. There is also a way to read it out of the cluster, but it needs a grant a tenant is not
+given: the same object holds that authority's **private key**, and Kubernetes cannot hand out one
+part of an object without the rest. Scenario 1 covers that route, for the person who installed
+Harbor.
+
+Do **not** build the file by hand from `openssl s_client`: what that gives you is Harbor's own
+certificate rather than the one that issued it, so it appears to work and then fails later with
+`x509: certificate signed by unknown authority`.
+
+However you got the file, check it is the right one for **this** Harbor before anything relies on it:
+
+```bash
+make ca-status
+```
+
+**Expect:** a line beginning `Harbor CA` that says it `matches` your Harbor address, and
+`CA certificate(s) match their servers.` A file that *looks* like a CA but belongs to a different
+server fails much later, as a TLS error naming neither the file nor this step. *(<1 min)*
+
+The CA is then used in **two** places, both handled for you: `make mirror` builds a **sudo-free**
+trust bundle (`SSL_CERT_FILE` = the system CAs + your Harbor CA) so `crane` pushes over HTTPS
+**without** touching the jump box's system trust store, and `make platform` creates an in-cluster
+ConfigMap **`harbor-ca`** (key `ca.crt`) so Kaniko/Tekton trust it too. If your Harbor presents a
+publicly-trusted certificate, leave `HARBOR_CA_FILE` empty and skip this step.
 
 For **ArgoCD**'s self-signed CA (only needed if you drive `argocd login` with verification, or
 to trust its UI), fetch it the same way — `ARGOCD_SERVER` is already set from discovery, so run
@@ -229,7 +250,7 @@ make vks-login    # validates $KUBECONFIG + context against the lab cluster
 
 ## 3b. Install the Broadcom VCF/VKS lab CLIs
 
- You need the **licensed** `argocd-vcf` +
+You need the **licensed** `argocd-vcf` +
 `vcf` binaries if **either** applies (both are the normal VKS case):
 
 - you authenticate with `VKS_AUTH_METHOD=vcf` — `scripts/30-vks-login.sh` hard-requires `vcf`; or
@@ -291,8 +312,8 @@ clearly if any is missing. On a minimal box where you skipped `make deps`:
 Because your Harbor project is a **tenant** project (typically **private**), the workload cluster
 must trust the Harbor CA **declaratively** — add the CA to the Cluster spec
 `trust.additionalTrustedCAs` (a request to the platform team if you don't own the Cluster
-resource). The value is the CA PEM **encoded twice with base64** (VKS decodes one layer, then the
-node trust store decodes the inner PEM):
+resource). The value is your Harbor CA certificate file **encoded twice with base64** (VKS decodes
+one layer, the cluster nodes decode the second):
 
 ```bash
 # DOUBLE base64: the outer -w0 keeps it a single line for the Cluster YAML.
@@ -379,7 +400,7 @@ rm -f /tmp/harbor-config.json
 ```
 
 **Expect:** a line naming `harbor-dockerconfig`, ending in `created` or `configured` — both are
-fine, the apply is idempotent.
+fine, and re-running it is safe.
 
 The Kubernetes secret is built from your Harbor **login/password**; Harbor's **REST API** is
 used only to create a robot account (if you self-service one) — it does not create this cluster

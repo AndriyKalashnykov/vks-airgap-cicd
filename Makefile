@@ -277,6 +277,10 @@ check-doc-make-targets: ## Gate: every `make X` a runbook tells the operator to 
 # command; this proves a LIVE capability is not INVISIBLE. `make builder-build`/`builder-push`/
 # `e2e-sneakernet-both` shipped and were merged while appearing in no document a user reads — the third
 # time in one day that "a capability change is not done until the operator docs say so" failed as prose.
+.PHONY: check-doc-expect-leak
+check-doc-expect-leak: ## Gate: an `**Expect:**` line must not quote a name the reader was never introduced to
+	@$(SCRIPTS)/check-doc-expect-leak.sh
+
 .PHONY: check-doc-target-coverage
 check-doc-target-coverage: ## Gate: every operator-invocable target must be named in SOME doc (CI gates exempt themselves via `## Gate:`)
 	@$(SCRIPTS)/check-doc-target-coverage.sh
@@ -503,6 +507,10 @@ fetch-supervisor-ca: ## Fetch the CA that signed the Supervisor's cert FROM VCEN
 .PHONY: show-dns-records
 show-dns-records: ## Print the exact DNS A records this install needs, with their live LoadBalancer IPs (scenario-1 §2.6)
 	@$(SCRIPTS)/show-dns-records.sh
+
+.PHONY: ca-status
+ca-status: ## Read-only: is each saved CA certificate still the right one for its server? (names how to get it again)
+	@$(SCRIPTS)/29-ca-status.sh
 
 .PHONY: fetch-harbor-ca
 fetch-harbor-ca: ## Fetch the CA that ISSUED the lab Harbor's cert → HARBOR_CA_FILE, and VERIFY it (for HTTPS mirror/Kaniko trust)
@@ -1016,7 +1024,11 @@ test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD fl
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint test-endpoint-report test-cluster-status-wait-gate test-harbor-admin-ns-classify test-tkr-classify test-state-echo-back test-uninstall-honesty test-classify-kube-failure test-env-lifecycle test-walk-doc test-harbor-reachable test-harbor-auth-report test-gitea-hook-ids test-argocd-kubeconfig-stale test-ca-anchor-validation test-unwedge-transport-refusal test-shell-rc-file ## Run all offline script-logic unit tests
+test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint test-endpoint-report test-cluster-status-wait-gate test-harbor-admin-ns-classify test-tkr-classify test-state-echo-back test-uninstall-honesty test-classify-kube-failure test-env-lifecycle test-walk-doc test-harbor-reachable test-harbor-auth-report test-gitea-hook-ids test-argocd-kubeconfig-stale test-ca-anchor-validation test-unwedge-transport-refusal test-shell-rc-file test-ca-staleness-check ## Run all offline script-logic unit tests
+
+.PHONY: test-ca-staleness-check
+test-ca-staleness-check: ## Offline: the four arms of the trust-anchor probe, incl. unreachable != stale
+	@bash $(SCRIPTS)/test-ca-staleness-check.sh
 
 .PHONY: test-shell-rc-file
 test-shell-rc-file: ## Offline: the rc-file resolver the runbook calls — the VM matrix is single-shell and CANNOT catch this
@@ -1323,7 +1335,7 @@ vendor-diagrams: ## Re-download the pinned C4-PlantUML stdlib into docs/diagrams
 	echo "vendor-diagrams: refreshed docs/diagrams/c4/ @ $(C4_PLANTUML_VERSION) — now run 'make diagrams' and verify the offline render"
 
 .PHONY: docs-lint
-docs-lint: check-readme-scenarios check-doc-command-count check-doc-make-targets check-doc-target-coverage check-vks-terminology check-doc-novels check-doc-robot-quoting check-vks-provenance ## Lint markdown + the README-scenario, command-count, target-coverage, VKS-terminology, doc-novels and robot-quoting gates
+docs-lint: check-readme-scenarios check-doc-expect-leak check-doc-command-count check-doc-make-targets check-doc-target-coverage check-vks-terminology check-doc-novels check-doc-robot-quoting check-vks-provenance ## Lint markdown + the README-scenario, command-count, target-coverage, VKS-terminology, doc-novels and robot-quoting gates
 	@# NOTE: diagrams-check is deliberately NOT a prerequisite here. It `docker run`s the pinned
 	@# PlantUML image (a ~478 MB pull, cold) and re-renders every .puml — so making it unconditional
 	@# meant a README-only PR paid for a full JVM render of seven diagrams it never touched. `make ci`

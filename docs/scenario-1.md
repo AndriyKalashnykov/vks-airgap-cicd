@@ -504,8 +504,9 @@ make psa-check
 
 ## 8. Harbor's CA
 
-Harbor uses a self-signed certificate. Save its CA so the jump box and the cluster trust it.
-Harbor publishes it, so no login is needed.
+Harbor's certificate is issued by a private CA (`CN = Harbor CA`), not by a public one, so nothing
+trusts it yet. Save that CA so the jump box and the cluster do. Harbor publishes it on an
+unauthenticated endpoint, so no login is needed.
 
 **The commands below read this — already in `./.env`:**
 
@@ -536,6 +537,20 @@ sha256sum ./secrets/harbor-ca.crt
 
 **Expect:** the file exists, is `0644`, its subject is a CA, and the digest matches. *(<1 min)*
 
+The digest proves it is the file Harbor's operator meant you to have. One more check proves it is the
+right file for **this** Harbor — a certificate left over from an earlier lab is still a perfectly
+valid certificate, and a rebuilt lab issues a new one at the *same address*, so the old file keeps
+looking fine until it fails:
+
+```bash
+make ca-status
+```
+
+**Expect:** a line beginning `Harbor CA` that says it `matches` your Harbor address, then
+`CA certificate(s) match their servers.` From here on `make lab-preflight` repeats this check for
+you, so a rebuilt lab is caught in the first seconds rather than 20 minutes into the mirror.
+*(<1 min)*
+
 <details><summary>Alternatives if that endpoint is unavailable</summary>
 
 - Harbor's UI: your project → **Registry Certificate** → download `ca.crt`.
@@ -545,10 +560,10 @@ sha256sum ./secrets/harbor-ca.crt
   make harbor-ca-from-cluster
   ```
 
-Note `make fetch-harbor-ca` derives the CA from the TLS handshake, so it works only when the **last**
-certificate Harbor sends is a self-signed CA that **directly issued** Harbor's certificate — a
-self-signed cert, or a single-level private CA. If there is an **intermediate** in the path (the
-usual corporate PKI) it stops and tells you so: the certificate it extracts cannot verify Harbor's
+Note `make fetch-harbor-ca` takes the CA from the connection Harbor answers on, so it works only when
+the **last** certificate Harbor sends is the one that **directly issued** Harbor's own — a
+self-signed certificate, or a single private CA. If your site puts another certificate in between
+(the usual corporate setup) it stops and tells you so: the certificate it took cannot verify Harbor's
 leaf on its own. Get the CA from Harbor's UI or from your platform team instead.
 
 </details>
