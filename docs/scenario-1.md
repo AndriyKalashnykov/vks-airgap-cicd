@@ -74,6 +74,12 @@ All of these are **entitled** downloads — you need a Broadcom account with a v
 Foundation entitlement. Get them now: Steps 1-5 read them off disk and will not tell
 you to fetch them. Versions move; match yours to what your entitlement offers.
 
+⚠️ **Each link opens a page that looks EMPTY until you pick a release.** The *Release*
+list on the page starts blank, and while it is blank the file table reads **"No data
+found"** — which looks exactly like the artifact not existing. Pick your release first,
+then the files appear. (If you are not signed in, the link takes you to Broadcom's
+sign-in page before any of this.)
+
 | file | from | put it in |
 |---|---|---|
 | `VCF-Consumption-CLI-Linux_AMD64-9.1.0.0400.25509669.tar.gz` | [VCF CLI](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20vSphere%20Foundation%209&release=9.1.0.0&os=&servicePk=542815&language=EN&viewGroup=true&groupId=540529) | `VCF_CLI_SRC_DIR` (you set it in Step 1) |
@@ -549,7 +555,15 @@ fi
 rm -rf "$tmp"
 ```
 
-Two details in there are load-bearing, and both were found by running it rather than reading it:
+**Expect:** one line ending `harbor.crt: OK` — that is `openssl` confirming the downloaded file
+really does vouch for this Harbor, and the CA is now saved. Any other message means **nothing was
+saved**, and each one names which problem it hit. *(<1 min)*
+
+If it prints *"nothing answered at"*, fix the A record before continuing. If it prints *"could not
+read"*, Harbor answered but its certificate did not arrive — the message lists what to check. If it
+prints *"that file does not vouch for"*, use one of the alternatives below.
+
+Two details in there are load-bearing:
 
 - It downloads to a scratch file, **not** straight to `./secrets/harbor-ca.crt`. If Harbor answers
   with an empty body, `curl` still succeeds, and writing directly would leave you a **zero-byte**
@@ -559,14 +573,6 @@ Two details in there are load-bearing, and both were found by running it rather 
   authority internally, and on some setups that is what this address hands out — same name, wrong
   file. It looks right, and then image pulls fail with `certificate signed by unknown authority`
   long after this step.
-
-**Expect:** one line ending `harbor.crt: OK` — that is `openssl` confirming the downloaded file
-really does vouch for this Harbor, and the CA is now saved. Any other message means **nothing was
-saved**, and each one names which problem it hit. *(<1 min)*
-
-If it prints *"nothing answered at"*, fix the A record before continuing. If it prints *"could not
-read"*, Harbor answered but its certificate did not arrive — the message lists what to check. If it
-prints *"that file does not vouch for"*, use one of the alternatives below.
 
 Then **check it against a digest you got from whoever runs Harbor**, over some other channel —
 `-k` above means you fetched it over a connection you could not yet verify:
