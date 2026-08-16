@@ -38,12 +38,28 @@ o="$(run ok1)"; r=$?
 if [ "$r" -eq 0 ] && printf '%s' "$o" | grep -q '0 FAILED'; then c=0; else c=1; fi
 assert "a passing block stays green" "$c" "rc=$r"
 
-# 2. Zero extracted blocks reported a clean walk and exit 0 -- reachable via a fence attribute,
-#    ```sh, or one invalid UTF-8 byte. This project HAS been in that state (a greedy . under re.S).
-printf '## S\n\n```sh\ntrue\n```\n' > "$T/zero.md"
+# 2. "Nothing failed" must not equal "nothing happened". TWO ways that can happen, and they need
+#    separate cases -- the floor used to be a hand-typed constant (WALK_MIN_BLOCKS, default 20),
+#    which caught neither honestly: this fixture "passed" only because 1 < 20, while its own comment
+#    claimed to be testing ZERO extracted blocks. The floor is now DERIVED (parser vs an independent
+#    source-side count), so both properties get a real case.
+#
+# 2a. ZERO blocks -- the derived floor alone would read `0 >= 0` and PASS.
+printf '## S\n\njust prose, no fences at all\n' > "$T/zero.md"
 o="$(WALK_DOC="$T/zero.md" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_ISTIO=existing bash "$W" 2>&1)"; r=$?
-if [ "$r" -ne 0 ] && printf '%s' "$o" | grep -q REFUSING; then c=0; else c=1; fi
-assert "too few blocks REFUSES" "$c" "rc=$r — 'nothing failed' must not equal 'nothing happened'"
+if [ "$r" -ne 0 ] && printf '%s' "$o" | grep -q 'ZERO command blocks'; then c=0; else c=1; fi
+assert "ZERO blocks REFUSES" "$c" "rc=$r — 'nothing failed' must not equal 'nothing happened'"
+
+# 2b. A block PRESENT IN THE SOURCE and INVISIBLE TO THE PARSER. A blockquoted fence is the real
+#     instance (measured in scenario-2: the ingress step's `make istio-preflight` was silently
+#     dropped while `14 extracted, 14 counted` reconciled perfectly). A hand-typed constant can
+#     NEVER catch this -- the human types the number to match whatever the parser happened to see.
+printf '## S\n\n```bash\ntrue\n```\n\n> ```bash\n> echo INVISIBLE\n> ```\n' > "$T/quoted.md"
+o="$(WALK_DOC="$T/quoted.md" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_ISTIO=existing bash "$W" 2>&1)"; r=$?
+if [ "$r" -ne 0 ] && printf '%s' "$o" | grep -q 'BLOCKQUOTED fence'; then c=0; else c=1; fi
+assert "a BLOCKQUOTED fence REFUSES" "$c" "rc=$r — the parser cannot see it, so the floor must"
+if printf '%s' "$o" | grep -q 'INVISIBLE'; then c=1; else c=0; fi
+assert "...and it was indeed never executed" "$c" "the blockquoted block ran"
 
 # 3. A ```bash nested inside a ````-fenced example is a snippet the reader must NOT run. The
 #    regex extractor scheduled `rm -rf /important` for execution.

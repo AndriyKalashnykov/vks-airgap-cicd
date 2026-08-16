@@ -349,15 +349,20 @@ fi
 # paths measured: a fence attribute, ```sh, and one invalid UTF-8 byte. That state HAS occurred here
 # (a greedy `.` under re.S).
 #
-# ⚠️ HONEST ABOUT WHAT THIS NUMBER IS: INDEP is PRINTED, not gated. It cannot equal ${#PARSED[@]}
-# (that counts ```sh and ```shell too, this greps ```bash), so it is a reader's cross-check, not a
-# floor. The block floor is the CONSTANT below. The only real reconciliation in this script is
-# INDEP_E. A previous version of this comment claimed the floor was reconciled against an
-# independent count; it was describing a variable that gates nothing.
+# INDEP IS NOW A FLOOR, NOT A DECORATION. It used to be printed-only, on the stated grounds that it
+# "cannot equal ${#PARSED[@]} because that counts ```sh and ```shell too". MEASURED: both documents
+# contain ZERO ```sh and ZERO ```shell fences, so once this grep is widened to the same three
+# languages the parser accepts, INDEP == ${#PARSED[@]} exactly (39/39 and 14/14). The obstacle was
+# real in principle and absent in fact.
+#
+# BLOCKQUOTE-TOLERANT (`>` allowed before the fence) on purpose, and that is the half that earns its
+# keep: the parser only sees a fence at the start of a line, so a `> ```bash ` block is invisible to
+# it — and a hand-typed constant can NEVER catch that, because the human types the number to match
+# whatever the parser happened to see. A derived floor catches it as an arithmetic contradiction.
 #
 # `cat` and not `grep -c "${DOC_SET[@]}"`: with MORE THAN ONE file grep prints `file:count` per
 # file, so the multi-file form yields text where a total is wanted.
-INDEP="$(cat "${DOC_SET[@]}" | grep -c '^[[:space:]]*```bash' || true)"
+INDEP="$(cat "${DOC_SET[@]}" | grep -cE '^[[:space:]]*>?[[:space:]]*```(bash|sh|shell)' || true)"
 # Claims, counted independently of the parser -- same discipline, different unit. INDENT-TOLERANT
 # on purpose: the parser only sees `**Expect` at COLUMN 0, so a column-0-only grep would share its
 # blindness and an indented claim would be invisible to both. A blockquoted `> **Expect:` still is.
@@ -375,8 +380,27 @@ printf 'row: ns=%s harbor=%s argocd=%s cluster=%s robot=%s clone-skipped=%s isti
 # Disclosed, because it is a real trade: carrying the environment means a block that forgot to
 # source ./.env is rescued by the previous one -- exactly as it would be for a reader in one terminal.
 printf 'shell: ONE INTERACTIVE bash per STATEMENT, ENV AND CWD CARRIED FORWARD (a reader has one terminal,\n        and runs one command at a time -- each result is printed under the command that produced it)\n'
-[ "${#PARSED[@]}" -ge "${WALK_MIN_BLOCKS:-20}" ] \
-  || { echo "REFUSING: only ${#PARSED[@]} blocks (< ${WALK_MIN_BLOCKS:-20}) — the parser and the document have diverged"; exit 1; }
+# THE FLOOR, DERIVED — per-document by construction, and nothing to keep in sync. A hand-typed
+# constant is a number someone maintains to match the parser, so it can only ever detect the parser
+# getting WORSE than the day the number was written; it cannot detect a block the parser never saw.
+#
+# TWO conditions, because the derived one alone has a hole the constant did not: a document with NO
+# fences at all yields `0 >= 0` and PASSES. "Nothing failed" must never equal "nothing happened", so
+# a walk that walks nothing is refused outright. (Found by the constant-era test failing against the
+# derived floor — the test was right and the first version of this change was wrong.)
+[ "${#PARSED[@]}" -gt 0 ] || {
+  echo "REFUSING: the parser extracted ZERO command blocks from ${DOC} — there is nothing to walk,"
+  echo "  and a walk that runs nothing must not report a clean result."
+  exit 1
+}
+[ "${#PARSED[@]}" -ge "$INDEP" ] || {
+  echo "REFUSING: the document has ${INDEP} fenced command block(s) but the parser extracted only ${#PARSED[@]}."
+  echo "  A block is present in the source and invisible to the parser. The usual cause is a"
+  echo "  BLOCKQUOTED fence (\`> \`\`\`bash\`) — the parser only sees a fence at the start of a line, so the"
+  echo "  block is silently dropped while every other counter reconciles. Unindent it, or move the"
+  echo "  commands out of the blockquote."
+  exit 1
+}
 
 for row in "${PARSED[@]}"; do
   H="$(printf '%s' "$row" | python3 -c 'import sys,json;print(json.load(sys.stdin)["h"])')"

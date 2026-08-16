@@ -428,48 +428,52 @@ deployed **app**, either front them with the ingress at `*.vks.local`, or `kubec
 (`kubectl -n gitea port-forward svc/gitea-http 3000:3000`, and one per app —
 `kubectl -n <app> port-forward svc/<app> 18080:80` for each of `javawebapp`, `gowebapp`).
 
-> **Ingress — ASK the cluster whether a mesh is there. Do not assume.** A platform team *may* have
-> shipped your cluster with the VKS Istio package (possibly at cluster-creation time) — but
-> **available is not installed**, and you hold cluster-admin on your own guest cluster, so either
-> answer is workable. `istio-preflight` measures it; it is sitting right there.
->
-> ```bash
-> make istio-preflight     # read-only: is Istio here? what does it require of me? what must I request?
-> ```
->
-> | It says | You run |
-> |---|---|
-> | **Istio is here** (the expected tenant case) | `make install-ingress INGRESS_CONTROLLER=istio-existing` — installs **nothing**, attaches routes only. **Never** the bare `make install-ingress` against a mesh you did not install: its default would **helm-install a second istiod over the platform's**. |
-> | **NO Istio detected** | `make install-ingress` (installs our own; images come from your Harbor) or `INGRESS_CONTROLLER=traefik` for a lighter option. |
->
-> `istio-preflight` also prints the exact `Gateway` selector the mesh requires, what your kubeconfig
-> may actually do, and what (if anything) to **request from the mesh admin**. It picks the route API:
-> the **Kubernetes Gateway API** when Istio is an Accepted `GatewayClass` (Istio then auto-provisions
-> the proxy *and* its LoadBalancer — nothing needed from the platform team), else the classic
-> `Gateway`/`VirtualService` path.
->
-> **Gateway API CRDs — you MAY be able to install them yourself, but the attach command will NOT do
-> it for you.** You hold **cluster-admin on your own guest cluster**, and the Gateway API CRDs are
-> cluster-scoped resources of *that* cluster, so you are permitted to install them. But
-> `make install-ingress INGRESS_CONTROLLER=istio-existing` **installs nothing** — that is the whole
-> point of the attach path — so if the CRDs are absent you must apply them yourself first. Once they
-> are there, Istio auto-provisions the proxy + LB from the `Gateway` you create. Only **ask the mesh admin** if you do
-> **not** own the cluster the mesh runs in. (If you end up on the classic path — no Gateway API — and the
-> VKS package ships its shared gateway **off by default**, then there is nothing to bind to and you
-> request a gateway.) `istio-preflight` reports which case you are in.
->
-> Add the printed `INGRESS_LB_IP` line to `/etc/hosts`
-> (see [Access the UIs](../README.md#access-the-uis-urls-logins-passwords)).
->
-> **PSA: `make psa-check` cannot prove anything *before* you install — and it will say so.** A VKS guest
-> cluster enforces the `restricted` Pod Security Standard **by default** (VKr v1.26+), which **rejects**
-> our Kaniko build pods and the Istio-provisioned gateway proxy unless their namespaces are labelled
-> `baseline`. The installers apply the measured labels.
->
-> But run it too early and every namespace is *absent*, so it measures nothing and prints
-> **`measured 0 namespace(s) … PSA UNPROVEN`**. That is the correct answer at that point, and it is
-> **not a pass** — a green there would have been true before any of our code ran. The run that proves it
-> is the one **after `make platform`**; look for `PSA OK — … (N measured)`.
+### Ingress — ASK the cluster whether a mesh is there. Do not assume
+
+A platform team *may* have
+shipped your cluster with the VKS Istio package (possibly at cluster-creation time) — but
+**available is not installed**, and you hold cluster-admin on your own guest cluster, so either
+answer is workable. `istio-preflight` measures it; it is sitting right there.
+
+```bash
+make istio-preflight     # read-only: is Istio here? what does it require of me? what must I request?
+```
+
+| It says | You run |
+|---|---|
+| **Istio is here** (the expected tenant case) | `make install-ingress INGRESS_CONTROLLER=istio-existing` — installs **nothing**, attaches routes only. **Never** the bare `make install-ingress` against a mesh you did not install: its default would **helm-install a second istiod over the platform's**. |
+| **NO Istio detected** | `make install-ingress` (installs our own; images come from your Harbor) or `INGRESS_CONTROLLER=traefik` for a lighter option. |
+
+`istio-preflight` also prints the exact `Gateway` selector the mesh requires, what your kubeconfig
+may actually do, and what (if anything) to **request from the mesh admin**. It picks the route API:
+the **Kubernetes Gateway API** when Istio is an Accepted `GatewayClass` (Istio then auto-provisions
+the proxy *and* its LoadBalancer — nothing needed from the platform team), else the classic
+`Gateway`/`VirtualService` path.
+
+**Gateway API CRDs — you MAY be able to install them yourself, but the attach command will NOT do
+it for you.** You hold **cluster-admin on your own guest cluster**, and the Gateway API CRDs are
+cluster-scoped resources of *that* cluster, so you are permitted to install them. But
+`make install-ingress INGRESS_CONTROLLER=istio-existing` **installs nothing** — that is the whole
+point of the attach path — so if the CRDs are absent you must apply them yourself first. Once they
+are there, Istio auto-provisions the proxy + LB from the `Gateway` you create. Only **ask the mesh admin** if you do
+**not** own the cluster the mesh runs in. (If you end up on the classic path — no Gateway API — and the
+VKS package ships its shared gateway **off by default**, then there is nothing to bind to and you
+request a gateway.) `istio-preflight` reports which case you are in.
+
+Add the printed `INGRESS_LB_IP` line to `/etc/hosts`
+(see [Access the UIs](../README.md#access-the-uis-urls-logins-passwords)).
+
+### PSA: `make psa-check` cannot prove anything *before* you install — and it will say so
+
+A VKS guest
+cluster enforces the `restricted` Pod Security Standard **by default** (VKr v1.26+), which **rejects**
+our Kaniko build pods and the Istio-provisioned gateway proxy unless their namespaces are labelled
+`baseline`. The installers apply the measured labels.
+
+But run it too early and every namespace is *absent*, so it measures nothing and prints
+**`measured 0 namespace(s) … PSA UNPROVEN`**. That is the correct answer at that point, and it is
+**not a pass** — a green there would have been true before any of our code ran. The run that proves it
+is the one **after `make platform`**; look for `PSA OK — … (N measured)`.
 
 <br>
 
