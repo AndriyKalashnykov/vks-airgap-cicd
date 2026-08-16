@@ -221,6 +221,18 @@ while IFS= read -r _i; do
   DOC_SET+=("$_p")
 done <<< "$_incs"
 
+# A CLOSING </details> MUST BE ALONE ON ITS LINE — see the block comment above the parser's
+# details handling. `.</details>` and `</details> more` are both rejected; the fix is one newline.
+_bad_close="$(grep -hnE '(.\S|\S.)</details>|</details>[[:space:]]*\S' "${DOC_SET[@]}" || true)"
+[ -z "$_bad_close" ] || {
+  echo "REFUSING: a closing </details> is not alone on its line. The parser only resets its"
+  echo "  'inside a <details>' state on a line that STARTS with </details>, so everything after"
+  echo "  this point would be silently SKIPPED while every counter still reconciles and rc=0:"
+  printf '%s\n' "$_bad_close" | sed 's/^/    /'
+  echo "  Put </details> on a line of its own."
+  exit 1
+}
+
 mapfile -t PARSED < <(python3 - "$DOC" <<'PY'
 import json, os, re, sys
 heading, fence, body, out = "(preamble)", None, [], []

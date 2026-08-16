@@ -50,6 +50,18 @@ o="$(WALK_DOC="$T/zero.md" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_ISTIO=existing
 if [ "$r" -ne 0 ] && printf '%s' "$o" | grep -q 'ZERO command blocks'; then c=0; else c=1; fi
 assert "ZERO blocks REFUSES" "$c" "rc=$r — 'nothing failed' must not equal 'nothing happened'"
 
+# 2c. A CLOSING </details> NOT ALONE ON ITS LINE silently un-runs THE REST OF THE DOCUMENT.
+#     The parser resets its details state only on a line STARTING with </details>, so `prose.</details>`
+#     leaves it open forever. MEASURED before the fix on a 3-block fixture: rc=0, "3 extracted, 3
+#     counted independently", "3 Expect, 3 parsed" -- every counter reconciling -- and 1 of 3 ran.
+#     On a real row one collapsed note at step 2 would silently skip steps 3-7 and report green.
+#     REFUSED rather than guessed: closing on any occurrence would remove the silent skip but
+#     introduce the opposite hazard, RUNNING a block that is an alternative for another scenario.
+printf '## A\n\n```bash\necho ONE\n```\n\n## B\n\n<details><summary>n</summary>\nprose.</details>\n\n```bash\necho TWO\n```\n' > "$T/badclose.md"
+o="$(WALK_DOC="$T/badclose.md" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_ISTIO=existing bash "$W" 2>&1)"; r=$?
+if [ "$r" -ne 0 ] && printf '%s' "$o" | grep -q 'not alone on its line'; then c=0; else c=1; fi
+assert "a </details> not alone on its line REFUSES" "$c" "rc=$r — the rest of the document would be silently skipped"
+
 # 2b. A block PRESENT IN THE SOURCE and INVISIBLE TO THE PARSER. A blockquoted fence is the real
 #     instance (measured in scenario-2: the ingress step's `make istio-preflight` was silently
 #     dropped while `14 extracted, 14 counted` reconciled perfectly). A hand-typed constant can
