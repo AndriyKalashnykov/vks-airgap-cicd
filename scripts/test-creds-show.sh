@@ -131,8 +131,66 @@ else
   bad "ingress present -> no /etc/hosts hint, so the *.vks.local URLs it just printed cannot resolve"
 fi
 
+# ---- STATE 4: THE REAL-LAB STATE. An overlay that is present but NOT stamped. -------------------
+# Every state above sets VKS_STATE_KIND=1, which short-circuits creds.sh's provenance ladder BEFORE
+# the stamp comparison — so until now this gate never rendered the STORED branch at all, and STORED
+# is the ONLY branch a real lab reaches: nothing on the real-lab path calls state_stamp (its two
+# callers are 05-kind-up.sh and a manual `make state-stamp`). The gate written to keep creds-show
+# honest "in every state" was blind to the state the operator is actually in. (B87)
+out="$(render 'HARBOR_URL=10.0.0.1
+HARBOR_PASSWORD=x
+ARGOCD_LB_IP=10.0.0.2
+')"
+if printf '%s' "$out" | grep -q 'values-provenance: STORED'; then
+  ok "unstamped overlay, non-KinD -> declares values-provenance: STORED"
+else
+  bad "unstamped overlay, non-KinD -> did NOT declare STORED. This is the REAL-LAB state, and the
+      whole point of the tri-state is that it is distinguishable from DISCOVERED."
+fi
+if printf '%s' "$out" | grep -qi 'may be from a lab that no longer exists'; then
+  ok "...and warns the HUMAN that the values may predate this cluster"
+else
+  bad "...but the human is not told. The token alone is not the deliverable."
+fi
+
+# ---- STATE 5: STAMPED and MATCHING -> DISCOVERED, without the KinD shortcut. --------------------
+# state_kubeconfig_server PARSES the kubeconfig and never dials, so a stamped overlay plus a
+# matching kubeconfig is fully offline. This is the branch VKS_STATE_KIND=1 has been standing in
+# for, so the stamp comparison itself has never been exercised by this gate.
+_kc="${TMPDIR:-/tmp}/creds-test-kc.$$"
+cat > "$_kc" <<'KC'
+apiVersion: v1
+kind: Config
+current-context: c
+clusters:
+- name: k
+  cluster:
+    server: https://10.9.8.7:6443
+contexts:
+- name: c
+  context:
+    cluster: k
+    user: u
+users:
+- name: u
+  user: {}
+KC
+out="$(KUBECONFIG="$_kc" render 'VKS_STATE_SERVER=https://10.9.8.7:6443
+HARBOR_URL=10.0.0.1
+HARBOR_PASSWORD=x
+ARGOCD_LB_IP=10.0.0.2
+')"
+rm -f "$_kc"
+if printf '%s' "$out" | grep -q 'values-provenance: DISCOVERED'; then
+  ok "stamp MATCHES the live kubeconfig -> DISCOVERED (no KinD shortcut involved)"
+else
+  bad "stamp MATCHES the live kubeconfig but provenance is not DISCOVERED. The stamp comparison is
+      the mechanism under test; every older state bypasses it via VKS_STATE_KIND=1."
+fi
+
+
 if [ "$fail" = 0 ]; then
-  printf '\nSUCCESS — creds-show tells the truth in every state (nothing installed / no ingress / fully installed)\n'
+  printf '\nSUCCESS — creds-show tells the truth in every state (nothing installed / no ingress /\n         fully installed / UNSTAMPED overlay = the real-lab state / stamped-and-matching)\n'
 else
   printf '\ncreds-show FAILED the truth check above.\n' >&2
 fi
