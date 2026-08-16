@@ -53,7 +53,9 @@ SINK="$VKS_STATE_FILE"
 # Nothing to put back any more — the sink IS ours. The old save/restore branch is deliberately gone
 # rather than left inert: a guard that can never fire reads as a guarantee it does not give.
 # shellcheck disable=SC2329  # invoked by the EXIT trap below
-restore() { rm -f "$SINK"; }
+# Also removes the hostile-stdin fixture. A SECOND `trap ... EXIT` would REPLACE this one
+# rather than run alongside it, so everything that needs cleaning goes here.
+restore() { rm -f "$SINK" "${_kc_hostile:-}"; }
 trap restore EXIT
 
 # SKIP_DOTENV=1 IS LOAD-BEARING. Without it `load_env` sources the operator's real ./.env and
@@ -223,7 +225,45 @@ fi
 
 
 if [ "$fail" = 0 ]; then
-  printf '\nSUCCESS — creds-show tells the truth in every state (nothing installed / no ingress /\n         fully installed / UNSTAMPED overlay = the real-lab state / stamped-and-matching)\n'
+  _kc_hostile="${TMPDIR:-/tmp}/creds-hostile-kc.$$"
+cat > "$_kc_hostile" <<'KCH'
+apiVersion: v1
+kind: Config
+current-context: c
+clusters:
+- name: k
+  cluster:
+    server: https://127.0.0.1:1
+contexts:
+- name: c
+  context: {cluster: k, user: u}
+users:
+- name: u
+  user: {}
+KCH
+# ── creds.sh must survive a HOSTILE STDIN ────────────────────────────────────────────────────
+# THE defect that hung `make ci` twice, for 22 and 27 minutes. kubectl blocks in
+# unix_stream_data_wait when stdin is an open pipe that never reaches EOF -- which is exactly what
+# it inherits from a make recipe or a test harness. --request-timeout CANNOT bound it: the process
+# never gets far enough to issue a request, so there is nothing for a request timeout to cut off.
+#
+# PROVEN by varying ONLY stdin against one kubeconfig: /dev/null -> rc=1 in 0s; an open pipe ->
+# HANGS; open pipe with </dev/null -> rc=1 in 0s. Removing the guard from creds.sh reproduces the
+# hang here in 40s.
+#
+# The timeout is the assertion. Without it a regression does not FAIL this suite -- it hangs it,
+# which is how the bug reached `make ci` twice without ever being called a test failure.
+_fifo="$(mktemp -u)"; mkfifo "$_fifo"; exec 9<>"$_fifo"
+if timeout 45 env SKIP_DOTENV=1 CREDS_TOKEN=1 KUBECONFIG="$_kc_hostile" ./scripts/creds.sh >/dev/null 2>&1 <&9; then
+  ok "creds.sh completes with a HOSTILE stdin (an open pipe that never sees EOF)"
+elif [ $? -eq 124 ]; then
+  bad "creds.sh completes with a HOSTILE stdin" "it HUNG -- a kubectl in creds.sh is missing </dev/null"
+else
+  ok "creds.sh completes with a HOSTILE stdin (an open pipe that never sees EOF)"
+fi
+exec 9>&-; rm -f "$_fifo"
+
+printf '\nSUCCESS — creds-show tells the truth in every state (nothing installed / no ingress /\n         fully installed / UNSTAMPED overlay = the real-lab state / stamped-and-matching)\n'
 else
   printf '\ncreds-show FAILED the truth check above.\n' >&2
 fi
