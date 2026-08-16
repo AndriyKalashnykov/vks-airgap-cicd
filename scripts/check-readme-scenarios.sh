@@ -57,7 +57,23 @@ SCENARIO_DIR="${REPO_ROOT}/docs"
 # `[text](#anchor)` -> `[text]`. A decision answered only by a LINK is a decision ORPHANED — that is
 # precisely what this gate exists to stop (the old version let the anchor `vks-authentication`
 # satisfy `cluster-access`, i.e. it blessed the very cross-reference its own header forbids).
-section() { sed -e 's/\]([^)]*)/]/g' "${SCENARIO_DIR}/$1" 2>/dev/null; }
+#
+# ...AND A SUMMARY-TABLE ROW IS A ROUTER, NOT AN ANSWER. Stripping the link target left the row's
+# PROSE behind, so `| **0** | [Get the repo] | clone it, cd in, make env-init |` satisfied `env-file`
+# all by itself. MEASURED 2026-08-16: with every numbered step body of scenario-1 replaced by a stub
+# — a document that answers NOTHING — this gate still scored 6 of 8 OK. That is the "passes by not
+# looking" state its own header warns about, and it would have blessed exactly the hollowing-out
+# that moving shared steps around invites.
+#
+# A line carrying an INTRA-DOCUMENT anchor `](#` is by construction pointing at where the answer
+# really lives, so it is not the answer. Dropping those lines is the whole fix — no line ranges, no
+# heading list, nothing to rot. ⚠️ It MUST run BEFORE the link-strip below: afterwards the anchor has
+# already been rewritten to `]` and the filter matches nothing, which is a vacuous "fix".
+#
+# Measured BOTH directions: pristine docs 24/24 OK (zero false REDs); the hollowed scenario-1 goes
+# from 2 MISSING to 6 of 8. The discriminator is clean — 16/16 summary rows carry `](#`, while 0/2
+# kind-local, 0/3 scenario-2 and 0/3 Timings rows do, so no real answer is dropped.
+section() { grep -vF '](#' "${SCENARIO_DIR}/$1" 2>/dev/null | sed -e 's/\]([^)]*)/]/g'; }
 
 # scenario|the document that MUST answer every decision below, by itself
 SCENARIOS='KinD|kind-local.md
