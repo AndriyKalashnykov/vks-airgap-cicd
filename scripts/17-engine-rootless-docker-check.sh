@@ -77,7 +77,7 @@ else
   log_info "starting a rootless dockerd as $(id -un) (uid $(id -u)) — no sudo, no root"
   setsid dockerd-rootless.sh > "$LOG" 2>&1 &       # docker-ok: see above — rootless-docker validation only.
   DAEMON_PGID="$!"
-  deadline=$(( SECONDS + ${READY_TIMEOUT_SECONDS:-90} ))
+  deadline=$(( SECONDS + ${DOCKER_ROOTLESS_READY_TIMEOUT_SECONDS:-90} ))
   until docker info >/dev/null 2>&1; do            # docker-ok: readiness probe for the daemon we just started.
     [ "$SECONDS" -lt "$deadline" ] || { tail -15 "$LOG" >&2; die "rootless dockerd did not come up (log above)"; }
     sleep 2
