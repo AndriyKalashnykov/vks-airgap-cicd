@@ -1082,6 +1082,22 @@ TEST_SLOW    := $(shell grep -l '^\# ci-tier: slow'   $(SCRIPTS)/test-*.sh 2>/de
 TEST_OFFLINE := $(filter-out $(TEST_MANUAL),$(TEST_ALL))
 TEST_FAST    := $(filter-out $(TEST_SLOW),$(TEST_OFFLINE))
 
+# The PER-PR half of the code gate. static-check-fast (23 offline gates, no mise) runs in its own
+# job; this adds the four that need a toolchain but NOT the wall-clock tier.
+#
+# WHY IT EXISTS: `ci-pass` only tests for failure/cancelled, and a SKIPPED job is neither — so with
+# static-check off the PR path, ci-pass went GREEN with lint, validate, sec, the script unit tests
+# and the app build having run NOWHERE. That is not theoretical: it is how #605's half-applied
+# toolchain bump merged green and sat red on main until it was found by hand.
+#
+# WHAT IT DELIBERATELY OMITS: trivy-fs + trivy-config (the workflow dropped the vuln-DB cache ON
+# PURPOSE, because a cached DB would silently serve results up to trivy's 24h client interval and
+# miss same-day CVEs — so per-PR trivy means a cold DB download every run), and test-scripts' slow
+# tier (6 targets that assert wall-clock BY DESIGN = 136s of 154s). Both stay on the weekly run.
+.PHONY: static-check-pr
+static-check-pr: lint validate app-test test-scripts-fast ## The per-PR half of static-check (no trivy, no wall-clock tests)
+	@echo "static-check-pr: OK"
+
 .PHONY: check-help-row-ids
 check-help-row-ids: ## Gate: no `make help` text may cite a backlog row id (a bare `make` prints it)
 	@$(SCRIPTS)/check-help-row-ids.sh
