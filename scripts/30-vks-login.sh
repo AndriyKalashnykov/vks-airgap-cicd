@@ -215,23 +215,41 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
         # string in the DOCS and left it here, so the second-most-likely reader of this die (an
         # operator whose anchor is missing) was sent to run something that cannot work.
         #
-        # There is deliberately NO fetch-supervisor-ca target, and that is not an oversight:
-        # MEASURED 2026-08-08 — the Supervisor presents ONE certificate (its leaf), so its issuer is
-        # NOT on the wire and cannot be extracted from the endpoint the way fetch-harbor-ca and
-        # fetch-argocd-ca extract theirs. It has to come out-of-band, from vCenter.
+        # ⚠️ A `make fetch-supervisor-ca` DOES exist (Makefile, scripts/fetch-supervisor-ca.sh) and
+        # this comment used to assert the opposite. The assertion was TRUE when written (2790ef7,
+        # 2026-08-08) and the target landed two days later (0b0da44, 2026-08-10), so it has been
+        # contradicting a shipped target since — a fact inside a control, gone stale.
+        #
+        # BOTH remedies are offered below, in that order, because neither is universal:
+        #   - the TARGET is one command, and it needs VCENTER_HOST, which ships COMMENTED in
+        #     .env.example and which scenario-2 never sets. Naming it unqualified would send a tenant
+        #     from a die that tells them what to do to a die saying "VCENTER_HOST is not set".
+        #   - the MANUAL recipe needs no vCenter credentials in .env, so it is the fallback for a
+        #     reader who has the FQDN but not the config.
+        #
+        # The reason it cannot come off the wire is unchanged and still measured: the Supervisor
+        # presents ONE certificate (its leaf), so its issuer is NOT on the connection the way
+        # fetch-harbor-ca and fetch-argocd-ca extract theirs. It has to come out-of-band, from vCenter.
         #
         # The curl+unzip below was RUN against a live 9.1 lab: it returned HTTP 200 / 6926 bytes and
         # the extracted root's SHA-256 matched the working secrets/supervisor-ca.crt exactly.
         5) die "VKS_CA_CERT_FILE='${VKS_CA_CERT_FILE}' is empty or unreadable, so the certificate
   ${SUPERVISOR_HOST} presents cannot be verified at all. This is NOT a stale anchor — there is no
   anchor, so there is nothing to re-fetch or re-pin.
-  The Supervisor serves only its LEAF, so its CA cannot be taken off this connection. Get the VMCA
-  root from vCenter (replace <vcenter> with your vCenter FQDN, NOT the Supervisor address).
+  The Supervisor serves only its LEAF, so its CA cannot be taken off this connection. It has to come
+  out-of-band, from vCenter. The certificate you need is the one whose subject matches this issuer:
+    $(printf '' | timeout 15 openssl s_client -connect "${SUPERVISOR_HOST}:443" 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | sed 's/^issuer=//')
+
+  EASIEST — one command, if your .env has VCENTER_HOST (your vCenter FQDN, NOT the Supervisor
+  address). It ships COMMENTED in .env.example, and the tenant runbook never sets it, so check first:
+    make fetch-supervisor-ca
+
+  BY HAND — needs no vCenter settings in .env, only the FQDN. Replace <vcenter> with it.
   Needs 'unzip' — 'make deps' installs it; on an air-gap box use your internal package mirror:
     curl -sk -o /tmp/vmca.zip https://<vcenter>/certs/download.zip
     unzip -j -o /tmp/vmca.zip 'certs/lin/*.0' -d ./secrets/vmca/
   A vCenter with more than one trusted root yields SEVERAL files, so do NOT blind-copy — print the
-  subjects and take the one whose CN matches the issuer named above:
+  subjects and take the one whose CN matches the issuer printed above:
     for f in ./secrets/vmca/*.0; do echo \"\$f\"; openssl x509 -in \"\$f\" -noout -subject; done
     cp ./secrets/vmca/<the matching one> ./secrets/supervisor-ca.crt
     chmod 0644 ./secrets/supervisor-ca.crt
