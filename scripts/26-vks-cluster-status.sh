@@ -214,6 +214,37 @@ endpoint_report() {
 }
 
 if [ "$WAIT_SECONDS" -gt 0 ]; then
+  # READ THE ENDPOINT ONCE, BEFORE BURNING THE BUDGET (B92).
+  #
+  # A cluster whose advertised controlPlaneEndpoint diverges from its LoadBalancer has, on this lab,
+  # never converged -- measured across four incarnations, none of which self-healed. The wait branch
+  # used to enter its loop without looking, so `VKS_CLUSTER_WAIT_SECONDS=1800` spent the full 30
+  # minutes to reach a conclusion that was already knowable in one read, and only THEN printed the
+  # remedy from the timeout path.
+  #
+  # GATED AT THE CALL SITE, NOT INSIDE THE FUNCTION. endpoint_report is print-only by contract --
+  # its header says so and test-endpoint-report asserts "DIVERGENT still exits 0 (never gates)" --
+  # and it is also called on the report-once path (below), which the Makefile advertises as
+  # read-only. Making the FUNCTION return non-zero would break both. Capturing its output here
+  # changes neither.
+  #
+  # ONLY the DIVERGENT verdict stops. Every DECLINE path it has -- NOT YET KNOWABLE (either value
+  # empty), a NAME-shaped endpoint that is not comparable to an IP, AGREE, or no candidate Service --
+  # falls through unchanged, so a healthy or still-provisioning cluster is never blocked.
+  # NO `2>/dev/null` here: endpoint_report already silences kubectl/jq stderr internally, so the
+  # only thing this would hide is a fault in the function itself. Measured with a failing mktemp:
+  # suppressed, the guard reported "CANNOT READ the Cluster" — a cluster that reads perfectly —
+  # while the un-captured sibling call printed the real cause. An error naming the wrong cause is
+  # worse than a crash.
+  _ep_once="$(endpoint_report || true)"
+  [ -n "$_ep_once" ] && printf '%s\n' "$_ep_once"
+  case "$_ep_once" in
+    *'*** DIVERGENT ***'*)
+      die "refusing to wait ${WAIT_SECONDS}s on a cluster whose endpoint already diverges.
+  The remedy is printed above, and waiting cannot change it: spec.controlPlaneEndpoint is written by
+  the platform and has not been observed to self-correct. Capture the evidence and recreate under a
+  DIFFERENT name -- recreating under the same one reproduced this three times running." ;;
+  esac
   end=$((SECONDS + WAIT_SECONDS))
   while [ "$SECONDS" -lt "$end" ]; do
     # BOTH, in one predicate. Breaking on conditions alone is what produced a false ready here.

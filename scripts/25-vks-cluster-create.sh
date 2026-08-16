@@ -128,7 +128,8 @@ log_info "  (1 CP + 2 best-effort-small workers). Yours varies with host load an
 # (MEASURED: endpoint at 04:32:17, VMService at 04:32:21 — a 4-second lead), so the value is a
 # PREDICTION. When it predicts wrong, CAPI never revisits it — spec.controlPlaneEndpoint does not
 # self-heal — so the cluster advertises an address nothing serves, the remote-connection probe fails
-# forever, and `make vks-cluster-status` burns its FULL wait (measured: 1807s) before saying so.
+# forever. `make vks-cluster-status` used to burn its FULL wait (measured: 1807s) before saying so;
+# since B92 its waiting form reads the endpoint ONCE up front and refuses in 0s instead.
 #
 # THE CAUSE IS A REUSED NAME, and that is measured, not inferred. Five incarnations of the SAME name
 # in the same vSphere Namespace: #1 (on a lab where the name was new) agreed and went Ready in
