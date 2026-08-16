@@ -539,6 +539,30 @@ Three things about it are deliberate, and each was measured — do not "improve"
 create` against a dead endpoint. A throwaway container has a fresh `$HOME` every run, so it is
 **structurally blind** to that class. This proves clean-box bootstrap + reach, not a full walk.
 
+### ⚠️ The VM walkthrough matrix lives in ANOTHER REPO — `walkbox-vm.sh` / `walk-matrix.sh`
+
+`make labbox` above is this repo's clean-box **container**. It is not the same thing as the VM
+walkthrough matrix that walks scenario-1 and scenario-2 end to end: those two scripts are tracked in
+**`nested-vsphere-lab`**, and this repo supplies only `WALK_REPO`, `scripts/walk-doc.sh` and the
+scenario docs they read.
+
+**Two known defects in them are filed THERE and are deliberately NOT tracked in this backlog** — the
+fixes edit files this repo does not contain, and both repos number items `B<N>` independently, so a
+copy here would collide the moment this backlog passes B428:
+
+| | |
+|---|---|
+| **B436** | the walkbox base image downloads into `$LAB_STATE` instead of the artifacts directory, so a state wipe silently costs a 596 MiB re-fetch |
+| **B428** | both scripts hand-roll their ssh options. An identity-free set now exists at `nested-vsphere-lab/lib/common.sh` (`LAB_SSH_OPTS`); lifting it takes that repo's `check-hardcodes` from 3 to 1 |
+
+```sh
+grep -n 'B436\|B428' ~/projects/nested-vsphere-lab/docs/BACKLOG.md
+```
+
+⚠️ **B428 is not a copy-paste.** Both walk arrays currently bundle the identity (`-i "$KEY"`), and
+`walk-matrix.sh` **pipes into ssh twice** — so it must never receive `-n`, which discards piped
+stdin. Lifting the shared options is easy; splitting `-i` out is the actual work.
+
 ## Verification honesty
 
 Offline-verifiable (no cluster): app tests, manifest/Tekton YAML validation, script
