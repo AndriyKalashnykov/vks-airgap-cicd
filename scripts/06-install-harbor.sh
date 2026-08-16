@@ -53,7 +53,7 @@ TLS_SECRET="${HARBOR_TLS_SECRET:-harbor-tls}"
 CERT_DIR="${REPO_ROOT}/secrets/harbor-tls"
 
 # Fixed chart-repo / release identifiers (overridable via env, slot-1 defaults).
-CHART_REPO_NAME="${HARBOR_CHART_REPO_NAME:-goharbor}"
+CHART_REPO_NAME="${HARBOR_CHART_REPO_NAME:-harbor}"
 CHART_REPO_URL="${HARBOR_CHART_REPO_URL:-https://helm.goharbor.io}"
 RELEASE="${HARBOR_RELEASE:-harbor}"
 HARBOR_SVC="${HARBOR_SVC:-harbor}"
