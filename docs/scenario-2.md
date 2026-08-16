@@ -100,6 +100,8 @@ addresses are what you put in `HARBOR_URL` and `ARGOCD_SERVER` below.
 make env-init      # creates .env from .env.example (backs up any existing one)
 ```
 
+**Expect:** `wrote a fresh .env from .env.example`. That file is the one you edit from here on.
+
 Then edit `.env` (these keys are already there, commented, from `.env.example` — uncomment and set;
 **do not paste a `<…>` line into `.env`** — an unedited `<…>` is a shell redirection that truncates
 the rest of the file when it is sourced):
@@ -223,6 +225,8 @@ make deps         # kind, crane, tkn, argocd, kubectl, helm + the rest of the mi
 make vks-login    # validates $KUBECONFIG + context against the lab cluster
 ```
 
+**Expect:** `prereqs installed. Versions:` followed by the pinned version of each tool.
+
 ## 3b. Install the Broadcom VCF/VKS lab CLIs
 
  You need the **licensed** `argocd-vcf` +
@@ -261,6 +265,8 @@ make install-vcf-clis VCF_CLI_SRC_DIR=~/Downloads/vcf   # argocd-vcf + vcf + vcf
 # versions are pinned in .env.example (ARGOCD_VCF_VERSION / VCF_CLI_VERSION / VCF_PLUGINS_VERSION);
 # keep them in sync with the artifacts you place in the folder.
 ```
+
+**Expect:** `VCF/VKS lab CLIs installed to` and the directory they went to.
 
 > **Where to get them, per arch:** see [Acquiring the licensed VCF CLI archives](vks-authentication.md#acquiring-the-licensed-vcf-cli-archives). The 9.1 artifacts are entitled (Broadcom portal / Supervisor) — the public artifactory serves only ≤ 9.0.x. **On an arm64 jump box** the VCF-flavored `argocd-vcf` is amd64-only; use the upstream argocd `make deps` already installs and run `make install-vcf-cli` + `make install-vcf-plugins` instead of `all`.
 
@@ -318,6 +324,9 @@ different namespaces. You supply the robot you were granted; the wiring is autom
 make harbor-robot                                  # → secrets/harbor-robot.env (if you hold project-admin)
 # then copy its two lines (the HARBOR_USERNAME + HARBOR_PASSWORD it wrote) into .env
 ```
+
+**Expect:** `robot account` created, then `credentials written to` a 0600 file. The secret is
+shown ONCE — if you miss it you must mint another robot.
 
 `make harbor-robot` authenticates with the **current** `HARBOR_USERNAME`/`HARBOR_PASSWORD` and asks Harbor
 *"am I project/system-admin?"* (`GET /users/current`) before minting a robot — **a robot cannot mint a
