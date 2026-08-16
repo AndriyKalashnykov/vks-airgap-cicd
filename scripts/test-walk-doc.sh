@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ci-tier: slow — walks both scenario docs end to end (~18s)
 # test-walk-doc.sh — the demonstrated RED for scripts/walk-doc.sh. Offline, no cluster, no VM.
 #
 # EVERY CASE HERE IS A DEFECT THAT SHIPPED. walk-doc.sh's first version reported

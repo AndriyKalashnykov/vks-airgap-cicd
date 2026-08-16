@@ -351,7 +351,7 @@ check-doc-novels: ## Gate: no multi-line re-litigation blockquotes ("this page u
 	@$(SCRIPTS)/check-doc-novels.sh
 
 .PHONY: check-doc-robot-quoting
-check-doc-robot-quoting: ## Gate: a Harbor robot credential (robot$<name>) in docs or .env.example must be SINGLE-QUOTED or set -a expands $<name> away -> 401 (B28)
+check-doc-robot-quoting: ## Gate: a Harbor robot credential (robot$<name>) in docs or .env.example must be SINGLE-QUOTED or set -a expands $<name> away -> 401
 	@$(SCRIPTS)/check-doc-robot-quoting.sh
 
 .PHONY: check-how-provenance
@@ -805,7 +805,7 @@ verify-ingress: check-env ## Assert the *.vks.local UIs route through the ingres
 	@$(SCRIPTS)/98-verify-ingress.sh
 
 .PHONY: verify-ingress-rendered
-verify-ingress-rendered: check-env ## Assert the ingress ROUTES were RENDERED where app backends deliberately do not exist (air-gap leg; additive to verify-ingress, never a replacement) (B50)
+verify-ingress-rendered: check-env ## Assert the ingress ROUTES were RENDERED where app backends deliberately do not exist (air-gap leg; additive to verify-ingress, never a replacement)
 	@./scripts/97-verify-ingress-rendered.sh
 
 .PHONY: verify-ingress-both
@@ -996,7 +996,7 @@ check-namespace-labelled: ## Gate: every namespace we OWN reaches an ensure_name
 	@$(SCRIPTS)/check-namespace-labelled.sh
 
 .PHONY: check-ns-chokepoint
-check-ns-chokepoint: ## Offline: no NEW namespace-creating call outside the ensure_namespace chokepoint (4 of 10 mechanisms; see the header) (B40)
+check-ns-chokepoint: ## Offline: no NEW namespace-creating call outside the ensure_namespace chokepoint (4 of 10 mechanisms; see the header)
 	@./scripts/check-ns-chokepoint.sh
 
 .PHONY: check-grep-q-pipe
@@ -1059,8 +1059,40 @@ test-harbor-robot-payload: ## Unit-test the Harbor robot payloads (system vs pro
 test-kind-down-safety: ## Unit-test that kind-down deletes ONLY what the KinD flow created (it used to eat a real lab's kubeconfig)
 	@$(SCRIPTS)/test-kind-down-safety.sh
 
+# ---- the offline unit-test set, DISCOVERED not enumerated ------------------------------------
+# The hand-typed prereq list this replaces had drifted: 51 scripts/test-*.sh on disk, 48 reachable.
+# The 3 missing ones were excluded ON PURPOSE (they need a container engine / a registry / a 12 GB
+# bundle) but NOTHING said so, so a 4th omission would have been invisible — and an omission from a
+# test list is the quietest way to lose coverage there is.
+#
+# The tier marker lives IN each file (`# ci-tier: slow|manual` on line 2), never here. A second
+# enumerated list in the Makefile is exactly the rot being removed, and it would rot SILENTLY: a
+# renamed file drops out of the list without a word. Keying on the file means:
+#   - a NEW test with no marker lands in the FAST set     -> more coverage, not less (fail-safe)
+#   - and its cost shows up immediately as a slower PR job -> visible, not silent
+#
+# manual = cannot run offline at all (engine/registry/bundle) -> in NEITHER set; run by hand.
+# slow   = asserts WALL-CLOCK by design, so it cannot be shortened without deleting the assertion
+#          it exists for (e.g. test-tkr-classify's `[ "$$el" -ge 15 ]`, a never-Ready cluster that
+#          MUST run its wait loop to timeout). MEASURED: 6 such targets = 136s of test-scripts'
+#          154s; the other 45 total 18s. That split is STRUCTURAL, not a taste call.
+TEST_ALL     := $(sort $(wildcard $(SCRIPTS)/test-*.sh))
+TEST_MANUAL  := $(shell grep -l '^\# ci-tier: manual' $(SCRIPTS)/test-*.sh 2>/dev/null)
+TEST_SLOW    := $(shell grep -l '^\# ci-tier: slow'   $(SCRIPTS)/test-*.sh 2>/dev/null)
+TEST_OFFLINE := $(filter-out $(TEST_MANUAL),$(TEST_ALL))
+TEST_FAST    := $(filter-out $(TEST_SLOW),$(TEST_OFFLINE))
+
+.PHONY: check-help-row-ids
+check-help-row-ids: ## Gate: no `make help` text may cite a backlog row id (a bare `make` prints it)
+	@$(SCRIPTS)/check-help-row-ids.sh
+
 .PHONY: test-scripts
-test-scripts: test-secret-quoting test-vcf-cli-resolve test-mirror-cache test-classify-changes test-argocd-topology test-harbor-robot-payload test-kind-down-safety test-state-overlay test-container-engine test-creds-show test-env-check test-env-validate test-vks-sso-user test-vks-username test-vks-discover-namespace test-argocd-preflight-ns test-argocd-version test-adversary-gate-rearm test-namespace-gates test-psa-defaults test-gate-vacuity test-run-sentinel test-doc-robot-quoting test-kubeconfig-ready test-e2e-fresh test-ingress-state-ordering test-gateway-image test-psa-ownership test-fetch-ca-pin test-ca-verifies-endpoint test-endpoint-report test-cluster-status-wait-gate test-harbor-admin-ns-classify test-tkr-classify test-state-echo-back test-uninstall-honesty test-classify-kube-failure test-env-lifecycle test-walk-doc test-harbor-reachable test-harbor-auth-report test-gitea-hook-ids test-argocd-kubeconfig-stale test-ca-anchor-validation test-unwedge-transport-refusal test-shell-rc-file test-ca-staleness-check test-env-precedence ## Run all offline script-logic unit tests
+test-scripts: ## Run all offline script-logic unit tests
+	@$(SCRIPTS)/run-test-set.sh "all offline" $(TEST_OFFLINE)
+
+.PHONY: test-scripts-fast
+test-scripts-fast: ## Run the offline unit tests that do NOT assert wall-clock (the per-PR set)
+	@$(SCRIPTS)/run-test-set.sh "fast" $(TEST_FAST)
 
 .PHONY: test-ca-staleness-check
 test-ca-staleness-check: ## Offline: the four arms of the trust-anchor probe, incl. unreachable != stale
@@ -1071,7 +1103,7 @@ test-shell-rc-file: ## Offline: the rc-file resolver the runbook calls — the V
 	@bash $(SCRIPTS)/test-shell-rc-file.sh
 
 .PHONY: test-unwedge-transport-refusal
-test-unwedge-transport-refusal: ## Offline: a break-glass DELETE must never report success over a no-op (B112)
+test-unwedge-transport-refusal: ## Offline: a break-glass DELETE must never report success over a no-op
 	@bash $(SCRIPTS)/test-unwedge-transport-refusal.sh
 
 .PHONY: test-env-precedence
@@ -1121,19 +1153,19 @@ test-endpoint-report: ## Offline: endpoint_report names a control-plane VIP dive
 	@bash scripts/test-endpoint-report.sh
 
 .PHONY: test-cluster-status-wait-gate
-test-cluster-status-wait-gate: ## Offline: the WAIT branch reads the endpoint once and refuses a DIVERGENT cluster up front (B92)
+test-cluster-status-wait-gate: ## Offline: the WAIT branch reads the endpoint once and refuses a DIVERGENT cluster up front
 	@bash scripts/test-cluster-status-wait-gate.sh
 
 .PHONY: test-harbor-admin-ns-classify
-test-harbor-admin-ns-classify: ## Offline: a transport failure must never read as "Harbor is not installed" (B110)
+test-harbor-admin-ns-classify: ## Offline: a transport failure must never read as "Harbor is not installed"
 	@bash scripts/test-harbor-admin-ns-classify.sh
 
 .PHONY: test-tkr-classify
-test-tkr-classify: ## Offline: a transport failure must not burn the 900s TKr wait and then blame the content library (B110)
+test-tkr-classify: ## Offline: a transport failure must not burn the 900s TKr wait and then blame the content library
 	@bash scripts/test-tkr-classify.sh
 
 .PHONY: test-state-echo-back
-test-state-echo-back: ## Offline: a writer must publish only what it PRODUCED — the overlay must not shadow a .env robot with admin (B111)
+test-state-echo-back: ## Offline: a writer must publish only what it PRODUCED — the overlay must not shadow a .env robot with admin
 	@bash scripts/test-state-echo-back.sh
 
 .PHONY: test-fetch-ca-pin
@@ -1145,7 +1177,7 @@ test-ca-verifies-endpoint: ## RED-proof ca_verifies_endpoint's six verdicts agai
 	@bash scripts/test-ca-verifies-endpoint.sh
 
 .PHONY: test-vks-username
-test-vks-username: ## Offline: the SHARED VKS SSO principal resolver — default, VKS_SSO_DOMAIN, C10 idempotency, and that BOTH consumers use it
+test-vks-username: ## Offline: the SHARED VKS SSO principal resolver — default, VKS_SSO_DOMAIN, idempotency on an already-qualified name, and that BOTH consumers use it
 	@./scripts/test-vks-username.sh
 
 .PHONY: test-vks-discover-namespace
@@ -1176,31 +1208,31 @@ test-ingress-state-ordering: ## Offline: INGRESS_CONTROLLER + INGRESS_LB_IP are 
 	@./scripts/test-ingress-state-ordering.sh
 
 .PHONY: test-namespace-gates
-test-namespace-gates: ## Offline: RED-prove check-namespace-labelled + check-pod-inject-label catch a deleted ensure_namespace CALL / pod-label (B30c)
+test-namespace-gates: ## Offline: RED-prove check-namespace-labelled + check-pod-inject-label catch a deleted ensure_namespace CALL / pod-label
 	@./scripts/test-namespace-gates.sh
 
 .PHONY: test-gate-vacuity
-test-gate-vacuity: ## Offline: STARVE each declared gate's corpus and require it to go RED — a gate that judged nothing must not report OK (B39/B49)
+test-gate-vacuity: ## Offline: STARVE each declared gate's corpus and require it to go RED — a gate that judged nothing must not report OK
 	@./scripts/test-gate-vacuity.sh
 
 .PHONY: test-run-sentinel
-test-run-sentinel: ## Offline: RED-prove assert_run_sentinel against fixture logs — the jump-box harness's real RED costs a 40-min container run (B47)
+test-run-sentinel: ## Offline: RED-prove assert_run_sentinel against fixture logs — the jump-box harness's real RED costs a 40-min container run
 	@./scripts/test-run-sentinel.sh
 
 .PHONY: test-psa-defaults
-test-psa-defaults: ## Offline: RED-prove check-psa-defaults (12 cases, incl. the 3 vacuous greens an adversary measured in an earlier draft) (B22)
+test-psa-defaults: ## Offline: RED-prove check-psa-defaults (12 cases, incl. the 3 vacuous greens an adversary measured in an earlier draft)
 	@./scripts/test-psa-defaults.sh
 
 .PHONY: test-doc-robot-quoting
-test-doc-robot-quoting: ## Offline: RED-prove check-doc-robot-quoting flags an unquoted Harbor robot credential (both directions) (B28)
+test-doc-robot-quoting: ## Offline: RED-prove check-doc-robot-quoting flags an unquoted Harbor robot credential (both directions)
 	@./scripts/test-doc-robot-quoting.sh
 
 .PHONY: test-kubeconfig-ready
-test-kubeconfig-ready: ## Offline: kubeconfig_ready gates on the FILE existing (C13), and the preflight accumulators/creator do NOT call it (B32)
+test-kubeconfig-ready: ## Offline: kubeconfig_ready gates on the FILE existing, and the preflight accumulators/creator do NOT call it
 	@./scripts/test-kubeconfig-ready.sh
 
 .PHONY: test-e2e-fresh
-test-e2e-fresh: ## Offline: E2E_FRESH=1 makes e2e-kind cold (kind-down first) + the reuse verdict banner is wired (B42)
+test-e2e-fresh: ## Offline: E2E_FRESH=1 makes e2e-kind cold (kind-down first) + the reuse verdict banner is wired
 	@./scripts/test-e2e-fresh.sh
 
 .PHONY: test-secret-quoting
@@ -1228,11 +1260,11 @@ test-env-validate: ## Offline: env-validate FAILS on an untrusted-TLS Harbor (no
 	@./scripts/test-env-validate.sh
 
 .PHONY: test-vks-sso-user
-test-vks-sso-user: ## Offline: vks_sso_user() is idempotent on '@' (no double SSO domain) and dies on a bare user with no VKS_SSO_DOMAIN (C10)
+test-vks-sso-user: ## Offline: vks_sso_user() is idempotent on '@' (no double SSO domain) and dies on a bare user with no VKS_SSO_DOMAIN
 	@./scripts/test-vks-sso-user.sh
 
 .PHONY: test-argocd-preflight-ns
-test-argocd-preflight-ns: ## Offline: argocd-preflight must NOT block install-all on a guest-default ns-NotFound unless ARGOCD_MECHANISM=kubectl (C12)
+test-argocd-preflight-ns: ## Offline: argocd-preflight must NOT block install-all on a guest-default ns-NotFound unless ARGOCD_MECHANISM=kubectl
 	@./scripts/test-argocd-preflight-ns.sh
 
 .PHONY: test-argocd-version
@@ -1409,7 +1441,7 @@ check-lib-sourcing: ## Gate: a script that CALLS a lib function must SOURCE the 
 .PHONY: static-check
 .PHONY: static-check-fast
 #check-static-fast: @ The CHEAP half of static-check: the alignment/doc/env gates only (~9s, no toolchain)
-static-check-fast: check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
+static-check-fast: check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
 
 # static-check is the UNION, so there is exactly ONE list. Defining the fast set separately and
 # leaving static-check with its own hand-typed copy is the enumerated-list rot this repo keeps

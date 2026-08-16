@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ci-tier: slow — asserts the wait loop runs its full budget, `[ "$el" -ge 15 ]` (~30s)
 # test-tkr-classify.sh — 24-vks-k8s-version.sh must not spend 900s to reach a wrong conclusion (B110).
 #
 # WHAT IT USED TO DO. `_newest_ready` was one pipeline ending in `tail -1`, so kubectl's rc was lost,
