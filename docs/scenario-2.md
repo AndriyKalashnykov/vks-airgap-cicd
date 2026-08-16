@@ -275,16 +275,19 @@ picks the archive matching **this jump box's OS/arch** and the **pinned versions
 `.env.example`) and ignores the rest — a mixed folder resolves deterministically, and if the
 pinned version isn't present it errors clearly rather than ever installing a different version.
 
-`VCF_CLI_SRC_DIR` is **required** — the installer does not guess where you dropped the files. Set
-it on the command line, or uncomment it in `.env` (gitignored) so every `make` invocation picks
-it up. The version pins in `.env.example` already match the current portal artifacts, so normally
-you only set the folder:
+`VCF_CLI_SRC_DIR` is **required** — the installer does not guess where you dropped the files. Set it
+in `./.env` (gitignored) alongside the other values from Step 1, so every `make` invocation picks it
+up and no path of yours ends up pasted into a command:
+
+| key | value |
+|---|---|
+| `VCF_CLI_SRC_DIR` | the folder you put the Broadcom archives in, e.g. `/home/you/Downloads/vcf` |
+
+The version pins in `.env.example` already match the current portal artifacts, so the folder is
+normally the only thing you set:
 
 ```bash
-make install-vcf-clis VCF_CLI_SRC_DIR=~/Downloads/vcf   # argocd-vcf + vcf + vcf plugins
-# or put it in .env once:  VCF_CLI_SRC_DIR=/home/you/Downloads/vcf   → then just `make install-vcf-clis`
-# versions are pinned in .env.example (ARGOCD_VCF_VERSION / VCF_CLI_VERSION / VCF_PLUGINS_VERSION);
-# keep them in sync with the artifacts you place in the folder.
+make install-vcf-clis     # argocd-vcf + vcf + vcf plugins, from VCF_CLI_SRC_DIR
 ```
 
 **Expect:** `VCF/VKS lab CLIs installed to` and the directory they went to.
