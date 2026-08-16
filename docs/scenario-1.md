@@ -516,17 +516,30 @@ unauthenticated endpoint, so no login is needed.
 
 ```bash
 set -a; . ./.env; set +a
-curl -sk --fail --max-time 20 -o ./secrets/harbor-ca.crt \
+tmp=$(mktemp -d)
+curl -sk --fail --max-time 20 -o "$tmp/ca.crt" \
   "https://${HARBOR_URL}/api/v2.0/systeminfo/getcert" \
-  || { rm -f ./secrets/harbor-ca.crt; echo "Harbor is not reachable at ${HARBOR_URL} — check the A record (make show-dns-records)"; false; } \
-&& chmod 0644 ./secrets/harbor-ca.crt \
-&& openssl x509 -in ./secrets/harbor-ca.crt -noout -subject     # expect: CN = Harbor CA
+  || { echo "Harbor is not reachable at ${HARBOR_URL} — check the A record (make show-dns-records)"; false; }
+openssl s_client -connect "${HARBOR_URL}:443" -servername "${HARBOR_URL}" </dev/null 2>/dev/null \
+  | openssl x509 > "$tmp/harbor.crt"
+openssl verify -CAfile "$tmp/ca.crt" "$tmp/harbor.crt" \
+  && install -m0644 "$tmp/ca.crt" ./secrets/harbor-ca.crt && rm -rf "$tmp" \
+  || { echo "that file does not vouch for ${HARBOR_URL} — nothing was saved; use an alternative below"; false; }
 ```
 
-If it prints *"Harbor is not reachable"*, fix the A record before continuing.
+Two details in there are load-bearing, and both were found by running it rather than reading it:
 
-If `openssl` errors *after* a successful `curl`, this Harbor does not publish its CA there — use one
-of the alternatives below.
+- It downloads to a scratch file, **not** straight to `./secrets/harbor-ca.crt`. If Harbor answers
+  with an empty body, `curl` still succeeds, and writing directly would leave you a **zero-byte**
+  file having **destroyed a good one you already had**.
+- It then asks Harbor for its own certificate and requires the downloaded file to **vouch for it**.
+  Checking only the name on the file is not enough: Harbor keeps its own separate certificate
+  authority internally, and on some setups that is what this address hands out — same name, wrong
+  file. It looks right, and then image pulls fail with `certificate signed by unknown authority`
+  long after this step.
+
+If it prints *"Harbor is not reachable"*, fix the A record before continuing. If it prints *"that
+file does not vouch for"*, nothing was saved — use one of the alternatives below.
 
 Then **check it against a digest you got from whoever runs Harbor**, over some other channel —
 `-k` above means you fetched it over a connection you could not yet verify:
@@ -535,7 +548,8 @@ Then **check it against a digest you got from whoever runs Harbor**, over some o
 sha256sum ./secrets/harbor-ca.crt
 ```
 
-**Expect:** the file exists, is `0644`, its subject is a CA, and the digest matches. *(<1 min)*
+**Expect:** `harbor.crt: OK` from the check above, then the file exists, is `0644`, and the digest
+matches. *(<1 min)*
 
 The digest proves it is the file Harbor's operator meant you to have. One more check proves it is the
 right file for **this** Harbor — a certificate left over from an earlier lab is still a perfectly
