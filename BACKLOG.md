@@ -271,6 +271,40 @@ chain otherwise works — `make harbor-ca-from-cluster` rc=0 (route B, the `<det
 walker skips) and `make harbor-admin-password` rc=0 with a live `http 200`. The failure is purely
 the sink precedence.
 
+## B114 — the break-glass unwedge CREATES the next wedge, then gives advice that cannot resolve it
+
+**MEDIUM. Observed end-to-end on the lab 2026-08-16, twice in one reset.**
+
+`unwedge-supervisor-service.sh` deletes the namespaced workload kapp is waiting on — including the
+service's **controller**. That is correct for the first wedge and it worked (measured: it cleared
+`endpointslice/argocd-service-webhook-service-r9ksq` and reported `deleted 3 object(s)`). But
+deleting the controller **strands every CR whose finalizer needs that controller**, and the strand
+is CLUSTER-SCOPED, so nothing the script deletes can reach it:
+
+    crd/applications.argoproj.io   Terminating since 11:07:26Z
+      finalizer: customresourcecleanup.apiextensions.k8s.io   <- waits for all CRs of the kind
+    application/cicd/gowebapp      Deleting since 11:07:27Z
+    application/cicd/javawebapp    Deleting since 11:07:27Z
+      finalizer: resources-finalizer.argocd.argoproj.io       <- needs the controller we just deleted
+
+kapp then moves from the endpointslice to `customresourcedefinition/applications.argoproj.io` and
+waits there **forever** — and the script's closing line says *"re-issue the uninstall. kapp retries
+in 15-minute rounds, so give it that long."* That advice is now WRONG: no number of rounds resolves
+a finalizer whose controller is gone. Measured: two full 15-minute rounds, no progress; clearing the
+two finalizers (`kubectl patch --type=merge -p '{"metadata":{"finalizers":null}}'`) made the CRD
+disappear in **under 8 seconds**.
+
+**Fix, in the order I would do it:** (1) after deleting workload, LOOK for CRs stuck `Deleting` with
+finalizers in the service's own API groups and say so explicitly, naming them and the patch — the
+script already has the operator's attention at exactly that moment; (2) only then print the
+"re-issue the uninstall" line, and make it conditional on having found none. Do NOT auto-patch
+finalizers: dropping a finalizer abandons whatever cleanup it represented, which on a REAL cluster
+can orphan real resources, and this script already refuses to guess elsewhere (it dies on an
+AMBIGUOUS namespace rather than picking one).
+
+⚠️ The generic form is worth stating because it is not specific to ArgoCD: **a break-glass tool that
+deletes a controller must account for the CRs that controller was the only thing able to finalize.**
+
 ## B113 — ✅ CLOSED. An "offline" suite DIALLED the live lab and hung `make ci` for 22 minutes
 
 **The class is MEASURED at 1 of 48, and that one is fixed.**
