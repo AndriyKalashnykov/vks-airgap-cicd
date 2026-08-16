@@ -50,12 +50,57 @@ SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kub
 [ -f "$SUP" ] || die "no Supervisor kubeconfig at '$SUP' — run 'make vks-login' first.
   Harbor is a SUPERVISOR Service; the guest cluster has no harbor namespace at all."
 
-ns="$(kubectl --kubeconfig "$SUP" get ns -l appplatform.vmware.com/serviceId=harbor -o name 2>/dev/null || true)"
+# The ESCAPE HATCH first — see .env.example. A tenant who cannot LIST NAMESPACES gets a correct
+# message from the FORBIDDEN arm below and would otherwise still be stuck.
+if [ -n "${HARBOR_SERVICE_NAMESPACE:-}" ]; then
+  ns="$HARBOR_SERVICE_NAMESPACE"
+else
+# CLASSIFY THE PROBE WE ACTUALLY RAN (B110). `2>/dev/null || true` made "I could not ask"
+# indistinguishable from "the answer is no", and the zero-match branch below then told the operator
+# Harbor was absent. MEASURED: a valid kubeconfig returns 1 namespace here and an expired one
+# returns 0, against the same running Harbor.
+#
+# NO `trap` for this temp file, deliberately: line ~61 below registers its OWN `trap … EXIT` for the
+# cert file, and a second EXIT trap REPLACES the first rather than adding to it — so a trap here
+# would be silently discarded and leak a file every run. Short-lived, so it is removed explicitly.
+_ns_err="$(mktemp)"
+_ns_rc=0
+ns="$(kubectl --kubeconfig "$SUP" --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-15s}" \
+        get ns -l appplatform.vmware.com/serviceId=harbor -o name 2>"$_ns_err")" || _ns_rc=$?
+if [ "$_ns_rc" -ne 0 ]; then
+  _cls="$(classify_kube_failure "$_ns_err")"
+  _err_txt="$(sed 's/^/    /' "$_ns_err")"; rm -f "$_ns_err"
+  _hint="Re-issue it:  make vks-login   (scenario-1 Step 3)"
+  case "$_cls" in
+    STALE_CA)     die "'${SUP}' does not work against this cluster, and the server ANSWERED — so this
+  is NOT Harbor being absent. A REBUILT cluster mints a new CA while the address stays the same.
+  ${_hint}" ;;
+    UNAUTHORIZED) die "the Supervisor REJECTED these credentials, so we never asked where Harbor is.
+  ${_hint}" ;;
+    FORBIDDEN)    die "authenticated, but this identity may not LIST NAMESPACES, so we cannot find
+  Harbor's namespace. That is an RBAC GRANT, not a missing service:
+  do NOT re-fetch your kubeconfig, and do NOT install Harbor.
+  Ask your platform admin for the namespace and set HARBOR_SERVICE_NAMESPACE in .env." ;;
+    UNREACHABLE)  die "could not reach the Supervisor at all. This is NOT evidence your kubeconfig is
+  stale — check the address and the network." ;;
+    PLAINTEXT)    die "the Supervisor endpoint answered PLAINTEXT where TLS was expected. Check the
+  server URL in '${SUP}'." ;;
+    NO_KUBE_TARGET) die "'${SUP}' names no cluster to talk to. ${_hint}" ;;
+    KUBECONFIG_UNUSABLE) die "'${SUP}' is unusable — something it NAMES is missing, unreadable or
+  malformed. ${_hint}" ;;
+    *)            log_error "could not ask the Supervisor where Harbor is:"
+                  printf '%s\n' "$_err_txt" >&2
+                  die "refusing to report Harbor absent on the strength of a probe that did not complete." ;;
+  esac
+fi
+rm -f "$_ns_err"
+# ONLY NOW is an empty result a fact about the world.
 n="$(printf '%s\n' "$ns" | grep -c . || true)"
 [ "$n" = 1 ] || die "expected EXACTLY ONE namespace labelled serviceId=harbor, got ${n}:
 $(printf '%s\n' "$ns" | sed 's/^/    /')
   Refusing to guess — an empty value would silently target 'default'."
 ns="${ns#namespace/}"
+fi
 log_info "harbor namespace: ${ns}  (by label, not by grep)"
 
 t="$(mktemp)"; trap 'rm -f "$t"' EXIT
