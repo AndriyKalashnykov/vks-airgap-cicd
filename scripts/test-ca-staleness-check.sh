@@ -88,7 +88,11 @@ else bad "rc=5  a non-anchor file is reported as not usable" "got rc=$r"; fi
 # The arms live in 29-ca-status.sh (ONE implementation; lab-preflight sources it). A missing arm
 # would fall through to the catch-all and mis-report — so assert each one exists where it actually
 # is, not where the first draft put it.
-CS="${REPO_ROOT}/scripts/29-ca-status.sh"
+# The arms + the token live in lib/tls.sh now (ca_status_report moved there so the preflight stops
+# SOURCING an executable and calling load_env twice). The assertions follow the code — the last
+# time they did not, one of them passed VACUOUSLY by grepping a file the block had left.
+CS="${REPO_ROOT}/scripts/lib/tls.sh"
+CS_MAIN="${REPO_ROOT}/scripts/29-ca-status.sh"   # the executable half: the summary + the token
 blk="$(awk '/case "\$rc" in/,/esac/' "$CS")"
 [ -n "$blk" ] || { echo "FAILED to extract the case block from $CS — aborting rather than testing nothing"; exit 1; }
 # ALL SIX documented verdicts (lib/tls.sh:82-84,178,185 -> 0 1 2 3 4 5). The first version of
@@ -131,12 +135,12 @@ else bad "lab-preflight folds stale anchors into its problem count" "a stale anc
 # when ANY quoted literal matches — so the literal MUST be unreachable from every failure arm. An
 # earlier Expect quoted "Harbor CA", which every per-certificate line begins with, including the
 # failure ones: the step added to catch the failure scored GREEN on it.
-if grep -q 'CA-STATUS: ALL-MATCH' "$CS"; then ok "the success token exists"
+if grep -q 'CA-STATUS: ALL-MATCH' "$CS_MAIN"; then ok "the success token exists"
 else bad "the success token exists" "the runbooks quote CA-STATUS: ALL-MATCH"; fi
 # Find the CONDITION GOVERNING the token, not a fixed window above it. A 3-line window was the
 # first version and it broke the moment the token gained an explanatory comment — a positional
 # assertion about source layout, masquerading as an assertion about behaviour.
-tokgate="$(awk '/^ *(el)?if /{c=$0} /CA-STATUS: ALL-MATCH/{print c; exit}' "$CS")"
+tokgate="$(awk '/^ *(el)?if /{c=$0} /CA-STATUS: ALL-MATCH/{print c; exit}' "$CS_MAIN")"
 if printf '%s' "$tokgate" | grep -q 'CA_STATUS_MATCHED' && printf '%s' "$tokgate" | grep -q 'CA_STATUS_CHECKED'; then
   ok "the token is gated on matched == checked (no skip, no empty run, can reach it)"
 else

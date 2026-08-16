@@ -158,12 +158,11 @@ else
 fi
 
 # ── 4. STALE TRUST ANCHORS ────────────────────────────────────────────────────────────────────
-# ONE implementation, in 29-ca-status.sh, sourced here. The first draft of this was an inline copy
-# of the probe loop; two copies of one predicate is the shape this repo keeps getting bitten by, and
-# `make ca-status` needs the same logic standalone. Sourcing gives the function without running the
-# report (the script returns early when sourced).
-# shellcheck source=scripts/29-ca-status.sh
-. "${SCRIPT_DIR}/29-ca-status.sh"
+# ONE implementation: ca_status_report in lib/tls.sh, beside the ca_verifies_endpoint whose return
+# codes it interprets. The first draft was an inline copy of the probe loop here; the second put it
+# in the executable 29-ca-status.sh and SOURCED that, which re-ran `set -euo pipefail`, re-sourced
+# the libraries and called load_env a second time. tls.sh is already sourced above, so this is just
+# a call — `make ca-status` is the other entry point to the same function.
 _stale=0; ca_status_report || _stale=$?
 problems=$((problems + _stale))
 
