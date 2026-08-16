@@ -587,76 +587,77 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-13 (matrix went 4/4 GREEN; the path is now FROZEN) — READ, THEN REPLACE
+## ▶️ HANDOFF 2026-08-16 (the freeze is LIFTED; `main` is deliberately UNCERTIFIED) — READ, THEN REPLACE
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### The acceptance test PASSED, and then I broke its meaning
+### The job, in the owner's words
 
-`make walk-matrix` ran all four rows on ONE pass with NO corrections mid-flight:
+Rebuild the walkthrough matrix for scenario-1 **and add scenario-2**. Both documents must read as
+**end-user documents**, not storage for internal technical notes and prose. Work out what
+scenario-2 can genuinely reuse from scenario-1. The walk reads each document as a whole, executes
+it line by line, and navigates on real command output. Rows run on throwaway Photon and Ubuntu VMs.
+Work until `BACKLOG.md` is empty; verify `creds-show` endpoints and logins after every lab cut,
+driving the web UIs in Chrome where an HTTP probe is not proof a human can log in.
 
-| row | cell | result |
-|---|---|---|
-| 1 | ubuntu / NOTHING | `rc=0` — 31 ran, **0 FAILED**, 7 skipped |
-| 2 | photon / EVERYTHING | `rc=0` — 26 ran, **0 FAILED**, 12 skipped |
-| 3 | photon / NOTHING | `rc=0` — 31 ran, **0 FAILED**, 7 skipped |
-| 4 | ubuntu / EVERYTHING | `rc=0` — 26 ran, **0 FAILED**, 12 skipped |
+### 🟡 THE FREEZE IS LIFTED, and that is deliberate
 
-Verified, not asserted: `main` never moved during the run; both NOTHING cells produced identical
-shapes and both EVERYTHING cells did too; 3.3k–5.6k log lines per row. Tagged **v1.0.1**
-(`d5adb69`) — **that commit is what "green" refers to.**
+Rewriting `docs/scenario-1.md` is on-path by definition, so `v1.0.1` stopped describing `main` the
+moment this work started. **That is the intended state, not an accident.** Two PRs landed:
 
-Then six PRs landed changes to files scenario-1 EXECUTES, so "4/4 green" silently stopped
-describing `main`. The owner caught it. **All six on-path files were reverted** (#603): 46 of 46
-files on the derived execution path are byte-identical to `v1.0.1`.
+- **#610** — the Go pin. `check-toolchain-alignment` had been RED on `main` since #605 half-applied
+  a Renovate bump (`images/images.txt` + the Dockerfile to `golang:1.26.6`, `.mise.toml` left at
+  `1.26.5`). It is fail-fast and early, so it masked everything behind it.
+- **#611** — **B108 re-folded**: all five held fixes are back, including **B83c**, where a LEAF
+  could be installed as the machine's trust anchor at exit 0. Restored tests pass 10/10, 10/10,
+  11/11.
 
-### 🔴 THE PATH IS FROZEN — owner decision, 2026-08-13
+**Do not re-revert to restore certification** — that drops the leaf-as-trust-anchor fix again. The
+way back to certified is a green matrix run, not a revert.
 
-**Do not edit anything scenario-1 executes** without asking. That set is DERIVED, not remembered —
-regenerate it rather than trusting this list:
+### 🔴 THE STANDING RISK — CI verifies almost nothing right now
 
-```bash
-tgts=$(grep -oE '\bmake [a-z][a-z0-9-]*' docs/scenario-1.md | awk '{print $2}' | sort -u)
-for t in $tgts; do awk -v t="^$t:" 'BEGIN{f=0} $0~t{f=1;next} /^[a-zA-Z0-9_.-]+:/{f=0} f' Makefile; done \
-  | grep -oE '(\$\(SCRIPTS\)|scripts)/[a-zA-Z0-9_.-]+\.sh' | sed 's|\$(SCRIPTS)|scripts|' | sort -u
-# + all scripts/lib/*.sh (sourced by them) + docs/scenario-1.md   => 46 files
-```
+`.github/workflows/ci.yml`'s `static-check` is **`if: false`** (disabled 2026-08-11 for speed —
+2m44s of a 3m03s run). `ci-pass` only tests for `failure`/`cancelled`, and a **skipped** job is
+neither — so `ci-pass` goes GREEN with none of the alignment gates, lint, `sec`, the script unit
+tests or the app tests having run.
 
-**21 of the 31 open backlog rows touch that set** and are therefore out of reach. That is the real
-price of the freeze, and it is the correct trade while the green state matters.
+**Measured consequence, not hypothetical:** that is how #605's drift merged green and sat on `main`.
+The change classifier is NOT at fault — tested, `.mise.toml` and `images/images.txt` both yield
+`code=true`. The job is off.
 
-Off-path and safe: the gates (`check-*.sh`), the tests, CI, `docs/**` except scenario-1, and the
-sibling repo.
+⇒ **Local `env -u GOROOT make ci` is the only real verification. Run it before every merge.**
 
-### What is HELD, and why it matters
+### The design was REFUTED by two adversaries — this is the surviving plan
 
-**B108** records five reverted fixes. One is a genuine security fix and should not be left out
-indefinitely: **B83c** — `27-harbor-ca-from-cluster.sh` validated the trust anchor by asking only
-whether it PARSED, so a **LEAF could be installed as the machine's trust anchor at exit 0**, and a
-leaf verifies nothing. Also reverted: B62 (arch-blind vcf CLI pick), B94, B98 (a STALE
-`ARGOCD_KUBECONFIG` surviving a lab rebuild), B105.
+| decision | outcome |
+|---|---|
+| 8 matrix rows | **REFUTED → 6.** `S2 × NOTHING` is *inexpressible*: `resolve_cell` collapses four per-resource flags into a scalar and gates `n==0`/`n==4`, but a tenant cell is `n=2`. A failing row also trips the rebuild guard and breaks sequencing. |
+| restricted-kubeconfig tenant | **REFUTED.** `scripts/91-e2e-tenant-mechanism.sh` (wired at `Makefile:770`) already builds the real tenant situation — AppProject + `argocd-rbac-cm` + apiKey account + a kubeconfig with no RBAC in the ArgoCD namespace. A k8s kubeconfig measures k8s RBAC; the tenant path is ArgoCD RBAC via argocd-server. I verified the script exists and does this. |
+| extract shared steps | **SURVIVES, and is stronger than argued** — it is a *correctness* fix. Scenario-2 has no bootstrap and no clone, so its first `make` dies `make: command not found`, while line 23 claims you need not read the other scenario. |
 
-**Unblocking needs ONE of:** re-run the 4-row matrix on a tree carrying them, or land them
-immediately before the next run so a single run certifies both.
+**Cut A:** S1×NOTHING×ubuntu → S1×EXISTS×photon → S2×EXISTS×photon.
+**Cut B:** S1×NOTHING×photon → S1×EXISTS×ubuntu → S2×EXISTS×ubuntu.
+
+### The prerequisite nobody can skip
+
+`walk-doc.sh` reads exactly ONE document and will not follow a link — **and both anti-vacuity floors
+(`INDEP`, `INDEP_E`) are computed from `$DOC` alone**, so a naive extraction walks only the
+scenario's own blocks while every counter reconciles perfectly and `EXIT=0`. Confirmed by execution.
+The fix is `<!-- walk-include: <path> -->` expanded in the extractor **with the floors recomputed
+over the EXPANDED text** — the second half is the load-bearing one.
 
 ### Distrust these
 
-- **`git diff --name-only v1.0.1..origin/main` is the only honest answer to "is main certified?"**
-  Nothing else in this repo tracks it, and the drift happened once already, silently, across six
-  reviewed PRs.
-- **A stale log will lie to you.** An adversary reading `/tmp/walk/ROWS12.log` (previous night,
-  `MATRIX_RC=2`) reported row 2 as FAILED while the acceptance run's own `FINAL4.log` said
-  `MATRIX_RC=0`. That is B103 exactly, and B103's fix (a per-invocation `VERDICT-<runid>.txt`,
-  merged in the lab repo) exists because of it. **Cite the per-run verdict file, never a fixed path.**
-- **`endpoint_report` is ASYMMETRIC** — it declines to compare a name-shaped ENDPOINT but reports
-  IP-vs-hostname-LB as DIVERGENT. Nothing acts on that today (the B92 gate was reverted), but any
-  future gate on that sentinel inherits it.
-
-### Still consuming resources
-
-`esxi01` and a leftover `vks-walkbox-ubuntu` are running under libvirt. The walk box is a leftover
-from row 4 and is safe to destroy; the lab is the operator's call.
+- **`git diff --name-only <tag>..origin/main` is the only honest answer to "is main certified?"**
+- **A stale log will lie to you.** Cite the per-invocation `VERDICT-<runid>.txt`, never a fixed path.
+- **A fresh `make lab` does NOT install the Supervisor Services** — verified; `services` is a
+  separate target. So a fresh cut genuinely IS the NOTHING cell.
+- **`WALK_DRY=1` is not side-effect-free** — the env-table loop `sed -i`s `$CWD/.env` before the dry
+  gate. Sandbox probes with `WALK_START_DIR`.
+- **The walk ships the vCenter SSO admin password to every row**, so no row is a tenant today
+  whatever its kubeconfig says.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
