@@ -517,14 +517,22 @@ unauthenticated endpoint, so no login is needed.
 ```bash
 set -a; . ./.env; set +a
 tmp=$(mktemp -d)
-curl -sk --fail --max-time 20 -o "$tmp/ca.crt" \
-  "https://${HARBOR_URL}/api/v2.0/systeminfo/getcert" \
-  || { echo "Harbor is not reachable at ${HARBOR_URL} — check the A record (make show-dns-records)"; false; }
-openssl s_client -connect "${HARBOR_URL}:443" -servername "${HARBOR_URL}" </dev/null 2>/dev/null \
-  | openssl x509 > "$tmp/harbor.crt"
-openssl verify -CAfile "$tmp/ca.crt" "$tmp/harbor.crt" \
-  && install -m0644 "$tmp/ca.crt" ./secrets/harbor-ca.crt && rm -rf "$tmp" \
-  || { echo "that file does not vouch for ${HARBOR_URL} — nothing was saved; use an alternative below"; false; }
+code=$(curl -sk --max-time 20 -o "$tmp/ca.crt" -w '%{http_code}' \
+  "https://${HARBOR_URL}/api/v2.0/systeminfo/getcert" || true)
+if [ "${code:-000}" = 000 ]; then
+  echo "nothing answered at ${HARBOR_URL} — check the A record (make show-dns-records)"
+elif [ "$code" != 200 ]; then
+  echo "Harbor answered (HTTP ${code}) but does not publish its CA there — use an alternative below"
+else
+  openssl s_client -connect "${HARBOR_URL}" -servername "${HARBOR_URL%%:*}" </dev/null 2>/dev/null \
+    | openssl x509 > "$tmp/harbor.crt"
+  if openssl verify -CAfile "$tmp/ca.crt" "$tmp/harbor.crt"; then
+    install -m0644 "$tmp/ca.crt" ./secrets/harbor-ca.crt
+  else
+    echo "that file does not vouch for ${HARBOR_URL} — nothing was saved; use an alternative below"
+  fi
+fi
+rm -rf "$tmp"
 ```
 
 Two details in there are load-bearing, and both were found by running it rather than reading it:
