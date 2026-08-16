@@ -23,7 +23,7 @@ cluster's namespaces and the workloads in them.
 Everything you need is in this section — you do not have to read the other scenario. Dual-homed:
 the jump box reaches both the internet and the lab (Supervisor API + Harbor).
 
-## Discover Harbor & ArgoCD + request grants
+## Discover Harbor and ArgoCD, and request your grants
 
 **Discover the endpoints** (read-only; you need at least read access to the Services'
 namespaces, or ask the platform team for the values):
@@ -118,9 +118,11 @@ the rest of the file when it is sourced):
 > happy-path — granted an AppProject role; the `request` fallback, for a tenant granted nothing, renders the
 > Application for the admin to apply. Full mechanism table in the reference below.)
 
-### Wire the repo & run the pipeline
+Now wire the repo and run the pipeline.
 
-**Step 0 — remove any STALE KinD overlay.** the state overlay is sourced *after* `.env`, so a leftover
+## 0. Remove any stale KinD overlay
+
+ the state overlay is sourced *after* `.env`, so a leftover
 one from a local run would silently redirect everything at a kind cluster. Delete it **before you
 start**:
 
@@ -141,7 +143,9 @@ cluster's generated passwords. `make kind-down` removes it **only if the KinD fl
 > `make gitops` throws the address away, and `make gitops` will refuse to build a repoURL ArgoCD
 > cannot reach. (The name is a leftover from when only the KinD flow discovered anything.)
 
-**Step 1 — finish `.env`.** The discovery step above filled the Harbor + ArgoCD values,
+## 1. Finish your .env
+
+ The discovery step above filled the Harbor + ArgoCD values,
 `ARGOCD_NAMESPACE`, and `KUBECONFIG` / `VKS_CONTEXT`. Only the **Gitea password** (a login for
 the component **we** install) and the **VKS auth method** remain:
 
@@ -159,7 +163,9 @@ to the verified shape but not yet lab-validated). For the legacy vSphere plugin,
 `VKS_AUTH_METHOD=vsphere` and `SUPERVISOR_HOST` / `VKS_NAMESPACE` / `VKS_CLUSTER_NAME` /
 `VKS_USERNAME` / `VKS_PASSWORD`.
 
-**Step 2 — save the Harbor CA certificate** to `./secrets/harbor-ca.crt` (the
+## 2. Save the Harbor CA certificate
+
+ to `./secrets/harbor-ca.crt` (the
 `HARBOR_CA_FILE` path). If the lab handed you the cert, drop it there. Otherwise fetch it
 from the running Harbor with **`make fetch-harbor-ca`** (reads `HARBOR_URL`, writes
 `HARBOR_CA_FILE`), or by hand:
@@ -188,14 +194,16 @@ to trust its UI), fetch it the same way — `ARGOCD_SERVER` is already set from 
 **`make fetch-argocd-ca`** (writes `ARGOCD_CA_FILE`). The tenant `api` path establishes the CLI's TLS
 trust via `argocd login` (the Step-3 token recipe), so `ARGOCD_CA_FILE` is optional for the demo itself.
 
-**Step 3 — install prereqs and log in to VKS:**
+## 3. Install prereqs and log in to VKS
 
 ```bash
 make deps         # kind, crane, tkn, argocd, kubectl, helm + the rest of the mise toolchain
 make vks-login    # validates $KUBECONFIG + context against the lab cluster
 ```
 
-**Step 3b — install the Broadcom VCF/VKS lab CLIs.** You need the **licensed** `argocd-vcf` +
+## 3b. Install the Broadcom VCF/VKS lab CLIs
+
+ You need the **licensed** `argocd-vcf` +
 `vcf` binaries if **either** applies (both are the normal VKS case):
 
 - you authenticate with `VKS_AUTH_METHOD=vcf` — `scripts/30-vks-login.sh` hard-requires `vcf`; or
@@ -267,7 +275,9 @@ Reference: [William Lam — using a VKS cluster with a private container registr
 (Verify the exact `trust.additionalTrustedCAs` shape against your VCF/VKS 9.1 lab — it is not
 reproducible on the KinD stand-in.)
 
-**Step 4 — Harbor projects + the image-pull secret.** Point `HARBOR_INFRA_PROJECT` /
+## 4. Harbor projects and the image-pull secret
+
+ Point `HARBOR_INFRA_PROJECT` /
 `HARBOR_APP_PROJECT` at the project(s) you were **granted** (in the *Request grants* step above) — they
 already exist. `make mirror` (run in Step 6) pushes to them; internally it first does a HEAD to confirm the
 project exists, but if your credential is a **project-scoped robot** that cannot query Harbor's system
@@ -304,7 +314,9 @@ kubectl --kubeconfig <your-supervisor-kubeconfig> get pods -A | grep argocd-appl
 If you have no Supervisor kubeconfig (the common tenant case), **ask the platform team for the namespace**
 — or use `ARGOCD_MECHANISM=api`, which needs no Kubernetes access there at all.
 
-**Step 5 — verify (or create) the in-cluster registry secret.** The pipeline pushes the
+## 5. Verify (or create) the in-cluster registry secret
+
+ The pipeline pushes the
 built image to Harbor from inside the cluster, which needs a Docker-config secret.
 `make platform` (its `configure-tekton` step, run in Step 6) creates it for you as
 **`harbor-dockerconfig`** in the `ci` namespace, from `HARBOR_USERNAME` / `HARBOR_PASSWORD`.
@@ -332,7 +344,7 @@ The Kubernetes secret is built from your Harbor **login/password**; Harbor's **R
 used only to create a robot account (if you self-service one) — it does not create this cluster
 secret.
 
-**Step 6 — prove your `.env` works, then install:**
+## 6. Prove your .env works, then install
 
 Catch a wrong value in **seconds** instead of 20 minutes into the mirror. As a tenant you were *given*
 most of these values, so this is exactly where a typo or a stale endpoint shows up:
@@ -390,7 +402,9 @@ were granted).
 > `Application` deploys **into your guest cluster**, not onto the Supervisor. This installs no
 > second ArgoCD in the guest.
 
-**Step 7 — access the UIs.** Harbor and ArgoCD are the **shared** instances — use the endpoints
+## 7. Access the UIs
+
+ Harbor and ArgoCD are the **shared** instances — use the endpoints
 you discovered + the credentials you were granted. For **Gitea** (which you installed) and the
 deployed **app**, either front them with the ingress at `*.vks.local`, or `kubectl port-forward`
 (`kubectl -n gitea port-forward svc/gitea-http 3000:3000`, and one per app —
