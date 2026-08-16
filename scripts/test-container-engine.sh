@@ -213,6 +213,32 @@ else
   bad "script(s) pkg_install an engine package literally:${lit_offenders} — route it through engine_packages() or check 7 goes blind"
 fi
 
+# ── engine_build_isolation: rootless podman cannot build on a cgroup-v1 host ─────────────────────
+# MEASURED on a Photon 5 walkbox during a real matrix row: the builder build died at its FIRST RUN
+# step with `open /sys/fs/cgroup/devices/buildah-...: No such file or directory`, and the SAME
+# Dockerfile on the SAME box succeeded with BUILDAH_ISOLATION=chroot. Ubuntu boots cgroup v2 and was
+# unaffected -- so the green ubuntu row said nothing about it, and only the photon row failed.
+# All THREE directions are asserted, because two of them are damaging in opposite ways: silent on v1
+# blocks the build entirely, and firing on v2 weakens isolation where nothing is wrong.
+_bi() ( . "${REPO_ROOT}/scripts/lib/engine.sh" 2>/dev/null
+        # shellcheck disable=SC2317
+        stat() { printf '%s\n' "$FAKE_CG"; }
+        # shellcheck disable=SC2317
+        container_engine() { printf '%s\n' "$FAKE_ENG"; }
+        engine_build_isolation )
+
+r="$(FAKE_CG=cgroup2fs FAKE_ENG=podman _bi)"
+if [ -z "$r" ]; then ok "engine_build_isolation: SILENT on cgroup v2 (nothing is wrong there)"
+else bad "engine_build_isolation fired on cgroup v2 ('$r') — weakens isolation for no reason"; fi
+
+r="$(FAKE_CG=tmpfs FAKE_ENG=podman _bi)"
+if [ "$r" = chroot ]; then ok "engine_build_isolation: chroot on cgroup v1 + podman (the measured fix)"
+else bad "engine_build_isolation silent on cgroup v1 ('$r') — the builder build cannot work there"; fi
+
+r="$(FAKE_CG=tmpfs FAKE_ENG=docker _bi)"
+if [ -z "$r" ]; then ok "engine_build_isolation: SILENT for docker (BUILDAH_ISOLATION is a buildah knob)"
+else bad "engine_build_isolation fired for docker ('$r')"; fi
+
 if [ "$fail" = 0 ]; then
   echo "test-container-engine: OK"
   exit 0
