@@ -99,6 +99,35 @@ engine_mode() {
   esac
 }
 
+# engine_build_isolation — prints 'chroot' when a build on THIS box needs it, else nothing.
+#
+# ROOTLESS PODMAN ON A CGROUP v1 HOST CANNOT BUILD. crun tries to create the container's cgroup under
+# /sys/fs/cgroup/devices/ -- a v1 controller directory owned by root, which an unprivileged user
+# cannot mkdir into -- and the build dies at the first RUN step with
+#     open `/sys/fs/cgroup/devices/buildah-buildah<N>`: No such file or directory
+#     did not get container create message from subprocess: EOF
+# an error naming neither podman, nor cgroups-v1, nor the user.
+#
+# MEASURED 2026-08-16 on a Photon 5 walkbox (podman 4.5.1, crun 1.29, `stat -fc %T /sys/fs/cgroup` =
+# tmpfs i.e. v1, no systemd user delegation), A/B on the same box, same Dockerfile, one RUN step:
+#     default isolation        -> "while running runtime: exit status 1"
+#     BUILDAH_ISOLATION=chroot -> Successfully tagged
+# Ubuntu boots cgroup v2 (cgroup2fs) and is unaffected -- which is exactly why only the Photon rows
+# of the walk matrix failed, and why a green ubuntu row said nothing about it.
+#
+# chroot isolation runs RUN steps without a container cgroup. It IS weaker isolation, and that is a
+# deliberate, bounded trade: we build OUR OWN Dockerfile FROM OUR OWN pinned base, on a box the
+# operator controls. It is not applied on cgroup v2, where nothing is wrong.
+#
+# Photon 5 CAN run v2 (`systemd.unified_cgroup_hierarchy=1` on the kernel cmdline) but does not by
+# default, and that is a boot-time parameter -- not something this repo can set on someone else's
+# jump box. So the fix belongs here, keyed on the condition rather than on the OS name.
+engine_build_isolation() {
+  [ "$(container_engine)" = podman ] || return 0
+  [ "$(stat -fc %T /sys/fs/cgroup 2>/dev/null)" = cgroup2fs ] && return 0
+  printf 'chroot'
+}
+
 # engine_certs_d_dir <mode> <registry> — where THAT mode's daemon looks for the CA.
 # The directory is keyed on the registry reference EXACTLY as the client writes it: host, plus the port
 # ONLY when non-default, no scheme, no trailing slash. A scheme or a slash here yields a path that can

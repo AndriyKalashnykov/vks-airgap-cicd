@@ -71,6 +71,14 @@ for app in $BUILDER_APPS; do
   tarball="${OUT_DIR}/${app}-builder.tar"
 
   log_info "[${app}] building the offline builder (this pulls its Maven deps — needs the internet)"
+  # A cgroup-v1 box cannot build rootless at all; see engine_build_isolation() for the measured A/B.
+  # ANNOUNCED, not applied silently -- it is a real isolation trade and the operator should see it.
+  _iso="$(engine_build_isolation)"
+  if [ -n "$_iso" ]; then
+    export BUILDAH_ISOLATION="$_iso"
+    log_warn "cgroup v1 detected — building with BUILDAH_ISOLATION=${_iso}: rootless podman cannot"
+    log_warn "  create a container cgroup here. Weaker isolation, bounded — our Dockerfile, our base."
+  fi
   run "$ENGINE" build \
     --build-arg "MAVEN_IMAGE=${BUILD_BASE}" \
     -f "${src}/Dockerfile.builder" \
