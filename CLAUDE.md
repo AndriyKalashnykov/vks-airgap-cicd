@@ -616,18 +616,30 @@ moment this work started. **That is the intended state, not an accident.** Two P
 **Do not re-revert to restore certification** — that drops the leaf-as-trust-anchor fix again. The
 way back to certified is a green matrix run, not a revert.
 
-### 🔴 THE STANDING RISK — CI verifies almost nothing right now
+### 🔴 THE STANDING RISK — five gates do not run on a PR
 
-`.github/workflows/ci.yml`'s `static-check` is **`if: false`** (disabled 2026-08-11 for speed —
-2m44s of a 3m03s run). `ci-pass` only tests for `failure`/`cancelled`, and a **skipped** job is
-neither — so `ci-pass` goes GREEN with none of the alignment gates, lint, `sec`, the script unit
-tests or the app tests having run.
+`.github/workflows/ci.yml`'s `static-check` is **`if: false`** on PRs (disabled 2026-08-11 for speed
+— 2m44s of a 3m03s run; restored 2026-08-16 for the weekly SCHEDULE only). `ci-pass` tests for
+`failure`/`cancelled`, and a **skipped** job is neither.
 
-**Measured consequence, not hypothetical:** that is how #605's drift merged green and sat on `main`.
-The change classifier is NOT at fault — tested, `.mise.toml` and `images/images.txt` both yield
-`code=true`. The job is off.
+⚠️ **CORRECTED 2026-08-16 — this used to say `ci-pass` goes green with "none of the alignment gates"
+having run. That is FALSE, and being wrong in that direction is worse than useless: it overstates
+the hole, so the reader distrusts everything equally instead of the five things that are actually
+uncovered.** Verified against `ci.yml` and the Makefile, not recalled:
 
-⇒ **Local `env -u GOROOT make ci` is the only real verification. Run it before every merge.**
+| | |
+|---|---|
+| **runs per-PR** | `static-check-fast` — **23** alignment/doc/env gates (~9 s). `ci-pass` asserts its result **EXPLICITLY** (`needs.static-check-fast.result != success` → fail), so a skip there IS caught. |
+| **does NOT run per-PR** | exactly five: **`lint`, `validate`, `sec`, `test-scripts`, `app-test`** |
+
+**Measured consequence, still not hypothetical — and it recurred today:** `make lint` went RED on a
+feature branch and stayed red across several pushes while CI reported `ci-pass: pass` every time,
+because `lint` is in the half that does not run. Found only by running the full gate locally, hours
+later. (#605's drift is the older instance; its class — an alignment gate — is now in the fast half,
+so that specific hole is closed.)
+
+⇒ **Run `env -u GOROOT make static-check` locally before every merge.** `docs-lint` plus the unit
+tests is NOT the gate, and believing it was is exactly how the lint stayed red.
 
 ### The design was REFUTED by two adversaries — this is the surviving plan
 

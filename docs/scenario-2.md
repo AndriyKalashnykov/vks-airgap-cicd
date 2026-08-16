@@ -43,40 +43,75 @@ make deps     # kubectl, crane, tkn, argocd, helm, openssl + the rest of the pin
 
 **Expect:** `prereqs installed. Versions:` followed by the pinned version of each tool. *(~3 min)*
 
-Now the **kubeconfig for the workload cluster you were given**. If the platform team sent you the
-file, save it at `./secrets/vks.kubeconfig` and skip to the check below. Otherwise fetch it with the
-licensed `vcf` CLI — which means installing that first:
+Now the kubeconfigs. **There are two, they are not interchangeable, and that is the single fact that
+makes the rest of this document behave:**
 
-| key | value | why |
+| kubeconfig | reaches | needed for |
 |---|---|---|
-| `VCF_CLI_SRC_DIR` | the folder holding the Broadcom archives | `make install-vcf-clis` reads it |
-| `VKS_AUTH_METHOD` | `vcf` | drives the login below through the `vcf` CLI |
-| `SUPERVISOR_HOST` | your Supervisor's address | the endpoint `vcf` logs in to |
-| `VKS_USERNAME` | your vSphere SSO user | |
-| `VKS_NAMESPACE` | the vSphere Namespace your cluster lives in | |
-| `VKS_CLUSTER_NAME` | the workload cluster you run the demo in | |
+| **Supervisor** | the Supervisor cluster, where Harbor and ArgoCD run as Services | the discovery immediately below |
+| **workload (guest)** | your own cluster | everything from Step 1 onward |
 
-Set those in `./.env` (see [Step 3b](#3b-where-the-broadcom-vcfvks-lab-cli-archives-come-from) for where the archives
-come from), then:
+Point `kubectl` at the wrong one and you get no error — you get **empty results**, which read exactly
+like *"the service is not installed"*.
+
+**Most tenants are handed the workload kubeconfig and never touch the Supervisor.** If that is you,
+save it and set `VKS_AUTH_METHOD=kubeconfig` in `./.env`:
+
+```bash
+head -1 ./secrets/vks.kubeconfig
+```
+
+**Expect:** `apiVersion: v1` — i.e. a real kubeconfig, not an empty file. (An empty one prints
+nothing here and then makes every later step report "not found".) Then **skip the rest of this
+step** and ask your platform team for the two
+`svc-…` namespace names the discovery below would have found — as a tenant you are normally not
+allowed to list all namespaces anyway, so that request is expected rather than unusual.
+
+<details><summary>Only if you hold vSphere SSO credentials and must fetch it yourself</summary>
+
+This path needs the **licensed** `vcf` CLI, so it is for tenants with entitlement to the Broadcom
+archives — [Step 3b](#3b-where-the-broadcom-vcfvks-lab-cli-archives-come-from) says how to get them.
+
+| key | value |
+|---|---|
+| `VCF_CLI_SRC_DIR` | the folder holding the Broadcom archives — `make install-vcf-clis` **dies** if this is unset |
+| `VKS_AUTH_METHOD` | `vcf` |
+| `SUPERVISOR_HOST` | your Supervisor's address |
+| `VKS_CONTEXT_NAME` | a name you invent for the context |
+| `VKS_USERNAME` | your vSphere SSO user |
+| `VCF_CLI_VSPHERE_PASSWORD` | your SSO password — in `.env`, never on a command line |
 
 ```bash
 make install-vcf-clis     # argocd-vcf + vcf + vcf plugins, from VCF_CLI_SRC_DIR
-make vks-login            # logs in and writes ./secrets/vks.kubeconfig
+make fetch-supervisor-ca  # without this the login dies "certificate signed by unknown authority"
 ```
 
-**Expect:** `VCF/VKS lab CLIs installed to`, then a context name. *(~2 min)*
-
-You need **cluster-admin** on that cluster: the flow creates `gitea`, `ci`, and one namespace per app
-in `apps/registry.tsv` — today `javawebapp` + `gowebapp` — and installs Tekton CRDs.
-
-Confirm it works before going on, because everything below depends on it:
+⚠️ **Confirm the printed SHA-256 with your platform team over another channel** — that download is
+deliberately unverified TLS, and the fingerprint is the only thing authenticating it.
 
 ```bash
-kubectl config current-context
+set -a; . ./.env; set +a
+make vks-login
 ```
 
-**Expect:** your context name. If you instead see `error: current-context is not set`, the kubeconfig
-is missing or empty — fix that here rather than reading `NOT FOUND` at every step below.
+**Expect:** `Supervisor context verified via` — and `./secrets/supervisor.kubeconfig` now exists.
+
+Then point `kubectl` at the **Supervisor** for the discovery below. `make vks-login` deliberately
+leaves `$KUBECONFIG` alone, so without this line `kubectl` keeps reading your **workload** cluster —
+which has no `svc-harbor-…` namespace at all, and so reports "not installed" for a service that is
+running perfectly well:
+
+```bash
+export KUBECONFIG=./secrets/supervisor.kubeconfig
+```
+
+⚠️ **Do not** use `vcf config set env.VCF_CLI_VSPHERE_PASSWORD` — it writes your SSO password in
+plaintext to `~/.config/vcf/config.yaml`, outside this repo and every secret scan.
+
+</details>
+
+You need **cluster-admin** on the workload cluster either way: the flow creates `gitea`, `ci`, and one
+namespace per app in `apps/registry.tsv` — today `javawebapp` + `gowebapp` — and installs Tekton CRDs.
 
 ## Discover Harbor and ArgoCD, and request your grants
 
@@ -96,7 +131,7 @@ echo "Harbor: ${HARBOR_NS:-NOT FOUND}   ArgoCD: ${ARGOCD_NS:-NOT FOUND}"
 rm -f "$err"
 ```
 
-**Expect:** two namespace names, each ending in a generated id.
+**Expect:** two namespace names, each ending in a generated id — the line reads `ArgoCD: svc` and then the id.
 
 `NOT FOUND` has **three** different causes, and the line beginning *"the cluster said"* — printed
 only when there was an error — tells you which. Read it before you ask anyone for anything:
@@ -299,7 +334,7 @@ step just confirms the login still holds after you finished filling in `.env`:
 make vks-login    # validates $KUBECONFIG + context against the lab cluster
 ```
 
-**Expect:** a context name, and no error.
+**Expect:** `connected. Current context:` followed by your context name.
 
 Step 0b also installed `openssl`, so now you can check the CA certificate you saved in Step 2 really
 is the one that signed **this** Harbor's:
