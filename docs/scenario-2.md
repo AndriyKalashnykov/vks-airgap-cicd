@@ -131,6 +131,7 @@ deploys nothing while reporting success**:
 | `ARGOCD_PROJECT` | *your granted AppProject* | **not** `default`; your project role must permit the destination |
 | `ARGOCD_AUTH_TOKEN` | *mint it first* | see the note below — it is a precondition, not just a value |
 | `ARGOCD_DEST_SERVER` | *your guest cluster API URL* | the guest must be **registered** as an ArgoCD destination first (admin-only; request it) |
+| `ARGOCD_REGISTER` | `never` | registering a cluster is admin-only. Without this, `make gitops` tries, is refused, and you get an error about permissions instead of the clear "ask your admin to register it" |
 
 <!-- -->
 
@@ -386,11 +387,14 @@ If you have no Supervisor kubeconfig (the common tenant case), **ask the platfor
 
 ## 5. Verify (or create) the in-cluster registry secret
 
- The pipeline pushes the
-built image to Harbor from inside the cluster, which needs a Docker-config secret.
-`make platform` (its `configure-tekton` step, run in Step 6) creates it for you as
-**`harbor-dockerconfig`** in the `ci` namespace, from `HARBOR_USERNAME` / `HARBOR_PASSWORD`.
-Check whether it already exists:
+The pipeline pushes the built image to Harbor from inside the cluster, which needs a Docker-config
+secret. **You do not normally create it** — `make platform` (its `configure-tekton` step, in Step 6)
+creates it for you as **`harbor-dockerconfig`** in the `ci` namespace, from `HARBOR_USERNAME` /
+`HARBOR_PASSWORD`.
+
+So on a **first** run this secret does not exist yet, and neither does the `ci` namespace — the check
+below will say so, and that is the correct answer at this point. It is worth running anyway, because
+on a **re-run** it tells you whether the credential you were given is already in place:
 
 ```bash
 set -a; . ./.env; set +a
@@ -399,11 +403,16 @@ kubectl -n ci get secret harbor-dockerconfig
 
 <br>
 
-Keep the secret **off argv** — build the `config.json` on disk and load it from a file; kaniko
-needs the key named literally `config.json`, not `.dockerconfigjson`:
+**Only if** Step 6 has already run and the secret is missing or holds the wrong credential, write it
+by hand. Keep the secret **off argv** — build the `config.json` on disk and load it from a file;
+kaniko needs the key named literally `config.json`, not `.dockerconfigjson`. The two `:?` guards are
+load-bearing: without them, empty values produce a **valid-looking secret containing no credential**,
+`kubectl` reports `configured`, and the push fails much later with a 401 naming Harbor:
 
 ```bash
 set -a; . ./.env; set +a
+: "${HARBOR_USERNAME:?set it in .env — an empty value writes a secret with no credential in it}"
+: "${HARBOR_PASSWORD:?set it in .env — an empty value writes a secret with no credential in it}"
 umask 077
 auth=$(printf '%s:%s' "$HARBOR_USERNAME" "$HARBOR_PASSWORD" | base64 -w0)
 printf '{"auths":{"%s":{"auth":"%s"}}}' "$HARBOR_URL" "$auth" > /tmp/harbor-config.json

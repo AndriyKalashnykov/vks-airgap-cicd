@@ -58,9 +58,30 @@ ca_status_report() {
   #
   # NEWLINE-separated + `while read`, not space-separated + `for` — the labels contain spaces, and a
   # `for x in $var` would split them mid-label (and does not word-split at all under zsh).
+  # ⚠️ `${HARBOR_URL%%/*}` WAS NOT A HOST PARSER, and two ordinary spellings produced a FALSE SKIP —
+  # a live, healthy endpoint reported as "did not answer". MEASURED:
+  #     HARBOR_URL=https://harbor.x  -> host became "https:"        -> rc=2, "did not answer"
+  #     HARBOR_URL=harbor.x:8443     -> host kept the port, probe 443 -> rc=2, "did not answer"
+  # lib/harbor.sh already answers "which host and port is this" (it strips the scheme with a warning,
+  # strips a trailing slash, and splits the port). Two implementations of one predicate is exactly the
+  # hazard this script's own header claims to avoid — so split it here the same way, in one helper.
+  _ca_hostport() {                       # <url> -> "host|port"
+    local u="$1" h p
+    h="${u#http://}"; h="${h#https://}"  # a scheme is a documented .env mistake, not a crash
+    h="${h%%/*}"; h="${h%/}"             # drop any path, then a trailing slash
+    case "$h" in
+      \[*\]:*) p="${h##*:}"; h="${h%:*}" ;;               # [v6]:port
+      \[*\])   p=443 ;;                                    # [v6]
+      *:*)     p="${h##*:}"; h="${h%:*}" ;;                # host:port
+      *)       p=443 ;;
+    esac
+    case "$p" in ''|*[!0-9]*) p=443 ;; esac
+    printf '%s|%s' "$h" "$p"
+  }
+
   local pairs=""
-  [ -n "${HARBOR_CA_FILE:-}" ]   && [ -n "${HARBOR_URL:-}" ]      && pairs="${pairs}Harbor CA|${HARBOR_CA_FILE}|${HARBOR_URL%%/*}|443|fetch-harbor-ca"$'\n'
-  [ -n "${VKS_CA_CERT_FILE:-}" ] && [ -n "${SUPERVISOR_HOST:-}" ] && pairs="${pairs}Supervisor CA|${VKS_CA_CERT_FILE}|${SUPERVISOR_HOST}|443|fetch-supervisor-ca"$'\n'
+  [ -n "${HARBOR_CA_FILE:-}" ]   && [ -n "${HARBOR_URL:-}" ]      && pairs="${pairs}Harbor CA|${HARBOR_CA_FILE}|$(_ca_hostport "$HARBOR_URL")|fetch-harbor-ca"$'\n'
+  [ -n "${VKS_CA_CERT_FILE:-}" ] && [ -n "${SUPERVISOR_HOST:-}" ] && pairs="${pairs}Supervisor CA|${VKS_CA_CERT_FILE}|$(_ca_hostport "$SUPERVISOR_HOST")|fetch-supervisor-ca"$'\n'
 
   # THE DENOMINATOR. Set for the caller, because "checked nothing" and "checked three and all were
   # fine" must not print the same sentence. The first version said "all CA certificates match their
@@ -117,7 +138,9 @@ ca_status_report() {
          # off, and the first person to see that rightly deletes the check. rc=1 and rc=2 being
          # DISTINCT is what makes this safe to ship; test-ca-staleness-check.sh asserts they differ.
          # It is NOT a pass either — see the ALL-MATCH token below, which this arm cannot reach.
-         log_warn "${label}: ${host} did not answer — skipping. This says nothing about the certificate." ;;
+         log_warn "${label}: ${host}:${port} did not answer — skipping. This says nothing about the certificate."
+         log_warn "  (the address is printed WITH its port so a skip is diagnosable: a mis-parsed"
+         log_warn "   HARBOR_URL used to land here as a false 'did not answer' on a healthy server.)" ;;
       3) log_error "${label} (${file}) issued the certificate at ${host}, but that certificate is"
          log_error "  NOT VALID FOR THIS ADDRESS. Your certificate is fine; the address is wrong."
          log_error "  Use the DNS name the certificate was issued for, not an IP — set it in ./.env."

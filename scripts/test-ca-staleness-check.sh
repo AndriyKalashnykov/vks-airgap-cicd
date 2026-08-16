@@ -134,6 +134,26 @@ else
   bad "the token is gated on matched == checked" "a skipped or empty run could print the success token"
 fi
 
+# THE HOST/PORT PARSER. Extracted from the shipped script, never transcribed. Two of these shapes
+# produced a FALSE SKIP ("did not answer") against a healthy endpoint before it existed.
+eval "$(sed -n '/^  _ca_hostport()/,/^  }/p' "$CS" | sed 's/^  //')"
+if ! declare -F _ca_hostport >/dev/null; then
+  bad "_ca_hostport extracted from the shipped script" "could not extract it — testing nothing"
+else
+  while IFS='|' read -r inp want; do
+    [ -n "$inp" ] || continue
+    got="$(_ca_hostport "$inp")"
+    if [ "$got" = "$want" ]; then ok "hostport: $inp -> $want"
+    else bad "hostport: $inp" "wanted '$want', got '$got'"; fi
+  done <<'HP'
+harbor.example|harbor.example|443
+https://harbor.example|harbor.example|443
+harbor.example:8443|harbor.example|8443
+https://harbor.example:8443/|harbor.example|8443
+[2001:db8::1]:8443|[2001:db8::1]|8443
+HP
+fi
+
 printf '\ntest-ca-staleness-check: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 printf 'test-ca-staleness-check: OK\n'
