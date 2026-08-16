@@ -564,6 +564,10 @@ lab-preflight: ## Read-only: three cluster preconditions that each kill the run 
 	@$(SCRIPTS)/24-lab-preflight.sh
 
 .PHONY: preflight argocd-preflight
+# CA_STATUS_STRICT: inside `preflight` a MISSING Harbor CA is fatal (nothing else catches it —
+# see the note in 29-ca-status.sh); running `lab-preflight` on its own it is only a warning,
+# because scenario-1 §7 correctly runs before §8 saves the CA.
+preflight: export CA_STATUS_STRICT = 1
 preflight: check-tools engine-check env-check argocd-preflight lab-preflight psa-check ## Read-only: can this lab actually run the flow? Run it BEFORE the 20-minute mirror (first prereq of install-all)
 
 .PHONY: argocd-preflight

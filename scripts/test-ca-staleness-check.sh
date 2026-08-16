@@ -154,6 +154,20 @@ https://harbor.example:8443/|harbor.example|8443
 HP
 fi
 
+# STRICT MODE. A missing CA is a WARNING for bare `lab-preflight` (scenario-1 §7 legitimately runs
+# before §8 saves it) and a PROBLEM for the `preflight` that gates install-all — where nothing else
+# catches it, because the two neighbouring probes abstain (curl -sk skips verification;
+# harbor_auth_report returns 0 when HARBOR_CA_FILE is unset) and preflight runs env-check, not
+# env-validate. Both directions asserted: an arm that cannot say NO is not a gate, and an arm that
+# always says NO breaks the documented §7 order.
+if grep -q 'CA_STATUS_STRICT' "$CS"; then ok "29-ca-status honours CA_STATUS_STRICT"
+else bad "29-ca-status honours CA_STATUS_STRICT" "a missing CA cannot fail the install-all preflight"; fi
+if grep -qE '^preflight: export CA_STATUS_STRICT' "${REPO_ROOT}/Makefile"; then
+  ok "the preflight target EXPORTS it (wiring, not just a flag nothing sets)"
+else
+  bad "the preflight target exports CA_STATUS_STRICT" "the strict arm exists but nothing turns it on"
+fi
+
 printf '\ntest-ca-staleness-check: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 printf 'test-ca-staleness-check: OK\n'

@@ -109,9 +109,26 @@ ca_status_report() {
       # on the scenario-2 walk: fetch-harbor-ca refused with "presents ONE certificate that is NOT
       # self-signed ... Its CA is not on the wire" — correct, and unfixable from the tenant's side.
       # So name the command as an ATTEMPT, not as the answer.
-      log_warn "${label} (${file}) is missing or empty."
-      log_warn "  Try  make ${remedy}  — it works only when the issuing CA is sent by the server."
-      log_warn "  Many servers do not send it, and it will say so: ask for the CA file instead."
+      # WARN or PROBLEM depends on WHO IS ASKING, and the difference is not cosmetic.
+      #   bare `make lab-preflight` — scenario-1 §7 legitimately runs BEFORE §8 saves the CA, so a
+      #     missing file is expected and must not fail. WARN.
+      #   `make preflight` (the first prerequisite of install-all) — here a missing CA is fatal and
+      #     NOTHING ELSE CATCHES IT: _harbor_serving_code probes with `curl -sk` (skip-verify, so
+      #     reachability passes without a CA), _harbor_ca_args returns non-zero when HARBOR_CA_FILE
+      #     is unset so harbor_auth_report prints "skipping the auth probe" and returns 0, and
+      #     `preflight` runs env-check, NOT env-validate — env-validate being the one gate that does
+      #     catch it (measured on the row-5 walk: curl exit 60). So install-all printed a three-line
+      #     all-clear and died 8-20 minutes later inside `mirror`. PROBLEM.
+      if [ "${CA_STATUS_STRICT:-0}" = 1 ]; then
+        log_error "${label} (${file}) is missing or empty — and the install cannot finish without it."
+        log_error "  Try  make ${remedy}  — it works only when the issuing CA is sent by the server."
+        log_error "  Many servers do not send it, and it will say so: ask for the CA file instead."
+        stale=$((stale + 1))
+      else
+        log_warn "${label} (${file}) is missing or empty."
+        log_warn "  Try  make ${remedy}  — it works only when the issuing CA is sent by the server."
+        log_warn "  Many servers do not send it, and it will say so: ask for the CA file instead."
+      fi
       continue
     fi
 
