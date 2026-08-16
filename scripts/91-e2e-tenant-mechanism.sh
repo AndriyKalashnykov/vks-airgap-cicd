@@ -227,7 +227,15 @@ fi
 # yet serving the API (and by the LB before it has finished re-wiring after the restart).
 admin_jwt=""
 for _ in $(seq 1 60); do
-  admin_jwt="$(jq -nc --arg u admin --arg p "$admin_pw" '{username:$u, password:$p}' \
+  # ⚠️ THE PASSWORD GOES VIA THE ENVIRONMENT, NOT ARGV. This was
+  #     jq -nc --arg u admin --arg p "$admin_pw" ...
+  # which puts the ArgoCD admin password in JQ'S ARGV — and MEASURED on this box,
+  #     /proc/<pid>/cmdline   -r--r--r--     <- world-readable
+  #     /proc/<pid>/environ   -r--------     <- owner only
+  # so any local user could read it — 60 times over ~2 minutes, because this is a retry loop.
+  # The curl half was already correct (`--data @-`, body on stdin); only the jq half leaked.
+  # `env.NAME` is jq's documented way to read the environment. Verified the JSON is identical.
+  admin_jwt="$(ARGOCD_ADMIN_PW="$admin_pw" jq -nc '{username:"admin", password:env.ARGOCD_ADMIN_PW}' \
     | curl -s -k --max-time 5 -H 'Content-Type: application/json' --data @- \
         "https://${argocd_lb}/api/v1/session" 2>/dev/null \
     | jq -r '.token // empty' 2>/dev/null || true)"
