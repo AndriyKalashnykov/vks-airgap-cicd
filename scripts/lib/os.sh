@@ -1204,6 +1204,28 @@ k_can_i() {
   case "$_out" in *yes*) printf 'yes|' ;; *no*) printf 'no|' ;; *) printf 'unknown|UNPARSEABLE' ;; esac
 }
 
+# harbor_scheme — http when HARBOR_INSECURE=1, https otherwise.
+#
+# ⚠️ THIS EXISTS BECAUSE THE PROBE BELOW HARDCODED `https://`, AND WAS THEREFORE PERMANENTLY BLIND
+# IN THE INSECURE LEG. `06-install-harbor.sh:16` documents HARBOR_INSECURE=1 as "plain HTTP
+# LoadBalancer at the LB IP", and `_harbor_ca_args` answers that mode with `-k` — so the probe spoke
+# TLS to a plain-HTTP listener. MEASURED:
+#
+#     curl -k https://<plain-http-listener>/   ->   http_code=000, rc=35 (wrong version number)
+#
+# and `_harbor_auth_code` collapses any non-zero rc to 000, so `harbor_auth_verdict` returned
+# `unchecked:…` FOREVER in that mode — a credential gate that never reaches a verdict, in the leg
+# the KinD e2e exercises. `02-env.sh:349` had the correct derivation all along; this is that same
+# rule, single-sourced, so the two cannot drift again.
+harbor_scheme() { if [ "${HARBOR_INSECURE:-0}" = 1 ]; then printf 'http'; else printf 'https'; fi; }
+
+# IT LIVES HERE, NOT IN lib/harbor.sh, for the reason `is_placeholder` does (see above): a SECOND
+# consumer appeared. 02-env.sh sources lib/os.sh + lib/tls.sh but NOT lib/harbor.sh, so defining
+# it there and calling it from 02-env.sh is `harbor_scheme: command not found` under
+# `set -euo pipefail` — the moment HARBOR_URL is set, which is the only path that reaches it.
+# Caught by checking the scope rather than by running env-validate, whose Harbor block SKIPS
+# when HARBOR_URL is unset: the edit would have passed a green run and failed on a real lab.
+
 # argocd_can_i <can-i args...> -> prints yes|no|unknown
 argocd_can_i() {
   local _out _err _rc=0
