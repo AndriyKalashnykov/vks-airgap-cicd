@@ -33,12 +33,58 @@ esac
 
 # `sort -V` is NUMERIC-aware, which is the whole point: lexically, v1.9.1 sorts AFTER v1.25.13.
 # Verified on this lab's real strings: v1.9.1 < v1.25.13 < v1.33.3 < v1.35.2 < v1.35.5.
-_newest_ready() {
-  kubectl --kubeconfig "$SUP" get kubernetesreleases --no-headers 2>/dev/null \
-    | awk '$3=="True" && $4=="True" {print $2}' | sort -V | tail -1
+# THE READ IS SEPARATE FROM THE FILTER, so kubectl's own rc survives. As one pipeline its status was
+# awk's, and `2>/dev/null` threw the reason away — which is how a transport failure became "no
+# releases are Ready yet" (B110). SEE _TKR_RC / _TKR_ERR below.
+_TKR_ERR="$(mktemp)"; _TKR_OUT="$(mktemp)"; trap 'rm -f "$_TKR_ERR" "$_TKR_OUT"' EXIT
+_TKR_RC=0
+# THE READ RUNS IN THIS SHELL, NOT IN A SUBSTITUTION. A first attempt set _TKR_RC inside a function
+# called as `v="$(_newest_ready)"` — a COMMAND SUBSTITUTION IS A SUBSHELL, so the assignment was
+# discarded and every classification silently fell through to the wait loop. Measured: the test
+# still burned the full budget and still blamed the content library. The fix is to write kubectl's
+# output to a FILE and read its rc here, then filter the file — no pipeline, no subshell.
+_tkr_read() {
+  _TKR_RC=0
+  kubectl --kubeconfig "$SUP" --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-15s}" \
+    get kubernetesreleases --no-headers >"$_TKR_OUT" 2>"$_TKR_ERR" || _TKR_RC=$?
+}
+_newest_ready() {   # call _tkr_read FIRST; this only filters what it fetched
+  awk '$3=="True" && $4=="True" {print $2}' "$_TKR_OUT" 2>/dev/null | sort -V | tail -1
 }
 
+_tkr_read
 v="$(_newest_ready || true)"
+
+# CLASSIFY BEFORE SPENDING THE BUDGET. This used to enter the wait loop on an empty result whatever
+# the reason, burn up to VKS_TKR_WAIT_SECONDS (900s), and then declare "Every release is published
+# but unusable, which is a Supervisor/content-library problem" — a confident platform diagnosis
+# derived from a connection that never succeeded. Waiting cannot fix a stale CA or a missing grant,
+# so it is 15 minutes spent to reach a conclusion that was already wrong.
+if [ "$_TKR_RC" -ne 0 ]; then
+  _hint="Re-issue it:  make vks-login   (scenario-1 Step 3)"
+  case "$(classify_kube_failure "$_TKR_ERR")" in
+    STALE_CA)     die "could not LIST the TKr releases: '${SUP}' does not work against this cluster,
+  and the server ANSWERED — a REBUILT cluster mints a new CA while the address stays the same. The
+  releases were never read, so this says nothing about them, and waiting cannot change it. ${_hint}" ;;
+    UNAUTHORIZED) die "the Supervisor REJECTED these credentials, so the TKr list was never read.
+  This says nothing about which releases exist. ${_hint}" ;;
+    FORBIDDEN)    die "authenticated, but this identity may not LIST kubernetesreleases, so we cannot
+  tell which TKr are usable. That is an RBAC GRANT, not a broken kubeconfig — do NOT re-fetch it.
+  Ask your platform admin for the TKr version and set VKS_K8S_VERSION in .env." ;;
+    UNREACHABLE)  die "could not reach the Supervisor at all, so the TKr list was never read. This is
+  NOT evidence your kubeconfig is stale — check the address and the network." ;;
+    PLAINTEXT)    die "the Supervisor endpoint answered PLAINTEXT where TLS was expected; the TKr list
+  was never read. Check the server URL in '${SUP}'." ;;
+    NO_KUBE_TARGET) die "'${SUP}' names no cluster to talk to, so the TKr list was never read. ${_hint}" ;;
+    KUBECONFIG_UNUSABLE) die "'${SUP}' is unusable — something it NAMES is missing, unreadable or
+  malformed, so the TKr list was never read. ${_hint}" ;;
+    *)            log_error "could not list the TKr releases:"
+                  sed 's/^/    /' "$_TKR_ERR" >&2
+                  die "refusing to wait ${WAIT}s, or to blame the content library, on a probe that did not complete." ;;
+  esac
+fi
+
+# ONLY NOW is an empty result a fact about the Supervisor's releases.
 if [ -z "$v" ] && [ "$WAIT" -gt 0 ]; then
   total="$(kubectl --kubeconfig "$SUP" get kubernetesreleases --no-headers 2>/dev/null | grep -c . || true)"
   log_info "${total:-0} release(s) published, none Ready+Compatible yet — a freshly-enabled Supervisor syncs them over several minutes."
@@ -46,7 +92,7 @@ if [ -z "$v" ] && [ "$WAIT" -gt 0 ]; then
   _w=0
   while [ "$_w" -lt "$WAIT" ]; do
     sleep 15; _w=$((_w + 15))
-    v="$(_newest_ready || true)"; [ -n "$v" ] && break
+    _tkr_read; v="$(_newest_ready || true)"; [ -n "$v" ] && break
     [ $((_w % 60)) = 0 ] && log_info "  still none usable (${_w}/${WAIT}s) ..."
   done
 fi
