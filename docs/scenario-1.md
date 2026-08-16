@@ -53,40 +53,10 @@ Internet-only? Use [the sneakernet flow](sneakernet.md) instead; it replaces Ste
 
 ## 0. Get the repo
 
-Everything below runs **from the repo root**. Nothing works from another directory.
+<!-- walk-include: common-bootstrap.md -->
 
-A stock box has neither `git` nor `make`, and `make deps` needs `curl`.
-
-**Ubuntu / Debian:**
-
-```bash
-sudo apt-get update && sudo apt-get install -y --no-install-recommends git make curl ca-certificates
-```
-
-**Photon OS 5** — `openssh openssh-socket` are both required. Without them this box loses SSH
-during the install and you cannot reconnect.
-
-```bash
-sudo tdnf install -y git make curl curl-libs ca-certificates openssh openssh-socket
-```
-
-Already root? Drop the `sudo`.
-
-```bash
-git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git
-```
-
-Already have the repo? Skip that one command — but still run the next block, which is what puts you
-**in** the repo.
-
-```bash
-cd vks-airgap-cicd
-pwd                            # sanity check: should end in /vks-airgap-cicd
-make env-init                  # creates ./.env from the template .env.example
-```
-
-**Expect:** `./.env` exists. It is the one file you edit for the rest of this runbook; each step
-below lists the keys it needs before the commands that read them.
+Follow [Common bootstrap](common-bootstrap.md) — install `git`/`make`/`curl`, clone, `cd` into the
+repo, and `make env-init`. It is shared with Scenario 2 so there is exactly one copy to keep right.
 
 **Collect these from your lab before Step 1** — you paste them into `.env`:
 

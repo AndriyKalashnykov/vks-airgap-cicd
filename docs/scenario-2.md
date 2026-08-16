@@ -23,6 +23,14 @@ cluster's namespaces and the workloads in them.
 Everything you need is in this section — you do not have to read the other scenario. Dual-homed:
 the jump box reaches both the internet and the lab (Supervisor API + Harbor).
 
+## 0. Get the repo
+
+<!-- walk-include: common-bootstrap.md -->
+
+Follow [Common bootstrap](common-bootstrap.md) — install `git`/`make`/`curl`, clone, `cd` into the
+repo, and `make env-init`. Every `make` below runs from the repo root; on a stock VM none of them
+exist until you have done this.
+
 ## Discover Harbor and ArgoCD, and request your grants
 
 **Discover the endpoints** (read-only; you need at least read access to the Services'
