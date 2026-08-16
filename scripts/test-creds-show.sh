@@ -62,6 +62,31 @@ trap restore EXIT
 # .env carried HARBOR_URL=harbor.env1.lab.test and whose .env.state still held an INGRESS_LB_IP
 # from a lab that had been DESTROYED. The same test passes in CI, where no .env exists, so the
 # failure looks like a code regression and is a test that reads its own environment.
+# ...AND SO IS SANDBOXING KUBECONFIG, for exactly the same reason one door along. creds.sh dials
+# the cluster (`kubectl --request-timeout=3s version`, :198) and also probes for ArgoCD (:88-93), so
+# an AMBIENT KUBECONFIG makes this "offline" suite reach a REAL cluster and its verdict depend on
+# that cluster's state. MEASURED 2026-08-16: during a Supervisor Service uninstall the lab accepted
+# TCP and then stalled, and `make ci` HUNG for 22+ minutes inside this file, in a target whose own
+# help text says "Offline script-logic unit tests".
+#
+# --request-timeout is NOT at fault, and a `timeout` wrapper would have been the wrong fix.
+# MEASURED at BOTH failure modes -- a packet-drop black hole (192.0.2.1) AND an accept-then-stall
+# listener (a socket that accepts and never writes, which is what the lab was doing) -- kubectl
+# exits at 3s in both. The 22 minutes is arithmetic, not a broken timeout: creds.sh makes ~2-3
+# kubectl calls per case, this suite has 11 cases, and every one of them paid the full 3s.
+#
+# RED-PROVEN, with the confounder held constant (the lab had ALSO stopped stalling by then, so a
+# plain re-run would have proved nothing): against the same accept-then-stall listener, this suite
+# takes 0s WITH the sandbox and 78s WITHOUT it. Both exit 0 -- the defect was never a failure, it
+# was an "offline" unit test quietly dialling a live cluster.
+#
+# A NONEXISTENT path rather than unsetting: it keeps `[ -n "$KUBECONFIG" ]` true, so the realistic
+# "configured but unusable" branch is what gets exercised, and kubectl fails on stat in milliseconds.
+# Per-case overrides (`KUBECONFIG="$_kc" render ...`) still win, which is how the one case that
+# genuinely wants a kubeconfig keeps working.
+export KUBECONFIG="/nonexistent/test-creds-show-sandbox.kubeconfig"
+export ARGOCD_KUBECONFIG="$KUBECONFIG"
+
 render() { rm -f "$SINK"; [ -n "${1:-}" ] && printf '%s' "$1" > "$SINK"; SKIP_DOTENV=1 CREDS_TOKEN=1 ./scripts/creds.sh 2>/dev/null; }
 
 # ---- STATE 1: nothing installed. Every value is a default; the output must SAY SO. -------------------

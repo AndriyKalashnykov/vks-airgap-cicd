@@ -79,23 +79,71 @@ esac
 log_info "namespace: ${NS}"
 
 # ── show, then confirm ────────────────────────────────────────────────────────────────────
-log_info "these objects would be DELETED:"
-kubectl -n "$NS" get deploy,statefulset,daemonset,svc,pod 2>/dev/null | sed 's/^/    /' || true
+# B112: this listing is what the operator CONFIRMS against. `2>/dev/null` made a transport failure
+# render as an EMPTY list, so they would confirm the deletion of a namespace we could not read — and
+# the loop below would then delete nothing and report success. Read the rc; refuse before asking.
+_uw_err="$(mktemp)"; _uw_out="$(mktemp)"
+# `cmd; rc=$?` is WRONG here: this script runs under `set -euo pipefail`, so a failing kubectl
+# exits at the kubectl and the whole refusal block below never runs — the operator gets a silent
+# non-zero exit with no diagnostic at all, which is worse than the bug being fixed. `|| rc=$?`
+# puts it in a condition context. (Caught by the test, not by reading it.)
+_uw_rc=0
+kubectl -n "$NS" get deploy,statefulset,daemonset,svc,pod > "$_uw_out" 2> "$_uw_err" || _uw_rc=$?
+if [ "$_uw_rc" -ne 0 ]; then
+  _uw_class="$(classify_kube_failure "$_uw_err")"
+  log_error "cannot READ ${NS} — refusing to ask you to confirm a deletion against a list we could not build."
+  case "$_uw_class" in
+    KUBECONFIG_UNUSABLE) log_error "  the kube config names something missing/unreadable: \$KUBECONFIG=${KUBECONFIG:-<unset>}" ;;
+    STALE_CA)            log_error "  the endpoint's certificate did not verify — the trust anchor is stale." ;;
+    PLAINTEXT)           log_error "  the endpoint is not speaking TLS (wrong scheme or port)." ;;
+    UNAUTHORIZED)        log_error "  the Supervisor token is EXPIRED/invalid. Renew it, then re-run." ;;
+    FORBIDDEN)           log_error "  authenticated, but RBAC denies reading ${NS}. This break-glass needs admin." ;;
+    UNREACHABLE)         log_error "  the Supervisor did not answer (DNS/route/endpoint)." ;;
+    NO_KUBE_TARGET)      log_error "  no cluster is configured for kubectl to talk to." ;;
+    *)                   log_error "  unclassified kubectl failure." ;;
+  esac
+  sed 's/^/    /' < "$_uw_err" >&2
+  rm -f "$_uw_err" "$_uw_out"
+  exit 1
+fi
+sed 's/^/    /' < "$_uw_out"
+rm -f "$_uw_err" "$_uw_out"
+log_info "these objects would be DELETED (listed above):"
 
 [ "${CONFIRM:-}" = yes ] || die "refusing without CONFIRM=yes. Re-run: make unwedge-supervisor-service SERVICE='${SERVICE}' CONFIRM=yes"
 
 # The NAMESPACE is deliberately not deleted (the webhook forbids it; the platform removes it).
 # Workload kinds only: leaving ConfigMaps/Secrets alone costs nothing and keeps the blast radius
 # to what kapp actually waits on -- Services own the endpointslices, workloads own the pods.
+# B112: `2>/dev/null || true` made "the kind has no objects" and "we could not ask" the SAME empty
+# string, so a transport failure skipped every kind and the script still said "deleted." — a success
+# claim over a no-op, in a script whose whole purpose is to delete. A mutating script refuses louder
+# than a reporting one: it DIES rather than continuing to the next kind.
+_uw_deleted=0
 for kind in deployment statefulset daemonset service; do
-  names="$(kubectl -n "$NS" get "$kind" -o name 2>/dev/null || true)"
+  _uw_err="$(mktemp)"
+  names="$(kubectl -n "$NS" get "$kind" -o name 2> "$_uw_err")" || {
+    log_error "cannot list ${kind} in ${NS} — $(classify_kube_failure "$_uw_err"). NOTHING further will be deleted."
+    log_error "  Partial progress: ${_uw_deleted} object(s) already deleted. Fix the cause and re-run."
+    sed 's/^/    /' < "$_uw_err" >&2; rm -f "$_uw_err"; exit 1
+  }
+  rm -f "$_uw_err"
   [ -n "$names" ] || continue
-  printf '%s\n' "$names" | while read -r obj; do
+  # NOT `printf | while read` — that is a SUBSHELL, so _uw_deleted would never survive the loop and
+  # the count would always print 0. A herestring keeps the loop in the current shell.
+  while read -r obj; do
     [ -n "$obj" ] || continue
     kubectl -n "$NS" delete "$obj" --wait=false 2>&1 | sed 's/^/    /' || true
-  done
+    _uw_deleted=$((_uw_deleted + 1))
+  done <<< "$names"
 done
 
-log_info "deleted. Remaining in ${NS}:"
+if [ "$_uw_deleted" -eq 0 ]; then
+  log_warn "nothing was deleted — every workload kind in ${NS} was already empty."
+  log_warn "  If the uninstall is still wedged, it is NOT waiting on these kinds; re-check with:"
+  log_warn "      kubectl -n ${NS} get all"
+else
+  log_info "deleted ${_uw_deleted} object(s). Remaining in ${NS}:"
+fi
 kubectl -n "$NS" get deploy,svc,endpointslice,pod 2>&1 | sed 's/^/    /' | head -5
 log_info "next: re-issue the uninstall. kapp retries in 15-minute rounds, so give it that long."
