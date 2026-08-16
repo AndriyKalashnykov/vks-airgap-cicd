@@ -330,8 +330,15 @@ Service — it runs on the Supervisor, not your guest cluster**, so this needs a
 which a locked-down tenant usually does **not** have:
 
 ```bash
-kubectl --kubeconfig <your-supervisor-kubeconfig> get pods -A | grep argocd-application-controller
+SUP="${VKS_SUPERVISOR_KUBECONFIG:-./secrets/supervisor.kubeconfig}"
+if [ -s "$SUP" ]; then kubectl --kubeconfig "$SUP" get pods -A | grep argocd-application-controller
+else echo "no Supervisor kubeconfig at $SUP — ask the platform team for ARGOCD_NAMESPACE"; fi
 ```
+
+Either branch tells you what you need: a pod line whose namespace is the value you want, or that you
+must ask. (Deliberately no `**Expect:**` here — every distinctive string this block can print is the
+block's own text, which the checker drops by design, so any claim would check nothing. See the
+`no non-vacuous claim available` note in the backlog rather than adding one.)
 
 If you have no Supervisor kubeconfig (the common tenant case), **ask the platform team for the namespace**
 — or use `ARGOCD_MECHANISM=api`, which needs no Kubernetes access there at all.
@@ -377,7 +384,7 @@ make env-check      # presence gate: is every required value set? (fast, no netw
 make env-validate   # validity gate: does KUBECONFIG reach the cluster, and does Harbor really authenticate?
 ```
 
-**Expect:** `env-check` → *all required values present*; `env-validate` → Harbor reachable and
+**Expect:** env-check → `all required values present`; env-validate → Harbor reachable and
 authenticated. Over HTTPS `env-validate` **verifies the TLS chain — there is no `-k` skip-verify**:
 with `HARBOR_CA_FILE` set it trusts that CA, without it curl's default **system trust**. So a green
 here **does** mean the CA is good — a self-signed Harbor with a missing **or wrong** `HARBOR_CA_FILE`
