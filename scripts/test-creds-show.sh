@@ -26,6 +26,9 @@
 set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
+# Absolute repo root, captured AFTER the cd above — render_with_env needs a path that does not
+# depend on the caller's cwd (see its own note).
+_CREDS_REPO="$(pwd)"
 export REPO_ROOT="$PWD"
 
 fail=0
@@ -90,6 +93,35 @@ export KUBECONFIG="/nonexistent/test-creds-show-sandbox.kubeconfig"
 export ARGOCD_KUBECONFIG="$KUBECONFIG"
 
 render() { rm -f "$SINK"; [ -n "${1:-}" ] && printf '%s' "$1" > "$SINK"; SKIP_DOTENV=1 CREDS_TOKEN=1 ./scripts/creds.sh 2>/dev/null; }
+
+# ⚠️ EVERY CASE ABOVE AND BELOW HOLDS `.env` AT EMPTY, and that made this gate STRUCTURALLY BLIND to
+# B161 for its whole life: it varies only the OVERLAY axis, so "no overlay but a POPULATED .env" —
+# the state where a real operator sits — was unreachable by construction. Three prior sessions
+# worked on this file and none could see it. `render_with_env` adds the missing axis.
+#
+# It uses a THROWAWAY REPO_ROOT rather than writing the operator's real ./.env: this suite must
+# never touch a file that carries live credentials, and creds.sh resolves .env from REPO_ROOT.
+# SKIP_DOTENV is deliberately NOT set here — reading the .env is the entire point of the case.
+render_with_env() {
+  local envbody="$1" sinkbody="${2:-}" t
+  t="$(mktemp -d)"
+  cp .env.example "$t/.env.example"
+  printf '%s' "$envbody" > "$t/.env"
+  [ -n "$sinkbody" ] && printf '%s' "$sinkbody" > "$t/.env.state"
+  # ⚠️ NOT ${OLDPWD}. This file cd's to the repo root at the top, so OLDPWD is whatever directory
+  # the CALLER happened to be in — the repo root when you run the script by hand, something else
+  # under run-test-set.sh. That made these cases silently render NOTHING and fail on the greps while
+  # the product was correct: the instrument, not the product. Capture the root explicitly.
+  # ⚠️ VKS_STATE_FILE MUST BE REDIRECTED INTO $t TOO, and this is the whole reason these cases first
+  # came back red against a CORRECT product. This file exports ONE shared sink (line ~54) and
+  # `render()` clears it per case; render_with_env did not, so it INHERITED whatever the previous
+  # case had published. creds.sh then saw _have_sink=1, never reached the DEFAULT arm, and the
+  # source split it exists to test could not fire. Point the sink at $t and the case is hermetic in
+  # both axes — overlay AND .env — which is the point of adding the second axis at all.
+  ( cd "$t" && REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" CREDS_TOKEN=1 \
+      "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )
+  rm -rf "$t"
+}
 
 # ---- STATE 1: nothing installed. Every value is a default; the output must SAY SO. -------------------
 out="$(render "")"
@@ -263,7 +295,68 @@ else
 fi
 exec 9>&-; rm -f "$_fifo"
 
-printf '\nSUCCESS — creds-show tells the truth in every state (nothing installed / no ingress /\n         fully installed / UNSTAMPED overlay = the real-lab state / stamped-and-matching)\n'
+# ---- STATE 6 (B161): NO OVERLAY, but a POPULATED .env — where a real operator actually sits. ---------
+# The runbooks tell the operator to set HARBOR_URL/HARBOR_PASSWORD by hand BEFORE installing
+# (02-env.sh:177), and .env survives a lab rebuild. So this state holds values that may be live OR
+# left over from a destroyed lab — and they are BYTE-IDENTICAL on screen, which is why creds-show
+# must answer SOURCE and never claim FRESHNESS in either direction.
+# The fixture value is deliberately LOW-ENTROPY and self-describing. The first version used a
+# realistic 16-char random string, to look like what env-populate generates, and gitleaks flagged it
+# (leaks found: 1) — correctly: a committed file carrying a credential-shaped high-entropy token is
+# exactly what that gate exists for. The code under test only asks whether .env holds an uncommented
+# KEY= assignment, so the VALUE is irrelevant to what this case proves. Do not make it realistic.
+out="$(render_with_env 'HARBOR_URL=192.168.101.130
+HARBOR_PASSWORD=fixture-value-not-a-real-secret
+')"
+if printf '%s' "$out" | grep -q 'env-populated: 1'; then
+  ok "B161: a populated .env is DETECTED (env-populated: 1)"
+else
+  bad "B161: a populated .env is NOT detected" "the source split cannot fire, so the false footnote below still ships"
+fi
+# THE HIGH FINDING. The old footnote asserted every value came from .env.example and that none of
+# them exists. HARBOR_PASSWORD is COMMENTED in .env.example (measured: uncommented=0), so that claim
+# is not merely vague — it is checkably FALSE, about a value that may be a live credential.
+if printf '%s' "$out" | grep -q 'None of them exists'; then
+  bad "B161: it still claims 'None of them exists' over values that came from .env" \
+      "a reader who checks that claim finds it false, and treats a live credential as a placeholder"
+else
+  ok "B161: it does NOT claim the values are non-existent placeholders"
+fi
+if printf '%s' "$out" | grep -qi 'from YOUR .env'; then
+  ok "B161: it names the real SOURCE (.env) instead of asserting freshness"
+else
+  bad "B161: it does not name .env as the source" "source is the only question answerable offline"
+fi
+if printf '%s' "$out" | grep -q 'env-validate'; then
+  ok "B161: it points at the one thing that SETTLES it (make env-validate authenticates for real)"
+else
+  bad "B161: no referral to env-validate" "telling a reader a value is unconfirmable without saying how to confirm it is half a message"
+fi
+# It must NEVER say STALE: on the documented real-lab flow that label is FALSE, and it would send an
+# operator to rotate a working credential.
+if printf '%s' "$out" | grep -qi '\bstale\b'; then
+  bad "B161: it labels the values STALE" "freshness is NOT computable here — .env carries no cluster stamp"
+else
+  ok "B161: it never claims the values are STALE (that is not knowable offline)"
+fi
+
+# ---- STATE 7: the CONSTRAINT — an EMPTY .env must keep the original wording, unchanged. -------------
+# The fix adds an ARM; it must not reword the genuinely-empty case, which the assertions at the top
+# of this file pin. A fresh clone with no .env is a real persona and "these are placeholders" is TRUE
+# for them.
+out="$(render_with_env '')"
+if printf '%s' "$out" | grep -qiE 'NOTHING IS INSTALLED YET|are a default'; then
+  ok "an EMPTY .env still gets the original placeholders wording (the fix is additive)"
+else
+  bad "an EMPTY .env lost the original wording" "the fix rewrote an arm it was supposed to leave alone"
+fi
+if printf '%s' "$out" | grep -q 'env-populated: 0'; then
+  ok "an EMPTY .env reports env-populated: 0"
+else
+  bad "an EMPTY .env does not report env-populated: 0" "the discriminator cannot tell the two states apart"
+fi
+
+printf '\nSUCCESS — creds-show tells the truth in every state (nothing installed / no ingress /\n         fully installed / UNSTAMPED overlay = the real-lab state / stamped-and-matching /\n         NO overlay but a POPULATED .env = where a real operator sits)\n'
 else
   printf '\ncreds-show FAILED the truth check above.\n' >&2
 fi
