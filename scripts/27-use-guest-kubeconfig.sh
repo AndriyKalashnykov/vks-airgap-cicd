@@ -63,29 +63,63 @@ CTX="$(timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl --kubeconfig "$KC" config curr
 
 [ -f "$ENV_FILE" ] || die "no ${ENV_FILE} — run 'make env-init' first (it copies .env.example)."
 
-# Idempotent upsert. `.env` is read by BOTH `make -include` and a shell `source`, so every value must
-# stay bare KEY=VALUE — no quotes, no spaces around `=`. These three values contain none.
-# Mode is preserved by writing THROUGH the existing file rather than replacing it: a fresh file
-# would be created at the caller's umask, and .env carries credentials.
-_upsert() {                                  # _upsert <key> <value>
-  local k="$1" v="$2" tmp
-  tmp="$(mktemp)"
-  grep -v "^[[:space:]]*${k}=" "$ENV_FILE" > "$tmp" || true
-  printf '%s=%s\n' "$k" "$v" >> "$tmp"
-  cat "$tmp" > "$ENV_FILE"                   # NOT mv: preserves .env's own mode and ownership
-  rm -f "$tmp"
-}
-
-_upsert KUBECONFIG      "$KC"
-_upsert VKS_CONTEXT     "$CTX"
-# §3 set this to 'vcf' to reach the SUPERVISOR; from here every command targets the GUEST. Left on
-# 'vcf', Step 7 silently checks the Supervisor and reports problems that are true of it and
+# WRITE ALL THREE, THEN ASSERT ALL THREE (B138). These keys are a SELECTOR TRIPLE: they are only
+# meaningful together, so they must move together.
+#
+# The old `_upsert` wrote only `.env`. All three are ALSO `state_set` by `05-kind-up.sh`
+# (:104/:109/:110), and `load_env` sources the state overlay — and legacy `.env.kind` — AFTER `.env`.
+# So on a box carrying either, the write was a NO-OP with a log line: the script announced the guest
+# kubeconfig while every later command still targeted the OLD cluster. That is a silently-wrong
+# selector, the worst failure mode this repo has.
+#
+# ⚠️ WHY NOT ONE `env_publish` PER KEY — an implementation round MEASURED the regression. `env_publish`
+# is write+clear+assert for ONE key, and it returns non-zero when the value does not take effect. Under
+# `set -euo pipefail`, three of them in a row means key #1 can ABORT the script, leaving keys #2 and #3
+# unwritten: `VKS_AUTH_METHOD` stays `vcf`, i.e. the "stop talking to the Supervisor" switch that the
+# OLD code did flip — while `.env` now shows `KUBECONFIG=<guest>`, so the operator reading the file
+# believes the switch happened. That is strictly worse than the no-op it replaced. Two phases keep
+# `_upsert`'s all-or-nothing write AND add the gate.
+#
+# The comment this replaces claimed every value must stay "bare KEY=VALUE — no quotes". That is no
+# longer true: `set_env_var` single-quotes a value containing a space or `$`. Verified safe here —
+# `grep -n '\$(KUBECONFIG)\|\$(VKS_CONTEXT)\|\$(VKS_AUTH_METHOD)' Makefile` returns ZERO, so none of
+# the three is make-expanded, and a quoted value still round-trips through `source`.
+_KEYS=(KUBECONFIG VKS_CONTEXT VKS_AUTH_METHOD)
+# §3 set VKS_AUTH_METHOD to 'vcf' to reach the SUPERVISOR; from here every command targets the GUEST.
+# Left on 'vcf', Step 7 silently checks the Supervisor and reports problems that are true of it and
 # irrelevant to your cluster.
-_upsert VKS_AUTH_METHOD kubeconfig
+_VALS=("$KC" "$CTX" kubeconfig)
 
-log_info "wrote to ${ENV_FILE}:"
+# Phase 1 — write every key and clear every overlay pin BEFORE asserting anything, so a failure
+# cannot strand a half-superseded triple.
+# ⚠️ RESIDUAL, named not hidden: `state_unset` has no ownership guard, so on a sink stamped for a
+# DIFFERENT cluster it strips these keys without archiving — even though `state_check` would decline
+# to source that sink. Bounded (per-key; passwords survive; `05-kind-up.sh` rewrites them next run)
+# and filed rather than fixed here: the guard belongs in `state_unset`, which has other callers.
+for _i in 0 1 2; do
+  set_env_var "${_KEYS[$_i]}" "${_VALS[$_i]}" "$ENV_FILE"
+  state_unset "${_KEYS[$_i]}" || true
+done
+
+# Phase 2 — assert all three, collect every failure, die ONCE with the whole picture.
+_bad=""
+for _i in 0 1 2; do
+  assert_env_effective "${_KEYS[$_i]}" "${_VALS[$_i]}" "the GUEST cluster selector" \
+    || _bad="${_bad} ${_KEYS[$_i]}"
+done
+[ -z "$_bad" ] || die "the guest selector did NOT take effect for:${_bad}
+  All three were written to ${ENV_FILE} and their state-overlay pins cleared, so a HIGHER-precedence
+  file is still winning — each line above names the file that wins. Fix those, then re-run; every
+  later step targets a cluster until this is coherent."
+
+log_info "wrote to ${ENV_FILE} (and cleared any state-overlay pin on these keys):"
 log_info "  KUBECONFIG=${KC}"
 log_info "  VKS_CONTEXT=${CTX}"
 log_info "  VKS_AUTH_METHOD=kubeconfig"
 log_info "NOW RE-SOURCE IT, or this shell keeps the SUPERVISOR kubeconfig that Step 3 exported:"
 log_info "  set -a; . ./.env; set +a"
+# ⚠️ The assert above proves no FILE shadows these values. It CANNOT see the KUBECONFIG you exported
+# at §3: `assert_env_effective` unsets the key before re-reading, which is exactly what makes it a
+# valid FILE test and exactly what blinds it to the ENVIRONMENT. Measured: with KUBECONFIG exported to
+# the Supervisor, the assert returns 0 while a child process still resolves the Supervisor. Only
+# re-sourcing displaces that — the line above is not redundant.
