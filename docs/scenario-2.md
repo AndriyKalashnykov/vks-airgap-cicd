@@ -131,17 +131,29 @@ namespaces, or ask the platform team for the values):
 The Supervisor puts each installed service in its own namespace, named `svc-<service>-<id>` — the
 `<id>` is generated, so you read it rather than guess it. These two commands find yours:
 
+⚠️ **These read the SUPERVISOR, and you have just been told to put the GUEST kubeconfig at
+`./secrets/vks.kubeconfig`.** Run them against the guest and you get empty results — exactly the trap
+this document warns about two tables up. So they name the Supervisor kubeconfig explicitly rather
+than trusting whatever `kubectl` currently points at, and they say plainly when you do not have one:
+
 ```bash
-err=$(mktemp)
-all_ns=$(kubectl get ns -o name 2>"$err" | sed 's|namespace/||')
-HARBOR_NS=$(printf '%s\n' "$all_ns" | grep '^svc-harbor-' | head -1)
-ARGOCD_NS=$(printf '%s\n' "$all_ns" | grep '^svc-argocd-service-' | head -1)
-echo "Harbor: ${HARBOR_NS:-NOT FOUND}   ArgoCD: ${ARGOCD_NS:-NOT FOUND}"
-[ -s "$err" ] && echo "the cluster said: $(tail -1 "$err")"
-rm -f "$err"
+set -a; . ./.env; set +a
+SUP="${VKS_SUPERVISOR_KUBECONFIG:-./secrets/supervisor.kubeconfig}"
+if [ -s "$SUP" ]; then
+  err=$(mktemp)
+  all_ns=$(kubectl --kubeconfig "$SUP" get ns -o name 2>"$err" | sed 's|namespace/||')
+  HARBOR_NS=$(printf '%s\n' "$all_ns" | grep '^svc-harbor-' | head -1)
+  ARGOCD_NS=$(printf '%s\n' "$all_ns" | grep '^svc-argocd-service-' | head -1)
+  echo "DISCOVERY: Harbor: ${HARBOR_NS:-NOT FOUND}   ArgoCD: ${ARGOCD_NS:-NOT FOUND}"
+  [ -s "$err" ] && echo "the cluster said: $(tail -1 "$err")"
+  rm -f "$err"
+else
+  echo "DISCOVERY: no Supervisor kubeconfig at $SUP — ask the platform team for the two svc-* namespace names"
+fi
 ```
 
-**Expect:** two namespace names, each ending in a generated id — the line reads `ArgoCD: svc` and then the id.
+**Expect:** a line starting `DISCOVERY:` — either the two namespace names, each ending in a generated
+id, or the sentence telling you to ask for them. Both are real answers; only silence is not.
 
 `NOT FOUND` has **three** different causes, and the line beginning *"the cluster said"* — printed
 only when there was an error — tells you which. Read it before you ask anyone for anything:
@@ -158,12 +170,19 @@ That last row is the common one on a fresh jump box: without a kubeconfig, `kube
 Now read their LoadBalancer addresses:
 
 ```bash
-kubectl -n "$HARBOR_NS" get svc -o jsonpath='{range .items[?(@.spec.type=="LoadBalancer")]}{.metadata.name}{"  "}{.status.loadBalancer.ingress[0].ip}{"\n"}{end}'
-kubectl -n "$ARGOCD_NS" get svc argocd-server -o jsonpath='{.status.loadBalancer.ingress[0].ip}{"\n"}'
+if [ -s "$SUP" ] && [ -n "${HARBOR_NS:-}" ]; then
+  echo "DISCOVERY: harbor LBs:"
+  kubectl --kubeconfig "$SUP" -n "$HARBOR_NS" get svc -o jsonpath='{range .items[?(@.spec.type=="LoadBalancer")]}{.metadata.name}{"  "}{.status.loadBalancer.ingress[0].ip}{"\n"}{end}'
+  echo "DISCOVERY: argocd LB:"
+  kubectl --kubeconfig "$SUP" -n "$ARGOCD_NS" get svc argocd-server -o jsonpath='{.status.loadBalancer.ingress[0].ip}{"\n"}'
+else
+  echo "DISCOVERY: skipping the LB read — ask the platform team for the Harbor and ArgoCD addresses"
+fi
 ```
 
-**Expect:** Harbor's entry is `harbor-nginx` followed by an IP, and ArgoCD prints a bare IP. Those two
-addresses are what you put in `HARBOR_URL` and `ARGOCD_SERVER` below.
+**Expect:** a line starting `DISCOVERY:` — either Harbor's `harbor-nginx` entry followed by an IP and
+ArgoCD's bare IP, or the sentence telling you to ask for them. Those two addresses are what you put in
+`HARBOR_URL` and `ARGOCD_SERVER` below.
 
 **Request grants from the platform team:**
 
@@ -302,7 +321,13 @@ already sent you that file, save it there and go straight to the check at the en
 Otherwise ask Harbor for it:
 
 ```bash
-make fetch-harbor-ca     # reads HARBOR_URL, writes HARBOR_CA_FILE
+set -a; . ./.env; set +a
+CA="${HARBOR_CA_FILE:-./secrets/harbor-ca.crt}"
+if [ -s "$CA" ]; then
+  echo "already have it at $CA — not re-fetching (this is the branch for a file you were sent)"
+else
+  make fetch-harbor-ca   # reads HARBOR_URL, writes HARBOR_CA_FILE
+fi
 ```
 
 Many shared Harbors do not send it, and then this stops and tells you so:
