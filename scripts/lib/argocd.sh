@@ -314,13 +314,28 @@ argocd_admin_password() {
   # kubectl PROMPTS — writing "Please enter Username: " to STDOUT — and that text base64-decodes
   # to a few bytes of garbage, which [ -n "$pw" ] happily accepts. The caller then reports a 401
   # as "the credential was rejected" for a Secret it never read. Deny it a stdin and it cannot ask.
-  # 2>&1 (not 2>/dev/null) so the NotFound/Forbidden text survives to be classified below.
+  #
+  # ⚠️ STDERR GOES TO A FILE, NEVER TO STDOUT. An earlier version used `2>&1` "so the
+  # NotFound/Forbidden text survives to be classified" — which merged the DIAGNOSTIC into the
+  # PAYLOAD. MEASURED against real kubectl v1.36.3: one server `Warning:` response header (the
+  # KEP-1693 mechanism ANY admission webhook or deprecated-API path emits) is concatenated in front
+  # of the base64 on a SUCCESSFUL read, `base64 -d` emits partial garbage, `|| true` keeps it, and
+  # the value is stamped `source=secret`. The caller then prints "the CREDENTIAL was rejected — the
+  # address and the anchor are FINE" about a password that is CORRECT — sending the operator to
+  # rotate a working credential, i.e. the exact failure this module exists to remove, reproduced by
+  # its own fix. A 15-char password became 5 chars of garbage with kubectl exiting 0.
+  local _errf _errtxt=""
+  _errf="$(mktemp)" || { printf '%s' "${ARGOCD_ADMIN_PASSWORD:-}"; return 0; }
   out="$(kubectl --kubeconfig "$kc" -n "$ns" get secret argocd-initial-admin-secret \
-           -o jsonpath='{.data.password}' </dev/null 2>&1)" || rc=$?
+           -o jsonpath='{.data.password}' </dev/null 2>"$_errf")" || rc=$?
+  _errtxt="$(cat "$_errf" 2>/dev/null || true)"; rm -f "$_errf"
 
   if [ "$rc" -eq 0 ]; then
     case "$out" in
-      *'Please enter'*|*'error:'*) rc=1 ;;   # belt-and-braces: a prompt that escaped despite </dev/null
+      # The payload must be PURE base64. Anything else means something that is not the secret
+      # reached stdout, and a partial decode is worse than no decode: it yields a plausible-looking
+      # wrong password that the caller then blames.
+      ''|*[!A-Za-z0-9+/=]*) rc=1 ;;
       *) pw="$(printf '%s' "$out" | base64 -d 2>/dev/null || true)" ;;
     esac
   fi
@@ -331,9 +346,17 @@ argocd_admin_password() {
     # A READ FAILURE and an ABSENT SECRET are different facts with different remedies. Collapsing
     # them is what made the old message prescribe ARGOCD_ADMIN_PASSWORD to an operator whose
     # kubeconfig was simply broken — which would have "passed" the check on a fabricated password.
-    case "$out" in
-      *NotFound*|*'not found'*) printf 'source=none rc=%s reason=absent\n'     "$rc" > "$diag" ;;
-      *)                        printf 'source=none rc=%s reason=unreadable\n' "$rc" > "$diag" ;;
+    # Classify on the DIAGNOSTIC ($_errtxt), never on the payload. And a missing NAMESPACE is NOT
+    # an absent Secret: a bare *NotFound* match reported `namespaces "argocd" not found` as
+    # "the Secret is ABSENT (the read SUCCEEDED)" — two false claims at once (the read did not
+    # succeed; the Secret is not what is missing) — and then prescribed ARGOCD_ADMIN_PASSWORD, the
+    # one remedy this check must never offer on an unread path. Highly reachable: ARGOCD_NAMESPACE
+    # defaults to `argocd` while on a real VKS lab ArgoCD is a Supervisor Service elsewhere.
+    case "$_errtxt" in
+      *'namespaces "'*'" not found'*) printf 'source=none rc=%s reason=nons\n'       "$rc" > "$diag" ;;
+      *NotFound*secret*|*'secrets "'*'" not found'*)
+                                      printf 'source=none rc=%s reason=absent\n'     "$rc" > "$diag" ;;
+      *)                              printf 'source=none rc=%s reason=unreadable\n' "$rc" > "$diag" ;;
     esac 2>/dev/null || true
     chmod 0600 "$diag" 2>/dev/null || true
   else
@@ -390,6 +413,12 @@ argocd_curl_tls_init() {
 # a command substitution is a SUBSHELL, so a global assigned in here CANNOT reach the caller — that
 # is a rule this repo already learned the hard way. Read them with `argocd_session_last`.
 argocd_session_token() {
+  # Clear FIRST — symmetric with argocd_admin_password. A write that FAILS (unwritable existing
+  # file, full/RO TMPDIR) would otherwise leave the PREVIOUS run's pair to answer for this one.
+  # MEASURED on this code: a planted `rc=0 http=200` + an unwritable file turned a genuine
+  # CONNECTION REFUSED into "answered 200 but the body carried no token — a response-shape
+  # change" — the exact stale-evidence bug this module exists to fix.
+  rm -f "$(_argocd_session_diag_path)" 2>/dev/null || true
   local server="$1" pw="$2" resolve="${3:-}" out="" rv=() code="000" rc=0
   [ -n "$resolve" ] && rv=(--resolve "$resolve")
   out="$(ARGOCD_ADMIN_PW="$pw" jq -nc '{username:"admin", password:env.ARGOCD_ADMIN_PW}' \

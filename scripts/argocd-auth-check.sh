@@ -47,7 +47,7 @@ bad()  { say "$1" "$2"; fail=1; }
 # read the Secret without it, and its absence otherwise produced the same 'NOT AVAILABLE' message
 # as a genuinely-absent Secret -- which then prescribes ARGOCD_ADMIN_PASSWORD, i.e. tells the
 # operator to make the check 'pass' on a password it never verified against anything.
-require_cmd jq curl kubectl
+require_cmd jq curl kubectl   # variadic since lib/os.sh was fixed — it used to check only the FIRST
 
 echo
 echo "════════ argocd auth check — does the ADMIN credential really authenticate? ════════"
@@ -93,6 +93,9 @@ _pw_src="$(argocd_password_last)"; _pw_src="${_pw_src#source=}"; _pw_src="${_pw_
 _pw_why="$(argocd_password_last)"; _pw_why="${_pw_why##*reason=}"; case "$_pw_why" in *' '*|source=*|'') _pw_why="" ;; esac
 if [ -z "$pw" ]; then
   case "$_pw_why" in
+    nons)
+      bad "admin password" "the NAMESPACE '${NS}' does not exist on this cluster (so the Secret was never looked for)"
+      say "  what to check" "ARGOCD_NAMESPACE. On a real VKS lab ArgoCD is a Supervisor Service and does NOT live in '${NS}' — this is the most common cause. Do NOT set ARGOCD_ADMIN_PASSWORD to get past it." ;;
     unreadable)
       bad "admin password" "COULD NOT BE READ — kubectl failed against ns '${NS}' (not: the Secret is missing)"
       say "  what to check" "the kubeconfig, its context, and whether it may read Secrets in '${NS}'. Do NOT set ARGOCD_ADMIN_PASSWORD to get past this — that makes the check pass on a password nothing verified." ;;
@@ -119,24 +122,33 @@ fi
 # Class denominator at the time: 2 production callers of argocd_session_token, 1 polled first.
 if [ -n "$pw" ] && [ "$fail" -eq 0 ]; then
   _ready=0
-  for _ in $(seq 1 "${ARGOCD_READY_ATTEMPTS:-30}"); do
+  # A non-numeric or negative value makes `seq` yield ZERO iterations, silently disabling the poll
+  # this check calls the leading cause of certification row 1's failure. Measured: `abc` -> 0, `-1`
+  # -> 0, `3 4` -> 0; the message then reads "after abc attempts".
+  _att="${ARGOCD_READY_ATTEMPTS:-30}"
+  case "$_att" in ''|*[!0-9]*|0) _att=30 ;; esac
+  for _ in $(seq 1 "$_att"); do
     # F9: without a status test ANY reply counts as "answering" — a 404, or an Envoy's
     # "503 no healthy upstream", breaks the loop and reports readiness during the exact race
     # this poll exists to wait out. F8: honour the scheme hook the session path already honours,
     # or this reports "did NOT answer" against a live stub while the session below returns 401.
     _hc="$(curl -s "${ARGOCD_CURL_TLS[@]}" -o /dev/null -w '%{http_code}' --max-time 3 \
              "${ARGOCD_SESSION_SCHEME:-https}://${srv}/healthz" 2>/dev/null || true)"
-    if [ "$_hc" = 200 ]; then
+    if [ "$_hc" != 000 ]; then
       _ready=1; break
     fi
     sleep "${ARGOCD_READY_INTERVAL_SECONDS:-2}"
   done
   if [ "$_ready" = 1 ]; then
-    say "endpoint" "answering on https://${srv}/healthz"
+    # ANY status means the endpoint is answering — the poll's job is to wait out a refused or
+    # reset connection (the K1.5 race), not to assert that /healthz is routed. Requiring 200 made a
+    # perfectly serving ArgoCD under --rootpath print "did NOT answer" one line above "a session
+    # token was ISSUED", telling the reader to discount a PASS printed beneath it.
+    say "endpoint" "answering on ${ARGOCD_SESSION_SCHEME:-https}://${srv}/healthz (HTTP ${_hc})"
   else
     # NOT a die: this check is read-only and its job is to REPORT. Saying the endpoint never
     # answered is itself the diagnosis, and it must not be confused with a credential verdict.
-    say "endpoint" "did NOT answer /healthz after ${ARGOCD_READY_ATTEMPTS:-30} attempts — anything below is about an endpoint that is not serving"
+    say "endpoint" "did NOT answer /healthz after ${_att} attempts — anything below is about an endpoint that is not serving"
   fi
   tok="$(argocd_session_token "$srv" "$pw")"
   if [ -n "$tok" ]; then
