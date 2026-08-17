@@ -647,24 +647,33 @@ not. Row 5's single failure is block `[24] make install-all` → `configure-argo
 `B148` records the correction: **#745 will not green these rows.** Their cause is in the OTHER repo —
 `nested-vsphere-lab/scripts/walk-matrix.sh` supplied `ARGOCD_SERVER=<IP>` and then pinned the
 server's own chain as the CLI's CA, constructing the one combination that can never verify (no IP
-SAN). That is **nvl #75, MERGED**. #745 is the doc + discriminator half in this repo, still blocked.
+SAN). ⚠️ **nvl #75 is MERGED but its entire diff is `docs/BACKLOG.md +1/-0` — it RECORDS that
+diagnosis and changes NO CODE. `walk-matrix.sh` is untouched, so rows 5+6 remain blocked on a fix
+nobody has written yet.** (Verified 2026-08-17. An earlier version of this handoff listed #75 among
+the session's fixes, which is how "the cause is merged" came to read as "the cause is fixed" — the
+task list carried the correct wording and this file did not.) #745 is the doc + discriminator half
+in this repo, and it **MERGED** at 17:29Z.
 
 Lab-verified on cut B, on the real server: the cert is self-signed with
 `DNS:localhost, DNS:argocd-server, DNS:argocd-server.cicd, …` and **no IP SAN**; the bare IP with the
 correct CA fails, the bare SAN `argocd-server` with the same CA returns **200**, and with no CA it
 fails *self-signed certificate*. So the CA is **required**, not optional.
 
-### Blocked on the outage, not on us
+### The outage is OVER and the queue is EMPTY — verified 2026-08-17
 
-GitHub is in a **Partial System Outage**. Open: **#745** (F9 doc+discriminator), **#751** (`changes`
-job via `git diff`), **#752** (`neutralize()` per-arm reasons), **#753** (`make argocd-auth-check`),
-**#741** (trivy bump). Every failure is a schema/CDN fetch — jsdelivr serving 000 for kubeconform CRD
-schemas and a rate-limited `raw.githubusercontent` in `check-gwapi-istio-alignment`. **Nothing in
-those PRs is at fault.** `KUBECONFORM_REQUIRE_SCHEMAS=1` / `GWAPI_REQUIRE_FETCH=1` are deliberate
-fail-closed gates — do **not** weaken them to get green.
+**Every PR this section used to list as outage-blocked is MERGED**: #741 (trivy), #745 (F9
+doc+discriminator), #750 (B148 lab-verified), #751 (`changes` via `git diff`), #752 (`neutralize()`
+per-arm reasons), #753 (`make argocd-auth-check`), #770, #773, #774, plus nvl #75 (docs only — see
+above) and nvl #76 (walk log permissions; 13 credential-bearing logs were world-readable). `main` is
+at `ce3af21`. **Open right now: #775 only** (the B26 lab measurement), and **zero** open in
+nested-vsphere-lab.
 
-Merged this session: **#750** (B148 lab-verified), **nvl #75** (the rows-5/6 cause), **nvl #76**
-(walk log permissions — 13 credential-bearing logs were world-readable).
+Two things worth carrying forward from the outage rather than forgetting with it. **GraphQL and REST
+are separate paths**: `gh pr merge` was 503 for hours while `gh api -X PUT .../pulls/N/merge`
+worked — reach for REST before concluding you are blocked. And the fail-closed gates it exposed were
+**working**: `KUBECONFORM_REQUIRE_SCHEMAS=1` and `GWAPI_REQUIRE_FETCH=1` reddened those PRs on a
+jsdelivr 000 and a rate-limited `raw.githubusercontent` fetch, which is the behaviour they exist for.
+Do **not** weaken them to get green.
 
 ### Distrust these
 
