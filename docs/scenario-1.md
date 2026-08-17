@@ -629,10 +629,10 @@ Harbor that was already there.
 make harbor-admin-password
 ```
 
-**Expect:** `wrote HARBOR_USERNAME and HARBOR_PASSWORD to ./.env` — the normal case here, because
-Step 4 told you to leave `HARBOR_PASSWORD` unset. If a working Harbor credential is already in your
-`./.env` — you installed Harbor yourself in Step 4, or you were handed one — it prints
-`already authenticates` instead and leaves it alone.
+**Expect:** `already authenticates` if the credential already in your .env works, otherwise `wrote HARBOR_USERNAME and HARBOR_PASSWORD to ./.env`.
+Step 4 told you to leave `HARBOR_PASSWORD` unset, so on a Harbor that was already there the second
+is the normal case. You see the first if you installed Harbor yourself in Step 4, or were handed a
+working credential — it is left alone either way.
 
 It reads the password out of the Harbor service's own secret and **proves it against Harbor before
 writing anything**. It never replaces a credential that already works, so it is safe to re-run — and
