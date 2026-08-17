@@ -53,13 +53,25 @@ run() {
           return 0 ;;
       esac
       printf 'read\n' >> "$WITNESS"
+      # ⚠️ THESE STUBS MODEL ARGO-CD, NOT THIS IMPLEMENTATION. The previous version's `fresh` stub
+      # advanced reconciledAt whenever an annotate had happened — which, per argo-cd v3.5.1's
+      # source, is EXACTLY the state of an app whose repo is UNREACHABLE, and the suite asserted it
+      # must PASS. A forced refresh is a Level-3 comparison, and Level 3 disables the repo-error
+      # short-circuit (state.go:700-712), so reconciledAt advances and .status.sync.revision holds
+      # the BRANCH NAME (state.go:653-655) even when nothing was fetched.
       case " $* " in
         *reconciledAt*)
           case "$STUB_MODE" in
-            stale)   printf '2026-01-01T00:00:00Z' ;;      # NEVER advances
-            fresh)   if [ -s "$WITNESS" ] && grep -q '^annotate$' "$WITNESS"; then printf '2026-06-06T12:00:00Z'; else printf '2026-01-01T00:00:00Z'; fi ;;
-            *)       printf '2026-01-01T00:00:00Z' ;;
+            stale)  printf '2026-01-01T00:00:00Z' ;;
+            *)      if [ -s "$WITNESS" ] && grep -q '^annotate$' "$WITNESS"; then printf '2026-06-06T12:00:00Z'; else printf '2026-01-01T00:00:00Z'; fi ;;
           esac
+          return 0 ;;
+        *ComparisonError*)
+          # unreachable_real: the fetch FAILED, so argo-cd appends a ComparisonError (state.go:699)
+          case "$STUB_MODE" in unreachable_real) printf 'rpc error: failed to get git client for repo http://this-host-does-not-exist.invalid:3000/demo/testapp-deploy.git' ;; esac
+          return 0 ;;
+        *sync.status*)
+          case "$STUB_MODE" in unreachable_real) printf 'Unknown' ;; *) printf 'Synced' ;; esac
           return 0 ;;
       esac
       case "$STUB_MODE" in
@@ -67,6 +79,7 @@ run() {
         nocrd)    echo 'error: the server doesn'"'"'t have a resource type "application"' >&2; return 1 ;;
         empty)    printf '' ;;
         condfail) case " $* " in *conditions*) echo 'Error from server (Forbidden): cannot read conditions' >&2; return 1 ;; esac; printf '' ;;
+        unreachable_real) printf 'main' ;;                  # the BRANCH NAME - what argo-cd leaves after a FAILED fetch
         *)        printf 'staleSHA1234' ;;                  # a revision that PERSISTS from an earlier run
       esac
       return 0
@@ -100,6 +113,24 @@ case "$out" in *RC=0*) ok "a fresh reconcile reports success" ;;
   *) bad "a fresh reconcile reports success" "got: ${out:0:170}" ;; esac
 case "$out" in *"re-reconciled after a forced refresh"*) ok "...and says what the evidence WAS" ;;
   *) bad "it names its evidence" "got: ${out:0:170}" ;; esac
+
+echo "== THE DECISIVE CASE: argo-cd's REAL unreachable-repo state must NOT pass =="
+# This is the property; everything else in this file is scaffolding. Per argo-cd v3.5.1, an app
+# whose repo cannot be reached, AFTER A FORCED REFRESH, presents as:
+#     reconciledAt ADVANCED  ·  sync.revision = the BRANCH NAME (non-empty)
+#     sync.status  = Unknown ·  a ComparisonError condition
+# Two previous versions of this check asserted exactly that state was SUCCESS. MEASURED then:
+# "re-reconciled ... reports revision main - the repo is reachable NOW", rc=0, against
+# this-host-does-not-exist.invalid.
+W="$(mktemp)"; out="$(run unreachable_real "$W")"; rm -f "$W"
+case "$out" in *RC=0*) bad "argo-cd's real unreachable state must NOT report success" "reconciledAt advances on a forced refresh even when the fetch failed - that is the whole trap" ;;
+  *) ok "argo-cd's real unreachable state does NOT report success" ;; esac
+case "$out" in *"is reachable NOW"*) bad "it must not claim reachability" "the fetch demonstrably failed" ;;
+  *) ok "it does NOT claim the repo is reachable" ;; esac
+case "$out" in *"FETCH FAILED"*) ok "it names the FETCH as what failed, not the reconcile" ;;
+  *) bad "it names the fetch" "got: ${out:0:190}" ;; esac
+case "$out" in *ComparisonError*|*"failed to get git client"*) ok "it surfaces argo-cd's OWN ComparisonError message" ;;
+  *) bad "it surfaces the ComparisonError" "got: ${out:0:190}" ;; esac
 
 echo
 echo "== a REFUSED refresh is an RBAC fault and must not be swallowed =="
