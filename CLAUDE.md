@@ -601,7 +601,7 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-17 08:20 EDT — run 5b: rows 1+2 GREEN first-pass, row 5 RED on F9; cut B walking
+## ▶️ HANDOFF 2026-08-17 — run 5b: the harness verdict is **MATRIX FAILED**. 4 of 6 green, rows 5+6 red
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
@@ -613,58 +613,58 @@ run on throwaway Photon and Ubuntu VMs. **All six rows green FROM THE FIRST GO**
 over the FINAL tree passing on its FIRST pass. Every fix resets that clock. Verify `creds-show`
 endpoints and logins after every lab cut, driving Chrome where an HTTP probe is not proof.
 
-### Run 5b — `run-20260817T111000Z-2933129`, over the FIXED tree
-
-| row | result |
-|---|---|
-| 1 · ubuntu · NOTHING | **GREEN** — 41 blocks: 34 ran, **0 FAILED**, 7 skipped · 22 CHECKABLE, **0 UNMET** |
-| 2 · photon · EXISTS | **GREEN** — 41 blocks: 29 ran, **0 FAILED**, 12 skipped · 18 CHECKABLE, **0 UNMET** |
-| 5 · photon · scenario-2 | **RED, one block** — 25 blocks: 17 ran, **1 FAILED**, 8 skipped · 7 CHECKABLE, **0 UNMET** |
-| 3, 4, 6 | walking on the cut-B lab (rebuild started 12:15:10Z) |
-
-**Both fixes hold on a real lab.** Row 1's log at `:847` shows the TOOL writing
-`VKS_K8S_VERSION=v1.35.5+vmware.1-vkr.1  (newest Ready+Compatible)` — no `(doc: setting …)` line,
-no *"already pinned … NOT overwriting it"* warning, and the cluster was **created** where run 4 was
-denied. Run 3's row 1 had **1 FAILED**; it is now 0.
-
-⚠️ Note v1.35.5 is the very version run 4 was *denied* on. That is the fix working as designed: the
-tool resolves at **use** time against current reality, and a photon OSImage for v1.35.5 exists now
-where it did not at run-4 time (images land minutes after a cut).
-
-### Row 5's single failure is F9 — the one already-known blocker
-
-Block `[24] make install-all` → `configure-argocd`, rc=1, after 1133 s:
+### Run 5b — `run-20260817T111000Z-2933129` — READ THE VERDICT FILE, NOT A SUMMARY
 
 ```text
-WARN  the argocd API probe FAILED TO ANSWER (STALE_CA) — this is NOT a denial.
-FATAL ARGOCD_MECHANISM=api, but the argocd API probe DID NOT ANSWER (STALE_CA).
-        * the ADDRESS  — ARGOCD_SERVER must be a name or IP the server's certificate actually carries
-        * the ANCHOR   — ARGOCD_CA_FILE (make fetch-argocd-ca) must be the CA that signed it
+MATRIX FAILED (6 of 6 designed rows requested) — row(s) 5 6 (scenario-2; did not gate
+the rebuild) did not complete  (14:34:19Z)
 ```
 
-argocd-server (effective) was **192.168.101.133**. This is task **#76 / F9**, not a new defect, and
-the failure message is doing its job — it names a TRANSPORT fault, says it is not a permissions one,
-and orders the two knobs (address first, then anchor).
+⚠️ **A previous version of this handoff said "run 5b COMPLETE" and listed rows 3/4/6 as still
+walking. Both were wrong** — cut B finished, and the authoritative artifact says FAILED. All six
+rows DO reach `WALK DONE`, so "did not complete" is the harness's wording for *did not complete
+successfully*; it is not a claim that a row never ran. Per row, from each log's own lines:
 
-⚠️ **I could not measure the certificate**, and the reason is worth recording so nobody repeats it:
-every probe of `192.168.101.{132,133,134,135,136}` from the hypervisor host timed out, and I briefly
-concluded *"the lab's LB IPs are not reachable from the host"*. **That conclusion is unsupported** —
-the driver had begun tearing the lab down at 12:15:10Z, seconds before the probes. The axis was
-timing, not routing. F9 must be measured from **inside** the lab (the walkbox), on a live cut.
+| row | OS | scen | blocks | FAILED | UNMET | |
+|---|---|---|---|---|---|---|
+| 1 | ubuntu | s1 | 41: 34 ran, 7 skipped | **0** | **0** | GREEN |
+| 2 | photon | s1 | 41: 29 ran, 12 skipped | **0** | **0** | GREEN |
+| 3 | photon | s1 | 41: 34 ran, 7 skipped | **0** | **0** | GREEN |
+| 4 | ubuntu | s1 | 41: 29 ran, 12 skipped | **0** | **0** | GREEN |
+| 5 | photon | s2 | 25: 17 ran, 8 skipped | **1** | 0 | RED |
+| 6 | ubuntu | s2 | 25: 17 ran, 8 skipped | **4** | **1** | RED |
 
-### The rebuild guard — correcting this handoff's own previous claim
+**All four scenario-1 cells passed first-pass over the fixed tree** — that is the real result, and
+it is the first time both OSes have gone green in the same run.
 
-The last handoff said *"`walk-matrix.sh:847` refuses to rebuild when any row failed"*. That was true
-of run 3 (where row **1** failed) and it is **under-specified**, which is what made me expect a
-refusal here. The code is explicit:
+**F9 reproduced IDENTICALLY on both scenario-2 rows** (`STALE_CA` ×3 in each). But do NOT read the
+two rows as symmetric: row 6 carries **three further failures and an unmet Expect** that row 5 does
+not. Row 5's single failure is block `[24] make install-all` → `configure-argocd`, rc=1 after
+1133 s, `argocd-server (effective): 192.168.101.133`.
 
-- `FAILED_ROWS` — rows **1 and 2** only. They walk the *same document* rows 3-4 walk, so their
-  failure genuinely predicts a cut-B failure. A failure here **does** refuse the rebuild.
-- `S2_FAILED_ROWS` — rows **5 and 6**, tracked separately and deliberately **not** gating. Its
-  comment records that on 2026-08-16 the old behaviour meant *"rows 3 and 4 NEVER WALKED"*
-  (`MATRIX-row4-ubuntu.log` was 0 bytes).
+### What actually fixes rows 5+6 — and it is NOT #745
 
-So run 5b proceeding to cut B after a red row 5 is **correct**, not a guard failure.
+`B148` records the correction: **#745 will not green these rows.** Their cause is in the OTHER repo —
+`nested-vsphere-lab/scripts/walk-matrix.sh` supplied `ARGOCD_SERVER=<IP>` and then pinned the
+server's own chain as the CLI's CA, constructing the one combination that can never verify (no IP
+SAN). That is **nvl #75, MERGED**. #745 is the doc + discriminator half in this repo, still blocked.
+
+Lab-verified on cut B, on the real server: the cert is self-signed with
+`DNS:localhost, DNS:argocd-server, DNS:argocd-server.cicd, …` and **no IP SAN**; the bare IP with the
+correct CA fails, the bare SAN `argocd-server` with the same CA returns **200**, and with no CA it
+fails *self-signed certificate*. So the CA is **required**, not optional.
+
+### Blocked on the outage, not on us
+
+GitHub is in a **Partial System Outage**. Open: **#745** (F9 doc+discriminator), **#751** (`changes`
+job via `git diff`), **#752** (`neutralize()` per-arm reasons), **#753** (`make argocd-auth-check`),
+**#741** (trivy bump). Every failure is a schema/CDN fetch — jsdelivr serving 000 for kubeconform CRD
+schemas and a rate-limited `raw.githubusercontent` in `check-gwapi-istio-alignment`. **Nothing in
+those PRs is at fault.** `KUBECONFORM_REQUIRE_SCHEMAS=1` / `GWAPI_REQUIRE_FETCH=1` are deliberate
+fail-closed gates — do **not** weaken them to get green.
+
+Merged this session: **#750** (B148 lab-verified), **nvl #75** (the rows-5/6 cause), **nvl #76**
+(walk log permissions — 13 credential-bearing logs were world-readable).
 
 ### Distrust these
 
@@ -673,24 +673,24 @@ So run 5b proceeding to cut B after a red row 5 is **correct**, not a guard fail
   read each row's `WALK DONE`/`DOCUMENT` lines plus the **"N of 6 designed rows"** denominator —
   never the exit code, never the completion notification.
 - **Do NOT edit `scripts/walk-matrix.sh` while a matrix runs.** bash reads a script incrementally;
-  rewriting it mid-run yields `unexpected EOF` that reads as a product bug. Two operator-visible
-  banners (`cutting a second lab for rows 3-4`, and the `WALK_SKIP_REBUILD=1` one) still say
-  "rows 3-4" when cut B is rows 3, **4 and 6** — a wrong denominator, filed rather than edited.
+  rewriting it mid-run yields `unexpected EOF` that reads as a product bug.
 - **`static-check` still does not run per-PR** — only `static-check-fast` (23 gates) does, and
   `ci-pass` asserts it; `sec` and the slow test tier wait for the weekly schedule. Run
   `env -u GOROOT make static-check` locally before every merge.
+- **`/tmp/walk` was world-readable for 8 days** (now 0700, and fixed at the source in nvl #76). If
+  you cite a row log, remember 13 of them carried a live-at-capture admin password.
 
 ### Blocked, and on what
 
-- **B133 (CRITICAL)** — the vCenter SSO **administrator** password goes to an unverified peer; the
-  only credential-bearing TLS client here with no trust ladder. BLOCKED on **one lab measurement**
-  (step 24 of `docs/lab-validation-plan.md`) and **two operator decisions** named in the row. Its
-  idea round refuted four of five specifics of the obvious fix and caught a new CRITICAL that fix
-  would have introduced. Do not implement before both.
+- **B133 (CRITICAL)** — the vCenter SSO **administrator** password goes to an unverified peer.
+  BLOCKED on one lab measurement (step 24 of `docs/lab-validation-plan.md`) and **two operator
+  decisions** named in the row. Its idea round refuted four of five specifics of the obvious fix.
 - **B145 (HIGH)** — the Expect checker truncates a multi-line paragraph to its first line; 26 of 43
-  paragraphs affected, independently re-measured. **Land it only AFTER a run certifies the tree** —
-  it will surface previously-invisible UNMETs.
-- **B101** — re-measured (150 candidates, 21 load-bearing); its re-scoping needs a RULE ZERO round.
+  paragraphs affected. **Land it only AFTER a run certifies the tree** — it will surface
+  previously-invisible UNMETs.
+- **B153** — the redaction design was REFUTED (shape-keying misses 3 of 4 printers); the answer is
+  value-keyed at `walk-doc.sh:587` **plus** printer-side, because the ArgoCD initial password is
+  read fresh from a Secret and never lands in a file the harness holds.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 

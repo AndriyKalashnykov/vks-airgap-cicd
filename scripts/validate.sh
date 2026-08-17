@@ -85,10 +85,21 @@ kc() {
     kubeconform "${KC_LOCS[@]}" -cache "$KC_CACHE" -kubernetes-version "$KUBERNETES_VERSION" "$@"
     return $?
   fi
-  local out ec invalid errors
+  local out ec invalid errors valid skipped total
   out="$(kubeconform "${KC_LOCS[@]}" -output json -summary -cache "$KC_CACHE" -kubernetes-version "$KUBERNETES_VERSION" "$@" 2>/dev/null)"; ec=$?
   invalid="$(printf '%s' "$out" | jq -r '[.resources[]? | select(.status=="statusInvalid")] | length' 2>/dev/null)"
   errors="$(printf '%s'  "$out" | jq -r '[.resources[]? | select(.status=="statusError")]   | length' 2>/dev/null)"
+  # valid and skipped are read SEPARATELY because `total` folds skipped in (below) and the
+  # "all schemas resolvable" claim used to be printed over them. MEASURED 2026-08-17 with real
+  # kubeconform v0.8.0: a CRD kind against an empty local location yields
+  # {valid:0, invalid:0, errors:0, skipped:1}, and this function printed
+  #   "1 resource(s) validated, all schemas resolvable (Invalid=0)"
+  # -- i.e. it claimed to have validated the one resource it had SKIPPED. `-ignore-missing-schemas`
+  # turns a miss into `skipped` with errors:0, so KUBECONFORM_REQUIRE_SCHEMAS=1 never fired on it.
+  valid="$(printf '%s'   "$out" | jq -r '(.summary.valid   // 0)' 2>/dev/null)"
+  skipped="$(printf '%s' "$out" | jq -r '(.summary.skipped // 0)' 2>/dev/null)"
+  case "$valid"   in ''|*[!0-9]*) valid=0   ;; esac
+  case "$skipped" in ''|*[!0-9]*) skipped=0 ;; esac
   # THE DENOMINATOR. Without it this gate can validate ZERO resources and print OK — measured by
   # an adversary round 2026-08-10: with no network, 8 of 8 kubeconform invocations validated
   # nothing and `validate: OK` was printed, rc=0. Counting only the FAILURES (invalid/errors) is
@@ -121,6 +132,14 @@ kc() {
   # erroring" is not a network condition — it means the input list matched no resources (a glob
   # that stopped matching, a renamed dir, an empty kustomize render). That is a real defect and
   # the one case where silence is worse than a red.
+  # ⚠️ THIS GUARD CANNOT SEE AN ALL-SKIPPED DIRECTORY, because `total` above FOLDS `skipped` in.
+  # MEASURED 2026-08-17 with a stub kubeconform emitting {valid:0,invalid:0,errors:0,skipped:5}:
+  # rc=0 and `validate: OK`, EVEN UNDER KUBECONFORM_REQUIRE_SCHEMAS=1 — zero resources examined,
+  # past a guard whose own prose below says "this gate cannot pass by not looking". Reachable in
+  # production: k8s/argocd/ measured `0 validated, 1 skipped, 0 unfetchable, of 1`.
+  # The count that means "examined" is (valid + invalid), NOT total. Closing this changes PASS/FAIL
+  # and must not land before genuinely unvalidatable kinds are declared explicitly (see B156/#88),
+  # or every dir of uncatalogued CRDs reds at once. Disclosed here rather than silently left.
   if [ "$total" -eq 0 ] && [ "$errors" -eq 0 ]; then
     log_error "kubeconform: examined ZERO resources and reported no errors — the inputs matched"
     log_error "  nothing. This gate cannot pass by not looking. Check the paths it was given:"
@@ -139,14 +158,25 @@ kc() {
     # are KUBECONFORM_SCHEMA_K8S / _CRD.)
     if [ "${KUBECONFORM_REQUIRE_SCHEMAS:-0}" = 1 ]; then
       log_error "kubeconform: $errors of $total resource(s) could not have their schema downloaded, and"
+      log_error "  ($valid validated, $skipped skipped with NO SCHEMA — also not checked.)"
       log_error "  KUBECONFORM_REQUIRE_SCHEMAS=1 (CI sets this). Those resources were NOT validated;"
       log_error "  passing here would report OK over work the gate did not do. Inputs: $*"
       return 1
     fi
     log_warn "kubeconform: $errors of $total resource(s) could not have their schema downloaded (CDN/registry unreachable) — those were NOT validated; not failing the gate (Invalid=0)"
+    log_warn "  ($valid validated, $skipped skipped with NO SCHEMA — also not checked, so do not read total-minus-errors as verified.)"
     log_warn "  (CI sets KUBECONFORM_REQUIRE_SCHEMAS=1 so this path is a FAILURE there, not a skip.)"
+  elif [ "$skipped" -gt 0 ]; then
+    # NOT "validated". A skipped resource had no schema to check it against, so saying otherwise
+    # is the passes-by-not-looking failure this function's own denominator comment exists to close,
+    # one level down: the denominator was right and `skipped` was counted as work done.
+    log_warn "kubeconform: $valid validated, $skipped skipped (NO SCHEMA - not checked), 0 unfetchable, of $total resource(s)"
+    log_warn "  a skipped resource is UNVERIFIED, not clean. Declare genuinely unvalidatable kinds"
+    log_warn "  with -skip <GVK> so a MISSING schema stays distinguishable from an EXEMPT one."
+    log_warn "  (KUBECONFORM_REQUIRE_SCHEMAS=1 does NOT cover this path — unlike the download-failure"
+    log_warn "   branch above, which it turns into a FAILURE. Do not read CI green as gating skips.)"
   else
-    log_info "kubeconform: $total resource(s) validated, all schemas resolvable (Invalid=0)"
+    log_info "kubeconform: $total resource(s) validated, all schemas resolvable (Invalid=0, Skipped=0)"
   fi
   return 0
 }
