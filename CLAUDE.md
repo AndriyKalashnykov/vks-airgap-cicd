@@ -601,80 +601,82 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-17 05:30 EDT — run 3 is OVER; the lab for run 4 is REBUILDING; 6 rows are owed
+## ▶️ HANDOFF 2026-08-17 07:15 EDT — run 4 FAILED, root-caused and FIXED; run 5b is walking
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
 ### The job, unchanged
 
-Rebuild the walkthrough matrix for scenario-1 **and** scenario-2, both as end-user documents. Rows
-run on throwaway Photon and Ubuntu VMs. **All six rows green FROM THE FIRST GO** — a fresh matrix
-over the FINAL tree passing on its FIRST pass. Every fix resets that clock. Verify `creds-show`
-endpoints and logins after every lab cut, driving Chrome where an HTTP probe is not proof.
+Rebuild the walkthrough matrix for scenario-1 **and** scenario-2, both as end-user documents, on
+throwaway Photon and Ubuntu VMs. **All six rows green FROM THE FIRST GO** — a fresh matrix over the
+FINAL tree passing on its FIRST pass. Every fix resets that clock. Verify `creds-show` endpoints and
+logins after every cut, driving Chrome where an HTTP probe is not proof.
 
-### Run 3's result, and why only half of it ran
+### Run 4 — 0 of 6 rows certified, ONE root cause
 
-Run 3 = `run-20260817T061515Z-1427190`, over the PRE-fix tree.
+Row 1: 41 blocks, 34 ran, **8 FAILED**. Row 2 then **REFUSED** (only 3 of 4 present), row 5 was
+**UNRUNNABLE**, and the matrix **correctly** refused the rebuild — so rows 3/4/6 never walked. Row 2's
+and row 5's failures are consequences, not independent faults.
 
-| row | result |
-|---|---|
-| 1 · ubuntu · NOTHING | 41 blocks: 34 ran, **1 FAILED**, 7 skipped · 22 CHECKABLE, **0 UNMET** |
-| 2 · photon · EXISTS | 41 blocks: 29 ran, **0 FAILED**, 12 skipped · 18 CHECKABLE, **0 UNMET** |
-| 5 · photon · scenario-2 | reached §6 `make install-all` |
-| 3, 4, 6 | **NEVER WALKED** |
+`make vks-cluster-create` was denied by the `tkr-resolver` webhook:
+*Missing compatible KR/OSImage · `{k8sVersionPrefix: v1.35.5+vmware.1-vkr.1, osImageSelector: os-name=photon}`*.
 
-**Rows 3/4/6 did not run, and that was CORRECT.** `walk-matrix.sh:847` refuses to rebuild the lab
-when any row failed — *"a rebuild cannot fix a row that failed before it walked … the lab is left
-ALONE so the failure can still be diagnosed."* Row 1 failed, so the run exited after cut A. Do not
-fight that guard. Its one real defect — it exited without writing the per-run VERDICT file, so the
-evidence dir said nothing — is FIXED (nvl #69); the refusal path now records what it refused and why.
+⚠️ **The obvious reading is WRONG and cost me a wrong diagnosis first.** `v1.35.5` **is**
+`Ready=True Compatible=True` — the version exists. The discriminator is the **OSImage**: measured on the
+lab, photon images exist for **v1.34.8 (1)** and **not** for v1.35.5 **(0)** or v1.35.2 **(0)**. So
+`make vks-k8s-version` was **right** — B116's OSImage predicate picked the newest release that actually
+has a photon image — and a **doc illustration** overrode it.
 
-Row 1's single failure was real and is FIXED: `.env.state` pinned `HARBOR_USERNAME`, so §9's robot
-identity could never take effect (B132 → `env_publish` clears the pin, vks #707, 7/7 RED-proven).
+`scenario-1.md:420`'s value cell held `v1.35.5` as an EXAMPLE, while that same row says *"`make
+vks-k8s-version` writes it"* and `:428` says *"You do not copy that value anywhere"*. `walk-doc.sh`
+copies table values into `./.env`, so the harness did exactly what the document forbids; the tool then
+correctly refused to overwrite an operator pin, and admission denied the cluster.
 
-### Run 4 — the sequence
+**FIXED in #736 — the value cell is now EMPTY**, which is the only spelling the extractor ignores.
+Measured: `discovered` and `-` are **still written** (a more baffling denial), and `(discovered)` prints
+*"set it BY HAND"*, contradicting `:428`.
+
+### Run 5b — LIVE, do not re-dispatch
+
+`run-20260817T111001Z`, log `/tmp/matrix5b.log`, monitor `b06uwx1vj`. Row 1 accepted the cell
+(`ns=0 harbor=0 argocd=0 cluster=0`). Tree: vks main at the #736 fix, `make ci` rc=0.
+
+⚠️ **HOLD every merge touching the WALKED tree while it runs** — `scripts/`, `docs/scenario-*`,
+`Makefile`, `k8s/`, `apps/`. If main moves under the matrix, later rows walk a different tree than
+earlier ones and the run stops certifying ONE tree. `BACKLOG.md` / `CLAUDE.md` / `docs/reviews/` /
+`docs/decisions/` are safe.
+
+**Read the result from** the per-invocation VERDICT file + each row's `WALK DONE`/`DOCUMENT` lines + the
+*"N of 6 designed rows"* denominator. **Never** the exit code, **never** the notification.
+
+### If the cell is dirty before a run
+
+`make walk-reset CONFIRM=yes` returns the lab to NOTHING-EXISTS in ~1 min instead of a 40-minute
+rebuild — but ⚠️ **it returns while the `svc-*` namespaces are still Terminating**, and the very next
+`walk-matrix` then observes `argocd=1` and refuses every row (this cost run 5 its first launch; filed as
+nvl **B445**). Before dispatching, confirm with the matrix's OWN predicate:
 
 ```sh
-cd ~/projects/nested-vsphere-lab && make destroy CONFIRM=yes && make lab
-make trust-vcsa && make kubectl-login          # ← still required; see below
-WALK_REPO=~/projects/vks-airgap-cicd VCF_CLI_SRC_DIR=~/Downloads/vcf \
-  WALK_ROWS="1 2 3 4 5 6" make walk-matrix
+kubectl get ns --no-headers | awk '{print $1}' | grep -E 'svc-argocd-service-|svc-harbor-|^cicd$'   # must be EMPTY
+kubectl get ns --no-headers | awk '$2!="Active"'                                                     # must be EMPTY
 ```
-
-⚠️ **`make destroy` RENAMES the kubeconfig away and `make lab` does NOT log in** (its own summary
-says *"Run: make kubectl-login"*). Skipping it no longer produces a 900 s misdiagnosis — B131 landed
-(nvl #68), so `_require_supervisor_auth` runs at all 4 call sites and the harness now says *"I could
-not ask"* out loud instead of reading it as *"no TKr exists"*. It still fails; it just tells you why.
-**The `python3 /tmp/walk-matrix-auth-before-tkr.py` step from the previous handoff is MERGED — do not
-re-apply it.**
-
-Two more preconditions: `assert_repo_published` refuses a WALK_REPO that is dirty **or ahead of
-origin/main**, and the SSO account locks out **PERMANENTLY after 3 failed attempts** — never loop a
-login (`kubectl-login` already refuses rather than spend one).
 
 ### Distrust these
 
+- **A stale log will lie.** Cite the per-invocation `VERDICT-<runid>.txt`, never a fixed path.
 - **`git diff --name-only v1.0.1..origin/main`** is the only honest answer to "is main certified?".
-- **A stale log will lie.** Cite the per-invocation `VERDICT-<runid>.txt`, never a fixed path, and
-  read each row's `WALK DONE`/`DOCUMENT` lines plus the **"N of 6 designed rows"** denominator —
-  never the exit code, never the completion notification.
-- **Rows 1 and 2 walked the PRE-fix tree.** Everything merged since is proven hermetically, not on a
-  lab. Run 4 is what proves it.
-- **`static-check` still does not run per-PR** — only `static-check-fast` (23 gates) does, and
-  `ci-pass` asserts it; `sec` and the slow test tier wait for the weekly schedule. Run
-  `env -u GOROOT make static-check` locally before every merge.
+- **`static-check` still does not run per-PR** — only `static-check-fast` does. Run
+  `env -u GOROOT make static-check` locally before merging.
+- **My own measurement scripts had two defects found only by running them** (wrong cluster; a `^harbor`
+  grep that misses VKS's `svc-harbor-*`). Distrust a new instrument before the product.
 
 ### Blocked, and on what
 
-- **B133 (CRITICAL)** — the vCenter SSO **administrator** password goes to an unverified peer; it is
-  the only credential-bearing TLS client here with no trust ladder. BLOCKED on **one lab
-  measurement** (step 24 of `docs/lab-validation-plan.md`: does `secrets/supervisor-ca.crt` also
-  anchor vCenter? — it decides whether 1 block breaks or 4) and **two operator decisions** named in
-  the row. Its idea round refuted four of five specifics of the obvious fix and caught a new CRITICAL
-  that fix would have introduced. Do not implement before both.
-- **B101** — re-measured (150 candidates, 21 load-bearing, several out of scope); its re-scoping is a
-  design decision and needs a RULE ZERO round before any code.
+- **B133 (CRITICAL)** — the vCenter SSO admin password goes to an unverified peer. BLOCKED on one lab
+  measurement + two operator decisions named in the row.
+- **B145 (HIGH)** — the walk's Expect checker truncates multi-line paragraphs (26 of 43). Land it
+  **after** a run certifies the tree; it will surface previously-invisible UNMETs.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
