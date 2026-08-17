@@ -89,10 +89,10 @@ pw=""
 # WHERE the password came from is part of the verdict, not trivia: a 401 only means "the credential
 # was rejected" if a credential was actually READ, and an unreadable Secret can otherwise leave a
 # non-empty garbage value that makes this check exonerate the address and the anchor it never tested.
-PW_SRC="$(argocd_password_last)"; PW_SRC="${PW_SRC#source=}"; PW_SRC="${PW_SRC%% *}"
-PW_WHY="$(argocd_password_last)"; PW_WHY="${PW_WHY##*reason=}"; case "$PW_WHY" in *' '*|source=*|'') PW_WHY="" ;; esac
+_pw_src="$(argocd_password_last)"; _pw_src="${_pw_src#source=}"; _pw_src="${_pw_src%% *}"
+_pw_why="$(argocd_password_last)"; _pw_why="${_pw_why##*reason=}"; case "$_pw_why" in *' '*|source=*|'') _pw_why="" ;; esac
 if [ -z "$pw" ]; then
-  case "$PW_WHY" in
+  case "$_pw_why" in
     unreadable)
       bad "admin password" "COULD NOT BE READ — kubectl failed against ns '${NS}' (not: the Secret is missing)"
       say "  what to check" "the kubeconfig, its context, and whether it may read Secrets in '${NS}'. Do NOT set ARGOCD_ADMIN_PASSWORD to get past this — that makes the check pass on a password nothing verified." ;;
@@ -103,7 +103,7 @@ if [ -z "$pw" ]; then
       bad "admin password" "NOT AVAILABLE (ns '${NS}'), and ARGOCD_ADMIN_PASSWORD is unset" ;;
   esac
 else
-  say "admin password" "read (${#pw} chars) from ${PW_SRC:-unknown} — never printed, never on argv"
+  say "admin password" "read (${#pw} chars) from ${_pw_src:-unknown} — never printed, never on argv"
 fi
 
 # ---- 4. AUTHENTICATE ---------------------------------------------------------------------------
@@ -156,7 +156,7 @@ if [ -n "$pw" ] && [ "$fail" -eq 0 ]; then
     _rc="${_diag#rc=}"; _rc="${_rc%% *}"
     _code="${_diag##*http=}"
     bad "POST /api/v1/session" "NO token (curl rc=${_rc:-?}, HTTP ${_code:-?})"
-    if _why="$(argocd_session_explain "$_rc" "$_code" "$PW_SRC")"; then
+    if _why="$(argocd_session_explain "$_rc" "$_code" "$_pw_src")"; then
       say "  what happened" "$_why"
     else
       # Only HERE is the cause genuinely undetermined, so only here is a hypothesis list honest —
