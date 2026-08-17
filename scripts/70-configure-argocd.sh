@@ -223,8 +223,28 @@ argocd_reconciler_ready() {
 # blackholed endpoint). One probe, one variable, then branch.
 _app_state=skip
 if [ "$argocd_ns_readable" = yes ]; then
+  # PROBE EVERY VERB THE PATH NEEDS, NOT JUST THE FIRST. This asked only for `create`, but the
+  # kubectl path also PATCHES: argocd_await_revision annotates argocd.argoproj.io/refresh=hard, and
+  # that annotate is now a gate rather than fire-and-forget, so a Role with [get,list,create]
+  # selected MECH=kubectl and then died ~500 lines later at the refresh.
+  # ⚠️ It is ADD, not REPLACE: probing `patch` ALONE would regress the mirror case — a
+  # [get,list,patch] Role would select kubectl and then fail to CREATE the Application at all.
   _ra_k="$(k_can_i --kubeconfig "$ARGOCD_KUBECONFIG" --request-timeout=15s \
             auth can-i create applications.argoproj.io -n "$ARGOCD_NAMESPACE")"
+  # BOTH verbs, because the path needs both and either one alone is a different late failure:
+  # without `create` it cannot make the Application; without `patch` it dies at the refresh
+  # annotate ~500 lines later. Probe `patch` only when `create` was actually granted, so the
+  # reported state stays the FIRST thing that is missing rather than the last one probed.
+  if [ "${_ra_k%%|*}" = yes ]; then
+    _ra_p="$(k_can_i --kubeconfig "$ARGOCD_KUBECONFIG" --request-timeout=15s \
+              auth can-i patch applications.argoproj.io -n "$ARGOCD_NAMESPACE")"
+    if [ "${_ra_p%%|*}" != yes ]; then
+      log_warn "kubectl may CREATE Applications in '${ARGOCD_NAMESPACE}' but not PATCH them"
+      log_warn "  (auth can-i patch -> ${_ra_p%%|*}). The flow annotates argocd.argoproj.io/refresh=hard"
+      log_warn "  to prove the repo is reachable, so a create-only grant fails at that step, not here."
+      _ra_k="$_ra_p"
+    fi
+  fi
   _app_state="${_ra_k%%|*}"
   [ "$_app_state" = unknown ] && log_warn "the kubectl write probe FAILED TO ANSWER (${_ra_k#*|}) —
   this is NOT a denial. It never reached the cluster, so no RBAC grant will change it. Not
@@ -717,11 +737,28 @@ EOF
 for_each_app configure_app_argocd
 
 # ---- PROVE ArgoCD can actually CLONE the repo ----------------------------------------------------
-# This is the gate that makes a wrong GITEA_ARGOCD_URL impossible to ship green, and it asserts a
-# POSITIVE signal on purpose: "no ComparisonError present" passes trivially on an Application ArgoCD
-# has not reconciled yet (its .status is simply empty). `.status.sync.revision` is only ever set
-# AFTER repo-server successfully fetched the repository — so a non-empty revision is proof of a real
-# clone, not the absence of a complaint.
+# This is the gate that makes a wrong GITEA_ARGOCD_URL impossible to ship green.
+#
+# ⚠️ CORRECTED 2026-08-17 — THIS COMMENT USED TO ASSERT THE OPPOSITE, AND IT WAS MEASURABLY FALSE.
+# It said `.status.sync.revision` "is only ever set AFTER repo-server successfully fetched the
+# repository — so a non-empty revision is proof of a real clone, not the absence of a complaint",
+# and on that basis it argued AGAINST using ComparisonError. Read against argo-cd v3.5.1 (our pin):
+#   state.go:653-655   syncStatus.Revision = spec.source.targetRevision — the BRANCH NAME — is set
+#                      BEFORE any fetch, and state.go:1042-1046 only overwrites it when manifests
+#                      were actually produced. So a FAILED fetch leaves it NON-EMPTY.
+# A non-empty revision is therefore NOT proof of a clone, and three successive versions of this
+# gate reported "the repo is reachable" against a host that does not exist because of it.
+#
+# The objection to ComparisonError ("passes trivially on an Application not yet reconciled") is real
+# but is answered by CONJUNCTION rather than by dropping the signal: argocd_await_revision requires
+# BOTH that the app reconciled (reconciledAt ADVANCED past a pre-refresh reading) AND that the fetch
+# succeeded (no ComparisonError, sync.status != Unknown). An unreconciled Application fails the
+# first half, so the trivial-pass case cannot arise.
+#
+# And reconciledAt alone is not sufficient either, for a reason specific to what this gate does:
+# forcing a refresh selects a Level-3 comparison, and Level 3 is exactly where argo-cd DISABLES its
+# repo-error short-circuit (state.go:700-712, gated `&& !noRevisionCache`), so the timestamp
+# advances even when the repo could not be read. Neither signal works alone; both together do.
 ARGOCD_REPO_TIMEOUT_SECONDS="${ARGOCD_REPO_TIMEOUT_SECONDS:-180}"
 if [ "$MECH" = request ]; then
   log_warn "nothing was applied (mechanism=request) — rendered the Applications to ${OUT_DIR#"${REPO_ROOT}/"}/ instead."
