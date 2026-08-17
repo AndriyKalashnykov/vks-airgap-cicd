@@ -43,6 +43,20 @@ t KUBECONFIG_UNUSABLE 'error: error loading config file "/x": yaml: line 3: mapp
 # carries both phrases. MEASURED: both of these classified KUBECONFIG_UNUSABLE before the patterns
 # were anchored on kubectl's config vocabulary.
 t FORBIDDEN    "Error from server (Forbidden): namespaces is forbidden; open /gone: no such file or directory"
+# kubectl TRANSLATES a 401 — its stderr contains neither "Unauthorized" NOR "401", so the arm that
+# catches it (lib/os.sh, the `You must be logged in to the server` arm) is invisible to every other
+# case in this file. It had ZERO cases pinning it: the arm existed, was correct, and nothing would
+# have gone red if someone deleted it. That is the shape this whole file exists to prevent — an
+# ordering held in place by prose alone.
+#
+# Both phrasings are pinned because the arm matches EITHER, and a future edit could drop one while
+# the other keeps the suite green. The exact text is kubectl's own, measured against a server
+# returning HTTP 401 with body {"reason":"Unauthorized","code":401}.
+t UNAUTHORIZED 'error: You must be logged in to the server (Unauthorized)'
+t UNAUTHORIZED 'error: You must be logged in to the server (the server has asked for the client to provide credentials)'
+# And the inversion that makes this arm load-bearing: kubectl's translated 401 carries NO numeric
+# token, so the anchored-`401` arm below it cannot catch it — the two are complementary, not
+# redundant. Dropping either leaves a real 401 classified UNKNOWN.
 t UNAUTHORIZED "error: You must be logged in to the server; open /gone: no such file or directory"
 
 # NO_KUBE_TARGET — kubectl NEVER HAD A TARGET. ⚠️ THIS IS WHY KUBECONFIG_UNUSABLE ALONE WAS NOT
