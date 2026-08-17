@@ -287,7 +287,7 @@ at a kind cluster that is not there. Delete it **before you start**:
 
 ```bash
 make state-show       # WHOSE state is this? (prints the cluster it was written for; redacts secrets)
-make kind-down        # ONLY if you ran the local KinD flow on this box — deletes the state it wrote
+make kind-down        # safe on ANY box: it removes only state the KinD flow stamped as its own
 ```
 
 The state overlay is **`.env.state`** (not `.env.kind` — that was renamed; a legacy `.env.kind` is still
