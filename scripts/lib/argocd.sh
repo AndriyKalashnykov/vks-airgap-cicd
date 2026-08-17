@@ -296,13 +296,56 @@ argocd_kubeconfig_stale_reason() {
 
 # argocd_admin_password <kubeconfig> <namespace> — echo the ArgoCD admin password, or nothing.
 # stdout is the RETURN VALUE; every diagnostic goes to stderr (os.sh's _log writes to >&2).
+_argocd_pw_diag_path() { printf '%s' "${ARGOCD_PW_DIAG:-${TMPDIR:-/tmp}/.argocd-pw-diag.$(id -u)}"; }
+
+# argocd_password_last — read back HOW the last argocd_admin_password call obtained its value.
+# Prints "source=secret|env|none rc=N [reason=absent|unreadable|empty]". A FILE, not a global,
+# because the caller uses pw="$(argocd_admin_password ...)" — a SUBSHELL, which a global cannot escape.
+argocd_password_last() { cat "$(_argocd_pw_diag_path)" 2>/dev/null || true; }
+
 argocd_admin_password() {
-  local kc="$1" ns="$2" pw=""
-  pw="$(kubectl --kubeconfig "$kc" -n "$ns" get secret argocd-initial-admin-secret \
-         -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  local kc="$1" ns="$2" pw="" out="" rc=0 diag
+  diag="$(_argocd_pw_diag_path)"
+  # Clear FIRST. A surviving file from a previous run would let the caller name THIS run's cause
+  # from the LAST run's evidence — a fresh instance of the very bug this module exists to fix.
+  rm -f "$diag" 2>/dev/null || true
+
+  # </dev/null is LOAD-BEARING, not hygiene. With a kubeconfig whose user has no credentials,
+  # kubectl PROMPTS — writing "Please enter Username: " to STDOUT — and that text base64-decodes
+  # to a few bytes of garbage, which [ -n "$pw" ] happily accepts. The caller then reports a 401
+  # as "the credential was rejected" for a Secret it never read. Deny it a stdin and it cannot ask.
+  # 2>&1 (not 2>/dev/null) so the NotFound/Forbidden text survives to be classified below.
+  out="$(kubectl --kubeconfig "$kc" -n "$ns" get secret argocd-initial-admin-secret \
+           -o jsonpath='{.data.password}' </dev/null 2>&1)" || rc=$?
+
+  if [ "$rc" -eq 0 ]; then
+    case "$out" in
+      *'Please enter'*|*'error:'*) rc=1 ;;   # belt-and-braces: a prompt that escaped despite </dev/null
+      *) pw="$(printf '%s' "$out" | base64 -d 2>/dev/null || true)" ;;
+    esac
+  fi
+
+  if [ -n "$pw" ]; then
+    ( umask 077; printf 'source=secret rc=0\n' > "$diag" ) 2>/dev/null || true
+  elif [ "$rc" -ne 0 ]; then
+    # A READ FAILURE and an ABSENT SECRET are different facts with different remedies. Collapsing
+    # them is what made the old message prescribe ARGOCD_ADMIN_PASSWORD to an operator whose
+    # kubeconfig was simply broken — which would have "passed" the check on a fabricated password.
+    case "$out" in
+      *NotFound*|*'not found'*) printf 'source=none rc=%s reason=absent\n'     "$rc" > "$diag" ;;
+      *)                        printf 'source=none rc=%s reason=unreadable\n' "$rc" > "$diag" ;;
+    esac 2>/dev/null || true
+    chmod 0600 "$diag" 2>/dev/null || true
+  else
+    ( umask 077; printf 'source=none rc=0 reason=empty\n' > "$diag" ) 2>/dev/null || true
+  fi
+
   # The secret is DELETED once an admin rotates the password (upstream behaviour), so an operator
   # override is a legitimate second source, not a fallback for laziness.
-  [ -n "$pw" ] || pw="${ARGOCD_ADMIN_PASSWORD:-}"
+  if [ -z "$pw" ] && [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]; then
+    pw="${ARGOCD_ADMIN_PASSWORD}"
+    ( umask 077; printf 'source=env rc=0\n' > "$diag" ) 2>/dev/null || true
+  fi
   printf '%s' "$pw"
 }
 
@@ -334,12 +377,83 @@ argocd_curl_tls_init() {
 # ARGOCD_SESSION_SCHEME exists ONLY so the offline test can point this at a plain-HTTP stub — the
 # curl-gate round's lesson that a check with no way to be tested against a failure class is how the
 # failure class ships. It defaults to https and no caller sets it.
+# ⚠️ IT USED TO DESTROY EVERY DISCRIMINATOR IT NEEDED, AND THAT MIS-DIRECTED A LIVE DIAGNOSIS
+# (certification run row 1, 2026-08-17 — backlog B163). `2>/dev/null || true` plus
+# `jq -r '.token // empty'` threw away BOTH curl's exit code AND the HTTP status, so an HTTP 401, an
+# HTTP 503 from a LoadBalancer with no ready endpoints, a refused connection (rc 7) and a TLS reject
+# all collapsed to the IDENTICAL empty token. The consumer then printed a CLOSED two-item hypothesis
+# list ("the ADDRESS ... the ANCHOR") over a signal that cannot distinguish five causes — and on the
+# run that mattered, NEITHER listed item was live. A reader followed the list to the wrong file.
+#
+# The token still goes to STDOUT ALONE, because callers use `tok="$(argocd_session_token ...)"` and
+# ANY other stdout would be folded into the return value. The diagnostics therefore travel by FILE:
+# a command substitution is a SUBSHELL, so a global assigned in here CANNOT reach the caller — that
+# is a rule this repo already learned the hard way. Read them with `argocd_session_last`.
 argocd_session_token() {
-  local server="$1" pw="$2" resolve="${3:-}" out="" rv=()
+  local server="$1" pw="$2" resolve="${3:-}" out="" rv=() code="000" rc=0
   [ -n "$resolve" ] && rv=(--resolve "$resolve")
   out="$(ARGOCD_ADMIN_PW="$pw" jq -nc '{username:"admin", password:env.ARGOCD_ADMIN_PW}' \
-    | curl -s "${ARGOCD_CURL_TLS[@]}" "${rv[@]}" --max-time "${ARGOCD_SESSION_TIMEOUT:-20}" \
+    | curl -s -w '\n%{http_code}' "${ARGOCD_CURL_TLS[@]}" "${rv[@]}" \
+        --max-time "${ARGOCD_SESSION_TIMEOUT:-20}" \
         -H 'Content-Type: application/json' --data @- \
-        "${ARGOCD_SESSION_SCHEME:-https}://${server}/api/v1/session" 2>/dev/null || true)"
+        "${ARGOCD_SESSION_SCHEME:-https}://${server}/api/v1/session" 2>/dev/null)" || rc=$?
+  # -w appends the code on its own LAST line; strip it back off before parsing the body.
+  code="$(printf '%s' "$out" | tail -n1)"
+  case "$code" in ''|*[!0-9]*) code="000" ;; esac
+  out="$(printf '%s' "$out" | sed '$d')"
+  ( umask 077; printf 'rc=%s http=%s\n' "$rc" "$code" > "$(_argocd_session_diag_path)" ) 2>/dev/null || true
   printf '%s' "$(printf '%s' "$out" | jq -r '.token // empty' 2>/dev/null || true)"
 }
+
+# Where argocd_session_token leaves its diagnostics. A FILE, not a global — see the ⚠️ above.
+_argocd_session_diag_path() {
+  printf '%s' "${ARGOCD_SESSION_DIAG:-${TMPDIR:-/tmp}/.argocd-session-diag.$(id -u)}"
+}
+
+# argocd_session_last — echo `rc=<n> http=<code>` from the most recent argocd_session_token call in
+# this process tree, or `rc= http=` when there is none. Never fails; it is a diagnostic, not a gate.
+argocd_session_last() {
+  local f; f="$(_argocd_session_diag_path)"
+  if [ -s "$f" ]; then cat "$f"; else printf 'rc= http=\n'; fi
+}
+
+# argocd_session_explain <rc> <http> — turn the pair into ONE named cause, or empty when the pair
+# does not determine one. This is what replaces the closed two-item list: the check may only offer
+# "next steps" for causes it has NOT already named.
+argocd_session_explain() {
+  local rc="${1:-}" code="${2:-}" pwsrc="${3:-}"
+  # TRANSPORT IS TESTED FIRST, and the order is the fix. curl can emit a status line and THEN fail:
+  # a server that sends 200 headers and stalls yields rc=28 http=200, which the status-first order
+  # reported as "a response-shape change" — sending the reader to the API format for a TIMEOUT.
+  # A preserved exit status outranks a status line that merely arrived before the failure.
+  case "$rc" in
+    7)  printf 'the CONNECTION WAS REFUSED (curl 7) — nothing is listening yet. Neither the address nor the anchor was consulted'; return 0 ;;
+    6)  printf 'the HOST DID NOT RESOLVE (curl 6) — a DNS fault, not TLS'; return 0 ;;
+    60) printf 'TLS VERIFICATION FAILED (curl 60) — THIS is the address-or-anchor case'; return 0 ;;
+    35) printf 'the TLS HANDSHAKE FAILED (curl 35) — a protocol/cipher fault, not a name or a CA'; return 0 ;;
+    # 52/56 are the documented K1.5 symptom — the LoadBalancer has an IP but its proxy is not wired
+    # yet, so the peer accepts the connection and drops it. Omitting them sent exactly this failure
+    # to the ADDRESS/ANCHOR candidate list, which is the defect this module exists to remove.
+    52|56) printf 'the connection was RESET or closed by the peer with no reply (curl %s) — a half-wired LoadBalancer, NOT a name or a CA. This is the documented K1.5 race' "$rc"; return 0 ;;
+    28) printf 'the request TIMED OUT (curl 28) — the peer accepted nothing in time'; return 0 ;;
+  esac
+  case "$code" in
+    401|403)
+      # A 401 only means "the credential was rejected" if a credential was actually READ. With an
+      # unreadable Secret the check can hold a garbage value and would otherwise exonerate the two
+      # things it never tested.
+      case "$pwsrc" in
+        secret|env) printf 'the CREDENTIAL was rejected by argocd-server (HTTP %s) — the address and the anchor are FINE' "$code" ;;
+        *)          printf 'argocd-server answered HTTP %s, but the password did NOT come from a known source (%s) — do NOT read this as "the credential is wrong"; establish where the password came from first' "$code" "${pwsrc:-unknown}" ;;
+      esac
+      return 0 ;;
+    502|503|504) printf 'argocd-server did NOT serve the request (HTTP %s) — reachable, but no ready backend yet. This is the LoadBalancer race, not a credential or trust fault' "$code"; return 0 ;;
+    200) printf 'argocd-server answered 200 but the body carried no token — a response-shape change, not an address/anchor fault'; return 0 ;;
+    ''|000) : ;;
+    # Any other status still settles the two things the candidate list would have asked about:
+    # the server answered, so the name resolved and the anchor verified.
+    *) printf 'argocd-server ANSWERED (HTTP %s), so the ADDRESS and the ANCHOR are both FINE — but the reply carried no token' "$code"; return 0 ;;
+  esac
+  return 1
+}
+
