@@ -460,7 +460,7 @@ make mirror-verify 2>&1 | tee /tmp/16-mirror-verify.log; echo "EXIT=$?"
 **Why:** we claim a same-Supervisor VKS cluster **auto-trusts** the Harbor cert with no per-node wiring (graded *community*). KinD cannot show it. **If it is false, the next step ImagePullBackOffs** and the remedy rolls your worker nodes.
 **Where:** jump box → **guest cluster**. Schedules one real pod in the guest (then deletes it).
 **Who needs it:** **YOU — this is why it runs before `make platform`.**
-**We then:** upgrade `harbor.md`'s auto-trust claim from *community* to `lab-verified` — **or**, on x509, **promote `trust.additionalTrustedCAs` from a footnote to a required step** in the runbook. If the Cluster CR has no `trust` field at all, we are documenting a field that does not exist and must correct it.
+**We then:** upgrade `harbor.md`'s auto-trust claim from *community* to `lab-verified` — **or**, on x509, **promote `osConfiguration.trust.additionalTrustedCAs` from a footnote to a required step** in the runbook. (The last clause of this step used to read *"if the Cluster CR has no `trust` field at all, we are documenting a field that does not exist"*. **SETTLED 2026-08-17, lab-verified:** the field exists — `osConfiguration.trust.additionalTrustedCAs[].caCert.{content,secretRef}` — but it is published by a CAPI **runtime extension**, so it appears in the ClusterClass's `status.variables` and **never** in `spec.variables`, which is empty on all 12 ClusterClasses. Reading `spec.variables` is what makes it look absent.)
 
 ```bash
 set -a; . ./.env; set +a
@@ -479,7 +479,7 @@ kubectl delete ns trust-probe
 | Event | Means |
 |---|---|
 | `Successfully pulled image` | **auto-trust CONFIRMED** |
-| `x509: certificate signed by unknown authority` | **NO auto-trust** — apply `trust.additionalTrustedCAs` to the Cluster CR **before step 18** |
+| `x509: certificate signed by unknown authority` | **NO auto-trust** — apply `osConfiguration.trust.additionalTrustedCAs` to the Cluster CR **before step 18** |
 | `unauthorized` / `401` | a **credential** problem, not a CA one — set `HARBOR_PUBLIC_PROJECTS` or add the pull secret and re-probe |
 
 **Send back:** the pod STATUS and the **Events** section, verbatim.
