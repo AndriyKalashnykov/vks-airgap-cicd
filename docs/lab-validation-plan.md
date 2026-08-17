@@ -608,7 +608,32 @@ make verify-ingress 2>&1 | tee /tmp/23-verify-ingress.log; echo "EXIT=$?"
 
 > **A proxy image pointing at docker.io/gcr.io ⇒ the auto-provisioned gateway will NOT pull on an air-gapped cluster.** We would have to mirror and override it — a real gap in the design.
 
-### 24. Give you your lab back · OPTIONAL, CHEAP
+### 24. 🎯 Does the SUPERVISOR CA also anchor vCENTER? · CHEAP, READ-ONLY — IT GATES B133 (CRITICAL)
+
+**Why:** `lib/vcenter.sh` sends the vCenter SSO **administrator** password to an unverified peer — `curl -sS -k` at `:48`, and the session token on the same channel at `:73`/`:89`. It is the only credential-bearing TLS client in this repo with no trust ladder at all (Harbor, ArgoCD and the Supervisor all have one). Fixing it needs a CA to verify against, and **this one command decides how big the fix is**:
+
+- `./secrets/supervisor-ca.crt` **also anchors vCenter** → only scenario-1 **Step 2** (`make vsphere-namespace`) runs before a CA exists, so exactly ONE block breaks and the fix is small.
+- it does **not** → all four vCenter blocks break, and a `fetch-vcenter-ca` is needed first. The bundle it would need is **already downloaded** by `fetch-supervisor-ca.sh:33` (`certs/download.zip` is vCenter's FULL root set) and then discarded at `:110-114`, which keeps only the root matching the Supervisor's leaf issuer — so even then the fix is *stop discarding it*, not *add a new fetch*.
+
+B64's row already recorded this as its "cheap unblock" and it has never been run.
+
+**Where:** jump box. Read-only, no credentials, no writes.
+**Who needs it:** US.
+**We then:** either ship the small `_vc_tls` change, or add the vCenter-root extraction first.
+
+```bash
+set -a; . ./.env; set +a
+echo "vCenter leaf issuer:"
+openssl s_client -connect "${VCENTER_HOST}:443" -showcerts </dev/null 2>/dev/null \
+  | openssl x509 -noout -issuer
+echo "supervisor-ca.crt subject:"
+openssl x509 -in ./secrets/supervisor-ca.crt -noout -subject
+```
+
+**Expect:** the two strings are either EQUAL (the anchor already exists) or NOT (a vCenter root must be extracted). Both are useful answers; there is no failure mode here.
+**Send back:** both lines verbatim. Also, one line that settles whether the whole question even applies to your lab — `curl -o /dev/null -sS -w '%{http_code}\n' "https://${VCENTER_HOST}/"` with **no** `-k`: if that returns a code rather than an error, your vCenter serves a publicly-trusted certificate and removing `-k` breaks nothing at all for you.
+
+### 25. Give you your lab back · OPTIONAL, CHEAP
 
 **Why:** nothing above is auto-cleaned, and **step 20 left a durable cluster-admin credential**.
 **Where:** jump box → **guest cluster** and **Supervisor** (deletes only what this run created).
