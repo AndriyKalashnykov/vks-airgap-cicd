@@ -217,6 +217,54 @@ else
   bad "05-kind-up.sh writes state before claiming the sink (claim=${claim_ln:-none} set=${set_ln:-none})"
 fi
 
+# ---- state_show's REDACTOR, both directions (B76 round, finding F7) --------------------------
+# WHY THIS EXISTS: redaction is by NAME PATTERN, so the pattern IS the control and a key whose name
+# is not in it is printed IN FULL. Before this case NOTHING exercised state_show at all. MEASURED
+# against the old three-word list (PASSWORD|TOKEN|SECRET): GPG_PASSPHRASE, GITHUB_PAT and TLS_KEY
+# were printed VERBATIM, and it was adequate only because every credential key in .env.example
+# happens to end in _PASSWORD or _TOKEN — a coincidence our OWN naming rules are set to break
+# (they mandate GPG_PASSPHRASE, not _PASSWORD, and keep GITHUB_PAT deliberately).
+_sink="$tmp/redact.state"
+cat > "$_sink" <<'FIX'
+VKS_STATE_SERVER=https://10.0.0.1:6443
+VKS_STATE_KIND=1
+HARBOR_PASSWORD=sup3rs3cret
+GPG_PASSPHRASE=letmein
+GITHUB_PAT=ghp_notarealtoken
+TLS_KEY=abc123
+ARGOCD_TOKEN=tok
+ARGOCD_PASSWORD_WAIT_SECONDS=30
+SSH_KEY_FILE=/home/op/.ssh/id_ed25519
+HARBOR_URL=10.0.0.9
+FIX
+_out="$(VKS_STATE_FILE="$_sink" state_show 2>&1)"
+
+# Positive control FIRST: if state_show printed nothing, every "not leaked" assertion below would
+# pass vacuously — the exact shape this repo keeps finding in its own gates.
+if printf '%s' "$_out" | grep -q 'HARBOR_URL=10.0.0.9'; then
+  ok "state_show renders the overlay (positive control: a non-secret value is present)"
+else
+  bad "state_show printed nothing usable — every redaction assertion below would pass vacuously"
+fi
+
+for _k in HARBOR_PASSWORD GPG_PASSPHRASE GITHUB_PAT TLS_KEY ARGOCD_TOKEN; do
+  if printf '%s' "$_out" | grep -qE "^\s*${_k}=<redacted>$"; then
+    ok "state_show REDACTS ${_k}"
+  else
+    bad "state_show did NOT redact ${_k} — it is printed in full ($(printf '%s' "$_out" | grep -E "^\s*${_k}=" | head -1))"
+  fi
+done
+# ...and the other direction: over-redaction hides operational values and makes the report useless.
+# The `<WORD>=` anchor is what keeps these safe; they are the cases that break if anyone widens the
+# list to a bare substring match.
+for _k in ARGOCD_PASSWORD_WAIT_SECONDS SSH_KEY_FILE; do
+  if printf '%s' "$_out" | grep -q "${_k}=<redacted>"; then
+    bad "state_show OVER-redacted ${_k} — it is not a secret, and hiding it makes state-show less useful"
+  else
+    ok "state_show does NOT over-redact ${_k}"
+  fi
+done
+
 rm -rf "$tmp"
 if [ "$fail" = 0 ]; then
   echo "test-state-overlay: OK"
