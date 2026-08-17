@@ -221,18 +221,21 @@ done
 #
 # Prefer the CA. Fall back to --insecure only when there is none, and say so LOUDLY — a silent
 # fallback would recreate exactly the blind spot this comment exists to describe.
-if [ -n "${ARGOCD_CA_FILE:-}" ] && [ -s "${ARGOCD_CA_FILE}" ]; then
+# SINGLE-SOURCED 2026-08-17: the branch itself now lives in lib/argocd.sh as
+# argocd_curl_tls_init, so this leg and the operator-facing `make argocd-auth-check` cannot
+# disagree about whether a run verified. The CLI half (--server-crt) stays here because only the
+# CLI needs it; curl speaks --cacert and gets it from the shared array.
+argocd_curl_tls_init
+_e2e_curl_tls=("${ARGOCD_CURL_TLS[@]}")
+if [ "$ARGOCD_TLS_MODE" = verified ]; then
   export ARGOCD_OPTS="--server-crt ${ARGOCD_CA_FILE}"
   log_info "argocd TLS: VERIFYING against ${ARGOCD_CA_FILE} (this leg covers the operator's path)"
   _e2e_tls="--server-crt ${ARGOCD_CA_FILE}"
-  # curl speaks --cacert, not --server-crt. Derived HERE, from the SAME branch, so the CLI and the
-  # raw session call cannot disagree about whether this run verifies. They used to: the session
-  # curl below was `-k` UNCONDITIONALLY while this branch had the CA in hand 26 lines earlier —
-  # and that call carries the ArgoCD ADMIN password.
-  _e2e_curl_tls=(--cacert "${ARGOCD_CA_FILE}")
+  # (the curl form is taken from ARGOCD_CURL_TLS above — one derivation, two consumers. They used
+  # to disagree: the session curl below was `-k` UNCONDITIONALLY while this branch had the CA in
+  # hand 26 lines earlier — and that call carries the ArgoCD ADMIN password.)
 else
   export ARGOCD_OPTS="--insecure"
-  _e2e_curl_tls=(-k)
   log_warn "argocd TLS: NOT VERIFIED (--insecure) — no ARGOCD_CA_FILE. This leg therefore does NOT
   cover the trust-anchor path, which is the one that fails on a real lab. To close that gap:
   make fetch-argocd-ca, then re-run with ARGOCD_CA_FILE set."
@@ -254,10 +257,11 @@ for _ in $(seq 1 60); do
   # so any local user could read it — 60 times over ~2 minutes, because this is a retry loop.
   # The curl half was already correct (`--data @-`, body on stdin); only the jq half leaked.
   # `env.NAME` is jq's documented way to read the environment. Verified the JSON is identical.
-  admin_jwt="$(ARGOCD_ADMIN_PW="$admin_pw" jq -nc '{username:"admin", password:env.ARGOCD_ADMIN_PW}' \
-    | curl -s "${_e2e_curl_tls[@]}" --max-time 5 -H 'Content-Type: application/json' --data @- \
-        "https://${argocd_lb}/api/v1/session" 2>/dev/null \
-    | jq -r '.token // empty' 2>/dev/null || true)"
+  # SINGLE-SOURCED: argocd_session_token (lib/argocd.sh) carries the argv-safety AND the JSON
+  # escaping. It reads ARGOCD_CURL_TLS, which _e2e_curl_tls above is a copy of. Its own offline
+  # test (test-argocd-session.sh) RED-proves that a password containing " or \ round-trips, which
+  # a printf-built body silently corrupts.
+  admin_jwt="$(ARGOCD_SESSION_TIMEOUT=5 argocd_session_token "$argocd_lb" "$admin_pw")"
   [ -n "$admin_jwt" ] && break
   sleep 2
 done
