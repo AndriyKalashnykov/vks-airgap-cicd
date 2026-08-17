@@ -442,12 +442,46 @@ export ARGOCD_NAMESPACE ARGOCD_TRACK_BRANCH ARGOCD_DEST_SERVER ARGOCD_PROJECT AR
 TOKEN=""
 [ -f "${REPO_ROOT}/secrets/gitea-ci-token" ] && TOKEN="$(cat "${REPO_ROOT}/secrets/gitea-ci-token")"
 APPS_APPLIED=""
-WORK_DIR="$(mktemp -d)"; trap 'rm -rf "$WORK_DIR"' EXIT
+WORK_DIR="$(mktemp -d)"; trap 'rm -rf "$WORK_DIR"; rm -f "${_ac_err:-}" "${_aw_err:-}"' EXIT   # ⚠️ the two argocd stderr captures are registered HERE too. On every `die` path their own `rm -f` runs first (measured: 0 leaks), but an operator Ctrl-C during `argocd app wait --timeout` left one behind (measured: 1).
 OUT_DIR="${REPO_ROOT}/out"           # only used by the `request` mechanism (gitignored)
 
 # apply_application <app> <manifest> — write the Application through the mechanism we MEASURED.
+# argocd_transport_die <class> <what-was-attempted> <cli-text>
+#
+# ONE ARM LIST for every argocd write site. The two sites shipped with DIFFERENT lists in the SAME
+# commit — enumerated-list rot at birth. MEASURED 2026-08-17 by an implementation-round adversary
+# driving the real script: `app create` omitted UNREACHABLE, so a plain `connection refused` fell to
+# the default arm and told the operator *"Does your AppProject permit this destination and repo?"* —
+# the exact defect B137 exists to fix, at the site B137 fixed, for a different transport shape.
+#
+# Returns 0 (and says nothing) when the class is NOT a transport/credential fault, so the caller
+# emits its own domain-specific message on the next line.
+argocd_transport_die() {
+  case "$1" in
+    STALE_CA|UNREACHABLE)
+      die "could not REACH argocd-server to $2 ($1) — a TRANSPORT fault, not a permissions one.
+  argocd-server never received the request, so no AppProject role changes it and 'make argocd-preflight'
+  cannot surface it. This also says NOTHING about whether the operation would have succeeded.
+  The certificate's NAME is verified BEFORE its chain (measured, go1.26.5), so a name fault HIDES an
+  anchor fault — fix the address first, then the anchor:
+    * ARGOCD_SERVER  ('${ARGOCD_SERVER:-<unset>}') must be a name/IP the server certificate carries
+    * ARGOCD_CA_FILE (make fetch-argocd-ca) must be the CA that signed it
+  the CLI said:
+$3" ;;
+    UNAUTHORIZED)
+      die "argocd-server REJECTED the credential while trying to $2.
+  ARGOCD_AUTH_TOKEN is absent, expired, or issued for another server — this is NOT an AppProject
+  question, and no RBAC grant changes it. Mint a fresh one (argocd login --sso; argocd account
+  generate-token) and re-run.
+  the CLI said:
+$3" ;;
+  esac
+  return 0
+}
+
+
 apply_application() {
-  local app="$1" manifest="$2"
+  local app="$1" manifest="$2" _ac_err="" _ac_cls="" _ac_txt=""
   case "$MECH" in
     kubectl)
       run ka apply -f "$manifest" >/dev/null
@@ -464,29 +498,12 @@ apply_application() {
         # measures RBAC and structurally cannot surface a transport fault.
         _ac_err="$(mktemp)"
         if ! argocd app create -f "$manifest" --upsert >/dev/null 2>"$_ac_err"; then
-          _ac_cls="$(classify_kube_failure "$_ac_err")"
+          _ac_cls="$(classify_argocd_failure "$_ac_err")"
           _ac_txt="$(tr -d '\000' < "$_ac_err" | tail -5)"; rm -f "$_ac_err"
-          case "$_ac_cls" in
-            STALE_CA)
-              die "could not REACH argocd-server to create Application '${app}' — a TRANSPORT fault,
-  not a permissions one. argocd-server never received the request, so no AppProject role and no
-  'make argocd-preflight' run will change it.
-  The certificate's NAME is verified BEFORE its chain (measured, go1.26.5), so a name fault HIDES an
-  anchor fault — fix the address first, then the anchor:
-    * ARGOCD_SERVER  ('${ARGOCD_SERVER:-<unset>}') must be a name/IP the server certificate carries
-    * ARGOCD_CA_FILE (make fetch-argocd-ca) must be the CA that signed it
+          argocd_transport_die "$_ac_cls" "create Application '${app}'" "$_ac_txt"
+          die "argocd-server refused to create Application '${app}'. Does your AppProject '${ARGOCD_PROJECT}' permit this destination and repo? ('make argocd-preflight' checks exactly that.)
   the CLI said:
-${_ac_txt}" ;;
-            UNAUTHORIZED)
-              die "argocd-server REJECTED the credential while creating Application '${app}'.
-  ARGOCD_AUTH_TOKEN is absent, expired, or issued for another server — not an AppProject question.
-  the CLI said:
-${_ac_txt}" ;;
-            *)
-              die "argocd-server refused to create Application '${app}'. Does your AppProject '${ARGOCD_PROJECT}' permit this destination and repo? ('make argocd-preflight' checks exactly that.)
-  the CLI said:
-${_ac_txt}" ;;
-          esac
+${_ac_txt}"
         fi
         rm -f "$_ac_err"
       ;;
@@ -636,20 +653,12 @@ if [ "$MECH" = api ] && [ "${_rv%%|*}" = no ]; then
         # "repo-server cannot reach Gitea", a guess about a DIFFERENT component. Keep the text.
         _aw_err="$(mktemp)"
         if ! argocd app wait "$app" --sync --timeout "$ARGOCD_REPO_TIMEOUT_SECONDS" >/dev/null 2>"$_aw_err"; then
-          _aw_cls="$(classify_kube_failure "$_aw_err")"
+          _aw_cls="$(classify_argocd_failure "$_aw_err")"
           _aw_txt="$(tr -d '\000' < "$_aw_err" | tail -5)"; rm -f "$_aw_err"
-          case "$_aw_cls" in
-            STALE_CA|UNAUTHORIZED|UNREACHABLE)
-              die "could not REACH argocd-server to wait on Application '$app' (${_aw_cls}).
-  This says NOTHING about whether the app synced, and nothing about repo-server or ${GITEA_ARGOCD_URL}
-  — the request did not arrive. Fix the connection/credential to '${ARGOCD_SERVER:-<unset>}'.
+          argocd_transport_die "$_aw_cls" "wait on Application '$app'" "$_aw_txt"
+          die "Application '$app' did not sync. If it never fetched a revision, ArgoCD's repo-server cannot reach ${GITEA_ARGOCD_URL}.
   the CLI said:
-${_aw_txt}" ;;
-            *)
-              die "Application '$app' did not sync. If it never fetched a revision, ArgoCD's repo-server cannot reach ${GITEA_ARGOCD_URL}.
-  the CLI said:
-${_aw_txt}" ;;
-          esac
+${_aw_txt}"
         fi
         rm -f "$_aw_err"
     log_info "  ${app}: synced (argocd-server)"

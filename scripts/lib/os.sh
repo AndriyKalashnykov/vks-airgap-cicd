@@ -1269,22 +1269,44 @@ argocd_can_i() {
     # and has a trivial remedy, yet it classified UNKNOWN; its text is
     #   rpc error: code = Unauthenticated desc = invalid session token: token is expired
     # Auth is tested BEFORE transport so a token message is not swallowed by the connection arm.
-    local _cls; _cls="$(classify_kube_failure "$_err")"
-    # KUBECONFIG_UNUSABLE / NO_KUBE_TARGET are KUBECTL verdicts and mean nothing for an argocd probe
-    # (argocd uses no kubeconfig), so they must not BYPASS the refinement the way a relevant class
-    # would. Without this, an argocd config error reading "stat …: no such file" would be reported
-    # to the operator as a problem with their KUBE configuration.
-    if [ "$_cls" = UNKNOWN ] || [ "$_cls" = KUBECONFIG_UNUSABLE ] || [ "$_cls" = NO_KUBE_TARGET ]; then
-      if command grep -qiE 'Unauthenticated|invalid session token|token is expired|Unauthorized' "$_err"; then
-        _cls=UNAUTHORIZED
-      elif command grep -qiE 'failed to establish connection|connection refused|x509|tls' "$_err"; then
-        _cls=UNREACHABLE
-      fi
-    fi
+      local _cls; _cls="$(classify_argocd_failure "$_err")"
     rm -f "$_err"; printf 'unknown|%s' "$_cls"; return 0
   fi
   rm -f "$_err"
   case "$_out" in yes) printf 'yes|' ;; no) printf 'no|' ;; *) printf 'unknown|UNPARSEABLE' ;; esac
+}
+
+# classify_argocd_failure <errfile> — classify_kube_failure, REFINED for argocd's own vocabulary.
+#
+# WHY IT IS A FUNCTION NOW. This logic lived INSIDE argocd_can_i, reachable by exactly one caller.
+# MEASURED 2026-08-17 by an implementation-round adversary driving the real script: the two argocd
+# failure sites in 70-configure-argocd.sh called `classify_kube_failure` RAW, so an EXPIRED TOKEN —
+# which argocd_can_i's own comment calls "the most common argocd fault" — classified UNKNOWN and was
+# reported as an AppProject/RBAC question at one site and as "repo-server cannot reach Gitea" at the
+# other: a claim about a DIFFERENT COMPONENT. One implementation, three callers.
+#
+# ⚠️ FOR argocd CALLERS ONLY. `k_can_i` is a KUBECTL probe and must keep calling classify_kube_failure
+# directly — the two call sites look identical and are one function apart. (I edited the wrong one
+# first; the tell was k_can_i losing its `rm -f`.)
+#
+# argocd is a THIRD vendor vocabulary — JSON, not kubectl's plain text — so the shared classifier
+# misses its shapes. AUTH IS TESTED BEFORE TRANSPORT so a token message is not swallowed by the
+# connection arm.
+classify_argocd_failure() {
+  local _err="${1:-/dev/null}" _cls
+  _cls="$(classify_kube_failure "$_err")"
+  # KUBECONFIG_UNUSABLE / NO_KUBE_TARGET are KUBECTL verdicts and mean nothing for an argocd probe
+  # (argocd uses no kubeconfig), so they must not BYPASS the refinement the way a relevant class
+  # would. Without this, an argocd config error reading "stat …: no such file" would be reported to
+  # the operator as a problem with their KUBE configuration.
+  if [ "$_cls" = UNKNOWN ] || [ "$_cls" = KUBECONFIG_UNUSABLE ] || [ "$_cls" = NO_KUBE_TARGET ]; then
+    if command grep -qiE 'Unauthenticated|invalid session token|token is expired|Unauthorized' "$_err" 2>/dev/null; then
+      _cls=UNAUTHORIZED
+    elif command grep -qiE 'failed to establish connection|connection refused|x509|tls' "$_err" 2>/dev/null; then
+      _cls=UNREACHABLE
+    fi
+  fi
+  printf '%s' "$_cls"
 }
 
 classify_kube_failure() {
