@@ -49,6 +49,31 @@ state_set() {
   ( umask 077; set_env_var "$1" "$2" "$f" )
 }
 
+# state_unset KEY — remove ONE key from the stamped sink.
+#
+# THIS IS NOT A BREACH OF THE never-`rm` PROMISE. That promise (see state_archive below) is about the
+# FILE: the passwords in it may be the only copy for a cluster that is still running, so the sink is
+# RENAMED, never deleted. This removes a single value that a step is SUPERSEDING right now, in the
+# same breath as writing its replacement — the old value is dead by construction.
+#
+# WHY IT HAS TO EXIST (measured 2026-08-17, matrix row 1, scenario-1 §9). `04-install-harbor-service.sh`
+# publishes HARBOR_USERNAME/HARBOR_PASSWORD to the overlay at :144-145. Step 9's `make harbor-robot`
+# then writes the ROBOT identity to `.env`. `load_env` sources the overlay LAST, so the robot identity
+# could never take effect: the run died on `assert_env_effective` with rc=1, having created the robot.
+# Writing a replacement into a LOWER-precedence file is not a publish — it is a no-op with a log line.
+state_unset() {
+  local key="$1" f; f="$(state_file)"
+  [ -f "$f" ] || return 0
+  grep -qE "^${key}=" "$f" 2>/dev/null || return 0
+  # 0600 is preserved deliberately: a fresh file created by the redirect would take the umask, and
+  # this sink holds generated credentials. Write beside it, then move over it.
+  local tmp; tmp="$(mktemp "${f}.XXXXXX")"
+  ( umask 077; grep -vE "^${key}=" "$f" > "$tmp" ) || { rm -f "$tmp"; return 1; }
+  chmod --reference="$f" "$tmp" 2>/dev/null || chmod 600 "$tmp"
+  mv -f "$tmp" "$f"
+  log_info "state: removed ${key} from $(basename "$f") — superseded by a value just written to .env"
+}
+
 # state_stamp [--kind] — record WHICH CLUSTER this sink belongs to. Written once, by whoever creates
 # the sink. `--kind` marks it as KinD-flow state, which is what makes `make kind-down`'s delete
 # contract safe: it may only remove a sink it is sure it created.

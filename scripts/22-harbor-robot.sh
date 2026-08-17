@@ -193,16 +193,24 @@ log_info "credentials written to $OUT_FILE (mode 0600, gitignored)."
 # Re-running `make harbor-robot` now stops with that exact message (the guard at the top of this
 # file). The way back is `make harbor-admin-password`, which re-reads the admin credential from the
 # Supervisor secret -- so say that HERE, where the operator is standing, not in a doc they have left.
-set_env_var HARBOR_USERNAME "$rname"  "${REPO_ROOT}/.env"
-set_env_var HARBOR_PASSWORD "$secret" "${REPO_ROOT}/.env"
+# env_publish, NOT set_env_var: it writes .env, CLEARS the key from the state overlay, and only then
+# asserts. Writing the replacement into the LOWEST-precedence sink while the overlay still holds the
+# old value is not a publish -- it is a no-op with a log line, which is exactly what happened below.
+#
+# BOTH KEYS, ALWAYS. Clearing only the username leaves .env=robot$x/robotsecret against an overlay
+# still holding admin's password -- effective USER=robot$x PASS=adminpw, i.e. a 401 that reads like a
+# wrong password. A partial fix here is worse than none.
+env_publish HARBOR_USERNAME "$rname"  "the robot identity"
+env_publish HARBOR_PASSWORD "$secret" "the robot secret"
 # ASSERT THE WRITE TOOK EFFECT. `.env` is the LOWEST-precedence sink, and on the DEFAULT admin path
 # `04-install-harbor-service.sh` has already state_set admin's credential into the overlay (both keys
 # ship COMMENTED in .env.example, so its `[ -n "${HARBOR_PASSWORD:-}" ] ||` guard is false at Step 4).
 # The line below then says the pipeline runs as the ROBOT while it runs as Harbor ADMIN -- and it
 # does NOT 401, because admin works, so nothing surfaces it. It also defeats this file's own
 # `robot$*` re-run guard, so a second robot gets minted unnoticed.
-assert_env_effective HARBOR_USERNAME "$rname"  "the robot identity" || exit 1
-assert_env_effective HARBOR_PASSWORD "$secret" "the robot secret"   || exit 1
+# (the assert that used to live here is now the last step of env_publish above — MEASURED
+# 2026-08-17, matrix row 1: it fired with rc=1 having already created the robot, because the write
+# could not take effect while 04-install-harbor-service.sh:144-145 still owned both keys.)
 log_info "published HARBOR_USERNAME/HARBOR_PASSWORD to ./.env — the pipeline now runs as the ROBOT, not as admin."
 log_info "  to mint another robot later, restore the admin credential first: make harbor-admin-password"
 log_warn "the secret is shown only once by Harbor; $OUT_FILE is your only other copy."

@@ -184,14 +184,19 @@ esac
 # pipeline as Harbor admin. .env is the sink Step 9 uses, and set_env_var upserts, so the robot
 # written later simply replaces this. Same file, same mode, same exposure as the value
 # `make env-populate` already writes there today.
-set_env_var HARBOR_USERNAME admin      "${REPO_ROOT}/.env"
-set_env_var HARBOR_PASSWORD "$pw"      "${REPO_ROOT}/.env"
+# env_publish clears the overlay copy before asserting. Without that, the assert here was VACUOUS on
+# the default path: the overlay already said `admin`, so `assert_env_effective HARBOR_USERNAME admin`
+# compared admin==admin and passed having proven nothing. That false confidence is why the ROBOT
+# direction (22-harbor-robot.sh) was the one that failed — you could always get back to admin, never
+# forward to robot, and the asymmetry WAS the bug.
+env_publish HARBOR_USERNAME admin "the repaired admin identity"
+env_publish HARBOR_PASSWORD "$pw" "the repaired admin password"
 # ASSERT THE WRITE TOOK EFFECT -- otherwise this whole command is a true, useless success.
 # MEASURED on the lab: `make harbor-admin-password` said "ok Harbor accepts admin (http 200) ...
 # wrote HARBOR_USERNAME and HARBOR_PASSWORD to ./.env" and `make env-validate` said 401 SECONDS
 # LATER. Both were true: they read different sinks. Re-running looped forever -- the overlay value
 # 401s, this falls through, re-reads the secret, re-verifies 200, rewrites .env, still shadowed.
-assert_env_effective HARBOR_USERNAME admin "the repaired admin identity" || exit 1
-assert_env_effective HARBOR_PASSWORD "$pw" "the repaired admin password" || exit 1
+# (the asserts moved into env_publish above, which also clears the overlay — the step this loop
+# used to fight: "re-running looped forever" because .env was rewritten and re-shadowed each time.)
 log_info "wrote HARBOR_USERNAME and HARBOR_PASSWORD to ./.env  (verified against ${HARBOR_URL} first)"
 log_info "the password is NOT printed here - read it back with 'make creds-show'"

@@ -845,6 +845,32 @@ doc_robot_line_is_bad() {
 #
 # It ASSERTS rather than prints: the failure is deterministic and machine-checkable, and a printed
 # "effective value" is a line an operator does not read.
+# env_publish KEY VALUE [why] — write KEY to .env AND clear it from the state overlay, then assert
+# it actually took effect. Use this, NOT a bare `set_env_var …/.env`, whenever a step SUPERSEDES a
+# value an earlier step published.
+#
+# THE INVARIANT, which is about SUCCESSION and not about categories:
+#   a step that SUPERSEDES a value must write to the sink that currently HOLDS it — or clear that
+#   sink. Writing a replacement into a lower-precedence file is not a publish; it is a no-op.
+#
+# It is deliberately NOT "the overlay may only hold discovered values". That per-key bucketing was
+# considered and refuted: the overlay legitimately already holds a mode toggle (HARBOR_INSECURE), an
+# explicit choice (INGRESS_CONTROLLER) and three GENERATED credentials — and lib/state.sh says why in
+# its own words: "LIFETIME IS A PROPERTY OF THE CLUSTER, NOT OF THE KEY."
+#
+# WHY BOTH KEYS OF A CREDENTIAL PAIR MUST GO TOGETHER (measured): clearing only the username leaves
+#   .env  = robot$vks-cicd / robotsecret     .env.state = (no username) / adminpw
+#   -> effective  USER=robot$vks-cicd  PASS=adminpw     <- a robot name with the admin secret => 401
+# A partial fix here manufactures an auth failure that looks like a wrong password.
+env_publish() {
+  local key="$1" val="$2" why="${3:-}"
+  set_env_var "$key" "$val" "${REPO_ROOT}/.env"
+  # Clear the overlay BEFORE asserting: the assert re-runs load_env, so it must see the final state.
+  # `command -v` because os.sh is sourced by scripts that do not pull in state.sh.
+  command -v state_unset >/dev/null 2>&1 && state_unset "$key"
+  assert_env_effective "$key" "$val" "$why"
+}
+
 assert_env_effective() {
   local key="$1" want="$2" why="${3:-}" got=""
   got="$( unset "$key"; load_env >/dev/null 2>&1; printf '%s' "${!key:-}" )"
