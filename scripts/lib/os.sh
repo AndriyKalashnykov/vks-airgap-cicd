@@ -1071,7 +1071,8 @@ gen_password() {
 # WITHOUT THIS, A NO-INTERNET BOX GETS THE WORST POSSIBLE FAILURE. Nothing in `preflight` probes the
 # internet (it checks tool PRESENCE and CLUSTER reachability), so `make install-all` on an air-gapped box
 # sails through preflight and then enters mirror-pull's http_get_retry, which is built to survive
-# githubusercontent 429s: curl --retry 3 (with backoff) inside 5 outer attempts with 5s delays and a 10s
+# githubusercontent 429s: an outer exponential-backoff loop (capped) — curl's own --retry was REMOVED
+# 2026-08-17 because it compounded with the outer backoff into 540s of sleep; see http_get_retry below
 # connect timeout. MEASURED: >2 minutes of retrying on a SINGLE manifest URL, and there are several of
 # them before the first image is even touched. The operator then gets a curl error naming
 # storage.googleapis.com — never "this box has no internet, you want the sneakernet flow".
@@ -1105,30 +1106,98 @@ require_internet() {
 }
 
 # http_get_retry <url> <dest> — download <url> to <dest>, resilient to transient
-# failures (notably raw.githubusercontent.com HTTP 429 rate-limiting). Combines
-# curl's own transient-error retry with an outer exponential-backoff loop, so a
-# rate-limited GitHub-raw fetch does not fail the install on the first blip.
-# Tunables come from .env.example (HTTP_GET_* / CURL_MAX_TIME_SECONDS). Writes
-# to <dest> only on success (curl -o truncates, but the outer loop re-fetches);
-# dies after the retry budget is exhausted.
+# failures (notably raw.githubusercontent.com HTTP 429 rate-limiting). An outer
+# exponential-backoff loop owns ALL retry and ALL backoff. Tunables come from
+# .env.example (HTTP_GET_* / CURL_MAX_TIME_SECONDS). Writes to <dest> only on
+# success (curl -o truncates, but the outer loop re-fetches); dies after the
+# retry budget is exhausted.
+#
+# ⚠️ CURL'S OWN `--retry` IS DELIBERATELY ABSENT — DO NOT ADD IT BACK. It used to
+# read `--retry 3 --retry-delay "$delay"`, and `$delay` is the OUTER loop's
+# DOUBLING value, so the two compounded: the inner curl slept 3x(5+10+20+40+80)
+# and the outer loop a further (5+10+20+40) = 540s of PURE SLEEP against a
+# connection refused in 0 ms. MEASURED 2026-08-17 (adversary-bash-git-cli):
+# http://127.0.0.1:9/x -> 9m00.5s; blackhole https://10.255.255.1/x -> 12m20.5s.
+# None of it was transfer. Three of the five call sites are on `make deps`, which
+# `scenario-1.md:140` WALKS, and `walk-doc.sh` has no per-block timeout to bound
+# it. One loop owns backoff, or they multiply.
+#
+# ⚠️ WHAT REMOVING THE INNER --retry COSTS — stated because it is NOT free
+# (MEASURED 2026-08-17, implementation round). `--retry-all-errors` was what made
+# curl retry a REFUSED CONNECTION at all: plain `--retry 3` against a refusal
+# retries ZERO times (measured 0s). Two things go with it:
+#   1. `Retry-After` COMPLIANCE. curl honours the header, and it OVERRIDES
+#      --retry-delay in BOTH directions — measured: server 30 / --retry-delay 5
+#      -> curl slept 30; server 3 / --retry-delay 20 -> curl slept 3. The outer
+#      loop cannot see the header, so a 429 carrying `Retry-After: 60` is no
+#      longer obeyed. The capped backoff below is the replacement.
+#   2. ATTEMPT COUNT: 5 outer x 4 requests = 20 became 5, and THE CAP DOES NOT
+#      RESTORE THEM. The loop is bounded by HTTP_GET_RETRIES, not by the budget,
+#      so capping the delay only makes a failure land SOONER (MEASURED: 541s ->
+#      65s = sleeps 5+10+20+30 over exactly 5 attempts). Raising HTTP_GET_RETRIES
+#      is the knob if a site needs more; do NOT read the cap as buying attempts.
+#      (The first draft of this comment claimed "~11 attempts inside the budget",
+#      copied from the review that prescribed the cap. It is false — the loop
+#      never consults the budget to decide whether to KEEP GOING, only to STOP.)
+#
+# ⚠️ THE BUDGET IS NOT A WHOLE-CALL CEILING, and claiming so would be a false fact
+# inside a control. It is checked BEFORE each attempt and BEFORE each sleep, never
+# DURING a transfer, so an attempt begun at budget-1 still runs its full
+# --max-time. TRUE worst case:
+#     HTTP_GET_TOTAL_BUDGET_SECONDS + HTTP_GET_MAX_TIME_SECONDS
+# MEASURED: budget=10 max-time=30 against a hanging server -> 30s elapsed, 3x the
+# bound the old comment stated.
+#
+# The budget DEFAULT is DERIVED from --max-time (5x) so a call site that widens
+# one widens the other. 00-install-prereqs.sh raises HTTP_GET_MAX_TIME_SECONDS to
+# 900 for the 238 MiB argocd download; a FIXED 300s budget there made retries
+# STRUCTURALLY IMPOSSIBLE — one attempt, then a die naming a knob the operator
+# never set while the one they did set went unmentioned.
 http_get_retry() {
   local url="$1" dest="$2"
   local attempts="${HTTP_GET_RETRIES:-5}"
   local delay="${HTTP_GET_RETRY_DELAY_SECONDS:-5}"
+  local maxtime="${HTTP_GET_MAX_TIME_SECONDS:-60}"
+  local maxdelay="${HTTP_GET_RETRY_MAX_DELAY_SECONDS:-30}"
+  local budget="${HTTP_GET_TOTAL_BUDGET_SECONDS:-$(( maxtime * 5 ))}"
   require_cmd curl
-  local i
+  # A non-numeric value makes `[ "$x" -ge "$budget" ]` error, `[` return 2, the
+  # `if` take the FALSE branch and the guard silently VANISH. MEASURED with `5m`:
+  # 5 lines of "integer expression expected" and no enforcement at all.
+  case "$budget"   in ''|*[!0-9]*) die "HTTP_GET_TOTAL_BUDGET_SECONDS must be whole seconds, got '${budget}'" ;; esac
+  case "$maxdelay" in ''|*[!0-9]*) die "HTTP_GET_RETRY_MAX_DELAY_SECONDS must be whole seconds, got '${maxdelay}'" ;; esac
+  local i started now elapsed
+  started=$(date +%s)
   for (( i = 1; i <= attempts; i++ )); do
-    if curl -fsSL \
-         --retry 3 --retry-delay "$delay" --retry-all-errors \
+    now=$(date +%s); elapsed=$(( now - started ))
+    # 0 = UNLIMITED, matching curl's own convention for --max-time.
+    if [ "$budget" -gt 0 ] && [ "$elapsed" -ge "$budget" ]; then
+      die "failed to download ${url}: gave up after ${elapsed}s (HTTP_GET_TOTAL_BUDGET_SECONDS=${budget}), $(( i - 1 )) attempt(s)"
+    fi
+    # --remove-on-error: without it a truncated body is LEFT ON DISK, and
+    # 07-install-argocd.sh:109 gates on `[ ! -s "$MANIFEST_FILE" ]` — a 10-byte
+    # partial is NON-empty, so the next run logs "using cached manifest" and
+    # `kubectl apply`s truncated YAML. MEASURED.
+    if curl -fsSL --remove-on-error \
          --connect-timeout "${HTTP_CONNECT_TIMEOUT_SECONDS:-10}" \
-         --max-time "${HTTP_GET_MAX_TIME_SECONDS:-60}" \
+         --max-time "$maxtime" \
          -o "$dest" "$url"; then
       return 0
     fi
     if [ "$i" -lt "$attempts" ]; then
+      now=$(date +%s); elapsed=$(( now - started ))
+      # Do not start a sleep we cannot finish inside the budget.
+      if [ "$budget" -gt 0 ] && [ "$(( elapsed + delay ))" -ge "$budget" ]; then
+        die "failed to download ${url}: gave up after ${elapsed}s (HTTP_GET_TOTAL_BUDGET_SECONDS=${budget}), ${i} attempt(s)"
+      fi
       log_warn "download failed (attempt ${i}/${attempts}): ${url} — retrying in ${delay}s"
       sleep "$delay"
       delay=$(( delay * 2 ))
+      # `if`, NOT `[ ... ] && delay=...` — that is the A&&B-as-loop-body shape
+      # this repo has a rule about: when the test is FALSE the list returns 1,
+      # which is the loop body's status, and reasoning about whether `set -e`
+      # fires there is exactly the thing the rule says not to do.
+      if [ "$delay" -gt "$maxdelay" ]; then delay="$maxdelay"; fi
     fi
   done
   die "failed to download ${url} after ${attempts} attempts"
