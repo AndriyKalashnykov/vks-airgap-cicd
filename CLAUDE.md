@@ -683,9 +683,18 @@ Do **not** weaken them to get green.
   never the exit code, never the completion notification.
 - **Do NOT edit `scripts/walk-matrix.sh` while a matrix runs.** bash reads a script incrementally;
   rewriting it mid-run yields `unexpected EOF` that reads as a product bug.
-- **`static-check` still does not run per-PR** — only `static-check-fast` (23 gates) does, and
-  `ci-pass` asserts it; `sec` and the slow test tier wait for the weekly schedule. Run
-  `env -u GOROOT make static-check` locally before every merge.
+- **A PR runs TWO gate jobs, and NEITHER is the full `static-check` — that is why you still run it
+  locally.** Corrected 2026-08-17; this bullet used to say `static-check` "does not run per-PR",
+  which is false. Read it off `ci.yml` rather than from memory — the line is
+  `run: make ${{ github.event_name == 'schedule' && 'static-check' || 'static-check-pr' }}`:
+  - `static-check-fast` (**24** gates, not 23) — the alignment/doc/env checks, its own job, ~20s.
+  - `static-check` the JOB — runs per-PR whenever `changes.outputs.code == 'true'`, but invokes
+    **`static-check-pr`** = `lint validate app-test test-scripts-fast`. On the weekly **schedule**
+    the same job invokes the full `static-check` instead.
+  So what a PR never sees is **`sec`** (gitleaks + trivy-fs + trivy-config) and the six unit tests
+  that assert WALL-CLOCK by design. Hence: run `env -u GOROOT make static-check` locally before
+  every merge — and note the *step* is named `make static-check` while it usually runs
+  `static-check-pr`, so the CI log's step name is not evidence of which target ran.
 - **`/tmp/walk` was world-readable for 8 days** (now 0700, and fixed at the source in nvl #76). If
   you cite a row log, remember 13 of them carried a live-at-capture admin password.
 

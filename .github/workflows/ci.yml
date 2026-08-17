@@ -140,7 +140,16 @@ jobs:
   # Composite code gate: check-env + lint + validate + app-test (Java 25 via mise).
   static-check:
     needs: changes
-    # ⚠️ DISABLED on request 2026-08-11. It was 2m44s of a 3m03s run — see the profile in
+    # CURRENT STATE, hoisted 2026-08-17 because the history below is append-only and its stale
+    # headline is what a skimmer reads: this job is ENABLED and runs per-PR whenever
+    # `changes.outputs.code == 'true'`, invoking `static-check-pr` (lint + validate + app-test +
+    # test-scripts-fast). Only the weekly SCHEDULE invokes the full `static-check` — so `sec`
+    # (gitleaks + trivy-fs + trivy-config) and the wall-clock tests are NOT on the PR path. The
+    # `if:` at the bottom of this comment block is the authority; everything between here and it is
+    # the reasoning, in the order it happened.
+    #
+    # ⚠️ DISABLED on request 2026-08-11 [SUPERSEDED — see the two restorations below].
+    # It was 2m44s of a 3m03s run — see the profile in
     # PR #524/#525: shellcheck 46s, test-scripts 40s (now ~30s), trivy 32s, go 20s, java 11s.
     # The job is left in the graph (and in ci-pass's `needs`) so re-enabling is ONE line:
     # restore `needs.changes.outputs.code == 'true'`.
