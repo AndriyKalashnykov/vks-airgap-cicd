@@ -350,7 +350,8 @@ install_tkn() {
   tmp="$(mktemp -d)"
   log_info "downloading tkn ${v}"
   # http_get_retry (lib/os.sh, sourced at the top of this file) — NOT a hand-rolled curl. It already
-  # carries --retry 3 --retry-all-errors plus an outer exponential-backoff loop and the
+  # carries an outer exponential-backoff loop (capped; curl's own --retry was REMOVED 2026-08-17 —
+  # it compounded into 540s of sleep, see lib/os.sh http_get_retry) and the
   # HTTP_GET_* tunables. MEASURED, walk row 3 (2026-08-13): a bare `curl -fsSL` here died on
   # `curl: (52) Empty reply from server` fetching tkn, and took deps-prereqs with it.
   # ⚠️ THE CAP IS OVERRIDDEN ON PURPOSE, VIA ITS OWN KNOB. The helper's 60s default is right for the

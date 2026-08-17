@@ -23,7 +23,7 @@ require_cmd curl
 # This step is the first thing that actually needs the internet. Two failures used to happen here, and
 # both told the operator something false:
 #   1. WITH crane installed: `preflight` passes (it probes tools and the CLUSTER, never the network), then
-#      http_get_retry — which is deliberately patient with a FLAKY network (curl --retry 3 inside 5 outer
+#      http_get_retry — which is deliberately patient with a FLAKY network (a CAPPED outer backoff loop;
 #      attempts, 10s connect timeout) — grinds against an ABSENT one. MEASURED: >2 minutes of retries on a
 #      SINGLE manifest URL, then a curl error naming storage.googleapis.com.
 #   2. WITHOUT crane (a real air-gapped jump box before bundle-load): `require_cmd crane` fired first and
