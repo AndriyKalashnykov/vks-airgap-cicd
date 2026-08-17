@@ -368,10 +368,22 @@ trust bundle (`SSL_CERT_FILE` = the system CAs + your Harbor CA) so `crane` push
 ConfigMap **`harbor-ca`** (key `ca.crt`) so Kaniko/Tekton trust it too. If your Harbor presents a
 publicly-trusted certificate, leave `HARBOR_CA_FILE` empty and skip this step.
 
-For **ArgoCD**'s self-signed CA (only needed if you drive `argocd login` with verification, or
-to trust its UI), fetch it the same way — `ARGOCD_SERVER` is already set from discovery, so run
-**`make fetch-argocd-ca`** (writes `ARGOCD_CA_FILE`). The tenant `api` path establishes the CLI's TLS
-trust via `argocd login` (the Step-3 token recipe), so `ARGOCD_CA_FILE` is optional for the demo itself.
+**ArgoCD's self-signed CA is needed too**, and for the same reason — fetch it the same way. Run
+**`make fetch-argocd-ca`** (writes `ARGOCD_CA_FILE`); `ARGOCD_SERVER` is already set from discovery.
+
+Do not skip it on the grounds that `argocd login` sorts the trust out for you. It establishes the
+CLI's TLS trust only when it can **verify** the server, and verification needs **both** knobs: an
+address the certificate carries *and* the authority that signed it. Measured against a leaf of
+argocd-server's shape — DNS SANs only, no IP SAN:
+
+| you give it | result |
+|---|---|
+| the LB **IP**, correct CA | `doesn't contain any IP SANs` — the **name** fails first and hides the anchor |
+| a name the cert carries, **no** CA | `signed by unknown authority` — the anchor is the next thing to fail |
+| a name the cert carries **and** the CA | verifies |
+
+So the only way `ARGOCD_CA_FILE` is genuinely optional is if you accept `--insecure`, which turns
+off verification rather than achieving it — and the write path does not.
 
 ## 3. Re-check your cluster login, and the CA
 
