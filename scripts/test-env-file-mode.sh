@@ -39,6 +39,11 @@ for um in 022 002 077; do
         set_env_var HARBOR_PASSWORD "$T_SECRET" "$T_SINK"' >/dev/null 2>&1 )
     m="$(stat -c %a "$d/.env" 2>/dev/null || echo MISSING)"
     # a value round-trip, not just a mode: `set -a; .` is how load_env and the docs read this file
+    # ⚠️ shellcheck disable=SC1091 — `./.env` is created AT RUNTIME in $d (a mktemp dir) and does not
+    # exist in the repo, so there is nothing to follow. This was GREEN LOCALLY and RED IN CI for the
+    # classic reason: the author's box has a real .env at the repo root, so shellcheck followed THAT
+    # and said nothing. A finding that depends on dev-machine state is not a finding about the code.
+    # shellcheck disable=SC1091
     rt="$( cd "$d" && set -a; . ./.env >/dev/null 2>&1; set +a; printf '%s' "${HARBOR_PASSWORD:-}" )"
     cells=$((cells+1))
     [ "$m" = 600 ] || badcells="$badcells umask=$um/pre=$pre:$m"
