@@ -226,8 +226,14 @@ deps: ## Install the full jump-box toolchain (OS floor first, then the mise tool
 	 if [ $$rc -ne 0 ]; then \
 	   : > "$(CURDIR)/.deps-failed"; \
 	   echo ""; \
-	   echo "make deps FAILED. The sentinel .deps-failed is set, so 'make check-tools' will tell you"; \
-	   echo "the toolchain is incomplete BECAUSE THIS FAILED - instead of sending you back here."; \
+	   echo "make deps FAILED. Scroll UP for the real error - that is the only thing that says what"; \
+	   echo "broke. A re-run is idempotent (mise re-fetches only what is missing)."; \
+	   echo ""; \
+	   echo "It does NOT promise what any other target will print. A later 'make check-tools' can"; \
+	   echo "legitimately say 'all REQUIRED tools present.' - it checks a SUBSET of what deps does"; \
+	   echo "(not java/maven/kustomize/go/node, and nothing deps CONFIGURES: the container-engine"; \
+	   echo "runtime and its registry search paths). A clean check-tools does NOT mean this was"; \
+	   echo "harmless. Clear the sentinel with: rm -f .deps-failed"; \
 	   exit 1; \
 	 fi; \
 	 rm -f "$(CURDIR)/.deps-failed"
