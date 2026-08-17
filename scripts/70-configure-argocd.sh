@@ -766,23 +766,18 @@ ${_aw_txt}"
   exit 0
 fi
 log_info "verifying ArgoCD can reach ${GITEA_ARGOCD_URL} (waiting for each Application to fetch a revision)"
+# ⚠️ THIS BLOCK USED TO NAME A CAUSE IT HAD NEVER PROBED. Certification row 5 (2026-08-17) failed
+# here and reported "Most likely GITEA_ARGOCD_URL is not reachable from the ArgoCD cluster" —
+# MEASURED FALSE the same day: from inside the repo-server pod the real clone handshake
+# (/info/refs?service=git-upload-pack) returned http=200, and the Application was Synced/Healthy
+# with a deploy history. The message was a guess printed in the voice of a diagnosis.
+#
+# Both reads below were `2>/dev/null || true`, so a NotFound, a Forbidden, a wrong namespace, a
+# wrong kubeconfig and "no resource type application" ALL collapsed into one empty string — and
+# then the run promised "Its own words:" and printed NOTHING, because the conditions dump had been
+# silenced too. The run's own evidence for which fault occurred was destroyed by its own redirects.
 for app in $APPS_APPLIED; do
-  ka -n "$ARGOCD_NAMESPACE" annotate application "$app" argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
-  rev=""
-  for _ in $(seq 1 "$ARGOCD_REPO_TIMEOUT_SECONDS"); do
-    rev="$(ka -n "$ARGOCD_NAMESPACE" get application "$app" -o jsonpath='{.status.sync.revision}' 2>/dev/null || true)"
-    [ -n "$rev" ] && break
-    sleep 1
-  done
-  if [ -z "$rev" ]; then
-    log_error "Application '$app' never fetched a revision from ${GITEA_ARGOCD_URL}/${GITEA_ORG}/${app}-deploy.git in ${ARGOCD_REPO_TIMEOUT_SECONDS}s."
-    log_error "  ArgoCD's repo-server (in $ARGOCD_API) could not clone the repo. Its own words:"
-    ka -n "$ARGOCD_NAMESPACE" get application "$app" \
-      -o jsonpath='{range .status.conditions[*]}    [{.type}] {.message}{"\n"}{end}' 2>/dev/null || true
-    log_error "  Most likely GITEA_ARGOCD_URL is not reachable from the ArgoCD cluster (currently: ${GITEA_ARGOCD_URL})."
-    die "ArgoCD cannot clone the deploy repo — refusing to report success."
-  fi
-  log_info "  ${app}: ArgoCD fetched revision ${rev} — the repo is reachable from the ArgoCD cluster"
+  argocd_await_revision "$app"
 done
 
 log_info "ArgoCD Applications created: $(app_names | tr '\n' ' ')"
