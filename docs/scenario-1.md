@@ -85,10 +85,12 @@ sign-in page before any of this.)
 | `VCF-Consumption-CLI-Linux_AMD64-9.1.0.0400.25509669.tar.gz` | [VCF CLI](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20vSphere%20Foundation%209&release=9.1.0.0&os=&servicePk=542815&language=EN&viewGroup=true&groupId=540529) | `VCF_CLI_SRC_DIR` (you set it in Step 1) |
 | `VCF-Consumption-CLI-PluginBundle-Linux_AMD64-9.1.0.0400.25509793.tar.gz` | [Plugins](https://support.broadcom.com/group/ecx/productfiles?displayGroup=VMware%20vSphere%20Foundation%209&release=9.1.0.0&os=&servicePk=542815&language=EN&viewGroup=true&groupId=540672) | `VCF_CLI_SRC_DIR` |
 | the amd64 `argocd` CLI | [ArgoCD](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=538499) | `VCF_CLI_SRC_DIR` |
-| `supervisor-service-argocd-legacy-1.1.0-25100889.yml` | [ArgoCD](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=538499) | anywhere — you upload it in vCenter in Step 5 |
-| `supervisor-service-harbor-legacy-v2.14.3+vmware.2-vks.1-25292931.yml` | [Harbor](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=542081) | anywhere — you upload it in vCenter in Step 4 |
-| `supervisor-service-harbor-data-values-v2.14.3.yml` | [Harbor](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=542081) | `~/Downloads/vcf` |
+| `supervisor-service-argocd-legacy-1.1.0-25100889.yml` | [ArgoCD](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=538499) | `VCF_CLI_SRC_DIR` |
+| `supervisor-service-harbor-legacy-v2.14.3+vmware.2-vks.1-25292931.yml` | [Harbor](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=542081) | `VCF_CLI_SRC_DIR` |
+| `supervisor-service-harbor-data-values-v2.14.3.yml` | [Harbor](https://support.broadcom.com/group/ecx/productfiles?subFamily=vSphere%20Supervisor%20Services&servicePk=542081) | `VCF_CLI_SRC_DIR` |
 
+All six go **directly in** `VCF_CLI_SRC_DIR` — not in a subdirectory. Every step that reads them
+(Steps 1, 4 and 5) looks exactly one level deep and stops with *"no `…-*.yml` in `<dir>`"* otherwise.
 The example throughout this runbook uses `~/Downloads/vcf` for all of them.
 
 ⚠️ **Take the `-legacy` service files.** The non-legacy ones install "successfully" and
@@ -122,7 +124,7 @@ it uses.
 
 | key | example | how to get the value |
 |---|---|---|
-| `VCF_CLI_SRC_DIR` | `/home/you/Downloads/vcf` | the folder you put the two Broadcom archives in |
+| `VCF_CLI_SRC_DIR` | `/home/you/Downloads/vcf` | the folder you put **all six** Step 0 downloads in — Steps 1, 4 and 5 each read it. Set it **in `./.env`** so it persists: Step 1 stops if it is unset, but Steps 4 and 5 silently fall back to `~/Downloads/vcf` — so a value that reaches only Step 1 (a one-shot `VCF_CLI_SRC_DIR=… scripts/01-…`, or a new terminal) makes Step 4 search a directory you never used, without saying so. |
 | `SUPERVISOR_HOST` | `192.168.101.128` | vCenter → Workload Management → Supervisors → Control Plane Node IP. **Bare host — no `https://`, no trailing slash.** |
 | `VKS_CONTEXT_NAME` | `vks-cicd` | **you invent this** — a short label for the `vcf` login context |
 | `VKS_NAMESPACE` | `cicd` | the vSphere Namespace the cluster goes in. **Create it first — Step 2.** Pick a name nothing else owns: Step 2's teardown deletes **by name**, and on a nested lab a namespace called `lab` already belongs to the lab itself. |
@@ -627,11 +629,17 @@ Harbor that was already there.
 make harbor-admin-password
 ```
 
-**Expect:** if you installed Harbor in Step 4, `already authenticates` — the working credential is left alone. Otherwise `wrote HARBOR_USERNAME and HARBOR_PASSWORD to ./.env`.
+**Expect:** `wrote HARBOR_USERNAME and HARBOR_PASSWORD to ./.env` — the normal case here, because
+Step 4 told you to leave `HARBOR_PASSWORD` unset. If a working Harbor credential is already in your
+`./.env` — you installed Harbor yourself in Step 4, or you were handed one — it prints
+`already authenticates` instead and leaves it alone.
 
 It reads the password out of the Harbor service's own secret and **proves it against Harbor before
-writing anything**. It never replaces a credential that already works, so it is safe to re-run and
-safe to run after Step 9's robot.
+writing anything**. It never replaces a credential that already works, so it is safe to re-run — and
+safe to run after Step 9's robot **while that robot still works** (Harbor answers `403` for a
+project-scoped robot, which counts as working). ⚠️ If the robot has since been revoked, rotated or
+expired, Harbor answers `401`, this command falls through and writes the **admin** credential to
+`./.env` — and your pipeline then runs as admin. Re-run `make harbor-robot` instead.
 
 It is **here, not in Step 4**, because verifying needs Harbor's CA — which is what you just fetched.
 
@@ -641,8 +649,9 @@ If it stops, it names which of these it hit:
   installed (Harbor only accepts that secret at its first start). Nothing is written. Ask whoever
   installed Harbor, or use a robot from Step 9. ⚠️ The same phrase also appears as a **warning
   mid-run** (`the HARBOR_PASSWORD currently in your .env does NOT authenticate - reading the
-  installed one`) — that one is not a failure, it is the command doing its job, and it usually
-  succeeds two lines later. Read the LAST line before acting.
+  installed one`) — that one is not a failure by itself, it is the command doing its job, and it
+  usually succeeds two lines later. It is also printed when nothing was sent to Harbor at all (no
+  CA, say), so it can equally precede a `could NOT check` stop. Read the LAST line before acting.
 - `could NOT check` — a different thing: nothing was sent to Harbor at all. It says which
   precondition is missing.
 - `no Supervisor kubeconfig` — run `make vks-login` (Step 3) first. Harbor's secret lives on the

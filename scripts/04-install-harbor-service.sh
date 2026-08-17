@@ -25,7 +25,7 @@ SRC_DIR="${VCF_CLI_SRC_DIR:-$HOME/Downloads/vcf}"
 DEF="$(find "$SRC_DIR" -maxdepth 1 -name 'supervisor-service-harbor-legacy-*.yml' 2>/dev/null | sort | tail -1)"
 TPL="$(find "$SRC_DIR" -maxdepth 1 -name 'supervisor-service-harbor-data-values-*.yml' 2>/dev/null | sort | tail -1)"
 [ -n "$DEF" ] || die "no supervisor-service-harbor-legacy-*.yml in $SRC_DIR (see docs/scenario-1.md Step 0)"
-[ -n "$TPL" ] || die "no supervisor-service-harbor-data-values-*.yml in $SRC_DIR"
+[ -n "$TPL" ] || die "no supervisor-service-harbor-data-values-*.yml in $SRC_DIR (see docs/scenario-1.md Step 0)"
 log_info "service definition : $(basename "$DEF")"
 log_info "data-values template: $(basename "$TPL")"
 

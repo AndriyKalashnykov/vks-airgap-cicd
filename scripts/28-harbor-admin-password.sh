@@ -42,12 +42,23 @@ if ! is_placeholder "${HARBOR_PASSWORD:-}"; then
   # includes an INCONCLUSIVE probe. Measured 2026-08-12 -- with a stale CA and a deliberately wrong
   # password the reporter returned 0, and this guard would have said the wrong credential works and
   # exited without doing its job.
-  if [ "$(harbor_auth_verdict)" = accepted ]; then
-    log_info "HARBOR_USERNAME=${HARBOR_USERNAME:-admin} already authenticates against ${HARBOR_URL} - leaving it alone"
-    log_info "  (re-run after 'make harbor-robot' and this stays out of the way: a working credential is never replaced)"
-    exit 0
-  fi
-  log_warn "the HARBOR_PASSWORD currently in your .env does NOT authenticate - reading the installed one"
+  # THREE outcomes, not two -- the SAME distinction the verify block below makes, which this
+  # branch used to collapse. `unchecked:*` means nothing was sent to Harbor at all (no CA, DNS,
+  # connection refused); reporting that as "does NOT authenticate" is a statement about the
+  # password, and it is the exact mislabel harbor_auth_verdict exists to prevent. Measured: with
+  # no CA this printed a password verdict and then died with `could NOT check` -- contradicting
+  # itself two lines later. One probe, as before: the verdict is captured, not re-read.
+  early_verdict="$(harbor_auth_verdict)"
+  case "$early_verdict" in
+    accepted)
+      log_info "HARBOR_USERNAME=${HARBOR_USERNAME:-admin} already authenticates against ${HARBOR_URL} - leaving it alone"
+      log_info "  (re-run after 'make harbor-robot' and this stays out of the way: a working credential is never replaced)"
+      exit 0 ;;
+    unchecked:*)
+      log_warn "could NOT check the HARBOR_PASSWORD currently in your .env against ${HARBOR_URL}: ${early_verdict#unchecked:} - reading the installed one" ;;
+    *)
+      log_warn "the HARBOR_PASSWORD currently in your .env does NOT authenticate - reading the installed one" ;;
+  esac
 fi
 
 # ── the Supervisor kubeconfig ────────────────────────────────────────────────────────────────────
