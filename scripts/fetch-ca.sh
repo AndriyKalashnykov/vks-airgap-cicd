@@ -247,8 +247,13 @@ else
   else
     die "refusing to write an unauthenticated trust anchor with no terminal to confirm it on.
   Pass the expected digest explicitly:  make fetch-${LABEL}-ca ${pin_var}=<sha256>
-  (MEASURED: no target depends on this one and no CI workflow invokes it, so this refusal breaks
-  no automated path — it only stops an unattended run from silently pinning whatever answered.)"
+  (No make target depends on this one and no CI workflow invokes it — still true, re-checked.
+  ⚠️ ONE automated path DOES reach it now: scenario-2 Step 2 is a walked block, and the walker is
+  non-TTY. That is deliberate and it does not fire in practice, because Step 2 asks whether the CA
+  is already present FIRST and the walk's driver stages it — so the walk takes the have-it-already
+  branch and never gets here. If it ever does get here, the walk SHOULD stop: an unattended run
+  pinning whatever answered is exactly what this refuses, and a green walk that pinned a stranger's
+  certificate would be worse than a red one.)"
   fi
 fi
 
