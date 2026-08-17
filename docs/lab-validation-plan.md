@@ -691,7 +691,10 @@ kubectl --kubeconfig ./secrets/argocd.kubeconfig -n $ARGOCD_NAMESPACE delete sec
 kubectl --kubeconfig ./secrets/argocd.kubeconfig -n $ARGOCD_NAMESPACE delete application --all
 kubectl delete ns gitea ci tekton-pipelines ${ISTIO_GWAPI_NAMESPACE:-vks-ingress} javawebapp gowebapp 2>/dev/null || true
 # Harbor: delete the robot + the cicd/apps projects from the Harbor UI if you want them gone.
-# DO NOT run `make kind-down` on this box — it is the LOCAL teardown and removes files under ./secrets.
+# `make kind-down` is now SAFE to run here, and scenario-2 Step 0c tells you to. It removes only what
+# the KinD flow stamped as its own, and it REFUSES to touch the state overlay when it cannot confirm
+# the cluster is gone. (It used to delete files under ./secrets unconditionally, which is why this
+# line forbade it; the secrets removal is now gated on a cluster having actually been deleted.)
 ```
 
 **Expect:** the ClusterRoleBinding and the cluster Secret are gone.

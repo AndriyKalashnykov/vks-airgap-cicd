@@ -88,7 +88,14 @@ fi
 #    The verb list USED to be `docker (exec|cp|network|run|build)`. That gate went GREEN on the very
 #    commit that added a bare `docker info` to an operator script — a gate that passes on the change
 #    it forbids is not a gate. Match the BINARY INVOCATION (`docker <subcommand>`), not a verb menu.
-KIND_ONLY='05-kind-up\.sh|06-install-harbor\.sh|07-install-argocd\.sh|kind-down\.sh'
+# kind-down.sh was REMOVED from this list 2026-08-17. It did not belong: the other three are never
+# prescribed outside the KinD stand-in and genuinely cannot function without docker, whereas
+# `docs/scenario-2.md` tells EVERY scenario-2 operator — on a real lab, podman-default — to run
+# `make kind-down` at Step 0c. The filename exemption suppressed a real finding: this gate's own
+# matcher reports FOUR hits in kind-down.sh including a top-level `require_cmd docker`, so it would
+# have caught the defect on day one. The three genuine docker calls that remain there now carry
+# per-line `# docker-ok:` reasons, which is auditable in a way a filename never is.
+KIND_ONLY='05-kind-up\.sh|06-install-harbor\.sh|07-install-argocd\.sh'
 # The glob below can only ever yield NN-*.sh / lib/*.sh / the two named scripts, so an allowlist entry
 # for e2e-*/test-*/jumpbox* would be DEAD — it would advertise coverage we do not have. They are
 # genuinely docker-bound and genuinely out of the operator flow, so they are simply not scanned; say
