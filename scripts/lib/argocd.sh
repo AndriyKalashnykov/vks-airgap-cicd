@@ -202,20 +202,26 @@ argocd_print_versions() {
   else
     log_warn "argocd CLI not on PATH — it is REQUIRED on the tenant path (argocd-server is the only writer a tenant may have)."
   fi
-  log_info "  NOTE: the CLI version is NOT the ArgoCD *server* version — the lab pins a 2.x SERVER while the KinD stand-in + CLI are 3.x. The number that matters on your lab is the RUNNING server, below."
+  log_info "  NOTE: the CLI version is NOT the ArgoCD *server* version — the CLI and the server are versioned INDEPENDENTLY and a CLI is deliberately tolerant across a server range. The number that matters on your lab is the RUNNING server, below -- this line names no generation on purpose, because it was wrong for two years."
   if [ -z "$kc" ] || [ ! -f "$kc" ] || ! have kubectl; then
     local why
     if   [ -z "$kc" ];   then why="no kubeconfig set (KUBECONFIG / ARGOCD_KUBECONFIG)"
     elif [ ! -f "$kc" ]; then why="kubeconfig file not found: $kc"
     else                     why="kubectl not installed"
     fi
-    log_warn "RUNNING server version: UNAVAILABLE — $why. On a real lab the running SERVER (a 2.x line) is the number that matters; the CLI + pin are 3.x and are NOT it."
+    log_warn "RUNNING server version: UNAVAILABLE — $why. On a real lab the RUNNING server is the number that matters; the CLI version and the KinD pin are NOT it."
     log_info "this repo's KinD pin: ARGOCD_VERSION=${ARGOCD_VERSION:-?}"
     return 0
   fi
   local ka=(kubectl --kubeconfig "$kc" --request-timeout="$to")
   if "${ka[@]}" get crd "$VKS_ARGOCD_CRD" >/dev/null 2>&1; then
-    log_info "VKS ArgoCD operator present. Supported server versions:"
+    # NOT "supported versions" -- `kubectl explain` prints a PATTERN plus one QUOTED PROSE EXAMPLE, and
+    # this repo measured that on a real Supervisor: 08-install-supervisor-service.sh:111-117 records
+    # that the CRD carries NO enum and that a naive scrape returns the example WITH ITS TRAILING QUOTE.
+    # The authoritative artifact is the Carvel PACKAGE the operator publishes (queried by
+    # 08-install-argocd-service.sh:148), not this. Labelling prose as an enumeration is the same
+    # class of error as the 2.x claims above: pointing the reader at something that cannot answer.
+    log_info "VKS ArgoCD operator present. Version FIELD SCHEMA (a pattern + example, NOT an enumeration):"
     "${ka[@]}" explain argocd.spec.version 2>/dev/null | sed 's/^/    /' || true
     "${ka[@]}" get argocd -A -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name,VERSION:.spec.version' 2>/dev/null | sed 's/^/    /' || true
   else
@@ -226,7 +232,7 @@ argocd_print_versions() {
   if [ -n "$img" ]; then
     log_info "RUNNING argocd-server image: $img   <- THE version that matters on a real lab"
   else
-    log_warn "RUNNING server version: UNAVAILABLE — no cluster reachable in ns/$ns (ArgoCD is elsewhere, you may not read it as a tenant, or your cluster is down). On a real lab THIS (a 2.x line) is the number that matters; the CLI + pin above are 3.x and are NOT it."
+    log_warn "RUNNING server version: UNAVAILABLE — no cluster reachable in ns/$ns (ArgoCD is elsewhere, you may not read it as a tenant, or your cluster is down). On a real lab THIS is the number that matters; the CLI version and the pin above are NOT it."
   fi
   log_info "this repo's KinD pin: ARGOCD_VERSION=${ARGOCD_VERSION:-?}"
 }

@@ -63,7 +63,7 @@ builder push, `verify`, `creds`) keys off the same flags so the two modes never 
 ### ArgoCD
 
 - **Supervisor Service** (Broadcom Argo CD Operator, GA 2025); provisions **stock upstream
-  ArgoCD** — VKS 9.1 = **v2.14.13** (selectable via the `ArgoCD` CR `spec.version`).
+  ArgoCD** — the version follows the ArgoCD **Service** version, not the VKS release: Service 1.0.0 = **v2.14.13** (9.1 RN), Service 1.1.0-25100889 = **v3.0.19+vmware.1-vks.1** (measured 2026-08-17). Selectable via the `ArgoCD` CR `spec.version`.
 - **Self-signed TLS on 443 by default.** Upstream `argocd-server` auto-generates a
   self-signed cert (persisted in `argocd-secret`); `server.insecure` (plain HTTP) is **not**
   the default. Overridable via an `argocd-server-tls` secret.
@@ -224,6 +224,22 @@ holds (installed via `make install-vcf-clis`).
 > known fidelity gap, not a match. `make argocd-preflight` reports all three (CLI, running server
 > image, `kubectl explain argocd.spec.version`) so this cannot be guessed at again.
 
+<!-- MD028: two ADJACENT blockquotes, deliberately separate. The 2026-07-11 block is append-only
+     history and must not be merged into the 2026-08-17 one that corrects it. -->
+
+> **CORRECTION (2026-08-17) — the correction ABOVE is now itself out of date, in its CONCLUSION.**
+> The 2026-07-11 block is factually right about the MECHANISM (a CLI version is not a server version)
+> and its numbers were right for the ArgoCD **Service** version that shipped then. Its *conclusion* —
+> "a real server-generation delta DOES exist — it is a known fidelity gap, not a match" — is **now
+> FALSE**, and it carries no version number, so no grep for `2.14` would ever have found it.
+> **MEASURED 2026-08-17** on a 9.1 Supervisor: the ArgoCD Service `1.1.0-25100889` publishes exactly
+> ONE package, **`3.0.19+vmware.1-vks.1`**, and this repo pins `ARGOCD_VERSION=v3.5.1`. Both are
+> **3.x**, so the generation gap is **CLOSED**; what remains is a MINOR delta (3.0.19 vs 3.5.1),
+> which is a much weaker claim than a generation mismatch.
+> The discriminating axis is the **ArgoCD Service version, NOT the VKS release** — Service 1.0.0 ->
+> 2.14.13 (9.1 RN), Service 1.1.0 -> 3.0.19. Both are 9.1 facts, so "scope it to 9.0" would write a
+> false statement and orphan a live `/9-1/` citation.
+
 **Ground-truth versions (verified):** lab `argocd` CLI = **`v3.0.19+d67e6eb90-vcf`** (built
 2025-12-02); `vcf` (VCF Consumption CLI) = **`v9.1.0.0.25296329`** (GA, 2026-03-20). VKS 9.1
 Harbor ≈ **2.14.3** (`_vmware` build); ArgoCD provisioned by the Broadcom Argo CD Operator
@@ -236,8 +252,10 @@ Harbor ≈ **2.14.3** (`_vmware` build); ArgoCD provisioned by the Broadcom Argo
   real HTTPS/443. A missing-CA hop fails KinD exactly as it would fail the lab.
 - **ArgoCD exposure/auth**: own LoadBalancer reached by IP, self-signed TLS on 443,
   `argocd login <ip> --insecure` (IP-SAN warning), admin from `argocd-initial-admin-secret` —
-  all match VKS 9.1. **NOT the server generation**: KinD runs ArgoCD **3.x** while the lab's
-  operator CR pins a **2.14.x** server (the 9.1 RN cites v2.14.13) — see the CORRECTION above.
+  all match VKS 9.1. **Server generation now MATCHES** on a Service-1.1.0 lab: measured 3.0.19 there
+  vs our v3.5.1 pin — a MINOR delta, not the generation gap this bullet used to claim. On an older
+  Service-1.0.0 lab (server 2.14.13) the gap is real again, so read the RUNNING server rather than
+  assuming either way. See both CORRECTION blocks above.
 - **The GitOps loop shape**: push → Tekton → Harbor → tag write-back → ArgoCD sync → app roll.
 
 **What a green KinD run does NOT prove (residual lab risk — verify on the real lab):**
