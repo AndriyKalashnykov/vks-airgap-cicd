@@ -329,15 +329,70 @@ if [ "$MECH" = api ] && [ "$can_api" = unknown ]; then
   # IDENTICALLY whether the CA is trusted or not) — so a name failure MASKS the anchor, and telling
   # the operator "re-fetch the CA" or "the anchor is fine" is a coin flip that costs a second round
   # trip. Name both knobs; they are independent here in a way they never are for a kubeconfig.
-  die "ARGOCD_MECHANISM=api, but the argocd API probe DID NOT ANSWER (${_why}).
-  This is a TRANSPORT fault, not a permissions one: argocd-server never received the probe, so no
-  AppProject role changes it and 'make argocd-preflight' cannot surface it — and every write below
-  would fail the same way, after creating namespaces and secrets.
-  Two INDEPENDENT knobs reach '${ARGOCD_SERVER:-<unset>}', and a name fault hides an anchor fault:
+  # ⚠️ DO NOT hand the operator two knobs and let them guess — MEASURE which one is wrong.
+  # `ca_verifies_endpoint` (lib/tls.sh) exists for EXACTLY this fault: its own header records that
+  # `rc 3 — chain OK, NAME wrong` was added "so callers stop reporting it as staleness", measured
+  # against a leaf with DNS SANs and NO IP SAN served on 127.0.0.1 — the shape argocd-server has.
+  # Harbor (27-harbor-ca-from-cluster.sh:148, 02-env.sh:410) and the Supervisor (30-vks-login.sh:181)
+  # both route through it; ArgoCD was the ONLY one of the three that did not, and that asymmetry is
+  # what made this message a coin flip. Do NOT re-implement it with a fresh `openssl` call: its
+  # header documents five measured traps a new one re-introduces (s_client exits 0 on verification
+  # FAILURE; it HANGS on a black-holed endpoint so rc 124 is not a bad anchor; a PLAINTEXT endpoint
+  # was once reported as "the CA verifies it"; five distinct broken anchors all read "unreachable";
+  # and -verify_ip vs -verify_hostname must be chosen per address shape or it verifies NOTHING).
+  # ⚠️ lib/tls.sh is NOT auto-sourced by os.sh — 02-env.sh:25 and 30-vks-login.sh:21 both record that
+  # omission as an rc-127 bug. Source it explicitly, and tolerate its absence rather than dying with
+  # a worse error than the one we came here to report.
+  _addr_verdict=""
+  # shellcheck source=scripts/lib/tls.sh
+  [ -f "${REPO_ROOT}/scripts/lib/tls.sh" ] && . "${REPO_ROOT}/scripts/lib/tls.sh" 2>/dev/null || true
+  if command -v ca_verifies_endpoint >/dev/null 2>&1 && [ -n "${ARGOCD_SERVER:-}" ]; then
+    # ARGOCD_SERVER may or may not carry a port; ca_verifies_endpoint takes them separately.
+    _cv_h="${ARGOCD_SERVER}"; _cv_p=443
+    case "$_cv_h" in *:*) _cv_p="${_cv_h##*:}"; _cv_h="${_cv_h%:*}" ;; esac
+    _cv=0; ca_verifies_endpoint "$_cv_h" "$_cv_p" "${ARGOCD_CA_FILE:-}" || _cv=$?
+    case "$_cv" in
+      0) _addr_verdict="  MEASURED: '${ARGOCD_SERVER}' VERIFIES against ARGOCD_CA_FILE (chain AND name).
+  So neither knob below is the fault — look at ARGOCD_AUTH_TOKEN, or at a proxy between us and it." ;;
+      3) _addr_verdict="  MEASURED: the ANCHOR IS CORRECT and the ADDRESS IS WRONG — the chain verified and the
+  NAME did not. Change ONLY the ADDRESS: do NOT re-fetch the CA, it is already the right one." ;;
+      1) _addr_verdict="  MEASURED: connected, and ARGOCD_CA_FILE did NOT verify the chain — so the ANCHOR is
+  wrong (or belongs to a rebuilt lab). Re-fetch it: make fetch-argocd-ca. The address may be fine." ;;
+      2) _addr_verdict="  MEASURED: '${ARGOCD_SERVER}' did not answer at all (unreachable, or it accepted and
+  closed with zero bytes — what an LB VIP looks like while its backend is still starting). This is
+  NOT evidence either knob is wrong; check reachability, then retry." ;;
+      4) _addr_verdict="  MEASURED: '${ARGOCD_SERVER}' served PLAINTEXT, not TLS — so no anchor can ever verify
+  it. You are almost certainly pointing at the wrong port or the wrong service." ;;
+      5) _addr_verdict="  NOT MEASURED: ARGOCD_CA_FILE is unset or unusable, so the two knobs cannot be told
+  apart yet. Set it first (make fetch-argocd-ca), re-run, and this message will name the real fault." ;;
+    esac
+    # The SANs are the answer to "which name, then?" — the FATAL used to pose that question and not
+    # answer it. Same idiom as 02-env.sh:447 / 30-vks-login.sh:193; `|| true` because a pipeline in a
+    # command substitution under `set -e` must not become a worse failure than the one we are reporting.
+    _sans="$(printf '' | timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client \
+               -connect "${_cv_h}:${_cv_p}" -servername "$_cv_h" 2>/dev/null \
+             | openssl x509 -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -s ' ' || true)"
+    [ -n "${_sans:-}" ] && _addr_verdict="${_addr_verdict}
+  THE NAMES THIS SERVER'S CERTIFICATE ACTUALLY CARRIES:${_sans}
+  Upstream ArgoCD mints 'argocd-server' and 'localhost' regardless of namespace, so 'argocd-server'
+  mapped to this address in /etc/hosts is the portable choice. It carries NO IP SAN, which is why an
+  IP can never verify however correct the CA is."
+  fi
+  # ⚠️ Build the fallback as its own assignment, NOT as a `${_addr_verdict:-<default>}` inside the die
+  # string: a multi-line default containing apostrophes does not parse there, and the resulting error
+  # lands ~200 lines away (`syntax error near unexpected token '('`), pointing at innocent code.
+  if [ -z "${_addr_verdict:-}" ]; then
+    _addr_verdict="  Two INDEPENDENT knobs reach '${ARGOCD_SERVER:-<unset>}', and a name fault hides an anchor fault:
     * the ADDRESS  — ARGOCD_SERVER must be a name or IP the server's certificate actually carries
     * the ANCHOR   — ARGOCD_CA_FILE (make fetch-argocd-ca) must be the CA that signed it
   Fix the address first (it is verified first), then re-run: the anchor error can only appear once
   the name matches."
+  fi
+  die "ARGOCD_MECHANISM=api, but the argocd API probe DID NOT ANSWER (${_why}).
+  This is a TRANSPORT fault, not a permissions one: argocd-server never received the probe, so no
+  AppProject role changes it and 'make argocd-preflight' cannot surface it — and every write below
+  would fail the same way, after creating namespaces and secrets.
+${_addr_verdict}"
 fi
 
 # ---- where does the app DEPLOY to? ---------------------------------------------------------------

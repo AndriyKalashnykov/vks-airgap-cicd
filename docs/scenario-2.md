@@ -248,12 +248,12 @@ you nothing):
 | `HARBOR_CA_FILE` | `./secrets/harbor-ca.crt` (fetched in Step 2, `make fetch-harbor-ca`) |
 | `HARBOR_INFRA_PROJECT` / `HARBOR_APP_PROJECT` | your granted project(s) — may be **one** shared project, not a `cicd`/`apps` split |
 | `HARBOR_PUBLIC_PROJECTS` | `false` — tenant projects are typically private (no-op on an existing project) |
-| `ARGOCD_SERVER` | the discovered argocd-server LB IP |
+| `ARGOCD_SERVER` | a **name the argocd-server certificate carries** — **not** the bare LB IP. The default cert has **no IP SAN**, so an IP can never verify however correct your CA is. Ask your platform team for the name they issued it for; failing that, upstream ArgoCD always mints `argocd-server`, so map that to the LB IP in `/etc/hosts` (Step 1 already has you add one) and use `argocd-server`. |
 | `ARGOCD_NAMESPACE` | the namespace the shared ArgoCD instance watches |
 | `ARGOCD_TRACK_BRANCH` | `main` |
 | `KUBECONFIG` | `./secrets/vks.kubeconfig` |
 | `VKS_CONTEXT` | the context name inside that kubeconfig |
-| `ARGOCD_CA_FILE` | *optional* — `./secrets/argocd-ca.crt` (`make fetch-argocd-ca`) |
+| `ARGOCD_CA_FILE` | **required for a verifying path** — `./secrets/argocd-ca.crt` (`make fetch-argocd-ca`). With the name right but no anchor, the login still fails *signed by unknown authority*; it is optional only if you accept `--insecure`, which the write path does not. |
 
 **The ArgoCD WRITE PATH — set these NOW, before `make install-all`.** Miss them and `make gitops`
 either **dies** on a guard (off-cluster with no destination) or **silently renders to `./out/` and
@@ -270,8 +270,7 @@ deploys nothing while reporting success**:
 <!-- -->
 
 > **Mint `ARGOCD_AUTH_TOKEN` FIRST — it is a precondition, not just a value.** `argocd login <ARGOCD_SERVER> --sso`
-> establishes both the token **and** the CLI's TLS trust for the self-signed argocd-server (there is no
-> `ARGOCD_CA_FILE` wired into the CLI path), then `argocd account generate-token --account <you>` prints the
+> establishes both the token **and** the CLI's TLS trust for the self-signed argocd-server, then `argocd account generate-token --account <you>` prints the
 > token you paste above. Order: discover `ARGOCD_SERVER` → `argocd login` → `generate-token` → set
 > `ARGOCD_AUTH_TOKEN`. Skip the login and a pasted token yields an opaque TLS failure. (`api` is the tenant
 > happy-path — granted an AppProject role; the `request` fallback, for a tenant granted nothing, renders the
