@@ -89,7 +89,12 @@ state_unset() {
   local g=0
   ( umask 077; grep -vE "^${key}=" "$f" > "$tmp" ) || g=$?
   if [ "$g" -ge 2 ]; then rm -f "$tmp"; return 1; fi
-  chmod --reference="$f" "$tmp" 2>/dev/null || chmod 600 "$tmp"
+  # NOT `chmod --reference="$f"`: this is the ONE place that creates a fresh inode (`mv` below), i.e.
+  # the one chance to repair a loose mode — and copying the sink's CURRENT mode threw that away.
+  # MEASURED: a 0644 sink went through state_unset and came out 0644, on a brand-new file. This
+  # function's own header already declares the sink "0600 (it holds generated passwords)", so the
+  # reference added nothing and could only carry a defect forward.
+  chmod 600 "$tmp" 2>/dev/null || true
   mv -f "$tmp" "$f"
   log_info "state: removed ${key} from $(basename "$f") — superseded by a value just written to .env"
 }

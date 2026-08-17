@@ -947,6 +947,20 @@ assert_env_effective() {
 set_env_var() {
   local key="$1" val="$2" file="${3:?set_env_var: a SINK is required — use state_set (the stamped overlay) or pass an explicit file}"
   mkdir -p "$(dirname "$file")"; touch "$file"
+  # 0600 BEFORE ANY CONTENT IS WRITTEN. `touch` inherits the ambient umask, and the comment above is
+  # about the OPPOSITE half of this problem: it explains why `cat > "$file"` (truncate in place) is
+  # used instead of `mv`, so a rewrite cannot UN-harden an operator who had chmod 600'd the file.
+  # Preserving the mode fixed un-hardening; it also faithfully preserves a LOOSE one, and no umask
+  # can repair that — MEASURED: umask 077 over a pre-existing 0644 file still yields 0644.
+  # Forcing 600 only ever TIGHTENS, so it agrees with that comment's intent rather than contradicting
+  # it. Chmod must be HERE and not at the end: a late chmod leaves a window in which the file already
+  # holds the credential at 0664.
+  #
+  # This repo already documents this exact trap TWICE and did not sweep it —
+  # `22-harbor-robot.sh` and `lib/vcenter.sh` both `rm -f` FIRST because "umask 077 only applies when
+  # the file is CREATED … the secret would land world-readable WHILE THIS CODE STILL READ AS SAFE".
+  # Both protect a TRANSIENT copy; this is the DURABLE store they read the credential out of.
+  chmod 600 "$file" 2>/dev/null || true
   local tmp; tmp="$(mktemp)"
   # `|| true`: grep -v exits 1 when it emits NOTHING, which is the normal single-key case.
   grep -vE "^${key}=" "$file" > "$tmp" 2>/dev/null || true
