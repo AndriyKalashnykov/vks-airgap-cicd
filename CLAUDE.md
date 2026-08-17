@@ -601,7 +601,7 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-17 03:10 EDT — matrix run 3 is LIVE and will stop after cut A; run 4 is required
+## ▶️ HANDOFF 2026-08-17 05:30 EDT — run 3 is OVER; the lab for run 4 is REBUILDING; 6 rows are owed
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
@@ -609,84 +609,72 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 ### The job, unchanged
 
 Rebuild the walkthrough matrix for scenario-1 **and** scenario-2, both as end-user documents. Rows
-run on throwaway Photon and Ubuntu VMs. **All six rows, green FROM THE FIRST GO.** Work until
-`BACKLOG.md` is empty; verify `creds-show` endpoints and logins after every lab cut, driving Chrome
-where an HTTP probe is not proof.
+run on throwaway Photon and Ubuntu VMs. **All six rows green FROM THE FIRST GO** — a fresh matrix
+over the FINAL tree passing on its FIRST pass. Every fix resets that clock. Verify `creds-show`
+endpoints and logins after every lab cut, driving Chrome where an HTTP probe is not proof.
 
-### Where the matrix actually is
+### Run 3's result, and why only half of it ran
 
-A fresh lab was cut at 01:46 (`logs/lab-20260817-010956.log`: *Supervisor is RUNNING*, 7 steps,
-36m47s). Run 3 = `run-20260817T061515Z-1427190`.
+Run 3 = `run-20260817T061515Z-1427190`, over the PRE-fix tree.
 
 | row | result |
 |---|---|
-| 1 · ubuntu · NOTHING | **DONE** — 41 blocks: 34 ran, **1 FAILED**, 7 skipped · 32/32 Expect parsed, 22 CHECKABLE, **0 UNMET** |
-| 2 · photon · EXISTS | **DONE** — 41 blocks: 29 ran, **0 FAILED**, 12 skipped · 18 CHECKABLE, **0 UNMET** |
-| 5 · photon · scenario-2 | running §6 `make install-all` at the time of writing |
-| 3, 4, 6 | **will NOT run** — see below |
+| 1 · ubuntu · NOTHING | 41 blocks: 34 ran, **1 FAILED**, 7 skipped · 22 CHECKABLE, **0 UNMET** |
+| 2 · photon · EXISTS | 41 blocks: 29 ran, **0 FAILED**, 12 skipped · 18 CHECKABLE, **0 UNMET** |
+| 5 · photon · scenario-2 | reached §6 `make install-all` |
+| 3, 4, 6 | **NEVER WALKED** |
 
-**Rows 3/4/6 will not walk, and that is CORRECT.** `walk-matrix.sh:847` refuses to rebuild the lab
-when any row failed: *"a rebuild cannot fix a row that failed before it walked … the lab is left
-ALONE so the failure can still be diagnosed."* Row 1 failed, so the run exits 1 after cut A. Do not
-fight that guard — it exists because two of one evening's three rebuilds were exactly that waste.
+**Rows 3/4/6 did not run, and that was CORRECT.** `walk-matrix.sh:847` refuses to rebuild the lab
+when any row failed — *"a rebuild cannot fix a row that failed before it walked … the lab is left
+ALONE so the failure can still be diagnosed."* Row 1 failed, so the run exited after cut A. Do not
+fight that guard. Its one real defect — it exited without writing the per-run VERDICT file, so the
+evidence dir said nothing — is FIXED (nvl #69); the refusal path now records what it refused and why.
 
-**Row 1's single failure was real and is FIXED**: `.env.state` pinned `HARBOR_USERNAME`, so §9's
-robot identity could never take effect (B132 → `env_publish`, #707).
+Row 1's single failure was real and is FIXED: `.env.state` pinned `HARBOR_USERNAME`, so §9's robot
+identity could never take effect (B132 → `env_publish` clears the pin, vks #707, 7/7 RED-proven).
 
-### Run 4 — the exact sequence, and the trap that ate two launches
+### Run 4 — the sequence
 
 ```sh
-python3 /tmp/walk-matrix-auth-before-tkr.py        # B131; SAFE only once run 3 has exited
 cd ~/projects/nested-vsphere-lab && make destroy CONFIRM=yes && make lab
-make trust-vcsa && make kubectl-login              # ← THE TRAP. Do not skip.
+make trust-vcsa && make kubectl-login          # ← still required; see below
 WALK_REPO=~/projects/vks-airgap-cicd VCF_CLI_SRC_DIR=~/Downloads/vcf \
   WALK_ROWS="1 2 3 4 5 6" make walk-matrix
 ```
 
 ⚠️ **`make destroy` RENAMES the kubeconfig away and `make lab` does NOT log in** (its own summary
-says *"Run: make kubectl-login"*), while `walk-matrix` assumes it exists. Without the login the TKr
-query falls back to `localhost:8080`, `2>/dev/null` eats the error, and the harness reports *"still
-no usable TKr"* for the full 900 s before aborting with **the wrong cause** — the lab had 81 TKrs
-published and 12 Ready+Compatible the whole time. That killed launches 1 and 2. **B131's patch is
-STAGED, validated against a copy (`bash -n` + shellcheck clean, auth hoisted above the wait at
-:241 < :252), and NOT applied** — the matrix is executing that file and bash reads scripts
-incrementally.
+says *"Run: make kubectl-login"*). Skipping it no longer produces a 900 s misdiagnosis — B131 landed
+(nvl #68), so `_require_supervisor_auth` runs at all 4 call sites and the harness now says *"I could
+not ask"* out loud instead of reading it as *"no TKr exists"*. It still fails; it just tells you why.
+**The `python3 /tmp/walk-matrix-auth-before-tkr.py` step from the previous handoff is MERGED — do not
+re-apply it.**
 
-Two more preconditions, both already true on `main` but re-check them: `assert_repo_published`
-refuses a WALK_REPO that is dirty **or ahead of origin/main**, and the SSO account locks out
-**PERMANENTLY after 3 failed attempts** — never loop a login.
+Two more preconditions: `assert_repo_published` refuses a WALK_REPO that is dirty **or ahead of
+origin/main**, and the SSO account locks out **PERMANENTLY after 3 failed attempts** — never loop a
+login (`kubectl-login` already refuses rather than spend one).
 
 ### Distrust these
 
 - **`git diff --name-only v1.0.1..origin/main`** is the only honest answer to "is main certified?".
 - **A stale log will lie.** Cite the per-invocation `VERDICT-<runid>.txt`, never a fixed path, and
   read each row's `WALK DONE`/`DOCUMENT` lines plus the **"N of 6 designed rows"** denominator —
-  never the exit code, and never the completion notification.
-- **Rows 1 and 2 walked the PRE-fix tree.** Everything merged tonight is proven hermetically, not on
-  a lab. Run 4 is what proves it.
-- **`static-check` still does not run per-PR** — only `sec` and the slow test tier wait for the
-  weekly schedule; `static-check-fast` (23 gates) DOES run and `ci-pass` asserts it. Run
+  never the exit code, never the completion notification.
+- **Rows 1 and 2 walked the PRE-fix tree.** Everything merged since is proven hermetically, not on a
+  lab. Run 4 is what proves it.
+- **`static-check` still does not run per-PR** — only `static-check-fast` (23 gates) does, and
+  `ci-pass` asserts it; `sec` and the slow test tier wait for the weekly schedule. Run
   `env -u GOROOT make static-check` locally before every merge.
 
 ### Blocked, and on what
 
-- **B133 (CRITICAL)** — the vCenter SSO **administrator** password goes to an unverified peer;
-  it is the only credential-bearing TLS client here with no trust ladder. The fix is BLOCKED on
-  **one lab measurement** (now step 24 of `docs/lab-validation-plan.md`: does
-  `secrets/supervisor-ca.crt` also anchor vCenter? — it decides whether 1 block breaks or 4) and
-  **two operator decisions** stated in the row. Its idea round refuted four of five specifics of the
-  obvious fix and caught a new CRITICAL it would have introduced. Do not implement before both.
-- **B129** — very likely a CASCADE of B128 rather than a defect: `install-all` already creates the
-  token `verify` wants, via `platform → seed-gitea`. Row 5 is walking the discriminating path now.
-  Do not "fix" it by appending a command until that lands.
-
-### What tonight actually shipped
-
-PR #702 B130 refuted · #703+#705 the secrets gate made derived, then its own engine/quoting gaps closed
-· #704 B90's vantage corrected · #706 the tenant e2e's ArgoCD CA + `require_kind_target` · #707
-`env_publish` · #708 B37's verdict hoisted · #709 a keyword audit that reading rejected 3/3 · #710
-kubectl's translated 401 pinned · #711 B133's findings + the queued measurement. Open RED rows
-14 → 12. Open PRs: 0.
+- **B133 (CRITICAL)** — the vCenter SSO **administrator** password goes to an unverified peer; it is
+  the only credential-bearing TLS client here with no trust ladder. BLOCKED on **one lab
+  measurement** (step 24 of `docs/lab-validation-plan.md`: does `secrets/supervisor-ca.crt` also
+  anchor vCenter? — it decides whether 1 block breaks or 4) and **two operator decisions** named in
+  the row. Its idea round refuted four of five specifics of the obvious fix and caught a new CRITICAL
+  that fix would have introduced. Do not implement before both.
+- **B101** — re-measured (150 candidates, 21 load-bearing, several out of scope); its re-scoping is a
+  design decision and needs a RULE ZERO round before any code.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
