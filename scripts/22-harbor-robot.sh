@@ -200,8 +200,13 @@ log_info "credentials written to $OUT_FILE (mode 0600, gitignored)."
 # BOTH KEYS, ALWAYS. Clearing only the username leaves .env=robot$x/robotsecret against an overlay
 # still holding admin's password -- effective USER=robot$x PASS=adminpw, i.e. a 401 that reads like a
 # wrong password. A partial fix here is worse than none.
-env_publish HARBOR_USERNAME "$rname"  "the robot identity"
-env_publish HARBOR_PASSWORD "$secret" "the robot secret"
+# ALL-OR-NOTHING (B138's round, F2). Two bare `env_publish` under `set -euo pipefail` meant key #1
+# could ABORT with key #2 unwritten — producing EXACTLY the mismatched pair the comment above calls
+# worse than none. MEASURED: overlay holding admin's pair + `.env.kind` pinning HARBOR_USERNAME ->
+# effective USER=robot$x PASS=adminpw. The comment stated the invariant; the code could not keep it.
+env_publish_all "the robot credential pair" \
+  HARBOR_USERNAME "$rname" \
+  HARBOR_PASSWORD "$secret"
 # ASSERT THE WRITE TOOK EFFECT. `.env` is the LOWEST-precedence sink, and on the DEFAULT admin path
 # `04-install-harbor-service.sh` has already state_set admin's credential into the overlay (both keys
 # ship COMMENTED in .env.example, so its `[ -n "${HARBOR_PASSWORD:-}" ] ||` guard is false at Step 4).

@@ -867,8 +867,63 @@ env_publish() {
   set_env_var "$key" "$val" "${REPO_ROOT}/.env"
   # Clear the overlay BEFORE asserting: the assert re-runs load_env, so it must see the final state.
   # `command -v` because os.sh is sourced by scripts that do not pull in state.sh.
-  command -v state_unset >/dev/null 2>&1 && state_unset "$key"
+  #
+  # ⚠️ `|| log_warn`, NOT a bare `&&`. `state_unset` is the LAST command of an `&&` list, so under
+  # `set -e` a non-zero return aborts THIS FUNCTION right here — silently skipping
+  # `assert_env_effective`, which is the entire control B132/B138 exist to provide. MEASURED:
+  # `f(){ echo wrote; command -v true >/dev/null && myfail; echo ASSERT-RAN; }` prints `wrote` and
+  # NEVER `ASSERT-RAN`. Two live routes reach it: `state_unset`'s own `>=2` arm (a failed rewrite,
+  # e.g. ENOSPC) and any future ownership gate that declines. Both are exactly the runs where the
+  # state is most likely wrong, i.e. where skipping the assert costs the most.
+  if command -v state_unset >/dev/null 2>&1; then
+    state_unset "$key" || log_warn "could not clear the state-overlay pin on ${key} — the assert below still decides"
+  fi
   assert_env_effective "$key" "$val" "$why"
+}
+
+# env_publish_all <why> <KEY> <VAL> [<KEY> <VAL> ...]
+#
+# PUBLISH A SET OF KEYS ALL-OR-NOTHING. Write every key and clear every overlay pin FIRST, then assert
+# every key, collect every failure, and die ONCE.
+#
+# WHY THIS EXISTS (B138 + its round). `env_publish` is write+clear+assert for ONE key, and it returns
+# non-zero when the value does not take effect. N of them in a row under `set -euo pipefail` means key
+# #1 can ABORT the script with keys #2..N unwritten — and for a set that is only meaningful TOGETHER,
+# a half-written set is worse than no write at all:
+#
+#   HARBOR_USERNAME/HARBOR_PASSWORD -> effective USER=robot$x PASS=adminpw, verbatim the "401 that
+#     reads like a wrong password" that 22-harbor-robot.sh's own comment calls worse than none.
+#   KUBECONFIG/VKS_CONTEXT/VKS_AUTH_METHOD -> VKS_AUTH_METHOD stranded on 'vcf', i.e. the "stop
+#     talking to the Supervisor" switch NOT flipped, while .env already shows the guest kubeconfig.
+#
+# MEASURED, both. 27-use-guest-kubeconfig.sh got this shape inline first; a round then found the same
+# unfixed shape at 22:203-204 and 28:192-193. One implementation, so a fourth site cannot diverge.
+env_publish_all() {
+  local why="$1"; shift
+  local -a _k=() _v=()
+  while [ "$#" -ge 2 ]; do _k+=("$1"); _v+=("$2"); shift 2; done
+  [ "$#" -eq 0 ] || { log_error "env_publish_all: odd number of KEY VAL arguments"; return 2; }
+  [ "${#_k[@]}" -gt 0 ] || { log_error "env_publish_all: no keys given"; return 2; }
+
+  local i
+  # Phase 1 — write everything and clear every pin BEFORE asserting anything.
+  for i in "${!_k[@]}"; do
+    set_env_var "${_k[$i]}" "${_v[$i]}" "${REPO_ROOT}/.env"
+    if command -v state_unset >/dev/null 2>&1; then
+      state_unset "${_k[$i]}" || log_warn "could not clear the state-overlay pin on ${_k[$i]}"
+    fi
+  done
+  # Phase 2 — assert everything, collect, report once.
+  local bad=""
+  for i in "${!_k[@]}"; do
+    assert_env_effective "${_k[$i]}" "${_v[$i]}" "$why" || bad="${bad} ${_k[$i]}"
+  done
+  [ -z "$bad" ] && return 0
+  log_error "these values did NOT take effect:${bad}"
+  log_error "  All were written to .env and their overlay pins cleared, so a HIGHER-precedence file"
+  log_error "  is still winning — the lines above name it. Fix those and re-run; the set is only"
+  log_error "  meaningful together, so a partial result is worse than none."
+  return 1
 }
 
 assert_env_effective() {
