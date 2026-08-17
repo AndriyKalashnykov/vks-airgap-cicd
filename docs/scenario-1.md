@@ -811,8 +811,8 @@ Then **check the routes actually work**, before you rely on those hostnames:
 make verify-ingress           # each *.vks.local host must reach ITS OWN backend
 ```
 
-**Expect:** one OK per host — gitea, tekton and each app — ending in
-`UI(s) reachable through the`. It sends `Host: <name>.vks.local`
+**Expect:** one OK per host — gitea, tekton and each app — ending in `UI(s) reachable through the`.
+It sends `Host: <name>.vks.local`
 to the ingress LoadBalancer IP directly, so **it needs no DNS and no `/etc/hosts` entry** — and it
 asserts a per-host body marker, not just a 200, because a mis-wired route returns 200 from the
 *wrong* backend. A host that fails here will not work in a browser either, and this names which one and why. *(~1 min)*
