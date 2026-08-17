@@ -143,6 +143,10 @@ fi
 echo
 echo "== a wrong/failed transport yields NO token (empty, never a partial) =="
 check "an unreachable server -> empty" "$(ARGOCD_SESSION_TIMEOUT=2 argocd_session_token '127.0.0.1:1' 'x')" ''
+# ⚠️ THE CAPTURE ITSELF, not just the classifier. Every explain case above hand-supplies rc/http, so
+# they all pass even with argocd_session_token reverted to the pre-capture body — measured 24/24 on
+# exactly that mutant. These two assert the pair is PRODUCED, which is the actual product change.
+check "…and the rc/http pair was RECORDED" "$(argocd_session_last)" 'rc=7 http=000'
 
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -201,14 +205,17 @@ echo
 echo "== the diag file must never answer for a PREVIOUS run =="
 # argocd_admin_password clears it FIRST; a surviving file would let the caller name this run's
 # cause from the last run's evidence -- a fresh instance of the bug being fixed.
-_diag="$(mktemp)"; printf 'source=secret rc=0\n' > "$_diag"
+# chmod 0444 is the load-bearing character: with a WRITABLE stale file the failing read overwrites
+# it anyway, so the case passed with the rm -f deleted (measured 24/24). Read-only, the branch must
+# still refuse to report the stale `source=secret` that would make a 401 blame the credential.
+_diag="$(mktemp)"; printf 'source=secret rc=0\n' > "$_diag"; chmod 0444 "$_diag"
 ( ARGOCD_PW_DIAG="$_diag" argocd_admin_password /nonexistent-kubeconfig some-ns >/dev/null 2>&1 || true )
 _after="$(ARGOCD_PW_DIAG="$_diag" argocd_password_last)"
 case "$_after" in
   source=secret*) bad "a failed read must not leave source=secret" "stale [$_after] would make a 401 blame the credential" ;;
   *) ok "a failed read overwrites the diag (got [$_after]), so no stale source=secret survives" ;;
 esac
-rm -f "$_diag"
+chmod 0644 "$_diag" 2>/dev/null || true; rm -f "$_diag"
 
 echo
 printf '  %d passed, %d failed\n' "$pass" "$fail"

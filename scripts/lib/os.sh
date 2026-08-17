@@ -374,8 +374,16 @@ container_engine() {
 
 # require_cmd cmd [human hint] — fail fast with an actionable message.
 require_cmd() {
-  local cmd="$1" hint="${2:-run scripts/00-install-prereqs.sh}"
-  have "$cmd" || die "required command '$cmd' not found — $hint"
+  # VARIADIC. It was `local cmd="$1" hint="${2:-…}"`, so `require_cmd jq curl kubectl` checked ONLY
+  # jq, silently turned "curl" into the hint string and discarded "kubectl" — measured: with a PATH
+  # holding only jq it returned SUCCESS while curl and kubectl were absent, and a missing jq printed
+  # `required command 'jq' not found — curl`. SEVEN callers in this tree used the multi-arg form and
+  # every one of them was checking a single command; making the function variadic fixes them all
+  # rather than editing seven call sites and hoping the eighth remembers.
+  local cmd
+  for cmd in "$@"; do
+    have "$cmd" || die "required command '${cmd}' not found — install it (see 'make deps') and re-run."
+  done
 }
 
 # require_gate_tool <binary> [how-to-get-it]
