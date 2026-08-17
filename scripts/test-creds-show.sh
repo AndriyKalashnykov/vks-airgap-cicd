@@ -212,6 +212,47 @@ else
   bad "...but the human is not told. The token alone is not the deliverable."
 fi
 
+# ---- B168: an operator's EXPLICIT ARGOCD_SERVER must OUTRANK a discovered ARGOCD_LB_IP. ---------
+# ARGOCD_SERVER appeared ZERO times across every fixture in this file, so creds.sh's entire real-lab
+# ArgoCD branch had NO coverage at all — and the fixture captioned "THE REAL-LAB STATE" above sets
+# the KinD sentinel ARGOCD_LB_IP, so even it exercised the KinD branch. MEASURED before the fix:
+# `ARGOCD_SERVER=argocd-server make creds-show` printed `https://192.168.101.131 (self-signed;
+# --insecure)` — the bare IP plus the literal --insecure that #745 tells operators never to use,
+# against a cert this lab MEASURED as carrying DNS SANs only (no IP SAN), i.e. an address that can
+# never verify. ARGOCD_SERVER is snapshot-protected (os.sh) and in check-env-clobber's SELECTORS;
+# ARGOCD_LB_IP is in NEITHER, so an unprotected file value was beating a protected explicit one.
+out="$(ARGOCD_SERVER=argocd-server.example render 'HARBOR_URL=10.0.0.1
+HARBOR_PASSWORD=x
+ARGOCD_LB_IP=10.0.0.2
+')"
+if printf '%s' "$out" | grep -q 'argocd-server\.example'; then
+  ok "explicit ARGOCD_SERVER outranks a discovered ARGOCD_LB_IP"
+else
+  bad "explicit ARGOCD_SERVER was IGNORED — an unprotected discovered value beat a protected explicit one"
+fi
+# The two things #745 says must never reach an operator, asserted on the ArgoCD line specifically so
+# a bare IP elsewhere in the summary cannot mask a regression here.
+_argoline="$(printf '%s' "$out" | grep -i '^[[:space:]]*ArgoCD' || true)"
+case "$_argoline" in
+  *--insecure*) bad "the ArgoCD line still offers --insecure despite an explicit ARGOCD_SERVER" ;;
+  *)            ok "...and the ArgoCD line does NOT offer --insecure" ;;
+esac
+case "$_argoline" in
+  *10.0.0.2*) bad "the ArgoCD line still shows the bare LB IP, which this lab measured has no IP SAN" ;;
+  *)          ok "...and it does NOT show the bare LB IP" ;;
+esac
+# CONTROL: with no ARGOCD_SERVER the KinD sentinel must STILL be used, or the fix has simply broken
+# KinD. Its writer 09-argocd-address.sh is Supervisor-only, so nothing sets ARGOCD_SERVER there.
+out="$(render 'HARBOR_URL=10.0.0.1
+HARBOR_PASSWORD=x
+ARGOCD_LB_IP=10.0.0.2
+')"
+if printf '%s' "$out" | grep -q '10\.0\.0\.2'; then
+  ok "CONTROL: with no ARGOCD_SERVER, the discovered LB IP is still used (KinD unbroken)"
+else
+  bad "CONTROL FAILED: the KinD path lost its endpoint — the fix broke the case it must preserve"
+fi
+
 # ---- STATE 5: STAMPED and MATCHING -> DISCOVERED, without the KinD shortcut. --------------------
 # state_kubeconfig_server PARSES the kubeconfig and never dials, so a stamped overlay plus a
 # matching kubeconfig is fully offline. This is the branch VKS_STATE_KIND=1 has been standing in
