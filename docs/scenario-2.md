@@ -180,6 +180,15 @@ else
 fi
 ```
 
+<!-- walk-doc: the literals below (harbor-nginx, HARBOR_URL, ARGOCD_SERVER) are DELIBERATELY on
+     continuation lines, where walk-doc.sh:346 cannot see them. Do NOT "fix" this by moving one up to
+     line 1 — PR #696 did exactly that for scenario-1:814 and it was right THERE and would be wrong
+     HERE. This block has TWO valid branches whose outputs are disjoint, and there is NO literal
+     common to both that is absent from the command text (measured exhaustively: 22 common
+     substrings >=6 chars, 0 of them outside the block). Branch 2's entire output is echo text, which
+     the parser correctly filters as vacuous. A line-1 literal therefore guarantees a FALSE UNMET on
+     the branch this document itself calls the normal tenant case. Its sibling block at :155 already
+     uses this same pattern. -->
 **Expect:** a line starting `DISCOVERY:`. Which one you get depends on whether you have a Supervisor
 kubeconfig: with one, Harbor's `harbor-nginx` entry followed by an IP and ArgoCD's bare IP; without
 one, the sentence telling you to ask the platform team for them. **Both are real answers — only

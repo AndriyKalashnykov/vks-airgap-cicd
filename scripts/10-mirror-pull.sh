@@ -138,16 +138,27 @@ if have helm; then
   ISTIO_CHART_REPO="${ISTIO_CHART_REPO:-https://istio-release.storage.googleapis.com/charts}"
   log_info "pulling the istio charts v${ISTIO_VERSION:-<unset>} into ${CHART_DIR} (the air-gap box cannot fetch them)"
   if [ -n "${ISTIO_VERSION:-}" ]; then
-    # RETRIED, like every other network call in this script. This was the ONLY un-retried one, and
-    # it is the most expensive place to lose: it runs AFTER the image pull, so a single blip here
-    # throws away a completed multi-minute mirror and fails `make install-all` outright.
-    # MEASURED 2026-08-17 (matrix row 5): 24/24 images pulled in 6m28s, then
-    #   Error: failed to update the following repositories: [https://istio-release.storage.googleapis.com/charts]
-    # -> rc=1 for the whole target. `helm repo add` had just SUCCEEDED against the same host seconds
-    # earlier, and the host + all three pinned charts answered HTTP 200 when re-probed, on helm 4.2.3
-    # with a cold cache. So it was transient, and transient is exactly what mirror_retry exists for.
-    mirror_retry "${MIRROR_RETRIES:-5}" run helm repo add istio-airgap "$ISTIO_CHART_REPO" --force-update >/dev/null
-    mirror_retry "${MIRROR_RETRIES:-5}" run helm repo update istio-airgap >/dev/null
+    # 1>&2, NOT >/dev/null -- helm puts THE CAUSE ON STDOUT AND ONLY A RESTATEMENT ON STDERR.
+    # MEASURED (helm 4.2.3, against a deliberately-broken repo):
+    #   stdout: '...Unable to get an update from the "istio-airgap" chart repository (URL):
+    #            failed to fetch .../index.yaml : 404 Not Found'   <- NAMES THE CAUSE
+    #   stderr: 'Error: failed to update the following repositories: [URL]'  <- says only THAT it failed
+    # Row 5's log (MATRIX-row5-photon.log:983) holds exactly and only the stderr line with no
+    # preceding warning -- the signature of stdout having been discarded. So the previous `>/dev/null`
+    # deleted the one line that could explain the failure, and "it was transient" is NOT a conclusion
+    # anyone can currently support: a GCS 429/503 after 24 pulls from Google-fronted registries, a DNS
+    # or IPv6 path to a different backend, and lab egress/conntrack pressure are all still live, and
+    # the re-probes that suggested "transient" ran on the DEV BOX, not the row's Photon VM -- a
+    # different egress path entirely. Redirecting to stderr keeps stdout pipe-clean (lib/os.sh:_log's
+    # own convention) while putting the cause in the log, so the NEXT failure names itself instead of
+    # being silently retried five times.
+    #
+    # The retry stands on its own merit regardless: this was the ONLY un-retried network call in the
+    # script (images use mirror_retry, manifests use http_get_retry) and it runs AFTER the images, so
+    # a blip here discards work already done. Cost of a re-run is ~1m40s, not the full 6m28s -- 14 of
+    # the 24 images are digest-pinned and cache-skip, including the two slowest.
+    mirror_retry "${MIRROR_RETRIES:-5}" run helm repo add istio-airgap "$ISTIO_CHART_REPO" --force-update 1>&2
+    mirror_retry "${MIRROR_RETRIES:-5}" run helm repo update istio-airgap 1>&2
     for c in base istiod gateway; do
       mirror_retry "${MIRROR_RETRIES:-5}" run helm pull "istio-airgap/${c}" --version "$ISTIO_VERSION" --destination "$CHART_DIR"
     done
