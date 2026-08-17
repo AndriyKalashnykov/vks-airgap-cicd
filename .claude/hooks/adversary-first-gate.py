@@ -39,7 +39,8 @@ must be able to write the plan first); and no gate can verify the review was INT
 happened.
 
 WHAT IT DELIBERATELY DOES NOT GATE:
-  - CLAUDE.md — it IS the plan/backlog.
+  - CLAUDE.md and BACKLOG.md — together they ARE the plan/backlog (the backlog moved out of
+    CLAUDE.md in f7f6c30, 2026-07-22; see the ROT WATCH note on EXEMPT_FILES below).
   - .claude/ itself — you must be able to fix a hook that is wrong.
   - subagents — they are already denied all writes by subagent-readonly-gate.py.
 
@@ -61,7 +62,9 @@ GUARDED_PREFIXES = (
     "scripts/",
     "jumpbox/",
     "k8s/",
-    "tekton/",
+    # "tekton/" was here and was DEAD: `git ls-files tekton` == 0 (measured 2026-08-16). The Tekton
+    # manifests live at k8s/tekton/ (9 files), already covered by "k8s/". A guarded prefix matching
+    # nothing is not harmless -- it reads as coverage this tuple does not have.
     "apps/",
 )
 GUARDED_FILES = ("Makefile",)
@@ -70,7 +73,20 @@ EXEMPT_PREFIXES = (
     ".claude/",
     ".github/",
 )
-EXEMPT_FILES = ("CLAUDE.md",)
+# ROT WATCH — this tracks THE PLAN/BACKLOG FILE, whatever it is currently called.
+#   CLAUDE.md held the backlog until f7f6c30 (2026-07-22, PR #396) moved it out: BACKLOG.md +70,
+#   CLAUDE.md -52. This tuple did NOT follow for ~3 weeks, so a bookkeeping commit ("close row B92")
+#   re-armed the gate and destroyed a legitimate design review. MEASURED over the last 200 commits:
+#   24 are BACKLOG-only, and 25 (12.5%, 1 in 8) stopped stranding a review once BACKLOG.md was added.
+#   It is NOT a bypass: a git exclude pathspec is per-FILE, so a MIXED commit (BACKLOG.md + code)
+#   still re-arms -- verified by running _last_nonexempt_commit_epoch() with and without the entry
+#   over 26 real mixed commits; the boundary was IDENTICAL (8caff30) both ways.
+#   RESIDUAL, named not hidden: a backlog row CAN carry a design (72 rows, 46 cite an adversary, 12
+#   carry file:line prescriptions), so a design written there is now unreviewed for longer. That was
+#   ALREADY true -- writes to BACKLOG.md were never guarded -- and the already-exempt CLAUDE.md is
+#   at least as design-carrying. This widens the residual in TIME, it does not create a new kind.
+#   If the plan file is renamed again, edit THIS tuple in the same commit.
+EXEMPT_FILES = ("CLAUDE.md", "BACKLOG.md")
 
 
 def _project_root() -> str:

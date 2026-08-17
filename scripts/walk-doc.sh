@@ -66,8 +66,23 @@ WALK_CLUSTER_EXISTS="${WALK_CLUSTER_EXISTS:-$WALK_EXISTS}"
 # <placeholder>.
 _istio_mode() {
   case "${WALK_ISTIO:-}" in install|existing) printf '%s' "$WALK_ISTIO"; return ;; esac
-  if   grep -q 'NO Istio detected'                "$STEP_OUT_FILE" 2>/dev/null; then printf 'install'
-  elif grep -q 'INGRESS_CONTROLLER=istio-existing' "$STEP_OUT_FILE" 2>/dev/null; then printf 'existing'
+  # KEY ON THE VERDICT, NOT THE FLAG. `INGRESS_CONTROLLER=istio-existing` has FIVE emit sites in
+  # 48-istio-preflight.sh (:72 :91 :126 :139 :217) and TWO of them are FAILURE paths:
+  #   :126 is a log_error followed by `exit 1` (:128) — discovery was REFUSED, here is what to set;
+  #   :139 (the "someone else installed it" MODE line) prints BEFORE the RBAC checks at :171-177,
+  #        :201 and :212 that can set rc=1 -> `:219 PREFLIGHT INCOMPLETE` -> exit 1.
+  # STEP_OUT_FILE captures stderr (:566 redirects 2>&1), so both were visible to the old grep, which
+  # therefore classified EVERY failed/incomplete preflight as "a mesh is here, attach to it".
+  #
+  # ⚠️ THE ANCHOR IS LOAD-BEARING — do NOT "simplify" it to a bare `PREFLIGHT OK`. That substring is
+  # also emitted by TWO OTHER scripts: 24-lab-preflight.sh:171 ("LAB PREFLIGHT OK — ...") and
+  # 23-argocd-preflight.sh:309 ("PREFLIGHT OK — clusters answer, ..."). They are harmless today only
+  # because STEP_OUT_FILE is truncated per `## ` heading (:530) and those blocks live under different
+  # headings — an accident that a shared-step extraction which MERGES headings would silently undo.
+  # The anchored form is immune, and was measured identical to the bare form on all six real istio
+  # paths. Only :91 and :217 (both success verdicts; :217 is gated on rc==0 at :216-220) emit it.
+  if   grep -q 'NO Istio detected'                    "$STEP_OUT_FILE" 2>/dev/null; then printf 'install'
+  elif grep -q "PREFLIGHT OK — 'make install-ingress" "$STEP_OUT_FILE" 2>/dev/null; then printf 'existing'
   else printf 'undecided'; fi
 }
 
