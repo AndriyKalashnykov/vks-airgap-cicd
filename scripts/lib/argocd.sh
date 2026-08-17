@@ -457,3 +457,73 @@ argocd_session_explain() {
   return 1
 }
 
+
+# argocd_await_revision <app> — wait for an Application to report a fetched revision, and
+# DISTINGUISH the ways that can fail. Lives here, not inline in 70-configure-argocd.sh, so a
+# test can drive it with a stub `ka`: the diagnostic it replaced survived precisely because it
+# was buried mid-script where nothing could exercise it.
+argocd_await_revision() {
+  local app="$1" _rd_err _rd_rc rev _attempts _cond
+  _rd_err="$(mktemp)"; _rd_rc=0; rev=""
+  # READ BEFORE ANNOTATING. Two reasons, and the second is the load-bearing one:
+  #  1. an Application that ALREADY carries a revision has PROVEN the repo is reachable, so there
+  #     is nothing left to demonstrate and no reason to wait;
+  #  2. `refresh=hard` invalidates the manifest cache and makes the controller rewrite
+  #     .status.sync wholesale. Firing it at an app that is already answering is a needless risk
+  #     of blanking the very field we then poll for — i.e. the check could manufacture its own
+  #     failure. Touch nothing we do not have to touch.
+  rev="$(ka -n "$ARGOCD_NAMESPACE" get application "$app" -o jsonpath='{.status.sync.revision}' 2>"$_rd_err")" || _rd_rc=$?
+  if [ "$_rd_rc" -ne 0 ]; then
+    # A FAILED READ IS NOT EVIDENCE ABOUT THE REPO. Name the READ, never the repo URL.
+    log_error "could not READ Application '${app}' — this says NOTHING about whether the repo is reachable."
+    log_error "  namespace : ${ARGOCD_NAMESPACE}   (resolved; see lib/os.sh's ARGOCD_NAMESPACE/VKS_NAMESPACE fallback)"
+    log_error "  API server: ${ARGOCD_API}"
+    log_error "  kubeconfig: ${ARGOCD_KUBECONFIG:-${KUBECONFIG:-<unset>}}"
+    log_error "  kubectl said:"
+    sed 's/^/    /' "$_rd_err" >&2 2>/dev/null || true
+    rm -f "$_rd_err"
+    die "cannot read Applications in '${ARGOCD_NAMESPACE}' — check the namespace, the kubeconfig, and whether the Application CRD is served there."
+  fi
+  if [ -n "$rev" ]; then
+    rm -f "$_rd_err"
+    log_info "  ${app}: already at revision ${rev} — the repo is reachable; not disturbing it"
+    return 0
+  fi
+
+  ka -n "$ARGOCD_NAMESPACE" annotate application "$app" argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
+  # NOTE: this is ATTEMPTS, not seconds — each turn costs a round-trip PLUS the sleep, so the wall
+  # clock is strictly longer than the count. Row 5 measured 188s for 180 attempts.
+  _attempts="$ARGOCD_REPO_TIMEOUT_SECONDS"
+  for _ in $(seq 1 "$_attempts"); do
+    _rd_rc=0
+    rev="$(ka -n "$ARGOCD_NAMESPACE" get application "$app" -o jsonpath='{.status.sync.revision}' 2>"$_rd_err")" || _rd_rc=$?
+    if [ "$_rd_rc" -ne 0 ]; then
+      log_error "the read of Application '${app}' started FAILING mid-wait (it succeeded moments ago):"
+      sed 's/^/    /' "$_rd_err" >&2 2>/dev/null || true
+      rm -f "$_rd_err"
+      die "lost access to Applications in '${ARGOCD_NAMESPACE}' while waiting — not a repo fault."
+    fi
+    [ -n "$rev" ] && break
+    sleep 1
+  done
+  if [ -z "$rev" ]; then
+    # ONLY HERE has the read demonstrably SUCCEEDED and returned empty, so the field really is
+    # unset and the repo is a legitimate suspect. Say what was checked and what was NOT.
+    log_error "Application '${app}' reported an EMPTY revision on all ${_attempts} attempts."
+    log_error "  The reads SUCCEEDED, so this is the Application's real state — not an access fault."
+    log_error "  namespace: ${ARGOCD_NAMESPACE}   API server: ${ARGOCD_API}"
+    log_error "  Its own conditions:"
+    _cond="$(ka -n "$ARGOCD_NAMESPACE" get application "$app" \
+      -o jsonpath='{range .status.conditions[*]}    [{.type}] {.message}{"\n"}{end}' 2>"$_rd_err")" || true
+    if [ -n "$_cond" ]; then printf '%s\n' "$_cond" >&2
+    else log_error "    (none — the Application reports NO conditions, so it is not complaining about the repo either)"; fi
+    log_error "  A repo it cannot clone is ONE candidate; confirm it rather than assume it, from the repo-server itself:"
+    log_error "    kubectl -n ${ARGOCD_NAMESPACE} exec deploy/argocd-repo-server -c repo-server -- \\"
+    log_error "      curl -s -o /dev/null -w '%{http_code}\\n' ${GITEA_ARGOCD_URL}/${GITEA_ORG}/${app}-deploy.git/info/refs?service=git-upload-pack"
+    log_error "    200 => the repo IS reachable and the cause is elsewhere; anything else => GITEA_ARGOCD_URL is the fault."
+    rm -f "$_rd_err"
+    die "ArgoCD never fetched a revision — refusing to report success."
+  fi
+  rm -f "$_rd_err"
+  log_info "  ${app}: ArgoCD fetched revision ${rev} — the repo is reachable from the ArgoCD cluster"
+}
