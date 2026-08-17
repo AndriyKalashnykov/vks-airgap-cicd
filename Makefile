@@ -563,8 +563,17 @@ harbor-ca-from-cluster: ## Get the lab Harbor's CA from the Supervisor when it i
 	@$(SCRIPTS)/27-harbor-ca-from-cluster.sh "$(if $(HARBOR_CA_FILE),$(HARBOR_CA_FILE),./secrets/harbor-ca.crt)"
 
 .PHONY: fetch-argocd-ca
-fetch-argocd-ca: ## Fetch the CA that ISSUED the ArgoCD server's cert → ARGOCD_CA_FILE, and VERIFY it (endpoint: ARGOCD_LB_IP or ARGOCD_SERVER)
-	@ep="$(if $(ARGOCD_LB_IP),$(ARGOCD_LB_IP),$(ARGOCD_SERVER))"; \
+# ⚠️ ARGOCD_SERVER FIRST (B168). This picks a TRUST ANCHOR, not a display string, so the rule
+# applies with more force here than anywhere: a DISCOVERED ARGOCD_LB_IP used to outrank an
+# operator's EXPLICIT ARGOCD_SERVER, and MEASURED there was NO operator input at all — not
+# .env, not the environment, not even `make fetch-argocd-ca ARGOCD_SERVER=…` on the command
+# line, GNU make's strongest precedence — that could redirect it. On a box with BOTH a live
+# KinD and a live lab that fetches the KinD ArgoCD's CA over the one the operator asked for.
+# ⚠️ Do NOT 'simplify' by dropping ARGOCD_LB_IP: its writer 09-argocd-address.sh is
+# Supervisor-only and .env.example ships ARGOCD_SERVER commented, so nothing sets it on KinD
+# and the recipe would die with an empty endpoint (measured).
+fetch-argocd-ca: ## Fetch the CA that ISSUED the ArgoCD server's cert → ARGOCD_CA_FILE, and VERIFY it (endpoint: ARGOCD_SERVER, else ARGOCD_LB_IP)
+	@ep="$(if $(ARGOCD_SERVER),$(ARGOCD_SERVER),$(ARGOCD_LB_IP))"; \
 	 [ -n "$$ep" ] || { echo "ERROR: set ARGOCD_LB_IP (kind, from the state overlay) or ARGOCD_SERVER (lab argocd-server LB IP) first"; exit 1; }; \
 	 $(SCRIPTS)/fetch-ca.sh "$$ep" "$(if $(ARGOCD_CA_FILE),$(ARGOCD_CA_FILE),./secrets/argocd-ca.crt)" argocd
 

@@ -66,9 +66,21 @@ gitea_url="${GITEA_URL:-$(ingress_url "${GITEA_HOST:-gitea.vks.local}")}"
 # ArgoCD is on its OWN LoadBalancer (like real VKS): KinD publishes ARGOCD_LB_IP to .env.state
 # (scheme https unless ARGOCD_INSECURE=1); a real lab uses the lab's own ArgoCD URL.
 argo_scheme="https"; [ "${ARGOCD_INSECURE:-0}" = "1" ] && argo_scheme="http"
-if [ -n "${ARGOCD_LB_IP:-}" ]; then
-  argocd_url="${argo_scheme}://${ARGOCD_LB_IP} (self-signed; --insecure)"
-elif [ -n "${ARGOCD_SERVER:-}" ]; then
+# ⚠️ ARGOCD_SERVER IS TESTED FIRST, AND THE ORDER IS THE FIX (B168). It used to be the other
+# way round, so a DISCOVERED, file-sourced ARGOCD_LB_IP outranked an operator's EXPLICIT
+# ARGOCD_SERVER — inverting this repo's own rule that config may supply a DEFAULT but may not
+# overrule an explicit choice (lib/os.sh:436). ARGOCD_SERVER is in load_env's snapshot-protected
+# list (os.sh:499) AND in check-env-clobber.sh's SELECTORS; ARGOCD_LB_IP is in NEITHER — so the
+# unprotected value was beating the protected one. MEASURED: `ARGOCD_SERVER=argocd-server
+# make creds-show` printed `https://192.168.101.131 (self-signed; --insecure)` — the bare IP plus
+# the literal --insecure that #745 tells operators never to use, against a cert with NO IP SAN.
+#
+# A KIND-STAMP DISCRIMINATOR WAS CONSIDERED AND REFUTED, measured across 5 states: keying on
+# VKS_STATE_KIND=1 repairs 1 of 3 defective states and REGRESSES one (a legacy .env.kind sink,
+# which os.sh:560 sources with no stamp at all), because every KinD sink carrying ARGOCD_LB_IP
+# also carries the stamp — the added conjuncts are true exactly when the bug fires. Inverting
+# the precedence repairs 3 of 3 with no stamp, no discriminator and no new mechanism.
+if [ -n "${ARGOCD_SERVER:-}" ]; then
   # A REAL LAB. ARGOCD_LB_IP is published only by the KinD flow (07-install-argocd.sh), so on a lab
   # this used to print the literal '<your lab's ArgoCD URL>' — while the operator had ALREADY told us
   # the address in ARGOCD_SERVER (both scenario runbooks have them discover and set it, and every
@@ -77,6 +89,10 @@ elif [ -n "${ARGOCD_SERVER:-}" ]; then
     http://*|https://*) argocd_url="$ARGOCD_SERVER" ;;
     *)                  argocd_url="${argo_scheme}://${ARGOCD_SERVER}" ;;
   esac
+elif [ -n "${ARGOCD_LB_IP:-}" ]; then
+  # KinD publishes this (07-install-argocd.sh). It is a DEFAULT — it applies only when the
+  # operator has not said otherwise.
+  argocd_url="${argo_scheme}://${ARGOCD_LB_IP} (self-signed; --insecure)"
 else
   # DISCOVER IT before giving up. MEASURED 2026-08-05: this printed `<not set>` and a footnote telling
   # the operator to "set ARGOCD_SERVER in .env" — while `kubectl -n <ns> get svc argocd-server` returned
