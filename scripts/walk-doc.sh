@@ -149,17 +149,56 @@ substitute() {
 # reports "1 line neutralized". Refuse the block instead -- half-executing is worse than not.
 # $2 = "log" -> record what was neutralized. Called twice per block (once to build the text that is
 # PRINTED, once to build the text that RUNS), so exactly one caller may log or the count doubles.
+#
+# ⚠️ THE REASON IS PER-ARM. It used to be ONE shared string, "needs a TTY / blocks forever",
+# which was FACTUALLY WRONG for two of the three arms — a false fact inside a control, which is
+# worse than no comment because it sends the next reader to fix the wrong thing. Corrected
+# 2026-08-17 with each arm's measured reason, plus what (if anything) covers the lost claim:
+# a neutralized line whose claim NOTHING else proves is a coverage hole, while one that merely
+# duplicates a proven path is not, and the old output conflated the two (B152).
 neutralize() {
-  local out="" line prev=""
+  local out="" line prev="" why="" cov=""
   while IFS= read -r line; do
+    why=""; cov=""
     case "$line" in
-      *"argocd login"*|*"argocd account update-password"*|*"port-forward"*)
-        case "$line" in *\\) echo 1 > "$UNSAFE_FILE" ;; esac   # continues into the next line
-        case "$prev" in *\\) echo 1 > "$UNSAFE_FILE" ;; esac   # is a continuation of the previous
-        out+="# WALK-NEUTRALIZED (needs a TTY / blocks forever): ${line}"$'\n'
-        [ "${2:-}" = log ] && printf '  neutralized: %s\n' "${line# }" >> "$NEUT_LOG" ;;
-      *) out+="${line}"$'\n' ;;
+      *"argocd login"*)
+        # MEASURED (argocd v3.0.19+d67e6eb90-vcf; also absent from upstream's docs): there is
+        # NO `--password-stdin` — passing it errors `unknown flag`. The ONLY non-interactive
+        # form is `--password <string>`, i.e. the secret in ARGV, which security.md forbids;
+        # and the prompt reads the TTY directly (terminal.ReadPassword on stdin's fd), so
+        # piping into a bare `argocd login` fails too. Do NOT "fix" this by rewriting the line:
+        # scenario-1:384 DELIBERATELY describes an interactive step ("prompts … paste what
+        # `make argocd-password` printed"), so a rewrite would test a command no reader types.
+        # The argv-safe way to prove this credential is the session-API POST already working in
+        # scripts/91-e2e-tenant-mechanism.sh:241+ — which belongs in a TARGET, not in here.
+        why='TTY-bound, and there is NO argv-safe non-interactive form (no --password-stdin)'
+        cov='UNCOVERED — nothing else in the matrix authenticates to ArgoCD (B152)' ;;
+      *"argocd account update-password"*)
+        # NOT a TTY problem — `--current-password`/`--new-password` DO exist. Two reasons to
+        # refuse anyway: they put secrets in ARGV, and it MUTATES the only ArgoCD admin
+        # credential on a SHARED lab. scenario-1:830-831 already records the fallout ("it can
+        # only show the generated one"), so walking it would poison every later step in this
+        # row AND every later row on the same cut. This one must stay neutralized forever.
+        why='a MUTATION a walk must not perform on a shared lab (NOT a TTY problem)'
+        cov='UNCOVERED — deliberately, see the reason' ;;
+      *"port-forward"*)
+        # A non-terminating FOREGROUND process: it blocks forever. It does NOT need a TTY.
+        why='never terminates — a foreground port-forward blocks forever'
+        cov='ingress path proven by "make verify-ingress"; the port-forward FALLBACK is UNCOVERED' ;;
     esac
+    if [ -n "$why" ]; then
+      case "$line" in *\\) echo 1 > "$UNSAFE_FILE" ;; esac   # continues into the next line
+      case "$prev" in *\\) echo 1 > "$UNSAFE_FILE" ;; esac   # is a continuation of the previous
+      out+="# WALK-NEUTRALIZED (${why}): ${line}"$'\n'
+      # ⚠️ EXACTLY ONE LINE PER ITEM. The verdict's neutralized count is `wc -l < "$NEUT_LOG"`
+      # (line ~704), so a multi-line record here silently MULTIPLIES the reported count — an
+      # inflated denominator, which reads as more thorough and is a lie. Keep why/covered-by on
+      # this same line, or change the count's source in the same edit.
+      [ "${2:-}" = log ] && printf '  neutralized: %s\n' \
+        "${line# }   [why: ${why} | covered-by: ${cov}]" >> "$NEUT_LOG"
+    else
+      out+="${line}"$'\n'
+    fi
     prev="$line"
   done <<< "$1"
   printf '%s' "$out"
