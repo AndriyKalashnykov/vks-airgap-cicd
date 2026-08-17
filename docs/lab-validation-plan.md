@@ -608,30 +608,44 @@ make verify-ingress 2>&1 | tee /tmp/23-verify-ingress.log; echo "EXIT=$?"
 
 > **A proxy image pointing at docker.io/gcr.io ⇒ the auto-provisioned gateway will NOT pull on an air-gapped cluster.** We would have to mirror and override it — a real gap in the design.
 
-### 24. 🎯 Does the SUPERVISOR CA also anchor vCENTER? · CHEAP, READ-ONLY — IT GATES B133 (CRITICAL)
+### 24. ✅ ANSWERED 2026-08-17 — a VMCA root DOES anchor vCenter (re-run only to re-confirm on YOUR lab)
 
-**Why:** `lib/vcenter.sh` sends the vCenter SSO **administrator** password to an unverified peer — `curl -sS -k` at `:48`, and the session token on the same channel at `:73`/`:89`. It is the only credential-bearing TLS client in this repo with no trust ladder at all (Harbor, ArgoCD and the Supervisor all have one). Fixing it needs a CA to verify against, and **this one command decides how big the fix is**:
+**Answer:** YES, and it was measured on a live cut. It unblocks B133's sizing: only scenario-1 **Step 2** (`make vsphere-namespace`) runs before a CA exists, so exactly ONE block breaks and the fix is the small one.
 
-- `./secrets/supervisor-ca.crt` **also anchors vCenter** → only scenario-1 **Step 2** (`make vsphere-namespace`) runs before a CA exists, so exactly ONE block breaks and the fix is small.
-- it does **not** → all four vCenter blocks break, and a `fetch-vcenter-ca` is needed first. The bundle it would need is **already downloaded** by `fetch-supervisor-ca.sh:33` (`certs/download.zip` is vCenter's FULL root set) and then discarded at `:110-114`, which keeps only the root matching the Supervisor's leaf issuer — so even then the fix is *stop discarding it*, not *add a new fetch*.
+```text
+vCenter leaf issuer        CN = CA, DC = vsphere, DC = local, ... O = vcsa.env1.lab.test
+vmca-root.pem  (trust-vcsa)   --cacert -> rc=0, HTTP 200      <- VERIFIES
+secrets/supervisor-ca.crt     --cacert -> rc=60               <- DOES NOT
+no --cacert at all            rc=60                            <- the state every operator is in today
+```
 
-B64's row already recorded this as its "cheap unblock" and it has never been run.
+⚠️ **THE SUBJECT-STRING COMPARISON THIS STEP ORIGINALLY PRESCRIBED GIVES THE WRONG ANSWER, AND I ONLY FOUND OUT BY RUNNING BOTH.** All three subjects above are **byte-identical**, yet one anchor verifies and one does not:
+
+```text
+vmca-root.pem       SHA256 73:79:F1:CB:...   notBefore Aug 14
+supervisor-ca.crt   SHA256 B3:93:B2:FF:...   notBefore Aug 13   (a PREVIOUS cut)
+```
+
+**Every lab cut mints a NEW VMCA with the SAME subject.** So comparing subjects would have reported EQUAL for a stale file from any earlier cut and concluded "the anchor already exists" — wrong, and wrong in the direction that ships a broken fix. This is the repo's own rule at work: **verify by a trust OPERATION, never by the presence of a file — or, here, by a string.**
 
 **Where:** jump box. Read-only, no credentials, no writes.
 **Who needs it:** US.
-**We then:** either ship the small `_vc_tls` change, or add the vCenter-root extraction first.
+**We then:** size B133's fix. It also tells you, per lab, whether the question applies at all.
 
 ```bash
 set -a; . ./.env; set +a
-echo "vCenter leaf issuer:"
-openssl s_client -connect "${VCENTER_HOST}:443" -showcerts </dev/null 2>/dev/null \
-  | openssl x509 -noout -issuer
-echo "supervisor-ca.crt subject:"
-openssl x509 -in ./secrets/supervisor-ca.crt -noout -subject
+# THE test — a handshake, not a string comparison. rc 0 => that anchor verifies vCenter.
+for ca in "${LAB_STATE:-$HOME/.local/state/nested-lab}/vmca-root.pem" ./secrets/supervisor-ca.crt; do
+  [ -f "$ca" ] || { printf '%-40s ABSENT\n' "$ca"; continue; }
+  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 --cacert "$ca" "https://${VCENTER_HOST}/" 2>/dev/null); rc=$?
+  printf '%-40s rc=%-3s %s\n' "$ca" "$rc" "$code"
+done
+# CONTROL — no anchor. rc 60 here is what "remove -k with no CA" would do to every operator.
+curl -sS -o /dev/null -w 'no-cacert %{http_code}\n' --max-time 15 "https://${VCENTER_HOST}/"; echo "rc=$?"
 ```
 
-**Expect:** the two strings are either EQUAL (the anchor already exists) or NOT (a vCenter root must be extracted). Both are useful answers; there is no failure mode here.
-**Send back:** both lines verbatim. Also, one line that settles whether the whole question even applies to your lab — `curl -o /dev/null -sS -w '%{http_code}\n' "https://${VCENTER_HOST}/"` with **no** `-k`: if that returns a code rather than an error, your vCenter serves a publicly-trusted certificate and removing `-k` breaks nothing at all for you.
+**Expect:** at least one anchor returns **rc=0**. If none does, a vCenter root must be extracted first — from a bundle `fetch-supervisor-ca.sh:33` **already downloads** (`certs/download.zip` is vCenter's FULL root set) and `:110-114` then discards, keeping only the root matching the SUPERVISOR's leaf issuer.
+**Send back:** the whole table including the control line. If the control returns a code rather than rc=60, your vCenter serves a publicly-trusted certificate and B133 costs you nothing at all.
 
 ### 25. Give you your lab back · OPTIONAL, CHEAP
 
