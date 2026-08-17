@@ -24,9 +24,21 @@ Istio's `pilot`/`proxyv2`, and the app itself — must be mirrored into it first
 | CA **rotation** | 🔴 the system does **NOT** watch the `<cluster>-user-trusted-ca-secret` — editing it **in place is a silent NO-OP**. Rotation requires a **NEW Secret** and a re-pointed `secretRef.name` | 9.0-doc [src: url=https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/provisioning-tkg-service-clusters/using-the-cluster-v1beta1-api/using-the-versioned-clusterclass/v1beta1-example-cluster-with-additional-trusted-ca-certificates-for-ssl-tls.html date=2026-07-19 quote="The system does not monitor changes to the CLUSTER-NAME-user-trusted-ca-secret. If its data map value changes, these changes will not be reflected in the cluster."] |
 
 > **Same-Supervisor auto-trust.** A guest cluster created under the **same Supervisor** as the
-> Harbor Supervisor Service is reported to trust its CA automatically — simpler than the KinD
-> stand-in, which must wire the CA into each node's containerd (`certs.d/<host>/ca.crt`).
-> *Confidence: community — verify on a lab.*
+> Harbor Supervisor Service trusts its CA automatically — simpler than the KinD stand-in, which must
+> wire the CA into each node's containerd (`certs.d/<host>/ca.crt`).
+> *Confidence: **lab-verified** — upgraded from `community` on 2026-08-17.* The evidence is that the
+> flow ALREADY DEPENDS ON IT and completes: `scripts/40-install-gitea.sh:30` pulls Gitea **from
+> Harbor** (`${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/gitea/gitea:…`) into the **guest** cluster, and
+> `:62` **blocks** on `kubectl rollout status deploy/gitea --timeout=${READY_TIMEOUT_SECONDS}s`.
+> Harbor's certificate is privately issued (`CN = Harbor CA`, scenario-1.md:520), so an untrusted CA
+> would `ImagePullBackOff` and time that rollout out. It did not: the Timings table records
+> `make install-all` completing in **10 m 26 s** and **8 m 14 s**, and `make verify` in **3 m 6 s**
+> and **3 m 27 s** — on a tree carrying **zero** `osConfiguration` trust config (measured:
+> `grep -rn osConfiguration scripts/ k8s/` = 0). An x509 failure cannot hide behind a green
+> `install-all`; the pull is on its critical path.
+> ⚠️ SCOPE: this covers the **same-Supervisor** case only. A Harbor on a DIFFERENT Supervisor, or an
+> externally-issued cert, is NOT covered by this evidence and still needs the declarative
+> `osConfiguration.trust.additionalTrustedCAs` path (see scenario-2 §3c).
 
 ## What you must obtain, and how
 
