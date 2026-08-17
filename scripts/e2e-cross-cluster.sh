@@ -187,12 +187,33 @@ while read -r app; do
   if guest -n "$ARGOCD_NS" get application "$app" >/dev/null 2>&1; then
     log_error "  ${app}: found in the GUEST — 70 wrote it to the workload cluster (CRITICAL #1)"; rc=1; continue
   fi
-  dest="$(hub -n "$ARGOCD_NS" get application "$app" -o jsonpath='{.spec.destination.server}{.spec.destination.name}')"
-  repo="$(hub -n "$ARGOCD_NS" get application "$app" -o jsonpath='{.spec.source.repoURL}')"
-  rev="$(hub -n "$ARGOCD_NS" get application "$app" -o jsonpath='{.status.sync.revision}')"
+  # These three reads used to discard their status entirely, so an unreadable Application produced
+  # empty strings that the assertions below then interpreted as facts about the REPO.
+  _rrc=0
+  dest="$(hub -n "$ARGOCD_NS" get application "$app" -o jsonpath='{.spec.destination.server}{.spec.destination.name}' 2>/dev/null)" || _rrc=$?
+  repo="$(hub -n "$ARGOCD_NS" get application "$app" -o jsonpath='{.spec.source.repoURL}' 2>/dev/null)" || _rrc=$?
+  rev="$(hub -n "$ARGOCD_NS" get application "$app" -o jsonpath='{.status.sync.revision}' 2>/dev/null)" || _rrc=$?
+  if [ "$_rrc" -ne 0 ]; then
+    log_error "  ${app}: could not READ the Application from the HUB — this says nothing about Gitea"; rc=1; continue
+  fi
   case "$repo" in *".svc"*) log_error "  ${app}: repoURL is cluster-local (${repo}) — CRITICAL #2"; rc=1 ;; esac
-  [ -n "$rev" ] || { log_error "  ${app}: ArgoCD never fetched a revision from ${repo} — the HUB cannot reach Gitea"; rc=1; }
-  log_info "  ${app}: in HUB · destination=${dest} · repo=${repo} · fetched revision=${rev:-<none>}"
+  # ⚠️ A NON-EMPTY REVISION IS NOT PROOF OF A FETCH — this assertion used to be `[ -n "$rev" ]`.
+  # In argo-cd v3.5.1 (our pin) state.go:653-655 sets syncStatus.Revision to spec.source.targetRevision
+  # — the BRANCH NAME — BEFORE any fetch, and state.go:1042-1046 only overwrites it once manifests
+  # were actually produced. So a hub that CANNOT reach Gitea still reports a non-empty revision, and
+  # this check passed it. The fetch signal is a ComparisonError condition (appended at state.go:699)
+  # and/or sync.status=Unknown (set at state.go:1034) — the same predicate argocd_await_revision uses.
+  _cerr="$(hub -n "$ARGOCD_NS" get application "$app" \
+    -o jsonpath='{range .status.conditions[?(@.type=="ComparisonError")]}{.message}{end}' 2>/dev/null || true)"
+  _sst="$(hub -n "$ARGOCD_NS" get application "$app" -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
+  if [ -n "$_cerr" ] || [ "$_sst" = Unknown ]; then
+    log_error "  ${app}: the HUB could not FETCH ${repo} (sync.status=${_sst:-<none>})"
+    [ -n "$_cerr" ] && log_error "    ArgoCD's own words: ${_cerr}"
+    rc=1
+  elif [ -z "$rev" ]; then
+    log_error "  ${app}: no revision recorded and no ComparisonError — the Application may not have reconciled yet"; rc=1
+  fi
+  log_info "  ${app}: in HUB · destination=${dest} · repo=${repo} · revision=${rev:-<none>} · sync=${_sst:-<none>}"
 done <<EOF
 $(app_names)
 EOF
