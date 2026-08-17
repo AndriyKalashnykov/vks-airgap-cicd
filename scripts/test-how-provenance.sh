@@ -22,6 +22,22 @@
 #   512 a vendor command cited INSIDE BACKTICKS in a sentence. Demanding a per-line grade there
 #       produced "`vcf context create …` (inferred), the" — which reads as if the word "the" is
 #       inferred. That is a citation, not an instruction; backticked spans are stripped.
+# ⚠️ A DIRECTIVE LINE TAKES ONLY THE DIRECTIVE. Trailing prose on the same line is parsed as a
+# further directive key, so writing the reason after the disable= produced SC1072/SC1073 parse
+# errors and REPLACED one lint finding with two. The reason goes on its own comment lines, below.
+# ⚠️ AND THE FIRST WORDING OF THIS VERY NOTE TRIPPED GITLEAKS. Quoting the broken directive inline
+# gave the line a <WORD> colon <high-entropy-token> shape, which generic-api-key flagged (entropy
+# 3.81) — a comment ABOUT a lint directive, read as a credential. Same class as this repo's
+# recorded PWD-colon and harborAdminPassword-colon false positives: prose that happens to look
+# like an assignment. Reworded rather than allowlisted, because widening a secrets allowlist to
+# admit prose is how a secrets gate stops catching secrets.
+# shellcheck disable=SC2016
+# EVERY probe string below is a LITERAL FIXTURE. `$C`, `$K`, `$X`
+# must reach the gate unexpanded: the gate's job is to judge the TEXT of an acquisition command,
+# and a shell-expanded `$C` would change the very thing under test. An implementation round
+# adjudicated the same directive on a sibling test and cleared it -- `set -u` also makes the
+# naive "fix" LOUD rather than silent, since double-quoting an undefined var aborts the run.
+# File-level rather than 10 line-level directives, because the reason is identical at every site.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
