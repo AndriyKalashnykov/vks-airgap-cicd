@@ -310,6 +310,36 @@ if [ "$MECH" = api ] && [ "$argocd_api_ready" != yes ]; then
   die "ARGOCD_MECHANISM=api needs the argocd CLI plus ARGOCD_SERVER and ARGOCD_AUTH_TOKEN (see .env.example)."
 fi
 
+# ⚠️ AN EXPLICIT `api` BYPASSES THE unknown-GUARD ABOVE — and the tenant path is ALWAYS explicit.
+# The die at the `auto` arm is unreachable here: `docs/scenario-2.md:264` and the walk harness
+# (`nested-vsphere-lab/scripts/walk-matrix.sh:393`) both set ARGOCD_MECHANISM=api, so `api) MECH=api`
+# takes it straight past the check that exists for exactly this state.
+#
+# MEASURED, matrix row 5, 2026-08-17 07:17:42Z: the probe was RIGHT and was then contradicted one
+# line later —
+#     WARN  the argocd API probe FAILED TO ANSWER (STALE_CA) ... Not selecting the api mechanism
+#     INFO  write mechanism: api  (kubectl=no, argocd-api=unknown)
+# and the run went on to create a namespace, apply PSA labels and mint an image-pull secret before
+# dying with a GUESSED AppProject/RBAC cause. We already HOLD the classified reason at this point;
+# this refuses before any of that side-effecting work and says what we actually measured.
+if [ "$MECH" = api ] && [ "$can_api" = unknown ]; then
+  _why="${_rl:-unknown|unknown}"; _why="${_why#*|}"
+  # ⚠️ THE REMEDY MUST NOT NAME ONE CAUSE. Go verifies the HOSTNAME BEFORE the chain (measured,
+  # go1.26.5: a leaf with DNS SANs only, dialled by IP, emits `doesn't contain any IP SANs`
+  # IDENTICALLY whether the CA is trusted or not) — so a name failure MASKS the anchor, and telling
+  # the operator "re-fetch the CA" or "the anchor is fine" is a coin flip that costs a second round
+  # trip. Name both knobs; they are independent here in a way they never are for a kubeconfig.
+  die "ARGOCD_MECHANISM=api, but the argocd API probe DID NOT ANSWER (${_why}).
+  This is a TRANSPORT fault, not a permissions one: argocd-server never received the probe, so no
+  AppProject role changes it and 'make argocd-preflight' cannot surface it — and every write below
+  would fail the same way, after creating namespaces and secrets.
+  Two INDEPENDENT knobs reach '${ARGOCD_SERVER:-<unset>}', and a name fault hides an anchor fault:
+    * the ADDRESS  — ARGOCD_SERVER must be a name or IP the server's certificate actually carries
+    * the ANCHOR   — ARGOCD_CA_FILE (make fetch-argocd-ca) must be the CA that signed it
+  Fix the address first (it is verified first), then re-run: the anchor error can only appear once
+  the name matches."
+fi
+
 # ---- where does the app DEPLOY to? ---------------------------------------------------------------
 # Default: in-cluster == the cluster ArgoCD runs in. That is correct ONLY when ArgoCD and the
 # workload share a cluster. When they do not, the in-cluster default means THE SUPERVISOR, so we
@@ -426,8 +456,39 @@ apply_application() {
       # The TENANT path. argocd-server enforces ARGOCD RBAC (an AppProject role), not Kubernetes RBAC
       # — which is why this works where `kubectl apply` into the admin's namespace is Forbidden.
       # ARGOCD_AUTH_TOKEN reaches the CLI through the ENVIRONMENT, never argv.
-      argocd app create -f "$manifest" --upsert >/dev/null \
-        || die "argocd-server refused to create Application '${app}'. Does your AppProject '${ARGOCD_PROJECT}' permit this destination and repo? ('make argocd-preflight' checks exactly that.)"
+        # ⚠️ CLASSIFY THE CLI'S OWN STDERR — do NOT substitute a cause. B137, measured row 5:
+        # this died with "Does your AppProject permit this destination and repo?" while the CLI had
+        # just printed `tls: failed to verify certificate: x509: ... doesn't contain any IP SANs`.
+        # The text was never DISCARDED (>/dev/null is stdout only) — it was ignored and then
+        # CONTRADICTED, which is worse: it sends the operator to argocd-preflight, a tool that
+        # measures RBAC and structurally cannot surface a transport fault.
+        _ac_err="$(mktemp)"
+        if ! argocd app create -f "$manifest" --upsert >/dev/null 2>"$_ac_err"; then
+          _ac_cls="$(classify_kube_failure "$_ac_err")"
+          _ac_txt="$(tr -d '\000' < "$_ac_err" | tail -5)"; rm -f "$_ac_err"
+          case "$_ac_cls" in
+            STALE_CA)
+              die "could not REACH argocd-server to create Application '${app}' — a TRANSPORT fault,
+  not a permissions one. argocd-server never received the request, so no AppProject role and no
+  'make argocd-preflight' run will change it.
+  The certificate's NAME is verified BEFORE its chain (measured, go1.26.5), so a name fault HIDES an
+  anchor fault — fix the address first, then the anchor:
+    * ARGOCD_SERVER  ('${ARGOCD_SERVER:-<unset>}') must be a name/IP the server certificate carries
+    * ARGOCD_CA_FILE (make fetch-argocd-ca) must be the CA that signed it
+  the CLI said:
+${_ac_txt}" ;;
+            UNAUTHORIZED)
+              die "argocd-server REJECTED the credential while creating Application '${app}'.
+  ARGOCD_AUTH_TOKEN is absent, expired, or issued for another server — not an AppProject question.
+  the CLI said:
+${_ac_txt}" ;;
+            *)
+              die "argocd-server refused to create Application '${app}'. Does your AppProject '${ARGOCD_PROJECT}' permit this destination and repo? ('make argocd-preflight' checks exactly that.)
+  the CLI said:
+${_ac_txt}" ;;
+          esac
+        fi
+        rm -f "$_ac_err"
       ;;
     request)
       # The GIVE-UP path, and deliberately LAST. We cannot write, so render EXACTLY what we would
@@ -570,8 +631,27 @@ if [ "$MECH" = api ] && [ "${_rv%%|*}" = no ]; then
   # kubectl at all. `argocd app wait` is the equivalent check.
   log_info "verifying via argocd-server that each Application syncs (kubectl cannot read them on this path)"
   for app in $APPS_APPLIED; do
-    argocd app wait "$app" --sync --timeout "$ARGOCD_REPO_TIMEOUT_SECONDS" >/dev/null 2>&1 \
-      || die "Application '$app' did not sync. If it never fetched a revision, ArgoCD's repo-server cannot reach ${GITEA_ARGOCD_URL}."
+        # ⚠️ THIS USED TO `2>&1` THE STDERR INTO /dev/null — strictly worse than the create site,
+        # which at least let the text reach the log. A transport fault here was reported as
+        # "repo-server cannot reach Gitea", a guess about a DIFFERENT component. Keep the text.
+        _aw_err="$(mktemp)"
+        if ! argocd app wait "$app" --sync --timeout "$ARGOCD_REPO_TIMEOUT_SECONDS" >/dev/null 2>"$_aw_err"; then
+          _aw_cls="$(classify_kube_failure "$_aw_err")"
+          _aw_txt="$(tr -d '\000' < "$_aw_err" | tail -5)"; rm -f "$_aw_err"
+          case "$_aw_cls" in
+            STALE_CA|UNAUTHORIZED|UNREACHABLE)
+              die "could not REACH argocd-server to wait on Application '$app' (${_aw_cls}).
+  This says NOTHING about whether the app synced, and nothing about repo-server or ${GITEA_ARGOCD_URL}
+  — the request did not arrive. Fix the connection/credential to '${ARGOCD_SERVER:-<unset>}'.
+  the CLI said:
+${_aw_txt}" ;;
+            *)
+              die "Application '$app' did not sync. If it never fetched a revision, ArgoCD's repo-server cannot reach ${GITEA_ARGOCD_URL}.
+  the CLI said:
+${_aw_txt}" ;;
+          esac
+        fi
+        rm -f "$_aw_err"
     log_info "  ${app}: synced (argocd-server)"
   done
   log_info "ArgoCD Applications created: $(app_names | tr '\n' ' ')"

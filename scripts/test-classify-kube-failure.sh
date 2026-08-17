@@ -81,6 +81,26 @@ t UNREACHABLE "The connection to the server 10.0.0.1:6443 was refused - did you 
 
 # STALE_CA — the server ANSWERED, so every remedy differs from UNREACHABLE.
 t STALE_CA "Unable to connect to the server: x509: certificate signed by unknown authority"
+#
+# ⚠️ THE OTHER TWO STALE_CA TOKENS HAD ZERO COVERAGE. Measured 2026-08-17: deleting *"x509"* AND
+# *"certificate is valid for"* from the arm, leaving only "signed by unknown authority", still gave
+# 20 passed / 0 failed. The suite could not see two thirds of its own arm. These cases pin it.
+#
+# Every string below was PRODUCED, not transcribed: a Go 1.26.5 TLS handshake against a locally
+# generated CA+leaf (/tmp/x509probe). All classify STALE_CA today, deliberately — this pins CURRENT
+# behaviour so any future split of the class has to update them on purpose.
+#
+# 🔴 THE LOAD-BEARING MEASUREMENT, and it refutes the obvious reading of these strings:
+#     leaf has DNS SANs only, dialled by IP, CA *TRUSTED*   -> "...doesn't contain any IP SANs"
+#     leaf has DNS SANs only, dialled by IP, CA *UNTRUSTED* -> "...doesn't contain any IP SANs"   (IDENTICAL)
+# Go verifies the HOSTNAME BEFORE the chain, so a name failure MASKS the anchor. A name-mismatch
+# message therefore says the anchor was NOT REACHED — never that the anchor is fine, and never that
+# re-fetching the CA is pointless. Any remedy text built on these strings must say so, or it sends
+# the operator to fix one fault and hit the other on the next run.
+t STALE_CA "tls: failed to verify certificate: x509: cannot validate certificate for 192.168.101.131 because it doesn't contain any IP SANs"
+t STALE_CA "tls: failed to verify certificate: x509: certificate is valid for localhost, argocd-server, argocd-server.cicd, argocd-server.cicd.svc, not argocd.env1.lab.test"
+t STALE_CA "tls: failed to verify certificate: x509: certificate is valid for 10.0.0.1, not 192.168.101.131"
+t STALE_CA "tls: failed to verify certificate: x509: certificate has expired or is not yet valid: current time 2026-08-17T04:08:30-04:00 is after 2026-08-17T08:07:30Z"
 t PLAINTEXT "error: server gave HTTP response to HTTPS client"
 
 # UNAUTHORIZED vs FORBIDDEN, unmixed — the ordering incident lib/os.sh records. One says
