@@ -446,19 +446,51 @@ clearly if any is missing. On a minimal box where you skipped `make deps`:
 > **Fidelity vs VKS.** The local KinD stand-in faithfully reproduces the lab's
 > **self-signed-TLS + CA-trust** posture (Harbor HTTPS + ArgoCD self-signed TLS on their own
 > LBs). Three things differ on a VKS cluster and must be verified there: the workload cluster
-> trusts the Harbor CA **declaratively** via the Cluster spec `trust.additionalTrustedCAs`
+> trusts the Harbor CA **declaratively** via the Cluster spec
+> `osConfiguration.trust.additionalTrustedCAs`
 > (not per-node `certs.d`); a **private** Harbor project needs a robot account +
 > `imagePullSecret`; and the lab is **FQDN**-addressed. See
 > [KinD TLS fidelity → Fidelity vs a real VCF/VKS 9.1 lab](decisions/kind-tls-fidelity.md).
 
+Reference: [William Lam — using a VKS cluster with a private container registry](https://williamlam.com/2024/06/using-a-vsphere-kubernetes-service-vks-cluster-with-a-private-container-registry.html).
+
+## 3c. Make the workload cluster trust the Harbor CA
+
 Because your Harbor project is a **tenant** project (typically **private**), the workload cluster
-must trust the Harbor CA **declaratively** — add the CA to the Cluster spec
-`trust.additionalTrustedCAs` (a request to the platform team if you don't own the Cluster
-resource). The value is your Harbor CA certificate file **encoded twice with base64** (VKS decodes
-one layer, the cluster nodes decode the second):
+must trust the Harbor CA **declaratively** — there is no per-node `certs.d` to edit. This is
+**two asks of the platform team** if you do not own the Cluster resource.
+
+**1. A Secret** in the same vSphere Namespace as the Cluster, conventionally named
+`<cluster>-user-trusted-ca-secret`.
+
+**The invariant — and it is the ONLY thing worth memorising:** the value **VKS reads** must be the
+CA **base64'd once**, because VKS decodes that one layer to recover the PEM. Every Kubernetes Secret
+also carries its own base64 layer on the wire, and **`kubectl` supplies exactly one layer for you**.
+So how many times *you* encode depends entirely on how you create the Secret, and both natural
+shortcuts are wrong in **opposite** directions:
+
+| you create it with | you supply the CA | because kubectl adds |
+|---|---|---|
+| hand-written `data:` (the YAML below) | **base64'd TWICE** | nothing — you are writing the wire layer yourself |
+| `kubectl create secret --from-literal=` | **base64'd ONCE** | one layer |
+| `kubectl create secret --from-file=` | a **file already holding** `base64 -w0 ca.crt` | one layer |
+
+Measured with `kubectl create secret generic --dry-run=client`, comparing what VKS would read
+(`.data` decoded once) against the target `base64(PEM)`:
+
+- `--from-file=k=ca.crt` (pointing at the **raw** CA) → VKS reads the **raw PEM**: **one layer
+  short**, so VKS base64-decodes a PEM and gets garbage.
+- `--from-literal=k=<doubly-encoded>` → **one layer too many**.
+- `--from-literal=k=<singly-encoded>` and `--from-file=` a file holding the singly-encoded CA →
+  **correct**.
+
+Broadcom states the requirement for the hand-written case: *"Double base64-encoding is required. If
+the contents are not double base64-encoded, the resulting PEM file cannot be processed."*
 
 ```bash
-# DOUBLE base64: the outer -w0 keeps it a single line for the Cluster YAML.
+# DOUBLE base64 — for the hand-written `data:` form below.
+# (For `--from-literal=` / `--from-file=`, use a SINGLE `base64 -w 0` instead: kubectl adds the
+# second layer itself. Encoding twice there gives one layer too many.)
 #
 # The two-step form is deliberate. Written as one pipeline — `base64 -w 0 $CA | base64 -w 0` —
 # a missing file makes the FIRST base64 fail while the pipeline's status is the SECOND one's,
@@ -468,9 +500,55 @@ CA="${HARBOR_CA_FILE:-./secrets/harbor-ca.crt}"
 b64=$(base64 -w 0 "$CA") && printf '%s' "$b64" | base64 -w 0
 ```
 
-Reference: [William Lam — using a VKS cluster with a private container registry](https://williamlam.com/2024/06/using-a-vsphere-kubernetes-service-vks-cluster-with-a-private-container-registry.html).
-(Verify the exact `trust.additionalTrustedCAs` shape against your VCF/VKS 9.1 lab — it is not
-reproducible on the KinD stand-in.)
+🔴 **Rotation is not an edit.** VKS does **not** watch this Secret — Broadcom: *"The system does not
+monitor changes to the CLUSTER-NAME-user-trusted-ca-secret. If its data map value changes, these
+changes will not be reflected in the cluster."* So if you get the encoding wrong, or the CA later
+rotates, **editing the Secret in place does nothing**: create a **new** Secret and re-point
+`secretRef.name` at it.
+
+**2. The Cluster topology variable** referencing that Secret — note the `osConfiguration.` prefix,
+which is easy to lose when this path is quoted second-hand:
+
+```yaml
+spec:
+  topology:
+    variables:
+      - name: osConfiguration
+        value:
+          trust:
+            additionalTrustedCAs:
+              - caCert:
+                  secretRef:
+                    name: <cluster>-user-trusted-ca-secret
+                    key: additional-ca-1
+```
+
+**When it takes effect.** On an **existing** cluster — the Scenario-2 case — this is added with
+`kubectl edit cluster/<name>`, and the CAs are installed **on the next rolling update**, so the
+nodes roll. Say that when you raise the ask; it is not a free change.
+
+⚠️ **`caCert.content` is an inline alternative — this runbook does not use it.** The schema offers
+`caCert.content` beside `caCert.secretRef`, and it carries **no encoding guidance**: the field is a
+bare `type: string` with no pattern or format, the word "base64" appears nowhere in the `trust`
+subtree of the live 9.1 schema, and Broadcom's double-base64 statement is written against the
+Secret path. That also means a server-side dry-run **cannot** tell you the answer — it accepts any
+string. We have not tested `content`, so we do not state its encoding. The schema's own description
+adds an independent reason to prefer `secretRef`: *"Content should only be used where it is ok if
+the secret data is viewable on the Cluster CR."*
+
+⚠️ **If you need to check the schema yourself, read `status.variables`, not `spec.variables`** —
+these variables are published by a CAPI **runtime extension**, so only the server knows them:
+
+```bash
+kubectl get clusterclass <class> -n "$VKS_CLUSTERCLASS_NAMESPACE" \
+  -o jsonpath='{.status.variables}' | jq '.[] | select(.name=="osConfiguration")'
+```
+
+(Measured on a 9.1 lab, 2026-08-17: `spec.variables` was empty on all 12 ClusterClasses present,
+so reading it returns nothing and looks like the field does not exist.)
+
+> ⚠️ The repo's own `k8s/vks/cluster.yaml` does **not** yet carry this stanza (backlog **B130**), so
+> a cluster created by `make vks-cluster-create` needs it added afterwards.
 
 ## 4. Harbor projects and the image-pull secret
 

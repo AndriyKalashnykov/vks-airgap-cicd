@@ -244,9 +244,13 @@ Harbor ≈ **2.14.3** (`_vmware` build); ArgoCD provisioned by the Broadcom Argo
 
 1. **The VKS workload-cluster CA-trust MECHANISM.** The lab does NOT hand-edit
    `certs.d/hosts.toml`. It trusts the Harbor CA declaratively via the Cluster (v1beta1) spec
-   `variables: [{name: trust, value: {additionalTrustedCAs: [{name: …}]}}]`, backed by a
-   **`<CLUSTER-NAME>-user-trusted-ca-secret`** in the vSphere Namespace holding the CA
-   **double-base64-encoded** (`base64 -w0 ca.crt | base64 -w0`). The secret is **not watched**
+   `variables: [{name: osConfiguration, value: {trust: {additionalTrustedCAs:
+   [{caCert: {secretRef: {name: …, key: …}}}]}}}]`, backed by a
+   **`<CLUSTER-NAME>-user-trusted-ca-secret`** in the vSphere Namespace whose value **as VKS reads
+   it** (i.e. `.data` decoded once) is the CA base64'd **once** — so a hand-written `data:` field
+   holds it **double**-encoded (`base64 -w0 ca.crt | base64 -w0`), while `kubectl create secret
+   --from-literal=` takes it **single**-encoded, because kubectl adds the wire layer itself
+   (measured, `--dry-run=client`). The secret is **not watched**
    (CA rotation needs a new secret + a cluster-spec update). Our per-node `certs.d` reaches the
    same end state by a non-transferable route — the most likely real-lab failure (wrong
    encoding, wrong namespace, un-reapplied rotation) is invisible to KinD.
@@ -264,14 +268,14 @@ Harbor ≈ **2.14.3** (`_vmware` build); ArgoCD provisioned by the Broadcom Argo
 
 **Sources:** [Harbor as a Supervisor Service (TechDocs)](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vsphere-supervisor-services-and-standalone-components/latest/using-supervisor-services/installing-and-configuring-harbor-and-contour/install-harbor-as-a-supervisor-service.html),
 [Air-gapped Harbor in VCF 9 (VCF blog)](https://blogs.vmware.com/cloud-foundation/2026/04/21/deploying-harbor-service-in-air-gapped-vmware-cloud-foundation-9-0/),
-[Integrate TKG clusters with a private registry — the `trust.additionalTrustedCAs` path (TechDocs)](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/using-private-registries-with-tkg-service-clusters/integrate-tkg-service-clusters-with-a-private-container-registry.html),
+[Integrate TKG clusters with a private registry — the `osConfiguration.trust.additionalTrustedCAs` path (TechDocs)](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/managing-vsphere-kuberenetes-service-clusters-and-workloads/using-private-registries-with-tkg-service-clusters/integrate-tkg-service-clusters-with-a-private-container-registry.html),
 [williamlam — VKS self-signed registry trust](https://williamlam.com/2025/08/quick-tip-configuring-vsphere-kubernetes-service-vks-cluster-with-self-signed-container-registry.html),
 [Broadcom Argo CD Operator GA](https://blogs.vmware.com/cloud-foundation/2025/07/11/gitops-for-vcf-broadcom-argo-cd-operator-now-available/),
 [Install the Argo CD Service (TechDocs)](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-service-administration-and-development/9-0/using-supervisor-services/using-argo-cd-service/install-argo-cd-service.html).
 
 **Actionable follow-ups (low-risk, tracked):** (T1) after the secure Harbor upgrade, assert the
 CA served by Harbor's own `GET /api/v2.0/systeminfo/getcert` matches our minted CA (exercises the
-real CA-retrieval path); (T2 — done here) document the `trust.additionalTrustedCAs` delta; (T3)
+real CA-retrieval path); (T2 — done here) document the `osConfiguration.trust.additionalTrustedCAs` delta; (T3)
 guard that no IP-shaped `HARBOR_URL` literal is hardcoded downstream (keep the FQDN swap safe);
 (T4, optional) a `HARBOR_PUBLIC_PROJECTS=0` matrix exercising a robot account + `imagePullSecret`.
 
