@@ -282,7 +282,14 @@ note "NOT removing secrets/ automatically — it may hold a credential this repo
 note "(the teardown rule: delete only what you can prove you created)."
 note "  rm -f ${REPO_ROOT}/secrets/${VKS_CLUSTER_NAME}.kubeconfig"
 note "and the ingress hosts line needs root, which we do not have:"
-note "  sudo sed -i '/vks.local/d' /etc/hosts"
+# DERIVED, not hardcoded. creds.sh:285 prints the /etc/hosts line built from ${GITEA_HOST},
+  # ${TEKTON_DASHBOARD_HOST} and app_host() per app, while this said `/vks.local/d` LITERALLY — so
+  # after any APP_DOMAIN change the two disagree: creds-show tells you to ADD the new names while
+  # uninstall tells you to DELETE the old ones, and the stale entry survives teardown. On the next
+  # cut the LB lands elsewhere and that entry points at a dead address, which is exactly the state
+  # creds.sh:277-281 exists to prevent ("a hosts entry pointing at nothing sends you to debug your
+  # browser"). The fallback keeps today's behaviour byte-identical.
+  note "  sudo sed -i '/${APP_DOMAIN:-vks.local}/d' /etc/hosts"
 left "secrets/ and the /etc/hosts line (manual; /etc/hosts needs sudo)"
 
 # --- verdict ------------------------------------------------------------------------------------
