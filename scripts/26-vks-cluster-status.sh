@@ -31,9 +31,13 @@ SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kub
 k() { kubectl --kubeconfig "$SUP" "$@"; }
 
 WAIT_SECONDS="${VKS_CLUSTER_WAIT_SECONDS:-0}"     # 0 = report once; >0 = poll until ready
-# ⚠️ NOT POLL_INTERVAL_SECONDS. That one is UNCOMMENTED in .env.example, so load_env's `set -a`
-# re-exports it and CLOBBERS a per-run override — measured here: `POLL_INTERVAL_SECONDS=20 make ...`
-# silently polled every 5s. Its own dedicated name cannot be shadowed that way.
+# ⚠️ NOT POLL_INTERVAL_SECONDS, and the reason CHANGED as of B122. This key was BORN because that
+# one used to be uncommented in .env.example, so load_env's `set -a` re-exported it and CLOBBERED a
+# per-run override (measured at the time: `POLL_INTERVAL_SECONDS=20 make ...` silently polled every
+# 5s). That is history now — it is commented and shadows nothing.
+# The key STAYS on a reason decided NOW, not inherited: this loop makes FOUR calls per iteration
+# (report() 1 + nodes_ready() 3) against an 1800s budget, where a POLL_INTERVAL_SECONDS site makes
+# one against 300s. 15s is right here and 5s is not, and a different value earns its own key.
 POLL="${VKS_CLUSTER_POLL_SECONDS:-15}"
 
 KC="${REPO_ROOT}/secrets/${VKS_CLUSTER_NAME}.kubeconfig"

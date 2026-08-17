@@ -358,10 +358,14 @@ install_tkn() {
   # (measured), so 60s demands 33 Mbit/s sustained for argocd — below that EVERY attempt dies
   # curl 28, and because 28 is retried the whole budget burns before failing. 900s is the transfer
   # cap, not a delay: a fast link still finishes in seconds.
-  # It is a SEPARATE variable because HTTP_GET_MAX_TIME_SECONDS is UNCOMMENTED in .env.example (=60),
-  # so load_env exports it and `${HTTP_GET_MAX_TIME_SECONDS:-900}` would have resolved to 60 — the
-  # override would have been INERT and argocd would still fail on a slow link. check-env-clobber
-  # caught that; PREREQ_DOWNLOAD_MAX_TIME_SECONDS ships COMMENTED, so a per-run override survives.
+  # It is a SEPARATE variable because HTTP_GET_MAX_TIME_SECONDS USED TO BE uncommented in
+  # .env.example (=60): load_env exported it, so `${HTTP_GET_MAX_TIME_SECONDS:-900}` resolved to 60,
+  # the override was INERT and argocd still failed on a slow link. check-env-clobber caught that.
+  # ⚠️ THAT KEY IS COMMENTED NOW (it was already commented before B122 — this sentence had simply
+  # gone stale), so the clobber no longer happens. The separate variable STAYS anyway, because the
+  # two want genuinely different numbers: 60s is right for a small manifest and 900s for a 238 MiB
+  # CLI, and a different value earns its own key. PREREQ_DOWNLOAD_MAX_TIME_SECONDS also ships
+  # COMMENTED, so a per-run override of IT survives.
   HTTP_GET_MAX_TIME_SECONDS="$(prereq_dl_max_time)" http_get_retry "$url" "${tmp}/tkn.tgz"
   tar -xzf "${tmp}/tkn.tgz" -C "$tmp" tkn
   install -m 0755 "${tmp}/tkn" "${BIN_DIR}/tkn"
