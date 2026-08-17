@@ -289,6 +289,15 @@ export KUBECONFIG=$PWD/secrets/vks.kubeconfig
 kubectl auth can-i '*' '*' --all-namespaces
 kubectl auth can-i create customresourcedefinitions.apiextensions.k8s.io
 kubectl auth can-i create clusterroles.rbac.authorization.k8s.io
+# The TWO resources `make vks-k8s-version` reads. They are DIFFERENT resources in DIFFERENT API
+# groups, so a grant on one says nothing about the other — and osimages is the newer of the two.
+# `24-vks-k8s-version.sh` now DEGRADES with a named FORBIDDEN instead of waiting out its budget and
+# blaming the content library, but whether a normal scenario-1 operator can list osimages at all has
+# never been measured on a real lab. If the answer here is "no", the OSImage cross-check silently
+# never runs for that identity, and every version it resolves is Ready+Compatible but UNVERIFIED for
+# the node image — which the webhook can then deny with "Could not resolve KR/OSImage".
+kubectl auth can-i list kubernetesreleases
+kubectl auth can-i list osimages
 kubectl get storageclass
 kubectl get svc -A --field-selector spec.type=LoadBalancer -o wide
 ```
