@@ -34,13 +34,21 @@ export GITEA_ORG=demo
 # `run <mode>` executes the function in a SUBSHELL (it calls die, which exits) with a stub `ka`,
 # and returns its combined output. STUB_MODE selects the fault being simulated.
 run() {
-  ( export STUB_MODE="$1"
+  ( export STUB_MODE="$1" WITNESS="${2:-/dev/null}"
+    # shellcheck disable=SC2329  # invoked indirectly by argocd_await_revision
     ka() {
+      # WITNESS is a FILE, not an echo: the product annotates with >/dev/null 2>&1, so anything the
+      # stub PRINTS on that path is eaten by the product's own redirect. A case asserting on printed
+      # output therefore measures the redirect, not the behaviour — measured: a mutant that annotated
+      # BEFORE reading still scored 13/13.
+      case " $* " in *" annotate "*) printf 'annotate\n' >> "$WITNESS"; return 0 ;; esac
+      printf 'read\n' >> "$WITNESS"
       case "$STUB_MODE" in
         readfail)  echo 'Error from server (Forbidden): applications.argoproj.io is forbidden' >&2; return 1 ;;
         nocrd)     echo 'error: the server doesn'"'"'t have a resource type "application"' >&2; return 1 ;;
-        empty)     case " $* " in *annotate*) return 0 ;; esac; printf '' ;;   # read SUCCEEDS, value empty
-        haverev)   case " $* " in *annotate*) echo "ANNOTATE-WAS-CALLED" ; return 0 ;; esac; printf 'abc123' ;;
+        empty)     printf '' ;;
+        condfail)  case " $* " in *conditions*) echo 'Error from server (Forbidden): cannot read conditions' >&2; return 1 ;; esac; printf '' ;;
+        haverev)   printf 'abc123' ;;
       esac
       return 0
     }
@@ -85,12 +93,35 @@ case "$out" in *"ONE candidate"*)           ok "the repo is offered as A candida
   *) bad "the repo is offered as a candidate" "got: ${out:0:150}" ;; esac
 
 echo
-echo "== an Application that ALREADY has a revision must not be disturbed =="
-out="$(run haverev)"
-case "$out" in *"already at revision abc123"*) ok "an existing revision short-circuits the wait" ;;
-  *) bad "an existing revision short-circuits" "got: ${out:0:150}" ;; esac
-case "$out" in *ANNOTATE-WAS-CALLED*)       bad "it must NOT annotate an app that already answered" "refresh=hard rewrites .status.sync wholesale — needless risk of blanking the field we poll for" ;;
-  *) ok "it does NOT annotate an app that already answered (read BEFORE annotate)" ;; esac
+echo "== a pre-existing revision must NOT short-circuit the probe =="
+# The short-circuit was REMOVED after it was measured to make this check a no-op: both apply paths
+# are UPSERT, so .status.sync.revision PERSISTS, and a stale one let the function exit 0 after ONE
+# read, ZERO annotates and ZERO repo contact while printing "the repo is reachable" — with
+# GITEA_ARGOCD_URL pointed at a host that does not exist.
+W="$(mktemp)"; out="$(run haverev "$W")"; wit="$(cat "$W")"; rm -f "$W"
+case "$out" in *"re-probing anyway"*) ok "an existing revision is reported but NOT trusted" ;;
+  *) bad "an existing revision is re-probed" "got: ${out:0:150}" ;; esac
+case "$wit" in *annotate*) ok "it STILL annotates (the refresh is not skipped)" ;;
+  *) bad "it still annotates" "witness=[$wit] — a short-circuit would make this gate a no-op" ;; esac
+# POSITIVE CONTROL for the witness itself: without it, an empty witness could mean "did not annotate"
+# OR "the witness never worked". Two reads minimum proves the file is being written at all.
+n_reads=$(printf '%s\n' "$wit" | grep -c '^read$' || true)
+if [ "${n_reads:-0}" -ge 2 ]; then
+  ok "the witness records reads too (so an empty 'annotate' would be meaningful)"
+else
+  bad "witness positive control" "only ${n_reads:-0} read(s) recorded — the witness may not be wired"
+fi
+
+echo
+echo "== a failed CONDITIONS read must not be reported as 'no conditions' =="
+# The conditions read was the SECOND of the two, and it still discarded its rc: it printed
+# "(none — not complaining about the repo either)" over a Forbidden. That is an affirmative
+# FALSEHOOD steering at the repo — worse than the old code's visible silence.
+out="$(run condfail)"
+case "$out" in *"could not read the conditions"*) ok "a Forbidden on the conditions read is named as a READ fault" ;;
+  *) bad "conditions read fault is named" "got: ${out:0:200}" ;; esac
+case "$out" in *"reports NO conditions"*) bad "it must NOT claim 'no conditions' when the read FAILED" "that is an affirmative falsehood pointing at the repo" ;;
+  *) ok "it does NOT claim 'no conditions' when the read failed" ;; esac
 
 echo
 printf '  %d passed, %d failed\n' "$pass" "$fail"

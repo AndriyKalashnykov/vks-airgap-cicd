@@ -463,67 +463,100 @@ argocd_session_explain() {
 # test can drive it with a stub `ka`: the diagnostic it replaced survived precisely because it
 # was buried mid-script where nothing could exercise it.
 argocd_await_revision() {
-  local app="$1" _rd_err _rd_rc rev _attempts _cond
-  _rd_err="$(mktemp)"; _rd_rc=0; rev=""
-  # READ BEFORE ANNOTATING. Two reasons, and the second is the load-bearing one:
-  #  1. an Application that ALREADY carries a revision has PROVEN the repo is reachable, so there
-  #     is nothing left to demonstrate and no reason to wait;
-  #  2. `refresh=hard` invalidates the manifest cache and makes the controller rewrite
-  #     .status.sync wholesale. Firing it at an app that is already answering is a needless risk
-  #     of blanking the very field we then poll for — i.e. the check could manufacture its own
-  #     failure. Touch nothing we do not have to touch.
-  rev="$(ka -n "$ARGOCD_NAMESPACE" get application "$app" -o jsonpath='{.status.sync.revision}' 2>"$_rd_err")" || _rd_rc=$?
-  if [ "$_rd_rc" -ne 0 ]; then
-    # A FAILED READ IS NOT EVIDENCE ABOUT THE REPO. Name the READ, never the repo URL.
+  local app="$1" _rd_err="" _ce_err="" _rd_rc=0 _ce_rc=0 rev="" _attempts _cond
+  # Every variable this function reports is defaulted. It runs under `set -u` and its whole job is
+  # to PRINT a diagnosis: dying half-way through printing one, on an unset variable, destroys the
+  # evidence it exists to produce. It now lives in a shared lib, so the single call site's
+  # environment is no longer a guarantee.
+  local _ns="${ARGOCD_NAMESPACE:-<unset>}" _api="${ARGOCD_API:-<unknown>}"
+  local _kc="${ARGOCD_KUBECONFIG:-${KUBECONFIG:-<unset>}}"
+  local _url="${GITEA_ARGOCD_URL:-<unset>}" _org="${GITEA_ORG:-<unset>}"
+
+  _attempts="${ARGOCD_REPO_TIMEOUT_SECONDS:-180}"
+  # A malformed value made the loop run ZERO times and the function then blamed the repo with a
+  # denominator it never earned ("EMPTY revision on all 0 attempts"). `set -e` does not fire on a
+  # bad `for` list, so this must be checked explicitly.
+  case "$_attempts" in ''|*[!0-9]*|0) die "ARGOCD_REPO_TIMEOUT_SECONDS must be a positive integer (got '${_attempts}')" ;; esac
+
+  _rd_err="$(mktemp)" || die "could not create a temp file for kubectl's stderr (TMPDIR=${TMPDIR:-/tmp} full or read-only?)"
+  _ce_err="$(mktemp)" || { rm -f "$_rd_err"; die "could not create a temp file (TMPDIR=${TMPDIR:-/tmp} full or read-only?)"; }
+  # RETURN covers every exit path including the die's, which the explicit rm -f's did not.
+  trap 'rm -f "$_rd_err" "$_ce_err"' RETURN
+
+  _await_read() {   # sets rev/_rd_rc; stderr to $_rd_err
+    _rd_rc=0
+    rev="$(ka -n "$_ns" get application "$app" -o jsonpath='{.status.sync.revision}' 2>"$_rd_err")" || _rd_rc=$?
+  }
+  _await_read_failed() {
     log_error "could not READ Application '${app}' — this says NOTHING about whether the repo is reachable."
-    log_error "  namespace : ${ARGOCD_NAMESPACE}   (resolved; see lib/os.sh's ARGOCD_NAMESPACE/VKS_NAMESPACE fallback)"
-    log_error "  API server: ${ARGOCD_API}"
-    log_error "  kubeconfig: ${ARGOCD_KUBECONFIG:-${KUBECONFIG:-<unset>}}"
+    log_error "  namespace : ${_ns}   (resolved; see lib/os.sh's ARGOCD_NAMESPACE/VKS_NAMESPACE fallback)"
+    log_error "  API server: ${_api}"
+    log_error "  kubeconfig: ${_kc}"
     log_error "  kubectl said:"
     sed 's/^/    /' "$_rd_err" >&2 2>/dev/null || true
-    rm -f "$_rd_err"
-    die "cannot read Applications in '${ARGOCD_NAMESPACE}' — check the namespace, the kubeconfig, and whether the Application CRD is served there."
-  fi
-  if [ -n "$rev" ]; then
-    rm -f "$_rd_err"
-    log_info "  ${app}: already at revision ${rev} — the repo is reachable; not disturbing it"
-    return 0
+  }
+
+  _await_read
+  if [ "$_rd_rc" -ne 0 ]; then
+    _await_read_failed
+    die "cannot read Applications in '${_ns}' — check the namespace, the kubeconfig, and whether the Application CRD is served there."
   fi
 
-  ka -n "$ARGOCD_NAMESPACE" annotate application "$app" argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
-  # NOTE: this is ATTEMPTS, not seconds — each turn costs a round-trip PLUS the sleep, so the wall
-  # clock is strictly longer than the count. Row 5 measured 188s for 180 attempts.
-  _attempts="$ARGOCD_REPO_TIMEOUT_SECONDS"
-  for _ in $(seq 1 "$_attempts"); do
-    _rd_rc=0
-    rev="$(ka -n "$ARGOCD_NAMESPACE" get application "$app" -o jsonpath='{.status.sync.revision}' 2>"$_rd_err")" || _rd_rc=$?
+  # ⚠️ NO SHORT-CIRCUIT ON A PRE-EXISTING REVISION. An earlier draft returned here when `rev` was
+  # already set, reasoning that an app which answered has proven the repo. MEASURED FALSE: both apply
+  # paths are UPSERT, so `.status.sync.revision` PERSISTS across runs — with a stale revision and
+  # GITEA_ARGOCD_URL pointed at a host that does not exist, the function exited 0 after ONE read,
+  # ZERO annotates and ZERO repo contact, printing "the repo is reachable". `.env.example` documents
+  # this block as "the gate that proves ArgoCD's repo-server can reach GITEA_ARGOCD_URL — a wrong URL
+  # used to sync green forever", which is precisely what the short-circuit restored. The pre-existing
+  # value is now only a NOTE; the refresh and a post-refresh read still have to happen.
+  [ -n "$rev" ] && log_info "  ${app}: revision ${rev} present from an earlier fetch — re-probing anyway (a stale revision is not proof)"
+
+  ka -n "$_ns" annotate application "$app" argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
+  rev=""
+  # ATTEMPTS, not seconds: each turn costs a round-trip PLUS the sleep, so wall-clock exceeds the
+  # count (row 5 measured 188s for 180).
+  local _tried=0
+  while [ "$_tried" -lt "$_attempts" ]; do
+    _tried=$(( _tried + 1 ))
+    _await_read
     if [ "$_rd_rc" -ne 0 ]; then
       log_error "the read of Application '${app}' started FAILING mid-wait (it succeeded moments ago):"
-      sed 's/^/    /' "$_rd_err" >&2 2>/dev/null || true
-      rm -f "$_rd_err"
-      die "lost access to Applications in '${ARGOCD_NAMESPACE}' while waiting — not a repo fault."
+      _await_read_failed
+      die "lost access to Applications in '${_ns}' while waiting — not a repo fault."
     fi
     [ -n "$rev" ] && break
     sleep 1
   done
+
   if [ -z "$rev" ]; then
-    # ONLY HERE has the read demonstrably SUCCEEDED and returned empty, so the field really is
-    # unset and the repo is a legitimate suspect. Say what was checked and what was NOT.
-    log_error "Application '${app}' reported an EMPTY revision on all ${_attempts} attempts."
+    log_error "Application '${app}' reported an EMPTY revision on all ${_tried} attempts."
     log_error "  The reads SUCCEEDED, so this is the Application's real state — not an access fault."
-    log_error "  namespace: ${ARGOCD_NAMESPACE}   API server: ${ARGOCD_API}"
+    log_error "  namespace: ${_ns}   API server: ${_api}"
     log_error "  Its own conditions:"
-    _cond="$(ka -n "$ARGOCD_NAMESPACE" get application "$app" \
-      -o jsonpath='{range .status.conditions[*]}    [{.type}] {.message}{"\n"}{end}' 2>"$_rd_err")" || true
-    if [ -n "$_cond" ]; then printf '%s\n' "$_cond" >&2
-    else log_error "    (none — the Application reports NO conditions, so it is not complaining about the repo either)"; fi
+    # The conditions read USED to be `2>/dev/null || true` — the same defect this function exists to
+    # remove, left in place on the second of the two reads. It printed "(none — not complaining about
+    # the repo either)" over a Forbidden: an affirmative FALSEHOOD steering at the repo, which is
+    # worse than the old code's visible silence and is row 5's exact mis-direction.
+    _ce_rc=0
+    _cond="$(ka -n "$_ns" get application "$app" \
+      -o jsonpath='{range .status.conditions[*]}    [{.type}] {.message}{"\n"}{end}' 2>"$_ce_err")" || _ce_rc=$?
+    if [ "$_ce_rc" -ne 0 ]; then
+      log_error "    could not read the conditions — a READ fault, not evidence about the repo. kubectl said:"
+      sed 's/^/      /' "$_ce_err" >&2 2>/dev/null || true
+    elif [ -n "$_cond" ]; then
+      printf '%s\n' "$_cond" >&2
+    else
+      log_error "    (none — the Application reports NO conditions, so it is not complaining about the repo either)"
+    fi
     log_error "  A repo it cannot clone is ONE candidate; confirm it rather than assume it, from the repo-server itself:"
-    log_error "    kubectl -n ${ARGOCD_NAMESPACE} exec deploy/argocd-repo-server -c repo-server -- \\"
-    log_error "      curl -s -o /dev/null -w '%{http_code}\\n' ${GITEA_ARGOCD_URL}/${GITEA_ORG}/${app}-deploy.git/info/refs?service=git-upload-pack"
+    # SINGLE-QUOTED: the URL carries '?', which zsh treats as a glob — unquoted it dies
+    # "no matches found" and curl never runs, and the error names the URL, so it reads as evidence
+    # the URL is bad. That would reinforce the very conclusion this function exists to prevent.
+    log_error "    kubectl -n ${_ns} exec deploy/argocd-repo-server -c repo-server -- \\"
+    log_error "      curl -s -o /dev/null -w '%{http_code}\\n' '${_url}/${_org}/${app}-deploy.git/info/refs?service=git-upload-pack'"
     log_error "    200 => the repo IS reachable and the cause is elsewhere; anything else => GITEA_ARGOCD_URL is the fault."
-    rm -f "$_rd_err"
     die "ArgoCD never fetched a revision — refusing to report success."
   fi
-  rm -f "$_rd_err"
   log_info "  ${app}: ArgoCD fetched revision ${rev} — the repo is reachable from the ArgoCD cluster"
 }
