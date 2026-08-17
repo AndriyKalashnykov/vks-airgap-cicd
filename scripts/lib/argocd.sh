@@ -280,3 +280,66 @@ argocd_kubeconfig_stale_reason() {
   fi
   return 0
 }
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# AUTHENTICATING TO argocd-server, argv-safely. Lifted from 91-e2e-tenant-mechanism.sh:222-264 so
+# the e2e and the operator-facing `make argocd-auth-check` cannot drift — B152 measured that NOTHING
+# in the certification matrix ever authenticates to ArgoCD, so this was the one credential with no
+# coverage anywhere, and F9 hid behind that gap for weeks.
+#
+# ⚠️ WHY NOT `argocd login`: it offers ONLY `--password <string>`, i.e. the secret in ARGV, which
+# security.md forbids (/proc/<pid>/cmdline is world-readable; /proc/<pid>/environ is owner-only).
+# MEASURED on argocd v3.0.19+d67e6eb90-vcf: `--password-stdin` does NOT exist (`unknown flag`), and
+# it is absent from upstream's docs too — so there is no argv-safe non-interactive password form.
+# The session API is the way: body on STDIN via `curl --data @-`, and the CLI driven afterwards by
+# ARGOCD_AUTH_TOKEN, which it reads from the ENVIRONMENT.
+
+# argocd_admin_password <kubeconfig> <namespace> — echo the ArgoCD admin password, or nothing.
+# stdout is the RETURN VALUE; every diagnostic goes to stderr (os.sh's _log writes to >&2).
+argocd_admin_password() {
+  local kc="$1" ns="$2" pw=""
+  pw="$(kubectl --kubeconfig "$kc" -n "$ns" get secret argocd-initial-admin-secret \
+         -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+  # The secret is DELETED once an admin rotates the password (upstream behaviour), so an operator
+  # override is a legitimate second source, not a fallback for laziness.
+  [ -n "$pw" ] || pw="${ARGOCD_ADMIN_PASSWORD:-}"
+  printf '%s' "$pw"
+}
+
+# argocd_curl_tls_init — set ARGOCD_CURL_TLS (array) and ARGOCD_TLS_MODE from ARGOCD_CA_FILE.
+#
+# Prefer the CA; fall back to -k only when there is none, and say so LOUDLY. A SILENT --insecure is
+# why an entire defect class hid: the trust-anchor path is the one that fails on a real lab, so a leg
+# that quietly skips verification reports success about the half that was never exercised.
+# An ARRAY, not a string, because a string would word-split a CA path containing a space.
+# shellcheck disable=SC2034  # ARGOCD_TLS_MODE is consumed by the scripts that source this library
+#                             (argocd-auth-check.sh prints it — the whole point is that a caller
+#                             must be able to SAY whether this run verified or not).
+argocd_curl_tls_init() {
+  if [ -n "${ARGOCD_CA_FILE:-}" ] && [ -s "${ARGOCD_CA_FILE}" ]; then
+    ARGOCD_CURL_TLS=(--cacert "${ARGOCD_CA_FILE}"); ARGOCD_TLS_MODE=verified
+  else
+    ARGOCD_CURL_TLS=(-k); ARGOCD_TLS_MODE=insecure
+  fi
+}
+
+# argocd_session_token <server> <password> [resolve-host:port:addr] — echo a JWT, or nothing.
+#
+# The password reaches jq through the ENVIRONMENT and the JSON reaches curl on STDIN, so it is in
+# NEITHER argv. ⚠️ Do NOT "simplify" the body to printf '{"password":"%s"}': printf does not escape
+# JSON, so a password containing " or \ silently produces a CORRUPT body and a 400 that reads as a
+# wrong credential. jq escapes it correctly. (I hand-rolled the printf form first; this is why it
+# is not here.)
+#
+# ARGOCD_SESSION_SCHEME exists ONLY so the offline test can point this at a plain-HTTP stub — the
+# curl-gate round's lesson that a check with no way to be tested against a failure class is how the
+# failure class ships. It defaults to https and no caller sets it.
+argocd_session_token() {
+  local server="$1" pw="$2" resolve="${3:-}" out="" rv=()
+  [ -n "$resolve" ] && rv=(--resolve "$resolve")
+  out="$(ARGOCD_ADMIN_PW="$pw" jq -nc '{username:"admin", password:env.ARGOCD_ADMIN_PW}' \
+    | curl -s "${ARGOCD_CURL_TLS[@]}" "${rv[@]}" --max-time "${ARGOCD_SESSION_TIMEOUT:-20}" \
+        -H 'Content-Type: application/json' --data @- \
+        "${ARGOCD_SESSION_SCHEME:-https}://${server}/api/v1/session" 2>/dev/null || true)"
+  printf '%s' "$(printf '%s' "$out" | jq -r '.token // empty' 2>/dev/null || true)"
+}

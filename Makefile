@@ -612,6 +612,15 @@ preflight: check-tools engine-check env-check argocd-preflight lab-preflight psa
 argocd-preflight: ## ArgoCD version + TOPOLOGY + write-mechanism + AppProject + Gitea reachability (two-cluster aware; non-zero on a blocking finding)
 	@$(SCRIPTS)/23-argocd-preflight.sh
 
+# A SEPARATE target from argocd-preflight, deliberately. Preflight answers "MAY I write?" (RBAC,
+# AppProject, topology) and says so itself at 23-argocd-preflight.sh:184: "argocd API: not probed".
+# This answers "does the CREDENTIAL work, and did the transport VERIFY?" — the question B152 measured
+# nothing in the certification matrix ever asks, because `argocd login` is TTY-bound and walk-doc
+# neutralizes it in all four scenario-1 rows (0 real-login lines across all six row logs).
+.PHONY: argocd-auth-check
+argocd-auth-check: ## Read-only: does the ArgoCD ADMIN credential actually authenticate, and did TLS verify? (argv-safe; no password on the command line)
+	@$(SCRIPTS)/argocd-auth-check.sh
+
 .PHONY: argocd-version
 argocd-version: ## Read-only: ArgoCD CLI vs RUNNING-server vs repo-pin versions (never gates; exits 0 even with no cluster)
 	@$(SCRIPTS)/argocd-version.sh

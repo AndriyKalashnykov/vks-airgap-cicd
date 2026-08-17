@@ -382,7 +382,21 @@ argocd account update-password
 minute.)*
 
 `argocd login` **prompts** for the password, so paste what `make argocd-password` printed. Nothing
-automates that step and nothing tests it — it is the one command in this runbook no harness can run.
+automates that step — it is the one command in this runbook no harness can run, because it reads the
+password from a TTY and `argocd login` has no `--password-stdin` (its only non-interactive form puts
+the secret in `argv`, which this repo forbids).
+
+But the CREDENTIAL itself is now testable, which is the part that used to be unverified anywhere:
+
+```bash
+make argocd-auth-check   # read-only: does the admin credential authenticate, and did TLS verify?
+```
+
+**Expect:** `argocd-auth-check: OK`, with `a session token was ISSUED`. It also tells you which of the
+two knobs is at fault when it fails — the **address** (an IP cannot verify: argocd-server's default
+certificate carries DNS SANs only, no IP SAN) or the **anchor** (`ARGOCD_CA_FILE`). If you have not
+run `make fetch-argocd-ca`, it passes on the credential and says plainly that it proved *nothing*
+about trust — read that line rather than the word PASS.
 
 ⚠️ **Once you change it, keep it yourself.** `make argocd-password` and `make creds-show` read the
 *generated* secret; the password you just chose is not written anywhere. After `argocd account
