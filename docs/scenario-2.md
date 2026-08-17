@@ -425,7 +425,7 @@ up and no path of yours ends up pasted into a command:
 
 | key | value |
 |---|---|
-| `VCF_CLI_SRC_DIR` | the folder you put the Broadcom archives in, e.g. `/home/you/Downloads/vcf` |
+| `VCF_CLI_SRC_DIR` | the folder you put the Broadcom archives in, e.g. `~/Downloads/vcf` |
 
 The version pins in `.env.example` already match the current portal artifacts, so the folder is
 normally the only thing you set.
