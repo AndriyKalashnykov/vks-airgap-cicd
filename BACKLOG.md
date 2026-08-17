@@ -16,6 +16,126 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## RUN CONTRACT — the walkthrough matrix (rows 1–6)
+
+**This is the operator's standing order, written down because it has had to be re-issued five times.
+Nothing in it is optional and nothing in it may be narrowed. A run that violates any line of it is
+not a run — it is a harness exercise, and reporting it as a matrix result is the failure this
+contract exists to stop.**
+
+### 0. The order, verbatim
+
+1. *"cut a new lab and do rows 1,2,3,4,5 until they green from the first time, while watchfully whole
+   reading scenario-1 and scenario-2, executing your own instructions line by line, observing full and
+   real output, not using your mockery with exit codes and grepping for parts of the documents and
+   output, do real job, do not assume, do not guess, verify and validate every fact you see."*
+2. *"cut a new lab and run all rows again, from both vSphere VMs photon and ubuntu"* — **both OSes,
+   both scenarios, six rows.**
+3. *"After every lab cut, verify `make creds-show` / lab `make creds` endpoints and credentials
+   ACTUALLY work — hit them, authenticate, drive the web UI in Chrome where an HTTP probe is not proof
+   a human can log in."*
+4. Read scenario-1 and scenario-2 **as a whole, as an end user**, executing line by line, observing
+   full output, navigating **only** from the instructions below the commands just entered.
+5. **Green FROM THE FIRST GO** — a fresh matrix over the FINAL tree passing on its FIRST pass. Every
+   fix resets that clock. A row that goes green on a re-run after a fix is **not** a first-pass green.
+
+### 1. What the six rows ARE (grepped from `nested-vsphere-lab/scripts/walk-matrix.sh`, not recalled)
+
+| row | OS | lab state | doc | cut |
+|---|---|---|---|---|
+| 1 | ubuntu | NOTHING exists | scenario-1 | **A** |
+| 2 | photon | EVERYTHING exists (what row 1 created) | scenario-1 | **A** |
+| 5 | photon | EVERYTHING exists | **scenario-2** | **A** (runs LAST in A) |
+| 3 | photon | NOTHING exists | scenario-1 | **B** (after the rebuild) |
+| 4 | ubuntu | EVERYTHING exists | scenario-1 | **B** |
+| 6 | ubuntu | EVERYTHING exists | **scenario-2** | **B** |
+
+Cut A → **rebuild the lab** → cut B. Rows 5 and 6 are the *same* scenario-2 document on *different
+OSes*; they are not a duplicate and neither substitutes for the other.
+
+### 2. What rows 5 and 6 specifically require
+
+Both are gated on `supply_s2_contract`, which must hand the row **ADMIN credentials AND a
+driver-supplied GUEST kubeconfig — NOT the tenant path**. If it cannot, the row is
+`UNRUNNABLE_ROWS`, **never walked**, and that is *not* a pass and *not* a failure: it is *no result*.
+Reporting an UNRUNNABLE row as anything other than "never walked" is a false claim.
+
+Their failures land in `S2_FAILED_ROWS`, tracked **separately** from `FAILED_ROWS`, because a
+scenario-2 refusal must never gate cut B's rebuild.
+
+### 3. Knobs (the complete set `walk-matrix.sh` reads)
+
+`WALK_ROWS` · `WALK_SCENARIOS` · `WALK_CLUSTER_NAME` (+`_EXPLICIT`) · `WALK_SKIP_REBUILD` ·
+`WALK_SKIP_CLONE` · `WALK_CLONE` · `WALK_REPO` · `WALK_RUN_ID` · `WALK_OUT_ROOT` (default
+`/tmp/walk`, mode 0700) · `WALK_OUT_DIR` · `WALK_DNS_ATTEND_SECONDS` · `WALK_TKR_WAIT_SECONDS` ·
+plus the lab/credential set: `VCENTER_HOST`/`VCENTER_USERNAME`/`VCSA_SSO_PASSWORD` ·
+`VKS_NAMESPACE`/`VKS_USERNAME`/`VKS_SSO_DOMAIN`/`VKS_CONTEXT_NAME`/`VKS_STORAGE_POLICY` ·
+`HARBOR_URL`/`HARBOR_USERNAME`/`HARBOR_PASSWORD`/`HARBOR_STORAGE_CLASS` ·
+`ARGOCD_NAMESPACE`/`ARGOCD_PROJECT` · `VCF_CLI_SRC_DIR` · `LAB_ROOT`/`LAB_STATE_DIR`.
+
+⚠️ `WALK_ROWS`'s default has **already shipped wrong once** (`"1 2 3 4"`, covering **neither**
+scenario-2 row — nvl #65). Pass rows explicitly; never trust the default to mean "all".
+
+### 4. Execution discipline — what "do real job" forbids
+
+- **Read the whole document as an end user.** Not the blocks the harness extracted — the prose
+  between them is the navigation, and a reader who cannot get from block N to block N+1 by reading
+  it has found a defect even when every command succeeds.
+- **Observe FULL, REAL output.** Not `rc=$?`. Not `| grep -c`. Not a tail. The verdict of a block is
+  what it printed, read.
+- **No exit-code proxies.** A completion notification's "exit code 0" is the LAST command's status
+  and is a documented liar here (`; echo`, `| tail`, a cancelled run, a timeout-cancel). Never
+  report pass/fail from it.
+- **Verify and validate every fact.** A fact recalled is a claim; a fact grepped, fetched, or run is
+  a measurement. Grade them differently and say which you have.
+- **Do not assume, do not guess.** If a step cannot be settled, say it is unsettled and name the one
+  command that would settle it.
+
+### 5. After every lab cut — credential verification (item 3, in full)
+
+`make creds-show` (repo) and lab `make creds` must be **exercised, not printed**: hit every endpoint,
+authenticate for real, and **drive the web UI in Chrome** wherever an HTTP probe is not proof a human
+can log in. A 200 from `curl` is not a login. A cert error in Chrome is a *trust* finding, not a
+reachability finding — distinguish them and say which.
+
+### 6. Security constraints — in force for the whole run
+
+- **Secrets never in argv.** `curl -K` config under `umask 077`, `--data @-` on stdin, or env-by-name.
+- **The vCenter SSO account LOCKS OUT AFTER 3 FAILED ATTEMPTS.** Never brute a password, never retry
+  a failed auth blind.
+- **Do not type passwords into web login forms.**
+- **`harbor-robot.env`, `gitea-ci-token`, `webhook-token` must NEVER be blanket-deleted** — they are
+  the only copy in existence.
+- Walk logs carry live credentials: `/tmp/walk` and every per-run dir are **0700**, and a row log is
+  citable only with that in mind.
+
+### 7. Measurement discipline — how a result is read
+
+- **The verdict is the per-invocation file**, `${WALK_OUT_ROOT}/run-${WALK_RUN_ID}/VERDICT-${WALK_RUN_ID}.txt`.
+  Never a fixed path (a stale log lies), never stdout scrollback, never the exit code.
+- **Read every row's own `WALK DONE` / `DOCUMENT` lines** plus the **"N of 6 designed rows"**
+  denominator. `MATRIX FAILED` is the harness's wording for *did not complete successfully* — rows
+  can reach `WALK DONE` and still be red.
+- **`FAILED` and `UNMET` are different**: a failed block is a command that broke; an UNMET Expect is
+  the document promising something the run did not print. Report both counts per row.
+- **Do NOT edit `walk-matrix.sh` (or any script) while a matrix runs** — bash reads a script
+  incrementally, so a rewrite mid-run yields `unexpected EOF` that reads as a product bug.
+- **Kill the process GROUP, never the pid** (`setsid` + `kill -- -PGID`), and read `etime` after any
+  kill. An orphaned driver has rebuilt a lab for 25 minutes while every later symptom was blamed on
+  the lab.
+- **A row's red is a hypothesis until root-caused.** Half of a matrix's reds have been the harness,
+  not the product — and half of those "obviously harness" ones were real bugs. Prove which.
+
+### 8. Rule Zero still applies
+
+Adversary-review a **design** BEFORE implementing it, and again on the **diff** after. A fix to a
+scenario doc or a script is a design. `isolation: "worktree"` on every dispatch.
+
+### 9. Reporting
+
+Times in **EST/EDT**. Commit and push roughly every 30 minutes. Report only: what shipped, what is
+verified, what is still unknown.
+
 ## Open rows
 
 | **B130** | ⚠️ **REFUTED (idea-round, `vks-adversary`, 2026-08-17) — the premise was FALSE and the fix would have remedied a failure that does not occur.** This row claimed the missing `osConfiguration` stanza means `make vks-cluster-create` builds a cluster that CANNOT PULL FROM HARBOR. I measured the ABSENCE of the stanza and asserted a PULL FAILURE — two different claims, joined by an unearned "so". **MEASURED, and it already works:** `scripts/40-install-gitea.sh:30` pulls Gitea FROM HARBOR into the GUEST cluster and `:62` BLOCKS on `rollout status --timeout`; Harbor's cert is privately issued (`CN = Harbor CA`, scenario-1.md:520); and the Timings table records `install-all` completing in **10 m 26 s** and **8 m 14 s** with `verify` green — on a tree with **zero** `osConfiguration` (`grep -rn osConfiguration scripts/ k8s/` = 0). An x509 failure would have timed that rollout out. It did not. **THE FREE WIN, now taken:** harbor.md's same-Supervisor auto-trust row was graded `community — verify on a lab` while the flow already DEPENDED on it and passed; promoted to **lab-verified** with the evidence chain, which `docs/lab-validation-plan.md:463` had already specified as the action. **FOUR MORE REASONS NOT TO BUILD IT:** (1) the CA does not EXIST at create time — script numbering encodes it, `25`-vks-cluster-create runs before `27`-harbor-ca-from-cluster — so a mandatory `secretRef` names an absent Secret on rows 1 and 3 every time; not circular (Harbor exists at §4) but a walkthrough REORDERING. (2) the `--dry-run=server` gate CANNOT catch it — an absent Secret is a cross-object existence question, not a schema one — so it would land 4–9 min later inside `vks-cluster-status`, the worst place. (3) `envsubst` has no conditional, so the stanza is in EVERY render; moving it script-side voids this row's own "mechanical coverage" argument by taking the YAML out of `k8s/` where yamllint and `check-cluster-template-vars` see it. (4) a TENANT never runs `make vks-cluster-create` — scenario-2 §3c is explicitly the `kubectl edit cluster/<name>` path — so the change helps only the scenario-1 admin, the one persona measured not to need it. **IF the capability is ever wanted** (defensible for a Harbor on a DIFFERENT Supervisor, which the evidence above does NOT cover): a post-create `kubectl patch` target guarded on an explicitly-set env var — rows 1/3 byte-identical, no template change, no reordering. Four lines, not thirty-six. **Residual, unmeasured:** whether admission accepts a `secretRef` to an absent Secret is INFERRED, not measured — it is the single highest-value lab check if this is ever revisited. |
