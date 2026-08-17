@@ -185,6 +185,36 @@ if [ "$rc" -ne 0 ]; then
     log_error "      make check-tools CHECK_TOOLS_PHASE=pre-carry"
   fi
 else
+  # THE SENTINEL IS SURFACED HERE TOO. It is read at the missing-tools branch above, which is
+  # unreachable when nothing is missing — so on a WARM box `make deps` could fail and this gate
+  # reported a clean toolchain in total silence, having just been named by deps as the thing that
+  # would say otherwise. MEASURED 2026-08-17: sentinel present + every tool present printed
+  # "all REQUIRED tools present." and not one word about the failure.
+  #
+  # ⚠️ ADDED as extra lines, never folded into the messages below: `docs/scenario-1.md` carries
+  # "all REQUIRED tools present." as an **Expect:** literal, substring-matched against this block's
+  # output — rewording it makes every walk row UNMET (measured both directions).
+  #
+  # ⚠️ It deliberately does NOT say "the failure was in a part you do not need". That is FALSE:
+  # `deps` installs six tools this gate never checks (java maven kustomize go node uv) and, under
+  # `set -euo pipefail`, a failure in its FIRST pkg_install aborts before the container-engine
+  # runtime (crun) and podman's unqualified-search-registries — so a reassured operator walks into
+  # a `podman build` that cannot resolve a short name.
+  #
+  # ⚠️ And it names `rm -f` rather than "re-run deps", for two measured reasons: the operator's
+  # failure (apt-get needs a tty for sudo) is NOT transient, so a re-run can never clear it; and
+  # `.deps-failed` is a real file that TRAVELS with the `tar` copy sneakernet prescribes, so on the
+  # air-gap box it may report a failure from ANOTHER machine — where "run make deps" is the one
+  # thing this script forbids.
+  if [ -f "${REPO_ROOT}/.deps-failed" ]; then
+    log_warn "a previous 'make deps' FAILED on this repo and has not since succeeded (.deps-failed)."
+    log_warn "  The tools THIS gate checks are present — but it does not check everything deps"
+    log_warn "  installs (java maven kustomize go node) or CONFIGURES (container-engine runtime,"
+    log_warn "  registry search paths), so this is not evidence the failure was harmless."
+    log_warn "  Scroll back to that failure. Clear the sentinel with:  rm -f .deps-failed"
+    log_warn "  (If this is the AIR-GAPPED box, the sentinel may have travelled with the repo copy"
+    log_warn "   — do NOT run 'make deps' here; it downloads from the internet.)"
+  fi
   if [ -n "$pending_carried" ]; then
     log_info "PRE-CARRY OK — everything the bundle CANNOT bring is present on this box."
     log_info "  Still to arrive from the bundle:${pending_carried}"
