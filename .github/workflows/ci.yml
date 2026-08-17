@@ -394,24 +394,48 @@ jobs:
     needs: [changes, static-check, static-check-fast, docs-lint, diagrams-check, secrets]
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read      # required to read this run's own jobs; without it the API 403s
     steps:
-      - name: Verify required jobs
-        # Inspect the changes detector too: if `changes` itself fails/cancels, the
-        # gate jobs are skipped (result 'skipped', not 'failure'), so a check that
-        # only looked at static-check/docs-lint would go green with no gates run.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Verify required jobs — from the JOBS API, not the needs context
+        # ⚠️ THE `needs` CONTEXT LIES WHEN A JOB DIES DURING SET-UP, and this gate is the SOLE
+        # required status check on the repo. MEASURED over 400 runs: three times — including once
+        # on main — `secrets` finished at conclusion `failure` while the old guard,
+        # `contains(needs.*.result,'failure')`, rendered in its own step log as literally
+        # `if false; then`, so ci-pass reported SUCCESS over a failed security scan.
+        #   runs 32041902265, 32043952216, 32044803928
+        # Root cause of all three, from the failing job's log: "Prepare all required actions" hit
+        # codeload.github.com 429/429/503 downloading an action. Transient GitHub infrastructure,
+        # so it recurs, and `secrets` is the most exposed job (two action downloads).
+        #
+        # The jobs API reported the truth in every case examined, so read that instead. The verdict
+        # itself lives in scripts/ci-pass-verdict.sh, offline and unit-tested by
+        # scripts/test-ci-pass-verdict.sh — which also asserts that script's job lists still agree
+        # with THIS file's job list and with the `needs:` above, so a renamed or added job fails at
+        # PR time instead of refusing every run.
+        env:
+          GH_TOKEN: ${{ github.token }}   # gh needs an explicit token even for a public endpoint
         run: |
-          if ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}; then
-            echo "a required job failed or was cancelled"; exit 1
-          fi
-          # static-check-fast is asserted EXPLICITLY, because the generic check above is blind to a
-          # SKIP and this job has no `if:` — so a skip here means something broke, never a
-          # paths-filter decision. Do NOT generalise this to `needs.*`: every other gate job
-          # legitimately skips (measured: a docs-only PR skips static-check + diagrams-check; a
-          # code-only PR skips docs-lint + diagrams-check), so a blanket skip-test would redden
-          # ci-pass — the sole required check — on essentially every PR.
-          if [ "${{ needs.static-check-fast.result }}" != "success" ]; then
-            echo "static-check-fast did not succeed (result: ${{ needs.static-check-fast.result }})"
-            echo "  It is unconditional, so anything other than 'success' is a real defect."
+          set -uo pipefail
+          # ⚠️ NO `filter` PARAMETER. The API default is the LATEST attempt, which is what we must
+          # judge. MEASURED: with filter=all this sees every attempt, so runs 32044956290 and
+          # 32044785511 — genuinely green after a re-run — would be refused on attempt 1's failure,
+          # making a `rerun --failed` that FIXES ci permanently unmergeable.
+          #
+          # (.conclusion // "none"): a still-running job has conclusion null, and an EMPTY field
+          # would be swallowed — TAB is IFS-whitespace, so `read` collapses a run of tabs and every
+          # later field shifts left. The sentinel keeps every field non-empty.
+          gh api --paginate \
+            "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
+            --jq '.jobs[] | [ .name, (.conclusion // "none"),
+                  ([ .steps[]? | select(.name != "Set up job" and .name != "Complete job") ] | length)
+                ] | @tsv' > /tmp/ci-jobs.tsv
+          rc=$?
+          if [ "$rc" -ne 0 ] || [ ! -s /tmp/ci-jobs.tsv ]; then
+            echo "the jobs API read produced nothing (rc=$rc) — refusing rather than assuming green"
             exit 1
           fi
-          echo "ci-pass: OK"
+          echo "--- jobs as the API reports them ---"; cat /tmp/ci-jobs.tsv; echo "---"
+          ./scripts/ci-pass-verdict.sh < /tmp/ci-jobs.tsv
