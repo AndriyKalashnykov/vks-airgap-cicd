@@ -138,10 +138,18 @@ if have helm; then
   ISTIO_CHART_REPO="${ISTIO_CHART_REPO:-https://istio-release.storage.googleapis.com/charts}"
   log_info "pulling the istio charts v${ISTIO_VERSION:-<unset>} into ${CHART_DIR} (the air-gap box cannot fetch them)"
   if [ -n "${ISTIO_VERSION:-}" ]; then
-    run helm repo add istio-airgap "$ISTIO_CHART_REPO" --force-update >/dev/null
-    run helm repo update istio-airgap >/dev/null
+    # RETRIED, like every other network call in this script. This was the ONLY un-retried one, and
+    # it is the most expensive place to lose: it runs AFTER the image pull, so a single blip here
+    # throws away a completed multi-minute mirror and fails `make install-all` outright.
+    # MEASURED 2026-08-17 (matrix row 5): 24/24 images pulled in 6m28s, then
+    #   Error: failed to update the following repositories: [https://istio-release.storage.googleapis.com/charts]
+    # -> rc=1 for the whole target. `helm repo add` had just SUCCEEDED against the same host seconds
+    # earlier, and the host + all three pinned charts answered HTTP 200 when re-probed, on helm 4.2.3
+    # with a cold cache. So it was transient, and transient is exactly what mirror_retry exists for.
+    mirror_retry "${MIRROR_RETRIES:-5}" run helm repo add istio-airgap "$ISTIO_CHART_REPO" --force-update >/dev/null
+    mirror_retry "${MIRROR_RETRIES:-5}" run helm repo update istio-airgap >/dev/null
     for c in base istiod gateway; do
-      run helm pull "istio-airgap/${c}" --version "$ISTIO_VERSION" --destination "$CHART_DIR"
+      mirror_retry "${MIRROR_RETRIES:-5}" run helm pull "istio-airgap/${c}" --version "$ISTIO_VERSION" --destination "$CHART_DIR"
     done
     log_info "charts carried: $(find "$CHART_DIR" -name '*.tgz' -printf '%f ' 2>/dev/null)"
   else

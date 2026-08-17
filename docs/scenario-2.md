@@ -180,9 +180,11 @@ else
 fi
 ```
 
-**Expect:** a line starting `DISCOVERY:` — either Harbor's `harbor-nginx` entry followed by an IP and
-ArgoCD's bare IP, or the sentence telling you to ask for them. Those two addresses are what you put in
-`HARBOR_URL` and `ARGOCD_SERVER` below.
+**Expect:** a line starting `DISCOVERY:`. Which one you get depends on whether you have a Supervisor
+kubeconfig: with one, Harbor's `harbor-nginx` entry followed by an IP and ArgoCD's bare IP; without
+one, the sentence telling you to ask the platform team for them. **Both are real answers — only
+silence is not**, and the second is the normal case for a tenant handed only a workload kubeconfig.
+Those two addresses are what you put in `HARBOR_URL` and `ARGOCD_SERVER` below.
 
 **Request grants from the platform team:**
 
