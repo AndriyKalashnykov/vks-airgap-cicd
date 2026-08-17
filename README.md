@@ -149,7 +149,7 @@ additional one (see [Istio on VKS](docs/vks-services/istio.md#4-attach-prefer-th
 > ([docs](https://argo-cd.readthedocs.io/en/stable/user-guide/projects/)); the Harbor robot we mint
 > is project-scoped (`scripts/22-harbor-robot.sh`); an Istio `Gateway`'s `hosts:` list gates which
 > hostnames a VirtualService may bind. But the exact `kubectl patch` invocations have **not** been
-> run against a VKS cluster, and the ArgoCD **server** there is 2.14.x (ours is 3.x). Treat them as
+> run against a VKS cluster, and the ArgoCD **server** there is whatever the ArgoCD *Service* version publishes (Service 1.1.0 -> 3.0.19, measured on a 9.1 lab 2026-08-17; Service 1.0.0 -> 2.14.13 per the 9.1 RN) — read the RUNNING server, never the CLI. Treat them as
 > a starting point, confirm against your lab, and correct this table. See the backlog in CLAUDE.md.
 
 </details>

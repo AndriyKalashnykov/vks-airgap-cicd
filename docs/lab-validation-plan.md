@@ -188,10 +188,10 @@ curl -sS --cacert secrets/harbor-ca.crt -u "$HARBOR_USERNAME" https://$HARBOR_UR
 
 ### 6. Install ArgoCD, and tell us what it's really called · YOUR OWN WORK + CHEAP PROBES
 
-**Why:** our scripts **hardcode `argocd-server`**. An operator-managed instance may name it `<CR>-server` — in which case that is a real bug. We also pin a 2.x server example while shipping a 3.x CLI.
+**Why:** our scripts **hardcode `argocd-server`**. An operator-managed instance may name it `<CR>-server` — in which case that is a real bug. (ANSWERED 2026-08-17: the server generation follows the ArgoCD Service version — Service 1.1.0 publishes 3.0.19, so on that lab the CLI and server are BOTH 3.x and no generation gap exists.)
 **Where:** **vSphere Client** for the Service + Namespace; jump box → **Supervisor** for every probe.
 **Who needs it:** BOTH.
-**We then:** if the deployments are `<CR>-server` rather than `argocd-server`, we make our scripts **discover by label** — today they hardcode the name, and it would present to you as *"the Supervisor kubeconfig doesn't work"*. If the running server is 2.x, we pin our KinD stand-in to the lab's line.
+**We then:** if the deployments are `<CR>-server` rather than `argocd-server`, we make our scripts **discover by label** — today they hardcode the name, and it would present to you as *"the Supervisor kubeconfig doesn't work"*. (The pin question is ANSWERED for Service 1.1.0: server 3.0.19 vs our KinD pin v3.5.1 — same generation, a MINOR delta, so no re-pin is needed. Re-ask only if a lab runs an older Service.)
 
 Follow **[Scenario 1 §A2](scenario-1.md)** steps 1–2, then:
 
