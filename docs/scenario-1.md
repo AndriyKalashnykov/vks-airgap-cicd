@@ -124,7 +124,7 @@ it uses.
 
 | key | example | how to get the value |
 |---|---|---|
-| `VCF_CLI_SRC_DIR` | `/home/you/Downloads/vcf` | the folder you put **all six** Step 0 downloads in — Steps 1, 4 and 5 each read it. Set it **in `./.env`** so it persists: Step 1 stops if it is unset, but Steps 4 and 5 silently fall back to `~/Downloads/vcf` — so a value that reaches only Step 1 (a one-shot `VCF_CLI_SRC_DIR=… scripts/01-…`, or a new terminal) makes Step 4 search a directory you never used, without saying so. |
+| `VCF_CLI_SRC_DIR` | `~/Downloads/vcf` | the folder you put **all six** Step 0 downloads in — Steps 1, 4 and 5 each read it. Set it **in `./.env`** so it persists: Step 1 stops if it is unset, but Steps 4 and 5 silently fall back to `~/Downloads/vcf` — so a value that reaches only Step 1 (a one-shot `VCF_CLI_SRC_DIR=… scripts/01-…`, or a new terminal) makes Step 4 search a directory you never used, without saying so. |
 | `SUPERVISOR_HOST` | `192.168.101.128` | vCenter → Workload Management → Supervisors → Control Plane Node IP. **Bare host — no `https://`, no trailing slash.** |
 | `VKS_CONTEXT_NAME` | `vks-cicd` | **you invent this** — a short label for the `vcf` login context |
 | `VKS_NAMESPACE` | `cicd` | the vSphere Namespace the cluster goes in. **Create it first — Step 2.** Pick a name nothing else owns: Step 2's teardown deletes **by name**, and on a nested lab a namespace called `lab` already belongs to the lab itself. |

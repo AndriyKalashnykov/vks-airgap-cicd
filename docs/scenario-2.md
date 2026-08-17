@@ -180,9 +180,20 @@ else
 fi
 ```
 
-**Expect:** a line starting `DISCOVERY:` — either Harbor's `harbor-nginx` entry followed by an IP and
-ArgoCD's bare IP, or the sentence telling you to ask for them. Those two addresses are what you put in
-`HARBOR_URL` and `ARGOCD_SERVER` below.
+<!-- walk-doc: the literals below (harbor-nginx, HARBOR_URL, ARGOCD_SERVER) are DELIBERATELY on
+     continuation lines, where walk-doc.sh:346 cannot see them. Do NOT "fix" this by moving one up to
+     line 1 — PR #696 did exactly that for scenario-1:814 and it was right THERE and would be wrong
+     HERE. This block has TWO valid branches whose outputs are disjoint, and there is NO literal
+     common to both that is absent from the command text (measured exhaustively: 22 common
+     substrings >=6 chars, 0 of them outside the block). Branch 2's entire output is echo text, which
+     the parser correctly filters as vacuous. A line-1 literal therefore guarantees a FALSE UNMET on
+     the branch this document itself calls the normal tenant case. Its sibling block at :155 already
+     uses this same pattern. -->
+**Expect:** a line starting `DISCOVERY:`. Which one you get depends on whether you have a Supervisor
+kubeconfig: with one, Harbor's `harbor-nginx` entry followed by an IP and ArgoCD's bare IP; without
+one, the sentence telling you to ask the platform team for them. **Both are real answers — only
+silence is not**, and the second is the normal case for a tenant handed only a workload kubeconfig.
+Those two addresses are what you put in `HARBOR_URL` and `ARGOCD_SERVER` below.
 
 **Request grants from the platform team:**
 
@@ -423,7 +434,7 @@ up and no path of yours ends up pasted into a command:
 
 | key | value |
 |---|---|
-| `VCF_CLI_SRC_DIR` | the folder you put the Broadcom archives in, e.g. `/home/you/Downloads/vcf` |
+| `VCF_CLI_SRC_DIR` | the folder you put the Broadcom archives in, e.g. `~/Downloads/vcf` |
 
 The version pins in `.env.example` already match the current portal artifacts, so the folder is
 normally the only thing you set.
