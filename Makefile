@@ -1330,18 +1330,11 @@ secrets: ## gitleaks — scan git HISTORY *and* the working tree for secrets
 
 .PHONY: check-secrets-untracked
 check-secrets-untracked: ## Gate: the paths .gitleaks.toml allowlists must NEVER be tracked by git
-# The allowlist above is what lets the working-tree scan be green on a real box. Its one hole is a
-# deliberate `git add -f .env` — which would then be INVISIBLE to gitleaks. Close it mechanically
-# rather than by trust: those paths are gitignored, so if git is tracking one, something is wrong.
-	@bad=""; for p in .env secrets .env.state .jumpbox; do \
-	   git ls-files --error-unmatch "$$p" >/dev/null 2>&1 && bad="$$bad $$p"; \
-	 done; \
-	 if [ -n "$$bad" ]; then \
-	   echo "ERROR: these are gitleaks-allowlisted (so NOT scanned) and MUST NOT be tracked:$$bad"; \
-	   echo "       Untrack with: git rm --cached -r <path>   (and rotate anything that leaked)"; \
-	   exit 1; \
-	 fi; \
-	 echo "check-secrets-untracked: OK — no allowlisted secret path is tracked"
+# DERIVED from .gitleaks.toml, not restated here. This recipe used to hardcode FOUR paths while the
+# config allowlisted SIX (`bundle/` and `.claude/worktrees/` were allowlisted-and-unchecked), and
+# the config's own comment asserted the coverage was complete. Nothing compared the two files, so
+# nothing could notice. The script reads the allowlist and tests every TRACKED file against it.
+	@$(SCRIPTS)/check-secrets-untracked.sh
 
 .PHONY: trivy-fs
 trivy-fs: app-build ## trivy — scan EVERY app's built artifact (jar / Go binary) for fixable HIGH/CRITICAL CVEs

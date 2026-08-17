@@ -21,7 +21,10 @@ CA/leaf keys, kubeconfigs) and are git-ignored, so they cannot reach a commit â€
 therefore loses no coverage by skipping them here.
 
 This allowlist would, however, hide a DELIBERATE `git add -f`. That hole is closed mechanically, not
-by trust: `make check-secrets-untracked` fails if any of these paths is ever tracked by git.
+by trust: `make check-secrets-untracked` READS THIS LIST and fails if any tracked file matches
+any pattern in it. It is DERIVED, not a restatement -- an earlier version hardcoded four of these
+six paths, so `bundle/` and `.claude/worktrees/` were allowlisted-and-unchecked while this very
+sentence claimed otherwise. Add an entry here and the gate covers it; there is no second list.
 """
 paths = [
   '''^secrets/''',      # self-signed Harbor CA + leaf keys, kubeconfigs (06-install-harbor.sh, 05-kind-up.sh)
