@@ -40,6 +40,12 @@ fail=0
 say()  { printf '  %-34s %s\n' "$1" "$2"; }
 bad()  { say "$1" "$2"; fail=1; }
 
+# Both are load-bearing and NEITHER was required before (B163/F3): a missing `jq` yields an empty
+# body, which becomes an empty token, which produced the SAME "NO token" message — a third silent
+# path into one diagnostic. Both are pinned (.mise.toml, 00-install-prereqs.sh), so this is a guard
+# against a broken PATH rather than a likely absence.
+require_cmd jq curl
+
 echo
 echo "════════ argocd auth check — does the ADMIN credential really authenticate? ════════"
 
@@ -85,7 +91,31 @@ else
 fi
 
 # ---- 4. AUTHENTICATE ---------------------------------------------------------------------------
+# ⚠️ THE READINESS POLL BELOW WAS DROPPED WHEN THIS CHECK WAS LIFTED (B163/F2, the leading cause of
+# certification row 1's failure). The lift took 91-e2e-tenant-mechanism.sh:222-264 but NOT :206-214,
+# whose own comment says why they belong together: "cloud-provider-kind assigns the IP long before
+# its Envoy is actually routing (the K1.5 race). A pod being Ready is NOT the same as its LB
+# answering — poll the endpoint itself, or the first request dies on connection reset."
+# It matters HERE more than there, because scenario-1 runs `make argocd-address` — which returns the
+# INSTANT .status.loadBalancer.ingress[0].ip appears, i.e. exactly when the race window OPENS — and
+# then runs this check a few lines later. Row 1 failed in 0s (sub-second: walk-doc.sh:704 prints
+# whole seconds), which is the shape of a refused connection, not of a TLS or credential fault.
+# Class denominator at the time: 2 production callers of argocd_session_token, 1 polled first.
 if [ -n "$pw" ] && [ "$fail" -eq 0 ]; then
+  _ready=0
+  for _ in $(seq 1 "${ARGOCD_READY_ATTEMPTS:-30}"); do
+    if curl -s "${ARGOCD_CURL_TLS[@]}" -o /dev/null --max-time 3 "https://${srv}/healthz" 2>/dev/null; then
+      _ready=1; break
+    fi
+    sleep "${ARGOCD_READY_INTERVAL_SECONDS:-2}"
+  done
+  if [ "$_ready" = 1 ]; then
+    say "endpoint" "answering on https://${srv}/healthz"
+  else
+    # NOT a die: this check is read-only and its job is to REPORT. Saying the endpoint never
+    # answered is itself the diagnosis, and it must not be confused with a credential verdict.
+    say "endpoint" "did NOT answer /healthz after ${ARGOCD_READY_ATTEMPTS:-30} attempts — anything below is about an endpoint that is not serving"
+  fi
   tok="$(argocd_session_token "$srv" "$pw")"
   if [ -n "$tok" ]; then
     say "POST /api/v1/session" "a session token was ISSUED"
@@ -95,9 +125,28 @@ if [ -n "$pw" ] && [ "$fail" -eq 0 ]; then
       say "VERDICT" "PASS (credential only) — the transport was NOT verified; see above"
     fi
   else
-    bad "POST /api/v1/session" "NO token — the credential did not authenticate, or the transport failed"
-    say "  ordered next steps" "1) the ADDRESS: is '${srv}' a name the certificate carries? 2) the ANCHOR: is ARGOCD_CA_FILE the CA that signed it?"
-    say "  discriminate them" "make argocd-preflight   (it reports which of the two is at fault)"
+    # ⚠️ THIS USED TO PRINT A CLOSED TWO-ITEM LIST (the ADDRESS / the ANCHOR) over a signal that
+    # could not distinguish five causes, because argocd_session_token discarded curl's rc AND the
+    # HTTP status. On certification row 1 (2026-08-17, backlog B163) NEITHER listed item was live —
+    # the run was `-k`, so the certificate's SANs were never consulted — and a reader followed the
+    # list to the wrong file. A check may only offer "next steps" for a cause it has NOT named.
+    _diag="$(argocd_session_last)"
+    _rc="${_diag#rc=}"; _rc="${_rc%% *}"
+    _code="${_diag##*http=}"
+    bad "POST /api/v1/session" "NO token (curl rc=${_rc:-?}, HTTP ${_code:-?})"
+    if _why="$(argocd_session_explain "$_rc" "$_code")"; then
+      say "  what happened" "$_why"
+    else
+      # Only HERE is the cause genuinely undetermined, so only here is a hypothesis list honest.
+      say "  undetermined"  "rc=${_rc:-?} HTTP ${_code:-?} does not name a cause on its own"
+      say "  candidates"    "1) the ADDRESS: is '${srv}' a name the certificate carries? 2) the ANCHOR: is ARGOCD_CA_FILE the CA that signed it?"
+      say "  discriminate"  "make argocd-preflight   (it reports which of the two is at fault)"
+    fi
+    if [ "$ARGOCD_TLS_MODE" != verified ]; then
+      # Say it out loud: with -k in effect, an address/anchor fault is IMPOSSIBLE here, so nobody
+      # should be sent to look at either. This is the sentence whose absence cost a session.
+      say "  NOTE" "this run was NOT verifying (-k), so the certificate's names were never consulted — an ADDRESS or ANCHOR fault cannot be the cause of THIS failure"
+    fi
   fi
 fi
 

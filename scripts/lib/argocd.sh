@@ -334,12 +334,62 @@ argocd_curl_tls_init() {
 # ARGOCD_SESSION_SCHEME exists ONLY so the offline test can point this at a plain-HTTP stub — the
 # curl-gate round's lesson that a check with no way to be tested against a failure class is how the
 # failure class ships. It defaults to https and no caller sets it.
+# ⚠️ IT USED TO DESTROY EVERY DISCRIMINATOR IT NEEDED, AND THAT MIS-DIRECTED A LIVE DIAGNOSIS
+# (certification run row 1, 2026-08-17 — backlog B163). `2>/dev/null || true` plus
+# `jq -r '.token // empty'` threw away BOTH curl's exit code AND the HTTP status, so an HTTP 401, an
+# HTTP 503 from a LoadBalancer with no ready endpoints, a refused connection (rc 7) and a TLS reject
+# all collapsed to the IDENTICAL empty token. The consumer then printed a CLOSED two-item hypothesis
+# list ("the ADDRESS ... the ANCHOR") over a signal that cannot distinguish five causes — and on the
+# run that mattered, NEITHER listed item was live. A reader followed the list to the wrong file.
+#
+# The token still goes to STDOUT ALONE, because callers use `tok="$(argocd_session_token ...)"` and
+# ANY other stdout would be folded into the return value. The diagnostics therefore travel by FILE:
+# a command substitution is a SUBSHELL, so a global assigned in here CANNOT reach the caller — that
+# is a rule this repo already learned the hard way. Read them with `argocd_session_last`.
 argocd_session_token() {
-  local server="$1" pw="$2" resolve="${3:-}" out="" rv=()
+  local server="$1" pw="$2" resolve="${3:-}" out="" rv=() code="000" rc=0
   [ -n "$resolve" ] && rv=(--resolve "$resolve")
   out="$(ARGOCD_ADMIN_PW="$pw" jq -nc '{username:"admin", password:env.ARGOCD_ADMIN_PW}' \
-    | curl -s "${ARGOCD_CURL_TLS[@]}" "${rv[@]}" --max-time "${ARGOCD_SESSION_TIMEOUT:-20}" \
+    | curl -s -w '\n%{http_code}' "${ARGOCD_CURL_TLS[@]}" "${rv[@]}" \
+        --max-time "${ARGOCD_SESSION_TIMEOUT:-20}" \
         -H 'Content-Type: application/json' --data @- \
-        "${ARGOCD_SESSION_SCHEME:-https}://${server}/api/v1/session" 2>/dev/null || true)"
+        "${ARGOCD_SESSION_SCHEME:-https}://${server}/api/v1/session" 2>/dev/null)" || rc=$?
+  # -w appends the code on its own LAST line; strip it back off before parsing the body.
+  code="$(printf '%s' "$out" | tail -n1)"
+  case "$code" in ''|*[!0-9]*) code="000" ;; esac
+  out="$(printf '%s' "$out" | sed '$d')"
+  ( umask 077; printf 'rc=%s http=%s\n' "$rc" "$code" > "$(_argocd_session_diag_path)" ) 2>/dev/null || true
   printf '%s' "$(printf '%s' "$out" | jq -r '.token // empty' 2>/dev/null || true)"
+}
+
+# Where argocd_session_token leaves its diagnostics. A FILE, not a global — see the ⚠️ above.
+_argocd_session_diag_path() {
+  printf '%s' "${ARGOCD_SESSION_DIAG:-${TMPDIR:-/tmp}/.argocd-session-diag.$(id -u)}"
+}
+
+# argocd_session_last — echo `rc=<n> http=<code>` from the most recent argocd_session_token call in
+# this process tree, or `rc= http=` when there is none. Never fails; it is a diagnostic, not a gate.
+argocd_session_last() {
+  local f; f="$(_argocd_session_diag_path)"
+  if [ -s "$f" ]; then cat "$f"; else printf 'rc= http=\n'; fi
+}
+
+# argocd_session_explain <rc> <http> — turn the pair into ONE named cause, or empty when the pair
+# does not determine one. This is what replaces the closed two-item list: the check may only offer
+# "next steps" for causes it has NOT already named.
+argocd_session_explain() {
+  local rc="${1:-}" code="${2:-}"
+  case "$code" in
+    401|403) printf 'the CREDENTIAL was rejected by argocd-server (HTTP %s) — the address and the anchor are FINE' "$code"; return 0 ;;
+    502|503|504) printf 'argocd-server did NOT serve the request (HTTP %s) — reachable, but no ready backend yet. This is the LoadBalancer race, not a credential or trust fault' "$code"; return 0 ;;
+    200) printf 'argocd-server answered 200 but the body carried no token — a response-shape change, not an address/anchor fault'; return 0 ;;
+  esac
+  case "$rc" in
+    7)  printf 'the CONNECTION WAS REFUSED (curl 7) — nothing is listening yet. Neither the address nor the anchor was consulted'; return 0 ;;
+    28) printf 'the request TIMED OUT (curl 28) — the peer accepted nothing in time'; return 0 ;;
+    60) printf 'TLS VERIFICATION FAILED (curl 60) — THIS is the address-or-anchor case'; return 0 ;;
+    35) printf 'the TLS HANDSHAKE FAILED (curl 35) — a protocol/cipher fault, not a name or a CA'; return 0 ;;
+    6)  printf 'the HOST DID NOT RESOLVE (curl 6) — a DNS fault, not TLS'; return 0 ;;
+  esac
+  return 1
 }
