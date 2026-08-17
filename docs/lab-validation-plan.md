@@ -628,6 +628,31 @@ supervisor-ca.crt   SHA256 B3:93:B2:FF:...   notBefore Aug 13   (a PREVIOUS cut)
 
 **Every lab cut mints a NEW VMCA with the SAME subject.** So comparing subjects would have reported EQUAL for a stale file from any earlier cut and concluded "the anchor already exists" — wrong, and wrong in the direction that ships a broken fix. This is the repo's own rule at work: **verify by a trust OPERATION, never by the presence of a file — or, here, by a string.**
 
+**RE-CONFIRMED 2026-08-17 on cut B — the answer HOLDS, and three additions, one of which corrects a value recorded in this very step.**
+
+```text
+vCenter leaf (cut B)                   notBefore Aug 17 12:49:30   issuer CN = CA, DC = vsphere, DC = local, ... O = vcsa.env1.lab.test
+vmca-root.pem  (current)   9F:7E:DB:32…  notBefore Aug 14 12:49:30   --cacert -> http=200 rc=0    <- VERIFIES
+secrets/supervisor-ca.crt  B3:93:B2:FF…  notBefore Aug 13 14:05:54   --cacert -> http=000 rc=60   <- does NOT
+no --cacert at all                                                   http=000 rc=60               <- today's operator
+```
+
+1. **THE FINGERPRINT THIS STEP RECORDS (`73:79:F1:CB…`) NO LONGER MATCHES THE FILE AT THAT PATH** — it is now
+   `9F:7E:DB:32…`. That is this step's own lesson biting the step: a fingerprint is a per-cut value, so quoting one
+   as a constant creates exactly the stale-comparison hazard the warning above describes. **Do not compare against a
+   recorded fingerprint — run the trust operation.** The values in the block above are dated for the same reason.
+2. **VMCA roots really do rotate per cut — measured, not inferred.** `$LAB_STATE/` holds at least four archived
+   anchors with four DIFFERENT fingerprints and notBefore stamps (`9F:6A:D9:20` Aug 13 19:20, `8F:EF:75:61`
+   Aug 13 21:25, `C0:8B:3E:B5` Aug 14 00:03, plus the current `9F:7E:DB:32` Aug 14 12:49), each parked as
+   `vmca-root.pem.destroyed-<ts>`. So the teardown ARCHIVES rather than deletes — the anchor of any earlier cut is
+   still on disk, which is precisely how a stale one gets picked up by accident.
+3. ⚠️ **AND THE ANCHOR DOES *NOT* SURVIVE A REBUILD — I nearly recorded that it did.** The current root's
+   `notBefore` (Aug 14) is three days older than cut B's leaf (Aug 17), which reads as "the root persisted and only
+   the leaf was re-issued". It did not: the file's **mtime is 2026-08-17 09:16**, i.e. `trust-vcsa` (a **nested-vsphere-lab** target, not one of ours) re-ran for
+   this cut and rewrote it. The reason it verifies is that it was **re-fetched**, not that it endured. Checking the
+   mtime is what separated those two stories, and they imply opposite things about whether an operator must re-run
+   nested-vsphere-lab's `trust-vcsa` after every rebuild (they must).
+
 **Where:** jump box. Read-only, no credentials, no writes.
 **Who needs it:** US.
 **We then:** size B133's fix. It also tells you, per lab, whether the question applies at all.
