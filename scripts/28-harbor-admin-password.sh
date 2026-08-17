@@ -189,8 +189,12 @@ esac
 # compared admin==admin and passed having proven nothing. That false confidence is why the ROBOT
 # direction (22-harbor-robot.sh) was the one that failed — you could always get back to admin, never
 # forward to robot, and the asymmetry WAS the bug.
-env_publish HARBOR_USERNAME admin "the repaired admin identity"
-env_publish HARBOR_PASSWORD "$pw" "the repaired admin password"
+# ALL-OR-NOTHING (B138's round, F2) — same shape as 22. A mid-pair abort here leaves the overlay
+# holding HALF a credential pair, so the documented recovery (`make harbor-admin-password`) has the
+# same structure and aborts on the same key: the repair path and the thing it repairs share the bug.
+env_publish_all "the repaired admin credential pair" \
+  HARBOR_USERNAME admin \
+  HARBOR_PASSWORD "$pw"
 # ASSERT THE WRITE TOOK EFFECT -- otherwise this whole command is a true, useless success.
 # MEASURED on the lab: `make harbor-admin-password` said "ok Harbor accepts admin (http 200) ...
 # wrote HARBOR_USERNAME and HARBOR_PASSWORD to ./.env" and `make env-validate` said 401 SECONDS

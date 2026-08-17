@@ -121,6 +121,37 @@ rm -f "$TD/.env.state"
 if ( cd "$TD" && REPO_ROOT="$TD" VKS_STATE_FILE="$TD/.env.state" bash -c '
      . scripts/lib/os.sh >/dev/null 2>&1; . scripts/lib/state.sh >/dev/null 2>&1
      state_unset HARBOR_USERNAME' ) >/dev/null 2>&1; then ok "absent FILE -> rc 0"; else bad "absent file should be a no-op"; fi
+# 7. THE PAIR-ABORT ROUTE — `env_publish_all` must be ALL-OR-NOTHING.
+#    A round MEASURED that 22-harbor-robot.sh and 28-harbor-admin-password.sh each ran TWO BARE
+#    `env_publish` under `set -euo pipefail`. Key #1 fails -> set -e aborts -> key #2 is never written
+#    and the overlay keeps admin's password: effective USER=robot$x PASS=adminpw, verbatim the "401
+#    that reads like a wrong password" that 22's OWN comment calls worse than none. Cases 1-6 are
+#    structurally BLIND to it: they pin the PARTIAL-CLEAR route to that pair, never the MID-PAIR-ABORT
+#    route. Measured baseline before this case existed: 9 passed, 0 failed with the defect live.
+#    The shadow is a legacy `.env.kind` (load_env sources it LAST), so the publish CANNOT win and the
+#    failure is guaranteed — which is what makes the all-or-nothing property observable at all.
+setup
+printf 'HARBOR_USERNAME=/LEGACY-USER\n' > "$TD/.env.kind"
+( cd "$TD" && REPO_ROOT="$TD" VKS_STATE_FILE="$TD/.env.state" bash -c '
+  set -euo pipefail
+  . scripts/lib/os.sh >/dev/null 2>&1; . scripts/lib/state.sh >/dev/null 2>&1
+  env_publish_all "the robot credential pair" \
+    HARBOR_USERNAME "robot\$vks-cicd" \
+    HARBOR_PASSWORD "robotsecret"' ) >/dev/null 2>&1 || true
+#    ^ `|| true` so the assertions below RUN. A failing publish returns non-zero BY DESIGN; without it
+#    the suite aborts here and reports nothing — the very shape this case exists to test.
+_u="$(grep -cE '^HARBOR_USERNAME=' "$TD/.env" 2>/dev/null || true)"
+_p="$(grep -cE '^HARBOR_PASSWORD=' "$TD/.env" 2>/dev/null || true)"
+if [ "${_u:-0}" -ge 1 ] && [ "${_p:-0}" -ge 1 ]; then
+  ok "PAIR: both keys written to .env despite the failure — all-or-nothing"
+else
+  bad "PAIR: .env has USERNAME=${_u} PASSWORD=${_p} — a mid-pair ABORT left the pair half-written"
+fi
+_left="$(grep -cE '^(HARBOR_USERNAME|HARBOR_PASSWORD)=' "$TD/.env.state" 2>/dev/null || true)"
+if [ "${_left:-0}" -eq 0 ]; then ok "PAIR: overlay holds NEITHER key — no half-pair left behind"
+else bad "PAIR: overlay still holds ${_left} of the pair — a half-cleared credential pair"; fi
+rm -f "$TD/.env.kind"
+
 
 echo
 echo "env_publish tests: ${pass} passed, ${fail} failed"
