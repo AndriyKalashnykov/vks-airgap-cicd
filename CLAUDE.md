@@ -601,107 +601,92 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-16 (the freeze is LIFTED; `main` is deliberately UNCERTIFIED) — READ, THEN REPLACE
+## ▶️ HANDOFF 2026-08-17 03:10 EDT — matrix run 3 is LIVE and will stop after cut A; run 4 is required
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### The job, in the owner's words
+### The job, unchanged
 
-Rebuild the walkthrough matrix for scenario-1 **and add scenario-2**. Both documents must read as
-**end-user documents**, not storage for internal technical notes and prose. Work out what
-scenario-2 can genuinely reuse from scenario-1. The walk reads each document as a whole, executes
-it line by line, and navigates on real command output. Rows run on throwaway Photon and Ubuntu VMs.
-Work until `BACKLOG.md` is empty; verify `creds-show` endpoints and logins after every lab cut,
-driving the web UIs in Chrome where an HTTP probe is not proof a human can log in.
+Rebuild the walkthrough matrix for scenario-1 **and** scenario-2, both as end-user documents. Rows
+run on throwaway Photon and Ubuntu VMs. **All six rows, green FROM THE FIRST GO.** Work until
+`BACKLOG.md` is empty; verify `creds-show` endpoints and logins after every lab cut, driving Chrome
+where an HTTP probe is not proof.
 
-### 🟡 THE FREEZE IS LIFTED, and that is deliberate
+### Where the matrix actually is
 
-Rewriting `docs/scenario-1.md` is on-path by definition, so `v1.0.1` stopped describing `main` the
-moment this work started. **That is the intended state, not an accident.** Two PRs landed:
+A fresh lab was cut at 01:46 (`logs/lab-20260817-010956.log`: *Supervisor is RUNNING*, 7 steps,
+36m47s). Run 3 = `run-20260817T061515Z-1427190`.
 
-- **#610** — the Go pin. `check-toolchain-alignment` had been RED on `main` since #605 half-applied
-  a Renovate bump (`images/images.txt` + the Dockerfile to `golang:1.26.6`, `.mise.toml` left at
-  `1.26.5`). It is fail-fast and early, so it masked everything behind it.
-- **#611** — **B108 re-folded**: all five held fixes are back, including **B83c**, where a LEAF
-  could be installed as the machine's trust anchor at exit 0. Restored tests pass 10/10, 10/10,
-  11/11.
-
-**Do not re-revert to restore certification** — that drops the leaf-as-trust-anchor fix again. The
-way back to certified is a green matrix run, not a revert.
-
-### 🔴 THE STANDING RISK — five gates do not run on a PR
-
-`.github/workflows/ci.yml`'s `static-check` is **`if: false`** on PRs (disabled 2026-08-11 for speed
-— 2m44s of a 3m03s run; restored 2026-08-16 for the weekly SCHEDULE only). `ci-pass` tests for
-`failure`/`cancelled`, and a **skipped** job is neither.
-
-⚠️ **CORRECTED 2026-08-16 — this used to say `ci-pass` goes green with "none of the alignment gates"
-having run. That is FALSE, and being wrong in that direction is worse than useless: it overstates
-the hole, so the reader distrusts everything equally instead of the five things that are actually
-uncovered.** Verified against `ci.yml` and the Makefile, not recalled:
-
-| | |
+| row | result |
 |---|---|
-| **runs per-PR** | `static-check-fast` — **23** alignment/doc/env gates (~9 s). `ci-pass` asserts its result **EXPLICITLY** (`needs.static-check-fast.result != success` → fail), so a skip there IS caught. |
-| **does NOT run per-PR** | **`sec` ONLY** (gitleaks + `trivy-fs` + `trivy-config`), plus the SLOW tier of `test-scripts`. |
+| 1 · ubuntu · NOTHING | **DONE** — 41 blocks: 34 ran, **1 FAILED**, 7 skipped · 32/32 Expect parsed, 22 CHECKABLE, **0 UNMET** |
+| 2 · photon · EXISTS | **DONE** — 41 blocks: 29 ran, **0 FAILED**, 12 skipped · 18 CHECKABLE, **0 UNMET** |
+| 5 · photon · scenario-2 | running §6 `make install-all` at the time of writing |
+| 3, 4, 6 | **will NOT run** — see below |
 
-⚠️ **CORRECTED 2026-08-16 — this row used to say "exactly five: `lint`, `validate`, `sec`,
-`test-scripts`, `app-test`", and FOUR of those five were wrong.** Measured, not recalled:
-`ci.yml:245` runs `make ${{ github.event_name == 'schedule' && 'static-check' || 'static-check-pr' }}`,
-and `Makefile:1098` defines `static-check-pr: lint validate app-test test-scripts-fast`. So `lint`,
-`validate`, `app-test` and the FAST test tier **do** run on every PR. Only `sec` and the slow test
-tier wait for the weekly schedule.
-The correction MATTERS IN BOTH DIRECTIONS: the standing hole is far smaller than this file claimed —
-but it is concentrated on the **security scans**, which is the worst single gate to be missing, and
-the old wording buried that among four false alarms. (Found by an adversary round on an unrelated
-change; the stale claim had been steering every session's risk judgement since it was written.)
+**Rows 3/4/6 will not walk, and that is CORRECT.** `walk-matrix.sh:847` refuses to rebuild the lab
+when any row failed: *"a rebuild cannot fix a row that failed before it walked … the lab is left
+ALONE so the failure can still be diagnosed."* Row 1 failed, so the run exits 1 after cut A. Do not
+fight that guard — it exists because two of one evening's three rebuilds were exactly that waste.
 
-**Measured consequence, still not hypothetical — and it recurred today:** `make lint` went RED on a
-feature branch and stayed red across several pushes while CI reported `ci-pass: pass` every time,
-because `lint` is in the half that does not run. Found only by running the full gate locally, hours
-later. (#605's drift is the older instance; its class — an alignment gate — is now in the fast half,
-so that specific hole is closed.)
+**Row 1's single failure was real and is FIXED**: `.env.state` pinned `HARBOR_USERNAME`, so §9's
+robot identity could never take effect (B132 → `env_publish`, #707).
 
-⇒ **Run `env -u GOROOT make static-check` locally before every merge.** `docs-lint` plus the unit
-tests is NOT the gate, and believing it was is exactly how the lint stayed red.
+### Run 4 — the exact sequence, and the trap that ate two launches
 
-### The design was REFUTED by two adversaries — this is the surviving plan
+```sh
+python3 /tmp/walk-matrix-auth-before-tkr.py        # B131; SAFE only once run 3 has exited
+cd ~/projects/nested-vsphere-lab && make destroy CONFIRM=yes && make lab
+make trust-vcsa && make kubectl-login              # ← THE TRAP. Do not skip.
+WALK_REPO=~/projects/vks-airgap-cicd VCF_CLI_SRC_DIR=~/Downloads/vcf \
+  WALK_ROWS="1 2 3 4 5 6" make walk-matrix
+```
 
-| decision | outcome |
-|---|---|
-| 8 matrix rows | **REFUTED → 6.** `S2 × NOTHING` is *inexpressible*: `resolve_cell` collapses four per-resource flags into a scalar and gates `n==0`/`n==4`, but a tenant cell is `n=2`. A failing row also trips the rebuild guard and breaks sequencing. |
-| restricted-kubeconfig tenant | **REFUTED.** `scripts/91-e2e-tenant-mechanism.sh` (wired at `Makefile:770`) already builds the real tenant situation — AppProject + `argocd-rbac-cm` + apiKey account + a kubeconfig with no RBAC in the ArgoCD namespace. A k8s kubeconfig measures k8s RBAC; the tenant path is ArgoCD RBAC via argocd-server. I verified the script exists and does this. |
-| extract shared steps | **SURVIVES, and is stronger than argued** — it is a *correctness* fix. Scenario-2 has no bootstrap and no clone, so its first `make` dies `make: command not found`, while line 23 claims you need not read the other scenario. |
+⚠️ **`make destroy` RENAMES the kubeconfig away and `make lab` does NOT log in** (its own summary
+says *"Run: make kubectl-login"*), while `walk-matrix` assumes it exists. Without the login the TKr
+query falls back to `localhost:8080`, `2>/dev/null` eats the error, and the harness reports *"still
+no usable TKr"* for the full 900 s before aborting with **the wrong cause** — the lab had 81 TKrs
+published and 12 Ready+Compatible the whole time. That killed launches 1 and 2. **B131's patch is
+STAGED, validated against a copy (`bash -n` + shellcheck clean, auth hoisted above the wait at
+:241 < :252), and NOT applied** — the matrix is executing that file and bash reads scripts
+incrementally.
 
-**Cut A:** S1×NOTHING×ubuntu → S1×EXISTS×photon → S2×EXISTS×photon.
-**Cut B:** S1×NOTHING×photon → S1×EXISTS×ubuntu → S2×EXISTS×ubuntu.
-
-### The prerequisite nobody can skip — ✅ ALREADY SHIPPED (#613). Do NOT rebuild it, and do NOT "fix" its floors
-
-`walk-doc.sh` used to read exactly ONE document and not follow a link, so a naive extraction would
-walk only the scenario's own blocks while every counter reconciled and `EXIT=0`.
-**`<!-- walk-include: <path> -->` landed in PR #613 and works** — verified end-to-end by an adversary
-round on 2026-08-16: it splices in DOCUMENT ORDER, both floors reconcile across the source set, and
-two independent resolutions are cross-checked (`walk-doc.sh:343`).
-
-⚠️ **This section previously said to recompute the floors "over the EXPANDED text" and called that
-the load-bearing half. That is BACKWARDS and it is the fake-green.** The floors are computed over the
-**SOURCES** (`walk-doc.sh:360,367` — `cat "${DOC_SET[@]}"`), deliberately, and `:202-208` explains
-why at length: an expansion-side floor compares the parser's output against itself, so `0 >= 0`
-passes while `0 >= 26` correctly refuses. A session that followed the old wording literally would
-have re-implemented it wrongly and produced a counter that cannot detect the parser being wrong.
+Two more preconditions, both already true on `main` but re-check them: `assert_repo_published`
+refuses a WALK_REPO that is dirty **or ahead of origin/main**, and the SSO account locks out
+**PERMANENTLY after 3 failed attempts** — never loop a login.
 
 ### Distrust these
 
-- **`git diff --name-only <tag>..origin/main` is the only honest answer to "is main certified?"**
-- **A stale log will lie to you.** Cite the per-invocation `VERDICT-<runid>.txt`, never a fixed path.
-- **A fresh `make lab` does NOT install the Supervisor Services** — verified; `services` is a
-  separate target. So a fresh cut genuinely IS the NOTHING cell.
-- **`WALK_DRY=1` is not side-effect-free** — the env-table loop `sed -i`s `$CWD/.env` before the dry
-  gate. Sandbox probes with `WALK_START_DIR`.
-- **The walk ships the vCenter SSO admin password to every row**, so no row is a tenant today
-  whatever its kubeconfig says.
+- **`git diff --name-only v1.0.1..origin/main`** is the only honest answer to "is main certified?".
+- **A stale log will lie.** Cite the per-invocation `VERDICT-<runid>.txt`, never a fixed path, and
+  read each row's `WALK DONE`/`DOCUMENT` lines plus the **"N of 6 designed rows"** denominator —
+  never the exit code, and never the completion notification.
+- **Rows 1 and 2 walked the PRE-fix tree.** Everything merged tonight is proven hermetically, not on
+  a lab. Run 4 is what proves it.
+- **`static-check` still does not run per-PR** — only `sec` and the slow test tier wait for the
+  weekly schedule; `static-check-fast` (23 gates) DOES run and `ci-pass` asserts it. Run
+  `env -u GOROOT make static-check` locally before every merge.
+
+### Blocked, and on what
+
+- **B133 (CRITICAL)** — the vCenter SSO **administrator** password goes to an unverified peer;
+  it is the only credential-bearing TLS client here with no trust ladder. The fix is BLOCKED on
+  **one lab measurement** (now step 24 of `docs/lab-validation-plan.md`: does
+  `secrets/supervisor-ca.crt` also anchor vCenter? — it decides whether 1 block breaks or 4) and
+  **two operator decisions** stated in the row. Its idea round refuted four of five specifics of the
+  obvious fix and caught a new CRITICAL it would have introduced. Do not implement before both.
+- **B129** — very likely a CASCADE of B128 rather than a defect: `install-all` already creates the
+  token `verify` wants, via `platform → seed-gitea`. Row 5 is walking the discriminating path now.
+  Do not "fix" it by appending a command until that lands.
+
+### What tonight actually shipped
+
+PR #702 B130 refuted · #703+#705 the secrets gate made derived, then its own engine/quoting gaps closed
+· #704 B90's vantage corrected · #706 the tenant e2e's ArgoCD CA + `require_kind_target` · #707
+`env_publish` · #708 B37's verdict hoisted · #709 a keyword audit that reading rejected 3/3 · #710
+kubectl's translated 401 pinned · #711 B133's findings + the queued measurement. Open RED rows
+14 → 12. Open PRs: 0.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
