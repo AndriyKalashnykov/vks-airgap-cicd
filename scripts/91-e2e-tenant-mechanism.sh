@@ -33,6 +33,19 @@ load_env
 # shellcheck source=scripts/lib/argocd.sh
 . "${SCRIPT_DIR}/lib/argocd.sh"   # gitea_clone_url — the same one 70-configure-argocd.sh uses
 
+# ⚠️ REFUSE A NON-KinD TARGET, BEFORE ANYTHING IS TOUCHED. Same guard 06-install-harbor.sh and
+# 07-install-argocd.sh already use — this script needed it just as badly and did not have it.
+#
+# WHY IT MATTERS HERE SPECIFICALLY: `make e2e-kind-tenant` has ZERO prerequisites (not even
+# check-env), and this script takes KUBECONFIG from .env.state — which is exactly what
+# `make vks-login` points at a REAL Supervisor. The header said "on KinD" and enforced nothing, and
+# prose is not a guard; that is the whole reason require_kind_target was written.
+#
+# What it would do against a real lab, in order: PATCH the live argocd-cm to mint a `tenant` apiKey
+# account, READ argocd-initial-admin-secret, and POST the real ArgoCD ADMIN password to the real
+# LoadBalancer. Every step succeeds; nothing warns.
+require_kind_target "e2e-kind-tenant"
+
 require_cmd kubectl
 # NAME THE STEP THAT ACTUALLY PROVIDES IT. This used to say only "(make deps)", which installs the
 # UPSTREAM argocd -- fine for KinD, but a VCF/VKS lab wants the vendor build (…-vcf), and that one
@@ -212,8 +225,14 @@ if [ -n "${ARGOCD_CA_FILE:-}" ] && [ -s "${ARGOCD_CA_FILE}" ]; then
   export ARGOCD_OPTS="--server-crt ${ARGOCD_CA_FILE}"
   log_info "argocd TLS: VERIFYING against ${ARGOCD_CA_FILE} (this leg covers the operator's path)"
   _e2e_tls="--server-crt ${ARGOCD_CA_FILE}"
+  # curl speaks --cacert, not --server-crt. Derived HERE, from the SAME branch, so the CLI and the
+  # raw session call cannot disagree about whether this run verifies. They used to: the session
+  # curl below was `-k` UNCONDITIONALLY while this branch had the CA in hand 26 lines earlier —
+  # and that call carries the ArgoCD ADMIN password.
+  _e2e_curl_tls=(--cacert "${ARGOCD_CA_FILE}")
 else
   export ARGOCD_OPTS="--insecure"
+  _e2e_curl_tls=(-k)
   log_warn "argocd TLS: NOT VERIFIED (--insecure) — no ARGOCD_CA_FILE. This leg therefore does NOT
   cover the trust-anchor path, which is the one that fails on a real lab. To close that gap:
   make fetch-argocd-ca, then re-run with ARGOCD_CA_FILE set."
@@ -236,7 +255,7 @@ for _ in $(seq 1 60); do
   # The curl half was already correct (`--data @-`, body on stdin); only the jq half leaked.
   # `env.NAME` is jq's documented way to read the environment. Verified the JSON is identical.
   admin_jwt="$(ARGOCD_ADMIN_PW="$admin_pw" jq -nc '{username:"admin", password:env.ARGOCD_ADMIN_PW}' \
-    | curl -s -k --max-time 5 -H 'Content-Type: application/json' --data @- \
+    | curl -s "${_e2e_curl_tls[@]}" --max-time 5 -H 'Content-Type: application/json' --data @- \
         "https://${argocd_lb}/api/v1/session" 2>/dev/null \
     | jq -r '.token // empty' 2>/dev/null || true)"
   [ -n "$admin_jwt" ] && break
