@@ -42,7 +42,7 @@ go       = "1.26.6"
 # Security-scan gates (make sec / static-check) — internet/CI side only, never
 # needed for the air-gap install flow. Provided cross-distro via mise so local
 # `make static-check` mirrors the CI static-check job (which runs mise-action).
-trivy    = "0.73.0"
+trivy    = "0.74.0"
 gitleaks = "8.30.1"
 # shellcheck — the lint gate's shell linter. Pinned via mise (not the OS package)
 # so local `make lint` uses the SAME version as CI; an unpinned system shellcheck
