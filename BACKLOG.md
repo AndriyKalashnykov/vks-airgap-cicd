@@ -144,12 +144,15 @@ verified, what is still unknown.
 > which are also settled). So a session that reads this section top-to-bottom re-reads more
 > settled ground than live work, and "work until the backlog is empty" measures the wrong thing.
 >
-> **Recount rather than trusting the numbers above** — they are a snapshot and will rot:
-> ```sh
-> grep -cE '^\| \*\*B[0-9]+\*\* \|' BACKLOG.md                 # total rows here
-> for g in ✅ 🟢 🟡 🟠 🔴; do printf '%s %s\n' "$g" \
->   "$(grep -cE "^\| \*\*B[0-9]+\*\* \| $g" BACKLOG.md)"; done  # by marker
-> ```
+> **Recount rather than trusting the numbers above** — they are a snapshot and will rot. Total rows:
+> `grep -cE '^\| \*\*B[0-9]+\*\* \|' BACKLOG.md`. By marker:
+> `for g in ✅ 🟢 🟡 🟠 🔴; do printf '%s %s\n' "$g" "$(grep -cE "^\| \*\*B[0-9]+\*\* \| $g" BACKLOG.md)"; done`
+>
+> ⚠️ Those are INLINE code spans on purpose, not a fenced block. This file's established
+> code-block style is INDENTED (markdownlint MD046 is `consistent`, and it infers the style from
+> the FIRST block). Adding one ```` ```sh ```` fence here flipped the inferred style to *fenced* and
+> reclassified **10 pre-existing indented blocks at lines 325–976 as violations** — `docs-lint`
+> went rc=2 with 11 findings when `main` was clean, and only ONE of them was in this text.
 >
 > ⚠️ **DO NOT "TIDY" THIS BY DELETING THE CLOSED ROWS.** Most of them are not records of work —
 > they are **REFUTATIONS**, and several exist specifically so a design is not rebuilt (B130, B37,
