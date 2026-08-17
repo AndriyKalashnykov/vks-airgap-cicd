@@ -68,6 +68,37 @@ if [ "$got" = "${ROBOT}|adminpw" ]; then
   ok "PARTIAL fix produces the mismatched pair [$got] — pinned, so nobody ships half of this"
 else bad "expected the mismatched pair from a partial fix; got [$got]"; fi
 
+# 3b. 🔴 THE 2-KEY OVERLAY — the REAL-LAB shape, and the one the fixture above structurally cannot
+#     reach. `04-install-harbor-service.sh:144-145` publishes EXACTLY the pair; there is no third key.
+#     Publishing the pair one key at a time therefore reduces the overlay to ONE line, and then to
+#     ZERO — and `grep -v` EXITS 1 when it emits nothing, so the second state_unset silently fails.
+#     Cases 2 and 3 are green today only because setup() seeds a third key (ARGOCD_KUBECONFIG=/x,
+#     added for case 5), which guarantees grep -v always has output. That is the "a gate's RED-proof
+#     checks a SUBSET" trap: the fixture is the one shape that hides the defect.
+setup2() { : > "$TD/.env"; ( umask 077; printf 'HARBOR_USERNAME=admin\nHARBOR_PASSWORD=adminpw\n' > "$TD/.env.state" ); }
+setup2
+( cd "$TD" && REPO_ROOT="$TD" VKS_STATE_FILE="$TD/.env.state" bash -c '
+  . scripts/lib/os.sh >/dev/null 2>&1; . scripts/lib/state.sh >/dev/null 2>&1
+  env_publish HARBOR_USERNAME "robot\$vks-cicd" "the robot identity"
+  env_publish HARBOR_PASSWORD "robotsecret"     "the robot secret"' ) >/dev/null 2>&1 || true
+#   ^^^^^^^ `|| true` is REQUIRED, and it is itself a finding: a failing env_publish returns non-zero,
+#   so under this file's `set -e` the abort would kill the SUITE before the assertion below could run
+#   — the test would die instead of reporting. Same shape as `make env-populate` aborting mid-populate.
+got="$(eff)"
+if [ "$got" = "${ROBOT}|robotsecret" ]; then ok "2-KEY overlay: env_publish BOTH keys -> [$got]"
+else bad "2-key overlay: expected robot/robotsecret, got [$got] — the SECOND state_unset failed, so the overlay still pins the admin password"; fi
+
+# 3c. And the mechanism, directly: state_unset on a SINGLE-key overlay must still remove the key.
+#     rc is deliberately NOT the assertion — a silent rc=1 that leaves the key is the defect, and an
+#     rc-only check would pass the moment someone "fixed" it by returning 0 without removing anything.
+( umask 077; printf 'HARBOR_USERNAME=admin\n' > "$TD/.env.state" )
+( cd "$TD" && REPO_ROOT="$TD" VKS_STATE_FILE="$TD/.env.state" bash -c '
+  . scripts/lib/os.sh >/dev/null 2>&1; . scripts/lib/state.sh >/dev/null 2>&1
+  state_unset HARBOR_USERNAME' ) >/dev/null 2>&1 || true
+if ! grep -q '^HARBOR_USERNAME=' "$TD/.env.state" 2>/dev/null; then
+  ok "state_unset on a SINGLE-key overlay removes the key (file may become empty)"
+else bad "state_unset left the key in a single-key overlay — grep -v exited 1 on empty output"; fi
+
 # 4. state_unset PRESERVES 0600 — the sink holds generated credentials.
 setup
 ( cd "$TD" && REPO_ROOT="$TD" VKS_STATE_FILE="$TD/.env.state" bash -c '

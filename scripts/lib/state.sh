@@ -68,7 +68,27 @@ state_unset() {
   # 0600 is preserved deliberately: a fresh file created by the redirect would take the umask, and
   # this sink holds generated credentials. Write beside it, then move over it.
   local tmp; tmp="$(mktemp "${f}.XXXXXX")"
-  ( umask 077; grep -vE "^${key}=" "$f" > "$tmp" ) || { rm -f "$tmp"; return 1; }
+  # `grep -v` EXITS 1 WHEN IT EMITS NOTHING, and that is the CORRECT outcome here: the sink held only
+  # this key, so removing it legitimately empties the file. The original `|| { rm; return 1; }` read
+  # that as failure -- so the key was NOT removed, NOTHING was logged, and rc=1 propagated. Measured
+  # 2026-08-17: 2-key overlay -> rc 0, removed; 1-key overlay -> rc 1, key STILL PRESENT, silent.
+  # It is the SECOND key of a pair that lands there (04-install-harbor-service.sh:144-145 publishes
+  # exactly HARBOR_USERNAME + HARBOR_PASSWORD), so `make harbor-robot` produced the robot USERNAME
+  # with the ADMIN PASSWORD -- verbatim the mismatched pair env_publish exists to prevent, and a 401
+  # that reads like a wrong password. This is `set_env_var`'s documented bug 2 (os.sh:819-822),
+  # re-introduced by a function written after it.
+  #
+  # NOT `|| true` (which the review prescribed). rc 1 and rc 2 BOTH leave an EMPTY tmp -- measured --
+  # so `|| true` would `mv` an empty file over a sink whose own header calls it "the only copy" of a
+  # running cluster's credentials. Which failure does the >=2 arm actually cover? MEASURED, both:
+  #   unreadable SINK   -> the early `grep -qE ... || return 0` above already returns 0, untouched.
+  #                        The >=2 arm is NOT what protects that case.
+  #   failed REWRITE    -> reachable (ENOSPC; reproduced with `ulimit -f 0`). grep cannot write $tmp,
+  #                        and this arm is what stops a TRUNCATED tmp being moved over the sink.
+  # So the arm is load-bearing for a write failure, not a read failure -- and only <=1 is benign.
+  local g=0
+  ( umask 077; grep -vE "^${key}=" "$f" > "$tmp" ) || g=$?
+  if [ "$g" -ge 2 ]; then rm -f "$tmp"; return 1; fi
   chmod --reference="$f" "$tmp" 2>/dev/null || chmod 600 "$tmp"
   mv -f "$tmp" "$f"
   log_info "state: removed ${key} from $(basename "$f") — superseded by a value just written to .env"
