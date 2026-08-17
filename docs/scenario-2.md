@@ -43,6 +43,32 @@ make deps     # kubectl, crane, tkn, argocd, helm, openssl + the rest of the pin
 
 **Expect:** `prereqs installed. Versions:` followed by the pinned version of each tool. *(~3 min)*
 
+### Put the toolchain on YOUR shell's PATH
+
+Every `make …` below works already, because the Makefile puts the pinned toolchain on `PATH` itself.
+The commands that are **not** `make` — every bare `kubectl` in this document — run in *your* shell,
+which cannot see them yet.
+
+```bash
+make shell-init                      # future shells: appends to YOUR shell's rc file
+. "$(make -s shell-rc-file)"         # THIS shell: re-reads that same file, whichever it is
+```
+
+**Two lines because they fix two different things.** The first edits your shell's startup file, which
+only affects shells you open *later*; the second re-reads it so the shell you are sitting in picks it
+up now. Neither hardcodes `~/.bashrc` — `make shell-rc-file` prints the file for bash, zsh, fish or
+ksh, the same resolver `shell-init` uses to decide where to write.
+
+**Do not skip this because `make deps` said the tools are installed.** Where they land differs by
+OS, and only one of the two is already on your `PATH`: on Photon `make deps` finds `kubectl` in
+`/usr/bin`, while on Ubuntu it downloads it to `~/.local/bin`, which no shell searches by default.
+So a bare `kubectl` exits `127 command not found` on Ubuntu at the two steps below that use one —
+in the same session where `make env-validate` reports the cluster reachable, because that ran under
+`make`. MEASURED on a walkthrough run 2026-08-17: Ubuntu failed both, Photon passed both, on
+identical documents.
+
+**Expect:** `kubectl version --client` answers **in this shell**.
+
 Now the kubeconfigs. **There are two, they are not interchangeable, and that is the single fact that
 makes the rest of this document behave:**
 
