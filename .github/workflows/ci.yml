@@ -180,7 +180,17 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/kubeconform
-          key: kubeconform-v2-${{ hashFiles('k8s/**', 'deploy/**', 'tekton/**') }}
+          # 'tekton/**' matched NOTHING and was dropped: `git ls-files tekton` = 0, because the
+          # manifests live at k8s/tekton/ (9 files) and are already covered by 'k8s/**'. Same
+          # dead-path rot already corrected once in the adversary hook's GUARDED_PREFIXES.
+          #
+          # ⚠️ KNOWN GAP, deliberately not closed here: the schemas kubeconform fetches depend on
+          # KUBERNETES_VERSION, and this key does NOT cover it — so bumping the k8s version reuses
+          # schemas fetched for the OLD one until a manifest also changes. Closing it means moving
+          # KUBERNETES_VERSION out of scripts/validate.sh:14 (a hardcoded literal, absent from
+          # .env.example, and validate.sh never calls load_env) and adding that file here. That is a
+          # two-file change in a script currently under adversary review; filed rather than rushed.
+          key: kubeconform-v2-${{ hashFiles('k8s/**', 'deploy/**') }}
           restore-keys: |
             kubeconform-v2-
 
