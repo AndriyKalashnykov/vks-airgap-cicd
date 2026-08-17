@@ -247,5 +247,20 @@ state_show() {
       log_warn "  NOT KinD state — 'make kind-down' will NOT touch it"
     fi
   fi
-  grep -vE '^(VKS_STATE_|#|$)' "$f" | sed 's/\(PASSWORD\|TOKEN\|SECRET\)=.*/\1=<redacted>/' | sed 's/^/    /'
+  # ⚠️ REDACTION IS BY NAME PATTERN, so the pattern IS the control — a key whose name is not in
+  # this list is printed IN FULL. MEASURED 2026-08-17 (B76 round, finding F7) against the old
+  # three-word list: HARBOR_PASSWORD and ARGOCD_TOKEN redacted correctly, while GPG_PASSPHRASE,
+  # GITHUB_PAT and TLS_KEY were printed VERBATIM. It was adequate only by accident — every
+  # credential key in .env.example today happens to end in _PASSWORD or _TOKEN — and the rot is
+  # PRESCRIBED BY OUR OWN CONVENTIONS, which mandate GPG_PASSPHRASE (not _PASSWORD) and keep
+  # GITHUB_PAT deliberately. The overlay really does hold generated secrets (05-kind-up.sh:130-142
+  # state_set HARBOR_PASSWORD/GITEA_ADMIN_PASSWORD/ARGOCD_ADMIN_PASSWORD "$(gen_password)"), so the
+  # day either name lands here this printed them.
+  #
+  # The anchor is `<WORD>=`, which is what keeps it from OVER-redacting: ARGOCD_PASSWORD_WAIT_SECONDS
+  # ends in `_WAIT_SECONDS=`, and SSH_KEY_FILE ends in `_FILE=`, so neither matches. Both directions
+  # are pinned by test-state-overlay.sh — widen this list only together with those cases.
+  grep -vE '^(VKS_STATE_|#|$)' "$f" \
+    | sed 's/\(PASSWORD\|PASSPHRASE\|TOKEN\|SECRET\|PAT\|KEY\|CRED\)=.*/\1=<redacted>/' \
+    | sed 's/^/    /'
 }
