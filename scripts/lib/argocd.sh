@@ -492,34 +492,56 @@ argocd_session_explain() {
 # test can drive it with a stub `ka`: the diagnostic it replaced survived precisely because it
 # was buried mid-script where nothing could exercise it.
 argocd_await_revision() {
-  local app="$1" _rd_err="" _ce_err="" _rd_rc=0 _ce_rc=0 rev="" _attempts _cond
-  # Every variable this function reports is defaulted. It runs under `set -u` and its whole job is
-  # to PRINT a diagnosis: dying half-way through printing one, on an unset variable, destroys the
-  # evidence it exists to produce. It now lives in a shared lib, so the single call site's
-  # environment is no longer a guarantee.
+  local app="$1" _rd_err="" _ce_err="" _an_err="" _rd_rc=0 _ce_rc=0 _an_rc=0 rev="" _attempts _cond
   local _ns="${ARGOCD_NAMESPACE:-<unset>}" _api="${ARGOCD_API:-<unknown>}"
   local _kc="${ARGOCD_KUBECONFIG:-${KUBECONFIG:-<unset>}}"
   local _url="${GITEA_ARGOCD_URL:-<unset>}" _org="${GITEA_ORG:-<unset>}"
+  local _pre_rev="" _pre_rec="" _rec="" _tried=0 _fresh=0 _rec_rc=0 _cerr="" _sst=""
 
+  # Validate BEFORE the `:-` default, or an EMPTY value silently takes the default and the guard's
+  # own '' arm is unreachable — while empty was the OLD code's actual trigger (`seq 1 ""` = zero
+  # iterations). Measured: the guard advertised protection for the one input it could not see.
+  case "${ARGOCD_REPO_TIMEOUT_SECONDS-180}" in
+    ''|*[!0-9]*|0) die "ARGOCD_REPO_TIMEOUT_SECONDS must be a positive integer (got '${ARGOCD_REPO_TIMEOUT_SECONDS-}')" ;;
+  esac
   _attempts="${ARGOCD_REPO_TIMEOUT_SECONDS:-180}"
-  # A malformed value made the loop run ZERO times and the function then blamed the repo with a
-  # denominator it never earned ("EMPTY revision on all 0 attempts"). `set -e` does not fire on a
-  # bad `for` list, so this must be checked explicitly.
-  case "$_attempts" in ''|*[!0-9]*|0) die "ARGOCD_REPO_TIMEOUT_SECONDS must be a positive integer (got '${_attempts}')" ;; esac
 
   _rd_err="$(mktemp)" || die "could not create a temp file for kubectl's stderr (TMPDIR=${TMPDIR:-/tmp} full or read-only?)"
-  _ce_err="$(mktemp)" || { rm -f "$_rd_err"; die "could not create a temp file (TMPDIR=${TMPDIR:-/tmp} full or read-only?)"; }
-  # RETURN covers every exit path including the die's, which the explicit rm -f's did not.
-  trap 'rm -f "$_rd_err" "$_ce_err"' RETURN
+  _ce_err="$(mktemp)" || { rm -f "$_rd_err"; die "could not create a temp file (TMPDIR=${TMPDIR:-/tmp})"; }
+  _an_err="$(mktemp)" || { rm -f "$_rd_err" "$_ce_err"; die "could not create a temp file (TMPDIR=${TMPDIR:-/tmp})"; }
+  # EXIT as well as RETURN: `die` is `exit 1` (lib/os.sh), and a RETURN trap does NOT fire on exit —
+  # measured, the temp files survived. The previous comment claimed RETURN "covers every exit path
+  # including the die's", which was false.
+  # RETURN ONLY. `trap ... EXIT` here REPLACED the caller's EXIT trap — bash has ONE per shell —
+  # so 70-configure-argocd.sh's WORK_DIR cleanup silently stopped running and every successful
+  # `make gitops` leaked a mktemp -d plus its own captures, ending with an unbound-variable error
+  # because the trap body referenced locals that were out of scope by then. MEASURED. `die` is
+  # `exit 1`, which a RETURN trap does not catch, so each die does its own rm -f explicitly.
+  trap 'rm -f "$_rd_err" "$_ce_err" "$_an_err"' RETURN
+  _await_cleanup() { rm -f "$_rd_err" "$_ce_err" "$_an_err" 2>/dev/null || true; }
 
-  _await_read() {   # sets rev/_rd_rc; stderr to $_rd_err
+  _await_read() {
     _rd_rc=0
     rev="$(ka -n "$_ns" get application "$app" -o jsonpath='{.status.sync.revision}' 2>"$_rd_err")" || _rd_rc=$?
   }
+  # Capture rc like the other reads. With `2>/dev/null || true` a silently-FAILED pre-read set
+  # _pre_rec="" and then ANY value "advanced" — measured printing an eight-month-old timestamp as a
+  # fresh reconcile. An unreadable value is UNKNOWN, never "".
+  _await_reconciled() {
+    _rec_rc=0
+    _rec="$(ka -n "$_ns" get application "$app" -o jsonpath='{.status.reconciledAt}' 2>"$_ce_err")" || _rec_rc=$?
+  }
+  # THE FETCH-SUCCESS SIGNAL. reconciledAt answers "did it reconcile"; this answers "did the FETCH
+  # succeed", and only the two together mean anything — see the block above the loop.
+  _await_fetch_failed() {
+    _cerr="$(ka -n "$_ns" get application "$app" \
+      -o jsonpath='{range .status.conditions[?(@.type=="ComparisonError")]}{.message}{end}' 2>/dev/null || true)"
+    _sst="$(ka -n "$_ns" get application "$app" -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
+    [ -n "$_cerr" ] || [ "$_sst" = Unknown ]
+  }
   _await_read_failed() {
     log_error "could not READ Application '${app}' — this says NOTHING about whether the repo is reachable."
-    log_error "  namespace : ${_ns}   (resolved; see lib/os.sh's ARGOCD_NAMESPACE/VKS_NAMESPACE fallback)"
-    log_error "  API server: ${_api}"
+    log_error "  namespace : ${_ns}   API server: ${_api}"
     log_error "  kubeconfig: ${_kc}"
     log_error "  kubectl said:"
     sed 's/^/    /' "$_rd_err" >&2 2>/dev/null || true
@@ -528,45 +550,83 @@ argocd_await_revision() {
   _await_read
   if [ "$_rd_rc" -ne 0 ]; then
     _await_read_failed
-    die "cannot read Applications in '${_ns}' — check the namespace, the kubeconfig, and whether the Application CRD is served there."
+    _await_cleanup; die "cannot read Applications in '${_ns}' — check the namespace, the kubeconfig, and whether the Application CRD is served there."
+  fi
+  # ⚠️ PRESENCE IS NOT FRESHNESS, AND THIS IS THE WHOLE POINT OF THE CHECK. Both apply paths are
+  # UPSERT, so `.status.sync.revision` PERSISTS across runs. An earlier version removed a
+  # short-circuit but kept testing PRESENCE, so it still exited 0 printing "the repo is reachable"
+  # with a STALE revision and GITEA_ARGOCD_URL pointed at a host that does not exist — MEASURED,
+  # zero repo contact. `.env.example` calls this "the gate that proves ArgoCD's repo-server can
+  # reach GITEA_ARGOCD_URL — a wrong URL used to sync green forever", so presence cannot satisfy it.
+  # We therefore record what was there BEFORE and demand evidence of a NEW reconcile.
+  _pre_rev="$rev"; _await_reconciled; _pre_rec="$_rec"
+
+  # THE REFRESH IS A GATE, NOT FIRE-AND-FORGET. It used to be `>/dev/null 2>&1 || true` — the one
+  # call whose failure makes everything after it meaningless. MEASURED: with a get-but-not-patch
+  # tenant RBAC (the scenario-2 shape) the annotate returned Forbidden, the run printed
+  # "re-probing anyway (a stale revision is not proof)" — an affirmative falsehood — and then
+  # declared the repo reachable, rc=0, never mentioning the refusal.
+  _an_rc=0
+  ka -n "$_ns" annotate application "$app" argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>"$_an_err" || _an_rc=$?
+  if [ "$_an_rc" -ne 0 ]; then
+    log_error "could not force a refresh of Application '${app}' — so NOTHING below can prove the repo is reachable."
+    log_error "  namespace: ${_ns}   API server: ${_api}"
+    log_error "  kubectl said:"
+    sed 's/^/    /' "$_an_err" >&2 2>/dev/null || true
+    log_error "  A tenant with get-but-not-patch on applications hits exactly this; it is an RBAC fault, not a repo fault."
+    _await_cleanup; die "cannot refresh Application '${app}' — refusing to report a reachability result we did not obtain."
   fi
 
-  # ⚠️ NO SHORT-CIRCUIT ON A PRE-EXISTING REVISION. An earlier draft returned here when `rev` was
-  # already set, reasoning that an app which answered has proven the repo. MEASURED FALSE: both apply
-  # paths are UPSERT, so `.status.sync.revision` PERSISTS across runs — with a stale revision and
-  # GITEA_ARGOCD_URL pointed at a host that does not exist, the function exited 0 after ONE read,
-  # ZERO annotates and ZERO repo contact, printing "the repo is reachable". `.env.example` documents
-  # this block as "the gate that proves ArgoCD's repo-server can reach GITEA_ARGOCD_URL — a wrong URL
-  # used to sync green forever", which is precisely what the short-circuit restored. The pre-existing
-  # value is now only a NOTE; the refresh and a post-refresh read still have to happen.
-  [ -n "$rev" ] && log_info "  ${app}: revision ${rev} present from an earlier fetch — re-probing anyway (a stale revision is not proof)"
-
-  ka -n "$_ns" annotate application "$app" argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
-  rev=""
-  # ATTEMPTS, not seconds: each turn costs a round-trip PLUS the sleep, so wall-clock exceeds the
-  # count (row 5 measured 188s for 180).
-  local _tried=0
+  # Wait for a NEW reconcile: reconciledAt must ADVANCE past what it was before the refresh. That is
+  # the evidence a fetch actually happened; a revision that merely EXISTS proves only that some
+  # earlier run succeeded. (The ideal oracle is the SHA this flow just pushed, but the seeding step
+  # does not publish it to this script — recorded so the better fix is not re-derived from scratch.)
   while [ "$_tried" -lt "$_attempts" ]; do
     _tried=$(( _tried + 1 ))
+    sleep 1
     _await_read
     if [ "$_rd_rc" -ne 0 ]; then
       log_error "the read of Application '${app}' started FAILING mid-wait (it succeeded moments ago):"
       _await_read_failed
-      die "lost access to Applications in '${_ns}' while waiting — not a repo fault."
+      _await_cleanup; die "lost access to Applications in '${_ns}' while waiting — not a repo fault."
     fi
-    [ -n "$rev" ] && break
-    sleep 1
+    _await_reconciled
+    # ⚠️ reconciledAt ADVANCING IS NOT PROOF OF A FETCH, and the reason is that WE forced the
+    # refresh. In argo-cd v3.5.1 (our pin) ANY refresh annotation selects
+    # CompareWithLatestForceResolve — "Level 3" — which sets noRevisionCache=true, and
+    # state.go:700-712 gates BOTH `return nil, ErrCompareStateRepo` short-circuits on
+    # `&& !noRevisionCache` (its own comment: "and it's not a Level 3 comparison"). So a repo error
+    # FALLS THROUGH, appcontroller.go:1973-1974 sets ReconciledAt = now, and state.go:653-655 has
+    # ALREADY set syncStatus.Revision to the TARGET REVISION — the branch name — before any fetch.
+    # MEASURED: against `this-host-does-not-exist.invalid` this check printed "re-reconciled ...
+    # reports revision main — the repo is reachable NOW", rc=0. For a LEVEL-2 (timer) refresh the
+    # oracle would be sound; our own forced refresh switches the protection off.
+    # So freshness needs BOTH: it reconciled (reconciledAt advanced) AND the fetch succeeded
+    # (no ComparisonError, sync.status != Unknown). Neither alone is sufficient.
+    if [ -n "$rev" ] && [ "$_rec_rc" -eq 0 ] && [ -n "$_rec" ] && [ "$_rec" != "$_pre_rec" ] \
+       && ! _await_fetch_failed; then _fresh=1; break; fi
   done
 
-  if [ -z "$rev" ]; then
-    log_error "Application '${app}' reported an EMPTY revision on all ${_tried} attempts."
-    log_error "  The reads SUCCEEDED, so this is the Application's real state — not an access fault."
+  if [ "$_fresh" -ne 1 ]; then
+    # DISTINGUISH the two failures. Resetting _rec inside the loop destroyed exactly the value
+    # needed to tell them apart, so a STALE revision was reported as an EMPTY one — the wrong
+    # diagnosis, in the check whose entire purpose is not to give the wrong diagnosis.
+    if _await_fetch_failed; then
+      log_error "Application '${app}' RECONCILED but the FETCH FAILED (${_tried} attempts)."
+      log_error "  sync.status=${_sst:-<none>}   ComparisonError: ${_cerr:-<none>}"
+      log_error "  reconciledAt DID advance, which on a forced refresh proves only that a comparison ran —"
+      log_error "  argo-cd disables its repo-error short-circuit for a forced (Level 3) refresh, so the"
+      log_error "  timestamp advances even when the repo could not be read. THIS is the fetch signal."
+    elif [ -n "$rev" ]; then
+      log_error "Application '${app}' did NOT re-reconcile after a forced refresh (${_tried} attempts)."
+      log_error "  It still carries revision ${_pre_rev} from an EARLIER run, and reconciledAt never advanced"
+      log_error "  past ${_pre_rec:-<none>} — so this run obtained NO evidence the repo is reachable now."
+    else
+      log_error "Application '${app}' reported an EMPTY revision on all ${_tried} attempts."
+      log_error "  The reads SUCCEEDED, so this is the Application's real state — not an access fault."
+    fi
     log_error "  namespace: ${_ns}   API server: ${_api}"
     log_error "  Its own conditions:"
-    # The conditions read USED to be `2>/dev/null || true` — the same defect this function exists to
-    # remove, left in place on the second of the two reads. It printed "(none — not complaining about
-    # the repo either)" over a Forbidden: an affirmative FALSEHOOD steering at the repo, which is
-    # worse than the old code's visible silence and is row 5's exact mis-direction.
     _ce_rc=0
     _cond="$(ka -n "$_ns" get application "$app" \
       -o jsonpath='{range .status.conditions[*]}    [{.type}] {.message}{"\n"}{end}' 2>"$_ce_err")" || _ce_rc=$?
@@ -579,13 +639,10 @@ argocd_await_revision() {
       log_error "    (none — the Application reports NO conditions, so it is not complaining about the repo either)"
     fi
     log_error "  A repo it cannot clone is ONE candidate; confirm it rather than assume it, from the repo-server itself:"
-    # SINGLE-QUOTED: the URL carries '?', which zsh treats as a glob — unquoted it dies
-    # "no matches found" and curl never runs, and the error names the URL, so it reads as evidence
-    # the URL is bad. That would reinforce the very conclusion this function exists to prevent.
     log_error "    kubectl -n ${_ns} exec deploy/argocd-repo-server -c repo-server -- \\"
     log_error "      curl -s -o /dev/null -w '%{http_code}\\n' '${_url}/${_org}/${app}-deploy.git/info/refs?service=git-upload-pack'"
     log_error "    200 => the repo IS reachable and the cause is elsewhere; anything else => GITEA_ARGOCD_URL is the fault."
-    die "ArgoCD never fetched a revision — refusing to report success."
+    _await_cleanup; die "ArgoCD produced no FRESH fetch — refusing to report success."
   fi
-  log_info "  ${app}: ArgoCD fetched revision ${rev} — the repo is reachable from the ArgoCD cluster"
+  log_info "  ${app}: ArgoCD re-reconciled after a forced refresh (reconciledAt ${_pre_rec:-<none>} -> ${_rec}) and reports revision ${rev} — the repo is reachable NOW"
 }
