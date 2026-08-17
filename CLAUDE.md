@@ -68,8 +68,22 @@ own constants, not from prose — they are `GUARDED_PREFIXES` / `EXEMPT_*` at th
 
 | | |
 |---|---|
-| **GUARDED** | `docs/` · `README.md` · `scripts/` · `jumpbox/` · `k8s/` · `tekton/` · `apps/` · `Makefile` |
-| **EXEMPT** | `.claude/` · `.github/` · `CLAUDE.md` — this file IS the plan/backlog, so you can always write it down first |
+| **GUARDED** | `docs/` · `README.md` · `scripts/` · `jumpbox/` · `k8s/` · `apps/` · `Makefile` |
+| **EXEMPT** | `.claude/` · `.github/` · `CLAUDE.md` · `BACKLOG.md` — together these ARE the plan/backlog, so you can always write it down first |
+
+⚠️ **Two corrections, 2026-08-16.** `tekton/` was in GUARDED and was **dead**: `git ls-files tekton`
+= 0; the manifests are at `k8s/tekton/` (9 files), already covered by `k8s/`. And `BACKLOG.md` was
+in NEITHER list, so a bookkeeping commit ("close row B92") re-armed the gate and destroyed a valid
+review — the exemption had tracked the FILE (`CLAUDE.md`) rather than the ROLE, and the backlog
+moved out in f7f6c30 (2026-07-22) without it. Measured: 24 of the last 200 commits are BACKLOG-only.
+It is **not** a bypass — a git exclude pathspec is per-FILE, so a MIXED commit still re-arms
+(`test-adversary-gate-rearm.sh` now pins both directions).
+🔴 **Known and NOT fixed:** `.env.example` (touched in **29 of the last 200 commits**, and this file
+calls it *"the single source of truth for every tunable"*), `.mise.toml`, `images/`, `deploy/`,
+`kind/`, `.gitleaks.toml`, `.trivyignore` and the 155-line `bootstrap-jumpbox.sh` are in NEITHER
+tuple — writable with **zero** review. Guarding them is a new control design and needs its own
+idea-round (measure the false-block rate first; `.env.example` alone would demand a round on ~15% of
+commits, and Renovate cannot run one at all).
 
 **It clears only until your NEXT COMMIT, not for the session.** The receipt records the adversary's
 wall-clock time and a guarded write passes only while that time is newer than HEAD's commit — so
@@ -630,7 +644,18 @@ uncovered.** Verified against `ci.yml` and the Makefile, not recalled:
 | | |
 |---|---|
 | **runs per-PR** | `static-check-fast` — **23** alignment/doc/env gates (~9 s). `ci-pass` asserts its result **EXPLICITLY** (`needs.static-check-fast.result != success` → fail), so a skip there IS caught. |
-| **does NOT run per-PR** | exactly five: **`lint`, `validate`, `sec`, `test-scripts`, `app-test`** |
+| **does NOT run per-PR** | **`sec` ONLY** (gitleaks + `trivy-fs` + `trivy-config`), plus the SLOW tier of `test-scripts`. |
+
+⚠️ **CORRECTED 2026-08-16 — this row used to say "exactly five: `lint`, `validate`, `sec`,
+`test-scripts`, `app-test`", and FOUR of those five were wrong.** Measured, not recalled:
+`ci.yml:245` runs `make ${{ github.event_name == 'schedule' && 'static-check' || 'static-check-pr' }}`,
+and `Makefile:1098` defines `static-check-pr: lint validate app-test test-scripts-fast`. So `lint`,
+`validate`, `app-test` and the FAST test tier **do** run on every PR. Only `sec` and the slow test
+tier wait for the weekly schedule.
+The correction MATTERS IN BOTH DIRECTIONS: the standing hole is far smaller than this file claimed —
+but it is concentrated on the **security scans**, which is the worst single gate to be missing, and
+the old wording buried that among four false alarms. (Found by an adversary round on an unrelated
+change; the stale claim had been steering every session's risk judgement since it was written.)
 
 **Measured consequence, still not hypothetical — and it recurred today:** `make lint` went RED on a
 feature branch and stayed red across several pushes while CI reported `ci-pass: pass` every time,

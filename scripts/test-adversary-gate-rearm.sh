@@ -73,11 +73,37 @@ probe 2 "guarded write after a post-review commit -> BLOCK (re-arm works)" "$(gw
 echo "--- B45: an EXEMPT-only commit does NOT re-arm; guarded / mixed / neither DO ---"
 # Baseline = the last NON-EXEMPT commit (f2 above). A review just after it, then an EXEMPT-only commit:
 # the baseline must NOT advance, so the guarded write stays allowed (the B45 fix).
-NEX="$(git -C "$TMP" log -1 --format=%ct -- . ':(exclude).claude' ':(exclude).github' ':(exclude)CLAUDE.md')"
+# DERIVE the exclude pathspec FROM THE HOOK, never hand-type it. This line used to spell out
+# ':(exclude).claude' ':(exclude).github' ':(exclude)CLAUDE.md' -- a SECOND enumerated list, in the
+# harness, which is exactly the rot the derivation guard 25 lines below exists to prevent, one level
+# up. It went stale the moment BACKLOG.md joined EXEMPT_FILES (2026-08-16) and would have disagreed
+# with the gate silently, because the temp repo has no BACKLOG.md so the value happened to match.
+# An ARRAY, one pathspec per element -- NOT a string + `eval`. A single string would need to be
+# left unquoted to word-split (shellcheck SC2086, and quoting it collapses every pathspec into ONE
+# argument, which silently excludes nothing).
+mapfile -t EXCL < <(python3 - "$HOOK" <<'PY'
+import re, sys
+src = open(sys.argv[1]).read()
+def tup(name):
+    m = re.search(name + r'\s*=\s*\((.*?)\)', src, re.S)
+    return re.findall(r'"([^"]+)"', m.group(1)) if m else []
+for p in tup('EXEMPT_PREFIXES') + tup('EXEMPT_FILES'):
+    print(':(exclude)%s' % p.rstrip('/'))
+PY
+)
+[ "${#EXCL[@]}" -gt 0 ] || { bad "could not derive the exclude pathspec from $HOOK"; EXCL=(':(exclude).claude'); }
+NEX="$(git -C "$TMP" log -1 --format=%ct -- . "${EXCL[@]}")"
 REV="$((NEX+50))"; echo "$REV" > "$RECEIPT"
 DOCS="$((REV+50))"; : > "$TMP/CLAUDE.md"; git -C "$TMP" add CLAUDE.md
 GIT_COMMITTER_DATE="@$DOCS +0000" GIT_AUTHOR_DATE="@$DOCS +0000" git -C "$TMP" commit -qm docs-only
 probe 0 "B45 THE FIX: guarded write after a DOCS-ONLY (CLAUDE.md) commit -> ALLOW (exempt does not re-arm)" "$(gwrite)"
+
+# BACKLOG.md joined EXEMPT_FILES on 2026-08-16 (the plan/backlog moved out of CLAUDE.md in f7f6c30).
+# Both directions, because the SECOND one is what proves it is not a bypass: closing a backlog row
+# must not strand a review, but smuggling code alongside a backlog edit must still re-arm.
+BLOG="$((DOCS+50))"; : > "$TMP/BACKLOG.md"; git -C "$TMP" add BACKLOG.md
+GIT_COMMITTER_DATE="@$BLOG +0000" GIT_AUTHOR_DATE="@$BLOG +0000" git -C "$TMP" commit -qm backlog-only
+probe 0 "BACKLOG-ONLY commit -> ALLOW (a bookkeeping commit must not destroy a valid review)" "$(gwrite)"
 
 CLD="$((DOCS+50))"; mkdir -p "$TMP/.claude/hooks"; : > "$TMP/.claude/hooks/z.py"; git -C "$TMP" add .claude/hooks/z.py
 GIT_COMMITTER_DATE="@$CLD +0000" GIT_AUTHOR_DATE="@$CLD +0000" git -C "$TMP" commit -qm claude-only
@@ -96,6 +122,17 @@ echo "$((MIX+50))" > "$RECEIPT"; NTH="$((MIX+100))"
 : > "$TMP/.env.example"; git -C "$TMP" add .env.example
 GIT_COMMITTER_DATE="@$NTH +0000" GIT_AUTHOR_DATE="@$NTH +0000" git -C "$TMP" commit -qm neither
 probe 2 "B45 (b): guarded write after a NEITHER (.env.example) commit -> BLOCK (only ALL-exempt commits skip)" "$(gwrite)"
+
+# The NON-BYPASS half of the BACKLOG.md exemption, and the reason it is safe to add: a git exclude
+# pathspec is per-FILE, not per-COMMIT, so a commit matches if ANY changed file survives exclusion.
+# Smuggling code alongside a backlog edit therefore still re-arms. Placed LAST deliberately -- it
+# commits a NON-exempt file, so running it earlier advances the baseline and false-BLOCKs every
+# ALLOW case after it (measured: it broke the .claude/-only case when I first inserted it here).
+MIX="$(( $(git -C "$TMP" log -1 --format=%ct) + 50 ))"
+printf 'x\n' > "$TMP/BACKLOG.md"; mkdir -p "$TMP/scripts"; printf 'x\n' > "$TMP/scripts/smuggled.sh"
+git -C "$TMP" add BACKLOG.md scripts/smuggled.sh
+GIT_COMMITTER_DATE="@$MIX +0000" GIT_AUTHOR_DATE="@$MIX +0000" git -C "$TMP" commit -qm backlog-plus-code
+probe 2 "MIXED BACKLOG.md + scripts/ -> BLOCK (an exclude pathspec is per-FILE: code still re-arms)" "$(gwrite)"
 
 echo "--- B45: the exclude pathspec is DERIVED from the EXEMPT constants (no third hand-typed list) ---"
 awk '/^def _last_nonexempt_commit_epoch/{f=1;next} f&&/^def /{f=0} f' "$HOOK" > "$TMP/fn.txt"
