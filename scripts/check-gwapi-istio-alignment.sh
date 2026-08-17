@@ -28,7 +28,19 @@ load_env
 minor="release-$(printf '%s' "$ISTIO_VERSION" | cut -d. -f1,2)"
 url="https://raw.githubusercontent.com/istio/istio/${minor}/go.mod"
 
-gomod="$(curl -sSL --max-time "${GWAPI_FETCH_TIMEOUT_SECONDS:-15}" "$url" 2>/dev/null || true)"
+# --fail is LOAD-BEARING, not hygiene: without it an HTTP error is rc=0 WITH THE ERROR PAGE AS THE
+# BODY, so the `[ -z "$gomod" ]` guard below never fires and the GWAPI_REQUIRE_FETCH branch is DEAD
+# CODE. The script then falls through to the "no sigs.k8s.io/gateway-api line" exit at the bottom and
+# blames the BRANCH NAME for what is actually an unreachable server -- failing CLOSED (so not a fake
+# green) while naming the WRONG cause, which sends the reader to the wrong file.
+#
+# MEASURED 2026-08-17 against a LOCAL http.server returning 500 with a 4000-byte body (no external
+# network, so this is reproducible during an outage):
+#   curl -sSL   -> rc=0, body=4026 bytes  -> guard does NOT fire   <- the defect
+#   curl -fsSL  -> rc=0, body=0 bytes     -> guard FIRES           <- the fix
+#   curl -fsSL against a 200 -> body intact, 1 gateway-api line    <- happy path unaffected
+# Note the DISCRIMINATOR is the BODY, not the rc: `|| true` below zeroes the status either way.
+gomod="$(curl -fsSL --max-time "${GWAPI_FETCH_TIMEOUT_SECONDS:-15}" "$url" 2>/dev/null || true)"
 if [ -z "$gomod" ]; then
   # GWAPI_REQUIRE_FETCH=1 turns the skip into a FAILURE. CI sets it, because CI has network by
   # definition and this gate is in the fast set that CI's green now stands for: a rate-limited
