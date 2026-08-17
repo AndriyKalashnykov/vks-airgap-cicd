@@ -20,7 +20,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pass=0; fail=0
 ok()   { printf '  PASS  %s\n' "$1"; pass=$((pass+1)); }
 bad()  { printf '  FAIL  %s\n     %s\n' "$1" "${2:-}"; fail=$((fail+1)); }
-check(){ [ "$2" = "$3" ] && ok "$1" || bad "$1" "want [$3] got [$2]"; }
+# ⚠️ HARDENING, NOT A BUG FIX — say which, or the next reader over-trusts the change. An
+# implementation round MEASURED that the `A && B || C` form here CANNOT misfire: `ok()`'s last
+# command is `pass=$((pass+1))`, an ASSIGNMENT, whose status is 0 unconditionally — verified on the
+# first call, on a call where the arithmetic result is 0, and with stdout closed, with `((n++))` at
+# n=0 as the positive control proving the instrument discriminates. So `bad` could never double-fire.
+# It is written as if/then/else anyway because the invariant that makes it safe lives in a DIFFERENT
+# function two lines away, and shellcheck is right that the shape is fragile.
+check(){ if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "want [$3] got [$2]"; fi; }
 
 # ── a stub argocd-server. Echoes back the password it received so the test can prove the body
 # survived transport byte-for-byte — the only way to catch a JSON-escaping bug.
@@ -59,10 +66,10 @@ echo "== argocd_curl_tls_init: prefers the CA, falls back LOUDLY =="
 CA="$(mktemp)"; printf 'not-a-real-ca\n' > "$CA"
 ARGOCD_CA_FILE="$CA" argocd_curl_tls_init
 check "with a CA -> mode is verified"      "$ARGOCD_TLS_MODE"      "verified"
-check "with a CA -> curl gets --cacert"    "${ARGOCD_CURL_TLS[0]}" "--cacert"
+check "with a CA -> curl gets --cacert"    "${ARGOCD_CURL_TLS[0]:-}" "--cacert"
 ARGOCD_CA_FILE="" argocd_curl_tls_init
 check "no CA -> mode is insecure"          "$ARGOCD_TLS_MODE"      "insecure"
-check "no CA -> curl gets -k"              "${ARGOCD_CURL_TLS[0]}" "-k"
+check "no CA -> curl gets -k"              "${ARGOCD_CURL_TLS[0]:-}" "-k"
 # An EMPTY file must not count as an anchor: `-s` is the guard, and a 0-byte CA would make curl fail
 # with a confusing error instead of taking the honest insecure path.
 EMPTY="$(mktemp)"; : > "$EMPTY"
@@ -77,6 +84,12 @@ check "a plain password authenticates"  "$(argocd_session_token "$SRV" 'S3cret')
 # THE LOAD-BEARING CASE. printf '{"password":"%s"}' corrupts both of these; jq does not.
 check 'a password with a DOUBLE QUOTE'  "$(argocd_session_token "$SRV" 'a"b')"             'tok:a"b'
 check 'a password with a BACKSLASH'     "$(argocd_session_token "$SRV" 'a\b')"             'tok:a\b'
+# shellcheck disable=SC2016  # BOTH single-quoted spans are the POINT: this case proves a
+# password containing a literal $ survives transport byte-for-byte, so neither the input nor
+# the expected value may be expanded by the shell. `set -u` also protects the naive "fix":
+# double-quoting these crashes with `rd: unbound variable` (rc=127), so the wrong change is
+# loud rather than silent. RESIDUAL: input and expected degrade TOGETHER, so if `rd` were ever
+# set in the environment a double-quoted version would pass with the $ coverage silently gone.
 check 'a password with BOTH + a $'      "$(argocd_session_token "$SRV" 'p@ss"w\o$rd')"     'tok:p@ss"w\o$rd'
 check 'a password with a NEWLINE'       "$(argocd_session_token "$SRV" 'a
 b')"                                                                                       'tok:a
@@ -86,13 +99,42 @@ echo
 echo "== the password reaches NEITHER argv (jq reads the environment; curl reads stdin) =="
 # Assert on the SOURCE, because a live /proc check would race the process's exit. The two forms this
 # must never regress to are a jq --arg and a printf-built body.
-grep -q "jq -nc '{username:\"admin\", password:env.ARGOCD_ADMIN_PW}'" "${SCRIPT_DIR}/lib/argocd.sh" \
-  && ok "jq reads the password from env.ARGOCD_ADMIN_PW" \
-  || bad "jq reads the password from env.ARGOCD_ADMIN_PW" "the env form is gone — a --arg would put it in jq's argv"
-grep -q 'curl .*--data @-' "${SCRIPT_DIR}/lib/argocd.sh" \
-  && ok "curl takes the body on STDIN (--data @-)" \
-  || bad "curl takes the body on STDIN (--data @-)" "not found"
-if grep -qE "printf '\{\"username\"" "${SCRIPT_DIR}/lib/argocd.sh"; then
+#
+# ⚠️ THE `--data @-` ASSERTION WAS BLIND FOR THE LIFE OF THIS FILE, and it is the one guarding this
+# repo's argv-secret invariant. It grepped the raw file for `curl .*--data @-`; the only line that
+# matched was **the COMMENT at lib/argocd.sh:294**, because the real invocation splits `curl` (:341)
+# from `--data @-` (:342) across a `\` continuation and grep is line-based.
+# RED-PROVEN: rewriting the code to `--data @/dev/stdin` while leaving the comment intact still
+# printed `PASS curl takes the body on STDIN (--data @-)` and `14 passed, 0 failed`.
+#
+# So: FOLD CONTINUATIONS, then DROP COMMENTS, then match. `_libsrc` is built once.
+# ⚠️ The match uses a HERESTRING, not `producer | grep -q`: under this file's `pipefail` a `grep -q`
+# exits at the first hit and SIGPIPEs the producer, and the pipeline's status becomes 141 — which
+# reports a FOUND pattern as ABSENT. In an assertion the failure direction would be a false FAIL;
+# in a scan gate it is a false CLEAN. Neither is acceptable, and a herestring cannot SIGPIPE.
+_libsrc="$(sed -e :a -e '/\\$/N; s/\\\n//; ta' "${SCRIPT_DIR}/lib/argocd.sh" | grep -v '^[[:space:]]*#')"
+
+# POSITIVE CONTROL, first: an assertion nobody has ever seen go red is not an assertion. If the
+# normalisation above silently produced nothing, every check below would "pass" over an empty string.
+if [ "$(printf '%s' "$_libsrc" | wc -l)" -gt 50 ]; then
+  ok "the normalised lib source is non-empty ($(printf '%s' "$_libsrc" | wc -l) non-comment lines)"
+else
+  bad "the normalised lib source is empty or tiny" "every source assertion below would pass vacuously"
+fi
+
+if grep -q "jq -nc '{username:\"admin\", password:env.ARGOCD_ADMIN_PW}'" <<< "$_libsrc"; then
+  ok "jq reads the password from env.ARGOCD_ADMIN_PW"
+else
+  bad "jq reads the password from env.ARGOCD_ADMIN_PW" "the env form is gone — a --arg would put it in jq's argv"
+fi
+if grep -q 'curl .*--data @-' <<< "$_libsrc"; then
+  ok "curl takes the body on STDIN (--data @-)"
+else
+  bad "curl takes the body on STDIN (--data @-)" "the body moved off stdin — a --data <value> puts the password in curl's argv"
+fi
+# Negative assertion, on the SAME normalised source: matching the raw file would let a comment
+# rewording produce a false FAIL here, which is the mirror of the bug above.
+if grep -qE "printf '\{\"username\"" <<< "$_libsrc"; then
   bad "no printf-built JSON body" "a printf body does not escape JSON — it corrupts a password containing a quote"
 else
   ok "no printf-built JSON body"
