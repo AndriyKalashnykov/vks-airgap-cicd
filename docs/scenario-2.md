@@ -193,7 +193,10 @@ fi
 kubeconfig: with one, Harbor's `harbor-nginx` entry followed by an IP and ArgoCD's bare IP; without
 one, the sentence telling you to ask the platform team for them. **Both are real answers — only
 silence is not**, and the second is the normal case for a tenant handed only a workload kubeconfig.
-Those two addresses are what you put in `HARBOR_URL` and `ARGOCD_SERVER` below.
+Harbor's address is what you put in `HARBOR_URL` below. **ArgoCD's is different:** what you
+discovered is an **IP**, and `ARGOCD_SERVER` needs a **name the server's certificate carries** — the
+IP is what you map that name *to*. The table below says which, and the block under it does it in the
+one order that works.
 
 **Request grants from the platform team:**
 
@@ -248,12 +251,41 @@ you nothing):
 | `HARBOR_CA_FILE` | `./secrets/harbor-ca.crt` (fetched in Step 2, `make fetch-harbor-ca`) |
 | `HARBOR_INFRA_PROJECT` / `HARBOR_APP_PROJECT` | your granted project(s) — may be **one** shared project, not a `cicd`/`apps` split |
 | `HARBOR_PUBLIC_PROJECTS` | `false` — tenant projects are typically private (no-op on an existing project) |
-| `ARGOCD_SERVER` | a **name the argocd-server certificate carries** — **not** the bare LB IP. The default cert has **no IP SAN**, so an IP can never verify however correct your CA is. Ask your platform team for the name they issued it for; failing that, upstream ArgoCD always mints `argocd-server`, so map that to the LB IP in `/etc/hosts` (Step 1 already has you add one) and use `argocd-server`. |
+| `ARGOCD_SERVER` | a **name the argocd-server certificate carries** — **not** the bare LB IP. An IP cannot verify unless the certificate carries an IP SAN, and a default ArgoCD one does not. **Ask your platform team which name they issued it for**; if they cannot say, see the block below. |
 | `ARGOCD_NAMESPACE` | the namespace the shared ArgoCD instance watches |
 | `ARGOCD_TRACK_BRANCH` | `main` |
 | `KUBECONFIG` | `./secrets/vks.kubeconfig` |
 | `VKS_CONTEXT` | the context name inside that kubeconfig |
 | `ARGOCD_CA_FILE` | **required for a verifying path** — `./secrets/argocd-ca.crt` (`make fetch-argocd-ca`). With the name right but no anchor, the login still fails *signed by unknown authority*; it is optional only if you accept `--insecure`, which the write path does not. |
+
+### The ArgoCD address, in the ONE order that works
+
+Three things depend on each other here, so the order is not a preference:
+
+```bash
+# 1. Make the NAME resolve. Use the name your platform team gave you; if they had none, upstream
+#    ArgoCD's own generated certificate carries `argocd-server` and `localhost`, so that is the
+#    portable guess. <argocd-lb-ip> is the ArgoCD IP you discovered above.
+echo "<argocd-lb-ip> argocd-server" | sudo tee -a /etc/hosts
+
+# 2. NOW fetch the CA. `make fetch-argocd-ca` dials ARGOCD_SERVER, so it can only work once step 1
+#    has made that name resolve — run it first and it dies "could not connect".
+ARGOCD_SERVER=argocd-server make fetch-argocd-ca
+
+# 3. Then put the NAME (not the IP) in .env, next to the CA file it just wrote.
+#    ARGOCD_SERVER=argocd-server
+#    ARGOCD_CA_FILE=./secrets/argocd-ca.crt
+```
+
+**Expect:** step 1 echoes the line back; step 2 writes `./secrets/argocd-ca.crt`.
+
+Do it in the other order and each failure names the wrong thing: without step 1, step 2 reports a
+**connection** problem for what is really a **DNS** one; with the IP in `ARGOCD_SERVER`, `make gitops`
+reports a **TLS** problem for what is really an **address** one.
+
+⚠️ **`argocd-server` is a single-label name.** If your site appends a DNS search suffix it may resolve
+somewhere else entirely; prefer the fully-qualified name your platform team issued the certificate for
+whenever they can give you one.
 
 **The ArgoCD WRITE PATH — set these NOW, before `make install-all`.** Miss them and `make gitops`
 either **dies** on a guard (off-cluster with no destination) or **silently renders to `./out/` and

@@ -346,37 +346,81 @@ if [ "$MECH" = api ] && [ "$can_api" = unknown ]; then
   _addr_verdict=""
   # shellcheck source=scripts/lib/tls.sh
   [ -f "${REPO_ROOT}/scripts/lib/tls.sh" ] && . "${REPO_ROOT}/scripts/lib/tls.sh" 2>/dev/null || true
-  if command -v ca_verifies_endpoint >/dev/null 2>&1 && [ -n "${ARGOCD_SERVER:-}" ]; then
-    # ARGOCD_SERVER may or may not carry a port; ca_verifies_endpoint takes them separately.
-    _cv_h="${ARGOCD_SERVER}"; _cv_p=443
-    case "$_cv_h" in *:*) _cv_p="${_cv_h##*:}"; _cv_h="${_cv_h%:*}" ;; esac
-    _cv=0; ca_verifies_endpoint "$_cv_h" "$_cv_p" "${ARGOCD_CA_FILE:-}" || _cv=$?
-    case "$_cv" in
-      0) _addr_verdict="  MEASURED: '${ARGOCD_SERVER}' VERIFIES against ARGOCD_CA_FILE (chain AND name).
-  So neither knob below is the fault — look at ARGOCD_AUTH_TOKEN, or at a proxy between us and it." ;;
-      3) _addr_verdict="  MEASURED: the ANCHOR IS CORRECT and the ADDRESS IS WRONG — the chain verified and the
+  # ⚠️ F8 FIRST: a credential fault is NOT a transport fault. `_why` can be UNAUTHORIZED
+  # (classify_argocd_failure, lib/os.sh) — an expired token means TLS was FINE, and sending the
+  # operator to `make fetch-argocd-ca` there is a wrong remedy for a right diagnosis. `_why` is
+  # already in hand; consult it before measuring anything.
+  case "$_why" in
+    UNAUTHORIZED)
+      _addr_verdict="  The TRANSPORT is fine — argocd-server ANSWERED and REJECTED THE CREDENTIAL.
+  Neither knob below is the fault: mint a fresh ARGOCD_AUTH_TOKEN (argocd login <server> --sso, then
+  argocd account generate-token --account <you>) and put it in .env. Do NOT re-fetch the CA." ;;
+  esac
+  if [ -z "${_addr_verdict:-}" ] && command -v ca_verifies_endpoint >/dev/null 2>&1 \
+     && [ -n "${ARGOCD_SERVER:-}" ]; then
+    # ⚠️ F7: parse host:port the way fetch-ca.sh:49-50 already does. A naive `%:*`/`##*:` split
+    # MEASURED broken on five real shapes: a scheme (`https://h` -> host=https, port=//h — and
+    # creds.sh:76 shows a scheme IS an anticipated shape here, while env_validate does NOT reject
+    # one for ARGOCD_SERVER as it does for HARBOR_URL), a trailing slash, `[::1]:443`, bare `::1`
+    # and `fd00::1` (-> host=fd00:, port=1). Each degraded to rc 2 "did not answer", i.e. STRICTLY
+    # WORSE than the generic text it replaced, because it blames reachability for a malformed value.
+    _cv_hp="$(printf '%s' "$ARGOCD_SERVER" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/.*##')"
+    case "$_cv_hp" in
+      \[*\]:*) _cv_h="${_cv_hp%]:*}]"; _cv_p="${_cv_hp##*]:}" ;;   # [v6]:port
+      \[*\])   _cv_h="$_cv_hp";        _cv_p=443 ;;                # [v6]
+      *:*:*)   _cv_h="$_cv_hp";        _cv_p=443 ;;                # bare IPv6, no port
+      *:*)     _cv_h="${_cv_hp%:*}";   _cv_p="${_cv_hp##*:}" ;;
+      *)       _cv_h="$_cv_hp";        _cv_p=443 ;;
+    esac
+    case "$_cv_p" in ''|*[!0-9]*) _cv_p=443 ;; esac
+    # ⚠️ F4: rc 2 conflates "does not RESOLVE" with "refused", and those have OPPOSITE remedies —
+    # MEASURED separable (errno 6 vs errno 111). A tenant who correctly set ARGOCD_SERVER to a
+    # certificate NAME and has not mapped it lands here, and rc 2's text tells them to "retry",
+    # which can never succeed. Ask the resolver first; it costs nothing and names the real fix.
+    if ! getent hosts "$_cv_h" >/dev/null 2>&1 && ! printf '%s' "$_cv_h" | grep -qE '^[0-9.]+$|:'; then
+      _addr_verdict="  MEASURED: '${_cv_h}' DOES NOT RESOLVE on this box — so nothing was dialled and
+  neither knob has been tested. If you set ARGOCD_SERVER to a certificate NAME (which is correct —
+  an IP cannot verify against a cert with no IP SAN), you must also make that name resolve:
+      echo \"<argocd-lb-ip> ${_cv_h}\" | sudo tee -a /etc/hosts
+  Then re-run. This is NOT a reachability problem and retrying alone will not fix it."
+    else
+      _cv=0; ca_verifies_endpoint "$_cv_h" "$_cv_p" "${ARGOCD_CA_FILE:-}" || _cv=$?
+      case "$_cv" in
+        0) _addr_verdict="  MEASURED: '${ARGOCD_SERVER}' VERIFIES against ARGOCD_CA_FILE (chain AND name).
+  So neither knob below is the fault. Look at ARGOCD_AUTH_TOKEN, or at something between us and the
+  server that terminates TLS or cannot do HTTP/2 (see ARGOCD_OPTS --grpc-web in .env.example)." ;;
+        3) _addr_verdict="  MEASURED: the ANCHOR IS CORRECT and the ADDRESS IS WRONG — the chain verified and the
   NAME did not. Change ONLY the ADDRESS: do NOT re-fetch the CA, it is already the right one." ;;
-      1) _addr_verdict="  MEASURED: connected, and ARGOCD_CA_FILE did NOT verify the chain — so the ANCHOR is
+        1) _addr_verdict="  MEASURED: connected, and ARGOCD_CA_FILE did NOT verify the chain — so the ANCHOR is
   wrong (or belongs to a rebuilt lab). Re-fetch it: make fetch-argocd-ca. The address may be fine." ;;
-      2) _addr_verdict="  MEASURED: '${ARGOCD_SERVER}' did not answer at all (unreachable, or it accepted and
+        2) _addr_verdict="  MEASURED: '${ARGOCD_SERVER}' resolved but did not answer (refused, or it accepted and
   closed with zero bytes — what an LB VIP looks like while its backend is still starting). This is
   NOT evidence either knob is wrong; check reachability, then retry." ;;
-      4) _addr_verdict="  MEASURED: '${ARGOCD_SERVER}' served PLAINTEXT, not TLS — so no anchor can ever verify
+        4) _addr_verdict="  MEASURED: '${ARGOCD_SERVER}' served PLAINTEXT, not TLS — so no anchor can ever verify
   it. You are almost certainly pointing at the wrong port or the wrong service." ;;
-      5) _addr_verdict="  NOT MEASURED: ARGOCD_CA_FILE is unset or unusable, so the two knobs cannot be told
-  apart yet. Set it first (make fetch-argocd-ca), re-run, and this message will name the real fault." ;;
-    esac
-    # The SANs are the answer to "which name, then?" — the FATAL used to pose that question and not
-    # answer it. Same idiom as 02-env.sh:447 / 30-vks-login.sh:193; `|| true` because a pipeline in a
-    # command substitution under `set -e` must not become a worse failure than the one we are reporting.
-    _sans="$(printf '' | timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client \
-               -connect "${_cv_h}:${_cv_p}" -servername "$_cv_h" 2>/dev/null \
-             | openssl x509 -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -s ' ' || true)"
-    [ -n "${_sans:-}" ] && _addr_verdict="${_addr_verdict}
-  THE NAMES THIS SERVER'S CERTIFICATE ACTUALLY CARRIES:${_sans}
-  Upstream ArgoCD mints 'argocd-server' and 'localhost' regardless of namespace, so 'argocd-server'
-  mapped to this address in /etc/hosts is the portable choice. It carries NO IP SAN, which is why an
-  IP can never verify however correct the CA is."
+        5) _addr_verdict="  NOT MEASURED: ARGOCD_CA_FILE is unset or unusable, so the two knobs cannot be told
+  apart yet. If your ArgoCD presents a PUBLICLY-TRUSTED certificate there is nothing to set and the
+  fault is elsewhere; otherwise set it (make fetch-argocd-ca) and re-run." ;;
+      esac
+      # ⚠️ F6: DERIVE this from the SANs, never hardcode it, and NEVER print it on rc 0. MEASURED
+      # against a leaf carrying `DNS:argocd-server, IP Address:127.0.0.1`: the old hardcoded text
+      # asserted "It carries NO IP SAN" directly beneath a printed IP SAN, claimed 'localhost' was
+      # present when it was not, and fired on a rc-0 address that had just verified — telling the
+      # operator to change something that works. lib/tls.sh's own gen_selfsigned_ca_cert mints
+      # IP SANs, so this repo reaches that contradiction.
+      if [ "$_cv" -ne 0 ]; then
+        _sans="$(printf '' | timeout "${CA_VERIFY_TIMEOUT:-15}" openssl s_client \
+                   -connect "${_cv_h}:${_cv_p}" -servername "$_cv_h" 2>/dev/null \
+                 | openssl x509 -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -s ' ' || true)"
+        if [ -n "${_sans:-}" ]; then
+          _addr_verdict="${_addr_verdict}
+  THE NAMES THIS SERVER'S CERTIFICATE ACTUALLY CARRIES:${_sans}"
+          printf '%s' "$_sans" | grep -q 'IP Address' || _addr_verdict="${_addr_verdict}
+  There is NO IP SAN there, so an IP can never verify however correct the CA is — use one of the
+  names above and make it resolve to this address."
+        fi
+      fi
+    fi
   fi
   # ⚠️ Build the fallback as its own assignment, NOT as a `${_addr_verdict:-<default>}` inside the die
   # string: a multi-line default containing apostrophes does not parse there, and the resulting error
