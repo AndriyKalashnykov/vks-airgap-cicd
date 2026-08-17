@@ -252,7 +252,27 @@ elif grep -q '^VKS_STATE_KIND=1' "$_sink" 2>/dev/null;                 then _pro
 elif [ -n "$_stamp" ] && [ "$_stamp" = "${_live_srv:-__none__}" ]; then _prov=DISCOVERED
 else                                                                _prov=STORED
 fi
+# Does the operator's OWN .env carry uncommented assignments?
+#
+# ⚠️ THIS IS THE *SOURCE* QUESTION, AND IT IS THE ONLY ONE ANSWERABLE HERE. FRESHNESS IS NOT:
+# `.env` carries no cluster stamp (only the overlay does, via VKS_STATE_SERVER), so a password left
+# over from a destroyed lab and one the operator typed thirty seconds ago render BYTE-IDENTICALLY.
+# MEASURED — two states, same output, same `values-provenance: DEFAULT`, same footnote. So this
+# report must never label a value STALE: on the repo's own documented real-lab flow (the runbooks
+# tell the operator to set HARBOR_PASSWORD by hand BEFORE install, 02-env.sh:177) that label would
+# be false, and it would send them to rotate a working credential.
+#
+# It also must not do the obvious "compare it to the committed example value" — that is DEAD CODE
+# for exactly the values it would be about: HARBOR_PASSWORD, HARBOR_USERNAME and
+# GITEA_ADMIN_PASSWORD are all COMMENTED in .env.example (measured: uncommented=0 for each), so
+# there is nothing to compare against and every password would fall to the "stale" arm.
+_env_populated=0
+if [ "${SKIP_DOTENV:-0}" != "1" ] && [ -f "${REPO_ROOT}/.env" ] \
+   && grep -qE '^[A-Za-z_][A-Za-z0-9_]*=' "${REPO_ROOT}/.env" 2>/dev/null; then
+  _env_populated=1
+fi
 [ "${CREDS_TOKEN:-0}" = "1" ] && printf 'values-provenance: %s\n' "$_prov"
+[ "${CREDS_TOKEN:-0}" = "1" ] && printf 'env-populated: %s\n' "$_env_populated"
 printf '\n  Context\n'
 case "$_prov" in
   DISCOVERED) printf '    values below : DISCOVERED — the overlay is stamped for the cluster you are talking to\n' ;;
@@ -261,7 +281,16 @@ case "$_prov" in
               printf '                   here may be from a lab that no longer exists. Run: make state-stamp\n'
               printf '                   after an install to make it self-identifying; re-run any value that\n'
               printf '                   is rejected rather than assuming it is wrong.\n' ;;
-  *)          printf '    values below : DEFAULTS from .env / .env.example — NOTHING IS INSTALLED YET, these are placeholders\n' ;;
+  *)          if [ "$_env_populated" = 1 ]; then
+                printf '    values below : from YOUR .env — no installer has published anything, so these are the\n'
+                printf '                   values you supplied, not placeholders. .env carries NO cluster stamp, so\n'
+                printf '                   this report cannot confirm they belong to the cluster you are talking to;\n'
+                printf '                   a value left over from a destroyed lab looks identical to one you just\n'
+                printf '                   typed. Run: make env-validate (it authenticates against Harbor); re-run\n'
+                printf '                   any value it rejects rather than assuming it is wrong.\n'
+              else
+                printf '    values below : DEFAULTS from .env / .env.example — NOTHING IS INSTALLED YET, these are placeholders\n'
+              fi ;;
 esac
 printf '    state overlay: %s\n' \
   "$([ "$_have_sink" = 1 ] && echo "$_sink" || echo "none — no installer has published anything")"
@@ -347,7 +376,22 @@ EOF
 #   * nothing installed  -> EVERY value here is a default. Say which ones fill themselves in (KinD) and
 #                           which the operator must supply (a real lab).
 #   * installed, but ArgoCD's address still unknown -> that IS a genuine per-service gap; name it.
-if [ "$_have_sink" = 0 ]; then
+if [ "$_have_sink" = 0 ] && [ "$_env_populated" = 1 ]; then
+  # ⚠️ THE OTHER ARM BELOW MAKES A POSITIVE, CHECKABLE CLAIM THAT IS FALSE HERE, and that is worse
+  # than vagueness: a reader who checks it finds it false. It says every value came from
+  # .env.example and "none of them exists" — but HARBOR_PASSWORD is COMMENTED in .env.example
+  # (measured: uncommented=0), so a value on screen CANNOT have come from there, and on a real lab
+  # the address is a live one the operator typed. Being told "placeholder" about a real credential
+  # is how it ends up in a ticket, a screenshot or a chat, unrotated.
+  printf '\n  note: nothing is installed yet, so no installer has published anything — but the values\n'
+  printf '        above are NOT placeholders: they came from YOUR .env, which is not tracked and not\n'
+  printf '        stamped for any cluster. This report therefore cannot tell a value you typed a\n'
+  printf '        minute ago from one left over from a lab that no longer exists; they are identical\n'
+  printf '        on screen. Treat every credential here as LIVE until you know otherwise.\n'
+  printf '          Settle it: make env-validate — it authenticates against Harbor and reports a 401\n'
+  printf '                     rather than leaving you to guess.\n'
+  printf '          KinD     : you need set nothing by hand; the install discovers and fills these in.\n'
+elif [ "$_have_sink" = 0 ]; then
   printf '\n  note: nothing is installed yet, so EVERY value above is a default from .env.example —\n'
   printf '        including Harbor'\''s and Gitea'\''s. None of them exists.\n'
   printf '          KinD     : the real addresses and passwords are discovered and filled in for you by\n'
