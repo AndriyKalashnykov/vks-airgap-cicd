@@ -72,7 +72,14 @@ jobs:
       docs: ${{ steps.filter.outputs.docs }}
       diagrams: ${{ steps.filter.outputs.diagrams }}
     steps:
+      # fetch-depth: 0 is REQUIRED here: the push arm below answers "what changed?" with
+      # `git diff`, offline, instead of the compare API. Repo is ~15 MiB / ~750 commits, so a
+      # full clone is cheap. ⚠️ Do NOT copy this to the `secrets` job — its own comment records
+      # fetch-depth: 1 as LOAD-BEARING for gitleaks (a full history makes it scan commits
+      # instead of the worktree).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
       - id: filter
         env:
           GH_TOKEN: ${{ github.token }}
@@ -83,18 +90,50 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          files=""
-          case "$EVENT" in
-            pull_request)
-              files="$(gh api "repos/${REPO}/pulls/${PR}/files" --paginate --jq '.[].filename')" ;;
-            push)
-              # A first push / a new branch / a tag has an all-zero `before`: nothing to compare
-              # to, so the list stays empty and classify-changes.sh runs every gate.
-              case "$BEFORE" in
-                ''|0000000000000000000000000000000000000000) files="" ;;
-                *) files="$(gh api "repos/${REPO}/compare/${BEFORE}...${SHA}" --jq '.files[].filename')" ;;
-              esac ;;
-          esac
+          echo "gh: $(gh --version 2>/dev/null | head -1)"   # `gh api` has NO --retry flag; see below
+          # `git_or_api` echoes the changed-file list and returns non-zero if it could not
+          # determine one. It must NOT print anything else on stdout (the caller captures it).
+          git_or_api() {
+            case "$EVENT" in
+              pull_request)
+                # MEASURED healthy during the 2026-08-17 compare-endpoint outage (6/6), so the
+                # PR arm stays on the API. NOTE: no --paginate on `compare` ever — pages 2+ of a
+                # compare carry no `.files` key, so paginating it is actively wrong.
+                gh api "repos/${REPO}/pulls/${PR}/files" --paginate --jq '.[].filename' ;;
+              push)
+                # A first push / a new branch / a tag has an all-zero `before`: nothing to
+                # compare to, so the list stays empty and classify-changes.sh runs every gate.
+                case "$BEFORE" in
+                  ''|0000000000000000000000000000000000000000) : ;;
+                  *)
+                    # `git diff` is exact, offline, and has no 300-file cap. It replaces
+                    # `gh api repos/.../compare/A...B`, which on 2026-08-17 returned HTTP 404
+                    # for ~95-100% of calls for over 20 minutes (MEASURED: 0/9 on three sha
+                    # pairs, 1/20 on a fourth) while the rate limit was untouched
+                    # (4961/5000) — i.e. a sustained endpoint outage, not throttling, and not
+                    # retryable: `gh api` has no --retry flag, and at p(fail)~0.95 a 3x retry
+                    # still fails ~86%. It reddened `main` on a docs-only merge.
+                    # A force-push or a rebase can leave BEFORE unreachable; that is the one
+                    # case we cannot answer, so fail and let the caller degrade.
+                    git cat-file -e "${BEFORE}^{commit}" 2>/dev/null || return 1
+                    git diff --name-only "$BEFORE" "$SHA" ;;
+                esac ;;
+            esac
+          }
+          files=""; determined=1
+          files="$(git_or_api)" || determined=0
+          if [ "$determined" -eq 0 ]; then
+            # DEGRADE, never die: an empty list makes classify-changes.sh turn EVERY gate ON
+            # (MEASURED: 0 bytes / 1 newline / 2 newlines all yield code=true docs=true
+            # diagrams=true). That is strictly MORE checking, so it is safe — but it is also
+            # byte-indistinguishable from a legitimate no-change run, which is the exact
+            # "green while not looking" shape this job exists to prevent. So SAY SO where a
+            # green run is still readable: a ::warning:: alone is effectively invisible.
+            files=""
+            echo "  changed: <UNKNOWN — lookup FAILED; assuming EVERYTHING changed>"
+            echo "::warning::change classification DEGRADED — could not determine the changed files; every gate will run"
+            echo '### ⚠️ change classification DEGRADED — every gate forced ON' >> "$GITHUB_STEP_SUMMARY"
+          fi
           printf '%s\n' "$files" | sed '/^$/d; s/^/  changed: /'
           printf '%s\n' "$files" | ./scripts/classify-changes.sh | tee -a "$GITHUB_OUTPUT"
 
