@@ -24,7 +24,14 @@ This allowlist would, however, hide a DELIBERATE `git add -f`. That hole is clos
 by trust: `make check-secrets-untracked` READS THIS LIST and fails if any tracked file matches
 any pattern in it. It is DERIVED, not a restatement -- an earlier version hardcoded four of these
 six paths, so `bundle/` and `.claude/worktrees/` were allowlisted-and-unchecked while this very
-sentence claimed otherwise. Add an entry here and the gate covers it; there is no second list.
+sentence claimed otherwise.
+
+Add an entry here and the gate covers it, in ANY valid TOML string form -- it parses with `tomllib`,
+so a double-quoted entry beside a triple-quoted one is NOT silently dropped (an earlier hand-written
+parser did exactly that, which is how one edit could have reopened the hole above). Patterns are
+matched with Python `re`; anything it cannot compile makes the gate DIE rather than skip the entry,
+so an RE2 construct we cannot faithfully evaluate is loud instead of invisible. There is no second
+list and no unstated condition.
 """
 paths = [
   '''^secrets/''',      # self-signed Harbor CA + leaf keys, kubeconfigs (06-install-harbor.sh, 05-kind-up.sh)
