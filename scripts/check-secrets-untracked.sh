@@ -1,75 +1,103 @@
 #!/usr/bin/env bash
 # Gate: no TRACKED file may be hidden from gitleaks by the .gitleaks.toml allowlist.
 #
-# WHY THIS IS DERIVED AND NOT A LIST. The previous version hardcoded four paths (.env, secrets,
-# .env.state, .jumpbox) while .gitleaks.toml allowlisted SIX -- `bundle/` and `.claude/worktrees/`
-# were allowlisted-and-unchecked. That is not cosmetic: an allowlisted path is SKIPPED by the
-# working-tree scan, so a deliberate `git add -f bundle/creds.env` would be invisible to gitleaks
-# AND invisible to this gate, on a job that runs on every PR.
+# WHY DERIVED. This gate once hardcoded four paths while .gitleaks.toml allowlisted SIX, so
+# `^bundle/` and `^\.claude/worktrees/` were allowlisted-and-unchecked -- and the config's own
+# comment claimed otherwise. An allowlisted path is SKIPPED by the working-tree scan, so a
+# `git add -f bundle/creds.env` was invisible to gitleaks AND to the gate built to close that hole.
 #
-# Worse, .gitleaks.toml's own comment asserted the coverage in as many words --
-#   "`make check-secrets-untracked` fails if any of these paths is ever tracked by git"
-# -- which was FALSE for 2 of 6. A false fact inside a control is the worst kind: it is the
-# sentence a reviewer reads INSTEAD of checking.
+# WHY PYTHON, AND NOT sed+grep. The first derived version parsed with
+# `sed -n '/^paths = \[/,/^]/p' | grep -oE "'''[^']*'''"` and matched with `grep -E`. An adversary
+# round MEASURED two false greens in that design, both one config edit away, both silent:
 #
-# The two files could not be kept in agreement by care, because nothing compared them. So this
-# gate does not restate the allowlist -- it READS it, and the enumerated list is gone.
+#   1. ENGINE GAP. gitleaks matches `paths` with Go RE2; grep -E is POSIX ERE. Measured against a
+#      real `openssl genrsa` key, with a positive control:
+#        (?i)^secrets/      gitleaks: SKIPS Secrets/creds.key | grep -E: "? at start of expression",
+#                                                               rc=1 -- indistinguishable from no-match
+#        ^(?:secrets|vault)/  gitleaks: SKIPS secrets/creds.key | grep -E: matches vault/ but MISSES
+#                                                               secrets/ -- so the gate still looks
+#                                                               functional while blind to the first
+#      Python's `re` expresses both. Where it CANNOT express an RE2 construct (`\pL`, and RE2 rejects
+#      the lookarounds Python allows) it RAISES -- so the disagreement is LOUD, never a silent skip.
+#      That asymmetry is the whole reason for the engine choice: the failure direction is a die, not
+#      a pass.
+#   2. QUOTING GAP. `paths = ['''^zzz/''', "^bundle/"]` is valid TOML and gitleaks honours BOTH.
+#      The old parser saw only the triple-quoted one and reported OK over a tracked key -- the
+#      ORIGINAL bug, reintroduced by a one-line edit, with the denominator quietly 2 instead of 1.
+#      A zero-pattern guard cannot see that; it only fires at zero. tomllib deletes the whole class
+#      (mixed quoting, apostrophes, `paths=[` spacing, multi-line literals) and additionally picks
+#      up the `[[allowlists]]` plural form gitleaks now prefers, which the old parser ignored.
 #
-# MEASURED 2026-08-17 (the drift, before this fix): allowlist 6, checked 4, unchecked
-# `^bundle/` + `^\.claude/worktrees/` -- both untracked TODAY, so latent rather than a live leak.
-# Found by an adversary round that had been asked about something else entirely.
+# WHAT IT ASSERTS: for every pattern P in the allowlist, NO git-tracked file matches P. It tests the
+# TRACKED FILES against the PATTERNS rather than translating each pattern into a path -- a
+# regex->path translation is a second thing to get wrong and would under-match on any entry shape
+# nobody anticipated.
 #
-# WHAT IT ASSERTS, precisely: for every pattern P in the `paths` allowlist, NO git-tracked file
-# matches P. Note the DIRECTION -- it tests the TRACKED FILES against the patterns rather than
-# translating each pattern into a path and asking git about it. That is deliberate: a regex->path
-# translation is a second thing to get wrong (what is the path of `^\.env$`? of a character class?)
-# and it would silently under-match on any entry shape nobody anticipated. Matching real paths
-# against the real regexes has no such gap.
-#
-# RED-PROOF, runnable, not by hand: scripts/test-check-secrets-untracked.sh (`make test-scripts`).
+# RED-PROOF, runnable: scripts/test-check-secrets-untracked.sh (in the fast per-PR tier).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CFG="${GITLEAKS_CONFIG:-${ROOT}/.gitleaks.toml}"
+# NO env override for the config path. There was a GITLEAKS_CONFIG knob; `git grep` found it in
+# exactly ONE place -- this line. Nothing set it, and `make secrets` hardcodes `--config
+# .gitleaks.toml`, so its only achievable effect was to point this gate at a DIFFERENT list than the
+# scanner reads: a false green with no upside.
+CFG="${ROOT}/.gitleaks.toml"
 
-die() { echo "ERROR: $*" >&2; exit 1; }
-
-[ -f "$CFG" ] || die "no gitleaks config at ${CFG} -- this gate reads its patterns from there"
-
-# Parse `paths = [ ... ]`. Entries are '''<regex>''' with optional trailing comments.
-# `|| true` on the grep: it exits 1 on no-match, and under `set -e` a non-zero inside $( ) kills
-# the script with NO OUTPUT. The empty case is what the n_pat guard below reports, loudly.
-PATTERNS="$(sed -n '/^paths = \[/,/^]/p' "$CFG" | grep -oE "'''[^']*'''" | sed "s/'''//g" || true)"
-
-n_pat=$(printf '%s' "$PATTERNS" | grep -c . || true)
-# VACUITY GUARD 1. A parser that silently returns nothing turns this gate into `exit 0` forever --
-# green, measuring the empty set. If .gitleaks.toml ever grows a different quoting style, FAIL
-# here rather than pass by not looking.
-[ "$n_pat" -gt 0 ] || die "parsed ZERO allowlist patterns from ${CFG} -- the parser and the config have diverged; this gate would otherwise pass by not looking"
+[ -f "$CFG" ] || { echo "ERROR: no gitleaks config at ${CFG} -- this gate reads its patterns from there" >&2; exit 1; }
 
 TRACKED="$(git -C "$ROOT" ls-files || true)"
-n_files=$(printf '%s' "$TRACKED" | grep -c . || true)
-# VACUITY GUARD 2. Same reasoning on the other input: no tracked files means we are not where we
-# think we are (not a repo, wrong cwd) -- it does not mean the repo is clean.
-[ "$n_files" -gt 0 ] || die "git ls-files returned NOTHING under ${ROOT} -- refusing to report OK over an empty file list"
+# VACUITY GUARD: no tracked files means we are not where we think we are (not a repo, wrong cwd) --
+# it does not mean the repo is clean. Refusing beats reporting OK over an empty set.
+printf '%s' "$TRACKED" | grep -q . || { echo "ERROR: git ls-files returned NOTHING under ${ROOT} -- refusing to report OK over an empty file list" >&2; exit 1; }
 
-bad=""
-while IFS= read -r pat; do
-  [ -n "$pat" ] || continue
-  # Capture-then-test, NEVER `| grep -q`: under `set -o pipefail` grep -q exits at the first match
-  # and SIGPIPEs the producer, so the pipeline can report a pattern ABSENT when it is PRESENT.
-  hits="$(printf '%s\n' "$TRACKED" | grep -E "$pat" || true)"
-  if [ -n "$hits" ]; then
-    bad="${bad}"$'\n'"  pattern ${pat} hides these TRACKED files:"$'\n'"$(printf '%s\n' "$hits" | sed 's/^/    /')"
-  fi
-done <<< "$PATTERNS"
+printf '%s' "$TRACKED" | python3 -c '
+import sys, re
+try:
+    import tomllib
+except ModuleNotFoundError:                      # py<3.11
+    # DIE rather than fall back to a hand parser: a silent fallback would reintroduce the exact
+    # quoting gap this file exists to close, and it would do it invisibly.
+    sys.exit("ERROR: python3 >= 3.11 required (tomllib). Do NOT substitute a hand-written TOML parser.")
 
-if [ -n "$bad" ]; then
-  echo "ERROR: files that gitleaks SKIPS (allowlisted) are TRACKED by git -- they are UNSCANNED:" >&2
-  printf '%s\n' "$bad" >&2
-  echo "       Untrack with: git rm --cached -r <path>   (and ROTATE anything that leaked)" >&2
-  echo "       Or, if the file genuinely belongs in git, narrow the pattern in ${CFG}." >&2
-  exit 1
-fi
+cfg, = sys.argv[1:]
+with open(cfg, "rb") as fh:
+    doc = tomllib.load(fh)
 
-echo "check-secrets-untracked: OK -- ${n_files} tracked files, none matched by any of the ${n_pat} allowlist patterns"
+pats = list(doc.get("allowlist", {}).get("paths", []))          # singular, what we use today
+for al in doc.get("allowlists", []):                            # plural, the form gitleaks prefers
+    pats += al.get("paths", [])
+
+# VACUITY GUARD: a parser that silently returns nothing turns this gate into exit 0 forever --
+# green, measuring the empty set.
+if not pats:
+    sys.exit(f"ERROR: parsed ZERO allowlist patterns from {cfg} -- the parser and the config have "
+             f"diverged; this gate would otherwise pass by not looking")
+
+tracked = [ln for ln in sys.stdin.read().splitlines() if ln]
+
+bad = []
+for p in pats:
+    try:
+        rx = re.compile(p)
+    except re.error as e:
+        # LOUD, by design. gitleaks uses RE2; anything Python cannot compile is a construct we
+        # cannot faithfully evaluate, and guessing would be a silent skip.
+        sys.exit(f"ERROR: allowlist pattern {p!r} does not compile in python re: {e}\n"
+                 f"       gitleaks uses Go RE2. This gate cannot faithfully evaluate it, so it "
+                 f"refuses rather than skip it silently.")
+    hits = [f for f in tracked if rx.search(f)]
+    if hits:
+        bad.append((p, hits))
+
+if bad:
+    print("ERROR: files that gitleaks SKIPS (allowlisted) are TRACKED by git -- they are UNSCANNED:", file=sys.stderr)
+    for p, hits in bad:
+        print(f"  pattern {p} hides these TRACKED files:", file=sys.stderr)
+        for h in hits:
+            print(f"    {h}", file=sys.stderr)
+    print("       Untrack with: git rm --cached -r <path>   (and ROTATE anything that leaked)", file=sys.stderr)
+    print(f"       Or, if the file genuinely belongs in git, narrow the pattern in {cfg}.", file=sys.stderr)
+    sys.exit(1)
+
+print(f"check-secrets-untracked: OK -- {len(tracked)} tracked files, none matched by any of the {len(pats)} allowlist patterns")
+' "$CFG"
