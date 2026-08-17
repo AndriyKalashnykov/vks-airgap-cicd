@@ -51,11 +51,20 @@ env_set() { set_env_var "$1" "$2" "$ENV_FILE"; }
 # ---------------------------------------------------------------------------
 env_init() {
   [ -f "$EXAMPLE_FILE" ] || die ".env.example missing at $EXAMPLE_FILE (the committed source of truth)"
+  # ⚠️ THIS is where .env's mode is really decided, and it was 0664. `.env.example` is committed 0644
+  # and `cp` to a non-existent target yields source-mode & ~umask, so at this box's umask 002 the file
+  # is BORN world-readable — measured: `.env.example 664 -> .env 664 -> still 664 after a
+  # HARBOR_PASSWORD publish`. Hardening set_env_var alone does NOT close it, because the single most
+  # sensitive credential never passes through set_env_var at all: `docs/scenario-1.md` tells the
+  # operator to HAND-EDIT VCENTER_PASSWORD (the vSphere SSO administrator) into this file at Step 2,
+  # and the first hardening writer does not run until Step ~5 — permanently if the walk diverges.
   if [ -f "$ENV_FILE" ]; then
     cp "$ENV_FILE" "${ENV_FILE}.bak"
+    chmod 600 "${ENV_FILE}.bak" 2>/dev/null || true   # a FULL credential copy; it inherits cp's mode
     log_warn "existing .env backed up to .env.bak (your previous overrides are preserved there)"
   fi
   cp "$EXAMPLE_FILE" "$ENV_FILE"
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
   log_info "wrote a fresh .env from .env.example"
   echo
   echo "Next:"
