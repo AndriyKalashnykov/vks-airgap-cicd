@@ -270,7 +270,12 @@ echo "<argocd-lb-ip> argocd-server" | sudo tee -a /etc/hosts
 
 # 2. NOW fetch the CA. `make fetch-argocd-ca` dials ARGOCD_SERVER, so it can only work once step 1
 #    has made that name resolve — run it first and it dies "could not connect".
-ARGOCD_SERVER=argocd-server make fetch-argocd-ca
+#    ⚠️ THE COMMAND-LINE FORM, NOT A PREFIX. `ARGOCD_SERVER=argocd-server make fetch-argocd-ca`
+#    LOOKS equivalent and is SILENTLY IGNORED the moment `.env` already carries the key — which is
+#    exactly the situation you are in if you are here on a RETRY. The Makefile's `-include .env`
+#    makes a FILE-defined make variable, and a file-defined variable BEATS an environment one, so
+#    the prefix form dials the stale value with no error. A command-line assignment outranks both.
+make fetch-argocd-ca ARGOCD_SERVER=argocd-server
 
 # 3. Then put the NAME (not the IP) in .env, next to the CA file it just wrote.
 #    ARGOCD_SERVER=argocd-server
