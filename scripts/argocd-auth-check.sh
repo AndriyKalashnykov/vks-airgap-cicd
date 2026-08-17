@@ -43,8 +43,11 @@ bad()  { say "$1" "$2"; fail=1; }
 # Both are load-bearing and NEITHER was required before (B163/F3): a missing `jq` yields an empty
 # body, which becomes an empty token, which produced the SAME "NO token" message — a third silent
 # path into one diagnostic. Both are pinned (.mise.toml, 00-install-prereqs.sh), so this is a guard
-# against a broken PATH rather than a likely absence.
-require_cmd jq curl
+# against a broken PATH rather than a likely absence. kubectl is here because section 3 CANNOT
+# read the Secret without it, and its absence otherwise produced the same 'NOT AVAILABLE' message
+# as a genuinely-absent Secret -- which then prescribes ARGOCD_ADMIN_PASSWORD, i.e. tells the
+# operator to make the check 'pass' on a password it never verified against anything.
+require_cmd jq curl kubectl
 
 echo
 echo "════════ argocd auth check — does the ADMIN credential really authenticate? ════════"
@@ -83,11 +86,24 @@ else
 fi
 pw=""
 [ -n "$KC" ] && [ -s "$KC" ] && pw="$(argocd_admin_password "$KC" "$NS")"
+# WHERE the password came from is part of the verdict, not trivia: a 401 only means "the credential
+# was rejected" if a credential was actually READ, and an unreadable Secret can otherwise leave a
+# non-empty garbage value that makes this check exonerate the address and the anchor it never tested.
+PW_SRC="$(argocd_password_last)"; PW_SRC="${PW_SRC#source=}"; PW_SRC="${PW_SRC%% *}"
+PW_WHY="$(argocd_password_last)"; PW_WHY="${PW_WHY##*reason=}"; case "$PW_WHY" in *' '*|source=*|'') PW_WHY="" ;; esac
 if [ -z "$pw" ]; then
-  bad "admin password" "NOT AVAILABLE (no argocd-initial-admin-secret in ns '${NS}', and ARGOCD_ADMIN_PASSWORD is unset)"
-  say "  note" "upstream DELETES that Secret once the password is rotated — set ARGOCD_ADMIN_PASSWORD if yours was"
+  case "$PW_WHY" in
+    unreadable)
+      bad "admin password" "COULD NOT BE READ — kubectl failed against ns '${NS}' (not: the Secret is missing)"
+      say "  what to check" "the kubeconfig, its context, and whether it may read Secrets in '${NS}'. Do NOT set ARGOCD_ADMIN_PASSWORD to get past this — that makes the check pass on a password nothing verified." ;;
+    absent)
+      bad "admin password" "the Secret argocd-initial-admin-secret is ABSENT in ns '${NS}' (the read SUCCEEDED)"
+      say "  note" "upstream DELETES that Secret once the password is rotated — set ARGOCD_ADMIN_PASSWORD if yours was" ;;
+    *)
+      bad "admin password" "NOT AVAILABLE (ns '${NS}'), and ARGOCD_ADMIN_PASSWORD is unset" ;;
+  esac
 else
-  say "admin password" "read (${#pw} chars) — never printed, never on argv"
+  say "admin password" "read (${#pw} chars) from ${PW_SRC:-unknown} — never printed, never on argv"
 fi
 
 # ---- 4. AUTHENTICATE ---------------------------------------------------------------------------
@@ -104,7 +120,13 @@ fi
 if [ -n "$pw" ] && [ "$fail" -eq 0 ]; then
   _ready=0
   for _ in $(seq 1 "${ARGOCD_READY_ATTEMPTS:-30}"); do
-    if curl -s "${ARGOCD_CURL_TLS[@]}" -o /dev/null --max-time 3 "https://${srv}/healthz" 2>/dev/null; then
+    # F9: without a status test ANY reply counts as "answering" — a 404, or an Envoy's
+    # "503 no healthy upstream", breaks the loop and reports readiness during the exact race
+    # this poll exists to wait out. F8: honour the scheme hook the session path already honours,
+    # or this reports "did NOT answer" against a live stub while the session below returns 401.
+    _hc="$(curl -s "${ARGOCD_CURL_TLS[@]}" -o /dev/null -w '%{http_code}' --max-time 3 \
+             "${ARGOCD_SESSION_SCHEME:-https}://${srv}/healthz" 2>/dev/null || true)"
+    if [ "$_hc" = 200 ]; then
       _ready=1; break
     fi
     sleep "${ARGOCD_READY_INTERVAL_SECONDS:-2}"
@@ -134,18 +156,23 @@ if [ -n "$pw" ] && [ "$fail" -eq 0 ]; then
     _rc="${_diag#rc=}"; _rc="${_rc%% *}"
     _code="${_diag##*http=}"
     bad "POST /api/v1/session" "NO token (curl rc=${_rc:-?}, HTTP ${_code:-?})"
-    if _why="$(argocd_session_explain "$_rc" "$_code")"; then
+    if _why="$(argocd_session_explain "$_rc" "$_code" "$PW_SRC")"; then
       say "  what happened" "$_why"
     else
-      # Only HERE is the cause genuinely undetermined, so only here is a hypothesis list honest.
+      # Only HERE is the cause genuinely undetermined, so only here is a hypothesis list honest —
+      # and even here it is honest ONLY when verifying. Under -k the certificate's names were never
+      # consulted, so printing ADDRESS/ANCHOR candidates and then a NOTE saying they are impossible
+      # is a self-contradiction on adjacent lines. Suppress the list instead of annotating it.
       say "  undetermined"  "rc=${_rc:-?} HTTP ${_code:-?} does not name a cause on its own"
-      say "  candidates"    "1) the ADDRESS: is '${srv}' a name the certificate carries? 2) the ANCHOR: is ARGOCD_CA_FILE the CA that signed it?"
-      say "  discriminate"  "make argocd-preflight   (it reports which of the two is at fault)"
+      if [ "$ARGOCD_TLS_MODE" = verified ]; then
+        say "  candidates"    "1) the ADDRESS: is '${srv}' a name the certificate carries? 2) the ANCHOR: is ARGOCD_CA_FILE the CA that signed it?"
+        say "  discriminate"  "make argocd-preflight   (it reports which of the two is at fault)"
+      fi
     fi
     if [ "$ARGOCD_TLS_MODE" != verified ]; then
       # Say it out loud: with -k in effect, an address/anchor fault is IMPOSSIBLE here, so nobody
       # should be sent to look at either. This is the sentence whose absence cost a session.
-      say "  NOTE" "this run was NOT verifying (-k), so the certificate's names were never consulted — an ADDRESS or ANCHOR fault cannot be the cause of THIS failure"
+      say "  NOTE" "this run was NOT verifying (-k), so the certificate's names were never consulted — an ADDRESS or ANCHOR fault cannot be the cause of THIS failure (which is why no candidate list is offered above)"
     fi
   fi
 fi

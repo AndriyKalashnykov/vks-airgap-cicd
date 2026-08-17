@@ -144,6 +144,72 @@ echo
 echo "== a wrong/failed transport yields NO token (empty, never a partial) =="
 check "an unreachable server -> empty" "$(ARGOCD_SESSION_TIMEOUT=2 argocd_session_token '127.0.0.1:1' 'x')" ''
 
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# argocd_session_explain — the whole point of the rc/http capture. WITHOUT THESE CASES the
+# harness reported the SAME COUNT before and after the capture was added, which is the named
+# signature of a gate blind to the change it carries. Both of the bugs pinned below (the 52/56
+# omission and the status-before-rc ordering) were found in under a minute by a probe that these
+# cases now ARE.
+echo
+echo "== argocd_session_explain: transport is tested BEFORE status =="
+
+# rc=28 WITH http=200 is a TIMEOUT, not a response-shape change. Status-first order reported it
+# as "a response-shape change" and sent the reader to the API format for a stalled body.
+_w="$(argocd_session_explain 28 200 secret || true)"
+case "$_w" in *TIMED\ OUT*) ok "rc=28 + http=200 -> TIMEOUT (rc outranks a status line that merely arrived)" ;;
+  *) bad "rc=28 + http=200 -> TIMEOUT" "got [$_w]" ;; esac
+
+# 52/56 are the DOCUMENTED K1.5 symptom -- the LoadBalancer has an IP but its proxy is not wired,
+# so the peer accepts and drops. Omitting them sent exactly this failure to the ADDRESS/ANCHOR
+# candidate list, i.e. the defect this module exists to remove.
+for _rc in 52 56; do
+  _w="$(argocd_session_explain "$_rc" 000 secret || true)"
+  case "$_w" in *RESET*|*closed\ by\ the\ peer*) ok "curl $_rc -> named as the K1.5 reset, not an address/anchor fault" ;;
+    *) bad "curl $_rc -> K1.5 reset" "got [$_w] -- an unnamed rc falls through to the candidate list" ;; esac
+done
+
+echo
+echo "== argocd_session_explain: any answered status settles ADDRESS and ANCHOR =="
+for _code in 404 500; do
+  _w="$(argocd_session_explain 0 "$_code" secret || true)"
+  case "$_w" in *ANSWERED*) ok "http $_code -> 'the server ANSWERED', so address+anchor are fine" ;;
+    *) bad "http $_code -> ANSWERED" "got [$_w] -- an unnamed status falls through to the candidate list" ;; esac
+done
+
+echo
+echo "== argocd_session_explain: a 401 may NOT blame the credential unless one was READ =="
+# THE F1 CASE. A kubeconfig that cannot read the Secret yields a NON-EMPTY garbage password, so
+# the check proceeds and, status-only, asserted "the CREDENTIAL was rejected -- the address and
+# the anchor are FINE" about a Secret it never read. It exonerated two innocents.
+_w="$(argocd_session_explain 0 401 secret || true)"
+case "$_w" in *CREDENTIAL\ was\ rejected*) ok "401 + password FROM THE SECRET -> blames the credential" ;;
+  *) bad "401 + pw from secret" "got [$_w]" ;; esac
+_w="$(argocd_session_explain 0 401 none || true)"
+case "$_w" in *did\ NOT\ come\ from\ a\ known\ source*) ok "401 + password from NO known source -> REFUSES to blame the credential" ;;
+  *) bad "401 + unknown pw source" "got [$_w] -- it is asserting a cause it has not established" ;; esac
+
+echo
+echo "== argocd_session_explain: undetermined stays undetermined =="
+if argocd_session_explain '' '' '' >/dev/null 2>&1; then
+  bad "empty rc + empty http -> undetermined" "it named a cause from nothing"
+else
+  ok "empty rc + empty http -> returns non-zero (undetermined), so the caller may offer candidates"
+fi
+
+echo
+echo "== the diag file must never answer for a PREVIOUS run =="
+# argocd_admin_password clears it FIRST; a surviving file would let the caller name this run's
+# cause from the last run's evidence -- a fresh instance of the bug being fixed.
+_diag="$(mktemp)"; printf 'source=secret rc=0\n' > "$_diag"
+( ARGOCD_PW_DIAG="$_diag" argocd_admin_password /nonexistent-kubeconfig some-ns >/dev/null 2>&1 || true )
+_after="$(ARGOCD_PW_DIAG="$_diag" argocd_password_last)"
+case "$_after" in
+  source=secret*) bad "a failed read must not leave source=secret" "stale [$_after] would make a 401 blame the credential" ;;
+  *) ok "a failed read overwrites the diag (got [$_after]), so no stale source=secret survives" ;;
+esac
+rm -f "$_diag"
+
 echo
 printf '  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
