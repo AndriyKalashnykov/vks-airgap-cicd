@@ -674,8 +674,21 @@ ratcheting the MASKED count ("varies by CELL, not by document quality"). The mas
   **zero** credentials, because TLS aborts before the request exists. A fail-closed fix is an
   *availability* decision, not a safety one. **NEW HIGH the row never mentions:** `wcp-service.sh:48`
   re-authenticates ≤60× per `make wcp-restart` **and** swallows the 401 (`>/dev/null 2>&1` on a call
-  whose `die` is `exit 1`) — the only *measured* lockout path, in current code, and not blocked on
-  either owner decision.
+  whose `die` is `exit 1`).
+  ⚠️ **CORRECTED the same day, by an oracle built from the loop's own bytes: this is NOT a lockout
+  path, and the words that used to end this sentence — "the only measured lockout path" — were
+  wrong.** Successful authentications do not increment SSO's failure counter, and the loop **exits at
+  the first 401** (measured `auths=1`), so it burns **exactly one** attempt. The ≤60 figure is the
+  worst case for a run in which every auth *succeeds*, which costs no lockout budget at all — and the
+  `die` being called a bug is, for the lockout question, **the thing preventing a lockout**.
+  ⚠️ It follows that a **bounded retry on a 401 must never be added**: it would turn a one-attempt
+  burn into 2–60 and *guarantee* the lockout. (Retry on `000`/`5xx` is fine.)
+  The **real** defect is broader and quieter: `vc_login` dies on 401, on `000` **and on any other
+  non-2xx**, so a single blip during the very restart the loop exists to wait through exits the script
+  at ~10 s with no message — while the *benign* timeout prints a full diagnosis. Fix: hoist
+  `vc_login` **out** of the loop (60 auths → 0), matching `vc_ss_install`'s already lab-proven shape.
+  A second, separate defect: line 75's `|| true` cannot swallow an `exit` either, so a `wcp-stop`
+  timeout suppresses the recovery instruction it was written to print.
 - **B166** — my (i)+(ii)+(iii) **refuted as a package**. The control I wanted to hoist is measurably
   **BLIND** (`CHECKED=0`: it builds its Supervisor pair only when `VKS_CA_CERT_FILE` is set, and
   `.env.example` ships it commented), and (iii) would **exit 1 on a correct walk**. **Land instead:

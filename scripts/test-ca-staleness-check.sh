@@ -182,6 +182,85 @@ else
   bad "the preflight target exports CA_STATUS_STRICT" "the strict arm exists but nothing turns it on"
 fi
 
+
+# ── B166: the report must not be BLIND to the Supervisor CA in the SHIPPED configuration ──────
+# ca_status_report builds its Supervisor pair only when VKS_CA_CERT_FILE is non-empty, and
+# .env.example ships that COMMENTED (docs/scenario-1.md: "Set it only if you moved it"). Without a
+# vks_ca_default call first, BOTH entry points examine ZERO pairs and report "nothing to check".
+#
+# ⚠️ THE FIRST VERSION OF THESE CASES WAS A FAKE-GREEN, and it is worth stating how, because the
+# numbers looked convincing: the behavioural arms EXPORTED VkS_CA_CERT_FILE themselves, so they never
+# called vks_ca_default at all. An implementation-round adversary measured that gutting the function
+# to `return 0` left the arms byte-identical, and that vks_ca_default could be DELETED from tls.sh
+# entirely with these cases still green. They pinned ca_status_report's `[ -n ... ]` conditional --
+# a thing that was never in doubt -- while appearing to pin the fix.
+#
+# WIRING: require the call at a COMMAND POSITION and check EACH occurrence's own window. A bare-token
+# grep passed `: vks_ca_default`, `false && vks_ca_default`, the token inside a log string, and the
+# token inside an unused function (2 of 6 mutations caught). A single concatenated window also passed
+# a file with one guarded and one UNGUARDED ca_status_report.
+for _f in "${REPO_ROOT}/scripts/29-ca-status.sh" "${REPO_ROOT}/scripts/24-lab-preflight.sh"; do
+  _n="$(basename "$_f")"; _bad=0; _seen=0
+  while IFS=: read -r _ln _; do
+    [ -n "${_ln:-}" ] || continue
+    _seen=$((_seen + 1))
+    _lo=$(( _ln - 12 )); [ "$_lo" -lt 1 ] && _lo=1
+    if ! sed -n "${_lo},${_ln}p" "$_f" | sed 's/#.*//' \
+         | grep -qE '^[[:space:]]*vks_ca_default[[:space:]]*$'; then
+      _bad=$((_bad + 1))
+    fi
+  done <<EOF
+$(grep -n 'ca_status_report' "$_f" | sed 's/#.*//' | grep 'ca_status_report' || true)
+EOF
+  if [ "$_seen" -eq 0 ]; then
+    bad "${_n}: found NO ca_status_report call" "the test cannot be measuring what it claims"
+  elif [ "$_bad" -eq 0 ]; then
+    ok "${_n}: every ca_status_report (${_seen}) is preceded by a real vks_ca_default call"
+  else
+    bad "${_n}: ${_bad} of ${_seen} ca_status_report calls lack a preceding vks_ca_default" \
+        "that entry point examines ZERO pairs on a box that never set VKS_CA_CERT_FILE"
+  fi
+done
+
+# BEHAVIOURAL — both arms CALL vks_ca_default; the only difference is whether the fixture REPO_ROOT
+# contains the default CA file. If this ever stops discriminating, the fix has become inert.
+# Capture the REAL library paths BEFORE the arms override REPO_ROOT to a fixture. Without this the
+# arms would try to source the libs from the fixture root and silently source nothing, so both would
+# return 0 and arm A would pass for entirely the wrong reason.
+LIB_OS="${REPO_ROOT}/scripts/lib/os.sh"
+LIB_TLS="${REPO_ROOT}/scripts/lib/tls.sh"
+_b166="$(mktemp -d)"
+mkdir -p "$_b166/withca/secrets" "$_b166/noca/secrets"
+if openssl req -x509 -newkey rsa:2048 -nodes -keyout "$_b166/k" \
+     -out "$_b166/withca/secrets/supervisor-ca.crt" -subj "/CN=b166" -days 1 >/dev/null 2>&1; then
+  _arm() {  # _arm <fixture-root> -> count of Supervisor pairs examined
+    ( set +e
+      export REPO_ROOT="$1" SUPERVISOR_HOST="sup.invalid" CA_VERIFY_TIMEOUT=2
+      unset VKS_CA_CERT_FILE HARBOR_URL HARBOR_CA_FILE
+      # shellcheck source=scripts/lib/os.sh
+      . "${LIB_OS}"  >/dev/null 2>&1
+      # shellcheck source=scripts/lib/tls.sh
+      . "${LIB_TLS}" >/dev/null 2>&1
+      vks_ca_default >/dev/null 2>&1     # THE CALL UNDER TEST
+      ca_status_report 2>&1 ) | grep -ciE 'Supervisor CA' || true
+  }
+  _a="$(_arm "$_b166/noca")"; _b="$(_arm "$_b166/withca")"
+  if [ "${_a:-0}" -eq 0 ]; then
+    ok "RED-proof: vks_ca_default finds no default CA -> NO Supervisor pair examined"
+  else
+    bad "RED-proof: no-CA fixture must examine 0 pairs" "got ${_a}"
+  fi
+  if [ "${_b:-0}" -ge 1 ]; then
+    ok "RED-proof: vks_ca_default resolves the default CA -> the Supervisor pair IS examined"
+  else
+    bad "RED-proof: with-CA fixture must examine >=1 pair" \
+        "got ${_b} — vks_ca_default is INERT; the production fix would not restore coverage"
+  fi
+else
+  printf 'skip  B166 behavioural arms (openssl unavailable)\n'
+fi
+rm -rf "$_b166"
+
 printf '\ntest-ca-staleness-check: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 printf 'test-ca-staleness-check: OK\n'
