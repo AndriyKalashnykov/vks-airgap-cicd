@@ -41,7 +41,14 @@ export GITEA_ORG=demo
 # The witness is a FILE: the product redirects the annotate, so anything the stub PRINTS on that
 # path is swallowed by the product's own redirect and an assertion on it measures the redirect.
 run() {
-  ( export STUB_MODE="$1" WITNESS="${2:-/dev/null}"
+  ( # ⚠️ PRODUCTION OPTIONS, NOT THE SUITE'S. This file runs `set -uo pipefail`; the code under
+    # test has NO `set` line of its own and inherits scripts/70-configure-argocd.sh:21, which is
+    # `set -euo pipefail`. Running the subject under weaker options is why this suite has now
+    # scored a clean green over a broken implementation THREE times: an errexit death in the
+    # function is simply invisible here. MEASURED: a candidate fix passed 28/28 under the suite's
+    # options and killed `make gitops` on the HEALTHY path under production's.
+    set -euo pipefail
+    export STUB_MODE="$1" WITNESS="${2:-/dev/null}"
     # shellcheck disable=SC2329  # invoked indirectly by argocd_await_revision
     ka() {
       case " $* " in
@@ -68,10 +75,21 @@ run() {
           return 0 ;;
         *ComparisonError*)
           # unreachable_real: the fetch FAILED, so argo-cd appends a ComparisonError (state.go:699)
-          case "$STUB_MODE" in unreachable_real) printf 'rpc error: failed to get git client for repo http://this-host-does-not-exist.invalid:3000/demo/testapp-deploy.git' ;; esac
+          # signalfail: the READ ITSELF fails. Until this mode existed NO stub could fail these two
+          # reads — both arms returned 0 unconditionally — so the suite had ZERO coverage of the
+          # exact defect it was built to catch: `2>/dev/null || true` made an unreadable signal
+          # indistinguishable from a healthy one, and the gate PASSED.
+          case "$STUB_MODE" in
+            signalfail) echo 'Error from server (Forbidden): applications.argoproj.io is forbidden: cannot get conditions' >&2; return 1 ;;
+            unreachable_real) printf 'rpc error: failed to get git client for repo http://this-host-does-not-exist.invalid:3000/demo/testapp-deploy.git' ;;
+          esac
           return 0 ;;
         *sync.status*)
-          case "$STUB_MODE" in unreachable_real) printf 'Unknown' ;; *) printf 'Synced' ;; esac
+          case "$STUB_MODE" in
+            signalfail) echo 'Error from server (Forbidden): applications.argoproj.io is forbidden: cannot get sync.status' >&2; return 1 ;;
+            unreachable_real) printf 'Unknown' ;;
+            *) printf 'Synced' ;;
+          esac
           return 0 ;;
       esac
       case "$STUB_MODE" in
@@ -79,12 +97,18 @@ run() {
         nocrd)    echo 'error: the server doesn'"'"'t have a resource type "application"' >&2; return 1 ;;
         empty)    printf '' ;;
         condfail) case " $* " in *conditions*) echo 'Error from server (Forbidden): cannot read conditions' >&2; return 1 ;; esac; printf '' ;;
+        signalfail) printf 'freshSHA9999' ;;                # healthy-looking: ONLY the signal read fails
         unreachable_real) printf 'main' ;;                  # the BRANCH NAME - what argo-cd leaves after a FAILED fetch
         *)        printf 'staleSHA1234' ;;                  # a revision that PERSISTS from an earlier run
       esac
       return 0
     }
-    argocd_await_revision testapp 2>&1; printf 'RC=%s\n' "$?" ) || true
+    # BARE call, deliberately: putting it in a `||`/`if` context would suspend `set -e` for the
+    # ENTIRE function body and hide precisely the deaths this suite must see. Production calls it
+    # bare too. RC therefore comes from an EXIT trap, which fires on a `die`, on an errexit death,
+    # and on a normal return alike.
+    trap 'printf "RC=%s\n" "$?"' EXIT
+    argocd_await_revision testapp 2>&1 ) || true
 }
 
 echo
@@ -193,5 +217,30 @@ case "$o" in *"could not READ"*) ok "with ARGOCD_API/KUBECONFIG/GITEA_* unset it
   *) bad "it survives unset variables" "got: ${o:0:150} — it likely died mid-print under set -u" ;; esac
 
 echo
+echo
+echo "== a FAILED read of the FETCH SIGNAL must not be mistaken for a healthy fetch =="
+# THE DEFECT THIS GROUP EXISTS FOR. Both signal reads used `2>/dev/null || true`, so a Forbidden
+# gave two empty strings, the predicate was FALSE, `! _await_fetch_failed` was TRUE, and the gate
+# set _fresh=1 and PASSED — a false green inside the gate built to prevent false greens. In this
+# mode the Application looks entirely healthy (revision advances, reconciledAt advances); ONLY the
+# signal read fails. So a pass here means the check cannot tell "the fetch is fine" from "I could
+# not ask".
+W="$(mktemp)"; out="$(run signalfail "$W")"; rm -f "$W"   # witness => reconciledAt ADVANCES, so ONLY the signal read is broken
+case "$out" in *'RC=0'*) bad "an unreadable fetch signal must NOT pass the gate" "it exited 0 — the false green is back" ;;
+  *) ok "an unreadable fetch signal does NOT pass the gate" ;; esac
+case "$out" in *"could not READ the fetch signal"*) ok "it names the READ as the fault" ;;
+  *) bad "it names the READ" "got: ${out:0:200}" ;; esac
+case "$out" in *Forbidden*) ok "it surfaces kubectl's OWN words (the read's stderr is captured, not /dev/null'd)" ;;
+  *) bad "it surfaces kubectl's stderr" "got: ${out:0:200}" ;; esac
+case "$out" in *"NO evidence either way about the repo"*) ok "it declines to say anything about the repo" ;;
+  *) bad "it declines to implicate the repo" "got: ${out:0:200}" ;; esac
+case "$out" in *"$GITEA_ARGOCD_URL"*) bad "a read fault must NOT blame the repo URL" "it printed $GITEA_ARGOCD_URL" ;;
+  *) ok "a read fault does NOT mention the repo URL" ;; esac
+# CONTROL: the SAME app shape with a READABLE signal must still pass, or the case above would be
+# satisfied by any regression that simply breaks the gate.
+W="$(mktemp)"; out="$(run fresh "$W")"; rm -f "$W"
+case "$out" in *'RC=0'*) ok "CONTROL — a healthy app with a readable signal still PASSES" ;;
+  *) bad "CONTROL: healthy still passes" "got: ${out:0:200}" ;; esac
+
 printf '  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
