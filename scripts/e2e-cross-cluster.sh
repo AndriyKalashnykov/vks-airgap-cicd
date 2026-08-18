@@ -25,7 +25,7 @@ HUB="${CC_HUB_CLUSTER:-cc-hub}"
 GUEST="${CC_GUEST_CLUSTER:-cc-guest}"
 ARGOCD_NS="${ARGOCD_NAMESPACE:-argocd}"
 # renovate: datasource=github-releases depName=argoproj/argo-cd
-ARGOCD_MANIFEST_VERSION="${ARGOCD_VERSION:-v3.4.5}"
+ARGOCD_MANIFEST_VERSION="${ARGOCD_VERSION:-v3.5.1}"   # aligned with .env.example; see the renovate.json manager that tracks BOTH
 WORK="$(mktemp -d)"
 HUB_KC="${WORK}/hub.kubeconfig"
 GUEST_KC="${WORK}/guest.kubeconfig"
