@@ -1137,7 +1137,13 @@ require_internet() {
   # No retry, deliberately (B181): a bounded retry re-runs the predicate, and the predicate was the
   # bug. Revisit only when an occurrence arrives carrying a mode from _curl_rc_label — 28 might argue
   # for one, 6 argues for fixing the resolver, and 22 is the class this comment just closed.
-  errf="$(mktemp "${TMPDIR:-/tmp}/internet-probe.XXXXXX")"
+  # ⚠️ `|| true` IS LOAD-BEARING, and /dev/null IS THE FALLBACK. MEASURED: under `set -euo pipefail`
+  # a FAILED mktemp (read-only or full /tmp -- exactly the kind of box this function exists to
+  # diagnose) makes the ASSIGNMENT non-zero and kills the script, so the operator would get mktemp's
+  # message INSTEAD of the air-gap guidance below. Degrading to /dev/null keeps the probe working and
+  # only loses curl's stderr text; the verdict and the per-host rc are unaffected.
+  errf="$(mktemp "${TMPDIR:-/tmp}/internet-probe.XXXXXX" 2>/dev/null || true)"
+  [ -n "$errf" ] || errf=/dev/null
   for host in https://storage.googleapis.com https://github.com; do
     code="$(curl -sS -o /dev/null --head \
               --connect-timeout "${INTERNET_PROBE_TIMEOUT_SECONDS:-5}" \
@@ -1151,7 +1157,10 @@ require_internet() {
       ${host#https://} -> HTTP ${code:-000}, curl rc=${rc} ($(_curl_rc_label "$rc")${err:+ — ${err}})"
     if [ "${code:-000}" != 000 ]; then ok=0; break; fi
   done
-  rm -f "$errf"
+  # NEVER `rm` the fallback: as root, `rm -f /dev/null` DELETES the device node (measured: it is a
+  # character special file, and rm would remove it). `rm -f ""` is harmless (rc=0) but the guard
+  # covers both.
+  [ "$errf" = /dev/null ] || rm -f "$errf"
   if [ "$ok" -eq 0 ]; then return 0; fi
   die "NO INTERNET on this box — and ${what} needs it.
 

@@ -49,6 +49,13 @@ _probe() {  # _probe <expect: 0|die> <label> <host:code:rc> ...
   local cases="$*" out rc
   # Run in a SUBSHELL: `die` calls exit, so it must not take the test harness with it.
   out="$(
+    # Optional: make mktemp FAIL, to exercise the degraded path (a read-only or full /tmp -- exactly
+    # the kind of box this function exists to diagnose). MEASURED: without the `|| true` guard in
+    # os.sh, a failed mktemp makes the assignment non-zero and `set -euo pipefail` kills the script,
+    # so the operator gets mktemp's message INSTEAD of the air-gap guidance.
+    if [ -n "${_STUB_MKTEMP_FAIL:-}" ]; then
+      mktemp() { echo "mktemp: failed to create file" >&2; return 1; }
+    fi
     curl() {
       local url="${*: -1}" c
       for c in $cases; do
@@ -117,6 +124,21 @@ ck "  ...and the message NAMES the mode as TLS" \
 
 ck "  ...and the die keeps curl's OWN message (the old form asked for it via -S then discarded it)" \
    bash -c '[[ "$1" == *"SSL"* ]]' _ "$_LAST_OUT"
+
+# ---- The DEGRADED path: mktemp unavailable (read-only / full /tmp) ---------------------------
+# The verdict must be UNAFFECTED; only curl's stderr text is lost. Without the guard in os.sh this
+# case does not merely lose text -- the script DIES before it can print the air-gap guidance.
+_STUB_MKTEMP_FAIL=1
+_probe 0 "mktemp FAILS + row-3 shape -> still ONLINE (verdict unaffected)" \
+  'storage:400:22:The_requested_URL_returned_error:_400' 'github:000:28:Connection_timed_out'
+
+_probe die "mktemp FAILS + genuinely air-gapped -> still DIES with the AIR-GAP guidance" \
+  'storage:000:6:Could_not_resolve_host' 'github:000:6:Could_not_resolve_host'
+ck "  ...and the message is the SNEAKERNET guidance, not an mktemp error" \
+   bash -c '[[ "$1" == *"SNEAKERNET"* && "$1" != *"failed to create file"* ]]' _ "$_LAST_OUT"
+ck "  ...and it still NAMES the mode (the rc survives; only curl's text is lost)" \
+   bash -c '[[ "$1" == *"DNS"* ]]' _ "$_LAST_OUT"
+unset _STUB_MKTEMP_FAIL
 
 # ---- _curl_rc_label: the vocabulary itself --------------------------------------------------
 echo
