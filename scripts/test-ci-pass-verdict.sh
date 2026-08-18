@@ -72,6 +72,29 @@ _same "CONDITIONAL == exactly the jobs carrying a job-level if:" \
   "$S_COND" \
   "$(printf '%s\n' "$Y_IF" | grep -vx "$S_SELF" | sort -u)"
 
+# ── the aggregator's OWN if: — the one line in the graph that nothing asserted ──────────────────
+# ⚠️ THE ASSERTION ABOVE DELIBERATELY EXCLUDES $S_SELF (`grep -vx`), which is correct for the
+# CONDITIONAL-set comparison and left ci-pass's own guard covered by NOTHING. An adversary round
+# (2026-08-17) mutated `if: always()` to `if: needs.changes.outputs.code == 'true'` in a scratch
+# copy of ci.yml and this suite still scored 23/23.
+#
+# WHY THAT IS FATAL RATHER THAN UNTIDY: ci-pass is the SOLE required status check in the ruleset
+# (`required_status_checks: [{context: "ci-pass"}]`). If its own guard ever stops being
+# unconditional, a docs-only PR publishes `ci-pass / skipped`, and both candidate outcomes are
+# unacceptable — either a skipped check SATISFIES the requirement, so every docs PR merges with
+# ZERO verification, or it does not, and the repo is permanently wedged. Nothing in the repo
+# distinguishes those two today (see the residual in the row), which is exactly why the guard must
+# not be allowed to drift in the first place.
+Y_SELF_IF="$(awk -v self="$S_SELF" '
+  /^jobs:/{j=1}
+  j && /^  [a-z][a-z0-9-]*:/{n=$1; sub(/:$/,"",n)}
+  j && n==self && /^    if:/{sub(/^    if:[[:space:]]*/,""); print; exit}' "$CI_YML")"
+if [ "$Y_SELF_IF" = "always()" ]; then
+  ok "${S_SELF}'s OWN job-level guard is exactly 'if: always()' (it is the sole required check — a conditional guard would let it SKIP)"
+else
+  bad "${S_SELF}'s own guard must be 'if: always()'" "found '${Y_SELF_IF:-<none>}' — as the SOLE required status check, anything conditional means it can publish 'skipped' on a filtered PR"
+fi
+
 # ── behaviour, against REAL captured runs ───────────────────────────────────────────────────────
 # _run <want:REFUSE|allow> <name> <tsv on stdin>
 _run() {
