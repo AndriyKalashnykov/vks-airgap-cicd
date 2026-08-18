@@ -69,8 +69,8 @@ pre-built.
 make check-tools CHECK_TOOLS_PHASE=pre-carry
 ```
 
-**Expect:** the five carried tools report `CARRIED (in the bundle)` — **that is correct, they are not
-supposed to be here yet** — and everything the tarball *cannot* bring must show `OK`:
+**Expect:** the five carried tools are listed as `CARRIED` with the note `(in the bundle)` — **that is
+correct, they are not supposed to be here yet** — and everything the tarball *cannot* bring shows `OK`:
 
 ```text
   kubectl      CARRIED    (in the bundle)      <- the bundle brings these five
@@ -109,8 +109,9 @@ make builder-build    # the offline Maven builder → ./bundle/builders/ (needs 
 make bundle           # → vks-airgap-cicd-bundle-<date>.tar  + its .sha256
 ```
 
-**Expect:** `staged crane / kubectl / helm / jq / yq` (each `static`), then `toolchain staged (…)`,
-`bundle ready: …tar (12G)`, and a `.sha256` beside it.
+**Expect:** one `staged` line per carried tool (crane, kubectl, helm, jq, yq), each reporting
+`static, runs:` with its pin — then `toolchain staged (…)`, `bundle ready: …tar (12G)`, and a
+`.sha256` beside it.
 
 `mirror-pull` **resumes** — re-run it after a dropped connection and it skips what already completed.
 
