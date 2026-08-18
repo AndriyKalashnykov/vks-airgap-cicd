@@ -169,7 +169,10 @@ if have argocd && [ -n "${ARGOCD_SERVER:-}" ] && [ -n "${ARGOCD_AUTH_TOKEN:-}" ]
   # error — and the CLI does `CheckError(err); fmt.Println(response.Value)`, so it PRINTS "no" and
   # EXITS 0. The `>/dev/null` then discarded the only thing carrying the answer. Compare the
   # OUTPUT; rc alone says the RPC completed, never that you may.
-  _ra="$(argocd_can_i create applications "${ARGOCD_PROJECT:-default}/*")"
+  # B179: same graded ladder as 70-configure-argocd.sh — this is the tool :629 NAMES as the
+  # remedy, so it must not keep reporting "argocd API: YES" to a tenant whose run will die at
+  # the readback or the upsert.
+  _ra="$(argocd_api_capability "${ARGOCD_PROJECT:-default}")"
   case "${_ra%%|*}" in
     yes) can_api=yes; log_info "argocd API: YES — argocd-server permits you to create Applications in project '${ARGOCD_PROJECT:-default}'." ;;
     no)  can_api=no;  log_info "argocd API: no  — argocd-server refuses (check your AppProject role)." ;;
@@ -184,7 +187,7 @@ else
   log_info "argocd API: not probed — set ARGOCD_SERVER + ARGOCD_AUTH_TOKEN (and install the argocd CLI) to test the tenant path."
 fi
 if [ "$can_kubectl" = 0 ] && [ "$can_api" != yes ]; then
-  warn "NO write mechanism is confirmed. As a tenant, request an ArgoCD AppProject role permitting 'applications, create' — or ask for the Applications to be created for you."
+  warn "NO write mechanism is confirmed. As a tenant, request an ArgoCD AppProject role permitting 'applications, create' AND 'get' AND 'update' (B179: create alone dies later — 'get' at the readback, 'update' on any re-run whose spec changed) — or ask for the Applications to be created for you."
 fi
 
 # A CREDENTIALED api tenant on a DEFAULTED (guest) kubeconfig who forgot the DESTINATION passes every

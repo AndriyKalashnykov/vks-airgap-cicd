@@ -926,3 +926,59 @@ argocd_app_fetch_verdict() {
   fi
   return 0
 }
+
+# argocd_api_capability <project> -> prints "<create-verdict>|<class>" (the argocd_can_i shape),
+# and WARNS on stderr about verbs the run needs LATER that this token demonstrably lacks.
+#
+# WHY (B179, and its idea round REFUTED the two-verb probe that came before this):
+#
+#   1. THERE ARE >=3 VERBS, NOT 2. The api write path needs `create` (probed), `get` (the readback,
+#      since #835 unconditional on every api run) AND `update` — apply_application's api arm is
+#      `argocd app create --upsert`, and v3.5.1 enforces ActionUpdate whenever the spec CHANGED
+#      (equalSpecs short-circuits only when byte-identical). DEPLOY_REPO_CLONE_URL derives from
+#      GITEA_ARGOCD_URL, and those addresses move between cuts, so a re-run routinely changes the
+#      spec. `91-e2e-tenant-mechanism.sh:277` records that denial verbatim and works around it by
+#      deleting the Applications first.
+#
+#   2. ONLY `create` MAY GATE. This is the load-bearing constraint and it is why get/update WARN
+#      instead of voting. The probe compares PATTERN vs PATTERN, so a NAME-SCOPED grant
+#      (`applications, get, myproj/javawebapp`) against the request `myproj/*` returns **no** even
+#      though the tenant can read the very Application we are about to write. A tenant with
+#      wildcard `create` + name-scoped `get` WORKS TODAY; letting `get=no` downgrade the mechanism
+#      would push them to MECH=request, which renders files and EXITS 0 HAVING APPLIED NOTHING —
+#      what 70-configure-argocd.sh:310-316 calls "SILENT SUCCESS … the worst possible default".
+#      `request` must never be reachable from a DERIVED denial.
+#
+#   3. So a `no` here is a WARNING THAT MAY BE A FALSE ALARM, and it says so. That is the honest
+#      trade: a name-scoped tenant reads one extra caveat; a create-only tenant learns the late
+#      failure NOW instead of ~500 lines in, at a message that misdiagnoses it as an AppProject
+#      destination/repo problem.
+#
+# The extra probes run ONLY when create=yes: on `no` the mechanism is already decided, and on
+# `unknown` argocd-server never answered, so two more unanswerable RPCs would add latency and noise
+# to a run that is about to die anyway.
+argocd_api_capability() {
+  local _proj="$1" _create _v _r
+  _create="$(argocd_can_i create applications "${_proj}/*")"
+  _v="${_create%%|*}"
+  if [ "$_v" = yes ]; then
+    _r="$(argocd_can_i get applications "${_proj}/*")"
+    if [ "${_r%%|*}" = no ]; then
+      log_warn "this token may CREATE Applications in '${_proj}' but not GET them.
+The readback after every api write goes through 'argocd app get', so the run would die there —
+roughly 500 lines after this point, at a message about the write, not about the read.
+⚠️ This can be a FALSE ALARM: the probe asks for '${_proj}/*', so a NAME-SCOPED grant such as
+'applications, get, ${_proj}/<one-app>' also answers no. Not selecting a different mechanism on it."
+    fi
+    _r="$(argocd_can_i update applications "${_proj}/*")"
+    if [ "${_r%%|*}" = no ]; then
+      log_warn "this token may CREATE Applications in '${_proj}' but not UPDATE them.
+The api write is 'argocd app create --upsert', and argocd-server enforces update whenever the spec
+CHANGED — which a re-run routinely does, because the deploy-repo URL moves between lab cuts. The
+run would die at apply_application with 'Does your AppProject permit this destination and repo?',
+which MISDIAGNOSES an update-RBAC denial.
+⚠️ Same false-alarm caveat as above, and same decision: this does NOT change the mechanism."
+    fi
+  fi
+  printf '%s' "$_create"
+}
