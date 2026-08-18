@@ -92,13 +92,50 @@ printf 'subjectAltName=DNS:argocd-server,DNS:localhost\n' > "$D/ext"
 openssl x509 -req -in "$D/l.csr" -CA "$D/ca.crt" -CAkey "$D/ca.key" -out "$D/l.crt" -days 1 \
   -extfile "$D/ext" >/dev/null 2>&1
 
-PORT="${TEST_ADDR_VERDICT_PORT:-18443}"
+# AN EPHEMERAL FREE PORT, then PROVE WE ARE TALKING TO OUR OWN SERVER.
+#
+# MEASURED 2026-08-18: this test failed with
+#     FAIL  IP + correct CA -> rc 1 (want 3)
+#     FAIL  the SAN probe returned nothing usable: ' DNS:vcsa.env1.lab.test'
+# on a tree with NO relevant change — including on unmodified origin/main. The cause was a stray
+# TLS server left behind by an earlier session, squatting on the hardcoded 18443 and presenting a
+# `CN=vcsa.env1.lab.test` certificate. The failure mode is the dangerous one: `s_server`'s bind
+# failure went to /dev/null, and the readiness loop below SUCCEEDED — against the squatter. So the
+# whole suite then measured SOMEONE ELSE'S SERVER and reported it as a product defect.
+#
+# Two independent fixes, because either alone is insufficient:
+#   1. Scan for a free port (the idiom test-fetch-ca-pin.sh:47 already uses). Reduces collisions,
+#      but is TOCTOU — a squatter can take the port between the probe and the bind.
+#   2. ASSERT THE SERVED CERT IS THE ONE WE MINTED. This is the load-bearing half: it closes the
+#      TOCTOU window and converts "silently measured the wrong server" into a named failure.
+PORT="${TEST_ADDR_VERDICT_PORT:-}"
+if [ -z "$PORT" ]; then
+  for p in $(seq 18443 18470); do
+    if ! (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then PORT="$p"; break; fi
+  done
+fi
+[ -n "$PORT" ] || { printf '  FAIL  no free port in 18443-18470\n'; exit 1; }
 openssl s_server -cert "$D/l.crt" -key "$D/l.key" -accept "$PORT" -quiet >/dev/null 2>&1 &
 SRV=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   printf '' | timeout 2 openssl s_client -connect "127.0.0.1:${PORT}" </dev/null >/dev/null 2>&1 && break
   sleep 1
 done
+# THE IDENTITY GATE. `CN=argocd-server` is unique to the leaf minted above; anything else on this
+# port is not ours, and every assertion below would be measuring it. Fail here, loudly, naming the
+# squatter — never proceed and blame the product.
+# `</dev/null` alone — a `printf '' |` in front of it is dead (SC2259: the redirect overrides the
+# pipe), and shellcheck treats that as an ERROR, not a warning.
+_srv_subject="$(timeout 5 openssl s_client -connect "127.0.0.1:${PORT}" </dev/null 2>/dev/null \
+  | openssl x509 -noout -subject 2>/dev/null || true)"
+case "$_srv_subject" in
+  *argocd-server*) : ;;
+  *) printf '  FAIL  port %s is serving a certificate we did NOT mint: %s\n' "$PORT" "${_srv_subject:-<none>}"
+     printf '        Our s_server could not bind, so every assertion below would measure that\n'
+     printf '        server instead of ours. Find the squatter with: ss -ltnp | grep :%s\n' "$PORT"
+     kill "$SRV" 2>/dev/null || true
+     exit 1 ;;
+esac
 
 echo "== 2. ca_verifies_endpoint rc -> the arm the operator reads =="
 probe() { local rc=0; ca_verifies_endpoint "$1" "$PORT" "$2" || rc=$?; printf '%s' "$rc"; }
