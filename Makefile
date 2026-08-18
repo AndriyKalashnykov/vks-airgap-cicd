@@ -84,7 +84,7 @@ export PATH := $(if $(MISE_PATHS),$(subst $(SPACE),:,$(strip $(MISE_PATHS))):,)$
 # the operator has removed.
 -include $(if $(wildcard .env.kind),secrets/.env.kind.make)
 secrets/.env.kind.make: .env.kind
-	@install -d -m 700 secrets
+	@mkdir -p secrets && chmod 700 secrets
 	@umask 077; sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$<' > '$@'
 
 # The STAMPED state overlay (was `.env.kind` — a KinD-named file that carried REAL-LAB state, which
@@ -101,7 +101,7 @@ secrets/.env.kind.make: .env.kind
 STATE_SRC := $(if $(VKS_STATE_FILE),$(VKS_STATE_FILE),.env.state)
 -include $(if $(wildcard $(STATE_SRC)),secrets/.env.state.make)
 secrets/.env.state.make: $(STATE_SRC)
-	@install -d -m 700 secrets
+	@mkdir -p secrets && chmod 700 secrets
 	@umask 077; sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$<' > '$@'
 
 # Load operator overrides so they win over the `?=` defaults in this file (but NOT over the
@@ -131,7 +131,7 @@ ifneq ($(SKIP_DOTENV),1)
 # `make check-secrets-untracked`. At the repo root it tripped the secrets gate, correctly.
 -include $(if $(wildcard .env),secrets/.env.make)
 secrets/.env.make: .env
-	@install -d -m 700 secrets
+	@mkdir -p secrets && chmod 700 secrets
 	@umask 077; sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$<' > '$@'
 
 # ⚠️ EXPORTED, because `-include .env` above creates MAKE variables, NOT environment — MEASURED: a recipe

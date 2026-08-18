@@ -114,6 +114,27 @@ mode="$(stat -c %a secrets/.env.make 2>/dev/null || echo '?')"
 case "$mode" in 600|400) ok "generated .env.make is $mode (umask 077 held)";;
                 *) bad "generated .env.make is mode $mode — it carries the same credentials as .env";; esac
 
+# ---- 9b. the DIRECTORY must be 700 (B174) -----------------------------------------------------
+# The file's 0600 above is NOT sufficient: `secrets/.env.make` is make `-include`d, so a
+# GROUP-WRITABLE DIRECTORY is make-variable injection regardless of the file's own mode — a group
+# member can unlink and recreate it. Measured on this box: umask IS 002, and a bare `mkdir -p`
+# yields 775.
+#
+# ⚠️ WHY NOT `install -d -m 700`, which is the obvious one-call form: **toybox IGNORES `-m` on the
+# `-d` path**, silently, rc=0. MEASURED on bare photon:5.0 (toybox 0.8.9 — the repo's primary
+# air-gap jump-box OS): fresh 775 AND existing 775, at umask 002. It works on GNU coreutils 9.4 and
+# uutils 0.8.0, so it passes on every dev box and is a NO-OP on the one machine that matters.
+# `mkdir -p && chmod` is 700/700 on toybox AND GNU, fresh AND existing — measured on both.
+#
+# This case RED-proves TWO things at once: the mode, and that the recipe actually re-runs. It
+# regresses the dir to 775 and touches .env so the timestamp-gated rule fires.
+chmod 775 secrets 2>/dev/null || true
+touch .env
+make -s show >/dev/null 2>&1
+dmode="$(stat -c %a secrets 2>/dev/null || echo '?')"
+case "$dmode" in 700) ok "secrets/ is $dmode — group-write closed, and the recipe re-ran to repair it";;
+                 *) bad "secrets/ is mode $dmode, not 700 — a group-writable dir holding a make -include'd file is variable injection (and if this is 775 on toybox, the fix regressed to \`install -d -m\`)";; esac
+
 # ---- 10. POSITIVE CONTROL — reconstruct the PRE-FIX include shape and require it to FAIL --------
 # Without this, every assertion above could be passing for a reason unrelated to the fix. Running the
 # suite against the real pre-fix Makefile (a git worktree at the parent commit) exits non-zero — but
