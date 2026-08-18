@@ -597,8 +597,8 @@ Then **check it against a digest you got from whoever runs Harbor**, over some o
 sha256sum ./secrets/harbor-ca.crt
 ```
 
-**Expect:** `harbor.crt: OK` from the check above, then the file exists, is `0644`, and the digest
-matches. *(<1 min)*
+**Expect:** one line — a 64-hex digest followed by `./secrets/harbor-ca.crt`. Compare that digest
+with the one your platform team gave you; they must match. *(<1 min)*
 
 The digest proves it is the file Harbor's operator meant you to have. One more check proves it is the
 right file for **this** Harbor — a certificate left over from an earlier lab is still a perfectly
@@ -723,7 +723,9 @@ make argocd-preflight           # CLI vs running-server versions; can ArgoCD rea
 make argocd-register-guest      # admin-only; creates an SA in your guest + a Secret in ArgoCD's ns
 ```
 
-**Expect:** re-running `make argocd-preflight` now says `PREFLIGHT OK`. *(~2 min)*
+**Expect:** `registered as` followed by the name and API server it used. Then re-run
+`make argocd-preflight` — it should now report PREFLIGHT OK, which is the assertion attached to
+that command's own block above. *(~2 min)*
 
 `argocd-preflight` also prints the deploy destination — every cluster registered with this ArgoCD,
 and which one your guest resolves to. If it says **`resolves UNAMBIGUOUSLY`**, there is nothing to
