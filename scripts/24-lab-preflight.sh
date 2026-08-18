@@ -163,6 +163,12 @@ fi
 # in the executable 29-ca-status.sh and SOURCED that, which re-ran `set -euo pipefail`, re-sourced
 # the libraries and called load_env a second time. tls.sh is already sourced above, so this is just
 # a call — `make ca-status` is the other entry point to the same function.
+# RESOLVE THE DEFAULT FIRST — see the same call in 29-ca-status.sh. Without it this preflight is
+# BLIND to the Supervisor CA in the shipped configuration (VKS_CA_CERT_FILE is COMMENTED in
+# .env.example), so it examines ZERO pairs and reports "nothing to check" instead of checking.
+# MEASURED 2026-08-18: pairs examined 0 -> 1 with only this line added. No network; it early-returns
+# when the operator set VKS_CA_CERT_FILE themselves.
+vks_ca_default
 _stale=0; ca_status_report || _stale=$?
 problems=$((problems + _stale))
 

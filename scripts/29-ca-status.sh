@@ -41,6 +41,15 @@ load_env
 _ca_status_main() {
   printf '\n================= CA certificate check =================\n' >&2
   local _stale=0
+  # RESOLVE THE DEFAULT FIRST, or this report is BLIND to the Supervisor CA on a doc-following box.
+  # ca_status_report builds its Supervisor pair only when VKS_CA_CERT_FILE is non-empty (tls.sh),
+  # and .env.example ships that COMMENTED — docs/scenario-1.md even says "Set it only if you moved
+  # it." So without this line the shipped default examines ZERO pairs and prints "no CA certificate
+  # is configured, so there is nothing to check", while a stale anchor sits unexamined.
+  # MEASURED 2026-08-18, same fixture, only this line differing: pairs examined 0 -> 1.
+  # vks_ca_default is a pure default-setter — no network, and it early-returns when the operator
+  # set VKS_CA_CERT_FILE themselves, so it cannot override an explicit choice.
+  vks_ca_default
   ca_status_report || _stale=$?
   if [ "${CA_STATUS_CHECKED:-0}" -eq 0 ]; then
     log_error "checked nothing — see above. This is NOT a pass."
