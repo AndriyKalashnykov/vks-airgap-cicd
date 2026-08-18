@@ -166,7 +166,22 @@ case "$wit" in *"-o json"*) ok "it asks for json (there is no jsonpath output on
 
 echo
 echo "════════ the MECH=api readback must not be gated on an RBAC probe ════════"
-# THE DEFECT THIS PINS, measured on certification row 5 (2026-08-18): the api-path readback was
+# ⚠️ COVERAGE, STATED AS A FRACTION AND NOT AS "PINNED". This is a TRIPWIRE FOR THE EXACT DELETED
+# SHAPE, not a proof of the property. It is a contiguous-string grep over a multi-line command
+# language, and an implementation-round adversary MEASURED two evasions that keep it 18/18 GREEN over
+# a fully reinstated, MECH-rerouting RBAC probe:
+#     (a) LINE-WRAPPED --  k_can_i ... auth can-i \<newline>  get applications.argoproj.io ...
+#         (not exotic: the code this replaced was ITSELF line-wrapped)
+#     (b) VARIABLE-HELD -- _verb="get applications.argoproj.io"; k_can_i auth can-i $_verb ...
+# VERBATIM reinstatement DOES go red (16/2), so the gate has a real, demonstrated RED — its coverage
+# is simply narrower than the word "pins" implies, and that word was mine.
+#
+# DO NOT chase those evasions with a cleverer regex. A scan gate over shell has an open bypass corpus;
+# the honest form is to declare the blind spots and stop, which is what this block now does. The
+# property itself is guarded by the SECOND case below (the branch must be unconditional) plus the
+# implementation round, not by this string match.
+#
+# THE DEFECT THIS TRIPS ON, measured on certification row 5 (2026-08-18): the api-path readback was
 # SELECTED by `kubectl auth can-i get applications.argoproj.io`. That is a PURE RBAC question, and
 # when the resource type is not served at all kubectl WARNS to stderr and answers `yes` — measured
 # against an apiserver with no argoproj.io group, using this repo's pinned kubectl 1.36.3. k_can_i
