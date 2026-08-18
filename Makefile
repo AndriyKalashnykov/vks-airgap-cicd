@@ -45,8 +45,14 @@
 # Step 1 of docs/scenario-1.md, on the first command a new operator ever types, with every tool
 # sitting on disk. `deps-mise` (below) already resolved mise this way; this line did not.
 #
-# NO `tr`: photon:5.0 does NOT ship coreutils, and 00-install-prereqs.sh does not install it — `tr`
-# arrives only as an unpinned side effect of installing podman/docker. Measured: with the engine
+# NO `tr`: photon:5.0 does NOT ship coreutils (measured 2026-08-18 — `install` there is a symlink to
+# /usr/bin/toybox). ⚠️ CORRECTED 2026-08-18: this used to add "and 00-install-prereqs.sh does not
+# install it", which is FALSE — `:88` DOES (`pkg_install ... coreutils ...`). The decision stands for a
+# STRONGER reason: this file is PARSED BEFORE `make deps` can run that script, so at Makefile-parse
+# time on a bare box `tr` is absent no matter what deps would later install. (The old wording also
+# mattered beyond this line: it is the comment a future session consults when deciding whether GNU
+# `install` can be assumed — and assuming it silently no-ops `install -d -m` on toybox, see B174.)
+# Measured: with the engine
 # packages absent, a `| tr` form still left helm/yq/crane unreachable AND printed
 # `tr: command not found` on every single make invocation. $(shell) already collapses newlines to
 # spaces, so $(subst) joins them with zero processes and works on any box.
