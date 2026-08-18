@@ -224,6 +224,57 @@ for v in "${UNCOMMENTED[@]}"; do
     log_error "    override LOSES. Comment it out (document the default in the comment)."
     rc=1
   fi
+
+  # (d) BOOLEAN TOGGLE — read anywhere as ${V:-0|1|true|false}.
+  #
+  # WHY A FOURTH ARM. Arms (a)/(a2)/(b) key on a DYNAMIC fallback or an override INVOCATION, and a
+  # security toggle usually has neither: it is read as a STATIC `${V:-0}` and switched by an env
+  # prefix. MEASURED by uncommenting each of the repo's nine documented-as-commented weakening
+  # toggles in isolation against this gate BEFORE this arm existed:
+  #     SHOW_SECRETS  ARGOCD_REGISTER_INSECURE  ALLOW_PUBLIC_CHARTS
+  #     ENGINE_SKIP_CA_RED  BUNDLE_SKIP_STATIC_CHECK          -> rc=0, ALL FIVE MISSED
+  #     HARBOR_INSECURE  ARGOCD_INSECURE  SKIP_DOTENV
+  #     VKS_INSECURE_SKIP_TLS_VERIFY                          -> rc=1, caught INCIDENTALLY
+  # The four that were caught are caught by accident of invocation shape, not by design — e.g.
+  # VKS_INSECURE_SKIP_TLS_VERIFY fires arm (b2) only because 31-fetch-argocd-kubeconfig.sh happens
+  # to contain an env-prefix line. ENGINE_SKIP_CA_RED's own comment in .env.example states the
+  # hazard verbatim ("would CLOBBER a per-run ... and, worse, silently disable the check for
+  # everyone") and was unenforced.
+  #
+  # WHY THIS SHAPE AND NOT THE OBVIOUS ONE. "Flag every uncommented var read as ${V:-<literal>}"
+  # was MEASURED at 32 of 57 flagged, 31 of them ordinary defaulting (GITEA_NAMESPACE, PSA_LEVEL_*,
+  # ISTIO_VERSION ...) -> 97% false-RED. The static-fallback shape is the NORMAL shape and does not
+  # discriminate. Narrowing the default to a BOOLEAN LITERAL measures 0 of 56 on the pristine file
+  # while still firing on 8 of the 9 toggles (the 9th reads `is_true "${V:-}"`, already caught by
+  # (b2)). DERIVED, so it does not rot as toggles are added — which is the whole point, since the
+  # five misses above are exactly enumerated-list rot in its live form.
+  #
+  # ⚠️ THE REMEDY IS "COMMENT IT OUT", AND DELIBERATELY NOT "add it to load_env's snapshot list".
+  # That second option is REFUTED BY MEASUREMENT and would silently disable this arm. load_env's
+  # loop is `if [ -n "${!_sel:-}" ]` — it restores a value the CALLER already set. The threat here
+  # is the INVERSE: the caller sets NOTHING and the FILE arms the flag. Measured with .env.example
+  # carrying SHOW_SECRETS=1 and the caller unset, the effective value is '1' with the snapshot and
+  # '1' without it — zero discrimination — while `is_protected` would then print an `ok ... a
+  # per-run override survives` line over the very line that armed the leak. The correct pattern for
+  # a security toggle is creds.sh's: read it from the PRE-load_env environment and honour only that.
+  #
+  # KNOWN, DISCLOSED SCOPE: a toggle written ${V:-no} / ${V:-off} / [ "$V" = yes ] is MISSED. The
+  # rot direction is a false NEGATIVE, not a false RED, and with 0/56 measured headroom adding
+  # literals here is cheap.
+  tog="$(grep -rlE '\$\{'"${v}"':-(0|1|true|false)\}' "${REPO_ROOT}/scripts" "${REPO_ROOT}/Makefile" 2>/dev/null \
+           | xargs -r -n1 basename | tr '\n' ' ')"
+  if [ -n "$tog" ]; then
+    log_error "CLOBBER: '${v}' is UNCOMMENTED in .env.example, and it is a BOOLEAN TOGGLE"
+    log_error "    read as \${${v}:-<default>} in: ${tog}"
+    log_error "    load_env sources .env.example with 'set -a' AFTER the caller's environment is"
+    log_error "    established, so this line becomes the EFFECTIVE value for every run — including"
+    log_error "    runs where nobody asked for it. For a toggle that WEAKENS something, that is a"
+    log_error "    permanent, invisible change of default."
+    log_error "    Fix: COMMENT IT OUT and document the default in the comment. Do NOT add it to"
+    log_error "    load_env's snapshot list — that restores only a value the CALLER set, so it is a"
+    log_error "    measured no-op here and would make this gate assert safety over the armed line."
+    rc=1
+  fi
 done
 
 if [ "$rc" -eq 0 ]; then
