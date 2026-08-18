@@ -601,7 +601,7 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-17 — run 5b: the harness verdict is **MATRIX FAILED**. 4 of 6 green, rows 5+6 red
+## ▶️ HANDOFF 2026-08-18 — run 6: **5 of 6 GREEN**. Rows 5 AND 6 are green for the FIRST TIME; row 3 failed on a transient OUTSIDE the tree
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
@@ -613,67 +613,89 @@ run on throwaway Photon and Ubuntu VMs. **All six rows green FROM THE FIRST GO**
 over the FINAL tree passing on its FIRST pass. Every fix resets that clock. Verify `creds-show`
 endpoints and logins after every lab cut, driving Chrome where an HTTP probe is not proof.
 
-### Run 5b — `run-20260817T111000Z-2933129` — READ THE VERDICT FILE, NOT A SUMMARY
+### Run 6 — `run-20260818T110322Z-3616190` — 07:03→10:25 EDT, tree FROZEN at `ef5e12b` throughout
 
 ```text
-MATRIX FAILED (6 of 6 designed rows requested) — row(s) 5 6 (scenario-2; did not gate
-the rebuild) did not complete  (14:34:19Z)
+MATRIX FAILED (6 of 6 designed rows requested) — row(s) 3 did not complete  (14:25:27Z)
 ```
 
-⚠️ **A previous version of this handoff said "run 5b COMPLETE" and listed rows 3/4/6 as still
-walking. Both were wrong** — cut B finished, and the authoritative artifact says FAILED. All six
-rows DO reach `WALK DONE`, so "did not complete" is the harness's wording for *did not complete
-successfully*; it is not a claim that a row never ran. Per row, from each log's own lines:
+| row | OS | scen | blocks | FAILED | UNMET | MASKED | |
+|---|---|---|---|---|---|---|---|
+| 1 | ubuntu | s1 | 42: 35 ran | **0** | **0** | 4 | GREEN |
+| 2 | photon | s1 | 42: 30 ran | **0** | **0** | 5 | GREEN |
+| 4 | ubuntu | s1 | 42: 30 ran | **0** | **0** | 5 | GREEN |
+| 5 | photon | s2 | 27: 18 ran | **0** | **0** | 0 | GREEN |
+| 6 | ubuntu | s2 | 27: 18 ran | **0** | **0** | 0 | GREEN |
+| 3 | photon | s1 | 42: 35 ran | **3** | **1** | 4 | RED |
 
-| row | OS | scen | blocks | FAILED | UNMET | |
-|---|---|---|---|---|---|---|
-| 1 | ubuntu | s1 | 41: 34 ran, 7 skipped | **0** | **0** | GREEN |
-| 2 | photon | s1 | 41: 29 ran, 12 skipped | **0** | **0** | GREEN |
-| 3 | photon | s1 | 41: 34 ran, 7 skipped | **0** | **0** | GREEN |
-| 4 | ubuntu | s1 | 41: 29 ran, 12 skipped | **0** | **0** | GREEN |
-| 5 | photon | s2 | 25: 17 ran, 8 skipped | **1** | 0 | RED |
-| 6 | ubuntu | s2 | 25: 17 ran, 8 skipped | **4** | **1** | RED |
+**THE MILESTONE: rows 5 and 6 — both scenario-2 cells — are GREEN, and both are firsts.** Run 5b had
+both RED with the identical `STALE_CA` signature (×3 each). The cross-repo fix (nvl #77's insecure
+fallback) is now proven end-to-end on **both** operating systems. Every previous run either never
+reached the tenant path or failed it.
 
-**All four scenario-1 cells passed first-pass over the fixed tree** — that is the real result, and
-it is the first time both OSes have gone green in the same run.
+**Row 3's cause is OUTSIDE the tree, and row 4 is the experiment that settles it.** Row 3's box
+pulled 33 MB at 13:10Z and FATAL'd on the same probe at 13:27Z; row 4 — same lab, same document,
+same commands — then cleared that identical probe and mirrored all 24 images clean. The signature
+appears in **no other log** in the run, and run 5b's row 3 had zero of it. Its 3 failures are ONE
+chain: `install-all` → nothing installed → `install-ingress` fails → `verify-ingress` fails + its
+UNMET. **Not a document defect, not a code defect.**
 
-**F9 reproduced IDENTICALLY on both scenario-2 rows** (`STALE_CA` ×3 in each). But do NOT read the
-two rows as symmetric: row 6 carries **three further failures and an unmet Expect** that row 5 does
-not. Row 5's single failure is block `[24] make install-all` → `configure-argocd`, rc=1 after
-1133 s, `argocd-server (effective): 192.168.101.133`.
+So the first-go rule is **not met (5/6)** while **the tree is not implicated**. That distinction is
+the open decision below, and it is the owner's.
 
-### What actually fixes rows 5+6 — and it is NOT #745
+### THE OPEN DECISION (owner's, not the agent's)
 
-`B148` records the correction: **#745 will not green these rows.** Their cause is in the OTHER repo —
-`nested-vsphere-lab/scripts/walk-matrix.sh` supplied `ARGOCD_SERVER=<IP>` and then pinned the
-server's own chain as the CLI's CA, constructing the one combination that can never verify (no IP
-SAN). ⚠️ **nvl #75 is MERGED but its entire diff is `docs/BACKLOG.md +1/-0` — it RECORDS that
-diagnosis and changes NO CODE. `walk-matrix.sh` is untouched, so rows 5+6 remain blocked on a fix
-nobody has written yet.** (Verified 2026-08-17. An earlier version of this handoff listed #75 among
-the session's fixes, which is how "the cause is merged" came to read as "the cause is fixed" — the
-task list carried the correct wording and this file did not.) #745 is the doc + discriminator half
-in this repo, and it **MERGED** at 17:29Z.
+Row 3's transient means a re-cut would likely go 6/6 — but a **row-3-only** re-run is the trap the
+harness itself documents: the lab holds the last cell, so a partial re-run measures a different
+starting state than the row was designed for. The three options are (A) full six-row re-cut,
+(B) `WALK_ROWS="3"` against a rebuilt cell, (C) accept 5/6 on the measured evidence that row 3's
+cause is external. **Nobody should pick (B) without re-reading the cell-state note in
+`walk-matrix.sh`.**
 
-Lab-verified on cut B, on the real server: the cert is self-signed with
-`DNS:localhost, DNS:argocd-server, DNS:argocd-server.cicd, …` and **no IP SAN**; the bare IP with the
-correct CA fails, the bare SAN `argocd-server` with the same CA returns **200**, and with no CA it
-fails *self-signed certificate*. So the CA is **required**, not optional.
+### Coverage fact worth keeping
 
-### The outage is OVER and the queue is EMPTY — verified 2026-08-17
+Rows 1+3 are identical at **22 CHECKABLE / 4 MASKED**; rows 2+4 identical at **18 / 5** — across
+*different operating systems*. **The OS contributes nothing to Expect coverage**; all variation is
+which cell ran. That independently confirms `walk-doc.sh:745-753`'s own argument for **not**
+ratcheting the MASKED count ("varies by CELL, not by document quality"). The masked claims decompose
+**3 structural + 3 cell-specific**, which reconciles 4-vs-5 exactly.
 
-**Every PR this section used to list as outage-blocked is MERGED**: #741 (trivy), #745 (F9
-doc+discriminator), #750 (B148 lab-verified), #751 (`changes` via `git diff`), #752 (`neutralize()`
-per-arm reasons), #753 (`make argocd-auth-check`), #770, #773, #774, plus nvl #75 (docs only — see
-above) and nvl #76 (walk log permissions; 13 credential-bearing logs were world-readable). `main` is
-at `ce3af21`. **Open right now: #775 only** (the B26 lab measurement), and **zero** open in
-nested-vsphere-lab.
+### Three adversary rounds ran in parallel with the matrix, and each refuted part of my framing
 
-Two things worth carrying forward from the outage rather than forgetting with it. **GraphQL and REST
-are separate paths**: `gh pr merge` was 503 for hours while `gh api -X PUT .../pulls/N/merge`
-worked — reach for REST before concluding you are blocked. And the fail-closed gates it exposed were
-**working**: `KUBECONFORM_REQUIRE_SCHEMAS=1` and `GWAPI_REQUIRE_FETCH=1` reddened those PRs on a
-jsdelivr 000 and a rate-limited `raw.githubusercontent` fetch, which is the behaviour they exist for.
-Do **not** weaken them to get green.
+- **B133 (CRITICAL, confirmed and current)** — but my premise was **3/4 wrong** (named a file that
+  does not exist in this repo, a second file that does not transmit the credential, and missed that
+  the handling is already argv-safe). **The lockout fear is REFUTED BY ORACLE**: a wrong-CA arm sends
+  **zero** credentials, because TLS aborts before the request exists. A fail-closed fix is an
+  *availability* decision, not a safety one. **NEW HIGH the row never mentions:** `wcp-service.sh:48`
+  re-authenticates ≤60× per `make wcp-restart` **and** swallows the 401 (`>/dev/null 2>&1` on a call
+  whose `die` is `exit 1`) — the only *measured* lockout path, in current code, and not blocked on
+  either owner decision.
+- **B166** — my (i)+(ii)+(iii) **refuted as a package**. The control I wanted to hoist is measurably
+  **BLIND** (`CHECKED=0`: it builds its Supervisor pair only when `VKS_CA_CERT_FILE` is set, and
+  `.env.example` ships it commented), and (iii) would **exit 1 on a correct walk**. **Land instead:
+  one line per file** — `vks_ca_default` before `ca_status_report` in `29-ca-status.sh` and
+  `24-lab-preflight.sh`. **F5: a THIRD (ArgoCD) CA pair would have diagnosed rows 5+6.**
+- **B180** — my "not load" call **held and is now measured** (even SIGSTOP yields rc 2, never rc 4),
+  but my `.env.example`-clobber attribution is **refuted outright** (there is no line to comment),
+  and **the row mis-reads its own evidence**: rc 4 means *connected to a non-TLS listener*, not
+  *never connected*. Its own `stress`-based RED-proof is structurally incapable of reproducing it.
+
+### Item 5 — settled, with two of my own instruments caught lying
+
+Credentials are proven by the **mirror push** (24 images × 3 rows — you cannot push 24 images without
+authenticating) and by `argocd-auth-check` issuing a **real session token** in-walk. The Chrome half
+is closed by a **two-arm headless test under a throwaway `HOME`** (the operator's trust store never
+opened): control → `ERR_CERT_AUTHORITY_INVALID`; with the CA imported → `<title>Harbor</title>`, the
+real UI. So endpoint, cert and shipped CA are all **correct**; the sole defect is that `CN=Harbor CA`
+is in **no** trust store — an operator action, deliberately not taken here.
+
+⚠️ **Two instrument failures, both caught before being reported as findings.** A first extractor
+printed `user=https://harbor.env1.lab.test` — a username is not a URL; the `creds-show` row is
+`Harbor <URL> (extra; extra) admin <password>`, so the parentheticals shift the columns. And even
+corrected, `tail -1` picks an arbitrary row's credential — this run has **five distinct** Harbor
+credentials (the NOTHING cell mints a per-row `robot$vks-cicd`; the EVERYTHING cell uses `admin`;
+Harbor is reinstalled between cells). A host-side credential probe is only meaningful **after** the
+matrix completes.
 
 ### Distrust these
 
@@ -681,34 +703,29 @@ Do **not** weaken them to get green.
 - **A stale log will lie.** Cite the per-invocation `VERDICT-<runid>.txt`, never a fixed path, and
   read each row's `WALK DONE`/`DOCUMENT` lines plus the **"N of 6 designed rows"** denominator —
   never the exit code, never the completion notification.
-- **Do NOT edit `scripts/walk-matrix.sh` while a matrix runs.** bash reads a script incrementally;
-  rewriting it mid-run yields `unexpected EOF` that reads as a product bug.
-- **A PR runs TWO gate jobs, and NEITHER is the full `static-check` — that is why you still run it
-  locally.** Corrected 2026-08-17; this bullet used to say `static-check` "does not run per-PR",
-  which is false. Read it off `ci.yml` rather than from memory — the line is
-  `run: make ${{ github.event_name == 'schedule' && 'static-check' || 'static-check-pr' }}`:
-  - `static-check-fast` (**24** gates, not 23) — the alignment/doc/env checks, its own job, ~20s.
-  - `static-check` the JOB — runs per-PR whenever `changes.outputs.code == 'true'`, but invokes
-    **`static-check-pr`** = `lint validate app-test test-scripts-fast`. On the weekly **schedule**
-    the same job invokes the full `static-check` instead.
-  So what a PR never sees is **`sec`** (gitleaks + trivy-fs + trivy-config) and the six unit tests
-  that assert WALL-CLOCK by design. Hence: run `env -u GOROOT make static-check` locally before
-  every merge — and note the *step* is named `make static-check` while it usually runs
-  `static-check-pr`, so the CI log's step name is not evidence of which target ran.
-- **`/tmp/walk` was world-readable for 8 days** (now 0700, and fixed at the source in nvl #76). If
-  you cite a row log, remember 13 of them carried a live-at-capture admin password.
+- **"The log has not advanced" must be measured on the log's TAIL and its mtime**, never on a marker
+  whose cadence you have not read. I called row 4 "stalled" off a `[N/24]` grep that only logs on
+  *pull completion* while `pushed blob:` lines were flowing; row 4 finished GREEN, and on that false
+  reading I nearly revised a correct diagnosis.
+- **Do NOT edit `scripts/walk-matrix.sh` while a matrix runs** — bash reads a script incrementally.
+- **A PR runs TWO gate jobs, and NEITHER is the full `static-check`.** Read it off `ci.yml`:
+  `static-check-fast` (24 gates) and a `static-check` *job* that invokes **`static-check-pr`**
+  (`lint validate app-test test-scripts-fast`). What a PR never sees is **`sec`** and the six
+  wall-clock unit tests. Run `env -u GOROOT make static-check` locally before every merge.
 
 ### Blocked, and on what
 
-- **B133 (CRITICAL)** — the vCenter SSO **administrator** password goes to an unverified peer.
-  BLOCKED on one lab measurement (step 24 of `docs/lab-validation-plan.md`) and **two operator
-  decisions** named in the row. Its idea round refuted four of five specifics of the obvious fix.
-- **B145 (HIGH)** — the Expect checker truncates a multi-line paragraph to its first line; 26 of 43
-  paragraphs affected. **Land it only AFTER a run certifies the tree** — it will surface
+- **B133 (CRITICAL)** — the SSO administrator password to an unverified peer. Its *fix* is now
+  unblocked on safety grounds (the oracle above), but still needs the two owner decisions in the row.
+  The **`wcp-service.sh` HIGH is independent and can ship first.**
+- **B145** — the Expect checker truncates a multi-line paragraph to its first line (26 of 43
+  paragraphs affected). **Land only AFTER a run certifies the tree** — it will surface
   previously-invisible UNMETs.
 - **B153** — the redaction design was REFUTED (shape-keying misses 3 of 4 printers); the answer is
-  value-keyed at `walk-doc.sh:587` **plus** printer-side, because the ArgoCD initial password is
-  read fresh from a Secret and never lands in a file the harness holds.
+  value-keyed at `walk-doc.sh:587` **plus** printer-side, because the ArgoCD initial password is read
+  fresh from a Secret and never lands in a file the harness holds.
+- **B166/B179/B180** — all three now carry their rounds' findings in `BACKLOG.md`. B179's *and*
+  B179a's fixes are both **refuted**; do not rebuild either.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
