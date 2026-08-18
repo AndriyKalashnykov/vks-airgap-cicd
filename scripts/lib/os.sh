@@ -1264,6 +1264,9 @@ $(head -3 "$file" 2>/dev/null | sed 's/^/    /')"
 # and the undifferentiated "failed to download <url>" gave the operator none of it.
 _http_fail_hint() {
   case "$1" in
+    # ⚠️ UNREACHABLE from http_get_retry today (MEASURED): the budget is checked at the TOP of
+    # each iteration, so at i=1 elapsed=0 and one attempt always runs, always setting last_code.
+    # Kept as a guard for a future caller that pre-checks a budget; it is not dead by accident.
     none) printf 'no request completed — the time budget expired before an attempt finished' ;;
     000)  printf 'HTTP 000 (curl rc %s) — NO response at all: DNS, no route, refused, or a timeout. This is THIS BOX, not the server' "$2" ;;
     4*)   printf 'HTTP %s (curl rc %s) — the server ANSWERED and refused: a filtering proxy, an expired credential, or a moved artifact. Not a connectivity fault, so retrying will not help' "$1" "$2" ;;
@@ -1329,6 +1332,13 @@ http_get_retry() {
     fi
     # Remember the LAST failure, not the first: a 000 that becomes a 403 on retry means the box
     # got a route and then hit a filter, and the second fact is the actionable one.
+    # ⚠️ curl's stdout is LOAD-BEARING here, and a ~/.curlrc can contaminate it: with
+    # `dump-header = -` the capture becomes a multi-line header dump (MEASURED). Do NOT "fix" that
+    # with `-q` — that would also disable a .curlrc an operator legitimately uses for a corporate
+    # proxy, which is live configuration on exactly the boxes this runs on. Bound it instead: a
+    # non-numeric value stays UN-BUCKETABLE (it falls to the `*)` arm and is printed as-is) but
+    # cannot flood the die.
+    case "$_code" in ''|*[!0-9]*) _code="$(printf '%.24s' "$_code" | tr -d '\n')" ;; esac
     last_code="${_code:-000}"; last_rc="$_rc"
     if [ "$i" -lt "$attempts" ]; then
       now=$(date +%s); elapsed=$(( now - started ))

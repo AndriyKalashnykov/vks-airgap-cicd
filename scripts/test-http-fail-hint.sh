@@ -36,15 +36,15 @@ ck(){ if eval "$2"; then printf '  PASS  %s\n' "$1"; pass=$((pass+1)); else prin
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 
 echo "--- the PURE hint function: each bucket must say WHOSE problem it is ---"
-ck "none  -> names the budget, not a status"      '[ -n "$(_http_fail_hint none none)" ] && _http_fail_hint none none | grep -q "budget"'
-ck "000   -> says NO response at all"             '_http_fail_hint 000 7  | grep -q "NO response at all"'
-ck "000   -> blames THIS BOX (actionable)"        '_http_fail_hint 000 7  | grep -q "THIS BOX"'
-ck "403   -> says the server ANSWERED"            '_http_fail_hint 403 22 | grep -q "ANSWERED and refused"'
-ck "403   -> says retrying will not help"         '_http_fail_hint 403 22 | grep -q "retrying will not help"'
+ck "none  -> names the budget, not a status"      '[ -n "$(_http_fail_hint none none)" ] && grep -q "budget" <<< "$(_http_fail_hint none none)"'
+ck "000   -> says NO response at all"             'grep -q "NO response at all" <<< "$(_http_fail_hint 000 7)"'
+ck "000   -> blames THIS BOX (actionable)"        'grep -q "THIS BOX" <<< "$(_http_fail_hint 000 7)"'
+ck "403   -> says the server ANSWERED"            'grep -q "ANSWERED and refused" <<< "$(_http_fail_hint 403 22)"'
+ck "403   -> says retrying will not help"         'grep -q "retrying will not help" <<< "$(_http_fail_hint 403 22)"'
 ck "404   -> same 4xx bucket as 403"              '[ "$(_http_fail_hint 404 22)" = "$(_http_fail_hint 403 22 | sed s/403/404/)" ]'
-ck "502   -> Upstream, usually transient"         '_http_fail_hint 502 22 | grep -q "Upstream"'
-ck "301   -> falls through, still names the code" '_http_fail_hint 301 0  | grep -q "HTTP 301"'
-ck "every bucket carries the curl rc"             '_http_fail_hint 404 22 | grep -q "curl rc 22"'
+ck "502   -> Upstream, usually transient"         'grep -q "Upstream" <<< "$(_http_fail_hint 502 22)"'
+ck "301   -> falls through, still names the code" 'grep -q "HTTP 301" <<< "$(_http_fail_hint 301 0)"'
+ck "every bucket carries the curl rc"             'grep -q "curl rc 22" <<< "$(_http_fail_hint 404 22)"'
 
 echo "--- the DISCRIMINATOR: 000 and 4xx must not produce the same sentence ---"
 ck "000 != 403 (they are different actions)"      '[ "$(_http_fail_hint 000 7)" != "$(_http_fail_hint 403 22)" ]'
@@ -68,6 +68,34 @@ ck "file:// SUCCESS actually wrote the body"      'grep -q hello "$T/dst"'
 ( eval "$FAST" 'http_get_retry "file://$T/absent" "$T/dst2"' ) >"$T/miss.log" 2>&1 && rc=0 || rc=$?
 ck "file:// MISSING dies"                         '[ "'"$rc"'" -ne 0 ]'
 ck "...naming a status rather than nothing"       'grep -qE "HTTP (000|[0-9]{3})" "$T/miss.log"'
+
+echo "--- the WIRING: a real status must reach the die (HIGH-1 from the implementation round) ---"
+# ⚠️ WHY THIS SECTION EXISTS. Every end-to-end case above has a TRUE status of 000 (a refused port,
+# two file:// URLs), so the 4xx/5xx buckets were exercised only against the PURE function — which is
+# trivially correct. MEASURED by the round: with `-w %{http_code}` DELETED FROM CURL ENTIRELY, and
+# again with `last_code` hardcoded to 000, this suite scored 20/20 GREEN. The whole feature could be
+# removed and the gate certified it. These cases pin the CAPTURE, using the `curl()` shell-function
+# stub idiom the sibling test-require-internet.sh:69 already uses — hermetic, so the header's
+# "no python3 on the bare Photon floor" reason for avoiding a server does not apply here either.
+for _c in 403 404 502 418; do
+  ( eval "$FAST"
+    # shellcheck disable=SC2317  # invoked indirectly, by http_get_retry
+    # The stub HONOURS -w the way real curl does: no -w, no status on stdout. Without this the
+    # stub prints the code regardless of argv, so DELETING `-w '%{http_code}'` from the real
+    # invocation is undetectable — measured: that mutation scored 0 RED until this case matched
+    # on the flag. The stub must model the thing under test, not just its happy output.
+    curl() { case "$*" in *'%{http_code}'*) printf '%s' "$_c" ;; esac; return 22; }
+    http_get_retry "http://stub.invalid/x" "$T/stub" ) >"$T/stub.log" 2>&1 || true
+  ck "a real HTTP $_c reaches the die (not just the pure function)" \
+     'grep -q "HTTP '"$_c"'" "$T/stub.log"'
+done
+# And the bucket must follow the captured code, not a constant.
+( eval "$FAST"
+  # shellcheck disable=SC2317
+  curl() { case "$*" in *'%{http_code}'*) printf '502' ;; esac; return 22; }
+  http_get_retry "http://stub.invalid/x" "$T/stub" ) >"$T/b5.log" 2>&1 || true
+ck "...and a 5xx is bucketed as UPSTREAM, not as the operator's box" 'grep -q "Upstream" "$T/b5.log"'
+ck "...and is NOT bucketed as THIS BOX"                              '! grep -q "THIS BOX" "$T/b5.log"'
 
 printf '\n  %s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 [ "$fail" -eq 0 ]
