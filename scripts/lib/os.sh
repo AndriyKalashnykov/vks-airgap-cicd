@@ -374,15 +374,31 @@ container_engine() {
 
 # require_cmd cmd [human hint] — fail fast with an actionable message.
 require_cmd() {
-  # VARIADIC. It was `local cmd="$1" hint="${2:-…}"`, so `require_cmd jq curl kubectl` checked ONLY
-  # jq, silently turned "curl" into the hint string and discarded "kubectl" — measured: with a PATH
-  # holding only jq it returned SUCCESS while curl and kubectl were absent, and a missing jq printed
-  # `required command 'jq' not found — curl`. SEVEN callers in this tree used the multi-arg form and
-  # every one of them was checking a single command; making the function variadic fixes them all
-  # rather than editing seven call sites and hoping the eighth remembers.
-  local cmd
-  for cmd in "$@"; do
-    have "$cmd" || die "required command '${cmd}' not found — install it (see 'make deps') and re-run."
+  # BOTH FORMS, because BOTH are in real use — measured across scripts/: 64 single-arg call sites,
+  # 21 that pass `<cmd> "<hint>"`, and ~8 that pass several BARE command names.
+  #
+  # It was originally `local cmd="$1" hint="${2:-…}"`, so `require_cmd jq curl kubectl` checked ONLY
+  # jq, silently turned "curl" into the hint and discarded "kubectl" — measured: with a PATH holding
+  # only jq it returned SUCCESS while curl and kubectl were absent.
+  #
+  # ⚠️ The fix for that was a plain `for cmd in "$@"`, and its comment claimed "SEVEN callers … every
+  # one of them was checking a single command". THAT PREMISE WAS FALSE and it broke 21 sites: the
+  # HINT was then checked as if it were a command, so `require_cmd vcf "install the VCF CLI (make
+  # install-vcf-clis) on this jump box"` FATAL'd with
+  #     required command 'install the VCF CLI (make install-vcf-clis) on this jump box' not found
+  # on a box where vcf was installed and working. MEASURED on a live lab: it killed `make vks-login`
+  # at scenario-1 Step 3 and cascaded to every downstream block of the walk.
+  #
+  # THE DISCRIMINATOR IS WHITESPACE: no command name contains a space, and all 21 hints do. So an
+  # argument containing whitespace is the HINT for the command that precedes it — never a command.
+  # A single-WORD hint would be misread as a command; there are none today, and this comment is the
+  # contract that keeps it that way.
+  local cmd hint
+  while [ $# -gt 0 ]; do
+    cmd="$1"; shift
+    hint=""
+    case "${1:-}" in *[[:space:]]*) hint="$1"; shift ;; esac
+    have "$cmd" || die "required command '${cmd}' not found — ${hint:-install it (see 'make deps') and re-run.}"
   done
 }
 
