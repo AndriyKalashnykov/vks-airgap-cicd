@@ -9,6 +9,17 @@
 #
 # Hermetic: a throwaway git repo with a commit at a KNOWN committer epoch; synthetic PreToolUse JSON.
 set -uo pipefail
+# ⚠️ A GATE'S TEST MUST NOT RUN WITH THE GATE'S OWN KILL-SWITCH IN THE ENVIRONMENT. With
+# ADVERSARY_GATE_OFF=1 exported, the hook ALLOWS everything, so every "must BLOCK" case fails
+# `rc=0 want 2` and this script prints "re-arm gate has a hole" — naming a cause it never
+# established, which is exactly the class of defect the rest of this suite exists to catch.
+# MEASURED 2026-08-17: an operator shell that had used the documented override for one commit
+# then read a clean gate as broken. Unset it for the duration; say so rather than doing it silently.
+if [ -n "${ADVERSARY_GATE_OFF:-}" ]; then
+  printf '  note: ADVERSARY_GATE_OFF was set in the environment; unsetting it for this run\n'
+  printf '        (with it set the hook allows everything and every BLOCK case would "fail")\n'
+  unset ADVERSARY_GATE_OFF
+fi
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 HOOK="${HOOK_UNDER_TEST:-.claude/hooks/adversary-first-gate.py}"

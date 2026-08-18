@@ -497,6 +497,7 @@ argocd_await_revision() {
   local _kc="${ARGOCD_KUBECONFIG:-${KUBECONFIG:-<unset>}}"
   local _url="${GITEA_ARGOCD_URL:-<unset>}" _org="${GITEA_ORG:-<unset>}"
   local _pre_rev="" _pre_rec="" _rec="" _tried=0 _fresh=0 _rec_rc=0 _cerr="" _sst=""
+  local _ff_err="" _ff_state=unknown
 
   # Validate BEFORE the `:-` default, or an EMPTY value silently takes the default and the guard's
   # own '' arm is unreachable — while empty was the OLD code's actual trigger (`seq 1 ""` = zero
@@ -509,6 +510,7 @@ argocd_await_revision() {
   _rd_err="$(mktemp)" || die "could not create a temp file for kubectl's stderr (TMPDIR=${TMPDIR:-/tmp} full or read-only?)"
   _ce_err="$(mktemp)" || { rm -f "$_rd_err"; die "could not create a temp file (TMPDIR=${TMPDIR:-/tmp})"; }
   _an_err="$(mktemp)" || { rm -f "$_rd_err" "$_ce_err"; die "could not create a temp file (TMPDIR=${TMPDIR:-/tmp})"; }
+  _ff_err="$(mktemp)" || { rm -f "$_rd_err" "$_ce_err" "$_an_err"; die "could not create a temp file (TMPDIR=${TMPDIR:-/tmp})"; }
   # EXIT as well as RETURN: `die` is `exit 1` (lib/os.sh), and a RETURN trap does NOT fire on exit —
   # measured, the temp files survived. The previous comment claimed RETURN "covers every exit path
   # including the die's", which was false.
@@ -517,8 +519,8 @@ argocd_await_revision() {
   # `make gitops` leaked a mktemp -d plus its own captures, ending with an unbound-variable error
   # because the trap body referenced locals that were out of scope by then. MEASURED. `die` is
   # `exit 1`, which a RETURN trap does not catch, so each die does its own rm -f explicitly.
-  trap 'rm -f "$_rd_err" "$_ce_err" "$_an_err"' RETURN
-  _await_cleanup() { rm -f "$_rd_err" "$_ce_err" "$_an_err" 2>/dev/null || true; }
+  trap 'rm -f "$_rd_err" "$_ce_err" "$_an_err" "$_ff_err"' RETURN
+  _await_cleanup() { rm -f "$_rd_err" "$_ce_err" "$_an_err" "$_ff_err" 2>/dev/null || true; }
 
   _await_read() {
     _rd_rc=0
@@ -533,11 +535,34 @@ argocd_await_revision() {
   }
   # THE FETCH-SUCCESS SIGNAL. reconciledAt answers "did it reconcile"; this answers "did the FETCH
   # succeed", and only the two together mean anything — see the block above the loop.
-  _await_fetch_failed() {
+  # ⚠️ THIS SETS A NAMED STATE AND ALWAYS RETURNS 0 — it does NOT encode the verdict in its exit
+  # code, and that is load-bearing, not style. This file has NO `set` line of its own: it inherits
+  # the caller, and scripts/70-configure-argocd.sh:21 is `set -euo pipefail`, so `set -e` is LIVE.
+  # A tri-state-by-exit-code predicate called BARE (`f; st=$?`) would trip `set -e` on the arm that
+  # returns non-zero — which for "fetch OK" is the HEALTHY path, so the run would die on the first
+  # iteration of a good gitops flow, silently. MEASURED under real `set -euo pipefail`.
+  #
+  # The previous form read both signals with `2>/dev/null || true`, so a silently-FAILED read gave
+  # two empty strings, the predicate was FALSE, `! _await_fetch_failed` was TRUE, and the freshness
+  # gate PASSED — a false green inside the gate that exists to prevent false greens. REPRODUCED
+  # against the real function with a Forbidden-returning stub: it printed "the repo is reachable
+  # NOW" and exited 0. So the reads capture rc per command, and an unreadable signal is `unknown`,
+  # never silently "not failed". (Same lesson as _await_reconciled 15 lines up, which already had it.)
+  #
+  # `unknown` is a NAME, not the exit code 2, deliberately: a future `if _await_fetch_state; then`
+  # would map rc=2 to the else-arm and restore exactly this false green, whereas an unset/misspelled
+  # name errors loudly under `set -u`. Out-params are also this function's own convention
+  # (_rd_rc/_rec_rc/_ce_rc).
+  _await_fetch_state() {                      # sets _ff_state=ok|failed|unknown; ALWAYS returns 0
+    local r1=0 r2=0
     _cerr="$(ka -n "$_ns" get application "$app" \
-      -o jsonpath='{range .status.conditions[?(@.type=="ComparisonError")]}{.message}{end}' 2>/dev/null || true)"
-    _sst="$(ka -n "$_ns" get application "$app" -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
-    [ -n "$_cerr" ] || [ "$_sst" = Unknown ]
+      -o jsonpath='{range .status.conditions[?(@.type=="ComparisonError")]}{.message}{end}' 2>"$_ff_err")" || r1=$?
+    _sst="$(ka -n "$_ns" get application "$app" -o jsonpath='{.status.sync.status}' 2>"$_ff_err")" || r2=$?
+    if   [ "$r1" -ne 0 ] || [ "$r2" -ne 0 ];       then _ff_state=unknown
+    elif [ -n "$_cerr" ] || [ "$_sst" = Unknown ]; then _ff_state=failed
+    else                                                _ff_state=ok
+    fi
+    return 0
   }
   _await_read_failed() {
     log_error "could not READ Application '${app}' — this says NOTHING about whether the repo is reachable."
@@ -603,15 +628,33 @@ argocd_await_revision() {
     # oracle would be sound; our own forced refresh switches the protection off.
     # So freshness needs BOTH: it reconciled (reconciledAt advanced) AND the fetch succeeded
     # (no ComparisonError, sync.status != Unknown). Neither alone is sufficient.
+    _await_fetch_state
     if [ -n "$rev" ] && [ "$_rec_rc" -eq 0 ] && [ -n "$_rec" ] && [ "$_rec" != "$_pre_rec" ] \
-       && ! _await_fetch_failed; then _fresh=1; break; fi
+       && [ "$_ff_state" = ok ]; then _fresh=1; break; fi
   done
 
   if [ "$_fresh" -ne 1 ]; then
     # DISTINGUISH the two failures. Resetting _rec inside the loop destroyed exactly the value
     # needed to tell them apart, so a STALE revision was reported as an EMPTY one — the wrong
     # diagnosis, in the check whose entire purpose is not to give the wrong diagnosis.
-    if _await_fetch_failed; then
+    # RECOMPUTE rather than reuse the loop's value: this helper re-reads, so a stale _ff_state
+    # would report a signal from a previous iteration.
+    _await_fetch_state
+    if [ "$_ff_state" = unknown ]; then
+      # A READ FAULT IS NOT EVIDENCE ABOUT THE REPO. This arm deliberately precedes the others: an
+      # unreadable signal masks the "did NOT re-reconcile" diagnosis, which is correct — we cannot
+      # claim an Application state we failed to read. Nothing here mentions the repo.
+      log_error "could not READ the fetch signal for Application '${app}' (${_tried} attempts) —"
+      log_error "  so this run obtained NO evidence either way about the repo. kubectl said:"
+      sed 's/^/    /' "$_ff_err" >&2 2>/dev/null || true
+    elif [ "$_rec_rc" -ne 0 ]; then
+      # Same class, one line away, and it was unreported: _rec_rc was captured but never surfaced,
+      # so a FAILED reconciledAt read was mislabelled "reconciledAt never advanced past <none>" —
+      # an Application-state claim manufactured from a read fault.
+      log_error "could not READ reconciledAt for Application '${app}' (${_tried} attempts) —"
+      log_error "  that is a READ fault, not evidence the Application failed to reconcile. kubectl said:"
+      sed 's/^/    /' "$_ce_err" >&2 2>/dev/null || true
+    elif [ "$_ff_state" = failed ]; then
       log_error "Application '${app}' RECONCILED but the FETCH FAILED (${_tried} attempts)."
       log_error "  sync.status=${_sst:-<none>}   ComparisonError: ${_cerr:-<none>}"
       log_error "  reconciledAt DID advance, which on a forced refresh proves only that a comparison ran —"
@@ -638,10 +681,16 @@ argocd_await_revision() {
     else
       log_error "    (none — the Application reports NO conditions, so it is not complaining about the repo either)"
     fi
-    log_error "  A repo it cannot clone is ONE candidate; confirm it rather than assume it, from the repo-server itself:"
-    log_error "    kubectl -n ${_ns} exec deploy/argocd-repo-server -c repo-server -- \\"
-    log_error "      curl -s -o /dev/null -w '%{http_code}\\n' '${_url}/${_org}/${app}-deploy.git/info/refs?service=git-upload-pack'"
-    log_error "    200 => the repo IS reachable and the cause is elsewhere; anything else => GITEA_ARGOCD_URL is the fault."
+    # ⚠️ ONLY offer the repo-server probe when we actually READ the Application's state. On a READ
+    # fault we do not know whether it reconciled, let alone whether the repo is implicated, so
+    # sending the operator to curl Gitea is the same misdirection this whole check exists to stop —
+    # and it would be the ONE line in the read-fault arm that names the repo.
+    if [ "$_ff_state" != unknown ] && [ "$_rec_rc" -eq 0 ]; then
+      log_error "  A repo it cannot clone is ONE candidate; confirm it rather than assume it, from the repo-server itself:"
+      log_error "    kubectl -n ${_ns} exec deploy/argocd-repo-server -c repo-server -- \\"
+      log_error "      curl -s -o /dev/null -w '%{http_code}\\n' '${_url}/${_org}/${app}-deploy.git/info/refs?service=git-upload-pack'"
+      log_error "    200 => the repo IS reachable and the cause is elsewhere; anything else => GITEA_ARGOCD_URL is the fault."
+    fi
     _await_cleanup; die "ArgoCD produced no FRESH fetch — refusing to report success."
   fi
   log_info "  ${app}: ArgoCD re-reconciled after a forced refresh (reconciledAt ${_pre_rec:-<none>} -> ${_rec}) and reports revision ${rev} — the repo is reachable NOW"
