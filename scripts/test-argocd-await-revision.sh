@@ -81,13 +81,43 @@ run() {
           # indistinguishable from a healthy one, and the gate PASSED.
           case "$STUB_MODE" in
             signalfail) echo 'Error from server (Forbidden): applications.argoproj.io is forbidden: cannot get conditions' >&2; return 1 ;;
-            unreachable_real) printf 'rpc error: failed to get git client for repo http://this-host-does-not-exist.invalid:3000/demo/testapp-deploy.git' ;;
+            # ⚠️ THE PREFIX IS PART OF THE FIXTURE. state.go:698 is
+            #   msg := "Failed to load target state: " + err.Error()
+            # so real argo-cd NEVER emits the bare rpc error. Without the prefix this fixture makes
+            # the flagship case classify `notrepo` and lose "FETCH FAILED" (measured: 33/1 vs 34/0),
+            # and the natural repair — editing the assertion — would pin a fixture asserting that a
+            # genuine repo failure is NOT the repo.
+            # The LEADING '; ' is what the real read emits: the jsonpath is
+            #   {range .status.conditions[?(@.type=="ComparisonError")]}{"; "}{.message}{end}
+            # so every message is separator-prefixed. The stub emulates kubectl, so it must too —
+            # otherwise the prefix test sees a bare message and classifies a genuine repo failure as
+            # `notrepo`. This is the stub tracking the product's read, not an assertion being bent.
+            unreachable_real) printf '; Failed to load target state: rpc error: failed to get git client for repo http://this-host-does-not-exist.invalid:3000/demo/testapp-deploy.git' ;;
+            # ── the four states the classifier distinguishes, none of which had ANY fixture ────────
+            # advisory_real: argo-cd appended a ComparisonError from a site that does NOT set
+            #   failedToLoadObjs (state.go:1053, "error setting app health: "), so sync.status stays
+            #   Synced. The old `[ -n "$_cerr" ]` predicate KILLED install-all here on a deployment
+            #   that is fine. This is the case with no prior coverage at all.
+            advisory_real) printf '; error setting app health: some health error' ;;
+            # notrepo_real: "Failed to load live state: " is the DESTINATION CLUSTER (state.go:777),
+            #   not the repo. Must die, and must NOT offer the Gitea repo-server probe.
+            notrepo_real)  printf '; Failed to load live state: the server could not find the requested resource' ;;
+            # unjudged_real: Unknown with NO condition — the controller has not judged it.
+            unjudged_real) printf '' ;;
+            # repo_notfirst: argo-cd appends SEVERAL conditions to one list and the repo message is
+            #   not always first (in v3.4.5 the GPG sites at 512-524 precede the repo site at 628).
+            #   With a trailing/absent separator this classifies `notrepo` and tells the operator NOT
+            #   to start at Gitea when Gitea IS the fault. The LEADING separator makes it positional-
+            #   independent. The third entry MENTIONS the phrase inline and must NOT be matched.
+            repo_notfirst) printf '; gpg signature check failed; Failed to load target state: rpc error: repo unreachable; a note mentioning Failed to load target state: inline' ;;
           esac
           return 0 ;;
         *sync.status*)
           case "$STUB_MODE" in
             signalfail) echo 'Error from server (Forbidden): applications.argoproj.io is forbidden: cannot get sync.status' >&2; return 1 ;;
-            unreachable_real) printf 'Unknown' ;;
+            unreachable_real|notrepo_real|unjudged_real|repo_notfirst) printf 'Unknown' ;;
+            # advisory_real is the whole point: the comparison COMPLETED, so argo-cd's own verdict is
+            # Synced even though a condition is present.
             *) printf 'Synced' ;;
           esac
           return 0 ;;
@@ -98,7 +128,8 @@ run() {
         empty)    printf '' ;;
         condfail) case " $* " in *conditions*) echo 'Error from server (Forbidden): cannot read conditions' >&2; return 1 ;; esac; printf '' ;;
         signalfail) printf 'freshSHA9999' ;;                # healthy-looking: ONLY the signal read fails
-        unreachable_real) printf 'main' ;;                  # the BRANCH NAME - what argo-cd leaves after a FAILED fetch
+        unreachable_real|notrepo_real|unjudged_real|repo_notfirst) printf 'main' ;;  # the BRANCH NAME - what argo-cd leaves after a FAILED fetch
+        advisory_real) printf 'freshSHA9999' ;;             # the fetch SUCCEEDED — a real revision
         *)        printf 'staleSHA1234' ;;                  # a revision that PERSISTS from an earlier run
       esac
       return 0
@@ -241,6 +272,49 @@ case "$out" in *"$GITEA_ARGOCD_URL"*) bad "a read fault must NOT blame the repo 
 W="$(mktemp)"; out="$(run fresh "$W")"; rm -f "$W"
 case "$out" in *'RC=0'*) ok "CONTROL — a healthy app with a readable signal still PASSES" ;;
   *) bad "CONTROL: healthy still passes" "got: ${out:0:200}" ;; esac
+
+echo
+echo "== a ComparisonError is NOT a repo verdict — one arm per cause =="
+# THE FALSE RED THIS SECTION EXISTS FOR. `[ -n "$_cerr" ]` treated ANY ComparisonError as a failed
+# fetch and killed `make install-all` at configure-argocd. But state.go:1035's
+# `if failedToLoadObjs { syncCode = Unknown }` is the ONLY app-level forcing, and the appends at 749
+# (normalize), 1053 (health) and 1060 (source-integrity) close their `if err != nil` block with NO
+# flag — so an Application can be Synced/Healthy while carrying one. Both unflagged sites sit AFTER a
+# successful GetRepoObjs, so they cannot coexist with a failed fetch.
+# RED-PROOF: on the pre-fix product this case exits RC=1 with "RECONCILED but the FETCH FAILED" —
+# and the output self-contradicts, printing `sync.status=Synced` on the line beneath it.
+W="$(mktemp)"; out="$(run advisory_real "$W")"; rm -f "$W"
+case "$out" in *'RC=0'*) ok "a NON-repo ComparisonError on a Synced app PASSES (the fetch succeeded)" ;;
+  *) bad "advisory must pass" "got: ${out:0:220}" ;; esac
+# Assert the WARN, not just the pass: without it a future regression to an unconditional pass scores
+# green and nobody sees the difference.
+case "$out" in *"NON-repo ComparisonError is present"*) ok "and it is NOT silent — the condition is surfaced as a WARN" ;;
+  *) bad "advisory must WARN" "a silent pass is indistinguishable from not checking" ;; esac
+case "$out" in *"FETCH FAILED"*) bad "advisory must not claim the fetch failed" "the comparison completed" ;;
+  *) ok "it does NOT claim the fetch failed" ;; esac
+
+# The DESTINATION CLUSTER, not the repo (state.go:777). Must die — and must not send the operator to Gitea.
+out="$(run notrepo_real)"
+case "$out" in *'RC=0'*) bad "a non-repo comparison failure must NOT pass" "sync.status=Unknown means the comparison failed" ;;
+  *) ok "a NON-repo comparison failure still FAILS the gate" ;; esac
+case "$out" in *"NOT the repo"*) ok "it names the cause as NOT the repo" ;;
+  *) bad "notrepo must say so" "got: ${out:0:220}" ;; esac
+case "$out" in *"argocd-repo-server"*|*"info/refs?service=git-upload-pack"*)
+      bad "notrepo must NOT offer the Gitea repo-server probe" "that is the misdirection this split exists to remove" ;;
+  *) ok "and it does NOT offer the Gitea repo-server probe" ;; esac
+
+# Unknown with NO condition: the controller has not judged it. Must die, must not blame the repo.
+out="$(run unjudged_real)"
+case "$out" in *'RC=0'*) bad "an unjudged Application must NOT pass" "nothing judged it, so nothing is evidence" ;;
+  *) ok "an UNJUDGED Application still FAILS the gate" ;; esac
+case "$out" in *"has not judged"*) ok "it says the controller has not judged it" ;;
+  *) bad "unjudged must say so" "got: ${out:0:220}" ;; esac
+
+# The repo message is NOT first in the list. With a trailing/absent separator this classified
+# `notrepo` and told the operator not to start at Gitea when Gitea WAS the fault.
+out="$(run repo_notfirst)"
+case "$out" in *"FETCH FAILED"*) ok "a repo message that is NOT FIRST is still classified as the repo" ;;
+  *) bad "position-independent prefix test" "got: ${out:0:220}" ;; esac
 
 printf '  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

@@ -497,7 +497,7 @@ argocd_await_revision() {
   local _kc="${ARGOCD_KUBECONFIG:-${KUBECONFIG:-<unset>}}"
   local _url="${GITEA_ARGOCD_URL:-<unset>}" _org="${GITEA_ORG:-<unset>}"
   local _pre_rev="" _pre_rec="" _rec="" _tried=0 _fresh=0 _rec_rc=0 _cerr="" _sst=""
-  local _ff_err="" _ff_state=unknown
+  local _ff_err="" _ff_state=unread
 
   # Validate BEFORE the `:-` default, or an EMPTY value silently takes the default and the guard's
   # own '' arm is unreachable — while empty was the OLD code's actual trigger (`seq 1 ""` = zero
@@ -553,14 +553,54 @@ argocd_await_revision() {
   # would map rc=2 to the else-arm and restore exactly this false green, whereas an unset/misspelled
   # name errors loudly under `set -u`. Out-params are also this function's own convention
   # (_rd_rc/_rec_rc/_ce_rc).
-  _await_fetch_state() {                      # sets _ff_state=ok|failed|unknown; ALWAYS returns 0
+  _await_fetch_state() {   # sets _ff_state=ok|advisory|repo|notrepo|unjudged|unread; ALWAYS returns 0
     local r1=0 r2=0
+    # The separator LEADS each message on purpose. With a trailing (or no) separator the prefix test
+    # is position-dependent: argo-cd appends several conditions to one list and the repo message is
+    # not always first — in v3.4.5 the GPG-signature sites at 512-524 append BEFORE the repo site at
+    # 628 — so `case "$_cerr" in "Failed to load target state: "*)` would classify a co-occurring
+    # repo failure as `notrepo` and tell the operator NOT to start at Gitea when Gitea is the fault.
+    # A LEADING "; " makes `*"; Failed to load target state: "*` match at any position, and it also
+    # rejects a message that merely MENTIONS the phrase inline. Stripped again for display.
     _cerr="$(ka -n "$_ns" get application "$app" \
-      -o jsonpath='{range .status.conditions[?(@.type=="ComparisonError")]}{.message}{end}' 2>"$_ff_err")" || r1=$?
+      -o jsonpath='{range .status.conditions[?(@.type=="ComparisonError")]}{"; "}{.message}{end}' 2>"$_ff_err")" || r1=$?
     _sst="$(ka -n "$_ns" get application "$app" -o jsonpath='{.status.sync.status}' 2>"$_ff_err")" || r2=$?
-    if   [ "$r1" -ne 0 ] || [ "$r2" -ne 0 ];       then _ff_state=unknown
-    elif [ -n "$_cerr" ] || [ "$_sst" = Unknown ]; then _ff_state=failed
-    else                                                _ff_state=ok
+    # CLASSIFY ON sync.status — argo-cd's OWN verdict on whether the comparison failed — and use the
+    # message prefix only to NAME the cause. `[ -n "$_cerr" ]` alone was a FALSE RED: state.go:1035's
+    # `if failedToLoadObjs { syncCode = Unknown }` is the only app-level forcing, and the appends at
+    # 749 (normalize), 1053 (health) and 1060 (source-integrity) each close their `if err != nil`
+    # block with NO flag — so an Application can be Synced/Healthy while carrying a ComparisonError,
+    # and we were killing `make install-all` on a deployment that is fine. Both unflagged sites sit
+    # AFTER a successful GetRepoObjs, so they cannot coexist with a failed fetch.
+    #
+    # The HEALTHY arm is the POSITIVE test on purpose. `[ "$_sst" = Unknown ]` as the failure test
+    # fails OPEN: kubectl returns empty with rc=0 for a missing nested path, so a freshly-created
+    # Application the controller has not touched yields _sst="" and would route to `ok` — reporting
+    # "the repo is reachable NOW" about a read that judged nothing.
+    if [ "$r1" -ne 0 ] || [ "$r2" -ne 0 ]; then
+      _ff_state=unread
+    elif [ -n "$_cerr" ]; then
+      case "$_cerr" in
+        # FATAL REGARDLESS OF sync.status — belt-and-braces. v3.5.1 makes Synced+this UNREACHABLE:
+        # state.go:698 is the only producer of the prefix, :712 sets failedToLoadObjs in the SAME
+        # `if err != nil` block, :1035 turns that into syncCode=Unknown, and :1108 writes conditions
+        # and syncStatus ATOMICALLY from one CompareAppState (ComparisonError is a managed type, so
+        # every comparison replaces it). The grace-period early returns at :705/:710 persist NOTHING
+        # and are gated `!noRevisionCache`, which our refresh=hard (Level 3) sets — so they cannot
+        # fire here at all. This arm is what keeps that true across an ARGOCD_VERSION bump: the pin
+        # is Renovate-tracked and no gate re-derives the proof. Costs exactly one cell of the truth
+        # table, and being wrong THIS way is benign (a die plus the repo-server probe, which is the
+        # right remedy for a repo failure anyway).
+        # BOTH alternatives: first-position AND after the leading separator (a message is not always
+        # first — in v3.4.5 the GPG sites at 512-524 append before the repo site at 628).
+        "Failed to load target state: "*|*"; Failed to load target state: "*) _ff_state=repo ;;
+        # if/else, NOT `A && B || C` — that operator shape is a fake-green this repo has been bitten by.
+        *) if [ "$_sst" = Unknown ]; then _ff_state=notrepo; else _ff_state=advisory; fi ;;
+      esac
+    elif [ "$_sst" = Unknown ]; then
+      _ff_state=unjudged
+    else
+      _ff_state=ok
     fi
     return 0
   }
@@ -630,7 +670,7 @@ argocd_await_revision() {
     # (no ComparisonError, sync.status != Unknown). Neither alone is sufficient.
     _await_fetch_state
     if [ -n "$rev" ] && [ "$_rec_rc" -eq 0 ] && [ -n "$_rec" ] && [ "$_rec" != "$_pre_rec" ] \
-       && [ "$_ff_state" = ok ]; then _fresh=1; break; fi
+       && { [ "$_ff_state" = ok ] || [ "$_ff_state" = advisory ]; }; then _fresh=1; break; fi
   done
 
   if [ "$_fresh" -ne 1 ]; then
@@ -640,7 +680,7 @@ argocd_await_revision() {
     # RECOMPUTE rather than reuse the loop's value: this helper re-reads, so a stale _ff_state
     # would report a signal from a previous iteration.
     _await_fetch_state
-    if [ "$_ff_state" = unknown ]; then
+    if [ "$_ff_state" = unread ]; then
       # A READ FAULT IS NOT EVIDENCE ABOUT THE REPO. This arm deliberately precedes the others: an
       # unreadable signal masks the "did NOT re-reconcile" diagnosis, which is correct — we cannot
       # claim an Application state we failed to read. Nothing here mentions the repo.
@@ -654,12 +694,30 @@ argocd_await_revision() {
       log_error "could not READ reconciledAt for Application '${app}' (${_tried} attempts) —"
       log_error "  that is a READ fault, not evidence the Application failed to reconcile. kubectl said:"
       sed 's/^/    /' "$_ce_err" >&2 2>/dev/null || true
-    elif [ "$_ff_state" = failed ]; then
-      log_error "Application '${app}' RECONCILED but the FETCH FAILED (${_tried} attempts)."
-      log_error "  sync.status=${_sst:-<none>}   ComparisonError: ${_cerr:-<none>}"
-      log_error "  reconciledAt DID advance, which on a forced refresh proves only that a comparison ran —"
-      log_error "  argo-cd disables its repo-error short-circuit for a forced (Level 3) refresh, so the"
-      log_error "  timestamp advances even when the repo could not be read. THIS is the fetch signal."
+    elif [ "$_ff_state" = repo ] || [ "$_ff_state" = notrepo ] || [ "$_ff_state" = unjudged ]; then
+      # ONE arm per cause. They were a single `failed` arm whose text named the REPO for all of them,
+      # so a destination-cluster fault sent the operator to curl Gitea — the exact misdirection this
+      # gate exists to prevent. `${_cerr#"; "}` strips the LEADING separator added for the position-
+      # independent prefix test above; the message is otherwise quoted verbatim, never paraphrased,
+      # because `notrepo` is a genuine catch-all (three v3.5.1 sites append a bare err.Error()).
+      case "$_ff_state" in
+        repo)
+          log_error "Application '${app}' RECONCILED but the FETCH FAILED (${_tried} attempts)."
+          log_error "  sync.status=${_sst:-<none>}   ComparisonError: ${_cerr#"; "}"
+          log_error "  reconciledAt DID advance, which on a forced refresh proves only that a comparison ran —"
+          log_error "  argo-cd disables its repo-error short-circuit for a forced (Level 3) refresh, so the"
+          log_error "  timestamp advances even when the repo could not be read. THIS is the fetch signal." ;;
+        notrepo)
+          log_error "Application '${app}' RECONCILED but its COMPARISON FAILED for a reason that is NOT the repo."
+          log_error "  sync.status=${_sst:-<none>}   ComparisonError: ${_cerr#"; "}"
+          log_error "  argo-cd appends this condition from several places and only ONE of them is the repo"
+          log_error "  ('Failed to load target state: '). 'Failed to load live state: ' is the DESTINATION"
+          log_error "  CLUSTER. Read the message above — do NOT start at Gitea." ;;
+        unjudged)
+          log_error "Application '${app}' has sync.status=${_sst:-<none>} with NO ComparisonError."
+          log_error "  The controller has not judged this Application, so nothing here is evidence about"
+          log_error "  the repo. Check that an application-controller is running and watching '${_ns}'." ;;
+      esac
     elif [ -n "$rev" ]; then
       log_error "Application '${app}' did NOT re-reconcile after a forced refresh (${_tried} attempts)."
       log_error "  It still carries revision ${_pre_rev} from an EARLIER run, and reconciledAt never advanced"
@@ -685,13 +743,27 @@ argocd_await_revision() {
     # fault we do not know whether it reconciled, let alone whether the repo is implicated, so
     # sending the operator to curl Gitea is the same misdirection this whole check exists to stop —
     # and it would be the ONE line in the read-fault arm that names the repo.
-    if [ "$_ff_state" != unknown ] && [ "$_rec_rc" -eq 0 ]; then
+    # ⚠️ NOT `!= unread`. Splitting `failed` into repo/notrepo/unjudged means an inequality test
+    # readmits every new state, so a DESTINATION-CLUSTER fault would still be handed a Gitea probe.
+    # Whitelist the states for which the repo is a live candidate.
+    if { [ "$_ff_state" = ok ] || [ "$_ff_state" = repo ] || [ "$_ff_state" = unjudged ]; } \
+       && [ "$_rec_rc" -eq 0 ]; then
       log_error "  A repo it cannot clone is ONE candidate; confirm it rather than assume it, from the repo-server itself:"
       log_error "    kubectl -n ${_ns} exec deploy/argocd-repo-server -c repo-server -- \\"
       log_error "      curl -s -o /dev/null -w '%{http_code}\\n' '${_url}/${_org}/${app}-deploy.git/info/refs?service=git-upload-pack'"
       log_error "    200 => the repo IS reachable and the cause is elsewhere; anything else => GITEA_ARGOCD_URL is the fault."
     fi
     _await_cleanup; die "ArgoCD produced no FRESH fetch — refusing to report success."
+  fi
+  # An `advisory` pass is NEVER silent. The comparison completed — so the repo IS reachable, which is
+  # this gate's whole contract — but the Application is carrying a real condition that something
+  # downstream (make verify) must catch. Without this line a future regression to an unconditional
+  # pass would score green and nobody would see the difference.
+  if [ "$_ff_state" = advisory ]; then
+    log_warn "  ${app}: a NON-repo ComparisonError is present — the FETCH SUCCEEDED (sync.status=${_sst})."
+    log_warn "    ${_cerr#"; "}"
+    log_warn "    argo-cd appends this AFTER a successful repo read (normalize / health / source-integrity),"
+    log_warn "    so it is not evidence about the repo. It IS a real problem — 'make verify' is what catches it."
   fi
   log_info "  ${app}: ArgoCD re-reconciled after a forced refresh (reconciledAt ${_pre_rec:-<none>} -> ${_rec}) and reports revision ${rev} — the repo is reachable NOW"
 }
