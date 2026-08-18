@@ -24,11 +24,6 @@ bad() { printf '  FAIL  %s\n       %s\n' "$1" "${2:-}"; fail=$((fail+1)); }
 
 export ARGOCD_REPO_TIMEOUT_SECONDS=2   # keep the suite fast; the count is not what is under test
 
-# run <mode> [witness] -> "state|msg"
-# ⚠️ PRODUCTION OPTIONS. lib/argocd.sh has no `set` line of its own and inherits
-# 70-configure-argocd.sh:21 (`set -euo pipefail`). The sibling suite scored three clean greens over
-# broken implementations by running the subject under weaker options; do not repeat it here.
-# run <mode> [witness] -> "state|msg"
 # ⚠️ THE STUB IS A SCRIPT ON $PATH, NOT A SHELL FUNCTION. argocd_app_fetch_verdict wraps the call in
 # `timeout`, and timeout(1) EXECS A BINARY — a bash function named `argocd` is invisible to it. The
 # sibling suite can stub `ka` as a function only because nothing wraps that call. This is the same
@@ -67,6 +62,7 @@ exit 0
 STUB
 chmod +x "$STUBDIR/argocd"
 
+# run <mode> [witness] -> "state|msg"
 run() {
   # ⚠️ CAPTURE, THEN DECIDE — never `) … || printf`. A trailing `||` makes the subshell the LEFT
   # OPERAND of an AND-OR list, and bash suppresses errexit INSIDE it; the subshell's own
