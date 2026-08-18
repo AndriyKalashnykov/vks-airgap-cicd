@@ -797,7 +797,7 @@ it prints.** It has more outcomes than the two obvious ones, so do not guess fro
   needs no read access at all.
 
 **How long it takes varies more than anything else in this runbook, so do not use the clock to judge
-it.** Attaching runs no helm at all — usually seconds. Installing runs three helm charts and two
+it.** Attaching installs nothing — one read-only `helm status` — usually seconds. Installing runs three helm charts and two
 readiness waits, each with its own deadline: a re-run against a warm cluster is ~10 seconds, a cold
 install on a fresh one is minutes, and the ceiling is ~25. To lengthen a deadline set
 `READY_TIMEOUT_SECONDS` — either on the `make` command line
