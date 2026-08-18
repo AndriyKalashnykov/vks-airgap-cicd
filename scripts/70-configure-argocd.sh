@@ -286,7 +286,10 @@ if have argocd && [ -n "${ARGOCD_SERVER:-}" ] && [ -n "${ARGOCD_AUTH_TOKEN:-}" ]
   # ⚠️ A DENIAL EXITS 0. Upstream argo-cd v3.4.5 (the installed version) returns
   # `&CanIResponse{Value:"no"}, nil` for a refusal, and the CLI prints that value and exits 0 — so
   # branching on rc recorded a REFUSED tenant as PERMITTED, and `>/dev/null` binned the answer.
-  _rl="$(argocd_can_i create applications "${ARGOCD_PROJECT}/*")"
+  # B179: the graded ladder. create GATES; get/update only WARN, naming the LATE failure they
+  # would cause. Deriving a downgrade from get/update would make `request` reachable from a
+  # denial that may itself be a name-scoping false alarm — see argocd_api_capability.
+  _rl="$(argocd_api_capability "${ARGOCD_PROJECT}")"
   case "${_rl%%|*}" in
     yes) can_api=yes ;;
     no)  can_api=no ;;
