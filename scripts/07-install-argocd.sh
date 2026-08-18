@@ -112,6 +112,10 @@ if [ ! -s "$MANIFEST_FILE" ]; then
 else
   log_info "using cached ArgoCD ${ARGOCD_VERSION} install manifest: ${MANIFEST_FILE}"
 fi
+# B181: deliberately OUTSIDE the if/else, so it also validates the CACHED file. A cache
+# poisoned by a portal on an earlier run is non-empty, so `[ ! -s ]` above reuses it happily
+# and this would never fire if it sat only on the fetch branch.
+assert_k8s_manifest "$MANIFEST_FILE" "$INSTALL_MANIFEST"
 log_info "installing ArgoCD ${ARGOCD_VERSION} into ${ARGOCD_NAMESPACE} (server-side apply)"
 run kubectl apply -n "$ARGOCD_NAMESPACE" --server-side --force-conflicts -f "$MANIFEST_FILE"
 

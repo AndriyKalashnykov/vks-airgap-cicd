@@ -1227,6 +1227,38 @@ require_internet() {
 # 900 for the 238 MiB argocd download; a FIXED 300s budget there made retries
 # STRUCTURALLY IMPOSSIBLE — one attempt, then a die naming a knob the operator
 # never set while the one they did set went unmentioned.
+# assert_k8s_manifest FILE URL — the file we just downloaded must BE a Kubernetes manifest.
+#
+# WHY THIS EXISTS, measured 2026-08-18 against real curl 8.5.0 (B181 decision round):
+# `http_get_retry` uses `curl -fsSL`, so a filtering proxy's 403/404/502 fails the transfer,
+# retries 5x, and dies loudly naming the URL — correct, and already handled. But a CAPTIVE
+# PORTAL answers **200** with an HTML block page: curl succeeds, rc=0, in 0.0s, and the page
+# is written AS THE MANIFEST. `mirror_collect_images` then silently yields only images.txt
+# entries (the Tekton controller images vanish), and in the sneakernet flow that bundle is
+# CARRIED ACROSS THE AIR GAP before `kubectl apply` finally fails on HTML.
+#
+# This assertion cannot rot: it is a claim about the contract of the file WE REQUIRE, not
+# about a third party's incidental behaviour. If it ever misfires, the file genuinely is not
+# a manifest — a real bug either way. A `-L` 302-to-portal lands on the same 200 and is
+# caught identically.
+#
+# RED/GREEN-proven on the REAL artifacts (B181): GREEN 12/12 files in bundle/manifests/ carry
+# a column-0 `apiVersion:`; RED 4/4 portal bodies caught (HTML block page, <!DOCTYPE html>
+# sign-in, "Access Denied by Policy", {"error":"blocked"}).
+assert_k8s_manifest() {
+  local file="$1" url="${2:-<unknown url>}"
+  [ -s "$file" ] || die "downloaded ${url} but ${file} is empty — nothing was written."
+  # Column 0 on purpose: an indented `apiVersion:` is a nested field, not a document header.
+  grep -qE '^apiVersion:' "$file" && return 0
+  die "${url} answered, but the body is NOT a Kubernetes manifest (no column-0 'apiVersion:' in ${file}).
+  A captive portal or filtering proxy is answering for this host instead of the origin —
+  it returned a page (a block page, a sign-in redirect, or a JSON error) with HTTP 200, so
+  the download SUCCEEDED and wrote that page where a manifest belongs.
+  This is NOT an air gap: something answered. Check whether this box is behind a proxy that
+  intercepts TLS, then re-run. First 3 lines of what arrived:
+$(head -3 "$file" 2>/dev/null | sed 's/^/    /')"
+}
+
 http_get_retry() {
   local url="$1" dest="$2"
   local attempts="${HTTP_GET_RETRIES:-5}"
