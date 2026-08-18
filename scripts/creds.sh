@@ -52,6 +52,16 @@ load_env
 # A NON-terminal is a redirect, a pipe, a CI capture, an agent transcript, or the walk harness, which
 # runs every documented command with stdout redirected to a per-row log. That is how live Gitea,
 # Harbor and ArgoCD passwords reached /tmp/walk/MATRIX-row*.log on previous runs.
+#
+# ⚠️ A PTY-BASED CAPTURE COUNTS AS A TERMINAL AND WILL REVEAL. `[ -t 1 ]` asks "is fd 1 a tty", not
+# "is a human reading this" — so `script(1)`, `ssh -t`, `unbuffer`, and some CI runners allocate a pty
+# and get the CLEARTEXT into their capture file. MEASURED:
+#     script -qec './scripts/creds.sh' /dev/null | grep -c CANARY   ->  1      (a plain pipe -> 0)
+# This is NOT a gap in today's walk (measured: walk-doc.sh runs each statement through a PIPE, and
+# nested-vsphere-lab/scripts/walk-matrix.sh's ssh option array has no `-t`), but it IS the honest
+# boundary of what the mask covers, and the reader must be told rather than left to infer "captured
+# == masked". Do NOT try to distinguish a pty-with-a-human from a pty-with-a-recorder: that is
+# undecidable, and any heuristic for it would break the intended function on a real terminal.
 if [ -t 1 ] || [ "$_show_secrets_snapshot" = "1" ]; then _reveal=1; else _reveal=0; fi
 
 # _mask <secret> — apply ONLY to values that are REAL secrets.
@@ -222,7 +232,19 @@ if [ "$_argo_rc" = 0 ]; then
   # appended further down, OUTSIDE this, so the provenance survives masking. That annotation is the
   # reason a column-level mask was refused: it exists precisely so a bare value is not read as
   # "this is your password".
-  argo_pw="$(_mask "$argo_pw")"
+  #
+  # ⚠️ EMPTY IS NOT A SECRET. `_mask` renders its sentinel unconditionally, so an rc=0-with-no-output
+  # would advertise a hidden password that does not exist and send the reader to SHOW_SECRETS=1 for
+  # an empty cell. NOT reachable today — both of argocd-password.sh's exit-0 paths are guarded
+  # non-empty (`[ -n "$enc" ]` and `[ -n "$ARGOCD_ADMIN_PASSWORD" ]`) — so this is latent, and it
+  # arms the moment a third exit-0 path is added. Say what happened instead of masking nothing.
+  # (`if`, not `[ -n … ] && …`: the AND-list form returns 1 on the empty branch, which is the
+  # tail-of-a-block trap rules/shell/coding-style.md forbids.)
+  if [ -n "$argo_pw" ]; then
+    argo_pw="$(_mask "$argo_pw")"
+  else
+    argo_pw="<empty — argocd-password.sh exited 0 but printed nothing>"
+  fi
 else
   # SAME CLASS AS THE TWO ABOVE, third row: "<VKS-provided — get it from your lab>" is only true on a real
   # lab. On a KinD box ArgoCD's password is GENERATED at install like the others, so telling the operator

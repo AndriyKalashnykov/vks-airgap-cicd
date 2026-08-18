@@ -23,6 +23,11 @@ VKS cluster:
 > ⚠️ Putting `SHOW_SECRETS=1` in your `.env` does **not** work, on purpose — it is read from the
 > environment *before* `.env` is loaded, so one forgotten line cannot silently re-arm the leak for
 > every future capture.
+>
+> ⚠️ **A pty-based capture counts as a terminal and WILL show the passwords.** The test is "is stdout
+> a tty", not "is a human reading this" — so `script`, `ssh -t`, `unbuffer` and some CI runners get
+> the cleartext into their transcript. Only a **pipe or a redirect** masks. If you are recording a
+> session that will be shared, capture it with a redirect, not with `script`.
 
 - The **`*.vks.local`** hostnames exist **only after the ingress is in place** — `make install-ingress`
   (KinD / a mesh-free cluster), or `make install-ingress INGRESS_CONTROLLER=istio-existing` on a real
