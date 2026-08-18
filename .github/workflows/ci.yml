@@ -233,10 +233,36 @@ jobs:
       # app-test) threw the fetch away too. MEASURED on PR #745: attempt 2 reached 3m15s and died
       # with `16 of 16 resource(s) could not have their schema downloaded`.
       #
-      # `if: always()` on the save is what closes it. That is safe HERE specifically because the
-      # key is CONTENT-ADDRESSED (below): a partial save cannot serve a stale answer for different
-      # content — it can only under-fill an entry that a later run tops up. This is the same
-      # argument this file already makes for the Go build cache.
+      # Saving on failure is what closes it — but the FIRST version of that fix carried a safety
+      # argument that was FALSE, and it contradicted this very comment ~20 lines up. It claimed a
+      # partial save "can only under-fill an entry that a later run tops up". kubeconform tops up
+      # the DIRECTORY (measured: 3 schema files -> deleted 1 -> re-ran -> back to 3); the CACHE
+      # ENTRY does not. GitHub's own docs: "You cannot change the contents of an existing cache.
+      # Instead, you can create a new cache with a new key." So a run that died mid-validate would
+      # reserve a PARTIAL entry under the content key, the next run at the same content hash would
+      # get an EXACT hit, the save would be skipped as redundant, and the missing schemas would be
+      # re-fetched and DISCARDED on every run thereafter — the exact freeze described above, now
+      # reached FASTER. Worst case is the motivating incident itself: PR #745 attempt 2 died with
+      # "16 of 16 resource(s) could not have their schema downloaded", i.e. a ~EMPTY directory,
+      # and an empty-but-existing dir IS saved. That converts "cold, then eventually complete"
+      # into "warm and permanently empty".
+      #
+      # THE FIX IS THE KEY, NOT THE CONDITION: every save mints a NEW key (`…-<run_id>`) and the
+      # restore prefix-matches. An entry is therefore never rewritten and never frozen — the newest
+      # one always wins, and a partial is superseded by the next run rather than enshrined.
+      # Cost, stated: one small entry per run. The Actions cache evicts LRU at 10 GB and these are
+      # JSON schemas, so this is cheap; if it ever matters, the eviction is self-correcting.
+      #
+      # `!cancelled()` rather than `always()`: always() fires on CANCELLATION too, so a
+      # concurrency-superseded run would save whatever half-populated directory existed at the
+      # instant it was killed. `!cancelled()` still runs on FAILURE — which is the entire point —
+      # but not on cancel.
+      #
+      # CLASS DENOMINATOR: this is 1 of 3 combined `actions/cache` steps in this file. The Maven
+      # (~/.m2) and Go build caches below are BOTH still combined, i.e. both still discard on
+      # failure. They are left deliberately: their content is re-fetchable from Central/proxy
+      # without a CDN throttle gate failing the job, so the self-sustaining-outage shape that
+      # justified this split does not apply to them. Revisit if either starts gating a job.
       - name: Restore kubeconform schema cache
         id: kubeconform-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -253,8 +279,13 @@ jobs:
           # refetches; it CANNOT serve a 1.30 schema for a 1.31 request. Adding KUBERNETES_VERSION
           # to this key would therefore buy ZERO correctness and cost a full re-fetch of the whole
           # set on every bump. Do not add it. (See BACKLOG B156.)
+          # ⚠️ THIS PRIMARY KEY IS DELIBERATELY ONE NOTHING EVER WRITES. The save step below mints
+          # `<this>-<run_id>`, so `cache-hit` is ALWAYS false here and the restore ALWAYS resolves
+          # through `restore-keys`, which prefix-matches the MOST RECENT entry. That is what makes
+          # the entry non-frozen — see the save step for the measured reason.
           key: kubeconform-v2-${{ hashFiles('k8s/**', 'deploy/**') }}
           restore-keys: |
+            kubeconform-v2-${{ hashFiles('k8s/**', 'deploy/**') }}-
             kubeconform-v2-
 
       # Persist the Maven local repo across runs — static-check runs mvn twice (app-test's `mvnw test`
@@ -317,12 +348,15 @@ jobs:
           GWAPI_REQUIRE_FETCH: '1'
         run: make ${{ github.event_name == 'schedule' && 'static-check' || 'static-check-pr' }}
 
-      # THE OTHER HALF OF THE SPLIT (see the restore step's comment). `if: always()` is the whole
-      # point: the run we MOST need to persist is the one that FAILED on a throttle, because it is
-      # the run that just paid to fetch. Without this the failure is self-sustaining.
-      # `cache-hit` is only ever 'true' on an EXACT key hit, in which case the entry is already
-      # complete and re-saving is both wasteful and rejected by the backend — so skip only that case,
-      # never the failure case.
+      # THE OTHER HALF OF THE SPLIT (see the restore step's comment). Saving on FAILURE is the whole
+      # point: the run we MOST need to persist is the one that died on a throttle, because it is the
+      # run that just paid to fetch. Without it the failure is self-sustaining.
+      #
+      # The key carries `-<run_id>`, so every save mints a NEW entry rather than trying to rewrite an
+      # existing one — GitHub cache entries are IMMUTABLE, and the previous shape (save under the
+      # bare content key, skipped on an exact hit) could freeze a PARTIAL entry forever. The restore
+      # step's `restore-keys` prefix-matches the newest, so the freshest set always wins. There is no
+      # `cache-hit` condition any more because with a run-id suffix an exact hit is impossible.
       #
       # ⚠️ UNGUARDED RESIDUAL, stated rather than implied: nothing asserts that this stays split.
       # Re-merging it into a single `actions/cache` step silently restores the bug, and a Renovate
@@ -330,11 +364,11 @@ jobs:
       # it shows up only as a cold cache on the next throttle. Same shape as the `apk upgrade`
       # under-layer-cache trap: the mechanism goes inert and only a marker would prove it ran.
       - name: Save kubeconform schema cache
-        if: always() && steps.kubeconform-cache.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/kubeconform
-          key: ${{ steps.kubeconform-cache.outputs.cache-primary-key }}
+          key: ${{ steps.kubeconform-cache.outputs.cache-primary-key }}-${{ github.run_id }}
 
   # Docs gate: markdownlint (via npx) + the README-scenario gate. CHEAP — no Docker.
   docs-lint:
