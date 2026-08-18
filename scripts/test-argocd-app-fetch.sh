@@ -49,6 +49,17 @@ case "${STUB_MODE:-}" in
   repo)  printf '%s' '{"status":{"sync":{"status":"Unknown"},"conditions":[{"type":"ComparisonError","message":"Failed to load target state: rpc error: failed to get git client for repo http://gitea.invalid:3000/demo/x-deploy.git"}]}}' ;;
   live)  printf '%s' '{"status":{"sync":{"status":"Unknown"},"conditions":[{"type":"ComparisonError","message":"Failed to load live state: cluster https://guest:6443 not found"}]}}' ;;
   nocmp) printf '%s' '{"status":{"sync":{"status":"Unknown"}}}' ;;
+  # nostatus: NO .status.sync at all — a freshly-created Application the controller has not judged.
+  # This is the state this suite could not previously express, and it is the one the read
+  # MANUFACTURES: `jq -r '.status.sync.status // ""'` turns a missing path into "". Under the old
+  # `[ "$_sst" = Unknown ]` test that fell through to the healthy arm and the function AFFIRMED `ok`,
+  # so the caller logged "<app>: synced (argocd-server)" for an app nothing had compared — on the
+  # TENANT path, the one branch never exercised by any recorded walk run.
+  nostatus) printf '%s' '{"status":{}}' ;;
+  # repo2nd: TWO conditions with the repo message SECOND. Before the leading separator this
+  # classified `notrepo` here while the kubectl path called it `repo` — the same Application, two
+  # mechanisms, opposite verdicts, selectable with one variable (B177).
+  repo2nd) printf '%s' '{"status":{"sync":{"status":"Unknown"},"conditions":[{"type":"ComparisonError","message":"gpg signature check failed"},{"type":"ComparisonError","message":"Failed to load target state: rpc error: repo unreachable"}]}}' ;;
   ok)    printf '%s' '{"status":{"sync":{"status":"Synced"},"conditions":[]}}' ;;
   junk)  printf '%s' 'this is not json at all' ;;
 esac
@@ -57,11 +68,31 @@ STUB
 chmod +x "$STUBDIR/argocd"
 
 run() {
-  ( set -euo pipefail
-    export STUB_MODE="$1" WITNESS="${2:-/dev/null}" PATH="$STUBDIR:$PATH"
-    argocd_app_fetch_verdict testapp
-    printf '%s|%s\n' "$_afv_state" "$_afv_msg"
-    rm -f "$_afv_err" ) 2>/dev/null || printf 'SUBJECT-DIED|\n'
+  # ⚠️ CAPTURE, THEN DECIDE — never `) … || printf`. A trailing `||` makes the subshell the LEFT
+  # OPERAND of an AND-OR list, and bash suppresses errexit INSIDE it; the subshell's own
+  # `set -euo pipefail` does NOT restore it. MEASURED: a mutant killing argocd_app_fetch_verdict on
+  # EVERY path scored 12/0 — the suite was totally blind to the deaths it exists to catch.
+  #
+  # The `||` form has a second defect the capture also fixes: on a death AFTER the printf it emitted
+  # BOTH the partial line and SUBJECT-DIED, and `case "$out" in ok|*)` matched the first, scoring a
+  # PASS. Capturing means only one verdict is ever emitted.
+  #
+  # THE REDIRECT IS INSIDE THE SUBSTITUTION, ON THE SUBSHELL, and that placement is load-bearing:
+  # `out="$( … )" 2>/dev/null` does NOT redirect the substitution — for a command consisting only of
+  # assignments, expansions run BEFORE redirections — so the stub's stderr escapes into the report.
+  # MEASURED: 8 leaks with the redirect outside, 0 with it inside.
+  #
+  # `rc=$?` on its OWN LINE, never `|| rc=$?` — that reintroduces the very suppression above
+  # (measured: rc=0 and the post-death marker printed). scripts/test-argocd-version.sh:43 is the
+  # other correct instance of this pattern in the repo; copy from there.
+  local out rc
+  out="$( ( set -euo pipefail
+            export STUB_MODE="$1" WITNESS="${2:-/dev/null}" PATH="$STUBDIR:$PATH"
+            argocd_app_fetch_verdict testapp
+            printf '%s|%s\n' "$_afv_state" "$_afv_msg"
+            rm -f "$_afv_err" ) 2>/dev/null )"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then printf '%s\n' "$out"; else printf 'SUBJECT-DIED|\n'; fi
 }
 
 echo
@@ -90,6 +121,19 @@ out="$(run nocmp)"
 case "$out" in unknown\|*) ok "Unknown with NO condition = the controller never judged it" ;;
   *) bad "no-condition Unknown" "got: $out" ;; esac
 
+out="$(run repo2nd)"
+case "$out" in repo\|*) ok "a repo message that is NOT FIRST is still the repo (matches the sibling)" ;;
+  *) bad "position-independent prefix test" "got: $out — without a LEADING separator this says notrepo while the kubectl path says repo, on the same Application" ;; esac
+
+out="$(run nostatus)"
+case "$out" in unknown\|*) ok "NO .status.sync at all is 'unknown' — the controller never judged it" ;;
+  *) bad "an unjudged app must NOT be affirmed as ok" "got: $out — the read manufactures \"\" for a missing path, and affirming ok here makes the caller log '<app>: synced (argocd-server)' for an Application nothing compared" ;; esac
+# The MESSAGE must not assert a value the read did not produce. It used to hardcode
+# "sync.status=Unknown", which is a claim about a status that is actually EMPTY, printed verbatim by
+# the caller. Same class as the guard against claiming "no conditions" when the read FAILED.
+case "$out" in *"sync.status=<none>"*) ok "and it reports the status it actually read, not a hardcoded 'Unknown'" ;;
+  *) bad "must interpolate the status" "got: $out" ;; esac
+
 out="$(run cli)"
 case "$out" in cli\|*) ok "a CLI failure is its own state, not a repo verdict" ;;
   *) bad "cli failure" "got: $out" ;; esac
@@ -113,8 +157,14 @@ echo "== the MECHANISM: a soft refresh must actually be requested =="
 W="$(mktemp)"; run ok "$W" >/dev/null; wit="$(cat "$W")"; rm -f "$W"
 case "$wit" in *--refresh*) ok "--refresh IS passed (without it the short-circuit stays armed)" ;;
   *) bad "--refresh is passed" "witness=[$wit]" ;; esac
-case "$wit" in *--hard-refresh*) bad "must NOT use --hard-refresh" "it adds a per-app NoCache render whose failure is only log.Warnf'ed — more cost, no more proof" ;;
-  *) ok "and NOT --hard-refresh (soft already selects Level 3)" ;; esac
+# ⚠️ GATED ON A NON-EMPTY WITNESS. A bare negative passes VACUOUSLY on an empty witness — measured:
+# under a mutant that kills the function on every path this case still scored a PASS, because
+# "nothing was recorded" satisfies "--hard-refresh was not used". Pair it with the positive above.
+case "$wit" in
+  '') bad "the witness is EMPTY" "the negative below would pass vacuously — nothing was recorded, so there is nothing to be absent" ;;
+  *--hard-refresh*) bad "must NOT use --hard-refresh" "it adds a per-app NoCache render whose failure is only log.Warnf'ed — more cost, no more proof" ;;
+  *) ok "and NOT --hard-refresh (soft already selects Level 3)" ;;
+esac
 case "$wit" in *"-o json"*) ok "it asks for json (there is no jsonpath output on this subcommand)" ;;
   *) bad "asks for json" "witness=[$wit]" ;; esac
 
