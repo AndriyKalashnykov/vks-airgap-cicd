@@ -117,15 +117,16 @@ _probe 0 "storage 400 alone -> ONLINE (github never consulted)" \
 # ---- The CONTROLS. A guard that cannot say NO is not a guard. -------------------------------
 _probe die "genuinely air-gapped: both hosts unresolvable -> DIES" \
   'storage:000:6:Could_not_resolve_host' 'github:000:6:Could_not_resolve_host'
-ck "  ...and the message NAMES the mode as DNS" has DNS "$_LAST_OUT"
+ck "  ...and the PER-HOST line names the mode as DNS (rc=6)" has "rc=6 (DNS" "$_LAST_OUT"
 
 _probe die "blackholed: both hosts time out -> DIES" \
   'storage:000:28:Connection_timed_out' 'github:000:28:Connection_timed_out'
-ck "  ...and the message NAMES the mode as TIMED OUT" has "TIMED OUT" "$_LAST_OUT"
+ck "  ...and the PER-HOST line names the mode as TIMED OUT (rc=28)" has "rc=28 (TIMED OUT" "$_LAST_OUT"
 
 _probe die "intercepting proxy: TLS fails on both -> DIES" \
   'storage:000:60:SSL_certificate_problem' 'github:000:35:SSL_connect_error'
-ck "  ...and the message NAMES the mode as TLS" has TLS "$_LAST_OUT"
+ck "  ...and the PER-HOST lines name the mode as TLS (rc=60 AND rc=35)" has "rc=60 (TLS failed" "$_LAST_OUT"
+ck "  ...on the SECOND host too (a per-host label, not one applied to both)" has "rc=35 (TLS failed" "$_LAST_OUT"
 
 ck "  ...and the die keeps curl's OWN message (the old form asked for it via -S then discarded it)" \
    has SSL "$_LAST_OUT"
@@ -141,8 +142,8 @@ _probe die "mktemp FAILS + genuinely air-gapped -> still DIES with the AIR-GAP g
   'storage:000:6:Could_not_resolve_host' 'github:000:6:Could_not_resolve_host'
 ck "  ...and the message is the SNEAKERNET guidance" has SNEAKERNET "$_LAST_OUT"
 ck "  ...and NOT an mktemp error" hasnt "failed to create file" "$_LAST_OUT"
-ck "  ...and it still NAMES the mode (the rc survives; only curl's text is lost)" \
-   has DNS "$_LAST_OUT"
+ck "  ...and the PER-HOST line still names the mode (the rc survives; only curl's text is lost)" \
+   has "rc=6 (DNS" "$_LAST_OUT"
 unset _STUB_MKTEMP_FAIL
 
 # ---- _curl_rc_label: the vocabulary itself --------------------------------------------------
