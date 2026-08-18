@@ -40,7 +40,7 @@
     },
     {
       "customType": "regex",
-      "description": "Air-gap image inventory: each image ref on the line below its # renovate: comment. currentValue is the TAG and currentDigest the optional @sha256 — captured separately so a digest-pinned row (distroless, whose `nonroot` tag MOVES and has no semver) is bump-able. Capturing them together made currentValue the bare 64-hex, which the docker datasource cannot version, so the row was skipped (skipReason invalid-value) and only the Dockerfile half of a digest bump ever landed. The sha256: prefix MUST stay INSIDE the group: the datasource emits newDigest as sha256:<hex>, so capturing bare hex yields a permanent currentDigest/newDigest mismatch that retries forever.",
+      "description": "Air-gap image inventory: each image ref on the line below its # renovate: comment. currentValue is the TAG and currentDigest the optional @sha256 \u2014 captured separately so a digest-pinned row (distroless, whose `nonroot` tag MOVES and has no semver) is bump-able. Capturing them together made currentValue the bare 64-hex, which the docker datasource cannot version, so the row was skipped (skipReason invalid-value) and only the Dockerfile half of a digest bump ever landed. The sha256: prefix MUST stay INSIDE the group: the datasource emits newDigest as sha256:<hex>, so capturing bare hex yields a permanent currentDigest/newDigest mismatch that retries forever.",
       "managerFilePatterns": [
         "/^images/images\\.txt$/"
       ],
@@ -50,7 +50,7 @@
     },
     {
       "customType": "regex",
-      "description": "Consumed release/tool versions pinned in .env.example (Tekton, kubectl, tkn, argocd CLI+manifest, cloud-provider-kind, harbor chart). Only # renovate:-annotated lines are matched. The optional extractVersion + registryUrl groups mirror every annotation shape used (extractVersion for tkn's v-prefix strip, registryUrl for the harbor helm datasource). currentValue/currentDigest are split for the same reason as the images.txt manager above — DISTROLESS_STATIC_TAG is `nonroot@sha256:...`, and capturing it whole made it unversionable and therefore untracked, so images.txt would bump while this file silently did not and check-image-alignment's env arm would fail. Deliberately NO versioning group: the docker datasource's defaultVersioning is already `docker`, so `versioning=docker` in an annotation is inert AND would not match this pattern, silently untracking whatever it annotates.",
+      "description": "Consumed release/tool versions pinned in .env.example (Tekton, kubectl, tkn, argocd CLI+manifest, cloud-provider-kind, harbor chart). Only # renovate:-annotated lines are matched. The optional extractVersion + registryUrl groups mirror every annotation shape used (extractVersion for tkn's v-prefix strip, registryUrl for the harbor helm datasource). currentValue/currentDigest are split for the same reason as the images.txt manager above \u2014 DISTROLESS_STATIC_TAG is `nonroot@sha256:...`, and capturing it whole made it unversionable and therefore untracked, so images.txt would bump while this file silently did not and check-image-alignment's env arm would fail. Deliberately NO versioning group: the docker datasource's defaultVersioning is already `docker`, so `versioning=docker` in an annotation is inert AND would not match this pattern, silently untracking whatever it annotates.",
       "managerFilePatterns": [
         "/^\\.env\\.example$/"
       ],
@@ -60,7 +60,7 @@
     },
     {
       "customType": "regex",
-      "description": "Image tags in k8s + Tekton manifests AND in scripts/ shell defaults, referenced as ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/<repo>:<tag> (a ${VAR}-prefixed ref the built-in docker manager can't parse). depName/currentValue are extracted from the ref so these bump in lockstep with images/images.txt; the check-image-alignment gate is the deterministic backstop. scripts/ IS IN SCOPE because gitea's tag lives in 40-install-gitea.sh's default (the manifest carries ${GITEA_IMAGE} so the Harbor-less cross-cluster e2e can override it) — with only k8s/ in scope the bot bumped images.txt and could not reach the consumer, so EVERY gitea bump landed RED on check-image-alignment (measured: PR #443, 2026-07-28). The char classes exclude `}` AND `<>`, both load-bearing: without `}` the shell default's closing brace of ${GITEA_IMAGE:-...} is captured into currentValue (measured: currentValue='1.27.0-rootless}'), which the docker datasource cannot version, so the row is SKIPPED SILENTLY — green config, zero coverage, the same invisible-untracking failure documented on the images.txt and .env.example managers above. Without `<>` the regex also extracts placeholder prose from COMMENTS (measured over scripts/: 4 deps instead of 1 — `<repo>:<tag>)` from check-image-alignment.sh's own docstring and `<app>-builder:<tag>,` from 14-builder-build.sh + 22-builder-push.sh), producing chronic failed docker lookups on the Dependency Dashboard — the same class as the kaniko registryUrl rule below. No legal Docker repo or tag contains `}`, `<` or `>`, so neither exclusion can drop a real ref.",
+      "description": "Image tags in k8s + Tekton manifests AND in scripts/ shell defaults, referenced as ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/<repo>:<tag> (a ${VAR}-prefixed ref the built-in docker manager can't parse). depName/currentValue are extracted from the ref so these bump in lockstep with images/images.txt; the check-image-alignment gate is the deterministic backstop. scripts/ IS IN SCOPE because gitea's tag lives in 40-install-gitea.sh's default (the manifest carries ${GITEA_IMAGE} so the Harbor-less cross-cluster e2e can override it) \u2014 with only k8s/ in scope the bot bumped images.txt and could not reach the consumer, so EVERY gitea bump landed RED on check-image-alignment (measured: PR #443, 2026-07-28). The char classes exclude `}` AND `<>`, both load-bearing: without `}` the shell default's closing brace of ${GITEA_IMAGE:-...} is captured into currentValue (measured: currentValue='1.27.0-rootless}'), which the docker datasource cannot version, so the row is SKIPPED SILENTLY \u2014 green config, zero coverage, the same invisible-untracking failure documented on the images.txt and .env.example managers above. Without `<>` the regex also extracts placeholder prose from COMMENTS (measured over scripts/: 4 deps instead of 1 \u2014 `<repo>:<tag>)` from check-image-alignment.sh's own docstring and `<app>-builder:<tag>,` from 14-builder-build.sh + 22-builder-push.sh), producing chronic failed docker lookups on the Dependency Dashboard \u2014 the same class as the kaniko registryUrl rule below. No legal Docker repo or tag contains `}`, `<` or `>`, so neither exclusion can drop a real ref.",
       "managerFilePatterns": [
         "/^k8s/.+\\.yaml$/",
         "/^scripts/.+\\.sh$/"
@@ -69,6 +69,16 @@
         "\\$\\{HARBOR_URL\\}/\\$\\{HARBOR_INFRA_PROJECT\\}/(?<depName>[^:\\s\"}<>]+):(?<currentValue>[^\\s\"}<>]+)"
       ],
       "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Release versions pinned as a SHELL DEFAULT in scripts/*.sh, annotated with `# renovate:`. WHY THIS EXISTS: scripts/e2e-cross-cluster.sh:27 carried exactly such an annotation and NOTHING honoured it \u2014 manager #3 is the only one scoped to scripts/, and its matchString is the ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/... image-ref form, which cannot match an annotated shell default (measured with a positive control: that regex matches a real Harbor ref and does NOT match this block). Meanwhile the SAME dep is tracked in .env.example by manager #2 and was bumped three times (v3.4.6, v3.5.0, v3.5.1) while the script literal never moved once \u2014 so the annotation read as maintained and was inert, which is the whole drift mechanism. The value shape here is a shell default `VAR=\"${OTHER:-value}\"`, not .env.example's bare `VAR=value`, which is why #2's pattern does not cover it either. Same depName+datasource as #2's entry deliberately, so both files move together.",
+      "managerFilePatterns": [
+        "/^scripts/.+\\.sh$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)(?: extractVersion=(?<extractVersion>[^\\s]+))?\\n[A-Z_]+=\"\\$\\{[A-Z_]+:-(?<currentValue>[^\\s\"}]+)\\}\""
+      ]
     }
   ],
   "vulnerabilityAlerts": {
@@ -138,7 +148,7 @@
       "groupName": "Spring Boot"
     },
     {
-      "description": "Group all docker-datasource images (Dockerfile ARG bases + images/images.txt inventory) into one PR so the same image pinned in multiple files bumps together. pinDigests off: it governs ADDING a digest to a ref that has none, NOT updating one that exists (renovate lookup: the currentDigest path never consults pinDigests), so the digest-pinned distroless row still bumps normally; these are build/mirror images for a demo, not a published runtime artifact. Do NOT add a {matchUpdateTypes:[digest], enabled:false} companion here: that guard exists for SEMVER-tagged images where a digest refresh can mask a version bump, and distroless is the documented opposite — `nonroot` MOVES and has no semver, so the digest refresh is the ONLY update path. Scoped to docker it would also kill digest updates for every app Dockerfile's digest-pinned base-image ARG.",
+      "description": "Group all docker-datasource images (Dockerfile ARG bases + images/images.txt inventory) into one PR so the same image pinned in multiple files bumps together. pinDigests off: it governs ADDING a digest to a ref that has none, NOT updating one that exists (renovate lookup: the currentDigest path never consults pinDigests), so the digest-pinned distroless row still bumps normally; these are build/mirror images for a demo, not a published runtime artifact. Do NOT add a {matchUpdateTypes:[digest], enabled:false} companion here: that guard exists for SEMVER-tagged images where a digest refresh can mask a version bump, and distroless is the documented opposite \u2014 `nonroot` MOVES and has no semver, so the digest refresh is the ONLY update path. Scoped to docker it would also kill digest updates for every app Dockerfile's digest-pinned base-image ARG.",
       "matchDatasources": [
         "docker"
       ],
