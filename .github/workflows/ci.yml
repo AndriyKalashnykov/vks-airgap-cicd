@@ -428,6 +428,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}   # gh needs an explicit token even for a public endpoint
         run: |
           set -uo pipefail
+          rc=0            # initialised: `set -u` + the `|| rc=$?` form means it is unset on the happy path
           # ⚠️ NO `filter` PARAMETER. The API default is the LATEST attempt, which is what we must
           # judge. MEASURED: with filter=all this sees every attempt, so runs 32044956290 and
           # 32044785511 — genuinely green after a re-run — would be refused on attempt 1's failure,
@@ -440,9 +441,15 @@ jobs:
             "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
             --jq '.jobs[] | [ .name, (.conclusion // "none"),
                   ([ .steps[]? | select(.name != "Set up job" and .name != "Complete job") ] | length)
-                ] | @tsv' > /tmp/ci-jobs.tsv
-          rc=$?
-          if [ "$rc" -ne 0 ] || [ ! -s /tmp/ci-jobs.tsv ]; then
+                ] | @tsv' > /tmp/ci-jobs.tsv || rc=$?
+          # ⚠️ `|| rc=$?`, NOT a bare `rc=$?` on the next line. GitHub runs a `run:` block as
+          # `/usr/bin/bash -e {0}`, and the `set -uo pipefail` above does NOT clear that `-e` — so a
+          # failing `gh api` killed the step AT THE GH LINE and `rc=$?` never executed. The outcome
+          # was still fail-closed (the job failed), but the operator got a bare gh error instead of
+          # the sentence below naming the cause — and the cause is an API 5xx, i.e. the SAME outage
+          # class that produced this control's founding incident. Reproduced both ways 2026-08-17:
+          # with `-e` -> rc=1 and NO output; without -> the message prints.
+          if [ "${rc:-0}" -ne 0 ] || [ ! -s /tmp/ci-jobs.tsv ]; then
             echo "the jobs API read produced nothing (rc=$rc) — refusing rather than assuming green"
             exit 1
           fi
