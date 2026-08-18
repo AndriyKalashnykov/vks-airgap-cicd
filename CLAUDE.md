@@ -450,6 +450,12 @@ the trip: every open question as a numbered step with its command, its expected 
 send back. The lab is the scarce resource — a step you run without knowing what to collect is a trip we
 cannot learn from.
 
+**Running the six-row walkthrough matrix?** [`docs/matrix-standing-rules.md`](docs/matrix-standing-rules.md)
+is the 34 standing rules it runs under — scope, how to read the documents, how to execute, how to read the
+VERDICT, the both-ways implication rule, the security constraints, and the during-a-run rules (the tree is
+FROZEN, never edit a script mid-run, kill by process group). They existed only in chat and were asked for
+twice; each during-a-run rule has a recorded incident behind it.
+
 ## Skills
 
 Use the following skills when working on related files:
