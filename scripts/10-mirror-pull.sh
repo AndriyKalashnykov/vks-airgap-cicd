@@ -73,6 +73,11 @@ declare -A MANIFESTS=(
 for f in "${!MANIFESTS[@]}"; do
   log_info "downloading manifest $f"
   http_get_retry "${MANIFESTS[$f]}" "${MANIFEST_DIR}/${f}"
+  # B181: a captive portal answers 200 with a block page, so the download SUCCEEDS and writes
+  # HTML here. Without this the page becomes the manifest, mirror_collect_images silently
+  # drops the controller images, and the bundle is carried across the air gap before
+  # `kubectl apply` fails on HTML. MEASURED against real curl 8.5.0.
+  assert_k8s_manifest "${MANIFEST_DIR}/${f}" "${MANIFESTS[$f]}"
 done
 
 # ---- 2. Collect the full image list ----

@@ -92,13 +92,76 @@ printf 'subjectAltName=DNS:argocd-server,DNS:localhost\n' > "$D/ext"
 openssl x509 -req -in "$D/l.csr" -CA "$D/ca.crt" -CAkey "$D/ca.key" -out "$D/l.crt" -days 1 \
   -extfile "$D/ext" >/dev/null 2>&1
 
-PORT="${TEST_ADDR_VERDICT_PORT:-18443}"
+# AN EPHEMERAL FREE PORT, then PROVE WE ARE TALKING TO OUR OWN SERVER.
+#
+# MEASURED 2026-08-18: this test failed with
+#     FAIL  IP + correct CA -> rc 1 (want 3)
+#     FAIL  the SAN probe returned nothing usable: ' DNS:vcsa.env1.lab.test'
+# on a tree with NO relevant change — including on unmodified origin/main. The cause was a stray
+# TLS server left behind by an earlier session, squatting on the hardcoded 18443 and presenting a
+# `CN=vcsa.env1.lab.test` certificate. The failure mode is the dangerous one: `s_server`'s bind
+# failure went to /dev/null, and the readiness loop below SUCCEEDED — against the squatter. So the
+# whole suite then measured SOMEONE ELSE'S SERVER and reported it as a product defect.
+#
+# Two independent fixes, because either alone is insufficient:
+#   1. Scan a DISJOINT band for a free port. B180(f) is explicit that `test-fetch-ca-pin.sh:47`
+#      scans `seq 18443 18470` starting on the exact literal this file used to hardcode, that both
+#      suites are in TEST_FAST, and that serial order hides the contention only by luck of $(sort) —
+#      so this one takes 18471-18499 and they can never collide BY CONSTRUCTION. (My first draft of
+#      this fix scanned 18443-18470, i.e. straight into the collision the row warns about.)
+#      MEASURED: ip_local_port_range is 32768-60999 here, so 18471-18499 also stays clear of the
+#      ephemeral range — B180(g)'s objection to `pick_port` (it moves the listener INTO that range)
+#      does not apply to a fixed low band.
+#      This half only lowers probability; it is NOT the primary fix, per B180(g).
+#   2. ASSERT THE SERVED CERT IS THE ONE WE MINTED. This is the load-bearing half: it closes the
+#      TOCTOU window and covers B180(d) — `openssl s_server -accept` fails loudly on a busy port
+#      but into /dev/null, `SRV=$!` then holds a DEAD PID, and the readiness loop falls through. A
+#      `kill -0 "$SRV"` liveness check would catch the dead-PID case only; asserting the CERT
+#      catches that AND the live-but-foreign case, in one check.
+#      It exits NON-ZERO, per B180(e): the sibling records that an `exit 0`/SKIP here once produced
+#      ZERO assertions read as a pass. This is a harness fault, not a product fault, so it says so —
+#      but it must never be silent and must never be green.
+PORT="${TEST_ADDR_VERDICT_PORT:-}"
+if [ -z "$PORT" ]; then
+  for p in $(seq 18471 18499); do
+    if ! (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then PORT="$p"; break; fi
+  done
+fi
+[ -n "$PORT" ] || { printf '  INCONCLUSIVE  no free port in 18471-18499 (harness fault, not a product fault)\n'; exit 1; }
 openssl s_server -cert "$D/l.crt" -key "$D/l.key" -accept "$PORT" -quiet >/dev/null 2>&1 &
 SRV=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   printf '' | timeout 2 openssl s_client -connect "127.0.0.1:${PORT}" </dev/null >/dev/null 2>&1 && break
   sleep 1
 done
+# THE IDENTITY GATE — compare the FINGERPRINT, not the subject.
+#
+# ⚠️ A SUBSTRING TEST ON `CN=argocd-server` IS DEFEATED BY THE MOST LIKELY SQUATTER OF ALL: an
+# ORPHANED `s_server` FROM A PREVIOUSLY-KILLED RUN OF THIS VERY TEST, which mints exactly that CN.
+# Its `trap cleanup EXIT` does NOT fire on SIGKILL, and this repo has recorded both kill-by-PID
+# orphaning detached children and a harness being killed mid-run. MEASURED 2026-08-18: an impostor
+# with a DIFFERENT key but `subject=CN = argocd-server` passes a substring gate and reproduces the
+# original incident shape byte-for-byte (`rc 1 (want 3)` + "returned nothing usable"), so the gate
+# would have been blind to precisely its own leftovers. The fingerprint is key-bound and cannot be
+# forged by re-using the name.
+# `</dev/null` alone — a `printf '' |` in front of it is dead (SC2259: the redirect overrides the
+# pipe), and shellcheck treats that as an ERROR, not a warning.
+_srv_pem="$(timeout 5 openssl s_client -connect "127.0.0.1:${PORT}" </dev/null 2>/dev/null || true)"
+_srv_subject="$(printf '%s' "$_srv_pem" | openssl x509 -noout -subject 2>/dev/null || true)"
+_srv_fp="$(printf '%s' "$_srv_pem" | openssl x509 -noout -fingerprint -sha256 2>/dev/null || true)"
+_our_fp="$(openssl x509 -in "$D/l.crt" -noout -fingerprint -sha256 2>/dev/null || true)"
+# The subject stays in the MESSAGE — it is what names the squatter for a human — but the DECISION
+# is the fingerprint. An empty _our_fp must never compare equal to an empty _srv_fp.
+if [ -n "$_our_fp" ] && [ "$_srv_fp" = "$_our_fp" ]; then
+  :
+else
+  { printf '  INCONCLUSIVE  port %s is serving a certificate we did NOT mint: %s\n' "$PORT" "${_srv_subject:-<none>}"
+    printf '        served fp: %s\n        ours     : %s\n' "${_srv_fp:-<none>}" "${_our_fp:-<none>}"
+    printf '        Our s_server could not bind, so every assertion below would measure that\n'
+    printf '        server instead of ours. Find the squatter with: ss -ltnp | grep :%s\n' "$PORT"
+    kill "$SRV" 2>/dev/null || true
+    exit 1; }
+fi
 
 echo "== 2. ca_verifies_endpoint rc -> the arm the operator reads =="
 probe() { local rc=0; ca_verifies_endpoint "$1" "$PORT" "$2" || rc=$?; printf '%s' "$rc"; }
