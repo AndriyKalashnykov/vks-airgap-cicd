@@ -732,13 +732,33 @@ argocd_await_revision() {
           log_error "  The controller has not judged this Application, so nothing here is evidence about"
           log_error "  the repo. Check that an application-controller is running and watching '${_ns}'." ;;
       esac
-    elif [ -n "$rev" ]; then
+    # TEST THE RECONCILE FIRST, THEN THE REVISION. Ordering these the other way round made
+    # `elif [ -n "$rev" ]` OWN the "did NOT re-reconcile" sentence, so an EMPTY revision could never
+    # receive that diagnosis EVEN WHEN A FROZEN reconciledAt was the true cause — and the empty arm
+    # then printed BYTE-IDENTICAL text whether the timestamp had advanced or not, conflating two
+    # states and naming neither. Measured.
+    elif [ "$_rec" = "$_pre_rec" ]; then
+      # The forced refresh was never processed. True whether or not a revision is present, so this
+      # arm now covers the case the empty arm used to swallow.
       log_error "Application '${app}' did NOT re-reconcile after a forced refresh (${_tried} attempts)."
-      log_error "  It still carries revision ${_pre_rev} from an EARLIER run, and reconciledAt never advanced"
-      log_error "  past ${_pre_rec:-<none>} — so this run obtained NO evidence the repo is reachable now."
+      log_error "  reconciledAt never advanced past ${_pre_rec:-<none>}, so this run obtained NO evidence"
+      log_error "  the repo is reachable now.${rev:+ It still carries revision ${_pre_rev} from an EARLIER run.}"
+      log_error "  The controller did not act on the refresh: check that an application-controller is"
+      log_error "  running and watching '${_ns}'."
     else
-      log_error "Application '${app}' reported an EMPTY revision on all ${_tried} attempts."
-      log_error "  The reads SUCCEEDED, so this is the Application's real state — not an access fault."
+      # reconciledAt DID advance — the comparison ran — and it recorded no revision. Per
+      # state.go:654-656 `syncStatus.Revision` is set only `if len(revisions) > 0`, while :1040
+      # assigns Status unconditionally, so Synced-with-no-revision is a real state and it is about
+      # the TARGET REVISION, not about reachability. Deliberately NOT the `unjudged` wording: the
+      # controller HAS judged this Application (that is what the advance means), so claiming it has
+      # not would be an affirmative falsehood — the same class as claiming "no conditions" when the
+      # read failed.
+      log_error "Application '${app}' RECONCILED but recorded an EMPTY revision (${_tried} attempts)."
+      log_error "  reconciledAt advanced ${_pre_rec:-<none>} -> ${_rec}, and the reads SUCCEEDED — so the"
+      log_error "  comparison ran and resolved no revision. That is about the TARGET REVISION, not about"
+      log_error "  reaching the repo. Check what the Application asks for and what the controller resolved:"
+      log_error "    kubectl -n ${_ns} get application ${app} \\"
+      log_error "      -o jsonpath='{.spec.source.targetRevision}{\"  ->  \"}{.status.sync.revision}{\"\\n\"}'"
     fi
     log_error "  namespace: ${_ns}   API server: ${_api}"
     log_error "  Its own conditions:"
@@ -859,6 +879,12 @@ argocd_app_fetch_verdict() {
   # claim manufactured by an absent tool. That is the recorded gitea_hook_ids incident (lib/os.sh),
   # one file over, and it would be strictly worse than the hedge this replaces.
   local _cerr _sst _jrc=0
+  # NO leading separator here, and that is deliberate — it is the one place the sibling's shape does
+  # NOT transfer. `join("; ")` ALREADY puts "; " before every non-first message, so the two prefix
+  # alternatives below are what make the test position-independent; prepending an empty element adds
+  # nothing (measured: reverting it turns ZERO cases red, while reverting the ALTERNATIVES turns two
+  # red) and it corrupts the output, because `_afv_msg="$_cerr"` has no `${_cerr#"; "}` strip on this
+  # path — the caller printed `; Failed to load target state: …` verbatim.
   _cerr="$(printf '%s' "$_json" | jq -r '[.status.conditions[]? | select(.type=="ComparisonError") | .message] | join("; ")')" || _jrc=$?
   _sst="$(printf '%s' "$_json" | jq -r '.status.sync.status // ""')" || _jrc=$?
   if [ "$_jrc" -ne 0 ]; then
@@ -875,13 +901,26 @@ argocd_app_fetch_verdict() {
   if [ -n "$_cerr" ]; then
     _afv_msg="$_cerr"
     case "$_cerr" in
-      "Failed to load target state: "*) _afv_state=repo ;;
+      # BOTH alternatives, matching the sibling: first-position AND after the leading separator.
+      "Failed to load target state: "*|*"; Failed to load target state: "*) _afv_state=repo ;;
       *)                                _afv_state=notrepo ;;
     esac
-  elif [ "$_sst" = Unknown ]; then
-    # Unknown with NO condition: the controller never produced a comparison at all (an
-    # InvalidSpecError, or an Application it has not yet touched). A third remedy again.
-    _afv_state=unknown; _afv_msg="sync.status=Unknown with no ComparisonError — the controller has not judged this Application"
+  elif [ "$_sst" != Synced ] && [ "$_sst" != OutOfSync ]; then
+    # POSITIVE enum, exactly as the sibling classifier uses — and this site needs it MORE, because
+    # its own read MANUFACTURES the empty string: `jq -r '.status.sync.status // ""'` yields "" for
+    # an Application with no `.status.sync` at all, which is precisely a freshly-created app the
+    # controller has not judged. Under the old `[ "$_sst" = Unknown ]` test that fell through to the
+    # healthy arm and this function AFFIRMED `ok` — the caller (70-configure-argocd.sh:801) then
+    # logged "<app>: synced (argocd-server)" for an Application nothing had compared. On the TENANT
+    # path, which is the one branch that has never executed in any recorded walk run.
+    # `Synced|OutOfSync` is complete: types.go@v3.5.1:1885/1887/1889.
+    #
+    # `unknown` here is this function's own vocabulary (the caller's `*)` arm), NOT the sibling's
+    # `unjudged` — do not unify them without reading 70-configure-argocd.sh:800-831.
+    _afv_state=unknown
+    # INTERPOLATE. Hardcoding "sync.status=Unknown" made the message assert a value the read did not
+    # produce — it prints for an EMPTY status too, and the caller emits it verbatim.
+    _afv_msg="sync.status=${_sst:-<none>} with no ComparisonError — the controller has not judged this Application"
   else
     _afv_state=ok; _afv_msg="$_sst"
   fi

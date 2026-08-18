@@ -81,6 +81,11 @@ run() {
           # indistinguishable from a healthy one, and the gate PASSED.
           case "$STUB_MODE" in
             signalfail) echo 'Error from server (Forbidden): applications.argoproj.io is forbidden: cannot get conditions' >&2; return 1 ;;
+            # condonly_fail: ONLY this read fails; the sync.status read below SUCCEEDS. That is the
+            # shape R5 exists for — with `2>` on both, the successful second read TRUNCATED the
+            # first's stderr, so the arm whose whole job is to surface kubectl's words printed none.
+            # signalfail cannot expose it because it fails BOTH reads.
+            condonly_fail) echo 'Error from server (Forbidden): FORBIDDEN-READING-CONDITIONS' >&2; return 1 ;;
             # ⚠️ THE PREFIX IS PART OF THE FIXTURE. state.go:698 is
             #   msg := "Failed to load target state: " + err.Error()
             # so real argo-cd NEVER emits the bare rpc error. Without the prefix this fixture makes
@@ -104,6 +109,10 @@ run() {
             notrepo_real)  printf '; Failed to load live state: the server could not find the requested resource' ;;
             # unjudged_real: Unknown with NO condition — the controller has not judged it.
             unjudged_real) printf '' ;;
+            # nostatus_real: NO .status.sync at all. kubectl returns EMPTY with rc=0 for a missing
+            # nested path, so this is the state the POSITIVE enum exists to catch — under
+            # `[ "$_sst" = Unknown ]` as the failure test it fell through to the healthy arm.
+            nostatus_real) printf '' ;;
             # repo_notfirst: argo-cd appends SEVERAL conditions to one list and the repo message is
             #   not always first (in v3.4.5 the GPG sites at 512-524 precede the repo site at 628).
             #   With a trailing/absent separator this classifies `notrepo` and tells the operator NOT
@@ -116,6 +125,8 @@ run() {
           case "$STUB_MODE" in
             signalfail) echo 'Error from server (Forbidden): applications.argoproj.io is forbidden: cannot get sync.status' >&2; return 1 ;;
             unreachable_real|notrepo_real|unjudged_real|repo_notfirst) printf 'Unknown' ;;
+            nostatus_real) printf '' ;;   # the read MANUFACTURES this for a missing .status.sync
+            condonly_fail) printf 'Synced' ;;   # this read SUCCEEDS — that is the point
             # advisory_real is the whole point: the comparison COMPLETED, so argo-cd's own verdict is
             # Synced even though a condition is present.
             *) printf 'Synced' ;;
@@ -128,7 +139,7 @@ run() {
         empty)    printf '' ;;
         condfail) case " $* " in *conditions*) echo 'Error from server (Forbidden): cannot read conditions' >&2; return 1 ;; esac; printf '' ;;
         signalfail) printf 'freshSHA9999' ;;                # healthy-looking: ONLY the signal read fails
-        unreachable_real|notrepo_real|unjudged_real|repo_notfirst) printf 'main' ;;  # the BRANCH NAME - what argo-cd leaves after a FAILED fetch
+        unreachable_real|notrepo_real|unjudged_real|repo_notfirst|nostatus_real) printf 'main' ;;  # the BRANCH NAME - what argo-cd leaves after a FAILED fetch
         advisory_real) printf 'freshSHA9999' ;;             # the fetch SUCCEEDED — a real revision
         *)        printf 'staleSHA1234' ;;                  # a revision that PERSISTS from an earlier run
       esac
@@ -223,13 +234,32 @@ case "$out" in *"could not READ"*) ok "a missing CRD is a read fault too" ;;
   *) bad "a missing CRD names the READ" "got: ${out:0:150}" ;; esac
 
 echo
-echo "== an EMPTY revision still offers the repo as ONE candidate, with the confirming command =="
+echo "== an EMPTY revision names the RECONCILE, and must NOT assert the repo =="
+# ⚠️ CONTRACT CHANGED, deliberately, and this is the reasoning — not a downgrade to obtain green.
+# These two cases used to assert that an empty revision offers the repo-server probe. The probe's
+# closing line asserts a CONCLUSION — "anything else => GITEA_ARGOCD_URL is the fault" — and this
+# state cannot support it: reaching here means `failedToLoadObjs` is false, i.e. GetRepoObjs
+# SUCCEEDED, so the repo WAS read. The arm's own preceding sentence already said as much ("the reads
+# SUCCEEDED ... not an access fault"), so the old behaviour had one line contradict the next. The
+# probe is now offered in exactly one state — `repo`, where argo-cd itself named the repo — and the
+# case below pins that, so this rewrite does not reduce what is asserted.
+# The `empty` fixture is a FROZEN-reconcile fixture (_pre_rec == _rec), which is why it lands in the
+# reconcile arm rather than the recorded-no-revision arm.
 out="$(run empty)"
-case "$out" in *"EMPTY revision"*|*"did NOT re-reconcile"*) ok "an empty value is reported honestly" ;;
-  *) bad "an empty value is reported" "got: ${out:0:150}" ;; esac
-case "$out" in *"info/refs"*) ok "it hands over the command that CONFIRMS the repo instead of guessing" ;;
-  *) bad "it offers the confirming command" "got: ${out:0:150}" ;; esac
-case "$out" in *"ONE candidate"*) ok "the repo is A candidate, not asserted as THE cause" ;;
+case "$out" in *"did NOT re-reconcile"*) ok "a frozen reconcile is named as the fault, not the revision" ;;
+  *) bad "an empty value is reported honestly" "got: ${out:0:150}" ;; esac
+case "$out" in *"application-controller"*) ok "and it hands over a concrete next step" ;;
+  *) bad "it offers a next step" "got: ${out:0:150}" ;; esac
+case "$out" in *"GITEA_ARGOCD_URL is the fault"*)
+      bad "must NOT assert the repo here" "GetRepoObjs succeeded in this state; the arm's own text says so" ;;
+  *) ok "it does NOT assert GITEA_ARGOCD_URL is the fault" ;; esac
+
+# THE POSITIVE COUNTERPART, and it is load-bearing: without it, DELETING the probe entirely scores a
+# clean green (measured 43/0), so nothing would witness that the probe exists at all.
+out="$(run unreachable_real)"
+case "$out" in *"info/refs"*) ok "the repo arm DOES still offer the confirming command" ;;
+  *) bad "the repo arm must offer the probe" "R4 narrowed the whitelist to \`repo\`; if it does not fire HERE the probe is dead" ;; esac
+case "$out" in *"ONE candidate"*) ok "and offers it as A candidate, not as THE cause" ;;
   *) bad "the repo is offered as a candidate" "got: ${out:0:150}" ;; esac
 
 echo
@@ -324,6 +354,22 @@ case "$out" in *"has not judged"*) ok "it says the controller has not judged it"
 out="$(run repo_notfirst)"
 case "$out" in *"FETCH FAILED"*) ok "a repo message that is NOT FIRST is still classified as the repo" ;;
   *) bad "position-independent prefix test" "got: ${out:0:220}" ;; esac
+
+# FINDING 6: without this case, reverting the positive enum leaves the suite IDENTICAL — R3 was
+# unasserted in this suite because every non-*_real mode returns Synced.
+out="$(run nostatus_real)"
+case "$out" in *'RC=0'*) bad "an EMPTY sync.status must NOT pass" "the read manufactures '' for a missing path; affirming ok here reports 'the repo is reachable NOW' about a read that judged nothing" ;;
+  *) ok "an EMPTY sync.status FAILS the gate (the positive enum catches what the read manufactures)" ;; esac
+case "$out" in *"has not judged"*) ok "and it is named as unjudged, not affirmed as healthy" ;;
+  *) bad "empty status -> unjudged" "got: ${out:0:200}" ;; esac
+
+# FINDING 5: R5 (truncate once + append both) was UNASSERTED — reverting it left the suite
+# IDENTICAL, because no fixture failed ONLY the first read.
+out="$(run condonly_fail)"
+case "$out" in *'RC=0'*) bad "a failed condition read must NOT pass" "" ;;
+  *) ok "a read fault on the CONDITIONS alone still fails the gate" ;; esac
+case "$out" in *FORBIDDEN-READING-CONDITIONS*) ok "and kubectl's OWN words survive the SECOND read (R5: truncate once, append both)" ;;
+  *) bad "the first read's stderr is preserved" "with 2> on both reads the successful second read truncates the first's stderr, so 'kubectl said:' prints NOTHING" ;; esac
 
 printf '  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
