@@ -322,6 +322,14 @@ assert_starved check-app-toolchains.sh    "check-app-toolchains dies with no too
 assert_starved check-pull-secret-alignment.sh "check-pull-secret-alignment dies with no apps"      'apps/registry.tsv'
 assert_starved check-env-clobber.sh       "check-env-clobber dies with nothing uncommented"        '.env.example'
 
+# check-expect-literals: its corpus is the WALKED DOCUMENTS, not scripts/, so starving `docs/*.md`
+# does not touch the gate's own source and there is no blast-radius overlap. Emptied, the extractor
+# yields ZERO literals and the FLOOR (40) fires — which is exactly the broken-extractor signature
+# that floor exists for. Declared here on the SAME commit that introduces the gate, so it never
+# arrives in the UNDECLARED list: a new gate showing up as a named gap is this harness working, but
+# it is debt I would be creating knowingly.
+assert_starved check-expect-literals.sh   "check-expect-literals dies with no Expect literals"     'docs/*.md'
+
 # check-java-alignment: DECLARABLE only since its two zero-states were separated (a registry with
 # apps but no java app is honest emptiness -> exit 0; a registry yielding ZERO apps is blindness ->
 # die). Before that split it died SILENTLY on an empty registry (rc=1, zero output) and this case
@@ -371,7 +379,9 @@ DECLARED=${#DECLARED_GATES[@]}
 # and every assertion passed, stderr was empty, DECLARED silently fell 19 -> 18, and the closing
 # line still read "UNDECLARED: none". The count is the only thing that notices, so it ratchets:
 # it may only ever go UP, and lowering the floor has to be a deliberate, visible edit.
-MIN_DECLARED=19
+# 19 -> 20 with check-expect-literals, declared on the commit that introduced it. The ratchet may
+# only ever go UP.
+MIN_DECLARED=20
 if [ "$DECLARED" -lt "$MIN_DECLARED" ]; then
   echo "test-gate-vacuity: DECLARED fell to ${DECLARED} (floor ${MIN_DECLARED}) — a starvation case was REMOVED, or a gate was PARKED in NOT_STARVABLE to silence it. Restore the case, or lower the floor deliberately and say why." >&2
   fail=1
