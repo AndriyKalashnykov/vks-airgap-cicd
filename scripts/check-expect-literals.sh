@@ -42,7 +42,8 @@
 #     PASSING literals are satisfied ONLY by comment lines. Two are prose (one of them a comment
 #     quoting the runbook's own command, which is circular); the third was a real allowlist case
 #     hiding in plain sight — its printer interpolates a variable, so the literal can never appear
-#     in the source at all, and it is now an ALLOW entry with that reason rather than silently green. Found while RED-proving this gate: the string
+#     in the source at all, and it is now an ALLOW entry with that reason rather than silently green.
+#     Separately: Found while RED-proving this gate: the string
 #     one Expect literal occurs TWICE in 28-harbor-admin-password.sh — once in the log line that
 #     actually prints it (:54) and once in a comment ABOUT that line (:39). Rewording only the log
 #     line leaves the comment satisfying the search, and the gate stays green over a claim the code
@@ -109,13 +110,31 @@ for _r in $ROOTS; do
   for _i in $_incs; do
     _p="$(dirname "$_r")/${_i}"
     [ -f "$_p" ] || { echo "check-expect-literals: walk-include names a missing file: ${_i} (from ${_r})"; exit 1; }
+    # G2: the SAME mechanism the root `[ -r ]` closes. Measured before this line existed:
+    # `chmod 000 docs/common-bootstrap.md` gave `55 checked, 0 MISSING, OK` rc=0 — one literal
+    # silently dropped, above the floor, from the file BOTH runbooks share.
+    [ -r "$_p" ] || { echo "check-expect-literals: walk-include names an unreadable file: ${_i} (from ${_r})"; exit 1; }
     case " $DOCS " in *" $_p "*) ;; *) DOCS="$DOCS $_p" ;; esac
   done
 done
 
 # THE COVERAGE ASSERTION. Only meaningful for the DEFAULT root set — an explicit argument list is a
-# deliberate narrowing (the tests use it), so do not demand it cover the whole tree.
+# deliberate narrowing, so it must not demand whole-tree coverage.
+# ⚠️ THE RATIONALE USED TO SAY "the tests use it". THAT WAS FALSE — measured: the ONLY invocation in
+# the repo is the bare `make check-expect-literals`. The guard is kept because a future fixture-based
+# harness WILL pass roots, not because one does today. And the skip is made AUDIBLE: a silent
+# disappearing assertion is the shape this repo bans.
+if [ "$#" -ne 0 ]; then
+  echo "check-expect-literals: NOTE — explicit roots given, so the whole-tree coverage assertion is SKIPPED"
+fi
 if [ "$#" -eq 0 ]; then
+  # ⚠️ SCOPE, stated so nobody "fixes" either half. (a) The glob is docs/*.md — NOT recursive and NOT
+  # repo-root; four subdirectories exist (decisions, diagrams, vks-services, reviews) and MEASURED
+  # today none carries an Expect line, so this is latent, not live. (b) The anchor below is COLUMN-0
+  # `^\*\*Expect`, deliberately MATCHING walk-doc.sh:440's `startswith('**Expect')`, while the
+  # EXTRACTOR further down uses the wider `^[[:space:]]*`. That asymmetry is correct — the walker
+  # decides which blocks are checkable by the strict anchor and which literals to pull by the loose
+  # one — so do NOT align them.
   _uncovered=""
   for _d in docs/*.md; do
     grep -qE '^\*\*Expect' "$_d" 2>/dev/null || continue
@@ -162,11 +181,12 @@ cm9ib3QgYWNjb3VudCAncm9ib3QkdmtzLWNpY2QnIGNyZWF0ZWQu                      # ours
 RElTQ09WRVJZOg==                                                          # pairing drop: echoed by its own fenced block (scenario-2 discovery step)
 Li9zZWNyZXRzL2FyZ29jZC1jYS5jcnQ=                                          # pairing drop: appears in its own block (scenario-2 argocd CA step)
 d3JpdGUgbWVjaGFuaXNtOiBhcGk=                                      # ours; the printer INTERPOLATES the mechanism, so this exact
-#     string can never appear in the source. ⚠️ INERT TODAY — a COMMENT showing sample output
-#     satisfies the search first, so this entry is never reached and the allowlisted count stays 8.
-#     It is a SAFETY NET, not dead weight: the moment that comment is reworded, this is the only
-#     thing between the gate and a false RED on a literal that is unmatchable by construction.
-#     Do NOT prune it as a dead entry — check whether the comment still exists first.
+#     string can never appear in the source. It is LIVE and load-bearing: 70-configure-argocd.sh:350
+#     used to carry a sample-output comment that satisfied the search, so this entry was inert and
+#     the literal was passing VACUOUSLY off a comment. That comment now names the mechanism as a
+#     placeholder instead, so the vacuity is REMOVED rather than documented, and deleting this
+#     entry gives one MISSING. Measured both ways. (No backticks here: this block is inside a
+#     single-quoted string and shellcheck reads them as command substitution, SC2016.)
 '
 ALLOW="$(printf '%s\n' "$ALLOW_B64" | sed 's/#.*//; s/[[:space:]]//g' | grep -v '^$' \
          | while IFS= read -r b; do printf '%s' "$b" | base64 -d 2>/dev/null; printf '\n'; done)"
@@ -229,8 +249,16 @@ while IFS= read -r lit; do
   # measured clean here (160/160 rc=0, including pinned to one core with `taskset -c 0`), so this is
   # NOT a reproduced bug — it is simply the `cmd | grep -q` shape under `pipefail` that this
   # portfolio's shell rules forbid, and the capture form costs nothing.
+  # ⚠️ EXACT PATH, NOT A SUBSTRING (G1). `grep -vF 'check-expect-literals.sh'` also removes any file
+  # whose NAME CONTAINS this one — most obviously `scripts/test-check-expect-literals.sh`, the
+  # RED-proof harness this repo builds for every gate (test-walk-doc.sh, test-ca-staleness-check.sh
+  # and test-argocd-preflight-ns.sh all exist). With that harness present and a literal witnessed by
+  # BOTH files, the substring form drops both, concludes "this gate's own source is the ONLY thing
+  # that satisfies it", and prints a remedy naming the WRONG FILE — a false RED whose message is
+  # factually untrue. `-vxF` on the exact path cannot do that.
   _witnesses="$(grep -rlF -- "$lit" scripts/ 2>/dev/null || true)"
-  _others="$(printf '%s\n' "$_witnesses" | grep -vF 'check-expect-literals.sh' || true)"
+  _self_path="scripts/$(basename -- "${BASH_SOURCE[0]}")"
+  _others="$(printf '%s\n' "$_witnesses" | grep -vxF -- "$_self_path" || true)"
   if grep -qF -- "$lit" "${BASH_SOURCE[0]}" && [ -z "$_others" ]; then
     echo "check-expect-literals: FAILED — this gate's own source is the ONLY thing under scripts/ that"
     echo "  satisfies an Expect literal:"
