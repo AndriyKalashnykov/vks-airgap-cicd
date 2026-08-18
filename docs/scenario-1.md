@@ -732,9 +732,17 @@ that command's own block above. *(~2 min)*
 
 `argocd-preflight` also prints the deploy destination — every cluster registered with this ArgoCD,
 and which one your guest resolves to. If it says **`resolves UNAMBIGUOUSLY`**, there is nothing to
-set. If it reports more than one candidate, set `ARGOCD_DEST_CLUSTER_NAME` in `./.env` to one of the
-names it just listed — the install refuses to guess, because guessing once deployed into a different
-cluster and reported `Synced/Healthy` the whole time.
+set. If it reports more than one candidate, name the destination in `./.env` — the install refuses to
+guess, because guessing once deployed into a different cluster and reported `Synced/Healthy` the
+whole time. Either variable does it, and they are alternatives, not a pair:
+
+| set this | to | when |
+|---|---|---|
+| `ARGOCD_DEST_CLUSTER_NAME` | one of the names `argocd-preflight` just listed | you can see the registered clusters — usually here |
+| `ARGOCD_DEST_SERVER` | your guest cluster's API URL | you cannot list them; this is the tenant path Scenario 2 uses |
+
+`70-configure-argocd.sh` accepts **either** (its guard is satisfied by one or the other), and its own
+refusal message offers both.
 
 `make argocd-version` prints the CLI version, the **running server** version and this repo's pin.
 The running server is the one that matters.
