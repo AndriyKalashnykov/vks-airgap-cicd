@@ -436,15 +436,34 @@ fi
 # REVEAL arm silently renders argocd-password's sentinel instead of the operator's password. So the
 # assertion is on the reveal arm, and it demands the VALUE and the ABSENCE of a nested sentinel:
 # either alone is satisfiable by the broken build.
+# ⚠️ AND THE OBVIOUS FORM OF THIS CASE IS VACUOUS — MEASURED, not reasoned. The first version set
+# SHOW_SECRETS=1 and asserted the value appears. Dropping `--raw` from creds.sh then still PASSED
+# (rc=0), because SHOW_SECRETS is inherited by the CHILD too: argocd-password.sh's own snapshot sees
+# it and reveals, so the fixed and broken builds produce identical output. A case that cannot tell
+# them apart is not a RED-proof however carefully it is worded.
+#
+# The state that DISCRIMINATES is the real-operator one: creds.sh on a TERMINAL with SHOW_SECRETS
+# UNSET. creds.sh then reveals (tty), while argocd-password.sh — captured in `$( )`, always a pipe —
+# masks. With `--raw` the plaintext still arrives; without it the cell renders a NESTED SENTINEL.
+# `script(1)` gives us that terminal, and this is also the pty behaviour docs/access-uis.md now
+# documents: a pty capture COUNTS as a terminal and reveals.
 _ARGO='ZZARGOSECRET-do-not-match-anything-else'
-out="$(SHOW_SECRETS=1 ARGOCD_ADMIN_PASSWORD="$_ARGO" render '')"
-_argo_row="$(printf '%s' "$out" | grep -iE '^ *ArgoCD ' | head -1)"
-if printf '%s' "$_argo_row" | grep -qF "$_ARGO" \
-   && ! printf '%s' "$_argo_row" | grep -qF 'hidden: not a terminal'; then
-  ok "SHOW_SECRETS=1 -> the ArgoCD cell carries the VALUE, so creds.sh's --raw handshake holds"
+if ! command -v script >/dev/null 2>&1; then
+  # LOUD, not silent. A skipped case that says nothing is indistinguishable from a passing one.
+  printf '  SKIP  --raw handshake: script(1) not on PATH, so no pty is available to discriminate\n' >&2
 else
-  bad "SHOW_SECRETS=1 -> the ArgoCD cell should carry the password and NO nested sentinel. Got:
+  # -q quiet, -e return the child's status, -c command, output to /dev/null (we read stdout).
+  # \r strip: a pty terminates lines with CRLF, which would defeat a plain grep -F on the tail.
+  _pty_out="$(script -qec "SKIP_DOTENV=1 CREDS_TOKEN=1 ARGOCD_ADMIN_PASSWORD='${_ARGO}' ./scripts/creds.sh" /dev/null 2>/dev/null | tr -d '\r')"
+  _argo_row="$(printf '%s' "$_pty_out" | grep -iE '^ *ArgoCD ' | head -1)"
+  if printf '%s' "$_argo_row" | grep -qF "$_ARGO" \
+     && ! printf '%s' "$_argo_row" | grep -qF 'hidden: not a terminal'; then
+    ok "on a TTY with SHOW_SECRETS unset -> the ArgoCD cell carries the VALUE (the --raw handshake holds)"
+  else
+    bad "on a TTY -> the ArgoCD cell must carry the password and NO nested sentinel. Dropping --raw
+        from creds.sh's argocd-password.sh call is what produces the sentinel here. Got:
 ${_argo_row:-<no ArgoCD row rendered at all -- the assertion is vacuous, fix the fixture first>}"
+  fi
 fi
 
 # The .env-IMMUNITY case. This is the arm the round named as most likely to be got wrong: the naive
