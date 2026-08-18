@@ -139,6 +139,25 @@ ci-pass	failure	1
 EOF
 
 # The 98% case. If this refuses, the gate reddens nearly every PR and gets deleted within a week.
+# ── a REAL captured payload, not hand-transcribed ───────────────────────────────────────────────
+# ⚠️ EVERY OTHER FIXTURE IN THIS FILE IS HAND-TRANSCRIBED TSV, AND ITS SOURCE RUNS ARE GONE.
+# Runs 32043952216 / 32044803928 / 32041902265 (the three false greens) and 32055155395 (the genuine
+# failure) all return HTTP 404 today — deleted by a routine `gh run delete` sweep on 2026-08-17 that
+# was not aware anything cited them. So if a future edit gets a field wrong, nothing can re-check
+# those four against source, and the header's factual claims about them can never be re-derived.
+# Recorded rather than quietly lived with, because a control whose evidence cannot be re-checked is
+# one you will eventually stop trusting for the wrong reason.
+#
+# THIS one is different: captured verbatim from the live jobs API and COMMITTED, so it can be
+# diffed against source for as long as the run survives, and re-captured from any run afterwards:
+#   gh api --paginate "repos/<o>/<r>/actions/runs/<id>/jobs?per_page=100" --jq '.jobs[] |
+#     [ .name, (.conclusion // "none"),
+#       ([ .steps[]? | select(.name != "Set up job" and .name != "Complete job") ] | length) ] | @tsv'
+# It carries the shape that matters — `success` AND `skipped` together — so it pins the property
+# that a legitimately skipped conditional job must NOT be read as a failure.
+_run allow "run 32087322157 — REAL captured payload (success + skipped), from a committed fixture" \
+  < "${SCRIPT_DIR}/fixtures/ci-pass-run-32087322157.tsv"
+
 _run allow "run 31948536196 — healthy docs-only (two conditional jobs skipped)" <<'EOF'
 static-check-fast	success	3
 changes	success	3
