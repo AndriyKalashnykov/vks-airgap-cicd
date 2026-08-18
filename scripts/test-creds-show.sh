@@ -425,6 +425,28 @@ else
 $(printf '%s' "$out" | grep -E '^ *Harbor ' || printf '%s' "$out" | tail -3)"
 fi
 
+# THE `--raw` HANDSHAKE (B153). argocd-password.sh now applies its OWN non-tty mask, because two of
+# the 16 credential occurrences measured in run 6's walk logs are its BARE invocation at
+# docs/scenario-1.md Step 5 — a value read from a k8s Secret, which never lands in .env or
+# .walk-env, so NO downstream redactor could ever key on it. creds.sh therefore has to ask for the
+# plaintext explicitly (`--raw`) and apply the decision itself.
+#
+# ⚠️ WITHOUT A CASE HERE THE REGRESSION IS INVISIBLE IN THE DIRECTION THAT MATTERS. Drop `--raw`
+# from creds.sh and the *masked* arm still looks perfect — a sentinel is what it expects — while the
+# REVEAL arm silently renders argocd-password's sentinel instead of the operator's password. So the
+# assertion is on the reveal arm, and it demands the VALUE and the ABSENCE of a nested sentinel:
+# either alone is satisfiable by the broken build.
+_ARGO='ZZARGOSECRET-do-not-match-anything-else'
+out="$(SHOW_SECRETS=1 ARGOCD_ADMIN_PASSWORD="$_ARGO" render '')"
+_argo_row="$(printf '%s' "$out" | grep -iE '^ *ArgoCD ' | head -1)"
+if printf '%s' "$_argo_row" | grep -qF "$_ARGO" \
+   && ! printf '%s' "$_argo_row" | grep -qF 'hidden: not a terminal'; then
+  ok "SHOW_SECRETS=1 -> the ArgoCD cell carries the VALUE, so creds.sh's --raw handshake holds"
+else
+  bad "SHOW_SECRETS=1 -> the ArgoCD cell should carry the password and NO nested sentinel. Got:
+${_argo_row:-<no ArgoCD row rendered at all -- the assertion is vacuous, fix the fixture first>}"
+fi
+
 # The .env-IMMUNITY case. This is the arm the round named as most likely to be got wrong: the naive
 # `${SHOW_SECRETS:-0}` read AFTER load_env fails it, because load_env's `set -a` exports whatever is
 # in the operator's .env over the caller's environment. A throwaway REPO_ROOT is used so the

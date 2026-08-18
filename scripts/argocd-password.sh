@@ -28,15 +28,43 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # lowercase on purpose: an UPPERCASE name here reads as an OPERATOR KNOB to check-env-coverage,
 # which then (correctly) demands it be documented in .env.example. The operator-facing knob is
 # ARGOCD_PASSWORD_WAIT_SECONDS; these two are internals.
+#
+# SHOW_SECRETS IS SNAPSHOT HERE, BEFORE load_env, FOR THE SAME REASON (see creds.sh's copy). It is a
+# per-run toggle, so `.env.example` ships it COMMENTED; but the protection must not depend on that
+# staying true, because an uncommented line would re-arm the leak permanently and invisibly.
+_show_secrets_snapshot="${SHOW_SECRETS:-0}"
+
+# --raw: print the value with NO mask, for a CALLER that applies its own reveal decision.
+# ⚠️ It exists because creds.sh captures this script in `$( )` — always a pipe, therefore always
+# non-tty — so without it a masked sentinel would land in creds.sh's OWN Password cell and the
+# operator would never see their password on a real terminal. creds.sh then masks (or reveals) it
+# with the identical rule. Do NOT reach for `[ -t 1 ]` to detect that case: it cannot distinguish
+# "creds.sh is capturing me" from "a walk log is capturing me", which is the whole leak.
+_raw=0
 _wait_arg=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --wait) _wait_arg="${2:-}"; shift 2 ;;
     --wait=*) _wait_arg="${1#--wait=}"; shift ;;
-    -h|--help) printf 'usage: argocd-password.sh [--wait SECONDS]\n'; exit 0 ;;
+    --raw) _raw=1; shift ;;
+    -h|--help) printf 'usage: argocd-password.sh [--wait SECONDS] [--raw]\n'; exit 0 ;;
     *) printf 'argocd-password.sh: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
 done
+
+# _emit <plaintext> — the ONLY way this script writes a password to stdout.
+# MEASURED (B153 round, run 6, all six row logs): 16 credential occurrences reached the walk logs.
+# creds-show's guard alone closes 14; a value-keyed redactor at walk-doc.sh's sink closes 12 and
+# adds ZERO over the guard -- the two that survive BOTH are the bare `make argocd-password` prints
+# at docs/scenario-1.md Step 5, because that value is read from the k8s Secret and never lands in
+# .env or .walk-env, so nothing downstream can key on it. This function is what takes it to 16/16.
+_emit() {
+  if [ "$_raw" = 1 ] || [ -t 1 ] || [ "$_show_secrets_snapshot" = "1" ]; then
+    printf '%s\n' "$1"
+  else
+    printf '<hidden: not a terminal — re-run with SHOW_SECRETS=1>\n'
+  fi
+}
 
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
@@ -134,8 +162,7 @@ if command -v kubectl >/dev/null 2>&1; then
     # immediately after reading it — so from that moment this value is stale while still being
     # served. Say so; a wrong password presented as fact costs more than no password.
     log_warn "this is the INITIAL admin password — if you have run 'argocd account update-password' it no longer works."
-    printf '%s' "$enc" | base64 -d
-    echo
+    _emit "$(printf '%s' "$enc" | base64 -d)"
     exit 0
   fi
 
@@ -154,8 +181,7 @@ if command -v kubectl >/dev/null 2>&1; then
         _split_answer "$ans"; enc="$ENC"
         log_info "read argocd-initial-admin-secret from ns/${ARGOCD_NAMESPACE} via ${ANSWERED_KC} (after ${_w}s)"
         log_warn "this is the INITIAL admin password — if you have run 'argocd account update-password' it no longer works."
-        printf '%s' "$enc" | base64 -d
-        echo
+        _emit "$(printf '%s' "$enc" | base64 -d)"
         exit 0
       fi
       [ $((_w % 60)) = 0 ] && log_info "  still absent (${_w}/${_wait}s) ..."
@@ -167,7 +193,7 @@ fi
 # 2. No initial-admin secret -> our password was applied (07 deletes it when it applies ours),
 #    or ArgoCD is lab-provided and the operator set the value themselves.
 if [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]; then
-  printf '%s\n' "$ARGOCD_ADMIN_PASSWORD"
+  _emit "$ARGOCD_ADMIN_PASSWORD"
   exit 0
 fi
 

@@ -223,7 +223,14 @@ else gitea_pw="$(_unset_pw GITEA_ADMIN_PASSWORD)"; fi
 # PROBE was once proposed here: the probe would have reported a true 401 about a value this repo
 # already knew was superseded. Keep the stderr; render the provenance instead of a bare secret.
 _argo_rc=0; _argo_err="$(mktemp)"
-argo_pw="$("${SCRIPT_DIR}/argocd-password.sh" --wait 0 2>"$_argo_err")" || _argo_rc=$?
+# `--raw` for the SAME reason as `--wait 0`: an ARGUMENT, which nothing in any .env can reach.
+# argocd-password.sh now applies its own non-tty mask (B153: two of the 16 measured leaks are its
+# BARE invocation at docs/scenario-1.md Step 5, which no downstream redactor could ever key on,
+# because the value comes from a k8s Secret and never lands in .env or .walk-env). But we capture it
+# in `$( )` -- always a pipe -- so without --raw we would receive the SENTINEL and render it into
+# the cell below, and the operator would never see their password even on a real terminal. We take
+# the plaintext and apply the identical decision ourselves, three lines down.
+argo_pw="$("${SCRIPT_DIR}/argocd-password.sh" --wait 0 --raw 2>"$_argo_err")" || _argo_rc=$?
 _argo_initial=0
 grep -q 'INITIAL admin password' "$_argo_err" 2>/dev/null && _argo_initial=1
 rm -f "$_argo_err"
