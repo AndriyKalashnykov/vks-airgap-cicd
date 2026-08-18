@@ -607,7 +607,7 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-18 — run 6: **5 of 6 GREEN**. Rows 5 AND 6 are green for the FIRST TIME; row 3 failed on a transient OUTSIDE the tree
+## ▶️ HANDOFF 2026-08-18 — run 6: **5 of 6 GREEN**. Rows 5 AND 6 are green for the FIRST TIME; row 3 failed on a CODE DEFECT that #850 has since retired
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
@@ -639,24 +639,43 @@ both RED with the identical `STALE_CA` signature (×3 each). The cross-repo fix 
 fallback) is now proven end-to-end on **both** operating systems. Every previous run either never
 reached the tenant path or failed it.
 
-**Row 3's cause is OUTSIDE the tree, and row 4 is the experiment that settles it.** Row 3's box
-pulled 33 MB at 13:10Z and FATAL'd on the same probe at 13:27Z; row 4 — same lab, same document,
-same commands — then cleared that identical probe and mirrored all 24 images clean. The signature
-appears in **no other log** in the run, and run 5b's row 3 had zero of it. Its 3 failures are ONE
-chain: `install-all` → nothing installed → `install-ingress` fails → `verify-ingress` fails + its
-UNMET. **Not a document defect, not a code defect.**
+🔴 **CORRECTED 2026-08-18 (same day, later): row 3's cause was IN THE TREE. The paragraph this
+replaces said "Not a document defect, not a code defect" — that was WRONG, and it was steering the
+open decision below toward the wrong answer.** The observation was right and the conclusion did not
+follow: row 3's box pulled 33 MB at 13:10Z and FATAL'd on `require_internet` at 13:27:56Z, and row 4
+— same lab, same document, same commands — cleared that identical probe minutes later. That LOOKS
+like a transient. The discriminator nobody ran is what the probe actually did.
 
-So the first-go rule is **not met (5/6)** while **the tree is not implicated**. That distinction is
-the open decision below, and it is the owner's.
+**MEASURED on a box with WORKING internet.** `storage.googleapis.com` answers `HEAD /` with **HTTP
+400**, and the old `curl -sSf`'s `-f` turns any 4xx into exit 22:
 
-### THE OPEN DECISION (owner's, not the agent's)
+| probe | OLD (`-sSf`, what row 3 ran) | NEW (`021c6a3`) |
+|---|---|---|
+| `storage.googleapis.com` — probe #1 | 400 → rc 22 → **"NO INTERNET"** | 400 → **INTERNET** |
+| `github.com` — probe #2 | 200 → INTERNET | **never consulted** (loop breaks on the first answer) |
 
-Row 3's transient means a re-cut would likely go 6/6 — but a **row-3-only** re-run is the trap the
-harness itself documents: the lab holds the last cell, so a partial re-run measures a different
-starting state than the row was designed for. The three options are (A) full six-row re-cut,
-(B) `WALK_ROWS="3"` against a rebuilt cell, (C) accept 5/6 on the measured evidence that row 3's
-cause is external. **Nobody should pick (B) without re-reading the cell-state note in
-`walk-matrix.sh`.**
+So the two-host redundancy the code advertised **did not exist**: `github.com` alone decided, and one
+blip from it was sufficient to FATAL a 25-minute row. **PR #850 merged at `16:54:22Z` — three and a
+half hours AFTER row 3 ran** — so row 3 could not have benefited, and run 8 is the first run to carry
+the fix. Its 3 failures are still ONE chain (`install-all` → nothing installed → `install-ingress`
+fails → `verify-ingress` fails + its UNMET); only the root differs.
+
+⚠️ **Why this correction matters more than the label.** "Transient" implies *wait and re-run*;
+"single point of failure on github.com" implies *the next matrix is hostage to github's error rate
+until the predicate is fixed*. The full root cause, with the refuted retry design, is `B181` in
+[`BACKLOG.md`](BACKLOG.md) — which carried the correct diagnosis while this handoff carried the
+refuted one, for hours. **When you correct a fact, grep EVERY home.**
+
+So the first-go rule was **not met (5/6)**, and **the tree WAS implicated** — which is the honest
+version of the sentence this replaces.
+
+### THE OPEN DECISION — RESOLVED (owner chose A)
+
+It read: (A) full six-row re-cut, (B) `WALK_ROWS="3"` against a rebuilt cell, (C) accept 5/6 on the
+evidence that row 3's cause is external. **The owner chose (A)**, and runs 7, 7b and 8 followed.
+(C) is now doubly dead: its premise is refuted above. **(B) remains the trap the harness documents**
+— the lab holds the last cell, so a partial re-run measures a different starting state than the row
+was designed for; nobody should pick it without re-reading the cell-state note in `walk-matrix.sh`.
 
 ### Coverage fact worth keeping
 
