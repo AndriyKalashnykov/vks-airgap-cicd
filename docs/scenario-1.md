@@ -723,7 +723,9 @@ make argocd-preflight           # CLI vs running-server versions; can ArgoCD rea
 make argocd-register-guest      # admin-only; creates an SA in your guest + a Secret in ArgoCD's ns
 ```
 
-**Expect:** re-running `make argocd-preflight` now says `PREFLIGHT OK`. *(~2 min)*
+**Expect:** `registered as` followed by the name and API server it used. Then re-run
+`make argocd-preflight` — it should now report PREFLIGHT OK, which is the assertion attached to
+that command's own block above. *(~2 min)*
 
 `argocd-preflight` also prints the deploy destination — every cluster registered with this ArgoCD,
 and which one your guest resolves to. If it says **`resolves UNAMBIGUOUSLY`**, there is nothing to
