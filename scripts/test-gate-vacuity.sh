@@ -82,6 +82,21 @@
 #   check-gwapi-istio-alignment — its corpus is an upstream go.mod fetched over the network; it
 #                               loud-SKIPs green when offline by design. Starving the repo does
 #                               nothing to it.
+#   check-secrets-untracked   — UNSTARVABLE BY CONSTRUCTION, and the reason is a property of THIS
+#                               harness, not of the gate. `starve()` is `git ls-files "$@" | while
+#                               read -r f; do : > "$f"; done` — it TRUNCATES, it never deletes, and
+#                               it iterates the tracked-file list. This gate's corpus is that LIST
+#                               (it asserts no allowlisted operator path — .env, secrets/*.key — is
+#                               ever tracked), not the CONTENTS of any file. Emptying every byte in
+#                               the repo leaves `git ls-files` returning exactly the same paths, so
+#                               the gate's own zero-guard ("git ls-files returned NOTHING under
+#                               ${ROOT} — refusing to report OK over an empty file list") cannot be
+#                               reached from here. Deleting files instead would starve it, but that
+#                               is a different harness: truncation is deliberate (an emptied file
+#                               keeps every file-COUNT healthy, which is the state that fools a gate
+#                               guarding the wrong number — the whole reason this technique was
+#                               chosen). So: coverage here is ZERO, the gate carries its own
+#                               zero-guard, and that guard has NOT been exercised by anything.
 #   check-doc-command-count   — CONDITIONAL BY DESIGN: it cross-checks any "N command(s)" prose
 #                               claim against the commands beside it, and a docs set that makes NO
 #                               such claim is a legitimate state with nothing to contradict. Its
@@ -330,6 +345,23 @@ assert_starved check-env-clobber.sh       "check-env-clobber dies with nothing u
 # it is debt I would be creating knowingly.
 assert_starved check-expect-literals.sh   "check-expect-literals dies with no Expect literals"     'docs/*.md'
 
+# ── the five that were UNDECLARED, audited 2026-08-18 ───────────────────────────────────────────
+# Their corpora were not discoverable by grepping for `git ls-files`/`find` — four of them read a
+# SINGLE named file rather than globbing, which is why an earlier survey came back near-empty and
+# read as "these have no corpus". Each corpus below was read out of the gate's own source.
+#
+# check-secrets-untracked is NOT here, and NOT because nobody got to it: it is UNSTARVABLE BY THIS
+# HARNESS'S TECHNIQUE. See its NOT_STARVABLE entry in the header for the measurement.
+assert_starved check-classifier-consumers.sh "check-classifier-consumers dies with no lib to read"  'scripts/lib/os.sh'
+assert_starved check-cluster-template-vars.sh "check-cluster-template-vars dies on an empty template" 'k8s/vks/cluster.yaml'
+assert_starved check-doc-expect-leak.sh   "check-doc-expect-leak dies with no scenario docs"       'docs/*.md'
+assert_starved check-help-row-ids.sh      "check-help-row-ids dies on an empty Makefile"           'Makefile'
+# ⚠️ scripts/lib/*.sh ONLY — NOT scripts/*.sh. This gate's second corpus is every script, which
+# INCLUDES this harness and the gate itself; starving that is the blast-radius trap (a gate emptied
+# of its own body exits 0 and scores `ok` having never run). Emptying the lib alone empties the
+# function inventory, which the gate's own `if not defined:` guard refuses on -- a real verdict.
+assert_starved check-lib-sourcing.sh      "check-lib-sourcing dies with 0 lib functions found"     'scripts/lib/*.sh'
+
 # check-java-alignment: DECLARABLE only since its two zero-states were separated (a registry with
 # apps but no java app is honest emptiness -> exit 0; a registry yielding ZERO apps is blindness ->
 # die). Before that split it died SILENTLY on an empty registry (rc=1, zero output) and this case
@@ -381,7 +413,7 @@ DECLARED=${#DECLARED_GATES[@]}
 # it may only ever go UP, and lowering the floor has to be a deliberate, visible edit.
 # 19 -> 20 with check-expect-literals, declared on the commit that introduced it. The ratchet may
 # only ever go UP.
-MIN_DECLARED=20
+MIN_DECLARED=25
 if [ "$DECLARED" -lt "$MIN_DECLARED" ]; then
   echo "test-gate-vacuity: DECLARED fell to ${DECLARED} (floor ${MIN_DECLARED}) — a starvation case was REMOVED, or a gate was PARKED in NOT_STARVABLE to silence it. Restore the case, or lower the floor deliberately and say why." >&2
   fail=1
@@ -393,7 +425,7 @@ fi
 # still surfaces as a named gap instead of hiding among them.
 # This list is hand-typed, so it CAN drift from the header block it summarises — the guard below
 # fails if a name here is not a real gate, which is the drift that actually bites (a rename).
-NOT_STARVABLE=(check-vks-terminology.sh check-gwapi-istio-alignment.sh check-doc-command-count.sh check-grep-q-pipe.sh)
+NOT_STARVABLE=(check-vks-terminology.sh check-gwapi-istio-alignment.sh check-doc-command-count.sh check-grep-q-pipe.sh check-secrets-untracked.sh)
 UNDECLARED=""
 DOCUMENTED=""
 while read -r g; do
@@ -452,6 +484,8 @@ if [ -n "$DOCUMENTED" ]; then
         echo "    ${_g}  — NOT guarded: exits 0 on an empty corpus BY DESIGN (honest emptiness)" ;;
       check-gwapi-istio-alignment.sh)
         echo "    ${_g}  — NOT guarded: exits 0 on a network SKIP; a green here does not prove the pin" ;;
+      check-secrets-untracked.sh)
+        echo "    ${_g}  — guarded INSIDE the gate, but that guard is UNEXERCISED: truncation cannot empty a FILE LIST" ;;
       *)
         echo "    ${_g}  — coverage UNSTATED: add it to the case in $(basename "$SELF")" ;;
     esac
