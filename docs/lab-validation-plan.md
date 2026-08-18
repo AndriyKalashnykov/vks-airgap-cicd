@@ -537,7 +537,8 @@ kubectl --kubeconfig $KC -n $ARGOCD_NAMESPACE exec $RS -- \
 
 ### 20. GitOps wiring — and the proof the clone happened · CHEAP
 
-**Why:** `.status.sync.revision` is set **only after repo-server actually fetched**. It is proof, not a proxy.
+**Why:** a non-empty `.status.sync.revision` is **NOT** proof of a clone — ⚠️ this line asserted the opposite until 2026-08-17 and it was measurably false. argo-cd sets `syncStatus.Revision` to `spec.source.targetRevision` — **the branch name** — *before* any fetch, and only overwrites it with a SHA once manifests were actually produced (`controller/state.go`; v3.5.1 lines 653-655 and 1042-1046, v3.4.5 lines 581 and 978-980). A FAILED fetch therefore leaves it non-empty.
+**What still discriminates:** the `Expect` below was already the right check and is unchanged — a **real 40-hex SHA** is distinguishable from a branch name, which is precisely the failure mode. The `SYNC` column is already in the query: `Unknown` means argo-cd could not build a comparison at all. ⚠️ **`Unknown` does NOT by itself mean the repo** — it is set from one variable (`failedToLoadObjs`) that argo-cd assigns at eight sites, only one of which is the repo fetch; the others include destination-cluster live-state, AppProject and diff faults, which on THIS two-cluster step are first-class candidates. So capture the `conditions` too and let them name the cause rather than assuming Gitea.
 **Where:** jump box → **Supervisor** (creates the Application) **and → guest** (registers it as the destination).
 **Who needs it:** BOTH.
 **We then:** a non-empty `REV` upgrades the two-cluster GitOps design to `lab-verified`. A destination/AppProject rejection in the conditions is the thing step 11's dry-run **structurally cannot** catch — we fix the manifest from your capture.
