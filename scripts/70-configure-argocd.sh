@@ -28,6 +28,12 @@ argocd_tls_opts   # ARGOCD_CA_FILE -> --server-crt, once, for every argocd call 
 
 require_cmd kubectl
 require_cmd envsubst "install gettext (provides envsubst)"
+# jq is needed by argocd_app_fetch_verdict on the MECH=api path: `argocd app get` offers only
+# -o json (no jsonpath), so the verdict is parsed with jq. It is pinned in .mise.toml and staged into
+# the sneakernet bundle (03-check-tools.sh classifies it `jq|carried`), so this guards a broken PATH
+# rather than a likely absence — but an UNREQUIRED jq turns "jq is missing" into an affirmative
+# exculpation of the repo, which is worse than the hedge it replaced.
+require_cmd jq
 kubeconfig_ready
 : "${ARGOCD_NAMESPACE:?}"
 : "${ARGOCD_TRACK_BRANCH:?}"; : "${GITEA_INTERNAL_URL:?}"; : "${GITEA_ORG:?}"
@@ -561,7 +567,7 @@ export ARGOCD_NAMESPACE ARGOCD_TRACK_BRANCH ARGOCD_DEST_SERVER ARGOCD_PROJECT AR
 TOKEN=""
 [ -f "${REPO_ROOT}/secrets/gitea-ci-token" ] && TOKEN="$(cat "${REPO_ROOT}/secrets/gitea-ci-token")"
 APPS_APPLIED=""
-WORK_DIR="$(mktemp -d)"; trap 'rm -rf "$WORK_DIR"; rm -f "${_ac_err:-}" "${_aw_err:-}"' EXIT   # ⚠️ the two argocd stderr captures are registered HERE too. On every `die` path their own `rm -f` runs first (measured: 0 leaks), but an operator Ctrl-C during `argocd app wait --timeout` left one behind (measured: 1).
+WORK_DIR="$(mktemp -d)"; trap 'rm -rf "$WORK_DIR"; rm -f "${_ac_err:-}" "${_afv_err:-}"' EXIT   # ⚠️ the two argocd stderr captures are registered HERE too. On every `die` path their own `rm -f` runs first (measured: 0 leaks), but an operator Ctrl-C during the api-path refresh left one behind (measured: 1). `_afv_err` (not the old `_aw_err`) is the one argocd_app_fetch_verdict creates — shellcheck SC2154 caught the stale name, which would have leaked it on Ctrl-C.
 OUT_DIR="${REPO_ROOT}/out"           # only used by the `request` mechanism (gitignored)
 
 # apply_application <app> <manifest> — write the Application through the mechanism we MEASURED.
@@ -787,16 +793,42 @@ if [ "$MECH" = api ] && [ "${_rv%%|*}" = no ]; then
         # ⚠️ THIS USED TO `2>&1` THE STDERR INTO /dev/null — strictly worse than the create site,
         # which at least let the text reach the log. A transport fault here was reported as
         # "repo-server cannot reach Gitea", a guess about a DIFFERENT component. Keep the text.
-        _aw_err="$(mktemp)"
-        if ! argocd app wait "$app" --sync --timeout "$ARGOCD_REPO_TIMEOUT_SECONDS" >/dev/null 2>"$_aw_err"; then
-          _aw_cls="$(classify_argocd_failure "$_aw_err")"
-          _aw_txt="$(tr -d '\000' < "$_aw_err" | tail -5)"; rm -f "$_aw_err"
-          argocd_transport_die "$_aw_cls" "wait on Application '$app'" "$_aw_txt"
-          die "Application '$app' did not sync. If it never fetched a revision, ArgoCD's repo-server cannot reach ${GITEA_ARGOCD_URL}.
-  the CLI said:
-${_aw_txt}"
-        fi
-        rm -f "$_aw_err"
+        # ⚠️ WAS `argocd app wait --sync`, which CANNOT prove a fetch happened. See
+        # argocd_app_fetch_verdict in lib/argocd.sh for the mechanism and for what this does NOT fix.
+        argocd_app_fetch_verdict "$app"
+        _aw_txt="$(tr -d '\000' < "$_afv_err" | tail -5)"
+        case "$_afv_state" in
+          ok) rm -f "$_afv_err" ;;
+          cli)
+            _aw_cls="$(classify_argocd_failure "$_afv_err")"; rm -f "$_afv_err"
+            argocd_transport_die "$_aw_cls" "refresh Application '$app'" "$_aw_txt"
+            die "could not read Application '$app' through argocd-server${_afv_msg:+ — ${_afv_msg}}.
+  This says NOTHING about whether the repo is reachable. the CLI said:
+${_aw_txt}" ;;
+          parse)
+            rm -f "$_afv_err"
+            die "could not parse argocd's reply for Application '$app' — ${_afv_msg}
+  A parse fault is not evidence about the repo. Check that jq is present and that the CLI emitted JSON." ;;
+          repo)
+            rm -f "$_afv_err"
+            die "ArgoCD could not FETCH the repo for Application '$app'.
+  argo-cd's own words: ${_afv_msg}
+  That message prefix is the ONE ComparisonError arm that IS the repo, so ${GITEA_ARGOCD_URL} is
+  implicated here. Confirm from the repo-server itself:
+    kubectl -n <argocd-ns> exec deploy/argocd-repo-server -c repo-server -- \\
+      curl -s -o /dev/null -w '%{http_code}\\n' '${GITEA_ARGOCD_URL}/${GITEA_ORG}/${app}-deploy.git/info/refs?service=git-upload-pack'" ;;
+          notrepo)
+            rm -f "$_afv_err"
+            die "Application '$app' failed its comparison for a reason that is NOT the repo.
+  argo-cd's own words: ${_afv_msg}
+  ComparisonError has SEVEN causes and only one is the repo fetch; 'Failed to load live state:' is the
+  DESTINATION CLUSTER, which on this path is a registered guest reached by a bearer token. Do NOT start
+  at Gitea — start at the message above." ;;
+          *)
+            rm -f "$_afv_err"
+            die "Application '$app': ${_afv_msg}
+  The controller produced no comparison, so nothing here implicates the repo." ;;
+        esac
     log_info "  ${app}: synced (argocd-server)"
   done
   log_info "ArgoCD Applications created: $(app_names | tr '\n' ' ')"

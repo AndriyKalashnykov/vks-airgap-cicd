@@ -695,3 +695,97 @@ argocd_await_revision() {
   fi
   log_info "  ${app}: ArgoCD re-reconciled after a forced refresh (reconciledAt ${_pre_rec:-<none>} -> ${_rec}) and reports revision ${rev} — the repo is reachable NOW"
 }
+
+# ---------------------------------------------------------------------------
+# argocd_app_fetch_verdict — did ArgoCD ACTUALLY fetch this app's repo, just now?
+#
+# The TENANT (MECH=api) counterpart to argocd_await_revision. It lives here, not inline in
+# 70-configure-argocd.sh, for the reason stated at the top of that function: a diagnostic buried
+# mid-script is one nothing can exercise, and this branch has never executed in ANY recorded walk
+# run (measured: 0 hits across the 158 logs in /tmp/walk), so a test is the ONLY thing that will
+# ever have exercised it before a lab does.
+#
+# WHY NOT `argocd app wait --sync`, which is what this replaces. With `--sync` alone the CLI's
+# predicate reduces to `sync.status == Synced` (v3.0.19 checkResourceStatus: healthCheckPassed
+# initialises true and no case matches; `operational := !watch.operation` is true), and it requests
+# NO refresh (`waitOnApplicationStatus`: `refresh := false`). Both apply paths UPSERT, so `Synced`
+# PERSISTS. Inside argo-cd's repo-error grace period — `defaultAppResyncPeriod + jitter` = 120+60 =
+# 180s — appcontroller.go returns `processNext` on ErrCompareStateRepo and persists NOTHING, so
+# `sync.status` stays `Synced` and `reconciledAt` stays frozen: the wait returns in under a second
+# and reports success having made no repo contact. `make gitops` runs inside that window.
+#
+# ⚠️ WHAT THIS DOES **NOT** FIX, because it never happened: an idea round measured that a WRONG
+# repo URL cannot "sync green forever" — a changed URL makes the controller take
+# `!currentSourceEqualsSyncedSource(app)` -> CompareWithLatestForceResolve (Level 3) ->
+# `noRevisionCache=true`, which DISABLES that short-circuit, so the error falls through and the wait
+# correctly fails. A day-old outage is likewise `Unknown` once the 180s grace expires. The gap this
+# closes is ONLY the spec-identical re-run inside the window.
+#
+#   --refresh, NOT --hard-refresh: ANY refresh selects Level 3, so soft already kills the
+#     short-circuit and re-resolves the revision remotely. Hard additionally issues a per-app
+#     GetAppDetails{NoCache:true} whose failure is only log.Warnf'ed server-side — more cost, no
+#     more proof.
+#   NO reconciledAt comparison: `Get` with `Refresh` BLOCKS until the controller clears the refresh
+#     annotation, and that annotation is deleted in the SAME patch that persists the new status
+#     (persistReconciliationStatus). The returned JSON is therefore structurally post-reconcile —
+#     there is nothing to poll and no pre-reading to compare against.
+#   `timeout` is MANDATORY: `argocd app get` has NO --timeout flag (v3.0.19 offers only
+#     --output/--show-operation/--refresh/--hard-refresh) and the server-side wait exits only on
+#     ctx.Done(), so a missing/booting controller HANGS it. This repo documents that state.
+#   RBAC: this needs `applications, get` ONLY — no action/, no override, no update — and RefreshApp
+#     patches the annotation with argocd-server's OWN ServiceAccount, so it needs zero tenant
+#     Kubernetes RBAC. It works precisely where argocd_await_revision's `ka annotate` is Forbidden.
+#
+# Sets, and ALWAYS returns 0 (an out-param, not an exit code: this file has no `set` line of its own
+# and inherits `set -euo pipefail` from its caller, so a non-zero return from a bare call would trip
+# errexit — measured on the sibling _await_fetch_state):
+#   _afv_state = ok | repo | notrepo | unknown | cli | parse
+#   _afv_msg   = the ComparisonError message, when there is one
+#   _afv_err   = path to the CLI's stderr capture (caller classifies + removes it)
+argocd_app_fetch_verdict() {
+  local app="$1" _rc=0 _json="" _tmo="${ARGOCD_REPO_TIMEOUT_SECONDS:-180}"
+  _afv_state=unknown; _afv_msg=""
+  _afv_err="$(mktemp)" || { _afv_state=cli; _afv_msg="could not create a temp file (TMPDIR=${TMPDIR:-/tmp})"; return 0; }
+
+  _json="$(timeout "$_tmo" argocd app get "$app" --refresh -o json 2>"$_afv_err")" || _rc=$?
+  if [ "$_rc" -ne 0 ]; then
+    # 124 is timeout(1)'s own code. Name it, because "the controller is not running" and "the CLI
+    # was rejected" have different remedies and the caller's transport classifier sees only stderr.
+    [ "$_rc" -eq 124 ] && _afv_msg="argocd app get did not return within ${_tmo}s (no --timeout flag exists; a missing or booting application-controller hangs it)"
+    _afv_state=cli
+    return 0
+  fi
+
+  # jq's rc is CAPTURED, never `|| true`. With `|| true` a missing jq yields an empty string, the
+  # prefix test finds nothing, and this function would AFFIRM that the repo is fine — a positive
+  # claim manufactured by an absent tool. That is the recorded gitea_hook_ids incident (lib/os.sh),
+  # one file over, and it would be strictly worse than the hedge this replaces.
+  local _cerr _sst _jrc=0
+  _cerr="$(printf '%s' "$_json" | jq -r '[.status.conditions[]? | select(.type=="ComparisonError") | .message] | join("; ")')" || _jrc=$?
+  _sst="$(printf '%s' "$_json" | jq -r '.status.sync.status // ""')" || _jrc=$?
+  if [ "$_jrc" -ne 0 ]; then
+    _afv_state=parse
+    _afv_msg="could not parse argocd's JSON (is jq present and did the CLI emit JSON?)"
+    return 0
+  fi
+
+  # PREFIX, not the condition TYPE. ComparisonError is appended by argo-cd at ELEVEN call sites
+  # covering SEVEN causes, and only ONE is the repo: state.go's `"Failed to load target state: "`
+  # (GetRepoObjs). Another — `"Failed to load live state: "` — is the DESTINATION CLUSTER, which on
+  # this very path is a registered guest reached by a bearer token, i.e. a first-class candidate.
+  # Matching the bare type would blame Gitea for an expired guest credential: the B137/B172 class.
+  if [ -n "$_cerr" ]; then
+    _afv_msg="$_cerr"
+    case "$_cerr" in
+      "Failed to load target state: "*) _afv_state=repo ;;
+      *)                                _afv_state=notrepo ;;
+    esac
+  elif [ "$_sst" = Unknown ]; then
+    # Unknown with NO condition: the controller never produced a comparison at all (an
+    # InvalidSpecError, or an Application it has not yet touched). A third remedy again.
+    _afv_state=unknown; _afv_msg="sync.status=Unknown with no ComparisonError — the controller has not judged this Application"
+  else
+    _afv_state=ok; _afv_msg="$_sst"
+  fi
+  return 0
+}
