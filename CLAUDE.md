@@ -685,8 +685,22 @@ ratcheting the MASKED count ("varies by CELL, not by document quality"). The mas
   burn into 2–60 and *guarantee* the lockout. (Retry on `000`/`5xx` is fine.)
   The **real** defect is broader and quieter: `vc_login` dies on 401, on `000` **and on any other
   non-2xx**, so a single blip during the very restart the loop exists to wait through exits the script
-  at ~10 s with no message — while the *benign* timeout prints a full diagnosis. Fix: hoist
-  `vc_login` **out** of the loop (60 auths → 0), matching `vc_ss_install`'s already lab-proven shape.
+  at ~10 s with no message — while the *benign* timeout prints a full diagnosis.
+  🔴 **THE FIX THIS PARAGRAPH USED TO PRESCRIBE IS REFUTED — DO NOT HOIST. It said: "hoist `vc_login`
+  OUT of the loop (60 auths → 0), matching `vc_ss_install`'s already lab-proven shape."** An
+  implementation round (2026-08-18) killed it using the file's **own** documented rationale, which I
+  had not read: `wcp-service.sh:39-41` states that during a restart the API disappears *"and the
+  session dies with it, **which is why each probe re-logs-in**"*. The re-login is **load-bearing, not
+  waste**. Hoisting hands `wait_for` a token the restart invalidates → `vc_api` non-2xx on every poll
+  → `st=""` throughout → the full `WCP_WAIT_SECONDS` (600) budget burns → `die "wcp did not reach
+  STARTED/HEALTHY within 600s"` **on a lab that recovered normally**. A working restart becomes a
+  10-minute false FATAL. The arithmetic was wrong too: `:31`'s `vc_login` is unconditional, so the
+  hoist is 60→**1**, never 60→0. ⇒ **Keep the re-login.** The real defect is narrower than either
+  framing: `if vc_login >/dev/null 2>&1; then` does **not** create a subshell, so `vc_login`'s `die`
+  (`exit 1`) on the **`000`** arm kills the whole script. The minimal fix is a **soft mode** —
+  fatal on 401 (preserving the one-attempt lockout budget stated above), non-fatal on `000`/5xx — and
+  stop discarding its stderr inside the loop. That fix is a SEPARATE claim from the finding; verify it
+  by running `make wcp-restart` on a real lab and confirming a transport blip no longer ends the wait.
   A second, separate defect: line 75's `|| true` cannot swallow an `exit` either, so a `wcp-stop`
   timeout suppresses the recovery instruction it was written to print.
 - **B166** — my (i)+(ii)+(iii) **refuted as a package**. The control I wanted to hoist is measurably
