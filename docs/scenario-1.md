@@ -723,15 +723,26 @@ make argocd-preflight           # CLI vs running-server versions; can ArgoCD rea
 make argocd-register-guest      # admin-only; creates an SA in your guest + a Secret in ArgoCD's ns
 ```
 
-**Expect:** `registered as` followed by the name and API server it used. Then re-run
+**Expect:** the guest ends up `registered` with this ArgoCD — either `registered as` followed by the
+name and API server it just used, or, if it was already registered, a line saying so and
+`nothing to do`. Both are success; the second is what you see on a re-run or on a cluster someone
+else already registered. Then re-run
 `make argocd-preflight` — it should now report PREFLIGHT OK, which is the assertion attached to
 that command's own block above. *(~2 min)*
 
 `argocd-preflight` also prints the deploy destination — every cluster registered with this ArgoCD,
 and which one your guest resolves to. If it says **`resolves UNAMBIGUOUSLY`**, there is nothing to
-set. If it reports more than one candidate, set `ARGOCD_DEST_CLUSTER_NAME` in `./.env` to one of the
-names it just listed — the install refuses to guess, because guessing once deployed into a different
-cluster and reported `Synced/Healthy` the whole time.
+set. If it reports more than one candidate, name the destination in `./.env` — the install refuses to
+guess, because guessing once deployed into a different cluster and reported `Synced/Healthy` the
+whole time. Either variable does it, and they are alternatives, not a pair:
+
+| set this | to | when |
+|---|---|---|
+| `ARGOCD_DEST_CLUSTER_NAME` | one of the names `argocd-preflight` just listed | you can see the registered clusters — usually here |
+| `ARGOCD_DEST_SERVER` | your guest cluster's API URL | you cannot list them; this is the tenant path Scenario 2 uses |
+
+`70-configure-argocd.sh` accepts **either** (its guard is satisfied by one or the other), and its own
+refusal message offers both.
 
 `make argocd-version` prints the CLI version, the **running server** version and this repo's pin.
 The running server is the one that matters.

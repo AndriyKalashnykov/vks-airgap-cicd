@@ -777,18 +777,49 @@ fi
 # shape of a broken connection. Distinguish them: only a real `no` means "use argocd-server".
 # Probed INSIDE the guard: the kubectl path was paying a round trip whose result both branches
 # below then discarded.
-_rv=""
-[ "$MECH" = api ] && _rv="$(k_can_i --kubeconfig "$ARGOCD_KUBECONFIG" --request-timeout=15s \
-        auth can-i get applications.argoproj.io -n "$ARGOCD_NAMESPACE")"
-if [ "$MECH" = api ] && [ "${_rv%%|*}" = unknown ]; then
-  die "cannot verify the Applications: the probe did not reach the cluster (${_rv#*|}).
-  Refusing to report a sync I did not observe. This is NOT a permissions problem — fix the
-  connection or the trust anchor, then re-run."
-fi
-if [ "$MECH" = api ] && [ "${_rv%%|*}" = no ]; then
-  # The tenant path writes through argocd-server and may not read the Application object with
-  # kubectl at all. `argocd app wait` is the equivalent check.
-  log_info "verifying via argocd-server that each Application syncs (kubectl cannot read them on this path)"
+# ⚠️ THIS USED TO ASK `kubectl auth can-i get applications.argoproj.io` AND ROUTE ON THE ANSWER.
+# That probe is the wrong question, and it KILLED certification row 5 on 2026-08-18.
+#
+# `auth can-i` is a PURE RBAC question. When the resource type is not served at all, kubectl's
+# cani.go warns to stderr and PROCEEDS with the raw string rather than aborting — so it answers
+# `yes`. MEASURED against an apiserver serving no argoproj.io group, with this repo's pinned
+# kubectl 1.36.3:
+#     $ kubectl auth can-i get applications.argoproj.io -n cicd
+#     Warning: the server doesn't have a resource type 'applications' in group 'argoproj.io'  [stderr]
+#     yes                                                                                     [stdout]
+# and `k_can_i` (lib/os.sh:1389) `rm -f`s that stderr UNREAD on the rc-0 path, so the one piece of
+# evidence saying the CRD is absent was destroyed before anyone could see it. The probe returned
+# `yes|`, control FELL THROUGH to the kubectl readback, and it died on the guest with "the server
+# doesn't have a resource type application" — 10 minutes after this same run had already WARNED
+# that ARGOCD_KUBECONFIG was unset and gitops would look in the wrong place.
+#
+# This repo already documents the identical hazard for the CREATE probe at :205 ("THE CRD IS NOT
+# THE CONTROLLER … a pure RBAC question") and for a third site at 99-verify.sh:160-165. This was
+# the second site, 540 lines from the first, with no guard.
+#
+# THE FIX IS TO STOP ASKING. On MECH=api the readback goes through argocd-server unconditionally:
+#   - :335 already guarantees `argocd` + ARGOCD_SERVER + ARGOCD_AUTH_TOKEN on this path, and :351
+#     dies if the api probe was unanswerable, so argocd-server is reachable BY CONSTRUCTION;
+#   - argocd_app_fetch_verdict is name-scoped, so it needs neither ARGOCD_KUBECONFIG nor a correct
+#     ARGOCD_NAMESPACE — and on this topology BOTH were wrong (the namespace had fallen back through
+#     os.sh:616 to ${VKS_NAMESPACE:-argocd}=cicd while the real one is svc-argocd-service-*), which
+#     is exactly why "just set ARGOCD_KUBECONFIG" is a two-variable fix wearing one variable's
+#     clothes;
+#   - it removes a 15 s round trip that could only ever return an answer we now ignore.
+#
+# DO NOT "fix" this by teaching k_can_i to report the missing-CRD warning as `unknown` INSTEAD of
+# this change: :783 mapped `unknown` to a die, so that alone turns a wrong-transport failure into a
+# CONFIDENTLY FALSE message ("the probe did not reach the cluster" — it reached it fine). That is a
+# separate hardening for k_can_i's five call sites, on its own round, AFTER this.
+#
+# A REAL TENANT was never broken by this: a scoped kubeconfig against a Supervisor that DOES serve
+# the CRD returns a genuine `no`, took this branch, and worked (91-e2e-tenant-mechanism.sh:307
+# exercises it). The victims are readers with GUEST ADMIN — which scenario-2.md's "do not set
+# ARGOCD_KUBECONFIG" makes the common case.
+if [ "$MECH" = api ]; then
+  # The tenant path writes through argocd-server, so it VERIFIES through argocd-server. Same
+  # transport for the write and the read — the property whose absence caused the failure above.
+  log_info "verifying via argocd-server that each Application syncs (same transport as the write)"
   for app in $APPS_APPLIED; do
         # ⚠️ THIS USED TO `2>&1` THE STDERR INTO /dev/null — strictly worse than the create site,
         # which at least let the text reach the log. A transport fault here was reported as

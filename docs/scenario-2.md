@@ -327,7 +327,7 @@ deploys nothing while reporting success**:
 | `ARGOCD_MECHANISM` | `api` | create the Application via argocd-server — no Kubernetes RBAC needed there |
 | `ARGOCD_PROJECT` | *your granted AppProject* | **not** `default`; your project role must permit the destination |
 | `ARGOCD_AUTH_TOKEN` | *mint it first* | see the note below — it is a precondition, not just a value |
-| `ARGOCD_DEST_SERVER` | *your guest cluster API URL* | the guest must be **registered** as an ArgoCD destination first (admin-only; request it) |
+| `ARGOCD_DEST_SERVER` | *your guest cluster API URL* | the guest must be **registered** as an ArgoCD destination first (admin-only; request it). **Alternative:** `ARGOCD_DEST_CLUSTER_NAME` — the guest's name *as registered in ArgoCD* — if your admin gave you the name rather than the URL. Set **either**, not both; `70-configure-argocd.sh` is satisfied by one or the other |
 | `ARGOCD_REGISTER` | `never` | registering a cluster is admin-only. Without this, `make gitops` tries, is refused, and you get an error about permissions instead of the clear "ask your admin to register it" |
 
 <!-- -->
@@ -579,8 +579,11 @@ the contents are not double base64-encoded, the resulting PEM file cannot be pro
 #
 # The two-step form is deliberate. Written as one pipeline — `base64 -w 0 $CA | base64 -w 0` —
 # a missing file makes the FIRST base64 fail while the pipeline's status is the SECOND one's,
-# so it prints "No such file or directory" and still exits 0: you would paste an EMPTY value
-# into your Cluster spec and nothing would tell you. Measured.
+# so it still exits 0 — and it is WORSE than pasting nothing: the second base64 encodes the
+# first one's ERROR MESSAGE, so what you paste is well-formed base64 that DECODES TO
+# "base64: <path>: No such file or directory". It looks exactly like data. MEASURED: rc=0, and
+# one decode returns that sentence. The two-step form below exits 1 instead, because `&&` sees
+# the first command's real status.
 CA="${HARBOR_CA_FILE:-./secrets/harbor-ca.crt}"
 b64=$(base64 -w 0 "$CA") && printf '%s' "$b64" | base64 -w 0
 ```

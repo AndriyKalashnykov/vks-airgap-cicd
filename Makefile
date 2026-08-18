@@ -45,8 +45,14 @@
 # Step 1 of docs/scenario-1.md, on the first command a new operator ever types, with every tool
 # sitting on disk. `deps-mise` (below) already resolved mise this way; this line did not.
 #
-# NO `tr`: photon:5.0 does NOT ship coreutils, and 00-install-prereqs.sh does not install it — `tr`
-# arrives only as an unpinned side effect of installing podman/docker. Measured: with the engine
+# NO `tr`: photon:5.0 does NOT ship coreutils (measured 2026-08-18 — `install` there is a symlink to
+# /usr/bin/toybox). ⚠️ CORRECTED 2026-08-18: this used to add "and 00-install-prereqs.sh does not
+# install it", which is FALSE — `:88` DOES (`pkg_install ... coreutils ...`). The decision stands for a
+# STRONGER reason: this file is PARSED BEFORE `make deps` can run that script, so at Makefile-parse
+# time on a bare box `tr` is absent no matter what deps would later install. (The old wording also
+# mattered beyond this line: it is the comment a future session consults when deciding whether GNU
+# `install` can be assumed — and assuming it silently no-ops `install -d -m` on toybox, see B174.)
+# Measured: with the engine
 # packages absent, a `| tr` form still left helm/yq/crane unreachable AND printed
 # `tr: command not found` on every single make invocation. $(shell) already collapses newlines to
 # spaces, so $(subst) joins them with zero processes and works on any box.
@@ -84,7 +90,7 @@ export PATH := $(if $(MISE_PATHS),$(subst $(SPACE),:,$(strip $(MISE_PATHS))):,)$
 # the operator has removed.
 -include $(if $(wildcard .env.kind),secrets/.env.kind.make)
 secrets/.env.kind.make: .env.kind
-	@mkdir -p secrets
+	@mkdir -p secrets && chmod 700 secrets
 	@umask 077; sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$<' > '$@'
 
 # The STAMPED state overlay (was `.env.kind` — a KinD-named file that carried REAL-LAB state, which
@@ -101,7 +107,7 @@ secrets/.env.kind.make: .env.kind
 STATE_SRC := $(if $(VKS_STATE_FILE),$(VKS_STATE_FILE),.env.state)
 -include $(if $(wildcard $(STATE_SRC)),secrets/.env.state.make)
 secrets/.env.state.make: $(STATE_SRC)
-	@mkdir -p secrets
+	@mkdir -p secrets && chmod 700 secrets
 	@umask 077; sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$<' > '$@'
 
 # Load operator overrides so they win over the `?=` defaults in this file (but NOT over the
@@ -131,7 +137,7 @@ ifneq ($(SKIP_DOTENV),1)
 # `make check-secrets-untracked`. At the repo root it tripped the secrets gate, correctly.
 -include $(if $(wildcard .env),secrets/.env.make)
 secrets/.env.make: .env
-	@mkdir -p secrets
+	@mkdir -p secrets && chmod 700 secrets
 	@umask 077; sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$<' > '$@'
 
 # ⚠️ EXPORTED, because `-include .env` above creates MAKE variables, NOT environment — MEASURED: a recipe

@@ -24,11 +24,6 @@ bad() { printf '  FAIL  %s\n       %s\n' "$1" "${2:-}"; fail=$((fail+1)); }
 
 export ARGOCD_REPO_TIMEOUT_SECONDS=2   # keep the suite fast; the count is not what is under test
 
-# run <mode> [witness] -> "state|msg"
-# ⚠️ PRODUCTION OPTIONS. lib/argocd.sh has no `set` line of its own and inherits
-# 70-configure-argocd.sh:21 (`set -euo pipefail`). The sibling suite scored three clean greens over
-# broken implementations by running the subject under weaker options; do not repeat it here.
-# run <mode> [witness] -> "state|msg"
 # ⚠️ THE STUB IS A SCRIPT ON $PATH, NOT A SHELL FUNCTION. argocd_app_fetch_verdict wraps the call in
 # `timeout`, and timeout(1) EXECS A BINARY — a bash function named `argocd` is invisible to it. The
 # sibling suite can stub `ka` as a function only because nothing wraps that call. This is the same
@@ -67,6 +62,7 @@ exit 0
 STUB
 chmod +x "$STUBDIR/argocd"
 
+# run <mode> [witness] -> "state|msg"
 run() {
   # ⚠️ CAPTURE, THEN DECIDE — never `) … || printf`. A trailing `||` makes the subshell the LEFT
   # OPERAND of an AND-OR list, and bash suppresses errexit INSIDE it; the subshell's own
@@ -167,6 +163,52 @@ case "$wit" in
 esac
 case "$wit" in *"-o json"*) ok "it asks for json (there is no jsonpath output on this subcommand)" ;;
   *) bad "asks for json" "witness=[$wit]" ;; esac
+
+echo
+echo "════════ the MECH=api readback must not be gated on an RBAC probe ════════"
+# THE DEFECT THIS PINS, measured on certification row 5 (2026-08-18): the api-path readback was
+# SELECTED by `kubectl auth can-i get applications.argoproj.io`. That is a PURE RBAC question, and
+# when the resource type is not served at all kubectl WARNS to stderr and answers `yes` — measured
+# against an apiserver with no argoproj.io group, using this repo's pinned kubectl 1.36.3. k_can_i
+# then `rm -f`s that stderr unread (os.sh:1389), so the probe reported a confident `yes`, control
+# fell through to the KUBECTL readback, and it died on a guest cluster with "the server doesn't have
+# a resource type application" — killing the row. The write went through argocd-server; so must the
+# read.
+#
+# ⚠️ COMMENTS ARE STRIPPED FIRST, AND THAT IS LOAD-BEARING. The fix's own comment QUOTES the
+# forbidden command — it has to, to explain the measurement — so a naive grep self-matches:
+# MEASURED 2 raw hits, both prose, 0 in code. A gate that reads a file it guards must look at the
+# CODE, or it goes red on the day someone documents the trap properly.
+_cfg="${SCRIPT_DIR}/70-configure-argocd.sh"
+_code="$(awk '{ s=$0; sub(/^[[:space:]]+/,"",s); if (substr(s,1,1) != "#") print }' "$_cfg")"
+
+if printf '%s' "$_code" | grep -q 'auth can-i get applications'; then
+  bad "the api readback is not gated on 'auth can-i get applications'" \
+      "an RBAC probe answers 'yes' for a resource type the cluster does not serve — it cannot select a transport"
+else
+  ok "the api readback is not gated on an 'auth can-i get applications' probe"
+fi
+
+# ...and the branch routing to argocd-server must be UNCONDITIONAL on MECH=api. Absence of the old
+# probe is not enough on its own — a DIFFERENT conditional could be reintroduced and be wrong the
+# same way.
+# shellcheck disable=SC2016  # the \$ is LITERAL on purpose: we are matching the TEXT `"$MECH"`
+# as it appears in the file, not expanding a variable. Proven by the RED-proof below.
+if printf '%s' "$_code" | grep -qE '^if \[ "\$MECH" = api \]; then'; then
+  ok "...and MECH=api routes to argocd-server unconditionally"
+else
+  bad "MECH=api routes to argocd-server unconditionally" \
+      "the api readback is conditional again; whatever selects it can be wrong the way auth can-i was"
+fi
+
+# ...while MECH=kubectl still reaches the kubectl readback. A fix that greened rows 5/6 by deleting
+# the scenario-1 path would be a loss — rows 1-4 are the ones currently passing.
+# shellcheck disable=SC2016  # literal `"$app"` again — matching source text, not expanding.
+if printf '%s' "$_code" | grep -q 'argocd_await_revision "\$app"'; then
+  ok "...and the kubectl readback still exists for MECH=kubectl (rows 1-4 unaffected)"
+else
+  bad "the kubectl readback still exists" "argocd_await_revision is gone — scenario-1 lost its fetch gate"
+fi
 
 echo
 printf '  %d passed, %d failed\n' "$pass" "$fail"

@@ -137,9 +137,64 @@ should_skip() {
 # evidence the guard keys on, so two blocks ran `export VCF_CLI_VSPHERE_PASSWORD=''` and were counted
 # as RAN -- then failed downstream on an auth error that reads like a document defect. An empty
 # string IS an invented value.
+#
+# 🔴 A `<argocd-lb-ip>` SUBSTITUTION WAS ADDED HERE ON 2026-08-18 AND REVERTED THE SAME DAY.
+# It is recorded rather than deleted so nobody rebuilds it. Three independent reasons, all measured:
+#
+#   (1) IT WAS INERT. Its comment asserted, as a measured fact, that the harness "exports it as
+#       ARGOCD_LB_IP". It does not: `ARGOCD_LB_IP` occurs ZERO times in the whole
+#       nested-vsphere-lab repo, and walk-matrix.sh:541 emits `ARGOCD_SERVER=$(cat …/.as)`.
+#       ARGOCD_LB_IP is published ONLY by scripts/07-install-argocd.sh — the KinD flow — into
+#       .env.state, and row 5's own log prints "state: no overlay (.env.state does not exist)".
+#       Running the new substitute() with the exact harness env left `<argocd-lb-ip>` in place and
+#       the block still SKIPPED. It changed nothing while reading as a fix.
+#
+#   (2) POINTING IT AT ARGOCD_SERVER WOULD NOT HAVE HELPED EITHER, because the block it un-skips
+#       CANNOT COMPLETE ITS OWN PURPOSE: scenario-2.md's step 3 of that 3-step procedure ("put the
+#       NAME in .env") is COMMENTS ONLY, and fetch-ca.sh merely PRINTS "set it in .env, e.g.
+#       ARGOCD_CA_FILE=…" without publishing the var. After the block, ARGOCD_SERVER is still the
+#       bare IP — i.e. exactly the IP-endpoint + CA-present combination B148 lab-verified can NEVER
+#       verify (the cert carries DNS SANs and no IP SAN).
+#
+#   (3) IT WOULD HAVE ADDED A NEW FAILURE MODE TO A CERTIFYING ROW. fetch-ca.sh is
+#       `set -euo pipefail`, so the change converts a counted SKIP into a block that can FAIL — on
+#       rows 5/6, which already carry one. And `tee -a` APPENDS, so a retried row duplicates the
+#       /etc/hosts line.
+#
+# The honest state is: that block is deliberately NOT walked, because its third step is unwalkable.
+# Making it walkable is a DOCUMENT change (a real state_set/sed line), not a substitution.
+#
+# (6) Substitute ONLY when the value is non-empty. Replacing the placeholder with "" deleted the
+# evidence the guard keys on, so two blocks ran `export VCF_CLI_VSPHERE_PASSWORD=''` and were counted
+# as RAN -- then failed downstream on an auth error that reads like a document defect. An empty
+# string IS an invented value.
+#
+# ⚠️ NOT `${s//pat/repl}`. On bash >= 5.2 an `&` in the REPLACEMENT expands to the whole match, so a
+# password containing `&` reinserts the literal placeholder, has_live_placeholder then fires, and the
+# block is SKIPPED with a message blaming the DOCUMENT. MEASURED on bash 5.2.21:
+#     s="pw=<P> end"; v="Q&Z";  ${s//<P>/$v}  ->  pw=Q<P>Z end        (and "a&&b" -> two placeholders)
+# It is bash-VERSION-dependent (literal on < 5.2), so the Photon and Ubuntu rows can disagree on the
+# same password — a divergence that would read as an OS bug. `\`, `*`, `%`, `#`, `"` are all safe.
+#
+# ⚠️ AND NOT the obvious `while [[ $s == *"$ph"* ]]; do s="${s%%…}$v${s#*…}"; done` repair either: it
+# RE-SCANS the text it just inserted, so a value that CONTAINS the placeholder loops FOREVER —
+# measured, it hung a 3s probe. A hang inside the walker burns an entire lab cut, which is worse than
+# the bug being fixed. The form below consumes left-to-right into `out` and never re-scans, so it
+# terminates on every input (verified: value-contains-placeholder returns in milliseconds).
+_subst_literal() {              # $1 haystack  $2 needle  $3 replacement (all literal, no globbing)
+  local rest="$1" needle="$2" repl="$3" out=''
+  while case "$rest" in *"$needle"*) true ;; *) false ;; esac; do
+    out="${out}${rest%%"$needle"*}${repl}"
+    rest="${rest#*"$needle"}"
+  done
+  printf '%s' "${out}${rest}"
+}
+
 substitute() {
-  [ -n "${VCF_CLI_VSPHERE_PASSWORD:-}" ] || { printf '%s' "$1"; return; }
-  printf '%s' "${1//<your SSO password>/$VCF_CLI_VSPHERE_PASSWORD}"
+  local s="$1"
+  [ -n "${VCF_CLI_VSPHERE_PASSWORD:-}" ] \
+    && s="$(_subst_literal "$s" '<your SSO password>' "$VCF_CLI_VSPHERE_PASSWORD")"
+  printf '%s' "$s"
 }
 
 # (5) A line a walk cannot run is COMMENTED OUT and counted -- not grounds to drop the whole block,

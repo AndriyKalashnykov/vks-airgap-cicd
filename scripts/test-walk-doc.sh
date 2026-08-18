@@ -338,5 +338,57 @@ o="$(WALK_DOC="$T/pos.md" WALK_START_DIR="$T" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 
 if [ "$r" -eq 0 ]; then c=0; else c=1; fi
 assert "...and the NO-argument form still walks" "$c" "rc=$r; the guard broke the real callers"
 
+# 16. SUBSTITUTION IS LITERAL, AND IT TERMINATES.
+#     `${s//pat/$repl}` expands `&` in the REPLACEMENT to the whole match on bash >= 5.2, so an SSO
+#     password containing `&` reinserted the literal placeholder -- has_live_placeholder then fired
+#     and the block was SKIPPED with a message blaming the DOCUMENT. MEASURED on bash 5.2.21:
+#         s="pw=<P> end"; v="Q&Z"; ${s//<P>/$v} -> pw=Q<P>Z end   ("a&&b" -> TWO placeholders)
+#     It is bash-VERSION-dependent (literal below 5.2), so the Photon and Ubuntu rows could disagree
+#     on the same password -- a divergence that would read as an OS bug.
+#
+#     The termination case is the one that matters MORE than the bug: the obvious repair
+#     (`while [[ $s == *"$ph"* ]]; do s="${s%%…}$v${s#*…}"; done`) RE-SCANS what it just inserted, so
+#     a value CONTAINING the placeholder loops forever -- it hung a 3s probe. A hang inside the
+#     walker burns an entire lab cut. _subst_literal consumes left-to-right and never re-scans.
+sub_lib="$T/sub.sh"
+sed -n '/^_subst_literal() {/,/^}/p;/^substitute() {/,/^}/p' "$W" > "$sub_lib"
+c=0
+# shellcheck source=/dev/null  # the lib is EXTRACTED from walk-doc.sh at run time by the sed above
+# shellcheck disable=SC2034    # the password vars ARE used — by substitute(), inside the sourced lib
+( . "$sub_lib"
+  VCF_CLI_VSPHERE_PASSWORD='Q&Z'   ; [ "$(substitute 'pw=<your SSO password> end')" = 'pw=Q&Z end'  ] || exit 1
+  VCF_CLI_VSPHERE_PASSWORD='a&&b'  ; [ "$(substitute 'pw=<your SSO password> end')" = 'pw=a&&b end' ] || exit 2
+  VCF_CLI_VSPHERE_PASSWORD='Q\Z'   ; [ "$(substitute 'pw=<your SSO password> end')" = 'pw=Q\Z end'  ] || exit 3
+  VCF_CLI_VSPHERE_PASSWORD='Q*Z'   ; [ "$(substitute 'pw=<your SSO password> end')" = 'pw=Q*Z end'  ] || exit 4
+  VCF_CLI_VSPHERE_PASSWORD='hunter2'; [ "$(substitute 'pw=<your SSO password> end')" = 'pw=hunter2 end' ] || exit 5
+) || c=$?
+assert "a password containing & substitutes LITERALLY (bash >= 5.2)" "$c" "case exit $c; the & expanded to the match"
+
+# ...and the guard's evidence survives an UNSET value: the placeholder must REMAIN so the block is
+# SKIPPED rather than run against a half-formed command (finding (6) at the top of substitute()).
+c=0
+# shellcheck source=/dev/null
+( . "$sub_lib"; unset VCF_CLI_VSPHERE_PASSWORD
+  [ "$(substitute 'pw=<your SSO password> end')" = 'pw=<your SSO password> end' ] ) || c=1
+assert "...and an UNSET password leaves the placeholder for the guard" "$c" "it substituted something"
+
+# ...and a replacement that CONTAINS the placeholder terminates instead of hanging.
+if timeout 5 bash -c ". '$sub_lib'
+  VCF_CLI_VSPHERE_PASSWORD='pre<your SSO password>post'
+  substitute 'a<your SSO password>b' >/dev/null" >/dev/null 2>&1; then c=0; else c=1; fi
+assert "...and a value containing the placeholder TERMINATES" "$c" "it hung — the loop re-scans its own output"
+
+# ...and the reverted <argocd-lb-ip> substitution stays reverted. It was INERT (the harness exports
+# ARGOCD_SERVER, never ARGOCD_LB_IP -- zero occurrences in the lab repo), it could not complete its
+# own block (step 3 of that procedure is comments-only), and it would have converted a counted SKIP
+# into a possible FAIL on rows 5/6. The header records why; this pins it.
+c=0
+# shellcheck source=/dev/null
+# shellcheck disable=SC2034  # BOTH are deliberately unused: the assertion is that substitute()
+# IGNORES them. If either ever becomes "used", this case has stopped testing what it says.
+( . "$sub_lib"; ARGOCD_LB_IP=1.2.3.4 ARGOCD_SERVER=1.2.3.4
+  [ "$(substitute 'x <argocd-lb-ip> y')" = 'x <argocd-lb-ip> y' ] ) || c=1
+assert "the reverted <argocd-lb-ip> substitution stays reverted" "$c" "it fired; read the header before re-adding it"
+
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
