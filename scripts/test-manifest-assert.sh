@@ -1,5 +1,6 @@
+#!/usr/bin/env bash
 set -u
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 # shellcheck disable=SC1091
 . scripts/lib/os.sh 2>/dev/null || { echo "cannot source os.sh"; exit 1; }
 pass=0; fail=0

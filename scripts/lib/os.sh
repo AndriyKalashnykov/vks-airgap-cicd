@@ -1259,6 +1259,19 @@ assert_k8s_manifest() {
 $(head -3 "$file" 2>/dev/null | sed 's/^/    /')"
 }
 
+# _http_fail_hint CODE CURL_RC — turn a status into the ONE sentence that tells an operator whose
+# problem this is. The four buckets are not decoration: they are the actual fork in what to do next,
+# and the undifferentiated "failed to download <url>" gave the operator none of it.
+_http_fail_hint() {
+  case "$1" in
+    none) printf 'no request completed — the time budget expired before an attempt finished' ;;
+    000)  printf 'HTTP 000 (curl rc %s) — NO response at all: DNS, no route, refused, or a timeout. This is THIS BOX, not the server' "$2" ;;
+    4*)   printf 'HTTP %s (curl rc %s) — the server ANSWERED and refused: a filtering proxy, an expired credential, or a moved artifact. Not a connectivity fault, so retrying will not help' "$1" "$2" ;;
+    5*)   printf 'HTTP %s (curl rc %s) — the server answered with an error. Upstream; usually transient' "$1" "$2" ;;
+    *)    printf 'HTTP %s (curl rc %s)' "$1" "$2" ;;
+  esac
+}
+
 http_get_retry() {
   local url="$1" dest="$2"
   local attempts="${HTTP_GET_RETRIES:-5}"
@@ -1272,29 +1285,57 @@ http_get_retry() {
   # 5 lines of "integer expression expected" and no enforcement at all.
   case "$budget"   in ''|*[!0-9]*) die "HTTP_GET_TOTAL_BUDGET_SECONDS must be whole seconds, got '${budget}'" ;; esac
   case "$maxdelay" in ''|*[!0-9]*) die "HTTP_GET_RETRY_MAX_DELAY_SECONDS must be whole seconds, got '${maxdelay}'" ;; esac
+  # B181 C2 — CARRY THE STATUS INTO THE DIE. Every die below used to name only the URL, the
+  # elapsed time and the budget, so an operator got "failed to download <url>" for four
+  # materially different faults: a filtering proxy (403), a moved artifact (404), an upstream
+  # outage (502) and a box with no route at all (000). The first three are somebody else's
+  # problem and the fourth is theirs, and nothing in the message told them which.
+  #
+  # This matters most where NOTHING ELSE reports it: 00-install-prereqs.sh and
+  # 07-install-argocd.sh call http_get_retry WITHOUT ever calling require_internet, so its die
+  # is the operator's only signal.
+  #
+  # MEASURED 2026-08-18, curl 8.5.0, against a real local server — `-w` DOES emit on the
+  # FAILING path under `-f`, which is the whole premise:
+  #     /ok       rc=0   w-stdout='200'   dest=9B
+  #     /portal   rc=0   w-stdout='200'   dest=28B     <- 200 body, see assert_k8s_manifest
+  #     /missing  rc=22  w-stdout='404'   dest=absent  <- --remove-on-error did its job
+  #     refused   rc=7   w-stdout='000'
+  # `-o "$dest"` sends the BODY to the file and `-s` silences progress, so stdout carries the
+  # -w field and nothing else; `-S` keeps curl's own error on stderr, which $( ) does not eat.
   local i started now elapsed
+  local last_code="none" last_rc="none"
   started=$(date +%s)
   for (( i = 1; i <= attempts; i++ )); do
     now=$(date +%s); elapsed=$(( now - started ))
     # 0 = UNLIMITED, matching curl's own convention for --max-time.
     if [ "$budget" -gt 0 ] && [ "$elapsed" -ge "$budget" ]; then
-      die "failed to download ${url}: gave up after ${elapsed}s (HTTP_GET_TOTAL_BUDGET_SECONDS=${budget}), $(( i - 1 )) attempt(s)"
+      die "failed to download ${url}: gave up after ${elapsed}s (HTTP_GET_TOTAL_BUDGET_SECONDS=${budget}), $(( i - 1 )) attempt(s).
+  last: $(_http_fail_hint "$last_code" "$last_rc")"
     fi
     # --remove-on-error: without it a truncated body is LEFT ON DISK, and
     # 07-install-argocd.sh:109 gates on `[ ! -s "$MANIFEST_FILE" ]` — a 10-byte
     # partial is NON-empty, so the next run logs "using cached manifest" and
     # `kubectl apply`s truncated YAML. MEASURED.
-    if curl -fsSL --remove-on-error \
+    # `&& rc=0 || rc=$?`, never `; rc=$?` after an assignment — the documented capture-then-test
+    # form, so this cannot trip a caller's `set -e` from inside the substitution.
+    local _code _rc
+    _code="$(curl -fsSL --remove-on-error -w '%{http_code}' \
          --connect-timeout "${HTTP_CONNECT_TIMEOUT_SECONDS:-10}" \
          --max-time "$maxtime" \
-         -o "$dest" "$url"; then
+         -o "$dest" "$url")" && _rc=0 || _rc=$?
+    if [ "$_rc" -eq 0 ]; then
       return 0
     fi
+    # Remember the LAST failure, not the first: a 000 that becomes a 403 on retry means the box
+    # got a route and then hit a filter, and the second fact is the actionable one.
+    last_code="${_code:-000}"; last_rc="$_rc"
     if [ "$i" -lt "$attempts" ]; then
       now=$(date +%s); elapsed=$(( now - started ))
       # Do not start a sleep we cannot finish inside the budget.
       if [ "$budget" -gt 0 ] && [ "$(( elapsed + delay ))" -ge "$budget" ]; then
-        die "failed to download ${url}: gave up after ${elapsed}s (HTTP_GET_TOTAL_BUDGET_SECONDS=${budget}), ${i} attempt(s)"
+        die "failed to download ${url}: gave up after ${elapsed}s (HTTP_GET_TOTAL_BUDGET_SECONDS=${budget}), ${i} attempt(s).
+  last: $(_http_fail_hint "$last_code" "$last_rc")"
       fi
       log_warn "download failed (attempt ${i}/${attempts}): ${url} — retrying in ${delay}s"
       sleep "$delay"
@@ -1306,7 +1347,8 @@ http_get_retry() {
       if [ "$delay" -gt "$maxdelay" ]; then delay="$maxdelay"; fi
     fi
   done
-  die "failed to download ${url} after ${attempts} attempts"
+  die "failed to download ${url} after ${attempts} attempts.
+  last: $(_http_fail_hint "$last_code" "$last_rc")"
 }
 
 # ---------------------------------------------------------------------------
