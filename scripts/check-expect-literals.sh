@@ -38,7 +38,11 @@
 #   - whether the Expect line is the RIGHT claim. It checks that the claim is satisfiable, not true.
 #   - anything about MASKED literals. walk-doc passes a block when ANY literal matches (:789), so a
 #     sibling that never appears is silently discarded — that is B102's reservoir, a different thing.
-#   - A COMMENT MENTIONING THE LITERAL KEEPS IT GREEN. Found while RED-proving this gate: the string
+#   - A COMMENT MENTIONING THE LITERAL KEEPS IT GREEN — MEASURED RATE 3 of 48 (6.25%) of currently
+#     PASSING literals are satisfied ONLY by comment lines. Two are prose (one of them a comment
+#     quoting the runbook's own command, which is circular); the third was a real allowlist case
+#     hiding in plain sight — its printer interpolates a variable, so the literal can never appear
+#     in the source at all, and it is now an ALLOW entry with that reason rather than silently green. Found while RED-proving this gate: the string
 #     one Expect literal occurs TWICE in 28-harbor-admin-password.sh — once in the log line that
 #     actually prints it (:54) and once in a comment ABOUT that line (:39). Rewording only the log
 #     line leaves the comment satisfying the search, and the gate stays green over a claim the code
@@ -72,10 +76,35 @@ cd "$REPO_ROOT" || exit 1
 # walk-doc.sh's OWN sed (:333) so the include grammar has one definition, not two. DEPTH 1 ONLY,
 # matching walk-doc.sh:395, which REFUSES a nested include — going deeper here would check literals
 # the walker would never reach.
-ROOTS="${1:-docs/scenario-1.md docs/scenario-2.md}"
+#
+# ⚠️ `"$@"`, NOT `${1:-…}`. The `${1:-…}` form SILENTLY IGNORES `$2..$n`, so the natural multi-arg
+# invocation `check-expect-literals.sh docs/scenario-1.md docs/scenario-2.md` checked only the FIRST
+# document and reported `44 checked, OK` — above the floor, so nothing complained.
+if [ "$#" -gt 0 ]; then ROOTS="$*"; else ROOTS="docs/scenario-1.md docs/scenario-2.md"; fi
+
+# ⚠️ THE ROOT LIST IS ITSELF A HARDCODED LIST, and this header's own anti-hardcoding argument applies
+# to it. The assertion below is what stops it rotting: EVERY document carrying a column-0 `**Expect`
+# must be a ROOT, or resolved as an include, or named here WITH A REASON. A new runbook that is
+# none of those is a RED, not an invisible gap. MEASURED: without this, adding `docs/scenario-3.md`
+# with an unsatisfiable claim reports `56 checked, OK` — and the floor cannot see it either, because
+# scenario-1 ALONE is 43, which clears 40.
+#
+# NOT_WALKED is a DECISION, not an oversight. These carry Expect lines and are not walked by the
+# six-row matrix, so their literals are prose rather than assertions the harness will enforce:
+#   docs/lab-validation-plan.md  a runbook for a manual lab trip; steps are performed by a human
+#   docs/sneakernet.md           the two-box flow; not one of the six rows
+#   docs/kind-local.md           the KinD stand-in, exercised by `make e2e-kind`, not by a walk
+# ⚠️ They are NOT clean: measured, they carry 5 literals nothing under scripts/ satisfies — two are
+# REAL doc defects, one is third-party text that would be an ordinary ALLOW entry, and two are a
+# DIFFERENT defect class (an `**Expect:**` whose literal is a SOURCE CITATION such as a file:line or
+# a line range, which is not a claim about output at all). Widening ROOTS to them is a scope
+# decision with a known price, not a free win — see the backlog.
+NOT_WALKED="docs/lab-validation-plan.md docs/sneakernet.md docs/kind-local.md"
+
 DOCS="$ROOTS"
 for _r in $ROOTS; do
   [ -f "$_r" ] || { echo "check-expect-literals: no such document: $_r"; exit 1; }
+  [ -r "$_r" ] || { echo "check-expect-literals: document is not readable: $_r"; exit 1; }
   _incs="$(sed -nE 's|^[[:space:]]*<!--[[:space:]]*walk-include:[[:space:]]*([^[:space:]]+)[[:space:]]*-->[[:space:]]*$|\1|p' "$_r" || true)"
   for _i in $_incs; do
     _p="$(dirname "$_r")/${_i}"
@@ -83,6 +112,23 @@ for _r in $ROOTS; do
     case " $DOCS " in *" $_p "*) ;; *) DOCS="$DOCS $_p" ;; esac
   done
 done
+
+# THE COVERAGE ASSERTION. Only meaningful for the DEFAULT root set — an explicit argument list is a
+# deliberate narrowing (the tests use it), so do not demand it cover the whole tree.
+if [ "$#" -eq 0 ]; then
+  _uncovered=""
+  for _d in docs/*.md; do
+    grep -qE '^\*\*Expect' "$_d" 2>/dev/null || continue
+    case " $DOCS $NOT_WALKED " in *" $_d "*) ;; *) _uncovered="${_uncovered} ${_d}" ;; esac
+  done
+  if [ -n "$_uncovered" ]; then
+    echo "check-expect-literals: FAILED — document(s) carry Expect lines but are neither walked nor declared:${_uncovered}"
+    echo "  A runbook this gate does not know about is a runbook whose Expect claims nothing checks."
+    echo "  Either add it to ROOTS (if a walk executes it), reference it with a walk-include, or add"
+    echo "  it to NOT_WALKED above WITH A REASON. An entry without a reason is a silenced gap."
+    exit 1
+  fi
+fi
 
 # The floor exists because a gate that checks NOTHING passes. If the extractor breaks — a changed
 # Expect marker, a mangled fence — it yields zero literals and reports success having looked at
@@ -115,6 +161,12 @@ aGFyYm9yLmNydDogT0s=                                                      # ours
 cm9ib3QgYWNjb3VudCAncm9ib3QkdmtzLWNpY2QnIGNyZWF0ZWQu                      # ours, the robot-account script interpolates the account name
 RElTQ09WRVJZOg==                                                          # pairing drop: echoed by its own fenced block (scenario-2 discovery step)
 Li9zZWNyZXRzL2FyZ29jZC1jYS5jcnQ=                                          # pairing drop: appears in its own block (scenario-2 argocd CA step)
+d3JpdGUgbWVjaGFuaXNtOiBhcGk=                                      # ours; the printer INTERPOLATES the mechanism, so this exact
+#     string can never appear in the source. ⚠️ INERT TODAY — a COMMENT showing sample output
+#     satisfies the search first, so this entry is never reached and the allowlisted count stays 8.
+#     It is a SAFETY NET, not dead weight: the moment that comment is reworded, this is the only
+#     thing between the gate and a false RED on a literal that is unmatchable by construction.
+#     Do NOT prune it as a dead entry — check whether the comment still exists first.
 '
 ALLOW="$(printf '%s\n' "$ALLOW_B64" | sed 's/#.*//; s/[[:space:]]//g' | grep -v '^$' \
          | while IFS= read -r b; do printf '%s' "$b" | base64 -d 2>/dev/null; printf '\n'; done)"
@@ -160,12 +212,32 @@ while IFS= read -r lit; do
   # DO NOT "fix" a hit by excluding this file from the search. That blinds the gate to every future
   # real finding in the one file most likely to grow them (same argument as the ALLOW encoding).
   # Reword the prose so it DESCRIBES the literal instead of quoting it.
-  if grep -qF -- "$lit" "${BASH_SOURCE[0]}"; then
-    echo "check-expect-literals: FAILED — an Expect literal appears VERBATIM in this gate's own source:"
+  # ⚠️ SOLE WITNESS, not "appears anywhere in this file". An earlier version tested only
+  # `grep -qF -- "$lit" "${BASH_SOURCE[0]}"`, which ABORTS the whole gate on any literal that merely
+  # OCCURS in 60 lines of English header prose — and prints a remedy ("stop quoting it") that does
+  # not apply, because nothing was quoted. MEASURED: `docs/sneakernet.md`'s `static` fired it while
+  # being satisfiable by 46 real scripts, and the abort HID two genuine missing literals in the same
+  # document. 1 of 22 on a real corpus written without knowledge of this gate; 0 of 56 on the shipped
+  # roots, so it was latent rather than live.
+  #
+  # ⚠️ A MINIMUM LENGTH IS REFUTED, twice, by measurement — do not reach for it. Length is not the
+  # mechanism: gate-file substrings that are plausible literals run 6 to 26 characters. And DIVERGING
+  # the two lengths REOPENS the hole this check exists to close — self-check at >=10 with the search
+  # at >=6 lets a 7-character sole-witness literal through as `0 MISSING, OK`.
+  #
+  # The pipeline is CAPTURED and then TESTED rather than `grep -rlF … | grep -qv …`. That form was
+  # measured clean here (160/160 rc=0, including pinned to one core with `taskset -c 0`), so this is
+  # NOT a reproduced bug — it is simply the `cmd | grep -q` shape under `pipefail` that this
+  # portfolio's shell rules forbid, and the capture form costs nothing.
+  _witnesses="$(grep -rlF -- "$lit" scripts/ 2>/dev/null || true)"
+  _others="$(printf '%s\n' "$_witnesses" | grep -vF 'check-expect-literals.sh' || true)"
+  if grep -qF -- "$lit" "${BASH_SOURCE[0]}" && [ -z "$_others" ]; then
+    echo "check-expect-literals: FAILED — this gate's own source is the ONLY thing under scripts/ that"
+    echo "  satisfies an Expect literal:"
     echo "    ${lit}"
-    echo "  The gate searches scripts/, and this file IS under scripts/, so that literal would pass"
-    echo "  by finding ITSELF — a vacuous green for exactly one claim, invisible in the summary line."
-    echo "  Reword the prose here to DESCRIBE the string rather than quote it. Do NOT exclude this file."
+    echo "  So that literal passes by finding ITSELF — a vacuous green for exactly one claim, and"
+    echo "  invisible in the summary line. Reword the prose HERE to DESCRIBE the string rather than"
+    echo "  quote it. Do NOT exclude this file from the search, and do NOT add a minimum length."
     exit 1
   fi
   # `--` IS LOAD-BEARING: a literal beginning with a dash (an ls long-format mode column is one) is
@@ -182,7 +254,16 @@ done < <(
   # of `**Expect:**` inside backticks, which B102 records as a real miscount.
   for D in $DOCS; do
     grep -hE '^[[:space:]]*\*\*Expect' "$D" 2>/dev/null
-  done | grep -o '`[^`]*`' | sed 's/^`//; s/`$//' \
+  # ⚠️ `-oE` WITH `+`, NOT `-o` WITH `*` — ONE CHARACTER, AND IT WAS A MEASURED FALSE GREEN.
+  # walk-doc.sh:710 is `re.findall(r'`([^`]+)`')`. This started as `[^`]*` (zero-or-more), which on
+  # a DOUBLE-backtick code span matches the EMPTY span between the two opening backticks, consumes
+  # them, and emits NOTHING — so the literal is silently dropped and the gate goes GREEN while
+  # walk-doc reports NOT SEEN. MEASURED by an implementation round: 646 literals missed across 800
+  # generated Expect lines, and `checked` STAYED AT 56, so the summary line carried no signal.
+  # A balanced double-backtick span is the standard CommonMark way to write a code span containing
+  # a backtick, so this is reachable prose, not a fuzz artifact. After the fix the extracted set is
+  # BYTE-IDENTICAL to walk-doc's over the real corpus, and 0 missed / 0 extra over the same fuzz.
+  done | grep -oE '`[^`]+`' | sed 's/^`//; s/`$//' \
     | awk '
         { lit = $0
           gsub(/^[ \t]+|[ \t]+$/, "", lit)
