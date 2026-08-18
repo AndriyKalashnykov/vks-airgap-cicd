@@ -36,6 +36,16 @@ ck() {  # ck <label> <predicate-command...>  -- the helper RUNS the predicate, s
   else echo "  FAIL  ${label}"; fail=$((fail+1)); fi
 }
 
+# Substring predicates as REAL COMMANDS, not `bash -c '<string>'`. Two reasons, and the second is
+# the one that reddened CI: (a) `ck` runs its argv, so a plain command composes cleanly; (b) CI's
+# `make lint` treats shellcheck SC2016 *info* as a finding, and every `bash -c '[[ "$1" == ... ]]'`
+# trips it -- while a bare local `shellcheck -x` exits 0, so the divergence is invisible until CI.
+# The sibling tests (e.g. test-argocd-classify.sh) already pass simple commands for this reason.
+# shellcheck disable=SC2329  # invoked INDIRECTLY, via ck's "$@" -- the case the message itself exempts
+has()  { case "$2" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
+# shellcheck disable=SC2329  # same: indirect via ck "$@"
+hasnt() { case "$2" in *"$1"*) return 1 ;; *) return 0 ;; esac; }
+
 # ---------------------------------------------------------------------------------------------
 # The stub reproduces curl's REAL contract, which is the whole point of the fix:
 #   * `-w '%{http_code}'` writes the code to STDOUT -- and it writes `000` when there was no answer
@@ -82,11 +92,9 @@ _probe() {  # _probe <expect: 0|die> <label> <host:code:rc> ...
 
   case "$want" in
     0)   ck "$label" test "$rc" -eq 0
-         ck "  ...and it reported ONLINE rather than dying" \
-            bash -c '[[ "$1" == *__ONLINE__* ]]' _ "$out" ;;
+         ck "  ...and it reported ONLINE rather than dying" has __ONLINE__ "$out" ;;
     die) ck "$label" test "$rc" -ne 0
-         ck "  ...and it did NOT report ONLINE" \
-            bash -c '[[ "$1" != *__ONLINE__* ]]' _ "$out" ;;
+         ck "  ...and it did NOT report ONLINE" hasnt __ONLINE__ "$out" ;;
   esac
   _LAST_OUT="$out"
 }
@@ -109,21 +117,18 @@ _probe 0 "storage 400 alone -> ONLINE (github never consulted)" \
 # ---- The CONTROLS. A guard that cannot say NO is not a guard. -------------------------------
 _probe die "genuinely air-gapped: both hosts unresolvable -> DIES" \
   'storage:000:6:Could_not_resolve_host' 'github:000:6:Could_not_resolve_host'
-ck "  ...and the message NAMES the mode as DNS" \
-   bash -c '[[ "$1" == *"DNS"* ]]' _ "$_LAST_OUT"
+ck "  ...and the message NAMES the mode as DNS" has DNS "$_LAST_OUT"
 
 _probe die "blackholed: both hosts time out -> DIES" \
   'storage:000:28:Connection_timed_out' 'github:000:28:Connection_timed_out'
-ck "  ...and the message NAMES the mode as TIMED OUT" \
-   bash -c '[[ "$1" == *"TIMED OUT"* ]]' _ "$_LAST_OUT"
+ck "  ...and the message NAMES the mode as TIMED OUT" has "TIMED OUT" "$_LAST_OUT"
 
 _probe die "intercepting proxy: TLS fails on both -> DIES" \
   'storage:000:60:SSL_certificate_problem' 'github:000:35:SSL_connect_error'
-ck "  ...and the message NAMES the mode as TLS" \
-   bash -c '[[ "$1" == *"TLS"* ]]' _ "$_LAST_OUT"
+ck "  ...and the message NAMES the mode as TLS" has TLS "$_LAST_OUT"
 
 ck "  ...and the die keeps curl's OWN message (the old form asked for it via -S then discarded it)" \
-   bash -c '[[ "$1" == *"SSL"* ]]' _ "$_LAST_OUT"
+   has SSL "$_LAST_OUT"
 
 # ---- The DEGRADED path: mktemp unavailable (read-only / full /tmp) ---------------------------
 # The verdict must be UNAFFECTED; only curl's stderr text is lost. Without the guard in os.sh this
@@ -134,10 +139,10 @@ _probe 0 "mktemp FAILS + row-3 shape -> still ONLINE (verdict unaffected)" \
 
 _probe die "mktemp FAILS + genuinely air-gapped -> still DIES with the AIR-GAP guidance" \
   'storage:000:6:Could_not_resolve_host' 'github:000:6:Could_not_resolve_host'
-ck "  ...and the message is the SNEAKERNET guidance, not an mktemp error" \
-   bash -c '[[ "$1" == *"SNEAKERNET"* && "$1" != *"failed to create file"* ]]' _ "$_LAST_OUT"
+ck "  ...and the message is the SNEAKERNET guidance" has SNEAKERNET "$_LAST_OUT"
+ck "  ...and NOT an mktemp error" hasnt "failed to create file" "$_LAST_OUT"
 ck "  ...and it still NAMES the mode (the rc survives; only curl's text is lost)" \
-   bash -c '[[ "$1" == *"DNS"* ]]' _ "$_LAST_OUT"
+   has DNS "$_LAST_OUT"
 unset _STUB_MKTEMP_FAIL
 
 # ---- _curl_rc_label: the vocabulary itself --------------------------------------------------
@@ -146,7 +151,7 @@ echo "_curl_rc_label — every mode a no-internet report has to distinguish"
 for pair in "6:DNS" "7:refused" "28:TIMED OUT" "35:TLS" "60:TLS" "22:PROVES internet" "0:answered"; do
   rc_in="${pair%%:*}"; want="${pair#*:}"
   got="$(_curl_rc_label "$rc_in")"
-  ck "rc=${rc_in} names '${want}'" bash -c '[[ "$1" == *"$2"* ]]' _ "$got" "$want"
+  ck "rc=${rc_in} names '${want}'" has "$want" "$got"
 done
 
 # ---- STRUCTURAL: defence-in-depth, and NOT a behavioural guard -------------------------------
@@ -172,12 +177,13 @@ echo
 echo "structural: the ACTIVE curl invocation, comments stripped (defence-in-depth, see header)"
 body="$(sed -n '/^require_internet()/,/^}/p' "${SCRIPT_DIR}/lib/os.sh" \
         | sed 's/[[:space:]]*#.*$//')"
-ck "the active invocation does NOT pass -f (it discarded a 400 that PROVES internet)" \
-   bash -c '[[ "$1" != *"-sSf"* && "$1" != *"curl -f"* ]]' _ "$body"
-ck "the active invocation DOES ask for %{http_code} (the predicate needs it)" \
-   bash -c '[[ "$1" == *"%{http_code}"* ]]' _ "$body"
+ck "the active invocation does NOT pass -sSf (it discarded a 400 that PROVES internet)" \
+   hasnt "-sSf" "$body"
+ck "the active invocation does NOT pass a bare curl -f either" hasnt "curl -f" "$body"
+ck "the active invocation DOES ask for the http_code writeout (the predicate needs it)" \
+   has '%{http_code}' "$body"
 ck "the comment-strip did not eat the invocation itself (positive control)" \
-   bash -c '[[ "$1" == *"curl -sS"* ]]' _ "$body"
+   has "curl -sS" "$body"
 
 echo
 if [ "$fail" -eq 0 ]; then echo "require_internet: ALL PASS (${pass})"; exit 0; fi
