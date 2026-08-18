@@ -1103,19 +1103,59 @@ gen_password() {
 #
 # The resilience is correct for a FLAKY network and exactly wrong for an ABSENT one. So: probe once,
 # cheaply, up front, and say the thing that is actually true.
+# _curl_rc_label <exit-code> — name the FAILURE MODE, so a no-internet report is diagnosable.
+# MEASURED (curl 8.5.0): 6 = DNS unresolvable (6 ms) · 7 = connect refused (5 ms) · 28 = timed out
+# (5009 ms, i.e. the --connect-timeout expiry) · 22 = an HTTP error status · 35/60 = TLS. These
+# already separate DNS from routing from firewall from proxy-MITM, which is every question an
+# operator asks after "NO INTERNET" — and the old die answered none of them.
+_curl_rc_label() {
+  case "${1:-}" in
+    0)     printf 'answered' ;;
+    6)     printf 'DNS — could not resolve the host' ;;
+    7)     printf 'connect refused / no route' ;;
+    28)    printf 'TIMED OUT — nothing answered in time (blackhole or firewall drop)' ;;
+    35|60) printf 'TLS failed — a proxy presenting its own certificate?' ;;
+    22)    printf 'an HTTP error status, which still PROVES internet' ;;
+    *)     printf 'curl exit %s' "${1:-?}" ;;
+  esac
+}
+
 require_internet() {
-  local what="${1:-this step}" host rc=1
-  # Two hosts, so one provider being down is not read as "no internet". HEAD only, short timeouts.
+  local what="${1:-this step}" host code rc err diag="" ok=1 errf
+  # ⚠️ `-f` IS DELIBERATELY ABSENT — DO NOT ADD IT BACK. It used to read `curl -sSf`, and that made
+  # this a SINGLE-HOST check on github.com while claiming to be a two-host one:
+  # `storage.googleapis.com` answers `HEAD /` with **HTTP 400**, and `-f` turns any 4xx into exit 22.
+  # MEASURED 2026-08-18, 5/5, on a box with working internet (github 200 in the same second). So the
+  # advertised redundancy did not exist, and any 403/429/5xx from github — the abuse-detection class
+  # `http_get_retry` below already fights — read as "this box has no internet".
+  #
+  # THE PREDICATE IS "DID ANYTHING ANSWER", NOT "DID IT ANSWER 2xx". An HTTP status line of any kind
+  # requires DNS + TCP + TLS + a full round trip to SUCCEED, so a 400 is POSITIVE PROOF of internet.
+  # `%{http_code}` is `000` exactly when curl never got a status line. Measured 4/4:
+  #   storage 400 -> internet · github 200 -> internet · NXDOMAIN -> 000/rc6 · blackhole -> 000/rc28.
+  #
+  # No retry, deliberately (B181): a bounded retry re-runs the predicate, and the predicate was the
+  # bug. Revisit only when an occurrence arrives carrying a mode from _curl_rc_label — 28 might argue
+  # for one, 6 argues for fixing the resolver, and 22 is the class this comment just closed.
+  errf="$(mktemp "${TMPDIR:-/tmp}/internet-probe.XXXXXX")"
   for host in https://storage.googleapis.com https://github.com; do
-    if curl -sSf -o /dev/null --head \
-         --connect-timeout "${INTERNET_PROBE_TIMEOUT_SECONDS:-5}" \
-         --max-time "${INTERNET_PROBE_MAX_TIME_SECONDS:-10}" \
-         --retry 0 "$host" 2>/dev/null; then
-      rc=0; break
-    fi
+    code="$(curl -sS -o /dev/null --head \
+              --connect-timeout "${INTERNET_PROBE_TIMEOUT_SECONDS:-5}" \
+              --max-time "${INTERNET_PROBE_MAX_TIME_SECONDS:-10}" \
+              --retry 0 -w '%{http_code}' "$host" 2>"$errf")" && rc=0 || rc=$?
+    # KEEP curl's own message (F3): the old form passed `-S` to enable it and then `2>/dev/null`'d
+    # it away, so the code asked for the diagnosis and deleted it.
+    err=""
+    if [ -s "$errf" ]; then err="$(tr -d '\r' <"$errf" | tr '\n' ' ')"; fi
+    diag="${diag}
+      ${host#https://} -> HTTP ${code:-000}, curl rc=${rc} ($(_curl_rc_label "$rc")${err:+ — ${err}})"
+    if [ "${code:-000}" != 000 ]; then ok=0; break; fi
   done
-  [ "$rc" -eq 0 ] && return 0
+  rm -f "$errf"
+  if [ "$ok" -eq 0 ]; then return 0; fi
   die "NO INTERNET on this box — and ${what} needs it.
+
+  What each probe actually saw:${diag}
 
   You are on the wrong flow for this box. Nothing here can download anything.
 
@@ -1126,7 +1166,8 @@ require_internet() {
                                    then: make platform gitops && make install-ingress && make verify
 
   Do NOT run 'make install-all' here: it starts with 'mirror', which downloads from the internet.
-  (If you believe this box IS online, check your proxy: this probe HEADs storage.googleapis.com and github.com.)"
+  (If you believe this box IS online, read the per-probe lines above: a DNS line means the resolver,
+   a TIMED OUT line means a firewall or a blackhole route, a TLS line means an intercepting proxy.)"
 }
 
 # http_get_retry <url> <dest> — download <url> to <dest>, resilient to transient
