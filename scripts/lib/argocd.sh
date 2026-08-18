@@ -562,9 +562,16 @@ argocd_await_revision() {
     # repo failure as `notrepo` and tell the operator NOT to start at Gitea when Gitea is the fault.
     # A LEADING "; " makes `*"; Failed to load target state: "*` match at any position, and it also
     # rejects a message that merely MENTIONS the phrase inline. Stripped again for display.
+    # TRUNCATE ONCE, then APPEND both reads. With `2>` on both, the SECOND read truncates the
+    # first's stderr — so when only the ComparisonError read failed, the arm whose entire job is to
+    # surface kubectl's own words printed NOTHING (measured: captured stderr empty; with `2>>`,
+    # "FORBIDDEN-READING-CONDITIONS" survives). A second temp file would fix it too and costs three
+    # new leak sites — its own mktemp die-handler, the RETURN trap at :522 and _await_cleanup at
+    # :523 — plus four `die`s that would leak it. One line here, zero new cleanup paths.
+    : > "$_ff_err"
     _cerr="$(ka -n "$_ns" get application "$app" \
-      -o jsonpath='{range .status.conditions[?(@.type=="ComparisonError")]}{"; "}{.message}{end}' 2>"$_ff_err")" || r1=$?
-    _sst="$(ka -n "$_ns" get application "$app" -o jsonpath='{.status.sync.status}' 2>"$_ff_err")" || r2=$?
+      -o jsonpath='{range .status.conditions[?(@.type=="ComparisonError")]}{"; "}{.message}{end}' 2>>"$_ff_err")" || r1=$?
+    _sst="$(ka -n "$_ns" get application "$app" -o jsonpath='{.status.sync.status}' 2>>"$_ff_err")" || r2=$?
     # CLASSIFY ON sync.status — argo-cd's OWN verdict on whether the comparison failed — and use the
     # message prefix only to NAME the cause. `[ -n "$_cerr" ]` alone was a FALSE RED: state.go:1035's
     # `if failedToLoadObjs { syncCode = Unknown }` is the only app-level forcing, and the appends at
@@ -594,13 +601,20 @@ argocd_await_revision() {
         # BOTH alternatives: first-position AND after the leading separator (a message is not always
         # first — in v3.4.5 the GPG sites at 512-524 append before the repo site at 628).
         "Failed to load target state: "*|*"; Failed to load target state: "*) _ff_state=repo ;;
+        # POSITIVE enum, both here and below. `[ "$_sst" = Unknown ]` as the FAILURE test fails OPEN:
+        # kubectl returns empty with rc=0 for a missing nested path, so an unexpected or unread
+        # status routed to the healthy arm and this gate affirmed "the FETCH SUCCEEDED
+        # (sync.status=)" — an affirmative claim with a blank where the evidence goes.
+        # `Synced|OutOfSync` is COMPLETE: types.go@v3.5.1:1885/1887/1889 defines SyncStatusCode as
+        # exactly Unknown/Synced/OutOfSync, and state.go:927 initialises syncCode then :1040 assigns
+        # it unconditionally — so argo-cd can never PERSIST an empty status. An empty read therefore
+        # means no .status.sync at all, or our own jsonpath drifted; the positive form makes the gate
+        # robust to ITS OWN READ drifting, which is the class this file keeps getting bitten by.
         # if/else, NOT `A && B || C` — that operator shape is a fake-green this repo has been bitten by.
-        *) if [ "$_sst" = Unknown ]; then _ff_state=notrepo; else _ff_state=advisory; fi ;;
+        *) case "$_sst" in Synced|OutOfSync) _ff_state=advisory ;; *) _ff_state=notrepo ;; esac ;;
       esac
-    elif [ "$_sst" = Unknown ]; then
-      _ff_state=unjudged
     else
-      _ff_state=ok
+      case "$_sst" in Synced|OutOfSync) _ff_state=ok ;; *) _ff_state=unjudged ;; esac
     fi
     return 0
   }
@@ -745,9 +759,21 @@ argocd_await_revision() {
     # and it would be the ONE line in the read-fault arm that names the repo.
     # ⚠️ NOT `!= unread`. Splitting `failed` into repo/notrepo/unjudged means an inequality test
     # readmits every new state, so a DESTINATION-CLUSTER fault would still be handed a Gitea probe.
-    # Whitelist the states for which the repo is a live candidate.
-    if { [ "$_ff_state" = ok ] || [ "$_ff_state" = repo ] || [ "$_ff_state" = unjudged ]; } \
-       && [ "$_rec_rc" -eq 0 ]; then
+    # THE RULE, in one sentence: offer the repo-server probe ONLY in the state where argo-cd ITSELF
+    # named the repo as the failed fetch. The probe's last line asserts a CONCLUSION — "anything else
+    # => GITEA_ARGOCD_URL is the fault" — which is sound only once the repo is already implicated.
+    #   repo      YES  argo-cd named it ("Failed to load target state: ")
+    #   notrepo   no   argo-cd named something ELSE (live state / project / diff)
+    #   advisory  no   GetRepoObjs SUCCEEDED; the condition was appended after it
+    #   ok        no   GetRepoObjs succeeded — same evidence as advisory
+    #   unjudged  no   nothing was judged, so the repo was never even tried
+    #   unread    no   no evidence of any kind
+    # `ok` and `unjudged` were previously whitelisted and both were wrong. `unjudged` produced a
+    # self-contradiction inside ONE output block: "nothing here is evidence about the repo" followed
+    # four lines later by "GITEA_ARGOCD_URL is the fault". And a plan to ADD `advisory` (on the
+    # grounds that it carries the same evidence as `ok`) was refuted the right way round — the
+    # symmetry is real, so the fix is to DROP `ok`, not to add its twin.
+    if [ "$_ff_state" = repo ] && [ "$_rec_rc" -eq 0 ]; then
       log_error "  A repo it cannot clone is ONE candidate; confirm it rather than assume it, from the repo-server itself:"
       log_error "    kubectl -n ${_ns} exec deploy/argocd-repo-server -c repo-server -- \\"
       log_error "      curl -s -o /dev/null -w '%{http_code}\\n' '${_url}/${_org}/${app}-deploy.git/info/refs?service=git-upload-pack'"

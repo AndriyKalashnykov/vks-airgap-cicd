@@ -139,7 +139,16 @@ run() {
     # bare too. RC therefore comes from an EXIT trap, which fires on a `die`, on an errexit death,
     # and on a normal return alike.
     trap 'printf "RC=%s\n" "$?"' EXIT
-    argocd_await_revision testapp 2>&1 ) || true
+    # ⚠️ NO `|| true`, and its ABSENCE is the point. A trailing `||` makes the subshell the LEFT
+    # OPERAND of an AND-OR list, and bash then suppresses errexit INSIDE it — the `set -euo pipefail`
+    # on the first line of this subshell does NOT restore it. So the suite was blind to exactly the
+    # deaths the comment above says it must see. MEASURED: a planted `_mut="$(grep NOPE /dev/null)"`
+    # on the HEALTHY path scored 43 passed / 0 failed, rc=0, while the same tree under production's
+    # options died at rc=1 without reaching the line after the call. That is verbatim the incident
+    # the comment cites. Removing it is safe because THIS file runs `set -uo pipefail` with no `-e`,
+    # so the non-zero subshell is absorbed by the `out="$(run …)"` capture. Proven both directions:
+    # clean 43/0 (no false RED), mutant 39/4.
+    argocd_await_revision testapp 2>&1 )
 }
 
 echo

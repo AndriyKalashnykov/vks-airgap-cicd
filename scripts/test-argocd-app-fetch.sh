@@ -57,11 +57,31 @@ STUB
 chmod +x "$STUBDIR/argocd"
 
 run() {
-  ( set -euo pipefail
-    export STUB_MODE="$1" WITNESS="${2:-/dev/null}" PATH="$STUBDIR:$PATH"
-    argocd_app_fetch_verdict testapp
-    printf '%s|%s\n' "$_afv_state" "$_afv_msg"
-    rm -f "$_afv_err" ) 2>/dev/null || printf 'SUBJECT-DIED|\n'
+  # ⚠️ CAPTURE, THEN DECIDE — never `) … || printf`. A trailing `||` makes the subshell the LEFT
+  # OPERAND of an AND-OR list, and bash suppresses errexit INSIDE it; the subshell's own
+  # `set -euo pipefail` does NOT restore it. MEASURED: a mutant killing argocd_app_fetch_verdict on
+  # EVERY path scored 12/0 — the suite was totally blind to the deaths it exists to catch.
+  #
+  # The `||` form has a second defect the capture also fixes: on a death AFTER the printf it emitted
+  # BOTH the partial line and SUBJECT-DIED, and `case "$out" in ok|*)` matched the first, scoring a
+  # PASS. Capturing means only one verdict is ever emitted.
+  #
+  # THE REDIRECT IS INSIDE THE SUBSTITUTION, ON THE SUBSHELL, and that placement is load-bearing:
+  # `out="$( … )" 2>/dev/null` does NOT redirect the substitution — for a command consisting only of
+  # assignments, expansions run BEFORE redirections — so the stub's stderr escapes into the report.
+  # MEASURED: 8 leaks with the redirect outside, 0 with it inside.
+  #
+  # `rc=$?` on its OWN LINE, never `|| rc=$?` — that reintroduces the very suppression above
+  # (measured: rc=0 and the post-death marker printed). scripts/test-argocd-version.sh:43 is the
+  # other correct instance of this pattern in the repo; copy from there.
+  local out rc
+  out="$( ( set -euo pipefail
+            export STUB_MODE="$1" WITNESS="${2:-/dev/null}" PATH="$STUBDIR:$PATH"
+            argocd_app_fetch_verdict testapp
+            printf '%s|%s\n' "$_afv_state" "$_afv_msg"
+            rm -f "$_afv_err" ) 2>/dev/null )"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then printf '%s\n' "$out"; else printf 'SUBJECT-DIED|\n'; fi
 }
 
 echo
