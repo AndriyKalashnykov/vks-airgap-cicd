@@ -137,9 +137,33 @@ should_skip() {
 # evidence the guard keys on, so two blocks ran `export VCF_CLI_VSPHERE_PASSWORD=''` and were counted
 # as RAN -- then failed downstream on an auth error that reads like a document defect. An empty
 # string IS an invented value.
+#
+# <argocd-lb-ip> — the SECOND placeholder, added 2026-08-18 (B160). WHY IT EARNS ITS PLACE: without
+# it, scenario-2's OWN ArgoCD-address block (the /etc/hosts entry -> `make fetch-argocd-ca
+# ARGOCD_SERVER=argocd-server` -> the name in .env) is NEVER WALKED — it carries `<argocd-lb-ip>`,
+# so the guard below refuses the whole block. MEASURED: the post-fix row-5 log
+# (run-20260817T203305Z-314064) contains ZERO occurrences of `etc/hosts` or `fetch-argocd-ca`. The
+# harness was therefore proving a tenant path the tenant is never given.
+#
+# The value is the one the harness ALREADY holds — supply_s2_contract writes it to OUT_DIR/.as and
+# exports it as ARGOCD_LB_IP — so this INVENTS NOTHING; it hands the document the address it was
+# always going to be told. That is why it is a substitution and not a new mechanism: it converts a
+# SKIP into a WALK.
+#
+# ⚠️ Deliberately NOT a lab-DNS record. dns-record.sh:44-47 refuses any name outside the lab domain,
+# so `argocd-server` and `argocd-server.cicd` both hard-die, while the one publishable form
+# `argocd-server.env1.lab.test` is NOT in the cert's SAN list. The document already prescribes
+# /etc/hosts (scenario-2.md:295), and dns-record.sh's "hosts is insufficient" argument is about
+# IN-CLUSTER workloads resolving through dnsmasq — the only consumer of ARGOCD_SERVER here is the
+# jump box, never a pod.
+#
+# Same non-empty rule as the password above, and for the same measured reason: substituting "" would
+# delete the evidence the guard keys on and let a block run against a half-formed command.
 substitute() {
-  [ -n "${VCF_CLI_VSPHERE_PASSWORD:-}" ] || { printf '%s' "$1"; return; }
-  printf '%s' "${1//<your SSO password>/$VCF_CLI_VSPHERE_PASSWORD}"
+  local s="$1"
+  [ -n "${VCF_CLI_VSPHERE_PASSWORD:-}" ] && s="${s//<your SSO password>/$VCF_CLI_VSPHERE_PASSWORD}"
+  [ -n "${ARGOCD_LB_IP:-}" ]             && s="${s//<argocd-lb-ip>/$ARGOCD_LB_IP}"
+  printf '%s' "$s"
 }
 
 # (5) A line a walk cannot run is COMMENTED OUT and counted -- not grounds to drop the whole block,

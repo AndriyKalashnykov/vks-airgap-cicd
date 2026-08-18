@@ -723,7 +723,10 @@ make argocd-preflight           # CLI vs running-server versions; can ArgoCD rea
 make argocd-register-guest      # admin-only; creates an SA in your guest + a Secret in ArgoCD's ns
 ```
 
-**Expect:** `registered as` followed by the name and API server it used. Then re-run
+**Expect:** the guest ends up `registered` with this ArgoCD — either `registered as` followed by the
+name and API server it just used, or, if it was already registered, a line saying so and
+`nothing to do`. Both are success; the second is what you see on a re-run or on a cluster someone
+else already registered. Then re-run
 `make argocd-preflight` — it should now report PREFLIGHT OK, which is the assertion attached to
 that command's own block above. *(~2 min)*
 

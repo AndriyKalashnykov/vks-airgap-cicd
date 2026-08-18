@@ -224,20 +224,35 @@ jobs:
       # changed, and `restore-keys` lets an unrelated change still warm-start from the closest
       # previous entry. (Schema MISSES — datreeio 404s for CRDs it does not carry — can never
       # be cached and are paid regardless; that is a separate, known cost.)
-      - name: Cache kubeconform schemas
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      # ⚠️ RESTORE AND SAVE ARE SPLIT ON PURPOSE — a combined `actions/cache` CANNOT warm this cache
+      # after a failure, which makes a throttle outage SELF-SUSTAINING. `actions/cache@55cc8345…`
+      # (v6) declares `post-if: "success()"` in its own action.yml AT THIS PINNED SHA, so its
+      # save runs ONLY when the job succeeded. Under KUBECONFORM_REQUIRE_SCHEMAS=1 a CDN throttle
+      # FAILS the job — which is precisely when we have just paid to fetch the schemas — so they
+      # were DISCARDED and the next run started from the same cold entry. Any unrelated red (lint,
+      # app-test) threw the fetch away too. MEASURED on PR #745: attempt 2 reached 3m15s and died
+      # with `16 of 16 resource(s) could not have their schema downloaded`.
+      #
+      # `if: always()` on the save is what closes it. That is safe HERE specifically because the
+      # key is CONTENT-ADDRESSED (below): a partial save cannot serve a stale answer for different
+      # content — it can only under-fill an entry that a later run tops up. This is the same
+      # argument this file already makes for the Go build cache.
+      - name: Restore kubeconform schema cache
+        id: kubeconform-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/kubeconform
           # 'tekton/**' matched NOTHING and was dropped: `git ls-files tekton` = 0, because the
           # manifests live at k8s/tekton/ (9 files) and are already covered by 'k8s/**'. Same
           # dead-path rot already corrected once in the adversary hook's GUARDED_PREFIXES.
           #
-          # ⚠️ KNOWN GAP, deliberately not closed here: the schemas kubeconform fetches depend on
-          # KUBERNETES_VERSION, and this key does NOT cover it — so bumping the k8s version reuses
-          # schemas fetched for the OLD one until a manifest also changes. Closing it means moving
-          # KUBERNETES_VERSION out of scripts/validate.sh:14 (a hardcoded literal, absent from
-          # .env.example, and validate.sh never calls load_env) and adding that file here. That is a
-          # two-file change in a script currently under adversary review; filed rather than rushed.
+          # ⚠️ CORRECTED — a "KNOWN GAP" recorded here (that this key omits KUBERNETES_VERSION, so a
+          # version bump reuses schemas fetched for the OLD one) was REFUTED BY MEASUREMENT
+          # 2026-08-18: kubeconform's OWN `-cache` is VERSION-DISCRIMINATING. Same cache dir,
+          # `-kubernetes-version 1.31.0` then `1.30.0` -> entries went 1 -> 2. A bump MISSES and
+          # refetches; it CANNOT serve a 1.30 schema for a 1.31 request. Adding KUBERNETES_VERSION
+          # to this key would therefore buy ZERO correctness and cost a full re-fetch of the whole
+          # set on every bump. Do not add it. (See BACKLOG B156.)
           key: kubeconform-v2-${{ hashFiles('k8s/**', 'deploy/**') }}
           restore-keys: |
             kubeconform-v2-
@@ -301,6 +316,25 @@ jobs:
           KUBECONFORM_REQUIRE_SCHEMAS: '1'
           GWAPI_REQUIRE_FETCH: '1'
         run: make ${{ github.event_name == 'schedule' && 'static-check' || 'static-check-pr' }}
+
+      # THE OTHER HALF OF THE SPLIT (see the restore step's comment). `if: always()` is the whole
+      # point: the run we MOST need to persist is the one that FAILED on a throttle, because it is
+      # the run that just paid to fetch. Without this the failure is self-sustaining.
+      # `cache-hit` is only ever 'true' on an EXACT key hit, in which case the entry is already
+      # complete and re-saving is both wasteful and rejected by the backend — so skip only that case,
+      # never the failure case.
+      #
+      # ⚠️ UNGUARDED RESIDUAL, stated rather than implied: nothing asserts that this stays split.
+      # Re-merging it into a single `actions/cache` step silently restores the bug, and a Renovate
+      # bump to a SHA whose `post-if` differs would too. The regression is INVISIBLE in a green run —
+      # it shows up only as a cold cache on the next throttle. Same shape as the `apk upgrade`
+      # under-layer-cache trap: the mechanism goes inert and only a marker would prove it ran.
+      - name: Save kubeconform schema cache
+        if: always() && steps.kubeconform-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/kubeconform
+          key: ${{ steps.kubeconform-cache.outputs.cache-primary-key }}
 
   # Docs gate: markdownlint (via npx) + the README-scenario gate. CHEAP — no Docker.
   docs-lint:
