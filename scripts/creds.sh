@@ -14,12 +14,57 @@
 # Printing these to the operator's own terminal is the intended function, not a leak (no value touches
 # argv). On a real lab the passwords are the operator's own or the lab's; they are only "demo" credentials
 # in the KinD stand-in.
+#
+# ⚠️ THE MASK BELOW DOES NOT CLOSE THE CLASS, AND SAYING SO IS THE POINT (B182 F1).
+# The row that prescribed this guard claimed `creds-show` was "the single upstream point". Its idea
+# round REFUTED that: `docs/scenario-1.md:376` runs `make argocd-password` inside a live bash block at
+# **Step 5, eight steps before creds-show**, and `scripts/argocd-password.sh` printfs the password to
+# stdout UNCONDITIONALLY. So this guard takes a walk row's leak from *3 credentials at step 13 + 1 at
+# step 5* down to *1 at step 5* — the log still contains a live ArgoCD admin password, and the row
+# now LOOKS remediated. That is B153's own recorded shape (a fix that covered 1 of 2 real credential
+# lines) repeating one level up.
+#
+# AND THE OBVIOUS COMPLETION IS BLOCKED: creds.sh calls argocd-password.sh through a COMMAND
+# SUBSTITUTION (see the `argo_pw=` assignment below), i.e. always a pipe, so porting `[ -t 1 ]` into
+# that script would make this table's Password cell read `<hidden…>` on the operator's own terminal.
+# The thing that actually closes the class is the VALUE-KEYED redactor B153 prefers — the pattern
+# already exists in-tree at `50-seed-gitea-repos.sh:111` and `:149`. Do not describe this file's
+# guard as "the leak is fixed".
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ── SHOW_SECRETS IS SNAPSHOTTED **BEFORE** load_env, AND THAT ORDER IS THE WHOLE FIX (B182 F5) ────
+# `load_env` sources `.env.example` and `.env` with `set -a`, so a `SHOW_SECRETS=1` line an operator
+# adds to their OWN `.env` — tired of typing it — would be EXPORTED over the caller's environment
+# and permanently re-arm the leak, INCLUDING inside the walk, invisibly (absence of masking produces
+# no output). `check-env-clobber.sh` cannot catch it: it scans `.env.example` only, and lib/os.sh:501
+# records this exact gap verbatim. The naive `${SHOW_SECRETS:-0}` read AFTER load_env fails this.
+# So: read it from the PRE-load_env environment and honour only that.
+_show_secrets_snapshot="${SHOW_SECRETS:-0}"
+
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
 load_env
+
+# ── the reveal decision, made once ───────────────────────────────────────────────────────────────
+# A terminal is the operator reading their own screen — the intended function, and unchanged.
+# A NON-terminal is a redirect, a pipe, a CI capture, an agent transcript, or the walk harness, which
+# runs every documented command with stdout redirected to a per-row log. That is how live Gitea,
+# Harbor and ArgoCD passwords reached /tmp/walk/MATRIX-row*.log on previous runs.
+if [ -t 1 ] || [ "$_show_secrets_snapshot" = "1" ]; then _reveal=1; else _reveal=0; fi
+
+# _mask <secret> — apply ONLY to values that are REAL secrets.
+# ⚠️ MASK THE VALUES, NOT THE COLUMN (B182 F4). Four things that appear in the Password column are
+# NOT secrets and MUST stay legible: the `<no login; …>` notes, the `_unset_pw` placeholders, the
+# `<ARGOCD_AUTH_TOKEN from .env — not a password>` row, and the `<- INITIAL secret; superseded …`
+# annotation. A column-level mask deletes the tenant/KinD/lab distinction that ~60 lines of comments
+# in this file exist to preserve — so the mask is applied at the three assignment sites only, and
+# the annotation is appended OUTSIDE it.
+_mask() {
+  if [ "$_reveal" = 1 ]; then printf '%s' "$1"
+  else printf '<hidden: not a terminal — re-run with SHOW_SECRETS=1>'; fi
+}
 
 # --- resolve URLs ---------------------------------------------------------------------
 # Harbor keeps its OWN LB (not behind the ingress); http when HARBOR_INSECURE=1 (KinD).
@@ -143,13 +188,17 @@ _unset_pw() {  # _unset_pw <VAR> -> what an unset password actually means, per f
   else printf '<generated at install (KinD) — or set %s in .env for a real lab>' "$1"; fi
 }
 harbor_user="${HARBOR_USERNAME:-admin}"
-harbor_pw="${HARBOR_PASSWORD:-$(_unset_pw HARBOR_PASSWORD)}"
+# The `:-` form cannot be kept: it would feed the PLACEHOLDER through _mask and hide the one thing a
+# reader needs when nothing is installed. Branch instead — mask a real value, print the explanation.
+if [ -n "${HARBOR_PASSWORD:-}" ]; then harbor_pw="$(_mask "$HARBOR_PASSWORD")"
+else harbor_pw="$(_unset_pw HARBOR_PASSWORD)"; fi
 # NOT a `gitea_admin` fallback: it disagreed with .env.example's GITEA_ADMIN_USER=admin, so this
 # printer could name an account the pipeline never used. It is also dead code — load_env sources
 # .env.example unconditionally (SKIP_DOTENV skips only .env), so the value is always set. If it
 # somehow is not, SAY SO rather than inventing a name. This is a printer; it must still exit 0.
 gitea_user="${GITEA_ADMIN_USER:-<unset — see GITEA_ADMIN_USER in .env.example>}"
-gitea_pw="${GITEA_ADMIN_PASSWORD:-$(_unset_pw GITEA_ADMIN_PASSWORD)}"
+if [ -n "${GITEA_ADMIN_PASSWORD:-}" ]; then gitea_pw="$(_mask "$GITEA_ADMIN_PASSWORD")"
+else gitea_pw="$(_unset_pw GITEA_ADMIN_PASSWORD)"; fi
 # ArgoCD via the context-aware resolver; exit 3 => VKS-provided / not knowable locally.
 # `--wait 0` is an ARGUMENT, not an env var: this is a PRINTER and must never block. argocd-password
 # defaults to a 900s wait for the still-reconciling case, and an env-var opt-out would be defeated by
@@ -168,7 +217,13 @@ argo_pw="$("${SCRIPT_DIR}/argocd-password.sh" --wait 0 2>"$_argo_err")" || _argo
 _argo_initial=0
 grep -q 'INITIAL admin password' "$_argo_err" 2>/dev/null && _argo_initial=1
 rm -f "$_argo_err"
-if [ "$_argo_rc" = 0 ]; then :; else
+if [ "$_argo_rc" = 0 ]; then
+  # A REAL secret was obtained — mask it. The `<- INITIAL secret; superseded …` annotation is
+  # appended further down, OUTSIDE this, so the provenance survives masking. That annotation is the
+  # reason a column-level mask was refused: it exists precisely so a bare value is not read as
+  # "this is your password".
+  argo_pw="$(_mask "$argo_pw")"
+else
   # SAME CLASS AS THE TWO ABOVE, third row: "<VKS-provided — get it from your lab>" is only true on a real
   # lab. On a KinD box ArgoCD's password is GENERATED at install like the others, so telling the operator
   # to go and get it from a lab they do not have is a third invented chore. Answer per flow.

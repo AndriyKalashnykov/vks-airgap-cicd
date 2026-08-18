@@ -397,6 +397,60 @@ else
   bad "an EMPTY .env does not report env-populated: 0" "the discriminator cannot tell the two states apart"
 fi
 
+# ---- STATE 7: THE SECRET GUARD (B182). Two cases, and they are MANDATORY because without them the
+# whole suite would run the HIDDEN arm and notice nothing. MEASURED before this was added: grepping
+# this file for any Password-column sentinel returned ZERO hits — the gate made no assertion on that
+# column at all, and `render()` calls creds.sh inside `$( )`, i.e. a pipe, i.e. non-tty. So after the
+# guard landed, all 11 existing cases would have exercised the masked path silently.
+#
+# ⚠️ EACH CASE ASSERTS BOTH DIRECTIONS. "the sentinel is present" alone is satisfiable by a creds.sh
+# that prints the sentinel unconditionally; "the value is absent" alone is satisfiable by one that
+# prints nothing. Only the conjunction distinguishes a working guard from either failure.
+_SECRET='ZZTESTSECRET-do-not-match-anything-else'
+
+out="$(HARBOR_PASSWORD="$_SECRET" render '')"
+if printf '%s' "$out" | grep -qF 'hidden: not a terminal' \
+   && ! printf '%s' "$out" | grep -qF "$_SECRET"; then
+  ok "piped + SHOW_SECRETS unset -> the password is MASKED and the value is absent"
+else
+  bad "piped + SHOW_SECRETS unset -> expected the hidden-sentinel AND no cleartext value. Got:
+$(printf '%s' "$out" | grep -E '^ *Harbor ' || printf '%s' "$out" | tail -3)"
+fi
+
+out="$(SHOW_SECRETS=1 HARBOR_PASSWORD="$_SECRET" render '')"
+if printf '%s' "$out" | grep -qF "$_SECRET"; then
+  ok "piped + SHOW_SECRETS=1 -> the escape hatch REVEALS (docs/access-uis.md depends on this)"
+else
+  bad "piped + SHOW_SECRETS=1 -> the documented escape hatch did NOT reveal the value. Got:
+$(printf '%s' "$out" | grep -E '^ *Harbor ' || printf '%s' "$out" | tail -3)"
+fi
+
+# The .env-IMMUNITY case. This is the arm the round named as most likely to be got wrong: the naive
+# `${SHOW_SECRETS:-0}` read AFTER load_env fails it, because load_env's `set -a` exports whatever is
+# in the operator's .env over the caller's environment. A throwaway REPO_ROOT is used so the
+# operator's real ./.env is never touched.
+# ⚠️ THE .env.example COPY IS LOAD-BEARING, and its absence made the FIRST version of this case
+# VACUOUS. Without it `load_env` FATALs (".env.example missing at <throwaway>"), creds.sh emits ONE
+# error line, and "the secret is absent" is trivially true — so the case passed against BOTH a
+# no-guard mutant AND the naive read-after-load_env mutant it exists to catch. Copy it, exactly as
+# render_with_env:108 does.
+_envdir="$(mktemp -d)"
+cp .env.example "${_envdir}/.env.example"
+printf 'SHOW_SECRETS=1\n' > "${_envdir}/.env"
+out="$( cd "$_CREDS_REPO" && REPO_ROOT="$_envdir" HARBOR_PASSWORD="$_SECRET" \
+        CREDS_TOKEN=1 ./scripts/creds.sh 2>/dev/null )"
+# POSITIVE CONTROL: the render must have produced a real table, not an error. Without this the
+# absence assertion below can pass on any failure mode at all.
+if ! printf '%s' "$out" | grep -qE '^ *Harbor '; then
+  bad ".env-immunity case rendered NO Harbor row — the render failed, so the assertion is vacuous"
+elif ! printf '%s' "$out" | grep -qF "$_SECRET"; then
+  ok ".env cannot re-arm the leak -> SHOW_SECRETS is snapshotted BEFORE load_env"
+else
+  bad ".env RE-ARMED the leak: a SHOW_SECRETS=1 line in the operator's .env revealed the value.
+      The snapshot is being read AFTER load_env. See lib/os.sh:501 for this clobber class."
+fi
+rm -rf "$_envdir"
+
 printf '\nSUCCESS — creds-show tells the truth in every state (nothing installed / no ingress /\n         fully installed / UNSTAMPED overlay = the real-lab state / stamped-and-matching /\n         NO overlay but a POPULATED .env = where a real operator sits)\n'
 else
   printf '\ncreds-show FAILED the truth check above.\n' >&2

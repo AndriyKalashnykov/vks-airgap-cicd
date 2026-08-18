@@ -7,6 +7,23 @@ ingress is installed) the one-time `/etc/hosts` line for the `*.vks.local` hosts
 correct depends on the context** — Harbor and ArgoCD are *ours* in KinD but the *lab's* on a real
 VKS cluster:
 
+> **Passwords print only to a terminal.** If you **pipe or redirect** `creds-show` — into a file, a
+> pager, `grep`, a CI capture — the password column reads
+> `<hidden: not a terminal — re-run with SHOW_SECRETS=1>`. That is deliberate: the walkthrough
+> harness runs every documented command with stdout redirected to a log, and live Gitea, Harbor and
+> ArgoCD passwords were reaching those logs in cleartext. Everything else — URLs, usernames, the
+> DISCOVERED/STORED provenance — is unchanged, so a redirect still gives you the whole table.
+>
+> To capture the passwords too, ask for it explicitly:
+>
+> ```bash
+> SHOW_SECRETS=1 make creds-show > creds.txt
+> ```
+>
+> ⚠️ Putting `SHOW_SECRETS=1` in your `.env` does **not** work, on purpose — it is read from the
+> environment *before* `.env` is loaded, so one forgotten line cannot silently re-arm the leak for
+> every future capture.
+
 - The **`*.vks.local`** hostnames exist **only after the ingress is in place** — `make install-ingress`
   (KinD / a mesh-free cluster), or `make install-ingress INGRESS_CONTROLLER=istio-existing` on a real
   VKS lab, where Istio already exists and we only attach routes (part of
