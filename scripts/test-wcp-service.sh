@@ -111,9 +111,23 @@ fi
 # End-to-end through the REAL script, with the vCenter layer stubbed to a state that NEVER reaches
 # the target — so wait_for must exhaust its budget. That is the only way to exercise both arms
 # without a vCenter, and it exercises the actual `case` wiring rather than a copy of it.
+# ⚠️ COPY THE THREE FILES; DO NOT `git archive`. The first version built this sandbox with
+# `git archive HEAD | tar -x`, which fails with no `.git` — and the failure path is a SKIP, so both
+# cases below vanished SILENTLY. Measured: mutating wait_for back to `die` (log_error 1 -> 0, the
+# die-form present) left the suite at rc=0 with NEITHER case printing a line. The mutation landed
+# and the RED-proof could not see it, because a RED-proof runs in exactly the .git-less throwaway
+# this depended on. wcp-service.sh needs only os.sh and vcenter.sh (its two `.` lines), so copy
+# them: no VCS, no network, works anywhere.
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
-if git archive HEAD 2>/dev/null | tar -x -C "$W" 2>/dev/null; then
-  cp scripts/wcp-service.sh "$W/scripts/wcp-service.sh"
+# The WHOLE lib, not just os.sh: os.sh sources its siblings (state.sh among them), so a
+# hand-picked subset dies with "No such file or directory" — which the `bad` message reports as a
+# product failure. Copy the directory and let the stub below overwrite exactly one file.
+# `.env.example` too: load_env reads it, and its absence is the vacuity that made an earlier
+# creds-show case pass against both mutants.
+if mkdir -p "$W/scripts/lib" \
+   && cp scripts/wcp-service.sh "$W/scripts/wcp-service.sh" \
+   && cp scripts/lib/*.sh       "$W/scripts/lib/" \
+   && cp .env.example           "$W/.env.example"; then
   cat > "$W/scripts/lib/vcenter.sh" <<'STUB'
 vc_require()   { :; }
 vc_login()     { return 0; }
@@ -142,7 +156,7 @@ $(tail -3 "$W/r.log")"
 $(tail -3 "$W/s.log")"
   fi
 else
-  printf 'SKIP  wait_for arms: git archive failed, so no sandbox could be built\n' >&2
+  printf "SKIP  wait_for arms: could not build the copy-sandbox\\n" >&2
 fi
 
 [ "$fail" -eq 0 ] || exit 1
