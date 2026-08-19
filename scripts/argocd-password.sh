@@ -59,6 +59,14 @@ done
 # at docs/scenario-1.md Step 5, because that value is read from the k8s Secret and never lands in
 # .env or .walk-env, so nothing downstream can key on it. This function is what takes it to 16/16.
 _emit() {
+  # ⚠️ DELIBERATELY `= "1"` AND NOT THE REPO'S `is_true` — do NOT "fix" this for consistency.
+  # `is_true` accepts 1|true|yes|y|on (case-insensitively). MEASURED 2026-08-18 across 9 values, the
+  # two predicates diverge on 5 — true / TRUE / yes / y / on — and EVERY divergence is in the
+  # fail-CLOSED direction: the shipped form MASKS where is_true would REVEAL. Widening a predicate
+  # that uncovers a password, for tidiness, is the wrong trade in the only direction that matters.
+  # An adversary flagged the inconsistency (correctly) and prescribed is_true; that prescription is
+  # declined on this measurement. The cost is an operator who types SHOW_SECRETS=true getting no
+  # output -- and the mask message names the accepted value verbatim, so it is self-correcting.
   if [ "$_raw" = 1 ] || [ -t 1 ] || [ "$_show_secrets_snapshot" = "1" ]; then
     printf '%s\n' "$1"
   else

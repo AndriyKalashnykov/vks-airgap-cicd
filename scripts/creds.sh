@@ -62,6 +62,14 @@ load_env
 # boundary of what the mask covers, and the reader must be told rather than left to infer "captured
 # == masked". Do NOT try to distinguish a pty-with-a-human from a pty-with-a-recorder: that is
 # undecidable, and any heuristic for it would break the intended function on a real terminal.
+# ⚠️ DELIBERATELY `= "1"` AND NOT THE REPO'S `is_true` — do NOT "fix" this for consistency.
+# `is_true` accepts 1|true|yes|y|on (case-insensitively). MEASURED 2026-08-18 across 9 values, the
+# two predicates diverge on 5 — true / TRUE / yes / y / on — and EVERY divergence is in the
+# fail-CLOSED direction: the shipped form MASKS where is_true would REVEAL. Widening a predicate
+# that uncovers a password, for tidiness, is the wrong trade in the only direction that matters.
+# An adversary flagged the inconsistency (correctly) and prescribed is_true; that prescription is
+# declined on this measurement. The cost is an operator who types SHOW_SECRETS=true getting no
+# output -- and the mask message names the accepted value verbatim, so it is self-correcting.
 if [ -t 1 ] || [ "$_show_secrets_snapshot" = "1" ]; then _reveal=1; else _reveal=0; fi
 
 # _mask <secret> — apply ONLY to values that are REAL secrets.
