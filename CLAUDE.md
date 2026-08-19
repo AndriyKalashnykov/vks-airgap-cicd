@@ -566,18 +566,25 @@ walkthrough matrix that walks scenario-1 and scenario-2 end to end: those two sc
 **`nested-vsphere-lab`**, and this repo supplies only `WALK_REPO`, `scripts/walk-doc.sh` and the
 scenario docs they read.
 
-**Two known defects in them are filed THERE and are deliberately NOT tracked in this backlog** — the
+**Three known defects in them are filed THERE and are deliberately NOT tracked in this backlog** — the
 fixes edit files this repo does not contain, and both repos number items `B<N>` independently, so a
 copy here would collide the moment this backlog passes B428:
 
 | | |
 |---|---|
+| **B453** | the matrix leaks **exactly one VM per run** — `destroy_stale_walkboxes` is called once, at `walk-matrix.sh:642`, *inside* `row()` **before** the box is built, so each row sweeps the PREVIOUS row's and the last row's is never swept. There is **no `trap` in the file at all**. Filed from this repo's B192 (PR #83) |
 | **B436** | the walkbox base image downloads into `$LAB_STATE` instead of the artifacts directory, so a state wipe silently costs a 596 MiB re-fetch |
 | **B428** | both scripts hand-roll their ssh options. An identity-free set now exists at `nested-vsphere-lab/lib/common.sh` (`LAB_SSH_OPTS`); lifting it takes that repo's `check-hardcodes` from 3 to 1 |
 
 ```sh
-grep -n 'B436\|B428' ~/projects/nested-vsphere-lab/docs/BACKLOG.md
+grep -n 'B453\|B436\|B428' ~/projects/nested-vsphere-lab/docs/BACKLOG.md
 ```
+
+⚠️ **That repo's backlog table is GENERATED** (`scripts/regen-backlog-index.sh`; `make backlog-index`
+is its drift gate) — add an `##`-level section to `docs/BACKLOG-EVIDENCE.md` and regenerate; never
+hand-edit the table. **Lead the heading with a status emoji**, or the classifier files it as
+`🔴 unclassified`, which in that repo means *"nobody has looked"* — a materially different claim
+from `🔴 open`.
 
 ⚠️ **B428 is not a copy-paste.** Both walk arrays currently bundle the identity (`-i "$KEY"`), and
 `walk-matrix.sh` **pipes into ssh twice** — so it must never receive `-n`, which discards piped
