@@ -52,6 +52,12 @@ probe() {
   # and the failure text blames the PRODUCT ("a snapshot that fires unconditionally..."). An
   # inherited REPO_ROOT (os.sh EXPORTS it) is worse: the probe reads the real repo instead of its
   # fixture, 4 FAILs. The repo's own convention for this is test-env-validate.sh:56.
+  # shellcheck disable=SC2016  # the `bash -c` body below is single-quoted DELIBERATELY: $3/$4
+  # must expand in the CHILD, from the positional args passed after the `_`, so the probe runs
+  # under the scrubbed environment. Double quotes would expand them in the PARENT and defeat
+  # the `env -u` scrub this whole block exists for.
+  # ⚠️ And the directive goes HERE, not inside the command: a comment between backslash-
+  # continued lines is a SYNTAX ERROR (SC1073/SC1126), which is how the first attempt broke it.
   out="$( cd "$T" || exit 1
           env -u HARBOR_INSECURE -u ARGOCD_INSECURE -u MIRROR_VERIFY_FAST \
               -u ARGOCD_ADMIN_PASSWORD -u GITEA_ADMIN_PASSWORD -u ARGOCD_LB_IP \

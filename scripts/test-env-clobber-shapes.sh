@@ -35,6 +35,8 @@ shape_fires() {  # $1 = the ${...} body, e.g. 'X_PROBE:-0'
   cp Makefile "$T/Makefile" 2>/dev/null
   cp -r scripts "$T/scripts"
   printf 'X_PROBE=0\n' >> "$T/.env.example"
+  # shellcheck disable=SC2016  # the ${...} is being WRITTEN INTO the probe file for the gate to
+  # read; expanding it here would plant the empty string and every case would go vacuously green.
   printf '#!/usr/bin/env bash\nv="${%s}"\necho "$v"\n' "$1" > "$T/scripts/zz-probe.sh"
   ( cd "$T" && REPO_ROOT="$T" ./scripts/check-env-clobber.sh >/dev/null 2>&1 ); rc=$?
   rm -rf "$T"
