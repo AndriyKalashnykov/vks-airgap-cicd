@@ -261,7 +261,15 @@ for v in "${UNCOMMENTED[@]}"; do
   # five misses above are exactly enumerated-list rot in its live form.
   #
   # ⚠️ THE REMEDY IS "COMMENT IT OUT", AND DELIBERATELY NOT "add it to load_env's snapshot list".
-  # That second option is REFUTED BY MEASUREMENT and would silently disable this arm. load_env's
+  # ⚠️ CORRECTED 2026-08-18: that sentence used to end "and would silently disable this arm". That
+  # half is FALSE and it is the dangerous half — it would scare the next session off a safe change,
+  # or stop them measuring. Settled by source-read AND by an idea round that ran it: the protected
+  # branch at :156 only LOGS, it does not `continue`, so execution falls through and this arm still
+  # fires (measured rc=1 with the var both snapshot-listed and armed uncommented). What the snapshot
+  # DOES do is print an `ok ... SNAPSHOT-PROTECTED ... a per-run override survives` line DIRECTLY
+  # ABOVE the error, about the very line that armed the leak — a legibility regression, not an
+  # enforcement one. Suppress that `ok` when the same var is also flagged here, if you add these.
+  # The rest of this paragraph stands and is the reason the remedy is still "comment it out": load_env's
   # loop is `if [ -n "${!_sel:-}" ]` — it restores a value the CALLER already set. The threat here
   # is the INVERSE: the caller sets NOTHING and the FILE arms the flag. Measured with .env.example
   # carrying SHOW_SECRETS=1 and the caller unset, the effective value is '1' with the snapshot and

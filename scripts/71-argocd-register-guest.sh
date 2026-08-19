@@ -198,6 +198,17 @@ log_info "guest API server ArgoCD will dial: $SERVER"
 if [ "${ARGOCD_REGISTER_INSECURE:-0}" = "1" ]; then
   # Opt-in: skip TLS verify of the guest API (the two-KinD stand-in reaches the guest by raw IP,
   # which may not be in the API cert SAN — the guest-API TLS/CA specifics are a real-lab-only concern).
+  #
+  # ⚠️ THIS WARNS, and the sibling `else` arm below is why. Visibility used to be exactly BACKWARDS:
+  # the ACCIDENTAL no-CA fallback warned, while this DELIBERATE opt-in was silent — even though this
+  # one is the worse of the two, because the choice does not end with the run. It is written into the
+  # ArgoCD Cluster Secret, so EVERY later sync to this destination dials the guest API with TLS
+  # verification off. `.env.example` says "Never on a real lab", and `make env-init` is a verbatim
+  # copy of that file, so an operator who armed it for the two-KinD e2e and left it there would
+  # register a REAL lab insecurely with no output at all.
+  log_warn "ARGOCD_REGISTER_INSECURE=1 — registering '${DEST_NAME}' with TLS verification OFF."
+  log_warn "  This PERSISTS in the Cluster Secret: every future sync to this destination skips verify."
+  log_warn "  Intended for the two-KinD stand-in only. On a real lab, unset it and supply the CA."
   TLS_CFG="\"tlsClientConfig\":{\"insecure\":true}"
 elif [ -n "$CA_DATA" ]; then
   TLS_CFG="\"tlsClientConfig\":{\"caData\":\"${CA_DATA}\"}"
