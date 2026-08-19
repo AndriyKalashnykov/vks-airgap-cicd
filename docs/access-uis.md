@@ -46,6 +46,12 @@ only the model, not a static table that would drift out of date.
 **ArgoCD password** — **`make argocd-password`** prints it, in every context. It asks the **cluster**
 first, so what it prints is the password that actually works.
 
+> It masks off a terminal, exactly like `creds-show` above — pipe or redirect it and you get
+> `<hidden: not a terminal — re-run with SHOW_SECRETS=1>`. Same reason: this command appears as a
+> walked step, so its output was landing in per-row logs in cleartext. On your own terminal nothing
+> changes. `SHOW_SECRETS=1 make argocd-password > f` captures it deliberately, and the same pty
+> caveat applies.
+
 - **KinD:** the flow generates one for you (`.env.state`) and applies it at install — nothing to set.
 - **VKS:** ArgoCD is the platform's. If you set `ARGOCD_ADMIN_PASSWORD` in `.env`, that is what you
   get; otherwise the command reads the initial-admin secret, or points you at your lab.
