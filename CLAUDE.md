@@ -637,8 +637,8 @@ half the deliverable, not a formality. Nothing has been tagged.
 | **B133 (CRITICAL) — CLOSED** | vCenter had a hardcoded `-k` on three curls: the SSO **administrator password** went to an unverified peer. It was the only credential-bearing TLS client here with no trust ladder. Now fails closed, with `VCENTER_INSECURE=1` as an explicit per-run opt-out. **Owner decision, on the record:** verify by default, CA optional and used when provided — which re-confirms B64 rather than reversing it. |
 | **`make fetch-vcenter-ca` — NEW** | Without it the fix is an **outage**: `VCENTER_CA_FILE` appeared **0 times** in `docs/`, so scenario-1 rows 1–4 would have died at **Step 2**, before Harbor, on this very cut. It selects the root **by handshake**, never by subject — every cut mints a new VMCA with a byte-identical subject. |
 | **B70 — owner decision taken: option C** | Adopt `tkg.tanzu.vmware.com/tkg-registry-additional-ca-cert` as the documented VKS path, KinD explicitly second-class. **NOT started.** Needs an idea round AND a lab, and it knowingly widens the stand-in/lab divergence. |
-| **B191, B174, B166, B188, B145, B192 — closed** | See their rows; each carries its measurements. |
-| **B193, B194, B195 — newly filed** | The vCenter ladder has **no PIN** (`VCENTER_CA_SHA256` does not exist), so do **not** claim parity with the Harbor/ArgoCD/Supervisor ladders. `vc_api` still cannot tell 200 from truncated-after-200. |
+| **B191, B174, B166, B188, B145, B192, B190, B69, B77, B156, B194 — closed** | See their rows; each carries its measurements. Three of them (**B192**, **B189**, **B178**) are corrections to rows *I* had filed wrong, and one (**B194**) is a fix whose first RED-proof measured nothing — the control caught it, the fixture was rebuilt, and the bug turned out real: `vc_api` returned **success over a truncated body**. |
+| **B193, B195 — newly filed** | The vCenter ladder has **no PIN** (`VCENTER_CA_SHA256` does not exist), so do **not** claim parity with the Harbor/ArgoCD/Supervisor ladders. `vc_api` still cannot tell 200 from truncated-after-200. |
 
 ### Distrust these
 
@@ -675,9 +675,8 @@ half the deliverable, not a formality. Nothing has been tagged.
   2 of 4 `fetch-*-ca` producers have the gate, and the two without are the SSO-admin pair.
 - **B26, B69, B104, B156, B160, B175, B178, B189, B190, B192, B194** — see their rows.
 
-**Row counts at handoff: 3 red / 13 amber / 25 green.** B26, B70 and B77 are the three reds, and
-**none of them is simply open work** — verified by reading each to its end rather than by its
-colour:
+**Row counts at handoff: 4 red / 8 amber / 30 green.** **None of the reds is simply open
+work** — verified by reading each to its end rather than by its colour:
 
 - **B70** is now DECIDED (option C) but needs an idea round and a lab; nothing is started.
 - **B77 is CLOSED** (2026-08-19): all five of the source review's findings are settled — the vCenter
