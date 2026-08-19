@@ -719,7 +719,12 @@ verdict and named the remedy. The circular gate that row describes is genuinely 
 3. `kubectl get mutatingwebhookconfiguration -o yaml | grep -A8 namespaceSelector` on a VKS guest
    cluster with Istio — **B26**'s residual. The shipped inject-defences were rendered against
    upstream 1.30.3; VKS ships `1.28.2+vmware.1-vks.1` and Broadcom could patch the template.
-4. `stat -c %a ./secrets/*.kubeconfig` after `make vks-login` — **already answered** on this box
+4. **Operator action, not an agent's** — the lab CA in YOUR browser goes stale on every cut, and the
+   subject DN is byte-identical so nothing looks wrong. Measured 2026-08-19: the stored
+   `nested-vsphere-lab` entry gives **rc=60** against the live vCenter while the correct anchor gives
+   rc=0, so Chrome shows an error page on the vCenter UI. Remedy (yours to run):
+   `certutil -D -d sql:$HOME/.pki/nssdb -n nested-vsphere-lab`, then re-add the current one. **B178.**
+5. `stat -c %a ./secrets/*.kubeconfig` after `make vks-login` — **already answered** on this box
    (every one is 600, the `vcf` CLI writes them correctly), so only re-check if that changes.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
