@@ -93,7 +93,19 @@ STEP=0; RAN=0; FAILED=0; SKIPPED=0
 EXPECT_TOTAL=0; EXPECT_MISS=0; EXPECT_LINES_PARSED=0; EXPECT_UNSEEN=0
 SKIP_LOG="$(mktemp)"; NEUT_LOG="$(mktemp)"; CWD_FILE="$(mktemp)"; RC_FILE="$(mktemp)"; UNSAFE_FILE="$(mktemp)"; OUT_FILE="$(mktemp)"; STEP_OUT_FILE="$(mktemp)"; EXPECT_LOG="$(mktemp)"
 ENV_FILE="$(mktemp)"; : > "$ENV_FILE"
-trap 'rm -f "$SKIP_LOG" "$NEUT_LOG" "$CWD_FILE" "$RC_FILE" "$UNSAFE_FILE" "$ENV_FILE"' EXIT
+# ⚠️ EVERY mktemp'd file BELONGS IN THIS TRAP. B186: three of these were absent, so a SECOND COPY
+# of every step's output — credentials included — survived on every walk box, one per row, for
+# the life of the VM. MEASURED 2026-08-18 by enumerating both sides rather than trusting the
+# row: 10 files are mktemp'd (the row says 8) and 4 survived (the row says 3) — it misses
+# PREENV_FILE, created LATER at :101, which is exactly how a file escapes a trap written above
+# it. OUT_FILE / STEP_OUT_FILE / EXPECT_LOG carry step OUTPUT (the credential-bearing ones);
+# PREENV_FILE carries only exported variable NAMES, which is lower risk and still not ours to
+# leave behind. The walk boxes are throwaway VMs, which BOUNDS the exposure and does not
+# remove it: a box lives for a whole row and anything with shell on it can read the file.
+# If you add another mktemp, add it here in the same edit — the trap is not derived, so
+# nothing will tell you.
+trap 'rm -f "$SKIP_LOG" "$NEUT_LOG" "$CWD_FILE" "$RC_FILE" "$UNSAFE_FILE" "$ENV_FILE" \
+             "$OUT_FILE" "$STEP_OUT_FILE" "$EXPECT_LOG" "$PREENV_FILE"' EXIT
 # WHO SET IT, snapshotted BEFORE the first block runs. Everything the harness supplies is
 # lab-specific and outranks the document's illustrative examples; everything else is the document's
 # to set, including overriding a value an EARLIER table row set. Taken here because after the walk

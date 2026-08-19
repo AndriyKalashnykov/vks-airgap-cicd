@@ -391,4 +391,28 @@ c=0
 assert "the reverted <argocd-lb-ip> substitution stays reverted" "$c" "it fired; read the header before re-adding it"
 
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
+# ── B186: EVERY mktemp'd file must be in the EXIT trap. ──────────────────────────────────────────
+# THIS IS AN ENUMERATED LIST GUARDING A SECURITY PROPERTY, which is the shape that rots. Three files
+# were absent when B186 was filed, so a SECOND COPY of every step's output — credentials included —
+# survived on every walk box. Enumerating BOTH sides is what found it, and it also corrected the
+# row: 10 files are mktemp'd (the row said 8) and 4 survived (it said 3) — it missed PREENV_FILE,
+# created LATER than the trap, which is exactly how a file escapes a trap written above it.
+# The check is DERIVED from the source, so adding a mktemp cannot silently pass.
+_wd_survivors="$(python3 - "$SCRIPT_DIR/walk-doc.sh" <<'PYEOF'
+import re, sys
+s = open(sys.argv[1]).read()
+made = list(dict.fromkeys(m.group(1) for m in re.finditer(r'(\w+)="\$\(mktemp[^)]*\)"', s)))
+t = re.search(r"trap 'rm -f (.*?)' EXIT", s, re.S)
+removed = re.findall(r'\$\{?(\w+)', t.group(1)) if t else []
+print(' '.join(v for v in made if v not in removed))
+PYEOF
+)"
+if [ -z "$_wd_survivors" ]; then
+  ok "every mktemp'd file is in the EXIT trap (B186)"
+else
+  bad "mktemp'd files NOT in the EXIT trap" "${_wd_survivors} — each leaves a copy of its contents on
+        every walk box for the life of the VM. OUT_FILE/STEP_OUT_FILE/EXPECT_LOG carry step OUTPUT,
+        i.e. credentials. Add them to the trap in the same edit that creates them."
+fi
+
 [ "$fail" -eq 0 ]
