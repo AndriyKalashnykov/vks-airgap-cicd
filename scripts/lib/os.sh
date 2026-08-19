@@ -968,6 +968,56 @@ assert_env_effective() {
   return 1
 }
 
+# ensure_secret_dir <path> — create it, and harden it to 0700 ONLY if it is a secrets/ dir of OURS.
+#
+# ⚠️ CONTAINMENT-SCOPED, NOT BLANKET, AND THAT IS THE WHOLE DESIGN. `secrets/` is born 0775 at
+# umask 002, and `Makefile:132` `-include`s `secrets/.env.make` — a group-writable DIRECTORY lets
+# any group member unlink-and-recreate that file regardless of its own 0600, which is make-variable
+# injection. The obvious fix is to chmod 700 wherever we mkdir. That fix is REFUTED, twice over:
+#
+#   * `shell_rc_file()` returns `$HOME/.bashrc` (bash), `${ZDOTDIR:-$HOME}/.zshrc` (zsh),
+#     `$HOME/.kshrc` (ksh) — so `dirname` at shell-init.sh is `$HOME` EXACTLY for three of the four
+#     supported shells. A blanket chmod takes the operator's HOME from 755 to 700, unrequested, on
+#     a machine we do not own, and irreversibly (nothing records the original mode).
+#   * `set_env_var`'s own mkdir below takes `${REPO_ROOT}/.env` at three call sites, so `dirname`
+#     is the REPOSITORY WORKING TREE. The normal install flow would chmod the repo root, breaking
+#     any group-shared checkout or non-owner bind-mount.
+#   Plus 8 of 13 sites take an OPERATOR-SETTABLE path — `KUBECONFIG` commonly resolves to
+#   `~/.kube/config`, and it legally holds a COLON-SEPARATED LIST, whose `dirname` is the literal
+#   string, so a blanket helper would chmod a garbage path.
+#
+# So: create unconditionally, harden only what resolves inside our own tree. Then every call site
+# can use it without an allowlist, which is the point — an allowlist is what rotted twice already.
+#
+# ⚠️ `cd … && pwd -P`, NOT `realpath -m`. POSIX, and toybox's realpath is not guaranteed on Photon
+# — 31-fetch-argocd-kubeconfig.sh:59 records the same choice for the same reason. This matters
+# here more than anywhere: B174's two previous fixes BOTH died on a GNU-only flag that toybox
+# accepts and ignores (`mkdir -p -m`, then `install -d -m`), each passing on every dev box and
+# doing nothing on the PRIMARY air-gap OS. The mkdir above is what makes `cd` viable where
+# `realpath -m` would otherwise be needed for a not-yet-existing path.
+#
+# ⚠️ chmod failure WARNS, it does not abort. `mkdir -p "$d" && chmod 700 "$d"` as a function TAIL
+# returns chmod's status, so an EPERM on a directory owned by someone else (a sudo-created
+# secrets/, a shared CI checkout, a rootless-podman uid mapping) would kill the caller under
+# `set -e` — a hard-fail the bare `mkdir -p` never had. Hardening is best-effort by construction.
+ensure_secret_dir() {
+  local d="${1:?ensure_secret_dir: a path is required}" rp
+  if ! mkdir -p "$d"; then return 1; fi
+  rp="$(cd "$d" 2>/dev/null && pwd -P)" || rp=""
+  if [ -z "$rp" ]; then
+    log_warn "ensure_secret_dir: created '${d}' but could not resolve it — left unhardened"
+    return 0
+  fi
+  # An unset REPO_ROOT would make the patterns below `/secrets/`, which could match a real
+  # system path. Refuse to guess: create only.
+  [ -n "${REPO_ROOT:-}" ] || return 0
+  case "${rp}/" in
+    "${REPO_ROOT}"/secrets/|"${REPO_ROOT}"/*/secrets/)
+      chmod 700 "$rp" || log_warn "ensure_secret_dir: could not harden ${rp} (not the owner?) — leaving its mode as-is" ;;
+    *) : ;;
+  esac
+}
+
 set_env_var() {
   local key="$1" val="$2" file="${3:?set_env_var: a SINK is required — use state_set (the stamped overlay) or pass an explicit file}"
   mkdir -p "$(dirname "$file")"; touch "$file"

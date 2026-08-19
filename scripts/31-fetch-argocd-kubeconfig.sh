@@ -59,7 +59,7 @@ ARGOCD_KUBECONFIG="${ARGOCD_KUBECONFIG:-${REPO_ROOT}/secrets/argocd.kubeconfig}"
 # `cd … && pwd` rather than realpath(1): POSIX, and toybox's realpath is not guaranteed on Photon.
 case "$ARGOCD_KUBECONFIG" in
   /*) : ;;
-  *)  mkdir -p "$(dirname "$ARGOCD_KUBECONFIG")"
+  *)  ensure_secret_dir "$(dirname "$ARGOCD_KUBECONFIG")"
       ARGOCD_KUBECONFIG="$(cd "$(dirname "$ARGOCD_KUBECONFIG")" && pwd)/$(basename "$ARGOCD_KUBECONFIG")" ;;
 esac
 export ARGOCD_KUBECONFIG
@@ -86,7 +86,7 @@ fi
 VCF_USER="$(vks_username)"
 CTX="${ARGOCD_SUPERVISOR_CONTEXT:-argocd-supervisor}"
 
-mkdir -p "$(dirname "$ARGOCD_KUBECONFIG")"
+ensure_secret_dir "$(dirname "$ARGOCD_KUBECONFIG")"
 
 # TLS: prefer a CA cert; fall back to skip-verify only when the operator explicitly opts in.
 TLS_ARGS=()

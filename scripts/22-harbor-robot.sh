@@ -168,7 +168,7 @@ fi
 # rm -f FIRST: `umask 077` only applies when the file is CREATED. A pre-existing world-readable
 # harbor-robot.env (a stray touch, an editor, a restore) would KEEP mode 0644 and the secret would
 # land world-readable while this code still read as safe.
-mkdir -p "$(dirname "$OUT_FILE")"
+ensure_secret_dir "$(dirname "$OUT_FILE")"
 rm -f "$OUT_FILE"
 esc_rname=${rname//\'/\'\\\'\'}
 esc_secret=${secret//\'/\'\\\'\'}

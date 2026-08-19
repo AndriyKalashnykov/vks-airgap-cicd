@@ -85,7 +85,7 @@ if [ "$need_create" = 1 ]; then
 fi
 
 # --- 2. Export the kubeconfig + publish context to downstream scripts --------
-mkdir -p "$(dirname "$KUBECONFIG_PATH")"
+ensure_secret_dir "$(dirname "$KUBECONFIG_PATH")"
 log_info "writing kubeconfig -> $KUBECONFIG_PATH"
 kind get kubeconfig --name "$CLUSTER_NAME" > "$KUBECONFIG_PATH"
 
