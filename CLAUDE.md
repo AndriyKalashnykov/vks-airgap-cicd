@@ -675,8 +675,14 @@ half the deliverable, not a formality. Nothing has been tagged.
   2 of 4 `fetch-*-ca` producers have the gate, and the two without are the SSO-admin pair.
 - **B26, B69, B104, B156, B160, B175, B178, B189, B190, B192, B194** — see their rows.
 
-**Row counts at handoff: 4 red / 8 amber / 30 green.** **None of the reds is simply open
-work** — verified by reading each to its end rather than by its colour:
+⚠️ **DO NOT COUNT THE BACKLOG BY COLOUR — measured 2026-08-19, the marker vocabulary is NOT
+controlled.** Across **124** rows the head marker is one of at least seven things: `✅` (73), **four
+byte-distinct `🟢` sequences** (11+6+5+4), `🟡` (5), `⚠️` (5), `🔴` (4), `🟠` (3) — and several rows
+lead with `✅`/`🟠`/`⚠️` where a status emoji is expected, so any single-emoji grep silently measures
+a **subset it chose**. An earlier version of this line said *"4 red / 8 amber / 30 green"*, which
+summed to 42 of 124 and read as a complete census; it was an artifact of which three emoji I happened
+to grep. The only defensible count is **4 rows head-marked `🔴`** — everything else needs reading.
+**None of those four is simply open work** — verified by reading each to its end, not by its colour:
 
 - **B70** is now DECIDED (option C) but needs an idea round and a lab; nothing is started.
 - **B77 is CLOSED** (2026-08-19): all five of the source review's findings are settled — the vCenter
