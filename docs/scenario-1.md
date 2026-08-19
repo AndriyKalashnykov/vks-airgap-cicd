@@ -504,7 +504,7 @@ make vks-cluster-status VKS_CLUSTER_WAIT_SECONDS=1800  # then wait for every nod
 `NOT YET KNOWABLE` → carry on. `*** DIVERGENT ***` → stop and follow what it prints; the waiting
 form refuses immediately rather than spending 30 minutes to reach the same answer.
 
-**Expect:** the waiting command reprints a table every 15 s, then exits `0` with every node
+**Expect:** the waiting command reprints a table every 15 s, then prints `conditions hold AND every expected node is Ready` and exits `0` with every node
 `Ready`. *(**4–9 min** — the Timings table's own runs span 3 m 45 s to 8 m 49 s; the command waits up to 30 min, so give it that before calling it stuck.)* A non-zero exit is not a pass — do not continue to the preflight.
 
 ### Get its kubeconfig
@@ -520,7 +520,7 @@ set -a; . ./.env; set +a
 kubectl --kubeconfig "./secrets/${VKS_CLUSTER_NAME}.kubeconfig" get nodes -o wide
 ```
 
-**Expect:** your nodes listed, all `Ready`.
+**Expect:** your nodes listed, all `Ready`. *(Read this one yourself — the walk cannot check it. Ready is 5 characters and the checker drops literals shorter than 6, and no longer token in this output carries the readiness meaning: INTERNAL-IP, for instance, is printed whenever the node list is non-empty, so it would pass on a cluster where every node is NotReady.)*
 
 Point everything after this at the guest cluster:
 
@@ -896,8 +896,8 @@ asserts a per-host body marker, not just a 200, because a mis-wired route return
 make creds-show
 ```
 
-**Expect:** every URL and login — Harbor, ArgoCD, Gitea, Tekton, one row per app. Each value is
-labelled **DISCOVERED** (read live) or **STORED** (remembered).
+**Expect:** every URL and login — `Harbor`, `ArgoCD`, Gitea, `Tekton`, one row per app. Each value is
+labelled **DISCOVERED** (read live), **STORED** (remembered), or a **DEFAULT** (nothing installed yet).
 
 The ArgoCD row is the exception if you changed that password in Step 5: it can only show the
 generated one, or say it cannot read it. Yours is in your password manager.
@@ -925,7 +925,7 @@ Removes what this runbook installed. It does not touch the vSphere lab.
 make uninstall-all CONFIRM=<your VKS_CLUSTER_NAME>
 ```
 
-**Expect:** it deletes only objects carrying our ownership label, and **prints what it left alone**.
+**Expect:** it deletes only objects carrying our ownership label, and **prints what it left alone**. *(Read this one yourself — the walk SKIPS this block on every row, by design: walk-doc.sh:122 refuses the uninstall command as "teardown - would destroy the lab mid-walk", and a skipped block never reaches the Expect check, so no literal here could ever be checked.)*
 *(~1 min)*
 
 **It will not** delete the Harbor projects/robot, `secrets/`, or `/etc/hosts` — it prints those
