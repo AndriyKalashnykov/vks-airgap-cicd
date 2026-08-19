@@ -83,9 +83,33 @@ mirror_platform_arg() {
   fi
 }
 
-# mirror_retry N CMD... -> run CMD, retrying up to N times with linear backoff. crane has
-# no built-in retry (skopeo had --retry-times); transient registry 5xx/network errors are
-# common on a cold mirror, so wrap the crane calls with this.
+# mirror_retry N CMD... -> run CMD, retrying up to N times with linear backoff.
+#
+# ⚠️ CORRECTED 2026-08-18. This comment used to say "crane has no built-in retry (skopeo had
+# --retry-times)". THAT IS FALSE for crane 0.21.9, and it is load-bearing: it is the sentence that
+# makes "just wrap it in mirror_retry" look like the obvious answer for any crane call, and it is
+# how a refuted fix for B187 got proposed. MEASURED — the installed binary contains
+# `remote/transport.NewRetry`, `retryTransport.RoundTrip`, `WithRetryBackoff/Predicate/StatusCodes`
+# and `wait.ExponentialBackoff`; upstream v0.21.9 `pkg/v1/remote/options.go` pins
+# `defaultRetryBackoff{Duration:1s, Factor:3, Jitter:0.1, Steps:3}` — THREE attempts, ~1s and ~3s —
+# fired by `defaultRetryPredicate` on `retry.IsTemporary` (which covers ETIMEDOUT), `io.EOF`,
+# `io.ErrUnexpectedEOF`, EPIPE, ECONNRESET, `net.ErrClosed`, plus `defaultRetryStatusCodes` =
+# 408/429/499/500/502/503/504/522.
+#
+# SO THIS WRAPPER MULTIPLIES, IT DOES NOT ADD. `mirror_retry 5` around a crane call is 5 x 3 = 15
+# network attempts with two nested backoffs. Consequences, measured:
+#   * ECONNREFUSED (Harbor down) is NOT `Temporary`, so crane returns in ~0.005s and this wrapper
+#     turns that into ~20s of pure sleep per image, for the identical answer.
+#   * A blackholed read dies at Go's own keepalive (TCP_KEEPIDLE=30 + 9x15 = 165s, which
+#     `DefaultTransport` sets, overriding the box sysctl), so crane already returns and retries.
+#     Only accept-then-stall is genuinely unbounded.
+#   * Against a DETERMINISTIC failure — a digest mismatch, a deleted image — every extra attempt
+#     buys nothing and delays the verdict.
+#
+# ⇒ Use it for an IDEMPOTENT MUTATION that a transient can genuinely lose (a push, a login). Do NOT
+# reach for it on an ASSERTION (`crane validate --remote`) or a one-shot DIAGNOSTIC PROBE (an
+# untrusted CA is not transient): there it multiplies the time-to-verdict of the very failure the
+# check exists to report. See B187 for the measurements and the per-site policy.
 mirror_retry() {
   local n="$1"; shift
   local i=1
