@@ -88,7 +88,18 @@ EXEMPT='APP_DEV_PORT|INGRESS_CONTROLLER'
 # with VKS_CLUSTER_NAME set in .env (the documented place), `make vks-cluster-create
 # VKS_CLUSTER_NAME=other` silently targeted the .env value — and, if that cluster existed, printed
 # "ALREADY EXISTS" while the operator believed they had created a different one.
-SELECTORS='SUPERVISOR_HOST|VCENTER_HOST|KUBECONFIG|VKS_AUTH_METHOD|INGRESS_CONTROLLER|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_SUPERVISOR_KUBECONFIG|VKS_CONTEXT|VKS_CLUSTER_NAME|VKS_NAMESPACE|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_USERNAME|HARBOR_PASSWORD|HARBOR_CA_FILE|VKS_CA_CERT_FILE|ARGOCD_CA_FILE|VKS_CA_SHA256|HARBOR_CA_SHA256|ARGOCD_CA_SHA256|VCF_CLI_SRC_DIR'
+# HARBOR_INSECURE / ARGOCD_INSECURE / MIRROR_VERIFY_FAST added 2026-08-18. They are NOT "which system"
+# selectors on this file's own definition — they are SECURITY-POSTURE toggles — and they are here anyway,
+# because the drift assertion below is a SUBSET test against load_env's mechanism and they now live in it.
+# That is the honest reading: SELECTORS is "what a per-run override must be able to win", and a security
+# posture qualifies more strongly than a hostname does. MEASURED before protecting them, via `.env.state`
+# (a THIRD channel this gate cannot read, since it scans the COMMITTED .env.example): caller 0 + overlay 1
+# -> 1 for all three, while the already-protected HARBOR_URL survived — the control proving the probe was
+# not simply clobbering everything. See test-insecure-toggle-snapshot.sh.
+# An optional single OR double quote, for the boolean-toggle arm's default. Hoisted because
+# '"'"' inside an already-single-quoted grep pattern is unreadable at the call site.
+_TOGQ='["'"'"']?'
+SELECTORS='SUPERVISOR_HOST|VCENTER_HOST|KUBECONFIG|VKS_AUTH_METHOD|INGRESS_CONTROLLER|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_SUPERVISOR_KUBECONFIG|VKS_CONTEXT|VKS_CLUSTER_NAME|VKS_NAMESPACE|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_USERNAME|HARBOR_PASSWORD|HARBOR_CA_FILE|VKS_CA_CERT_FILE|ARGOCD_CA_FILE|VKS_CA_SHA256|HARBOR_CA_SHA256|ARGOCD_CA_SHA256|VCF_CLI_SRC_DIR|HARBOR_INSECURE|ARGOCD_INSECURE|MIRROR_VERIFY_FAST'
 
 # Read the snapshot list out of load_env itself: `for _sel in A B C ...; do`
 PROTECTED="$(sed -n 's/^[[:space:]]*for _sel in \(.*\); do$/\1/p' "${REPO_ROOT}/scripts/lib/os.sh" | head -1)"
@@ -244,7 +255,7 @@ for v in "${UNCOMMENTED[@]}"; do
   # WHY THIS SHAPE AND NOT THE OBVIOUS ONE. "Flag every uncommented var read as ${V:-<literal>}"
   # was MEASURED at 32 of 57 flagged, 31 of them ordinary defaulting (GITEA_NAMESPACE, PSA_LEVEL_*,
   # ISTIO_VERSION ...) -> 97% false-RED. The static-fallback shape is the NORMAL shape and does not
-  # discriminate. Narrowing the default to a BOOLEAN LITERAL measures 0 of 56 on the pristine file
+  # discriminate. Narrowing the default to a BOOLEAN LITERAL measures 0 of 54 on the pristine file
   # while still firing on 8 of the 9 toggles (the 9th reads `is_true "${V:-}"`, already caught by
   # (b2)). DERIVED, so it does not rot as toggles are added — which is the whole point, since the
   # five misses above are exactly enumerated-list rot in its live form.
@@ -259,9 +270,21 @@ for v in "${UNCOMMENTED[@]}"; do
   # a security toggle is creds.sh's: read it from the PRE-load_env environment and honour only that.
   #
   # KNOWN, DISCLOSED SCOPE: a toggle written ${V:-no} / ${V:-off} / [ "$V" = yes ] is MISSED. The
-  # rot direction is a false NEGATIVE, not a false RED, and with 0/56 measured headroom adding
-  # literals here is cheap.
-  tog="$(grep -rlE '\$\{'"${v}"':-(0|1|true|false)\}' "${REPO_ROOT}/scripts" "${REPO_ROOT}/Makefile" 2>/dev/null \
+  # rot direction is a false NEGATIVE, not a false RED, so adding literals here is cheap.
+  #
+  # ⚠️ TWO SHAPES ADDED 2026-08-18 after an adversary round measured them MISSED, and I reproduced
+  # both with ${V:-0} as the working control (CAUGHT / MISSED / MISSED):
+  #     ${V:-0}    CAUGHT   the control — proves the probe reaches the arm
+  #     ${V-0}     MISSED   the NO-COLON form. Legal bash, and it differs only for the empty
+  #                         string, so it is a shape someone writes without thinking about it.
+  #     ${V:-"0"}  MISSED   the QUOTED default. Pure style; identical semantics.
+  # Both are now matched. $_TOGQ is an optional single-or-double quote, hoisted out because the
+  # nested quoting is unreadable inline.
+  #
+  # ⚠️ AND THE 56 IN THE PARAGRAPH ABOVE HAD ROTTED: the gate reports 54 uncommented values today.
+  # An adversary read 56 out of THIS COMMENT and reported my brief as wrong, when the comment was
+  # the stale artifact. Corrected in place — a number in prose is a claim with a date.
+  tog="$(grep -rlE '\$\{'"${v}"'(:-|-)'"$_TOGQ"'(0|1|true|false)'"$_TOGQ"'\}' "${REPO_ROOT}/scripts" "${REPO_ROOT}/Makefile" 2>/dev/null \
            | xargs -r -n1 basename | tr '\n' ' ')"
   if [ -n "$tog" ]; then
     log_error "CLOBBER: '${v}' is UNCOMMENTED in .env.example, and it is a BOOLEAN TOGGLE"
