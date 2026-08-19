@@ -673,7 +673,11 @@ half the deliverable, not a formality. Nothing has been tagged.
   walked steps, so it reddens rows 1–4 unless the harness supplies the digests. Supply them, accept
   red rows, or ship the gate TTY-only. **B195** is the same fix for `fetch-supervisor-ca.sh` — only
   2 of 4 `fetch-*-ca` producers have the gate, and the two without are the SSO-admin pair.
-- **B26, B69, B104, B156, B160, B175, B178, B189, B190, B192, B194** — see their rows.
+- **B26, B69, B156, B160, B175, B178, B189, B190, B192, B194** — see their rows.
+- **B104 is CLOSED, REFUTED by its own idea round** (2026-08-19) — do not re-propose it. apt's
+  `Acquire::Retries` default is **already 3** (measured on apt 2.8.3/24.04 **and** 3.2.0/26.04), so
+  that half was a no-op; and `--retry-all-errors` on the `mise.run | sh` pipe turns today's loud
+  `rc=56` into a silent **rc=0**, so the `||` guard never fires and `sh` executes a garbled seam.
 
 ⚠️ **DO NOT COUNT THE BACKLOG BY COLOUR — measured 2026-08-19, the marker vocabulary is NOT
 controlled.** Across **124** rows the head marker is one of at least seven things: `✅` (73), **four
