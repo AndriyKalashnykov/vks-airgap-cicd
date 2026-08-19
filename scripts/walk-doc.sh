@@ -560,6 +560,13 @@ for row in "${PARSED[@]}"; do
   # EVERY cell: the teardown block and one carrying a live <EXTERNAL-IP> placeholder), so counting
   # after the skip yields 24 in one row and 20 in another -- a floor at the document's real 26 would
   # then REFUSE a healthy walk on day one, which is the false-RED shape this file keeps re-learning.
+  # ⚠️ THIS FLOOR IS AT SLACK ZERO TODAY, AND THAT IS AN ASSET — do not widen it casually.
+  # `:783` asserts EXPECT_LINES_PARSED >= INDEP_E. MEASURED 2026-08-18: 46 vs 46, EXACT — so
+  # dropping even ONE claim REFUSES. It is exact only because the capture is one line per
+  # paragraph; a paragraph-level capture would take it to ~107 vs 46, i.e. slack 61, and you
+  # could then silently lose ~26 of 46 paragraphs and still pass. If the capture ever changes,
+  # count paragraph HEADS here (`grep -cE '^[[:space:]]*\*\*Expect'`), not lines, to restore
+  # slack 0. Recorded by an idea round that refuted the capture change itself (B145).
   EXPECT_LINES_PARSED=$(( EXPECT_LINES_PARSED + $(printf '%s' "$E" | grep -c . || true) ))
   STEP=$((STEP + 1))
   # THE DOCUMENT INSTRUCTS THROUGH TABLES TOO. "set in ./.env:" rows are instructions, not
