@@ -307,10 +307,36 @@ vc_api() {
   # empty code, not as an exit. The 60/77 discrimination lives in vc_login, which every caller
   # runs first, so a bad anchor is diagnosed there rather than surfacing here as a bare 000.
   local -a tls; _vc_tls_args tls
+  # ⚠️ B194: `%{http_code}` IS NOT A VERDICT ON ITS OWN. curl prints the status line it received, so a
+  # response cut short AFTER its 200 headers — a reset mid-body, a --max-time expiry mid-transfer —
+  # yields `code=200` with a TRUNCATED body, and the `case 2*) return 0` below hands the caller a
+  # success return over incomplete JSON. That is coding-style.md's "a wrapper that NORMALISES a
+  # tool's output must preserve its EXIT STATUS too": vc_login already does this (with explicit
+  # 60/77/35/51 arms); vc_api did not.
+  #
+  # The rc is captured and folded into the CODE rather than into a die, because this function's
+  # contract is to RETURN non-zero on any non-2xx WITHOUT dying — several callers legitimately
+  # expect a 404 (`deregister-supervisor-service.sh:57` branches on it). Forcing `000` keeps that
+  # contract, is the same sentinel a connect failure already produced, and makes "the transport
+  # broke" indistinguishable from nothing-arrived rather than from success.
+  #
+  # `&& _rc=0 || _rc=$?` on its own line, NOT `; _rc=$?` — the latter reads the assignment's status.
+  #
+  #
+  # RED-PROVEN by scripts/test-vc-api-truncation.sh. MEASURED against a raw-socket TLS fixture
+  # that sends a complete 200 + Content-Length: 5000, delivers 9 bytes, then closes hard —
+  # curl prints 200 with rc 18. Both arms through this function: WITHOUT the rc capture,
+  # rc=0 code=200 (a success return over incomplete JSON); WITH it, rc=1 code=000.
+  #
+  # ⚠️ The FIRST fixture used python's http.server, whose handler kept the connection open, so
+  # curl HUNG and errored — both arms measured rc=1 code=000 and the proof discriminated
+  # nothing. Only the control revealed that. Do not simplify the test back to http.server.
+  local _rc
   code="$(curl -sS "${tls[@]}" -o "$body" -w '%{http_code}' -X "$method" \
            --connect-timeout "${VC_CONNECT_TIMEOUT:-10}" --max-time "${VC_API_TIMEOUT:-120}" \
            -H "@${VC_HDR_FILE}" -H 'Content-Type: application/json' \
-           "$@" "https://${VCENTER_HOST}${path}" 2>/dev/null || true)"
+           "$@" "https://${VCENTER_HOST}${path}" 2>/dev/null)" && _rc=0 || _rc=$?
+  [ "$_rc" -eq 0 ] || code=000
   # DELIBERATELY not also a variable: one that is correct only when the caller avoids a subshell
   # is a trap, and it already produced a die message reporting HTTP 200 for a 400.
   printf '%s' "$code" > "${VC_CODE_FILE:-/dev/null}"
