@@ -631,8 +631,8 @@ every cut, driving Chrome where an HTTP probe is not proof.
 Run 8 (`/tmp/walk/VERDICT-20260818T212147Z-1408277.txt`) is **`MATRIX COMPLETE — walked 6 of 6
 designed rows`**, all rows **0 FAILED / 0 UNMET**. It certifies commit **`021c6a3`**.
 `main` has since moved. `git diff --name-only 021c6a3..origin/main` is the only honest answer to
-"is main certified?" — **re-measured at this handoff: 19 commits, 49 files, 41 of them walked
-scripts or walked docs** (it was 11/14 one handoff ago, so the drift is growing, not settling).
+"is main certified?" — **re-measured at this handoff: 25 commits, 50 files, 42 of them walked
+scripts or walked docs** (11/14 two handoffs ago, 19/49 one handoff ago — the drift is growing).
 **The first-go clock is reset and the next cut is what re-earns it.** Do not quote the 11/14 —
 re-run the command; every one of these numbers has rotted at least once.
 
@@ -651,6 +651,9 @@ half the deliverable, not a formality. Nothing has been tagged.
 | **B188 — CLOSED, and its round refuted HALF my plan** | `ARGOCD_REGISTER_INSECURE` is now honoured **only** from the pre-`load_env` environment. It disables TLS verification and the choice is written into the **ArgoCD Cluster Secret**, so every later sync to that destination skipped verification — a `.env` line was a standing downgrade **and a ratchet** (`ARGOCD_REGISTER_INSECURE=0 make gitops` could not undo it). Measured: `.env=1`+caller`0` → **0**, `.env=1`+silent → **0**, **no `.env`+caller`1` → 1** so `e2e-cross-cluster.sh:72`'s prefix still wins. **What I did NOT ship:** adding `ALLOW_PUBLIC_CHARTS`/`BUNDLE_SKIP_STATIC_CHECK` to the snapshot — measured **zero callers** anywhere in `scripts/`, `Makefile`, `docs/`, `README.md` — and the `ok`-line suppression that existed only to pay for it. |
 | **B196 — newly filed, the round's CRITICAL-class find** | `VKS_INSECURE_SKIP_TLS_VERIFY` is the same shape and **worse covered**: it reads `${V:-}`, so the clobber gate's arm (d) **structurally cannot see it** (`check-env-clobber.sh:248-250` says it is caught only *"INCIDENTALLY"*). Two consumers (`30-vks-login.sh:275`, `31-fetch-argocd-kubeconfig.sh:96`) ⇒ needs a **shared helper**, not a copy-paste, and one of them is the **VKS auth path** — so it is filed, not shipped. `30-vks-login.sh:271` already tells operators *"a credential is submitted over this connection"*. |
 | **B104, B192 — closed** | B104 **REFUTED** (see below). B192 closed here and filed where the fix lives: `nested-vsphere-lab` **B453**, PR #83, merged. |
+| **B196 — the RATCHET is fixed; the rest is YOURS** | `VKS_INSECURE_SKIP_TLS_VERIFY` is snapshot-protected (both lists, one commit; `check-env-clobber` rc=0). It fixed a **false documented promise**: `.env.example:1209` says a `make vks-login VKS_INSECURE_SKIP_TLS_VERIFY=1` / `.env` override *"is not clobbered"* — it was. 🔴 **The open half is a policy call, not code:** its round BLOCKED reclassifying the var as prefix-only, because `.env` is the **documented, invited** channel in three places, and prefix-only makes `31-fetch-argocd-kubeconfig.sh` `die` **demanding the value the operator just set** — the bug `lib/os.sh:139-146` calls already fixed. Decide, or leave it: the ratchet is gone either way. |
+| **B102 — CLOSED** | Four unmatchable `Expect:` lines settled: 2 shipped a literal quoted from the producing code, 2 marked **human-only in the document itself** with the reason. Its round refuted 2 of my 4 candidates — `INTERNAL-IP` is a **fake-green** (passes on an all-NotReady cluster) *and* would have reddened `check-expect-literals`; L928 was a **silent no-op** (the block is skipped on every row). **scenario-2 was measured clean: 15 `Expect:` lines, ZERO unmatchable** — this was scenario-1-only, so rows 5–6's first green is better-evidenced than rows 1–4's. |
+| **B197 — newly filed** | Explicit `ARGOCD_MECHANISM=api` has **no `have argocd` precondition**, and the CLI is **not carried in the bundle** (`11-bundle.sh` mentions it 0 times) and installed only by the **internet-side-only** prereqs script. A missing binary is reported as *"argocd repo add failed for \<url\>"*, sending the operator to debug Gitea. Severity deliberately not inflated: the default `auto` degrades correctly, so reachability on the air-gap box is **unproven**. The far-side binary audit is otherwise **complete — `argocd` is the only gap.** |
 
 ### Distrust these
 
@@ -709,8 +712,12 @@ byte-distinct `🟢` sequences** (11+6+5+4), `🟡` (5), `⚠️` (5), `🔴` (4
 lead with `✅`/`🟠`/`⚠️` where a status emoji is expected, so any single-emoji grep silently measures
 a **subset it chose**. An earlier version of this line said *"4 red / 8 amber / 30 green"*, which
 summed to 42 of 124 and read as a complete census; it was an artifact of which three emoji I happened
-to grep. The only defensible count is the one you re-measure — **at this handoff, 5 rows head-marked
-`🔴` of 125** (B196 is the new one) — everything else needs reading. **None of the reds is simply
+to grep. ⚠️ **AND THE DENOMINATOR HAS ITS OWN VERSION OF THE SAME BUG — measured 2026-08-19.**
+`^\| \*\*B[0-9]+\*\* \|` counts **126** rows; `^\| \*\*B[0-9]+[a-z-]*\*\* \|` counts **142**. The
+16 it silently drops are the **suffixed** rows — `B75-a`, `B75-b`, `B82-a`, `B102-fix`, and twelve
+`B<n>-orig` — so a count that looks like the whole backlog omits an entire naming convention the
+file uses. **Match the suffix, or say which rows you excluded.** At this handoff: **5 rows
+head-marked `🔴` of 142** — everything else needs reading. **None of the reds is simply
 open work** — verified by reading each to its end, not by its colour:
 
 - **B70** is now DECIDED (option C) but needs an idea round and a lab; nothing is started.
