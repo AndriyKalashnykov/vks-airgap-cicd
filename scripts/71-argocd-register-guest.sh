@@ -19,9 +19,38 @@
 # Secrets never touch argv: the token/CA are embedded in manifests applied over STDIN.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ⚠️ SNAPSHOT BEFORE load_env — this toggle registers a destination with TLS verification OFF, and
+# the choice PERSISTS in the ArgoCD Cluster Secret, so it is the one weakening toggle that is never
+# legitimate as standing config. `load_env` sources `.env.example` then `.env` with `set -a` AFTER
+# the caller's environment is established, so a `.env` line WINS over a per-run override — and for
+# this variable that is a RATCHET: once `.env` says 1 there is no per-run way back, because
+# `ARGOCD_REGISTER_INSECURE=0 make gitops` loses to the same `set -a`. MEASURED (idea round,
+# 2026-08-19), all three arms against the real `load_env`:
+#     .env=1, caller=0        -> 1  insecure, and unreachable by any override   *** the ratchet ***
+#     .env=1, caller silent   -> 1  insecure, silently
+#     no .env, caller=1       -> 1  the e2e prefix, which must keep working
+# Honouring ONLY the pre-`load_env` environment closes all three: the first two become 0, the third
+# is unchanged. `scripts/e2e-cross-cluster.sh:72` sets it as a direct command prefix on this script
+# (no make, no wrapper, no `env -i`), so it lands here BEFORE this line and still wins — that arm is
+# pinned by `test-argocd-register-insecure.sh` precisely so a "fix" that hardcodes 0 cannot pass.
+# Same pattern as `creds.sh`'s and `argocd-password.sh`'s `SHOW_SECRETS` and `24-lab-preflight.sh`'s
+# `CA_STATUS_STRICT`. Unlike those, this one IS documented in `.env.example` — so the commented line
+# there states the invocation form and that a value in `.env` is ignored by design.
+_argocd_register_insecure_snapshot="${ARGOCD_REGISTER_INSECURE:-0}"
+
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
 load_env
+
+# The file channel is DELIBERATELY inert for this variable — but say so, or an operator who set it in
+# `.env` sees the run quietly do the opposite and has nothing to grep for. Do not phrase this as an
+# error: the ignore is the intended behaviour, and the remedy is a different invocation, not a fix.
+if [ "${ARGOCD_REGISTER_INSECURE:-0}" = "1" ] && [ "$_argocd_register_insecure_snapshot" != "1" ]; then
+  log_warn "ARGOCD_REGISTER_INSECURE=1 came from .env/.env.example and is IGNORED BY DESIGN —"
+  log_warn "  it disables TLS verification PERMANENTLY in the ArgoCD Cluster Secret, so it is honoured"
+  log_warn "  only as a per-run prefix: ARGOCD_REGISTER_INSECURE=1 ${0##*/}"
+fi
+ARGOCD_REGISTER_INSECURE="$_argocd_register_insecure_snapshot"
 
 require_cmd kubectl "install kubectl (make deps)"
 
