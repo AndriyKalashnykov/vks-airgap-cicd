@@ -26,6 +26,14 @@ vc_require() {
 
 # vc_login — POST /api/session, store the token in a 0600 file, echo nothing.
 # The token is kept in a FILE (not a variable that could leak into a child's argv/environ).
+# shellcheck disable=SC2120  # ...and, transitively, SC2119 at the 8 bare call sites.
+# `--soft` is OPTIONAL BY DESIGN: eight callers are one-shot entry points that WANT the fatal
+# behaviour and correctly pass nothing; only the polling probe in wcp-service.sh passes the flag.
+# ShellCheck sees a function that reads "$1" and no caller passing one, so it suggests
+# `vc_login "$@"` — which would be WRONG here: it would forward the SCRIPT's argv into this
+# function, so `./04-install-harbor-service.sh --anything` would reach the flag parser and die
+# with "vc_login: unknown argument". Disabling SC2120 on the definition is the documented way to
+# silence the pair; do not "fix" the call sites.
 vc_login() {
   # --soft: on a TRANSPORT failure (000) or a server-side error (5xx), WARN and `return 1` instead
   # of dying. For a POLLING caller that is the difference between a diagnosis and a silent death.

@@ -74,6 +74,9 @@ check "an error nobody has seen before stays UNCLASSIFIED" UNCLASSIFIED \
 # transport branch must test for TRANSPORT explicitly, so everything else falls to the fails
 # tally. If someone later flips this to `[ "$cls" != CORRUPT ]`, UNCLASSIFIED silently becomes a
 # warning and this file must go red.
+# shellcheck disable=SC2016  # the single quotes are the POINT: we are grepping for the literal
+# text `"$cls"` in another file's source. Double quotes would expand $cls (unset here) and the
+# check would silently match `if [ "" = TRANSPORT ]` — i.e. never, making this case vacuous.
 if grep -q 'if \[ "\$cls" = TRANSPORT \]; then' scripts/23-mirror-verify.sh; then
   ok "the caller branches on = TRANSPORT, so UNCLASSIFIED falls through to the corrupt tally"
 else
