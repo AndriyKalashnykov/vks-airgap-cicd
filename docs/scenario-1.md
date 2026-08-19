@@ -612,8 +612,10 @@ make ca-status
 **Expect:** `CA-STATUS: ALL-MATCH` — nothing else prints that. *(<1 min)*
 
 Every other outcome names the file, the address and what to do, and exits non-zero. From here on
-`make lab-preflight` repeats this check for you, so a rebuilt lab is caught in the first seconds
-rather than 20 minutes into the mirror.
+`make lab-preflight` repeats this check for you — but only once the cluster answers: the CA report
+sits after that command's `kubectl` reachability gate, so on a lab that is **down** you get the
+kubectl failure and not the CA verdict. `make ca-status` is the one that needs no cluster, which is
+why the failure messages point at it. Run it directly whenever a lab has been rebuilt under you.
 
 <details><summary>Alternatives if that endpoint is unavailable</summary>
 

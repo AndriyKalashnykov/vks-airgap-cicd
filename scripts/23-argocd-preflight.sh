@@ -78,7 +78,9 @@ _pf_classify() {   # _pf_classify <label> <var-name-for-the-message>
   case "$(classify_kube_failure "$_pf_err")" in
     STALE_CA)     block "the $1 cluster's kubeconfig CA does not match what it points at ($2).
     The server ANSWERED — not a network fault. A REBUILT cluster mints a new CA while the address
-    stays the same. Re-fetch it: $3" ;;
+    stays the same. Re-fetch it: $3
+    If that does NOT clear it, the SAVED Supervisor CA is stale too. Check the anchor itself — it
+    needs no cluster, so it works when everything else here is dying:  make ca-status" ;;
     UNAUTHORIZED) block "the $1 cluster REJECTED this kubeconfig's credentials ($2) — expired, or
     from a cluster that no longer exists. Re-authenticate: $3" ;;
     FORBIDDEN)    block "authenticated to the $1 cluster, but this identity may not read it ($2).
