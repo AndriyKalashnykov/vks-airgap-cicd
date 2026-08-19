@@ -260,7 +260,7 @@ fi
 # ---- ONLY NOW does the operator's filesystem change. ---------------------------------------------------
 # PUBLIC trust material: 0644, always. A 0600 CA is unreadable by a container user with a different uid,
 # and the failure it produces ("error adding trust anchors from file") names TRUST, not PERMISSIONS.
-mkdir -p "$(dirname "$OUT")"
+ensure_secret_dir "$(dirname "$OUT")"
 install -m0644 "$CAND" "$OUT" || die "could not write ${OUT}"
 
 printf 'wrote %s\n' "$OUT"

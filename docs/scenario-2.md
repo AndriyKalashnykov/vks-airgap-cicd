@@ -207,7 +207,7 @@ fi
 ```
 
 <!-- walk-doc: the literals below (harbor-nginx, HARBOR_URL, ARGOCD_SERVER) are DELIBERATELY on
-     continuation lines, where walk-doc.sh:346 cannot see them. Do NOT "fix" this by moving one up to
+     continuation lines, where walk-doc.sh:452 cannot see them. Do NOT "fix" this by moving one up to
      line 1 — PR #696 did exactly that for scenario-1:814 and it was right THERE and would be wrong
      HERE. This block has TWO valid branches whose outputs are disjoint, and there is NO literal
      common to both that is absent from the command text (measured exhaustively: 22 common

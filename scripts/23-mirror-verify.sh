@@ -56,16 +56,57 @@ mapfile -t IMAGES < <(mirror_collect_images)
 [ -f "$LOCK_FILE" ] || log_warn "no images.lock at $LOCK_FILE — provenance check skipped (run 'make mirror-pull' to generate it)"
 
 log_info "verifying ${#IMAGES[@]} images in Harbor $HARBOR_URL/$HARBOR_INFRA_PROJECT (mode: ${MIRROR_VERIFY_FAST:+fast}${MIRROR_VERIFY_FAST:-full})"
-fails=0; warns=0
+# _verify_class <crane-stderr> — TRANSPORT | CORRUPT | UNCLASSIFIED.
+#
+# WHY THIS EXISTS. `crane validate --remote` fails for two completely different reasons, and this
+# script used to report BOTH as "Harbor's copy is corrupt/incomplete (re-mirror)". On the air-gap
+# box "re-mirror" means RE-CARRYING A 12 GB BUNDLE ACROSS THE GAP. MEASURED — real crane stderr for
+# a Harbor ref is 339 bytes, and the old `cut -c1-200` left the operator with:
+#
+#     … dial tcp: lookup harbor.env1.lab.test on 12
+#
+# `no such host` — the words that refute the corruption verdict — were cut off ENTIRELY, and the
+# run then died telling them to re-carry the bundle. For a DNS typo. That is this corpus's own
+# "an error message that names the wrong cause is worse than a crash", at its most expensive.
+#
+# ⚠️ UNCLASSIFIED IS TREATED AS CORRUPT, DELIBERATELY. `unexpected EOF` is BOTH the network-cut
+# signature AND the 2026-07-13 blob-store corruption signature; it is genuinely ambiguous. A
+# classifier that guessed "transient" there would silently downgrade a real corruption to a
+# warning, which is the one failure this gate exists to prevent. Fail toward corrupt, and print the
+# FULL stderr so the operator can judge what the classifier could not.
+_verify_class() {
+  case "$1" in
+    *"mismatched digest"*|*"mismatched diffid"*|*"undersized layer"* \
+      |*"does not match expected size"*|*MANIFEST_UNKNOWN*|*BLOB_UNKNOWN*) printf 'CORRUPT' ;;
+    *"no such host"*|*"connection refused"*|*"i/o timeout"*|*"no route to host"* \
+      |*"certificate signed by unknown authority"*|*"x509:"*|*"TLS handshake"* \
+      |*"server gave HTTP response to HTTPS client"*|*"context deadline exceeded"*) printf 'TRANSPORT' ;;
+    *) printf 'UNCLASSIFIED' ;;
+  esac
+}
+
+fails=0; warns=0; transport_fails=0
 pg_init "${#IMAGES[@]}"
 for src in "${IMAGES[@]}"; do
   dst="$(mirror_target_ref "$src")"
   pg_step "verify $dst"
   # 1. INTEGRITY (hard gate)
   if ! err="$(crane validate --remote "$dst" "${FAST[@]}" "${INSECURE[@]}" 2>&1)"; then
-    log_error "  INTEGRITY FAIL  $dst"
-    log_error "    $(printf '%s' "$err" | tr '\n' ' ' | cut -c1-200)"
-    fails=$((fails+1)); continue
+    cls="$(_verify_class "$err")"
+    if [ "$cls" = TRANSPORT ]; then
+      # NOT an integrity verdict. Say so in the label, because the label is what a hurried operator
+      # reads, and "INTEGRITY FAIL" on a DNS error is how the 12 GB re-carry gets started.
+      log_error "  UNREACHABLE     $dst  (transport/trust — NOT an integrity verdict)"
+      transport_fails=$((transport_fails+1))
+    else
+      log_error "  INTEGRITY FAIL  $dst${cls:+  [${cls}]}"
+      fails=$((fails+1))
+    fi
+    # 800, not 200: the real message is 339 bytes and the discriminating words are at the END of
+    # it. Truncating below the length of the thing you are truncating is how the evidence for the
+    # correct diagnosis gets removed while the wrong one is printed in full.
+    log_error "    $(printf '%s' "$err" | tr '\n' ' ' | cut -c1-800)"
+    continue
   fi
   # 2. PROVENANCE (reported; WARN-only when integrity already passed)
   want="$(lock_digest "$src")"
@@ -82,7 +123,21 @@ for src in "${IMAGES[@]}"; do
   fi
 done
 
+# TWO verdicts, because there are two causes and they have OPPOSITE remedies. Transport is checked
+# FIRST: when Harbor is simply unreachable EVERY image "fails", and telling the operator to re-carry
+# 12 GB because their DNS is wrong is the most expensive wrong answer this script can give.
+if [ "$transport_fails" -gt 0 ] && [ "$fails" -eq 0 ]; then
+  die "$transport_fails/${#IMAGES[@]} images could not be REACHED — this is NOT an integrity verdict and Harbor's copy is NOT known to be bad. Check the endpoint, DNS and CA trust (make harbor-reachable), then re-run. Do NOT re-mirror on the strength of this."
+fi
 if [ "$fails" -gt 0 ]; then
-  die "$fails/${#IMAGES[@]} images FAILED integrity — Harbor's copy is corrupt/incomplete (re-mirror; see the no-concurrent-load rule)"
+  # ⚠️ NOT `${transport_fails:+...}`. `:+` tests for a NON-EMPTY string, and "0" is non-empty, so
+  # that form appends the suffix even when there were zero transport failures. Test the NUMBER.
+  # `if`, not `[ ... ] && _also=...`: the AND-list returns 1 on the false branch, and under
+  # `set -e` that kills the script one line before the die it was decorating.
+  _also=""
+  if [ "$transport_fails" -gt 0 ]; then
+    _also=" — plus ${transport_fails} UNREACHABLE, which are a SEPARATE problem and not evidence of corruption"
+  fi
+  die "$fails/${#IMAGES[@]} images FAILED integrity — Harbor's copy is corrupt/incomplete (re-mirror; see the no-concurrent-load rule)${_also}"
 fi
 pg_done "mirror-verify: ${#IMAGES[@]} images intact in Harbor${warns:+ (${warns} provenance warnings)}"

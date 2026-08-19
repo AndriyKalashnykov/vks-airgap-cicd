@@ -39,15 +39,43 @@ log_info "wcp: ${before:-unknown}"
 # WAIT for a target state. "Action accepted" is not "usable": the API disappears during a
 # restart, so a bare exit would hand back a service that cannot yet be used -- and the session
 # dies with it, which is why each probe re-logs-in.
+# RETURNS non-zero on timeout — it does NOT die. Two reasons, both measured:
+#
+#   1. `wait_for ... || true` (the `stop` arm below) CANNOT swallow a `die`. `die` ends in `exit`,
+#      and `||` only catches a non-zero RETURN. So a `wcp-stop` that timed out used to terminate
+#      the script and suppress the very "next: make wcp-start" recovery line the `|| true` was
+#      written to guarantee — the operator was left with Workload Management DOWN and no
+#      instruction. The caller must decide fatality, so the caller gets a status to decide on.
+#   2. It keeps the two arms honest and DIFFERENT: a failed restart IS fatal, a failed stop is not.
 wait_for() {
   local want="$1" budget="${WCP_WAIT_SECONDS:-600}" _end=$((SECONDS + ${WCP_WAIT_SECONDS:-600})) st
   log_info "waiting for ${want} (budget ${budget}s)"
   while :; do
-    sleep 10
+    # The poll cadence is a TUNABLE, not a literal — same rule as every other timing in this repo.
+    # It also stops the offline regression test costing 10s per arm just to reach its first probe:
+    # test-wcp-service.sh sets it to 1, which is the difference between a 28s case and a 6s one.
+    # Default stays 10s: a restarting vCenter is not worth hammering, and each probe re-logs-in.
+    sleep "${WCP_POLL_SECONDS:-10}"
     st=""
-    if vc_login >/dev/null 2>&1; then st="$(wcp_state)"; fi
+    # `--soft` IS LOAD-BEARING, and so is dropping `2>/dev/null`.
+    #
+    # The re-login is deliberate and must STAY: the API disappears during a restart and the session
+    # dies with it, so a hoisted token would be invalid for every probe — `st` would be empty for
+    # the whole budget and a HEALTHY restart would `die` after the full 600s. (That hoist was
+    # proposed and refuted for exactly this reason; do not re-propose it.)
+    #
+    # What was wrong is that plain `vc_login` DIES on 000/5xx — the transport errors this loop
+    # exists to wait through — and an `exit` inside an `if` CONDITION does not stay in the `if`.
+    # MEASURED: `f(){ exit 7; }; if f; then ...; fi; echo AFTER` -> rc=7 and AFTER never prints.
+    # So one blip during a restart killed the script at ~10s with NO message, while the benign
+    # timeout path printed a full diagnosis. 401 is still fatal in soft mode, on the first
+    # attempt, which is what keeps this loop's SSO lockout cost at exactly ONE.
+    if vc_login --soft; then st="$(wcp_state)"; fi
     [ "$st" = "$want" ] && { log_info "wcp is ${st}"; return 0; }
-    [ "$SECONDS" -lt "$_end" ] || die "wcp did not reach ${want} within ${budget}s (last: ${st:-no answer}). It may still be transitioning - re-check with: make wcp-status"
+    if [ "$SECONDS" -ge "$_end" ]; then
+      log_error "wcp did not reach ${want} within ${budget}s (last: ${st:-no answer}). It may still be transitioning - re-check with: make wcp-status"
+      return 1
+    fi
   done
 }
 
@@ -72,9 +100,15 @@ case "$code" in
 esac
 
 case "$ACTION" in
+  # `|| true` NOW ACTUALLY WORKS — wait_for returns instead of dying (see its header). The
+  # recovery line below is the whole point of this arm: the operator has just taken Workload
+  # Management DOWN for every tenant, and must not be left without the command that brings it back.
   stop) wait_for "STOPPED/HEALTHY" || true
         log_info "next: make wcp-start   (nothing provisions until you do)" ;;
-  *)    wait_for "STARTED/HEALTHY"
+  # ...and this arm is EXPLICITLY fatal, which the old shared `die` made accidental. A restart that
+  # never reached STARTED/HEALTHY must fail the caller: `make wcp-restart` exists to unblock
+  # something, and reporting success over a service that never came back is the fake-green.
+  *)    wait_for "STARTED/HEALTHY" || die "wcp did not come back — Workload Management may still be transitioning. Re-check with: make wcp-status"
         log_info "next: re-check what you were unblocking. A stuck REMOVING can need another"
         log_info "  reconcile cycle - kapp waits in 15-minute rounds." ;;
 esac

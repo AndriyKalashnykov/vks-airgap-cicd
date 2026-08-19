@@ -156,7 +156,7 @@ EOF
     gitea admin user generate-access-token --username "$GITEA_ADMIN_USER" \
       --scopes all --token-name "seed-$(date +%s)" --raw | tr -d '\r' | tail -1)"
   [ -n "$TOKEN" ] || die "failed to generate Gitea access token"
-  mkdir -p "$(dirname "$TOKEN_FILE")"
+  ensure_secret_dir "$(dirname "$TOKEN_FILE")"
   ( umask 077; printf '%s' "$TOKEN" > "$TOKEN_FILE" )
   log_info "stored CI token -> $TOKEN_FILE"
 }

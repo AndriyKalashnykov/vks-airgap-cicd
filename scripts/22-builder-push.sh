@@ -19,6 +19,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
+# shellcheck source=scripts/lib/mirror.sh
+# For `mirror_retry` around the push below. 21-mirror-push.sh already sources this; this script
+# did not, which is the other half of why its push was the unwrapped one.
+. "${SCRIPT_DIR}/lib/mirror.sh"
 # lib/tls.sh BEFORE lib/harbor.sh — harbor_setup calls ca_bundle_with_system() from tls.sh, and
 # harbor.sh's own header says the CALLER must source it. Omitting it is not a lint error (shellcheck
 # cannot see across a runtime source), it is a `command not found` at the first TLS setup — which is
@@ -79,7 +83,25 @@ for app in $(app_names); do
 
   ref="$(app_builder_image "$app")"
   log_info "[${app}] pushing the carried builder -> ${ref}"
-  run crane push "$tarball" "$ref" "${CRANE_INSECURE[@]}"
+  # SAME OPERATION AS 21-mirror-push.sh:77, WHICH IS WRAPPED — and this one was not. That
+  # inconsistency is the defect: a push is an IDEMPOTENT MUTATION that a transient can genuinely
+  # lose, it runs on the AIR-GAP box (no internet to diagnose from), and `run` is transparent, so
+  # under `set -e` a single blip killed the whole script mid-carry.
+  #
+  # ⚠️ THIS IS THE ONLY SITE THAT GETS THE WRAPPER. The retry-everything reading is refuted (see
+  # lib/mirror.sh's header for the arithmetic: crane already retries 3x, so the wrapper MULTIPLIES
+  # to 15 attempts). Specifically NOT wrapped:
+  #   * `crane validate --remote` / `crane digest` — ASSERTIONS. Retrying an integrity check
+  #     multiplies the time-to-verdict of the very failure it exists to report.
+  #   * `16-engine-trust-check.sh` — a one-shot DIAGNOSTIC PROBE. `x509: certificate signed by
+  #     unknown authority` is not transient and is not in crane's retry predicate; retrying only
+  #     makes a correct "no" take five times longer.
+  #   * `crane auth login` (:66 here, and 21-mirror-push.sh:51) — DELIBERATELY LEFT ALONE. It is
+  #     idempotent, but it submits a CREDENTIAL, and Harbor supports failed-login lockout. Blindly
+  #     retrying a rejected password is the same shape as retrying a vCenter 401 — the one change
+  #     that can lock an account out — and `mirror_retry` cannot tell a rejected credential from a
+  #     transient. Wrapping it needs a predicate first; see B187.
+  mirror_retry "${MIRROR_RETRIES:-5}" run crane push "$tarball" "$ref" "${CRANE_INSECURE[@]}"
   pushed=$((pushed + 1))
 done
 

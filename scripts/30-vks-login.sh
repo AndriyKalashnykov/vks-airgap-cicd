@@ -373,7 +373,7 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # ABSOLUTE path on purpose: the chosen path is PERSISTED into ~/.config/vcf/config.yaml
     # and resolved at USE time, so a relative one breaks from any other cwd.
     SUP_KUBECONFIG="${VKS_SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}"
-    mkdir -p "$(dirname "$SUP_KUBECONFIG")"
+    ensure_secret_dir "$(dirname "$SUP_KUBECONFIG")"
     log_info "vcf contexts -> ${SUP_KUBECONFIG} (KUBECONFIG=${KUBECONFIG} is left untouched)"
 
     KUBECONFIG="$SUP_KUBECONFIG" VCF_CLI_SKIP_CONTEXT_RECOMMENDED_PLUGIN_INSTALLATION=1 \

@@ -607,177 +607,105 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-18 — run 6: **5 of 6 GREEN**. Rows 5 AND 6 are green for the FIRST TIME; row 3 failed on a CODE DEFECT that #850 has since retired
+## ▶️ HANDOFF 2026-08-18 — run 8: **6 of 6 GREEN**. The first-go certification is IN HAND
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### The job, unchanged
-
-Rebuild the walkthrough matrix for scenario-1 **and** scenario-2, both as end-user documents. Rows
-run on throwaway Photon and Ubuntu VMs. **All six rows green FROM THE FIRST GO** — a fresh matrix
-over the FINAL tree passing on its FIRST pass. Every fix resets that clock. Verify `creds-show`
-endpoints and logins after every lab cut, driving Chrome where an HTTP probe is not proof.
-
-### Run 6 — `run-20260818T110322Z-3616190` — 07:03→10:25 EDT, tree FROZEN at `ef5e12b` throughout
+### The result
 
 ```text
-MATRIX FAILED (6 of 6 designed rows requested) — row(s) 3 did not complete  (14:25:27Z)
+MATRIX COMPLETE — walked 6 of 6 designed rows (1 2 3 4 5 6)   (01:17:25Z)
+MATRIX_RC=0                                                    21:17:25 EDT
 ```
 
-| row | OS | scen | blocks | FAILED | UNMET | MASKED | |
-|---|---|---|---|---|---|---|---|
-| 1 | ubuntu | s1 | 42: 35 ran | **0** | **0** | 4 | GREEN |
-| 2 | photon | s1 | 42: 30 ran | **0** | **0** | 5 | GREEN |
-| 4 | ubuntu | s1 | 42: 30 ran | **0** | **0** | 5 | GREEN |
-| 5 | photon | s2 | 27: 18 ran | **0** | **0** | 0 | GREEN |
-| 6 | ubuntu | s2 | 27: 18 ran | **0** | **0** | 0 | GREEN |
-| 3 | photon | s1 | 42: 35 ran | **3** | **1** | 4 | RED |
+| row | OS | scen | blocks | FAILED | UNMET |
+|---|---|---|---|---|---|
+| 1 | ubuntu | s1 | 42: 35 ran, 7 skipped | **0** | **0** |
+| 2 | photon | s1 | 42: 30 ran, 12 skipped | **0** | **0** |
+| 3 | photon | s1 | 42: 35 ran, 7 skipped | **0** | **0** |
+| 4 | ubuntu | s1 | 42: 30 ran, 12 skipped | **0** | **0** |
+| 5 | photon | s2 | 27: 18 ran, 9 skipped | **0** | **0** |
+| 6 | ubuntu | s2 | 27: 18 ran, 9 skipped | **0** | **0** |
 
-**THE MILESTONE: rows 5 and 6 — both scenario-2 cells — are GREEN, and both are firsts.** Run 5b had
-both RED with the identical `STALE_CA` signature (×3 each). The cross-repo fix (nvl #77's insecure
-fallback) is now proven end-to-end on **both** operating systems. Every previous run either never
-reached the tenant path or failed it.
+**Read the UNMET claim the way it was established**, because "0" is the easy thing to assert: the
+run-wide sweep (`grep -c 'EXPECT UNMET'` over every row log, `grep -v ':0$'`) lists **only older run
+directories** — none of run 8's six logs appears, which is what makes each of them zero.
 
-🔴 **CORRECTED 2026-08-18 (same day, later): row 3's cause was IN THE TREE. The paragraph this
-replaces said "Not a document defect, not a code defect" — that was WRONG, and it was steering the
-open decision below toward the wrong answer.** The observation was right and the conclusion did not
-follow: row 3's box pulled 33 MB at 13:10Z and FATAL'd on `require_internet` at 13:27:56Z, and row 4
-— same lab, same document, same commands — cleared that identical probe minutes later. That LOOKS
-like a transient. The discriminator nobody ran is what the probe actually did.
+**WHAT IT CERTIFIES, precisely: commit `021c6a3`.** Measured at certification time against
+`origin/main`: the drift is **`BACKLOG.md` + `CLAUDE.md` only**, zero non-doc files. So the
+certification stands for the code that is on `main`.
 
-**MEASURED on a box with WORKING internet.** `storage.googleapis.com` answers `HEAD /` with **HTTP
-400**, and the old `curl -sSf`'s `-f` turns any 4xx into exit 22:
+**Row 3 is the one that matters most.** It is the row that ended run 6, and #850's fix — the
+`require_internet` probe whose host #1 had never succeeded, its `400` being proof of internet that
+`-f` discarded — is now proven end-to-end on the live lab. Run 6's failure was a CODE defect, not
+the transient I first reported.
 
-| probe | OLD (`-sSf`, what row 3 ran) | NEW (`021c6a3`) |
-|---|---|---|
-| `storage.googleapis.com` — probe #1 | 400 → rc 22 → **"NO INTERNET"** | 400 → **INTERNET** |
-| `github.com` — probe #2 | 200 → INTERNET | **never consulted** (loop breaks on the first answer) |
+Rows 1/3 are byte-identical in coverage across *different* operating systems, and so are 2/4 — the
+OS-invariance measured for B145/B102, seen a second time. Coverage varies by CELL, not by OS.
 
-So the two-host redundancy the code advertised **did not exist**: `github.com` alone decided, and one
-blip from it was sufficient to FATAL a 25-minute row. **PR #850 merged at `16:54:22Z` — three and a
-half hours AFTER row 3 ran** — so row 3 could not have benefited, and run 8 is the first run to carry
-the fix. Its 3 failures are still ONE chain (`install-all` → nothing installed → `install-ingress`
-fails → `verify-ingress` fails + its UNMET); only the root differs.
+### What is in flight
 
-⚠️ **Why this correction matters more than the label.** "Transient" implies *wait and re-run*;
-"single point of failure on github.com" implies *the next matrix is hostage to github's error rate
-until the predicate is fixed*. The full root cause, with the refuted retry design, is `B181` in
-[`BACKLOG.md`](BACKLOG.md) — which carried the correct diagnosis while this handoff carried the
-refuted one, for hours. **When you correct a fact, grep EVERY home.**
+- **#869 MERGED** (`main` is `a38f07e`). Post-merge CI was running at handoff time — check it.
+- **#868 OPEN** (`docs/d4-ssh-buffering`) — ⚠️ **note the branch name; it is NOT `fix/creds-mask-offtty`.**
+  Its implementation round CLEARED all four fixes and found a **HIGH** they missed, now applied.
+  `make static-check` was green at the tip before the final lint commit; re-run it before merging.
+- **Repo is clean**: `main`, #868's branch, and one adversary worktree. 12 stale worktrees and 11
+  merged branches were pruned, verified by RE-LISTING rather than by the delete counter.
 
-So the first-go rule was **not met (5/6)**, and **the tree WAS implicated** — which is the honest
-version of the sentence this replaces.
+### The two security fixes worth knowing about
 
-### THE OPEN DECISION — RESOLVED (owner chose A)
+**`.env.state` is a THIRD clobber channel**, written by our own `state_set` and sourced LAST by
+`load_env`, so it outranks the command line — and `check-env-clobber` structurally cannot see it (it
+gates the committed `.env.example`, correctly). Measured with a discriminating control:
 
-It read: (A) full six-row re-cut, (B) `WALK_ROWS="3"` against a rebuilt cell, (C) accept 5/6 on the
-evidence that row 3's cause is external. **The owner chose (A)**, and runs 7, 7b and 8 followed.
-(C) is now doubly dead: its premise is refuted above. **(B) remains the trap the harness documents**
-— the lab holds the last cell, so a partial re-run measures a different starting state than the row
-was designed for; nobody should pick it without re-reading the cell-state note in `walk-matrix.sh`.
+```text
+HARBOR_INSECURE=0    + overlay 1 -> 1     caller DEFEATED  (TLS verification pinned OFF)
+ARGOCD_INSECURE=0    + overlay 1 -> 1     caller DEFEATED
+MIRROR_VERIFY_FAST=0 + .env    1 -> 1     caller DEFEATED  (blob validation downgraded)
+HARBOR_URL=X         + overlay Y -> X     already snapshotted -> SURVIVED
+```
 
-### Coverage fact worth keeping
+`MIRROR_VERIFY_FAST` is the sharp one: it turns `crane validate` into `--fast`, skipping exactly the
+layer-blob download that caught the 2026-07-13 Harbor wipe.
 
-Rows 1+3 are identical at **22 CHECKABLE / 4 MASKED**; rows 2+4 identical at **18 / 5** — across
-*different operating systems*. **The OS contributes nothing to Expect coverage**; all variation is
-which cell ran. That independently confirms `walk-doc.sh:745-753`'s own argument for **not**
-ratcheting the MASKED count ("varies by CELL, not by document quality"). The masked claims decompose
-**3 structural + 3 cell-specific**, which reconciles 4-vs-5 exactly.
+**Then the round found the same defect in the CREDENTIAL class** — `ARGOCD_ADMIN_PASSWORD` and
+`GITEA_ADMIN_PASSWORD` are `state_set` into the overlay and documented `<SET-IN-.env>`, exactly like
+`HARBOR_PASSWORD` which was already protected. Of the 5 operator-settable credentials `state_set`
+writes, **3 were protected and 2 were not**. Both now snapshotted, RED-proven to fail exactly those
+two cases.
 
-### Three adversary rounds ran in parallel with the matrix, and each refuted part of my framing
-
-- **B133 (CRITICAL, confirmed and current)** — but my premise was **3/4 wrong** (named a file that
-  does not exist in this repo, a second file that does not transmit the credential, and missed that
-  the handling is already argv-safe). **The lockout fear is REFUTED BY ORACLE**: a wrong-CA arm sends
-  **zero** credentials, because TLS aborts before the request exists. A fail-closed fix is an
-  *availability* decision, not a safety one. **NEW HIGH the row never mentions:** `wcp-service.sh:48`
-  re-authenticates ≤60× per `make wcp-restart` **and** swallows the 401 (`>/dev/null 2>&1` on a call
-  whose `die` is `exit 1`).
-  ⚠️ **CORRECTED the same day, by an oracle built from the loop's own bytes: this is NOT a lockout
-  path, and the words that used to end this sentence — "the only measured lockout path" — were
-  wrong.** Successful authentications do not increment SSO's failure counter, and the loop **exits at
-  the first 401** (measured `auths=1`), so it burns **exactly one** attempt. The ≤60 figure is the
-  worst case for a run in which every auth *succeeds*, which costs no lockout budget at all — and the
-  `die` being called a bug is, for the lockout question, **the thing preventing a lockout**.
-  ⚠️ It follows that a **bounded retry on a 401 must never be added**: it would turn a one-attempt
-  burn into 2–60 and *guarantee* the lockout. (Retry on `000`/`5xx` is fine.)
-  The **real** defect is broader and quieter: `vc_login` dies on 401, on `000` **and on any other
-  non-2xx**, so a single blip during the very restart the loop exists to wait through exits the script
-  at ~10 s with no message — while the *benign* timeout prints a full diagnosis.
-  🔴 **THE FIX THIS PARAGRAPH USED TO PRESCRIBE IS REFUTED — DO NOT HOIST. It said: "hoist `vc_login`
-  OUT of the loop (60 auths → 0), matching `vc_ss_install`'s already lab-proven shape."** An
-  implementation round (2026-08-18) killed it using the file's **own** documented rationale, which I
-  had not read: `wcp-service.sh:39-41` states that during a restart the API disappears *"and the
-  session dies with it, **which is why each probe re-logs-in**"*. The re-login is **load-bearing, not
-  waste**. Hoisting hands `wait_for` a token the restart invalidates → `vc_api` non-2xx on every poll
-  → `st=""` throughout → the full `WCP_WAIT_SECONDS` (600) budget burns → `die "wcp did not reach
-  STARTED/HEALTHY within 600s"` **on a lab that recovered normally**. A working restart becomes a
-  10-minute false FATAL. The arithmetic was wrong too: `:31`'s `vc_login` is unconditional, so the
-  hoist is 60→**1**, never 60→0. ⇒ **Keep the re-login.** The real defect is narrower than either
-  framing: `if vc_login >/dev/null 2>&1; then` does **not** create a subshell, so `vc_login`'s `die`
-  (`exit 1`) on the **`000`** arm kills the whole script. The minimal fix is a **soft mode** —
-  fatal on 401 (preserving the one-attempt lockout budget stated above), non-fatal on `000`/5xx — and
-  stop discarding its stderr inside the loop. That fix is a SEPARATE claim from the finding; verify it
-  by running `make wcp-restart` on a real lab and confirming a transport blip no longer ends the wait.
-  A second, separate defect: line 75's `|| true` cannot swallow an `exit` either, so a `wcp-stop`
-  timeout suppresses the recovery instruction it was written to print.
-- **B166** — my (i)+(ii)+(iii) **refuted as a package**. The control I wanted to hoist is measurably
-  **BLIND** (`CHECKED=0`: it builds its Supervisor pair only when `VKS_CA_CERT_FILE` is set, and
-  `.env.example` ships it commented), and (iii) would **exit 1 on a correct walk**. **Land instead:
-  one line per file** — `vks_ca_default` before `ca_status_report` in `29-ca-status.sh` and
-  `24-lab-preflight.sh`. **F5: a THIRD (ArgoCD) CA pair would have diagnosed rows 5+6.**
-- **B180** — my "not load" call **held and is now measured** (even SIGSTOP yields rc 2, never rc 4),
-  but my `.env.example`-clobber attribution is **refuted outright** (there is no line to comment),
-  and **the row mis-reads its own evidence**: rc 4 means *connected to a non-TLS listener*, not
-  *never connected*. Its own `stress`-based RED-proof is structurally incapable of reproducing it.
-
-### Item 5 — settled, with two of my own instruments caught lying
-
-Credentials are proven by the **mirror push** (24 images × 3 rows — you cannot push 24 images without
-authenticating) and by `argocd-auth-check` issuing a **real session token** in-walk. The Chrome half
-is closed by a **two-arm headless test under a throwaway `HOME`** (the operator's trust store never
-opened): control → `ERR_CERT_AUTHORITY_INVALID`; with the CA imported → `<title>Harbor</title>`, the
-real UI. So endpoint, cert and shipped CA are all **correct**; the sole defect is that `CN=Harbor CA`
-is in **no** trust store — an operator action, deliberately not taken here.
-
-⚠️ **Two instrument failures, both caught before being reported as findings.** A first extractor
-printed `user=https://harbor.env1.lab.test` — a username is not a URL; the `creds-show` row is
-`Harbor <URL> (extra; extra) admin <password>`, so the parentheticals shift the columns. And even
-corrected, `tail -1` picks an arbitrary row's credential — this run has **five distinct** Harbor
-credentials (the NOTHING cell mints a per-row `robot$vks-cicd`; the EVERYTHING cell uses `admin`;
-Harbor is reinstalled between cells). A host-side credential probe is only meaningful **after** the
-matrix completes.
+**ARM 2 constrains both fixes** and is not padding: an unconditional snapshot would force the secure
+path onto a Harbor that was installed insecure and break every pull.
 
 ### Distrust these
 
-- **`git diff --name-only v1.0.1..origin/main`** is the only honest answer to "is main certified?".
-- **A stale log will lie.** Cite the per-invocation `VERDICT-<runid>.txt`, never a fixed path, and
-  read each row's `WALK DONE`/`DOCUMENT` lines plus the **"N of 6 designed rows"** denominator —
-  never the exit code, never the completion notification.
-- **"The log has not advanced" must be measured on the log's TAIL and its mtime**, never on a marker
-  whose cadence you have not read. I called row 4 "stalled" off a `[N/24]` grep that only logs on
-  *pull completion* while `pushed blob:` lines were flowing; row 4 finished GREEN, and on that false
-  reading I nearly revised a correct diagnosis.
-- **Do NOT edit `scripts/walk-matrix.sh` while a matrix runs** — bash reads a script incrementally.
-- **A PR runs TWO gate jobs, and NEITHER is the full `static-check`.** Read it off `ci.yml`:
-  `static-check-fast` (24 gates) and a `static-check` *job* that invokes **`static-check-pr`**
-  (`lint validate app-test test-scripts-fast`). What a PR never sees is **`sec`** and the six
-  wall-clock unit tests. Run `env -u GOROOT make static-check` locally before every merge.
+- **The verdict, not the exit code.** `MATRIX_RC=0` and a per-row `WALK DONE` are both necessary and
+  neither is sufficient — run 6 printed `WALK DONE` on a row with `3 FAILED`. Read the FAILED count
+  *inside* the line, and the `N of 6 designed rows` denominator.
+- **A backgrounded command's "exit code 0" is the LAST command's.** `make X > log; rc=$?; echo …`
+  reports the *echo's* status. Either let the gate be the whole call, or `{ …; exit $rc; }`.
+- **`gh pr edit --body` can silently refuse**, printing a Projects-classic deprecation notice that
+  reads as unrelated. Measured today: the body did not change. Verify with a sentinel; the working
+  path is `gh api -X PATCH repos/<o>/<r>/pulls/<N> -F body=@file`.
+- **Brief an adversary with a SHA, never a branch name.** A worktree inherits the caller's HEAD, so
+  two rounds today reviewed a REVERSED diff and reported the fixes as missing.
+- **Do not edit a file while a gate or a matrix is executing it.** A `run-test-set.sh` edit mid-run
+  produced `syntax error near unexpected token ';'` that was purely the moving tree.
+- **`make creds-show` from the MAIN checkout still prints credentials in cleartext** — the masking
+  fix is on #868. That is how three live values reached a transcript today.
 
 ### Blocked, and on what
 
-- **B133 (CRITICAL)** — the SSO administrator password to an unverified peer. Its *fix* is now
-  unblocked on safety grounds (the oracle above), but still needs the two owner decisions in the row.
-  The **`wcp-service.sh` HIGH is independent and can ship first.**
-- **B145** — the Expect checker truncates a multi-line paragraph to its first line (26 of 43
-  paragraphs affected). **Land only AFTER a run certifies the tree** — it will surface
-  previously-invisible UNMETs.
-- **B153** — the redaction design was REFUTED (shape-keying misses 3 of 4 printers); the answer is
-  value-keyed at `walk-doc.sh:587` **plus** printer-side, because the ArgoCD initial password is read
-  fresh from a Secret and never lands in a file the harness holds.
-- **B166/B179/B180** — all three now carry their rounds' findings in `BACKLOG.md`. B179's *and*
-  B179a's fixes are both **refuted**; do not rebuild either.
+- **B133 (CRITICAL)** — two owner decisions. Its independent `wcp-service.sh` HIGH already shipped.
+- **B142, B139** — both land in `scripts/lib/os.sh`; B139 is fully measured and ready to implement.
+- **B166** — the circular gate is live, but its own "30-line MOVE" is REFUTED: the hoist would die on
+  a bare box. Two-part fix specified.
+- **B160, B69** — one item each, both deliberately sequenced OUT of the next cut: editing a walked
+  scenario block resets the first-go clock by construction.
+- **B145** — land only AFTER a certifying run; it surfaces previously-invisible UNMETs.
+- **B188** — four toggles plus `WCP_POLL_SECONDS` still unsnapshotted; `.env` remains the INVITED
+  channel that no gate scans.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 

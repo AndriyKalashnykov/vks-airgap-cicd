@@ -520,7 +520,42 @@ load_env() {
   # cause is 04-install-harbor-service.sh publishing a credential it did not produce; that is
   # fixed at the writer. WHICH identity the pipeline runs as is a selector in every sense that
   # matters — an overlay `admin` silently shadowing a least-privilege robot is the reason.
-  for _sel in SUPERVISOR_HOST VCENTER_HOST KUBECONFIG VKS_AUTH_METHOD ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT VKS_CLUSTER_NAME VKS_NAMESPACE INGRESS_CONTROLLER HARBOR_CA_FILE VKS_CA_CERT_FILE ARGOCD_CA_FILE HARBOR_URL HARBOR_USERNAME HARBOR_PASSWORD VCF_CLI_SRC_DIR VKS_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256; do
+  # HARBOR_INSECURE / ARGOCD_INSECURE / MIRROR_VERIFY_FAST are NOT "which thing am I talking to" —
+  # they are SECURITY-POSTURE toggles, and they are here because the harm is identical and because
+  # `.env.state` is a THIRD clobber channel that no gate can see. `check-env-clobber` reads
+  # `.env.example` (correct, and green); the overlay is written by OUR OWN tooling (`state_set` in
+  # 05-kind-up.sh / 06-install-harbor.sh / 07-install-argocd.sh) and `load_env` sources it LAST, so
+  # it outranks even the command line. MEASURED 2026-08-18, with a discriminating control:
+  #     HARBOR_INSECURE=0    + overlay 1 -> 1   (caller DEFEATED)
+  #     ARGOCD_INSECURE=0    + overlay 1 -> 1   (caller DEFEATED)
+  #     MIRROR_VERIFY_FAST=0 + .env    1 -> 1   (caller DEFEATED)
+  #     HARBOR_URL=X         + overlay Y -> X   (already snapshotted -> SURVIVED; the control that
+  #                                              proves the probe is not simply clobbering all)
+  # CLAUDE.md already records this exact incident through the OTHER channel — `make e2e-kind
+  # HARBOR_INSECURE=1` silently ran the full SECURE stack — so this is a recurrence via a new sink.
+  # The first two pin TLS VERIFICATION off with no way back from the command line; the third turns
+  # `crane validate` into `--fast` (manifest/config only, per 23-mirror-verify.sh:14-15), i.e. it
+  # skips exactly the layer-blob download that caught the 2026-07-13 Harbor wipe (153 manifest
+  # links, ZERO blobs — a state `--fast` passes).
+  # ⚠️ The `[ -n … ]` guard below is what keeps this SAFE: it restores only a value the CALLER set,
+  # so an overlay that legitimately records "this Harbor was installed insecure" still applies when
+  # the caller is silent. A fix that forced these to a fixed value would break the KinD flow; that
+  # arm is asserted in test-insecure-toggle-snapshot.sh, not assumed.
+  # ARGOCD_ADMIN_PASSWORD / GITEA_ADMIN_PASSWORD added 2026-08-18 — the SAME class as
+  # HARBOR_PASSWORD three lines up, found by an adversary round on the commit that added the three
+  # toggles above and MISSED these two. Both are `state_set` into the overlay (05-kind-up.sh:131,
+  # :142) and both ship in .env.example as `# VAR=<SET-IN-.env>` — i.e. documented as
+  # operator-settable — exactly like HARBOR_PASSWORD, whose own note above records that "the overlay
+  # was measured to outrank the COMMAND LINE too". MEASURED with a discriminating control AND an
+  # inverse control, so the probe cannot be lying in either direction:
+  #     HARBOR_PASSWORD        caller=fromCaller overlay=fromOverlay -> fromCaller   PROTECTED
+  #     ARGOCD_ADMIN_PASSWORD  caller=fromCaller overlay=fromOverlay -> fromOverlay  DEFEATED
+  #     GITEA_ADMIN_PASSWORD   caller=fromCaller overlay=fromOverlay -> fromOverlay  DEFEATED
+  #     ARGOCD_LB_IP           caller=fromCaller overlay=fromOverlay -> fromOverlay  CORRECT — a
+  #                            DISCOVERED value SHOULD come from the overlay; it is the inverse
+  #                            control that proves this list is still a list and not "everything".
+  # Of the 5 operator-settable credentials `state_set` writes, 3 were protected and 2 were not.
+  for _sel in SUPERVISOR_HOST VCENTER_HOST KUBECONFIG VKS_AUTH_METHOD ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT VKS_CLUSTER_NAME VKS_NAMESPACE INGRESS_CONTROLLER HARBOR_CA_FILE VKS_CA_CERT_FILE ARGOCD_CA_FILE HARBOR_URL HARBOR_USERNAME HARBOR_PASSWORD VCF_CLI_SRC_DIR VKS_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256 HARBOR_INSECURE ARGOCD_INSECURE MIRROR_VERIFY_FAST ARGOCD_ADMIN_PASSWORD GITEA_ADMIN_PASSWORD; do
     if [ -n "${!_sel:-}" ]; then
       _snap_names="${_snap_names} ${_sel}"
       _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'
@@ -576,9 +611,22 @@ load_env() {
   # environment or from `.env` — both are the operator choosing, neither is a default.)
   export _VKS_EXPLICIT_KUBECONFIG="${_VKS_EXPLICIT_KUBECONFIG:-${KUBECONFIG:-}}"
 
+  # B142 — RECORD WHETHER THE SINK WAS ACTUALLY SOURCED, because that is the only honest predicate
+  # for a WRITE path. `state_unset` needs to know "could this sink's pin possibly be shadowing me?",
+  # and the answer is exactly "was it sourced in this process". `state_check` is NOT that predicate:
+  # its idea round measured that it PERMITS on an unstamped sink AND returns 0 early when
+  # `_VKS_EXPLICIT_KUBECONFIG` is empty — a READ-path concession with no meaning on a write path.
+  # Measured there: with no explicit KUBECONFIG, three keys were stripped from a sink stamped for
+  # ANOTHER cluster and `state_check` never refused.
+  # ⚠️ UNSET means "load_env never ran in this process", and that must PROCEED — many callers
+  # legitimately never call it, and a fail-closed default would break every one of them. Only an
+  # explicit 0 is a refusal signal.
   if state_check; then
     # shellcheck disable=SC1090
     [ -f "$state" ] && . "$state"
+    export _VKS_STATE_SOURCED=1
+  else
+    export _VKS_STATE_SOURCED=0
   fi
   # One release of back-compat: a legacy .env.kind is still read (last, so the new sink wins).
   if [ -f "$legacy" ]; then
@@ -955,6 +1003,37 @@ assert_env_effective() {
   got="$( unset "$key"; load_env >/dev/null 2>&1; printf '%s' "${!key:-}" )"
   [ "$got" = "$want" ] && return 0
 
+  # ⚠️ DISCRIMINATE BEFORE ACCUSING. Under SKIP_DOTENV=1 this re-read deliberately IGNORES `.env`
+  # (:582), so the value we just wrote there cannot be seen IN THIS PROCESS — and the failure path
+  # below then told the operator "a higher-precedence file already sets ${key} … remove that line"
+  # while naming NO LINE, because none exists. MEASURED (B139): the identical call is rc=1 under
+  # SKIP_DOTENV=1 and rc=0 with it unset; with a genuine `.env.kind` shadow the same path DOES name
+  # the file. So the PRESENCE OF A NAMED FILE is the discriminator, and this re-read recovers it.
+  #
+  # This is NOT "special-case the message", which was the row's first prescription and is wrong: a
+  # write to `.env` under SKIP_DOTENV=1 is not useless, it is UNVERIFIABLE IN-PROCESS and WILL take
+  # effect on a normal run. Warning blindly throws that distinction away; so does dying.
+  #
+  # The callers are the scenario-1 operator steps 22-harbor-robot.sh, 27-use-guest-kubeconfig.sh and
+  # 28-harbor-admin-password.sh — and the KinD e2e sets E2E_SKIP_DOTENV=1 by design, so this path is
+  # reached on every such run.
+  if [ "${SKIP_DOTENV:-0}" = "1" ]; then
+    local got0
+    # A PREFIX ASSIGNMENT on the function call, not `export` — it reaches load_env just the same
+    # (bash places it in the call's environment) and, being contained in this command substitution,
+    # cannot escape. `export SKIP_DOTENV=0` here made shellcheck raise SC2031 at creds.sh:378, which
+    # legitimately reads the AMBIENT value: my deliberately-contained write was being reported as a
+    # defect in someone else's file. Silencing it THERE would have been the wrong end.
+    got0="$( unset "$key"; SKIP_DOTENV=0 load_env >/dev/null 2>&1; printf '%s' "${!key:-}" )"
+    if [ "$got0" = "$want" ]; then
+      log_warn "wrote ${key} to .env${why:+ (${why})}; SKIP_DOTENV=1 makes THIS process ignore .env,"
+      log_warn "  so the write cannot be verified here — nothing shadows it, and a normal run WILL"
+      log_warn "  see it. Re-read with .env enabled returned the value just written."
+      return 0
+    fi
+    # else: a REAL shadow, and it outranks `.env` even with `.env` enabled. Fall through and name it.
+  fi
+
   log_error "WROTE ${key} to .env, and it did NOT take effect${why:+ (${why})}."
   log_error "  a higher-precedence file already sets ${key}, so the next command still reads that one."
   local f
@@ -966,6 +1045,56 @@ assert_env_effective() {
   done
   log_error "  remove that line (or fix the writer that put it there) and re-run."
   return 1
+}
+
+# ensure_secret_dir <path> — create it, and harden it to 0700 ONLY if it is a secrets/ dir of OURS.
+#
+# ⚠️ CONTAINMENT-SCOPED, NOT BLANKET, AND THAT IS THE WHOLE DESIGN. `secrets/` is born 0775 at
+# umask 002, and `Makefile:132` `-include`s `secrets/.env.make` — a group-writable DIRECTORY lets
+# any group member unlink-and-recreate that file regardless of its own 0600, which is make-variable
+# injection. The obvious fix is to chmod 700 wherever we mkdir. That fix is REFUTED, twice over:
+#
+#   * `shell_rc_file()` returns `$HOME/.bashrc` (bash), `${ZDOTDIR:-$HOME}/.zshrc` (zsh),
+#     `$HOME/.kshrc` (ksh) — so `dirname` at shell-init.sh is `$HOME` EXACTLY for three of the four
+#     supported shells. A blanket chmod takes the operator's HOME from 755 to 700, unrequested, on
+#     a machine we do not own, and irreversibly (nothing records the original mode).
+#   * `set_env_var`'s own mkdir below takes `${REPO_ROOT}/.env` at three call sites, so `dirname`
+#     is the REPOSITORY WORKING TREE. The normal install flow would chmod the repo root, breaking
+#     any group-shared checkout or non-owner bind-mount.
+#   Plus 8 of 13 sites take an OPERATOR-SETTABLE path — `KUBECONFIG` commonly resolves to
+#   `~/.kube/config`, and it legally holds a COLON-SEPARATED LIST, whose `dirname` is the literal
+#   string, so a blanket helper would chmod a garbage path.
+#
+# So: create unconditionally, harden only what resolves inside our own tree. Then every call site
+# can use it without an allowlist, which is the point — an allowlist is what rotted twice already.
+#
+# ⚠️ `cd … && pwd -P`, NOT `realpath -m`. POSIX, and toybox's realpath is not guaranteed on Photon
+# — 31-fetch-argocd-kubeconfig.sh:59 records the same choice for the same reason. This matters
+# here more than anywhere: B174's two previous fixes BOTH died on a GNU-only flag that toybox
+# accepts and ignores (`mkdir -p -m`, then `install -d -m`), each passing on every dev box and
+# doing nothing on the PRIMARY air-gap OS. The mkdir above is what makes `cd` viable where
+# `realpath -m` would otherwise be needed for a not-yet-existing path.
+#
+# ⚠️ chmod failure WARNS, it does not abort. `mkdir -p "$d" && chmod 700 "$d"` as a function TAIL
+# returns chmod's status, so an EPERM on a directory owned by someone else (a sudo-created
+# secrets/, a shared CI checkout, a rootless-podman uid mapping) would kill the caller under
+# `set -e` — a hard-fail the bare `mkdir -p` never had. Hardening is best-effort by construction.
+ensure_secret_dir() {
+  local d="${1:?ensure_secret_dir: a path is required}" rp
+  if ! mkdir -p "$d"; then return 1; fi
+  rp="$(cd "$d" 2>/dev/null && pwd -P)" || rp=""
+  if [ -z "$rp" ]; then
+    log_warn "ensure_secret_dir: created '${d}' but could not resolve it — left unhardened"
+    return 0
+  fi
+  # An unset REPO_ROOT would make the patterns below `/secrets/`, which could match a real
+  # system path. Refuse to guess: create only.
+  [ -n "${REPO_ROOT:-}" ] || return 0
+  case "${rp}/" in
+    "${REPO_ROOT}"/secrets/|"${REPO_ROOT}"/*/secrets/)
+      chmod 700 "$rp" || log_warn "ensure_secret_dir: could not harden ${rp} (not the owner?) — leaving its mode as-is" ;;
+    *) : ;;
+  esac
 }
 
 set_env_var() {

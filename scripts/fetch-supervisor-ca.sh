@@ -146,7 +146,7 @@ case "$_vrc" in
   *) die "could not verify ${SUPERVISOR_HOST}'s certificate against the matched CA (ca_verifies_endpoint rc=${_vrc})" ;;
 esac
 
-mkdir -p "$(dirname "$OUT")"
+ensure_secret_dir "$(dirname "$OUT")"
 cp "$match" "$OUT"; chmod 0644 "$OUT"      # a CA is public trust material, not a secret
 log_info "installed ${OUT}"
 openssl x509 -in "$OUT" -noout -fingerprint -sha256 2>/dev/null | sed 's/^/  /'

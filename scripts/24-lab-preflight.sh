@@ -24,6 +24,23 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ⚠️ SNAPSHOT BEFORE load_env — ONE LINE IN A PERSONAL `.env` DISABLED THE ONLY CHECK FOR A
+# MISSING HARBOR CA. `Makefile:623` does `preflight: export CA_STATUS_STRICT = 1` precisely
+# because, as its own comment says, "nothing else catches it". But `load_env` sources
+# `.env.example` and `.env` with `set -a` AFTER the caller's environment is established, so a
+# `.env` line WINS over the Makefile's export. MEASURED, this exact script's ordering:
+#     Makefile exports 1, operator .env says 0  ->  effective 0   *** the gate is disarmed ***
+#     caller sets nothing                       ->  effective 0   (unchanged, the secure default)
+# ...and it is a RATCHET: once `.env` says 0 there is no per-run way back, because
+# `CA_STATUS_STRICT=1 make preflight` loses to the same `set -a`.
+#
+# There is NOTHING to protect here: `CA_STATUS_STRICT` appears NOWHERE in `.env.example` (grep
+# count 0) and `check-env-coverage.sh` classifies it as internal, "not something an operator sets".
+# So honour ONLY the pre-`load_env` environment, which is where the Makefile's export lives. Same
+# pattern as `creds.sh`'s and `argocd-password.sh`'s `SHOW_SECRETS` snapshot.
+_ca_status_strict_snapshot="${CA_STATUS_STRICT:-0}"
+
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
 # shellcheck source=scripts/lib/tls.sh
@@ -31,6 +48,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/harbor.sh
 . "${SCRIPT_DIR}/lib/harbor.sh"
 load_env
+# Restore the snapshot OVER whatever load_env's `set -a` just put there. `ca_status_report` reads
+# the global (`lib/tls.sh:473`), so the value has to be back in the environment by the time it is
+# called — an argument would need a signature change across every caller of that function.
+export CA_STATUS_STRICT="$_ca_status_strict_snapshot"
 
 require_cmd kubectl
 

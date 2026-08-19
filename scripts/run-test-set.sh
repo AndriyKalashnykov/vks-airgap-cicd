@@ -28,6 +28,26 @@ if [ "$#" -eq 0 ]; then
 fi
 
 total=0; failed=0; failures=""; start=$SECONDS
+# ⚠️ SKIPPED ARMS WERE INVISIBLE, AND THAT MADE THIS RUNNER A FAKE-GREEN FOR EVERY GATE IT JUDGES.
+# `bash "$t" > "$log" 2>&1` captures the test's output and the log is cat'd ONLY in the rc!=0
+# branch, so a test that deliberately writes a LOUD skip to >&2 -- because its own header says "a
+# skipped case that says nothing is indistinguishable from a passing one" -- had that line
+# DISCARDED on the green path. `ok test-X.sh 7s` read identically whether 5 arms ran or 2 did.
+# MEASURED 2026-08-18: 32 of 79 scripts/test-*.sh carry a skip path.
+#
+# ⚠️ THE DETECTOR IS ANCHORED, and the first version was not. Matching the word "skip" anywhere
+# counted PASS messages -- `ok ... blob validation cannot be silently skipped`, `cache-skip
+# eligible`, `two conditional jobs skipped` -- and reported 11 of 70 on a suite where the real
+# number is far lower. The tests announce a skip as a line-start MARKER (`SKIP  ...` or `SKIP: ...`,
+# both measured in the corpus), so that is what this matches, case-SENSITIVELY. An unanchored
+# detector here would be the same defect it exists to catch: a number that looks like a measurement
+# and is an artifact of the question.
+#
+# ⚠️ AND THE OBVIOUS FIX IS WRONG. An adversary prescribed "gate the SUCCESS banner on zero skips";
+# that would turn every LEGITIMATE skip into a failure across a third of the suite (a test that
+# correctly skips its live-cluster arm on a laptop is not a defect). So this SURFACES, and never
+# gates -- the gates.md "print the denominator" discipline, not a new red.
+skipped=0; skipnotes=""
 log=$(mktemp); trap 'rm -f "$log"' EXIT
 
 for t in "$@"; do
@@ -41,7 +61,19 @@ for t in "$@"; do
   rc=0
   bash "$t" > "$log" 2>&1 || rc=$?
   if [ "$rc" -eq 0 ]; then
-    printf '  ok    %-50s %3ds\n' "$(basename "$t")" "$((SECONDS - t0))"
+    # Count the test's OWN skip lines. `grep -c` prints 0 and exits 1 on no match, which under
+    # `set -e` would kill the runner -- hence `|| true`, the documented capture-then-test form.
+    _sk="$(grep -cE '^[[:space:]]*SKIP[:[:space:]]' "$log" 2>/dev/null || true)"
+    case "$_sk" in ''|*[!0-9]*) _sk=0 ;; esac
+    if [ "$_sk" -gt 0 ]; then
+      skipped=$((skipped + 1))
+      skipnotes="${skipnotes}  $(basename "$t") (${_sk} skip line(s))"$'\n'
+      printf '  ok    %-50s %3ds  [%s SKIP line(s) -- see below]\n' \
+        "$(basename "$t")" "$((SECONDS - t0))" "$_sk"
+      grep -E '^[[:space:]]*SKIP[:[:space:]]' "$log" | sed 's/^/        | /' | head -6
+    else
+      printf '  ok    %-50s %3ds\n' "$(basename "$t")" "$((SECONDS - t0))"
+    fi
   else
     printf '  FAIL  %-50s %3ds  (rc=%s)\n' "$(basename "$t")" "$((SECONDS - t0))" "$rc"
     sed 's/^/        | /' "$log" | tail -25
@@ -49,7 +81,9 @@ for t in "$@"; do
   fi
 done
 
-printf '\nrun-test-set [%s]: %d test(s) run in %ds, %d failed\n' \
-  "$label" "$total" "$((SECONDS - start))" "$failed"
+printf '\nrun-test-set [%s]: %d test(s) run in %ds, %d failed, %d with skipped arm(s)\n' \
+  "$label" "$total" "$((SECONDS - start))" "$failed" "$skipped"
+# NOT a failure -- a DENOMINATOR. A green whose coverage shrank silently is the thing this prints.
+[ "$skipped" -eq 0 ] || printf 'SKIPPED ARMS (green, but these tests did not measure everything):\n%s' "$skipnotes"
 [ "$failed" -eq 0 ] || { printf 'FAILED:\n%s' "$failures"; exit 1; }
 exit 0

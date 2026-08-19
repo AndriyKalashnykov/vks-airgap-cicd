@@ -64,6 +64,24 @@ state_set() {
 state_unset() {
   local key="$1" f; f="$(state_file)"
   [ -f "$f" ] || return 0
+  # B142 — DO NOT EDIT A SINK THIS PROCESS NEVER SOURCED. `load_env` publishes `_VKS_STATE_SOURCED`
+  # from inside its own `if state_check` branch, so it answers exactly the question a WRITE path has:
+  # "could this sink's pin possibly be shadowing me?" If it was not sourced, the pin is inert and
+  # clearing it accomplishes nothing — while the file may belong to ANOTHER cluster. Measured in the
+  # idea round: with no explicit KUBECONFIG, three keys were stripped from a sink stamped for a
+  # different cluster and `state_check` never refused, because its early return is a READ-path
+  # concession (`[ -n "$_VKS_EXPLICIT_KUBECONFIG" ] || return 0`) with no meaning here.
+  # ⚠️ RETURN 0, NOT 1. This is not a failure: the caller's INTENT — "make sure this key is not
+  # pinned" — is already satisfied, because an unsourced pin cannot shadow. Returning 1 would abort
+  # `env_publish`'s pair under `set -e`, which is the half-written-credential defect this file's own
+  # header records.
+  # ⚠️ UNSET means load_env never ran; PROCEED. Many callers legitimately never call it, and a
+  # fail-closed default would break every one of them.
+  if [ "${_VKS_STATE_SOURCED-1}" = "0" ]; then
+    log_warn "state_unset ${key}: the sink was NOT sourced in this process, so its pin cannot be"
+    log_warn "  shadowing anything — leaving $(basename "$f") untouched (it may belong to another cluster)."
+    return 0
+  fi
   grep -qE "^${key}=" "$f" 2>/dev/null || return 0
   # 0600 is preserved deliberately: a fresh file created by the redirect would take the umask, and
   # this sink holds generated credentials. Write beside it, then move over it.

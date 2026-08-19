@@ -61,6 +61,42 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
     cadence you have not read.** Run 6: a `[N/24]` progress marker logs only on *pull completion*, so
     a row that pushed blobs for 13 minutes looked stalled while it was perfectly healthy. It finished
     GREEN, and on that false reading a correct diagnosis was nearly revised.
+4a. ⚠️ **AND THAT INSTRUMENT IS STILL INSUFFICIENT — THE HOST LOG LAGS THE BOX BY MINUTES, because a
+    walk's output is ssh'd from a NON-TTY and the far side BLOCK-BUFFERS it.** Rule 4 tells you to use
+    the tail *and* the mtime. Run 8, row 2, measured: the log's mtime age was **555s** and its size was
+    frozen at **95,299 bytes** — both of rule 4's signals said stalled — while a read-only `ps` on the
+    walk box showed **three different `crane validate` invocations inside 40 seconds**. The log then
+    flushed and its age dropped to 31s. Nothing was wrong; the pipe was simply holding ~9 minutes of
+    output. For scale: the same row's healthy baseline was a **15s** maximum inter-image gap, so the
+    false signal was 35x the real one — comfortably enough to look fatal.
+    **So liveness is read from the ARTIFACT ON THE BOX, never from the host log** (this repo's own
+    "detect by ARTIFACT, not by a proxy" rule, applied to the walk):
+
+    ```sh
+    K=/var/tmp/vks-walkbox/id_ed25519; IP=<vm ip from FINAL<N>.log>
+    O=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=10 -i "$K")
+    timeout 20 ssh -n "${O[@]}" "vks@${IP}" 'ps -eo etime,args | grep -E "^ *[0-9:]+ (crane|kubectl|helm|make) " | head -3'
+    ```
+
+    Sample it **twice**, ~20s apart. Two *different* commands is progress, full stop. The identical
+    command with a growing `etime` is **not** a hang by itself — ⚠️ **that sharper-sounding rule was
+    WRONG and was corrected the same day.** A composite step legitimately runs for many minutes:
+    measured, `make verify` alone took 3m15s and 2m57s in the two scenario-1 rows and **6m16s** in a
+    scenario-2 row that finished GREEN. So the identical command is a hang only once its `etime`
+    exceeds **that step's own baseline**, which you get from a previous row's log.
+    ⚠️ **AND THE BASELINE MUST COME FROM THE SAME SCENARIO.** Run 8 row 5 (scenario-2) sat at 5m42s
+    on `make verify`. Against the scenario-1 rows that reads as **1.7x slow** and invites a wrong
+    diagnosis; against run 6's scenario-2 row — same OS, same step, GREEN — it is comfortably
+    normal. The scenarios are different code paths; comparing across them is the wrong comparator,
+    and it is the easy mistake because the scenario-1 numbers are the ones in front of you.
+    `-n` is load-bearing (it stops ssh eating the caller's stdin), and this is READ-ONLY — never run
+    anything on the box that writes, per H.
+    (This is also the argument for the per-run output directory: a previous run's row log IS the
+    baseline, and a flat layout clobbers it.)
+    **A hang here is unbounded**, which is why the distinction matters: `walk-doc.sh` has no timeout of
+    any kind, `walk-matrix.sh`'s timeouts cover only its kubectl/openssl probes, and
+    `mirror_retry` (`scripts/lib/mirror.sh:89`) retries a command that *returns* — a wedged
+    `crane pull` never returns, so nothing in the stack will ever end it.
 5. **`MATRIX FAILED` means failed** — even when every row printed `WALK DONE`. That is the harness's
     wording for *did not complete successfully*, not a claim that a row never ran.
 

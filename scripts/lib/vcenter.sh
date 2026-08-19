@@ -26,7 +26,32 @@ vc_require() {
 
 # vc_login — POST /api/session, store the token in a 0600 file, echo nothing.
 # The token is kept in a FILE (not a variable that could leak into a child's argv/environ).
+# shellcheck disable=SC2120  # ...and, transitively, SC2119 at the 8 bare call sites.
+# `--soft` is OPTIONAL BY DESIGN: eight callers are one-shot entry points that WANT the fatal
+# behaviour and correctly pass nothing; only the polling probe in wcp-service.sh passes the flag.
+# ShellCheck sees a function that reads "$1" and no caller passing one, so it suggests
+# `vc_login "$@"` — which would be WRONG here: it would forward the SCRIPT's argv into this
+# function, so `./04-install-harbor-service.sh --anything` would reach the flag parser and die
+# with "vc_login: unknown argument". Disabling SC2120 on the definition is the documented way to
+# silence the pair; do not "fix" the call sites.
 vc_login() {
+  # --soft: on a TRANSPORT failure (000) or a server-side error (5xx), WARN and `return 1` instead
+  # of dying. For a POLLING caller that is the difference between a diagnosis and a silent death.
+  #
+  # ⚠️ 401 STAYS FATAL IN BOTH MODES, and that is the load-bearing part. vCenter SSO locks the
+  # account after a small number of failures in a short window (this file's own note below says 5
+  # in 3 minutes; the operator's standing brief says 3 — operate on the SMALLER number). Dying at
+  # the FIRST 401 is what keeps a polling loop's lockout cost at exactly ONE attempt. A "bounded
+  # retry on 401" is therefore FORBIDDEN: it would turn a one-attempt burn into 2..N and is the one
+  # change that could actually lock the account out. Retrying 000/5xx costs nothing — those never
+  # reach the SSO failure counter, because no credential was ever evaluated.
+  local _soft=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --soft) _soft=1; shift ;;
+      *) die "vc_login: unknown argument $1" ;;
+    esac
+  done
   vc_require
   VC_TOKEN_FILE="${VC_TOKEN_FILE:-$(mktemp)}"
   VC_CURL_CFG="${VC_CURL_CFG:-$(mktemp)}"
@@ -48,10 +73,28 @@ vc_login() {
   code="$(curl -sS -k -o "$body" -w '%{http_code}' -X POST \
            --connect-timeout "${VC_CONNECT_TIMEOUT:-10}" --max-time "${VC_API_TIMEOUT:-60}" \
            -K "$VC_CURL_CFG" "https://${VCENTER_HOST}/api/session" 2>/dev/null || true)"
+  # ⚠️ THE SOFT SET IS 000 AND 5xx ONLY, AND THAT LINE IS DELIBERATE.
+  #   000  no HTTP response at all — nothing reached SSO, so no credential was evaluated.
+  #   5xx  the server failed to process it — likewise no credential verdict.
+  # Everything else stays FATAL even in soft mode, including 403: a permission refusal is a
+  # CREDENTIAL problem that no amount of waiting fixes, and retrying it is how you approach the
+  # lockout threshold sideways. `if`, not `[ ... ] && { ...; }` — the AND-list form returns 1 on
+  # the false branch, which under `set -e` would kill the caller from inside a case arm.
   case "$code" in
     201|200) : ;;
     401) rm -f "$body"; die "vCenter rejected VCENTER_USERNAME/VCENTER_PASSWORD (HTTP 401). NOTE: vCenter SSO locks the account after 5 failures in 3 minutes - do not retry blindly." ;;
-    000) rm -f "$body"; die "vCenter ${VCENTER_HOST} is unreachable (no HTTP response). Check the FQDN resolves and is routable from here." ;;
+    000) rm -f "$body"
+         if [ "$_soft" = 1 ]; then
+           log_warn "vCenter ${VCENTER_HOST} did not answer (no HTTP response) — expected while it restarts; will re-probe."
+           return 1
+         fi
+         die "vCenter ${VCENTER_HOST} is unreachable (no HTTP response). Check the FQDN resolves and is routable from here." ;;
+    5??) rm -f "$body"
+         if [ "$_soft" = 1 ]; then
+           log_warn "vCenter /api/session returned HTTP ${code} — server-side, expected while it restarts; will re-probe."
+           return 1
+         fi
+         die "vCenter /api/session returned HTTP ${code:-<none>}" ;;
     *)   rm -f "$body"; die "vCenter /api/session returned HTTP ${code:-<none>}" ;;
   esac
   # The body is a bare JSON string: "abc123..."

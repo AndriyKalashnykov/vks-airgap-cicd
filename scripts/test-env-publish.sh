@@ -153,6 +153,97 @@ else bad "PAIR: overlay still holds ${_left} of the pair — a half-cleared cred
 rm -f "$TD/.env.kind"
 
 
+# 8. B139 — SKIP_DOTENV=1 must WARN AND SUCCEED when nothing shadows, and still FAIL when something does.
+#    THE DEFECT WAS A MISLEADING ERROR, not merely an rc. `assert_env_effective` re-reads through
+#    `load_env`, which under SKIP_DOTENV=1 deliberately IGNORES `.env` (os.sh:582) — so the value just
+#    written there is invisible IN THIS PROCESS and the failure path fired, telling the operator
+#    "a higher-precedence file already sets HARBOR_PASSWORD ... remove that line" while naming NO LINE.
+#    They are sent to delete a line that does not exist. MEASURED before the fix: rc=1 under
+#    SKIP_DOTENV=1, rc=0 with it unset, on the IDENTICAL call.
+#    The callers are scenario-1 operator steps (22-harbor-robot, 27-use-guest-kubeconfig,
+#    28-harbor-admin-password) and the KinD e2e sets E2E_SKIP_DOTENV=1 BY DESIGN, so this is reached
+#    on every such run.
+#    ⚠️ BOTH ARMS ARE REQUIRED. A "fix" that just warns whenever SKIP_DOTENV=1 throws away the real
+#    discrimination — a genuine shadow outranks `.env` whether or not `.env` was read, and must still
+#    FAIL with the file named. Arm 2 is what stops that, and it is why this is not a message tweak.
+setup
+_out="$( cd "$TD" && REPO_ROOT="$TD" VKS_STATE_FILE="$TD/.env.state" SKIP_DOTENV=1 bash -c '
+  . scripts/lib/os.sh >/dev/null 2>&1; . scripts/lib/state.sh >/dev/null 2>&1
+  env_publish HARBOR_PASSWORD probevalue' 2>&1 )" && _rc=0 || _rc=$?
+if [ "$_rc" -eq 0 ]; then
+  ok "SKIP_DOTENV: an unverifiable-but-unshadowed write SUCCEEDS (rc=0)"
+else
+  bad "SKIP_DOTENV: rc=${_rc} with nothing shadowing — the operator is told to remove a line that
+        does not exist. Re-read with .env enabled to discriminate before accusing."
+fi
+case "$_out" in
+  *"cannot be verified here"*) ok "SKIP_DOTENV: and it SAYS why, rather than passing in silence" ;;
+  *) bad "SKIP_DOTENV: succeeded without explaining that .env was ignored in-process — a silent
+        pass here is indistinguishable from a verified one." ;;
+esac
+
+#    ARM 2: a REAL shadow must still FAIL, and still NAME the file. This is the discrimination the
+#    row's first prescription ("special-case the message") would have destroyed.
+printf 'HARBOR_PASSWORD=/LEGACY-PASS
+' > "$TD/.env.kind"
+_out2="$( cd "$TD" && REPO_ROOT="$TD" VKS_STATE_FILE="$TD/.env.state" SKIP_DOTENV=1 bash -c '
+  . scripts/lib/os.sh >/dev/null 2>&1; . scripts/lib/state.sh >/dev/null 2>&1
+  env_publish HARBOR_PASSWORD probevalue' 2>&1 )" && _rc2=0 || _rc2=$?
+#    ^ `&& rc=0 || rc=$?`, NEVER `; rc=$?`. Arm 2 makes the publish FAIL on purpose, and under
+#    `set -e` a failing command substitution in an ASSIGNMENT aborts the script — which is exactly
+#    what happened on the first attempt: arm 2 never ran and the suite exited 1 having printed no
+#    summary. Case 7 above records the same trap in its own `|| true`.
+rm -f "$TD/.env.kind"
+if [ "$_rc2" -ne 0 ]; then
+  ok "SKIP_DOTENV: a GENUINE shadow still FAILS (the discrimination survives the fix)"
+else
+  bad "SKIP_DOTENV: a real .env.kind shadow returned rc=0 — the fix warns unconditionally and has
+        thrown away the only signal that distinguishes a shadow from an unreadable .env."
+fi
+case "$_out2" in
+  *".env.kind"*) ok "SKIP_DOTENV: and the failure NAMES the shadowing file" ;;
+  *) bad "SKIP_DOTENV: the failure did not name .env.kind — naming the file IS the discriminator
+        between a real shadow and an in-process read gap." ;;
+esac
+
+
+# 9. B142 — state_unset must NOT edit a sink this process never sourced, and must still edit one it did.
+#    The predicate is `_VKS_STATE_SOURCED`, published by load_env from INSIDE its own `if state_check`
+#    branch, so it answers exactly the write-path question: "could this sink's pin be shadowing me?"
+#    `state_check` is NOT that predicate — its idea round measured it PERMITS on an unstamped sink and
+#    returns 0 early when `_VKS_EXPLICIT_KUBECONFIG` is empty, a READ-path concession. Measured there:
+#    with no explicit KUBECONFIG, three keys were stripped from a sink stamped for ANOTHER cluster.
+#    ⚠️ ALL THREE STATES ARE REQUIRED, and the third is the one that constrains the design: UNSET
+#    means load_env never ran, and many callers legitimately never call it — a fail-closed default
+#    would break every one of them. Only an explicit 0 refuses.
+#    ⚠️ AND THE REFUSAL RETURNS 0, NOT 1: the caller's intent ("this key must not be pinned") is
+#    already satisfied by an unsourced pin, and rc=1 would abort env_publish's pair under `set -e` —
+#    the half-written-credential defect case 7 above exists for.
+_su() {  # $1 = value for _VKS_STATE_SOURCED ('' = unset); echoes "<rc> <keys-left>"
+  setup; printf 'FOO=bar\nBAZ=qux\n' > "$TD/.env.state"
+  local _r
+  ( cd "$TD" && REPO_ROOT="$TD" VKS_STATE_FILE="$TD/.env.state" bash -c '
+      . scripts/lib/os.sh >/dev/null 2>&1; . scripts/lib/state.sh >/dev/null 2>&1
+      [ -n "'"$1"'" ] && export _VKS_STATE_SOURCED='"$1"'
+      state_unset FOO' ) >/dev/null 2>&1 && _r=0 || _r=$?
+  printf '%s %s' "$_r" "$(grep -c '^FOO=' "$TD/.env.state" 2>/dev/null || printf 0)"
+}
+read -r _r _left <<<"$(_su 1)"
+if [ "$_r" = 0 ] && [ "$_left" = 0 ]; then ok "STATE_SOURCED=1: the key IS removed (normal path intact)"
+else bad "STATE_SOURCED=1: rc=${_r} keys-left=${_left} — the guard is refusing on the SOURCED path,
+        which breaks every ordinary state_unset caller."; fi
+
+read -r _r _left <<<"$(_su 0)"
+if [ "$_r" = 0 ] && [ "$_left" = 1 ]; then ok "STATE_SOURCED=0: the sink is LEFT ALONE, and rc is 0"
+else bad "STATE_SOURCED=0: rc=${_r} keys-left=${_left} — an unsourced sink was edited (it may belong
+        to another cluster), or the refusal returned non-zero and will abort a publish pair."; fi
+
+read -r _r _left <<<"$(_su '')"
+if [ "$_r" = 0 ] && [ "$_left" = 0 ]; then ok "STATE_SOURCED unset: PROCEEDS (load_env never ran)"
+else bad "STATE_SOURCED unset: rc=${_r} keys-left=${_left} — unset must proceed. A fail-closed
+        default breaks every caller that legitimately never calls load_env."; fi
+
+
 echo
 echo "env_publish tests: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]
