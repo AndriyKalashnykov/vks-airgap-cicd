@@ -325,6 +325,10 @@ check-doc-make-targets: ## Gate: every `make X` a runbook tells the operator to 
 check-doc-expect-leak: ## Gate: an `**Expect:**` line must not quote a name the reader was never introduced to
 	@$(SCRIPTS)/check-doc-expect-leak.sh
 
+.PHONY: check-expect-literals
+check-expect-literals: ## Gate: every literal an `**Expect:**` line asserts must exist in the code meant to print it
+	@$(SCRIPTS)/check-expect-literals.sh
+
 .PHONY: check-doc-target-coverage
 check-doc-target-coverage: ## Gate: every operator-invocable target must be named in SOME doc (CI gates exempt themselves via `## Gate:`)
 	@$(SCRIPTS)/check-doc-target-coverage.sh
@@ -1454,7 +1458,7 @@ vendor-diagrams: ## Re-download the pinned C4-PlantUML stdlib into docs/diagrams
 	echo "vendor-diagrams: refreshed docs/diagrams/c4/ @ $(C4_PLANTUML_VERSION) — now run 'make diagrams' and verify the offline render"
 
 .PHONY: docs-lint
-docs-lint: check-readme-scenarios check-doc-expect-leak check-doc-command-count check-doc-make-targets check-doc-target-coverage check-vks-terminology check-doc-novels check-doc-robot-quoting check-vks-provenance ## Lint markdown + the README-scenario, command-count, target-coverage, VKS-terminology, doc-novels and robot-quoting gates
+docs-lint: check-readme-scenarios check-doc-expect-leak check-expect-literals check-doc-command-count check-doc-make-targets check-doc-target-coverage check-vks-terminology check-doc-novels check-doc-robot-quoting check-vks-provenance ## Lint markdown + the README-scenario, command-count, target-coverage, VKS-terminology, doc-novels and robot-quoting gates
 	@# NOTE: diagrams-check is deliberately NOT a prerequisite here. It `docker run`s the pinned
 	@# PlantUML image (a ~478 MB pull, cold) and re-renders every .puml — so making it unconditional
 	@# meant a README-only PR paid for a full JVM render of seven diagrams it never touched. `make ci`
@@ -1488,7 +1492,7 @@ check-lib-sourcing: ## Gate: a script that CALLS a lib function must SOURCE the 
 .PHONY: static-check
 .PHONY: static-check-fast
 #check-static-fast: @ The CHEAP half of static-check: the alignment/doc/env gates only (~9s, no toolchain)
-static-check-fast: check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
+static-check-fast: check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
 
 # static-check is the UNION, so there is exactly ONE list. Defining the fast set separately and
 # leaving static-check with its own hand-typed copy is the enumerated-list rot this repo keeps

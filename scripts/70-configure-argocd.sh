@@ -347,7 +347,7 @@ fi
 # MEASURED, matrix row 5, 2026-08-17 07:17:42Z: the probe was RIGHT and was then contradicted one
 # line later —
 #     WARN  the argocd API probe FAILED TO ANSWER (STALE_CA) ... Not selecting the api mechanism
-#     INFO  write mechanism: api  (kubectl=no, argocd-api=unknown)
+#     INFO  write mechanism: <the chosen mechanism>  (kubectl=no, argocd-api=unknown)
 # and the run went on to create a namespace, apply PSA labels and mint an image-pull secret before
 # dying with a GUESSED AppProject/RBAC cause. We already HOLD the classified reason at this point;
 # this refuses before any of that side-effecting work and says what we actually measured.
