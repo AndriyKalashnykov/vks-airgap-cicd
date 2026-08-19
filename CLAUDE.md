@@ -697,6 +697,14 @@ The lab is UP but **partially built**, and two things about it are worth knowing
   cutting, the remedy is `make fetch-supervisor-ca`, and `secrets/vmca-root.pem` is stale too
   (measured rc=60 against the live vCenter).
 
+🔴 **And the credentials `make creds-show` prints DO NOT WORK — measured, not assumed.**
+`make env-validate` (which is the standalone Harbor-auth entry point, a fact worth knowing because
+there is no `make harbor-auth`) reported `Harbor reachable (https://harbor.env1.lab.test)` followed
+immediately by **`Harbor rejected HARBOR_USERNAME/HARBOR_PASSWORD (HTTP 401)`**, plus the stale
+kubeconfig. So the Harbor password in `.env` belongs to a lab that no longer exists — and
+`creds-show` said in as many words that it could not tell you that, which is the report working as
+designed rather than a defect. A re-cut regenerates them; **do not chase the 401 before the cut.**
+
 That state incidentally **confirmed B166 on real infrastructure**: with the cluster unreachable and
 `creds-show` reduced to "cluster: not reachable", `make ca-status` still returned a definitive
 verdict and named the remedy. The circular gate that row describes is genuinely broken.
