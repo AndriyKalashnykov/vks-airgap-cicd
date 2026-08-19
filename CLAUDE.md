@@ -638,7 +638,7 @@ half the deliverable, not a formality. Nothing has been tagged.
 | **`make fetch-vcenter-ca` — NEW** | Without it the fix is an **outage**: `VCENTER_CA_FILE` appeared **0 times** in `docs/`, so scenario-1 rows 1–4 would have died at **Step 2**, before Harbor, on this very cut. It selects the root **by handshake**, never by subject — every cut mints a new VMCA with a byte-identical subject. |
 | **B70 — owner decision taken: option C** | Adopt `tkg.tanzu.vmware.com/tkg-registry-additional-ca-cert` as the documented VKS path, KinD explicitly second-class. **NOT started.** Needs an idea round AND a lab, and it knowingly widens the stand-in/lab divergence. |
 | **B191, B174, B166, B188, B145, B192 — closed** | See their rows; each carries its measurements. |
-| **B193, B194 — newly filed** | The vCenter ladder has **no PIN** (`VCENTER_CA_SHA256` does not exist), so do **not** claim parity with the Harbor/ArgoCD/Supervisor ladders. `vc_api` still cannot tell 200 from truncated-after-200. |
+| **B193, B194, B195 — newly filed** | The vCenter ladder has **no PIN** (`VCENTER_CA_SHA256` does not exist), so do **not** claim parity with the Harbor/ArgoCD/Supervisor ladders. `vc_api` still cannot tell 200 from truncated-after-200. |
 
 ### Distrust these
 
@@ -663,8 +663,16 @@ half the deliverable, not a formality. Nothing has been tagged.
   exist (the doc was restructured; §4a is gone, §5/§6/§8 are different sections now). Re-derive from
   `docs/reviews/2026-08-04-first-real-lab-measurements.md` against the CURRENT document. Do **not**
   map the old numbers by guessing.
-- **B193** — needs `VCENTER_CA_SHA256` wired through `ca_pin_verdict`; until then the vCenter path
-  is TOFU redeemed only by the printed fingerprint.
+- **B193 / B195** — 🔴 **an owner decision, and the design first prescribed for B193 is REFUTED.** Wiring
+  `ca_pin_verdict` into `_vc_tls` would print a FALSE fingerprint-mismatch on a CORRECT anchor
+  (`lib/vcenter.sh` does not source `lib/tls.sh` — verified by execution, `command -v` returns NOT
+  AVAILABLE). And a pin at CONSUMPTION buys nothing: it ships commented, so the normal case is unset,
+  and `make fetch-vcenter-ca` fetches over `curl -sk` from the very host being authenticated. **A pin
+  is only a control if its value PREDATES the fetch** ⇒ it belongs in the PRODUCER, with
+  `fetch-ca.sh`'s arms. **The decision you owe:** that gate `die`s with no TTY, and both fetches are
+  walked steps, so it reddens rows 1–4 unless the harness supplies the digests. Supply them, accept
+  red rows, or ship the gate TTY-only. **B195** is the same fix for `fetch-supervisor-ca.sh` — only
+  2 of 4 `fetch-*-ca` producers have the gate, and the two without are the SSO-admin pair.
 - **B26, B69, B104, B156, B160, B175, B178, B189, B190, B192, B194** — see their rows.
 
 **Row counts at handoff: 3 red / 13 amber / 25 green.** B26, B70 and B77 are the three reds, and
@@ -672,7 +680,11 @@ half the deliverable, not a formality. Nothing has been tagged.
 colour:
 
 - **B70** is now DECIDED (option C) but needs an idea round and a lab; nothing is started.
-- **B77**'s remaining half cannot be executed as written — its section numbers no longer exist.
+- **B77 is CLOSED** (2026-08-19): all five of the source review's findings are settled — the vCenter
+  REST capability went 0→23 hits in code, and the `yq`-creates-a-key trap is closed by construction
+  (anchored `awk`, which cannot create a key, plus a no-placeholder-survives assertion). I briefly
+  raised the missing browser flow as an owner decision; that was **my error** — the browser path is
+  an OPTION, not the default, and REST-as-default is exactly what the review asked for.
 - **B26**'s fix (3) is REFUTED as specified (measured: one non-zero cell in twenty-eight — the
   gate would be satisfied by the upstream chart, not by us) and it carries an explicit
   (a)–(f) rebuild spec if anyone wants it. Its remaining residual is **lab-gated**: one command,
@@ -697,6 +709,14 @@ The lab is UP but **partially built**, and two things about it are worth knowing
   cutting, the remedy is `make fetch-supervisor-ca`, and `secrets/vmca-root.pem` is stale too
   (measured rc=60 against the live vCenter).
 
+🔴 **And the credentials `make creds-show` prints DO NOT WORK — measured, not assumed.**
+`make env-validate` (which is the standalone Harbor-auth entry point, a fact worth knowing because
+there is no `make harbor-auth`) reported `Harbor reachable (https://harbor.env1.lab.test)` followed
+immediately by **`Harbor rejected HARBOR_USERNAME/HARBOR_PASSWORD (HTTP 401)`**, plus the stale
+kubeconfig. So the Harbor password in `.env` belongs to a lab that no longer exists — and
+`creds-show` said in as many words that it could not tell you that, which is the report working as
+designed rather than a defect. A re-cut regenerates them; **do not chase the 401 before the cut.**
+
 That state incidentally **confirmed B166 on real infrastructure**: with the cluster unreachable and
 `creds-show` reduced to "cluster: not reachable", `make ca-status` still returned a definitive
 verdict and named the remedy. The circular gate that row describes is genuinely broken.
@@ -711,7 +731,12 @@ verdict and named the remedy. The circular gate that row describes is genuinely 
 3. `kubectl get mutatingwebhookconfiguration -o yaml | grep -A8 namespaceSelector` on a VKS guest
    cluster with Istio — **B26**'s residual. The shipped inject-defences were rendered against
    upstream 1.30.3; VKS ships `1.28.2+vmware.1-vks.1` and Broadcom could patch the template.
-4. `stat -c %a ./secrets/*.kubeconfig` after `make vks-login` — **already answered** on this box
+4. **Operator action, not an agent's** — the lab CA in YOUR browser goes stale on every cut, and the
+   subject DN is byte-identical so nothing looks wrong. Measured 2026-08-19: the stored
+   `nested-vsphere-lab` entry gives **rc=60** against the live vCenter while the correct anchor gives
+   rc=0, so Chrome shows an error page on the vCenter UI. Remedy (yours to run):
+   `certutil -D -d sql:$HOME/.pki/nssdb -n nested-vsphere-lab`, then re-add the current one. **B178.**
+5. `stat -c %a ./secrets/*.kubeconfig` after `make vks-login` — **already answered** on this box
    (every one is 600, the `vcf` CLI writes them correctly), so only re-check if that changes.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
