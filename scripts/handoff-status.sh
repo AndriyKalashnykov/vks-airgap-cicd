@@ -47,7 +47,18 @@ printf '%s\n' "$(sed -n "${s}p" CLAUDE.md)" >&2
 last="$(git log -1 --format=%H -L "${s},${e}:CLAUDE.md" 2>/dev/null | head -1)"
 [ -n "${last:-}" ] || { log_warn "handoff-status: cannot locate the handoff's last edit (shallow clone?)."; exit 0; }
 
-since="$(git log --oneline "${last}..main" 2>/dev/null || true)"
+# ⚠️ COMPARE AGAINST origin/main, NOT the local `main` ref. `git fetch` updates
+# refs/remotes/origin/main; it does NOT move refs/heads/main, and in a `git worktree` the local
+# `main` belongs to a DIFFERENT checkout entirely and is routinely far behind. MEASURED 2026-08-19
+# in a worktree whose local main was 18 commits stale: `${last}..main` reported **0** while
+# `${last}..origin/main` reported **2** — so this printer, whose whole job is to stop a handoff
+# being written before the last merge, certified a STALE handoff as current. A false green in a
+# session-end tool. Prefer the branch's own upstream, fall back to origin/main, then local main
+# (a clone with no remote). RED-proof: run it from a worktree with a stale local `main`.
+_hs_ref="$(git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || true)"
+[ -n "${_hs_ref:-}" ] || _hs_ref="$(git rev-parse --verify -q --abbrev-ref origin/main 2>/dev/null || true)"
+[ -n "${_hs_ref:-}" ] || _hs_ref=main
+since="$(git log --oneline "${last}..${_hs_ref}" 2>/dev/null || true)"
 n="$(printf '%s' "$since" | grep -c . || true)"
 log_info "handoff-status: the handoff was last edited by $(git log -1 --format='%h (%ad)' --date=short "$last" 2>/dev/null); ${n} commit(s) on main since."
 if [ "${n:-0}" -gt 0 ]; then
