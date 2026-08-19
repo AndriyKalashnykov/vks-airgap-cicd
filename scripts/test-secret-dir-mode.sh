@@ -83,7 +83,12 @@ fi
 # ⚠️ THE PORTABILITY GUARD, and it is the one that matters most for this row. Both previous fixes
 # were GNU-only no-ops on toybox. These cases cannot catch that — they run on a dev box — so
 # assert the IDIOM instead.
-if grep -q 'pwd -P' scripts/lib/os.sh && ! grep -A25 '^ensure_secret_dir()' scripts/lib/os.sh | grep -q 'realpath'; then
+# ⚠️ The `realpath` arm is a HERESTRING, not a pipe. `producer | grep -q` lets grep exit at its
+# first match, SIGPIPEs the producer, and under pipefail reports a FOUND pattern as ABSENT — which
+# here would silently turn "someone reintroduced realpath" into a CLEAN pass, i.e. the false green
+# this whole guard exists to prevent. `check-grep-q-pipe` caught it in this very file.
+_body="$(grep -A25 '^ensure_secret_dir()' scripts/lib/os.sh)"
+if grep -q 'pwd -P' scripts/lib/os.sh && ! grep -q 'realpath' <<< "$_body"; then
   ok 'the helper resolves with `cd … && pwd -P`, not realpath (toybox has no guaranteed realpath)'
 else
   bad "ensure_secret_dir must not use realpath: 31-fetch-argocd-kubeconfig.sh:59 records that
