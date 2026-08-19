@@ -680,12 +680,11 @@ half the deliverable, not a formality. Nothing has been tagged.
 colour:
 
 - **B70** is now DECIDED (option C) but needs an idea round and a lab; nothing is started.
-- **B77** is now RE-DERIVED (2026-08-19): four of the source review's five findings have LANDED
-  (the vCenter REST capability went 0→23 hits in code; the `yq`-creates-a-key trap is closed by
-  construction with anchored `awk` + a no-placeholder-survives assertion). **One gap left, and it
-  is a decision, not code:** the browser flow was DROPPED against an Action that said keep it and
-  cited you — `scenario-1.md` has zero 'vSphere Client'/'Add New Service' occurrences and it did
-  not relocate. Restore it, declare it superseded by the REST path, or leave it — your call.
+- **B77 is CLOSED** (2026-08-19): all five of the source review's findings are settled — the vCenter
+  REST capability went 0→23 hits in code, and the `yq`-creates-a-key trap is closed by construction
+  (anchored `awk`, which cannot create a key, plus a no-placeholder-survives assertion). I briefly
+  raised the missing browser flow as an owner decision; that was **my error** — the browser path is
+  an OPTION, not the default, and REST-as-default is exactly what the review asked for.
 - **B26**'s fix (3) is REFUTED as specified (measured: one non-zero cell in twenty-eight — the
   gate would be satisfied by the upstream chart, not by us) and it carries an explicit
   (a)–(f) rebuild spec if anyone wants it. Its remaining residual is **lab-gated**: one command,
