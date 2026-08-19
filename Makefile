@@ -549,6 +549,9 @@ use-guest-kubeconfig: ## Point the rest of the walk at the GUEST cluster (publis
 	@$(SCRIPTS)/27-use-guest-kubeconfig.sh
 
 .PHONY: fetch-supervisor-ca
+fetch-vcenter-ca: ## Fetch the trust anchor that verifies VCENTER itself (scenario-1 §1b, BEFORE §2) — picks it from vCenter's own bundle BY HANDSHAKE, writes ./secrets/vcenter-ca.pem, prints the fingerprint to confirm out of band
+	@$(SCRIPTS)/fetch-vcenter-ca.sh
+
 fetch-supervisor-ca: ## Fetch the CA that signed the Supervisor's cert FROM VCENTER (scenario-1 §3) — picks the right root, verifies it, prints the fingerprint to confirm out of band
 	@$(SCRIPTS)/fetch-supervisor-ca.sh
 

@@ -190,6 +190,48 @@ now.
 nothing. So if a storage policy or VM class turns out to be missing, fix it in vCenter (or delete
 and recreate the namespace); re-running with a corrected `.env` is a no-op.
 
+### First, give vCenter a trust anchor — this step and the next two will refuse without one
+
+Everything from here that talks to vCenter sends your **SSO administrator password**, so it will not
+open that connection to a peer whose identity it has not verified. A lab vCenter serves a self-signed
+certificate, so out of the box there is nothing to verify against and the command stops. One command
+fixes it, and it needs no credentials:
+
+```bash
+make fetch-vcenter-ca
+```
+
+It downloads vCenter's own root bundle from `https://<VCENTER_HOST>/certs/download.zip` (the
+*"Download trusted root CA certificates"* link on the vCenter landing page), picks the root that
+actually **verifies** your vCenter — by performing a handshake, not by comparing subject names — and
+writes it to `./secrets/vcenter-ca.pem`, where every later step finds it on its own.
+
+**Expect:** `verified vCenter by handshake:` followed by **1** — then the file it wrote, its expiry,
+and a **SHA-256 fingerprint**. A `0` there means none of vCenter's own roots verifies the name in
+`VCENTER_HOST`, and the command tells you which of the two causes it is.
+
+⚠️ **Confirm that fingerprint with your platform team over a channel that is not this connection.**
+The anchor was pulled off the very wire it is meant to authenticate, so until you check the digest
+against a second source, what you have is trust-on-first-use. The fingerprint authenticates it; the
+transport it arrived over does not.
+
+⚠️ **Do not reuse `./secrets/supervisor-ca.crt` for this.** It is a different CA — measured on a live
+lab, it fails to verify vCenter (`rc=60`) while the root above succeeds. Nor should you reuse a
+`vmca-root.pem` left over from an earlier lab: **every cut mints a new VMCA with a byte-identical
+subject**, so a stale file looks correct and verifies nothing. `make fetch-vcenter-ca` is safe to
+re-run after any re-cut and is the reliable way to get a current one.
+
+If you have a reason to proceed without verifying — a throwaway lab you are about to destroy — you
+can opt out for a single run, deliberately, per command:
+
+```bash
+VCENTER_INSECURE=1 make vsphere-namespace
+```
+
+Never do that on a lab you did not build yourself: it sends the SSO administrator password to a peer
+whose identity has not been checked. Putting `VCENTER_INSECURE=1` in `.env` is worse still, because it
+silently applies to every future run on that box.
+
 ```bash
 make vsphere-namespace
 ```
