@@ -614,7 +614,7 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-19 — READY FOR A NEW LAB CUT. B133 (the last CRITICAL) is closed and lab-measured
+## ▶️ HANDOFF 2026-08-19 — READY FOR A NEW LAB CUT. Nothing blocks it; the certification does not cover today's `main`
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
@@ -631,8 +631,10 @@ every cut, driving Chrome where an HTTP probe is not proof.
 Run 8 (`/tmp/walk/VERDICT-20260818T212147Z-1408277.txt`) is **`MATRIX COMPLETE — walked 6 of 6
 designed rows`**, all rows **0 FAILED / 0 UNMET**. It certifies commit **`021c6a3`**.
 `main` has since moved. `git diff --name-only 021c6a3..origin/main` is the only honest answer to
-"is main certified?" — at handoff time that was **11 commits**, 14 files of which are walked
-scripts or walked docs. **So the first-go clock is reset and the next cut is what re-earns it.**
+"is main certified?" — **re-measured at this handoff: 19 commits, 49 files, 41 of them walked
+scripts or walked docs** (it was 11/14 one handoff ago, so the drift is growing, not settling).
+**The first-go clock is reset and the next cut is what re-earns it.** Do not quote the 11/14 —
+re-run the command; every one of these numbers has rotted at least once.
 
 `B108` closes on **six rows green from the first go AND a new tag replacing `v1.0.1`** — the tag is
 half the deliverable, not a formality. Nothing has been tagged.
@@ -646,6 +648,9 @@ half the deliverable, not a formality. Nothing has been tagged.
 | **B70 — owner decision taken: option C** | Adopt `tkg.tanzu.vmware.com/tkg-registry-additional-ca-cert` as the documented VKS path, KinD explicitly second-class. **NOT started.** Needs an idea round AND a lab, and it knowingly widens the stand-in/lab divergence. |
 | **B191, B174, B166, B188, B145, B192, B190, B69, B77, B156, B194 — closed** | See their rows; each carries its measurements. Three of them (**B192**, **B189**, **B178**) are corrections to rows *I* had filed wrong, and one (**B194**) is a fix whose first RED-proof measured nothing — the control caught it, the fixture was rebuilt, and the bug turned out real: `vc_api` returned **success over a truncated body**. |
 | **B193, B195 — newly filed** | The vCenter ladder has **no PIN** (`VCENTER_CA_SHA256` does not exist), so do **not** claim parity with the Harbor/ArgoCD/Supervisor ladders. `vc_api` still cannot tell 200 from truncated-after-200. |
+| **B188 — CLOSED, and its round refuted HALF my plan** | `ARGOCD_REGISTER_INSECURE` is now honoured **only** from the pre-`load_env` environment. It disables TLS verification and the choice is written into the **ArgoCD Cluster Secret**, so every later sync to that destination skipped verification — a `.env` line was a standing downgrade **and a ratchet** (`ARGOCD_REGISTER_INSECURE=0 make gitops` could not undo it). Measured: `.env=1`+caller`0` → **0**, `.env=1`+silent → **0**, **no `.env`+caller`1` → 1** so `e2e-cross-cluster.sh:72`'s prefix still wins. **What I did NOT ship:** adding `ALLOW_PUBLIC_CHARTS`/`BUNDLE_SKIP_STATIC_CHECK` to the snapshot — measured **zero callers** anywhere in `scripts/`, `Makefile`, `docs/`, `README.md` — and the `ok`-line suppression that existed only to pay for it. |
+| **B196 — newly filed, the round's CRITICAL-class find** | `VKS_INSECURE_SKIP_TLS_VERIFY` is the same shape and **worse covered**: it reads `${V:-}`, so the clobber gate's arm (d) **structurally cannot see it** (`check-env-clobber.sh:248-250` says it is caught only *"INCIDENTALLY"*). Two consumers (`30-vks-login.sh:275`, `31-fetch-argocd-kubeconfig.sh:96`) ⇒ needs a **shared helper**, not a copy-paste, and one of them is the **VKS auth path** — so it is filed, not shipped. `30-vks-login.sh:271` already tells operators *"a credential is submitted over this connection"*. |
+| **B104, B192 — closed** | B104 **REFUTED** (see below). B192 closed here and filed where the fix lives: `nested-vsphere-lab` **B453**, PR #83, merged. |
 
 ### Distrust these
 
@@ -663,6 +668,18 @@ half the deliverable, not a formality. Nothing has been tagged.
   own verdict line.
 - **Do NOT edit `scripts/walk-matrix.sh`, `scripts/walk-doc.sh` or either scenario doc while a
   matrix runs** — bash reads a script incrementally, and the harness `scp`s those files per row.
+- ⚠️ **`git switch main` FAILS in a worktree checkout** (`fatal: 'main' is already used by worktree
+  at …`), and with `2>/dev/null` that failure is **invisible** — so the `reset --hard origin/main`
+  you chained after it lands on **whatever branch you were actually on**. I did this three times
+  today; it was harmless only because those branches were already merged. Sync by `git checkout
+  <your-branch> && git reset --hard origin/main`, and read the branch name back.
+- ⚠️ **I destroyed an uncommitted operator file this session** — `nested-vsphere-lab`'s
+  `docs/BUILD-RECEIPTS.tsv` carried an unstaged build-receipt row from the 2026-08-18 cut, and a
+  `reset --hard` inside a multi-repo sync one-liner took it. Unstaged ⇒ no blob ⇒ no git recovery.
+  `/tmp/labcut-recover2.log:323` preserves `when=2026-08-18T11:03:02Z`, `elapsed_s=1233`,
+  `steps_ran=3`, `steps_skipped=4`; `sha`/`esxi.cpu`/`forced` would be **guesses**, so no
+  reconstructed row was written — a fabricated receipt is worse than a gap. **`reset --hard` never
+  goes in a compound block, and never in a repo whose tree you did not dirty.**
 
 ### Blocked, and on what
 
@@ -692,8 +709,9 @@ byte-distinct `🟢` sequences** (11+6+5+4), `🟡` (5), `⚠️` (5), `🔴` (4
 lead with `✅`/`🟠`/`⚠️` where a status emoji is expected, so any single-emoji grep silently measures
 a **subset it chose**. An earlier version of this line said *"4 red / 8 amber / 30 green"*, which
 summed to 42 of 124 and read as a complete census; it was an artifact of which three emoji I happened
-to grep. The only defensible count is **4 rows head-marked `🔴`** — everything else needs reading.
-**None of those four is simply open work** — verified by reading each to its end, not by its colour:
+to grep. The only defensible count is the one you re-measure — **at this handoff, 5 rows head-marked
+`🔴` of 125** (B196 is the new one) — everything else needs reading. **None of the reds is simply
+open work** — verified by reading each to its end, not by its colour:
 
 - **B70** is now DECIDED (option C) but needs an idea round and a lab; nothing is started.
 - **B77 is CLOSED** (2026-08-19): all five of the source review's findings are settled — the vCenter
