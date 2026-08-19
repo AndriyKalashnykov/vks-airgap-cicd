@@ -85,9 +85,16 @@ put it at `./secrets/vks.kubeconfig` — that exact path, because it is where ev
 looks by default — and set `VKS_AUTH_METHOD=kubeconfig` in `./.env`:
 
 ```bash
-mkdir -p ./secrets
+mkdir -p ./secrets && chmod 700 ./secrets   # do this FIRST — see below
 cp "<path-to-the-kubeconfig-you-were-given>" ./secrets/vks.kubeconfig
+chmod 600 ./secrets/vks.kubeconfig
 ```
+
+That kubeconfig is a cluster credential, and `cp` gives the copy whatever mode the **source** had —
+so if you were handed a world-readable file, you now have a world-readable cluster credential and
+nothing will ever tell you: no tool on this path warns about it (checked). Hardening the directory
+**before** the copy is the load-bearing half — it is what makes the file unreachable to anyone else
+during the moment between `cp` and `chmod`. Do not reorder those two lines.
 
 Now confirm it actually arrived. Keep this as its own command: an empty or truncated copy is the
 most expensive mistake in this document, because it reports nothing here and then makes **every**

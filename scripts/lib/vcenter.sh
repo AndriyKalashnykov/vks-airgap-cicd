@@ -17,6 +17,123 @@
 # IDEMPOTENCY: `?action=checkContent` derives a service's id from the YAML WITHOUT
 # registering it. That is the only way to ask "is this already registered?" before mutating.
 
+# vcenter_ca_default — point VCENTER_CA_FILE at an anchor we can find, if the operator did not.
+#
+# PURE: no network, and it never overrides a value the operator set. Mirrors vks_ca_default()
+# in lib/tls.sh, deliberately, so there is ONE shape for "default the anchor" in this repo.
+#
+# MEASURED 2026-08-18 on a live lab: secrets/supervisor-ca.crt is NOT a vCenter anchor
+# (--cacert supervisor-ca.crt -> rc=60), while a cert taken from vCenter's own
+# /certs/download.zip bundle verifies it (rc=0). They are different CAs; `make fetch-vcenter-ca`
+# is what produces the file this function looks for.
+#
+# ⚠️ IT DELIBERATELY DOES NOT PROBE secrets/vmca-root.pem, EVEN THOUGH ONE EXISTS ON THIS BOX.
+# MEASURED the same day: that copy returns **rc=60** against the live vCenter — it is STALE, from
+# an earlier cut — and `-s` cannot tell stale from good. Defaulting to it would silently select a
+# dead anchor and then hand the operator the rc-60 die naming a file THEY NEVER CHOSE. Adding a
+# ca_verifies_endpoint check here would fix that and would put NETWORK in a function documented
+# PURE, so it stays out. When no anchor is found, _vc_tls REFUSES, which is the correct outcome.
+vcenter_ca_default() {
+  [ -n "${VCENTER_CA_FILE:-}" ] && return 0
+  # ONE path, deliberately. An earlier draft also probed ${LAB_STATE}/vmca-root.pem because the
+  # sibling lab repo produces one there — and `check-env-coverage` correctly went RED: that made
+  # LAB_STATE a variable THIS repo reads without owning or documenting, importing another repo's
+  # concept into our env contract for a path an operator can set explicitly in one line anyway.
+  # The die in _vc_tls_args names the sibling's `make trust-vcsa` in prose instead, which informs
+  # without coupling.
+  local c="${REPO_ROOT}/secrets/vcenter-ca.pem"
+  if [ -s "$c" ]; then
+    VCENTER_CA_FILE="$c"; export VCENTER_CA_FILE
+    log_info "TLS: using the vCenter anchor at ${c}"
+  fi
+  return 0
+}
+
+# _vc_tls — the ONE place that decides how a vCenter TLS connection is trusted.
+#
+# Ported from _harbor_ca_args (lib/harbor.sh), which exists for exactly this hazard and says so:
+# three functions were each re-deriving it, and the moment they drift one of them sends a
+# password over a connection another one refused to. vCenter had it WORSE -- a hardcoded `-k` on
+# all three curls, with no knob, no anchor and no pin, while Harbor, ArgoCD and the Supervisor
+# each had a trust ladder. This was the only credential-bearing TLS client in the repo with none.
+#
+# Prints curl args newline-separated; returns 1 when there is neither an anchor nor an explicit
+# opt-out, so the CALLER decides what refusing looks like at its own call site.
+#
+# INSECURE IS OPT-IN, never a fallback. That polarity matches HARBOR_INSECURE/ARGOCD_INSECURE and
+# it is the owner decision recorded in B64 ("vCenter is pre-existing customer infrastructure, so
+# this repo must fail closed"), re-confirmed 2026-08-18.
+_vc_tls() {
+  if   [ -n "${VCENTER_CA_FILE:-}" ] && [ -s "${VCENTER_CA_FILE}" ]; then printf '%s\n%s' --cacert "${VCENTER_CA_FILE}"
+  elif [ "${VCENTER_INSECURE:-0}" = 1 ];                             then printf '%s' -k
+  else return 1; fi
+}
+
+# _vc_tls_args <arrayname> [soft] — resolve the anchor and fill the array.
+#
+# Callers use it as: local -a tls; _vc_tls_args tls        (fatal — the default)
+#               or: local -a tls; _vc_tls_args tls soft    (returns 1 instead of dying)
+#
+# ⚠️ THE `soft` ARM IS NOT SYMMETRY-FOR-ITS-OWN-SAKE — it is a REGRESSION THIS CHANGE CAUSED, and
+# the gate caught it. `vc_login --soft` exists so wcp-service.sh's restart-wait can re-probe a
+# vCenter that is deliberately down; its whole contract is "RETURN non-zero, do not exit". The
+# first version of this function died unconditionally, so a box with no anchor lost the entire
+# 600s wait to a refusal on the FIRST probe — turning a recoverable restart into a hard failure.
+# test-wcp-service.sh caught it (`vc_login --soft should RETURN non-zero on 000, not exit`).
+# Refusing is still correct; dying inside a poll loop is not.
+_vc_tls_args() {
+  local -n __vc_out="$1"   # nameref: bash 4.3+. MEASURED on the real targets: photon:5.0 ships 5.3.0,
+                       # ubuntu:24.04 ships 5.2.21, host 5.2.21 — all far above the floor, and it
+                       # works under `set -u` (verified, not assumed).
+  local _soft_mode="${2:-}"
+  __vc_out=()
+  vcenter_ca_default
+  # ⚠️ ALL THREE LOCALS ARE `__vc_`-PREFIXED, and that is not cosmetic. A nameref collides
+  # SILENTLY with a caller's own variable of the same name: MEASURED, a caller passing an array
+  # named `_out` gets "circular name reference" warnings AND an empty array, but one whose locals
+  # are named `_t` or `_a` gets an empty array, rc 0, and NO warning at all. An empty array means
+  # curl runs with neither --cacert nor -k, so the CA case silently degrades to system-store
+  # verification and the insecure case silently drops -k. No caller collides today; the prefix is
+  # what keeps it that way.
+  local __vc_t __vc_a
+  if __vc_t="$(_vc_tls)"; then
+    while IFS= read -r __vc_a; do __vc_out+=("$__vc_a"); done <<< "$__vc_t"
+    return 0
+  fi
+  if [ "$_soft_mode" = soft ]; then
+    log_warn "no vCenter trust anchor (VCENTER_CA_FILE unset, ./secrets/vcenter-ca.pem absent) —"
+    log_warn "  NOT sending credentials to an unverified peer. Set VCENTER_CA_FILE, or accept the"
+    log_warn "  risk for this run with VCENTER_INSECURE=1."
+    return 1
+  fi
+  # ⚠️ NAME THE PATH THEY SET, or the message prescribes what they just did. MEASURED: with
+  # VCENTER_CA_FILE=/typo/vcenter-ca.pem the first version said "export VCENTER_CA_FILE=…" and
+  # never printed the path. `-s` is false for ABSENT and for ZERO-BYTE alike and those have
+  # different remedies. The sibling handling this SAME SSO credential already has the arm —
+  # 30-vks-login.sh:277: "VKS_CA_CERT_FILE='<path>' is set but missing or empty. Refusing to
+  # fall back…".
+  if [ -n "${VCENTER_CA_FILE:-}" ]; then
+    die "VCENTER_CA_FILE='${VCENTER_CA_FILE}' is set, but that file is missing or empty — so there
+  is no anchor to verify vCenter with, and this repo will not send the SSO administrator password
+  over a connection whose identity it has not checked.
+  Check the path, or produce the anchor with:  make fetch-vcenter-ca
+  Or accept the risk for THIS run, deliberately and per-run:  VCENTER_INSECURE=1 make <target>"
+  fi
+  die "refusing to send the vCenter SSO administrator password over a connection whose identity
+  we have not verified. vCenter is pre-existing infrastructure and this repo fails closed there.
+  Give it an anchor (any ONE of these):
+    - make fetch-vcenter-ca            (downloads vCenter's own roots and picks the one that
+                                        VERIFIES it, by handshake, writing ./secrets/vcenter-ca.pem)
+    - export VCENTER_CA_FILE=/path/to/the/vCenter/CA.pem
+    - put it at ./secrets/vcenter-ca.pem
+  vCenter serves its own roots unauthenticated at https://${VCENTER_HOST}/certs/download.zip —
+  unzip certs/lin/*.0 and keep the one that VERIFIES vCenter (prove it with a handshake, not a
+  subject compare: every lab cut mints a new VMCA with a byte-identical subject).
+  NOTE: ./secrets/supervisor-ca.crt is NOT a vCenter anchor — measured on a live lab, it returns
+  rc=60 against vCenter while the VMCA root returns rc=0.
+  Or accept the risk for THIS run, deliberately and per-run:  VCENTER_INSECURE=1 make <target>"
+}
+
 vc_require() {
   require_cmd curl jq base64
   : "${VCENTER_HOST:?VCENTER_HOST is not set (your vCenter FQDN, e.g. vcsa.env1.lab.test)}"
@@ -68,11 +185,52 @@ vc_login() {
   ( umask 077; printf 'user = "%s:%s"\n' \
       "$(esc_curlk "$VCENTER_USERNAME")" "$(esc_curlk "$VCENTER_PASSWORD")" > "$VC_CURL_CFG" )
 
-  local body code
+  local body code _crc
+  # Pass the caller's soft-ness through: in a poll loop a missing anchor must be a re-probe, not
+  # an exit. See _vc_tls_args' own note — this is the line the wcp-service test pins.
+  local -a tls
+  if [ "$_soft" = 1 ]; then _vc_tls_args tls soft || return 1; else _vc_tls_args tls; fi
   body="$(mktemp)"; chmod 600 "$body"
-  code="$(curl -sS -k -o "$body" -w '%{http_code}' -X POST \
+  # ⚠️ `|| true` IS GONE, DELIBERATELY, and the 60/77 arms below are why.
+  # Removing `-k` without capturing curl's rc would have introduced a NEW critical: rc 60 (the
+  # anchor does not verify this server) and rc 77 (the anchor file is unreadable) BOTH surface as
+  # http_code=000, which is the "unreachable" arm below — so every TRUST failure would have told
+  # the operator to go debug DNS. `&& _crc=0 || _crc=$?`, not `; _crc=$?`, because a plain
+  # assignment-then-read aborts under `set -e` (common/coding-style.md).
+  code="$(curl -sS "${tls[@]}" -o "$body" -w '%{http_code}' -X POST \
            --connect-timeout "${VC_CONNECT_TIMEOUT:-10}" --max-time "${VC_API_TIMEOUT:-60}" \
-           -K "$VC_CURL_CFG" "https://${VCENTER_HOST}/api/session" 2>/dev/null || true)"
+           -K "$VC_CURL_CFG" "https://${VCENTER_HOST}/api/session" 2>/dev/null)" && _crc=0 || _crc=$?
+  case "$_crc" in
+    0) : ;;
+    60) rm -f "$body"; die "vCenter's certificate did NOT verify against ${VCENTER_CA_FILE:-<no anchor>} (curl rc 60).
+  This is a TRUST failure, not a network one — the host answered. Most likely the lab was re-cut
+  and minted a new VMCA: every cut produces a new CA with a BYTE-IDENTICAL subject, so a stale
+  anchor looks correct and only a handshake tells you otherwise.
+  Re-fetch the anchor, or accept the risk for this run with VCENTER_INSECURE=1." ;;
+    # MEASURED: rc 77 fires on ALL of absent, empty, mode-000 AND "exists, readable, but is HTML
+    # rather than a PEM" — the last being the realistic operator error (saving the wrong file out
+    # of download.zip). The old text said "check it exists and is readable by you", which sends
+    # that operator to look at permissions that are fine.
+    77) rm -f "$body"; die "could not USE the vCenter anchor '${VCENTER_CA_FILE:-<unset>}' (curl rc 77).
+  It is missing, unreadable, or not a PEM certificate. This will say which:
+    openssl x509 -in '${VCENTER_CA_FILE:-<path>}' -noout" ;;
+    # ⚠️ 35/51 IS SOFT, 60/77 IS NOT, AND THE SPLIT IS THE WHOLE POINT OF THIS ARM.
+    # A handshake blip is fixed by WAITING; an anchor problem never is. MEASURED against a listener
+    # that accepts TCP but does not speak TLS — a proxy that has bound its port but has not finished
+    # coming up, i.e. exactly a service mid-restart: `code=000 rc=35`. And measured against the
+    # PREVIOUS code: `curl -sS -k … || true` turned rc 35 into code=000, which the `000` arm below
+    # soft-returns. So making it fatal was a REGRESSION I introduced — `make wcp-restart`'s 600s
+    # wait used to survive a TLS blip and would have died on the first one, needing no missing
+    # anchor, only the restart the target itself induces. This repo already classifies rc 35 as
+    # transport-transient twice: fetch-supervisor-ca.sh calls it "half-open … a VIP mid-move" and
+    # RETRIES it, and os.sh:1665 records the same signature.
+    35|51) rm -f "$body"
+         if [ "$_soft" = 1 ]; then
+           log_warn "the TLS handshake with ${VCENTER_HOST} failed (curl rc ${_crc}) — expected while it restarts; will re-probe."
+           return 1
+         fi
+         die "the TLS handshake with ${VCENTER_HOST} failed (curl rc ${_crc}). The host answered but the connection could not be secured." ;;
+  esac
   # ⚠️ THE SOFT SET IS 000 AND 5xx ONLY, AND THAT LINE IS DELIBERATE.
   #   000  no HTTP response at all — nothing reached SSO, so no credential was evaluated.
   #   5xx  the server failed to process it — likewise no credential verdict.
@@ -113,8 +271,22 @@ vc_last_code() { cat "${VC_CODE_FILE:-/dev/null}" 2>/dev/null; }
 
 vc_logout() {
   [ -n "${VC_HDR_FILE:-}" ] && [ -s "${VC_HDR_FILE:-/nonexistent}" ] || return 0
-  curl -sS -k -o /dev/null -X DELETE --max-time 20 -H "@${VC_HDR_FILE}" \
-    "https://${VCENTER_HOST}/api/session" 2>/dev/null || true
+  # ⚠️ THIS ONE USES _vc_tls DIRECTLY AND NEVER _vc_tls_args, because _vc_tls_args DIES and this
+  # runs as an EXIT trap. A `die` here would replace the caller's real exit status and its real
+  # error message with a TLS complaint raised during cleanup. If we cannot verify the peer we
+  # simply do not send the token to it — the session expires on its own — and we still remove the
+  # local credential files, which is the part that actually matters on this box.
+  local -a tls=(); local _t _a
+  if _t="$(_vc_tls)"; then
+    while IFS= read -r _a; do tls+=("$_a"); done <<< "$_t"
+    curl -sS "${tls[@]}" -o /dev/null -X DELETE --max-time 20 -H "@${VC_HDR_FILE}" \
+      "https://${VCENTER_HOST}/api/session" 2>/dev/null || true
+  else
+    # Not silent: the session stays alive server-side until vCenter's idle timeout, and an
+    # operator who never sees this line has no way to know that happened.
+    log_warn "no vCenter trust anchor at logout — NOT sending the session token to an unverified"
+    log_warn "  peer. The session will expire on its own; local credential files are still removed."
+  fi
   rm -f "${VC_TOKEN_FILE:-}" "${VC_CURL_CFG:-}" "${VC_HDR_FILE:-}" "${VC_CODE_FILE:-}" 2>/dev/null || true
   return 0
 }
@@ -129,7 +301,13 @@ vc_api() {
   local method="$1" path="$2"; shift 2
   local body code
   body="$(mktemp)"; chmod 600 "$body"
-  code="$(curl -sS -k -o "$body" -w '%{http_code}' -X "$method" \
+  # Same trust decision as vc_login, from the same ONE place. `|| true` is kept HERE (unlike
+  # vc_login) because this function's contract is to return non-zero on any non-2xx WITHOUT dying
+  # — some callers legitimately expect a 404 — so a transport failure has to reach them as an
+  # empty code, not as an exit. The 60/77 discrimination lives in vc_login, which every caller
+  # runs first, so a bad anchor is diagnosed there rather than surfacing here as a bare 000.
+  local -a tls; _vc_tls_args tls
+  code="$(curl -sS "${tls[@]}" -o "$body" -w '%{http_code}' -X "$method" \
            --connect-timeout "${VC_CONNECT_TIMEOUT:-10}" --max-time "${VC_API_TIMEOUT:-120}" \
            -H "@${VC_HDR_FILE}" -H 'Content-Type: application/json' \
            "$@" "https://${VCENTER_HOST}${path}" 2>/dev/null || true)"

@@ -29,6 +29,12 @@ bad() { printf 'FAIL  %s\n' "$1" >&2; fail=1; }
 # ── cases 1-2: the soft/hard split on a TRANSPORT failure ────────────────────────────────────────
 # 192.0.2.0/24 is TEST-NET-1 (RFC 5737) — guaranteed unroutable, so curl yields 000 without
 # touching anything real. The lab is NEVER contacted by this file.
+# THE SUBSHELL IS THE POINT: vc_login can `die`, and a die inside this suite's own shell would
+# end the suite instead of failing one case. Every export below is deliberately local to that
+# subshell, and each case sets what it needs afresh — shellcheck cannot see that the isolation
+# is the feature rather than a leak. (Directive LAST: prose after it is absorbed INTO it and
+# yields SC1073 'couldn't parse this shellcheck directive'.)
+# shellcheck disable=SC2030,SC2031
 probe() {
   # $1 = extra args for vc_login. Runs in a SUBSHELL so a `die` cannot kill this suite; the
   # subshell's rc tells us which happened, and the marker tells us it RETURNED rather than exited.
@@ -37,6 +43,17 @@ probe() {
     . scripts/lib/vcenter.sh
     export VCENTER_HOST="${ORACLE_HOST:-192.0.2.1}" VCENTER_USERNAME='probe@vsphere.local' \
            VCENTER_PASSWORD='NOT-A-REAL-PASSWORD' VC_CONNECT_TIMEOUT=2 VC_API_TIMEOUT=3
+    # ⚠️ THE ORACLE'S OWN CA, OR THE HTTP CASES BELOW ARE UNREACHABLE.
+    # Since B133 vc_login FAILS CLOSED: with no trust anchor it refuses BEFORE any credential
+    # leaves the box. That is the point of the change — but it means a test that wants to reach a
+    # 401 or a 503 must first give the client something to trust, exactly as an operator would.
+    # Without this the 401 case silently became "refused at TLS" and reported rc=9, i.e. it read
+    # as "--soft softened the 401" when nothing of the sort had happened. A test that cannot
+    # reach its own subject is not testing it.
+    # ORACLE_CA is unset for the unreachable-host cases above, where refusing and failing to
+    # connect are indistinguishable anyway and the assertion is about RETURN-vs-EXIT.
+    [ -n "${ORACLE_CA:-}" ] && export VCENTER_CA_FILE="$ORACLE_CA"
+    [ -n "${ORACLE_CA:-}" ] || export VCENTER_INSECURE=1
     vc_login ${1:+"$1"} && exit 0
     printf 'RETURNED\n'          # only reachable if vc_login RETURNED non-zero instead of exiting
     exit 9
@@ -67,8 +84,14 @@ else
   T="$(mktemp -d)"; SRV=""
   # shellcheck disable=SC2064  # expand T/SRV NOW: the trap must clean up even if this shell dies.
   trap "rm -rf '$T'; [ -n \"\${SRV:-}\" ] && kill \"\$SRV\" 2>/dev/null" EXIT
+  # ⚠️ THE IP SAN IS LOAD-BEARING, and its absence produced a FALSE PASS. The oracle is dialled as
+  # 127.0.0.1, so a cert with only CN=localhost is REJECTED by curl (rc 60) since Go/OpenSSL stopped
+  # honouring CN — and since B133 that rc is a fatal TRUST arm. MEASURED while adding ORACLE_CA: the
+  # 401 case went green having died at TLS and never reached the 401 at all, while the 503 case (which
+  # expects a soft RETURN) correctly went red at rc=1 and is the only reason the false pass was
+  # noticed. Both cases must reach their HTTP code or neither is measuring anything.
   if openssl req -x509 -newkey rsa:2048 -keyout "$T/k.pem" -out "$T/c.pem" -days 1 -nodes \
-       -subj "/CN=localhost" >/dev/null 2>&1; then
+       -subj "/CN=localhost" -addext "subjectAltName=IP:127.0.0.1" >/dev/null 2>&1; then
     cat > "$T/srv.py" <<'PY'
 import http.server, ssl, sys, os
 CODE = int(os.environ["ORACLE_CODE"])
@@ -86,7 +109,7 @@ PY
       P=$(( 20000 + RANDOM % 10000 ))
       ORACLE_CODE="$code" python3 "$T/srv.py" "$P" "$T/c.pem" "$T/k.pem" & SRV=$!
       sleep 1.5
-      out="$(ORACLE_HOST="127.0.0.1:${P}" probe --soft)"; rc=$?
+      out="$(ORACLE_HOST="127.0.0.1:${P}" ORACLE_CA="$T/c.pem" probe --soft)"; rc=$?
       kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null; SRV=""
       if [ "$want" = fatal ]; then
         if [ "$rc" != 9 ]; then
@@ -158,6 +181,56 @@ $(tail -3 "$W/s.log")"
 else
   printf "SKIP  wait_for arms: could not build the copy-sandbox\\n" >&2
 fi
+
+
+# ── cases 6-7: the REFUSAL arm — no anchor, no opt-in ────────────────────────────────────────────
+# ⚠️ THESE BYPASS probe(), AND THAT IS THE POINT. probe() supplies VCENTER_CA_FILE when ORACLE_CA is
+# set and VCENTER_INSECURE=1 otherwise, so EVERY case above takes one of the two branches and NONE
+# reaches "neither" — the single most important behaviour in the B133 change ("refuse before any
+# credential leaves the box") and the `soft` arm added to fix a regression a test caught were both
+# unpinned. An implementation round found that; a hand-run RED-proof expires at the next commit.
+#
+# `env -u` scrubs the AMBIENT environment too: without it a stray ./secrets/vcenter-ca.pem on the
+# test box makes vcenter_ca_default fire, the cases take the --cacert branch, and the suite reports
+# the same verdict having exercised a different path. (test-insecure-toggle-snapshot.sh:50 records
+# the same lesson.)
+# THE SUBSHELL IS THE POINT: vc_login can `die`, and a die inside this suite's own shell would
+# end the suite instead of failing one case. Every export below is deliberately local to that
+# subshell, and each case sets what it needs afresh — shellcheck cannot see that the isolation
+# is the feature rather than a leak. (Directive LAST: prose after it is absorbed INTO it and
+# yields SC1073 'couldn't parse this shellcheck directive'.)
+# shellcheck disable=SC2030,SC2031
+refusal_probe() {
+  ( set -uo pipefail
+    . scripts/lib/os.sh >/dev/null 2>&1
+    . scripts/lib/vcenter.sh
+    export VCENTER_HOST='192.0.2.1' VCENTER_USERNAME='probe@vsphere.local' \
+           VCENTER_PASSWORD='NOT-A-REAL-PASSWORD' VC_CONNECT_TIMEOUT=2 VC_API_TIMEOUT=3 \
+           REPO_ROOT="$1"
+    vc_login ${2:+"$2"} && exit 0
+    printf 'RETURNED\n'
+    exit 9
+  ) 2>&1
+}
+
+# REPO_ROOT points at an empty dir so ./secrets/vcenter-ca.pem cannot exist there.
+_NOCA="$(mktemp -d)"
+out="$(env -u VCENTER_CA_FILE -u VCENTER_INSECURE bash -c "$(declare -f refusal_probe); cd '$PWD'; refusal_probe '$_NOCA' --soft")"
+rc=$?
+if [ "$rc" = 9 ] && printf '%s' "$out" | grep -q RETURNED; then
+  ok "no anchor + --soft: RETURNS (a poll loop survives to re-probe rather than dying on probe 1)"
+else
+  bad "no anchor + --soft must RETURN, not exit — this is the regression the soft arm exists to fix. rc=${rc}"
+fi
+
+out="$(env -u VCENTER_CA_FILE -u VCENTER_INSECURE bash -c "$(declare -f refusal_probe); cd '$PWD'; refusal_probe '$_NOCA'")"
+rc=$?
+if [ "$rc" != 9 ] && printf '%s' "$out" | grep -q 'refusing to send'; then
+  ok "no anchor, no opt-in: REFUSES and says so (the password never reaches an unverified peer)"
+else
+  bad "no anchor must refuse with the 'refusing to send' message. rc=${rc} out='$(printf '%s' "$out" | tail -2 | tr '\n' ' ')'"
+fi
+rm -rf "$_NOCA"
 
 [ "$fail" -eq 0 ] || exit 1
 printf 'SUCCESS — wcp-service survives a transport blip, still dies on a bad credential, and each\n'

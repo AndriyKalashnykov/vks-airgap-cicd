@@ -73,7 +73,7 @@ probe() {
 }
 
 # ── ARM 1: the caller's EXPLICIT choice must beat the overlay / .env ──────────────────────────────
-for v in HARBOR_INSECURE ARGOCD_INSECURE; do
+for v in HARBOR_INSECURE ARGOCD_INSECURE VCENTER_INSECURE; do
   got="$(probe .env.state "${v}=1" "$v" 0)"
   if [ "$got" = 0 ]; then
     ok "${v}: caller 0 beats a .env.state 1 (TLS verification cannot be pinned off)"
@@ -94,7 +94,7 @@ else
 fi
 
 # ── ARM 2: with the caller SILENT, the overlay must still apply (the KinD flow depends on it) ─────
-for v in HARBOR_INSECURE ARGOCD_INSECURE; do
+for v in HARBOR_INSECURE ARGOCD_INSECURE VCENTER_INSECURE; do
   got="$(probe .env.state "${v}=1" "$v" '')"
   if [ "$got" = 1 ]; then
     ok "${v}: caller silent -> the overlay still wins (the insecure KinD flow is not broken)"

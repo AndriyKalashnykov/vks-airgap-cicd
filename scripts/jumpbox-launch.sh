@@ -75,7 +75,25 @@ esac
 HARBOR_INSECURE="${HARBOR_INSECURE:-0}"
 
 WORK="${REPO_ROOT}/.jumpbox"
-mkdir -p "$WORK"
+# B191: this directory holds a SUPERVISOR kubeconfig — a cluster-admin credential — and it is
+# OUTSIDE secrets/, so `ensure_secret_dir`'s containment predicate provably does not match it
+# (measured: it matches only ${REPO_ROOT}/secrets and ${REPO_ROOT}/*/secrets). A bare `mkdir -p`
+# left it at the operator's umask: MEASURED 775, with the kubeconfig itself 664 (`cp` inherits the
+# source's mode) or 664 (the redirect). Twenty-seven lines below, the CA is written with an
+# explicit `install -m 0644` AND a written reason — the credential had neither.
+#
+# ⚠️ THE DIRECTORY, NOT THE FILE, AND THAT IS MEASURED RATHER THAN CAUTIOUS. The container runs
+# `USER vks` whose uid is assigned by the BASE IMAGE: photon:5.0 gives 1000, ubuntu:24.04 gives
+# 1001 (both measured by running the Dockerfiles' own useradd). The host file is owned by uid 1000,
+# so at 664 the ubuntu cell reads it through the `other` bit and at 600 it CANNOT — that is this
+# repo's recorded 0600-unreadable class, and it is why the CA beside it is deliberately 0644.
+# Hardening the DIRECTORY is safe because every mount here is a FILE bind-mount (`:180` mounts
+# ${WORK}/kubeconfig directly), so the container never traverses this directory at all.
+#
+# `chmod` as its own statement, NOT `mkdir -p -m 700`: measured in B174, `-m` is IGNORED when the
+# directory already exists, so the naive form is a silent no-op on exactly the boxes that have the
+# defect — and `install -d -m` is additionally ignored by toybox, the primary air-gap OS.
+mkdir -p "$WORK" && chmod 700 "$WORK"
 
 # The kubeconfig the CONTAINER will use: `--internal` gives the address reachable from INSIDE the kind
 # network (the host-facing one points at 127.0.0.1, which in the container is the container itself).

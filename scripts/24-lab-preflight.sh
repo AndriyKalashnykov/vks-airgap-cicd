@@ -84,7 +84,11 @@ if ! kubectl version -o json >/dev/null 2>"$_lp_err"; then
     STALE_CA)     die "the kubeconfig's CA does not match ${_lp_srv:-the server it points at}.
   The server ANSWERED — this is NOT a network fault. A REBUILT cluster mints a new CA while the
   address stays the same, so a dead kubeconfig looks correctly configured.
-  Re-export it from the cluster that is actually running:  make vks-login" ;;
+  Re-export it from the cluster that is actually running:  make vks-login
+  If that does NOT clear it, your SAVED Supervisor CA is stale too — and vks-login cannot tell you,
+  because under VKS_AUTH_METHOD=kubeconfig (what scenario-1 section 6 sets) its arm checks only that
+  the file is non-empty; every CA check lives in the vcf arm. Check the anchor itself — it needs no
+  cluster, so it works when everything else here is dying:  make ca-status" ;;
     UNAUTHORIZED) die "${_lp_srv:-the cluster} REJECTED this kubeconfig's credentials — they expired,
   or they belong to a cluster that no longer exists. Re-authenticate:  make vks-login" ;;
     FORBIDDEN)    die "authenticated to ${_lp_srv:-the cluster}, but this identity may not read it.
