@@ -990,6 +990,32 @@ assert_env_effective() {
   got="$( unset "$key"; load_env >/dev/null 2>&1; printf '%s' "${!key:-}" )"
   [ "$got" = "$want" ] && return 0
 
+  # ⚠️ DISCRIMINATE BEFORE ACCUSING. Under SKIP_DOTENV=1 this re-read deliberately IGNORES `.env`
+  # (:582), so the value we just wrote there cannot be seen IN THIS PROCESS — and the failure path
+  # below then told the operator "a higher-precedence file already sets ${key} … remove that line"
+  # while naming NO LINE, because none exists. MEASURED (B139): the identical call is rc=1 under
+  # SKIP_DOTENV=1 and rc=0 with it unset; with a genuine `.env.kind` shadow the same path DOES name
+  # the file. So the PRESENCE OF A NAMED FILE is the discriminator, and this re-read recovers it.
+  #
+  # This is NOT "special-case the message", which was the row's first prescription and is wrong: a
+  # write to `.env` under SKIP_DOTENV=1 is not useless, it is UNVERIFIABLE IN-PROCESS and WILL take
+  # effect on a normal run. Warning blindly throws that distinction away; so does dying.
+  #
+  # The callers are the scenario-1 operator steps 22-harbor-robot.sh, 27-use-guest-kubeconfig.sh and
+  # 28-harbor-admin-password.sh — and the KinD e2e sets E2E_SKIP_DOTENV=1 by design, so this path is
+  # reached on every such run.
+  if [ "${SKIP_DOTENV:-0}" = "1" ]; then
+    local got0
+    got0="$( unset "$key"; export SKIP_DOTENV=0; load_env >/dev/null 2>&1; printf '%s' "${!key:-}" )"
+    if [ "$got0" = "$want" ]; then
+      log_warn "wrote ${key} to .env${why:+ (${why})}; SKIP_DOTENV=1 makes THIS process ignore .env,"
+      log_warn "  so the write cannot be verified here — nothing shadows it, and a normal run WILL"
+      log_warn "  see it. Re-read with .env enabled returned the value just written."
+      return 0
+    fi
+    # else: a REAL shadow, and it outranks `.env` even with `.env` enabled. Fall through and name it.
+  fi
+
   log_error "WROTE ${key} to .env, and it did NOT take effect${why:+ (${why})}."
   log_error "  a higher-precedence file already sets ${key}, so the next command still reads that one."
   local f
