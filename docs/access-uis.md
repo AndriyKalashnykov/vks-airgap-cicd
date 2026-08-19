@@ -43,8 +43,10 @@ For the concrete URLs, usernames and passwords in *your* context, run **`make cr
 single source of truth (it resolves KinD-vs-lab and the tenant-vs-admin login for you), so this page keeps
 only the model, not a static table that would drift out of date.
 
-**ArgoCD password** — **`make argocd-password`** prints it, in every context. It asks the **cluster**
-first, so what it prints is the password that actually works.
+**ArgoCD password** — **`make argocd-password`** prints it **on a terminal**, and masks it otherwise
+(see the note below — the qualification is not optional, and it used to sit under this line where a
+reader skimming for the command would never reach it). It asks the **cluster** first, so what it
+prints is the password that actually works.
 
 > It masks off a terminal, exactly like `creds-show` above — pipe or redirect it and you get
 > `<hidden: not a terminal — re-run with SHOW_SECRETS=1>`. Same reason: this command appears as a

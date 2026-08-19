@@ -520,7 +520,28 @@ load_env() {
   # cause is 04-install-harbor-service.sh publishing a credential it did not produce; that is
   # fixed at the writer. WHICH identity the pipeline runs as is a selector in every sense that
   # matters — an overlay `admin` silently shadowing a least-privilege robot is the reason.
-  for _sel in SUPERVISOR_HOST VCENTER_HOST KUBECONFIG VKS_AUTH_METHOD ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT VKS_CLUSTER_NAME VKS_NAMESPACE INGRESS_CONTROLLER HARBOR_CA_FILE VKS_CA_CERT_FILE ARGOCD_CA_FILE HARBOR_URL HARBOR_USERNAME HARBOR_PASSWORD VCF_CLI_SRC_DIR VKS_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256; do
+  # HARBOR_INSECURE / ARGOCD_INSECURE / MIRROR_VERIFY_FAST are NOT "which thing am I talking to" —
+  # they are SECURITY-POSTURE toggles, and they are here because the harm is identical and because
+  # `.env.state` is a THIRD clobber channel that no gate can see. `check-env-clobber` reads
+  # `.env.example` (correct, and green); the overlay is written by OUR OWN tooling (`state_set` in
+  # 05-kind-up.sh / 06-install-harbor.sh / 07-install-argocd.sh) and `load_env` sources it LAST, so
+  # it outranks even the command line. MEASURED 2026-08-18, with a discriminating control:
+  #     HARBOR_INSECURE=0    + overlay 1 -> 1   (caller DEFEATED)
+  #     ARGOCD_INSECURE=0    + overlay 1 -> 1   (caller DEFEATED)
+  #     MIRROR_VERIFY_FAST=0 + .env    1 -> 1   (caller DEFEATED)
+  #     HARBOR_URL=X         + overlay Y -> X   (already snapshotted -> SURVIVED; the control that
+  #                                              proves the probe is not simply clobbering all)
+  # CLAUDE.md already records this exact incident through the OTHER channel — `make e2e-kind
+  # HARBOR_INSECURE=1` silently ran the full SECURE stack — so this is a recurrence via a new sink.
+  # The first two pin TLS VERIFICATION off with no way back from the command line; the third turns
+  # `crane validate` into `--fast` (manifest/config only, per 23-mirror-verify.sh:14-15), i.e. it
+  # skips exactly the layer-blob download that caught the 2026-07-13 Harbor wipe (153 manifest
+  # links, ZERO blobs — a state `--fast` passes).
+  # ⚠️ The `[ -n … ]` guard below is what keeps this SAFE: it restores only a value the CALLER set,
+  # so an overlay that legitimately records "this Harbor was installed insecure" still applies when
+  # the caller is silent. A fix that forced these to a fixed value would break the KinD flow; that
+  # arm is asserted in test-insecure-toggle-snapshot.sh, not assumed.
+  for _sel in SUPERVISOR_HOST VCENTER_HOST KUBECONFIG VKS_AUTH_METHOD ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT VKS_CLUSTER_NAME VKS_NAMESPACE INGRESS_CONTROLLER HARBOR_CA_FILE VKS_CA_CERT_FILE ARGOCD_CA_FILE HARBOR_URL HARBOR_USERNAME HARBOR_PASSWORD VCF_CLI_SRC_DIR VKS_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256 HARBOR_INSECURE ARGOCD_INSECURE MIRROR_VERIFY_FAST; do
     if [ -n "${!_sel:-}" ]; then
       _snap_names="${_snap_names} ${_sel}"
       _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'
