@@ -44,12 +44,15 @@ chk() {  # <label> <path> <HARDEN|SKIP> <pre-mode>
   mkdir -p "$d"; chmod "$pre" "$d"
   ensure_secret_dir "$d" >/dev/null 2>&1
   rp="$(cd "$d" && pwd -P)"; got="$(stat -c %a "$rp")"
+  # `if`, not `A && B || C` — in that shape a non-zero `ok` also runs `bad`, which is the
+  # fake-green form this repo's own gate flags (SC2015).
   if [ "$want" = HARDEN ]; then
-    [ "$got" = 700 ] && ok "$lbl -> 700" || bad "$lbl: want 700, got ${got} (pre ${pre})"
+    if [ "$got" = 700 ]; then ok "$lbl -> 700"
+    else bad "$lbl: want 700, got ${got} (pre ${pre})"; fi
   else
-    [ "$got" = "$pre" ] && ok "$lbl -> untouched (${got})" \
-      || bad "$lbl: MUST NOT be re-permissioned. was ${pre}, now ${got}.
-        The containment predicate has been loosened, and this is a directory we do not own."
+    if [ "$got" = "$pre" ]; then ok "$lbl -> untouched (${got})"
+    else bad "$lbl: MUST NOT be re-permissioned. was ${pre}, now ${got}.
+        The containment predicate has been loosened, and this is a directory we do not own."; fi
   fi
 }
 
@@ -57,6 +60,8 @@ chk 'our secrets/'                          "$REPO/secrets"                HARDE
 chk 'nested app secrets/'                   "$REPO/apps/secrets"           HARDEN 775
 chk 'traversal INTO secrets/ still hardens' "$REPO/x/../secrets"           HARDEN 775
 chk 'the REPO ROOT (set_env_var .env)'      "$REPO"                        SKIP   775
+# shellcheck disable=SC2016  # '$HOME' is a LABEL naming the variable, not a reference to it —
+# expanding it would print the operator's real home directory into the test output.
 chk 'a fake $HOME (shell-init)'             "$FAKEHOME"                    SKIP   755
 chk 'a fake ~/.kube (KUBECONFIG)'           "$FAKEHOME/.kube"              SKIP   755
 chk 'a mktemp dir (lib/tls.sh)'             "$T/scratch"                   SKIP   700
@@ -89,6 +94,7 @@ fi
 # this whole guard exists to prevent. `check-grep-q-pipe` caught it in this very file.
 _body="$(grep -A25 '^ensure_secret_dir()' scripts/lib/os.sh)"
 if grep -q 'pwd -P' scripts/lib/os.sh && ! grep -q 'realpath' <<< "$_body"; then
+  # shellcheck disable=SC2016  # backticks + prose describing the IDIOM; nothing to expand.
   ok 'the helper resolves with `cd … && pwd -P`, not realpath (toybox has no guaranteed realpath)'
 else
   bad "ensure_secret_dir must not use realpath: 31-fetch-argocd-kubeconfig.sh:59 records that
@@ -97,4 +103,5 @@ else
 fi
 
 [ "$fail" -eq 0 ] || exit 1
+# shellcheck disable=SC2016  # same: '$HOME' names the variable in a sentence.
 printf 'SUCCESS — our secrets/ is hardened; $HOME, the repo root, ~/.kube and mktemp dirs are not.\n'
