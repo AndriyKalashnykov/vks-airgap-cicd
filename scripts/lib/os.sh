@@ -541,7 +541,21 @@ load_env() {
   # so an overlay that legitimately records "this Harbor was installed insecure" still applies when
   # the caller is silent. A fix that forced these to a fixed value would break the KinD flow; that
   # arm is asserted in test-insecure-toggle-snapshot.sh, not assumed.
-  for _sel in SUPERVISOR_HOST VCENTER_HOST KUBECONFIG VKS_AUTH_METHOD ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT VKS_CLUSTER_NAME VKS_NAMESPACE INGRESS_CONTROLLER HARBOR_CA_FILE VKS_CA_CERT_FILE ARGOCD_CA_FILE HARBOR_URL HARBOR_USERNAME HARBOR_PASSWORD VCF_CLI_SRC_DIR VKS_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256 HARBOR_INSECURE ARGOCD_INSECURE MIRROR_VERIFY_FAST; do
+  # ARGOCD_ADMIN_PASSWORD / GITEA_ADMIN_PASSWORD added 2026-08-18 — the SAME class as
+  # HARBOR_PASSWORD three lines up, found by an adversary round on the commit that added the three
+  # toggles above and MISSED these two. Both are `state_set` into the overlay (05-kind-up.sh:131,
+  # :142) and both ship in .env.example as `# VAR=<SET-IN-.env>` — i.e. documented as
+  # operator-settable — exactly like HARBOR_PASSWORD, whose own note above records that "the overlay
+  # was measured to outrank the COMMAND LINE too". MEASURED with a discriminating control AND an
+  # inverse control, so the probe cannot be lying in either direction:
+  #     HARBOR_PASSWORD        caller=fromCaller overlay=fromOverlay -> fromCaller   PROTECTED
+  #     ARGOCD_ADMIN_PASSWORD  caller=fromCaller overlay=fromOverlay -> fromOverlay  DEFEATED
+  #     GITEA_ADMIN_PASSWORD   caller=fromCaller overlay=fromOverlay -> fromOverlay  DEFEATED
+  #     ARGOCD_LB_IP           caller=fromCaller overlay=fromOverlay -> fromOverlay  CORRECT — a
+  #                            DISCOVERED value SHOULD come from the overlay; it is the inverse
+  #                            control that proves this list is still a list and not "everything".
+  # Of the 5 operator-settable credentials `state_set` writes, 3 were protected and 2 were not.
+  for _sel in SUPERVISOR_HOST VCENTER_HOST KUBECONFIG VKS_AUTH_METHOD ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT VKS_CLUSTER_NAME VKS_NAMESPACE INGRESS_CONTROLLER HARBOR_CA_FILE VKS_CA_CERT_FILE ARGOCD_CA_FILE HARBOR_URL HARBOR_USERNAME HARBOR_PASSWORD VCF_CLI_SRC_DIR VKS_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256 HARBOR_INSECURE ARGOCD_INSECURE MIRROR_VERIFY_FAST ARGOCD_ADMIN_PASSWORD GITEA_ADMIN_PASSWORD; do
     if [ -n "${!_sel:-}" ]; then
       _snap_names="${_snap_names} ${_sel}"
       _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'

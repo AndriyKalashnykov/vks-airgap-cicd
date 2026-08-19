@@ -257,7 +257,11 @@ if openssl req -x509 -newkey rsa:2048 -nodes -keyout "$_b166/k" \
         "got ${_b} — vks_ca_default is INERT; the production fix would not restore coverage"
   fi
 else
-  printf 'skip  B166 behavioural arms (openssl unavailable)\n'
+  # UPPERCASE `SKIP` is the marker run-test-set.sh's skip detector anchors on
+  # (`^[[:space:]]*SKIP[:[:space:]]`, case-sensitive). Lowercase here meant this skip —
+  # of the B166 RED-PROOF arms — was invisible in the suite summary. Found by an adversary
+  # measuring the detector's boundary, not by the detector.
+  printf 'SKIP  B166 behavioural arms (openssl unavailable)\n'
 fi
 rm -rf "$_b166"
 

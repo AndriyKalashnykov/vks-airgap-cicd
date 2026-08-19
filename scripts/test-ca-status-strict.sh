@@ -73,7 +73,12 @@ if [ "$(grep -c 'CA_STATUS_STRICT' .env.example)" = 0 ]; then
 else
   bad "CA_STATUS_STRICT now appears in .env.example. It is documented as an operator knob, so
         the pre-load_env snapshot silently ignores what the docs invite them to set — re-open the
-        design (see B188: the same reasoning is why HARBOR_INSECURE must NOT be snapshotted)."
+        design. ⚠️ This sentence USED to say the same reasoning is why HARBOR_INSECURE must NOT be
+          snapshotted. That was FALSIFIED 30 minutes later by 3d68b34, which snapshots it —
+          my own change, in a control's text, un-swept until an adversary found it. The real
+          distinction: the toggles have a CALLER who names them on the command line, so a
+          snapshot restores a choice; CA_STATUS_STRICT has only the Makefile's export, so a
+          snapshot restores a POLICY the operator never set.)"
 fi
 
 # And the mechanism has to still be REACHABLE — a check nobody calls proves nothing.

@@ -99,7 +99,7 @@ EXEMPT='APP_DEV_PORT|INGRESS_CONTROLLER'
 # An optional single OR double quote, for the boolean-toggle arm's default. Hoisted because
 # '"'"' inside an already-single-quoted grep pattern is unreadable at the call site.
 _TOGQ='["'"'"']?'
-SELECTORS='SUPERVISOR_HOST|VCENTER_HOST|KUBECONFIG|VKS_AUTH_METHOD|INGRESS_CONTROLLER|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_SUPERVISOR_KUBECONFIG|VKS_CONTEXT|VKS_CLUSTER_NAME|VKS_NAMESPACE|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_USERNAME|HARBOR_PASSWORD|HARBOR_CA_FILE|VKS_CA_CERT_FILE|ARGOCD_CA_FILE|VKS_CA_SHA256|HARBOR_CA_SHA256|ARGOCD_CA_SHA256|VCF_CLI_SRC_DIR|HARBOR_INSECURE|ARGOCD_INSECURE|MIRROR_VERIFY_FAST'
+SELECTORS='SUPERVISOR_HOST|VCENTER_HOST|KUBECONFIG|VKS_AUTH_METHOD|INGRESS_CONTROLLER|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_SUPERVISOR_KUBECONFIG|VKS_CONTEXT|VKS_CLUSTER_NAME|VKS_NAMESPACE|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_USERNAME|HARBOR_PASSWORD|HARBOR_CA_FILE|VKS_CA_CERT_FILE|ARGOCD_CA_FILE|VKS_CA_SHA256|HARBOR_CA_SHA256|ARGOCD_CA_SHA256|VCF_CLI_SRC_DIR|HARBOR_INSECURE|ARGOCD_INSECURE|MIRROR_VERIFY_FAST|ARGOCD_ADMIN_PASSWORD|GITEA_ADMIN_PASSWORD'
 
 # Read the snapshot list out of load_env itself: `for _sel in A B C ...; do`
 PROTECTED="$(sed -n 's/^[[:space:]]*for _sel in \(.*\); do$/\1/p' "${REPO_ROOT}/scripts/lib/os.sh" | head -1)"
@@ -271,6 +271,10 @@ for v in "${UNCOMMENTED[@]}"; do
   #
   # KNOWN, DISCLOSED SCOPE: a toggle written ${V:-no} / ${V:-off} / [ "$V" = yes ] is MISSED. The
   # rot direction is a false NEGATIVE, not a false RED, so adding literals here is cheap.
+  # ALSO MISSED, both measured to be ZERO occurrences today so neither is a live gap:
+  #   * `${V:=0}` (assign-default) — not in the alternation below;
+  #   * any toggle consumed OUTSIDE `$REPO_ROOT/scripts` + `Makefile` — .github/workflows/,
+  #     jumpbox/ and k8s/ are not scanned. Named here because "0 today" is not "0 forever".
   #
   # ⚠️ TWO SHAPES ADDED 2026-08-18 after an adversary round measured them MISSED, and I reproduced
   # both with ${V:-0} as the working control (CAUGHT / MISSED / MISSED):

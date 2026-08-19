@@ -47,11 +47,21 @@ probe() {
   cp .env.example "$T/.env.example" 2>/dev/null || { rm -rf "$T"; printf 'NOENVEXAMPLE'; return; }
   printf '%s\n' "$2" > "$T/$1"
   cp -r scripts "$T/scripts"
+  # ⚠️ SCRUB THE AMBIENT ENVIRONMENT. Measured: `HARBOR_INSECURE=0 ./this-test` made arm 2 FAIL,
+  # because the "caller silent" case inherited the ambient value and the caller was never silent —
+  # and the failure text blames the PRODUCT ("a snapshot that fires unconditionally..."). An
+  # inherited REPO_ROOT (os.sh EXPORTS it) is worse: the probe reads the real repo instead of its
+  # fixture, 4 FAILs. The repo's own convention for this is test-env-validate.sh:56.
   out="$( cd "$T" || exit 1
-          [ -n "${4:-}" ] && export "$3=$4"
-          . scripts/lib/os.sh >/dev/null 2>&1
-          load_env >/dev/null 2>&1
-          printf '%s' "${!3:-<unset>}" )"
+          env -u HARBOR_INSECURE -u ARGOCD_INSECURE -u MIRROR_VERIFY_FAST \
+              -u ARGOCD_ADMIN_PASSWORD -u GITEA_ADMIN_PASSWORD -u ARGOCD_LB_IP \
+              -u INGRESS_CONTROLLER -u GITEA_ADMIN_USER -u REPO_ROOT -u VKS_STATE_FILE \
+              bash -c '
+                [ -n "${4:-}" ] && export "$3=$4"
+                . scripts/lib/os.sh >/dev/null 2>&1
+                load_env >/dev/null 2>&1
+                printf "%s" "${!3:-<unset>}"
+              ' _ "$1" "$2" "$3" "${4:-}" )"
   rm -rf "$T"
   printf '%s' "$out"
 }
@@ -96,22 +106,53 @@ else
   bad "MIRROR_VERIFY_FAST: with no caller value the .env setting must apply; got '${got}'."
 fi
 
+# ── THE CREDENTIAL CLASS — the same defect, found by an adversary round on the commit above. ─────
+# ARGOCD_ADMIN_PASSWORD / GITEA_ADMIN_PASSWORD are `state_set` into the overlay (05-kind-up.sh:131,
+# :142) and ship in .env.example as `# VAR=<SET-IN-.env>`, i.e. documented operator-settable —
+# byte-for-byte HARBOR_PASSWORD's situation, which os.sh already protects. 3 of the 5 credentials
+# state_set writes were protected; these 2 were not.
+for v in ARGOCD_ADMIN_PASSWORD GITEA_ADMIN_PASSWORD; do
+  got="$(probe .env.state "${v}=fromOverlay" "$v" fromCaller)"
+  if [ "$got" = fromCaller ]; then
+    ok "${v}: an explicit caller value beats the overlay (same class as HARBOR_PASSWORD)"
+  else
+    bad "${v}: caller said fromCaller, got '${got}'. The overlay outranks the command line for a
+        credential the operator is documented to set, so \`VAR=x make <target>\` is a silent no-op."
+  fi
+done
+
+# THE INVERSE CONTROL FOR THAT CLASS, and it is the one that keeps the list a LIST. ARGOCD_LB_IP is
+# a DISCOVERED value: the overlay SHOULD win. If this ever flips, the snapshot has grown to cover
+# everything and every discovered-state flow breaks.
+got="$(probe .env.state 'ARGOCD_LB_IP=fromOverlay' ARGOCD_LB_IP fromCaller)"
+if [ "$got" = fromOverlay ]; then
+  ok "control: ARGOCD_LB_IP (DISCOVERED) still takes the overlay — the snapshot is not 'everything'"
+else
+  bad "control: ARGOCD_LB_IP is a discovered value and the overlay must win; got '${got}'. Adding it
+        to the snapshot list would break every flow that reads a published address."
+fi
+
 # ── THE DISCRIMINATING CONTROL. Without it, arm 1 passing proves nothing about the MECHANISM —
 # a harness bug that dropped every sourced file would produce the same six PASSes above. ──────────
 got="$(probe .env.state 'INGRESS_CONTROLLER=traefik' INGRESS_CONTROLLER istio)"
 if [ "$got" = istio ]; then
-  ok "control: an ALREADY-snapshotted selector also survives, so the probe reaches load_env"
+  ok "control: an already-PROTECTED selector still survives the widening (see the note below)"
 else
   bad "control: INGRESS_CONTROLLER has been snapshotted since long before this change and must
-        survive; got '${got}'. If THIS fails, the harness is broken, not the product — every other
-        case above is measuring nothing."
+        survive; got '${got}' — the widening broke an existing protection.
+        ⚠️ This case does NOT prove the probe reaches load_env, and its first version claimed it did.
+        MEASURED: with lib/os.sh replaced by garbage it still printed ok, because its expected value
+        EQUALS the caller's — a dead load_env produces the same answer. The anti-vacuity evidence is
+        ARM 2 and the GITEA_ADMIN_USER control below, whose expected values DIFFER from the caller's;
+        both fire when load_env is dead."
 fi
 
 # And the inverse control: a var that is deliberately NOT snapshotted must still be clobberable,
 # or the snapshot list has silently become "everything" and this file cannot detect a regression.
 got="$(probe .env.state 'GITEA_ADMIN_USER=fromoverlay' GITEA_ADMIN_USER fromcaller)"
 if [ "$got" = fromoverlay ]; then
-  ok "control: a NON-snapshotted var is still overridden by the overlay (the list is still a list)"
+  ok "control: a NON-snapshotted var is still overridden — and THIS case, not the one above, is
+      what proves the probe reaches load_env: its expected value DIFFERS from the caller's"
 else
   bad "control: GITEA_ADMIN_USER is not in the snapshot list, so the overlay should win; got
         '${got}'. Either it was added to the list (update this case and say why) or the guard now
