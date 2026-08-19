@@ -611,9 +611,22 @@ load_env() {
   # environment or from `.env` — both are the operator choosing, neither is a default.)
   export _VKS_EXPLICIT_KUBECONFIG="${_VKS_EXPLICIT_KUBECONFIG:-${KUBECONFIG:-}}"
 
+  # B142 — RECORD WHETHER THE SINK WAS ACTUALLY SOURCED, because that is the only honest predicate
+  # for a WRITE path. `state_unset` needs to know "could this sink's pin possibly be shadowing me?",
+  # and the answer is exactly "was it sourced in this process". `state_check` is NOT that predicate:
+  # its idea round measured that it PERMITS on an unstamped sink AND returns 0 early when
+  # `_VKS_EXPLICIT_KUBECONFIG` is empty — a READ-path concession with no meaning on a write path.
+  # Measured there: with no explicit KUBECONFIG, three keys were stripped from a sink stamped for
+  # ANOTHER cluster and `state_check` never refused.
+  # ⚠️ UNSET means "load_env never ran in this process", and that must PROCEED — many callers
+  # legitimately never call it, and a fail-closed default would break every one of them. Only an
+  # explicit 0 is a refusal signal.
   if state_check; then
     # shellcheck disable=SC1090
     [ -f "$state" ] && . "$state"
+    export _VKS_STATE_SOURCED=1
+  else
+    export _VKS_STATE_SOURCED=0
   fi
   # One release of back-compat: a legacy .env.kind is still read (last, so the new sink wins).
   if [ -f "$legacy" ]; then
@@ -1006,7 +1019,12 @@ assert_env_effective() {
   # reached on every such run.
   if [ "${SKIP_DOTENV:-0}" = "1" ]; then
     local got0
-    got0="$( unset "$key"; export SKIP_DOTENV=0; load_env >/dev/null 2>&1; printf '%s' "${!key:-}" )"
+    # A PREFIX ASSIGNMENT on the function call, not `export` — it reaches load_env just the same
+    # (bash places it in the call's environment) and, being contained in this command substitution,
+    # cannot escape. `export SKIP_DOTENV=0` here made shellcheck raise SC2031 at creds.sh:378, which
+    # legitimately reads the AMBIENT value: my deliberately-contained write was being reported as a
+    # defect in someone else's file. Silencing it THERE would have been the wrong end.
+    got0="$( unset "$key"; SKIP_DOTENV=0 load_env >/dev/null 2>&1; printf '%s' "${!key:-}" )"
     if [ "$got0" = "$want" ]; then
       log_warn "wrote ${key} to .env${why:+ (${why})}; SKIP_DOTENV=1 makes THIS process ignore .env,"
       log_warn "  so the write cannot be verified here — nothing shadows it, and a normal run WILL"

@@ -207,6 +207,43 @@ case "$_out2" in
 esac
 
 
+# 9. B142 — state_unset must NOT edit a sink this process never sourced, and must still edit one it did.
+#    The predicate is `_VKS_STATE_SOURCED`, published by load_env from INSIDE its own `if state_check`
+#    branch, so it answers exactly the write-path question: "could this sink's pin be shadowing me?"
+#    `state_check` is NOT that predicate — its idea round measured it PERMITS on an unstamped sink and
+#    returns 0 early when `_VKS_EXPLICIT_KUBECONFIG` is empty, a READ-path concession. Measured there:
+#    with no explicit KUBECONFIG, three keys were stripped from a sink stamped for ANOTHER cluster.
+#    ⚠️ ALL THREE STATES ARE REQUIRED, and the third is the one that constrains the design: UNSET
+#    means load_env never ran, and many callers legitimately never call it — a fail-closed default
+#    would break every one of them. Only an explicit 0 refuses.
+#    ⚠️ AND THE REFUSAL RETURNS 0, NOT 1: the caller's intent ("this key must not be pinned") is
+#    already satisfied by an unsourced pin, and rc=1 would abort env_publish's pair under `set -e` —
+#    the half-written-credential defect case 7 above exists for.
+_su() {  # $1 = value for _VKS_STATE_SOURCED ('' = unset); echoes "<rc> <keys-left>"
+  setup; printf 'FOO=bar\nBAZ=qux\n' > "$TD/.env.state"
+  local _r
+  ( cd "$TD" && REPO_ROOT="$TD" VKS_STATE_FILE="$TD/.env.state" bash -c '
+      . scripts/lib/os.sh >/dev/null 2>&1; . scripts/lib/state.sh >/dev/null 2>&1
+      [ -n "'"$1"'" ] && export _VKS_STATE_SOURCED='"$1"'
+      state_unset FOO' ) >/dev/null 2>&1 && _r=0 || _r=$?
+  printf '%s %s' "$_r" "$(grep -c '^FOO=' "$TD/.env.state" 2>/dev/null || printf 0)"
+}
+read -r _r _left <<<"$(_su 1)"
+if [ "$_r" = 0 ] && [ "$_left" = 0 ]; then ok "STATE_SOURCED=1: the key IS removed (normal path intact)"
+else bad "STATE_SOURCED=1: rc=${_r} keys-left=${_left} — the guard is refusing on the SOURCED path,
+        which breaks every ordinary state_unset caller."; fi
+
+read -r _r _left <<<"$(_su 0)"
+if [ "$_r" = 0 ] && [ "$_left" = 1 ]; then ok "STATE_SOURCED=0: the sink is LEFT ALONE, and rc is 0"
+else bad "STATE_SOURCED=0: rc=${_r} keys-left=${_left} — an unsourced sink was edited (it may belong
+        to another cluster), or the refusal returned non-zero and will abort a publish pair."; fi
+
+read -r _r _left <<<"$(_su '')"
+if [ "$_r" = 0 ] && [ "$_left" = 0 ]; then ok "STATE_SOURCED unset: PROCEEDS (load_env never ran)"
+else bad "STATE_SOURCED unset: rc=${_r} keys-left=${_left} — unset must proceed. A fail-closed
+        default breaks every caller that legitimately never calls load_env."; fi
+
+
 echo
 echo "env_publish tests: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]
