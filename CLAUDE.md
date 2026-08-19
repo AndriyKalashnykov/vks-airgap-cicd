@@ -701,6 +701,25 @@ half the deliverable, not a formality. Nothing has been tagged.
   red rows, or ship the gate TTY-only. **B195** is the same fix for `fetch-supervisor-ca.sh` — only
   2 of 4 `fetch-*-ca` producers have the gate, and the two without are the SSO-admin pair.
 - **B26, B69, B156, B160, B175, B178, B189, B190, B192, B194** — see their rows.
+- 🔴 **B197's ORIGINAL TEXT IS WRONG AND IS MERGED — read its correction, not its premise.** I filed
+  "explicit `ARGOCD_MECHANISM=api` has no `have argocd` precondition"; the guard is at
+  `70-configure-argocd.sh:338-340` and I had stopped reading **eleven lines short** of it. The row
+  now leads with that and records the **three real defects** its round found instead — the top one
+  (`:333`/`:339` telling an operator to set the two variables they already set) is measurably wrong
+  today and is message-only.
+- **B181's blocker was ILLUSORY** — the row said *"C3'S SPECIFICATION IS NOT RECORDED ANYWHERE …
+  do NOT invent it"* while specifying C3 ~400 characters earlier. Nothing needed recovering. What is
+  owed is a decision, and its gate does **not** match its mechanism: the parenthetical gates on
+  **speed** (65 s) while the mechanism is a **correctness** guard against a false FATAL from one
+  root rotation — so "65 s is acceptable" does **not** dispose of it.
+- **B189 CLOSED as already-addressed** — `24-lab-preflight.sh:84-90` already prints the disclosure,
+  on the failure path where it is actionable, and `scenario-1.md:565-566` runs the two commands on
+  adjacent lines. Adding the proposed note would have been a second copy that must stay true.
+- ⚠️ **`make handoff-status` WAS LYING, and I hit it live (fixed, PR #887).** It counted
+  `${last}..main` — the **local** `main` ref, which `git fetch` never moves and which in a worktree
+  belongs to a different checkout. Measured with local main 18 commits stale: it reported **0**
+  while `origin/main` had moved **2**. It now prefers the branch's upstream. **If you are reading a
+  handoff older than PR #887, its "0 commits since" proves nothing.**
 - **B104 is CLOSED, REFUTED by its own idea round** (2026-08-19) — do not re-propose it. apt's
   `Acquire::Retries` default is **already 3** (measured on apt 2.8.3/24.04 **and** 3.2.0/26.04), so
   that half was a no-op; and `--retry-all-errors` on the `mise.run | sh` pipe turns today's loud
