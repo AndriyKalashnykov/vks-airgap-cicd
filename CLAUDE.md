@@ -680,7 +680,12 @@ half the deliverable, not a formality. Nothing has been tagged.
 colour:
 
 - **B70** is now DECIDED (option C) but needs an idea round and a lab; nothing is started.
-- **B77**'s remaining half cannot be executed as written — its section numbers no longer exist.
+- **B77** is now RE-DERIVED (2026-08-19): four of the source review's five findings have LANDED
+  (the vCenter REST capability went 0→23 hits in code; the `yq`-creates-a-key trap is closed by
+  construction with anchored `awk` + a no-placeholder-survives assertion). **One gap left, and it
+  is a decision, not code:** the browser flow was DROPPED against an Action that said keep it and
+  cited you — `scenario-1.md` has zero 'vSphere Client'/'Add New Service' occurrences and it did
+  not relocate. Restore it, declare it superseded by the REST path, or leave it — your call.
 - **B26**'s fix (3) is REFUTED as specified (measured: one non-zero cell in twenty-eight — the
   gate would be satisfied by the upstream chart, not by us) and it carries an explicit
   (a)–(f) rebuild spec if anyone wants it. Its remaining residual is **lab-gated**: one command,
