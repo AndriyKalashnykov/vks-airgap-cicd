@@ -638,7 +638,7 @@ half the deliverable, not a formality. Nothing has been tagged.
 | **`make fetch-vcenter-ca` — NEW** | Without it the fix is an **outage**: `VCENTER_CA_FILE` appeared **0 times** in `docs/`, so scenario-1 rows 1–4 would have died at **Step 2**, before Harbor, on this very cut. It selects the root **by handshake**, never by subject — every cut mints a new VMCA with a byte-identical subject. |
 | **B70 — owner decision taken: option C** | Adopt `tkg.tanzu.vmware.com/tkg-registry-additional-ca-cert` as the documented VKS path, KinD explicitly second-class. **NOT started.** Needs an idea round AND a lab, and it knowingly widens the stand-in/lab divergence. |
 | **B191, B174, B166, B188, B145, B192 — closed** | See their rows; each carries its measurements. |
-| **B193, B194 — newly filed** | The vCenter ladder has **no PIN** (`VCENTER_CA_SHA256` does not exist), so do **not** claim parity with the Harbor/ArgoCD/Supervisor ladders. `vc_api` still cannot tell 200 from truncated-after-200. |
+| **B193, B194, B195 — newly filed** | The vCenter ladder has **no PIN** (`VCENTER_CA_SHA256` does not exist), so do **not** claim parity with the Harbor/ArgoCD/Supervisor ladders. `vc_api` still cannot tell 200 from truncated-after-200. |
 
 ### Distrust these
 
@@ -663,8 +663,16 @@ half the deliverable, not a formality. Nothing has been tagged.
   exist (the doc was restructured; §4a is gone, §5/§6/§8 are different sections now). Re-derive from
   `docs/reviews/2026-08-04-first-real-lab-measurements.md` against the CURRENT document. Do **not**
   map the old numbers by guessing.
-- **B193** — needs `VCENTER_CA_SHA256` wired through `ca_pin_verdict`; until then the vCenter path
-  is TOFU redeemed only by the printed fingerprint.
+- **B193 / B195** — 🔴 **an owner decision, and the design first prescribed for B193 is REFUTED.** Wiring
+  `ca_pin_verdict` into `_vc_tls` would print a FALSE fingerprint-mismatch on a CORRECT anchor
+  (`lib/vcenter.sh` does not source `lib/tls.sh` — verified by execution, `command -v` returns NOT
+  AVAILABLE). And a pin at CONSUMPTION buys nothing: it ships commented, so the normal case is unset,
+  and `make fetch-vcenter-ca` fetches over `curl -sk` from the very host being authenticated. **A pin
+  is only a control if its value PREDATES the fetch** ⇒ it belongs in the PRODUCER, with
+  `fetch-ca.sh`'s arms. **The decision you owe:** that gate `die`s with no TTY, and both fetches are
+  walked steps, so it reddens rows 1–4 unless the harness supplies the digests. Supply them, accept
+  red rows, or ship the gate TTY-only. **B195** is the same fix for `fetch-supervisor-ca.sh` — only
+  2 of 4 `fetch-*-ca` producers have the gate, and the two without are the SSO-admin pair.
 - **B26, B69, B104, B156, B160, B175, B178, B189, B190, B192, B194** — see their rows.
 
 **Row counts at handoff: 3 red / 13 amber / 25 green.** B26, B70 and B77 are the three reds, and
