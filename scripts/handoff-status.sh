@@ -53,10 +53,17 @@ last="$(git log -1 --format=%H -L "${s},${e}:CLAUDE.md" 2>/dev/null | head -1)"
 # in a worktree whose local main was 18 commits stale: `${last}..main` reported **0** while
 # `${last}..origin/main` reported **2** — so this printer, whose whole job is to stop a handoff
 # being written before the last merge, certified a STALE handoff as current. A false green in a
-# session-end tool. Prefer the branch's own upstream, fall back to origin/main, then local main
-# (a clone with no remote). RED-proof: run it from a worktree with a stale local `main`.
-_hs_ref="$(git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || true)"
-[ -n "${_hs_ref:-}" ] || _hs_ref="$(git rev-parse --verify -q --abbrev-ref origin/main 2>/dev/null || true)"
+# session-end tool. RED-proof: run it from a worktree with a stale local `main`.
+#
+# ⚠️ AND IT MUST BE origin/main SPECIFICALLY — NOT `@{upstream}`. My first fix preferred the
+# branch's own upstream, which is wrong by construction: this printer asks "what merged into MAIN
+# since the handoff was edited", a question about the MAINLINE, never about whatever branch you
+# happen to be standing on. MEASURED minutes later, on a just-merged feature branch: `@{upstream}`
+# resolved to `origin/docs/handoff-2` — a ref left behind by `--delete-branch` — and the printer
+# reported **1 commit since** a commit that WAS main's HEAD, where `origin/main` correctly gave 0.
+# Same false-signal class as the bug it was fixing, introduced by the fix. Fall back to local main
+# only for a clone with no remote.
+_hs_ref="$(git rev-parse --verify -q --abbrev-ref origin/main 2>/dev/null || true)"
 [ -n "${_hs_ref:-}" ] || _hs_ref=main
 since="$(git log --oneline "${last}..${_hs_ref}" 2>/dev/null || true)"
 n="$(printf '%s' "$since" | grep -c . || true)"
