@@ -618,6 +618,27 @@ _lab_add() { _lab_rows="${_lab_rows}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\n';
 # ⚠️ EMPTY IS NOT A SECRET (same trap as :251) — `_mask` renders its sentinel unconditionally, so an
 # unset password would advertise a hidden value that does not exist and send the reader to
 # SHOW_SECRETS=1 for nothing.
+# ── _ssh_classify <errfile> <prefix> — ONE mapping of a kube failure class to (token, sentence) ──
+# BOTH call sites in the SSH probe go through this. The first version had two: a full case at the
+# listing site and a THREE-ARM case at the read site, whose `*)` swallowed five real classes. The
+# repo's own `check-classifier-consumers` gate caught it (Makefile:383) — it requires every consumer
+# of classify_kube_failure to handle EVERY class, precisely because a `*)` that says "not one we
+# classify" is FALSE for a class that exists and drops the remedy that class carries.
+# One function = one place to be complete, and the gate has one consumer to check.
+_ssh_classify() {
+  local _e="$1" _p="$2"
+  case "$(classify_kube_failure "$_e")" in
+    FORBIDDEN)           _ssh_tok="<forbidden>";     _ssh_state="${_p} — FORBIDDEN: this identity may not read that in '${VKS_NAMESPACE:-?}'. Ask your platform admin." ;;
+    UNAUTHORIZED)        _ssh_tok="<auth failed>";   _ssh_state="${_p} — the Supervisor REJECTED this kubeconfig. Re-run: make vks-login" ;;
+    STALE_CA)            _ssh_tok="<stale CA>";      _ssh_state="${_p} — the Supervisor answered but its CA does not verify (kubeconfig from a destroyed lab?)" ;;
+    UNREACHABLE)         _ssh_tok="<unreachable>";   _ssh_state="${_p} — the Supervisor is unreachable from here" ;;
+    PLAINTEXT)           _ssh_tok="<plaintext>";     _ssh_state="${_p} — the Supervisor endpoint answered PLAINTEXT where TLS was expected" ;;
+    NO_KUBE_TARGET)      _ssh_tok="<no target>";     _ssh_state="${_p} — the kubeconfig names no cluster" ;;
+    KUBECONFIG_UNUSABLE) _ssh_tok="<bad kubeconfig>"; _ssh_state="${_p} — the kubeconfig is unusable (something it NAMES is missing)" ;;
+    *)                   _ssh_tok="<kubectl failed>"; _ssh_state="${_p} — kubectl failed for a reason we do not classify" ;;
+  esac
+}
+
 _lab_plain() { if [ -n "${1:-}" ]; then printf '%s' "$1"; else printf '<not set>'; fi; }
 _lab_secret() { if [ -n "${1:-}" ]; then _mask "$1"; else printf '<not set>'; fi; }
 
@@ -656,15 +677,15 @@ _lab_add "vcf CLI"   "(the VKS / SSO account)"  "$(_lab_plain "${VKS_USERNAME:-}
 #
 # The LISTING MUST NOT BE A PIPELINE. `kubectl ... | sed | grep | head` yields HEAD's status, so the
 # rc is meaningless before it is even discarded. Capture kubectl alone, read its rc, then filter.
-_ssh_pw=""; _lab_err=""; _ssh_sec=""; _ssh_state="not probed"
+_ssh_pw=""; _lab_err=""; _ssh_sec=""; _ssh_state="not probed"; _ssh_tok="<not probed>"
 if [ "$_no_probe_snapshot" = "1" ]; then
-  _ssh_state="not probed (CREDS_NO_PROBE=1)"
+  _ssh_state="not probed (CREDS_NO_PROBE=1)"; _ssh_tok="<not probed>"
 elif [ -z "${VKS_NAMESPACE:-}" ]; then
-  _ssh_state="not probed (VKS_NAMESPACE unset)"
+  _ssh_state="not probed (VKS_NAMESPACE unset)"; _ssh_tok="<not probed>"
 else
   _sup_kc="$(supervisor_kubeconfig 2>/dev/null || true)"
   if [ -z "$_sup_kc" ] || [ ! -f "$_sup_kc" ]; then
-    _ssh_state="no Supervisor kubeconfig — run: make vks-login"
+    _ssh_state="no Supervisor kubeconfig — run: make vks-login"; _ssh_tok="<no kubeconfig>"
   else
     _lab_err="$(mktemp)"
     # `&& rc=0 || rc=$?` and NOT `; rc=$?` — the latter dies under `set -e` (rules/shell).
@@ -672,20 +693,11 @@ else
                    -n "$VKS_NAMESPACE" get secret -o name </dev/null 2>"$_lab_err")" && _ssh_rc=0 || _ssh_rc=$?
     if [ "$_ssh_rc" -ne 0 ]; then
       # THE WHOLE POINT: name WHY we could not ask, so it is never mistaken for "there is none".
-      case "$(classify_kube_failure "$_lab_err")" in
-        FORBIDDEN)          _ssh_state="could not ask — FORBIDDEN: this identity may not list secrets in '${VKS_NAMESPACE}'. Ask your platform admin." ;;
-        UNAUTHORIZED)       _ssh_state="could not ask — the Supervisor REJECTED this kubeconfig. Re-run: make vks-login" ;;
-        STALE_CA)           _ssh_state="could not ask — the Supervisor answered but its CA does not verify (kubeconfig from a destroyed lab?)" ;;
-        UNREACHABLE)        _ssh_state="could not ask — the Supervisor is unreachable from here" ;;
-        PLAINTEXT)          _ssh_state="could not ask — the Supervisor endpoint answered PLAINTEXT where TLS was expected" ;;
-        NO_KUBE_TARGET)     _ssh_state="could not ask — the kubeconfig names no cluster" ;;
-        KUBECONFIG_UNUSABLE) _ssh_state="could not ask — the kubeconfig is unusable (something it NAMES is missing)" ;;
-        *)                  _ssh_state="could not ask — kubectl failed (rc=${_ssh_rc})" ;;
-      esac
+      _ssh_classify "$_lab_err" "could not ask"
     else
       _ssh_sec="$(printf '%s' "$_ssh_list" | sed 's|^secret/||' | grep -E -- '-ssh-password$' | head -1 || true)"
       if [ -z "$_ssh_sec" ]; then
-        _ssh_state="none in '${VKS_NAMESPACE}' — this cluster publishes no node-SSH secret"
+        _ssh_tok="<none>"; _ssh_state="none in '${VKS_NAMESPACE}' — this cluster publishes no node-SSH secret"
       else
         # stderr to a FILE, never 2>&1: a server `Warning:` header concatenates in front of the
         # base64 on a SUCCESSFUL read and base64 -d then emits partial garbage (lib/argocd.sh:327).
@@ -695,24 +707,36 @@ else
         # purity-check before decoding, or a partial decode ships a WRONG password.
         case "$_ssh_b64" in ''|*[!A-Za-z0-9+/=]*) _ssh_b64="" ;; esac
         if [ "$_ssh_rc" -ne 0 ]; then
-          _ssh_state="could not read ${_ssh_sec} — $(classify_kube_failure "$_lab_err")"
+          _ssh_classify "$_lab_err" "could not read ${_ssh_sec}"
         elif [ -z "$_ssh_b64" ]; then
-          _ssh_state="${_ssh_sec} carries no usable ssh-passwordkey"
+          _ssh_tok="<no key>"; _ssh_state="${_ssh_sec} carries no usable ssh-passwordkey"
         else
           _ssh_pw="$(printf '%s' "$_ssh_b64" | base64 -d 2>/dev/null || true)"
-          [ -n "$_ssh_pw" ] || _ssh_state="${_ssh_sec} decoded empty"
+          [ -n "$_ssh_pw" ] || _ssh_tok="<empty>"; _ssh_state="${_ssh_sec} decoded empty"
         fi
       fi
     fi
   fi
 fi
-# `vmware-system-user` — VERIFIED 2026-08-20, not a convention: `ssh -i <ssh-privatekey from the
+# `vmware-system-user` — VERIFIED 2026-08-20 on VKS GUEST NODES, and scoped to that claim: `ssh -i <ssh-privatekey from the
 # <cluster>-ssh secret> vmware-system-user@<node>` returned `id -un` = vmware-system-user and the
 # node's own hostname. The `?` this row shipped with earlier that day is removed on that evidence.
+# ⚠️ SHORT TOKEN IN THE COLUMN; THE SENTENCE GOES UNDER THE TABLE (impl round, MED).
+# `_ssh_state` used to render into the ENDPOINT column, whose width is a max over all rows —
+# MEASURED: the FORBIDDEN arm took that column to 110 chars and the line to ~170, wrapping ALL FOUR
+# rows on an 80/120-col terminal. FORBIDDEN is the TENANT case: the reader least able to fix it and
+# most in need of a legible table.
+# The Password cell separates NOT ATTEMPTED from ATTEMPTED-AND-FAILED — on a `not probed` arm
+# nothing was tried, so "not readable" would imply a failed read that never happened, which is the
+# very conflation this block exists to fix.
 if [ -n "$_ssh_pw" ]; then
   _lab_add "guest node SSH" "$(_lab_plain "$_ssh_sec")" "vmware-system-user" "$(_lab_secret "$_ssh_pw")"
 else
-  _lab_add "guest node SSH" "$_ssh_state" "vmware-system-user" "<not readable>"
+  case "$_ssh_state" in
+    "not probed"*) _ssh_pwcell="<not attempted>" ;;
+    *)             _ssh_pwcell="<not readable>" ;;
+  esac
+  _lab_add "guest node SSH" "$_ssh_tok" "vmware-system-user" "$_ssh_pwcell"
 fi
 
 # Widths, mirroring the table above. `if/then/fi` and NOT `[ ] && x` — a false test as the loop
@@ -744,15 +768,23 @@ EOF
 printf '\n  ⚠️ vCenter SSO locks the account PERMANENTLY after 3 failed attempts. This report SHOWS these\n'
 printf '     values and NEVER authenticates with them, so a wrong one is not spent here. If one is\n'
 printf '     rejected, STOP and confirm it with whoever owns the lab — do not retry.\n'
-# DERIVED, not hardcoded (B202 F8): a literal rots the moment a scenario doc asks for an eighth var.
-_lab_n=0
-for _v in VCENTER_HOST VCENTER_USERNAME VCENTER_PASSWORD VKS_USERNAME VKS_PASSWORD \
-          VCF_CLI_VSPHERE_PASSWORD SUPERVISOR_HOST; do
-  _lab_n=$((_lab_n + 1))
-done
-printf '\n  showing all %s credential values the scenario documents ask you to set, plus the guest-node\n' "$_lab_n"
-printf '  SSH password READ LIVE from the Supervisor. There is no ssh row in .env because this repo never\n'
-printf '  asks you for one — the credential is not yours to supply, it is the cluster'\''s to hand you.\n'
-printf '  Source: %s in vSphere Namespace %s.\n' "${_ssh_sec:-<none found>}" "${VKS_NAMESPACE:-<unset>}"
+# ⚠️ NOT DERIVED, and it no longer pretends to be (impl round, MED). The previous version looped over
+# a HARDCODED 7-element literal counting its own elements — MEASURED: injecting an 8th row still
+# printed 7. It tracked neither the rows, nor .env.example, nor the scenario docs, and reading as
+# "derived" made it WORSE than the literal it replaced. NAMING the variables is the honest form: the
+# list IS the claim, so it cannot go stale silently.
+printf '\n  Showing the lab-access values the scenario documents ask you to set: VCENTER_HOST,\n'
+printf '  VCENTER_USERNAME, VCENTER_PASSWORD, VKS_USERNAME, VKS_PASSWORD, VCF_CLI_VSPHERE_PASSWORD\n'
+printf '  and SUPERVISOR_HOST. There is no ssh row in .env because this repo never asks you for one —\n'
+printf '  that credential is not yours to supply, it is the cluster'"'"'s to hand you.\n'
+# ⚠️ CONDITIONAL, and that is the whole point (impl round, MED). These sentences printed
+# UNCONDITIONALLY, so a run that read NOTHING still claimed "READ LIVE from the Supervisor" and
+# asserted `Source: <none found>` — an absence about a namespace we may never have been able to
+# query. The exact conflation the probe rewrite above exists to fix, re-committed two lines below it.
+if [ -n "$_ssh_pw" ]; then
+  printf '  Guest-node SSH password READ LIVE from %s in vSphere Namespace %s.\n' "$_ssh_sec" "${VKS_NAMESPACE:-<unset>}"
+else
+  printf '  Guest-node SSH password NOT read: %s\n' "$_ssh_state"
+fi
 
 echo

@@ -96,7 +96,7 @@ for app in $(app_names); do
   #   * `16-engine-trust-check.sh` — a one-shot DIAGNOSTIC PROBE. `x509: certificate signed by
   #     unknown authority` is not transient and is not in crane's retry predicate; retrying only
   #     makes a correct "no" take five times longer.
-#   * `crane auth login` (:66 here, and 21-mirror-push.sh:51) — DELIBERATELY LEFT ALONE, and the
+#   * `crane auth login` (:70 here, and 21-mirror-push.sh:51) — DELIBERATELY LEFT ALONE, and the
 #     REASON stated here until 2026-08-20 was FALSE. It said "Harbor supports failed-login lockout"
 #     and that retrying is "the same shape as retrying a vCenter 401 — the one change that can lock
 #     an account out". MEASURED at goharbor v2.15.2 (the appVersion of our pinned
