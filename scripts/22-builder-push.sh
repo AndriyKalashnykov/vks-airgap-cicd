@@ -96,11 +96,37 @@ for app in $(app_names); do
   #   * `16-engine-trust-check.sh` — a one-shot DIAGNOSTIC PROBE. `x509: certificate signed by
   #     unknown authority` is not transient and is not in crane's retry predicate; retrying only
   #     makes a correct "no" take five times longer.
-  #   * `crane auth login` (:66 here, and 21-mirror-push.sh:51) — DELIBERATELY LEFT ALONE. It is
-  #     idempotent, but it submits a CREDENTIAL, and Harbor supports failed-login lockout. Blindly
-  #     retrying a rejected password is the same shape as retrying a vCenter 401 — the one change
-  #     that can lock an account out — and `mirror_retry` cannot tell a rejected credential from a
-  #     transient. Wrapping it needs a predicate first; see B187.
+#   * `crane auth login` (:66 here, and 21-mirror-push.sh:51) — DELIBERATELY LEFT ALONE, and the
+#     REASON stated here until 2026-08-20 was FALSE. It said "Harbor supports failed-login lockout"
+#     and that retrying is "the same shape as retrying a vCenter 401 — the one change that can lock
+#     an account out". MEASURED at goharbor v2.15.2 (the appVersion of our pinned
+#     HARBOR_CHART_VERSION=1.19.2, confirmed with `helm show chart harbor/harbor --version 1.19.2`),
+#     reading upstream source at that tag:
+#         src/core/auth/authenticator.go : const frozenTime = 1500 * time.Millisecond
+#                                          lock.Lock(m.Principal); time.Sleep(frozenTime)
+#         src/core/auth/lock.go          : IsLocked = time.Since(failures[user]) <= d
+#     — a 1.5s SELF-EXPIRING per-principal sleep. NO attempt counter. NO lockout threshold.
+#
+#     THAT IS NOT A LICENCE TO RETRY, and the correction must not be read as one:
+#       (a) mirror_retry backs off 2s, 4s, 6s, 8s (lib/mirror.sh:120). EVERY interval EXCEEDS the
+#           1.5s window, so IsLocked is false on each retry and ALL attempts reach Authenticate().
+#           Harbor own sleep suppresses exactly nothing here.
+#       (b) auth.Login dispatches to whatever authenticator auth_mode selects, and the lock sits in
+#           FRONT of it, authenticator-agnostic. Under ldap_auth/oidc_auth each surviving attempt is
+#           a real BIND AT A DIRECTORY WE DO NOT CONTROL — on a VCF estate plausibly the same
+#           vSphere SSO that locks PERMANENTLY after 3 (matrix-standing-rules F.2, lib/vcenter.sh).
+#           mirror_retry 5 would then deliver 5 binds past a 3-strike policy.
+#       (c) the count is exactly N, not 3N: crane own retry fires only on 408/429/499/5xx
+#           (lib/mirror.sh:97), so a 401 is never retried internally.
+#     OUR install is db_auth — this repo sets auth_mode in 0 places, and the live lab unauthenticated
+#     /api/v2.0/systeminfo returned "auth_mode":"db_auth" (2026-08-20, no credential spent). But a
+#     scenario-2 tenant Harbor is the platform team, and its auth_mode is not ours to assume
+#     (RULE ZERO-B).
+#
+#     So: the vCenter equivalence is NOT identical, and it is NOT retractable either. A predicate
+#     that tells a 401 from a transient (B187) is NECESSARY AND NOT SUFFICIENT — the penalty for a
+#     rejected credential lives in whatever identity store auth_mode points at, which we neither
+#     control nor enumerate. Leave it un-retried.
   mirror_retry "${MIRROR_RETRIES:-5}" run crane push "$tarball" "$ref" "${CRANE_INSECURE[@]}"
   pushed=$((pushed + 1))
 done

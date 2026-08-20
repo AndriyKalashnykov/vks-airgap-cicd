@@ -95,6 +95,29 @@ _mask() {
   else printf '<hidden: not a terminal — re-run with SHOW_SECRETS=1>'; fi
 }
 
+# ── _settle_note <indent> — the ONE place that names the remedies (B202 F3) ──────────────────────
+# Three arms of this report describe a possibly-stale credential, and until 2026-08-20 they named
+# DIFFERENT remedies or NONE: the STORED arm — the one a post-matrix box with a surviving overlay
+# actually lands in, and the one with the strongest "may be from a lab that no longer exists"
+# language — named no target at all. That is the operator's original complaint reproduced verbatim.
+# One helper, called from every arm, so the copies cannot drift.
+#
+# The two commands do DIFFERENT JOBS and the distinction is the point: env-validate DIAGNOSES (it
+# authenticates and reports the 401); harbor-admin-password FIXES (it reads the INSTALLED admin
+# credential and writes a working one). Naming only the diagnosis leaves the reader knowing they are
+# broken with no way forward.
+_settle_note() {
+  local i="${1:-        }"
+  printf '%sSettle it — two different jobs:\n' "$i"
+  printf '%s  DIAGNOSE  make env-validate          authenticates against Harbor and reports the 401\n' "$i"
+  printf '%s  FIX       make harbor-admin-password reads the INSTALLED admin credential and writes a\n' "$i"
+  printf '%s                                       WORKING one to .env. It VERIFIES BEFORE WRITING,\n' "$i"
+  printf '%s                                       never replaces a credential that already works,\n' "$i"
+  printf '%s                                       and REFUSES if yours is a robot$ account (mint a\n' "$i"
+  printf '%s                                       fresh one with: make harbor-robot).\n' "$i"
+}
+
+
 # --- resolve URLs ---------------------------------------------------------------------
 # Harbor keeps its OWN LB (not behind the ingress); http when HARBOR_INSECURE=1 (KinD).
 harbor_scheme="https"; [ "${HARBOR_INSECURE:-0}" = "1" ] && harbor_scheme="http"
@@ -415,14 +438,16 @@ case "$_prov" in
               printf '                   this cluster. An overlay SURVIVES A REBUILD, so a password or an IP\n'
               printf '                   here may be from a lab that no longer exists. Run: make state-stamp\n'
               printf '                   after an install to make it self-identifying; re-run any value that\n'
-              printf '                   is rejected rather than assuming it is wrong.\n' ;;
+              printf '                   is rejected rather than assuming it is wrong.\n'
+              _settle_note '                   ' ;;
   *)          if [ "$_env_populated" = 1 ]; then
                 printf '    values below : from YOUR .env — no installer has published anything, so these are the\n'
                 printf '                   values you supplied, not placeholders. .env carries NO cluster stamp, so\n'
                 printf '                   this report cannot confirm they belong to the cluster you are talking to;\n'
                 printf '                   a value left over from a destroyed lab looks identical to one you just\n'
-                printf '                   typed. Run: make env-validate (it authenticates against Harbor); re-run\n'
-                printf '                   any value it rejects rather than assuming it is wrong.\n'
+                printf '                   typed. Re-run any value that is rejected rather than assuming it\n'
+                printf '                   is wrong.\n'
+                _settle_note '                   '
               else
                 printf '    values below : DEFAULTS from .env / .env.example — these ARE PLACEHOLDERS, not credentials\n'
               fi ;;
@@ -460,6 +485,22 @@ add_row() { rows="${rows}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\n'; }
 # Ordered by the pipeline flow: Gitea (push) -> Tekton (build) -> Harbor (registry) -> ArgoCD (deploy) -> apps.
 add_row "Gitea"  "$gitea_url"  "$gitea_user"  "$gitea_pw"
 add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)"
+# ── WHY THIS ROW IS NOT READ LIVE FROM THE CLUSTER (B202 F5/D) ──────────────────────────────────
+# NOT because "a printer must not probe" — it demonstrably does: the guest-node SSH row below runs
+# two live kubectl calls (PR #901). Stating that as the reason would be refuted by this very file.
+#
+# The real reason is a PRIVILEGE INVERSION. After scenario-1 Step 9, `.env` holds the LEAST-PRIVILEGE
+# robot (22-harbor-robot.sh publishes `robot$<project>+<name>`) while the Supervisor secret holds
+# ADMIN. "Prefer the cluster" would therefore promote admin over the account the pipeline actually
+# runs as — and taking only the PASSWORD rebuilds the mixed pair whose 401 is already MEASURED at
+# 22-harbor-robot.sh:200-206. There are four states where `.env` is authoritative and the cluster is
+# stale: the Step 9 robot; a ROTATED admin password (goharbor applies HARBOR_ADMIN_PASSWORD only at
+# first bootstrap); a re-install over a surviving DB; and values the cluster does not carry at all.
+#
+# ⚠️ IF ANYONE EVER DOES ADD A LIVE READ HERE: username and secret move as ONE ATOMIC PAIR from ONE
+# source, never field-by-field. `make harbor-admin-password` already does this correctly
+# (env_publish_all writes BOTH keys, and since B202 F4 it REFUSES to overwrite a robot$ pair).
+# test-creds-show.sh asserts this mechanically — a comment alone is not the control.
 add_row "Harbor" "$harbor_url" "$harbor_user" "$harbor_pw"
 # Render the PROVENANCE with the value. A bare secret here reads as "this is your password",
 # and on the primary runbook it is the pre-rotation one from Step 5 onward — which is the state
@@ -523,8 +564,7 @@ if [ "$_have_sink" = 0 ] && [ "$_env_populated" = 1 ]; then
   printf '        stamped for any cluster. This report therefore cannot tell a value you typed a\n'
   printf '        minute ago from one left over from a lab that no longer exists; they are identical\n'
   printf '        on screen. Treat every credential here as LIVE until you know otherwise.\n'
-  printf '          Settle it: make env-validate — it authenticates against Harbor and reports a 401\n'
-  printf '                     rather than leaving you to guess.\n'
+  _settle_note '          '
   printf '          KinD     : you need set nothing by hand; the install discovers and fills these in.\n'
 elif [ "$_have_sink" = 0 ]; then
   printf '\n  note: EVERY value above is a PLACEHOLDER from .env.example, not a credential —\n'
@@ -605,35 +645,74 @@ _lab_add "vcf CLI"   "(the VKS / SSO account)"  "$(_lab_plain "${VKS_USERNAME:-}
 #
 # No SSO bind happens here: `supervisor_kubeconfig` only RESOLVES an existing file and never
 # refreshes a token. Keep it that way (see the prohibition above).
-_ssh_pw=""; _lab_err=""
-if [ "$_no_probe_snapshot" != "1" ] && [ -n "${VKS_NAMESPACE:-}" ]; then
+# ⚠️ CORRECTED 2026-08-20 (B202 F7). The comment above said "check rc, not the match count" and the
+# FIRST version of this block did the opposite: `_lab_err` was written at two sites and NEVER READ,
+# the rc was discarded by `|| true`, and the branch tested `[ -n "$_ssh_sec" ]` — the match count.
+# So Forbidden, an expired Supervisor token and an unreachable API ALL rendered `<not readable>`,
+# indistinguishable from "this cluster has no such secret". That is the same "I could not ask" vs
+# "the answer is no" conflation this repo already fixed twice (harbor_auth_verdict's three outcomes,
+# classify_kube_failure's eight classes) — and it failed in the REASSURING direction, in the file
+# RULE ZERO-B makes the end user's only credentials surface.
+#
+# The LISTING MUST NOT BE A PIPELINE. `kubectl ... | sed | grep | head` yields HEAD's status, so the
+# rc is meaningless before it is even discarded. Capture kubectl alone, read its rc, then filter.
+_ssh_pw=""; _lab_err=""; _ssh_sec=""; _ssh_state="not probed"
+if [ "$_no_probe_snapshot" = "1" ]; then
+  _ssh_state="not probed (CREDS_NO_PROBE=1)"
+elif [ -z "${VKS_NAMESPACE:-}" ]; then
+  _ssh_state="not probed (VKS_NAMESPACE unset)"
+else
   _sup_kc="$(supervisor_kubeconfig 2>/dev/null || true)"
-  if [ -n "$_sup_kc" ] && [ -f "$_sup_kc" ]; then
+  if [ -z "$_sup_kc" ] || [ ! -f "$_sup_kc" ]; then
+    _ssh_state="no Supervisor kubeconfig — run: make vks-login"
+  else
     _lab_err="$(mktemp)"
-    _ssh_sec="$(timeout "${TOOL_VERSION_TIMEOUT_SECONDS:-20}" kubectl --kubeconfig "$_sup_kc" \
-                  -n "$VKS_NAMESPACE" get secret -o name </dev/null 2>"$_lab_err" \
-                | sed 's|^secret/||' | grep -E -- '-ssh-password$' | head -1 || true)"
-    if [ -n "$_ssh_sec" ]; then
-      # stderr to a FILE, never 2>&1: a server `Warning:` header concatenates in front of the
-      # base64 on a SUCCESSFUL read and base64 -d then emits partial garbage (lib/argocd.sh:327).
-      _ssh_b64="$(timeout "${TOOL_VERSION_TIMEOUT_SECONDS:-20}" kubectl --kubeconfig "$_sup_kc" \
-                    -n "$VKS_NAMESPACE" get secret "$_ssh_sec" \
-                    -o jsonpath='{.data.ssh-passwordkey}' </dev/null 2>>"$_lab_err" || true)"
-      # purity-check before decoding, or a partial decode ships a WRONG password.
-      case "$_ssh_b64" in ''|*[!A-Za-z0-9+/=]*) _ssh_b64="" ;; esac
-      if [ -n "$_ssh_b64" ]; then
-        _ssh_pw="$(printf '%s' "$_ssh_b64" | base64 -d 2>/dev/null || true)"
+    # `&& rc=0 || rc=$?` and NOT `; rc=$?` — the latter dies under `set -e` (rules/shell).
+    _ssh_list="$(timeout "${TOOL_VERSION_TIMEOUT_SECONDS:-20}" kubectl --kubeconfig "$_sup_kc" \
+                   -n "$VKS_NAMESPACE" get secret -o name </dev/null 2>"$_lab_err")" && _ssh_rc=0 || _ssh_rc=$?
+    if [ "$_ssh_rc" -ne 0 ]; then
+      # THE WHOLE POINT: name WHY we could not ask, so it is never mistaken for "there is none".
+      case "$(classify_kube_failure "$_lab_err")" in
+        FORBIDDEN)          _ssh_state="could not ask — FORBIDDEN: this identity may not list secrets in '${VKS_NAMESPACE}'. Ask your platform admin." ;;
+        UNAUTHORIZED)       _ssh_state="could not ask — the Supervisor REJECTED this kubeconfig. Re-run: make vks-login" ;;
+        STALE_CA)           _ssh_state="could not ask — the Supervisor answered but its CA does not verify (kubeconfig from a destroyed lab?)" ;;
+        UNREACHABLE)        _ssh_state="could not ask — the Supervisor is unreachable from here" ;;
+        PLAINTEXT)          _ssh_state="could not ask — the Supervisor endpoint answered PLAINTEXT where TLS was expected" ;;
+        NO_KUBE_TARGET)     _ssh_state="could not ask — the kubeconfig names no cluster" ;;
+        KUBECONFIG_UNUSABLE) _ssh_state="could not ask — the kubeconfig is unusable (something it NAMES is missing)" ;;
+        *)                  _ssh_state="could not ask — kubectl failed (rc=${_ssh_rc})" ;;
+      esac
+    else
+      _ssh_sec="$(printf '%s' "$_ssh_list" | sed 's|^secret/||' | grep -E -- '-ssh-password$' | head -1 || true)"
+      if [ -z "$_ssh_sec" ]; then
+        _ssh_state="none in '${VKS_NAMESPACE}' — this cluster publishes no node-SSH secret"
+      else
+        # stderr to a FILE, never 2>&1: a server `Warning:` header concatenates in front of the
+        # base64 on a SUCCESSFUL read and base64 -d then emits partial garbage (lib/argocd.sh:327).
+        _ssh_b64="$(timeout "${TOOL_VERSION_TIMEOUT_SECONDS:-20}" kubectl --kubeconfig "$_sup_kc" \
+                      -n "$VKS_NAMESPACE" get secret "$_ssh_sec" \
+                      -o jsonpath='{.data.ssh-passwordkey}' </dev/null 2>>"$_lab_err")" && _ssh_rc=0 || _ssh_rc=$?
+        # purity-check before decoding, or a partial decode ships a WRONG password.
+        case "$_ssh_b64" in ''|*[!A-Za-z0-9+/=]*) _ssh_b64="" ;; esac
+        if [ "$_ssh_rc" -ne 0 ]; then
+          _ssh_state="could not read ${_ssh_sec} — $(classify_kube_failure "$_lab_err")"
+        elif [ -z "$_ssh_b64" ]; then
+          _ssh_state="${_ssh_sec} carries no usable ssh-passwordkey"
+        else
+          _ssh_pw="$(printf '%s' "$_ssh_b64" | base64 -d 2>/dev/null || true)"
+          [ -n "$_ssh_pw" ] || _ssh_state="${_ssh_sec} decoded empty"
+        fi
       fi
     fi
   fi
 fi
-# `vmware-system-user` is the VKS/TKG node account. MEASURED: it appears 0 times in this repo, so it
-# is labelled as convention rather than asserted as fact — do not upgrade the wording without an
-# actual ssh login proving it.
+# `vmware-system-user` — VERIFIED 2026-08-20, not a convention: `ssh -i <ssh-privatekey from the
+# <cluster>-ssh secret> vmware-system-user@<node>` returned `id -un` = vmware-system-user and the
+# node's own hostname. The `?` this row shipped with earlier that day is removed on that evidence.
 if [ -n "$_ssh_pw" ]; then
-  _lab_add "guest node SSH" "$(_lab_plain "$_ssh_sec")" "vmware-system-user?" "$(_lab_secret "$_ssh_pw")"
+  _lab_add "guest node SSH" "$(_lab_plain "$_ssh_sec")" "vmware-system-user" "$(_lab_secret "$_ssh_pw")"
 else
-  _lab_add "guest node SSH" "<not readable>" "vmware-system-user?" "<not set>"
+  _lab_add "guest node SSH" "$_ssh_state" "vmware-system-user" "<not readable>"
 fi
 
 # Widths, mirroring the table above. `if/then/fi` and NOT `[ ] && x` — a false test as the loop
@@ -665,7 +744,13 @@ EOF
 printf '\n  ⚠️ vCenter SSO locks the account PERMANENTLY after 3 failed attempts. This report SHOWS these\n'
 printf '     values and NEVER authenticates with them, so a wrong one is not spent here. If one is\n'
 printf '     rejected, STOP and confirm it with whoever owns the lab — do not retry.\n'
-printf '\n  showing 7 of the 7 credential values the scenario documents ask you to set, plus the guest-node\n'
+# DERIVED, not hardcoded (B202 F8): a literal rots the moment a scenario doc asks for an eighth var.
+_lab_n=0
+for _v in VCENTER_HOST VCENTER_USERNAME VCENTER_PASSWORD VKS_USERNAME VKS_PASSWORD \
+          VCF_CLI_VSPHERE_PASSWORD SUPERVISOR_HOST; do
+  _lab_n=$((_lab_n + 1))
+done
+printf '\n  showing all %s credential values the scenario documents ask you to set, plus the guest-node\n' "$_lab_n"
 printf '  SSH password READ LIVE from the Supervisor. There is no ssh row in .env because this repo never\n'
 printf '  asks you for one — the credential is not yours to supply, it is the cluster'\''s to hand you.\n'
 printf '  Source: %s in vSphere Namespace %s.\n' "${_ssh_sec:-<none found>}" "${VKS_NAMESPACE:-<unset>}"

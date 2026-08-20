@@ -624,6 +624,18 @@ fi
 # NEVER VERIFIED: this printer must not authenticate to vCenter — 3 failed binds lock the SSO account
 # PERMANENTLY. Harbor's penalty is a ~1.5s per-principal sleep and Gitea has none, so "we verify
 # Harbor" is not an argument for touching this one. Guards the file against a future convenience.
+# ── B202 F6: the ATOMIC-PAIR guard, as an ASSERTION rather than a comment ───────────────────────
+# A Harbor credential read that sets HARBOR_PASSWORD without HARBOR_USERNAME in the same block
+# rebuilds the mixed pair whose 401 is MEASURED at 22-harbor-robot.sh:200-206, and promotes admin
+# over the Step 9 robot. A comment recording that hazard is un-enforced and will be read past —
+# this repo's own record is that prose did not hold.
+if grep -nE '^[^#]*HARBOR_PASSWORD=.*(kubectl|jsonpath|base64 -d)' "${_CREDS_REPO}/scripts/creds.sh" \
+     | grep -qv 'HARBOR_USERNAME'; then
+  bad "creds.sh gained a live HARBOR_PASSWORD read with no HARBOR_USERNAME beside it" \
+      "username and secret must move as ONE atomic pair from ONE source; a mixed pair is a MEASURED 401"
+else
+  ok "creds.sh has no field-by-field Harbor credential read (the atomic-pair hazard stays closed)"
+fi
 if grep -qE 'vc_login|vc_api' "${_CREDS_REPO}/scripts/creds.sh"; then
   bad "creds.sh acquired a vCenter auth call" "3 failed binds lock the SSO account PERMANENTLY; this file SHOWS, never verifies"
 else
