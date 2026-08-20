@@ -129,7 +129,12 @@ out="$(render "")"
 # phrasings — so when I mutated two of them the gate stayed GREEN and reported the defect as caught. A
 # gate that greps prose is testing the prose.
 if printf '%s' "$out" | grep -q 'values-provenance: DEFAULT'; then
-  ok "no overlay -> declares values-provenance: DEFAULT (placeholders, not credentials)"
+  # ⚠️ THE GLOSS, NOT THE TOKEN, WAS THE STALE PART (B204). It used to read "(placeholders, not
+  # credentials)" as if DEFAULT meant that unconditionally. It does NOT: DEFAULT is ONE axis (no
+  # usable state overlay) and `env-populated` is the OTHER (did .env supply values). This case
+  # renders with SKIP_DOTENV=1 (see `render`), so env-populated=0 and "placeholders" IS true HERE —
+  # but the PAIR carries the meaning, and STATE 6 below pins the other cell of it.
+  ok "no overlay + SKIP_DOTENV -> values-provenance: DEFAULT with env-populated: 0 (placeholders)"
 else
   bad "no overlay -> the output does NOT declare values-provenance: DEFAULT. It prints
       harbor.vks.local / Harbor12345 as if they were real. That is the exact lie this gate exists for."
@@ -359,6 +364,21 @@ exec 9>&-; rm -f "$_fifo"
 out="$(render_with_env 'HARBOR_URL=192.168.101.130
 HARBOR_PASSWORD=fixture-value-not-a-real-secret
 ')"
+# ── B204: PIN THE TWO TOKENS TOGETHER, because neither means anything alone ─────────────────────
+# B204 claimed `values-provenance: DEFAULT` contradicts the prose "Treat every credential here as
+# LIVE". MEASURED: it does not — DEFAULT and env-populated are ORTHOGONAL AXES, and the pair
+# (DEFAULT, env-populated=1) already identifies "no overlay, but YOUR .env supplied real values"
+# uniquely. A fourth enum value (`SUPPLIED`) was proposed and REFUTED: it is either exactly that pair
+# (redundant), or it wins whenever .env is populated and DESTROYS the DISCOVERED/STORED split — the
+# branch carrying "may be from a lab that no longer exists", built after a measured 3-way failure.
+# So: NO product change. Pin the PAIR, which nothing did before — STATE 1 pins DEFAULT with
+# env-populated=0, and this state pinned env-populated=1 while saying NOTHING about provenance.
+if printf '%s' "$out" | grep -q 'values-provenance: DEFAULT'; then
+  ok "B204: populated .env + no overlay -> DEFAULT *paired with* env-populated: 1 (not placeholders)"
+else
+  bad "B204: populated .env + no overlay did NOT declare values-provenance: DEFAULT" \
+      "the two tokens are orthogonal axes; if either drifts, the pair stops identifying the state"
+fi
 if printf '%s' "$out" | grep -q 'env-populated: 1'; then
   ok "B161: a populated .env is DETECTED (env-populated: 1)"
 else

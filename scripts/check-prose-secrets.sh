@@ -34,7 +34,31 @@ cd "$SCRIPT_DIR/.." || { echo "check-prose-secrets: cannot cd to repo root"; exi
 # when the separator ends the LINE — by construction such a line carries no value after it.
 # The `admin ?/ ?[A-Za-z0-9]` arm needs no change: it already demands an alphanumeric after the
 # slash, so `.admin // empty` never matched it.
-PATTERN='password ?(:|/[^/])|passwd|pwd ?(:|/[^/])|sshpass -p|admin ?/ ?[A-Za-z0-9]|token ?(:|/[^/])|secret ?(:|/[^/])'
+# ── B203: the `make creds` TABLE shape — ONE arm added, and the row STAYS OPEN ───────────────────
+# The report renders whitespace-column rows (`Harbor   https://…   admin   <value>`), which satisfy
+# none of the arms above: MEASURED 0 of 3 realistic rows. The `admin` arm now also accepts 2+ SPACES
+# as the separator, not only `/`.
+#
+# `\b` is load-bearing and its cost was measured BOTH ways: without it, `gitea_admin  account` in
+# ordinary prose matches (a false positive class); with it, that class is gone and NO real row is
+# lost, because this repo's rendered usernames are bare `admin` (`.env.example` GITEA_ADMIN_USER=admin).
+# `robot$<project>+admin` STILL matches, because `+` is not a word character — and that is CORRECT:
+# such a line IS a robot credential row, so it is a true positive, not a residual hole.
+#
+# ⛔ TWO ARMS WERE CONSIDERED AND REFUTED BY MEASUREMENT — do not re-add either:
+#   * `admin +[A-Za-z0-9]{6}` (entropy-ish): 61 false positives across the real *.md corpus.
+#   * `Username +Password` (detect a pasted TABLE HEADER): ZERO DISCRIMINATION. Measured — it fires
+#     TWICE on `SKIP_DOTENV=1 creds.sh` output where every secret is a `<hidden…>` sentinel and no
+#     credential exists. It fires identically on the safe paste and the leaking one, and its cheapest
+#     remedy is to reword the HEADER, which leaves every credential row unflagged. A gate that fires
+#     on the CATEGORY rather than the FINDING.
+#
+# ⚠️ THIS DOES NOT CLOSE B203, AND THE ROW SAYS SO. The uncaught shape is the WORST one:
+#     guest node SSH   <secret-name>   vmware-system-user   <live password>
+# It carries no `admin`, so no widening of this arm can reach it — catching it needs either an
+# enumerated username list (rot) or a STATEFUL table-context gate (a NEW control, which needs its own
+# idea round). Do not mark B203 closed on the strength of this arm going green.
+PATTERN='password ?(:|/[^/])|passwd|pwd ?(:|/[^/])|sshpass -p|\badmin ?(/|  +) ?[A-Za-z0-9]|token ?(:|/[^/])|secret ?(:|/[^/])'
 
 # `--untracked` covers tracked AND present-but-untracked *.md (it still honours
 # .gitignore, so bundle/ and other ignored trees are skipped) — so a scratch
@@ -116,6 +140,20 @@ if [ "${1:-}" = --selftest ]; then
 # tracked, and this file is tracked. Low-entropy fixtures are also MORE representative -- a real
 # prose leak looks like "password: hunter2", not like a random token.
 _must_catch 'admin / <value>'          'use admin / Sup3rSecret99x7 on the bastion'
+  # ── B203: the `make creds` TABLE shape (whitespace columns, not `/`) ──────────────────────────
+  # RED-PROVEN both directions. The catches are the rows the report actually renders; the allows are
+  # the false-positive classes the `\b` and the `2+ spaces` requirements exist to exclude.
+  _must_catch 'creds table: admin row'   '  Harbor   https://harbor.vks.local   admin   Sup3rSecret99x7'
+  # shellcheck disable=SC2016  # the `$` is LITERAL: this is Harbor's robot-account NAME shape
+  # (robot$<project>+<name>), the exact text a pasted table row would carry. Nothing to expand.
+  _must_catch 'creds table: robot row'   '  Harbor   https://harbor.vks.local   robot$cicd+admin   Sup3rSecret99x7'
+  _must_pass  'prose: gitea_admin'       'the gitea_admin  account is created by the seeder'
+  _must_pass  'prose: single space'      'the admin account is created during install'
+  # ⚠️ THE UNCAUGHT SHAPE, PINNED AS A KNOWN GAP RATHER THAN LEFT SILENT (B203 stays OPEN).
+  # This row carries no `admin`, so no widening of that arm reaches it. It is asserted as ALLOWED so
+  # that the gap is VISIBLE in the selftest output instead of being an absence nobody notices — if a
+  # future arm ever catches it, THIS CASE FAILS and whoever did it must come here and close B203.
+  _must_pass  'B203 GAP: non-admin row'  '  guest node SSH   cicd-gc08-ssh-password   vmware-system-user   Sup3rSecret99x7'
   _must_catch 'token: <value>'           'the token: EXAMPLE-NOT-A-REAL-TOKEN is in the vault'
   _must_catch 'token / <value>'          'log in with token / EXAMPLE-NOT-A-REAL-TOKEN'
   _must_catch 'password: <value>'        'the password: p8krX3cBoBLI323 was rotated'
