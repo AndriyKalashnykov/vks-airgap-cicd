@@ -628,8 +628,19 @@ every cut, driving Chrome where an HTTP probe is not proof.
 
 ### 🔴 READ THIS BEFORE THE CUT — the certification does NOT cover today's `main`
 
-Run 8 (`/tmp/walk/VERDICT-20260818T212147Z-1408277.txt`) is **`MATRIX COMPLETE — walked 6 of 6
-designed rows`**, all rows **0 FAILED / 0 UNMET**. It certifies commit **`021c6a3`**.
+⚠️ **THE RUN-8 EVIDENCE NO LONGER EXISTS — destroyed by the 2026-08-19 18:46 EDT power loss.**
+`/tmp` is cleared on boot (`/usr/lib/tmpfiles.d/tmp.conf`), so `/tmp/walk/` is gone and a
+`find` for `VERDICT-*` across `$HOME` and `/tmp` returns **ZERO** files. The citation below is
+kept for the record but **does not resolve**, and every per-row log went with it — so there is
+**no baseline left to diff the next matrix against**, and a failing row cannot be told from a
+pre-existing flake. `git status` is structurally incapable of seeing this class of loss.
+🔴 **The next matrix MUST run with `WALK_OUT_ROOT=$HOME/walk-evidence`** (honoured at
+`nested-vsphere-lab/scripts/walk-matrix.sh:62`, which otherwise defaults to `/tmp/walk`), or the
+certification B108 closes on will be wiped by the next reboot exactly like this one was.
+
+Run 8 (`/tmp/walk/VERDICT-20260818T212147Z-1408277.txt`, **now destroyed**) was
+**`MATRIX COMPLETE — walked 6 of 6 designed rows`**, all rows **0 FAILED / 0 UNMET**,
+certifying commit **`021c6a3`**.
 `main` has since moved. `git diff --name-only 021c6a3..origin/main` is the only honest answer to
 "is main certified?" — **re-measured at this handoff: 25 commits, 50 files, 42 of them walked
 scripts or walked docs** (11/14 two handoffs ago, 19/49 one handoff ago — the drift is growing).
@@ -664,9 +675,10 @@ half the deliverable, not a formality. Nothing has been tagged.
   `rc != 0` cannot distinguish *died for the right reason* from *died earlier*.
 - **`make static-check` locally, `env -u GOROOT`, before every merge.** A PR runs
   `static-check-fast` + `static-check-pr`; **neither runs `sec`** or the wall-clock unit tests.
-- **A stale log will lie.** Cite the per-invocation `VERDICT-<runid>.txt`. Run 8 wrote its verdict
-  to `/tmp/walk/` **directly**, not into a `run-*` dir — the newest `run-*` dir is the older 5-of-6
-  run that failed on row 3.
+- **A stale log will lie — and here there is no log left to be stale.** Cite the per-invocation
+  `VERDICT-<runid>.txt`. Run 8 wrote its verdict to `/tmp/walk/` **directly**, not into a `run-*`
+  dir; both are gone with `/tmp` (see the ⚠️ above). Point the next run at
+  `WALK_OUT_ROOT=$HOME/walk-evidence` so its verdict survives a reboot.
 - **Never read pass/fail off a completion notification.** Grep the log for `RC=` or the harness's
   own verdict line.
 - **Do NOT edit `scripts/walk-matrix.sh`, `scripts/walk-doc.sh` or either scenario doc while a
