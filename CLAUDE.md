@@ -201,6 +201,42 @@ End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag wr
 
 **"Jump box" names up to three DIFFERENT machines — prefer *internet box* / *air-gap box* when it matters.** In a **dual-homed** run there is one box that reaches both the internet and the lab. In a **sneakernet** run there are two: the **internet box** (`mirror-pull`/`builder-build`/`bundle`) and the **air-gap box** (`bundle-load`/`mirror-push`/`builder-push`/`platform` — it CANNOT run `make deps`; see RULE ZERO-A). Separately, `make jumpbox*` builds a **test** jump-box container that itself needs the internet (it runs `make deps`). Note `docs/sneakernet.md` uses **internet box** / **air-gap box** for its two boxes (matching the README Delivery note — B59 reconciled the old inversion, 2026-07-23).
 
+## 🔒 RULE ZERO-B — THE END USER HAS ONLY THIS REPO. THE LAB IS A BLACK BOX (BLOCKING)
+
+They `git clone` **`vks-airgap-cicd`** and nothing else. They do **not** have `nested-vsphere-lab`, they did
+not build the lab, and they cannot read its Makefile, its `lab2-info.txt`, or its `make creds`. Everything
+they know about the lab is **the `.env` values [`docs/scenario-1.md`](docs/scenario-1.md) and
+[`docs/scenario-2.md`](docs/scenario-2.md) tell them to fill in.** In the real world that lab is a VCF/VKS
+estate someone else operates; `nested-vsphere-lab` is only how WE happen to conjure one.
+
+**Therefore:**
+
+1. **Never point the end user at `nested-vsphere-lab`** — not at its targets, its files, or its output. For
+    them that is a dead reference, exactly like citing a `/tmp` path after a reboot. If they need a value,
+    it must be reachable from THIS repo: from `.env`, from a `make` target here, or from the cluster.
+2. **Anything they must SEE must be surfaced by THIS repo.** A credential, endpoint, CA or command that
+    exists only in the lab repo does not exist for them. `make creds-show` is their ONLY credentials
+    surface — if it omits something they need, that is a defect in this repo, not a lookup they should
+    make elsewhere.
+3. **Any `make <target>` this repo PRINTS must exist in THIS Makefile.** A target that lives only in the
+    lab repo is unrunnable for them and reads as a broken product.
+4. **When you catch yourself writing "the lab does X", ask how the end user learns X.** If the answer is
+    "from the other repo", it is not an answer.
+
+**Measured 2026-08-20, and worth keeping that way:** `scenario-1.md`, `scenario-2.md` and `README.md`
+contain **zero** references to `nested-vsphere-lab` — the separation currently holds; do not erode it.
+Scenario-1 does tell them to set `VCENTER_HOST` / `VCENTER_USERNAME` / `VCENTER_PASSWORD` /
+`VCENTER_INSECURE`, and `.env.example` carries **9** `VCENTER_*` variables — so they DO supply vCenter
+credentials, into `.env`, in this repo. (This file may reference the lab repo freely: it is for the
+maintainer, not the reader of the scenarios.)
+
+⚠️ **THE INCIDENT THAT PRODUCED THIS RULE (2026-08-20).** The operator asked why `make creds` showed no
+vCenter or SSH credentials. The answer given was *"you ran the wrong repo's `creds` — use
+`make -C ~/projects/nested-vsphere-lab creds`."* That answer is **worthless for the actual audience**, and
+it turned a real product defect into a supposed user error. The defect is that this repo's own credentials
+report has no vCenter section although the end user has already typed those values into `.env` here.
+**Ask "does the end user have this?" BEFORE answering "where is it?".**
+
 ## Common commands
 
 | Command | What it does |
