@@ -625,13 +625,31 @@ fi
 # PERMANENTLY. Harbor's penalty is a ~1.5s per-principal sleep and Gitea has none, so "we verify
 # Harbor" is not an argument for touching this one. Guards the file against a future convenience.
 # ── B202 F6: the ATOMIC-PAIR guard, as an ASSERTION rather than a comment ───────────────────────
-# A Harbor credential read that sets HARBOR_PASSWORD without HARBOR_USERNAME in the same block
-# rebuilds the mixed pair whose 401 is MEASURED at 22-harbor-robot.sh:200-206, and promotes admin
-# over the Step 9 robot. A comment recording that hazard is un-enforced and will be read past —
-# this repo's own record is that prose did not hold.
-if grep -nE '^[^#]*HARBOR_PASSWORD=.*(kubectl|jsonpath|base64 -d)' "${_CREDS_REPO}/scripts/creds.sh" \
-     | grep -qv 'HARBOR_USERNAME'; then
-  bad "creds.sh gained a live HARBOR_PASSWORD read with no HARBOR_USERNAME beside it" \
+# A Harbor credential read that sets the password WITHOUT the username in the same statement rebuilds
+# the mixed pair whose 401 is MEASURED at 22-harbor-robot.sh:200-206, and promotes admin over the
+# Step 9 robot.
+#
+# ⚠️ THE FIRST VERSION OF THIS ASSERTION WAS VACUOUS and printed a FALSE ALL-CLEAR (impl round,
+# HIGH 2). It grepped `HARBOR_PASSWORD=` — but the variable that actually feeds the Harbor row is
+# `harbor_pw` (creds.sh assigns it, the table renders it). MEASURED: a real
+# `harbor_pw="$(kubectl ... | base64 -d)"` rendered GREEN and printed "the atomic-pair hazard stays
+# closed". It only fired on `HARBOR_PASSWORD=`, the one shape nobody would write. So it modelled the
+# hazard it could imagine rather than the one the file can actually grow.
+#
+# TWO fixes, both load-bearing:
+#   * match BOTH names, and
+#   * FOLD `\`-continuations first — the read is likely to be wrapped across lines, and a
+#     line-oriented grep cannot see a pair split over two of them.
+# NO `grep -qv`: the impl round measured that the harness grep (ugrep) returns 0 for
+# `<empty> | grep -qv X` where GNU grep returns 1 — i.e. the exact construct whose exit code cannot
+# be trusted across implementations. Capture the text and test the STRING instead.
+_creds_folded="$(sed -e :a -e '/\\$/N; s/\\\n//; ta' "${_CREDS_REPO}/scripts/creds.sh")"
+_atomic_bad="$(printf '%s\n' "$_creds_folded" \
+  | grep -nE '^[^#]*(HARBOR_PASSWORD|harbor_pw)=.*(kubectl|jsonpath|base64 -d)' \
+  | grep -v 'HARBOR_USERNAME')"
+if [ -n "$_atomic_bad" ]; then
+  bad "creds.sh gained a live Harbor credential read with no HARBOR_USERNAME in the same statement:
+      $(printf '%s' "$_atomic_bad" | head -2)" \
       "username and secret must move as ONE atomic pair from ONE source; a mixed pair is a MEASURED 401"
 else
   ok "creds.sh has no field-by-field Harbor credential read (the atomic-pair hazard stays closed)"

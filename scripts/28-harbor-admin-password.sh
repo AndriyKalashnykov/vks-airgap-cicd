@@ -53,32 +53,46 @@ if ! is_placeholder "${HARBOR_PASSWORD:-}"; then
   # no CA this printed a password verdict and then died with `could NOT check` -- contradicting
   # itself two lines later. One probe, as before: the verdict is captured, not re-read.
   early_verdict="$(harbor_auth_verdict)"
+
+  # A WORKING credential wins, whoever it belongs to. This arm must stay FIRST.
   case "$early_verdict" in
     accepted)
       log_info "HARBOR_USERNAME=${HARBOR_USERNAME:-admin} already authenticates against ${HARBOR_URL} - leaving it alone"
       log_info "  (re-run after 'make harbor-robot' and this stays out of the way: a working credential is never replaced)"
       exit 0 ;;
+  esac
+
+  # ⚠️ PAST THIS POINT WE ARE GOING TO REPLACE THE CREDENTIAL WITH ADMIN, so the robot guard belongs
+  # HERE — above the verdict switch — and NOT inside one of its arms (B202 impl round, HIGH 1).
+  #
+  # The first version of this guard lived inside the `rejected` arm only, so `unchecked:*` BYPASSED
+  # it and reached the admin write. MEASURED by the round, running this script with the verdict
+  # forced:  robot + rejected -> refused (correct);  robot + unchecked -> BYPASSED -> admin write.
+  # That is the WORSE direction: `unchecked` means NOTHING was sent to Harbor, so it is strictly LESS
+  # evidence than a rejection — and it is a NORMAL state (no CA yet before scenario-1 Step 8, after a
+  # CA rotation, or Harbor simply unreachable). Step 9 mints the robot and Step 8 fetches the CA, so
+  # the ordering that produces it is the documented one.
+  #
+  # It also made two shipped sentences FALSE in the same commit: this file's own header, and the
+  # operator-facing `_settle_note` in creds.sh which promises "REFUSES if yours is a robot$ account".
+  if harbor_username_is_robot; then
+    die "HARBOR_USERNAME='${HARBOR_USERNAME}' is a ROBOT account, and this command is about to replace
+     it with 'admin'. Refusing - that would silently downgrade a least-privilege setup to a full admin
+     credential, which is the opposite of what scenario-1 Step 9 set up.
+     Verdict for the credential in your .env: ${early_verdict}
+       - 'rejected'  => the platform team revoked or rotated it, or only one half of the pair drifted
+                        (22-harbor-robot.sh:200-206 records that MEASURED 401).
+       - 'unchecked' => NOTHING was sent to Harbor, so nothing is known about this robot at all. That
+                        is even weaker ground for promoting it to admin.
+       Mint a fresh one:  make harbor-robot
+     If you genuinely want the admin credential instead, clear HARBOR_USERNAME and HARBOR_PASSWORD
+     from ./.env first and re-run this - the choice should be explicit, not a side effect."
+  fi
+
+  case "$early_verdict" in
     unchecked:*)
       log_warn "could NOT check the HARBOR_PASSWORD currently in your .env against ${HARBOR_URL}: ${early_verdict#unchecked:} - reading the installed one" ;;
     *)
-      # ⚠️ A REJECTED **ROBOT** PAIR MUST NOT FALL THROUGH TO THE ADMIN WRITE (B202 F4).
-      # The header above says "a credential that already authenticates wins" -- true, but ONLY for
-      # `accepted`. On `rejected` this used to log_warn and fall straight through to
-      # `env_publish_all ... HARBOR_USERNAME admin` at the bottom of this file, so a robot the
-      # platform team REVOKED or ROTATED was silently PROMOTED TO ADMIN -- precisely the
-      # least-privilege downgrade the header claims this script exists to prevent. A robot is a
-      # DELIBERATE choice (scenario-1 Step 9, 22-harbor-robot.sh); repair it AS a robot.
-      case "${HARBOR_USERNAME:-}" in
-        robot\$*|robot@*)
-          die "HARBOR_USERNAME='${HARBOR_USERNAME}' is a ROBOT account and Harbor REJECTED it.
-     Refusing to replace it with 'admin' - that would silently downgrade a least-privilege setup to
-     a full admin credential, which is the opposite of what scenario-1 Step 9 set up.
-     A robot is rejected when the platform team revoked or rotated it, or when only one half of the
-     pair drifted (22-harbor-robot.sh:200-206 records that MEASURED 401).
-       Mint a fresh one:  make harbor-robot
-     If you genuinely want the admin credential instead, clear HARBOR_USERNAME and HARBOR_PASSWORD
-     from ./.env first and re-run this - the choice should be explicit, not a side effect." ;;
-      esac
       log_warn "the HARBOR_PASSWORD currently in your .env does NOT authenticate - reading the installed one" ;;
   esac
 fi

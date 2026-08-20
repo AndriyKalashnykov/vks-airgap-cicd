@@ -220,6 +220,26 @@ harbor_auth_ok() { [ "$(harbor_auth_verdict)" = accepted ]; }
 # NOT authenticate ... a Harbor whose password was later changed keeps the OLD one and this secret is
 # stale", about a password that had never been sent anywhere. An error that names the wrong cause is
 # worse than a crash: it sends the operator to fix a thing that is not broken.
+# harbor_username_is_robot [name] — true when the Harbor username is a ROBOT account.
+# SINGLE-SOURCED because two call sites guard the same concept and had DRIFTED APART: this file's
+# consumer used `robot\$*|robot@*` while 22-harbor-robot.sh used `'robot$'*`. Neither was findable
+# by grepping the other, which is how a guard gets fixed in one place and left open in the other.
+#
+# `robot@` is NOT included: it occurs 0 times anywhere else in scripts/ or docs/, and it would BLOCK
+# an ordinary LDAP human named robot@corp.example.com from an admin repair they are entitled to.
+#
+# ⚠️ KNOWN RESIDUAL, named rather than papered over: Harbor's robot_name_prefix is configurable, so a
+# platform-team Harbor may mint `svc$...` / `bot-...` / a bare `<project>+<name>`, and those are NOT
+# matched. Reachable only in scenario-2, where the Harbor is theirs (RULE ZERO-B). OUR minting is
+# always `robot$` (22-harbor-robot.sh) and IS covered. Do NOT widen this pattern blind — settle it
+# first with: GET /api/v2.0/configurations | jq .robot_name_prefix
+harbor_username_is_robot() {
+  case "${1:-${HARBOR_USERNAME:-}}" in
+    'robot$'*) return 0 ;;
+    *)         return 1 ;;
+  esac
+}
+
 harbor_auth_verdict() {
   [ -n "${HARBOR_URL:-}" ]              || { printf 'unchecked:no HARBOR_URL'; return; }
   if is_placeholder "${HARBOR_PASSWORD:-}"; then printf 'unchecked:no password'; return; fi
