@@ -50,7 +50,7 @@ spec:
         git clone -b "$(params.deploy-revision)" "$(params.deploy-url)" \
           "$(workspaces.scratch.path)/deploy"
     - name: set-tag
-      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/mikefarah/yq:4.53.3
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/mikefarah/yq:4.53.6
       env:
         - name: TAG
           value: $(params.tag)
