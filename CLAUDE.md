@@ -704,10 +704,24 @@ never opened.
 
 ### Open, and whose they are
 
-- **Yours, at your convenience:** confirm the VMCA fingerprint once against the vSphere UI (the fetch is
-  TOFU) — `A0:3C:C7:A3:9C:05:6C:0D:A1:BB:F5:95:17:02:BA:54:44:7C:24:C5:4B:FC:9B:C8:3C:47:0C:59:06:46:FE:F2`;
-  and **B178**, the stale lab CA in your Chrome NSS store, which a fresh cut invalidates with a
-  byte-identical subject so nothing looks wrong.
+- ✅ **B178 is FIXED (2026-08-20, by the operator) and the two items that used to sit here are CLOSED.**
+  The stale lab CA in the operator's Chrome NSS store was replaced with the live anchor and verified end to
+  end: stored fingerprint now equals the live VMCA, `curl --cacert` against it returns **HTTP 200**, and
+  Chrome renders **`Welcome to VMware vSphere`** with no interstitial — verified in the operator's OWN
+  running browser after a restart, not only on a copy. The fix was **demonstrated on a COPY
+  of the real store first** (empty store and stale-store both give `ERR_CERT_AUTHORITY_INVALID`; copy plus
+  the live anchor renders the UI), so the command handed over carried a proven outcome rather than an
+  assertion — which is what C.7 asks for.
+- ⚠️ **DO NOT put a VMCA fingerprint in a handoff as something to "confirm later" — it goes stale WITHIN
+  THE RUN, and there is no out-of-band channel here to confirm it against anyway.** Measured: a fingerprint
+  published at 22:24 was already dead by 00:24, because the matrix's mid-matrix rebuild re-runs `trust-vcsa`
+  and rewrites `vmca-root.pem` (mtime `00:24:52`, `REBUILD2.log` mentions `trust-vcsa` 54 times). And the
+  TOFU confirmation it asked for is **not available on this box**: vCenter's `/certs/download.zip` is the
+  same channel `trust-vcsa` already fetched from (circular), and the VCSA deploy logs record **zero**
+  occurrences of the VMCA thumbprint. Threat model, for proportion: `192.168.100.50` is reachable only via
+  `virbr-nmgmt`, a libvirt-private bridge this host created, on a VM inside `esxi01`, itself a domain on
+  this host — an attacker able to MITM that already owns the hypervisor. Read the anchor from
+  `~/.local/state/nested-lab/vmca-root.pem` when you need it; do not quote it forward.
 - **Owner decisions still open:** **B193/B195** (B195 is HIGH — only 2 of the 4 `fetch-*-ca` producers have
   a consent gate, and the two without are the SSO-admin pair), **B196**'s policy half, **B70** (decided as
   option C, needs an idea round and a lab).
