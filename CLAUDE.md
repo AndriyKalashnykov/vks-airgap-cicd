@@ -614,202 +614,101 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-19 — READY FOR A NEW LAB CUT. Nothing blocks it; the certification does not cover today's `main`
+## ▶️ HANDOFF 2026-08-20 — CERTIFIED 6/6 ON THE FIRST PASS AND TAGGED `v1.1.0`. The lab is LIVE and fully installed
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### The job, unchanged
+### The standing job is DONE — do not re-certify the same tree
 
-Rebuild the walkthrough matrix for scenario-1 **and** scenario-2, both as end-user documents, on
-throwaway Photon and Ubuntu VMs against a freshly cut lab. **Six rows, all green FROM THE FIRST GO
-over the FINAL tree.** Every fix resets that clock. Verify `creds-show` endpoints and logins after
-every cut, driving Chrome where an HTTP probe is not proof.
+`MATRIX COMPLETE — walked 6 of 6 designed rows (1 2 3 4 5 6)`, every row **0 FAILED / 0 UNMET**, over a
+**freshly cut lab**, on the **first pass**. No fix reset the clock. **B108 is CLOSED**; its full numbers
+live in that row, not here.
 
-### 🔴 READ THIS BEFORE THE CUT — the certification does NOT cover today's `main`
+- **Certified tree: `778fa77`. Tag: `v1.1.0`** (annotated), deliberately NOT on main's head — two commits
+  landed after it and neither was walked: `6cb7937` (Renovate's renovate-CLI pin, which **auto-merged 12
+  seconds before row 1 started**) and `1e75332` (a docs-only PR held unmerged for the run).
+- **Evidence: `~/walk-evidence/run-20260820T022721Z-272401/`** (`0700`), which **survives a reboot**.
+  That location is not cosmetic — the PREVIOUS certification's evidence was destroyed by the 2026-08-19
+  power loss because `walk-matrix.sh` defaults `WALK_OUT_ROOT=/tmp/walk` (filed as **B454**,
+  `nested-vsphere-lab` PR #90). **Always pass `WALK_OUT_ROOT` somewhere durable.**
+- Run 8's verdict path, cited in the previous handoff, **no longer resolves**. There is therefore **no
+  older baseline to diff against**; this run is the new baseline.
 
-⚠️ **THE RUN-8 EVIDENCE NO LONGER EXISTS — destroyed by the 2026-08-19 18:46 EDT power loss.**
-`/tmp` is cleared on boot (`/usr/lib/tmpfiles.d/tmp.conf`), so `/tmp/walk/` is gone and a
-`find` for `VERDICT-*` across `$HOME` and `/tmp` returns **ZERO** files. The citation below is
-kept for the record but **does not resolve**, and every per-row log went with it — so there is
-**no baseline left to diff the next matrix against**, and a failing row cannot be told from a
-pre-existing flake. `git status` is structurally incapable of seeing this class of loss.
-🔴 **The next matrix MUST run with `WALK_OUT_ROOT=$HOME/walk-evidence`** (honoured at
-`nested-vsphere-lab/scripts/walk-matrix.sh:62`, which otherwise defaults to `/tmp/walk`), or the
-certification B108 closes on will be wiped by the next reboot exactly like this one was.
+### The lab is UP and carries the full demo — do not assume it needs a cut
 
-Run 8 (`/tmp/walk/VERDICT-20260818T212147Z-1408277.txt`, **now destroyed**) was
-**`MATRIX COMPLETE — walked 6 of 6 designed rows`**, all rows **0 FAILED / 0 UNMET**,
-certifying commit **`021c6a3`**.
-`main` has since moved. `git diff --name-only 021c6a3..origin/main` is the only honest answer to
-"is main certified?" — **re-measured at this handoff: 25 commits, 50 files, 42 of them walked
-scripts or walked docs** (11/14 two handoffs ago, 19/49 one handoff ago — the drift is growing).
-**The first-go clock is reset and the next cut is what re-earns it.** Do not quote the 11/14 —
-re-run the command; every one of these numbers has rotted at least once.
+Measured after the matrix. `esxi01` is the only libvirt domain; everything else runs inside it.
 
-`B108` closes on **six rows green from the first go AND a new tag replacing `v1.0.1`** — the tag is
-half the deliverable, not a formality. Nothing has been tagged.
-
-### What landed this session, and what to distrust about it
-
-| | |
+| what | where |
 |---|---|
-| **B133 (CRITICAL) — CLOSED** | vCenter had a hardcoded `-k` on three curls: the SSO **administrator password** went to an unverified peer. It was the only credential-bearing TLS client here with no trust ladder. Now fails closed, with `VCENTER_INSECURE=1` as an explicit per-run opt-out. **Owner decision, on the record:** verify by default, CA optional and used when provided — which re-confirms B64 rather than reversing it. |
-| **`make fetch-vcenter-ca` — NEW** | Without it the fix is an **outage**: `VCENTER_CA_FILE` appeared **0 times** in `docs/`, so scenario-1 rows 1–4 would have died at **Step 2**, before Harbor, on this very cut. It selects the root **by handshake**, never by subject — every cut mints a new VMCA with a byte-identical subject. |
-| **B70 — owner decision taken: option C** | Adopt `tkg.tanzu.vmware.com/tkg-registry-additional-ca-cert` as the documented VKS path, KinD explicitly second-class. **NOT started.** Needs an idea round AND a lab, and it knowingly widens the stand-in/lab divergence. |
-| **B191, B174, B166, B188, B145, B192, B190, B69, B77, B156, B194 — closed** | See their rows; each carries its measurements. Three of them (**B192**, **B189**, **B178**) are corrections to rows *I* had filed wrong, and one (**B194**) is a fix whose first RED-proof measured nothing — the control caught it, the fixture was rebuilt, and the bug turned out real: `vc_api` returned **success over a truncated body**. |
-| **B193, B195 — newly filed** | The vCenter ladder has **no PIN** (`VCENTER_CA_SHA256` does not exist), so do **not** claim parity with the Harbor/ArgoCD/Supervisor ladders. `vc_api` still cannot tell 200 from truncated-after-200. |
-| **B188 — CLOSED, and its round refuted HALF my plan** | `ARGOCD_REGISTER_INSECURE` is now honoured **only** from the pre-`load_env` environment. It disables TLS verification and the choice is written into the **ArgoCD Cluster Secret**, so every later sync to that destination skipped verification — a `.env` line was a standing downgrade **and a ratchet** (`ARGOCD_REGISTER_INSECURE=0 make gitops` could not undo it). Measured: `.env=1`+caller`0` → **0**, `.env=1`+silent → **0**, **no `.env`+caller`1` → 1** so `e2e-cross-cluster.sh:72`'s prefix still wins. **What I did NOT ship:** adding `ALLOW_PUBLIC_CHARTS`/`BUNDLE_SKIP_STATIC_CHECK` to the snapshot — measured **zero callers** anywhere in `scripts/`, `Makefile`, `docs/`, `README.md` — and the `ok`-line suppression that existed only to pay for it. |
-| **B196 — newly filed, the round's CRITICAL-class find** | `VKS_INSECURE_SKIP_TLS_VERIFY` is the same shape and **worse covered**: it reads `${V:-}`, so the clobber gate's arm (d) **structurally cannot see it** (`check-env-clobber.sh:248-250` says it is caught only *"INCIDENTALLY"*). Two consumers (`30-vks-login.sh:275`, `31-fetch-argocd-kubeconfig.sh:96`) ⇒ needs a **shared helper**, not a copy-paste, and one of them is the **VKS auth path** — so it is filed, not shipped. `30-vks-login.sh:271` already tells operators *"a credential is submitted over this connection"*. |
-| **B104, B192 — closed** | B104 **REFUTED** (see below). B192 closed here and filed where the fix lives: `nested-vsphere-lab` **B453**, PR #83, merged. |
-| **B196 — the RATCHET is fixed; the rest is YOURS** | `VKS_INSECURE_SKIP_TLS_VERIFY` is snapshot-protected (both lists, one commit; `check-env-clobber` rc=0). It fixed a **false documented promise**: `.env.example:1209` says a `make vks-login VKS_INSECURE_SKIP_TLS_VERIFY=1` / `.env` override *"is not clobbered"* — it was. 🔴 **The open half is a policy call, not code:** its round BLOCKED reclassifying the var as prefix-only, because `.env` is the **documented, invited** channel in three places, and prefix-only makes `31-fetch-argocd-kubeconfig.sh` `die` **demanding the value the operator just set** — the bug `lib/os.sh:139-146` calls already fixed. Decide, or leave it: the ratchet is gone either way. |
-| **B102 — CLOSED** | Four unmatchable `Expect:` lines settled: 2 shipped a literal quoted from the producing code, 2 marked **human-only in the document itself** with the reason. Its round refuted 2 of my 4 candidates — `INTERNAL-IP` is a **fake-green** (passes on an all-NotReady cluster) *and* would have reddened `check-expect-literals`; L928 was a **silent no-op** (the block is skipped on every row). **scenario-2 was measured clean: 15 `Expect:` lines, ZERO unmatchable** — this was scenario-1-only, so rows 5–6's first green is better-evidenced than rows 1–4's. |
-| **B197 — newly filed** | Explicit `ARGOCD_MECHANISM=api` has **no `have argocd` precondition**, and the CLI is **not carried in the bundle** (`11-bundle.sh` mentions it 0 times) and installed only by the **internet-side-only** prereqs script. A missing binary is reported as *"argocd repo add failed for \<url\>"*, sending the operator to debug Gitea. Severity deliberately not inflated: the default `auto` degrades correctly, so reachability on the air-gap box is **unproven**. The far-side binary audit is otherwise **complete — `argocd` is the only gap.** |
+| vCenter | `vcsa.env1.lab.test` / 192.168.100.50 |
+| Supervisor | 192.168.101.128 |
+| Harbor | `harbor.env1.lab.test` / 192.168.101.130 — `cicd` 25 repos, `apps` 2 |
+| argocd-server | 192.168.101.131 (`cicd` ns, on the SUPERVISOR, as VKS ships it) |
+| guest cluster API | 192.168.101.132 |
+| Gitea | 192.168.101.133 |
+| Istio gateways | 192.168.101.134 / .135 |
+
+**ArgoCD carries 2 Applications, `gowebapp` and `javawebapp`, both Synced AND Healthy** — the whole
+`git push → Tekton → Harbor → ArgoCD → running workload` loop, for both languages, on this lab.
+
+### Verified AFTER the run by AUTHENTICATING, not by probing
+
+Rule C.6: never during a run, because a run reinstalls Harbor between cells. All of it was done without
+typing a password into a browser form and under a **throwaway `HOME`**, so the operator's NSS store was
+never opened.
+
+- **Harbor** — API basic-auth 200 (`admin`, sysadmin); the UI's OWN `/c/login` form endpoint 200 with a
+  `sid` cookie, and that cookie alone then authenticates the API; wrong password → **401**.
+- **ArgoCD** — `/api/v1/session` 200 over **fully verified TLS**, `argocd.token` cookie, cookie-only
+  `userinfo` → `loggedIn: True`; wrong password → **401**.
+- Both UIs rendered in Chrome with TLS verified and no interstitial.
 
 ### Distrust these
 
-- **The gate caught THREE defects in my own B133 change, and one was a FALSE PASS.** The test's
-  oracle cert had no IP SAN, so the 401 case — the one whose entire purpose is the SSO lockout
-  budget — went green **by dying at TLS without ever reaching the 401**. Only the sibling 503 case
-  exposed it. Assume the same shape exists elsewhere: a `want=fatal` assertion that checks only
-  `rc != 0` cannot distinguish *died for the right reason* from *died earlier*.
-- **`make static-check` locally, `env -u GOROOT`, before every merge.** A PR runs
-  `static-check-fast` + `static-check-pr`; **neither runs `sec`** or the wall-clock unit tests.
-- **A stale log will lie — and here there is no log left to be stale.** Cite the per-invocation
-  `VERDICT-<runid>.txt`. Run 8 wrote its verdict to `/tmp/walk/` **directly**, not into a `run-*`
-  dir; both are gone with `/tmp` (see the ⚠️ above). Point the next run at
-  `WALK_OUT_ROOT=$HOME/walk-evidence` so its verdict survives a reboot.
-- **Never read pass/fail off a completion notification.** Grep the log for `RC=` or the harness's
-  own verdict line.
-- **Do NOT edit `scripts/walk-matrix.sh`, `scripts/walk-doc.sh` or either scenario doc while a
-  matrix runs** — bash reads a script incrementally, and the harness `scp`s those files per row.
-- ⚠️ **`git switch main` FAILS in a worktree checkout** (`fatal: 'main' is already used by worktree
-  at …`), and with `2>/dev/null` that failure is **invisible** — so the `reset --hard origin/main`
-  you chained after it lands on **whatever branch you were actually on**. I did this three times
-  today; it was harmless only because those branches were already merged. Sync by `git checkout
-  <your-branch> && git reset --hard origin/main`, and read the branch name back.
-- ⚠️ **I destroyed an uncommitted operator file this session** — `nested-vsphere-lab`'s
-  `docs/BUILD-RECEIPTS.tsv` carried an unstaged build-receipt row from the 2026-08-18 cut, and a
-  `reset --hard` inside a multi-repo sync one-liner took it. Unstaged ⇒ no blob ⇒ no git recovery.
-  `/tmp/labcut-recover2.log:323` preserves `when=2026-08-18T11:03:02Z`, `elapsed_s=1233`,
-  `steps_ran=3`, `steps_skipped=4`; `sha`/`esxi.cpu`/`forced` would be **guesses**, so no
-  reconstructed row was written — a fabricated receipt is worse than a gap. **`reset --hard` never
-  goes in a compound block, and never in a repo whose tree you did not dirty.**
+- 🔴 **The repo's `.env` Harbor password is STALE — `make env-validate` returns a genuine 401.** This is
+  NOT a broken Harbor. The matrix installs Harbor from the walkbox VMs, and the harness destroys them, so
+  the credential it generated does not exist on this box. The live one is recoverable from the cluster
+  (the `harbor-core-ver-1` secret in the `svc-harbor-*` namespace). Decide whether to write it back into
+  `.env` before running anything that needs Harbor auth from the host.
+- **`make creds-show` correctly reports "no installer has published anything"** — also not a fault. The
+  host installed nothing; the walkboxes did. Its own text says it cannot tell a value you typed from one
+  left over from a destroyed lab, and that warning is accurate.
+- **Never read pass/fail off a completion notification.** Grep the log for `RC=` or the harness's own
+  verdict line. Same for `pgrep`/`ps` counts: they self-match, and both times one looked alarming tonight
+  it was the invoking shell at `etime 00:00`.
+- **A backlog row's proposed fix is a hypothesis, and two were refuted tonight before a line was written.**
+  B181's retry is refuted by its own row AND by the code comment (Stage 1 shipped in PR #850; Stage 2 says
+  do NOT build a retry on the strength of "it was probably transient"). B75-a's candidate fix is refuted at
+  four independently fatal layers. **Read rows to their end before implementing them** — B181 is 26,539
+  characters and the refutation is at the bottom.
+- **Line citations rot.** Several rows' coordinates were wrong tonight while their facts held. Read for
+  substance, never by coordinate.
 
-### Blocked, and on what
+### Open, and whose they are
 
-- **B77** — its remaining half **cannot be executed as written**: the §-numbers it cites no longer
-  exist (the doc was restructured; §4a is gone, §5/§6/§8 are different sections now). Re-derive from
-  `docs/reviews/2026-08-04-first-real-lab-measurements.md` against the CURRENT document. Do **not**
-  map the old numbers by guessing.
-- **B193 / B195** — 🔴 **an owner decision, and the design first prescribed for B193 is REFUTED.** Wiring
-  `ca_pin_verdict` into `_vc_tls` would print a FALSE fingerprint-mismatch on a CORRECT anchor
-  (`lib/vcenter.sh` does not source `lib/tls.sh` — verified by execution, `command -v` returns NOT
-  AVAILABLE). And a pin at CONSUMPTION buys nothing: it ships commented, so the normal case is unset,
-  and `make fetch-vcenter-ca` fetches over `curl -sk` from the very host being authenticated. **A pin
-  is only a control if its value PREDATES the fetch** ⇒ it belongs in the PRODUCER, with
-  `fetch-ca.sh`'s arms. **The decision you owe:** that gate `die`s with no TTY, and both fetches are
-  walked steps, so it reddens rows 1–4 unless the harness supplies the digests. Supply them, accept
-  red rows, or ship the gate TTY-only. **B195** is the same fix for `fetch-supervisor-ca.sh` — only
-  2 of 4 `fetch-*-ca` producers have the gate, and the two without are the SSO-admin pair.
-- **B26, B69, B156, B160, B175, B178, B189, B190, B192, B194** — see their rows.
-- 🔴 **B197's ORIGINAL TEXT IS WRONG AND IS MERGED — read its correction, not its premise.** I filed
-  "explicit `ARGOCD_MECHANISM=api` has no `have argocd` precondition"; the guard is at
-  `70-configure-argocd.sh:338-340` and I had stopped reading **eleven lines short** of it. The row
-  now leads with that and records the **three real defects** its round found instead — the top one
-  (`:333`/`:339` telling an operator to set the two variables they already set) is measurably wrong
-  today and is message-only.
-- **B181's blocker was ILLUSORY** — the row said *"C3'S SPECIFICATION IS NOT RECORDED ANYWHERE …
-  do NOT invent it"* while specifying C3 ~400 characters earlier. Nothing needed recovering. What is
-  owed is a decision, and its gate does **not** match its mechanism: the parenthetical gates on
-  **speed** (65 s) while the mechanism is a **correctness** guard against a false FATAL from one
-  root rotation — so "65 s is acceptable" does **not** dispose of it.
-- **B189 CLOSED as already-addressed** — `24-lab-preflight.sh:84-90` already prints the disclosure,
-  on the failure path where it is actionable, and `scenario-1.md:565-566` runs the two commands on
-  adjacent lines. Adding the proposed note would have been a second copy that must stay true.
-- ⚠️ **`make handoff-status` WAS LYING, and I hit it live (fixed, PR #887).** It counted
-  `${last}..main` — the **local** `main` ref, which `git fetch` never moves and which in a worktree
-  belongs to a different checkout. Measured with local main 18 commits stale: it reported **0**
-  while `origin/main` had moved **2**. It now prefers the branch's upstream. **If you are reading a
-  handoff older than PR #887, its "0 commits since" proves nothing.**
-- **B104 is CLOSED, REFUTED by its own idea round** (2026-08-19) — do not re-propose it. apt's
-  `Acquire::Retries` default is **already 3** (measured on apt 2.8.3/24.04 **and** 3.2.0/26.04), so
-  that half was a no-op; and `--retry-all-errors` on the `mise.run | sh` pipe turns today's loud
-  `rc=56` into a silent **rc=0**, so the `||` guard never fires and `sh` executes a garbled seam.
+- **Yours, at your convenience:** confirm the VMCA fingerprint once against the vSphere UI (the fetch is
+  TOFU) — `A0:3C:C7:A3:9C:05:6C:0D:A1:BB:F5:95:17:02:BA:54:44:7C:24:C5:4B:FC:9B:C8:3C:47:0C:59:06:46:FE:F2`;
+  and **B178**, the stale lab CA in your Chrome NSS store, which a fresh cut invalidates with a
+  byte-identical subject so nothing looks wrong.
+- **Owner decisions still open:** **B193/B195** (B195 is HIGH — only 2 of the 4 `fetch-*-ca` producers have
+  a consent gate, and the two without are the SSO-admin pair), **B196**'s policy half, **B70** (decided as
+  option C, needs an idea round and a lab).
+- **Deferred because the tree was frozen, now free to land:** **B198** (`check-toolchain-alignment`'s go arm
+  passes vacuously when either extraction is empty), **B200** (a stale generated include outliving its
+  source). Both touch walked files, so they will need re-certification before the next tag.
+- **Renovate #892 is HELD, not rejected** (**B199**). It is three bumps, not one. **Do NOT close it** —
+  closing adds the update to Renovate's ignore list.
+- **B75-a's fix direction is now MEASURED** (port-forward to `localhost`, which the cert covers), including
+  the trap that will bite whoever builds its RED-proof: the cert is `CA:FALSE`, so it must be trusted as a
+  PEER, not as a CA, or Chrome reports a Privacy error that reads like a product defect.
 
-⚠️ **DO NOT COUNT THE BACKLOG BY COLOUR — measured 2026-08-19, the marker vocabulary is NOT
-controlled.** Across **124** rows the head marker is one of at least seven things: `✅` (73), **four
-byte-distinct `🟢` sequences** (11+6+5+4), `🟡` (5), `⚠️` (5), `🔴` (4), `🟠` (3) — and several rows
-lead with `✅`/`🟠`/`⚠️` where a status emoji is expected, so any single-emoji grep silently measures
-a **subset it chose**. An earlier version of this line said *"4 red / 8 amber / 30 green"*, which
-summed to 42 of 124 and read as a complete census; it was an artifact of which three emoji I happened
-to grep. ⚠️ **AND THE DENOMINATOR HAS ITS OWN VERSION OF THE SAME BUG — measured 2026-08-19.**
-`^\| \*\*B[0-9]+\*\* \|` counts **126** rows; `^\| \*\*B[0-9]+[a-z-]*\*\* \|` counts **142**. The
-16 it silently drops are the **suffixed** rows — `B75-a`, `B75-b`, `B82-a`, `B102-fix`, and twelve
-`B<n>-orig` — so a count that looks like the whole backlog omits an entire naming convention the
-file uses. **Match the suffix, or say which rows you excluded.** At this handoff: **5 rows
-head-marked `🔴` of 142** — everything else needs reading. **None of the reds is simply
-open work** — verified by reading each to its end, not by its colour:
+### If you want another certification
 
-- **B70** is now DECIDED (option C) but needs an idea round and a lab; nothing is started.
-- **B77 is CLOSED** (2026-08-19): all five of the source review's findings are settled — the vCenter
-  REST capability went 0→23 hits in code, and the `yq`-creates-a-key trap is closed by construction
-  (anchored `awk`, which cannot create a key, plus a no-placeholder-survives assertion). I briefly
-  raised the missing browser flow as an owner decision; that was **my error** — the browser path is
-  an OPTION, not the default, and REST-as-default is exactly what the review asked for.
-- **B26**'s fix (3) is REFUTED as specified (measured: one non-zero cell in twenty-eight — the
-  gate would be satisfied by the upstream chart, not by us) and it carries an explicit
-  (a)–(f) rebuild spec if anyone wants it. Its remaining residual is **lab-gated**: one command,
-  `kubectl get mutatingwebhookconfiguration -o yaml | grep -A8 namespaceSelector`, against a VKS
-  guest cluster with Istio — because the shipped fixes were rendered against upstream 1.30.3
-  while VKS ships 1.28.2+vmware.1-vks.1 and Broadcom could patch the injector template.
-  **Add it to the post-cut checklist.**
-
-### Lab state as of this handoff (measured, not assumed)
-
-The lab is UP but **partially built**, and two things about it are worth knowing before the cut:
-
-- **vCenter answers** (`vcsa.env1.lab.test` → 192.168.100.50, HTTPS 200). Its anchor is fetchable
-  with the new `make fetch-vcenter-ca` — proven end to end: `1 candidate, 1 verified by handshake`.
-- **A Harbor from an earlier cut is still live** — `harbor.env1.lab.test` → 192.168.101.130, HTTPS
-  200 — so the credentials `make creds-show` prints are **live, not dead placeholders**. `argocd`
-  is NXDOMAIN, matching its `<not set>`.
-- 🔴 **`secrets/supervisor-ca.crt` is STALE and the workload cluster is unreachable because of it.**
-  `kubectl get ns` → `x509: certificate signed by unknown authority`; `make ca-status` says
-  `Supervisor CA … does NOT match 192.168.101.128`, `1 of 2 CA certificate(s) above are wrong`.
-  A re-cut re-mints it, so **do not fix it by hand first** — but if you need the current lab before
-  cutting, the remedy is `make fetch-supervisor-ca`, and `secrets/vmca-root.pem` is stale too
-  (measured rc=60 against the live vCenter).
-
-🔴 **And the credentials `make creds-show` prints DO NOT WORK — measured, not assumed.**
-`make env-validate` (which is the standalone Harbor-auth entry point, a fact worth knowing because
-there is no `make harbor-auth`) reported `Harbor reachable (https://harbor.env1.lab.test)` followed
-immediately by **`Harbor rejected HARBOR_USERNAME/HARBOR_PASSWORD (HTTP 401)`**, plus the stale
-kubeconfig. So the Harbor password in `.env` belongs to a lab that no longer exists — and
-`creds-show` said in as many words that it could not tell you that, which is the report working as
-designed rather than a defect. A re-cut regenerates them; **do not chase the 401 before the cut.**
-
-That state incidentally **confirmed B166 on real infrastructure**: with the cluster unreachable and
-`creds-show` reduced to "cluster: not reachable", `make ca-status` still returned a definitive
-verdict and named the remedy. The circular gate that row describes is genuinely broken.
-
-### Post-cut checklist — the lab-gated items, in one place
-
-1. `make labbox` against a lab with **no** `./secrets/vcenter-ca.pem` — confirms scenario-1 Step 2
-   refuses cleanly and the documented remedy works. **Cheapest decisive check before the cut**,
-   because rows 1–4 are the ones you are trying to get green first time.
-2. `make wcp-restart` with a valid anchor — confirms the wait survives a TLS blip (rc 35). The soft
-   arm is proven against a plaintext-listener analogue, not against vCenter mid-restart.
-3. `kubectl get mutatingwebhookconfiguration -o yaml | grep -A8 namespaceSelector` on a VKS guest
-   cluster with Istio — **B26**'s residual. The shipped inject-defences were rendered against
-   upstream 1.30.3; VKS ships `1.28.2+vmware.1-vks.1` and Broadcom could patch the template.
-4. **Operator action, not an agent's** — the lab CA in YOUR browser goes stale on every cut, and the
-   subject DN is byte-identical so nothing looks wrong. Measured 2026-08-19: the stored
-   `nested-vsphere-lab` entry gives **rc=60** against the live vCenter while the correct anchor gives
-   rc=0, so Chrome shows an error page on the vCenter UI. Remedy (yours to run):
-   `certutil -D -d sql:$HOME/.pki/nssdb -n nested-vsphere-lab`, then re-add the current one. **B178.**
-5. `stat -c %a ./secrets/*.kubeconfig` after `make vks-login` — **already answered** on this box
-   (every one is 600, the `vcf` CLI writes them correctly), so only re-check if that changes.
+Cut a new lab, then run all six rows over a FINAL tree, and pass `WALK_OUT_ROOT` somewhere under `$HOME`.
+The standing rules are [`docs/matrix-standing-rules.md`](docs/matrix-standing-rules.md); the pre-flight that
+saved real time tonight was checking that the Supervisor kubeconfig exists first, because a fresh cut has
+none (`make lab` deliberately does not log in) and the harness only discovers that after a 900s TKr wait.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
