@@ -230,6 +230,26 @@ Scenario-1 does tell them to set `VCENTER_HOST` / `VCENTER_USERNAME` / `VCENTER_
 credentials, into `.env`, in this repo. (This file may reference the lab repo freely: it is for the
 maintainer, not the reader of the scenarios.)
 
+**SHARPENING 2026-08-20 — the end user's credential surface is what they can OBTAIN, not what `.env`
+declares. Answering from the `.env` surface produces a confident, wrong "you can't have that".** Asked
+why `make creds` showed no ssh credentials, I answered — correctly about the wrong question — that this
+repo declares **0** SSH vars and the scenario documents mention ssh **0** times. The operator's follow-up
+was the right question: *knowing the vCenter/SSO password, can the end user obtain them?* **MEASURED
+against the live lab: yes.** The Supervisor's vSphere Namespace carries `<cluster>-ssh`
+(`ssh-privatekey`) and `<cluster>-ssh-password` (`ssh-passwordkey`, 44 bytes, decoded rc=0), and
+`sso:Administrator@vsphere.local` — a credential scenario-1 already tells them to supply — reads them.
+
+So the test for every row is **"can the end user GET this?"**, and the transitive chain counts:
+`.env` -> Supervisor -> Supervisor secrets -> guest kubeconfig -> guest secrets. If the answer is yes,
+`make creds` shows it, in plaintext, on their terminal. `_mask` keeps a **pipe** hidden, so this does not
+put secrets in the walk row logs.
+
+⚠️ **And the probe that says "there is nothing there" is the one to distrust.** My first measurement
+reported **0 ssh secrets** and was the INSTRUMENT failing: `get secret -A` is `Forbidden` to SSO admin on
+a Supervisor (cluster-wide list), and the grep swallowed the rc, so a **permission error read as an empty
+result**. Scope to the namespace and check rc, never the match count — an absence is a claim about your
+query before it is a claim about the world.
+
 ⚠️ **THE INCIDENT THAT PRODUCED THIS RULE (2026-08-20).** The operator asked why `make creds` showed no
 vCenter or SSH credentials. The answer given was *"you ran the wrong repo's `creds` — use
 `make -C ~/projects/nested-vsphere-lab creds`."* That answer is **worthless for the actual audience**, and
@@ -716,9 +736,20 @@ never opened.
   (the `harbor-core-ver-1` secret in the `svc-harbor-*` namespace, or — faster — it is the `.hp` file in the
   evidence directory above). Decide whether to write it back into `.env` before running anything that needs
   Harbor auth from the host.
-- **`make creds-show` correctly reports "no installer has published anything"** — also not a fault. The
-  host installed nothing; the walkboxes did. Its own text says it cannot tell a value you typed from one
-  left over from a destroyed lab, and that warning is accurate.
+- ⚠️ **RETRACTED 2026-08-20 (same day): `make creds-show` was NOT "correctly reporting" — it carried two
+  real defects, and this bullet blessed them.** What was true is the narrow part: the host installed
+  nothing, the walkboxes did, so the *overlay* sentence was accurate. What I did with that fact was wrong
+  — I generalised one accurate sentence into a verdict on the whole report and wrote it down as
+  not-a-fault, which is precisely what stops the next reader from checking. The operator found both
+  within hours. **(1)** It printed `NOTHING IS INSTALLED YET` one line above its own
+  `cluster : reachable`, because the flow line was computed from `_have_sink` — does `.env.state` exist
+  in THIS CHECKOUT — a per-checkout fact standing in for a world fact, and never consulted the cluster it
+  had already measured. **(2)** It omitted every lab credential: of 31 credential/endpoint-shaped vars in
+  `.env.example`, **20 never reached the report**, including every `VCENTER_*` and `VKS_*`. Both fixed in
+  PR #901; the report now states only what it can know, and shows the vCenter/VKS rows plus the
+  guest-node SSH password read live from the Supervisor. **The transferable lesson is the one that cost
+  the most: a green-looking component I have just reasoned about is exactly the one I am most likely to
+  certify without measuring.**
 - **Never read pass/fail off a completion notification.** Grep the log for `RC=` or the harness's own
   verdict line. Same for `pgrep`/`ps` counts: they self-match, and both times one looked alarming tonight
   it was the invoking shell at `etime 00:00`.
