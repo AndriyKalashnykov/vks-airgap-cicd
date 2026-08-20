@@ -119,7 +119,7 @@ render_with_env() {
   # source split it exists to test could not fire. Point the sink at $t and the case is hermetic in
   # both axes — overlay AND .env — which is the point of adding the second axis at all.
   ( cd "$t" && REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" CREDS_TOKEN=1 \
-      "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )
+      CREDS_NO_PROBE=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )
   rm -rf "$t"
 }
 
@@ -134,7 +134,10 @@ else
   bad "no overlay -> the output does NOT declare values-provenance: DEFAULT. It prints
       harbor.vks.local / Harbor12345 as if they were real. That is the exact lie this gate exists for."
 fi
-if printf '%s' "$out" | grep -qiE 'NOTHING IS INSTALLED YET|are a default'; then
+# ⚠️ The wording changed 2026-08-20 and the INTENT did not: the human must be told these are
+# PLACEHOLDERS. What was removed is the world-claim ("nothing is installed yet"), which this command
+# cannot know — it can only know where the values came from. Match the property, not the old prose.
+if printf '%s' "$out" | grep -qiE 'ARE PLACEHOLDERS|is a PLACEHOLDER|are a default'; then
   ok "no overlay -> and it says so in words a human will read, not only in the token"
 else
   bad "no overlay -> the token says DEFAULT but nothing tells the HUMAN. Both must be true."
@@ -173,9 +176,16 @@ else
   bad "ingress present -> creds-show fails to advertise the *.vks.local URLs. Over-correcting into
       silence is its own defect: with an ingress, those URLs are exactly what the operator wants."
 fi
-if printf '%s' "$out" | grep -qiE 'NOTHING IS INSTALLED YET|<not set>|<needs ingress>'; then
-  bad "fully installed -> the output still carries a 'not set'/'needs'/'nothing installed' marker:
-      $(printf '%s' "$out" | grep -oiE 'NOTHING IS INSTALLED YET|<not set>|<needs ingress>' | head -2 | tr '\n' ' ')"
+# ⚠️ SCOPED TO THE SERVICE TABLE, and the scoping IS the assertion. Its intent is "a fully-installed
+# PIPELINE has no unset SERVICE". The `Lab access` section added 2026-08-20 is a DIFFERENT CLASS: its
+# rows are values an operator types into .env for a REAL lab, and this fixture is KinD-shaped, so
+# `<not set>` there is the CORRECT answer. Grepping the whole output fails on a TRUTHFUL render — and
+# the tempting fix (drop `<not set>` from the pattern) would blind it to the service rows it exists
+# for. Cut at the section header instead; STATE 9 covers the lab rows on their own terms.
+out_services="$(printf '%s' "$out" | sed '/Lab access/,$d')"
+if printf '%s' "$out_services" | grep -qiE 'NOTHING IS INSTALLED YET|<not set>|<needs ingress>'; then
+  bad "fully installed -> the SERVICE table still carries a 'not set'/'needs'/'nothing installed' marker:
+      $(printf '%s' "$out_services" | grep -oiE 'NOTHING IS INSTALLED YET|<not set>|<needs ingress>' | head -2 | tr '\n' ' ')"
 else
   ok "fully installed -> no stale 'not set' / 'needs ingress' / 'defaults' markers remain"
 fi
@@ -386,8 +396,11 @@ fi
 # of this file pin. A fresh clone with no .env is a real persona and "these are placeholders" is TRUE
 # for them.
 out="$(render_with_env '')"
-if printf '%s' "$out" | grep -qiE 'NOTHING IS INSTALLED YET|are a default'; then
-  ok "an EMPTY .env still gets the original placeholders wording (the fix is additive)"
+# ⚠️ Matches the PROPERTY this case's own comment states — "these are placeholders" is TRUE for a
+# fresh clone — not the 2026-08-20 prose. The world-claim ("nothing is installed yet") was removed
+# from every arm because the command cannot know it; the placeholder claim was kept because it can.
+if printf '%s' "$out" | grep -qiE 'ARE PLACEHOLDERS|is a PLACEHOLDER|are a default'; then
+  ok "an EMPTY .env still says the values are placeholders (the fix is additive)"
 else
   bad "an EMPTY .env lost the original wording" "the fix rewrote an arm it was supposed to leave alone"
 fi
@@ -492,7 +505,148 @@ else
 fi
 rm -rf "$_envdir"
 
-printf '\nSUCCESS — creds-show tells the truth in every state (nothing installed / no ingress /\n         fully installed / UNSTAMPED overlay = the real-lab state / stamped-and-matching /\n         NO overlay but a POPULATED .env = where a real operator sits)\n'
+# ---- STATE 8: THE THIRD AXIS — CLUSTER REACHABILITY. ------------------------------------------------
+# ⚠️ THIS AXIS DID NOT EXIST, and its absence is why this gate could not fail on the defect the OWNER
+# hit. The header above says this suite "varies only the OVERLAY axis"; render_with_env added the .env
+# axis. Neither can reach the state a real operator sits in on a REAL LAB: no overlay on THIS checkout,
+# a populated .env, and a cluster that ANSWERS. Measured 2026-08-20 against a live lab with Harbor,
+# ArgoCD, Gitea, Tekton and two apps running and 31 namespaces visible, the report printed:
+#     cluster      : reachable — context 'nested-lab'
+#     flow         : real VKS lab (VKS_AUTH_METHOD=vcf), nothing installed yet
+# Two adjacent lines contradicting each other. The flow line is computed from `_have_sink` +
+# VKS_AUTH_METHOD ONLY (creds.sh:304-312) and NEVER consults `_cluster`, which is measured live two
+# lines below it — so it is INVARIANT under reachability. A/B proved it: identical flow line whether
+# the cluster answered or not.
+#
+# `_have_sink` is a fact about THIS CHECKOUT ("has an installer on THIS BOX published anything"), not
+# about the world. `.env.state` is gitignored and per-clone, so an end user hits the false claim
+# whenever the install happened elsewhere: a colleague installed and they cloned; a second operator on
+# a second box; or scenario-2's TENANT, who by definition never installs Harbor or ArgoCD at all.
+#
+# The stub is the whole point: no cluster, no credentials, no SSO attempt — just a kubectl on PATH that
+# answers `version` 0. creds.sh:324 gates reachability on exactly that call.
+render_with_cluster() {
+  local envbody="$1" reachable="$2" t
+  t="$(mktemp -d)"; mkdir -p "$t/bin"
+  cp .env.example "$t/.env.example"
+  printf '%s' "$envbody" > "$t/.env"
+  if [ "$reachable" = 1 ]; then
+    printf '#!/bin/sh\ncase "$*" in\n  *current-context*) echo stub-ctx ;;\n  *version*) exit 0 ;;\nesac\nexit 0\n' > "$t/bin/kubectl"
+  else
+    printf '#!/bin/sh\nexit 1\n' > "$t/bin/kubectl"
+  fi
+  chmod +x "$t/bin/kubectl"
+  : > "$t/kc"
+  ( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+      KUBECONFIG="$t/kc" CREDS_TOKEN=1 CREDS_NO_PROBE=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )
+  rm -rf "$t"
+}
+
+_real_env='HARBOR_URL=harbor.example.test
+HARBOR_USERNAME=admin
+HARBOR_PASSWORD=fixture-value-not-a-real-secret
+GITEA_ADMIN_PASSWORD=fixture-value-not-a-real-secret-two
+VKS_AUTH_METHOD=vcf'
+
+out="$(render_with_cluster "$_real_env" 1)"
+
+# POSITIVE CONTROL FIRST. Without it the assertion below passes VACUOUSLY whenever the stub is not
+# found, the probe changes shape, or creds.sh stops consulting PATH — i.e. exactly when the gate has
+# stopped measuring anything. A negative assertion needs proof the mechanism fired.
+if printf '%s' "$out" | grep -q 'cluster      : reachable'; then
+  ok "cluster axis: the stub kubectl is honoured — the report reads the cluster as reachable"
+else
+  bad "cluster axis: the stub was NOT honoured, so every assertion in STATE 8 is vacuous.
+      The report did not print 'cluster      : reachable'. Fix the stub before trusting this state."
+fi
+
+# THE DEFECT. This is the OWNER's A/B frozen as an assertion.
+# ⚠️ MATCH EVERY PHRASING, not the one I happened to fix. The first version of this grepped
+# 'nothing installed yet' (no "is") and went GREEN while `NOTHING IS INSTALLED YET` survived one line
+# above it, from a DIFFERENT print site. There are five sites in creds.sh that make this claim; a gate
+# keyed on one phrasing tests that phrasing, not the property.
+if printf '%s' "$out" | grep -qiE 'nothing (is )?installed yet'; then
+  bad "reachable cluster + populated .env + no overlay -> the report STILL claims 'nothing installed yet'.
+      That is a claim about THE WORLD inferred from '\$_have_sink', a fact about THIS CHECKOUT. The
+      cluster answered; the report never asked it. Measured on a live lab running the whole demo."
+else
+  ok "reachable cluster -> the report does NOT claim nothing is installed"
+fi
+
+# The sharper form: not merely wrong, SELF-CONTRADICTORY within one render.
+if printf '%s' "$out" | grep -q 'cluster      : reachable' \
+   && printf '%s' "$out" | grep -qiE 'nothing (is )?installed yet'; then
+  bad "the SAME render says 'cluster: reachable' and 'nothing installed yet' two lines apart.
+      A reader cannot tell which to believe, and the report gives them no way to decide."
+else
+  ok "no render contradicts itself about reachability vs installation"
+fi
+
+# The UNREACHABLE arm must keep working — a fix must not simply delete the claim in every state.
+out="$(render_with_cluster "$_real_env" 0)"
+if printf '%s' "$out" | grep -q 'cluster      : reachable'; then
+  bad "cluster axis: the UNREACHABLE stub was reported as reachable — the axis does not discriminate."
+else
+  ok "cluster axis: an unreachable cluster is reported as such (the axis discriminates)"
+fi
+
+# ---- STATE 9: the LAB ACCESS section — the operator asked "why don't I see vCenter credentials" ---
+# The answer was that nothing ever printed them. MEASURED 2026-08-20: of 31 credential/endpoint-shaped
+# vars in .env.example, 20 never reached this report, including every VCENTER_* and VKS_*.
+#
+# Both directions, because each fails differently:
+#   set   -> the values must APPEAR (a section that drops them IS the original defect)
+#   unset -> the section must still RENDER (one that vanishes when empty leaves the reader with no
+#            idea the values exist — which is how they stayed missing for so long)
+out="$(render_with_env '
+VCENTER_HOST=vcsa.example.test
+VCENTER_USERNAME=administrator@vsphere.local
+SUPERVISOR_HOST=10.0.0.9
+VKS_USERNAME=administrator@vsphere.local
+')"
+if printf '%s' "$out" | grep -q 'Lab access'; then
+  ok "lab vars set -> the Lab access section is rendered"
+else
+  bad "lab vars set -> no Lab access section" "the vCenter/VKS rows the operator asked for are missing"
+fi
+if printf '%s' "$out" | grep -q 'vcsa.example.test' && printf '%s' "$out" | grep -q '10.0.0.9'; then
+  ok "lab vars set -> vCenter and Supervisor endpoints are actually SHOWN"
+else
+  bad "lab vars set -> the endpoints are not shown" "the section renders but drops its values"
+fi
+# The lockout warning must travel WITH the row in EVERY arm — a caveat that prints only sometimes is
+# the trap rules/common/coding-style.md records.
+if printf '%s' "$out" | grep -qi 'PERMANENTLY after 3 failed'; then
+  ok "lab vars set -> the vCenter permanent-lockout warning is present"
+else
+  bad "lab vars set -> no lockout warning" "showing a vCenter credential without it invites a retry"
+fi
+# NEVER VERIFIED: this printer must not authenticate to vCenter — 3 failed binds lock the SSO account
+# PERMANENTLY. Harbor's penalty is a ~1.5s per-principal sleep and Gitea has none, so "we verify
+# Harbor" is not an argument for touching this one. Guards the file against a future convenience.
+if grep -qE 'vc_login|vc_api' "${_CREDS_REPO}/scripts/creds.sh"; then
+  bad "creds.sh acquired a vCenter auth call" "3 failed binds lock the SSO account PERMANENTLY; this file SHOWS, never verifies"
+else
+  ok "creds.sh still never authenticates to vCenter (no vc_login / vc_api)"
+fi
+out="$(render_with_env '')"
+if printf '%s' "$out" | grep -q 'Lab access'; then
+  ok "lab vars UNSET -> the section still renders (it does not vanish and hide that the values exist)"
+else
+  bad "lab vars UNSET -> the section vanished" "the reader cannot learn these values exist"
+fi
+
+fi
+
+# ⚠️ THE VERDICT IS RE-EVALUATED HERE, and it must be. The `if [ "$fail" = 0 ]` that opens at ~line 300
+# is a FAIL-FAST gate deciding whether to RUN the later states — it is not the verdict. It was also
+# PRINTING the verdict from inside its own branch, so its condition was read ONCE at line 300 and the
+# SUCCESS banner then fired unconditionally at the end. Measured 2026-08-20 while adding STATE 8: the
+# suite printed two `FAIL` lines and then "SUCCESS — creds-show tells the truth in every state".
+# `exit "$fail"` was correct throughout, so CI never mis-reported — but a HUMAN reading the output saw
+# SUCCESS above their own failures, which is the one thing this gate exists to not do.
+if [ "$fail" = 0 ]; then
+  printf '\nSUCCESS — creds-show tells the truth in every state (nothing installed / no ingress /\n         fully installed / UNSTAMPED overlay = the real-lab state / stamped-and-matching /\n         NO overlay but a POPULATED .env / a REACHABLE cluster / the LAB ACCESS rows)\n'
 else
   printf '\ncreds-show FAILED the truth check above.\n' >&2
 fi

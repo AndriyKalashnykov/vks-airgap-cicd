@@ -43,6 +43,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # So: read it from the PRE-load_env environment and honour only that.
 _show_secrets_snapshot="${SHOW_SECRETS:-0}"
 
+# ── CREDS_NO_PROBE, SNAPSHOTTED FOR THE SAME REASON AS SHOW_SECRETS ─────────────────────────────
+# Set it to 1 to forbid every cluster read below. `test-creds-show.sh` sets it so the OFFLINE suite
+# — which runs inside `static-check` and `make ci` — can never dial a live lab: two of its fixtures
+# carry REAL lab IPs, so an unguarded read would fire at real infrastructure from a unit test.
+# Snapshotted BEFORE load_env because `set -a` would otherwise let a `.env` line re-arm the probe
+# invisibly (lib/os.sh:501 records that exact clobber class).
+_no_probe_snapshot="${CREDS_NO_PROBE:-0}"
+
+# creds.sh had NO trap at all — the pre-existing `_argo_err` mktemp leaks on every error path.
+trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" 2>/dev/null || true' EXIT
+
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
 load_env
@@ -306,10 +317,26 @@ if [ "$_have_sink" = 1 ] && grep -q '^VKS_STATE_KIND=1' "$_sink" 2>/dev/null; th
 elif [ "$_have_sink" = 1 ]; then
   _flow="real lab (a state overlay exists and is NOT KinD-stamped)"
 elif [ "${VKS_AUTH_METHOD:-}" = "vcf" ]; then
-  _flow="real VKS lab (VKS_AUTH_METHOD=vcf), nothing installed yet"
+  _flow="real VKS lab (VKS_AUTH_METHOD=vcf)"
 else
-  _flow="undetermined — nothing installed yet (KinD: 'make e2e-kind' · lab: docs/scenario-1.md or scenario-2.md)"
+  _flow="undetermined (KinD: 'make e2e-kind' · lab: docs/scenario-1.md or scenario-2.md)"
 fi
+# ⚠️ THE FLOW LINE NAMES THE FLOW. IT MUST NOT CLAIM WHAT IS INSTALLED — it cannot know.
+# It is computed from `_have_sink` + VKS_AUTH_METHOD only, and `_cluster` is measured LIVE about
+# twenty lines below and was never consulted, so the claim was INVARIANT under reachability.
+# MEASURED 2026-08-20 against a lab running Harbor + ArgoCD + Gitea + Tekton + two apps, 31
+# namespaces visible: this printed `cluster: reachable — context 'nested-lab'` directly beneath
+# `flow: real VKS lab (VKS_AUTH_METHOD=vcf), nothing installed yet`. Two adjacent, contradictory
+# lines; the operator believed the wrong one and chased a 401 that had nothing to do with it.
+#
+# `_have_sink` answers "has an installer ON THIS BOX published anything" — a fact about THIS
+# CHECKOUT, not about the world. `.env.state` is gitignored and per-clone, so the false claim is
+# reachable by an ordinary end user with no harness in sight: a colleague installed and they cloned
+# the repo; a second operator on a second box; or scenario-2's TENANT, who by definition never
+# installs Harbor or ArgoCD. Do not re-add an installation claim here. If one is ever wanted it must
+# come from a live probe, and note that "installed" spans TWO clusters with TWO kubeconfigs —
+# Harbor/ArgoCD are Supervisor services while Gitea/Tekton are guest-cluster — so no single cheap
+# probe answers it. Pinned by STATE 8 in scripts/test-creds-show.sh.
 
 # Does the cluster actually answer? Bounded — never hang the summary on an unreachable API server.
 _cluster="not reachable (or KUBECONFIG unset)"
@@ -397,7 +424,7 @@ case "$_prov" in
                 printf '                   typed. Run: make env-validate (it authenticates against Harbor); re-run\n'
                 printf '                   any value it rejects rather than assuming it is wrong.\n'
               else
-                printf '    values below : DEFAULTS from .env / .env.example — NOTHING IS INSTALLED YET, these are placeholders\n'
+                printf '    values below : DEFAULTS from .env / .env.example — these ARE PLACEHOLDERS, not credentials\n'
               fi ;;
 esac
 printf '    state overlay: %s\n' \
@@ -491,7 +518,7 @@ if [ "$_have_sink" = 0 ] && [ "$_env_populated" = 1 ]; then
   # (measured: uncommented=0), so a value on screen CANNOT have come from there, and on a real lab
   # the address is a live one the operator typed. Being told "placeholder" about a real credential
   # is how it ends up in a ticket, a screenshot or a chat, unrotated.
-  printf '\n  note: nothing is installed yet, so no installer has published anything — but the values\n'
+  printf '\n  note: no installer has published anything ON THIS BOX — but the values\n'
   printf '        above are NOT placeholders: they came from YOUR .env, which is not tracked and not\n'
   printf '        stamped for any cluster. This report therefore cannot tell a value you typed a\n'
   printf '        minute ago from one left over from a lab that no longer exists; they are identical\n'
@@ -500,7 +527,7 @@ if [ "$_have_sink" = 0 ] && [ "$_env_populated" = 1 ]; then
   printf '                     rather than leaving you to guess.\n'
   printf '          KinD     : you need set nothing by hand; the install discovers and fills these in.\n'
 elif [ "$_have_sink" = 0 ]; then
-  printf '\n  note: nothing is installed yet, so EVERY value above is a default from .env.example —\n'
+  printf '\n  note: EVERY value above is a PLACEHOLDER from .env.example, not a credential —\n'
   printf '        including Harbor'\''s and Gitea'\''s. None of them exists.\n'
   printf '          KinD     : the real addresses and passwords are discovered and filled in for you by\n'
   printf '                     the install (make e2e-kind / make install-all). Set nothing by hand.\n'
@@ -518,4 +545,129 @@ else
     printf '        on a real lab, set ARGOCD_SERVER in .env.\n'
   fi
 fi
+
+# ── Lab access — the values the END USER supplies, and which NO installer publishes ──────────────
+# RULE ZERO-B: the end user clones THIS repo only. The lab is a black box to them; everything they
+# know about it arrives through `.env`, which the scenario documents tell them to fill.
+#
+# These rows were MISSING ENTIRELY, which is what the operator hit: they asked "why don't I see
+# vCenter credentials" and the answer was that nothing here ever printed them. MEASURED 2026-08-20:
+# `.env.example` declares 31 credential/endpoint-shaped vars; 20 of them never reached this report.
+# The 7 below are exactly the ones the scenario documents instruct the reader to SET (VCENTER_HOST 3
+# mentions, VKS_USERNAME 6, SUPERVISOR_HOST 6, VCF_CLI_VSPHERE_PASSWORD 5, VCENTER_USERNAME 1,
+# VCENTER_PASSWORD 1, VKS_PASSWORD 1). The other 13 are timeouts, CA paths and kube-contexts — not
+# credentials, and not rows.
+#
+# ⚠️ NEVER AUTHENTICATE TO vCENTER FROM THIS PRINTER, AND NEVER REFRESH AN EXPIRED SUPERVISOR TOKEN
+# HERE. vSphere SSO locks the account PERMANENTLY after 3 failed binds (docs/matrix-standing-rules.md
+# §F.2, and lib/vcenter.sh:155-163 dies on the FIRST 401 for this reason). The precedent that it is
+# fine to VERIFY a credential does NOT extend to this row: Harbor's penalty is a ~1.5s per-principal
+# sleep and Gitea has none, so "we verify Harbor" is not an argument for touching vCenter.
+# `supervisor_kubeconfig()` only RESOLVES an existing file and never refreshes — keep it that way, or
+# merely rendering this section becomes an SSO bind. This section SHOWS; it never verifies.
+#
+# There is NO ssh row, and that is a measurement, not an omission: `.env.example` declares 0 SSH vars
+# and the scenario documents mention ssh 0 times. SSH to the lab appliances belongs to the LAB repo,
+# which the end user does not have. Do not invent a row for it.
+#
+# Secrets go through `_mask` exactly like the table above, so a TTY reveals and a PIPE hides. That is
+# what keeps the walk row logs secret-free; any future row added here MUST use `_mask` for the same
+# reason, or `/tmp/walk/MATRIX-row*.log` starts carrying live lab credentials.
+_lab_rows=""
+_lab_add() { _lab_rows="${_lab_rows}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\n'; }
+# ⚠️ EMPTY IS NOT A SECRET (same trap as :251) — `_mask` renders its sentinel unconditionally, so an
+# unset password would advertise a hidden value that does not exist and send the reader to
+# SHOW_SECRETS=1 for nothing.
+_lab_plain() { if [ -n "${1:-}" ]; then printf '%s' "$1"; else printf '<not set>'; fi; }
+_lab_secret() { if [ -n "${1:-}" ]; then _mask "$1"; else printf '<not set>'; fi; }
+
+_vc_ep=""; if [ -n "${VCENTER_HOST:-}" ]; then _vc_ep="https://${VCENTER_HOST}"; fi
+_sup_ep=""; if [ -n "${SUPERVISOR_HOST:-}" ]; then _sup_ep="https://${SUPERVISOR_HOST}"; fi
+_lab_add "vCenter"   "$(_lab_plain "$_vc_ep")"  "$(_lab_plain "${VCENTER_USERNAME:-}")" "$(_lab_secret "${VCENTER_PASSWORD:-}")"
+_lab_add "VKS / SSO" "$(_lab_plain "$_sup_ep")" "$(_lab_plain "${VKS_USERNAME:-}")"     "$(_lab_secret "${VKS_PASSWORD:-}")"
+_lab_add "vcf CLI"   "(the VKS / SSO account)"  "$(_lab_plain "${VKS_USERNAME:-}")"     "$(_lab_secret "${VCF_CLI_VSPHERE_PASSWORD:-}")"
+
+# ── guest-node SSH — READ LIVE, because the END USER CAN READ IT ────────────────────────────────
+# The operator asked whether knowing the vCenter/SSO credentials yields ssh access. MEASURED
+# 2026-08-20 against the live lab: YES. The Supervisor's vSphere Namespace carries
+#     <cluster>-ssh                 -> ssh-privatekey
+#     <cluster>-ssh-password        -> ssh-passwordkey   (44 bytes, decoded rc=0)
+# and an `sso:Administrator@vsphere.local` kubeconfig reads them. So by the standing rule — if the
+# end user can obtain it, this report shows it — it belongs here.
+#
+# ⚠️ MY FIRST MEASUREMENT SAID "0 ssh secrets" AND WAS THE INSTRUMENT FAILING. `get secret -A`
+# is Forbidden to SSO admin on a Supervisor (cluster-wide list), and the grep swallowed the rc, so a
+# permission error read as an empty result. Scope to the NAMESPACE; check rc, not the match count.
+#
+# ⚠️ DISCOVER the secret, never construct it from VKS_CLUSTER_NAME. MEASURED: `.env` said
+# `cicd-gc1` while the live secrets were `cicd-gc0819222721-ssh-password`. Same class as the
+# `harbor-core-ver-1` trap — a name that looks derivable and is not.
+#
+# No SSO bind happens here: `supervisor_kubeconfig` only RESOLVES an existing file and never
+# refreshes a token. Keep it that way (see the prohibition above).
+_ssh_pw=""; _lab_err=""
+if [ "$_no_probe_snapshot" != "1" ] && [ -n "${VKS_NAMESPACE:-}" ]; then
+  _sup_kc="$(supervisor_kubeconfig 2>/dev/null || true)"
+  if [ -n "$_sup_kc" ] && [ -f "$_sup_kc" ]; then
+    _lab_err="$(mktemp)"
+    _ssh_sec="$(timeout "${TOOL_VERSION_TIMEOUT_SECONDS:-20}" kubectl --kubeconfig "$_sup_kc" \
+                  -n "$VKS_NAMESPACE" get secret -o name </dev/null 2>"$_lab_err" \
+                | sed 's|^secret/||' | grep -E -- '-ssh-password$' | head -1 || true)"
+    if [ -n "$_ssh_sec" ]; then
+      # stderr to a FILE, never 2>&1: a server `Warning:` header concatenates in front of the
+      # base64 on a SUCCESSFUL read and base64 -d then emits partial garbage (lib/argocd.sh:327).
+      _ssh_b64="$(timeout "${TOOL_VERSION_TIMEOUT_SECONDS:-20}" kubectl --kubeconfig "$_sup_kc" \
+                    -n "$VKS_NAMESPACE" get secret "$_ssh_sec" \
+                    -o jsonpath='{.data.ssh-passwordkey}' </dev/null 2>>"$_lab_err" || true)"
+      # purity-check before decoding, or a partial decode ships a WRONG password.
+      case "$_ssh_b64" in ''|*[!A-Za-z0-9+/=]*) _ssh_b64="" ;; esac
+      if [ -n "$_ssh_b64" ]; then
+        _ssh_pw="$(printf '%s' "$_ssh_b64" | base64 -d 2>/dev/null || true)"
+      fi
+    fi
+  fi
+fi
+# `vmware-system-user` is the VKS/TKG node account. MEASURED: it appears 0 times in this repo, so it
+# is labelled as convention rather than asserted as fact — do not upgrade the wording without an
+# actual ssh login proving it.
+if [ -n "$_ssh_pw" ]; then
+  _lab_add "guest node SSH" "$(_lab_plain "$_ssh_sec")" "vmware-system-user?" "$(_lab_secret "$_ssh_pw")"
+else
+  _lab_add "guest node SSH" "<not readable>" "vmware-system-user?" "<not set>"
+fi
+
+# Widths, mirroring the table above. `if/then/fi` and NOT `[ ] && x` — a false test as the loop
+# body's last command returns non-zero and trips `set -e` (rules/shell: the `A && B` tail trap).
+_lw1=6; _lw2=8; _lw3=8
+while IFS=$'\t' read -r c1 c2 c3 c4; do
+  if [ -z "$c1" ]; then continue; fi
+  if [ ${#c1} -gt "$_lw1" ]; then _lw1=${#c1}; fi
+  if [ ${#c2} -gt "$_lw2" ]; then _lw2=${#c2}; fi
+  if [ ${#c3} -gt "$_lw3" ]; then _lw3=${#c3}; fi
+done <<EOF
+$_lab_rows
+EOF
+
+printf '\n  Lab access — you supplied these in .env; no installer publishes them\n'
+printf '\n  %-*s  %-*s  %-*s  %s\n' "$_lw1" "Target" "$_lw2" "Endpoint" "$_lw3" "Username" "Password"
+printf '  %-*s  %-*s  %-*s  %s\n' \
+  "$_lw1" "$(printf '%*s' "$_lw1" '' | tr ' ' '-')" \
+  "$_lw2" "$(printf '%*s' "$_lw2" '' | tr ' ' '-')" \
+  "$_lw3" "$(printf '%*s' "$_lw3" '' | tr ' ' '-')" \
+  "$(printf '%*s' 8 '' | tr ' ' '-')"
+while IFS=$'\t' read -r c1 c2 c3 c4; do
+  if [ -z "$c1" ]; then continue; fi
+  printf '  %-*s  %-*s  %-*s  %s\n' "$_lw1" "$c1" "$_lw2" "$c2" "$_lw3" "$c3" "$c4"
+done <<EOF
+$_lab_rows
+EOF
+
+printf '\n  ⚠️ vCenter SSO locks the account PERMANENTLY after 3 failed attempts. This report SHOWS these\n'
+printf '     values and NEVER authenticates with them, so a wrong one is not spent here. If one is\n'
+printf '     rejected, STOP and confirm it with whoever owns the lab — do not retry.\n'
+printf '\n  showing 7 of the 7 credential values the scenario documents ask you to set, plus the guest-node\n'
+printf '  SSH password READ LIVE from the Supervisor. There is no ssh row in .env because this repo never\n'
+printf '  asks you for one — the credential is not yours to supply, it is the cluster'\''s to hand you.\n'
+printf '  Source: %s in vSphere Namespace %s.\n' "${_ssh_sec:-<none found>}" "${VKS_NAMESPACE:-<unset>}"
+
 echo
