@@ -156,6 +156,14 @@
       "pinDigests": false
     },
     {
+      "description": "go is pinned TWICE for one logical version, exactly like kubectl above: .mise.toml (mise manager, depName 'go' - the toolchain CI and local dev TEST with) and the golang image (docker manager, depName 'golang' - what the pipeline BUILDS the app with, via images/images.txt + .env.example GOLANG_BUILD_TAG + each Go app's Dockerfile BUILDER_IMAGE arg, derived from apps/registry.tsv). DIFFERENT managers with DIFFERENT depNames, so by default Renovate opens two PRs and check-toolchain-alignment (Makefile:1057-1064, which asserts .mise.toml go == images.txt golang) goes RED on whichever lands first. MEASURED 2026-08-20: PR #892 bumped the image to 1.27.0 and left .mise.toml at 1.26.6, so it was UNMERGEABLE AS FILED - the gate was correct and Renovate had split a coupled set. Group both depNames so the two pins bump in ONE PR. Must come AFTER 'mise tools' AND 'Docker images' so it overrides both - packageRules apply in order and a later broad rule silently steals one half back out of the group, which is precisely how this pair got split.",
+      "matchPackageNames": [
+        "go",
+        "golang"
+      ],
+      "groupName": "go toolchain"
+    },
+    {
       "description": "kaniko's real image is gcr.io/kaniko-project/executor; the manifest customManager derives depName=kaniko-project/executor which defaults to Docker Hub (no such repo -> chronic 401 on the dashboard lookup). Point it at gcr.io. images.txt tracks the correct gcr.io ref and check-image-alignment is the deterministic backstop.",
       "matchDatasources": [
         "docker"
