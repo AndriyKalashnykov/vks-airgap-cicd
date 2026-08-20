@@ -37,6 +37,10 @@ require_cmd kubectl
 # password it installed Harbor with, and Step 9's robot is the credential the pipeline SHOULD run as.
 # Overwriting either with the admin secret would silently downgrade a least-privilege setup to admin
 # -- so a credential that already authenticates wins, and this script says so and exits.
+# ⚠️ THAT IS TRUE ONLY OF THE `accepted` BRANCH, and the sentence above used to oversell it (B202 F4).
+# A REJECTED credential still falls through to the admin write below; the guard added in the
+# `rejected` arm is what makes the claim true for a ROBOT pair. An ordinary rejected `admin` password
+# is still replaced, which is the whole point of the command.
 if ! is_placeholder "${HARBOR_PASSWORD:-}"; then
   # harbor_auth_ok, NOT harbor_auth_report: the reporter returns 0 for "nothing to report", which
   # includes an INCONCLUSIVE probe. Measured 2026-08-12 -- with a stale CA and a deliberately wrong
@@ -57,6 +61,24 @@ if ! is_placeholder "${HARBOR_PASSWORD:-}"; then
     unchecked:*)
       log_warn "could NOT check the HARBOR_PASSWORD currently in your .env against ${HARBOR_URL}: ${early_verdict#unchecked:} - reading the installed one" ;;
     *)
+      # ⚠️ A REJECTED **ROBOT** PAIR MUST NOT FALL THROUGH TO THE ADMIN WRITE (B202 F4).
+      # The header above says "a credential that already authenticates wins" -- true, but ONLY for
+      # `accepted`. On `rejected` this used to log_warn and fall straight through to
+      # `env_publish_all ... HARBOR_USERNAME admin` at the bottom of this file, so a robot the
+      # platform team REVOKED or ROTATED was silently PROMOTED TO ADMIN -- precisely the
+      # least-privilege downgrade the header claims this script exists to prevent. A robot is a
+      # DELIBERATE choice (scenario-1 Step 9, 22-harbor-robot.sh); repair it AS a robot.
+      case "${HARBOR_USERNAME:-}" in
+        robot\$*|robot@*)
+          die "HARBOR_USERNAME='${HARBOR_USERNAME}' is a ROBOT account and Harbor REJECTED it.
+     Refusing to replace it with 'admin' - that would silently downgrade a least-privilege setup to
+     a full admin credential, which is the opposite of what scenario-1 Step 9 set up.
+     A robot is rejected when the platform team revoked or rotated it, or when only one half of the
+     pair drifted (22-harbor-robot.sh:200-206 records that MEASURED 401).
+       Mint a fresh one:  make harbor-robot
+     If you genuinely want the admin credential instead, clear HARBOR_USERNAME and HARBOR_PASSWORD
+     from ./.env first and re-run this - the choice should be explicit, not a side effect." ;;
+      esac
       log_warn "the HARBOR_PASSWORD currently in your .env does NOT authenticate - reading the installed one" ;;
   esac
 fi
