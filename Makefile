@@ -378,6 +378,10 @@ check-how-provenance: ## Gate: every `# how:` acquisition command must be runnab
 check-vks-provenance: ## Gate: every fact row in a docs/vks-services Confidence table carries a resolvable [src:] citation token (code refs are opened + verified)
 	@$(SCRIPTS)/check-vks-provenance.sh
 
+.PHONY: check-doc-prereq-order
+check-doc-prereq-order: ## Gate: a tool a doc declares as a prerequisite must be declared BEFORE the command that uses it
+	@./scripts/check-doc-prereq-order.sh
+
 .PHONY: check-vks-login-requires
 check-vks-login-requires: ## Gate: creds.sh's hand-typed vks-login requirement map agrees with 30-vks-login.sh
 	@./scripts/check-vks-login-requires.sh
@@ -1517,7 +1521,7 @@ check-lib-sourcing: ## Gate: a script that CALLS a lib function must SOURCE the 
 .PHONY: static-check
 .PHONY: static-check-fast
 #check-static-fast: @ The CHEAP half of static-check: the alignment/doc/env gates only (~9s, no toolchain)
-static-check-fast: check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-vks-login-requires check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
+static-check-fast: check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
 
 # static-check is the UNION, so there is exactly ONE list. Defining the fast set separately and
 # leaving static-check with its own hand-typed copy is the enumerated-list rot this repo keeps
