@@ -753,7 +753,7 @@ make env-validate   # validity gate: does KUBECONFIG reach the cluster, and does
 authenticated. Over HTTPS `env-validate` **verifies the TLS chain — there is no `-k` skip-verify**:
 with `HARBOR_CA_FILE` set it trusts that CA, without it curl's default **system trust**. So a green
 here **does** mean the CA is good — a self-signed Harbor with a missing **or wrong** `HARBOR_CA_FILE`
-**fails here** with `Harbor TLS not trusted (curl exit 60)`, caught now instead of an hour later inside
+**fails here** with `Harbor TLS not trusted`, caught now instead of an hour later inside
 Kaniko. Set `HARBOR_CA_FILE` for a self-signed lab Harbor; leave it empty only if Harbor's cert is
 publicly trusted (or set `HARBOR_INSECURE=1` for plain HTTP).
 

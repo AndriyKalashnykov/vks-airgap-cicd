@@ -153,7 +153,12 @@ fi
 # Expect marker, a mangled fence — it yields zero literals and reports success having looked at
 # nothing. MEASURED 2026-08-18: 56 unique literals. 40 leaves room for real doc churn while being
 # 40x above the broken-extractor signature of 0.
-FLOOR="${EXPECT_LITERALS_FLOOR:-40}"
+# ⚠️ RAISED WITH B205, and the reason is that the OLD floor could not detect a regression of the
+# capability B205 adds. MEASURED: 77 checked before widening, 94 after. At floor 40, a silent
+# break of the continuation extraction drops 94 -> 77 and still passes at 1.9x the floor — the
+# broken-extractor signature the old value was sized against (0) is NOT the signature this
+# change introduces. 85 sits above the un-widened 77, so losing continuations now goes RED.
+FLOOR="${EXPECT_LITERALS_FLOOR:-85}"
 
 # ── ALLOWLIST ────────────────────────────────────────────────────────────────────────────────────
 # ⚠️ THE ENTRIES ARE BASE64, AND THAT IS NOT OBFUSCATION — IT IS THE ONLY THING THAT MAKES THIS GATE
@@ -180,6 +185,15 @@ aGFyYm9yLmNydDogT0s=                                                      # ours
 cm9ib3QgYWNjb3VudCAncm9ib3QkdmtzLWNpY2QnIGNyZWF0ZWQu                      # ours, the robot-account script interpolates the account name
 RElTQ09WRVJZOg==                                                          # pairing drop: echoed by its own fenced block (scenario-2 discovery step)
 Li9zZWNyZXRzL2FyZ29jZC1jYS5jcnQ=                                          # pairing drop: appears in its own block (scenario-2 argocd CA step)
+dmlydHVhbG1hY2hpbmVjbGFzcw==                                              # pairing drop: the VM-class
+  #     resource named by its OWN fenced block in the scenario-1 VM-class step, so the
+  #     lit-in-block filter drops it at runtime and _tot stays 0. It became visible OFFLINE only
+  #     when B205 widened this gate to continuation lines; a false RED, not a doc/code
+  #     disagreement. The storage-quota resource beside it is the same class and passes today
+  #     off a circular comment. NO apostrophes, backticks, or plaintext copies of an encoded
+  #     literal in this block: an apostrophe TERMINATES the single-quoted string (measured: it
+  #     broke the parse at the done token), and a plaintext copy makes the gate satisfy itself
+  #     (measured: the self-test below caught exactly that).
 d3JpdGUgbWVjaGFuaXNtOiBhcGk=                                      # ours; the printer INTERPOLATES the mechanism, so this exact
 #     string can never appear in the source. It is LIVE and load-bearing: 70-configure-argocd.sh:350
 #     used to carry a sample-output comment that satisfied the search, so this entry was inert and
@@ -280,8 +294,27 @@ done < <(
   # Extract backticked literals from `**Expect:**` lines, applying walk-doc's three pairing-free
   # filters. Anchored on `^[[:space:]]*\*\*Expect` — an UNANCHORED grep also matches PROSE mentions
   # of `**Expect:**` inside backticks, which B102 records as a real miscount.
+  # ── B205: read CONTINUATION lines too — OFFLINE ONLY, and the scope is the whole point ─────────
+  # walk-doc.sh's PARSER stays single-line and MUST. Widening it was designed, then REFUTED by its
+  # idea round as CERTIFICATION-BLOCKING: docs/scenario-2.md's discovery block flips from _tot=0
+  # (not checkable) to _tot=3 with `harbor-nginx`/`HARBOR_URL`/`ARGOCD_SERVER`, none of which can
+  # appear on the `else` branch EVERY scenario-2 matrix row takes -> EXPECT UNMET -> exit 1, ~25
+  # minutes into a live lab. And that is not an accident: docs/scenario-2.md:216-224 is a dated
+  # comment stating those literals are DELIBERATELY on continuation lines, naming PR #696 which got
+  # it wrong once, and predicting this exact failure. The design decision lives in the DOCUMENT, not
+  # the script — which is why a script-side review misses it.
+  #
+  # So this gate reads MORE than the parser ON PURPOSE, and the asymmetry is the design:
+  #   walk-doc.sh (RUNTIME)          : HEAD only  -> what a matrix row ASSERTS. Unchanged.
+  #   check-expect-literals (OFFLINE): head+cont  -> what a claim may REFER to. Widened here.
+  # An offline MISSING costs a red gate on a laptop; a runtime UNMET costs a certification row.
+  # ⚠️ Therefore the "BYTE-IDENTICAL to walk-doc's extraction" note further down is NO LONGER TRUE
+  # for the LINE SET (it remains true for the per-line literal grammar), and test-expect-extraction
+  # pins the difference so neither side can drift silently.
   for D in $DOCS; do
-    grep -hE '^[[:space:]]*\*\*Expect' "$D" 2>/dev/null
+    awk '/^[[:space:]]*\*\*Expect/ { print; inx=1; next }
+         inx && (/^[[:space:]]*$/ || /^[[:space:]]*```/) { inx=0 }
+         inx { print }' "$D" 2>/dev/null
   # ⚠️ `-oE` WITH `+`, NOT `-o` WITH `*` — ONE CHARACTER, AND IT WAS A MEASURED FALSE GREEN.
   # walk-doc.sh:710 is `re.findall(r'`([^`]+)`')`. This started as `[^`]*` (zero-or-more), which on
   # a DOUBLE-backtick code span matches the EMPTY span between the two opening backticks, consumes
