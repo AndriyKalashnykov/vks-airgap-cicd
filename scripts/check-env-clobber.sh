@@ -99,7 +99,7 @@ EXEMPT='APP_DEV_PORT|INGRESS_CONTROLLER'
 # An optional single OR double quote, for the boolean-toggle arm's default. Hoisted because
 # '"'"' inside an already-single-quoted grep pattern is unreadable at the call site.
 _TOGQ='["'"'"']?'
-SELECTORS='SUPERVISOR_HOST|VCENTER_HOST|KUBECONFIG|VKS_AUTH_METHOD|INGRESS_CONTROLLER|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_SUPERVISOR_KUBECONFIG|VKS_CONTEXT|VKS_CLUSTER_NAME|VKS_NAMESPACE|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_USERNAME|HARBOR_PASSWORD|HARBOR_CA_FILE|VKS_CA_CERT_FILE|ARGOCD_CA_FILE|VKS_CA_SHA256|HARBOR_CA_SHA256|ARGOCD_CA_SHA256|VCF_CLI_SRC_DIR|HARBOR_INSECURE|ARGOCD_INSECURE|MIRROR_VERIFY_FAST|ARGOCD_ADMIN_PASSWORD|GITEA_ADMIN_PASSWORD|VCENTER_CA_FILE|VCENTER_INSECURE|VKS_INSECURE_SKIP_TLS_VERIFY'
+SELECTORS='SUPERVISOR_HOST|VCENTER_HOST|KUBECONFIG|VKS_AUTH_METHOD|INGRESS_CONTROLLER|ARGOCD_KUBECONFIG|GUEST_KUBECONFIG|VKS_SUPERVISOR_KUBECONFIG|VKS_CONTEXT|VKS_CLUSTER_NAME|VKS_NAMESPACE|ARGOCD_SERVER|ARGOCD_AUTH_TOKEN|ARGOCD_DEST_SERVER|ARGOCD_DEST_CLUSTER_NAME|ARGOCD_NAMESPACE|HARBOR_URL|HARBOR_USERNAME|HARBOR_PASSWORD|HARBOR_CA_FILE|VKS_CA_CERT_FILE|ARGOCD_CA_FILE|VKS_CA_SHA256|VCENTER_CA_SHA256|HARBOR_CA_SHA256|ARGOCD_CA_SHA256|VCF_CLI_SRC_DIR|HARBOR_INSECURE|ARGOCD_INSECURE|MIRROR_VERIFY_FAST|ARGOCD_ADMIN_PASSWORD|GITEA_ADMIN_PASSWORD|VCENTER_CA_FILE|VCENTER_INSECURE|VKS_INSECURE_SKIP_TLS_VERIFY'
 
 # Read the snapshot list out of load_env itself: `for _sel in A B C ...; do`
 PROTECTED="$(sed -n 's/^[[:space:]]*for _sel in \(.*\); do$/\1/p' "${REPO_ROOT}/scripts/lib/os.sh" | head -1)"
@@ -296,8 +296,18 @@ for v in "${UNCOMMENTED[@]}"; do
   # ⚠️ AND THE 56 IN THE PARAGRAPH ABOVE HAD ROTTED: the gate reports 54 uncommented values today.
   # An adversary read 56 out of THIS COMMENT and reported my brief as wrong, when the comment was
   # the stale artifact. Corrected in place — a number in prose is a claim with a date.
-  tog="$(grep -rlE '\$\{'"${v}"'(:-|-)'"$_TOGQ"'(0|1|true|false)'"$_TOGQ"'\}' "${REPO_ROOT}/scripts" "${REPO_ROOT}/Makefile" 2>/dev/null \
-           | xargs -r -n1 basename | tr '\n' ' ')"
+  # ⚠️ THIRD SHAPE ADDED 2026-08-21 (B196/F9): `is_true "${V:-}"` - an EMPTY default, so the
+  # boolean-literal alternation cannot match it. It is the shape VKS_INSECURE_SKIP_TLS_VERIFY uses,
+  # i.e. the repo's single most dangerous toggle (a credential is submitted over the very connection
+  # it stops verifying), and until now this gate caught it ONLY INCIDENTALLY - via arm (b2), and only
+  # because 31-fetch-argocd-kubeconfig.sh happens to contain an env-prefix line. Rewording that die,
+  # which the prefix-only migration REQUIRES, would have made the gate go SILENTLY BLIND on it: the
+  # migration commit would have disabled its own guard. MEASURED 1 of 1 repo-wide, so it adds no
+  # sibling churn and cannot re-introduce the 97% false-RED of the naive static-fallback shape.
+  tog="$( { grep -rlE '\$\{'"${v}"'(:-|-)'"$_TOGQ"'(0|1|true|false)'"$_TOGQ"'\}' "${REPO_ROOT}/scripts" "${REPO_ROOT}/Makefile" 2>/dev/null || true
+            grep -rlE 'is_true[[:space:]]+"?\$\{'"${v}"':-\}"?' "${REPO_ROOT}/scripts" "${REPO_ROOT}/Makefile" 2>/dev/null || true
+          } | sort -u \
+            | xargs -r -n1 basename | tr '\n' ' ')"
   if [ -n "$tog" ]; then
     log_error "CLOBBER: '${v}' is UNCOMMENTED in .env.example, and it is a BOOLEAN TOGGLE"
     log_error "    read as \${${v}:-<default>} in: ${tog}"
