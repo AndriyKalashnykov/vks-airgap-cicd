@@ -101,6 +101,27 @@ air-gap box. (KinD is dual-homed — no bundle to carry. It replaces `make mirro
 **Fast path (dual-homed Ubuntu/Photon)** — one command OS-gates, installs git/curl/make +
 mise, clones this repo, runs `make deps`, and prints a toolchain report:
 
+> **`curl` must already be present** for the pipe form above. MEASURED 2026-08-09 on stock images:
+> **Photon OS 5 has it; Ubuntu 22.04, 24.04 and 26.04 do NOT.** On Ubuntu, install it first — and
+> `ca-certificates` with it, or the fetch dies `curl: (77) error setting certificate file`:
+>
+> ```bash
+> apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+> ```
+>
+> (Prefix with `sudo` if you are not root. A bare container has neither `sudo` nor `curl`.)
+>
+> The **`make deps` toolchain install + the container engine + cluster reachability** are validated
+> end-to-end by `make jumpbox` — it runs them on a fresh jump-box container (`JUMPBOX_OS=photon` on
+> `photon:5.0`, the default, or `JUMPBOX_OS=ubuntu` on `ubuntu:26.04`), joined to a local KinD cluster,
+> and fails if `make deps` or the engine setup breaks on a real jump box of that OS.
+>
+> **`make jumpbox-matrix` runs all four permutations** — {photon, ubuntu} × {podman, docker} — and each
+> leg makes the engine actually **log in, pull, build, push and pull-back-verify against the real
+> self-signed Harbor**. `make bootstrap-engine-test` proves the other half: that `make deps` *produces*
+> the box you asked for, on **literally bare** OS images (podman by default with **zero** docker; docker
+> only when you ask for it).
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AndriyKalashnykov/vks-airgap-cicd/main/bootstrap-jumpbox.sh | bash
 ```
@@ -126,39 +147,21 @@ then go to [Toolchain and access](#toolchain-and-access) below:
 git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git && cd vks-airgap-cicd
 ```
 
-> **`curl` must already be present** for the pipe form above. MEASURED 2026-08-09 on stock images:
-> **Photon OS 5 has it; Ubuntu 22.04, 24.04 and 26.04 do NOT.** On Ubuntu, install it first — and
-> `ca-certificates` with it, or the fetch dies `curl: (77) error setting certificate file`:
->
-> ```bash
-> apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
-> ```
->
-> (Prefix with `sudo` if you are not root. A bare container has neither `sudo` nor `curl`.)
->
-> The **`make deps` toolchain install + the container engine + cluster reachability** are validated
-> end-to-end by `make jumpbox` — it runs them on a fresh jump-box container (`JUMPBOX_OS=photon` on
-> `photon:5.0`, the default, or `JUMPBOX_OS=ubuntu` on `ubuntu:26.04`), joined to a local KinD cluster,
-> and fails if `make deps` or the engine setup breaks on a real jump box of that OS.
->
-> **`make jumpbox-matrix` runs all four permutations** — {photon, ubuntu} × {podman, docker} — and each
-> leg makes the engine actually **log in, pull, build, push and pull-back-verify against the real
-> self-signed Harbor**. `make bootstrap-engine-test` proves the other half: that `make deps` *produces*
-> the box you asked for, on **literally bare** OS images (podman by default with **zero** docker; docker
-> only when you ask for it).
-
 ### Toolchain and access
 
 **You need:** a jump box on **Ubuntu** or **PhotonOS**, with network reach to the Supervisor, Harbor,
 and (dual-homed only) the workload cluster.
 
-**Then run these, in order. Nothing else on this page requires action.**
+**Your path document drives from here — it gives these commands in context, and this page does not
+repeat them as instructions.** `make deps` and `make env-init` are the first two steps of all three paths
+([KinD](docs/kind-local.md), [Scenario 1](docs/scenario-1.md), [Scenario 2](docs/scenario-2.md)); follow the
+one you picked rather than this list, so there is only ever one place telling you what to run.
+
+Two read-only helpers answer questions about *this box* rather than about a path, so they sit here.
+`make engine-check` is mentioned by **no** path document; `make check-tools` appears once, in Scenario 1:
 
 ```bash
-make deps            # toolchain: mise + podman (git/make/curl come from bootstrap-jumpbox.sh)
-                     #   want docker instead?  make deps CONTAINER_ENGINE=docker
-make engine-check    # read-only: what engine does this box have, and will it cost you a sudo?
-make env-init        # a blank .env from .env.example
+make engine-check    # which container engine does this box have, and will it cost you a sudo?
 make check-tools     # what this box has, and what it still needs
 ```
 
