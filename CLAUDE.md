@@ -684,8 +684,9 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 - 🔴 **Certified tree: `fbdf683` — and NO TAG POINTS AT IT ANY MORE.** The version series was reset
   on 2026-08-21 (owner decision): every tag (`v1.0.0` `v1.0.1` `v1.1.0` `v1.2.0`) was deleted locally and on the
   remote, and a single **`v1.0.0`** was cut at the then-current `main`. **`v1.0.0` MARKS A VERSION, NOT A
-  CERTIFICATION** — at the moment it was cut, `main` was **5 commits / 15 files** past `fbdf683`, including six
-  `scripts/`. Anyone who needs the certified tree must use the SHA; there is no longer a tag for it, and reading
+  CERTIFICATION** — at the moment it was cut, `main` was **7 commits / 21 files** past `fbdf683`, **12 of them
+  `scripts/`** — including the vCenter-anchor pin check, the clobber gate's new arm, and
+  `vks-trust-probe`. That is a materially different tree, not a cosmetic drift. Anyone who needs the certified tree must use the SHA; there is no longer a tag for it, and reading
   `v1.0.0` as "the 6/6 tree" is the single easiest wrong inference to make here.
   When it WAS tagged, the tag was on main's head — 0 open PRs at arm time, because **#910 was
   merged BEFORE arming**. That was deliberate: the previous certification had a Renovate CLI pin
