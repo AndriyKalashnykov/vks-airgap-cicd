@@ -776,7 +776,7 @@ make creds-show    # every URL + login for THIS context — one row per app in a
 ```
 
 **Expect:** `make gitops` logs `write mechanism: api`.
-**Expect:** `make creds-show` prints a `Lab access` section — as a TENANT you supplied `VKS_USERNAME` and `SUPERVISOR_HOST` in `.env`, so those rows carry YOUR values, not placeholders. The vCenter row stays unset: a tenant is not given vCenter credentials, and this document never asks you for them.
+**Expect:** `make creds-show` prints a `Lab access` section — as a TENANT you supplied `VKS_USERNAME` and `SUPERVISOR_HOST` in `.env`, so those rows carry YOUR values, not placeholders. This document never asks you for vCenter credentials, so unless you set them yourself the vCenter row reads `<not set>`.
 **Expect:** the `guest node SSH` row is the one a tenant is most likely to see FAIL: if your identity may not list secrets in the vSphere Namespace it shows `<forbidden>` and a note telling you to ask your platform admin — that is a permissions answer, NOT `this cluster has no such secret`.
 **Expect:** if a Harbor credential is rejected, the report names BOTH `make env-validate` (which DIAGNOSES, reporting the 401) and `make harbor-admin-password` (which FIXES it) — and the latter REFUSES outright if your `HARBOR_USERNAME` is a robot account, because replacing it with `admin` would downgrade your least-privilege setup.
 
@@ -802,6 +802,37 @@ were granted).
 > CRs), then set **`ARGOCD_DEST_SERVER`** to your guest cluster's API URL in `.env` so the
 > `Application` deploys **into your guest cluster**, not onto the Supervisor. This installs no
 > second ArgoCD in the guest.
+
+## Adding an app as a tenant
+
+Locally (and in **Scenario 1**, where you are the admin) nothing else is needed. As a **tenant**
+(Scenario 2) an app's **new namespace** and **new hostname** may not be covered by what you were
+granted. What that means concretely:
+
+| What | When it bites | What to run / ask for |
+|---|---|---|
+| **ArgoCD AppProject destination** | Always, as a tenant (you get your own AppProject; ours defaults to `default`, which permits everything — VKS's will not). The `Application` is rejected: *"application destination … is not permitted in project"* | **Check first:** `kubectl -n $ARGOCD_NAMESPACE get appproject <yours> -o jsonpath='{.spec.destinations}{"\n"}{.spec.sourceRepos}'` — your new namespace AND the new `<app>-deploy` repo URL must both be listed.<br>**Ask the ArgoCD admin** to add them: `kubectl -n $ARGOCD_NAMESPACE patch appproject <yours> --type=json -p='[{"op":"add","path":"/spec/destinations/-","value":{"server":"$ARGOCD_DEST_SERVER","namespace":"<app>"}},{"op":"add","path":"/spec/sourceRepos/-","value":"<gitea>/<org>/<app>-deploy.git"}]'` |
+| **Ingress hostname on a SHARED Gateway** | **Only** on the classic route API against a platform-owned Gateway (`ISTIO_SHARED_GATEWAY`). Its `hosts:` list belongs to the mesh admin, so an unlisted host **404s from a listener that exists** | **Check first:** `make istio-preflight` (and `istio_assert_shared_gateway_hosts` fails the install rather than 404ing later).<br>**Ask the mesh admin** to admit the host — ideally once, as a wildcard: `kubectl -n <gw-ns> patch gateway <gw> --type=json -p='[{"op":"add","path":"/spec/servers/0/hosts/-","value":"*.vks.local"}]'` |
+| **Harbor** | Never (for a *new app*) | Nothing to do **when adding an app**: the robot's push+pull is scoped to the whole project, so a new repo under it is already covered — and `make gitops` creates the `harbor-pull` Secret in the new app's namespace for you. **But the robot itself is not always self-serviceable**: only a Harbor **system-admin** can create one that spans two projects. See the grants table below. |
+
+**On the Gateway-API path the hostname needs nobody:** Istio
+auto-provisions the gateway from a `Gateway` we create in **our own** namespace, so its `hosts:`
+list is ours. (That Broadcom's Istio routes with the **Gateway API** is graded **community / doc-inferred, never
+seen on a lab** — [istio.md](vks-services/istio.md) — and it is load-bearing here: it decides whether
+you must ask the mesh admin for a hostname at all. It is item 12 of the
+[lab validation plan](lab-validation-plan.md).)
+
+The AppProject destination is the only **always-required** tenant request; on an
+attached **air-gapped** VKS-package mesh whose proxy registry needs auth, a gateway pull-secret is an
+additional one (see [Istio on VKS](vks-services/istio.md#4-attach-prefer-the-gateway-api)).
+
+> ⚠️ **Provenance of the commands above: INFERRED, not lab-verified.** The *facts* are sourced —
+> ArgoCD's AppProject restricts by `spec.destinations` + `spec.sourceRepos`
+> ([docs](https://argo-cd.readthedocs.io/en/stable/user-guide/projects/)); the Harbor robot we mint
+> is project-scoped (`scripts/22-harbor-robot.sh`); an Istio `Gateway`'s `hosts:` list gates which
+> hostnames a VirtualService may bind. But the exact `kubectl patch` invocations have **not** been
+> run against a VKS cluster, and the ArgoCD **server** there is whatever your ArgoCD *Service* publishes — read the RUNNING server, never the CLI. Treat them as
+> a starting point, confirm against your lab, and correct this table.
 
 ## 7. Access the UIs
 
@@ -844,7 +875,7 @@ VKS package ships its shared gateway **off by default**, then there is nothing t
 request a gateway.) `istio-preflight` reports which case you are in.
 
 Add the printed `INGRESS_LB_IP` line to `/etc/hosts`
-(see [Access the UIs](../README.md#access-the-uis-urls-logins-passwords)).
+(see [Access the UIs](access-uis.md)).
 
 ### PSA: `make psa-check` cannot prove anything *before* you install — and it will say so
 

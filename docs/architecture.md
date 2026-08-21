@@ -2,7 +2,7 @@
 
 <br>
 
-Harbor + ArgoCD are **Supervisor Services** — you install them (Scenario 1) or the platform team already has (Scenario 2); the [cluster-topology diagram](../README.md#cluster-topology-VKS) is the one that shows where they actually run (the context/container/deployment diagrams below draw the **collapsed** single-cluster view the KinD stand-in uses). The jump box mirrors every
+Harbor + ArgoCD are **Supervisor Services** — you install them (Scenario 1) or the platform team already has (Scenario 2); the [cluster-topology diagram](diagrams/out/vks-topology.png) is the one that shows where they actually run (the context/container/deployment diagrams below draw the **collapsed** single-cluster view the KinD stand-in uses). The jump box mirrors every
 image into Harbor; a `git push` then drives the whole CI/CD flow entirely inside the air gap.
 
 ## System context
