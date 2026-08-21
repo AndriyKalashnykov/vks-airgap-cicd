@@ -1,5 +1,12 @@
 # Istio on VKS: how it is meant to be used, how we use it, and the two scenarios
 
+> ⚠️ **PARTLY SUPERSEDED — added 2026-08-21.** The *Broadcom-packaging question* this ADR leaves
+> open is **answered** by [istio-via-vks-package.md](istio-via-vks-package.md), which had zero inbound
+> links from here. And the *"exact 9.1 package version strings"* listed below as open are **lab-verified**
+> in [../vks-services/istio.md](../vks-services/istio.md) (2026-08-10) — which also records that this
+> document's `1.25.3` is **not offered** on 9.1. Treat `istio.md` as the living record for versions;
+> this ADR is the decision, and stays append-only.
+
 Status: **ACCEPTED & LANDED** (attach mode shipped; the Broadcom-packaging question is
 still open — see "Unverified" below).
 Date: 2026-07-12
@@ -211,7 +218,7 @@ hostnames and would fake a successful switch):
 ### A false green this produced, and the fix
 
 `INGRESS_LB_IP` is **our own published state** — every install/attach writes the address it resolved
-into `.env.kind`, `load_env` sources it back, and `44-install-ingress.sh` *exports* it before
+into the state overlay (`.env.state` today; this said `.env.kind`, which is now read-only back-compat that **nothing writes** — corrected 2026-08-21), `load_env` sources it back, and `44-install-ingress.sh` *exports* it before
 `exec`ing the attach script. So it is always set after any previous run, and is indistinguishable
 from a deliberate operator override. Consuming it as an "override" made the Gateway-API attach report
 the **previous classic gateway's IP**, and the route check then passed *through the classic routes

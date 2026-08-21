@@ -19,8 +19,8 @@ image into Harbor; a `git push` then drives the whole CI/CD flow entirely inside
 
 ### Cluster topology (VKS)
 
-On VKS the stack spans **two** clusters: Harbor + ArgoCD are Supervisor Services
-Supervisor Services that run on the **Supervisor**, while Gitea, Tekton, the ingress, and
+On VKS the stack spans **two** clusters: Harbor + ArgoCD are Supervisor Services that
+run on the **Supervisor**, while Gitea, Tekton, the ingress, and
 the app are installed into the **guest** workload cluster. Because ArgoCD lives on the
 Supervisor, the guest cluster is **registered as an ArgoCD destination** (`make
 argocd-register-guest`) so it can deploy the apps (`javawebapp`, `gowebapp`) there — it does **not** run a second ArgoCD

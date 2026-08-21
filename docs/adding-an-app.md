@@ -31,3 +31,7 @@ and where `verify` injects its marker. Both live in `scripts/lib/apps.sh`.
 Locally, and in [Scenario 1](scenario-1.md) where you are the admin, nothing else is needed. As a
 **tenant** ([Scenario 2](scenario-2.md)), a new app's namespace and hostname may fall outside what
 you were granted — see [Scenario 2 → adding an app as a tenant](scenario-2.md#adding-an-app-as-a-tenant).
+
+---
+
+[← back to the README](../README.md)

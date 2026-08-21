@@ -2,10 +2,21 @@
 
 <br>
 
-`make help` prints the same list, grouped, straight from the Makefile — that is the source of truth.
-This page is the catalogue with a little more context. **A gate (`make check-doc-target-coverage`)
-fails CI if an operator-invocable target appears in no document at all**, so a new capability cannot
-ship invisible again.
+`make help` prints the full list, grouped, straight from the Makefile — **that is the source of
+truth, and it is the exhaustive one.**
+
+⚠️ **This page is a CURATED SUBSET, not a complete catalogue.** It used to call itself "the
+catalogue", which implied a completeness it did not have: a 2026-08-21 content audit measured **48
+of 125** operator-facing targets absent (a naive count that also includes the `check-*` gates puts it
+at 130 of 224 — either way, large). It is curated on purpose — the value here is the *context* around
+the targets an operator actually reaches for, not a second copy of `make help` that drifts every time
+a target lands.
+
+**So: if a target is not here, that means nothing about whether it exists.** Run `make help`.
+
+**A gate (`make check-doc-target-coverage`) fails CI if an operator-invocable target appears in no
+document at all** — note the floor it measures: *somewhere*, not *here*. It cannot see this page's
+coverage, which is why the gap grew unnoticed.
 
 | Group | Target | Purpose |
 |-------|--------|---------|
@@ -48,6 +59,20 @@ ship invisible again.
 | Security | `secrets-scan` / `prose-secrets` | The working-tree secret scan · credentials written in **prose** in `*.md` (which pattern scanners miss) |
 | Housekeeping | `clean` | Remove build artifacts (the image cache and the bundle stay — they are expensive) |
 | Diagrams | `diagrams` / `diagrams-check` / `vendor-diagrams` | Render PNGs / byte-diff drift gate / re-vendor C4-PlantUML |
+
+## Real-lab and verification helpers
+
+Added 2026-08-21 — these were absent while being among the most reached-for on a real lab.
+
+| Group | Target | Purpose |
+|-------|--------|---------|
+| Mirror | `mirror-verify` | Blob-integrity gate: `crane validate` fetches and digests every layer, and cross-checks Harbor against `images.lock`. Read-only, safe to interrupt. `mirror` **depends** on it — a push you have not verified is not a mirror |
+| Preflight | `argocd-preflight` | ArgoCD version + topology + write-mechanism + AppProject + Gitea reachability, two-cluster aware; non-zero on a blocking finding |
+| Trust | `vks-trust-probe` | LIVE, read-only: does this guest cluster trust our Harbor, and by what mechanism? Compares the CA fingerprint and forces a real pull. States in its own output what a green does **not** prove |
+| Harbor | `harbor-robot` | Mint the least-privilege robot the pipeline runs as (needs Harbor project-admin; a tenant requests it instead) |
+| ArgoCD | `argocd-register-guest` | Register the guest cluster as an ArgoCD destination — the Supervisor-hosted ArgoCD cannot deploy into it otherwise |
+| Verify | `verify-gateway-image` | LIVE: every running Istio container image came from OUR Harbor. Catches a silently-ignored `global.hub` override, which helm accepts with rc=0 |
+| Verify | `verify-ingress-rendered` | Asserts the ingress routes were **rendered** where app backends deliberately do not exist — a 503 proves a route matched, a 404 would mean it was never rendered |
 
 ---
 

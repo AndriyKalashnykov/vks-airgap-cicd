@@ -2,7 +2,7 @@
 
 <br>
 
-**Jump-box disk space** — measured for the current image set (~30 images: 9 pinned in
+**Jump-box disk space** — measured for the current image set (~30 images: 11 pinned in
 [`images/images.txt`](../images/images.txt) plus the Tekton Pipelines+Triggers controller
 images pulled from their release manifests, which dominate the count — alongside Gitea,
 Kaniko, Maven, Temurin JDK/JRE, alpine/git, yq, and the ingress images). Figures are approximate.
@@ -32,7 +32,7 @@ the app images are the ones the pipeline actually built in the last KinD run).
 | **Java** | `javawebapp-builder` — **offline builder, `~/.m2` pre-baked** (built on the jump box, pushed to Harbor) | **292 MB** |
 | **Java** | `javawebapp:<sha>` — the image the pipeline builds | 130 MB |
 | | **Java total** | **≈ 690 MB** |
-| **Go** | `golang:1.26.5-bookworm` (build) | 283 MB |
+| **Go** | `golang:1.26.7-bookworm` (build) | 283 MB |
 | **Go** | `distroless/static-debian12` (runtime base) | 1 MB |
 | **Go** | *offline builder* | **none — the app is stdlib-only, so its air-gapped build fetches nothing** |
 | **Go** | `gowebapp:<sha>` — the image the pipeline builds | **4.85 MB** |
