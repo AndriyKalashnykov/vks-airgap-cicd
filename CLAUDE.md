@@ -671,7 +671,7 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-21 — RE-CERTIFIED 6/6 ON THE FIRST PASS, TAGGED `v1.2.0`. A fresh lab is UP
+## ▶️ HANDOFF 2026-08-21 — RE-CERTIFIED 6/6 ON THE FIRST PASS. TAGS RESET to `v1.0.0`. A fresh lab is UP
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
@@ -681,8 +681,13 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 `MATRIX COMPLETE — walked 6 of 6 designed rows (1 2 3 4 5 6)`, **0 FAILED / 0 UNMET across all six**,
 `MATRIX_RC=0`, ~4h06m, first pass. No fix was applied mid-run, so the §A.2 clock never reset.
 
-- **Certified tree: `fbdf683`. Tag: `v1.2.0`** (annotated; `refs/tags/v1.2.0^{}` → `fbdf683`, verified
-  on the remote). This time the tag IS on main's head — 0 open PRs at arm time, because **#910 was
+- 🔴 **Certified tree: `fbdf683` — and NO TAG POINTS AT IT ANY MORE.** The version series was reset
+  on 2026-08-21 (owner decision): every tag (`v1.0.0` `v1.0.1` `v1.1.0` `v1.2.0`) was deleted locally and on the
+  remote, and a single **`v1.0.0`** was cut at the then-current `main`. **`v1.0.0` MARKS A VERSION, NOT A
+  CERTIFICATION** — at the moment it was cut, `main` was **5 commits / 15 files** past `fbdf683`, including six
+  `scripts/`. Anyone who needs the certified tree must use the SHA; there is no longer a tag for it, and reading
+  `v1.0.0` as "the 6/6 tree" is the single easiest wrong inference to make here.
+  When it WAS tagged, the tag was on main's head — 0 open PRs at arm time, because **#910 was
   merged BEFORE arming**. That was deliberate: the previous certification had a Renovate CLI pin
   auto-merge **12 seconds before row 1 started**, which splits a run across two commits.
 - **All three cross-OS pairs are BYTE-IDENTICAL** — rows 1~3 (37 ran / 7 skipped), 2~4 (31 / 13),
@@ -732,9 +737,12 @@ none).
   this run while three processes were live on the walkbox. Liveness comes from the walkbox artifact.
 - **`pgrep`/`ps` SELF-MATCH.** Twice this session a count read 1 or 2 with the real answer **0** — the
   hits were my own shell and grep. Read `/proc/<pid>/cmdline` before believing a count either way.
-- **"Is main certified?" is a command, never a quoted number:**
-  `git diff --name-only v1.2.0..origin/main`. Note `git rev-parse v1.2.0` gives the **tag object**
-  (`0d91324`); the commit is `v1.2.0^{commit}` = `fbdf683`. Quoting the wrong one misreports the tree.
+- **"Is main certified?" is a command, never a quoted number — and it now takes a SHA, not a tag:**
+  `git diff --name-only fbdf683..origin/main`. The old form named `v1.2.0`, which no longer exists after the
+  tag reset; a dangling tag makes that command fail in a way that reads like a repo problem rather than a
+  deleted ref. (The tag-object-vs-commit trap it used to warn about is moot for the same reason, but it recurs
+  the moment anything is tagged again: `git rev-parse <tag>` gives the TAG OBJECT for an annotated tag; the
+  commit is `<tag>^{commit}`. Quoting the wrong one misreports the tree.)
 - **Line citations rot.** Several were wrong today while their facts held. Read for substance.
 - **`git switch main` FAILS in a worktree checkout**, and with `2>/dev/null` that failure is invisible,
   so a chained `reset --hard origin/main` lands on whatever branch you were on.
