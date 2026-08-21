@@ -27,6 +27,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# shellcheck source=scripts/lib/psa.sh
+. "${SCRIPT_DIR}/lib/psa.sh"
 load_env
 
 : "${KUBECONFIG:?set KUBECONFIG (or run: make vks-login) - this probe reads a cluster}"
@@ -98,7 +100,7 @@ if [ -z "$PROBE_IMAGE" ]; then
 fi
 echo "     image: ${PROBE_IMAGE}  (from namespace ${_probe_src_ns:-?})"
 
-kubectl create ns "$PROBE_NS" >/dev/null 2>&1 && _ns_made=1
+ensure_namespace "$PROBE_NS" >/dev/null 2>&1 && _ns_made=1
 # VKS enforces PSA `restricted` by default, so the probe pod is restricted-COMPLIANT rather than
 # relabelling the namespace. A probe that needs the policy weakened to run is measuring the wrong box.
 kubectl -n "${_probe_src_ns}" get secret harbor-pull -o yaml 2>/dev/null \
