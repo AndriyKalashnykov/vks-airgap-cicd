@@ -95,6 +95,41 @@ if [ "$nmatch" -gt 1 ]; then
   die "pick one deliberately and set VCENTER_CA_FILE to it, rather than letting this script guess."
 fi
 
+# ── B195/F4+F7: PIN CHECK, BEFORE the install ──────────────────────────────────────────────────
+# The vCenter anchor was checked NOWHERE IN ITS ENTIRE LIFE. Its sibling VKS_CA_CERT_FILE has a
+# gate, deferred to use time (30-vks-login.sh:154); HARBOR_CA / ARGOCD_CA are gated at write time by
+# fetch-ca.sh. This one had neither, which is why B195's "2 of 4 producers lack a gate" was the
+# wrong shape - one has a deferred gate, one had none at all.
+#
+# ⚠️ IT RUNS BEFORE `install`, ON $match, NOT AFTER, ON $OUT. fetch-ca.sh is deliberately built that
+# way ("ONLY NOW does the operator's filesystem change"); checking afterwards means a mismatched
+# anchor is already on disk when you refuse it.
+#
+# ⚠️ NO CONSENT PROMPT HERE, DELIBERATELY. fetch-ca.sh's prompt dies with no TTY, and this command is
+# an UNCONDITIONAL walked fence (docs/scenario-1.md:201) whose file the matrix driver does NOT stage
+# (measured: 0 hits for vcenter-ca in walk-matrix.sh/walkbox-vm.sh) - so a prompt here reddens
+# certification rows 1-4 with no rescue branch. Verdict 3 (= no pin) is the trust-on-first-use path
+# and returns silently, so this arm is WALK-NEUTRAL: it changes nothing until an operator supplies
+# a pin, and then it is the first thing that has ever verified this anchor.
+_vp=0; ca_pin_verdict "$match" "${VCENTER_CA_SHA256:-}" || _vp=$?
+case "$_vp" in
+  0) log_info "CA fingerprint MATCHES VCENTER_CA_SHA256" ;;
+  3) : ;;   # no pin -> trust-on-first-use, as before. Silent by design.
+  4) die "VCENTER_CA_SHA256 is set but is not a SHA-256 digest - REFUSING (a malformed pin must never
+      silently downgrade to trust-on-first-use).
+        got:      '${VCENTER_CA_SHA256:-}'
+        expected: 64 hex characters, with or without colons
+      Recompute it from the anchor whoever operates vCenter gave you:
+        openssl x509 -in <their-ca.crt> -noout -fingerprint -sha256" ;;
+  5) die "could not read a certificate from the matched vCenter root - refusing to install it." ;;
+  *) die "vCENTER CA FINGERPRINT MISMATCH - REFUSING to write a trust anchor.
+        expected (VCENTER_CA_SHA256): $(printf '%s' "${VCENTER_CA_SHA256:-}" | tr -d ': ' | tr '[:upper:]' '[:lower:]')
+        served by ${VCENTER_HOST}:    $(openssl x509 -in "$match" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]')
+      Either vCenter's CA was legitimately rotated, or something is intercepting this connection.
+      Do NOT proceed by clearing VCENTER_CA_SHA256. Confirm the correct digest out of band first." ;;
+esac
+
+
 ensure_secret_dir "$(dirname "$OUT")"
 # rm -f FIRST: `umask` applies only at CREATION, so a pre-existing 0644 file would keep its mode.
 # A CA is public trust material, so 0644 is correct here — same reason the Harbor CA is 0644 and
