@@ -82,8 +82,15 @@ ck "70-configure-argocd.sh calls NO raw classify_kube_failure (found ${n_raw})" 
 
 # ONE arm list. The two sites shipped with DIFFERENT lists in the same commit; that divergence is
 # what let a connection-refused reach the AppProject message at one site and not the other.
+# B197(3): this asserted a FLOOR (-ge 2) over THREE sites, so it was GREEN while the third
+# (argocd repo add) died RAW, and would have stayed green if a fourth landed raw. Two assertions
+# now. The count is EQUALITY and is enumerated on purpose - a new argocd failure site must be
+# reviewed, not silently absorbed. The raw-die check below is the non-rotting half: it fires on a
+# new unclassified site whatever the count.
 n_die="$(sed 's/#.*//' "$CFG" | grep -c 'argocd_transport_die ' || true)"
-ck "both write sites route through the shared argocd_transport_die (${n_die} calls)" test "$n_die" -ge 2
+ck "every argocd write site routes through argocd_transport_die (${n_die} calls, expected 3)" test "$n_die" -eq 3
+n_rawdie="$(sed 's/#.*//' "$CFG" | grep -cE '\|\| *die "argocd' || true)"
+ck "no argocd invocation dies WITHOUT classification (${n_rawdie} raw)" test "$n_rawdie" -eq 0
 n_arm="$(sed -n '/^argocd_transport_die() {/,/^}/p' "$CFG" | grep -c 'STALE_CA|UNREACHABLE' || true)"
 ck "the transport arm list exists in exactly ONE place" test "$n_arm" -eq 1
 

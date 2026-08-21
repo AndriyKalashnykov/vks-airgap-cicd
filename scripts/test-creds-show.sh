@@ -688,6 +688,61 @@ fi
 
 fi
 
+# ── STATE 10 — B207: the report must name the FIRST unmet vks-login requirement, and go SILENT ──
+# The defect: `flow : real VKS lab (VKS_AUTH_METHOD=vcf)` printed while the credential that method
+# needs read `<not set>` two sections below, and the report then prescribed `make vks-login`, which
+# in that state cannot run. Three things are pinned here, and the THIRD is the one that keeps this
+# from becoming the false-advice class it was written to remove.
+_b207() {  # _b207 <env-body> -> the rendered report
+  render_with_cluster "$1" 1
+}
+
+# (a) UNHEALTHY: names the first unmet requirement IN DISPATCH ORDER.
+out="$(_b207 'VKS_AUTH_METHOD=vcf
+HARBOR_URL=harbor.example.test')"
+if printf '%s' "$out" | grep -q 'first\n*.*not satisfied is SUPERVISOR_HOST' \
+   || printf '%s' "$out" | tr '\n' ' ' | grep -q 'not satisfied is SUPERVISOR_HOST'; then
+  ok "B207: names SUPERVISOR_HOST — the FIRST requirement vks-login dies on under vcf"
+else
+  bad "B207: did not name SUPERVISOR_HOST as the first unmet requirement.
+      This is the ordering bug the idea round caught: naming VCF_CLI_VSPHERE_PASSWORD would send the
+      operator to fix the THIRD blocker while 30-vks-login.sh:59 dies on the FIRST."
+fi
+
+# (b) It MUST name the password once the `:?` requirements are met — and give the RIGHT reason.
+# ⚠️ This assertion was INVERTED in the first draft ("must NOT name it"), on the strength of the
+# idea round's correct observation that VCF_CLI_VSPHERE_PASSWORD only WARNS. It does warn — and
+# then `vcf context create` runs with `</dev/null` UNCONDITIONALLY (30-vks-login.sh:380) with NO
+# short-circuit between them, so it fails anyway. Measured. Leaving it out made the note SILENT on
+# the exact box the operator reported, i.e. the whole defect survived its own fix.
+out_pw="$(_b207 'VKS_AUTH_METHOD=vcf
+SUPERVISOR_HOST=supervisor.example.test
+VKS_CONTEXT_NAME=fixture-context
+HARBOR_URL=harbor.example.test')"
+if printf '%s' "$out_pw" | tr '\n' ' ' | grep -q 'not satisfied is VCF_CLI_VSPHERE_PASSWORD'; then
+  ok "B207: names VCF_CLI_VSPHERE_PASSWORD once the die-on-unset requirements are satisfied"
+else
+  bad "B207: went SILENT with only the password missing - that is the operator's exact box."
+fi
+if printf '%s' "$out_pw" | tr '\n' ' ' | grep -q 'cannot prompt for it'; then
+  ok "B207: gives the RIGHT reason for the password (</dev/null, not a requirement check)"
+else
+  bad "B207: named the password but not WHY - it does not die at a check, it fails at context create."
+fi
+
+# (c) HEALTHY: SILENCE. gates.md — advice guarded on the FINDING, never the category; and ask what
+# happens if the operator DOES what you told them. Without this case the note fires on a correct box.
+out_ok="$(_b207 'VKS_AUTH_METHOD=vcf
+SUPERVISOR_HOST=supervisor.example.test
+VKS_CONTEXT_NAME=fixture-context
+VCF_CLI_VSPHERE_PASSWORD=fixture-value-not-a-real-secret
+HARBOR_URL=harbor.example.test')"
+if printf '%s' "$out_ok" | tr '\n' ' ' | grep -q 'not satisfied is'; then
+  bad "B207: the note FIRED on a box with every requirement satisfied — false advice."
+else
+  ok "B207: SILENT when every vks-login requirement is met"
+fi
+
 # ⚠️ THE VERDICT IS RE-EVALUATED HERE, and it must be. The `if [ "$fail" = 0 ]` that opens at ~line 300
 # is a FAIL-FAST gate deciding whether to RUN the later states — it is not the verdict. It was also
 # PRINTING the verdict from inside its own branch, so its condition was read ONCE at line 300 and the

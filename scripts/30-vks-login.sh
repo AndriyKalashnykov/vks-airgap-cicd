@@ -348,7 +348,11 @@ back to skipping TLS verification: that would silently downgrade a connection yo
     # and it reaches the CLI through execve's envp, never argv. It is a documented .env key
     # (scenario-1 §1), and load_env exports it, so no wiring is needed here either way.
     if [ -z "${VCF_CLI_VSPHERE_PASSWORD:-}" ]; then
-      log_warn "VCF_CLI_VSPHERE_PASSWORD is not set — this run will PROMPT, and will FAIL in CI."
+      # B207/F6 (measured 2026-08-21): this said "will PROMPT". It cannot - `vcf context create`
+      # below runs with `</dev/null` UNCONDITIONALLY, so there is no tty to answer. The two lines
+      # contradicted each other; whichever you touch, fix the other.
+      log_warn "VCF_CLI_VSPHERE_PASSWORD is not set. This run CANNOT prompt for it - vcf context"
+      log_warn "  create runs with </dev/null below - so it fails HERE, not only in CI."
       log_warn "  Set it in .env (scenario-1 §1) or export it. NEVER 'vcf config set env.…', which"
       log_warn "  writes it in plaintext to ~/.config/vcf/config.yaml, outside every teardown here."
     fi
