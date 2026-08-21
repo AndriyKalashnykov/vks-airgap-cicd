@@ -279,7 +279,15 @@ fi
 
 can_api=no
 argocd_api_ready=no
-if have argocd && [ -n "${ARGOCD_SERVER:-}" ] && [ -n "${ARGOCD_AUTH_TOKEN:-}" ]; then
+# B197(1): THREE causes tracked separately, so a message can name the ONE that is missing. A single
+# boolean made "CLI absent" and "vars absent" produce a BYTE-IDENTICAL message, and - measurably
+# wrong - told an operator who had ALREADY set both variables to go and set them.
+_api_missing=''
+have argocd                     || _api_missing="${_api_missing} the argocd CLI"
+[ -n "${ARGOCD_SERVER:-}" ]     || _api_missing="${_api_missing} ARGOCD_SERVER"
+[ -n "${ARGOCD_AUTH_TOKEN:-}" ] || _api_missing="${_api_missing} ARGOCD_AUTH_TOKEN"
+_api_missing="${_api_missing# }"
+if [ -z "$_api_missing" ]; then
   argocd_api_ready=yes
   # ARGOCD_AUTH_TOKEN reaches the CLI through the ENVIRONMENT (the argocd CLI reads it by name) —
   # never `argocd login --password`, which would put the secret in argv.
@@ -330,13 +338,13 @@ esac
 # override, so a run could target a hostname that resolves only on the author's box (/etc/hosts) —
 # and the e2e still went green. A log line naming the effective server is what makes that visible.
 [ -z "${ARGOCD_SERVER:-}" ] || log_info "argocd-server (effective): ${ARGOCD_SERVER}"
-log_info "write mechanism: ${MECH}  (kubectl=${can_kubectl}, argocd-api=${can_api}$([ "$argocd_api_ready" = no ] && printf ' [api not probed: set ARGOCD_SERVER + ARGOCD_AUTH_TOKEN]'))"
+log_info "write mechanism: ${MECH}  (kubectl=${can_kubectl}, argocd-api=${can_api}$([ -n "$_api_missing" ] && printf ' [api not probed: missing %s]' "$_api_missing"))"
 
 if [ "$MECH" = kubectl ] && [ "$can_kubectl" != yes ] ; then
   die "ARGOCD_MECHANISM=kubectl, but this kubeconfig may not create Applications in '$ARGOCD_NAMESPACE' on $ARGOCD_API."
 fi
 if [ "$MECH" = api ] && [ "$argocd_api_ready" != yes ]; then
-  die "ARGOCD_MECHANISM=api needs the argocd CLI plus ARGOCD_SERVER and ARGOCD_AUTH_TOKEN (see .env.example)."
+  die "ARGOCD_MECHANISM=api, but this box is missing: ${_api_missing}. See .env.example."
 fi
 
 # ⚠️ AN EXPLICIT `api` BYPASSES THE unknown-GUARD ABOVE — and the tenant path is ALWAYS explicit.
@@ -724,9 +732,19 @@ EOF
         # A tenant's repo credential MUST be project-scoped — that is the only kind ArgoCD RBAC lets
         # them create. Password on STDIN, never argv.
         log_info "  ${app}: argocd repo add ${DEPLOY_REPO_CLONE_URL} (project ${ARGOCD_PROJECT})"
-        printf '%s' "$TOKEN" | argocd repo add "$DEPLOY_REPO_CLONE_URL" \
-          --project "$ARGOCD_PROJECT" --username "$GITEA_CI_USER" --password-stdin >/dev/null \
-          || die "argocd repo add failed for ${DEPLOY_REPO_CLONE_URL}"
+            # B197(2): this was the ONE argocd failure site of three that did NOT classify. Its
+            # stderr was uncaptured, so an expired token or a STALE_CA reported only "argocd repo
+            # add failed" - a transport fault misattributed to the repo. Mirrors :628-631.
+            _ra_err="$(mktemp)"
+            if ! printf '%s' "$TOKEN" | argocd repo add "$DEPLOY_REPO_CLONE_URL" \
+                 --project "$ARGOCD_PROJECT" --username "$GITEA_CI_USER" --password-stdin \
+                 >/dev/null 2>"$_ra_err"; then
+              _ra_cls="$(classify_argocd_failure "$_ra_err")"
+              _ra_txt="$(tr -d '\000' < "$_ra_err" | tail -5)"; rm -f "$_ra_err"
+              argocd_transport_die "$_ra_cls" "add repo '${DEPLOY_REPO_CLONE_URL}'" "$_ra_txt"
+              die "argocd repo add failed for ${DEPLOY_REPO_CLONE_URL}"
+            fi
+            rm -f "$_ra_err"
         ;;
       request)
         log_warn "  ${app}: the deploy repo is PRIVATE — ask your platform team to run:"

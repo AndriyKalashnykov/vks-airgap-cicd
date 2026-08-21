@@ -618,6 +618,50 @@ _lab_add() { _lab_rows="${_lab_rows}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\n';
 # ⚠️ EMPTY IS NOT A SECRET (same trap as :251) — `_mask` renders its sentinel unconditionally, so an
 # unset password would advertise a hidden value that does not exist and send the reader to
 # SHOW_SECRETS=1 for nothing.
+# ── B207: what `make vks-login` stops on FIRST, for the ACTIVE method ──────────────────────────
+# The report printed `flow : real VKS lab (VKS_AUTH_METHOD=vcf)` and, two sections below, a
+# credential that method needs as `<not set>` — holding both halves and never joining them. It
+# then said `run: make vks-login`, which in that state cannot succeed.
+#
+# ⚠️ THE MAP IS HAND-TYPED ON PURPOSE. "Derive it from 30-vks-login.sh's dispatch" was REFUTED
+# (idea round 2026-08-21): 6 of 11 mentions of these names in that file are COMMENTS, one a
+# NOT-WIRED design note (:309-311) that a deriver reads as the wiring — the docstring-matching
+# class in gates.md. `make check-vks-login-requires` asserts this map agrees with the script.
+#
+# ⚠️ THE ORDER IS THE DISPATCH ORDER, and ONLY the checks that `die` are listed.
+# VCF_CLI_VSPHERE_PASSWORD is deliberately ABSENT: under `vcf` it only WARNS (30-vks-login.sh:350),
+# so it is not a blocker. Naming it as "the" blocker was this fix's first draft, and it was wrong —
+# vks-login dies on SUPERVISOR_HOST (:59) long before it looks at the password.
+_vks_login_requires() {
+  printf 'KUBECONFIG\n'                                   # :33  — global, every method
+  case "${VKS_AUTH_METHOD:-}" in
+    vcf)     printf 'SUPERVISOR_HOST\nVKS_CONTEXT_NAME\nVCF_CLI_VSPHERE_PASSWORD\n' ;;             # :59 :60, then :380
+    vsphere) printf 'SUPERVISOR_HOST\nVKS_NAMESPACE\nVKS_CLUSTER_NAME\nVKS_USERNAME\nVKS_PASSWORD\n' ;; # :462-466
+  esac
+}
+# ⚠️ TWO KINDS OF FATAL, and the message must not conflate them. The `:?` variables above kill
+# vks-login at a requirement check. VCF_CLI_VSPHERE_PASSWORD does NOT: it only WARNS
+# (30-vks-login.sh:351) and then `vcf context create` runs with `</dev/null` UNCONDITIONALLY (:380),
+# so it cannot prompt and fails there instead. Measured 2026-08-21: there is NO short-circuit
+# between the warn and the call. Leaving it out entirely was this fix's SECOND draft — and it made
+# the note SILENT on the exact box the operator reported, which is the whole defect.
+_unmet_why() {
+  case "$1" in
+    VCF_CLI_VSPHERE_PASSWORD) printf 'vcf context create runs with </dev/null, so it cannot prompt for it' ;;
+    *)                        printf 'vks-login stops at that check' ;;
+  esac
+}
+# Prints the FIRST unset requirement, or nothing. This is an OBSERVATION of THIS process after
+# load_env — never a prediction about a future one: `VAR=… make vks-login` authenticates fine, so
+# the wording below says "not set in .env or this environment", not "cannot authenticate".
+_first_unmet() {
+  local _v
+  while IFS= read -r _v; do
+    [ -n "$_v" ] || continue
+    [ -n "${!_v-}" ] || { printf '%s' "$_v"; return 0; }
+  done < <(_vks_login_requires)
+  return 1
+}
 # ── _ssh_classify <errfile> <prefix> — ONE mapping of a kube failure class to (token, sentence) ──
 # BOTH call sites in the SSH probe go through this. The first version had two: a full case at the
 # listing site and a THREE-ARM case at the read site, whose `*)` swallowed five real classes. The
@@ -685,7 +729,10 @@ elif [ -z "${VKS_NAMESPACE:-}" ]; then
 else
   _sup_kc="$(supervisor_kubeconfig 2>/dev/null || true)"
   if [ -z "$_sup_kc" ] || [ ! -f "$_sup_kc" ]; then
-    _ssh_state="no Supervisor kubeconfig — run: make vks-login"; _ssh_tok="<no kubeconfig>"
+    _ssh_state="no Supervisor kubeconfig — run: make vks-login"
+    _um_ssh="$(_first_unmet || true)"
+    [ -z "$_um_ssh" ] || _ssh_state="${_ssh_state} (which needs ${_um_ssh}, not set)"
+    _ssh_tok="<no kubeconfig>"
   else
     _lab_err="$(mktemp)"
     # `&& rc=0 || rc=$?` and NOT `; rc=$?` — the latter dies under `set -e` (rules/shell).
@@ -773,6 +820,12 @@ printf '     rejected, STOP and confirm it with whoever owns the lab — do not 
 # printed 7. It tracked neither the rows, nor .env.example, nor the scenario docs, and reading as
 # "derived" made it WORSE than the literal it replaced. NAMING the variables is the honest form: the
 # list IS the claim, so it cannot go stale silently.
+_um="$(_first_unmet || true)"
+if [ -n "$_um" ]; then
+  printf '\n  \u26a0\ufe0f  make vks-login (VKS_AUTH_METHOD=%s) checks its requirements in order and the first\n' "${VKS_AUTH_METHOD:-<unset>}"
+  printf '     one not satisfied is %s — not set in .env or in this environment.\n' "$_um"
+  printf '     %s. Set it before any step that needs a kubeconfig.\n' "$(_unmet_why "$_um")"
+fi
 printf '\n  Showing the lab-access values the scenario documents ask you to set: VCENTER_HOST,\n'
 printf '  VCENTER_USERNAME, VCENTER_PASSWORD, VKS_USERNAME, VKS_PASSWORD, VCF_CLI_VSPHERE_PASSWORD\n'
 printf '  and SUPERVISOR_HOST. There is no ssh row in .env because this repo never asks you for one —\n'

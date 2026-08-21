@@ -378,6 +378,10 @@ check-how-provenance: ## Gate: every `# how:` acquisition command must be runnab
 check-vks-provenance: ## Gate: every fact row in a docs/vks-services Confidence table carries a resolvable [src:] citation token (code refs are opened + verified)
 	@$(SCRIPTS)/check-vks-provenance.sh
 
+.PHONY: check-vks-login-requires
+check-vks-login-requires: ## Gate: creds.sh's hand-typed vks-login requirement map agrees with 30-vks-login.sh
+	@./scripts/check-vks-login-requires.sh
+
 .PHONY: check-classifier-consumers
 check-classifier-consumers: ## Gate: every case-form consumer of classify_kube_failure handles every class it can emit
 	@./scripts/check-classifier-consumers.sh
@@ -1045,19 +1049,33 @@ check-pod-inject-label: ## Gate: every workload we ship declines sidecar injecti
 	@$(SCRIPTS)/check-pod-inject-label.sh
 
 .PHONY: check-toolchain-alignment
-check-toolchain-alignment: ## Fail if kubectl pinned in .mise.toml disagrees with .env.example KUBECTL_VERSION
-	@mise_v=$$(grep -E '^kubectl' .mise.toml | sed -E 's/.*"([^"]+)".*/\1/' | tr -d 'v'); \
-	env_v=$$(grep -E '^KUBECTL_VERSION=' .env.example | cut -d= -f2 | tr -d 'v'); \
+check-toolchain-alignment: ## Fail if the kubectl/go pins in .mise.toml disagree with .env.example / images.txt
+# B198, REDESIGNED 2026-08-21 after its idea round refuted BOTH the row and the fix it prescribed:
+#  - the row said this printed `go aligned ()` and EXITED 0. Measured: it did not. `.SHELLFLAGS` is
+#    `-eu -o pipefail -c`, so a non-matching grep exits 1 and killed the recipe AT THE ASSIGNMENT
+#    with no message naming go at all. A SILENT RED, not a fake green - a different defect.
+#  - the prescribed empty-guard was therefore DEAD CODE: `set -e` kills the line above it, so the
+#    guard could never run in the one case it was written for (coding-style.md).
+#  - and `|| true` WITHOUT the guard is worse than either: it makes `"" != ""` reachable and
+#    produces exactly the `aligned ()` rc=0 the row feared. Measured. They land TOGETHER or not at all.
+#  - `^kubectl` had no `=` anchor and neither arm had `head -1`, so `kubectl-convert = "..."` (a real
+#    mise tool) yielded a TWO-LINE value and a false DRIFT quoting a garbled pin.
+# Shape copied from scripts/check-java-alignment.sh: extract with `|| true`, HARD-GUARD the reference
+# value, then compare UNCONDITIONALLY rendering `<none>` - an unparseable pin is loud DRIFT, never a skip.
+	@mise_v=$$(grep -E '^kubectl[[:space:]]*=' .mise.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/' | tr -d 'v' || true); \
+	env_v=$$(grep -E '^KUBECTL_VERSION=' .env.example | head -1 | cut -d= -f2 | tr -d 'v' || true); \
+	[ -n "$$env_v" ] || { echo "ERROR: could not read KUBECTL_VERSION from .env.example - the extractor is blind, not the pin absent."; exit 1; }; \
 	if [ "$$mise_v" != "$$env_v" ]; then \
-	  echo "ERROR: kubectl version drift (BLOCKING) — .mise.toml=$$mise_v vs .env.example KUBECTL_VERSION=$$env_v."; \
+	  echo "ERROR: kubectl version drift (BLOCKING) - .mise.toml=$${mise_v:-<none>} vs .env.example KUBECTL_VERSION=$$env_v."; \
 	  echo "       Same tool, two pins: jump box (mise) + air-gap fallback (00-install-prereqs.sh). Align them."; \
 	  exit 1; \
 	fi; \
 	echo "check-toolchain-alignment: kubectl aligned ($$mise_v)"; \
-	go_mise=$$(grep -E '^go ' .mise.toml | sed -E 's/.*"([^"]+)".*/\1/'); \
-	go_img=$$(grep -oE '^golang:[0-9.]+' images/images.txt | head -1 | sed 's|golang:||'); \
-	if [ -n "$$go_mise" ] && [ -n "$$go_img" ] && [ "$$go_mise" != "$$go_img" ]; then \
-	  echo "ERROR: Go version drift (BLOCKING) — .mise.toml=$$go_mise vs images/images.txt golang:$$go_img."; \
+	go_mise=$$(grep -E '^go[[:space:]]*=' .mise.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/' || true); \
+	go_img=$$(grep -oE '^golang:[0-9.]+' images/images.txt | head -1 | sed 's|golang:||' || true); \
+	[ -n "$$go_img" ] || { echo "ERROR: could not read a golang: pin from images/images.txt - the extractor is blind, not the pin absent."; exit 1; }; \
+	if [ "$$go_mise" != "$$go_img" ]; then \
+	  echo "ERROR: Go version drift (BLOCKING) - .mise.toml=$${go_mise:-<none>} vs images/images.txt golang:$$go_img."; \
 	  echo "       The pipeline BUILDS the Go app with the mirrored golang image; local/CI must TEST it"; \
 	  echo "       with the same toolchain, or you test something the pipeline never builds."; \
 	  exit 1; \
@@ -1495,7 +1513,7 @@ check-lib-sourcing: ## Gate: a script that CALLS a lib function must SOURCE the 
 .PHONY: static-check
 .PHONY: static-check-fast
 #check-static-fast: @ The CHEAP half of static-check: the alignment/doc/env gates only (~9s, no toolchain)
-static-check-fast: check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
+static-check-fast: check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-vks-login-requires check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
 
 # static-check is the UNION, so there is exactly ONE list. Defining the fast set separately and
 # leaving static-check with its own hand-typed copy is the enumerated-list rot this repo keeps
