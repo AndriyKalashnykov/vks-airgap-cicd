@@ -8,7 +8,7 @@
 # so this is a preventive gate: there are zero violations in the tree today.
 #
 # WHY A GATE AND NOT A RULE:
-#   The "single-quote a robot credential" rule is documented (detailed-steps.md, .env.example) and
+#   The "single-quote a robot credential" rule is documented (.env.example) and
 #   would still be re-typed unquoted in the next doc. Prose loaded at session start does not fire at
 #   the moment text is generated; a check that runs does.
 #

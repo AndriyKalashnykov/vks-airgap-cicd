@@ -204,7 +204,6 @@ Background and deep-dives — each scenario above is already self-contained end 
 | [CI/CD](docs/ci-cd.md) | what CI actually gates (and what it deliberately does not) |
 | [VKS authentication](docs/vks-authentication.md) | how `$KUBECONFIG` is produced on VKS (`VKS_AUTH_METHOD`, the `vcf` CLI flow), and **why Scenario 1 needs a second kubeconfig**. Both VKS scenarios run `make vks-login` themselves; **the KinD path skips it entirely** |
 | [Demo walkthrough](docs/demo-walkthrough.md) | drive the GitOps loop by hand |
-| [Detailed steps](docs/detailed-steps.md) | the full step-by-step |
 | [Lab validation plan](docs/lab-validation-plan.md) | the 24 steps to run on a **real VKS lab** to settle what KinD cannot — each with the command, what to capture, and what a PASS/FAIL proves |
 | [VKS services](docs/vks-services/) | what Broadcom actually ships (Harbor / ArgoCD / Istio), each fact **graded** by provenance |
 | [Decisions](docs/decisions/) | why the KinD stand-in is built the way it is |
