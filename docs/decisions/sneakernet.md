@@ -70,10 +70,19 @@ Stated, not hidden:
 
 - **`install-all` cannot run on box B** — it begins with `mirror` (internet), and its `preflight`
   (`03-check-tools.sh`) requires the full toolchain. The runbook lists the steps to run instead.
-- **`INGRESS_CONTROLLER=istio` (the default) cannot install air-gapped** — `46-install-istio.sh` does
-  `helm repo add istio-release.storage.googleapis.com`. **`traefik` is fully air-gap-clean today** (image
-  from Harbor, manifests in-repo) and `istio-existing` needs no install at all. Vendoring the Istio chart
-  into `bundle/charts/` is the fix; it is not done.
+- ⚠️ **CORRECTED 2026-08-21 — this said `INGRESS_CONTROLLER=istio` (the default) *cannot install
+  air-gapped* and that vendoring the chart *"is not done"*. Both are FALSE, and this is a live-state
+  bullet, so the append-only ADR convention does not shield it.** The charts **are** carried:
+  `10-mirror-pull.sh:168` runs `helm pull istio-airgap/<chart> --version "$ISTIO_VERSION" --destination
+  "$CHART_DIR"` into `bundle/charts/`, and `46-install-istio.sh:64` is headed **AIR-GAP FIRST** — it
+  prefers a carried chart and **`die`s** (`:77`, *"the bundle … carries NO istio charts"*) rather than
+  silently reaching for the internet; `ALLOW_PUBLIC_CHARTS=1` is the explicit opt-out.
+  An operator reading the old text would have switched off the default ingress for a reason that had
+  stopped being true. **The two residuals that ARE still live**, both of which only *warn* on the
+  internet box and are therefore easy to miss: `ISTIO_VERSION` unset -> charts not carried
+  (`10-mirror-pull.sh:172`), and `helm` absent on the pull box -> charts not carried (`:175`). In either
+  case the air-gap box can only use `traefik` or `istio-existing`. **`traefik` is fully air-gap-clean**
+  (image from Harbor, manifests in-repo) and `istio-existing` needs no install at all.
 - **`install-harbor` / `install-argocd` fetch from the internet** (goharbor helm repo; the ArgoCD
   install.yaml from raw.githubusercontent). These are the **KinD stand-in** paths — on a real lab both are
   Supervisor Services — but an operator running them on box B would fail.

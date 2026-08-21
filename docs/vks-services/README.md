@@ -14,6 +14,12 @@ of re-deriving it.
 | **ArgoCD** | **Supervisor** (a vSphere Namespace) | the platform team, as a **Supervisor Service** | [`argocd.md`](argocd.md) |
 | **Istio** | the **GUEST / workload cluster** | the cluster owner, as a **VKS Standard Package** | [`istio.md`](istio.md) |
 
+**Also here, and not a service:** [`guest-cluster-vip.md`](guest-cluster-vip.md) — the reused-cluster-name
+VIP trap (measured: a create that hung **1807 s**), CAPV PR #3881 / issue #2872, four remedies that were tried
+and refuted, and how to find which Supervisor Services are installed. `25-vks-cluster-create.sh` already
+guards the trap and fails in ~0 s with the remedy printed — this page is the *why*, and it had **zero inbound
+links** until 2026-08-21.
+
 That split is the single most load-bearing fact on this page, and it drives everything else:
 
 - Harbor and ArgoCD live **beside** your workload cluster, not in it. So you *discover* their

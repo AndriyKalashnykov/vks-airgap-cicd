@@ -31,10 +31,16 @@ Steps 19–24 are minutes each.
   Services and provision the cluster anyway — so every divergence between our doc and the vSphere
   Client you actually see is free evidence about the least-verified prose we ship. A plan that starts
   at *"assume `./secrets/vks.kubeconfig` exists"* throws that away.
-- **We ship TWO CONTRADICTORY forms of `vcf context create`** (`30-vks-login.sh:70` uses an interactive
-  name with `--auth-type basic`; `31-fetch-argocd-kubeconfig.sh:63` uses a positional name with
-  `--type k8s` and `--ca-certificate`). At most one is right, **neither has ever run**, and this repo has shipped a
-  fabricated `vcf` command before — hence rule 5 and the `--help` dump in step 3.
+- ⚠️ **CORRECTED 2026-08-21 — the "two contradictory forms, neither has ever run" premise is
+  FALSE against today's code, and acting on it would "fix" a script into the state it is already in.**
+  Both callers converged on `<positional-name> --type kubernetes`: `30-vks-login.sh:106` builds
+  `create_args=("$VKS_CONTEXT_NAME" --endpoint … --type kubernetes --auth-type basic)` — the positional IS
+  passed — and `31-fetch-argocd-kubeconfig.sh:145` passes `--type kubernetes`, with `:129` describing the
+  `--type k8s` / no-positional shape as **the old one**. `docs/vks-authentication.md:53-61` grades the flow
+  **lab-verified 2026-07-22** on a real VCF 9.1 Supervisor, so the form HAS run.
+  **What is still genuinely open here** is narrower: confirming the exact argv against `vcf context create
+  --help` on the lab, and the `VCF_CLI_VSPHERE_PASSWORD`-only password mechanism, which remains ungraded.
+  Rule 5 and the `--help` dump stay — this repo HAS shipped a fabricated `vcf` command before.
 - **Why the stages must be split** (rule 1): **Harbor CA auto-trust** (graded *community*) is
   observable right after `mirror` and **before** `platform`, which pulls Gitea *from* Harbor — if
   auto-trust is false, `platform` ImagePullBackOffs and the remedy rolls your worker nodes.
@@ -464,12 +470,31 @@ make mirror-verify 2>&1 | tee /tmp/16-mirror-verify.log; echo "EXIT=$?"
 
 **Creates:** the `cicd` + `apps` Harbor projects and a robot account (additive; deletable from the Harbor UI).
 
-### 17. Does the guest cluster auto-trust Harbor's cert? · CHEAP — MUST RUN BEFORE step 18
+### 17. Does the guest cluster auto-trust Harbor's cert? · ✅ ANSWERED 2026-08-21 — optional re-confirm
 
-**Why:** we claim a same-Supervisor VKS cluster **auto-trusts** the Harbor cert with no per-node wiring (graded *community*). KinD cannot show it. **If it is false, the next step ImagePullBackOffs** and the remedy rolls your worker nodes.
-**Where:** jump box → **guest cluster**. Schedules one real pod in the guest (then deletes it).
-**Who needs it:** **YOU — this is why it runs before `make platform`.**
-**We then:** upgrade `harbor.md`'s auto-trust claim from *community* to `lab-verified` — **or**, on x509, **promote `osConfiguration.trust.additionalTrustedCAs` from a footnote to a required step** in the runbook. (The last clause of this step used to read *"if the Cluster CR has no `trust` field at all, we are documenting a field that does not exist"*. **SETTLED 2026-08-17, lab-verified:** the field exists — `osConfiguration.trust.additionalTrustedCAs[].caCert.{content,secretRef}` — but it is published by a CAPI **runtime extension**, so it appears in the ClusterClass's `status.variables` and **never** in `spec.variables`, which is empty on all 12 ClusterClasses. Reading `spec.variables` is what makes it look absent.)
+⚠️ **This step is SETTLED; do not spend lab time re-deriving it.** It used to say the claim was graded
+*community* and that the run would upgrade it. Both were stale: `docs/vks-services/harbor.md` grades it
+**lab-verified** twice — the auto-trust row (upgraded 2026-08-17) and CA propagation (2026-08-21, with a
+fingerprint MATCH).
+
+**The mechanism, measured:** VKS copies the Harbor CA into the guest itself —
+`tkg-system/kapp-controller-config` key `caCerts` carries `CN = Harbor CA` with a SHA-256 byte-identical to
+our own `secrets/harbor-ca.crt`. Neither this repo nor the lab repo writes it.
+
+**Re-confirm on any lab in ~15s with one target, not the hand-rolled probe below:**
+
+```bash
+make vks-trust-probe
+```
+
+It compares the fingerprint AND forces a real `imagePullPolicy: Always` pull, and it states in its own output
+what it does **not** prove: a green cannot distinguish node CA-trust from containerd configured **insecure**
+for this registry — both produce an identical successful pull. **That distinction is the one thing here still
+worth lab time**, and it needs node access (`VCF_CLI_VSPHERE_PASSWORD`, or the `<cluster>-ssh-password`
+secret in the Supervisor's vSphere Namespace).
+
+**Where:** jump box → **guest cluster**. **Who needs it:** only if you want the node-level mechanism settled.
+**The manual form below is kept for reference**, superseded by the target above:
 
 ```bash
 set -a; . ./.env; set +a

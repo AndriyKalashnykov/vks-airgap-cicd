@@ -248,12 +248,24 @@ else
     die "refusing to write an unauthenticated trust anchor with no terminal to confirm it on.
   Pass the expected digest explicitly:  make fetch-${LABEL}-ca ${pin_var}=<sha256>
   (No make target depends on this one and no CI workflow invokes it — still true, re-checked.
-  ⚠️ ONE automated path DOES reach it now: scenario-2 Step 2 is a walked block, and the walker is
-  non-TTY. That is deliberate and it does not fire in practice, because Step 2 asks whether the CA
-  is already present FIRST and the walk's driver stages it — so the walk takes the have-it-already
-  branch and never gets here. If it ever does get here, the walk SHOULD stop: an unattended run
-  pinning whatever answered is exactly what this refuses, and a green walk that pinned a stranger's
-  certificate would be worse than a red one.)"
+  ⚠️ TWO automated paths reach it, and the walker is non-TTY (measured 2026-08-21: a tty test
+  returns FALSE under walk-doc.sh's interactive bash -c, with stdin from /dev/null, a pipe, or inherited). This said
+  ONE, and the second was found only by an adversary round:
+    * scenario-2 Step 2 (harbor) - safe by DESIGN: the step asks whether the CA is already present
+      FIRST and the walk's driver stages harbor-ca.crt, so the walk takes the have-it-already branch.
+    * scenario-2 Step 'ArgoCD's CA' (argocd) - had NO such branch, and the driver stages nothing for
+      it. It survived only because a sibling line in the same fence carries a live <argocd-lb-ip>
+      placeholder, and walk-doc.sh skips a block containing one WHOLESALE. i.e. the certification's
+      greenness over it rested on a typographic accident: substituting that placeholder - an obvious
+      docs improvement - would have un-skipped the block and reddened rows 5/6. It now carries the
+      same have-it-already pre-check as the harbor step (B208) - but NOT the same protection.
+    Harbor is safe because of BOTH halves: the pre-check AND the driver staging harbor-ca.crt.
+    NOTHING stages argocd-ca.crt (measured: 0 hits in walk-matrix.sh and walkbox-vm.sh), so in a
+    walk that pre-check is always FALSE and this die stays reachable. The block is protected only
+    by the surviving argocd-lb-ip placeholder - ONE non-comment line, not three.
+  If either ever does get here, the walk SHOULD stop: an unattended run pinning whatever answered is
+  exactly what this refuses, and a green walk that pinned a stranger's certificate would be worse
+  than a red one.)"
   fi
 fi
 

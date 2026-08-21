@@ -308,7 +308,20 @@ echo "<argocd-lb-ip> argocd-server" | sudo tee -a /etc/hosts
 #    exactly the situation you are in if you are here on a RETRY. The Makefile's `-include .env`
 #    makes a FILE-defined make variable, and a file-defined variable BEATS an environment one, so
 #    the prefix form dials the stale value with no error. A command-line assignment outranks both.
-make fetch-argocd-ca ARGOCD_SERVER=argocd-server
+#    ⚠️ AND THE PRE-CHECK IS NOT DECORATION. `make fetch-argocd-ca` ends in a consent gate that
+#    DIES with no terminal ("refusing to write an unauthenticated trust anchor with no terminal to
+#    confirm it on"), and a walkthrough runs non-TTY (measured: `[ -t 0 ]` -> 1 under the walker's
+#    `bash -i -c`, with stdin from /dev/null, a pipe, or inherited). The Harbor step already has
+#    this branch; this one did not, and survived only because the `<argocd-lb-ip>` placeholder above
+#    makes a walk skip the whole block. Substituting that placeholder would have un-skipped it and
+#    reddened the walk. If you were SENT the CA, this takes the have-it-already branch.
+set -a; . ./.env; set +a
+CA="${ARGOCD_CA_FILE:-./secrets/argocd-ca.crt}"
+if [ -s "$CA" ]; then
+  echo "already have it at $CA — not re-fetching (this is the branch for a file you were sent)"
+else
+  make fetch-argocd-ca ARGOCD_SERVER=argocd-server
+fi
 
 # 3. Then put the NAME (not the IP) in .env, next to the CA file it just wrote.
 #    ARGOCD_SERVER=argocd-server
