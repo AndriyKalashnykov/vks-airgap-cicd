@@ -150,5 +150,18 @@ ensure_secret_dir "$(dirname "$OUT")"
 cp "$match" "$OUT"; chmod 0644 "$OUT"      # a CA is public trust material, not a secret
 log_info "installed ${OUT}"
 openssl x509 -in "$OUT" -noout -fingerprint -sha256 2>/dev/null | sed 's/^/  /'
+# B195/F1.5: RECORD THAT *WE* PULLED THIS OFF THE WIRE.
+# 30-vks-login.sh:157-165 stays DELIBERATELY SILENT when no pin is set, and writes out its reason:
+# "the operator has already pointed VKS_CA_CERT_FILE at a file they obtained THEMSELVES - which is
+# the out-of-band path". That premise is FALSE for a file this script wrote: :33 fetched it with
+# `curl -sk` off the very wire it is meant to authenticate - precisely the trust-on-first-use
+# situation the same comment says this is NOT. The consumer had no way to tell the two apart.
+# The marker carries the DIGEST, not just a flag, so an operator who later replaces the file by hand
+# does NOT inherit a stale "fetched" verdict - the digests stop matching and the consumer goes quiet
+# again. Public trust material, so 0644 like the anchor itself.
+_prov_fp="$(openssl x509 -in "$OUT" -noout -fingerprint -sha256 2>/dev/null | tr -d ': ' | sed 's/.*=//' | tr '[:upper:]' '[:lower:]' || true)"
+if [ -n "$_prov_fp" ]; then
+  printf '%s\n' "$_prov_fp" > "${OUT}.fetched" && chmod 0644 "${OUT}.fetched"
+fi
 log_info "CONFIRM that fingerprint with your platform team over a channel that is NOT this connection."
 log_info "next: make vks-login"

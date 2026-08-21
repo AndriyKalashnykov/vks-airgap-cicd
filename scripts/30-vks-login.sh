@@ -162,7 +162,23 @@ Place your VKS workload-cluster kubeconfig there (e.g. exported from VCF Automat
         # transcription, no partial compare). Demanding a pin on top would nag every correct user for
         # nothing, and this repo has a recorded defect where a gate printed advice on a NON-finding.
         # The pin is an optional cross-check for operators who were handed a digest as well as a file.
-        3) : ;;
+        # B195/F1.5: the silence above is RIGHT for a file the operator obtained themselves, and WRONG
+        # for one `make fetch-supervisor-ca` pulled off the wire with `curl -sk` - the trust-on-first-use
+        # case this very comment says it is NOT. The producer now records the digest it wrote; we warn
+        # ONLY while the file still IS those fetched bytes. An operator who replaced it by hand no longer
+        # matches, so the deliberate silence is preserved for exactly the path it was reasoned for.
+        # Advice guarded on the FINDING, not the category.
+        3) _prov="${VKS_CA_CERT_FILE}.fetched"
+           if [ -s "$_prov" ]; then
+             _now_fp="$(openssl x509 -in "$VKS_CA_CERT_FILE" -noout -fingerprint -sha256 2>/dev/null | tr -d ': ' | sed 's/.*=//' | tr '[:upper:]' '[:lower:]' || true)"
+             if [ -n "$_now_fp" ] && [ "$_now_fp" = "$(tr -d ' \n' < "$_prov")" ]; then
+               log_warn "the CA at ${VKS_CA_CERT_FILE} was FETCHED off the wire by 'make fetch-supervisor-ca',"
+               log_warn "  not supplied by you - so nothing yet proves it belongs to ${SUPERVISOR_HOST} rather"
+               log_warn "  than to something intercepting it, and a credential is about to go over it."
+               log_warn "  Confirm this digest out of band with your platform team, then pin it in .env:"
+               log_warn "    VKS_CA_SHA256=${_now_fp}"
+             fi
+           fi ;;
         4) die "VKS_CA_SHA256 is set but is not a SHA-256 digest — REFUSING (a malformed pin must never
   silently downgrade to an unauthenticated anchor).
     got:      '${VKS_CA_SHA256:-}'
