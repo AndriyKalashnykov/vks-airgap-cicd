@@ -203,7 +203,7 @@ Background and deep-dives — each scenario above is already self-contained end 
 | [Sizing](docs/sizing.md) | jump-box disk + guest-cluster resources |
 | [Repository layout](docs/repository-layout.md) | where things live |
 | [Adding an app](docs/adding-an-app.md) | one row in `apps/registry.tsv` — what loops over it, and what a tenant must request |
-| [Make targets](docs/make-targets.md) | the catalogue, with context (`make help` prints the same list straight from the Makefile). A CI gate fails if an operator-invocable target is documented **nowhere** |
+| [Make targets](docs/make-targets.md) | a **curated subset** with context — `make help` is the exhaustive list, straight from the Makefile. A CI gate fails if an operator-invocable target is documented **nowhere**; it cannot see whether it is documented *here* |
 | [CI/CD](docs/ci-cd.md) | what CI actually gates (and what it deliberately does not) |
 | [VKS authentication](docs/vks-authentication.md) | how `$KUBECONFIG` is produced on VKS (`VKS_AUTH_METHOD`, the `vcf` CLI flow), and **why Scenario 1 needs a second kubeconfig**. Both VKS scenarios run `make vks-login` themselves; **the KinD path skips it entirely** |
 | [Demo walkthrough](docs/demo-walkthrough.md) | drive the GitOps loop by hand |

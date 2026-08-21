@@ -686,7 +686,13 @@ no --cacert at all                                                   http=000 rc
    the leaf was re-issued". It did not: the file's **mtime is 2026-08-17 09:16**, i.e. `trust-vcsa` (a **nested-vsphere-lab** target, not one of ours) re-ran for
    this cut and rewrote it. The reason it verifies is that it was **re-fetched**, not that it endured. Checking the
    mtime is what separated those two stories, and they imply opposite things about whether an operator must re-run
-   nested-vsphere-lab's `trust-vcsa` after every rebuild (they must).
+   the anchor must be re-fetched after every rebuild (**it must**).
+   ⚠️ **RULE ZERO-B, corrected 2026-08-21:** this used to say *"an operator must re-run
+   nested-vsphere-lab's `trust-vcsa`"*. The end user of THIS repo has cloned only this repo - no `trust-vcsa`
+   target, no `~/.local/state/nested-lab` - so that instruction is unrunnable for them. In terms they can act
+   on: **your vCenter's VMCA root does NOT survive a lab rebuild; re-obtain it after every one**, however your
+   platform team publishes it. `nested-vsphere-lab`'s `trust-vcsa` is merely how OUR lab does it, and the
+   `$LAB_STATE` path below is an example location, not an instruction.
 
 **Where:** jump box. Read-only, no credentials, no writes.
 **Who needs it:** US.

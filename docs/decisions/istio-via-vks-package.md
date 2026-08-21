@@ -1,5 +1,13 @@
 # Installing Istio as the VKS Standard Package (Carvel) — proposed, REFUTED
 
+> ⚠️ **TWO UPDATES — added 2026-08-21.** (1) Its one *"open, deliberately ungraded"* item —
+> whether kapp-controller is present — is **ANSWERED**: [../vks-services/istio.md](../vks-services/istio.md)
+> records lab-verified 9.1 PackageInstall installs (2026-08-10), which require it, and names
+> `vmware-system-tkg`. (2) Its *"zero new code"* line now needs scoping: generic package targets
+> (`list-vks-packages` / `install-vks-package` / `uninstall-vks-package`) DID ship, with measured 20 s
+> install / 11 s uninstall. **The rejection still holds** — it was scoped to adding a FOURTH ingress
+> mode, not to package management.
+
 **Status:** REJECTED — do not implement. The direction is right; the *mode* is not.
 **Date:** 2026-07-22
 **Answers:** the "Broadcom-packaging question" left open by
