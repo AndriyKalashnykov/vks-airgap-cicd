@@ -671,151 +671,96 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-20 — CERTIFIED 6/6 ON THE FIRST PASS AND TAGGED `v1.1.0`. The lab is LIVE and fully installed
+## ▶️ HANDOFF 2026-08-21 — RE-CERTIFIED 6/6 ON THE FIRST PASS, TAGGED `v1.2.0`. A fresh lab is UP
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
 ### The standing job is DONE — do not re-certify the same tree
 
-`MATRIX COMPLETE — walked 6 of 6 designed rows (1 2 3 4 5 6)`, every row **0 FAILED / 0 UNMET**, over a
-**freshly cut lab**, on the **first pass**. No fix reset the clock. **B108 is CLOSED**; its full numbers
-live in that row, not here.
+`MATRIX COMPLETE — walked 6 of 6 designed rows (1 2 3 4 5 6)`, **0 FAILED / 0 UNMET across all six**,
+`MATRIX_RC=0`, ~4h06m, first pass. No fix was applied mid-run, so the §A.2 clock never reset.
 
-- **Certified tree: `778fa77`. Tag: `v1.1.0`** (annotated), deliberately NOT on main's head — two commits
-  landed after it and neither was walked: `6cb7937` (Renovate's renovate-CLI pin, which **auto-merged 12
-  seconds before row 1 started**) and `1e75332` (a docs-only PR held unmerged for the run).
-- 🔴 **Evidence: `~/walk-evidence/run-20260820T022721Z-272401/` — it is BOTH the certification record AND a
-  LIVE SECRET STORE. Do not copy, archive, attach or share it.** It holds, in plaintext, this lab's **live**
-  Harbor admin password (`.hp`), a live ArgoCD auth token (`.at`) and CLI config (`.acfg`), the guest-cluster
-  kubeconfig (`.gkc`) and the Harbor CA (`.hca`). The dir is `0700` and, since 2026-08-20, every file inside
-  is `0600` — **six of the twenty-six were `0664` until then**, and the earlier claim that "`0700`" settled it
-  was wrong in the reassuring direction (the same error `walk-matrix.sh:169-173` records having already made
-  once). Measured positive control: the password and token appear **0 times** in the row logs, so the logs
-  themselves carry no secret. It **survives a reboot**, which is the point.
-  That location is not cosmetic — the PREVIOUS certification's evidence was destroyed by the 2026-08-19
-  power loss because `walk-matrix.sh` defaults `WALK_OUT_ROOT=/tmp/walk` (filed as **B454**,
-  `nested-vsphere-lab` PR #90). **Always pass `WALK_OUT_ROOT` somewhere durable.**
-- Run 8's verdict path, cited in the previous handoff, **no longer resolves**. There is therefore **no
-  older baseline to diff against**; this run is the new baseline.
+- **Certified tree: `fbdf683`. Tag: `v1.2.0`** (annotated; `refs/tags/v1.2.0^{}` → `fbdf683`, verified
+  on the remote). This time the tag IS on main's head — 0 open PRs at arm time, because **#910 was
+  merged BEFORE arming**. That was deliberate: the previous certification had a Renovate CLI pin
+  auto-merge **12 seconds before row 1 started**, which splits a run across two commits.
+- **All three cross-OS pairs are BYTE-IDENTICAL** — rows 1~3 (37 ran / 7 skipped), 2~4 (31 / 13),
+  5~6 (18 / 9) — same counts on both OSes AND across two independently cut labs. Every row
+  reconciles at `parsed == heads` (37/37, 17/17): slack zero, the check that catches a parser
+  dropping claims.
+- 🔴 **Evidence: `~/walk-evidence/run-20260821T034057Z-1601968/` — BOTH the certification record AND a
+  LIVE SECRET STORE. Do not copy, archive, attach or share it.** Dir `0700`, all files `0600`.
+  ⚠️ **THE `0664` DEFECT RECURRED, exactly as the previous handoff warned**: 6 files — including both
+  row-1/row-2 logs and **the verdict file itself** — were `0664` until I fixed them. `0700` on the
+  DIRECTORY is not sufficient and never was. Check `find <dir> -type f ! -perm 600 | wc -l` after
+  every run. Positive control passes: the Harbor password appears **0 times** in the row logs.
+- **Scope limit, stated not implied:** rows 5/6 prove scenario-2 is **walkable** — the driver supplies
+  ADMIN credentials and a guest kubeconfig, as their own banner says (*"NOT the tenant path"*). A real
+  tenant holding only platform-issued grants is **UNPROVEN by this matrix**.
 
-### The lab is UP and carries the full demo — do not assume it needs a cut
+### The lab is UP (cut B) — do not assume it needs a cut
 
-Measured after the matrix. `esxi01` is the only libvirt domain; everything else runs inside it.
+Measured after the run. `esxi01` is the only libvirt domain; **0 walkboxes leaked** (the one B453
+predicts was swept, after proving provenance by the `vks-walkbox-managed` marker — `esxi01` carries
+none).
 
 | what | where |
 |---|---|
 | vCenter | `vcsa.env1.lab.test` / 192.168.100.50 |
-| Supervisor | 192.168.101.128 (control-plane IP; the kube API LB is **.129**) |
-| Harbor | `harbor.env1.lab.test` / 192.168.101.130 — `cicd` 25 repos, `apps` 2 |
-| argocd-server | 192.168.101.131 (`cicd` ns, on the SUPERVISOR, as VKS ships it) |
-| guest cluster API | 192.168.101.132 |
-| Gitea | 192.168.101.133 |
-| Istio gateways | 192.168.101.134 / .135 |
-
-**ArgoCD carries 2 Applications, `gowebapp` and `javawebapp`, both Synced AND Healthy** — the whole
-`git push → Tekton → Harbor → ArgoCD → running workload` loop, for both languages, on this lab.
-
-### Verified AFTER the run by AUTHENTICATING, not by probing
-
-Rule C.6: never during a run, because a run reinstalls Harbor between cells. All of it was done without
-typing a password into a browser form and under a **throwaway `HOME`**, so the operator's NSS store was
-never opened.
-
-- **Harbor** — API basic-auth 200 (`admin`, sysadmin); the UI's OWN `/c/login` form endpoint 200 with a
-  `sid` cookie, and that cookie alone then authenticates the API; wrong password → **401**.
-- **ArgoCD** — `/api/v1/session` 200 over **fully verified TLS**, `argocd.token` cookie, cookie-only
-  `userinfo` → `loggedIn: True`; wrong password → **401**.
-- Both UIs rendered in Chrome with TLS verified and no interstitial.
+| Harbor / ArgoCD | Supervisor Services: `svc-harbor-oy47l`, `svc-argocd-service-l49kf` |
+| vSphere Namespace | `cicd` |
+| guest cluster | `cicd-gc0820234057` |
 
 ### Distrust these
 
-- 🔴 **The repo's `.env` Harbor password is STALE — `make env-validate` returns a genuine 401.** This is
-  NOT a broken Harbor. The matrix installs Harbor from the walkbox VMs, and the harness destroys them, so
-  the credential it generated does not exist on this box. The live one is recoverable from the cluster
-  (the `harbor-core-ver-1` secret in the `svc-harbor-*` namespace, or — faster — it is the `.hp` file in the
-  evidence directory above). Decide whether to write it back into `.env` before running anything that needs
-  Harbor auth from the host.
-- ⚠️ **RETRACTED 2026-08-20 (same day): `make creds-show` was NOT "correctly reporting" — it carried two
-  real defects, and this bullet blessed them.** What was true is the narrow part: the host installed
-  nothing, the walkboxes did, so the *overlay* sentence was accurate. What I did with that fact was wrong
-  — I generalised one accurate sentence into a verdict on the whole report and wrote it down as
-  not-a-fault, which is precisely what stops the next reader from checking. The operator found both
-  within hours. **(1)** It printed `NOTHING IS INSTALLED YET` one line above its own
-  `cluster : reachable`, because the flow line was computed from `_have_sink` — does `.env.state` exist
-  in THIS CHECKOUT — a per-checkout fact standing in for a world fact, and never consulted the cluster it
-  had already measured. **(2)** It omitted every lab credential: of 31 credential/endpoint-shaped vars in
-  `.env.example`, **20 never reached the report**, including every `VCENTER_*` and `VKS_*`. Both fixed in
-  PR #901; the report now states only what it can know, and shows the vCenter/VKS rows plus the
-  guest-node SSH password read live from the Supervisor. **The transferable lesson is the one that cost
-  the most: a green-looking component I have just reasoned about is exactly the one I am most likely to
-  certify without measuring.**
-- **Never read pass/fail off a completion notification.** Grep the log for `RC=` or the harness's own
-  verdict line. Same for `pgrep`/`ps` counts: they self-match, and both times one looked alarming tonight
-  it was the invoking shell at `etime 00:00`.
-- **A backlog row's proposed fix is a hypothesis, and two were refuted tonight before a line was written.**
-  B181's retry is refuted by its own row AND by the code comment (Stage 1 shipped in PR #850; Stage 2 says
-  do NOT build a retry on the strength of "it was probably transient"). B75-a's candidate fix is refuted at
-  four independently fatal layers. **Read rows to their end before implementing them** — B181 is ~27k
-  characters and the refutation is at the bottom.
-- **Line citations rot.** Several rows' coordinates were wrong tonight while their facts held. Read for
-  substance, never by coordinate.
-- **Run `env -u GOROOT make static-check` locally before every merge.** A PR runs only `static-check-fast`
-  plus `static-check-pr`; **neither runs `sec`** (gitleaks, trivy-fs, trivy-config) or the wall-clock tests.
-- **`git switch main` FAILS in a worktree checkout** (`already used by worktree at ...`), and with
-  `2>/dev/null` that failure is INVISIBLE — so a `reset --hard origin/main` chained after it lands on
-  whatever branch you were actually on. Sync with `git checkout <branch> && git reset --hard origin/main`
-  and read the branch name back.
-- **"Is main certified?" is a command, never a quoted number:** `git diff --name-only v1.1.0..origin/main`.
-  Re-run it. Every handoff that quoted a previous session's figure had it rot (11/14, then 19/49, then 25/50).
+- 🔴 **The repo's `.env` Harbor password is STALE — `make env-validate` returns a genuine 401**
+  (re-measured 2026-08-21). NOT a broken Harbor: the matrix installs Harbor from the walkboxes and
+  destroys them, so the credential it generated does not exist on this box. Recover it from the
+  cluster, or faster, the `.hp` sidecar in the evidence dir. **This recurs after every matrix run** —
+  it is the expected state, not a defect.
+- **A backlog row is a HYPOTHESIS, and today three were refuted before a line shipped.** B203's second
+  arm had **zero discrimination** (measured firing twice on output where every secret is a
+  `<hidden…>` sentinel). B204's whole **premise was false** — the gate it cited was not violated; the
+  stale part was a gloss. B205's own design was **certification-blocking**, and the reason was written
+  in `docs/scenario-2.md:216-224`, a dated comment naming PR #696 and predicting the exact failure.
+  **Read rows to their end, and grep the DOCUMENT for in-document directives before touching a
+  parser** — a script-side review cannot see them.
+- **Never read pass/fail off a completion notification.** Grep the log for its own `RC=` line or the
+  harness's verdict. `MATRIX FAILED` means failed even when every row printed `WALK DONE` (§D.5).
+- **The driver log LAGS the box by minutes** (§D.4a). It sat **28 minutes** without a write during
+  this run while three processes were live on the walkbox. Liveness comes from the walkbox artifact.
+- **`pgrep`/`ps` SELF-MATCH.** Twice this session a count read 1 or 2 with the real answer **0** — the
+  hits were my own shell and grep. Read `/proc/<pid>/cmdline` before believing a count either way.
+- **"Is main certified?" is a command, never a quoted number:**
+  `git diff --name-only v1.2.0..origin/main`. Note `git rev-parse v1.2.0` gives the **tag object**
+  (`0d91324`); the commit is `v1.2.0^{commit}` = `fbdf683`. Quoting the wrong one misreports the tree.
+- **Line citations rot.** Several were wrong today while their facts held. Read for substance.
+- **`git switch main` FAILS in a worktree checkout**, and with `2>/dev/null` that failure is invisible,
+  so a chained `reset --hard origin/main` lands on whatever branch you were on.
+- ⚠️ **DO NOT put a VMCA fingerprint in a handoff.** TWO cuts happened in this run; each re-mints it.
+  Read it from `~/.local/state/nested-lab/vmca-root.pem` when you need it.
+- **Run `env -u GOROOT make static-check` locally before every merge.** A PR runs `static-check-fast`
+  plus `static-check-pr`; **neither runs `sec`** (gitleaks, trivy-fs, trivy-config).
+- **The lesson that cost the most today:** a green-looking component I have just reasoned about is
+  exactly the one I am most likely to certify without measuring. I documented `make creds-show` as
+  "correctly reporting" in the morning; it carried two real defects, both found by the operator.
 
 ### Open, and whose they are
 
-- ✅ **B178 is FIXED (2026-08-20, by the operator) and the two items that used to sit here are CLOSED.**
-  The stale lab CA in the operator's Chrome NSS store was replaced with the live anchor and verified end to
-  end: stored fingerprint now equals the live VMCA, `curl --cacert` against it returns **HTTP 200**, and
-  Chrome renders **`Welcome to VMware vSphere`** with no interstitial — verified in the operator's OWN
-  running browser after a restart, not only on a copy. The fix was **demonstrated on a COPY
-  of the real store first** (empty store and stale-store both give `ERR_CERT_AUTHORITY_INVALID`; copy plus
-  the live anchor renders the UI), so the command handed over carried a proven outcome rather than an
-  assertion — which is what C.7 asks for.
-- ⚠️ **DO NOT put a VMCA fingerprint in a handoff as something to "confirm later" — it goes stale WITHIN
-  THE RUN, and there is no out-of-band channel here to confirm it against anyway.** Measured: a fingerprint
-  published at 22:24 was already dead by 00:24, because the matrix's mid-matrix rebuild re-runs `trust-vcsa`
-  and rewrites `vmca-root.pem` (mtime `00:24:52`, `REBUILD2.log` mentions `trust-vcsa` 54 times). And the
-  TOFU confirmation it asked for is **not available on this box**: vCenter's `/certs/download.zip` is the
-  same channel `trust-vcsa` already fetched from (circular), and the VCSA deploy logs record **zero**
-  occurrences of the VMCA thumbprint. Threat model, for proportion: `192.168.100.50` is reachable only via
-  `virbr-nmgmt`, a libvirt-private bridge this host created, on a VM inside `esxi01`, itself a domain on
-  this host — an attacker able to MITM that already owns the hypervisor. Read the anchor from
-  `~/.local/state/nested-lab/vmca-root.pem` when you need it; do not quote it forward.
-- **Owner decisions still open:** **B193/B195** (B195 is HIGH — only 2 of the 4 `fetch-*-ca` producers have
-  a consent gate, and the two without are the SSO-admin pair), **B196**'s policy half, **B70** (decided as
-  option C, needs an idea round and a lab).
-- **Deferred because the tree was frozen, now free to land:** **B198** (`check-toolchain-alignment`'s go arm
-  passes vacuously when either extraction is empty), **B200** (a stale generated include outliving its
-  source). Both touch walked files, so they will need re-certification before the next tag.
-- **Renovate #892 is HELD, not rejected** (**B199**). It is three bumps, not one. **Do NOT close it** —
-  closing adds the update to Renovate's ignore list.
-- **B75-a's fix direction is now MEASURED** (port-forward to `localhost`, which the cert covers), including
-  the trap that will bite whoever builds its RED-proof: the cert is `CA:FALSE`, so it must be trusted as a
-  PEER, not as a CA, or Chrome reports a Privacy error that reads like a product defect.
-
-### The post-cut checklist item that is NOT satisfiable here (B26)
-
-The previous handoff carried B26's residual as a post-cut item. **Measured 2026-08-20: a matrix cut cannot
-answer it.** `istio-sidecar-injector` IS present on the live guest cluster, but istiod is
-`harbor.env1.lab.test/cicd/istio/pilot:1.30.3` — OUR upstream Istio, installed by rows 1/3 (row 1's log says
-`NO Istio detected`), not VKS's `1.28.2+vmware.1-vks.1`. The rows INSTALL rather than ATTACH, so a VKS
-Standard-Package injector template never exists on a cut. It needs a cluster where Istio arrived as the
-Standard Package. Do not re-add it to a post-cut checklist without that precondition.
-
-### If you want another certification
-
-Cut a new lab, then run all six rows over a FINAL tree, and pass `WALK_OUT_ROOT` somewhere under `$HOME`.
-The standing rules are [`docs/matrix-standing-rules.md`](docs/matrix-standing-rules.md); the pre-flight that
-saved real time tonight was checking that the Supervisor kubeconfig exists first, because a fresh cut has
-none (`make lab` deliberately does not log in) and the harness only discovers that after a 900s TKr wait.
+- **B203 is PARTIALLY addressed and deliberately NOT closed** — the uncaught shape is the worst one
+  (`guest node SSH … vmware-system-user … <value>`, no `admin`, unreachable by any widening of that
+  arm). The gap is PINNED as a `_must_pass` selftest case: if a future arm catches it, that case
+  FAILS and whoever did it must close the row.
+- **B205 residual:** `INDEP_E`, `check-doc-expect-leak.sh` and the negation guard remain head-anchored
+  — correct under the shipped asymmetric fix, and a **coupled** change if the unit is ever widened.
+- **B26 is still not satisfiable by a matrix cut** (unchanged): the rows INSTALL Istio rather than
+  attach, so a VKS Standard-Package injector template never exists. Needs a cluster where Istio
+  arrived as the Standard Package.
+- **Owner decisions still open:** B193/B195 (B195 is HIGH — 2 of 4 `fetch-*-ca` producers have no
+  consent gate, and the two without are the SSO-admin pair), B196's policy half, B70.
+- **Not yet done this session:** credential verification by AUTHENTICATING against the new lab
+  (§C.5/C.6 — endpoints and logins, after the run, never during).
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
