@@ -125,7 +125,7 @@ the deterministic backstop; a Renovate customManager bumps the consumers in lock
 
 ## Open / unverified
 
-- The remaining "community"-graded rows above (`tlsSecretLabels`, same-Supervisor auto-trust) —
+- The remaining **"community"-graded** row above (`tlsSecretLabels`) — verify on a real 9.1 lab. ⚠️ **`same-Supervisor auto-trust` was REMOVED from this list 2026-08-21: it is graded `lab-verified` twice in this very file** (line ~16, CA propagation with a fingerprint MATCH; and the auto-trust row itself, upgraded 2026-08-17). In the one document whose whole job is honest grading, listing a twice-proven fact as unproven spends scarce lab time and teaches the reader to distrust the grades. `make check-vks-provenance` is structurally blind here — it validates Confidence-TABLE tokens, and this is prose. Re-measure any time with `make vks-trust-probe`.
   **verify on a real 9.1 lab**. The **double-base64 CA** and the **creation-or-later ordering** were
   upgraded to `9.0-doc` on 2026-07-19 by fetching Broadcom's own v1beta1/v1beta2 trusted-CA example;
   the runnable shapes (Secret, Cluster variables block, the `kubectl edit` path, and the

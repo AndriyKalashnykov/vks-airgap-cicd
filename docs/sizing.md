@@ -3,7 +3,7 @@
 <br>
 
 **Jump-box disk space** — measured for the current image set (~30 images: 9 pinned in
-[`images/images.txt`](images/images.txt) plus the Tekton Pipelines+Triggers controller
+[`images/images.txt`](../images/images.txt) plus the Tekton Pipelines+Triggers controller
 images pulled from their release manifests, which dominate the count — alongside Gitea,
 Kaniko, Maven, Temurin JDK/JRE, alpine/git, yq, and the ingress images). Figures are approximate.
 
