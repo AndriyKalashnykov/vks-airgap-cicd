@@ -109,7 +109,12 @@ export PATH := $(if $(MISE_PATHS),$(subst $(SPACE),:,$(strip $(MISE_PATHS))):,)$
 #      kills the whole file with `*** missing separator`.
 #   2. `&&`-chained. This runs at PARSE time, i.e. BEFORE `SHELL`/`.SHELLFLAGS` further down, so
 #      it is `/bin/sh -c` with NO `-e -u -o pipefail`.
-#   3. Written to a PID-suffixed TEMP file and `mv`d into place. Two reasons, both measured:
+#   3. Written to a PID-suffixed TEMP file and `mv`d into place. Two reasons, both measured.
+#      ⚠ THE QUOTING IS LOAD-BEARING: `'$(2).$$$$.tmp'` puts `$$` INSIDE single quotes, so the
+#      shell takes it LITERALLY and every writer shares one path named `....$$.tmp` -- measured,
+#      two concurrent makes with DIFFERENT sources then interleave into one file that PARSES,
+#      which is worse than the partial read this is meant to prevent. `'$(2)'.$$$$.tmp` closes
+#      the quote first so the shell expands `$$` to its PID.
 #      `umask` applies only at CREATION, so a pre-existing 0644 survives a `>` truncate (0644
 #      retained WITH a live credential inside), whereas `mv` carries the temp file's own 0600;
 #      and `rename(2)` is ATOMIC, so a concurrent `make` reading this include sees either the
@@ -123,7 +128,7 @@ export PATH := $(if $(MISE_PATHS),$(subst $(SPACE),:,$(strip $(MISE_PATHS))):,)$
 define regen_overlay_mk
 $(shell mkdir -p secrets && chmod 700 secrets && \
   if [ -f '$(1)' ]; then umask 077 && \
-    sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$(1)' > '$(2).$$$$.tmp' && mv -f '$(2).$$$$.tmp' '$(2)'; fi)
+    sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$(1)' > '$(2)'.$$$$.tmp && mv -f '$(2)'.$$$$.tmp '$(2)'; fi)
 endef
 
 _ENVMK_KIND := $(call regen_overlay_mk,.env.kind,secrets/.env.kind.make)
