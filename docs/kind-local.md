@@ -2,12 +2,43 @@
 
 <br>
 
-> **You want to *see it work*.** No VKS cluster, no `.env`, three commands.
+> **You want to *see it work*.** No VKS cluster and no `.env`. Once you have the repo:
+> `make deps` -> `make e2e-kind` -> `make creds-show` (three commands).
 
 `make e2e-kind` stands up a local [KinD](https://kind.sigs.k8s.io/) cluster, installs the pieces a real
 VKS provides as Supervisor Services (**Harbor** + **ArgoCD**), and runs the **same**
 `mirror → builder → platform → gitops → verify` flow the real lab uses — ending with a git push that
 travels through Tekton, Harbor and ArgoCD to a live page.
+
+## Get the repo
+
+A stock box has none of this. Everything below runs from the repo root.
+
+**Ubuntu / Debian:**
+
+```bash
+sudo apt-get update && sudo apt-get install -y --no-install-recommends git make curl ca-certificates
+```
+
+**Photon OS 5** — `openssh openssh-socket` are both required. Without them this box loses SSH during
+the install and you cannot reconnect.
+
+```bash
+sudo tdnf install -y git make curl curl-libs ca-certificates openssh openssh-socket
+```
+
+Already root? Drop the `sudo`.
+
+```bash
+git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git
+cd vks-airgap-cicd
+```
+
+⚠️ **You also need Docker, and `make deps` will NOT install it.** kind's nodes *are* docker
+containers, so this one path needs Docker specifically — with `CONTAINER_ENGINE` unset, `make deps`
+installs **podman** and zero docker packages, and `make kind-up` then stops at `require_cmd docker`.
+Install Docker from your distribution first, or run `make deps CONTAINER_ENGINE=docker`, which
+installs it together with its rootless prerequisites.
 
 ## Run it
 
