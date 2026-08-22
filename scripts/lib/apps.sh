@@ -198,12 +198,24 @@ app_export() {
 # and nothing else. NOTE the `while read` (not `for x in $(...)`): the login shell may be zsh,
 # which does NOT word-split an unquoted expansion, so a `for` loop would run ONCE on the whole blob.
 for_each_app() {
-  local fn="$1" app
+  local fn="$1" app names n=0
+  # CAPTURE FIRST, and FLOOR the count. `done <<EOF\n$(app_names)\nEOF` swallows a die: app_names
+  # exits inside the command substitution, the heredoc is EMPTY, the loop runs ZERO times, and the
+  # caller then prints its success line. All EIGHT callers share that failure -- no ingress routes,
+  # no ArgoCD Applications, no Gitea repos, no Tekton pipelines, no Istio routes -- each reported as
+  # success. Measured on 99-verify.sh: "End-to-end verified for EVERY app ()" at rc=0.
+  #
+  # This is the same FILE-vs-ITEM floor that check-app-hardcodes (`pairs`) and check-app-toolchains
+  # (`checked`) already carry, and that this function -- the thing they all loop through -- lacked.
+  # Zero apps is never legitimate for any caller: the registry ships two.
+  names="$(app_names)"
   while read -r app; do
     [ -n "$app" ] || continue
     app_export "$app"
     "$fn" "$app"
+    n=$((n + 1))
   done <<EOF
-$(app_names)
+$names
 EOF
+  [ "$n" -gt 0 ] || die "for_each_app: iterated 0 app(s) running '$fn' — apps/registry.tsv is empty or app_names is broken. The caller's success message would be VACUOUS."
 }
