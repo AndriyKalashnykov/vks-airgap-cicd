@@ -5,7 +5,7 @@
 A one-line edit in Gitea travels **source → test → image → registry → GitOps write-back → cluster →
 running page**, entirely inside the air gap. Each hop has a Web UI. This is that loop, by hand.
 
-Works the same on all three paths (KinD, Scenario 1, Scenario 2) once the stack is up.
+Works the same on all three paths (Scenario 1, Scenario 2, KinD) once the stack is up.
 `make verify` does it automatically; walk it yourself to *see* it.
 
 ## Step 0 — get your URLs and passwords

@@ -68,8 +68,11 @@ New here? Pick the path that matches your situation — each one is self-contain
 | **VKS — Harbor + ArgoCD already exist** (I am a **tenant**) | [Scenario 2](docs/scenario-2.md) | **Have:** cluster-admin on your own guest cluster · Harbor **project-admin** (else ask for robot credentials) · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md#acquiring-the-licensed-vcf-cli-archives))<br>**Ask the platform team for:** your guest cluster **registered** with ArgoCD (admin-only) · an ArgoCD role that lets you create an `Application` · mesh rights — `make istio-preflight` prints exactly what to request<br>**Reachable from the jump box:** the internet and Harbor. |
 | **Just see it work** (no VKS cluster) | [KinD](docs/kind-local.md) | **Have:** Docker (KinD needs Docker specifically) · internet access |
 
-Each document is **self-contained end to end** — pick one and follow it; you never need another,
-and it gives every command in context, starting with getting the repo onto the box. Once it is up:
+Pick one and follow it in order: each document answers the decisions in its own runbook, and
+`make check-readme-scenarios` gates eight of them. The **container engine** below is the one
+deliberate exception — it is decided here and not repeated in them. Each path opens by getting the
+repo onto the box; the two VKS paths do it through a shared
+[Common bootstrap](docs/common-bootstrap.md). Once it is up:
 **[Access the UIs](docs/access-uis.md)** — URLs, logins, passwords.
 
 **Delivery (both VKS paths):** if no single box reaches **both** the internet *and* Harbor, mirror via
@@ -78,6 +81,18 @@ air-gap box. (KinD is dual-homed, so there is no bundle to carry.)
 
 > **Container engine — podman is the default and you do nothing.** `make deps` installs it, and it is the
 > only engine that needs **no sudo on any box**. **Docker is supported too, opt-in.**
+>
+> **This applies to all three paths and is not repeated in them — and there is nowhere to "set" it.**
+> `CONTAINER_ENGINE` must stay **commented** in `.env` (an uncommented value pins the engine and
+> defeats both the auto-detection and any per-run override — `.env.example` says so at the key), so
+> it has to ride the command or be exported:
+>
+> ```bash
+> export CONTAINER_ENGINE=docker     # keep it exported for the whole session
+> ```
+>
+> Run a bare `make deps` instead and you get **podman** — and podman then wins on every later bare
+> `make`, because the engine is auto-detected and podman is preferred when both are present.
 >
 > | your situation | what you run | sudo? |
 > |---|---|---|
@@ -90,7 +105,9 @@ air-gap box. (KinD is dual-homed, so there is no bundle to carry.)
 
 ## Reference
 
-Background and deep-dives. Each path above is self-contained, so you never need these to run the flow.
+Background and deep-dives. A path document names the ones it needs — Scenario 2 links
+[VKS authentication](docs/vks-authentication.md) for the licensed archives, and Scenario 1 lists
+them inline — so you do not need to read these first.
 
 | | |
 |---|---|
@@ -105,7 +122,7 @@ Background and deep-dives. Each path above is self-contained, so you never need 
 | [VKS authentication](docs/vks-authentication.md) | how `$KUBECONFIG` is produced on VKS (`VKS_AUTH_METHOD`, the `vcf` CLI flow), and **why Scenario 1 needs a second kubeconfig**. Both VKS scenarios run `make vks-login` themselves; **the KinD path skips it entirely** |
 | [Demo walkthrough](docs/demo-walkthrough.md) | drive the GitOps loop by hand |
 | [VKS services](docs/vks-services/) | what Broadcom ships (Harbor / ArgoCD / Istio), and how confident we are in each fact |
-| [Decisions](docs/decisions/) | the design choices behind the KinD stand-in |
+| [Decisions](docs/decisions/) | one document per design decision, with the evidence behind it |
 
 ## Contributing
 
