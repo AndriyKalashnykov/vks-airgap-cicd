@@ -112,13 +112,20 @@ Background and deep-dives. Each path above is self-contained, so you never need 
 Open an issue or a pull request. Before you push:
 
 ```bash
-make ci      # the same gate CI runs. Green here = green there.
+make ci
 ```
 
-**Do not bump tool or image versions by hand** — [Renovate](https://docs.renovatebot.com/) owns them
-(`.mise.toml`, `.env.example`, `images/images.txt`, and inline `# renovate:` comments). A hand-edit
-gets reverted by the next bot PR, and `make ci` fails it anyway: the same version lives in several
-files and an alignment gate asserts they agree.
+`make ci` is a **superset** of what a PR runs, not the same thing: a PR runs `static-check-fast`,
+`static-check-pr` (which omits `sec` — gitleaks, trivy-fs, trivy-config) and `secrets-scan`, while
+the full `static-check` runs on the weekly schedule. Two differences can still make CI red on a
+green local run — CI sets `GWAPI_REQUIRE_FETCH=1`, so a schema fetch that *skips* locally is a
+*failure* there, and the code jobs are path-filtered, so a docs-only PR skips them entirely.
+
+**Do not bump tool or image versions by hand** — [Renovate](https://docs.renovatebot.com/) owns
+them: `.mise.toml`, `pom.xml`, `Dockerfile*` and `.github/workflows/*` through its own managers, and
+`Makefile`, `.env.example`, `images/images.txt`, `k8s/**.yaml` and `scripts/**.sh` through custom
+ones. A **partial** hand-edit fails `make ci`, because the same version lives in several files and
+an alignment gate asserts they agree.
 
 ## License
 
