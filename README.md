@@ -57,16 +57,16 @@ As a **tenant** it may also need grants you must request:
 
 New here? Pick the path that matches your situation — each one is self-contained end to end:
 
-1. **KinD** — *see it work.* No VKS cluster, **zero `.env`**.
-2. **VKS — I install Harbor + ArgoCD** (as **Supervisor Services**) — I am the admin: I provision the workload cluster too, then run the pipeline.
-3. **VKS — Harbor + ArgoCD already exist** — I am a **tenant**: I **discover** them,
+1. **VKS — I install Harbor + ArgoCD** (as **Supervisor Services**) — I am the admin: I provision the workload cluster too, then run the pipeline.
+2. **VKS — Harbor + ArgoCD already exist** — I am a **tenant**: I **discover** them,
    **request** what I'm not allowed to self-service, then run the pipeline.
+3. **KinD** — *see it work.* No VKS cluster, **zero `.env`**.
 
 | I want to… | Path | You need |
 |------------|------|----------|
-| **Just see it work** (no VKS cluster) | [KinD](docs/kind-local.md) | **Have:** Docker (KinD needs Docker specifically) · internet access |
 | **VKS — I install Harbor + ArgoCD** (I am the admin) | [Scenario 1](docs/scenario-1.md) | **Have:** a vSphere login that can install a Supervisor Service, create a vSphere Namespace and provision a guest cluster · cluster-admin on that guest cluster · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md#acquiring-the-licensed-vcf-cli-archives))<br>**Reachable from the jump box:** the internet, the Supervisor API, Harbor — and ArgoCD's cluster must reach your guest API. |
 | **VKS — Harbor + ArgoCD already exist** (I am a **tenant**) | [Scenario 2](docs/scenario-2.md) | **Have:** cluster-admin on your own guest cluster · Harbor **project-admin** (else ask for robot credentials) · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md#acquiring-the-licensed-vcf-cli-archives))<br>**Ask the platform team for:** your guest cluster **registered** with ArgoCD (admin-only) · an ArgoCD role that lets you create an `Application` · mesh rights — `make istio-preflight` prints exactly what to request<br>**Reachable from the jump box:** the internet and Harbor. |
+| **Just see it work** (no VKS cluster) | [KinD](docs/kind-local.md) | **Have:** Docker (KinD needs Docker specifically) · internet access |
 
 Each document is **self-contained end to end** — pick one and follow it; you never need another,
 and it gives every command in context, starting with getting the repo onto the box. Once it is up:
