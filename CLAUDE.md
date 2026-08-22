@@ -765,11 +765,21 @@ none).
   FAILS and whoever did it must close the row.
 - **B205 residual:** `INDEP_E`, `check-doc-expect-leak.sh` and the negation guard remain head-anchored
   — correct under the shipped asymmetric fix, and a **coupled** change if the unit is ever widened.
-- **B26 is still not satisfiable by a matrix cut** (unchanged): the rows INSTALL Istio rather than
-  attach, so a VKS Standard-Package injector template never exists. Needs a cluster where Istio
-  arrived as the Standard Package.
-- **Owner decisions still open:** B193/B195 (B195 is HIGH — 2 of 4 `fetch-*-ca` producers have no
-  consent gate, and the two without are the SSO-admin pair), B196's policy half, B70.
+- **B26 is still not satisfiable by a matrix cut** — now MEASURED, 2026-08-22, not asserted. On the
+  live guest cluster Istio is **ours**: three helm releases (`istio-base`, `istiod`,
+  `istio-ingressgateway`, all `1.30.3`, installed 06:52 2026-08-21 by `46-install-istio.sh`) and
+  **zero `PackageInstall` objects** — no VKS Standard Package anywhere. So the rows INSTALL rather
+  than attach and no Standard-Package injector template ever exists. ⚠️ **The corollary is a trap:**
+  a preflight run against THIS cluster today reports `existing` and the attach fence would run —
+  but that is run 8's leftover, and §A.1 cuts a NEW lab, where the same preflight says `NO Istio
+  detected` and the INSTALL fence runs instead. Measuring attach-mode on an un-recut lab measures
+  a state the matrix will never be in.
+- **Owner decisions: ALL FOUR ARE CLOSED. This line said "still open" for a day and was wrong,**
+  which is how a session came to ask the owner to re-decide them. B70/B195/B196 were decided
+  2026-08-21 (`f8643fa`, PR #920 — each row's END carries `OWNER DECISION 2026-08-21 … ROW
+  CLOSED`); B193 is `⛔ REFUTED` (2026-08-19), never a decision. **Read a row to its END** — these
+  open with the question and close with the answer, and stopping at the lead reads closed as open.
+  Nothing in this bullet needs the owner.
 - **Not yet done this session:** credential verification by AUTHENTICATING against the new lab
   (§C.5/C.6 — endpoints and logins, after the run, never during).
 
