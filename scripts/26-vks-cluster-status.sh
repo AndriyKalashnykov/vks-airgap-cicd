@@ -27,7 +27,7 @@ require_cmd kubectl
 # split was invisible on the box that measured it and would have split the moment an
 # operator set either one.
 SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kubeconfig")"   # lib/os.sh: ONE resolver, first that EXISTS
-[ -f "$SUP" ] || die "no Supervisor kubeconfig at '$SUP' — run 'make vks-login' first."
+[ -f "$SUP" ] || { supervisor_kubeconfig_hint >&2; die "no Supervisor kubeconfig — see the search order above"; }
 k() { kubectl --kubeconfig "$SUP" "$@"; }
 
 WAIT_SECONDS="${VKS_CLUSTER_WAIT_SECONDS:-0}"     # 0 = report once; >0 = poll until ready

@@ -102,8 +102,7 @@ fi
 # is the name the WRITER (30-vks-login.sh) honours. Harbor is a SUPERVISOR Service: $KUBECONFIG from
 # Step 6 onward is the GUEST cluster, which has no harbor namespace at all.
 SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kubeconfig")"   # lib/os.sh: ONE resolver, first that EXISTS
-[ -f "$SUP" ] || die "no Supervisor kubeconfig at '$SUP' - run 'make vks-login' (scenario-1 Step 3) first.
-  Harbor is a SUPERVISOR Service; the guest cluster has no harbor namespace."
+[ -f "$SUP" ] || { supervisor_kubeconfig_hint >&2; die "no Supervisor kubeconfig — see the search order above"; }
 
 # ── the namespace, BY LABEL ──────────────────────────────────────────────────────────────────────
 # Not `get ns | grep harbor`: zero matches yields an EMPTY namespace and kubectl then silently runs

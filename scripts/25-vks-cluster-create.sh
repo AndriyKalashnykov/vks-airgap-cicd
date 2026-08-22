@@ -58,7 +58,7 @@ export VKS_SERVICE_CIDR="${VKS_SERVICE_CIDR:-172.21.0.0/16}"
 # split was invisible on the box that measured it and would have split the moment an
 # operator set either one.
 SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kubeconfig")"   # lib/os.sh: ONE resolver, first that EXISTS
-[ -f "$SUP" ] || die "no Supervisor kubeconfig at '$SUP' — run 'make vks-login' first (it writes one)."
+[ -f "$SUP" ] || { supervisor_kubeconfig_hint >&2; die "no Supervisor kubeconfig — see the search order above"; }
 k() { kubectl --kubeconfig "$SUP" "$@"; }
 
 log_info "cluster:      ${VKS_NAMESPACE}/${VKS_CLUSTER_NAME}"

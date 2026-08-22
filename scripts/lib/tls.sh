@@ -66,6 +66,13 @@ gen_selfsigned_ca_cert() {
 #   via SSL_CERT_FILE trusts BOTH upstream (public) registries and our self-signed Harbor
 #   in one run — without touching the (root-owned) system store. No sudo.
 ca_bundle_with_system() {
+  # ARITY GUARD FIRST. Called with ONE argument this used to write the bundle to the empty path and
+  # print nothing, returning 0 -- so a caller writing `X="$(ca_bundle_with_system "$ca" || fallback)"`
+  # got an EMPTY X with no error, the `||` never fired, and `SSL_CERT_FILE=` surfaced minutes later as
+  # `x509: certificate signed by unknown authority` from crane, which reads as a LAB problem rather
+  # than a call-site typo. MEASURED 2026-08-22: cost a full mirror run (5/5 images "FAILED") before
+  # anyone looked at the argument list.
+  [ $# -eq 2 ] || { echo "ca_bundle_with_system: needs 2 args (<ca-file> <out-bundle>), got $#" >&2; return 2; }
   local ca="$1" out="$2" sys
   [ -s "$ca" ] || { echo "ca_bundle_with_system: CA file '$ca' missing" >&2; return 2; }
   mkdir -p "$(dirname "$out")"

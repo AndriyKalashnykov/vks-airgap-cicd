@@ -47,8 +47,7 @@ OUT="${1:?usage: 27-harbor-ca-from-cluster.sh <out-file>   (the Makefile passes 
 # split was invisible on the box that measured it and would have split the moment an
 # operator set either one.
 SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kubeconfig")"   # lib/os.sh: ONE resolver, first that EXISTS
-[ -f "$SUP" ] || die "no Supervisor kubeconfig at '$SUP' — run 'make vks-login' first.
-  Harbor is a SUPERVISOR Service; the guest cluster has no harbor namespace at all."
+[ -f "$SUP" ] || { supervisor_kubeconfig_hint >&2; die "no Supervisor kubeconfig — see the search order above"; }
 
 # The ESCAPE HATCH first — see .env.example. A tenant who cannot LIST NAMESPACES gets a correct
 # message from the FORBIDDEN arm below and would otherwise still be stuck.

@@ -100,6 +100,79 @@ with `Edit`/`Write`** — which is exactly how two READ-ONLY-briefed adversaries
 2026-07-14, one of them *while the main agent was executing the script*. It now blocks subagent writes
 outright. **A sandbox with a door in it is worse than none: it manufactures confidence.**
 
+### RULE ZERO-A0 — TO REACH ANYTHING IN THE LAB, USE THE REPO'S TARGET. NEVER HAND-ROLL A PROBE (BLOCKING)
+
+This repo already contains a purpose-built, measured tool for every lab question you will have. Every
+time a session hand-rolls `curl`/`kubectl`/`crane` at the lab instead, it re-derives a wrong answer —
+and this has recurred for WEEKS. The tools are not optional and they are not a fallback.
+
+**START HERE, ALWAYS:** `make preflight` (read-only composite: check-tools · engine-check · env-check
+· argocd-preflight · lab-preflight · psa-check) and `make env-validate` (format + KUBECONFIG + Harbor
+connectivity AND auth). Between them they answer "can this lab do the thing" in two commands.
+
+⚠️ **THE COMMON CASE IS A LAB WE DO NOT OWN.** Most of the time this repo runs as a **TENANT**
+(Scenario 2): Harbor and ArgoCD already exist, we have **NO Supervisor access**, and everything we
+know arrives as **variables in `.env`** that a platform team hands us. So the FIRST question about
+any recovery step is *"does this work from `.env` alone?"* — a target that reads a Supervisor secret
+is unavailable to the audience that needs it most, and telling a tenant to run one is a dead end.
+
+| you want | the target | tenant-safe? |
+|---|---|---|
+| is Harbor serving? | `make harbor-reachable` | ✅ from `.env` |
+| does my Harbor credential WORK? | `make env-validate` | ✅ from `.env` |
+| make my engine trust Harbor | `make trust-harbor` (proves it with a real login handshake) | ✅ from `.env` |
+| does the ArgoCD credential work? | `make argocd-auth-check` | ✅ from `.env` |
+| ArgoCD versions / topology | `make argocd-version` · `make argocd-preflight` | ✅ from `.env` |
+| endpoints + logins for the CURRENT context | `make creds-show` | ✅ from `.env` |
+| would our pods be admitted? | `make psa-check` | ✅ guest kubeconfig |
+| does the guest trust our Harbor? | `make vks-trust-probe` | ✅ guest kubeconfig |
+| a push/pull credential | `make harbor-robot` | ⚠️ needs Harbor **project-admin** — a tenant without it must REQUEST robot credentials |
+| recover the admin credential | `make harbor-admin-password` | ❌ **SUPERVISOR ONLY** |
+| the Harbor CA when it is not on the wire | `make harbor-ca-from-cluster` | ❌ **SUPERVISOR ONLY** (`make fetch-harbor-ca` is the tenant path — it reads the wire) |
+| ArgoCD's LB address | `make argocd-address` | ❌ **SUPERVISOR ONLY** |
+| the Supervisor kubeconfig for ArgoCD | `make fetch-argocd-kubeconfig` | ❌ **SUPERVISOR ONLY** |
+
+**A TENANT WHOSE CREDENTIAL IS STALE CANNOT RECOVER IT — they must REQUEST a new one.** There is no
+self-service path, and no target will invent one. `make env-validate` is how they learn it is stale
+(rc=2, HTTP 401); the fix is a conversation with the platform team, not a command.
+
+**THE CHAIN, when a credential is stale** (each link is a target; the only human input is the first):
+
+```text
+VCENTER_PASSWORD -> make vks-login -> secrets/supervisor.kubeconfig
+                 -> make harbor-admin-password -> make harbor-robot -> make mirror
+```
+
+⚠️ **Harbor is a SUPERVISOR Service.** The guest kubeconfig has NO harbor namespace, so
+`kubectl -n harbor ...` against the guest is always empty — that is not "Harbor is missing".
+
+⚠️ **vCenter SSO LOCKS OUT PERMANENTLY AFTER 3 FAILED ATTEMPTS.** Never guess, never retry blind. If
+`VCENTER_PASSWORD` is absent from `.env`, STOP and ask the operator — do not spend an attempt.
+
+#### THREE HARBOR "AUTH CHECKS" THAT DO NOT DISCRIMINATE — measured 2026-08-22
+
+A session tested a 12-day-old `secrets/harbor-robot.env` three ways, got "works" three times, and was
+wrong every time. The credential was DEAD (`UNAUTHORIZED ... action: push`):
+
+| probe | reading | why it is worthless |
+|---|---|---|
+| `GET /api/v2.0/projects` with creds | 200 | returns **200 with NO credentials**, and 200 with a **deliberately wrong password** |
+| `GET /service/token?scope=...` with creds | 200 | returns **200 with bogus creds** too |
+| `crane auth login` | "logged in" | it only **writes `~/.docker/config.json`** — it validates nothing |
+| **`crane copy` (the real push)** | **UNAUTHORIZED** | the only one that discriminates |
+
+`make env-validate` gets it right in one command (rc=2, `Harbor rejected HARBOR_USERNAME/HARBOR_PASSWORD (HTTP 401)`)
+because `lib/harbor.sh`'s `harbor_auth_report` already solved this — its own test asserts **401 fails,
+403 PASSES**. Use it. `GET /api/v2.0/users/current` is the endpoint that actually requires auth.
+
+⚠️ **`secrets/` is gitignored operator state that NOTHING cleans up.** A `harbor-robot.env` survives
+every lab re-cut and reads as valid to any proxy check. Age is not the tell; only the real operation is.
+
+⚠️ `ca_bundle_with_system` takes **TWO** arguments — `<ca-file> <out-bundle>` — and writes to the
+second. Called with one it silently produces nothing and returns 0, so `$(... || fallback)` never
+fires and `SSL_CERT_FILE` ends up EMPTY, which surfaces as `x509: certificate signed by unknown
+authority` from crane.
+
 ### RULE ZERO-A — DERIVE THE CONTRACT FROM THE CODE BEFORE YOU CHANGE IT (BLOCKING)
 
 Before writing code that changes **what one side must provide to another** — the air gap, a wire
@@ -208,6 +281,35 @@ not build the lab, and they cannot read its Makefile, its `lab2-info.txt`, or it
 they know about the lab is **the `.env` values [`docs/scenario-1.md`](docs/scenario-1.md) and
 [`docs/scenario-2.md`](docs/scenario-2.md) tell them to fill in.** In the real world that lab is a VCF/VKS
 estate someone else operates; `nested-vsphere-lab` is only how WE happen to conjure one.
+
+### 🔴 AND MOST OF THE TIME THE LAB IS NOT OURS — `.env` IS THE ONLY ACCESS, AND THIS DRIVES DESIGN DECISIONS
+
+The **default** posture is Scenario 2 — a **TENANT**. Harbor and ArgoCD already exist, someone else
+runs the Supervisor, and **everything we can reach arrives as variables in `.env`** that a platform
+team hands over. Scenario 1 (we install the Supervisor Services ourselves) is the EXCEPTION, and the
+KinD stand-in is a convenience. Design for the tenant first.
+
+**The consequences are not stylistic — they decide what may be built:**
+
+1. **"Does this work from `.env` alone?" is the FIRST question about any recovery or diagnostic step.**
+   A target that reads a **Supervisor** secret is unavailable to the audience that needs it most.
+   Telling a tenant to run one is a dead end dressed as an answer. See RULE ZERO-A0's table, which
+   marks every target tenant-safe or SUPERVISOR-ONLY.
+2. **A tenant whose credential is stale CANNOT recover it.** There is no self-service path and no
+   target will invent one. `make env-validate` is how they LEARN it is stale (rc=2, HTTP 401); the
+   fix is a REQUEST to the platform team, not a command. Any "sync/recover" mechanism must say so
+   plainly rather than fail obscurely.
+3. **Anything that needs more than `.env` must be a REQUEST, and must be named as one** — a Harbor
+   robot when we lack project-admin, a namespace, a hostname on a shared Istio Gateway, an ArgoCD
+   AppProject destination, the guest cluster REGISTERED with ArgoCD. `make istio-preflight` and
+   `make argocd-preflight` exist to print exactly what to ask for.
+4. **Never assume Supervisor access when reasoning about a failure.** `kubectl -n harbor …` against a
+   guest kubeconfig is empty BY DESIGN — that is not "Harbor is missing", and a session has already
+   burned time on that inference.
+5. **Convenience paths for US must be existence-guarded no-ops for THEM.** The
+   `supervisor_kubeconfig_candidates()` fallback to a lab-provisioning repo's state dir is fine
+   precisely because it silently does nothing on a box that has no such directory — and it is kept
+   OUT of `.env.example` so it never enters the end user's config surface.
 
 **Therefore:**
 
