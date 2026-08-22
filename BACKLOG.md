@@ -201,6 +201,22 @@ COLLAPSED** to their open residuals (their done parts dropped). The history that
 `B3`, `B13`, `B18`, `B19`, `B22`, `B27`, `B28`, `B45`, `B47`, `B48`, `B49`, `B55`, `B56`, `B58`, `B59`, `B71`, `B73`, `B74`, `B79`, `B80`, `B85`, `B99`, `B100`, `B63`, `B98`, `B105`, `B94`, `B103`, `B60`, `B62`, `B89`.
 Each cited its own PR; full text is in git history (`git log -p -- BACKLOG.md`) and `docs/reviews/`.
 
+**Also unaccounted, recorded 2026-08-22:** `B14` (`scripts/05-kind-up.sh:128`), `B36`
+(`scripts/46-install-istio.sh:93`), `B117` (`scripts/test-cluster-status-wait-gate.sh:116`) and
+`B231` (`scripts/lib/tls.sh:223`) are cited as provenance by scripts, have no row here, and appear in
+neither prune note above. Recover them with `git log -p -- BACKLOG.md CLAUDE.md` — **both paths**,
+because rows lived in `CLAUDE.md` until the 2026-07-22 split (`f7f6c30`), so BACKLOG-only history
+misses them.
+
+⚠️ **Two classes that LOOK dangling and are NOT — measured 2026-08-22, after a session reported six
+of them to the owner as broken citations.** (a) **Heading-form rows.** `B86`, `B87`, `B88` and
+`B109`–`B114` are `## B<N> —` sections further down this file, invisible to a grep for the bolded
+table form; the real inventory is **153 table rows + 11 heading rows = 146 distinct ids**, not the
+137 a table-only regex reports. (b) **Hex fragments.** `B0`, `B4` and `B5` come from certificate
+fingerprints and MAC addresses (`B0:E5:E6`, `31:B4:DB:16`, `C0:8B:3E:B5`), not from citations. Any
+future audit of this file must enumerate BOTH row forms and exclude hex, or it will manufacture
+findings — and a prune driven by it would delete rows that open rows still cite as evidence.
+
 **Deliberately KEPT, and this is the load-bearing half of the prune:**
 
 - every 🔵 REFUTED / ⛔ DO-NOT-BUILD row — their value is stopping someone rebuilding a design
