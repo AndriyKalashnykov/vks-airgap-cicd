@@ -133,7 +133,23 @@ istio_discover() {
 istio_ensure_gwapi_crds() {
   local ver="${GATEWAY_API_VERSION:?GATEWAY_API_VERSION must be set (.env.example)}"
   if kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
-    log_info "Gateway API CRDs already present"
+    # STATE THE VERSION, DO NOT JUDGE IT. The old line made NO version claim, so an operator read
+    # "already present" as "my GATEWAY_API_VERSION pin is in effect" -- it is not, and on VKS it
+    # never will be: these CRDs are a kapp-managed package (labels kapp.k14s.io/*) the operator
+    # cannot change, and OUR side is gated to Istio's vendored version by check-gwapi-istio-alignment
+    # ("do NOT guess"). So a mismatch here is STRUCTURAL and unfixable by the reader.
+    #
+    # ⚠️ DELIBERATELY log_info, NOT log_warn. MEASURED on a live 9.1 lab: v1.4.0 already serves
+    # supportedFeatures as []object (so the []string->[]object skew is at an earlier boundary, not
+    # here); there is NO safe-upgrades ValidatingAdmissionPolicy on the guest; and the certified 6/6
+    # matrix ran 31h with istiod 1/1, the Gateway PROGRAMMED=True and zero unmarshal errors. A warn
+    # would cry danger on every real lab where 31h of certified operation says none -- and the only
+    # remedy a reader could invent (lowering the pin) is blocked by that other gate and would break
+    # Istio. Advice attached to a non-finding is worse than silence.
+    local _got
+    _got="$(kubectl get crd httproutes.gateway.networking.k8s.io \
+            -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}' 2>/dev/null || true)"
+    log_info "Gateway API CRDs already present (bundle-version=${_got:-unknown}; our GATEWAY_API_VERSION=${ver} is Istio's vendored version — on VKS these CRDs are a kapp-managed package, so a difference here is normal)"
     return 0
   fi
   # MANIFEST_DIR is a LOCAL in 10-mirror-pull.sh and 41-install-tekton.sh — it is NOT an .env var and
