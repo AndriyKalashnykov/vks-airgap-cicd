@@ -7,6 +7,41 @@
 > `make deps`**: provision its toolchain by hand from your internal package mirror and deliver the
 > rest via the carried bundle — see [Sneakernet](sneakernet.md).
 
+## The one-liner this page automates
+
+If the box is dual-homed (Ubuntu or PhotonOS) you can skip the rest of this page: one command
+OS-gates, installs `git`/`curl`/`make` + mise, clones the repo, runs `make deps`, and prints a
+toolchain report.
+
+> **`curl` must already be present** for it — the command *is* a `curl`. **Photon OS 5 ships it;
+> the Ubuntu 22.04, 24.04 and 26.04 stock images do not**, so install it there first, together with
+> `ca-certificates`, or the fetch dies `curl: (77) error setting certificate file`:
+>
+> ```bash
+> sudo apt-get update && sudo apt-get install -y --no-install-recommends curl ca-certificates
+> ```
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AndriyKalashnykov/vks-airgap-cicd/main/bootstrap-jumpbox.sh | bash
+```
+
+Prefer to read a script before running it? Download, inspect, then run:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/AndriyKalashnykov/vks-airgap-cicd/main/bootstrap-jumpbox.sh
+less bootstrap-jumpbox.sh
+bash bootstrap-jumpbox.sh
+```
+
+It is idempotent — a re-run skips what is already present. To pin a ref, set `REF` **for the shell
+that runs the script**: `curl -fsSL … | REF=<tag-or-sha> bash`, or
+`REF=<tag-or-sha> bash bootstrap-jumpbox.sh` for the download form. Putting `REF=` before `curl`
+sets it on `curl`, where it is lost. It installs only the **open** toolchain — the licensed VCF CLIs
+stay operator-supplied (`make install-vcf-clis`). It needs internet; a fully air-gapped host uses
+the carried bundle instead.
+
+## The manual path
+
 Everything else (mise, `make deps`, the toolchain) runs from a clone of this repo, so first
 get **git + SSH + make** working on a fresh box. Do this once, manually.
 
