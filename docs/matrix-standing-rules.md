@@ -36,6 +36,22 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
 1. Line by line.
 2. Observe **full and real** output. Not an exit code, not a grepped fragment.
 3. **No verdict before the falsifying command.** Read, measure, then report.
+3a. ⚠️ **AND DISPATCHING AN ADVERSARY ROUND IS A VERDICT-GENERATING ACT — rule 3 above is written
+    about REPORTING, and that is the hole.** If the system the code touches is REACHABLE, run the
+    code against it BEFORE sending it to a round. Measurement collapses the hypothesis space a
+    review would otherwise explore.
+    **MEASURED 2026-08-22:** a `walk-matrix.sh` change went through **four** rounds and ~35 findings
+    without ever running against the live lab — which was up the whole session, and had been used
+    that same morning to measure the very certificate under discussion. Rounds 2–4 argued about
+    **IP-SAN arms and wildcard SANs this estate does not have**. One run of the real function
+    settled it: `SUPPLY_RC=0`, the DNS-SAN arm fired, and the admin-password POST minted a real
+    token over the pinned connection. The rounds were not wasted — they caught three log lines
+    asserting things the code did not do — but the ORDER cost three rounds on configurations that
+    cannot occur.
+    Practically: extract and run the **whole function**, not a lifted fragment (a fragment cannot
+    prove the path the product takes); stub the minimum; use a throwaway `OUT_DIR`; pair every
+    "it works" with a **control that must FAIL** (`--cacert` giving rc=0 means nothing until the
+    same request without it gives rc=60); and state what the run did NOT cover.
 4. `.env` **fresh** from `.env.example`, via the document's own lifecycle targets.
 5. After every lab cut, verify `make creds-show` / lab `make creds` endpoints and credentials by
     **authenticating**, and drive the web UI in **Chrome** where an HTTP probe is not proof a human
