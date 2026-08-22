@@ -88,10 +88,40 @@ export PATH := $(if $(MISE_PATHS),$(subst $(SPACE),:,$(strip $(MISE_PATHS))):,)$
 # Each `-include` is guarded on the SOURCE existing: without that, deleting `.env` leaves the
 # generated `secrets/.env.make` orphaned and still included, so values keep applying from a file
 # the operator has removed.
+# ── ONE regeneration path for all three overlays, run at PARSE time (see the WHY below).
+#
+# WHY NOT A RULE. The rule form (`secrets/X.make: X`) decides freshness by MTIME, and the derived
+# file is stamped `now` on every rebuild — so it is routinely NEWER than a perfectly current
+# source. MEASURED on this Makefile, three independent staleness triggers, all silent:
+#   1. SOURCE SWITCH, no mtime trickery at all. `VKS_STATE_FILE=a` then `=b` serves A's values
+#      for B, and it is SYMMETRIC (b then a serves B's) and PERSISTENT across further runs.
+#   2. SAME source, content ROTATED, older mtime — `cp -p`, `rsync -a`, `tar -x`, a backup
+#      restore, `git checkout`. Affects `.env` and `.env.kind` too, not just the state overlay.
+#   3. SAME source, rotated, EQUAL mtime — a coarse-granularity filesystem, or a `state_set`
+#      inside a recipe followed by a sub-`$(MAKE)` in the same second.
+# This block feeds the SELECTOR class (KUBECONFIG, HARBOR_URL, HARBOR_CA_FILE, ARGOCD_KUBECONFIG),
+# and `fetch-harbor-ca`/`fetch-argocd-ca` pass those as ARGV — so the operator fetches a trust
+# anchor from a Harbor/ArgoCD they did not name. That is B168's failure, re-opened on the mtime
+# axis. Regenerating unconditionally removes the mtime from the decision entirely.
+#
+# Three details are load-bearing, each MEASURED:
+#   1. ASSIGNED to a variable, never a bare `$(shell …)` — stray stdout becomes makefile text and
+#      kills the whole file with `*** missing separator`.
+#   2. `&&`-chained. This runs at PARSE time, i.e. BEFORE `SHELL`/`.SHELLFLAGS` further down, so
+#      it is `/bin/sh -c` with NO `-e -u -o pipefail`.
+#   3. `rm -f` BEFORE the redirect. `umask` applies only at CREATION, so a pre-existing 0644
+#      survives a `>` truncate — measured, 0644 retained with a live credential inside.
+# An ORPHANED generated file (source deleted) is deliberately LEFT on disk; the `$(wildcard)`
+# guard on each `-include` is what stops it applying.
+# $(call regen_overlay_mk,<source>,<generated>)
+define regen_overlay_mk
+$(shell mkdir -p secrets && chmod 700 secrets && \
+  if [ -f '$(1)' ]; then rm -f '$(2)' && umask 077 && \
+    sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$(1)' > '$(2)'; fi)
+endef
+
+_ENVMK_KIND := $(call regen_overlay_mk,.env.kind,secrets/.env.kind.make)
 -include $(if $(wildcard .env.kind),secrets/.env.kind.make)
-secrets/.env.kind.make: .env.kind
-	@mkdir -p secrets && chmod 700 secrets
-	@umask 077; sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$<' > '$@'
 
 # The STAMPED state overlay (was `.env.kind` — a KinD-named file that carried REAL-LAB state, which
 # is how `make kind-down` came to destroy a lab's kubeconfig). VKS_STATE_FILE overrides the path.
@@ -105,10 +135,8 @@ secrets/.env.kind.make: .env.kind
 # rescue it, and the operator fetches a CA from the overlay's Harbor while believing they named
 # another. `make <target> VAR=value` still wins over both, as it should.
 STATE_SRC := $(if $(VKS_STATE_FILE),$(VKS_STATE_FILE),.env.state)
+_ENVMK_STATE := $(call regen_overlay_mk,$(STATE_SRC),secrets/.env.state.make)
 -include $(if $(wildcard $(STATE_SRC)),secrets/.env.state.make)
-secrets/.env.state.make: $(STATE_SRC)
-	@mkdir -p secrets && chmod 700 secrets
-	@umask 077; sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$<' > '$@'
 
 # Load operator overrides so they win over the `?=` defaults in this file (but NOT over the
 # discovered state above — see the precedence note). `-include` (leading '-') silently skips a
@@ -135,10 +163,8 @@ ifneq ($(SKIP_DOTENV),1)
 # Generated UNDER secrets/: it is a rewrite of .env, so it carries the same credentials, and
 # secrets/ is already gitignored, gitleaks-allowlisted and asserted-untracked by
 # `make check-secrets-untracked`. At the repo root it tripped the secrets gate, correctly.
+_ENVMK_ENV := $(call regen_overlay_mk,.env,secrets/.env.make)
 -include $(if $(wildcard .env),secrets/.env.make)
-secrets/.env.make: .env
-	@mkdir -p secrets && chmod 700 secrets
-	@umask 077; sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$<' > '$@'
 
 # ⚠️ EXPORTED, because `-include .env` above creates MAKE variables, NOT environment — MEASURED: a recipe
 # sees make-var=[AA:BB:CC] while the script it invokes sees []. fetch-ca.sh does not call load_env, so
