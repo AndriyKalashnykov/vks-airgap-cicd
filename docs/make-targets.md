@@ -66,6 +66,7 @@ Added 2026-08-21 — these were absent while being among the most reached-for on
 
 | Group | Target | Purpose |
 |-------|--------|---------|
+| Mirror | `harbor-auth-check` | Fails in **seconds** on a Harbor credential that cannot push, instead of after the ~20-minute pull. `mirror` **depends** on it; `mirror-pull` deliberately does **not** — the sneakernet internet box runs that one with no Harbor at all. `install-all` was already gated this way via `preflight`. Read-only. Returns 0 when there is nothing to probe, so it is a fast-fail for the configured-but-stale case, not a completeness gate |
 | Mirror | `mirror-verify` | Blob-integrity gate: `crane validate` fetches and digests every layer, and cross-checks Harbor against `images.lock`. Read-only, safe to interrupt. `mirror` **depends** on it — a push you have not verified is not a mirror |
 | Preflight | `argocd-preflight` | ArgoCD version + topology + write-mechanism + AppProject + Gitea reachability, two-cluster aware; non-zero on a blocking finding |
 | Trust | `vks-trust-probe` | LIVE, read-only: does this guest cluster trust our Harbor, and by what mechanism? Compares the CA fingerprint and forces a real pull. States in its own output what a green does **not** prove |
