@@ -29,10 +29,11 @@ VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surface
 > image with **Kaniko** and pushes it to **Harbor** → Tekton bumps the image tag in the
 > deploy repo → **ArgoCD** syncs the new version to the cluster → the web UI updates.
 > On VKS, **Harbor** and **ArgoCD** run as **Supervisor Services** (on the Supervisor —
-> you either install them, or they already exist and you're a tenant), and **Istio** is an *installable*
-> **VKS Standard Package** in the guest cluster — your cluster may or may not have one, so this project
-> either installs it from your Harbor or **attaches** to an existing mesh (`make istio-preflight` tells
-> you which). What this project always owns: mirroring every required image into Harbor, and
+> you either install them, or they already exist and you're a tenant), and **Istio** is a guest-cluster
+> **VKS Standard Package** your cluster owner may or may not have installed — so this project
+> **attaches** to that mesh (`INGRESS_CONTROLLER=istio-existing`), and only helm-installs its own,
+> with images from your Harbor, when there is none. `make istio-preflight` tells you which case you
+> are in — never install over a mesh you did not install. What this project always owns: mirroring every required image into Harbor, and
 > installing + wiring **Gitea + Tekton** and the demo app.
 > See [`docs/vks-services/`](docs/vks-services/) for what each service is, and how to install/configure/use it.
 
@@ -45,7 +46,8 @@ The demo ships **two apps, in two languages**, and runs both through the *same* 
 **The two languages are not decoration — they are the air-gap story.** The Java app needs a
 **pre-baked offline Maven builder image** (`Dockerfile.builder`), because an in-cluster `mvn` cannot
 reach Maven Central. The Go app is **stdlib-only**, so its air-gapped build fetches *nothing* and it
-needs **no builder image at all** — same pipeline either way.
+needs **no builder image at all** — same pipeline either way. Each app is verified independently, so
+a green `javawebapp` never hides a broken `gowebapp`.
 
 Adding an app is **one row** in `apps/registry.tsv` — see [Adding an app](docs/adding-an-app.md).
 As a **tenant** it may also need grants you must request:
@@ -85,7 +87,7 @@ air-gap box. (KinD is dual-homed, so there is no bundle to carry.)
 > | Not sure what your box has | `make engine-check` (read-only — tells you the engine, the mode, and what it will cost) | — |
 > | `make e2e-kind` (the KinD stand-in) | needs Docker **regardless** — kind's nodes *are* docker containers | — |
 >
-> Rootful docker's one sudo cannot be engineered away; `make trust-harbor` prints the exact line to run.
+> Rootful docker's sudo cannot be engineered away; `make trust-harbor` prints the exact line to run.
 
 ## Prerequisites
 
@@ -94,9 +96,11 @@ air-gap box. (KinD is dual-homed, so there is no bundle to carry.)
 **Fast path (dual-homed Ubuntu/Photon)** — one command OS-gates, installs git/curl/make +
 mise, clones this repo, runs `make deps`, and prints a toolchain report:
 
-> **`curl` must already be present** for the command below. **Photon OS 5 has it; Ubuntu 22.04, 24.04
-> and 26.04 do not** — on Ubuntu install it first, together with `ca-certificates`, or the fetch dies
-> `curl: (77) error setting certificate file`:
+<!-- The phrase "must already be present" is the ENTIRE corpus of check-doc-prereq-order across all
+     docs; rewording it to e.g. "you need curl first" flips that gate to "parsed ZERO ... blind". -->
+> **`curl` must already be present** for the `curl … | bash` command further below. **Photon OS 5
+> ships it; the Ubuntu 22.04, 24.04 and 26.04 stock images do not** — install it there first, with
+> `ca-certificates`, or the fetch dies `curl: (77) error setting certificate file`:
 >
 > ```bash
 > apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
@@ -134,12 +138,16 @@ git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git && cd vks-air
 **You need:** a jump box on **Ubuntu** or **PhotonOS**, with network reach to the Supervisor, Harbor,
 and (dual-homed only) the workload cluster.
 
-**Now follow your path document — it gives every command in context, in the right order.** Nothing
-else needs to happen on this page.
+**Now follow your path document** — [KinD](docs/kind-local.md) · [Scenario 1](docs/scenario-1.md) ·
+[Scenario 2](docs/scenario-2.md). Each one starts by installing the toolchain (`make deps`) and gives
+every command in context, in the right order. Nothing else needs to happen on this page.
 
-> **Do not run `env-populate`, `env-check` or `fetch-harbor-ca` yet.** All three need a live cluster
-> and a live Harbor, neither of which exists at this point, so all three fail here. Your runbook runs
-> each of them at the point where it works.
+> **Do not run `env-populate`, `env-check` or `fetch-harbor-ca` yet — and note `env-populate`
+> *succeeds* here, which is the trap.** Run this early and it mints a throwaway Harbor/ArgoCD
+> password your lab will not accept; it never overwrites a value you set, so the fake one sticks and
+> `env-check` then passes on it. `env-check` needs the real `HARBOR_URL` and a workload kubeconfig,
+> and `fetch-harbor-ca` dials Harbor — none of which exist yet. Your runbook runs each at the point
+> where it works.
 
 ## Reference
 
