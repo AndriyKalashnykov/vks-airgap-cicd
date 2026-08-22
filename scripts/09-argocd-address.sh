@@ -28,8 +28,7 @@ require_cmd kubectl
 # The SAME chain 08-install-argocd-service.sh uses. ArgoCD is a SUPERVISOR Service, so from Step 6
 # onward $KUBECONFIG is the GUEST cluster, which has no argocd-server at all.
 SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kubeconfig")"   # lib/os.sh: ONE resolver, first that EXISTS
-[ -f "$SUP" ] || die "no Supervisor kubeconfig at '$SUP' - run 'make vks-login' (scenario-1 Step 3) first.
-  ArgoCD is a SUPERVISOR Service; the guest cluster has no argocd-server."
+[ -f "$SUP" ] || { supervisor_kubeconfig_hint >&2; die "no Supervisor kubeconfig — see the search order above"; }
 
 NS="${ARGOCD_NAMESPACE:-${VKS_NAMESPACE:-}}"
 [ -n "$NS" ] || die "ARGOCD_NAMESPACE is not set (and VKS_NAMESPACE is empty) - scenario-1 Step 5 sets it."

@@ -74,7 +74,7 @@ fi
 # was the odd one out.
 SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kubeconfig")"   # lib/os.sh: ONE resolver, first that EXISTS
 if [ ! -s "$SUP" ]; then
-  log_warn "no Supervisor kubeconfig at '${SUP}' - skipping the instance CR."
+  { supervisor_kubeconfig_hint >&2; log_warn "no Supervisor kubeconfig — skipping the instance CR (search order above)."; }
   log_warn "  run 'make vks-login' first, then: make install-argocd-service"
   exit 0
 fi

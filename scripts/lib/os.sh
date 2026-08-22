@@ -782,11 +782,37 @@ argocd_namespace() { printf '%s' "${ARGOCD_NAMESPACE:-${VKS_NAMESPACE:-argocd}}"
 # cluster" into "the service does not exist", an error naming the wrong cause.
 supervisor_kubeconfig() {
   local c
-  for c in "${VKS_SUPERVISOR_KUBECONFIG:-}" "${SUPERVISOR_KUBECONFIG:-}" \
-           "${REPO_ROOT}/secrets/supervisor.kubeconfig" "${ARGOCD_KUBECONFIG:-}" "${KUBECONFIG:-}"; do
+  for c in $(supervisor_kubeconfig_candidates); do
     [ -n "$c" ] && [ -s "$c" ] && { printf '%s' "$c"; return 0; }
   done
   return 1
+}
+
+# supervisor_kubeconfig_candidates — the SEARCH ORDER, in one place, so the resolver and every
+# error message agree. A caller that cannot resolve MUST print this list (supervisor_kubeconfig_hint)
+# rather than naming a single path: a FATAL that says only "not at secrets/supervisor.kubeconfig"
+# sends the reader hunting, and MEASURED 2026-08-22 that cost a session ~40 minutes rediscovering
+# that the file was already on the box.
+#
+# The last entry is a LAST-RESORT convenience for a maintainer whose Supervisor kubeconfig is
+# managed by a separate lab-provisioning repo. It is existence-guarded, so for an end user who has
+# no such directory it is a silent no-op and nothing in this repo depends on it (RULE ZERO-B: the
+# end user has ONLY this repo).
+supervisor_kubeconfig_candidates() {
+  printf '%s\n' "${VKS_SUPERVISOR_KUBECONFIG:-}" "${SUPERVISOR_KUBECONFIG:-}" \
+    "${REPO_ROOT}/secrets/supervisor.kubeconfig" "${ARGOCD_KUBECONFIG:-}" "${KUBECONFIG:-}" \
+    "${VKS_LAB_STATE_DIR:-$HOME/.local/state/nested-lab}/kubeconfig"
+}
+
+# supervisor_kubeconfig_hint — what to print when the resolver returns 1.
+supervisor_kubeconfig_hint() {
+  local c
+  printf '  no Supervisor kubeconfig found. Looked, in order:\n'
+  for c in $(supervisor_kubeconfig_candidates); do
+    [ -n "$c" ] && printf '    %s %s\n' "$([ -s "$c" ] && printf 'FOUND-BUT-EMPTY' || printf 'absent         ')" "$c"
+  done
+  printf '  Fix: export VKS_SUPERVISOR_KUBECONFIG=<path>, or run: make vks-login\n'
+  printf '  (Harbor and ArgoCD are SUPERVISOR Services -- a GUEST kubeconfig will not do.)\n'
 }
 
 # supervisor_kubeconfig_or_die [what-needs-it]

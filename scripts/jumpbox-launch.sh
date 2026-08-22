@@ -102,7 +102,7 @@ if [ "$JUMPBOX_TARGET" = lab ]; then
   # address in it is reachable from the container exactly as it is from the host -- no --internal
   # rewrite, because there is no separate container network to translate for.
   _sup="${VKS_SUPERVISOR_KUBECONFIG:-${REPO_ROOT}/secrets/supervisor.kubeconfig}"
-  [ -s "$_sup" ] || die "no Supervisor kubeconfig at '${_sup}' — run 'make vks-login' (scenario-1 Step 3) first"
+  [ -s "$_sup" ] || { supervisor_kubeconfig_hint >&2; die "no Supervisor kubeconfig — see the search order above"; }
   cp "$_sup" "${WORK}/kubeconfig"
 else
   kind get kubeconfig --name "${KIND_CLUSTER_NAME:?}" --internal > "${WORK}/kubeconfig"
