@@ -131,8 +131,16 @@ ensure_project() {
       log_error "  Most likely: Harbor's DATABASE survives from an earlier install and still holds the"
       log_error "  ORIGINAL admin password, while a later install generated a new one (e.g. 'make"
       log_error "  install-harbor' with your .env, then 'make e2e-kind', which regenerates credentials)."
-      log_error "  Fix: 'make kind-down' and re-run (a fresh Harbor is seeded with the current password),"
-      log_error "  or set HARBOR_PASSWORD to the password Harbor was FIRST installed with."
+      # The diagnosis above is about KinD (a surviving Harbor DB from an earlier local install), so its
+      # remedy is printed ONLY on KinD. VKS_STATE_KIND is stamped by 05-kind-up.sh; a real lab never
+      # stamps it, so it defaults to 0 and the operator gets the remedy that can actually work. The
+      # real-lab note is printed UNCONDITIONALLY: a stale KinD overlay then costs one extra paragraph,
+      # which is strictly better than withholding the only fix that applies. (B209)
+      if [ "${VKS_STATE_KIND:-0}" = 1 ]; then
+        log_error "  Fix (KinD): 'make kind-down' and re-run (a fresh Harbor is seeded with the current password),"
+        log_error "  or set HARBOR_PASSWORD to the password Harbor was FIRST installed with."
+      fi
+      harbor_settle_note "  "
       return 1
       ;;
     403)
@@ -294,6 +302,10 @@ harbor_auth_report() {
       printf '%s  from its FIRST install, and a later data-values submission does not change it.\n' "$note_p" >&2
       printf '%sSet HARBOR_USERNAME/HARBOR_PASSWORD in .env to the credential that Harbor was\n' "$note_p" >&2
       printf '%s  installed with, or to a robot from '\''make harbor-robot'\''.\n' "$note_p" >&2
+      # 'make harbor-robot' MINTS with the admin credential (22-harbor-robot.sh:26-27), so in the
+      # one state this arm fires in -- the admin credential is REJECTED -- it cannot run. Name the
+      # remedy that can. (B209)
+      harbor_settle_note "  "
       return 1 ;;
     *)   printf '%sHarbor auth probe inconclusive (http %s) — not judging it here\n' "$note_p" "$acode" >&2; return 0 ;;
   esac

@@ -1696,6 +1696,41 @@ k_can_i() {
 # rule, single-sourced, so the two cannot drift again.
 harbor_scheme() { if [ "${HARBOR_INSECURE:-0}" = 1 ]; then printf 'http'; else printf 'https'; fi; }
 
+# ── harbor_settle_note <indent> — the ONE place that names the Harbor-401 remedies (B209) ─────────
+# FOUR sites report a Harbor 401. Until 2026-08-22 exactly ONE named the fix; of the other three, two
+# named a remedy that CANNOT WORK in that state:
+#   * lib/harbor.sh harbor_auth_report  ->  'make harbor-robot', which needs a WORKING admin
+#     credential to mint with (22-harbor-robot.sh:26-27) -- i.e. the very thing that is broken.
+#   * lib/harbor.sh harbor_api          ->  'make kind-down', a KinD remedy printed on the REAL-LAB
+#     push path. That whole diagnosis (a surviving Harbor DB from an earlier KinD install) is a
+#     statement about KinD; on a lab it sends the operator to destroy a cluster that is not there.
+#   * 02-env.sh env_validate            ->  no remedy at all.
+# One helper, called from every arm, so the copies cannot drift again. This is the same reasoning
+# creds.sh:98-103 recorded for its own three arms on 2026-08-20 -- the helper was written there and
+# then never called from the GATES, which is why the operator hit it a second time.
+#
+# IT LIVES HERE, NOT IN lib/harbor.sh, for the reason harbor_scheme does (above): creds.sh sources
+# lib/os.sh + lib/apps.sh and 02-env.sh sources lib/os.sh + lib/tls.sh -- NEITHER sources
+# lib/harbor.sh (measured: their harbor.sh grep hits are COMMENTS). Defining it there would be
+# `harbor_settle_note: command not found` under `set -euo pipefail`, on the 401 path only, which a
+# green run never reaches. Every one of the 9 scripts that DOES source lib/harbor.sh also sources
+# lib/os.sh (measured 9/9), so calling it from there is safe.
+#
+# The two commands do DIFFERENT JOBS: env-validate DIAGNOSES, harbor-admin-password FIXES. Naming
+# only the diagnosis leaves the reader knowing they are broken with no way forward.
+harbor_settle_note() {
+  _hsn_i="${1:-  }"
+  printf '%sSettle it - two different jobs:\n' "$_hsn_i" >&2
+  printf '%s  DIAGNOSE  make env-validate          authenticates against Harbor and reports the 401\n' "$_hsn_i" >&2
+  printf '%s  FIX       make harbor-admin-password reads the INSTALLED admin credential and writes a\n' "$_hsn_i" >&2
+  printf '%s                                       WORKING one to .env. It VERIFIES BEFORE WRITING,\n' "$_hsn_i" >&2
+  printf '%s                                       never replaces a credential that already works,\n' "$_hsn_i" >&2
+  printf '%s                                       and REFUSES if yours is a robot$ account (mint a\n' "$_hsn_i" >&2
+  printf '%s                                       fresh one with: make harbor-robot).\n' "$_hsn_i" >&2
+  printf '%s  NOTE      harbor-admin-password needs the SUPERVISOR kubeconfig. As a TENANT you cannot\n' "$_hsn_i" >&2
+  printf '%s            run it - REQUEST a working Harbor credential from your platform admin.\n' "$_hsn_i" >&2
+}
+
 # IT LIVES HERE, NOT IN lib/harbor.sh, for the reason `is_placeholder` does (see above): a SECOND
 # consumer appeared. 02-env.sh sources lib/os.sh + lib/tls.sh but NOT lib/harbor.sh, so defining
 # it there and calling it from 02-env.sh is `harbor_scheme: command not found` under

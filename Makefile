@@ -456,6 +456,9 @@ check-ports: ## Fail early if the local app-dev port is already in use (names th
 
 ##@ Air-gap image mirroring
 .PHONY: mirror-pull
+harbor-auth-check: ## Read-only: fail in SECONDS on a Harbor credential that cannot push (prereq of `mirror`, NOT of `mirror-pull` — the sneakernet internet box has no Harbor)
+	@$(SCRIPTS)/09-harbor-auth-check.sh
+
 mirror-pull: check-env ## (internet) Pull every image in images/images.txt into the local cache
 	@$(SCRIPTS)/10-mirror-pull.sh
 
@@ -485,7 +488,7 @@ mirror-verify-red-test: check-env ## NEGATIVE test (LIVE Harbor): delete one mir
 # does not actually hold makes the push a SILENT NO-OP that exits 0 (see 06-install-harbor.sh §3 —
 # it happened, 36/36, and only mirror-verify caught it). The mirror's contract is "the images are
 # retrievable from Harbor", and crane validate is the only thing here that asserts it.
-mirror: mirror-pull mirror-push mirror-verify ## (dual-homed) Pull + push + VERIFY in one run
+mirror: harbor-auth-check mirror-pull mirror-push mirror-verify ## (dual-homed) Pull + push + VERIFY in one run
 
 .PHONY: engine-trust-check
 engine-trust-check: check-env ## Does THIS engine (podman|docker) actually work against the self-signed Harbor? Prints its PRECONDITION ROW (CA method + whether sudo was needed). ~60s.

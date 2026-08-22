@@ -106,16 +106,11 @@ _mask() {
 # authenticates and reports the 401); harbor-admin-password FIXES (it reads the INSTALLED admin
 # credential and writes a working one). Naming only the diagnosis leaves the reader knowing they are
 # broken with no way forward.
-_settle_note() {
-  local i="${1:-        }"
-  printf '%sSettle it — two different jobs:\n' "$i"
-  printf '%s  DIAGNOSE  make env-validate          authenticates against Harbor and reports the 401\n' "$i"
-  printf '%s  FIX       make harbor-admin-password reads the INSTALLED admin credential and writes a\n' "$i"
-  printf '%s                                       WORKING one to .env. It VERIFIES BEFORE WRITING,\n' "$i"
-  printf '%s                                       never replaces a credential that already works,\n' "$i"
-  printf '%s                                       and REFUSES if yours is a robot$ account (mint a\n' "$i"
-  printf '%s                                       fresh one with: make harbor-robot).\n' "$i"
-}
+# DELEGATES to harbor_settle_note (lib/os.sh) as of 2026-08-22: this same text was duplicated into the
+# GATES (02-env.sh env_validate, lib/harbor.sh harbor_api + harbor_auth_report), so the single-source
+# rationale above now points at ONE definition rather than at this copy. stderr->stdout because this
+# is a REPORT and its other arms print to stdout. (B209)
+_settle_note() { harbor_settle_note "${1:-        }" 2>&1; }
 
 
 # --- resolve URLs ---------------------------------------------------------------------

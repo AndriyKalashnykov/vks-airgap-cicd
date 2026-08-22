@@ -382,7 +382,11 @@ env_validate() {
           rm -f "$cfg"
           case "$acode" in
             200|403) log_info "Harbor credentials accepted (HTTP $acode)" ;;   # 403 = robot lacks /users/current but auth passed
-            401)     log_error "Harbor rejected HARBOR_USERNAME/HARBOR_PASSWORD (HTTP 401)"; errs=$((errs+1)) ;;
+            401)     log_error "Harbor rejected HARBOR_USERNAME/HARBOR_PASSWORD (HTTP 401)"
+                     # Until 2026-08-22 this arm named NO remedy, so env-validate told the operator they
+                     # were broken and stopped there. It is the DIAGNOSE half of the pair. (B209)
+                     harbor_settle_note "         "
+                     errs=$((errs+1)) ;;
             *)       log_warn "Harbor auth probe inconclusive (HTTP $acode) — verify at mirror time" ;;
           esac
         fi
