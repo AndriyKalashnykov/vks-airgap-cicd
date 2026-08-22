@@ -127,8 +127,13 @@ done
 if [ -z "$gen_bad" ]; then
   ok "generated secrets/.env.state.make lands 0600 from every pre-existing mode (5 cells)"
 else
-  bad "generated overlay mode:$gen_bad" "umask is create-only — the writer must unlink before the redirect"
+  bad "generated overlay mode:$gen_bad" "umask is create-only — mv the temp file in, do not redirect over the destination"
 fi
+# The writer is atomic (write a PID-suffixed temp, then rename), so nothing may survive it. A
+# leftover here means someone replaced the mv with a plain redirect, or the rename failed silently.
+leftover="$(find "$REPO/secrets" -maxdepth 1 -name '*.tmp' 2>/dev/null | wc -l)"
+if [ "$leftover" -eq 0 ]; then ok "the atomic writer leaves no *.tmp behind in secrets/"
+else bad "$leftover leftover *.tmp in secrets/" "the temp file is PID-suffixed; a survivor means the rename did not happen"; fi
 rm -rf "$d"; rm -f "$REPO/secrets/.env.state.make"
 
 printf '\n== %s passed, %s failed ==\n' "$pass" "$fail"
