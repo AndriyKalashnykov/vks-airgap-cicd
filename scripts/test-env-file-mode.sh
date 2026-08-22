@@ -106,5 +106,35 @@ done
 if [ "$sinks" -eq 0 ]; then ok ".env.example is read by 3 gates and written by NONE (so it never gets chmodded to 600)"
 else bad "$sinks gate(s) that point ENV_FILE at .env.example also WRITE through set_env_var" "they would chmod the committed file"; fi
 
+# ---- 5. the GENERATED overlays — secrets/*.make ---------------------------------------------------
+# These are a REWRITE of .env / .env.state, so they carry the same credentials verbatim — and they
+# sat OUTSIDE this test's corpus while its own header documented the exact trap that hits them. The
+# Makefile regenerates them at PARSE time with a `>` redirect, and `umask` is create-only, so a
+# pre-existing loose mode survives the truncate unless the writer unlinks first. Measured before the
+# fix: a pre-seeded 0644 stayed 0644 with a live credential inside.
+d="$(mktemp -d)"; printf 'HARBOR_PASSWORD=%s\n' "$SECRET" > "$d/.env.state"
+gen_bad=""
+for pre in none 644 664 666 400; do
+  if [ "$pre" = none ]; then
+    rm -f "$REPO/secrets/.env.state.make"
+  else
+    : > "$REPO/secrets/.env.state.make"; chmod "$pre" "$REPO/secrets/.env.state.make"
+  fi
+  ( cd "$REPO" || exit 1; VKS_STATE_FILE="$d/.env.state" make -s --no-print-directory help >/dev/null 2>&1 )
+  m="$(stat -c %a "$REPO/secrets/.env.state.make" 2>/dev/null || echo MISSING)"
+  [ "$m" = 600 ] || gen_bad="$gen_bad pre=$pre:$m"
+done
+if [ -z "$gen_bad" ]; then
+  ok "generated secrets/.env.state.make lands 0600 from every pre-existing mode (5 cells)"
+else
+  bad "generated overlay mode:$gen_bad" "umask is create-only — mv the temp file in, do not redirect over the destination"
+fi
+# The writer is atomic (write a PID-suffixed temp, then rename), so nothing may survive it. A
+# leftover here means someone replaced the mv with a plain redirect, or the rename failed silently.
+leftover="$(find "$REPO/secrets" -maxdepth 1 -name '*.tmp' 2>/dev/null | wc -l)"
+if [ "$leftover" -eq 0 ]; then ok "the atomic writer leaves no *.tmp behind in secrets/"
+else bad "$leftover leftover *.tmp in secrets/" "the temp file is PID-suffixed; a survivor means the rename did not happen"; fi
+rm -rf "$d"; rm -f "$REPO/secrets/.env.state.make"
+
 printf '\n== %s passed, %s failed ==\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

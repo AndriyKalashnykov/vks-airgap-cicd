@@ -43,24 +43,26 @@ cd "$T" || exit 1
 mkdir -p secrets
 
 # ---- lift the SHIPPED include blocks -------------------------------------------------------
-# Each block is `-include ...` followed by its rule; take from the -include through its recipe.
-# Each range ends at the block's own recipe line (`@umask 077; ...`), which occurs once per block.
-# Ending on a pattern that does NOT occur (my first attempt anchored on `.env.kind.make`, which the
-# recipe writes as `$@`) makes sed run to EOF — and the lift guard passed on the WHOLE MAKEFILE,
-# because it only had a LOWER bound. Hence the upper bound below: a guard with one open end is not
-# a guard.
+# FOUR ranges: the shared `regen_overlay_mk` macro FIRST (a `$(call)` before its `define` expands
+# to nothing, silently), then each block from its `$(call)` line through its own `-include`.
+# Ending on a pattern that does NOT occur makes sed run to EOF — measured twice now: once on the
+# original `.env.kind.make` anchor, and again when the per-block rules were replaced by the macro
+# and the old `@umask 077;` end-anchor stopped existing (3589 lines lifted). The guard caught both,
+# which is the whole reason it has an UPPER bound: a guard with one open end is not a guard.
 {
-  sed -n '/^-include \$(if \$(wildcard \.env\.kind)/,/^\t@umask 077;/p' "$MK"
-  sed -n '/^STATE_SRC := /,/^\t@umask 077;/p'                          "$MK"
-  sed -n '/^-include \$(if \$(wildcard \.env),/,/^\t@umask 077;/p'     "$MK"
+  sed -n '/^define regen_overlay_mk$/,/^endef$/p'                                        "$MK"
+  sed -n '/^_ENVMK_KIND := /,/^-include \$(if \$(wildcard \.env\.kind)/p'               "$MK"
+  sed -n '/^STATE_SRC := /,/^-include \$(if \$(wildcard \$(STATE_SRC))/p'                "$MK"
+  sed -n '/^_ENVMK_ENV := /,/^-include \$(if \$(wildcard \.env),/p'                      "$MK"
 } > Makefile
 lifted="$(grep -c . Makefile)"
 if [ "$lifted" -ge 10 ] && [ "$lifted" -le 30 ] \
    && grep -q 'STATE_SRC' Makefile && grep -q 'wildcard \.env\.kind' Makefile \
-   && [ "$(grep -c '@umask 077;' Makefile)" -eq 3 ]; then
-   # ^ NOT `'^\t@umask'`: GNU sed understands \t in a regex, grep's BRE does not — it reads as a
-   #   literal 't', so the anchored form matched nothing and failed a correct lift.
-  ok "lifted ${lifted} non-blank lines of the shipped include machinery (3 blocks)"
+   && grep -q '^endef$' Makefile \
+   && [ "$(grep -c 'call regen_overlay_mk' Makefile)" -eq 3 ]; then
+   # ^ `grep -c` on the CALL SITES, not on the macro body: the body occurs once by construction, so
+   #   counting it could never detect a dropped block. Three call sites == three overlays.
+  ok "lifted ${lifted} non-blank lines of the shipped include machinery (macro + 3 blocks)"
 else
   bad "LIFT FAILED (${lifted} lines) — this harness is not testing the product; fix the sed anchors"
   printf '\n  %d passed, %d failed\n' "$pass" "$fail"; exit 1
@@ -104,6 +106,45 @@ chk 'deleting .env.state stops its orphan applying' 'harbor.ENV' "$(f 1)"
 printf 'HARBOR_URL=harbor.RELOCATED\n' > custom.state
 chk 'VKS_STATE_FILE relocates the state overlay' 'harbor.RELOCATED' \
   "$(VKS_STATE_FILE=custom.state make -s show 2>/dev/null | cut -d'|' -f1)"
+
+# ---- 7a. THE MTIME BLEED — the trigger section 7 above CANNOT catch ---------------------------
+# Section 7 passes by ACCIDENT: it writes custom.state immediately BEFORE invoking make, so the
+# source is always NEWER than the generated file and even the old rule form looked fresh. A fixed
+# derived path with a VARIABLE source decides freshness by mtime, and the derived file is stamped
+# `now` on every rebuild — so it is routinely newer than a perfectly current source. Three
+# triggers, each serving the WRONG file's values, silently, with rc=0.
+printf 'HARBOR_URL=harbor.BLEED_A\n' > bleed_a.state
+printf 'HARBOR_URL=harbor.BLEED_B\n' > bleed_b.state
+bl() { VKS_STATE_FILE="$1" make -s show 2>/dev/null | cut -d'|' -f1; }
+chk 'bleed 1a: the first source reads correctly'        'harbor.BLEED_A' "$(bl bleed_a.state)"
+chk 'bleed 1b: switching source does not serve the old' 'harbor.BLEED_B' "$(bl bleed_b.state)"
+chk 'bleed 1c: switching back does not serve the other' 'harbor.BLEED_A' "$(bl bleed_a.state)"
+printf 'HARBOR_URL=harbor.ROTATED\n' > bleed_a.state; touch -d '2020-01-01' bleed_a.state
+chk 'bleed 2: rotated content, OLDER mtime, is re-read' 'harbor.ROTATED' "$(bl bleed_a.state)"
+_bm="$(stat -c %y bleed_a.state)"
+printf 'HARBOR_URL=harbor.SAMESEC\n' > bleed_a.state; touch -d "$_bm" bleed_a.state
+chk 'bleed 3: rotated content, EQUAL mtime, is re-read' 'harbor.SAMESEC' "$(bl bleed_a.state)"
+
+# POSITIVE CONTROL for 7a — the pre-fix RULE form must still bleed, or 7a discriminates nothing.
+mkdir -p bleedctl/secrets && cd bleedctl || exit 1
+cat > Makefile <<'MK'
+STATE_SRC := $(if $(VKS_STATE_FILE),$(VKS_STATE_FILE),.env.state)
+-include $(if $(wildcard $(STATE_SRC)),secrets/.env.state.make)
+secrets/.env.state.make: $(STATE_SRC)
+	@mkdir -p secrets && chmod 700 secrets
+	@umask 077; sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=/\1 ?= /' '$<' > '$@'
+show: ; @printf "%s\n" "$(HARBOR_URL)"
+MK
+printf 'HARBOR_URL=harbor.CTL_A\n' > a.state
+printf 'HARBOR_URL=harbor.CTL_B\n' > b.state
+VKS_STATE_FILE=a.state make -s show >/dev/null 2>&1
+_ctl="$(VKS_STATE_FILE=b.state make -s show 2>/dev/null)"
+if [ "$_ctl" = 'harbor.CTL_B' ]; then
+  bad "positive control: the PRE-FIX rule form did NOT bleed — section 7a discriminates nothing"
+else
+  ok "positive control: pre-fix rule form still bleeds (b.state served [$_ctl]) — 7a discriminates"
+fi
+cd "$T" || exit 1
 
 # ---- 8. the rewrite must not mangle a value containing '=' or spaces --------------------------
 printf 'HARBOR_URL=host:443/path?a=b c\n' > .env.state
