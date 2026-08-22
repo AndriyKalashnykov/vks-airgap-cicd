@@ -69,8 +69,7 @@ New here? Pick the path that matches your situation — each one is self-contain
 | **VKS — Harbor + ArgoCD already exist** (I am a **tenant**) | [Scenario 2](docs/scenario-2.md) | **Have:** cluster-admin on your own guest cluster · Harbor **project-admin** (else ask for robot credentials) · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md#acquiring-the-licensed-vcf-cli-archives))<br>**Ask the platform team for:** your guest cluster **registered** with ArgoCD (admin-only) · an ArgoCD role that lets you create an `Application` · mesh rights — `make istio-preflight` prints exactly what to request<br>**Reachable from the jump box:** the internet and Harbor. |
 
 Each document is **self-contained end to end** — pick one and follow it; you never need another,
-and it gives every command in context. The VKS paths start from the jump-box
-**[Prerequisites](#prerequisites)** below. Once it is up:
+and it gives every command in context, starting with getting the repo onto the box. Once it is up:
 **[Access the UIs](docs/access-uis.md)** — URLs, logins, passwords.
 
 **Delivery (both VKS paths):** if no single box reaches **both** the internet *and* Harbor, mirror via
@@ -88,66 +87,6 @@ air-gap box. (KinD is dual-homed, so there is no bundle to carry.)
 > | `make e2e-kind` (the KinD stand-in) | needs Docker **regardless** — kind's nodes *are* docker containers | — |
 >
 > Rootful docker's sudo cannot be engineered away; `make trust-harbor` prints the exact line to run.
-
-## Prerequisites
-
-### Bootstrap an unprovisioned jump box (before you can clone this repo)
-
-**Fast path (dual-homed Ubuntu/Photon)** — one command OS-gates, installs git/curl/make +
-mise, clones this repo, runs `make deps`, and prints a toolchain report:
-
-<!-- The phrase "must already be present" is the ENTIRE corpus of check-doc-prereq-order across all
-     docs; rewording it to e.g. "you need curl first" flips that gate to "parsed ZERO ... blind". -->
-> **`curl` must already be present** for the `curl … | bash` command further below. **Photon OS 5
-> ships it; the Ubuntu 22.04, 24.04 and 26.04 stock images do not** — install it there first, with
-> `ca-certificates`, or the fetch dies `curl: (77) error setting certificate file`:
->
-> ```bash
-> apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
-> ```
->
-> (Prefix with `sudo` if you are not root.)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/AndriyKalashnykov/vks-airgap-cicd/main/bootstrap-jumpbox.sh | bash
-```
-
-**Prefer to read a script before running it?** Download, inspect, then run — instead of the one-liner above:
-
-```bash
-curl -fsSLO https://raw.githubusercontent.com/AndriyKalashnykov/vks-airgap-cicd/main/bootstrap-jumpbox.sh
-less bootstrap-jumpbox.sh
-bash bootstrap-jumpbox.sh
-```
-
-It's idempotent (re-run skips what's present). Pin a ref by setting `REF` **for the shell that runs the
-script**: `curl -fsSL … | REF=<tag-or-sha> bash` (pipe form) or `REF=<tag-or-sha> bash bootstrap-jumpbox.sh`
-(download form) — putting `REF=` *before* `curl` sets it on `curl`, where it is lost. It installs
-only the **open** toolchain — the licensed VCF CLIs stay operator-supplied (`make install-vcf-clis`).
-It needs internet (dual-homed); a fully air-gapped host uses the carried bundle instead.
-
-**On a box that already has `git` and `make`** you don't need the one-liner — clone and enter the repo,
-then go to [Toolchain and access](#toolchain-and-access) below:
-
-```bash
-git clone https://github.com/AndriyKalashnykov/vks-airgap-cicd.git && cd vks-airgap-cicd
-```
-
-### Toolchain and access
-
-**You need:** a jump box on **Ubuntu** or **PhotonOS**, with network reach to the Supervisor, Harbor,
-and (dual-homed only) the workload cluster.
-
-**Now follow your path document** — [KinD](docs/kind-local.md) · [Scenario 1](docs/scenario-1.md) ·
-[Scenario 2](docs/scenario-2.md). Each one starts by installing the toolchain (`make deps`) and gives
-every command in context, in the right order. Nothing else needs to happen on this page.
-
-> **Do not run `env-populate`, `env-check` or `fetch-harbor-ca` yet — and note `env-populate`
-> *succeeds* here, which is the trap.** Run this early and it mints a throwaway Harbor/ArgoCD
-> password your lab will not accept; it never overwrites a value you set, so the fake one sticks and
-> `env-check` then passes on it. `env-check` needs the real `HARBOR_URL` and a workload kubeconfig,
-> and `fetch-harbor-ca` dials Harbor — none of which exist yet. Your runbook runs each at the point
-> where it works.
 
 ## Reference
 
@@ -167,12 +106,6 @@ Background and deep-dives. Each path above is self-contained, so you never need 
 | [Demo walkthrough](docs/demo-walkthrough.md) | drive the GitOps loop by hand |
 | [VKS services](docs/vks-services/) | what Broadcom ships (Harbor / ArgoCD / Istio), and how confident we are in each fact |
 | [Decisions](docs/decisions/) | the design choices behind the KinD stand-in |
-
-## Configuration
-
-Everything is driven by `.env` (copied from `.env.example`), with an optional `.env.state`
-overlay written by the KinD flow. Nothing is hardcoded in scripts or the Makefile. See
-`.env.example` for the full, documented list of tunables.
 
 ## Contributing
 
