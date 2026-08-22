@@ -191,6 +191,11 @@ kustomize_build() {
 echo "== kustomize build (every app's deploy dir) =="
 # shellcheck source=scripts/lib/apps.sh
 . "${REPO_ROOT}/scripts/lib/apps.sh"
+# CAPTURE FIRST. `done <<EOF\n$(app_names)\nEOF` swallows a die: app_names exits inside the
+# command substitution, the heredoc is EMPTY, and both loops below run zero times while this
+# script reports `validate: OK` at rc=0. An assignment trips `set -e`; a heredoc substitution
+# does not. Shared by BOTH arms so a broken registry cannot pass either.
+_apps="$(app_names)"
 _validated=0
 while read -r _app; do
   [ -n "$_app" ] || continue
@@ -214,9 +219,14 @@ while read -r _app; do
     log_error "kustomize build failed for '${_app}' (need kustomize or kubectl)"; rc=1
   fi
 done <<EOF
-$(app_names)
+$_apps
 EOF
 # Print the DENOMINATOR: a gate that cannot say how many apps it checked cannot be trusted.
+# ...and FLOOR it. Printing a denominator of 0 is not a guard: measured, a missing registry made
+# `$(app_names)` die INSIDE the heredoc substitution, the loop ran zero times, and this gate
+# reported `validate: OK` at rc=0 while checking NOTHING. Same shape as the `for x in $(fn)`
+# fail-open fixed in #944 -- that sweep missed this hand-rolled heredoc form.
+[ "$_validated" -gt 0 ] || die "validate: checked 0 app deploy dir(s) -- apps/registry.tsv is empty or app_names is broken. The gate has gone BLIND."
 log_info "kustomize: validated ${_validated} app deploy dir(s)"
 
 echo "== every app's Tekton TEST TASK must exist =="
@@ -225,8 +235,10 @@ echo "== every app's Tekton TEST TASK must exist =="
 # was written but never added to k8s/tekton/tasks/, so gowebapp's first PipelineRun died while
 # javawebapp's succeeded.) Assert it statically instead.
 _missing=""
+_tasks_checked=0
 while read -r _app; do
   [ -n "$_app" ] || continue
+  _tasks_checked=$((_tasks_checked + 1))
   _t="$(app_test_task "$_app")"
   if grep -qs "^  name: ${_t}$" "${REPO_ROOT}"/k8s/tekton/tasks/*.yaml; then
     log_info "test task OK: ${_app} -> ${_t}"
@@ -235,8 +247,13 @@ while read -r _app; do
     _missing=1; rc=1
   fi
 done <<EOF
-$(app_names)
+$_apps
 EOF
+# This arm had NO counter at all, so it could not even print a denominator -- a broken registry
+# produced ZERO "test task OK" lines and no error. It exists because a real PipelineRun died on a
+# missing Task; blind, it is exactly as useless as not having it.
+[ "$_tasks_checked" -gt 0 ] || die "validate: checked 0 app test task(s) -- apps/registry.tsv is empty or app_names is broken. The gate has gone BLIND."
+log_info "test tasks: checked ${_tasks_checked} app(s)"
 [ -z "$_missing" ] || log_error "  a pipeline referencing a missing Task fails at RUN time (CouldntGetTask), never at build time."
 
 # ---------------------------------------------------------------------------------------------
