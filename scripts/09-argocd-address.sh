@@ -49,15 +49,74 @@ esac
 # the Deployment and Service (visible ~5-6 min later: row1 14:32:29 -> 14:37:46, row3 16:01:12 ->
 # 16:08:08). So "no LoadBalancer IP" and "no Service yet" are different failures with different
 # remedies, and reporting the first for the second names the wrong cause.
+# ⚠️ THE STREAMS ARE NOT MERGED (B210). This used to be `2>&1`, which folded kubectl's stderr into
+# the VALUE -- exactly what classify_kube_failure's own header (lib/os.sh) forbids in as many words:
+# "NEVER MERGE THE STREAMS". With them merged, an error is indistinguishable from an address, and the
+# errfile that classify_kube_failure needs does not exist at all.
+#
+# The failure this fixes: point $KUBECONFIG at a GUEST cluster (which is what it is from scenario-1
+# Step 6 onward -- see supervisor_kubeconfig's candidate list) and `-n cicd` does not exist, so kubectl
+# exits non-zero, _state says `absent`, and this script WAITS ARGOCD_ADDRESS_WAIT_SECONDS (default
+# 900s) printing "the ArgoCD instance is still reconciling". That is a positive claim about a cluster
+# we are not even pointed at, and it costs 15 minutes before saying anything true.
+_ERRF="$(mktemp)"; trap 'rm -f "$_ERRF"' EXIT
 _state() {                       # absent | pending | <ip>
-  local out
+  local out rc=0
   out="$(kubectl --kubeconfig "$SUP" -n "$NS" get svc argocd-server \
-           -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>&1)" || { printf 'absent'; return; }
-  case "$out" in ''|*NotFound*|*'no resources'*) printf 'pending' ;; *) printf '%s' "$out" ;; esac
+           -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>"$_ERRF")" || rc=$?
+  [ "$rc" -ne 0 ] && { printf 'absent'; return; }
+  # The probe SUCCEEDED, so whatever kubectl wrote to stderr (retry noise, warnings) is not a
+  # failure and must not be classified. Without this, rc=0 + empty stdout -- the NORMAL `pending`
+  # state -- was classified UNREACHABLE and exited in 0s, aborting the exact state this target
+  # exists to wait through. A global cannot escape the $( ) subshell; the FILE can, so truncate it.
+  : > "$_ERRF"
+  case "$out" in '') printf 'pending' ;; *) printf '%s' "$out" ;; esac
+}
+
+# Is `absent` worth WAITING on? Only if the namespace exists and the Service has not appeared yet.
+# A missing NAMESPACE, an unusable kubeconfig, a stale CA or a rejected credential are all states
+# that waiting cannot fix, and most of them mean this kubeconfig is not the Supervisor. FORBIDDEN and
+# UNREACHABLE are classified but judged WAIT-WORTHY (see the arm below). Returns 0 = wait is
+# pointless. This CLASSIFIES; it never refuses to run (a real fresh Supervisor whose Service has not
+# yet reconciled must keep waiting, which is the whole point of the target).
+_wait_is_pointless() {
+  local e; e="$(cat "$_ERRF" 2>/dev/null || true)"
+  [ -n "$e" ] || return 1
+  case "$e" in *namespaces*not\ found*) return 0 ;; esac
+  case "$(classify_kube_failure "$_ERRF")" in
+    # ⚠️ UNREACHABLE and FORBIDDEN are DELIBERATELY ABSENT (implementation round, 2026-08-22).
+    # _wait_is_pointless is evaluated EXACTLY ONCE, before the loop -- i.e. at the single most
+    # transient moment, immediately after 08-install-argocd-service.sh requests the CR, at peak
+    # Supervisor churn. MEASURED with a fake kubectl emitting ONE `i/o timeout`: at probe 1 it exited
+    # 0s; at probe 3 the identical fault was ridden out and the run waited normally. Same fault,
+    # opposite handling, decided only by WHEN it lands -- and the printed remedy then blames a GUEST
+    # kubeconfig for a 15-second network hiccup. FORBIDDEN is out for the same reason (RBAC
+    # propagation). Only states that CANNOT resolve by waiting belong here.
+    KUBECONFIG_UNUSABLE|STALE_CA|UNAUTHORIZED|NO_KUBE_TARGET|PLAINTEXT) return 0 ;;
+    # HANDLED EXPLICITLY, and the verdict is WAIT (return 1). check-classifier-consumers is right to
+    # demand every class appear: letting these fall to `*)` would print "not one we classify", which
+    # is false. They ARE classified -- we simply judge that waiting is the correct response, because
+    # both resolve on their own: a Supervisor apiserver blips during reconcile, and RBAC propagates.
+    FORBIDDEN|UNREACHABLE) return 1 ;;
+  esac
+  return 1
 }
 
 st="$(_state)"
 if [ "$st" = absent ] || [ "$st" = pending ]; then
+    # B210: do not burn 900s on a state waiting cannot fix. This is a CLASSIFIER, not a gate -- it
+    # only skips the WAIT and prints what kubectl actually said; a genuinely reconciling Supervisor
+    # whose Service has not appeared yet still waits exactly as before.
+    if _wait_is_pointless; then
+      log_error "svc/argocd-server is not reachable, and WAITING WILL NOT FIX IT - not waiting."
+      log_error "  kubectl said: $(head -2 "$_ERRF" | tr '\n' ' ')"
+      log_error "  If that names a missing NAMESPACE, this kubeconfig is almost certainly your GUEST"
+      log_error "  cluster, not the Supervisor. ArgoCD is a SUPERVISOR Service, so a guest kubeconfig"
+      log_error "  cannot see it. Point VKS_SUPERVISOR_KUBECONFIG at the Supervisor kubeconfig, or run"
+      log_error "  'make vks-login'. As a TENANT you may have no Supervisor access at all - ask your"
+      log_error "  platform admin for the ArgoCD address instead."
+      exit 1
+    fi
   if [ "$WAIT" -gt 0 ]; then
     case "$st" in
       absent)  log_info "svc/argocd-server does not exist in ${NS} yet — the ArgoCD instance is still reconciling (measured: ~5-6 min after the install is issued)." ;;

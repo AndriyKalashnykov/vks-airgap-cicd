@@ -799,9 +799,16 @@ supervisor_kubeconfig() {
 # no such directory it is a silent no-op and nothing in this repo depends on it (RULE ZERO-B: the
 # end user has ONLY this repo).
 supervisor_kubeconfig_candidates() {
+  # ⚠️ $KUBECONFIG IS GENUINELY LAST AS OF 2026-08-22 (B210). The header above has said "$KUBECONFIG
+  # is LAST" since it was written, and it was NOT: it sat at position 5 of 6, ahead of the lab-state
+  # kubeconfig -- so a GUEST kubeconfig outranked a real SUPERVISOR one whenever both existed. This
+  # reorder changes only WHICH OF TWO EXISTING FILES WINS, preferring the one that is by construction
+  # a Supervisor over the one that is by construction a guest (30-vks-login.sh:43-44 tells the
+  # operator to put their WORKLOAD-cluster kubeconfig in $KUBECONFIG). It adds no probe, no
+  # permission, and no way to false-block.
   printf '%s\n' "${VKS_SUPERVISOR_KUBECONFIG:-}" "${SUPERVISOR_KUBECONFIG:-}" \
-    "${REPO_ROOT}/secrets/supervisor.kubeconfig" "${ARGOCD_KUBECONFIG:-}" "${KUBECONFIG:-}" \
-    "${VKS_LAB_STATE_DIR:-$HOME/.local/state/nested-lab}/kubeconfig"
+    "${REPO_ROOT}/secrets/supervisor.kubeconfig" "${ARGOCD_KUBECONFIG:-}" \
+    "${VKS_LAB_STATE_DIR:-$HOME/.local/state/nested-lab}/kubeconfig" "${KUBECONFIG:-}"
 }
 
 # supervisor_kubeconfig_hint — what to print when the resolver returns 1.

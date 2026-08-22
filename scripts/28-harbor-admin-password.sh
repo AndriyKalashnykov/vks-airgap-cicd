@@ -160,7 +160,30 @@ n="$(printf '%s\n' "$ns" | grep -c . || true)"
 if [ "$n" != 1 ]; then
   log_error "expected EXACTLY ONE namespace labelled serviceId=harbor, got ${n}:"
   printf '%s\n' "$ns" | sed 's/^/    /' >&2
-  [ "$n" = 0 ] && log_error "  no Harbor Supervisor Service on this Supervisor - install it (Step 4) or ask your platform admin."
+    if [ "$n" = 0 ]; then
+      log_error "  no Harbor Supervisor Service on this Supervisor - install it (Step 4) or ask your platform admin."
+      # B210 -- APPENDED HINT, NEVER A BLOCK. rc=0 with an empty result is ambiguous: it is the TRUE
+      # answer on a real Supervisor with no Harbor yet (scenario-1 before Step 4), and it is ALSO what
+      # a GUEST kubeconfig returns, because `get ns -l <anything>` is rc=0-by-construction anywhere --
+      # namespaces exist on every cluster and labels are freeform. The line above is right for the
+      # first case and confidently WRONG for the second.
+      #
+      # The discriminator costs ONE call and needs only `list namespaces`, which a tenant has: are
+      # there ANY serviceId-labelled namespaces? >=1 means Supervisor Services live here, so the line
+      # above stands unqualified. 0 means we cannot tell -- so we HINT, never refuse. A genuinely bare
+      # Supervisor must keep working, and docs/vks-services/guest-cluster-vip.md records that not
+      # every service carries the label (svc-tmc-c9 does not), so this selector must never gate.
+      _any_rc=0
+      _any="$(kubectl --kubeconfig "$SUP" --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-15s}" \
+                get ns -l appplatform.vmware.com/serviceId -o name 2>/dev/null)" || _any_rc=$?
+      if [ "$_any_rc" -eq 0 ] && [ "$(printf '%s\n' "$_any" | grep -c . || true)" = 0 ]; then
+        log_error "  HINT: this kubeconfig has NO Supervisor Services at all (${SUP})."
+        log_error "        Harbor is a SUPERVISOR Service, so a GUEST kubeconfig cannot see it and would"
+        log_error "        answer exactly like this. If that is what you handed us, point"
+        log_error "        VKS_SUPERVISOR_KUBECONFIG at the Supervisor kubeconfig or run: make vks-login"
+        log_error "        (If this really is a bare Supervisor, the line above is the right answer.)"
+      fi
+    fi
   die "refusing to guess - an empty value would silently target the 'default' namespace"
 fi
 ns="${ns#namespace/}"
