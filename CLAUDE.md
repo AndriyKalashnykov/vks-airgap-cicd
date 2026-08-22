@@ -769,11 +769,17 @@ none).
   live guest cluster Istio is **ours**: three helm releases (`istio-base`, `istiod`,
   `istio-ingressgateway`, all `1.30.3`, installed 06:52 2026-08-21 by `46-install-istio.sh`) and
   **zero `PackageInstall` objects** — no VKS Standard Package anywhere. So the rows INSTALL rather
-  than attach and no Standard-Package injector template ever exists. ⚠️ **The corollary is a trap:**
-  a preflight run against THIS cluster today reports `existing` and the attach fence would run —
-  but that is run 8's leftover, and §A.1 cuts a NEW lab, where the same preflight says `NO Istio
-  detected` and the INSTALL fence runs instead. Measuring attach-mode on an un-recut lab measures
-  a state the matrix will never be in.
+  than attach and no Standard-Package injector template ever exists. ⚠️ **BOTH fences DO run across
+  the matrix, and an earlier draft of this bullet said otherwise — it was wrong.** The NOTHING rows
+  (1, 3) start on a fresh cluster and take the INSTALL fence; the EVERYTHING rows (2, 4) find the
+  mesh the preceding row installed and take the ATTACH fence — rows 2 and 4 logged `attaching to an
+  Istio we did NOT install` with the document's `expect:` line SEEN. The reason that is not enough
+  for B26: `48-istio-preflight.sh:93` returns from the gateway-api branch **before** the ownership
+  check, so `_istio_mode()` answers `existing` for **any** present mesh — including one we installed
+  ourselves. So the attach path is exercised, but only ever against our own helm mesh, never a
+  package one. B26's remaining half is settled in its backlog row from the RENDERED package bundle,
+  because no matrix run can produce an injected pod at all: every workload namespace we create is
+  `istio-injection=disabled`, and injection needs a positive opt-in we never set.
 - **Owner decisions: ALL FOUR ARE CLOSED. This line said "still open" for a day and was wrong,**
   which is how a session came to ask the owner to re-decide them. B70/B195/B196 were decided
   2026-08-21 (`f8643fa`, PR #920 — each row's END carries `OWNER DECISION 2026-08-21 … ROW
