@@ -100,6 +100,67 @@ with `Edit`/`Write`** — which is exactly how two READ-ONLY-briefed adversaries
 2026-07-14, one of them *while the main agent was executing the script*. It now blocks subagent writes
 outright. **A sandbox with a door in it is worse than none: it manufactures confidence.**
 
+### RULE ZERO-A0 — TO REACH ANYTHING IN THE LAB, USE THE REPO'S TARGET. NEVER HAND-ROLL A PROBE (BLOCKING)
+
+This repo already contains a purpose-built, measured tool for every lab question you will have. Every
+time a session hand-rolls `curl`/`kubectl`/`crane` at the lab instead, it re-derives a wrong answer —
+and this has recurred for WEEKS. The tools are not optional and they are not a fallback.
+
+**START HERE, ALWAYS:** `make preflight` (read-only composite: check-tools · engine-check · env-check
+· argocd-preflight · lab-preflight · psa-check) and `make env-validate` (format + KUBECONFIG + Harbor
+connectivity AND auth). Between them they answer "can this lab do the thing" in two commands.
+
+| you want | the target |
+|---|---|
+| is Harbor serving? | `make harbor-reachable` |
+| does my Harbor credential WORK? | `make env-validate` |
+| recover the admin credential | `make harbor-admin-password` (reads the Supervisor secret, VERIFIES, refuses to publish an unverified one) |
+| a push/pull credential | `make harbor-robot` |
+| make my engine trust Harbor | `make trust-harbor` (proves it with a real login handshake) |
+| the Harbor / ArgoCD CA | `make fetch-harbor-ca` · `make fetch-argocd-ca` · `make harbor-ca-from-cluster` |
+| does the ArgoCD credential work? | `make argocd-auth-check` |
+| ArgoCD versions / topology | `make argocd-version` · `make argocd-preflight` |
+| endpoints + logins for the CURRENT context | `make creds-show` |
+| would our pods be admitted? | `make psa-check` |
+| does the guest trust our Harbor? | `make vks-trust-probe` |
+
+**THE CHAIN, when a credential is stale** (each link is a target; the only human input is the first):
+
+```text
+VCENTER_PASSWORD -> make vks-login -> secrets/supervisor.kubeconfig
+                 -> make harbor-admin-password -> make harbor-robot -> make mirror
+```
+
+⚠️ **Harbor is a SUPERVISOR Service.** The guest kubeconfig has NO harbor namespace, so
+`kubectl -n harbor ...` against the guest is always empty — that is not "Harbor is missing".
+
+⚠️ **vCenter SSO LOCKS OUT PERMANENTLY AFTER 3 FAILED ATTEMPTS.** Never guess, never retry blind. If
+`VCENTER_PASSWORD` is absent from `.env`, STOP and ask the operator — do not spend an attempt.
+
+#### THREE HARBOR "AUTH CHECKS" THAT DO NOT DISCRIMINATE — measured 2026-08-22
+
+A session tested a 12-day-old `secrets/harbor-robot.env` three ways, got "works" three times, and was
+wrong every time. The credential was DEAD (`UNAUTHORIZED ... action: push`):
+
+| probe | reading | why it is worthless |
+|---|---|---|
+| `GET /api/v2.0/projects` with creds | 200 | returns **200 with NO credentials**, and 200 with a **deliberately wrong password** |
+| `GET /service/token?scope=...` with creds | 200 | returns **200 with bogus creds** too |
+| `crane auth login` | "logged in" | it only **writes `~/.docker/config.json`** — it validates nothing |
+| **`crane copy` (the real push)** | **UNAUTHORIZED** | the only one that discriminates |
+
+`make env-validate` gets it right in one command (rc=2, `Harbor rejected HARBOR_USERNAME/HARBOR_PASSWORD (HTTP 401)`)
+because `lib/harbor.sh`'s `harbor_auth_report` already solved this — its own test asserts **401 fails,
+403 PASSES**. Use it. `GET /api/v2.0/users/current` is the endpoint that actually requires auth.
+
+⚠️ **`secrets/` is gitignored operator state that NOTHING cleans up.** A `harbor-robot.env` survives
+every lab re-cut and reads as valid to any proxy check. Age is not the tell; only the real operation is.
+
+⚠️ `ca_bundle_with_system` takes **TWO** arguments — `<ca-file> <out-bundle>` — and writes to the
+second. Called with one it silently produces nothing and returns 0, so `$(... || fallback)` never
+fires and `SSL_CERT_FILE` ends up EMPTY, which surfaces as `x509: certificate signed by unknown
+authority` from crane.
+
 ### RULE ZERO-A — DERIVE THE CONTRACT FROM THE CODE BEFORE YOU CHANGE IT (BLOCKING)
 
 Before writing code that changes **what one side must provide to another** — the air gap, a wire
