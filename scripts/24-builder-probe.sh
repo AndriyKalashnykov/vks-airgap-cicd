@@ -38,7 +38,9 @@ TIMEOUT="${BUILDER_PROBE_TIMEOUT:-180s}"
 probed=0
 fail=0
 
-for app in $(app_names); do
+# Capture first -- see check-app-toolchains.sh: a dying $( ) in argument position is silent.
+_apps="$(app_names)"
+for app in $_apps; do
   [ -n "$app" ] || continue
   # Only apps that actually HAVE a pre-baked builder are in scope. A go app's "builder" is the
   # mirrored upstream golang image, which the mirror already verifies and which we did not carry as

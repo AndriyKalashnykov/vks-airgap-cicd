@@ -123,7 +123,10 @@ echo >&2
 # stuck Terminating FOREVER in a namespace we do not own, needing a manual finalizer patch by
 # whoever does own it.
 log_info "1/5  ArgoCD Applications (ours only)"
-for app in $(app_names); do
+# Capture first: a dying $( ) in argument position does not trip `set -e`, so a missing registry
+# would make this loop run zero times and uninstall NOTHING, silently, with rc=0.
+_apps="$(app_names)"
+for app in $_apps; do
   if ! read_state -n "$ARGOCD_NAMESPACE" get application "$app"; then
     absent_or_unknown "$app"; continue
   fi

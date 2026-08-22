@@ -75,7 +75,10 @@ printf '%s' "$HARBOR_PASSWORD" | run crane auth login "$HARBOR_URL" \
 ensure_project "$HARBOR_INFRA_PROJECT" || log_warn "ensure_project('$HARBOR_INFRA_PROJECT') non-zero — a 403 on an EXISTING project is the known project-scoped-robot gap; continuing"
 
 pushed=0
-for app in $(app_names); do
+# Capture first -- see check-app-toolchains.sh: a dying $( ) in argument position is silent,
+# so a missing registry would push NOTHING and still report success.
+_apps="$(app_names)"
+for app in $_apps; do
   app_has_builder "$app" || continue
   tarball="${IN_DIR}/${app}-builder.tar"
   [ -f "$tarball" ] || die "app '${app}' needs a builder image, but the bundle carries none for it (${tarball}).
@@ -140,7 +143,10 @@ fi
 # HEAD and SKIPS the upload if the registry claims to have it — so a registry that answers 200 for a
 # blob it cannot serve makes `crane push` a SILENT NO-OP THAT EXITS 0. That happened to this repo's
 # whole mirror. crane validate --remote FETCHES every blob back.
-for app in $(app_names); do
+# Capture first -- see check-app-toolchains.sh: a dying $( ) in argument position is silent,
+# so a missing registry would push NOTHING and still report success.
+_apps="$(app_names)"
+for app in $_apps; do
   app_has_builder "$app" || continue
   ref="$(app_builder_image "$app")"
   run crane validate --remote "$ref" "${CRANE_INSECURE[@]}"

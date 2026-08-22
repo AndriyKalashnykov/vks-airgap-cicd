@@ -26,7 +26,13 @@ rc=0
 checked=0
 while read -r app; do
   [ -n "$app" ] || continue
-  for tool in $(app_toolchain "$app"); do
+  # CAPTURE FIRST, never `for tool in $(app_toolchain ...)`. `app_toolchain` DIES on an unknown
+  # lang, and a dying $( ) in ARGUMENT position does NOT trip `set -e` (measured: the loop body
+  # simply runs zero times and the script SURVIVES). This gate exists to say "you added a
+  # LANGUAGE, so pin its toolchain" -- and with the `for ... in $(...)` form it printed FATAL,
+  # then OK, then exited 0 on exactly that input. An assignment DOES trip `set -e`.
+  tools="$(app_toolchain "$app")"
+  for tool in $tools; do
     checked=$((checked + 1))
     if grep -qE "^${tool}[[:space:]]*=" "$MISE"; then
       log_info "toolchain OK: ${app} (lang=$(app_lang "$app")) needs '${tool}' -> pinned in .mise.toml"
