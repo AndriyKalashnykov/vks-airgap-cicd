@@ -78,11 +78,18 @@ run_for_app() {
       esac
       ;;
     rust)
-      case "$ACTION" in
-        # --offline --locked here too, matching the Dockerfile: if the vendored cache is incomplete this
-        # FAILS locally instead of quietly fetching, which is the whole point of testing the air gap.
-        test)  log_info "[${app}] cargo test";  ( cd "$src" && cargo test --offline --locked --quiet ) ;;
-        build) log_info "[${app}] cargo build"; ( cd "$src" && cargo build --release --offline --locked --quiet ) ;;
+        case "$ACTION" in
+        # --locked but NOT --offline, and the asymmetry is deliberate. app-test is the INTERNET-SIDE
+        # target -- the same one where `npm ci` and the python venv are allowed to fetch -- so it must
+        # populate a COLD cargo registry. MEASURED: --offline passed on a warm box and FAILED in CI with
+        # "error: no matching package named `axum` found / offline mode (via `--offline`) can sometimes
+        # cause surprising resolution failures". That is the warm-cache trap this repo already records
+        # for ~/.m2, in a second ecosystem.
+        # --locked still holds: the resolver may not CHANGE Cargo.lock, so the run stays reproducible.
+        # THE AIR GAP IS TESTED ELSEWHERE BY CONSTRUCTION: k8s/tekton/tasks/rust-test.yaml and the app
+        # Dockerfile both run --offline --locked, in the places that genuinely have no egress.
+        test)  log_info "[${app}] cargo test";  ( cd "$src" && cargo test --locked --quiet ) ;;
+        build) log_info "[${app}] cargo build"; ( cd "$src" && cargo build --release --locked --quiet ) ;;
       esac
       ;;
     dotnet)
