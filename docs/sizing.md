@@ -11,9 +11,63 @@ Kaniko, Maven, Temurin JDK/JRE, alpine/git, yq, and the ingress images). Figures
 |------|-------|------|
 | Mirror image cache — **single-arch** (default, `MIRROR_ARCH=amd64`) | `bundle/images/` | **~3.0 GB** |
 | Mirror image cache — **all architectures** (`MIRROR_ALL_ARCH=1`) | `bundle/images/` | ~5.2 GB |
-| Maven builder image build (local docker/podman storage) | engine store | ~1.5 GB |
+| Builder images — **all six apps** (local docker/podman storage) | engine store | **~4.3 GB** |
+| Their six upstream base images (pulled to build them) | engine store | **~3.3 GB** |
 | Sneakernet bundle tarball (sneakernet flow only) | repo root | ~2.5 GB (on top of the cache) |
 
+## Builder images — the number that changed when the demo went to six apps
+
+Every app ships a `Dockerfile.builder` whose whole job is to bake its dependency cache, because an
+in-cluster build reaches no package registry. That is six images, not one, and they are the largest
+thing the jump box builds. **MEASURED 2026-08-23** (podman, `linux/amd64`, current pins):
+
+| app | builder image | its upstream base |
+|---|---:|---:|
+| rustwebapp | **1.57 GB** | `rust:1.98-alpine` 1.03 GB |
+| gowebapp | **1.00 GB** | `golang:1.27.0-bookworm` 871 MB |
+| dotnetwebapp | **967 MB** | `mcr…/dotnet/sdk:10.0-alpine` 762 MB |
+| javawebapp | **622 MB** | `maven:3.9-eclipse-temurin-25` 494 MB |
+| nodejswebapp | **178 MB** | `node:24-alpine` 169 MB |
+| pythonwebapp | **105 MB** | `python:3.14-alpine` 50 MB |
+| **total** | **≈ 4.3 GB** | **≈ 3.3 GB** |
+
+Realistic floor for a **dual-homed six-app walk**, measured against a box that hit `ENOSPC` at 15 G used:
+
+| component | size |
+|---|---:|
+| OS + toolchain + repo | ~4.0 GB |
+| `bundle/images/` (crane OCI layout, separate store) | ~3.0 GB |
+| engine store (six bases **once** + six deltas) | ~4.0 GB |
+| `bundle/builders/*.tar` (uncompressed docker-archives) | ~4.3 GB |
+| **core total** | **≈ 15.3 GB** |
+| with 30% headroom | **≈ 20 GB** |
+
+Both columns are live at once during `make builder-image` / `make builder-build` — but **they do not
+add up**, and the difference matters. A builder image *contains* its base's layers (`FROM <base>`
+makes them its parent layers), so the engine store holds each base **once** plus a small per-app
+delta. MEASURED on the walkthrough VM: the reported sizes sum to 6.29 GB while the store held
+**3.7 GB**, and the model `bases + deltas` predicts that to within 1.1% (deltas: go +114 MB, java
++105, node +6, python +55, rust +180). **Consequence: `podman rmi <base>` while its builder exists
+frees ≈ 0 bytes** — the deduplication has already happened, so "prune the bases to make room" is not
+a lever.
+
+The term that *is* easy to miss: `14-builder-build.sh` also `podman save`s every builder into
+`bundle/builders/*.tar` as uncompressed docker-archives — **another ≈ 4.3 GB** — and it does so on
+the **dual-homed** path too, because `make builder-image` is a thin orchestrator over that same
+script. `bundle/images/` (crane's OCI layout) is a **separate** store from podman's, so those really
+are second copies.
+
+> **This is what a 16 GB ROOT FILESYSTEM runs out of, and it fails at the LAST app.** MEASURED 2026-08-23 on a
+> 16 GB Photon walkthrough VM: `make install-all` died in `builder-image` on the **sixth** builder —
+> `Error: committing container … no space left on device` while unpacking the NuGet cache — with
+> `/dev/sda2 16G 15G 558M 97%`. The VM's virtual disk was **40 GiB** — `lsblk` showed `sda` at 40 GiB
+> with `sda2` at only 16 GiB and ~24 GiB unallocated behind it, because the Photon GCE base image ships
+> a 16 GiB root layout and nothing grew it at first boot. **Check the PARTITION, not just the disk.** The failure then arrives **disguised**: `install-all` never reaches
+> `platform → seed-gitea`, so the next step reports `missing secrets/gitea-ci-token — run 'make
+> seed-gitea' first`, which sends you to Gitea instead of to the disk. If you see that token error,
+> check `df -h /` before anything else — and see the note below: on the walkthrough VM the disk was
+> not too small, its filesystem had simply never grown into it.
+On the mirror cache itself:
 > Even in single-arch mode the **Tekton controller images stay multi-arch**
 > (~2 GB of the 3 GB): they are digest-pinned in the release manifests, so their
 > multi-arch list digest must be preserved for the pull to resolve. The single-arch
@@ -62,10 +116,11 @@ Adding a **third app in an existing language** costs only its own app image (≈
 Adding a **new language** costs a build image + a runtime base — plus an offline builder **only if
 that language cannot build offline unaided**.
 
-**Recommended free space on the jump box:** **≥ 10 GB** dual-homed (cache + builder build +
-overhead); **≥ 15 GB** sneakernet (adds the transferable bundle tarball). The **VKS/KinD
-cluster** additionally stores these images in Harbor + each node's containerd (~5–6 GB) —
-that is cluster-side, separate from the jump box.
+**Recommended free space on the jump box:** **≥ 20 GB** dual-homed and **≥ 25 GB** sneakernet
+(which adds the transferable bundle tarball). RAISED 2026-08-23 from 10/15 GB, which was sized when the
+demo shipped ONE builder: six builders + six bases are ≈ 7.6 GB by themselves, and a 16 GB box was
+measured failing at 97% full on the sixth. The **VKS/KinD cluster** additionally stores these images in
+Harbor + each node's containerd (~5–6 GB) —
 
 **Guest (VKS workload) cluster sizing** — sizing for the **guest cluster** where this project deploys **Gitea + Tekton (+ Dashboard) +
 the demo apps** and their images. Harbor and ArgoCD run on the **Supervisor** as Supervisor Services, so they are budgeted

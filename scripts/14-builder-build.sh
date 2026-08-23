@@ -36,7 +36,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/engine.sh"
 load_env
 
-: "${BUILDER_IMAGE_TAG:?}"
+: "${BUILDER_IMAGE_TAG:=${BUILDER_IMAGE_TAG_DEFAULT:?lib/apps.sh must be sourced first}}"   # single-sourced in lib/apps.sh; .env/env/cmdline still override
 : "${BUNDLE_DIR:?}"
 
 # NOTE: no HARBOR_* is required here, deliberately. This box does not have Harbor and must not need it.
@@ -98,8 +98,20 @@ for app in $BUILDER_APPS; do
     log_warn "cgroup v1 detected — building with BUILDAH_ISOLATION=${_iso}: rootless podman cannot"
     log_warn "  create a container cgroup here. Weaker isolation, bounded — our Dockerfile, our base."
   fi
+  # PROVENANCE LABELS. The tag alone cannot distinguish two builders built from different trees --
+  # MEASURED 2026-08-23: bundle/builders/rustwebapp-builder.tar (config ebbbdf76…, 9 layers, 16:04:30Z)
+  # and localhost/rustwebapp-builder:0.3.0 (config 88371d02…, 8 layers, 17:33:47Z) are DIFFERENT
+  # IMAGES at ONE TAG; one is what builder-push ships to Harbor for Tekton, the other is what
+  # app-verify certifies. Stamping here is the whole fix: this is the SINGLE chokepoint (15-build-
+  # push-builder.sh is a thin orchestrator over this file), base_digest is already resolved above,
+  # and the config blob that carries labels is exactly what `save` writes and `crane push` reads --
+  # so the air-gap side inherits the provenance for free, no second mechanism to carry it.
+  #   inputs = the tree recipe  -> checkable OFFLINE, on a fresh box, which is where the defect lives
+  #   base   = the resolved digest -> checkable only where bundle/images.lock exists (gitignored)
   run "$ENGINE" build \
     --build-arg "${builder_arg}=${build_base}" \
+    --label "io.vks.builder.inputs=$(builder_inputs_hash "$app")" \
+    --label "io.vks.builder.base=${base_digest}" \
     -f "${src}/Dockerfile.builder" \
     -t "$local_ref" \
     "${src}"

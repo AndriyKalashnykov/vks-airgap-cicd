@@ -21,7 +21,7 @@ kubeconfig_ready
 : "${HARBOR_USERNAME:?set HARBOR_USERNAME in .env (admin for scenario 1, your robot for scenario 2)}"; : "${HARBOR_PASSWORD:?set HARBOR_PASSWORD in .env}"
 : "${GITEA_INTERNAL_URL:?}"; : "${GITEA_ORG:?}"
 : "${GITEA_CI_USER:?}"; : "${APP_BRANCH:?}"; : "${ARGOCD_TRACK_BRANCH:?}"
-: "${BUILDER_IMAGE_TAG:?}"
+: "${BUILDER_IMAGE_TAG:=${BUILDER_IMAGE_TAG_DEFAULT:?lib/apps.sh must be sourced first}}"   # single-sourced in lib/apps.sh; .env/env/cmdline still override
 # The app registry: everything below is rendered ONCE PER APP from it.
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"

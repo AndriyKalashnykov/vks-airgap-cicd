@@ -83,15 +83,8 @@ capture() {
   [ "$rc" -eq 0 ] || { sed 's/^/    | /' "$out" >&2; die "[${app}] runner exited ${rc}"; }
 }
 
-# app_builder_local <app> — the image to run tests in.
-#
-# LOCAL-FIRST, deliberately. app_builder_image() hard-requires HARBOR_URL:? and HARBOR_INFRA_PROJECT:?,
-# so resolving through it would make `make app-test` -- a hermetic, offline, no-cluster gate -- depend
-# on a registry, a CA and a live credential. It would then fail on any box whose Harbor credential has
-# expired, which is the normal state after a lab re-cut.
-app_builder_local() {
-  printf 'localhost/%s-builder:%s' "$1" "${BUILDER_IMAGE_TAG:-0.3.0}"
-}
+# app_builder_local() now lives in lib/apps.sh -- it is shared by all four offline
+# consumers of the local builder image, so its default cannot drift between them.
 
 # run_in_builder <app> <lang> <out> <cmd> — run <cmd> inside the app's builder image.
 #
@@ -120,6 +113,7 @@ run_in_builder() {
   local src img eng
   src="${REPO_ROOT}/$(app_src "$app")"
   img="$(app_builder_local "$app")"
+  builder_freshness_check "${app}" "${img}"
   eng="$(container_engine)"
   # `image inspect`, NOT `image exists`: the latter is podman-only. MEASURED 2026-08-23:
   # `docker image exists alpine` -> rc=1 "unknown command", so on a docker box EVERY app died

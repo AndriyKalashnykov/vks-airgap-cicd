@@ -83,29 +83,26 @@ repo onto the box; the two VKS paths do it through a shared
 **[sneakernet](docs/sneakernet.md)** — pull on the internet box, carry the bundle across, push from the
 air-gap box. (KinD is dual-homed, so there is no bundle to carry.)
 
-> **Container engine — podman is the default and you do nothing.** `make deps` installs it, and it is the
-> only engine that needs **no sudo on any box**. **Docker is supported too, opt-in.**
+> **Container engine — podman is the default and you do nothing.** `make deps` installs it, and it is
+> the only engine that needs **no sudo on any box**. **Docker is supported, opt-in.**
 >
-> **This applies to all three paths and is not repeated in them — and there is nowhere to "set" it.**
-> `CONTAINER_ENGINE` must stay **commented** in `.env` (an uncommented value pins the engine and
-> defeats both the auto-detection and any per-run override — `.env.example` says so at the key), so
-> it has to ride the command or be exported:
+> Decided here and **not repeated in the three paths**. There is nowhere to "set" it: `CONTAINER_ENGINE`
+> must stay **commented** in `.env` — an uncommented value pins the engine and defeats any per-run
+> override (`.env.example` says so at the key) — so docker rides the environment:
 >
 > ```bash
-> export CONTAINER_ENGINE=docker     # keep it exported for the whole session
+> # ONLY for docker. For podman, the default, you set NOTHING and export NOTHING.
+> export CONTAINER_ENGINE=docker   # per SESSION. `make deps CONTAINER_ENGINE=docker` sets it for
+> make deps                        # ONE invocation only, so a later bare `make` reverts to podman.
 > ```
 >
-> Run a bare `make deps` instead and you get **podman** — and podman then wins on every later bare
-> `make`, because the engine is auto-detected and podman is preferred when both are present.
+> Then, **once Harbor exists**, `make trust-harbor`. Rootful docker costs **one sudo per registry** and
+> that cannot be engineered away; `make trust-harbor` prints the exact line. Unsure what your box has?
+> `make engine-check` is read-only and tells you the engine, the mode and what it will cost. The
+> measurements behind all of this — per engine, per OS — are in
+> [the container-engine decision](docs/decisions/container-engine-support.md).
 >
-> | your situation | what you run | sudo? |
-> |---|---|---|
-> | **Default (podman)** | nothing — `make deps` installs it | **never** |
-> | **You want docker** | `make deps CONTAINER_ENGINE=docker` (bootstrap) — then, **once Harbor exists**, `make trust-harbor` | **rootless: none** · **rootful: one per registry** (at `trust-harbor` time) |
-> | Not sure what your box has | `make engine-check` (read-only — tells you the engine, the mode, and what it will cost) | — |
-> | `make e2e-kind` (the KinD stand-in) | needs Docker **regardless** — kind's nodes *are* docker containers | — |
->
-> Rootful docker's sudo cannot be engineered away; `make trust-harbor` prints the exact line to run.
+> `make e2e-kind` needs Docker **regardless**: kind's nodes *are* docker containers.
 
 ## Reference
 

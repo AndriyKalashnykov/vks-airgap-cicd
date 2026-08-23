@@ -184,6 +184,17 @@ _ENVMK_ENV := $(call regen_overlay_mk,.env,secrets/.env.make)
 # a single quote (`bash -n` -> unexpected EOF) and silently ate a `$`. A command-line override still wins.
 export HARBOR_CA_SHA256
 export ARGOCD_CA_SHA256
+
+# BUILDER_IMAGE_TAG is `-include`d from .env like every other tunable, which makes it a MAKE
+# variable -- and make does NOT put make variables into a recipe's ENVIRONMENT. Three of the four
+# consumers of the local builder image (app-test.sh, trivy-fs.sh, check-ui-contract.sh) are
+# deliberately hermetic and do NOT call load_env, so without this line they read the shell
+# fallback and `.env` could never move them. MEASURED 2026-08-23: `.env` set to 9.9.9 ->
+# `make var: [9.9.9]` but `recipe env: [<UNSET-IN-ENV>]` -> resolved `...-builder:0.3.0`.
+# Consequence, which is why this is a one-line fix to a fail-open and not a tidy-up: bumping the
+# tag (CLAUDE.md tells you to, when an app's deps change) moved 14-builder-build.sh and the Tekton
+# render to the new tag while `make app-verify` went on certifying the OLD image -- and PASSED.
+export BUILDER_IMAGE_TAG
 endif
 
 # The KinD e2e is a stand-in for a brand-new operator / a CI runner — neither has a `.env`.
@@ -1037,6 +1048,31 @@ bootstrap-test: ## Validate bootstrap-jumpbox.sh from-nothing on BARE OS images 
 ##@ Demo applications (local dev) — every app in apps/registry.tsv, dispatched by language
 .PHONY: app-verify
 app-verify: app-test check-ui-contract trivy-fs ## Test EVERY app + assert they render an identical page + scan their built artefacts. RUN THIS LOCALLY BEFORE MERGING A PR — deliberately NOT in CI, because every one of these builds all six toolchains.
+
+.PHONY: builder-freshness
+builder-freshness: ## Report whether each app's builder image was built from THIS tree (read-only)
+	@# READ-ONLY. Surfaces what the four gates (app-test, check-ui-contract, trivy-fs, app-run) only
+	@# ever mention in passing as a WARN. A state nobody can ASK about is a state nobody acts on --
+	@# and the defect this exists for is invisible by construction: two builder images built 89
+	@# minutes apart from different trees carry the SAME tag (MEASURED 2026-08-23 on a real app), so
+	@# neither `podman images` nor the tag can tell an operator which one they are about to certify.
+	@# Exits 0 during the stamp's grace period; BUILDER_FRESHNESS_ENFORCE=1 makes a stale or
+	@# unstamped image fatal, here and in all four consumers, from the one switch.
+	@set -e; . $(SCRIPTS)/lib/os.sh >/dev/null 2>&1; . $(SCRIPTS)/lib/apps.sh; \
+	 stale=0; total=0; \
+	 for a in $$(app_names); do \
+	   app_has_builder "$$a" || continue; \
+	   total=$$((total + 1)); ref="$$(app_builder_local "$$a")"; \
+	   out="$$(builder_freshness_check "$$a" "$$ref" 2>&1 || true)"; \
+	   if [ -n "$$out" ]; then stale=$$((stale + 1)); \
+	     printf '  STALE   %-16s %s\n' "$$a" "$$ref"; \
+	     printf '%s\n' "$$out" | sed 's/^/            /' | head -2; \
+	   else printf '  fresh   %-16s %s\n' "$$a" "$$ref"; fi; \
+	 done; \
+	 printf 'builder-freshness: %s of %s builder image(s) are stale or unstamped\n' "$$stale" "$$total"; \
+	 if [ "$$stale" -gt 0 ] && [ "$${BUILDER_FRESHNESS_ENFORCE:-0}" = "1" ]; then exit 1; fi; \
+	 if [ "$$stale" -gt 0 ]; then \
+	   echo "  rebuild: 'make builder-image' (dual-homed) or 'make builder-build' (sneakernet internet box)"; fi
 
 .PHONY: app-test
 .PHONY: check-ui-contract

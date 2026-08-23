@@ -51,7 +51,8 @@ while read -r app; do
 # with a leading log line may still SCAN, reporting clean over a corrupted file.
 build_in_builder() {
   local app="$1" out="$2" cmd="$3" img eng
-  img="localhost/${app}-builder:${BUILDER_IMAGE_TAG:-0.3.0}"
+  img="$(app_builder_local "$app")"
+  builder_freshness_check "${app}" "${img}"
   eng="$(container_engine)"
   # `image inspect`, not `image exists` - the latter is podman-only (docker: rc=1 "unknown command").
   "$eng" image inspect "$img" >/dev/null 2>&1 \

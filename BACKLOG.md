@@ -1063,3 +1063,42 @@ call about a security gate, and a bigger saving is not by itself a reason to ove
 </details>
 
 </details>
+
+## B206 — `24-builder-probe.sh` runs `mvn -o -v` for ALL SIX apps; only java has mvn 🔴 open
+
+**Latent, not blocking.** MEASURED 2026-08-23: `scripts/24-builder-probe.sh:45-64` loops
+`for app in $_apps`, skips on `app_has_builder "$app" || continue`, then runs `mvn -o -v` inside the
+builder image. Since 2026-08-23 **all six** apps ship a `Dockerfile.builder`, so the loop now enters
+for go/node/python/rust/dotnet — whose builders contain no `mvn`. It will fail **5 of 6** the first
+time anyone runs it.
+
+Not on the critical path, which is why it is filed rather than fixed: `grep -c builder-probe
+docs/scenario-1.md docs/scenario-2.md` -> **0 / 0**, and it is **not** a prerequisite of
+`install-all`. So no walkthrough row and no `make install-all` reaches it.
+
+The fix is the same generalisation `check-image-alignment.sh` and `app-test.sh` already received:
+the probe's assertion must be **per-language**, derived from a hook (`app_lang`), not a hardcoded
+`mvn`. Its own comment explains *why* `mvn -o -v` is the right probe **for java** — offline, so a
+missing Maven Central cannot make it pass or fail spuriously. Each language needs its own equivalent
+(`go version`, `node -v`, `python -V`, `cargo -V`, `dotnet --version`), and the offline property must
+be preserved for each.
+
+Found by an `adversary-docker` idea-round on an unrelated question (the walkbox disk), which is the
+recurring pattern: the highest-value finding is usually about something already shipped, not about
+the thing under review.
+
+## B207 — MOVED to nested-vsphere-lab as B459 (the walkbox rootfs growth) ✅ closed
+
+Mis-filed here. The walkbox is `nested-vsphere-lab`'s: that repo's `scripts/walkbox-vm.sh` builds it,
+and CLAUDE.md's own rule already says walkbox defects are filed **there** and deliberately not
+tracked in this backlog, because the fixes edit files this repo does not contain and the two
+backlogs number `B<N>` independently.
+
+It is now **B459** in `nested-vsphere-lab/docs/BACKLOG-EVIDENCE.md` (that repo's index is GENERATED —
+`make backlog-index` is its drift gate; regenerated and re-checked green).
+
+Kept here as a pointer only, because the SYMPTOM lands in this repo and is thoroughly misleading: the
+walkbox runs out of disk building this repo's SIXTH builder image, and what you actually see is
+`missing secrets/gitea-ci-token — run 'make seed-gitea' first`, because `install-all` died before
+`platform → seed-gitea`. **If a walk reports that token error, run `df -h /` before touching Gitea.**
+The sizing that drives it is in [docs/sizing.md](docs/sizing.md).

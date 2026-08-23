@@ -31,7 +31,8 @@ log_info "running '${APP}' (lang=${_lang}) on http://localhost:${port}  [health:
 #   NO --network=none   a test proves the build is offline; a dev server must be reachable.
 # The source stays READ-ONLY and the work tree is a tmpfs, exactly as the test path, so a local
 # run still cannot leave root-owned files in the operator's tree.
-_img="localhost/${APP}-builder:${BUILDER_IMAGE_TAG:-0.3.0}"
+_img="$(app_builder_local "$APP")"
+builder_freshness_check "${APP}" "${_img}"
 _eng="$(container_engine)"
 # `image inspect`, not `image exists`: the latter is podman-only (docker -> rc=1 unknown command).
 "$_eng" image inspect "$_img" >/dev/null 2>&1 \
