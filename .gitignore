@@ -72,3 +72,20 @@ __pycache__/
 
 # make deps drops this when either half fails, so check-tools can say "deps failed earlier"
 .deps-failed
+
+# ---- per-app build artifacts (six apps, six toolchains) --------------------------------------
+# Each app dir IS its own Gitea repo, so anything a build produces there would travel to the
+# cluster as source. node_modules alone is 601 files: it was committed once, on 2026-08-22, and
+# removed in the same session.
+#
+# NOT ignored, deliberately: package-lock.json / Cargo.lock. Those are the LOCKFILES the offline
+# builders install from (`npm ci`, `cargo fetch --locked`), so they must be in the repo or the
+# air-gapped build is not reproducible.
+apps/*/*/node_modules/
+apps/*/*/target/
+apps/*/*/obj/
+apps/*/*/bin/
+apps/*/*/__pycache__/
+apps/*/*/.pytest_cache/
+apps/*/*/*.egg-info/
+
