@@ -516,7 +516,13 @@ Run a single app test: `cd apps/java/javawebapp && ./mvnw -B -Dtest=<ClassName>#
   on the internet side (bakes the full `~/.m2` via `mvn verify`) and pushes it to
   Harbor. The app `Dockerfile` (`BUILDER_IMAGE` + `MVN_OFFLINE=-o` args) and the
   Tekton `maven-test` task both consume it and build **offline**. Rebuild + bump
-  `BUILDER_IMAGE_TAG` when `apps/java/javawebapp/pom.xml` deps change.
+  the builder when an app's dependency manifest changes — for ANY of the six apps, not just
+  java. You no longer have to NOTICE: since 2026-08-23 `14-builder-build.sh` stamps
+  `io.vks.builder.inputs` (a hash of each app's Dockerfile.builder + its dependency manifests)
+  and the four offline gates compare it against the tree, so a stale builder announces itself.
+  `make builder-freshness` reports it on demand; `BUILDER_FRESHNESS_ENFORCE=1` makes it fatal.
+  Do NOT bump `BUILDER_IMAGE_TAG` for this — its default is single-sourced in `lib/apps.sh` and
+  it is the HARBOR ref that Tekton, `builders.tsv` and `22-builder-push.sh` all consume.
 - **KinD local e2e**: `kind/kind-config.yaml` enables containerd `config_path`;
   `05-kind-up.sh` runs cloud-provider-kind (LoadBalancer) and writes `KUBECONFIG` +
   `VKS_AUTH_METHOD=kubeconfig` (via `state_set`) to the **stamped state overlay `.env.state`**

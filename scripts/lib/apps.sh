@@ -167,11 +167,146 @@ app_set_message() {
 # The invariant the `case` could not express: an app that SHIPS a builder pushes to its OWN
 # <app>-builder ref; an app that does not never had anything to push. Deriving from the same
 # predicate that enrols the app makes those two facts one fact, so they cannot disagree again.
+# BUILDER_IMAGE_TAG_DEFAULT — the ONE place the local builder tag's default lives.
+#
+# It was re-typed as `${BUILDER_IMAGE_TAG:-0.3.0}` in FOUR consumers (app-test, trivy-fs,
+# check-ui-contract, app-run). That is not merely duplication: three of those four do NOT call
+# load_env, and `make` does not export `-include`d variables to recipes (no .EXPORT_ALL_VARIABLES;
+# the only exports are PATH, HARBOR_CA_SHA256, ARGOCD_CA_SHA256). MEASURED 2026-08-23 with a probe
+# makefile against the repo's own env file:
+#
+#     make var:   [9.9.9]              <- the -include'd value IS a make variable
+#     recipe env: [<UNSET-IN-ENV>]     <- and is NOT in the recipe environment
+#     resolved:   localhost/gowebapp-builder:0.3.0
+#
+# So `.env` could never move it for those three, while 14-builder-build.sh and 60-configure-tekton.sh
+# (which DO call load_env) honoured it. Following CLAUDE.md's own instruction to bump the tag when an
+# app's deps change therefore SPLIT the repo: the builder and the Tekton pipeline moved to the new
+# tag while `make app-verify` -- the pre-merge gate -- kept certifying the OLD image, and PASSED.
+# A fail-open armed by the documented remediation. The Makefile now `export`s the variable so the
+# lever works; this constant makes the fallback single-valued so the two cannot drift apart again.
+BUILDER_IMAGE_TAG_DEFAULT="0.3.0"
+
+# ---- builder freshness: the INPUTS hash -------------------------------------------------------
+#
+# THE DEFECT THIS EXISTS FOR (measured 2026-08-23, live, on this box):
+#   bundle/builders/rustwebapp-builder.tar   config ebbbdf76…  created 16:04:30Z  9 layers
+#   localhost/rustwebapp-builder:0.3.0       config 88371d02…  created 17:33:47Z  8 layers
+# TWO DIFFERENT IMAGES, 89 minutes apart, ONE TAG -- one is what `make builder-push` ships to Harbor
+# for Tekton, the other is what `make app-verify` certifies. The tag cannot tell them apart, so the
+# certifying artefact and the shipping artefact are simply not the same thing and nothing says so.
+#
+# Renovate does NOT close this. MEASURED: PR #956 (rust 1.98) moved FOUR files in ONE PR -- the
+# Dockerfile, the Dockerfile.builder, images/images.txt and this file -- because packageRule
+# "Docker images" groups matchDatasources:["docker"] across every manager. So the RECIPE is tracked
+# and gated (check-image-alignment now asserts all six ARGs, not the one it used to). But NOTHING
+# rebuilds the ARTEFACT: zero CI workflows and zero gates reference builder-build/builder-image;
+# only `make builder-image`/`builder-build` do, and `install-all` calls the former -- which is why a
+# fresh walkbox is safe by construction and a dev box is not.
+#
+# WHY A HASH AND NOT A TAG. A tagging scheme (derive the tag from the inputs, or from the base
+# digest) was the obvious fix and was REFUTED: the two divergent images above share an IDENTICAL
+# base digest (both rust:1.98-alpine @ sha256:3ffeca71…), so a base-digest tag reports MATCH on the
+# exact defect that motivated it; and BUILDER_IMAGE_TAG is the HARBOR ref that 22-builder-push.sh,
+# 60-configure-tekton.sh, 24-builder-probe.sh and builders.tsv all consume, so rewriting it changes
+# the air-gap contract for a check that does not check the right thing. A LABEL touches none of it.
+#
+# WHY ONE SHARED LIST AND NOT A PER-LANGUAGE `case`. lib/apps.sh is actively DELETING per-language
+# case lists (app_toolchain() was emptied 2026-08-23) and its own comment laments that "FIVE sibling
+# case lists still die for an unknown language". A `find`-style match over one filename list adds no
+# per-language branch; the MANIFEST_GUARD below converts list-rot into a loud failure at enrolment,
+# the same trick app_has_builder() uses by being a file test rather than a language branch.
+BUILDER_INPUT_MANIFESTS="pom.xml go.mod go.sum package.json package-lock.json Cargo.toml Cargo.lock requirements.txt pyproject.toml packages.lock.json"
+
+# builder_inputs_hash <app> — a stable digest of everything that decides what goes INTO the builder.
+#
+# SCOPE, stated so the label is not over-read: this covers the RECIPE (the Dockerfile.builder and the
+# dependency manifests). It does NOT cover the base image's own DIGEST -- all six bases are FLOATING
+# tags (rust:1.98-alpine, node:24-alpine, …) re-resolved into the gitignored bundle/images.lock, so a
+# rebuilt upstream alpine changes NO tree file and this hash says "fresh" over a builder built on the
+# old base OS. That axis is carried by the SEPARATE io.vks.builder.base label, which can only be
+# compared where images.lock exists. Both are stamped; only one is checkable on a fresh box.
+builder_inputs_hash() {
+  local app="${1:?app name required}" src f n=0 listing=""
+  src="$(app_src "$app")"
+  for f in Dockerfile.builder $BUILDER_INPUT_MANIFESTS; do
+    [ -f "${src}/${f}" ] || continue
+    case "$f" in Dockerfile.builder) : ;; *) n=$((n + 1)) ;; esac
+    listing="${listing}${f} $(sha256sum "${src}/${f}" | cut -d' ' -f1)
+"
+  done
+  # *.csproj is a WILDCARD name, so it cannot sit in a fixed list; enumerated separately, not cased.
+  for f in "${src}"/*.csproj; do
+    [ -f "$f" ] || continue
+    n=$((n + 1))
+    listing="${listing}$(basename "$f") $(sha256sum "$f" | cut -d' ' -f1)
+"
+  done
+  # MANIFEST_GUARD. Zero manifests means this app's dependency file is not in the list above -- the
+  # list has rotted for a newly enrolled language. Failing LOUDLY here is the whole reason a shared
+  # list is acceptable in place of a per-language case: rot becomes a die at enrolment, not a hash
+  # that silently describes only the Dockerfile and therefore never changes when deps do.
+  [ "$n" -ge 1 ] || die "builder_inputs_hash($app): no dependency manifest matched under ${src}. Add its filename to BUILDER_INPUT_MANIFESTS in lib/apps.sh — without it this hash would be blind to every dependency change."
+  printf '%s' "$listing" | LC_ALL=C sort | sha256sum | cut -d' ' -f1
+}
+
+# builder_freshness_check <app> <image-ref> — is that image built from THIS tree?
+#
+# GRACE PERIOD, DELIBERATE, AND DATED. Default is WARN. On the day the stamp lands, NO builder image
+# on ANY box carries the label, so a hard check would fail all four consumers at once and demand six
+# full rebuilds (rustwebapp alone is 1.57 GB of `cargo fetch` + `cargo build --release`, over the
+# network) plus a mirror-pull for images.lock on a dual-homed box. That is exactly the shape that
+# gets an escape hatch exported and never removed. WARN lets the rebuild happen naturally via the
+# normal `make builder-image`; flip with BUILDER_FRESHNESS_ENFORCE=1 once the fleet has rebuilt.
+#
+# FAIL-CLOSED ON A MISSING LABEL, which is the arm most likely to ship broken. `image inspect` of an
+# absent label yields an EMPTY string, so the naive `[ "$got" = "$want" ]` compares "" with a real
+# hash -- that happens to be safe here, but the INVERSE (both sides empty, e.g. if the recompute also
+# failed) would PASS. So emptiness is tested EXPLICITLY and treated as UNKNOWN/STALE, never as a
+# match. An unlabelled image is "I cannot tell", which is not the same claim as "it is fresh".
+builder_freshness_check() {
+  local app="${1:?}" ref="${2:?}" want got eng
+  eng="$(container_engine)"
+  want="$(builder_inputs_hash "$app")"
+  [ -n "$want" ] || die "builder_freshness_check($app): could not compute the inputs hash"
+  got="$("$eng" image inspect --format '{{index .Config.Labels "io.vks.builder.inputs"}}' "$ref" 2>/dev/null || true)"
+  case "$got" in ''|'<no value>') got="" ;; esac
+
+  if [ -z "$got" ]; then
+    _builder_freshness_verdict "$app" "$ref" \
+      "carries no io.vks.builder.inputs label, so its provenance is UNKNOWN — it predates the stamp. Rebuild with 'make builder-image' (dual-homed) or 'make builder-build' (sneakernet internet box)."
+  elif [ "$got" != "$want" ]; then
+    _builder_freshness_verdict "$app" "$ref" \
+      "was built from a DIFFERENT tree (image=${got:0:12} tree=${want:0:12}). A dependency manifest or its Dockerfile.builder has changed since. Rebuild it."
+  fi
+}
+
+_builder_freshness_verdict() {
+  local app="$1" ref="$2" why="$3"
+  if [ "${BUILDER_FRESHNESS_ENFORCE:-0}" = "1" ]; then
+    die "[${app}] ${ref} ${why}"
+  fi
+  log_warn "[${app}] ${ref} ${why}"
+  log_warn "[${app}]   (WARN during the stamp's grace period; BUILDER_FRESHNESS_ENFORCE=1 makes this fatal)"
+}
+
+# app_builder_local <app> — the LOCAL builder ref: the image the offline gates run in.
+#
+# LOCAL-FIRST, deliberately. app_builder_image() hard-requires HARBOR_URL:? and HARBOR_INFRA_PROJECT:?,
+# so resolving through it would make `make app-test` -- a hermetic, offline, no-cluster gate -- depend
+# on a registry, a CA and a live credential. It would then fail on any box whose Harbor credential has
+# expired, which is the normal state after a lab re-cut. That hermeticity is why these consumers do not
+# call load_env, and why the fix for the disconnect above is `export` + this constant rather than
+# load_env: adding load_env would drag HARBOR_URL back into an offline gate.
+app_builder_local() {
+  printf 'localhost/%s-builder:%s' "${1:?app name required}" "${BUILDER_IMAGE_TAG:-$BUILDER_IMAGE_TAG_DEFAULT}"
+}
+
 app_builder_image() {
   local name="$1"
   if app_has_builder "$name"; then
     # Its own ref, namespaced by app. Never collides with a mirrored upstream repo.
-    printf '%s/%s/%s-builder:%s' "${HARBOR_URL:?}" "${HARBOR_INFRA_PROJECT:?}" "$name" "${BUILDER_IMAGE_TAG:?}"
+    printf '%s/%s/%s-builder:%s' "${HARBOR_URL:?}" "${HARBOR_INFRA_PROJECT:?}" "$name" "${BUILDER_IMAGE_TAG:-$BUILDER_IMAGE_TAG_DEFAULT}"
   else
     # No builder: the app builds FROM the mirrored upstream base directly. mirror_target_ref is the
     # ONE mapping the mirror itself uses (lib/mirror.sh), so this cannot drift from where the image
@@ -346,6 +481,37 @@ app_builder_base() {
 # app_builder_arg <name> -- the --build-arg NAME the app's Dockerfile.builder actually declares.
 # 14-builder-build.sh VERIFIES the Dockerfile declares it before building, so a mismatch is a loud
 # die instead of the silent unpinned base described above.
+# app_builder_probe <name> -- the OFFLINE command that proves this app's builder image can RUN.
+#
+# 24-builder-probe.sh used to hardcode `mvn -o -v` for EVERY app with a builder. That was correct
+# while javawebapp was the only one; since 2026-08-23 all six ship a Dockerfile.builder, and the
+# go/node/python/rust/dotnet builders contain no `mvn` -- so the probe would have failed 5 of 6 the
+# first time anyone ran it. It is latent rather than live only because `builder-probe` is in no
+# scenario document and is not a prerequisite of install-all.
+#
+# THE OFFLINE PROPERTY IS THE POINT, and it is why this is a hook rather than a `$(app_lang)` guess
+# at the interpreter name. The probe must not be able to pass or fail for a NETWORK reason: maven
+# needs an explicit `-o` or a missing Maven Central turns a config-blob failure into a download
+# failure (and vice versa). The other five version commands read only local state and are offline by
+# construction -- `dotnet --version` reads the SDK on disk, `cargo -V` the toolchain, and so on.
+# Each also exercises the image's PATH/entrypoint/user without needing a project, which is the whole
+# signal: a mangled config blob shows up here as "executable file not found", which no blob checksum
+# can produce.
+#
+# `die` on an unknown language, like its two siblings: enrolling a seventh language must fail LOUDLY
+# here rather than silently skip the probe for it.
+app_builder_probe() {
+  case "$(app_lang "$1")" in
+    java)   printf 'mvn -o -v' ;;
+    go)     printf 'go version' ;;
+    nodejs) printf 'node -v' ;;
+    python) printf 'python -V' ;;
+    rust)   printf 'cargo -V' ;;
+    dotnet) printf 'dotnet --version' ;;
+    *)      die "app '$1' ships a Dockerfile.builder but app_builder_probe() has no branch for lang '$(app_lang "$1")' — add one naming an OFFLINE command that proves its builder runs." ;;
+  esac
+}
+
 app_builder_arg() {
   case "$(app_lang "$1")" in
     java) printf 'MAVEN_IMAGE' ;;

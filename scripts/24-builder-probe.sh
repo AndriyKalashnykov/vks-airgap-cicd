@@ -53,17 +53,31 @@ for app in $_apps; do
   pod="builder-probe-$(printf '%s' "$app" | tr -c 'a-z0-9' '-' | cut -c1-40)"
   log_info "[${app}] probing the CARRIED builder is runnable: ${ref}"
 
-  # `mvn -o -v` is deliberate: -o (offline) so a missing Maven Central cannot make this pass or fail
-  # for the wrong reason, and -v because it exercises the JVM + the image's PATH/entrypoint without
-  # needing a project. A mangled config blob fails here with "executable file not found" / no such
-  # command, which is exactly the signal the blob checks cannot produce.
+  # The probe command is PER LANGUAGE, from app_builder_probe() in lib/apps.sh -- it was a hardcoded
+  # `mvn -o -v` until 2026-08-23, which was right while java was the only app with a builder and
+  # would have failed 5 of the 6 that ship one today. The hook keeps the property that made `mvn -o`
+  # the right choice: the command must be OFFLINE, so a missing package registry cannot make this
+  # pass or fail for the wrong reason, and it must exercise the image's PATH/entrypoint without
+  # needing a project. A mangled config blob then fails here with "executable file not found", which
+  # is exactly the signal the blob checks cannot produce.
+  #
+  # Capture into a VARIABLE first: app_builder_probe() dies on an unknown language, and a `die`
+  # inside $( ) in ARGUMENT position does not trip the caller's set -e -- it would just pass an empty
+  # command and turn a loud enrolment failure into a silent one.
+  probe_cmd="$(app_builder_probe "$app")"
+  # An ARRAY, not an unquoted expansion. The probe is a COMMAND LINE ("mvn -o -v", "dotnet
+  # --version") that must reach kubectl as SEPARATE argv entries, so it has to split -- but an
+  # unquoted $probe_cmd asks shellcheck to trust a split it cannot verify (SC2086) and would also
+  # glob if a probe ever contained * or ?. read -r -a splits on IFS once, explicitly, and every use
+  # after it is quoted.
+  read -r -a probe_argv <<< "$probe_cmd"
   kubectl -n "$NS" delete pod "$pod" --ignore-not-found >/dev/null 2>&1 || true
   if kubectl -n "$NS" run "$pod" \
         --image="$ref" --restart=Never --attach --rm \
         --pod-running-timeout="$TIMEOUT" \
-        --command -- mvn -o -v > "${TMPDIR:-/tmp}/probe-${app}.log" 2>&1; then
-    log_info "[${app}] OK — the carried image started and its Maven ran:"
-    grep -m1 -E '^Apache Maven' "${TMPDIR:-/tmp}/probe-${app}.log" | sed 's/^/      /' || true
+        --command -- "${probe_argv[@]}" > "${TMPDIR:-/tmp}/probe-${app}.log" 2>&1; then
+    log_info "[${app}] OK — the carried image started and \`${probe_cmd}\` ran:"
+    head -1 "${TMPDIR:-/tmp}/probe-${app}.log" | sed 's/^/      /' || true
     probed=$((probed + 1))
   else
     log_error "[${app}] the CARRIED builder ${ref} did NOT run. Blob integrity is not the question —"

@@ -209,7 +209,11 @@ check_pinned "istio/proxyv2 (images.txt)" "$proxyv2_itag" "$istio_itag"
 # it (depName=maven) via images.txt only, and check-java-alignment aligns just the JDK MAJOR — so a
 # maven `3.9 -> 3.10` bump would drift the consumers silently. Assert the full tag across all four.
 # `|| true`: standalone `set -e` assignments — a head-1 SIGPIPE / no-match must not abort here.
-mvn_itag="$(grep -oE '^maven:[^[:space:]"]+' images/images.txt | head -1 | sed 's|maven:||' || true)"
+# mvn_itag REMOVED 2026-08-23. Its only consumer was the hardcoded `MAVEN_IMAGE` arm below, which
+# checked ONE app's Dockerfile.builder ARG (measured denominator: 1 of 6). That arm now loops every
+# builder app and derives BOTH sides from the hooks -- app_builder_arg() for the ARG name and
+# app_builder_base() for the expected <repo>:<tag> -- so a per-language literal here is exactly the
+# enumerated-list rot the loop was written to remove.
 # The builder Dockerfile belongs to whichever app SHIPS one (see app_has_builder) — found via the
 # registry, never by hardcoding which app is the Java one.
 # `if…fi`, NOT `app_has_builder "$a" && { …; }`: as a loop-body TAIL that `A && B` returns non-zero
@@ -217,12 +221,35 @@ mvn_itag="$(grep -oE '^maven:[^[:space:]"]+' images/images.txt | head -1 | sed '
 # and `set -euo pipefail` kills the script HERE — making the `if [ -n "$builder_app" ]` guard on the
 # next line unreachable dead code. Measured 2026-07-19 with the registry emptied: rc=1, output
 # truncated mid-run, ZERO bytes of stderr. The twin of check-java-alignment.sh's line 40.
-builder_app="$(app_names | while read -r a; do if app_has_builder "$a"; then printf '%s' "$a"; break; fi; done)"
-if [ -n "$builder_app" ]; then
-  builder_df="$(app_src "$builder_app")/Dockerfile.builder"
-  check_pinned "MAVEN_IMAGE (${builder_df})" \
-    "$(grep -oE 'MAVEN_IMAGE=maven:[^[:space:]"]+' "$builder_df" | head -1 | sed 's|MAVEN_IMAGE=maven:||' || true)" "$mvn_itag"
-fi
+# GENERALISED 2026-08-23. This was a grep for ONE HARDCODED ARG NAME (`MAVEN_IMAGE`) against the
+# FIRST app that ships a builder -- so its measured denominator was 1 of 6. GO_IMAGE, NODE_IMAGE,
+# PYTHON_IMAGE, RUST_IMAGE and DOTNET_SDK_IMAGE were held aligned ONLY by Renovate's docker manager
+# noticing the `ARG X=image:tag` line. That does work (MEASURED: PR #956 moved all four rust copies
+# in one PR, because packageRule "Docker images" groups matchDatasources:["docker"] across ALL
+# managers) -- but it is a BOT, not a GATE: nothing in-tree would have gone red if a hand-edit moved
+# images/images.txt and left an ARG behind, which is precisely the drift this file exists to catch.
+#
+# It is the same generalisation the _builder_apps loop below already received, and the comment under
+# that loop even explains why ("a grep for one hardcoded NAME could only ever check ONE"). The arm
+# above it simply never got it. Both hooks it needs already existed: app_builder_arg() names the ARG
+# the app's Dockerfile.builder declares, app_builder_base() gives the expected <repo>:<tag>, and
+# BOTH die on an unknown language -- so enrolling a new language cannot silently skip this check.
+#
+# Compares the FULL <repo>:<tag>, not just the tag: a bare-tag comparison cannot see an ARG that
+# points at the right VERSION of the WRONG IMAGE. check_pinned flags an empty actual as
+# `<absent>` + drift=1, so a grep that matches nothing is a RED, not a vacuous pass.
+for _bapp in $(app_names); do
+  app_has_builder "$_bapp" || continue
+  _bdf="$(app_src "$_bapp")/Dockerfile.builder"
+  _barg="$(app_builder_arg "$_bapp")"
+  # ASSIGNMENT, not argument position: a `die` inside $( ) in an ARGUMENT does NOT trip the
+  # caller's set -e, and check_pinned returns 0 on an empty expected -> a VACUOUS "ok" for an
+  # app whose language was added to app_builder_arg() but not app_builder_base().
+  _bbase="$(app_builder_base "$_bapp")"
+  check_pinned "${_barg} (${_bdf})" \
+    "$(grep -oE "^ARG[[:space:]]+${_barg}=[^[:space:]\"]+" "$_bdf" | head -1 | sed "s|^ARG[[:space:]]*${_barg}=||" || true)" \
+    "$_bbase"
+done
 # The builder base ref MOVED on 2026-08-22. It was `MAVEN_SRC=` in 14-builder-build.sh, resolved ONCE
 # above the loop -- so it could not vary per app, and a node builder would have been handed
 # MAVEN_IMAGE and silently built on an UNPINNED base (measured: podman warns, exits 0). It now lives

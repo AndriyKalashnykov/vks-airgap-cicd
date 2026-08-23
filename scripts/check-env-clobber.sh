@@ -164,8 +164,17 @@ for v in "${UNCOMMENTED[@]}"; do
     fi
   fi
 
-  # (a) DYNAMIC fallback in any script: ${VAR:-$(...)} or ${VAR:-${OTHER}}
-  dyn="$(grep -rlE "\\\$\{${v}:-\\\$[({]" "${REPO_ROOT}/scripts" 2>/dev/null | xargs -r -n1 basename | tr '\n' ' ')"
+  # (a) DYNAMIC fallback in any script: ${VAR:-$(...)}, ${VAR:-${OTHER}} or ${VAR:-$BARE}
+  #
+  # WIDENED 2026-08-23 to accept a BARE `$NAME` after `:-`. The class was `[({]` only, so the
+  # spelling `${VAR:-$OTHER_VAR}` -- no brace, no paren -- was INVISIBLE. That is not theoretical:
+  # it is the spelling I reached for first when single-sourcing BUILDER_IMAGE_TAG's default, and
+  # this gate returned "OK -- none of the 55 uncommented values shadows a dynamic fallback" while
+  # BUILDER_IMAGE_TAG sat UNCOMMENTED in .env.example with exactly such a fallback. Written braced,
+  # the gate would have gone RED immediately and prescribed the correct remedy (comment it out).
+  # A gate blind to the most natural spelling of the defect it hunts is a gate that passes by not
+  # looking -- and it had already let one live instance through.
+  dyn="$(grep -rlE "\\\$\{${v}:-\\\$[({A-Za-z_]" "${REPO_ROOT}/scripts" 2>/dev/null | xargs -r -n1 basename | tr '\n' ' ')"
   if [ -n "$dyn" ]; then
     log_error "CLOBBER: '${v}' is UNCOMMENTED in .env.example, but the code reads it with a DYNAMIC fallback"
     log_error "    in: ${dyn}"

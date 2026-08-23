@@ -102,7 +102,8 @@ for app in "${names[@]}"; do
   #
   # The rendered page comes back on STDOUT rather than through a writable mount -- that is what keeps
   # the bind mount read-only. A missing -v cannot pass: `cp -a /src/.` fails.
-  _img="localhost/${app}-builder:${BUILDER_IMAGE_TAG:-0.3.0}"
+  _img="$(app_builder_local "$app")"
+  builder_freshness_check "${app}" "${_img}"
   _eng="$(container_engine)"
   "$_eng" image exists "$_img" 2>/dev/null \
     || die "check-ui-contract: builder image ${_img} not present for '${app}' — run 'make builder-image'"
