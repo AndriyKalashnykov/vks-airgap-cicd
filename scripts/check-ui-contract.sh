@@ -90,7 +90,26 @@ for app in "${names[@]}"; do
   # "OK -- all 2 app(s) render an identical page (webapp webapp)", rc=0, with the two different
   # byte counts printed in its own log and ignored.
   f="$T/${app}.html"
-  "${REPO}/$(app_src "$app")/ui-contract.sh" "$f" || die "check-ui-contract: producer failed for '${app}'"
+  # RUN THE PRODUCER IN THE APP'S BUILDER IMAGE, not on the host. These producers were the LAST
+  # consumers of the host java/go/rust/dotnet/node toolchains: each shells out to `go test`,
+  # `cargo test`, `dotnet run` or `./mvnw`, so as long as they ran here, .mise.toml had to pin all
+  # six regardless of what app-test did.
+  #
+  # Same shape as scripts/app-test.sh run_in_builder, and for the same measured reasons: source is
+  # READ-ONLY (nothing can land root-owned in the operator's tree), the work tree is a tmpfs
+  # (cargo/maven/node HARD-FAIL on a read-only source), --network=none proves the builders really
+  # are self-contained, and --pull=never stops a stale tag silently fetching from a registry.
+  #
+  # The rendered page comes back on STDOUT rather than through a writable mount -- that is what keeps
+  # the bind mount read-only. A missing -v cannot pass: `cp -a /src/.` fails.
+  _img="localhost/${app}-builder:${BUILDER_IMAGE_TAG:-0.3.0}"
+  _eng="$(container_engine)"
+  "$_eng" image exists "$_img" 2>/dev/null \
+    || die "check-ui-contract: builder image ${_img} not present for '${app}' — run 'make builder-image'"
+  "$_eng" run --rm --network=none --pull=never \
+      -v "${REPO}/$(app_src "$app"):/src:ro" --tmpfs "/work:exec,size=${BUILDER_TMPFS_SIZE:-2g}" -w /work \
+      "$_img" sh -c 'cp -a /src/. /work/ && cp -a /build/node_modules /work/ 2>/dev/null; ./ui-contract.sh /work/.ui-out >/dev/null 2>&1 && cat /work/.ui-out' \
+      > "$f" || die "check-ui-contract: producer failed for '${app}'"
   [ -s "$f" ] || die "check-ui-contract: '${app}' producer exited 0 but wrote NOTHING to its output file."
   norm "$f" > "$T/${app}.norm"
   [ -s "$T/${app}.norm" ] || die "check-ui-contract: '${app}' rendered only blank lines — that is not a page."

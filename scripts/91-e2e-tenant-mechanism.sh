@@ -32,6 +32,14 @@ load_env
 . "${SCRIPT_DIR}/lib/apps.sh"
 # shellcheck source=scripts/lib/argocd.sh
 . "${SCRIPT_DIR}/lib/argocd.sh"   # gitea_clone_url — the same one 70-configure-argocd.sh uses
+# shellcheck source=scripts/lib/tls.sh
+. "${SCRIPT_DIR}/lib/tls.sh"      # require_kind_target — WITHOUT this, line 47 dies rc=127.
+                                  # MEASURED 2026-08-23: after this file's own source chain,
+                                  # `type -t require_kind_target` -> NOT DEFINED, so
+                                  # `make e2e-kind-tenant` was dead on arrival. check-lib-sourcing
+                                  # could not see it: it scans RAW TEXT for lib/*.sh, and os.sh's
+                                  # COMMENTS name six libs it never sources, crediting all 216
+                                  # scripts that source os.sh with all of them.
 
 # ⚠️ REFUSE A NON-KinD TARGET, BEFORE ANYTHING IS TOUCHED. Same guard 06-install-harbor.sh and
 # 07-install-argocd.sh already use — this script needed it just as badly and did not have it.
