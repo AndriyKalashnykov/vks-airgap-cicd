@@ -5,10 +5,16 @@ metadata:
   namespace: ${CI_NAMESPACE}
 spec:
   description: >-
-    Run the Go app's tests OFFLINE. No pre-baked dependency cache is needed (and no builder image
-    exists for Go): the app is stdlib-only by design, so `go test` fetches nothing. GOFLAGS=-mod=mod
-    with GOPROXY=off makes that explicit — if a dependency is ever added, this task FAILS loudly in
-    the air gap instead of silently trying to reach a module proxy.
+    Run the Go app's tests OFFLINE, on the app's own builder image, whose baked /go/pkg/mod is what
+    makes that possible. GOPROXY=off is the air gap made explicit: there is no module proxy to
+    reach, so a missing module FAILS loudly here rather than hanging on a dial timeout.
+
+    ⚠️ This description used to say the app was "stdlib-only by design" and that "no builder image
+    exists for Go". BOTH became false on 2026-08-22, when gowebapp gained chi — and this task's
+    correctness now DEPENDS on the builder image it is handed. MEASURED, both arms:
+    warm /go/pkg/mod + GOPROXY=off -> ok; EMPTY module cache + GOPROXY=off -> "module lookup
+    disabled by GOPROXY=off", FAIL. So if this task is ever pointed at a bare golang image instead
+    of the app's builder, it fails in the air gap and nowhere else.
   params:
     - name: subdir
       type: string
