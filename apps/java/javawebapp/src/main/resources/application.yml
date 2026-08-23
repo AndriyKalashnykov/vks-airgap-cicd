@@ -28,8 +28,24 @@ info:
 management:
   endpoints:
     web:
+      # /healthz, not /actuator/health -- 5 of the 6 demo apps already serve /healthz, so this
+      # brings the one deviant into a convention that already holds; app_health_path() is then a
+      # constant and can never rot. Actuator still does the REAL health check (components, groups):
+      # this is a path mapping, not a hardcoded 200.
+      #
+      # ⚠️ MEASURED against Spring Boot 4.1.1, BOTH directions:
+      #   path-mapping.health=healthz -> /healthz 200, /healthz/liveness 200, / 200 (index), /nope 404
+      #   path-mapping.health=/       -> IllegalStateException at startup, context refresh FAILS
+      # The guard (WebEndpointAutoConfiguration.assertHasNoRootPaths) keys on an ENDPOINT mapped to
+      # '/', not on base-path being '/', so this config cannot trip it. Re-verify on a Boot major.
+      base-path: /
+      path-mapping:
+        health: healthz
       exposure:
-        include: health,info
+        # `info` is DELIBERATELY absent: with base-path '/' it would be served at the root as
+        # /info (measured: 200 {}), a new public route nothing consumes, and it would silently
+        # shadow any future @GetMapping("/info").
+        include: health
   endpoint:
     health:
       probes:

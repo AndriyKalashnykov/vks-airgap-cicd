@@ -73,6 +73,6 @@ EXPOSE ${APP_INTERNAL_PORT}
 # intervening comment silently detaches it (measured: the finding came straight back).
 # hadolint ignore=DL3025
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
-    CMD curl -sf "http://127.0.0.1:${APP_INTERNAL_PORT}/actuator/health/liveness" || exit 1
+    CMD curl -sf "http://127.0.0.1:${APP_INTERNAL_PORT}/healthz/liveness" || exit 1
 
 ENTRYPOINT ["sh", "-c", "java -jar /app/app.jar --server.port=${APP_INTERNAL_PORT}"]

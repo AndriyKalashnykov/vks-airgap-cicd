@@ -60,14 +60,14 @@ spec:
             - name: APP_INTERNAL_PORT
               value: "8080"
           startupProbe:
-            httpGet: { path: /actuator/health/readiness, port: http }
+            httpGet: { path: /healthz/readiness, port: http }
             failureThreshold: 30
             periodSeconds: 2
           livenessProbe:
-            httpGet: { path: /actuator/health/liveness, port: http }
+            httpGet: { path: /healthz/liveness, port: http }
             periodSeconds: 10
           readinessProbe:
-            httpGet: { path: /actuator/health/readiness, port: http }
+            httpGet: { path: /healthz/readiness, port: http }
             periodSeconds: 5
           resources:
             requests: { cpu: "100m", memory: "256Mi" }

@@ -145,11 +145,20 @@ app_runtime_image() {
 # `make verify` waits for the app to serve HTTP before asserting the marker. Spring Boot exposes
 # actuator; the Go app exposes a plain /healthz (no actuator exists outside Spring).
 app_health_path() {
-  case "$(app_lang "$1")" in
-    java) printf '/actuator/health' ;;
-    go)   printf '/healthz' ;;
-    *)    die "app '$1': add a branch to app_health_path()" ;;
-  esac
+  # ZERO branches, permanently. Every app serves /healthz -- 5 of 6 already did; the Java app
+  # reaches it through actuator path-mapping (see its application.yml), so it is a REAL health
+  # check, not a hardcoded 200. The `$1` is accepted and ignored so every caller stays unchanged.
+  #
+  # This was a `case` that died for any unknown language. MEASURED 2026-08-22: enrolling a third
+  # app made `make creds` print FATAL, render the row anyway with a BLANK health field, and exit 0
+  # -- because a `die` inside `$( )` in ARGUMENT position does not trip the caller's `set -e`.
+  #
+  # ⚠️ NOT a claim that the per-language rot is closed. FIVE sibling `case` lists still die for an
+  # unknown language (app_test_task, app_set_message, app_runtime_image, app_toolchain,
+  # app_build_args) and most are irreducibly per-language: Go and Java cannot share a runtime
+  # image or a toolchain. The health path was the one branch that was a CONVENTION we own.
+  : "${1:?app_health_path: an app name is required}"
+  printf '/healthz'
 }
 
 # --- per-LANGUAGE behaviour #5: the toolchain the app needs to BE TESTED ------------------------
