@@ -80,6 +80,17 @@
       "matchStrings": [
         "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)(?: extractVersion=(?<extractVersion>[^\\s]+))?\\n[A-Z_]+=\"\\$\\{[A-Z_]+:-(?<currentValue>[^\\s\"}]+)\\}\""
       ]
+    },
+    {
+      "description": "app_builder_base() in scripts/lib/apps.sh \u2014 the builder BASE image, one branch per language. It is a SECOND copy of a tag that also lives in images/images.txt: the mirror needs the inventory line, and 14-builder-build.sh needs this branch to know WHICH inventory key to look the digest up by. check-image-alignment executes this hook and compares the two, so a split bump is a hard RED \u2014 but a RED nobody can fix without a hand-edit is a stall, so track it here and let them bump together. Deriving it from images.txt instead would make that alignment arm compare a value to itself, i.e. vacuous.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^scripts/lib/apps\\.sh$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)\\n\\s*[a-z]+\\)\\s*printf '[^:']+:(?<currentValue>[^']+)'"
+      ],
+      "versioningTemplate": "docker"
     }
   ],
   "vulnerabilityAlerts": {

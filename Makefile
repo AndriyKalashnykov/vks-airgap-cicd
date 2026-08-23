@@ -1037,7 +1037,7 @@ bootstrap-test: ## Validate bootstrap-jumpbox.sh from-nothing on BARE OS images 
 ##@ Demo applications (local dev) — every app in apps/registry.tsv, dispatched by language
 .PHONY: app-test
 .PHONY: check-ui-contract
-check-ui-contract: ## Every app must render the SAME page (owner req: identical look and feel). Renders each app and diffs; ~2 min (it runs the java + go test suites)
+check-ui-contract: ## Every app must render the SAME page (owner requirement: identical look and feel). Renders each app through its REAL handler and diffs; MEASURED 2.9s (one test class per app, and it runs after app-test so both toolchains are warm)
 	@$(SCRIPTS)/check-ui-contract.sh
 
 app-test: ## Test EVERY app (mvn test / go test). One app: APP=gowebapp
@@ -1202,7 +1202,7 @@ TEST_FAST    := $(filter-out $(TEST_SLOW),$(TEST_OFFLINE))
 # miss same-day CVEs — so per-PR trivy means a cold DB download every run), and test-scripts' slow
 # tier (6 targets that assert wall-clock BY DESIGN = 136s of 154s). Both stay on the weekly run.
 .PHONY: static-check-pr
-static-check-pr: lint validate app-test test-scripts-fast ## The per-PR half of static-check (no trivy, no wall-clock tests)
+static-check-pr: lint validate app-test check-ui-contract test-scripts-fast ## The per-PR half of static-check (no trivy, no wall-clock tests)
 	@echo "static-check-pr: OK"
 
 .PHONY: check-help-row-ids

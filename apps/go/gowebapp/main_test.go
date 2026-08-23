@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -94,11 +93,27 @@ func TestUIContractRender(t *testing.T) {
 	// FIXED inputs, shared verbatim by every app's producer. They are masked by the gate, so their
 	// VALUES do not matter -- but they must be the same everywhere so the masking is uniform.
 	p := page{AppName: "APPNAME", Message: "MESSAGE", Version: "VERSION", Commit: "COMMIT"}
-	var buf bytes.Buffer
-	if err := indexTmpl.Execute(&buf, p); err != nil {
-		t.Fatalf("render: %v", err)
+	// Rendered through the REAL router (newMux -> chi -> the GET / handler), not by calling
+	// indexTmpl.Execute directly. The java sibling renders through MockMvc and its javadoc says the
+	// artifact must be "what a user would actually be served"; a direct template render is the
+	// hand-rolled thing that sentence disparages, and it would be blind to a break in the route, the
+	// Content-Type, or the handler's error path. One rule for all six producers: render through the
+	// app's real HTTP handler.
+	srv := httptest.NewServer(newMux(p))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
 	}
-	if err := os.WriteFile(out, buf.Bytes(), 0o644); err != nil {
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /: want 200, got %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if err := os.WriteFile(out, body, 0o644); err != nil {
 		t.Fatalf("write %s: %v", out, err)
 	}
 }

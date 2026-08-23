@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- No PackageReference: ASP.NET Core's shared framework already carries everything this page
+       needs (Kestrel + Razor). That is deliberate and is dotnet's distinctive air-gap lesson — the
+       FRAMEWORK is the dependency, and it ships inside the runtime image rather than being
+       restored. The builder image below still exists (every app has one, by decision) and still
+       does a real `dotnet restore`, which is what makes the in-cluster build offline-safe. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RootNamespace>DotnetWebapp</RootNamespace>
+  </PropertyGroup>
+
+</Project>

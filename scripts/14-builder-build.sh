@@ -54,15 +54,9 @@ LOCK="${BUNDLE_DIR}/images.lock"
   The builder's base image is pinned to the DIGEST the mirror resolved, so the builder and the mirrored
   base are the same bytes by construction. Without the lock there is nothing to pin to."
 
-MAVEN_SRC="maven:3.9-eclipse-temurin-25"
-# `|| true`: grep exits 1 on no-match and 2 on a missing file — either would kill this script under
-# `set -e` with NO output, an error shape this repo has hit four times.
-MAVEN_DIGEST="$(awk -v k="$MAVEN_SRC" '$1==k{print $2}' "$LOCK" 2>/dev/null | head -1 || true)"
-[ -n "$MAVEN_DIGEST" ] || die "'${MAVEN_SRC}' has no digest in ${LOCK} — re-run 'make mirror-pull'."
-BUILD_BASE="docker.io/library/maven@${MAVEN_DIGEST}"
 
 ENGINE="$(container_engine)"
-log_info "engine=${ENGINE} · base pinned by digest from images.lock: ${MAVEN_SRC} -> ${MAVEN_DIGEST}"
+log_info "engine=${ENGINE} · builder base(s) pinned by digest from images.lock (resolved PER APP below)"
 
 OUT_DIR="${BUNDLE_DIR}/builders"
 mkdir -p "$OUT_DIR"
@@ -72,6 +66,26 @@ for app in $BUILDER_APPS; do
   # A LOCAL tag only. The destination ref is NOT computed here on purpose: it is
   # ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/<app>-builder:<tag>, and this box does not know HARBOR_URL
   # (it has no Harbor). 22-builder-push.sh names the destination on the box that does.
+  # PER-APP, INSIDE THE LOOP. This used to be one Maven base resolved ABOVE the loop, so it could
+  # not vary per app: a node builder would have been handed `--build-arg MAVEN_IMAGE=<maven digest>`,
+  # an ARG its Dockerfile never declares. MEASURED: podman prints `[Warning] one or more build args
+  # were not consumed` and EXITS 0, so the build silently falls back to the ARG's own default -- an
+  # UNPINNED base in an air-gap build. Renaming the variables would not have fixed it; moving the
+  # resolution in here is what fixes it.
+  base_key="$(app_builder_base "$app")"
+  builder_arg="$(app_builder_arg "$app")"
+  # `|| true`: awk exits non-zero on a missing file, which would kill this script under `set -e`
+  # with NO output -- an error shape this repo has hit four times.
+  base_digest="$(awk -v k="$base_key" '$1==k{print $2}' "$LOCK" 2>/dev/null | head -1 || true)"
+  [ -n "$base_digest" ] || die "[${app}] '${base_key}' has no digest in ${LOCK} — is it in images/images.txt? Then re-run 'make mirror-pull'."
+  build_base="$(app_builder_base_path "$app")@${base_digest}"
+
+  # THE GUARD that makes the whole thing fail LOUDLY. An undeclared --build-arg is a WARNING and
+  # exit 0, so without this a wrong ARG name ships an unpinned base and nothing says so. Assert the
+  # Dockerfile actually declares it BEFORE spending a build on it.
+  grep -qE "^[[:space:]]*ARG[[:space:]]+${builder_arg}(=|[[:space:]]|$)" "${src}/Dockerfile.builder" \
+    || die "[${app}] ${src}/Dockerfile.builder does not declare 'ARG ${builder_arg}', which app_builder_arg() says it should. An undeclared --build-arg is only a WARNING (measured: podman exits 0), so this would have silently built on an UNPINNED base."
+
   local_ref="localhost/${app}-builder:${BUILDER_IMAGE_TAG}"
   tarball="${OUT_DIR}/${app}-builder.tar"
 
@@ -85,7 +99,7 @@ for app in $BUILDER_APPS; do
     log_warn "  create a container cgroup here. Weaker isolation, bounded — our Dockerfile, our base."
   fi
   run "$ENGINE" build \
-    --build-arg "MAVEN_IMAGE=${BUILD_BASE}" \
+    --build-arg "${builder_arg}=${build_base}" \
     -f "${src}/Dockerfile.builder" \
     -t "$local_ref" \
     "${src}"

@@ -173,6 +173,64 @@ app_build_args() {
 # file. (gowebapp has none — stdlib-only.)
 app_has_builder() { [ -f "${REPO_ROOT}/$(app_src "$1")/Dockerfile.builder" ]; }
 
+# --- per-LANGUAGE behaviour #7: WHICH base image the app's Dockerfile.builder is built FROM -------
+# 14-builder-build.sh enrolls EVERY app that ships a Dockerfile.builder (app_has_builder, above) --
+# generic selection -- but until 2026-08-22 its body resolved ONE Maven base ABOVE the loop and
+# passed it to every app as `--build-arg MAVEN_IMAGE=...`. So a node builder app would have received
+# an ARG its Dockerfile never declares, and MEASURED: podman answers
+#   [Warning] one or more build args were not consumed: [MAVEN_IMAGE]
+# and EXITS 0. The build then uses the ARG's own default -- an UNPINNED base in an air-gap build,
+# announced only by a warning nobody reads. Renaming MAVEN_* would not have helped: the value was
+# resolved once, above the loop, so it physically could not vary per app.
+#
+# app_builder_base <name> -- the images/images.txt KEY of the builder base. Must match a line in
+# that file exactly, because 14-builder-build.sh looks its DIGEST up in bundle/images.lock and a
+# miss is a hard die.
+app_builder_base() {
+  case "$(app_lang "$1")" in
+    # renovate: datasource=docker depName=maven
+    java) printf 'maven:3.9-eclipse-temurin-25' ;;
+    # renovate: datasource=docker depName=golang
+    go)   printf 'golang:1.27.0-bookworm' ;;
+    # renovate: datasource=docker depName=node
+    nodejs) printf 'node:24-alpine' ;;
+    # renovate: datasource=docker depName=rust
+    rust) printf 'rust:1.97-alpine' ;;
+    # renovate: datasource=docker depName=python
+    python) printf 'python:3.14-alpine' ;;
+    # renovate: datasource=docker depName=mcr.microsoft.com/dotnet/sdk
+    dotnet) printf 'mcr.microsoft.com/dotnet/sdk:10.0-alpine' ;;
+    *)    die "app '$1' ships a Dockerfile.builder but app_builder_base() has no branch for lang '$(app_lang "$1")' — add one, and add the image to images/images.txt so it is mirrored." ;;
+  esac
+}
+
+# app_builder_arg <name> -- the --build-arg NAME the app's Dockerfile.builder actually declares.
+# 14-builder-build.sh VERIFIES the Dockerfile declares it before building, so a mismatch is a loud
+# die instead of the silent unpinned base described above.
+app_builder_arg() {
+  case "$(app_lang "$1")" in
+    java) printf 'MAVEN_IMAGE' ;;
+    go)   printf 'GO_IMAGE' ;;
+    nodejs) printf 'NODE_IMAGE' ;;
+    rust) printf 'RUST_IMAGE' ;;
+    python) printf 'PYTHON_IMAGE' ;;
+    dotnet) printf 'DOTNET_SDK_IMAGE' ;;
+    *)    die "app '$1' ships a Dockerfile.builder but app_builder_arg() has no branch for lang '$(app_lang "$1")' — add one naming the ARG its Dockerfile.builder declares." ;;
+  esac
+}
+
+# app_builder_base_path <name> -- the pullable path for that base, DERIVED, so it is not a third
+# per-language site to forget. A key containing '/' is already a full path (mcr.microsoft.com/...);
+# a bare name is a Docker Hub official image and lives under docker.io/library/.
+app_builder_base_path() {
+  local key; key="$(app_builder_base "$1")"
+  local repo="${key%%:*}"
+  case "$repo" in
+    */*) printf '%s' "$repo" ;;
+    *)   printf 'docker.io/library/%s' "$repo" ;;
+  esac
+}
+
 # app_image <name> — the app's image repo in Harbor (no tag; the pipeline tags it with the commit).
 app_image() { printf '%s/%s/%s' "$HARBOR_URL" "$HARBOR_APP_PROJECT" "$1"; }
 

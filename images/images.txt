@@ -21,9 +21,10 @@ eclipse-temurin:25.0.4_7-jre-jammy
 # renovate: datasource=docker depName=maven
 maven:3.9-eclipse-temurin-25
 
-# ---- Go toolchain (gowebapp: `go vet` + `go test` + `go build` in the Tekton go-test/kaniko tasks) ----
-# No pre-baked dependency cache is needed (unlike the Maven builder image): gowebapp is
-# stdlib-only, so the offline build fetches nothing. See apps/go/gowebapp/main.go.
+# ---- Go toolchain (gowebapp: `go vet` + `go test` + `go build`, and its BUILDER base) ----
+# gowebapp is no longer stdlib-only: it depends on chi, so its offline build DOES need a warm
+# module cache. It therefore ships apps/go/gowebapp/Dockerfile.builder like every other app --
+# one uniform pole. See lib/apps.sh app_builder_base().
 # renovate: datasource=docker depName=golang
 golang:1.27.0-bookworm
 
@@ -58,3 +59,25 @@ traefik:v3.7.11
 istio/pilot:1.30.3
 # renovate: datasource=docker depName=istio/proxyv2
 istio/proxyv2:1.30.3
+
+# ---- Node.js toolchain (nodejswebapp: builder base + runtime base) ----
+# node 24 is the current LTS line ("Krypton"); 26 is Current (lts=no), which is why the pin is 24.
+# renovate: datasource=docker depName=node
+node:24-alpine
+
+# ---- Rust toolchain (rustwebapp builder base) ----
+# The runtime is distroless/static (already pinned above for Go) -- a CGO-free Rust binary needs
+# nothing else, so Rust adds a BUILD image only.
+# renovate: datasource=docker depName=rust
+rust:1.97-alpine
+
+# ---- Python toolchain (pythonwebapp: builder base) ----
+# renovate: datasource=docker depName=python
+python:3.14-alpine
+
+# ---- .NET toolchain (dotnetwebapp: SDK builds, ASP.NET chiselled runtime serves) ----
+# 10.0 is the LTS line with support=active; 9.0 is maintenance STS.
+# renovate: datasource=docker depName=mcr.microsoft.com/dotnet/sdk
+mcr.microsoft.com/dotnet/sdk:10.0-alpine
+# renovate: datasource=docker depName=mcr.microsoft.com/dotnet/aspnet
+mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled

@@ -36,31 +36,71 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# shellcheck source=scripts/lib/apps.sh
+. "${SCRIPT_DIR}/lib/apps.sh"
 
 REPO="${REPO_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 
-norm() { tr -s ' \t' ' ' < "$1" | sed 's/^ //; s/ $//' | grep -v '^$'; }
+# NORMALISATION IS DELIBERATELY MINIMAL: blank lines only.
+#
+# It started as `tr -s ' \t' ' '` + strip + drop-blanks, justified as "the two renders differ by 5
+# bytes, all indentation". MEASURED, that justification was WRONG: the only difference is one
+# WHOLE whitespace-only LINE (left behind by the stripped Thymeleaf comment), so dropping blank
+# lines ALONE makes them identical and the collapse/strip did nothing. Worse, the unexercised half
+# is not free -- 2-space vs 4-space indentation inside a <pre> compares IDENTICAL after collapsing,
+# and that IS visible to a user. Removing it is strictly tighter at zero cost today.
+norm() { grep -v '^[[:space:]]*$' "$1" || true; }
 
-producers=()
-while IFS= read -r p; do producers+=("$p"); done < <(find "$REPO/apps" -mindepth 3 -maxdepth 3 -name 'ui-contract.sh' | sort)
-
-# A gate with fewer than two producers cannot COMPARE anything -- it would pass by not looking.
-[ "${#producers[@]}" -ge 2 ] || die "check-ui-contract: found ${#producers[@]} producer(s) under apps/*/*/ui-contract.sh — need at least 2 to compare. A one-app run proves nothing."
-
-log_info "check-ui-contract: rendering ${#producers[@]} app(s)"
-names=()
-for p in "${producers[@]}"; do
-  app="$(basename "$(dirname "$p")")"
+# THE APP LIST COMES FROM THE REGISTRY, NOT FROM THE FILESYSTEM.
+#
+# It used to be `find apps -mindepth 3 -maxdepth 3 -name ui-contract.sh`, which compared only the
+# apps that HAPPENED to have a producer. MEASURED on a fake tree with 3 registry rows and 2
+# producers: "OK -- all 2 app(s) render an identical page", rc=0. The third app was invisible and
+# the word "all" asserted a completeness it had never established. With six apps, forgetting a
+# producer is the DEFAULT outcome. The fixed depth was wrong too: the registry's `src` column is
+# free-form, so a producer at apps/z/app3/src/ was invisible to the find and visible to the author.
+_apps="$(app_names)"
+n_registry=0; n_cmp=0
+names=(); missing=()
+while read -r app; do
+  [ -n "$app" ] || continue
+  n_registry=$((n_registry + 1))
+  prod="${REPO}/$(app_src "$app")/ui-contract.sh"
+  if [ ! -x "$prod" ]; then missing+=("${app} (expected ${prod#"$REPO"/})"); continue; fi
   names+=("$app")
-  "$p" "$T/${app}.html" || die "check-ui-contract: producer failed for '${app}' ($p)"
-  norm "$T/${app}.html" > "$T/${app}.norm"
-  log_info "  ${app}: $(wc -c < "$T/${app}.html") bytes rendered"
+done <<EOF
+${_apps}
+EOF
+
+# A missing producer is a HARD FAIL, not a silent skip. This is the whole difference between
+# "every app renders the same page" and "the apps I happened to look at agreed".
+if [ "${#missing[@]}" -gt 0 ]; then
+  log_error "check-ui-contract: ${#missing[@]} registry app(s) have NO executable ui-contract.sh producer:"
+  printf '    %s\n' "${missing[@]}" >&2
+  die "check-ui-contract: refusing to report on a SUBSET. Every app in apps/registry.tsv must ship apps/<lang>/<app>/ui-contract.sh (executable) that writes its rendered page to \$1."
+fi
+[ "${#names[@]}" -ge 2 ] || die "check-ui-contract: ${#names[@]} app(s) in the registry — need at least 2 to compare. A one-app run proves nothing."
+
+log_info "check-ui-contract: rendering ${#names[@]} app(s) from apps/registry.tsv"
+for app in "${names[@]}"; do
+  # KEYED ON THE APP NAME FROM THE REGISTRY, which is unique by construction. It used to be keyed
+  # on basename(dirname(producer)): MEASURED, apps/java/webapp and apps/go/webapp then wrote the
+  # SAME temp file, the second clobbered the first, and the gate diffed a file against itself --
+  # "OK -- all 2 app(s) render an identical page (webapp webapp)", rc=0, with the two different
+  # byte counts printed in its own log and ignored.
+  f="$T/${app}.html"
+  "${REPO}/$(app_src "$app")/ui-contract.sh" "$f" || die "check-ui-contract: producer failed for '${app}'"
+  [ -s "$f" ] || die "check-ui-contract: '${app}' producer exited 0 but wrote NOTHING to its output file."
+  norm "$f" > "$T/${app}.norm"
+  [ -s "$T/${app}.norm" ] || die "check-ui-contract: '${app}' rendered only blank lines — that is not a page."
+  log_info "  ${app}: $(wc -c < "$f") bytes rendered"
 done
 
 ref="${names[0]}"
 fail=0
 for app in "${names[@]:1}"; do
+  n_cmp=$((n_cmp + 1))
   if ! diff -q "$T/${ref}.norm" "$T/${app}.norm" >/dev/null 2>&1; then
     fail=1
     log_error "check-ui-contract: '${app}' does NOT render the same page as '${ref}':"
@@ -68,5 +108,6 @@ for app in "${names[@]:1}"; do
   fi
 done
 
-[ "$fail" -eq 0 ] || die "check-ui-contract: the shared-UI contract is BROKEN (compared ${#names[@]} apps against '${ref}')."
-log_info "check-ui-contract: OK — all ${#names[@]} app(s) render an identical page (${names[*]})."
+[ "$fail" -eq 0 ] || die "check-ui-contract: the shared-UI contract is BROKEN."
+# PRINT THE DENOMINATOR against the REGISTRY, so "all" is a claim this gate can actually support.
+log_info "check-ui-contract: OK — ${#names[@]} of ${n_registry} registry app(s) render an identical page (${names[*]}); ${n_cmp} comparison(s)."
