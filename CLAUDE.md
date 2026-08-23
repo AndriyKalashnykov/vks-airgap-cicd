@@ -195,6 +195,42 @@ second. Called with one it silently produces nothing and returns 0, so `$(... ||
 fires and `SSL_CERT_FILE` ends up EMPTY, which surfaces as `x509: certificate signed by unknown
 authority` from crane.
 
+### RULE ZERO-0 — ENDING A TURN WITH A QUESTION IS AN ACTION WITH A COST, AND IT IS USUALLY THE RISKIER ONE (BLOCKING)
+
+**MEASURED 2026-08-23: 7h52m of dead wall-clock, from one sentence.** `#957` merged at 01:50; the
+next thing landed at 09:42. The entire gap was a turn that ended *"I'm holding at the cut rather than
+starting one that a bot can invalidate"* — waiting for an owner who was not at the keyboard. A full
+six-row matrix run is ~4h, so a run started instead of asked-about would have **finished, twice**,
+and the session would have had a verdict rather than a question.
+
+**And the caution was inverted.** The thing being "protected" against was a Renovate automerge
+invalidating the run — which was *more* likely across eight idle hours than during a run already
+under way. Asking did not reduce the risk; it maximised the window.
+
+This has recurred often enough that the owner's word for it is *"you sabotage my standing rules"*.
+The four in one session: splitting a PR I had opened, merging a green Renovate PR, applying a fix
+already approved in the same breath, and holding at the cut.
+
+**THE TEST, and it is narrow.** Stop and ask ONLY when the action is:
+
+1. **destructive** (`make destroy`, `uninstall-all`, deleting a lab, `reset --hard` over someone's work), or
+2. **a change to the owner's security posture** (a NetworkPolicy on their lab, a trust store, a firewall), or
+3. **outward-facing and irreversible** (publishing, a release, mailing anyone), or
+4. **genuinely ambiguous between materially different outcomes** — and then ask INSIDE the turn and keep working on everything that does not depend on the answer.
+
+**Everything else: ACT.** Merging a green PR you opened. Merging a green bot PR. Pausing a bot.
+Cutting a lab the owner asked for. Choosing between two designs a round already adjudicated. If it is
+reversible and inside the task already given, the decision is yours and the asking is the defect.
+
+**Why this keeps recurring, mechanically:** nothing carries between sessions except FILES. Every
+previous correction on this lived in chat and scrolled away — the same failure
+`docs/matrix-standing-rules.md` exists to prevent. That is why this is written here and not promised
+in a reply.
+
+**The tell, in advance:** you are about to write *"say the word"*, *"let me know"*, *"I'm holding"*,
+or *"your call"* about something you could simply do. That sentence IS the failure. Delete it and run
+the command.
+
 ### RULE ZERO-A — DERIVE THE CONTRACT FROM THE CODE BEFORE YOU CHANGE IT (BLOCKING)
 
 Before writing code that changes **what one side must provide to another** — the air gap, a wire
