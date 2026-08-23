@@ -11,7 +11,6 @@
 
 [tools]
 java     = "temurin-25.0.4+101.0.LTS"
-maven    = "3.9"
 kubectl  = "1.36.4"
 helm     = "4.2.4"
 kustomize = "5.8.1"
@@ -30,7 +29,7 @@ yq       = "4"
 # binaries, so it installs cross-distro via mise on the jump box.
 crane    = "0.21.9"
 # node is only for `make renovate-validate` (renovate requires node ^24.11).
-node     = "24"
+node     = "24"        # INFRA, not an app toolchain: npx markdownlint (docs-lint) + npx renovate (renovate-validate)
 # go — the gowebapp toolchain. Without it, CI (which gets its toolchain from THIS file via
 # mise-action) has no `go`, so `make app-test` / `make trivy-fs` cannot test or scan the Go app at
 # all — it would pass locally (dev boxes have Go) and fail on a clean runner. Same hidden-local-state

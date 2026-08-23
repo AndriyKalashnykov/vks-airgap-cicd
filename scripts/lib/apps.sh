@@ -133,7 +133,12 @@ app_health_path() {
 # `make check-app-toolchains` gates it.
 app_toolchain() {
   case "$(app_lang "$1")" in
-    java) printf 'java maven' ;;
+    # maven is DELIBERATELY ABSENT. MEASURED 2026-08-22: the Java app builds with `./mvnw`, which runs
+    # apache-maven-3.9.9 from its OWN wrapper dist (.mvn/wrapper/maven-wrapper.properties). mise was
+    # supplying 3.9.16, which NOTHING invoked -- a live version inconsistency no gate noticed. The one
+    # bare `mvn` in the tree (24-builder-probe.sh:62) runs INSIDE the builder container, not on the
+    # host. So requiring a maven pin forced a download onto every walkbox for a binary never executed.
+    java) printf 'java' ;;
     go)   printf 'go' ;;
     *)    die "app '$1': add a branch to app_toolchain() — and pin its tools in .mise.toml" ;;
   esac
