@@ -1,5 +1,9 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+
+  "//PAUSED": "TEMPORARY — Renovate is PAUSED for a six-row walkthrough-matrix certification run. It has automerge:true, and matrix-standing-rules.md section H.2 requires the tree be FROZEN while the matrix is armed or running: walk-matrix.sh ships `git archive HEAD` at ROW time, so a mid-run automerge SPLITS the run across two commits and voids the certification. This is not hypothetical -- the previous run records a Renovate CLI pin auto-merging TWELVE SECONDS before row 1 started. Re-enable by deleting this key and the `enabled` line below, once the run has produced its verdict. Paused 2026-08-23.",
+  "enabled": false,
+
   "extends": [
     "config:best-practices",
     ":semanticCommitType(chore)"
