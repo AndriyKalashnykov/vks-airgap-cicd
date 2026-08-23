@@ -1583,9 +1583,18 @@ ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifi
 ##@ Dependencies (Renovate)
 .PHONY: renovate-validate
 renovate-validate: ## Validate renovate.json (pinned renovate — needs node on PATH)
-	@if [ -n "$${GH_ACCESS_TOKEN:-}" ]; then export GITHUB_COM_TOKEN="$$GH_ACCESS_TOKEN"; \
+	@out=$$(mktemp); trap 'rm -f "$$out"' EXIT; \
+	if [ -n "$${GH_ACCESS_TOKEN:-}" ]; then export GITHUB_COM_TOKEN="$$GH_ACCESS_TOKEN"; \
 	else echo "note: GH_ACCESS_TOKEN unset — some lookups may be skipped"; fi; \
-	npx --yes renovate@$(RENOVATE_VERSION) --platform=local
+	npx --yes renovate@$(RENOVATE_VERSION) --platform=local > "$$out" 2>&1; rc=$$?; \
+	cat "$$out"; \
+	if grep -qE 'config-validation|Invalid configuration option|invalid settings' "$$out"; then \
+	  echo "ERROR: renovate reports INVALID CONFIG. It STILL EXITS 0 (measured 2026-08-23) --"; \
+	  echo "       that is the whole reason this grep exists; do not 'simplify' it back to a bare rc."; \
+	  grep -oE '"validationMessage": "[^"]*"' "$$out" | sort -u; \
+	  exit 1; \
+	fi; \
+	exit $$rc
 
 ##@ Housekeeping
 .PHONY: clean
