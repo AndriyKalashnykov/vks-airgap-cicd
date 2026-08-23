@@ -115,7 +115,7 @@ l0=$(grep -c 'sidecar.istio.io/inject: "false"' "$TMP/$yf")
 sed -i '/sidecar.istio.io\/inject: "false"/d' "$TMP/$yf"
 l1=$(grep -c 'sidecar.istio.io/inject: "false"' "$TMP/$yf")
 if [ "$l0" -eq 1 ] && [ "$l1" -eq 0 ] && [ -s "$TMP/$yf" ] \
-   && python3 -c 'import sys,yaml;list(yaml.safe_load_all(open(sys.argv[1])))' "$TMP/$yf" 2>/dev/null; then
+   && yq -e '.' "$TMP/$yf" >/dev/null 2>&1; then
   ok "mutation landed: gitea inject label removed and the YAML still parses"
 else
   bad "gitea label mutation did NOT land / broke the YAML (l0=$l0 l1=$l1) — a PARSE error would be a false-RED"

@@ -53,6 +53,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT" || die "cannot cd to repo root"
 
 command -v python3 >/dev/null 2>&1 || die "check-pod-inject-label: python3 is required (YAML parsing)."
+# yq, not PyYAML. MEASURED 2026-08-23: pinning python in .mise.toml changed WHICH interpreter CI
+# resolves -- from the runner's system python3 (which ships PyYAML) to mise's, which does not -- and
+# this gate died "ModuleNotFoundError: No module named 'yaml'". Locally BOTH interpreters had it, so
+# the failure was CI-only and invisible here. yq is already pinned in .mise.toml AND carried in the
+# air-gap bundle, and it emits JSON that python's STDLIB reads -- so this now depends on nothing a
+# fresh interpreter might lack. -o=json -I0 prints ONE JSON DOCUMENT PER LINE, which is what makes
+# multi-document YAML work without a YAML parser at all.
+command -v yq >/dev/null 2>&1 || die "check-pod-inject-label: yq is required (YAML->JSON). It is pinned in .mise.toml: run 'make deps'."
 
 # Parse rather than grep: a grep for the label cannot tell a POD-TEMPLATE label from a top-level
 # metadata label (the wrong one is a no-op — objectSelector matches the POD), and cannot tell a
@@ -62,14 +70,19 @@ command -v python3 >/dev/null 2>&1 || die "check-pod-inject-label: python3 is re
 # $ and % must reach python unexpanded. (An apostrophe inside would terminate the string; there is
 # deliberately none, and that is noted at the one comment that wanted one.)
 out="$(git ls-files 'k8s/*.yaml' 'k8s/**/*.yaml' 'k8s/*.yml' 'k8s/**/*.yml' 'deploy/*.yaml' 'deploy/**/*.yaml' 'deploy/*.yml' 'deploy/**/*.yml' 2>/dev/null | sort -u | python3 -c '
-import sys, yaml
+import json, subprocess, sys
 KINDS = {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"}
 checked = 0
 bad = []
 for path in (l.strip() for l in sys.stdin if l.strip()):
+    # Still read the raw text: the line-number reporting below quotes the ORIGINAL YAML, which the
+    # JSON round-trip cannot give back (yq renumbers and reformats).
     raw = open(path).read()
     try:
-        docs = list(yaml.safe_load_all(raw))
+        # -I0 keeps each document on ONE line, so a multi-doc file becomes one JSON per line.
+        cp = subprocess.run(["yq", "-o=json", "-I0", ".", path],
+                            capture_output=True, text=True, check=True)
+        docs = [json.loads(l) for l in cp.stdout.splitlines() if l.strip()]
     except Exception as e:
         print("PARSE\t%s\t%s" % (path, e)); continue
     for d in docs:
