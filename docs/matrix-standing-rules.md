@@ -148,6 +148,16 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
 4. Run `env -u GOROOT make static-check` locally before every merge. A PR runs only
     `static-check-pr`, which omits `sec` (gitleaks, trivy-fs, trivy-config) and the wall-clock tests;
     the full target runs per-PR only on the weekly schedule.
+5. **Run `make app-verify` locally before every merge that touches `apps/**`.** As of 2026-08-23 the
+    app builds (`app-test`, `check-ui-contract`, `trivy-fs`) are deliberately OUT of both CI gates: they build all
+    six toolchains — java, go, node, python, rust, dotnet — for a repo whose subject is the AIR-GAP
+    PIPELINE, not the apps. The apps are really tested by Tekton, in their own builder images, which
+    is the thing being demonstrated.
+    This is DISCIPLINE, not a gate, and the exposure is measured: 19 of the last 200 commits touch
+    `apps/**` and **10 of those are Renovate**, which auto-merges on green. So a dependency bump that
+    breaks a test can land unless someone runs this. Nothing enforces it but the person merging.
+    `trivy-fs` moved here too, so **the app-artefact CVE scan no longer runs in CI at all** — CI keeps
+    only the scans that need no build (gitleaks, prose-secrets, trivy-config on the manifests).
 
 ## H. During a run
 

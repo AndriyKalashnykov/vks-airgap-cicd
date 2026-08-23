@@ -929,6 +929,11 @@ none).
   Read it from `~/.local/state/nested-lab/vmca-root.pem` when you need it.
 - **Run `env -u GOROOT make static-check` locally before every merge.** A PR runs `static-check-fast`
   plus `static-check-pr`; **neither runs `sec`** (gitleaks, trivy-fs, trivy-config).
+- **Run `make app-verify` before any merge touching `apps/**`.** Since 2026-08-23 the app builds
+  (`app-test` + `check-ui-contract` + `trivy-fs`) are deliberately OUT of both CI gates — they build all six
+  toolchains for a repo whose subject is the air-gap PIPELINE, and Tekton already tests each app in
+  its own builder image. Nothing enforces this but you: 19 of the last 200 commits touch `apps/**`
+  and **10 are Renovate**, which auto-merges on green.
 - **The lesson that cost the most today:** a green-looking component I have just reasoned about is
   exactly the one I am most likely to certify without measuring. I documented `make creds-show` as
   "correctly reporting" in the morning; it carried two real defects, both found by the operator.
