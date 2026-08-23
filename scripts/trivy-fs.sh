@@ -7,8 +7,8 @@
 #
 #   java -> the fat jar         (trivy sees BOOT-INF/lib/*.jar — every resolved dependency)
 #   go   -> the compiled binary (trivy sees Type: gobinary — including the Go STDLIB version, which
-#           is where Go-stdlib CVEs surface; scanning go.mod would miss them entirely because a
-#           stdlib-only app has no modules at all)
+#           is where Go-stdlib CVEs surface; scanning go.mod would miss them entirely, and it
+#           misses them EVEN NOW that gowebapp has a dependency -- the stdlib is not a module)
 #
 # Registry-driven: adding an app scans it, adding a language is one `case` branch.
 set -euo pipefail

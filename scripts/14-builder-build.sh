@@ -45,7 +45,7 @@ load_env
 # (an app with no Dockerfile.builder) would make the command substitution fail and `set -e` kill us.
 BUILDER_APPS="$(app_names | while read -r a; do if app_has_builder "$a"; then printf '%s ' "$a"; fi; done)"
 if [ -z "$BUILDER_APPS" ]; then
-  log_info "no app ships a Dockerfile.builder — nothing to build (a stdlib-only app needs no offline dependency cache)"
+  log_info "no app ships a Dockerfile.builder — nothing to build (an app whose build fetches nothing needs no pre-baked dependency cache). As of 2026-08-22 every app ships one, so reaching this line means the registry or the app dirs are not what you think."
   exit 0
 fi
 

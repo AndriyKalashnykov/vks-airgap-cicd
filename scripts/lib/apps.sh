@@ -92,17 +92,44 @@ app_set_message() {
 # Both are refs INTO HARBOR (the air gap has nothing else). The tags come from .env.example and are
 # kept aligned with images/images.txt by `make check-image-alignment`, which reads each app's
 # Dockerfile ARGs straight out of the registry — so this stays honest without a per-app gate.
+# ⚠️ DERIVED FROM app_has_builder, NOT FROM A PER-LANGUAGE LITERAL. This was a `case` on the
+# language, and its `go)` arm returned the MIRRORED UPSTREAM path
+# (${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/golang:${GOLANG_BUILD_TAG}) because Go genuinely had no
+# builder. The moment gowebapp gained a Dockerfile.builder (2026-08-22) that arm became a
+# MIRROR-CORRUPTING BUG, MEASURED:
+#
+#     java push-ref: harbor/cicd/javawebapp-builder:0.3.0     (a builder)
+#     go   push-ref: harbor/cicd/golang:1.27.0-bookworm       (the MIRRORED UPSTREAM IMAGE)
+#
+# app_has_builder() is a file test, so gowebapp enrolled itself in 22-builder-push.sh, which
+# computes its destination from THIS function -- and `make builder-push` would have REPLACED the
+# mirrored public golang in Harbor with a locally-built derivative. Nothing would have failed:
+# 23-mirror-verify.sh treats a digest mismatch as a WARN whose text blames "likely OCI-layout
+# rewrap", and install-all verifies BEFORE the push (Makefile: mirror -> mirror-verify ->
+# builder-image), so the clobber lands after the only check that could see it.
+#
+# The invariant the `case` could not express: an app that SHIPS a builder pushes to its OWN
+# <app>-builder ref; an app that does not never had anything to push. Deriving from the same
+# predicate that enrols the app makes those two facts one fact, so they cannot disagree again.
 app_builder_image() {
   local name="$1"
-  case "$(app_lang "$name")" in
-    # Java needs a PRE-BAKED builder image (its ~/.m2 holds every dependency) because an in-cluster
-    # `mvn` cannot reach Maven Central. That image is built + pushed by 15-build-push-builder.sh.
-    java) printf '%s/%s/%s-builder:%s' "$HARBOR_URL" "$HARBOR_INFRA_PROJECT" "$name" "${BUILDER_IMAGE_TAG:?}" ;;
-    # Go needs NO builder image: the app is stdlib-only, so the offline build fetches nothing and
-    # the mirrored upstream golang image is enough.
-    go)   printf '%s/%s/golang:%s' "$HARBOR_URL" "$HARBOR_INFRA_PROJECT" "${GOLANG_BUILD_TAG:?}" ;;
-    *)    die "app '$name': add a branch to app_builder_image()" ;;
-  esac
+  if app_has_builder "$name"; then
+    # Its own ref, namespaced by app. Never collides with a mirrored upstream repo.
+    printf '%s/%s/%s-builder:%s' "${HARBOR_URL:?}" "${HARBOR_INFRA_PROJECT:?}" "$name" "${BUILDER_IMAGE_TAG:?}"
+  else
+    # No builder: the app builds FROM the mirrored upstream base directly. mirror_target_ref is the
+    # ONE mapping the mirror itself uses (lib/mirror.sh), so this cannot drift from where the image
+    # actually landed -- reimplementing the <host>/<path>:<tag> rewrite here is how they diverge.
+    # GUARD, not an assumption: lib/apps.sh does NOT source lib/mirror.sh (it would be circular --
+    # mirror.sh sources apps.sh), so mirror_target_ref is the CALLER's to provide. Without this a
+    # caller that sourced apps.sh alone gets `mirror_target_ref: command not found` on this branch
+    # ONLY -- the trap lib/os.sh:1699 records for harbor_scheme. MEASURED: 24-builder-probe.sh
+    # sources apps.sh and NOT mirror.sh today. The branch is currently unreachable (every app ships
+    # a builder), which is exactly why it needs to fail loudly rather than rot.
+    command -v mirror_target_ref >/dev/null 2>&1 \
+      || die "app '$name' has no Dockerfile.builder, so its image ref comes from mirror_target_ref — but lib/mirror.sh is not sourced. Source it alongside lib/apps.sh in the calling script."
+    mirror_target_ref "$(app_builder_base "$name")"
+  fi
 }
 
 app_runtime_image() {
@@ -154,7 +181,8 @@ app_toolchain() {
 #       unreachable in the air gap). Passing it to a NON-Maven app is meaningless — Kaniko silently
 #       drops a --build-arg the Dockerfile never declares, so it "worked", but it is a landmine for
 #       the next language.
-# Go:   none — the app is stdlib-only, so its Dockerfile declares no offline switch at all.
+# Go:   none — `go build` takes its offline behaviour from GOFLAGS/GOPROXY in the Dockerfile, not
+#       from a --build-arg. (It is no longer stdlib-only: it depends on chi and ships a builder.)
 #
 # Prints a SPACE-SEPARATED list of `--build-arg=K=V` flags (empty for a language that needs none).
 # It is threaded to the Kaniko task as the `build-args` param (Trigger -> Pipeline -> Task), where
@@ -170,7 +198,8 @@ app_build_args() {
 # app_has_builder <name> — true iff the app ships a Dockerfile.builder, i.e. it needs a pre-baked
 # offline dependency cache. Keyed on the FILE, not on the language: that is what actually decides
 # whether `make builder-image` has work to do, and a future language that needs one just adds the
-# file. (gowebapp has none — stdlib-only.)
+# file. As of 2026-08-22 all six apps ship one, so this predicate is true for every app -- but it
+# stays a FILE TEST, because that is what makes adding a language a file rather than a branch.
 app_has_builder() { [ -f "${REPO_ROOT}/$(app_src "$1")/Dockerfile.builder" ]; }
 
 # --- per-LANGUAGE behaviour #7: WHICH base image the app's Dockerfile.builder is built FROM -------

@@ -197,9 +197,11 @@ check_pinned "ISTIO_VERSION (.env.example)" "$(grep -E '^ISTIO_VERSION=' .env.ex
 check_pinned "istio/proxyv2 (images.txt)" "$proxyv2_itag" "$istio_itag"
 
 # The following are NOT registry-derived on purpose: they guard the Java OFFLINE-BUILDER apparatus
-# (Dockerfile.builder + 15-build-push-builder.sh), which exists only because an in-cluster `mvn`
-# cannot reach Maven Central. No other language has one (gowebapp is stdlib-only, so it needs no
-# pre-baked dependency cache). If a second language ever needs a builder image, derive these too.
+# (Dockerfile.builder + 15-build-push-builder.sh), which exists because an in-cluster build cannot
+# reach its language's package registry. As of 2026-08-22 EVERY app ships one (owner decision: one
+# uniform air-gap pole), so the arm above derives them by EXECUTING app_builder_base() per builder
+# app rather than naming a language. This comment used to say "no other language has one (gowebapp
+# is stdlib-only)" -- both halves stopped being true when gowebapp gained chi and a builder.
 #
 # The Maven BUILD image (maven:<mvn>-eclipse-temurin-<jdk>) is mirrored in images.txt and its
 # FULL tag is re-typed in four consumers the manifest grep above cannot see: the two app

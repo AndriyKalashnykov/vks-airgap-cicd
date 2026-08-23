@@ -26,6 +26,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
+# shellcheck source=scripts/lib/mirror.sh
+. "${SCRIPT_DIR}/lib/mirror.sh"
 load_env
 
 : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"

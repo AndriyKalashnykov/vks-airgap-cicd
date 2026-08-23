@@ -12,6 +12,13 @@ FROM ${RUST_IMAGE}
 WORKDIR /build
 # Manifests FIRST so the dependency layer caches independently of the source.
 COPY Cargo.toml Cargo.lock ./
+# ⚠️ THE STUB TARGET IS LOAD-BEARING, and this is where the Java shape does NOT transfer.
+# manifests-first caches correctly for npm / maven / nuget, but cargo REFUSES to parse a manifest
+# that declares no target. MEASURED against this app's real Cargo.toml:
+#     error: failed to parse manifest ... Caused by: no targets specified in the manifest
+# so `cargo fetch` on a manifests-only layer cannot run at all. A throwaway src/main.rs satisfies
+# the parser; the real source arrives with the COPY below and overwrites it.
+RUN mkdir -p src && echo 'fn main() {}' > src/main.rs
 # `cargo fetch` populates $CARGO_HOME without compiling; the offline build then runs
 # `cargo build --offline`, which is the only mode that cannot silently reach the network.
 RUN cargo fetch --locked

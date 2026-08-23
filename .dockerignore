@@ -1,0 +1,32 @@
+# Build context exclusions, applied to EVERY app's `COPY . .`.
+#
+# WHY THIS MATTERS MORE THAN SIZE: each apps/<lang>/<app>/ dir IS the content of that app's Gitea
+# repo AND the Kaniko build context. Host-built artifacts landing in an image are not just bloat --
+# a host `obj/project.assets.json` carries ABSOLUTE HOST PATHS, and an in-container
+# `dotnet build --no-restore` will read it and fail or silently use the wrong paths. The same
+# applies to a host-built target/ (rust) or node_modules/ (wrong platform binaries).
+#
+# Measured 2026-08-22, before this file existed: no .dockerignore anywhere in the tree, so every
+# COPY . . ingested obj/ (296K), bin/ (144K), node_modules/, target/, __pycache__/ and a
+# 13.8 MB unstripped host-built ELF sitting in apps/go/gowebapp/.
+**/node_modules/
+**/target/
+**/obj/
+**/bin/
+**/__pycache__/
+**/.pytest_cache/
+**/*.egg-info/
+**/.venv/
+**/venv/
+
+# VCS + editor noise
+.git/
+**/.gitignore
+**/*.swp
+
+# Never ship secrets or operator-local state into a build context.
+.env
+.env.*
+!.env.example
+secrets/
+bundle/

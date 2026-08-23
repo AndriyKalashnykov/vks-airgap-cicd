@@ -81,6 +81,12 @@ __pycache__/
 # NOT ignored, deliberately: package-lock.json / Cargo.lock. Those are the LOCKFILES the offline
 # builders install from (`npm ci`, `cargo fetch --locked`), so they must be in the repo or the
 # air-gapped build is not reproducible.
+# A Go binary built WITHOUT -o lands in the app dir named after the module, has NO extension, and
+# is therefore invisible to every pattern above. Measured 2026-08-22: a 13.8 MB unstripped ELF sat
+# in apps/go/gowebapp/ , untracked AND unignored, so `git add -A` would have committed it into that
+# app's Gitea repo. Ignore the shape (an app dir's own name) rather than one app's name.
+apps/go/*/[a-z]*webapp
+apps/rust/*/[a-z]*webapp
 apps/*/*/node_modules/
 apps/*/*/target/
 apps/*/*/obj/
