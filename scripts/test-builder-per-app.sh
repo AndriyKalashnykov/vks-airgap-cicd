@@ -16,7 +16,7 @@
 # per-app-ness is actually measured rather than assumed.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR/.."
+cd "$SCRIPT_DIR/.." || { printf "FATAL: cannot cd to the repo root\n" >&2; exit 1; }
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh" >/dev/null 2>&1
 # shellcheck source=scripts/lib/apps.sh
@@ -49,8 +49,8 @@ _two() {
 }
 _first="$(app_names | head -1)"
 IFS='|' read -r jb ja jp nb na np <<< "$(_two)"
-[ "$jb" != "$nb" ] && ok "two languages get DIFFERENT bases ($jb vs $nb)" || bad "both languages share a base" "$jb" "they must differ"
-[ "$ja" != "$na" ] && ok "two languages get DIFFERENT build-arg names ($ja vs $na)" || bad "both languages share an ARG name" "$ja" "they must differ"
+if [ "$jb" != "$nb" ]; then ok "two languages get DIFFERENT bases ($jb vs $nb)"; else bad "both languages share a base" "$jb" "they must differ"; fi
+if [ "$ja" != "$na" ]; then ok "two languages get DIFFERENT build-arg names ($ja vs $na)"; else bad "both languages share an ARG name" "$ja" "they must differ"; fi
 ck "the nodejs path derives correctly" "$np" "docker.io/library/node"
 ck "the java path is untouched by the second app" "$jp" "docker.io/library/maven"
 
@@ -68,12 +68,15 @@ case "$out" in *app_builder_base*) ok "an unhandled lang dies naming app_builder
 
 # --- THE GUARD: 14-builder-build.sh must verify the Dockerfile DECLARES the arg -----------------
 # Without it a wrong ARG name is a WARNING and exit 0 -- a silently unpinned base.
-grep -qE 'grep -qE .*ARG.*builder_arg' "${SCRIPT_DIR}/14-builder-build.sh" \
-  && ok "14-builder-build.sh asserts the Dockerfile declares the ARG" \
-  || bad "the ARG-declaration guard is gone" "absent" "present"
+if grep -qE 'grep -qE .*ARG.*builder_arg' "${SCRIPT_DIR}/14-builder-build.sh"; then
+  ok "14-builder-build.sh asserts the Dockerfile declares the ARG"
+else
+  bad "the ARG-declaration guard is gone" "absent" "present"
+fi
 
 # --- and the resolution must be INSIDE the loop, not above it ----------------------------------
 _loop="$(awk '/^for app in \$BUILDER_APPS/,0' "${SCRIPT_DIR}/14-builder-build.sh")"
+# shellcheck disable=SC2016  # deliberate: matches the LITERAL source text, must NOT expand
 case "$_loop" in *'app_builder_base "$app"'*) ok "the base is resolved INSIDE the per-app loop" ;;
                  *) bad "the base is resolved outside the loop again" "absent from loop body" "present" ;; esac
 
