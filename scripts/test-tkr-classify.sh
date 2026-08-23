@@ -34,6 +34,8 @@ while [ $i -lt ${#args[@]} ]; do case "${args[$i]}" in
   *) sub="${args[$i]}"; res="${args[$((i+1))]:-}"; break;; esac; done
 case "$sub" in
   version) echo "Client Version: v1.34.0"; exit 0 ;;
+  api-resources) echo 'virtualmachineclasses  vmclass  vmoperator.vmware.com/v1alpha5  false  VirtualMachineClass'; exit 0 ;;  # a REAL SUPERVISOR: the modes here inject a failure into the READ, not into what the cluster IS.
+
   get) case "${STUB_MODE:-ok}" in
          stale_ca)  echo 'Unable to connect to the server: tls: failed to verify certificate: x509: certificate signed by unknown authority' >&2; exit 1 ;;
          forbidden) echo 'Error from server (Forbidden): kubernetesreleases is forbidden: User "u" cannot list resource "kubernetesreleases"' >&2; exit 1 ;;

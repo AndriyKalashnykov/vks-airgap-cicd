@@ -831,6 +831,87 @@ supervisor_kubeconfig_or_die() {
   printf '%s' "$k"
 }
 
+# kubeconfig_is_supervisor <kubeconfig> -- rc 0 iff that kubeconfig points at a SUPERVISOR.
+#
+# THE DISCRIMINATOR B210 SAID DID NOT EXIST. Its row concluded "no Supervisor-only CRD is reliably
+# readable" -- true, and a category error: it tested two CRD READS
+# (`supervisorservices` returns "No resources found" WITH services serving; `serviceinstallconfigs`
+# is Forbidden even to sso:Administrator). This is not a CRD read. It is API-GROUP DISCOVERY.
+#
+# MEASURED at both operating points:
+#   GUEST  (live, 2026-08-22, secrets/cicd-gc0820234057.kubeconfig): 0 bytes, header-only
+#   SUPERVISOR (recorded, nested-vsphere-lab PLAN-lab-cut-automation.md:339):
+#          virtualmachineclasses  vmclass  vmoperator.vmware.com/v1alpha5
+#   CONTROL on the same guest: --api-group=tekton.dev -> 3+ rows, so it discriminates rather than
+#          always answering empty.
+#
+# Three properties, each the thing B210 believed impossible:
+#   TENANT-READABLE, and CHEAPER in RBAC than the namespace probe -- discovery needs only
+#     ClusterRole `system:discovery`, bound to Group/system:authenticated. Listing namespaces needs
+#     an explicit grant that is genuinely deniable (28-harbor-admin-password.sh has a FORBIDDEN arm).
+#   INDEPENDENT OF STEP 4 -- VM Operator materialises the guest cluster's node VMs, so it must serve
+#     before a guest cluster can exist at all. Harbor (Step 4) comes later. So this does NOT
+#     false-block a fresh Supervisor, which is what refuted the earlier attempt.
+#   ALREADY IN PRODUCTION -- nested-vsphere-lab/stages/nested-vsphere/vm.sh:53-66 ships it as a hard
+#     die whose message names the guest case verbatim.
+#
+# ⚠️ rc IS USELESS HERE, and that is the exact trap B210 fell into: `api-resources` on a group that
+# does not exist EXITS 0 and prints only a header. Assert a NON-EMPTY list, never the status.
+#
+# NOT a Harbor detector. `kubectl get ns -l appplatform.vmware.com/serviceId=harbor` answers
+# IDENTICALLY (rc=0, empty) on a guest and on a bare Supervisor before Step 4 -- measured -- so it
+# detects HARBOR, not a SUPERVISOR. Do not substitute it here.
+# ⚠️ THREE-STATE, and the third state is the whole point:
+#     0 = reachable AND serves vmoperator      -> a Supervisor
+#     1 = reachable AND does NOT serve it      -> NOT a Supervisor (the only short-circuit)
+#     2 = COULD NOT DETERMINE                  -> unreachable / stale CA / unauthorized
+#
+# A two-state version is WRONG and I shipped one: `api-resources` returns EMPTY for a stale CA and
+# for an unreachable API just as it does for a guest, so a bare emptiness test reported "this is not
+# a Supervisor" for a Supervisor whose CA had been rebuilt -- replacing one confidently-wrong message
+# with another. MEASURED: test-tkr-classify.sh went 18/19, its STALE_CA case failing, and
+# test-cluster-status-wait-gate.sh failed too. The reachability tier is what the sibling
+# implementation (nested-vsphere-lab/stages/nested-vsphere/vm.sh) has and I had dropped.
+#
+# Callers MUST branch on rc==1 only. Treating rc!=0 as "not a Supervisor" re-introduces the bug.
+kubeconfig_is_supervisor() {
+  local kc="${1:-${KUBECONFIG:-}}" res
+  [ -n "$kc" ] || return 2
+  # Tier 1: can we talk to an API server at all? If not, we know NOTHING about what it serves.
+  KUBECONFIG="$kc" kubectl version --request-timeout=20s >/dev/null 2>&1 || return 2
+  res="$(KUBECONFIG="$kc" kubectl api-resources --api-group=vmoperator.vmware.com \
+           --no-headers --request-timeout=20s 2>/dev/null || true)"
+  # Drop a NAME/APIVERSION header line before testing for emptiness. --no-headers above should make
+  # this unreachable -- but if it is ever dropped, `[ -n "$res" ]` alone reads the HEADER as content
+  # and the probe silently answers SUPERVISOR for EVERY cluster, which is B210 restored with a green
+  # test suite. Caught by test-supervisor-discriminator.sh case 3 on its first run; the flag and the
+  # filter are belt and braces because a single point of failure here fails OPEN.
+  res="$(printf '%s' "$res" | grep -vE '^[[:space:]]*NAME([[:space:]]|$)' || true)"
+  res="$(printf '%s' "$res" | tr -d '[:space:]')"
+  [ -n "$res" ] && return 0
+  return 1
+}
+
+# not_a_supervisor_note -- the message every Supervisor-scoped consumer should print when
+# kubeconfig_is_supervisor says no. ONE helper, so the copies cannot drift (the B209 lesson: a
+# _settle_note existed and was never called from the gates, so the operator hit it twice).
+not_a_supervisor_note() {
+  printf '  this kubeconfig is NOT a Supervisor -- it does not serve vmoperator.vmware.com.
+'
+  printf '  That is almost always the GUEST cluster: Harbor and ArgoCD are SUPERVISOR Services,
+'
+  printf '  so the guest genuinely has neither, and an empty answer here is a fact about WHICH
+'
+  printf '  CLUSTER you asked, not about what is installed.
+'
+  printf '  Fix: export VKS_SUPERVISOR_KUBECONFIG=<path>, or run: make vks-login
+'
+  printf '  As a TENANT you may have no Supervisor access at all -- then this operation is not
+'
+  printf '  yours to run: ask your platform admin (RULE ZERO-B).
+'
+}
+
 esc_curlk() { local s=$1; s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}; s=${s//$'\r'/\\r}; printf '%s' "$s"; }
 
 # is_placeholder <value> — "the operator has not supplied this yet": empty, or a `<SET-…>` token.

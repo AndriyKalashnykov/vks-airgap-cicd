@@ -45,6 +45,8 @@ case "$*" in
     printf '{}' ;;
   *"get nodes"*)   printf '' ;;      # never Ready -> the wait loop must run to its timeout
   version)         echo "Client Version: v1.34.0" ;;
+  *api-resources*) echo 'virtualmachineclasses  vmclass  vmoperator.vmware.com/v1alpha5  false  VirtualMachineClass' ;;  # a REAL SUPERVISOR: these modes inject a failure into the READ, not into what the cluster IS. GLOB, because this stub switches on "$*", not on a parsed subcommand.
+
   *)               printf '' ;;
 esac
 exit 0
@@ -128,6 +130,8 @@ case "$*" in
   *controlPlaneEndpoint.host*) printf '%s' "${STUB_ADV:-}" ;;
   *"get svc -o json"*) printf '{"items":[]}' ;;
   version) echo "Client Version: v1.34.0" ;;
+  *api-resources*) echo 'virtualmachineclasses  vmclass  vmoperator.vmware.com/v1alpha5  false  VirtualMachineClass' ;;  # a REAL SUPERVISOR: these modes inject a failure into the READ, not into what the cluster IS. GLOB, because this stub switches on "$*", not on a parsed subcommand.
+
   *) printf '' ;;
 esac
 exit 0

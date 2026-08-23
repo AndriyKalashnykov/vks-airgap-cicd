@@ -91,6 +91,29 @@ report() {
     return 3
   fi
   if [ "$_rep_rc" -ne 0 ]; then
+    # WRONG-CLUSTER OUTRANKS EVERY OTHER CLASS. classify_kube_failure reads an ERROR STRING and
+    # therefore cannot tell "your credential is bad" from "your credential is fine and this is the
+    # GUEST cluster, which has no Cluster CRD at all". MEASURED 2026-08-22 against the live guest:
+    # this printed "the Supervisor rejected these credentials — make vks-login" for a kubeconfig
+    # that authenticates perfectly, and then ALSO printed "(no <name>-kubeconfig Secret yet — the
+    # control plane has not been minted)" about a cluster whose 3 nodes were Ready. Two false
+    # statements from one wrong-cluster read.
+    # Read SUP DIRECTLY -- do NOT give it a colon-dash default here. SUP is ASSIGNED at :29 from the
+    # one resolver, so the default would be dead code; worse, check-env-coverage treats the
+    # colon-dash form as the signature of an OPERATOR-SETTABLE variable and demands it be documented
+    # in .env.example, which would be a lie (nothing sets SUP from outside this script).
+    # ⚠️ And that gate reads COMMENTS too: an earlier version of this very comment spelled the form
+    # out and tripped the gate on itself. Describe the shape; do not write it.
+    # rc==1 ONLY -- see the note in lib/os.sh. rc==2 (unreachable / stale CA) must reach the
+    # classifier below, which names those causes correctly.
+    kubeconfig_is_supervisor "$SUP"; _sup_rc=$?
+    if [ "$_sup_rc" -eq 1 ]; then
+      rm -f "$_rep_err"
+      echo "  cluster ${VKS_NAMESPACE}/${VKS_CLUSTER_NAME}: COULD NOT ASK — this kubeconfig is NOT a Supervisor"
+      echo "                     (nothing here says whether that Cluster exists)"
+      not_a_supervisor_note | sed 's/^/                   /'
+      return 2
+    fi
     case "$(classify_kube_failure "$_rep_err")" in
       STALE_CA)            _why="the kubeconfig does not work against this cluster (rebuilt CA?) — make vks-login" ;;
       UNAUTHORIZED)        _why="the Supervisor rejected these credentials — make vks-login" ;;
