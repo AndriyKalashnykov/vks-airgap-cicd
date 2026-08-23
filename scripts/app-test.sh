@@ -35,6 +35,17 @@ run_for_app() {
         build) log_info "[${app}] go build";         ( cd "$src" && CGO_ENABLED=0 go build -o /dev/null ./... ) ;;
       esac
       ;;
+    nodejs)
+      case "$ACTION" in
+        # `npm ci`, not `npm install`: it installs from package-lock.json EXACTLY and errors when the
+        # lockfile and package.json disagree -- the same "the lockfile is the contract" property go.sum
+        # and Maven give the others, and exactly what the Tekton nodejs-test task runs.
+        test)  log_info "[${app}] npm ci + npm test"; ( cd "$src" && npm ci --no-audit --no-fund --silent && npm test ) ;;
+        # Nothing to compile. `npm ci` IS the build: it proves the lockfile resolves, which is the only
+        # thing that can fail before runtime.
+        build) log_info "[${app}] npm ci (no compile step)"; ( cd "$src" && npm ci --omit=dev --no-audit --no-fund --silent ) ;;
+      esac
+      ;;
     *) die "app '${app}': unknown lang '$(app_lang "$app")' — add a branch to scripts/app-test.sh" ;;
   esac
 }

@@ -55,6 +55,13 @@ while read -r app; do
       artifact="${TMP}/${app}"
       ( cd "$src" && CGO_ENABLED=0 go build -o "$artifact" . )
       ;;
+    nodejs)
+      # SCAN THE LOCKFILE DIRECTORY, not a built artifact. An interpreted app has no binary carrying
+      # its dependencies, so the thing that describes what SHIPS is package-lock.json -- which trivy
+      # reads directly, needing no node_modules and no network.
+      [ -f "${src}/package-lock.json" ] || die "app '${app}': no package-lock.json under $(app_src "$app") -- trivy would scan nothing, and an empty scan is not a clean one."
+      artifact="$src"
+      ;;
     *) die "app '${app}': add a branch to scripts/trivy-fs.sh" ;;
   esac
 
