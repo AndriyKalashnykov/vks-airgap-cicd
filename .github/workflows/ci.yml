@@ -193,7 +193,10 @@ jobs:
     #
     # DO NOT write `if: false` to disable it: that was tried, and it killed the SCHEDULE too, so the
     # full gate silently ran NOWHERE (see the 2026-08-16 note above). Gate on the EVENT.
-    if: github.event_name == 'schedule'
+    # workflow_dispatch too, or there is NO way to run the full gate on demand -- and the reason to
+    # keep it reachable is concrete: it is the ONLY place `sec` (gitleaks, trivy-config) and the
+    # wall-clock script tests run in CI at all.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -349,7 +352,7 @@ jobs:
       # "make static-check", which is WRONG on every PR -- a PR runs `static-check-pr`, and the
       # GitHub UI showed a step name asserting otherwise. A label that misreports what ran is how
       # someone reasonably concludes CI is still building the apps when it is not.
-      - name: make ${{ github.event_name == 'schedule' && 'static-check' || 'static-check-pr' }}
+      - name: make static-check
         env:
           # CI has network by definition, so a schema that could not be FETCHED is a FAILURE here,
           # not a skip — the same reason static-check-fast sets GWAPI_REQUIRE_FETCH=1 below.
@@ -361,7 +364,7 @@ jobs:
           # The lenient default stays for local dev (a laptop on a train must not red on a CDN).
           KUBECONFORM_REQUIRE_SCHEMAS: '1'
           GWAPI_REQUIRE_FETCH: '1'
-        run: make ${{ github.event_name == 'schedule' && 'static-check' || 'static-check-pr' }}
+        run: make static-check
 
       # THE OTHER HALF OF THE SPLIT (see the restore step's comment). Saving on FAILURE is the whole
       # point: the run we MOST need to persist is the one that died on a throttle, because it is the
