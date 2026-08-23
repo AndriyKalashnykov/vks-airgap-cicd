@@ -14,14 +14,23 @@ ARG RUNTIME_IMAGE=python:3.14-alpine
 # hadolint ignore=DL3006
 FROM ${BUILDER_IMAGE} AS build
 WORKDIR /src
-COPY requirements.txt ./
-# --no-cache-dir: the wheel cache has served its purpose in the builder image; carrying it into a
-# layer would double the size for nothing.
-RUN python -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+# ⚠️ NO venv creation and NO pip install here -- BUILDER_IMAGE already carries BOTH venvs
+# (/opt/venv = the app's deps, /opt/venv-dev = those plus pytest). This stage used to run
+# `python -m venv /opt/venv && pip install -r requirements.txt` followed by
+# `pip install pytest`, which is the air gap leaking twice over:
+#   * PIP_NO_INDEX below is what makes it EXPLICIT: --no-cache-dir, which is what used to be here,
+#     is a LOCAL CACHE knob and does not stop pip dialling PyPI. That confusion is the whole bug.
+#   * MEASURED under --network none: the `pip install pytest` line gave 5 NameResolutionError
+#     retries then "No matching distribution found for pytest".
+#   * The venv line, by contrast, measured rc=0 offline -- `python -m venv` on an EXISTING dir
+#     preserves site-packages, so every requirement reported "already satisfied" and pip never
+#     dialled. It was wasted work rather than a leak, but it made the leak hard to see.
+# Belt and braces: if anything here ever calls pip again, it fails LOUDLY instead of reaching out.
+ENV PIP_NO_INDEX=1
 COPY . .
-# Tests run in the same layer (hadolint DL3059) so a broken app cannot produce an image at all.
-RUN /opt/venv/bin/pip install --no-cache-dir pytest && /opt/venv/bin/python -m pytest -q
+# Tests run in the BUILD stage so a broken app cannot produce an image at all, using the DEV venv --
+# which the runtime stage does not copy, so pytest never ships.
+RUN /opt/venv-dev/bin/python -m pytest -q
 
 # hadolint ignore=DL3006
 FROM ${RUNTIME_IMAGE} AS runtime

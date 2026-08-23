@@ -136,6 +136,28 @@ is unavailable to the audience that needs it most, and telling a tenant to run o
 self-service path, and no target will invent one. `make env-validate` is how they learn it is stale
 (rc=2, HTTP 401); the fix is a conversation with the platform team, not a command.
 
+⚠️ **THE TABLE IS A PROHIBITION, NOT A LOOKUP LIST — and its EDGE is where every violation happens
+(BLOCKING).** The rule above reads as "here are the targets for these questions", so it is obeyed for
+every question that IS a row and abandoned for the first one that is not. MEASURED 2026-08-22, twice
+inside ten minutes, by a session that had quoted this rule an hour earlier: asked "what pods are
+running / what is the ingress LB IP" — neither a row — it hand-rolled `kubectl -o custom-columns`,
+which **zsh glob-mangled** (`no matches found` on the `[0]` subscript) and returned nothing, and
+hand-searched `secrets/` for a kubeconfig instead of calling the repo's own resolver.
+
+**When your question is not a row, the answer is still NEVER a raw `kubectl`/`curl`.** It is one of:
+
+| | |
+|---|---|
+| the target exists under another name | `make creds-show` answers "what are the endpoints and logins **for this context**" — it loops the registry, so it covers apps that did not exist when the table was written |
+| a LIBRARY function exists | `scripts/lib/*.sh` — `istio_discover`, `supervisor_kubeconfig`, `harbor_auth_report`. Source the lib; do not re-derive what it already resolves |
+| **the missing target IS the finding** | a lab question with no target is a gap in the product, not a licence to improvise. File it |
+
+The cost is not style. A hand-rolled probe (a) is unreviewed and often wrong — the two above returned
+**nothing** and a shell error; (b) does not carry the repo's hard-won discriminators, so it silently
+re-enters a settled trap (the three Harbor auth probes that return 200 with NO credentials; a
+`kubectl` empty-result that is rc=0 and therefore bypasses `classify_kube_failure` entirely); and (c)
+its output is not the product's, so a green from it certifies nothing an operator will ever see.
+
 **THE CHAIN, when a credential is stale** (each link is a target; the only human input is the first):
 
 ```text

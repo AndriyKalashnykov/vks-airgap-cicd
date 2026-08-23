@@ -20,5 +20,25 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
+# A SECOND venv carrying the TEST tooling. Two venvs, not one, because the runtime stage copies
+# /opt/venv WHOLESALE (../Dockerfile: COPY --from=build /opt/venv /opt/venv) -- so anything installed
+# into it SHIPS. pytest in a production image is bloat and attack surface for nothing.
+#
+# It must be baked HERE, on the internet side. MEASURED: the app build stage's
+# `pip install pytest` produced 5 NameResolutionError retries then "No matching distribution found
+# for pytest" under --network none. There is also no wheelhouse to fall back on -- measured, this
+# image's pip cache is EMPTY (`ls /root/.cache/pip` -> No such file), because --no-cache-dir above
+# deliberately keeps it that way. So the VENV is the only carrier, and the test venv needs its own.
+#
+# It gets its OWN full install (requirements + pytest), NOT --system-site-packages.
+# MEASURED: `--system-site-packages` exposes the SYSTEM site-packages, and Flask is in /opt/venv,
+# which is not the system -- so `pytest` collected and died with
+#     app.py:23: from flask import Flask, Response
+#     E  ModuleNotFoundError: No module named 'flask'
+# The duplicate Flask (636 KB, measured) exists ONLY in the builder; the runtime stage copies
+# /opt/venv, never /opt/venv-dev, so nothing about the shipped image changes.
+RUN python -m venv /opt/venv-dev \
+    && /opt/venv-dev/bin/pip install --no-cache-dir -r requirements.txt pytest
+
 COPY . .
 # The image's value is /opt/venv, which the app Dockerfile copies into its runtime stage.

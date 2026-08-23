@@ -46,8 +46,18 @@ ENV GOTOOLCHAIN=local
 COPY go.mod go.sum ./
 COPY *.go ./
 
-# -mod=mod against the builder's warm module cache. GOFLAGS is set here rather than on each command
-# so `go test` and `go build` below cannot disagree about it.
+# -mod=readonly against the builder's warm module cache. GOFLAGS is set here rather than on each
+# command so `go test` and `go build` below cannot disagree about it.
+#
+# ⚠️ THIS SAID `-mod=mod`, WHICH IS WEAKER THAN GO'S OWN DEFAULT (readonly) -- we had explicitly
+# opted OUT of a protection. The two flags block DIFFERENT things and are complementary:
+#   -mod=readonly  stops go ADDING a require to go.mod
+#   GOPROXY=off    stops go FETCHING one already required but absent from the cache
+# MEASURED on a go.mod drifted from the builder cache, with the network UP:
+#   -mod=mod      -> 'go: downloading github.com/go-chi/chi v1.5.5'  and SUCCEEDED
+#   -mod=readonly -> 'import lookup disabled by -mod=readonly'       and refused
+# readonly builds and tests this app fine offline against the warm cache, so -mod=mod bought
+# nothing and cost the default protection.
 #
 # GOPROXY=off is the AIR GAP, and it was missing here: k8s/tekton/tasks/go-test.yaml set it but this
 # image build -- the one kaniko actually runs in-cluster -- did not. MEASURED both arms:
@@ -55,7 +65,7 @@ COPY *.go ./
 #   EMPTY module cache + GOPROXY=off -> "module lookup disabled by GOPROXY=off", FAIL
 # Without it, an incomplete builder cache does not fail here; it tries to DIAL proxy.golang.org and
 # fails on a timeout, in the one environment where that error is hardest to read.
-ENV GOFLAGS=-mod=mod \
+ENV GOFLAGS=-mod=readonly \
     GOPROXY=off
 
 # CGO_ENABLED=0 -> a fully static binary, which is what the distroless *static* base requires.
