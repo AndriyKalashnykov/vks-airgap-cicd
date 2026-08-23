@@ -110,7 +110,10 @@ run_for_app() {
       case "$ACTION" in
         test)
           log_info "[${app}] dotnet test (TUnit/MTP)"
-          local proj; proj="$(ls "$src"/tests/*.csproj 2>/dev/null | head -1)"
+          # A glob loop, not `ls` (SC2012): with nullglob off an unmatched pattern stays literal,
+          # so the -e test is what distinguishes "a test project exists" from "the glob did not match".
+          local proj=""; local f
+          for f in "$src"/tests/*.csproj; do [ -e "$f" ] && { proj="$f"; break; }; done
           [ -n "$proj" ] || die "[${app}] no test project at ${src}/tests/*.csproj"
           ( cd "$src" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
               capture "$app" "$out" dotnet run --project "$proj" -c Release )
