@@ -269,7 +269,7 @@ app_builder_base() {
     # renovate: datasource=docker depName=node
     nodejs) printf 'node:24-alpine' ;;
     # renovate: datasource=docker depName=rust
-    rust) printf 'rust:1.97-alpine' ;;
+    rust) printf 'rust:1.98-alpine' ;;
     # renovate: datasource=docker depName=python
     python) printf 'python:3.14-alpine' ;;
     # renovate: datasource=docker depName=mcr.microsoft.com/dotnet/sdk

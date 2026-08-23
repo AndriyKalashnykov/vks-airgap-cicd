@@ -8,7 +8,7 @@
 # The runtime is distroless/static — the SAME base gowebapp uses — which works only because the
 # binary is genuinely static. That is why the musl target and the CGO-free dependency set are
 # load-bearing here and not a stylistic choice.
-ARG BUILDER_IMAGE=rust:1.97-alpine
+ARG BUILDER_IMAGE=rust:1.98-alpine
 ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 # hadolint ignore=DL3006
