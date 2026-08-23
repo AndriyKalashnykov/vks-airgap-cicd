@@ -46,6 +46,11 @@ assert_ran() {
   # when TERM is set, so this is done for ALL languages rather than patched per language.
   local plain; plain="$(mktemp)"
   sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$out" > "$plain"
+  # Single quotes below are DELIBERATE: each string is the CONTAINER's command, so its variables
+  # must expand INSIDE the container, not on this host. The directive sits before the whole case,
+  # not a branch - shellcheck rejects a per-branch directive (SC1124), and putting it on a branch
+  # ALSO made the comment itself trip SC2016.
+  # shellcheck disable=SC2016
   case "$lang" in
     go)     n=$(grep -cE '^--- PASS' "$plain" || true) ;;
     rust)   n=$(sed -n 's/.*test result: ok\. \([0-9]\+\) passed.*/\1/p' "$plain" | head -1) ;;
@@ -132,19 +137,10 @@ run_for_app() {
   out="$(mktemp)"; trap 'rm -f "$out"' RETURN
 
   if [ "$ACTION" = build ]; then
-    # `build` stays on the HOST: check-ui-contract and trivy-fs consume the built artefact from the
-    # working tree, and a tmpfs one is discarded when the container exits.
-    local src; src="${REPO_ROOT}/$(app_src "$app")"
-    case "$lang" in
-      java)   log_info "[${app}] mvn package";  ( cd "$src" && ./mvnw -B -q -DskipTests package ) ;;
-      go)     log_info "[${app}] go build";     ( cd "$src" && go build ./... ) ;;
-      nodejs) log_info "[${app}] npm build";    ( cd "$src" && npm run --silent build --if-present ) ;;
-      python) log_info "[${app}] py compile";   ( cd "$src" && uv run --quiet -- python -m compileall -q . ) ;;
-      rust)   log_info "[${app}] cargo build";  ( cd "$src" && cargo build --locked --release ) ;;
-      dotnet) log_info "[${app}] dotnet build"; ( cd "$src" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet build --nologo -v q -c Release ) ;;
-      *) die "app '${app}': unknown lang '${lang}' — add a branch to scripts/app-test.sh" ;;
-    esac
-    return 0
+    # The build ACTION is retired. Its only caller was `make app-build`, whose only consumer was
+    # `trivy-fs` -- and trivy-fs now builds the two artefacts it actually scans (a jar and a Go
+    # binary) inside the builder images. Nothing else in the repo built an app on the host.
+    die "app-build is retired: trivy-fs builds what it scans in the builder image. Use 'make app-verify'."
   fi
 
   # TEST runs in the app's own builder image -- the SAME image the Tekton task uses, so what is
@@ -166,7 +162,15 @@ run_for_app() {
     rust)   run_in_builder "$app" "$lang" "$out" 'cargo test --offline --locked' ;;
     # `dotnet test` CANNOT drive this: .NET 10 dropped VSTest support for Microsoft.Testing.Platform
     # (which TUnit runs on) and errors while STILL EXITING 0. An MTP test project is an executable.
-    dotnet) run_in_builder "$app" "$lang" "$out" 'proj=$(ls tests/*.csproj 2>/dev/null | head -1); [ -n "$proj" ] || { echo "no test project" >&2; exit 1; }; DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet run --project "$proj" -c Release' ;;
+    dotnet)
+      # Resolve the test project ON THE HOST and pass a literal path in. Discovering it inside the
+      # container needed a $-expression in a single-quoted string, which is unreadable and trips
+      # SC2016 in a spot no directive can cleanly cover (a per-branch directive is SC1124).
+      _proj=""; for _f in "${REPO_ROOT}/$(app_src "$app")"/tests/*.csproj; do
+        [ -e "$_f" ] && { _proj="tests/$(basename "$_f")"; break; }; done
+      [ -n "$_proj" ] || die "[${app}] no test project at $(app_src "$app")/tests/*.csproj"
+      run_in_builder "$app" "$lang" "$out" \
+        "DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet run --project ${_proj} -c Release" ;;
     *) die "app '${app}': unknown lang '${lang}' — add a branch to scripts/app-test.sh" ;;
   esac
 

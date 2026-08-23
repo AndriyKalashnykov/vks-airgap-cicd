@@ -247,23 +247,29 @@ app_health_path() {
 # them. That is how the Go app shipped with an unpinned toolchain AND a CVE'd stdlib.
 # `make check-app-toolchains` gates it.
 app_toolchain() {
-  case "$(app_lang "$1")" in
-    # maven is DELIBERATELY ABSENT. MEASURED 2026-08-22: the Java app builds with `./mvnw`, which runs
-    # apache-maven-3.9.9 from its OWN wrapper dist (.mvn/wrapper/maven-wrapper.properties). mise was
-    # supplying 3.9.16, which NOTHING invoked -- a live version inconsistency no gate noticed. The one
-    # bare `mvn` in the tree (24-builder-probe.sh:62) runs INSIDE the builder container, not on the
-    # host. So requiring a maven pin forced a download onto every walkbox for a binary never executed.
-    java) printf 'java' ;;
-    go)   printf 'go' ;;
-    # `node` is already pinned in .mise.toml, where its comment calls it INFRA (npx markdownlint,
-    # npx renovate). It is now BOTH: app-test.sh runs `npm test` for this app on the same binary.
-    nodejs) printf 'node' ;;
-    python) printf 'python' ;;
-    rust)   printf 'rust' ;;
-    dotnet) printf 'dotnet' ;;
-    *)    die "app '$1': add a branch to app_toolchain() — and pin its tools in .mise.toml" ;;
-  esac
+  # EMPTY BY DESIGN as of 2026-08-23. Every consumer of a host app-toolchain is now containerised —
+  # app-test, check-ui-contract, trivy-fs and app-run all run inside the app's own builder image.
+  # MEASURED: all four exit 0 with java/go/cargo/dotnet/node stripped from PATH entirely.
+  #
+  # The invariant this used to protect ("CI can actually build and test this app") did not vanish;
+  # it MOVED, and is now asserted by a stronger mechanism. check-image-alignment.sh:239-244 executes
+  # app_builder_base() PER APP and asserts its tag against images/images.txt. Since the tests now run
+  # INSIDE that image, "the toolchain that tests == the toolchain that builds" is an IDENTITY rather
+  # than an assertion.
+  #
+  # Two of the pins this removes never worked anyway. MEASURED on a cold MISE_DATA_DIR:
+  #   rust 1.98.0 -> "(symlink)", 8.0K, 1 file, no binary
+  #   dotnet 10   -> "(symlink)", 8.0K, 1 file, no binary
+  # i.e. mise did not install them; it symlinked this box's rustup and system dotnet. They resolved
+  # only because the dev box already had them — the hidden-dev-box-state class. On a walkbox, which
+  # has neither, that path had never been exercised, and every one of the six matrix rows runs
+  # `make deps` (scenario-1 Step 1) which would have been the first place to try it.
+  #
+  # node is NOT here and is still pinned: it is INFRA (npx markdownlint, npx renovate), not an app
+  # toolchain.
+  :
 }
+
 
 # --- per-LANGUAGE behaviour #6: extra --build-arg flags for the image build ---------------------
 # The Kaniko task (k8s/tekton/tasks/kaniko-build.yaml) is SHARED and app-agnostic: it knows about a

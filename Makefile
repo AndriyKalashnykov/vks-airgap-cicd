@@ -1046,9 +1046,6 @@ check-ui-contract: ## Every app must render the SAME page (owner requirement: id
 app-test: ## Test EVERY app (mvn test / go test). One app: APP=gowebapp
 	@$(SCRIPTS)/app-test.sh test $(APP)
 
-.PHONY: app-build
-app-build: ## Build EVERY app (mvn package / go build). One app: APP=gowebapp
-	@$(SCRIPTS)/app-test.sh build $(APP)
 
 .PHONY: app-run
 app-run: check-ports ## Run ONE app locally (APP=javawebapp|gowebapp; default javawebapp) on http://localhost:$(APP_DEV_PORT)
@@ -1128,17 +1125,18 @@ check-toolchain-alignment: ## Fail if the kubectl/go pins in .mise.toml disagree
 	  echo "       Same tool, two pins: jump box (mise) + air-gap fallback (00-install-prereqs.sh). Align them."; \
 	  exit 1; \
 	fi; \
-	echo "check-toolchain-alignment: kubectl aligned ($$mise_v)"; \
-	go_mise=$$(grep -E '^go[[:space:]]*=' .mise.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/' || true); \
-	go_img=$$(grep -oE '^golang:[0-9.]+' images/images.txt | head -1 | sed 's|golang:||' || true); \
-	[ -n "$$go_img" ] || { echo "ERROR: could not read a golang: pin from images/images.txt - the extractor is blind, not the pin absent."; exit 1; }; \
-	if [ "$$go_mise" != "$$go_img" ]; then \
-	  echo "ERROR: Go version drift (BLOCKING) - .mise.toml=$${go_mise:-<none>} vs images/images.txt golang:$$go_img."; \
-	  echo "       The pipeline BUILDS the Go app with the mirrored golang image; local/CI must TEST it"; \
-	  echo "       with the same toolchain, or you test something the pipeline never builds."; \
-	  exit 1; \
-	fi; \
-	echo "check-toolchain-alignment: go aligned ($$go_mise)"
+	echo "check-toolchain-alignment: kubectl aligned ($$mise_v)"
+	@echo "check-toolchain-alignment: go arm retired (see check-image-alignment)"
+
+# GO ARM RETIRED 2026-08-23. It compared .mise.toml go against images/images.txt. That mise pin is
+# GONE: go is not installed on the host any more, because app-test, check-ui-contract, trivy-fs and
+# app-run each run inside the builder image (all four MEASURED rc=0 with toolchains stripped from
+# PATH). With tests running INSIDE that image, toolchain-that-tests == toolchain-that-builds is an
+# IDENTITY rather than an assertion.
+#
+# The other half of the invariant - the builder base agreeing with the mirror - is asserted by
+# check-image-alignment.sh:239-244, which EXECUTES app_builder_base() per app and compares its tag
+# against images/images.txt. Strictly stronger: every app, not just go, read from what the build uses.
 
 ##@ Offline script tests (unit tests for script logic; RUN BY static-check)
 # Fast, fully-offline (no network/cluster/registry) unit tests for script logic that
