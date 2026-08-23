@@ -17,7 +17,14 @@ WORKDIR /src
 COPY package.json package-lock.json ./
 # --offline is the whole point: it turns "the cache was incomplete" from a silent network fetch
 # into a hard failure, which is the only way an air-gapped build can be trusted.
-RUN npm ci --omit=dev --no-audit --no-fund --offline || npm ci --omit=dev --no-audit --no-fund
+#
+# ⚠️ THERE WAS A `|| npm ci ...` FALLBACK ON THIS LINE, immediately under that comment, and it
+# defeated it completely: any cache miss fell through to a REGISTRY FETCH. On the jump box that
+# succeeds silently, so the image builds green while proving nothing about the air gap -- and the
+# only place it would ever fail is in-cluster, where there is no registry to reach and the error is
+# a dial timeout rather than a missing package. A fallback to the network is not a safety net here;
+# it is the bug. If this line fails, the BUILDER IMAGE is stale: rebuild it (make builder-image).
+RUN npm ci --omit=dev --no-audit --no-fund --offline
 COPY . .
 # Tests run in the same layer as the install (one RUN: hadolint DL3059) so a broken app cannot
 # produce an image at all. The Tekton task runs them too; an out-of-band build still cannot skip.

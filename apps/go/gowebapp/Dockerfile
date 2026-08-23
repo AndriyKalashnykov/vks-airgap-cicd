@@ -48,7 +48,15 @@ COPY *.go ./
 
 # -mod=mod against the builder's warm module cache. GOFLAGS is set here rather than on each command
 # so `go test` and `go build` below cannot disagree about it.
-ENV GOFLAGS=-mod=mod
+#
+# GOPROXY=off is the AIR GAP, and it was missing here: k8s/tekton/tasks/go-test.yaml set it but this
+# image build -- the one kaniko actually runs in-cluster -- did not. MEASURED both arms:
+#   warm /go/pkg/mod + GOPROXY=off   -> ok
+#   EMPTY module cache + GOPROXY=off -> "module lookup disabled by GOPROXY=off", FAIL
+# Without it, an incomplete builder cache does not fail here; it tries to DIAL proxy.golang.org and
+# fails on a timeout, in the one environment where that error is hardest to read.
+ENV GOFLAGS=-mod=mod \
+    GOPROXY=off
 
 # CGO_ENABLED=0 -> a fully static binary, which is what the distroless *static* base requires.
 # Safe here ONLY because nothing in the dependency graph needs cgo (stdlib-only; no sqlite driver,

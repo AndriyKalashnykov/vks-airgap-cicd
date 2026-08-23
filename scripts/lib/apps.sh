@@ -57,6 +57,11 @@ app_test_task() {
   case "$(app_lang "$1")" in
     java) printf 'maven-test' ;;
     go)   printf 'go-test' ;;
+    # Named for the LANGUAGE, matching go-test. NOT derived as "<lang>-test": `maven-test` names
+    # the TOOL, and a Java app could legitimately use Gradle, which would make a derived
+    # 'java-test' actively wrong. scripts/validate.sh:243 greps these names against
+    # k8s/tekton/tasks/*.yaml on every PR, so a task that does not exist REDs offline.
+    nodejs) printf 'nodejs-test' ;;
     *)    die "app '$1': unknown lang '$(app_lang "$1")' — add a branch to app_test_task()" ;;
   esac
 }
@@ -69,20 +74,33 @@ app_test_task() {
 # app_set_message <name> <checkout-dir> <message>
 app_set_message() {
   local name="$1" dir="$2" msg="$3" lang; lang="$(app_lang "$name")"
+  # ⚠️ ESCAPE `&` BEFORE IT REACHES A sed REPLACEMENT. In `sed s#a#b#`, a bare `&` in the
+  # replacement expands to THE ENTIRE MATCHED TEXT -- so a marker containing one (a timestamp, a
+  # branch name, "A&B") silently produces a garbled hybrid, and sed exits 0. The `grep -q` below
+  # would then also pass, because the escaped form still contains the literal message. Escape
+  # `\` first or you double-escape what you just inserted.
+  local esc="$msg"; esc="${esc//\\/\\\\}"; esc="${esc//&/\\&}"; esc="${esc//#/\\#}"
   case "$lang" in
     java)
       # application.yml:  message: ${APP_MESSAGE:Hello from vks-airgap-cicd}
       local f="${dir}/src/main/resources/application.yml"
       [ -f "$f" ] || die "app '$name': expected $f (java marker file)"
-      sed -i "s#\${APP_MESSAGE:[^}]*}#\${APP_MESSAGE:${msg}}#" "$f"
-      grep -q "$msg" "$f" || die "app '$name': marker did not land in $f"
+      sed -i "s#\${APP_MESSAGE:[^}]*}#\${APP_MESSAGE:${esc}}#" "$f"
+      grep -qF "$msg" "$f" || die "app '$name': marker did not land in $f"
       ;;
     go)
       # main.go:  const defaultMessage = "Hello from vks-airgap-cicd"
       local f="${dir}/main.go"
       [ -f "$f" ] || die "app '$name': expected $f (go marker file)"
-      sed -i "s#^const defaultMessage = \".*\"#const defaultMessage = \"${msg}\"#" "$f"
-      grep -q "const defaultMessage = \"${msg}\"" "$f" || die "app '$name': marker did not land in $f"
+      sed -i "s#^const defaultMessage = \".*\"#const defaultMessage = \"${esc}\"#" "$f"
+      grep -qF "const defaultMessage = \"${msg}\"" "$f" || die "app '$name': marker did not land in $f"
+      ;;
+    nodejs)
+      # server.js:  const defaultMessage = 'Hello from vks-airgap-cicd';   (SINGLE quotes, trailing ;)
+      local f="${dir}/server.js"
+      [ -f "$f" ] || die "app '$name': expected $f (nodejs marker file)"
+      sed -i "s#^const defaultMessage = '.*';#const defaultMessage = '${esc}';#" "$f"
+      grep -qF "const defaultMessage = '${msg}';" "$f" || die "app '$name': marker did not land in $f"
       ;;
     *) die "app '$name': unknown lang '$lang' — add a branch to app_set_message()" ;;
   esac
@@ -137,6 +155,17 @@ app_runtime_image() {
   case "$(app_lang "$name")" in
     java) printf '%s/%s/eclipse-temurin:%s' "$HARBOR_URL" "$HARBOR_INFRA_PROJECT" "${TEMURIN_JRE_TAG:?}" ;;
     go)   printf '%s/%s/distroless/static-debian12:%s' "$HARBOR_URL" "$HARBOR_INFRA_PROJECT" "${DISTROLESS_STATIC_TAG:?}" ;;
+    # DERIVED from app_builder_base, not a second pin. For Node the builder base IS the runtime
+    # base (images/images.txt:63 says so in as many words), so a NODE_RUNTIME_TAG var would be a
+    # SECOND source of truth for one image and a fresh drift surface -- and it would sit outside
+    # the `# renovate:` annotation that tracks the literal, so only one of the two would ever bump.
+    # Safe here specifically because that literal carries NO digest: mirror_target_ref prefers the
+    # TAG and would silently drop a digest if one were added (measured on the Go/Rust bases). If a
+    # digest is ever pinned for node, this arm must stop deriving and pin explicitly.
+    nodejs)
+      command -v mirror_target_ref >/dev/null 2>&1 \
+        || die "app '$name': app_runtime_image needs mirror_target_ref — source scripts/lib/mirror.sh"
+      mirror_target_ref "$(app_builder_base "$name")" ;;
     *)    die "app '$name': add a branch to app_runtime_image()" ;;
   esac
 }
@@ -176,6 +205,9 @@ app_toolchain() {
     # host. So requiring a maven pin forced a download onto every walkbox for a binary never executed.
     java) printf 'java' ;;
     go)   printf 'go' ;;
+    # `node` is already pinned in .mise.toml, where its comment calls it INFRA (npx markdownlint,
+    # npx renovate). It is now BOTH: app-test.sh runs `npm test` for this app on the same binary.
+    nodejs) printf 'node' ;;
     *)    die "app '$1': add a branch to app_toolchain() — and pin its tools in .mise.toml" ;;
   esac
 }
@@ -200,6 +232,10 @@ app_build_args() {
   case "$(app_lang "$1")" in
     java) printf -- '--build-arg=MVN_OFFLINE=-o' ;;
     go)   printf '' ;;
+    # Empty, like Go: the Node Dockerfile hardcodes `npm ci --offline`, so the air gap needs no
+    # build arg to switch it on. (Java is the exception -- its offline flag is a VALUE, `-o`, that
+    # exists nowhere in its Dockerfile except a comment, so it must be passed.)
+    nodejs) printf '' ;;
     *)    die "app '$1': add a branch to app_build_args()" ;;
   esac
 }
