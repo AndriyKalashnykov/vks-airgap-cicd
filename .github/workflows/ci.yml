@@ -182,7 +182,18 @@ jobs:
     # Expect more on a 4-vCPU runner — lint alone measures 25.6s at 4 cores, 47.4s at 2, because
     # it is CPU-bound and does NOT shrink with caching.
     # TO REVERT: put back `if: github.event_name == 'schedule'`. One line, as before.
-    if: github.event_name == 'schedule' || needs.changes.outputs.code == 'true'
+    # SCHEDULE ONLY (2026-08-23, owner's call). This job is the ONLY thing on a PR that installs the
+    # six app toolchains via mise and restores/saves the maven + go caches -- and after app-test,
+    # check-ui-contract and trivy-fs left the CI gates, it no longer builds a single app, so all of
+    # that setup was pure cost on every PR.
+    #
+    # What still gates a PR: static-check-fast (the cheap alignment/doc/env gates, no toolchain),
+    # secrets, diagrams-check and docs-lint. The rest is run LOCALLY before merging --
+    # `make static-check` and `make app-verify`, per docs/matrix-standing-rules.md G.4/G.5.
+    #
+    # DO NOT write `if: false` to disable it: that was tried, and it killed the SCHEDULE too, so the
+    # full gate silently ran NOWHERE (see the 2026-08-16 note above). Gate on the EVENT.
+    if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
