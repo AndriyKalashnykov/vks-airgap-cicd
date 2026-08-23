@@ -231,6 +231,22 @@ in a reply.
 or *"your call"* about something you could simply do. That sentence IS the failure. Delete it and run
 the command.
 
+**THE SIBLING FAILURE: TREATING A RUNNING BACKGROUND JOB AS THE END OF THE TURN.** Same root, and it
+costs the same way. MEASURED 2026-08-23, minutes after RULE ZERO-0 was written: a ~45-minute lab cut
+was launched, a status report was written, and the turn ended — while a full six-app KinD e2e, which
+touches nothing the cut touches and needed 32 idle CPUs and 148 GiB of free RAM, sat unstarted until
+the owner asked *"do you have other tasks you can run in parallel?"*. It was available from t=0.
+
+A backgrounded job is not a blocker; it is a REASON to start the next independent thing. The turn
+ends when there is no independent work left, never when the last report was written.
+
+**The reflex, at the moment you launch anything long:** before writing a single word of status, ask
+what else can run RIGHT NOW that does not depend on it — and start that too. On this repo the
+answer is almost never "nothing": a KinD e2e, an adversary round, a gate, a doc audit and a lab cut
+are mutually independent, and the box is a 32-CPU machine.
+
+**The tell:** your reply is a status table and nothing is being started in the same turn.
+
 ### RULE ZERO-A — DERIVE THE CONTRACT FROM THE CODE BEFORE YOU CHANGE IT (BLOCKING)
 
 Before writing code that changes **what one side must provide to another** — the air gap, a wire
