@@ -38,4 +38,15 @@ spec:
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
-        dotnet test --no-restore --nologo -v q
+        # TWO reasons this is NOT `dotnet test --no-restore`:
+        #  1. .NET 10 dropped VSTest support for Microsoft.Testing.Platform, which TUnit runs on.
+        #     `dotnet test` then errors "Testing with VSTest target is no longer supported" -- and
+        #     MEASURED 2026-08-23, it STILL EXITS 0, so the failure is invisible to Tekton.
+        #     An MTP test project is an executable; running it is the supported path.
+        #  2. workingDir is a FRESH CLONE, so there is no obj/project.assets.json here -- the
+        #     builder's lives at /build and is path-anchored. --no-restore would fail outright.
+        #     The restore below is still OFFLINE: NUGET_PACKAGES points at the image's warm cache.
+        proj="$(ls tests/*.csproj 2>/dev/null | head -1)"
+        [ -n "$proj" ] || { echo "no test project at tests/*.csproj" >&2; exit 1; }
+        dotnet restore "$proj"
+        dotnet run --project "$proj" --no-restore -c Release
