@@ -15,6 +15,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
 
+# NO_COLOR is the documented cross-tool standard (https://no-color.org) and is the RIGHT mechanism
+# for this, not a regex: dotnet, cargo and others honour it. It is set once here rather than per arm.
+#
+# The ANSI strip in assert_ran stays as a FALLBACK, and the reason is measured, not defensive habit:
+# on this box every runner already suppresses colour when stdout is a pipe, so the coloured form is
+# NOT locally reproducible -- CI is the only place that produced it. Until a CI run proves NO_COLOR
+# alone is sufficient, removing the strip would be asserting a fix I have not measured.
+export NO_COLOR=1
+
 ACTION="${1:-test}"
 ONLY="${2:-}"
 
@@ -31,23 +40,30 @@ ONLY="${2:-}"
 assert_ran() {
   local app="$1" lang="$2" out="$3" n=""
   [ -s "$out" ] || die "[${app}] the runner emitted ZERO BYTES — it did not run"
+  # STRIP ANSI FIRST. Measured 2026-08-23: dotnet emits colour on the GitHub runner but not on the
+  # dev box, so "  succeeded: 3" arrives as "\033[32m  succeeded: 3" and every ^-anchored pattern
+  # misses it -- green locally, red in CI, for a run whose tests all passed. Any runner may colour
+  # when TERM is set, so this is done for ALL languages rather than patched per language.
+  local plain; plain="$(mktemp)"
+  sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$out" > "$plain"
   case "$lang" in
-    go)     n=$(grep -cE '^--- PASS' "$out" || true) ;;
-    rust)   n=$(sed -n 's/.*test result: ok\. \([0-9]\+\) passed.*/\1/p' "$out" | head -1) ;;
+    go)     n=$(grep -cE '^--- PASS' "$plain" || true) ;;
+    rust)   n=$(sed -n 's/.*test result: ok\. \([0-9]\+\) passed.*/\1/p' "$plain" | head -1) ;;
     # "4 passed in 0.04s" sits at LINE START, so a pattern demanding a char before the digit
     # matches nothing. Grep the phrase, not a position.
-    python) n=$(grep -oE '[0-9]+ passed' "$out" | grep -oE '[0-9]+' | head -1) ;;
+    python) n=$(grep -oE '[0-9]+ passed' "$plain" | grep -oE '[0-9]+' | head -1) ;;
     # node --test's spec reporter prints an INFO glyph then "pass N" (measured: "\u2139 pass 3"),
     # NOT "# pass N" as the TAP reporter would. Match the word, not the decoration.
-    nodejs) n=$(grep -oE '(^|[^a-z])pass [0-9]+' "$out" | grep -oE '[0-9]+' | head -1) ;;
-    java)   n=$(sed -n 's/.*Tests run: \([0-9]\+\).*/\1/p' "$out" | tail -1) ;;
-    dotnet) n=$(sed -n 's/^ *succeeded: \([0-9]\+\).*/\1/p' "$out" | head -1) ;;
+    nodejs) n=$(grep -oE '(^|[^a-z])pass [0-9]+' "$plain" | grep -oE '[0-9]+' | head -1) ;;
+    java)   n=$(sed -n 's/.*Tests run: \([0-9]\+\).*/\1/p' "$plain" | tail -1) ;;
+    dotnet) n=$(sed -n 's/^ *succeeded: \([0-9]\+\).*/\1/p' "$plain" | head -1) ;;
   esac
   if [ -z "$n" ]; then
     sed 's/^/    | /' "$out" >&2
     die "[${app}] no test-count line in the runner's output (above) — it ran no tests"
   fi
   [ "$n" -ge 1 ] || { sed 's/^/    | /' "$out" >&2; die "[${app}] 0 tests collected"; }
+  rm -f "$plain"
   TESTS_TOTAL=$((TESTS_TOTAL + n))
   log_info "[${app}] ${n} test(s) ran"
 }
