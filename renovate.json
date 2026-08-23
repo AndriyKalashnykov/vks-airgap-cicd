@@ -6,6 +6,7 @@
   ],
   "enabledManagers": [
     "maven",
+    "maven-wrapper",
     "dockerfile",
     "github-actions",
     "mise",
