@@ -1,0 +1,21 @@
+[package]
+name = "rustwebapp"
+version = "0.1.0"
+edition = "2021"
+
+# axum over actix: pure Rust with no C dependencies, so the CGO-free static story holds and the
+# runtime image stays distroless/static (the same base gowebapp uses). Templating is a plain
+# format! of the shared markup on purpose -- a Rust-specific template engine would make this app's
+# rendering diverge from the other five, which `make check-ui-contract` forbids.
+#
+# VERSIONS VERIFIED against the crates.io sparse index (not from memory): axum 0.8.9 is the latest
+# stable (0.9 does NOT exist), tokio 1.53.1.
+[dependencies]
+axum = "0.8.9"
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net"] }
+
+[dev-dependencies]
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net"] }
+
+[profile.release]
+strip = true

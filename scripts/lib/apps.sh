@@ -57,6 +57,11 @@ app_test_task() {
   case "$(app_lang "$1")" in
     java) printf 'maven-test' ;;
     go)   printf 'go-test' ;;
+    # Named for the LANGUAGE, matching go-test. NOT derived as "<lang>-test": `maven-test` names
+    # the TOOL, and a Java app could legitimately use Gradle, which would make a derived
+    # 'java-test' actively wrong. scripts/validate.sh:243 greps these names against
+    # k8s/tekton/tasks/*.yaml on every PR, so a task that does not exist REDs offline.
+    nodejs) printf 'nodejs-test' ;;
     *)    die "app '$1': unknown lang '$(app_lang "$1")' — add a branch to app_test_task()" ;;
   esac
 }
@@ -69,20 +74,33 @@ app_test_task() {
 # app_set_message <name> <checkout-dir> <message>
 app_set_message() {
   local name="$1" dir="$2" msg="$3" lang; lang="$(app_lang "$name")"
+  # ⚠️ ESCAPE `&` BEFORE IT REACHES A sed REPLACEMENT. In `sed s#a#b#`, a bare `&` in the
+  # replacement expands to THE ENTIRE MATCHED TEXT -- so a marker containing one (a timestamp, a
+  # branch name, "A&B") silently produces a garbled hybrid, and sed exits 0. The `grep -q` below
+  # would then also pass, because the escaped form still contains the literal message. Escape
+  # `\` first or you double-escape what you just inserted.
+  local esc="$msg"; esc="${esc//\\/\\\\}"; esc="${esc//&/\\&}"; esc="${esc//#/\\#}"
   case "$lang" in
     java)
       # application.yml:  message: ${APP_MESSAGE:Hello from vks-airgap-cicd}
       local f="${dir}/src/main/resources/application.yml"
       [ -f "$f" ] || die "app '$name': expected $f (java marker file)"
-      sed -i "s#\${APP_MESSAGE:[^}]*}#\${APP_MESSAGE:${msg}}#" "$f"
-      grep -q "$msg" "$f" || die "app '$name': marker did not land in $f"
+      sed -i "s#\${APP_MESSAGE:[^}]*}#\${APP_MESSAGE:${esc}}#" "$f"
+      grep -qF "$msg" "$f" || die "app '$name': marker did not land in $f"
       ;;
     go)
       # main.go:  const defaultMessage = "Hello from vks-airgap-cicd"
       local f="${dir}/main.go"
       [ -f "$f" ] || die "app '$name': expected $f (go marker file)"
-      sed -i "s#^const defaultMessage = \".*\"#const defaultMessage = \"${msg}\"#" "$f"
-      grep -q "const defaultMessage = \"${msg}\"" "$f" || die "app '$name': marker did not land in $f"
+      sed -i "s#^const defaultMessage = \".*\"#const defaultMessage = \"${esc}\"#" "$f"
+      grep -qF "const defaultMessage = \"${msg}\"" "$f" || die "app '$name': marker did not land in $f"
+      ;;
+    nodejs)
+      # server.js:  const defaultMessage = 'Hello from vks-airgap-cicd';   (SINGLE quotes, trailing ;)
+      local f="${dir}/server.js"
+      [ -f "$f" ] || die "app '$name': expected $f (nodejs marker file)"
+      sed -i "s#^const defaultMessage = '.*';#const defaultMessage = '${esc}';#" "$f"
+      grep -qF "const defaultMessage = '${msg}';" "$f" || die "app '$name': marker did not land in $f"
       ;;
     *) die "app '$name': unknown lang '$lang' — add a branch to app_set_message()" ;;
   esac
@@ -92,17 +110,44 @@ app_set_message() {
 # Both are refs INTO HARBOR (the air gap has nothing else). The tags come from .env.example and are
 # kept aligned with images/images.txt by `make check-image-alignment`, which reads each app's
 # Dockerfile ARGs straight out of the registry — so this stays honest without a per-app gate.
+# ⚠️ DERIVED FROM app_has_builder, NOT FROM A PER-LANGUAGE LITERAL. This was a `case` on the
+# language, and its `go)` arm returned the MIRRORED UPSTREAM path
+# (the Harbor path of the MIRRORED golang image, tag from its .env.example var) because Go had no
+# builder. The moment gowebapp gained a Dockerfile.builder (2026-08-22) that arm became a
+# MIRROR-CORRUPTING BUG, MEASURED:
+#
+#     java push-ref: harbor/cicd/javawebapp-builder:0.3.0     (a builder)
+#     go   push-ref: harbor/cicd/golang:1.27.0-bookworm       (the MIRRORED UPSTREAM IMAGE)
+#
+# app_has_builder() is a file test, so gowebapp enrolled itself in 22-builder-push.sh, which
+# computes its destination from THIS function -- and `make builder-push` would have REPLACED the
+# mirrored public golang in Harbor with a locally-built derivative. Nothing would have failed:
+# 23-mirror-verify.sh treats a digest mismatch as a WARN whose text blames "likely OCI-layout
+# rewrap", and install-all verifies BEFORE the push (Makefile: mirror -> mirror-verify ->
+# builder-image), so the clobber lands after the only check that could see it.
+#
+# The invariant the `case` could not express: an app that SHIPS a builder pushes to its OWN
+# <app>-builder ref; an app that does not never had anything to push. Deriving from the same
+# predicate that enrols the app makes those two facts one fact, so they cannot disagree again.
 app_builder_image() {
   local name="$1"
-  case "$(app_lang "$name")" in
-    # Java needs a PRE-BAKED builder image (its ~/.m2 holds every dependency) because an in-cluster
-    # `mvn` cannot reach Maven Central. That image is built + pushed by 15-build-push-builder.sh.
-    java) printf '%s/%s/%s-builder:%s' "$HARBOR_URL" "$HARBOR_INFRA_PROJECT" "$name" "${BUILDER_IMAGE_TAG:?}" ;;
-    # Go needs NO builder image: the app is stdlib-only, so the offline build fetches nothing and
-    # the mirrored upstream golang image is enough.
-    go)   printf '%s/%s/golang:%s' "$HARBOR_URL" "$HARBOR_INFRA_PROJECT" "${GOLANG_BUILD_TAG:?}" ;;
-    *)    die "app '$name': add a branch to app_builder_image()" ;;
-  esac
+  if app_has_builder "$name"; then
+    # Its own ref, namespaced by app. Never collides with a mirrored upstream repo.
+    printf '%s/%s/%s-builder:%s' "${HARBOR_URL:?}" "${HARBOR_INFRA_PROJECT:?}" "$name" "${BUILDER_IMAGE_TAG:?}"
+  else
+    # No builder: the app builds FROM the mirrored upstream base directly. mirror_target_ref is the
+    # ONE mapping the mirror itself uses (lib/mirror.sh), so this cannot drift from where the image
+    # actually landed -- reimplementing the <host>/<path>:<tag> rewrite here is how they diverge.
+    # GUARD, not an assumption: lib/apps.sh does NOT source lib/mirror.sh (it would be circular --
+    # mirror.sh sources apps.sh), so mirror_target_ref is the CALLER's to provide. Without this a
+    # caller that sourced apps.sh alone gets `mirror_target_ref: command not found` on this branch
+    # ONLY -- the trap lib/os.sh:1699 records for harbor_scheme. MEASURED: 24-builder-probe.sh
+    # sources apps.sh and NOT mirror.sh today. The branch is currently unreachable (every app ships
+    # a builder), which is exactly why it needs to fail loudly rather than rot.
+    command -v mirror_target_ref >/dev/null 2>&1 \
+      || die "app '$name' has no Dockerfile.builder, so its image ref comes from mirror_target_ref — but lib/mirror.sh is not sourced. Source it alongside lib/apps.sh in the calling script."
+    mirror_target_ref "$(app_builder_base "$name")"
+  fi
 }
 
 app_runtime_image() {
@@ -110,6 +155,17 @@ app_runtime_image() {
   case "$(app_lang "$name")" in
     java) printf '%s/%s/eclipse-temurin:%s' "$HARBOR_URL" "$HARBOR_INFRA_PROJECT" "${TEMURIN_JRE_TAG:?}" ;;
     go)   printf '%s/%s/distroless/static-debian12:%s' "$HARBOR_URL" "$HARBOR_INFRA_PROJECT" "${DISTROLESS_STATIC_TAG:?}" ;;
+    # DERIVED from app_builder_base, not a second pin. For Node the builder base IS the runtime
+    # base (images/images.txt:63 says so in as many words), so a NODE_RUNTIME_TAG var would be a
+    # SECOND source of truth for one image and a fresh drift surface -- and it would sit outside
+    # the `# renovate:` annotation that tracks the literal, so only one of the two would ever bump.
+    # Safe here specifically because that literal carries NO digest: mirror_target_ref prefers the
+    # TAG and would silently drop a digest if one were added (measured on the Go/Rust bases). If a
+    # digest is ever pinned for node, this arm must stop deriving and pin explicitly.
+    nodejs)
+      command -v mirror_target_ref >/dev/null 2>&1 \
+        || die "app '$name': app_runtime_image needs mirror_target_ref — source scripts/lib/mirror.sh"
+      mirror_target_ref "$(app_builder_base "$name")" ;;
     *)    die "app '$name': add a branch to app_runtime_image()" ;;
   esac
 }
@@ -118,11 +174,20 @@ app_runtime_image() {
 # `make verify` waits for the app to serve HTTP before asserting the marker. Spring Boot exposes
 # actuator; the Go app exposes a plain /healthz (no actuator exists outside Spring).
 app_health_path() {
-  case "$(app_lang "$1")" in
-    java) printf '/actuator/health' ;;
-    go)   printf '/healthz' ;;
-    *)    die "app '$1': add a branch to app_health_path()" ;;
-  esac
+  # ZERO branches, permanently. Every app serves /healthz -- 5 of 6 already did; the Java app
+  # reaches it through actuator path-mapping (see its application.yml), so it is a REAL health
+  # check, not a hardcoded 200. The `$1` is accepted and ignored so every caller stays unchanged.
+  #
+  # This was a `case` that died for any unknown language. MEASURED 2026-08-22: enrolling a third
+  # app made `make creds` print FATAL, render the row anyway with a BLANK health field, and exit 0
+  # -- because a `die` inside `$( )` in ARGUMENT position does not trip the caller's `set -e`.
+  #
+  # ⚠️ NOT a claim that the per-language rot is closed. FIVE sibling `case` lists still die for an
+  # unknown language (app_test_task, app_set_message, app_runtime_image, app_toolchain,
+  # app_build_args) and most are irreducibly per-language: Go and Java cannot share a runtime
+  # image or a toolchain. The health path was the one branch that was a CONVENTION we own.
+  : "${1:?app_health_path: an app name is required}"
+  printf '/healthz'
 }
 
 # --- per-LANGUAGE behaviour #5: the toolchain the app needs to BE TESTED ------------------------
@@ -140,6 +205,9 @@ app_toolchain() {
     # host. So requiring a maven pin forced a download onto every walkbox for a binary never executed.
     java) printf 'java' ;;
     go)   printf 'go' ;;
+    # `node` is already pinned in .mise.toml, where its comment calls it INFRA (npx markdownlint,
+    # npx renovate). It is now BOTH: app-test.sh runs `npm test` for this app on the same binary.
+    nodejs) printf 'node' ;;
     *)    die "app '$1': add a branch to app_toolchain() — and pin its tools in .mise.toml" ;;
   esac
 }
@@ -154,7 +222,8 @@ app_toolchain() {
 #       unreachable in the air gap). Passing it to a NON-Maven app is meaningless — Kaniko silently
 #       drops a --build-arg the Dockerfile never declares, so it "worked", but it is a landmine for
 #       the next language.
-# Go:   none — the app is stdlib-only, so its Dockerfile declares no offline switch at all.
+# Go:   none — `go build` takes its offline behaviour from GOFLAGS/GOPROXY in the Dockerfile, not
+#       from a --build-arg. (It is no longer stdlib-only: it depends on chi and ships a builder.)
 #
 # Prints a SPACE-SEPARATED list of `--build-arg=K=V` flags (empty for a language that needs none).
 # It is threaded to the Kaniko task as the `build-args` param (Trigger -> Pipeline -> Task), where
@@ -163,6 +232,10 @@ app_build_args() {
   case "$(app_lang "$1")" in
     java) printf -- '--build-arg=MVN_OFFLINE=-o' ;;
     go)   printf '' ;;
+    # Empty, like Go: the Node Dockerfile hardcodes `npm ci --offline`, so the air gap needs no
+    # build arg to switch it on. (Java is the exception -- its offline flag is a VALUE, `-o`, that
+    # exists nowhere in its Dockerfile except a comment, so it must be passed.)
+    nodejs) printf '' ;;
     *)    die "app '$1': add a branch to app_build_args()" ;;
   esac
 }
@@ -170,8 +243,67 @@ app_build_args() {
 # app_has_builder <name> — true iff the app ships a Dockerfile.builder, i.e. it needs a pre-baked
 # offline dependency cache. Keyed on the FILE, not on the language: that is what actually decides
 # whether `make builder-image` has work to do, and a future language that needs one just adds the
-# file. (gowebapp has none — stdlib-only.)
+# file. As of 2026-08-22 all six apps ship one, so this predicate is true for every app -- but it
+# stays a FILE TEST, because that is what makes adding a language a file rather than a branch.
 app_has_builder() { [ -f "${REPO_ROOT}/$(app_src "$1")/Dockerfile.builder" ]; }
+
+# --- per-LANGUAGE behaviour #7: WHICH base image the app's Dockerfile.builder is built FROM -------
+# 14-builder-build.sh enrolls EVERY app that ships a Dockerfile.builder (app_has_builder, above) --
+# generic selection -- but until 2026-08-22 its body resolved ONE Maven base ABOVE the loop and
+# passed it to every app as `--build-arg MAVEN_IMAGE=...`. So a node builder app would have received
+# an ARG its Dockerfile never declares, and MEASURED: podman answers
+#   [Warning] one or more build args were not consumed: [MAVEN_IMAGE]
+# and EXITS 0. The build then uses the ARG's own default -- an UNPINNED base in an air-gap build,
+# announced only by a warning nobody reads. Renaming MAVEN_* would not have helped: the value was
+# resolved once, above the loop, so it physically could not vary per app.
+#
+# app_builder_base <name> -- the images/images.txt KEY of the builder base. Must match a line in
+# that file exactly, because 14-builder-build.sh looks its DIGEST up in bundle/images.lock and a
+# miss is a hard die.
+app_builder_base() {
+  case "$(app_lang "$1")" in
+    # renovate: datasource=docker depName=maven
+    java) printf 'maven:3.9-eclipse-temurin-25' ;;
+    # renovate: datasource=docker depName=golang
+    go)   printf 'golang:1.27.0-bookworm' ;;
+    # renovate: datasource=docker depName=node
+    nodejs) printf 'node:24-alpine' ;;
+    # renovate: datasource=docker depName=rust
+    rust) printf 'rust:1.97-alpine' ;;
+    # renovate: datasource=docker depName=python
+    python) printf 'python:3.14-alpine' ;;
+    # renovate: datasource=docker depName=mcr.microsoft.com/dotnet/sdk
+    dotnet) printf 'mcr.microsoft.com/dotnet/sdk:10.0-alpine' ;;
+    *)    die "app '$1' ships a Dockerfile.builder but app_builder_base() has no branch for lang '$(app_lang "$1")' — add one, and add the image to images/images.txt so it is mirrored." ;;
+  esac
+}
+
+# app_builder_arg <name> -- the --build-arg NAME the app's Dockerfile.builder actually declares.
+# 14-builder-build.sh VERIFIES the Dockerfile declares it before building, so a mismatch is a loud
+# die instead of the silent unpinned base described above.
+app_builder_arg() {
+  case "$(app_lang "$1")" in
+    java) printf 'MAVEN_IMAGE' ;;
+    go)   printf 'GO_IMAGE' ;;
+    nodejs) printf 'NODE_IMAGE' ;;
+    rust) printf 'RUST_IMAGE' ;;
+    python) printf 'PYTHON_IMAGE' ;;
+    dotnet) printf 'DOTNET_SDK_IMAGE' ;;
+    *)    die "app '$1' ships a Dockerfile.builder but app_builder_arg() has no branch for lang '$(app_lang "$1")' — add one naming the ARG its Dockerfile.builder declares." ;;
+  esac
+}
+
+# app_builder_base_path <name> -- the pullable path for that base, DERIVED, so it is not a third
+# per-language site to forget. A key containing '/' is already a full path (mcr.microsoft.com/...);
+# a bare name is a Docker Hub official image and lives under docker.io/library/.
+app_builder_base_path() {
+  local key; key="$(app_builder_base "$1")"
+  local repo="${key%%:*}"
+  case "$repo" in
+    */*) printf '%s' "$repo" ;;
+    *)   printf 'docker.io/library/%s' "$repo" ;;
+  esac
+}
 
 # app_image <name> — the app's image repo in Harbor (no tag; the pipeline tags it with the commit).
 app_image() { printf '%s/%s/%s' "$HARBOR_URL" "$HARBOR_APP_PROJECT" "$1"; }

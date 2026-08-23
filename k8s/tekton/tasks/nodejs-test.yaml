@@ -1,0 +1,49 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: nodejs-test
+  namespace: ${CI_NAMESPACE}
+spec:
+  description: >-
+    Run the Node app's tests OFFLINE, on the app's own builder image, whose baked node_modules is
+    what makes that possible. `npm ci --offline` is the air gap made explicit: it refuses to reach
+    the registry, so a dependency that is not already in the image FAILS loudly here rather than
+    hanging on a network timeout.
+
+    `npm ci` (not `npm install`) because it installs from package-lock.json exactly and errors if
+    the lockfile and package.json disagree -- the same "the lockfile is the contract" property the
+    other languages get from go.sum and Maven's resolved dependency list.
+  params:
+    - name: subdir
+      type: string
+      default: repo
+    - name: builder-image
+      type: string
+  workspaces:
+    - name: source
+  steps:
+    - name: test
+      image: $(params.builder-image)
+      workingDir: $(workspaces.source.path)/$(params.subdir)
+      env:
+        # No registry to reach in the air gap. Fail fast rather than retry into a timeout.
+        - name: npm_config_offline
+          value: "true"
+        - name: npm_config_audit
+          value: "false"
+        - name: npm_config_fund
+          value: "false"
+        # npm writes its cache and logs under $HOME; the image's HOME may be read-only or absent
+        # for the runAsUser Tekton picks, so point both at the workspace, which is writable.
+        - name: HOME
+          value: $(workspaces.source.path)
+        - name: npm_config_cache
+          value: $(workspaces.source.path)/.npm
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        # The builder image already carries node_modules for this exact lockfile. Reinstalling from
+        # the workspace copy proves the lockfile in the COMMIT still resolves offline -- if someone
+        # adds a dependency without rebuilding the builder, this is where it is caught.
+        npm ci --offline
+        npm test

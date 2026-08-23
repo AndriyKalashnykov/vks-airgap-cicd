@@ -19,6 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"log/slog"
 	"net"
 	"net/http"
@@ -92,16 +95,28 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
 
 // newMux builds the router. Split out from main so the tests exercise the REAL handlers
 // (not a reimplementation of them) over httptest — hermetic, no network, no fixed port.
-func newMux(p page) *http.ServeMux {
-	mux := http.NewServeMux()
+//
+// ROUTED WITH chi (github.com/go-chi/chi/v5), which is this app's ONE real dependency, and it is
+// deliberate: a demo whose Go app has an empty `require` block does not exercise the air-gapped
+// dependency story at all. chi over echo/gin because it is PURE GO and its handlers ARE
+// http.HandlerFunc -- so `distroless/static` keeps working (CGO_ENABLED=0, asserted in the tests)
+// and nothing about the stdlib contract changes. Templating stays stdlib html/template on purpose:
+// a Go-specific UI kit would make this app's rendering diverge from the others, which
+// `make check-ui-contract` forbids.
+func newMux(p page) http.Handler {
+	r := chi.NewRouter()
+	// Recoverer turns a handler panic into a 500 instead of killing the connection. The container
+	// probes ITSELF (distroless has no shell and no curl), so a panic that took the listener down
+	// would mark the pod unhealthy forever rather than failing one request.
+	r.Use(middleware.Recoverer)
 
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, `{"status":"UP"}`)
 	})
 
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
+	r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := indexTmpl.Execute(w, p); err != nil {
 			slog.Error("render failed", "err", err)
@@ -109,7 +124,7 @@ func newMux(p page) *http.ServeMux {
 		}
 	})
 
-	return mux
+	return r
 }
 
 // healthcheck is the container HEALTHCHECK probe. The runtime image is distroless (no shell, no

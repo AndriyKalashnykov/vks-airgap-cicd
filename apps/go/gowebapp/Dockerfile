@@ -2,10 +2,19 @@
 #
 # gowebapp — the Go sibling of javawebapp.
 #
-# AIR-GAP: the build needs NO module proxy and NO pre-baked dependency cache, because the app is
-# stdlib-only (see main.go). That is the whole reason it is stdlib-only: the Maven app needs a
-# builder image with ~/.m2 baked in (apps/java/javawebapp/Dockerfile.builder) precisely because an
-# in-cluster `mvn` cannot reach Maven Central. `go build` here reaches nothing.
+# AIR-GAP: this app DOES have a dependency (chi), so the in-cluster build needs a warm module
+# cache. It comes from apps/go/gowebapp/Dockerfile.builder, built on the internet side and pushed
+# to Harbor; the pipeline passes it as BUILDER_IMAGE (Tekton -> kaniko-build.yaml -> this ARG),
+# resolved per app by lib/apps.sh app_builder_image().
+#
+# This header claimed the opposite until 2026-08-22 -- "the build needs NO module proxy and NO
+# pre-baked dependency cache, because the app is stdlib-only". That stopped being true the moment
+# chi was added, and the file still COPY'd only go.mod (not go.sum), so the Kaniko build failed with
+# `missing go.sum entry`. Both are fixed; the comment is kept as the record of why.
+#
+# The ARG DEFAULT below is deliberately the plain upstream golang image, NOT the builder: a bare
+# local `podman build` has no Harbor to pull a builder from, and fetching chi from the proxy on a
+# dev box is correct. In the pipeline the default is always overridden.
 #
 # Both stages come from images MIRRORED INTO HARBOR (images/images.txt); Kaniko rewrites the host
 # via BUILDER_IMAGE / RUNTIME_IMAGE, exactly as it does for the Java app.
@@ -29,9 +38,35 @@ WORKDIR /src
 # SILENT about the TOOLCHAIN, which is a different fetch on a different trigger.
 ENV GOTOOLCHAIN=local
 
-# No `go mod download` step and no cache mount: there are no external modules to fetch.
-COPY go.mod ./
+# go.mod AND go.sum. gowebapp is no longer stdlib-only -- it depends on chi -- so the build needs
+# the checksum file, and the modules themselves come from the BUILDER IMAGE's warm /go/pkg/mod
+# (apps/go/gowebapp/Dockerfile.builder, built on the internet side and pushed to Harbor). This
+# comment used to say "there are no external modules to fetch"; that stopped being true on
+# 2026-08-22 and the COPY was one file short, which would have failed the build outright.
+COPY go.mod go.sum ./
 COPY *.go ./
+
+# -mod=readonly against the builder's warm module cache. GOFLAGS is set here rather than on each
+# command so `go test` and `go build` below cannot disagree about it.
+#
+# ⚠️ THIS SAID `-mod=mod`, WHICH IS WEAKER THAN GO'S OWN DEFAULT (readonly) -- we had explicitly
+# opted OUT of a protection. The two flags block DIFFERENT things and are complementary:
+#   -mod=readonly  stops go ADDING a require to go.mod
+#   GOPROXY=off    stops go FETCHING one already required but absent from the cache
+# MEASURED on a go.mod drifted from the builder cache, with the network UP:
+#   -mod=mod      -> 'go: downloading github.com/go-chi/chi v1.5.5'  and SUCCEEDED
+#   -mod=readonly -> 'import lookup disabled by -mod=readonly'       and refused
+# readonly builds and tests this app fine offline against the warm cache, so -mod=mod bought
+# nothing and cost the default protection.
+#
+# GOPROXY=off is the AIR GAP, and it was missing here: k8s/tekton/tasks/go-test.yaml set it but this
+# image build -- the one kaniko actually runs in-cluster -- did not. MEASURED both arms:
+#   warm /go/pkg/mod + GOPROXY=off   -> ok
+#   EMPTY module cache + GOPROXY=off -> "module lookup disabled by GOPROXY=off", FAIL
+# Without it, an incomplete builder cache does not fail here; it tries to DIAL proxy.golang.org and
+# fails on a timeout, in the one environment where that error is hardest to read.
+ENV GOFLAGS=-mod=readonly \
+    GOPROXY=off
 
 # CGO_ENABLED=0 -> a fully static binary, which is what the distroless *static* base requires.
 # Safe here ONLY because nothing in the dependency graph needs cgo (stdlib-only; no sqlite driver,

@@ -43,13 +43,17 @@ The demo ships **two apps, in two languages**, and runs both through the *same* 
 `git push` → Tekton (test → Kaniko build → Harbor → tag write-back) → ArgoCD → the live page.
 `apps/registry.tsv` is the single source of truth — everything else loops over it.
 
-**The two languages are not decoration — they are the air-gap story.** The Java app needs a
-**pre-baked offline Maven builder image** (`Dockerfile.builder`), because an in-cluster `mvn` cannot
-reach Maven Central. The Go app is **stdlib-only**, so its air-gapped build fetches *nothing* and it
-needs **no builder image at all** — same pipeline either way. Each app is verified independently, so
-a green `javawebapp` never hides a broken `gowebapp`.
+**The languages are not decoration — they are the air-gap story.** An in-cluster build reaches no
+package registry, so every app ships a **pre-baked builder image** (`Dockerfile.builder`) carrying
+its own dependency cache: `~/.m2` for Java, the module cache for Go. Both are built on the
+internet-connected jump box, pushed to Harbor, and consumed by the offline build — same pipeline
+either way. Each app is verified independently, so a green `javawebapp` never hides a broken
+`gowebapp`, and `make check-ui-contract` requires every app to render an **identical page**, so they
+differ in data and never in layout.
 
-Adding an app is **one row** in `apps/registry.tsv` — see [Adding an app](docs/adding-an-app.md).
+Adding an app is **one row** in `apps/registry.tsv` — but the row is an **enrolment**, so add it
+only once the app is finished (it enrols the app in every gate at once). See
+[Adding an app](docs/adding-an-app.md).
 As a **tenant** it may also need grants you must request:
 [Scenario 2 → adding an app as a tenant](docs/scenario-2.md#adding-an-app-as-a-tenant).
 

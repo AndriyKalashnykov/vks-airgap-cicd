@@ -35,17 +35,17 @@ class JavaWebappApplicationIntegrationTest {
     }
 
     @Test
-    void actuatorHealthReturns200AndStatusUp() {
-        ResponseEntity<String> resp = rest.getForEntity(url("/actuator/health"), String.class);
+    void healthzReturns200AndStatusUp() {
+        ResponseEntity<String> resp = rest.getForEntity(url("/healthz"), String.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).contains("\"status\":\"UP\"");
     }
 
     @Test
     void livenessAndReadinessProbesUp() {
-        assertThat(rest.getForEntity(url("/actuator/health/liveness"), String.class).getBody())
+        assertThat(rest.getForEntity(url("/healthz/liveness"), String.class).getBody())
                 .contains("\"status\":\"UP\"");
-        assertThat(rest.getForEntity(url("/actuator/health/readiness"), String.class).getBody())
+        assertThat(rest.getForEntity(url("/healthz/readiness"), String.class).getBody())
                 .contains("\"status\":\"UP\"");
     }
 

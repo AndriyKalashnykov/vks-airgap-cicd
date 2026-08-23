@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -64,5 +65,55 @@ func TestEnvFallback(t *testing.T) {
 	t.Setenv("APP_MESSAGE", "from-env")
 	if got := env("APP_MESSAGE", defaultMessage); got != "from-env" {
 		t.Errorf("set env must win: got %q", got)
+	}
+}
+
+// --- THE SHARED-UI CONTRACT (plan Phase B) -----------------------------------------------------
+// Owner requirement: every app renders the SAME layout, differing only in app-specific data. Today
+// the Java Thymeleaf template and this inline one hold the CSS block VERBATIM TWICE, with nothing
+// asserting they stay identical -- measured byte-identical 2026-08-22, which is exactly when to
+// gate it, not after the first drift. Six apps means six copies.
+//
+// The contract is deliberately an OBSERVABLE one: each app RENDERS with the fixed inputs below and
+// writes the result to $UI_CONTRACT_OUT. A language-agnostic gate then masks the app-specific
+// fields and requires every app's output to be byte-identical. That measures "same look and feel"
+// as a user would see it, rather than comparing template SOURCES -- which cannot work across
+// Thymeleaf / html/template / Razor / Jinja2 / JSX.
+//
+// A GENERATOR + drift gate would PREVENT drift rather than detect it, and is the right SECOND step.
+// It is not the first one: it presumes a single markup source, and each app dir IS its own Gitea
+// repo, so the markup has to live in each app.
+//
+// Skips when the env var is unset, so a normal `go test` is unaffected.
+func TestUIContractRender(t *testing.T) {
+	out := os.Getenv("UI_CONTRACT_OUT")
+	if out == "" {
+		t.Skip("UI_CONTRACT_OUT unset — this is the contract producer, not a unit test")
+	}
+	// FIXED inputs, shared verbatim by every app's producer. They are masked by the gate, so their
+	// VALUES do not matter -- but they must be the same everywhere so the masking is uniform.
+	p := page{AppName: "APPNAME", Message: "MESSAGE", Version: "VERSION", Commit: "COMMIT"}
+	// Rendered through the REAL router (newMux -> chi -> the GET / handler), not by calling
+	// indexTmpl.Execute directly. The java sibling renders through MockMvc and its javadoc says the
+	// artifact must be "what a user would actually be served"; a direct template render is the
+	// hand-rolled thing that sentence disparages, and it would be blind to a break in the route, the
+	// Content-Type, or the handler's error path. One rule for all six producers: render through the
+	// app's real HTTP handler.
+	srv := httptest.NewServer(newMux(p))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /: want 200, got %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if err := os.WriteFile(out, body, 0o644); err != nil {
+		t.Fatalf("write %s: %v", out, err)
 	}
 }

@@ -55,6 +55,23 @@ for reg in zero comment; do
   esac
 done
 
+# trivy-fs.sh — SHIPPED FAIL-OPEN, found 2026-08-22 by an adversary round and MEASURED before the
+# fix: `APPS_REGISTRY=/nonexistent bash scripts/trivy-fs.sh` printed
+#     FATAL  app registry not found: /nonexistent
+#     INFO   trivy-fs: OK - 0 app artifact(s) scanned, no fixable HIGH/CRITICAL CVEs
+# and exited 0. A CVE SCANNER CERTIFYING CLEAN HAVING SCANNED NOTHING -- shape 2 (the heredoc) plus
+# shape 3 (an unfloored counter), in the one gate where a false green is worst. This suite covered
+# validate.sh and check-app-toolchains but NOT trivy-fs, which is why it survived PR #944.
+rc="$(run_rc /nonexistent scripts/trivy-fs.sh)"
+if [ "$rc" != 0 ]; then ok "trivy-fs FAILS CLOSED on an unreadable registry (rc=$rc)"
+else bad "trivy-fs returned rc=0 on an unreadable registry" "it would certify a CLEAN CVE scan having scanned nothing"; fi
+
+out="$( cd "$REPO" && APPS_REGISTRY=/nonexistent bash scripts/trivy-fs.sh 2>&1 || true )"
+case "$out" in
+  *"OK — 0 app artifact"*|*"OK - 0 app artifact"*) bad "trivy-fs still prints its OK line on a broken registry" "the line a reader believes is the line that lies" ;;
+  *) ok "trivy-fs prints NO success line when it scanned nothing" ;;
+esac
+
 # POSITIVE CONTROL — the healthy registry must still pass, or the assertions above prove nothing.
 rc="$(run_rc "$REPO/apps/registry.tsv" scripts/validate.sh)"
 if [ "$rc" = 0 ]; then ok "positive control: the REAL registry still passes validate.sh (rc=0)"

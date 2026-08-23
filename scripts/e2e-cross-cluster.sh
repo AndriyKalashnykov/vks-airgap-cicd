@@ -140,8 +140,9 @@ export GITEA_SERVICE_TYPE=NodePort
 # DERIVED from images/images.txt rather than pinned: a literal here drifted silently once
 # (B100) because the alignment gate could only see ${HARBOR_URL}-prefixed refs. It now has a
 # bare-ref arm too, and that arm deliberately SKIPS interpolated tags -- so deriving is drift-proof
-# HERE. It is not a universal rule: `MAVEN_SRC` in 14-builder-build.sh is asserted LITERALLY by
-# another arm of the same gate, so deriving that one turns the gate red. Check before copying.
+# HERE. It is not a universal rule: the BUILDER BASE refs (lib/apps.sh app_builder_base(), one
+# branch per language) are asserted LITERALLY by another arm of the same gate, so deriving those
+# turns the gate red. Check before copying.
 GITEA_IMAGE="$(grep -oE '^gitea/gitea:[^[:space:]]+' "${SCRIPT_DIR}/../images/images.txt" | head -1 || true)"
 [ -n "$GITEA_IMAGE" ] || die "no gitea/gitea ref in images/images.txt — cannot pick the image"
 export GITEA_IMAGE

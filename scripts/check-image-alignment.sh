@@ -197,9 +197,11 @@ check_pinned "ISTIO_VERSION (.env.example)" "$(grep -E '^ISTIO_VERSION=' .env.ex
 check_pinned "istio/proxyv2 (images.txt)" "$proxyv2_itag" "$istio_itag"
 
 # The following are NOT registry-derived on purpose: they guard the Java OFFLINE-BUILDER apparatus
-# (Dockerfile.builder + 15-build-push-builder.sh), which exists only because an in-cluster `mvn`
-# cannot reach Maven Central. No other language has one (gowebapp is stdlib-only, so it needs no
-# pre-baked dependency cache). If a second language ever needs a builder image, derive these too.
+# (Dockerfile.builder + 15-build-push-builder.sh), which exists because an in-cluster build cannot
+# reach its language's package registry. As of 2026-08-22 EVERY app ships one (owner decision: one
+# uniform air-gap pole), so the arm above derives them by EXECUTING app_builder_base() per builder
+# app rather than naming a language. This comment used to say "no other language has one (gowebapp
+# is stdlib-only)" -- both halves stopped being true when gowebapp gained chi and a builder.
 #
 # The Maven BUILD image (maven:<mvn>-eclipse-temurin-<jdk>) is mirrored in images.txt and its
 # FULL tag is re-typed in four consumers the manifest grep above cannot see: the two app
@@ -221,13 +223,26 @@ if [ -n "$builder_app" ]; then
   check_pinned "MAVEN_IMAGE (${builder_df})" \
     "$(grep -oE 'MAVEN_IMAGE=maven:[^[:space:]"]+' "$builder_df" | head -1 | sed 's|MAVEN_IMAGE=maven:||' || true)" "$mvn_itag"
 fi
-# The builder's base ref lives in 14-builder-build.sh (MAVEN_SRC). It used to be two vars in
-# 15-build-push-builder.sh (BUILD_BASE / MAVEN_BASE, both a Harbor ref); the builder was split so the
-# INTERNET box can build it without Harbor, and 14 now resolves that ref to a DIGEST via
-# bundle/images.lock. The tag must still match images.txt — it is the key the lock is looked up by, so a
-# drift here means the lookup finds nothing (or the wrong image) rather than an ImagePullBackOff.
-check_pinned "MAVEN_SRC (14-builder-build.sh)" \
-  "$(grep -E '^MAVEN_SRC=' scripts/14-builder-build.sh | grep -oE 'maven:[^[:space:]"]+' | head -1 | sed 's|maven:||' || true)" "$mvn_itag"
+# The builder base ref MOVED on 2026-08-22. It was `MAVEN_SRC=` in 14-builder-build.sh, resolved ONCE
+# above the loop -- so it could not vary per app, and a node builder would have been handed
+# MAVEN_IMAGE and silently built on an UNPINNED base (measured: podman warns, exits 0). It now lives
+# in lib/apps.sh's app_builder_base(), resolved PER APP inside the loop.
+#
+# So this arm EXECUTES the hook for every app that ships a Dockerfile.builder instead of grepping a
+# literal. That is not merely an adaptation: a grep for one hardcoded NAME could only ever check ONE
+# language, and it went `<absent>` the moment the name moved (measured, rc=2 -- loudly, which is why
+# this is a fix and not a discovery). Executing it covers every builder app, including ones added
+# later, with no edit here.
+#
+# The tag must still match images.txt -- it is the KEY the digest lookup uses, so a drift means the
+# lookup finds nothing (or the wrong image) rather than an ImagePullBackOff.
+_builder_apps="$(app_names | while read -r _a; do if app_has_builder "$_a"; then printf '%s ' "$_a"; fi; done)"
+for _ba in $_builder_apps; do
+  _bkey="$(app_builder_base "$_ba")"   # the images.txt KEY: <repo>:<tag>
+  _brepo="${_bkey%%:*}"; _btag="${_bkey#*:}"
+  _bwant="$(grep -oE "^${_brepo}:[^[:space:]\"]+" images/images.txt | head -1 | sed "s|^${_brepo}:||" || true)"
+  check_pinned "app_builder_base(${_ba}) [${_brepo}]" "$_btag" "$_bwant"
+done
 
 # --- BARE docker.io refs the repo owns, DERIVED from images/images.txt ------------------------
 # ARM 1 sees only refs written as ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/<repo>:<tag>. A ref written
@@ -253,12 +268,13 @@ check_pinned "MAVEN_SRC (14-builder-build.sh)" \
 #      GOAL state -- a false RED whose cheapest silencer is to re-hardcode a tag. VERIFIED: with the
 #      last literal derived, arm 4 reports `0 ref(s) found` and does NOT error.
 #
-# ONE REF IS DELIBERATELY EXEMPT FROM THE "just derive it" ADVICE: `MAVEN_SRC` in
-# 14-builder-build.sh. The check_pinned() call at the end of arm 3 asserts that ref LITERALLY -- it
-# greps `^MAVEN_SRC=` and compares the tag -- so deriving it makes ARM 3 red (measured: `DRIFT
-# MAVEN_SRC ... [^[:space:]]+' vs 3.9-eclipse-temurin-25`). Arm 3 is not weakened to accommodate
-# arm 4: it guards the offline-builder apparatus, where the tag is the key `bundle/images.lock` is
-# looked up by. So for THAT ref the literal is correct and arm 4 simply agrees with arm 3.
+# THE BUILDER BASE REFS ARE DELIBERATELY EXEMPT FROM THE "just derive it" ADVICE. They live in
+# lib/apps.sh's app_builder_base() -- one branch per language -- and arm 3 above EXECUTES that hook
+# per builder app and compares the tag against images.txt. (Until 2026-08-22 there was exactly one,
+# `MAVEN_SRC=` in 14-builder-build.sh, greped literally; it moved because a single ref above the
+# loop could not vary per app.) Arm 3 is not weakened to accommodate arm 4: it guards the
+# offline-builder apparatus, where the tag is the KEY `bundle/images.lock` is looked up by. So for
+# those refs the literal is correct and arm 4 simply agrees with arm 3.
 #
 # Not flagged, deliberately: an interpolated tag (correct BY CONSTRUCTION -- it derives at runtime);
 # a ref preceded by `/` (that is arm 1's, and double-counting hides a blind arm); a ref in

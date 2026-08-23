@@ -36,22 +36,24 @@ ARG APP_GID=10001
 
 ENV APP_INTERNAL_PORT=${APP_INTERNAL_PORT}
 
-# Patch base-OS CVEs in the DEPLOYED image, then install curl for the HEALTHCHECK
-# probe (slim, no recommends). The eclipse-temurin JRE base lags Ubuntu security
-# updates between rebuilds, so `apt-get install` alone leaves fixable HIGH CVEs in
-# already-present libs (e.g. libssl3/openssl) unpatched — an explicit `apt-get
-# upgrade` clears them (verified: raw base 2 HIGH -> 0 after upgrade). See
-# rules/common/security.md "apt-upgrade before the scan".
-# DL3005 ignored: `apt-get upgrade` is the intended CVE-patching mechanism here;
-#   its reproducibility caveat is outweighed by shipping base security fixes.
-# DL3008 ignored: pinning an exact curl patch would break on base bumps and defeat
-#   getting curl's own CVE fixes.
-# hadolint ignore=DL3005,DL3008
-RUN apt-get update \
-    && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends curl \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+# ⚠️ NO apt-get HERE, DELIBERATELY. This stage is what kaniko builds IN-CLUSTER, where there is no
+# egress, so `apt-get update` cannot work — MEASURED: a --network none build died here with
+# "E: Unable to locate package curl". Two things used to live on this line and both are gone:
+#
+#   apt-get install curl  -- only ever fed the HEALTHCHECK below, which now probes with `java`
+#                            itself (JavaWebappApplication --healthcheck). Every sibling app already
+#                            probed with its own runtime; this one predated them all.
+#   apt-get upgrade       -- patched base-OS CVEs. That protection now comes from the PIN:
+#                            images/images.txt carries eclipse-temurin under a `# renovate:`
+#                            annotation, so a CVE fix arrives as a base-image bump that is mirrored
+#                            like any other image. That is already how the other four apps get
+#                            patched -- two are distroless and have no package manager AT ALL, so
+#                            they could never have done this.
+#
+# Residual, stated not hidden: between a temurin CVE fix and the Renovate bump landing, the
+# deployed image carries the unpatched base. Nothing in this repo scans the built APP IMAGE today
+# (trivy-fs scans the JAR), so that window is UNMEASURED either way -- removing the apt-get does not
+# lose a gate, because there was none.
 
 # Non-root runtime user.
 RUN groupadd -g ${APP_GID} app \
@@ -73,6 +75,6 @@ EXPOSE ${APP_INTERNAL_PORT}
 # intervening comment silently detaches it (measured: the finding came straight back).
 # hadolint ignore=DL3025
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
-    CMD curl -sf "http://127.0.0.1:${APP_INTERNAL_PORT}/actuator/health/liveness" || exit 1
+    CMD ["java", "-jar", "/app/app.jar", "--healthcheck"]
 
 ENTRYPOINT ["sh", "-c", "java -jar /app/app.jar --server.port=${APP_INTERNAL_PORT}"]

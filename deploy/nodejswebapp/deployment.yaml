@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nodejswebapp
+  labels:
+    app.kubernetes.io/name: nodejswebapp
+    app.kubernetes.io/part-of: vks-airgap-cicd-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nodejswebapp
+  template:
+    metadata:
+      labels:
+        # istio-injection=disabled on the NAMESPACE is the primary control (lib/psa.sh,
+        # ensure_namespace). This pod-level LABEL is the race guard: ArgoCD's
+        # CreateNamespace=true can create the ns and sync this pod before the installer
+        # labels it. A LABEL, not an annotation -- a webhook objectSelector is a
+        # LabelSelector and never matches annotations (Backlog B26).
+        sidecar.istio.io/inject: "false"
+        app.kubernetes.io/name: nodejswebapp
+    spec:
+      # Harbor image-pull credential, created in this namespace by 70-configure-argocd.sh.
+      # REQUIRED when the Harbor project is private (the tenant default: HARBOR_PUBLIC_PROJECTS=false);
+      # harmless when it is public. Without it every pod here goes ImagePullBackOff.
+      imagePullSecrets:
+        - name: harbor-pull
+      securityContext:
+        runAsNonRoot: true
+        # 1000:1000 is the `node` user baked into node:*-alpine, and it is what the runtime stage
+        # selects (apps/nodejs/nodejswebapp/Dockerfile:36 `USER 1000:1000`). It is NOT the Java
+        # app's 10001 nor the Go app's 65532 -- each image ships a different non-root user, and a
+        # uid the image does not define makes the kubelet refuse to start the container.
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nodejswebapp
+          # kustomize `images:` transformer rewrites this name to the Harbor ref + tag.
+          # The Tekton write-back task bumps the tag in kustomization.yaml on each build.
+          image: nodejswebapp
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # ⚠️ PLACEHOLDERS — kustomize `replacements` (see kustomization.yaml) overwrites BOTH from
+            # the image reference after the `images` transformer has applied newTag, so they end up
+            # showing the commit that is ACTUALLY deployed rather than an in-code default.
+            - name: APP_VERSION
+              value: "dev"
+            - name: APP_COMMIT
+              value: "unknown"
+            - name: APP_INTERNAL_PORT
+              value: "8080"
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            failureThreshold: 30
+            periodSeconds: 1
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          resources:
+            # Between the Go binary (16Mi) and the JVM: a Node process carries a V8 heap but no
+            # JVM metaspace. Not tuned against a running pod yet -- revisit with real usage.
+            requests: { cpu: "10m", memory: "48Mi" }
+            limits: { cpu: "500m", memory: "192Mi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      # No /tmp emptyDir, and that is MEASURED rather than copied: server.js has zero fs/writeFile/
+      # mkdir calls and `express` is its only dependency, so nothing writes to disk at runtime.
+      # The Java app needs one because the JVM/Tomcat unpacks to /tmp; this does not.

@@ -7,8 +7,8 @@
 #
 #   java -> the fat jar         (trivy sees BOOT-INF/lib/*.jar — every resolved dependency)
 #   go   -> the compiled binary (trivy sees Type: gobinary — including the Go STDLIB version, which
-#           is where Go-stdlib CVEs surface; scanning go.mod would miss them entirely because a
-#           stdlib-only app has no modules at all)
+#           is where Go-stdlib CVEs surface; scanning go.mod would miss them entirely, and it
+#           misses them EVEN NOW that gowebapp has a dependency -- the stdlib is not a module)
 #
 # Registry-driven: adding an app scans it, adding a language is one `case` branch.
 set -euo pipefail
@@ -28,6 +28,12 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 rc=0
 scanned=0
+# CAPTURE FIRST -- do NOT inline `$(app_names)` into the heredoc below. MEASURED 2026-08-22:
+# `done <<EOF` + `$(app_names)` SWALLOWS a die inside the substitution, so a missing registry
+# printed `FATAL: app registry not found`, then `OK - 0 app artifact(s) scanned`, and exited 0.
+# A CVE SCANNER CERTIFYING CLEAN HAVING SCANNED NOTHING. An assignment propagates the failure
+# under `set -e`; the heredoc does not. Same class PR #944 fixed in validate.sh and for_each_app.
+_apps="$(app_names)"
 while read -r app; do
   [ -n "$app" ] || continue
   src="${REPO_ROOT}/$(app_src "$app")"
@@ -56,8 +62,12 @@ while read -r app; do
   trivy rootfs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --quiet "$artifact" || rc=1
   scanned=$((scanned + 1))
 done <<EOF
-$(app_names)
+${_apps}
 EOF
+
+# THE FLOOR. The denominator below is only meaningful if it is non-zero: "0 scanned" and "0
+# vulnerabilities" are indistinguishable in the OK line, and the OK line is what a reader believes.
+[ "$scanned" -gt 0 ] || die "trivy-fs: scanned 0 app artifact(s) - refusing to report a CLEAN scan over nothing. Either the app registry is unreadable or no app produced an artifact (did 'make app-build' run?)."
 
 # Print the denominator: a scanner that cannot say how many artifacts it looked at cannot be trusted.
 if [ "$rc" -eq 0 ]; then

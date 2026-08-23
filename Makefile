@@ -1036,6 +1036,10 @@ bootstrap-test: ## Validate bootstrap-jumpbox.sh from-nothing on BARE OS images 
 
 ##@ Demo applications (local dev) — every app in apps/registry.tsv, dispatched by language
 .PHONY: app-test
+.PHONY: check-ui-contract
+check-ui-contract: ## Every app must render the SAME page (owner requirement: identical look and feel). Renders each app through its REAL handler and diffs; MEASURED 2.9s (one test class per app, and it runs after app-test so both toolchains are warm)
+	@$(SCRIPTS)/check-ui-contract.sh
+
 app-test: ## Test EVERY app (mvn test / go test). One app: APP=gowebapp
 	@$(SCRIPTS)/app-test.sh test $(APP)
 
@@ -1198,7 +1202,7 @@ TEST_FAST    := $(filter-out $(TEST_SLOW),$(TEST_OFFLINE))
 # miss same-day CVEs — so per-PR trivy means a cold DB download every run), and test-scripts' slow
 # tier (6 targets that assert wall-clock BY DESIGN = 136s of 154s). Both stay on the weekly run.
 .PHONY: static-check-pr
-static-check-pr: lint validate app-test test-scripts-fast ## The per-PR half of static-check (no trivy, no wall-clock tests)
+static-check-pr: lint validate app-test check-ui-contract test-scripts-fast ## The per-PR half of static-check (no trivy, no wall-clock tests)
 	@echo "static-check-pr: OK"
 
 .PHONY: check-help-row-ids
@@ -1568,7 +1572,7 @@ static-check-fast: check-help-row-ids check-lib-sourcing check-namespace-labelle
 # finding: add a check-* to one and not the other and coverage silently drops with nothing red.
 # Prereqs run left-to-right serially, so this is ORDER-PRESERVING — proven, not assumed:
 #   `make -n static-check` is byte-identical before and after (112 lines, md5 37ed5550e16947fbd8a47ae40d19b6b9).
-static-check: static-check-fast lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: static-check-fast lint validate sec test-scripts app-test check-ui-contract ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)

@@ -44,7 +44,11 @@ if require_gate_tool shellcheck; then
   # from batch membership (proven with an SC1091 control, not by diffing two empty outputs).
   # nproc is present on bare photon:5.0, but degrade rather than die: an empty -P is a hard xargs
   # error, and `set -e` does not fire on a failed substitution in argument position.
+  # apps/ IS IN THE CORPUS: each app ships apps/<lang>/<app>/ui-contract.sh (the shared-UI contract
+  # producer). Without this line those were the ONE shell file a new-language contributor copies,
+  # and `make lint` never looked at them -- six unlinted scripts once all six apps land.
   _sc_files() { find "$REPO_ROOT/scripts" -name '*.sh' -print0; \
+                find "$REPO_ROOT/apps" -name '*.sh' -print0; \
                 find "$REPO_ROOT" -maxdepth 1 -name '*.sh' -print0; }
   # >/dev/null, NOT >/dev/null 2>&1: splicing is a STDOUT problem (the findings), while xargs's own
   # failure — "invalid number for -P", a usage error — is a single small write on STDERR. Discard
