@@ -38,7 +38,21 @@ spec:
         - name: HOME
           value: $(workspaces.source.path)
         - name: npm_config_cache
-          value: $(workspaces.source.path)/.npm
+          # /root/.npm — where THIS image's `npm ci` actually wrote the cache, exactly as
+          # dotnet-test.yaml points at /root/.nuget/packages.
+          #
+          # It was $(workspaces.source.path)/.npm, which is EMPTY. Overriding HOME to the workspace
+          # (above, so npm can write logs) ALREADY relocates npm's cache there; this pinned it.
+          # MEASURED 2026-08-23 in the e2e's nodejs PipelineRun:
+          #   npm error code ENOTCACHED
+          #   request to https://registry.npmjs.org/wrappy/... 'only-if-cached' but no cached response
+          # ENOTCACHED, not EACCES — a PATH problem, not permissions. Confirmed by construction:
+          #   HOME=/tmp/ws npm config get cache  ->  /tmp/ws/.npm
+          #
+          # Readable because this image declares no USER, so the step runs as uid 0 (measured: id -u -> 0).
+          # If a securityContext or PSA ever forces non-root, this fails LOUDLY with EACCES (measured:
+          # uid 1000 CANNOT read /root/.npm) and the fix is to bake the cache to a world-readable path.
+          value: /root/.npm
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
