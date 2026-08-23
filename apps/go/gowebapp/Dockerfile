@@ -10,7 +10,7 @@
 # Both stages come from images MIRRORED INTO HARBOR (images/images.txt); Kaniko rewrites the host
 # via BUILDER_IMAGE / RUNTIME_IMAGE, exactly as it does for the Java app.
 
-ARG BUILDER_IMAGE=golang:1.26.7-bookworm
+ARG BUILDER_IMAGE=golang:1.27.0-bookworm
 ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 # BUILDER_IMAGE default is explicitly tagged; DL3006 cannot see through the ARG.
@@ -18,6 +18,16 @@ ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c8918
 FROM ${BUILDER_IMAGE} AS build
 
 WORKDIR /src
+
+# GOTOOLCHAIN=local — the DEFAULT is `auto`, which is a NETWORK MODE. MEASURED (impl round,
+# 2026-08-22): with a go.mod directive ABOVE the image's toolchain, `auto` responds by trying to
+# DOWNLOAD one -- `go: downloading go1.28.0 ... toolchain not available` -- which inside air-gapped
+# Kaniko is fatal, and no offline gate catches it because it only fires in a live build. `local`
+# converts that silent network dependency into a clear local error:
+#   `go.mod requires go >= 1.28.0 (running go 1.27.0)`.
+# NOTE the header above says the build needs no module proxy. That is true of MODULES and was
+# SILENT about the TOOLCHAIN, which is a different fetch on a different trigger.
+ENV GOTOOLCHAIN=local
 
 # No `go mod download` step and no cache mount: there are no external modules to fetch.
 COPY go.mod ./

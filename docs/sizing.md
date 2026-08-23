@@ -27,16 +27,16 @@ the app images are the ones the pipeline actually built in the last KinD run).
 
 | Bucket | Image | Size |
 |---|---|---|
-| **Java** | `maven:3.9-eclipse-temurin-25` (build) | 168 MB |
+| **Java** | `maven` build image (tag pinned in `images/images.txt`) | 168 MB |
 | **Java** | `eclipse-temurin:…-jre-jammy` (runtime base) | 99 MB |
 | **Java** | `javawebapp-builder` — **offline builder, `~/.m2` pre-baked** (built on the jump box, pushed to Harbor) | **292 MB** |
 | **Java** | `javawebapp:<sha>` — the image the pipeline builds | 130 MB |
 | | **Java total** | **≈ 690 MB** |
-| **Go** | `golang:1.26.7-bookworm` (build) | 283 MB |
+| **Go** | `golang` build image (tag pinned in `images/images.txt`) | 287 MB |
 | **Go** | `distroless/static-debian12` (runtime base) | 1 MB |
 | **Go** | *offline builder* | **none — the app is stdlib-only, so its air-gapped build fetches nothing** |
 | **Go** | `gowebapp:<sha>` — the image the pipeline builds | **4.85 MB** |
-| | **Go total** | **≈ 290 MB** |
+| | **Go total** | **≈ 293 MB** |
 | **Shared** | Tekton (Pipelines + Triggers + Dashboard) | **~2 GB** — dominates the mirror |
 | **Shared** | `gitea` 62 · `istio/proxyv2` 87 · `istio/pilot` 72 · `kaniko` 44 · `alpine/git` 35 · `traefik` 52 · `yq` 9 | 362 MB |
 | | **Shared total** | **≈ 2.4 GB** |
