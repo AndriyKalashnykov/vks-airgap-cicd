@@ -20,10 +20,16 @@
 #   src       source dir; this dir IS the content of the <name>-app Gitea repo
 #   deploy    kustomize dir; this dir IS the content of the <name>-deploy Gitea repo
 #
+# ⚠️ A ROW IS AN ENROLMENT, NOT AN INTENTION. Adding a row enrols the app in EVERY gate at once —
+# validate (deploy dir + Tekton task), check-image-alignment (a runtime Dockerfile),
+# check-pull-secret-alignment, check-app-toolchains, check-ui-contract, and every for_each_app
+# caller. On 2026-08-22 four rows were added for apps whose source existed but whose deploy/,
+# Tekton task and runtime Dockerfile did not: every gate went red at once and the work became
+# un-splittable, because no single app could be finished to green.
+#
+# So: FINISH the app, THEN add its row. Its files can live under apps/<lang>/<app>/ un-enrolled for
+# as long as you like — nothing reads them until the row exists. That is what makes each app
+# independently landable.
 # name		lang	src			deploy
 javawebapp	java	apps/java/javawebapp	deploy/javawebapp
 gowebapp	go	apps/go/gowebapp	deploy/gowebapp
-nodejswebapp	nodejs	apps/nodejs/nodejswebapp	deploy/nodejswebapp
-rustwebapp	rust	apps/rust/rustwebapp	deploy/rustwebapp
-pythonwebapp	python	apps/python/pythonwebapp	deploy/pythonwebapp
-dotnetwebapp	dotnet	apps/dotnet/dotnetwebapp	deploy/dotnetwebapp

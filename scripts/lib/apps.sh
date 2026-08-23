@@ -94,7 +94,7 @@ app_set_message() {
 # Dockerfile ARGs straight out of the registry — so this stays honest without a per-app gate.
 # ⚠️ DERIVED FROM app_has_builder, NOT FROM A PER-LANGUAGE LITERAL. This was a `case` on the
 # language, and its `go)` arm returned the MIRRORED UPSTREAM path
-# (${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/golang:${GOLANG_BUILD_TAG}) because Go genuinely had no
+# (the Harbor path of the MIRRORED golang image, tag from its .env.example var) because Go had no
 # builder. The moment gowebapp gained a Dockerfile.builder (2026-08-22) that arm became a
 # MIRROR-CORRUPTING BUG, MEASURED:
 #
