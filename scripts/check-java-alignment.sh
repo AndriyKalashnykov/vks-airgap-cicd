@@ -65,13 +65,18 @@ check() { # <label> <actual-major> — compare to $pom
   fi
 }
 
-mise="$(grep -oE '^java[[:space:]]*=[[:space:]]*"temurin-[0-9]+' .mise.toml | grep -oE '[0-9]+$' || true)"
+# MISE ARM RETIRED 2026-08-23: the java pin is gone from .mise.toml. Java is not installed on the
+# host any more — app-test, check-ui-contract, trivy-fs and app-run all run inside the builder
+# image (MEASURED rc=0 with the toolchains stripped from PATH), so the JDK that TESTS is the JDK
+# inside maven:<v>-eclipse-temurin-<major>, which the Dockerfile/images.txt arms below already
+# pin. Keeping this arm would assert a pin that must not exist.
+# mise=  (retired)
 df_build="$(grep -oE 'BUILDER_IMAGE=maven:[0-9.]+-eclipse-temurin-[0-9]+' "${JAVA_SRC}/Dockerfile" | grep -oE '[0-9]+$' | head -1 || true)"
 df_run="$(grep -oE 'RUNTIME_IMAGE=eclipse-temurin:[0-9]+' "${JAVA_SRC}/Dockerfile" | grep -oE '[0-9]+$' | head -1 || true)"
 img_mvn="$(grep -oE 'maven:[0-9.]+-eclipse-temurin-[0-9]+' images/images.txt | grep -oE '[0-9]+$' | head -1 || true)"
 img_jre="$(grep -oE 'eclipse-temurin:[0-9]+' images/images.txt | grep -oE '[0-9]+$' | head -1 || true)"
 
-check ".mise.toml (temurin)"                 "$mise"
+# check ".mise.toml (temurin)" retired — see the note above
 check "${JAVA_SRC}/Dockerfile BUILDER_IMAGE (maven)" "$df_build"
 check "${JAVA_SRC}/Dockerfile RUNTIME_IMAGE"        "$df_run"
 check "images.txt maven build image"         "$img_mvn"

@@ -46,6 +46,11 @@ assert_ran() {
   # when TERM is set, so this is done for ALL languages rather than patched per language.
   local plain; plain="$(mktemp)"
   sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$out" > "$plain"
+  # Single quotes below are DELIBERATE: each string is the CONTAINER's command, so its variables
+  # must expand INSIDE the container, not on this host. The directive sits before the whole case,
+  # not a branch - shellcheck rejects a per-branch directive (SC1124), and putting it on a branch
+  # ALSO made the comment itself trip SC2016.
+  # shellcheck disable=SC2016
   case "$lang" in
     go)     n=$(grep -cE '^--- PASS' "$plain" || true) ;;
     rust)   n=$(sed -n 's/.*test result: ok\. \([0-9]\+\) passed.*/\1/p' "$plain" | head -1) ;;
@@ -78,80 +83,98 @@ capture() {
   [ "$rc" -eq 0 ] || { sed 's/^/    | /' "$out" >&2; die "[${app}] runner exited ${rc}"; }
 }
 
-run_for_app() {
-  local app="$1" src lang out
+# app_builder_local <app> — the image to run tests in.
+#
+# LOCAL-FIRST, deliberately. app_builder_image() hard-requires HARBOR_URL:? and HARBOR_INFRA_PROJECT:?,
+# so resolving through it would make `make app-test` -- a hermetic, offline, no-cluster gate -- depend
+# on a registry, a CA and a live credential. It would then fail on any box whose Harbor credential has
+# expired, which is the normal state after a lab re-cut.
+app_builder_local() {
+  printf 'localhost/%s-builder:%s' "$1" "${BUILDER_IMAGE_TAG:-0.3.0}"
+}
+
+# run_in_builder <app> <lang> <out> <cmd> — run <cmd> inside the app's builder image.
+#
+# THE SHAPE IS LOAD-BEARING; each flag is here for a measured reason:
+#
+#   -v "$src:/src:ro"        the source is READ-ONLY, so a test run can never write into the operator's
+#                            tree. Under rootful docker a writable bind mount leaves ROOT-OWNED files
+#                            behind; --user is not the fix (under rootless podman container uid 1000
+#                            maps to host 100999 and cannot write at all). Writing nothing sidesteps
+#                            both engines' ownership models instead of working around either.
+#   --tmpfs /work + cp -a    3 of 6 languages HARD-FAIL on a read-only source: cargo rc=101
+#                            ("Read-only file system at /src/target"), maven rc=1 (cannot create
+#                            target/classes), and node cannot resolve node_modules at /src at all.
+#                            Staging into a tmpfs gives them a writable tree that is discarded on exit.
+#   --network=none           the builders pre-bake every dependency; if one reaches the network the
+#                            air-gap claim is false, and this is what proves it rather than asserting it.
+#   --pull=never             `--pull` defaults to "missing" on BOTH podman and docker, and the pull
+#                            happens BEFORE the container exists, so --network=none does not stop it.
+#                            Without this a stale or mistyped tag silently fetches from a registry and
+#                            the run "passes" against an image nobody intended.
+#
+# A missing -v is caught for free: `cp -a /src/.` fails, so the run cannot pass by testing the stale
+# copy every Dockerfile.builder leaves at /build via its closing `COPY . .`.
+run_in_builder() {
+  local app="$1" lang="$2" out="$3" cmd="$4"
+  local src img eng
   src="${REPO_ROOT}/$(app_src "$app")"
+  img="$(app_builder_local "$app")"
+  eng="$(container_engine)"
+  # `image inspect`, NOT `image exists`: the latter is podman-only. MEASURED 2026-08-23:
+  # `docker image exists alpine` -> rc=1 "unknown command", so on a docker box EVERY app died
+  # "builder image not present" while the image was present. `image inspect` is valid on both.
+  "$eng" image inspect "$img" >/dev/null 2>&1 || \
+    die "[${app}] builder image ${img} not present — build it with 'make builder-image' (or podman build -f $(app_src "$app")/Dockerfile.builder)"
+  capture "$app" "$out" "$eng" run --rm --network=none --pull=never \
+    -v "${src}:/src:ro" --tmpfs "/work:exec,size=${BUILDER_TMPFS_SIZE:-2g}" -w /work \
+    "$img" sh -c "cp -a /src/. /work/ && ${cmd}"
+}
+
+run_for_app() {
+  local app="$1" lang out
   lang="$(app_lang "$app")"
   out="$(mktemp)"; trap 'rm -f "$out"' RETURN
 
+  if [ "$ACTION" = build ]; then
+    # The build ACTION is retired. Its only caller was `make app-build`, whose only consumer was
+    # `trivy-fs` -- and trivy-fs now builds the two artefacts it actually scans (a jar and a Go
+    # binary) inside the builder images. Nothing else in the repo built an app on the host.
+    die "app-build is retired: trivy-fs builds what it scans in the builder image. Use 'make app-verify'."
+  fi
+
+  # TEST runs in the app's own builder image -- the SAME image the Tekton task uses, so what is
+  # tested here is what the pipeline builds. Every command below was MEASURED green in that image,
+  # offline, on a read-only source: java 6, go ok, nodejs 3, python 4, rust 4, dotnet 3.
+  log_info "[${app}] ${lang} test (in $(app_builder_local "$app"))"
   case "$lang" in
-    java)
-      # NOT -q: surefire's "Tests run: N" is an INFO line, and -q suppresses the very number
-      # assert_ran needs. Output is captured, so the verbosity costs nothing on a green run.
-      case "$ACTION" in
-        test)  log_info "[${app}] mvn test";    ( cd "$src" && capture "$app" "$out" ./mvnw -B test ) ;;
-        build) log_info "[${app}] mvn package"; ( cd "$src" && ./mvnw -B -q -DskipTests package ) ;;
-      esac
-      ;;
-    go)
-      # -v so each test emits "--- PASS"; a bare `go test` prints one "ok <pkg>" line per PACKAGE,
-      # which counts packages rather than tests and reads as 1 even when a file has 20 tests.
-      case "$ACTION" in
-        # `go vet` FIRST, as before the rewrite -- it catches what the compiler will not. It is not
-        # counted by assert_ran (it reports no tests); only `go test` is.
-        test)  log_info "[${app}] go vet + go test"
-               ( cd "$src" && go vet ./... )
-               ( cd "$src" && capture "$app" "$out" go test -v ./... ) ;;
-        build) log_info "[${app}] go build"; ( cd "$src" && go build ./... ) ;;
-      esac
-      ;;
-    nodejs)
-      case "$ACTION" in
-        # `npm ci`, NOT `npm install`: it installs from package-lock.json EXACTLY and errors when the
-        # lockfile and package.json disagree -- the same "the lockfile is the contract" property go.sum
-        # and Maven give the others, and exactly what the Tekton nodejs-test task runs.
-        # Dropping it in the 2026-08-23 rewrite passed LOCALLY (node_modules already existed on the
-        # dev box) and failed on CI's fresh checkout with "Cannot find package 'express'".
-        test)  log_info "[${app}] npm ci + npm test"
-               ( cd "$src" && npm ci --no-audit --no-fund --silent )
-               ( cd "$src" && capture "$app" "$out" npm test ) ;;
-        build) log_info "[${app}] npm build"; ( cd "$src" && npm run --silent build --if-present ) ;;
-      esac
-      ;;
-    python)
-      case "$ACTION" in
-        test)  log_info "[${app}] pytest"; ( cd "$src" && capture "$app" "$out" uv run --quiet --with-requirements requirements.txt --with pytest -- pytest -q ) ;;
-        build) log_info "[${app}] python compile"; ( cd "$src" && uv run --quiet -- python -m compileall -q . ) ;;
-      esac
-      ;;
-    rust)
-      case "$ACTION" in
-        test)  log_info "[${app}] cargo test";  ( cd "$src" && capture "$app" "$out" cargo test --locked ) ;;
-        build) log_info "[${app}] cargo build"; ( cd "$src" && cargo build --locked --release ) ;;
-      esac
-      ;;
+    # NOT -q: surefire's "Tests run: N" is an INFO line and -q suppresses the number assert_ran needs.
+    java)   run_in_builder "$app" "$lang" "$out" './mvnw -B -o test' ;;
+    # -v so each test emits "--- PASS"; a bare `go test` prints one "ok" per PACKAGE, counting
+    # packages rather than tests. `go vet` first, as before -- it is not counted by assert_ran.
+    go)     run_in_builder "$app" "$lang" "$out" 'go vet ./... && go test -v ./...' ;;
+    # node_modules is baked at /build (Dockerfile.builder WORKDIR), NOT at /src, and ESM ignores
+    # NODE_PATH -- so it must be copied into the work dir. `npm ci` is NOT run: the builder already
+    # installed from the lockfile, and --network=none would make a reinstall impossible anyway.
+    nodejs) run_in_builder "$app" "$lang" "$out" 'cp -a /build/node_modules /work/ 2>/dev/null; npm test' ;;
+    # -p no:cacheprovider silences the .pytest_cache write; /opt/venv-dev carries pytest.
+    python) run_in_builder "$app" "$lang" "$out" 'PYTHONDONTWRITEBYTECODE=1 /opt/venv-dev/bin/python -m pytest -q -p no:cacheprovider' ;;
+    rust)   run_in_builder "$app" "$lang" "$out" 'cargo test --offline --locked' ;;
+    # `dotnet test` CANNOT drive this: .NET 10 dropped VSTest support for Microsoft.Testing.Platform
+    # (which TUnit runs on) and errors while STILL EXITING 0. An MTP test project is an executable.
     dotnet)
-      # `dotnet test` CANNOT drive this: .NET 10 dropped VSTest support for Microsoft.Testing.Platform
-      # (which TUnit runs on) and errors "Testing with VSTest target is no longer supported" -- while
-      # STILL EXITING 0 (measured 2026-08-23). An MTP test project is an executable, so run it.
-      case "$ACTION" in
-        test)
-          log_info "[${app}] dotnet test (TUnit/MTP)"
-          # A glob loop, not `ls` (SC2012): with nullglob off an unmatched pattern stays literal,
-          # so the -e test is what distinguishes "a test project exists" from "the glob did not match".
-          local proj=""; local f
-          for f in "$src"/tests/*.csproj; do [ -e "$f" ] && { proj="$f"; break; }; done
-          [ -n "$proj" ] || die "[${app}] no test project at ${src}/tests/*.csproj"
-          ( cd "$src" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
-              capture "$app" "$out" dotnet run --project "$proj" -c Release )
-          ;;
-        build) log_info "[${app}] dotnet build"; ( cd "$src" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet build --nologo -v q -c Release ) ;;
-      esac
-      ;;
+      # Resolve the test project ON THE HOST and pass a literal path in. Discovering it inside the
+      # container needed a $-expression in a single-quoted string, which is unreadable and trips
+      # SC2016 in a spot no directive can cleanly cover (a per-branch directive is SC1124).
+      _proj=""; for _f in "${REPO_ROOT}/$(app_src "$app")"/tests/*.csproj; do
+        [ -e "$_f" ] && { _proj="tests/$(basename "$_f")"; break; }; done
+      [ -n "$_proj" ] || die "[${app}] no test project at $(app_src "$app")/tests/*.csproj"
+      run_in_builder "$app" "$lang" "$out" \
+        "DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet run --project ${_proj} -c Release" ;;
     *) die "app '${app}': unknown lang '${lang}' — add a branch to scripts/app-test.sh" ;;
   esac
 
-  [ "$ACTION" = test ] && assert_ran "$app" "$lang" "$out"
+  assert_ran "$app" "$lang" "$out"
   return 0
 }
 

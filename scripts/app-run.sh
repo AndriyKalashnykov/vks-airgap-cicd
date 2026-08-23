@@ -21,17 +21,32 @@ port="${APP_DEV_PORT:-8080}"
 _lang="$(app_lang "$APP")"
 _health="$(app_health_path "$APP")"
 log_info "running '${APP}' (lang=${_lang}) on http://localhost:${port}  [health: ${_health}]"
-case "$(app_lang "$APP")" in
-  java) ( cd "$src" && APP_INTERNAL_PORT="$port" ./mvnw -B spring-boot:run ) ;;
-  go)   ( cd "$src" && APP_INTERNAL_PORT="$port" go run . ) ;;
-  # `node server.js`, NOT `npm start`: npm adds a process layer that swallows signals, so Ctrl-C
-  # leaves the server orphaned holding the port. The runtime Dockerfile ENTRYPOINT is the same two
-  # words, so local and in-container run are the same thing.
-  nodejs) ( cd "$src" && APP_INTERNAL_PORT="$port" node server.js ) ;;
-  # python app.py / cargo run: each app is launched exactly as its runtime image ENTRYPOINT does, so
-  # local and in-container run cannot diverge.
-  python) ( cd "$src" && APP_INTERNAL_PORT="$port" python app.py ) ;;
-  rust)   ( cd "$src" && APP_INTERNAL_PORT="$port" cargo run --offline --locked --quiet ) ;;
-  dotnet) ( cd "$src" && APP_INTERNAL_PORT="$port" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet run ) ;;
-  *)    die "app '${APP}': unknown lang — add a branch to scripts/app-run.sh" ;;
+# RUN IN THE APP'S BUILDER IMAGE, not on the host. These six invocations were the LAST
+# consumers of the host java/go/node/python/rust/dotnet toolchains; app-test, check-ui-contract
+# and trivy-fs already run in the builders (all three MEASURED rc=0 with those toolchains
+# stripped from PATH entirely).
+#
+# TWO DELIBERATE DIFFERENCES from the test path, and both matter:
+#   -p PORT      this is a SERVER; the whole point is reaching it from the host.
+#   NO --network=none   a test proves the build is offline; a dev server must be reachable.
+# The source stays READ-ONLY and the work tree is a tmpfs, exactly as the test path, so a local
+# run still cannot leave root-owned files in the operator's tree.
+_img="localhost/${APP}-builder:${BUILDER_IMAGE_TAG:-0.3.0}"
+_eng="$(container_engine)"
+# `image inspect`, not `image exists`: the latter is podman-only (docker -> rc=1 unknown command).
+"$_eng" image inspect "$_img" >/dev/null 2>&1 \
+  || die "app '${APP}': builder image ${_img} not present — run 'make builder-build' (needs no Harbor)"
+case "$_lang" in
+  java)   _cmd='./mvnw -B spring-boot:run' ;;
+  go)     _cmd='go run .' ;;
+  # `node server.js`, NOT `npm start`: npm adds a process layer that swallows signals.
+  nodejs) _cmd='node server.js' ;;
+  python) _cmd='/opt/venv/bin/python app.py' ;;
+  rust)   _cmd='cargo run --offline --locked --quiet' ;;
+  dotnet) _cmd='dotnet run --no-launch-profile' ;;
+  *) die "app '${APP}': unknown lang — add a branch to scripts/app-run.sh" ;;
 esac
+exec "$_eng" run --rm -it -p "${port}:${port}" \
+  -e APP_INTERNAL_PORT="$port" -e DOTNET_CLI_TELEMETRY_OPTOUT=1 -e DOTNET_NOLOGO=1 \
+  -v "${src}:/src:ro" --tmpfs "/work:exec,size=${BUILDER_TMPFS_SIZE:-2g}" -w /work \
+  "$_img" sh -c "cp -a /src/. /work/ && cp -a /build/node_modules /work/ 2>/dev/null; ${_cmd}"

@@ -10,7 +10,28 @@
 # Run `mise install` on the jump box before running the Makefile.
 
 [tools]
-java     = "temurin-25.0.4+101.0.LTS"
+# REMOVED 2026-08-23: java, go, python, rust, dotnet.
+#
+# Every consumer of a host app-toolchain is now containerised — app-test, check-ui-contract,
+# trivy-fs and app-run each run inside the app's OWN builder image, which is the same image the
+# Tekton task uses. MEASURED: all four exit 0 with java/go/cargo/dotnet/node stripped from PATH.
+#
+# This is not tidying. `make deps` -> `mise install` is scenario-1 STEP 1, run by EVERY one of the
+# six matrix rows on a throwaway VM, and it was fetching ~900 MB of toolchain the walk never uses.
+# A previous row died there: a cold `mise install` hit `refused stream` on java, the largest
+# artifact, with 13 of 17 tools installed.
+#
+# Two of the removed pins never worked. MEASURED on a cold MISE_DATA_DIR:
+#   rust 1.98.0 -> '(symlink)', 8.0K, one file, no binary
+#   dotnet 10   -> '(symlink)', 8.0K, one file, no binary
+# mise did not install them; it symlinked this box's rustup and system dotnet. They resolved only
+# because the dev box already had them — the hidden-dev-box-state class. A walkbox has neither.
+#
+# The invariant they protected MOVED rather than vanished: check-image-alignment.sh:239-244
+# executes app_builder_base() per app and asserts its tag against images/images.txt, and
+# check-app-toolchains now asserts every enrolled app ships a Dockerfile.builder (RED-proven).
+#
+# node STAYS below: it is INFRA (npx markdownlint for docs-lint, npx renovate), not an app toolchain.
 kubectl  = "1.36.4"
 helm     = "4.2.4"
 kustomize = "5.8.1"
@@ -37,19 +58,15 @@ node     = "24"        # INFRA, not an app toolchain: npx markdownlint (docs-lin
 # KEEP ALIGNED with the golang image in images/images.txt and the ARG in apps/go/gowebapp/Dockerfile
 # (check-toolchain-alignment gates it): the pipeline builds with that image, so a local/CI toolchain
 # on a different minor would test something the pipeline never builds.
-go       = "1.27.0"
 # python/rust: the SAME minor the app's builder base image pins (scripts/lib/apps.sh app_builder_base
 # -> python:3.14-alpine, rust:1.98-alpine), for the same reason the go comment above gives -- the
 # pipeline builds with that image, so a local toolchain on a different minor would test something the
 # pipeline never builds. check-app-toolchains REQUIRES a pin here for every enrolled language: without
 # it CI (mise-action) has no interpreter, so the app is NEITHER TESTED NOR SCANNED there while still
 # passing on any dev box that happens to have one installed.
-python   = "3.14"
-rust     = "1.98"
 # dotnet: the SDK major the builder base pins (mcr.microsoft.com/dotnet/sdk:10.0-alpine). Same
 # reasoning as the others -- a local toolchain on a different major would test something the pipeline
 # never builds, and check-app-toolchains requires a pin for every enrolled language.
-dotnet   = "10"
 # Security-scan gates (make sec / static-check) — internet/CI side only, never
 # needed for the air-gap install flow. Provided cross-distro via mise so local
 # `make static-check` mirrors the CI static-check job (which runs mise-action).

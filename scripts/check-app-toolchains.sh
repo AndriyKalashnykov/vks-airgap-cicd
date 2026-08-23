@@ -26,30 +26,33 @@ rc=0
 checked=0
 while read -r app; do
   [ -n "$app" ] || continue
-  # CAPTURE FIRST, never `for tool in $(app_toolchain ...)`. `app_toolchain` DIES on an unknown
-  # lang, and a dying $( ) in ARGUMENT position does NOT trip `set -e` (measured: the loop body
-  # simply runs zero times and the script SURVIVES). This gate exists to say "you added a
-  # LANGUAGE, so pin its toolchain" -- and with the `for ... in $(...)` form it printed FATAL,
-  # then OK, then exited 0 on exactly that input. An assignment DOES trip `set -e`.
-  tools="$(app_toolchain "$app")"
-  for tool in $tools; do
-    checked=$((checked + 1))
-    if grep -qE "^${tool}[[:space:]]*=" "$MISE"; then
-      log_info "toolchain OK: ${app} (lang=$(app_lang "$app")) needs '${tool}' -> pinned in .mise.toml"
-    else
-      log_error "app '${app}' (lang=$(app_lang "$app")) needs '${tool}', but it is NOT pinned in .mise.toml"
-      log_error "    => CI (mise-action) has no '${tool}', so this app is NEITHER TESTED NOR SCANNED there."
-      log_error "    => it will still pass on any dev box that happens to have '${tool}' installed."
-      rc=1
-    fi
-  done
+  # SUBJECT CHANGED 2026-08-23. This used to assert "the app's host toolchain is pinned in
+  # .mise.toml". Every consumer of a host app-toolchain is now containerised — app-test,
+  # check-ui-contract, trivy-fs and app-run all run inside the app's own builder image, and all
+  # four were MEASURED rc=0 with java/go/cargo/dotnet/node stripped from PATH entirely. So that
+  # assertion had no subject left, and this gate's own floor correctly fired:
+  #   'checked 0 toolchain(s) — the gate has gone BLIND'.
+  #
+  # The invariant did not vanish, it MOVED. What CI needs now is a BUILDER IMAGE per app, and its
+  # base tag is already asserted against images/images.txt by check-image-alignment.sh:239-244,
+  # which EXECUTES app_builder_base() per app. What that cannot see is an app enrolled with no
+  # Dockerfile.builder at all — which is what this gate now catches.
+  checked=$((checked + 1))
+  if app_has_builder "$app"; then
+    log_info "builder OK: ${app} (lang=$(app_lang "$app")) ships $(app_src "$app")/Dockerfile.builder"
+  else
+    log_error "app '${app}' (lang=$(app_lang "$app")) has NO Dockerfile.builder"
+    log_error "    => app-test / check-ui-contract / trivy-fs / app-run ALL run in that image now,"
+    log_error "    => so this app cannot be tested, rendered, scanned or run — anywhere."
+    rc=1
+  fi
 done <<EOF
 $(app_names)
 EOF
 
 if [ "$rc" -eq 0 ]; then
   [ "$checked" -gt 0 ] || die "check-app-toolchains: checked 0 toolchain(s) — apps/registry.tsv is empty or app_names is broken. The gate has gone BLIND."
-  log_info "check-app-toolchains: OK — every app's toolchain (${checked} tool(s)) is pinned in .mise.toml, so CI can actually test and scan it."
+  log_info "check-app-toolchains: OK — all ${checked} enrolled app(s) ship a Dockerfile.builder, so CI can actually test and scan it."
 else
   log_error "check-app-toolchains: pin the missing tool(s) in .mise.toml (and align the version with the image the pipeline builds with — check-toolchain-alignment)."
 fi
