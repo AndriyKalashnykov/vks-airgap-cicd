@@ -16,6 +16,20 @@
 [ -n "${__VKS_APPS_SH_LOADED:-}" ] && return 0
 __VKS_APPS_SH_LOADED=1
 
+# apps.sh CALLS mirror_target_ref (app_runtime_image, nodejs/python arms), which lib/mirror.sh
+# defines -- so apps.sh must source it, per the rule check-lib-sourcing.sh states: a script that
+# CALLS a lib function must SOURCE the lib that defines it.
+#
+# It did not, and the failure was real: `make e2e-kind` died at seed-gitea with
+#   app 'nodejswebapp': app_runtime_image needs mirror_target_ref — source scripts/lib/mirror.sh
+# AFTER seeding javawebapp and gowebapp, because only the nodejs/python arms need it. Every
+# consumer of for_each_app inherits the dependency (app_export calls app_runtime_image), so fixing
+# it in each caller would be the enumerated-list rot; the library declares its own dependency.
+# mirror.sh carries a __VKS_MIRROR_SH_LOADED guard, so re-sourcing is a no-op.
+_APPS_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/mirror.sh
+. "${_APPS_SH_DIR}/mirror.sh"
+
 APPS_REGISTRY="${APPS_REGISTRY:-${REPO_ROOT}/apps/registry.tsv}"
 
 # app_rows — print the registry's data rows (comments/blank lines stripped), tab-separated.

@@ -36,6 +36,16 @@
 # and the parent printed `sudo=NO`. A global cannot cross a subshell. A FILE can — so the counter is a
 # file. (rules/common/coding-style.md says exactly this. Writing the rule does not stop you writing the
 # bug; only a mechanism does.)
+
+# engine.sh CALLS os.sh helpers, so it SOURCES os.sh -- the rule check-lib-sourcing.sh states.
+# It worked only because every caller happened to source os.sh FIRST. That is luck, not a
+# contract: the identical latent bug in apps.sh DID fire -- `make e2e-kind` died at seed-gitea
+# with "app 'nodejswebapp': app_runtime_image needs mirror_target_ref", after seeding two apps.
+# os.sh carries a __VKS_OS_SH_LOADED guard, so re-sourcing is a no-op.
+_ENGINE_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/os.sh
+. "${_ENGINE_SH_DIR}/os.sh"
+
 ENGINE_SUDO_COUNT_FILE="${ENGINE_SUDO_COUNT_FILE:-$(mktemp -t engine-sudo.XXXXXX)}"
 export ENGINE_SUDO_COUNT_FILE
 # Do NOT clobber a counter a parent already started: a matrix driver sources this, then calls 16 as a

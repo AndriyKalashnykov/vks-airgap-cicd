@@ -33,6 +33,15 @@
 # dead anchor and then hand the operator the rc-60 die naming a file THEY NEVER CHOSE. Adding a
 # ca_verifies_endpoint check here would fix that and would put NETWORK in a function documented
 # PURE, so it stays out. When no anchor is found, _vc_tls REFUSES, which is the correct outcome.
+
+# vcenter.sh CALLS require_cmd (os.sh), so it SOURCES os.sh. It previously carried only the
+# `# shellcheck source=` COMMENT, which satisfied the gate's whole-file scan while providing
+# nothing at runtime -- found the moment that scan was restricted to code.
+# os.sh carries a __VKS_OS_SH_LOADED guard, so re-sourcing is a no-op.
+_VCENTER_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/os.sh
+. "${_VCENTER_SH_DIR}/os.sh"
+
 vcenter_ca_default() {
   [ -n "${VCENTER_CA_FILE:-}" ] && return 0
   # ONE path, deliberately. An earlier draft also probed ${LAB_STATE}/vmca-root.pem because the
