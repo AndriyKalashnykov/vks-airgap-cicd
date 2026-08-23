@@ -4,7 +4,8 @@
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title th:text="${appName} + ' — VKS CI/CD demo'">VKS CI/CD demo</title>
-    <!-- Self-contained: no external CSS/JS/CDN (air-gapped). -->
+    <!--/* Self-contained: no external CSS/JS/CDN (air-gapped). Thymeleaf parser-level
+         comment: it is stripped at render time, so it cannot break the shared-UI contract. */-->
     <style>
         :root { color-scheme: light dark; }
         body {
@@ -31,10 +32,8 @@
         <h1 th:text="${appName}">javawebapp</h1>
         <p class="message" th:text="${message}">Hello from vks-airgap-cicd</p>
         <dl>
-            <dt>Version</dt>
-            <dd th:text="${version}">dev</dd>
-            <dt>Commit</dt>
-            <dd th:text="${commit}">unknown</dd>
+            <dt>Version</dt><dd th:text="${version}">dev</dd>
+            <dt>Commit</dt><dd th:text="${commit}">unknown</dd>
         </dl>
     </main>
 </body>

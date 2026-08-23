@@ -1036,6 +1036,10 @@ bootstrap-test: ## Validate bootstrap-jumpbox.sh from-nothing on BARE OS images 
 
 ##@ Demo applications (local dev) — every app in apps/registry.tsv, dispatched by language
 .PHONY: app-test
+.PHONY: check-ui-contract
+check-ui-contract: ## Every app must render the SAME page (owner req: identical look and feel). Renders each app and diffs; ~2 min (it runs the java + go test suites)
+	@$(SCRIPTS)/check-ui-contract.sh
+
 app-test: ## Test EVERY app (mvn test / go test). One app: APP=gowebapp
 	@$(SCRIPTS)/app-test.sh test $(APP)
 
@@ -1568,7 +1572,7 @@ static-check-fast: check-help-row-ids check-lib-sourcing check-namespace-labelle
 # finding: add a check-* to one and not the other and coverage silently drops with nothing red.
 # Prereqs run left-to-right serially, so this is ORDER-PRESERVING — proven, not assumed:
 #   `make -n static-check` is byte-identical before and after (112 lines, md5 37ed5550e16947fbd8a47ae40d19b6b9).
-static-check: static-check-fast lint validate sec test-scripts app-test ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: static-check-fast lint validate sec test-scripts app-test check-ui-contract ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)
