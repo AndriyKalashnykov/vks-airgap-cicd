@@ -504,11 +504,43 @@ if [ "${_argo_initial:-0}" = 1 ] && [ -n "$argo_pw" ]; then
   argo_pw="${argo_pw}   <- INITIAL secret; superseded if you ran 'argocd account update-password'"
 fi
 add_row "ArgoCD" "$argocd_url" "$argo_user"   "$argo_pw"
+# CAPTURE INTO VARIABLES FIRST -- do NOT inline these `$( )` into add_row's ARGUMENTS.
+# MEASURED 2026-08-22 with a newly-enrolled app whose app_health_path() branch did not yet exist:
+#     FATAL  app 'nodejswebapp': add a branch to app_health_path()
+#     nodejswebapp  <needs ingress>  -  (no login; health at )      <- rendered anyway, EMPTY
+#     rc=0                                                          <- and reported SUCCESS
+# A `die` inside `$( )` in ARGUMENT position does not trip `set -e`: the substitution's subshell
+# exits, the empty string is substituted, and the caller carries on. An ASSIGNMENT propagates it.
+# Same class as the trivy-fs fail-open fixed earlier today, and as `for x in $(dying_fn)`.
+# DEGRADE on the REGISTRY read; stay FATAL on the per-app accessors. Those are different faults:
+# an unknown language is a wiring BUG that must not render a blank field, but an unreadable or
+# comments-only registry must not delete the Gitea/Harbor/ArgoCD rows and the whole Lab-access
+# section, none of which depend on it. This file is a PRINTER (see :245, :194) and :389 records the
+# exact incident: "set -e kills the report before it prints anything ... died with 'Error 1' and no
+# output at all."
+# MEASURED: the naive `_apps="$(app_names)"` took test-creds-show.sh from 42-ok/0-FAIL to
+# 34-ok/8-FAIL -- every assertion reading output printed AFTER this loop. `app_names` also exits 1
+# on a COMMENTS-ONLY registry (its grep -vE matches nothing), which is a documented workflow here
+# ("FINISH the app, THEN add its row"), not a fault.
+# `if ! x="$( )"` is a condition context, so set -e is correctly suspended for this read only.
+if ! _apps="$(app_names)"; then
+  log_warn "app registry unreadable or empty — omitting the per-app rows"
+  _apps=""
+fi
 while read -r _a; do
   [ -n "$_a" ] || continue
-  add_row "$_a" "$(ingress_url "$(app_host "$_a")")" "-" "(no login; health at $(app_health_path "$_a"))"
+  _host="$(app_host "$_a")"
+  _health="$(app_health_path "$_a")"
+  _url="$(ingress_url "$_host")"
+  # ⚠️ LATENT, NOT CATCHING ANYTHING TODAY -- said plainly, because a check that cannot fire reads
+  # as a guarantee (:222 deleted a previous marker for exactly that reason). MEASURED: no arm of
+  # app_health_path returns rc=0-with-empty-output, so the assignment above already does the work.
+  # This arms the moment one does -- app_build_args' go arm (an intentional empty printf) is the
+  # precedent for a per-language accessor that legitimately prints nothing.
+  [ -n "$_health" ] || die "app '$_a': app_health_path() returned nothing — refusing to print a credentials row with a blank health path."
+  add_row "$_a" "$_url" "-" "(no login; health at ${_health})"
 done <<EOF
-$(app_names)
+${_apps}
 EOF
 
 # Measure every column against every row (headers included), then print.
@@ -754,7 +786,7 @@ else
           _ssh_tok="<no key>"; _ssh_state="${_ssh_sec} carries no usable ssh-passwordkey"
         else
           _ssh_pw="$(printf '%s' "$_ssh_b64" | base64 -d 2>/dev/null || true)"
-          [ -n "$_ssh_pw" ] || _ssh_tok="<empty>"; _ssh_state="${_ssh_sec} decoded empty"
+          if [ -z "$_ssh_pw" ]; then _ssh_tok="<empty>"; _ssh_state="${_ssh_sec} decoded empty"; fi
         fi
       fi
     fi
