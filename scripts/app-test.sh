@@ -81,13 +81,24 @@ run_for_app() {
       # -v so each test emits "--- PASS"; a bare `go test` prints one "ok <pkg>" line per PACKAGE,
       # which counts packages rather than tests and reads as 1 even when a file has 20 tests.
       case "$ACTION" in
-        test)  log_info "[${app}] go test";  ( cd "$src" && capture "$app" "$out" go test -v ./... ) ;;
+        # `go vet` FIRST, as before the rewrite -- it catches what the compiler will not. It is not
+        # counted by assert_ran (it reports no tests); only `go test` is.
+        test)  log_info "[${app}] go vet + go test"
+               ( cd "$src" && go vet ./... )
+               ( cd "$src" && capture "$app" "$out" go test -v ./... ) ;;
         build) log_info "[${app}] go build"; ( cd "$src" && go build ./... ) ;;
       esac
       ;;
     nodejs)
       case "$ACTION" in
-        test)  log_info "[${app}] npm test";  ( cd "$src" && capture "$app" "$out" npm test --silent ) ;;
+        # `npm ci`, NOT `npm install`: it installs from package-lock.json EXACTLY and errors when the
+        # lockfile and package.json disagree -- the same "the lockfile is the contract" property go.sum
+        # and Maven give the others, and exactly what the Tekton nodejs-test task runs.
+        # Dropping it in the 2026-08-23 rewrite passed LOCALLY (node_modules already existed on the
+        # dev box) and failed on CI's fresh checkout with "Cannot find package 'express'".
+        test)  log_info "[${app}] npm ci + npm test"
+               ( cd "$src" && npm ci --no-audit --no-fund --silent )
+               ( cd "$src" && capture "$app" "$out" npm test ) ;;
         build) log_info "[${app}] npm build"; ( cd "$src" && npm run --silent build --if-present ) ;;
       esac
       ;;
