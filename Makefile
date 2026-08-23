@@ -1450,7 +1450,7 @@ check-secrets-untracked: ## Gate: the paths .gitleaks.toml allowlists must NEVER
 	@$(SCRIPTS)/check-secrets-untracked.sh
 
 .PHONY: trivy-fs
-trivy-fs: app-build ## trivy — scan EVERY app's built artifact (jar / Go binary) for fixable HIGH/CRITICAL CVEs
+trivy-fs: ## trivy — scan EVERY app's built artifact (jar / Go binary) for fixable HIGH/CRITICAL CVEs
 	@$(SCRIPTS)/trivy-fs.sh
 
 .PHONY: trivy-config

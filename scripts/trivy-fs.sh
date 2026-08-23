@@ -38,22 +38,45 @@ while read -r app; do
   [ -n "$app" ] || continue
   src="${REPO_ROOT}/$(app_src "$app")"
 
+
+# build_in_builder <app> <out> <cmd> - produce ONE artefact inside the app's builder image.
+#
+# The artefact leaves on STDOUT, so the bind mount stays READ-ONLY and nothing is written to the
+# operator's tree (rootful docker leaves ROOT-OWNED files on a writable mount; under rootless podman
+# `--user` is backwards -- container uid 1000 maps to host 100999 and cannot write at all).
+# MEASURED: a 23,581,942-byte jar came out this way; `file` says "Java archive data (JAR)", owner
+# andriy:andriy, and `trivy rootfs` scanned it rc=0.
+#
+# Build chatter goes to STDERR (1>&2) so a stray log line cannot corrupt the artefact - a Go binary
+# with a leading log line may still SCAN, reporting clean over a corrupted file.
+build_in_builder() {
+  local app="$1" out="$2" cmd="$3" img eng
+  img="localhost/${app}-builder:${BUILDER_IMAGE_TAG:-0.3.0}"
+  eng="$(container_engine)"
+  # `image inspect`, not `image exists` - the latter is podman-only (docker: rc=1 "unknown command").
+  "$eng" image inspect "$img" >/dev/null 2>&1 \
+    || die "app '${app}': builder image ${img} not present - run 'make builder-build' (Harbor-free)"
+  "$eng" run --rm --network=none --pull=never \
+    -v "${REPO_ROOT}/$(app_src "$app"):/src:ro" --tmpfs "/work:exec,size=${BUILDER_TMPFS_SIZE:-2g}" -w /work \
+    "$img" sh -c "cp -a /src/. /work/ 1>&2 && ${cmd}" > "$out"
+  [ -s "$out" ] || die "app '${app}': the builder produced an EMPTY artefact - nothing to scan"
+}
+
   case "$(app_lang "$app")" in
     java)
       # A glob + a case test, not `ls | grep` (SC2010): the -sources/-javadoc jars must be skipped,
       # and the fat jar is the one that carries BOOT-INF/lib/*.jar (i.e. the dependencies).
-      artifact=""
-      for j in "${src}"/target/*.jar; do
-        [ -f "$j" ] || continue
-        case "$j" in *-sources.jar|*-javadoc.jar) continue ;; esac
-        artifact="$j"; break
-      done
-      [ -n "$artifact" ] || die "app '${app}': no built jar under $(app_src "$app")/target — did app-build run?"
+      # BUILT IN THE BUILDER IMAGE, not on the host. This arm was the ONLY consumer of `app-build`
+      # in the repo -- and app-build was building all SIX apps to feed it one jar.
+      artifact="${TMP}/${app}.jar"
+      build_in_builder "$app" "$artifact" \
+        './mvnw -B -q -o -DskipTests package 1>&2 && cat target/*.jar'
       ;;
     go)
       # Build it here (cheap, no deps to fetch) so the scan sees the REAL binary + its stdlib.
       artifact="${TMP}/${app}"
-      ( cd "$src" && CGO_ENABLED=0 go build -o "$artifact" . )
+      build_in_builder "$app" "$artifact" \
+        'CGO_ENABLED=0 go build -o /tmp/a . 1>&2 && cat /tmp/a'
       ;;
     nodejs)
       # SCAN THE LOCKFILE DIRECTORY, not a built artifact. An interpreted app has no binary carrying
