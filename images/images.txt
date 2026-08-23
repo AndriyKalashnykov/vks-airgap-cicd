@@ -69,7 +69,7 @@ node:24-alpine
 # The runtime is distroless/static (already pinned above for Go) -- a CGO-free Rust binary needs
 # nothing else, so Rust adds a BUILD image only.
 # renovate: datasource=docker depName=rust
-rust:1.97-alpine
+rust:1.98-alpine
 
 # ---- Python toolchain (pythonwebapp: builder base) ----
 # renovate: datasource=docker depName=python

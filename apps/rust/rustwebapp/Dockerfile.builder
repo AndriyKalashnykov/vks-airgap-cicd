@@ -4,7 +4,7 @@
 #
 # Rebuild whenever Cargo.toml / Cargo.lock change. scripts/14-builder-build.sh resolves the base
 # image and the ARG NAME below PER APP via lib/apps.sh.
-ARG RUST_IMAGE=rust:1.97-alpine
+ARG RUST_IMAGE=rust:1.98-alpine
 # RUST_IMAGE default is explicitly tagged; DL3006 can't see through the ARG.
 # hadolint ignore=DL3006
 FROM ${RUST_IMAGE}
