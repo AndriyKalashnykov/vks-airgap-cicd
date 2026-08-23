@@ -32,6 +32,16 @@
 
 # state_file — the sink. A VARIABLE, so a second cluster (e2e-cross-cluster) or a container harness
 # can have its own and never leak into the repo's.
+
+# state.sh CALLS os.sh helpers, so it SOURCES os.sh -- the rule check-lib-sourcing.sh states.
+# It worked only because every caller happened to source os.sh FIRST. That is luck, not a
+# contract: the identical latent bug in apps.sh DID fire -- `make e2e-kind` died at seed-gitea
+# with "app 'nodejswebapp': app_runtime_image needs mirror_target_ref", after seeding two apps.
+# os.sh carries a __VKS_OS_SH_LOADED guard, so re-sourcing is a no-op.
+_STATE_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/os.sh
+. "${_STATE_SH_DIR}/os.sh"
+
 state_file() { printf '%s' "${VKS_STATE_FILE:-${REPO_ROOT}/.env.state}"; }
 
 # state_kubeconfig_server <kubeconfig> — the API server URL, computed from the FILE alone.

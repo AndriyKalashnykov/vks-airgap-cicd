@@ -26,6 +26,16 @@
 [ -n "${__VKS_PSA_SH_LOADED:-}" ] && return 0
 __VKS_PSA_SH_LOADED=1
 
+# psa.sh CALLS os.sh helpers, so it SOURCES os.sh -- the rule check-lib-sourcing.sh states.
+# It worked only because every caller happened to source os.sh FIRST. That is luck, not a
+# contract: the identical latent bug in apps.sh DID fire -- `make e2e-kind` died at seed-gitea
+# with "app 'nodejswebapp': app_runtime_image needs mirror_target_ref", after seeding two apps.
+# os.sh carries a __VKS_OS_SH_LOADED guard, so re-sourcing is a no-op.
+_PSA_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/os.sh
+. "${_PSA_SH_DIR}/os.sh"
+
+
 # Per-namespace-role levels. Override any of them in .env.
 #   restricted  — the k8s default on VKS; non-root, no caps, seccomp RuntimeDefault
 #   baseline    — permits running as root and common non-hostile settings
