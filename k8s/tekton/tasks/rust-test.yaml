@@ -1,0 +1,39 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: rust-test
+  namespace: ${CI_NAMESPACE}
+spec:
+  description: >-
+    Run the Rust app's tests OFFLINE, on the app's own builder image, whose warm cargo registry is
+    what makes that possible.
+
+    --offline AND --locked, both deliberately, because they block different things: --locked forbids
+    the resolver CHANGING Cargo.lock, while --offline forbids reaching the network at all. Measured:
+    `cargo build --locked` alone, with an empty registry cache and the network up, still printed
+    Downloading/Updating lines — so --locked by itself is NOT an air-gap control.
+  params:
+    - name: subdir
+      type: string
+      default: repo
+    - name: builder-image
+      type: string
+  workspaces:
+    - name: source
+  steps:
+    - name: test
+      image: $(params.builder-image)
+      workingDir: $(workspaces.source.path)/$(params.subdir)
+      env:
+        # Belt and braces alongside the explicit flags below: an unflagged cargo invocation added
+        # later still cannot dial out.
+        - name: CARGO_NET_OFFLINE
+          value: "true"
+        # CARGO_HOME must be writable and must keep the builder's warm registry. The image bakes it
+        # at /usr/local/cargo; pointing it at the workspace would DISCARD that and force a fetch.
+        - name: CARGO_TERM_COLOR
+          value: never
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        cargo test --offline --locked --quiet

@@ -1,0 +1,41 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: dotnet-test
+  namespace: ${CI_NAMESPACE}
+spec:
+  description: >-
+    Run the .NET app's tests OFFLINE, on the app's own builder image, whose warm ~/.nuget/packages is
+    what makes that possible.
+
+    --no-restore is the air-gap switch: it forbids resolving packages, so an incomplete builder cache
+    FAILS here rather than dialling nuget.org from a pod with no egress. DOTNET_CLI_TELEMETRY_OPTOUT
+    matters for the same reason — the SDK phones home on first use, and in an air gap that is a
+    hanging connection rather than a refused one.
+  params:
+    - name: subdir
+      type: string
+      default: repo
+    - name: builder-image
+      type: string
+  workspaces:
+    - name: source
+  steps:
+    - name: test
+      image: $(params.builder-image)
+      workingDir: $(workspaces.source.path)/$(params.subdir)
+      env:
+        - name: DOTNET_CLI_TELEMETRY_OPTOUT
+          value: "1"
+        - name: DOTNET_NOLOGO
+          value: "1"
+        # The SDK writes its first-use marker and NuGet scratch under $HOME; the image's HOME may not
+        # be writable for the uid Tekton runs as, so point both at the workspace.
+        - name: HOME
+          value: $(workspaces.source.path)
+        - name: NUGET_PACKAGES
+          value: /root/.nuget/packages
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        dotnet test --no-restore --nologo -v q

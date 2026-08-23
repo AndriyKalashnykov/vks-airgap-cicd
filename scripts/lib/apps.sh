@@ -62,6 +62,9 @@ app_test_task() {
     # 'java-test' actively wrong. scripts/validate.sh:243 greps these names against
     # k8s/tekton/tasks/*.yaml on every PR, so a task that does not exist REDs offline.
     nodejs) printf 'nodejs-test' ;;
+    python) printf 'python-test' ;;
+    rust)   printf 'rust-test' ;;
+    dotnet) printf 'dotnet-test' ;;
     *)    die "app '$1': unknown lang '$(app_lang "$1")' — add a branch to app_test_task()" ;;
   esac
 }
@@ -101,6 +104,27 @@ app_set_message() {
       [ -f "$f" ] || die "app '$name': expected $f (nodejs marker file)"
       sed -i "s#^const defaultMessage = '.*';#const defaultMessage = '${esc}';#" "$f"
       grep -qF "const defaultMessage = '${msg}';" "$f" || die "app '$name': marker did not land in $f"
+        ;;
+      python)
+        # app.py:  DEFAULT_MESSAGE = "Hello from vks-airgap-cicd"
+        local f="${dir}/app.py"
+        [ -f "$f" ] || die "app '$name': expected $f (python marker file)"
+        sed -i "s#^DEFAULT_MESSAGE = \".*\"#DEFAULT_MESSAGE = \"${esc}\"#" "$f"
+        grep -qF "DEFAULT_MESSAGE = \"${msg}\"" "$f" || die "app '$name': marker did not land in $f"
+        ;;
+      rust)
+        # src/main.rs:  const DEFAULT_MESSAGE: &str = "Hello from vks-airgap-cicd";
+        local f="${dir}/src/main.rs"
+        [ -f "$f" ] || die "app '$name': expected $f (rust marker file)"
+        sed -i "s#^const DEFAULT_MESSAGE: &str = \".*\";#const DEFAULT_MESSAGE: \&str = \"${esc}\";#" "$f"
+        grep -qF "const DEFAULT_MESSAGE: &str = \"${msg}\";" "$f" || die "app '$name': marker did not land in $f"
+      ;;
+    dotnet)
+      # Program.cs:  public const string DefaultMessage = "Hello from vks-airgap-cicd";
+      local f="${dir}/Program.cs"
+      [ -f "$f" ] || die "app '$name': expected $f (dotnet marker file)"
+      sed -i "s#DefaultMessage = \".*\";#DefaultMessage = \"${esc}\";#" "$f"
+      grep -qF "DefaultMessage = \"${msg}\";" "$f" || die "app '$name': marker did not land in $f"
       ;;
     *) die "app '$name': unknown lang '$lang' — add a branch to app_set_message()" ;;
   esac
@@ -166,6 +190,18 @@ app_runtime_image() {
       command -v mirror_target_ref >/dev/null 2>&1 \
         || die "app '$name': app_runtime_image needs mirror_target_ref — source scripts/lib/mirror.sh"
       mirror_target_ref "$(app_builder_base "$name")" ;;
+      # python: builder base IS the runtime base (both python:3.14-alpine) -- same reasoning as nodejs
+      # above, and safe for the same reason: that literal carries no digest for mirror_target_ref to drop.
+      python)
+        command -v mirror_target_ref >/dev/null 2>&1 \
+          || die "app '$name': app_runtime_image needs mirror_target_ref — source scripts/lib/mirror.sh"
+        mirror_target_ref "$(app_builder_base "$name")" ;;
+      # rust builds a CGO-free static binary, so it ships on the SAME distroless base as Go and reuses
+      # the same pin -- one mirrored image, one tag, no second source of truth.
+      rust) printf '%s/%s/distroless/static-debian12:%s' "$HARBOR_URL" "$HARBOR_INFRA_PROJECT" "${DISTROLESS_STATIC_TAG:?}" ;;
+      # dotnet ships on the CHISELLED aspnet base, which images/images.txt:83 already mirrors under its
+      # own # renovate: annotation -- a separate image from the SDK builder base, unlike python/nodejs.
+      dotnet) printf '%s/%s/dotnet/aspnet:%s' "$HARBOR_URL" "$HARBOR_INFRA_PROJECT" "${DOTNET_ASPNET_TAG:?}" ;;
     *)    die "app '$name': add a branch to app_runtime_image()" ;;
   esac
 }
@@ -208,6 +244,9 @@ app_toolchain() {
     # `node` is already pinned in .mise.toml, where its comment calls it INFRA (npx markdownlint,
     # npx renovate). It is now BOTH: app-test.sh runs `npm test` for this app on the same binary.
     nodejs) printf 'node' ;;
+    python) printf 'python' ;;
+    rust)   printf 'rust' ;;
+    dotnet) printf 'dotnet' ;;
     *)    die "app '$1': add a branch to app_toolchain() — and pin its tools in .mise.toml" ;;
   esac
 }
@@ -236,6 +275,12 @@ app_build_args() {
     # build arg to switch it on. (Java is the exception -- its offline flag is a VALUE, `-o`, that
     # exists nowhere in its Dockerfile except a comment, so it must be passed.)
     nodejs) printf '' ;;
+    # Empty for the same reason as Go and Node: the Dockerfile hardcodes the offline switch
+    # (pip's PIP_NO_INDEX / cargo's --offline --locked), so the air gap needs no build arg.
+    python) printf '' ;;
+    rust)   printf '' ;;
+    # Empty: the Dockerfile hardcodes --no-restore, so the air gap needs no build arg.
+    dotnet) printf '' ;;
     *)    die "app '$1': add a branch to app_build_args()" ;;
   esac
 }

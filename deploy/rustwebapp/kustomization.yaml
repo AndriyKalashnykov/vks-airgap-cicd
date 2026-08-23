@@ -1,0 +1,35 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: rustwebapp
+
+resources:
+  - deployment.yaml
+  - service.yaml
+
+images:
+  - name: rustwebapp
+    newName: harbor.vks.local/apps/rustwebapp
+    newTag: "0.1.0"
+
+replicas:
+  - name: rustwebapp
+    count: 2
+
+# Carry the DEPLOYED image tag into the app's own version/commit display, sourced from the container
+# image AFTER the images transformer applies newTag, so it always matches what is really running.
+replacements:
+  - source:
+      kind: Deployment
+      name: rustwebapp
+      fieldPath: spec.template.spec.containers.[name=rustwebapp].image
+      options:
+        delimiter: ":"
+        index: 1
+    targets:
+      - select:
+          kind: Deployment
+          name: rustwebapp
+        fieldPaths:
+          - spec.template.spec.containers.[name=rustwebapp].env.[name=APP_VERSION].value
+          - spec.template.spec.containers.[name=rustwebapp].env.[name=APP_COMMIT].value

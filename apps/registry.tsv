@@ -33,3 +33,7 @@
 # name		lang	src			deploy
 javawebapp	java	apps/java/javawebapp	deploy/javawebapp
 gowebapp	go	apps/go/gowebapp	deploy/gowebapp
+nodejswebapp	nodejs	apps/nodejs/nodejswebapp	deploy/nodejswebapp
+pythonwebapp	python	apps/python/pythonwebapp	deploy/pythonwebapp
+rustwebapp	rust	apps/rust/rustwebapp	deploy/rustwebapp
+dotnetwebapp	dotnet	apps/dotnet/dotnetwebapp	deploy/dotnetwebapp

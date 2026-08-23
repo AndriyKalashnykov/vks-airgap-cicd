@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dotnetwebapp
+  labels:
+    app.kubernetes.io/name: dotnetwebapp
+    app.kubernetes.io/part-of: vks-airgap-cicd-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dotnetwebapp
+  template:
+    metadata:
+      labels:
+        # istio-injection=disabled on the NAMESPACE is the primary control; this pod-level LABEL is
+        # the race guard (ArgoCD's CreateNamespace=true can sync this pod before the ns is labelled).
+        # A LABEL, not an annotation -- a webhook objectSelector never matches annotations (B26).
+        sidecar.istio.io/inject: "false"
+        app.kubernetes.io/name: dotnetwebapp
+    spec:
+      imagePullSecrets:
+        - name: harbor-pull
+      securityContext:
+        runAsNonRoot: true
+        # 1654 is the `app` user baked into the CHISELLED aspnet base, which is what this app's
+        # runtime stage selects (its Dockerfile USER line). NOT the 65532 the distroless apps use --
+        # each base ships its own, and a uid the image does not define makes the kubelet refuse.
+        runAsUser: 1654
+        runAsGroup: 1654
+        fsGroup: 1654
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: dotnetwebapp
+          image: dotnetwebapp
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # PLACEHOLDERS — kustomize replacements overwrite both from the image ref after the
+            # images transformer applies newTag, so they show the commit actually deployed.
+            - name: APP_VERSION
+              value: "dev"
+            - name: APP_COMMIT
+              value: "unknown"
+            - name: APP_INTERNAL_PORT
+              value: "8080"
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            failureThreshold: 30
+            periodSeconds: 1
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: "10m", memory: "64Mi" }
+            limits:   { cpu: "500m", memory: "256Mi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

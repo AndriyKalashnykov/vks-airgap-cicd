@@ -125,6 +125,22 @@ v="$(_newest_ready || true)"
 # so it is 15 minutes spent to reach a conclusion that was already wrong.
 if [ "$_TKR_RC" -ne 0 ]; then
   _hint="Re-issue it:  make vks-login   (scenario-1 Step 3)"
+  # WRONG-CLUSTER BEFORE WRONG-CREDENTIAL. classify_kube_failure reads an ERROR STRING, so it
+  # cannot see that we authenticated perfectly well against a cluster that simply is not a
+  # Supervisor -- it lands in UNAUTHORIZED/FORBIDDEN and blames the credential. MEASURED
+  # 2026-08-22 against the live guest: this died with "the Supervisor REJECTED these
+  # credentials", sending the operator to re-run `make vks-login` for a kubeconfig that was
+  # working. B210's class: an answer about WHICH CLUSTER you asked, read as an answer about
+  # what is installed.
+  # rc==1 ONLY: rc==2 means we could not determine (unreachable / stale CA), and that must fall
+  # through to classify_kube_failure, which has the right words for those.
+  kubeconfig_is_supervisor "$SUP"; _sup_rc=$?
+  if [ "$_sup_rc" -eq 1 ]; then
+    not_a_supervisor_note >&2   # called directly: $( ) strips the trailing newline, so the
+                                # die below would run straight into the last line of the note.
+    die "cannot list TKr releases: '${SUP}' is not a Supervisor (see above). The releases were
+  never read, so this says nothing about which exist."
+  fi
   case "$(classify_kube_failure "$_TKR_ERR")" in
     STALE_CA)     die "could not LIST the TKr releases: '${SUP}' does not work against this cluster,
   and the server ANSWERED — a REBUILT cluster mints a new CA while the address stays the same. The

@@ -41,7 +41,21 @@ require_cmd openssl
 # ⚠️ Taken as an ARGUMENT, exactly as fetch-ca.sh does, NOT read as ${HARBOR_CA_FILE:-default}.
 # HARBOR_CA_FILE is UNCOMMENTED in .env.example, so load_env exports it and a dynamic fallback
 # here could never fire — check-env-clobber flags precisely that. The Makefile passes the value.
-OUT="${1:?usage: 27-harbor-ca-from-cluster.sh <out-file>   (the Makefile passes $(HARBOR_CA_FILE))}"
+# ⚠️ THE MAKEFILE REFERENCE IS SINGLE-QUOTED, DELIBERATELY. Written as $(HARBOR_CA_FILE) inside a
+# double-quoted ${1:?...} it is COMMAND SUBSTITUTION: bash evaluates the message while building it,
+# runs HARBOR_CA_FILE as a command, and the helpful usage text becomes
+#     27-harbor-ca-from-cluster.sh: line 44: HARBOR_CA_FILE: command not found     rc=127
+# MEASURED 2026-08-22. It fires on exactly the path that exists to help -- a missing argument.
+# Same family as the no-backticks-in-git-commit-m rule: a $() inside a message string is parsed.
+if [ -z "${1:-}" ]; then
+  # shellcheck disable=SC2016  # deliberate: the single quotes are the FIX. This is a MAKEFILE
+  # variable reference being shown to a human, so it must NOT expand -- expanding it is the bug
+  # this guard exists to remove (bash ran HARBOR_CA_FILE as a command; rc=127).
+  printf 'usage: 27-harbor-ca-from-cluster.sh <out-file>   (the Makefile passes %s)\n' \
+         '$(HARBOR_CA_FILE)' >&2
+  exit 64
+fi
+OUT="$1"
 # ⚠️ VKS_SUPERVISOR_KUBECONFIG FIRST — that is the name the WRITER (30-vks-login.sh)
 # honours. These readers used only SUPERVISOR_KUBECONFIG; the defaults coincide, so the
 # split was invisible on the box that measured it and would have split the moment an

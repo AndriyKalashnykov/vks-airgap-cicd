@@ -38,6 +38,18 @@ node     = "24"        # INFRA, not an app toolchain: npx markdownlint (docs-lin
 # (check-toolchain-alignment gates it): the pipeline builds with that image, so a local/CI toolchain
 # on a different minor would test something the pipeline never builds.
 go       = "1.27.0"
+# python/rust: the SAME minor the app's builder base image pins (scripts/lib/apps.sh app_builder_base
+# -> python:3.14-alpine, rust:1.98-alpine), for the same reason the go comment above gives -- the
+# pipeline builds with that image, so a local toolchain on a different minor would test something the
+# pipeline never builds. check-app-toolchains REQUIRES a pin here for every enrolled language: without
+# it CI (mise-action) has no interpreter, so the app is NEITHER TESTED NOR SCANNED there while still
+# passing on any dev box that happens to have one installed.
+python   = "3.14"
+rust     = "1.98"
+# dotnet: the SDK major the builder base pins (mcr.microsoft.com/dotnet/sdk:10.0-alpine). Same
+# reasoning as the others -- a local toolchain on a different major would test something the pipeline
+# never builds, and check-app-toolchains requires a pin for every enrolled language.
+dotnet   = "10"
 # Security-scan gates (make sec / static-check) — internet/CI side only, never
 # needed for the air-gap install flow. Provided cross-distro via mise so local
 # `make static-check` mirrors the CI static-check job (which runs mise-action).

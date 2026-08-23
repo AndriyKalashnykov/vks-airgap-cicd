@@ -1,0 +1,39 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: python-test
+  namespace: ${CI_NAMESPACE}
+spec:
+  description: >-
+    Run the Python app's tests OFFLINE, on the app's own builder image. That image carries TWO venvs:
+    /opt/venv (the app's dependencies, which the runtime stage copies) and /opt/venv-dev (those plus
+    pytest, which it does not) — so the test tooling never ships in the production image.
+
+    PIP_NO_INDEX=1 is the air gap made explicit. It is NOT the same as --no-cache-dir, which controls
+    only the local wheel cache and does not stop pip dialling PyPI — that confusion was a real leak
+    here: the app Dockerfile's `pip install pytest` produced 5 NameResolutionError retries under
+    --network none before the venvs were split.
+  params:
+    - name: subdir
+      type: string
+      default: repo
+    - name: builder-image
+      type: string
+  workspaces:
+    - name: source
+  steps:
+    - name: test
+      image: $(params.builder-image)
+      workingDir: $(workspaces.source.path)/$(params.subdir)
+      env:
+        # Any pip call here must FAIL LOUDLY rather than reach out. Nothing should need one --
+        # /opt/venv-dev is already complete — so this is a tripwire, not a mechanism.
+        - name: PIP_NO_INDEX
+          value: "1"
+        - name: PYTHONDONTWRITEBYTECODE
+          value: "1"
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        # The DEV venv, which has pytest. /opt/venv deliberately does not.
+        /opt/venv-dev/bin/python -m pytest -q
