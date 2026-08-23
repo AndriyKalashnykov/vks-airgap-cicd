@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The dotnet app's test project. It exists because `dotnet test` on the app project alone
+       DISCOVERED ZERO TESTS AND EXITED 0 — `make app-test` reported "OK for 6 app(s)" over an app
+       with no test file and no test-framework reference at all. A test arm that cannot fail is
+       worse than no arm: it is a permanent false green, and it was reported as coverage.
+
+       TUnit is this portfolio's mandatory .NET test framework (rules/dotnet/testing.md) — not
+       xUnit/NUnit/MSTest. It runs on Microsoft.Testing.Platform, so the project is an Exe and
+       TestingPlatformDotnetTestSupport is what lets plain `dotnet test` drive it. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+    <RootNamespace>DotnetWebapp.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- renovate: the nuget manager tracks this PackageReference -->
+    <PackageReference Include="TUnit" Version="1.65.38" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../dotnetwebapp.csproj" />
+  </ItemGroup>
+
+</Project>

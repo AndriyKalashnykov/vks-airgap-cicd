@@ -42,7 +42,7 @@ CLUSTER_NAME="${KIND_CLUSTER_NAME:?KIND_CLUSTER_NAME must be set in .env.example
 # of their LoadBalancer VIPs, repoints our registry selector at it, and EXITS 0.
 require_kind_target "install-harbor"
 KUBECONFIG_PATH="${KUBECONFIG:?KUBECONFIG must be set in .env.example}"
-READY_TIMEOUT="${READY_TIMEOUT_SECONDS:-300}"
+READY_TIMEOUT="${READY_TIMEOUT_SECONDS:-600}"
 POLL_INTERVAL="${POLL_INTERVAL_SECONDS:-5}"
 CURL_MAX_TIME="${CURL_MAX_TIME_SECONDS:-10}"
 HARBOR_PW="${HARBOR_PASSWORD:-}"

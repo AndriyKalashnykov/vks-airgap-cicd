@@ -16,7 +16,10 @@ FROM ${DOTNET_SDK_IMAGE}
 WORKDIR /build
 # The project file FIRST so the restore layer caches independently of the source.
 COPY dotnetwebapp.csproj ./
-RUN dotnet restore
+# The TEST project's csproj too: TUnit is a real PackageReference, and without restoring it here the
+# in-cluster test step has no TUnit in ~/.nuget/packages and cannot run offline at all.
+COPY tests/DotnetWebapp.Tests.csproj tests/
+RUN dotnet restore && dotnet restore tests/DotnetWebapp.Tests.csproj
 
 COPY . .
 # The image's value is its warm ~/.nuget/packages, inherited by the app Dockerfile.

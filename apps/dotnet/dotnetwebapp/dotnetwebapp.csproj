@@ -13,4 +13,13 @@
     <RootNamespace>DotnetWebapp</RootNamespace>
   </PropertyGroup>
 
+  <!-- The Web SDK globs **/*.cs, so WITHOUT this the app project compiles tests/ into itself and
+       fails with CS0246 'TUnit could not be found' — attributed to THIS csproj, not the test one.
+       It would also break the image build, whose `COPY . .` + `dotnet build` hits the same glob. -->
+  <ItemGroup>
+    <Compile Remove="tests/**" />
+    <Content Remove="tests/**" />
+    <None Remove="tests/**" />
+  </ItemGroup>
+
 </Project>

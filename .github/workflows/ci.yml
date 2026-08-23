@@ -334,7 +334,11 @@ jobs:
       # The weekly run gets the FULL gate; a PR gets the per-PR half. Same job, same caches, one
       # expression — rather than a second job that would have to re-derive mise and all three
       # cache steps, and whose copy would be where the next silent cache bug lands.
-      - name: make static-check
+      # The NAME carries the same expression as the `run:` below. It was the hardcoded string
+      # "make static-check", which is WRONG on every PR -- a PR runs `static-check-pr`, and the
+      # GitHub UI showed a step name asserting otherwise. A label that misreports what ran is how
+      # someone reasonably concludes CI is still building the apps when it is not.
+      - name: make ${{ github.event_name == 'schedule' && 'static-check' || 'static-check-pr' }}
         env:
           # CI has network by definition, so a schema that could not be FETCHED is a FAILURE here,
           # not a skip — the same reason static-check-fast sets GWAPI_REQUIRE_FETCH=1 below.

@@ -87,11 +87,16 @@ __pycache__/
 # app's Gitea repo. Ignore the shape (an app dir's own name) rather than one app's name.
 apps/go/*/[a-z]*webapp
 apps/rust/*/[a-z]*webapp
-apps/*/*/node_modules/
-apps/*/*/target/
-apps/*/*/obj/
-apps/*/*/bin/
-apps/*/*/__pycache__/
-apps/*/*/.pytest_cache/
-apps/*/*/*.egg-info/
+# `apps/*/*/x` is FIXED DEPTH -- exactly two levels under apps/. It therefore missed
+# apps/dotnet/dotnetwebapp/tests/obj/, and a commit swept 178 build artefacts (7,004 lines) into
+# the tree. Any app with a nested project -- a test project, a workspace member, a submodule --
+# hits the same hole. `apps/**/x` matches at ANY depth.
+apps/**/node_modules/
+apps/**/target/
+apps/**/obj/
+apps/**/bin/
+apps/**/__pycache__/
+apps/**/.pytest_cache/
+apps/**/*.egg-info/
+apps/**/TestResults/
 

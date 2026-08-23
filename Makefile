@@ -1035,6 +1035,9 @@ bootstrap-test: ## Validate bootstrap-jumpbox.sh from-nothing on BARE OS images 
 	@$(SCRIPTS)/bootstrap-test.sh
 
 ##@ Demo applications (local dev) — every app in apps/registry.tsv, dispatched by language
+.PHONY: app-verify
+app-verify: app-test check-ui-contract trivy-fs ## Test EVERY app + assert they render an identical page + scan their built artefacts. RUN THIS LOCALLY BEFORE MERGING A PR — deliberately NOT in CI, because every one of these builds all six toolchains.
+
 .PHONY: app-test
 .PHONY: check-ui-contract
 check-ui-contract: ## Every app must render the SAME page (owner requirement: identical look and feel). Renders each app through its REAL handler and diffs; MEASURED 2.9s (one test class per app, and it runs after app-test so both toolchains are warm)
@@ -1205,7 +1208,7 @@ TEST_FAST    := $(filter-out $(TEST_SLOW),$(TEST_OFFLINE))
 # miss same-day CVEs — so per-PR trivy means a cold DB download every run), and test-scripts' slow
 # tier (6 targets that assert wall-clock BY DESIGN = 136s of 154s). Both stay on the weekly run.
 .PHONY: static-check-pr
-static-check-pr: lint validate app-test check-ui-contract test-scripts-fast ## The per-PR half of static-check (no trivy, no wall-clock tests)
+static-check-pr: lint validate test-scripts-fast ## The per-PR half of static-check (no trivy, no wall-clock tests, NO app builds)
 	@echo "static-check-pr: OK"
 
 .PHONY: check-help-row-ids
@@ -1470,7 +1473,7 @@ prose-secrets: ## grep *.md for prose credentials gitleaks misses (natural-langu
 secrets-scan: check-secrets-untracked secrets prose-secrets ## gitleaks + prose-credential scan (cheap; no build)
 
 .PHONY: sec
-sec: secrets-scan trivy-fs trivy-config ## Run all security scanners (gitleaks + prose-secrets + trivy fs/config)
+sec: secrets-scan trivy-config ## Security scanners that need NO app build (gitleaks + prose-secrets + trivy config). The app-artefact CVE scan is trivy-fs, in app-verify.
 
 ##@ Diagrams & composite gates
 # podman rootless needs --userns=keep-id so the mapped uid can write the mounted
@@ -1575,7 +1578,7 @@ static-check-fast: check-help-row-ids check-lib-sourcing check-namespace-labelle
 # finding: add a check-* to one and not the other and coverage silently drops with nothing red.
 # Prereqs run left-to-right serially, so this is ORDER-PRESERVING — proven, not assumed:
 #   `make -n static-check` is byte-identical before and after (112 lines, md5 37ed5550e16947fbd8a47ae40d19b6b9).
-static-check: static-check-fast lint validate sec test-scripts app-test check-ui-contract ## Composite code gate (alignment + lint + manifests + security + script unit tests + app tests)
+static-check: static-check-fast lint validate sec test-scripts ## Composite code gate (alignment + lint + manifests + security + script unit tests). NO app builds — see app-verify.
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)
@@ -1583,9 +1586,18 @@ ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifi
 ##@ Dependencies (Renovate)
 .PHONY: renovate-validate
 renovate-validate: ## Validate renovate.json (pinned renovate — needs node on PATH)
-	@if [ -n "$${GH_ACCESS_TOKEN:-}" ]; then export GITHUB_COM_TOKEN="$$GH_ACCESS_TOKEN"; \
+	@out=$$(mktemp); trap 'rm -f "$$out"' EXIT; \
+	if [ -n "$${GH_ACCESS_TOKEN:-}" ]; then export GITHUB_COM_TOKEN="$$GH_ACCESS_TOKEN"; \
 	else echo "note: GH_ACCESS_TOKEN unset — some lookups may be skipped"; fi; \
-	npx --yes renovate@$(RENOVATE_VERSION) --platform=local
+	npx --yes renovate@$(RENOVATE_VERSION) --platform=local > "$$out" 2>&1; rc=$$?; \
+	cat "$$out"; \
+	if grep -qE 'config-validation|Invalid configuration option|invalid settings' "$$out"; then \
+	  echo "ERROR: renovate reports INVALID CONFIG. It STILL EXITS 0 (measured 2026-08-23) --"; \
+	  echo "       that is the whole reason this grep exists; do not 'simplify' it back to a bare rc."; \
+	  grep -oE '"validationMessage": "[^"]*"' "$$out" | sort -u; \
+	  exit 1; \
+	fi; \
+	exit $$rc
 
 ##@ Housekeeping
 .PHONY: clean
