@@ -221,7 +221,7 @@ BUNDLE_DIR          ?= ./bundle
 # renovate: datasource=docker depName=plantuml/plantuml
 PLANTUML_VERSION    ?= 1.2026.6
 # renovate: datasource=npm depName=renovate
-RENOVATE_VERSION    ?= 44.35.0
+RENOVATE_VERSION    ?= 44.35.2
 # renovate: datasource=npm depName=markdownlint-cli
 MARKDOWNLINT_VERSION ?= 0.49.1
 # Container engine — podman is the DEFAULT, docker only a fallback. Override: CONTAINER_ENGINE=docker
