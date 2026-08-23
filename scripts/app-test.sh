@@ -46,6 +46,52 @@ run_for_app() {
         build) log_info "[${app}] npm ci (no compile step)"; ( cd "$src" && npm ci --omit=dev --no-audit --no-fund --silent ) ;;
       esac
       ;;
+    python)
+      case "$ACTION" in
+        # -q for the same output shape as the Tekton python-test task. There is no compile step, so the
+        # "build" action is an IMPORT check: it proves app.py is loadable, which is the only thing that
+        # can fail before runtime for an interpreted app.
+        # A THROWAWAY VENV, not the bare interpreter. Python has no self-contained runner the way Java has
+        # ./mvnw or Go has its module cache, so `python -m pytest` against the mise interpreter dies with
+        # "No module named pytest" -- measured. The venv lives in a TEMP dir, never in the source tree: an
+        # in-tree .venv would be swept into the builder image by its `COPY . .`. cwd stays $src so
+        # `import app` resolves exactly as it does in the container. This fetches, like `npm ci` and mvnw
+        # do here -- app-test is an INTERNET-SIDE target. The air-gap path is the Tekton python-test task,
+        # which uses the builder image's pre-baked /opt/venv-dev and never reaches the network.
+        test)  log_info "[${app}] pytest (throwaway venv)"
+               _pyvenv="$(mktemp -d)"
+               python -m venv "$_pyvenv/venv" >/dev/null
+               "$_pyvenv/venv/bin/pip" install -q --disable-pip-version-check -r "$src/requirements.txt" pytest
+               ( cd "$src" && "$_pyvenv/venv/bin/python" -m pytest -q ); _rc=$?
+               rm -rf "$_pyvenv"; [ "$_rc" -eq 0 ] || exit "$_rc" ;;
+        # "build" for an interpreted app == "the declared dependencies RESOLVE, and the source COMPILES".
+        # It deliberately mirrors the nodejs arm above (`npm ci`, no compile step). It does NOT `import app`
+        # with the bare interpreter -- measured, that dies "No module named flask", because the mise python
+        # has only the stdlib. compileall gives the syntax half without needing the app to be importable,
+        # and the venv install gives the dependency half.
+        build) log_info "[${app}] resolve deps + compile check"
+               _pyvenv="$(mktemp -d)"
+               python -m venv "$_pyvenv/venv" >/dev/null
+               "$_pyvenv/venv/bin/pip" install -q --disable-pip-version-check -r "$src/requirements.txt"
+               ( cd "$src" && PYTHONDONTWRITEBYTECODE=1 "$_pyvenv/venv/bin/python" -m compileall -q . >/dev/null ); _rc=$?
+               rm -rf "$_pyvenv"; [ "$_rc" -eq 0 ] || exit "$_rc" ;;
+      esac
+      ;;
+    rust)
+      case "$ACTION" in
+        # --offline --locked here too, matching the Dockerfile: if the vendored cache is incomplete this
+        # FAILS locally instead of quietly fetching, which is the whole point of testing the air gap.
+        test)  log_info "[${app}] cargo test";  ( cd "$src" && cargo test --offline --locked --quiet ) ;;
+        build) log_info "[${app}] cargo build"; ( cd "$src" && cargo build --release --offline --locked --quiet ) ;;
+      esac
+      ;;
+    dotnet)
+      case "$ACTION" in
+        # Telemetry off here too: the SDK phones home on first use, and app-test runs on operator boxes.
+        test)  log_info "[${app}] dotnet test";  ( cd "$src" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet test --nologo -v q ) ;;
+        build) log_info "[${app}] dotnet build"; ( cd "$src" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet build --nologo -v q -c Release ) ;;
+      esac
+      ;;
     *) die "app '${app}': unknown lang '$(app_lang "$app")' — add a branch to scripts/app-test.sh" ;;
   esac
 }

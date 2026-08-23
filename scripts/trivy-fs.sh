@@ -62,6 +62,29 @@ while read -r app; do
       [ -f "${src}/package-lock.json" ] || die "app '${app}': no package-lock.json under $(app_src "$app") -- trivy would scan nothing, and an empty scan is not a clean one."
       artifact="$src"
       ;;
+    python)
+      # Same reasoning as nodejs: an interpreted app has no binary carrying its dependencies, so the
+      # thing describing what SHIPS is requirements.txt, which trivy reads directly -- offline, no venv.
+      [ -f "${src}/requirements.txt" ] || die "app '${app}': no requirements.txt under $(app_src "$app") -- trivy would scan nothing, and an empty scan is not a clean one."
+      artifact="$src"
+      ;;
+    rust)
+      # Cargo.lock, NOT the built binary: a stripped release binary carries no crate metadata, so
+      # scanning it finds nothing and reports clean. The lockfile is what names the shipped crates.
+      [ -f "${src}/Cargo.lock" ] || die "app '${app}': no Cargo.lock under $(app_src "$app") -- trivy would scan nothing, and an empty scan is not a clean one."
+      artifact="$src"
+      ;;
+    dotnet)
+      # The .csproj, not a built DLL. This app declares no PackageReference (ASP.NET Core's shared
+      # framework carries Kestrel and Razor), so the csproj plus its TargetFramework is what names the
+      # shipped surface; trivy reads it offline. If PackageReferences are ever added, a packages.lock.json
+      # would be the better target -- say so here rather than discovering it silently.
+      # GLOB, never the app's own filename: check-app-hardcodes forbids a shared file naming an instance,
+  # and a second .NET app would carry a differently-named .csproj. (It caught exactly that here.)
+  _csproj=""; for _c in "${src}"/*.csproj; do [ -f "$_c" ] && { _csproj="$_c"; break; }; done
+  [ -n "$_csproj" ] || die "app '${app}': no .csproj under $(app_src "$app") -- trivy would scan nothing, and an empty scan is not a clean one."
+      artifact="$src"
+      ;;
     *) die "app '${app}': add a branch to scripts/trivy-fs.sh" ;;
   esac
 

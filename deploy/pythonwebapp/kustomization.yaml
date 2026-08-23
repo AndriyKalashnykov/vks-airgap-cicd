@@ -1,0 +1,35 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: pythonwebapp
+
+resources:
+  - deployment.yaml
+  - service.yaml
+
+images:
+  - name: pythonwebapp
+    newName: harbor.vks.local/apps/pythonwebapp
+    newTag: "0.1.0"
+
+replicas:
+  - name: pythonwebapp
+    count: 2
+
+# Carry the DEPLOYED image tag into the app's own version/commit display, sourced from the container
+# image AFTER the images transformer applies newTag, so it always matches what is really running.
+replacements:
+  - source:
+      kind: Deployment
+      name: pythonwebapp
+      fieldPath: spec.template.spec.containers.[name=pythonwebapp].image
+      options:
+        delimiter: ":"
+        index: 1
+    targets:
+      - select:
+          kind: Deployment
+          name: pythonwebapp
+        fieldPaths:
+          - spec.template.spec.containers.[name=pythonwebapp].env.[name=APP_VERSION].value
+          - spec.template.spec.containers.[name=pythonwebapp].env.[name=APP_COMMIT].value

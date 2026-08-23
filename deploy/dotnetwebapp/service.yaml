@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dotnetwebapp
+  labels:
+    app.kubernetes.io/name: dotnetwebapp
+    app.kubernetes.io/part-of: vks-airgap-cicd-demo
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: dotnetwebapp
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
