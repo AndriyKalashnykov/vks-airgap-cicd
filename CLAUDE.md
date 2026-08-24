@@ -874,117 +874,70 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-23 — TREE IS READY TO ARM. Both repos clean, queue empty, arming is now WIRED
+## ▶️ HANDOFF 2026-08-24 — MATRIX 6/6 GREEN on a fresh cut. main is clean; the next job is B471
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### The standing job: ARM THE MATRIX. Everything it needs is done
+### The certification that just landed
 
-```sh
-WALK_REPO=$HOME/projects/vks-airgap-cicd \
-WALK_OUT_ROOT=$HOME/walk-evidence \
-make -C ~/projects/nested-vsphere-lab walk-matrix > /tmp/matrix.log 2>&1 &
-sleep 90 && wc -l /tmp/matrix.log     # hundreds = armed. single digits = REFUSED, read the last line.
-```
+`run-20260824T143354Z-3174779` — **6 of 6 rows, every one rc=0, every one `0 FAILED`**, across two
+lab cuts (rows 1/2/5 on cut A, 3/4/6 on cut B after a rebuild). Rows 3/4/6 were green on their FIRST
+attempt on the fresh cut, which was the ask.
 
-🔴 **`VCF_CLI_SRC_DIR` is NO LONGER passed by hand — it is DERIVED from `WALK_REPO/.env`** (lab
-`02e1710`, row B460). It used to be required from the environment, and omitting it exited in **two log
-lines**, which reads as "running" to anyone who does not check the length. That cost a full arming
-cycle this session. **`WALK_OUT_ROOT` is still explicit and load-bearing** — its default is
-`/tmp/walk` and a reboot has destroyed a whole certification (lab B454).
+| pair | branch | blocks | differ by |
+|---|---|---|---|
+| 1 ↔ 3 | NOTHING exists | `37 ran / 7 skipped` both | `[02]`↔`[01]`, the OS clone block, ONLY |
+| 2 ↔ 4 | EVERYTHING exists | `31 ran / 13 skipped` both | same |
+| 5 ↔ 6 | scenario-2 | `18 ran / 10 skipped` both | same |
 
-| precondition | state |
-|---|---|
-| `vks-airgap-cicd` | `main` @ **`9df3100`**, ahead=0, dirty=0, **0 open PRs** (#968 merged) |
-| `nested-vsphere-lab` | `main` @ **`02e1710`**, ahead=0, dirty=0 |
-| lab | **UP** — cut B. vCenter `vcsa.env1.lab.test`/192.168.100.50, ns `cicd`, guest `cicd-gc0820234057` |
-| leaked VMs | 2 walkboxes from the previous run (lab B453) — the matrix sweeps them on the way in; do not delete by hand |
+**The symmetry is the evidence, not the greens.** A flake shows up as an asymmetry here long before
+it shows up as a red. Evidence in `~/walk-evidence/run-20260824T143354Z-3174779/`.
 
-### 🔴 DISTRUST THIS FIRST if a row fails oddly early
+### 🔴 DISTRUST FIRST
 
-**`scripts/lib/os.sh` changed, and EVERY script sources it.** A sudo **capability** probe was added
-(`sudo -n true`, once per process tree, guarded by `VKS_SUDO_PROBED`). It is RED-proven 3/3 — silent
-when sudo works, silent on a legitimate password prompt, warns only on a broken PAM stack — and it
-stayed silent through a full green `make jumpbox` leg. **But the matrix is the first thing to run it
-on real walkboxes.** If a row dies early or logs `sudo is PRESENT but NON-FUNCTIONAL`, start there,
-not in the walk. Escape hatch: the probe never refuses — it only warns, and `SUDO` is still assigned.
-
-**Second: the Photon `/etc/shadow` pin.** Three Photon images now `chmod 0400 /etc/shadow` at build
-time. If a build prints `NOTE: /etc/shadow arrived <n> (expected 400)`, **that is the drift detector
-working, not a failure** — it means the `shadow`(pwconv→0400) vs `systemd`(systemd-sysusers→0000)
-scriptlet race flipped, which any dependency bump can do. The build only FAILS if the chmod itself
-did not take.
-
-### Distrust these (carried forward, still true)
-
-- 🔴 **The repo's `.env` Harbor password goes STALE after every matrix run** — the matrix installs
-  Harbor from throwaway walkboxes and destroys them. `make env-validate` → genuine 401 is the
-  EXPECTED post-run state, not a defect. Recover per RULE ZERO-A0's chain.
-- **Never read pass/fail off a completion notification.** Measured AGAIN this session: a backgrounded
-  `make static-check > log 2>&1; echo "RC=$?"` reported **exit code 0** while the gate exited **2** —
-  the `;` makes the echo the last command. Either let the command BE the whole call, or `exit $rc`.
-- **`ps`/`pgrep` SELF-MATCH**, and an empty match is a claim about your PATTERN first.
-- **A subagent transcript's file size/mtime is NOT liveness** — it lands at completion.
-- **Never edit a file a running job is reading.** Cost a redone `static-check` this session.
-- **`git switch main` FAILS in a worktree checkout**; with `2>/dev/null` that failure is invisible and
-  a chained `reset --hard` lands on the wrong branch.
-- **Run `env -u GOROOT make static-check` before every merge** — a PR runs `static-check-fast` +
-  `static-check-pr`, and **neither runs `sec`**.
-- **Run `make app-verify` before any merge touching `apps/**`** — app builds are deliberately out of
-  both CI gates, and 10 of the last 200 `apps/**` commits are Renovate, which auto-merges on green.
+- **A leaked walkbox VM is still running** — `vks-walkbox-ubuntu`, 8 GiB, virsh id 69. This is lab
+  **B453** exactly as filed: `destroy_stale_walkboxes` runs at the START of each row, so every row
+  sweeps the PREVIOUS row's box and the LAST row's is never swept. There is no `trap` in that file.
+  The next matrix run sweeps it, or:
+  `virsh --connect qemu:///system destroy vks-walkbox-ubuntu && virsh --connect qemu:///system undefine vks-walkbox-ubuntu --remove-all-storage`
+- **`make env-validate` returns rc=2 / HTTP 401, and that is CORRECT.** The matrix installs Harbor
+  from throwaway walkboxes and destroys them, so `.env`'s Harbor credential is dead BY DESIGN after
+  every run. Recover per RULE ZERO-A0's chain; do not diagnose it as a defect.
+- **`static-check` is SKIPPED on a PR** (paths-filtered; only `static-check-fast` runs, and NEITHER
+  it nor `static-check-pr` runs `sec`). Run `env -u GOROOT make static-check` locally before merging.
+  Measured this session: the full local gate REJECTED a new test for SC2015 that CI never saw.
+- **`pgrep`/`ps` SELF-MATCHED three times this session**, twice producing a false "still running" in a
+  status report. Read the argv and compare against `$$` before believing any process count.
+- **A backgrounded `cmd > log; echo "RC=$?"` reports the ECHO's status** — the notification said
+  "exit code 0" over a gate that exited 2. Use `{ cmd; rc=$?; echo RC=$rc; exit $rc; }` or read the log.
 
 ### Open
 
-- **B213** — `--security-opt seccomp=unconfined` would dissolve the whole `/etc/shadow` class
-  (`--privileged` is a bundle: only its AppArmor half causes the bug, only its seccomp half is
-  needed). NOT shipped: a non-privileged container has **no `/dev/fuse`**, so it needs its own change
-  and a full `make jumpbox-matrix`. Keep the 0400 pin regardless.
-- **The interpreter-write hole in the adversary gate — REAL, and now believed UN-GATEABLE at the ship
-  boundary (measured 2026-08-24).** The hole reproduces on the live hook: same file, no fresh receipt,
-  `Bash "echo pwned > scripts/00-install-prereqs.sh"` -> **rc=0 ALLOW** while `Write` to that same path
-  -> **rc=2 BLOCK**. It is main-agent AND subagent, at the Bash layer.
-  ⚠️ **The "88%" this line used to carry is ~2x inflated.** It reproduces only with a LOOSE matcher
-  (any write verb in a command that merely *mentions* a guarded path). Anchoring on the write's actual
-  TARGET gives **502 Bash vs 626 Edit/Write = 44.5%**, and a 12-sample audit of the redirect class
-  showed ~17% false positives, so the true share is roughly **20–45%**. The hole is real; the number
-  that justified its priority was not — a load-bearing figure inside a control's own rationale.
-  ⚠️ **The `git pre-commit chokepoint`, ranked #1 by the earlier idea round, is REFUTED. Do not build
-  it.** The killer is one command: **200 of the last 200 commits on `main` are server-side GitHub
-  squash merges** (committer `GitHub <noreply@github.com>`, 1 parent), so a *client* pre-commit hook
-  is not in the path of a single artifact that ships — "covers 100% of what SHIPS" was never true.
-  Its companion premise fails the same way: Renovate authors via the GitHub API and never runs a local
-  hook, so the feared false-blocks are **0** for the same reason the coverage is 0. It also carries
-  **eight** bypasses, not one (`--no-verify`, `-n`, `-c core.hooksPath=/dev/null`, `-c core.hooksPath=`,
-  and silent skips on `revert`/`cherry-pick`/`rebase`/`merge` — all verified with a positive control),
-  and its only clone-surviving deployment (`git config --global core.hooksPath`) violates this file's
-  own "the gate stays project-local" rule by firing in `nested-vsphere-lab`.
-  **A CI/server-side gate is structurally impossible**, not merely unbuilt: `.claude/state/*.receipt`
-  is gitignored (`.gitignore:51 .claude/*`, 0 tracked files), so `ci-pass` — a real zero-bypass gate
-  (ruleset `18692333`, `bypass_actors: []`) — can never see the evidence, and every in-diff signal is
-  agent-self-mintable. The one non-self-mintable signal is a human PR review, which the owner has
-  explicitly rejected. **Treat this as DISCIPLINE, name the mechanism, and stop** — a partial gate that
-  reads as "handled" is worse than none. Counterweight worth keeping: across 16,245 Bash tool uses in
-  this project, `--no-verify` appears **15 times, all of them in probes and prose — zero operational
-  use, ever**. The bypasses are available, not exercised.
-  The receipt **self-mint** the earlier round found (a plain `Write` to `.claude/state/*.receipt` was
-  rc=0 here) is **already fixed** in #968.
-- **⛔ `permissions.ask` / `ask-on-outward.py` are DELIBERATELY UNWIRED — do NOT "restore" them.** An
-  adversary graded their absence CRITICAL and I restored them; the owner's reason is explicit: *"i do
-  not want to be your babysitter approving every time."* Reverted the same day. A subagent's severity
-  does not override an owner's decision. Recorded in `claude-config` `ab0f2ed`.
+- **B471 (new, 🔴)** — the matrix certifies the scenario-2 **document**, never the tenant
+  **permission model**; the rows are handed admin creds and a driver-supplied kubeconfig, and their
+  own label says "NOT the tenant path". RULE ZERO-B makes tenant the DEFAULT posture, so the
+  most-exercised scenario has the least-exercised audience. Same shape as the istiod capacity bug
+  that shipped this session (fine for admin, failed closed for a tenant). Needs an idea round.
+- **B213, B206** unchanged.
+- The interpreter-write hole in the adversary gate is still believed **un-gateable at the ship
+  boundary** — see the section above; do not rebuild the refuted `git pre-commit` chokepoint.
 
-### What this session shipped (PR #968, lab `02e1710`)
+### What #977 shipped, and the lesson in its shape
 
-Photon `/etc/shadow` 0400 pin in 3 hazard-scoped images + drift NOTE · `check-jumpbox-shadow` (scope
-derived from the hazard, asserts chmod+stat in the SAME RUN and no install after — RED-proven 6 ways)
-· `os.sh` sudo capability probe · **`crun`**, missing from the podman install list although its
-comment claimed it (`podman info` was failing outright) · `VCF_CLI_SRC_DIR` derivation + CRLF strip ·
-**B208 CLOSED** — photon×docker `JUMPBOX_OK` for the first time, with a live Harbor push and a firing
-CA negative control.
+A **RULE ZERO-B leak**: `supervisor_kubeconfig_hint` printed
+`${VKS_LAB_STATE_DIR:-$HOME/.local/state/nested-lab}/kubeconfig` at EVERY end user across 8 scripts,
+while `os.sh` claimed that entry was existence-guarded — true of the RESOLVER, false of the PRINTER.
+Fixed at the emitter (both consumers at once); `scripts/test-supervisor-kubeconfig.sh` pins it,
+RED-proven by mutation, offline set 89 → 90.
 
-Three adversary rounds. **Each refuted the previous diagnosis** — the shipped cause is the third one,
-and both earlier ones are recorded in the Dockerfiles so nobody re-derives them.
+**Of the six commits, THREE were corrections of the other three, and no gate caught any of them**: a
+claim retracted in a commit message survived in the code comment; a rationale I had "measured" was
+false (`jumpbox-launch.sh` calls the hint without the resolver); and a commit about enumerated-list
+rot rotted its own line citations. All three needed a reviewer reading the diff AFTER it was written
+— the implementation round, not the idea round. Two adversary rounds also refuted a vCenter CA pair
+(it could never fire) and all three proposed gate designs (98% / backwards / 92% false-RED,
+denominator 1); both refutations are recorded in-code so they are not rebuilt.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
