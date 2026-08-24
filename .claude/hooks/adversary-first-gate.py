@@ -12,7 +12,7 @@ built a test, and reported it GREEN — with no adversary anywhere. The user had
 adversary" by hand. The adversaries then immediately found real, shipped-in defects.
 
 WHAT IT DOES. Writing to the operator-facing product — the code (scripts/, Makefile, jumpbox/, k8s/,
-tekton/, apps/) AND the operator docs (docs/, README.md) — is BLOCKED unless an adversary has been
+apps/) AND the operator docs (docs/, README.md) — is BLOCKED unless an adversary has been
 engaged SINCE THE LAST NON-EXEMPT COMMIT (B45 — an exempt-only docs/handoff/CI/plan commit does not re-arm).
 
 RE-ARM ON COMMIT (2026-07-14, second correction). The first version cleared the gate for the WHOLE
