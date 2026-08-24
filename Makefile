@@ -1603,9 +1603,17 @@ check-lib-sourcing: ## Gate: a script that CALLS a lib function must SOURCE the 
 	@$(SCRIPTS)/check-lib-sourcing.sh
 
 .PHONY: static-check
+.PHONY: check-tekton-scripts
+check-tekton-scripts: ## Every Tekton `script:` block: shebang is /bin/sh AND the body is POSIX sh
+	@# Offline. Closes the blind spot that shipped a `#!/usr/bin/env bash` into an ALPINE builder:
+	@# scripts/lint.sh shellchecks scripts/*.sh and repo-root *.sh only, so all 11 embedded Tekton
+	@# script blocks were UNLINTED. Four of six builder images have no bash, so four task scripts
+	@# could never run -- and only the first to reach the pipeline ever said so.
+	@$(SCRIPTS)/check-tekton-scripts.sh
+
 .PHONY: static-check-fast
 #check-static-fast: @ The CHEAP half of static-check: the alignment/doc/env gates only (~9s, no toolchain)
-static-check-fast: check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars check-dockerfile-no-install ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
+static-check-fast: check-tekton-scripts check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars check-dockerfile-no-install ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
 
 # static-check is the UNION, so there is exactly ONE list. Defining the fast set separately and
 # leaving static-check with its own hand-typed copy is the enumerated-list rot this repo keeps

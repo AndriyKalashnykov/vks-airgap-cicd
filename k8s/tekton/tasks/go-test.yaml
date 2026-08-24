@@ -40,7 +40,7 @@ spec:
         - name: GOCACHE
           value: $(workspaces.source.path)/.gocache
       script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
+        #!/bin/sh
+        set -eu
         go vet ./...
         go test ./...

@@ -1102,3 +1102,45 @@ walkbox runs out of disk building this repo's SIXTH builder image, and what you 
 `missing secrets/gitea-ci-token — run 'make seed-gitea' first`, because `install-all` died before
 `platform → seed-gitea`. **If a walk reports that token error, run `df -h /` before touching Gitea.**
 The sizing that drives it is in [docs/sizing.md](docs/sizing.md).
+
+## B208 — `jumpbox-matrix` photon×docker: `--privileged` breaks sudo, so that cell has never passed 🔴 open
+
+**PRE-EXISTING** (`jumpbox/Dockerfile.photon-docker` last changed 2026-08-08) and **off the six-row
+critical path** (`grep -c jumpbox docs/scenario-{1,2}.md` -> **0 / 0**), so it is filed rather than
+fixed mid-certification.
+
+MEASURED 2026-08-23, `make jumpbox-matrix` -> **`JUMPBOX MATRIX: 3/4 passed — FAILED`**, the failing
+cell being `LEG FAILED: photon x docker`. Inside it:
+
+    sudo: PAM account management error: Authentication service cannot retrieve authentication info
+    sudo: a password is required
+    make[1]: *** [Makefile:329: deps-prereqs] Error 1
+
+`--privileged` is the discriminator, and `scripts/jumpbox-launch.sh:195` passes it on every leg:
+
+    docker run --rm                vks-jumpbox:photon-docker  -> sudo rc=0
+    docker run --rm --privileged   vks-jumpbox:photon-docker  -> sudo rc=1     <-- the launcher's form
+    docker run --rm --privileged   vks-jumpbox:ubuntu-docker  -> sudo rc=0
+
+So it is Photon + docker-image + `--privileged` specifically. Ruled OUT by measurement:
+
+- the shadow entry is present -- as root, `getent shadow vks` -> `vks:!:20689:0:90:7:::` (the `!` marks the account as having no
+  usable login credential, which is normal and correct for a passwordless sudoers entry);
+- `/etc/nsswitch.conf` resolves both the account and shadow databases from local files;
+- `/etc/pam.d/sudo` is the stock Photon include stack;
+- the sudoers drop-in is identical to the PODMAN photon image, which passes: both do
+  `groupadd vks && useradd -g vks -m -s /bin/bash vks` plus a passwordless-sudo line for `vks` in
+  `/etc/sudoers.d/vks` at 0440, then `USER vks`.
+
+The two images differ only in packages -- podman/fuse-overlayfs/slirp4netns versus
+docker/procps-ng/iproute2 -- so the next step is to find what Photon's `docker` package pulls in that
+changes PAM behaviour under `--privileged`. Not yet established.
+
+Note the image runs non-root **deliberately**: its own header records that at uid 0 the sudo column,
+which is the entire deliverable of the engine matrix, is not merely wrong but UNMEASURABLE. So
+"run it as root" is not the fix.
+
+Worth stating plainly: this cell of a documented target has presumably never passed, and nothing
+surfaced that until the target was actually run. The other three cells are green --
+photon×podman, ubuntu×podman and ubuntu×docker all reported `engine-trust-check PASSED`, the last of
+them via `docker-rootless` with the CA at `~/.config/docker/certs.d/`.

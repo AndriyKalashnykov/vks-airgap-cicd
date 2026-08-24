@@ -21,7 +21,7 @@ spec:
       image: $(params.builder-image)
       workingDir: $(workspaces.source.path)/$(params.subdir)
       script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
+        #!/bin/sh
+        set -eu
         # -o (offline): deps are pre-baked in the builder image's ~/.m2.
         ./mvnw -B -o test
