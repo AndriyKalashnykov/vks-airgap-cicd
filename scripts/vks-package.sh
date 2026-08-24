@@ -25,6 +25,45 @@ PACKAGE="${2:-${PACKAGE:-}}"
 require_cmd kubectl jq
 [ -s "${KUBECONFIG:-/nonexistent}" ] || die "no kubeconfig at '${KUBECONFIG:-<unset>}'. These are GUEST-cluster packages - point KUBECONFIG at the guest cluster (make vks-cluster-status writes one)."
 
+# WHICH CLUSTER? There is no CLUSTER= argument -- the target is whatever $KUBECONFIG points at, so
+# KUBECONFIG is a SELECTOR and a silent wrong value acts on the wrong cluster. The documented flow
+# makes that reachable rather than theoretical: scenario-1.md:303 and scenario-2.md:148 both tell
+# the operator to `export KUBECONFIG=./secrets/supervisor.kubeconfig` for the Supervisor steps, and
+# nothing un-exports it before a later `make install-vks-package` in the same shell. So SAY which
+# cluster, every time, on both paths. This is a PRINT, not a gate -- it cannot false-block.
+log_info "cluster: $(kube_target_id)   [KUBECONFIG=${KUBECONFIG}]"
+
+# REFUSE A SUPERVISOR. These are GUEST-cluster packages, and the pre-existing guards CANNOT catch
+# this -- MEASURED 2026-08-24 against a live Supervisor and a live guest:
+#   * a Supervisor serves the SAME refNames at the SAME versions (ako, cert-manager, cilium,
+#     cluster-autoscaler, contour -- five byte-identical rows; it has MORE packages, not fewer),
+#     so `_list`'s "no Carvel Packages visible" die never fires;
+#   * `install` never reaches `_list` anyway -- it calls `_versions`, which RETURNS versions on a
+#     Supervisor, so `_die_unknown` does not fire either;
+#   * `install` has NO CONFIRM gate (only `uninstall` does).
+# So the wrong-cluster install proceeds UNCONFIRMED and binds cluster-admin on the Supervisor
+# control plane. This is the ONE place an EAGER check is justified: everywhere else in this repo
+# the discriminator is called LAZILY inside a failure branch, because the operation FAILS on the
+# wrong cluster and only the message needs correcting. Here the operation SUCCEEDS.
+#
+# rc=2 (API server unreachable) FAILS OPEN by design: it means we learned nothing about the
+# cluster, and an air-gapped or slow lab must not be blocked by a probe that could not reach it.
+# The cost of that is honest and worth stating: the gate is silent exactly when the operator is
+# most confused about which cluster they are on. It can only refuse a HEALTHY Supervisor.
+# Measured latency: 0.09s warm guest, 0.11s Supervisor, 3.1s host-unreachable, 20s blackholed.
+if [ "$ACTION" = install ] || [ "$ACTION" = uninstall ]; then
+  _sup_rc=0; kubeconfig_is_supervisor "$KUBECONFIG" || _sup_rc=$?
+  case "$_sup_rc" in
+    0) die "REFUSING: that kubeconfig points at a SUPERVISOR, not a guest cluster.
+  $(kube_target_id)
+  These are GUEST-cluster Carvel packages. A Supervisor serves the same package names at the same
+  versions, so nothing downstream would have stopped this -- and \`install\` would have bound
+  cluster-admin on the Supervisor control plane without asking.
+  Point KUBECONFIG at the guest cluster (make vks-cluster-status writes one), then re-run." ;;
+    2) log_warn "could not reach the API server to check whether this is a Supervisor — proceeding (not a pass)" ;;
+  esac
+fi
+
 _versions() { kubectl get packages -A -o json 2>/dev/null \
   | jq -r --arg r "$1" '[.items[]?|select(.spec.refName==$r)|.spec.version]|sort|.[]' 2>/dev/null; }
 
@@ -56,7 +95,7 @@ case "$ACTION" in
     printf '%s\n' "$vers" | grep -qxF "$VER" || die "version '${VER}' is not offered for ${PACKAGE}. Offered:
 $(printf '%s\n' "$vers" | sed 's/^/    /')"
     name="$(printf '%s' "$PACKAGE" | cut -d. -f1)"
-    log_info "installing ${PACKAGE} ${VER} into ${PKG_NS} (PackageInstall '${name}')"
+    log_info "installing ${PACKAGE} ${VER} into ${PKG_NS} (PackageInstall '${name}') on $(kube_target_id)"
 
     # A dedicated SA + cluster-admin binding: a Standard Package installs cluster-scoped objects
     # (CRDs, webhooks, a CNI DaemonSet), so the installer needs them. Named after the package so
@@ -111,9 +150,11 @@ YAML
     name="$(printf '%s' "$PACKAGE" | cut -d. -f1)"
     kubectl -n "$PKG_NS" get pkgi "$name" >/dev/null 2>&1 || { log_info "${PACKAGE} is not installed in ${PKG_NS} - nothing to do"; exit 0; }
     [ "${CONFIRM:-}" = yes ] || die "refusing without CONFIRM=yes.
-  This removes ${PACKAGE} and everything it deployed into this cluster. Re-run:
+  This removes ${PACKAGE} and everything it deployed from:
+      $(kube_target_id)
+  Confirm that is the cluster you mean, then re-run:
       make uninstall-vks-package PACKAGE='${PACKAGE}' CONFIRM=yes"
-    log_warn "uninstalling ${PACKAGE} from this guest cluster"
+    log_warn "uninstalling ${PACKAGE} from $(kube_target_id)"
     kubectl -n "$PKG_NS" delete pkgi "$name" 2>&1 | sed 's/^/    /'
     # Only what WE created: the SA and binding are named after the package.
     kubectl delete clusterrolebinding "${name}-pkg-sa-cluster-admin" --ignore-not-found >/dev/null 2>&1 || true

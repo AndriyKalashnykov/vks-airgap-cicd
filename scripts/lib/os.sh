@@ -861,6 +861,24 @@ supervisor_kubeconfig_or_die() {
   printf '%s' "$k"
 }
 
+# kube_target_id -- "context @ api-server" for the kubeconfig currently in effect.
+#
+# WHY: several targets take NO cluster argument -- the target is whatever $KUBECONFIG points at, so
+# KUBECONFIG is a SELECTOR and a silent wrong value acts on the wrong cluster. The documented flow
+# makes that reachable: scenario-1.md:303 and scenario-2.md:148 both tell the operator to
+# `export KUBECONFIG=./secrets/supervisor.kubeconfig` for the Supervisor steps and nothing
+# un-exports it, so a later GUEST-scoped command in that shell is aimed at the Supervisor.
+#
+# A PRINT, never a gate: it cannot false-block, and it degrades to named placeholders rather than
+# an empty string that reads as "fine". Refusing a wrong cluster is a separate decision -- the
+# discriminator for that already exists (kubeconfig_is_supervisor, below) and wiring it is B467.
+kube_target_id() {
+  local ctx srv
+  ctx="$(kubectl config current-context 2>/dev/null || true)"
+  srv="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)"
+  printf '%s' "${ctx:-<no current-context>} @ ${srv:-<no server in kubeconfig>}"
+}
+
 # kubeconfig_is_supervisor <kubeconfig> -- rc 0 iff that kubeconfig points at a SUPERVISOR.
 #
 # THE DISCRIMINATOR B210 SAID DID NOT EXIST. Its row concluded "no Supervisor-only CRD is reliably

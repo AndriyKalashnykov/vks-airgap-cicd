@@ -151,6 +151,20 @@ export KUBECONFIG=./secrets/supervisor.kubeconfig
 ⚠️ **Do not** use `vcf config set env.VCF_CLI_VSPHERE_PASSWORD` — it writes your SSO password in
 plaintext to `~/.config/vcf/config.yaml`, outside this repo and every secret scan.
 
+⚠️ **That `export` OUTLIVES this block — point it back at the guest cluster before you continue.**
+`load_env` snapshot-protects `KUBECONFIG` precisely so an explicit choice wins, so the exported
+Supervisor path **beats the `KUBECONFIG` row in the `.env` table below** (measured). Without this,
+you would believe `.env` selected the workload cluster while every later `make` target read the
+Supervisor:
+
+```bash
+make use-guest-kubeconfig
+set -a; . ./.env; set +a
+```
+
+**Expect:** `wrote to` — then `KUBECONFIG`, `VKS_CONTEXT` and `VKS_AUTH_METHOD=kubeconfig`.
+(Scenario 1 does this at its Step 6 for the same reason; this block was missing it.)
+
 </details>
 
 You need **cluster-admin** on the workload cluster either way: the flow creates `gitea`, `ci`, and one

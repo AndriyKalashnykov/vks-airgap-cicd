@@ -255,6 +255,16 @@ help: ## Show this help
 	  /^[a-zA-Z0-9_-]+:.*##/ {i=index($$0,"##"); n=$$0; sub(/:.*/,"",n); \
 	                          printf "  \033[36m%-28s\033[0m %s\n", n, substr($$0,i+2)} \
 	  /^##@/ {printf "\n\033[1m%s\033[0m\n", substr($$0,5)}' $(MAKEFILE_LIST)
+	@printf '\n\033[1mWHICH CLUSTER a target talks to\033[0m\n'
+	@printf '  No target takes a cluster argument — it is whichever kubeconfig applies, and the two\n'
+	@printf '  scopes are overridden DIFFERENTLY. This asymmetry is measured, not stylistic:\n\n'
+	@printf '    GUEST-scoped       make <target> KUBECONFIG=/path/to/guest.kubeconfig\n'
+	@printf '    SUPERVISOR-scoped  make <target> VKS_SUPERVISOR_KUBECONFIG=/path/to/supervisor.kubeconfig\n\n'
+	@printf '  KUBECONFIG= does NOT work for a Supervisor-scoped target: supervisor_kubeconfig()\n'
+	@printf '  resolves by a RANKED candidate list in which $$KUBECONFIG is deliberately LAST, so an\n'
+	@printf '  explicit one loses to any higher candidate that exists. Use the scoped variable.\n'
+	@printf '  A target is Supervisor-scoped iff its script calls supervisor_kubeconfig (14 files):\n'
+	@printf '    grep -rl supervisor_kubeconfig scripts/\n'
 	@echo ""
 
 ##@ Prerequisites
