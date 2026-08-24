@@ -28,6 +28,15 @@
 #   MUST sit above the first COMMAND: placed after `set -uo pipefail` it is silently inert.
 set -uo pipefail
 
+# ⚠️ MAKEFLAGS= ON EVERY `make` BELOW, and it is load-bearing. This test CAPTURES make's stdout,
+# and an outer `make -C <repo> static-check` puts `-w` into MAKEFLAGS, which a bare `make` in a
+# child script INHERITS -- so `make[1]: Entering directory '...'` lands inside the `$( )` and every
+# comparison fails. MEASURED both ways: from the repo root the suite is green; the identical tree
+# under `make -C` failed 15 of 21 here and 1 of 9 in test-shell-rc-file.sh. That is a FALSE RED
+# about the operator's invocation, not about the product -- exactly the kind of failure that sends
+# someone to debug the wrong file. Clearing MAKEFLAGS isolates the child from however the parent
+# was invoked, which is what a reproducible test needs.
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MK="${REPO_ROOT}/Makefile"
 pass=0; fail=0
@@ -69,7 +78,7 @@ else
 fi
 printf 'show: ; @printf "%%s|%%s|%%s\\n" "$(HARBOR_URL)" "$(KUBECONFIG)" "$(ONLY_IN_ENV)"\n' >> Makefile
 
-f() { make -s show 2>/dev/null | cut -d'|' -f"$1"; }
+f() { MAKEFLAGS='' make -s show 2>/dev/null | cut -d'|' -f"$1"; }
 
 # ---- 1. .env alone ---------------------------------------------------------------------------
 printf 'HARBOR_URL=harbor.ENV\nONLY_IN_ENV=yes\n' > .env
@@ -86,13 +95,13 @@ chk 'legacy .env.kind BEATS the state overlay' 'harbor.KIND'   "$(f 1)"
 rm -f .env.kind secrets/.env.kind.make
 
 # ---- 4. THE BUG: the operator's exported value must beat every file ---------------------------
-out="$(HARBOR_URL=harbor.OPERATOR KUBECONFIG=/operator/chose make -s show 2>/dev/null)"
+out="$(HARBOR_URL=harbor.OPERATOR KUBECONFIG=/operator/chose MAKEFLAGS='' make -s show 2>/dev/null)"
 chk 'export HARBOR_URL beats every file'   'harbor.OPERATOR' "$(printf '%s' "$out" | cut -d'|' -f1)"
 chk 'export KUBECONFIG beats every file'   '/operator/chose' "$(printf '%s' "$out" | cut -d'|' -f2)"
 
 # ---- 5. a command-line assignment still outranks everything ----------------------------------
 chk 'make VAR=... beats the environment too' 'harbor.CMDLINE' \
-  "$(HARBOR_URL=harbor.OPERATOR make -s show HARBOR_URL=harbor.CMDLINE 2>/dev/null | cut -d'|' -f1)"
+  "$(HARBOR_URL=harbor.OPERATOR MAKEFLAGS='' make -s show HARBOR_URL=harbor.CMDLINE 2>/dev/null | cut -d'|' -f1)"
 
 # ---- 6. ORPHAN GUARD: deleting a source must stop its generated file applying -----------------
 # Without the `$(wildcard ...)` guard the generated secrets/.env.state.make survives the delete and
@@ -105,7 +114,7 @@ chk 'deleting .env.state stops its orphan applying' 'harbor.ENV' "$(f 1)"
 # ---- 7. VKS_STATE_FILE relocates the overlay --------------------------------------------------
 printf 'HARBOR_URL=harbor.RELOCATED\n' > custom.state
 chk 'VKS_STATE_FILE relocates the state overlay' 'harbor.RELOCATED' \
-  "$(VKS_STATE_FILE=custom.state make -s show 2>/dev/null | cut -d'|' -f1)"
+  "$(VKS_STATE_FILE=custom.state MAKEFLAGS='' make -s show 2>/dev/null | cut -d'|' -f1)"
 
 # ---- 7a. THE MTIME BLEED — the trigger section 7 above CANNOT catch ---------------------------
 # Section 7 passes by ACCIDENT: it writes custom.state immediately BEFORE invoking make, so the
@@ -115,7 +124,7 @@ chk 'VKS_STATE_FILE relocates the state overlay' 'harbor.RELOCATED' \
 # triggers, each serving the WRONG file's values, silently, with rc=0.
 printf 'HARBOR_URL=harbor.BLEED_A\n' > bleed_a.state
 printf 'HARBOR_URL=harbor.BLEED_B\n' > bleed_b.state
-bl() { VKS_STATE_FILE="$1" make -s show 2>/dev/null | cut -d'|' -f1; }
+bl() { VKS_STATE_FILE="$1" MAKEFLAGS='' make -s show 2>/dev/null | cut -d'|' -f1; }
 chk 'bleed 1a: the first source reads correctly'        'harbor.BLEED_A' "$(bl bleed_a.state)"
 chk 'bleed 1b: switching source does not serve the old' 'harbor.BLEED_B' "$(bl bleed_b.state)"
 chk 'bleed 1c: switching back does not serve the other' 'harbor.BLEED_A' "$(bl bleed_a.state)"
@@ -137,8 +146,8 @@ show: ; @printf "%s\n" "$(HARBOR_URL)"
 MK
 printf 'HARBOR_URL=harbor.CTL_A\n' > a.state
 printf 'HARBOR_URL=harbor.CTL_B\n' > b.state
-VKS_STATE_FILE=a.state make -s show >/dev/null 2>&1
-_ctl="$(VKS_STATE_FILE=b.state make -s show 2>/dev/null)"
+VKS_STATE_FILE=a.state MAKEFLAGS='' make -s show >/dev/null 2>&1
+_ctl="$(VKS_STATE_FILE=b.state MAKEFLAGS='' make -s show 2>/dev/null)"
 if [ "$_ctl" = 'harbor.CTL_B' ]; then
   bad "positive control: the PRE-FIX rule form did NOT bleed — section 7a discriminates nothing"
 else
@@ -171,7 +180,7 @@ case "$mode" in 600|400) ok "generated .env.make is $mode (umask 077 held)";;
 # regresses the dir to 775 and touches .env so the timestamp-gated rule fires.
 chmod 775 secrets 2>/dev/null || true
 touch .env
-make -s show >/dev/null 2>&1
+MAKEFLAGS='' make -s show >/dev/null 2>&1
 dmode="$(stat -c %a secrets 2>/dev/null || echo '?')"
 case "$dmode" in 700) ok "secrets/ is $dmode — group-write closed, and the recipe re-ran to repair it";;
                  *) bad "secrets/ is mode $dmode, not 700 — a group-writable dir holding a make -include'd file is variable injection (and if this is 775 on toybox, the fix regressed to \`install -d -m\`)";; esac
@@ -190,7 +199,7 @@ mkdir -p prefix/secrets && cd prefix || exit 1
   printf 'show: ; @printf "%%s|%%s\\n" "$(HARBOR_URL)" "$(KUBECONFIG)"\n'; } > Makefile
 printf 'HARBOR_URL=harbor.ENV\n'                                     > .env
 printf 'HARBOR_URL=harbor.STATE\nKUBECONFIG=/from/state.kc\n'        > .env.state
-got="$(HARBOR_URL=harbor.OPERATOR make -s show 2>/dev/null | cut -d'|' -f1)"
+got="$(HARBOR_URL=harbor.OPERATOR MAKEFLAGS='' make -s show 2>/dev/null | cut -d'|' -f1)"
 if [ "$got" = 'harbor.OPERATOR' ]; then
   bad "positive control: the PRE-FIX shape did NOT reproduce B84 — these assertions discriminate nothing"
 else

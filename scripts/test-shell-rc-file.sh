@@ -11,6 +11,15 @@
 # So the coverage has to come from here. This asserts the RESOLVER, which is what the runbook now
 # calls instead of naming a file.
 set -uo pipefail
+
+# ⚠️ MAKEFLAGS= ON EVERY `make` BELOW, and it is load-bearing. This test CAPTURES make's stdout,
+# and an outer `make -C <repo> static-check` puts `-w` into MAKEFLAGS, which a bare `make` in a
+# child script INHERITS -- so `make[1]: Entering directory '...'` lands inside the `$( )` and every
+# comparison fails. MEASURED both ways: from the repo root the suite is green; the identical tree
+# under `make -C` failed 15 of 21 here and 1 of 9 in test-shell-rc-file.sh. That is a FALSE RED
+# about the operator's invocation, not about the product -- exactly the kind of failure that sends
+# someone to debug the wrong file. Clearing MAKEFLAGS isolates the child from however the parent
+# was invoked, which is what a reproducible test needs.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf 'ok    %s\n' "$1"; }
@@ -48,13 +57,13 @@ if [ "$got" = "/tmp/zdot/.zshrc" ]; then ok "zsh honours ZDOTDIR"
 else bad "zsh honours ZDOTDIR" "wanted /tmp/zdot/.zshrc, got '$got'"; fi
 
 # ── 4. the TARGET the runbook actually calls agrees with the resolver, and FAILS on unknown ──
-# scenario-1 runs `. "$(make -s shell-rc-file)"`. If the target ever printed something on an
+# scenario-1 runs `. "$(MAKEFLAGS='' make -s shell-rc-file)"`. If the target ever printed something on an
 # unsupported shell, that line would source a path nobody maintains.
-got="$(cd "$REPO_ROOT" && SHELL=/usr/bin/zsh HOME="$H" ZDOTDIR="" make -s shell-rc-file 2>/dev/null)"
+got="$(cd "$REPO_ROOT" && SHELL=/usr/bin/zsh HOME="$H" ZDOTDIR="" MAKEFLAGS='' make -s shell-rc-file 2>/dev/null)"
 if [ "$got" = "$H/.zshrc" ]; then ok "make shell-rc-file agrees with the resolver (zsh)"
 else bad "make shell-rc-file agrees with the resolver (zsh)" "got '$got'"; fi
 
-if ! (cd "$REPO_ROOT" && SHELL=/bin/tcsh HOME="$H" make -s shell-rc-file >/dev/null 2>&1); then
+if ! (cd "$REPO_ROOT" && SHELL=/bin/tcsh HOME="$H" MAKEFLAGS='' make -s shell-rc-file >/dev/null 2>&1); then
   ok "make shell-rc-file FAILS on an unsupported shell (never prints a guess)"
 else
   bad "make shell-rc-file FAILS on an unsupported shell" "it exited 0"
