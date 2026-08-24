@@ -16,59 +16,101 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
-## 🟠 B467 — `install-vks-package` never named the cluster it changes — NAMING FIXED, wrong-cluster GUARD still open
+## ✅ B467 — `vks-package.sh` could install onto a SUPERVISOR, unconfirmed, binding cluster-admin — CLOSED
 
 There is no `CLUSTER=` argument: the target is whatever `$KUBECONFIG` points at
-(`Makefile:561` -> `scripts/vks-package.sh`). `KUBECONFIG` is therefore a **SELECTOR**. The
-override half is already sound — `os.sh:481` snapshot-protects it, so
-`make install-vks-package KUBECONFIG=/path/x` genuinely wins. The defect was that **nothing echoed
-back which cluster it chose**.
+(`Makefile:561` -> `scripts/vks-package.sh`). The override half was already sound (`os.sh:481`
+snapshot-protects it). Two things were not.
 
-**Why it is reachable, not theoretical:** the documented flow hands the operator an exported
-Supervisor kubeconfig and never un-exports it — `scenario-1.md:303` and `scenario-2.md:148` both say
-`export KUBECONFIG=./secrets/supervisor.kubeconfig`. A later `make install-vks-package` in that same
-shell is aimed at the **Supervisor**. Separately, `secrets/` holds **four** guest kubeconfigs
-(measured 2026-08-24) of which only `cicd-gc0824060158` is live, and nothing prunes them.
+⚠️ **The hazard was far worse than this row first said, and an idea-round adversary MEASURED it
+against a live Supervisor AND a live guest.** This row claimed the `_list` "are Carvel Packages
+visible" check was "the only thing between you and a wrong-cluster install". **That guard does not
+exist:**
 
-**DONE (2026-08-24):** `vks-package.sh` prints `context @ api-server [KUBECONFIG=path]` on entry, on
-the install action line, and — twice — on the destructive path, including inside the `CONFIRM=yes`
-refusal so you must read the identity before confirming. It is a PRINT, never a gate, so it cannot
-false-block. Proven live against `cicd-gc0824060158`:
+| | measured |
+|---|---|
+| a Supervisor serves the SAME package refNames at the SAME versions | `ako`, `cert-manager`, `cilium`, `cluster-autoscaler`, `contour` — **five byte-identical rows**; a Supervisor has MORE packages than a guest, not fewer |
+| so `_list`'s "no Carvel Packages visible" die | **never fires** |
+| and `install` never reaches `_list` anyway | it calls `_versions`, which **returns versions** on a Supervisor |
+| and `install` has a CONFIRM gate | **NO** — only `uninstall` does |
 
-    level=INFO  cluster: cicd-gc0824060158-admin@cicd-gc0824060158 @ https://192.168.101.132:6443   [KUBECONFIG=/tmp/gkc-test/kc]
-    level=FATAL refusing without CONFIRM=yes.
-                  This removes <pkg> and everything it deployed from:
-                      cicd-gc0824060158-admin@cicd-gc0824060158 @ https://192.168.101.132:6443
+So `make install-vks-package PACKAGE=<any>` aimed at a Supervisor proceeded **unconfirmed** and
+created a **ClusterRoleBinding to cluster-admin** on the Supervisor control plane. Reachable because
+`scenario-1.md:303` and `scenario-2.md:148` both tell the operator to
+`export KUBECONFIG=./secrets/supervisor.kubeconfig` and nothing un-exported it. (Fairly: the package
+targets appear **zero** times in either scenario, so this is an operator improvising, not a
+documented walk.)
 
-And degraded (a kubeconfig with no context) prints `<no current-context> @ <no server in kubeconfig>`
-rather than an empty string that reads as "fine".
+**DONE:**
 
-**STILL OPEN — the wrong-cluster GUARD.** Naming it helps a reader; it does not stop a script.
+- `vks-package.sh` prints `context @ api-server [KUBECONFIG=path]` on entry, on the install action
+  line, and twice on the destructive path including inside the `CONFIRM=yes` refusal.
+- `install` and `uninstall` now **REFUSE** a Supervisor via `kubeconfig_is_supervisor` (`os.sh:907`,
+  API-GROUP discovery on `vmoperator.vmware.com`). **rc=2 (unreachable) FAILS OPEN** — an air-gapped
+  or slow lab must not be blocked by a probe that could not reach it; the honest cost is that the
+  gate is silent exactly when the operator is most confused. Measured latency: 0.09s warm guest,
+  0.11s Supervisor, 3.1s host-unreachable, 20s blackholed.
+- `list` stays **ungated** — it mutates nothing.
+- `scripts/test-vks-package-guard.sh` — 6 offline cases (stubbed kubectl): Supervisor refused on
+  both mutating verbs, the refusal names the cluster and the remedy, a guest is NOT refused,
+  unreachable fails OPEN, `list` is not gated.
 
-⚠️ **CORRECTED 2026-08-24, same day: the discriminator this row said to "not guess" ALREADY EXISTS
-and is RED-proven.** `kubeconfig_is_supervisor()` (`os.sh:907`) answers it by **API-GROUP
-DISCOVERY** on `vmoperator.vmware.com` — not a CRD read, which is the category error that made B210
-conclude no discriminator was possible. It is measured at both operating points (guest: header-only
-/ 0 bytes; Supervisor: `virtualmachineclasses`), carries a control proving it discriminates rather
-than always answering empty, needs only `system:discovery` RBAC (so it is TENANT-readable and
-cheaper than a namespace probe), and has `not_a_supervisor_note()` as its shared message.
-`scripts/test-supervisor-discriminator.sh` pins the trap that `kubectl api-resources
---api-group=<absent>` EXITS 0 with a header, so rc is useless and the implementation must assert a
-non-empty list.
+⚠️ **This is the ONE place an EAGER discriminator is justified, and the round was explicit about
+why.** Both pre-existing consumers (`24-vks-k8s-version.sh:126`, `26-vks-cluster-status.sh:109`)
+call it **LAZILY inside a failure branch** — zero happy-path cost, structurally zero false-RED,
+because the operation FAILS on the wrong cluster and only the message needs correcting. Here the
+operation **succeeds**. Do NOT promote the eager pattern elsewhere on the strength of this row.
 
-**Only THREE scripts call it** — `24-vks-k8s-version.sh`, `26-vks-cluster-status.sh`, and its own
-test. `vks-package.sh` does not. So the fix is not research; it is wiring an existing, tested
-primitive into the guest-scoped entry points.
+**Follow-up the round named and this row does NOT close:** sweep for any OTHER guest-scoped target
+with the same shape — succeeds wrongly rather than failing. That denominator is unmeasured.
 
-⚠️ **Do NOT wire it before the idea round lands.** Turning a PRINT into a GATE is a new control, and
-`kubeconfig_is_supervisor` returns **2** when the API server is unreachable — an air-gapped or slow
-lab must not be false-blocked by a check that cannot reach the cluster. The tri-state (0 supervisor
-/ 1 not / 2 unknown) is the whole design question, and "unknown" must fail OPEN.
+## 🔴 B468 — a per-run kubeconfig override is BROKEN for Supervisor-scoped targets
 
-**Done when:** guest-scoped entry points refuse a Supervisor kubeconfig by identity via
-`kubeconfig_is_supervisor`, rc=2 fails open with a named reason, and the false-RED rate is measured
-on the five scripts that touch both scopes in one run (`26-vks-cluster-status.sh`,
-`argocd-password.sh`, `creds.sh`, and two tests).
+The owner asked for ".env variables for supervisor and guest kubeconfigs, used as defaults, but able
+to point a target at a different kubeconfig". Measured against the tree, the guest half already
+works and the Supervisor half does not:
+
+| requirement | guest | Supervisor |
+|---|---|---|
+| sane default | bare `$KUBECONFIG` — works | `supervisor_kubeconfig()` — works |
+| **point a target at a different kubeconfig** | **WORKS** (`make <t> KUBECONFIG=…`, proven live in both forms) | **BROKEN** |
+
+`supervisor_kubeconfig()` resolves by a RANKED candidate list, and MEASURED:
+
+    VKS_SUPERVISOR_KUBECONFIG=<sup> KUBECONFIG=<other>  ->  <sup>        the explicit KUBECONFIG LOST
+    KUBECONFIG=<other>  (nothing else set)             ->  the MAINTAINER-CONVENIENCE entry won
+
+`load_env`'s own header states the invariant it breaks: *"A variable that selects WHICH CLUSTER you
+are talking to must be owned by the caller. Config may supply a DEFAULT; it may not overrule an
+explicit choice."*
+
+**Interim, shipped:** `make help` now documents the asymmetry — `KUBECONFIG=` for guest-scoped
+targets, `VKS_SUPERVISOR_KUBECONFIG=` for Supervisor-scoped ones, with the reason and the
+`grep -rl supervisor_kubeconfig scripts/` derivation of which is which.
+
+⚠️ **FOUR designs are REFUTED — do not rebuild them.** All measured by the idea round:
+
+1. **A `guest_kubeconfig()` resolver mirroring the Supervisor one.** There is NO ordering that works:
+   put `$KUBECONFIG` anywhere but first and `make <t> KUBECONFIG=…` becomes a silent no-op; put it
+   first and the resolver degenerates to bare `$KUBECONFIG`, doing nothing for the hazard. The repo
+   already reached this conclusion in production — `argocd-password.sh:113`: *"NOT
+   `supervisor_kubeconfig` ALONE, WHICH WOULD INVERT THE SAME BUG … Try BOTH, take the first that
+   ANSWERS, and say which one did: evidence, not ranking."*
+2. **UNCOMMENTING the five kubeconfig vars** (the literal first step of the ask). It walks into the
+   clobber class, and `check-env-clobber` would say **`ok`** on an unsound premise: its exemption
+   ("snapshot-protected, so a per-run override survives") is true for a bare `$VAR` read and FALSE
+   once a resolver ranks two protected selectors against each other — exactly what the measurement
+   above shows. Leave all five commented.
+3. **Declaring a SCOPE on each Makefile target.** 230 targets; an enumerated list with no gate, and
+   a stale tag is worse than none (mis-tagged guest ⇒ false-block; mis-tagged supervisor ⇒ silently
+   permits). Scope is already DERIVABLE: a script that calls `supervisor_kubeconfig*` is
+   Supervisor-scoped (14 files).
+4. **"Just un-export KUBECONFIG in the docs."** Wrong for scenario-1: every target between the
+   export (`:303`) and the guest switch (`:528`) is Supervisor-scoped. The export IS the mechanism.
+
+**The real fix, if pursued:** make `supervisor_kubeconfig()` honour an EXPLICITLY-SET `$KUBECONFIG`
+— a distinction it currently cannot make — or adopt the `argocd-password.sh` shape (probe both,
+take the one that ANSWERS, print which).
 
 ## 🟠 B466 — `.env` switch: install Istio via the VKS Standard Package instead of helm
 
