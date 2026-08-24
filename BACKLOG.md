@@ -1104,7 +1104,7 @@ walkbox runs out of disk building this repo's SIXTH builder image, and what you 
 `platform → seed-gitea`. **If a walk reports that token error, run `df -h /` before touching Gitea.**
 The sizing that drives it is in [docs/sizing.md](docs/sizing.md).
 
-## B208 — `jumpbox-matrix` photon×docker: `--privileged` breaks sudo, so that cell has never passed 🔴 open
+## B208 — `jumpbox-matrix` photon×docker: `--privileged` breaks sudo, so that cell has never passed ✅ closed
 
 **PRE-EXISTING** (`jumpbox/Dockerfile.photon-docker` last changed 2026-08-08) and **off the six-row
 critical path** (`grep -c jumpbox docs/scenario-{1,2}.md` -> **0 / 0**), so it is filed rather than
@@ -1145,6 +1145,20 @@ Worth stating plainly: this cell of a documented target has presumably never pas
 surfaced that until the target was actually run. The other three cells are green --
 photon×podman, ubuntu×podman and ubuntu×docker all reported `engine-trust-check PASSED`, the last of
 them via `docker-rootless` with the CA at `~/.config/docker/certs.d/`.
+
+**✅ CLOSED 2026-08-23 — measured, with a live push to the real Harbor.** Root cause was NOT the base
+image date (two earlier diagnoses, both refuted): `/etc/shadow` is owned by no package, and
+`shadow`'s `pwconv` (0400) races `systemd`'s `systemd-sysusers` (0000) — rpm's transaction order
+decides, and the docker set orders systemd first. Fixed in PR #968 by pinning 0400 at build time in
+every hazard-scoped Photon image, with a drift NOTE that fired on its first real build
+(`photon-docker: arrived 0 (expected 400)`; `photon-podman`: silent — exactly the predicted split).
+`crun` was also missing from the podman image's install list although its comment claimed it.
+
+**Evidence — `make jumpbox JUMPBOX_OS=photon JUMPBOX_ENGINE=docker` -> `JUMPBOX_OK`:**
+rootless docker build+run smoke OK; the CA **negative control** fired (*"without the CA, docker
+CANNOT reach 172.18.0.3"*), so the trust result is not vacuous; login+pull+build+**push** to the KinD
+Harbor succeeded; and **0** broken-PAM warnings from the new `os.sh` capability probe, which is the
+correct silent behaviour on a healthy box.
 
 ## B213 — `--security-opt seccomp=unconfined` would dissolve the whole /etc/shadow failure class 🔴 open
 
