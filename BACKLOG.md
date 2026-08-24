@@ -16,6 +16,48 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🔴 B471 — the matrix certifies the scenario-2 DOCUMENT, never the tenant PERMISSION MODEL 🔴 open
+
+**The matrix's own row label says so**, verbatim (`nested-vsphere-lab/scripts/walk-matrix.sh:1063`
+and `:1141`):
+
+> `photon | scenario-2 (document walkability; ADMIN creds AND a driver-supplied GUEST kubeconfig — NOT the tenant path)`
+
+So a green row 5/6 certifies **"every command in `docs/scenario-2.md` runs and produces its
+documented result"**. It does NOT certify **"a tenant can follow this runbook"**, because the row is
+handed two things a real tenant does not have:
+
+| the row gets | a real tenant has |
+|---|---|
+| **admin** credentials | restricted RBAC — may not list nodes, may not read Supervisor secrets |
+| a guest kubeconfig **supplied by the driver** | to obtain one, possibly by asking the platform team |
+
+**Why this matters more than it sounds.** RULE ZERO-B makes the tenant the **DEFAULT** posture:
+Scenario 2 is the common case and Scenario 1 is the exception. So the matrix's most-exercised
+scenario is the one whose *audience* is least exercised — six green rows say nothing about the
+permission model the majority of users are actually in.
+
+**It is not hypothetical — the same shape shipped a bug this session.** The istiod capacity
+preflight worked for an admin and **failed closed for a tenant** (a tenant cannot read node
+allocatable, so the check's usable-capacity probe returned 0). No matrix row would have caught it;
+it was found by reasoning about the tenant path, not by running one.
+
+**Measured 2026-08-24 (run `run-20260824T143354Z-3174779`, 6/6 green):** rows 5 and 6 walked
+`28 blocks: 18 ran, 0 FAILED, 10 skipped` — identical on photon and ubuntu. Four of the ten skips
+are `0b. Install the toolchain, then get a kubeconfig - inside a <details> alternative: Only if you
+hold vSphere SSO credentials and must fetch it yourself` — i.e. **the branch a credential-less
+tenant would actually take is skipped**, because the driver supplied the kubeconfig instead.
+
+**What would close it (NOT designed — needs an idea round first; inventing a new matrix row is
+exactly the "new control" act RULE ZERO says most needs one):**
+sketch only — a row that binds a *restricted* ServiceAccount (no node read, no Supervisor access),
+hands the walk only what `.env` can carry, and asserts the runbook either succeeds or fails with a
+message naming the grant to REQUEST. The hard part is not the row; it is deciding what a tenant is
+allowed to see, which is a lab-policy question, not a scripting one.
+
+**Do NOT close this by relabelling the existing rows.** Their label is already honest; the gap is
+that nothing else covers what they exclude.
+
 ## 🟠 B470 — `test-cluster-status-wait-gate.sh` TRUNCATES a pre-existing `secrets/testcluster.kubeconfig`
 
 The test drives the real `26-vks-cluster-status.sh`, which writes
