@@ -16,6 +16,71 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🔴 B461 — a stale `.env.state` silently makes BOTH scenario-2 rows UNRUNNABLE (measured 2026-08-24)
+
+**Symptom.** Matrix run `run-20260824T040634Z-1480291`: `ROW 5 UNRUNNABLE — could not supply
+scenario-2's credentials`, reason `cannot supply S2 contract: no Harbor CA minted`. Row 6 uses the
+same `supply_s2_contract`, so it goes the same way. The harness says *"Not counted as a failure"*,
+so the run reports `walked 4 of 6` rather than FAILED — easy to read as fine. **It is not: a third
+of the matrix never ran.**
+
+**The CA was minted.** `S2-HARBORCA.log` shows `wrote …/secrets/harbor-tls/ca.crt`, subject
+`CN = Harbor CA`, with a SHA-256. The file exists and parses.
+
+**Root cause — producer and consumer disagree because a STATE OVERLAY redirected the producer.**
+
+| | |
+|---|---|
+| `walk-matrix.sh:975` checks | `${WALK_REPO}/secrets/harbor-ca.crt` (hardcoded) |
+| the Makefile target writes | `$(if $(HARBOR_CA_FILE),$(HARBOR_CA_FILE),./secrets/harbor-ca.crt)` |
+| `.env:997` | `HARBOR_CA_FILE=./secrets/harbor-ca.crt` |
+| **`.env.state:13`** | **`HARBOR_CA_FILE=…/secrets/harbor-tls/ca.crt`** — a leftover **KinD** discovery |
+| `make -pn` resolves | the `harbor-tls` path — the overlay is `-include`d LAST and wins |
+
+`SKIP_DOTENV=1`, which the driver does pass, suppresses `.env` for the **scripts' `load_env`** but
+**NOT for make's `-include`**. That asymmetry is the gap.
+
+**Fix (one line, in the LAB repo — §H.1 forbade touching it while the matrix was executing it):**
+pass the path explicitly on the invocation at `walk-matrix.sh:981`, so producer and consumer agree
+by construction —
+
+    VKS_SUPERVISOR_KUBECONFIG="$kc" HARBOR_URL="${HARBOR_URL:-harbor.env1.lab.test}" \
+      HARBOR_CA_FILE="$hca" SKIP_DOTENV=1 make -C "$WALK_REPO" harbor-ca-from-cluster
+
+This is exactly the defensive form the comment at `:977-980` already prescribes for `HARBOR_URL`,
+applied to the sibling variable it missed.
+
+**Done-when:** a matrix run walks rows 5 and 6 (not UNRUNNABLE) on a box that has a `.env.state`
+carrying a KinD `HARBOR_CA_FILE`. Prove it by leaving that line in place.
+
+**The exposure is BOUNDED — audited, not left open.** There are exactly TWO host-side
+`make -C "$WALK_REPO"` calls in the driver, both inside `supply_s2_contract`:
+
+| call | state | why |
+|---|---|---|
+| `:952` `vks-cluster-status` | ✅ SAFE | passes `VKS_SUPERVISOR_KUBECONFIG="$kc"` explicitly, and `supervisor_kubeconfig()` takes that env var as its FIRST candidate. `S2-KUBECONFIG.log` proves it read the real lab (`phase: Provisioned`, `ControlPlaneInitialized: True`), not KinD. |
+| `:982` `harbor-ca-from-cluster` | ⛔ BROKEN | passes `HARBOR_URL` and `SKIP_DOTENV` but **not** `HARBOR_CA_FILE`. |
+
+`HARBOR_CA_FILE` is **not** emitted by `walk_env`, so the VMs never see it and **rows 1–4 are
+unaffected**. The blast radius is exactly the two scenario-2 rows.
+
+**How bad the overlay is, for context:** that `.env.state` (written by a KinD run at
+`2026-08-24T00:13:47Z`) overrides **14** variables for any host-side make — including the selector
+`KUBECONFIG` (KinD's), `HARBOR_URL=172.18.0.3`, `VKS_CONTEXT=kind-vks-airgap-cicd`. Only the two
+that the driver names explicitly are safe. Every future host-side `make -C "$WALK_REPO"` must name
+what it depends on.
+
+**The fix is MEASUREMENT-VALIDATED, not assumed.** I suspected an `-include`d `VAR=x` would beat an
+environment variable, which would have made the prescribed env-prefix fix useless. Measured — it
+does not:
+
+    HARBOR_URL=SENTINEL_ENV make -pn   ->  HARBOR_URL = SENTINEL_ENV     (env prefix WINS)
+    make HARBOR_URL=SENTINEL_CMD -pn   ->  HARBOR_URL = SENTINEL_CMD
+    neither                            ->  HARBOR_URL = 172.18.0.3       (the KinD leak)
+
+So the env-prefix form is the right shape, the driver's existing `HARBOR_URL` defence genuinely
+works, and the bug is purely the omitted sibling variable.
+
 ## RUN CONTRACT — the walkthrough matrix (rows 1–6)
 
 **This is the operator's standing order, written down because it has had to be re-issued five times.

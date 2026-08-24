@@ -64,12 +64,19 @@ backlog **and** the design). What is NOT acceptable is starting work with no adv
 **Trigger 2 IS NOW A HOOK, because prose did not hold — it was skipped on 2026-07-14 by the very
 session that had just re-read it.** `.claude/hooks/adversary-first-gate.py` (wired in
 `.claude/settings.json`) **BLOCKS `Edit`/`Write`** until an adversary has run. Read the truth from its
-own constants, not from prose — they are `GUARDED_PREFIXES` / `EXEMPT_*` at the top of the file:
+own constants, not from prose. There are **FOUR**, and reading only the obvious pair is a measured
+trap: `GUARDED_PREFIXES`, **`GUARDED_FILES`**, `EXEMPT_PREFIXES`, `EXEMPT_FILES`. On 2026-08-24 a
+session hand-typed the first, third and fourth into an AST reader, missed `GUARDED_FILES =
+("Makefile",)`, and concluded the Makefile was ungated — it is guarded, at line 215's
+`rel.startswith(GUARDED_PREFIXES) or rel in GUARDED_FILES`.
 
-| | |
-|---|---|
-| **GUARDED** | `docs/` · `README.md` · `scripts/` · `jumpbox/` · `k8s/` · `apps/` · `Makefile` |
-| **EXEMPT** | `.claude/` · `.github/` · `CLAUDE.md` · `BACKLOG.md` — together these ARE the plan/backlog, so you can always write it down first |
+⚠️ **A value table used to sit here and was DELETED on 2026-08-24, deliberately.** It was a prose
+duplicate of an in-repo constant — exactly the class the sentence above forbids — and it had already
+drifted once (`tekton/`). Do not reinstate it; a gate to police it was designed, prototyped and
+**REFUTED at 50% false-RED**, with two of the five false-REDs being documentation *improvements*.
+The authoritative answer is the hook's own verdict: feed it a `Write` payload for the path and read
+the rc (**2 = guarded, 0 = ungated**). The exemptions exist so the plan/backlog can always be
+written down first.
 
 ⚠️ **Two corrections, 2026-08-16.** `tekton/` was in GUARDED and was **dead**: `git ls-files tekton`
 = 0; the manifests are at `k8s/tekton/` (9 files), already covered by `k8s/`. And `BACKLOG.md` was
@@ -78,12 +85,17 @@ review — the exemption had tracked the FILE (`CLAUDE.md`) rather than the ROLE
 moved out in f7f6c30 (2026-07-22) without it. Measured: 24 of the last 200 commits are BACKLOG-only.
 It is **not** a bypass — a git exclude pathspec is per-FILE, so a MIXED commit still re-arms
 (`test-adversary-gate-rearm.sh` now pins both directions).
-🔴 **Known and NOT fixed:** `.env.example` (touched in **29 of the last 200 commits**, and this file
+🔴 **Known and NOT fixed:** `.env.example` (touched in **21 of the last 200 commits** — measured at `cd542ff` 2026-08-24; it
+read **29** at `0fdd6ac` on 2026-08-16, i.e. this very figure rots ~28% in a week, so re-measure
+before quoting it — and this file
 calls it *"the single source of truth for every tunable"*), `.mise.toml`, `images/`, `deploy/`,
 `kind/`, `.gitleaks.toml`, `.trivyignore` and the 155-line `bootstrap-jumpbox.sh` are in NEITHER
 tuple — writable with **zero** review. Guarding them is a new control design and needs its own
-idea-round (measure the false-block rate first; `.env.example` alone would demand a round on ~15% of
-commits, and Renovate cannot run one at all).
+idea-round. **The false-block cost was measured 2026-08-24 and is ~15x SMALLER than the ~15% this
+line used to claim: 2 of 200 commits (1%).** Of the 21 commits touching `.env.example`, **19 are
+MIXED with an already-guarded path**, so the session had to engage an adversary anyway and a new
+guard adds nothing; only 2 are `.env.example`-without-any-guarded-path. That makes this cheaper than
+it looked — and correspondingly lower value.
 
 **It clears only until your NEXT COMMIT, not for the session.** The receipt records the adversary's
 wall-clock time and a guarded write passes only while that time is newer than HEAD's commit — so
@@ -200,8 +212,17 @@ authority` from crane.
 **MEASURED 2026-08-23: 7h52m of dead wall-clock, from one sentence.** `#957` merged at 01:50; the
 next thing landed at 09:42. The entire gap was a turn that ended *"I'm holding at the cut rather than
 starting one that a bot can invalidate"* — waiting for an owner who was not at the keyboard. A full
-six-row matrix run is ~4h, so a run started instead of asked-about would have **finished, twice**,
-and the session would have had a verdict rather than a question.
+six-row matrix run is hours, not minutes, so a run started instead of asked-about would have
+**finished**, and the session would have had a verdict rather than a question.
+
+⚠️ **Do NOT quote a duration here — measured 2026-08-24.** This line used to say "~4h" and "finished,
+**twice**". Both were wrong: `7h52m ÷ 4h06m = 1.92`, so "twice" was false on its own number; and the
+only two COMPLETE runs measured **3h06m** and **4h06m** — 32% apart, same tree, 24h apart — while
+**both are 2-app trees**. The repo now has six apps (builder STEP lines 4 → 34) and **no COMPLETE
+6-app run exists**, so any figure written here is a forecast quoting an obsolete corpus. Read
+`~/walk-evidence/run-*/VERDICT-*.txt` instead. A `make matrix-eta` printer to derive it was designed
+and **REFUTED**: every COMPLETE run is 2-app and every 6-app run is incomplete, so it would have
+automated quoting the stale number with a command's authority behind it.
 
 **And the caution was inverted.** The thing being "protected" against was a Renovate automerge
 invalidating the run — which was *more* likely across eight idle hours than during a run already
@@ -919,13 +940,34 @@ did not take.
   (`--privileged` is a bundle: only its AppArmor half causes the bug, only its seccomp half is
   needed). NOT shipped: a non-privileged container has **no `/dev/fuse`**, so it needs its own change
   and a full `make jumpbox-matrix`. Keep the 0400 pin regardless.
-- **The interpreter-write hole in the adversary gate.** MEASURED: this repo's gate matcher has **no
-  Bash arm at all**, so `echo x > scripts/x.sh` is rc=0 ALLOW here; the lab repo's has one but catches
-  ~10%. Across 31,688 real Bash commands, **88% of guarded writes in the last 6 sessions bypassed
-  Edit/Write entirely**. An idea round **REFUTED** the obvious string-matcher fix (17–18% false
-  blocks, landing on running our own gates; closes 0 of 9 sibling bypasses) and ranked a **git
-  pre-commit chokepoint** #1 — mechanism-independent, needs the owner for nothing, covers 100% of what
-  SHIPS. The receipt **self-mint** it also found (a plain `Write` to `.claude/state/*.receipt` was
+- **The interpreter-write hole in the adversary gate — REAL, and now believed UN-GATEABLE at the ship
+  boundary (measured 2026-08-24).** The hole reproduces on the live hook: same file, no fresh receipt,
+  `Bash "echo pwned > scripts/00-install-prereqs.sh"` -> **rc=0 ALLOW** while `Write` to that same path
+  -> **rc=2 BLOCK**. It is main-agent AND subagent, at the Bash layer.
+  ⚠️ **The "88%" this line used to carry is ~2x inflated.** It reproduces only with a LOOSE matcher
+  (any write verb in a command that merely *mentions* a guarded path). Anchoring on the write's actual
+  TARGET gives **502 Bash vs 626 Edit/Write = 44.5%**, and a 12-sample audit of the redirect class
+  showed ~17% false positives, so the true share is roughly **20–45%**. The hole is real; the number
+  that justified its priority was not — a load-bearing figure inside a control's own rationale.
+  ⚠️ **The `git pre-commit chokepoint`, ranked #1 by the earlier idea round, is REFUTED. Do not build
+  it.** The killer is one command: **200 of the last 200 commits on `main` are server-side GitHub
+  squash merges** (committer `GitHub <noreply@github.com>`, 1 parent), so a *client* pre-commit hook
+  is not in the path of a single artifact that ships — "covers 100% of what SHIPS" was never true.
+  Its companion premise fails the same way: Renovate authors via the GitHub API and never runs a local
+  hook, so the feared false-blocks are **0** for the same reason the coverage is 0. It also carries
+  **eight** bypasses, not one (`--no-verify`, `-n`, `-c core.hooksPath=/dev/null`, `-c core.hooksPath=`,
+  and silent skips on `revert`/`cherry-pick`/`rebase`/`merge` — all verified with a positive control),
+  and its only clone-surviving deployment (`git config --global core.hooksPath`) violates this file's
+  own "the gate stays project-local" rule by firing in `nested-vsphere-lab`.
+  **A CI/server-side gate is structurally impossible**, not merely unbuilt: `.claude/state/*.receipt`
+  is gitignored (`.gitignore:51 .claude/*`, 0 tracked files), so `ci-pass` — a real zero-bypass gate
+  (ruleset `18692333`, `bypass_actors: []`) — can never see the evidence, and every in-diff signal is
+  agent-self-mintable. The one non-self-mintable signal is a human PR review, which the owner has
+  explicitly rejected. **Treat this as DISCIPLINE, name the mechanism, and stop** — a partial gate that
+  reads as "handled" is worse than none. Counterweight worth keeping: across 16,245 Bash tool uses in
+  this project, `--no-verify` appears **15 times, all of them in probes and prose — zero operational
+  use, ever**. The bypasses are available, not exercised.
+  The receipt **self-mint** the earlier round found (a plain `Write` to `.claude/state/*.receipt` was
   rc=0 here) is **already fixed** in #968.
 - **⛔ `permissions.ask` / `ask-on-outward.py` are DELIBERATELY UNWIRED — do NOT "restore" them.** An
   adversary graded their absence CRITICAL and I restored them; the owner's reason is explicit: *"i do
