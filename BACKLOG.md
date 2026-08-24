@@ -16,6 +16,45 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🔴 B462 — a THIRD copy of the Harbor-CA path, on the VM side, that B461's fix cannot protect
+
+`walk-matrix.sh:530` hardcodes `~/vks-airgap-cicd/secrets/harbor-ca.crt` for the walkbox, while the
+VM's effective `HARBOR_CA_FILE` comes from `.env.example:137` — `walk_env` emits `HARBOR_URL` but
+**never** `HARBOR_CA_FILE` (grep: 0 emissions). **Four literals govern one value**: driver-host
+`:997`, driver-VM `:530`, `.env.example:137`, `Makefile:635` fallback. B461 collapsed the host pair
+only. If `.env.example`'s default moves, `:530` writes where the VM does not look — the same bug one
+hop out, surfacing ~40 min in as a scenario-2 walk failure instead of a fast UNRUNNABLE.
+**Fix:** emit `HARBOR_CA_FILE` into the VM `.env` from `walk_env`, derived from the same literal as
+`:530` — one variable, both sides.
+
+## 🟠 B463 — the diagnostic that MISLED the diagnosis is unchanged
+
+`walk-matrix.sh:1002` prints `no Harbor CA minted` for **all seven** ways the producer can fail,
+while `27-harbor-ca-from-cluster.sh:130-176` distinguishes them precisely (wrong CA / no answer /
+SAN mismatch / not-an-anchor / zero bytes / FORBIDDEN / STALE_CA), each ending *"'$OUT' was NOT
+touched."* The sentence was **FALSE in this very incident** — the CA *was* minted — and that is what
+made a path bug read as a missing CA. **Fix:** append the log's last ERROR line, or just say
+`no Harbor CA at $hca`.
+
+## 🟠 B464 — the overlay-clobber CLASS is recorded only in a commit message; nothing gates it
+
+`.env.state` overrides **14** variables for any host-side make, including the selector `KUBECONFIG`.
+`check-env-clobber` reads `.env.example` and is **structurally blind** to the overlay — `load_env`'s
+own comment already calls it *"a THIRD clobber channel that no gate can see"*. Two call sites are
+pinned by hand today; the third, written in a hurry, re-enters this.
+**Candidate:** assert that every `make -C "$WALK_REPO"` in `walk-matrix.sh` pins the selectors its
+consumer then checks; RED-prove by deleting a pin. Needs an idea round — a naive version rots.
+
+## ✅ B465 — CLOSED: collateral damage from the B461 bug, repaired 2026-08-24
+
+The pre-fix bug wrote the **lab's** Harbor CA over `secrets/harbor-tls/ca.crt` — the **KinD**
+Harbor's trust anchor. Confirmed: that file carried the buggy run's logged
+`SHA-256 E7:FD:1E:C3:…`, while the (since-rebuilt) lab's CA is `13:A9:88:94:…`, and a KinD cluster
+`vks-airgap-cicd` was live with its Harbor serving at `172.18.0.3`. The stale anchor **failed** to
+verify it. `ca.key` (Jul 11) survived, so a CA regenerated from it with the leaf's exact issuer
+(`CN = vks-lab-harbor-ca`) was the exact repair. Proven by handshake, not file presence:
+`curl --cacert` → **200**; controls with the stale CA and with no CA → **rc=60**.
+
 ## 🔴 B461 — a stale `.env.state` silently makes BOTH scenario-2 rows UNRUNNABLE (measured 2026-08-24)
 
 **Symptom.** Matrix run `run-20260824T040634Z-1480291`: `ROW 5 UNRUNNABLE — could not supply
@@ -37,8 +76,21 @@ of the matrix never ran.**
 | **`.env.state:13`** | **`HARBOR_CA_FILE=…/secrets/harbor-tls/ca.crt`** — a leftover **KinD** discovery |
 | `make -pn` resolves | the `harbor-tls` path — the overlay is `-include`d LAST and wins |
 
-`SKIP_DOTENV=1`, which the driver does pass, suppresses `.env` for the **scripts' `load_env`** but
-**NOT for make's `-include`**. That asymmetry is the gap.
+⚠️ **CORRECTED 2026-08-24 — the mechanism above was WRONG TWICE.** An adversary round measured it
+and I verified both:
+
+- *"`SKIP_DOTENV=1` suppresses `.env` for the scripts but NOT for make's `-include`"* — **FALSE**.
+  `Makefile:162` is `ifneq ($(SKIP_DOTENV),1)` around the `.env` include at `:178`, and its own
+  comment says *"at the MAKE level here, and inside every script"*. It gates `.env` at **BOTH**
+  levels. What it gates at **NEITHER** is **`.env.state` (`:150`) and `.env.kind` (`:135`)** — that
+  is the real hole, and it is why naming the variable is the fix.
+- *"the overlay is `-include`'d LAST"* — **FALSE and INVERTED**. `.env.state.make` is included
+  **FIRST** (`:150`), `.env.make` second (`:178`); `regen_overlay_mk` rewrites `KEY=` to `KEY ?=`,
+  so **FIRST wins**.
+The cost of the wrong version: a reader widening the fix reaches for *"make SKIP_DOTENV cover make's
+includes"* — already true, zero help — instead of the real lever. **Limit of my own check:** claim 1
+is settled by READING the `ifneq`, not measured — `.env`'s value and the Makefile default are the
+same string, so no probe can discriminate them.
 
 **Fix (one line, in the LAB repo — §H.1 forbade touching it while the matrix was executing it):**
 pass the path explicitly on the invocation at `walk-matrix.sh:981`, so producer and consumer agree
