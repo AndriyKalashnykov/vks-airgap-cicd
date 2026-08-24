@@ -853,128 +853,96 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-21 — RE-CERTIFIED 6/6 ON THE FIRST PASS. TAGS RESET to `v1.0.0`. A fresh lab is UP
+## ▶️ HANDOFF 2026-08-23 — TREE IS READY TO ARM. Both repos clean, queue empty, arming is now WIRED
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### The standing job is DONE — do not re-certify the same tree
+### The standing job: ARM THE MATRIX. Everything it needs is done
 
-`MATRIX COMPLETE — walked 6 of 6 designed rows (1 2 3 4 5 6)`, **0 FAILED / 0 UNMET across all six**,
-`MATRIX_RC=0`, ~4h06m, first pass. No fix was applied mid-run, so the §A.2 clock never reset.
+```sh
+WALK_REPO=$HOME/projects/vks-airgap-cicd \
+WALK_OUT_ROOT=$HOME/walk-evidence \
+make -C ~/projects/nested-vsphere-lab walk-matrix > /tmp/matrix.log 2>&1 &
+sleep 90 && wc -l /tmp/matrix.log     # hundreds = armed. single digits = REFUSED, read the last line.
+```
 
-- 🔴 **Certified tree: `fbdf683` — and NO TAG POINTS AT IT ANY MORE.** The version series was reset
-  on 2026-08-21 (owner decision): every tag (`v1.0.0` `v1.0.1` `v1.1.0` `v1.2.0`) was deleted locally and on the
-  remote, and a single **`v1.0.0`** was cut at the then-current `main`. **`v1.0.0` MARKS A VERSION, NOT A
-  CERTIFICATION** — the drift from `fbdf683` is a **command, not a number** — this line quoted one twice on
-  2026-08-21 and it rotted within the day, both times:
-  `git rev-list --count fbdf683..origin/main` and `git diff --name-only fbdf683..origin/main | wc -l`.
-  It was already materially different when the tag was cut (double figures of files, over a dozen
-  `scripts/`, including the vCenter-anchor pin check and `vks-trust-probe`), and it only grows. Anyone who needs the certified tree must use the SHA; there is no longer a tag for it, and reading
-  `v1.0.0` as "the 6/6 tree" is the single easiest wrong inference to make here.
-  When it WAS tagged, the tag was on main's head — 0 open PRs at arm time, because **#910 was
-  merged BEFORE arming**. That was deliberate: the previous certification had a Renovate CLI pin
-  auto-merge **12 seconds before row 1 started**, which splits a run across two commits.
-- **All three cross-OS pairs are BYTE-IDENTICAL** — rows 1~3 (37 ran / 7 skipped), 2~4 (31 / 13),
-  5~6 (18 / 9) — same counts on both OSes AND across two independently cut labs. Every row
-  reconciles at `parsed == heads` (37/37, 17/17): slack zero, the check that catches a parser
-  dropping claims.
-- 🔴 **Evidence: `~/walk-evidence/run-20260821T034057Z-1601968/` — BOTH the certification record AND a
-  LIVE SECRET STORE. Do not copy, archive, attach or share it.** Dir `0700`, all files `0600`.
-  ⚠️ **THE `0664` DEFECT RECURRED, exactly as the previous handoff warned**: 6 files — including both
-  row-1/row-2 logs and **the verdict file itself** — were `0664` until I fixed them. `0700` on the
-  DIRECTORY is not sufficient and never was. Check `find <dir> -type f ! -perm 600 | wc -l` after
-  every run. Positive control passes: the Harbor password appears **0 times** in the row logs.
-- **Scope limit, stated not implied:** rows 5/6 prove scenario-2 is **walkable** — the driver supplies
-  ADMIN credentials and a guest kubeconfig, as their own banner says (*"NOT the tenant path"*). A real
-  tenant holding only platform-issued grants is **UNPROVEN by this matrix**.
+🔴 **`VCF_CLI_SRC_DIR` is NO LONGER passed by hand — it is DERIVED from `WALK_REPO/.env`** (lab
+`02e1710`, row B460). It used to be required from the environment, and omitting it exited in **two log
+lines**, which reads as "running" to anyone who does not check the length. That cost a full arming
+cycle this session. **`WALK_OUT_ROOT` is still explicit and load-bearing** — its default is
+`/tmp/walk` and a reboot has destroyed a whole certification (lab B454).
 
-### The lab is UP (cut B) — do not assume it needs a cut
-
-Measured after the run. `esxi01` is the only libvirt domain; **0 walkboxes leaked** (the one B453
-predicts was swept, after proving provenance by the `vks-walkbox-managed` marker — `esxi01` carries
-none).
-
-| what | where |
+| precondition | state |
 |---|---|
-| vCenter | `vcsa.env1.lab.test` / 192.168.100.50 |
-| Harbor / ArgoCD | Supervisor Services: `svc-harbor-oy47l`, `svc-argocd-service-l49kf` |
-| vSphere Namespace | `cicd` |
-| guest cluster | `cicd-gc0820234057` |
+| `vks-airgap-cicd` | `main` @ **`9df3100`**, ahead=0, dirty=0, **0 open PRs** (#968 merged) |
+| `nested-vsphere-lab` | `main` @ **`02e1710`**, ahead=0, dirty=0 |
+| lab | **UP** — cut B. vCenter `vcsa.env1.lab.test`/192.168.100.50, ns `cicd`, guest `cicd-gc0820234057` |
+| leaked VMs | 2 walkboxes from the previous run (lab B453) — the matrix sweeps them on the way in; do not delete by hand |
 
-### Distrust these
+### 🔴 DISTRUST THIS FIRST if a row fails oddly early
 
-- 🔴 **The repo's `.env` Harbor password is STALE — `make env-validate` returns a genuine 401**
-  (re-measured 2026-08-21). NOT a broken Harbor: the matrix installs Harbor from the walkboxes and
-  destroys them, so the credential it generated does not exist on this box. Recover it from the
-  cluster, or faster, the `.hp` sidecar in the evidence dir. **This recurs after every matrix run** —
-  it is the expected state, not a defect.
-- **A backlog row is a HYPOTHESIS, and today three were refuted before a line shipped.** B203's second
-  arm had **zero discrimination** (measured firing twice on output where every secret is a
-  `<hidden…>` sentinel). B204's whole **premise was false** — the gate it cited was not violated; the
-  stale part was a gloss. B205's own design was **certification-blocking**, and the reason was written
-  in `docs/scenario-2.md:216-224`, a dated comment naming PR #696 and predicting the exact failure.
-  **Read rows to their end, and grep the DOCUMENT for in-document directives before touching a
-  parser** — a script-side review cannot see them.
-- **Never read pass/fail off a completion notification.** Grep the log for its own `RC=` line or the
-  harness's verdict. `MATRIX FAILED` means failed even when every row printed `WALK DONE` (§D.5).
-- **The driver log LAGS the box by minutes** (§D.4a). It sat **28 minutes** without a write during
-  this run while three processes were live on the walkbox. Liveness comes from the walkbox artifact.
-- **`pgrep`/`ps` SELF-MATCH.** Twice this session a count read 1 or 2 with the real answer **0** — the
-  hits were my own shell and grep. Read `/proc/<pid>/cmdline` before believing a count either way.
-- **"Is main certified?" is a command, never a quoted number — and it now takes a SHA, not a tag:**
-  `git diff --name-only fbdf683..origin/main`. The old form named `v1.2.0`, which no longer exists after the
-  tag reset; a dangling tag makes that command fail in a way that reads like a repo problem rather than a
-  deleted ref. (The tag-object-vs-commit trap it used to warn about is moot for the same reason, but it recurs
-  the moment anything is tagged again: `git rev-parse <tag>` gives the TAG OBJECT for an annotated tag; the
-  commit is `<tag>^{commit}`. Quoting the wrong one misreports the tree.)
-- **Line citations rot.** Several were wrong today while their facts held. Read for substance.
-- **`git switch main` FAILS in a worktree checkout**, and with `2>/dev/null` that failure is invisible,
-  so a chained `reset --hard origin/main` lands on whatever branch you were on.
-- ⚠️ **DO NOT put a VMCA fingerprint in a handoff.** TWO cuts happened in this run; each re-mints it.
-  Read it from `~/.local/state/nested-lab/vmca-root.pem` when you need it.
-- **Run `env -u GOROOT make static-check` locally before every merge.** A PR runs `static-check-fast`
-  plus `static-check-pr`; **neither runs `sec`** (gitleaks, trivy-fs, trivy-config).
-- **Run `make app-verify` before any merge touching `apps/**`.** Since 2026-08-23 the app builds
-  (`app-test` + `check-ui-contract` + `trivy-fs`) are deliberately OUT of both CI gates — they build all six
-  toolchains for a repo whose subject is the air-gap PIPELINE, and Tekton already tests each app in
-  its own builder image. Nothing enforces this but you: 19 of the last 200 commits touch `apps/**`
-  and **10 are Renovate**, which auto-merges on green.
-- **The lesson that cost the most today:** a green-looking component I have just reasoned about is
-  exactly the one I am most likely to certify without measuring. I documented `make creds-show` as
-  "correctly reporting" in the morning; it carried two real defects, both found by the operator.
+**`scripts/lib/os.sh` changed, and EVERY script sources it.** A sudo **capability** probe was added
+(`sudo -n true`, once per process tree, guarded by `VKS_SUDO_PROBED`). It is RED-proven 3/3 — silent
+when sudo works, silent on a legitimate password prompt, warns only on a broken PAM stack — and it
+stayed silent through a full green `make jumpbox` leg. **But the matrix is the first thing to run it
+on real walkboxes.** If a row dies early or logs `sudo is PRESENT but NON-FUNCTIONAL`, start there,
+not in the walk. Escape hatch: the probe never refuses — it only warns, and `SUDO` is still assigned.
 
-### Open, and whose they are
+**Second: the Photon `/etc/shadow` pin.** Three Photon images now `chmod 0400 /etc/shadow` at build
+time. If a build prints `NOTE: /etc/shadow arrived <n> (expected 400)`, **that is the drift detector
+working, not a failure** — it means the `shadow`(pwconv→0400) vs `systemd`(systemd-sysusers→0000)
+scriptlet race flipped, which any dependency bump can do. The build only FAILS if the chmod itself
+did not take.
 
-- **B203 is PARTIALLY addressed and deliberately NOT closed** — the uncaught shape is the worst one
-  (`guest node SSH … vmware-system-user … <value>`, no `admin`, unreachable by any widening of that
-  arm). The gap is PINNED as a `_must_pass` selftest case: if a future arm catches it, that case
-  FAILS and whoever did it must close the row.
-- **B205 residual:** `INDEP_E`, `check-doc-expect-leak.sh` and the negation guard remain head-anchored
-  — correct under the shipped asymmetric fix, and a **coupled** change if the unit is ever widened.
-- **B26 is still not satisfiable by a matrix cut** — now MEASURED, 2026-08-22, not asserted. On the
-  live guest cluster Istio is **ours**: three helm releases (`istio-base`, `istiod`,
-  `istio-ingressgateway`, all `1.30.3`, installed 06:52 2026-08-21 by `46-install-istio.sh`) and
-  **zero `PackageInstall` objects** — no VKS Standard Package anywhere. So the rows INSTALL rather
-  than attach and no Standard-Package injector template ever exists. ⚠️ **BOTH fences DO run across
-  the matrix, and an earlier draft of this bullet said otherwise — it was wrong.** The NOTHING rows
-  (1, 3) start on a fresh cluster and take the INSTALL fence; the EVERYTHING rows (2, 4) find the
-  mesh the preceding row installed and take the ATTACH fence — rows 2 and 4 logged `attaching to an
-  Istio we did NOT install` with the document's `expect:` line SEEN. The reason that is not enough
-  for B26: `48-istio-preflight.sh:93` returns from the gateway-api branch **before** the ownership
-  check, so `_istio_mode()` answers `existing` for **any** present mesh — including one we installed
-  ourselves. So the attach path is exercised, but only ever against our own helm mesh, never a
-  package one. B26's remaining half is settled in its backlog row from the RENDERED package bundle,
-  because no matrix run can produce an injected pod at all: every workload namespace we create is
-  `istio-injection=disabled`, and injection needs a positive opt-in we never set.
-- **Owner decisions: ALL FOUR ARE CLOSED. This line said "still open" for a day and was wrong,**
-  which is how a session came to ask the owner to re-decide them. B70/B195/B196 were decided
-  2026-08-21 (`f8643fa`, PR #920 — each row's END carries `OWNER DECISION 2026-08-21 … ROW
-  CLOSED`); B193 is `⛔ REFUTED` (2026-08-19), never a decision. **Read a row to its END** — these
-  open with the question and close with the answer, and stopping at the lead reads closed as open.
-  Nothing in this bullet needs the owner.
-- **Not yet done this session:** credential verification by AUTHENTICATING against the new lab
-  (§C.5/C.6 — endpoints and logins, after the run, never during).
+### Distrust these (carried forward, still true)
+
+- 🔴 **The repo's `.env` Harbor password goes STALE after every matrix run** — the matrix installs
+  Harbor from throwaway walkboxes and destroys them. `make env-validate` → genuine 401 is the
+  EXPECTED post-run state, not a defect. Recover per RULE ZERO-A0's chain.
+- **Never read pass/fail off a completion notification.** Measured AGAIN this session: a backgrounded
+  `make static-check > log 2>&1; echo "RC=$?"` reported **exit code 0** while the gate exited **2** —
+  the `;` makes the echo the last command. Either let the command BE the whole call, or `exit $rc`.
+- **`ps`/`pgrep` SELF-MATCH**, and an empty match is a claim about your PATTERN first.
+- **A subagent transcript's file size/mtime is NOT liveness** — it lands at completion.
+- **Never edit a file a running job is reading.** Cost a redone `static-check` this session.
+- **`git switch main` FAILS in a worktree checkout**; with `2>/dev/null` that failure is invisible and
+  a chained `reset --hard` lands on the wrong branch.
+- **Run `env -u GOROOT make static-check` before every merge** — a PR runs `static-check-fast` +
+  `static-check-pr`, and **neither runs `sec`**.
+- **Run `make app-verify` before any merge touching `apps/**`** — app builds are deliberately out of
+  both CI gates, and 10 of the last 200 `apps/**` commits are Renovate, which auto-merges on green.
+
+### Open
+
+- **B213** — `--security-opt seccomp=unconfined` would dissolve the whole `/etc/shadow` class
+  (`--privileged` is a bundle: only its AppArmor half causes the bug, only its seccomp half is
+  needed). NOT shipped: a non-privileged container has **no `/dev/fuse`**, so it needs its own change
+  and a full `make jumpbox-matrix`. Keep the 0400 pin regardless.
+- **The interpreter-write hole in the adversary gate.** MEASURED: this repo's gate matcher has **no
+  Bash arm at all**, so `echo x > scripts/x.sh` is rc=0 ALLOW here; the lab repo's has one but catches
+  ~10%. Across 31,688 real Bash commands, **88% of guarded writes in the last 6 sessions bypassed
+  Edit/Write entirely**. An idea round **REFUTED** the obvious string-matcher fix (17–18% false
+  blocks, landing on running our own gates; closes 0 of 9 sibling bypasses) and ranked a **git
+  pre-commit chokepoint** #1 — mechanism-independent, needs the owner for nothing, covers 100% of what
+  SHIPS. The receipt **self-mint** it also found (a plain `Write` to `.claude/state/*.receipt` was
+  rc=0 here) is **already fixed** in #968.
+- **⛔ `permissions.ask` / `ask-on-outward.py` are DELIBERATELY UNWIRED — do NOT "restore" them.** An
+  adversary graded their absence CRITICAL and I restored them; the owner's reason is explicit: *"i do
+  not want to be your babysitter approving every time."* Reverted the same day. A subagent's severity
+  does not override an owner's decision. Recorded in `claude-config` `ab0f2ed`.
+
+### What this session shipped (PR #968, lab `02e1710`)
+
+Photon `/etc/shadow` 0400 pin in 3 hazard-scoped images + drift NOTE · `check-jumpbox-shadow` (scope
+derived from the hazard, asserts chmod+stat in the SAME RUN and no install after — RED-proven 6 ways)
+· `os.sh` sudo capability probe · **`crun`**, missing from the podman install list although its
+comment claimed it (`podman info` was failing outright) · `VCF_CLI_SRC_DIR` derivation + CRLF strip ·
+**B208 CLOSED** — photon×docker `JUMPBOX_OK` for the first time, with a live Harbor push and a firing
+CA negative control.
+
+Three adversary rounds. **Each refuted the previous diagnosis** — the shipped cause is the third one,
+and both earlier ones are recorded in the Dockerfiles so nobody re-derives them.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
