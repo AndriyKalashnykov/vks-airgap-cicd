@@ -224,7 +224,8 @@ ISTIOD_SET=(
 )
 # Refuse a pod the scheduler cannot place, BEFORE helm burns its --wait discovering it.
 capacity_assert_fits \
-  "$(capacity_chart_request "$CHART_ISTIOD" "$ISTIO_VERSION" "${ISTIOD_SET[@]}")" istiod
+  "$(capacity_chart_request "$CHART_ISTIOD" "$ISTIO_VERSION" "${ISTIOD_SET[@]}")" istiod \
+  "set ISTIOD_MEMORY_REQUEST in your .env (NOT .env.example, which is the committed template)"
 run helm upgrade --install istiod "$CHART_ISTIOD" \
   --namespace "$ISTIO_NAMESPACE" \
   --version "$ISTIO_VERSION" --wait --timeout "${READY_TIMEOUT_SECONDS}s" \
@@ -242,7 +243,8 @@ GW_SET=(
 # node's `used` and this is the CUMULATIVE question ("does the gateway fit in what is LEFT?").
 # The request comes from the chart under these exact args, so a chart bump cannot drift past it.
 capacity_assert_fits \
-  "$(capacity_chart_request "$CHART_GATEWAY" "$ISTIO_VERSION" "${GW_SET[@]}")" "istio gateway"
+  "$(capacity_chart_request "$CHART_GATEWAY" "$ISTIO_VERSION" "${GW_SET[@]}")" "istio gateway" \
+  "pin the gateway's request via a helm --set in this script"
 run helm upgrade --install "$GW_RELEASE" "$CHART_GATEWAY" \
   --namespace "$ISTIO_GATEWAY_NAMESPACE" --create-namespace \
   --version "$ISTIO_VERSION" --wait --timeout "${READY_TIMEOUT_SECONDS}s" \

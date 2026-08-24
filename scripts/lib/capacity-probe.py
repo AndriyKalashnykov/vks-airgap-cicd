@@ -16,23 +16,34 @@ exit:  0 ok, 3 unreadable input
 import json
 import sys
 
-UNITS = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "K": 1000, "M": 1000**2, "G": 1000**3}
+# Ti/Pi/Ei and their decimal siblings are legal k8s quantities. Omitting them made as_bytes()
+# return 0, whose DIRECTION differs by side and is dangerous on one of them: a POD request read as
+# 0 under-counts usage -> more apparent free -> FALSE GREEN. A node allocatable read as 0 -> FALSE
+# RED. Neither is reachable on today's clusters (all container requests are Mi, all allocatables
+# Ki) but a node with round Ti allocatable serialises as Ti.
+UNITS = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4, "Pi": 1024**5, "Ei": 1024**6,
+         "K": 1000, "M": 1000**2, "G": 1000**3, "T": 1000**4, "P": 1000**5, "E": 1000**6}
 MI = 1024**2
 # Tolerations our installs declare. Empty today; a node's NoSchedule/NoExecute taint therefore
 # excludes it. Populate this (not a node-name allowlist) if an install ever tolerates a taint.
-TOLERATIONS: list = []
+# The istiod chart DECLARES a toleration, so an empty list here is not merely conservative -- it
+# excludes a node istiod can actually use, under-counting candidates and producing a false RED at
+# the margin. Measured from `helm template bundle/charts/istiod-1.30.3.tgz` under the install's own
+# --set args. No node currently carries this taint, so it is latent, not active.
+TOLERATIONS: list = [{"key": "cni.istio.io/not-ready", "operator": "Exists"}]
 
 
 def as_bytes(v: str) -> int:
+    """Bytes for a k8s quantity. RAISES on anything it cannot parse -- returning 0 for an
+    unrecognised form is a FALSE GREEN when the value is a pod request (less usage -> more
+    apparent free). The caller must decide to skip; this must never silently count zero."""
     if not v:
         return 0
-    for suffix, mult in UNITS.items():
+    # Longest suffix first, so "Mi" is never matched as "M" (and "Ei" not as "E").
+    for suffix in sorted(UNITS, key=len, reverse=True):
         if v.endswith(suffix):
-            return int(float(v[: -len(suffix)]) * mult)
-    try:
-        return int(v)
-    except ValueError:
-        return 0
+            return int(float(v[: -len(suffix)]) * UNITS[suffix])
+    return int(float(v))    # bare = bytes; float() so 1e9 parses. ValueError propagates by design.
 
 
 def tolerated(taint: dict) -> bool:
@@ -83,10 +94,16 @@ def main() -> int:
             continue  # unscheduled pods hold no node memory
         if obj.get("status", {}).get("phase") in ("Succeeded", "Failed"):
             continue
-        nodes[node]["req"] += sum(
-            as_bytes((c.get("resources", {}).get("requests") or {}).get("memory", ""))
-            for c in obj["spec"].get("containers", [])
-        )
+        # The scheduler charges max(sum(containers), max(initContainer)) + spec.overhead -- init
+        # containers run BEFORE the app ones, so a large init peak reserves that much. Measured
+        # delta on this cluster today: 0Mi (52 of 96 pods carry inits; only 1 declares a memory
+        # request), so this is latent -- one Tekton or app change makes it active.
+        spec = obj["spec"]
+        mem = lambda c: as_bytes((c.get("resources", {}).get("requests") or {}).get("memory", ""))
+        run = sum(mem(c) for c in spec.get("containers", []))
+        ini = max([mem(c) for c in spec.get("initContainers", [])] or [0])
+        over = as_bytes((spec.get("overhead") or {}).get("memory", ""))
+        nodes[node]["req"] += max(run, ini) + over
 
     free = {n: v["alloc"] - v["req"] for n, v in nodes.items() if not v["blockers"]}
     best = max(free.values()) if free else 0
@@ -100,5 +117,29 @@ def main() -> int:
     return 0
 
 
+def to_mi() -> int:
+    """`--to-mi`: read a k8s quantity on stdin, print integer Mi (rounded UP), rc 0.
+    rc 1 on anything unparseable. ONE parser serves the shell side and the node arithmetic -- the
+    shell had its own, which refused `1.5Gi` and `512Ki` (both legal) and silently disabled the
+    whole check by making the render come back empty."""
+    q = sys.stdin.read().strip()
+    # A BARE integer is a legal k8s quantity meaning BYTES, so as_bytes() must keep accepting it --
+    # the API server serialises node/pod values that way. But this mode reads an OPERATOR KNOB or a
+    # CHART value, where a bare number is a ~10^6x under-reservation typo and never intentional
+    # (every chart-rendered value carries a suffix). Refuse it HERE, not in as_bytes.
+    if q.isdigit():
+        return 1
+    try:
+        b = as_bytes(q)
+    except ValueError:
+        return 1
+    if b <= 0:
+        return 1
+    print(-(-b // MI))   # ceil: round UP so the fit check stays conservative
+    return 0
+
+
 if __name__ == "__main__":
+    if "--to-mi" in sys.argv:
+        sys.exit(to_mi())
     sys.exit(main())
