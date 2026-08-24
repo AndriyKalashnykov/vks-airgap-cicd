@@ -114,7 +114,37 @@ pkg_mgr() {
 # ---------------------------------------------------------------------------
 SUDO=""
 if [ "$(id -u)" -ne 0 ]; then
-  if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else
+  if command -v sudo >/dev/null 2>&1; then
+    SUDO="sudo"
+    # PRESENCE IS NOT CAPABILITY. `command -v sudo` succeeding says nothing about whether sudo WORKS.
+    # MEASURED 2026-08-23: with /etc/shadow at 0000 in a --privileged container, sudo is present and
+    # every `$SUDO tdnf install` dies with a PAM error that names neither sudo nor shadow — 40 minutes
+    # into a walk, pointing nowhere. Probe once and name the cause HERE, where it is cheap.
+    #
+    # The discrimination is load-bearing: `sudo -n true` returns 1 for BOTH a broken PAM stack AND a
+    # perfectly healthy box that simply wants a password, so warning on rc alone would cry wolf on
+    # every password-prompting operator. MEASURED, the three states are distinguishable by stderr:
+    #     working NOPASSWD   -> rc=0
+    #     broken PAM         -> rc=1, "PAM account management error: ... cannot retrieve ..."
+    #     password required  -> rc=1, ONLY "a password is required"   <- legitimate, stay SILENT
+    # We keep assigning SUDO in every case: a prompt-capable box is legitimate and must still work.
+    # The deliverable is the named diagnostic, never a refusal.
+    if [ -z "${VKS_SUDO_PROBED:-}" ]; then          # once per process tree, not once per sourced script
+      export VKS_SUDO_PROBED=1
+      if ! _sudo_probe_err="$(sudo -n true 2>&1)"; then
+        case "$_sudo_probe_err" in
+          *"PAM account management"*|*[Aa]"uthentication service cannot retrieve"*)
+            log_warn "sudo is PRESENT but NON-FUNCTIONAL: ${_sudo_probe_err%%$'\n'*}"
+            log_warn "  Most often /etc/shadow's mode: a --privileged container is AppArmor-unconfined,"
+            log_warn "  so the host unix-chkpwd profile attaches WITHOUT dac_override and cannot read"
+            log_warn "  a 0000 shadow. Check: stat -c %a /etc/shadow  (want 400 on Photon)."
+            log_warn "  See scripts/check-jumpbox-shadow.sh for the build-time contract."
+            ;;
+        esac
+      fi
+      unset _sudo_probe_err
+    fi
+  else
     log_warn "not root and no sudo found; package/CA operations may fail"
   fi
 fi

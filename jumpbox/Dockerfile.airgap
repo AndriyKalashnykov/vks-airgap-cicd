@@ -55,6 +55,30 @@ RUN if command -v tdnf >/dev/null 2>&1; then \
 # A non-root operator, as on a real jump box.
 # Absolute paths: Photon's default RUN PATH does NOT include /usr/sbin, so a bare `groupadd` is 127.
 RUN /usr/sbin/groupadd -f vks && /usr/sbin/useradd -g vks -m -s /bin/bash vks
+
+# /etc/shadow mode contract — PHOTON ONLY (the conditional is about BLAST RADIUS, not harm).
+# MEASURED 2026-08-23: /etc/shadow is owned by NO package. `shadow`'s pwconv creates it 0400;
+# `systemd`'s systemd-sysusers creates it 0000; both packages are in every set and rpm's TRANSACTION
+# ORDER decides which wins. At 0000 a `--privileged` container is AppArmor-unconfined, the HOST
+# unix-chkpwd profile attaches (audit_write + shadow read, NO dac_override), and `sudo -n true` fails.
+# ⚠️ CORRECTED 2026-08-23 — an earlier version of this comment said "forcing 0400 on Ubuntu REMOVES
+#    group read and BREAKS sudo — the exact inverse bug." THAT IS FALSE, refuted with a control:
+#      ubuntu shadow 640 (as shipped) -> sudo rc=0
+#      ubuntu shadow 400 (forced)     -> sudo rc=0   <- the claim predicted FAILURE
+#      ubuntu shadow 000 (control)    -> sudo rc=1   <- instrument proven live, so not a vacuous pass
+#    0400 is root-OWNER-readable and sudo is setuid-root, so Ubuntu's setgid-`shadow` group path is
+#    never needed. The conditional stays because there is no reason to touch a base that is already
+#    correct — minimal blast radius — NOT because 0400 would harm it.
+# ⚠️ INERT IN THIS IMAGE TODAY: this Dockerfile installs `sudo` but writes NO sudoers rule (0 NOPASSWD
+#    entries), so `sudo -n true` returns 1 on both bases regardless of mode and nothing here invokes
+#    unix_chkpwd. Pre-placed so the day a sudoers rule is added the image does not silently acquire
+#    the breakage. check-jumpbox-shadow.sh scopes on the HAZARD, which is the conservative direction.
+RUN if command -v tdnf >/dev/null 2>&1 && [ -f /etc/shadow ]; then \
+      before="$(stat -c %a /etc/shadow)"; chmod 0400 /etc/shadow; \
+      [ "$before" = "400" ] || echo "NOTE: /etc/shadow arrived $before (expected 400) — the shadow/systemd scriptlet order MOVED"; \
+      m="$(stat -c %a /etc/shadow)"; \
+      [ "$m" = "400" ] || { echo "FATAL: chmod did not take (/etc/shadow is $m, want 400)"; exit 1; }; \
+    fi
 # DL3066 (new in hadolint 2.15) wants a numeric uid. The uid here is assigned by
 # `useradd` with no -u and DIFFERS by base image: Ubuntu ships a default user at
 # 1000 so `vks` lands on 1001; Photon has none so `vks` gets 1000. Hardcoding a

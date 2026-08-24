@@ -24,6 +24,24 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
 2. All six green **from the first go** — a fresh matrix over the **final** tree, passing on its
    **first** pass. Every fix resets that clock.
 3. Report times in **EST/EDT**.
+4. **Arm it with this, and confirm it armed.** `VCF_CLI_SRC_DIR` (the licensed VCF CLI archives) is
+   **DERIVED from `WALK_REPO`'s `.env`** by `walk-matrix.sh` when unset — wired 2026-08-23, because
+   requiring it by hand made a mis-armed run indistinguishable from a launched one: the refusal is
+   **two log lines**, which reads as "running" to anyone who does not check the length.
+
+   ```sh
+   # `make -C` and not `cd`: the target lives in nested-vsphere-lab, NOT in this repo, and naming
+   # the repo in the command is what stops it reading as a target you could run here.
+   WALK_REPO=$HOME/projects/vks-airgap-cicd \
+   WALK_OUT_ROOT=$HOME/walk-evidence \
+   make -C ~/projects/nested-vsphere-lab walk-matrix > /tmp/matrix.log 2>&1 &
+   sleep 90 && wc -l /tmp/matrix.log     # hundreds = armed. single digits = refused —
+                                         # read the LAST line; _die emits 3, not 1.
+   ```
+
+   `WALK_OUT_ROOT` is still explicit and load-bearing: its default is `/tmp/walk`, and a reboot
+   destroys the certification the matrix exists to produce (lab-repo B454). It is **not** derived,
+   because unlike the CLI path it is not a fact about the repo.
 
 ## B. Reading the documents
 
