@@ -16,25 +16,23 @@
 # discriminator is TIME: refused in under a second, or still running when the budget expires.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TMP="$(mktemp -d)"; mkdir -p "$TMP/bin" "$TMP/secrets"
+TMP="$(mktemp -d)"; mkdir -p "$TMP/bin" "$TMP/secrets" "$TMP/repo/secrets"
+# The throwaway repo root needs whatever 26-vks-cluster-status.sh reads FROM the root -- today just
+# .env.example, whose absence it (correctly) treats as fatal. Symlinked, not copied, so it cannot
+# drift from the real file.
+ln -sf "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.env.example" "$TMP/repo/.env.example"
+# ⚠️ REPO_ROOT="$TMP/repo" ON BOTH INVOCATIONS BELOW -- do not drop either.
 # 26-vks-cluster-status.sh:43 writes ${REPO_ROOT}/secrets/${VKS_CLUSTER_NAME}.kubeconfig, and this
-# test drives it with VKS_CLUSTER_NAME=testcluster -- so a plain run LEFT a 0-byte
-# secrets/testcluster.kubeconfig in the real repo. Measured: it was sitting there after
-# `make static-check`. Stale kubeconfigs in secrets/ are B467's hazard, since no target takes a
-# cluster argument and an operator exporting the wrong one acts on the wrong cluster.
+# test drives it with VKS_CLUSTER_NAME=testcluster. Without the override it wrote into the REAL
+# repo: a plain run left a 0-byte secrets/testcluster.kubeconfig behind, and if an operator
+# genuinely had a cluster of that name it TRUNCATED their kubeconfig to 0 bytes (measured by md5:
+# d80fe9f4... -> d41d8cd9..., the empty-file hash). Stale kubeconfigs in secrets/ are B467's
+# hazard, since no target takes a cluster argument.
 #
-# Remove ONLY what THIS RUN created. If an operator genuinely has a cluster named `testcluster`,
-# their file predates us and must survive.
-#
-# ⚠️ RESIDUAL, measured and NOT fixed here: if that file pre-exists, the script under test
-# TRUNCATES it to 0 bytes before this trap ever runs, so its CONTENT is already gone. The clean fix
-# is to stop the child writing into the real repo at all, but pointing it at a throwaway
-# REPO_ROOT was tried and broke 4 of the 13 cases -- the script needs the real root for more than
-# this path. Filed as B470.
-STRAY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/secrets/testcluster.kubeconfig"
-STRAY_PREEXISTED=0
-[ -e "$STRAY" ] && STRAY_PREEXISTED=1
-trap 'rm -rf "$TMP"; if [ "$STRAY_PREEXISTED" -eq 0 ]; then rm -f "$STRAY"; fi' EXIT
+# A first attempt patched only ONE of the two call sites and cleaned up afterwards instead. That
+# looked like "REPO_ROOT is not the write path" (the other site kept littering) and it could not
+# have fixed the truncation anyway -- by the time any trap runs, the content is already gone.
+trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
 ok()  { printf '  PASS  %s\n' "$1"; pass=$((pass + 1)); }
 bad() { printf '  FAIL  %s — %s\n' "$1" "$2"; fail=$((fail + 1)); }
@@ -85,7 +83,8 @@ run_wait() {
     VKS_SUPERVISOR_KUBECONFIG="$TMP/secrets/sup.kubeconfig" \
     VKS_CLUSTER_NAME="$CL" VKS_NAMESPACE="$NS" \
     VKS_CLUSTER_WAIT_SECONDS=8 VKS_CLUSTER_POLL_SECONDS=2 \
-    bash "$SCRIPT_DIR/26-vks-cluster-status.sh"
+    REPO_ROOT="$TMP/repo" \
+  bash "$SCRIPT_DIR/26-vks-cluster-status.sh"
   ) > "$TMP/out" 2>&1
   rc=$?
   t1=$SECONDS
@@ -122,6 +121,7 @@ else bad "empty endpoint: falls through and WAITS" "returned after ${el}s — a 
   STUB_CLUSTER_FAIL=x509 SKIP_DOTENV=1 \
   VKS_SUPERVISOR_KUBECONFIG="$TMP/secrets/sup.kubeconfig" \
   VKS_CLUSTER_NAME="$CL" VKS_NAMESPACE="$NS" VKS_CLUSTER_WAIT_SECONDS=0 \
+  REPO_ROOT="$TMP/repo" \
   bash "$SCRIPT_DIR/26-vks-cluster-status.sh"
 ) > "$TMP/rep" 2>&1 || true
 if grep -q 'COULD NOT ASK' "$TMP/rep"; then ok "report: a transport failure says COULD NOT ASK"
