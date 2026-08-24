@@ -210,7 +210,8 @@ fi
 # function that must not exist and MISS the vcenter one, and VKS_CA_CERT_FILE -> vks_ca_default is
 # not a mechanical transform (it drops CERT), so the map would itself be hand-typed.
 # If a THIRD pair whose var ships COMMENTED ever lands, give it its own arm here -- and prefer the
-# BEHAVIOURAL fixture at :225 (which counts pairs EXAMINED) over any count of the enumeration,
+# BEHAVIOURAL fixture below -- the `_arm` that counts pairs EXAMINED -- over any count of the
+# enumeration (cited by ANCHOR TEXT, not a line number: this very comment shifted them),
 # because a pair COUNT passes over a pair that never builds.
 for _f in "${REPO_ROOT}/scripts/29-ca-status.sh" "${REPO_ROOT}/scripts/24-lab-preflight.sh"; do
   _n="$(basename "$_f")"; _bad=0; _seen=0

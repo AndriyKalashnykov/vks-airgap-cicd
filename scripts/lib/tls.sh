@@ -422,7 +422,9 @@ ca_status_report() {
   #     giving a veto to an anchor that flow never uses.
   # So: to add one you must ALSO source+call its *_ca_default at BOTH entry points (as :52 does for
   # vks_ca_default), keep it OUT of the blocking path, and extend the B166 wiring gate
-  # (test-ca-staleness-check.sh:202-223 hardcodes `vks_ca_default` and is blind to a missing one).
+  # (its WIRING arm -- grep that file for `vks_ca_default` -- hardcodes that ONE name and is blind
+  # to a missing sibling; the residual is documented at the arm itself. Cited by ANCHOR TEXT, not a
+  # line number: the commit that first wrote this note shifted its own citations by 13 lines.)
   # A pair COUNT assertion does NOT discriminate -- it pins the enumeration and passes over a pair
   # that never builds; :191-196 records that exact mistake already being made once here.
   #
