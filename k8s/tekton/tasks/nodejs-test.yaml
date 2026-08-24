@@ -54,8 +54,8 @@ spec:
           # uid 1000 CANNOT read /root/.npm) and the fix is to bake the cache to a world-readable path.
           value: /root/.npm
       script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
+        #!/bin/sh
+        set -eu
         # The builder image already carries node_modules for this exact lockfile. Reinstalling from
         # the workspace copy proves the lockfile in the COMMIT still resolves offline -- if someone
         # adds a dependency without rebuilding the builder, this is where it is caught.

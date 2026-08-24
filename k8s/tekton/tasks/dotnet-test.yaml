@@ -36,8 +36,8 @@ spec:
         - name: NUGET_PACKAGES
           value: /root/.nuget/packages
       script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
+        #!/bin/sh
+        set -eu
         # TWO reasons this is NOT `dotnet test --no-restore`:
         #  1. .NET 10 dropped VSTest support for Microsoft.Testing.Platform, which TUnit runs on.
         #     `dotnet test` then errors "Testing with VSTest target is no longer supported" -- and

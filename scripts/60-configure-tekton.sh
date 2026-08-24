@@ -21,10 +21,15 @@ kubeconfig_ready
 : "${HARBOR_USERNAME:?set HARBOR_USERNAME in .env (admin for scenario 1, your robot for scenario 2)}"; : "${HARBOR_PASSWORD:?set HARBOR_PASSWORD in .env}"
 : "${GITEA_INTERNAL_URL:?}"; : "${GITEA_ORG:?}"
 : "${GITEA_CI_USER:?}"; : "${APP_BRANCH:?}"; : "${ARGOCD_TRACK_BRANCH:?}"
-: "${BUILDER_IMAGE_TAG:=${BUILDER_IMAGE_TAG_DEFAULT:?lib/apps.sh must be sourced first}}"   # single-sourced in lib/apps.sh; .env/env/cmdline still override
 # The app registry: everything below is rendered ONCE PER APP from it.
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
+# AFTER lib/apps.sh, not before: this reads BUILDER_IMAGE_TAG_DEFAULT, which that file defines.
+# MEASURED 2026-08-23 — placing it above the source made `make e2e-sneakernet` die with
+# "BUILDER_IMAGE_TAG_DEFAULT: lib/apps.sh must be sourced first". It is LATENT: `make e2e-kind`
+# passed, because there BUILDER_IMAGE_TAG is already set, so `:=` never evaluates its default.
+# Verifying that a script SOURCES a library is not the same as verifying it sources it FIRST.
+: "${BUILDER_IMAGE_TAG:=${BUILDER_IMAGE_TAG_DEFAULT:?lib/apps.sh must be sourced first}}"   # single-sourced in lib/apps.sh; .env/env/cmdline still override
 
 # ---- CI-bot Gitea token (minted by 50-seed-gitea-repos.sh) ----
 GITEA_CI_TOKEN="${GITEA_CI_TOKEN:-}"

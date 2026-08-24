@@ -33,7 +33,7 @@ spec:
         - name: PYTHONDONTWRITEBYTECODE
           value: "1"
       script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
+        #!/bin/sh
+        set -eu
         # The DEV venv, which has pytest. /opt/venv deliberately does not.
         /opt/venv-dev/bin/python -m pytest -q

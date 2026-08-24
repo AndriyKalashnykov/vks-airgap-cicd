@@ -1565,14 +1565,43 @@ http_get_retry() {
     # `kubectl apply`s truncated YAML. MEASURED.
     # `&& rc=0 || rc=$?`, never `; rc=$?` after an assignment — the documented capture-then-test
     # form, so this cannot trip a caller's `set -e` from inside the substitution.
+      # --remove-on-error IS NOT PORTABLE: it landed in curl 7.83.0, and ubuntu:22.04 -- a DECLARED
+      # supported OS in bootstrap-test's default set -- ships 7.81.0. MEASURED 2026-08-23:
+      #     ubuntu:22.04  curl 7.81.0  --remove-on-error NO
+      #     ubuntu:24.04  curl 8.5.0   --remove-on-error YES        photon:5.0  YES
+      # On 22.04 every attempt died `curl: option --remove-on-error: is unknown` with rc=2, all five
+      # retries failed identically, and the FATAL then blamed the WRONG CAUSE -- "HTTP 000 ... NO
+      # response at all: DNS, no route, refused ... This is THIS BOX" -- sending the operator to
+      # debug networking on a box whose network was fine.
+      #
+      # Feature-DETECTED once, not version-compared: the version string is not the capability, and a
+      # distro backport would make a version test wrong in the safe-looking direction. The fallback
+      # does the same job by hand -- see the rm -f after the failure check.
+      if [ -z "${_CURL_HAS_REMOVE_ON_ERROR:-}" ]; then
+        # HERESTRING, not a pipe: `producer | grep -q` lets grep exit at its first match, the
+        # producer takes SIGPIPE, and under `set -o pipefail` the whole thing reports FAILURE for a
+        # pattern that WAS found. check-grep-q-pipe gates exactly this, and caught this very line.
+        if grep -q -- '--remove-on-error' <<< "$(curl --help all 2>/dev/null)"; then
+          _CURL_HAS_REMOVE_ON_ERROR=1
+        else
+          _CURL_HAS_REMOVE_ON_ERROR=0
+        fi
+      fi
+      local _roe=()
+      [ "$_CURL_HAS_REMOVE_ON_ERROR" = 1 ] && _roe=(--remove-on-error)
     local _code _rc
-    _code="$(curl -fsSL --remove-on-error -w '%{http_code}' \
+    _code="$(curl -fsSL "${_roe[@]}" -w '%{http_code}' \
          --connect-timeout "${HTTP_CONNECT_TIMEOUT_SECONDS:-10}" \
          --max-time "$maxtime" \
          -o "$dest" "$url")" && _rc=0 || _rc=$?
     if [ "$_rc" -eq 0 ]; then
       return 0
     fi
+      # The portable half of --remove-on-error: a truncated body left on disk is NON-empty, so a
+      # later `[ ! -s "$MANIFEST_FILE" ]` cache check reports "using cached manifest" and applies
+      # truncated YAML (MEASURED, 07-install-argocd.sh:109). Unconditional -- harmless where the
+      # flag already removed it, load-bearing where curl is too old to have the flag at all.
+      rm -f "$dest" 2>/dev/null || true
     # Remember the LAST failure, not the first: a 000 that becomes a 403 on retry means the box
     # got a route and then hit a filter, and the second fact is the actionable one.
     # ⚠️ curl's stdout is LOAD-BEARING here, and a ~/.curlrc can contaminate it: with
