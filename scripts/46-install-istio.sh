@@ -19,6 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 # shellcheck source=scripts/lib/istio.sh
 . "${SCRIPT_DIR}/lib/istio.sh"
+. "${SCRIPT_DIR}/lib/capacity.sh"
 load_env
 
 require_cmd kubectl
@@ -180,24 +181,71 @@ run helm upgrade --install istio-base "$CHART_BASE" \
 
 # --- 3. Control plane (istiod), images from Harbor ----------------------------
 log_info "installing istiod v${ISTIO_VERSION} (hub=${HUB})"
+# ISTIOD_MEMORY_REQUEST — why we pin it, and why 2048Mi does not fit here.
+# MEASURED 2026-08-24 on a real VKS guest cluster (best-effort-small workers, the sizing this repo
+# documents): istiod Pending 42m, "0/3 nodes are available: 1 node(s) had untolerated taint(s),
+# 2 Insufficient memory". Worker allocatable 2833Mi; the demo's own workload already holds
+# 874/957Mi. Even PERFECTLY BALANCED that leaves 1918Mi free against the chart's 2048Mi request --
+# 130Mi short with NO placement that fits. Irreducible FOR THIS WORKLOAD; it is not a universal.
+# WHY IT USED TO WORK: the demo grew. Measured from the row logs, the runs that installed istio at
+# 2048Mi carried TWO apps; it now carries SIX. Nothing about istio changed -- the cluster filled up
+# underneath it, and 2048Mi was always going to cross the line eventually. That also means a
+# passing install is NOT evidence the next one fits, which is what the preflight below is for.
+# ⚠️ NOT ESTABLISHED: two runs on the SAME day, same app count and ordering, disagreed -- one fit
+# istiod twice, the next did not. Do not invent a mechanism for that; it is unexplained.
+# The chart's own values.yaml calls 2048Mi "Resources for a small pilot install" -- a scheduling
+# RESERVATION for a general small production mesh, not a working-set measurement. This install sets
+# global.proxy.autoInject=disabled (line above), so the mesh has exactly ONE xDS client: the ingress
+# gateway proxy. Istio's perf guidance benchmarks 1000 services / 2000 pods; this demo is ~20
+# services and 1 proxy.
+# ⚠️ CATEGORY-1 CONSTANT (no-magic taxonomy): a MEASURED metric. It is NOT category-3 -- that
+# requires the value to be underspecified on BOTH ends, and the chart specifies 2048Mi.
+# MEASURED 2026-08-24, same cluster, istiod fully configured (25 svc / 96 pods, 8 VirtualServices
+# applied 6m30s before the first sample, gateway attached, ONE xDS client), 3 samples over 12 min:
+#   istiod RSS 43Mi / 39Mi / 39Mi, 0 restarts   (the gateway proxy: 26Mi)
+# So 768Mi is ~18.7x the steady state. It is deliberately NOT tightened to ~256Mi yet: all three
+# samples are IDLE-ish -- no Tekton build was running and `make verify` had not run. Re-sample
+# `kubectl top pod -n istio-system` during a build before lowering it; PEAK is the number that
+# should set a request, and the only cost of over-reserving is headroom (see the next paragraph).
+# ⚠️ It lowers only the RESERVATION, never a ceiling: the rendered Deployment sets no limits and no
+# GOMEMLIMIT, so istiod stays Burstable and cannot be cgroup-OOMKilled. The real cost is OOM-kill
+# PRIORITY under node pressure (oom_score_adj 477 -> 804), which is why it must not be paired with
+# cramming istiod onto the fullest node.
+# ONE arg array, shared by the capacity render and the install. If they diverged, the check would
+# measure a DIFFERENT Deployment than the one created -- a green that describes nothing.
+ISTIOD_SET=(
+  --set global.hub="$HUB"
+  --set global.tag="$ISTIO_VERSION"
+  --set global.proxy.autoInject=disabled
+  --set meshConfig.enableTracing=false
+  --set pilot.autoscaleEnabled=false
+  --set pilot.resources.requests.memory="${ISTIOD_MEMORY_REQUEST:-768Mi}"
+)
+# Refuse a pod the scheduler cannot place, BEFORE helm burns its --wait discovering it.
+capacity_assert_fits \
+  "$(capacity_chart_request "$CHART_ISTIOD" "$ISTIO_VERSION" "${ISTIOD_SET[@]}")" istiod
 run helm upgrade --install istiod "$CHART_ISTIOD" \
   --namespace "$ISTIO_NAMESPACE" \
   --version "$ISTIO_VERSION" --wait --timeout "${READY_TIMEOUT_SECONDS}s" \
-  --set global.hub="$HUB" \
-  --set global.tag="$ISTIO_VERSION" \
-  --set global.proxy.autoInject=disabled \
-  --set meshConfig.enableTracing=false \
-  --set pilot.autoscaleEnabled=false
+  "${ISTIOD_SET[@]}"
 
 # --- 4. Ingress gateway (LoadBalancer), images from Harbor --------------------
 log_info "installing istio ingress gateway (LoadBalancer) into ${ISTIO_GATEWAY_NAMESPACE}"
+GW_SET=(
+  --set service.type=LoadBalancer
+  --set labels.istio="$ISTIO_GATEWAY_LABEL"
+  --set global.hub="$HUB"
+  --set global.tag="$ISTIO_VERSION"
+)
+# A SECOND check, not a duplicate: it runs AFTER istiod is Running, so istiod's request is in the
+# node's `used` and this is the CUMULATIVE question ("does the gateway fit in what is LEFT?").
+# The request comes from the chart under these exact args, so a chart bump cannot drift past it.
+capacity_assert_fits \
+  "$(capacity_chart_request "$CHART_GATEWAY" "$ISTIO_VERSION" "${GW_SET[@]}")" "istio gateway"
 run helm upgrade --install "$GW_RELEASE" "$CHART_GATEWAY" \
   --namespace "$ISTIO_GATEWAY_NAMESPACE" --create-namespace \
   --version "$ISTIO_VERSION" --wait --timeout "${READY_TIMEOUT_SECONDS}s" \
-  --set service.type=LoadBalancer \
-  --set labels.istio="$ISTIO_GATEWAY_LABEL" \
-  --set global.hub="$HUB" \
-  --set global.tag="$ISTIO_VERSION"
+  "${GW_SET[@]}"
 
 # --- 4b. RE-ASSERT the PSA labels ---------------------------------------------
 # They are applied at 1b, BEFORE anything schedules (that ordering is load-bearing -- see there).
