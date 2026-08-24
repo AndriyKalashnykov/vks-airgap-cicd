@@ -836,9 +836,19 @@ supervisor_kubeconfig_candidates() {
   # a Supervisor over the one that is by construction a guest (30-vks-login.sh:43-44 tells the
   # operator to put their WORKLOAD-cluster kubeconfig in $KUBECONFIG). It adds no probe, no
   # permission, and no way to false-block.
+  # The lab-state entry is emitted ONLY when its directory exists. The header above claimed it
+  # "is existence-guarded, so for an end user who has no such directory it is a silent no-op" --
+  # that was true of the RESOLVER ([ -s "$c" ]) and FALSE of the PRINTER, which always expanded it
+  # non-empty and so printed "/home/<user>/.local/state/nested-lab/kubeconfig" at an end user who
+  # has never heard of that repo. CLAUDE.md RULE ZERO-B: "Never point the end user at
+  # nested-vsphere-lab -- not at its targets, its files, or its output." Guarding the EMITTER fixes
+  # both consumers at once and makes the claim above true. Behaviour-preserving for the resolver:
+  # if the directory does not exist the file cannot exist, so [ -s ] was already false.
+  local _lab="${VKS_LAB_STATE_DIR:-$HOME/.local/state/nested-lab}"
+  [ -d "$_lab" ] || _lab=""
   printf '%s\n' "${VKS_SUPERVISOR_KUBECONFIG:-}" "${SUPERVISOR_KUBECONFIG:-}" \
     "${REPO_ROOT}/secrets/supervisor.kubeconfig" "${ARGOCD_KUBECONFIG:-}" \
-    "${VKS_LAB_STATE_DIR:-$HOME/.local/state/nested-lab}/kubeconfig" "${KUBECONFIG:-}"
+    "${_lab:+$_lab/kubeconfig}" "${KUBECONFIG:-}"
 }
 
 # supervisor_kubeconfig_hint — what to print when the resolver returns 1.
@@ -846,7 +856,13 @@ supervisor_kubeconfig_hint() {
   local c
   printf '  no Supervisor kubeconfig found. Looked, in order:\n'
   for c in $(supervisor_kubeconfig_candidates); do
-    [ -n "$c" ] && printf '    %s %s\n' "$([ -s "$c" ] && printf 'FOUND-BUT-EMPTY' || printf 'absent         ')" "$c"
+    # -e, NOT -s. `-s` means exists AND NON-empty -- which is exactly when the resolver
+    # (supervisor_kubeconfig) would already have RETURNED this path, and this hint only runs
+    # when the resolver returned 1. So under `-s` the FOUND-BUT-EMPTY arm is UNREACHABLE and a
+    # file that exists at 0 bytes prints `absent`: an interrupted `make vks-login` leaves a
+    # truncated kubeconfig, the operator is told it is absent, and re-runs the login that
+    # "already worked" while the file sits right there. MEASURED 2026-08-24.
+    [ -n "$c" ] && printf '    %s %s\n' "$([ -e "$c" ] && printf 'FOUND-BUT-EMPTY' || printf 'absent         ')" "$c"
   done
   printf '  Fix: export VKS_SUPERVISOR_KUBECONFIG=<path>, or run: make vks-login\n'
   printf '  (Harbor and ArgoCD are SUPERVISOR Services -- a GUEST kubeconfig will not do.)\n'
@@ -855,9 +871,16 @@ supervisor_kubeconfig_hint() {
 # supervisor_kubeconfig_or_die [what-needs-it]
 supervisor_kubeconfig_or_die() {
   local k
-  k="$(supervisor_kubeconfig)" || die "no readable Supervisor kubeconfig${1:+ (needed by $1)} — run 'make vks-login' (scenario-1 Step 3).
-  Tried, in order: VKS_SUPERVISOR_KUBECONFIG, SUPERVISOR_KUBECONFIG, ${REPO_ROOT}/secrets/supervisor.kubeconfig, ARGOCD_KUBECONFIG, KUBECONFIG.
+  # PRINT the hint; never re-type the candidate list. The hand-typed version named FIVE entries
+  # when supervisor_kubeconfig_candidates emits SIX -- it omitted ${VKS_LAB_STATE_DIR}/kubeconfig
+  # and showed KUBECONFIG 5th when B210 had made it 6th/LAST -- while saying "Tried, in order:".
+  # An error that misstates what was searched sends the reader hunting; :822 already mandated the
+  # hint, and 8 other scripts already do this. This was the last hand-typed copy in the repo.
+  k="$(supervisor_kubeconfig)" || {
+    supervisor_kubeconfig_hint >&2
+    die "no readable Supervisor kubeconfig${1:+ (needed by $1)} — see the search order above; run 'make vks-login' (scenario-1 Step 3).
   Harbor and ArgoCD are SUPERVISOR Services; the guest cluster has neither namespace."
+  }
   printf '%s' "$k"
 }
 
