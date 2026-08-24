@@ -844,6 +844,11 @@ supervisor_kubeconfig_candidates() {
   # nested-vsphere-lab -- not at its targets, its files, or its output." Guarding the EMITTER fixes
   # both consumers at once and makes the claim above true. Behaviour-preserving for the resolver:
   # if the directory does not exist the file cannot exist, so [ -s ] was already false.
+  # ⚠️ THE SLOT IS EMPTIED, NEVER REMOVED. `printf` still emits SIX lines; the 5th is empty when
+  # there is no lab dir. Both current consumers use `for c in $(...)`, which drops empty fields --
+  # but a line-INDEXED consumer (mapfile, `read a b c d e f`) still finds KUBECONFIG in slot 6.
+  # That is the contract. Do NOT "clean this up" into a conditional argument list: it would shift
+  # slot 6 and break any such consumer silently.
   local _lab="${VKS_LAB_STATE_DIR:-$HOME/.local/state/nested-lab}"
   [ -d "$_lab" ] || _lab=""
   printf '%s\n' "${VKS_SUPERVISOR_KUBECONFIG:-}" "${SUPERVISOR_KUBECONFIG:-}" \
@@ -853,16 +858,26 @@ supervisor_kubeconfig_candidates() {
 
 # supervisor_kubeconfig_hint — what to print when the resolver returns 1.
 supervisor_kubeconfig_hint() {
-  local c
+  local c _st
   printf '  no Supervisor kubeconfig found. Looked, in order:\n'
   for c in $(supervisor_kubeconfig_candidates); do
-    # -e, NOT -s. `-s` means exists AND NON-empty -- which is exactly when the resolver
-    # (supervisor_kubeconfig) would already have RETURNED this path, and this hint only runs
-    # when the resolver returned 1. So under `-s` the FOUND-BUT-EMPTY arm is UNREACHABLE and a
-    # file that exists at 0 bytes prints `absent`: an interrupted `make vks-login` leaves a
-    # truncated kubeconfig, the operator is told it is absent, and re-runs the login that
-    # "already worked" while the file sits right there. MEASURED 2026-08-24.
-    [ -n "$c" ] && printf '    %s %s\n' "$([ -e "$c" ] && printf 'FOUND-BUT-EMPTY' || printf 'absent         ')" "$c"
+    # THREE-WAY, and the third state is why. A two-way `[ -s ]` label reported an existing
+    # 0-byte file as `absent` (an interrupted `make vks-login` leaves a truncated kubeconfig; the
+    # operator is told it is absent and re-runs the login that "already worked" while the file sits
+    # right there). A two-way `[ -e ]` label fixes that and then LIES the other way, calling a
+    # perfectly good 6-byte kubeconfig FOUND-BUT-EMPTY.
+    #
+    # ⚠️ AND THE OBVIOUS RATIONALE FOR THE TWO-WAY FORM IS FALSE. It is tempting to argue the
+    # present/absent distinction cannot arise because "the hint runs only when the resolver
+    # returned 1, so [ -s ] is false for everything it sees". MEASURED FALSE: jumpbox-launch.sh
+    # (the `[ -s "$_sup" ] || { supervisor_kubeconfig_hint; ... }` guard) calls this hint from its
+    # OWN chain and NEVER calls the resolver, so a non-empty candidate genuinely reaches here.
+    # Do not collapse these three arms back to two on that reasoning.
+    if   [ ! -e "$c" ]; then _st='absent         '
+    elif [   -s "$c" ]; then _st='present        '
+    else                     _st='EMPTY (0 bytes)'
+    fi
+    [ -n "$c" ] && printf '    %s %s\n' "$_st" "$c"
   done
   printf '  Fix: export VKS_SUPERVISOR_KUBECONFIG=<path>, or run: make vks-login\n'
   printf '  (Harbor and ArgoCD are SUPERVISOR Services -- a GUEST kubeconfig will not do.)\n'
@@ -873,7 +888,10 @@ supervisor_kubeconfig_or_die() {
   local k
   # PRINT the hint; never re-type the candidate list. The hand-typed version named FIVE entries
   # when supervisor_kubeconfig_candidates emits SIX -- it omitted ${VKS_LAB_STATE_DIR}/kubeconfig
-  # and showed KUBECONFIG 5th when B210 had made it 6th/LAST -- while saying "Tried, in order:".
+  # -- while saying "Tried, in order:". (NOT a misordering: KUBECONFIG is LAST in both and the
+  # five named entries were in identical relative order. An earlier draft of this comment claimed
+  # an ordering defect; MEASURED FALSE, and it is deleted here because a code comment outlives the
+  # commit message that retracted it -- the next reader greps the code, not the git log.)
   # An error that misstates what was searched sends the reader hunting; :822 already mandated the
   # hint, and 8 other scripts already do this. This was the last hand-typed copy in the repo.
   k="$(supervisor_kubeconfig)" || {
