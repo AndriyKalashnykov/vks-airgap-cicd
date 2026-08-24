@@ -62,7 +62,7 @@ else ok "VKS_LAB_STATE_DIR pointing at a FILE does not resolve"; fi
 # `[ -s "$_sup" ]` guard and never calls the resolver, so a non-empty candidate genuinely arrives.
 printf '12345\n' > "$T/present"; : > "$T/empty"
 lbl=$(run supervisor_kubeconfig_hint VKS_SUPERVISOR_KUBECONFIG="$T/present" \
-                                     SUPERVISOR_KUBECONFIG="$T/empty" ARGOCD_KUBECONFIG=/does/not/exist)
+                                     ARGOCD_KUBECONFIG="$T/empty" KUBECONFIG=/does/not/exist)
 if printf '%s' "$lbl" | grep -q "present .*$T/present"; then ok "label: a NON-empty file reads 'present'"
 else bad "label: a NON-empty file reads 'present'" "$(printf '%s' "$lbl" | grep -F "$T/present")"; fi
 
@@ -73,7 +73,8 @@ if printf '%s' "$lbl" | grep -q "absent .*does/not/exist"; then ok "label: a mis
 else bad "label: a missing file reads 'absent'" "not labelled absent"; fi
 
 # --- 5. or_die must PRINT the derived list, never a hand-typed one ------------------------------
-# The hand-typed version named FIVE entries where candidates emits SIX, omitting the lab entry,
+# The hand-typed version named FIVE entries where candidates emitted SIX AT THE TIME (FIVE since
+# the unprefixed alias was dropped), omitting the lab entry,
 # while saying "Tried, in order:". Assert the omitted one is present and the hand-typed line is not.
 mkdir -p "$T/lab2"
 out=$(run 'supervisor_kubeconfig_or_die probe' VKS_LAB_STATE_DIR="$T/lab2" 2>&1)
@@ -95,6 +96,30 @@ val=$(env -u KUBECONFIG -u VKS_SUPERVISOR_KUBECONFIG -u SUPERVISOR_KUBECONFIG -u
 if [ "$val" = "$T/lab3/kubeconfig" ]
 then ok "or_die's return value is UNPOLLUTED by the hint (the >&2 is intact)"
 else bad "or_die's return value is UNPOLLUTED by the hint (the >&2 is intact)" "got [$val]"; fi
+
+# --- 7. the two COLLAPSED names must never come back --------------------------------------------
+# Both were a SECOND name for something that already had one, and each had its own failure mode:
+#   SUPERVISOR_KUBECONFIG (unprefixed) -- the WRITER wrote the VKS_ name while four READERS read
+#     this one; both defaulted to secrets/supervisor.kubeconfig, so they agreed BY COINCIDENCE and
+#     would have diverged the instant an operator set either.
+#   GUEST_KUBECONFIG -- WORSE: only 71-argocd-register-guest.sh honoured it while its siblings use
+#     ambient $KUBECONFIG, so setting it differently gave a SPLIT-BRAIN GUEST (register cluster X,
+#     deploy to cluster Y) -- silently, because both are valid kubeconfigs.
+# Grep the USE forms ($VAR / ${VAR), not the bare word: the bare word appears in the comments that
+# explain the removal, and those must stay so nobody reintroduces either name.
+for _dead in SUPERVISOR_KUBECONFIG GUEST_KUBECONFIG; do
+  _hits=$(grep -rhoE "\\\$\\{?${_dead}\\b" scripts/ Makefile 2>/dev/null \
+          | grep -vc 'VKS_SUPERVISOR_KUBECONFIG' || true)
+  if [ "$_hits" -eq 0 ]; then ok "the collapsed name \$${_dead} is read NOWHERE"
+  else bad "the collapsed name \$${_dead} is read NOWHERE" "$_hits use-site(s) reappeared"; fi
+done
+
+# ...and neither may be advertised in .env.example, or an operator will set a name nothing reads.
+for _dead in SUPERVISOR_KUBECONFIG GUEST_KUBECONFIG; do
+  _n=$(grep -cE "^#? ?${_dead}=" "${SCRIPT_DIR}/../.env.example" 2>/dev/null || true)
+  if [ "${_n:-0}" -eq 0 ]; then ok "${_dead} is not advertised in .env.example"
+  else bad "${_dead} is not advertised in .env.example" "still documented"; fi
+done
 
 printf '  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

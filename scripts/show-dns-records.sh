@@ -30,7 +30,6 @@ require_cmd kubectl
 KC=""
 for _c in "${ARGOCD_KUBECONFIG:-}" \
           "${VKS_SUPERVISOR_KUBECONFIG:-}" \
-          "${SUPERVISOR_KUBECONFIG:-}" \
           "${REPO_ROOT}/secrets/supervisor.kubeconfig" \
           "${KUBECONFIG:-}"; do
   [ -n "$_c" ] && [ -s "$_c" ] && { KC="$_c"; break; }
@@ -38,7 +37,7 @@ done
 if [ -z "$KC" ]; then
   log_error "no readable kubeconfig. Harbor and ArgoCD run on the SUPERVISOR; tried, in order:"
   for _c in "${ARGOCD_KUBECONFIG:-<unset>}" "${VKS_SUPERVISOR_KUBECONFIG:-<unset>}" \
-            "${SUPERVISOR_KUBECONFIG:-<unset>}" "${REPO_ROOT}/secrets/supervisor.kubeconfig" \
+            "${REPO_ROOT}/secrets/supervisor.kubeconfig" \
             "${KUBECONFIG:-<unset>}"; do
     log_error "    ${_c}"
   done

@@ -56,10 +56,11 @@ if [ -z "${1:-}" ]; then
   exit 64
 fi
 OUT="$1"
-# ⚠️ VKS_SUPERVISOR_KUBECONFIG FIRST — that is the name the WRITER (30-vks-login.sh)
-# honours. These readers used only SUPERVISOR_KUBECONFIG; the defaults coincide, so the
-# split was invisible on the box that measured it and would have split the moment an
-# operator set either one.
+# ⚠️ VKS_SUPERVISOR_KUBECONFIG is the ONLY name — that is what the WRITER (30-vks-login.sh)
+# honours. An unprefixed SUPERVISOR_KUBECONFIG alias existed until 2026-08-24. MEASURED against git
+# history (2790ef7, #479): these readers accepted BOTH, prefixed first — so the alias was reachable
+# only by an operator who explicitly set the UNPREFIXED one, which the writer never wrote. Setting
+# the prefixed name always agreed. Collapsed to one name; do not reintroduce a second.
 SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kubeconfig")"   # lib/os.sh: ONE resolver, first that EXISTS
 [ -f "$SUP" ] || { supervisor_kubeconfig_hint >&2; die "no Supervisor kubeconfig — see the search order above"; }
 
