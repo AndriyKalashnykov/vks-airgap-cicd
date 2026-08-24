@@ -14,7 +14,7 @@ RUN tdnf clean all && tdnf makecache && \
     tdnf install -y \
       ca-certificates openssl curl git openssh-clients make tar gzip which gawk gettext \
       shadow sudo \
-      podman fuse-overlayfs slirp4netns && \
+      podman crun fuse-overlayfs slirp4netns && \
     tdnf clean all
 
 # Non-root operator with subuid/subgid (for rootless podman) + passwordless sudo
@@ -23,6 +23,29 @@ RUN groupadd vks && useradd -g vks -m -s /bin/bash vks && \
     printf 'vks:100000:65536\n' > /etc/subuid && \
     printf 'vks:100000:65536\n' > /etc/subgid && \
     printf 'vks ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/vks && chmod 0440 /etc/sudoers.d/vks
+# /etc/shadow mode is a BUILD-TIME contract of THIS FILE'S OWN INSTALL LINE.
+# MEASURED 2026-08-23. /etc/shadow is owned by NO PACKAGE (`rpm -qf` -> "not owned by any package");
+# it exists only because a scriptlet creates it, and TWO scriptlets race to do so:
+#     shadow  %post -> pwconv            -> creates it 0400
+#     systemd %post -> systemd-sysusers  -> creates it 0000
+# BOTH packages are in BOTH the podman and docker sets. rpm's TRANSACTION ORDER decides, measured
+# straight from the install logs:
+#     docker set:  systemd@line149 -> shadow@line165   => sysusers wins => 0000
+#     podman set:  shadow@line169  -> systemd@line179  => pwconv   wins => 0400
+# SO THE PODMAN IMAGE IS NOT STRUCTURALLY SAFE — IT IS AHEAD IN A RACE. Any Renovate bump, any added
+# package, any upstream `Requires:` change can flip the order, with no docker involved and no change
+# to the photon:5.0 tag. That is why the pin belongs on EVERY photon image, not just the docker one.
+# WHY 0000 BREAKS US: a `--privileged` container is AppArmor-UNCONFINED, so the HOST's unix-chkpwd
+# profile attaches by path — audit_write + `/etc/shadow r`, NO dac_override — so setuid-root
+# unix_chkpwd cannot open a 0000 file and `sudo -n true` returns 1 (`PAM account management error`).
+# COUNTER-INTUITIVE: WITHOUT `--privileged` the same 0000 image sudo's FINE. Do not "refute" this
+# without the flag. And --privileged IS required: the userns rootless podman/dockerd needs is blocked
+# by SECCOMP (measured: `--security-opt seccomp=unconfined` alone restores it; apparmor=unconfined
+# alone does not), on a host with kernel.apparmor_restrict_unprivileged_userns=1.
+RUN before="$(stat -c %a /etc/shadow)"; chmod 0400 /etc/shadow; \
+    [ "$before" = "400" ] || echo "NOTE: /etc/shadow arrived $before (expected 400) — the shadow/systemd scriptlet order MOVED; see scripts/check-jumpbox-shadow.sh"; \
+    m="$(stat -c %a /etc/shadow)"; \
+    [ "$m" = "400" ] || { echo "FATAL: chmod did not take (/etc/shadow is $m, want 400)"; exit 1; }
 
 # Rootless podman storage → fuse-overlayfs (overlay-in-container needs the fuse mount program).
 RUN install -d -o vks -g vks /home/vks/.config/containers && \

@@ -197,9 +197,22 @@ def main() -> int:
 
     if rel.startswith("../"):          # outside the project — not ours to police
         return 0
-    if rel.startswith(EXEMPT_PREFIXES) or rel in EXEMPT_FILES:
+    # ⚠️ THE RECEIPT ITSELF IS GUARDED, even though `.claude/` is exempt. MEASURED 2026-08-23 in THIS
+    #    repo: a plain `Write` to .claude/state/adversary-<session>.receipt returned rc=0, so the agent
+    #    could FORGE ITS OWN CLEARANCE and the next guarded write sailed through. The filename is
+    #    discoverable with `ls .claude/state/`. This clause exists in nested-vsphere-lab since
+    #    2026-07-27 and was never ported here; the docstring's "the override belongs to the human" was
+    #    FALSE in this repo until this line. Ported after an adversary round graded it CRITICAL.
+    #    KNOWN RESIDUAL, declared not hidden: this arm is consulted on Edit/Write ONLY. This repo's
+    #    matcher has NO `Bash` arm at all, so `printf x > .claude/state/*.receipt` still mints. That is
+    #    the same F1 the lab repo hit on 2026-07-29; closing it here needs the Bash arm, which the same
+    #    round REFUTED as a string matcher (17-18% false blocks, on running our own gates) in favour of
+    #    a git pre-commit chokepoint. Tracked, not fixed here.
+    if "/.claude/state/" in "/" + rel and rel.endswith(".receipt"):
+        pass                                # fall through to the gate below — do NOT return 0
+    elif rel.startswith(EXEMPT_PREFIXES) or rel in EXEMPT_FILES:
         return 0
-    if not (rel.startswith(GUARDED_PREFIXES) or rel in GUARDED_FILES):
+    elif not (rel.startswith(GUARDED_PREFIXES) or rel in GUARDED_FILES):
         return 0
 
     # The gate: a guarded write needs an adversary engaged SINCE the last NON-EXEMPT commit (B45 — an
