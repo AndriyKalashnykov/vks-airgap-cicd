@@ -43,21 +43,32 @@ false-block. Proven live against `cicd-gc0824060158`:
 And degraded (a kubeconfig with no context) prints `<no current-context> @ <no server in kubeconfig>`
 rather than an empty string that reads as "fine".
 
-**STILL OPEN — the wrong-cluster GUARD.** Naming it helps a reader; it does not stop a script. Two
-unanswered questions, and the first is the one that matters:
+**STILL OPEN — the wrong-cluster GUARD.** Naming it helps a reader; it does not stop a script.
 
-1. ⚠️ **UNVERIFIED:** does a **Supervisor** kubeconfig pass the `kubectl get packages -A` guard at
-   `vks-package.sh:35`? Not settled: there is no `secrets/supervisor.kubeconfig` on this box, the
-   three cached candidates under `/tmp` are empty, and minting one costs an SSO attempt against a
-   **3-strike permanent lockout** (RULE ZERO-A0). Settle it opportunistically the next time a
-   Supervisor kubeconfig exists: `KUBECONFIG=<supervisor> kubectl get packages -A`. If it returns
-   packages, the guard is decorative and this needs a real discriminator.
-2. What IS the discriminator? Do not guess one. Candidates to measure when (1) is answerable: the
-   presence of `vmware-system-tkg` PackageRepositories vs Supervisor-only CRDs
-   (`virtualmachines.vmoperator.vmware.com`, `clusters.cluster.x-k8s.io`).
+⚠️ **CORRECTED 2026-08-24, same day: the discriminator this row said to "not guess" ALREADY EXISTS
+and is RED-proven.** `kubeconfig_is_supervisor()` (`os.sh:907`) answers it by **API-GROUP
+DISCOVERY** on `vmoperator.vmware.com` — not a CRD read, which is the category error that made B210
+conclude no discriminator was possible. It is measured at both operating points (guest: header-only
+/ 0 bytes; Supervisor: `virtualmachineclasses`), carries a control proving it discriminates rather
+than always answering empty, needs only `system:discovery` RBAC (so it is TENANT-readable and
+cheaper than a namespace probe), and has `not_a_supervisor_note()` as its shared message.
+`scripts/test-supervisor-discriminator.sh` pins the trap that `kubectl api-resources
+--api-group=<absent>` EXITS 0 with a header, so rc is useless and the implementation must assert a
+non-empty list.
 
-**Done when:** (1) is measured, and — if a Supervisor does pass — a discriminator refuses it by
-identity rather than by "some packages were visible".
+**Only THREE scripts call it** — `24-vks-k8s-version.sh`, `26-vks-cluster-status.sh`, and its own
+test. `vks-package.sh` does not. So the fix is not research; it is wiring an existing, tested
+primitive into the guest-scoped entry points.
+
+⚠️ **Do NOT wire it before the idea round lands.** Turning a PRINT into a GATE is a new control, and
+`kubeconfig_is_supervisor` returns **2** when the API server is unreachable — an air-gapped or slow
+lab must not be false-blocked by a check that cannot reach the cluster. The tri-state (0 supervisor
+/ 1 not / 2 unknown) is the whole design question, and "unknown" must fail OPEN.
+
+**Done when:** guest-scoped entry points refuse a Supervisor kubeconfig by identity via
+`kubeconfig_is_supervisor`, rc=2 fails open with a named reason, and the false-RED rate is measured
+on the five scripts that touch both scopes in one run (`26-vks-cluster-status.sh`,
+`argocd-password.sh`, `creds.sh`, and two tests).
 
 ## 🟠 B466 — `.env` switch: install Istio via the VKS Standard Package instead of helm
 
