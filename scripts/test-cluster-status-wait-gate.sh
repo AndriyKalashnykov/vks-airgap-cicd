@@ -17,7 +17,24 @@
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP="$(mktemp -d)"; mkdir -p "$TMP/bin" "$TMP/secrets"
-trap 'rm -rf "$TMP"' EXIT
+# 26-vks-cluster-status.sh:43 writes ${REPO_ROOT}/secrets/${VKS_CLUSTER_NAME}.kubeconfig, and this
+# test drives it with VKS_CLUSTER_NAME=testcluster -- so a plain run LEFT a 0-byte
+# secrets/testcluster.kubeconfig in the real repo. Measured: it was sitting there after
+# `make static-check`. Stale kubeconfigs in secrets/ are B467's hazard, since no target takes a
+# cluster argument and an operator exporting the wrong one acts on the wrong cluster.
+#
+# Remove ONLY what THIS RUN created. If an operator genuinely has a cluster named `testcluster`,
+# their file predates us and must survive.
+#
+# ⚠️ RESIDUAL, measured and NOT fixed here: if that file pre-exists, the script under test
+# TRUNCATES it to 0 bytes before this trap ever runs, so its CONTENT is already gone. The clean fix
+# is to stop the child writing into the real repo at all, but pointing it at a throwaway
+# REPO_ROOT was tried and broke 4 of the 13 cases -- the script needs the real root for more than
+# this path. Filed as B470.
+STRAY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/secrets/testcluster.kubeconfig"
+STRAY_PREEXISTED=0
+[ -e "$STRAY" ] && STRAY_PREEXISTED=1
+trap 'rm -rf "$TMP"; if [ "$STRAY_PREEXISTED" -eq 0 ]; then rm -f "$STRAY"; fi' EXIT
 pass=0; fail=0
 ok()  { printf '  PASS  %s\n' "$1"; pass=$((pass + 1)); }
 bad() { printf '  FAIL  %s — %s\n' "$1" "$2"; fail=$((fail + 1)); }
