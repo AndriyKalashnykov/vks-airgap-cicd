@@ -199,6 +199,19 @@ fi
 # grep passed `: vks_ca_default`, `false && vks_ca_default`, the token inside a log string, and the
 # token inside an unused function (2 of 6 mutations caught). A single concatenated window also passed
 # a file with one guarded and one UNGUARDED ca_status_report.
+# RESIDUAL, NAMED (2026-08-24): this arm guards `vks_ca_default` ONLY, and that is CORRECT today,
+# not an oversight. It is the only pair-var that ships COMMENTED in .env.example, so it is the only
+# one whose resolver an entry point must remember to call. Harbor needs no default-setter at all
+# (HARBOR_CA_FILE ships UNCOMMENTED at .env.example:137, so load_env sets it; a harbor_ca_default
+# would duplicate that value and re-enter the clobber class). vcenter_ca_default exists but vCenter
+# is NOT a pair, and it is called at a CHOKEPOINT (lib/vcenter.sh:99, inside _vc_tls_args), so it
+# cannot be forgotten and needs no gate.
+# DERIVING these names from the pair list was proposed and REFUTED: it would DEMAND the harbor
+# function that must not exist and MISS the vcenter one, and VKS_CA_CERT_FILE -> vks_ca_default is
+# not a mechanical transform (it drops CERT), so the map would itself be hand-typed.
+# If a THIRD pair whose var ships COMMENTED ever lands, give it its own arm here -- and prefer the
+# BEHAVIOURAL fixture at :225 (which counts pairs EXAMINED) over any count of the enumeration,
+# because a pair COUNT passes over a pair that never builds.
 for _f in "${REPO_ROOT}/scripts/29-ca-status.sh" "${REPO_ROOT}/scripts/24-lab-preflight.sh"; do
   _n="$(basename "$_f")"; _bad=0; _seen=0
   while IFS=: read -r _ln _; do
