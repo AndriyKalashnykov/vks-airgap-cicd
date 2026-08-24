@@ -16,6 +16,50 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🟠 B469 — the guest-scope sweep B467 did NOT close: 14 mutating scripts, shape common, reachability unmeasured
+
+The idea round that produced B467's fix named a follow-up it could not do: *"whether any OTHER
+guest-scoped target shares F1's shape — succeeds wrongly rather than failing. That sweep is the
+denominator this design is missing."* Here is the denominator; the exposure is not.
+
+**MEASURED 2026-08-24** — guest-scoped scripts (they do NOT call `supervisor_kubeconfig`) that
+mutate a cluster (`kubectl apply/create/delete/label/patch/annotate`, `helm upgrade/install/uninstall`):
+
+| script | mutating calls | would it SUCCEED on a Supervisor? |
+|---|---|---|
+| `91-e2e-tenant-mechanism.sh` | 10 | likely — plain k8s API |
+| `90-e2e-istio-existing.sh` | 10 | likely |
+| `07-install-argocd.sh` | 9 | likely |
+| `60-configure-tekton.sh` | 8 | likely |
+| `46-install-istio.sh` | 7 | likely (helm) |
+| `70-configure-argocd.sh` | 6 | likely |
+| `06-install-harbor.sh` | 6 | likely (helm) |
+| `45-install-traefik.sh` | 4 | likely |
+| `49-psa-check.sh` · `24-lab-preflight.sh` · `24-builder-probe.sh` · `23-argocd-preflight.sh` · `20-bundle-load.sh` · `41-install-tekton.sh` | 1–3 each | mixed |
+
+**So the SHAPE is common. The EXPOSURE is not, and that distinction is the whole row.** All 14 run
+inside `make install-all` / `make platform`, i.e. a flow the operator entered *after* switching to
+the guest — scenario-1 does that at its Step 6, and scenario-2 now does too (this session). What
+made `vks-package.sh` different is that it is invoked **ad-hoc**, outside any flow that switches
+first, **and** its install binds cluster-admin without a CONFIRM gate.
+
+⚠️ **Do NOT "fix" this by adding the eager discriminator to 14 scripts.** The round was explicit:
+both pre-existing consumers call `kubeconfig_is_supervisor` **LAZILY inside a failure branch** —
+zero happy-path cost, structurally zero false-RED — and an eager pre-flight costs up to **20s** on a
+blackholed endpoint (measured), on every one of them, for a hazard most cannot reach. B467's eager
+gate is justified by ONE property that does not generalise: its operation **succeeds** on the wrong
+cluster instead of failing.
+
+**What is actually UNMEASURED, and how to settle it:** for each of the 14, does the operation
+SUCCEED or FAIL against a Supervisor? Nobody has run them there, and running them there is exactly
+what must not happen casually. The cheap, safe probe is per-script and read-only: does its FIRST
+mutating call target a resource a Supervisor serves? A helm install into a fresh namespace does; a
+`kubectl apply` of a Tekton CRD probably does; anything keyed on a guest-only object does not.
+
+**Done when:** each of the 14 is classified SUCCEEDS-WRONGLY vs FAILS-LOUDLY with evidence, and only
+the SUCCEEDS-WRONGLY ones — if any — get a guard, using the lazy pattern unless their operation
+succeeds, in which case B467's eager form applies with the same rc=2-fails-open contract.
+
 ## ✅ B467 — `vks-package.sh` could install onto a SUPERVISOR, unconfirmed, binding cluster-admin — CLOSED
 
 There is no `CLUSTER=` argument: the target is whatever `$KUBECONFIG` points at
