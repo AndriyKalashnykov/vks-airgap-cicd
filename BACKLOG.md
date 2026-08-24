@@ -16,6 +16,34 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🟠 B470 — `test-cluster-status-wait-gate.sh` TRUNCATES a pre-existing `secrets/testcluster.kubeconfig`
+
+The test drives the real `26-vks-cluster-status.sh`, which writes
+`${REPO_ROOT}/secrets/${VKS_CLUSTER_NAME}.kubeconfig` (`:43`), with `VKS_CLUSTER_NAME=testcluster`.
+So it writes into the REAL repo.
+
+**FIXED (litter):** the test now removes that file if it did NOT pre-exist. Measured before the fix:
+a 0-byte `secrets/testcluster.kubeconfig` was sitting in the tree after `make static-check`. Stale
+kubeconfigs in `secrets/` are B467's hazard — no target takes a cluster argument, so an operator
+exporting the wrong one acts on the wrong cluster. (Six were present this session; all became dead
+after a lab teardown.)
+
+**NOT FIXED (truncation):** if an operator genuinely has a cluster named `testcluster`, the script
+**truncates their kubeconfig to 0 bytes** before the cleanup trap ever runs. Measured with an md5:
+`d80fe9f4…` -> `d41d8cd9…` (the empty-file hash). The trap correctly does not delete it — the
+content is simply already gone.
+
+⚠️ **The obvious fix was TRIED and FAILED, so do not re-try it blind.** Pointing the child at a
+throwaway `REPO_ROOT="$TMP/repo"` on its invocation line (`os.sh:20` honours a pre-set `REPO_ROOT`)
+took the suite from **13/13 to 9 passed / 4 failed** AND still left the litter — so the script needs
+the real root for more than that one path, and the write is not reaching `secrets/` only through
+the variable I assumed. Find the actual write path before changing the invocation.
+
+**Done when:** the test cannot write into the real `secrets/` at all, with 13/13 still green — or,
+if that proves structurally impossible, the collision is removed by giving the fixture a name no
+real cluster would take (the cheap option, and it needs measuring for the same reason: the name may
+be load-bearing in the stubs).
+
 ## 🟠 B469 — the guest-scope sweep B467 did NOT close: 14 mutating scripts, shape common, reachability unmeasured
 
 The idea round that produced B467's fix named a follow-up it could not do: *"whether any OTHER
