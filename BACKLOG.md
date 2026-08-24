@@ -1484,28 +1484,43 @@ call about a security gate, and a bigger saving is not by itself a reason to ove
 
 </details>
 
-## B206 — `24-builder-probe.sh` runs `mvn -o -v` for ALL SIX apps; only java has mvn 🔴 open
+## B206 — the builder probe's `mvn` hardcode ✅ CLOSED (fixed 2026-08-23, one day after filing) — and this row was WRONG about reachability
 
-**Latent, not blocking.** MEASURED 2026-08-23: `scripts/24-builder-probe.sh:45-64` loops
-`for app in $_apps`, skips on `app_has_builder "$app" || continue`, then runs `mvn -o -v` inside the
-builder image. Since 2026-08-23 **all six** apps ship a `Dockerfile.builder`, so the loop now enters
-for go/node/python/rust/dotnet — whose builders contain no `mvn`. It will fail **5 of 6** the first
-time anyone runs it.
+**CLOSED 2026-08-24 by measurement, not by doing the work: the work was already done.**
 
-Not on the critical path, which is why it is filed rather than fixed: `grep -c builder-probe
-docs/scenario-1.md docs/scenario-2.md` -> **0 / 0**, and it is **not** a prerequisite of
-`install-all`. So no walkthrough row and no `make install-all` reaches it.
+    lib/apps.sh:503   app_builder_probe() dispatches java|go|nodejs|python|rust|dotnet,
+                      and die()s on an unknown lang (:511)
+    24-builder-probe.sh:67   probe_cmd="$(app_builder_probe "$app")"
+    grep 'mvn -o -v' 24-builder-probe.sh -> 2 hits, BOTH in COMMENTS (:57, :68)
 
-The fix is the same generalisation `check-image-alignment.sh` and `app-test.sh` already received:
-the probe's assertion must be **per-language**, derived from a hook (`app_lang`), not a hardcoded
-`mvn`. Its own comment explains *why* `mvn -o -v` is the right probe **for java** — offline, so a
-missing Maven Central cannot make it pass or fail spuriously. Each language needs its own equivalent
-(`go version`, `node -v`, `python -V`, `cargo -V`, `dotnet --version`), and the offline property must
-be preserved for each.
+The code says so itself at `:56-58`: *"it was a hardcoded `mvn -o -v` until **2026-08-23**, which was
+right while java was the only app with a builder and would have failed 5 of the 6 that ship one
+today."*
 
-Found by an `adversary-docker` idea-round on an unrelated question (the walkbox disk), which is the
-recurring pattern: the highest-value finding is usually about something already shipped, not about
-the thing under review.
+### ⚠️ This row's SECOND claim was FALSE, and that half matters more
+
+It said *"no walkthrough row and no `make install-all` reaches it"*, resting on
+`grep -c builder-probe docs/scenario-1.md docs/scenario-2.md` -> `0 / 0`. Both true, and the
+conclusion does not follow — **`scripts/jumpbox-run.sh:198` runs `make builder-probe` as Step 4c**,
+so every `make jumpbox` / `jumpbox-matrix` hits it. The scenario docs were the wrong place to look.
+
+That is also the evidence the fix is real: `make jumpbox-matrix` went green closing [[B208]] on
+2026-08-23/24 with all six apps shipping a `Dockerfile.builder`. A probe still hardcoding `mvn`
+would have failed 5 of 6 in that run.
+
+**Why the false half is the dangerous one.** "Nothing reaches it" is the sentence that justifies
+leaving a future break unfixed. Left standing, it would have licensed exactly that for a script the
+jumpbox harness runs on every invocation.
+
+### The lesson, recorded because it cost a wrong proposal
+
+This row was offered to the operator as the top next task — a fix for a bug fixed the day before —
+on the strength of its one-line index entry, never opened. `gates.md` already says a backlog row's
+STATUS is a claim; so is its REACHABILITY. The check was 30 seconds:
+
+    grep -rn 'builder-probe' Makefile scripts/*.sh .github/workflows/*.yml docs/*.md
+
+Do not propose work from an index line. Open the row, then verify the row.
 
 ## B207 — MOVED to nested-vsphere-lab as B459 (the walkbox rootfs growth) ✅ closed
 
