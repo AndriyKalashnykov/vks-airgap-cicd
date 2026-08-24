@@ -585,7 +585,7 @@ load_env() {
   #                            DISCOVERED value SHOULD come from the overlay; it is the inverse
   #                            control that proves this list is still a list and not "everything".
   # Of the 5 operator-settable credentials `state_set` writes, 3 were protected and 2 were not.
-  for _sel in SUPERVISOR_HOST VCENTER_HOST KUBECONFIG VKS_AUTH_METHOD ARGOCD_KUBECONFIG GUEST_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT VKS_CLUSTER_NAME VKS_NAMESPACE INGRESS_CONTROLLER HARBOR_CA_FILE VKS_CA_CERT_FILE ARGOCD_CA_FILE HARBOR_URL HARBOR_USERNAME HARBOR_PASSWORD VCF_CLI_SRC_DIR VKS_CA_SHA256 VCENTER_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256 HARBOR_INSECURE ARGOCD_INSECURE MIRROR_VERIFY_FAST ARGOCD_ADMIN_PASSWORD GITEA_ADMIN_PASSWORD VCENTER_CA_FILE VCENTER_INSECURE VKS_INSECURE_SKIP_TLS_VERIFY; do
+  for _sel in SUPERVISOR_HOST VCENTER_HOST KUBECONFIG VKS_AUTH_METHOD ARGOCD_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT VKS_CLUSTER_NAME VKS_NAMESPACE INGRESS_CONTROLLER HARBOR_CA_FILE VKS_CA_CERT_FILE ARGOCD_CA_FILE HARBOR_URL HARBOR_USERNAME HARBOR_PASSWORD VCF_CLI_SRC_DIR VKS_CA_SHA256 VCENTER_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256 HARBOR_INSECURE ARGOCD_INSECURE MIRROR_VERIFY_FAST ARGOCD_ADMIN_PASSWORD GITEA_ADMIN_PASSWORD VCENTER_CA_FILE VCENTER_INSECURE VKS_INSECURE_SKIP_TLS_VERIFY; do
     if [ -n "${!_sel:-}" ]; then
       _snap_names="${_snap_names} ${_sel}"
       _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'
@@ -800,8 +800,11 @@ argocd_namespace() { printf '%s' "${ARGOCD_NAMESPACE:-${VKS_NAMESPACE:-argocd}}"
 #
 # Harbor and ArgoCD are SUPERVISOR Services, so every script that talks to them needs this, and SEVEN
 # of them had hand-rolled the same chain. Two shapes were in the tree at once:
-#   ${VKS_SUPERVISOR_KUBECONFIG:-${SUPERVISOR_KUBECONFIG:-<default>}}   first that is SET
-#   a loop over candidates                                             first that EXISTS
+#   a nested ":-" chain over two names, falling back to a default   first that is SET
+#   a loop over candidates                                          first that EXISTS
+# (The two names are written out below rather than shown as a "${...:-...}" expansion on purpose:
+#  check-env-coverage.sh scans for that FORM, so an illustrative one in a comment reads as a real
+#  READ of a variable that no longer exists, and the gate then demands it back in .env.example.)
 # They are NOT the same, and show-dns-records.sh:26-29 records what the difference cost: .env carries
 # ARGOCD_KUBECONFIG for a file Step 10 creates LATER, so the `:-` chain picked that unset-but-
 # configured path, the real file lost, and the die named a file it had never looked at.
@@ -844,14 +847,29 @@ supervisor_kubeconfig_candidates() {
   # nested-vsphere-lab -- not at its targets, its files, or its output." Guarding the EMITTER fixes
   # both consumers at once and makes the claim above true. Behaviour-preserving for the resolver:
   # if the directory does not exist the file cannot exist, so [ -s ] was already false.
-  # ⚠️ THE SLOT IS EMPTIED, NEVER REMOVED. `printf` still emits SIX lines; the 5th is empty when
-  # there is no lab dir. Both current consumers use `for c in $(...)`, which drops empty fields --
-  # but a line-INDEXED consumer (mapfile, `read a b c d e f`) still finds KUBECONFIG in slot 6.
-  # That is the contract. Do NOT "clean this up" into a conditional argument list: it would shift
-  # slot 6 and break any such consumer silently.
+  # ⚠️ THE LAB SLOT IS EMPTIED, NEVER REMOVED. `printf` emits FIVE lines (it was SIX until the
+  # unprefixed SUPERVISOR_KUBECONFIG alias was dropped, 2026-08-24); the 4th is EMPTY when there is
+  # no lab dir rather than absent. MEASURED: both consumers (supervisor_kubeconfig,
+  # supervisor_kubeconfig_hint) use `for c in $(...)`, which drops empty fields, and there is no
+  # line-INDEXED consumer -- so the empty line is invisible today. Keep it anyway: a conditional
+  # argument list would shift the trailing slots, which is exactly how a future mapfile/read
+  # consumer breaks silently.
   local _lab="${VKS_LAB_STATE_DIR:-$HOME/.local/state/nested-lab}"
   [ -d "$_lab" ] || _lab=""
-  printf '%s\n' "${VKS_SUPERVISOR_KUBECONFIG:-}" "${SUPERVISOR_KUBECONFIG:-}" \
+  # SUPERVISOR_KUBECONFIG (unprefixed) was REMOVED 2026-08-24. It was never a second concept --
+  # the WRITER (30-vks-login.sh) always wrote VKS_SUPERVISOR_KUBECONFIG while four readers read only
+  # the unprefixed name; both defaulted to secrets/supervisor.kubeconfig, so they agreed BY
+  # COINCIDENCE and would have diverged the instant an operator set either one. One name now.
+  # ⚠️ THERE IS NO MIGRATION GUARD, DELIBERATELY, AND THE RESIDUAL IS REAL. An operator who still
+  # sets the old name in their .env is SILENTLY IGNORED: the ladder falls through to the next
+  # candidate, which on a box with ~/.local/state/nested-lab is a DIFFERENT CLUSTER, with no error --
+  # and two consumers of this resolver CREATE (25-vks-cluster-create.sh) and DESTROY
+  # (98-uninstall-all.sh). A `die` was written and then REMOVED on the owner's call: nobody was
+  # measured to set it. Note what that evidence could NOT see -- `.env` is gitignored, so a
+  # `git log -S` for the name searched a corpus that by construction cannot contain the only file
+  # an operator can set it in. Exposure is bounded to operators who ALREADY had it set, since
+  # .env.example no longer teaches the name. Do not re-add a guard without re-deciding that.
+  printf '%s\n' "${VKS_SUPERVISOR_KUBECONFIG:-}" \
     "${REPO_ROOT}/secrets/supervisor.kubeconfig" "${ARGOCD_KUBECONFIG:-}" \
     "${_lab:+$_lab/kubeconfig}" "${KUBECONFIG:-}"
 }
@@ -887,7 +905,8 @@ supervisor_kubeconfig_hint() {
 supervisor_kubeconfig_or_die() {
   local k
   # PRINT the hint; never re-type the candidate list. The hand-typed version named FIVE entries
-  # when supervisor_kubeconfig_candidates emits SIX -- it omitted ${VKS_LAB_STATE_DIR}/kubeconfig
+  # when supervisor_kubeconfig_candidates emitted SIX AT THE TIME (it emits FIVE since the
+  # unprefixed alias was dropped) -- it omitted ${VKS_LAB_STATE_DIR}/kubeconfig
   # -- while saying "Tried, in order:". (NOT a misordering: KUBECONFIG is LAST in both and the
   # five named entries were in identical relative order. An earlier draft of this comment claimed
   # an ordering defect; MEASURED FALSE, and it is deleted here because a code comment outlives the

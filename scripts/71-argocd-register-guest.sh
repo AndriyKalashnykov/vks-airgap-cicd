@@ -55,9 +55,17 @@ ARGOCD_REGISTER_INSECURE="$_argocd_register_insecure_snapshot"
 require_cmd kubectl "install kubectl (make deps)"
 
 # --- inputs ------------------------------------------------------------------
-# GUEST_KUBECONFIG : the workload cluster where javawebapp deploys (default: the flow's $KUBECONFIG).
-# ARGOCD_KUBECONFIG: the cluster the ArgoCD instance runs in (the Supervisor / the e2e ArgoCD box).
-GUEST_KUBECONFIG="${GUEST_KUBECONFIG:-${KUBECONFIG:?KUBECONFIG (guest cluster) must be set}}"
+# KUBECONFIG        : the workload cluster where the apps deploy. THE ONLY name for it.
+# ARGOCD_KUBECONFIG : the cluster the ArgoCD instance runs in (the Supervisor / the e2e ArgoCD box).
+#
+# GUEST_KUBECONFIG (an operator-settable override that defaulted to $KUBECONFIG) was REMOVED
+# 2026-08-24. MEASURED: it NEVER diverged anywhere in the tree -- even e2e-cross-cluster.sh set
+# BOTH to the same value, and the thing that actually differs there is ARGOCD_KUBECONFIG. It was
+# one concept with two names, and it was WORSE than a harmless alias: only THIS script honoured it,
+# while its siblings (67-72) use ambient $KUBECONFIG. So an operator who set it differently got a
+# SPLIT-BRAIN GUEST -- this script registering cluster X with ArgoCD while everything else deployed
+# to cluster Y, silently, because both are valid kubeconfigs. One name removes that by construction.
+_guest_kc="${KUBECONFIG:?KUBECONFIG (guest cluster) must be set}"
 ARGOCD_KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}"
 : "${ARGOCD_NAMESPACE:?ARGOCD_NAMESPACE must be set (namespace the ArgoCD instance watches)}"
 
@@ -86,11 +94,11 @@ if [ "$ARGOCD_REGISTER" != force ]; then
   # `make: *** [argocd-register-guest] Error 1` and nothing else. MEASURED 2026-08-12, walk block
   # [27], both rows. kubectl's own noise is already redirected inside argocd_api_server, so there is
   # nothing left here for the redirect to suppress except the diagnostic.
-  if ! argocd_is_off_cluster "$ARGOCD_KUBECONFIG" "$GUEST_KUBECONFIG"; then
+  if ! argocd_is_off_cluster "$ARGOCD_KUBECONFIG" "$_guest_kc"; then
     log_info "ArgoCD runs in the SAME cluster as the workload — nothing to register."
     exit 0
   fi
-  guest_api="$(argocd_api_server "$GUEST_KUBECONFIG")"
+  guest_api="$(argocd_api_server "$_guest_kc")"
   already="$(kubectl --kubeconfig "$ARGOCD_KUBECONFIG" -n "$ARGOCD_NAMESPACE" \
       get secret -l argocd.argoproj.io/secret-type=cluster \
       -o go-template="$ARGOCD_CLUSTER_LIST_TEMPLATE" 2>/dev/null \
@@ -146,7 +154,7 @@ if [ "$ARGOCD_REGISTER" != force ]; then
   fi
   if [ "${_rs%%|*}" != yes ]; then
     log_warn "you may not create Secrets in ns/${ARGOCD_NAMESPACE} on the ArgoCD cluster — registration is ADMIN-only."
-    log_warn "  REQUEST from your platform team: register guest cluster '$(kubectl --kubeconfig "$GUEST_KUBECONFIG" config current-context 2>/dev/null || echo guest)' ($guest_api) as an ArgoCD destination."
+    log_warn "  REQUEST from your platform team: register guest cluster '$(kubectl --kubeconfig "$_guest_kc" config current-context 2>/dev/null || echo guest)' ($guest_api) as an ArgoCD destination."
     log_warn "  Then set ARGOCD_DEST_CLUSTER_NAME (the name they registered it under) and re-run 'make gitops'."
     log_warn "  Skipping registration (set ARGOCD_REGISTER=never to silence this)."
     exit 0
@@ -154,10 +162,10 @@ if [ "$ARGOCD_REGISTER" != force ]; then
 fi
 ARGOCD_MANAGER_SA="${ARGOCD_MANAGER_SA:-argocd-manager}"
 ARGOCD_MANAGER_NS="${ARGOCD_MANAGER_NS:-kube-system}"
-[ -f "$GUEST_KUBECONFIG" ]  || die "GUEST_KUBECONFIG not found: $GUEST_KUBECONFIG"
+[ -f "$_guest_kc" ]  || die "KUBECONFIG (guest cluster) not found: $_guest_kc"
 [ -f "$ARGOCD_KUBECONFIG" ] || die "ARGOCD_KUBECONFIG not found: $ARGOCD_KUBECONFIG"
 
-kg() { kubectl --kubeconfig "$GUEST_KUBECONFIG" "$@"; }   # guest cluster
+kg() { kubectl --kubeconfig "$_guest_kc" "$@"; }   # guest cluster
 # --request-timeout matches the sibling wrapper in 23-argocd-preflight.sh: without it this probe
 # hangs forever against a blackholed endpoint, and a classifier cannot help a probe that never returns.
 ka() { kubectl --kubeconfig "$ARGOCD_KUBECONFIG" --request-timeout=15s "$@"; }  # ArgoCD cluster

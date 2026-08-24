@@ -67,7 +67,7 @@ hub -n "$ARGOCD_NS" rollout status deploy/argocd-repo-server --timeout=180s >/de
 # 1. Register GUEST with HUB's ArgoCD via the real target under test.
 # ---------------------------------------------------------------------------
 log_info "== registering GUEST with HUB via make argocd-register-guest =="
-KUBECONFIG="$GUEST_KC" GUEST_KUBECONFIG="$GUEST_KC" ARGOCD_KUBECONFIG="$HUB_KC" \
+KUBECONFIG="$GUEST_KC" ARGOCD_KUBECONFIG="$HUB_KC" \
   ARGOCD_NAMESPACE="$ARGOCD_NS" ARGOCD_DEST_CLUSTER_NAME="$GUEST" \
   GUEST_API_SERVER="$GUEST_INTERNAL_SERVER" ARGOCD_REGISTER_INSECURE=1 \
   "${SCRIPT_DIR}/71-argocd-register-guest.sh"
