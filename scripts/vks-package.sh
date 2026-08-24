@@ -25,6 +25,20 @@ PACKAGE="${2:-${PACKAGE:-}}"
 require_cmd kubectl jq
 [ -s "${KUBECONFIG:-/nonexistent}" ] || die "no kubeconfig at '${KUBECONFIG:-<unset>}'. These are GUEST-cluster packages - point KUBECONFIG at the guest cluster (make vks-cluster-status writes one)."
 
+# WHICH CLUSTER? There is no CLUSTER= argument -- the target is whatever $KUBECONFIG points at, so
+# KUBECONFIG is a SELECTOR and a silent wrong value acts on the wrong cluster. The documented flow
+# makes that reachable rather than theoretical: scenario-1.md:303 and scenario-2.md:148 both tell
+# the operator to `export KUBECONFIG=./secrets/supervisor.kubeconfig` for the Supervisor steps, and
+# nothing un-exports it before a later `make install-vks-package` in the same shell. So SAY which
+# cluster, every time, on both paths. This is a PRINT, not a gate -- it cannot false-block.
+_cluster_id() {
+  local ctx srv
+  ctx="$(kubectl config current-context 2>/dev/null || true)"
+  srv="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)"
+  printf '%s' "${ctx:-<no current-context>} @ ${srv:-<no server in kubeconfig>}"
+}
+log_info "cluster: $(_cluster_id)   [KUBECONFIG=${KUBECONFIG}]"
+
 _versions() { kubectl get packages -A -o json 2>/dev/null \
   | jq -r --arg r "$1" '[.items[]?|select(.spec.refName==$r)|.spec.version]|sort|.[]' 2>/dev/null; }
 
@@ -56,7 +70,7 @@ case "$ACTION" in
     printf '%s\n' "$vers" | grep -qxF "$VER" || die "version '${VER}' is not offered for ${PACKAGE}. Offered:
 $(printf '%s\n' "$vers" | sed 's/^/    /')"
     name="$(printf '%s' "$PACKAGE" | cut -d. -f1)"
-    log_info "installing ${PACKAGE} ${VER} into ${PKG_NS} (PackageInstall '${name}')"
+    log_info "installing ${PACKAGE} ${VER} into ${PKG_NS} (PackageInstall '${name}') on $(_cluster_id)"
 
     # A dedicated SA + cluster-admin binding: a Standard Package installs cluster-scoped objects
     # (CRDs, webhooks, a CNI DaemonSet), so the installer needs them. Named after the package so
@@ -111,9 +125,11 @@ YAML
     name="$(printf '%s' "$PACKAGE" | cut -d. -f1)"
     kubectl -n "$PKG_NS" get pkgi "$name" >/dev/null 2>&1 || { log_info "${PACKAGE} is not installed in ${PKG_NS} - nothing to do"; exit 0; }
     [ "${CONFIRM:-}" = yes ] || die "refusing without CONFIRM=yes.
-  This removes ${PACKAGE} and everything it deployed into this cluster. Re-run:
+  This removes ${PACKAGE} and everything it deployed from:
+      $(_cluster_id)
+  Confirm that is the cluster you mean, then re-run:
       make uninstall-vks-package PACKAGE='${PACKAGE}' CONFIRM=yes"
-    log_warn "uninstalling ${PACKAGE} from this guest cluster"
+    log_warn "uninstalling ${PACKAGE} from $(_cluster_id)"
     kubectl -n "$PKG_NS" delete pkgi "$name" 2>&1 | sed 's/^/    /'
     # Only what WE created: the SA and binding are named after the package.
     kubectl delete clusterrolebinding "${name}-pkg-sa-cluster-admin" --ignore-not-found >/dev/null 2>&1 || true

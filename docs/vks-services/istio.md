@@ -49,6 +49,42 @@ Package deploys CRDs, webhooks and a CNI DaemonSet), and the uninstall removes e
 MEASURED 2026-08-10 on a 9.1 guest cluster: install 20 s, uninstall 11 s, `istio-system` and every
 workload gone afterwards.
 
+## The package does NOT pin istiod's memory — it inherits the upstream 2048Mi (2026-08-24)
+
+Load-bearing if you install Istio the VKS way on best-effort-small workers: **the Standard Package
+hits the same scheduling wall our helm path did.** It exposes `istio.pilot.resources.requests` as a
+tunable and leaves it **`null`**, so the upstream chart default applies.
+
+| Fact | Observed | Confidence |
+|---|---|---|
+| `istio.pilot.resources{,.requests,.limits}` default | **`null`** — the package pins nothing | lab-verified 9.1 [src: cmd="kubectl get package -n vmware-system-tkg istio.kubernetes.vmware.com.1.28.5+vmware.1-vks.1 -o json" out="istio.pilot.resources.requests: default=null (and .resources, .limits — all null)" date=2026-08-24] |
+| What that inherits | `pilot.resources.requests: {cpu: 500m, memory: 2048Mi}` | measured from the package's OWN bundle [src: cmd="crane export projects.packages.broadcom.com/vsphere/supervisor/vks-standard-packages/3.6.0-20260416/vks-standard-packages@sha256:52fba00879bb572dc9f22099415b5c20fb6cb1092dea6511e5b3d3f81fa8ff5d - then tar -x, then sed -n 3114,3116p config/upstream/istiod.yaml" out="requests: / cpu: 500m / memory: 2048Mi" date=2026-08-24] |
+| Do the overlays override it? | **No.** `config/overlay/upstream/istiod-overlay.yaml` wires `values.istio.pilot.resources` through unchanged | measured from the bundle [src: cmd="grep -rn resources config/overlay/upstream/istiod-overlay.yaml" out="only wires values.istio.pilot.resources through; no literal memory/cpu override" date=2026-08-24] |
+| Consequence on best-effort-small | istiod Pending; workers are 2833Mi allocatable and this demo's own workload holds ~874/957Mi, so even perfectly balanced there is 1918Mi free — 130Mi short | lab-verified 9.1 [src: cmd="kubectl describe pod istiod" out="0/3 nodes are available: 1 node(s) had untolerated taint(s), 2 Insufficient memory" date=2026-08-24] |
+
+The bundle is **publicly readable** — no Broadcom credentials were needed to establish any of this:
+`crane export <the bundle ref above> - | tar -x`. That is the cheapest way to answer "what would the
+package actually deploy?" without installing it into a cluster you care about.
+
+**The fix is the same value on both paths.** Our helm path pins it with `ISTIOD_MEMORY_REQUEST`
+(default `768Mi`; measured steady-state RSS on a configured mesh is **43/39/39Mi**). The package path
+needs the equivalent in a data-values file:
+
+```yaml
+# istio-values.yaml  ->  make install-vks-package PACKAGE=istio.kubernetes.vmware.com PKG_VALUES=istio-values.yaml
+istio:
+  pilot:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 768Mi
+```
+
+⚠️ **UNVERIFIED:** that values file has not been applied to a real cluster. The *schema key* is
+confirmed present and `null`-defaulted (above); the *install* through it is not. Settle it by
+installing the package with it on a throwaway guest cluster and reading
+`kubectl -n istio-system get deploy istiod -o jsonpath='{...resources.requests}'`.
+
 ## Lab-verified on 9.1 (2026-08-10)
 
 Installed and uninstalled the package on a real 9.1 guest cluster (VKr v1.32). These rows were

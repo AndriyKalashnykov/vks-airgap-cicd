@@ -16,6 +16,92 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🟠 B467 — `install-vks-package` never named the cluster it changes — NAMING FIXED, wrong-cluster GUARD still open
+
+There is no `CLUSTER=` argument: the target is whatever `$KUBECONFIG` points at
+(`Makefile:561` -> `scripts/vks-package.sh`). `KUBECONFIG` is therefore a **SELECTOR**. The
+override half is already sound — `os.sh:481` snapshot-protects it, so
+`make install-vks-package KUBECONFIG=/path/x` genuinely wins. The defect was that **nothing echoed
+back which cluster it chose**.
+
+**Why it is reachable, not theoretical:** the documented flow hands the operator an exported
+Supervisor kubeconfig and never un-exports it — `scenario-1.md:303` and `scenario-2.md:148` both say
+`export KUBECONFIG=./secrets/supervisor.kubeconfig`. A later `make install-vks-package` in that same
+shell is aimed at the **Supervisor**. Separately, `secrets/` holds **four** guest kubeconfigs
+(measured 2026-08-24) of which only `cicd-gc0824060158` is live, and nothing prunes them.
+
+**DONE (2026-08-24):** `vks-package.sh` prints `context @ api-server [KUBECONFIG=path]` on entry, on
+the install action line, and — twice — on the destructive path, including inside the `CONFIRM=yes`
+refusal so you must read the identity before confirming. It is a PRINT, never a gate, so it cannot
+false-block. Proven live against `cicd-gc0824060158`:
+
+    level=INFO  cluster: cicd-gc0824060158-admin@cicd-gc0824060158 @ https://192.168.101.132:6443   [KUBECONFIG=/tmp/gkc-test/kc]
+    level=FATAL refusing without CONFIRM=yes.
+                  This removes <pkg> and everything it deployed from:
+                      cicd-gc0824060158-admin@cicd-gc0824060158 @ https://192.168.101.132:6443
+
+And degraded (a kubeconfig with no context) prints `<no current-context> @ <no server in kubeconfig>`
+rather than an empty string that reads as "fine".
+
+**STILL OPEN — the wrong-cluster GUARD.** Naming it helps a reader; it does not stop a script. Two
+unanswered questions, and the first is the one that matters:
+
+1. ⚠️ **UNVERIFIED:** does a **Supervisor** kubeconfig pass the `kubectl get packages -A` guard at
+   `vks-package.sh:35`? Not settled: there is no `secrets/supervisor.kubeconfig` on this box, the
+   three cached candidates under `/tmp` are empty, and minting one costs an SSO attempt against a
+   **3-strike permanent lockout** (RULE ZERO-A0). Settle it opportunistically the next time a
+   Supervisor kubeconfig exists: `KUBECONFIG=<supervisor> kubectl get packages -A`. If it returns
+   packages, the guard is decorative and this needs a real discriminator.
+2. What IS the discriminator? Do not guess one. Candidates to measure when (1) is answerable: the
+   presence of `vmware-system-tkg` PackageRepositories vs Supervisor-only CRDs
+   (`virtualmachines.vmoperator.vmware.com`, `clusters.cluster.x-k8s.io`).
+
+**Done when:** (1) is measured, and — if a Supervisor does pass — a discriminator refuses it by
+identity rather than by "some packages were visible".
+
+## 🟠 B466 — `.env` switch: install Istio via the VKS Standard Package instead of helm
+
+Istio is the **only** one of our three platform components with an addon form to switch to. Harbor
+and ArgoCD are **Supervisor Services** (scenario-1.md:6, "installs Harbor and ArgoCD as Supervisor
+Services") — a different family, installed on the Supervisor, with no guest-cluster package
+equivalent. Istio is a guest-cluster **Standard Package**, so on a real lab the mesh a tenant meets
+is normally the package, not ours.
+
+Today `INGRESS_CONTROLLER` has three values: `istio` (we helm-install), `istio-existing` (attach to
+a mesh someone else installed, install nothing), `traefik`. The gap is the middle ground: **install
+it the VKS way, then attach**. The repo already has the generic half —
+`make install-vks-package PACKAGE=istio.kubernetes.vmware.com [PKG_VERSION=] [PKG_VALUES=]`,
+lab-verified 2026-08-10 (install 20 s, uninstall 11 s).
+
+**What is already MEASURED (2026-08-24), so nobody re-derives it:**
+
+| | |
+|---|---|
+| this guest cluster offers | `istio.kubernetes.vmware.com` at **6 versions**, 1.27.1 → 1.28.5 (`+vmware.1-vks.1`) |
+| is it installed? | **no** — the only PackageInstalls are antrea, gateway-api, guest-cluster-auth-service, metrics-server. That is why `istio-preflight` said "NO Istio detected" and rows fell to the helm branch |
+| does the package pin istiod's memory? | **NO.** `istio.pilot.resources{,.requests,.limits}` all default `null`, so it inherits the upstream `{cpu: 500m, memory: 2048Mi}` — read from the package's own bundle, `config/upstream/istiod.yaml:3114-3116`, no overlay overriding it |
+| consequence | **the addon path hits the SAME scheduling wall.** Switching to it does not avoid B-this-fix; it needs the same value via `PKG_VALUES` |
+
+Full evidence + the bundle ref + the data-values snippet: `docs/vks-services/istio.md` §"The package
+does NOT pin istiod's memory".
+
+**Design questions the implementation must answer (do NOT assume):**
+
+1. A fourth `INGRESS_CONTROLLER` value (`istio-package`?) vs a separate `ISTIO_INSTALL_METHOD`
+   (`helm`|`package`) orthogonal to it. The second is probably right — "which mesh" and "how it got
+   there" are different axes, and `istio-existing` already means "not us".
+2. **Air-gap.** Our helm path pulls istio images from OUR Harbor via `global.hub`. The package pulls
+   from Broadcom's registry unless `istio.meshConfig.imagePullSecrets` + a mirrored path are wired.
+   An air-gapped install through the package is UNVERIFIED and is the hard part of this row.
+3. The package version is Broadcom's line (1.27/1.28); ours is 1.30.3. `check-gwapi-istio-alignment`
+   pins gateway-api against the istio minor, so switching methods changes that pairing.
+4. Who owns uninstall — `make uninstall-vks-package` removes the package's own SA/binding, but our
+   routes live in app namespaces.
+
+**Done when:** one `.env` variable selects the method; both methods reach the same
+`make verify-ingress` green; the air-gap question in (2) is answered with a measurement, not a
+sentence; and the memory pin is applied on BOTH paths.
+
 ## 🔴 B462 — a THIRD copy of the Harbor-CA path, on the VM side, that B461's fix cannot protect
 
 `walk-matrix.sh:530` hardcodes `~/vks-airgap-cicd/secrets/harbor-ca.crt` for the walkbox, while the

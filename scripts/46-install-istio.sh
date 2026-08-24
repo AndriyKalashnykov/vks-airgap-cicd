@@ -19,6 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 # shellcheck source=scripts/lib/istio.sh
 . "${SCRIPT_DIR}/lib/istio.sh"
+# shellcheck source=scripts/lib/capacity.sh
 . "${SCRIPT_DIR}/lib/capacity.sh"
 load_env
 
