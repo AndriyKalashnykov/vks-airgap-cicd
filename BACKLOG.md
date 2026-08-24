@@ -16,6 +16,55 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🔵 B472 — OPTIONAL: derive the tenant's required permission set EMPIRICALLY, not from the code 🔵 optional
+
+**Optional by design.** [[B471]] is the finding; this is one *possible* way to make its answer
+empirical instead of derived. Nothing depends on it, and it can be declined without leaving B471
+worse off.
+
+### The measurement that motivates it (2026-08-24, live lab, cut B)
+
+There is **no tenant identity in the lab at all**. The guest cluster kubeconfig
+(`secrets/cicd-gc0824103354.kubeconfig`) is:
+
+    Username   kubernetes-admin
+    Groups     [system:masters system:authenticated]
+    can-i      *.*   []   []   [*]        <- cluster-admin on everything
+
+So every scenario-2 row runs as **cluster-admin**. B471 is therefore not "the matrix fails to test
+the tenant path" but "there is no tenant to test".
+
+### The five axes, DERIVED FROM THE CODE (this is the part that is a hypothesis)
+
+| # | axis | what the scenario-2 path needs | the undecided choice |
+|---|---|---|---|
+| 1 | namespaces | every script creates/labels one (`50-seed-gitea-repos`, `70-configure-argocd`, `99-verify`, `49-psa-check`) | tenant creates their own, or platform pre-creates and grants admin *within* |
+| 2 | **node `allocatable`** | `46-install-istio.sh` + `lib/capacity.sh` read it for the scheduling preflight | grant node read, or make the preflight degrade. **This axis already produced a shipped bug** — the istiod capacity preflight worked for an admin and failed CLOSED for a tenant |
+| 3 | Istio route objects | `47-attach-istio` + `98-verify-ingress` use `Gateway`/`VirtualService` | Gateway-API needs only the tenant's own ns; the classic path needs the mesh admin to expose a selector + TLS secret |
+| 4 | Harbor | `make harbor-robot` needs project-admin | tenant is project-admin, or is handed a pull-only robot and CANNOT self-recover a stale one (see RULE ZERO-B) |
+| 5 | ArgoCD | AppProject **destination** + **repo** grants, plus cluster registration | tenant gets a scoped AppProject, or submits manifests to an admin |
+
+Axes 3 and 5 are **already modelled** — `istio-preflight` and `argocd-preflight` exist to print what
+to REQUEST. Axes 1, 2 and 4 are the undecided ones.
+
+⚠️ **That table is DERIVED, not measured.** It is a hypothesis about what a tenant needs, and this
+repo's record is that derivations get refuted roughly half the time. Do not treat it as the answer.
+
+### The optional probe
+
+Create a **minimal** ServiceAccount in the guest cluster — namespace-admin only, no node read, no
+cluster scope — run the scenario-2 path against it, and record exactly which commands fail and with
+what message. That converts *"a tenant probably needs these five things"* into *"it breaks in these
+N places, here are the errors"*, which is what a matrix row would have to encode anyway.
+
+**Cost/risk:** it WRITES to the lab (an SA + Role + RoleBinding, scoped to one namespace of a guest
+cluster that exists to be destroyed). Reversible, but it is a mutation, so it needs the operator's
+word before running — hence optional, not queued.
+
+**Do NOT skip straight to building a matrix row from the derived table.** That is the failure mode
+B471 already warns about: a row built on a guessed permission model certifies a permission model
+nobody runs. Measure first, or decide the policy first — either is fine, guessing is not.
+
 ## 🔴 B471 — the matrix certifies the scenario-2 DOCUMENT, never the tenant PERMISSION MODEL 🔴 open
 
 **The matrix's own row label says so**, verbatim (`nested-vsphere-lab/scripts/walk-matrix.sh:1063`
