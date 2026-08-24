@@ -1,5 +1,11 @@
 # Recovering a wedged lab reset
 
+> **This is a MAINTAINER doc about OUR lab, and it is not part of any end-user path.**
+> Every command here runs against `nested-vsphere-lab`, the repo we happen to use to conjure a
+> VCF/VKS estate. An end user of this repo has cloned only THIS repo and has none of it — for
+> them the lab is a black box reached entirely through `.env` (see
+> [`scenario-1.md`](scenario-1.md) / [`scenario-2.md`](scenario-2.md)).
+
 What to do when the lab reset (`make -C ~/projects/nested-vsphere-lab walk-reset CONFIRM=yes`)
 refuses or hangs. Every sequence here was **measured on the lab on 2026-08-16**, in the order it actually happened —
 each fix revealed the next blocker, which is why the order matters.
