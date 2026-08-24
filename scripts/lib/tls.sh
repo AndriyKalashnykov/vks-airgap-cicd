@@ -405,9 +405,28 @@ ca_status_report() {
     return 0
   fi
 
-  # The pairs are DERIVED from the env, not enumerated in a list that rots: each is a *_CA_FILE key
-  # and the endpoint key that names what it anchors. Adding a third anchor means adding it here AND
-  # to .env.example, which check-env-coverage already enforces.
+  # THE PAIRS BELOW ARE AN ENUMERATED LIST. They are hand-written, one line each, and they DO rot.
+  # (This comment claimed the opposite until 2026-08-24; that false claim is what made "just add a
+  # third line" look safe. A DERIVED structure would not require you to add a line at all.)
+  # Each line is a *_CA_FILE key plus the endpoint key naming what it anchors, and FIRES only when
+  # BOTH are non-empty in the environment.
+  #
+  # ⚠️ ADDING A PAIR IS NOT A ONE-LINER. A vCenter CA pair was designed and REFUTED 2026-08-24:
+  #   * it would NEVER FIRE -- VCENTER_CA_FILE/VCENTER_HOST are COMMENTED in .env.example, so
+  #     load_env never exports them, and neither entry point (29-ca-status.sh, 24-lab-preflight.sh)
+  #     sources lib/vcenter.sh, whose vcenter_ca_default() is the only thing that sets the var.
+  #     MEASURED: `set -a; . .env.example` leaves both UNSET. A pair that cannot build is decoration.
+  #   * repaired, a third ABSTAINING pair flips "CA-STATUS: ALL-MATCH" to "INCOMPLETE", and BOTH
+  #     scenario docs pin that string as an `Expect:` -- a walk-matrix row would fail.
+  #   * repaired, its `stale` return reaches lab-preflight's exit code, which gates install-all --
+  #     giving a veto to an anchor that flow never uses.
+  # So: to add one you must ALSO source+call its *_ca_default at BOTH entry points (as :52 does for
+  # vks_ca_default), keep it OUT of the blocking path, and extend the B166 wiring gate
+  # (its WIRING arm -- grep that file for `vks_ca_default` -- hardcodes that ONE name and is blind
+  # to a missing sibling; the residual is documented at the arm itself. Cited by ANCHOR TEXT, not a
+  # line number: the commit that first wrote this note shifted its own citations by 13 lines.)
+  # A pair COUNT assertion does NOT discriminate -- it pins the enumeration and passes over a pair
+  # that never builds; :191-196 records that exact mistake already being made once here.
   #
   # THE LABEL IS A HUMAN NAME, NOT THE VARIABLE NAME. This printed "HARBOR_CA_FILE: verifies ..." in
   # its first version, and scenario-1 mentions HARBOR_CA_FILE exactly ZERO times — so the operator
