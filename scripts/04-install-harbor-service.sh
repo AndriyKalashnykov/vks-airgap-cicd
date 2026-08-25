@@ -22,10 +22,18 @@ load_env
 SRC_DIR="${VCF_CLI_SRC_DIR:-$HOME/Downloads/vcf}"
 
 # The service definition and its data-values template are operator-supplied, entitled files.
-DEF="$(find "$SRC_DIR" -maxdepth 1 -name 'supervisor-service-harbor-legacy-*.yml' 2>/dev/null | sort | tail -1)"
-TPL="$(find "$SRC_DIR" -maxdepth 1 -name 'supervisor-service-harbor-data-values-*.yml' 2>/dev/null | sort | tail -1)"
+DEF="$(newest_versioned_file "$SRC_DIR" 'supervisor-service-harbor-legacy-*.yml' || true)"
+TPL="$(newest_versioned_file "$SRC_DIR" 'supervisor-service-harbor-data-values-*.yml' || true)"
 [ -n "$DEF" ] || die "no supervisor-service-harbor-legacy-*.yml in $SRC_DIR (see docs/scenario-1.md Step 0)"
 [ -n "$TPL" ] || die "no supervisor-service-harbor-data-values-*.yml in $SRC_DIR (see docs/scenario-1.md Step 0)"
+# The definition and its values template are chosen by two INDEPENDENT searches, so a directory
+# holding two downloads can pair a 2.14 definition with a 2.9 values file -- a mismatch neither
+# `die` above can see, and one that surfaces as an obscure reconcile error much later.
+_def_v="$(versioned_file_version "$DEF")"; _tpl_v="$(versioned_file_version "$TPL")"
+[ "$_def_v" = "$_tpl_v" ] || die "version MISMATCH between the two operator-supplied Harbor files:
+  definition:    $(basename "$DEF")   (${_def_v:-<none>})
+  data-values:   $(basename "$TPL")   (${_tpl_v:-<none>})
+  They must be the same version. Remove the stale pair from ${SRC_DIR} and re-run."
 log_info "service definition : $(basename "$DEF")"
 log_info "data-values template: $(basename "$TPL")"
 

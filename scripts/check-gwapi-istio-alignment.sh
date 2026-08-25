@@ -95,7 +95,7 @@ if [ -n "${ISTIO_PACKAGE_VERSION:-}" ]; then
       exit 1
     fi
     log_warn "check-gwapi-istio-alignment: the PACKAGE pin ${ISTIO_PACKAGE_VERSION} was NOT checked."
-    log_warn "  fetch failed: ${pkg_url}"
+    log_warn "  could not fetch ${pkg_url}"
     log_warn "  If that URL looks wrong, the PIN is the suspect, not the network: the branch is derived"
     log_warn "  as release-<major>.<minor> from ISTIO_PACKAGE_VERSION, so a malformed pin yields a 404."
     # The OK line MUST carry the caveat here too. A fetch failure is the MOST LIKELY not-checked

@@ -68,11 +68,13 @@ fi
 
 # The two sites must be the SAME code path. A second hand-written sort is the defect this file
 # exists to prevent, and it is what shipped in #989.
-n="$(grep -oE 'sort_by\([[:space:]]*vkey[[:space:]]*\)' "$ROOT"/scripts/vks-package.sh "$ROOT"/scripts/08-install-argocd-service.sh | wc -l | tr -d ' ')"
-if [ "$n" = 3 ]; then
-  ok "all three selection sites use the shared vkey (3 uses)"
+# >= not ==, over ALL scripts: an exact count over two named files false-REDs on a legitimate
+# fourth use (measured) and false-GREENs on a NEW hand-rolled sort in a third file (also measured).
+n="$(grep -roE 'sort_by\([[:space:]]*vkey[[:space:]]*\)' "$ROOT"/scripts --include='*.sh' | wc -l | tr -d ' ')"
+if [ "$n" -ge 3 ]; then
+  ok "the shared vkey is used at $n site(s) across scripts/ (>= the 3 known ones)"
 else
-  bad "all sites use vkey" "found $n uses across vks-package.sh + 08-install-argocd-service.sh; a site was removed, or a new one was written with its own comparison"
+  bad "sites use the shared vkey" "found only $n use(s) of sort_by(vkey) in scripts/; a selection site was removed or rewritten with its own comparison"
 fi
 # Strip COMMENT lines before matching. The product's comments explain at length WHY `sort -V` is
 # absent, so a bare grep for the literal matches the prose and reports the defect it is asserting
@@ -80,9 +82,25 @@ fi
 # HERESTRING, not a pipe: `producer | grep -q` lets grep exit at its first match, the producer takes
 # SIGPIPE, and pipefail turns a FOUND pattern into ABSENT at random. check-grep-q-pipe caught this
 # exact line in the very test written to prove a fix.
-if # `-V` hides in a bundle (-Vr, -rV, -uV, -k1,1V) or wears its long name. MEASURED: the previous
+# `-V` hides in a bundle (-Vr, -rV, -uV, -k1,1V) or wears its long name. MEASURED: the previous
 # pattern caught 3 of 8 realistic spellings; `sort -rV | head -1` is the natural re-introduction.
-grep -qE 'sort([[:space:]]+-[A-Za-z0-9,.]*V|[[:space:]]+--version-sort)\b' <<< "$(sed 's/^[[:space:]]*#.*//' "$ROOT"/scripts/vks-package.sh "$ROOT"/scripts/08-install-argocd-service.sh)"; then
+# Scoped to ALL of scripts/, not two named files: a new hand-rolled `sort -V | tail -1` in a THIRD
+# script was invisible to the two-file form (measured: 15 passed, rc=0 over exactly that defect).
+# TWO exclusions, both semantic, neither an exclusion-to-silence:
+#   * test-*.sh are not the PRODUCT. This file's own control RUNS `sort -V` on purpose, to prove the
+#     shared key deliberately DIFFERS from it on GA-vs-rc -- the "a gate in the tree it scans"
+#     defect, where the honest fix is to scope by meaning, not to blank the file.
+#   * 24-vks-k8s-version.sh is the ONE deliberate product exception: its TKr strings always carry
+#     +vmware, so GNU and toybox were verified byte-identical there (twice, on a real photon:5.0).
+_scan_targets() {   # a glob + case, not `ls | grep`: SC2010, and it is correct for odd filenames
+  local f
+  for f in "$ROOT"/scripts/*.sh; do
+    case "${f##*/}" in test-*.sh|24-vks-k8s-version.sh) continue ;; esac
+    printf '%s\n' "$f"
+  done
+}
+_scan_stripped() { local f; while IFS= read -r f; do sed 's/^[[:space:]]*#.*//' "$f"; done < <(_scan_targets); }
+if grep -qE 'sort([[:space:]]+-[A-Za-z0-9,.]*V|[[:space:]]+--version-sort)\b' <<< "$(_scan_stripped)"; then
   bad "no sort -V in the product CODE" "sort -V is back; it is OS-dependent (toybox != GNU) and reintroduces the divergence"
 else
   ok "no sort -V in the product CODE (OS-dependent, deliberately absent)"

@@ -24,9 +24,13 @@ expect_fetch_fail=0
 ok()  { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
 bad() {
   if [ "$expect_fetch_fail" -eq 0 ] && [ -n "${T:-}" ] && [ -f "$T/out" ] \
-     && grep -q 'fetch failed: https://' "$T/out"; then
+     && grep -q 'could not fetch' "$T/out"; then
     flakes=$((flakes+1))
-    printf '  FLAKE %s\n     the gate could not fetch mid-run — this case measured NOTHING.\n' "$1"
+    # `SKIP: ` at LINE START, not "FLAKE": run-test-set.sh surfaces only /^[[:space:]]*SKIP[:[:space:]]/,
+    # so a bespoke marker is DISCARDED and the runner then prints "0 with skipped arm(s)" over a run
+    # where cases measured nothing -- an actively false statement, and the exact class that runner
+    # exists to prevent.
+    printf '  SKIP: %s — the gate could not fetch mid-run; this case measured NOTHING.\n' "$1"
     printf '     NOT a product failure: the reachability probe covers only the FIRST of ~14 fetches.\n'
     return
   fi
@@ -58,8 +62,8 @@ run() { ( cd "$T" && env -u GWAPI_REQUIRE_FETCH "$@" bash scripts/check-gwapi-is
 # only the FIRST of ~14 fetches; a failure at any later one makes the gate warn-and-continue, an
 # "expects RED" case then sees rc=0, and the message accuses a gate that is fine. Any case that
 # depends on a fetch calls this first.
-fetch_ok() { ! grep -q 'fetch failed: https://' "$T/out"; }
-flaked()   { printf '  FLAKE %s\n     the gate could not fetch mid-run; this case measured NOTHING (not a product failure)\n' "$1"; }
+fetch_ok() { ! grep -q 'could not fetch' "$T/out"; }
+flaked()   { flakes=$((flakes+1)); printf '  SKIP: %s — the gate could not fetch mid-run; this case measured NOTHING (not a product failure)\n' "$1"; }
 said() { grep -qF "$1" "$T/out"; }
 
 # --- the HELM arm: the RED that had never been demonstrated -------------------------------------
@@ -74,7 +78,9 @@ else
 fi
 tree 1.30.3 v1.5.1
 run E=1; rc=$?
-if [ "$rc" -eq 0 ]; then ok "HELM arm green when the pin is right (no false RED)"; else bad "HELM arm green" "rc=$rc"; fi
+if ! fetch_ok; then flaked "HELM arm green when the pin is right"
+elif [ "$rc" -eq 0 ]; then ok "HELM arm green when the pin is right (no false RED)"
+else bad "HELM arm green" "rc=$rc"; fi
 
 # --- the PACKAGE arm ----------------------------------------------------------------------------
 tree 1.30.3 v1.5.1 1.28.5+vmware.1-vks.1
@@ -86,7 +92,9 @@ else
 fi
 tree 1.30.3 v1.5.1 1.30.3+vmware.1-vks.1
 run E=1; rc=$?
-if [ "$rc" -eq 0 ]; then ok "PACKAGE arm green when both pins agree"; else bad "PACKAGE arm green" "rc=$rc"; fi
+if ! fetch_ok; then flaked "PACKAGE arm green when both pins agree"
+elif [ "$rc" -eq 0 ]; then ok "PACKAGE arm green when both pins agree"
+else bad "PACKAGE arm green" "rc=$rc"; fi
 
 # F7: a 200 whose body has NO gateway-api line must FAIL CLOSED, like the helm arm on the same
 # condition. release-1.8/go.mod is a real 200 (~5 KB) with zero sigs.k8s.io/gateway-api lines.
@@ -102,10 +110,18 @@ fi
 tree 1.30.3 v1.5.1 '1.28+vmware.1-vks.1'
 expect_fetch_fail=1   # this case PROVOKES the 404 on purpose; a "fetch failed" here is the subject
 run E=1
-if said 'fetch failed: https://' && said 'the PIN is the suspect'; then
+if said 'could not fetch https://' && said 'the PIN is the suspect'; then
   ok "F8 fetch failure names the URL and the pin"
 else
   bad "F8 message" "a malformed pin reads as a network problem and sends the reader to the wrong suspect"
+fi
+# The OK line MUST carry the caveat here too. This is the MOST LIKELY not-checked path in the wild
+# (a proxy, a rate-limit, a malformed pin), and without this assertion the product fix for it was
+# vacuous: deleting the one-line `gwapi_pkg_unchecked=1` left this file 9/9 green.
+if said 'HELM PATH ONLY'; then
+  ok "F8 the fetch-failure path ALSO caveats its OK line"
+else
+  bad "F8 caveats the OK" "the gate warned that the pin was not checked and then printed an unqualified OK — the reader sees a full pass over a half-run gate"
 fi
 expect_fetch_fail=0
 
@@ -136,7 +152,7 @@ fi
 
 expect_fetch_fail=0
 if [ "$flakes" -gt 0 ]; then
-  printf '\n  PARTIAL: %d case(s) could not be measured (network). %d passed, %d FAILED.\n' "$flakes" "$pass" "$fail"
+  printf '\n  SKIP: %d case(s) could not be measured (network). %d passed, %d FAILED.\n' "$flakes" "$pass" "$fail"
 else
   printf '\n  %d passed, %d FAILED\n' "$pass" "$fail"
 fi

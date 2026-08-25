@@ -2171,3 +2171,25 @@ _VKEY='def vkey:
       ($build | [scan("[0-9]+")] | map(tonumber)),
       $raw ];'
 vkey_jq() { printf '%s' "$_VKEY"; }
+
+# newest_versioned_file <dir> <glob> — the NEWEST operator-supplied file matching <glob>, by VERSION.
+#
+# `find … | sort | tail -1` is LEXICOGRAPHIC. MEASURED over the filenames docs/scenario-1.md:89-91
+# tells the operator to download: it picks argocd `1.2.0` over `1.10.0`, and harbor `v2.9.1` over
+# `v2.14.3`. Dormant only while exactly one version is present -- the moment Broadcom publishes an
+# update beside the old download, the installer silently installs the OLDER service.
+#
+# Prints the path. Prints NOTHING on no match (the caller's own `die` has the actionable message).
+newest_versioned_file() {
+  local dir="$1" glob="$2" files
+  files="$(find "$dir" -maxdepth 1 -name "$glob" 2>/dev/null || true)"
+  [ -n "$files" ] || return 1
+  # Sort by the version embedded in the basename, through the SHARED key, then return the path.
+  printf '%s\n' "$files" | jq -R -s -r "$(vkey_jq)"'
+      [ splits("\n") | select(length > 0) ]
+    | map({ p: ., v: ((. | split("/") | last | capture("(?<v>[0-9][0-9.]*[0-9])").v) // "0") })
+    | sort_by(.v | vkey) | last | .p'
+}
+
+# versioned_file_version <path> — the version embedded in a versioned filename, or empty.
+versioned_file_version() { printf '%s' "${1##*/}" | grep -oE '[0-9][0-9.]*[0-9]' | head -1; }
