@@ -1778,16 +1778,23 @@ gone afterwards.
 
 **TWO BLOCKERS, both already measured — this is not a one-line switch:**
 
-1. **The package does not pin istiod's memory.** It exposes `istio.pilot.resources.requests` as a
-   tunable and leaves it **`null`**, so the upstream chart default `{cpu: 500m, memory: 2048Mi}`
-   applies, and `config/overlay/upstream/istiod-overlay.yaml` does not override it. On
-   `best-effort-small` workers (2833Mi allocatable, this demo already holding ~874Mi) **istiod goes
-   Pending** — the same scheduling wall our helm path hit. Our path solved it with
-   `ISTIOD_MEMORY_REQUEST` (default `768Mi`; measured steady-state RSS **43/39/39Mi**). The package
-   path needs the same value supplied via `PKG_VALUES=<file>`.
-2. **The package's ingress gateway ships OFF.** Turning it on is another `PKG_VALUES` stanza, so
-   "install the package" is not the whole job — the gateway and its LoadBalancer have to come from
-   somewhere, and `46-install-istio.sh` currently helm-installs `istio/gateway` for exactly that.
+1. ~~**The package does not pin istiod's memory.**~~ **BOTH BLOCKERS ARE SOLVED, MEASURED
+   2026-08-25**, and the values file is committed at `k8s/istio/vks-package-values.yaml`. The
+   package's schema **does** pin `requests: {cpu: 500m, memory: 2048Mi}` (this row previously said
+   `null` / "inherits upstream" — wrong; see the correction in `docs/vks-services/istio.md`), and
+   `istiod-overlay.yaml:350` sets `requests:` from the data-values **unconditionally**
+   (`#@overlay/match missing_ok=True`), so an override lands. Rendering the public bundle offline —
+   `ytt -f config/ --data-values-file k8s/istio/vks-package-values.yaml`, no cluster touched — gives
+   **`istiod requests: {cpu: 100m, memory: 768Mi}`, `replicas: 1`**, and the **ingress gateway ON**
+   as a `LoadBalancer` in `istio-ingress` (the same namespace the helm gateway uses).
+2. **A third knob nobody had measured: `pilot.replicas` defaults to `2`** in the package, where helm
+   defaults to 1. So a naive package install wants TWO istiods at 2048Mi each — the package path is
+   not merely *equal* to the helm path's problem, it is **twice as bad**. Pinned to 1 in the values
+   file.
+3. **THE REAL REMAINING COST — a VERSION DOWNGRADE.** Measured on a live 9.1 guest cluster: the
+   package offers **1.28.5**`+vmware.1-vks.1`; our helm path runs **1.30.3**. Switching is a
+   **two-minor downgrade**. That is a genuine tradeoff (VMware-certified build vs newer upstream),
+   not a free swap, and it is the thing to decide on — the memory and gateway objections are gone.
 
 **NOT the same question as `istio-existing`.** CLAUDE.md's "attach, never install" is about a mesh
 the PLATFORM TEAM already runs — `INGRESS_CONTROLLER=istio-existing` + `47-attach-istio.sh`, which
@@ -1799,7 +1806,13 @@ the `global.hub` override (and with it `make verify-gateway-image`, which exists
 helm accepts an unknown `--set` key with rc=0 and silently falls back to the public registry), and
 it makes our Istio install the same shape a VKS operator would use.
 
-**Done when:** `INGRESS_CONTROLLER=istio` installs via `install-vks-package` with a `PKG_VALUES`
-file pinning `istio.pilot.resources.requests` and enabling the ingress gateway; `make
-verify-ingress` is green on a real lab; and `docs/vks-services/istio.md` records which path is the
-default with its measurement.
+**What is left is ONLY the live proof.** Rendering settles that the values reach istiod; it cannot
+show that kapp-controller reconciles, that the LoadBalancer gets an IP, or that traffic routes. A
+live test needs `helm uninstall` of the three releases first (they would fight: two istiods, two
+mutating webhooks), and the gateway gets a **NEW** LB IP, so the `*.vks.local` `/etc/hosts` entries
+must be repointed before `make verify-ingress` means anything.
+
+**Done when:** `INGRESS_CONTROLLER=istio` installs via `install-vks-package` with
+`k8s/istio/vks-package-values.yaml`; `make verify-ingress` is green on a real lab; the 1.28.5-vs-1.30.3
+downgrade is an accepted decision rather than an unnoticed side effect; and `docs/vks-services/istio.md`
+records which path is the default with its measurement.

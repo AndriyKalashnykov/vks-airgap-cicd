@@ -53,14 +53,25 @@ workload gone afterwards.
 
 Load-bearing if you install Istio the VKS way on best-effort-small workers: **the Standard Package
 hits the same scheduling wall our helm path did.** It exposes `istio.pilot.resources.requests` as a
-tunable and leaves it **`null`**, so the upstream chart default applies.
+tunable and **pins it, in its own schema, at 2048Mi**.
+
+⚠️ **CORRECTED 2026-08-25 — this section previously said the package leaves `resources` `null` "so
+the upstream chart default applies". It does not.** `config/schema.yaml` in the package's own bundle
+sets `requests: {cpu: 500m, memory: 2048Mi}` directly. The `null` reading came from the openAPIv3
+view (`kubectl get package -o jsonpath=…valuesSchema`), which shows no default on the `resources`
+NODE because the defaults sit on its LEAVES — so `default=None` there means "this node has no
+default of its own", not "nothing is set below it". The CONSEQUENCE is unchanged (2048Mi does not
+fit); only the mechanism was wrong, and it mattered because "inherits an upstream default" and
+"pins its own" are different things to argue with.
 
 | Fact | Observed | Confidence |
 |---|---|---|
-| `istio.pilot.resources{,.requests,.limits}` default | **`null`** — the package pins nothing | lab-verified 9.1 [src: cmd="kubectl get package -n vmware-system-tkg istio.kubernetes.vmware.com.1.28.5+vmware.1-vks.1 -o json" out="istio.pilot.resources.requests: default=null (and .resources, .limits — all null)" date=2026-08-24] |
-| What that inherits | `pilot.resources.requests: {cpu: 500m, memory: 2048Mi}` | measured from the package's OWN bundle [src: cmd="crane export projects.packages.broadcom.com/vsphere/supervisor/vks-standard-packages/3.6.0-20260416/vks-standard-packages@sha256:52fba00879bb572dc9f22099415b5c20fb6cb1092dea6511e5b3d3f81fa8ff5d - then tar -x, then sed -n 3114,3116p config/upstream/istiod.yaml" out="requests: / cpu: 500m / memory: 2048Mi" date=2026-08-24] |
+| `istio.pilot.resources.requests` default | **`{cpu: 500m, memory: 2048Mi}`** — the package pins it ITSELF, in `config/schema.yaml` | measured 2026-08-25 [src: cmd="crane export <bundle> - \| tar -x; sed -n '138,146p' config/schema.yaml" out="requests: cpu 500m / memory 2048Mi"] |
+| Is it an upstream inherit? | **No** — the package's own schema default. The upstream chart's `{{ template "resources" . }}` is never reached for `discovery` | measured 2026-08-25 [src: cmd="grep -n resources config/upstream/istiod.yaml" out="707/966/1626 template resources, all overlaid"] |
 | Do the overlays override it? | **No.** `config/overlay/upstream/istiod-overlay.yaml` wires `values.istio.pilot.resources` through unchanged | measured from the bundle [src: cmd="grep -rn resources config/overlay/upstream/istiod-overlay.yaml" out="only wires values.istio.pilot.resources through; no literal memory/cpu override" date=2026-08-24] |
 | Consequence on best-effort-small | istiod Pending; workers are 2833Mi allocatable and this demo's own workload holds ~874/957Mi, so even perfectly balanced there is 1918Mi free — 130Mi short | lab-verified 9.1 [src: cmd="kubectl describe pod istiod" out="0/3 nodes are available: 1 node(s) had untolerated taint(s), 2 Insufficient memory" date=2026-08-24] |
+| **Can a data-values file fix it?** | **YES.** Rendering the package offline with our values gives istiod `requests: {cpu: 100m, memory: 768Mi}`, `replicas: 1`, and the ingress gateway ON as a `LoadBalancer` in `istio-ingress`. The overlay sets `requests:` unconditionally | measured 2026-08-25, no cluster touched [src: cmd="ytt -f config/ --data-values-file k8s/istio/vks-package-values.yaml" out="istiod requests cpu 100m memory 768Mi replicas 1"] |
+| Package vs our helm Istio | package offers **1.28.5**`+vmware.1-vks.1`; our helm path runs **1.30.3** — switching is a **two-minor DOWNGRADE** | measured 2026-08-25 on a live 9.1 guest cluster [src: cmd="make list-vks-packages; helm list -A" out="istio 1.28.5+vmware.1-vks.1 vs istiod-1.30.3"] |
 
 The bundle is **publicly readable** — no Broadcom credentials were needed to establish any of this:
 `crane export <the bundle ref above> - | tar -x`. That is the cheapest way to answer "what would the

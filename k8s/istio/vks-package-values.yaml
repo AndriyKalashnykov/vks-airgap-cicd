@@ -1,0 +1,40 @@
+# data-values for the VKS Standard Package `istio.kubernetes.vmware.com`, so the package path is
+# equivalent to what scripts/46-install-istio.sh installs with helm. Pass it as:
+#
+#   KUBECONFIG=<GUEST> make install-vks-package \
+#     PACKAGE=istio.kubernetes.vmware.com PKG_VALUES=k8s/istio/vks-package-values.yaml
+#
+# Every key below is one the PACKAGE ITSELF exposes -- read from its own valuesSchema.openAPIv3 on a
+# live 9.1 guest cluster (istio.kubernetes.vmware.com.1.28.5+vmware.1-vks.1), not from a doc. The
+# package is not missing these knobs; it simply ships them off or unset.
+istio:
+  pilot:
+    # THE PACKAGE LEAVES `resources` NULL, so the upstream chart default applies:
+    # {cpu: 500m, memory: 2048Mi}. MEASURED 2026-08-24 on best-effort-small workers -- istiod Pending
+    # 42m, "2 Insufficient memory". Worker allocatable 2833Mi and this demo's own workload already
+    # holds 874/957Mi, so even perfectly balanced that leaves 1918Mi against a 2048Mi request: 130Mi
+    # short, with NO placement that fits. Our helm path pins 768Mi; measured steady-state istiod RSS
+    # on a configured mesh is 43/39/39Mi, so 768Mi is ~18x headroom, not a squeeze.
+    #
+    # The chart's own values.yaml calls 2048Mi "Resources for a small pilot install" -- a scheduling
+    # RESERVATION for a general small production mesh, not a working-set measurement.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 768Mi
+    # AND THE PACKAGE DEFAULTS `replicas` TO 2 (schema-read, same cluster) -- helm defaults to 1. Two
+    # istiods double the reservation, which is the difference between fitting and not on this sizing.
+    # This is a knob our helm path never had to touch, and it is the reason a naive package install
+    # is WORSE off than the helm one, not merely equal to it.
+    replicas: 1
+  gateways:
+    ingress:
+      # SHIPS OFF (`enabled` default false, schema-read). Turning it on is this one boolean; the
+      # namespace default is already `istio-ingress`, which is where our helm gateway lives, so the
+      # ingress LoadBalancer lands where verify-ingress and the *.vks.local hosts already expect it.
+      enabled: true
+      replicas: 1
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
