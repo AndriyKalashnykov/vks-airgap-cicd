@@ -23,11 +23,19 @@ trap cleanup EXIT
 stub() {
   cleanup; STUB="$(mktemp -d)"; mkdir -p "$STUB/bin"
   printf '%s' "${1:-}" > "$STUB/pods.out"; printf '%s' "${2:-0}" > "$STUB/pods.rc"
+  printf '%s' "${5:-0}" > "$STUB/failfirst"; : > "$STUB/calls"
   printf '%s' "${3:-True}" > "$STUB/prog";  printf '%s' "${4:-10.0.0.9}" > "$STUB/addr"
   cat > "$STUB/bin/kubectl" <<'K'
 #!/usr/bin/env bash
 case "$*" in
-  *'get pods'*jsonpath*) rc=$(cat "$STUBDIR/pods.rc")
+  *'get pods'*jsonpath*)
+     echo x >> "$STUBDIR/calls"; n=$(wc -l < "$STUBDIR/calls"); ff=$(cat "$STUBDIR/failfirst")
+     if [ "$n" -le "$ff" ]; then
+       # a TRANSIENT local/api error -- NOT Forbidden. This is the realistic trigger for state 2,
+       # and the old test only ever emitted Forbidden, pinning the RBAC flavour and never this one.
+       echo 'Error from server: etcdserver: request timed out' >&2; exit 1
+     fi
+     rc=$(cat "$STUBDIR/pods.rc")
      [ "$rc" -ne 0 ] && { echo 'Error from server (Forbidden): pods is forbidden' >&2; exit "$rc"; }
      cat "$STUBDIR/pods.out"; exit 0 ;;
   *'get gateway'*Programmed*) cat "$STUBDIR/prog"; exit 0 ;;
@@ -42,7 +50,7 @@ K
 call() {
   local fn="$1" out rc=0
   out="$(STUBDIR="$STUB" PATH="$STUB/bin:$PATH" bash -c "
-      set +u
+      set -uo pipefail
       . '$ROOT/scripts/lib/os.sh' >/dev/null 2>&1
       . '$ROOT/scripts/lib/istio.sh' >/dev/null 2>&1
       ISTIO_GWAPI_NAMESPACE=vks-ingress ISTIO_GATEWAY_NAME=vks-uis
@@ -84,14 +92,27 @@ fi
 if grep -q 'not Ready' "$STUB/err"; then ok "...and the diagnosis names the data plane"; else bad "diagnoses the proxy" "stderr had no proxy diagnosis"; fi
 if grep -q 'endpoints istiod' "$STUB/err"; then ok "...and points at istiod's ENDPOINTS, not just its pod"; else bad "names the endpoints check" "stderr: $(tail -3 "$STUB/err" | tr '\n' ' ')"; fi
 
+# UNREADABLE FOR THE WHOLE BUDGET -> the tenant concession. Asserting the address ALONE was
+# VACUOUS: unfixed main returns the address unconditionally, for an entirely different reason, so
+# that case could not tell fixed from unfixed. The address AND the boundary warning together can.
 stub '' 1 True 10.0.0.9
 r="$(call istio_wait_gwapi_address)"
-if [ "${r%%|*}" = 0 ] && [ "${r#*|}" = 10.0.0.9 ]; then
-  ok "UNKNOWN readiness -> returns the address (never false-block a tenant) "
+if [ "${r%%|*}" = 0 ] && [ "${r#*|}" = 10.0.0.9 ] && grep -q 'UNREADABLE for the entire' "$STUB/err"; then
+  ok "unreadable for the WHOLE budget -> address + a boundary warning (never false-block a tenant)"
 else
-  bad "unknown degrades open" "got '$r' — a tenant who cannot read the namespace must not be blocked"
+  bad "unknown degrades open at the boundary" "got '$r'; stderr had $(grep -c 'UNREADABLE for the entire' "$STUB/err") boundary warning(s) — a tenant who cannot read the namespace must not be blocked, but it must not read as a pass either"
 fi
-if grep -q 'UNKNOWN' "$STUB/err"; then ok "...loudly"; else bad "unknown is loud" "no UNKNOWN on stderr"; fi
+
+# THE HIGH FROM ROUND 4: ONE transient error must NOT disable the guard. Before this fix, state 2
+# RETURNED immediately, so a single etcd timeout in a 60-poll budget bypassed the whole check over a
+# permanently crashlooping proxy that the very next poll would have caught.
+stub 'vks-uis-istio-abc=False'$'\n' 0 True 10.0.0.9 1
+r="$(call istio_wait_gwapi_address)"
+if [ "${r%%|*}" != 0 ]; then
+  ok "ONE transient error then a crashlooping proxy -> still FAILS (round 4 HIGH)"
+else
+  bad "one transient error must not bypass the guard" "returned rc=0 and '${r#*|}' — a single unreadable poll disabled the guard over the exact state it exists to catch"
+fi
 
 printf '\n  %d passed, %d FAILED\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

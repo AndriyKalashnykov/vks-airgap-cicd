@@ -429,7 +429,11 @@ istio_gwapi_proxy_ready() {
   fi
   rm -f "$err"
   [ -n "$out" ] || return 1                       # not provisioned YET -- keep polling
-  printf '%s' "$out" | grep -q '=True$' && return 0
+  # HERESTRING, not `printf | grep -q`: grep -q exits at its first match, printf takes SIGPIPE, and
+  # pipefail turns a READY proxy into "not Ready" -- a healthy install would then poll the full 300s
+  # and fail with a FALSE diagnosis. Measured as a gradient from ~31 KB of pod list (0/200 at 12 KB,
+  # 193/200 at 50 KB); a real Gateway has 1-3 pods, so it is unreachable today. The fix is free.
+  grep -q '=True$' <<< "$out" && return 0
   return 1
 }
 
@@ -462,6 +466,7 @@ istio_diagnose_proxy() {
 # ---------------------------------------------------------------------------
 istio_wait_gwapi_address() {
   local timeout="${READY_TIMEOUT_SECONDS:-300}" interval="${POLL_INTERVAL_SECONDS:-5}" elapsed=0 prog addr
+  local _pr=0 _unknown_seen=0 _definitive_seen=0
   log_info "waiting for Istio to program Gateway ${ISTIO_GWAPI_NAMESPACE}/${ISTIO_GATEWAY_NAME} (timeout ${timeout}s)"
   while :; do
     prog="$(kubectl -n "$ISTIO_GWAPI_NAMESPACE" get gateway "$ISTIO_GATEWAY_NAME" \
@@ -470,12 +475,21 @@ istio_wait_gwapi_address() {
       -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true)"
     if [ "$prog" = "True" ] && [ -n "$addr" ]; then
       # Programmed + address is NOT the end result -- see istio_gwapi_proxy_ready's header.
-      istio_gwapi_proxy_ready; _pr=$?
+      # `|| _pr=$?`, not a bare call then `$?`: a bare failing command is subject to the CALLER's
+      # errexit. Today the sole caller is `LB_IP="$(...)" || die`, which suspends it -- but the code
+      # this replaced was an `A && B` list, which is errexit-EXEMPT, so this is a NEW sensitivity.
+      _pr=0; istio_gwapi_proxy_ready || _pr=$?
       case "$_pr" in
         0) printf '%s' "$addr"; return 0 ;;
-        2) log_warn "proxy readiness UNKNOWN (could not ask) — accepting the address WITHOUT that check"
-           printf '%s' "$addr"; return 0 ;;
-        *) : ;;   # provisioned but not Ready -> keep polling until the timeout below
+        2) # COULD NOT ASK. Do NOT return here. Returning on the FIRST unreadable poll makes ONE
+           # ordinary transient error -- an etcd timeout, a failed mktemp -- disable this guard
+           # entirely: measured, 1 bad poll out of 60 (1.7% of the budget) bypassed it over a
+           # permanently crashlooping proxy that the very next poll would have caught. RBAC, the
+           # case this state exists for, is the LEAST likely trigger, since WE create this
+           # namespace. So remember it and keep polling; the tenant concession is honoured at the
+           # TIMEOUT boundary instead, which requires the WHOLE budget to be unreadable.
+           _unknown_seen=1 ;;
+        *) _definitive_seen=1 ;;   # a REAL "not Ready" answer -> keep polling until the timeout
       esac
     fi
     elapsed=$(( elapsed + interval ))
@@ -484,7 +498,16 @@ istio_wait_gwapi_address() {
       log_error "  kubectl -n ${ISTIO_GWAPI_NAMESPACE} describe gateway ${ISTIO_GATEWAY_NAME}"
       log_error "  Istio provisions the data plane itself — check what it created:"
       kubectl -n "$ISTIO_GWAPI_NAMESPACE" get deploy,svc,pods -l "gateway.networking.k8s.io/gateway-name=${ISTIO_GATEWAY_NAME}" 2>&1 | sed 's/^/      /' >&2 || true
-      if [ "$prog" = "True" ] && [ -n "$addr" ]; then
+      if [ "$prog" = "True" ] && [ -n "$addr" ] && [ "$_unknown_seen" = 1 ] && [ "$_definitive_seen" = 0 ]; then
+        # NEVER ONCE got a readable answer in the whole budget => genuinely COULD NOT ASK. Both
+        # conditions matter: `_unknown_seen` alone would ACCEPT the address whenever a single
+        # transient error happened to occur alongside a definitively-crashlooping proxy -- i.e. it
+        # would re-open the fail-open in the exact B477 state. This is the tenant concession, and it
+        # now costs the full timeout rather than one bad poll.
+        log_warn "proxy readiness was UNREADABLE for the entire ${timeout}s — accepting the address"
+        log_warn "  WITHOUT that check. This is not a pass: nothing here verified the data plane."
+        printf '%s' "$addr"; return 0
+      elif [ "$prog" = "True" ] && [ -n "$addr" ]; then
         # Programmed WITH an address but we still timed out => the proxy never went Ready.
         istio_diagnose_proxy
       elif [ "$prog" = "True" ] || kubectl -n "$ISTIO_GWAPI_NAMESPACE" get svc "${ISTIO_GATEWAY_NAME}-${ISTIO_GATEWAY_CLASS:-istio}" >/dev/null 2>&1; then
