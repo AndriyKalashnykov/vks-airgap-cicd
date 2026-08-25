@@ -66,6 +66,38 @@ while read -r a; do [ -n "$a" ] || continue; want=$((want+1))
   grep -qF "\`${a}\`" "$DOC" || { log_error "  ${a}: in the app registry but MISSING from the walkthrough table"; fail=1; }
 done < <(app_names)
 
+# ---- second assertion: a GENERIC instruction must not name a CONCRETE app --------------------
+# The rest of the walkthrough is written with `<app>` placeholders so all six readers can follow it.
+# One cell of the Step-3 TaskRun table said "writes the new tag back into `javawebapp-deploy`" while
+# its three siblings said `<app>` — so five of six readers were told the wrong repo. Nothing could
+# see it: check-app-hardcodes deliberately excludes docs/ (this repo's policy is that prose MAY name
+# an instance), and the Step-2 table above legitimately names all six.
+#
+# So the rule is POSITIONAL, not lexical: an app name is allowed ONLY in a Step-2 table row (a line
+# whose FIRST cell is that app) or on the one line that deliberately introduces the example. Every
+# other occurrence is a placeholder someone left concrete.
+#
+# MEASURED on the healthy doc: 7 occurrences, 7 allowed -> false-RED 0. RED on demand: put
+# `javawebapp-deploy` back into the deploy-update row and this fires.
+EXAMPLE_LINE='The examples walk'
+stray=0
+occ=0
+while IFS= read -r line; do
+  case "$line" in *"$EXAMPLE_LINE"*) continue ;; esac
+  while read -r a; do
+    [ -n "$a" ] || continue
+    case "$line" in *"$a"*) ;; *) continue ;; esac
+    occ=$((occ+1))
+    # allowed: a table row whose FIRST cell is this app (leading spaces permitted)
+    case "$line" in *"| \`${a}\` |"*) continue ;; esac
+    log_error "  a GENERIC instruction names the concrete app '${a}':"
+    log_error "    ${line}"
+    log_error "    use the <app> placeholder — five of six readers follow a different app"
+    stray=$((stray+1)); fail=1
+  done < <(app_names)
+done < "$DOC"
+log_info "check-doc-greeting-paths: ${occ} app-name occurrence(s) outside the example line, ${stray} stray"
+
 log_info "check-doc-greeting-paths: ${n} table row(s) checked against ${want} registered app(s)"
 [ "$n" -eq "$want" ] || { log_error "  row count ${n} != app count ${want} — the table and the registry disagree"; fail=1; }
 if [ "$fail" -eq 0 ]; then echo "check-doc-greeting-paths: OK"; else echo "check-doc-greeting-paths: FAILED"; exit 1; fi
