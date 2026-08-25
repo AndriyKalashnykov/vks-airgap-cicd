@@ -25,6 +25,7 @@ stub() {
   printf '%s' "${1:-}" > "$STUB/pods.out"; printf '%s' "${2:-0}" > "$STUB/pods.rc"
   printf '%s' "${5:-0}" > "$STUB/failfirst"; : > "$STUB/calls"
   printf "%s" "${6:-gateway.networking.k8s.io/gateway-name=vks-uis}" > "$STUB/selector"
+  printf '%s' "${7:-0}" > "$STUB/nosel"
   printf '%s' "${3:-True}" > "$STUB/prog";  printf '%s' "${4:-10.0.0.9}" > "$STUB/addr"
   cat > "$STUB/bin/kubectl" <<'K'
 #!/usr/bin/env bash
@@ -57,7 +58,10 @@ case "$*" in
   *'get svc'*'{.spec.type}'*)          echo LoadBalancer; exit 0 ;;
   *'get svc'*'loadBalancer.ingress'*ip*) cat "$STUBDIR/addr"; exit 0 ;;
   *'get svc'*hostname*)                exit 0 ;;
-  *'get svc'*'-o json'*)               printf '{"spec":{"selector":{"istio":"ingressgateway","app":"istio-ingressgateway"}}}'; exit 0 ;;
+  *'get svc'*'-o json'*)
+     if [ "$(cat "$STUBDIR/nosel")" = 1 ]; then printf '{"spec":{}}'          # a Service with NO selector: legal
+     else printf '{"spec":{"selector":{"istio":"ingressgateway","app":"istio-ingressgateway"}}}'; fi
+     exit 0 ;;
   *'get gateway'*Programmed*) cat "$STUBDIR/prog"; exit 0 ;;
   *'get gateway'*addresses*)  cat "$STUBDIR/addr"; exit 0 ;;
   *) exit 0 ;;
@@ -177,6 +181,23 @@ if grep -q 'was assigned, but the gateway proxy never became Ready' "$STUB/err";
   ok "...and it does NOT misdiagnose an assigned address as a stuck LoadBalancer"
 else
   bad "classic diagnosis names the right cause" "it fell through to the pending-LB diagnosis, which assumes the address never arrived — the mirror image of the wrong symptom guide this PR corrects"
+fi
+
+# THE ACTUAL FAIL-OPEN, at the CALLER's boundary. Testing istio_proxy_ready's rc in isolation is not
+# enough: the defect was that rc 2 routed into the tenant concession, which PUBLISHES the address
+# after the full timeout. Proven necessary by mutation -- routing selector-unknown back into
+# _unknown_seen left every other case GREEN.
+stub 'istio-ingressgateway-xyz=False'$'\n' 0 True 10.0.0.9 0 'istio=ingressgateway,app=istio-ingressgateway' 1
+r="$(call istio_wait_lb_ip)"
+if [ "${r%%|*}" != 0 ] && [ -z "${r#*|}" ]; then
+  ok "a Service with NO selector -> FAILS CLOSED, publishes nothing"
+else
+  bad "underivable selector fails closed" "got '$r' — an underivable selector is a DEFECT (no .spec.selector, or jq missing), not the tenant-RBAC case the concession exists for. Publishing here is the original fail-open, merely delayed by the timeout."
+fi
+if grep -q 'DEFECT here, not a permissions limit' "$STUB/err"; then
+  ok "...and says it is a defect, not a permissions limit"
+else
+  bad "names the cause" "the message must not read as an RBAC concession — that is what sent this down the publishing path"
 fi
 
 printf '\n  %d passed, %d FAILED\n' "$pass" "$fail"
