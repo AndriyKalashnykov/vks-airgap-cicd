@@ -24,12 +24,19 @@ stub() {
   cleanup; STUB="$(mktemp -d)"; mkdir -p "$STUB/bin"
   printf '%s' "${1:-}" > "$STUB/pods.out"; printf '%s' "${2:-0}" > "$STUB/pods.rc"
   printf '%s' "${5:-0}" > "$STUB/failfirst"; : > "$STUB/calls"
+  printf '%s' "${6:-gateway.networking.k8s.io/gateway-name=}" > "$STUB/selector"
   printf '%s' "${3:-True}" > "$STUB/prog";  printf '%s' "${4:-10.0.0.9}" > "$STUB/addr"
   cat > "$STUB/bin/kubectl" <<'K'
 #!/usr/bin/env bash
 case "$*" in
   *'get pods'*jsonpath*)
      echo x >> "$STUBDIR/calls"; n=$(wc -l < "$STUBDIR/calls"); ff=$(cat "$STUBDIR/failfirst")
+     # The stub HONOURS the selector. Without this it returned the same pods for ANY selector, so a
+     # copy-pasted gateway-name selector on the classic path passed VACUOUSLY -- proven by mutation:
+     # the case went GREEN over exactly the defect the adversary warned about. An empty set is what
+     # a wrong selector really produces, and it must read as "not Ready", never as Ready.
+     want="$(cat "$STUBDIR/selector")"
+     case "$*" in *"$want"*) : ;; *) exit 0 ;; esac   # wrong selector -> NO pods, rc=0
      if [ "$n" -le "$ff" ]; then
        # a TRANSIENT local/api error -- NOT Forbidden. This is the realistic trigger for state 2,
        # and the old test only ever emitted Forbidden, pinning the RBAC flavour and never this one.
@@ -128,7 +135,7 @@ fi
 # the one whose own mechanism produced B477. A copy-paste would have been worse than nothing: the
 # classic proxy carries the SERVICE's selector, not the gateway-name label, so a copied selector
 # matches NOTHING and the check passes vacuously (state 1 forever, or a false Ready on an empty set).
-stub 'istio-ingressgateway-xyz=True'$'\n' 0 True 10.0.0.9
+stub 'istio-ingressgateway-xyz=True'$'\n' 0 True 10.0.0.9 0 'istio=ingressgateway'
 r="$(call istio_wait_lb_ip)"
 if [ "${r%%|*}" = 0 ] && [ "${r#*|}" = 10.0.0.9 ]; then
   ok "CLASSIC: LB address + a Ready proxy -> returns the address"
@@ -136,7 +143,7 @@ else
   bad "classic healthy path" "got '$r' — a healthy classic install must not be blocked (and this is what a copy-pasted gateway-name selector would break)"
 fi
 
-stub 'istio-ingressgateway-xyz=False'$'\n' 0 True 10.0.0.9
+stub 'istio-ingressgateway-xyz=False'$'\n' 0 True 10.0.0.9 0 'istio=ingressgateway'
 r="$(call istio_wait_lb_ip)"
 if [ "${r%%|*}" != 0 ]; then
   ok "CLASSIC: LB address + a CRASHLOOPING proxy -> FAILS (the package path's own fail-open)"
