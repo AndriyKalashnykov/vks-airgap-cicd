@@ -401,7 +401,7 @@ So a driver-supplied guest kubeconfig IS the documented tenant path. This repo's
 of the SUPERVISOR and an admin of their OWN guest cluster.
 
 **Of the 36 make targets scenario-2 names, exactly 3 need a permission a tenant lacks** — and the
-document already flags each: `fetch-argocd-kubeconfig` (`:518`, declared optional), 
+document already flags each: `fetch-argocd-kubeconfig` (`:518`, declared optional),
 `argocd-register-guest` (`:828`, "**they** run..."), `harbor-admin-password` (`:808`, whose own
 Expect line says it REFUSES a robot account). Nothing in the `install-all` chain is Supervisor-side.
 
