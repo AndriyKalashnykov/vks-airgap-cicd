@@ -416,15 +416,15 @@ app_namespaces_flat() { app_names | tr '\n' ' '; }
 #
 # THREE STATES, never two: 0 = a Ready proxy pod; 1 = provisioned but not Ready; 2 = COULD NOT ASK.
 # "Cannot ask" is not a verdict -- 48-istio-preflight.sh:153-157 documents that exact mistake.
-istio_gwapi_proxy_ready() {
-  local sel="gateway.networking.k8s.io/gateway-name=${ISTIO_GATEWAY_NAME}" out err rc=0
+istio_proxy_ready() {   # <namespace> <label-selector>
+  local ns="$1" sel="$2" out err rc=0
   err="$(mktemp)"
   # stderr to its OWN file, never 2>&1: merging makes the capture non-empty and inverts the
   # emptiness test below (the reason k_can_i/classify_kube_failure give in os.sh).
-  out="$(kubectl -n "$ISTIO_GWAPI_NAMESPACE" get pods -l "$sel" \
+  out="$(kubectl -n "$ns" get pods -l "$sel" \
          -o jsonpath='{range .items[*]}{.metadata.name}{"="}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>"$err")" || rc=$?
   if [ "$rc" -ne 0 ]; then
-    log_warn "could not read the provisioned proxy's pods in ${ISTIO_GWAPI_NAMESPACE}: $(head -1 "$err")"
+    log_warn "could not read the gateway proxy's pods in ${ns}: $(head -1 "$err")"
     rm -f "$err"; return 2
   fi
   rm -f "$err"
@@ -437,20 +437,28 @@ istio_gwapi_proxy_ready() {
   return 1
 }
 
+# Back-compat wrapper for the gateway-api path, which selects by Gateway name.
+istio_gwapi_proxy_ready() {
+  istio_proxy_ready "$ISTIO_GWAPI_NAMESPACE" "gateway.networking.k8s.io/gateway-name=${ISTIO_GATEWAY_NAME}"
+}
+
 # istio_diagnose_proxy — print WHY the provisioned proxy is not serving. stderr only: the caller's
 # STDOUT is its return value (the Gateway address), so a stray printf here would corrupt it.
 istio_diagnose_proxy() {
-  local sel="gateway.networking.k8s.io/gateway-name=${ISTIO_GATEWAY_NAME}" pod reason
+  istio_diagnose_proxy_sel "$ISTIO_GWAPI_NAMESPACE" "gateway.networking.k8s.io/gateway-name=${ISTIO_GATEWAY_NAME}"
+}
+istio_diagnose_proxy_sel() {   # <namespace> <label-selector>
+  local ns="$1" sel="$2" pod reason
   log_error "  Istio PROGRAMMED the Gateway and published an address, but the proxy it provisioned"
   log_error "  is not Ready — so the address answers nothing. This is the data plane, not the config."
-  kubectl -n "$ISTIO_GWAPI_NAMESPACE" get pods -l "$sel" 2>&1 | sed 's/^/      /' >&2 || true
-  pod="$(kubectl -n "$ISTIO_GWAPI_NAMESPACE" get pods -l "$sel" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  kubectl -n "$ns" get pods -l "$sel" 2>&1 | sed 's/^/      /' >&2 || true
+  pod="$(kubectl -n "$ns" get pods -l "$sel" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
   if [ -n "$pod" ]; then
-    reason="$(kubectl -n "$ISTIO_GWAPI_NAMESPACE" get pod "$pod" \
+    reason="$(kubectl -n "$ns" get pod "$pod" \
       -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}{" "}{.status.containerStatuses[0].lastState.terminated.reason}' 2>/dev/null || true)"
     log_error "      reason: ${reason:-<none>}"
     log_error "      last log line:"
-    kubectl -n "$ISTIO_GWAPI_NAMESPACE" logs "$pod" --tail=3 2>&1 | sed 's/^/        /' >&2 || true
+    kubectl -n "$ns" logs "$pod" --tail=3 2>&1 | sed 's/^/        /' >&2 || true
     log_error "  If the log says 'failed to sign CSR' / 'connect: connection refused' to :15012, the"
     log_error "  proxy cannot reach istiod's CA. Check istiod has ENDPOINTS, not merely that it runs:"
     log_error "      kubectl -n <istio-ns> get endpoints istiod        # <none> means its SELECTOR matches no pod"
@@ -607,6 +615,7 @@ EOF
 # ---------------------------------------------------------------------------
 istio_wait_lb_ip() {
   local timeout="${READY_TIMEOUT_SECONDS:-300}" interval="${POLL_INTERVAL_SECONDS:-5}" elapsed=0 svc_type ip
+  local _pr=0 _unknown_seen=0 _definitive_seen=0 _svc_sel
   svc_type="$(kubectl -n "$ISTIO_GATEWAY_NAMESPACE" get svc "$ISTIO_GATEWAY_SERVICE" -o jsonpath='{.spec.type}' 2>/dev/null || true)"
   if [ "$svc_type" != "LoadBalancer" ]; then
     log_error "gateway Service ${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_SERVICE} is type '${svc_type}', not LoadBalancer —"
@@ -615,15 +624,43 @@ istio_wait_lb_ip() {
     log_error "  (e.g. to a NodePort address or an upstream LB that fronts it)."
     return 1
   fi
+  # The Service's OWN selector, as k=v pairs. If it is unreadable we fall back to a pods check that
+  # cannot narrow -- so readiness reports state 2 (could not ask), never a false Ready.
+  _svc_sel="$(kubectl -n "$ISTIO_GATEWAY_NAMESPACE" get svc "$ISTIO_GATEWAY_SERVICE" -o json 2>/dev/null \
+    | jq -r '(.spec.selector // {}) | to_entries | map("\(.key)=\(.value)") | join(",")' 2>/dev/null || true)"
   log_info "waiting for the ingress-gateway LoadBalancer address (timeout ${timeout}s)"
   while :; do
     ip="$(kubectl -n "$ISTIO_GATEWAY_NAMESPACE" get svc "$ISTIO_GATEWAY_SERVICE" \
       -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
     [ -z "$ip" ] && ip="$(kubectl -n "$ISTIO_GATEWAY_NAMESPACE" get svc "$ISTIO_GATEWAY_SERVICE" \
       -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"
-    [ -n "$ip" ] && { printf '%s' "$ip"; return 0; }
+    if [ -n "$ip" ]; then
+      # An assigned LoadBalancer address is NOT the end result either -- same fail-open as the
+      # gateway-api path (B477). This matters MOST here: the two callers are the CLASSIC attach
+      # branch and 43-install-istio-package.sh, and the package/kapp path is the one whose own
+      # mechanism produced the incident. Selector is the SERVICE's own, not the gateway-name label
+      # the gwapi path uses -- a copy-paste would have selected nothing and passed vacuously.
+      _pr=0; istio_proxy_ready "$ISTIO_GATEWAY_NAMESPACE" "$_svc_sel" || _pr=$?
+      case "$_pr" in
+        0) printf '%s' "$ip"; return 0 ;;
+        2) _unknown_seen=1 ;;          # keep polling; concede only at the boundary
+        *) _definitive_seen=1 ;;
+      esac
+    fi
     elapsed=$(( elapsed + interval ))
     if [ "$elapsed" -ge "$timeout" ]; then
+      if [ -n "$ip" ] && [ "$_unknown_seen" = 1 ] && [ "$_definitive_seen" = 0 ]; then
+        log_warn "gateway proxy readiness was UNREADABLE for the entire ${timeout}s — accepting the"
+        log_warn "  address WITHOUT that check. This is not a pass: nothing verified the data plane."
+        printf '%s' "$ip"; return 0
+      fi
+      if [ -n "$ip" ]; then
+        # The address IS assigned, so this is NOT a stuck LoadBalancer -- diagnosing it as one would
+        # name the wrong cause (the mirror-image defect of the symptom guide this PR also corrects).
+        log_error "the LoadBalancer address ${ip} was assigned, but the gateway proxy never became Ready"
+        istio_diagnose_proxy_sel "$ISTIO_GATEWAY_NAMESPACE" "$_svc_sel"
+        return 1
+      fi
       log_error "no LoadBalancer address on ${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_SERVICE} within ${timeout}s"
       istio_diagnose_pending_lb "$ISTIO_GATEWAY_NAMESPACE" "$ISTIO_GATEWAY_SERVICE"
       return 1

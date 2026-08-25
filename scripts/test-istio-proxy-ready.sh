@@ -38,6 +38,13 @@ case "$*" in
      rc=$(cat "$STUBDIR/pods.rc")
      [ "$rc" -ne 0 ] && { echo 'Error from server (Forbidden): pods is forbidden' >&2; exit "$rc"; }
      cat "$STUBDIR/pods.out"; exit 0 ;;
+  # ORDER MATTERS: `-o jsonpath=` STARTS WITH `-o json`, so the plain-JSON pattern must come LAST
+  # or it swallows every jsonpath query. It did, and the test caught it as a FAIL rather than a
+  # silent pass -- which is the only reason this stub is trustworthy.
+  *'get svc'*'{.spec.type}'*)          echo LoadBalancer; exit 0 ;;
+  *'get svc'*'loadBalancer.ingress'*ip*) cat "$STUBDIR/addr"; exit 0 ;;
+  *'get svc'*hostname*)                exit 0 ;;
+  *'get svc'*'-o json'*)               printf '{"spec":{"selector":{"istio":"ingressgateway","app":"istio-ingressgateway"}}}'; exit 0 ;;
   *'get gateway'*Programmed*) cat "$STUBDIR/prog"; exit 0 ;;
   *'get gateway'*addresses*)  cat "$STUBDIR/addr"; exit 0 ;;
   *) exit 0 ;;
@@ -54,6 +61,7 @@ call() {
       . '$ROOT/scripts/lib/os.sh' >/dev/null 2>&1
       . '$ROOT/scripts/lib/istio.sh' >/dev/null 2>&1
       ISTIO_GWAPI_NAMESPACE=vks-ingress ISTIO_GATEWAY_NAME=vks-uis
+      ISTIO_GATEWAY_NAMESPACE=istio-ingress ISTIO_GATEWAY_SERVICE=istio-ingressgateway
       READY_TIMEOUT_SECONDS=2 POLL_INTERVAL_SECONDS=1
       $fn" 2>"$STUB/err")" || rc=$?
   printf '%s|%s' "$rc" "$out"
@@ -112,6 +120,33 @@ if [ "${r%%|*}" != 0 ]; then
   ok "ONE transient error then a crashlooping proxy -> still FAILS (round 4 HIGH)"
 else
   bad "one transient error must not bypass the guard" "returned rc=0 and '${r#*|}' — a single unreadable poll disabled the guard over the exact state it exists to catch"
+fi
+
+# --- the CLASSIC / PACKAGE path, which publishes through istio_wait_lb_ip -------------------------
+# Round 4: the guard closed ONE of two branches of the same case statement. The two left open were
+# 47-attach-istio.sh's CLASSIC branch and 43-install-istio-package.sh -- and the package/kapp path is
+# the one whose own mechanism produced B477. A copy-paste would have been worse than nothing: the
+# classic proxy carries the SERVICE's selector, not the gateway-name label, so a copied selector
+# matches NOTHING and the check passes vacuously (state 1 forever, or a false Ready on an empty set).
+stub 'istio-ingressgateway-xyz=True'$'\n' 0 True 10.0.0.9
+r="$(call istio_wait_lb_ip)"
+if [ "${r%%|*}" = 0 ] && [ "${r#*|}" = 10.0.0.9 ]; then
+  ok "CLASSIC: LB address + a Ready proxy -> returns the address"
+else
+  bad "classic healthy path" "got '$r' — a healthy classic install must not be blocked (and this is what a copy-pasted gateway-name selector would break)"
+fi
+
+stub 'istio-ingressgateway-xyz=False'$'\n' 0 True 10.0.0.9
+r="$(call istio_wait_lb_ip)"
+if [ "${r%%|*}" != 0 ]; then
+  ok "CLASSIC: LB address + a CRASHLOOPING proxy -> FAILS (the package path's own fail-open)"
+else
+  bad "classic guard" "returned rc=0 and '${r#*|}' — the classic and PACKAGE paths still publish a dead address"
+fi
+if grep -q 'was assigned, but the gateway proxy never became Ready' "$STUB/err"; then
+  ok "...and it does NOT misdiagnose an assigned address as a stuck LoadBalancer"
+else
+  bad "classic diagnosis names the right cause" "it fell through to the pending-LB diagnosis, which assumes the address never arrived — the mirror image of the wrong symptom guide this PR corrects"
 fi
 
 printf '\n  %d passed, %d FAILED\n' "$pass" "$fail"
