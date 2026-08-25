@@ -168,7 +168,7 @@ set -a; . ./.env; set +a
 </details>
 
 You need **cluster-admin** on the workload cluster either way: the flow creates `gitea`, `ci`, and one
-namespace per app in `apps/registry.tsv` — today `javawebapp` + `gowebapp` — and installs Tekton CRDs.
+namespace per app in `apps/registry.tsv` — and installs Tekton CRDs.
 
 ## Discover Harbor and ArgoCD, and request your grants
 
@@ -867,7 +867,7 @@ additional one (see [Istio on VKS](vks-services/istio.md#4-attach-prefer-the-gat
 you discovered + the credentials you were granted. For **Gitea** (which you installed) and the
 deployed **app**, either front them with the ingress at `*.vks.local`, or `kubectl port-forward`
 (`kubectl -n gitea port-forward svc/gitea-http 3000:3000`, and one per app —
-`kubectl -n <app> port-forward svc/<app> 18080:80` for each of `javawebapp`, `gowebapp`).
+`kubectl -n <app> port-forward svc/<app> 18080:80` for each app in `apps/registry.tsv`).
 
 ### Ingress — ASK the cluster whether a mesh is there. Do not assume
 
@@ -950,7 +950,7 @@ is the one **after `make platform`**; look for `PSA OK — … (N measured)`.
   `Host: <ip>`, which matches no vhost (404, not a clone). `make gitops` refuses to build an
   unreachable repoURL rather than let every Application fail silently.
 - **cluster-admin** on the workload cluster is required — the flow creates namespaces
-  (`gitea`, `ci`, and one per app in `apps/registry.tsv` — `javawebapp`, `gowebapp`) and installs Tekton CRDs.
+  (`gitea`, `ci`, and one per app in `apps/registry.tsv`) and installs Tekton CRDs.
 - **StorageClass:** Gitea uses a PVC (`GITEA_STORAGE_SIZE`, default `5Gi`). Ensure the
   cluster has a default StorageClass (or set one explicitly).
 - **Harbor project(s)** you were granted must exist and you must hold **push** on them; a

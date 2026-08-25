@@ -39,13 +39,14 @@ VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surface
 
 ## What the demo deploys
 
-The demo ships **two apps, in two languages**, and runs both through the *same* walk:
+The demo ships **six apps, one per language** — Java, Go, Node.js, Python, Rust and .NET — and runs
+every one through the *same* walk:
 `git push` → Tekton (test → Kaniko build → Harbor → tag write-back) → ArgoCD → the live page.
 `apps/registry.tsv` is the single source of truth — everything else loops over it.
 
 **The languages are not decoration — they are the air-gap story.** An in-cluster build reaches no
 package registry, so every app ships a **pre-baked builder image** (`Dockerfile.builder`) carrying
-its own dependency cache: `~/.m2` for Java, the module cache for Go. Both are built on the
+its own dependency cache: `~/.m2` for Java, the module cache for Go, and so on. All are built on the
 internet-connected jump box, pushed to Harbor, and consumed by the offline build — same pipeline
 either way. Each app is verified independently, so a green `javawebapp` never hides a broken
 `gowebapp`, and `make check-ui-contract` requires every app to render an **identical page**, so they

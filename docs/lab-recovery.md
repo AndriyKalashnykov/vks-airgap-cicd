@@ -85,13 +85,13 @@ controller is now unfinalizable:
 
 ```text
 crd/applications.argoproj.io   Terminating   finalizer: customresourcecleanup.apiextensions.k8s.io
-application/cicd/{gowebapp,javawebapp}       finalizer: resources-finalizer.argocd.argoproj.io
+application/cicd/<app>                       finalizer: resources-finalizer.argocd.argoproj.io   (one per app)
 ```
 
 ```sh
 KUBECONFIG="$KC" kubectl get applications.argoproj.io -A \
   -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,FIN:.metadata.finalizers,DEL:.metadata.deletionTimestamp
-for a in gowebapp javawebapp; do
+for a in $(awk -F'\t' '!/^#/ && NF>1 {print $1}' apps/registry.tsv); do
   KUBECONFIG="$KC" kubectl -n cicd patch application.argoproj.io "$a" \
     --type=merge -p '{"metadata":{"finalizers":null}}'
 done

@@ -75,7 +75,7 @@ On the mirror cache itself:
 
 ## What each language costs — every image, attributed
 
-The two apps are not decoration — **they are the air-gap story**. Below is the **entire image set**,
+The apps are not decoration — **they are the air-gap story**. Below is the **entire image set**,
 each image attributed to the language that needs it. Measured (registry-compressed, `linux/amd64`;
 the app images are the ones the pipeline actually built in the last KinD run).
 
@@ -97,7 +97,7 @@ the app images are the ones the pipeline actually built in the last KinD run).
 
 ### The three things this table says
 
-1. **On the BUILD side the two languages cost about the same** — Java 267 MB of mirrored images
+1. **On the BUILD side the languages cost about the same** — Java 267 MB of mirrored images
    (maven + JRE) vs Go 284 MB (the `golang` image alone is *bigger* than Maven's). The interesting
    difference is not the compiler.
 2. **Java needs an offline builder and Go does not.** An in-cluster `mvn` cannot reach Maven Central,

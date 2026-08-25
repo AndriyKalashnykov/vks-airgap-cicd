@@ -23,7 +23,7 @@ On VKS the stack spans **two** clusters: Harbor + ArgoCD are Supervisor Services
 run on the **Supervisor**, while Gitea, Tekton, the ingress, and
 the app are installed into the **guest** workload cluster. Because ArgoCD lives on the
 Supervisor, the guest cluster is **registered as an ArgoCD destination** (`make
-argocd-register-guest`) so it can deploy the apps (`javawebapp`, `gowebapp`) there — it does **not** run a second ArgoCD
+argocd-register-guest`) so it can deploy the apps (every row of `apps/registry.tsv`) there — it does **not** run a second ArgoCD
 in the guest. (The KinD stand-in collapses both levels into one cluster.)
 
 <p align="center"><a href="diagrams/out/vks-topology.png"><img src="diagrams/out/vks-topology.png" alt="VKS namespace/cluster topology — Supervisor (Harbor + ArgoCD as Supervisor Services) vs the guest workload cluster we install into — click to enlarge" width="960"></a></p>
