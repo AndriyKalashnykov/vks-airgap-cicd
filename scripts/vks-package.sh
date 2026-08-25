@@ -82,18 +82,8 @@ fi
 # shellcheck disable=SC2016  # jq PROGRAM TEXT, not shell. The single quotes are load-bearing:
 # $raw / $s / $core / $build are jq variables, and letting the shell expand them would silently
 # substitute empty strings and make every comparison compare nothing.
-_VKEY='def vkey:
-  . as $raw
-  | (if type == "string" then . else "" end) as $s
-  | ($s | split("+")) as $p
-  | ($p[0] // "") as $core
-  | ($p[1:] | join("+")) as $build
-  | ($core | split("-")) as $c
-  | [ ($c[0] // "" | [scan("[0-9]+")] | map(tonumber)),
-      [ (if ($c | length) > 1 then 0 else 1 end) ],
-      ($c[1:] | join("-") | [scan("[0-9]+")] | map(tonumber)),
-      ($build | [scan("[0-9]+")] | map(tonumber)),
-      $raw ];'
+# _VKEY comes from scripts/lib/os.sh -- one key for every version selection in this repo.
+
 
 # `// ""` on .spec.version: a Package with the field absent must not abort the whole listing with a
 # jq error that `_list` then reports as "no Carvel Packages visible. Is KUBECONFIG pointing at a
@@ -102,10 +92,15 @@ _versions() { kubectl get packages -A -o json 2>/dev/null \
   | jq -r --arg r "$1" "$_VKEY"' [.items[]?|select(.spec.refName==$r)|(.spec.version // "")]|map(select(length>0))|sort_by(vkey)|.[]' 2>/dev/null; }
 
 _list() {
+  # A package whose only item has no .spec.version is LISTED with "<no version>", not dropped:
+  # filtering it out made `list` hide a package that `_die_unknown` then advertises as available.
+  # `type=="string"` before `length`: on a non-string version `length` is a jq ERROR (measured:
+  # `boolean (true) has no length`, rc=5), which _list swallows and reports as "no Carvel Packages
+  # visible. Is KUBECONFIG pointing at a GUEST cluster?" -- naming the wrong cause entirely.
   local out
   # LATEST comes from the SAME vkey the installer uses -- do not re-implement it here.
   out="$(kubectl get packages -A -o json 2>/dev/null \
-        | jq -r "$_VKEY"' [.items[]?|{r:.spec.refName,v:(.spec.version // "")}]|map(select(.v|length>0))|group_by(.r)|map({r:.[0].r,n:length,latest:(map(.v)|sort_by(vkey)|last)})|.[]|"  \(.r)\t\(.n)\t\(.latest)"' 2>/dev/null || true)"
+        | jq -r "$_VKEY"' [.items[]?|{r:.spec.refName,v:(.spec.version // "")}]|group_by(.r)|map({r:.[0].r,n:length,latest:((map(.v)|map(select((type=="string") and length>0))|sort_by(vkey)|last) // "<no version>")})|.[]|"  \(.r)\t\(.n)\t\(.latest)"' 2>/dev/null || true)"
   [ -n "$out" ] || die "no Carvel Packages visible. Is KUBECONFIG pointing at a GUEST cluster with the standard-packages repo? Check: kubectl get packagerepositories -A"
   printf '  %-46s %-9s %s\n' PACKAGE VERSIONS LATEST
   printf '%s\n' "$out" | while IFS=$'\t' read -r r n l; do printf '  %-46s %-9s %s\n' "${r# }" "$n" "$l"; done

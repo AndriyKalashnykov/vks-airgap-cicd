@@ -17,9 +17,21 @@
 set -uo pipefail
 export LC_ALL=C
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
-pass=0; fail=0; T=""
+pass=0; fail=0; flakes=0; T=""
+# Set to 1 by the ONE case that DELIBERATELY provokes a 404 (F8). Everywhere else, "fetch failed"
+# in the gate's output means the network moved under us, not that the product is wrong.
+expect_fetch_fail=0
 ok()  { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
-bad() { fail=$((fail+1)); printf '  FAIL %s\n     %s\n' "$1" "${2:-}"; }
+bad() {
+  if [ "$expect_fetch_fail" -eq 0 ] && [ -n "${T:-}" ] && [ -f "$T/out" ] \
+     && grep -q 'fetch failed: https://' "$T/out"; then
+    flakes=$((flakes+1))
+    printf '  FLAKE %s\n     the gate could not fetch mid-run — this case measured NOTHING.\n' "$1"
+    printf '     NOT a product failure: the reachability probe covers only the FIRST of ~14 fetches.\n'
+    return
+  fi
+  fail=$((fail+1)); printf '  FAIL %s\n     %s\n' "$1" "${2:-}"
+}
 cleanup() { [ -n "$T" ] && rm -rf "$T"; }
 trap cleanup EXIT
 
@@ -34,7 +46,20 @@ tree() {
   { printf 'ISTIO_VERSION=%s\nGATEWAY_API_VERSION=%s\n' "$1" "$2"
     [ -n "${3:-}" ] && printf 'ISTIO_PACKAGE_VERSION=%s\n' "$3"; } > "$T/.env.example"
 }
-run() { ( cd "$T" && env "$@" bash scripts/check-gwapi-istio-alignment.sh >"$T/out" 2>&1 ); }
+# `env -u GWAPI_REQUIRE_FETCH`: CI sets it to 1 for the job that runs `make static-check`
+# (.github/workflows/ci.yml), and run-test-set.sh invokes each test with a bare `bash "$t"` and no
+# env sanitization -- so it LEAKED IN and made case F8 (which asserts the warn-and-continue path)
+# take the exit-1 branch instead. MEASURED: default rc=0 9/9; GWAPI_REQUIRE_FETCH=1 rc=1. It went
+# green on PRs (static-check-fast runs no tests) and would have reddened the WEEKLY run. A case that
+# wants the flag passes it explicitly.
+run() { ( cd "$T" && env -u GWAPI_REQUIRE_FETCH "$@" bash scripts/check-gwapi-istio-alignment.sh >"$T/out" 2>&1 ); }
+
+# A network flake mid-run must not be reported as the PRODUCT failing. The reachability probe covers
+# only the FIRST of ~14 fetches; a failure at any later one makes the gate warn-and-continue, an
+# "expects RED" case then sees rc=0, and the message accuses a gate that is fine. Any case that
+# depends on a fetch calls this first.
+fetch_ok() { ! grep -q 'fetch failed: https://' "$T/out"; }
+flaked()   { printf '  FLAKE %s\n     the gate could not fetch mid-run; this case measured NOTHING (not a product failure)\n' "$1"; }
 said() { grep -qF "$1" "$T/out"; }
 
 # --- the HELM arm: the RED that had never been demonstrated -------------------------------------
@@ -75,12 +100,14 @@ fi
 
 # F8: a malformed pin derives a 404 branch; the message must name the URL and accuse the PIN.
 tree 1.30.3 v1.5.1 '1.28+vmware.1-vks.1'
+expect_fetch_fail=1   # this case PROVOKES the 404 on purpose; a "fetch failed" here is the subject
 run E=1
 if said 'fetch failed: https://' && said 'the PIN is the suspect'; then
   ok "F8 fetch failure names the URL and the pin"
 else
   bad "F8 message" "a malformed pin reads as a network problem and sends the reader to the wrong suspect"
 fi
+expect_fetch_fail=0
 
 # F9: unset is the DEFAULT path (ISTIO_PACKAGE_VERSION is commented in .env.example), so the
 # half-coverage disclosure must be a WARN and the OK line must carry the caveat.
@@ -99,6 +126,7 @@ fi
 
 # GWAPI_REQUIRE_FETCH must cover the package arm too, not just the helm one.
 tree 1.30.3 v1.5.1 '1.28+vmware.1-vks.1'
+expect_fetch_fail=1   # same deliberate 404, now asserting REQUIRE_FETCH makes it fatal
 run GWAPI_REQUIRE_FETCH=1; rc=$?
 if [ "$rc" -ne 0 ]; then
   ok "GWAPI_REQUIRE_FETCH=1 makes an unfetchable PACKAGE pin fatal"
@@ -106,5 +134,10 @@ else
   bad "GWAPI_REQUIRE_FETCH covers the package arm" "rc=$rc"
 fi
 
-printf '\n  %d passed, %d FAILED\n' "$pass" "$fail"
+expect_fetch_fail=0
+if [ "$flakes" -gt 0 ]; then
+  printf '\n  PARTIAL: %d case(s) could not be measured (network). %d passed, %d FAILED.\n' "$flakes" "$pass" "$fail"
+else
+  printf '\n  %d passed, %d FAILED\n' "$pass" "$fail"
+fi
 [ "$fail" -eq 0 ]

@@ -144,7 +144,7 @@ if [ -z "$VER" ]; then   # 2. the Carvel Package the operator actually published
   _pkg_end=$((SECONDS + ${ARGOCD_PACKAGE_WAIT_SECONDS:-180}))
   while :; do
     VER="$(kubectl --kubeconfig "$SUP" get packages.data.packaging.carvel.dev -A -o json 2>/dev/null \
-          | jq -r '[.items[]? | select(.spec.refName == "argocd.kubernetes.vmware.com") | .spec.version] | sort | last // empty' 2>/dev/null || true)"
+          | jq -r "$_VKEY"' [.items[]? | select(.spec.refName == "argocd.kubernetes.vmware.com") | (.spec.version // "")] | map(select((type=="string") and length>0)) | sort_by(vkey) | last // empty' 2>/dev/null || true)"
     [ -n "$VER" ] && { log_info "version from the published Carvel Package: ${VER}"; break; }
     [ "$SECONDS" -lt "$_pkg_end" ] || break
     log_info "waiting for the ArgoCD Carvel Package to be published (the CRD is already here)..."

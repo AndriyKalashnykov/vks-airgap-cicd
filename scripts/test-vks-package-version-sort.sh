@@ -22,11 +22,11 @@ bad() { fail=$((fail+1)); printf '  FAIL %s\n     %s\n' "$1" "${2:-}"; }
 # shell assignment, so sed can carve it precisely; the guard below fails loudly if it ever moves.
 # shellcheck disable=SC2016  # the single quotes are DELIBERATE: this carves jq SOURCE out of the
 # product, and expanding $raw / $core / $build here would corrupt the very thing under test.
-_VKEY="$(sed -n "/^_VKEY='/,/;'$/p" "$ROOT/scripts/vks-package.sh" | sed "1s/^_VKEY='//; \$s/'$//")"
+_VKEY="$(sed -n "/^_VKEY='/,/;'$/p" "$ROOT/scripts/lib/os.sh" | sed "1s/^_VKEY='//; \$s/'$//")"
 # shellcheck disable=SC2016  # a jq-source PATTERN, not an expansion.
 case "$_VKEY" in
   *'def vkey:'*'$raw ];') ok "extracted _VKEY from the product ($(printf '%s' "$_VKEY" | wc -l) lines)" ;;
-  *) bad "extract _VKEY from vks-package.sh" "got ${#_VKEY} bytes; the assignment moved or changed shape -- every case below would be VACUOUS, so this is fatal"; printf '\n  %d passed, %d FAILED\n' "$pass" "$fail"; exit 1 ;;
+  *) bad "extract _VKEY from scripts/lib/os.sh" "got ${#_VKEY} bytes; the assignment moved or changed shape -- every case below would be VACUOUS, so this is fatal"; printf '\n  %d passed, %d FAILED\n' "$pass" "$fail"; exit 1 ;;
 esac
 
 # latest <version>... -> what the product's key floats to. This is the actual default install.
@@ -68,11 +68,11 @@ fi
 
 # The two sites must be the SAME code path. A second hand-written sort is the defect this file
 # exists to prevent, and it is what shipped in #989.
-n="$(grep -c 'sort_by(vkey)' "$ROOT/scripts/vks-package.sh")"
-if [ "$n" = 2 ]; then
-  ok "both selection sites use the shared vkey (2 uses)"
+n="$(grep -oE 'sort_by\([[:space:]]*vkey[[:space:]]*\)' "$ROOT"/scripts/vks-package.sh "$ROOT"/scripts/08-install-argocd-service.sh | wc -l | tr -d ' ')"
+if [ "$n" = 3 ]; then
+  ok "all three selection sites use the shared vkey (3 uses)"
 else
-  bad "both sites use vkey" "found $n uses of sort_by(vkey); a site was removed or a third appeared"
+  bad "all sites use vkey" "found $n uses across vks-package.sh + 08-install-argocd-service.sh; a site was removed, or a new one was written with its own comparison"
 fi
 # Strip COMMENT lines before matching. The product's comments explain at length WHY `sort -V` is
 # absent, so a bare grep for the literal matches the prose and reports the defect it is asserting
@@ -80,19 +80,45 @@ fi
 # HERESTRING, not a pipe: `producer | grep -q` lets grep exit at its first match, the producer takes
 # SIGPIPE, and pipefail turns a FOUND pattern into ABSENT at random. check-grep-q-pipe caught this
 # exact line in the very test written to prove a fix.
-if grep -qE '\bsort[[:space:]]+-V\b' <<< "$(sed 's/^[[:space:]]*#.*//' "$ROOT/scripts/vks-package.sh")"; then
+if # `-V` hides in a bundle (-Vr, -rV, -uV, -k1,1V) or wears its long name. MEASURED: the previous
+# pattern caught 3 of 8 realistic spellings; `sort -rV | head -1` is the natural re-introduction.
+grep -qE 'sort([[:space:]]+-[A-Za-z0-9,.]*V|[[:space:]]+--version-sort)\b' <<< "$(sed 's/^[[:space:]]*#.*//' "$ROOT"/scripts/vks-package.sh "$ROOT"/scripts/08-install-argocd-service.sh)"; then
   bad "no sort -V in the product CODE" "sort -V is back; it is OS-dependent (toybox != GNU) and reintroduces the divergence"
 else
   ok "no sort -V in the product CODE (OS-dependent, deliberately absent)"
 fi
 
-# A Package with no .spec.version must not abort the listing.
-got="$(printf '{"items":[{"spec":{"refName":"a","version":"1.2.3"}},{"spec":{"refName":"b"}}]}' \
-       | jq -r "$_VKEY"' [.items[]?|{r:.spec.refName,v:(.spec.version // "")}]|map(select(.v|length>0))|group_by(.r)|map({r:.[0].r,latest:(map(.v)|sort_by(vkey)|last)})|.[]|.r' 2>&1)"
-if [ "$got" = a ]; then
-  ok "a Package with no .spec.version is skipped, not fatal"
+# Drive the PRODUCT's own `_list`, not a retyped copy of its jq. The previous version of this case
+# pasted the pipeline, so reverting BOTH halves of the product fix left the file 13/13 GREEN: it
+# satisfied this file's own header (it did run $_VKEY) while the thing the fix changed was the
+# PIPELINE. A stubbed `kubectl` on PATH + a minimal kubeconfig executes the real path.
+_stub="$(mktemp -d)"; mkdir -p "$_stub/bin"
+cat > "$_stub/bin/kubectl" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+  *"get packages"*) printf '%s' '{"items":[{"spec":{"refName":"a","version":"1.2.3"}},{"spec":{"refName":"b"}},{"spec":{"refName":"c","version":"1.10.0"}},{"spec":{"refName":"c","version":"1.9.0"}},{"spec":{"refName":"d","version":true}}]}' ;;
+  *) exit 0 ;;
+esac
+STUB
+chmod +x "$_stub/bin/kubectl"
+printf 'apiVersion: v1\nkind: Config\n' > "$_stub/kc"
+_out="$(cd "$ROOT" && PATH="$_stub/bin:$PATH" KUBECONFIG="$_stub/kc" bash scripts/vks-package.sh list 2>&1 | grep -v 'level=')"
+rm -rf "$_stub"
+
+if grep -qE '^[[:space:]]+c[[:space:]]+2[[:space:]]+1\.10\.0$' <<< "$_out"; then
+  ok "the PRODUCT's own list picks 1.10.0 over 1.9.0 (real code path)"
 else
-  bad "missing .spec.version tolerated" "got '$got' -- a schema surprise on ONE row kills the whole listing and gets reported as 'no Carvel Packages visible'"
+  bad "product _list is version-aware" "got: $_out"
+fi
+if grep -qE '^[[:space:]]+b[[:space:]]+1[[:space:]]+<no version>$' <<< "$_out"; then
+  ok "a Package with no .spec.version is LISTED as <no version>, not dropped, not fatal"
+else
+  bad "null .spec.version listed" "a dropped package is invisible in list while _die_unknown still advertises it. got: $_out"
+fi
+if grep -qE '^[[:space:]]+d[[:space:]]+1[[:space:]]+<no version>$' <<< "$_out"; then
+  ok "a NON-STRING .spec.version does not abort the listing"
+else
+  bad "non-string version tolerated" "jq 'has no length' (rc=5) is swallowed and reported as 'no Carvel Packages visible'. got: $_out"
 fi
 
 printf '\n  %d passed, %d FAILED\n' "$pass" "$fail"

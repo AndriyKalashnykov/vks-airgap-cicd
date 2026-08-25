@@ -2140,3 +2140,34 @@ shell_activate_line() {
     *)             printf '%s' "" ;;
   esac
 }
+
+
+# ONE version-sort key for the WHOLE repo. Three sites needed it and each had its own: two in
+# vks-package.sh (which DISAGREED with each other on toybox) and one in 08-install-argocd-service.sh
+# that picked 3.0.9 over 3.0.19 -- i.e. installed an OLDER ArgoCD than the lab runs. A version
+# comparison written a fourth time is the defect; call this.
+#
+# NOT `sort -V`: implementation-dependent. MEASURED over
+# [1.28.5, 1.28.5+vmware.1-vks.1, 1.28.5+vmware.2-vks.1] -- GNU coreutils 9.4 picks +vmware.2,
+# toybox 0.8.9 (Photon 5) picks the BARE 1.28.5. Pure jq is identical on every OS by construction.
+# NOT jq's bare `sort`: LEXICOGRAPHIC, so 1.9.0 beats 1.100.0 and 3.0.9 beats 3.0.19.
+#
+# TOTAL: every field compared, raw string as the final tiebreak at a FIXED index, so the answer
+# never depends on the order the API server listed things in. (Do not re-add `| flatten` -- it
+# shifts $raw's index so a string can be compared against a number, which inverts real cases.)
+# GA outranks its own prereleases, so a floating default can never land on a release candidate.
+# shellcheck disable=SC2016  # jq PROGRAM TEXT. $raw/$s/$core/$build are JQ variables; letting the
+# shell expand them would substitute empty strings and make every comparison compare nothing.
+_VKEY='def vkey:
+  . as $raw
+  | (if type == "string" then . else "" end) as $s
+  | ($s | split("+")) as $p
+  | ($p[0] // "") as $core
+  | ($p[1:] | join("+")) as $build
+  | ($core | split("-")) as $c
+  | [ ($c[0] // "" | [scan("[0-9]+")] | map(tonumber)),
+      [ (if ($c | length) > 1 then 0 else 1 end) ],
+      ($c[1:] | join("-") | [scan("[0-9]+")] | map(tonumber)),
+      ($build | [scan("[0-9]+")] | map(tonumber)),
+      $raw ];'
+vkey_jq() { printf '%s' "$_VKEY"; }
