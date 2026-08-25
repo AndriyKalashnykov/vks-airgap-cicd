@@ -43,6 +43,11 @@ SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 . "${SCRIPT_DIR}/lib/apps.sh"
 load_env
 
+# kubectl and jq: this script's own header names both, and istio_wait_lb_ip derives the gateway
+# Service selector with jq. Without jq that selector is empty, which now fails CLOSED rather than
+# publishing an address nothing verified -- so name the missing tool HERE, not 100 lines later.
+require_cmd kubectl jq
+
 # EXPORTED, not bare: istio_apply_routes renders manifests with envsubst, which reads the
 # ENVIRONMENT. An unexported var renders EMPTY -> `namespace:` blank -> the Gateway lands in
 # `default` while the VirtualServices point at istio-ingress/<name> -> 404. (Same note as 46.)

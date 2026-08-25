@@ -397,25 +397,141 @@ EOF
 app_namespaces_flat() { app_names | tr '\n' ' '; }
 
 # ---------------------------------------------------------------------------
+# istio_gwapi_proxy_ready — is the proxy Istio PROVISIONED for our Gateway actually serving?
+#
+# WHY THIS EXISTS (measured on the lab, 2026-08-25, B477): `Programmed=True` + an address means
+# ISTIO accepted the Gateway. It says NOTHING about the data plane. On that run the Gateway was
+# Programmed with LB IP 192.168.101.135 while its proxy pod sat in CrashLoopBackOff (17 restarts,
+# `failed to sign CSR: dial tcp <istiod>:15012: connect: connection refused` -- istiod's Service had
+# ZERO endpoints). So install/attach exited 0, published a dead address into .env.state, and the
+# operator learned nothing until verify-ingress polled 8 hosts x 300s = 40 MINUTES later.
+#
+# It asserts the END RESULT (a Ready proxy pod), not a proxy for it:
+#   * the proxy lives in ISTIO_GWAPI_NAMESPACE, which WE create -- no istio-system RBAC, so this
+#     works for a TENANT, who is the default audience (RULE ZERO-B).
+#   * it is blind to which istiod, which revision, canary vs ambient -- it never names istiod.
+#   * it catches the whole class: CA unreachable, ImagePullBackOff on an air-gapped pull, PSA
+#     rejection, OOM. A Deployment can be Available and a pod Ready=True while the mesh is dead;
+#     neither `rollout status` nor `wait --for=condition` can see this.
+#
+# THREE STATES, never two: 0 = a Ready proxy pod; 1 = provisioned but not Ready; 2 = COULD NOT ASK.
+# "Cannot ask" is not a verdict -- 48-istio-preflight.sh:153-157 documents that exact mistake.
+istio_proxy_ready() {   # <namespace> <label-selector>
+  local ns="$1" sel="$2" out err rc=0
+  # An EMPTY selector must NEVER reach kubectl: `get pods -l ""` selects EVERY pod in the namespace,
+  # so one unrelated healthy pod reports the gateway proxy as Ready. MEASURED: rc=0 over a namespace
+  # whose only pod was not ours. Reachable three ways -- a Service with no selector (legal, for
+  # manually-managed Endpoints), jq absent, or the `-o json` read failing -- and each of those is
+  # exactly a "could not ask" condition, not a pass.
+  if [ -z "$sel" ]; then
+    # rc 3, NOT 2. Returning 2 fed the tenant concession, so an underivable selector still
+    # PUBLISHED the address at the timeout boundary -- the fail-open DELAYED by 300s, not closed.
+    # MEASURED: a selector-less Service + a not-Ready proxy gave RC=0 STDOUT=[10.0.0.9]. And this is
+    # a BUG on the paths that reach it (jq missing, a Service with no selector), never the tenant
+    # RBAC case the concession exists for -- so it must fail CLOSED.
+    return 3
+  fi
+  err="$(mktemp)"
+  # stderr to its OWN file, never 2>&1: merging makes the capture non-empty and inverts the
+  # emptiness test below (the reason k_can_i/classify_kube_failure give in os.sh).
+  out="$(kubectl -n "$ns" get pods -l "$sel" \
+         -o jsonpath='{range .items[*]}{.metadata.name}{"="}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>"$err")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    log_warn "could not read the gateway proxy's pods in ${ns}: $(head -1 "$err")"
+    rm -f "$err"; return 2
+  fi
+  rm -f "$err"
+  [ -n "$out" ] || return 1                       # not provisioned YET -- keep polling
+  # HERESTRING, not `printf | grep -q`: grep -q exits at its first match, printf takes SIGPIPE, and
+  # pipefail turns a READY proxy into "not Ready" -- a healthy install would then poll the full 300s
+  # and fail with a FALSE diagnosis. Measured as a gradient from ~31 KB of pod list (0/200 at 12 KB,
+  # 193/200 at 50 KB); a real Gateway has 1-3 pods, so it is unreachable today. The fix is free.
+  grep -q '=True$' <<< "$out" && return 0
+  return 1
+}
+
+# Back-compat wrapper for the gateway-api path, which selects by Gateway name.
+istio_gwapi_proxy_ready() {
+  istio_proxy_ready "$ISTIO_GWAPI_NAMESPACE" "gateway.networking.k8s.io/gateway-name=${ISTIO_GATEWAY_NAME}"
+}
+
+# istio_diagnose_proxy — print WHY the provisioned proxy is not serving. stderr only: the caller's
+# STDOUT is its return value (the Gateway address), so a stray printf here would corrupt it.
+istio_diagnose_proxy() {
+  istio_diagnose_proxy_sel "$ISTIO_GWAPI_NAMESPACE" "gateway.networking.k8s.io/gateway-name=${ISTIO_GATEWAY_NAME}"
+}
+istio_diagnose_proxy_sel() {   # <namespace> <label-selector>
+  local ns="$1" sel="$2" pod reason
+  log_error "  Istio PROGRAMMED the Gateway and published an address, but the proxy it provisioned"
+  log_error "  is not Ready — so the address answers nothing. This is the data plane, not the config."
+  kubectl -n "$ns" get pods -l "$sel" 2>&1 | sed 's/^/      /' >&2 || true
+  pod="$(kubectl -n "$ns" get pods -l "$sel" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  if [ -n "$pod" ]; then
+    reason="$(kubectl -n "$ns" get pod "$pod" \
+      -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}{" "}{.status.containerStatuses[0].lastState.terminated.reason}' 2>/dev/null || true)"
+    log_error "      reason: ${reason:-<none>}"
+    log_error "      last log line:"
+    kubectl -n "$ns" logs "$pod" --tail=3 2>&1 | sed 's/^/        /' >&2 || true
+    log_error "  If the log says 'failed to sign CSR' / 'connect: connection refused' to :15012, the"
+    log_error "  proxy cannot reach istiod's CA. Check istiod has ENDPOINTS, not merely that it runs:"
+    log_error "      kubectl -n <istio-ns> get endpoints istiod        # <none> means its SELECTOR matches no pod"
+    log_error "      kubectl -n <istio-ns> get svc istiod -o jsonpath='{.spec.selector}'"
+    log_error "  A kapp-installed Service carries kapp.k14s.io/app in its selector; a helm-installed"
+    log_error "  istiod pod does not have that label, so the two never match (B477)."
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # istio_wait_gwapi_address — wait for Istio to PROGRAM the Gateway and publish its address.
 # `Programmed=True` is the real readiness signal; the address is what /etc/hosts must point at.
 # ---------------------------------------------------------------------------
 istio_wait_gwapi_address() {
   local timeout="${READY_TIMEOUT_SECONDS:-300}" interval="${POLL_INTERVAL_SECONDS:-5}" elapsed=0 prog addr
+  local _pr=0 _unknown_seen=0 _definitive_seen=0
   log_info "waiting for Istio to program Gateway ${ISTIO_GWAPI_NAMESPACE}/${ISTIO_GATEWAY_NAME} (timeout ${timeout}s)"
   while :; do
     prog="$(kubectl -n "$ISTIO_GWAPI_NAMESPACE" get gateway "$ISTIO_GATEWAY_NAME" \
       -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null || true)"
     addr="$(kubectl -n "$ISTIO_GWAPI_NAMESPACE" get gateway "$ISTIO_GATEWAY_NAME" \
       -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true)"
-    [ "$prog" = "True" ] && [ -n "$addr" ] && { printf '%s' "$addr"; return 0; }
+    if [ "$prog" = "True" ] && [ -n "$addr" ]; then
+      # Programmed + address is NOT the end result -- see istio_gwapi_proxy_ready's header.
+      # `|| _pr=$?`, not a bare call then `$?`: a bare failing command is subject to the CALLER's
+      # errexit. Today the sole caller is `LB_IP="$(...)" || die`, which suspends it -- but the code
+      # this replaced was an `A && B` list, which is errexit-EXEMPT, so this is a NEW sensitivity.
+      _pr=0; istio_gwapi_proxy_ready || _pr=$?
+      case "$_pr" in
+        0) printf '%s' "$addr"; return 0 ;;
+        2) # COULD NOT ASK. Do NOT return here. Returning on the FIRST unreadable poll makes ONE
+           # ordinary transient error -- an etcd timeout, a failed mktemp -- disable this guard
+           # entirely: measured, 1 bad poll out of 60 (1.7% of the budget) bypassed it over a
+           # permanently crashlooping proxy that the very next poll would have caught. RBAC, the
+           # case this state exists for, is the LEAST likely trigger, since WE create this
+           # namespace. So remember it and keep polling; the tenant concession is honoured at the
+           # TIMEOUT boundary instead, which requires the WHOLE budget to be unreadable.
+           _unknown_seen=1 ;;
+        *) _definitive_seen=1 ;;   # a REAL "not Ready" answer -> keep polling until the timeout
+      esac
+    fi
     elapsed=$(( elapsed + interval ))
     if [ "$elapsed" -ge "$timeout" ]; then
       log_error "Gateway not programmed within ${timeout}s (Programmed=${prog:-<none>}, address=${addr:-<none>})"
       log_error "  kubectl -n ${ISTIO_GWAPI_NAMESPACE} describe gateway ${ISTIO_GATEWAY_NAME}"
       log_error "  Istio provisions the data plane itself — check what it created:"
       kubectl -n "$ISTIO_GWAPI_NAMESPACE" get deploy,svc,pods -l "gateway.networking.k8s.io/gateway-name=${ISTIO_GATEWAY_NAME}" 2>&1 | sed 's/^/      /' >&2 || true
-      if [ "$prog" = "True" ] || kubectl -n "$ISTIO_GWAPI_NAMESPACE" get svc "${ISTIO_GATEWAY_NAME}-${ISTIO_GATEWAY_CLASS:-istio}" >/dev/null 2>&1; then
+      if [ "$prog" = "True" ] && [ -n "$addr" ] && [ "$_unknown_seen" = 1 ] && [ "$_definitive_seen" = 0 ]; then
+        # NEVER ONCE got a readable answer in the whole budget => genuinely COULD NOT ASK. Both
+        # conditions matter: `_unknown_seen` alone would ACCEPT the address whenever a single
+        # transient error happened to occur alongside a definitively-crashlooping proxy -- i.e. it
+        # would re-open the fail-open in the exact B477 state. This is the tenant concession, and it
+        # now costs the full timeout rather than one bad poll.
+        log_warn "proxy readiness was UNREADABLE for the entire ${timeout}s — accepting the address"
+        log_warn "  WITHOUT that check. This is not a pass: nothing here verified the data plane."
+        printf '%s' "$addr"; return 0
+      elif [ "$prog" = "True" ] && [ -n "$addr" ]; then
+        # Programmed WITH an address but we still timed out => the proxy never went Ready.
+        istio_diagnose_proxy
+      elif [ "$prog" = "True" ] || kubectl -n "$ISTIO_GWAPI_NAMESPACE" get svc "${ISTIO_GATEWAY_NAME}-${ISTIO_GATEWAY_CLASS:-istio}" >/dev/null 2>&1; then
         # The proxy exists but has no address -> it is the LoadBalancer, not Istio, that is stuck.
         istio_diagnose_pending_lb "$ISTIO_GWAPI_NAMESPACE" "${ISTIO_GATEWAY_NAME}-${ISTIO_GATEWAY_CLASS:-istio}"
       else
@@ -512,6 +628,7 @@ EOF
 # ---------------------------------------------------------------------------
 istio_wait_lb_ip() {
   local timeout="${READY_TIMEOUT_SECONDS:-300}" interval="${POLL_INTERVAL_SECONDS:-5}" elapsed=0 svc_type ip
+  local _pr=0 _unknown_seen=0 _definitive_seen=0 _selector_unknown=0 _svc_sel
   svc_type="$(kubectl -n "$ISTIO_GATEWAY_NAMESPACE" get svc "$ISTIO_GATEWAY_SERVICE" -o jsonpath='{.spec.type}' 2>/dev/null || true)"
   if [ "$svc_type" != "LoadBalancer" ]; then
     log_error "gateway Service ${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_SERVICE} is type '${svc_type}', not LoadBalancer —"
@@ -526,9 +643,46 @@ istio_wait_lb_ip() {
       -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
     [ -z "$ip" ] && ip="$(kubectl -n "$ISTIO_GATEWAY_NAMESPACE" get svc "$ISTIO_GATEWAY_SERVICE" \
       -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"
-    [ -n "$ip" ] && { printf '%s' "$ip"; return 0; }
+    if [ -n "$ip" ]; then
+      # Derived INSIDE the loop, on purpose. Computed once, a single transient failure of this one
+      # `-o json` read left _svc_sel empty for the WHOLE budget and disabled the guard -- the very
+      # defect the gwapi loop was fixed for one commit earlier. Re-deriving costs one poll instead.
+      _svc_sel="$(kubectl -n "$ISTIO_GATEWAY_NAMESPACE" get svc "$ISTIO_GATEWAY_SERVICE" -o json 2>/dev/null \
+        | jq -r '(.spec.selector // {}) | to_entries | map("\(.key)=\(.value)") | join(",")' 2>/dev/null || true)"
+      # An assigned LoadBalancer address is NOT the end result either -- same fail-open as the
+      # gateway-api path (B477). This matters MOST here: the two callers are the CLASSIC attach
+      # branch and 43-install-istio-package.sh, and the package/kapp path is the one whose own
+      # mechanism produced the incident. Selector is the SERVICE's own, not the gateway-name label
+      # the gwapi path uses -- a copy-paste would have selected nothing and passed vacuously.
+      _pr=0; istio_proxy_ready "$ISTIO_GATEWAY_NAMESPACE" "$_svc_sel" || _pr=$?
+      case "$_pr" in
+        0) printf '%s' "$ip"; return 0 ;;
+        3) _selector_unknown=1 ;;      # a BUG, not RBAC -> must NOT reach the concession
+        2) _unknown_seen=1 ;;          # genuinely could not ask -> concede only at the boundary
+        *) _definitive_seen=1 ;;
+      esac
+    fi
     elapsed=$(( elapsed + interval ))
     if [ "$elapsed" -ge "$timeout" ]; then
+      if [ -n "$ip" ] && [ "$_selector_unknown" = 1 ]; then
+        log_error "could not derive the gateway Service's pod selector, so the data plane was never"
+        log_error "  checked. This is a DEFECT here, not a permissions limit: ${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_SERVICE}"
+        log_error "  has no .spec.selector, or jq is missing. Failing CLOSED rather than publishing"
+        log_error "  ${ip}, which nothing has verified serves anything."
+        return 1
+      fi
+      if [ -n "$ip" ] && [ "$_unknown_seen" = 1 ] && [ "$_definitive_seen" = 0 ]; then
+        log_warn "gateway proxy readiness was UNREADABLE for the entire ${timeout}s — accepting the"
+        log_warn "  address WITHOUT that check. This is not a pass: nothing verified the data plane."
+        printf '%s' "$ip"; return 0
+      fi
+      if [ -n "$ip" ]; then
+        # The address IS assigned, so this is NOT a stuck LoadBalancer -- diagnosing it as one would
+        # name the wrong cause (the mirror-image defect of the symptom guide this PR also corrects).
+        log_error "the LoadBalancer address ${ip} was assigned, but the gateway proxy never became Ready"
+        istio_diagnose_proxy_sel "$ISTIO_GATEWAY_NAMESPACE" "$_svc_sel"
+        return 1
+      fi
       log_error "no LoadBalancer address on ${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_SERVICE} within ${timeout}s"
       istio_diagnose_pending_lb "$ISTIO_GATEWAY_NAMESPACE" "$ISTIO_GATEWAY_SERVICE"
       return 1
