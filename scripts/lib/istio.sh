@@ -418,6 +418,15 @@ app_namespaces_flat() { app_names | tr '\n' ' '; }
 # "Cannot ask" is not a verdict -- 48-istio-preflight.sh:153-157 documents that exact mistake.
 istio_proxy_ready() {   # <namespace> <label-selector>
   local ns="$1" sel="$2" out err rc=0
+  # An EMPTY selector must NEVER reach kubectl: `get pods -l ""` selects EVERY pod in the namespace,
+  # so one unrelated healthy pod reports the gateway proxy as Ready. MEASURED: rc=0 over a namespace
+  # whose only pod was not ours. Reachable three ways -- a Service with no selector (legal, for
+  # manually-managed Endpoints), jq absent, or the `-o json` read failing -- and each of those is
+  # exactly a "could not ask" condition, not a pass.
+  if [ -z "$sel" ]; then
+    log_warn "no label selector for the gateway proxy in ${ns} — cannot identify its pods"
+    return 2
+  fi
   err="$(mktemp)"
   # stderr to its OWN file, never 2>&1: merging makes the capture non-empty and inverts the
   # emptiness test below (the reason k_can_i/classify_kube_failure give in os.sh).

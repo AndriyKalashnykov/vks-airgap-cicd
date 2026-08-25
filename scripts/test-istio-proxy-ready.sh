@@ -92,6 +92,19 @@ r="$(call istio_gwapi_proxy_ready)"
 if [ "${r%%|*}" = 2 ]; then ok "cannot READ the pods -> 2 (not a verdict)"; else bad "unreadable -> 2" "got rc=${r%%|*}"; fi
 if grep -q 'could not read' "$STUB/err"; then ok "...and it says so on stderr"; else bad "warns on unreadable" "stderr: $(head -1 "$STUB/err")"; fi
 
+# An EMPTY selector must be "could not ask", never Ready. `kubectl get pods -l ""` selects EVERY pod
+# in the namespace, so one unrelated healthy pod would report OUR proxy Ready -- a fail-open I
+# introduced when istio_wait_lb_ip started deriving the selector from the Service. Reachable when
+# the Service has no selector (legal, for manually-managed Endpoints), when jq is absent, or when
+# the -o json read fails. MEASURED before the fix: rc=0 over a namespace whose only pod was not ours.
+stub 'some-unrelated-pod=True'$'\n' 0
+r="$(call 'istio_proxy_ready istio-ingress ""')"
+if [ "${r%%|*}" = 2 ]; then
+  ok "an EMPTY selector -> 2 (could not ask), never Ready on an unrelated pod"
+else
+  bad "empty selector is not a pass" "got rc=${r%%|*} — an empty -l selects EVERY pod in the namespace, so any healthy pod there certifies our proxy"
+fi
+
 # --- the END RESULT: what the caller returns -----------------------------------------------------
 stub 'vks-uis-istio-abc=True'$'\n' 0 True 10.0.0.9
 r="$(call istio_wait_gwapi_address)"
