@@ -117,6 +117,43 @@ N places, here are the errors"*, which is what a matrix row would have to encode
 cluster that exists to be destroyed). Reversible, but it is a mutation, so it needs the operator's
 word before running — hence optional, not queued.
 
+### 2026-08-25 — a large part of that probe is available READ-ONLY, via impersonation
+
+The probe above is filed as optional *because it mutates the lab* (an SA + Role + RoleBinding), so it
+needs the operator's word. That blocker is smaller than it looks: `kubectl auth can-i --as=<subject>`
+issues a **SubjectAccessReview**, which is a read of the authorizer. It creates nothing, and it
+answers "would this identity be permitted" for any subject the API server can name — including one
+that does not exist yet.
+
+Measured on the live lab (guest `https://192.168.101.132:6443`), impersonating
+`system:serviceaccount:javawebapp:default`:
+
+    no    get secrets                                 -n istio-system
+    no    create gateways.gateway.networking.k8s.io   -n vks-ingress
+    no    create httproutes.gateway.networking.k8s.io -n javawebapp
+    no    create virtualservices.networking.istio.io  -n javawebapp
+    no    create deployments                          -n javawebapp
+    no    get pods                                    -n javawebapp        <- its OWN namespace
+
+⚠️ **Read what that does and does not establish.** The `default` SA carries no RoleBinding at all, so
+this is the **floor**, not a realistic tenant — it proves "admin is not a tenant", which B472 already
+knew. Its value is the *technique*: point `--as` at the subject the five-axis table proposes and the
+derived hypothesis becomes a measured answer, with no write to the lab.
+
+**Three limits, so nobody mistakes it for the probe:**
+
+1. It answers **RBAC only**. It cannot tell you a script fails for a non-RBAC reason (a webhook, a
+   quota, PSA, a missing CRD), and this repo has already shipped one bug of exactly that shape — the
+   istiod capacity preflight that read node `allocatable` and failed CLOSED for a tenant.
+2. It gives a **verdict, not an error message**. The probe's stated deliverable is *"here are the N
+   places it breaks and what they say"*; `can-i` yields `no`, which is not a diagnosis an operator
+   can act on.
+3. `--as` itself requires **impersonate** permission, so this is a measurement an ADMIN takes *about*
+   a tenant — it is not something the tenant can run to diagnose themselves.
+
+So: use it to cheaply refute or confirm axes 1–5 before spending a mutation, and still run the real
+probe for the error text. It shrinks the probe; it does not replace it.
+
 **Do NOT skip straight to building a matrix row from the derived table.** That is the failure mode
 B471 already warns about: a row built on a guessed permission model certifies a permission model
 nobody runs. Measure first, or decide the policy first — either is fine, guessing is not.
