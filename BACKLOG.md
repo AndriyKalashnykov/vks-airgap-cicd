@@ -1848,8 +1848,15 @@ is not deleted — as benign *"but so does everything else, by design."* **It is
 survivor here is not one of the three objects F6 names (PackageInstall, `<pkg>-pkg-sa`,
 `<pkg>-pkg-sa-cluster-admin`) — it is a **Service**, i.e. the leftover class is **wider than F6
 enumerated**, and a leftover does not merely sit there: it **shadows and breaks a later install of
-the same component**. An enumerated list of what teardown must remove is the defect; whether F6
-itself reopens is under adversary review.
+the same component**. An enumerated list of what teardown must remove is the defect.
+
+⚠️ **Adversary verdict: do NOT reopen F6 verbatim.** F6 names PackageInstall + SA +
+ClusterRoleBinding, which are exactly the three `vks-package.sh:193-197` **does** delete — filing
+this against F6 would record the wrong defect. What is genuinely unclosed is: (a) the **premise**
+*"cluster deletion subsumes it"*, which is FALSE for the walkthrough matrix because it **reuses a
+cut across rows**; (b) `98-uninstall-all.sh` has **zero** hits for `pkgi|packageinstall`, so
+`make uninstall-all` cannot remove a package-installed Istio at all; and (c) **label-scoped
+Services are invisible to every teardown this repo has**. That is this row.
 
 **Repair (needs a human — the agent's mutating `kubectl` against the lab is classifier-blocked):**
 
