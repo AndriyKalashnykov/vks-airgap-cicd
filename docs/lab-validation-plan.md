@@ -730,7 +730,8 @@ kubectl -n kube-system delete secret -l kubernetes.io/service-account.name=argoc
 kubectl --kubeconfig ./secrets/argocd.kubeconfig -n $ARGOCD_NAMESPACE delete secret -l argocd.argoproj.io/secret-type=cluster
 # our workloads (leave them if you want the demo alive):
 kubectl --kubeconfig ./secrets/argocd.kubeconfig -n $ARGOCD_NAMESPACE delete application --all
-kubectl delete ns gitea ci tekton-pipelines ${ISTIO_GWAPI_NAMESPACE:-vks-ingress} javawebapp gowebapp 2>/dev/null || true
+kubectl delete ns gitea ci tekton-pipelines "${ISTIO_GWAPI_NAMESPACE:-vks-ingress}" \
+  $(awk -F'\t' '!/^#/ && NF>1 {print $1}' apps/registry.tsv) 2>/dev/null || true
 # Harbor: delete the robot + the cicd/apps projects from the Harbor UI if you want them gone.
 # `make kind-down` is now SAFE to run here, and scenario-2 Step 0c tells you to. It removes only what
 # the KinD flow stamped as its own, and it REFUSES to touch the state overlay when it cannot confirm

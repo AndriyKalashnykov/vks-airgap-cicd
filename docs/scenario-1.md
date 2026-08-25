@@ -128,10 +128,10 @@ it uses.
 | `VCF_CLI_SRC_DIR` | `~/Downloads/vcf` | the folder holding **all six** Step 0 downloads. |
 | `SUPERVISOR_HOST` | `192.168.101.128` | vCenter → Workload Management → Supervisors → Control Plane Node IP. **Bare host — no `https://`, no trailing slash.** |
 | `VKS_CONTEXT_NAME` | `vks-cicd` | **you invent this** — a short label for the `vcf` login context |
-| `VKS_NAMESPACE` | `cicd` | the vSphere Namespace the cluster goes in. **Create it first — Step 2.** Pick a name nothing else owns: Step 2's teardown deletes **by name**, and on a nested lab a namespace called `lab` already belongs to the lab itself. |
+| `VKS_NAMESPACE` | `cicd` | you name it here; **Step 2 creates it**. Pick a name nothing else owns — teardown deletes **by name**, and on a nested lab `lab` already belongs to the lab itself. |
 | `VKS_CLUSTER_NAME` | `cicd-gc1` | **you invent this** — the guest cluster Step 6 creates. Must not be a name you deleted recently (see notes). |
 | `VKS_USERNAME` | `administrator@vsphere.local` | your vCenter SSO login |
-| `VKS_AUTH_METHOD` | `vcf` | how you log in. `vcf` = log in to the **Supervisor** (Step 3). Step 6 changes it to `kubeconfig` once the guest cluster exists. Unset, it defaults to `kubeconfig` and Step 3 fails looking for a cluster you have not created yet. |
+| `VKS_AUTH_METHOD` | `vcf` | **set it — do not leave it blank.** `vcf` logs in to the Supervisor; Step 6 switches it to `kubeconfig` for you. Left blank it silently becomes `kubeconfig`, and then `make env-check` goes **green** on a `.env` that is missing `SUPERVISOR_HOST` and `VKS_CONTEXT_NAME` too. |
 | `VCF_CLI_VSPHERE_PASSWORD` | *your value* | the password for that login. **Single quotes — see below.** |
 | `VKS_SSO_DOMAIN` | `vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups → *Domain* |
 
@@ -938,10 +938,12 @@ Skipped the ingress step? The `*.vks.local` URLs will not resolve — reach a se
 ```bash
 kubectl -n gitea port-forward svc/gitea-http 3000:3000                   # http://localhost:3000
 kubectl -n tekton-pipelines port-forward svc/tekton-dashboard 9097:9097  # http://localhost:9097
-# One per app. The app list is apps/registry.tsv; each app's Service is svc/<name>
-# on port 80 in a namespace of the same name. Today that is these two:
-kubectl -n javawebapp port-forward svc/javawebapp 18080:80              # http://localhost:18080
-kubectl -n gowebapp   port-forward svc/gowebapp   18081:80              # http://localhost:18081
+
+# One per app, each on its own local port. Every app's Service is svc/<name> on port 80,
+# in a namespace of the same name. Ask the registry which apps exist -- do NOT paste a
+# list from a document, which goes stale the day an app is added:
+awk -F'\t' '!/^#/ && NF>1 {print $1}' apps/registry.tsv
+kubectl -n <app> port-forward svc/<app> 18080:80                        # http://localhost:18080
 ```
 
 **Expect:** the UI answers on `localhost` at the port you forwarded.
@@ -970,6 +972,10 @@ Two runs on a 9.1 lab (i9-14900KF / 188 GiB) hosting the nested lab on the same 
 under self-contention. Where the runs disagree, both are shown.
 [Conditions](scenario-1-notes.md#timings--what-these-numbers-do-not-cover).
 
+⚠️ **Measured 2026-08-09, when the repo shipped TWO apps.** It ships six now, and `mirror`,
+`builder-image`, the pipeline and `make verify` all scale with that — so read these as a floor, not
+a forecast.
+
 | Step | Command | Run 1 | Run 2 |
 |---|---|---|---|
 | 6 | `make vks-cluster-create` | <1 s | <1 s |
@@ -980,7 +986,7 @@ under self-contention. Where the runs disagree, both are shown.
 | 11 | `make install-all` | **10 m 26 s** | **8 m 14 s** |
 | ↳ | `mirror-pull` / `mirror-push` / `mirror-verify` | 22 s / 2 m 38 s / 5 m 46 s | — |
 | ↳ | `builder-image` + `platform` + `gitops` | ≈1 m 40 s | — |
-| 11 | `make verify` (2 apps) | **3 m 6 s** | **3 m 27 s** |
+| 11 | `make verify` | **3 m 6 s** | **3 m 27 s** |
 | 14 | `make uninstall-all` | 1 m 12 s | 1 m 12 s |
 
 From a **bare Photon jump box** (fresh box, nothing cached — so the mirror pulls every image), the
