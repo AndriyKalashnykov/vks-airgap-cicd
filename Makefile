@@ -371,6 +371,10 @@ env-validate: ## Validity gate — format + KUBECONFIG/Harbor connectivity+auth 
 check-doc-command-count: ## Gate: a doc that COUNTS commands ("two commands") must list exactly that many
 	@$(SCRIPTS)/check-doc-command-count.sh
 
+.PHONY: check-doc-greeting-paths
+check-doc-greeting-paths: ## Gate: every per-app file the demo walkthrough tells an operator to EDIT must exist and still carry the greeting
+	@$(SCRIPTS)/check-doc-greeting-paths.sh
+
 .PHONY: check-doc-make-targets
 check-doc-make-targets: ## Gate: every `make X` a runbook tells the operator to run must EXIST in the Makefile
 	@$(SCRIPTS)/check-doc-make-targets.sh
@@ -1589,7 +1593,7 @@ vendor-diagrams: ## Re-download the pinned C4-PlantUML stdlib into docs/diagrams
 	echo "vendor-diagrams: refreshed docs/diagrams/c4/ @ $(C4_PLANTUML_VERSION) — now run 'make diagrams' and verify the offline render"
 
 .PHONY: docs-lint
-docs-lint: check-readme-scenarios check-doc-expect-leak check-expect-literals check-doc-command-count check-doc-make-targets check-doc-target-coverage check-vks-terminology check-doc-novels check-doc-robot-quoting check-vks-provenance ## Lint markdown + the README-scenario, command-count, target-coverage, VKS-terminology, doc-novels and robot-quoting gates
+docs-lint: check-readme-scenarios check-doc-expect-leak check-expect-literals check-doc-command-count check-doc-make-targets check-doc-greeting-paths check-doc-target-coverage check-vks-terminology check-doc-novels check-doc-robot-quoting check-vks-provenance ## Lint markdown + the README-scenario, command-count, target-coverage, VKS-terminology, doc-novels and robot-quoting gates
 	@# NOTE: diagrams-check is deliberately NOT a prerequisite here. It `docker run`s the pinned
 	@# PlantUML image (a ~478 MB pull, cold) and re-renders every .puml — so making it unconditional
 	@# meant a README-only PR paid for a full JVM render of seven diagrams it never touched. `make ci`
