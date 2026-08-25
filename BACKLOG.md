@@ -1791,10 +1791,11 @@ gone afterwards.
    defaults to 1. So a naive package install wants TWO istiods at 2048Mi each — the package path is
    not merely *equal* to the helm path's problem, it is **twice as bad**. Pinned to 1 in the values
    file.
-3. **THE REAL REMAINING COST — a VERSION DOWNGRADE.** Measured on a live 9.1 guest cluster: the
-   package offers **1.28.5**`+vmware.1-vks.1`; our helm path runs **1.30.3**. Switching is a
-   **two-minor downgrade**. That is a genuine tradeoff (VMware-certified build vs newer upstream),
-   not a free swap, and it is the thing to decide on — the memory and gateway objections are gone.
+3. ~~**THE REAL REMAINING COST — a VERSION DOWNGRADE.**~~ **ACCEPTED BY THE OWNER 2026-08-25.**
+   Measured on a live 9.1 guest cluster: the package offers **1.28.5**`+vmware.1-vks.1`; our helm
+   path runs **1.30.3**, so switching is a **two-minor downgrade**. Surfaced as a decision because
+   it is a real tradeoff (VMware-certified build vs newer upstream) rather than a free swap; the
+   owner accepted it. **No open objections remain — this row is approved work, not a proposal.**
 
 **NOT the same question as `istio-existing`.** CLAUDE.md's "attach, never install" is about a mesh
 the PLATFORM TEAM already runs — `INGRESS_CONTROLLER=istio-existing` + `47-attach-istio.sh`, which
