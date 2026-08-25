@@ -90,20 +90,28 @@ fi
 #   * test-*.sh are not the PRODUCT. This file's own control RUNS `sort -V` on purpose, to prove the
 #     shared key deliberately DIFFERS from it on GA-vs-rc -- the "a gate in the tree it scans"
 #     defect, where the honest fix is to scope by meaning, not to blank the file.
+#   * scripts/lib/ IS scanned. Globbing scripts/*.sh alone left 13 libs and ~7,140 lines unscanned
+#     -- including os.sh, which HOLDS the shared key. Proven blind: a planted `sort -V | tail -1` in
+#     lib/os.sh left this file 15/15 GREEN.
 #   * 24-vks-k8s-version.sh is the ONE deliberate product exception: its TKr strings always carry
 #     +vmware, so GNU and toybox were verified byte-identical there (twice, on a real photon:5.0).
 _scan_targets() {   # a glob + case, not `ls | grep`: SC2010, and it is correct for odd filenames
   local f
-  for f in "$ROOT"/scripts/*.sh; do
+  for f in "$ROOT"/scripts/*.sh "$ROOT"/scripts/lib/*.sh; do
     case "${f##*/}" in test-*.sh|24-vks-k8s-version.sh) continue ;; esac
     printf '%s\n' "$f"
   done
 }
 _scan_stripped() { local f; while IFS= read -r f; do sed 's/^[[:space:]]*#.*//' "$f"; done < <(_scan_targets); }
-if grep -qE 'sort([[:space:]]+-[A-Za-z0-9,.]*V|[[:space:]]+--version-sort)\b' <<< "$(_scan_stripped)"; then
+_scan_n="$(_scan_targets | wc -l | tr -d ' ')"
+# A denominator, and it is FATAL at zero: a scan of nothing greps clean, and "no sort -V found"
+# over an empty corpus is the purest form of a green that means nothing.
+if [ "${_scan_n:-0}" -lt 20 ]; then
+  bad "the sort -V scan has a corpus" "scanned only ${_scan_n} file(s) — a near-empty corpus greps clean, so this check would pass by not looking"
+elif grep -qE 'sort([[:space:]]+-[A-Za-z0-9,.]*V|[[:space:]]+--version-sort)\b' <<< "$(_scan_stripped)"; then
   bad "no sort -V in the product CODE" "sort -V is back; it is OS-dependent (toybox != GNU) and reintroduces the divergence"
 else
-  ok "no sort -V in the product CODE (OS-dependent, deliberately absent)"
+  ok "no sort -V in the product CODE across ${_scan_n} file(s) (OS-dependent, deliberately absent)"
 fi
 
 # Drive the PRODUCT's own `_list`, not a retyped copy of its jq. The previous version of this case

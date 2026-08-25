@@ -15,6 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 
 SRC_DIR="${VCF_CLI_SRC_DIR:-$HOME/Downloads/vcf}"
+require_cmd jq   # newest_versioned_file needs it HERE, 60+ lines before this script's own require_cmd
 DEF="$(newest_versioned_file "$SRC_DIR" 'supervisor-service-argocd-legacy-*.yml' || true)"
 [ -n "$DEF" ] || die "no supervisor-service-argocd-legacy-*.yml in $SRC_DIR (see docs/scenario-1.md Step 0)"
 log_info "service definition: $(basename "$DEF")"

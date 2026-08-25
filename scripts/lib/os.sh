@@ -2172,6 +2172,25 @@ _VKEY='def vkey:
       $raw ];'
 vkey_jq() { printf '%s' "$_VKEY"; }
 
+# _file_version <filename-or-path> — the version embedded in a versioned filename, or EMPTY.
+#
+# ALWAYS rc=0. `grep -o` exits 1 on NO MATCH, and these callers run `set -euo pipefail`, so
+# `v="$(extractor "$f")"` on an unparseable name KILLED the install script with rc=1 and ZERO output
+# -- before the log lines that name the chosen files, and making the caller's own `<none>` fallback
+# provably dead code. scripts/fetch-ca.sh:80-82 documents this exact landmine four lines from its own
+# `find | sort | tail`; I re-introduced it anyway. Returning empty is the only safe contract.
+#
+# It keeps the BUILD METADATA. `[0-9][0-9.]*[0-9]` stopped at the `+`, so the runbook's real files --
+# `...-v2.14.3+vmware.2-vks.1-25292931.yml` and its `+vmware.10` sibling -- produced the SAME key
+# `2.14.3`; `sort_by` is stable, so the winner became whatever `find` emitted first. That is a
+# DETERMINISM REGRESSION against the `find | sort | tail -1` it replaced, and it discarded exactly
+# what _VKEY exists to order. Requiring a dot excludes a bare counter (`harbor-24-legacy-v2.14.3`
+# yields 2.14.3, not 24); anchoring at the end takes the trailing run, not a prefix.
+_file_version() {
+  printf '%s' "${1##*/}" \
+    | jq -R -r 'sub("\\.[Yy][Aa]?[Mm][Ll]$"; "") | capture("(?<v>[0-9]+\\.[0-9][0-9A-Za-z.+_-]*)$").v // ""' 2>/dev/null || true
+}
+
 # newest_versioned_file <dir> <glob> — the NEWEST operator-supplied file matching <glob>, by VERSION.
 #
 # `find … | sort | tail -1` is LEXICOGRAPHIC. MEASURED over the filenames docs/scenario-1.md:89-91
@@ -2184,12 +2203,17 @@ newest_versioned_file() {
   local dir="$1" glob="$2" files
   files="$(find "$dir" -maxdepth 1 -name "$glob" 2>/dev/null || true)"
   [ -n "$files" ] || return 1
-  # Sort by the version embedded in the basename, through the SHARED key, then return the path.
+  # Sorted by the version through the SHARED key -- the SAME extraction _file_version uses, so the
+  # PICK and the harbor def/values PAIR CHECK cannot disagree about what a filename's version is.
+  # `// empty`, not a bare `last`: `last` on an empty array prints the literal string "null" with
+  # rc=0, which would pass the caller's `[ -n ]` guard and install a file named `null`.
   printf '%s\n' "$files" | jq -R -s -r "$(vkey_jq)"'
       [ splits("\n") | select(length > 0) ]
-    | map({ p: ., v: ((. | split("/") | last | capture("(?<v>[0-9][0-9.]*[0-9])").v) // "0") })
-    | sort_by(.v | vkey) | last | .p'
+    | map({ p: ., v: ((. | split("/") | last
+              | sub("\\.[Yy][Aa]?[Mm][Ll]$"; "")
+              | capture("(?<v>[0-9]+\\.[0-9][0-9A-Za-z.+_-]*)$").v) // "0") })
+    | sort_by(.v | vkey) | last | .p // empty'
 }
 
-# versioned_file_version <path> — the version embedded in a versioned filename, or empty.
-versioned_file_version() { printf '%s' "${1##*/}" | grep -oE '[0-9][0-9.]*[0-9]' | head -1; }
+# versioned_file_version <path> — public name; ONE extractor shared with the sort above.
+versioned_file_version() { _file_version "$1"; }

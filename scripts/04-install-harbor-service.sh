@@ -22,6 +22,10 @@ load_env
 SRC_DIR="${VCF_CLI_SRC_DIR:-$HOME/Downloads/vcf}"
 
 # The service definition and its data-values template are operator-supplied, entitled files.
+# jq is required by newest_versioned_file/_file_version. Without this, a missing jq surfaces as
+# "no supervisor-service-harbor-legacy-*.yml in $SRC_DIR" -- the wrong cause, pointing the operator
+# at a re-download of a file that is present.
+require_cmd jq
 DEF="$(newest_versioned_file "$SRC_DIR" 'supervisor-service-harbor-legacy-*.yml' || true)"
 TPL="$(newest_versioned_file "$SRC_DIR" 'supervisor-service-harbor-data-values-*.yml' || true)"
 [ -n "$DEF" ] || die "no supervisor-service-harbor-legacy-*.yml in $SRC_DIR (see docs/scenario-1.md Step 0)"
