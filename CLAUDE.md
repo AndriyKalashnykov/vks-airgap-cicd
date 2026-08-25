@@ -917,10 +917,28 @@ owner already gone:
   six were the whole problem; the namespace's own `status.conditions` named them
   (`NamespaceContentRemaining` / `NamespaceFinalizersRemaining`). Read the conditions, not `get all`.
 
-**Two options remain, and the choice is the OWNER'S:**
+**RESOLVED 2026-08-25 — (a) is IMPOSSIBLE, not merely risky. Do not retry it.** The owner
+authorised clearing the finalizers; the patch returned `Forbidden`. The drain had already deleted
+the namespace's RoleBindings, so for the SAME identity:
 
-- **(a)** clear `metadata.finalizers` on the 6 Application CRs → the namespace drains.
-- **(c)** re-cut the lab.
+| namespace | get | patch | delete | rolebindings |
+|---|---|---|---|---|
+| `svc-argocd-service-vh6my` (Active) | yes | **yes** | **yes** | yes |
+| `cicd` (Terminating) | yes | **no** | **no** | **no** |
+
+**The drain revokes the permission needed to unblock the drain**, and `can-i * *` is `no` — the SSO
+administrator is not cluster-admin on the Supervisor. No credential on this box can clear it. **The
+only exit for THIS cell is a re-cut.**
+
+**The ordering defect is FIXED UPSTREAM so it cannot recur** (lab PR #105, B463):
+`walk-reset-cell.sh` now has a **step 0** that deletes `applications.argoproj.io` `--wait=true`
+BEFORE the cluster, while ArgoCD and the destination are both alive. Root cause was that step 1 was
+headed *"THE CLUSTER FIRST"* while our own `scripts/98-uninstall-all.sh:122-125` says an
+Application's finalizer *"can only complete while ArgoCD can still REACH the destination cluster"* —
+and `walk-reset` never called `make uninstall-all` (zero references). The lab's
+`SUPERVISOR-SERVICES.md` had also marked **CONFIRMED** that Applications *"have no finalizers"*,
+which is true of ones ArgoCD creates itself and FALSE for ours — we set it deliberately at
+`k8s/argocd/application.yaml:18`. Corrected in place.
 
 ⚠️ **Why (a) is not mine to take unilaterally.** `nested-vsphere-lab`'s
 `scripts/check-no-force-finalize.sh` is a hard gate against clearing **`spec.finalizers` on a
