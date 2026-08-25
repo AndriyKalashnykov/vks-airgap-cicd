@@ -879,6 +879,11 @@ e2e-kind-both: ## Matrix: run the full KinD e2e in BOTH SSL modes (secure self-s
 SNEAKERNET_TRANSFER ?=
 
 .PHONY: e2e-kind-cross-cluster
+# Same guard as its siblings. It does not call load_env today, so `.env` cannot reach it — but it
+# reads ${ARGOCD_NAMESPACE:-argocd} from the ambient env, so an exported shell value (or a future
+# load_env) would reintroduce the defect that hit e2e-kind-tenant (see its comment). A uniform
+# invariant beats relying on an absence.
+e2e-kind-cross-cluster: export SKIP_DOTENV = $(E2E_SKIP_DOTENV)
 e2e-kind-cross-cluster: ## Faithful 2-KinD-cluster validation of the cross-cluster ArgoCD registration (HUB ArgoCD registers a GUEST cluster + syncs an app INTO it — the real-lab Supervisor→guest topology)
 	@$(SCRIPTS)/e2e-cross-cluster.sh
 
@@ -934,6 +939,11 @@ verify-ingress-both: check-env ## Matrix: install + route-verify BOTH ingress co
 # Same fresh-box fidelity as e2e-kind (a trailing '#' comment here would land INSIDE the
 # value — make keeps the whitespace — so the note lives on its own line).
 .PHONY: e2e-kind-tenant
+# SKIP_DOTENV like every other KinD e2e: this target ran against a LAB-configured `.env` and died
+# `ArgoCD is not installed` — .env's ARGOCD_NAMESPACE is the Supervisor's vSphere Namespace, so the
+# check looked in the WRONG namespace of the RIGHT cluster (measured 2026-08-25). `.env.state` is
+# still loaded, so KUBECONFIG keeps resolving to the KinD cluster.
+e2e-kind-tenant: export SKIP_DOTENV = $(E2E_SKIP_DOTENV)
 e2e-kind-tenant: ## Prove the TENANT write path (argocd-server, zero k8s RBAC in the ArgoCD ns) — run after e2e-kind
 	@$(SCRIPTS)/91-e2e-tenant-mechanism.sh
 
