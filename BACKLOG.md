@@ -1874,7 +1874,50 @@ kubeconfig, not inferred:
 | 2 | `istiod` pod: **Running 1/1, Ready=True, 0 restarts**, IP `172.20.2.51`. |
 | 3 | `kubectl -n istio-system get endpoints istiod` → **`<none>`**. The EndpointSlice exists with an EMPTY endpoint list. |
 | 4 | Service selector: `app=istiod`, `istio=pilot`, **`kapp.k14s.io/app=1787633405480953199`**. Pod labels carry `app=istiod` and `istio=pilot` but **no `kapp.k14s.io/app`** — they say `app.kubernetes.io/managed-by: Helm`, `helm.sh/chart: istiod-1.30.3`. |
-| 5 | The **Service** says `helm.sh/chart: istiod-`**`1.0.0`** and carries `kapp.k14s.io/identity` + `kapp.k14s.io/original`. The **Deployment** says `istiod-`**`1.30.3`**, no kapp labels. `kubectl get pkgi -A` shows **no istio PackageInstall** (only tkg system ones), while `sh.helm.release.v1.istiod.v1` exists. |
+| 5 | The **Service** says `helm.sh/chart: istiod-`**`1.0.0`** and carries `kapp.k14s.io/identity` + `kapp.k14s.io/original`. The **Deployment** says `istiod-`**`1.30.3`**, no kapp labels. `sh.helm.release.v1.istiod.v1` exists. ⚠️ **I ALSO WROTE that `kubectl get pkgi -A` shows no istio PackageInstall. THAT WAS FALSE** — see the correction below. |
+
+### 🔴 CORRECTED 2026-08-25 — it was NOT an orphan. A LIVE, PERMANENTLY-FAILING reconciler was re-breaking it every 2 minutes
+
+The reading below ("orphan") is **wrong**, and the error was mine: I ran `kubectl get pkgi -A`, read
+the first page, and reported **no istio PackageInstall**. It was there all along, in
+**`vmware-system-tkg`** — `istio.kubernetes.vmware.com 1.28.5+vmware.1-vks.1`, status **`Reconcile
+failed`**. That single misreading is why this was filed as dead leftovers and why the first fix did
+not hold.
+
+**The real mechanism, and it is a deadlock that can never resolve:**
+
+    kapp: Error: update deployment/istiod (apps/v1) namespace: istio-system:
+      Deployment.apps "istiod" is invalid: spec.selector:
+        Invalid value: {"matchLabels":{"istio":"pilot","kapp.k14s.io/app":"1787633405480953199"}}:
+        field is immutable (reason: Invalid)
+
+kapp's label-scoping wants `kapp.k14s.io/app` in the istiod **Deployment's** `spec.selector` — which
+Kubernetes forbids as **immutable**. So the reconcile can NEVER succeed. But every ~2-minute retry
+still re-applies the **Service** (whose selector IS mutable), re-inserting the kapp label → **zero
+endpoints** → every proxy fails `dial tcp <istiod>:15012` → its XDS config FREEZES.
+
+**Why that is worse than a plain outage:** the frozen proxy keeps serving whatever it last knew. On
+the walkthrough matrix, apps redeployed at `12:15:08Z` got new pod IPs while Envoy was frozen at
+`11:46:31Z`, so it kept dialling **dead** IPs — measured `cx_connect_fail::22`, `cds.update_failure:
+122` against `update_success: 3`. Three of eight hosts answered `200` (their IPs happened to be
+unchanged) and five timed out. A partial, moving failure that reads as flaky routing.
+
+**The fix, and the trap in it:** a plain `kubectl delete pkgi istio` would make kapp **garbage-collect
+the 9 resources it owns**, including the istiod Service and Deployment — i.e. it would take the mesh
+with it. Set `spec.noopDelete: true` FIRST, then delete: the reconciler goes, the resources stay.
+Measured: 9 owned resources before, **9 after**. Then remove the kapp label from the Service; with no
+reconciler it now HOLDS (the earlier patch was reverted within ~10 minutes).
+
+    kubectl -n vmware-system-tkg patch pkgi istio --type=merge -p '{"spec":{"noopDelete":true}}'
+    kubectl -n vmware-system-tkg delete pkgi istio
+    kubectl -n istio-system patch svc istiod --type=json \
+      -p='[{"op":"remove","path":"/spec/selector/kapp.k14s.io~1app"}]'
+    kubectl -n vks-ingress delete pod -l gateway.networking.k8s.io/gateway-name=vks-uis
+
+**The transferable lesson is the misreading, not the mechanism.** "No PackageInstall exists" was a
+claim about a *paginated listing I did not finish reading*, and it converted a live-reconciler
+problem into an orphan story that survived two rounds. Same family as the `--limit`-saturation rule:
+a listing answered the question I asked, not the one I meant.
 
 **Reading:** a VKS **Standard Package** Istio was installed via Carvel/kapp — kapp injects
 `kapp.k14s.io/app` into selectors — its PackageInstall was later removed, and its **Service
