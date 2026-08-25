@@ -17,7 +17,7 @@
 set -uo pipefail
 export LC_ALL=C
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
-pass=0; fail=0; flakes=0; T=""
+pass=0; fail=0; flakes=0; T=""; _skip_f8=0
 # Set to 1 by the ONE case that DELIBERATELY provokes a 404 (F8). Everywhere else, "fetch failed"
 # in the gate's output means the network moved under us, not that the product is wrong.
 expect_fetch_fail=0
@@ -107,10 +107,24 @@ else
 fi
 
 # F8: a malformed pin derives a 404 branch; the message must name the URL and accuse the PIN.
+# POSITIVE CONTROL. `expect_fetch_fail=1` disables bad()'s flake guard -- necessarily, since this
+# case provokes a 404 on purpose -- so under a real outage the two cases below FALSELY ACCUSE the
+# product ("a malformed pin reads as a network problem..."), which is exactly backwards. Measured: a
+# mid-run outage produced 6 SKIPs and 2 such FAILs. The control distinguishes them: if the HELM
+# arm's own fetch (a known-good URL, fetched in this same run) also failed, the network moved.
+tree 1.30.3 v1.5.1
+run E=1
+if ! fetch_ok; then
+  flaked "F8 message"; flaked "F8 caveats the OK"; _skip_f8=1
+else
+  _skip_f8=0
+fi
+
 tree 1.30.3 v1.5.1 '1.28+vmware.1-vks.1'
 expect_fetch_fail=1   # this case PROVOKES the 404 on purpose; a "fetch failed" here is the subject
 run E=1
-if said 'could not fetch https://' && said 'the PIN is the suspect'; then
+if [ "${_skip_f8:-0}" = 1 ]; then :   # already reported as flaked above
+elif said 'could not fetch https://' && said 'the PIN is the suspect'; then
   ok "F8 fetch failure names the URL and the pin"
 else
   bad "F8 message" "a malformed pin reads as a network problem and sends the reader to the wrong suspect"
@@ -118,7 +132,8 @@ fi
 # The OK line MUST carry the caveat here too. This is the MOST LIKELY not-checked path in the wild
 # (a proxy, a rate-limit, a malformed pin), and without this assertion the product fix for it was
 # vacuous: deleting the one-line `gwapi_pkg_unchecked=1` left this file 9/9 green.
-if said 'HELM PATH ONLY'; then
+if [ "${_skip_f8:-0}" = 1 ]; then :   # already reported as flaked above
+elif said 'HELM PATH ONLY'; then
   ok "F8 the fetch-failure path ALSO caveats its OK line"
 else
   bad "F8 caveats the OK" "the gate warned that the pin was not checked and then printed an unqualified OK — the reader sees a full pass over a half-run gate"
