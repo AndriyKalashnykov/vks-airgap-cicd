@@ -16,6 +16,53 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🔵 B481 — REFUTED: do NOT wire the proxy-readiness check into `istio-preflight` 🔵 refuted
+
+**Recorded so it is not rebuilt.** After [[B477]] it looks obvious that `make istio-preflight` should
+call the readiness check that already exists (`istio_proxy_ready`, `lib/istio.sh`), because during
+the outage preflight printed `PREFLIGHT OK`. An `adversary-k8s` idea round refuted it before anything
+was written.
+
+**F1 — it has ZERO discrimination, and false-REDs 100% of the time on its normal input.** Preflight
+runs *before* attach, and in the incident the Gateway was created *at attach time*. So at preflight
+time there is no proxy pod to be Ready — and `istio_proxy_ready` returns **1 for an empty pod set**:
+
+| state at preflight time | result |
+|---|---|
+| healthy mesh, not yet attached (the normal case) | **1** |
+| B477 mesh (istiod endpoints zeroed), not yet attached | **1** |
+
+Identical. Downgrading `PREFLIGHT OK` on rc≠0 would redden every pre-install run and catch nothing —
+including `make e2e-kind-istio-existing`, which runs preflight immediately before `install-ingress`
+and is healthy by construction.
+
+**F2 — it would not merely false-RED, it would CRASH preflight.** `ISTIO_GWAPI_NAMESPACE` and
+`ISTIO_GATEWAY_NAME` are commented in `.env.example` and defaulted only inside a function preflight
+never calls, and `48-istio-preflight.sh` sets `set -euo pipefail`. Measured:
+`ISTIO_GWAPI_NAMESPACE: unbound variable`, rc=1.
+
+**F3 — the istiod-endpoints variant is the design [[B477]] ALREADY refuted** (it needs
+`istio-system`, which a tenant does not own — RULE ZERO-B — and false-REDs on canary/multi-revision
+and ambient). Do not re-enter it sideways.
+
+**F4 — the cost it targets is already fixed at the right place.** PR #995 made both wait loops fail
+attach rather than publish a dead address, so B477 now costs one 300s timeout at attach, not 8×300s
+at verify. And the "green preflight misled us" gap is already disclosed where the operator reads it,
+at `98-verify-ingress.sh:180`.
+
+### What to do instead
+
+1. **Nothing on the gateway-api path.** At preflight time there is nothing in the tenant's own
+   namespaces to observe. That is the honest answer, not a gap.
+2. **If preflight should say more, make it a PRINTER, never a verdict change** — one line stating
+   that it has *not* checked the data plane, true in every state, no RBAC cost, cannot false-RED.
+3. **The genuinely better target is a DIFFERENT bug, on the CLASSIC path**: `lib/istio.sh:65` finds a
+   Service with `:15021` but never checks its selector matches a pod. Unlike the refuted proposal
+   this **does** discriminate at preflight time — the platform's gateway Service exists *before*
+   attach, so "it has zero ready endpoints" is a real pre-install finding, in a namespace preflight
+   already reads. Needs its own idea round; `rc=2` (could-not-ask) must degrade to a warning, since
+   preflight's verdict is currently a two-way boolean with no third state.
+
 ## 🔴 B480 — the two Istio install paths ADOPT each other's objects, silently and permanently 🔴 open
 
 **Measured 2026-08-25 on the live lab. This is reachable by running the DOCUMENTED commands in the
