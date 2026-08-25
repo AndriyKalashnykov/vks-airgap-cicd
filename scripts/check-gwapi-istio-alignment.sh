@@ -90,7 +90,10 @@ if [ -n "${ISTIO_PACKAGE_VERSION:-}" ]; then
       log_error "check-gwapi-istio-alignment: could not fetch ${pkg_url} (the PACKAGE pin) and GWAPI_REQUIRE_FETCH=1."
       exit 1
     fi
-    log_warn "check-gwapi-istio-alignment: the PACKAGE pin ${ISTIO_PACKAGE_VERSION} was NOT checked (fetch failed)."
+    log_warn "check-gwapi-istio-alignment: the PACKAGE pin ${ISTIO_PACKAGE_VERSION} was NOT checked."
+    log_warn "  fetch failed: ${pkg_url}"
+    log_warn "  If that URL looks wrong, the PIN is the suspect, not the network: the branch is derived"
+    log_warn "  as release-<major>.<minor> from ISTIO_PACKAGE_VERSION, so a malformed pin yields a 404."
   else
     pkg_vendored="$(printf '%s' "$pkg_gomod" | grep -E '^[[:space:]]+sigs\.k8s\.io/gateway-api v' | head -1 | awk '{print $2}')"
     if [ -n "$pkg_vendored" ] && [ "$pkg_vendored" != "$GATEWAY_API_VERSION" ]; then
@@ -102,15 +105,36 @@ if [ -n "${ISTIO_PACKAGE_VERSION:-}" ]; then
       log_error "  as ISTIO_VERSION, or give the package path its own CRD version."
       exit 1
     fi
-    [ -n "$pkg_vendored" ] && log_info "check-gwapi-istio-alignment: the PACKAGE pin ${ISTIO_PACKAGE_VERSION} also vendors ${pkg_vendored}."
+    if [ -z "$pkg_vendored" ]; then
+      # FAIL CLOSED, exactly as the helm arm above does on the same condition. `release-1.8/go.mod`
+      # is a real HTTP 200 with ZERO sigs.k8s.io/gateway-api lines, so a fetch can succeed and the
+      # extraction still yield nothing -- and warning-and-continuing there made this gate LESS
+      # informative when a pin was set-but-uncheckable than when it was unset.
+      log_error "check-gwapi-istio-alignment: fetched ${pkg_url} but found no sigs.k8s.io/gateway-api"
+      log_error "  requirement in it. Either ${pkg_minor} does not vendor gateway-api (so the PACKAGE"
+      log_error "  pin ${ISTIO_PACKAGE_VERSION} is for an Istio that predates it), or the go.mod format"
+      log_error "  changed and this gate's matcher is stale. Both need a human; neither is a pass."
+      exit 1
+    fi
+    log_info "check-gwapi-istio-alignment: the PACKAGE pin ${ISTIO_PACKAGE_VERSION} also vendors ${pkg_vendored}."
   fi
 else
-  log_info "check-gwapi-istio-alignment: ISTIO_PACKAGE_VERSION is unset, so the package path's Istio"
-  log_info "  version FLOATS and cannot be checked offline. This gate covers the HELM path only."
+  # WARN, not INFO: ISTIO_PACKAGE_VERSION is commented in .env.example, so this is the DEFAULT path
+  # and every real run takes it. An INFO line saying "this gate covers half of what you think" is the
+  # kind of disclosure nobody reads. Not "offline" -- this gate is online and just made two HTTPS
+  # fetches; the reason is that an unpinned package version is chosen at INSTALL time, on a cluster.
+  log_warn "check-gwapi-istio-alignment: ISTIO_PACKAGE_VERSION is unset, so the package path's Istio"
+  log_warn "  version FLOATS -- it is chosen from the cluster's offer at install time and CANNOT be"
+  log_warn "  checked here. This gate covers the HELM path only. Set ISTIO_PACKAGE_VERSION to cover both."
+  gwapi_pkg_unchecked=1
 fi
 
 if [ "$GATEWAY_API_VERSION" = "$vendored" ]; then
-  log_info "check-gwapi-istio-alignment: OK — istio ${ISTIO_VERSION} (${minor}) vendors gateway-api ${vendored}, and that is our pin"
+  if [ "${gwapi_pkg_unchecked:-0}" = 1 ]; then
+    log_info "check-gwapi-istio-alignment: OK (HELM PATH ONLY — the package path is UNCHECKED, see the warning above) — istio ${ISTIO_VERSION} (${minor}) vendors gateway-api ${vendored}, and that is our pin"
+  else
+    log_info "check-gwapi-istio-alignment: OK — istio ${ISTIO_VERSION} (${minor}) vendors gateway-api ${vendored}, and that is our pin"
+  fi
   exit 0
 fi
 
