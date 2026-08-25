@@ -125,15 +125,23 @@ it uses.
 
 | key | example | how to get the value |
 |---|---|---|
-| `VCF_CLI_SRC_DIR` | `~/Downloads/vcf` | the folder you put **all six** Step 0 downloads in — Steps 1, 4 and 5 each read it. Set it **in `./.env`** so it persists: Step 1 stops if it is unset, but Steps 4 and 5 silently fall back to `~/Downloads/vcf` — so a value that reaches only Step 1 (a one-shot `VCF_CLI_SRC_DIR=… scripts/01-…`, or a new terminal) makes Step 4 search a directory you never used, without saying so. |
+| `VCF_CLI_SRC_DIR` | `~/Downloads/vcf` | the folder holding **all six** Step 0 downloads. |
 | `SUPERVISOR_HOST` | `192.168.101.128` | vCenter → Workload Management → Supervisors → Control Plane Node IP. **Bare host — no `https://`, no trailing slash.** |
 | `VKS_CONTEXT_NAME` | `vks-cicd` | **you invent this** — a short label for the `vcf` login context |
 | `VKS_NAMESPACE` | `cicd` | the vSphere Namespace the cluster goes in. **Create it first — Step 2.** Pick a name nothing else owns: Step 2's teardown deletes **by name**, and on a nested lab a namespace called `lab` already belongs to the lab itself. |
 | `VKS_CLUSTER_NAME` | `cicd-gc1` | **you invent this** — the guest cluster Step 6 creates. Must not be a name you deleted recently (see notes). |
 | `VKS_USERNAME` | `administrator@vsphere.local` | your vCenter SSO login |
 | `VKS_AUTH_METHOD` | `vcf` | how you log in. `vcf` = log in to the **Supervisor** (Step 3). Step 6 changes it to `kubeconfig` once the guest cluster exists. Unset, it defaults to `kubeconfig` and Step 3 fails looking for a cluster you have not created yet. |
-| `VCF_CLI_VSPHERE_PASSWORD` | *your value* | the password for that login. Set it in `.env` like everything else here, **in single quotes** — `VCF_CLI_VSPHERE_PASSWORD='your password'` — and escape an embedded `'` as `'\''`. Written bare, a password containing `$`, a space, a quote or a backtick is silently mangled or fails to parse, and this account **locks out after 3 failed attempts** (Step 3). |
+| `VCF_CLI_VSPHERE_PASSWORD` | *your value* | the password for that login. **Single quotes — see below.** |
 | `VKS_SSO_DOMAIN` | `vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups → *Domain* |
+
+⚠️ **Passwords go in SINGLE quotes** — `VCF_CLI_VSPHERE_PASSWORD='your password'`, an embedded `'`
+escaped as `'\''`. Bare, a `$` or space is silently mangled, so the value changes every run and each
+retry burns one of **3 attempts before the account locks out permanently**. You see `HTTP 401` while
+`.env` looks correct.
+
+⚠️ **Put `VCF_CLI_SRC_DIR` in `./.env`, not on a command line.** Steps 4 and 5 silently fall back to
+`~/Downloads/vcf`, so a one-shot value makes Step 4 search a directory you never used.
 
 Now run:
 
@@ -187,10 +195,14 @@ now.
 |---|---|---|
 | `VCENTER_HOST` | `vcsa.env1.lab.test` | your vCenter FQDN from Step 0 — **not** the Supervisor IP |
 | `VCENTER_USERNAME` | `administrator@vsphere.local` | the same SSO login as Step 1 |
-| `VCENTER_PASSWORD` | *your value* | the same password as Step 1 — and **in single quotes, exactly as there**: `VCENTER_PASSWORD='your password'`, with an embedded `'` escaped as `'\''`. Written bare it is silently mangled: `$$` expands to the shell PID, so the value differs **on every run** with no error at all, and each retry spends a fresh attempt on an account that **locks out after 3**. Harbor and ArgoCD then report `HTTP 401` as though the password were wrong, while the value in `.env` looks correct. |
-| `VKS_STORAGE_POLICY` | `wcp-vmfs` (single-host VMFS)<br>vSAN: **read it off your lab** — see the next column | **Per-lab, not a constant.** This is the vCenter policy **NAME**, not the storage **class**: the class is the name lowercased with spaces as dashes, and `04-vsphere-namespace.sh:52` says that is **not invertible**, so a class-shaped string like `vsan-default-storage-policy` is not a value you can assume. **Already have a namespace? `make vsphere-namespace` prints the policy it uses, by name** — no kubeconfig needed. Otherwise vCenter → **Policies and Profiles → VM Storage Policies**; if you set it wrong the create stops and lists every available policy. |
+| `VCENTER_PASSWORD` | *your value* | the same password as Step 1 — **and in single quotes, for the same reason.** |
+| `VKS_STORAGE_POLICY` | `wcp-vmfs` | vCenter → **Policies and Profiles → VM Storage Policies**. Already have a namespace? `make vsphere-namespace` prints the one it uses — no kubeconfig needed. |
 | `VKS_VM_CLASSES` | `best-effort-small best-effort-medium` | space-separated; `best-effort-small` alone is enough. Defaults to the example, and the names are **sent to vCenter unchecked** — a class that does not exist fails with an HTTP code that does not mention VM classes. |
 | `VKS_CLUSTER_COMPUTE` | *(leave unset)* | **only if** vCenter has **more than one** cluster. Steps 4 and 5 need it too, not just this one. |
+
+⚠️ **`VKS_STORAGE_POLICY` is the policy NAME, not the storage class** — and you cannot convert one
+to the other. Guess wrong and the create stops and lists every policy you actually have, which is
+the fastest way to find the right one.
 
 ⚠️ **It will not modify a namespace that already exists** — it prints what is attached and changes
 nothing. So if a storage policy or VM class turns out to be missing, fix it in vCenter (or delete
@@ -332,7 +344,7 @@ The registry every image comes from.
 | key | example | how to get the value |
 |---|---|---|
 | `HARBOR_URL` | `harbor.env1.lab.test` | **you choose it** — but it must be a name your **real DNS** can answer, because the guest nodes resolve it. Bare host: no `https://`, no trailing slash. |
-| `HARBOR_STORAGE_CLASS` | `wcp-vmfs` (VMFS)<br>`vsan-default-storage-policy` (vSAN) | `kubectl get storageclass` |
+| `HARBOR_STORAGE_CLASS` | `wcp-vmfs` (VMFS)<br>`vsan-default-storage-policy` (vSAN) | **No default — you must set it, and it is the only key in this runbook you cannot read before Step 3.** Run `kubectl get storageclass` now that you have a kubeconfig. Unset, `make install-harbor-service` stops at once. |
 
 **Run:**
 
@@ -405,8 +417,11 @@ The GitOps engine, running on the Supervisor.
 
 | key | example | how to get the value |
 |---|---|---|
-| `ARGOCD_NAMESPACE` | `cicd` | the vSphere Namespace the ArgoCD **instance** goes in. ⚠️ Nothing will stop you if you skip this: `load_env` DERIVES it from `VKS_NAMESPACE`, so the guards that look like they would catch it never fire. A derived value is worse than an empty one here — it names a namespace that EXISTS, so the next command succeeds and the failure surfaces three steps later as `kubectl get deploy argocd-server` finding nothing. |
+| `ARGOCD_NAMESPACE` | `cicd` | the vSphere Namespace the ArgoCD **instance** goes in. **Do not skip it — see below.** |
 | `VKS_AUTH_METHOD` | `vcf` | leave it `vcf` here; the guest-cluster step changes it to `kubeconfig`. |
+
+⚠️ **Set `ARGOCD_NAMESPACE` explicitly.** Left blank it silently becomes `VKS_NAMESPACE` — no
+error — and you find out three steps later, when `kubectl get deploy argocd-server` finds nothing.
 
 **Run:**
 
@@ -480,7 +495,11 @@ Where Gitea, Tekton and your apps run. You need cluster-admin on it.
 | `VKS_CLUSTER_NAME` | `cicd-gc1` | you invented it when you filled in `.env`. **Never reuse a name you deleted recently** — it never converges. |
 | `VKS_CONTEXT_NAME` | `vks-cicd` | the context name you chose — read by the `vcf` fallback below |
 | `VKS_NAMESPACE` | `cicd` | your vSphere Namespace — read by the `vcf` fallback below |
-| `VKS_K8S_VERSION` |  | **`make vks-k8s-version`** writes it — the newest **Ready AND Compatible** release *that also has an OSImage for your node OS*, waiting if a freshly-enabled Supervisor is still syncing them. On a lab that has both, it looks like `v1.35.5+vmware.1-vkr.1`. **The value cell above is deliberately EMPTY**: the walk harness writes any literal it finds there into `./.env`, which PINS this key — and a pin makes the tool log *"already pinned … NOT overwriting it"* and keeps a version whose OSImage may not exist, so admission denies the cluster. It writes the **full** name because this is a *prefix* selector: a bare `v1.34` is accepted and then floats, which an air-gap repo must not do. It will not move a version you pinned yourself. |
+| `VKS_K8S_VERSION` |  | **leave it empty** — `make vks-k8s-version` writes it for you, below. |
+<!-- MAINTAINERS: the value cell MUST stay empty. The walk harness writes any literal it finds
+     there into ./.env, which PINS this key -- and a pin makes the tool log "already pinned ...
+     NOT overwriting it" and keep a version whose OSImage may not exist, so admission denies the
+     cluster. -->
 
 ```bash
 make vks-k8s-version           # resolve the TKr NOW — see the note below; do not skip this
@@ -492,6 +511,9 @@ make vks-cluster-create        # applies the Cluster; provisioning is async
 into `./.env` itself, and `make vks-cluster-create` on the next line reads it from there. If it says
 `NOT overwriting it`, you pinned `VKS_K8S_VERSION` yourself earlier and it is respecting that; clear
 the pin if you wanted the newest.
+
+It picks the newest release that is Ready, Compatible, and has an OSImage for your node OS — and
+writes the **full** name, because a bare `v1.34` is a prefix that floats.
 
 Run the two together, in that order — on a freshly-built Supervisor the answer goes stale in
 minutes. If the create is rejected with `Could not resolve KR/OSImage`, just run both lines again:
