@@ -397,6 +397,66 @@ EOF
 app_namespaces_flat() { app_names | tr '\n' ' '; }
 
 # ---------------------------------------------------------------------------
+# istio_gwapi_proxy_ready — is the proxy Istio PROVISIONED for our Gateway actually serving?
+#
+# WHY THIS EXISTS (measured on the lab, 2026-08-25, B477): `Programmed=True` + an address means
+# ISTIO accepted the Gateway. It says NOTHING about the data plane. On that run the Gateway was
+# Programmed with LB IP 192.168.101.135 while its proxy pod sat in CrashLoopBackOff (17 restarts,
+# `failed to sign CSR: dial tcp <istiod>:15012: connect: connection refused` -- istiod's Service had
+# ZERO endpoints). So install/attach exited 0, published a dead address into .env.state, and the
+# operator learned nothing until verify-ingress polled 8 hosts x 300s = 40 MINUTES later.
+#
+# It asserts the END RESULT (a Ready proxy pod), not a proxy for it:
+#   * the proxy lives in ISTIO_GWAPI_NAMESPACE, which WE create -- no istio-system RBAC, so this
+#     works for a TENANT, who is the default audience (RULE ZERO-B).
+#   * it is blind to which istiod, which revision, canary vs ambient -- it never names istiod.
+#   * it catches the whole class: CA unreachable, ImagePullBackOff on an air-gapped pull, PSA
+#     rejection, OOM. A Deployment can be Available and a pod Ready=True while the mesh is dead;
+#     neither `rollout status` nor `wait --for=condition` can see this.
+#
+# THREE STATES, never two: 0 = a Ready proxy pod; 1 = provisioned but not Ready; 2 = COULD NOT ASK.
+# "Cannot ask" is not a verdict -- 48-istio-preflight.sh:153-157 documents that exact mistake.
+istio_gwapi_proxy_ready() {
+  local sel="gateway.networking.k8s.io/gateway-name=${ISTIO_GATEWAY_NAME}" out err rc=0
+  err="$(mktemp)"
+  # stderr to its OWN file, never 2>&1: merging makes the capture non-empty and inverts the
+  # emptiness test below (the reason k_can_i/classify_kube_failure give in os.sh).
+  out="$(kubectl -n "$ISTIO_GWAPI_NAMESPACE" get pods -l "$sel" \
+         -o jsonpath='{range .items[*]}{.metadata.name}{"="}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>"$err")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    log_warn "could not read the provisioned proxy's pods in ${ISTIO_GWAPI_NAMESPACE}: $(head -1 "$err")"
+    rm -f "$err"; return 2
+  fi
+  rm -f "$err"
+  [ -n "$out" ] || return 1                       # not provisioned YET -- keep polling
+  printf '%s' "$out" | grep -q '=True$' && return 0
+  return 1
+}
+
+# istio_diagnose_proxy — print WHY the provisioned proxy is not serving. stderr only: the caller's
+# STDOUT is its return value (the Gateway address), so a stray printf here would corrupt it.
+istio_diagnose_proxy() {
+  local sel="gateway.networking.k8s.io/gateway-name=${ISTIO_GATEWAY_NAME}" pod reason
+  log_error "  Istio PROGRAMMED the Gateway and published an address, but the proxy it provisioned"
+  log_error "  is not Ready — so the address answers nothing. This is the data plane, not the config."
+  kubectl -n "$ISTIO_GWAPI_NAMESPACE" get pods -l "$sel" 2>&1 | sed 's/^/      /' >&2 || true
+  pod="$(kubectl -n "$ISTIO_GWAPI_NAMESPACE" get pods -l "$sel" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  if [ -n "$pod" ]; then
+    reason="$(kubectl -n "$ISTIO_GWAPI_NAMESPACE" get pod "$pod" \
+      -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}{" "}{.status.containerStatuses[0].lastState.terminated.reason}' 2>/dev/null || true)"
+    log_error "      reason: ${reason:-<none>}"
+    log_error "      last log line:"
+    kubectl -n "$ISTIO_GWAPI_NAMESPACE" logs "$pod" --tail=3 2>&1 | sed 's/^/        /' >&2 || true
+    log_error "  If the log says 'failed to sign CSR' / 'connect: connection refused' to :15012, the"
+    log_error "  proxy cannot reach istiod's CA. Check istiod has ENDPOINTS, not merely that it runs:"
+    log_error "      kubectl -n <istio-ns> get endpoints istiod        # <none> means its SELECTOR matches no pod"
+    log_error "      kubectl -n <istio-ns> get svc istiod -o jsonpath='{.spec.selector}'"
+    log_error "  A kapp-installed Service carries kapp.k14s.io/app in its selector; a helm-installed"
+    log_error "  istiod pod does not have that label, so the two never match (B477)."
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # istio_wait_gwapi_address — wait for Istio to PROGRAM the Gateway and publish its address.
 # `Programmed=True` is the real readiness signal; the address is what /etc/hosts must point at.
 # ---------------------------------------------------------------------------
@@ -408,14 +468,26 @@ istio_wait_gwapi_address() {
       -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null || true)"
     addr="$(kubectl -n "$ISTIO_GWAPI_NAMESPACE" get gateway "$ISTIO_GATEWAY_NAME" \
       -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true)"
-    [ "$prog" = "True" ] && [ -n "$addr" ] && { printf '%s' "$addr"; return 0; }
+    if [ "$prog" = "True" ] && [ -n "$addr" ]; then
+      # Programmed + address is NOT the end result -- see istio_gwapi_proxy_ready's header.
+      istio_gwapi_proxy_ready; _pr=$?
+      case "$_pr" in
+        0) printf '%s' "$addr"; return 0 ;;
+        2) log_warn "proxy readiness UNKNOWN (could not ask) — accepting the address WITHOUT that check"
+           printf '%s' "$addr"; return 0 ;;
+        *) : ;;   # provisioned but not Ready -> keep polling until the timeout below
+      esac
+    fi
     elapsed=$(( elapsed + interval ))
     if [ "$elapsed" -ge "$timeout" ]; then
       log_error "Gateway not programmed within ${timeout}s (Programmed=${prog:-<none>}, address=${addr:-<none>})"
       log_error "  kubectl -n ${ISTIO_GWAPI_NAMESPACE} describe gateway ${ISTIO_GATEWAY_NAME}"
       log_error "  Istio provisions the data plane itself — check what it created:"
       kubectl -n "$ISTIO_GWAPI_NAMESPACE" get deploy,svc,pods -l "gateway.networking.k8s.io/gateway-name=${ISTIO_GATEWAY_NAME}" 2>&1 | sed 's/^/      /' >&2 || true
-      if [ "$prog" = "True" ] || kubectl -n "$ISTIO_GWAPI_NAMESPACE" get svc "${ISTIO_GATEWAY_NAME}-${ISTIO_GATEWAY_CLASS:-istio}" >/dev/null 2>&1; then
+      if [ "$prog" = "True" ] && [ -n "$addr" ]; then
+        # Programmed WITH an address but we still timed out => the proxy never went Ready.
+        istio_diagnose_proxy
+      elif [ "$prog" = "True" ] || kubectl -n "$ISTIO_GWAPI_NAMESPACE" get svc "${ISTIO_GATEWAY_NAME}-${ISTIO_GATEWAY_CLASS:-istio}" >/dev/null 2>&1; then
         # The proxy exists but has no address -> it is the LoadBalancer, not Istio, that is stuck.
         istio_diagnose_pending_lb "$ISTIO_GWAPI_NAMESPACE" "${ISTIO_GATEWAY_NAME}-${ISTIO_GATEWAY_CLASS:-istio}"
       else
