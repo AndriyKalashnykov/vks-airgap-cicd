@@ -1750,3 +1750,56 @@ that can hold the §8.5 constraint.
 **Done when:** the manifest exists, a gate here fails on a doc key with no row AND on a manifest row
 for a key no document names, a `FORBID` row is RED-proven by attempting the emission, and
 `walk-matrix.sh` reads the file instead of `walk_env`'s hand-typed heredoc.
+
+## 🟡 B476 — Istio is the only one of our three components installed by HELM when a VKS-native path already exists and is measured
+
+Measured 2026-08-25. The three components install three genuinely different ways:
+
+| | mechanism | client |
+|---|---|---|
+| Harbor | Supervisor Service — `POST /api/vcenter/namespace-management/supervisor-services` with an entitled `.yml` | `curl` to vCenter |
+| ArgoCD | Supervisor Service — same route, same shape | `curl` to vCenter |
+| **Istio** | **`helm install`** istio/base + istiod + gateway, images from our Harbor (`46-install-istio.sh`) | `helm` |
+
+But the VKS-native path for Istio **already exists in this repo and is lab-measured**:
+
+    make install-vks-package   PACKAGE=istio.kubernetes.vmware.com
+    make uninstall-vks-package PACKAGE=istio.kubernetes.vmware.com CONFIRM=yes
+
+`scripts/vks-package.sh` uses **`kubectl` and `jq` only** — 16 and 4 invocations, **zero** `vcf`,
+`helm`, `imgpkg` or `kctrl`. It applies a Carvel **`PackageInstall`** CR (plus a ServiceAccount and
+cluster-admin binding named after the package) and the guest cluster's existing kapp-controller
+reconciles it. So it needs neither the licensed CLI nor a vCenter API call — a lighter dependency
+than either of the other two paths. `vcf package install istio …` is recorded as the **LEGACY**
+path (`docs/vks-services/istio.md:21`); the CR is the current one.
+
+MEASURED on a 9.1 guest cluster: **install 20 s, uninstall 11 s**, `istio-system` and every workload
+gone afterwards.
+
+**TWO BLOCKERS, both already measured — this is not a one-line switch:**
+
+1. **The package does not pin istiod's memory.** It exposes `istio.pilot.resources.requests` as a
+   tunable and leaves it **`null`**, so the upstream chart default `{cpu: 500m, memory: 2048Mi}`
+   applies, and `config/overlay/upstream/istiod-overlay.yaml` does not override it. On
+   `best-effort-small` workers (2833Mi allocatable, this demo already holding ~874Mi) **istiod goes
+   Pending** — the same scheduling wall our helm path hit. Our path solved it with
+   `ISTIOD_MEMORY_REQUEST` (default `768Mi`; measured steady-state RSS **43/39/39Mi**). The package
+   path needs the same value supplied via `PKG_VALUES=<file>`.
+2. **The package's ingress gateway ships OFF.** Turning it on is another `PKG_VALUES` stanza, so
+   "install the package" is not the whole job — the gateway and its LoadBalancer have to come from
+   somewhere, and `46-install-istio.sh` currently helm-installs `istio/gateway` for exactly that.
+
+**NOT the same question as `istio-existing`.** CLAUDE.md's "attach, never install" is about a mesh
+the PLATFORM TEAM already runs — `INGRESS_CONTROLLER=istio-existing` + `47-attach-istio.sh`, which
+installs nothing. That stays. This row is about which mechanism WE use when we are the ones
+installing on our own guest cluster.
+
+**Why it is worth doing:** it removes helm from the guest-cluster install path entirely, it removes
+the `global.hub` override (and with it `make verify-gateway-image`, which exists solely because
+helm accepts an unknown `--set` key with rc=0 and silently falls back to the public registry), and
+it makes our Istio install the same shape a VKS operator would use.
+
+**Done when:** `INGRESS_CONTROLLER=istio` installs via `install-vks-package` with a `PKG_VALUES`
+file pinning `istio.pilot.resources.requests` and enabling the ingress gateway; `make
+verify-ingress` is green on a real lab; and `docs/vks-services/istio.md` records which path is the
+default with its measurement.
