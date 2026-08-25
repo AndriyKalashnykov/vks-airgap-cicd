@@ -1263,6 +1263,10 @@ static-check-pr: lint validate test-scripts-fast ## The per-PR half of static-ch
 check-help-row-ids: ## Gate: no `make help` text may cite a backlog row id (a bare `make` prints it)
 	@$(SCRIPTS)/check-help-row-ids.sh
 
+.PHONY: check-clean-context
+check-clean-context: ## Build EVERY app from a git-archive (tracked-files-only) context — catches a build that depends on untracked working-tree output. APP=<name> for one.
+	@$(SCRIPTS)/test-clean-context-build.sh
+
 .PHONY: test-scripts
 test-scripts: ## Run all offline script-logic unit tests
 	@$(SCRIPTS)/run-test-set.sh "all offline" $(TEST_OFFLINE)

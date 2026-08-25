@@ -18,9 +18,24 @@ ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_NOLOGO=1 \
     DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
 COPY . .
-# Tests and publish in ONE layer (hadolint DL3059) so a broken app cannot produce an image at all.
-# --no-restore on BOTH: the builder already restored, and this is the flag that proves it.
-RUN dotnet build --no-restore -c Release \
+# `dotnet restore --source` FIRST, then --no-restore on the rest.
+#
+# ⚠️ THIS USED TO BE `--no-restore` ALONE, and it only ever worked by accident. The comment claimed
+# "the builder already restored, and this is the flag that proves it" -- but the builder restores at
+# WORKDIR /build while this stage builds at /src, so `/src/obj/project.assets.json` was never
+# produced by it. What supplied that file was `COPY . .` picking up the DEVELOPER'S LOCAL `obj/`
+# from the build context. MEASURED 2026-08-25: the instant a .dockerignore excluded `obj/`, the
+# in-cluster build failed in ten seconds with
+#     error NETSDK1004: Assets file '/src/obj/project.assets.json' not found
+# i.e. the air-gapped build depended on an untracked artifact from someone's working tree, and a
+# clean CI checkout would have failed the same way.
+#
+# The restore is OFFLINE and stays offline: --source points at the builder's warm
+# ~/.nuget/packages (see Dockerfile.builder, whose stated value is exactly that cache), and
+# --no-cache stops NuGet consulting any configured remote feed. If this ever needs the network it
+# will FAIL rather than silently reach out, which is the property an air-gap build needs.
+RUN dotnet restore --no-cache --source /root/.nuget/packages \
+    && dotnet build --no-restore -c Release \
     && dotnet publish --no-restore -c Release -o /app
 
 # hadolint ignore=DL3006
