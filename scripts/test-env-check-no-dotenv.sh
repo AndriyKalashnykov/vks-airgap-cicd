@@ -29,6 +29,10 @@ trap cleanup EXIT
 # under test going red on inputs that were never copied, and the message accuses the product.
 T="$(mktemp -d)" || { echo "  FAIL mktemp"; exit 1; }
 if ! git -C "$ROOT" archive HEAD > "$T/a.tar" 2>/dev/null; then
+  if [ -n "${CI:-}" ]; then
+    printf '  FAIL  no git repo (or no HEAD) and CI is set — a SKIP here is a green that measured NOTHING\n'
+    exit 1
+  fi
   printf '  SKIP  not a git repo (or no HEAD) — this test needs git archive for a .env-free tree\n'; exit 0
 fi
 tar -xf "$T/a.tar" -C "$T" || { bad "HARNESS: tar extract" "this is the TEST's setup, not the product"; printf '\n  %d passed, %d FAILED\n' "$pass" "$fail"; exit 1; }
@@ -44,10 +48,18 @@ fi
 # this would test the wrong artifact: an uncommitted fix is invisible and an uncommitted REGRESSION
 # is missed. The archive supplies the .env-free SHAPE; the working tree supplies the CODE.
 cp -a "$ROOT/scripts/." "$T/scripts/" || { bad "HARNESS: overlay the working tree" "could not copy scripts/"; printf '\n  %d passed, %d FAILED\n' "$pass" "$fail"; exit 1; }
-[ -f "$T/.env" ] && bad "HARNESS: the overlay dragged in a .env" "cp -a copied an untracked .env — the corpus is no longer .env-free"
+# NOTE: no post-overlay ".env leaked" guard here. `cp -a "$ROOT/scripts/."` writes into
+# $T/scripts/, so it CANNOT create $T/.env -- a guard there could never fire, and a check that
+# cannot fire reads as a guarantee while providing none. The pre-overlay check above is the real
+# one. (An untracked scripts/.env WOULD be copied, to $T/scripts/.env, which load_env never reads.)
 ok "corpus: $n scripts from HEAD, code overlaid from the working tree, NO .env"
 
-run() { ( cd "$T" && env "$@" bash scripts/02-env.sh check >"$T/out" 2>&1 ); }
+# `env -i`, NOT `env "$@"`: the latter ADDS variables and never clears the inherited environment,
+# so an ambient KUBECONFIG or HARBOR_PASSWORD in the operator's shell flips this test. MEASURED:
+# KUBECONFIG=/nonexistent -> the KinD case FALSE-REDs; HARBOR_PASSWORD=x -> the teeth case
+# FALSE-GREENs. load_env snapshot-protects both by design (they outrank .env.state), so this is the
+# product behaving correctly and the HARNESS lying. PATH and HOME are the only carry-overs.
+run() { ( cd "$T" && env -i PATH="$PATH" HOME="$HOME" "$@" bash scripts/02-env.sh check >"$T/out" 2>&1 ); }
 
 # 1. real-lab FIRST run: no .env, no state -> must be RED, and must name VALUES not a file
 run E=1; rc=$?

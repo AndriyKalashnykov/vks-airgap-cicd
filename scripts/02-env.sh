@@ -217,8 +217,17 @@ env_check() {
   # Making this a NO-OP under SKIP_DOTENV would have disabled exactly that; measured, and refuted.
   #
   # NOT gated on SKIP_DOTENV, deliberately: it needs no variable threaded through two sub-makes to
-  # be correct, and it improves the REAL-LAB first run too -- "5 required values missing, here they
-  # are" strictly dominates "no .env yet", which names a FILE when the reader's problem is VALUES.
+  # be correct, and on a real-lab FIRST run "5 required values missing, here they are" beats "no
+  # .env yet", which names a FILE when the reader's problem is VALUES.
+  #
+  # ⚠️ NOT "strictly dominates" -- that claim was measured FALSE and is corrected here. On a box
+  # with NO .env but a STALE .env.state (any dev box that ran the KinD e2e and never `kind-down`ed,
+  # since that only removes a KIND-STAMPED sink), this now returns rc=0 where it used to hard-stop:
+  # measured rc=1 -> rc=0. preflight has no env-validate backstop, so install-all would then mirror
+  # to the OVERLAY's HARBOR_URL. The codebase already accepts that hazard -- with a real .env plus
+  # the same stale overlay, the PRE-FIX gate is ALSO rc=0 and the overlay's HARBOR_URL still wins --
+  # so this WIDENS an accepted hazard rather than creating one. Named, not hidden; state_stamp and
+  # its "does not record which cluster it belongs to" warning are the existing mitigation.
   # env_populate and env_validate keep their `die`: the file is a write target / a read source there.
   [ -f "$ENV_FILE" ] || log_warn "no .env file — checking the values that ARE set (state overlays, environment). 'make env-init' creates one."
   load_env
@@ -262,9 +271,15 @@ env_check() {
     esac
   fi
   if [ "${#missing[@]}" -gt 0 ]; then
-    log_error "env-check: ${#missing[@]} required value(s) missing/placeholder:"
+    # The remedy must be runnable FROM THE STATE THAT PRODUCED THIS ERROR. With no .env,
+  # `make env-populate` itself FATALs ("no .env yet") -- measured -- so telling the reader to run
+  # it bounces them through a dead command. env-init has to come first, and this block is what a
+  # reader scrolls to; the WARN six lines up is not where they look.
+  local _env_remedy="Set them in .env (run 'make env-populate' to mint the ones we can), then re-check."
+  [ -f "$ENV_FILE" ] || _env_remedy="No .env exists yet: run 'make env-init', then 'make env-populate' to mint the ones we can, then re-check."
+  log_error "env-check: ${#missing[@]} required value(s) missing/placeholder:"
     printf '  - %s\n' "${missing[@]}"
-    echo "Set them in .env (run 'make env-populate' to mint the ones we can), then re-check."
+    echo "${_env_remedy}"
     exit 1
   fi
   log_info "env-check: all required values present (auth method: ${VKS_AUTH_METHOD:-kubeconfig})"
