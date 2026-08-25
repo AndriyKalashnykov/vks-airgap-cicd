@@ -64,21 +64,48 @@ if [ "$ACTION" = install ] || [ "$ACTION" = uninstall ]; then
   esac
 fi
 
-# `sort -V`, NOT jq's `sort`. jq sorts strings LEXICOGRAPHICALLY, and the newest version is taken
-# with `tail -1` below, so the DEFAULT would float to the wrong release the moment a two-digit
-# component appears. MEASURED 2026-08-25:
-#     jq sort  | tail -1  over  [1.27.8, 1.28.5, 1.9.0, 1.100.0]  ->  1.9.0     WRONG
-#     sort -V  | tail -1  over the same list                      ->  1.100.0   right
-# It also fixes the vmware-build suffix: over [.+vmware.1, .+vmware.2, .+vmware.10] lexicographic
-# picks vmware.2 and `sort -V` picks vmware.10. Today's six istio versions happen to agree under
-# both (all two-digit minors, all vmware.1), which is exactly why this was invisible.
+# ONE version key, used by BOTH the LIST and the INSTALL. They must never be able to disagree.
+#
+# NOT `sort -V`: it is implementation-dependent, and a jump box is Photon (toybox) or Ubuntu (GNU).
+# MEASURED 2026-08-25 over [1.28.5, 1.28.5+vmware.1-vks.1, 1.28.5+vmware.2-vks.1]:
+#     GNU coreutils 9.4  sort -V | tail -1  ->  1.28.5+vmware.2-vks.1
+#     toybox 0.8.9       sort -V | tail -1  ->  1.28.5                 <- DIFFERENT OS, DIFFERENT PICK
+# So `sort -V` at one site and jq at the other made `list` report one LATEST while `install` chose
+# another, on Photon only. Pure jq is byte-identical on every OS by construction.
+#
+# NOT jq's bare `sort` either: it is LEXICOGRAPHIC, so [1.9.0, 1.100.0] floats to 1.9.0.
+#
+# The key is TOTAL -- every field is compared, and the raw string is the final tiebreak -- so the
+# result never depends on the order the API server happened to list the packages in.
+# A GA release outranks its own prereleases: `1.28.5` beats `1.28.5-rc1`, so the default float
+# can never land on a release candidate. (`sort -V` ranks -rc1 ABOVE GA; that is not what we want.)
+# shellcheck disable=SC2016  # jq PROGRAM TEXT, not shell. The single quotes are load-bearing:
+# $raw / $s / $core / $build are jq variables, and letting the shell expand them would silently
+# substitute empty strings and make every comparison compare nothing.
+_VKEY='def vkey:
+  . as $raw
+  | (if type == "string" then . else "" end) as $s
+  | ($s | split("+")) as $p
+  | ($p[0] // "") as $core
+  | ($p[1:] | join("+")) as $build
+  | ($core | split("-")) as $c
+  | [ ($c[0] // "" | [scan("[0-9]+")] | map(tonumber)),
+      [ (if ($c | length) > 1 then 0 else 1 end) ],
+      ($c[1:] | join("-") | [scan("[0-9]+")] | map(tonumber)),
+      ($build | [scan("[0-9]+")] | map(tonumber)),
+      $raw ];'
+
+# `// ""` on .spec.version: a Package with the field absent must not abort the whole listing with a
+# jq error that `_list` then reports as "no Carvel Packages visible. Is KUBECONFIG pointing at a
+# GUEST cluster?" -- naming the wrong cause for a one-row schema surprise.
 _versions() { kubectl get packages -A -o json 2>/dev/null \
-  | jq -r --arg r "$1" '[.items[]?|select(.spec.refName==$r)|.spec.version]|.[]' 2>/dev/null | sort -V; }
+  | jq -r --arg r "$1" "$_VKEY"' [.items[]?|select(.spec.refName==$r)|(.spec.version // "")]|map(select(length>0))|sort_by(vkey)|.[]' 2>/dev/null; }
 
 _list() {
   local out
+  # LATEST comes from the SAME vkey the installer uses -- do not re-implement it here.
   out="$(kubectl get packages -A -o json 2>/dev/null \
-        | jq -r '[.items[]?|{r:.spec.refName,v:.spec.version}]|group_by(.r)|map({r:.[0].r,n:length,latest:(map(.v)|sort_by(split(".")|map(gsub("[^0-9].*$";"")|tonumber? // 0))|last)})|.[]|"  \(.r)\t\(.n)\t\(.latest)"' 2>/dev/null || true)"
+        | jq -r "$_VKEY"' [.items[]?|{r:.spec.refName,v:(.spec.version // "")}]|map(select(.v|length>0))|group_by(.r)|map({r:.[0].r,n:length,latest:(map(.v)|sort_by(vkey)|last)})|.[]|"  \(.r)\t\(.n)\t\(.latest)"' 2>/dev/null || true)"
   [ -n "$out" ] || die "no Carvel Packages visible. Is KUBECONFIG pointing at a GUEST cluster with the standard-packages repo? Check: kubectl get packagerepositories -A"
   printf '  %-46s %-9s %s\n' PACKAGE VERSIONS LATEST
   printf '%s\n' "$out" | while IFS=$'\t' read -r r n l; do printf '  %-46s %-9s %s\n' "${r# }" "$n" "$l"; done
