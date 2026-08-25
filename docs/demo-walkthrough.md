@@ -17,8 +17,9 @@ make creds-show
 It prints, for **your** environment: every **URL**, its **username**, its **password**, and the
 one-time `/etc/hosts` line the `*.vks.local` hostnames need (there is no DNS in an air gap).
 
-Use those URLs below. The examples say `javawebapp.vks.local` — that is just the default; yours are
-whatever `make creds-show` printed.
+Use those URLs below. The examples walk **`javawebapp`**, but the repo ships **six** apps and
+`make creds-show` lists them as equals — pick any one. The hostname and the file you edit both
+change per app; the table in Step 2 gives both.
 
 ## The loop
 
@@ -28,37 +29,43 @@ whatever `make creds-show` printed.
    `Hello from vks-airgap-cicd` default. Either is fine — you're about to change it.)
 
 2. **Sign in to Gitea first** (the username **and** password `make creds-show` prints — editing
-   requires auth), then **edit it in Gitea.** Open **`demo/javawebapp-app`** →
-   `src/main/resources/application.yml`, click the **pencil**, and change the greeting on line 18 (edit
-   whatever text is currently after `${APP_MESSAGE:` — it may already be a verify marker):
+   requires auth), then **edit the greeting in Gitea.** Open **`demo/<app>-app`**, navigate to the
+   file for your app, click the **pencil**, and change the text. Each app keeps its greeting in its
+   own language's idiom, so the file differs — this is the whole table:
 
-   ```yaml
-   # e.g. from:
-     message: ${APP_MESSAGE:Hello from vks-airgap-cicd}
-   # to (any text):
-     message: ${APP_MESSAGE:Hello from the air-gapped pipeline}
-   ```
+   | app | file to edit | the line |
+   |-----|--------------|----------|
+   | `javawebapp` | `src/main/resources/application.yml` | `message: ${APP_MESSAGE:Hello from vks-airgap-cicd}` |
+   | `gowebapp` | `main.go` | `const defaultMessage = "Hello from vks-airgap-cicd"` |
+   | `nodejswebapp` | `server.js` | `const defaultMessage = 'Hello from vks-airgap-cicd';` |
+   | `pythonwebapp` | `app.py` | `DEFAULT_MESSAGE = "Hello from vks-airgap-cicd"` |
+   | `rustwebapp` | `src/main.rs` | `const DEFAULT_MESSAGE: &str = "Hello from vks-airgap-cicd";` |
+   | `dotnetwebapp` | `Program.cs` | `public const string DefaultMessage = "Hello from vks-airgap-cicd";` |
+
+   Change only the **text inside the quotes** to anything you like, e.g. `Hello from the air-gapped
+   pipeline`. If you have already run `make verify` (or `make e2e-kind`, which calls it), that text
+   is a `vks-airgap-cicd-verify-<epoch>` marker rather than the default — edit it anyway.
 
    **Commit directly to `main`.** That fires the Gitea webhook → Tekton → a new PipelineRun.
 
-3. **Watch Tekton build it.** In the **Tekton Dashboard**, a `javawebapp-ci-*` PipelineRun appears in
+3. **Watch Tekton build it.** In the **Tekton Dashboard**, a `<app>-ci-*` PipelineRun appears in
    the `ci` namespace. Open each TaskRun to tail its log:
 
    | TaskRun | Does |
    |---------|------|
-   | `clone-app` | clones `javawebapp-app`; its short commit SHA becomes the image tag |
-   | `test` | runs `./mvnw -B -o test` **offline** (against the deps-baked builder image) |
+   | `clone-app` | clones `<app>-app`; its short commit SHA becomes the image tag |
+   | `test` | runs the app's own test command **offline**, against its deps-baked builder image (java: `./mvnw -B -o test`; go: `go test`; and so on per language) |
    | `build` | **Kaniko** builds the image and pushes it to Harbor |
    | `deploy-update` | writes the new tag back into `javawebapp-deploy` — the GitOps hand-off |
 
-4. **See the image in Harbor.** Project **`apps`** → repository **`javawebapp`**. A new tag appears:
+4. **See the image in Harbor.** Project **`apps`** → repository **`<app>`**. A new tag appears:
    the **git short SHA** of your commit.
 
-5. **See the tag written back in Gitea.** **`demo/javawebapp-deploy`** → `kustomization.yaml` has a
-   new commit by **`ci-bot`** (`ci: deploy javawebapp <sha>`) bumping `images[0].newTag`. ArgoCD
+5. **See the tag written back in Gitea.** **`demo/<app>-deploy`** → `kustomization.yaml` has a
+   new commit by **`ci-bot`** (`ci: deploy <app> <sha>`) bumping `images[0].newTag`. ArgoCD
    watches **this** repo — which is why the *write-back*, not your source push, is what deploys.
 
-6. **Watch ArgoCD deploy it.** The **`javawebapp`** Application flips **`OutOfSync` → `Synced`** and
+6. **Watch ArgoCD deploy it.** The **`<app>`** Application flips **`OutOfSync` → `Synced`** and
    rolls the Deployment to the new image. (Auto-sync polls on an interval — click **Refresh** to
    reconcile now.)
 
