@@ -176,6 +176,23 @@ env_populate() {
   echo "    HARBOR_USERNAME      'admin' if you installed Harbor (Scenario 1); the robot login robot\$<name> for a tenant (Scenario 2) — the local KinD flow sets this itself"
   echo "    HARBOR_PASSWORD      OVERRIDE the generated value with the lab's admin/robot secret"
   echo "    VCF_CLI_SRC_DIR      folder holding the licensed VCF/argocd-vcf CLI archives (make install-vcf-clis)"
+      # 3 KEYS WERE MISSING HERE UNTIL 2026-08-25, AND THE OMISSION STRANDED THE OPERATOR.
+      # MEASURED: scenario-1.md Step 1 requires 9 keys; this block printed 7. The three below were
+      # in neither this list NOR env_check. Someone who set exactly what this printed -- trusting
+      # the tool over the doc -- then hit `make vks-login`, which HARD-DIES on VKS_CONTEXT_NAME
+      # (it is in 30-vks-login.sh's :? die-set). Fixing that dropped them onto the interactive
+      # password path against an account that locks out PERMANENTLY after 3 attempts.
+      # THE DOC WAS RIGHT; THIS TOOL WAS WRONG. Root cause: this block (last touched 2026-07-11)
+      # and the doc table (2026-08-13) are two HAND-TYPED lists with nothing linking them.
+      echo "    VKS_AUTH_METHOD      set it to vcf for a REAL LAB (Step 1). It defaults to kubeconfig, which is right for the local"
+      echo "                         KinD flow (05-kind-up.sh writes it) and makes Step 3 fail looking for a cluster you have not"
+                                   # ^ nuance the doc carries too: Step 6 flips it back to kubeconfig once the guest cluster exists.
+      echo "                         created yet. Step 6 changes it back for you."
+      echo "    VKS_CONTEXT_NAME     you invent this - a short label for the vcf login context. REQUIRED: make vks-login dies without it"
+      echo "    VKS_SSO_DOMAIN       vCenter > Administration > Single Sign On > Users and Groups > Domain (needed only if VKS_USERNAME is bare, with no @)"
+      echo "    VCF_CLI_VSPHERE_PASSWORD  your vCenter SSO password. Put it in .env IN SINGLE QUOTES. Unquoted it is SILENTLY MANGLED - a"
+      echo "                              doubled dollar becomes the shell PID, so the value DIFFERS EVERY RUN with no error, and each retry"
+      echo "                              spends a fresh attempt on an account that LOCKS OUT PERMANENTLY after 3. See scenario-1.md Step 1."
   echo
   log_info "populate done — run 'make env-check' then 'make env-validate'"
 }

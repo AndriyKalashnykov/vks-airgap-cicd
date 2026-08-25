@@ -58,7 +58,8 @@ Internet-only? Use [the sneakernet flow](sneakernet.md) instead; it replaces Ste
 Follow [Common bootstrap](common-bootstrap.md) — install `git`/`make`/`curl`, clone, `cd` into the
 repo, and `make env-init`. It is shared with Scenario 2 so there is exactly one copy to keep right.
 
-**Collect these from your lab before Step 1** — you paste them into `.env`:
+**Collect these from your lab before Step 1** — write them down now; you enter them into `.env` in
+Steps 1 and 2, where each one is listed with the exact `.env` key it goes in:
 
 | What | Example | Where to find it |
 |---|---|---|
@@ -169,8 +170,11 @@ fish or ksh, which is the same resolver `shell-init` used to decide where to wri
 Your cluster goes in a vSphere Namespace. Use your own — not one shared with other workloads,
 because teardown deletes **by name** and this repo's app names are generic.
 
-> **Already have one?** Put its name in `VKS_NAMESPACE` and go to Step 3 — nothing else here
-> applies to you.
+> **Already have one?** Put its name in `VKS_NAMESPACE` and skip **only** `make vsphere-namespace`
+> below. The key table and the vCenter trust anchor still apply to you: `VCENTER_HOST`,
+> `VCENTER_USERNAME` and `VCENTER_PASSWORD` are hard-required — `make fetch-supervisor-ca` (Step 3)
+> dies without `VCENTER_HOST`, and Steps 4 and 5 die without the other two — and Steps 4 and 5 also
+> refuse without the anchor `make fetch-vcenter-ca` writes.
 
 Step 3 activates a login context at this namespace and fails if it does not exist yet, so create it
 now.
@@ -181,7 +185,7 @@ now.
 |---|---|---|
 | `VCENTER_HOST` | `vcsa.env1.lab.test` | your vCenter FQDN from Step 0 — **not** the Supervisor IP |
 | `VCENTER_USERNAME` | `administrator@vsphere.local` | the same SSO login as Step 1 |
-| `VCENTER_PASSWORD` | *your value* | the same password as Step 1 |
+| `VCENTER_PASSWORD` | *your value* | the same password as Step 1 — and **in single quotes, exactly as there**: `VCENTER_PASSWORD='your password'`, with an embedded `'` escaped as `'\''`. Written bare it is silently mangled: `$$` expands to the shell PID, so the value differs **on every run** with no error at all, and each retry spends a fresh attempt on an account that **locks out after 3**. Harbor and ArgoCD then report `HTTP 401` as though the password were wrong, while the value in `.env` looks correct. |
 | `VKS_STORAGE_POLICY` | `wcp-vmfs` (single-host VMFS)<br>vSAN: **read it off your lab** — see the next column | **Per-lab, not a constant.** This is the vCenter policy **NAME**, not the storage **class**: the class is the name lowercased with spaces as dashes, and `04-vsphere-namespace.sh:52` says that is **not invertible**, so a class-shaped string like `vsan-default-storage-policy` is not a value you can assume. **Already have a namespace? `make vsphere-namespace` prints the policy it uses, by name** — no kubeconfig needed. Otherwise vCenter → **Policies and Profiles → VM Storage Policies**; if you set it wrong the create stops and lists every available policy. |
 | `VKS_VM_CLASSES` | `best-effort-small best-effort-medium` | space-separated; `best-effort-small` alone is enough. Defaults to the example, and the names are **sent to vCenter unchecked** — a class that does not exist fails with an HTTP code that does not mention VM classes. |
 | `VKS_CLUSTER_COMPUTE` | *(leave unset)* | **only if** vCenter has **more than one** cluster. Steps 4 and 5 need it too, not just this one. |
@@ -190,7 +194,7 @@ now.
 nothing. So if a storage policy or VM class turns out to be missing, fix it in vCenter (or delete
 and recreate the namespace); re-running with a corrected `.env` is a no-op.
 
-### First, give vCenter a trust anchor — this step and the next two will refuse without one
+### First, give vCenter a trust anchor — Steps 4 and 5 will refuse without one
 
 Everything from here that talks to vCenter sends your **SSO administrator password**, so it will not
 open that connection to a peer whose identity it has not verified. A lab vCenter serves a self-signed
