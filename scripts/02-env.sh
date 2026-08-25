@@ -204,7 +204,23 @@ env_populate() {
 # check — presence only (fast, no network)
 # ---------------------------------------------------------------------------
 env_check() {
-  [ -f "$ENV_FILE" ] || die "no .env yet — run 'make env-init' first"
+  # WARN, not die, on an ABSENT .env. This gate's very next line is `load_env`, which under
+  # SKIP_DOTENV=1 is CONTRACTUALLY OBLIGED TO IGNORE the file (lib/os.sh logs "IGNORING .env") --
+  # so demanding the file's PRESENCE here is incoherent, and it made the documented KinD quickstart
+  # impossible on a clean clone (B478): `make e2e-kind` -> install-all -> preflight -> here -> rc=2
+  # "no .env yet", while README/kind-local/Makefile:201 all promise "zero .env" and call it ENFORCED.
+  #
+  # The VALUE checks below stay, and they are the teeth: on the KinD path every required value comes
+  # from `.env.state` (published by kind-up/install-harbor/install-argocd), so an absent .env is fine
+  # while a BLANK generated secret still fails -- which is the regression this gate exists for
+  # (lib/os.sh:610 records a CI run that FATAL'd on an empty HARBOR_PASSWORD while local was green).
+  # Making this a NO-OP under SKIP_DOTENV would have disabled exactly that; measured, and refuted.
+  #
+  # NOT gated on SKIP_DOTENV, deliberately: it needs no variable threaded through two sub-makes to
+  # be correct, and it improves the REAL-LAB first run too -- "5 required values missing, here they
+  # are" strictly dominates "no .env yet", which names a FILE when the reader's problem is VALUES.
+  # env_populate and env_validate keep their `die`: the file is a write target / a read source there.
+  [ -f "$ENV_FILE" ] || log_warn "no .env file — checking the values that ARE set (state overlays, environment). 'make env-init' creates one."
   load_env
   # HARBOR_URL + KUBECONFIG are checked explicitly below (sentinel / file-existence), not in this
   # generic placeholder loop — so they are intentionally absent here.
