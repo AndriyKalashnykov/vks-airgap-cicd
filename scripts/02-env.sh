@@ -176,12 +176,15 @@ env_populate() {
   echo "    HARBOR_USERNAME      'admin' if you installed Harbor (Scenario 1); the robot login robot\$<name> for a tenant (Scenario 2) — the local KinD flow sets this itself"
   echo "    HARBOR_PASSWORD      OVERRIDE the generated value with the lab's admin/robot secret"
   echo "    VCF_CLI_SRC_DIR      folder holding the licensed VCF/argocd-vcf CLI archives (make install-vcf-clis)"
-      # 3 KEYS WERE MISSING HERE UNTIL 2026-08-25, AND THE OMISSION STRANDED THE OPERATOR.
-      # MEASURED: scenario-1.md Step 1 requires 9 keys; this block printed 7. The three below were
-      # in neither this list NOR env_check. Someone who set exactly what this printed -- trusting
-      # the tool over the doc -- then hit `make vks-login`, which HARD-DIES on VKS_CONTEXT_NAME
-      # (it is in 30-vks-login.sh's :? die-set). Fixing that dropped them onto the interactive
-      # password path against an account that locks out PERMANENTLY after 3 attempts.
+      # 4 KEYS WERE MISSING HERE UNTIL 2026-08-25, AND THE OMISSION STRANDED THE OPERATOR.
+      # MEASURED: scenario-1.md Step 1 lists 9 keys; this block carried only 5 of them.
+      # VKS_AUTH_METHOD is the KEYSTONE, and env_check could NOT save you -- it is guarded by
+      #   vcf) required+=(SUPERVISOR_HOST VKS_CONTEXT_NAME) ;;    <- see env_check, below
+      # so an operator who never sets VKS_AUTH_METHOD gets the `kubeconfig` default, that branch
+      # never runs, and env_check passes GREEN on a real-lab .env missing both. They then reach
+      # `make vks-login`, which HARD-DIES on VKS_CONTEXT_NAME (30-vks-login.sh's :? die-set), and
+      # fixing that alone drops them onto the interactive password path against an account that
+      # locks out PERMANENTLY after 3 attempts.
       # THE DOC WAS RIGHT; THIS TOOL WAS WRONG. Root cause: this block (last touched 2026-07-11)
       # and the doc table (2026-08-13) are two HAND-TYPED lists with nothing linking them.
       echo "    VKS_AUTH_METHOD      set it to vcf for a REAL LAB (Step 1). It defaults to kubeconfig, which is right for the local"

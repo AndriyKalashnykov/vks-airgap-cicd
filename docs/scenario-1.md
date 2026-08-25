@@ -61,13 +61,13 @@ repo, and `make env-init`. It is shared with Scenario 2 so there is exactly one 
 **Collect these from your lab before Step 1** — write them down now; you enter them into `.env` in
 Steps 1 and 2, where each one is listed with the exact `.env` key it goes in:
 
-| What | Example | Where to find it |
-|---|---|---|
-| Supervisor IP | `192.168.101.128` | vCenter → Workload Management → Supervisors → *Control Plane Node IP* |
-| vCenter FQDN | `vcsa.env1.lab.test` | the address you log into vCenter with (Step 3 needs it for the CA). **Your jump box must resolve it** — check: `getent hosts vcsa.env1.lab.test` |
-| your SSO user | `administrator@vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups |
-| your SSO domain | `vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups, the *Domain* dropdown |
-| your SSO password | — | for that login — you put it in `.env` in Step 1 |
+| What | `.env` key | Example | Where to find it |
+|---|---|---|---|
+| Supervisor IP | `SUPERVISOR_HOST` | `192.168.101.128` | vCenter → Workload Management → Supervisors → *Control Plane Node IP*. **Bare host — no `https://`, no trailing slash.** |
+| vCenter FQDN | `VCENTER_HOST` | `vcsa.env1.lab.test` | the address you log into vCenter with (Step 3 needs it for the CA). **Your jump box must resolve it** — check: `getent hosts vcsa.env1.lab.test` |
+| your SSO user | `VKS_USERNAME` **and** `VCENTER_USERNAME` | `administrator@vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups. **Two keys, one value** — Steps 3 and 4/5 read different ones. |
+| your SSO domain | `VKS_SSO_DOMAIN` | `vsphere.local` | vCenter → Administration → Single Sign On → Users and Groups, the *Domain* dropdown. Needed only if `VKS_USERNAME` is bare (no `@`) or unset. |
+| your SSO password | `VCF_CLI_VSPHERE_PASSWORD` **and** `VCENTER_PASSWORD` | — | for that login. **Two keys, one value**, and **both in single quotes** — see Step 1, where an unquoted password is silently mangled against an account that locks out after 3 attempts. |
 
 ### Download the Broadcom artifacts
 
@@ -172,9 +172,11 @@ because teardown deletes **by name** and this repo's app names are generic.
 
 > **Already have one?** Put its name in `VKS_NAMESPACE` and skip **only** `make vsphere-namespace`
 > below. The key table and the vCenter trust anchor still apply to you: `VCENTER_HOST`,
-> `VCENTER_USERNAME` and `VCENTER_PASSWORD` are hard-required — `make fetch-supervisor-ca` (Step 3)
-> dies without `VCENTER_HOST`, and Steps 4 and 5 die without the other two — and Steps 4 and 5 also
-> refuse without the anchor `make fetch-vcenter-ca` writes.
+> `VCENTER_USERNAME` and `VCENTER_PASSWORD` are hard-required — `make fetch-vcenter-ca` (below) and
+> `make fetch-supervisor-ca` (Step 3) both die without `VCENTER_HOST`, and Steps 4 and 5 die without
+> the other two. The anchor `make fetch-vcenter-ca` writes is also required by this step and by
+> Steps 4 and 5. (`VKS_STORAGE_POLICY` and `VKS_VM_CLASSES` in the table below are read *only* by
+> `make vsphere-namespace`, so those two you can leave alone.)
 
 Step 3 activates a login context at this namespace and fails if it does not exist yet, so create it
 now.
@@ -194,7 +196,7 @@ now.
 nothing. So if a storage policy or VM class turns out to be missing, fix it in vCenter (or delete
 and recreate the namespace); re-running with a corrected `.env` is a no-op.
 
-### First, give vCenter a trust anchor — Steps 4 and 5 will refuse without one
+### First, give vCenter a trust anchor — this step, and Steps 4 and 5, refuse without one
 
 Everything from here that talks to vCenter sends your **SSO administrator password**, so it will not
 open that connection to a peer whose identity it has not verified. A lab vCenter serves a self-signed
@@ -259,6 +261,7 @@ LoadBalancer IPs, the ArgoCD instance. Do it now and those steps run in one pass
 | key | example | set where |
 |---|---|---|
 | `SUPERVISOR_HOST` | `192.168.101.128` | Step 1 |
+| `VCENTER_HOST` | `vcsa.env1.lab.test` | Step 1 |
 | `VKS_CONTEXT_NAME` | `vks-cicd` | Step 1 (you invented it) |
 | `VKS_USERNAME` | `administrator@vsphere.local` | Step 1 |
 | `VKS_NAMESPACE` | `cicd` | Step 1, created in Step 2 |
