@@ -34,10 +34,32 @@ TPL="$(newest_versioned_file "$SRC_DIR" 'supervisor-service-harbor-data-values-*
 # holding two downloads can pair a 2.14 definition with a 2.9 values file -- a mismatch neither
 # `die` above can see, and one that surfaces as an obscure reconcile error much later.
 _def_v="$(versioned_file_version "$DEF")"; _tpl_v="$(versioned_file_version "$TPL")"
-[ "$_def_v" = "$_tpl_v" ] || die "version MISMATCH between the two operator-supplied Harbor files:
+# COMPARE THE SEMVER CORE, not the whole string. Broadcom names the two halves of one pair at
+# DIFFERENT granularity -- MEASURED on a real download:
+#   definition:  supervisor-service-harbor-legacy-v2.14.3+vmware.2-vks.1-25292931.yml
+#   data-values: supervisor-service-harbor-data-values-v2.14.3.yml
+# Those ARE the same release. A whole-string equality therefore rejects the ONLY naming the vendor
+# actually ships, and it did: it FATAL'd `make install-harbor-service` 1 second in, which took out
+# a walkthrough-matrix cut-B run (row 3 failed, rows 4 and 6 never walked). It had never fired
+# before because it is only reachable on a NOTHING-exists row -- the rows that install Harbor.
+#
+# Build metadata is still compared when BOTH sides carry it, so a genuine 2.14.3+vmware.2 paired
+# with a 2.14.3+vmware.3 is still refused. The case this deliberately allows is exactly one:
+# one side carries metadata and the other does not.
+_def_core="${_def_v%%+*}"; _tpl_core="${_tpl_v%%+*}"
+_pair_ok=0
+if [ "$_def_core" = "$_tpl_core" ]; then
+  case "${_def_v}|${_tpl_v}" in
+    *+*\|*+*) [ "$_def_v" = "$_tpl_v" ] && _pair_ok=1 ;;   # both stamped -> demand exact
+    *)         _pair_ok=1 ;;                                # one bare     -> core is all there is
+  esac
+fi
+[ "$_pair_ok" -eq 1 ] || die "version MISMATCH between the two operator-supplied Harbor files:
   definition:    $(basename "$DEF")   (${_def_v:-<none>})
   data-values:   $(basename "$TPL")   (${_tpl_v:-<none>})
-  They must be the same version. Remove the stale pair from ${SRC_DIR} and re-run."
+  They must be the same release. Build metadata after '+' may differ in PRESENCE (the vendor names
+  the two halves at different granularity) but not in VALUE. Remove the stale pair from ${SRC_DIR}
+  and re-run."
 log_info "service definition : $(basename "$DEF")"
 log_info "data-values template: $(basename "$TPL")"
 
