@@ -33,7 +33,13 @@ want_pattern() {
     nodejs) printf 'node_modules/' ;;
     python) printf '__pycache__/' ;;
     dotnet) printf 'obj/'    ;;
-    *)      printf '' ;;
+    # ⚠️ NO SILENT DEFAULT. This used to be `*) printf ''`, and the caller then printed `ok` with
+    # the note "(language has no known build-output dir)" -- so enrolling a SEVENTH language would
+    # have PASSED this gate while checking nothing, which is the enumerated-list rot the gate exists
+    # to prevent, committed inside the gate. Measured: want_pattern kotlin -> empty -> ok.
+    # This mirrors builder_inputs_hash's MANIFEST_GUARD (lib/apps.sh), which dies loudly for the
+    # same reason: rot must surface at ENROLMENT, not as a green that describes nothing.
+    *)      return 1 ;;
   esac
 }
 
@@ -48,10 +54,12 @@ while read -r app; do
     bad "${app}: no .dockerignore — 'COPY . .' will absorb the working tree"
     continue
   fi
-  pat="$(want_pattern "$lang")"
-  if [ -z "$pat" ]; then
-    ok "${app}: .dockerignore present (language '${lang}' has no known build-output dir)"
-  elif grep -qF "$pat" "$di"; then
+  if ! pat="$(want_pattern "$lang")"; then
+    bad "${app}: language '${lang}' has no build-output pattern in want_pattern() — ADD ONE. A new
+        language must not pass this gate by being unknown to it (that is how the list rots)."
+    continue
+  fi
+  if grep -qF "$pat" "$di"; then
     ok "${app}: .dockerignore excludes ${pat}"
   else
     bad "${app}: .dockerignore does not exclude '${pat}' (language ${lang})"
