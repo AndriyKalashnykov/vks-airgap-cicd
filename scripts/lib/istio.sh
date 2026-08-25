@@ -424,8 +424,12 @@ istio_proxy_ready() {   # <namespace> <label-selector>
   # manually-managed Endpoints), jq absent, or the `-o json` read failing -- and each of those is
   # exactly a "could not ask" condition, not a pass.
   if [ -z "$sel" ]; then
-    log_warn "no label selector for the gateway proxy in ${ns} — cannot identify its pods"
-    return 2
+    # rc 3, NOT 2. Returning 2 fed the tenant concession, so an underivable selector still
+    # PUBLISHED the address at the timeout boundary -- the fail-open DELAYED by 300s, not closed.
+    # MEASURED: a selector-less Service + a not-Ready proxy gave RC=0 STDOUT=[10.0.0.9]. And this is
+    # a BUG on the paths that reach it (jq missing, a Service with no selector), never the tenant
+    # RBAC case the concession exists for -- so it must fail CLOSED.
+    return 3
   fi
   err="$(mktemp)"
   # stderr to its OWN file, never 2>&1: merging makes the capture non-empty and inverts the
@@ -624,7 +628,7 @@ EOF
 # ---------------------------------------------------------------------------
 istio_wait_lb_ip() {
   local timeout="${READY_TIMEOUT_SECONDS:-300}" interval="${POLL_INTERVAL_SECONDS:-5}" elapsed=0 svc_type ip
-  local _pr=0 _unknown_seen=0 _definitive_seen=0 _svc_sel
+  local _pr=0 _unknown_seen=0 _definitive_seen=0 _selector_unknown=0 _svc_sel
   svc_type="$(kubectl -n "$ISTIO_GATEWAY_NAMESPACE" get svc "$ISTIO_GATEWAY_SERVICE" -o jsonpath='{.spec.type}' 2>/dev/null || true)"
   if [ "$svc_type" != "LoadBalancer" ]; then
     log_error "gateway Service ${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_SERVICE} is type '${svc_type}', not LoadBalancer —"
@@ -633,10 +637,6 @@ istio_wait_lb_ip() {
     log_error "  (e.g. to a NodePort address or an upstream LB that fronts it)."
     return 1
   fi
-  # The Service's OWN selector, as k=v pairs. If it is unreadable we fall back to a pods check that
-  # cannot narrow -- so readiness reports state 2 (could not ask), never a false Ready.
-  _svc_sel="$(kubectl -n "$ISTIO_GATEWAY_NAMESPACE" get svc "$ISTIO_GATEWAY_SERVICE" -o json 2>/dev/null \
-    | jq -r '(.spec.selector // {}) | to_entries | map("\(.key)=\(.value)") | join(",")' 2>/dev/null || true)"
   log_info "waiting for the ingress-gateway LoadBalancer address (timeout ${timeout}s)"
   while :; do
     ip="$(kubectl -n "$ISTIO_GATEWAY_NAMESPACE" get svc "$ISTIO_GATEWAY_SERVICE" \
@@ -644,6 +644,11 @@ istio_wait_lb_ip() {
     [ -z "$ip" ] && ip="$(kubectl -n "$ISTIO_GATEWAY_NAMESPACE" get svc "$ISTIO_GATEWAY_SERVICE" \
       -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"
     if [ -n "$ip" ]; then
+      # Derived INSIDE the loop, on purpose. Computed once, a single transient failure of this one
+      # `-o json` read left _svc_sel empty for the WHOLE budget and disabled the guard -- the very
+      # defect the gwapi loop was fixed for one commit earlier. Re-deriving costs one poll instead.
+      _svc_sel="$(kubectl -n "$ISTIO_GATEWAY_NAMESPACE" get svc "$ISTIO_GATEWAY_SERVICE" -o json 2>/dev/null \
+        | jq -r '(.spec.selector // {}) | to_entries | map("\(.key)=\(.value)") | join(",")' 2>/dev/null || true)"
       # An assigned LoadBalancer address is NOT the end result either -- same fail-open as the
       # gateway-api path (B477). This matters MOST here: the two callers are the CLASSIC attach
       # branch and 43-install-istio-package.sh, and the package/kapp path is the one whose own
@@ -652,12 +657,20 @@ istio_wait_lb_ip() {
       _pr=0; istio_proxy_ready "$ISTIO_GATEWAY_NAMESPACE" "$_svc_sel" || _pr=$?
       case "$_pr" in
         0) printf '%s' "$ip"; return 0 ;;
-        2) _unknown_seen=1 ;;          # keep polling; concede only at the boundary
+        3) _selector_unknown=1 ;;      # a BUG, not RBAC -> must NOT reach the concession
+        2) _unknown_seen=1 ;;          # genuinely could not ask -> concede only at the boundary
         *) _definitive_seen=1 ;;
       esac
     fi
     elapsed=$(( elapsed + interval ))
     if [ "$elapsed" -ge "$timeout" ]; then
+      if [ -n "$ip" ] && [ "$_selector_unknown" = 1 ]; then
+        log_error "could not derive the gateway Service's pod selector, so the data plane was never"
+        log_error "  checked. This is a DEFECT here, not a permissions limit: ${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_SERVICE}"
+        log_error "  has no .spec.selector, or jq is missing. Failing CLOSED rather than publishing"
+        log_error "  ${ip}, which nothing has verified serves anything."
+        return 1
+      fi
       if [ -n "$ip" ] && [ "$_unknown_seen" = 1 ] && [ "$_definitive_seen" = 0 ]; then
         log_warn "gateway proxy readiness was UNREADABLE for the entire ${timeout}s — accepting the"
         log_warn "  address WITHOUT that check. This is not a pass: nothing verified the data plane."

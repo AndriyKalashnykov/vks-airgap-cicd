@@ -24,19 +24,25 @@ stub() {
   cleanup; STUB="$(mktemp -d)"; mkdir -p "$STUB/bin"
   printf '%s' "${1:-}" > "$STUB/pods.out"; printf '%s' "${2:-0}" > "$STUB/pods.rc"
   printf '%s' "${5:-0}" > "$STUB/failfirst"; : > "$STUB/calls"
-  printf '%s' "${6:-gateway.networking.k8s.io/gateway-name=}" > "$STUB/selector"
+  printf "%s" "${6:-gateway.networking.k8s.io/gateway-name=vks-uis}" > "$STUB/selector"
   printf '%s' "${3:-True}" > "$STUB/prog";  printf '%s' "${4:-10.0.0.9}" > "$STUB/addr"
   cat > "$STUB/bin/kubectl" <<'K'
 #!/usr/bin/env bash
 case "$*" in
   *'get pods'*jsonpath*)
      echo x >> "$STUBDIR/calls"; n=$(wc -l < "$STUBDIR/calls"); ff=$(cat "$STUBDIR/failfirst")
-     # The stub HONOURS the selector. Without this it returned the same pods for ANY selector, so a
-     # copy-pasted gateway-name selector on the classic path passed VACUOUSLY -- proven by mutation:
-     # the case went GREEN over exactly the defect the adversary warned about. An empty set is what
-     # a wrong selector really produces, and it must read as "not Ready", never as Ready.
-     want="$(cat "$STUBDIR/selector")"
-     case "$*" in *"$want"*) : ;; *) exit 0 ;; esac   # wrong selector -> NO pods, rc=0
+     # The stub HONOURS the selector, and models REAL kubectl semantics:
+     #   * a WRONG selector -> no pods (an empty set, which must read as "not Ready")
+     #   * an EMPTY selector -> EVERY pod. apimachinery labels.Parse("") is {Empty:true} and
+     #     matches any label set, so `get pods -l ""` returns the whole namespace. The first
+     #     version of this stub had it backwards -- empty matched NOTHING -- so removing the
+     #     product's empty-selector guard yielded rc=1 (blocks) instead of the rc=0 (publishes)
+     #     the case's own text claims. It pinned the wrong "before" behaviour.
+     # It also compares the VALUE AFTER -l, not a substring of the whole command line: with the
+     # latter, `want=vks-ingress` (a NAMESPACE) matched, and the case passed over an unrelated pod.
+     want="$(cat "$STUBDIR/selector")"; got=""; nxt=0
+     for a in "$@"; do [ "$nxt" = 1 ] && { got="$a"; nxt=0; }; [ "$a" = "-l" ] && nxt=1; done
+     if [ -n "$got" ] && [ "$got" != "$want" ]; then exit 0; fi   # wrong selector -> NO pods
      if [ "$n" -le "$ff" ]; then
        # a TRANSIENT local/api error -- NOT Forbidden. This is the realistic trigger for state 2,
        # and the old test only ever emitted Forbidden, pinning the RBAC flavour and never this one.
@@ -99,10 +105,14 @@ if grep -q 'could not read' "$STUB/err"; then ok "...and it says so on stderr"; 
 # the -o json read fails. MEASURED before the fix: rc=0 over a namespace whose only pod was not ours.
 stub 'some-unrelated-pod=True'$'\n' 0
 r="$(call 'istio_proxy_ready istio-ingress ""')"
-if [ "${r%%|*}" = 2 ]; then
-  ok "an EMPTY selector -> 2 (could not ask), never Ready on an unrelated pod"
+# rc 3, NOT 2. An underivable selector is a DEFECT on the paths that reach it (a Service with no
+# .spec.selector, or jq missing) -- never the tenant-RBAC case state 2 exists for. Returning 2 fed
+# the tenant concession, which PUBLISHES the address at the timeout boundary, so the fail-open was
+# only DELAYED by the guard, not closed. Measured before this fix: RC=0 STDOUT=[10.0.0.9].
+if [ "${r%%|*}" = 3 ]; then
+  ok "an EMPTY selector -> 3 (a defect, fails CLOSED), never Ready on an unrelated pod"
 else
-  bad "empty selector is not a pass" "got rc=${r%%|*} — an empty -l selects EVERY pod in the namespace, so any healthy pod there certifies our proxy"
+  bad "empty selector fails closed" "got rc=${r%%|*} — an empty -l selects EVERY pod in the namespace (apimachinery labels.Parse(\"\") matches any label set), so any healthy pod there certifies our proxy; and rc=2 would route into the tenant concession, which publishes the address anyway"
 fi
 
 # --- the END RESULT: what the caller returns -----------------------------------------------------
@@ -148,7 +158,7 @@ fi
 # the one whose own mechanism produced B477. A copy-paste would have been worse than nothing: the
 # classic proxy carries the SERVICE's selector, not the gateway-name label, so a copied selector
 # matches NOTHING and the check passes vacuously (state 1 forever, or a false Ready on an empty set).
-stub 'istio-ingressgateway-xyz=True'$'\n' 0 True 10.0.0.9 0 'istio=ingressgateway'
+stub 'istio-ingressgateway-xyz=True'$'\n' 0 True 10.0.0.9 0 'istio=ingressgateway,app=istio-ingressgateway'
 r="$(call istio_wait_lb_ip)"
 if [ "${r%%|*}" = 0 ] && [ "${r#*|}" = 10.0.0.9 ]; then
   ok "CLASSIC: LB address + a Ready proxy -> returns the address"
@@ -156,7 +166,7 @@ else
   bad "classic healthy path" "got '$r' — a healthy classic install must not be blocked (and this is what a copy-pasted gateway-name selector would break)"
 fi
 
-stub 'istio-ingressgateway-xyz=False'$'\n' 0 True 10.0.0.9 0 'istio=ingressgateway'
+stub 'istio-ingressgateway-xyz=False'$'\n' 0 True 10.0.0.9 0 'istio=ingressgateway,app=istio-ingressgateway'
 r="$(call istio_wait_lb_ip)"
 if [ "${r%%|*}" != 0 ]; then
   ok "CLASSIC: LB address + a CRASHLOOPING proxy -> FAILS (the package path's own fail-open)"

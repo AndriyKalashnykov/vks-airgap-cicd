@@ -23,7 +23,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/capacity.sh"
 load_env
 
-require_cmd kubectl
+# jq: istio_wait_lb_ip derives the gateway Service selector with it. Without jq the selector is
+# empty, which now fails CLOSED rather than publishing an unverified address -- so a missing jq must
+# be named HERE, not discovered as a confusing late failure.
+require_cmd kubectl jq
 require_cmd helm
 : "${KUBECONFIG:?KUBECONFIG must be set (see .env.example; produced by make vks-login or make kind-up)}"; export KUBECONFIG
 : "${HARBOR_URL:?}"; : "${HARBOR_INFRA_PROJECT:?}"
