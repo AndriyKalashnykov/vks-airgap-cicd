@@ -229,9 +229,16 @@ BUILDER_INPUT_MANIFESTS="pom.xml go.mod go.sum package.json package-lock.json Ca
 builder_inputs_hash() {
   local app="${1:?app name required}" src f n=0 listing=""
   src="$(app_src "$app")"
-  for f in Dockerfile.builder $BUILDER_INPUT_MANIFESTS; do
+  # .dockerignore sits beside Dockerfile.builder because it is a CONTEXT DEFINITION, not a
+  # dependency manifest: it decides which bytes `COPY . .` puts in the image. Omit it and a change
+  # that materially alters the image (measured: 347 MB -> 1 MB for rustwebapp) leaves the freshness
+  # stamp identical, so every offline gate reports the builder fresh while the tree says otherwise.
+  # It is EXCLUDED from n for the same reason Dockerfile.builder is -- the MANIFEST_GUARD below
+  # counts DEPENDENCY manifests, and neither of these is one. An app without the file is skipped by
+  # the `-f` test, so this cannot break an app that has not grown one yet.
+  for f in Dockerfile.builder .dockerignore $BUILDER_INPUT_MANIFESTS; do
     [ -f "${src}/${f}" ] || continue
-    case "$f" in Dockerfile.builder) : ;; *) n=$((n + 1)) ;; esac
+    case "$f" in Dockerfile.builder|.dockerignore) : ;; *) n=$((n + 1)) ;; esac
     listing="${listing}${f} $(sha256sum "${src}/${f}" | cut -d' ' -f1)
 "
   done

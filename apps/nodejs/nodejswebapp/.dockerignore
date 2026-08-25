@@ -1,0 +1,27 @@
+# Build context exclusions for BOTH Dockerfile.builder and Dockerfile.
+#
+# WHY THIS FILE EXISTS. Both Dockerfiles do `COPY . .`, and the build context is this directory
+# (scripts/14-builder-build.sh passes "${src}"). Without this file the builder image absorbs
+# whatever build output happens to be lying in the working tree -- so the image content depends on
+# what the developer last ran, and two developers produce different images from the same commit.
+# That is non-determinism baked into an air-gap artifact every cluster node must pull.
+#
+# MEASURED 2026-08-25 on a working tree: 438 MB of UNTRACKED local build output across the six apps
+# (rust target/ 346 MB, dotnet tests/bin 50 MB, java target/ 23 MB, the go binary 15 MB, nodejs
+# node_modules 4.3 MB). None of it is tracked -- `git ls-files` over apps/ returns zero bin/obj/
+# target/node_modules entries -- so a clean CI checkout never sees it and the bloat is invisible
+# there. Two tells that it was COPIED rather than built: the go builder compiles to /dev/null yet
+# shipped a 15 MB binary, and the dotnet builder's last RUN is only `dotnet restore` yet shipped
+# 50 MB of tests/bin.
+#
+# Dependency CACHES are deliberately NOT excluded here -- they live outside the context anyway
+# ($CARGO_HOME, ~/.m2, /root/.nuget, the npm cache), which is what makes the offline build work.
+
+# --- build output for this app ---
+node_modules/
+npm-debug.log*
+
+# --- never useful in an image ---
+.git/
+.gitignore
+*.swp
