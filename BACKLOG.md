@@ -322,47 +322,141 @@ probe for the error text. It shrinks the probe; it does not replace it.
 B471 already warns about: a row built on a guessed permission model certifies a permission model
 nobody runs. Measure first, or decide the policy first — either is fine, guessing is not.
 
-## 🔴 B471 — the matrix certifies the scenario-2 DOCUMENT, never the tenant PERMISSION MODEL 🔴 open
+## 🟢 B483 — the ONLY tenant-RBAC test was wired to nothing AND broken 🟢 closed 2026-08-25
 
-**The matrix's own row label says so**, verbatim (`nested-vsphere-lab/scripts/walk-matrix.sh:1063`
-and `:1141`):
+Found by the B471 idea round (finding 4: "invoked by nothing"), then MEASURED — and the measurement
+was worse than the finding.
 
-> `photon | scenario-2 (document walkability; ADMIN creds AND a driver-supplied GUEST kubeconfig — NOT the tenant path)`
+`make e2e-kind-tenant` runs `91-e2e-tenant-mechanism.sh`, the repo's only real tenant-RBAC test
+(339 lines, AppProject + `argocd-rbac-cm` role + apiKey account + a kubeconfig with zero RBAC in the
+ArgoCD namespace, with a positive control and hard-fail-on-`unknown` negative controls). It was a
+prerequisite of **no** target and appeared in **zero** workflows.
 
-So a green row 5/6 certifies **"every command in `docs/scenario-2.md` runs and produces its
-documented result"**. It does NOT certify **"a tenant can follow this runbook"**, because the row is
-handed two things a real tenant does not have:
+Running it revealed it was also **broken**: rc=2, `FATAL ArgoCD is not installed`. The cluster was
+fine — `deploy/argocd-server` was Running. The target lacked the `export SKIP_DOTENV` line that
+`e2e-kind` and `e2e-kind-istio-existing` both carry, so it read the operator's LAB-configured
+`.env`, where `ARGOCD_NAMESPACE=cicd` (the Supervisor's vSphere Namespace). It looked in the WRONG
+NAMESPACE of the RIGHT CLUSTER, and its error named neither.
 
-| the row gets | a real tenant has |
+**That pairing is the lesson.** A test nothing invokes cannot tell you it has rotted, so "unwired"
+and "broken" arrive together and the second is invisible until someone types the command. The tell
+was an error that named a component rather than a lookup.
+
+Fix: `export SKIP_DOTENV = $(E2E_SKIP_DOTENV)` on `e2e-kind-tenant`, and the same guard on
+`e2e-kind-cross-cluster` (which reads `${ARGOCD_NAMESPACE:-argocd}` from the ambient env and is safe
+today only because it happens not to call `load_env` — a uniform invariant beats relying on an
+absence). `.env.state` is still loaded, so `KUBECONFIG` keeps resolving to the KinD cluster.
+
+Verified: before, `FATAL ArgoCD is not installed`; after, the run reaches
+`RED 1 OK - the tenant CANNOT create Applications in ns/argocd with kubectl (Forbidden)` and mints
+its API token. `e2e-kind-both` was checked and is NOT affected — it delegates to `$(MAKE) e2e-kind`,
+which carries its own target-specific export.
+
+**Gated so it cannot recur:** `scripts/test-e2e-dotenv-guard.sh` asserts that every `e2e-kind*`
+target which invokes a script directly carries the export. The exemption is DERIVED from the recipe
+(does it call `$(SCRIPTS)/`?), never a hand-typed target list. RED-proven: delete the guard line and
+it fails naming `e2e-kind-tenant`; restore and it passes.
+
+**Writing that gate produced its own worked example of a classifier that lies.** Two bugs, both
+caught by reading the output instead of the rc:
+
+1. It reported `e2e-kind` as "delegates only" — but `e2e-kind` DOES call
+   `$(SCRIPTS)/e2e-ordering-verdict.sh`. The extractor stopped at the target's FIRST rule line
+   (`e2e-kind: export SKIP_DOTENV = ...`) and read an empty recipe. A target can have several rule
+   lines; the body after every one of them counts.
+2. After fixing that it STILL false-exempted, because a column-0 `#` comment INTERLEAVED inside a
+   recipe does not end that recipe in GNU make — but it did end my scan.
+
+Both were harmless on today's tree (that target happens to be guarded), which is exactly why they
+would have shipped: the gate was GREEN and its exemption line was wrong. The denominator is the tell
+— `3 checked / 2 exempt` before, `4 checked / 1 exempt` after.
+
+Still open, deliberately: WIRING it into an automated path. It needs a live KinD cluster with ArgoCD
+and mutates that cluster's ArgoCD, so where it belongs is a design question, not a one-liner. B471
+carries it.
+
+## 🟡 B471 — RE-SCOPED: the tenant gap is HARBOR, not the guest cluster 🟡 open
+
+> **CORRECTED 2026-08-25 by an idea round + my own measurements. The original row was ~5x too big
+> and its central piece of evidence was INVERTED.** Kept in place rather than rewritten away, so the
+> next reader does not re-derive the refuted version.
+
+### What the original row claimed, and why most of it is false
+
+It claimed the matrix's scenario-2 rows certify the DOCUMENT but not the PERMISSION MODEL, because
+the row is handed (a) admin credentials and (b) a driver-supplied guest kubeconfig that "a real
+tenant" would not have. **Both halves are wrong for the guest cluster**, and `docs/scenario-2.md`
+says so itself, five times (measured, verbatim):
+
+| line | text |
 |---|---|
-| **admin** credentials | restricted RBAC — may not list nodes, may not read Supervisor secrets |
-| a guest kubeconfig **supplied by the driver** | to obtain one, possibly by asking the platform team |
+| `:20` | "**cluster-admin on your own guest cluster** (we create namespaces, RBAC, PSA labels)" |
+| `:170` | "You need **cluster-admin** on the workload cluster either way" |
+| `:876` | "you hold cluster-admin on your own guest cluster" |
+| `:895` | "You hold **cluster-admin on your own guest cluster**" |
+| `:952` | "**cluster-admin** on the workload cluster is required" |
 
-**Why this matters more than it sounds.** RULE ZERO-B makes the tenant the **DEFAULT** posture:
-Scenario 2 is the common case and Scenario 1 is the exception. So the matrix's most-exercised
-scenario is the one whose *audience* is least exercised — six green rows say nothing about the
-permission model the majority of users are actually in.
+and `:83` — "**Most tenants are handed the workload kubeconfig and never touch the Supervisor.**"
+So a driver-supplied guest kubeconfig IS the documented tenant path. This repo's tenant is a tenant
+of the SUPERVISOR and an admin of their OWN guest cluster.
 
-**It is not hypothetical — the same shape shipped a bug this session.** The istiod capacity
-preflight worked for an admin and **failed closed for a tenant** (a tenant cannot read node
-allocatable, so the check's usable-capacity probe returned 0). No matrix row would have caught it;
-it was found by reasoning about the tenant path, not by running one.
+**Of the 36 make targets scenario-2 names, exactly 3 need a permission a tenant lacks** — and the
+document already flags each: `fetch-argocd-kubeconfig` (`:518`, declared optional),
+`argocd-register-guest` (`:828`, "**they** run..."), `harbor-admin-password` (`:808`, whose own
+Expect line says it REFUSES a robot account). Nothing in the `install-all` chain is Supervisor-side.
 
-**Measured 2026-08-24 (run `run-20260824T143354Z-3174779`, 6/6 green):** rows 5 and 6 walked
-`28 blocks: 18 ran, 0 FAILED, 10 skipped` — identical on photon and ubuntu. Four of the ten skips
-are `0b. Install the toolchain, then get a kubeconfig - inside a <details> alternative: Only if you
-hold vSphere SSO credentials and must fetch it yourself` — i.e. **the branch a credential-less
-tenant would actually take is skipped**, because the driver supplied the kubeconfig instead.
+### 🔴 Its cited evidence was INVERTED
 
-**What would close it (NOT designed — needs an idea round first; inventing a new matrix row is
-exactly the "new control" act RULE ZERO says most needs one):**
-sketch only — a row that binds a *restricted* ServiceAccount (no node read, no Supervisor access),
-hands the walk only what `.env` can carry, and asserts the runbook either succeeds or fails with a
-message naming the grant to REQUEST. The hard part is not the row; it is deciding what a tenant is
-allowed to see, which is a lab-policy question, not a scripting one.
+The row said four skipped blocks were "the branch a credential-less tenant would actually take".
+Measured at `scenario-2.md:113-116`, that branch needs the **licensed `vcf` CLI + vSphere SSO
+credentials + Broadcom entitlement** — strictly MORE privilege, not less. The row takes the branch
+the document calls the normal tenant case.
 
-**Do NOT close this by relabelling the existing rows.** Their label is already honest; the gap is
-that nothing else covers what they exclude.
+The genuinely tenant-relevant skip is one the original row never mentioned: block **`[22]`**,
+"a Harbor robot already exists; its secret is shown ONCE" — i.e. **`make harbor-robot` never runs**.
+
+### What actually survives — ONE axis
+
+The scenario-2 rows are supplied a **Harbor admin** credential (`walk-matrix.sh:832-838`, logged at
+`:1119`), `harbor-robot` is skipped, and the sysadmin / project-admin-one-project /
+two-projects-IMPOSSIBLE decision at `22-harbor-robot.sh:79` is untested — only its *payloads* are
+(`test-harbor-robot-payload.sh`). The project-scoped-robot path where `HEAD /projects` is denied and
+project-CREATE returns 403-on-existing (`scenario-2.md:677-683`) is exercised nowhere.
+
+Everything else is already covered: `24-lab-preflight.sh:123-135`, `22-harbor-robot.sh:79-123`,
+`lib/capacity.sh:167-171` (degrades to WARN on the tenant shape), plus `23-argocd-preflight.sh`,
+`48-istio-preflight.sh`, `70-configure-argocd.sh` — **11 distinct `can-i` probes**.
+
+### Done-when (re-scoped)
+
+1. an OFFLINE stub test for `22-harbor-robot.sh:79`'s 3-way decision and the 403-on-existing
+   fallback, beside `test-harbor-robot-payload.sh` in `make test-scripts`; and
+2. `can-i create namespaces` + `can-i list nodes` added to `24-lab-preflight.sh` (0 of the 11
+   existing probes cover them).
+
+### REFUTED — do not build these
+
+- **An offline grep gate over scenario-2 for admin verbs.** Built and measured during the idea
+  round: **17 of 18 hits were false** (94%). Every hit landed on a line where the document was
+  already doing the right thing, so its only remedy is deleting an honest disclosure.
+- **`make tenant-preflight` keyed on `can-i --list`.** It does not discriminate: it goes green on
+  any cluster where nobody downscoped anything, and B472 measured the guest kubeconfig answering
+  `*.* [] [] [*]`. It measures the caller, not the design.
+- **A 7th matrix row with a downscoped kubeconfig.** It would certify our GUESS at tenant RBAC
+  (B472's five-axis table is derived, not measured), needs a lab mutation, and its green would read
+  as "tenants work".
+
+### Cannot be settled without a real tenant on a real lab
+
+There is **no tenant identity in the lab at all** — B472, lab-verified: the guest kubeconfig is
+`kubernetes-admin` / `system:masters`. Creating one is a lab-policy decision. And `can-i` is
+structurally blind to the class that actually bit us: admission webhooks, ResourceQuota, PSA on a
+namespace the tenant did not create, and computed values like node `allocatable`.
+
+### The premise-4 bug is FIXED
+
+`lib/capacity.sh:23-30,167-171` records the istiod capacity defect and its fix. It was found by
+REASONING about the tenant path — which argues that reasoning works here, not that a row is needed.
 
 ## 🟠 B470 — `test-cluster-status-wait-gate.sh` TRUNCATES a pre-existing `secrets/testcluster.kubeconfig`
 
