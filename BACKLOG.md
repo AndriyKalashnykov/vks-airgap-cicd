@@ -95,7 +95,7 @@ Measured 2026-08-25, the same gate, the same day, on both platforms:
 | where it runs | images it checked | result |
 |---|---|---|
 | **KinD** — wired into `Makefile:845`, `INGRESS_CONTROLLER=istio` | **2** | `gateway image provenance: OK — all 2 running container image(s) came from 172.18.0.3` |
-| **the lab** — never wired, and would skip in `istio-existing` | **7** | `FAILED — 5 of 7 container image(s) did not come from harbor…` |
+| **the lab** — never wired, and would skip in `istio-existing` | **7** | `FAILED — 5 of 7 container image(s) did not come from harbor…` ⚠️ *those five are a **deliberate, warned** `ISTIO_PACKAGE_ALLOW_REMOTE=1` override, not damage — see [[B477]]* |
 
 KinD's mesh is a helm-only install, so it genuinely has **two** Istio containers — istiod and the
 gateway proxy. There is no `istio-cni`, no `istio-support`, and no VKS package, so the mixed-registry
@@ -105,6 +105,12 @@ package path added the extra components, and five of them came from a public reg
 So the gate's green is honest and worth almost nothing: it is measured over a denominator of 2, on
 the one platform where the answer can only ever be "all ours". The place where the denominator is 7
 and the answer is "5 of them are not" is the place it never runs.
+
+⚠️ **Read the two columns for what they are.** The lab's five failures are the *recorded consequence
+of an intentional override* ([[B477]]), so this table is **not** "the gate would have caught a live
+defect". It is narrower and still worth the row: whatever the cause, the lab is the only platform
+where this gate's answer can be anything other than trivially green — and it is the platform where
+the gate never runs. A future genuine mixed-registry mesh would be equally invisible.
 
 That is this portfolio's own rule — *a gate's trigger must cover its own inputs* — with numbers
 attached, and it is why the fix is about WHERE the gate runs, not about making it stricter.
@@ -2130,10 +2136,40 @@ paused pkgi is a paused-forever pkgi.
 
 | left behind | why it matters |
 |---|---|
-| **5 of 7** running Istio containers pull from **`projects.packages.broadcom.com`** — `istio-cni-node` (×3), `istio-support`, **and the `vks-uis-istio` gateway proxy itself** | **the air-gap invariant is broken**, including the pod that actually serves ingress. Only istiod and the classic `istio-ingressgateway` come from our Harbor. On a genuinely air-gapped lab these cannot pull at all, and there is no reconciler left to change them. MEASURED 2026-08-25: `make verify-gateway-image` run against the lab exits **2** and names all five — see [[B482]] for why it never ran there |
+| **5 of 7** running Istio containers pull from **`projects.packages.broadcom.com`** — `istio-cni-node` (×3), `istio-support`, and the `vks-uis-istio` gateway proxy | ⚠️ **NOT a defect — this is a deliberate, warned override, and the gate WORKED.** See the correction below. The cluster is genuinely not air-gapped for those five, so `make verify-gateway-image` exits **2** and names them (measured 2026-08-25) — but that is the *recorded consequence of a choice*, not damage. [[B482]] is why the gate never ran here on its own |
 | `istio-cni` **1.28.5** under istiod **1.30.3** | a two-minor data-plane skew |
 | ClusterRoleBinding `istio-pkg-sa-cluster-admin` → **cluster-admin** | a dangling cluster-admin grant to a ServiceAccount nothing manages (plus `istio-pkg-sa`, `istio-pkg-values`) |
 | all **50** objects still carry `kapp.k14s.io/app` in `metadata.labels` | the patch removed it only from `spec.selector`. A future package install mints a new app id → ownership conflict on 50 objects |
+
+**⚠️ ROOT-CAUSED 2026-08-25 — the public-registry images are NOT a defect, and this row said they were.**
+The operator asked for the root cause rather than accepting the finding, and the answer is in two log
+lines one minute apart:
+
+    00:50  ag1.log  the preflight REFUSED the install:
+             "On a lab WITH internet you can proceed deliberately with
+              ISTIO_PACKAGE_ALLOW_REMOTE=1 -- knowing ..."
+    00:51  ag2.log  re-run WITH the override (04:50:02Z):
+             WARN  package images resolve from projects.packages.broadcom.com,
+                   which is NOT harbor.env1.lab.test
+             WARN  ISTIO_PACKAGE_ALLOW_REMOTE=1 — proceeding. This install is NOT air-gapped
+
+`43-install-istio-package.sh:90-106` reads the Package CR's `imgpkgBundle.image` host and **dies**
+unless it resolves from Harbor or localhost. The Supervisor's Package CRs genuinely resolve from
+`projects.packages.broadcom.com` (measured — that is how VMware ships them), so it refused, named the
+consequence, and offered an explicit escape. The escape was taken, knowingly.
+
+**So the control worked perfectly, and this row originally credited its output as damage.** Two
+lessons, and the second is the one that matters:
+
+1. **The registry question and the ownership question are INDEPENDENT.** `ISTIO_PACKAGE_ALLOW_REMOTE`
+   governs *where images come from* and is fully guarded. [[B480]] — kapp adopting helm's control
+   plane — governs *who owns the objects* and is guarded by **nothing**. Conflating them inflated a
+   real finding with a non-finding.
+2. **An adversary's finding is not a root cause.** The round graded this HIGH as an unfiled defect and
+   was right about the observation; it had no way to reach the cause, which lived in a `/tmp` log from
+   a prior session. Writing it into the backlog as a defect without root-causing it is the same
+   failure this row already records one paragraph down — accepting a plausible account instead of
+   measuring — committed while correcting exactly that.
 
 **On the lesson.** A first draft of this correction claimed the cause was mine — that I had read only
 "the first page" of `kubectl get pkgi -A`. **That is false and was itself unverified**: measured,
