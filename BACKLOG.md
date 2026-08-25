@@ -16,6 +16,62 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🔴 B473 — NOTHING clears `secrets/` when a lab is destroyed or re-cut; stale CAs and PRIVATE KEYS accrete 🔴 open
+
+**MEASURED 2026-08-25, on a real re-cut.** After `make destroy` + `make lab`, `secrets/` still held
+**14 files and 2 directories** from labs that no longer exist:
+
+    vcenter-ca.pem        Aug 21   CN = CA, DC = vsphere, DC = local     <- OLD VMCA
+    supervisor-ca.crt     Aug 21   IDENTICAL SUBJECT                     <- OLD
+    harbor-ca.crt         Aug 24   from the lab just destroyed
+    vmca-root.pem         Aug  1 · ca-lab-gc1.pem  Aug  4                <- ancient
+    harbor-tls/           ca.crt ca.key tls.crt tls.key                  <- PRIVATE KEYS, dead Harbor
+    vmca/50ab00a9.0                                                      <- stale c_rehash dir
+    6x *.kubeconfig       ALL -> https://192.168.101.132:6443            <- dead guest clusters
+    vks.kubeconfig        -> 127.0.0.1:42749                             <- a long-dead KinD
+
+### Why it is a real hazard, not untidiness
+
+1. **The CAs are stale in the DANGEROUS way.** `lib/vcenter.sh:214` says it in as many words:
+   *"every cut produces a new CA with a BYTE-IDENTICAL subject, so a stale anchor looks correct and
+   only a handshake tells you otherwise."* A subject comparison passes; only TLS fails.
+2. **The guest API VIP is STABLE across cuts** — all six kubeconfigs name `192.168.101.132:6443`.
+   So a stale guest kubeconfig **connects to the NEW cluster and fails on credentials**, which
+   reads as an auth problem rather than a stale-file problem. That is the worse failure.
+3. **Private keys for a destroyed Harbor sit on disk indefinitely** (`harbor-tls/ca.key`,
+   `tls.key`). Whoever holds them can mint a cert for anything that trusted that CA.
+
+### Why nothing deletes them — an OWNERSHIP SEAM, and each side is individually CORRECT
+
+| | |
+|---|---|
+| `nested-vsphere-lab`'s `destroy` | correctly does NOT reach into another repo's `secrets/`. Its own `check-teardown` says *"everything this lab **OWNS**"*, and the teardown rule is *delete only what you created* |
+| `vks-airgap-cicd` | has no "the lab I derived from was destroyed" hook — **it never learns the lab died**. `uninstall-all` removes what scenario-1 created ON the lab, not the artifacts derived FROM it. `make clean` removes only the bundle and `app/target` — measured: **nothing** in this Makefile clears `secrets/` |
+
+Both correctly decline, so the state accretes forever. Same shape as `patterns.md`'s sudo-residue
+rule — *state your tooling created outside its own teardown's reach* — except the boundary here is a
+REPO, not a privilege level.
+
+⚠️ The lab side ALSO archives rather than deletes, deliberately and correctly: `~/.local/state/nested-lab/`
+now holds **~105** `*.destroyed-<ts>` files (35 kubeconfigs + 35 fingerprints + 35 PEMs, back to
+Aug 15). That is a separate, lower-severity accretion and belongs to the lab repo, not here.
+
+### What would close it — NOT DESIGNED, needs an idea round first
+
+Sketch only: a `make secrets-reset` on THIS side (the owner), clearing lab-derived artifacts while
+KEEPING `secrets/.env.make` (a 73 KB derived make cache, not lab state), plus a staleness detector.
+Half of that detector ALREADY EXISTS — `make ca-status` is exactly "is this anchor still the right
+one for its server", and it would have flagged the Aug 21 VMCA against an Aug 25 lab.
+
+**Do NOT build the destructive target casually.** RULE ZERO names inventing a new control as the act
+that most needs an idea round, and a `rm -rf` over an operator's gitignored credential directory is
+the sharpest version of that. Open questions it must answer FIRST: what is the KEEP-set (`.env.make`
+today — what else?); is it opt-in or wired into an existing flow; and how does it avoid the
+`nested-vsphere-lab` mistake in reverse (deleting something another tool owns)?
+
+**Workaround until then:** `tar czf ~/secrets-backup-$(date -u +%Y%m%dT%H%M%SZ).tar.gz secrets/` then
+remove the lab-derived files by hand. That is what was done on 2026-08-25; the backup was 68K.
+
 ## 🔵 B472 — OPTIONAL: derive the tenant's required permission set EMPIRICALLY, not from the code 🔵 optional
 
 **Optional by design.** [[B471]] is the finding; this is one *possible* way to make its answer
