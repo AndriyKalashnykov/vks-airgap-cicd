@@ -138,8 +138,24 @@ fi
 #    default, the PVC stays Pending forever and the failure you see is a POD TIMEOUT, which names
 #    nothing. Judge by the annotation the cluster ACTUALLY carries, not by the presence of any SC.
 default_sc="$(kubectl get storageclass -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{" "}{end}' 2>/dev/null || true)"
-n_sc="$(kubectl get storageclass --no-headers 2>/dev/null | wc -l | tr -d ' ' || true)"
-if [ -n "$default_sc" ]; then
+# ⚠️ CAPTURE STDERR, do not discard it. A tenant who may not LIST StorageClasses gets an EMPTY
+#    result, INDISTINGUISHABLE from "there are none" -- and the else-arm below then says "no
+#    StorageClass at all -- Gitea's PVC can never bind", a claim about the CLUSTER derived from a
+#    question nobody answered. MEASURED 2026-08-25 with a Forbidden-returning kubectl:
+#    default_sc=[] n_sc=[0] -> that false PROBLEM. Check 1 already had the right answer (`unk`);
+#    the file applied it to 1 of its 4 checks.
+_sc_err="$(mktemp)"
+n_sc="$(kubectl get storageclass --no-headers 2>"$_sc_err" | wc -l | tr -d ' ' || true)"
+_sc_cls=""
+# `if`, not `[ -s … ] && …`: under `set -e` the AND-list form is safe ONLY because bash
+# exempts a failing LEFT operand, which is too subtle to leave for the next reader.
+if [ -s "$_sc_err" ]; then _sc_cls="$(classify_kube_failure "$_sc_err")"; fi
+rm -f "$_sc_err"
+if [ "$_sc_cls" = FORBIDDEN ]; then
+  unk "cannot LIST StorageClasses (RBAC) -- this says NOTHING about whether a default exists."
+  note "Normal for a tenant: StorageClasses are cluster-scoped. Not evidence of a missing one."
+  note "Ask your platform team whether a default StorageClass is set on this cluster."
+elif [ -n "$default_sc" ]; then
   ok "default StorageClass: ${default_sc}(Gitea's PVC binds to it)"
 elif [ "$n_sc" -gt 0 ]; then
   bad "there are ${n_sc} StorageClass(es) but NONE is marked default — Gitea's PVC will sit Pending forever."
@@ -166,11 +182,24 @@ harbor_auth_report || problems=$((problems + 1))
 #    cannot resolve gitea-http.gitea.svc — Gitea needs its OWN LoadBalancer VIP for ArgoCD to clone from.
 #    We cannot prove a provider exists without creating a Service, and this script is read-only. So we
 #    report the evidence we CAN see and say plainly what it does and does not prove.
-lbs="$(kubectl get svc -A --field-selector spec.type=LoadBalancer --no-headers 2>/dev/null | wc -l | tr -d ' ' || true)"
+# Same capture as check 2: `svc -A` is cluster-wide, so a namespace-scoped tenant is Forbidden
+# and gets 0 -- which would read as "no LoadBalancer Services exist yet". Milder than a PROBLEM,
+# but still an assertion about the cluster nobody established.
+_lb_err="$(mktemp)"
+lbs="$(kubectl get svc -A --field-selector spec.type=LoadBalancer --no-headers 2>"$_lb_err" | wc -l | tr -d ' ' || true)"
+_lb_cls=""
+# `if`, not `[ -s … ] && …`: under `set -e` the AND-list form is safe ONLY because bash
+# exempts a failing LEFT operand, which is too subtle to leave for the next reader.
+if [ -s "$_lb_err" ]; then _lb_cls="$(classify_kube_failure "$_lb_err")"; fi
+rm -f "$_lb_err"
 pending="$(kubectl get svc -A --field-selector spec.type=LoadBalancer \
   -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\t"}{.status.loadBalancer.ingress[0].ip}{"\n"}{end}' 2>/dev/null \
   | awk -F'\t' '$2 == "" {print $1}' | tr '\n' ' ' || true)"
-if [ "$lbs" -eq 0 ]; then
+if [ "$_lb_cls" = FORBIDDEN ]; then
+  unk "cannot LIST Services cluster-wide (RBAC) -- a provider cannot be observed, and their"
+  note "ABSENCE is not established either. Normal for a namespace-scoped tenant."
+  note "Ask your platform team whether this cluster has a LoadBalancer provider."
+elif [ "$lbs" -eq 0 ]; then
   note "no LoadBalancer Services exist yet, so a provider cannot be OBSERVED here."
   note "This is NOT a pass: if the cluster has no LB provider, Gitea's Service will never get an"
   note "EXTERNAL-IP and ArgoCD (off-cluster on a real lab) can never clone from it. If you are unsure,"

@@ -452,12 +452,41 @@ Everything else is already covered: `24-lab-preflight.sh:123-135`, `22-harbor-ro
 `lib/capacity.sh:167-171` (degrades to WARN on the tenant shape), plus `23-argocd-preflight.sh`,
 `48-istio-preflight.sh`, `70-configure-argocd.sh` — **11 distinct `can-i` probes**.
 
-### Done-when (re-scoped)
+### Done-when (re-scoped, and item 2 was REFUTED by a second round)
 
 1. an OFFLINE stub test for `22-harbor-robot.sh:79`'s 3-way decision and the 403-on-existing
-   fallback, beside `test-harbor-robot-payload.sh` in `make test-scripts`; and
-2. `can-i create namespaces` + `can-i list nodes` added to `24-lab-preflight.sh` (0 of the 11
-   existing probes cover them).
+   fallback, beside `test-harbor-robot-payload.sh` in `make test-scripts`. **STILL OPEN**, and it
+   must carry four changes a second idea round measured as CRITICAL: pin `REPO_ROOT` to a
+   `mktemp -d` **and `cd` into it BEFORE sourcing `lib/os.sh`** (`os.sh:31` EXPORTS `REPO_ROOT`, so
+   it leaks into the child); pass the project pair through a temp **`.env`**, never env vars (the
+   uncommented `HARBOR_INFRA_PROJECT`/`HARBOR_APP_PROJECT` in `.env.example` are re-sourced by
+   `load_env`'s `set -a` and silently select the WRONG branch — the round hit exactly that); assert
+   only on the three operator-facing strings, never on the stub's own responses; and add a
+   HERMETICITY case, because the success path WRITES `secrets/harbor-robot.env` and publishes to
+   `./.env` — auto-discovery would run that inside `static-check` and **overwrite the operator's
+   real Harbor credentials on every run**.
+
+2. ~~`can-i create namespaces` + `can-i list nodes` added to `24-lab-preflight.sh`~~ — **REFUTED by
+   the round that proposed it.** Both are false-BAD generators: `ensure_namespace` uses
+   `create --dry-run=client | apply`, so `create namespaces` is never exercised on a pre-created
+   namespace; and a `bad` on `list nodes` would contradict `lib/capacity.sh:167-171`, which calls
+   unreadable nodes "normal for a tenant". Do not build these.
+
+### ✅ DONE 2026-08-25 — F-d1 and F-c4, the two the round ranked ABOVE the stub test
+
+- **F-d1 (#1011)** — `make vks-login` died FATAL for a tenant because it asserted the
+  CLUSTER-SCOPED `list nodes` on the same `&&` as `cluster-info`. Fixed; measured that
+  `cluster-info` alone still returns rc=1 `Unauthorized` on a corrupted token, so the connectivity
+  proof the code comment protects is intact.
+- **F-c4 (this row's other half)** — `24-lab-preflight.sh` discarded kubectl's stderr on TWO checks
+  and judged the empty result, so a Forbidden tenant was told **"no StorageClass at all — Gitea's
+  PVC can never bind"**. MEASURED before the fix (`default_sc=[] n_sc=[0]` → that PROBLEM). Both
+  checks now classify via `classify_kube_failure` and report `unk`, whose own comment already said
+  a check "must not assert a permissions verdict nobody obtained" — the file had the answer and
+  applied it to 1 of its 4 checks. Guarded by `scripts/test-lab-preflight-forbidden.sh`, which
+  tests BOTH directions (a fix that never judges anything would pass the tenant case and destroy
+  the check) and is RED-proven: re-discarding stderr flips exactly the two StorageClass assertions
+  while the LoadBalancer and admin ones stay green.
 
 ### REFUTED — do not build these
 
