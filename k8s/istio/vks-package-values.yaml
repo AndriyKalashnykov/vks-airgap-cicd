@@ -8,9 +8,16 @@
 # live 9.1 guest cluster (istio.kubernetes.vmware.com.1.28.5+vmware.1-vks.1), not from a doc. The
 # package is not missing these knobs; it simply ships them off or unset.
 istio:
+  # Rendered by 48-install-istio-package.sh with envsubst. These MUST stay as ${...} tokens: the
+  # package's schema exposes both namespaces, and without them 48 creates and PSA-labels one pair
+  # while the package installs into another -- pods rejected by an admission policy 48 thought it
+  # had satisfied. (Until 2026-08-25 this file had no tokens at all, so the render was a no-op.)
+  namespace: ${ISTIO_NAMESPACE}
   pilot:
-    # THE PACKAGE LEAVES `resources` NULL, so the upstream chart default applies:
-    # {cpu: 500m, memory: 2048Mi}. MEASURED 2026-08-24 on best-effort-small workers -- istiod Pending
+    # THE PACKAGE PINS THIS ITSELF, in its own config/schema.yaml, at {cpu: 500m, memory: 2048Mi}.
+    # (This comment said "leaves it NULL, so the upstream chart default applies" until 2026-08-25 --
+    # wrong. The null reading came from the openAPIv3 view, which shows no default on the `resources`
+    # NODE because the defaults sit on its LEAVES.) MEASURED 2026-08-24 on best-effort-small workers -- istiod Pending
     # 42m, "2 Insufficient memory". Worker allocatable 2833Mi and this demo's own workload already
     # holds 874/957Mi, so even perfectly balanced that leaves 1918Mi against a 2048Mi request: 130Mi
     # short, with NO placement that fits. Our helm path pins 768Mi; measured steady-state istiod RSS
@@ -29,6 +36,7 @@ istio:
     replicas: 1
   gateways:
     ingress:
+      namespace: ${ISTIO_GATEWAY_NAMESPACE}
       # SHIPS OFF (`enabled` default false, schema-read). Turning it on is this one boolean; the
       # namespace default is already `istio-ingress`, which is where our helm gateway lives, so the
       # ingress LoadBalancer lands where verify-ingress and the *.vks.local hosts already expect it.

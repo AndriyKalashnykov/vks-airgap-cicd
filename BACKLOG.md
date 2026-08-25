@@ -1807,6 +1807,38 @@ the `global.hub` override (and with it `make verify-gateway-image`, which exists
 helm accepts an unknown `--set` key with rc=0 and silently falls back to the public registry), and
 it makes our Istio install the same shape a VKS operator would use.
 
+**AN ADVERSARY ROUND ON THE IMPLEMENTATION (2026-08-25) REFUTED THE DEFAULT FLIP AND FOUND FIVE
+MORE THINGS. Three were fixed; these five are design-level and remain open:**
+
+| # | finding | why it is not a code fix |
+|---|---|---|
+| **F3** | **THE BLOCKER.** `images/images.txt` mirrors istio **1.30.3** — the HELM versions. The package pulls **1.28.5** from its own bundle repo, digest-addressed, which `make mirror` cannot stage. kbld resolves images RELATIVE TO THE BUNDLE, and there is no `global.hub` to redirect them. | Relocating the standard-packages repository is `imgpkg copy` by the **platform team** — outside this repo and outside `make mirror` entirely. |
+| **F2** | KinD has **no kapp-controller** (0 hits for `kapp\|carvel\|packageinstall`), so `make e2e-kind` can never exercise the package path — the only local verification that would have caught the F1 crash. | Adding Carvel to the KinD stand-in is its own project. |
+| **F6** | `98-uninstall-all.sh` has **0** hits for `pkgi\|PackageInstall\|vks-package`, so teardown leaves the PackageInstall, its SA, and **ClusterRoleBinding `istio-pkg-sa-cluster-admin` → cluster-admin** standing on a real lab. | Wants a teardown design, not a line. |
+| **F5** | Istio release-1.28 vendors **gateway-api v1.4.1**; we install **v1.5.1** (`GATEWAY_API_VERSION`), the CRDs-newer-than-client direction `check-gwapi-istio-alignment.sh` names as crash-looping. That gate reads `ISTIO_VERSION`, which the package path never sets — **so it stays green while its invariant is false**. | The gate needs to learn the second path. |
+| **F7** | The version default **floats**: `PKG_VERSION=""` → `jq sort \| tail -1`, a LEXICOGRAPHIC sort, in a repo built on pinning. Today's six versions happen to sort correctly; a 1.9/1.100 would not. | Pinning it is easy; deciding whether the default should float at all is not. |
+
+⚠️ **AND THIS LAB CANNOT DETECT F3**, which is why the preflight exists. `PackageRepository
+standard-packages` reports `Reconcile succeeded` — it pulled from Broadcom, so **the lab has
+internet**. `make install-vks-package` would go **green here and prove nothing**: the same
+dual-homed false-green this repo already documents for the builder base image. The new
+`43-install-istio-package.sh` therefore REFUSES when the bundle host is not local/mirrored
+(RED-proven against this lab: rc=1), with `ISTIO_PACKAGE_ALLOW_REMOTE=1` as a deliberate,
+documented opt-out that says out loud the run proves nothing.
+
+**FIXED in the same round, each re-proven:** the path died at `istio_apply_routes` because it never
+set `ISTIO_GATEWAY_LABEL`/`ISTIO_GATEWAY_SERVICE` (F1 — it died AFTER creating 8 namespaces and
+installing the package); the `helm` escape hatch was itself CLOBBERED because the new key was not in
+`load_env`'s snapshot (F4 — verbatim the incident at `lib/os.sh:507`, proven fixed with a control);
+the `envsubst` render was a NO-OP because the values file had no `${}` tokens at all (F8); the
+values file still carried my superseded "leaves it NULL" comment (F9); and `48` collided with
+`48-istio-preflight.sh` (F11 → renamed 43).
+
+**The 768Mi claim SURVIVED both rounds and is the best-evidenced thing here:** exactly ONE istiod
+Deployment in the rendered output, carrying the unresolved image AND `requests: {cpu: 100m, memory:
+768Mi}` and `replicas: 1` in the SAME object — and kbld, the only remaining pipeline stage, rewrites
+image fields only.
+
 **What is left is ONLY the live proof.** Rendering settles that the values reach istiod; it cannot
 show that kapp-controller reconciles, that the LoadBalancer gets an IP, or that traffic routes. A
 live test needs `helm uninstall` of the three releases first (they would fight: two istiods, two
