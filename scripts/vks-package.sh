@@ -79,6 +79,9 @@ fi
 # result never depends on the order the API server happened to list the packages in.
 # A GA release outranks its own prereleases: `1.28.5` beats `1.28.5-rc1`, so the default float
 # can never land on a release candidate. (`sort -V` ranks -rc1 ABOVE GA; that is not what we want.)
+# shellcheck disable=SC2016  # jq PROGRAM TEXT, not shell. The single quotes are load-bearing:
+# $raw / $s / $core / $build are jq variables, and letting the shell expand them would silently
+# substitute empty strings and make every comparison compare nothing.
 _VKEY='def vkey:
   . as $raw
   | (if type == "string" then . else "" end) as $s
