@@ -874,70 +874,98 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-24 — MATRIX 6/6 GREEN on a fresh cut. main is clean; the next job is B471
+## ▶️ HANDOFF 2026-08-25 — MATRIX 5/6 GREEN; row 1 is BLOCKED on an orphaned ArgoCD finalizer
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### The certification that just landed
+### Where the matrix stands
 
-`run-20260824T143354Z-3174779` — **6 of 6 rows, every one rc=0, every one `0 FAILED`**, across two
-lab cuts (rows 1/2/5 on cut A, 3/4/6 on cut B after a rebuild). Rows 3/4/6 were green on their FIRST
-attempt on the fresh cut, which was the ask.
+Five rows green, across two runs on the current cut. **The pair symmetry is the evidence, not the
+greens** — a flake shows up as an asymmetry long before it shows up as a red:
 
-| pair | branch | blocks | differ by |
+| pair | rows | ledger | identical? |
 |---|---|---|---|
-| 1 ↔ 3 | NOTHING exists | `37 ran / 7 skipped` both | `[02]`↔`[01]`, the OS clone block, ONLY |
-| 2 ↔ 4 | EVERYTHING exists | `31 ran / 13 skipped` both | same |
-| 5 ↔ 6 | scenario-2 | `18 ran / 10 skipped` both | same |
+| EVERYTHING exists | 2 ↔ 4 | `31 ran / 0 FAILED / 13 skipped` | ✅ |
+| scenario-2 | 5 ↔ 6 | `18 ran / 0 FAILED / 10 skipped` | ✅ |
+| NOTHING exists | 3 (green) ↔ **1 (not run)** | `37 ran / 0 FAILED / 7 skipped` | ⚠️ half-measured |
 
-**The symmetry is the evidence, not the greens.** A flake shows up as an asymmetry here long before
-it shows up as a red. Evidence in `~/walk-evidence/run-20260824T143354Z-3174779/`.
+Evidence: `~/walk-evidence/run-20260825T165856Z-1691298` (rows 3/4/6),
+`run-20260825T133210Z-62319` (row 2), `run-20260825T114908Z-3753525` (row 5).
+
+### 🔴 THE BLOCKER — read this before touching the lab
+
+Row 1 needs an empty cell. `make walk-reset CONFIRM=yes` **timed out at its full 1800s** and the
+`cicd` vSphere Namespace is stuck `Terminating`. Two layers of orphaned content, each with its
+owner already gone:
+
+1. **20 PVCs** labelled `cicd-gc0825125856/TKGService`, `Bound` (not Terminating), **0/20
+   ownerReferences** — orphans of a cluster that was already deleted. CLEARED by hand, label-scoped.
+2. **6 `applications.argoproj.io`** (`dotnetwebapp gowebapp javawebapp nodejswebapp pythonwebapp
+   rustwebapp`) holding `resources-finalizer.argocd.argoproj.io`, each with a `deletionTimestamp`.
+   **STILL BLOCKING.**
+
+**Measured, so do not re-derive it:**
+
+- No `application-controller` and no `argocd-server` exists anywhere on the Supervisor. The only
+  survivor is `svc-argocd-service-vh6my/argocd-service-controller-manager` — the Supervisor Service
+  **operator**, which manages instances and does **not** process Application finalizers.
+- **Reinstalling ArgoCD to drain them CANNOT WORK.** The instance lived *in* `cicd`, and a
+  Terminating namespace rejects creates — measured:
+  `configmaps is forbidden: User "sso:Administrator@vsphere.local" cannot create resource`.
+- `kubectl get all` does **not** list CRs. An early probe reported "0 objects remaining" while these
+  six were the whole problem; the namespace's own `status.conditions` named them
+  (`NamespaceContentRemaining` / `NamespaceFinalizersRemaining`). Read the conditions, not `get all`.
+
+**Two options remain, and the choice is the OWNER'S:**
+
+- **(a)** clear `metadata.finalizers` on the 6 Application CRs → the namespace drains.
+- **(c)** re-cut the lab.
+
+⚠️ **Why (a) is not mine to take unilaterally.** `nested-vsphere-lab`'s
+`scripts/check-no-force-finalize.sh` is a hard gate against clearing **`spec.finalizers` on a
+NAMESPACE**, for a measured reason: the apiserver then drops the namespace object while its contents
+stay in etcd, and a Supervisor Service reinstall **reuses the namespace suffix**, so a prior
+install's seven cleartext Secrets reappear inside the NEW Harbor. (a) is a *different* object — CRs,
+not the namespace, which keeps its `["kubernetes"]` finalizer and its normal deletion path — but it
+is close enough to a documented credential-leak path that the auto-mode classifier blocked it and
+the owner should decide. Filed upstream as lab **B462** (merged, PR #104): the refusal message names
+a remedy — "delete the guest cluster" — that has *already happened*, so following it loops forever.
+
+### What landed this session (all merged, `main` green)
+
+| PR | what |
+|---|---|
+| **#1011** | 🔴 a **live tenant-blocking bug**: `make vks-login` died FATAL asserting the CLUSTER-SCOPED `list nodes`, which a tenant cannot hold — while `lib/capacity.sh:167-171` calls exactly that "normal for a tenant". Two files, one capability, opposite verdicts, the fatal one at the entry point; and `vks-login` sits AFTER `mirror` in `install-all`, so a tenant burned ~20 min and then died. |
+| **#1010** | the walkthrough promised a hostname its table never carried, and named ONE app in a table whose siblings used `<app>`. Gated POSITIONALLY inside the gate that already owns that doc. |
+| **#1009** | the only tenant-RBAC test was wired to nothing **and** broken (read the LAB's `.env`, wrong namespace of the right cluster). Gated by `test-e2e-dotenv-guard.sh`. |
+| lab **#104** | B462 above. |
 
 ### 🔴 DISTRUST FIRST
 
-- **A leaked walkbox VM is still running** — `vks-walkbox-ubuntu`, 8 GiB, virsh id 69. This is lab
-  **B453** exactly as filed: `destroy_stale_walkboxes` runs at the START of each row, so every row
-  sweeps the PREVIOUS row's box and the LAST row's is never swept. There is no `trap` in that file.
-  The next matrix run sweeps it, or:
-  `virsh --connect qemu:///system destroy vks-walkbox-ubuntu && virsh --connect qemu:///system undefine vks-walkbox-ubuntu --remove-all-storage`
-- **`make env-validate` returns rc=2 / HTTP 401, and that is CORRECT.** The matrix installs Harbor
+- **`make env-validate` returns rc=2 / HTTP 401 and that is CORRECT** — the matrix installs Harbor
   from throwaway walkboxes and destroys them, so `.env`'s Harbor credential is dead BY DESIGN after
   every run. Recover per RULE ZERO-A0's chain; do not diagnose it as a defect.
-- **`static-check` is SKIPPED on a PR** (paths-filtered; only `static-check-fast` runs, and NEITHER
-  it nor `static-check-pr` runs `sec`). Run `env -u GOROOT make static-check` locally before merging.
-  Measured this session: the full local gate REJECTED a new test for SC2015 that CI never saw.
-- **`pgrep`/`ps` SELF-MATCHED three times this session**, twice producing a false "still running" in a
-  status report. Read the argv and compare against `$$` before believing any process count.
-- **A backgrounded `cmd > log; echo "RC=$?"` reports the ECHO's status** — the notification said
-  "exit code 0" over a gate that exited 2. Use `{ cmd; rc=$?; echo RC=$rc; exit $rc; }` or read the log.
+- **`static-check` is SKIPPED on a PR** (paths-filtered). Run `env -u GOROOT make static-check`
+  locally before merging anything touching `scripts/` — it is 101 offline tests, ~400s.
+- **`pgrep`/`ps | grep` SELF-MATCHED repeatedly this session**, twice producing a false "still
+  running". Read the argv and compare against `$$`; a count is not evidence.
+- **`ps -p ""`** (an empty PID from a failed extraction) dumps EVERY process. Guard the extraction.
+- A **leaked `vks-walkbox-*` VM** per run is lab B453 (the sweep runs at row START, so the last row's
+  box is never swept). The next matrix run sweeps it.
 
 ### Open
 
-- **B471 (new, 🔴)** — the matrix certifies the scenario-2 **document**, never the tenant
-  **permission model**; the rows are handed admin creds and a driver-supplied kubeconfig, and their
-  own label says "NOT the tenant path". RULE ZERO-B makes tenant the DEFAULT posture, so the
-  most-exercised scenario has the least-exercised audience. Same shape as the istiod capacity bug
-  that shipped this session (fine for admin, failed closed for a tenant). Needs an idea round.
-- **B213, B206** unchanged.
-- The interpreter-write hole in the adversary gate is still believed **un-gateable at the ship
-  boundary** — see the section above; do not rebuild the refuted `git pre-commit` chokepoint.
-
-### What #977 shipped, and the lesson in its shape
-
-A **RULE ZERO-B leak**: `supervisor_kubeconfig_hint` printed
-`${VKS_LAB_STATE_DIR:-$HOME/.local/state/nested-lab}/kubeconfig` at EVERY end user across 8 scripts,
-while `os.sh` claimed that entry was existence-guarded — true of the RESOLVER, false of the PRINTER.
-Fixed at the emitter (both consumers at once); `scripts/test-supervisor-kubeconfig.sh` pins it,
-RED-proven by mutation, offline set 89 → 90.
-
-**Of the six commits, THREE were corrections of the other three, and no gate caught any of them**: a
-claim retracted in a commit message survived in the code comment; a rationale I had "measured" was
-false (`jumpbox-launch.sh` calls the hint without the resolver); and a commit about enumerated-list
-rot rotted its own line citations. All three needed a reviewer reading the diff AFTER it was written
-— the implementation round, not the idea round. Two adversary rounds also refuted a vCenter CA pair
-(it could never fire) and all three proposed gate designs (98% / backwards / 92% false-RED,
-denominator 1); both refutations are recorded in-code so they are not rebuilt.
+- **B471** — RE-SCOPED, not closed. An idea round refuted most of it and its central evidence was
+  **inverted**; the one surviving axis is **Harbor** (the rows get a Harbor ADMIN credential,
+  `make harbor-robot` is skipped, and the 3-way decision at `22-harbor-robot.sh:79` is untested).
+  A second round then **refuted its own prescription** to add `can-i` probes to lab-preflight,
+  measuring both as false-BAD generators — so that is deliberately NOT built. Three designs are
+  recorded as REFUTED in the row so nobody rebuilds them.
+- **B483** — the tenant e2e is fixed but still WIRED TO NOTHING. It needs a live KinD cluster with
+  ArgoCD and mutates that cluster's ArgoCD, and `91-e2e-tenant-mechanism.sh` has **no revert trap**
+  (one `trap`, and it only removes a tempdir). Add the trap FIRST, then decide its home.
+- **B213, B206, B480, B482** unchanged.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
