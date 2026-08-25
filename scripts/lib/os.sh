@@ -2140,3 +2140,80 @@ shell_activate_line() {
     *)             printf '%s' "" ;;
   esac
 }
+
+
+# ONE version-sort key for the WHOLE repo. Three sites needed it and each had its own: two in
+# vks-package.sh (which DISAGREED with each other on toybox) and one in 08-install-argocd-service.sh
+# that picked 3.0.9 over 3.0.19 -- i.e. installed an OLDER ArgoCD than the lab runs. A version
+# comparison written a fourth time is the defect; call this.
+#
+# NOT `sort -V`: implementation-dependent. MEASURED over
+# [1.28.5, 1.28.5+vmware.1-vks.1, 1.28.5+vmware.2-vks.1] -- GNU coreutils 9.4 picks +vmware.2,
+# toybox 0.8.9 (Photon 5) picks the BARE 1.28.5. Pure jq is identical on every OS by construction.
+# NOT jq's bare `sort`: LEXICOGRAPHIC, so 1.9.0 beats 1.100.0 and 3.0.9 beats 3.0.19.
+#
+# TOTAL: every field compared, raw string as the final tiebreak at a FIXED index, so the answer
+# never depends on the order the API server listed things in. (Do not re-add `| flatten` -- it
+# shifts $raw's index so a string can be compared against a number, which inverts real cases.)
+# GA outranks its own prereleases, so a floating default can never land on a release candidate.
+# shellcheck disable=SC2016  # jq PROGRAM TEXT. $raw/$s/$core/$build are JQ variables; letting the
+# shell expand them would substitute empty strings and make every comparison compare nothing.
+_VKEY='def vkey:
+  . as $raw
+  | (if type == "string" then . else "" end) as $s
+  | ($s | split("+")) as $p
+  | ($p[0] // "") as $core
+  | ($p[1:] | join("+")) as $build
+  | ($core | split("-")) as $c
+  | [ ($c[0] // "" | [scan("[0-9]+")] | map(tonumber)),
+      [ (if ($c | length) > 1 then 0 else 1 end) ],
+      ($c[1:] | join("-") | [scan("[0-9]+")] | map(tonumber)),
+      ($build | [scan("[0-9]+")] | map(tonumber)),
+      $raw ];'
+vkey_jq() { printf '%s' "$_VKEY"; }
+
+# _file_version <filename-or-path> — the version embedded in a versioned filename, or EMPTY.
+#
+# ALWAYS rc=0. `grep -o` exits 1 on NO MATCH, and these callers run `set -euo pipefail`, so
+# `v="$(extractor "$f")"` on an unparseable name KILLED the install script with rc=1 and ZERO output
+# -- before the log lines that name the chosen files, and making the caller's own `<none>` fallback
+# provably dead code. scripts/fetch-ca.sh:80-82 documents this exact landmine four lines from its own
+# `find | sort | tail`; I re-introduced it anyway. Returning empty is the only safe contract.
+#
+# It keeps the BUILD METADATA. `[0-9][0-9.]*[0-9]` stopped at the `+`, so the runbook's real files --
+# `...-v2.14.3+vmware.2-vks.1-25292931.yml` and its `+vmware.10` sibling -- produced the SAME key
+# `2.14.3`; `sort_by` is stable, so the winner became whatever `find` emitted first. That is a
+# DETERMINISM REGRESSION against the `find | sort | tail -1` it replaced, and it discarded exactly
+# what _VKEY exists to order. Requiring a dot excludes a bare counter (`harbor-24-legacy-v2.14.3`
+# yields 2.14.3, not 24); anchoring at the end takes the trailing run, not a prefix.
+_file_version() {
+  printf '%s' "${1##*/}" \
+    | jq -R -r 'sub("\\.[Yy][Aa]?[Mm][Ll]$"; "") | capture("(?<v>[0-9]+\\.[0-9][0-9A-Za-z.+_-]*)$").v // ""' 2>/dev/null || true
+}
+
+# newest_versioned_file <dir> <glob> — the NEWEST operator-supplied file matching <glob>, by VERSION.
+#
+# `find … | sort | tail -1` is LEXICOGRAPHIC. MEASURED over the filenames docs/scenario-1.md:89-91
+# tells the operator to download: it picks argocd `1.2.0` over `1.10.0`, and harbor `v2.9.1` over
+# `v2.14.3`. Dormant only while exactly one version is present -- the moment Broadcom publishes an
+# update beside the old download, the installer silently installs the OLDER service.
+#
+# Prints the path. Prints NOTHING on no match (the caller's own `die` has the actionable message).
+newest_versioned_file() {
+  local dir="$1" glob="$2" files
+  files="$(find "$dir" -maxdepth 1 -name "$glob" 2>/dev/null || true)"
+  [ -n "$files" ] || return 1
+  # Sorted by the version through the SHARED key -- the SAME extraction _file_version uses, so the
+  # PICK and the harbor def/values PAIR CHECK cannot disagree about what a filename's version is.
+  # `// empty`, not a bare `last`: `last` on an empty array prints the literal string "null" with
+  # rc=0, which would pass the caller's `[ -n ]` guard and install a file named `null`.
+  printf '%s\n' "$files" | jq -R -s -r "$(vkey_jq)"'
+      [ splits("\n") | select(length > 0) ]
+    | map({ p: ., v: ((. | split("/") | last
+              | sub("\\.[Yy][Aa]?[Mm][Ll]$"; "")
+              | capture("(?<v>[0-9]+\\.[0-9][0-9A-Za-z.+_-]*)$").v) // "0") })
+    | sort_by(.v | vkey) | last | .p // empty'
+}
+
+# versioned_file_version <path> — public name; ONE extractor shared with the sort above.
+versioned_file_version() { _file_version "$1"; }

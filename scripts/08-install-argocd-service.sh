@@ -15,7 +15,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_env
 
 SRC_DIR="${VCF_CLI_SRC_DIR:-$HOME/Downloads/vcf}"
-DEF="$(find "$SRC_DIR" -maxdepth 1 -name 'supervisor-service-argocd-legacy-*.yml' 2>/dev/null | sort | tail -1)"
+# The version pick below needs jq HERE -- this script's own require_cmd is 60+ lines further down,
+# and without an earlier guard a missing jq surfaces as "no such file in $SRC_DIR": the wrong cause.
+require_cmd jq
+DEF="$(newest_versioned_file "$SRC_DIR" 'supervisor-service-argocd-legacy-*.yml' || true)"
 [ -n "$DEF" ] || die "no supervisor-service-argocd-legacy-*.yml in $SRC_DIR (see docs/scenario-1.md Step 0)"
 log_info "service definition: $(basename "$DEF")"
 
@@ -122,7 +125,11 @@ _vschema="$(printf '%s' "$_crd_json" | jq -c '.spec.versions[]?.schema.openAPIV3
 _pattern="$(printf '%s' "$_vschema" | jq -r '.pattern // empty' 2>/dev/null || true)"
 
 if [ -z "$VER" ]; then   # 1. an enum, if this operator ever grows one
-  VER="$(printf '%s' "$_vschema" | jq -r '[.enum[]?] | last // empty' 2>/dev/null || true)"
+    # `| last` with NO ordering: whichever the CRD happens to list LAST wins. MEASURED over the
+    # three versions this lab offers, in three document orders: 3.0.9 / 3.0.2 / 3.0.19 -- two of
+    # three pick an OLDER ArgoCD, i.e. strictly worse than the lexicographic sort below it. And this
+    # branch runs FIRST, so it wins. Dormant only while the 9.1 CRD carries no enum.
+  VER="$(printf '%s' "$_vschema" | jq -r "$(vkey_jq)"' [.enum[]?] | map(select(type=="string")) | sort_by(vkey) | last // empty' 2>/dev/null || true)"
   [ -n "$VER" ] && log_info "version from the CRD schema enum: ${VER}"
 fi
 if [ -z "$VER" ]; then   # 2. the Carvel Package the operator actually published
@@ -144,7 +151,7 @@ if [ -z "$VER" ]; then   # 2. the Carvel Package the operator actually published
   _pkg_end=$((SECONDS + ${ARGOCD_PACKAGE_WAIT_SECONDS:-180}))
   while :; do
     VER="$(kubectl --kubeconfig "$SUP" get packages.data.packaging.carvel.dev -A -o json 2>/dev/null \
-          | jq -r '[.items[]? | select(.spec.refName == "argocd.kubernetes.vmware.com") | .spec.version] | sort | last // empty' 2>/dev/null || true)"
+          | jq -r "$(vkey_jq)"' [.items[]? | select(.spec.refName == "argocd.kubernetes.vmware.com") | (.spec.version // "")] | map(select((type=="string") and length>0)) | sort_by(vkey) | last // empty' 2>/dev/null || true)"
     [ -n "$VER" ] && { log_info "version from the published Carvel Package: ${VER}"; break; }
     [ "$SECONDS" -lt "$_pkg_end" ] || break
     log_info "waiting for the ArgoCD Carvel Package to be published (the CRD is already here)..."

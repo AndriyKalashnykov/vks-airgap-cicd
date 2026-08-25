@@ -57,6 +57,13 @@ RESOLVED_ARCHIVE=""
 # order is filesystem-dependent. The `|| true` neutralises ONLY the spurious 141 that `head -1`
 # closing the pipe gives `sort` under pipefail -- `sort` has already buffered all of find's output,
 # so the SELECTED line is correct; without it a legitimate match is misread as "none".
+# ⚠️ KNOWN, NOT FIXED (round 4). This is the FOURTH lexicographic pick over operator-supplied files
+# in this directory; the other three now go through newest_versioned_file(). It is left alone
+# DELIBERATELY, not overlooked: these are ARCHIVE names, not the `-vX.Y.Z.yml` shape _file_version
+# parses, so the shared helper would extract nothing and fall back to find order -- strictly worse
+# than today. Reachable only when Broadcom ships a re-spin of the SAME pinned version beside the old
+# one (…-25509669 next to …-25600000), where `head -1` takes the OLDER build. Fixing it needs an
+# extractor for the archive naming, and a test, before it touches an install path.
 _resolve_glob() {
   local g="$1" gf="${2:-}" hit
   hit="$(find "$SRC_DIR" -maxdepth 1 -type f -name "$g" 2>/dev/null | sort | head -1 || true)"

@@ -81,6 +81,10 @@ fi
 # offers newest, which is not knowable offline -- so say that out loud rather than imply coverage.
 # This gate's own header records why that distinction matters: it exists because a COMMENT saying
 # "keep this coupled" was not a control.
+# Initialised, NOT left to default: load_env's `set -a` exports every uncommented .env line, so an
+# uninherited bare name could be forced on from the environment and print "HELM PATH ONLY" under a
+# fully-checked package pin, with no warning above it to explain the caveat.
+gwapi_pkg_unchecked=0
 if [ -n "${ISTIO_PACKAGE_VERSION:-}" ]; then
   pkg_minor="release-$(printf '%s' "$ISTIO_PACKAGE_VERSION" | cut -d. -f1,2)"
   pkg_url="https://raw.githubusercontent.com/istio/istio/${pkg_minor}/go.mod"
@@ -91,9 +95,13 @@ if [ -n "${ISTIO_PACKAGE_VERSION:-}" ]; then
       exit 1
     fi
     log_warn "check-gwapi-istio-alignment: the PACKAGE pin ${ISTIO_PACKAGE_VERSION} was NOT checked."
-    log_warn "  fetch failed: ${pkg_url}"
+    log_warn "  could not fetch ${pkg_url}"
     log_warn "  If that URL looks wrong, the PIN is the suspect, not the network: the branch is derived"
     log_warn "  as release-<major>.<minor> from ISTIO_PACKAGE_VERSION, so a malformed pin yields a 404."
+    # The OK line MUST carry the caveat here too. A fetch failure is the MOST LIKELY not-checked
+    # path in the wild (a proxy, a rate-limit, a malformed pin), and it previously warned and then
+    # printed an unqualified "OK" -- so the reader saw a full pass over a half-run gate.
+    gwapi_pkg_unchecked=1
   else
     pkg_vendored="$(printf '%s' "$pkg_gomod" | grep -E '^[[:space:]]+sigs\.k8s\.io/gateway-api v' | head -1 | awk '{print $2}')"
     if [ -n "$pkg_vendored" ] && [ "$pkg_vendored" != "$GATEWAY_API_VERSION" ]; then
