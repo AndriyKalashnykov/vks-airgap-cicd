@@ -30,7 +30,25 @@ CONTROLLER="${_override:-${INGRESS_CONTROLLER:-istio}}"
 case "$CONTROLLER" in
   istio)
     log_info "INGRESS_CONTROLLER=istio -> installing Istio ingress"
-    exec "${SCRIPT_DIR}/46-install-istio.sh"
+    # HOW to install it is a second axis: `package` (VKS-native, the default) or `helm`. See
+    # BACKLOG.md B476 -- the package is a Carvel PackageInstall the guest's own kapp-controller
+    # reconciles, needing neither helm nor the vcf CLI, at the cost of a two-minor version
+    # downgrade (1.28.5 vs 1.30.3), accepted deliberately.
+    # DEFAULT IS `helm`, DELIBERATELY. An adversary round refuted `package` as the default on three
+    # independent MEASURED grounds: (1) the package path dies before it finishes -- it never sets
+    # ISTIO_GATEWAY_LABEL/SERVICE, so istio_apply_routes dies AFTER 8 namespaces and the install;
+    # (2) KinD has no kapp-controller, so the default would break `make e2e-kind`, the only local
+    # verification that could catch (1); (3) images/images.txt mirrors istio 1.30.3 (the HELM
+    # versions) while the package pulls 1.28.5 from a registry this repo does not mirror -- a
+    # default that leaves the air gap in an air-gap repo. `package` is OPT-IN until one live run
+    # exists. See BACKLOG.md B476.
+    case "${ISTIO_INSTALL_METHOD:-helm}" in
+      package) log_info "INGRESS_CONTROLLER=istio, ISTIO_INSTALL_METHOD=package -> VKS Standard Package"
+               exec "${SCRIPT_DIR}/43-install-istio-package.sh" ;;
+      helm)    log_info "INGRESS_CONTROLLER=istio, ISTIO_INSTALL_METHOD=helm -> helm charts, images from Harbor"
+                   exec "${SCRIPT_DIR}/46-install-istio.sh" ;;
+      *)       die "unknown ISTIO_INSTALL_METHOD='${ISTIO_INSTALL_METHOD}' (expected 'package' or 'helm')" ;;
+    esac
     ;;
   istio-existing)
     log_info "INGRESS_CONTROLLER=istio-existing -> attaching to an Istio we did NOT install"

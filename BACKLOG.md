@@ -1778,16 +1778,24 @@ gone afterwards.
 
 **TWO BLOCKERS, both already measured — this is not a one-line switch:**
 
-1. **The package does not pin istiod's memory.** It exposes `istio.pilot.resources.requests` as a
-   tunable and leaves it **`null`**, so the upstream chart default `{cpu: 500m, memory: 2048Mi}`
-   applies, and `config/overlay/upstream/istiod-overlay.yaml` does not override it. On
-   `best-effort-small` workers (2833Mi allocatable, this demo already holding ~874Mi) **istiod goes
-   Pending** — the same scheduling wall our helm path hit. Our path solved it with
-   `ISTIOD_MEMORY_REQUEST` (default `768Mi`; measured steady-state RSS **43/39/39Mi**). The package
-   path needs the same value supplied via `PKG_VALUES=<file>`.
-2. **The package's ingress gateway ships OFF.** Turning it on is another `PKG_VALUES` stanza, so
-   "install the package" is not the whole job — the gateway and its LoadBalancer have to come from
-   somewhere, and `46-install-istio.sh` currently helm-installs `istio/gateway` for exactly that.
+1. ~~**The package does not pin istiod's memory.**~~ **BOTH BLOCKERS ARE SOLVED, MEASURED
+   2026-08-25**, and the values file is committed at `k8s/istio/vks-package-values.yaml`. The
+   package's schema **does** pin `requests: {cpu: 500m, memory: 2048Mi}` (this row previously said
+   `null` / "inherits upstream" — wrong; see the correction in `docs/vks-services/istio.md`), and
+   `istiod-overlay.yaml:350` sets `requests:` from the data-values **unconditionally**
+   (`#@overlay/match missing_ok=True`), so an override lands. Rendering the public bundle offline —
+   `ytt -f config/ --data-values-file k8s/istio/vks-package-values.yaml`, no cluster touched — gives
+   **`istiod requests: {cpu: 100m, memory: 768Mi}`, `replicas: 1`**, and the **ingress gateway ON**
+   as a `LoadBalancer` in `istio-ingress` (the same namespace the helm gateway uses).
+2. **A third knob nobody had measured: `pilot.replicas` defaults to `2`** in the package, where helm
+   defaults to 1. So a naive package install wants TWO istiods at 2048Mi each — the package path is
+   not merely *equal* to the helm path's problem, it is **twice as bad**. Pinned to 1 in the values
+   file.
+3. ~~**THE REAL REMAINING COST — a VERSION DOWNGRADE.**~~ **ACCEPTED BY THE OWNER 2026-08-25.**
+   Measured on a live 9.1 guest cluster: the package offers **1.28.5**`+vmware.1-vks.1`; our helm
+   path runs **1.30.3**, so switching is a **two-minor downgrade**. Surfaced as a decision because
+   it is a real tradeoff (VMware-certified build vs newer upstream) rather than a free swap; the
+   owner accepted it. **No open objections remain — this row is approved work, not a proposal.**
 
 **NOT the same question as `istio-existing`.** CLAUDE.md's "attach, never install" is about a mesh
 the PLATFORM TEAM already runs — `INGRESS_CONTROLLER=istio-existing` + `47-attach-istio.sh`, which
@@ -1799,7 +1807,45 @@ the `global.hub` override (and with it `make verify-gateway-image`, which exists
 helm accepts an unknown `--set` key with rc=0 and silently falls back to the public registry), and
 it makes our Istio install the same shape a VKS operator would use.
 
-**Done when:** `INGRESS_CONTROLLER=istio` installs via `install-vks-package` with a `PKG_VALUES`
-file pinning `istio.pilot.resources.requests` and enabling the ingress gateway; `make
-verify-ingress` is green on a real lab; and `docs/vks-services/istio.md` records which path is the
-default with its measurement.
+**AN ADVERSARY ROUND ON THE IMPLEMENTATION (2026-08-25) REFUTED THE DEFAULT FLIP AND FOUND FIVE
+MORE THINGS. Three were fixed; these five are design-level and remain open:**
+
+| # | finding | why it is not a code fix |
+|---|---|---|
+| **F3** | **THE BLOCKER.** `images/images.txt` mirrors istio **1.30.3** — the HELM versions. The package pulls **1.28.5** from its own bundle repo, digest-addressed, which `make mirror` cannot stage. kbld resolves images RELATIVE TO THE BUNDLE, and there is no `global.hub` to redirect them. | Relocating the standard-packages repository is `imgpkg copy` by the **platform team** — outside this repo and outside `make mirror` entirely. |
+| **F2** | KinD has **no kapp-controller** (0 hits for `kapp\|carvel\|packageinstall`), so `make e2e-kind` can never exercise the package path — the only local verification that would have caught the F1 crash. | Adding Carvel to the KinD stand-in is its own project. |
+| **F6** | `98-uninstall-all.sh` has **0** hits for `pkgi\|PackageInstall\|vks-package`, so teardown leaves the PackageInstall, its SA, and **ClusterRoleBinding `istio-pkg-sa-cluster-admin` → cluster-admin** standing on a real lab. | Wants a teardown design, not a line. |
+| **F5** | Istio release-1.28 vendors **gateway-api v1.4.1**; we install **v1.5.1** (`GATEWAY_API_VERSION`), the CRDs-newer-than-client direction `check-gwapi-istio-alignment.sh` names as crash-looping. That gate reads `ISTIO_VERSION`, which the package path never sets — **so it stays green while its invariant is false**. | The gate needs to learn the second path. |
+| **F7** | The version default **floats**: `PKG_VERSION=""` → `jq sort \| tail -1`, a LEXICOGRAPHIC sort, in a repo built on pinning. Today's six versions happen to sort correctly; a 1.9/1.100 would not. | Pinning it is easy; deciding whether the default should float at all is not. |
+
+⚠️ **AND THIS LAB CANNOT DETECT F3**, which is why the preflight exists. `PackageRepository
+standard-packages` reports `Reconcile succeeded` — it pulled from Broadcom, so **the lab has
+internet**. `make install-vks-package` would go **green here and prove nothing**: the same
+dual-homed false-green this repo already documents for the builder base image. The new
+`43-install-istio-package.sh` therefore REFUSES when the bundle host is not local/mirrored
+(RED-proven against this lab: rc=1), with `ISTIO_PACKAGE_ALLOW_REMOTE=1` as a deliberate,
+documented opt-out that says out loud the run proves nothing.
+
+**FIXED in the same round, each re-proven:** the path died at `istio_apply_routes` because it never
+set `ISTIO_GATEWAY_LABEL`/`ISTIO_GATEWAY_SERVICE` (F1 — it died AFTER creating 8 namespaces and
+installing the package); the `helm` escape hatch was itself CLOBBERED because the new key was not in
+`load_env`'s snapshot (F4 — verbatim the incident at `lib/os.sh:507`, proven fixed with a control);
+the `envsubst` render was a NO-OP because the values file had no `${}` tokens at all (F8); the
+values file still carried my superseded "leaves it NULL" comment (F9); and `48` collided with
+`48-istio-preflight.sh` (F11 → renamed 43).
+
+**The 768Mi claim SURVIVED both rounds and is the best-evidenced thing here:** exactly ONE istiod
+Deployment in the rendered output, carrying the unresolved image AND `requests: {cpu: 100m, memory:
+768Mi}` and `replicas: 1` in the SAME object — and kbld, the only remaining pipeline stage, rewrites
+image fields only.
+
+**What is left is ONLY the live proof.** Rendering settles that the values reach istiod; it cannot
+show that kapp-controller reconciles, that the LoadBalancer gets an IP, or that traffic routes. A
+live test needs `helm uninstall` of the three releases first (they would fight: two istiods, two
+mutating webhooks), and the gateway gets a **NEW** LB IP, so the `*.vks.local` `/etc/hosts` entries
+must be repointed before `make verify-ingress` means anything.
+
+**Done when:** `INGRESS_CONTROLLER=istio` installs via `install-vks-package` with
+`k8s/istio/vks-package-values.yaml`; `make verify-ingress` is green on a real lab; the 1.28.5-vs-1.30.3
+downgrade is an accepted decision rather than an unnoticed side effect; and `docs/vks-services/istio.md`
+records which path is the default with its measurement.
