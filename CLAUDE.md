@@ -874,115 +874,84 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-25 — MATRIX 5/6 GREEN; row 1 is BLOCKED on an orphaned ArgoCD finalizer
+## ▶️ HANDOFF 2026-08-25 — MATRIX 6/6 GREEN on a fresh cut, all three pairs IDENTICAL
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### Where the matrix stands
+### The certification
 
-Five rows green, across two runs on the current cut. **The pair symmetry is the evidence, not the
-greens** — a flake shows up as an asymmetry long before it shows up as a red:
+All six rows green. **The pair symmetry is the evidence, not the greens** — a flake shows up as an
+asymmetry long before it shows up as a red, and all three pairs match exactly:
 
-| pair | rows | ledger | identical? |
+| pair | rows | ledger | |
 |---|---|---|---|
-| EVERYTHING exists | 2 ↔ 4 | `31 ran / 0 FAILED / 13 skipped` | ✅ |
-| scenario-2 | 5 ↔ 6 | `18 ran / 0 FAILED / 10 skipped` | ✅ |
-| NOTHING exists | 3 (green) ↔ **1 (not run)** | `37 ran / 0 FAILED / 7 skipped` | ⚠️ half-measured |
+| NOTHING exists | 1 ↔ 3 | `37 ran / 0 FAILED / 7 skipped` | ✅ identical |
+| EVERYTHING exists | 2 ↔ 4 | `31 ran / 0 FAILED / 13 skipped` | ✅ identical |
+| scenario-2 | 5 ↔ 6 | `18 ran / 0 FAILED / 10 skipped` | ✅ identical |
 
-Evidence: `~/walk-evidence/run-20260825T165856Z-1691298` (rows 3/4/6),
-`run-20260825T133210Z-62319` (row 2), `run-20260825T114908Z-3753525` (row 5).
+Row 1's green is REAL, not skips: zero load-bearing blocks in its skipped list
+(`install-all`, `verify`, `verify-ingress`, `install-harbor-service`, `install-argocd-service` all
+RAN), **6/6 apps served their own marker**, and 8 UIs reachable through the istio ingress.
 
-### 🔴 THE BLOCKER — read this before touching the lab
+Evidence: `run-20260825T221952Z-2864413` (row 1, fresh cut) · `run-20260825T165856Z-1691298`
+(rows 3/4/6) · `run-20260825T133210Z-62319` (row 2) · `run-20260825T114908Z-3753525` (row 5).
 
-Row 1 needs an empty cell. `make walk-reset CONFIRM=yes` **timed out at its full 1800s** and the
-`cicd` vSphere Namespace is stuck `Terminating`. Two layers of orphaned content, each with its
-owner already gone:
+⚠️ **Read the 1 ↔ 3 pair with this caveat: it is NOT like-for-like on Kubernetes version.** Both rows
+used the same "newest Ready+Compatible" selector and got different answers, because the lab was
+re-cut between them — row 3 built its cluster on `v1.35.6+vmware.2-vkr.3`, row 1 on
+`v1.34.9+vmware.2-vkr.4` (the rebuilt Supervisor's newer TKrs were not `Ready` yet; the cluster
+reports `UpdatesAvailable: True`). The identical ledger across two Kubernetes minors is arguably
+STRONGER evidence — but it is not the same test twice, and nothing in the ledger says so.
 
-1. **20 PVCs** labelled `cicd-gc0825125856/TKGService`, `Bound` (not Terminating), **0/20
-   ownerReferences** — orphans of a cluster that was already deleted. CLEARED by hand, label-scoped.
-2. **6 `applications.argoproj.io`** (`dotnetwebapp gowebapp javawebapp nodejswebapp pythonwebapp
-   rustwebapp`) holding `resources-finalizer.argocd.argoproj.io`, each with a `deletionTimestamp`.
-   **STILL BLOCKING.**
+### Why the lab was re-cut (do not re-derive this)
 
-**Measured, so do not re-derive it:**
+`walk-reset` timed out at its full 1800s with `cicd` stuck `Terminating` on six
+`applications.argoproj.io` holding `resources-finalizer.argocd.argoproj.io`. Root cause was ORDERING
+and it is now FIXED UPSTREAM (lab PR #105, B463): `walk-reset-cell.sh` step 1 was headed *"THE
+CLUSTER FIRST"* while this repo's own `scripts/98-uninstall-all.sh:122-125` says an Application's
+finalizer *"can only complete while ArgoCD can still REACH the destination cluster"* — and
+`walk-reset` never called `make uninstall-all`. It now has a **step 0** that deletes Applications
+before the cluster.
 
-- No `application-controller` and no `argocd-server` exists anywhere on the Supervisor. The only
-  survivor is `svc-argocd-service-vh6my/argocd-service-controller-manager` — the Supervisor Service
-  **operator**, which manages instances and does **not** process Application finalizers.
-- **Reinstalling ArgoCD to drain them CANNOT WORK.** The instance lived *in* `cicd`, and a
-  Terminating namespace rejects creates — measured:
-  `configmaps is forbidden: User "sso:Administrator@vsphere.local" cannot create resource`.
-- `kubectl get all` does **not** list CRs. An early probe reported "0 objects remaining" while these
-  six were the whole problem; the namespace's own `status.conditions` named them
-  (`NamespaceContentRemaining` / `NamespaceFinalizersRemaining`). Read the conditions, not `get all`.
-
-**RESOLVED 2026-08-25 — (a) is IMPOSSIBLE, not merely risky. Do not retry it.** The owner
-authorised clearing the finalizers; the patch returned `Forbidden`. The drain had already deleted
-the namespace's RoleBindings, so for the SAME identity:
-
-| namespace | get | patch | delete | rolebindings |
-|---|---|---|---|---|
-| `svc-argocd-service-vh6my` (Active) | yes | **yes** | **yes** | yes |
-| `cicd` (Terminating) | yes | **no** | **no** | **no** |
-
-**The drain revokes the permission needed to unblock the drain**, and `can-i * *` is `no` — the SSO
-administrator is not cluster-admin on the Supervisor. No credential on this box can clear it. **The
-only exit for THIS cell is a re-cut.**
-
-**The ordering defect is FIXED UPSTREAM so it cannot recur** (lab PR #105, B463):
-`walk-reset-cell.sh` now has a **step 0** that deletes `applications.argoproj.io` `--wait=true`
-BEFORE the cluster, while ArgoCD and the destination are both alive. Root cause was that step 1 was
-headed *"THE CLUSTER FIRST"* while our own `scripts/98-uninstall-all.sh:122-125` says an
-Application's finalizer *"can only complete while ArgoCD can still REACH the destination cluster"* —
-and `walk-reset` never called `make uninstall-all` (zero references). The lab's
-`SUPERVISOR-SERVICES.md` had also marked **CONFIRMED** that Applications *"have no finalizers"*,
-which is true of ones ArgoCD creates itself and FALSE for ours — we set it deliberately at
-`k8s/argocd/application.yaml:18`. Corrected in place.
-
-⚠️ **Why (a) is not mine to take unilaterally.** `nested-vsphere-lab`'s
-`scripts/check-no-force-finalize.sh` is a hard gate against clearing **`spec.finalizers` on a
-NAMESPACE**, for a measured reason: the apiserver then drops the namespace object while its contents
-stay in etcd, and a Supervisor Service reinstall **reuses the namespace suffix**, so a prior
-install's seven cleartext Secrets reappear inside the NEW Harbor. (a) is a *different* object — CRs,
-not the namespace, which keeps its `["kubernetes"]` finalizer and its normal deletion path — but it
-is close enough to a documented credential-leak path that the auto-mode classifier blocked it and
-the owner should decide. Filed upstream as lab **B462** (merged, PR #104): the refusal message names
-a remedy — "delete the guest cluster" — that has *already happened*, so following it loops forever.
-
-### What landed this session (all merged, `main` green)
-
-| PR | what |
-|---|---|
-| **#1011** | 🔴 a **live tenant-blocking bug**: `make vks-login` died FATAL asserting the CLUSTER-SCOPED `list nodes`, which a tenant cannot hold — while `lib/capacity.sh:167-171` calls exactly that "normal for a tenant". Two files, one capability, opposite verdicts, the fatal one at the entry point; and `vks-login` sits AFTER `mirror` in `install-all`, so a tenant burned ~20 min and then died. |
-| **#1010** | the walkthrough promised a hostname its table never carried, and named ONE app in a table whose siblings used `<app>`. Gated POSITIONALLY inside the gate that already owns that doc. |
-| **#1009** | the only tenant-RBAC test was wired to nothing **and** broken (read the LAB's `.env`, wrong namespace of the right cluster). Gated by `test-e2e-dotenv-guard.sh`. |
-| lab **#104** | B462 above. |
+**Clearing the finalizers was IMPOSSIBLE, not merely risky** — measured, so do not retry it: the
+drain had already deleted the namespace's RoleBindings, so the SAME identity had
+`patch`/`delete`/`rolebindings` = **no** in the Terminating namespace and **yes** in an Active one.
+**The drain revokes the permission needed to unblock the drain**, and `can-i * *` is `no`.
+Reinstalling ArgoCD cannot help either: the instance lived IN `cicd`, and a Terminating namespace
+rejects creates.
 
 ### 🔴 DISTRUST FIRST
 
-- **`make env-validate` returns rc=2 / HTTP 401 and that is CORRECT** — the matrix installs Harbor
-  from throwaway walkboxes and destroys them, so `.env`'s Harbor credential is dead BY DESIGN after
-  every run. Recover per RULE ZERO-A0's chain; do not diagnose it as a defect.
+- **`make env-validate` returns rc=2 / HTTP 401 and that is CORRECT** after any matrix run — the
+  walkboxes are destroyed with their Harbor credential. Recover per RULE ZERO-A0's chain.
 - **`static-check` is SKIPPED on a PR** (paths-filtered). Run `env -u GOROOT make static-check`
-  locally before merging anything touching `scripts/` — it is 101 offline tests, ~400s.
-- **`pgrep`/`ps | grep` SELF-MATCHED repeatedly this session**, twice producing a false "still
-  running". Read the argv and compare against `$$`; a count is not evidence.
-- **`ps -p ""`** (an empty PID from a failed extraction) dumps EVERY process. Guard the extraction.
-- A **leaked `vks-walkbox-*` VM** per run is lab B453 (the sweep runs at row START, so the last row's
-  box is never swept). The next matrix run sweeps it.
+  locally before merging anything touching `scripts/` — 101 offline tests, ~400s.
+- **`kubectl get all` does NOT list custom resources.** A probe reported "0 objects remaining" while
+  six CRs were the entire problem; the namespace's `status.conditions` named them.
+- **`pgrep`/`ps | grep` SELF-MATCH.** Read argv and compare against `$$`; a count is not evidence.
+  `ps -p ""` (empty PID from a failed extraction) dumps EVERY process.
+- **A leaked `vks-walkbox-*` VM per run is lab B453** — the sweep runs at row START, so the last
+  row's box is never swept, and `make destroy`'s teardown does not own it. `make walkbox-vm-down`.
+
+### What landed this session (all merged, `main` green at every post-merge run)
+
+| PR | what |
+|---|---|
+| **#1011** | 🔴 live tenant-blocking bug: `make vks-login` died FATAL asserting the CLUSTER-SCOPED `list nodes` a tenant cannot hold, while `lib/capacity.sh` calls that "normal for a tenant" |
+| **#1014** | the tenant e2e MUTATED a shared ArgoCD with nothing undoing it; added a key-scoped revert trap, verified by re-reading the cluster |
+| **#1010** | walkthrough promised a hostname its table never carried, and named ONE app in a generic table |
+| **#1009** | the only tenant-RBAC test was wired to nothing AND broken |
+| lab **#104/#105** | B462 (refusal names an already-done remedy) and B463 (the ordering fix above) |
 
 ### Open
 
-- **B471** — RE-SCOPED, not closed. An idea round refuted most of it and its central evidence was
-  **inverted**; the one surviving axis is **Harbor** (the rows get a Harbor ADMIN credential,
-  `make harbor-robot` is skipped, and the 3-way decision at `22-harbor-robot.sh:79` is untested).
-  A second round then **refuted its own prescription** to add `can-i` probes to lab-preflight,
-  measuring both as false-BAD generators — so that is deliberately NOT built. Three designs are
-  recorded as REFUTED in the row so nobody rebuilds them.
-- **B483** — the tenant e2e is fixed but still WIRED TO NOTHING. It needs a live KinD cluster with
-  ArgoCD and mutates that cluster's ArgoCD, and `91-e2e-tenant-mechanism.sh` has **no revert trap**
-  (one `trap`, and it only removes a tempdir). Add the trap FIRST, then decide its home.
+- **B483** — the tenant e2e now has its revert trap, so WIRING it into an automated path is finally
+  safe to design. Deliberately still open: it needs a live KinD cluster with ArgoCD and mutates it.
+- **B471** — RE-SCOPED. An idea round refuted most of it and its central evidence was inverted; the
+  surviving axis is **Harbor**. A second round then refuted its OWN prescription to add `can-i`
+  probes to lab-preflight, measuring both as false-BAD generators. Three refuted designs are
+  recorded in the row so nobody rebuilds them.
 - **B213, B206, B480, B482** unchanged.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
