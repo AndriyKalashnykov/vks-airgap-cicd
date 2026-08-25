@@ -1816,6 +1816,52 @@ MORE THINGS. Three were fixed; these five are design-level and remain open:**
 | **F2** | KinD has **no kapp-controller** (0 hits for `kapp\|carvel\|packageinstall`), so `make e2e-kind` can never exercise the package path — the only local verification that would have caught the F1 crash. | Adding Carvel to the KinD stand-in is its own project. |
 | ~~**F6**~~ | ~~teardown leaves a cluster-admin binding~~ **REFUTED 2026-08-25 — non-finding.** The adversary grepped `98-uninstall-all.sh` for `pkgi\|PackageInstall\|vks-package`, found 0, and stopped. But `:242-245` says the guest-cluster half is **deliberately skipped** because deleting the Cluster (`:258`) removes everything inside it — and all three package objects (PackageInstall, `<pkg>-pkg-sa`, `<pkg>-pkg-sa-cluster-admin`) are **guest-cluster** objects, since `vks-package.sh` runs against the guest kubeconfig. `vks-package.sh uninstall` also removes all three itself, including the values Secret. **RESIDUAL:** if the Cluster is not labelled as ours, teardown skips it and the objects survive — but so does everything else, by design. | — |
 
+### 🔴 B478 — the documented KinD quickstart FAILS on a clean checkout, and the repo calls the claim "ENFORCED"
+
+MEASURED 2026-08-25 in a fresh `git worktree` of `origin/main` with no `.env`:
+
+    $ make e2e-kind E2E_FRESH=1
+    no .env yet — run 'make env-init' first
+    make[1]: *** [Makefile:366: env-check] Error 1
+    make: *** [Makefile:845: e2e-kind] Error 2
+
+Chain: `e2e-kind` (Makefile:845) runs `install-all`, which needs `preflight` (Makefile:704), whose
+prereqs include `env-check` (Makefile:365 → `scripts/02-env.sh check`). It fails on the **absence of
+the `.env` FILE**, not on any value.
+
+**Four claims say otherwise, and one of them calls it enforced:**
+
+| where | claim |
+|---|---|
+| `README.md:68` | *"**KinD** — see it work. No VKS cluster, **zero `.env`**."* |
+| `docs/kind-local.md:6` | *"`make deps` → `make e2e-kind` → `make creds-show` (three commands)."* |
+| `docs/kind-local.md:77` | *"`make env-init` — **optional** — KinD needs no `.env`"* |
+| `Makefile:201` | *"Ignoring it by default keeps 'make e2e-kind needs zero `.env`' an **ENFORCED** property"* |
+
+And `make deps` — the documented FIRST command — does **not** create `.env`: the only `.env` strings
+in `scripts/00-install-prereqs.sh` are comments about `.env.example`. So the three-command
+quickstart a new operator is told to run **cannot work on a clean clone**.
+
+⚠️ **Why it went unnoticed for so long, and this is the transferable part:** every run of the KinD
+e2e in this repo's history has been on a box that already had a `.env`. The property is only false
+in the one state nobody develops in — and the repo's own rule already says a *"zero-config"* claim
+must be **VERIFIED ON A CLEAN CHECKOUT**, because *"a local run passes on values only your box
+has"*. That rule exists here, is cited in `configuration.md`, and was not applied to this claim.
+`scripts/test-env-check.sh` exists and does not catch it: it tests `env-check`'s own logic, not
+whether the documented sequence runs.
+
+**Found by accident**, which is worth recording honestly: the e2e was being re-run in a throwaway
+worktree to prove an unrelated library change, and the worktree happened to be the clean state the
+claim had never been tested in.
+
+**NOT FIXED — an idea round is out.** Three candidates, each with a real cost: (a) make `env-check`
+presence-exempt when `SKIP_DOTENV=1` (the run is deliberately ignoring `.env`, so gating on its
+presence is incoherent — but does `SKIP_DOTENV` even reach that process through
+`$(MAKE) install-all` → `preflight`?); (b) have `e2e-kind` run `env-init` itself (which **renames a
+real operator's `.env` to `.env.bak`** — possibly worse than a hard failure); (c) change the docs and
+drop the claim (but `Makefile:201` argues the property is deliberate and valuable, so weakening it
+may be the wrong direction). Do not implement before the round returns.
+
 ### 🔴 B477 — an orphaned kapp-owned `istiod` Service made the mesh unreachable while EVERY object looked healthy (MEASURED on the lab, 2026-08-25)
 
 The walkthrough matrix's row 2 failed on exactly one block — `make verify-ingress`, all 8 hosts
