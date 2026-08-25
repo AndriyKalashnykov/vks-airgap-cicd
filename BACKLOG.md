@@ -16,6 +16,45 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🔴 B480 — the two Istio install paths ADOPT each other's objects, silently and permanently 🔴 open
+
+**Measured 2026-08-25 on the live lab. This is reachable by running the DOCUMENTED commands in the
+DOCUMENTED order — it is not lab damage.**
+
+`44-install-ingress.sh:45` dispatches on `ISTIO_INSTALL_METHOD` (default `helm`) to either
+`46-install-istio.sh` (helm charts, images from Harbor) or `43-install-istio-package.sh` (the VKS
+Standard Package, via Carvel/kapp). **Neither checks whether the other already owns the namespace:**
+
+| | greps for the other's ownership marker |
+|---|---|
+| `43-install-istio-package.sh` (package) | `sh.helm.release` / `helm list` / `helm status` → **0 hits** |
+| `46-install-istio.sh` (helm) | `kapp` / `pkgi` / `packageinstall` → **0 hits** |
+| `44-install-ingress.sh:45` | dispatches on the variable with **no state check at all** |
+
+So `make install-ingress` (default helm) followed by
+`make install-ingress ISTIO_INSTALL_METHOD=package` hands a helm-installed control plane to kapp,
+which **adopts** it. Measured: **30 of the 50** objects kapp claimed carried helm's original
+`creationTimestamp`. kapp then wants `kapp.k14s.io/app` inside istiod's Deployment `spec.selector`,
+Kubernetes forbids it as immutable, and the reconcile **can never converge** — see [[B477]] for the
+full mechanism and the resulting outage.
+
+**It is not self-healing and not obviously reversible.** Removing the reconciler leaves the mesh
+running but permanently mixed: measured, `istio-cni-node` and `istio-support` still pull from the
+**public** `projects.packages.broadcom.com` (breaking the air-gap invariant `make
+verify-gateway-image` exists to assert) at **1.28.5**, under an istiod from our Harbor at **1.30.3**.
+
+**Proposed guard — both directions, and it is offline-RED-provable:**
+
+- `43` dies if any `sh.helm.release.v1.istiod.*` Secret exists in `$ISTIO_NAMESPACE`.
+- `46` dies if any object in `$ISTIO_NAMESPACE` carries a `kapp.k14s.io/app` label.
+- Each names the other path and the uninstall that would make the switch safe, rather than just refusing.
+
+⚠️ **Not yet reviewed.** Per RULE ZERO this needs an idea round before it is built — in particular
+whether a *deliberate* migration between paths is a supported workflow (in which case the answer is
+an explicit `--force`/uninstall step, not a hard refusal), and whether the helm-side check is safe
+for `INGRESS_CONTROLLER=istio-existing`, where a platform-owned mesh may legitimately be
+kapp-managed and we must attach without installing anything.
+
 ## 🔴 B473 — NOTHING clears `secrets/` when a lab is destroyed or re-cut; stale CAs and PRIVATE KEYS accrete 🔴 open
 
 **MEASURED 2026-08-25, on a real re-cut.** After `make destroy` + `make lab`, `secrets/` still held
@@ -1876,50 +1915,50 @@ kubeconfig, not inferred:
 | 4 | Service selector: `app=istiod`, `istio=pilot`, **`kapp.k14s.io/app=1787633405480953199`**. Pod labels carry `app=istiod` and `istio=pilot` but **no `kapp.k14s.io/app`** — they say `app.kubernetes.io/managed-by: Helm`, `helm.sh/chart: istiod-1.30.3`. |
 | 5 | The **Service** says `helm.sh/chart: istiod-`**`1.0.0`** and carries `kapp.k14s.io/identity` + `kapp.k14s.io/original`. The **Deployment** says `istiod-`**`1.30.3`**, no kapp labels. `sh.helm.release.v1.istiod.v1` exists. ⚠️ **I ALSO WROTE that `kubectl get pkgi -A` shows no istio PackageInstall. THAT WAS FALSE** — see the correction below. |
 
-### 🔴 CORRECTED 2026-08-25 — it was NOT an orphan. A LIVE, PERMANENTLY-FAILING reconciler was re-breaking it every 2 minutes
+### 🔴 CORRECTED 2026-08-25 — not an orphan, and not a misreading either. THIS REPO'S OWN TWO ISTIO INSTALL PATHS COLLIDED
 
-The reading below ("orphan") is **wrong**, and the error was mine: I ran `kubectl get pkgi -A`, read
-the first page, and reported **no istio PackageInstall**. It was there all along, in
-**`vmware-system-tkg`** — `istio.kubernetes.vmware.com 1.28.5+vmware.1-vks.1`, status **`Reconcile
-failed`**. That single misreading is why this was filed as dead leftovers and why the first fix did
-not hold.
+Everything below the next heading (`**Reading:**` onward) is the ORIGINAL diagnosis. ⚠️ **It is
+REFUTED** — read this first.
 
-**The real mechanism, and it is a deadlock that can never resolve:**
+**What was actually true**, measured on the live guest cluster (`https://192.168.101.132:6443`):
 
-    kapp: Error: update deployment/istiod (apps/v1) namespace: istio-system:
-      Deployment.apps "istiod" is invalid: spec.selector:
-        Invalid value: {"matchLabels":{"istio":"pilot","kapp.k14s.io/app":"1787633405480953199"}}:
-        field is immutable (reason: Invalid)
-
-kapp's label-scoping wants `kapp.k14s.io/app` in the istiod **Deployment's** `spec.selector` — which
-Kubernetes forbids as **immutable**. So the reconcile can NEVER succeed. But every ~2-minute retry
-still re-applies the **Service** (whose selector IS mutable), re-inserting the kapp label → **zero
-endpoints** → every proxy fails `dial tcp <istiod>:15012` → its XDS config FREEZES.
-
-**It presented DIFFERENTLY the second time, and that is the useful part.** One root cause, two
-symptoms, decided by *when* istiod went away relative to the proxy's own lifecycle:
-
-| | 2026-08-24 (this row's original table, above) | 2026-08-25 (measured) |
+| when | what | how it is known |
 |---|---|---|
-| proxy pod | **CrashLoopBackOff, 17 restarts** — never got a cert | **Running** — had a cert, lost istiod later |
-| its log | `failed to sign CSR: dial tcp …:15012: connection refused` | XDS frozen: `cds.update_failure: 122` vs `update_success: 3` |
+| `02:20:41Z` | **helm** installs Istio **1.30.3**, including istiod's Service | helm release `sh.helm.release.v1.istiod.v1`, `first_deployed == last_deployed`; `svc/istiod` managedFields `manager: helm, op: Apply` |
+| `04:50:03Z` | **`43-install-istio-package.sh`** installs the VKS **package** into the SAME namespace. kapp **ADOPTS** helm's objects | `istio-pkg-sa`, `istio-pkg-sa-cluster-admin`, `istio-pkg-values` all created at that instant; **30 of the 50** kapp-labelled objects have helm's `02:20:41Z` creationTimestamp |
+| then, forever | kapp retries every **10 min** and can never succeed | five `istio.app-change-*` ConfigMaps at `12:00/12:10/12:20/12:30/12:40Z`, all `successful = False` |
+
+So the order is **helm first, package second** — the exact opposite of the original reading — and the
+package path did not *install alongside* helm, it **took ownership of helm's control plane**.
+
+**The deadlock:** kapp's label-scoping wants `kapp.k14s.io/app` inside istiod's **Deployment**
+`spec.selector`, which Kubernetes forbids as **immutable**. The reconcile can never succeed. But the
+retry still re-applies the **Service** (mutable selector), re-inserting the label and zeroing its
+endpoints — so proxies lose `:15012` and their XDS config freezes.
+
+**⚠️ THE REAL DEFECT, and it is in this repo, not the lab:** neither install path checks whether the
+other already owns the namespace. Measured — `43-install-istio-package.sh` greps for a helm release
+**0 times**; `46-install-istio.sh` greps for `kapp`/`pkgi` **0 times**; `44-install-ingress.sh:45`
+dispatches on `ISTIO_INSTALL_METHOD` (default `helm`) with **no state check at all**. Running the
+documented default and then the documented package variant is therefore enough to silently and
+**permanently** hand a helm-installed mesh to a reconciler that can never converge. See [[B480]].
+
+**Two presentations, one cause** — which you get depends on *when* istiod goes away relative to the
+proxy's own lifecycle:
+
+| | 2026-08-24 (the original table below) | 2026-08-25 |
+|---|---|---|
+| proxy pod | **CrashLoopBackOff**, 17 restarts — never got a cert | **Running** — had a cert, lost istiod later |
 | ingress | **8 of 8 → `HTTP 000`** (2404s) | **5 → `HTTP 200`, 3 → `HTTP 000`** |
 
-The second is the nastier one. A proxy that already holds a cert keeps serving whatever config it
-last knew, so it looks healthy and mostly works. Envoy's config froze at `11:46:31Z`; the apps were
-redeployed at `12:15:08Z` and got new pod IPs; Envoy went on dialling the **dead** ones
-(`cx_connect_fail::22`). Only the three whose IPs had actually moved failed — a partial, moving
-failure that reads as flaky routing rather than an outage.
+The second is the nastier one: a proxy holding a cert keeps serving its last-known config, so it
+looks healthy and mostly works. **CrashLoopBackOff is NOT this bug's signature.**
 
-⚠️ **So do not treat "CrashLoopBackOff" as this bug's signature.** A *Running* proxy serving a
-majority of hosts is the same defect at a different moment, and it is the presentation that survives
-a casual look.
-
-**The fix, and the trap in it:** a plain `kubectl delete pkgi istio` would make kapp **garbage-collect
-the 9 resources it owns**, including the istiod Service and Deployment — i.e. it would take the mesh
-with it. Set `spec.noopDelete: true` FIRST, then delete: the reconciler goes, the resources stay.
-Measured: 9 owned resources before, **9 after**. Then remove the kapp label from the Service; with no
-reconciler it now HOLDS (the earlier patch was reverted within ~10 minutes).
+**The fix, and the trap in it.** A plain `kubectl delete pkgi istio` makes kapp garbage-collect
+everything it owns — measured **50 objects, including 14 CustomResourceDefinitions**, so it would
+have cascade-deleted every `Gateway`, `VirtualService` and `HTTPRoute` in the cluster, not merely
+"the mesh". `spec.noopDelete: true` first, then delete, keeps them (confirmed against the live CRD:
+*"delete PackageInstall/App CR but preserve App's associated resources"*).
 
     kubectl -n vmware-system-tkg patch pkgi istio --type=merge -p '{"spec":{"noopDelete":true}}'
     kubectl -n vmware-system-tkg delete pkgi istio
@@ -1927,10 +1966,25 @@ reconciler it now HOLDS (the earlier patch was reverted within ~10 minutes).
       -p='[{"op":"remove","path":"/spec/selector/kapp.k14s.io~1app"}]'
     kubectl -n vks-ingress delete pod -l gateway.networking.k8s.io/gateway-name=vks-uis
 
-**The transferable lesson is the misreading, not the mechanism.** "No PackageInstall exists" was a
-claim about a *paginated listing I did not finish reading*, and it converted a live-reconciler
-problem into an orphan story that survived two rounds. Same family as the `--limit`-saturation rule:
-a listing answered the question I asked, not the one I meant.
+`spec.paused` and `spec.canceled` also exist and would have stopped the re-breaking while keeping the
+reconciler. They were **not** used, deliberately: the immutable-selector deadlock is permanent, so a
+paused pkgi is a paused-forever pkgi.
+
+**⚠️ RESIDUAL STATE — the cluster is repaired but NOT clean.** All measured, all still true:
+
+| left behind | why it matters |
+|---|---|
+| `istio-cni-node` (×3) and `istio-support` pull from **`projects.packages.broadcom.com`** | **the air-gap invariant is broken.** Only istiod and the gateway come from our Harbor. On a genuinely air-gapped lab these pods cannot pull at all, and there is no reconciler left to change them. `make verify-gateway-image` would fail |
+| `istio-cni` **1.28.5** under istiod **1.30.3** | a two-minor data-plane skew |
+| ClusterRoleBinding `istio-pkg-sa-cluster-admin` → **cluster-admin** | a dangling cluster-admin grant to a ServiceAccount nothing manages (plus `istio-pkg-sa`, `istio-pkg-values`) |
+| all **50** objects still carry `kapp.k14s.io/app` in `metadata.labels` | the patch removed it only from `spec.selector`. A future package install mints a new app id → ownership conflict on 50 objects |
+
+**On the lesson.** A first draft of this correction claimed the cause was mine — that I had read only
+"the first page" of `kubectl get pkgi -A`. **That is false and was itself unverified**: measured,
+that command emits **9 lines**, `kubectl get` does not paginate, and `istio` sorts LAST. Inventing a
+plausible-sounding explanation for my own error, and writing it down as the transferable lesson, is
+the more embarrassing failure — it would have sent the next reader to improve their reading habits
+instead of to the ungated collision in [[B480]].
 
 **Reading:** a VKS **Standard Package** Istio was installed via Carvel/kapp — kapp injects
 `kapp.k14s.io/app` into selectors — its PackageInstall was later removed, and its **Service
