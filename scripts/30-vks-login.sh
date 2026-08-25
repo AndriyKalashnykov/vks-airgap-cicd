@@ -540,9 +540,28 @@ log_info "verifying cluster reachability..."
 # Merging with 2>&1 is not an option: it makes the capture non-empty and inverts emptiness tests
 # downstream, which this repo has measured turning a WARN into a BLOCK asserting the opposite.
 _vks_err="$(mktemp)"; trap 'rm -f "$_vks_err"' EXIT
-if kubectl cluster-info >/dev/null 2>"$_vks_err" && kubectl get nodes >/dev/null 2>"$_vks_err"; then
+# `cluster-info` ALONE is the connectivity proof. `get nodes` used to sit on this `&&`, which made
+# a TENANT's `make vks-login` die FATAL — `list nodes` is CLUSTER-SCOPED, and a namespace-scoped
+# tenant does not hold it. RULE ZERO-B makes tenant the DEFAULT posture, and `lib/capacity.sh:167-171`
+# already says unreadable nodes is "normal for a tenant. It is NOT a memory problem" — so two files
+# gave opposite verdicts on the same capability and the FATAL one was at the entry point.
+#
+# Worse, `install-all` is `preflight mirror mirror-verify builder-image vks-login ...` (Makefile:916),
+# so a tenant burned the ~20-minute mirror and THEN died — inverting the "cheapest failure available"
+# ordering that 24-lab-preflight.sh exists to provide.
+#
+# MEASURED 2026-08-25 that this does NOT weaken the check the comment above protects: with the token
+# corrupted, `kubectl cluster-info` alone returns rc=1 `You must be logged in to the server
+# (Unauthorized)`. Expiry and unreachability are still caught; only the cluster-scoped RBAC
+# ASSERTION is gone, and that was never connectivity.
+if kubectl cluster-info >/dev/null 2>"$_vks_err"; then
   log_info "connected. Current context: $(kubectl config current-context)"
-  kubectl get nodes -o wide >&2
+  if kubectl get nodes -o wide >&2 2>/dev/null; then
+    :
+  else
+    log_warn "this identity cannot list nodes — NORMAL for a tenant (list nodes is cluster-scoped)."
+    log_warn "  It is NOT a failure of this step: the cluster answered above. See lib/capacity.sh:167."
+  fi
 else
   # ⚠️ `--minify`, and computed ONCE. `.clusters[0]` without it is the FIRST cluster in the FILE,
   # not the one the current context uses, and a real VKS kubeconfig always holds several (Supervisor
@@ -565,9 +584,14 @@ else
   The server answered, so it is reachable — the token or certificate has EXPIRED or belongs to a
   cluster that no longer exists. Log in again and re-fetch the kubeconfig." ;;
     FORBIDDEN)
-      die "authenticated, but this identity is not permitted to list nodes on
+      # This arm used to say "not permitted to LIST NODES", because `kubectl get nodes` sat on the
+      # `&&` above. It no longer does (a tenant legitimately cannot), so only `cluster-info` can
+      # reach here — and naming `list nodes` would send an operator to fix a grant that is not the
+      # one they are missing. An error that names the wrong cause is worse than a crash.
+      die "authenticated, but this identity is not permitted to run cluster discovery on
   ${_vks_srv:-<unknown>}.
-  That is an RBAC grant, not a broken kubeconfig — ask for the role, or use an identity that has it." ;;
+  'kubectl cluster-info' was REFUSED — that is an RBAC grant, not a broken kubeconfig.
+  (Being unable to list NODES is normal for a tenant and is NOT this error; it is only a warning.)" ;;
     KUBECONFIG_UNUSABLE)
       die "a file named in your kube configuration is missing, unreadable or malformed, so NOTHING
   WAS DIALLED — this says nothing about whether the cluster is up. It may be \$KUBECONFIG itself, or

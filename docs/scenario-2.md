@@ -691,7 +691,7 @@ different namespaces. You supply the robot you were granted; the wiring is autom
 
 ```bash
 make harbor-robot                                  # → secrets/harbor-robot.env (if you hold project-admin)
-# then copy its two lines (the HARBOR_USERNAME + HARBOR_PASSWORD it wrote) into .env
+# it writes HARBOR_USERNAME + HARBOR_PASSWORD into ./.env itself — nothing to copy
 ```
 
 **Expect:** `robot account` created, then `credentials written to` a 0600 file. The secret is
