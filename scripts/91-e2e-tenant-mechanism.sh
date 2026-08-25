@@ -68,7 +68,50 @@ require_cmd argocd "the tenant path IS the argocd CLI. Get the VENDOR build:
 NS="${ARGOCD_NAMESPACE:-argocd}"
 PROJ="tenant-a"
 ACCOUNT="tenant"
-WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+WORK="$(mktemp -d)"
+
+# ---- REVERT TRAP ---------------------------------------------------------------------------------
+# This test MUTATES a shared ArgoCD: it adds an account to `argocd-cm`, rewrites `policy.csv` in
+# `argocd-rbac-cm`, and creates an AppProject, a ServiceAccount, a ClusterRole and a
+# ClusterRoleBinding. Until 2026-08-25 NOTHING undid any of it — the only trap removed a tempdir —
+# so every run left a `tenant` account with an apiKey and a hand-written RBAC policy behind on a
+# cluster `e2e-kind` REUSES BY DEFAULT. That is why this target is still wired to nothing: you
+# cannot safely chain a test that permanently widens the ArgoCD it runs against.
+#
+# The revert is key-scoped, never a whole-object restore: putting back a captured `argocd-cm` would
+# clobber anything else that changed meanwhile. `policy.csv` IS restored from its captured value
+# because we overwrite the whole key — and when it did not exist before, the key is removed.
+_ORIG_RBAC="${WORK}/orig-policy.csv"
+_REVERTED=0
+revert_all() {
+  [ "$_REVERTED" = 1 ] && return 0
+  _REVERTED=1
+  log_info "reverting the ArgoCD mutations this test made (it runs against a REUSED cluster)"
+  # 1. the account we added — remove just that key.
+  #    ⚠️ The JSON-Pointer path is `/data/accounts.<name>`, NOT `/data/accounts~1<name>`. `~1`
+  #    escapes a literal '/', and this key's separator is a '.', which needs no escaping. The
+  #    escaped form is silently a NO-OP: measured 2026-08-25, it reported success while
+  #    `accounts.tenant` was still `apiKey,login`.
+  kubectl -n "$NS" patch configmap argocd-cm --type json \
+    -p "[{\"op\":\"remove\",\"path\":\"/data/accounts.${ACCOUNT}\"}]" >/dev/null 2>&1 || true
+  # 2. policy.csv — restore the captured value, or remove the key if there was none
+  if [ -s "$_ORIG_RBAC" ]; then
+    kubectl -n "$NS" patch configmap argocd-rbac-cm --type merge \
+      -p "$(printf '{"data":{"policy.csv":%s}}' "$(jq -Rs . < "$_ORIG_RBAC")")" >/dev/null 2>&1 || true
+  else
+    kubectl -n "$NS" patch configmap argocd-rbac-cm --type json \
+      -p '[{"op":"remove","path":"/data/policy.csv"}]' >/dev/null 2>&1 || true
+  fi
+  # 3. the objects we created
+  kubectl -n "$NS" delete appproject.argoproj.io "$PROJ" --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n default delete serviceaccount tenant --ignore-not-found >/dev/null 2>&1 || true
+  kubectl delete clusterrole tenant-guest --ignore-not-found >/dev/null 2>&1 || true
+  kubectl delete clusterrolebinding tenant-guest-admin --ignore-not-found >/dev/null 2>&1 || true
+  # 4. make argocd-server read the reverted config, so the NEXT run starts clean
+  kubectl -n "$NS" rollout restart deploy/argocd-server >/dev/null 2>&1 || true
+  log_info "  revert done: account, policy.csv, AppProject, SA, ClusterRole, ClusterRoleBinding"
+}
+trap 'revert_all; rm -rf "$WORK"' EXIT
 
 kubectl -n "$NS" get deploy argocd-server >/dev/null 2>&1 \
   || die "ArgoCD is not installed — run 'make e2e-kind' (or 'make kind-up install-harbor install-argocd') first."
@@ -108,6 +151,10 @@ ${dests}  clusterResourceWhitelist:
     - group: '*'
       kind: '*'
 EOF
+
+# Capture policy.csv BEFORE overwriting it, so the trap can put it back verbatim. An absent key
+# leaves the file empty, which the trap reads as "there was none" and removes the key instead.
+kubectl -n "$NS" get configmap argocd-rbac-cm -o jsonpath='{.data.policy\.csv}' > "$_ORIG_RBAC" 2>/dev/null || true
 
 # ArgoCD RBAC: the tenant may create Applications IN THEIR PROJECT — and nothing else.
 kubectl -n "$NS" patch configmap argocd-rbac-cm --type merge -p "$(cat <<EOF
