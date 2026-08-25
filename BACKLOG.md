@@ -1896,11 +1896,24 @@ Kubernetes forbids as **immutable**. So the reconcile can NEVER succeed. But eve
 still re-applies the **Service** (whose selector IS mutable), re-inserting the kapp label → **zero
 endpoints** → every proxy fails `dial tcp <istiod>:15012` → its XDS config FREEZES.
 
-**Why that is worse than a plain outage:** the frozen proxy keeps serving whatever it last knew. On
-the walkthrough matrix, apps redeployed at `12:15:08Z` got new pod IPs while Envoy was frozen at
-`11:46:31Z`, so it kept dialling **dead** IPs — measured `cx_connect_fail::22`, `cds.update_failure:
-122` against `update_success: 3`. Three of eight hosts answered `200` (their IPs happened to be
-unchanged) and five timed out. A partial, moving failure that reads as flaky routing.
+**It presented DIFFERENTLY the second time, and that is the useful part.** One root cause, two
+symptoms, decided by *when* istiod went away relative to the proxy's own lifecycle:
+
+| | 2026-08-24 (this row's original table, above) | 2026-08-25 (measured) |
+|---|---|---|
+| proxy pod | **CrashLoopBackOff, 17 restarts** — never got a cert | **Running** — had a cert, lost istiod later |
+| its log | `failed to sign CSR: dial tcp …:15012: connection refused` | XDS frozen: `cds.update_failure: 122` vs `update_success: 3` |
+| ingress | **8 of 8 → `HTTP 000`** (2404s) | **5 → `HTTP 200`, 3 → `HTTP 000`** |
+
+The second is the nastier one. A proxy that already holds a cert keeps serving whatever config it
+last knew, so it looks healthy and mostly works. Envoy's config froze at `11:46:31Z`; the apps were
+redeployed at `12:15:08Z` and got new pod IPs; Envoy went on dialling the **dead** ones
+(`cx_connect_fail::22`). Only the three whose IPs had actually moved failed — a partial, moving
+failure that reads as flaky routing rather than an outage.
+
+⚠️ **So do not treat "CrashLoopBackOff" as this bug's signature.** A *Running* proxy serving a
+majority of hosts is the same defect at a different moment, and it is the presentation that survives
+a casual look.
 
 **The fix, and the trap in it:** a plain `kubectl delete pkgi istio` would make kapp **garbage-collect
 the 9 resources it owns**, including the istiod Service and Deployment — i.e. it would take the mesh
