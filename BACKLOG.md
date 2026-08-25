@@ -1815,6 +1815,72 @@ MORE THINGS. Three were fixed; these five are design-level and remain open:**
 | **F3** | **THE BLOCKER.** `images/images.txt` mirrors istio **1.30.3** — the HELM versions. The package pulls **1.28.5** from its own bundle repo, digest-addressed, which `make mirror` cannot stage. kbld resolves images RELATIVE TO THE BUNDLE, and there is no `global.hub` to redirect them. | Relocating the standard-packages repository is `imgpkg copy` by the **platform team** — outside this repo and outside `make mirror` entirely. |
 | **F2** | KinD has **no kapp-controller** (0 hits for `kapp\|carvel\|packageinstall`), so `make e2e-kind` can never exercise the package path — the only local verification that would have caught the F1 crash. | Adding Carvel to the KinD stand-in is its own project. |
 | ~~**F6**~~ | ~~teardown leaves a cluster-admin binding~~ **REFUTED 2026-08-25 — non-finding.** The adversary grepped `98-uninstall-all.sh` for `pkgi\|PackageInstall\|vks-package`, found 0, and stopped. But `:242-245` says the guest-cluster half is **deliberately skipped** because deleting the Cluster (`:258`) removes everything inside it — and all three package objects (PackageInstall, `<pkg>-pkg-sa`, `<pkg>-pkg-sa-cluster-admin`) are **guest-cluster** objects, since `vks-package.sh` runs against the guest kubeconfig. `vks-package.sh uninstall` also removes all three itself, including the values Secret. **RESIDUAL:** if the Cluster is not labelled as ours, teardown skips it and the objects survive — but so does everything else, by design. | — |
+
+### 🔴 B477 — an orphaned kapp-owned `istiod` Service made the mesh unreachable while EVERY object looked healthy (MEASURED on the lab, 2026-08-25)
+
+The walkthrough matrix's row 2 failed on exactly one block — `make verify-ingress`, all 8 hosts
+`HTTP 000` after the full 300s-per-host budget (2404s). The chain, measured through the guest
+kubeconfig, not inferred:
+
+| # | observation |
+|---|---|
+| 1 | `vks-uis-istio` gateway pod: **CrashLoopBackOff, 17 restarts**. Log: `failed to sign CSR: … dial tcp 172.21.4.110:15012: connect: connection refused` — it cannot reach istiod's CA, so it never gets a workload cert and aborts. |
+| 2 | `istiod` pod: **Running 1/1, Ready=True, 0 restarts**, IP `172.20.2.51`. |
+| 3 | `kubectl -n istio-system get endpoints istiod` → **`<none>`**. The EndpointSlice exists with an EMPTY endpoint list. |
+| 4 | Service selector: `app=istiod`, `istio=pilot`, **`kapp.k14s.io/app=1787633405480953199`**. Pod labels carry `app=istiod` and `istio=pilot` but **no `kapp.k14s.io/app`** — they say `app.kubernetes.io/managed-by: Helm`, `helm.sh/chart: istiod-1.30.3`. |
+| 5 | The **Service** says `helm.sh/chart: istiod-`**`1.0.0`** and carries `kapp.k14s.io/identity` + `kapp.k14s.io/original`. The **Deployment** says `istiod-`**`1.30.3`**, no kapp labels. `kubectl get pkgi -A` shows **no istio PackageInstall** (only tkg system ones), while `sh.helm.release.v1.istiod.v1` exists. |
+
+**Reading:** a VKS **Standard Package** Istio was installed via Carvel/kapp — kapp injects
+`kapp.k14s.io/app` into selectors — its PackageInstall was later removed, and its **Service
+survived**. A later **helm** Istio install created a Deployment whose pods can never match that
+orphaned selector. Every object reports healthy; the control plane is unreachable.
+
+**Why this is the DANGEROUS shape, and what it costs:** `make istio-preflight` said the mesh was
+fine and named the ATTACH command; `make attach-istio` then reported **success** and applied 8
+HTTPRoutes and a programmed Gateway with an LB IP — against a dead control plane. Nothing was red
+until a 40-minute poll. The repo's own SYMPTOM GUIDE for `HTTP 000` names the **wrong** cause here
+(*"the Gateway's selector matches NO gateway workload"*) — the *gateway's* selector was correct;
+**istiod's** was not.
+
+⚠️ **This sharpens the F6 residual above, which I dismissed.** I refuted F6 on the grounds that
+deleting the Cluster subsumes teardown, and named the residual — objects surviving when the Cluster
+is not deleted — as benign *"but so does everything else, by design."* **It is not benign.** The
+survivor here is not one of the three objects F6 names (PackageInstall, `<pkg>-pkg-sa`,
+`<pkg>-pkg-sa-cluster-admin`) — it is a **Service**, i.e. the leftover class is **wider than F6
+enumerated**, and a leftover does not merely sit there: it **shadows and breaks a later install of
+the same component**. An enumerated list of what teardown must remove is the defect; whether F6
+itself reopens is under adversary review.
+
+**Repair (needs a human — the agent's mutating `kubectl` against the lab is classifier-blocked):**
+
+    kubectl -n istio-system patch svc istiod --type=json \
+      -p='[{"op":"remove","path":"/spec/selector/kapp.k14s.io~1app"}]'
+    kubectl -n istio-system get endpoints istiod     # must now list the istiod pod IP
+    kubectl -n vks-ingress delete pod -l gateway.networking.k8s.io/gateway-name=vks-uis
+
+**Product change — the first design was REFUTED; shipped as PR #995.** I proposed asserting that
+*istiod* has ready endpoints. The idea round refuted it: that needs `istio-system`, a namespace a
+TENANT does not own (RULE ZERO-B), and it false-REDs on canary/multi-revision and has to reason
+about ambient. The prescribed guard instead asserts the **provisioned proxy's pods are Ready**, in
+`istio_wait_gwapi_address` — the proxy lives in a namespace **we create** (no foreign RBAC), it
+never names istiod, and it is the END RESULT rather than a proxy for it, so it also catches
+ImagePullBackOff on an air-gapped pull, PSA rejection and OOM. Three states: Ready / not Ready /
+COULD-NOT-ASK, the last degrading to a loud warning rather than blocking a tenant.
+
+⚠️ **One step of the original narrative here was WRONG and is corrected:** I wrote that our helm
+installer created the crashing gateway. It cannot have — `istio_apply_routes_gwapi` is called ONLY
+by `47-attach-istio.sh`. Measured: Gateway `vks-uis` was created `05:43:18Z`, exactly when row 2's
+ATTACH ran, so it is not a leftover and no stale-Gateway sweep is needed. Also measured: the kapp
+app ConfigMap `istio` still EXISTS (so this is a partial delete, not a full orphan), and the Service
+carries **no** helm ownership annotation — kapp created it and helm never owned it.
+
+**Still open, 6 of 7:** the adversary counted **7** sites asserting a component is PRESENT where
+SERVING is what matters, and **0** uses of endpoints/endpointslices as an assertion anywhere in
+`scripts/` — against 18 presence-booleans, 9 `rollout status`, 8 `wait --for=condition`, none of
+which can see this bug. #995 closes site 1 (`lib/istio.sh:403`). The rest: `47-attach-istio.sh:65`,
+`48-istio-preflight.sh:38`, `lib/istio.sh:52`, `lib/istio.sh:65` (the same bug one object over --
+it finds a Service with :15021 but never checks its selector matches a pod), `lib/istio.sh:135`,
+`lib/istio.sh:513`.
 | **F5** | Istio release-1.28 vendors **gateway-api v1.4.1**; we install **v1.5.1** (`GATEWAY_API_VERSION`), the CRDs-newer-than-client direction `check-gwapi-istio-alignment.sh` names as crash-looping. That gate reads `ISTIO_VERSION`, which the package path never sets — **so it stays green while its invariant is false**. | The gate needs to learn the second path. |
 | **F7** | The version default **floats**: `PKG_VERSION=""` → `jq sort \| tail -1`, a LEXICOGRAPHIC sort, in a repo built on pinning. Today's six versions happen to sort correctly; a 1.9/1.100 would not. | Pinning it is easy; deciding whether the default should float at all is not. |
 
