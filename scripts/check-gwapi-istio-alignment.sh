@@ -69,6 +69,46 @@ if [ -z "$vendored" ]; then
   exit 1
 fi
 
+# THE SECOND INSTALL PATH. ISTIO_INSTALL_METHOD=package installs a DIFFERENT Istio -- the VKS
+# Standard Package, whose version this file never sees, while 43-install-istio-package.sh calls the
+# same istio_ensure_gwapi_crds and therefore inherits the SAME GATEWAY_API_VERSION. So this gate was
+# validating the helm pin's requirement and reporting OK for a run that would install neither that
+# Istio nor its gateway-api. MEASURED 2026-08-25: release-1.28 (the package) vendors gateway-api
+# v1.4.1 while release-1.30 (helm) vendors v1.5.1 -- the CRDs-newer-than-client direction, which is
+# the crash-looping one.
+#
+# It can only be checked when the package version is PINNED. Unset, it floats to whatever the cluster
+# offers newest, which is not knowable offline -- so say that out loud rather than imply coverage.
+# This gate's own header records why that distinction matters: it exists because a COMMENT saying
+# "keep this coupled" was not a control.
+if [ -n "${ISTIO_PACKAGE_VERSION:-}" ]; then
+  pkg_minor="release-$(printf '%s' "$ISTIO_PACKAGE_VERSION" | cut -d. -f1,2)"
+  pkg_url="https://raw.githubusercontent.com/istio/istio/${pkg_minor}/go.mod"
+  pkg_gomod="$(curl -fsSL --max-time "${GWAPI_FETCH_TIMEOUT_SECONDS:-15}" "$pkg_url" 2>/dev/null || true)"
+  if [ -z "$pkg_gomod" ]; then
+    if [ "${GWAPI_REQUIRE_FETCH:-0}" = 1 ]; then
+      log_error "check-gwapi-istio-alignment: could not fetch ${pkg_url} (the PACKAGE pin) and GWAPI_REQUIRE_FETCH=1."
+      exit 1
+    fi
+    log_warn "check-gwapi-istio-alignment: the PACKAGE pin ${ISTIO_PACKAGE_VERSION} was NOT checked (fetch failed)."
+  else
+    pkg_vendored="$(printf '%s' "$pkg_gomod" | grep -E '^[[:space:]]+sigs\.k8s\.io/gateway-api v' | head -1 | awk '{print $2}')"
+    if [ -n "$pkg_vendored" ] && [ "$pkg_vendored" != "$GATEWAY_API_VERSION" ]; then
+      log_error "check-gwapi-istio-alignment: GATEWAY_API_VERSION=${GATEWAY_API_VERSION} does not match the"
+      log_error "  PACKAGE pin. istio ${ISTIO_PACKAGE_VERSION} (${pkg_minor}) vendors gateway-api ${pkg_vendored}."
+      log_error "  ISTIO_INSTALL_METHOD=package installs THAT Istio and then istio_ensure_gwapi_crds installs"
+      log_error "  ${GATEWAY_API_VERSION} against it. Newer CRDs than the client is the crash-looping direction."
+      log_error "  One GATEWAY_API_VERSION cannot serve two Istio minors: pin the package to the same minor"
+      log_error "  as ISTIO_VERSION, or give the package path its own CRD version."
+      exit 1
+    fi
+    [ -n "$pkg_vendored" ] && log_info "check-gwapi-istio-alignment: the PACKAGE pin ${ISTIO_PACKAGE_VERSION} also vendors ${pkg_vendored}."
+  fi
+else
+  log_info "check-gwapi-istio-alignment: ISTIO_PACKAGE_VERSION is unset, so the package path's Istio"
+  log_info "  version FLOATS and cannot be checked offline. This gate covers the HELM path only."
+fi
+
 if [ "$GATEWAY_API_VERSION" = "$vendored" ]; then
   log_info "check-gwapi-istio-alignment: OK — istio ${ISTIO_VERSION} (${minor}) vendors gateway-api ${vendored}, and that is our pin"
   exit 0
