@@ -64,13 +64,21 @@ if [ "$ACTION" = install ] || [ "$ACTION" = uninstall ]; then
   esac
 fi
 
+# `sort -V`, NOT jq's `sort`. jq sorts strings LEXICOGRAPHICALLY, and the newest version is taken
+# with `tail -1` below, so the DEFAULT would float to the wrong release the moment a two-digit
+# component appears. MEASURED 2026-08-25:
+#     jq sort  | tail -1  over  [1.27.8, 1.28.5, 1.9.0, 1.100.0]  ->  1.9.0     WRONG
+#     sort -V  | tail -1  over the same list                      ->  1.100.0   right
+# It also fixes the vmware-build suffix: over [.+vmware.1, .+vmware.2, .+vmware.10] lexicographic
+# picks vmware.2 and `sort -V` picks vmware.10. Today's six istio versions happen to agree under
+# both (all two-digit minors, all vmware.1), which is exactly why this was invisible.
 _versions() { kubectl get packages -A -o json 2>/dev/null \
-  | jq -r --arg r "$1" '[.items[]?|select(.spec.refName==$r)|.spec.version]|sort|.[]' 2>/dev/null; }
+  | jq -r --arg r "$1" '[.items[]?|select(.spec.refName==$r)|.spec.version]|.[]' 2>/dev/null | sort -V; }
 
 _list() {
   local out
   out="$(kubectl get packages -A -o json 2>/dev/null \
-        | jq -r '[.items[]?|{r:.spec.refName,v:.spec.version}]|group_by(.r)|map({r:.[0].r,n:length,latest:(map(.v)|sort|last)})|.[]|"  \(.r)\t\(.n)\t\(.latest)"' 2>/dev/null || true)"
+        | jq -r '[.items[]?|{r:.spec.refName,v:.spec.version}]|group_by(.r)|map({r:.[0].r,n:length,latest:(map(.v)|sort_by(split(".")|map(gsub("[^0-9].*$";"")|tonumber? // 0))|last)})|.[]|"  \(.r)\t\(.n)\t\(.latest)"' 2>/dev/null || true)"
   [ -n "$out" ] || die "no Carvel Packages visible. Is KUBECONFIG pointing at a GUEST cluster with the standard-packages repo? Check: kubectl get packagerepositories -A"
   printf '  %-46s %-9s %s\n' PACKAGE VERSIONS LATEST
   printf '%s\n' "$out" | while IFS=$'\t' read -r r n l; do printf '  %-46s %-9s %s\n' "${r# }" "$n" "$l"; done
