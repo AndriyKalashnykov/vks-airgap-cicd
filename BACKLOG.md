@@ -148,6 +148,20 @@ running but permanently mixed: measured, `istio-cni-node` and `istio-support` st
 **public** `projects.packages.broadcom.com` (breaking the air-gap invariant `make
 verify-gateway-image` exists to assert) at **1.28.5**, under an istiod from our Harbor at **1.30.3**.
 
+**⚠️ It CANNOT be reproduced on KinD — measured 2026-08-25.** The local stand-in has none of the
+machinery the package path needs:
+
+    packageinstalls.packaging.carvel.dev       ABSENT
+    packagerepositories.packaging.carvel.dev   ABSENT
+    apps.kappctrl.k14s.io                      ABSENT
+
+So `43-install-istio-package.sh` can never run there, no kapp adoption can occur, and KinD's mesh is
+permanently helm-only (measured: exactly **2** Istio containers, which is also why the gate in
+[[B482]] sees a denominator of 2 there). A behavioural RED for any guard therefore has to come from
+**the lab** or from an **offline fixture** — the repo already does the latter for the sibling gate
+(`make test-gateway-image` RED/GREEN-proves its classifier via fixtures, no cluster). Prefer the
+fixture: it is the only form that can run in CI.
+
 **Proposed guard — both directions, and it is offline-RED-provable:**
 
 - `43` dies if any `sh.helm.release.v1.istiod.*` Secret exists in `$ISTIO_NAMESPACE`.
