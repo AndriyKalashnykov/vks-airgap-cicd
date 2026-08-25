@@ -88,6 +88,27 @@ names every offender:
     ok    istio-ingress/istio-ingressgateway <- harbor.env1.lab.test/cicd/istio/proxyv2:1.30.3
     gateway image provenance: FAILED — 5 of 7 container image(s) did not come from harbor…
 
+### The DENOMINATOR makes it sharper: the gate runs where the defect cannot occur
+
+Measured 2026-08-25, the same gate, the same day, on both platforms:
+
+| where it runs | images it checked | result |
+|---|---|---|
+| **KinD** — wired into `Makefile:845`, `INGRESS_CONTROLLER=istio` | **2** | `gateway image provenance: OK — all 2 running container image(s) came from 172.18.0.3` |
+| **the lab** — never wired, and would skip in `istio-existing` | **7** | `FAILED — 5 of 7 container image(s) did not come from harbor…` |
+
+KinD's mesh is a helm-only install, so it genuinely has **two** Istio containers — istiod and the
+gateway proxy. There is no `istio-cni`, no `istio-support`, and no VKS package, so the mixed-registry
+class this gate exists to catch **cannot arise there**. The lab has 7 containers precisely because the
+package path added the extra components, and five of them came from a public registry.
+
+So the gate's green is honest and worth almost nothing: it is measured over a denominator of 2, on
+the one platform where the answer can only ever be "all ours". The place where the denominator is 7
+and the answer is "5 of them are not" is the place it never runs.
+
+That is this portfolio's own rule — *a gate's trigger must cover its own inputs* — with numbers
+attached, and it is why the fix is about WHERE the gate runs, not about making it stricter.
+
 ⚠️ **The `istio-existing` skip is defensible and is NOT simply a bug to delete.** Its stated reason
 is sound: the mesh is the platform's, so its image hub is theirs to choose, and failing a tenant's
 run over a decision the tenant cannot make would be wrong. But the skip is currently
