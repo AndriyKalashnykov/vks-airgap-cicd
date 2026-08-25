@@ -388,6 +388,10 @@ check-expect-literals: ## Gate: every literal an `**Expect:**` line asserts must
 	@$(SCRIPTS)/check-expect-literals.sh
 
 .PHONY: check-doc-target-coverage
+check-walk-env-manifest: ## Gate: every (scenario, key) the scenario docs name has a row in
+	@#  docs/walk-env-manifest.tsv saying what the walkthrough harness does about it, and vice versa.
+	@$(SCRIPTS)/check-walk-env-manifest.sh
+
 check-doc-target-coverage: ## Gate: every operator-invocable target must be named in SOME doc (CI gates exempt themselves via `## Gate:`)
 	@$(SCRIPTS)/check-doc-target-coverage.sh
 
@@ -1627,7 +1631,7 @@ check-tekton-scripts: ## Every Tekton `script:` block: shebang is /bin/sh AND th
 
 .PHONY: static-check-fast
 #check-static-fast: @ The CHEAP half of static-check: the alignment/doc/env gates only (~9s, no toolchain)
-static-check-fast: check-jumpbox-shadow check-tekton-scripts check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars check-dockerfile-no-install ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
+static-check-fast: check-jumpbox-shadow check-tekton-scripts check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-walk-env-manifest check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars check-dockerfile-no-install ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
 
 # static-check is the UNION, so there is exactly ONE list. Defining the fast set separately and
 # leaving static-check with its own hand-typed copy is the enumerated-list rot this repo keeps
