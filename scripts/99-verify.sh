@@ -156,6 +156,49 @@ verify_app() {
   fi
   log_info "[${app}] PipelineRun succeeded"
 
+  # ---- INSTRUMENT: split scheduling+image-pull from actual build time ------------------------
+  # WHY THIS EXISTS. Across the archived matrix rows in ~/walk-evidence/, rustwebapp's PipelineRun
+  # interval is BIMODAL by roughly 4x while every other app's is tight. The archive cannot say why:
+  # `grep -c FailedScheduling` over every archived row log is ZERO, because diagnostics are dumped
+  # only on the FAILURE path above -- a run that is 4x slow but SUCCEEDS emits two INFO lines and
+  # nothing else. The slow runs are unattributable BY CONSTRUCTION, and the slow mode consumes ~71%
+  # of READY_TIMEOUT_SECONDS, so this is not a curiosity.
+  #   reproduce the distribution:  grep -h 'PipelineRun succeeded' ~/walk-evidence/*/MATRIX-row*.log
+  # (Deliberately NO frozen per-app second-ranges here: they rot as apps and builders change, which
+  # is the same trap CLAUDE.md records for the matrix duration figures.)
+  #
+  # A TaskRun's .status.startTime versus its first step's .terminated.startedAt IS the discriminator:
+  #   gap large, step small  -> scheduling / image-pull  (node pressure, affinity, registry latency)
+  #   gap ~0,    step large  -> the BUILD did more work  (e.g. a cold cargo cache)
+  #
+  # ⚠️ SELECTED BY pipelineRun, NOT pipeline. $sel is `tekton.dev/pipeline=<app>-ci`, which matches
+  # EVERY run of that pipeline -- and nothing prunes TaskRuns, so archived rows routinely hold two
+  # runs of one app. Timing rows from an older (possibly fast) run, carrying absolute timestamps,
+  # are worse than none: a reader computing a delta off the wrong row gets a real, wrong number.
+  #
+  # ⚠️ The KEYS ARE INSIDE the jsonpath, so the output carries no positional meaning and no field
+  # can shift. That is why there is no `while IFS=... read` here and no delimiter to reason about.
+  #
+  # ⚠️ NO `date -d` ARITHMETIC. The walk box is Photon (toybox) as often as Ubuntu (GNU). Raw
+  # timestamps are portable; a wrong delta would be worse than two honest timestamps.
+  #
+  # Rows print in NAME order, not execution order (build, clone-app, deploy-update, test) -- each
+  # row carries its own timestamps, so read those, not the order.
+  _pr_name="${pr##*/}"
+  _timing="$(kubectl -n "$CI_NAMESPACE" get taskruns -l "tekton.dev/pipelineRun=${_pr_name}" \
+    -o jsonpath='{range .items[*]}{.metadata.name} sched={.status.startTime} step0={.status.steps[0].terminated.startedAt} done={.status.completionTime}{"\n"}{end}' \
+    2>/dev/null || true)"
+  # A COUNT, always. Silence has five indistinguishable causes (no TaskRuns matched, RBAC denied,
+  # CRD not served, jsonpath errored, kubectl absent) -- and printing nothing would reproduce the
+  # exact defect this block exists to fix. 0 is a legitimate, informative answer.
+  log_info "  timing[${app}] $(printf '%s' "$_timing" | grep -c . || true) TaskRun(s) for ${_pr_name}"
+  # if/then, not `A && B || C`: the || arm runs when A is TRUE and B fails, which is the shape this
+  # repo has repeatedly recorded as a fake-green. Here C is `true` so it is harmless, but the shape
+  # is not worth keeping — and the block must still never be able to fail the run.
+  if [ -n "$_timing" ]; then
+    printf '%s\n' "$_timing" | sed "s|^|    timing[${app}] |" >&2 || true
+  fi
+
   # ---- ArgoCD: force the write-back to reconcile NOW, then wait for the image to CHANGE -------
   # ⚠️ --kubeconfig "$ARGOCD_KUBECONFIG", NOT the ambient one. ArgoCD's Applications live on the
   # cluster ARGOCD runs in, which on a real lab is the SUPERVISOR while $KUBECONFIG is the GUEST.
@@ -163,8 +206,36 @@ verify_app() {
   # never nudged, and the diagnostic below printed `error: the server doesn't have a resource type
   # "application"` — the guest has no ArgoCD CRDs at all. On KinD the two are the same file, which
   # is why this survived: the bug is invisible in the only topology the local e2e exercises.
+  # ⚠️ The rc is CAPTURED, and stderr goes to its OWN FILE -- never `2>&1`. os.sh:1836 states the
+  # rule and why: merging the streams makes the capture non-empty, which inverts any emptiness test
+  # downstream. Capturing rc alone would recover "did it fail" and throw away "why", and kubectl
+  # exits 1 for Forbidden, NotFound, no-such-resource and connection-refused alike -- so rc
+  # discriminates almost nothing. classify_kube_failure (os.sh) is already in scope via lib/os.sh.
+  #
+  # THE CAUSE IS MEASURED, NOT GUESSED. lib/argocd.sh:645-657 already fixed this exact annotate and
+  # records it: with a get-but-not-patch tenant RBAC -- the scenario-2 shape -- the annotate returns
+  # Forbidden. Scenario-2 is also where this wait is slow in the archive. So the first thing to
+  # suspect is an RBAC grant the tenant CANNOT self-service (RULE ZERO-B), not a kubeconfig typo.
+  #
+  # NON-FATAL, deliberately, and this is where it differs from lib/argocd.sh. There the annotate
+  # gates a reachability CLAIM, so failing it must die rather than report a result it did not
+  # obtain. Here it only makes the wait below slower: ArgoCD still reconciles on its own timer.
+  # Making it fatal would convert a slow row into a failed one.
+  local _refresh_rc=0 _refresh_err
+  _refresh_err="$(mktemp)"
   kubectl --kubeconfig "${ARGOCD_KUBECONFIG:-$KUBECONFIG}" -n "$ARGOCD_NAMESPACE" \
-    annotate application "$app" argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>&1 || true
+    annotate application "$app" argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>"$_refresh_err" || _refresh_rc=$?
+  if [ "$_refresh_rc" -ne 0 ]; then
+    log_warn "[${app}] ArgoCD refresh nudge FAILED (rc=${_refresh_rc}, $(classify_kube_failure "$_refresh_err")) — the"
+    log_warn "  wait below falls back to ArgoCD's own reconcile timer, so expect SLOW, not broken."
+    log_warn "  (that timer is argocd-cm's timeout.reconciliation; this repo overrides it NOWHERE, so"
+    log_warn "   its default applies here — but a platform team's lab may have changed it.)"
+    log_warn "  kubectl said:"
+    sed 's/^/    /' "$_refresh_err" >&2 2>/dev/null || true
+    log_warn "  A tenant with get-but-not-patch on applications hits exactly this — an RBAC fault, not"
+    log_warn "  a kubeconfig fault, and not one a tenant can self-service. See lib/argocd.sh:645."
+  fi
+  rm -f "$_refresh_err"
   if ! wait_for "[${app}] ArgoCD rolls a new image (was ${pre_img:-none})" \
        sh -c "[ \"\$(kubectl -n $ns get deploy $app -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)\" != '${pre_img}' ]"; then
     log_error "[${app}] ArgoCD did not roll a new image (still ${pre_img:-none})"
