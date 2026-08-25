@@ -1680,3 +1680,73 @@ correct under the flag they use *today*.
 
 **Done when:** `jumpbox-launch.sh` runs without `--privileged`, `make jumpbox-matrix` is 4/4, and the
 `/etc/shadow` contract is documented as belt-and-braces rather than load-bearing.
+
+## 🟡 B474 — `8.5` is a decimal insertion point, not a numbering scheme; renumbering costs ~30 refs across TWO repos
+
+`docs/scenario-1.md` has a step numbered **8.5**. There is no reader-facing logic behind it — it
+was inserted between 8 and 9 and nothing was renumbered. `8.1` would be **worse**, not better: it
+reads as a *sub-step of 8*, and it is not one. Step 8 fetches Harbor's **CA** and always runs; 8.5
+fetches an **admin credential** and only runs if Harbor pre-existed. Independent things.
+
+**Why it is not just a heading edit.** Measured 2026-08-25:
+
+| | |
+|---|---|
+| `8.5` references | **6** real (4 in `scenario-1.md`, 2 in script comments) |
+| references to Steps 9–14 by number | **~30**, across `BACKLOG.md`, 6 scripts, and `README.md` |
+| headings + anchor links that move | 6 + 6 |
+| **`scripts/walk-doc.sh`** | **9** step-number references |
+| **`nested-vsphere-lab/scripts/walk-matrix.sh`** | **11** step-number references — **a different repo** |
+
+Both walkers key on step numbers, so a renumber can change which blocks the matrix skips. That
+makes this a change to run **between** matrix campaigns, never before one, and it needs a full
+6-row run to validate — the same bar as any walker change.
+
+**Done when:** 8.5 → 9 and 9–14 → 10–15, every reference in both repos updated, `walk-doc.sh` and
+`walk-matrix.sh` still classify the same blocks, and a 6-row matrix is green on the renumbered doc.
+
+## 🟡 B475 — the walkthrough harness invents 21 env variables, so it certifies the COMMANDS, not the DOCUMENT
+
+`nested-vsphere-lab/scripts/walk-matrix.sh`'s `walk_env()` pre-supplies ~21 variables into
+`$HOME/.walk-env` before a single documented command runs. The list is hand-typed and has nothing
+linking it to the documents it claims to walk, so it drifts in both directions:
+
+- a key a document requires but the harness never supplies → the row dies on a real lab for a
+  reason a **reader** would also hit, and the harness scores it as a product bug;
+- a key the harness supplies that no document names → the row is green on a value no reader could
+  ever have, i.e. it certifies a path that does not exist.
+
+A **third** hand-typed copy lived in `make env-populate` and was missing 4 of the 9 keys
+scenario-1 Step 1 lists — for six weeks, silently (fixed in #983).
+
+**Two designs were built and REFUTED. Do not rebuild either.**
+
+1. *A flat union of doc keys + an EXEMPT table in the harness.* **Scenario-blind.**
+   `HARBOR_PASSWORD` is in the doc set **and** the emitted set, so moving its emission out of the
+   `if [ "$scen" = scenario-2 ]` guard leaves the gate **GREEN** while re-short-circuiting the very
+   §8.5 regression `walk-matrix.sh:553-577` records. It also **could not run** where it was placed:
+   `walk_env` there dies `CELL_ROBOT: unbound variable`, rc=1, **zero stdout** — and walk-matrix is
+   `set -uo pipefail` **without `-e`**, so it fails **open**.
+2. *Grepping the harness's own `printf 'KEY=%s\n'` block to derive what it emits.* As fragile as the
+   list it replaces — refactor those printfs to a heredoc and the emitted set silently shrinks, the
+   gate reports false drift on a key that IS supplied, and the cheapest fix is a wrong exemption.
+
+**The design that survives review:** a manifest **in this repo**, `docs/walk-env-manifest.tsv`,
+one row per *(scenario, key)* with one of three dispositions and a reason —
+
+    scenario-1  HARBOR_PASSWORD  FORBID  §8.5 must be walked; injecting it skips the branch that reads it
+    scenario-2  HARBOR_PASSWORD  EMIT    a tenant IS handed one — that is scenario-2's premise
+    scenario-1  VKS_K8S_VERSION  EXEMPT  the walk writes it; a pinned value goes stale within one cut
+
+reconciled **offline, here, in both directions** against the documents, with the harness *reading*
+the file rather than hand-typing anything. That puts the refusal in the repo whose edit caused it,
+kills the second parse, and makes the per-scenario dimension expressible — which is the only shape
+that can hold the §8.5 constraint.
+
+**Prerequisite, measured:** the exporter's parse must first stop dropping **indented table rows**
+(12 across the two docs) and **keys inside longer code spans** — `INGRESS_CONTROLLER` and
+`HARBOR_INSECURE` are named in scenario-2 tables and were absent from the derived set.
+
+**Done when:** the manifest exists, a gate here fails on a doc key with no row AND on a manifest row
+for a key no document names, a `FORBID` row is RED-proven by attempting the emission, and
+`walk-matrix.sh` reads the file instead of `walk_env`'s hand-typed heredoc.

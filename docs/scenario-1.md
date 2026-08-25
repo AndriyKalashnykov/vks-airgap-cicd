@@ -332,7 +332,7 @@ The registry every image comes from.
 | key | example | how to get the value |
 |---|---|---|
 | `HARBOR_URL` | `harbor.env1.lab.test` | **you choose it** — but it must be a name your **real DNS** can answer, because the guest nodes resolve it. Bare host: no `https://`, no trailing slash. |
-| `HARBOR_STORAGE_CLASS` | `wcp-vmfs` (VMFS)<br>`vsan-default-storage-policy` (vSAN) | `kubectl get storageclass` |
+| `HARBOR_STORAGE_CLASS` | `wcp-vmfs` (VMFS)<br>`vsan-default-storage-policy` (vSAN) | **No default — you must set it, and it is the only key in this runbook you cannot read before Step 3.** Run `kubectl get storageclass` now that you have a kubeconfig. Unset, `make install-harbor-service` stops at once. |
 
 **Run:**
 
