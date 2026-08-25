@@ -1858,11 +1858,29 @@ itself reopens is under adversary review.
     kubectl -n istio-system get endpoints istiod     # must now list the istiod pod IP
     kubectl -n vks-ingress delete pod -l gateway.networking.k8s.io/gateway-name=vks-uis
 
-**Product change under review:** have `istio-preflight` / `attach-istio` assert that istiod is
-**REACHABLE** (a ready endpoint), not merely PRESENT — and refuse rather than attach to a dead mesh.
-The idea round is open; do not implement before it returns. The open question it must settle is
-whether a TENANT (RULE ZERO-B: the default audience, `.env` only) can even read
-endpoints/endpointslices in `istio-system` — if not, the guard false-blocks the primary audience.
+**Product change — the first design was REFUTED; shipped as PR #995.** I proposed asserting that
+*istiod* has ready endpoints. The idea round refuted it: that needs `istio-system`, a namespace a
+TENANT does not own (RULE ZERO-B), and it false-REDs on canary/multi-revision and has to reason
+about ambient. The prescribed guard instead asserts the **provisioned proxy's pods are Ready**, in
+`istio_wait_gwapi_address` — the proxy lives in a namespace **we create** (no foreign RBAC), it
+never names istiod, and it is the END RESULT rather than a proxy for it, so it also catches
+ImagePullBackOff on an air-gapped pull, PSA rejection and OOM. Three states: Ready / not Ready /
+COULD-NOT-ASK, the last degrading to a loud warning rather than blocking a tenant.
+
+⚠️ **One step of the original narrative here was WRONG and is corrected:** I wrote that our helm
+installer created the crashing gateway. It cannot have — `istio_apply_routes_gwapi` is called ONLY
+by `47-attach-istio.sh`. Measured: Gateway `vks-uis` was created `05:43:18Z`, exactly when row 2's
+ATTACH ran, so it is not a leftover and no stale-Gateway sweep is needed. Also measured: the kapp
+app ConfigMap `istio` still EXISTS (so this is a partial delete, not a full orphan), and the Service
+carries **no** helm ownership annotation — kapp created it and helm never owned it.
+
+**Still open, 6 of 7:** the adversary counted **7** sites asserting a component is PRESENT where
+SERVING is what matters, and **0** uses of endpoints/endpointslices as an assertion anywhere in
+`scripts/` — against 18 presence-booleans, 9 `rollout status`, 8 `wait --for=condition`, none of
+which can see this bug. #995 closes site 1 (`lib/istio.sh:403`). The rest: `47-attach-istio.sh:65`,
+`48-istio-preflight.sh:38`, `lib/istio.sh:52`, `lib/istio.sh:65` (the same bug one object over --
+it finds a Service with :15021 but never checks its selector matches a pod), `lib/istio.sh:135`,
+`lib/istio.sh:513`.
 | **F5** | Istio release-1.28 vendors **gateway-api v1.4.1**; we install **v1.5.1** (`GATEWAY_API_VERSION`), the CRDs-newer-than-client direction `check-gwapi-istio-alignment.sh` names as crash-looping. That gate reads `ISTIO_VERSION`, which the package path never sets — **so it stays green while its invariant is false**. | The gate needs to learn the second path. |
 | **F7** | The version default **floats**: `PKG_VERSION=""` → `jq sort \| tail -1`, a LEXICOGRAPHIC sort, in a repo built on pinning. Today's six versions happen to sort correctly; a 1.9/1.100 would not. | Pinning it is easy; deciding whether the default should float at all is not. |
 
