@@ -18,8 +18,10 @@ It prints, for **your** environment: every **URL**, its **username**, its **pass
 one-time `/etc/hosts` line the `*.vks.local` hostnames need (there is no DNS in an air gap).
 
 Use those URLs below. The examples walk **`javawebapp`**, but the repo ships **six** apps and
-`make creds-show` lists them as equals — pick any one. The hostname and the file you edit both
-change per app; the table in Step 2 gives both.
+`make creds-show` lists them as equals — pick any one. Two things change per app: the **hostname**,
+which is always `<app>.<APP_DOMAIN>` (`APP_DOMAIN` defaults to `vks.local`, and `make creds-show`
+prints the real URL for *your* environment), and the **file you edit**, which the table in Step 2
+gives.
 
 ## The loop
 
@@ -56,7 +58,7 @@ change per app; the table in Step 2 gives both.
    | `clone-app` | clones `<app>-app`; its short commit SHA becomes the image tag |
    | `test` | runs the app's own test command **offline**, against its deps-baked builder image (java: `./mvnw -B -o test`; go: `go test`; and so on per language) |
    | `build` | **Kaniko** builds the image and pushes it to Harbor |
-   | `deploy-update` | writes the new tag back into `javawebapp-deploy` — the GitOps hand-off |
+   | `deploy-update` | writes the new tag back into `<app>-deploy` — the GitOps hand-off |
 
 4. **See the image in Harbor.** Project **`apps`** → repository **`<app>`**. A new tag appears:
    the **git short SHA** of your commit.
