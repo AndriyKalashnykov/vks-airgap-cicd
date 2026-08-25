@@ -371,6 +371,31 @@ Both were harmless on today's tree (that target happens to be guarded), which is
 would have shipped: the gate was GREEN and its exemption line was wrong. The denominator is the tell
 — `3 checked / 2 exempt` before, `4 checked / 1 exempt` after.
 
+**2026-08-25 — the REVERT TRAP is now in place (the prerequisite an adversary named).** The test
+MUTATED a shared ArgoCD and nothing undid it: it added `accounts.tenant` to `argocd-cm`, rewrote
+`policy.csv` in `argocd-rbac-cm`, and created an AppProject, a ServiceAccount, a ClusterRole and a
+ClusterRoleBinding. The only `trap` removed a tempdir. Since `e2e-kind` REUSES a warm cluster by
+default, every run left a live apiKey account and a hand-written RBAC policy behind — which is
+exactly why wiring it into an automated path would have shipped a leak.
+
+The residue was not hypothetical: the pre-state of the verification run READ
+`accounts.tenant=apiKey,login`, a 414-byte `policy.csv`, and all four objects, left by an earlier
+run in this same session.
+
+`revert_all()` now runs on EXIT and is **key-scoped, never a whole-object restore** — putting back a
+captured `argocd-cm` would clobber anything else that changed meanwhile. `policy.csv` IS restored
+from its captured value (we overwrite the whole key), and the key is REMOVED when there was none.
+
+⚠️ **A bug in the trap itself, caught by running it rather than reading it:** the JSON-Pointer path
+must be `/data/accounts.<name>`, NOT `/data/accounts~1<name>`. `~1` escapes a literal `/`, and this
+key's separator is a `.`, which needs no escaping. The escaped form is a **silent no-op** — measured,
+it reported success while `accounts.tenant` was still `apiKey,login`.
+
+VERIFIED by measurement, not by the revert's own claim: baseline cleaned, test run (rc=0, the tenant
+created every Application through argocd-server), then re-read — `accounts.tenant` empty,
+`policy.csv` 0 bytes, AppProject / SA / ClusterRole / ClusterRoleBinding all absent. Exactly the
+baseline.
+
 Still open, deliberately: WIRING it into an automated path. It needs a live KinD cluster with ArgoCD
 and mutates that cluster's ArgoCD, so where it belongs is a design question, not a one-liner. B471
 carries it.
