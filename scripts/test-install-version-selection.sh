@@ -71,11 +71,17 @@ has "gwapi: the caveat flag is INITIALISED, not inherited" check-gwapi-istio-ali
     "load_env's set -a exports every uncommented .env line, so an uninitialised bare name can be forced on from the environment and print HELM PATH ONLY under a fully-checked pin"
 
 # --- jq is required where the helper is used ------------------------------------------------------
-for f in 04-install-harbor-service.sh 08-install-argocd-service.sh; do
-  if grep -qE 'require_cmd .*\bjq\b' <<< "$(code "$f")"; then
-    ok "${f%%-*}: jq is required before the version pick"
+# ORDER, not presence. 08 already had `require_cmd kubectl jq` -- at line 82, SIXTY-FOUR lines
+# AFTER the version pick at line 18. A presence check passes on that and asserts nothing: proven by
+# mutation, deleting the new early guard left this case GREEN.
+for _f in 04-install-harbor-service.sh 08-install-argocd-service.sh; do
+  _src="$(code "$_f")"
+  _jq="$(grep -nE 'require_cmd([[:space:]]+[A-Za-z0-9_-]+)*[[:space:]]+jq\b' <<< "$_src" | head -1 | cut -d: -f1)"
+  _use="$(grep -nE 'newest_versioned_file' <<< "$_src" | head -1 | cut -d: -f1)"
+  if [ -n "$_jq" ] && [ -n "$_use" ] && [ "$_jq" -lt "$_use" ]; then
+    ok "${_f%%-*}: jq required BEFORE the version pick (line $_jq < $_use)"
   else
-    bad "${f%%-*}: jq required" "newest_versioned_file needs jq; without the guard a missing jq surfaces as 'no such file in \$SRC_DIR' — the wrong cause, sending the operator to re-download a file that is present"
+    bad "${_f%%-*}: jq required before the pick" "require_cmd jq at line ${_jq:-<none>}, first use at line ${_use:-<none>} — without an EARLIER guard a missing jq surfaces as 'no such file in \$SRC_DIR': the wrong cause, sending the operator to re-download a file that is present"
   fi
 done
 
