@@ -16,6 +16,90 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🔵 B481 — REFUTED: do NOT wire the proxy-readiness check into `istio-preflight` 🔵 refuted
+
+**Recorded so it is not rebuilt.** After [[B477]] it looks obvious that `make istio-preflight` should
+call the readiness check that already exists (`istio_proxy_ready`, `lib/istio.sh`), because during
+the outage preflight printed `PREFLIGHT OK`. An `adversary-k8s` idea round refuted it before anything
+was written.
+
+**F1 — it has ZERO discrimination, and false-REDs 100% of the time on its normal input.** Preflight
+runs *before* attach, and in the incident the Gateway was created *at attach time*. So at preflight
+time there is no proxy pod to be Ready — and `istio_proxy_ready` returns **1 for an empty pod set**:
+
+| state at preflight time | result |
+|---|---|
+| healthy mesh, not yet attached (the normal case) | **1** |
+| B477 mesh (istiod endpoints zeroed), not yet attached | **1** |
+
+Identical. Downgrading `PREFLIGHT OK` on rc≠0 would redden every pre-install run and catch nothing —
+including `make e2e-kind-istio-existing`, which runs preflight immediately before `install-ingress`
+and is healthy by construction.
+
+**F2 — it would not merely false-RED, it would CRASH preflight.** `ISTIO_GWAPI_NAMESPACE` and
+`ISTIO_GATEWAY_NAME` are commented in `.env.example` and defaulted only inside a function preflight
+never calls, and `48-istio-preflight.sh` sets `set -euo pipefail`. Measured:
+`ISTIO_GWAPI_NAMESPACE: unbound variable`, rc=1.
+
+**F3 — the istiod-endpoints variant is the design [[B477]] ALREADY refuted** (it needs
+`istio-system`, which a tenant does not own — RULE ZERO-B — and false-REDs on canary/multi-revision
+and ambient). Do not re-enter it sideways.
+
+**F4 — the cost it targets is already fixed at the right place.** PR #995 made both wait loops fail
+attach rather than publish a dead address, so B477 now costs one 300s timeout at attach, not 8×300s
+at verify. And the "green preflight misled us" gap is already disclosed where the operator reads it,
+at `98-verify-ingress.sh:180`.
+
+### What to do instead
+
+1. **Nothing on the gateway-api path.** At preflight time there is nothing in the tenant's own
+   namespaces to observe. That is the honest answer, not a gap.
+2. **If preflight should say more, make it a PRINTER, never a verdict change** — one line stating
+   that it has *not* checked the data plane, true in every state, no RBAC cost, cannot false-RED.
+3. **The genuinely better target is a DIFFERENT bug, on the CLASSIC path**: `lib/istio.sh:65` finds a
+   Service with `:15021` but never checks its selector matches a pod. Unlike the refuted proposal
+   this **does** discriminate at preflight time — the platform's gateway Service exists *before*
+   attach, so "it has zero ready endpoints" is a real pre-install finding, in a namespace preflight
+   already reads. Needs its own idea round; `rc=2` (could-not-ask) must degrade to a warning, since
+   preflight's verdict is currently a two-way boolean with no third state.
+
+## 🔴 B482 — `verify-gateway-image` WORKS, and can never run on the lab path 🔴 open
+
+**Measured 2026-08-25.** The air-gap breakage in [[B477]] went unnoticed for hours even though this
+repo ships a gate whose entire job is to catch it. The gate is not broken — it is **structurally
+unable to run where the defect lives**:
+
+| | |
+|---|---|
+| wired into | `Makefile:845` only — the **KinD** e2e (`e2e-kind`) |
+| named in `docs/scenario-1.md` / `scenario-2.md` | **0 times** — the lab path never invokes it |
+| the lab rows run | `INGRESS_CONTROLLER=istio-existing`, and `96-verify-gateway-image.sh:60` **SKIPs** in that mode |
+
+So on the one platform where a mesh can silently reach a public registry, the check is absent twice
+over: not called, and it would opt out if it were.
+
+**It genuinely works.** Run by hand against the guest cluster in `istio` mode it exits **2** and
+names every offender:
+
+    FAIL  istio-system/istio-cni-node-{48c5l,g4xpv,p5kzg}      <- projects.packages.broadcom.com
+    FAIL  istio-system/istio-support-55c844f4cb-bbqmj          <- projects.packages.broadcom.com
+    FAIL  vks-ingress/vks-uis-istio-6955cdc9b7-6v4zx           <- projects.packages.broadcom.com
+    ok    istio-system/istiod-...            <- harbor.env1.lab.test/cicd/istio/pilot:1.30.3
+    ok    istio-ingress/istio-ingressgateway <- harbor.env1.lab.test/cicd/istio/proxyv2:1.30.3
+    gateway image provenance: FAILED — 5 of 7 container image(s) did not come from harbor…
+
+⚠️ **The `istio-existing` skip is defensible and is NOT simply a bug to delete.** Its stated reason
+is sound: the mesh is the platform's, so its image hub is theirs to choose, and failing a tenant's
+run over a decision the tenant cannot make would be wrong. But the skip is currently
+**unconditional**, so it also excuses the case where *we* caused the mixture — which is exactly
+[[B480]].
+
+**Not yet idea-reviewed.** The shape of the fix is the open question, and the obvious one (make it
+assert on `istio-existing` too) is refuted by the paragraph above. Candidates worth putting to a
+round: report **without failing** on `istio-existing` (a printer, so a tenant sees the mixture and
+can raise it with their platform team); or assert only over objects *we* created; or key the skip on
+whether the namespace shows evidence of our own install rather than on the mode string.
+
 ## 🔴 B480 — the two Istio install paths ADOPT each other's objects, silently and permanently 🔴 open
 
 **Measured 2026-08-25 on the live lab. This is reachable by running the DOCUMENTED commands in the
@@ -2011,7 +2095,7 @@ paused pkgi is a paused-forever pkgi.
 
 | left behind | why it matters |
 |---|---|
-| `istio-cni-node` (×3) and `istio-support` pull from **`projects.packages.broadcom.com`** | **the air-gap invariant is broken.** Only istiod and the gateway come from our Harbor. On a genuinely air-gapped lab these pods cannot pull at all, and there is no reconciler left to change them. `make verify-gateway-image` would fail |
+| **5 of 7** running Istio containers pull from **`projects.packages.broadcom.com`** — `istio-cni-node` (×3), `istio-support`, **and the `vks-uis-istio` gateway proxy itself** | **the air-gap invariant is broken**, including the pod that actually serves ingress. Only istiod and the classic `istio-ingressgateway` come from our Harbor. On a genuinely air-gapped lab these cannot pull at all, and there is no reconciler left to change them. MEASURED 2026-08-25: `make verify-gateway-image` run against the lab exits **2** and names all five — see [[B482]] for why it never ran there |
 | `istio-cni` **1.28.5** under istiod **1.30.3** | a two-minor data-plane skew |
 | ClusterRoleBinding `istio-pkg-sa-cluster-admin` → **cluster-admin** | a dangling cluster-admin grant to a ServiceAccount nothing manages (plus `istio-pkg-sa`, `istio-pkg-values`) |
 | all **50** objects still carry `kapp.k14s.io/app` in `metadata.labels` | the patch removed it only from `spec.selector`. A future package install mints a new app id → ownership conflict on 50 objects |
