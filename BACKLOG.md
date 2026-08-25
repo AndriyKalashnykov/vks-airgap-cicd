@@ -1818,6 +1818,28 @@ MORE THINGS. Three were fixed; these five are design-level and remain open:**
 | **F5** | Istio release-1.28 vendors **gateway-api v1.4.1**; we install **v1.5.1** (`GATEWAY_API_VERSION`), the CRDs-newer-than-client direction `check-gwapi-istio-alignment.sh` names as crash-looping. That gate reads `ISTIO_VERSION`, which the package path never sets — **so it stays green while its invariant is false**. | The gate needs to learn the second path. |
 | **F7** | The version default **floats**: `PKG_VERSION=""` → `jq sort \| tail -1`, a LEXICOGRAPHIC sort, in a repo built on pinning. Today's six versions happen to sort correctly; a 1.9/1.100 would not. | Pinning it is easy; deciding whether the default should float at all is not. |
 
+### ✅ F5 and F7 are CLOSED — and the FIRST fix for F7 was itself REFUTED (2026-08-25)
+
+Both went out, an adversary attacked them, and it **refuted the F7 fix**. Recording the arc, because
+the refuted version is the one a future session would otherwise rebuild.
+
+| | |
+|---|---|
+| **F7, attempt 1** (#989, merged) | Replaced **one** of the two selection sites with `sort -V` and left the other in jq. |
+| **why that is worse** | `sort -V` is **implementation-dependent**. MEASURED over `[1.28.5, 1.28.5+vmware.1-vks.1, 1.28.5+vmware.2-vks.1]` — GNU coreutils 9.4 → `+vmware.2`; **toybox 0.8.9 (Photon 5) → `1.28.5`**; jq (the other site) → `+vmware.2`. So on a Photon jump box `make list-vks-packages` reports one LATEST and `make install-vks-package` installs another. **Before #989 both sites were pure jq and byte-identical on every OS** — the "fix" traded *consistently wrong* for *right-on-GNU / different-on-Photon*, in a repo whose `jumpbox-both` matrix exists to prove the two OSes equivalent. |
+| **why my own Photon check missed it** | I tested `1.9.0` vs `1.100.0`, which **agrees** on both implementations. The divergence needs the `+vmware` build suffix. A single operating point that happens to agree is not a portability proof. |
+| **F7, attempt 2** (#992) | `sort -V` deleted; **one shared jq key** (`_VKEY`) used by both sites, so divergence is structurally impossible on any OS. The key is **total** (raw string as final tiebreak at a fixed position) and **GA outranks its own prereleases**, so the floating default can never land on an rc. `.spec.version // ""` so one schema-surprise row no longer aborts the listing under a message blaming KUBECONFIG. |
+| **F5** (#991) | The gate learned the package path — and the arm shipped **fail-OPEN**: `release-1.8/go.mod` is a real HTTP 200 with **zero** gateway-api lines, so a successful fetch could still extract nothing and return 0 **silently, even under `GWAPI_REQUIRE_FETCH=1`**, while the sibling helm arm exits 1 on the identical condition. Now fails closed. Also: the FLOATS disclosure is the **default** path (`ISTIO_PACKAGE_VERSION` is commented in `.env.example`) and was a quiet `log_info` followed by an unqualified `OK`; now a WARN, and the OK line says **"HELM PATH ONLY — the package path is UNCHECKED"**. |
+
+**Both tests were vacuous or absent, which is the more useful finding:**
+
+- `test-vks-package-version-sort.sh` passed **7/7 with the fix surgically removed** — its `grep -q 'sort -V'` matched the product's own **comment** (the *"greps a SYMBOL NAME, also matches the DOCSTRING"* defect) and its other cases executed a **pasted copy** of the expression rather than the product. Rewritten to sed-extract `_VKEY` from `vks-package.sh` and execute it, with a fatal guard if the extraction stops matching. 7 → 13 cases, 4 RED-proofs.
+- `check-gwapi-istio-alignment.sh` had **no test at all** and **could not be RED-proved**: both halves of its comparison are uncommented in `.env.example`, so `load_env`'s `set -a` clobbers any override (measured — `GATEWAY_API_VERSION=v1.4.1` returns rc=0, and so does `SKIP_DOTENV=1`, which ignores `.env` but not `.env.example`). That clobber is **correct** — both are pins coupled to `images/images.txt` — so the seam is a **hermetic tree**, not a production test-only branch. New `test-gwapi-alignment.sh`: 9 cases, 5 RED-proofs. The gate whose header opens *"WHY THIS EXISTS: I GUESSED"* has now been seen to fail.
+
+⚠️ **Three defects were found only on the MERGED tree, never by CI**, because `static-check` is paths-filtered and **SKIPPED on PRs**: a `sed | grep -q` SIGPIPE trap (caught by this repo's own `check-grep-q-pipe`, in the very test written to prove a fix), and **fifteen** `cond && ok || bad` sites across the two tests — the A && B || C fake-green this repo's rules forbid, invisible at `-S warning` because `make lint` runs `shellcheck -x` with no `-S`. Run `env -u GOROOT make static-check` on a merged worktree before merging; the PR green does not cover it.
+
+**Class denominator.** `sort -V | tail -1` production sites: **2**. The other is `scripts/24-vks-k8s-version.sh:115`, which selects the **TKr** — the Kubernetes version of the cluster you are about to create. Measured: GNU and toybox **agree** on realistic TKr strings (`v1.34.1---vmware.1-vkr.4`), because TKrs carry no `+build` metadata, which is what diverges. Same unguarded class, **no live defect**; deliberately left alone rather than churned.
+
 ⚠️ **AND THIS LAB CANNOT DETECT F3**, which is why the preflight exists. `PackageRepository
 standard-packages` reports `Reconcile succeeded` — it pulled from Broadcom, so **the lab has
 internet**. `make install-vks-package` would go **green here and prove nothing**: the same
