@@ -64,7 +64,10 @@ n="$(grep -c 'sort_by(vkey)' "$ROOT/scripts/vks-package.sh")"
 # Strip COMMENT lines before matching. The product's comments explain at length WHY `sort -V` is
 # absent, so a bare grep for the literal matches the prose and reports the defect it is asserting
 # against -- the same docstring-matching defect this file's header describes, inverted.
-sed 's/^[[:space:]]*#.*//' "$ROOT/scripts/vks-package.sh" | grep -qE '\bsort[[:space:]]+-V\b' \
+# HERESTRING, not a pipe: `producer | grep -q` lets grep exit at its first match, the producer takes
+# SIGPIPE, and pipefail turns a FOUND pattern into ABSENT at random. check-grep-q-pipe caught this
+# exact line in the very test written to prove a fix.
+grep -qE '\bsort[[:space:]]+-V\b' <<< "$(sed 's/^[[:space:]]*#.*//' "$ROOT/scripts/vks-package.sh")" \
   && bad "no sort -V in the product CODE" "sort -V is back; it is OS-dependent (toybox != GNU) and reintroduces the divergence" \
   || ok "no sort -V in the product CODE (OS-dependent, deliberately absent)"
 
