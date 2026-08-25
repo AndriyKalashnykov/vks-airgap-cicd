@@ -43,6 +43,14 @@ export VKS_VM_CLASS="${VKS_VM_CLASS:-best-effort-small}"
 export VKS_STORAGE_CLASS="${VKS_STORAGE_CLASS:-wcp-vmfs}"
 export VKS_CONTROL_PLANE_COUNT="${VKS_CONTROL_PLANE_COUNT:-1}"
 export VKS_NODE_COUNT="${VKS_NODE_COUNT:-2}"
+# Node ephemeral storage. Default 50 GiB each -- NOT copied from a cloud vendor's default, but
+# sized from what we measured: six builder images are 4.44 GiB before Kaniko, six app runtimes,
+# Tekton, Istio and six builds' writable layers, against a stock 19.3 GiB node whose kubelet evicts
+# below ~2.9 GiB free. 50 keeps steady-state well under the 85% image-GC trigger rather than merely
+# under the eviction threshold. See the long comment in k8s/vks/cluster.yaml for the failure this
+# prevents and for why BOTH volumes must be mounted.
+export VKS_NODE_CONTAINERD_GIB="${VKS_NODE_CONTAINERD_GIB:-50}"
+export VKS_NODE_KUBELET_GIB="${VKS_NODE_KUBELET_GIB:-50}"
 export VKS_POD_CIDR="${VKS_POD_CIDR:-172.20.0.0/16}"
 export VKS_SERVICE_CIDR="${VKS_SERVICE_CIDR:-172.21.0.0/16}"
 

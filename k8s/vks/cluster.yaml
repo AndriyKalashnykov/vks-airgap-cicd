@@ -65,3 +65,66 @@ spec:
         value:
           persistentVolumes:
             defaultStorageClass: ${VKS_STORAGE_CLASS}
+      # ---- node ephemeral storage ---
+      # ⚠️ THIS IS A PLATFORM-ADMIN ACT, NOT A TENANT ONE. Editing spec.topology.variables on the
+      # Cluster object requires ownership of it. In this repo's DEFAULT posture (RULE ZERO-B: a
+      # tenant with .env and a guest kubeconfig) this is something you REQUEST, not something you
+      # apply. It takes effect on the NEXT cluster creation; on an existing cluster the Tanzu
+      # Cluster Operator rolls the nodes to apply it.----------------------------------------------------------
+      # WHY. VKS node images ship a STATIC 20 GiB root partition (Broadcom KB 408602, which lists
+      # "Nodes report DiskPressure" and "Pods are evicted due to insufficient ephemeral storage" as
+      # its symptoms). Measured on this lab: capacity reads 19.3 GiB on every node. Our SIX builder
+      # images alone are 4.44 GiB (rust 1.57, go 1.00, dotnet 0.97, java 0.62, nodejs 0.18,
+      # python 0.11) before Kaniko, six app runtimes, Tekton, Istio and six builds' writable layers.
+      #
+      # The kubelet evicts below 15% free of imagefs -- ~2.9 GiB on a 20 GiB disk -- and
+      # imageGCHighThresholdPercent defaults to 85, i.e. GC only starts at 15% free TOO. On a
+      # single-filesystem node that is ZERO headroom: routine GC can never pre-empt the condition.
+      #
+      # WHAT IT COSTS WHEN IT FIRES (measured on this lab 2026-08-25, then REPRODUCED in a
+      # throwaway 3-node KinD cluster): the node gets a NoSchedule taint, Tekton's affinity
+      # assistant has already pinned the PipelineRun's pods to that node, and the next task cannot
+      # move -- "Preemption is not helpful for scheduling", because BOTH filter failures return
+      # UnschedulableAndUnresolvable and preemption can neither remove a taint nor create the pod a
+      # required podAffinity needs. Tekton's own recovery does NOT rescue it: measured across three
+      # arms (plain taint / cordon / forced PipelineRun reconcile) the assistant was never deleted.
+      # Removing the taint scheduled the pod in under 5 seconds, so the stall lasts exactly as long
+      # as the taint does.
+      #
+      # ⚠️ HOW LONG THAT IS, IS NOT ESTABLISHED -- and the obvious answer is the one to distrust.
+      # The observed stalls cluster tightly (~297s +/- 22s) and it is tempting to attribute that to
+      # the kubelet's EvictionPressureTransitionPeriod (default 5m), which holds DiskPressure true
+      # for five minutes after the disk itself recovers. An adversary round refuted that as stated:
+      # there are at least THREE independent 5-minute constants in this path
+      # (EvictionPressureTransitionPeriod, ImageGCPeriod, and the scheduler's
+      # DefaultPodMaxInUnschedulablePodsDuration), and the damper's clock starts at the NODE's last
+      # threshold observation while the scheduler flush's starts at the POD's pending time -- so
+      # tight clustering is what the FLUSH predicts with no extra assumption, and what the damper
+      # predicts only via a coincidence repeated every time. The evidence does not separate them.
+      # What settles it: log the node's NodeHasNoDiskPressure event timestamp minus the pod's
+      # Scheduled event timestamp. Under 10s => taint-gated. Tens of seconds => scheduler flush.
+      #
+      # Whichever it is, the stall is minutes, it is invisible to the archived matrix logs (which
+      # record ZERO DiskPressure and ZERO FailedScheduling lines), and a bigger disk removes the
+      # TRIGGER rather than the mechanism.
+      #
+      # ⚠️ MOUNT BOTH. Giving containerd its own disk creates a DEDICATED imagefs, and image GC
+      # then relieves imagefs ONLY -- a later nodefs event (logs, emptyDir) would have no
+      # node-level reclaim path at all and would go straight to evicting pods. KB 408602 mounts
+      # both for this reason; do not "simplify" this to one volume.
+      #
+      # ⚠️ VARIABLE NAME IS CLUSTERCLASS-VERSION-SPECIFIC. builtin-generic-v3.5.0+ calls it
+      # `volumes` with a SCALAR `capacity`; KB 408602 shows an older `nodePoolVolumes` form with
+      # `capacity.storage`. This repo pins ${VKS_CLUSTERCLASS} (default builtin-generic-v3.6.0),
+      # so the scalar form applies. If you change VKS_CLUSTERCLASS, re-check the schema:
+      #   kubectl explain clusterclass.spec.variables --recursive | grep -A5 volumes
+      - name: volumes
+        value:
+          - name: containerd
+            mountPath: /var/lib/containerd
+            storageClass: ${VKS_STORAGE_CLASS}
+            capacity: ${VKS_NODE_CONTAINERD_GIB}Gi
+          - name: kubelet
+            mountPath: /var/lib/kubelet
+            storageClass: ${VKS_STORAGE_CLASS}
+            capacity: ${VKS_NODE_KUBELET_GIB}Gi
