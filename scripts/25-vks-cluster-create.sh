@@ -184,11 +184,19 @@ if ! k apply --dry-run=server -f "$RENDERED" >/dev/null 2>"${RENDERED}.err"; the
   # The ten with code-side defaults, DERIVED from this script's own export block so the list
   # cannot rot, printed with the value actually in effect. A hand-typed copy would drift the
   # first time someone adds an input; this cannot.
+  # ⚠️ DO NOT STATE THE PROVENANCE UNCONDITIONALLY. This block used to assert "these default IN
+  # CODE and are NOT in .env" for all ten — which became FALSE for VKS_STORAGE_CLASS and
+  # VKS_CLUSTERCLASS the moment `make vks-shape-set` started writing them there. A header that is
+  # true only sometimes sends the operator to edit the wrong place. Test each against the file.
   log_error ""
-  log_error "  these inputs default IN CODE and are NOT in .env — set one there to override:"
+  log_error "  the values in effect (a code default unless marked, which you override in .env):"
   while IFS= read -r _d; do
     [ -n "$_d" ] || continue
-    printf '       %-28s = %s\n' "$_d" "${!_d-}" >&2
+    if [ -f "${REPO_ROOT}/.env" ] && grep -q "^${_d}=" "${REPO_ROOT}/.env" 2>/dev/null; then
+      printf '       %-28s = %-24s <- PINNED IN .env; edit or delete that line\n' "$_d" "${!_d-}" >&2
+    else
+      printf '       %-28s = %-24s   (code default)\n' "$_d" "${!_d-}" >&2
+    fi
   done <<EOF
 $(sed -n 's/^export \(VKS_[A-Z_]*\)="\${\1:-.*/\1/p' "$0" || true)
 EOF

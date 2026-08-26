@@ -26,6 +26,7 @@ printf 'apiVersion: v1\nkind: Config\nclusters: []\n' > "$T/sup.kc"
 # the three clusterclass cases RED, which is the evidence they are not vacuous.
 mk_kubectl() { # $1 = storageClassName lines ; $2 = clusterclass lines (name|min|max|deprecated)
   printf '%s' "$1" > "$T/sc"
+  : > "$T/zones"
   printf '%s' "$2" | python3 -c '
 import json,sys
 items=[]
@@ -43,6 +44,9 @@ json.dump({"items":items}, sys.stdout)' > "$T/cc"
 case " $* " in
   *storagepolicyquota*) cat "${STUB_DIR}/sc" ;;
   *clusterclass*)       cat "${STUB_DIR}/cc" ;;
+  # WAS UNMATCHED: every case ran at zones=0, so the multi-zone guard was unreachable and deleting
+  # it left the suite 13/13 GREEN. That is the definition of a vacuous branch.
+  *zones*)              cat "${STUB_DIR}/zones" 2>/dev/null || true ;;
 esac
 exit 0
 EOF
@@ -78,13 +82,19 @@ out="$(run set VKS_NAMESPACE=cicd)"
 if grep -qx 'VKS_STORAGE_CLASS=wcp-vmfs' "$T/.env"; then ok "set writes the assigned storage class"; else bad "set did not write VKS_STORAGE_CLASS"; fi
 if grep -qx 'VKS_CLUSTERCLASS=builtin-generic-v3.7.0' "$T/.env"; then ok "set writes the newest NON-deprecated class"; else bad "set wrote the wrong clusterclass"; fi
 # ---- set: idempotent --------------------------------------------------------------------------
+# ⚠️ THE PIN MUST DIFFER FROM WHAT DISCOVERY WOULD PICK, or preserve and overwrite produce the SAME
+# file and the case cannot discriminate. Mutation-proven: with the pin equal to the discovered
+# value, deleting the guard outright still left the suite fully GREEN.
+# `wcp-vmfs-latebinding` IS assigned (so not stale, so not repaired) but is filtered out of the
+# pick, so discovery would write `wcp-vmfs`. Preserve -> latebinding survives; overwrite -> it does not.
+printf 'VKS_STORAGE_CLASS=wcp-vmfs-latebinding\n' > "$T/.env"
 # NOT via run(): that sets SKIP_DOTENV=1, so load_env never reads the .env we just wrote and the
 # second pass sees the vars UNSET — idempotence would be structurally unreachable and the case
 # would fail for a harness reason. This one deliberately lets .env be read.
 out="$(env STUB_DIR="$T" PATH="$T/bin:$PATH" REPO_ROOT="$T" \
         VKS_SUPERVISOR_KUBECONFIG="$T/sup.kc" VKS_NAMESPACE=cicd \
         timeout 60 ./scripts/vks-shape.sh set 2>&1)"
-if grep -q 'already set' <<<"$out"; then ok "set is idempotent (does not overwrite)"; else bad "set overwrote an existing value"; fi
+if grep -qx 'VKS_STORAGE_CLASS=wcp-vmfs-latebinding' "$T/.env"; then ok "set is idempotent (the PIN is intact)"; else bad "set overwrote an existing value"; fi
 # ---- set: AMBIGUOUS must write NOTHING (the load-bearing case) ---------------------------------
 mk_kubectl "wcp-vmfs
 wcp-vsan
@@ -108,5 +118,66 @@ out="$(run set VKS_NAMESPACE=cicd)"
 if grep -q '^VKS_STORAGE_CLASS=' "$T/.env"; then bad "no-RBAC: wrote a value from an empty read"
 else ok "no-RBAC: wrote nothing"; fi
 if grep -q 'not discovered' <<<"$out"; then ok "no-RBAC: says it could not discover"; else bad "no-RBAC: silent"; fi
+# ---- F6: multi-zone must REFUSE (was unreachable — the stub did not answer `get zones`) --------
+mk_kubectl "wcp-vmfs
+wcp-vmfs-latebinding
+" "$CC3"
+printf 'z1\nz2\n' > "$T/zones"
+: > "$T/.env"
+out="$(run set VKS_NAMESPACE=cicd)"
+if grep -q '^VKS_STORAGE_CLASS=' "$T/.env"; then
+  bad "MULTI-ZONE: wrote a single class — Broadcom requires -latebinding for worker volumes across zones"
+else ok "MULTI-ZONE: wrote nothing"; fi
+if grep -q 'zones' <<<"$out"; then ok "MULTI-ZONE: says why"; else bad "MULTI-ZONE: no explanation"; fi
+: > "$T/zones"
+
+# ---- F3: SKIP_DOTENV must NOT destroy a deliberate pin ----------------------------------------
+# The pin must be a class this Supervisor DOES have — otherwise this case also trips the
+# stale-repair rule below and stops isolating F3's actual mechanism (reading the pin from the FILE
+# rather than the environment, which SKIP_DOTENV=1 leaves unset).
+mk_kubectl "wcp-vmfs
+my-deliberate-vsan-policy
+" "$CC3"
+printf 'VKS_STORAGE_CLASS=my-deliberate-vsan-policy\n' > "$T/.env"
+out="$(run set VKS_NAMESPACE=cicd)"
+if grep -qx 'VKS_STORAGE_CLASS=my-deliberate-vsan-policy' "$T/.env"; then
+  ok "SKIP_DOTENV: the operator's pin SURVIVES (read from the file, not the env)"
+else bad "SKIP_DOTENV: destroyed the operator's pin — load_env skipped .env but set still wrote it"; fi
+
+# ---- F5: a STALE pin (names something this Supervisor lacks) must be REPAIRED ------------------
+# Its OWN single-class stub: the F3 case above leaves two assigned, which would make this hit the
+# AMBIGUOUS branch and pass for the wrong reason.
+mk_kubectl "wcp-vmfs
+" "$CC3"
+printf 'VKS_STORAGE_CLASS=from-a-different-lab\n' > "$T/.env"
+out="$(run set VKS_NAMESPACE=cicd)"
+if grep -qx 'VKS_STORAGE_CLASS=wcp-vmfs' "$T/.env"; then
+  ok "STALE pin repaired (else the tool cannot fix the failure it exists to prevent)"
+else bad "STALE pin left in place — vks-shape-set can never repair it"; fi
+
+# ---- F4: latebinding-ONLY must NOT be reported as an RBAC problem ------------------------------
+mk_kubectl "wcp-vsan-latebinding
+" "$CC3"
+: > "$T/.env"
+out="$(run set VKS_NAMESPACE=cicd)"
+if grep -q 'WaitForFirstConsumer' <<<"$out"; then ok "latebinding-only: names the REAL cause"
+else bad "latebinding-only: blamed RBAC for a readable quota"; fi
+
+# ---- F9: an encryption policy must not create false ambiguity ----------------------------------
+mk_kubectl "wcp-vmfs
+vm-encryption-policy
+" "$CC3"
+: > "$T/.env"
+out="$(run set VKS_NAMESPACE=cicd)"
+if grep -qx 'VKS_STORAGE_CLASS=wcp-vmfs' "$T/.env"; then
+  ok "encryption policy de-prioritised (5 of 7 namespaces carry one)"
+else bad "encryption policy caused false AMBIGUOUS — feature inert in most namespaces"; fi
+
+# ---- F8: a missing .env must NOT gate (it is a prerequisite of vks-cluster-create) -------------
+rm -f "$T/.env"
+out="$(run set VKS_NAMESPACE=cicd)"; rc=$?
+if [ $rc -eq 0 ]; then ok "no .env: warns, exits 0 (cannot block a create)"; else bad "no .env: rc=$rc — it gates"; fi
+
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
+

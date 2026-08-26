@@ -63,6 +63,14 @@ sc_all="$(k get storagepolicyquota -n "$NS" \
 # refuse rather than pick the wrong half. Measured on this lab: 1 zone.
 zones="$(k get zones -n "$NS" --no-headers 2>/dev/null | grep -c . || true)"
 sc_pick="$(printf '%s\n' "$sc_all" | grep -v -- '-latebinding$' || true)"
+# F9: de-prioritise an ENCRYPTION policy before declaring ambiguity — the ClusterClass schema
+# says storageClass creates NODE ROOT VOLUMES, which a VM-encryption policy is never the answer
+# for. Measured on this Supervisor: 5 of 7 namespaces carry one, so skipping this step makes the
+# feature inert in most of them. Only applied when it still leaves a candidate.
+if [ "$(printf '%s\n' "$sc_pick" | grep -c . || true)" -gt 1 ] 2>/dev/null; then
+  _noenc="$(printf '%s\n' "$sc_pick" | grep -v -- '-encryption-policy$' || true)"
+  [ -n "$_noenc" ] && sc_pick="$_noenc"
+fi
 sc_n="$(printf '%s\n' "$sc_pick" | grep -c . || true)"
 if [ "${zones:-1}" -gt 1 ] 2>/dev/null; then sc_n=0; sc_multizone=1; else sc_multizone=0; fi
 
@@ -128,10 +136,38 @@ fi
 
 # --- set ----------------------------------------------------------------------------------------
 ENV_FILE="${REPO_ROOT}/.env"
-[ -f "$ENV_FILE" ] || die "no .env — run 'make env-init' first."
+# F8: this runs as a PREREQUISITE of vks-cluster-create, whose comment promises it NEVER gates.
+# A die here would stop a create that previously ran fine on a .env-less box (load_env itself only
+# requires .env.example). Warn and exit 0 like every other degrade arm in this file.
+if [ ! -f "$ENV_FILE" ]; then
+  log_warn "no .env — nothing to write. Run 'make env-init' if you want one; the code defaults apply."
+  exit 0
+fi
 wrote=0
-if [ -n "${VKS_STORAGE_CLASS:-}" ]; then
-  log_info "= VKS_STORAGE_CLASS already set (${VKS_STORAGE_CLASS}) — not overwriting"
+# ⚠️ READ THE PIN FROM THE FILE, NOT THE ENVIRONMENT. Under SKIP_DOTENV=1 load_env does not read
+# .env, so ${VKS_STORAGE_CLASS} is UNSET while the file may hold a deliberate pin — and this
+# script still WRITES to that file. Measured: SKIP_DOTENV=1 ... set replaced a
+# `my-deliberate-vsan-policy` pin with this lab's `wcp-vmfs`. "Ignore .env for reading" plus
+# "write .env" is exactly how a tool produces the wrong pin its own header warns about.
+pin_of() { sed -n "s/^$1=//p" "$ENV_FILE" | tail -1; }
+sc_pin="$(pin_of VKS_STORAGE_CLASS)"; cc_pin="$(pin_of VKS_CLUSTERCLASS)"
+
+# ⚠️ TWO REVIEW FINDINGS COLLIDE HERE AND THE TIE IS BROKEN DELIBERATELY. "Never destroy a
+# deliberate pin" and "repair a stale one" give opposite answers for a pin naming a class this
+# Supervisor does not have. Repair wins: that pin CANNOT work here — the create is rejected
+# `storage class(es): <pin> not found` — so preserving it only makes the tool unable to fix the
+# failure it exists to prevent. The pin is still read from the FILE, so SKIP_DOTENV=1 cannot make a
+# VALID pin look unset and clobber it; only a provably-absent one is replaced, and loudly.
+# A pin that names something this Supervisor does NOT have is not a preference — it is a stale
+# value carried from another lab, and refusing to touch it makes the tool unable to repair the very
+# failure it exists to prevent. Overwrite ONLY in that case, and say so loudly.
+sc_stale=0
+if [ -n "$sc_pin" ] && [ -n "$sc_all" ] && ! printf '%s\n' "$sc_all" | grep -qxF "$sc_pin"; then sc_stale=1; fi
+cc_stale=0
+if [ -n "$cc_pin" ] && [ -n "$cc_live" ] && ! printf '%s\n' "$cc_live" | grep -qxF "$cc_pin"; then cc_stale=1; fi
+
+if [ -n "$sc_pin" ] && [ "$sc_stale" = 0 ]; then
+  log_info "= VKS_STORAGE_CLASS already set (${sc_pin}) — not overwriting"
 elif [ "$sc_n" = 1 ]; then
   set_env_var VKS_STORAGE_CLASS "$sc_pick" "$ENV_FILE"; wrote=$((wrote+1))
   log_info "+ VKS_STORAGE_CLASS = ${sc_pick}  (the policy assigned to ${NS})"
@@ -142,12 +178,20 @@ elif [ "${sc_multizone:-0}" = 1 ]; then
   log_warn "? VKS_STORAGE_CLASS NOT auto-set — ${NS} has ${zones} zones, and a multi-zone namespace"
   log_warn "    REQUIRES a -latebinding class for machineDeployment (worker) volumes, while this repo"
   log_warn "    renders ONE storageClass for the whole topology. Set it by hand and check the workers."
+elif [ -n "$sc_all" ]; then
+  # The quota WAS readable and returned classes — they are all WaitForFirstConsumer. Blaming RBAC
+  # here sends the operator to fix something that is fine, and the create then proceeds on a code
+  # default that does not exist in this namespace.
+  log_warn "? VKS_STORAGE_CLASS NOT auto-set — ${NS} has only WaitForFirstConsumer (-latebinding)"
+  log_warn "    classes assigned. Pick one by hand and check the worker volumes:"
+  printf '%s\n' "$sc_all" | while IFS= read -r c; do [ -n "$c" ] && printf '      %s\n' "$c"; done
 else
-  log_warn "- VKS_STORAGE_CLASS not discovered (no storagepolicyquota readable in ${NS})"
+  log_warn "- VKS_STORAGE_CLASS not discovered — nothing readable at storagepolicyquota in ${NS}"
+  log_warn "    (a tenant may lack RBAC there; 'make vks-shape-show' prints what this identity sees)"
 fi
 
-if [ -n "${VKS_CLUSTERCLASS:-}" ]; then
-  log_info "= VKS_CLUSTERCLASS already set (${VKS_CLUSTERCLASS}) — not overwriting"
+if [ -n "$cc_pin" ] && [ "$cc_stale" = 0 ]; then
+  log_info "= VKS_CLUSTERCLASS already set (${cc_pin}) — not overwriting"
 elif [ -n "$cc_newest" ]; then
   set_env_var VKS_CLUSTERCLASS "$cc_newest" "$ENV_FILE"; wrote=$((wrote+1))
   log_info "+ VKS_CLUSTERCLASS = ${cc_newest}  (newest non-deprecated — admission would pick it anyway)"

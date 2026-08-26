@@ -510,6 +510,10 @@ make vks-k8s-version           # resolve the TKr NOW — see the note below; do 
 make vks-cluster-create        # applies the Cluster; provisioning is async
 ```
 
+Both of these **write to `./.env`** — `vks-k8s-version` writes `VKS_K8S_VERSION`, and
+`vks-cluster-create` runs `make vks-shape-set` first, which writes the storage class and
+ClusterClass your Supervisor actually has. Nothing for you to look up or copy.
+
 **Expect:** a line naming `VKS_K8S_VERSION:` with a full release string such as
 `v1.36.2+vmware.2-vkr.3`. You do **not** copy that value anywhere — `make vks-k8s-version` writes it
 into `./.env` itself, and `make vks-cluster-create` on the next line reads it from there. If it says
