@@ -16,16 +16,16 @@
 # COLUMNS (tab-separated):
 #   name      the app + its k8s namespace + its Harbor repo + its Gitea repos (<name>-app/-deploy)
 #             + its ingress host (<name>.${APP_DOMAIN})
-#   lang      java | go — selects the Tekton test task and the marker-rewrite rule (lib/apps.sh)
+#   lang      java | go | nodejs | python | rust | dotnet — selects the Tekton test task and the
+#             marker-rewrite rule (lib/apps.sh). A NEW language is one `case` branch there.
 #   src       source dir; this dir IS the content of the <name>-app Gitea repo
 #   deploy    kustomize dir; this dir IS the content of the <name>-deploy Gitea repo
 #
 # ⚠️ A ROW IS AN ENROLMENT, NOT AN INTENTION. Adding a row enrols the app in EVERY gate at once —
 # validate (deploy dir + Tekton task), check-image-alignment (a runtime Dockerfile),
 # check-pull-secret-alignment, check-app-toolchains, check-ui-contract, and every for_each_app
-# caller. On 2026-08-22 four rows were added for apps whose source existed but whose deploy/,
-# Tekton task and runtime Dockerfile did not: every gate went red at once and the work became
-# un-splittable, because no single app could be finished to green.
+# caller. Add a row for an app whose deploy/, Tekton task or runtime Dockerfile does not exist yet
+# and every gate goes red at once, with no single app finishable to green.
 #
 # So: FINISH the app, THEN add its row. Its files can live under apps/<lang>/<app>/ un-enrolled for
 # as long as you like — nothing reads them until the row exists. That is what makes each app

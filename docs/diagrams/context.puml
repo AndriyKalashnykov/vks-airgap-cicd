@@ -12,7 +12,7 @@ System_Boundary(airgap, "Air gap") {
   System(platform, "VKS CI/CD Platform", "Gitea + Tekton build/test, image to Harbor, ArgoCD GitOps deploy to the VKS cluster.\nOne app per row of apps/registry.tsv (six today) — same walk for each")
 }
 
-System_Ext(upstream, "Container registries + one package registry per language", "gcr.io / ghcr.io / docker.io\nMaven Central · proxy.golang.org · npm · PyPI · crates.io · NuGet")
+System_Ext(upstream, "Container registries + one package registry per language", "gcr.io / ghcr.io / docker.io\nrepo.maven.apache.org · proxy.golang.org · registry.npmjs.org · pypi.org · crates.io · api.nuget.org")
 
 Rel(dev, platform, "git push (change to any app)", "HTTPS/git")
 Rel(platform, dev, "serves each app's running web UI", "HTTP")

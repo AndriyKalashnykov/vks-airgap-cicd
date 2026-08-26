@@ -6,8 +6,7 @@
 |------|---------|
 | `scripts/` | Ordered, OS-portable (Ubuntu+PhotonOS) automation; `lib/os.sh` + `lib/mirror.sh` are shared libraries |
 | `apps/registry.tsv` | **The app registry — one row per app.** Everything loops over it: seeding, Tekton, ArgoCD, ingress, PSA, the gates. Adding an app is **one row** |
-| `apps/java/javawebapp/` | Spring Boot app (seeded into Gitea `javawebapp-app`); `Dockerfile` + `Dockerfile.builder` (its offline Maven dependency cache) |
-| `apps/go/gowebapp/` | Go app, **stdlib-only** (seeded into `gowebapp-app`). No `Dockerfile.builder`: with zero modules the air-gapped build fetches nothing, so it needs no pre-baked dependency cache |
+| `apps/<lang>/<app>/` | One dir per row of `apps/registry.tsv` (six today: `java/javawebapp`, `go/gowebapp`, `nodejs/nodejswebapp`, `python/pythonwebapp`, `rust/rustwebapp`, `dotnet/dotnetwebapp`). Each dir IS the content of its `<app>-app` Gitea repo and holds a `Dockerfile` (runtime) **and** a `Dockerfile.builder` — the pre-baked dependency cache that lets the in-cluster build reach no package registry |
 | `deploy/<app>/` | Kustomize manifests ArgoCD deploys — one dir per app = one deploy repo. **Not applied by us** — seeded into Gitea `<app>-deploy`, which Tekton writes the image tag into and ArgoCD syncs |
 | `k8s/` | Everything **we** apply to the cluster |
 | `k8s/tekton/` | Tekton pipeline, tasks, triggers, RBAC |

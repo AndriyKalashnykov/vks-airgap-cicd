@@ -39,12 +39,12 @@ internet-connected jump box, pushed to Harbor, and consumed offline:
 
 | app | cache it bakes | fetched from |
 |---|---|---|
-| `javawebapp` | `~/.m2` (`./mvnw -B verify`) | Maven Central |
+| `javawebapp` | `~/.m2` (`./mvnw -B verify`) | `repo.maven.apache.org` |
 | `gowebapp` | the Go module cache (`go mod download`) | `proxy.golang.org` |
 | `nodejswebapp` | `node_modules` (`npm ci`) | `registry.npmjs.org` |
-| `pythonwebapp` | the venv (`pip install -r requirements.txt`) | PyPI |
+| `pythonwebapp` | the venv (`pip install -r requirements.txt`) | `pypi.org` |
 | `rustwebapp` | the cargo registry (`cargo fetch --locked`) | `crates.io` |
-| `dotnetwebapp` | the NuGet cache (`dotnet restore`) | `nuget.org` |
+| `dotnetwebapp` | the NuGet cache (`dotnet restore`) | `api.nuget.org` |
 
 Adding an app is **one row** in `apps/registry.tsv` — see [Adding an app](docs/adding-an-app.md).
 

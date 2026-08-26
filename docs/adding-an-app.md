@@ -7,9 +7,13 @@ branch in `scripts/lib/apps.sh`.
 The row:
 
 ```tsv
-# name        lang  src                   deploy
-javawebapp    java  apps/java/javawebapp  deploy/javawebapp
-gowebapp      go    apps/go/gowebapp      deploy/gowebapp
+# name        lang    src                       deploy
+javawebapp    java    apps/java/javawebapp      deploy/javawebapp
+gowebapp      go      apps/go/gowebapp          deploy/gowebapp
+nodejswebapp  nodejs  apps/nodejs/nodejswebapp  deploy/nodejswebapp
+pythonwebapp  python  apps/python/pythonwebapp  deploy/pythonwebapp
+rustwebapp    rust    apps/rust/rustwebapp      deploy/rustwebapp
+dotnetwebapp  dotnet  apps/dotnet/dotnetwebapp  deploy/dotnetwebapp
 ```
 
 Each app gets: its own Gitea repos (`<app>-app` + `<app>-deploy`), its own Tekton `Pipeline`
@@ -25,8 +29,7 @@ per-app `<APP>_HOST` variable — there used to be, and it meant a new row silen
 
 ## What differs per LANGUAGE (measured — it is not two things)
 
-This document used to say *"only two things differ per language"*. Measured 2026-08-22, that is
-false: `scripts/lib/apps.sh` carries **ten** per-language `case` branches — `app_test_task`,
+Several things differ per language, not two: false: `scripts/lib/apps.sh` carries **ten** per-language `case` branches — `app_test_task`,
 `app_set_message`, `app_builder_image`, `app_runtime_image`, `app_health_path`, `app_toolchain`,
 `app_build_args`, `app_builder_base`, `app_builder_arg` — plus three more outside it
 (`app-run.sh`, `app-test.sh`, `trivy-fs.sh`). And a further set is not a `case` at all but a **file

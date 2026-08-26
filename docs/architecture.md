@@ -11,7 +11,7 @@ image into Harbor; a `git push` then drives the whole CI/CD flow entirely inside
 
 ### Containers
 
-<p align="center"><a href="diagrams/out/container.png"><img src="diagrams/out/container.png" alt="Container diagram — N apps (javawebapp, gowebapp) from apps/registry.tsv, one shared Tekton EventListener — click to enlarge" width="960"></a></p>
+<p align="center"><a href="diagrams/out/container.png"><img src="diagrams/out/container.png" alt="Container diagram — one app per row of apps/registry.tsv (six today), one shared Tekton EventListener — click to enlarge" width="960"></a></p>
 
 ### Deployment
 
@@ -30,7 +30,7 @@ in the guest. (The KinD stand-in collapses both levels into one cluster.)
 
 ### Pipeline flow
 
-<p align="center"><a href="diagrams/out/pipeline-flow.png"><img src="diagrams/out/pipeline-flow.png" alt="Pipeline flow — one lane per app (javawebapp, gowebapp) through the shared Tekton EventListener — click to enlarge" width="720"></a></p>
+<p align="center"><a href="diagrams/out/pipeline-flow.png"><img src="diagrams/out/pipeline-flow.png" alt="Pipeline flow — the same walk for every app, through the shared Tekton EventListener — click to enlarge" width="720"></a></p>
 
 Diagram sources are committed under [`docs/diagrams/`](diagrams/) (C4-PlantUML);
 `make diagrams` re-renders the PNGs and `make diagrams-check` fails CI if they drift.

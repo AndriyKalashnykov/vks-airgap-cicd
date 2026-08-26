@@ -19,7 +19,7 @@ Kaniko, Maven, Temurin JDK/JRE, alpine/git, yq, and the ingress images). Figures
 
 Every app ships a `Dockerfile.builder` whose whole job is to bake its dependency cache, because an
 in-cluster build reaches no package registry. That is six images, not one, and they are the largest
-thing the jump box builds. **MEASURED 2026-08-23** (podman, `linux/amd64`, current pins):
+thing the jump box builds. * `linux/amd64`, current pins):
 
 | app | builder image | its upstream base |
 |---|---:|---:|
@@ -37,15 +37,18 @@ Derived from each app's `Dockerfile.builder` / `Dockerfile` (so it cannot drift 
 
 | app | build image | runtime base | cache it bakes | fetched from |
 |---|---|---|---|---|
-| `javawebapp` | `maven:3.9-eclipse-temurin-25` | `eclipse-temurin:…-jre-jammy` | `~/.m2` | Maven Central |
+| `javawebapp` | `maven:3.9-eclipse-temurin-25` | `eclipse-temurin:…-jre-jammy` | `~/.m2` | `repo.maven.apache.org` |
 | `gowebapp` | `golang:1.27.0-bookworm` | `distroless/static-debian12` | Go module cache | `proxy.golang.org` |
 | `nodejswebapp` | `node:24-alpine` | `node:24-alpine` | `node_modules` | `registry.npmjs.org` |
-| `pythonwebapp` | `python:3.14-alpine` | `python:3.14-alpine` | the venv | PyPI |
+| `pythonwebapp` | `python:3.14-alpine` | `python:3.14-alpine` | the venv | `pypi.org` |
 | `rustwebapp` | `rust:1.98-alpine` | `distroless/static-debian12` | cargo registry | `crates.io` |
-| `dotnetwebapp` | `mcr…/dotnet/sdk:10.0-alpine` | `mcr…/dotnet/aspnet:10.0-noble-chiseled` | NuGet cache | `nuget.org` |
+| `dotnetwebapp` | `mcr…/dotnet/sdk:10.0-alpine` | `mcr…/dotnet/aspnet:10.0-noble-chiseled` | NuGet cache | `api.nuget.org` |
 
-**The jump box needs egress to ALL SIX package registries**, not just Maven Central — `builder-build`
-fails on whichever one is blocked. Two apps (`nodejswebapp`, `pythonwebapp`) run on their build image
+**The jump box needs egress to ALL SIX package registries** — `builder-build` fails on whichever one
+is blocked. The `fetched from` column names each ecosystem's PRIMARY host; it is **not a complete
+firewall allowlist**, because several tools also contact a sibling host (Go a checksum DB, pip a
+file CDN, cargo a separate index and CDN). If you must build an allowlist, derive it by running
+`make builder-build` behind a logging proxy — do not transcribe this table. Two apps (`nodejswebapp`, `pythonwebapp`) run on their build image
 as the runtime base; two (`gowebapp`, `rustwebapp`) ship a static binary on `distroless/static`.
 
 Realistic floor for a **dual-homed six-app walk**, measured against a box that hit `ENOSPC` at 15 G used:
@@ -74,7 +77,7 @@ the **dual-homed** path too, because `make builder-image` is a thin orchestrator
 script. `bundle/images/` (crane's OCI layout) is a **separate** store from podman's, so those really
 are second copies.
 
-> **This is what a 16 GB ROOT FILESYSTEM runs out of, and it fails at the LAST app.** MEASURED 2026-08-23 on a
+> **This is what a 16 GB ROOT FILESYSTEM runs out of, and it fails at the LAST app.**
 > 16 GB Photon walkthrough VM: `make install-all` died in `builder-image` on the **sixth** builder —
 > `Error: committing container … no space left on device` while unpacking the NuGet cache — with
 > `/dev/sda2 16G 15G 558M 97%`. The VM's virtual disk was **40 GiB** — `lsblk` showed `sda` at 40 GiB
