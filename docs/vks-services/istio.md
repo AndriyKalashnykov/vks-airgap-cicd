@@ -653,3 +653,42 @@ the framework does land guest-side.
 
 **And the demo survived it**: after the node roll, all six apps' pods are `Running` and **zero** pods
 cluster-wide are outside Running/Completed.
+
+## Guest-cluster upgrade: there IS a vCenter UI — it is the Local Consumption Interface, on the `Resources` tab
+
+Grade: **lab-verified 2026-08-26** (LCI `com.vmware.cci-ns~9.1.1.0`, vCenter 9.1 build 25629530).
+
+Three supported paths, not one:
+
+| path | how |
+|---|---|
+| **vCenter UI** | Supervisor Management -> Namespaces -> `<ns>` -> **`Resources`** tab -> *vSphere Kubernetes Service* -> the cluster's **⋮** -> **Upgrade** (siblings: *View YAML*, *Download Kubeconfig File*, *Delete*; plus **+ CREATE**) |
+| **VCF CLI** | `vcf cluster available-upgrades get <c> -n <ns>` then `vcf cluster upgrade <c> -n <ns> --kr <vkr>` (`--kr` accepts a name PREFIX and picks the latest compatible) |
+| **kubectl** | patch `.spec.topology.version` (and `.classRef.name`) on the Cluster object, and let Cluster API roll the Machines |
+
+⚠️ **WHY THE UI IS EASY TO MISS, and it cost a long search here.** LCI is a **Supervisor-SERVED vSphere Client
+plugin**, not a native vCenter view. It renders ONLY on the namespace's **`Resources`** tab. Every native
+surface shows the cluster **read-only** — `Compute -> VMware Resources -> Kubernetes clusters` (no row
+action, name not a link, double-click inert), the namespace **ACTIONS** menu (Add Permission / Remove
+only), **Updates** (Supervisor-only, "No items found"), **Supervisors**, **Configure -> General ->
+Kubernetes Service** (content libraries only), **Global Inventory Lists** (no Kubernetes list), and the
+Hosts-and-Clusters inventory, where the cluster appears as a Resource Pool badged **`Consumer Managed`**
+with every mutating action greyed out. That badge is REAL — but it is about the vCenter inventory object,
+and concluding "therefore there is no UI" from it is WRONG. The UI is one tab away in the same tab bar.
+
+**Precondition:** LCI must be installed. From VCF **9.1** it is a **Core Supervisor Service**, installed
+when the Supervisor is enabled; on 9.0 it is a manual add (`Supervisor Management -> Services -> Add New
+Service -> Consumption Interface`). On this lab it shows as `cci-ns.vmware.com` **ACTIVATED**, namespace
+`svc-cci-ns-*`, service `cci-ns-plugin-service:8053`. If that tile is absent, there is no cluster UI and
+`vcf cluster upgrade` is the path.
+
+**ClusterClass is not a picker.** Auto-rebase moves it when the Kubernetes version is upgraded — it
+*"updates the existing Cluster object to use the latest ClusterClass that supports the Kubernetes versions
+requested by the cluster"*. Observed verbatim when this lab was rebased: `v3.6.0 -> v3.6.0` followed by
+*"ClusterClass builtin-generic-v3.6.0 updated to the newest compatible ClusterClass builtin-generic-v3.7.0"*.
+To force it, remove the `kubernetes.vmware.com/skip-auto-cc-rebase: ""` annotation — via **View YAML**,
+which is an editable, saveable Cluster YAML (the UI equivalent of `kubectl edit cluster`).
+
+[src: github.com/vsphere-tmm/Supervisor-Services path=consumption-interface/Release_Notes_9_0_1.md]
+*"Allows the user to Upgrade an existing cluster by updating its VKr version."* — the action's existence,
+vendor-primary at 9.0.x; **9.1.1.0 confirmed live on this lab** (the URL carries the plugin version).
