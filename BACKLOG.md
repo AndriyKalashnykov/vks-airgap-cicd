@@ -486,8 +486,11 @@ gate on install**. `uninstall` DOES check (`:232`):
 
     kubectl -n "$PKG_NS" get pkgi "$name" >/dev/null 2>&1 || { log_info "... nothing to do"; exit 0; }
 
-Measured: the only `get pkgi` calls in the file are at `:216 :225 :232 :246` — **all in the uninstall
-path**. Install has no counterpart.
+⚠️ **CORRECTED by the design round:** I first wrote that the only `get pkgi` calls are at
+`:216 :225 :232 :246`, *all in the uninstall path*. **`:216` and `:225` are in the INSTALL path**
+(the reconcile-wait loop and its timeout `die`). The conclusion survives — none is a **pre-apply**
+guard — but the correction matters constructively: install ALREADY resolves `$PKG_NS` and ALREADY
+calls `get pkgi`, so the guard costs one more call, not new machinery.
 
 **Consequence.** A `PackageInstall/istio` in `vmware-system-tkg` created by anyone else — a second
 operator, a re-run at a different `PKG_VERSION`, a platform hand-install, or later the VKS addon
@@ -506,8 +509,56 @@ ownership consideration. ⚠️ The obvious fix — mirror uninstall's `CONFIRM`
 requiring `CONFIRM=yes` could convert an idempotent step into an interactive one and break the
 matrix. That is exactly what the design round must settle before anything is written.
 
-**Status: found, verified from source, NOT designed, NOT tested, NOT fixed.** A fix design is under
-adversary review; nothing has been implemented. The tree is frozen mid-certification.
+### The design round REFUTED my proposed fix — and both halves of my premise
+
+**1. "A CONFIRM gate could break the unattended matrix" is FALSE.** MEASURED: `ISTIO_INSTALL_METHOD`
+appears in **0 of 37** `docs/**.md` and **0** Makefile lines; `44-install-ingress.sh:45` defaults to
+`helm`, and `.env.example` keeps the toggle commented. **The matrix cannot reach this code path.**
+Consequence beyond the premise: **a green six-row matrix is VACUOUS evidence for this change** and
+must not be cited as proof it is safe.
+
+**2. The CONFIRM gate is refuted anyway, by a stronger case.** `install` **dies AFTER the apply** —
+it applies at `:184`, waits, then `die`s at `:224` on reconcile timeout. So the most likely reason an
+operator re-runs leaves all three objects behind, and the gate would fire on **their own retry**,
+training them to type `CONFIRM=yes` reflexively — which is exactly what makes a gate useless on the
+day it matters.
+
+**So: gate on DIVERGENCE, never on existence.** Identical `refName` + version + SA -> adopt silently
+(that IS idempotency, and it is the retry). Different version -> gate (an operator re-running at an
+older `PKG_VERSION` over a live mesh is the real hazard; `43:32-33` already calls the two-minor gap a
+deliberate downgrade). Different `refName` under the same derived name -> die.
+
+### Three findings that reshape the fix
+
+- **`managedFields` cannot work.** MEASURED: `kubectl` defaults to `--server-side=false`, so the
+  manager is `kubectl-client-side-apply` for **any** apply — ours, a second operator's, a hand-run.
+  Use the repo's OWN ownership label instead; the precedent is
+  `71-argocd-register-guest.sh:268-283` (check-then-refuse) consumed by `98-uninstall-all.sh`.
+- **That precedent's idiom FAILS OPEN**, and fails open into *granting cluster-admin*. `if
+  _owner="$(... 2>/dev/null)"` cannot distinguish absent from **Forbidden** from unreachable, so a
+  namespaced tenant skips the guard entirely. Use `kube_is_notfound` (`lib/os.sh:2115` — requires the
+  server's own `Error from server (NotFound)` **and** the object token on one line): provably absent
+  -> proceed; anything else -> refuse and name why. ⚠️ Do **not** write it as
+  `case "$(classify_kube_failure …)"` — `check-classifier-consumers.sh` matches that literal form and
+  would pull this file into a 9-consumer denominator.
+- **"Leave `uninstall` alone" is REFUTED.** `:241` deletes the cluster-scoped
+  `<name>-pkg-sa-cluster-admin` **by name, output discarded, errors swallowed** — a direct violation
+  of this repo's own doctrine at `98-uninstall-all.sh:17-18` (*"deletes ONLY objects carrying our
+  ownership label, NEVER by name alone"*). The two halves compose: install ADOPTS a foreign pkgi, the
+  operator now believes it is theirs, and uninstall then deletes **their** pkgi and **their**
+  cluster-admin CRB. **Two destructive acts from one lossy derivation** (`cut -d. -f1` maps
+  `istio.kubernetes.vmware.com` -> `istio`, so any two refNames sharing a first DNS label collide on
+  a CLUSTER-SCOPED object). The uninstall half must ship in the SAME change.
+
+**Status: found, verified from source, DESIGNED AND THE DESIGN REFUTED ONCE, redesigned per the
+above, NOT YET IMPLEMENTED, NOT TESTED.** RED cases R1-R7 and green controls C1-C6 are specified —
+including **C2 (identical -> proceeds silently)**, without which the fix is unproven, and **R5
+(Forbidden -> must NOT fail open)**, without which it ships the bug it was written to fix. Blocked on
+the tree being frozen mid-certification.
+
+⚠️ Also flagged, not fixed: `test-vks-package-guard.sh:37`'s stub arm `*" get "*" packages "*)`
+**can never match** (the leading space) — harmless today only because that arm and the fallthrough
+both yield empty output, and actively misleading the moment the harness returns a real package list.
 
 ## 🔴 B486 — `ARGOCD_SERVER` is published as an **IP**, and `.env.example` says it must be a **NAME** 🔴 open
 
