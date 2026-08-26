@@ -71,7 +71,15 @@ SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kub
 k() { kubectl --kubeconfig "$SUP" "$@"; }
 
 log_info "cluster:      ${VKS_NAMESPACE}/${VKS_CLUSTER_NAME}"
-log_info "class:        ${VKS_CLUSTERCLASS} (ns ${VKS_CLUSTERCLASS_NAMESPACE})"
+# ⚠️ THIS IS WHAT WE ASKED FOR, NOT WHAT YOU WILL GET. MEASURED 2026-08-26 on VKS 3.7.1+v1.36:
+# the Supervisor's mutating webhook (capi.mutating.tanzukubernetescluster.run.tanzu.vmware.com)
+# REWRITES this to the newest compatible ClusterClass -- and it does so even when the class we asked
+# for is already IN RANGE (asked v3.6.0 + v1.35.6, which v3.6.0 supports; stored v3.7.0). So
+# VKS_CLUSTERCLASS is INERT, not merely stale, and computing a "better" value here would only
+# produce something admission discards. The class is READ BACK after the apply below; that read, not
+# this line, is the ground truth -- exactly as k8s/vks/cluster.yaml:21-28 already says for the
+# VERSION. Logging only this line is how a green certification records the wrong class. (B490)
+log_info "class:        ${VKS_CLUSTERCLASS} (ns ${VKS_CLUSTERCLASS_NAMESPACE}) — REQUESTED; admission may rewrite it"
 log_info "version:      ${VKS_K8S_VERSION}   (a PREFIX — admission resolves and REWRITES it)"
 log_info "topology:     ${VKS_CONTROL_PLANE_COUNT} control plane + ${VKS_NODE_COUNT} worker(s) of ${VKS_VM_CLASS}"
 log_info "storage:      ${VKS_STORAGE_CLASS}"
@@ -81,6 +89,10 @@ log_info "supervisor:   ${SUP}"
 # `kubectl apply` over an existing Cluster is a successful no-op ("unchanged", exit 0) — which is
 # NOT "the cluster I asked for". Report what is actually there and stop.
 if k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" >/dev/null 2>&1; then
+  # ⚠️ SECOND EFFECT, worth naming: this also stops a re-apply from letting the mutating webhook
+  # bump a LIVE cluster's ClusterClass and roll its nodes. That is a rebase, not a create, and it is
+  # not something a re-run should do by accident. To move onto a newer class deliberately, create a
+  # cluster under a NEW name (see the reused-name note below) rather than re-applying over this one.
   log_warn "${VKS_NAMESPACE}/${VKS_CLUSTER_NAME} ALREADY EXISTS — not re-applying."
   k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" >&2
   log_info "inspect it with:  make vks-cluster-status"
@@ -124,10 +136,33 @@ if ! k apply --dry-run=server -f "$RENDERED" >/dev/null 2>"${RENDERED}.err"; the
   rm -f "${RENDERED}.err"
   die "fix the value it names in .env, then re-run."
 fi
+# ⚠️ DO NOT rm THIS UNREAD ON SUCCESS. The dry-run's stderr is where the platform says it rewrote
+# something -- "Warning: ClusterClass builtin-generic-v3.6.0 updated to the newest compatible
+# ClusterClass builtin-generic-v3.7.0" arrives on a run whose rc is 0. Discarding it made the one
+# path built to catch surprises silently throw away the only notice of one.
+if [ -s "${RENDERED}.err" ]; then
+  log_warn "the Supervisor accepted this, WITH remarks (rc=0, so these are not errors):"
+  sed 's/^/    /' "${RENDERED}.err" >&2
+fi
 rm -f "${RENDERED}.err"
 log_info "dry-run accepted."
 
 k apply -f "$RENDERED"
+
+# --- READ BACK what the platform actually stored --------------------------------------------------
+# The ground truth is the object, never what we rendered. `|| true` because a failed read must not
+# kill a successful create: this is a REPORT, and a create that worked stays worked.
+_stored_class="$(k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" \
+                   -o jsonpath='{.spec.topology.classRef.name}' 2>/dev/null || true)"
+if [ -z "$_stored_class" ]; then
+  log_warn "could not read back .spec.topology.classRef.name — the class in effect is UNCONFIRMED."
+elif [ "$_stored_class" != "$VKS_CLUSTERCLASS" ]; then
+  log_warn "ClusterClass in effect is ${_stored_class}, NOT the ${VKS_CLUSTERCLASS} requested —"
+  log_warn "  the Supervisor rewrote it to the newest compatible class. This is normal and is why"
+  log_warn "  VKS_CLUSTERCLASS is a seed rather than a setting. Cite ${_stored_class} in any report."
+else
+  log_info "class in effect: ${_stored_class} (confirmed on the created object)"
+fi
 log_info "applied. MEASURED 2026-08-08 on a single-host 9.1 lab: all 3 nodes Ready in ~3m45s"
 log_info "  (1 CP + 2 best-effort-small workers). Yours varies with host load and image pulls."
 
