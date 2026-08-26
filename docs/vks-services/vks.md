@@ -75,16 +75,36 @@ EOF
 
 ## Upgrading it
 
-### 1. Register the version — vCenter UI only
+### 1. Register the version — two endpoints, and only ONE of them is closed
 
 > Supervisor Management → **Services** → the **Kubernetes Service** card → **ACTIONS → Add New
 > Version** → **UPLOAD** the `-legacy-` file → **FINISH**
 
-⚠️ **This step cannot be automated.** VKS is a Core Service and the create API returns **HTTP 403**:
-*"Core services are managed by vCenter, it's not allowed to create, activate, deactivate, delete or
-update display name / description of a Core service."*
-
 ⚠️ Use **Add New Version**, not **Add New Service** — the latter is the 403 path.
+
+**The 403 is real, and it is about the SERVICE, not the version.** These are two different endpoints:
+
+- `POST /api/vcenter/namespace-management/supervisor-services` — creating the **SERVICE** — returns
+  **403** for a Core service: *"Core services are managed by vCenter, it's not allowed to create,
+  activate, deactivate, delete or update display name / description of a Core service."* That is the
+  **Add New Service** path. Do not use it.
+- `POST /api/vcenter/namespace-management/supervisor-services/{id}/versions` — creating a
+  **VERSION** — returned **201** on `vCenter 9.1.0.0300` as `Administrator@vsphere.local` on
+  2026-08-26, with body `{"carvel_spec":{"content":"<base64 of the -legacy- YAML>"}}`. The
+  Supervisor's Package was rebuilt from those bytes with the correct
+  `projects.packages.broadcom.com` image, and the upgrade that followed reached `CONFIGURED`.
+
+The verbs the 403 enumerates are all **service-level**; version operations are not among them. And
+the privilege model has exactly one privilege — `SupervisorServices.Manage` — whose own text covers
+*"creating or deleting a Supervisor Service version"*. So the version endpoint is a documented,
+first-class operation rather than an internal route.
+
+⚠️ **If it ever returns 403 for you, the UI path above is unchanged and is the fallback.** The 201 is
+one build, one identity, one date — not a promise about vCenter's future behaviour.
+
+⚠️ **`DELETE` on a Core service's version is NOT measured over the API** (only through the UI). Until
+it is, an API registration is state whose only proven undo is the UI — which matters, because the
+recovery below is *deactivate -> delete -> re-register*.
 
 **Expect** an amber *"The YAML content defines an existing Supervisor Service
 (tkg.vsphere.vmware.com), which may prevent creating a Supervisor Service from the content."* That
@@ -187,5 +207,8 @@ route on its own: it is `+v1.36` too, so it unlocks Kubernetes 1.36 exactly as 3
 | Deleting the version DOES remove the Supervisor Package | **lab-verified 2026-08-26** | it disappeared between the delete and the re-register |
 | The upgrade leaves running guest clusters untouched | **lab-verified 2026-08-26** | the guest stayed on its own class and version, `Available=True AddonsReconciled=True`, across two hops |
 | Admission rewrites `classRef` to the newest compatible class | **lab-verified 2026-08-26** | six server-side dry-runs; it rewrote even when the asked class was in range |
-| `3.6.3 → 3.7.1` in ONE hop | **INFERRED — not run** | the package declares `source-version-upgrade-constraints: '>=3.4.0'`, which 3.6.3 satisfies. What was measured is the two-hop path |
+| `3.6.3 → 3.7.1` in ONE hop | **lab-verified 2026-08-26** | run on a fresh cut: `CONFIGURED` in **2m31s**, off an API-registered version. (Was graded INFERRED earlier the same day; the package declares `source-version-upgrade-constraints: '>=3.4.0'`.) |
 | Whether the classRef rewrite also fires on UPDATE | **NOT ESTABLISHED** | deliberately untested — that dry-run would have targeted a live cluster |
+| `POST /{id}/versions` on a Core service | **lab-verified 2026-08-26** | HTTP 201; `{carvel_spec:{content}}` is the shape — `{version_spec:…}`, `{spec:…}` and `{content:…}` all 400 |
+| `DELETE /{id}/versions/{ver}` on a **Core** service over the API | **NOT ESTABLISHED** | the route exists (semantic 404 on a bogus version) but has only ever been exercised through the UI |
+| Whether an API-registered version differs from a UI-registered one | **NOT ESTABLISHED** | no UI-registered non-embedded version existed to diff against. `trust_verified` does NOT discriminate — it is `false` on the embedded one too |
