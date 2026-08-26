@@ -43,6 +43,57 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
    destroys the certification the matrix exists to produce (lab-repo B454). It is **not** derived,
    because unlike the CLI path it is not a fact about the repo.
 
+5. **The VKS version is NOT a property of the tree — it is a property of the CUT, and every cut
+   reverts it.** MEASURED 2026-08-26: only `3.6.3-embedded+v1.35` has
+   `registered_by_default: true`; a 3.7 version is registered by hand and the mid-matrix rebuild is
+   the lab repo's `destroy CONFIRM=yes` + `lab` targets — a FULL destroy that takes vCenter's
+   catalogue with it.
+   So a default `walk-matrix` run certifies on **3.6.3**, whatever the lab happened to be running
+   when you started it.
+
+   ⚠️ **And registration CANNOT be automated.** VKS is a **Core Supervisor Service**; the create API
+   returns HTTP 403 and the lab repo's `vks-register` target refuses up front. It is vCenter UI only
+   (Supervisor Management → Services → Kubernetes Service → **ACTIONS → Add New Version** → upload
+   the **`-legacy-`** YAML). Everything after registration is automated.
+
+   To certify on 3.7, split the run at the cut boundary the script already supports — `WALK_ROWS`
+   and `WALK_SKIP_REBUILD` are existing, documented flags, so this needs no change to the harness:
+
+   ```sh
+   # 0. the lab in front of you is already on 3.7 (register via UI, then the vks-upgrade target)
+   # 1. cut A. Stops WITHOUT rebuilding, because no row of cut B was requested.
+   WALK_REPO=... WALK_OUT_ROOT=$HOME/walk-evidence \
+   make -C ~/projects/nested-vsphere-lab walk-matrix WALK_ROWS="1 2 5"
+
+   # 2. cut B's lab, BY HAND, so the 3.7 registration can be re-applied before the rows run
+   make -C ~/projects/nested-vsphere-lab destroy CONFIRM=yes
+   make -C ~/projects/nested-vsphere-lab lab
+   make -C ~/projects/nested-vsphere-lab kubectl-login
+   #    ... register the -legacy- YAML in the UI, then:
+   make -C ~/projects/nested-vsphere-lab vks-upgrade VKS_VERSION=<ver> CONFIRM=<ver>
+
+   # 3. cut B. WALK_SKIP_REBUILD stops it destroying the lab you just prepared.
+   #    WALK_CLUSTER_NAME is MANDATORY with that flag (the script refuses without it): the name
+   #    normally rotates per invocation, row 3 CREATES the cluster under it, and row 6 must then
+   #    RESOLVE it. Pick one and pass the same value.
+   WALK_REPO=... WALK_OUT_ROOT=$HOME/walk-evidence \
+   make -C ~/projects/nested-vsphere-lab walk-matrix \
+        WALK_ROWS="3 4 6" WALK_SKIP_REBUILD=1 WALK_CLUSTER_NAME=cicd-gc<stamp>
+   ```
+
+   ⚠️ **The two halves are then TWO run directories and TWO verdicts**, so the pair-symmetry read
+   (§D) spans them: 1↔3, 2↔4, 5↔6 still have to match, and nothing prints that for you.
+
+   ⚠️ **`WALK_ROWS="3 4 5"`-style mixing is a KNOWN hazard** (`walk-matrix.sh:47`): scenario-2's
+   credential injection is dispatched before the scenario-1 rows in the same invocation. The split
+   above keeps 5 with cut A and 6 with cut B, which is the designed grouping — do not re-mix them
+   to save a run.
+
+   ⚠️ **NOT YET EXERCISED end to end.** The flags, their preconditions and the destroy-and-rebuild
+   are read from `walk-matrix.sh` and `docs/VKS-UPGRADE.md`; the 3.7 upgrade itself IS
+   lab-verified (3.6.3 → 3.7.0 → 3.7.1, both `CONFIGURED`). The SPLIT has not been run. Treat the
+   first attempt as part of the certification, not as setup.
+
 ## B. Reading the documents
 
 1. Read **both** scenario documents **whole**, as an end user.

@@ -6,7 +6,7 @@
 # scenario-1 Step 6 said: "kubectl get kubernetesreleases -> pick one that is Ready AND Compatible
 # and paste its full name." A fresh Supervisor publishes dozens and marks only some usable, so the
 # reader is scanning two boolean columns by eye and retyping a string like
-# `v1.35.5+vmware.1-vkr.1` -- where a single wrong character is a cluster that never creates.
+# `v1.36.2+vmware.2-vkr.3` -- where a single wrong character is a cluster that never creates.
 #
 # The repo already knew how: nested-vsphere-lab's walk harness has resolved exactly this for every
 # row (`awk '$3=="True" && $4=="True"' | sort -V | tail -1`). The reader was the only one doing it by

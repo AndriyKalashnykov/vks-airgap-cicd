@@ -472,7 +472,7 @@ Still open, deliberately: WIRING it into an automated path. It needs a live KinD
 and mutates that cluster's ArgoCD, so where it belongs is a design question, not a one-liner. B471
 carries it.
 
-## 🔴 B489 — `vks-package.sh install` ADOPTS AND OVERWRITES an existing PackageInstall, and re-grants cluster-admin, with NO existence check 🔴 open
+## ✅ B489 — `vks-package.sh install` ADOPTS AND OVERWRITES an existing PackageInstall, and re-grants cluster-admin — FIXED 2026-08-26
 
 **Found by an adversary 2026-08-26 while reviewing an unrelated design; VERIFIED from source before
 filing.** `install` (`scripts/vks-package.sh` ~:184-207) does a bare `kubectl apply -f -` creating:
@@ -559,6 +559,42 @@ the tree being frozen mid-certification.
 ⚠️ Also flagged, not fixed: `test-vks-package-guard.sh:37`'s stub arm `*" get "*" packages "*)`
 **can never match** (the leading space) — harmless today only because that arm and the fallthrough
 both yield empty output, and actively misleading the moment the harness returns a real package list.
+
+### SHIPPED 2026-08-26 — and the implementation round REFUTED the first attempt
+
+`scripts/test-vks-package-adoption.sh`, **17 cases, 0 failed**. RED-proven in a
+`git worktree --detach HEAD`: the SAME test against the PRE-CHANGE script scored **9 failed / 3
+passed** — the old code silently `installed` in every refusal scenario and DID delete the foreign
+cluster-scoped binding. The stub-arm bug above is fixed too (6/6).
+
+**The implementation adversary refuted the first version**, and the three findings that mattered are
+the reason this row is worth reading:
+
+1. **CRITICAL — the PackageInstall was STILL deleted by name.** I had protected the SA, the
+   ClusterRoleBinding and the values Secret, and left the pkgi — the object that owns the entire
+   deployed mesh, i.e. the expensive one — deleted by name four lines under a comment quoting
+   *"NEVER by name alone"*. Measured: install REFUSED a foreign-owned pkgi and uninstall destroyed
+   it one command later. Pinned by R8, which asserts BOTH the refusal AND that no delete call was
+   issued at all.
+2. **HIGH — a REGRESSION I introduced.** `kubectl create secret generic` does not take the heredoc's
+   labels, so `<name>-pkg-values` was the one object we create UNLABELLED — after which the new
+   uninstall correctly refused to delete an object we had made ourselves, on **every** real istio
+   uninstall (`43-install-istio-package.sh` always passes `PKG_VALUES`), desensitising the operator
+   to the genuine warnings. Fixed by labelling at creation; pinned by C7.
+3. **HIGH — C6 was VACUOUS.** `! grep -q 'NOT deleting'` is a pure negative: an adversary mutated
+   the delete-when-ours away entirely and the suite stayed **12/12 green** while cluster-admin was
+   abandoned on every uninstall. It also passed on a script that FATAL'd at startup. Now the stub
+   logs every kubectl invocation and C6 asserts the delete was **ISSUED**.
+
+Also fixed from the same round: a failed owner read no longer reports `owned-by='<none>'` (asserting
+a value never obtained, then offering a `kubectl delete` the operator was just told they cannot run);
+uninstall's early exit no longer reads Forbidden as *"not installed — nothing to do"* with rc=0; an
+unparseable read now dies naming what it saw (R4); and the temp file no longer leaks.
+
+⚠️ **A green six-row matrix is NOT evidence for this change** — measured: `ISTIO_INSTALL_METHOD`
+appears in 0 of 37 docs and 0 Makefile lines, the default is `helm`, so the matrix cannot reach this
+code path. The decisive live run is a VKS guest with `ISTIO_INSTALL_METHOD=package`; everything here
+is stub-measured.
 
 ## 🔴 B486 — `ARGOCD_SERVER` is published as an **IP**, and `.env.example` says it must be a **NAME** 🔴 open
 
@@ -2766,3 +2802,363 @@ must be repointed before `make verify-ingress` means anything.
 `k8s/istio/vks-package-values.yaml`; `make verify-ingress` is green on a real lab; the 1.28.5-vs-1.30.3
 downgrade is an accepted decision rather than an unnoticed side effect; and `docs/vks-services/istio.md`
 records which path is the default with its measurement.
+
+## ✅ B490 — we LOGGED a ClusterClass the Supervisor silently overrides — FIXED 2026-08-26 (the "hardcoded default" framing was REFUTED)
+
+MEASURED on the live lab 2026-08-26, VKS `3.6.3-embedded+v1.35`:
+
+    scripts/25-vks-cluster-create.sh:39  export VKS_CLUSTERCLASS="${VKS_CLUSTERCLASS:-builtin-generic-v3.6.0}"
+    .env.example:1327                    # VKS_CLUSTERCLASS=builtin-generic-v3.6.0     <- COMMENTED, so the code default applies
+    scripts/24-vks-k8s-version.sh        picks the NEWEST Ready+Compatible TKr and publishes VKS_K8S_VERSION
+
+Two axes of the same cluster spec, two opposite policies. `spec.topology.version` self-updates with
+the platform; `spec.topology.classRef.name` does not — so the day VKS moves, every cluster this repo
+creates is pinned to the class of the release BEFORE the one that is installed, and nothing goes red.
+
+Live evidence that the axis really moves:
+
+    vmware-system-vks-public: builtin-generic-v3.1.0 … v3.6.0    <- tops out exactly at the installed VKS 3.6
+    guest cicd-gc0826070115:  classRef builtin-generic-v3.6.0, version v1.35.6+vmware.2
+    TKrs:                     v1.36.1 and v1.36.2 present but Ready=False Compatible=False
+
+The `+v1.35` suffix in `3.6.3-embedded+v1.35` is the max k8s minor the SERVICE supports — which is
+why both 1.36 TKrs are `Compatible=False` today, and it is the reason the class list stops at v3.6.0.
+
+**Why this is a re-certification blocker, not a nit.** Certifying the matrix on VKS 3.7 means guest
+clusters must actually land on 3.7's class. With the hardcode they land on v3.6.0, the run goes
+green, and the certification says "3.7" about a tree that exercised 3.6's ClusterClass.
+
+**Direction (NOT yet designed, NOT adversary-reviewed — do not implement from this paragraph).**
+The obvious move is a `24`-sibling that discovers the newest `builtin-generic-v*` in
+`VKS_CLUSTERCLASS_NAMESPACE` and publishes `VKS_CLUSTERCLASS`. It is NOT obviously right:
+
+- **newest-class and newest-TKr are two independent picks that must be COMPATIBLE with each other.**
+  Picking each independently is exactly the "version-locked release train" trap — nothing here
+  asserts the pair is supported, and a class/TKr mismatch is an admission rejection at create time.
+
+- a ClusterClass has no `Ready`/`Compatible` condition to gate on the way a TKr does, so the
+  discovery has no equivalent readiness signal — "newest by name" is a semver sort over a name, i.e.
+  the enumerated-list rot in a different costume.
+
+- **an EXISTING cluster is not migrated by changing the default.** Rebasing a live guest from
+  v3.6.0 to v3.7.0 is a separate, mutating operation with its own blast radius.
+
+### MEASURED 2026-08-26 after the lab reached VKS 3.7.1 — the platform DECLARES the pairing
+
+The pairing is not a guess and does not need an enumerated table: **each ClusterClass carries the
+Kubernetes range it supports as LABELS the platform sets.**
+
+    builtin-generic-v3.6.0   kubernetes.vmware.com/min-version-supported=v1.32   max-version-supported=v1.35
+    builtin-generic-v3.7.0   kubernetes.vmware.com/min-version-supported=v1.33   max-version-supported=v1.36
+
+So the two axes are **not** independent, and "pick the newest class" is the WRONG rule — it is right
+by luck today and wrong the moment a class ships that the chosen release predates (v3.7.0's floor is
+already v1.33, so a 1.32 cluster must NOT take it).
+
+**The rule that follows from the data:** `24-vks-k8s-version.sh` picks the Kubernetes version first
+(newest Ready+Compatible); the class is then the **newest class whose declared
+`[min,max]` range CONTAINS that version**. One direction, no circularity, and the constraint is read
+from the object rather than typed here — so it cannot rot as classes are added.
+
+Concretely, with the lab now on VKS 3.7.1 the newest Ready+Compatible release is a **1.36**, and
+v3.6.0's `max-version-supported=v1.35` **excludes it** — the hardcoded default is now actively
+wrong, not merely stale.
+
+⚠️ Two things still NOT established, and the second is the one that decides how loud the failure is:
+
+- whether admission REJECTS an out-of-range pair (loud, fine) or silently resolves something else
+  (quiet, and then a green matrix certifies the wrong class — the outcome this row exists to
+  prevent). `k8s/vks/cluster.yaml:21-28` already records that `spec.topology.version` is a PREFIX
+  selector that admission REWRITES, so a quiet resolution is not far-fetched.
+
+- the v3.7.0 variable SCHEMA differs from v3.6.0's (`k8s/vks/cluster.yaml:116-120` warns the
+  variable names are ClusterClass-version-specific; the lab doc records
+  *"bootstrapAddons variable cannot be set when KR version < 1.35.0"*). Changing the class without
+  re-checking the schema swaps one silent breakage for another.
+
+### 🔴 THE IDEA ROUND REFUTED ALL OF THIS — the platform already does the selection (MEASURED 2026-08-26)
+
+I was about to build a script to compute `VKS_CLUSTERCLASS`. **The Supervisor's mutating webhook
+already implements exactly that algorithm.** Six server-side dry-runs against non-existent cluster
+names (nothing created; `kubectl get cluster -A` unchanged before and after):
+
+    asked v3.6.0 + v1.36.2  (OUT of range)  -> rc=0, STORED builtin-generic-v3.7.0
+    asked v3.6.0 + v1.35.6  (IN range)      -> rc=0, STORED builtin-generic-v3.7.0
+    asked v3.5.0 + v1.33.13-fips (IN range) -> rc=0, STORED builtin-generic-v3.7.0
+    asked v3.1.0 + anything                 -> rc=1, REJECTED (schema: vsphereOptions undefined)
+    stderr: "Warning: ClusterClass builtin-generic-v3.6.0 updated to the newest compatible
+             ClusterClass builtin-generic-v3.7.0"
+
+The second row is decisive: **it bumps even when the asked class is already in range.** So
+`VKS_CLUSTERCLASS` is not *stale*, it is **inert** — a computed value admission would discard.
+
+Three further premises of mine were measured FALSE, and one of them would have CREATED a bug:
+
+- **The manifest sends FOUR variables, not six.** `bootstrapAddons` appears exactly once in this
+  repo — in this backlog, quoting the lab doc. The extra names I "saw" are what the webhook
+  DEFAULTS into the result. "Fixing" the manifest to carry `bootstrapAddons` would have ADDED the
+  variable the lab doc says cannot be set below KR 1.35.
+- **v3.6.0 and v3.7.0 have IDENTICAL variable schemas.** The schema cliff is at **v3.1.0** (it
+  carries `nodePoolVolumes` and lacks `vsphereOptions`/`volumes`) — the opposite end of the range
+  from where I aimed the risk.
+- **A `sort -V` range check matches NOTHING.** The labels are 2-component (`v1.36`), the chosen
+  version is 3-component with `+vmware.N-vkr.N`, so `sort -V` puts the chosen one on top and every
+  class is excluded → a fail-closed die on a healthy lab. (Naive string compare is separately
+  broken: `v1.9.1 > v1.35` lexically.)
+
+### The REAL defect, and it is live TODAY with no new script
+
+It resolves **silently**: rc=0, a `Warning:` on stderr, and `25-vks-cluster-create.sh:74` logs
+`class: builtin-generic-v3.6.0` for a cluster that will be **v3.7.0**. Nothing ever reads the stored
+value back — `grep -rn 'classRef' scripts/` returns zero hits outside the template. Worse, the one
+path built to catch things throws the evidence away: the pre-apply dry-run sends stderr to
+`${RENDERED}.err`, prints it only in the failure arm, and `rm -f`s it **unread** on success.
+
+**So a green six-row certification would record "v3.6.0" for clusters that are v3.7.0** — precisely
+the outcome this row exists to prevent, reachable with no code change at all.
+
+**Done-when (the corrected fix, ~5 lines in `25`, no new target and no new scenario-1 step):** after
+the apply, read `-o jsonpath='{.spec.topology.classRef.name}'`, log THAT, and warn when it differs
+from what was asked; and stop discarding the dry-run stderr on success. This is the same discipline
+`k8s/vks/cluster.yaml:21-28` already mandates for `spec.topology.version` (*"the ground truth is the
+LABEL on the created object, never spec.topology.version"*) — the class has the identical shape and
+was simply never covered. It is also correct under **both** behaviours: if a future VKS stops
+auto-bumping, a read-back is still right, whereas the discovery script would be right under only one.
+
+⚠️ Residual, named: the auto-bump is a measured fact about **VKS 3.7.1+v1.36 on one lab via one
+webhook** (`capi.mutating.tanzukubernetescluster.run.tanzu.vmware.com`). It is not a promise.
+Whether it also fires on UPDATE was deliberately NOT tested (that dry-run would target the live
+cluster). And `docs/scenario-1.md:579` tells the operator to `kubectl get clusterclass -A` and pick
+"the newest Ready one" — `-A` spans three namespaces whose tenant copies are the v3.1.0–v3.3.0 ones
+that would be REJECTED, and the answer is overridden anyway.
+
+### SHIPPED 2026-08-26 — the read-back, not the discovery script
+
+`scripts/25-vks-cluster-create.sh`: the request line now says **REQUESTED; admission may rewrite
+it**, the dry-run's stderr is PRINTED on a rc=0 run instead of `rm -f`'d unread, and the class is
+read back off the created object and reported — naming both values and which one to cite.
+
+`scripts/test-vks-class-readback.sh`, **7 cases, 0 failed**; against the unfixed script the same
+test scored **2 passed / 5 failed**, and its RED output is the defect verbatim:
+`msg=class:        builtin-generic-v3.6.0` logged as fact for a cluster that would be v3.7.0.
+
+One more finding from the round, applied: the ALREADY-EXISTS refusal also stops a re-apply letting
+the webhook bump a **live** cluster's class and roll its nodes — a rebase, not a create. Its comment
+now says so, and points at creating under a new name rather than at the lab repo (RULE ZERO-B).
+
+Still open from that round, deliberately NOT bundled: `docs/scenario-1.md:579` tells the operator to
+`kubectl get clusterclass -A` and pick "the newest Ready one" — `-A` spans three namespaces whose
+tenant copies are the v3.1.0–v3.3.0 ones that would be REJECTED, and the value is overridden anyway.
+That is a docs change with its own blast radius (it is a scenario-1 step) and wants its own review.
+
+## ✅ B491 — VKS 3.7.1 blocked by a stale SUPERVISOR Package — RESOLVED 2026-08-26; the lab is now on 3.7.1
+
+MEASURED on the live lab 2026-08-26. Recorded because the diagnosis is counter-intuitive: vCenter's
+catalogue and the Supervisor's Carvel Package are **two different stores**, and re-registering the
+YAML fixes only the first.
+
+### The failure
+
+`make -C nested-vsphere-lab vks-upgrade VKS_VERSION=3.7.1 CONFIRM=3.7.1` -> HTTP 500
+*"Supervisor Service (tkg.vsphere.vmware.com) version (3.7.1+v1.36) … is not compatible."*
+The vSphere UI wizard is more specific — Signature Verification **ERROR**:
+
+    Connectivity to image depot.kube-system.svc/vcf/supervisor-service-vks/ga/3.7.1/…:3.7.1 cannot be
+    verified: Get "https://depot.kube-system.svc/v2/": lookup depot.kube-system.svc … no such host
+
+### Root cause
+
+The operator first registered the **depot**-flavoured YAML, then replaced it with the **legacy** one.
+vCenter's catalogue took the swap; the Supervisor's Package did not:
+
+| store | what it holds |
+|---|---|
+| vCenter catalogue, version `3.7.1+v1.36` | the LEGACY yaml — 9108 b64 chars -> **6830 bytes**, image `projects.packages.broadcom.com/…` (byte-identical in size to the legacy file on disk) |
+| Supervisor `Package` in `vmware-system-supervisor-services` | still `depot.kube-system.svc/vcf/supervisor-service-vks/ga/3.7.1/…` |
+
+There is no `depot` Service in `kube-system` (VCF Operations / Software Depot is out of scope for
+this lab), so the Supervisor's lookup can never resolve.
+
+### Facts that CLOSE the obvious competing explanations
+
+- **It is not a version incompatibility.** Compatibility Check is a *Warning*, and its text is
+  *"…on a single-node control plane Supervisor can cause downtime…consider scaling out to a 3-node
+  control plane first."* Nothing about ClusterClass, TKr, or Supervisor k8s.
+
+- **`trust_verified: false` is NOT the blocker.** It is `false` on **BOTH** versions — including
+  `3.6.3-embedded+v1.35`, which is installed and running right now. A field that reads the same on
+  the broken and the working version discriminates nothing. (This was a real hypothesis until the
+  control was measured.)
+
+- **Supervisor egress to `projects.packages.broadcom.com` is PROVEN**, so the legacy image is
+  reachable: `harbor.tanzu.vmware.com 2.14.3+vmware.2-vks.1` and
+  `argocd-service.vsphere.vmware.com 1.1.0-25100889` both fetch from that host and both report
+  `Reconcile succeeded`. 79 Packages reference it.
+
+- **A `wcp` restart does NOT clear it** (already tried; `RunState: STARTED`, 500 unchanged).
+
+### Route facts (probed with a BOGUS version id, so nothing real could be touched)
+
+A semantic 404 that echoes the id means the route EXISTS; a bare `Not found.` means it does not.
+
+| route | verb | verdict |
+|---|---|---|
+| `…/supervisor-services/{svc}/versions/{ver}` | DELETE | **exists** |
+| `…/versions/{ver}?action=deactivate` / `?action=activate` | PATCH | **exists** |
+| `…/versions/{ver}?action=deactivate` | POST | absent |
+| `…/versions/{ver}?action=setDefault` | PATCH | absent |
+| `…/versions/{ver}` (update content in place) | PUT / PATCH | **absent** |
+
+So **there is no in-place content update** — delete + re-register is the only path — and a
+**per-VERSION** deactivate exists, so the whole service never has to be deactivated.
+
+⚠️ `scripts/deregister-supervisor-service.sh` is NOT usable here: it deactivates the whole service
+and loops DELETE over **every** version, which would take out the running 3.6.3 VKS.
+
+### The END-RESULT criterion (not a proxy)
+
+An HTTP 200 from the upgrade proves nothing. The observables are:
+
+    v1.36.2---vmware.2-vkr.3   Compatible=False -> True      (today both 1.36 TKrs are False/False)
+    builtin-generic-v3.7.0     absent -> present in vmware-system-vks-public   (today it stops at v3.6.0)
+
+`3.6.3-embedded+**v1.35**` — the `+v1.35` suffix IS the max k8s minor the service supports, which is
+exactly why both 1.36 TKrs are `Compatible=False` today.
+
+### RESOLVED — what actually fixed it, and the order that made it safe
+
+The first plan (delete the 3.7.1 version, re-register, upgrade) was **REFUTED by an adversary**: it
+would have run an irreversible delete to test a hypothesis that was testable read-only, and
+registration of a Core service over the public API is a measured HTTP 403 (UI only), so a failed
+re-register would have left the lab with no 3.7.1 and a manual-only restore.
+
+**The additive proof came first, and it destroyed nothing.** Registering **3.7.0** — a version that
+did not yet exist — built its Package from the uploaded bytes:
+
+    3.7.0+v1.36  created 17:05:30Z  projects.packages.broadcom.com/...   <- from the LEGACY file
+    3.7.1+v1.36  created 16:22:48Z  depot.kube-system.svc/...            <- fossil of the depot upload
+
+That single observation established **both** facts at once: registration DOES build the Package from
+content, and the 3.7.1 Package was therefore a leftover the legacy re-upload never replaced.
+Registering a version that ALREADY EXISTS does not rebuild its Package — which is why the operator's
+remove-and-re-upload had not worked.
+
+Then, in order:
+
+| step | result |
+|---|---|
+| `make vks-upgrade VKS_VERSION=3.7.0` | **CONFIGURED, 2m31s** — no HTTP 500 |
+| UI Manage Versions -> DEACTIVATE 3.7.1 -> DELETE | *"successfully deleted"*; `Supervisors: 0`, 3.7.0 untouched |
+| **checkpoint:** is the stale Package gone? | **yes** — the delete cascaded to the Supervisor |
+| UI Add New Version -> upload `-legacy-3.7.1` | Package REBUILT at 17:14:02Z with the broadcom image |
+| `make vks-upgrade VKS_VERSION=3.7.1` | **CONFIGURED, 2m02s**, `Reconcile succeeded` |
+
+End state, verified against the criteria above rather than the exit code:
+
+    svc-tkg.vsphere.vmware.com   3.7.1+v1.36   Reconcile succeeded
+    v1.36.1 / v1.36.2 TKr        Ready=True    Compatible=True     (were False/False)
+    builtin-generic-v3.7.0       present                            (list stopped at v3.6.0)
+    guest cicd-gc0826070115      Available=True AddonsReconciled=True, untouched
+
+Two predictions from the lab doc did NOT hold here and are recorded so they are not re-trusted:
+`Ready` stayed False was expected (the content library, not VKS, supplies it) — **both 1.36 TKrs
+went Ready=True anyway**; and the compatible catalogue was expected to SHRINK 12 -> 9 — this lab
+reads **13**.
+
+The recovery procedure is now documented in the lab repo at `docs/VKS-UPGRADE.md` §2
+(*"If you already registered the NON-legacy file…"*), because the doc warned against the non-legacy
+file but never said what to do once it had been registered.
+
+⚠️ **STILL OPEN and unchanged:** `registered_by_default` is TRUE only for `3.6.3-embedded+v1.35`, so
+**every lab cut still reverts VKS to 3.6.3** and the register+upgrade must be re-applied per cut.
+That belongs in `docs/matrix-standing-rules.md` §A — not yet written, because the re-certification
+run plan is not settled (see B490, which blocks it).
+
+### Consequence for the matrix (measured, and it changes the run plan)
+
+    3.6.3-embedded+v1.35   registered_by_default: TRUE     <- ships with the Supervisor image
+    3.7.1+v1.36            registered_by_default: FALSE    <- registered by hand
+
+The lab pins no VKS version (`nested-vsphere-lab` has no such key), and 3.6.3's Package image is
+`docker-registry.kube-system.svc:5000/tkg-svs/…` — the Supervisor's own embedded registry. So **every
+lab cut reverts VKS to 3.6.3**, and certifying the matrix "on 3.7" requires the register+upgrade to
+be re-applied after **each** cut (the six-row matrix cuts twice). That belongs in
+`docs/matrix-standing-rules.md` §A once the upgrade is proven to work.
+
+## 🟡 B492 — the two machine readers of `scenario-1.md` DISAGREE about `<details>`, so a harmless-looking docs edit turns a gate RED
+
+MEASURED 2026-08-26 while fixing B490's docs half. Recorded because the surprise is structural, not
+a one-off, and it will bite the next person editing a scenario document.
+
+| reader | honours `<details>`? | consequence |
+|---|---|---|
+| `scripts/walk-doc.sh` (the WALK) | **yes** — table-row env extraction is gated on `details is None` | rows inside an `<details>` block are invisible to the walk |
+| `scripts/walk-env-keys.sh` (the GATE) | **no** — it greps every `^\s*\|` table row for ALL-CAPS backtick tokens | every such row creates a `walk-env-manifest.tsv` obligation |
+
+So the gate's ground truth (*the document NAMES this key*) is strictly broader than the walker's
+(*the document INSTRUCTS this key*). A row in an optional `<details>` table therefore owes a manifest
+entry for a key the walk can never use — and writing `$VKS_CLUSTERCLASS_NAMESPACE` into that row
+turns `check-walk-env-manifest` RED (measured: `rc=1`, *"A scenario document names these, and
+docs/walk-env-manifest.tsv has no row for them"*). Writing the LITERAL namespace is green.
+
+Deleting such a row is also a TWO-file change: measured, removing it alone yields
+`ORPHAN 1 VKS_CLUSTERCLASS ... rc=1`, because `walk-env-manifest.tsv`'s EXEMPT reason does not match
+the escape phrases at `check-walk-env-manifest.sh:112`.
+
+Measured, for anyone who needs the numbers: the walk extracts **44 blocks / 23 env instructions**
+from `scenario-1.md`, and `VKS_CLUSTERCLASS` reaches `env`: **False** — as do `VKS_VM_CLASS`,
+`VKS_STORAGE_CLASS`, `VKS_NODE_COUNT` and `VKS_CONTROL_PLANE_COUNT`. So wording in that table cannot
+change what a certification exercises.
+
+### Second, smaller: `check-expect-literals`'s rationale is broader than its mechanism
+
+Its failure text says *"Fix one of the two copies — **the log line** in scripts/, or the Expect line
+in the document"*, and *"The next matrix row asserting it will go EXPECT UNMET and exit 1"*. Both
+overstate what it proves:
+
+- The literal `v1.36.2+vmware.2-vkr.3` is satisfied by a **COMMENT** (`24-vks-k8s-version.sh:9`), not
+  by any log line. The gate proves the string exists under `scripts/`, not that code can emit it.
+- The "will go EXPECT UNMET" claim assumes an extraction broader than `walk-doc.sh:452`, which
+  appends only lines **starting with** `**Expect`. Measured on the real file: 36 Expect lines, and
+  the version literal — which sits on the CONTINUATION line — is on **none** of them, so the walk
+  would not have asserted it at all.
+
+Both directions fail SAFE, so this is not a defect to rush. It is worth knowing before someone reads
+that message as a statement about runtime behaviour and goes looking for a log line that was never
+supposed to exist.
+
+**Done-when:** the message says what it measures (*"a copy under scripts/"*, not *"the log line"*),
+and either the gate's extraction matches `walk-doc.sh:452` or it states plainly that it is
+deliberately broader. Do NOT narrow it to match without checking what that stops catching.
+
+## 🟡 B493 — one test is ~half of `static-check`, and the cause is a hardcoded `sleep 15` that the repo's own rule forbids
+
+MEASURED 2026-08-26, three consecutive runs: `test-argocd-address-classify.sh` reports **201s** —
+against a whole-gate wall time of roughly 400s. It is the single largest item in the run, and the
+gate runs many times in a working session (five times today, so ~17 minutes in that one test).
+
+It is not doing 201s of work. `09-argocd-address.sh` polls with a **hardcoded** interval, twice:
+
+    145:      sleep 15; _w=$((_w + 15))
+    186:      sleep 15; _rw=$((_rw + 15))
+
+The *budget* is externalized (`ARGOCD_ADDRESS_WAIT_SECONDS`, default 900) but the *interval* is not,
+so a test can only reduce the NUMBER of polls, never the cost of one. Any case that must exercise a
+timeout still pays 15s per iteration.
+
+⚠️ This is also a straight violation of `rules/common/configuration.md`: *"Timeouts, intervals,
+retries"* are named explicitly as operator-tunable, and the only acceptable slots are an env-fallback
+default, a canonical declaration, or `.env.example`. A bare `sleep 15` is none of them — and the file
+right beside it already externalizes its budget, so the omission is inconsistent within one script.
+
+**Direction (NOT designed, NOT reviewed):** externalize the interval the same way the budget already
+is, and have the test pass a small one. Two things to settle first rather than assume:
+
+- whether any case depends on the 15s cadence for its *meaning* (a re-resolve race needs at least
+  one interval to elapse between two stubbed answers — shrinking it could make a real race untestable
+  rather than merely faster);
+- whether shrinking it in tests would hide a defect that only appears at the production cadence,
+  which is the usual objection to making a timing knob smaller for the benefit of the harness.
+
+Do NOT "fix" this by deleting cases. The 19 cases exist because the re-resolve behaviour they pin
+was written after a live incident where the LoadBalancer address moved under an unchanged Service.
