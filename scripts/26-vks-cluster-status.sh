@@ -85,7 +85,9 @@ report() {
   # It is handled HERE, not by adding a class to the shared classifier: NotFound is a per-RESOURCE
   # fact, the classifier is per-CONNECTION, and adding a class would force all seven of its
   # consumers to grow an arm for a concept most of them cannot encounter.
-  if [ "$_rep_rc" -ne 0 ] && grep -qE 'NotFound|not found' "$_rep_err" 2>/dev/null \
+  # kube_is_notfound requires the SERVER's own "Error from server (NotFound)" prefix, so the
+  # exclusion list below is no longer load-bearing -- kept as belt-and-braces only.
+  if [ "$_rep_rc" -ne 0 ] && kube_is_notfound "$_rep_err" "$VKS_CLUSTER_NAME" \
      && ! grep -qiE 'no such host|connection refused|certificate|Unauthorized|Forbidden|no such file' "$_rep_err" 2>/dev/null; then
     rm -f "$_rep_err"
     echo "  cluster ${VKS_NAMESPACE}/${VKS_CLUSTER_NAME}: DOES NOT EXIST — the Supervisor answered, and has no such Cluster."

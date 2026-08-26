@@ -552,3 +552,68 @@ kubectl get pkgr -A
 controller pattern… **However, manual lifecycle operations via the CLI remain a supported
 alternative for granular control.**"* And Broadcom's air-gapped 9.1 guide §1d: VKS Standard Packages
 are managed *"by using the VCF CLI **or Carvel custom resources**"*.
+## Air-gapped relocation: the images come from the Software Depot, NOT from your Harbor
+
+[src: github.com/vmware/vsphere-supervisor@main path=airgapped/air-gapped-vcf91.md] — Broadcom's own
+"VKS Deployment Guide for VCF 9.1.0 air-gapped environments". Grade: **primary-sourced (upstream
+repo), NOT lab-verified.**
+
+Istio is a **VKS Standard Package**, and the guide relocates the whole Standard-Packages bundle —
+not per-package — through the Supervisor's **Software Depot OCI registry**:
+
+| step | what happens |
+|---|---|
+| 1d | `oci_image_depot_migrator.py download -s .../vks-standard-packages/<ver>/...` onto a bastion |
+| 6b | `oci_image_depot_migrator.py upload` (or `copy`, from a DMZ) into Software Depot's OCI registry. `imgpkg copy` runs INSIDE that script |
+| 7a/7b | a Supervisor **management proxy**, then the Harbor service's package YAML has `spec.template.spec.fetch[0].imgpkgBundle.image` edited from `depot.kube-system.svc/...` to `depot-image-proxy.kube-system.svc.cluster.local/...` |
+| 8c | with Harbor up, a `default-addonrepository-<ver>-regional-harbor` appears at **`depot.kube-system.svc/vcf/vks-standard-packages/ga/...`** and add-ons install via `vcf addon install create` |
+
+### What this means for OUR air-gap check (scripts/43-install-istio-package.sh)
+
+1. **The bundle host on a correctly air-gapped 9.1 is `depot.kube-system.svc` (or
+   `depot-image-proxy.kube-system.svc.cluster.local`) — an IN-CLUSTER service, not our Harbor.**
+   Our "air-gap safe" arm accepts only `localhost:*`, `127.0.0.1:*` and `$HARBOR_URL*`, so those
+   hosts fall through to `*)` and the check **DIES on the officially documented configuration**,
+   telling the operator to request a relocation the guide already had them perform. That is a
+   false block, and it must be fixed before the check can be trusted on a real lab.
+2. **The relocation is a PLATFORM-TEAM action with a name.** The die message should cite
+   `oci_image_depot_migrator.py` and this guide, not a vague "ask them".
+3. **The documented install verb is `vcf addon install create`**, while we apply a `PackageInstall`
+   CR directly (B476). Both reach kapp-controller; what makes images resolve locally is the
+   step-7 repository wiring, which is a Supervisor prerequisite we neither perform nor verify.
+
+### SETTLED ON THE LAB 2026-08-25 — grade: **lab-verified**
+
+Measured on guest cluster `cicd-gc0825181952` (VKr `v1.34.9+vmware.2`), read-only:
+
+| fact | measurement |
+|---|---|
+| Carvel `Package` CRs live in **`vmware-system-tkg`** | all **84** packages; **zero** in any other namespace |
+| **`vmware-system-vks-public` does not exist on the guest** | `Error from server (NotFound): namespaces "vmware-system-vks-public" not found`. The guide's namespace is the `vcf addon` listing's view, NOT where the CRs live — our default is correct |
+| istio ships **one `Package` per VERSION** | six: `1.27.1 · 1.27.4 · 1.27.5 · 1.27.8 · 1.28.2 · 1.28.5`. So a `refName`-only filter matches six objects, and `tail -1` picks `1.28.5` whatever you pinned |
+| the bundle host on a **non-relocated** lab | `projects.packages.broadcom.com/vsphere/supervisor/vks-standard-packages/3.6.0-20260416/vks-standard-packages@sha256:...`, and the `PackageRepository` `vmware-system-tkg/standard-packages` points at the same registry (`Reconcile succeeded`) |
+
+**Still NOT-ESTABLISHED:** whether a *relocated* lab rewrites that field to `depot.kube-system.svc`.
+This lab is not relocated, so it cannot answer. Settle it on one that is:
+
+```sh
+kubectl get packages -A -o json | jq -r '.items[]|select(.spec.refName|test("istio"))
+  | "\(.metadata.namespace) \(.spec.version) \(.spec.template.spec.fetch[0].imgpkgBundle.image)"'
+kubectl get packagerepositories -A -o json | jq -r '.items[]|"\(.metadata.name) -> \(.spec.fetch.imgpkgBundle.image)"'
+```
+
+### Superseded: the namespace question (kept so it is not re-opened)
+
+`vcf addon available list` reports add-ons in **`vmware-system-vks-public`**; our probe and
+`vks-package.sh` use **`vmware-system-tkg`**, which is **lab-verified 2026-08-10** (a PackageInstall
+in another namespace failed `Package istio.kubernetes.vmware.com not found`). Those can both be
+true — the AddonRepository and the `Package` CRs need not share a namespace. Settle it in one
+command on a real lab:
+
+```sh
+kubectl get packages -A -o json \
+  | jq -r '[.items[]|select(.spec.refName=="istio.kubernetes.vmware.com")|.metadata.namespace]|unique'
+```
+
+If that returns anything other than `["vmware-system-tkg"]`, the namespaced probe in
+`43-install-istio-package.sh` is looking in the wrong place and silently finds nothing.

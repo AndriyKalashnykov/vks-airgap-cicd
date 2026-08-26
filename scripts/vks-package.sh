@@ -171,7 +171,7 @@ YAML
       [ -n "$d" ] && [ "$d" != "$last" ] && { log_info "  ${d}"; last="$d"; }
       case "$d" in
         *"Reconcile succeeded"*) log_info "${PACKAGE} ${VER} installed"; exit 0 ;;
-        *"not found"*) die "${d}
+        *Package*"not found"*) die "${d}
   That is the NAMESPACE trap: Carvel Packages are namespaced and live in ${PKG_NS}. If you changed
   VKS_PACKAGE_NAMESPACE, change it back." ;;
       esac

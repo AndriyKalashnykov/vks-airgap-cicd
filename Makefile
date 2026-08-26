@@ -1124,6 +1124,11 @@ lint: ## shellcheck scripts, yamllint manifests, hadolint Dockerfile
 validate: ## kustomize build + kubeconform manifests; kubectl dry-run Tekton YAML
 	@$(SCRIPTS)/validate.sh
 
+.PHONY: check-notfound-discriminator
+#check-notfound-discriminator: @ Fail if any script decides "absent" from a bare "not found" substring
+check-notfound-discriminator:
+	@$(SCRIPTS)/check-notfound-discriminator.sh
+
 .PHONY: check-image-alignment
 check-dockerfile-no-install: ## Fail if any app's RUNTIME Dockerfile stage installs anything (it is built in-cluster, with no egress)
 	@$(SCRIPTS)/check-dockerfile-no-install.sh
@@ -1649,7 +1654,7 @@ check-tekton-scripts: ## Every Tekton `script:` block: shebang is /bin/sh AND th
 
 .PHONY: static-check-fast
 #check-static-fast: @ The CHEAP half of static-check: the alignment/doc/env gates only (~9s, no toolchain)
-static-check-fast: check-jumpbox-shadow check-tekton-scripts check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-walk-env-manifest check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars check-dockerfile-no-install ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
+static-check-fast: check-notfound-discriminator check-jumpbox-shadow check-tekton-scripts check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-walk-env-manifest check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-pull-secret-alignment check-cluster-template-vars check-dockerfile-no-install ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
 
 # static-check is the UNION, so there is exactly ONE list. Defining the fast set separately and
 # leaving static-check with its own hand-typed copy is the enumerated-list rot this repo keeps

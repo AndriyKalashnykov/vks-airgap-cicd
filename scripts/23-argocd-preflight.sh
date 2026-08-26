@@ -294,7 +294,7 @@ while read -r app; do
   _ns_err="$(mktemp)"
   if kg get ns "$app" >/dev/null 2>"$_ns_err"; then
     log_info "  ${app}: exists"
-  elif grep -qiE 'notfound|not found' "$_ns_err"; then
+  elif kube_is_notfound "$_ns_err" "$app"; then
     log_info "  ${app}: absent (make gitops creates it, PSA-labelled)"
   else
     log_warn "  ${app}: could not check ($(classify_kube_failure "$_ns_err")) — NOT reporting it absent."
