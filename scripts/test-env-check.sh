@@ -109,4 +109,58 @@ write_env_vcf "" ; sed -i '/^VKS_CONTEXT_NAME=/d' "$TMP/.env"
 if run_check_vcf; then bad "vcf: env-check passed with VKS_CONTEXT_NAME missing"; else ok "vcf: env-check still fails on a genuinely required var"; fi
 grep -q VKS_CONTEXT_NAME "$TMP/out" || bad "vcf: failure did not name VKS_CONTEXT_NAME"
 
+# --- B473 finding 9: a LOOPBACK server sitting in the LAB slot -----------------------------------
+# PRESENCE is not identity. `./secrets/vks.kubeconfig` is the DOCUMENTED real-lab guest default, and a
+# KinD run of an older vintage wrote ITS kubeconfig there. MEASURED 2026-08-26 on this box: that file
+# held `server: https://127.0.0.1:42961`, the -s check above passed, and the first thing that noticed
+# was env-validate — a REACHABILITY gate that needs the network and is a separate step.
+#
+# ⚠️ The GREEN cases are the load-bearing ones. A check that only ever refuses is indistinguishable
+# from one that refuses everything, and this one MUST NOT fire on KinD, where loopback is CORRECT.
+kc_with() {  # $1 = server URL  -> writes a parseable kubeconfig with a current-context
+  cat > "$TMP/lb.kc" <<EOF
+apiVersion: v1
+kind: Config
+current-context: c
+clusters: [{name: cl, cluster: {server: $1, insecure-skip-tls-verify: true}}]
+contexts: [{name: c, context: {cluster: cl, user: u}}]
+users: [{name: u, user: {token: x}}]
+EOF
+}
+run_kc() {  # $1 = VKS_STATE_KIND value  [$2 = extra PATH prefix]
+  write_env "harbor.example.com"
+  env -u HARBOR_URL -u HARBOR_CA_FILE -u KUBECONFIG -u VKS_STATE_FILE \
+    ${2:+PATH="$2:$PATH"} REPO_ROOT="$TMP" KUBECONFIG="$TMP/lb.kc" VKS_STATE_KIND="$1" \
+    bash "$ENVSH" check >"$TMP/out" 2>&1
+}
+
+if ! command -v kubectl >/dev/null 2>&1; then
+  echo "skip  B473-9 loopback cases (kubectl absent — the check fails open by design)"
+else
+  # RED — loopback in the LAB slot must be refused, and must NAME the address and the file.
+  kc_with 'https://127.0.0.1:42961'
+  if run_kc 0; then bad "B473-9 RED: env-check PASSED on a LOOPBACK kubeconfig in the lab slot"
+  else ok "B473-9 RED: loopback in the lab slot refused"; fi
+  grep -q '127.0.0.1:42961' "$TMP/out" || bad "B473-9 RED: the refusal did not name the address"
+  grep -q 'lb.kc'           "$TMP/out" || bad "B473-9 RED: the refusal did not name the file"
+
+  # GREEN — the SAME shape with a routable server must pass. Without this the check could be
+  # refusing every kubeconfig and the RED above would not notice.
+  kc_with 'https://192.168.101.132:6443'
+  if run_kc 0; then ok "B473-9 GREEN: a routable server passes"
+  else bad "B473-9 GREEN: a routable kubeconfig was REFUSED"; cat "$TMP/out" >&2; fi
+
+  # GREEN — loopback is CORRECT for KinD. VKS_STATE_KIND is the discriminator, not the address.
+  kc_with 'https://127.0.0.1:42961'
+  if run_kc 1; then ok "B473-9 GREEN: loopback accepted when VKS_STATE_KIND=1 (KinD)"
+  else bad "B473-9 GREEN: the check fired on KinD, where loopback is correct"; cat "$TMP/out" >&2; fi
+
+  # GREEN — FAIL OPEN when the config cannot be read. A presence gate that starts refusing what it
+  # cannot parse is worse than the defect it was added for.
+  mkdir -p "$TMP/stub"; printf '#!/usr/bin/env bash\nexit 1\n' > "$TMP/stub/kubectl"; chmod +x "$TMP/stub/kubectl"
+  kc_with 'https://127.0.0.1:42961'
+  if run_kc 0 "$TMP/stub"; then ok "B473-9 GREEN: unreadable config skips the check (fails OPEN)"
+  else bad "B473-9: a kubectl that cannot read the config turned into a REFUSAL"; cat "$TMP/out" >&2; fi
+fi
+
 if [ "$fail" -eq 0 ]; then echo "test-env-check: OK"; else echo "test-env-check: FAILED"; exit 1; fi

@@ -252,7 +252,7 @@ an explicit `--force`/uninstall step, not a hard refusal), and whether the helm-
 for `INGRESS_CONTROLLER=istio-existing`, where a platform-owned mesh may legitimately be
 kapp-managed and we must attach without installing anything.
 
-## 🔴 B473 — NOTHING clears `secrets/` when a lab is destroyed or re-cut; stale CAs and PRIVATE KEYS accrete 🔴 open
+## 🟡 B473 — the PRUNE is REFUTED (this repo shipped it once and it destroyed an operator's kubeconfig); the real gap was ONE offline check, now FIXED 🔴 open
 
 **MEASURED 2026-08-25, on a real re-cut.** After `make destroy` + `make lab`, `secrets/` still held
 **14 files and 2 directories** from labs that no longer exist:
@@ -307,6 +307,80 @@ today — what else?); is it opt-in or wired into an existing flow; and how does
 
 **Workaround until then:** `tar czf ~/secrets-backup-$(date -u +%Y%m%dT%H%M%SZ).tar.gz secrets/` then
 remove the lab-derived files by hand. That is what was done on 2026-08-25; the backup was 68K.
+
+### 🔴 REFUTED 2026-08-26 by an idea round — do NOT build a prune
+
+**This exact design has already shipped in this repo, and it already caused the harm.**
+`scripts/kind-down.sh:121-128`, verbatim: *"It used to delete any kubeconfig living under ./secrets —
+and the comment claimed that protected a real-VKS one. It did the opposite: the DOCUMENTED real-lab
+default IS `./secrets/vks.kubeconfig`. So `make kind-down` — which BOTH real-lab runbooks tell you to
+run at Step 0 — **DELETED THE OPERATOR'S LAB KUBECONFIG**."* A prune re-widens the
+"looks stale ⇒ delete" predicate that incident narrowed, over the same directory.
+
+And the repo has already ratified the opposite position at the exact moment a prune would run —
+`98-uninstall-all.sh:294`: *"NOT removing secrets/ automatically — it may hold a credential this repo
+did not create"* / *"delete only what you can prove you created"*.
+
+Four more findings, each fatal on its own:
+
+- **The KEEP and DELETE sets are INVERTED.** `secrets/.env.make` — the one file this row said to KEEP
+  — is regenerated at make PARSE time on every invocation (`Makefile:127-131`), i.e. the safest thing
+  in the directory to delete. `secrets/harbor-tls/ca.key` — implicitly in the delete set — is
+  **deliberately stable** (`lib/tls.sh:32-37` re-mints the leaf but REUSES the CA), so deleting it
+  silently **rotates a CA** that node containerd `certs.d`, an `SSL_CERT_FILE` bundle, or the
+  in-cluster `harbor-ca` ConfigMap may still be pinned to. The prune would cause the regression.
+- **The discriminator is ANTI-correlated with age**, measured with a paired control:
+  `supervisor-ca.crt` (notBefore Aug 23, 3 days) verifies `return code: 0`; `harbor-ca.crt`
+  (notBefore Aug 26, ~5 h) fails `error 20`. The NEWER file is the dead one. This reproduces
+  `29-ca-status.sh`'s own 2026-08-16 measurement — two operating points ten days apart, same
+  direction — so no mtime/age/"belongs to the previous cut" heuristic can work.
+- **12 of 13 artifacts carry NO provenance** (only `supervisor-ca.crt.fetched` does), so the refusal
+  this design most needs — *never delete what the operator supplied* — has no offline discriminator
+  for 92% of the directory. A prune honouring it would decline to touch almost everything; one that
+  did not would be guessing. In Scenario 2 the guessed-wrong case is a platform-issued credential a
+  **tenant cannot re-obtain** (RULE ZERO-A0: no self-service recovery).
+- **The pruner and the hazard are largely DISJOINT sets.** The staleness that actually bit today
+  happened while the lab was ALIVE: `harbor-ca.crt`'s subject is byte-identical to the live one,
+  different key, five hours apart. A "prune what belongs to a destroyed lab" pass would have removed
+  three harmless orphans and LEFT the one anchor that was actually broken.
+
+Also corrected: this row claimed a stale guest kubeconfig *"fails on credentials, which reads as an
+auth problem"*. **Measured, it is `x509: certificate signed by unknown authority`** — a TLS/STALE_CA
+failure, which `classify_kube_failure` (`lib/os.sh:2153-2169`) already returns *distinctly* from
+`UNAUTHORIZED`. That is better news than the row assumed, and it is why the detector below can be
+purely offline.
+
+### ✅ WHAT SHIPPED INSTEAD — one offline check, deleting nothing
+
+Three of the four cases already have a correct detector (`ca_status_report`, wired into
+`make preflight` via `24-lab-preflight.sh:246`; `env-validate`'s `STALE_CA` arm; the `.fetched`
+digest marker). The genuine gap was narrower than this row implied, and needs no network:
+
+**A LOOPBACK server in the LAB slot.** `./secrets/vks.kubeconfig` is the documented real-lab guest
+default, and an older KinD run wrote ITS kubeconfig there — `server: https://127.0.0.1:42961`.
+`env-check`'s `-s` test passed happily; the first thing that noticed was `env-validate`, a
+REACHABILITY gate that needs the network and is a separate step. A loopback address is structurally
+impossible for a VKS guest cluster, so it is decidable offline, and `VKS_STATE_KIND` (already written
+by `state_claim_kind`) distinguishes the KinD flow, where loopback is CORRECT.
+
+Shipped in `02-env.sh`'s presence gate, with four cases in `test-env-check.sh` — and the GREEN ones
+are the load-bearing half, since a check that only ever refuses is indistinguishable from one that
+refuses everything:
+
+    RED    loopback + not-KinD          -> refused, naming the address AND the file
+    GREEN  routable server              -> passes
+    GREEN  loopback + VKS_STATE_KIND=1  -> passes (KinD; loopback is correct there)
+    GREEN  kubectl cannot read it       -> SKIPS (fails OPEN, deliberately)
+
+RED-proven in a detached worktree at HEAD: against the pre-change script the RED case **PASSES the
+loopback through** (the defect) while all three GREENs still pass — so the controls are not vacuous
+and only the intended assertion flips.
+
+**Residual, named:** `env-check` stays existence-only for everything else, and that is deliberate and
+documented (*"env-check is the STRICTER PRESENCE gate … env-validate is the REACHABILITY gate … so it
+can be run standalone"*). Making it reach the cluster is refused by its own contract. And if key
+destruction is ever genuinely wanted, this repo's precedent is **`shred`** (`04-install-harbor-service.sh:9`),
+not `rm` — shipping `rm` while calling it key destruction would be its own false-green.
 
 ## 🔵 B472 — OPTIONAL: derive the tenant's required permission set EMPIRICALLY, not from the code 🔵 optional
 
