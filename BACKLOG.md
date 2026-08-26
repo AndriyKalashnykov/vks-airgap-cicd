@@ -402,6 +402,26 @@ carries it.
 
 ## 🔴 B484 — the Forbidden-reads-as-absent sweep: a FAIL-OPEN air-gap check outranks the wrong-message bug 🔴 open
 
+> **2026-08-25 — the sweep half is DONE; #1 grew and is now the whole row.** The bare-substring
+> discriminator is fixed at all five sites (`48` ×2, `23`, `26`, `98`, `08`) behind one shared
+> `kube_is_notfound` in `lib/os.sh`, RED-proven by three new cases in
+> `test-istio-preflight-absence.sh` and guarded by `check-notfound-discriminator.sh`. What remains
+> is **#1**, and an idea round plus Broadcom's own air-gap guide grew it from "add an else" to five
+> defects:
+>
+> | | |
+> |---|---|
+> | **F1 CRITICAL** | **LAB-VERIFIED 2026-08-25** on `cicd-gc0825181952`: the `refName` filter matches **one Package per VERSION** — six of them (`1.27.1 · 1.27.4 · 1.27.5 · 1.27.8 · 1.28.2 · 1.28.5`) and `tail -1` picks by API order — so it can die over a bundle that will never be installed, or clear one while a DIFFERENT version installs from Broadcom. Resolve the version first, then filter on `refName AND version`, and assert exactly one match. |
+> | **F2 HIGH** | the `case` pattern is not a host comparison — measured **4/12 wrong in BOTH directions** (`https://harbor.x` false-blocks; `harbor.x.evil.io` false-passes). `lib/tls.sh` already ships `_ca_hostport()` for exactly this; lift it rather than write a third implementation. |
+> | **F3 HIGH** | `classify_kube_failure` has no arm for "this cluster has no Carvel packaging API", so that operator would get "could not determine where the images come from" in place of today's correct "no such Package". |
+> | ~~F2 namespace~~ | **REFUTED ON THE LAB 2026-08-25.** All **84** Packages are in `vmware-system-tkg` and `vmware-system-vks-public` **does not exist on the guest** — our default is correct. The fail-OPEN half of F2 (empty ⇒ skip) still stands. |
+> | **F4 HIGH** | the namespaced fallback I proposed is **harmful** — `Package` is namespaced, so `-A` is strictly harder to satisfy, and the fallback's only outcome is a misleading error. Probe with the installer's own `-A` and delete it. |
+> | **F6 HIGH — sibling nobody had looked at** | `96-verify-gateway-image.sh` has **zero** references to `ISTIO_INSTALL_METHOD` (`grep -c` = 0) and branches on `INGRESS_CONTROLLER` alone, so in `package` mode it demands `$HARBOR_URL/*` provenance for images that legitimately come from the addon repository — it **fails a CORRECT install**. Make it SKIP loudly, as it already does for `istio-existing`. |
+> | **F5 — false-BLOCK on the DOCUMENTED air-gap config** (9.1-primary-doc, NOT lab-verified: this lab is not relocated, so its bundles read `projects.packages.broadcom.com` and the `depot*` case cannot be confirmed here) | Broadcom's [air-gapped VCF 9.1 guide](https://github.com/vmware/vsphere-supervisor/blob/main/airgapped/air-gapped-vcf91.md) relocates the Standard-Packages bundle into the **Software Depot OCI registry** via `oci_image_depot_migrator.py`, after which the istio package resolves from **`depot.kube-system.svc/vcf/vks-standard-packages/ga/...`** (or `depot-image-proxy.kube-system.svc.cluster.local`). Our safe-list is only `localhost:*\|127.0.0.1:*\|$HARBOR_URL*`, so a CORRECTLY air-gapped lab **dies** and is told to request a relocation it already did. Details + the open namespace question: `docs/vks-services/istio.md`. |
+>
+> Note `ISTIO_INSTALL_METHOD` defaults to **`helm`** (`44-install-ingress.sh:45`), so #1 sits on an
+> **opt-in** path — it is not a blocker for the default walk.
+
 Found by the implementation round on B471/F-c4 (#1016), which swept **72 stderr-discarding kubectl
 sites across 145 non-test scripts** and flagged 24. Two rank ABOVE the two I fixed, because a wrong
 MESSAGE costs an operator time while a fail-OPEN costs them the guarantee.

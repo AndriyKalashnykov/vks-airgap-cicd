@@ -2056,6 +2056,45 @@ vks_package_namespace() {
   esac
 }
 
+# kube_is_notfound <errfile> [resource-token]
+#
+# TRUE only when the API SERVER said this specific thing does not exist.
+#
+# WHY THIS EXISTS AND WHY IT IS NOT A SUBSTRING TEST: every caller that used to decide
+# "absent" by grepping stderr for `not ?found` also matched kubectl's CLIENT-SIDE config
+# error --
+#     Error in configuration: context was not found for specified context: <name>
+#
+# ⚠️ THE PREFIX ALONE IS NOT ENOUGH, and an earlier comment here claimed it was. MEASURED:
+# an HTTP 404 body DOES carry the server prefix --
+#     Error from server (NotFound): the server could not find the requested resource
+# -- so ONLY THE TOKEN separates 'this resource is absent' from 'the endpoint 404'd'. The
+# token is therefore MANDATORY; a tokenless call would be exactly the bug this exists to stop.
+# -- which is a dangling `current-context`, the commonest kubeconfig fault, and says NOTHING
+# about the resource. MEASURED with real kubectl 1.36.4: the substring test reports that
+# input as ABSENT; this one does not. A second instance is any endpoint answering HTTP 404
+# ("the server could not find the requested resource"), which also contains the phrase.
+#
+# The consequence at 48-istio-preflight.sh was not cosmetic: "absent" there emits the string
+# walk-doc.sh greps to choose the INSTALL branch, so a tenant with a stale kubeconfig was
+# steered into helm-installing a SECOND mesh over the platform team's.
+#
+# The token argument is what makes it specific: pass the resource the caller asked for, so a
+# NotFound about something ELSE in the same buffer cannot answer for it.
+kube_is_notfound() {
+  local errfile="${1:-/dev/null}" token="${2:-}"
+  [ -r "$errfile" ] || return 1
+  # The server's own prefix. Client-side config errors and HTTP 404 bodies do not carry it.
+  [ -n "$token" ] || return 1        # MANDATORY -- see above
+  # SAME LINE. The two facts must belong to ONE error: kubectl batches (a multi-name get emits
+  # several `Error from server (...)` lines into one stderr), so an independent prefix-grep and
+  # token-grep can pair a NotFound about A with the token of B.
+  # HERESTRING, not a pipe: `producer | grep -q` lets grep exit early and SIGPIPE the producer,
+  # which under `set -o pipefail` reports a FOUND pattern as ABSENT. bash spools a herestring to a
+  # temp file, so there is nothing to SIGPIPE. (check-grep-q-pipe caught this exact line.)
+  grep -qF -- "$token" <<< "$(grep -F 'Error from server (NotFound)' "$errfile" 2>/dev/null)"
+}
+
 classify_kube_failure() {
   local errfile="${1:-/dev/null}" e=""
   [ -r "$errfile" ] && e="$(cat "$errfile" 2>/dev/null || true)"

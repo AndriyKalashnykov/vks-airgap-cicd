@@ -95,17 +95,20 @@ require_cmd kubectl jq   # the CR path needs both; vc_require only covers the RE
 _crd_err="$(mktemp)"; trap 'rm -f "$_crd_err"; vc_logout' EXIT
 _end=$((SECONDS + ${ARGOCD_CRD_WAIT_SECONDS:-600}))
 until kubectl --kubeconfig "$SUP" get crd argocds.argocd-service.vsphere.vmware.com >/dev/null 2>"$_crd_err"; do
-  case "$(cat "$_crd_err" 2>/dev/null || true)" in
-    *NotFound*|*'not found'*) : ;;   # the only reason to keep waiting
-    *) _cls="$(classify_kube_failure "$_crd_err" 2>/dev/null || true)"
+  # The SERVER's own NotFound about THIS crd is the only reason to keep waiting. A bare
+  # "not found" substring also matches kubectl's client-side "context was not found for
+  # specified context", so a broken kubeconfig used to spin out the whole timeout instead
+  # of failing immediately with the right cause.
+  if ! kube_is_notfound "$_crd_err" argocds.argocd-service.vsphere.vmware.com; then
+       _cls="$(classify_kube_failure "$_crd_err" 2>/dev/null || true)"
        log_error "cannot reach the Supervisor to watch for the ArgoCD CRD (${_cls:-unclassified}):"
        sed 's/^/    /' "$_crd_err" >&2
        die "the SERVICE INSTALL SUCCEEDED - this is your kubeconfig, not the install.
   '${SUP}' does not work against this cluster. A REBUILT cluster mints a new CA while the
   address stays the same, so a stale kubeconfig looks valid and is not. Re-issue it, then re-run
   this (it is idempotent and skips straight to the instance CR):
-      make vks-login" ;;
-  esac
+      make vks-login"
+  fi
   [ "$SECONDS" -lt "$_end" ] || die "the ArgoCD CRD never appeared within ${ARGOCD_CRD_WAIT_SECONDS:-600}s, though the cluster IS reachable - the service install did not finish publishing it"
   sleep 10
 done

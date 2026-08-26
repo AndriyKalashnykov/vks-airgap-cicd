@@ -18,8 +18,8 @@ Locally, `make ci` runs `static-check` + `docs-lint` + `diagrams-check`, and `st
 `sec` (gitleaks, trivy-fs, trivy-config) plus `static-check-fast`.
 
 ⚠️ **A PR does NOT run everything `make ci` does.** `static-check` and `static-check-fast` are
-**separate CI jobs**, so a change can pass the composite locally and still redden the fast half —
-when `check-ns-chokepoint` failed as a PR job while the full `static-check`
+**separate CI jobs**, so a change can pass the composite locally and still redden the fast half.
+That is not hypothetical: `check-ns-chokepoint` has failed as a PR job while the full `static-check`
 passed. Run `env -u GOROOT make static-check` locally before relying on a green.
 
 ---

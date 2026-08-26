@@ -27,11 +27,17 @@ The **ingress hostname is derived, not configured**: an app is reachable at
 per-app `<APP>_HOST` variable — there used to be, and it meant a new row silently died until you
 *also* edited `.env.example`, so "one row" was a lie the gates could not see.
 
-## What differs per LANGUAGE (measured — it is not two things)
+## What differs per LANGUAGE
 
-Several things differ per language, not two: false: `scripts/lib/apps.sh` carries **ten** per-language `case` branches — `app_test_task`,
-`app_set_message`, `app_builder_image`, `app_runtime_image`, `app_health_path`, `app_toolchain`,
-`app_build_args`, `app_builder_base`, `app_builder_arg` — plus three more outside it
+More than you would guess, and the exact set moves — so **derive it, do not trust a list**:
+
+```sh
+awk '/^[a-z_][a-z0-9_]*\(\)/{fn=$1; sub(/\(\).*/,"",fn)}
+     /case[[:space:]]+"\$\(app_lang/ || /case[[:space:]]+"\$\{?_?lang\}?"/ {if(fn)print fn}' \
+  scripts/lib/apps.sh | sort -u
+```
+
+Each function it prints has one branch per language, plus three more outside `apps.sh`
 (`app-run.sh`, `app-test.sh`, `trivy-fs.sh`). And a further set is not a `case` at all but a **file
 or a config key**: the Tekton task manifest (`k8s/tekton/tasks/<lang>-test.yaml`), the toolchain pin
 in `.mise.toml`, two lines in `images/images.txt` (builder base + runtime base), and two tag vars in

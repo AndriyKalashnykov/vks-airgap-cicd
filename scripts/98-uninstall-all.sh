@@ -95,7 +95,15 @@ read_state() {
 # was measured to report a killed process and a real network fault as a completed deletion.
 absent_or_unknown() {
   case "$_RS_ERR" in
-    *NotFound*|*"not found"*) note "- ${1}: absent" ;;
+    # An HTTP 404 carries the SERVER prefix too and names no resource -- point this at a proxy
+    # or a wrong port and EVERY resource would print "absent", i.e. reported cleaned up having
+    # never been read. That arm must come FIRST.
+    *"the server could not find the requested resource"*)
+       note "! ${1}: CANNOT READ (the endpoint 404'd — this is NOT evidence it is absent)"
+       left "${1} (could not be checked: endpoint 404)" ;;
+    # The SERVER's prefix, not a bare substring: "context was not found for specified
+    # context" is a client-side config fault and says nothing about ${1}.
+    *"Error from server (NotFound)"*) note "- ${1}: absent" ;;
     *) note "! ${1}: CANNOT READ (rc=${_RS_RC})${_RS_ERR:+ — ${_RS_ERR}}"
        left "${1} (could not be checked${_RS_ERR:+: ${_RS_ERR}})" ;;
   esac
