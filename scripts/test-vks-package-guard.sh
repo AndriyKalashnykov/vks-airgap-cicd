@@ -36,7 +36,14 @@ case " \$* " in
       [ "\$mode" = supervisor ] && { printf 'virtualmachineclasses  vmclass  vmoperator.vmware.com/v1alpha5\n'; exit 0; }
       exit 0 ;;   # a guest prints NOTHING (header suppressed by --no-headers) and still EXITS 0
   *" config "*)         printf 'stub-context\n'; exit 0 ;;
-  *" get "*" packages "*) printf '{"items":[]}\n'; exit 0 ;;
+  # WARNING: this arm used to be written with " get " and " packages " as two separate
+  # space-padded globs, which under a case over the space-padded argv can NEVER match -- the
+  # first glob consumes the space BEFORE packages, leaving nothing for the second to match.
+  # Harmless only because it and the fallthrough both produced empty output, and actively
+  # misleading the moment the harness needs a real package list. Match the pair as ONE token.
+  # (B489.) And keep this comment free of backticks: the heredoc is UNQUOTED, so a backtick
+  # here is command substitution -- writing one produced 8 lines of shell errors mid-test.
+  *"get packages"*) printf '{"items":[]}\n'; exit 0 ;;
   *) exit 0 ;;
 esac
 EOF
