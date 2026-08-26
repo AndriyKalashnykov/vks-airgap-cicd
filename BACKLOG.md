@@ -514,6 +514,7 @@ different gate. Fixed. **No gate covers doc-vs-code default agreement** — that
 and needs its own idea round.
 
 **STILL OPEN, carried forward:**
+
 - **F5 (live)** — still artefact-verified only; we cannot reproduce a relocated depot.
 - **`vks-package.sh`'s `kubectl apply -f -` discards stderr**, so the *second* half of the no-Carvel
   path is unclassifiable no matter what the probe says. Named, not fixed.
@@ -522,7 +523,6 @@ and needs its own idea round.
   code that manufactures the appearance of handling. **One read-only command settles it on a live
   3.7.1 guest:** `kubectl get crd -o name | grep -c addons.kubernetes.vmware.com`. Could not be run
   this session — the guest cluster was deleted to reset the matrix cell.
-
 
 > **2026-08-25 — the sweep half is DONE; #1 grew and is now the whole row.** The bare-substring
 > discriminator is fixed at all five sites (`48` ×2, `23`, `26`, `98`, `08`) behind one shared
