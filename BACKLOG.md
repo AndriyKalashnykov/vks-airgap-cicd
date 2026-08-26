@@ -411,13 +411,19 @@ carries it.
 >
 > | | |
 > |---|---|
-> | **F1 CRITICAL** | **LAB-VERIFIED 2026-08-25** on `cicd-gc0825181952`: the `refName` filter matches **one Package per VERSION** — six of them (`1.27.1 · 1.27.4 · 1.27.5 · 1.27.8 · 1.28.2 · 1.28.5`) and `tail -1` picks by API order — so it can die over a bundle that will never be installed, or clear one while a DIFFERENT version installs from Broadcom. Resolve the version first, then filter on `refName AND version`, and assert exactly one match. |
+> | **F1 CRITICAL** | **RE-MEASURED ON 3.7.1 (2026-08-26): now EIGHT Packages, not six** (`+1.28.9`, `+1.30.2`), and a SECOND repository (`vks-addons-3.7.0-20260723`) shares the namespace — so `tail -1` is more arbitrary than before. The prescribed fix holds: **0** duplicate `refName`+`version` pairs across both repos. **LAB-VERIFIED 2026-08-25** on `cicd-gc0825181952`: the `refName` filter matches **one Package per VERSION** — six of them (`1.27.1 · 1.27.4 · 1.27.5 · 1.27.8 · 1.28.2 · 1.28.5`) and `tail -1` picks by API order — so it can die over a bundle that will never be installed, or clear one while a DIFFERENT version installs from Broadcom. Resolve the version first, then filter on `refName AND version`, and assert exactly one match. |
 > | **F2 HIGH** | the `case` pattern is not a host comparison — measured **4/12 wrong in BOTH directions** (`https://harbor.x` false-blocks; `harbor.x.evil.io` false-passes). `lib/tls.sh` already ships `_ca_hostport()` for exactly this; lift it rather than write a third implementation. |
 > | **F3 HIGH** | `classify_kube_failure` has no arm for "this cluster has no Carvel packaging API", so that operator would get "could not determine where the images come from" in place of today's correct "no such Package". |
 > | ~~F2 namespace~~ | **REFUTED ON THE LAB 2026-08-25.** All **84** Packages are in `vmware-system-tkg` and `vmware-system-vks-public` **does not exist on the guest** — our default is correct. The fail-OPEN half of F2 (empty ⇒ skip) still stands. |
 > | **F4 HIGH** | the namespaced fallback I proposed is **harmful** — `Package` is namespaced, so `-A` is strictly harder to satisfy, and the fallback's only outcome is a misleading error. Probe with the installer's own `-A` and delete it. |
 > | **F6 HIGH — sibling nobody had looked at** | `96-verify-gateway-image.sh` has **zero** references to `ISTIO_INSTALL_METHOD` (`grep -c` = 0) and branches on `INGRESS_CONTROLLER` alone, so in `package` mode it demands `$HARBOR_URL/*` provenance for images that legitimately come from the addon repository — it **fails a CORRECT install**. Make it SKIP loudly, as it already does for `istio-existing`. |
 > | **F5 — false-BLOCK on the DOCUMENTED air-gap config** (9.1-primary-doc, NOT lab-verified: this lab is not relocated, so its bundles read `projects.packages.broadcom.com` and the `depot*` case cannot be confirmed here) | Broadcom's [air-gapped VCF 9.1 guide](https://github.com/vmware/vsphere-supervisor/blob/main/airgapped/air-gapped-vcf91.md) relocates the Standard-Packages bundle into the **Software Depot OCI registry** via `oci_image_depot_migrator.py`, after which the istio package resolves from **`depot.kube-system.svc/vcf/vks-standard-packages/ga/...`** (or `depot-image-proxy.kube-system.svc.cluster.local`). Our safe-list is only `localhost:*\|127.0.0.1:*\|$HARBOR_URL*`, so a CORRECTLY air-gapped lab **dies** and is told to request a relocation it already did. Details + the open namespace question: `docs/vks-services/istio.md`. |
+>
+> **The VKS-3.7 collision risk is REFUTED, lab-verified 2026-08-26.** The lab was upgraded to
+> `3.7.1+v1.36` and the guest rebased to `builtin-generic-v3.7.0` / k8s `v1.35.6`: the guest still
+> carries **0 addon CRDs** — the addon framework is Supervisor-side only — so nothing competes with
+> our `PackageInstall`. The tripwire stays (it costs one `kubectl get crd`) and is now proven silent
+> on the version it guards. Details: `docs/vks-services/istio.md`.
 >
 > Note `ISTIO_INSTALL_METHOD` defaults to **`helm`** (`44-install-ingress.sh:45`), so #1 sits on an
 > **opt-in** path — it is not a blocker for the default walk.
