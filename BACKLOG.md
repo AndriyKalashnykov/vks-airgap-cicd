@@ -3159,6 +3159,58 @@ lab cut reverts VKS to 3.6.3**, and certifying the matrix "on 3.7" requires the 
 be re-applied after **each** cut (the six-row matrix cuts twice). That belongs in
 `docs/matrix-standing-rules.md` §A once the upgrade is proven to work.
 
+## 🟡 B494 — a BACKLOG ID is a magic word in `check-walk-env-manifest`'s escape list; 5 rows hang on the literal `B471`
+
+MEASURED 2026-08-26 (an adversary round on B492 found it; re-measured independently here).
+
+`check-walk-env-manifest.sh:110` lets an ORPHAN row escape when its free-text `reason` matches:
+
+    *"never names it"* | *"no document names"* | *B471*
+
+The third is a **backlog row ID**, substring-matched against prose. Ten rows in
+`docs/walk-env-manifest.tsv` mention `B471`; **five escape on that literal ALONE** —
+they carry neither of the other phrases:
+
+    VKS_STORAGE_POLICY   VCENTER_HOST   VCENTER_USERNAME   VCENTER_PASSWORD   HARBOR_STORAGE_CLASS
+
+Two failure directions, both live:
+
+- **A copy-edit flips the gate RED for no semantic change.** All five reasons read perfectly well
+  without the `B471:` prefix, so anyone tidying the prose silently turns five rows into ORPHANs and
+  reddens `static-check` having altered no decision.
+- **Any FUTURE reason that mentions B471 for an unrelated purpose gets a free pass**, because the
+  match is a bare substring with no structure behind it.
+
+**Fix:** replace prose-substring matching with an explicit 5th TSV column (e.g. `undocumented=yes`),
+so the escape is structural rather than a magic string. Same-repo, gate-local, no cross-repo change.
+
+Do NOT "fix" it by adding more escape phrases — that is the enumerated-list rot one level down.
+
+## 🟢 B495 — REFUTED, recorded so nobody rebuilds it: do NOT make `walk-env-keys.sh` honour `<details>`
+
+B492 records that the two machine readers of the scenario docs disagree about `<details>`, and the
+obvious tidy-up is to align them. **An adversary round refuted that, measured.**
+
+- Narrowing the gate yields **45 doc pairs vs 68 manifest rows → 13 ORPHANs, rc=1** (from a current
+  58 pairs / 0 orphans). Not a no-op.
+- **Four of the thirteen are scenario-2 `EMIT` rows** — `SUPERVISOR_HOST`, `VCF_CLI_VSPHERE_PASSWORD`,
+  `VKS_CONTEXT_NAME`, `VKS_USERNAME`. Deleting them to go green removes the assertion that the
+  harness supplies the tenant's SSO identity.
+- **The readers do not disagree** — they answer different questions. The manifest's own contract is
+  *"what the harness MAY PRE-SUPPLY"*, and `check-walk-env-manifest.sh:101-104` says outright that
+  *"forbidding a key the document does NOT name is the strongest form of the row, not a defect."*
+  Doc-naming is a TRIGGER for requiring a decision, not the decision.
+- **`<details>` is one of THREE divergence axes**, so aligning on it is a half-fix: `walk-doc.sh:423`
+  also requires the key in the FIRST CELL (measured: 5 more scenario-2 keys differ on that alone),
+  and `:440` splits rows by value shape.
+- **Broader-guards-narrower is the intended architecture here, twice** — `walk-doc.sh:518` computes
+  `INDEP_E` with a deliberately broader regex so `:798` can REFUSE when the parser attached fewer,
+  and `check-expect-literals.sh:297-312` records that widening the parser was designed and
+  **refuted as certification-blocking**.
+
+If the asymmetry bothers you, spend it on **B494** instead — that is a real rot with two live
+failure directions.
+
 ## 🟡 B492 — the two machine readers of `scenario-1.md` DISAGREE about `<details>`, so a harmless-looking docs edit turns a gate RED
 
 MEASURED 2026-08-26 while fixing B490's docs half. Recorded because the surprise is structural, not
