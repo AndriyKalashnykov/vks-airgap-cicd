@@ -133,8 +133,68 @@ log_info "validating against the Supervisor (server-side dry-run — persists no
 if ! k apply --dry-run=server -f "$RENDERED" >/dev/null 2>"${RENDERED}.err"; then
   log_error "the Supervisor REJECTED this cluster. Its own words (they name the exact field):"
   sed 's/^/    /' "${RENDERED}.err" >&2
+
+  # ⚠️ THE SERVER NAMES AN OBJECT; IT HAS NEVER HEARD OF OUR VARIABLE. This branch used to say
+  # "fix the value it names in .env" -- and for TEN of this script's thirteen VKS_* inputs that
+  # value is NOT in .env. It is a code-side default in the export block above, and .env.example
+  # keeps those keys COMMENTED *by design* (check-env-clobber requires it, because an uncommented
+  # value would be exported by load_env's `set -a` and defeat the per-run override). So the
+  # operator was told to fix a string that `grep` cannot find, with no hint that a variable is
+  # even involved. Measured on a rejection naming `ClusterClass builtin-generic-v3.6.0`.
+  _rej="$(cat "${RENDERED}.err" 2>/dev/null || true)"
+  _var=""
+  # ⚠️ THESE PATTERNS ARE MEASURED, NOT GUESSED. Probed 2026-08-26 against the live Supervisor
+  # with a deliberately bogus value for each, and the first draft of this case got THREE of the
+  # four wrong by writing the CamelCase field name the template uses instead of the prose the
+  # server emits. Verbatim rejections:
+  #     vm class(es): bogus-vm-class-xyz not found            <- NOT "vmClass"
+  #     storage class(es): does-not-exist-policy not found     <- NOT "storageClass"
+  #     MachineDeployment np1, filters: {k8sVersionPrefix: ..  <- NOT "version" (capital V)
+  #     ClusterClass builtin-generic-vX ... not found          <- the only one that matched
+  # Re-measure before editing: change one value to a bogus string and read the dry-run's stderr.
+  case "$_rej" in
+    *ClusterClass*)        _var=VKS_CLUSTERCLASS ;;
+    *"vm class"*)          _var=VKS_VM_CLASS ;;
+    *"storage class"*)     _var=VKS_STORAGE_CLASS ;;
+    *k8sVersionPrefix*)    _var=VKS_K8S_VERSION ;;
+  esac
+  if [ -n "$_var" ]; then
+    log_error ""
+    log_error "  -> in THIS repo that value comes from ${_var} (effective: '${!_var}')"
+    case "$_var" in
+      VKS_CLUSTERCLASS)
+        log_error "     list what YOUR Supervisor actually has:  make vks-shape-show"
+        log_error "     ⚠️ list THAT namespace, NOT the cluster's own. A vSphere Namespace gets a"
+        log_error "        REPLICATED SUBSET, and it is the old end: measured on VKS 3.7.1, two"
+        log_error "        namespaces (one with no clusters at all) each held the same 3, every one"
+        log_error "        deprecated=true and capped at k8s v1.32, against 7 up to v1.36 in the"
+        log_error "        public one. WHICH subset is replicated may differ by VKS version —"
+        log_error "        untested below 3.7 — but the caps are labels on the CLASSES, not the"
+        log_error "        Supervisor, so the replicated end is older wherever this fires." ;;
+      VKS_VM_CLASS)      log_error "     list yours:  kubectl get virtualmachineclass" ;;
+      # NOT `kubectl get storageclass` -- that is CLUSTER-scoped and lists policies assigned to
+      # OTHER vSphere Namespaces (measured: 4 cluster-wide, 2 assigned to cicd). vks-shape-show
+      # reads the NAMESPACE-scoped storagepolicyquota, which is the usable set.
+      VKS_STORAGE_CLASS) log_error "     list what YOUR namespace can use:  make vks-shape-show"
+                         log_error "     or write it for you:               make vks-shape-set" ;;
+      VKS_K8S_VERSION)   log_error "     list yours:  kubectl get kubernetesreleases   (need Ready=True AND Compatible=True)" ;;
+    esac
+  fi
+
+  # The ten with code-side defaults, DERIVED from this script's own export block so the list
+  # cannot rot, printed with the value actually in effect. A hand-typed copy would drift the
+  # first time someone adds an input; this cannot.
+  log_error ""
+  log_error "  these inputs default IN CODE and are NOT in .env — set one there to override:"
+  while IFS= read -r _d; do
+    [ -n "$_d" ] || continue
+    printf '       %-28s = %s\n' "$_d" "${!_d-}" >&2
+  done <<EOF
+$(sed -n 's/^export \(VKS_[A-Z_]*\)="\${\1:-.*/\1/p' "$0" || true)
+EOF
+
   rm -f "${RENDERED}.err"
-  die "fix the value it names in .env, then re-run."
+  die "set the value the Supervisor named — in .env if it is listed above, otherwise fix the object on the Supervisor."
 fi
 # ⚠️ DO NOT rm THIS UNREAD ON SUCCESS. The dry-run's stderr is where the platform says it rewrote
 # something -- "Warning: ClusterClass builtin-generic-v3.6.0 updated to the newest compatible

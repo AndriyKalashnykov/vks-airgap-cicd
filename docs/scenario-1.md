@@ -586,15 +586,23 @@ VKS_AUTH_METHOD=vcf make vks-login
 
 <details><summary>Optional — the cluster's shape. Skip unless you want to change it.</summary>
 
-**→ set in `./.env`:** uncomment the key and give it your value. Leave it commented to take the default.
+**You do not have to fill these in.** The two that depend on your estate are discovered for you:
 
-| key | default | example | how to get the value |
-|---|---|---|---|
-| `VKS_CLUSTERCLASS` | `builtin-generic-v3.6.0` | `builtin-generic-v3.6.0` | `kubectl get clusterclass -n vmware-system-vks-public` — a SEED. The Supervisor rewrites it to the newest compatible class; `make vks-cluster-create` reports the one in effect. |
-| `VKS_VM_CLASS` | `best-effort-small` | `best-effort-small` | `kubectl get virtualmachineclass` |
-| `VKS_STORAGE_CLASS` | `wcp-vmfs` | `wcp-vmfs` | `kubectl get storageclass` |
-| `VKS_CONTROL_PLANE_COUNT` | `1` | `1` | how many control-plane nodes |
-| `VKS_NODE_COUNT` | `2` | `2` | how many workers. One is too small for the platform. |
+```bash
+make vks-shape-show     # what YOUR Supervisor and vSphere Namespace actually offer
+make vks-shape-set      # write the unambiguous ones into ./.env
+```
+
+`vks-shape-set` writes nothing when the answer is ambiguous — it prints the choices instead, because a
+wrong value pinned in `.env` overrides the default that would otherwise have worked.
+
+The rest are yours to choose. **→ set in `./.env`:** uncomment the key and give it your value.
+
+| key | default | what it is |
+|---|---|---|
+| `VKS_VM_CLASS` | `best-effort-small` | node size. `kubectl get virtualmachineclass` lists yours |
+| `VKS_CONTROL_PLANE_COUNT` | `1` | how many control-plane nodes |
+| `VKS_NODE_COUNT` | `2` | how many workers. One is too small for the platform. |
 
 </details>
 
