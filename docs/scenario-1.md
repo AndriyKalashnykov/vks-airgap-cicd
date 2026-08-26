@@ -586,15 +586,19 @@ VKS_AUTH_METHOD=vcf make vks-login
 
 <details><summary>Optional — the cluster's shape. Skip unless you want to change it.</summary>
 
-**You do not have to fill these in.** The two that depend on your estate are discovered for you:
+**You do not have to fill these in.** The values that depend on your estate — the storage policy
+attached to your vSphere Namespace, and the ClusterClass — are discovered and written for you:
+`make vks-cluster-create` runs `make vks-shape-set` first. Nothing to copy, nothing to look up.
+
+To see what your Supervisor offers before then:
 
 ```bash
-make vks-shape-show     # what YOUR Supervisor and vSphere Namespace actually offer
-make vks-shape-set      # write the unambiguous ones into ./.env
+make vks-shape-show
 ```
 
-`vks-shape-set` writes nothing when the answer is ambiguous — it prints the choices instead, because a
-wrong value pinned in `.env` overrides the default that would otherwise have worked.
+`vks-shape-set` never overwrites a value you set yourself, and writes **nothing** when the answer is
+ambiguous — it prints the choices instead, because a wrong value pinned in `.env` overrides the
+default that would otherwise have worked.
 
 The rest are yours to choose. **→ set in `./.env`:** uncomment the key and give it your value.
 

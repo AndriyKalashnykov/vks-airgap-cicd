@@ -614,7 +614,11 @@ vks-login: ## Authenticate to VKS (VCF 9 + Supervisor) → writes KUBECONFIG/con
 	@$(SCRIPTS)/30-vks-login.sh
 
 .PHONY: vks-cluster-create
-vks-cluster-create: ## Provision the guest VKS cluster from the VKS_* topology keys (scenario-1 §4b); server-side dry-run gates it
+# vks-shape-set FIRST: it fills the ESTATE-SPECIFIC values (the storage policy attached to this
+# vSphere Namespace) that the code defaults get wrong on any estate that is not this lab. It is
+# idempotent, refuses to overwrite a value you set, writes NOTHING when the answer is ambiguous,
+# and NEVER gates -- with no Supervisor reachable it warns and exits 0, so it cannot block a create.
+vks-cluster-create: vks-shape-set ## Provision the guest VKS cluster from the VKS_* topology keys (scenario-1 §4b); server-side dry-run gates it
 	@$(SCRIPTS)/25-vks-cluster-create.sh
 
 .PHONY: vks-cluster-status

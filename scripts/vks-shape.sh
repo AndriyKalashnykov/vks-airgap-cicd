@@ -43,11 +43,28 @@ fi
 # are provisioned up front, so WaitForFirstConsumer buys nothing, and the base name is what this
 # repo has always shipped. If a namespace has ONLY a -latebinding class the filter yields nothing
 # and we report ambiguity rather than guessing.
+# READ status.total[] — the field Broadcom documents ("read storage class names from the Status
+# section"), and `kubectl get storagepolicyquota -n <ns>` is explicitly given as the NON-ADMIN path
+# because `kubectl get storageclass` is "available only to a user with administrator privileges".
+# A tenant is this repo's DEFAULT persona, so the admin-only command must not be the primary.
+# status.extensions[] carries the same names and is the fallback. API is cns.vmware.com/v1alpha2
+# here (v1alpha1 is served but not storage) — do not pin v1alpha1.
 sc_all="$(k get storagepolicyquota -n "$NS" \
+            -o jsonpath='{range .items[*].status.total[*]}{.storageClassName}{"\n"}{end}' \
+            2>/dev/null | sort -u | grep -v '^$' || true)"
+[ -n "$sc_all" ] || sc_all="$(k get storagepolicyquota -n "$NS" \
             -o jsonpath='{range .items[*].status.extensions[*].extensionQuotaUsage[*]}{.storageClassName}{"\n"}{end}' \
             2>/dev/null | sort -u | grep -v '^$' || true)"
+
+# ⚠️ MULTI-ZONE INVERTS THE CHOICE. Broadcom, verbatim: "When there are multiple Zones in a
+# namespace, late-binding storage class is REQUIRED for persistent volumes for node of
+# machineDeployment." That scopes it to WORKERS, while this repo renders ONE storageClass for the
+# whole topology — so a multi-zone namespace cannot be served by one auto-picked value and we
+# refuse rather than pick the wrong half. Measured on this lab: 1 zone.
+zones="$(k get zones -n "$NS" --no-headers 2>/dev/null | grep -c . || true)"
 sc_pick="$(printf '%s\n' "$sc_all" | grep -v -- '-latebinding$' || true)"
 sc_n="$(printf '%s\n' "$sc_pick" | grep -c . || true)"
+if [ "${zones:-1}" -gt 1 ] 2>/dev/null; then sc_n=0; sc_multizone=1; else sc_multizone=0; fi
 
 # --- cluster class ------------------------------------------------------------------------------
 # ⚠️ THIS ONE IS INERT AND THE OUTPUT SAYS SO. MEASURED on VKS 3.7.1 via server-side dry-runs: the
@@ -111,6 +128,10 @@ elif [ "$sc_n" = 1 ]; then
 elif [ "${sc_n:-0}" -gt 1 ] 2>/dev/null; then
   log_warn "? VKS_STORAGE_CLASS AMBIGUOUS — ${NS} has more than one assigned policy. Pick one, set it by hand:"
   printf '%s\n' "$sc_pick" | while IFS= read -r c; do [ -n "$c" ] && printf '      %s\n' "$c"; done
+elif [ "${sc_multizone:-0}" = 1 ]; then
+  log_warn "? VKS_STORAGE_CLASS NOT auto-set — ${NS} has ${zones} zones, and a multi-zone namespace"
+  log_warn "    REQUIRES a -latebinding class for machineDeployment (worker) volumes, while this repo"
+  log_warn "    renders ONE storageClass for the whole topology. Set it by hand and check the workers."
 else
   log_warn "- VKS_STORAGE_CLASS not discovered (no storagepolicyquota readable in ${NS})"
 fi
