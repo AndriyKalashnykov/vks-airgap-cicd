@@ -16,6 +16,78 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🔵 B485 — an air-gapped "depot" WITHOUT VCF Operations: plausible, untested, and worth one experiment 🔵 idea
+
+**Grade: NOT-ESTABLISHED.** Everything below the "what is settled" table is a *hypothesis*. Nothing in
+it has been run. Filed so the context is not lost, not as a plan of record.
+
+### Why this exists
+
+Broadcom's [air-gapped VCF 9.1 guide](https://github.com/vmware/vsphere-supervisor/blob/main/airgapped/air-gapped-vcf91.md)
+relocates VKS Standard Packages (istio among them) into the Supervisor's **Software Depot**, after
+which package bundles resolve from `depot.kube-system.svc` instead of `projects.packages.broadcom.com`.
+That matters to us for exactly one reason: `43-install-istio-package.sh`'s air-gap check accepts only
+`localhost:*`, `127.0.0.1:*` and `$HARBOR_URL*`, so a correctly relocated lab is **REFUSED** — see
+[[B484]] F5. We cannot currently reproduce a relocated lab to settle it.
+
+### What is settled (measured 2026-08-26 on this lab, vCenter 9.1 build 25629530)
+
+| | |
+|---|---|
+| **`depot.kube-system.svc`** — what the non-legacy service YAMLs reference | needs **VCF Operations' Software Depot**. §5c drives it with `toggle_software_depot_oci_image_upload.sh --vsp-host <vsp-fqdn> --admin-username admin@vsp.local`. This lab builds **no VCF Operations**, `kubectl -n kube-system get svc depot` is **NotFound**, and VCF Operations is **out of scope** (owner, 2026-08-26). So the VCF Depot itself: **no**. |
+| **`docker-registry.kube-system.svc:5000`** | **ALREADY RUNNING** on the Supervisor — pod `docker-registry-<id>`, image `vmware/docker-registry:2.8.3.25018815`, ClusterIP `10.96.1.158:5000`. This is what `localhost:5000` in our allowlist refers to. |
+| the `supervisor-management-proxy-0.4.1` YAML we hold in `VCF_CLI_SRC_DIR` | **NOT the depot proxy.** Its data-values are `nsxManagers` / `nsxSvcLoadBalancerIP` — it is the **Antrea-NSX Adapter** proxy. We hold **zero** of the §7a pieces. |
+| the artefact difference F5 turns on | the two shipped service YAMLs differ by **one line**, in exactly the field the check reads: `vsphere-kubernetes-service-legacy-3.7.1+v1.36.yaml` -> `projects.packages.broadcom.com/...`; `vsphere-kubernetes-service-3.7.1+v1.36.yaml` -> `depot.kube-system.svc/vcf/supervisor-service-vks/ga/3.7.1/...`. Both sha256 match the lab repo's pinned checksums. |
+
+### The hypothesis
+
+A depot is not magic: it is an OCI registry the Supervisor can reach, plus a package YAML pointing at
+it. So relocate the Standard Packages bundle into a registry we control and repoint
+`spec.template.spec.fetch[0].imgpkgBundle.image` — §7b's move with a different registry underneath.
+Two candidates, **neither needing VCF Operations**:
+
+1. **The Supervisor's own `docker-registry:5000`.** Architecturally the right answer — it is already
+   the relocation target for bootstrap images, which is *why* the check whitelists `localhost:5000`.
+   ⚠️ **UNPROBED**: this identity gets `pods/portforward: no` on the Supervisor, so its catalog could
+   not be read and push-ability could not be tested. Whether anything but WCP may write to it is
+   **NOT-ESTABLISHED**.
+2. **Our Harbor** (`svc-harbor-*`, already a Supervisor Service) — reachable, writable, and we push to
+   it every run. Lower fidelity to the vendor flow, far cheaper to try.
+
+`oci_image_depot_migrator.py` is missing either way. Its documented job is download/upload/copy of
+imgpkg bundles and **`imgpkg copy` runs inside it**, so a plain
+`imgpkg copy --to-repo <registry>/<path>` should substitute. Untested.
+
+### The experiment, if someone picks this up
+
+Non-destructive and reversible — a copy into a registry we own, plus registering a NEW service version
+(reversible with the lab repo's deregister path). Do NOT uninstall or overwrite the running one.
+
+    # 1. relocate the bundle (from an internet-connected box)
+    imgpkg copy -b projects.packages.broadcom.com/vsphere/supervisor/vks-standard-packages/<ver>/vks-standard-packages:<ver>             --to-repo <harbor>/<project>/vks-standard-packages
+    # 2. take a copy of the legacy service YAML and repoint the ONE line
+    #    spec.template.spec.fetch[0].imgpkgBundle.image -> <harbor>/<project>/...
+    # 3. register that YAML as a new version (vCenter UI: Services -> Kubernetes Service ->
+    #    ACTIONS -> Add New Version; the API 403s for a Core Service)
+    # 4. install it on the Supervisor, then read what the guest's Package CRs actually say:
+    kubectl get packages -A -o json | jq -r '.items[]|select(.spec.refName|test("istio"))
+      |"\(.spec.version) \(.spec.template.spec.fetch[0].imgpkgBundle.image)"'
+
+### What it would settle
+
+- **[[B484]] F5** on real hardware instead of artefact-verification: does a relocated Package CR's
+  `imgpkgBundle` field actually carry the relocated host? If YES the fix is "widen the allowlist"; if
+  NO the check is **reading the wrong field entirely** and needs redesigning. That branch is currently
+  unknowable here, and it is the single highest-value thing this experiment buys.
+- Whether an air-gapped VKS package install is reachable for an operator who has **no VCF Operations**
+  — which is this repo's entire audience per RULE ZERO-B.
+
+### Explicitly NOT in scope
+
+- Building VCF Operations into the lab (owner: out of scope, 2026-08-26).
+- §7a's `manage-depot-image-proxy.sh` — needs vCenter **root SSH + `sshpass` + a Supervisor ID**, which
+  is above Supervisor admin and above what a tenant can ever have.
+
 ## 🔵 B481 — REFUTED: do NOT wire the proxy-readiness check into `istio-preflight` 🔵 refuted
 
 **Recorded so it is not rebuilt.** After [[B477]] it looks obvious that `make istio-preflight` should
