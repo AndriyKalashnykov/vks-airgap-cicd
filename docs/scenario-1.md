@@ -396,6 +396,8 @@ for you**, right after the CA that lets it verify Harbor. Nothing to do here.
 
 <details><summary>Optional — Harbor project names, both already work</summary>
 
+**→ set in `./.env`:** both keys ship UNCOMMENTED with a working default — edit the value in place.
+
 | key | default | how to get the value |
 |---|---|---|
 | `HARBOR_INFRA_PROJECT` | `cicd` | **you choose** — the project for pipeline images |
@@ -471,6 +473,8 @@ A non-zero exit from `make argocd-address` says which of the two things is missi
 **instance** (it never reconciled) or its **LoadBalancer address** — and they need different fixes.
 
 <details><summary>Optional — both already work</summary>
+
+**→ set in `./.env`:** uncomment the key and give it your value. Leave it commented to take the default.
 
 | key | default | how to get the value |
 |---|---|---|
@@ -581,6 +585,8 @@ VKS_AUTH_METHOD=vcf make vks-login
 `secrets/supervisor.kubeconfig`, not the `./` form you typed.
 
 <details><summary>Optional — the cluster's shape. Skip unless you want to change it.</summary>
+
+**→ set in `./.env`:** uncomment the key and give it your value. Leave it commented to take the default.
 
 | key | default | example | how to get the value |
 |---|---|---|---|
