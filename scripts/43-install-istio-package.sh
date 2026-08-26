@@ -171,16 +171,37 @@ if [ "${DRY_RUN:-0}" != 1 ]; then
     _pkg_cr="$(printf '%s' "$_pkg_json" | jq -r --arg r "$PKG" --arg v "${PKG_VER_RESOLVED:-}" \
       '[.items[]?|select(.spec.refName==$r and .spec.version==$v)
         |.spec.template.spec.fetch[]?|(.imgpkgBundle.image // .image.url // empty)]|first // empty' 2>/dev/null || true)"
-    BUNDLE_HOST="${_pkg_cr%%/*}"
+    # registry_hostport (lib/os.sh), NOT `%%/*`: the latter returns the whole reference for a
+    # hostless Docker-Hub ref, and the comparison below must be host-for-host.
+    BUNDLE_HOST="$(registry_hostport "$_pkg_cr")"
     log_info "inspecting ${PKG} ${PKG_VER_RESOLVED} in ${PKG_NS_RESOLVED} (the version that will install)"
   fi
 fi
 if [ -n "$BUNDLE_HOST" ]; then
+  # EXACT host:port, never a prefix. MEASURED 2026-08-26, the prefix form was wrong BOTH ways:
+  # `harbor.lab` ACCEPTED `harbor.lab.evil.example` (false GREEN — a lookalike read as our mirror),
+  # and a scheme or trailing slash in HARBOR_URL false-BLOCKED the real one. Both sides now go
+  # through the same parser, so the two spellings of one host cannot disagree.
+  #
+  # depot*.kube-system.svc: the VCF Software Depot, and it IS an air-gapped path. ARTEFACT-VERIFIED
+  # 2026-08-26 (not lab-verified — we have no relocated depot): the two shipped VKS service YAMLs
+  # differ by exactly this field —
+  #   vsphere-kubernetes-service-legacy-3.7.1+v1.36.yaml -> projects.packages.broadcom.com/...
+  #   vsphere-kubernetes-service-3.7.1+v1.36.yaml        -> depot.kube-system.svc/vcf/...
+  # — both sha256 matching the pinned checksums. Broadcom's air-gapped 9.1 guide §7b rewrites it to
+  # depot-image-proxy.kube-system.svc.cluster.local. Refusing those REFUSES the vendor's own
+  # sanctioned air-gapped configuration and sends the operator to request a relocation they already
+  # performed. See B485 for the open question of whether the CR carries the relocated host at all.
+  _harbor_hp="$(registry_hostport "${HARBOR_URL:-}")"
   case "$BUNDLE_HOST" in
-    localhost:*|127.0.0.1:*|"${HARBOR_URL:-__none__}"*)
-      log_info "package images resolve from ${BUNDLE_HOST} — local/mirrored, air-gap safe" ;;
+    localhost:*|127.0.0.1:*|"[::1]":*)
+      log_info "package images resolve from ${BUNDLE_HOST} — local, air-gap safe" ;;
+    depot.kube-system.svc:*|depot-image-proxy.kube-system.svc.cluster.local:*|depot*.kube-system.svc*:*)
+      log_info "package images resolve from ${BUNDLE_HOST} — the Supervisor's Software Depot, air-gap safe" ;;
     *)
-      if [ "${ISTIO_PACKAGE_ALLOW_REMOTE:-0}" = 1 ]; then
+      if [ -n "${HARBOR_URL:-}" ] && [ "$BUNDLE_HOST" = "$_harbor_hp" ]; then
+        log_info "package images resolve from ${BUNDLE_HOST} — our mirror, air-gap safe"
+      elif [ "${ISTIO_PACKAGE_ALLOW_REMOTE:-0}" = 1 ]; then
         log_warn "package images resolve from ${BUNDLE_HOST}, which is NOT ${HARBOR_URL:-your mirror}."
         log_warn "  ISTIO_PACKAGE_ALLOW_REMOTE=1 — proceeding. This install is NOT air-gapped, and a"
         log_warn "  green result here says nothing about whether it would work without internet."
