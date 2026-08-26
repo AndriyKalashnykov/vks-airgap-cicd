@@ -59,17 +59,23 @@ if _dep_out="$(kubectl get deploy -A -l app=istiod -o name 2>"$_ist_dep_err")"; 
   # A label selector that matches nothing is rc=0 + EMPTY, never NotFound. That IS absence.
   if [ -n "$_dep_out" ]; then _dep=present; else _dep=absent; fi
 else
-  if kube_is_notfound "$_ist_dep_err" deployments; then _dep=absent; else _dep=unknown; fi
+  # UNCONDITIONALLY unknown. There is NO list error that means absence: for a label-selected
+  # list, absence is rc=0 + EMPTY (handled above). A token test here is worse than useless --
+  # MEASURED, real kubectl 1.36.4 against a 404 endpoint:
+  #   Error from server (NotFound): Unable to find "apps/v1, Resource=deployments" that match
+  #   label selector "app=istiod" ... the server could not find the requested resource
+  # server prefix PRESENT + the token `deployments` PRESENT -> "absent" off a read that FAILED.
+  _dep=unknown
 fi
 _ist_cls="$(classify_kube_failure "$_ist_dep_err" 2>/dev/null || true)"
 rm -f "$_ist_crd_err" "$_ist_dep_err"
 
-# EITHER read being unknown poisons the absence claim -- not just both. A partner that says
-# "absent" cannot vouch for a read that failed: the CRD may be unreadable (cluster-scoped,
-# routinely denied to a tenant) while `get deploy -A` legitimately matches nothing because
-# this mesh's istiod is not labelled app=istiod.
-if [ "$_crd" != present ] && [ "$_dep" != present ] \
-   && { [ "$_crd" = unknown ] || [ "$_dep" = unknown ]; }; then
+# THE TWO READS ARE NOT SYMMETRIC, and an earlier draft of this made them so -- which turned a
+# definitive answer into a hard block. The CRD read SETTLES absence on its own: a server
+# NotFound about that exact CRD means Istio is not installed, whatever the deploy read did.
+# The deploy read settles NOTHING on its own -- this mesh's istiod may simply not be
+# labelled app=istiod. So only an UNKNOWN CRD read poisons the claim.
+if [ "$_crd" = unknown ] && [ "$_dep" != present ]; then
   # NOT `exit 0`, and deliberately NOT the string walk-doc.sh keys on.
   log_error "could not determine whether Istio is present (${_ist_cls:-unclassified}) — a read"
   log_error "  failed. This is NOT evidence that Istio is absent, and it must not be read as such:"

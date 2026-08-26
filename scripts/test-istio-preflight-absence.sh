@@ -40,6 +40,31 @@ case "$*" in
 esac
 EOF
     ;;
+    crdabsent) cat > "$1/bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+# The CRD read is DEFINITIVE (server NotFound about that exact CRD) while the deploy read fails.
+# A symmetric ladder turned this into a hard block -- but the CRD settles absence on its own, and
+# installing Istio is the whole point on such a cluster.
+case "$*" in
+  *"version -o json"*|*"config current-context"*) echo ctx; exit 0 ;;
+  *"get crd virtualservices"*) echo 'Error from server (NotFound): customresourcedefinitions.apiextensions.k8s.io "virtualservices.networking.istio.io" not found' >&2; exit 1 ;;
+  *"get deploy -A"*) echo 'Error from server (Forbidden): deployments.apps is forbidden' >&2; exit 1 ;;
+  *) exit 0 ;;
+esac
+EOF
+    ;;
+    deploy404) cat > "$1/bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+# REAL kubectl 1.36.4 against a 404 endpoint. It carries the SERVER prefix AND the word
+# "deployments", so a token test on `deployments` called it ABSENT off a read that FAILED.
+case "$*" in
+  *"version -o json"*|*"config current-context"*) echo ctx; exit 0 ;;
+  *"get crd virtualservices"*) echo 'Error from server (Forbidden): customresourcedefinitions.apiextensions.k8s.io is forbidden' >&2; exit 1 ;;
+  *"get deploy -A"*) echo 'Error from server (NotFound): Unable to find "apps/v1, Resource=deployments" that match label selector "app=istiod", field selector "": the server could not find the requested resource' >&2; exit 1 ;;
+  *) exit 0 ;;
+esac
+EOF
+    ;;
     staleconf) cat > "$1/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 # REAL kubectl 1.36.4 output for a dangling `current-context` -- the commonest kubeconfig fault.
@@ -145,6 +170,20 @@ raw="$(run onesided)"; out="$(_out_of "$raw")"; rc="$(_rc_of "$raw")"; ck_rc "$r
 if printf '%s' "$out" | grep -qF 'NO Istio detected'; then
   echo "    FAIL    an UNKNOWN read was spent as evidence of absence"; fail=1
 else echo "    ok      one unknown read poisons the absence claim"; fi
+
+
+echo "  case 7: DEFINITIVE crd-absent + a FAILED deploy read -- must still report absence"
+raw="$(run crdabsent)"; out="$(_out_of "$raw")"; rc="$(_rc_of "$raw")"; ck_rc "$rc"
+if printf '%s' "$out" | grep -qF 'NO Istio detected'; then
+  echo "    ok      the CRD read settles it; a failed partner does not veto a definitive answer"
+else echo "    FAIL    a definitive crd=absent was overridden by a failed partner read"; fail=1; fi
+if [ "$rc" -eq 0 ]; then echo "    ok      exit 0"; else echo "    FAIL    exit $rc — hard block on a cluster where Istio is genuinely absent"; fail=1; fi
+
+echo "  case 8: a 404 whose text CONTAINS 'deployments' -- the token must not vouch for it"
+raw="$(run deploy404)"; out="$(_out_of "$raw")"; rc="$(_rc_of "$raw")"; ck_rc "$rc"
+if printf '%s' "$out" | grep -qF 'NO Istio detected'; then
+  echo "    FAIL    claimed absence off a FAILED list read (the 'deployments' token matched a 404)"; fail=1
+else echo "    ok      a failed list read is never absence"; fi
 
 [ "$fail" -eq 0 ] || { echo "test-istio-preflight-absence: FAILED"; exit 1; }
 echo "test-istio-preflight-absence: OK"

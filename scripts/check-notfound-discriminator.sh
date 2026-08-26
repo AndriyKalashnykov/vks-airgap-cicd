@@ -14,7 +14,6 @@
 #   48-istio-preflight     -> emits the string walk-doc.sh greps to choose the INSTALL branch,
 #                             so a tenant with a stale kubeconfig was steered into helm-installing
 #                             a SECOND mesh over the platform team's
-#   43-install-istio-package -> skips the air-gap check and installs from Broadcom, reporting success
 #   08-install-argocd-service -> waits out the full timeout instead of naming the real fault
 #   98-uninstall-all       -> reports a resource cleaned up that it never managed to read
 #   23 / 26                -> report a namespace / cluster absent that they could not see
@@ -22,6 +21,14 @@
 # THE ONLY TWO ACCEPTED FORMS:
 #   kube_is_notfound <errfile> <token>          (lib/os.sh — server prefix AND the resource token)
 #   *"Error from server (NotFound)"*            (a shell case on a STRING, same anchor)
+#
+# COVERAGE IS A FRACTION, NOT A CLOSURE. Measured against 7 near-miss fixtures it catches 1.
+# NAMED BLIND SPOTS (each verified to slip past): a trailing '.' inside the quotes; a $VAR in the
+# arm pattern; an arm split across a line continuation; an arm not starting with '*'; parentheses
+# inside the quoted phrase; and pass (a) keys on the variable NAME looking like an error buffer, so
+# `grep -qi "not found" "$buf"` is missed where `"$errf"` is caught. It also scans only
+# scripts/*.sh + scripts/lib/*.sh and excludes test-*.sh wholesale (107 of 253 files). This gate
+# raises the cost of REINTRODUCING the class; it does not prove the class closed.
 #
 # SELF-MATCH: this gate lives in the tree it scans, so the pattern it hunts is COMPOSED at
 # runtime and never appears as a literal here. Its own selftest asserts this file contributes
@@ -52,7 +59,8 @@ while IFS= read -r f; do
   #      separates "classify a cluster read" from "assert on a message" (all the test-*.sh do the
   #      latter, which is why they are excluded wholesale above).
   #  (b) a `case` ARM: the arm and its subject `case "$_SOME_ERR" in` are on DIFFERENT lines, so a
-  #      per-line err filter can never see the subject. Fold continuations and match the arm itself.
+  #      per-line err filter can never see the subject, so match the arm itself. (It does NOT fold
+#      line continuations -- a split arm is a named blind spot above.)
   #      A bare-substring arm is wrong regardless of subject, so no err filter is applied here.
   hits_a="$(grep -nE "(grep|case)[^|]*${_nf}" "$f" 2>/dev/null \
     | grep -vE '^[0-9]+:[[:space:]]*#' \
@@ -86,6 +94,10 @@ ARMS
   printf 'FAIL %s\n' "$f"
   printf '%s\n' "$remaining" | sed 's/^/       /'
 done < <(git ls-files 'scripts/*.sh' 'scripts/lib/*.sh' 2>/dev/null | grep -v '/test-')
+
+# A gate that scanned NOTHING is not a green. Both sibling doc gates in this repo FATAL on 0;
+# so does this one, or a broken pathspec/layout passes forever having looked at nothing.
+[ "$scanned" -gt 0 ] || { echo "check-notfound-discriminator: scanned 0 scripts — the pathspec or git is broken" >&2; exit 1; }
 
 if [ "$bad" -ne 0 ]; then
   cat >&2 <<EOF
