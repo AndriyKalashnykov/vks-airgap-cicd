@@ -9,7 +9,7 @@ Person(dev, "Developer", "Pushes application code changes")
 Person(op, "Platform operator", "Runs the jump-box mirror + installers")
 
 System_Boundary(airgap, "Air gap") {
-  System(platform, "VKS CI/CD Platform", "Gitea + Tekton build/test, image to Harbor, ArgoCD GitOps deploy to the VKS cluster.\nN apps from apps/registry.tsv (today: javawebapp · gowebapp) — same walk for each")
+  System(platform, "VKS CI/CD Platform", "Gitea + Tekton build/test, image to Harbor, ArgoCD GitOps deploy to the VKS cluster.\nOne app per row of apps/registry.tsv (six today) — same walk for each")
 }
 
 System_Ext(upstream, "Upstream registries + Maven Central", "gcr.io / ghcr.io / docker.io / repo.maven.apache.org")

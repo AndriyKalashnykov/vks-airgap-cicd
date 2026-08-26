@@ -22,8 +22,7 @@ System_Boundary(agz, "Guest / workload VKS cluster  ·  NO internet access") {
 Rel(jb, net, "1 · pull images + Maven deps", "HTTPS (internet side)")
 Rel(jb, svc, "2 · push mirrored images", "HTTPS (Harbor, on the Supervisor)")
 Rel(jb, cluster, "3 · install + wire Gitea, Tekton, the apps", "HTTPS (guest cluster)")
-Rel(cluster, svc, "4 · pull every image", "from Harbor, in-lab only")
-Rel(svc, cluster, "5 · GitOps sync", "ArgoCD reconciles INTO the guest")
+BiRel(svc, cluster, "4 · guest pulls every image from Harbor\n5 · ArgoCD syncs INTO the guest", "in-lab only")
 
 SHOW_LEGEND()
 @enduml

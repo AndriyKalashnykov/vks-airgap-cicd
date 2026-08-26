@@ -3,52 +3,38 @@
 !include _style.puml
 
 ' TOP-DOWN layout (plain Rel, no LAYOUT_LEFT_RIGHT and no Rel_R/Rel_L direction hints):
-' with TWO app lanes, any left-to-right chaining renders a ~5000px strip — measured — which
-' both clips at PlantUML's 4096px default (PLANTUML_LIMIT_SIZE; that is exactly how the
-' single-app version lost its last node + legend) and embeds as an unreadable sliver.
-' Flowing DOWN puts the two lanes side by side per step instead: 1506x2226, no clipping.
-' The render also raises PLANTUML_LIMIT_SIZE well above 4096 (Makefile _render_diagrams)
-' as a backstop so no diagram can silently clip again.
+' left-to-right chaining renders a very wide strip that clips at PlantUML's 4096px default
+' (PLANTUML_LIMIT_SIZE). The render also raises that limit (Makefile _render_diagrams) as a backstop.
 '
-' TWO apps, ONE walk (apps/registry.tsv). The ONLY shared object in the CI intake is the
-' EventListener: a SINGLE listener for every app, which label-selects the per-app Trigger CRs
-' (vks-airgap-cicd/ci: app), each CEL-filtered on body.repository.name — so a push to one app's
-' repo fires ONLY that app's pipeline. The two lanes differ only in the TEST task and the base
-' images they build FROM (scripts/lib/apps.sh: app_test_task / app_builder_image / app_runtime_image).
+' ONE LANE, not one per app. This used to draw two lanes (1a/1b, 2a/2b, ...) back when the repo had
+' two apps; it now has SIX, and six lanes is unreadable. The walk is IDENTICAL for every app, so the
+' diagram shows it ONCE with <app> placeholders and the registry named on the boxes. The only shared
+' object in the CI intake is the EventListener: a SINGLE listener for every app, which label-selects
+' the per-app Trigger CRs (vks-airgap-cicd/ci: app), each CEL-filtered on body.repository.name -- so
+' a push to one app's repo fires ONLY that app's pipeline. Lanes differ only in the TEST task and the
+' base images they build FROM (scripts/lib/apps.sh: app_test_task / app_builder_image /
+' app_runtime_image).
 
-title Pipeline flow — a push to production, inside the air gap (one lane per app)
+title Pipeline flow — a push to production, inside the air gap (the same walk for every app)
 
 Person(dev, "Developer")
-Container(gitea_java, "Gitea: javawebapp-app", "git repo")
-Container(gitea_go, "Gitea: gowebapp-app", "git repo")
+Container(gitea_app, "Gitea: <app>-app", "git repo · one per row of apps/registry.tsv (six today)")
 Container(el, "Tekton EventListener 'apps'", "ONE listener for every app;\nlabel-selects the per-app Trigger CRs")
-Container(pipe_java, "PipelineRun javawebapp-ci", "clone · maven-test · kaniko · write-back")
-Container(pipe_go, "PipelineRun gowebapp-ci", "clone · go-test · kaniko · write-back")
+Container(pipe_app, "PipelineRun <app>-ci", "clone · test (per language) · kaniko · write-back")
 ContainerDb(harbor, "Harbor", "OCI registry", $tags="datastore")
-Container(dep_java, "Gitea: javawebapp-deploy", "git repo")
-Container(dep_go, "Gitea: gowebapp-deploy", "git repo")
+Container(dep_app, "Gitea: <app>-deploy", "git repo · ArgoCD watches this one")
 Container(argo, "ArgoCD", "one Application per app")
-Container(app_java, "javawebapp", "Deployment + Service")
-Container(app_go, "gowebapp", "Deployment + Service")
+Container(app_run, "<app>", "Deployment (2 replicas) + Service")
 
-Rel(dev, gitea_java, "1a. git push")
-Rel(dev, gitea_go, "1b. git push")
-Rel(gitea_java, el, "2a. push webhook")
-Rel(gitea_go, el, "2b. push webhook")
-Rel(el, pipe_java, "3a. Trigger javawebapp\n(CEL on repository.name)")
-Rel(el, pipe_go, "3b. Trigger gowebapp\n(CEL on repository.name)")
-Rel(pipe_java, pipe_java, "4a. maven-test, offline\n(deps-baked builder)")
-Rel(pipe_go, pipe_go, "4b. go-test\n(stdlib-only)")
-Rel(pipe_java, harbor, "5a. kaniko push\napps/javawebapp:<sha>")
-Rel(pipe_go, harbor, "5b. kaniko push\napps/gowebapp:<sha>")
-Rel(pipe_java, dep_java, "6a. commit the new tag")
-Rel(pipe_go, dep_go, "6b. commit the new tag")
-Rel(dep_java, argo, "7a. auto-sync")
-Rel(dep_go, argo, "7b. auto-sync")
-Rel(argo, app_java, "8a. deploy")
-Rel(argo, app_go, "8b. deploy")
-Rel(harbor, app_java, "pull image")
-Rel(harbor, app_go, "pull image")
+Rel(dev, gitea_app, "git push")
+Rel(gitea_app, el, "push webhook")
+Rel(el, pipe_app, "Trigger <app>\n(CEL on repository.name)")
+Rel(pipe_app, pipe_app, "test, OFFLINE\n(the app's deps-baked builder)")
+Rel(pipe_app, harbor, "kaniko push\napps/<app>:<sha>")
+Rel(pipe_app, dep_app, "commit the new tag")
+Rel(dep_app, argo, "auto-sync")
+Rel(argo, app_run, "deploy")
+Rel(harbor, app_run, "pull image")
 
 SHOW_LEGEND()
 @enduml
