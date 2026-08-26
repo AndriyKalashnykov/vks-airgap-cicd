@@ -1,115 +1,68 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/AndriyKalashnykov/vks-airgap-cicd/ci.yml?branch=main&label=CI&style=flat)](https://github.com/AndriyKalashnykov/vks-airgap-cicd/actions/workflows/ci.yml)
 [![Renovate enabled](https://img.shields.io/badge/renovate-enabled-brightgreen?logo=renovatebot&style=flat)](https://docs.renovatebot.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen?style=flat)](LICENSE)
-[![Hits](https://hits.sh/github.com/AndriyKalashnykov/vks-airgap-cicd.svg?view=today-total&style=flat&color=4c1)](https://hits.sh/github.com/AndriyKalashnykov/vks-airgap-cicd/)
 
 # Air-gapped CI/CD on VMware VKS
 
-Reference implementation of an end-to-end CI/CD pipeline for a **fully air-gapped**
-VKS cluster (VMware vSphere Kubernetes Service, VCF 9 + Supervisor). Two surfaces:
+Reference implementation of an end-to-end CI/CD pipeline for a **fully air-gapped** VKS cluster
+(VMware vSphere Kubernetes Service, VCF 9 + Supervisor).
 
-- **Pipeline surface** — self-hosted **Gitea** + **Tekton** (test → **Kaniko** build →
-  **Harbor** push → GitOps tag write-back), wired to **Harbor** + **ArgoCD**, which run as **Supervisor Services** (you install them, or they already exist and you are a tenant).
-- **Delivery surface** — an OS-portable (Ubuntu / PhotonOS) jump-box image mirror (**crane**,
-  dual-homed or **[sneakernet](docs/sneakernet.md)** — carry the bundle across on a stick when the jump
-  box has internet but no route to Harbor), a dependency-baked offline **Maven** builder, an **optional** pluggable
-  ingress (**Istio** default, **Traefik** optional — or **attach to an Istio the platform team already
-  installed**) fronting the UIs at `*.vks.local`, and a **KinD** end-to-end that proves the whole flow
-  locally.
+- **Pipeline** — self-hosted **Gitea** + **Tekton**: test → **Kaniko** build → **Harbor** push →
+  GitOps tag write-back → **ArgoCD** sync → the live page.
+- **Delivery** — an OS-portable (Ubuntu / PhotonOS) jump-box image mirror (**crane**, dual-homed or
+  **[sneakernet](docs/sneakernet.md)**), a pre-baked offline builder image per language, an optional
+  ingress fronting the UIs at `*.vks.local`, and a **KinD** end-to-end that proves the flow locally.
 
-  The ingress is **optional**: it only decides *how you reach the UIs*. The pipeline itself is proven
-  over a port-forward, so it needs no ingress and no `/etc/hosts` entry. Add one when you want
-  `*.vks.local` URLs.
+On VKS, **Harbor** and **ArgoCD** are **Supervisor Services** — you either install them, or they
+already exist and you are a tenant. **Istio** is a guest-cluster **VKS Standard Package**, so this
+project *attaches* to a mesh that already exists (`INGRESS_CONTROLLER=istio-existing`) and installs
+its own only when there is none — `make istio-preflight` tells you which case you are in. What this
+project always owns: mirroring every required image into Harbor, and installing and wiring
+**Gitea + Tekton** and the demo apps.
 
-<p align="center"><img src="docs/diagrams/out/airgap.png" alt="Air-gap connectivity: the jump box bridges the internet and the air-gapped VKS cluster; the cluster itself has no internet access" width="820"></p>
+The ingress is **optional** — it only decides *how you reach the UIs*. The pipeline is verified over
+a port-forward, so it needs no ingress and no `/etc/hosts` entry.
 
-<p align="center"><em>The jump box is the only bridge — it pulls from the internet and pushes into the air-gapped cluster, which has no internet access of its own.</em></p>
+<p align="center"><img src="docs/diagrams/out/airgap.png" alt="Air-gap connectivity: the jump box bridges the internet and the air-gapped VKS cluster" width="760"></p>
 
-> A developer pushes a change to **Gitea** → **Tekton** runs tests, builds a container
-> image with **Kaniko** and pushes it to **Harbor** → Tekton bumps the image tag in the
-> deploy repo → **ArgoCD** syncs the new version to the cluster → the web UI updates.
-> On VKS, **Harbor** and **ArgoCD** run as **Supervisor Services** (on the Supervisor —
-> you either install them, or they already exist and you're a tenant), and **Istio** is a guest-cluster
-> **VKS Standard Package** your cluster owner may or may not have installed — so this project
-> **attaches** to that mesh (`INGRESS_CONTROLLER=istio-existing`), and only helm-installs its own,
-> with images from your Harbor, when there is none. `make istio-preflight` tells you which case you
-> are in — never install over a mesh you did not install. What this project always owns: mirroring every required image into Harbor, and
-> installing + wiring **Gitea + Tekton** and the demo app.
-> See [`docs/vks-services/`](docs/vks-services/) for what each service is, and how to install/configure/use it.
+<p align="center"><em>The jump box is the only bridge — it pulls from the internet and pushes into the air gap.</em></p>
 
 ## What the demo deploys
 
-The demo ships **six apps, one per language** — Java, Go, Node.js, Python, Rust and .NET — and runs
-every one through the *same* walk:
-`git push` → Tekton (test → Kaniko build → Harbor → tag write-back) → ArgoCD → the live page.
-`apps/registry.tsv` is the single source of truth — everything else loops over it.
+**Six apps, one per language** — Java, Go, Node.js, Python, Rust and .NET — each run through the
+*same* pipeline and verified independently. `apps/registry.tsv` is the single source of truth;
+everything else loops over it.
 
-**The languages are not decoration — they are the air-gap story.** An in-cluster build reaches no
-package registry, so every app ships a **pre-baked builder image** (`Dockerfile.builder`) carrying
-its own dependency cache: `~/.m2` for Java, the module cache for Go, and so on. All are built on the
-internet-connected jump box, pushed to Harbor, and consumed by the offline build — same pipeline
-either way. Each app is verified independently, so a green `javawebapp` never hides a broken
-`gowebapp`, and `make check-ui-contract` requires every app to render an **identical page**, so they
-differ in data and never in layout.
+An in-cluster build reaches no package registry, so every app ships a **pre-baked builder image**
+(`Dockerfile.builder`) carrying its own dependency cache — `~/.m2` for Java, the module cache for Go,
+and so on. All are built on the internet-connected jump box, pushed to Harbor, and consumed offline.
 
-Adding an app is **one row** in `apps/registry.tsv` — but the row is an **enrolment**, so add it
-only once the app is finished (it enrols the app in every gate at once). See
-[Adding an app](docs/adding-an-app.md).
-As a **tenant** it may also need grants you must request:
-[Scenario 2 → adding an app as a tenant](docs/scenario-2.md#adding-an-app-as-a-tenant).
+Adding an app is **one row** in `apps/registry.tsv` — see [Adding an app](docs/adding-an-app.md).
 
 ## Choose your path
 
-New here? Pick the path that matches your situation — each one is self-contained end to end:
-
-1. **VKS — I install Harbor + ArgoCD** (as **Supervisor Services**) — I am the admin: I provision the workload cluster too, then run the pipeline.
-2. **VKS — Harbor + ArgoCD already exist** — I am a **tenant**: I **discover** them,
-   **request** what I'm not allowed to self-service, then run the pipeline.
-3. **KinD** — *see it work.* No VKS cluster, **zero `.env`**.
+Pick the one that matches your situation and follow it in order — each is self-contained end to end.
 
 | I want to… | Path | You need |
 |------------|------|----------|
-| **VKS — I install Harbor + ArgoCD** (I am the admin) | [Scenario 1](docs/scenario-1.md) | **Have:** a vSphere login that can install a Supervisor Service, create a vSphere Namespace and provision a guest cluster · cluster-admin on that guest cluster · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md#acquiring-the-licensed-vcf-cli-archives))<br>**Reachable from the jump box:** the internet, the Supervisor API, Harbor — and ArgoCD's cluster must reach your guest API. |
-| **VKS — Harbor + ArgoCD already exist** (I am a **tenant**) | [Scenario 2](docs/scenario-2.md) | **Have:** cluster-admin on your own guest cluster · Harbor **project-admin** (else ask for robot credentials) · the licensed VCF CLI archives ([where to get them](docs/vks-authentication.md#acquiring-the-licensed-vcf-cli-archives))<br>**Ask the platform team for:** your guest cluster **registered** with ArgoCD (admin-only) · an ArgoCD role that lets you create an `Application` · mesh rights — `make istio-preflight` prints exactly what to request<br>**Reachable from the jump box:** the internet and Harbor. |
-| **Just see it work** (no VKS cluster) | [KinD](docs/kind-local.md) | **Have:** Docker (KinD needs Docker specifically) · internet access |
+| **Install Harbor + ArgoCD myself** (I am the admin) | [Scenario 1](docs/scenario-1.md) | a vSphere login that can install a Supervisor Service |
+| **They already exist** (I am a **tenant**) | [Scenario 2](docs/scenario-2.md) | cluster-admin on your own guest cluster |
+| **Just see it work** (no VKS cluster) | [KinD](docs/kind-local.md) | Docker · internet access · **zero `.env`** |
 
-Pick one and follow it in order: each document answers the decisions in its own runbook, and
-`make check-readme-scenarios` gates eight of them. The **container engine** below is the one
-deliberate exception — it is decided here and not repeated in them. Each path opens by getting the
-repo onto the box; the two VKS paths do it through a shared
-[Common bootstrap](docs/common-bootstrap.md). Once it is up:
-**[Access the UIs](docs/access-uis.md)** — URLs, logins, passwords.
+Both VKS paths start with the shared [Common bootstrap](docs/common-bootstrap.md). Once the stack is
+up: **[Access the UIs](docs/access-uis.md)** for URLs, logins and passwords.
 
-**Delivery (both VKS paths):** if no single box reaches **both** the internet *and* Harbor, mirror via
-**[sneakernet](docs/sneakernet.md)** — pull on the internet box, carry the bundle across, push from the
-air-gap box. (KinD is dual-homed, so there is no bundle to carry.)
+If no single box reaches **both** the internet *and* Harbor, mirror via
+**[sneakernet](docs/sneakernet.md)** — pull on the internet box, carry the bundle, push from the
+air-gap box.
 
-> **Container engine — podman is the default and you do nothing.** `make deps` installs it, and it is
-> the only engine that needs **no sudo on any box**. **Docker is supported, opt-in.**
->
-> Decided here and **not repeated in the three paths**. There is nowhere to "set" it: `CONTAINER_ENGINE`
-> must stay **commented** in `.env` — an uncommented value pins the engine and defeats any per-run
-> override (`.env.example` says so at the key) — so docker rides the environment:
->
-> ```bash
-> # ONLY for docker. For podman, the default, you set NOTHING and export NOTHING.
-> export CONTAINER_ENGINE=docker   # per SESSION. `make deps CONTAINER_ENGINE=docker` sets it for
-> make deps                        # ONE invocation only, so a later bare `make` reverts to podman.
-> ```
->
-> Then, **once Harbor exists**, `make trust-harbor`. Rootful docker costs **one sudo per registry** and
-> that cannot be engineered away; `make trust-harbor` prints the exact line. Unsure what your box has?
-> `make engine-check` is read-only and tells you the engine, the mode and what it will cost. The
-> measurements behind all of this — per engine, per OS — are in
-> [the container-engine decision](docs/decisions/container-engine-support.md).
->
-> `make e2e-kind` needs Docker **regardless**: kind's nodes *are* docker containers.
+**Container engine:** podman is the default and needs no action. Docker is supported opt-in — see
+[container engine](docs/decisions/container-engine-support.md). `make e2e-kind` needs Docker
+regardless, because kind's nodes *are* docker containers.
 
 ## Reference
 
-Background and deep-dives. A path document names the ones it needs — Scenario 2 links
-[VKS authentication](docs/vks-authentication.md) for the licensed archives, and Scenario 1 lists
-them inline — so you do not need to read these first.
+Deep-dives. Each path names the ones it needs, so you do not have to read these first.
 
 | | |
 |---|---|
@@ -134,17 +87,12 @@ Open an issue or a pull request. Before you push:
 make ci
 ```
 
-`make ci` is a **superset** of what a PR runs, not the same thing: a PR runs `static-check-fast`,
-`static-check-pr` (which omits `sec` — gitleaks, trivy-fs, trivy-config) and `secrets-scan`, while
-the full `static-check` runs on the weekly schedule. Two differences can still make CI red on a
-green local run — CI sets `GWAPI_REQUIRE_FETCH=1`, so a schema fetch that *skips* locally is a
-*failure* there, and the code jobs are path-filtered, so a docs-only PR skips them entirely.
+`make ci` is a superset of what a PR runs, so a green `make ci` can still differ from CI — see
+[CI/CD](docs/ci-cd.md).
 
 **Do not bump tool or image versions by hand** — [Renovate](https://docs.renovatebot.com/) owns
-them: `.mise.toml`, `pom.xml`, `Dockerfile*` and `.github/workflows/*` through its own managers, and
-`Makefile`, `.env.example`, `images/images.txt`, `k8s/**.yaml` and `scripts/**.sh` through custom
-ones. A **partial** hand-edit fails `make ci`, because the same version lives in several files and
-an alignment gate asserts they agree.
+them. The same version lives in several files and an alignment gate asserts they agree, so a partial
+hand-edit fails `make ci`.
 
 ## License
 
