@@ -85,9 +85,33 @@ log_info "Istio via VKS Standard Package '${PKG}' (ISTIO_INSTALL_METHOD=package)
 # THE FALSE-GREEN THIS EXISTS FOR: on a DUAL-HOMED lab the install SUCCEEDS from Broadcom, goes
 # green, and proves nothing about the air gap -- the same class as a builder base image that
 # silently falls back to the public registry. The operator learns on the box that can still fix it.
+# Resolve the Package namespace ONCE, by asking the cluster (lib/os.sh). Both the tripwire below
+# and the bundle-host probe further down must agree about where they are looking.
+PKG_NS_RESOLVED="$(vks_package_namespace "$PKG" 2>/dev/null || true)"
+[ -n "$PKG_NS_RESOLVED" ] || PKG_NS_RESOLVED=vmware-system-tkg
+
+# VKS 3.7+ TRIPWIRE. We install into `vmware-system-tkg`, which is the SYSTEM's namespace -- a
+# deliberate trade-off (see vks-package.sh's header and docs/vks-services/istio.md). On VKS 3.7+
+# the ADDON FRAMEWORK reconciles that namespace, so an addon-managed `istio` and our hand-applied
+# PackageInstall would be two writers on one name. Measured on VKr v1.34.9 / VKS 3.6.0
+# (2026-08-25): ZERO addon CRDs on the guest, so the conflict cannot occur there. The presence of
+# an addon CRD is the discriminator -- cheap, and it does not enumerate versions.
+if [ "${DRY_RUN:-0}" != 1 ]; then
+  _addon_crds="$(kubectl get crd -o name 2>/dev/null | grep -c 'addons\.kubernetes\.vmware\.com' || true)"
+  if [ "${_addon_crds:-0}" -gt 0 ] 2>/dev/null; then
+    log_warn "this guest carries the VKS ADDON framework (${_addon_crds} addon CRD(s))."
+    log_warn "  We are about to hand-apply a PackageInstall into '${PKG_NS_RESOLVED}',"
+    log_warn "  which the addon controller also reconciles. If '${PKG}' is ALSO installed as an addon,"
+    log_warn "  the two are competing writers on one name. Check before proceeding:"
+    log_warn "      kubectl get addoninstall,clusteraddon -A 2>/dev/null | grep -i istio"
+    log_warn "  If it is addon-managed, install it that way instead ('vcf addon install create istio')"
+    log_warn "  and set INGRESS_CONTROLLER=istio-existing here."
+  fi
+fi
+
 BUNDLE_HOST=""
 if [ "${DRY_RUN:-0}" != 1 ]; then
-  _pkg_cr="$(kubectl get package -n "${VKS_PACKAGE_NAMESPACE:-vmware-system-tkg}"     -o jsonpath="{range .items[?(@.spec.refName=='${PKG}')]}{.spec.template.spec.fetch[0].imgpkgBundle.image}{'\n'}{end}"     2>/dev/null | tail -1 || true)"
+  _pkg_cr="$(kubectl get package -n "${PKG_NS_RESOLVED}"     -o jsonpath="{range .items[?(@.spec.refName=='${PKG}')]}{.spec.template.spec.fetch[0].imgpkgBundle.image}{'\n'}{end}"     2>/dev/null | tail -1 || true)"
   BUNDLE_HOST="${_pkg_cr%%/*}"
 fi
 if [ -n "$BUNDLE_HOST" ]; then

@@ -2020,6 +2020,42 @@ classify_argocd_failure() {
   printf '%s' "$_cls"
 }
 
+# vks_package_namespace [<package-refName>]
+#
+# Where do this cluster's Carvel `Package` CRs live? DISCOVER it; do not hardcode it.
+#
+# WHY DISCOVERY AND NOT A CONSTANT: the name is not stable across sources. MEASURED 2026-08-25 on
+# guest cicd-gc0825181952 (VKS Service 3.6.3-embedded+v1.35): all 84 Packages and the single
+# PackageRepository are in `vmware-system-tkg`, and `vmware-vks-system` does NOT EXIST. A published
+# walkthrough on the SAME 3.6.x generation (its repo build 3.6.0-20260416 is the one this lab runs)
+# says the system repository is in `vmware-vks-system`. One of those is wrong, or it varies per
+# cluster; one lab cannot tell, and it does not need to -- ask the cluster.
+#
+# A hardcoded namespace fails in the WORST way: a PackageInstall in the wrong namespace reconciles
+# to `Package <name> not found`, which reads as "the package does not exist" and is really "you
+# looked in the wrong place". Lab-verified 2026-08-10: it retried that for 4 minutes.
+#
+#   VKS_PACKAGE_NAMESPACE set  -> used verbatim, no query (an operator override always wins)
+#   unset                      -> the namespace(s) actually holding Packages; exactly one -> use it
+#   nothing found / ambiguous  -> non-zero, and the CALLER decides. It must NOT silently proceed:
+#                                 an empty answer means "we could not tell", never "absent".
+vks_package_namespace() {
+  local want="${1:-}" out=""
+  if [ -n "${VKS_PACKAGE_NAMESPACE:-}" ]; then printf '%s' "$VKS_PACKAGE_NAMESPACE"; return 0; fi
+  if [ -n "$want" ]; then
+    out="$(kubectl get packages -A \
+            -o jsonpath="{range .items[?(@.spec.refName=='${want}')]}{.metadata.namespace}{'\n'}{end}" \
+            2>/dev/null | sort -u || true)"
+  fi
+  [ -n "$out" ] || out="$(kubectl get packages -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' \
+                            2>/dev/null | sort -u || true)"
+  case "$(printf '%s\n' "$out" | grep -c . || true)" in
+    1) printf '%s' "$out"; return 0 ;;
+    0) return 1 ;;                                          # could not tell -- NOT "absent"
+    *) printf '%s' "$out" | tr '\n' ' ' >&2; return 2 ;;      # ambiguous: the caller must choose
+  esac
+}
+
 classify_kube_failure() {
   local errfile="${1:-/dev/null}" e=""
   [ -r "$errfile" ] && e="$(cat "$errfile" 2>/dev/null || true)"

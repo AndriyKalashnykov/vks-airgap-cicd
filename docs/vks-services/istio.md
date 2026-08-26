@@ -492,3 +492,63 @@ this way is settled in [the decision record](../decisions/istio-via-vks-package.
   Env: vSphere 9.0.2, Supervisor 1.32.9, VKS 3.6.2+v1.35, vKR 1.35.2, repo 3.6.0-20260416,
   Istio 1.28.5, cert-manager 1.19.2.
 - This repo: `docs/decisions/istio-on-vks.md` (the decision + the full verification matrix)
+
+## `vcf addon` vs a hand-applied `PackageInstall` — corrected grades (2026-08-25)
+
+| claim | grade | evidence |
+|---|---|---|
+| `vcf addon` is the **NEWER** mechanism (VKS 3.5+), not an obsolete one | **9.1-primary-doc** | Broadcom calls the PackageInstall path *"the older package mechanism"* / *"legacy PackageInstall"*, ships a page titled *"Migrate a Legacy Package Add-on"* and a one-way `vcf addon install migrate` verb |
+| **neither path is formally deprecated** | **9.1-primary-doc** | zero deprecation notices for `vcf package`/Carvel/PackageInstall in the VCF 9.1 Product Support Notes; the 9.1 doc says the old workflow *"remains available"* |
+| a hand-applied `PackageInstall` is a **documented, supported** path | **9.1-primary-doc** | the air-gapped 9.1 guide §1d: Standard Packages are managed *"by using the VCF CLI **or Carvel custom resources**"*; and Broadcom's *Install Cluster Autoscaler Using Kubectl* page ships the full SA + CRB + PackageInstall YAML |
+| **Istio has NOT been migrated to the addon path** | **9.1-primary-doc, measured** | Broadcom's Istio page and NFS page were both updated **2026-08-22**; NFS is `vcf addon`×5 / `vcf package`×0, Istio is `vcf addon`×**0** / `vcf package`×**5** |
+| `vcf addon` targets the **Supervisor**, not the guest | **9.1-primary-doc** | *"set kubectl context to Supervisor API-Server"*; `AddonInstall` etc. live in `vmware-system-vks-public` **on the Supervisor** |
+
+**So we keep the `PackageInstall` path** — not because it is more current (it is not), but because
+`vcf addon` needs the **entitled** VCF Consumption CLI **and Supervisor access**, which a tenant
+(the default posture, RULE ZERO-B) does not have; because its air-gapped image resolution requires
+Harbor-as-a-Supervisor-Service plus Software Depot; and because Istio is measurably still on the
+`vcf package` side of Broadcom's own documentation.
+
+## Why we install into `vmware-system-tkg` — a DELIBERATE trade-off, not the only option
+
+Grade: **lab-verified 2026-08-25** (guest `cicd-gc0825181952`, VKr `v1.34.9+vmware.2`, repo build
+`vks-standard-packages:3.6.0-20260416`) unless marked otherwise.
+
+`vks-package.sh` applies its `PackageInstall` + ServiceAccount + cluster-admin ClusterRoleBinding
+into **`vmware-system-tkg`**, riding the **system-managed** `PackageRepository` that ships with the
+cluster. Broadcom's own kubectl documentation and community practice instead put a **customer-owned**
+versioned repository in **`tkg-system`**. Both work. Here is why we do not move.
+
+| | ride the system repo (**what we do**) | own a repo in `tkg-system` |
+|---|---|---|
+| objects we create | PackageInstall + SA + CRB | …plus a `PackageRepository` we must maintain |
+| **air gap** | **free** — the platform team already relocated it | **we** must relocate the bundle ourselves, i.e. the Software-Depot flow this repo deliberately does not adopt |
+| version tracking | automatic — the system repo follows the VKS Service release | **ours**: *"you should update your repository when you update VKS Service versions"* ([Bauer](https://medium.com/@bob-bauer/managing-vks-package-repositories-fe345bd8bf08)) |
+| isolation from system lifecycle | none — see the risk below | full |
+
+**The risk, measured rather than assumed.** The system namespace is *"reserved for the addon
+controller and system-owned packages. Using it for customer-managed installs is discouraged to avoid
+potential conflicts with automated system updates."* On **this** cluster that conflict cannot occur:
+
+- `kubectl get crd | grep -c addon` -> **0** — no addon framework on the guest at all;
+- `kapp-controller` runs in **`tkg-system`**, which is otherwise **empty** (no `pkgr`, no `pkgi`);
+- the 8 existing installs are all `<cluster>-<component>` (antrea, gateway-api, metrics-server,
+  pinniped, …) — our `istio` collides with none of them.
+
+So it is a **MEDIUM that becomes live on VKS 3.7+**, where the addon framework actively reconciles
+that namespace and an addon-managed `istio` and ours would be two writers on one name. `43-install-
+istio-package.sh` warns when addon CRDs are present.
+
+**Discrepancy left OPEN, not guessed.** Bauer names the system repo's namespace **`vmware-vks-system`**;
+on this lab that namespace **does not exist** and the repository is in `vmware-system-tkg`. Either the
+article has a slip or it is version-dependent. One lab cannot tell. Settle it on a VKS 3.7 cluster:
+
+```sh
+kubectl get ns | grep -E 'vmware-(vks-system|system-tkg)'
+kubectl get pkgr -A
+```
+
+**Both paths are supported.** The same article: *"Customers are encouraged to adopt the Addon
+controller pattern… **However, manual lifecycle operations via the CLI remain a supported
+alternative for granular control.**"* And Broadcom's air-gapped 9.1 guide §1d: VKS Standard Packages
+are managed *"by using the VCF CLI **or Carvel custom resources**"*.

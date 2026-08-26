@@ -13,13 +13,36 @@
 # which reads as a missing package and is really a wrong namespace -- it retried that for 4
 # minutes before the namespace was corrected. Every platform-managed install on a VKS cluster
 # (<cluster>-antrea, -gateway-api, -metrics-server) lives there for the same reason. So do ours.
+#
+# ⚠️ AND THAT IS A DELIBERATE TRADE-OFF, NOT "the correct namespace". `vmware-system-tkg` is the
+# SYSTEM's -- it holds the system-managed PackageRepository and is documented as reserved for the
+# addon controller. Broadcom's own kubectl docs put CUSTOMER-managed installs in `tkg-system` with
+# a repository YOU create and version. We ride the system repo on purpose:
+#   - in an AIR GAP the platform team has already relocated it, so it costs us nothing; owning one
+#     would mean relocating the bundle ourselves -- the Software-Depot flow this repo rejects;
+#   - the system repo tracks the VKS Service release automatically; ours would have to be bumped
+#     by hand on every VKS Service upgrade.
+# Measured on VKr v1.34.9 (VKS 3.6.0), 2026-08-25: the guest has ZERO addon CRDs, `tkg-system` is
+# EMPTY (kapp-controller runs there but owns no pkgr/pkgi), and the 8 platform installs are all
+# named <cluster>-<component> -- so our `istio` collides with nothing. The conflict the docs warn
+# about becomes real on VKS 3.7+, where the addon framework reconciles this namespace; 43-install-
+# istio-package.sh warns when addon CRDs are present. See docs/vks-services/istio.md.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
 load_env
 
-PKG_NS="${VKS_PACKAGE_NAMESPACE:-vmware-system-tkg}"
+# DISCOVERED, not hardcoded -- see vks_package_namespace() in lib/os.sh for why the name is not
+# stable across sources. An explicit VKS_PACKAGE_NAMESPACE still wins. If the cluster cannot be
+# asked (no kubeconfig yet, an offline `list`), fall back to the historically-measured name and
+# SAY the value is unverified -- never let a silent default masquerade as a discovered answer.
+if PKG_NS="$(vks_package_namespace 2>/dev/null)" && [ -n "$PKG_NS" ]; then :
+else
+  PKG_NS=vmware-system-tkg
+  log_warn "could not ask the cluster where Carvel Packages live; assuming '${PKG_NS}'"
+  log_warn "  (lab-measured on VKS 3.6.3, but UNVERIFIED here). Override with VKS_PACKAGE_NAMESPACE=<ns>."
+fi
 ACTION="${1:-list}"
 PACKAGE="${2:-${PACKAGE:-}}"
 require_cmd kubectl jq
