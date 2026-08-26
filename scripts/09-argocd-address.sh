@@ -73,6 +73,23 @@ _state() {                       # absent | pending | <ip>
   case "$out" in '') printf 'pending' ;; *) printf '%s' "$out" ;; esac
 }
 
+# _answers <ip> -- did the VIP ACCEPT A CONNECTION? NOT "is ArgoCD ready".
+#
+# ⚠️ ANY STATUS, NEVER 200, and never a /healthz 200 as a READINESS proxy. Both directions are
+# already measured in this repo:
+#   * requiring 200 false-failed a healthy ArgoCD served under --rootpath (argocd-auth-check.sh:144),
+#     and an L7 LB answering 403/404 unauthenticated does the same;
+#   * /healthz can be answered by a pod that is NOT yet serving the API, and by the LB before it has
+#     finished re-wiring (91-e2e-tenant-mechanism.sh:303) -- so a 200 would not prove readiness here.
+# This probe therefore claims exactly ONE thing: something is LISTENING at this address. curl writes
+# 000 when it never got a response, and that is the only distinction being drawn.
+_answers() {
+  local code
+  code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 \
+            "${ARGOCD_SESSION_SCHEME:-https}://${1}/healthz" 2>/dev/null || true)"
+  [ -n "$code" ] && [ "$code" != 000 ]
+}
+
 # Is `absent` worth WAITING on? Only if the namespace exists and the Service has not appeared yet.
 # A missing NAMESPACE, an unusable kubeconfig, a stale CA or a rejected credential are all states
 # that waiting cannot fix, and most of them mean this kubeconfig is not the Supervisor. FORBIDDEN and
@@ -146,17 +163,82 @@ case "$st" in
     log_error "    kubectl --kubeconfig ${SUP} -n ${NS} get svc argocd-server -o wide"
     exit 1 ;;
 esac
+
+# ── THE ADDRESS APPEARING IS NOT THE ADDRESS BEING RIGHT ──────────────────────────────────────────
+# MEASURED on the live 3.7 lab, certification row 1, 2026-08-26:
+#   05:56:14  svc/argocd-server created
+#   05:56:24  this script published ARGOCD_SERVER=192.168.101.131  (10s after the Service appeared)
+#   05:56:40  `make argocd-auth-check` polled .131 -- 30 attempts, 170s, every one HTTP 000
+#   later     the SAME Service object (same uid, NEVER recreated) carried 192.168.101.138, which
+#             answered HTTP 200. .131 was by then allocated to nothing at all.
+#             harbor moved .130 -> .137 in the same run: the whole VIP pool shifted.
+# The wait above breaks the INSTANT an address exists, i.e. publishes at the moment of maximum churn.
+# argocd-auth-check already carries a 30x readiness poll added for this same row's PREVIOUS failure
+# (B163/F2) and it could not help: it polls the address it was GIVEN and never re-resolves, so it
+# waited out a permanently dead VIP.
+#
+# RE-RESOLVING IS THE LOAD-BEARING HALF. A probe alone would only relocate that 150s wait one script
+# earlier. Harbor survives this class solely because HARBOR_URL is a NAME that DNS re-resolves.
+if [ "$WAIT" -gt 0 ] && ! _answers "$st"; then
+  log_info "svc/argocd-server reports ${st}, but nothing answers there — re-resolving until it does."
+  _rw=0
+  while [ "$_rw" -lt "$WAIT" ]; do
+    sleep 15; _rw=$((_rw + 15))
+    _now="$(_state)"
+    case "$_now" in absent|pending) continue ;; esac
+    if [ "$_now" != "$st" ]; then
+      log_warn "  the LoadBalancer address CHANGED underneath us: ${st} -> ${_now}"
+      st="$_now"
+    fi
+    _answers "$st" && { log_info "  ${st} answers (${_rw}s)"; break; }
+    [ $((_rw % 60)) = 0 ] && log_info "  ${st} still silent (${_rw}/${WAIT}s) ..."
+  done
+  # ⚠️ WARN AND PUBLISH -- deliberately NOT a die. A die converts today's LATE failure into an EARLY
+  # hard stop on a lab where the address is fine and only this probe is wrong (an L7 LB answering
+  # 403/404 unauthenticated, a --rootpath deployment). The Service's address is still the best answer
+  # available, so publish it and say loudly that it never answered.
+  _answers "$st" || {
+    log_warn "nothing answered at ${st} within ${WAIT}s — PUBLISHING IT ANYWAY."
+    log_warn "  This probe only asks whether SOMETHING is listening; an L7 LB or a --rootpath install"
+    log_warn "  can legitimately refuse it. If the next step cannot connect, re-run"
+    log_warn "  'make argocd-address': it re-resolves, and may overwrite a value it wrote itself."
+  }
+fi
 ip="$st"
 
 # NON-DESTRUCTIVE, and it matters on a real lab: a TENANT may have been GRANTED an address for an
 # ArgoCD they do not own, and discovering a same-named service on some other cluster must not
 # overwrite it. Same rule 02-env.sh:137 already applies -- write only over a placeholder.
-if ! is_placeholder "${ARGOCD_SERVER:-}" && [ "${ARGOCD_SERVER}" != "$ip" ]; then
+# ⚠️ ...BUT A VALUE **WE** WROTE IS OURS TO CORRECT, or the only remedy is blocked. MEASURED
+# 2026-08-26: when the VIP moved, `.env` held the dead .131; re-running `make argocd-address` -- the
+# operator's obvious next move, and the one this script's own warning implies -- hit the guard below,
+# printed "change it in .env yourself" and exited 0 HAVING CHANGED NOTHING. So the address was
+# unrecoverable by tooling, and nothing said so.
+# The tenant protection is the POINT and is kept: we overwrite only a value carrying our own
+# provenance marker. A granted address has none, so it is still never clobbered.
+# There is NO state_get() in lib/state.sh -- the sink is SOURCED by load_env, so the marker is
+# already an environment variable by the time we get here. Calling a non-existent helper would have
+# returned empty under `|| true` and silently pinned this guard shut, which is the bug it is fixing.
+if ! is_placeholder "${ARGOCD_SERVER:-}" && [ "${ARGOCD_SERVER}" != "$ip" ] \
+   && [ "${ARGOCD_SERVER_SOURCE:-}" != discovered ]; then
   log_warn "ARGOCD_SERVER is already set to '${ARGOCD_SERVER}' - NOT overwriting it with the discovered ${ip}."
+  log_warn "  Nothing here wrote that value, so it is treated as one you were GRANTED and is left alone."
   log_warn "  If ${ip} is the one you want, change it in .env yourself."
 else
+  if [ -n "${ARGOCD_SERVER:-}" ] && [ "${ARGOCD_SERVER}" != "$ip" ]; then
+    log_warn "correcting ARGOCD_SERVER ${ARGOCD_SERVER} -> ${ip} (we wrote the previous value)."
+  fi
   set_env_var ARGOCD_SERVER "$ip" "${REPO_ROOT}/.env"
+  # PROVENANCE, so a later run may correct this value (see the guard above). It goes to the STATE
+  # overlay, not .env: it is something the system observed about itself, never an operator tunable.
+  state_set ARGOCD_SERVER_SOURCE discovered 2>/dev/null || true
   log_info "wrote ARGOCD_SERVER=${ip} to ./.env"
+  # DEBT, recorded where it is created: .env.example:439 says this should be
+  # `<SET-a-name-the-cert-carries>`, and the lab-verified SAN list carries NO IP SAN -- so this IP
+  # works only because every consumer runs --insecure/-k. Harbor survives VIP churn precisely because
+  # HARBOR_URL is a NAME. show-dns-records.sh already emits an A-record row for argocd-server, so the
+  # name path exists and is unused here. Publishing a name is a separate change (it needs the A
+  # record to be a documented step); see BACKLOG.md B486.
 fi
 
 echo
