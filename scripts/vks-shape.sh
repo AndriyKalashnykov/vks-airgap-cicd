@@ -76,11 +76,21 @@ if [ "${zones:-1}" -gt 1 ] 2>/dev/null; then sc_n=0; sc_multizone=1; else sc_mul
 # and it is the OLD end (measured: cicd and lab each held the same 3, every one deprecated=true and
 # capped at k8s v1.32, against 7 up to v1.36 in the public one).
 ccns="${VKS_CLUSTERCLASS_NAMESPACE:-vmware-system-vks-public}"
-cc_all="$(k get clusterclass -n "$ccns" \
-            -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.metadata.labels.kubernetes\.vmware\.com/min-version-supported}{"|"}{.metadata.labels.kubernetes\.vmware\.com/max-version-supported}{"|"}{.metadata.labels.deprecated\.kubernetes\.vmware\.com/deprecated}{"\n"}{end}' \
-            2>/dev/null | grep -v '^$' || true)"
-cc_live="$(printf '%s\n' "$cc_all" | awk -F'|' '$4!="true"{print $1}' | sort -V || true)"
-cc_newest="$(printf '%s\n' "$cc_live" | tail -1)"
+# ⚠️ NO `sort -V`. It is BANNED in product code here — it is OS-dependent (toybox != GNU) and this
+# repo ships a shared jq sort key, vkey_jq(), used at 8 sites. test-vks-package-version-sort.sh
+# gates it, and caught this file using `sort -V` on its first full run. Sorting the CLASS list also
+# genuinely needs a version key, not lexicographic: builtin-generic-v3.9.0 must rank BELOW v3.10.0,
+# and VKS moved 3.1 -> 3.7 inside this repo's own history, so v3.10 is within the artifact's life.
+cc_all="$(k get clusterclass -n "$ccns" -o json 2>/dev/null \
+  | jq -r "$(vkey_jq)"' [.items[]
+      | {n: .metadata.name,
+         v: (.metadata.labels["kubernetes.vmware.com/version"] // ""),
+         mn: (.metadata.labels["kubernetes.vmware.com/min-version-supported"] // ""),
+         mx: (.metadata.labels["kubernetes.vmware.com/max-version-supported"] // ""),
+         d:  (.metadata.labels["deprecated.kubernetes.vmware.com/deprecated"] // "")}]
+      | sort_by(.v | vkey) | .[] | "\(.n)|\(.mn)|\(.mx)|\(.d)"' 2>/dev/null | grep -v '^$' || true)"
+cc_live="$(printf '%s\n' "$cc_all" | awk -F'|' '$4!="true"{print $1}' || true)"
+cc_newest="$(printf '%s\n' "$cc_live" | grep -v '^$' | tail -1 || true)"
 
 if [ "$VERB" = show ]; then
   echo
@@ -100,7 +110,7 @@ if [ "$VERB" = show ]; then
   echo "  VKS_CLUSTERCLASS — INERT. The Supervisor rewrites it to the newest COMPATIBLE class;"
   echo "                     it only has to EXIST. Listing ${ccns}:"
   if [ -n "$cc_all" ]; then
-    printf '%s\n' "$cc_all" | sort -V | while IFS='|' read -r n mn mx dep; do
+    printf '%s\n' "$cc_all" | while IFS='|' read -r n mn mx dep; do
       [ -n "$n" ] || continue
       if [ "$dep" = true ]; then printf '      %-26s k8s %s..%s   DEPRECATED\n' "$n" "$mn" "$mx"
       else                       printf '      %-26s k8s %s..%s\n' "$n" "$mn" "$mx"; fi

@@ -20,8 +20,24 @@ mkdir -p "$T/bin"
 cp .env.example "$T/.env.example"
 printf 'apiVersion: v1\nkind: Config\nclusters: []\n' > "$T/sup.kc"
 
+# $2 is "name|min|max|deprecated" lines for READABILITY; the stub converts them to the JSON the
+# product now asks for. The product moved from `-o jsonpath` to `-o json | jq` when the repo's
+# sort -V ban forced it onto the shared vkey key — and this stub NOT being updated is what turned
+# the three clusterclass cases RED, which is the evidence they are not vacuous.
 mk_kubectl() { # $1 = storageClassName lines ; $2 = clusterclass lines (name|min|max|deprecated)
-  printf '%s' "$1" > "$T/sc"; printf '%s' "$2" > "$T/cc"
+  printf '%s' "$1" > "$T/sc"
+  printf '%s' "$2" | python3 -c '
+import json,sys
+items=[]
+for ln in sys.stdin.read().splitlines():
+    if not ln.strip(): continue
+    n,mn,mx,d = (ln.split("|") + ["","","",""])[:4]
+    lab={"kubernetes.vmware.com/version": n.rsplit("-",1)[-1],
+         "kubernetes.vmware.com/min-version-supported": mn,
+         "kubernetes.vmware.com/max-version-supported": mx}
+    if d: lab["deprecated.kubernetes.vmware.com/deprecated"]=d
+    items.append({"metadata":{"name":n,"labels":lab}})
+json.dump({"items":items}, sys.stdout)' > "$T/cc"
   cat > "$T/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 case " $* " in
