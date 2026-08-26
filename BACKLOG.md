@@ -472,6 +472,46 @@ Still open, deliberately: WIRING it into an automated path. It needs a live KinD
 and mutates that cluster's ArgoCD, so where it belongs is a design question, not a one-liner. B471
 carries it.
 
+## 🔴 B486 — `ARGOCD_SERVER` is published as an **IP**, and `.env.example` says it must be a **NAME** 🔴 open
+
+**MEASURED on the live 3.7 lab, certification row 1, 2026-08-26.** `09-argocd-address.sh` publishes
+`ARGOCD_SERVER=<LB IP>`. `.env.example:439` says it should be `<SET-a-name-the-cert-carries>`, and the
+lab-verified SAN list beside it carries **no IP SAN** at all (`DNS:localhost, DNS:argocd-server,
+DNS:argocd-server.cicd…`). The IP works only because every consumer runs `--insecure`/`-k`.
+
+**Why it matters, with the control from the same run.** The VIP pool shifted: harbor `.130 -> .137`,
+argocd `.131 -> .138`. **Harbor did not break**, because `HARBOR_URL` is a NAME and DNS re-resolved
+it. ArgoCD broke, because a bare IP has no indirection. `show-dns-records.sh:74` **already emits an
+A-record row for `argocd-server`**, so the name path is built and simply unused here.
+
+The re-resolve fix shipped alongside this row makes the IP *survivable*; it does not make it
+*correct*, and it removes the pressure to fix the kind. `rules/common/coding-style.md` §"A COUPLED
+SET is checked in BOTH DIRECTIONS" already names this script as publishing "the one value the docs
+forbid".
+
+**Done-when.** `ARGOCD_SERVER` carries a name the certificate actually presents, with the A record a
+documented step of scenario-1 §5 exactly as §4 does it for Harbor; the LB IP is published separately
+as `ARGOCD_LB_IP` in `.env.state`. Then `-k` stops being load-bearing and TLS can be *verified*.
+
+**Also open, from the same review:**
+
+- **F6, UNSETTLED and load-bearing** — nothing waits for the ArgoCD *instance* to report Ready before
+  reading its Service; there are **zero** readers of that CRD's status in this repo. Whether the
+  VMware `argocds.argocd-service.vsphere.vmware.com` CR even HAS a status stanza is **UNVERIFIED** —
+  it decides whether the re-resolve poll is the fix or a workaround for not waiting on Ready. Could
+  not be settled this session: `walk-reset` deregisters the service, so the CRD was gone. Two
+  read-only commands settle it while a lab has ArgoCD installed:
+  `kubectl get crd argocds.argocd-service.vsphere.vmware.com -o jsonpath='{.spec.versions[0].schema.openAPIV3Schema.properties.status}'`
+- **F7** — this is now the **third** hand-rolled endpoint poller, and the existing two disagree on
+  what counts as answering (`argocd-auth-check.sh` accepts any status ≠ 000; `91-e2e-tenant-mechanism.sh`
+  requires curl success). Extract one `argocd_endpoint_answers` into `lib/argocd.sh` beside
+  `argocd_session_token`, which was single-sourced on 2026-08-17 for exactly this reason.
+- **The VIP-reallocation mechanism is UNDERDETERMINED.** Measured: the Service was created 05:56:14Z
+  and kept the **same uid**, so it was never recreated — its LB status was re-programmed. Whether
+  that was a per-Service reprogram or a Supervisor-wide pool reallocation is unknown; if the latter,
+  a reallocation can land *after* publication and no publisher-side fix is ever sufficient, which is
+  a second argument for the name.
+
 ## 🔴 B484 — the Forbidden-reads-as-absent sweep: a FAIL-OPEN air-gap check outranks the wrong-message bug 🔴 open
 
 **UPDATE 2026-08-26 — F1/F2/F5 DONE; F3 re-graded and CLOSED differently than designed; two NEW

@@ -149,6 +149,27 @@ if [ -n "$pw" ] && [ "$fail" -eq 0 ]; then
     # NOT a die: this check is read-only and its job is to REPORT. Saying the endpoint never
     # answered is itself the diagnosis, and it must not be confused with a credential verdict.
     say "endpoint" "did NOT answer /healthz after ${_att} attempts — anything below is about an endpoint that is not serving"
+      # ⚠️ DIAGNOSE THE STALE ADDRESS, but DO NOT RE-RESOLVE AND CONTINUE. Re-resolving here would
+      # make this check go GREEN while .env still held the dead address -- so `argocd login`,
+      # `make gitops`, `make fetch-argocd-ca` and `creds-show` would all stay broken behind a passing
+      # check. That is the fake-green class. It also cannot work for a TENANT, who is HANDED
+      # ARGOCD_SERVER and has no Supervisor access, so the check would mean two different things in
+      # the two scenarios. Report the discrepancy; change nothing.
+      # MEASURED 2026-08-26: this poll burned 170s against a VIP that had moved .131 -> .138 and was
+      # never coming back. The poll was added (B163/F2) for the K1.5 race -- an address that is
+      # CORRECT but not yet routing -- and is structurally blind to an address that CHANGED.
+      if [ -n "${KC:-}" ] && [ -r "${KC:-}" ]; then
+        _live="$(kubectl --kubeconfig "$KC" -n "$NS" get svc argocd-server \
+                   -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+        if [ -n "$_live" ] && [ "$_live" != "$srv" ]; then
+          say "  THE ADDRESS MOVED" "ARGOCD_SERVER=${srv}, but svc/argocd-server is now at ${_live}"
+          say "  what to do" "your .env is stale - re-run 'make argocd-address'; it re-resolves and may now correct a value it wrote itself"
+        elif [ -z "$_live" ]; then
+          say "  cross-check" "svc/argocd-server reports no LoadBalancer address at all - the instance may still be reconciling"
+        else
+          say "  cross-check" "svc/argocd-server agrees the address is ${srv}, so this is NOT a stale-address problem"
+        fi
+      fi
   fi
   tok="$(argocd_session_token "$srv" "$pw")"
   if [ -n "$tok" ]; then
