@@ -472,6 +472,43 @@ Still open, deliberately: WIRING it into an automated path. It needs a live KinD
 and mutates that cluster's ArgoCD, so where it belongs is a design question, not a one-liner. B471
 carries it.
 
+## 🔴 B489 — `vks-package.sh install` ADOPTS AND OVERWRITES an existing PackageInstall, and re-grants cluster-admin, with NO existence check 🔴 open
+
+**Found by an adversary 2026-08-26 while reviewing an unrelated design; VERIFIED from source before
+filing.** `install` (`scripts/vks-package.sh` ~:184-207) does a bare `kubectl apply -f -` creating:
+
+- ServiceAccount `<name>-pkg-sa`
+- **`ClusterRoleBinding <name>-pkg-sa-cluster-admin` -> `roleRef: ClusterRole/cluster-admin`** — cluster-scoped
+- `PackageInstall <name>` in `$PKG_NS`
+
+with **no check that any of them already exists**, and — per the file's own header ~:70 — **no CONFIRM
+gate on install**. `uninstall` DOES check (`:232`):
+
+    kubectl -n "$PKG_NS" get pkgi "$name" >/dev/null 2>&1 || { log_info "... nothing to do"; exit 0; }
+
+Measured: the only `get pkgi` calls in the file are at `:216 :225 :232 :246` — **all in the uninstall
+path**. Install has no counterpart.
+
+**Consequence.** A `PackageInstall/istio` in `vmware-system-tkg` created by anyone else — a second
+operator, a re-run at a different `PKG_VERSION`, a platform hand-install, or later the VKS addon
+framework — is **silently adopted and overwritten**, along with a cluster-admin ClusterRoleBinding.
+
+**Why this outranks the addon tripwire it was found next to.** `43-install-istio-package.sh` carries
+17 lines of warning about "two competing writers on one name" from the VKS 3.7 addon framework — a
+hazard that is (a) speculative, (b) guarded by a probe measured to be structurally unable to fire
+(see B484), and (c) about a package Broadcom has NOT migrated to the addon path. **This is the same
+hazard class, reachable today by mundane means, on the same code path, entirely unguarded.**
+
+**Done-when.** Before the apply, read the existing `PackageInstall`; adopt-vs-refuse is a deliberate,
+tested decision rather than an accident; and the cluster-scoped ClusterRoleBinding gets its own
+ownership consideration. ⚠️ The obvious fix — mirror uninstall's `CONFIRM` gate — **may be refuted**:
+`install` is called unattended by `44-install-ingress.sh` inside the six-row certification matrix, so
+requiring `CONFIRM=yes` could convert an idempotent step into an interactive one and break the
+matrix. That is exactly what the design round must settle before anything is written.
+
+**Status: found, verified from source, NOT designed, NOT tested, NOT fixed.** A fix design is under
+adversary review; nothing has been implemented. The tree is frozen mid-certification.
+
 ## 🔴 B486 — `ARGOCD_SERVER` is published as an **IP**, and `.env.example` says it must be a **NAME** 🔴 open
 
 **MEASURED on the live 3.7 lab, certification row 1, 2026-08-26.** `09-argocd-address.sh` publishes
