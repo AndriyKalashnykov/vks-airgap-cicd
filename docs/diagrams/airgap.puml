@@ -8,15 +8,22 @@ title Air-gap connectivity — the jump box is the only bridge
 System_Ext(net, "Internet", "Upstream registries + Maven Central\ngcr.io · ghcr.io · docker.io · repo.maven.apache.org")
 
 System_Boundary(jbz, "Jump box  ·  dual-homed (internet + air-gapped VKS)") {
-  System(jb, "Mirror + offline builder", "crane copies images into Harbor;\nbuilds the deps-baked Maven builder\n(only the Java app needs one — the Go app is stdlib-only)")
+  System(jb, "Mirror + offline builders", "crane copies images into Harbor;\nbuilds one dependency-baked builder image\nper language (six today)")
 }
 
-System_Boundary(agz, "Air-gapped VKS cluster  ·  NO internet access") {
-  System(cluster, "Harbor · Gitea · Tekton · ArgoCD · the apps", "The whole CI/CD platform runs here; pulls images only from Harbor.\nOne app per row of apps/registry.tsv — today javawebapp + gowebapp")
+System_Boundary(sup, "Supervisor  ·  VCF 9  ·  NO internet access") {
+  System(svc, "Harbor + ArgoCD", "Supervisor Services, each in its own vSphere Namespace.\nYou install them (Scenario 1), or they already exist\nand you are a tenant (Scenario 2).")
+}
+
+System_Boundary(agz, "Guest / workload VKS cluster  ·  NO internet access") {
+  System(cluster, "Gitea · Tekton · the apps", "What this project installs and wires.\nPulls every image from Harbor.\nOne app per row of apps/registry.tsv (six today).")
 }
 
 Rel(jb, net, "1 · pull images + Maven deps", "HTTPS (internet side)")
-Rel(jb, cluster, "2 · push mirrored images, install + wire", "HTTPS (cluster side)")
+Rel(jb, svc, "2 · push mirrored images", "HTTPS (Harbor, on the Supervisor)")
+Rel(jb, cluster, "3 · install + wire Gitea, Tekton, the apps", "HTTPS (guest cluster)")
+Rel(cluster, svc, "4 · pull every image", "from Harbor, in-lab only")
+Rel(svc, cluster, "5 · GitOps sync", "ArgoCD reconciles INTO the guest")
 
 SHOW_LEGEND()
 @enduml

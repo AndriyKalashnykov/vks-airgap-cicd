@@ -1,5 +1,32 @@
 # Decision — is docker supportable as an alternative to podman?
 
+## Using docker (the operational how-to)
+
+> Moved here from the README on 2026-08-26. It was 20 of the README's 151 lines for something whose
+> default answer is "do nothing", and the three path documents deliberately do not repeat it — so it
+> had to move rather than be deleted.
+
+**podman is the default and needs no action.** `make deps` installs it, and it is the only engine
+that needs **no sudo on any box**.
+
+**Docker is supported, opt-in.** There is nowhere to "set" it: `CONTAINER_ENGINE` must stay
+**commented** in `.env`, because an uncommented value pins the engine and defeats any per-run
+override (`.env.example` says so at the key). So docker rides the environment:
+
+```bash
+# ONLY for docker. For podman, the default, you set NOTHING and export NOTHING.
+export CONTAINER_ENGINE=docker   # per SESSION. `make deps CONTAINER_ENGINE=docker` sets it for
+make deps                        # ONE invocation only, so a later bare `make` reverts to podman.
+```
+
+Then, **once Harbor exists**, run `make trust-harbor`. Rootful docker costs **one sudo per
+registry** and that cannot be engineered away; `make trust-harbor` prints the exact line.
+
+Unsure what your box has? `make engine-check` is read-only and reports the engine, the mode, and
+what it will cost.
+
+`make e2e-kind` needs Docker **regardless** — kind's nodes *are* docker containers.
+
 **Status:** ACCEPTED & MEASURED · updated 2026-07-14 (option B implemented)
 **Verdict:** **Yes — docker is now SUPPORTED on a jump box, on both OSes, and it is opt-in.**
 **podman remains the DEFAULT, and it remains the only engine that is sudo-free on every box.**
