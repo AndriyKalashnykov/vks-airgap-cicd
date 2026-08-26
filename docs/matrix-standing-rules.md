@@ -51,10 +51,20 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
    So a default `walk-matrix` run certifies on **3.6.3**, whatever the lab happened to be running
    when you started it.
 
-   ⚠️ **And registration CANNOT be automated.** VKS is a **Core Supervisor Service**; the create API
-   returns HTTP 403 and the lab repo's `vks-register` target refuses up front. It is vCenter UI only
-   (Supervisor Management → Services → Kubernetes Service → **ACTIONS → Add New Version** → upload
-   the **`-legacy-`** YAML). Everything after registration is automated.
+   ⚠️ **Registration is a SEPARATE step from the upgrade, and the 403 everyone quotes is about the
+   wrong endpoint.** `POST …/supervisor-services` (create the **SERVICE** — the UI's *Add New
+   Service*) really does return 403 for a Core service. `POST …/supervisor-services/{id}/versions`
+   (create a **VERSION** — the UI's *Add New Version*) returned **201** on vCenter 9.1.0.0300 as
+   `Administrator@vsphere.local`, 2026-08-26, and the upgrade off it reached `CONFIGURED`. See
+   [`vks-services/vks.md`](vks-services/vks.md) for the body shape and the caveats.
+
+   The UI path (Supervisor Management → Services → Kubernetes Service → **ACTIONS → Add New
+   Version** → upload the **`-legacy-`** YAML) is unchanged and is the fallback if that ever 403s.
+
+   ⚠️ **THE SPLIT-RUN BELOW STANDS EITHER WAY — do not remove it on the strength of that 201.** What
+   the API changes is whether a human must be present to CLICK; it changes nothing about the fact
+   that a rebuilt Supervisor has lost the registration and must be re-registered and re-upgraded
+   before the rows run. The split exists because the cut boundary is where that has to happen.
 
    To certify on 3.7, split the run at the cut boundary the script already supports — `WALK_ROWS`
    and `WALK_SKIP_REBUILD` are existing, documented flags, so this needs no change to the harness:
