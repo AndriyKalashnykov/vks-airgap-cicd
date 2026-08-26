@@ -619,3 +619,37 @@ kubectl get packages -A -o json \
 
 If that returns anything other than `["vmware-system-tkg"]`, the namespaced probe in
 `43-install-istio-package.sh` is looking in the wrong place and silently finds nothing.
+
+## MEASURED ON VKS 3.7.1 — the addon framework does NOT reach the guest
+
+Grade: **lab-verified 2026-08-26**. Lab upgraded `tkg.vsphere.vmware.com` **3.6.3-embedded+v1.35 ->
+3.7.1+v1.36** (2m01s), then `cicd-gc0825181952` rebased `builtin-generic-v3.6.0 -> v3.7.0`,
+k8s `v1.34.9 -> v1.35.6+vmware.2` (9m04s, every Machine replaced).
+
+| question | 3.6.3 | **3.7.1** |
+|---|---|---|
+| addon CRDs **on the guest** | 0 | **0 — still Supervisor-side only** |
+| namespace holding Carvel `Package` CRs | `vmware-system-tkg` (84) | **`vmware-system-tkg` (116)** — one namespace, unchanged |
+| istio `Package` objects | 6 (`1.27.1 … 1.28.5`) | **8** (`+1.28.9`, `+1.30.2`) |
+| `PackageRepository` objects | 1 (`standard-packages`) | **2** — plus `vks-addons-3.7.0-20260723`, same namespace |
+| overlapping `refName`+`version` across repos | n/a | **0** — the pair is still unique |
+| existing PackageInstalls | 8 `<cluster>-<component>` | 9 (`+helm-controller`) — our `istio` collides with none |
+| `tkg-system` | empty | **still empty** |
+
+**The collision risk documented for "VKS 3.7+" does NOT materialise.** There is no addon controller
+on the guest at 3.7.1 to compete with a hand-applied `PackageInstall`, so
+`43-install-istio-package.sh`'s tripwire stays silent — now proven silent on the version it was
+built for, not merely on 3.6. Keep the tripwire: it costs one `kubectl get crd` and it fires the day
+the framework does land guest-side.
+
+**Two things this SHARPENS rather than settles:**
+
+1. **B484 F1 got worse.** A `refName`-only filter now matches **eight** Packages, so `tail -1` picks
+   even more arbitrarily. The prescribed fix — filter on `refName` **AND** `version`, then assert
+   exactly one match — is verified still sound: **0** duplicate `refName`+`version` pairs even with
+   two repositories in the namespace.
+2. **A second repository is new.** `vks-addons-3.7.0-20260723` appears guest-side alongside
+   `standard-packages`. Anything that assumes "one repository per namespace" is now wrong.
+
+**And the demo survived it**: after the node roll, all six apps' pods are `Running` and **zero** pods
+cluster-wide are outside Running/Completed.
