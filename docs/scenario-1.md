@@ -972,7 +972,7 @@ Two runs on a 9.1 lab (i9-14900KF / 188 GiB) hosting the nested lab on the same 
 under self-contention. Where the runs disagree, both are shown.
 [Conditions](scenario-1-notes.md#timings--what-these-numbers-do-not-cover).
 
-⚠️ **Measured 2026-08-09, when the repo shipped TWO apps.** It ships six now, and `mirror`,
+⚠️ * when the repo shipped TWO apps.** It ships six now, and `mirror`,
 `builder-image`, the pipeline and `make verify` all scale with that — so read these as a floor, not
 a forecast.
 

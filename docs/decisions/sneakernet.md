@@ -59,7 +59,7 @@ Split:
 
 | | box | network | how |
 |---|---|---|---|
-| `make builder-build` | A | the package registries only (Maven Central · proxy.golang.org · npm · PyPI · crates.io · NuGet) | base pinned **by digest from `bundle/images.lock`** — byte-identical to the mirrored base, so no Harbor is needed and builder↔mirror alignment holds *by construction* (`images.txt` pins maven by tag, so a naive public pull could legitimately differ) |
+| `make builder-build` | A | the package registries only (Maven Central · proxy.golang.org · npm · pypi.org · crates.io · NuGet) | base pinned **by digest from `bundle/images.lock`** — byte-identical to the mirrored base, so no Harbor is needed and builder↔mirror alignment holds *by construction* (`images.txt` pins maven by tag, so a naive public pull could legitimately differ) |
 | `make builder-push` | B | Harbor only | `crane push bundle/builders/<app>` — the destination ref is computed from `HARBOR_URL` **on box B**, which is the only box that knows it |
 | `make builder-image` | dual-homed | both | unchanged: build + push |
 

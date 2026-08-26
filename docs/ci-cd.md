@@ -19,7 +19,7 @@ Locally, `make ci` runs `static-check` + `docs-lint` + `diagrams-check`, and `st
 
 ⚠️ **A PR does NOT run everything `make ci` does.** `static-check` and `static-check-fast` are
 **separate CI jobs**, so a change can pass the composite locally and still redden the fast half —
-measured 2026-08-21, when `check-ns-chokepoint` failed as a PR job while the full `static-check`
+when `check-ns-chokepoint` failed as a PR job while the full `static-check`
 passed. Run `env -u GOROOT make static-check` locally before relying on a green.
 
 ---

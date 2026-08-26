@@ -35,8 +35,47 @@ echo "===================== Istio preflight =====================" >&2
 log_info "cluster: $(kubectl config current-context 2>/dev/null || echo '<unknown>')"
 
 # --- 1. Is Istio installed at all? --------------------------------------------
-if ! kubectl get crd virtualservices.networking.istio.io >/dev/null 2>&1 \
-   && ! kubectl get deploy -A -l app=istiod -o name 2>/dev/null | grep . >/dev/null; then
+# ⚠️ ABSENCE MAY ONLY BE CLAIMED WHEN THE CLUSTER ANSWERED. Both reads used to discard rc and
+#    stderr, and `!` turns a FAILED read into "not present" — so a Forbidden or unreachable cluster
+#    produced "NO Istio detected" and `exit 0`. That is not a cosmetic message bug:
+#      * walk-doc.sh:84 greps this EXACT string and returns `install`, so the harness then runs the
+#        INSTALL variant;
+#      * the install path helm-installs a SECOND istiod over the platform's (46-install-istio.sh:182)
+#        and relabels istio-system's PSA (46-install-istio.sh:167, ISTIO_NAMESPACE=istio-system) --
+#        breaking the platform's pods ACROSS TENANTS, as the comment at :109-113 below says.
+#    The live trigger is the TENANT, not an unreachable cluster: `get crd` and `get deploy -A` are
+#    both CLUSTER-SCOPED, exactly what a namespace-scoped tenant is denied, and docs/scenario-2.md
+#    runs `make istio-preflight` with NO upstream reachability or permission gate (scenario-1 is
+#    protected only because `make lab-preflight` dies on UNREACHABLE first). MEASURED 2026-08-26:
+#    both a dead cluster and a Forbidden tenant took this branch.
+#
+#    NotFound is the ONLY failure that means "absent". Anything else means "we could not tell".
+_ist_crd_err="$(mktemp)"; _ist_dep_err="$(mktemp)"
+if kubectl get crd virtualservices.networking.istio.io >/dev/null 2>"$_ist_crd_err"; then _crd=present
+elif grep -qiE 'not ?found' "$_ist_crd_err"; then _crd=absent
+else _crd=unknown; fi
+if _dep_out="$(kubectl get deploy -A -l app=istiod -o name 2>"$_ist_dep_err")"; then
+  if [ -n "$_dep_out" ]; then _dep=present; else _dep=absent; fi
+else
+  if grep -qiE 'not ?found' "$_ist_dep_err"; then _dep=absent; else _dep=unknown; fi
+fi
+_ist_cls="$(classify_kube_failure "$_ist_dep_err" 2>/dev/null || true)"
+rm -f "$_ist_crd_err" "$_ist_dep_err"
+
+if [ "$_crd" = unknown ] && [ "$_dep" = unknown ]; then
+  # NOT `exit 0`, and deliberately NOT the string walk-doc.sh keys on.
+  log_error "could not determine whether Istio is present (${_ist_cls:-unclassified}) — BOTH reads"
+  log_error "  failed. This is NOT evidence that Istio is absent, and it must not be read as such:"
+  log_error "  'kubectl get crd' and 'kubectl get deploy -A' are CLUSTER-SCOPED, which a"
+  log_error "  namespace-scoped tenant is normally denied."
+  log_error "  If you are a TENANT: ask the mesh admin whether Istio is installed, then set"
+  log_error "  INGRESS_CONTROLLER=istio-existing plus the ISTIO_GATEWAY_* values (see below)."
+  log_error "  If you expected to be able to read them: re-run 'make vks-login', then this preflight."
+  echo "==========================================================" >&2
+  exit 1
+fi
+
+if [ "$_crd" != present ] && [ "$_dep" != present ]; then
   log_warn "NO Istio detected on this cluster."
   log_warn "  -> Use INGRESS_CONTROLLER=istio (the default) and 'make install-ingress' to INSTALL it,"
   log_warn "     or INGRESS_CONTROLLER=traefik for the lighter option."

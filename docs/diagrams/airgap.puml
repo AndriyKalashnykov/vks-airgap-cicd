@@ -5,7 +5,7 @@ LAYOUT_LEFT_RIGHT()
 
 title Air-gap connectivity — the jump box is the only bridge
 
-System_Ext(net, "Internet", "Container registries + one package registry PER LANGUAGE\ngcr.io · ghcr.io · docker.io\nMaven Central · proxy.golang.org · npm · PyPI · crates.io · NuGet")
+System_Ext(net, "Internet", "Container registries + one package registry PER LANGUAGE\ngcr.io · ghcr.io · docker.io\nrepo.maven.apache.org · proxy.golang.org · registry.npmjs.org · pypi.org · crates.io · api.nuget.org")
 
 System_Boundary(jbz, "Jump box  ·  dual-homed (internet + air-gapped VKS)") {
   System(jb, "Mirror + offline builders", "crane copies images into Harbor;\nbuilds one dependency-baked builder image\nper language (six today)")
