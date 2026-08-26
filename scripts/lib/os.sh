@@ -2054,6 +2054,8 @@ vks_package_namespace() {
     0) return 1 ;;                                          # could not tell -- NOT "absent"
     *) printf '%s' "$out" | tr '\n' ' ' >&2; return 2 ;;      # ambiguous: the caller must choose
   esac
+}
+
 # kube_is_notfound <errfile> [resource-token]
 #
 # TRUE only when the API SERVER said this specific thing does not exist.

@@ -82,6 +82,7 @@ package actually deploy?" without installing it into a cluster you care about.
 needs the equivalent in a data-values file:
 
 ```yaml
+
 # istio-values.yaml  ->  make install-vks-package PACKAGE=istio.kubernetes.vmware.com PKG_VALUES=istio-values.yaml
 istio:
   pilot:
@@ -552,6 +553,7 @@ kubectl get pkgr -A
 controller pattern… **However, manual lifecycle operations via the CLI remain a supported
 alternative for granular control.**"* And Broadcom's air-gapped 9.1 guide §1d: VKS Standard Packages
 are managed *"by using the VCF CLI **or Carvel custom resources**"*.
+
 ## Air-gapped relocation: the images come from the Software Depot, NOT from your Harbor
 
 [src: github.com/vmware/vsphere-supervisor@main path=airgapped/air-gapped-vcf91.md] — Broadcom's own
