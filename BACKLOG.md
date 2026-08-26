@@ -474,6 +474,56 @@ carries it.
 
 ## 🔴 B484 — the Forbidden-reads-as-absent sweep: a FAIL-OPEN air-gap check outranks the wrong-message bug 🔴 open
 
+**UPDATE 2026-08-26 — F1/F2/F5 DONE; F3 re-graded and CLOSED differently than designed; two NEW
+findings, one of them a shipped CRITICAL that neither the backlog nor I had noticed.**
+
+**F2/F5 (host comparison + Software Depot) — DONE, PR #1028.** The bundle host is compared as an
+exact `host:port` through a new `registry_hostport()` in `lib/os.sh`, lifted verbatim from `tls.sh`'s
+`_ca_hostport` so there is one parser. RED-proven: reverting to the prefix form fails 3 of the 4 new
+cases (both false-GREEN directions and the false-BLOCK).
+
+**F3 — the designed fix was REFUTED by BOTH adversary rounds, independently, and MEASURED.** Adding a
+`NO_SUCH_RESOURCE` class to `classify_kube_failure` turns `check-classifier-consumers` RED on **9/9**
+consumers (that gate DERIVES its class list from the function body and requires a named arm in every
+case-form consumer, each needing a *different* remedy), and breaks `test-tkr-classify`, which
+explicitly PINS an absent CRD as `UNKNOWN`. `vks-package.sh` is not one of the nine. Closed instead
+with a **LOCAL** discriminator, which is what both rounds prescribed. **Re-graded HIGH -> MED**: the
+path is opt-in (`ISTIO_INSTALL_METHOD` defaults to `helm`), so it fires on KinD / a non-VKS cluster.
+
+**NEW, CRITICAL, SHIPPED — `vks-package.sh install` died SILENTLY.** `_versions` is a `kubectl | jq`
+pipeline and the call site had no `|| true`, so under `set -euo pipefail` a failing kubectl killed the
+script ONE LINE ABOVE its own guard. MEASURED; the CONTROL is the discriminator:
+
+| kubectl says | before | after |
+|---|---|---|
+| no Carvel API | rc=1, **262 B, silent** | rc=1, 674 B, names the cause |
+| Forbidden (a namespaced tenant) | rc=1, **262 B, silent** | rc=1, 721 B, names RBAC |
+| API present, 0 items (CONTROL) | rc=1, 545 B | **unchanged** |
+| API present, package exists (CONTROL) | installs | **unchanged** |
+
+In the field: `make install-ingress ISTIO_INSTALL_METHOD=package` created two namespaces and exited 1
+with no message. `_die_unknown` carried the same shape independently. Fixed + pinned by
+`scripts/test-vks-package-error-discrimination.sh`.
+
+**NEW, HIGH — `.env.example` stated the OPPOSITE default, twice, since 98276c1.** It called
+`ISTIO_INSTALL_METHOD=package` the default; the code has always read `${ISTIO_INSTALL_METHOD:-helm}`.
+Its "override per run" example was a no-op against the real default. Material, not cosmetic: the two
+methods install different Istio minors under **different** provenance guards, so a reader who believed
+`package` was the default believed 43's air-gap check had protected them when helm had run under a
+different gate. Fixed. **No gate covers doc-vs-code default agreement** — that is new-control design
+and needs its own idea round.
+
+**STILL OPEN, carried forward:**
+
+- **F5 (live)** — still artefact-verified only; we cannot reproduce a relocated depot.
+- **`vks-package.sh`'s `kubectl apply -f -` discards stderr**, so the *second* half of the no-Carvel
+  path is unclassifiable no matter what the probe says. Named, not fixed.
+- **The VKS 3.7 addon tripwire may be structurally unable to fire.** It probes the GUEST, but this
+  repo's own graded record says `AddonInstall` lives on the **Supervisor**. If so it is unreachable
+  code that manufactures the appearance of handling. **One read-only command settles it on a live
+  3.7.1 guest:** `kubectl get crd -o name | grep -c addons.kubernetes.vmware.com`. Could not be run
+  this session — the guest cluster was deleted to reset the matrix cell.
+
 > **2026-08-25 — the sweep half is DONE; #1 grew and is now the whole row.** The bare-substring
 > discriminator is fixed at all five sites (`48` ×2, `23`, `26`, `98`, `08`) behind one shared
 > `kube_is_notfound` in `lib/os.sh`, RED-proven by three new cases in
