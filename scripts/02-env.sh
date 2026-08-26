@@ -269,6 +269,42 @@ env_check() {
       *:*) : ;;
       *) [ -s "${KUBECONFIG:-/nonexistent}" ] || missing+=("KUBECONFIG (file missing or EMPTY: '${KUBECONFIG:-}' — fetch the workload kubeconfig first; a cluster you just created writes ./secrets/\${VKS_CLUSTER_NAME}.kubeconfig)") ;;
     esac
+    # ── B473 finding 9: a LOOPBACK server in the LAB slot ─────────────────────────────────────
+    # PRESENCE is not identity. `./secrets/vks.kubeconfig` is the DOCUMENTED real-lab guest-cluster
+    # default (lib/os.sh's `${KUBECONFIG:-${REPO_ROOT}/secrets/vks.kubeconfig}`), and a KinD run of an
+    # older vintage wrote its OWN kubeconfig there. MEASURED 2026-08-26: that file held
+    # `server: https://127.0.0.1:42961`, the `-s` test above passed happily, and the first thing that
+    # noticed was `env-validate` — a REACHABILITY gate that needs the network and is a separate step.
+    # 05-kind-up.sh:151 already warns about precisely this: "ON A LAB BOX secrets/vks.kubeconfig IS
+    # THE LAB", and 30-vks-login.sh:515 records that an existence check "is defeated by a STALE file".
+    #
+    # A loopback address is structurally impossible for a VKS guest cluster, so this needs NO network
+    # and no new stamping — which is why it belongs in the PRESENCE gate rather than the validity one
+    # (env-check is deliberately standalone-runnable; see this file's own contract note).
+    #
+    # ⚠️ IT MUST NOT FIRE ON KinD, where a loopback server is CORRECT. The discriminator is the state
+    # overlay's own VKS_STATE_KIND, written by state_claim_kind() before the KinD flow's first
+    # state_set — not a guess from the address.
+    #
+    # ⚠️ FAIL-OPEN ON DOUBT, deliberately: no kubectl, no current-context, an unreadable file or a
+    # colon-separated LIST all skip. This gate's job is to catch ONE unambiguous shape; a presence
+    # gate that starts refusing configurations it cannot parse is worse than the defect.
+    if [ "${VKS_STATE_KIND:-0}" != 1 ] && have kubectl; then
+      case "${KUBECONFIG:-}" in
+        ''|*:*) : ;;   # unset, or a multi-file list — the operator's business
+        *)
+          # `config view --minify` reads the CURRENT context only and makes NO network call.
+          _kc_srv="$(KUBECONFIG="$KUBECONFIG" kubectl config view --minify \
+                       -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)"
+          case "$_kc_srv" in
+            *//127.0.0.1:*|*//localhost:*|*//'[::1]':*)
+              missing+=("KUBECONFIG points at a LOOPBACK address (${_kc_srv}) in '${KUBECONFIG}', but this is not the KinD flow.
+      A VKS guest cluster is never reachable on loopback, so this file belongs to something else —
+      most likely a KinD run that wrote to the real-lab default path. It is not the cluster you think.
+      Remove or repoint it, then re-run:  make vks-login") ;;
+          esac ;;
+      esac
+    fi
   fi
   if [ "${#missing[@]}" -gt 0 ]; then
     # The remedy must be runnable FROM THE STATE THAT PRODUCED THIS ERROR. With no .env,
