@@ -2056,6 +2056,37 @@ vks_package_namespace() {
   esac
 }
 
+# registry_hostport <url-or-ref> -> "host:port"
+#
+# THE ONE HOST PARSER. `${x%%/*}` is not one, and neither is a prefix match. MEASURED 2026-08-26,
+# a prefix comparison of HARBOR_URL against a bundle host was wrong in BOTH directions:
+#   HARBOR_URL=harbor.lab         bundle=harbor.lab.evil.example  -> ACCEPTED as our mirror (FALSE GREEN)
+#   HARBOR_URL=10.0.0.5           bundle=10.0.0.50                -> ACCEPTED as our mirror (FALSE GREEN)
+#   HARBOR_URL=https://harbor.lab bundle=harbor.lab:443           -> refused                (FALSE BLOCK)
+#   HARBOR_URL=harbor.lab/        bundle=harbor.lab:443           -> refused                (FALSE BLOCK)
+# The false-GREEN direction is the dangerous one: a lookalike host reads as air-gap-safe.
+#
+# This is `_ca_hostport` from lib/tls.sh, promoted verbatim. That one was written after a measured
+# incident (a scheme in .env made the host `https:`), and lib/tls.sh's own header says two
+# implementations of one predicate is the hazard it exists to avoid -- so this is a LIFT, not a
+# third copy. A registry ref carries no scheme, but an operator-set HARBOR_URL routinely does.
+#
+# Default port 443: both sides get the same default, so it cancels in a comparison, and callers
+# that only want the host can strip it.
+registry_hostport() {
+  local u="${1:-}" h p
+  h="${u#http://}"; h="${h#https://}"     # a scheme is a documented .env mistake, not a crash
+  h="${h%%/*}"; h="${h%/}"                # drop any path, then a trailing slash
+  case "$h" in
+    \[*\]:*) p="${h##*:}"; h="${h%:*}" ;;   # [v6]:port
+    \[*\])   p=443 ;;                       # [v6]
+    *:*)     p="${h##*:}"; h="${h%:*}" ;;   # host:port
+    *)       p=443 ;;
+  esac
+  case "$p" in ''|*[!0-9]*) p=443 ;; esac
+  printf '%s:%s' "$h" "$p"
+}
+
 # kube_is_notfound <errfile> [resource-token]
 #
 # TRUE only when the API SERVER said this specific thing does not exist.

@@ -103,6 +103,56 @@ out="$(probe empty)"; ran=$((ran+1))
 if printf '%s' "$out" | grep -qF 'cannot identify'; then ok "refused an ambiguous answer"
 else bad "proceeded on 0 matches (silent skip — the original fail-open)"; fi
 
-[ "$ran" -eq 4 ] || { echo "  harness lost track of itself (ran=$ran)"; exit 1; }
+
+# ── B484 F2/F5: the host COMPARISON ────────────────────────────────────────────────────────────
+# The bundle host is compared EXACTLY, host-for-host, through registry_hostport. A prefix match was
+# measured wrong in BOTH directions, and the false-GREEN direction is the dangerous one.
+hostcase() { # $1=HARBOR_URL  $2=bundle image ref
+  mk_kubectl normal
+  cat > "$STUB/kubectl" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *"get crd -o name"*) exit 0 ;;
+  *"get package"*"-o json"*)
+    cat <<'J'
+{"items":[{"metadata":{"name":"p"},"spec":{"refName":"istio.kubernetes.vmware.com","version":"1.30.2+vmware.1-vks.1",
+ "template":{"spec":{"fetch":[{"imgpkgBundle":{"image":"$2"}}]}}}}]}
+J
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+EOF
+  chmod +x "$STUB/kubectl"
+  PATH="$STUB:$PATH" KUBECONFIG="$KC" SKIP_DOTENV=1 HARBOR_URL="$1"     VKS_PACKAGE_NAMESPACE=vmware-system-tkg INGRESS_CONTROLLER=istio ISTIO_INSTALL_METHOD=package     timeout 60 bash scripts/43-install-istio-package.sh 2>&1
+}
+safe()   { printf '%s' "$1" | grep -qE 'air-gap safe'; }
+
+echo "  case 5: a LOOKALIKE host must NOT read as our mirror (the false-GREEN direction)"
+ran=$((ran+1))
+if safe "$(hostcase harbor.lab harbor.lab.evil.example/vks/istio@sha256:aaa)"; then
+  bad "harbor.lab.evil.example ACCEPTED as our mirror"
+else ok "lookalike rejected"; fi
+
+echo "  case 6: an IP PREFIX must not match either (10.0.0.5 vs 10.0.0.50)"
+ran=$((ran+1))
+if safe "$(hostcase 10.0.0.5 10.0.0.50/vks/istio@sha256:aaa)"; then
+  bad "10.0.0.50 ACCEPTED against HARBOR_URL=10.0.0.5"
+else ok "IP prefix rejected"; fi
+
+echo "  case 7: a SCHEME in HARBOR_URL must not false-BLOCK the real mirror"
+ran=$((ran+1))
+if safe "$(hostcase https://harbor.lab harbor.lab:443/vks/istio@sha256:aaa)"; then
+  ok "scheme tolerated; the real mirror is accepted"
+else bad "https://harbor.lab false-blocked its own mirror"; fi
+
+echo "  case 8: the Software Depot hosts are air-gap SAFE (artefact-verified, B484 F5)"
+for h in depot.kube-system.svc depot-image-proxy.kube-system.svc.cluster.local; do
+  ran=$((ran+1))
+  if safe "$(hostcase harbor.lab "$h/vcf/vks-standard-packages/ga/3.7.1/x@sha256:aaa")"; then
+    ok "$h accepted"
+  else bad "$h REFUSED — that is the vendor's own air-gapped configuration"; fi
+done
+
+[ "$ran" -eq 9 ] || { echo "  harness lost track of itself (ran=$ran)"; exit 1; }
 [ "$fail" -eq 0 ] || { echo "istio-package-version-probe: FAILED"; exit 1; }
 echo "istio-package-version-probe: OK — ${ran} cases"
