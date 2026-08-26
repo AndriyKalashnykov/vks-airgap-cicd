@@ -1,4 +1,4 @@
-# VKS services — Harbor, ArgoCD, Istio
+# VKS services — VKS itself, Harbor, ArgoCD, Istio
 
 What VMware/Broadcom actually ships on **VCF 9 / vSphere Kubernetes Service (VKS)**, how it is
 installed and configured, how *this repo* consumes it, and what is still unverified.
@@ -10,6 +10,7 @@ of re-deriving it.
 
 | Service | Where it runs | Who installs it | Page |
 |---|---|---|---|
+| **VKS itself** (`tkg.vsphere.vmware.com`) | the **Supervisor** — it is what makes guest clusters exist | ships with the Supervisor; **new versions are registered BY HAND, in the UI** | [`vks.md`](vks.md) |
 | **Harbor** | **Supervisor** (a vSphere Namespace) | the platform team, as a **Supervisor Service** | [`harbor.md`](harbor.md) |
 | **ArgoCD** | **Supervisor** (a vSphere Namespace) | the platform team, as a **Supervisor Service** | [`argocd.md`](argocd.md) |
 | **Istio** | the **GUEST / workload cluster** | the cluster owner, as a **VKS Standard Package** | [`istio.md`](istio.md) |

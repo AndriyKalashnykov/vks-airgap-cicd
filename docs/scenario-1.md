@@ -507,13 +507,21 @@ make vks-cluster-create        # applies the Cluster; provisioning is async
 ```
 
 **Expect:** a line naming `VKS_K8S_VERSION:` with a full release string such as
-`v1.35.5+vmware.1-vkr.1`. You do **not** copy that value anywhere — `make vks-k8s-version` writes it
+`v1.36.2+vmware.2-vkr.3`. You do **not** copy that value anywhere — `make vks-k8s-version` writes it
 into `./.env` itself, and `make vks-cluster-create` on the next line reads it from there. If it says
 `NOT overwriting it`, you pinned `VKS_K8S_VERSION` yourself earlier and it is respecting that; clear
 the pin if you wanted the newest.
 
 It picks the newest release that is Ready, Compatible, and has an OSImage for your node OS — and
 writes the **full** name, because a bare `v1.34` is a prefix that floats.
+
+⚠️ **Which MINOR you get is decided by the VKS service version, not by this command.** The service
+version carries the ceiling in its own name — `3.6.3-embedded+v1.35` tops out at Kubernetes 1.35,
+`3.7.1+v1.36` at 1.36 — and a release above that ceiling is published but reads `Compatible=False`,
+so this command will not select it. Measured 2026-08-26: both 1.36 releases were `Ready=False
+Compatible=False` on a `+v1.35` service and flipped to `True`/`True` the moment it reached `+v1.36`.
+So if you expected a newer minor than you got, the thing to check is the service version, not the
+release list — see [`vks-services/vks.md`](vks-services/vks.md).
 
 Run the two together, in that order — on a freshly-built Supervisor the answer goes stale in
 minutes. If the create is rejected with `Could not resolve KR/OSImage`, just run both lines again:
@@ -576,7 +584,7 @@ VKS_AUTH_METHOD=vcf make vks-login
 
 | key | default | example | how to get the value |
 |---|---|---|---|
-| `VKS_CLUSTERCLASS` | `builtin-generic-v3.6.0` | `builtin-generic-v3.6.0` | `kubectl get clusterclass -A` — the newest Ready one |
+| `VKS_CLUSTERCLASS` | `builtin-generic-v3.6.0` | `builtin-generic-v3.6.0` | `kubectl get clusterclass -n vmware-system-vks-public` — a SEED. The Supervisor rewrites it to the newest compatible class; `make vks-cluster-create` reports the one in effect. |
 | `VKS_VM_CLASS` | `best-effort-small` | `best-effort-small` | `kubectl get virtualmachineclass` |
 | `VKS_STORAGE_CLASS` | `wcp-vmfs` | `wcp-vmfs` | `kubectl get storageclass` |
 | `VKS_CONTROL_PLANE_COUNT` | `1` | `1` | how many control-plane nodes |
