@@ -34,10 +34,11 @@ public_pod()  { printf '{"items":[{"metadata":{"name":"%s"},"status":{"container
 #       the fixture directory after the very first case and every later one read a missing file.
 # Output goes to a FILE and rc is read directly from the gate's own invocation.
 GATE_OUT="$(mktemp)"
-case_is() { # <label> <want-rc: 0|nonzero> <grep-ERE or "">
+case_is() { # <label> <want-rc: 0|nonzero> <grep-ERE or ""> [ISTIO_INSTALL_METHOD]
   ran=$((ran + 1))
   local rc
   HARBOR_URL=h.local INGRESS_CONTROLLER=istio GATEWAY_IMAGE_FIXTURE="$FIX" \
+    ISTIO_INSTALL_METHOD="${4:-helm}" \
     bash "$GATE" > "$GATE_OUT" 2>&1
   rc=$?
   local okrc=1
@@ -85,6 +86,16 @@ case_is "RED when only an INIT container came from the public registry" 1 'NOT f
 printf '{"items":[{"metadata":{"name":"gw"},"status":{"containerStatuses":[{"image":"istio/proxyv2:1.30.3","imageID":"h.local/infra/istio/proxyv2@sha256:cc"}]}}]}' > "${FIX}/vks-ingress.json"
 case_is "GREEN when .image is normalised but imageID resolves to Harbor" 0 'matched via imageID'
 
-[ "$ran" -eq 7 ] || die "expected 7 cases, ran ${ran} — this harness lost track of itself"
+# 8/9. ISTIO_INSTALL_METHOD=package sets NO `global.hub`, so its images legitimately come from the
+# VKS addon repository, not our Harbor. Asserting our registry there REDS a CORRECT install. The
+# gate had ZERO references to ISTIO_INSTALL_METHOD (grep -c = 0) and branched on INGRESS_CONTROLLER
+# alone, so `istio` + `package` fell straight through to the Harbor assertion.
+printf '{"items":[{"metadata":{"name":"gw"},"status":{"containerStatuses":[{"image":"projects.packages.broadcom.com/vsphere/supervisor/istio/proxyv2:1.28.5","imageID":"projects.packages.broadcom.com/vsphere/supervisor/istio/proxyv2@sha256:aa"}]}}]}' > "${FIX}/vks-ingress.json"
+printf '{"items":[{"metadata":{"name":"istiod-1"},"status":{"containerStatuses":[{"image":"projects.packages.broadcom.com/vsphere/supervisor/istio/pilot:1.28.5","imageID":"projects.packages.broadcom.com/vsphere/supervisor/istio/pilot@sha256:bb"}]}}]}' > "${FIX}/istio-system.json"
+case_is "SKIPS in package mode — depot images must not be judged against our Harbor" 0 'NOTHING was verified' package
+# ...and the SAME fixture must still RED under the default helm method, or the skip is unconditional.
+case_is "REDS on the same depot images under the DEFAULT helm method" 1 'NOT from h.local'
+
+[ "$ran" -eq 9 ] || die "expected 9 cases, ran ${ran} — this harness lost track of itself"
 [ "$fail" -eq 0 ] || { log_error "gateway-image gate: FAILED"; exit 1; }
 log_info "gateway-image gate: OK — ${ran} cases (classifier only; the LIVE integration is proven by e2e-kind)"

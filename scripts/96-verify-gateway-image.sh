@@ -54,8 +54,22 @@ load_env
 [ -n "${GATEWAY_IMAGE_FIXTURE:-}" ] || kubeconfig_ready
 
 CONTROLLER="${INGRESS_CONTROLLER:-istio}"
+# ISTIO_INSTALL_METHOD matters here and this gate used to be blind to it. The PACKAGE path
+# deliberately sets NO `global.hub` (43-install-istio-package.sh:73) -- kbld resolves the bundle's
+# own image list, so the images legitimately come from the VKS addon repository, NOT from our
+# Harbor. Asserting our registry there REDS a CORRECT install. Same reasoning as the
+# istio-existing arm below: when we did not choose the hub, we cannot assert it.
 case "$CONTROLLER" in
-  istio) ;;
+  istio)
+    if [ "${ISTIO_INSTALL_METHOD:-helm}" = package ]; then
+      log_warn "SKIP: ISTIO_INSTALL_METHOD=package — this path sets no 'global.hub'; the images come"
+      log_warn "  from the VKS addon repository (relocated by the PLATFORM team into the Supervisor's"
+      log_warn "  Software Depot), not from \${HARBOR_URL}. Asserting our registry would RED a correct"
+      log_warn "  install. NOTHING was verified about provenance in this mode — the air-gap question"
+      log_warn "  for the package path is answered by 43-install-istio-package.sh's bundle-host check."
+      exit 0
+    fi
+    ;;
   istio-existing)
     log_warn "SKIP: INGRESS_CONTROLLER=istio-existing — the mesh is the PLATFORM's, so its image hub is"
     log_warn "  theirs, not our Harbor; asserting our registry would RED a correctly-configured foreign"
