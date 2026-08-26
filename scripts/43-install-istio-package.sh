@@ -87,8 +87,23 @@ log_info "Istio via VKS Standard Package '${PKG}' (ISTIO_INSTALL_METHOD=package)
 # silently falls back to the public registry. The operator learns on the box that can still fix it.
 # Resolve the Package namespace ONCE, by asking the cluster (lib/os.sh). Both the tripwire below
 # and the bundle-host probe further down must agree about where they are looking.
-PKG_NS_RESOLVED="$(vks_package_namespace "$PKG" 2>/dev/null || true)"
-[ -n "$PKG_NS_RESOLVED" ] || PKG_NS_RESOLVED=vmware-system-tkg
+# Resolve the Package NAMESPACE once, and PASS IT to the installer (below) so the probe and the
+# install provably look at the same place. A PackageInstall resolves its packageRef in ITS OWN
+# namespace -- lab-verified 2026-08-10, `Reconcile failed: Package ... not found`, retried 4
+# minutes -- so a cluster-wide `-A` probe can match a Package in a namespace no PackageInstall is
+# ever created in. That would be this very defect, one level up.
+_pkg_ns_rc=0
+PKG_NS_RESOLVED="$(vks_package_namespace "$PKG" 2>/dev/null)" || _pkg_ns_rc=$?
+case "$_pkg_ns_rc" in
+  0) : ;;
+  2) log_warn "several namespaces hold Carvel Packages; vks_package_namespace could not choose." ;;
+  *) log_warn "could not ask the cluster where Carvel Packages live." ;;
+esac
+if [ -z "$PKG_NS_RESOLVED" ]; then
+  PKG_NS_RESOLVED=vmware-system-tkg
+  log_warn "  assuming '${PKG_NS_RESOLVED}' (lab-measured, but UNVERIFIED here)."
+  log_warn "  Override with VKS_PACKAGE_NAMESPACE=<ns>."
+fi
 
 # VKS 3.7+ TRIPWIRE. We install into `vmware-system-tkg`, which is the SYSTEM's namespace -- a
 # deliberate trade-off (see vks-package.sh's header and docs/vks-services/istio.md). On VKS 3.7+
@@ -109,10 +124,56 @@ if [ "${DRY_RUN:-0}" != 1 ]; then
   fi
 fi
 
+# WHICH Package do we inspect? The one that will actually be INSTALLED -- and that is not what a
+# refName-only filter gives you. MEASURED on the lab 2026-08-26: istio ships EIGHT Package objects,
+# one per version (1.27.1 .. 1.30.2), and the count GROWS (it was six before the 3.7 upgrade). The
+# installer picks `PKG_VERSION` if set, else the SEMVER-latest (vks-package.sh `_versions`, which
+# sorts by vkey). A probe that took whatever the API returned last could therefore inspect a bundle
+# that is never installed (false BLOCK) or clear one while a DIFFERENT version installs from
+# somewhere else (FALSE GREEN -- the exact false-green the comment above says this exists to stop).
+#
+# ⚠️ jq, NOT jsonpath. kubectl's jsonpath has no `&&`; the two-predicate filter that looks obvious
+# here does not parse, and because the query is wrapped in `2>/dev/null` the parse error would be
+# swallowed, leaving an empty result and skipping the check silently on EVERY cluster, forever.
+# jq is already mandatory (require_cmd above) and is how vks-package.sh selects versions.
 BUNDLE_HOST=""
 if [ "${DRY_RUN:-0}" != 1 ]; then
-  _pkg_cr="$(kubectl get package -n "${PKG_NS_RESOLVED}"     -o jsonpath="{range .items[?(@.spec.refName=='${PKG}')]}{.spec.template.spec.fetch[0].imgpkgBundle.image}{'\n'}{end}"     2>/dev/null | tail -1 || true)"
-  BUNDLE_HOST="${_pkg_cr%%/*}"
+  _pkg_err="$(mktemp)"
+  _pkg_json="$(kubectl get package -n "$PKG_NS_RESOLVED" -o json 2>"$_pkg_err")" || _pkg_json=""
+  if [ -z "$_pkg_json" ]; then
+    # Could not REACH the API. That is not "the bundle is remote" and not "it is local" -- it is
+    # unknown, and an air-gapped lab must not be blocked by a probe that could not reach it.
+    log_warn "could not read Packages in '${PKG_NS_RESOLVED}' ($(classify_kube_failure "$_pkg_err")) --"
+    log_warn "  the bundle host is UNKNOWN. Proceeding, but this run proves NOTHING about the air gap."
+    rm -f "$_pkg_err"
+  else
+    rm -f "$_pkg_err"
+    # The version the INSTALL will use. vkey (lib/os.sh) is the shared semver key -- jq's bare
+    # `sort` is LEXICOGRAPHIC, so 1.9.0 would beat 1.100.0.
+    PKG_VER_RESOLVED="${ISTIO_PACKAGE_VERSION:-$(printf '%s' "$_pkg_json" \
+      | jq -r --arg r "$PKG" "$(vkey_jq)"' [.items[]?|select(.spec.refName==$r)|.spec.version]
+              |map(select((type=="string") and length>0))|sort_by(vkey)|last // empty' 2>/dev/null || true)}"
+    _n="$(printf '%s' "$_pkg_json" | jq -r --arg r "$PKG" --arg v "${PKG_VER_RESOLVED:-}" \
+            '[.items[]?|select(.spec.refName==$r and .spec.version==$v)]|length' 2>/dev/null || echo 0)"
+    if [ "${_n:-0}" != 1 ]; then
+      # REACHED and ambiguous is not the same as could-not-reach. This is the SOLE provenance guard
+      # on the package path -- 96-verify-gateway-image.sh exits 0 for this mode by design -- so an
+      # ambiguous answer must not pass silently.
+      die "cannot identify the ${PKG} Package to inspect: ${_n:-0} match(es) for version
+  '${PKG_VER_RESOLVED:-<unresolved>}' in namespace '${PKG_NS_RESOLVED}'.
+  This check is the only thing verifying where the package's images come from, so it will not
+  proceed on an ambiguous answer. Inspect with:
+      kubectl get packages -n ${PKG_NS_RESOLVED} -o custom-columns=NAME:.metadata.name,REF:.spec.refName,VER:.spec.version
+  Pin explicitly with ISTIO_PACKAGE_VERSION=<version>, or set VKS_PACKAGE_NAMESPACE=<ns>."
+    fi
+    # `fetch` is a LIST and Carvel supports several types; reading fetch[0].imgpkgBundle only would
+    # return empty for a bundle at index 1 or a non-imgpkgBundle fetch -- another silent skip.
+    _pkg_cr="$(printf '%s' "$_pkg_json" | jq -r --arg r "$PKG" --arg v "${PKG_VER_RESOLVED:-}" \
+      '[.items[]?|select(.spec.refName==$r and .spec.version==$v)
+        |.spec.template.spec.fetch[]?|(.imgpkgBundle.image // .image.url // empty)]|first // empty' 2>/dev/null || true)"
+    BUNDLE_HOST="${_pkg_cr%%/*}"
+    log_info "inspecting ${PKG} ${PKG_VER_RESOLVED} in ${PKG_NS_RESOLVED} (the version that will install)"
+  fi
 fi
 if [ -n "$BUNDLE_HOST" ]; then
   case "$BUNDLE_HOST" in
@@ -165,7 +226,12 @@ VALUES_RENDERED="$(mktemp)"; trap 'rm -f "$VALUES_RENDERED"' EXIT
 # receive the literal ${NAME} text, and expanding it here would substitute before envsubst runs,
 # leaving it with an empty allowlist and therefore substituting NOTHING.
 envsubst '${ISTIO_NAMESPACE} ${ISTIO_GATEWAY_NAMESPACE}' < "$VALUES_TPL" > "$VALUES_RENDERED"
-run env PACKAGE="$PKG" PKG_VERSION="${ISTIO_PACKAGE_VERSION:-}" PKG_VALUES="$VALUES_RENDERED" \
+# PASS the resolved version and namespace. Without this the installer re-runs its own version
+# selection 50 lines later and can pick a DIFFERENT Package than the one just cleared -- a
+# PackageRepository reconcile between the two queries is enough, and that is exactly the event
+# that grew istio from six Packages to eight. vks-package.sh validates an explicit pin against
+# the offered list and dies with the real list, so a version that vanished mid-run fails CLOSED.
+run env PACKAGE="$PKG" PKG_VERSION="${PKG_VER_RESOLVED:-${ISTIO_PACKAGE_VERSION:-}}" VKS_PACKAGE_NAMESPACE="$PKG_NS_RESOLVED" PKG_VALUES="$VALUES_RENDERED" \
   "${SCRIPT_DIR}/vks-package.sh" install "$PKG"
 
 # --- 4. RE-ASSERT the PSA labels ----------------------------------------------
