@@ -144,17 +144,32 @@ default_sc="$(kubectl get storageclass -o jsonpath='{range .items[?(@.metadata.a
 #    question nobody answered. MEASURED 2026-08-25 with a Forbidden-returning kubectl:
 #    default_sc=[] n_sc=[0] -> that false PROBLEM. Check 1 already had the right answer (`unk`);
 #    the file applied it to 1 of its 4 checks.
+# ⚠️ KEY ON kubectl's EXIT STATUS, never on "stderr is non-empty" and never on the CLASS alone.
+#    Both of those were shipped on 2026-08-25 and both were WRONG, measured:
+#      * stderr-non-empty: kubectl writes DEPRECATION WARNINGS to stderr and exits 0. An admin whose
+#        warning happened to contain the word "forbidden" got `UNKNOWN` + a BLOCKING rc, where the
+#        code had printed `ok` the day before. A regression, not a hardening.
+#      * class-alone: `classify_kube_failure`'s UNREACHABLE arm sits ABOVE FORBIDDEN and is
+#        unanchored, so a REAL 403 carrying one klog `dial tcp … i/o timeout` discovery line (real
+#        kubectl emits several before the terminal error) classifies UNREACHABLE — and the false
+#        PROBLEM this whole change exists to remove came straight back.
+#    rc is the only thing that answers "did the call fail". The class only WORDS the message, so it
+#    must not say "(RBAC)" for an UNREACHABLE.
 _sc_err="$(mktemp)"
-n_sc="$(kubectl get storageclass --no-headers 2>"$_sc_err" | wc -l | tr -d ' ' || true)"
+if _sc_out="$(kubectl get storageclass --no-headers 2>"$_sc_err")"; then _sc_rc=0; else _sc_rc=$?; fi
+n_sc="$(printf '%s' "$_sc_out" | grep -c . || true)"
 _sc_cls=""
-# `if`, not `[ -s … ] && …`: under `set -e` the AND-list form is safe ONLY because bash
-# exempts a failing LEFT operand, which is too subtle to leave for the next reader.
-if [ -s "$_sc_err" ]; then _sc_cls="$(classify_kube_failure "$_sc_err")"; fi
+if [ "$_sc_rc" -ne 0 ]; then _sc_cls="$(classify_kube_failure "$_sc_err")"; fi
 rm -f "$_sc_err"
-if [ "$_sc_cls" = FORBIDDEN ]; then
-  unk "cannot LIST StorageClasses (RBAC) -- this says NOTHING about whether a default exists."
-  note "Normal for a tenant: StorageClasses are cluster-scoped. Not evidence of a missing one."
-  note "Ask your platform team whether a default StorageClass is set on this cluster."
+if [ "$_sc_rc" -ne 0 ]; then
+  unk "could not LIST StorageClasses (${_sc_cls:-unclassified}) -- this says NOTHING about whether"
+  note "a default exists. It is NOT evidence of a missing one."
+  if [ "$_sc_cls" = FORBIDDEN ]; then
+    note "Normal for a tenant: StorageClasses are cluster-scoped."
+    note "Ask your platform team whether a default StorageClass is set on this cluster."
+  else
+    note "Re-run 'make vks-login', then this preflight."
+  fi
 elif [ -n "$default_sc" ]; then
   ok "default StorageClass: ${default_sc}(Gitea's PVC binds to it)"
 elif [ "$n_sc" -gt 0 ]; then
@@ -185,20 +200,25 @@ harbor_auth_report || problems=$((problems + 1))
 # Same capture as check 2: `svc -A` is cluster-wide, so a namespace-scoped tenant is Forbidden
 # and gets 0 -- which would read as "no LoadBalancer Services exist yet". Milder than a PROBLEM,
 # but still an assertion about the cluster nobody established.
+# Same rc-keyed rule as check 2 above, and for the same measured reasons.
 _lb_err="$(mktemp)"
-lbs="$(kubectl get svc -A --field-selector spec.type=LoadBalancer --no-headers 2>"$_lb_err" | wc -l | tr -d ' ' || true)"
+if _lb_out="$(kubectl get svc -A --field-selector spec.type=LoadBalancer --no-headers 2>"$_lb_err")"; then _lb_rc=0; else _lb_rc=$?; fi
+lbs="$(printf '%s' "$_lb_out" | grep -c . || true)"
 _lb_cls=""
-# `if`, not `[ -s … ] && …`: under `set -e` the AND-list form is safe ONLY because bash
-# exempts a failing LEFT operand, which is too subtle to leave for the next reader.
-if [ -s "$_lb_err" ]; then _lb_cls="$(classify_kube_failure "$_lb_err")"; fi
+if [ "$_lb_rc" -ne 0 ]; then _lb_cls="$(classify_kube_failure "$_lb_err")"; fi
 rm -f "$_lb_err"
 pending="$(kubectl get svc -A --field-selector spec.type=LoadBalancer \
   -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\t"}{.status.loadBalancer.ingress[0].ip}{"\n"}{end}' 2>/dev/null \
   | awk -F'\t' '$2 == "" {print $1}' | tr '\n' ' ' || true)"
-if [ "$_lb_cls" = FORBIDDEN ]; then
-  unk "cannot LIST Services cluster-wide (RBAC) -- a provider cannot be observed, and their"
-  note "ABSENCE is not established either. Normal for a namespace-scoped tenant."
-  note "Ask your platform team whether this cluster has a LoadBalancer provider."
+if [ "$_lb_rc" -ne 0 ]; then
+  unk "could not LIST Services cluster-wide (${_lb_cls:-unclassified}) -- a provider cannot be"
+  note "observed, and their ABSENCE is not established either."
+  if [ "$_lb_cls" = FORBIDDEN ]; then
+    note "Normal for a namespace-scoped tenant."
+    note "Ask your platform team whether this cluster has a LoadBalancer provider."
+  else
+    note "Re-run 'make vks-login', then this preflight."
+  fi
 elif [ "$lbs" -eq 0 ]; then
   note "no LoadBalancer Services exist yet, so a provider cannot be OBSERVED here."
   note "This is NOT a pass: if the cluster has no LB provider, Gitea's Service will never get an"
