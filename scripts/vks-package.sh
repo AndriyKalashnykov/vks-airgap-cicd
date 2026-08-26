@@ -93,7 +93,10 @@ fi
 # `// ""` on .spec.version: a Package with the field absent must not abort the whole listing with a
 # jq error that `_list` then reports as "no Carvel Packages visible. Is KUBECONFIG pointing at a
 # GUEST cluster?" -- naming the wrong cause for a one-row schema surprise.
-_versions() { kubectl get packages -A -o json 2>/dev/null \
+# stderr goes to $_PKG_ERR (a FILE), not /dev/null. `2>/dev/null` hides the MESSAGE and not the
+# STATUS, so the caller saw only "empty" and had to guess between three very different causes: no
+# Carvel API at all, a cluster-scoped list this identity may not hold, and a genuinely absent package.
+_versions() { kubectl get packages -A -o json 2>"${_PKG_ERR:-/dev/null}" \
   | jq -r --arg r "$1" "$(vkey_jq)"' [.items[]?|select(.spec.refName==$r)|(.spec.version // "")]|map(select((type=="string") and length>0))|sort_by(vkey)|.[]' 2>/dev/null; }
 
 _list() {
@@ -115,7 +118,10 @@ _list() {
 _die_unknown() {
   log_error "$1"
   log_error "  packages available on this cluster:"
-  kubectl get packages -A -o json 2>/dev/null | jq -r '[.items[]?.spec.refName]|unique|.[]' 2>/dev/null | sed 's/^/    /' >&2
+  # `|| true`: this pipeline is a STATEMENT under `set -euo pipefail`, so a failing kubectl kills the
+  # function HERE and the final die() below never prints -- the error reporter would itself die
+  # silently, in exactly the case it exists to report.
+  { kubectl get packages -A -o json 2>/dev/null | jq -r '[.items[]?.spec.refName]|unique|.[]' 2>/dev/null | sed 's/^/    /' >&2; } || true
   die "re-run with PACKAGE=<one of the above>   (see also: make list-vks-packages)"
 }
 
@@ -124,8 +130,48 @@ case "$ACTION" in
 
   install)
     [ -n "$PACKAGE" ] || _die_unknown "PACKAGE is not set."
-    vers="$(_versions "$PACKAGE")"
-    [ -n "$vers" ] || _die_unknown "no Package '${PACKAGE}' on this cluster."
+    # `|| true` IS LOAD-BEARING. `_versions` is a `kubectl | jq` pipeline, so under
+    # `set -euo pipefail` a failing kubectl makes the ASSIGNMENT non-zero and `set -e` kills the
+    # script HERE -- one line above the guard that exists for precisely this case. MEASURED
+    # 2026-08-26 with a stubbed kubectl; the CONTROL is the discriminator:
+    #     no Carvel API                  -> rc=1, 262 bytes, output ends at "cluster: ..."  SILENT
+    #     Forbidden (a namespaced tenant) -> rc=1, 262 bytes, identical                     SILENT
+    #     API present, 0 items (CONTROL)  -> rc=1, 545 bytes, full diagnostic          guard reached
+    # In the field that is `make install-ingress ISTIO_INSTALL_METHOD=package` creating two
+    # namespaces and then dying with no message at all.
+    _PKG_ERR="$(mktemp)"; export _PKG_ERR
+    vers="$(_versions "$PACKAGE" || true)"
+    if [ -z "$vers" ]; then
+      # DISCRIMINATE, rather than reporting one cause for three. Deliberately a LOCAL check and NOT a
+      # new class in classify_kube_failure: check-classifier-consumers.sh DERIVES the class list from
+      # that function and requires a named arm in every case-form consumer, so a new class reddens 9
+      # files, each needing a DIFFERENT remedy -- and this script is not one of those nine. "this API
+      # group is not served" is also neither transport nor auth, which is that taxonomy.
+      _e="$(cat "$_PKG_ERR" 2>/dev/null || true)"; rm -f "$_PKG_ERR"
+      case "$_e" in
+        *"doesn't have a resource type"*|*"no matches for kind"*|*"could not find the requested resource"*)
+          # HEDGED ON PURPOSE. This says kubectl's DISCOVERY does not list the TYPE right now -- which
+          # is usually "no kapp-controller here", but an aggregated APIService that is momentarily
+          # Unavailable, or a kapp-controller still starting, produces the same answer. It is also a
+          # claim about the TYPE, never about whether a given OBJECT exists; that stays
+          # kube_is_notfound's job, which requires the server's own "Error from server (NotFound)".
+          die "this cluster is not serving the Carvel packaging API (packaging.carvel.dev), so no VKS
+    Package can be installed here. Usually that means no kapp-controller -- KinD and generic clusters
+    have none, a VKS GUEST cluster does -- but it can also be an APIService that is still starting.
+      -> use ISTIO_INSTALL_METHOD=helm, or point KUBECONFIG at a VKS guest cluster.
+      -> if you believe this IS a VKS guest, check WHICH cluster: $(kube_target_id)
+         and confirm with: kubectl api-resources --api-group=data.packaging.carvel.dev" ;;
+        *orbidden*)
+          die "this cluster serves packaging.carvel.dev, but this identity may not LIST packages
+    cluster-wide ('kubectl get packages -A'), which a namespaced tenant cannot hold.
+      -> ask your platform team to run 'make list-vks-packages', or use ISTIO_INSTALL_METHOD=helm.
+    kubectl said: ${_e}" ;;
+        "") _die_unknown "no Package '${PACKAGE}' on this cluster." ;;
+        *)  die "could not list Carvel Packages on $(kube_target_id).
+    kubectl said: ${_e}" ;;
+      esac
+    fi
+    rm -f "$_PKG_ERR" 2>/dev/null || true
     VER="${PKG_VERSION:-$(printf '%s\n' "$vers" | tail -1)}"
     printf '%s\n' "$vers" | grep -qxF "$VER" || die "version '${VER}' is not offered for ${PACKAGE}. Offered:
 $(printf '%s\n' "$vers" | sed 's/^/    /')"
