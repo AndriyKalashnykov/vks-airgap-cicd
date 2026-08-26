@@ -105,7 +105,7 @@ run is the one that proves this box can actually run the install.
 
 ```bash
 make mirror-pull      # every image in images/images.txt → ./bundle
-make builder-build    # the offline Maven builder → ./bundle/builders/ (needs Maven Central; NOT Harbor)
+make builder-build    # one offline builder per language → ./bundle/builders/ (needs the package registries; NOT Harbor)
 make bundle           # → vks-airgap-cicd-bundle-<date>.tar  + its .sha256
 ```
 
@@ -115,8 +115,8 @@ make bundle           # → vks-airgap-cicd-bundle-<date>.tar  + its .sha256
 
 `mirror-pull` **resumes** — re-run it after a dropped connection and it skips what already completed.
 
-> **`builder-build` is not optional for the Java app.** Its Maven dependencies are baked into an image on
-> the internet side, because the in-cluster Kaniko build cannot reach Maven Central. The air-gap box cannot
+> **`builder-build` is not optional.** Each app's dependencies are baked into an image on
+> the internet side, because the in-cluster Kaniko build reaches NO package registry. The air-gap box cannot
 > build it (no internet) and the internet box cannot push it (no Harbor) — so it is **carried in the bundle**
 > and pushed on the far side by `make builder-push`.
 

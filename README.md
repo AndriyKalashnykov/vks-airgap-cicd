@@ -33,9 +33,18 @@ a port-forward, so it needs no ingress and no `/etc/hosts` entry.
 *same* pipeline and verified independently. `apps/registry.tsv` is the single source of truth;
 everything else loops over it.
 
-An in-cluster build reaches no package registry, so every app ships a **pre-baked builder image**
-(`Dockerfile.builder`) carrying its own dependency cache — `~/.m2` for Java, the module cache for Go,
-and so on. All are built on the internet-connected jump box, pushed to Harbor, and consumed offline.
+An in-cluster build reaches **no package registry**, so every app ships a **pre-baked builder image**
+(`Dockerfile.builder`) carrying its own dependency cache. All six are built on the
+internet-connected jump box, pushed to Harbor, and consumed offline:
+
+| app | cache it bakes | fetched from |
+|---|---|---|
+| `javawebapp` | `~/.m2` (`./mvnw -B verify`) | Maven Central |
+| `gowebapp` | the Go module cache (`go mod download`) | `proxy.golang.org` |
+| `nodejswebapp` | `node_modules` (`npm ci`) | `registry.npmjs.org` |
+| `pythonwebapp` | the venv (`pip install -r requirements.txt`) | PyPI |
+| `rustwebapp` | the cargo registry (`cargo fetch --locked`) | `crates.io` |
+| `dotnetwebapp` | the NuGet cache (`dotnet restore`) | `nuget.org` |
 
 Adding an app is **one row** in `apps/registry.tsv` — see [Adding an app](docs/adding-an-app.md).
 

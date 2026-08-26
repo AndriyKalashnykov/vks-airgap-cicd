@@ -45,6 +45,10 @@ a silent bit-flip is plausible, and it used to be silently optional at both ends
 
 ## 3. The builder is BUILT outside and PUSHED inside
 
+> The narrative below is the ORIGINAL two-app finding and is kept as written — it is why the split
+> exists. The repo now ships SIX apps and `builder-build` needs EVERY language's package registry,
+> not just Maven Central; the table is the current contract.
+
 `make builder-image` needed **both networks at once**: Maven Central (to bake `~/.m2`) *and* Harbor (its
 base ref, a pre-build login probe, and the push). On a sneakernet split **neither box can run it** — box A
 has no Harbor, box B has no Maven Central — so the mirror completed and the offline Java build could not
@@ -55,7 +59,7 @@ Split:
 
 | | box | network | how |
 |---|---|---|---|
-| `make builder-build` | A | Maven Central only | base pinned **by digest from `bundle/images.lock`** — byte-identical to the mirrored base, so no Harbor is needed and builder↔mirror alignment holds *by construction* (`images.txt` pins maven by tag, so a naive public pull could legitimately differ) |
+| `make builder-build` | A | the package registries only (Maven Central · proxy.golang.org · npm · PyPI · crates.io · NuGet) | base pinned **by digest from `bundle/images.lock`** — byte-identical to the mirrored base, so no Harbor is needed and builder↔mirror alignment holds *by construction* (`images.txt` pins maven by tag, so a naive public pull could legitimately differ) |
 | `make builder-push` | B | Harbor only | `crane push bundle/builders/<app>` — the destination ref is computed from `HARBOR_URL` **on box B**, which is the only box that knows it |
 | `make builder-image` | dual-homed | both | unchanged: build + push |
 

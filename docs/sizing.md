@@ -31,6 +31,23 @@ thing the jump box builds. **MEASURED 2026-08-23** (podman, `linux/amd64`, curre
 | pythonwebapp | **105 MB** | `python:3.14-alpine` 50 MB |
 | **total** | **≈ 4.3 GB** | **≈ 3.3 GB** |
 
+### What each language actually requires
+
+Derived from each app's `Dockerfile.builder` / `Dockerfile` (so it cannot drift from the code):
+
+| app | build image | runtime base | cache it bakes | fetched from |
+|---|---|---|---|---|
+| `javawebapp` | `maven:3.9-eclipse-temurin-25` | `eclipse-temurin:…-jre-jammy` | `~/.m2` | Maven Central |
+| `gowebapp` | `golang:1.27.0-bookworm` | `distroless/static-debian12` | Go module cache | `proxy.golang.org` |
+| `nodejswebapp` | `node:24-alpine` | `node:24-alpine` | `node_modules` | `registry.npmjs.org` |
+| `pythonwebapp` | `python:3.14-alpine` | `python:3.14-alpine` | the venv | PyPI |
+| `rustwebapp` | `rust:1.98-alpine` | `distroless/static-debian12` | cargo registry | `crates.io` |
+| `dotnetwebapp` | `mcr…/dotnet/sdk:10.0-alpine` | `mcr…/dotnet/aspnet:10.0-noble-chiseled` | NuGet cache | `nuget.org` |
+
+**The jump box needs egress to ALL SIX package registries**, not just Maven Central — `builder-build`
+fails on whichever one is blocked. Two apps (`nodejswebapp`, `pythonwebapp`) run on their build image
+as the runtime base; two (`gowebapp`, `rustwebapp`) ship a static binary on `distroless/static`.
+
 Realistic floor for a **dual-homed six-app walk**, measured against a box that hit `ENOSPC` at 15 G used:
 
 | component | size |
@@ -73,11 +90,15 @@ On the mirror cache itself:
 > multi-arch list digest must be preserved for the pull to resolve. The single-arch
 > saving therefore applies to the large tag-referenced images (Maven, Temurin, the builder).
 
-## What each language costs — every image, attributed
+## Java vs Go — a two-language deep-dive on build vs delivery cost
 
-The apps are not decoration — **they are the air-gap story**. Below is the **entire image set**,
-each image attributed to the language that needs it. Measured (registry-compressed, `linux/amd64`;
-the app images are the ones the pipeline actually built in the last KinD run).
+⚠️ **This section covers TWO of the six apps.** It predates the six-app table above and is kept
+because the Java-vs-Go contrast is the clearest illustration of the build-side / delivery-side
+split. It is **not** the full image set — the builder figures above are, and they are newer. Node.js,
+Python, Rust and .NET are not attributed here; their builder sizes are in the six-app table.
+
+Measured (registry-compressed, `linux/amd64`; the app images are the ones the pipeline actually
+built in a KinD run).
 
 | Bucket | Image | Size |
 |---|---|---|
@@ -88,9 +109,9 @@ the app images are the ones the pipeline actually built in the last KinD run).
 | | **Java total** | **≈ 690 MB** |
 | **Go** | `golang` build image (tag pinned in `images/images.txt`) | 287 MB |
 | **Go** | `distroless/static-debian12` (runtime base) | 1 MB |
-| **Go** | *offline builder* | **none — the app is stdlib-only, so its air-gapped build fetches nothing** |
+| **Go** | `gowebapp-builder` — **offline builder, module cache pre-baked** | *not measured registry-compressed.* The six-app table above reports **1.00 GB LOCAL** — a different unit, so it cannot be added to this column. The row used to say "none"; that was wrong. |
 | **Go** | `gowebapp:<sha>` — the image the pipeline builds | **4.85 MB** |
-| | **Go total** | **≈ 293 MB** |
+| | **Go total** | **≈ 293 MB** — EXCLUDING the builder, which is not measured in this unit |
 | **Shared** | Tekton (Pipelines + Triggers + Dashboard) | **~2 GB** — dominates the mirror |
 | **Shared** | `gitea` 62 · `istio/proxyv2` 87 · `istio/pilot` 72 · `kaniko` 44 · `alpine/git` 35 · `traefik` 52 · `yq` 9 | 362 MB |
 | | **Shared total** | **≈ 2.4 GB** |
@@ -100,10 +121,11 @@ the app images are the ones the pipeline actually built in the last KinD run).
 1. **On the BUILD side the languages cost about the same** — Java 267 MB of mirrored images
    (maven + JRE) vs Go 284 MB (the `golang` image alone is *bigger* than Maven's). The interesting
    difference is not the compiler.
-2. **Java needs an offline builder and Go does not.** An in-cluster `mvn` cannot reach Maven Central,
-   so `Dockerfile.builder` bakes the whole `~/.m2` on the internet side — that is the **292 MB**, and
-   it is the single largest per-language cost in the repo. A stdlib-only Go build fetches **nothing**.
-   Same pipeline, one `case` branch in `lib/apps.sh`.
+2. **EVERY app needs an offline builder — and they cost wildly different amounts.** An in-cluster
+   build reaches no package registry, so each `Dockerfile.builder` bakes that language's cache on the
+   internet side. Java's `~/.m2` is the **292 MB** in this compressed column. It is NOT the largest in
+   the repo — by the local measure in the six-app table above, **rust (1.57 GB) and go (1.00 GB) are
+   both bigger than java (622 MB)**. Same pipeline, one `case` branch in `lib/apps.sh`.
 3. **On the DELIVERY side Go wins by ~27×** — a 4.85 MB static binary on `distroless/static` versus a
    130 MB JAR on a JRE. That is what you ship, and re-ship on every commit.
 

@@ -5,7 +5,7 @@ LAYOUT_LEFT_RIGHT()
 
 title Air-gap connectivity — the jump box is the only bridge
 
-System_Ext(net, "Internet", "Upstream registries + Maven Central\ngcr.io · ghcr.io · docker.io · repo.maven.apache.org")
+System_Ext(net, "Internet", "Container registries + one package registry PER LANGUAGE\ngcr.io · ghcr.io · docker.io\nMaven Central · proxy.golang.org · npm · PyPI · crates.io · NuGet")
 
 System_Boundary(jbz, "Jump box  ·  dual-homed (internet + air-gapped VKS)") {
   System(jb, "Mirror + offline builders", "crane copies images into Harbor;\nbuilds one dependency-baked builder image\nper language (six today)")
@@ -19,7 +19,7 @@ System_Boundary(agz, "Guest / workload VKS cluster  ·  NO internet access") {
   System(cluster, "Gitea · Tekton · the apps", "What this project installs and wires.\nPulls every image from Harbor.\nOne app per row of apps/registry.tsv (six today).")
 }
 
-Rel(jb, net, "1 · pull images + Maven deps", "HTTPS (internet side)")
+Rel(jb, net, "1 · pull images + each app's deps", "HTTPS (internet side)")
 Rel(jb, svc, "2 · push mirrored images", "HTTPS (Harbor, on the Supervisor)")
 Rel(jb, cluster, "3 · install + wire Gitea, Tekton, the apps", "HTTPS (guest cluster)")
 BiRel(svc, cluster, "4 · guest pulls every image from Harbor\n5 · ArgoCD syncs INTO the guest", "in-lab only")
