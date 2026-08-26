@@ -495,13 +495,17 @@ as `ARGOCD_LB_IP` in `.env.state`. Then `-k` stops being load-bearing and TLS ca
 
 **Also open, from the same review:**
 
-- **F6, UNSETTLED and load-bearing** — nothing waits for the ArgoCD *instance* to report Ready before
-  reading its Service; there are **zero** readers of that CRD's status in this repo. Whether the
-  VMware `argocds.argocd-service.vsphere.vmware.com` CR even HAS a status stanza is **UNVERIFIED** —
-  it decides whether the re-resolve poll is the fix or a workaround for not waiting on Ready. Could
-  not be settled this session: `walk-reset` deregisters the service, so the CRD was gone. Two
-  read-only commands settle it while a lab has ArgoCD installed:
-  `kubectl get crd argocds.argocd-service.vsphere.vmware.com -o jsonpath='{.spec.versions[0].schema.openAPIV3Schema.properties.status}'`
+- **F6 SETTLED 2026-08-26, MEASURED: the CR DOES carry a status stanza, and this repo has ZERO
+  readers of it.** `crd argocds.argocd-service.vsphere.vmware.com` defines `.status.conditions`, and
+  the live instance reports `PackageInstallReady=True`, `SecretReady=True`,
+  `SyncPackageInstallStatus=True`. So a readiness signal EXISTS to wait on before reading the
+  Service's address, and nothing waits on it.
+  ⚠️ **Do NOT overstate this.** Those conditions describe the **PackageInstall**, not whether the
+  LoadBalancer VIP is stable or routable — and the incident was a VIP that moved on an already-created
+  Service. Waiting on them is plausibly necessary and is **NOT proven sufficient**, so the re-resolve
+  loop stays until someone measures whether Ready precedes VIP stability. Done-when: wait on the
+  condition in `08-install-argocd-service.sh` AND show, with timestamps, that the VIP no longer moves
+  after it goes True.
 - **F7** — this is now the **third** hand-rolled endpoint poller, and the existing two disagree on
   what counts as answering (`argocd-auth-check.sh` accepts any status ≠ 000; `91-e2e-tenant-mechanism.sh`
   requires curl success). Extract one `argocd_endpoint_answers` into `lib/argocd.sh` beside
@@ -558,11 +562,19 @@ and needs its own idea round.
 - **F5 (live)** — still artefact-verified only; we cannot reproduce a relocated depot.
 - **`vks-package.sh`'s `kubectl apply -f -` discards stderr**, so the *second* half of the no-Carvel
   path is unclassifiable no matter what the probe says. Named, not fixed.
-- **The VKS 3.7 addon tripwire may be structurally unable to fire.** It probes the GUEST, but this
-  repo's own graded record says `AddonInstall` lives on the **Supervisor**. If so it is unreachable
-  code that manufactures the appearance of handling. **One read-only command settles it on a live
-  3.7.1 guest:** `kubectl get crd -o name | grep -c addons.kubernetes.vmware.com`. Could not be run
-  this session — the guest cluster was deleted to reset the matrix cell.
+- **SETTLED 2026-08-26, MEASURED: the VKS 3.7 addon tripwire IS DEAD CODE.** On the live 3.7 lab,
+  guest `cicd-gc0826033451`: **SUPERVISOR addon CRDs = 9, GUEST addon CRDs = 0**. The tripwire in
+  `43-install-istio-package.sh:115` probes the GUEST with the ambient KUBECONFIG, and
+  `vks-package.sh:77-88` eagerly REFUSES a Supervisor kubeconfig — so the guest is the only thing it
+  can ever see, and it cannot fire. 17 lines of warning that can never print, on a risk
+  `docs/vks-services/istio.md:539` calls live on VKS 3.7+. **Re-point it at the Supervisor
+  kubeconfig, or delete it and restate the risk honestly** — leaving it is worse than nothing,
+  because it manufactures the appearance of handling.
+- **SETTLED, and my FIRST probe was WRONG in the alarming direction.** The package path's premise
+  holds: the same guest serves **112 packages**, 7 `*.carvel.dev` CRDs, and 2 api-resources in
+  `data.packaging.carvel.dev`. An earlier probe reported **0** and would have implied the whole
+  package path was impossible on a guest; it had run before the guest was ready. An instrument
+  artifact, caught by re-measuring rather than repeating it.
 
 > **2026-08-25 — the sweep half is DONE; #1 grew and is now the whole row.** The bare-substring
 > discriminator is fixed at all five sites (`48` ×2, `23`, `26`, `98`, `08`) behind one shared
