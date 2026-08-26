@@ -400,6 +400,44 @@ Still open, deliberately: WIRING it into an automated path. It needs a live KinD
 and mutates that cluster's ArgoCD, so where it belongs is a design question, not a one-liner. B471
 carries it.
 
+## 🔴 B484 — the Forbidden-reads-as-absent sweep: a FAIL-OPEN air-gap check outranks the wrong-message bug 🔴 open
+
+Found by the implementation round on B471/F-c4 (#1016), which swept **72 stderr-discarding kubectl
+sites across 145 non-test scripts** and flagged 24. Two rank ABOVE the two I fixed, because a wrong
+MESSAGE costs an operator time while a fail-OPEN costs them the guarantee.
+
+**#1 — `scripts/43-install-istio-package.sh:86-113` FAILS OPEN.** `BUNDLE_HOST=""` is set, filled
+from `kubectl get package … 2>/dev/null`, and then guarded by `if [ -n "$BUNDLE_HOST" ]; then … fi`
+**with no `else`** (verified by reading it). So any failure of that read — a tenant Forbidden on a
+cluster-scoped `get package`, an expired credential, an API blip — leaves it empty and the WHOLE
+air-gap check is skipped, including the `die` that otherwise stops an install whose images resolve
+from a vendor bundle repo the mirror cannot stage. The comment directly above says the point is that
+*"The operator learns on the box that can still fix it."* A silently-disabled control does the
+opposite, and it is invisible: the run goes green.
+
+**#2 — `scripts/48-istio-preflight.sh:206-209` asserts a false claim and exits 1.** `GW_TYPE` comes
+from a `2>/dev/null` jsonpath; when the Service is unreadable it is not `LoadBalancer`, so the check
+tells a tenant *"the gateway is not a LoadBalancer"* — a statement about the CLUSTER derived from a
+question nobody answered — and sets `rc=1`. This is tenant-facing (`make istio-preflight`) and the
+remedy it prints is roughly right for the wrong reason.
+
+**Lower-ranked, recorded so the sweep is not re-run from scratch:** `lib/vks-package.sh:84,95`
+(`get packages -A`, cluster-wide, unmeasured); `vks-trust-probe.sh:91` and `:66` (assert absence but
+are non-blocking and exit 0); `lib/istio.sh:67` (leads with a false claim, then hedges RBAC with the
+exact remedy on the next line — lowest of the six).
+
+**The exemplar to copy is `lib/capacity.sh:146-175`**, which separates "nodes unlistable (RBAC),
+normal for a tenant … NOT a memory problem" from "all excluded", and SKIPs.
+
+**Done-when.** Both #1 and #2 key on kubectl's EXIT STATUS, not on emptiness — the same rule B471/F-c4
+had to be corrected to (keying on stderr-non-emptiness regressed an admin; keying on the CLASS was
+shadowed by `classify_kube_failure`'s unanchored UNREACHABLE arm). #1 must FAIL CLOSED: an unreadable
+package list is not evidence the images are mirrored.
+
+⚠️ **Do NOT "fix" this by widening `classify_kube_failure`.** Its UNREACHABLE arm sits above
+FORBIDDEN and is unanchored, and every other `case "$(classify_kube_failure …)"` consumer inherits
+that. Keying on rc makes a call site immune without touching the shared classifier.
+
 ## 🟡 B471 — RE-SCOPED: the tenant gap is HARBOR, not the guest cluster 🟡 open
 
 > **CORRECTED 2026-08-25 by an idea round + my own measurements. The original row was ~5x too big
