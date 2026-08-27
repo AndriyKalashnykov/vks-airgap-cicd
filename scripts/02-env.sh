@@ -272,7 +272,18 @@ env_check() {
     # ── B473 finding 9: a LOOPBACK server in the LAB slot ─────────────────────────────────────
     # PRESENCE is not identity. `./secrets/vks.kubeconfig` is the DOCUMENTED real-lab guest-cluster
     # default (lib/os.sh's `${KUBECONFIG:-${REPO_ROOT}/secrets/vks.kubeconfig}`), and a KinD run of an
-    # older vintage wrote its OWN kubeconfig there. MEASURED 2026-08-26: that file held
+    # older vintage wrote its OWN kubeconfig there.
+    #
+    # ⚠️ THIS WAS A LIVE BUG, NOT RESIDUE FROM AN OLD ONE. The "older vintage" wording above reads
+    # as history and tells the next reader not to look. Root cause, found 2026-08-26: `kind create
+    # cluster` writes the AMBIENT $KUBECONFIG when --kubeconfig is absent, so it merged into whatever
+    # slot load_env had defaulted to and HIJACKED its `current-context`. The forensics that settled
+    # it: secrets/vks.kubeconfig was 0600 (kind's own mode) while secrets/kind.kubeconfig was 0664
+    # (a shell redirect under umask 002), SAME mtime. Fixed by an early `export KUBECONFIG` in
+    # 05-kind-up.sh plus the check-kind-kubeconfig gate. THIS DETECTOR REMAINS an AFTERMATH check
+    # for a file damaged before that fix -- it never prevented anything, and it is silent during
+    # the KinD run itself (the VKS_STATE_KIND guard below).
+    # MEASURED 2026-08-26: that file held
     # `server: https://127.0.0.1:42961`, the `-s` test above passed happily, and the first thing that
     # noticed was `env-validate` — a REACHABILITY gate that needs the network and is a separate step.
     # 05-kind-up.sh:151 already warns about precisely this: "ON A LAB BOX secrets/vks.kubeconfig IS
