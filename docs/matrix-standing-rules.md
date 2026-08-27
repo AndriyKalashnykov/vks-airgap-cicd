@@ -279,6 +279,19 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
     `git worktree` (`git worktree add /tmp/wt <branch>`), which leaves `HEAD` and the working tree
     of the main checkout untouched.
 
+    ⚠️ **A worktree is not automatically safe — switching ITS branch under a running gate is the
+    same violation, one level down.** MEASURED 2026-08-26, ~1 hour after this rule was corrected:
+    I launched `make static-check` in `/tmp/wt-mainpost`, then ran `git switch -c <other-branch>`
+    **in that same worktree** while the gate was still running. The gate exited `rc=0` — over a
+    tree that changed underneath it. That green measures nothing, and it is indistinguishable from
+    an honest one.
+
+    The rule is per-TREE, not per-repo: **one worktree per branch, and never switch a tree while
+    anything is reading it** — a gate, a test, a build, a matrix. `git worktree add` refuses to
+    check the same branch out twice, which is a useful backstop but only catches the collision,
+    not the switch. The cheap habit is to name the worktree after the branch
+    (`/tmp/wt-<branch-slug>`) so a second checkout is obviously a second directory.
+
     The same applies, with **no guard at all**, to **`nested-vsphere-lab` itself**: `:770`
     (`walkbox-vm.sh`, every row), `:714` (`dns-record.sh`), `:237` (`supervisor-endpoint.sh`) are
     read per-row from that repo's working tree, and `assert_repo_published` does not cover it.
