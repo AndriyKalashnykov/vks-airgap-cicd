@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # every grep pattern here is a LITERAL to match inside 99-verify.sh,
+#   not an expansion. Double-quoting would expand ${app}/${health}/$rc and match nothing.
+# shellcheck disable=SC2034  # img/app/ns/pf_target are consumed by the classifier stand-in under
+#   the SAME names the real function uses; renaming them would weaken the fidelity this test needs.
 # test-verify-pf-readiness.sh — the READINESS wait must rebuild a dead tunnel, not blame the app.
 #
 # THE DEFECT THIS PINS (measured 2026-08-27, KinD e2e). B497 gave marker_visible() a tunnel-death
