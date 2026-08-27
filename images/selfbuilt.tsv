@@ -22,7 +22,15 @@
 #   dockerfile  path within the checkout
 #   target      docker build --target (empty = default stage)
 #   repo_path   path under ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/
-#   tag         the tag the consuming manifest asks for
+#   tag         the tag the consuming manifest asks for.
+#               ⚠️ IT MUST ENCODE ANY go_get OVERRIDE, NOT JUST THE UPSTREAM REF. Our artifact is
+#               "fork v1.25.18 PLUS go-containerregistry v0.21.9" -- tagging that as plain
+#               `v1.25.18-debug` misrepresents its content, and it is not merely cosmetic: MEASURED
+#               2026-08-26, pushing different content under an already-cached tag left the KinD nodes
+#               running the OLD binary (Tekton steps are imagePullPolicy=IfNotPresent), so a verified
+#               fix appeared not to work and cost a full e2e cycle. Same mutable-tag class the repo's
+#               Harbor blob-store incident is about: the digest in selfbuilt.lock is the truth, the
+#               tag is only a label -- so make the label change whenever the content does.
 #   go_get      OPTIONAL, space-separated module@version overrides applied BEFORE the build
 #
 # WHY go_get EXISTS — and it is the single strongest argument for building rather than mirroring.
@@ -45,4 +53,4 @@
 # step for a completely different reason.
 #
 # renovate: datasource=github-releases depName=chainguard-forks/kaniko
-kaniko	https://github.com/chainguard-forks/kaniko	v1.25.18	deploy/Dockerfile	kaniko-debug	kaniko-project/executor	v1.25.18-debug	github.com/google/go-containerregistry@v0.21.9
+kaniko	https://github.com/chainguard-forks/kaniko	v1.25.18	deploy/Dockerfile	kaniko-debug	kaniko-project/executor	v1.25.18-gcr0.21.9-debug	github.com/google/go-containerregistry@v0.21.9
