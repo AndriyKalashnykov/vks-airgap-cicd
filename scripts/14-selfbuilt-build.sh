@@ -55,7 +55,12 @@ LOCK="${OUT_DIR}/selfbuilt.lock"
 # a privilege boundary -- the real harm is that a stray apostrophe silently corrupts the exit
 # code, which is a fake-green generator in a repo whose whole doctrine is exit-code honesty.
 src=""
-_selfbuilt_cleanup() { [ -n "${src:-}" ] && rm -rf -- "$src"; }
+# ⚠️ `return 0` IS LOAD-BEARING. `[ -n "$x" ] && rm ...` as a function's TAIL returns 1 when the
+# test is false, and as an EXIT trap that becomes THE SCRIPT'S exit status. `src` is emptied after
+# every successful image (see the end of the loop) and is never set at all when every image is
+# skipped — so this script exited 1 on a fully-successful run. It went unnoticed because nothing
+# called it from a flow that checked: wiring it into install-all is what made it matter.
+_selfbuilt_cleanup() { [ -n "${src:-}" ] && rm -rf -- "$src"; return 0; }
 trap _selfbuilt_cleanup EXIT
 : > "${LOCK}.tmp"
 
@@ -177,24 +182,32 @@ for name in $NAMES; do
   # which is the value a later run can actually compare.
   engine_id="$("$ENGINE" inspect --format '{{.Id}}' "$local_ref" 2>/dev/null || echo unknown)"
   # ---- PROVE THE OVERRIDE REACHED THE ARTIFACT -------------------------------
-  # Injecting the RUN proves the DOCKERFILE TEXT changed; it does not prove the binary was built
-  # with the override. Without this the whole chain is: text injected -> build exited 0 -> push
-  # verified -> INFERRED that the dependency is what we asked for. A green push is equally
-  # consistent with a cached layer or `go get` resolving to something else.
-  # Go embeds its module graph in the executable, so one command settles it offline.
+  # Injecting the RUN proves the DOCKERFILE TEXT changed; it does not prove the BINARY was built
+  # with the override. Without this the chain is: text injected -> build exited 0 -> push verified
+  # -> INFERRED that the dependency is what we asked for. A green push is equally consistent with a
+  # cached layer or `go get` resolving to something else.
+  #
+  # ⚠️ NOT `go version -m`: this is a SCRATCH-based executor image with NO Go toolchain in it
+  # (measured — `command -v go` inside the image returns nothing, while /kaniko/executor is there).
+  # An earlier version of this check assumed one and degraded to a WARN on every build, which is a
+  # proof that never runs. Go embeds its build info as PLAIN TEXT in the executable, so grep reads
+  # it with no toolchain at all. The debug image ships /busybox/sh; a non-debug one would not, and
+  # that case still warns rather than silently passing.
   if [ -n "$gg" ]; then
     for _mod in $gg; do
       _want_mod="${_mod%@*}"; _want_ver="${_mod##*@}"
-      if _mods="$($ENGINE run --rm --entrypoint /busybox/sh "$local_ref" \
-                    -c 'go version -m /kaniko/executor 2>/dev/null' 2>/dev/null)"; then
-        printf '%s' "$_mods" | grep -qE "[[:space:]]${_want_mod}[[:space:]]+${_want_ver}([[:space:]]|\$)" \
-          || die "[${name}] the go_get override did not reach the binary: expected ${_want_mod} ${_want_ver}
-  in 'go version -m /kaniko/executor'. The Dockerfile text was injected and the build exited 0, so
-  this is the difference between 'we asked' and 'it happened'."
-        log_info "[${name}] verified in the binary: ${_want_mod} ${_want_ver}"
+      # The dep record is "<module><TAB><version>"; `.` matches the tab without needing to quote it.
+      # Measured on a correct build: 2 hits. A wrong version: 0.
+      if _hits="$("$ENGINE" run --rm --entrypoint /busybox/sh "$local_ref" \
+                    -c "grep -ac '${_want_mod}.${_want_ver}' /kaniko/executor 2>/dev/null || echo 0" 2>/dev/null)"; then
+        case "$_hits" in
+          ''|0|*[!0-9]*) die "[${name}] the go_get override did not reach the binary: '${_want_mod} ${_want_ver}'
+  is not in /kaniko/executor's embedded build info. The Dockerfile text was injected and the build
+  exited 0, so this is the difference between 'we asked' and 'it happened'." ;;
+          *) log_info "[${name}] verified in the binary: ${_want_mod} ${_want_ver} (${_hits} build-info hit(s))" ;;
+        esac
       else
-        # A non-debug image has no shell; say so rather than silently skipping the proof.
-        log_warn "[${name}] could not run 'go version -m' in ${local_ref} (no shell?) — the go_get override is UNVERIFIED in the artifact"
+        log_warn "[${name}] no shell in ${local_ref} — the go_get override is UNVERIFIED in the artifact"
       fi
     done
   fi

@@ -102,7 +102,11 @@ for name in $NAMES; do
   # `|| true`: a crane failure here must not abort before we can report it (set -e).
   now="$(crane digest "$ref" "${CRANE_INSECURE[@]}" 2>/dev/null || true)"
   [ -n "$now" ] || { log_warn "[${name}] could not read the registry digest — recording nothing"; continue; }
-  was="$(awk -F'\t' -v n="$name" '$1==n {print $2}' "$PUSHED_LOCK" 2>/dev/null | tail -1)"
+  # `|| true` for the SAME reason line 103 carries one, and it is a FIRST-RUN bug: on the very first
+  # push the lock file does not exist yet, awk exits 2 (cannot open), pipefail propagates it, and
+  # `set -e` kills the script AFTER a successful, verified push. `2>/dev/null` hides the message, not
+  # the status. It stayed invisible because a box that had ever pushed by hand already had the file.
+  was="$(awk -F'\t' -v n="$name" '$1==n {print $2}' "$PUSHED_LOCK" 2>/dev/null | tail -1 || true)"
   if [ -n "$was" ] && [ "$was" != "$now" ]; then
     log_error "[${name}] ${ref} now serves ${now}, but a previous verified push recorded ${was}."
     log_error "  The SAME TAG is serving DIFFERENT BYTES. Either the tag was overwritten (give the new"
