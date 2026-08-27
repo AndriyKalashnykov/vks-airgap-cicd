@@ -95,27 +95,62 @@ done
 # verify anything -- it was provenance you could not check. Here we ask the registry what it now
 # serves, and on a re-run we FAIL when the same tag serves different bytes, which is the mutable-tag
 # hazard this repo has already been bitten by.
+# The check is CARRIED vs SERVED, in this run, from this bundle. `crane digest --tarball` computes
+# the digest offline from the tarball we carried, with the carried crane; `crane digest <ref>` asks
+# the registry what it serves. MEASURED 2026-08-27, equal on a synthetic push to a throwaway
+# registry AND on the real artifact (both sha256:95106555...), so this comparison is well-founded.
+#
+# This REPLACED a historical check against a local lock file, which had three defects, all measured:
+#   1. It appended the drifted digest UNCONDITIONALLY *before* the die, and read the baseline with
+#      `tail -1` -- so a real tag overwrite fired ONCE and the operator's habitual re-run silently
+#      cleared it. A one-shot tripwire is not a control, and nobody designed that hatch.
+#   2. It keyed on the image NAME alone, never the tag, so it compared digests ACROSS tags. An
+#      operator following this gate's own printed remedy ("give the new content its own tag") tripped
+#      it anyway. A gate whose prescribed fix does not work gets removed by the next person.
+#   3. It could check NOTHING on a first run (no lock yet) -- exactly the run a fresh air-gap box does.
+# Carried-vs-served has none of them: no schema, no migration, no fail-open window, nothing to
+# poison, and it cannot self-clear because it re-derives both sides every time.
+#
+# The lock survives as an append-only PROVENANCE JOURNAL that gates nothing. It records the full ref
+# so a human can answer "what did we push here, and when" -- the question the old 3-column,
+# name-keyed format could not answer.
 PUSHED_LOCK="${IN_DIR}/selfbuilt-pushed.lock"
 drift=0
 for name in $NAMES; do
   ref="$(selfbuilt_harbor_ref "$name")"
-  # `|| true`: a crane failure here must not abort before we can report it (set -e).
+  tarball="${IN_DIR}/${name}.tar"
+
+  # `|| true` on both: a crane failure must not abort via `set -e` before we can REPORT it.
   now="$(crane digest "$ref" "${CRANE_INSECURE[@]}" 2>/dev/null || true)"
-  [ -n "$now" ] || { log_warn "[${name}] could not read the registry digest — recording nothing"; continue; }
-  # `|| true` for the SAME reason line 103 carries one, and it is a FIRST-RUN bug: on the very first
-  # push the lock file does not exist yet, awk exits 2 (cannot open), pipefail propagates it, and
-  # `set -e` kills the script AFTER a successful, verified push. `2>/dev/null` hides the message, not
-  # the status. It stayed invisible because a box that had ever pushed by hand already had the file.
-  was="$(awk -F'\t' -v n="$name" '$1==n {print $2}' "$PUSHED_LOCK" 2>/dev/null | tail -1 || true)"
-  if [ -n "$was" ] && [ "$was" != "$now" ]; then
-    log_error "[${name}] ${ref} now serves ${now}, but a previous verified push recorded ${was}."
-    log_error "  The SAME TAG is serving DIFFERENT BYTES. Either the tag was overwritten (give the new"
-    log_error "  content its own tag — see the tag rule in images/selfbuilt.tsv) or the registry is lying."
-    drift=1
+  want="$(crane digest --tarball "$tarball" 2>/dev/null || true)"
+
+  if [ -z "$now" ]; then
+    log_warn "[${name}] could not read the registry digest — carried-vs-served UNCHECKED for this ref"
+    continue
   fi
-  printf '%s\t%s\t%s\n' "$name" "$now" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$PUSHED_LOCK"
-  log_info "[${name}] registry digest: ${now}"
+  if [ -z "$want" ]; then
+    # Not fatal on its own: the push and `crane validate --remote` above already succeeded. But say
+    # so, because a silent skip here is the fail-open this rewrite exists to remove.
+    log_warn "[${name}] could not read the CARRIED digest from ${tarball} — comparison SKIPPED"
+    continue
+  fi
+
+  if [ "$want" != "$now" ]; then
+    log_error "[${name}] ${ref} serves ${now}, but the carried ${tarball} is ${want}."
+    log_error "  Harbor is not serving what THIS bundle carries. Either the tag was overwritten by"
+    log_error "  someone else, or the registry is lying. (If YOU changed the content, that is a"
+    log_error "  different thing: the tag must change with it — see the tag rule in images/selfbuilt.tsv.)"
+    drift=1
+  else
+    log_info "[${name}] carried == served: ${now}"
+  fi
+
+  # Journal AFTER the verdict, and only for a ref that matched. A drifted digest must never become
+  # anyone's baseline -- that is defect (1) above, and writing it here would reintroduce it.
+  if [ "$drift" -eq 0 ]; then
+    printf '%s\t%s\t%s\t%s\n' "$name" "$ref" "$now" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$PUSHED_LOCK"
+  fi
 done
-[ "$drift" -eq 0 ] || die "a self-built tag changed content under the same name — refusing to call this a clean push."
+[ "$drift" -eq 0 ] || die "Harbor is not serving the bytes this bundle carries — refusing to call this a clean push."
 
 log_info "self-built images pushed + verified:${pushed}"

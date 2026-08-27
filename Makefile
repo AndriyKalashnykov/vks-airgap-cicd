@@ -1332,6 +1332,10 @@ test-scripts: ## Run all offline script-logic unit tests
 test-scripts-fast: ## Run the offline unit tests that do NOT assert wall-clock (the per-PR set)
 	@$(SCRIPTS)/run-test-set.sh "fast" $(TEST_FAST)
 
+.PHONY: test-selfbuilt-push-drift
+test-selfbuilt-push-drift: ## Manual: the push-side CARRIED-vs-SERVED drift gate, against a throwaway registry
+	@bash $(SCRIPTS)/test-selfbuilt-push-drift.sh
+
 .PHONY: test-ca-staleness-check
 test-ca-staleness-check: ## Offline: the four arms of the trust-anchor probe, incl. unreachable != stale
 	@bash $(SCRIPTS)/test-ca-staleness-check.sh
