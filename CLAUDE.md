@@ -268,6 +268,36 @@ are mutually independent, and the box is a 32-CPU machine.
 
 **The tell:** your reply is a status table and nothing is being started in the same turn.
 
+### RULE ZERO-P — BEFORE DIAGNOSING A BUG IN THIRD-PARTY CODE, SEARCH ITS MERGED PRs. FIRST. (BLOCKING)
+
+**MEASURED 2026-08-27: this cost most of a day.** kaniko deadlocked; I diagnosed it from first
+principles across FIVE e2e runs, derived the exact mechanism, wrote a patch, and proved it. The fix
+had been **merged upstream the previous evening** — `chainguard-forks/kaniko` PR #477, and
+`v1.25.19` is *identical* to that merge commit. Our pin was **one release short**. The whole day was
+re-deriving somebody's merged patch.
+
+**Two commands, before touching anything:**
+
+```sh
+gh pr list --repo <owner>/<repo> --state all --limit 30 --json number,title,state,mergedAt
+gh api "search/issues?q=repo:<owner>/<repo>+<symptom>+in:title,body&per_page=10"   --jq '.items[] | "#\(.number) [\(.state)] \(.title)"'
+```
+
+Then, for anything that looks close, **check tag containment** — merged is not released:
+`gh api "repos/<o>/<r>/compare/<tag>...<merge_sha>" --jq .status` → `behind`/`identical` = IN the
+tag, `ahead` = NOT in it.
+
+**THE SPECIFIC TRAP THAT DID IT — a dismissal written on ONE axis.** I recorded *"bumping the fork
+does not help: v1.25.19 still pins ggcr v0.21.5"*. That was **true** about the ggcr pin and
+**blind** to the fact that v1.25.19 carried the leak fix. A version bump moves **two independent
+axes** — the dependency pins AND the project's own code — and I checked one, then quoted my own note
+back at myself as a settled reason not to look again. **When you write down a reason NOT to try
+something, name which axis you checked, or it will be read as covering all of them.**
+
+**And the symptom was in a stack trace I did not read for three runs.** I inferred "kaniko failed"
+from exit codes and re-ran with a different pin, three times. The `kubectl logs` that named
+`pullLimiter.acquire` was available on run one. Read the failure before choosing a fix.
+
 ### RULE ZERO-S — THE BASH TOOL IS **ZSH** ON THIS BOX. WRAP ANY NON-TRIVIAL SNIPPET IN `bash -c` (BLOCKING)
 
 **MEASURED on this box, right now** — `$SHELL=/usr/bin/zsh`, and the Bash tool's own shell reports
