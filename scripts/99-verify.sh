@@ -66,7 +66,11 @@ verify_app() {
   local app="$1"
   local marker="${MARKER}-${app}"
   local ns="$APP_NAMESPACE" health; health="$(app_health_path "$app")"
-  local app_local_port; app_local_port="${APP_LOCAL_PORT:-$(pick_port)}"
+  # ⚠️ A PORT PER APP. `APP_LOCAL_PORT` is set unconditionally at the top of this file, so this
+  # fallback could never fire and all six apps shared ONE local port -- if app N's kill has not
+  # released it before app N+1 binds, the new forward exits silently (output -> /dev/null) and the
+  # HTTP-up check dies with "app not serving /healthz": another wrong cause.
+  local app_local_port; app_local_port="$(pick_port)"
 
   log_info "=== verify [${app}] (lang=${APP_LANG}) ==="
 
@@ -247,22 +251,106 @@ verify_app() {
   log_info "[${app}] deployed image now ${img}"
 
   # ---- THE USER-FACING END RESULT: the running page shows THIS app's marker -------------------
-  wait_for "[${app}] new rollout complete" kubectl -n "$ns" rollout status "deploy/${app}" --timeout=30s
-  kubectl -n "$ns" port-forward "svc/${app}" "${app_local_port}:80" >/dev/null 2>&1 &
-  PF_PID=$!
+  # ⚠️ THE TUNNEL DIES BY CONSTRUCTION, NOT BY BAD LUCK. `kubectl port-forward svc/X` selects ONE
+  # pod and does not follow endpoints; kubectl's own help says "The forwarding session ends when the
+  # selected pod terminates". Every app here is `replicas: 2` with NO `strategy:` block (6/6,
+  # deploy/*/deployment.yaml:9), so the default RollingUpdate is maxSurge=1/maxUnavailable=0 and old
+  # pods ARE terminated on every rollout -- which is exactly what we have just triggered. So binding
+  # `svc/` immediately after a rollout is a coin flip on whether the tunnel outlives the poll.
+  # MEASURED over the whole walk archive: 1 failure in 233 "HTTP up -> marker poll" pairs (0.43%),
+  # which across a 36-app-verify matrix is ~14% of runs losing a row. It cost row 4 of the 3.7.1
+  # certification on 2026-08-26, and the harness blamed the PAGE:
+  #   00:46:53 FATAL [rustwebapp] end result not observed
+  #   00:47:05 OK   rustwebapp.vks.local served the greeting page through the ingress   <- ALIVE
+  #
+  # 1. The rollout's rc is CHECKED (it was discarded), and we settle until every pod actually runs
+  #    the new image -- `rollout status` can return while old pods are still Terminating.
+  wait_for "[${app}] new rollout complete" kubectl -n "$ns" rollout status "deploy/${app}" --timeout=30s \
+    || die "[${app}] rollout did not converge -- NOT a page problem; the Deployment never settled"
+  _all_pods_on_img() {
+    local got; got="$(kubectl -n "$ns" get pod -l "app.kubernetes.io/name=${app}" \
+      -o jsonpath='{range .items[*]}{.status.containerStatuses[0].image}{"\n"}{end}' 2>/dev/null)"
+    [ -n "$got" ] && ! grep -qv "^${img}$" <<< "$got"
+  }
+  wait_for "[${app}] every pod running ${img}" _all_pods_on_img \
+    || log_warn "[${app}] not every pod reports ${img} — the marker check below may sample an old pod"
+
+  # 2. Bind a NAMED POD that is Ready and already on the new image, not `svc/`. A death is then
+  #    attributable to that pod instead of being invisible.
+  _pick_pod() {
+    kubectl -n "$ns" get pod -l "app.kubernetes.io/name=${app}" \
+      -o jsonpath='{range .items[?(@.status.phase=="Running")]}{.metadata.name}{" "}{.status.containerStatuses[0].image}{"\n"}{end}' \
+      2>/dev/null | awk -v i="$img" '$2==i {print $1; exit}'
+  }
+  local pf_target; pf_target="$(_pick_pod)"
+  [ -n "$pf_target" ] || pf_target="svc/${app}"   # fall back rather than fail: svc/ still works
+  _start_pf() {
+    [ -n "${PF_PID:-}" ] && { kill "$PF_PID" 2>/dev/null || true; }
+    kubectl -n "$ns" port-forward "$pf_target" "${app_local_port}:80" >/dev/null 2>&1 &
+    PF_PID=$!
+    PF_GEN=$((${PF_GEN:-0} + 1))
+  }
+  PF_GEN=0; _start_pf
   local url="http://localhost:${app_local_port}"
-  wait_for "[${app}] app HTTP up" curl -fsS "${url}${health}" || die "[${app}] app not serving ${health}"
+  # 3. BOUND EVERY CURL. `wait_for` only tests its deadline BETWEEN attempts, so one hanging attempt
+  #    makes READY_TIMEOUT_SECONDS not a bound at all. Measured: a bare `curl -fsS` against an
+  #    accept-then-hang peer was still running at 8s. The sibling 98-verify-ingress.sh already
+  #    passes --max-time for exactly this reason.
+  local CT="--connect-timeout ${VERIFY_CURL_CONNECT_TIMEOUT_SECONDS:-5} --max-time ${VERIFY_CURL_MAX_TIME_SECONDS:-10}"
+  # shellcheck disable=SC2086  # CT is a deliberate word-split flag list
+  wait_for "[${app}] app HTTP up" curl -fsS $CT "${url}${health}" \
+    || die "[${app}] app not serving ${health} (tunnel to ${pf_target}, generation ${PF_GEN})"
 
   # Capture the page, THEN grep the variable: `curl | grep -q` lets grep close the pipe on its
   # first match and SIGPIPE curl (141), which under `set -o pipefail` reads as "marker absent" —
   # a false failure on a page that DID show it.
+  # 4. CLASSIFY WITH kubectl, NOT WITH CURL'S EXIT CODE. rc=7 is only ONE tunnel-death shape:
+  #    accept-then-RST gives 56 and accept-then-hang gives 28, and those leave no trace at all --
+  #    not even the `curl: (7)` line that made this incident diagnosable. So on ANY curl failure we
+  #    ask the cluster, which needs no tunnel.
+  # 5. CACHE THE LAST NON-EMPTY BODY. The old diagnostic re-fetched down the SAME dead tunnel and
+  #    therefore printed nothing, leaving the archive unable to distinguish "the tunnel died" from
+  #    "the page never had the marker". This is the change that makes the next occurrence legible.
+  PF_LAST_BODY=""; PF_DEATHS=0; PF_RESTARTS_BLOCKED=""
   # shellcheck disable=SC2329  # invoked indirectly (for_each_app / wait_for)
-  marker_visible() { local b; b="$(curl -fsS "${url}/" 2>/dev/null || true)"; grep -q "$marker" <<< "$b"; }
+  marker_visible() {
+    local b rc
+    # shellcheck disable=SC2086
+    b="$(curl -fsS $CT "${url}/" 2>/dev/null)" && rc=0 || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      local restarts ready
+      restarts="$(kubectl -n "$ns" get pod -l "app.kubernetes.io/name=${app}" -o jsonpath='{range .items[*]}{.status.containerStatuses[0].restartCount}{"+"}{end}' 2>/dev/null)"
+      ready="$(kubectl -n "$ns" get pod -l "app.kubernetes.io/name=${app}" -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{" "}{end}' 2>/dev/null)"
+      if grep -q false <<< "$ready" || [ -z "$ready" ]; then
+        PF_RESTARTS_BLOCKED="pods not Ready (ready=[${ready}] restarts=[${restarts}])"
+        return 1     # the APP is unstable -- do NOT paper over it by rebuilding the tunnel
+      fi
+      PF_DEATHS=$((PF_DEATHS + 1))
+      if [ "$PF_GEN" -lt "${VERIFY_PF_MAX_GENERATIONS:-5}" ]; then
+        log_warn "[${app}] the port-forward stopped ($(_curl_rc_label "$rc")); pods are Ready, so this is the TUNNEL. Rebuilding (generation $((PF_GEN + 1)))."
+        pf_target="$(_pick_pod)"; [ -n "$pf_target" ] || pf_target="svc/${app}"
+        _start_pf
+      fi
+      return 1
+    fi
+    [ -n "$b" ] && PF_LAST_BODY="$b"
+    grep -q "$marker" <<< "$b"
+  }
   if wait_for "[${app}] deployed page shows marker ${marker}" marker_visible; then
     log_info "[${app}] SUCCESS — the deployed page shows '${marker}'"
   else
-    log_error "[${app}] app is up but the page does NOT show '${marker}' (deployed image: ${img})"
-    curl -fsS "${url}/" | grep -i 'class="message"' >&2 || true
+    # 6. NAME THE ACTUAL CAUSE. Still FATAL either way -- a certification cannot pass on an
+    #    unobserved end result -- but the operator must know whether to retry the row or debug the
+    #    product, so the token differs.
+    if [ -n "$PF_RESTARTS_BLOCKED" ]; then
+      log_error "PRODUCT [${app}] the app never became stable: ${PF_RESTARTS_BLOCKED} (deployed image: ${img})"
+    elif [ -n "$PF_LAST_BODY" ]; then
+      log_error "PRODUCT [${app}] the page WAS served and does NOT show '${marker}' (deployed image: ${img}, ${PF_DEATHS} tunnel death(s), ${PF_GEN} generation(s))"
+      grep -i 'class="message"' <<< "$PF_LAST_BODY" >&2 || printf '%s\n' "$PF_LAST_BODY" | head -5 >&2
+    else
+      log_error "HARNESS-TUNNEL [${app}] the page was NEVER successfully fetched — ${PF_DEATHS} tunnel death(s) across ${PF_GEN} generation(s) to ${pf_target}. This is the PORT-FORWARD, not the app; retry the row."
+      kubectl -n "$ns" get pod -l "app.kubernetes.io/name=${app}" -o wide >&2 2>/dev/null || true
+    fi
     die "[${app}] end result not observed"
   fi
   kill "$PF_PID" 2>/dev/null || true; PF_PID=""

@@ -3290,6 +3290,53 @@ returns `94 literal(s) checked, 9 allowlisted, 0 MISSING`.
 and either the gate's extraction matches `walk-doc.sh:452` or it states plainly that it is
 deliberately broader. Do NOT narrow it to match without checking what that stops catching.
 
+## ✅ B497 — `make verify`'s port-forward dies BY CONSTRUCTION, and the harness blames the page
+
+**It cost row 4 of the VKS 3.7.1 certification on 2026-08-26.** `31 ran, 1 FAILED, 13 skipped` —
+the ran/skipped/neutralized counts matched their pair exactly; one block failed.
+
+`kubectl port-forward svc/X` selects ONE pod and does not follow endpoints. kubectl's own help
+(v1.36.4, verbatim): *"The forwarding session ends when the selected pod terminates, and a rerun of
+the command is needed to resume forwarding."* Every app here is `replicas: 2` with **no `strategy:`
+block** (6/6, `deploy/*/deployment.yaml:9`), so the default RollingUpdate is
+`maxSurge=1/maxUnavailable=0` and old pods **are** terminated — during the very rollout `verify` has
+just triggered. So the tunnel dies by construction; only luck decides which app is hit.
+
+**MEASURED across the whole walk archive: 1 failure in 233 `app HTTP up → marker poll` pairs
+(0.43%)** — which over a 36-app-verify matrix is **≈14% of runs losing a row, one in seven.** That is
+a lower bound: a tunnel that died *after* the marker was seen leaves no trace.
+
+The harness then reported the wrong thing. From row 4:
+
+    00:46:53  FATAL [rustwebapp] end result not observed   ("the page does NOT show the marker")
+    00:47:05  OK    rustwebapp.vks.local served the greeting page through the ingress   <- ALIVE, 12s later
+
+Six defects, all in one function:
+
+| | |
+|---|---|
+| `port-forward svc/` binds one doomed pod | now binds a **named pod** already running the new image |
+| `rollout status`'s rc was **DISCARDED** | now checked, **and** we settle until every pod reports `$img` |
+| curl's `rc=7` used as the tunnel-death test | **insufficient** — accept-then-RST gives 56, accept-then-hang 28, and *those leave no trace at all*. Classification now asks **kubectl**, which needs no tunnel |
+| all three curls **unbounded** | `wait_for` only tests its deadline *between* attempts, so one hanging attempt made `READY_TIMEOUT_SECONDS` not a bound. `--max-time`/`--connect-timeout` added |
+| the failure diagnostic re-fetched down the **same dead tunnel** | so it printed nothing, and the archive cannot separate *tunnel died* from *marker absent*. The last non-empty body is now **cached** and printed |
+| all six apps shared ONE local port | `:69`'s `pick_port` fallback was dead — `:28` sets `APP_LOCAL_PORT` unconditionally |
+
+Still **FATAL** either way — a certification cannot pass on an unobserved end result, and an
+"INCONCLUSIVE ⇒ don't fail the row" bucket is the false-GREEN that lets a crash-looping app certify.
+Only the token changes: `PRODUCT` vs `HARNESS-TUNNEL`, so the operator knows whether to retry the row
+or debug the app.
+
+**Refuted alternatives, recorded so nobody rebuilds them:** curl through the **ingress** — it does not
+exist yet (`verify` is walk step [35], the ingress installs at [36]+), `creds.sh:128` says verify uses
+a port-forward *"precisely so it needs none"*, and a tenant cannot get a hostname on a shared Gateway;
+`kubectl exec` — the apps are **distroless, no shell, no curl**; an in-cluster probe pod — needs a
+mirrored image (`curlimages/curl` is not in `images/images.txt`) plus `restricted`-PSA overrides.
+
+**Residual, named:** which of two readings caused row 4 specifically — probed a stale pod (the
+discarded `rollout status` rc; it returned in **<1s**) vs a pure tunnel death — **cannot be recovered
+from the archive**, because the harness captured no page content and no pod state. The cached-body
+instrumentation is what settles it on the next occurrence. Not verified against a live cluster.
 ## 🔴 B498 — Kaniko is ARCHIVED by Google; a MAINTAINED FORK exists but publishes NO image
 
 **MEASURED 2026-08-27** against the GitHub API and the registries. I filed an earlier version of
