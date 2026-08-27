@@ -3546,6 +3546,59 @@ retired, so nobody reads its silence as maintenance.
 
 ⚠️ Do NOT swap the builder while a certification is in flight — it is on the walked path.
 
+### 2026-08-27 — the branch was reviewed and its wiring REFUTED; the row's own warning is why it stays draft
+
+`feat/selfbuilt-kaniko` (#1051) was rebased onto current `main` and given a cold `make e2e-kind`. It
+FAILED, as it should: `TaskRunImagePullFailed` /
+`ErrImagePull ... NotFound` on `${HARBOR_URL}/cicd/kaniko-project/executor:v1.25.18-gcr0.21.9-debug`.
+
+**MEASURED root cause:** `selfbuilt-build` / `selfbuilt-push` exist as targets and **nothing calls
+them** — `mirror` is `harbor-auth-check mirror-pull mirror-push mirror-verify`, `install-all` is
+`preflight mirror mirror-verify builder-image vks-login platform gitops`, and
+`grep -rn selfbuilt scripts/ Makefile .github` finds zero invocations. The branch ALSO removed the
+kaniko row from `images/images.txt`, so there is no mirror fallback. The consumer was switched, the
+producer was not wired, and the manifest lost its old answer. **`main` is unaffected** — its
+`images.txt` still carries `v1.24.0-debug`.
+
+**The obvious fix — add a `selfbuilt-image` one-shot to `install-all` beside `builder-image` — was
+REFUTED by an idea-round before it was written.** Recorded so nobody re-derives it:
+
+1. **CRITICAL — it would make `install-all` hard-depend on a Go toolchain nothing provisions.**
+   `selfbuilt.tsv`'s kaniko row has a `go_get`, so `14-selfbuilt-build.sh` requires `go` on PATH.
+   MEASURED on this tree: **0** active `go` pins in `.mise.toml`, **0** installs in
+   `00-install-prereqs.sh`, **0** checks in `03-check-tools.sh`. So every walk row would reach step
+   11, run the ~10-minute mirror, and *then* die on a missing toolchain — the exact shape `preflight`
+   exists to prevent. ⚠️ Validating this on the dev box is a FALSE GREEN: it has a stale
+   `mise/installs/go/1.27.0`. Validate on a walkbox or `photon:5.0`.
+2. **CRITICAL — it is VACUOUS for sneakernet.** `e2e-sneakernet.sh` runs
+   `mirror-pull → builder-build → bundle` and `jumpbox-run.sh` runs
+   `bundle-load → mirror-push → builder-push → mirror-verify`; neither mentions selfbuilt. Both paths
+   need wiring in the same change, or the air-gap box gets a bundle with no executor.
+3. **HIGH — `11-bundle.sh`'s new guard tests a DIRECTORY, not the tarballs.**
+   `14-selfbuilt-build.sh` `mkdir -p`s the output dir before it can fail, so a FAILED build leaves an
+   empty dir, the guard passes, and the bundle ships without kaniko — failing "after the carry, on
+   the machine that cannot re-cut", which is precisely what that guard's own comment promises to
+   prevent. It must iterate `selfbuilt_names` and require each `<name>.tar`.
+4. **HIGH — the targets are misfiled under `##@ Quality gates`, which `check-doc-target-coverage`
+   EXEMPTS.** They are not gates: they clone from GitHub, build from source and mutate a registry.
+   Consequence: `grep -rn selfbuilt docs/ README.md CLAUDE.md` → **zero**, while the coverage gate
+   reports OK. `builder-probe` is a pre-existing third instance of the same misfiling.
+5. **MED** — no idempotence: every `install-all` would pay a full from-source rebuild (no sentinel,
+   unlike the mirror's `.mirror-ok`), and `scenario-1.md` tells operators to re-run `install-all`.
+6. **MED** — both scenario docs print the `install-all` chain verbatim and record its timing; adding
+   a prereq drifts all three, and no gate covers a comment line.
+
+**Cleared by the same round** (so these are settled, not open): `e2e-kind` DOES call `install-all`;
+`builder-image` IS the right analogue (`15-build-push-builder.sh` is a thin orchestrator — prefer a
+script over a make-prereq chain so `-j` cannot reorder it); the dual-homed build→push needs no
+`bundle`/`bundle-load`; `check-image-alignment` already reads `selfbuilt.tsv` as a second inventory
+and passes; and the ORDERING is right, though it belongs *before* `mirror` so a toolchain death costs
+seconds rather than twenty minutes.
+
+**Sequencing stands, and this row already said so.** The warning above is the reason: a certification
+was in flight when this was reviewed, so nothing was wired. Land the `v1.0.0` re-cut first, then wire
+BOTH paths in one change with 1–4 fixed, then run kaniko its own six-row matrix.
+
 ## 🟡 B496 — a NEWER VCF plugin bundle (0500) exists, and I could not confirm whether a matching CLI does
 
 Asked to check Broadcom for newer VCF CLI / plugin / service artifacts and update the pins, I found a
