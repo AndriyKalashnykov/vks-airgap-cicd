@@ -3290,48 +3290,73 @@ returns `94 literal(s) checked, 9 allowlisted, 0 MISSING`.
 and either the gate's extraction matches `walk-doc.sh:452` or it states plainly that it is
 deliberately broader. Do NOT narrow it to match without checking what that stops catching.
 
-## 🔴 B498 — Kaniko is ARCHIVED upstream; our pin is the LAST release that will ever exist
+## 🔴 B498 — Kaniko is ARCHIVED by Google; a MAINTAINED FORK exists but publishes NO image
 
-**MEASURED 2026-08-27** against the GitHub API, because I had left this an explicit UNVERIFIED when
-asked which Kaniko we run:
+**MEASURED 2026-08-27** against the GitHub API and the registries. I filed an earlier version of
+this row that listed BuildKit / Buildah / buildpacks as the candidates and **missed the obvious
+one** — the operator pointed it out. This is the corrected row.
 
-    repos/GoogleContainerTools/kaniko  ->  archived=true   last push 2025-06-03
-    releases[0]                        ->  v1.24.0         published 2025-05-23
+| | ours today | chainguard-forks/kaniko |
+|---|---|---|
+| repo | `GoogleContainerTools/kaniko` — **`archived=true`**, last push **2025-06-03** | **`archived=false`**, last push **2026-08-26** |
+| newest release | `v1.24.0` (2025-05-23) — also the newest tag gcr.io serves | **`v1.25.18`** (2026-08-10) |
+| activity since Google archived it | none | **≥100 commits**, incl. `fix(util): close each layer reader before opening the next` |
 
-We pin `gcr.io/kaniko-project/executor:v1.24.0-debug` (`images/images.txt:13`), mirrored into Harbor
-and consumed by `k8s/tekton/tasks/kaniko-build.yaml:54`. I verified separately that **v1.24.0 is the
-newest tag gcr.io serves**, so the pin is not stale — it is *terminal*.
+So our pin is not stale, it is **terminal** — and a live successor is **14 patch releases** ahead.
 
-**Why this is 🔴 rather than a curiosity.** Three consequences, none of which announce themselves:
+### The decisive fact: the fork publishes NOTHING
 
-1. **No upstream CVE fixes, ever.** Kaniko runs as **root** (`runAsUser=0` — which is precisely why
-   the `ci` namespace needs PSA `baseline` instead of `restricted`, `60-configure-tekton.sh:55`) and
-   it holds a **Harbor push credential** (`22-harbor-robot.sh:110`: the build pod carries ONE
-   registry credential). An unmaintained root-privileged builder with registry write access is the
-   component you least want frozen.
-2. **The Renovate annotation is now dead weight that LOOKS live.** `# renovate:
-   datasource=docker depName=gcr.io/kaniko-project/executor` can never fire again, so the absence of
-   a bump PR reads as "up to date" when it means "abandoned". Anyone auditing freshness by *"has
-   Renovate been quiet?"* gets the wrong answer here.
-3. **The alignment gate keeps passing and proves nothing about this.** `check-image-alignment`
-   verifies `images.txt` and the Tekton task agree — RED-proven 2026-08-27: drifting the manifest
-   tag yields `DRIFT kaniko-project/executor: manifest=v1.23.9-debug vs
-   images/images.txt=v1.24.0-debug`, rc=1. That is a **consistency** gate, not a **freshness** one.
-   Both copies can agree forever on an archived image.
+`.github/workflows/images.yaml` builds all four targets (`kaniko-executor`, `kaniko-debug`,
+`kaniko-slim`, `kaniko-warmer`) and line 96 is **`push: false`**. I probed the obvious registries —
+`ghcr.io/chainguard-forks/{kaniko,kaniko-executor,executor}`, `cgr.dev/chainguard/kaniko`,
+`chainguard/kaniko` — **none serves it**. There is no image to re-point `images/images.txt` at.
 
-**NOT a design decision yet, deliberately.** The replacement is not obvious, and the options differ
-in ways that touch the air gap, PSA and the Harbor credential model:
+**So this is not a pin bump. It is a self-build:**
 
-| candidate | the thing to check FIRST |
-|---|---|
-| **BuildKit** (rootless) | can it push to a self-signed Harbor via our CA ConfigMap, and does rootless remove the `baseline` PSA exception (`lib/psa.sh:55`)? |
-| **Buildah** | same TLS question, plus whether it needs `/dev/fuse` or caps a VKS guest may refuse |
-| **Tekton buildpacks** | changes the CONTRACT: our apps ship hand-written Dockerfiles (`check-dockerfile-no-install.sh` polices them), so this is far more than a swap |
-| **stay on v1.24.0** | legitimate for a demo — but then SAY SO, rather than letting the Renovate comment imply maintenance |
+    git clone https://github.com/chainguard-forks/kaniko && cd kaniko
+    docker build --target kaniko-debug -t <registry>/kaniko:debug --file deploy/Dockerfile .
+    docker push <registry>/kaniko:debug
 
-**Done-when:** either a replacement is chosen and proven by a green `make e2e-kind` plus a real
-`make verify` on the lab, **or** the pin carries an explicit archived-upstream note and the Renovate
-annotation is removed or marked dead, so nobody reads its silence as freshness.
+`deploy/Dockerfile:102` does carry the `kaniko-debug` target, and `-debug` is the variant we need
+(`check-tekton-scripts.sh:44` allows the busybox shebang for kaniko **only**).
+
+### Why that is cheaper here than it sounds — the pattern already exists
+
+This repo ALREADY builds an image on the internet side and pushes it to Harbor: the offline Maven
+builder, `14-builder-build.sh` (INTERNET box, no Harbor) plus `22-builder-push.sh` (air-gap box, no
+internet, carried crane). A kaniko self-build is the same shape and should reuse it rather than
+invent a second mechanism — including `builders.tsv`, the `io.vks.builder.inputs` freshness stamp
+and the sneakernet split.
+
+The fork's build pulls three digest-pinned bases (`golang:1.26`, `debian:bookworm-slim`,
+`busybox:musl`). Fine — the build happens on the **internet** side, same as the Maven builder — but
+they are new inputs and belong in whatever freshness stamp the kaniko build gets.
+
+### What to settle BEFORE building it
+
+1. **Does the fork fix anything we actually hit?** 14 releases is not automatically a reason. Read
+   the changelog for the classes that bite us: layer handling, registry auth, TLS to a self-signed
+   Harbor.
+2. **Reproducibility.** We would ship a builder WE built. Pin a tag (`v1.25.18`), never `main`, and
+   record the resulting digest — otherwise the bundle's provenance is weaker than the gcr.io image
+   it replaces.
+3. **Does it change the PSA story?** Kaniko runs as **root** (`runAsUser=0`), which is why the `ci`
+   namespace needs PSA `baseline` rather than `restricted` (`60-configure-tekton.sh:55`,
+   `lib/psa.sh:55`). If the fork has not changed that, the exception stays — and that is the biggest
+   reason to care about an unmaintained builder, since it also holds a **Harbor push credential**
+   (`22-harbor-robot.sh:110`).
+4. **`check-image-alignment` keeps passing either way.** RED-proven again 2026-08-27 (drifting the
+   manifest tag gives `DRIFT kaniko-project/executor: manifest=v1.23.9-debug vs
+   images/images.txt=v1.24.0-debug`, rc=1). It is a **consistency** gate, not a **freshness** one:
+   both copies can agree forever on an archived image. Nothing here would ever have told us.
+5. **The Renovate annotation is dead weight that LOOKS live.** `# renovate: datasource=docker
+   depName=gcr.io/kaniko-project/executor` can never fire again, so its silence reads as "up to
+   date". A self-built image needs `datasource=github-releases depName=chainguard-forks/kaniko`.
+
+**Done-when:** either the fork is built, pinned by tag AND digest, pushed to Harbor through the
+existing builder pattern, and proven by `make e2e-kind` plus a real `make verify` on the lab — **or**
+the decision to stay on the archived v1.24.0 is written down explicitly and the Renovate annotation
+retired, so nobody reads its silence as maintenance.
 
 ⚠️ Do NOT swap the builder while a certification is in flight — it is on the walked path.
 
