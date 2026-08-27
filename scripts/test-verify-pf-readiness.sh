@@ -91,5 +91,24 @@ ck "readiness failure can say HARNESS-TUNNEL" "$(grep -c 'HARNESS-TUNNEL \[\${ap
 ck "the old un-rebuilding wait is GONE"       "$(grep -c 'wait_for "\[\${app}\] app HTTP up" curl' "$V")" 0
 
 echo
+
+# --- the REMOTE port must follow the TARGET ---------------------------------------
+# 80 is the SERVICE port (targetPort `http` = 8080 in the container). Binding a NAMED POD on :80
+# can never connect. MEASURED on a healthy Ready pod: pod:80 -> http 000, pod:8080 -> http 200,
+# svc:80 -> http 200. It shipped as `"${app_local_port}:80"` for BOTH targets, so every run that
+# successfully found a Ready pod was unreachable -- 114 refused connections across the generation
+# cap, ~10 minutes after the pods were Ready in 6s. The svc/ fallback still worked, so the failure
+# only appeared when the pod lookup SUCCEEDED.
+pf_line=$(grep -c 'port-forward "$pf_target" "${app_local_port}:${pf_port}"' "$V")
+ck "the port-forward binds \${pf_port}, not a literal :80" "$pf_line" "1"
+ck "no literal :80 remains on the port-forward line" \
+   "$(grep -c 'port-forward "$pf_target" "${app_local_port}:80"' "$V")" "0"
+ck "pf_port is resolved from the pod's containerPort" \
+   "$(grep -c 'jsonpath=.{.spec.containers\[0\].ports\[0\].containerPort}' "$V")" "1"
+# ⚠️ EXECUTABLE lines only: the phrase appears in the explanatory comment too, and counting both
+# made this assert 2. Same trap as "a check that greps a symbol also matches its own docstring".
+ck "a pod with no containerPort falls back to svc/" \
+   "$(grep -vE '^[[:space:]]*#' "$V" | grep -c 'declares no containerPort')" "1"
+
 if [ "$fail" -eq 0 ]; then echo "test-verify-pf-readiness: ${pass} passed, 0 failed"; exit 0; fi
 echo "test-verify-pf-readiness: ${pass} passed, ${fail} FAILED"; exit 1
