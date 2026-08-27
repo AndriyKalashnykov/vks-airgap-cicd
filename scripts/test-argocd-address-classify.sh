@@ -21,16 +21,53 @@ mkdir -p "$T/bin"
 printf 'apiVersion: v1\n' > "$T/sup.kubeconfig"
 : > "$T/.env.example"
 
+# ⚠️ COUNT THE CALLS. Three cases used to assert `elapsed >= 14` as a proxy for "the loop ran".
+# That proxy is why the suite cost 201s: it can only be satisfied by burning the wall clock, so the
+# budget could never shrink. The call count observes the SAME property directly (1 = returned before
+# the loop, >=3 = polled) and lets the budget drop to 2s.
+# ⚠️ IT IS NOT "IMMUNE TO MACHINE LOAD" -- an earlier version of this comment claimed that, and it
+# is backwards. The old sleep-counter guaranteed ceil(WAIT/interval) iterations regardless of probe
+# cost; the DEADLINE loop makes the iteration count depend on how long each probe takes. MEASURED
+# breaking point at WAIT=2 POLL=1: probe cost 0.34s -> 3 calls (pass); 0.5s -> 2 calls -> FAIL.
+# Probe cost on this box: 0.001s, i.e. ~400x headroom, and 3/3 consecutive runs green. So the risk
+# is small TODAY and the margin is what matters -- whoever next shrinks a budget must re-measure it.
+# The flake string is `no_loop_2calls`, one character from the genuine RED `no_loop_1calls`.
+kcalls() { [ -f "$T/kcalls" ] && wc -c < "$T/kcalls" | tr -d ' ' || echo 0; }
+# ⚠️ EVERY kubectl stub must COUNT. Four cases below hand-write their own stub, and a hand-written
+# one that omits the counter makes any call-count assertion read 0 -- which fails safe (0 < 3) and
+# therefore SILENTLY, so the next assertion written against it is vacuous without saying so.
+# This helper emits the counter line, so a stub cannot be written that does not count.
+kstub() {  # kstub <body-lines...>  -- writes an executable kubectl that counts, then runs the body
+  { printf '#!/usr/bin/env bash\n'
+    printf 'printf x >> %s\n' "$(printf '%q' "$T/kcalls")"
+    printf '%s\n' "$@"
+  } > "$T/bin/kubectl"; chmod +x "$T/bin/kubectl"
+}
 mk_kubectl() {   # $1 = stderr text, $2 = rc, $3 = stdout
   { printf '#!/usr/bin/env bash\n'
+    printf 'printf x >> %s\n' "$(printf '%q' "$T/kcalls")"
     printf 'printf %%s %s >&2\n' "$(printf '%q' "$1")"
     printf 'printf %%s %s\n'     "$(printf '%q' "${3:-}")"
     printf 'exit %s\n' "$2"
   } > "$T/bin/kubectl"; chmod +x "$T/bin/kubectl"
 }
 
-run() {  # elapsed:rc:output
+# ⚠️ STUB CURL TOO. Case 4 (an address IS returned) shipped with no curl stub, so `_answers` made
+# REAL network calls to the unroutable fixture IP at `curl --max-time 5` each -- MEASURED at 20s of
+# that case's 50s, and it gets WORSE as the poll interval shrinks (4 probes -> 17). Stubbing it is
+# the single largest saving in this file and needs no new knob.
+mk_curl() {  # $1 = rc the fake curl returns (0 = "the address answers")
+  { printf '#!/usr/bin/env bash\n'; printf 'exit %s\n' "$1"; } > "$T/bin/curl"; chmod +x "$T/bin/curl"
+}
+rm_curl() { rm -f "$T/bin/curl"; }
+
+run() {  # run [wait_seconds] [poll_interval] -> elapsed:rc:output
+  # ⚠️ ARGUMENTS, not env. Call sites used the WAITS=N prefix form -- which is TWO ASSIGNMENTS, not a
+  # command prefix, so WAITS PERSISTED into every later case. MEASURED: the case below it silently
+  # ran at 16 rather than the 30 its author intended. Parameters cannot leak.
+  local w="${1:-30}" pi="${2:-15}"
   local s e rc out
+  : > "$T/kcalls"
   s=$(date +%s)
   # REPO_ROOT is pinned to the throwaway dir: without it, case 4 reaches set_env_var and writes
   # ARGOCD_SERVER=<fixture-ip> into the OPERATOR'S REAL .env. That is not hypothetical -- it happened
@@ -38,7 +75,8 @@ run() {  # elapsed:rc:output
   # REAL discovery would then REFUSE to overwrite the fake and argocd login would dial 10.20.30.40.
   # $T/.env.example must exist so lib/os.sh does not fall back to `git rev-parse` for the root.
   out="$(PATH="$T/bin:$PATH" VKS_SUPERVISOR_KUBECONFIG="$T/sup.kubeconfig" REPO_ROOT="$T" \
-         ARGOCD_NAMESPACE=cicd ARGOCD_ADDRESS_WAIT_SECONDS="${WAITS:-30}" SKIP_DOTENV=1 \
+         ARGOCD_NAMESPACE=cicd ARGOCD_ADDRESS_WAIT_SECONDS="$w" \
+         ARGOCD_ADDRESS_POLL_INTERVAL_SECONDS="$pi" SKIP_DOTENV=1 \
          bash "$SCRIPT_DIR/09-argocd-address.sh" 2>&1)" ; rc=$?
   e=$(date +%s)
   printf '%s:%s:%s' "$((e-s))" "$rc" "$(printf '%s' "$out" | tr '\n' ' ')"
@@ -64,11 +102,12 @@ ck "stale CA -> did NOT wait"             "$([ "$el" -lt 12 ] && echo fast || ec
 
 # GREEN (the no-false-block control) — namespace EXISTS, Service not yet created. MUST still wait.
 mk_kubectl 'Error from server (NotFound): services "argocd-server" not found' 1 ''
-WAITS=16 r="$(run)"; el=${r%%:*}
-ck "reconciling Supervisor -> STILL WAITS" "$([ "$el" -ge 14 ] && echo waited || echo "fast_${el}s")" "waited"
+r="$(run 2 1)"; n=$(kcalls)
+ck "reconciling Supervisor -> STILL WAITS" "$([ "$n" -ge 3 ] && echo waited || echo "no_loop_${n}calls")" "waited"
 
 # GREEN — an address is returned and printed.
 mk_kubectl '' 0 '10.20.30.40'
+mk_curl 0     # the address ANSWERS -- without this, _answers made REAL curls to an unroutable IP
 r="$(run)"; rest=${r#*:}; rc=${rest%%:*}; out=${rest#*:}
 ck "address -> rc 0"                      "$rc" "0"
 ck "address -> printed"                   "$(printf '%s' "$out" | grep -c '10.20.30.40')" "1"
@@ -77,8 +116,8 @@ ck "address -> printed"                   "$(printf '%s' "$out" | grep -c '10.20
 # it, i.e. it could not see the two HIGH defects an implementation round found. These two cases are
 # the ones that discriminate; without them this gate measures nothing about the arms that broke.
 mk_kubectl 'Unable to connect to the server: dial tcp 10.0.0.1:443: i/o timeout' 1 ''
-WAITS=16 r="$(run)"; el=${r%%:*}
-ck "transient i/o timeout -> STILL WAITS" "$([ "$el" -ge 14 ] && echo waited || echo "fast_${el}s")" "waited"
+r="$(run 2 1)"; n=$(kcalls)
+ck "transient i/o timeout -> STILL WAITS" "$([ "$n" -ge 3 ] && echo waited || echo "no_loop_${n}calls")" "waited"
 
 # rc=0 with retry NOISE on stderr is the NORMAL pending state -- it must never be classified.
 # ⚠️ THE STDERR TEXT MUST CLASSIFY, or this case is VACUOUS. A first draft used a generic
@@ -91,8 +130,8 @@ ck "transient i/o timeout -> STILL WAITS" "$([ "$el" -ge 14 ] && echo waited || 
 # truncation this rc=0 probe is wrongly classified and exits 0s. The two fixes INTERACT: a fixture
 # for one must be chosen against the other.
 mk_kubectl 'W0822 client retrying: x509: certificate signed by unknown authority' 0 ''
-WAITS=16 r="$(run)"; el=${r%%:*}
-ck "rc=0 with stderr noise -> STILL WAITS" "$([ "$el" -ge 14 ] && echo waited || echo "fast_${el}s")" "waited"
+r="$(run 2 1)"; n=$(kcalls)
+ck "rc=0 with stderr noise -> STILL WAITS" "$([ "$n" -ge 3 ] && echo waited || echo "no_loop_${n}calls")" "waited"
 
 
 # ══ THE VIP MOVED UNDERNEATH US (measured on the live 3.7 lab, certification row 1, 2026-08-26) ══
@@ -122,7 +161,7 @@ mk_moving() {
 
 rm -f "$T/kc" "$T/curl-ran" "$T/.env"
 mk_moving
-WAITS=90 r="$(run)"
+r="$(run 6 1)"
 _env="$(cat "$T/.env" 2>/dev/null || true)"
 ck "moving VIP -> publishes the address that ANSWERED" \
    "$(printf '%s' "$_env" | grep -qF 'ARGOCD_SERVER=192.168.101.138' && echo yes || echo no)" "yes"
@@ -136,20 +175,25 @@ ck "the curl probe actually RAN (not passing by not looking)" \
 # CONTROL — an L7 LB or a --rootpath install answers 403/404 unauthenticated. NOT a failure; treating
 # it as one would be a brand-new false BLOCK on a perfectly good lab.
 rm -f "$T/kc" "$T/.env"
-printf '#!/usr/bin/env bash\nprintf 192.168.101.150\nexit 0\n' > "$T/bin/kubectl"; chmod +x "$T/bin/kubectl"
+kstub 'printf 192.168.101.150' 'exit 0'
 printf '#!/usr/bin/env bash\nprintf 403\nexit 0\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
-WAITS=30 r="$(run)"
+r="$(run 4 1)"
 ck "403 counts as ANSWERING (no false block on --rootpath / an L7 LB)" \
    "$(grep -qF 'ARGOCD_SERVER=192.168.101.150' "$T/.env" 2>/dev/null && echo published || echo blocked)" "published"
-ck "403 publishes FAST (did not sit out the budget)" \
-   "$([ "${r%%:*}" -lt 20 ] && echo fast || echo slow)" "fast"
+# ⚠️ NOT `elapsed < 20`. The budget retune made that VACUOUS: at WAIT=4 the FULL-budget path is
+# ~4-5s, always under 20, so the assertion could not fail for any input. RED-proved by mutating
+# _answers to require 200 (the exact defect this case documents): budget 4 stayed GREEN on the
+# defect, budget 30 caught it. The call COUNT is the real discriminator and is load-immune --
+# a clean tree is ALWAYS exactly 1 (403 answers on the first probe, no loop); the defect is 5.
+ck "403 publishes FAST (answered on the FIRST probe — did not enter the wait loop)" \
+   "$(kcalls)" "1"
 
 # CONTROL — budget expires, nothing ever answers: WARN and PUBLISH, rc 0. A die would convert a late
 # failure into an EARLY hard stop on a lab whose address is fine and only this probe is wrong.
 rm -f "$T/kc" "$T/.env"
-printf '#!/usr/bin/env bash\nprintf 192.168.101.160\nexit 0\n' > "$T/bin/kubectl"; chmod +x "$T/bin/kubectl"
+kstub 'printf 192.168.101.160' 'exit 0'
 printf '#!/usr/bin/env bash\nprintf 000\nexit 0\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
-WAITS=16 r="$(run)"
+r="$(run 2 1)"
 ck "never answers -> still PUBLISHES (warn, not die)" \
    "$(grep -qF 'ARGOCD_SERVER=192.168.101.160' "$T/.env" 2>/dev/null && echo published || echo blocked)" "published"
 ck "never answers -> rc 0" "$(printf '%s' "$r" | cut -d: -f2)" "0"
