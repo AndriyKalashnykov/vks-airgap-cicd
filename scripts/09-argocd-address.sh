@@ -41,6 +41,15 @@ WAIT="${ARGOCD_ADDRESS_WAIT_SECONDS:-900}"
 case "$WAIT" in
   ''|*[!0-9]*) die "ARGOCD_ADDRESS_WAIT_SECONDS must be WHOLE SECONDS, got '${WAIT}' (900, not 10m)" ;;
 esac
+# The POLL INTERVAL, externalized (B493). It was a hardcoded `sleep 15` in both loops below, so a
+# caller could only reduce the NUMBER of polls, never the cost of one.
+# ⚠️ 0 IS REJECTED, unlike WAIT above. WAIT=0 is meaningful (skip the wait entirely, gated by
+# `[ "$WAIT" -gt 0 ]`); interval 0 is an INFINITE TIGHT LOOP hammering the Supervisor API --
+# MEASURED: `timeout 30` returns rc=124. Same guard shape as lib/argocd.sh's positive-integer check.
+POLL="${ARGOCD_ADDRESS_POLL_INTERVAL_SECONDS:-15}"
+case "$POLL" in
+  ''|*[!0-9]*|0) die "ARGOCD_ADDRESS_POLL_INTERVAL_SECONDS must be a POSITIVE whole number of seconds, got '${POLL}'" ;;
+esac
 
 # THREE STATES, THREE MESSAGES. A wait written for "<pending>" is wrong here: MEASURED on two walk
 # rows, at this point in the runbook the Service DOES NOT EXIST --
@@ -140,12 +149,20 @@ if [ "$st" = absent ] || [ "$st" = pending ]; then
       pending) log_info "svc/argocd-server exists but has no LoadBalancer address yet." ;;
     esac
     log_info "waiting up to ${WAIT}s ..."
-    _w=0
-    while [ "$_w" -lt "$WAIT" ]; do
-      sleep 15; _w=$((_w + 15))
+    # ⚠️ DEADLINE, not a sleep-counter. `_w=$((_w + 15))` counted only the SLEEP, so the loop ran
+    # for WAIT seconds of sleeping PLUS the cost of every probe -- MEASURED at WAIT=16: 50s elapsed,
+    # 3.1x the budget, because each `_state` can spend up to `curl --max-time 5`. Against a dead VIP
+    # at the 900s default that is minutes of overshoot, and it gets worse as the interval shrinks
+    # (the same case at POLL=1 measured 106s). SECONDS is the shell's own elapsed counter.
+    _t0=$SECONDS; _end=$((_t0 + WAIT)); _logged=0
+    while [ "$SECONDS" -lt "$_end" ]; do
+      sleep "$POLL"
       st="$(_state)"
       case "$st" in absent|pending) ;; *) break ;; esac
-      [ $((_w % 60)) = 0 ] && log_info "  still ${st} (${_w}/${WAIT}s) ..."
+      # ⚠️ `% 60` assumed the interval DIVIDES 60. At POLL=7 it fired every lcm(7,60)=420s, i.e. the
+      # operator saw a progress line every 7 MINUTES instead of every minute. Elapsed-since-last.
+      _el=$((SECONDS - _t0))
+      if [ $((_el - _logged)) -ge 60 ]; then _logged=$_el; log_info "  still ${st} (${_el}/${WAIT}s) ..."; fi
     done
   fi
 fi
@@ -181,17 +198,18 @@ esac
 # earlier. Harbor survives this class solely because HARBOR_URL is a NAME that DNS re-resolves.
 if [ "$WAIT" -gt 0 ] && ! _answers "$st"; then
   log_info "svc/argocd-server reports ${st}, but nothing answers there — re-resolving until it does."
-  _rw=0
-  while [ "$_rw" -lt "$WAIT" ]; do
-    sleep 15; _rw=$((_rw + 15))
+  _rt0=$SECONDS; _rend=$((_rt0 + WAIT)); _rlogged=0
+  while [ "$SECONDS" -lt "$_rend" ]; do
+    sleep "$POLL"
     _now="$(_state)"
+    _rw=$((SECONDS - _rt0))            # ELAPSED, not a sleep tally -- it is reported below
     case "$_now" in absent|pending) continue ;; esac
     if [ "$_now" != "$st" ]; then
       log_warn "  the LoadBalancer address CHANGED underneath us: ${st} -> ${_now}"
       st="$_now"
     fi
     _answers "$st" && { log_info "  ${st} answers (${_rw}s)"; break; }
-    [ $((_rw % 60)) = 0 ] && log_info "  ${st} still silent (${_rw}/${WAIT}s) ..."
+    if [ $((_rw - _rlogged)) -ge 60 ]; then _rlogged=$_rw; log_info "  ${st} still silent (${_rw}/${WAIT}s) ..."; fi
   done
   # ⚠️ WARN AND PUBLISH -- deliberately NOT a die. A die converts today's LATE failure into an EARLY
   # hard stop on a lab where the address is fine and only this probe is wrong (an L7 LB answering
