@@ -60,4 +60,29 @@ for name in $NAMES; do
   log_info "[${name}] verified intact in Harbor: ${ref}"
 done
 
+# ---- RECORD (and, on a re-run, COMPARE) THE REGISTRY DIGEST -------------------
+# The build side records the ENGINE's image id, which is a CONFIG digest and is NOT comparable to
+# what a registry reports (measured: 1253e769... vs 95106555...). Without this, the lock could not
+# verify anything -- it was provenance you could not check. Here we ask the registry what it now
+# serves, and on a re-run we FAIL when the same tag serves different bytes, which is the mutable-tag
+# hazard this repo has already been bitten by.
+PUSHED_LOCK="${IN_DIR}/selfbuilt-pushed.lock"
+drift=0
+for name in $NAMES; do
+  ref="$(selfbuilt_harbor_ref "$name")"
+  # `|| true`: a crane failure here must not abort before we can report it (set -e).
+  now="$(crane digest "$ref" "${CRANE_INSECURE[@]}" 2>/dev/null || true)"
+  [ -n "$now" ] || { log_warn "[${name}] could not read the registry digest — recording nothing"; continue; }
+  was="$(awk -F'\t' -v n="$name" '$1==n {print $2}' "$PUSHED_LOCK" 2>/dev/null | tail -1)"
+  if [ -n "$was" ] && [ "$was" != "$now" ]; then
+    log_error "[${name}] ${ref} now serves ${now}, but a previous verified push recorded ${was}."
+    log_error "  The SAME TAG is serving DIFFERENT BYTES. Either the tag was overwritten (give the new"
+    log_error "  content its own tag — see the tag rule in images/selfbuilt.tsv) or the registry is lying."
+    drift=1
+  fi
+  printf '%s\t%s\t%s\n' "$name" "$now" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$PUSHED_LOCK"
+  log_info "[${name}] registry digest: ${now}"
+done
+[ "$drift" -eq 0 ] || die "a self-built tag changed content under the same name — refusing to call this a clean push."
+
 log_info "self-built images pushed + verified:${pushed}"

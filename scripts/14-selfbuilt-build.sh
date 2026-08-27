@@ -121,9 +121,14 @@ for name in $NAMES; do
   run "$ENGINE" save -o "$tarball" "$local_ref"
 
   # THE REPRODUCIBILITY ANCHOR. The pin is the git tag; the anchor is what that tag PRODUCED here.
-  # Recorded so the air-gap side can prove it pushed the same bytes it was handed.
-  digest="$("$ENGINE" inspect --format '{{.Id}}' "$local_ref" 2>/dev/null || echo unknown)"
-  printf '%s\t%s\t%s\t%s:%s\t%s\n' "$name" "$ref" "$digest" "$repo" "$tag" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${LOCK}.tmp"
+  #
+  # ⚠️ THIS IS THE ENGINE'S IMAGE ID (a CONFIG digest), NOT the manifest digest a registry reports.
+  # MEASURED 2026-08-26, they differ: engine id 1253e769..., pushed manifest 95106555... So this
+  # column alone CANNOT verify what was pushed -- treating it as if it could made the lock
+  # write-only decoration. 22-selfbuilt-push.sh appends the REGISTRY digest after a verified push,
+  # which is the value a later run can actually compare.
+  engine_id="$("$ENGINE" inspect --format '{{.Id}}' "$local_ref" 2>/dev/null || echo unknown)"
+  printf '%s\t%s\t%s\t%s:%s\t%s\n' "$name" "$ref" "$engine_id" "$repo" "$tag" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${LOCK}.tmp"
 
   rm -rf "$src"; trap - EXIT
 done
