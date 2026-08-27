@@ -103,8 +103,22 @@ pf_line=$(grep -c 'port-forward "$pf_target" "${app_local_port}:${pf_port}"' "$V
 ck "the port-forward binds \${pf_port}, not a literal :80" "$pf_line" "1"
 ck "no literal :80 remains on the port-forward line" \
    "$(grep -c 'port-forward "$pf_target" "${app_local_port}:80"' "$V")" "0"
+# ⚠️ THIS USED TO ASSERT THE JSONPATH APPEARS EXACTLY ONCE, and that made it a gate that was GREEN
+# over a live defect and RED on its remedy -- the shape most likely to get a correct fix reverted to
+# restore a green gate. The defect: pf_port was resolved ONCE, at the initial bind, while both
+# tunnel-rebuild sites reassigned pf_target and inherited the stale port. Every Service exposes only
+# 80 and every containerPort is 8080, so pod->svc/ bound svc/ on 8080 (no such service port) and
+# svc/->pod bound a pod on 80 (nothing listening); either killed the tunnel for the rest of the run.
+# Resolving the port in a helper called at all three sites is the fix, and it necessarily makes the
+# jsonpath appear once while the CALL appears three times. Assert the invariant that matters: the
+# port is re-derived wherever the target is chosen.
 ck "pf_port is resolved from the pod's containerPort" \
-   "$(grep -c 'jsonpath=.{.spec.containers\[0\].ports\[0\].containerPort}' "$V")" "1"
+   "$([ "$(grep -c 'jsonpath=.{.spec.containers\[0\].ports\[0\].containerPort}' "$V")" -ge 1 ] && echo ok)" "ok"
+# EVERY site that assigns pf_target must be followed by a re-derivation. Counting the CALL, not the
+# literal, is what makes this survive the helper refactor -- and what would catch a THIRD rebuild
+# site being added later without one.
+ck "pf_port is re-derived at every site that moves pf_target" \
+   "$(grep -c '_resolve_pf_port' "$V")" "4"
 # ⚠️ EXECUTABLE lines only: the phrase appears in the explanatory comment too, and counting both
 # made this assert 2. Same trap as "a check that greps a symbol also matches its own docstring".
 ck "a pod with no containerPort falls back to svc/" \
