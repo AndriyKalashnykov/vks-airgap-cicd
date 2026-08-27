@@ -2,8 +2,24 @@
 # check-expect-literals.sh — every literal an `**Expect:**` line asserts must EXIST in the code that
 # is supposed to print it.
 #
-# THE DEFECT THIS CLOSES (B102). An Expect literal and the log line that satisfies it are TWO copies
-# of one string, in two files, with nothing asserting they agree. Reword the log line and
+# ⚠️ WHAT THIS GATE MEASURES, precisely (B492). It asserts that a COPY of each Expect literal exists
+# somewhere under scripts/. It does NOT assert that a LOG LINE emits it: a comment satisfies the
+# search identically. MEASURED 2026-08-26 — the literal `v1.36.2+vmware.2-vkr.3` is matched by
+# exactly one occurrence under scripts/, and that occurrence is a COMMENT (24-vks-k8s-version.sh:9).
+#
+# ⚠️ AND ITS EXTRACTION IS DELIBERATELY BROADER THAN THE WALK'S. walk-doc.sh:452 appends only lines
+# that START WITH `**Expect` at column 0; this gate takes literals from a wider sweep. MEASURED on
+# scenario-1.md: 36 Expect lines, and the version literal above is on NONE of them — it sits in
+# prose at :518 — so the walk would never have asserted it, and the "the next matrix row will go
+# EXPECT UNMET" consequence does not follow for every literal this gate flags.
+# That breadth is KEPT ON PURPOSE, not an oversight: narrowing it to walk-doc.sh's column-0 rule
+# would stop catching a literal that a future continuation-line or table-cell extraction WOULD
+# assert, and every direction here fails SAFE (a flagged literal is at worst a string to reconcile;
+# a missed one is a live-lab failure 25 minutes in). Do not narrow it without measuring what that
+# stops catching.
+#
+# THE DEFECT THIS CLOSES (B102). An Expect literal and the string that satisfies it are TWO copies
+# of one string, in two files, with nothing asserting they agree. Reword the code copy and
 # `static-check` stays GREEN while the next matrix goes EXPECT UNMET and exits 1 — twenty-five
 # minutes into a row, on a live lab. One line of prose has already killed a whole matrix run once.
 #
@@ -349,9 +365,12 @@ fi
 if [ "$missing" -gt 0 ]; then
   echo "check-expect-literals: FAILED — ${missing} Expect literal(s) are not present under scripts/:${MISS}"
   echo
-  echo "  Each of these is a claim a runbook makes that NOTHING IN THE CODE CAN SATISFY. The next"
-  echo "  matrix row asserting it will go EXPECT UNMET and exit 1, ~25 minutes in, on a live lab."
-  echo "  Fix one of the two copies — the log line in scripts/, or the Expect line in the document."
+  echo "  Each of these is a literal a runbook states that appears NOWHERE under scripts/ — so no code"
+  echo "  in this repo can produce it. What this gate measures is exactly that: a COPY of the string"
+  echo "  exists somewhere under scripts/. It does NOT prove a log line emits it (a comment satisfies"
+  echo "  it too — measured: v1.36.2+vmware.2-vkr.3 is matched only by a comment in"
+  echo "  24-vks-k8s-version.sh), and it does NOT prove the walk would ever assert it."
+  echo "  Fix one of the two copies — the string in scripts/, or the literal in the document."
   echo "  If the literal is genuinely unmatchable (third-party output, or assembled at runtime), add"
   echo "  it to ALLOW in this file WITH A REASON. An entry without a reason is a silenced defect."
   exit 1

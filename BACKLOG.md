@@ -3211,7 +3211,7 @@ obvious tidy-up is to align them. **An adversary round refuted that, measured.**
 If the asymmetry bothers you, spend it on **B494** instead — that is a real rot with two live
 failure directions.
 
-## 🟡 B492 — the two machine readers of `scenario-1.md` DISAGREE about `<details>`, so a harmless-looking docs edit turns a gate RED
+## ✅ B492 — the two machine readers of `scenario-1.md` DISAGREE about `<details>`, so a harmless-looking docs edit turns a gate RED
 
 MEASURED 2026-08-26 while fixing B490's docs half. Recorded because the surprise is structural, not
 a one-off, and it will bite the next person editing a scenario document.
@@ -3252,6 +3252,22 @@ overstate what it proves:
 Both directions fail SAFE, so this is not a defect to rush. It is worth knowing before someone reads
 that message as a statement about runtime behaviour and goes looking for a log line that was never
 supposed to exist.
+
+**CLOSED 2026-08-26 (second half only; the `<details>` asymmetry above is RECORDED, not changed).**
+All four measurements re-derived independently before acting: the message did claim *"the log line"*
+(`:354`); the version literal is matched by exactly one occurrence under `scripts/` and it is a
+**COMMENT** (`24-vks-k8s-version.sh:9`); `walk-doc.sh:452` appends only `line.startswith('**Expect')`;
+and of **36** Expect lines in `scenario-1.md`, **0** contain that literal — it sits in prose at `:518`.
+
+The failure text now says what it MEASURES (a copy of the string exists under `scripts/`, which a
+comment satisfies) and no longer promises a consequence that does not follow for every literal it
+flags. The header states that the extraction is **deliberately broader** than `walk-doc.sh:452` and
+why: narrowing it to the column-0 rule would stop catching a literal that a future continuation-line
+or table-cell extraction WOULD assert, and every direction here fails safe — a flagged literal is a
+string to reconcile, a missed one is a live-lab failure 25 minutes in. Not narrowed, per this row.
+
+RED-proven: planting an unmatchable `**Expect:**` literal fires the corrected message; removing it
+returns `94 literal(s) checked, 9 allowlisted, 0 MISSING`.
 
 **Done-when:** the message says what it measures (*"a copy under scripts/"*, not *"the log line"*),
 and either the gate's extraction matches `walk-doc.sh:452` or it states plainly that it is
