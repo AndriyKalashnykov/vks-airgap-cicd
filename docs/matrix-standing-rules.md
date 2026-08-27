@@ -244,11 +244,44 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
     one mid-run yields `unexpected EOF` that reads as a product bug. This includes
     `nested-vsphere-lab`'s own step scripts — the cut-B rebuild invokes that repo's `lab` target
     mid-matrix. (It lives in **nested-vsphere-lab**, not here; this repo has no such target.)
-2. **The tree is frozen while the matrix is armed or running.** `walk-matrix.sh` refuses a
-    `WALK_REPO` that is dirty or ahead of `origin/main`, and every row ships `git archive HEAD` at
-    **row** time — so a branch blocks the launch and a mid-run merge splits the run across two
-    commits. (`git archive` reads the commit, so an uncommitted working-tree edit is harmless; being
-    *ahead* is not.)
+2. **The tree is frozen while the matrix is armed or running — INCLUDING the working tree.**
+    `walk-matrix.sh` refuses a `WALK_REPO` that is dirty or ahead of `origin/main`, but that check
+    runs **once, at startup** (`assert_repo_published`, called at `:179`), while the per-row reads
+    happen inside `walk_vm`, called **once per row** at `:793`. So nothing re-checks between rows,
+    and a branch switch or a merge+pull mid-run is invisible.
+
+    ⚠️ **This rule previously ended "(`git archive` reads the commit, so an uncommitted working-tree
+    edit is harmless)". That was FALSE, and false in the REASSURING direction — it licensed exactly
+    the edit that contaminates a row.** Only **one** of the six per-row reads goes through the
+    commit. MEASURED 2026-08-26 against `walk-matrix.sh`:
+
+    | line | read | source |
+    |---|---|---|
+    | `:609` | `git archive … HEAD` (the repo tarball) | **the commit** |
+    | `:598` | `scp $WALK_REPO/scripts/walk-doc.sh` | **the working tree** |
+    | `:648` | `scp $WALK_REPO/docs/<scenario>.md` | **the working tree** |
+    | `:657` | `sed` the doc to derive its `walk-include:` list | **the working tree** |
+    | `:655` | `[ -f $WALK_REPO/docs/<include> ]` | **the working tree** |
+    | `:656` | `scp` each include | **the working tree** |
+
+    So an uncommitted edit to a scenario doc changes what a later row walks, silently, and both
+    verdicts still come out green — after which the pair-symmetry read (1↔3, 2↔4, 5↔6) compares two
+    different tests as though they were one.
+
+    Worse, **nothing in any artifact records which commit a row walked** — not the verdict, not the
+    row log, not `FINAL<N>.log`. When this happened to me on 2026-08-26 (four branch switches at
+    19:11/19:40/19:58/20:02 while rows 4 and 6 were pending) the only way to establish that row 3
+    was clean was to read the *reflog*, by hand, afterwards. Row 3's archive was taken at 19:45,
+    while I happened to be back on `main`. Luck, not a control.
+
+    **Until the harness pins and records the SHA: do not touch `WALK_REPO` at all while a matrix is
+    armed or running — not a branch switch, not a merge, not an uncommitted edit.** Work in a
+    `git worktree` (`git worktree add /tmp/wt <branch>`), which leaves `HEAD` and the working tree
+    of the main checkout untouched.
+
+    The same applies, with **no guard at all**, to **`nested-vsphere-lab` itself**: `:770`
+    (`walkbox-vm.sh`, every row), `:714` (`dns-record.sh`), `:237` (`supervisor-endpoint.sh`) are
+    read per-row from that repo's working tree, and `assert_repo_published` does not cover it.
 3. **One matrix at a time.** Two concurrent runs against the same lab make any failure
     unattributable.
 4. **Kill by process group**, not by PID — killing a driver by PID orphans its children, and an
