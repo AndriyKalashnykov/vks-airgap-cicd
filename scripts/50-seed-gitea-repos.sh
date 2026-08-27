@@ -331,7 +331,7 @@ seed_app() {
   # mints a NEW token; 60-configure-tekton.sh applies it to k8s while Gitea keeps the OLD one. The
   # core-interceptor's HMAC check then rejects every delivery, silently, forever.
   #
-  # ⚠️ PATCH IS A SILENT NO-OP FOR THE SECRET. Source-read at the PINNED tag (gitea/gitea:1.27.1,
+  # ⚠️ PATCH IS A SILENT NO-OP FOR THE SECRET. Source-read at the PINNED tag (see images/images.txt; 1.27.2-rootless at time of writing,
   # images/images.txt): in routers/api/v1/utils/hook.go, `Secret:` appears exactly ONCE — line 221,
   # inside addHook() (the POST path). editHook() (340-398) reads only url, content_type and the
   # Slack keys, so a PATCH carrying config.secret returns 200 and changes NOTHING. It would also
