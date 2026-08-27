@@ -979,7 +979,11 @@ is what those PRs actually touched, and rewriting them would falsify the record.
   | `port-forward svc/<app> L:80` | http 200 |
 
   The `svc/` FALLBACK still works, so this **only bites when the pod lookup SUCCEEDS** — the
-  healthier the cluster, the more certain the failure. Fixed in #1054.
+  healthier the cluster, the more certain the failure. Fixed in #1054 **for the INITIAL bind
+  only** — verified from its own diff. Both tunnel-REBUILD sites kept inheriting the stale
+  port until **#1062**, which moved the resolution inside `_start_pf` so the one place that
+  binds is the one place that resolves. Reading this as "fixed in #1054" is what let the
+  rebuild half survive three more weeks.
 
 - **It did not look like a port bug, and that is the lesson.** It presented as 114 "connection
   refused" tunnel deaths across the generation cap, ending ~10 minutes AFTER both pods were Ready —
@@ -1013,7 +1017,8 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 | PR | what |
 |---|---|
 | #1053 | `env-check` catches a dangling `ARGOCD_KUBECONFIG` (found live in this repo's `.env`) |
-| #1054 | the port-forward derives its remote port from the target; `80` only for `svc/` |
+| #1054 | the port-forward derives its remote port from the target at the INITIAL bind; `80` only for `svc/` |
+| #1062 | that derivation moved INSIDE `_start_pf` — the rebuild sites had inherited the stale port |
 | #1055 | Harbor's admin credential is VERIFIED at install time (`harbor_credential_settle`) |
 
 **#1055's own story is worth reading before extending it.** Harbor honours `HARBOR_ADMIN_PASSWORD`
@@ -1026,7 +1031,7 @@ new 12/12 suite, shellcheck, and the sourcing gate. The suite's wiring cases ass
 text, never definedness**; they now assert `type -t` reachability against a source set DERIVED from
 `06`.
 
-### Proven live
+### Proven live — ON THE #1054 TREE; NOT re-run since #1062
 
 - `make verify` **6/6** on KinD: every app logs `tunnel target <pod> remote port 8080`, zero bind
   `:80`, and dotnetwebapp took a real tunnel death and **rebuilt to generation 2** — #1052 and #1054
