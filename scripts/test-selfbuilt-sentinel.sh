@@ -91,5 +91,41 @@ out="$(cd "$T" && BUNDLE_DIR="$T/bundle" REPO_ROOT="$T" SELFBUILT_FORCE=1 \
 case "$out" in *"already built at"*) bad "SELFBUILT_FORCE=1 -> REBUILD" ;;
                *)                    ok  "SELFBUILT_FORCE=1 -> REBUILD" ;; esac
 
+# ROUND-TRIP: the case that binds the stamp WRITE to the stamp COMPARE.
+# Every case above writes the fixture stamp ITSELF, so none of them observes what the script
+# actually writes. An adversary proved that blindness exploitable: mutating ONLY the write
+# (tag -> ref) while leaving the compare correct left this file 6/6 GREEN, with the sentinel a
+# PERMANENT NO-OP -- the stamp could never equal the tag again, so every run paid a full clone and
+# container build, silently, forever. Here the SCRIPT writes the stamp and the NEXT run reads it.
+rt_probe() {
+  local d="$T/rt"; rm -rf "$d"; mkdir -p "$d/bin"
+  # Fake git: clone produces a minimal tree. Fake engine: `save -o <f>` writes a non-empty file.
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'if [ "${1:-}" = clone ]; then for a in "$@"; do t="$a"; done; mkdir -p "$t"; printf "FROM scratch\n" > "$t/Dockerfile"; fi'
+    echo 'exit 0'
+  } > "$d/bin/git"
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'prev=""; for a in "$@"; do [ "$prev" = "-o" ] && printf "tar\n" > "$a"; prev="$a"; done'
+    echo 'exit 0'
+  } > "$d/bin/podman"
+  chmod +x "$d/bin/git" "$d/bin/podman"
+  ( cd "$T" && PATH="$d/bin:$PATH" CONTAINER_ENGINE=podman SELFBUILT_FORCE=1 \
+      bash "$T/scripts/14-selfbuilt-build.sh" >/dev/null 2>&1 ) || return 1
+  [ -s "$STAMP" ] || return 1
+}
+if rt_probe; then
+  got="$(cat "$STAMP" 2>/dev/null)"
+  if [ "$got" = "$TAG" ]; then ok "round-trip: the script WRITES the tag (write bound to compare)"
+  else bad "round-trip: the script writes the tag (wrote [$got], want [$TAG])"
+  fi
+  if [ "$(decide)" = skip ]; then ok "round-trip: the NEXT run skips on what the script itself wrote"
+  else bad "round-trip: the NEXT run skips on what the script itself wrote"
+  fi
+else
+  printf '  SKIP  round-trip (fake git/engine probe could not complete)\n'
+fi
+
 printf '  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
