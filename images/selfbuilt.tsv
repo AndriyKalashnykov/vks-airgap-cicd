@@ -53,25 +53,48 @@
 # Proven behaviourally, both binaries against the real Harbor: v1.24.0 pushes, v1.25.18-as-shipped
 # FAILS, v1.25.18 rebuilt with v0.21.9 PUSHES.
 #
-# ⚠️ WHY v0.21.9 AND NOT THE "MINIMUM" v0.21.6 — DO NOT MINIMISE THIS PIN.
-# v0.21.6 is the first release carrying the realm exemption, so it LOOKS like the smallest safe
-# bump, and an adversary round argued exactly that (51 fewer commits through kaniko's hot path).
-# It was tried, and MEASURED 2026-08-27: kaniko built with v0.21.6 dies at the FIRST layer pull:
+# 🔴 CORRECTED 2026-08-27 (LATER THE SAME DAY): v0.21.9 DOES NOT WORK EITHER.
+# This block previously said v0.21.9 was "the first version that has both" the realm exemption and
+# the pull-limiter fix, and therefore usable. That was written after v0.21.6 was measured to
+# deadlock, and it was WRONG -- it assumed ggcr #2373 fixed the deadlock. It does not.
+#
+# MEASURED on a live pipeline, with the SERVED binary independently confirmed to embed v0.21.9
+# (2 build-info hits, 0 for v0.21.6): kaniko dies at the FIRST layer pull, identically to v0.21.6:
 #
 #   INFO Unpacking rootfs as cmd COPY .mvn/ .mvn/ requires it.
 #   fatal error: all goroutines are asleep - deadlock!
-#   go-containerregistry/pkg/v1/remote.(*pullLimiter).acquire  .../remote/limiter.go:37
+#   goroutine 1 [select, locked to thread]:
+#   go-containerregistry/pkg/v1/remote.(*pullLimiter).acquire   .../remote/limiter.go:37
+#     <- (*fetcher).fetchBlobURL <- (*remoteImageLayer).Compressed
+#     <- partial.(*compressedLayerExtender).Uncompressed <- kaniko/pkg/util.GetFSFromLayers
 #
-# The fix is IN the v0.21.6..v0.21.9 range: ggcr #2373 "remote: release pull limiter slot when body
-# is read to EOF" (limiter.go +8/-0, limiter_test.go +54/-0). So the two things we need land in
-# DIFFERENT releases -- the exemption in v0.21.6, the limiter fix after it -- and v0.21.9 is the
-# first version that has both. "Smallest blast radius" is the wrong axis here: the commits being
-# skipped contain a fix this build REQUIRES.
+# WHY #2373 CANNOT HELP. It releases a limiter slot when a body is read to EOF -- i.e. it fixes a
+# LEAK. This is not a leak. `defaultJobs = 4` (options.go:107, `o.limiter = newPullLimiter(o.jobs)`)
+# and the image has ELEVEN layers; kaniko's GetFSFromLayers holds layer bodies OPEN while it
+# unpacks, so once 4 slots are held the 5th acquire() blocks forever. One goroutine, nothing left to
+# release. Verified #2373 IS in v0.21.8/v0.21.9 (GitHub compare: merge commit b3a7149b is an
+# ancestor of both) -- so its presence is not the question; its scope is.
 #
-# The override cannot be avoided either: there is NO env/flag alternative (zero os.Getenv in either
-# transport tree; --insecure gates only the SCHEME), upstream issue #2258 asked for a disable option
-# that was never implemented, and bumping the fork does not help -- v1.25.19 (2026-08-27) still pins
-# v0.21.5.
+# THE REAL SHAPE OF THE PROBLEM, and why no pin in this series can be right:
+#   pkg/v1/remote/limiter.go is ABSENT at v0.21.5 and PRESENT at v0.21.6, .7, .8, .9, v0.22.0.
+#   The limiter arrived in the SAME RELEASE as the realm exemption.
+# So the two properties we need are in DIRECT CONFLICT along this axis:
+#   v0.21.5  -> no limiter (no deadlock), but the SSRF guard REFUSES our IP-literal registry
+#   v0.21.6+ -> exemption present, but the limiter deadlocks kaniko on any image with >4 layers
+# There is no version that has one without the other. Bumping further does not help; v0.22.0 still
+# has the limiter.
+#
+# THE PIN BELOW IS THEREFORE NOT KNOWN-GOOD. It is the last thing tried, and it FAILS. Do not read
+# it as a working configuration. The route under review is to stop feeding ggcr an IP LITERAL at
+# all: transport/bearer.go guards on `net.ParseIP(host) != nil` and says in as many words that
+# "DNS-based SSRF is out of scope here", so a DNS-named Harbor never trips the guard and v0.21.5 --
+# which has no limiter -- would work with NO override. That is a design change (cert SAN, containerd
+# certs.d keying, in-cluster + on-node name resolution) and is being reviewed before implementation.
+#
+# The override cannot be avoided by configuration either: there is NO env/flag alternative (zero
+# os.Getenv in either transport tree; --insecure gates only the SCHEME), upstream issue #2258 asked
+# for a disable option that was never implemented, and bumping the fork does not help -- v1.25.19
+# (2026-08-27) still pins v0.21.5.
 #
 # ⚠️ THE FORK VENDORS ITS DEPENDENCIES. `go get` alone leaves vendor/ stale and the build dies with
 # `go: inconsistent vendoring` at the credential-helper step -- an error naming neither the module
