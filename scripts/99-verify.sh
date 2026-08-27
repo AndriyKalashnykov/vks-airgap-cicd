@@ -371,9 +371,19 @@ verify_app() {
     case "$pf_target" in
       ""|svc/*) pf_port=80; return 0 ;;
     esac
+    # rc ON ITS OWN LINE. `2>/dev/null || true` alone conflates "kubectl could not be asked" with
+    # "the pod declares no containerPort", and the branch below then LOGS the latter as fact. That
+    # conflation is newly on the hot path: rebuild site #1 is reached precisely when kubectl was
+    # unqueryable (krc != 0). The same function states the opposing rule ~60 lines below -- an empty
+    # answer means "not Ready" only if the query SUCCEEDED.
+    local _pp_rc=0
     pf_port="$(kubectl -n "$ns" get pod "$pf_target" \
-                 -o jsonpath='{.spec.containers[0].ports[0].containerPort}' 2>/dev/null || true)"
-    if [ -z "$pf_port" ]; then
+                 -o jsonpath='{.spec.containers[0].ports[0].containerPort}' 2>/dev/null)" || _pp_rc=$?
+    if [ "$_pp_rc" -ne 0 ]; then
+      log_warn "[${app}] could not read ${pf_target}'s spec (rc=${_pp_rc}) — binding svc/ instead"
+      _pf_ev "could not read ${pf_target}'s spec (rc=${_pp_rc}) — DOWNGRADING to svc/" 2>/dev/null || true
+      pf_target="svc/${app}"; pf_port=80
+    elif [ -z "$pf_port" ]; then
       # A pod that declares no containerPort gives us nothing to bind. svc/ resolves the name for
       # us, so fall back rather than guess a number.
       #
@@ -383,7 +393,13 @@ verify_app() {
       # immediately -- MEASURED: `kubectl port-forward "" 18099:80` -> "error: resource name may not
       # be empty", i.e. a permanently dead tunnel. Resolving it inside the helper covers every
       # caller by construction instead of requiring each one to remember.
+      # ⚠️ _pf_ev AS WELL AS log_warn. At BOTH rebuild sites this helper runs inside _pf_classify
+      # inside a wait_for PREDICATE, and wait_for invokes it as `"$@" >/dev/null 2>&1` (line ~46) --
+      # so a log_warn here is DISCARDED and a rebuild-time downgrade to svc/ leaves NO trace in the
+      # archive. That is the unattributable-tunnel state this whole arc exists to remove, and it is
+      # the exact trap _pf_ev was introduced for 35 lines below. Adversary-caught.
       log_warn "[${app}] pod ${pf_target} declares no containerPort — binding svc/ instead"
+      _pf_ev "pod ${pf_target} declares no containerPort — DOWNGRADING to svc/ (remote port 80)" 2>/dev/null || true
       pf_target="svc/${app}"; pf_port=80
     fi
   }

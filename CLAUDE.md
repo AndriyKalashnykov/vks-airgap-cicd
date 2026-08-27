@@ -1046,11 +1046,16 @@ text, never definedness**; they now assert `type -t` reachability against a sour
   `0 FAILED`) — superseding the earlier warning. It remains two verdicts in two run directories,
   and nothing prints the pair-symmetry read for you. Treat a first attempt on a NEW lab as part of the
   certification, not as setup.
-- **#1051 (self-built kaniko)** remains a DRAFT pending a full `make e2e-kind`.
+- ⚠️ CORRECTED 2026-08-27: **#1051 (self-built kaniko) is MERGED** (`ebb5895`, an ancestor of
+  this tree) and the `make e2e-kind` it was pending IS the cold run cited above — that run
+  logs `self-built images pushed + verified: kaniko`. This bullet was doubly false and sat
+  BETWEEN two bullets that were corrected, which is how it survived: a correction pass reads
+  the lines it came to change. It has since also passed two-box sneakernet on photon+ubuntu.
 - ⚠️ CORRECTED 2026-08-27: a cold `make e2e-kind` (`E2E_FRESH=1`) HAS since completed — exit 0,
   6/6 apps, 0 deadlocks, and the harness's own closing line `OK — create-ordering EXERCISED`.
   The warm run was green too (exit 0, 6/6). This line previously said the cold run had not
-  completed; that was true when written and is now false. #1055 has therefore
+  completed; that was true when written and is now false. Separately, and NOT derived from
+  the above (the previous wording said "therefore", which no longer follows): #1055 has
   never executed against a live fresh Harbor — that run is what would exercise its
   `HARBOR_FIRST_INSTALL=1` retry path.
 

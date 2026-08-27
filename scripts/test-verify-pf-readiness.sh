@@ -114,15 +114,39 @@ ck "no literal :80 remains on the port-forward line" \
 # port is re-derived wherever the target is chosen.
 ck "pf_port is resolved from the pod's containerPort" \
    "$([ "$(grep -c 'jsonpath=.{.spec.containers\[0\].ports\[0\].containerPort}' "$V")" -ge 1 ] && echo ok)" "ok"
-# EVERY site that assigns pf_target must be followed by a re-derivation. Counting the CALL, not the
-# literal, is what makes this survive the helper refactor -- and what would catch a THIRD rebuild
-# site being added later without one.
-ck "pf_port is re-derived at every site that moves pf_target" \
-   "$(grep -c '_resolve_pf_port' "$V")" "4"
+# ⚠️ THIS ASSERTION WAS ITSELF INVERTED, AND MEASURED SO. It used to be
+#     ck "..." "$(grep -c '_resolve_pf_port' "$V")" "4"
+# i.e. a RAW COUNT of 1 definition + 3 calls, anywhere in the file, COMMENTS INCLUDED. Measured on
+# copies of the real script:
+#     a new rebuild site with NO re-derivation (the defect) -> 24/24 GREEN   <- ships the bug
+#     a new rebuild site WITH one (correct)                 -> 1 FAILED
+#     a bare COMMENT naming the helper                      -> 1 FAILED
+# That is the same green-over-the-defect / red-on-the-remedy shape this file replaced two lines up,
+# re-entered while claiming to remove it -- and it re-entered the comment-counting trap that the
+# NEXT assertion guards against with `grep -vE '^[[:space:]]*#'`.
+#
+# Compare executable SITES to executable CALLS. A site is a place that re-chooses pf_target; a call
+# is a re-derivation, minus the definition itself. Verified in all five directions: baseline 3/3
+# GREEN, defect 4/3 RED, correct addition 4/4 GREEN, comment 3/3 GREEN, pre-fix state 3/1 RED.
+_pf_exe="$(grep -vE '^[[:space:]]*#' "$V")"
+_pf_sites="$(printf '%s\n' "$_pf_exe" | grep -c '_pick_pod)"')"
+_pf_calls="$(( $(printf '%s\n' "$_pf_exe" | grep -c '_resolve_pf_port') \
+              - $(printf '%s\n' "$_pf_exe" | grep -c '_resolve_pf_port()') ))"
+ck "every site that re-chooses pf_target re-derives pf_port" "$_pf_calls" "$_pf_sites"
 # ⚠️ EXECUTABLE lines only: the phrase appears in the explanatory comment too, and counting both
 # made this assert 2. Same trap as "a check that greps a symbol also matches its own docstring".
-ck "a pod with no containerPort falls back to svc/" \
-   "$(grep -vE '^[[:space:]]*#' "$V" | grep -c 'declares no containerPort')" "1"
+# ⚠️ THIS USED TO ASSERT THE MESSAGE APPEARS EXACTLY ONCE, which made it brittle AND vacuous: it
+# broke when a second, DIFFERENT channel was added for the same event, while never checking what the
+# fallback assigns (the assertions below do that). The real invariant is that a rebuild-time
+# downgrade reaches BOTH channels -- log_warn for a human tailing the run, and _pf_ev for the
+# archive -- because at both rebuild sites this code runs inside a wait_for predicate that discards
+# stdout and stderr, so log_warn ALONE leaves no trace of a silent target/port change.
+ck "the no-containerPort downgrade is reported to a human (log_warn)" \
+   "$(grep -vE '^[[:space:]]*#' "$V" | grep -c 'log_warn.*declares no containerPort')" "1"
+ck "the no-containerPort downgrade also reaches the ARCHIVE (_pf_ev, which wait_for cannot discard)" \
+   "$(grep -vE '^[[:space:]]*#' "$V" | grep -c '_pf_ev.*declares no containerPort')" "1"
+ck "a kubectl FAILURE is reported as such, not as 'declares no containerPort'" \
+   "$(grep -vE '^[[:space:]]*#' "$V" | grep -c "could not read .* spec (rc=")" "2"
 
 # ⚠️ THE LINE ABOVE COUNTS A LOG MESSAGE, NOT A BEHAVIOUR, and was therefore VACUOUS with respect to
 # what the fallback actually assigns: it passed both when the helper blanked pf_target and when it
