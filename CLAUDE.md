@@ -215,14 +215,24 @@ starting one that a bot can invalidate"* — waiting for an owner who was not at
 six-row matrix run is hours, not minutes, so a run started instead of asked-about would have
 **finished**, and the session would have had a verdict rather than a question.
 
-⚠️ **Do NOT quote a duration here — measured 2026-08-24.** This line used to say "~4h" and "finished,
-**twice**". Both were wrong: `7h52m ÷ 4h06m = 1.92`, so "twice" was false on its own number; and the
-only two COMPLETE runs measured **3h06m** and **4h06m** — 32% apart, same tree, 24h apart — while
-**both are 2-app trees**. The repo now has six apps (builder STEP lines 4 → 34) and **no COMPLETE
-6-app run exists**, so any figure written here is a forecast quoting an obsolete corpus. Read
-`~/walk-evidence/run-*/VERDICT-*.txt` instead. A `make matrix-eta` printer to derive it was designed
-and **REFUTED**: every COMPLETE run is 2-app and every 6-app run is incomplete, so it would have
-automated quoting the stale number with a command's authority behind it.
+⚠️ **A duration IS now measurable — corrected 2026-08-27; the previous warning is superseded.**
+This block used to say **"no COMPLETE 6-app run exists"** and that "every COMPLETE run is 2-app".
+That was true on 2026-08-24 and is **FALSE as of 2026-08-27**: two COMPLETE half-runs landed that
+morning, both on the **6-app** tree (`apps/registry.tsv` = 6 rows at HEAD and at the cut-A commit),
+both verdicts reading `MATRIX COMPLETE`, all six rows `0 FAILED`, VKS 3.7.0/3.7.1:
+
+| half | rows | start → end | duration |
+|---|---|---|---|
+| cut A | 1 2 5 | 06:51:43Z → 08:39:02Z | **1h47m19s** |
+| cut B | 3 4 6 | 09:25:28Z → 11:05:36Z | **1h40m08s** |
+
+Run time **3h27m27s**, plus a **46m** manual inter-cut window ⇒ **≈4h14m elapsed**. The older
+figures (3h06m / 4h06m) were 2-app and must not be compared against these.
+
+**The reason NOT to hardcode a number here still stands**, so the `make matrix-eta` refutation is
+kept: a figure written into prose rots the moment the app count or the row split changes, and a
+printer would quote it with a command's authority. Read `~/walk-evidence/run-*/VERDICT-*.txt` for
+the current corpus; the table above is dated evidence, not a forecast.
 
 **And the caution was inverted.** The thing being "protected" against was a Renovate automerge
 invalidating the run — which was *more* likely across eight idle hours than during a run already
@@ -1032,10 +1042,20 @@ text, never definedness**; they now assert `type -t` reachability against a sour
   [`docs/matrix-standing-rules.md`](docs/matrix-standing-rules.md) §A5 before launching: a default
   run certifies on **3.6.3**, and 3.7 needs the split (cut A rows 1 2 5 → destroy+lab+register+
   upgrade → cut B rows 3 4 6 with `WALK_SKIP_REBUILD=1` and a MANDATORY `WALK_CLUSTER_NAME`).
-  ⚠️ That split is **still not exercised end to end** — treat the first attempt as part of the
+  ⚠️ That split **WAS exercised end to end on 2026-08-27** (both halves COMPLETE, all six rows
+  `0 FAILED`) — superseding the earlier warning. It remains two verdicts in two run directories,
+  and nothing prints the pair-symmetry read for you. Treat a first attempt on a NEW lab as part of the
   certification, not as setup.
-- **#1051 (self-built kaniko)** remains a DRAFT pending a full `make e2e-kind`.
-- A cold `make e2e-kind` has NOT completed since these fixes; `make verify` has. #1055 has therefore
+- ⚠️ CORRECTED 2026-08-27: **#1051 (self-built kaniko) is MERGED** (`ebb5895`, an ancestor of
+  this tree) and the `make e2e-kind` it was pending IS the cold run cited above — that run
+  logs `self-built images pushed + verified: kaniko`. This bullet was doubly false and sat
+  BETWEEN two bullets that were corrected, which is how it survived: a correction pass reads
+  the lines it came to change. It has since also passed two-box sneakernet on photon+ubuntu.
+- ⚠️ CORRECTED 2026-08-27: a cold `make e2e-kind` (`E2E_FRESH=1`) HAS since completed — exit 0,
+  6/6 apps, 0 deadlocks, and the harness's own closing line `OK — create-ordering EXERCISED`.
+  The warm run was green too (exit 0, 6/6). This line previously said the cold run had not
+  completed; that was true when written and is now false. Separately, and NOT derived from
+  the above (the previous wording said "therefore", which no longer follows): #1055 has
   never executed against a live fresh Harbor — that run is what would exercise its
   `HARBOR_FIRST_INSTALL=1` retry path.
 

@@ -354,17 +354,56 @@ verify_app() {
   # were Ready (6s and 7s after creation) -- so it looked like a flaky tunnel or a slow app, and was
   # neither. The svc/ FALLBACK below still worked, which is why this only bites when the pod lookup
   # SUCCEEDS: the healthier the cluster, the more certain the failure.
+  # ⚠️ THE PORT IS A FUNCTION OF THE TARGET, SO IT MUST BE RE-DERIVED EVERY TIME THE TARGET MOVES.
+  # This used to be resolved ONCE, in the initial bind, while the tunnel-rebuild sites reassigned
+  # pf_target and inherited the stale port. MEASURED across all six apps: every Service exposes
+  # ONLY 80 and every containerPort is 8080, so BOTH transitions were broken --
+  #     pod  -> svc/   inherited 8080, and no Service has a port 8080     -> bind fails
+  #     svc/ -> pod    inherited 80,   and nothing listens on 80          -> the bug above, again
+  # Either one killed the tunnel permanently for the rest of the run. That is the real mechanism of
+  # the run-8 failure: generations 4 and 5 fell back to svc/ carrying pf_port=8080 from a pod bind,
+  # after which no fetch ever succeeded and the PRODUCT verdict was rendered from a CACHED pre-roll
+  # body -- so the page was blamed for a tunnel that could not connect. Adversary-caught; the $img
+  # snapshot merely triggered the fallback, it did not cause the failure.
   local pf_port=80
-  if [ -n "$pf_target" ]; then
+  # shellcheck disable=SC2329  # invoked indirectly below and at every rebuild site
+  _resolve_pf_port() {
+    case "$pf_target" in
+      ""|svc/*) pf_port=80; return 0 ;;
+    esac
+    # rc ON ITS OWN LINE. `2>/dev/null || true` alone conflates "kubectl could not be asked" with
+    # "the pod declares no containerPort", and the branch below then LOGS the latter as fact. That
+    # conflation is newly on the hot path: rebuild site #1 is reached precisely when kubectl was
+    # unqueryable (krc != 0). The same function states the opposing rule ~60 lines below -- an empty
+    # answer means "not Ready" only if the query SUCCEEDED.
+    local _pp_rc=0
     pf_port="$(kubectl -n "$ns" get pod "$pf_target" \
-                 -o jsonpath='{.spec.containers[0].ports[0].containerPort}' 2>/dev/null || true)"
-    if [ -z "$pf_port" ]; then
+                 -o jsonpath='{.spec.containers[0].ports[0].containerPort}' 2>/dev/null)" || _pp_rc=$?
+    if [ "$_pp_rc" -ne 0 ]; then
+      log_warn "[${app}] could not read ${pf_target}'s spec (rc=${_pp_rc}) — binding svc/ instead"
+      _pf_ev "could not read ${pf_target}'s spec (rc=${_pp_rc}) — DOWNGRADING to svc/" 2>/dev/null || true
+      pf_target="svc/${app}"; pf_port=80
+    elif [ -z "$pf_port" ]; then
       # A pod that declares no containerPort gives us nothing to bind. svc/ resolves the name for
       # us, so fall back rather than guess a number.
+      #
+      # ⚠️ FALL BACK TO svc/ HERE, not to "". An earlier version of this helper blanked pf_target
+      # and relied on the caller re-checking for empty. That is true at the INITIAL bind (which has
+      # an `if [ -z "$pf_target" ]` follow-up) and FALSE at both REBUILD sites, which call _start_pf
+      # immediately -- MEASURED: `kubectl port-forward "" 18099:80` -> "error: resource name may not
+      # be empty", i.e. a permanently dead tunnel. Resolving it inside the helper covers every
+      # caller by construction instead of requiring each one to remember.
+      # ⚠️ _pf_ev AS WELL AS log_warn. At BOTH rebuild sites this helper runs inside _pf_classify
+      # inside a wait_for PREDICATE, and wait_for invokes it as `"$@" >/dev/null 2>&1` (line ~46) --
+      # so a log_warn here is DISCARDED and a rebuild-time downgrade to svc/ leaves NO trace in the
+      # archive. That is the unattributable-tunnel state this whole arc exists to remove, and it is
+      # the exact trap _pf_ev was introduced for 35 lines below. Adversary-caught.
       log_warn "[${app}] pod ${pf_target} declares no containerPort — binding svc/ instead"
-      pf_target=""; pf_port=80
+      _pf_ev "pod ${pf_target} declares no containerPort — DOWNGRADING to svc/ (remote port 80)" 2>/dev/null || true
+      pf_target="svc/${app}"; pf_port=80
     fi
-  fi
+  }
+  _resolve_pf_port
   if [ -z "$pf_target" ]; then
     # F5: falling back silently means a degraded run is indistinguishable from a fixed one.
     pf_target="svc/${app}"; pf_port=80
@@ -428,6 +467,7 @@ verify_app() {
       _pf_ev "curl failed ($(_curl_rc_label "$rc")) AND kubectl rc=${krc}; rebuilding the tunnel anyway"
       if [ "$PF_GEN" -lt "${VERIFY_PF_MAX_GENERATIONS:-5}" ]; then
         pf_target="$(_pick_pod)"; [ -n "$pf_target" ] || { pf_target="svc/${app}"; _pf_ev "no Ready pod on ${img} — FALLING BACK TO svc/"; }
+        _resolve_pf_port   # the target moved, so the port must move with it
         _start_pf
       fi
       return 1
@@ -445,6 +485,7 @@ verify_app() {
     if [ "$PF_GEN" -lt "${VERIFY_PF_MAX_GENERATIONS:-5}" ]; then
       _pf_ev "the port-forward stopped ($(_curl_rc_label "$rc")); pods are Ready, so this is the TUNNEL — rebuilding (generation $((PF_GEN + 1)))"
       pf_target="$(_pick_pod)"; [ -n "$pf_target" ] || { pf_target="svc/${app}"; _pf_ev "no Ready pod on ${img} — FALLING BACK TO svc/"; }
+      _resolve_pf_port   # the target moved, so the port must move with it
       _start_pf
     else
       _pf_ev "the port-forward stopped ($(_curl_rc_label "$rc")) and the generation cap (${VERIFY_PF_MAX_GENERATIONS:-5}) is spent"

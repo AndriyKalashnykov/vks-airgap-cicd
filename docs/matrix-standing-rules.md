@@ -99,7 +99,9 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
    above keeps 5 with cut A and 6 with cut B, which is the designed grouping — do not re-mix them
    to save a run.
 
-   ⚠️ **NOT YET EXERCISED end to end.** The flags, their preconditions and the destroy-and-rebuild
+   ⚠️ **EXERCISED end to end on 2026-08-27** (cut A rows 1 2 5, cut B rows 3 4 6; both verdicts
+   `MATRIX COMPLETE`, all six rows `0 FAILED`, VKS 3.7.0/3.7.1). Previously read NOT YET EXERCISED.
+   The caveats below still stand — The flags, their preconditions and the destroy-and-rebuild
    are read from `walk-matrix.sh` and `docs/VKS-UPGRADE.md`; the 3.7 upgrade itself IS
    lab-verified (3.6.3 → 3.7.0 → 3.7.1, both `CONFIGURED`). The SPLIT has not been run. Treat the
    first attempt as part of the certification, not as setup.
