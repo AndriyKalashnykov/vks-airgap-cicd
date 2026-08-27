@@ -97,7 +97,10 @@ if [ -n "$orphan" ]; then
     [ -n "$pair" ] || continue
     sc="${pair%%	*}"; kk="${pair##*	}"
     row="$(awk -F'\t' -v s="$sc" -v k="$kk" '$1==s && $2==k {print $3"\t"$4}' "$MANIFEST" | head -1)"
-    dd="${row%%	*}"; r="${row#*	}"
+    # Only the DISPOSITION is needed here now. The reason used to be matched as a substring to
+    # decide the escape (see the note below); column 5 replaced that, so parsing it would leave an
+    # unused variable and invite someone to start matching on prose again.
+    dd="${row%%	*}"
     # A FORBID row is a STANDING PROHIBITION -- "never supply this here". Whether the document
     # happens to name the key is beside the point; forbidding a key the document does NOT name is
     # the strongest form of the row, not a defect. (scenario-1 HARBOR_PASSWORD is exactly that: the
@@ -118,7 +121,7 @@ if [ -n "$orphan" ]; then
       undocumented)
         printf '  ok (declared)  %-11s %s\n' "${sc#scenario-}" "$kk" ;;
       *)
-        printf '  ORPHAN         %-11s %-26s no document names it, and column 5 does not say `undocumented`\n' "${sc#scenario-}" "$kk"
+        printf '  ORPHAN         %-11s %-26s no document names it, and column 5 is not undocumented\n' "${sc#scenario-}" "$kk"
         rc=1 ;;
     esac
   done <<< "$orphan"
