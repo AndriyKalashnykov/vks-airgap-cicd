@@ -269,8 +269,8 @@ harbor_auth_verdict() {
 #
 # WHY THIS EXISTS — the root cause, from primary source.
 # Harbor is the ONLY component this repo installs that it never RECONCILES. goharbor
-# src/core/main.go:94-110 (v2.15.2, the version chart harbor-helm 1.19.2 pins) applies
-# HARBOR_ADMIN_PASSWORD only when the admin row has NO SALT:
+# src/core/main.go updateInitPasswordWithMgr() (v2.15.2, lines 76-92; cite the SYMBOL, the line
+# numbers move) applies HARBOR_ADMIN_PASSWORD only when the admin row has NO SALT:
 #     if user.Salt == "" { UpdatePassword(...) } else { log.Warning("Admin password from config
 #       (HARBOR_ADMIN_PASSWORD) ignored: password already exists in database.") }
 # The initial schema seeds admin with password='' and salt NULL, so the value is honoured exactly
@@ -287,8 +287,9 @@ harbor_auth_verdict() {
 # the value that just failed. (28-harbor-admin-password.sh reads a Supervisor Secret written by
 # SOMEONE ELSE — that one is independent, and it already verifies before it writes.)
 #
-# WHY THE SIBLINGS NEED NOTHING: ArgoCD reconciles (07-install-argocd.sh:171-180 patches
-# argocd-secret and deletes argocd-initial-admin-secret as its marker) and Gitea reconciles
+# WHY THE SIBLINGS NEED NOTHING: ArgoCD reconciles whenever ARGOCD_ADMIN_PASSWORD is set
+# (07-install-argocd.sh:163-181, an unconditional bcrypt patch of argocd-secret; the delete at :180
+# is cleanup so `make argocd-password` returns OUR value, not a marker) and Gitea reconciles
 # unconditionally (50-seed-gitea-repos.sh:139 `gitea admin user change-password`). Harbor is the only
 # one of the three that cannot, because upstream refuses.
 harbor_credential_settle() {
@@ -321,6 +322,11 @@ harbor_credential_settle() {
         # password that had not been sent anywhere. An error naming the wrong cause is worse than none.
         log_warn "could not verify the Harbor credential (${v#unchecked:}) — NOT a password verdict; nothing was sent to Harbor"
         return 0 ;;
+      # A verdict we do not recognise must not spin: without this arm the `while :` is a hot loop
+      # with no sleep (MEASURED: a stubbed "degraded" verdict ran until `timeout` killed it at 12s).
+      # Unreachable today -- harbor_auth_verdict emits exactly the three above -- but that set grew
+      # from two to three once already, so a fourth is the expected direction of change.
+      *)  log_warn "unrecognised Harbor verdict '$v' — treating as unchecked"; return 0 ;;
     esac
   done
 

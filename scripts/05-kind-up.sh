@@ -173,7 +173,12 @@ if [ "$need_create" = 1 ]; then state_set KIND_REUSED 0; else state_set KIND_REU
 # ⚠️ A FAILED QUERY IS NOT AN ABSENT NAMESPACE. Read rc, never the empty match -- an empty result
 # from a broken kubectl would send us straight back to minting, which is the bug this guards.
 if [ -z "${HARBOR_PASSWORD:-}" ]; then
-  _hns_rc=0; kubectl get namespace "${HARBOR_NAMESPACE:-harbor}" >/dev/null 2>&1 || _hns_rc=$?
+  # ⚠️ KUBECONFIG IS PINNED EXPLICITLY. state_claim_kind (:131) unsets every non-VKS_STATE_* key --
+  # KUBECONFIG included -- and it is not re-exported until :207, i.e. AFTER this guard. Unpinned,
+  # this kubectl reads the operator's AMBIENT ~/.kube/config and answers about the WRONG cluster:
+  # a harbor ns there FALSE-DIES a healthy fresh KinD run, and its absence (a VKS guest kubeconfig
+  # never has one) MINTS over a warm KinD Harbor -- the exact bug this guard exists to stop.
+  _hns_rc=0; KUBECONFIG="$KUBECONFIG_PATH" kubectl get namespace "${HARBOR_NAMESPACE:-harbor}" >/dev/null 2>&1 || _hns_rc=$?
   if [ "$_hns_rc" = 0 ]; then
     die "this cluster already has a '${HARBOR_NAMESPACE:-harbor}' namespace, but no HARBOR_PASSWORD is known.
   Harbor fixed its admin password at its own first bootstrap and will IGNORE a new one, so minting

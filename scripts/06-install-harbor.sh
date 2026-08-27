@@ -26,6 +26,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 # shellcheck source=scripts/lib/tls.sh
 . "${SCRIPT_DIR}/lib/tls.sh"
+# AFTER tls.sh (22-builder-push.sh:26 documents that ordering). lib/harbor.sh has no top-level
+# statements, so sourcing it is side-effect free.
+#
+# ⚠️ WITHOUT THIS LINE step 8b is `harbor_credential_settle: command not found` -> rc 127, and under
+# `set -euo pipefail` that kills the script at its LAST step on EVERY run, including a perfectly
+# healthy fresh install. It shipped that way and three green signals missed it: the new test suite
+# (12/12 -- its wiring cases asserted ORDER and TEXT, never DEFINEDNESS), shellcheck (clean), and
+# check-lib-sourcing.sh (OK over 917 call sites, blind here for two independent reasons -- see the
+# fix in that file). test-harbor-credential-settle.sh now asserts REACHABILITY via `type -t`.
+. "${SCRIPT_DIR}/lib/harbor.sh"
 load_env
 
 # --- Tunables (read from .env* after load_env; never hardcode) ---------------

@@ -64,15 +64,48 @@ ck "no HARBOR_URL -> unchecked, passes"      "$(run_settle 200 --verify-only adm
 ck "robot\$ user -> DIES naming the robot"   "$(run_settle 200 --verify-only 'robot$ci')" "rc=1|robot"
 ck "robot\$ beats even a 401"                "$(run_settle 401 --verify-only 'robot$ci')" "rc=1|robot"
 
-# --- WIRING: asserted against the shipped scripts, not a copy ------------------
-ck "06 calls settle AFTER publishing HARBOR_URL" \
-   "$(awk '/state_set HARBOR_URL/{p=NR} /harbor_credential_settle/{s=NR} END{print (p&&s&&s>p)?"yes":"no"}' scripts/06-install-harbor.sh)" "yes"
+# --- WIRING: REACHABILITY, not text ------------------------------------------
+# ⚠️ THE PREVIOUS VERSION OF THIS BLOCK WAS PROSE-SATISFIABLE AND SHIPPED A CRITICAL.
+# It asserted ORDER (an awk over `state_set HARBOR_URL` vs `harbor_credential_settle`) and grep
+# COUNTS. All four cases were GREEN while the call could not execute at all: 06-install-harbor.sh
+# sourced only lib/os.sh and lib/tls.sh, so `harbor_credential_settle` was `command not found`
+# -> rc 127, killing the script at its LAST step on every run. Deleting the real
+# `state_set HARBOR_URL` line left the awk assertion passing on the COMMENT alone.
+#
+# So: source EXACTLY what 06 sources, in a subshell, and demand the function is really there.
+# A comment cannot satisfy `type -t`.
+srcs=$(grep -cE '^\. "\$\{SCRIPT_DIR\}/lib/harbor\.sh"$' scripts/06-install-harbor.sh)
+ck "06 SOURCES lib/harbor.sh (without it the call is rc=127)" "$srcs" "1"
+
+reach=$(
+  cd "$(dirname "$0")/.." 2>/dev/null || exit 1
+  SCRIPT_DIR="$PWD/scripts"
+  # DERIVE the source set from 06 itself -- hardcoding `. lib/harbor.sh` here would make this case
+  # test THIS subshell rather than the shipped script, which is the vacuity it exists to catch.
+  # Top-level sources only (leading `. "` at column 0), matching what 06 runs before step 8b.
+  while IFS= read -r libline; do
+    eval ". ${libline#. }" >/dev/null 2>&1 || true
+  done < <(grep -E '^\. "\$\{SCRIPT_DIR\}/lib/[a-z]+\.sh"$' "$SCRIPT_DIR/06-install-harbor.sh")
+  type -t harbor_credential_settle 2>/dev/null || echo MISSING
+)
+ck "harbor_credential_settle is REACHABLE from 06's source set" "$reach" "function"
+
+# The publish must still precede the call, but assert it on EXECUTABLE text so a comment
+# mentioning state_set cannot stand in for the real line.
+order=$(grep -vE '^[[:space:]]*#' scripts/06-install-harbor.sh \
+        | awk '/state_set HARBOR_URL/{p=NR} /harbor_credential_settle/{s=NR} END{print (p&&s&&s>p)?"yes":"no"}')
+ck "06 calls settle AFTER the real (uncommented) publish" "$order" "yes"
+
 ck "06 exports HARBOR_URL for the probe (state_set does NOT export)" \
    "$(grep -c '^export HARBOR_URL=' scripts/06-install-harbor.sh)" "1"
 ck "05 guards the mint on an existing harbor namespace" \
    "$(grep -c 'kubectl get namespace "${HARBOR_NAMESPACE:-harbor}"' scripts/05-kind-up.sh)" "1"
-ck "05 reads the query's rc, not its empty output" \
+ck "05 reads the query rc, not its empty output" \
    "$(grep -c '_hns_rc=\$?' scripts/05-kind-up.sh)" "1"
+# state_claim_kind unsets KUBECONFIG at :134 and it is not restored until :207, so the guard's
+# kubectl MUST pin it or it interrogates the operator's ambient ~/.kube/config. MEASURED.
+ck "05 PINS KUBECONFIG on the guard's kubectl (unset between :134 and :207)" \
+   "$(grep -c 'KUBECONFIG="$KUBECONFIG_PATH" kubectl get namespace' scripts/05-kind-up.sh)" "1"
 
 echo "  ---- $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
