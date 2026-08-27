@@ -57,8 +57,10 @@ while IFS= read -r f; do
     if printf '%s' "$line" | grep -q -- '--kubeconfig'; then covered=$((covered + 1)); continue; fi
     if [ -n "$exp_line" ] && [ "$exp_line" -lt "$n" ]; then covered=$((covered + 1)); continue; fi
     fail=1
+    # shellcheck disable=SC2016  # the $ below is PROSE about the variable, not an expansion.
     printf 'check-kind-kubeconfig: %s:%s — a kind invocation with NO --kubeconfig and no preceding `export KUBECONFIG=`\n' "$f" "$n" >&2
     printf '    %s\n' "$(printf '%s' "$trimmed" | cut -c1-110)" >&2
+    # shellcheck disable=SC2016  # ditto — prose, not an expansion.
     printf '    It writes the AMBIENT $KUBECONFIG, which on a lab box is a LAB slot (lib/os.sh:692).\n' >&2
   done < "$f"
 done <<< "$files"
