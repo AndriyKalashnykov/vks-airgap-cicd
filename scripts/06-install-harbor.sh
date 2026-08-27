@@ -26,6 +26,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 # shellcheck source=scripts/lib/tls.sh
 . "${SCRIPT_DIR}/lib/tls.sh"
+# AFTER tls.sh (22-builder-push.sh:26 documents that ordering). lib/harbor.sh has no top-level
+# statements, so sourcing it is side-effect free.
+#
+# ⚠️ WITHOUT THIS LINE step 8b is `harbor_credential_settle: command not found` -> rc 127, and under
+# `set -euo pipefail` that kills the script at its LAST step on EVERY run, including a perfectly
+# healthy fresh install. It shipped that way and three green signals missed it: the new test suite
+# (12/12 -- its wiring cases asserted ORDER and TEXT, never DEFINEDNESS), shellcheck (clean), and
+# check-lib-sourcing.sh (OK over 917 call sites, blind here for two independent reasons -- see the
+# fix in that file). test-harbor-credential-settle.sh now asserts REACHABILITY via `type -t`.
+# shellcheck source=scripts/lib/harbor.sh
+. "${SCRIPT_DIR}/lib/harbor.sh"
 load_env
 
 # --- Tunables (read from .env* after load_env; never hardcode) ---------------
@@ -133,7 +144,9 @@ harbor_render_values() {  # $1 = tls enabled (true|false), $2 = externalURL
 # Phase 1 exists only to create the Service so cloud-provider-kind can assign the LB IP that
 # becomes the cert's SAN. If the release is already there, the Service is too — skip straight to
 # phase 2, which applies the FULL desired state.
+HARBOR_FIRST_INSTALL=1   # consumed by step 8b: only a FRESH Harbor is worth retrying a 401 on
 if helm status "$RELEASE" -n "$NS" >/dev/null 2>&1; then
+  HARBOR_FIRST_INSTALL=0
   log_info "Harbor release '$RELEASE' already exists — skipping the phase-1 install (it would DOWNGRADE TLS and roll the registry)"
 else
   harbor_render_values false "$PROVISIONAL_URL"
@@ -298,6 +311,31 @@ else
   state_set HARBOR_CA_FILE "${CERT_DIR}/ca.crt"
   log_info "published HARBOR_URL=$LB_IP, HARBOR_INSECURE=0, HARBOR_CA_FILE=${CERT_DIR}/ca.crt to $(state_file)"
 fi
+
+# --- 8b. Did the credential we just submitted ACTUALLY take effect? ------------
+# Harbor is the only component we install that never RECONCILES its admin password: goharbor
+# src/core/main.go:99 applies HARBOR_ADMIN_PASSWORD only when the admin row has no salt, i.e. at
+# ITS OWN first bootstrap. On every later run helm accepts the value, the Secret updates, the pods
+# go Ready, and Harbor IGNORES it. Step 7 gates on /api/v2.0/health, which is UNAUTHENTICATED, so
+# nothing here has ever actually authenticated. MEASURED: this file contained ZERO harbor_auth*
+# calls, and the resulting 401 surfaced ~20 minutes downstream in 21-mirror-push.sh.
+#
+# ⚠️ SITED AFTER STEP 8 ON PURPOSE, and the values are passed EXPLICITLY. harbor_auth_verdict reads
+# HARBOR_URL / HARBOR_CA_FILE from the ENVIRONMENT, and `state_set` writes the state FILE ONLY --
+# it does NOT export (measured: after `state_set HARBOR_URL 10.9.9.9`, $HARBOR_URL is UNSET). A call
+# placed earlier, or one that trusts state_set to have exported, returns `unchecked:no HARBOR_URL`,
+# warns, and PASSES -- vacuous, and indistinguishable from a real check.
+export HARBOR_URL="$LB_IP"
+export HARBOR_PASSWORD="$HARBOR_PW"
+if [ "$HARBOR_INSECURE" = "1" ]; then
+  export HARBOR_INSECURE=1; export HARBOR_CA_FILE=""
+else
+  export HARBOR_INSECURE=0; export HARBOR_CA_FILE="${CERT_DIR}/ca.crt"
+fi
+# ⚠️ --may-reconcile is RESERVED and currently behaves exactly like --verify-only: the KinD DB
+# reset is NOT implemented (unverified on the pinned chart). Stated HERE, at the call, because a
+# reader of this line would otherwise assume reconciliation happens.
+HARBOR_SETTLE_FRESH="${HARBOR_FIRST_INSTALL:-0}" harbor_credential_settle --may-reconcile
 
 # --- 9. Summary --------------------------------------------------------------
 log_info "Harbor installed: ${health_url%/api/*} (admin user: ${HARBOR_USERNAME:-admin})"

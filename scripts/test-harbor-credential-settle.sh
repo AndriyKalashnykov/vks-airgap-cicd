@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# test-harbor-credential-settle.sh — RED-proof for harbor_credential_settle (lib/harbor.sh).
+#
+# WHAT THIS GUARDS. Harbor is the only component this repo installs that never RECONCILES its admin
+# password: goharbor src/core/main.go:99 applies HARBOR_ADMIN_PASSWORD only when the admin row has
+# no salt, i.e. at ITS OWN first bootstrap. On every later run helm accepts the value, the Secret
+# updates, the pods go Ready, /api/v2.0/health (UNAUTHENTICATED) returns 200 -- and Harbor ignores
+# it. MEASURED: 06-install-harbor.sh had ZERO harbor_auth* calls, so the 401 surfaced ~20 minutes
+# downstream in 21-mirror-push.sh, reading as a mirror bug.
+#
+# HONESTY. This exercises the REAL harbor_credential_settle, stubbing only the two probe primitives
+# (_harbor_auth_code, _harbor_ca_args) so no network is touched. It does NOT prove the KinD DB
+# reconcile works -- that mechanism is UNVERIFIED on the pinned chart and --may-reconcile is
+# deliberately a no-op until it is measured on a throwaway Harbor.
+# The single-quoted $-strings below are grep PATTERNS matched against script TEXT; expanding
+# them is precisely the bug they exist to detect.
+# shellcheck disable=SC2016
+set -uo pipefail
+cd "$(dirname "$0")/.." || exit 1
+pass=0; fail=0
+ck() { if [ "$2" = "$3" ]; then pass=$((pass+1)); echo "  ok    $1";
+       else fail=$((fail+1)); echo "  FAIL  $1 (want '$3', got '$2')"; fi; }
+
+# Run settle in a SUBSHELL: it calls die() on a real rejection, which exits.
+# <code> <mode> <user> [url] -> prints "rc=<rc>|<first matching signal>"
+run_settle() {
+  local code="$1" mode="$2" user="$3" url="${4-172.18.0.3}"
+  local out rc
+  out=$(
+    set +e
+    . scripts/lib/os.sh    >/dev/null 2>&1
+    . scripts/lib/harbor.sh >/dev/null 2>&1
+    _harbor_ca_args()  { printf -- '--cacert\n/tmp/nonexistent-ca.crt'; return 0; }
+    _harbor_auth_code() { printf '%s' "$code"; }
+    HARBOR_URL="$url" HARBOR_USERNAME="$user" HARBOR_PASSWORD='S0me-Real-Pw!' \
+      harbor_credential_settle "$mode" 2>&1
+  ); rc=$?
+  local sig=none
+  case "$out" in
+    *"is a ROBOT account"*)              sig=robot ;;
+    *"REJECTED"*)                        sig=rejected ;;
+    *"could not verify"*)                sig=unchecked ;;
+    *"the one in effect"*)               sig=accepted ;;
+  esac
+  printf 'rc=%s|%s' "$rc" "$sig"
+}
+
+echo "harbor_credential_settle:"
+# --- the credential is good ---------------------------------------------------
+ck "200 -> accepted, rc=0"                  "$(run_settle 200 --verify-only admin)"      "rc=0|accepted"
+ck "403 -> accepted (authenticated, just not authorized)" \
+                                            "$(run_settle 403 --verify-only admin)"      "rc=0|accepted"
+
+# --- the credential is REJECTED: this is the whole point ----------------------
+ck "401 -> DIES (verify-only)"              "$(run_settle 401 --verify-only admin)"      "rc=1|rejected"
+ck "401 -> DIES (may-reconcile too)"        "$(run_settle 401 --may-reconcile admin)"    "rc=1|rejected"
+
+# --- the probe could not run: NEVER a password verdict ------------------------
+# MEASURED 2026-08-12 (scenario-1 walk, row 4): a probe that never ran was reported as an auth
+# failure about a password that had not been sent anywhere. An error naming the wrong cause is
+# worse than a crash -- it sends the operator to fix a thing that is not broken.
+ck "000 -> unchecked, passes, NOT a verdict" "$(run_settle 000 --verify-only admin)"     "rc=0|unchecked"
+ck "no HARBOR_URL -> unchecked, passes"      "$(run_settle 200 --verify-only admin '')"  "rc=0|unchecked"
+
+# --- a robot on an INSTALL path is wrong before any probe runs -----------------
+# Today this surfaces as a bare 401 that reads as a password problem.
+ck "robot\$ user -> DIES naming the robot"   "$(run_settle 200 --verify-only 'robot$ci')" "rc=1|robot"
+ck "robot\$ beats even a 401"                "$(run_settle 401 --verify-only 'robot$ci')" "rc=1|robot"
+
+# --- the RETRY branch: production's fresh-install path, previously untested ----
+# 06 passes HARBOR_SETTLE_FRESH="${HARBOR_FIRST_INSTALL:-0}", which is 1 on every first install --
+# so `tries`/`continue`/`sleep` is what `make e2e-kind` actually takes, and nothing pinned it.
+# ⚠️ COUNT THE PROBES. Without the count, FRESH=1 and FRESH=0 are indistinguishable: both end rc=1
+# with the same message, so an assertion on rc alone cannot tell a retry loop from a single shot.
+probes_for() {  # <fresh> <tries> -> number of times the probe was called
+  local fresh="$1" tries="$2" cnt; cnt="$(mktemp)"
+  (
+    set +e
+    . scripts/lib/os.sh    >/dev/null 2>&1
+    . scripts/lib/harbor.sh >/dev/null 2>&1
+    _harbor_ca_args()   { printf -- '--cacert\n/tmp/nonexistent-ca.crt'; return 0; }
+    _harbor_auth_code() { printf 'x' >> "$cnt"; printf '401'; }
+    HARBOR_URL=1.2.3.4 HARBOR_USERNAME=admin HARBOR_PASSWORD='S0me-Real-Pw!' \
+      HARBOR_SETTLE_FRESH="$fresh" HARBOR_SETTLE_TRIES="$tries" HARBOR_SETTLE_INTERVAL=0 \
+      harbor_credential_settle --verify-only
+  ) >/dev/null 2>&1
+  wc -c < "$cnt" | tr -d ' '; rm -f "$cnt"
+}
+ck "FRESH=0 -> a 401 is authoritative: probed ONCE"  "$(probes_for 0 4)" "1"
+ck "FRESH=1 -> a 401 may be an unseeded admin row: probed 4x" "$(probes_for 1 4)" "4"
+
+# A probe that did not COMPLETE is the most retryable state; it must retry on FRESH and still WARN
+# (never die) when the retries run out.
+probes_unchecked() {
+  local fresh="$1" tries="$2" cnt; cnt="$(mktemp)"
+  (
+    set +e
+    . scripts/lib/os.sh    >/dev/null 2>&1
+    . scripts/lib/harbor.sh >/dev/null 2>&1
+    _harbor_ca_args()   { printf -- '--cacert\n/tmp/nonexistent-ca.crt'; return 0; }
+    _harbor_auth_code() { printf 'x' >> "$cnt"; printf '000'; }
+    HARBOR_URL=1.2.3.4 HARBOR_USERNAME=admin HARBOR_PASSWORD='S0me-Real-Pw!' \
+      HARBOR_SETTLE_FRESH="$fresh" HARBOR_SETTLE_TRIES="$tries" HARBOR_SETTLE_INTERVAL=0 \
+      harbor_credential_settle --verify-only
+    printf 'rc=%s' "$?" >> "$cnt"
+  ) >/dev/null 2>&1
+  local out; out="$(cat "$cnt")"; rm -f "$cnt"; printf '%s' "$out"
+}
+ck "FRESH=0 -> a failed probe warns immediately (1 probe, rc=0)"  "$(probes_unchecked 0 3)" "xrc=0"
+ck "FRESH=1 -> a failed probe RETRIES then still WARNS (3, rc=0)" "$(probes_unchecked 1 3)" "xxxrc=0"
+
+# --- WIRING: REACHABILITY, not text ------------------------------------------
+# ⚠️ THE PREVIOUS VERSION OF THIS BLOCK WAS PROSE-SATISFIABLE AND SHIPPED A CRITICAL.
+# It asserted ORDER (an awk over `state_set HARBOR_URL` vs `harbor_credential_settle`) and grep
+# COUNTS. All four cases were GREEN while the call could not execute at all: 06-install-harbor.sh
+# sourced only lib/os.sh and lib/tls.sh, so `harbor_credential_settle` was `command not found`
+# -> rc 127, killing the script at its LAST step on every run. Deleting the real
+# `state_set HARBOR_URL` line left the awk assertion passing on the COMMENT alone.
+#
+# So: source EXACTLY what 06 sources, in a subshell, and demand the function is really there.
+# A comment cannot satisfy `type -t`.
+srcs=$(grep -cE '^\. "\$\{SCRIPT_DIR\}/lib/harbor\.sh"$' scripts/06-install-harbor.sh)
+ck "06 SOURCES lib/harbor.sh (without it the call is rc=127)" "$srcs" "1"
+
+reach=$(
+  cd "$(dirname "$0")/.." 2>/dev/null || exit 1
+  SCRIPT_DIR="$PWD/scripts"
+  # DERIVE the source set from 06 itself -- hardcoding `. lib/harbor.sh` here would make this case
+  # test THIS subshell rather than the shipped script, which is the vacuity it exists to catch.
+  # Top-level sources only (leading `. "` at column 0), matching what 06 runs before step 8b.
+  while IFS= read -r libline; do
+    eval ". ${libline#. }" >/dev/null 2>&1 || true
+  done < <(grep -E '^\. "\$\{SCRIPT_DIR\}/lib/[a-z]+\.sh"$' "$SCRIPT_DIR/06-install-harbor.sh")
+  type -t harbor_credential_settle 2>/dev/null || echo MISSING
+)
+ck "harbor_credential_settle is REACHABLE from 06's source set" "$reach" "function"
+
+# The publish must still precede the call, but assert it on EXECUTABLE text so a comment
+# mentioning state_set cannot stand in for the real line.
+order=$(grep -vE '^[[:space:]]*#' scripts/06-install-harbor.sh \
+        | awk '/state_set HARBOR_URL/{p=NR} /harbor_credential_settle/{s=NR} END{print (p&&s&&s>p)?"yes":"no"}')
+ck "06 calls settle AFTER the real (uncommented) publish" "$order" "yes"
+
+ck "06 exports HARBOR_URL for the probe (state_set does NOT export)" \
+   "$(grep -c '^export HARBOR_URL=' scripts/06-install-harbor.sh)" "1"
+ck "05 guards the mint on an existing harbor namespace" \
+   "$(grep -c 'kubectl get namespace "${HARBOR_NAMESPACE:-harbor}"' scripts/05-kind-up.sh)" "1"
+ck "05 reads the query rc, not its empty output" \
+   "$(grep -c '_hns_rc=\$?' scripts/05-kind-up.sh)" "1"
+# state_claim_kind unsets KUBECONFIG at :134 and it is not restored until :207, so the guard's
+# kubectl MUST pin it or it interrogates the operator's ambient ~/.kube/config. MEASURED.
+ck "05 PINS KUBECONFIG on the guard's kubectl (unset between :134 and :207)" \
+   "$(grep -c 'KUBECONFIG="$KUBECONFIG_PATH" kubectl get namespace' scripts/05-kind-up.sh)" "1"
+
+echo "  ---- $pass passed, $fail failed"
+[ "$fail" -eq 0 ]
