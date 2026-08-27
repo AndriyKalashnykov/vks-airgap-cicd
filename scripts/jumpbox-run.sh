@@ -243,6 +243,16 @@ ctx="$(mktemp -d)"
 # A short-named base (alpine) exercises unqualified-search-registries resolution + a rootless
 # overlay build — the exact things Photon's podman lacks by default — on either OS variant.
 printf 'FROM alpine:3\nRUN echo jumpbox-rootless-ok > /marker\n' > "${ctx}/Dockerfile"
+# isolation-ok: INLINE on purpose — this script deliberately does not source the repo libs (see
+# the note at the top about container_engine being "a THIRD one"); it runs inside the jumpbox
+# image. Same condition as engine_build_isolation() in lib/engine.sh, which carries the measured
+# A/B. WITHOUT this the build dies at the RUN step on a cgroup-v1 box and the comment directly
+# above sends the reader to unqualified-search-registries — a confidently wrong cause, on the one
+# box an operator can least debug. Adversary-found 2026-08-27.
+if [ "$ENGINE" = podman ] && [ "$(stat -fc %T /sys/fs/cgroup 2>/dev/null)" != cgroup2fs ]; then
+  export BUILDAH_ISOLATION=chroot
+  echo "cgroup v1 → BUILDAH_ISOLATION=chroot (rootless podman cannot make a container cgroup here)"
+fi
 "$ENGINE" build -t jb-smoke "$ctx" 2>&1 | tail -3
 "$ENGINE" run --rm jb-smoke cat /marker
 echo "crane (mirror engine): $(crane version 2>&1 | head -1)"

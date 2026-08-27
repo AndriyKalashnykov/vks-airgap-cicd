@@ -41,6 +41,8 @@ mk() {  # $1 = marker -> prints the tarball path
   local d="$T/b$1"; mkdir -p "$d"
   printf 'FROM scratch\nCOPY m.txt /m.txt\n' > "$d/Dockerfile"
   printf 'marker-%s\n' "$1" > "$d/m.txt"
+  # isolation-ok: this Dockerfile is FROM scratch + COPY with NO RUN step, so buildah never creates
+  # a container and the cgroup-v1 crun failure cannot occur here. The guard is about RUN steps.
   "$ENGINE" build -q -t "localhost/pushdrift:$1" "$d" >/dev/null 2>&1
   "$ENGINE" save -o "$T/$1.tar" "localhost/pushdrift:$1" >/dev/null 2>&1
   printf '%s' "$T/$1.tar"

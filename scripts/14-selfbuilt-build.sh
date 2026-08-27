@@ -27,6 +27,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# engine_build_isolation lives in lib/engine.sh, NOT os.sh (which has container_engine/engine_choice).
+# check-lib-sourcing.sh exists because this exact call was once added without this line and died
+# `engine_build_isolation: command not found` at runtime — it caught the same omission here today.
+# shellcheck source=scripts/lib/engine.sh
+. "${SCRIPT_DIR}/lib/engine.sh"
 # shellcheck source=scripts/lib/selfbuilt.sh
 . "${SCRIPT_DIR}/lib/selfbuilt.sh"
 load_env
@@ -179,6 +184,22 @@ for name in $NAMES; do
     mv "$tmp_df" "$df"
   fi
 
+  # A cgroup-v1 box CANNOT build rootless at all — see engine_build_isolation() in lib/engine.sh for
+  # the A/B measured on a Photon 5 walkbox 2026-08-16. That fix was applied to the BUILDER build
+  # (14-builder-build.sh) and this file, added later by the self-built-kaniko work, did not inherit
+  # it. MEASURED 2026-08-27, walk-matrix cut A: ubuntu row 1 PASSED while photon rows 2 and 5 both
+  # died here at the first RUN step —
+  #     crun ... open `/sys/fs/cgroup/devices/buildah-buildah2...`: exit status 1
+  #     Error: building at STEP "RUN mkdir -p /kaniko/.docker"
+  # — with podman itself warning "Using cgroups-v1". Ubuntu boots cgroup v2 and is unaffected, which
+  # is precisely why a green ubuntu row said nothing about it, and why this shipped.
+  # ANNOUNCED, not applied silently: it is a real isolation trade and the operator should see it.
+  _iso="$(engine_build_isolation)"
+  if [ -n "$_iso" ]; then
+    export BUILDAH_ISOLATION="$_iso"
+    log_warn "cgroup v1 detected — building with BUILDAH_ISOLATION=${_iso}: rootless podman cannot"
+    log_warn "  create a container cgroup here. Weaker isolation, bounded — our Dockerfile, our base."
+  fi
   build_args=(build -f "${src}/${dfile}" -t "$local_ref")
   [ -n "$target" ] && build_args+=(--target "$target")
   build_args+=("$src")

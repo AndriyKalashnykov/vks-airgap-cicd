@@ -246,6 +246,73 @@ r="$(FAKE_CG=tmpfs FAKE_ENG=docker _bi)"
 if [ -z "$r" ]; then ok "engine_build_isolation: SILENT for docker (BUILDAH_ISOLATION is a buildah knob)"
 else bad "engine_build_isolation fired for docker ('$r')"; fi
 
+# ── EVERY engine BUILD must go through engine_build_isolation ────────────────────────────────
+# The three cases above prove the HELPER is right. Nothing proved anyone CALLS it — and that is
+# exactly how the defect shipped: the fix landed in 14-builder-build.sh on 2026-08-16, then the
+# self-built-kaniko work added a SECOND build path that did not inherit it. MEASURED from the walk
+# archive, a natural A/B on the SAME podman 5.8.5, cgroup v1 throughout:
+#     06:51 + 09:25 runs (builder path, fix PRESENT) -> chroot fired 6x, 0 crun failures, 6 tagged
+#     22:12 run        (selfbuilt path, fix ABSENT)  -> chroot fired 0x, 2 crun failures, 0 tagged
+#
+# ⚠️ THIS CHECK WAS ITSELF REFUTED ONCE, THREE WAYS, AND EACH REPAIR IS LOAD-BEARING:
+#  1. It grepped the ASSIGNMENT `_iso="$(...)"` and not the EXPORT. Measured: deleting
+#     `export BUILDAH_ISOLATION` left the gate GREEN and shellcheck silent (`_iso` is still read by
+#     the `[ -n ]`, so no SC2034). It certified a file from which the fix had been removed.
+#  2. It matched ONE syntax (`run "$ENGINE" build`). Measured against four fixtures, it missed a
+#     bare `"$ENGINE" build`, a literal `podman build`, and a build inside a function — and the bare
+#     form is ALREADY used in three scripts here, so it is at least as likely as the modelled one.
+#  3. It globbed `[0-9]*.sh`, a by-filename allowlist, which silently excluded jumpbox-run.sh — a
+#     real operator-facing rootless build with a RUN step and zero isolation refs.
+# So: match the CLASS, require the export, and exempt per LINE with a written reason.
+# `{` IS a command position in shell (`b() { podman build ...; }`), and a build inside a function
+# is one of the shapes an adversary used to defeat the previous version of this matcher. Measured:
+# without `{` in the class, top-level bare/literal/indented all MATCH and the in-function form MISSES.
+_bld_pat='(^|[;&|`{]|\$\()[[:space:]]*(run[[:space:]]+)?("?\$\{?ENGINE\}?"?|podman|buildah)[[:space:]]+(build|bud)\b|build_args=\(build'
+# SC2016: single quotes are DELIBERATE — this is a grep PATTERN matching the literal characters
+# `$ENGINE` in the scanned files, not this shell's $ENGINE.
+# shellcheck disable=SC2016,SC2031
+_bld_scripts=""
+# SC2031: REPO_ROOT is only READ here; the subshell note refers to an unrelated earlier use.
+# shellcheck disable=SC2031
+for _f in "${REPO_ROOT}"/scripts/*.sh; do
+  # STRIP COMMENTS BEFORE MATCHING. Polarity matters and it is the opposite of a forbidden-call
+  # scan: here a COMMENTED-OUT build needs no guard, so a comment must not create a finding.
+  # Measured: without this, `# ... a `podman build` that cannot resolve a short name.` in
+  # 00-install-prereqs.sh and 03-check-tools.sh were reported as unguarded build sites.
+  case "$(basename "$_f")" in
+    # The gate carries the pattern as DATA. Excluded by name with a reason, and the count assertion
+    # below proves the pattern is still live rather than silently matching nothing.
+    test-container-engine.sh) continue ;;
+  esac
+  sed 's/#.*//' "$_f" | grep -qE "$_bld_pat" && _bld_scripts="${_bld_scripts} ${_f}"
+done
+
+_n_bld=0; _missing=""
+for _f in $_bld_scripts; do
+  # A line carrying `# isolation-ok: <reason>` is exempt — a REASONED per-line marker, never a
+  # filename allowlist, so the next real finding in the same file is still caught.
+  grep -qE '# *isolation-ok:' "$_f" && continue
+  _n_bld=$((_n_bld + 1))
+  # BOTH halves. Either alone is not the fix: measured, deleting only the export left the old gate
+  # GREEN and shellcheck silent, certifying a file the fix had been removed from.
+  if ! grep -qE '^[[:space:]]*_iso="\$\(engine_build_isolation\)"' "$_f" \
+     || ! grep -qE '^[[:space:]]*export BUILDAH_ISOLATION=' "$_f"; then
+    _missing="${_missing} $(basename "$_f")"
+  fi
+done
+_n_found=$(printf '%s' "$_bld_scripts" | wc -w)
+if [ "$_n_found" -lt 3 ]; then
+  bad "the class matcher found only ${_n_found} build script(s) — it is BROKEN, not the tree.
+      A gate that matches nothing passes over everything, which is the failure this section exists
+      to prevent. There are at least three real engine builds in scripts/."
+elif [ -n "$_missing" ]; then
+  bad "engine build(s) that do not resolve AND export the build isolation:${_missing}
+      A cgroup-v1 box cannot build rootless at all, so these die at their FIRST RUN step — on Photon
+      only, which is why a green ubuntu row says nothing about it."
+else
+  ok "all engine builds guarded (${_n_bld} checked, $((_n_found - _n_bld)) exempt with a written reason)"
+fi
+
 if [ "$fail" = 0 ]; then
   echo "test-container-engine: OK"
   exit 0
