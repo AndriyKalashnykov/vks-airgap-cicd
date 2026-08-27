@@ -3665,7 +3665,44 @@ is, and have the test pass a small one. Two things to settle first rather than a
 Do NOT "fix" this by deleting cases. The 19 cases exist because the re-resolve behaviour they pin
 was written after a live incident where the LoadBalancer address moved under an unchanged Service.
 
-## 🔴 B501 — the seed fires a build per app on a WARM cluster, racing verify
+## 🔴 B501 — the seed fires a build per app on a WARM cluster (THE FIX SHIPPED IN #1063 IS REFUTED)
+
+⚠️ **CORRECTED 2026-08-27 BY THE LIVE TWO-ARM RUN. Read this before touching the seed again.**
+
+PR #1063 hoisted the webhook DELETE above the push, on the reasoning that a deleted hook cannot
+deliver. **Measured on a warm cluster, it does not work**, and it cannot:
+
+| | javawebapp |
+|---|---|
+| seed pushed | 19:17:**22** |
+| hook `created_at` | 19:17:**23** |
+| hook `updated_at` (a delivery attempt) | 19:17:**25** |
+| PipelineRun created | 19:17:**25** |
+
+**Gitea delivered at :25 for a push at :22 — one second before the hook existed.** Push events are
+QUEUED and hooks are resolved at DELIVERY time, not at push time, so removing the hook beforehand
+changes nothing: it only has to exist when the queue drains. Result: **3 of 6 apps still fired a
+seed build** (run 8 was 4 of 6 — a 4→3 move that is within the noise of a delivery race, not a fix).
+
+The idea-round that cleared the hoist reasoned about ORDERING and did not know delivery is
+asynchronous. Its option **(d) "do nothing"** — which was argued and dismissed — was the closer
+answer: **#1062's marker-SHA assertion is the real fix**, because it makes verify immune to a stray
+build rather than trying to prevent one.
+
+**What the hoist DID achieve, and why it was not reverted:** the refuse-rather-than-guess gate now
+fires BEFORE two destructive force-pushes, so a 401/502 on the hook listing aborts before the repos
+are rewritten. ARM 2 passed — exactly one hook per repo, correct EventListener URL, active — so it
+is harmless. Only its stated purpose is unmet.
+
+**Do NOT re-attempt this by re-ordering.** Any variant that deletes/creates the hook around the push
+loses to the same queue. Options that could actually work, none of them yet reviewed: create the
+hooks only AFTER every app is seeded AND the delivery queue has drained (unbounded wait — the
+adversary already refuted quiescence-waiting); seed with the EventListener scaled to zero; or accept
+the builds and rely on #1062, which is what happens today.
+
+**Original row follows, for the measurements that are still valid.**
+
+## B501 (original) — the seed fires a build per app on a WARM cluster, racing verify
 
 **Measured 2026-08-27 (e2e run 8), adversary-confirmed against the live cluster.**
 
