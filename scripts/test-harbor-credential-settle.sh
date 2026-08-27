@@ -13,7 +13,7 @@
 # reconcile works -- that mechanism is UNVERIFIED on the pinned chart and --may-reconcile is
 # deliberately a no-op until it is measured on a throwaway Harbor.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 pass=0; fail=0
 ck() { if [ "$2" = "$3" ]; then pass=$((pass+1)); echo "  ok    $1";
        else fail=$((fail+1)); echo "  FAIL  $1 (want '$3', got '$2')"; fi; }
@@ -63,6 +63,48 @@ ck "no HARBOR_URL -> unchecked, passes"      "$(run_settle 200 --verify-only adm
 # Today this surfaces as a bare 401 that reads as a password problem.
 ck "robot\$ user -> DIES naming the robot"   "$(run_settle 200 --verify-only 'robot$ci')" "rc=1|robot"
 ck "robot\$ beats even a 401"                "$(run_settle 401 --verify-only 'robot$ci')" "rc=1|robot"
+
+# --- the RETRY branch: production's fresh-install path, previously untested ----
+# 06 passes HARBOR_SETTLE_FRESH="${HARBOR_FIRST_INSTALL:-0}", which is 1 on every first install --
+# so `tries`/`continue`/`sleep` is what `make e2e-kind` actually takes, and nothing pinned it.
+# ⚠️ COUNT THE PROBES. Without the count, FRESH=1 and FRESH=0 are indistinguishable: both end rc=1
+# with the same message, so an assertion on rc alone cannot tell a retry loop from a single shot.
+probes_for() {  # <fresh> <tries> -> number of times the probe was called
+  local fresh="$1" tries="$2" cnt; cnt="$(mktemp)"
+  (
+    set +e
+    . scripts/lib/os.sh    >/dev/null 2>&1
+    . scripts/lib/harbor.sh >/dev/null 2>&1
+    _harbor_ca_args()   { printf -- '--cacert\n/tmp/nonexistent-ca.crt'; return 0; }
+    _harbor_auth_code() { printf 'x' >> "$cnt"; printf '401'; }
+    HARBOR_URL=1.2.3.4 HARBOR_USERNAME=admin HARBOR_PASSWORD='S0me-Real-Pw!' \
+      HARBOR_SETTLE_FRESH="$fresh" HARBOR_SETTLE_TRIES="$tries" HARBOR_SETTLE_INTERVAL=0 \
+      harbor_credential_settle --verify-only
+  ) >/dev/null 2>&1
+  wc -c < "$cnt" | tr -d ' '; rm -f "$cnt"
+}
+ck "FRESH=0 -> a 401 is authoritative: probed ONCE"  "$(probes_for 0 4)" "1"
+ck "FRESH=1 -> a 401 may be an unseeded admin row: probed 4x" "$(probes_for 1 4)" "4"
+
+# A probe that did not COMPLETE is the most retryable state; it must retry on FRESH and still WARN
+# (never die) when the retries run out.
+probes_unchecked() {
+  local fresh="$1" tries="$2" cnt; cnt="$(mktemp)"
+  (
+    set +e
+    . scripts/lib/os.sh    >/dev/null 2>&1
+    . scripts/lib/harbor.sh >/dev/null 2>&1
+    _harbor_ca_args()   { printf -- '--cacert\n/tmp/nonexistent-ca.crt'; return 0; }
+    _harbor_auth_code() { printf 'x' >> "$cnt"; printf '000'; }
+    HARBOR_URL=1.2.3.4 HARBOR_USERNAME=admin HARBOR_PASSWORD='S0me-Real-Pw!' \
+      HARBOR_SETTLE_FRESH="$fresh" HARBOR_SETTLE_TRIES="$tries" HARBOR_SETTLE_INTERVAL=0 \
+      harbor_credential_settle --verify-only
+    printf 'rc=%s' "$?" >> "$cnt"
+  ) >/dev/null 2>&1
+  local out; out="$(cat "$cnt")"; rm -f "$cnt"; printf '%s' "$out"
+}
+ck "FRESH=0 -> a failed probe warns immediately (1 probe, rc=0)"  "$(probes_unchecked 0 3)" "xrc=0"
+ck "FRESH=1 -> a failed probe RETRIES then still WARNS (3, rc=0)" "$(probes_unchecked 1 3)" "xxxrc=0"
 
 # --- WIRING: REACHABILITY, not text ------------------------------------------
 # ⚠️ THE PREVIOUS VERSION OF THIS BLOCK WAS PROSE-SATISFIABLE AND SHIPPED A CRITICAL.

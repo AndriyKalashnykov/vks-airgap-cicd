@@ -331,6 +331,9 @@ if [ "$HARBOR_INSECURE" = "1" ]; then
 else
   export HARBOR_INSECURE=0; export HARBOR_CA_FILE="${CERT_DIR}/ca.crt"
 fi
+# ⚠️ --may-reconcile is RESERVED and currently behaves exactly like --verify-only: the KinD DB
+# reset is NOT implemented (unverified on the pinned chart). Stated HERE, at the call, because a
+# reader of this line would otherwise assume reconciliation happens.
 HARBOR_SETTLE_FRESH="${HARBOR_FIRST_INSTALL:-0}" harbor_credential_settle --may-reconcile
 
 # --- 9. Summary --------------------------------------------------------------

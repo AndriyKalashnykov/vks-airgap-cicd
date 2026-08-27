@@ -320,6 +320,19 @@ harbor_credential_settle() {
         # ⚠️ NEVER report this as "the password is wrong". MEASURED 2026-08-12 (row 4 of the
         # scenario-1 walk): a probe that never ran was reported as an authentication failure, about a
         # password that had not been sent anywhere. An error naming the wrong cause is worse than none.
+        # On a FRESH install a probe that did not COMPLETE is the MOST retryable state there is --
+        # Harbor's API may simply not be serving yet. The previous shape retried an AUTHORITATIVE 401
+        # six times and a transient probe failure zero times, which is backwards. Retrying only this
+        # sub-case keeps the never-a-verdict promise intact: exhausting the retries still WARNS.
+        case "$v" in
+          'unchecked:the probe did not complete')
+            # Increment BEFORE the comparison, exactly as the `rejected` arm does, so `max` means
+            # TOTAL ATTEMPTS in both arms. Testing first made TRIES=3 probe four times.
+            tries=$((tries + 1))
+            if [ "${HARBOR_SETTLE_FRESH:-0}" = 1 ] && [ "$tries" -lt "$max" ]; then
+              sleep "${HARBOR_SETTLE_INTERVAL:-5}"; continue
+            fi ;;
+        esac
         log_warn "could not verify the Harbor credential (${v#unchecked:}) — NOT a password verdict; nothing was sent to Harbor"
         return 0 ;;
       # A verdict we do not recognise must not spin: without this arm the `while :` is a hot loop
