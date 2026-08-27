@@ -25,8 +25,11 @@ mk() {  # mk <curl-rc> <kubectl-rc> <ready-string>
   RC="$1"; KRC="$2"; READY="$3"
   PF_DEATHS=0; PF_POLL_FAILS=0; PF_RESTARTS_BLOCKED=""; PF_UNKNOWN=""; PF_GEN=1; REBUILT=0
   _start_pf() { PF_GEN=$((PF_GEN+1)); REBUILT=$((REBUILT+1)); }
+  # shellcheck disable=SC2329  # stand-ins for the real script's indirect callees
   _pf_ev() { :; }
+  # shellcheck disable=SC2329
   _pick_pod() { echo "pod-x"; }
+  # shellcheck disable=SC2329
   _curl_rc_label() { echo "rc=$1"; }
   VERIFY_PF_MAX_GENERATIONS=5; img=i; app=a; ns=n; pf_target=pod-x
   classify() {
