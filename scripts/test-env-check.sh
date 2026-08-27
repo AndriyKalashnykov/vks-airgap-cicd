@@ -163,4 +163,46 @@ else
   else bad "B473-9: a kubectl that cannot read the config turned into a REFUSAL"; cat "$TMP/out" >&2; fi
 fi
 
+# --- ARGOCD_KUBECONFIG: a SELECTOR pointing at a file that does not exist -------------------------
+# env-check existence-checked KUBECONFIG while never mentioning ARGOCD_KUBECONFIG at all. MEASURED:
+# 0 occurrences of the name in 02-env.sh, and a deliberately dangling value PASSED. The failure then
+# surfaced out of `make gitops`/`make verify` as a bare
+#     error: stat ./secrets/argocd.kubeconfig: no such file or directory
+# -- an error naming a FILE rather than the variable that chose it.
+#
+# ⚠️ RUN UNDER VKS_AUTH_METHOD=vcf ON PURPOSE. The first version of this guard sat inside the
+# `[ "$VKS_AUTH_METHOD" = kubeconfig ]` branch, so it was DEAD in the `vcf` shape -- which is the
+# cross-cluster one, i.e. exactly where ArgoCD is a Supervisor Service and this variable is set.
+# A traced build never reached the case at all. These cases pin it OUTSIDE that branch.
+#
+# ⚠️ The GREEN arms are load-bearing: a check that only ever refuses is indistinguishable from a
+# check that refuses everything.
+printf 'apiVersion: v1\n' > "$TMP/argocd-present.kc"
+
+write_env_vcf "ARGOCD_KUBECONFIG=$TMP/argocd-MISSING.kc"
+if run_check_vcf; then
+  bad "ARGOCD_KUBECONFIG: a dangling selector PASSED env-check"
+else
+  if grep -q ARGOCD_KUBECONFIG "$TMP/out"; then
+    ok "ARGOCD_KUBECONFIG RED: dangling selector is caught, and the message names the VARIABLE"
+  else
+    bad "ARGOCD_KUBECONFIG: check failed but never named the variable"
+  fi
+fi
+
+write_env_vcf "ARGOCD_KUBECONFIG=$TMP/argocd-present.kc"
+if run_check_vcf; then ok "ARGOCD_KUBECONFIG GREEN: an existing file passes"
+else bad "ARGOCD_KUBECONFIG: an EXISTING kubeconfig was refused"; cat "$TMP/out" >&2; fi
+
+# UNSET is the correct value for the KinD stand-in and any single-cluster lab -- it must stay SILENT,
+# not merely pass. A warning here would train operators to set a variable they must not set.
+write_env_vcf ""
+if run_check_vcf; then
+  if grep -q ARGOCD_KUBECONFIG "$TMP/out"; then
+    bad "ARGOCD_KUBECONFIG: UNSET produced output — it is the correct value for a single-cluster lab"
+  else
+    ok "ARGOCD_KUBECONFIG GREEN: UNSET is silent (ArgoCD shares \$KUBECONFIG)"
+  fi
+else bad "ARGOCD_KUBECONFIG: UNSET was refused"; cat "$TMP/out" >&2; fi
+
 if [ "$fail" -eq 0 ]; then echo "test-env-check: OK"; else echo "test-env-check: FAILED"; exit 1; fi
