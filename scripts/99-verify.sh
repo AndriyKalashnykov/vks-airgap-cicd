@@ -257,7 +257,7 @@ verify_app() {
     log_warn "  (that timer is argocd-cm's timeout.reconciliation; this repo overrides it NOWHERE, so"
     log_warn "   its default applies here — but a platform team's lab may have changed it.)"
     log_warn "  kubectl said:"
-    sed 's/^/    /' "$_refresh_err" >&2
+    sed 's/^/    /' "$_refresh_err" >&2 2>/dev/null || true
     log_warn "  A tenant with get-but-not-patch on applications hits exactly this — an RBAC fault, not"
     log_warn "  a kubeconfig fault, and not one a tenant can self-service. See lib/argocd.sh:645."
   fi
@@ -381,7 +381,7 @@ verify_app() {
     - $*"; }
 
   local pf_port=80
-  # shellcheck disable=SC2329  # invoked indirectly below and at every rebuild site
+  # shellcheck disable=SC2329  # invoked from _start_pf, the one place that binds
   _resolve_pf_port() {
     case "$pf_target" in
       ""|svc/*) pf_port=80; return 0 ;;
@@ -418,13 +418,11 @@ verify_app() {
       pf_target="svc/${app}"; pf_port=80
     fi
   }
-  _resolve_pf_port
   if [ -z "$pf_target" ]; then
     # F5: falling back silently means a degraded run is indistinguishable from a fixed one.
     pf_target="svc/${app}"; pf_port=80
     log_warn "[${app}] no Ready pod reports ${img} — binding svc/, which is the PRE-FIX behaviour this fix exists to remove"
   fi
-  log_info "[${app}] tunnel target ${pf_target} remote port ${pf_port}"
   _start_pf() {
     # ⚠️ RESOLVE THE PORT HERE, AT THE ONE PLACE THAT BINDS. The port is a function of the target,
     # so deriving it anywhere else means every future caller must remember to. A previous version
@@ -437,6 +435,15 @@ verify_app() {
     # it. MEASURED to self-correct a stale port in both directions (a pod carrying 80 binds 8080; an
     # svc/ carrying 8080 binds 80).
     _resolve_pf_port
+    # LOG WHAT WAS ACTUALLY BOUND, from inside the bind. This line used to sit outside, fed by a
+    # SECOND standalone _resolve_pf_port -- so the initial bind issued `kubectl get pod` TWICE
+    # (measured GETPOD=2) and the two could DISAGREE: with only the second failing, the log read
+    # "tunnel target pod-x remote port 8080" while the bind was svc/ on 80, a silent downgrade to
+    # what the warning above calls the PRE-FIX behaviour. The doubling is also exactly what
+    # motivates `[ "${PF_GEN:-0}" -eq 0 ] && _resolve_pf_port` -- a de-dup that reintroduces the
+    # stale port on every rebuild, and which an adversary measured GREEN against the old gate.
+    # One resolution, at the bind, logged here -- so every generation reports its own target.
+    log_info "[${app}] tunnel target ${pf_target} remote port ${pf_port} (generation $((${PF_GEN:-0} + 1)))"
     [ -n "${PF_PID:-}" ] && { kill "$PF_PID" 2>/dev/null || true; }
     kubectl -n "$ns" port-forward "$pf_target" "${app_local_port}:${pf_port}" >/dev/null 2>&1 &
     PF_PID=$!
@@ -582,7 +589,12 @@ verify_app() {
       grep -i 'class="message"' <<< "$PF_LAST_BODY" >&2 || printf '%s\n' "$PF_LAST_BODY" | head -5 >&2
     else
       log_error "HARNESS-TUNNEL [${app}] the page was NEVER successfully fetched — ${PF_DEATHS} tunnel death(s) across ${PF_GEN} generation(s) to ${pf_target}. This is the PORT-FORWARD, not the app; retry the row."
-      kubectl -n "$ns" get pod -l "app.kubernetes.io/name=${app}" -o wide >&2
+      # `|| true`: a DIAGNOSTIC, not a gate. Without it `set -e` pre-empts the `die` on the next
+      # line, so a failing kubectl here (a stale kubeconfig -- the very state that puts you in
+      # this branch) prints the ERROR and exits 1 with NO "FATAL ... end result not observed".
+      # MEASURED both directions. The _pf_ev calls above deliberately have no guard: they are
+      # pure assignments over a PF_EVENTS initialised before any caller, so they cannot fail.
+      kubectl -n "$ns" get pod -l "app.kubernetes.io/name=${app}" -o wide >&2 2>/dev/null || true
     fi
     die "[${app}] end result not observed"
   fi

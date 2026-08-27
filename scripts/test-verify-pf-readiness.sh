@@ -128,8 +128,21 @@ ck "pf_port is resolved from the pod's containerPort" \
 # place that binds, so a site cannot exist without a re-derivation. The assertion collapses to a
 # structural fact with nothing to count and nothing to gap.
 _pf_body="$(sed -n '/_start_pf() {/,/^  }/p' "$V")"
-ck "_start_pf re-derives the port at the bind (so no caller can forget)" \
-   "$(printf '%s\n' "$_pf_body" | grep -vE '^[[:space:]]*#' | grep -c '_resolve_pf_port')" "1"
+# ⚠️ THREE VERSIONS OF THIS ASSERTION HAVE NOW BEEN MEASURED GAMEABLE. v1 counted occurrences of
+# the helper name; v2 compared "sites" to "calls"; v3 asserted the call is PRESENT in _start_pf's
+# body. v3 still had FOUR false greens, two of which an adversary EXECUTED to the wrong port:
+#   - the call moved BELOW the port-forward line      -> bound svc/ on 8080 AND a pod on 80
+#   - `[ "${PF_GEN:-0}" -eq 0 ] && _resolve_pf_port`  -> bound svc/ on 8080 on every rebuild
+#   - the call deleted with only a TRAILING comment naming it (the `grep -vE '^[[:space:]]*#'`
+#     filter strips FULL-LINE comments only)
+#   - a SECOND port-forward of the app port outside _start_pf, breaking the one-bind invariant
+# Presence is not enough: ORDER and REACHABILITY and one-binder all matter. Assert the call is the
+# FIRST EXECUTABLE LINE of the body -- which is unorderable, unreachable-proof and comment-proof --
+# and that exactly one line binds the app's local port.
+_pf_first="$(printf '%s\n' "$_pf_body" | sed 1d | grep -vE '^[[:space:]]*(#|$)' | head -1 | sed 's/^[[:space:]]*//')"
+ck "_resolve_pf_port is the FIRST executable line of _start_pf" "$_pf_first" "_resolve_pf_port"
+ck "exactly ONE line binds the app's local port" \
+   "$(grep -cE 'port-forward .*\$\{app_local_port\}' "$V")" "1"
 # The single-quote blindness that let a blanking revert through v2, in both spellings.
 ck "no code path assigns an empty pf_target (single-quoted)" \
    "$(grep -vE '^[[:space:]]*#' "$V" | grep -c "pf_target=''")" "0"
