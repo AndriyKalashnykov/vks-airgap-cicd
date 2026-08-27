@@ -376,8 +376,15 @@ verify_app() {
     if [ -z "$pf_port" ]; then
       # A pod that declares no containerPort gives us nothing to bind. svc/ resolves the name for
       # us, so fall back rather than guess a number.
+      #
+      # ⚠️ FALL BACK TO svc/ HERE, not to "". An earlier version of this helper blanked pf_target
+      # and relied on the caller re-checking for empty. That is true at the INITIAL bind (which has
+      # an `if [ -z "$pf_target" ]` follow-up) and FALSE at both REBUILD sites, which call _start_pf
+      # immediately -- MEASURED: `kubectl port-forward "" 18099:80` -> "error: resource name may not
+      # be empty", i.e. a permanently dead tunnel. Resolving it inside the helper covers every
+      # caller by construction instead of requiring each one to remember.
       log_warn "[${app}] pod ${pf_target} declares no containerPort — binding svc/ instead"
-      pf_target=""; pf_port=80
+      pf_target="svc/${app}"; pf_port=80
     fi
   }
   _resolve_pf_port

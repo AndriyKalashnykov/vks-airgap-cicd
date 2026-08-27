@@ -124,5 +124,15 @@ ck "pf_port is re-derived at every site that moves pf_target" \
 ck "a pod with no containerPort falls back to svc/" \
    "$(grep -vE '^[[:space:]]*#' "$V" | grep -c 'declares no containerPort')" "1"
 
+# ⚠️ THE LINE ABOVE COUNTS A LOG MESSAGE, NOT A BEHAVIOUR, and was therefore VACUOUS with respect to
+# what the fallback actually assigns: it passed both when the helper blanked pf_target and when it
+# set svc/. That distinction is the whole bug -- MEASURED, `kubectl port-forward "" 18099:80` ->
+# "error: resource name may not be empty", and the two REBUILD sites call _start_pf immediately with
+# no empty-check, so a blanking fallback is a permanently dead tunnel there. Assert the assignment.
+ck "the no-containerPort fallback assigns svc/, never an empty target" \
+   "$(grep -vE '^[[:space:]]*#' "$V" | grep -A1 'declares no containerPort' | grep -c 'pf_target="svc/\${app}"')" "1"
+ck "no code path assigns an empty pf_target" \
+   "$(grep -vE '^[[:space:]]*#' "$V" | grep -c 'pf_target=""')" "0"
+
 if [ "$fail" -eq 0 ]; then echo "test-verify-pf-readiness: ${pass} passed, 0 failed"; exit 0; fi
 echo "test-verify-pf-readiness: ${pass} passed, ${fail} FAILED"; exit 1
