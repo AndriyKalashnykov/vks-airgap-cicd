@@ -267,6 +267,7 @@ verify_app() {
   #    the new image -- `rollout status` can return while old pods are still Terminating.
   wait_for "[${app}] new rollout complete" kubectl -n "$ns" rollout status "deploy/${app}" --timeout=30s \
     || die "[${app}] rollout did not converge -- NOT a page problem; the Deployment never settled"
+  # shellcheck disable=SC2329  # invoked indirectly (wait_for), same as marker_visible below
   _all_pods_on_img() {
     local got; got="$(kubectl -n "$ns" get pod -l "app.kubernetes.io/name=${app}" \
       -o jsonpath='{range .items[*]}{.status.containerStatuses[0].image}{"\n"}{end}' 2>/dev/null)"
