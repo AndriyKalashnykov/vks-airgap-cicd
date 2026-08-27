@@ -3456,11 +3456,25 @@ admin → ~25s of pointless retries before the (correct) die. The converse (rele
 deleted) yields `FIRST_INSTALL=0` and no retry where retrying would have helped. Both are cosmetic;
 measuring them needs a live KinD Harbor.
 
-### 4. NOT YET EXECUTED LIVE
+### 4. ✅ EXECUTED LIVE 2026-08-27 — including the RED
 
-`make verify` has passed 6/6 since these fixes; a cold `make e2e-kind` has **not** completed, so
-step 8b has never run against a real fresh Harbor. That run is what exercises the
-`HARBOR_FIRST_INSTALL=1` path and would settle (2) for free.
+`make kind-up install-harbor` ran step 8b against a genuinely fresh KinD Harbor, exit 0:
+
+    Harbor accepted admin — the credential we hold is the one in effect
+    Harbor installed: https://172.18.0.3 (admin user: admin)
+
+So the source line resolves (no rc 127), the probe RAN (not `unchecked`), and the credential was
+really verified. A green alone would prove none of that, so the three arms were then measured
+read-only against that same live Harbor:
+
+| input | verdict |
+|---|---|
+| the real password | `accepted` |
+| a WRONG password | **`rejected`** — it discriminates |
+| `HARBOR_URL` unset | `unchecked:no HARBOR_URL` — never a password verdict |
+
+⚠️ This does NOT settle (2): the 401-vs-5xx question needs a probe inside the first ~60s of a fresh
+install, and this run was already past that window when it was measured. (1) and (3) are unchanged.
 
 ## 🔴 B498 — Kaniko is ARCHIVED by Google; a MAINTAINED FORK exists but publishes NO image
 
