@@ -38,7 +38,13 @@
 # carries an SSRF guard that REFUSES a bearer-token realm whose host is a private/RFC1918 address:
 #     creating push check transport for 172.18.0.3 failed: invalid realm in www-authenticate:
 #     realm host "172.18.0.3" is a private or link-local address
-# Every air-gapped Harbor is on a private address, so the fork CANNOT PUSH TO OURS at all. Upstream
+# ⚠️ SCOPE — CORRECTED 2026-08-26, and the first version of this line OVERSTATED it. The guard keys
+# on `net.ParseIP(host) != nil`, so it fires only when the realm host is an IP LITERAL. Measured
+# both ways: our KinD Harbor is addressed as 172.18.0.3 and echoes realm="https://172.18.0.3/..."
+# -> the guard FIRES. The VKS lab addresses Harbor as harbor.env1.lab.test and echoes
+# realm="https://harbor.env1.lab.test/..." -> NOT an IP -> the guard does NOT fire. So this breaks
+# an IP-ADDRESSED Harbor, not "every air-gapped Harbor". It still blocks our own e2e gate, which is
+# reason enough -- and an FQDN is a deployment choice a consumer may not make. Upstream
 # added an exemption for "realm matching the registry host:port" on 2026-05-18 (bf87c3bf, #2302),
 # first released in v0.21.6 -- `git compare v0.21.5...bf87c3bf` reports ahead_by=30, i.e. the fork
 # ships the guard WITHOUT its fix. Bumping the dependency is only possible because we BUILD; a

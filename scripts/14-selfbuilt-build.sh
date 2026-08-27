@@ -76,10 +76,13 @@ for name in $NAMES; do
   [ -f "${src}/${dfile}" ] || die "[${name}] ${url}@${ref} has no ${dfile}"
 
   # ---- OPTIONAL DEPENDENCY OVERRIDE (the `go_get` column) -------------------
-  # This is the lever that MIRRORING CANNOT GIVE YOU, and it is not hypothetical: see the
-  # images/selfbuilt.tsv header for the measured case where the fork's pinned
-  # go-containerregistry REFUSES to push to any registry on a private IP -- i.e. to every
-  # air-gapped Harbor -- and the fix exists one patch release later.
+  # This is the lever that MIRRORING CANNOT GIVE YOU, and it is not hypothetical: the fork's pinned
+  # go-containerregistry REFUSES to push to a registry whose token realm is an IP LITERAL on a
+  # private address, and the fix exists one patch release later. SCOPE, measured both ways: our KinD
+  # Harbor (172.18.0.3) trips it; the VKS lab (harbor.env1.lab.test) does NOT, because the guard is
+  # `net.ParseIP(host) != nil` and a hostname is not an IP. So it breaks an IP-ADDRESSED Harbor, not
+  # every air-gapped one -- which is still our own e2e gate. See images/selfbuilt.tsv for the full
+  # measurement and the upstream commit.
   gg="$(selfbuilt_go_get "$name")"
   if [ -n "$gg" ]; then
     command -v go >/dev/null 2>&1 || die "[${name}] images/selfbuilt.tsv requests a go_get override (${gg}) but 'go' is not on PATH.
