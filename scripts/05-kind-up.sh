@@ -90,6 +90,7 @@ if kind get clusters 2>/dev/null | grep -xF "$CLUSTER_NAME" >/dev/null; then
     log_warn "kind cluster '$CLUSTER_NAME' exists but is NOT healthy (partial/interrupted create?) — deleting + recreating"
     # --kubeconfig: see the block below. `kind delete` only strips `kind-*` entries, so it cannot
     # damage a lab kubeconfig -- but pinning it means kind NEVER opens a file this flow does not own.
+    ensure_secret_dir "$(dirname "$KUBECONFIG_PATH")"   # kind creates missing parents at 0755
     run kind delete cluster --name "$CLUSTER_NAME" --kubeconfig "$KUBECONFIG_PATH" || true
   fi
   rm -f "$kc"
@@ -100,7 +101,10 @@ if [ "$need_create" = 1 ]; then
   # `--kubeconfig` is belt-and-braces on top of the early `export KUBECONFIG` at the top of this
   # file: it survives a re-order, and it makes the ownership explicit at the call site. kind's help:
   # "--kubeconfig string  sets kubeconfig path instead of $KUBECONFIG or $HOME/.kube/config".
-  # It also gives us the file at 0600 (kind's own mode) instead of a shell redirect under umask 002,
+  # It also gives us the file at 0600 WHEN KIND CREATES IT (kind's own mode). The `kind get kubeconfig >`
+  # redirect below still runs every time and PRESERVES an existing mode, so on a warm reuse where the
+  # file is absent the result is 0664 under umask 002 -- harmless inside a 0700 secrets/, but not the
+  # unconditional 0600 an earlier draft claimed.
   # which is why secrets/kind.kubeconfig was 0664 before this change. ensure_secret_dir runs first so
   # `secrets/` is BORN 0700 rather than created 0755 by kind and hardened afterwards (kind creates
   # missing parents itself -- MEASURED 2026-08-26 -- so this is about the MODE, not about existence).
@@ -173,8 +177,14 @@ if [ "$need_create" = 1 ]; then state_set KIND_REUSED 0; else state_set KIND_REU
 [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ] || state_set ARGOCD_ADMIN_PASSWORD "$(gen_password)"
 log_info "published KUBECONFIG/VKS_AUTH_METHOD/VKS_CONTEXT (+ generated KinD Harbor/Gitea/ArgoCD creds; see 'make creds-show') to $(state_file)"
 
-# Re-export with the ABSOLUTE path (the early export above used the possibly-relative form; both
-# name the same file). The EARLY one is the load-bearing one -- see its comment near the top.
+# ⚠️ THIS LINE RESTORES KUBECONFIG; IT IS NOT A COSMETIC RE-EXPORT. Do not delete it.
+# An earlier version of this comment claimed the early export used a "possibly-relative form" --
+# that is FALSE: REPO_ROOT is always absolute (cd&&pwd / git rev-parse --show-toplevel / pwd), so
+# KUBECONFIG_PATH == KUBECONFIG_ABS. The real reason, MEASURED 2026-08-26: state_claim_kind()
+# UNSETS every non-VKS_STATE_* key of a foreign sink, KUBECONFIG among them
+# (BEFORE=[.../secrets/kind.kubeconfig] -> AFTER=[<UNSET>]). state_stamp below READS $KUBECONFIG,
+# so without this line it would stamp VKS_STATE_KUBECONFIG="" / SERVER="" -- a KinD-stamped sink
+# that looks unstamped, silently, on the lab box this fix exists to protect.
 export KUBECONFIG="$KUBECONFIG_ABS"
 
 # STAMP ONLY NOW — AFTER KUBECONFIG points at the cluster we just created.

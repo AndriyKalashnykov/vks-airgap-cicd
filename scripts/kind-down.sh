@@ -92,6 +92,9 @@ if have kind; then _kind_out="$(kind get clusters 2>"$_DPS_ERR")" || _kind_rc=$?
 if [ "$_kind_rc" -ne 0 ] && have kind; then _cannot_ask "kind clusters"; fi
 if [ "$_kind_rc" -eq 0 ] && printf '%s\n' "$_kind_out" | grep -xF "$CLUSTER_NAME" >/dev/null; then
   log_info "deleting kind cluster '$CLUSTER_NAME'"
+  # kind CREATES missing parents at 0755 (measured), and secrets/ holds kubeconfigs and generated
+  # passwords -- so make it 0700 first rather than letting kind decide.
+  ensure_secret_dir "$(dirname "$KIND_KUBECONFIG_PATH")"
   run kind delete cluster --name "$CLUSTER_NAME" --kubeconfig "$KIND_KUBECONFIG_PATH"
   KIND_CLUSTER_REMOVED=1
 else

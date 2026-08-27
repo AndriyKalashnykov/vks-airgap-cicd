@@ -312,7 +312,17 @@ env_check() {
               missing+=("KUBECONFIG points at a LOOPBACK address (${_kc_srv}) in '${KUBECONFIG}', but this is not the KinD flow.
       A VKS guest cluster is never reachable on loopback, so this file belongs to something else —
       most likely a KinD run that wrote to the real-lab default path. It is not the cluster you think.
-      Remove or repoint it, then re-run:  make vks-login") ;;
+
+      ⚠️ DO NOT DELETE IT FIRST. kind MERGES rather than truncating (measured), so this file very
+      likely STILL CONTAINS your lab cluster and its token — a KinD context was merged in and
+      current-context was repointed at it. The non-destructive fix is one command:
+          kubectl --kubeconfig '${KUBECONFIG}' config get-contexts     # find your lab context
+          kubectl --kubeconfig '${KUBECONFIG}' config use-context <lab>
+          kubectl --kubeconfig '${KUBECONFIG}' config delete-context kind-<name>   # optional tidy-up
+      Only if the lab context is genuinely absent should you repoint or replace the file. A
+      SCENARIO-2 TENANT must not delete it: that kubeconfig is the credential the platform team
+      handed them, they cannot self-service a replacement, and 'make vks-login' is a SUPERVISOR-only
+      path they do not have.") ;;
           esac ;;
       esac
     fi

@@ -44,10 +44,11 @@ cleanup() {
 trap cleanup EXIT
 
 log_info "creating two kind clusters: HUB=$HUB (ArgoCD) + GUEST=$GUEST (workload)"
-# --kubeconfig IS LOAD-BEARING: without it `kind create` writes to $KUBECONFIG, which load_env has
-# already defaulted to the LAB slot (lib/os.sh:692). This target creates TWO clusters, so it
-# clobbered the operator's lab kubeconfig TWICE before writing its own slots on the next lines.
-mkdir -p "$WORK"
+# --kubeconfig IS LOAD-BEARING: without it `kind create` writes to $KUBECONFIG. This script does
+# NOT call load_env (measured: 0 calls), so that is the operator's AMBIENT value -- ~/.kube/config
+# when unset, which on a lab box is a LIVE Supervisor config. Creating two clusters hijacked its
+# current-context twice. (An earlier draft of this comment cited lib/os.sh:692 here; that line
+# never executes on this path, and citing it sends a reader to the wrong file.)
 kind create cluster --name "$HUB"   --kubeconfig "$HUB_KC"   >/dev/null
 kind create cluster --name "$GUEST" --kubeconfig "$GUEST_KC" >/dev/null
 kind get kubeconfig --name "$HUB"   > "$HUB_KC"
