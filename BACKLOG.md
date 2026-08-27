@@ -3656,6 +3656,7 @@ its ordering is a control change and needs its own idea-round before implementat
 a one-line move.
 
 **Related, same review, not yet filed separately:**
+
 - `$img` is a one-shot snapshot that `_all_pods_on_img` and every `_pick_pod` call closes over.
   In run 8 this turned the mis-timed wait into `no Ready pod on ...:5981b0e` -> svc/ fallback ->
   **113 tunnel deaths across 5 generations**, then a `PRODUCT ... does not show marker` verdict
