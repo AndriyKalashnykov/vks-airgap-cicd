@@ -104,6 +104,26 @@ for name in $NAMES; do
   # --depth 1 --branch <TAG>: git refuses a nonexistent ref loudly, which is the check we want.
   run git clone --quiet --depth 1 --branch "$ref" "$url" "$src"
 
+  # ---- SOURCE PATCHES -------------------------------------------------------
+  # Some defects cannot be fixed by choosing a version, because no release contains the fix.
+  # MEASURED 2026-08-27: ggcr's realm exemption (which this build NEEDS to push to an IP-addressed
+  # Harbor) and its pull limiter (which DEADLOCKS kaniko) both landed in v0.21.6, so no pin has one
+  # without the other. The patch is applied to the CLONE, before the container build, so the
+  # go mod vendor inside that build is unaffected.
+  #
+  # --check FIRST: a patch gone stale against a bumped git_ref must fail LOUDLY here, naming
+  # itself, rather than silently not applying and leaving the defect in a build that succeeds.
+  patch_rel="$(selfbuilt_patch "$name")"
+  if [ -n "$patch_rel" ]; then
+    patch_abs="${REPO_ROOT}/${patch_rel}"
+    [ -f "$patch_abs" ] || die "[${name}] images/selfbuilt.tsv names patch ${patch_rel}, but ${patch_abs} does not exist."
+    ( cd "$src" && git apply --check "$patch_abs" ) || die "[${name}] ${patch_rel} does NOT apply to ${url}@${ref}.
+  The pin moved and the patch went stale. Re-cut it against ${ref}; do NOT drop it -- read its
+  header for what it fixes and whether that is still needed."
+    ( cd "$src" && run git apply "$patch_abs" )
+    log_info "[${name}] applied source patch: ${patch_rel}"
+  fi
+
   # An IMMUTABLE tag is the whole reproducibility contract, so prove the checkout is AT it rather
   # than trusting that clone honoured --branch.
   got="$(git -C "$src" describe --tags --exact-match 2>/dev/null || true)"

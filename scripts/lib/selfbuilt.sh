@@ -37,6 +37,7 @@ selfbuilt_target()    { selfbuilt_field "$1" 5; }
 selfbuilt_repo_path() { selfbuilt_field "$1" 6; }
 selfbuilt_tag()       { selfbuilt_field "$1" 7; }
 selfbuilt_go_get()    { selfbuilt_field "$1" 8; }   # OPTIONAL — see the TSV header
+selfbuilt_patch()     { selfbuilt_field "$1" 9; }   # OPTIONAL — repo-relative .patch applied after clone
 
 # The FULL Harbor reference a consuming manifest asks for. Single-sourced here so the build side,
 # the push side and check-image-alignment cannot disagree about it.
