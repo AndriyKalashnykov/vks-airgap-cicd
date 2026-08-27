@@ -97,7 +97,10 @@ if [ -n "$orphan" ]; then
     [ -n "$pair" ] || continue
     sc="${pair%%	*}"; kk="${pair##*	}"
     row="$(awk -F'\t' -v s="$sc" -v k="$kk" '$1==s && $2==k {print $3"\t"$4}' "$MANIFEST" | head -1)"
-    dd="${row%%	*}"; r="${row#*	}"
+    # Only the DISPOSITION is needed here now. The reason used to be matched as a substring to
+    # decide the escape (see the note below); column 5 replaced that, so parsing it would leave an
+    # unused variable and invite someone to start matching on prose again.
+    dd="${row%%	*}"
     # A FORBID row is a STANDING PROHIBITION -- "never supply this here". Whether the document
     # happens to name the key is beside the point; forbidding a key the document does NOT name is
     # the strongest form of the row, not a defect. (scenario-1 HARBOR_PASSWORD is exactly that: the
@@ -106,11 +109,19 @@ if [ -n "$orphan" ]; then
       printf '  ok (FORBID)    %-11s %s\n' "${sc#scenario-}" "$kk"
       continue
     fi
-    case "$r" in
-      *"never names it"*|*"no document names"*|*B471*)
+    # ⚠️ STRUCTURAL, not a prose substring. This used to be
+    #     *"never names it"*|*"no document names"*|*B471*
+    # -- and that third alternative is a BACKLOG ROW ID matched against free text. MEASURED
+    # 2026-08-26: 8 rows mentioned B471 and FIVE escaped on that literal ALONE. So a copy-edit
+    # removing `B471:` from a reason -- changing no decision -- turned five rows ORPHAN and
+    # reddened this gate, while any future reason that happened to mention B471 got a free pass.
+    # Column 5 (`undocumented`) says the thing the prose was being asked to imply.
+    _flag="$(awk -F'\t' -v s="$sc" -v k="$kk" '$1==s && $2==k {print $5}' "$MANIFEST" | head -1)"
+    case "$_flag" in
+      undocumented)
         printf '  ok (declared)  %-11s %s\n' "${sc#scenario-}" "$kk" ;;
       *)
-        printf '  ORPHAN         %-11s %-26s no document names it, and the reason does not say so\n' "${sc#scenario-}" "$kk"
+        printf '  ORPHAN         %-11s %-26s no document names it, and column 5 is not undocumented\n' "${sc#scenario-}" "$kk"
         rc=1 ;;
     esac
   done <<< "$orphan"

@@ -63,6 +63,29 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'ORPHAN.*APP_BRANCH'; then
 else bad "RED orphan" "rc=$rc out=$(printf '%s' "$out" | head -2)"; fi
 rm -rf "$d"
 
+# 3a. THE ESCAPE IS STRUCTURAL, NOT PROSE (B494). Column 5 `undocumented` is what lets an
+#     unnamed key through. Before this, the gate substring-matched column 4 against
+#     "never names it" | "no document names" | B471 -- and that third alternative is a BACKLOG ROW
+#     ID matched against free text. MEASURED 2026-08-26: 8 rows mentioned B471 and FIVE escaped on
+#     that literal ALONE, so a copy-edit removing `B471:` -- changing no decision -- turned five
+#     rows ORPHAN and reddened static-check. Both halves are pinned here: the flag PASSES, and the
+#     prose that used to pass no longer does.
+d="$(mk)"
+printf 'scenario-1\tAPP_BRANCH\tEXEMPT\tno document names it\tundocumented\n' >> "$d/docs/walk-env-manifest.tsv"
+out="$(run "$d")"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'ok (declared).*APP_BRANCH'; then
+  ok "column 5 'undocumented' declares an unnamed key (rc=0)"
+else bad "flagged orphan" "rc=$rc out=$(printf '%s' "$out" | head -3)"; fi
+rm -rf "$d"
+
+d="$(mk)"
+printf 'scenario-1\tAPP_BRANCH\tEXEMPT\tB471: no document names it, it never names it\n' >> "$d/docs/walk-env-manifest.tsv"
+out="$(run "$d")"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'ORPHAN.*APP_BRANCH'; then
+  ok "RED: the OLD prose phrases alone no longer declare it -- prose is prose again"
+else bad "prose must not declare" "rc=$rc out=$(printf '%s' "$out" | head -3)"; fi
+rm -rf "$d"
+
 # 3b. ...and the SAME row as FORBID is legitimate. A FORBID is a standing prohibition: forbidding a
 #     key the document does not name is the STRONGEST form of the row, not a defect. Without this,
 #     scenario-1 HARBOR_PASSWORD -- the row the whole per-scenario design exists for -- is a false RED.

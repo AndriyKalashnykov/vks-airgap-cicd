@@ -3,6 +3,19 @@
 # One row per (scenario, key). The harness (nested-vsphere-lab/scripts/walk-matrix.sh) reads this
 # file; scripts/check-walk-env-manifest.sh reconciles it against the documents, offline, here.
 #
+# COLUMNS: scenario <TAB> key <TAB> disposition <TAB> reason [<TAB> flags]
+#
+# The OPTIONAL 5th field carries `undocumented` for a row that is deliberately not named by any
+# document -- an ORPHAN by construction, not by oversight. That escape used to be a SUBSTRING MATCH
+# ON THE PROSE in column 4: `check-walk-env-manifest.sh` let a row through if its reason contained
+# "never names it", "no document names", or the literal `B471` -- a BACKLOG ROW ID, matched against
+# free text. MEASURED 2026-08-26: 8 rows mentioned B471 and FIVE escaped on that literal alone
+# (VKS_STORAGE_POLICY, VCENTER_HOST, VCENTER_USERNAME, VCENTER_PASSWORD, HARBOR_STORAGE_CLASS).
+# Both directions were live: tidying `B471:` out of a reason -- a pure copy-edit, no decision
+# changed -- turned five rows ORPHAN and reddened static-check; and any future reason mentioning
+# B471 for an unrelated purpose got a free pass. The flag makes the escape STRUCTURAL, so prose is
+# prose again. Do NOT add more escape phrases; that is the same enumerated-list rot one level down.
+#
 # WHY IT LIVES IN THIS REPO. The harness pre-supplies ~21 variables into the walk box before a single
 # documented command runs. That list used to be hand-typed in walk_env() with nothing linking it to
 # the documents it claims to walk, so it drifted in BOTH directions: a key a document requires but
@@ -57,9 +70,9 @@ scenario-1	VKS_AUTH_METHOD	EXEMPT	the DOCUMENT owns it: Step 3 sets vcf, Step 6 
 scenario-1	VKS_CA_CERT_FILE	EXEMPT	`make fetch-supervisor-ca` writes the file this path names
 scenario-1	VKS_CLUSTER_COMPUTE	EXEMPT	only a multi-cluster vCenter sets it; the lab has one
 scenario-1	VKS_VM_CLASSES	EXEMPT	.env.example default is what the lab offers
-scenario-1	VKS_CLUSTERCLASS	EXEMPT	no document names it: 'make vks-shape-set' discovers it, and it is INERT anyway — MEASURED VKS 3.7.1, admission rewrites classRef to the newest COMPATIBLE class even when the one asked for is in range (asked v3.6.0 with k8s v1.35.6, stored v3.7.0)
+scenario-1	VKS_CLUSTERCLASS	EXEMPT	no document names it: 'make vks-shape-set' discovers it, and it is INERT anyway — MEASURED VKS 3.7.1, admission rewrites classRef to the newest COMPATIBLE class even when the one asked for is in range (asked v3.6.0 with k8s v1.35.6, stored v3.7.0)	undocumented
 scenario-1	VKS_VM_CLASS	EXEMPT	.env.example default; cluster shape
-scenario-1	VKS_STORAGE_CLASS	EXEMPT	no document names it: 'make vks-shape-set' discovers it from the NAMESPACE-scoped storagepolicyquota (kubectl get storageclass is CLUSTER-scoped and lists policies other vSphere Namespaces own — measured 4 cluster-wide vs 2 assigned to cicd)
+scenario-1	VKS_STORAGE_CLASS	EXEMPT	no document names it: 'make vks-shape-set' discovers it from the NAMESPACE-scoped storagepolicyquota (kubectl get storageclass is CLUSTER-scoped and lists policies other vSphere Namespaces own — measured 4 cluster-wide vs 2 assigned to cicd)	undocumented
 scenario-1	VKS_CONTROL_PLANE_COUNT	EXEMPT	.env.example default; cluster shape
 scenario-1	VKS_NODE_COUNT	EXEMPT	.env.example default; cluster shape
 scenario-1	HARBOR_INFRA_PROJECT	EXEMPT	.env.example default; the reader renames the project only if they want to
@@ -101,11 +114,11 @@ scenario-2	HARBOR_APP_PROJECT	EXEMPT	.env.example default
 # (the matrix certifies the scenario-2 DOCUMENT, never the tenant PERMISSION MODEL) showing up
 # mechanically. They are EMIT today because the rows depend on them; flipping any to FORBID is a
 # per-row validated change, not a bulk edit. See BACKLOG.md B471.
-scenario-2	VKS_NAMESPACE	EMIT	B471: emitted though scenario-2 never names it — a tenant is GIVEN a namespace
-scenario-2	VKS_CLUSTER_NAME	EMIT	B471: emitted though scenario-2 never names it — a tenant is GIVEN a cluster
-scenario-2	VKS_SSO_DOMAIN	EMIT	B471: emitted though scenario-2 never names it
-scenario-2	VKS_STORAGE_POLICY	EMIT	B471: a tenant has NO vCenter access and cannot read a storage policy
-scenario-2	VCENTER_HOST	EMIT	B471: a tenant has NO vCenter access
-scenario-2	VCENTER_USERNAME	EMIT	B471: a tenant has NO vCenter credentials
-scenario-2	VCENTER_PASSWORD	EMIT	B471: a tenant has NO vCenter credentials
-scenario-2	HARBOR_STORAGE_CLASS	EMIT	B471: a tenant does not install Harbor and never sets its storage class
+scenario-2	VKS_NAMESPACE	EMIT	B471: emitted though scenario-2 never names it — a tenant is GIVEN a namespace	undocumented
+scenario-2	VKS_CLUSTER_NAME	EMIT	B471: emitted though scenario-2 never names it — a tenant is GIVEN a cluster	undocumented
+scenario-2	VKS_SSO_DOMAIN	EMIT	B471: emitted though scenario-2 never names it	undocumented
+scenario-2	VKS_STORAGE_POLICY	EMIT	B471: a tenant has NO vCenter access and cannot read a storage policy	undocumented
+scenario-2	VCENTER_HOST	EMIT	B471: a tenant has NO vCenter access	undocumented
+scenario-2	VCENTER_USERNAME	EMIT	B471: a tenant has NO vCenter credentials	undocumented
+scenario-2	VCENTER_PASSWORD	EMIT	B471: a tenant has NO vCenter credentials	undocumented
+scenario-2	HARBOR_STORAGE_CLASS	EMIT	B471: a tenant does not install Harbor and never sets its storage class	undocumented

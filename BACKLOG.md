@@ -3159,7 +3159,7 @@ lab cut reverts VKS to 3.6.3**, and certifying the matrix "on 3.7" requires the 
 be re-applied after **each** cut (the six-row matrix cuts twice). That belongs in
 `docs/matrix-standing-rules.md` §A once the upgrade is proven to work.
 
-## 🟡 B494 — a BACKLOG ID is a magic word in `check-walk-env-manifest`'s escape list; 5 rows hang on the literal `B471`
+## ✅ B494 — a BACKLOG ID is a magic word in `check-walk-env-manifest`'s escape list; 5 rows hang on the literal `B471`
 
 MEASURED 2026-08-26 (an adversary round on B492 found it; re-measured independently here).
 
@@ -3180,6 +3180,23 @@ Two failure directions, both live:
   reddens `static-check` having altered no decision.
 - **Any FUTURE reason that mentions B471 for an unrelated purpose gets a free pass**, because the
   match is a bare substring with no structure behind it.
+
+**CLOSED 2026-08-26.** Measurements re-derived first, with one correction to this row: **8** rows
+mention `B471`, not ten — the five-escaping-on-the-literal-alone figure is exact, and the five names
+match. Before touching anything I checked every reader, because adding a column silently breaks any
+consumer that takes the LAST field: `check-walk-env-manifest.sh:57` validates `[ "$n" -lt 4 ]`
+(**less than**, so a 5th field is already legal) and the harness reads
+`read -r m_scen key disp _` (the `_` absorbs it). Verified `disp` stays `EMIT`, unpolluted, on a
+5-column row. 4- and 5-column rows now coexist in the file.
+
+RED-proven three ways, and the third is the one that matters:
+
+    copy-edit `B471:` out of a reason  -> rc=0   (was RED; the defect this row is about)
+    remove the flag from a row         -> rc=1   ORPHAN, by name
+    flag removed, OLD PROSE left in    -> rc=1   ORPHAN -- prose no longer votes
+
+Two cases added to `test-walk-env-manifest.sh` pinning both halves (12 -> 14 passing, so the corpus
+grew rather than going green at the same count).
 
 **Fix:** replace prose-substring matching with an explicit 5th TSV column (e.g. `undocumented=yes`),
 so the escape is structural rather than a magic string. Same-repo, gate-local, no cross-repo change.
