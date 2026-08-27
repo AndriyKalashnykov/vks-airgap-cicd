@@ -365,8 +365,23 @@ verify_app() {
   # after which no fetch ever succeeded and the PRODUCT verdict was rendered from a CACHED pre-roll
   # body -- so the page was blamed for a tunnel that could not connect. Adversary-caught; the $img
   # snapshot merely triggered the fallback, it did not cause the failure.
+  # ⚠️ THE EVENT CHANNEL IS DEFINED **HERE**, BEFORE THE FIRST BIND, NOT LATER.
+  # It used to be defined ~35 lines below, after _resolve_pf_port had already run. MEASURED: at the
+  # INITIAL bind of the FIRST app, _pf_ev was undefined -> "command not found" (rc 127), silently
+  # swallowed by a `|| true` guard; for apps 2-6 the definition leaked across for_each_app
+  # iterations but `PF_EVENTS=""` then WIPED the entry three lines later. So the archive channel was
+  # a no-op at 1 of its 3 call sites in every app, while the commit claimed "now emits both".
+  # Defining it before anything can call it removes the ordering dependency entirely.
+  #
+  # EVENTS GO IN A VARIABLE, NOT log_warn: `wait_for` invokes its predicate as `"$@" >/dev/null
+  # 2>&1`, so anything _log writes from in there is DISCARDED. Collected, printed in the arms below.
+  PF_EVENTS=""
+  # shellcheck disable=SC2329  # invoked indirectly (from the predicates below and _resolve_pf_port)
+  _pf_ev() { PF_EVENTS="${PF_EVENTS}
+    - $*"; }
+
   local pf_port=80
-  # shellcheck disable=SC2329  # invoked indirectly below and at every rebuild site
+  # shellcheck disable=SC2329  # invoked from _start_pf, the one place that binds
   _resolve_pf_port() {
     case "$pf_target" in
       ""|svc/*) pf_port=80; return 0 ;;
@@ -381,7 +396,7 @@ verify_app() {
                  -o jsonpath='{.spec.containers[0].ports[0].containerPort}' 2>/dev/null)" || _pp_rc=$?
     if [ "$_pp_rc" -ne 0 ]; then
       log_warn "[${app}] could not read ${pf_target}'s spec (rc=${_pp_rc}) — binding svc/ instead"
-      _pf_ev "could not read ${pf_target}'s spec (rc=${_pp_rc}) — DOWNGRADING to svc/" 2>/dev/null || true
+      _pf_ev "could not read ${pf_target}'s spec (rc=${_pp_rc}) — DOWNGRADING to svc/"
       pf_target="svc/${app}"; pf_port=80
     elif [ -z "$pf_port" ]; then
       # A pod that declares no containerPort gives us nothing to bind. svc/ resolves the name for
@@ -399,18 +414,36 @@ verify_app() {
       # archive. That is the unattributable-tunnel state this whole arc exists to remove, and it is
       # the exact trap _pf_ev was introduced for 35 lines below. Adversary-caught.
       log_warn "[${app}] pod ${pf_target} declares no containerPort — binding svc/ instead"
-      _pf_ev "pod ${pf_target} declares no containerPort — DOWNGRADING to svc/ (remote port 80)" 2>/dev/null || true
+      _pf_ev "pod ${pf_target} declares no containerPort — DOWNGRADING to svc/ (remote port 80)"
       pf_target="svc/${app}"; pf_port=80
     fi
   }
-  _resolve_pf_port
   if [ -z "$pf_target" ]; then
     # F5: falling back silently means a degraded run is indistinguishable from a fixed one.
     pf_target="svc/${app}"; pf_port=80
     log_warn "[${app}] no Ready pod reports ${img} — binding svc/, which is the PRE-FIX behaviour this fix exists to remove"
   fi
-  log_info "[${app}] tunnel target ${pf_target} remote port ${pf_port}"
   _start_pf() {
+    # ⚠️ RESOLVE THE PORT HERE, AT THE ONE PLACE THAT BINDS. The port is a function of the target,
+    # so deriving it anywhere else means every future caller must remember to. A previous version
+    # policed that with a gate comparing "sites that re-choose pf_target" to "re-derivation calls",
+    # and an adversary measured FOUR realistic edits that carry the stale-port defect under a green
+    # gate: a `pf_target="svc/${app}"` site with no _pick_pod; a call made unreachable by a
+    # condition; the call placed BEFORE the assignment; and a blanking revert written with single
+    # quotes. Two of those shapes already exist in this file. Detecting the bug was the wrong goal:
+    # with the resolution inside _start_pf there is exactly ONE bind, so no site can exist without
+    # it. MEASURED to self-correct a stale port in both directions (a pod carrying 80 binds 8080; an
+    # svc/ carrying 8080 binds 80).
+    _resolve_pf_port
+    # LOG WHAT WAS ACTUALLY BOUND, from inside the bind. This line used to sit outside, fed by a
+    # SECOND standalone _resolve_pf_port -- so the initial bind issued `kubectl get pod` TWICE
+    # (measured GETPOD=2) and the two could DISAGREE: with only the second failing, the log read
+    # "tunnel target pod-x remote port 8080" while the bind was svc/ on 80, a silent downgrade to
+    # what the warning above calls the PRE-FIX behaviour. The doubling is also exactly what
+    # motivates `[ "${PF_GEN:-0}" -eq 0 ] && _resolve_pf_port` -- a de-dup that reintroduces the
+    # stale port on every rebuild, and which an adversary measured GREEN against the old gate.
+    # One resolution, at the bind, logged here -- so every generation reports its own target.
+    log_info "[${app}] tunnel target ${pf_target} remote port ${pf_port} (generation $((${PF_GEN:-0} + 1)))"
     [ -n "${PF_PID:-}" ] && { kill "$PF_PID" 2>/dev/null || true; }
     kubectl -n "$ns" port-forward "$pf_target" "${app_local_port}:${pf_port}" >/dev/null 2>&1 &
     PF_PID=$!
@@ -436,12 +469,9 @@ verify_app() {
   # HTTP 200 through the ingress, both pods were 1/1 Running, and NO kubectl port-forward process
   # existed. That is verbatim the mis-attribution B497 exists to remove, one step earlier in the
   # same function: the fix covered the marker check and not the wait above it.
-  PF_LAST_BODY=""; PF_DEATHS=0; PF_POLL_FAILS=0; PF_RESTARTS_BLOCKED=""; PF_UNKNOWN=""; PF_EVENTS=""
+  PF_LAST_BODY=""; PF_DEATHS=0; PF_POLL_FAILS=0; PF_RESTARTS_BLOCKED=""; PF_UNKNOWN=""   # PF_EVENTS is initialised earlier, before the first bind
   # ⚠️ EVENTS GO IN A VARIABLE, NOT log_warn: `wait_for` invokes its predicate as `"$@" >/dev/null
   # 2>&1`, so anything _log writes from in here is DISCARDED. Collected, printed in the arms below.
-  # shellcheck disable=SC2329  # invoked indirectly (from the predicates below)
-  _pf_ev() { PF_EVENTS="${PF_EVENTS}
-  - $*"; }
 
   # SHARED classifier: given a FAILING curl rc, decide tunnel-vs-app and rebuild when it is the
   # tunnel. EXTRACTED rather than duplicated -- two copies would drift, and the entire point is that
@@ -467,7 +497,6 @@ verify_app() {
       _pf_ev "curl failed ($(_curl_rc_label "$rc")) AND kubectl rc=${krc}; rebuilding the tunnel anyway"
       if [ "$PF_GEN" -lt "${VERIFY_PF_MAX_GENERATIONS:-5}" ]; then
         pf_target="$(_pick_pod)"; [ -n "$pf_target" ] || { pf_target="svc/${app}"; _pf_ev "no Ready pod on ${img} — FALLING BACK TO svc/"; }
-        _resolve_pf_port   # the target moved, so the port must move with it
         _start_pf
       fi
       return 1
@@ -485,7 +514,6 @@ verify_app() {
     if [ "$PF_GEN" -lt "${VERIFY_PF_MAX_GENERATIONS:-5}" ]; then
       _pf_ev "the port-forward stopped ($(_curl_rc_label "$rc")); pods are Ready, so this is the TUNNEL — rebuilding (generation $((PF_GEN + 1)))"
       pf_target="$(_pick_pod)"; [ -n "$pf_target" ] || { pf_target="svc/${app}"; _pf_ev "no Ready pod on ${img} — FALLING BACK TO svc/"; }
-      _resolve_pf_port   # the target moved, so the port must move with it
       _start_pf
     else
       _pf_ev "the port-forward stopped ($(_curl_rc_label "$rc")) and the generation cap (${VERIFY_PF_MAX_GENERATIONS:-5}) is spent"
@@ -525,9 +553,6 @@ verify_app() {
   # DISCARDED -- including the curl failure-mode label that is the whole point of classifying. A
   # rebuild-heavy row would have been indistinguishable in the archive from a clean one, i.e. the
   # fix would have been unmeasurable. Collected here, printed in BOTH arms below.
-  # shellcheck disable=SC2329  # called from marker_visible, which wait_for invokes indirectly
-  _pf_ev() { PF_EVENTS="${PF_EVENTS}
-    - $*"; }
   # shellcheck disable=SC2329  # invoked indirectly (wait_for)
   marker_visible() {
     local b rc
@@ -564,6 +589,11 @@ verify_app() {
       grep -i 'class="message"' <<< "$PF_LAST_BODY" >&2 || printf '%s\n' "$PF_LAST_BODY" | head -5 >&2
     else
       log_error "HARNESS-TUNNEL [${app}] the page was NEVER successfully fetched — ${PF_DEATHS} tunnel death(s) across ${PF_GEN} generation(s) to ${pf_target}. This is the PORT-FORWARD, not the app; retry the row."
+      # `|| true`: a DIAGNOSTIC, not a gate. Without it `set -e` pre-empts the `die` on the next
+      # line, so a failing kubectl here (a stale kubeconfig -- the very state that puts you in
+      # this branch) prints the ERROR and exits 1 with NO "FATAL ... end result not observed".
+      # MEASURED both directions. The _pf_ev calls above deliberately have no guard: they are
+      # pure assignments over a PF_EVENTS initialised before any caller, so they cannot fail.
       kubectl -n "$ns" get pod -l "app.kubernetes.io/name=${app}" -o wide >&2 2>/dev/null || true
     fi
     die "[${app}] end result not observed"

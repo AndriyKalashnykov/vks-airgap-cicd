@@ -979,7 +979,14 @@ is what those PRs actually touched, and rewriting them would falsify the record.
   | `port-forward svc/<app> L:80` | http 200 |
 
   The `svc/` FALLBACK still works, so this **only bites when the pod lookup SUCCEEDS** — the
-  healthier the cluster, the more certain the failure. Fixed in #1054.
+  healthier the cluster, the more certain the failure. Fixed in #1054 **for the INITIAL bind
+  only** — verified from its own diff. Both tunnel-REBUILD sites kept inheriting the stale
+  port until **#1062**, which re-derived it at both rebuild sites — and the resolution only moved
+  INSIDE `_start_pf` in the FOLLOW-UP to #1062 (verified: #1062's own `_start_pf` body contains no
+  `_resolve_pf_port`). Reading this as "fixed in #1054" is what let the rebuild half survive
+  another **twelve hours** — #1054 landed 01:42 and #1062 13:36 the SAME DAY. An earlier draft of
+  this line said "three more weeks", a 42x overstatement that would have told a reader to distrust
+  three weeks of matrix runs over a bug that lived one session.
 
 - **It did not look like a port bug, and that is the lesson.** It presented as 114 "connection
   refused" tunnel deaths across the generation cap, ending ~10 minutes AFTER both pods were Ready —
@@ -1013,7 +1020,8 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 | PR | what |
 |---|---|
 | #1053 | `env-check` catches a dangling `ARGOCD_KUBECONFIG` (found live in this repo's `.env`) |
-| #1054 | the port-forward derives its remote port from the target; `80` only for `svc/` |
+| #1054 | the port-forward derives its remote port from the target at the INITIAL bind; `80` only for `svc/` |
+| #1062 | the derivation added at BOTH rebuild sites — they had inherited the stale port. (Moving it INSIDE `_start_pf` is the follow-up, not this PR.) |
 | #1055 | Harbor's admin credential is VERIFIED at install time (`harbor_credential_settle`) |
 
 **#1055's own story is worth reading before extending it.** Harbor honours `HARBOR_ADMIN_PASSWORD`
@@ -1026,7 +1034,7 @@ new 12/12 suite, shellcheck, and the sourcing gate. The suite's wiring cases ass
 text, never definedness**; they now assert `type -t` reachability against a source set DERIVED from
 `06`.
 
-### Proven live
+### Proven live — the 6/6 `make verify` below is the #1054 TREE; a separate cold `make e2e-kind` on the #1062 tree was also 6/6 (0 FATAL, create-ordering exercised, all six bound a pod on 8080), but logged 0 DOWNGRADING events, so it exercised the INITIAL bind and NOT the rebuild path
 
 - `make verify` **6/6** on KinD: every app logs `tunnel target <pod> remote port 8080`, zero bind
   `:80`, and dotnetwebapp took a real tunnel death and **rebuilt to generation 2** — #1052 and #1054

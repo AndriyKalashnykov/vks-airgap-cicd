@@ -114,25 +114,42 @@ ck "no literal :80 remains on the port-forward line" \
 # port is re-derived wherever the target is chosen.
 ck "pf_port is resolved from the pod's containerPort" \
    "$([ "$(grep -c 'jsonpath=.{.spec.containers\[0\].ports\[0\].containerPort}' "$V")" -ge 1 ] && echo ok)" "ok"
-# ⚠️ THIS ASSERTION WAS ITSELF INVERTED, AND MEASURED SO. It used to be
-#     ck "..." "$(grep -c '_resolve_pf_port' "$V")" "4"
-# i.e. a RAW COUNT of 1 definition + 3 calls, anywhere in the file, COMMENTS INCLUDED. Measured on
-# copies of the real script:
-#     a new rebuild site with NO re-derivation (the defect) -> 24/24 GREEN   <- ships the bug
-#     a new rebuild site WITH one (correct)                 -> 1 FAILED
-#     a bare COMMENT naming the helper                      -> 1 FAILED
-# That is the same green-over-the-defect / red-on-the-remedy shape this file replaced two lines up,
-# re-entered while claiming to remove it -- and it re-entered the comment-counting trap that the
-# NEXT assertion guards against with `grep -vE '^[[:space:]]*#'`.
+# ⚠️ TWO PREVIOUS VERSIONS OF THIS ASSERTION WERE BOTH GAMEABLE, AND BOTH WERE MEASURED SO.
+#   v1  grep -c '_resolve_pf_port' == 4   -> GREEN on a new rebuild site with NO re-derivation,
+#                                            RED on a correct addition, RED on a bare comment.
+#   v2  executable SITES vs executable CALLS -> RED on the _pick_pod-shaped defect (an improvement),
+#       but still GREEN on FOUR other realistic edits that carry the same stale-port bug: a
+#       `pf_target="svc/${app}"` site with no _pick_pod (a shape that ALREADY EXISTS TWICE in the
+#       file); a call made unreachable by a condition; the call moved BEFORE the assignment; and a
+#       blanking revert written `pf_target=''` in single quotes, which v2's sibling guard could not
+#       see because it greps the double-quoted literal.
 #
-# Compare executable SITES to executable CALLS. A site is a place that re-chooses pf_target; a call
-# is a re-derivation, minus the definition itself. Verified in all five directions: baseline 3/3
-# GREEN, defect 4/3 RED, correct addition 4/4 GREEN, comment 3/3 GREEN, pre-fix state 3/1 RED.
-_pf_exe="$(grep -vE '^[[:space:]]*#' "$V")"
-_pf_sites="$(printf '%s\n' "$_pf_exe" | grep -c '_pick_pod)"')"
-_pf_calls="$(( $(printf '%s\n' "$_pf_exe" | grep -c '_resolve_pf_port') \
-              - $(printf '%s\n' "$_pf_exe" | grep -c '_resolve_pf_port()') ))"
-ck "every site that re-chooses pf_target re-derives pf_port" "$_pf_calls" "$_pf_sites"
+# Detecting the bug was the wrong goal. The port is now resolved INSIDE _start_pf, which is the one
+# place that binds, so a site cannot exist without a re-derivation. The assertion collapses to a
+# structural fact with nothing to count and nothing to gap.
+_pf_body="$(sed -n '/_start_pf() {/,/^  }/p' "$V")"
+# ⚠️ THREE VERSIONS OF THIS ASSERTION HAVE NOW BEEN MEASURED GAMEABLE. v1 counted occurrences of
+# the helper name; v2 compared "sites" to "calls"; v3 asserted the call is PRESENT in _start_pf's
+# body. v3 still had FOUR false greens, two of which an adversary EXECUTED to the wrong port:
+#   - the call moved BELOW the port-forward line      -> bound svc/ on 8080 AND a pod on 80
+#   - `[ "${PF_GEN:-0}" -eq 0 ] && _resolve_pf_port`  -> bound svc/ on 8080 on every rebuild
+#   - the call deleted with only a TRAILING comment naming it (the `grep -vE '^[[:space:]]*#'`
+#     filter strips FULL-LINE comments only)
+#   - a SECOND port-forward of the app port outside _start_pf, breaking the one-bind invariant
+# Presence is not enough: ORDER and REACHABILITY and one-binder all matter. Assert the call is the
+# FIRST EXECUTABLE LINE of the body -- which is unorderable, unreachable-proof and comment-proof --
+# and that exactly one line binds the app's local port.
+_pf_first="$(printf '%s\n' "$_pf_body" | sed 1d | grep -vE '^[[:space:]]*(#|$)' | head -1 | sed 's/^[[:space:]]*//')"
+ck "_resolve_pf_port is the FIRST executable line of _start_pf" "$_pf_first" "_resolve_pf_port"
+ck "exactly ONE line binds the app's local port" \
+   "$(grep -cE 'port-forward .*\$\{app_local_port\}' "$V")" "1"
+# The single-quote blindness that let a blanking revert through v2, in both spellings.
+ck "no code path assigns an empty pf_target (single-quoted)" \
+   "$(grep -vE '^[[:space:]]*#' "$V" | grep -c "pf_target=''")" "0"
+# One channel definition, not two. Two existed at 443 and 529 and DIFFERED in indentation, so the
+# same helper formatted archive events differently depending on which wait fired.
+ck "exactly ONE _pf_ev definition" \
+   "$(grep -c '_pf_ev() {' "$V")" "1"
 # ⚠️ EXECUTABLE lines only: the phrase appears in the explanatory comment too, and counting both
 # made this assert 2. Same trap as "a check that greps a symbol also matches its own docstring".
 # ⚠️ THIS USED TO ASSERT THE MESSAGE APPEARS EXACTLY ONCE, which made it brittle AND vacuous: it
@@ -145,8 +162,13 @@ ck "the no-containerPort downgrade is reported to a human (log_warn)" \
    "$(grep -vE '^[[:space:]]*#' "$V" | grep -c 'log_warn.*declares no containerPort')" "1"
 ck "the no-containerPort downgrade also reaches the ARCHIVE (_pf_ev, which wait_for cannot discard)" \
    "$(grep -vE '^[[:space:]]*#' "$V" | grep -c '_pf_ev.*declares no containerPort')" "1"
-ck "a kubectl FAILURE is reported as such, not as 'declares no containerPort'" \
-   "$(grep -vE '^[[:space:]]*#' "$V" | grep -c "could not read .* spec (rc=")" "2"
+# ⚠️ THIS COUNTED OCCURRENCES (== 2) AND NAMED NO CHANNEL -- the exact vacuity it replaced.
+# MEASURED: swapping the log_warn for a SECOND _pf_ev deletes the human channel entirely and the
+# count stays 2, so it stayed `ok`. Anchor each channel, like the pair above.
+ck "a kubectl FAILURE reaches a human (log_warn), not mislabelled as 'declares no containerPort'" \
+   "$(grep -vE '^[[:space:]]*#' "$V" | grep -c 'log_warn.*could not read')" "1"
+ck "a kubectl FAILURE also reaches the ARCHIVE (_pf_ev)" \
+   "$(grep -vE '^[[:space:]]*#' "$V" | grep -c '_pf_ev.*could not read')" "1"
 
 # ⚠️ THE LINE ABOVE COUNTS A LOG MESSAGE, NOT A BEHAVIOUR, and was therefore VACUOUS with respect to
 # what the fallback actually assigns: it passed both when the helper blanked pf_target and when it
