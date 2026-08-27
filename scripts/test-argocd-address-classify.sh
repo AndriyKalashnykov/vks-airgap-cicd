@@ -22,11 +22,27 @@ printf 'apiVersion: v1\n' > "$T/sup.kubeconfig"
 : > "$T/.env.example"
 
 # ⚠️ COUNT THE CALLS. Three cases used to assert `elapsed >= 14` as a proxy for "the loop ran".
-# That proxy is why the suite cost 201s: it can only be satisfied by actually burning the wall
-# clock, so the budget could never shrink. The call count observes the SAME property directly
-# (1 = returned before the loop, >=3 = polled), is immune to machine load, and lets the budget
-# drop to 2s. MEASURED both ways: 1 vs 3 at WAIT=16/POLL=15 AND at WAIT=2/POLL=1.
+# That proxy is why the suite cost 201s: it can only be satisfied by burning the wall clock, so the
+# budget could never shrink. The call count observes the SAME property directly (1 = returned before
+# the loop, >=3 = polled) and lets the budget drop to 2s.
+# ⚠️ IT IS NOT "IMMUNE TO MACHINE LOAD" -- an earlier version of this comment claimed that, and it
+# is backwards. The old sleep-counter guaranteed ceil(WAIT/interval) iterations regardless of probe
+# cost; the DEADLINE loop makes the iteration count depend on how long each probe takes. MEASURED
+# breaking point at WAIT=2 POLL=1: probe cost 0.34s -> 3 calls (pass); 0.5s -> 2 calls -> FAIL.
+# Probe cost on this box: 0.001s, i.e. ~400x headroom, and 3/3 consecutive runs green. So the risk
+# is small TODAY and the margin is what matters -- whoever next shrinks a budget must re-measure it.
+# The flake string is `no_loop_2calls`, one character from the genuine RED `no_loop_1calls`.
 kcalls() { [ -f "$T/kcalls" ] && wc -c < "$T/kcalls" | tr -d ' ' || echo 0; }
+# ⚠️ EVERY kubectl stub must COUNT. Four cases below hand-write their own stub, and a hand-written
+# one that omits the counter makes any call-count assertion read 0 -- which fails safe (0 < 3) and
+# therefore SILENTLY, so the next assertion written against it is vacuous without saying so.
+# This helper emits the counter line, so a stub cannot be written that does not count.
+kstub() {  # kstub <body-lines...>  -- writes an executable kubectl that counts, then runs the body
+  { printf '#!/usr/bin/env bash\n'
+    printf 'printf x >> %s\n' "$(printf '%q' "$T/kcalls")"
+    printf '%s\n' "$@"
+  } > "$T/bin/kubectl"; chmod +x "$T/bin/kubectl"
+}
 mk_kubectl() {   # $1 = stderr text, $2 = rc, $3 = stdout
   { printf '#!/usr/bin/env bash\n'
     printf 'printf x >> %s\n' "$(printf '%q' "$T/kcalls")"
@@ -159,18 +175,23 @@ ck "the curl probe actually RAN (not passing by not looking)" \
 # CONTROL — an L7 LB or a --rootpath install answers 403/404 unauthenticated. NOT a failure; treating
 # it as one would be a brand-new false BLOCK on a perfectly good lab.
 rm -f "$T/kc" "$T/.env"
-printf '#!/usr/bin/env bash\nprintf 192.168.101.150\nexit 0\n' > "$T/bin/kubectl"; chmod +x "$T/bin/kubectl"
+kstub 'printf 192.168.101.150' 'exit 0'
 printf '#!/usr/bin/env bash\nprintf 403\nexit 0\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
 r="$(run 4 1)"
 ck "403 counts as ANSWERING (no false block on --rootpath / an L7 LB)" \
    "$(grep -qF 'ARGOCD_SERVER=192.168.101.150' "$T/.env" 2>/dev/null && echo published || echo blocked)" "published"
-ck "403 publishes FAST (did not sit out the budget)" \
-   "$([ "${r%%:*}" -lt 20 ] && echo fast || echo slow)" "fast"
+# ⚠️ NOT `elapsed < 20`. The budget retune made that VACUOUS: at WAIT=4 the FULL-budget path is
+# ~4-5s, always under 20, so the assertion could not fail for any input. RED-proved by mutating
+# _answers to require 200 (the exact defect this case documents): budget 4 stayed GREEN on the
+# defect, budget 30 caught it. The call COUNT is the real discriminator and is load-immune --
+# a clean tree is ALWAYS exactly 1 (403 answers on the first probe, no loop); the defect is 5.
+ck "403 publishes FAST (answered on the FIRST probe — did not enter the wait loop)" \
+   "$(kcalls)" "1"
 
 # CONTROL — budget expires, nothing ever answers: WARN and PUBLISH, rc 0. A die would convert a late
 # failure into an EARLY hard stop on a lab whose address is fine and only this probe is wrong.
 rm -f "$T/kc" "$T/.env"
-printf '#!/usr/bin/env bash\nprintf 192.168.101.160\nexit 0\n' > "$T/bin/kubectl"; chmod +x "$T/bin/kubectl"
+kstub 'printf 192.168.101.160' 'exit 0'
 printf '#!/usr/bin/env bash\nprintf 000\nexit 0\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
 r="$(run 2 1)"
 ck "never answers -> still PUBLISHES (warn, not die)" \

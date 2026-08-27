@@ -47,9 +47,18 @@ esac
 # `[ "$WAIT" -gt 0 ]`); interval 0 is an INFINITE TIGHT LOOP hammering the Supervisor API --
 # MEASURED: `timeout 30` returns rc=124. Same guard shape as lib/argocd.sh's positive-integer check.
 POLL="${ARGOCD_ADDRESS_POLL_INTERVAL_SECONDS:-15}"
+# ⚠️ `|0)` IS A LITERAL PATTERN, so it rejects `0` and ACCEPTS `00`, `000`, ... and `sleep 00` is
+# ~3ms. MEASURED: WAIT=2 POLL=00 issued 337 kubectl calls in 2s against 3 at POLL=1; at the 900s
+# default that is ~150,000 Supervisor API calls. The DEADLINE loop below is what makes it
+# unbounded -- the old sleep-counter advanced `_w` by the interval regardless of how long `sleep`
+# actually took, so a zero sleep still terminated after WAIT/interval iterations. Normalise with
+# `10#` (which also rejects `015`, that would otherwise sleep 15s against a 2s budget, AND avoids
+# `[ 015 -gt 0 ]` reading it as octal).
 case "$POLL" in
-  ''|*[!0-9]*|0) die "ARGOCD_ADDRESS_POLL_INTERVAL_SECONDS must be a POSITIVE whole number of seconds, got '${POLL}'" ;;
+  ''|*[!0-9]*) die "ARGOCD_ADDRESS_POLL_INTERVAL_SECONDS must be a POSITIVE whole number of seconds, got '${POLL}'" ;;
 esac
+[ "$((10#$POLL))" -gt 0 ] || die "ARGOCD_ADDRESS_POLL_INTERVAL_SECONDS must be a POSITIVE whole number of seconds, got '${POLL}'"
+POLL="$((10#$POLL))"
 
 # THREE STATES, THREE MESSAGES. A wait written for "<pending>" is wrong here: MEASURED on two walk
 # rows, at this point in the runbook the Service DOES NOT EXIST --
@@ -150,10 +159,13 @@ if [ "$st" = absent ] || [ "$st" = pending ]; then
     esac
     log_info "waiting up to ${WAIT}s ..."
     # ⚠️ DEADLINE, not a sleep-counter. `_w=$((_w + 15))` counted only the SLEEP, so the loop ran
-    # for WAIT seconds of sleeping PLUS the cost of every probe -- MEASURED at WAIT=16: 50s elapsed,
-    # 3.1x the budget, because each `_state` can spend up to `curl --max-time 5`. Against a dead VIP
-    # at the 900s default that is minutes of overshoot, and it gets worse as the interval shrinks
-    # (the same case at POLL=1 measured 106s). SECONDS is the shell's own elapsed counter.
+    # for WAIT seconds of sleeping PLUS the cost of every probe. THIS loop's probe is `_state`,
+    # i.e. KUBECTL -- curl lives in `_answers`, which this loop never invokes (an earlier version of
+    # this comment cited a `curl --max-time 5` cost here; that is loop 2's mechanism, not this one).
+    # A/B MEASURED at WAIT=16: with a fast kubectl, OLD 31s vs NEW 30s -- both ~1.9x, so the deadline
+    # changes little when the probe is cheap. With a 4s probe: OLD 42s (2.6x) vs NEW 23s (1.4x).
+    # The overshoot is real and proportional to probe cost; it is not the 3.1x quoted before.
+    # SECONDS is the shell's own elapsed counter.
     _t0=$SECONDS; _end=$((_t0 + WAIT)); _logged=0
     while [ "$SECONDS" -lt "$_end" ]; do
       sleep "$POLL"
