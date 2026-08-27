@@ -83,14 +83,18 @@ for name in $NAMES; do
   # re-run skips only when the tarball exists AND the recorded ref matches the pin we want now.
   # SELFBUILT_FORCE=1 rebuilds regardless.
   #
-  # Keyed on the GIT REF (an immutable tag), so bumping the pin invalidates it by construction.
+  # Keyed on the full BUILD TAG, not the git ref. MEASURED 2026-08-27: a ref-keyed sentinel is
+  # BLIND to a dependency-override change -- reverting go_get ggcr v0.21.6 -> v0.21.9 left the ref
+  # at v1.25.18, so the stale v0.21.6 tarball was reused while WEARING the v0.21.9 tag, and the
+  # e2e's kaniko step hung 8m16s on the v0.21.6 pullLimiter deadlock. check-selfbuilt.sh REQUIRES
+  # the tag to encode every go_get override, so the tag IS the complete identity; the ref is not.
   # Deliberately NOT keyed on the tarball alone: a stale tarball from an earlier pin would then be
   # treated as current, which is the failure this is supposed to prevent.
   _sb_stamp="${OUT_DIR}/.${name}.built"
   if [ "${SELFBUILT_FORCE:-0}" != "1" ] \
      && [ -s "$tarball" ] \
-     && [ "$(cat "$_sb_stamp" 2>/dev/null)" = "${ref}" ]; then
-    log_info "[${name}] already built at ${ref} (${tarball}) — skipping. SELFBUILT_FORCE=1 to rebuild."
+     && [ "$(cat "$_sb_stamp" 2>/dev/null)" = "${tag}" ]; then
+    log_info "[${name}] already built at ${tag} (${tarball}) — skipping. SELFBUILT_FORCE=1 to rebuild."
     continue
   fi
 
@@ -215,7 +219,7 @@ for name in $NAMES; do
   printf '%s\t%s\t%s\t%s:%s\t%s\n' "$name" "$ref" "$engine_id" "$repo" "$tag" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${LOCK}.tmp"
   # Written ONLY here, i.e. after the save succeeded — a build that dies leaves no stamp, so the
   # next run rebuilds rather than trusting a partial artifact.
-  printf '%s\n' "$ref" > "$_sb_stamp"
+  printf '%s\n' "$tag" > "$_sb_stamp"
 
   rm -rf -- "$src"; src=""
 done
