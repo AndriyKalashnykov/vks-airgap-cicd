@@ -510,6 +510,10 @@ make vks-k8s-version           # resolve the TKr NOW — see the note below; do 
 make vks-cluster-create        # applies the Cluster; provisioning is async
 ```
 
+Both of these **write to `./.env`** — `vks-k8s-version` writes `VKS_K8S_VERSION`, and
+`vks-cluster-create` runs `make vks-shape-set` first, which writes the storage class and
+ClusterClass your Supervisor actually has. Nothing for you to look up or copy.
+
 **Expect:** a line naming `VKS_K8S_VERSION:` with a full release string such as
 `v1.36.2+vmware.2-vkr.3`. You do **not** copy that value anywhere — `make vks-k8s-version` writes it
 into `./.env` itself, and `make vks-cluster-create` on the next line reads it from there. If it says
@@ -586,15 +590,27 @@ VKS_AUTH_METHOD=vcf make vks-login
 
 <details><summary>Optional — the cluster's shape. Skip unless you want to change it.</summary>
 
-**→ set in `./.env`:** uncomment the key and give it your value. Leave it commented to take the default.
+**You do not have to fill these in.** The values that depend on your estate — the storage policy
+attached to your vSphere Namespace, and the ClusterClass — are discovered and written for you:
+`make vks-cluster-create` runs `make vks-shape-set` first. Nothing to copy, nothing to look up.
 
-| key | default | example | how to get the value |
-|---|---|---|---|
-| `VKS_CLUSTERCLASS` | `builtin-generic-v3.6.0` | `builtin-generic-v3.6.0` | `kubectl get clusterclass -n vmware-system-vks-public` — a SEED. The Supervisor rewrites it to the newest compatible class; `make vks-cluster-create` reports the one in effect. |
-| `VKS_VM_CLASS` | `best-effort-small` | `best-effort-small` | `kubectl get virtualmachineclass` |
-| `VKS_STORAGE_CLASS` | `wcp-vmfs` | `wcp-vmfs` | `kubectl get storageclass` |
-| `VKS_CONTROL_PLANE_COUNT` | `1` | `1` | how many control-plane nodes |
-| `VKS_NODE_COUNT` | `2` | `2` | how many workers. One is too small for the platform. |
+To see what your Supervisor offers before then:
+
+```bash
+make vks-shape-show
+```
+
+`vks-shape-set` never overwrites a value you set yourself, and writes **nothing** when the answer is
+ambiguous — it prints the choices instead, because a wrong value pinned in `.env` overrides the
+default that would otherwise have worked.
+
+The rest are yours to choose. **→ set in `./.env`:** uncomment the key and give it your value.
+
+| key | default | what it is |
+|---|---|---|
+| `VKS_VM_CLASS` | `best-effort-small` | node size. `kubectl get virtualmachineclass` lists yours |
+| `VKS_CONTROL_PLANE_COUNT` | `1` | how many control-plane nodes |
+| `VKS_NODE_COUNT` | `2` | how many workers. One is too small for the platform. |
 
 </details>
 

@@ -614,7 +614,11 @@ vks-login: ## Authenticate to VKS (VCF 9 + Supervisor) → writes KUBECONFIG/con
 	@$(SCRIPTS)/30-vks-login.sh
 
 .PHONY: vks-cluster-create
-vks-cluster-create: ## Provision the guest VKS cluster from the VKS_* topology keys (scenario-1 §4b); server-side dry-run gates it
+# vks-shape-set FIRST: it fills the ESTATE-SPECIFIC values (the storage policy attached to this
+# vSphere Namespace) that the code defaults get wrong on any estate that is not this lab. It is
+# idempotent, refuses to overwrite a value you set, writes NOTHING when the answer is ambiguous,
+# and NEVER gates -- with no Supervisor reachable it warns and exits 0, so it cannot block a create.
+vks-cluster-create: vks-shape-set ## Provision the guest VKS cluster from the VKS_* topology keys (scenario-1 §4b); server-side dry-run gates it
 	@$(SCRIPTS)/25-vks-cluster-create.sh
 
 .PHONY: vks-cluster-status
@@ -725,8 +729,15 @@ argocd-auth-check: ## Read-only: does the ArgoCD ADMIN credential actually authe
 	@$(SCRIPTS)/argocd-auth-check.sh
 
 .PHONY: argocd-version
+.PHONY: vks-shape-show vks-shape-set
 argocd-version: ## Read-only: ArgoCD CLI vs RUNNING-server vs repo-pin versions (never gates; exits 0 even with no cluster)
 	@$(SCRIPTS)/argocd-version.sh
+
+vks-shape-show: ## Read-only: what storage classes + ClusterClasses THIS Supervisor/namespace offers (never gates; exits 0 with no cluster)
+	@$(SCRIPTS)/vks-shape.sh show
+
+vks-shape-set: ## Write the UNAMBIGUOUS guest-cluster shape values into .env (writes nothing when ambiguous or already set)
+	@$(SCRIPTS)/vks-shape.sh set
 
 ##@ Platform install (Gitea + Tekton)
 .PHONY: install-gitea

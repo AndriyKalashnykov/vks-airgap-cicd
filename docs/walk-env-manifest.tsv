@@ -57,9 +57,9 @@ scenario-1	VKS_AUTH_METHOD	EXEMPT	the DOCUMENT owns it: Step 3 sets vcf, Step 6 
 scenario-1	VKS_CA_CERT_FILE	EXEMPT	`make fetch-supervisor-ca` writes the file this path names
 scenario-1	VKS_CLUSTER_COMPUTE	EXEMPT	only a multi-cluster vCenter sets it; the lab has one
 scenario-1	VKS_VM_CLASSES	EXEMPT	.env.example default is what the lab offers
-scenario-1	VKS_CLUSTERCLASS	EXEMPT	.env.example default; the reader changes it only for a non-default cluster shape
+scenario-1	VKS_CLUSTERCLASS	EXEMPT	no document names it: 'make vks-shape-set' discovers it, and it is INERT anyway — MEASURED VKS 3.7.1, admission rewrites classRef to the newest COMPATIBLE class even when the one asked for is in range (asked v3.6.0 with k8s v1.35.6, stored v3.7.0)
 scenario-1	VKS_VM_CLASS	EXEMPT	.env.example default; cluster shape
-scenario-1	VKS_STORAGE_CLASS	EXEMPT	.env.example default; cluster shape
+scenario-1	VKS_STORAGE_CLASS	EXEMPT	no document names it: 'make vks-shape-set' discovers it from the NAMESPACE-scoped storagepolicyquota (kubectl get storageclass is CLUSTER-scoped and lists policies other vSphere Namespaces own — measured 4 cluster-wide vs 2 assigned to cicd)
 scenario-1	VKS_CONTROL_PLANE_COUNT	EXEMPT	.env.example default; cluster shape
 scenario-1	VKS_NODE_COUNT	EXEMPT	.env.example default; cluster shape
 scenario-1	HARBOR_INFRA_PROJECT	EXEMPT	.env.example default; the reader renames the project only if they want to
