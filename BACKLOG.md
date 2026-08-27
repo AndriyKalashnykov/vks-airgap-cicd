@@ -3290,7 +3290,7 @@ returns `94 literal(s) checked, 9 allowlisted, 0 MISSING`.
 and either the gate's extraction matches `walk-doc.sh:452` or it states plainly that it is
 deliberately broader. Do NOT narrow it to match without checking what that stops catching.
 
-## ✅ B497 — `make verify`'s port-forward dies BY CONSTRUCTION, and the harness blames the page
+## ✅ B497 — `make verify`'s port-forward can bind a doomed pod, and the harness blames the page
 
 **It cost row 4 of the VKS 3.7.1 certification on 2026-08-26.** `31 ran, 1 FAILED, 13 skipped` —
 the ran/skipped/neutralized counts matched their pair exactly; one block failed.
@@ -3302,9 +3302,30 @@ block** (6/6, `deploy/*/deployment.yaml:9`), so the default RollingUpdate is
 `maxSurge=1/maxUnavailable=0` and old pods **are** terminated — during the very rollout `verify` has
 just triggered. So the tunnel dies by construction; only luck decides which app is hit.
 
-**MEASURED across the whole walk archive: 1 failure in 233 `app HTTP up → marker poll` pairs
-(0.43%)** — which over a 36-app-verify matrix is **≈14% of runs losing a row, one in seven.** That is
-a lower bound: a tunnel that died *after* the marker was seen leaves no trace.
+**MEASURED across the whole walk archive: 237 app-verify attempts over 49 rows, exactly ONE failure
+of this shape (0.42%), first seen 2026-08-26** — so the forward binds a survivor ~236 times out of
+237. Over a 36-app-verify matrix that is **≈14% of runs losing a row**. A lower bound: a tunnel that
+died *after* the marker was seen leaves no trace.
+
+**MEASURED IN A THROWAWAY CLUSTER 2026-08-26 — the mechanism, not an inference.** A 2-replica
+Deployment (`terminationGracePeriodSeconds: 30`), a `port-forward svc/web` bound exactly as
+`99-verify.sh:251` does, then a rollout:
+
+    t+33s  curl_rc=0   http=200  pf_alive=yes  pods=4    <- 2 old + 2 new
+    t+36s  curl_rc=52  http=000  pf_alive=yes  pods=2    <- BROKEN, and the rc is 52, not 7
+    t+39s  curl_rc=7   http=000  pf_alive=NO   pods=2    <- dead
+
+Two things this settles that reading logs could not: the tunnel dies at the **graceful-termination
+tail** (~36s, matching the 30s grace period), which is precisely the window between `rollout status`
+returning and the old pods going away; and **rc=52 arrives BEFORE rc=7**. The original design keyed
+on rc=7 alone and would have read that first failure as "marker absent" — the adversary refuted that
+on paper, and this is the measurement.
+
+⚠️ **It is a NARROW RACE, not a certainty — an earlier draft of this row said "dies by construction"
+without the condition, and that is wrong.** It dies by construction *only when it binds a pod the
+rollout is about to remove*. And the `rollout complete → app HTTP up` gap was ≤1s in **94 of those
+237** attempts (40%), so an "instant" rollout status is the NORMAL case and is **not** by itself
+evidence of anything.
 
 The harness then reported the wrong thing. From row 4:
 

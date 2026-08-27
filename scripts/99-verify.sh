@@ -251,15 +251,20 @@ verify_app() {
   log_info "[${app}] deployed image now ${img}"
 
   # ---- THE USER-FACING END RESULT: the running page shows THIS app's marker -------------------
-  # ⚠️ THE TUNNEL DIES BY CONSTRUCTION, NOT BY BAD LUCK. `kubectl port-forward svc/X` selects ONE
-  # pod and does not follow endpoints; kubectl's own help says "The forwarding session ends when the
-  # selected pod terminates". Every app here is `replicas: 2` with NO `strategy:` block (6/6,
-  # deploy/*/deployment.yaml:9), so the default RollingUpdate is maxSurge=1/maxUnavailable=0 and old
-  # pods ARE terminated on every rollout -- which is exactly what we have just triggered. So binding
-  # `svc/` immediately after a rollout is a coin flip on whether the tunnel outlives the poll.
-  # MEASURED over the whole walk archive: 1 failure in 233 "HTTP up -> marker poll" pairs (0.43%),
-  # which across a 36-app-verify matrix is ~14% of runs losing a row. It cost row 4 of the 3.7.1
-  # certification on 2026-08-26, and the harness blamed the PAGE:
+  # ⚠️ THE TUNNEL CAN BIND A DOOMED POD -- a NARROW RACE, not a certainty. `kubectl port-forward
+  # svc/X` selects ONE pod and does not follow endpoints; kubectl's own help says "The forwarding
+  # session ends when the selected pod terminates". Every app here is `replicas: 2` with NO
+  # `strategy:` block (6/6, deploy/*/deployment.yaml:9), so the default RollingUpdate terminates old
+  # pods during the rollout `verify` has just triggered -- and if the forward happens to bind one of
+  # those, the session ends and every later curl fails.
+  # MEASURED over the whole walk archive: 237 app-verify attempts across 49 rows, ONE failure of
+  # this shape (0.42%), first seen 2026-08-26. So it binds a survivor ~236 times out of 237; this is
+  # a race with a small window, NOT something that happens every rollout. Do not read the numbers as
+  # "broken" -- read them as "unbounded exposure that finally hit". Across a 36-app-verify matrix,
+  # 1-(1-0.0042)^36 ~= 14% of runs lose a row to it.
+  # ⚠️ NOT diagnostic on its own: the `rollout complete -> app HTTP up` gap was <=1s in 94 of those
+  # 237 attempts (40%), so an "instant" rollout status is the NORMAL case, not a symptom.
+  # It cost row 4 of the 3.7.1 certification, and the harness blamed the PAGE:
   #   00:46:53 FATAL [rustwebapp] end result not observed
   #   00:47:05 OK   rustwebapp.vks.local served the greeting page through the ingress   <- ALIVE
   #
