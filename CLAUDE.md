@@ -919,99 +919,95 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-27 — MATRIX 6/6 GREEN on VKS 3.7.1; the walk is INVARIANT across the upgrade
+## ▶️ HANDOFF 2026-08-27 (later) — a port-forward bound the SERVICE port against a POD; it failed everything
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### The certification — and read the CAVEAT, the headline overclaims without it
-
-All six rows green, all three pairs byte-identical:
-
-| pair | rows | ledger | |
-|---|---|---|---|
-| NOTHING exists | 1 ↔ 3 | `37 ran, 0 FAILED, 7 skipped, 5 neut` | ✅ identical |
-| EVERYTHING exists | 2 ↔ 4 | `31 ran, 0 FAILED, 13 skipped, 5 neut` | ✅ identical |
-| scenario-2 | 5 ↔ 6 | `18 ran, 0 FAILED, 10 skipped, 0 neut` | ✅ identical |
-
-⚠️ **ONLY ROWS 3, 4 AND 6 RAN ON VKS 3.7.1.** Rows 1, 2, 5 ran on 3.6.3, and every pair also
-spans a Kubernetes minor. Measured per row:
-
-| row | run | VKS service | guest k8s |
-|---|---|---|---|
-| 1 | `run-20260825T221952Z-2864413` | 3.6.3 | **v1.34.9**+vmware.2-vkr.4 (created its own) |
-| 2 | `run-20260826T110115Z-1192477` | 3.6.3 | inherited **v1.35.5** |
-| 5 | `run-20260826T110115Z-1192477` | 3.6.3 | inherited v1.35.x |
-| 3 | `run-20260826T234028Z-3674688` | **3.7.1** | **v1.36.2**+vmware.2-vkr.3 (created its own) |
-| 6 | `run-20260826T234028Z-3674688` | **3.7.1** | inherited v1.36.2 |
-| 4 | `run-20260827T012942Z-688162` | **3.7.1** | reused row 3's cluster (v1.36.2) |
-
-So the defensible claim is **INVARIANCE**, not "six rows on 3.7.1": each 3.7.1 row reproduced,
-ledger for ledger, the row it pairs with from the 3.6.3 era. Only cluster-CREATING rows (1 and 3)
-print a TKr; the rest inherit, which is why the table says "inherited". 1↔3 spans **two** minors.
-
-Other facts the runs themselves record: ClusterClass **in effect** `builtin-generic-v3.7.0` (the
-request was `v3.6.0` — the Supervisor rewrites it, and `#1034`'s read-back is the only reason we
-know); ArgoCD `3.0.19+vmware.1-vks.1`; Harbor `2.14.3+vmware.2-vks.1`; kaniko `v1.24.0-debug`; 6 apps.
-
-**Row 3 and row 1 walked DIFFERENT `scenario-1.md`** (23 commits between them). Proven equivalent by
-extracting the walkable command set from both trees: **92 lines each, zero differences**; all 10
-walk-visible changes are prose. That check was MANUAL — lab `#121` makes the harness record the
-WALK_REPO SHA so it stops being manual.
-
 ### 🔴 DISTRUST FIRST
 
-- **Row 4 FAILED on its first attempt and passed on re-run — that was not a product defect.**
-  `make verify`'s `port-forward svc/X` binds ONE pod and does not follow endpoints; the rollout it
-  has just triggered terminates old pods, so binding a doomed one kills the tunnel and the harness
-  then blames THE PAGE. MEASURED in a throwaway cluster: `t+33s rc=0 → t+36s rc=52 → t+39s rc=7,
-  pf dead`. Archive rate: **1 failure in 237 app-verify attempts (0.42%)**, ≈14% of full matrix runs.
-  Fixed in `#1047` (B497). Note **rc=52 arrives BEFORE rc=7** — a discriminator keyed on 7 alone
-  misreads the first failure.
-- **`kind` writes the AMBIENT `$KUBECONFIG` unless `--kubeconfig` is pinned**, and `load_env`
-  defaults that to a LAB slot (`lib/os.sh:692`) — so on a lab box `make kind-up` merged KinD into
-  `secrets/vks.kubeconfig` and hijacked its `current-context`; after the scenario docs' own
-  `export KUBECONFIG=./secrets/supervisor.kubeconfig` (`scenario-1.md:322`, `scenario-2.md:148`)
-  the target is the **Supervisor**. Worst case is a **scenario-2 tenant**: that file is the
-  credential the platform team handed them and RULE ZERO-A0 says they cannot self-service it.
-  Fixed by an early `export KUBECONFIG` in `05-kind-up.sh` + `make check-kind-kubeconfig`.
-  MEASURED: kind **merges**, so nothing is lost — the damage is the context hijack, and
-  `kind delete` then deletes the `current-context` key iff the kind one was current.
-  ⚠️ The obvious gate (grep each call for `--kubeconfig`) is **blind** to `05-kind-up.sh`'s
-  array-assembled `run kind "${create_args[@]}"` — it returned an identical clean on the fixed
-  and unfixed trees. The gate keys on ORDERING for that reason; do not "simplify" it.
-- **`make env-validate` returns rc=2 / HTTP 401 after any matrix run** — the walkboxes are destroyed
-  with their Harbor credential. Recover per RULE ZERO-A0's chain.
-- **`static-check` is SKIPPED on a PR** (paths-filtered). Run `env -u GOROOT make static-check`
-  locally before merging anything touching `scripts/` — ~120 tests.
-- **One worktree per branch.** Switching a worktree's branch while a gate runs in it is the same
-  frozen-tree violation as touching WALK_REPO mid-matrix; I did it once today and the gate returned
-  rc=0 over a tree that had changed underneath it.
-- **`pgrep`/`ps | grep` SELF-MATCH.** A "1 matrix still running" reading was my own monitor loop; a
-  `pkill` of it killed my own shell (exit 144).
+- **The previous handoff's "MATRIX 6/6 GREEN" is still true for the tree it names, and that tree
+  could not have passed today.** #1047 (merged 2026-08-27 ~03:0x) switched the verify tunnel from
+  `svc/<app>` to a NAMED POD and kept the remote port at `80`. 80 is the SERVICE port; the Service
+  maps it to `targetPort: http` = the container's **8080**. A pod has nothing on 80. MEASURED
+  against a healthy, Ready, 0-restart pod:
 
-### What landed (all merged, main green)
+  | target | result |
+  |---|---|
+  | `port-forward <pod> L:80` | **http 000** (connection refused) |
+  | `port-forward <pod> L:8080` | http 200 |
+  | `port-forward svc/<app> L:80` | http 200 |
 
-`#1038` vks-shape · `#1039` RULE ZERO-S (the Bash tool is zsh) · `#1041` B496 + the vcf-cli test fix
-· `#1042` the standing rule said an uncommitted edit was "harmless" — it is not · `#1043` B492 ·
-`#1044` B494 (an ORPHAN escape matched the literal `B471` against prose) · `#1045` a worktree is not
-automatically safe · `#1048` B498 (kaniko archived). Lab: `#119` skip-rebuild guard · `#120`
-walk-reset fail-closed · `#121` freeze the walk inputs + record the SHA.
+  The `svc/` FALLBACK still works, so this **only bites when the pod lookup SUCCEEDS** — the
+  healthier the cluster, the more certain the failure. Fixed in #1054.
 
-### Open
+- **It did not look like a port bug, and that is the lesson.** It presented as 114 "connection
+  refused" tunnel deaths across the generation cap, ending ~10 minutes AFTER both pods were Ready —
+  and they were Ready in **6s and 7s**. "Slow app" and "flaky tunnel" were both plausible and both
+  wrong; the app was serving the entire time. What settled it was `kubectl get pod -o
+  jsonpath='{...containerPort}'` plus two 20-second port-forwards, not more log reading.
 
-- **`#1046`** B493 — `test-argocd-address-classify` 201s → 41s, and a **3.1× budget overshoot that
-  ships today** (both poll loops counted sleep, not elapsed). Implementation round OUT.
-- **`#1047`** B497 — the port-forward fix above. Idea + implementation rounds both in; the impl round
-  found **two HIGH bugs I had introduced** (an app serving 5xx read as a tunnel death; "kubectl
-  failed" read as a PRODUCT verdict *and* the rebuild skipped). Fixed, RED-proven 5 ways.
-- **`v1.0.0` re-cut** — the tag must claim INVARIANCE, not "six rows on 3.7.1". The existing tag says
-  "six-row certification against VKS 3.6.3", which has the same overclaim shape.
-- **B498 kaniko** — Google archived it; `chainguard-forks/kaniko` is alive (`v1.25.18`, ≥100 commits)
-  but publishes NO image (`push: false`), so it is a SELF-BUILD via the existing
-  `14-builder-build.sh`/`22-builder-push.sh` pattern. Do it AFTER the tag: kaniko is on the walked
-  path, so swapping it invalidates the certification the tag records, and it needs its own matrix.
-- **B213, B206, B480, B482, B471** unchanged.
+- **One bug, three failures**: two KinD e2e runs and **row 1 of the recert matrix**, which died
+  `app not serving /healthz (tunnel to javawebapp-..., generation 1)` — a message naming the page,
+  about a page that was fine.
+
+- **#1052 neither caused nor hid it.** It is the reason the run reported `HARNESS-TUNNEL` with death
+  and generation counts instead of blaming the app, which is what made the port visible at all.
+
+- **A dangling `ARGOCD_KUBECONFIG` in an operator `.env` costs ~5 MINUTES PER APP, silently.** The
+  ArgoCD refresh nudge fails (`error: stat ./secrets/argocd.kubeconfig: no such file or directory`)
+  and every app falls back to ArgoCD's reconcile timer — "SLOW, not broken", exactly as the warning
+  says. This repo's own `.env` had it. #1053 now catches it at `env-check`; the remedy is to COMMENT
+  the line (unset is correct whenever ArgoCD shares `$KUBECONFIG`).
+
+- **`check-lib-sourcing.sh` was nearly vacuous and is now repaired.** Its `have` set was built from
+  raw text INCLUDING COMMENTS, and os.sh names `lib/harbor.sh` 10 times in comments — exempting all
+  **249** scripts that source os.sh from harbor.sh (and apps.sh, govc.sh, istio.sh, state.sh,
+  vcenter.sh). Its CALL regex was also blind to the `VAR=x func` prefix: fixing that took the call
+  count **917 → 936**. If you touch it, note that four plausible fixes were implemented and REFUTED
+  by running them (see the commit body) — in particular `executable_text()` is NOT the fix on the
+  source side, because it blanks quoted string contents and the lib path lives inside the quotes.
+
+### Merged today
+
+| PR | what |
+|---|---|
+| #1053 | `env-check` catches a dangling `ARGOCD_KUBECONFIG` (found live in this repo's `.env`) |
+| #1054 | the port-forward derives its remote port from the target; `80` only for `svc/` |
+| #1055 | Harbor's admin credential is VERIFIED at install time (`harbor_credential_settle`) |
+
+**#1055's own story is worth reading before extending it.** Harbor honours `HARBOR_ADMIN_PASSWORD`
+only at ITS OWN first bootstrap (goharbor `updateInitPasswordWithMgr()`, v2.15.2 lines 76-92 — cite
+the SYMBOL, the line numbers move), so a re-install silently keeps the old password while every
+readiness probe passes, because `/api/v2.0/health` is UNAUTHENTICATED. Both adversary rounds then
+REFUTED the first version: `06-install-harbor.sh` never sourced `lib/harbor.sh`, so the call was
+`command not found` (rc 127) at the last step of every install. Three green signals missed it — the
+new 12/12 suite, shellcheck, and the sourcing gate. The suite's wiring cases asserted **order and
+text, never definedness**; they now assert `type -t` reachability against a source set DERIVED from
+`06`.
+
+### Proven live
+
+- `make verify` **6/6** on KinD: every app logs `tunnel target <pod> remote port 8080`, zero bind
+  `:80`, and dotnetwebapp took a real tunnel death and **rebuilt to generation 2** — #1052 and #1054
+  validated on the same run.
+- `make env-check` flags the dangling `ARGOCD_KUBECONFIG` with the right message; its own remedy
+  clears it.
+
+### In flight
+
+- **The lab is being REBUILT.** The recert cut A refused in 2s and CORRECTLY: cut A does **not**
+  rebuild (the rebuild happens BETWEEN cuts), so it evaluated the rows against the lab a killed run
+  left dirty — row 1 wants "nothing exists" and found 4 of 4. Read
+  [`docs/matrix-standing-rules.md`](docs/matrix-standing-rules.md) §A5 before launching: a default
+  run certifies on **3.6.3**, and 3.7 needs the split (cut A rows 1 2 5 → destroy+lab+register+
+  upgrade → cut B rows 3 4 6 with `WALK_SKIP_REBUILD=1` and a MANDATORY `WALK_CLUSTER_NAME`).
+  ⚠️ That split is **still not exercised end to end** — treat the first attempt as part of the
+  certification, not as setup.
+- **#1051 (self-built kaniko)** remains a DRAFT pending a full `make e2e-kind`.
+- A cold `make e2e-kind` has NOT completed since these fixes; `make verify` has. #1055 has therefore
+  never executed against a live fresh Harbor — that run is what would exercise its
+  `HARBOR_FIRST_INSTALL=1` retry path.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
