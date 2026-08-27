@@ -968,6 +968,18 @@ WALK_REPO SHA so it stops being manual.
   pf dead`. Archive rate: **1 failure in 237 app-verify attempts (0.42%)**, ≈14% of full matrix runs.
   Fixed in `#1047` (B497). Note **rc=52 arrives BEFORE rc=7** — a discriminator keyed on 7 alone
   misreads the first failure.
+- **`kind` writes the AMBIENT `$KUBECONFIG` unless `--kubeconfig` is pinned**, and `load_env`
+  defaults that to a LAB slot (`lib/os.sh:692`) — so on a lab box `make kind-up` merged KinD into
+  `secrets/vks.kubeconfig` and hijacked its `current-context`; after the scenario docs' own
+  `export KUBECONFIG=./secrets/supervisor.kubeconfig` (`scenario-1.md:322`, `scenario-2.md:148`)
+  the target is the **Supervisor**. Worst case is a **scenario-2 tenant**: that file is the
+  credential the platform team handed them and RULE ZERO-A0 says they cannot self-service it.
+  Fixed by an early `export KUBECONFIG` in `05-kind-up.sh` + `make check-kind-kubeconfig`.
+  MEASURED: kind **merges**, so nothing is lost — the damage is the context hijack, and
+  `kind delete` then deletes the `current-context` key iff the kind one was current.
+  ⚠️ The obvious gate (grep each call for `--kubeconfig`) is **blind** to `05-kind-up.sh`'s
+  array-assembled `run kind "${create_args[@]}"` — it returned an identical clean on the fixed
+  and unfixed trees. The gate keys on ORDERING for that reason; do not "simplify" it.
 - **`make env-validate` returns rc=2 / HTTP 401 after any matrix run** — the walkboxes are destroyed
   with their Harbor credential. Recover per RULE ZERO-A0's chain.
 - **`static-check` is SKIPPED on a PR** (paths-filtered). Run `env -u GOROOT make static-check`
