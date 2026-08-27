@@ -71,6 +71,24 @@ for name in $NAMES; do
   local_ref="localhost/selfbuilt-${name}:${tag}"
   tarball="${OUT_DIR}/${name}.tar"
 
+  # ---- SKIP AN IMAGE ALREADY BUILT AT THIS EXACT PIN ------------------------
+  # `install-all` runs this on EVERY invocation, and scenario-1 explicitly tells the operator to
+  # "fix it and re-run install-all" -- so without a sentinel a from-source clone+build is paid every
+  # time. Same shape as the mirror's `.mirror-ok`: the sentinel records what was built, and a
+  # re-run skips only when the tarball exists AND the recorded ref matches the pin we want now.
+  # SELFBUILT_FORCE=1 rebuilds regardless.
+  #
+  # Keyed on the GIT REF (an immutable tag), so bumping the pin invalidates it by construction.
+  # Deliberately NOT keyed on the tarball alone: a stale tarball from an earlier pin would then be
+  # treated as current, which is the failure this is supposed to prevent.
+  _sb_stamp="${OUT_DIR}/.${name}.built"
+  if [ "${SELFBUILT_FORCE:-0}" != "1" ] \
+     && [ -s "$tarball" ] \
+     && [ "$(cat "$_sb_stamp" 2>/dev/null)" = "${ref}" ]; then
+    log_info "[${name}] already built at ${ref} (${tarball}) — skipping. SELFBUILT_FORCE=1 to rebuild."
+    continue
+  fi
+
   src="$(mktemp -d "${TMPDIR:-/tmp}/selfbuilt-${name}.XXXXXX")"
 
   log_info "[${name}] cloning ${url} at ${ref}"
@@ -94,29 +112,42 @@ for name in $NAMES; do
   # measurement and the upstream commit.
   gg="$(selfbuilt_go_get "$name")"
   if [ -n "$gg" ]; then
-    # ⚠️ DO NOT restore the words "mise provides one" here. MEASURED 2026-08-26: .mise.toml:13 says
-    # "REMOVED 2026-08-23: java, go, python, rust, dotnet", `go` pins = 0, and 00-install-prereqs.sh
-    # mentions go ZERO times. The first version of this message asserted a provision that had been
-    # deleted three days earlier, and it only ever ran green because this dev box still carried a
-    # STALE ~/.local/share/mise/installs/go/1.27.0 -- the exact hidden-dev-box-state class
-    # .mise.toml's own comment names for rust/dotnet. A walkbox has neither.
-    command -v go >/dev/null 2>&1 || die "[${name}] images/selfbuilt.tsv requests a go_get override (${gg}) but 'go' is not on PATH.
-  The override edits go.mod BEFORE the container build, so it needs a Go toolchain ON THIS BOX.
-  Go is deliberately NOT in .mise.toml (removed 2026-08-23) and NOT installed by 'make deps' —
-  install it yourself on the internet box, or drop the go_get column for this row."
-    log_info "[${name}] dependency override: go get ${gg}"
-    # shellcheck disable=SC2086  # INTENTIONALLY unquoted: the column is space-separated and
-    # may carry several module@version overrides. Quoting would pass them as ONE argument.
-    ( cd "$src" && run go get $gg )
-    # ⚠️ `go mod vendor`, NOT `go mod tidy`. MEASURED, and the two failures look identical:
-    #   * a vendored module (this fork vendors) left un-revendored dies at the credential-helper
-    #     step with `go: inconsistent vendoring` -- an error naming neither the module nor us.
-    #   * `go mod tidy` PRUNES the tool dependency deploy/Dockerfile installs, failing the SAME
-    #     step for a completely different reason.
-    if [ -d "${src}/vendor" ]; then
-      log_info "[${name}] re-vendoring (the upstream vendors its dependencies)"
-      ( cd "$src" && run go mod vendor )
-    fi
+    # ---- THE OVERRIDE GOES INSIDE THE BUILD, WHERE GO ALREADY LIVES ----------
+    # It used to run `go get` + `go mod vendor` ON THIS BOX, before the container build. That made a
+    # host Go toolchain a hard dependency of the whole flow -- and MEASURED 2026-08-27: `.mise.toml`
+    # carries 0 `go` pins (removed 2026-08-23), `00-install-prereqs.sh` installs it 0 times, and
+    # `03-check-tools.sh` checks it 0 times. So wiring this into `install-all` would have run the
+    # ~10-minute mirror on every walkbox and THEN died on a missing binary. It only ever looked fine
+    # here because this dev box carries a stale mise go/1.27.0 that a walkbox does not.
+    #
+    # MEASURED on the fork at the pinned tag: deploy/Dockerfile's builder stage is
+    # `FROM golang:1.26 ... AS builder` with `WORKDIR /src` and `COPY . .`, and it VENDORS. So both
+    # the toolchain and the source are already inside the build; the host needs no Go at all.
+    # Upstream documents this exact `go get <tool>@<tag>` + `go mod vendor` pair in a comment above
+    # its own `go install` steps -- it expects the results committed via PR, which is why there is no
+    # ARG hook and why we insert a RUN instead.
+    df="${src}/${dfile}"
+    [ -f "$df" ] || die "[${name}] ${dfile} not found under ${src}"
+    # The anchor is load-bearing: the RUN must land AFTER the source is COPYed in and BEFORE the
+    # first `go install`, or it either has no go.mod to edit or runs too late to affect the tools.
+    grep -qE '^COPY \. \.$' "$df" || die "[${name}] ${dfile} has no 'COPY . .' line to anchor the
+  dependency override on. Upstream's layout changed; re-read deploy/Dockerfile before editing this."
+    log_info "[${name}] dependency override (inside the build): go get ${gg}"
+    tmp_df="${df}.selfbuilt"
+    awk -v gg="$gg" '
+      { print }
+      /^COPY \. \.$/ && !done {
+        print ""
+        print "# --- injected by scripts/14-selfbuilt-build.sh from images/selfbuilt.tsv go_get ---"
+        print "# go mod vendor, NOT go mod tidy: this fork VENDORS, and tidy PRUNES the tool"
+        print "# dependencies the go install steps below need."
+        print "RUN go get " gg " && go mod vendor"
+        done = 1
+      }
+    ' "$df" > "$tmp_df"
+    # Prove the injection landed rather than trusting awk exited 0.
+    grep -qE '^RUN go get ' "$tmp_df" || die "[${name}] the dependency override was not injected into ${dfile}"
+    mv "$tmp_df" "$df"
   fi
 
   build_args=(build -f "${src}/${dfile}" -t "$local_ref")
@@ -145,7 +176,33 @@ for name in $NAMES; do
   # write-only decoration. 22-selfbuilt-push.sh appends the REGISTRY digest after a verified push,
   # which is the value a later run can actually compare.
   engine_id="$("$ENGINE" inspect --format '{{.Id}}' "$local_ref" 2>/dev/null || echo unknown)"
+  # ---- PROVE THE OVERRIDE REACHED THE ARTIFACT -------------------------------
+  # Injecting the RUN proves the DOCKERFILE TEXT changed; it does not prove the binary was built
+  # with the override. Without this the whole chain is: text injected -> build exited 0 -> push
+  # verified -> INFERRED that the dependency is what we asked for. A green push is equally
+  # consistent with a cached layer or `go get` resolving to something else.
+  # Go embeds its module graph in the executable, so one command settles it offline.
+  if [ -n "$gg" ]; then
+    for _mod in $gg; do
+      _want_mod="${_mod%@*}"; _want_ver="${_mod##*@}"
+      if _mods="$($ENGINE run --rm --entrypoint /busybox/sh "$local_ref" \
+                    -c 'go version -m /kaniko/executor 2>/dev/null' 2>/dev/null)"; then
+        printf '%s' "$_mods" | grep -qE "[[:space:]]${_want_mod}[[:space:]]+${_want_ver}([[:space:]]|\$)" \
+          || die "[${name}] the go_get override did not reach the binary: expected ${_want_mod} ${_want_ver}
+  in 'go version -m /kaniko/executor'. The Dockerfile text was injected and the build exited 0, so
+  this is the difference between 'we asked' and 'it happened'."
+        log_info "[${name}] verified in the binary: ${_want_mod} ${_want_ver}"
+      else
+        # A non-debug image has no shell; say so rather than silently skipping the proof.
+        log_warn "[${name}] could not run 'go version -m' in ${local_ref} (no shell?) — the go_get override is UNVERIFIED in the artifact"
+      fi
+    done
+  fi
+
   printf '%s\t%s\t%s\t%s:%s\t%s\n' "$name" "$ref" "$engine_id" "$repo" "$tag" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${LOCK}.tmp"
+  # Written ONLY here, i.e. after the save succeeded — a build that dies leaves no stamp, so the
+  # next run rebuilds rather than trusting a partial artifact.
+  printf '%s\n' "$ref" > "$_sb_stamp"
 
   rm -rf -- "$src"; src=""
 done

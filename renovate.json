@@ -105,12 +105,23 @@
       "customType": "regex",
       "description": "images/selfbuilt.tsv \u2014 images we BUILD from source because no free published build exists. WITHOUT THIS MANAGER THE PIN IS FROZEN FOREVER: measured 2026-08-26, none of the other customManager patterns matches this path, so the file's own `# renovate:` annotation was INERT. The whole reason for building from source is escaping an unmaintained image; shipping a new un-bumpable pin would recreate the problem.",
       "managerFilePatterns": [
-        "^images/selfbuilt\\.tsv$"
+        "/^images\\/selfbuilt\\.tsv$/"
       ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s*\\n[^#\\t\\n]+\\t[^\\t]+\\t(?<currentValue>[^\\t]+)\\t"
       ],
       "extractVersionTemplate": "^v?(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "description": "images/selfbuilt.tsv column 8 (go_get) — the DEPENDENCY OVERRIDE, tracked separately from the git_ref in column 3. The manager above captures column 3 only, so this pin was invisible to every manager in this file: measured 2026-08-27, managerFilePatterns across all eight managers cover .env.example, images/images.txt, k8s/**.yaml, Makefile and scripts/**, and `gomod` does not apply to a TSV. That is the exact failure the manager above exists to prevent, on the same row — and this one is the SECURITY-hardening pin (it carries the go-containerregistry realm-check exemption), so a future upstream fix would never land. Anchored on a leading TAB so it can only match the data row: the module@version form appears nowhere else in the file (verified).",
+      "managerFilePatterns": [
+        "/^images\\/selfbuilt\\.tsv$/"
+      ],
+      "matchStrings": [
+        "\\t(?<depName>github\\.com/[^\\s@\\t]+)@(?<currentValue>v[^\\s\\t]+)"
+      ],
+      "datasourceTemplate": "go"
     }
   ],
   "vulnerabilityAlerts": {

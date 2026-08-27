@@ -11,6 +11,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# shellcheck source=scripts/lib/selfbuilt.sh
+. "${SCRIPT_DIR}/lib/selfbuilt.sh"
 
 # ⚠️ DECLARED because mise_pin() below now asks mise for the RESOLVED pin instead of hand-parsing
 # .mise.toml. Both run on the INTERNET side (this script cuts the bundle), so needing them here does not
@@ -31,9 +33,22 @@ load_env
 # The cheapest failure available is this one, on the internet box, before the tar.
 if [ -s "${REPO_ROOT}/images/selfbuilt.tsv" ] \
    && grep -qvE '^[[:space:]]*(#|$)' "${REPO_ROOT}/images/selfbuilt.tsv" 2>/dev/null; then
-  [ -d "${BUNDLE_DIR}/selfbuilt" ] || die "images/selfbuilt.tsv lists images this repo BUILDS, but
-  ${BUNDLE_DIR}/selfbuilt does not exist — so this bundle would carry none of them and
-  'make selfbuilt-push' would fail on the air-gap box, after the carry.
+  # ⚠️ CHECK THE TARBALLS, NOT THE DIRECTORY. 14-selfbuilt-build.sh does `mkdir -p "$OUT_DIR"`
+  # BEFORE it can fail, so a build that dies part-way leaves an EMPTY selfbuilt/ behind — and a
+  # `[ -d ]` guard then PASSES over it, shipping a bundle with zero executors and failing "after the
+  # carry, on the machine that cannot re-cut", which is exactly what this guard exists to prevent.
+  # Per-row, so a partial build (2 of 3 images) is caught too.
+  _sb_missing=""
+  while IFS= read -r _sb; do
+    [ -n "$_sb" ] || continue
+    [ -s "${BUNDLE_DIR}/selfbuilt/${_sb}.tar" ] || _sb_missing="${_sb_missing} ${_sb}"
+  done <<EOF
+$(selfbuilt_names)
+EOF
+  [ -z "$_sb_missing" ] || die "images/selfbuilt.tsv lists images this repo BUILDS, and the bundle
+  carries no tarball for:${_sb_missing}
+  ${BUNDLE_DIR}/selfbuilt/<name>.tar is what 'make selfbuilt-push' reads on the air-gap box, so this
+  bundle would fail there — after the carry, on the machine that cannot re-cut.
   Run 'make selfbuilt-build' on THIS box first."
 fi
 

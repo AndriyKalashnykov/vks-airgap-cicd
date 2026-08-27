@@ -25,7 +25,7 @@
 #   repo_path   path under ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/
 #   tag         the tag the consuming manifest asks for.
 #               ⚠️ IT MUST ENCODE ANY go_get OVERRIDE, NOT JUST THE UPSTREAM REF. Our artifact is
-#               "fork v1.25.18 PLUS go-containerregistry v0.21.9" -- tagging that as plain
+#               "fork v1.25.18 PLUS go-containerregistry v0.21.6" -- tagging that as plain
 #               `v1.25.18-debug` misrepresents its content, and it is not merely cosmetic: MEASURED
 #               2026-08-26, pushing different content under an already-cached tag left the KinD nodes
 #               running the OLD binary (Tekton steps are imagePullPolicy=IfNotPresent), so a verified
@@ -51,7 +51,18 @@
 # ships the guard WITHOUT its fix. Bumping the dependency is only possible because we BUILD; a
 # mirrored published image offers no such lever.
 # Proven behaviourally, both binaries against the real Harbor: v1.24.0 pushes, v1.25.18-as-shipped
-# FAILS, v1.25.18 rebuilt with v0.21.9 PUSHES.
+# FAILS, v1.25.18 rebuilt with v0.21.6 PUSHES.
+#
+# WHY v0.21.6 AND NOT NEWER. v0.21.6 is the FIRST release carrying the exemption, read at the tag:
+# validateRealmURL gains a registryHost argument and returns nil early when u.Host == registryHost,
+# before the IP check. v0.21.9 is 51 commits further and that delta touches pkg/v1/mutate,
+# pkg/v1/tarball and pkg/name -- kaniko's hot path -- ADDING new hard-error paths (#2328 read-limit
+# error, #2306 symlink rejection, #2303 layer-digest verification). None of that buys us anything the
+# exemption does not, so we take the SMALLEST blast radius. (v0.22.0 exists; "newest" was never the
+# reason.) The exemption is NOT opt-in and there is NO env/flag alternative: both transport trees
+# contain zero os.Getenv, --insecure gates only the SCHEME, and upstream issue #2258 asked for a
+# disable option that was never implemented. Bumping the fork does not help either -- v1.25.19
+# (2026-08-27) still pins v0.21.5.
 #
 # ⚠️ THE FORK VENDORS ITS DEPENDENCIES. `go get` alone leaves vendor/ stale and the build dies with
 # `go: inconsistent vendoring` at the credential-helper step -- an error naming neither the module
@@ -60,4 +71,4 @@
 # step for a completely different reason.
 #
 # renovate: datasource=github-releases depName=chainguard-forks/kaniko
-kaniko	https://github.com/chainguard-forks/kaniko	v1.25.18	deploy/Dockerfile	kaniko-debug	kaniko-project/executor	v1.25.18-gcr0.21.9-debug	github.com/google/go-containerregistry@v0.21.9
+kaniko	https://github.com/chainguard-forks/kaniko	v1.25.18	deploy/Dockerfile	kaniko-debug	kaniko-project/executor	v1.25.18-gcr0.21.6-debug	github.com/google/go-containerregistry@v0.21.6

@@ -530,6 +530,23 @@ engine-trust-check-rootless: check-env ## Is ROOTLESS DOCKER viable? (the ONLY d
 # The offline Maven builder needs TWO networks — Maven Central (to bake ~/.m2) and Harbor (to push).
 # A DUAL-HOMED box has both, so `builder-image` does it in one shot. A SNEAKERNET split has NEITHER
 # box with both, so it is split: build outside (into the bundle), push inside (with the carried crane).
+# ⚠️ THESE THREE LIVE HERE, NOT UNDER `##@ Quality gates`, ON PURPOSE.
+# They were filed there, and check-doc-target-coverage.sh EXEMPTS that group by name — so they were
+# invisible to the gate AND undocumented (`grep -rn selfbuilt docs/ README.md` returned zero) while
+# it reported "every operator-invocable target is documented". They are not gates: they clone from
+# GitHub, build from source, and mutate a registry.
+.PHONY: selfbuilt-image
+selfbuilt-image: check-env ## (dual-homed) Build + push the images that have no published upstream (images/selfbuilt.tsv)
+	@$(SCRIPTS)/15-build-push-selfbuilt.sh
+
+.PHONY: selfbuilt-build
+selfbuilt-build: ## INTERNET box: build the images that have no free published build (images/selfbuilt.tsv) into the bundle
+	@$(SCRIPTS)/14-selfbuilt-build.sh
+
+.PHONY: selfbuilt-push
+selfbuilt-push: ## AIR-GAP box: push the carried self-built images into Harbor (no container engine needed)
+	@$(SCRIPTS)/22-selfbuilt-push.sh
+
 .PHONY: builder-image
 builder-image: check-env ## (dual-homed) Build + push the air-gap Maven builder image (deps pre-baked)
 	@$(SCRIPTS)/15-build-push-builder.sh
@@ -924,7 +941,7 @@ e2e-sneakernet-both: ## The sneakernet OS matrix: the SAME carried tarball unpac
 # platform / gitops consume them — so a corrupt/incomplete Harbor copy fails HERE (the
 # integrity gate) instead of surfacing later as a mid-pipeline Kaniko MANIFEST_UNKNOWN.
 # Read-only + non-disruptive to a healthy mirror. Prereqs update left-to-right (sequential).
-install-all: preflight mirror mirror-verify builder-image vks-login platform gitops ## Run the complete air-gap install end to end (preflight FIRST, then mirror integrity-verified, then the pipeline)
+install-all: preflight selfbuilt-image mirror mirror-verify builder-image vks-login platform gitops ## Run the complete air-gap install end to end (preflight FIRST, then mirror integrity-verified, then the pipeline)
 
 .PHONY: verify
 verify: check-env ## e2e: push a change → Tekton build → Harbor → ArgoCD sync → HTTP check (LIVE cluster)
@@ -1155,13 +1172,7 @@ check-kind-kubeconfig: ## Fail if a `kind` invocation could write the AMBIENT $$
 check-selfbuilt: ## Fail if images/selfbuilt.tsv is missing, empty, or has a moving ref / unpinned go_get
 	@$(SCRIPTS)/check-selfbuilt.sh
 
-.PHONY: selfbuilt-build
-selfbuilt-build: ## INTERNET box: build the images that have no free published build (images/selfbuilt.tsv) into the bundle
-	@$(SCRIPTS)/14-selfbuilt-build.sh
 
-.PHONY: selfbuilt-push
-selfbuilt-push: ## AIR-GAP box: push the carried self-built images into Harbor (no container engine needed)
-	@$(SCRIPTS)/22-selfbuilt-push.sh
 
 .PHONY: check-cluster-template-vars
 check-cluster-template-vars: ## Fail if k8s/vks/cluster.yaml interpolates a $${VAR} that 25-vks-cluster-create.sh never binds

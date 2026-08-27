@@ -47,6 +47,31 @@ rc=0
 while IFS= read -r name; do
   [ -n "$name" ] || continue
   ref="$(selfbuilt_git_ref "$name")"; tag="$(selfbuilt_tag "$name")"
+
+  # ⚠️ THE TAG MUST ALSO ENCODE EVERY go_get OVERRIDE, NOT JUST THE REF.
+  # The ref check alone was byte-identical GREEN in all three of these, MEASURED:
+  #   baseline                                   -> rc=0
+  #   go_get bumped v0.21.6 -> v0.22.0, tag same -> rc=0   (different content, same tag)
+  #   go_get column DELETED entirely, tag same   -> rc=0   (image built WITHOUT the fix)
+  # The third is the dangerous one: the image ships under a tag still advertising the override, and
+  # every node with imagePullPolicy=IfNotPresent keeps serving the old working image -- a GREEN e2e
+  # over a build that no longer contains the fix. That is exactly the incident the header above
+  # memorialises, re-armed by the column the header itself calls load-bearing.
+  gg="$(selfbuilt_go_get "$name")"
+  if [ -n "$gg" ]; then
+    for _mod in $gg; do
+      _ver="${_mod##*@}"                 # module@vX.Y.Z -> vX.Y.Z
+      _bare="${_ver#v}"                  # the tag spells it without the leading v (gcr0.21.6)
+      case "$tag" in
+        *"$_bare"*) ;;
+        *) echo "check-selfbuilt: row '${name}' tag '${tag}' does not encode its go_get override '${_mod}'" >&2
+           echo "  Two builds with DIFFERENT dependency pins would share one tag, and a node with" >&2
+           echo "  imagePullPolicy=IfNotPresent would keep serving whichever it cached first." >&2
+           rc=1 ;;
+      esac
+    done
+  fi
+
   case "$tag" in
     *"$ref"*) ;;
     *) echo "check-selfbuilt: row '${name}' tag '${tag}' does not contain its git_ref '${ref}'" >&2

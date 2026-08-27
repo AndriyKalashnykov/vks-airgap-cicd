@@ -867,7 +867,7 @@ rejected, and it takes 8–10 minutes to say so. Fix it here — the Harbor step
 comes from.
 
 ```bash
-make install-all      # preflight -> mirror -> mirror-verify -> builder-image -> vks-login -> platform -> gitops
+make install-all      # preflight -> selfbuilt-image -> mirror -> mirror-verify -> builder-image -> vks-login -> platform -> gitops
 make verify           # pushes a marked change and follows it to the running app
 ```
 

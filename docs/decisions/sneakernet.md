@@ -62,6 +62,19 @@ Split:
 | `make builder-build` | A | the package registries only (Maven Central · proxy.golang.org · npm · pypi.org · crates.io · NuGet) | base pinned **by digest from `bundle/images.lock`** — byte-identical to the mirrored base, so no Harbor is needed and builder↔mirror alignment holds *by construction* (`images.txt` pins maven by tag, so a naive public pull could legitimately differ) |
 | `make builder-push` | B | Harbor only | `crane push bundle/builders/<app>` — the destination ref is computed from `HARBOR_URL` **on box B**, which is the only box that knows it |
 | `make builder-image` | dual-homed | both | unchanged: build + push |
+| `make selfbuilt-build` | A | GitHub + the Go module proxy | clone the pinned tag, build from source, `<engine> save` into `bundle/selfbuilt/<name>.tar` |
+| `make selfbuilt-push` | B | Harbor only | `crane push bundle/selfbuilt/<name>.tar` — no container engine needed on B, exactly as `builder-push` |
+| `make selfbuilt-image` | dual-homed | both | build + push in one shot; this is what `install-all` runs |
+
+`images/selfbuilt.tsv` is the same idea for a DIFFERENT reason: those images have no published
+upstream at all (Google archived kaniko; the maintained fork publishes no image), so `mirror-pull`
+has nothing to pull and only `selfbuilt-build` can supply them. They ride in `bundle/selfbuilt/`,
+carried for free by the existing tar — and `11-bundle.sh` refuses to cut a bundle that is missing any
+of their tarballs, because the alternative is discovering it on box B after the carry.
+
+⚠️ The dependency override in the `go_get` column runs **inside** the container build, not on box A.
+The fork's builder stage is already `FROM golang:...`, so box A needs no Go toolchain — which matters
+because Go is deliberately absent from `.mise.toml` and `make deps`.
 
 The builder is **not** added to `images/images.txt`. It has no upstream to pull or track, `mirror-pull`
 would try to pull a ref that does not exist, `_mirror_repo_path` would double the project path, and —
