@@ -29,17 +29,28 @@ ARGOCD_MANIFEST_VERSION="${ARGOCD_VERSION:-v3.5.1}"   # aligned with .env.exampl
 WORK="$(mktemp -d)"
 HUB_KC="${WORK}/hub.kubeconfig"
 GUEST_KC="${WORK}/guest.kubeconfig"
+# ⚠️ MUST PRECEDE THE FIRST `kind` CALL. This script does NOT call load_env, so without it
+# $KUBECONFIG is the operator's AMBIENT value -- ~/.kube/config when unset -- and creating two
+# clusters hijacks its `current-context` twice. MEASURED on this box 2026-08-26: ~/.kube/config
+# carried stale `kind-cc-hub`/`kind-cc-guest` entries and `kubectl config current-context` was
+# unset. $WORK is a mktemp -d already removed by the EXIT trap.
+export KUBECONFIG="${WORK}/kubeconfig"
 
 cleanup() {
-  kind delete cluster --name "$HUB"   >/dev/null 2>&1 || true
-  kind delete cluster --name "$GUEST" >/dev/null 2>&1 || true
+  kind delete cluster --name "$HUB"   --kubeconfig "$HUB_KC"   >/dev/null 2>&1 || true
+  kind delete cluster --name "$GUEST" --kubeconfig "$GUEST_KC" >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
 trap cleanup EXIT
 
 log_info "creating two kind clusters: HUB=$HUB (ArgoCD) + GUEST=$GUEST (workload)"
-kind create cluster --name "$HUB"   >/dev/null
-kind create cluster --name "$GUEST" >/dev/null
+# --kubeconfig IS LOAD-BEARING: without it `kind create` writes to $KUBECONFIG. This script does
+# NOT call load_env (measured: 0 calls), so that is the operator's AMBIENT value -- ~/.kube/config
+# when unset, which on a lab box is a LIVE Supervisor config. Creating two clusters hijacked its
+# current-context twice. (An earlier draft of this comment cited lib/os.sh:692 here; that line
+# never executes on this path, and citing it sends a reader to the wrong file.)
+kind create cluster --name "$HUB"   --kubeconfig "$HUB_KC"   >/dev/null
+kind create cluster --name "$GUEST" --kubeconfig "$GUEST_KC" >/dev/null
 kind get kubeconfig --name "$HUB"   > "$HUB_KC"
 kind get kubeconfig --name "$GUEST" > "$GUEST_KC"
 # Guest API endpoint reachable from HUB pods on the shared kind docker network — the guest

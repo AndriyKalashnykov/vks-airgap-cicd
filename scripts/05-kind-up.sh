@@ -33,6 +33,27 @@ CPK_VERSION="${CLOUD_PROVIDER_KIND_VERSION:?CLOUD_PROVIDER_KIND_VERSION must be 
 # Not an env var: this path is OWNED by the KinD flow, not an operator knob. (Making it settable
 # would just re-open the hole from the other side.)
 KUBECONFIG_PATH="${REPO_ROOT}/secrets/kind.kubeconfig"
+
+# ⚠️ THIS EXPORT MUST PRECEDE THE FIRST `kind` INVOCATION IN THIS FILE. It used to live ~120 lines
+# below, after the cluster was up -- which left every `kind` call before it writing into the
+# AMBIENT $KUBECONFIG. load_env applies the REAL-LAB path as a CODE default (lib/os.sh:692,
+# `export KUBECONFIG="${KUBECONFIG:-${REPO_ROOT}/secrets/vks.kubeconfig}"`), so that ambient value
+# is a LAB slot on any lab box, and after the scenario docs' `export KUBECONFIG=./secrets/
+# supervisor.kubeconfig` (scenario-1.md:322, scenario-2.md:148) it is the SUPERVISOR.
+#
+# MEASURED 2026-08-26, kind v0.32.0 -- kind MERGES, it does not truncate, so nothing is lost:
+#   `kind create`  adds its cluster/context/user AND HIJACKS `current-context` to `kind-<name>`.
+#   `kind delete`  removes only its own entries -- but if `current-context` is the kind one it
+#                  DELETES THE KEY, leaving `kubectl` with "current-context is not set".
+# So the damage is a context hijack, not data loss, and it is create-then-delete: pinning the
+# CREATE means kind never becomes current in a lab file, and the delete is then a no-op on it
+# (measured: a kubeconfig with no `kind-*` entries comes back byte-identical).
+# The sharp victim is a SCENARIO-2 TENANT: their $KUBECONFIG is secrets/vks.kubeconfig, the
+# credential the platform team HANDED them, and they cannot self-service a replacement.
+#
+# `secrets/` may not exist yet and the export is only a variable, so nothing is created here;
+# ensure_secret_dir below still makes the dir 0700 rather than letting kind create it 0755.
+export KUBECONFIG="$KUBECONFIG_PATH"
 READY_TIMEOUT="${READY_TIMEOUT_SECONDS:-300}"
 POLL_INTERVAL="${POLL_INTERVAL_SECONDS:-5}"
 KIND_CONFIG="${REPO_ROOT}/kind/kind-config.yaml"
@@ -67,14 +88,28 @@ if kind get clusters 2>/dev/null | grep -xF "$CLUSTER_NAME" >/dev/null; then
     need_create=0
   else
     log_warn "kind cluster '$CLUSTER_NAME' exists but is NOT healthy (partial/interrupted create?) — deleting + recreating"
-    run kind delete cluster --name "$CLUSTER_NAME" || true
+    # --kubeconfig: see the block below. `kind delete` only strips `kind-*` entries, so it cannot
+    # damage a lab kubeconfig -- but pinning it means kind NEVER opens a file this flow does not own.
+    ensure_secret_dir "$(dirname "$KUBECONFIG_PATH")"   # kind creates missing parents at 0755
+    run kind delete cluster --name "$CLUSTER_NAME" --kubeconfig "$KUBECONFIG_PATH" || true
   fi
   rm -f "$kc"
 fi
 if [ "$need_create" = 1 ]; then
   log_info "creating kind cluster '$CLUSTER_NAME' from $KIND_CONFIG"
   # Assemble args in an array so the optional --image is added only when set.
-  create_args=(create cluster --name "$CLUSTER_NAME" --config "$KIND_CONFIG")
+  # `--kubeconfig` is belt-and-braces on top of the early `export KUBECONFIG` at the top of this
+  # file: it survives a re-order, and it makes the ownership explicit at the call site. kind's help:
+  # "--kubeconfig string  sets kubeconfig path instead of $KUBECONFIG or $HOME/.kube/config".
+  # It also gives us the file at 0600 WHEN KIND CREATES IT (kind's own mode). The `kind get kubeconfig >`
+  # redirect below still runs every time and PRESERVES an existing mode, so on a warm reuse where the
+  # file is absent the result is 0664 under umask 002 -- harmless inside a 0700 secrets/, but not the
+  # unconditional 0600 an earlier draft claimed.
+  # which is why secrets/kind.kubeconfig was 0664 before this change. ensure_secret_dir runs first so
+  # `secrets/` is BORN 0700 rather than created 0755 by kind and hardened afterwards (kind creates
+  # missing parents itself -- MEASURED 2026-08-26 -- so this is about the MODE, not about existence).
+  ensure_secret_dir "$(dirname "$KUBECONFIG_PATH")"
+  create_args=(create cluster --name "$CLUSTER_NAME" --config "$KIND_CONFIG" --kubeconfig "$KUBECONFIG_PATH")
   if [ -n "$NODE_IMAGE" ]; then
     log_info "using pinned node image: $NODE_IMAGE"
     create_args+=(--image "$NODE_IMAGE")
@@ -142,7 +177,14 @@ if [ "$need_create" = 1 ]; then state_set KIND_REUSED 0; else state_set KIND_REU
 [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ] || state_set ARGOCD_ADMIN_PASSWORD "$(gen_password)"
 log_info "published KUBECONFIG/VKS_AUTH_METHOD/VKS_CONTEXT (+ generated KinD Harbor/Gitea/ArgoCD creds; see 'make creds-show') to $(state_file)"
 
-# Point subsequent kubectl calls at the kind cluster.
+# ⚠️ THIS LINE RESTORES KUBECONFIG; IT IS NOT A COSMETIC RE-EXPORT. Do not delete it.
+# An earlier version of this comment claimed the early export used a "possibly-relative form" --
+# that is FALSE: REPO_ROOT is always absolute (cd&&pwd / git rev-parse --show-toplevel / pwd), so
+# KUBECONFIG_PATH == KUBECONFIG_ABS. The real reason, MEASURED 2026-08-26: state_claim_kind()
+# UNSETS every non-VKS_STATE_* key of a foreign sink, KUBECONFIG among them
+# (BEFORE=[.../secrets/kind.kubeconfig] -> AFTER=[<UNSET>]). state_stamp below READS $KUBECONFIG,
+# so without this line it would stamp VKS_STATE_KUBECONFIG="" / SERVER="" -- a KinD-stamped sink
+# that looks unstamped, silently, on the lab box this fix exists to protect.
 export KUBECONFIG="$KUBECONFIG_ABS"
 
 # STAMP ONLY NOW — AFTER KUBECONFIG points at the cluster we just created.

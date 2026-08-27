@@ -15,6 +15,10 @@ load_env
 
 CLUSTER_NAME="${KIND_CLUSTER_NAME:?KIND_CLUSTER_NAME must be set in .env.example}"
 KUBECONFIG_PATH="${KUBECONFIG:-}"
+# The slot the KinD flow OWNS (05-kind-up.sh:35). `kind delete` is pinned to it so kind can never
+# open the inherited $KUBECONFIG -- which on a lab box is secrets/vks.kubeconfig or, after
+# scenario-1 step "export KUBECONFIG=./secrets/supervisor.kubeconfig", the SUPERVISOR.
+KIND_KUBECONFIG_PATH="${REPO_ROOT}/secrets/kind.kubeconfig"
 CPK_CONTAINER="cloud-provider-kind"
 
 # NO `require_cmd docker` HERE, DELIBERATELY. It made the FILE half of this script (the overlay, the
@@ -88,7 +92,10 @@ if have kind; then _kind_out="$(kind get clusters 2>"$_DPS_ERR")" || _kind_rc=$?
 if [ "$_kind_rc" -ne 0 ] && have kind; then _cannot_ask "kind clusters"; fi
 if [ "$_kind_rc" -eq 0 ] && printf '%s\n' "$_kind_out" | grep -xF "$CLUSTER_NAME" >/dev/null; then
   log_info "deleting kind cluster '$CLUSTER_NAME'"
-  run kind delete cluster --name "$CLUSTER_NAME"
+  # kind CREATES missing parents at 0755 (measured), and secrets/ holds kubeconfigs and generated
+  # passwords -- so make it 0700 first rather than letting kind decide.
+  ensure_secret_dir "$(dirname "$KIND_KUBECONFIG_PATH")"
+  run kind delete cluster --name "$CLUSTER_NAME" --kubeconfig "$KIND_KUBECONFIG_PATH"
   KIND_CLUSTER_REMOVED=1
 else
   log_info "kind cluster '$CLUSTER_NAME' not present (or kind absent) — skipping"

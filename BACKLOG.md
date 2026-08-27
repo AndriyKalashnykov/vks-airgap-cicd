@@ -16,6 +16,59 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🟢 B499 — `kind` wrote the AMBIENT `$KUBECONFIG`, a LAB slot on every lab box 🟢 closed
+
+**CLOSED by #1050.** Kept because the *gate design* was refuted once and should not be rebuilt.
+
+`kind` writes `$KUBECONFIG` when `--kubeconfig` is absent (its help: *"sets kubeconfig path instead of
+`$KUBECONFIG` or `$HOME/.kube/config`"*). `load_env` applies the real-lab path as a CODE default
+(`lib/os.sh:692`), so on any lab box that value **is a lab slot** — and after the scenario docs' own
+`export KUBECONFIG=./secrets/supervisor.kubeconfig` (`scenario-1.md:322`, `scenario-2.md:148`) it is
+the **Supervisor**.
+
+### What it actually does — MEASURED, kind v0.32.0
+
+kind **MERGES**; it does not truncate, so **no credential is lost**. The damage is a **context hijack**:
+
+| | effect |
+|---|---|
+| `kind create` | adds its entries, repoints `current-context` to `kind-<name>` |
+| `kind delete` | removes its own entries; if `current-context` was the kind one, **deletes the key** |
+| `kind delete`, file with no `kind-*` entries | **byte-identical** |
+
+That last row is why fixing CREATE defuses DELETE.
+
+### Blast radius is NOT symmetric — the worst case is the TENANT
+
+| | hits | recovery |
+|---|---|---|
+| scenario-1 | `supervisor.kubeconfig` or `secrets/<cluster>.kubeconfig` | `make vks-login` — re-fetchable |
+| **scenario-2** | **`secrets/vks.kubeconfig`** — the credential the platform team HANDED them | **none.** RULE ZERO-A0: a tenant cannot self-service it. A support ticket. |
+
+Observed on the dev box: `secrets/vks.kubeconfig` read `server: https://127.0.0.1:36653`, and
+`~/.kube/config` had lost `current-context` and carried stale `kind-cc-hub`/`kind-cc-guest` from
+`e2e-cross-cluster.sh`.
+
+### 🔴 The obvious gate was BUILT and REFUTED — do not rebuild it
+
+A gate that greps each call for `--kubeconfig` is **structurally blind to this bug**:
+`05-kind-up.sh` assembles the subcommand in an array (`create_args=(create cluster …)`;
+`run kind "${create_args[@]}"`), so the string `kind create` never appears. Measured: it returned an
+**identical clean 6-of-6 on the fixed AND the unfixed tree** — it would have shipped green over the
+defect it was written for.
+
+`check-kind-kubeconfig.sh` therefore keys on **ORDERING**: each writing `kind` invocation must carry
+`--kubeconfig` **or** be preceded by an `export KUBECONFIG=` in the same file. RED-proven both ways —
+against `origin/main` it names all 7 sites; removing the early export re-REDs it.
+
+### Why it took a session to find
+
+It was recorded **nowhere**: 0 mentions in `CLAUDE.md`, 0 gates over `kind` invocations, and none of
+the 10 BACKLOG kubeconfig hits was this bug. That absence was the real defect; the gate plus one
+`CLAUDE.md` DISTRUST row is the fix for it.
+
+---
+
 ## 🔵 B485 — an air-gapped "depot" WITHOUT VCF Operations: plausible, untested, and worth one experiment 🔵 idea
 
 **Grade: NOT-ESTABLISHED.** Everything below the "what is settled" table is a *hypothesis*. Nothing in
