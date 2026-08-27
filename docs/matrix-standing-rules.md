@@ -70,7 +70,12 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
    and `WALK_SKIP_REBUILD` are existing, documented flags, so this needs no change to the harness:
 
    ```sh
-   # 0. the lab in front of you is already on 3.7 (register via UI, then the vks-upgrade target)
+   # 0. GET THE LAB ONTO 3.7 AND LOGGED IN. If it is already there, only kubectl-login may be
+   #    missing — see the ⚠️ below.
+   make -C ~/projects/nested-vsphere-lab trust-vcsa        # pin the VMCA before sending a credential
+   make -C ~/projects/nested-vsphere-lab kubectl-login     # MANDATORY — see below
+   make -C ~/projects/nested-vsphere-lab vks-register VKS_VERSION=<ver>
+   make -C ~/projects/nested-vsphere-lab vks-upgrade  VKS_VERSION=<ver> CONFIRM=<ver>
    # 1. cut A. Stops WITHOUT rebuilding, because no row of cut B was requested.
    WALK_REPO=... WALK_OUT_ROOT=$HOME/walk-evidence \
    make -C ~/projects/nested-vsphere-lab walk-matrix WALK_ROWS="1 2 5"
@@ -90,6 +95,25 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
    make -C ~/projects/nested-vsphere-lab walk-matrix \
         WALK_ROWS="3 4 6" WALK_SKIP_REBUILD=1 WALK_CLUSTER_NAME=cicd-gc<stamp>
    ```
+
+   ⚠️ **`kubectl-login` IS PART OF STEP 0, and it was missing from it until 2026-08-27 — which cost
+   a cut-A launch.** Step 2 listed it for cut B's lab; step 0 did not, because step 0 was written as
+   one prose line assuming a lab *already* prepared. Rebuild the lab and you are in step 2's
+   situation while reading step 0's instructions. The lab repo's `destroy` target RENAMES the
+   kubeconfig to `kubeconfig.destroyed-<ts>`, and its `lab` target does not log in (its own summary
+   says to run `kubectl-login`), so a freshly built lab has none.
+
+   The gap is invisible until the walk starts, because **register and upgrade do not need it** — they
+   use the vCenter REST API (`VCSA_IP` + token). Only the walk needs the Supervisor kubeconfig. So
+   step 0 appears to succeed completely and `walk-matrix` then refuses:
+
+   ```text
+   REFUSING: there is no Supervisor kubeconfig at .../kubeconfig.
+   FATAL: could not resolve a usable TKr — refusing to walk against a guess
+   ```
+
+   ⚠️ **One attempt only.** The SSO account locks out PERMANENTLY after 3 failed attempts; never
+   loop `kubectl-login`.
 
    ⚠️ **The two halves are then TWO run directories and TWO verdicts**, so the pair-symmetry read
    (§D) spans them: 1↔3, 2↔4, 5↔6 still have to match, and nothing prints that for you.
