@@ -101,10 +101,23 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
 
    ⚠️ **EXERCISED end to end on 2026-08-27** (cut A rows 1 2 5, cut B rows 3 4 6; both verdicts
    `MATRIX COMPLETE`, all six rows `0 FAILED`, VKS 3.7.0/3.7.1). Previously read NOT YET EXERCISED.
-   The caveats below still stand — The flags, their preconditions and the destroy-and-rebuild
-   are read from `walk-matrix.sh` and `docs/VKS-UPGRADE.md`; the 3.7 upgrade itself IS
-   lab-verified (3.6.3 → 3.7.0 → 3.7.1, both `CONFIGURED`). The SPLIT has not been run. Treat the
-   first attempt as part of the certification, not as setup.
+
+   ⚠️ **CORRECTED 2026-08-27 (later): this paragraph used to end "The SPLIT has not been run" — four
+   lines below the sentence saying it was exercised end to end.** A correction had been appended
+   above a stale claim that survived, so one paragraph asserted both. The split HAS been run; the
+   flags, their preconditions and the destroy-and-rebuild are read from `walk-matrix.sh` and
+   `docs/VKS-UPGRADE.md`, and the 3.7 upgrade itself is lab-verified (3.6.3 → 3.7.0 → 3.7.1, both
+   `CONFIGURED`). What still stands is the narrower claim: on a **NEW** lab, treat the first attempt
+   as part of the certification rather than as setup — measured 2026-08-27, a recert cut A on a lab
+   left dirty by a killed run refused in 2s, correctly, because cut A does not rebuild.
+
+   ⚠️ **Step 0 is NOT optional and NOT deferrable to the cut boundary.** Only
+   `3.6.3-embedded+v1.35` is registered by default, so a lab that has just been rebuilt is on 3.6.3
+   and a `walk-matrix` run started against it certifies **3.6.3**, whatever you intended. Register
+   the `-legacy-` 3.7 YAML and run `vks-upgrade` BEFORE cut A, and again after the mid-matrix
+   rebuild before cut B. The licensed YAMLs live in `~/Downloads/vcf/`
+   (`vsphere-kubernetes-service-legacy-<ver>.yaml`) — they are an entitled download, so they are
+   operator-supplied and never fetched by any target here.
 
 ## B. Reading the documents
 
