@@ -5,10 +5,11 @@
 # build it on the internet box and carry the result. Putting one in images.txt would make
 # `make mirror-pull` try to pull a tag that does not exist.
 #
-# WHY NOT apps/registry.tsv. That registry is per-APP: 40 files consume app_names/for_each_app, and
+# WHY NOT apps/registry.tsv. That registry is per-APP: 41 files consume app_names/for_each_app, and
 # every row implies a deploy dir, a Gitea repo pair, an ArgoCD Application, an ingress host and a
 # `make verify` marker assertion. An infra image has none of those. (MEASURED 2026-08-26:
-# `grep -rln 'app_names\|for_each_app' scripts/ Makefile` -> 40.)
+# `grep -rln 'app_names\|for_each_app' scripts/ Makefile` -> 41. An earlier draft said 40, taken before
+# 14-selfbuilt-build.sh existed and mentioned app_names in its own header.)
 #
 # REPRODUCIBILITY. The pin is the upstream GIT REF, and the anchor recorded after a build is the
 # RESULTING DIGEST. "Build from the default branch" is disqualifying for an air gap: two operators

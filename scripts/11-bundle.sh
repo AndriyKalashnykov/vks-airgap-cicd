@@ -24,6 +24,19 @@ load_env
 : "${BUNDLE_DIR:?}"
 [ -d "${BUNDLE_DIR}/images" ] || die "no image cache at ${BUNDLE_DIR}/images — run 'make mirror-pull' first"
 
+# THE SELF-BUILT IMAGES MUST BE IN THE BUNDLE, AND THIS IS THE LAST PLACE THAT CAN SAY SO.
+# images/selfbuilt.tsv lists images with NO upstream to pull, so `mirror-pull` cannot supply them;
+# only `make selfbuilt-build` can. Cutting a bundle without them succeeds here and then fails on
+# the AIR-GAP box at `make selfbuilt-push` -- after the carry, on the machine that cannot re-cut.
+# The cheapest failure available is this one, on the internet box, before the tar.
+if [ -s "${REPO_ROOT}/images/selfbuilt.tsv" ] \
+   && grep -qvE '^[[:space:]]*(#|$)' "${REPO_ROOT}/images/selfbuilt.tsv" 2>/dev/null; then
+  [ -d "${BUNDLE_DIR}/selfbuilt" ] || die "images/selfbuilt.tsv lists images this repo BUILDS, but
+  ${BUNDLE_DIR}/selfbuilt does not exist — so this bundle would carry none of them and
+  'make selfbuilt-push' would fail on the air-gap box, after the carry.
+  Run 'make selfbuilt-build' on THIS box first."
+fi
+
 OUT_DIR="${BUNDLE_OUT_DIR:-$REPO_ROOT}"
 # The tarball must NOT land inside the directory we are archiving: tar would be reading a file that
 # is still growing and abort with "file changed as we read it" (it did — it broke e2e-sneakernet).

@@ -46,6 +46,17 @@ ENGINE="$(container_engine)"
 OUT_DIR="${BUNDLE_DIR}/selfbuilt"
 mkdir -p "$OUT_DIR"
 LOCK="${OUT_DIR}/selfbuilt.lock"
+
+# ⚠️ ONE trap, set ONCE, reading $src AT TRAP TIME. The first version did
+#     trap "rm -rf '$src'" EXIT      # with SC2064 disabled
+# which INTERPOLATES a TSV-derived value into a single-quoted shell string. MEASURED: a row
+# named  x'; touch PWNED_MARKER; :'  created PWNED_MARKER, left the temp dir behind, and
+# REPLACED the script's exit status with 127. selfbuilt.tsv is a committed file, so this is not
+# a privilege boundary -- the real harm is that a stray apostrophe silently corrupts the exit
+# code, which is a fake-green generator in a repo whose whole doctrine is exit-code honesty.
+src=""
+_selfbuilt_cleanup() { [ -n "${src:-}" ] && rm -rf -- "$src"; }
+trap _selfbuilt_cleanup EXIT
 : > "${LOCK}.tmp"
 
 log_info "engine=${ENGINE} · building from source: ${NAMES}"
@@ -61,8 +72,6 @@ for name in $NAMES; do
   tarball="${OUT_DIR}/${name}.tar"
 
   src="$(mktemp -d "${TMPDIR:-/tmp}/selfbuilt-${name}.XXXXXX")"
-  # shellcheck disable=SC2064  # $src is intentionally expanded NOW, not at trap time.
-  trap "rm -rf '$src'" EXIT
 
   log_info "[${name}] cloning ${url} at ${ref}"
   # --depth 1 --branch <TAG>: git refuses a nonexistent ref loudly, which is the check we want.
@@ -85,8 +94,16 @@ for name in $NAMES; do
   # measurement and the upstream commit.
   gg="$(selfbuilt_go_get "$name")"
   if [ -n "$gg" ]; then
+    # ⚠️ DO NOT restore the words "mise provides one" here. MEASURED 2026-08-26: .mise.toml:13 says
+    # "REMOVED 2026-08-23: java, go, python, rust, dotnet", `go` pins = 0, and 00-install-prereqs.sh
+    # mentions go ZERO times. The first version of this message asserted a provision that had been
+    # deleted three days earlier, and it only ever ran green because this dev box still carried a
+    # STALE ~/.local/share/mise/installs/go/1.27.0 -- the exact hidden-dev-box-state class
+    # .mise.toml's own comment names for rust/dotnet. A walkbox has neither.
     command -v go >/dev/null 2>&1 || die "[${name}] images/selfbuilt.tsv requests a go_get override (${gg}) but 'go' is not on PATH.
-  The override edits go.mod BEFORE the container build, so it needs a Go toolchain here (mise provides one)."
+  The override edits go.mod BEFORE the container build, so it needs a Go toolchain ON THIS BOX.
+  Go is deliberately NOT in .mise.toml (removed 2026-08-23) and NOT installed by 'make deps' —
+  install it yourself on the internet box, or drop the go_get column for this row."
     log_info "[${name}] dependency override: go get ${gg}"
     # shellcheck disable=SC2086  # INTENTIONALLY unquoted: the column is space-separated and
     # may carry several module@version overrides. Quoting would pass them as ONE argument.
@@ -130,7 +147,7 @@ for name in $NAMES; do
   engine_id="$("$ENGINE" inspect --format '{{.Id}}' "$local_ref" 2>/dev/null || echo unknown)"
   printf '%s\t%s\t%s\t%s:%s\t%s\n' "$name" "$ref" "$engine_id" "$repo" "$tag" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${LOCK}.tmp"
 
-  rm -rf "$src"; trap - EXIT
+  rm -rf -- "$src"; src=""
 done
 
 sort -u "${LOCK}.tmp" > "$LOCK"; rm -f "${LOCK}.tmp"
