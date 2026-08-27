@@ -1441,6 +1441,10 @@ test-vks-discover-namespace: ## Offline: VKS_NAMESPACE discovery resolves the si
 test-adversary-gate-rearm: ## Offline: the adversary-first gate RE-ARMS on every commit (a review authorizes only until the next commit)
 	@./scripts/test-adversary-gate-rearm.sh
 
+.PHONY: worktree-status
+worktree-status: ## PRINTS ONLY: which worktrees/branches look prunable, and the exact commands
+	@bash $(SCRIPTS)/worktree-status.sh
+
 .PHONY: handoff-status
 handoff-status: ## PRINTS ONLY (never gates, always exits 0): what merged since the handoff was last edited — read it against what the handoff CLAIMS
 	@./scripts/handoff-status.sh
