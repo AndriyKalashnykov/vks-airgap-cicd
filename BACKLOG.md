@@ -3290,6 +3290,75 @@ returns `94 literal(s) checked, 9 allowlisted, 0 MISSING`.
 and either the gate's extraction matches `walk-doc.sh:452` or it states plainly that it is
 deliberately broader. Do NOT narrow it to match without checking what that stops catching.
 
+## ✅ B497 — `make verify`'s port-forward can bind a doomed pod, and the harness blames the page
+
+**It cost row 4 of the VKS 3.7.1 certification on 2026-08-26.** `31 ran, 1 FAILED, 13 skipped` —
+the ran/skipped/neutralized counts matched their pair exactly; one block failed.
+
+`kubectl port-forward svc/X` selects ONE pod and does not follow endpoints. kubectl's own help
+(v1.36.4, verbatim): *"The forwarding session ends when the selected pod terminates, and a rerun of
+the command is needed to resume forwarding."* Every app here is `replicas: 2` with **no `strategy:`
+block** (6/6, `deploy/*/deployment.yaml:9`), so the default RollingUpdate is
+`maxSurge=1/maxUnavailable=0` and old pods **are** terminated — during the very rollout `verify` has
+just triggered. So the tunnel dies by construction; only luck decides which app is hit.
+
+**MEASURED across the whole walk archive: 237 app-verify attempts over 49 rows, exactly ONE failure
+of this shape (0.42%), first seen 2026-08-26** — so the forward binds a survivor ~236 times out of
+237. Over a 36-app-verify matrix that is **≈14% of runs losing a row**. A lower bound: a tunnel that
+died *after* the marker was seen leaves no trace.
+
+**MEASURED IN A THROWAWAY CLUSTER 2026-08-26 — the mechanism, not an inference.** A 2-replica
+Deployment (`terminationGracePeriodSeconds: 30`), a `port-forward svc/web` bound exactly as
+`99-verify.sh:251` does, then a rollout:
+
+    t+33s  curl_rc=0   http=200  pf_alive=yes  pods=4    <- 2 old + 2 new
+    t+36s  curl_rc=52  http=000  pf_alive=yes  pods=2    <- BROKEN, and the rc is 52, not 7
+    t+39s  curl_rc=7   http=000  pf_alive=NO   pods=2    <- dead
+
+Two things this settles that reading logs could not: the tunnel dies at the **graceful-termination
+tail** (~36s, matching the 30s grace period), which is precisely the window between `rollout status`
+returning and the old pods going away; and **rc=52 arrives BEFORE rc=7**. The original design keyed
+on rc=7 alone and would have read that first failure as "marker absent" — the adversary refuted that
+on paper, and this is the measurement.
+
+⚠️ **It is a NARROW RACE, not a certainty — an earlier draft of this row said "dies by construction"
+without the condition, and that is wrong.** It dies by construction *only when it binds a pod the
+rollout is about to remove*. And the `rollout complete → app HTTP up` gap was ≤1s in **94 of those
+237** attempts (40%), so an "instant" rollout status is the NORMAL case and is **not** by itself
+evidence of anything.
+
+The harness then reported the wrong thing. From row 4:
+
+    00:46:53  FATAL [rustwebapp] end result not observed   ("the page does NOT show the marker")
+    00:47:05  OK    rustwebapp.vks.local served the greeting page through the ingress   <- ALIVE, 12s later
+
+Six defects, all in one function:
+
+| | |
+|---|---|
+| `port-forward svc/` binds one doomed pod | now binds a **named pod** already running the new image |
+| `rollout status`'s rc was **DISCARDED** | now checked, **and** we settle until every pod reports `$img` |
+| curl's `rc=7` used as the tunnel-death test | **insufficient** — accept-then-RST gives 56, accept-then-hang 28, and *those leave no trace at all*. Classification now asks **kubectl**, which needs no tunnel |
+| all three curls **unbounded** | `wait_for` only tests its deadline *between* attempts, so one hanging attempt made `READY_TIMEOUT_SECONDS` not a bound. `--max-time`/`--connect-timeout` added |
+| the failure diagnostic re-fetched down the **same dead tunnel** | so it printed nothing, and the archive cannot separate *tunnel died* from *marker absent*. The last non-empty body is now **cached** and printed |
+| all six apps shared ONE local port | `:69`'s `pick_port` fallback was dead — `:28` sets `APP_LOCAL_PORT` unconditionally |
+
+Still **FATAL** either way — a certification cannot pass on an unobserved end result, and an
+"INCONCLUSIVE ⇒ don't fail the row" bucket is the false-GREEN that lets a crash-looping app certify.
+Only the token changes: `PRODUCT` vs `HARNESS-TUNNEL`, so the operator knows whether to retry the row
+or debug the app.
+
+**Refuted alternatives, recorded so nobody rebuilds them:** curl through the **ingress** — it does not
+exist yet (`verify` is walk step [35], the ingress installs at [36]+), `creds.sh:128` says verify uses
+a port-forward *"precisely so it needs none"*, and a tenant cannot get a hostname on a shared Gateway;
+`kubectl exec` — the apps are **distroless, no shell, no curl**; an in-cluster probe pod — needs a
+mirrored image (`curlimages/curl` is not in `images/images.txt`) plus `restricted`-PSA overrides.
+
+**Residual, named:** which of two readings caused row 4 specifically — probed a stale pod (the
+discarded `rollout status` rc; it returned in **<1s**) vs a pure tunnel death — **cannot be recovered
+from the archive**, because the harness captured no page content and no pod state. The cached-body
+instrumentation is what settles it on the next occurrence. Not verified against a live cluster.
+
 ## 🔴 B498 — Kaniko is ARCHIVED by Google; a MAINTAINED FORK exists but publishes NO image
 
 **MEASURED 2026-08-27** against the GitHub API and the registries. I filed an earlier version of
