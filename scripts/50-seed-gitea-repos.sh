@@ -289,20 +289,27 @@ push_repo() {
 seed_app() {
   local app="$1"
 
-  # Source repo: the app's source dir IS the content of <app>-app.
-  push_repo "${REPO_ROOT}/${APP_SRC}" "$APP_GIT_REPO" "$APP_BRANCH"
-
-  # Deploy repo: the app's kustomize dir, rendered to operator values (kustomization at root).
-  local deploy_src="${tmp}/deploy-src-${app}"
-  rm -rf "$deploy_src"; mkdir -p "$deploy_src"; cp -a "${REPO_ROOT}/${APP_DEPLOY_DIR}/." "$deploy_src/"
-  NEWNAME="${APP_IMAGE}" NS="${APP_NAMESPACE}" \
-    yq -i '.images[0].newName = strenv(NEWNAME) | .namespace = strenv(NS)' \
-    "${deploy_src}/kustomization.yaml"
-  yq -i ".replicas[0].count = ${APP_REPLICAS}" "${deploy_src}/kustomization.yaml"
-  push_repo "$deploy_src" "$APP_DEPLOY_REPO" "$ARGOCD_TRACK_BRANCH"
-
-  # Webhook on <app>-app -> the shared EventListener. Gitea does NOT dedupe hooks: a blind re-POST
-  # on a re-run creates a DUPLICATE, firing 2 PipelineRuns per push. Skip if ours is already there.
+  # ---- WEBHOOK: DELETE BEFORE THE PUSH, CREATE AFTER IT -----------------------
+  # MEASURED 2026-08-27 (e2e run 8). This block used to run entirely AFTER push_repo, and on a WARM
+  # cluster that meant the PRE-EXISTING hook was still live when the seed pushed -- and its HMAC
+  # comes from the persisted secrets/webhook-token, so the delivery was ACCEPTED. The seed push
+  # therefore fired a PipelineRun per app that nothing waited for: 4 of 6 apps got one, in a
+  # 6-second burst.
+  #
+  # It is DETERMINISTIC IN REGISTRY ORDER, not intermittent. verify walks apps sequentially, so the
+  # gap between the seed build's tag write-back and the marker's grows with position, against
+  # ArgoCD's 180s default reconciliation: javawebapp 36s PASS, nodejswebapp 165s PASS,
+  # pythonwebapp 214s FAIL. Invisible on a COLD cluster, where no stale hook exists -- which is why
+  # it read as random.
+  #
+  # Deleting first also moves the refuse-rather-than-guess gate AHEAD of two destructive force-
+  # pushes: a 401/502 on the hook listing now aborts before the repos are rewritten, not after.
+  #
+  # The CREATE stays after the push (below), because that is where the secret is set -- PATCH cannot
+  # set it, so DELETE+POST is the only pair whose secret handling is correct. Adversary-cleared:
+  # all five of this block's invariants survive the hoist, and the cold path is measured safe
+  # (an empty repo returns hooks_code=200 with body [], so gitea_hook_ids yields no ids and the
+  # delete loop is skipped -- it does NOT trip the refuse-rather-than-guess logic).
   local hook_url="http://el-apps.${CI_NAMESPACE}.svc:8080"
   local hooks_api="${base}/api/v1/repos/${GITEA_ORG}/${APP_GIT_REPO}/hooks"
   # Capture the body, then grep the VARIABLE draining all input (no `-q`): `api_body | grep -qF`
@@ -355,6 +362,21 @@ seed_app() {
       log_info "webhook on ${APP_GIT_REPO}: removed stale hook ${hid} (its HMAC secret cannot be read back, let alone patched)"
     done <<< "$ids"
   fi
+
+  # Source repo: the app's source dir IS the content of <app>-app.
+  push_repo "${REPO_ROOT}/${APP_SRC}" "$APP_GIT_REPO" "$APP_BRANCH"
+
+  # Deploy repo: the app's kustomize dir, rendered to operator values (kustomization at root).
+  local deploy_src="${tmp}/deploy-src-${app}"
+  rm -rf "$deploy_src"; mkdir -p "$deploy_src"; cp -a "${REPO_ROOT}/${APP_DEPLOY_DIR}/." "$deploy_src/"
+  NEWNAME="${APP_IMAGE}" NS="${APP_NAMESPACE}" \
+    yq -i '.images[0].newName = strenv(NEWNAME) | .namespace = strenv(NS)' \
+    "${deploy_src}/kustomization.yaml"
+  yq -i ".replicas[0].count = ${APP_REPLICAS}" "${deploy_src}/kustomization.yaml"
+  push_repo "$deploy_src" "$APP_DEPLOY_REPO" "$ARGOCD_TRACK_BRANCH"
+
+  # Webhook on <app>-app -> the shared EventListener. Gitea does NOT dedupe hooks: a blind re-POST
+  # on a re-run creates a DUPLICATE, firing 2 PipelineRuns per push. Skip if ours is already there.
   cat > "${tmp}/hook-${app}.json" <<EOF
 {"type":"gitea","active":true,"events":["push"],
  "config":{"url":"${hook_url}","content_type":"json","secret":"${WEBHOOK_TOKEN}"}}
