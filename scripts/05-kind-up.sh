@@ -162,7 +162,26 @@ if [ "$need_create" = 1 ]; then state_set KIND_REUSED 0; else state_set KIND_REU
 # generated password (only-if-unset), so the SKIP_DOTENV KinD flow has it after HARBOR_USERNAME was
 # commented in .env.example (B14) — same clobber exposure as HARBOR_PASSWORD, no worse.
 [ -n "${HARBOR_USERNAME:-}" ]      || state_set HARBOR_USERNAME admin
-[ -n "${HARBOR_PASSWORD:-}" ]      || state_set HARBOR_PASSWORD "$(gen_password)"
+# HARBOR_PASSWORD: mint ONLY for a Harbor that does not exist yet.
+#
+# Harbor honours HARBOR_ADMIN_PASSWORD only at ITS OWN first bootstrap (goharbor
+# src/core/main.go:99 -- applied only when the admin row has no salt). So on a WARM cluster whose
+# Harbor is already bootstrapped, minting a fresh password writes a value that CANNOT work, and
+# publishes it to the sink AS FACT: `make creds-show` then prints a password that 401s, and the
+# failure surfaces ~20 minutes later in 21-mirror-push.sh. Minting is right only for a fresh Harbor.
+#
+# ⚠️ A FAILED QUERY IS NOT AN ABSENT NAMESPACE. Read rc, never the empty match -- an empty result
+# from a broken kubectl would send us straight back to minting, which is the bug this guards.
+if [ -z "${HARBOR_PASSWORD:-}" ]; then
+  _hns_rc=0; kubectl get namespace "${HARBOR_NAMESPACE:-harbor}" >/dev/null 2>&1 || _hns_rc=$?
+  if [ "$_hns_rc" = 0 ]; then
+    die "this cluster already has a '${HARBOR_NAMESPACE:-harbor}' namespace, but no HARBOR_PASSWORD is known.
+  Harbor fixed its admin password at its own first bootstrap and will IGNORE a new one, so minting
+  here would publish a password that cannot work. The sink ($(state_file)) has lost it.
+  Start from a clean Harbor:  make kind-down && make e2e-kind"
+  fi
+  state_set HARBOR_PASSWORD "$(gen_password)"
+fi
 [ -n "${GITEA_ADMIN_PASSWORD:-}" ] || state_set GITEA_ADMIN_PASSWORD "$(gen_password)"
 # ArgoCD too — and it MUST be generated HERE, into the state overlay .env.state, not left to `.env`.
 #

@@ -264,6 +264,90 @@ harbor_auth_verdict() {
   esac
 }
 
+# harbor_credential_settle [--verify-only|--may-reconcile] — DID THE CREDENTIAL WE JUST SUBMITTED
+# ACTUALLY TAKE EFFECT? Call it at the END of an install, after HARBOR_URL and the CA are published.
+#
+# WHY THIS EXISTS — the root cause, from primary source.
+# Harbor is the ONLY component this repo installs that it never RECONCILES. goharbor
+# src/core/main.go:94-110 (v2.15.2, the version chart harbor-helm 1.19.2 pins) applies
+# HARBOR_ADMIN_PASSWORD only when the admin row has NO SALT:
+#     if user.Salt == "" { UpdatePassword(...) } else { log.Warning("Admin password from config
+#       (HARBOR_ADMIN_PASSWORD) ignored: password already exists in database.") }
+# The initial schema seeds admin with password='' and salt NULL, so the value is honoured exactly
+# once, at FIRST bootstrap. On every later run `helm upgrade --install` submits it, the Secret
+# updates, the pods go Ready, /api/v2.0/health returns 200 -- and Harbor IGNORES it. MEASURED:
+# 06-install-harbor.sh contained ZERO calls to harbor_auth* and gated readiness on /health, which is
+# UNAUTHENTICATED. So the install reported success and the 401 surfaced ~20 minutes later in
+# 21-mirror-push.sh. This function is the missing check, not a new mechanism.
+#
+# ⚠️ THE PASSWORD CANNOT BE READ BACK. harbor_user.password is PBKDF2-HMAC-SHA256 with a per-user
+# random salt (600,000 iterations on 2.15.2, 4,096 on the lab's 2.14.x). There is no recovery, only
+# a RESET. Do not add a "read the credential from the cluster" path: on every install WE perform, the
+# harbor-core Secret is strictly DOWNSTREAM of what we just submitted, so it can only ever hand back
+# the value that just failed. (28-harbor-admin-password.sh reads a Supervisor Secret written by
+# SOMEONE ELSE — that one is independent, and it already verifies before it writes.)
+#
+# WHY THE SIBLINGS NEED NOTHING: ArgoCD reconciles (07-install-argocd.sh:171-180 patches
+# argocd-secret and deletes argocd-initial-admin-secret as its marker) and Gitea reconciles
+# unconditionally (50-seed-gitea-repos.sh:139 `gitea admin user change-password`). Harbor is the only
+# one of the three that cannot, because upstream refuses.
+harbor_credential_settle() {
+  local mode="${1:---verify-only}" v tries=0 max="${HARBOR_SETTLE_TRIES:-6}"
+
+  # A ROBOT ON AN INSTALL PATH IS ALREADY WRONG, and today it surfaces as a bare 401 that reads as a
+  # password problem. harbor_username_is_robot is single-sourced precisely so both guards agree.
+  if harbor_username_is_robot "${HARBOR_USERNAME:-}"; then
+    die "HARBOR_USERNAME='${HARBOR_USERNAME}' is a ROBOT account, and this is an INSTALL path.
+  A robot cannot be Harbor's admin, so the install would appear to succeed and then 401.
+  Set HARBOR_USERNAME=admin (with the matching password) for the install, and use the robot for the
+  pipeline afterwards."
+  fi
+
+  while :; do
+    v="$(harbor_auth_verdict)"
+    case "$v" in
+      accepted) log_info "Harbor accepted ${HARBOR_USERNAME:-admin} — the credential we hold is the one in effect"; return 0 ;;
+      rejected)
+        # A FRESH install may answer /health before the admin row is seeded, so retry there. On a
+        # PRE-EXISTING Harbor a 401 is authoritative immediately and retrying only burns the deadline.
+        tries=$((tries + 1))
+        if [ "${HARBOR_SETTLE_FRESH:-0}" = 1 ] && [ "$tries" -lt "$max" ]; then
+          sleep "${HARBOR_SETTLE_INTERVAL:-5}"; continue
+        fi
+        break ;;
+      unchecked:*)
+        # ⚠️ NEVER report this as "the password is wrong". MEASURED 2026-08-12 (row 4 of the
+        # scenario-1 walk): a probe that never ran was reported as an authentication failure, about a
+        # password that had not been sent anywhere. An error naming the wrong cause is worse than none.
+        log_warn "could not verify the Harbor credential (${v#unchecked:}) — NOT a password verdict; nothing was sent to Harbor"
+        return 0 ;;
+    esac
+  done
+
+  # rejected, for real.
+  log_error "Harbor REJECTED ${HARBOR_USERNAME:-admin} (http 401) right after the install."
+  log_error "  This Harbor's admin password was fixed at ITS OWN first bootstrap. The value we just"
+  log_error "  submitted was accepted by helm and written to the Secret, and Harbor IGNORED it"
+  log_error "  (goharbor src/core/main.go:99 — it is applied only when the admin row has no salt)."
+  log_error "  It is a PBKDF2 digest: it cannot be read back, only reset."
+  if [ "${VKS_STATE_KIND:-0}" = 1 ]; then
+    log_error "  On KinD the supported way out is a clean Harbor:  make kind-down && make e2e-kind"
+    log_error "  (the sink now holds a password that does NOT work — 'make creds-show' would print it as fact)."
+  else
+    log_error "  Options: (a) 'make harbor-admin-password' if you can reach the Supervisor;"
+    log_error "           (b) ask the platform team for the admin credential or a robot;"
+    log_error "           (c) 'make harbor-robot' if you are Harbor project-admin."
+  fi
+  case "$mode" in
+    --may-reconcile)
+      # RESERVED. A KinD-only reconcile (reset harbor_user.salt and restart harbor-core) is the
+      # generalisation of what ArgoCD and Gitea already do, but the mechanism is UNVERIFIED on the
+      # pinned chart and this function will not mutate a database on an unmeasured hypothesis.
+      log_error "  (--may-reconcile is reserved; the KinD DB reset is not implemented until it is measured)" ;;
+  esac
+  die "Harbor rejected the credential this install just submitted."
+}
+
 harbor_auth_report() {
   local ok_p='  ok       ' bad_p='  PROBLEM  ' note_p='           '
   [ -n "${HARBOR_URL:-}" ] || return 0                      # reachable_report already said so
