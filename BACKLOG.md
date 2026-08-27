@@ -3290,6 +3290,51 @@ returns `94 literal(s) checked, 9 allowlisted, 0 MISSING`.
 and either the gate's extraction matches `walk-doc.sh:452` or it states plainly that it is
 deliberately broader. Do NOT narrow it to match without checking what that stops catching.
 
+## 🔴 B498 — Kaniko is ARCHIVED upstream; our pin is the LAST release that will ever exist
+
+**MEASURED 2026-08-27** against the GitHub API, because I had left this an explicit UNVERIFIED when
+asked which Kaniko we run:
+
+    repos/GoogleContainerTools/kaniko  ->  archived=true   last push 2025-06-03
+    releases[0]                        ->  v1.24.0         published 2025-05-23
+
+We pin `gcr.io/kaniko-project/executor:v1.24.0-debug` (`images/images.txt:13`), mirrored into Harbor
+and consumed by `k8s/tekton/tasks/kaniko-build.yaml:54`. I verified separately that **v1.24.0 is the
+newest tag gcr.io serves**, so the pin is not stale — it is *terminal*.
+
+**Why this is 🔴 rather than a curiosity.** Three consequences, none of which announce themselves:
+
+1. **No upstream CVE fixes, ever.** Kaniko runs as **root** (`runAsUser=0` — which is precisely why
+   the `ci` namespace needs PSA `baseline` instead of `restricted`, `60-configure-tekton.sh:55`) and
+   it holds a **Harbor push credential** (`22-harbor-robot.sh:110`: the build pod carries ONE
+   registry credential). An unmaintained root-privileged builder with registry write access is the
+   component you least want frozen.
+2. **The Renovate annotation is now dead weight that LOOKS live.** `# renovate:
+   datasource=docker depName=gcr.io/kaniko-project/executor` can never fire again, so the absence of
+   a bump PR reads as "up to date" when it means "abandoned". Anyone auditing freshness by *"has
+   Renovate been quiet?"* gets the wrong answer here.
+3. **The alignment gate keeps passing and proves nothing about this.** `check-image-alignment`
+   verifies `images.txt` and the Tekton task agree — RED-proven 2026-08-27: drifting the manifest
+   tag yields `DRIFT kaniko-project/executor: manifest=v1.23.9-debug vs
+   images/images.txt=v1.24.0-debug`, rc=1. That is a **consistency** gate, not a **freshness** one.
+   Both copies can agree forever on an archived image.
+
+**NOT a design decision yet, deliberately.** The replacement is not obvious, and the options differ
+in ways that touch the air gap, PSA and the Harbor credential model:
+
+| candidate | the thing to check FIRST |
+|---|---|
+| **BuildKit** (rootless) | can it push to a self-signed Harbor via our CA ConfigMap, and does rootless remove the `baseline` PSA exception (`lib/psa.sh:55`)? |
+| **Buildah** | same TLS question, plus whether it needs `/dev/fuse` or caps a VKS guest may refuse |
+| **Tekton buildpacks** | changes the CONTRACT: our apps ship hand-written Dockerfiles (`check-dockerfile-no-install.sh` polices them), so this is far more than a swap |
+| **stay on v1.24.0** | legitimate for a demo — but then SAY SO, rather than letting the Renovate comment imply maintenance |
+
+**Done-when:** either a replacement is chosen and proven by a green `make e2e-kind` plus a real
+`make verify` on the lab, **or** the pin carries an explicit archived-upstream note and the Renovate
+annotation is removed or marked dead, so nobody reads its silence as freshness.
+
+⚠️ Do NOT swap the builder while a certification is in flight — it is on the walked path.
+
 ## 🟡 B496 — a NEWER VCF plugin bundle (0500) exists, and I could not confirm whether a matching CLI does
 
 Asked to check Broadcom for newer VCF CLI / plugin / service artifacts and update the pins, I found a
