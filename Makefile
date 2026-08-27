@@ -530,6 +530,23 @@ engine-trust-check-rootless: check-env ## Is ROOTLESS DOCKER viable? (the ONLY d
 # The offline Maven builder needs TWO networks — Maven Central (to bake ~/.m2) and Harbor (to push).
 # A DUAL-HOMED box has both, so `builder-image` does it in one shot. A SNEAKERNET split has NEITHER
 # box with both, so it is split: build outside (into the bundle), push inside (with the carried crane).
+# ⚠️ THESE THREE LIVE HERE, NOT UNDER `##@ Quality gates`, ON PURPOSE.
+# They were filed there, and check-doc-target-coverage.sh EXEMPTS that group by name — so they were
+# invisible to the gate AND undocumented (`grep -rn selfbuilt docs/ README.md` returned zero) while
+# it reported "every operator-invocable target is documented". They are not gates: they clone from
+# GitHub, build from source, and mutate a registry.
+.PHONY: selfbuilt-image
+selfbuilt-image: check-env ## (dual-homed) Build + push the images that have no published upstream (images/selfbuilt.tsv)
+	@$(SCRIPTS)/15-build-push-selfbuilt.sh
+
+.PHONY: selfbuilt-build
+selfbuilt-build: ## INTERNET box: build the images that have no free published build (images/selfbuilt.tsv) into the bundle
+	@$(SCRIPTS)/14-selfbuilt-build.sh
+
+.PHONY: selfbuilt-push
+selfbuilt-push: ## AIR-GAP box: push the carried self-built images into Harbor (no container engine needed)
+	@$(SCRIPTS)/22-selfbuilt-push.sh
+
 .PHONY: builder-image
 builder-image: check-env ## (dual-homed) Build + push the air-gap Maven builder image (deps pre-baked)
 	@$(SCRIPTS)/15-build-push-builder.sh
@@ -924,7 +941,7 @@ e2e-sneakernet-both: ## The sneakernet OS matrix: the SAME carried tarball unpac
 # platform / gitops consume them — so a corrupt/incomplete Harbor copy fails HERE (the
 # integrity gate) instead of surfacing later as a mid-pipeline Kaniko MANIFEST_UNKNOWN.
 # Read-only + non-disruptive to a healthy mirror. Prereqs update left-to-right (sequential).
-install-all: preflight mirror mirror-verify builder-image vks-login platform gitops ## Run the complete air-gap install end to end (preflight FIRST, then mirror integrity-verified, then the pipeline)
+install-all: preflight selfbuilt-image mirror mirror-verify builder-image vks-login platform gitops ## Run the complete air-gap install end to end (preflight FIRST, then mirror integrity-verified, then the pipeline)
 
 .PHONY: verify
 verify: check-env ## e2e: push a change → Tekton build → Harbor → ArgoCD sync → HTTP check (LIVE cluster)
@@ -1151,6 +1168,12 @@ check-image-alignment: ## Fail if any mirrored image tag drifts between k8s/tekt
 check-kind-kubeconfig: ## Fail if a `kind` invocation could write the AMBIENT $$KUBECONFIG (a LAB slot by default)
 	@$(SCRIPTS)/check-kind-kubeconfig.sh
 
+.PHONY: check-selfbuilt
+check-selfbuilt: ## Fail if images/selfbuilt.tsv is missing, empty, or has a moving ref / unpinned go_get
+	@$(SCRIPTS)/check-selfbuilt.sh
+
+
+
 .PHONY: check-cluster-template-vars
 check-cluster-template-vars: ## Fail if k8s/vks/cluster.yaml interpolates a $${VAR} that 25-vks-cluster-create.sh never binds
 	@$(SCRIPTS)/check-cluster-template-vars.sh
@@ -1308,6 +1331,10 @@ test-scripts: ## Run all offline script-logic unit tests
 .PHONY: test-scripts-fast
 test-scripts-fast: ## Run the offline unit tests that do NOT assert wall-clock (the per-PR set)
 	@$(SCRIPTS)/run-test-set.sh "fast" $(TEST_FAST)
+
+.PHONY: test-selfbuilt-push-drift
+test-selfbuilt-push-drift: ## Manual: the push-side CARRIED-vs-SERVED drift gate, against a throwaway registry
+	@bash $(SCRIPTS)/test-selfbuilt-push-drift.sh
 
 .PHONY: test-ca-staleness-check
 test-ca-staleness-check: ## Offline: the four arms of the trust-anchor probe, incl. unreachable != stale
@@ -1669,7 +1696,7 @@ check-tekton-scripts: ## Every Tekton `script:` block: shebang is /bin/sh AND th
 
 .PHONY: static-check-fast
 #check-static-fast: @ The CHEAP half of static-check: the alignment/doc/env gates only (~9s, no toolchain)
-static-check-fast: check-notfound-discriminator check-jumpbox-shadow check-tekton-scripts check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-walk-env-manifest check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-kind-kubeconfig check-pull-secret-alignment check-cluster-template-vars check-dockerfile-no-install ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
+static-check-fast: check-notfound-discriminator check-jumpbox-shadow check-tekton-scripts check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-walk-env-manifest check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-kind-kubeconfig check-pull-secret-alignment check-cluster-template-vars check-dockerfile-no-install check-selfbuilt ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
 
 # static-check is the UNION, so there is exactly ONE list. Defining the fast set separately and
 # leaving static-check with its own hand-typed copy is the enumerated-list rot this repo keeps

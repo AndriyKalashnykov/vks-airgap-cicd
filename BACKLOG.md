@@ -3664,3 +3664,58 @@ is, and have the test pass a small one. Two things to settle first rather than a
 
 Do NOT "fix" this by deleting cases. The 19 cases exist because the re-resolve behaviour they pin
 was written after a live incident where the LoadBalancer address moved under an unchanged Service.
+
+## 🔴 B501 — the seed fires a build per app on a WARM cluster, racing verify
+
+**Measured 2026-08-27 (e2e run 8), adversary-confirmed against the live cluster.**
+
+`scripts/50-seed-gitea-repos.sh:293` `push_repo`s the app repo, and only reconciles the
+webhook at 304+. On a **warm** cluster the pre-existing hook is already live and its HMAC
+comes from the persisted `secrets/webhook-token`, so the seed push **fires a PipelineRun per
+app** that nothing waits for.
+
+Measured: **4 of 6 apps** got one, in a 6-second burst at 14:06:1x —
+`javawebapp-ci-pvsqv` 14:06:16, `nodejswebapp-ci-k95b6` 14:06:17,
+`pythonwebapp-ci-v8lx9` 14:06:20, `rustwebapp-ci-pqfbw` 14:06:22.
+
+**It is deterministic in REGISTRY ORDER, not intermittent.** verify walks apps sequentially,
+so the gap between the seed build's write-back and the marker's grows monotonically with
+position, against ArgoCD's **180 s** default reconciliation (this repo overrides it nowhere):
+
+| app | seed -> marker gap | result |
+|---|---|---|
+| javawebapp | 36 s | PASS |
+| nodejswebapp | 165 s | PASS |
+| pythonwebapp | **214 s** | **FAIL** |
+
+180 falls exactly between 165 and 214. rustwebapp and dotnetwebapp sit further out still and
+were simply never reached, so reading run 8 as "a pythonwebapp problem" under-scopes it.
+
+**Invisible on a cold cluster** (`E2E_FRESH=1`), where no stale hook exists — which is why it
+reads as random.
+
+**What is already fixed, and what is not.** `be4b48f` made verify *correct* in the face of
+this: it now asserts the deployed tag is a prefix of the marker commit's sha, so a stray
+build's write-back can no longer satisfy the wait. That is a fix to the SYMPTOM. This row is
+the CAUSE: the extra build, the extra rollout churn and the wasted CI time all remain.
+
+**Prescribed fix (adversary):** move the existing-hook **DELETE** above `push_repo` and leave
+the **create** after it. Zero seed builds, bounded, no waiting. Do NOT wait for quiescence —
+unbounded.
+
+⚠️ The webhook block is a carefully reasoned control (delete+POST because PATCH cannot set the
+secret; a documented Gitea non-dedupe hazard; a SIGPIPE trap in its own hook-listing). Changing
+its ordering is a control change and needs its own idea-round before implementation — it is not
+a one-line move.
+
+**Related, same review, not yet filed separately:**
+
+- `$img` is a one-shot snapshot that `_all_pods_on_img` and every `_pick_pod` call closes over.
+  In run 8 this turned the mis-timed wait into `no Ready pod on ...:5981b0e` -> svc/ fallback ->
+  **113 tunnel deaths across 5 generations**, then a `PRODUCT ... does not show marker` verdict
+  rendered from a cached pre-roll body. `be4b48f` narrows the window but does not close the class.
+  Fix: have `_pick_pod` re-read the Deployment's current image.
+- `update-deploy` pushes with no rebase/retry, so two concurrent write-backs to one deploy repo
+  fail non-fast-forward. Not reached in run 8, but the seed burst makes it likelier.
+- `test-verify-marker-build.sh` reconstructs the predicate with no drift gate (disclosed in its
+  own header). Fix: extract the predicate to `lib/` and source it from both.

@@ -11,6 +11,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# shellcheck source=scripts/lib/selfbuilt.sh
+. "${SCRIPT_DIR}/lib/selfbuilt.sh"
 
 # ⚠️ DECLARED because mise_pin() below now asks mise for the RESOLVED pin instead of hand-parsing
 # .mise.toml. Both run on the INTERNET side (this script cuts the bundle), so needing them here does not
@@ -23,6 +25,32 @@ load_env
 
 : "${BUNDLE_DIR:?}"
 [ -d "${BUNDLE_DIR}/images" ] || die "no image cache at ${BUNDLE_DIR}/images — run 'make mirror-pull' first"
+
+# THE SELF-BUILT IMAGES MUST BE IN THE BUNDLE, AND THIS IS THE LAST PLACE THAT CAN SAY SO.
+# images/selfbuilt.tsv lists images with NO upstream to pull, so `mirror-pull` cannot supply them;
+# only `make selfbuilt-build` can. Cutting a bundle without them succeeds here and then fails on
+# the AIR-GAP box at `make selfbuilt-push` -- after the carry, on the machine that cannot re-cut.
+# The cheapest failure available is this one, on the internet box, before the tar.
+if [ -s "${REPO_ROOT}/images/selfbuilt.tsv" ] \
+   && grep -qvE '^[[:space:]]*(#|$)' "${REPO_ROOT}/images/selfbuilt.tsv" 2>/dev/null; then
+  # ⚠️ CHECK THE TARBALLS, NOT THE DIRECTORY. 14-selfbuilt-build.sh does `mkdir -p "$OUT_DIR"`
+  # BEFORE it can fail, so a build that dies part-way leaves an EMPTY selfbuilt/ behind — and a
+  # `[ -d ]` guard then PASSES over it, shipping a bundle with zero executors and failing "after the
+  # carry, on the machine that cannot re-cut", which is exactly what this guard exists to prevent.
+  # Per-row, so a partial build (2 of 3 images) is caught too.
+  _sb_missing=""
+  while IFS= read -r _sb; do
+    [ -n "$_sb" ] || continue
+    [ -s "${BUNDLE_DIR}/selfbuilt/${_sb}.tar" ] || _sb_missing="${_sb_missing} ${_sb}"
+  done <<EOF
+$(selfbuilt_names)
+EOF
+  [ -z "$_sb_missing" ] || die "images/selfbuilt.tsv lists images this repo BUILDS, and the bundle
+  carries no tarball for:${_sb_missing}
+  ${BUNDLE_DIR}/selfbuilt/<name>.tar is what 'make selfbuilt-push' reads on the air-gap box, so this
+  bundle would fail there — after the carry, on the machine that cannot re-cut.
+  Run 'make selfbuilt-build' on THIS box first."
+fi
 
 OUT_DIR="${BUNDLE_OUT_DIR:-$REPO_ROOT}"
 # The tarball must NOT land inside the directory we are archiving: tar would be reading a file that

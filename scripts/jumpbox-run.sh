@@ -146,6 +146,11 @@ if [ "${JUMPBOX_MODE:-validate}" = "airgap-half" ]; then
   echo "### builder-push — push the CARRIED Maven builder into Harbor (no internet; crane, not an engine) ###"
   make builder-push
 
+  # Same shape as builder-push and for the same reason: the tarball was CARRIED, and `crane push`
+  # reads it without a container engine. Skipped silently when the bundle carries none, so a repo
+  # with an empty selfbuilt.tsv is unaffected.
+  make selfbuilt-push
+
   echo "### mirror-verify — integrity-check Harbor's copy (the sneakernet assertion) ###"
   make mirror-verify
 

@@ -103,6 +103,19 @@ The chosen design uses the **LoadBalancer IP** as the endpoint instead:
   lab), and that is identical whether the SAN is an IP or a name. We don't pay the
   sudo/DNS friction for a cosmetic match.
 
+> ⚠️ **CORRECTED 2026-08-27 — "cosmetic" is MEASURED FALSE.** The IP-vs-FQDN choice changes
+> third-party BEHAVIOUR, not just a SAN string. go-containerregistry rejects a bearer realm whose
+> host is a private **IP literal** (an SSRF guard against the cloud metadata service); the check is
+> `net.ParseIP(host) != nil`, so an FQDN skips it entirely — the code's own comment says
+> "DNS-based SSRF is out of scope here". Consequence, measured: kaniko built from the maintained
+> fork CANNOT push to this stand-in's `https://<LB-IP>` Harbor, while the real lab
+> (`harbor.env1.lab.test`) never trips it. The stand-in is HARDER than the lab, and that asymmetry
+> generated a real dependency override (`images/selfbuilt.tsv`, the `go_get` column).
+>
+> The decision to keep the IP still stands — an FQDN needs three new resolution mechanisms (host
+> `/etc/hosts`, which costs a **sudo**; each kind node; CoreDNS for in-cluster pulls) and the cert
+> helper mints ONE SAN, IP **or** DNS, never both. But it is not free, and it is not cosmetic.
+
 ## Design — mimic on KinD (exact per-file changes)
 
 Only **Harbor** and **ArgoCD** are VKS-provided, so only they change. Gitea, Tekton, the

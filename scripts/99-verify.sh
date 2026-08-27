@@ -111,6 +111,14 @@ verify_app() {
   app_set_message "$app" "$d" "$marker"
   git -C "$d" commit -aqm "verify: ${marker}"
   git -C "$d" push -q origin "$APP_BRANCH"
+  # The FULL sha of the commit we just pushed. The deployed image tag is the app repo's
+  # `git rev-parse --short HEAD` (k8s/tekton/tasks/git-clone.yaml:40 -> results.commit ->
+  # kaniko --destination=$(params.image):$(params.tag) -> update-deploy.yaml newTag), so the tag is
+  # an ABBREVIATION of this. Full sha + prefix test, never equality: `--short` length is not fixed
+  # (git widens it as a repo grows, and core.abbrev may differ between this clone and Tekton's), so
+  # an equality test against our own --short output would be comparing two independently-chosen
+  # abbreviation lengths.
+  local marker_sha; marker_sha="$(git -C "$d" rev-parse HEAD)"
   kill "$PF_PID" 2>/dev/null || true; PF_PID=""
   log_info "[${app}] pushed marker to ${APP_GIT_REPO}"
 
@@ -135,6 +143,15 @@ verify_app() {
     wait_for "Gitea reachable" curl -fsS "http://localhost:${GITEA_LOCAL_PORT}/api/healthz" || true
     git -C "$d" commit -q --allow-empty -m "verify: re-fire ${marker}" >/dev/null 2>&1 || true
     git -C "$d" push -q origin "$APP_BRANCH" >/dev/null 2>&1 || true
+    # RE-CAPTURE THE SHA. The re-fire COMMITS (--allow-empty above), so HEAD MOVED, and the
+    # pipeline it triggers builds the NEW sha. The image-attribution wait below tests the
+    # deployed tag against marker_sha, so leaving it at the pre-re-fire value makes that wait
+    # PERMANENTLY UNSATISFIABLE -- it would burn the full readiness timeout and die, on
+    # exactly the run the old "!= pre_img" test recovered from. Adversary-caught and
+    # RED-proven against a real re-fire commit (marker 13ddaa7..., re-fire tag fcfcd18 ->
+    # NO MATCH). Measured: 0 re-fires in 341 archived verify attempts, so this is latent,
+    # which is precisely why no test or run would have found it.
+    marker_sha="$(git -C "$d" rev-parse HEAD)"
     kill "$PF_PID" 2>/dev/null || true; PF_PID=""
   done
   if [ -z "$pr" ]; then
@@ -245,9 +262,36 @@ verify_app() {
     log_warn "  a kubeconfig fault, and not one a tenant can self-service. See lib/argocd.sh:645."
   fi
   rm -f "$_refresh_err"
-  if ! wait_for "[${app}] ArgoCD rolls a new image (was ${pre_img:-none})" \
-       sh -c "[ \"\$(kubectl -n $ns get deploy $app -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)\" != '${pre_img}' ]"; then
-    log_error "[${app}] ArgoCD did not roll a new image (still ${pre_img:-none})"
+  # ASSERT THE IMAGE IS *THIS MARKER'S* BUILD -- not merely that it CHANGED.
+  #
+  # MEASURED 2026-08-27 (run 8): this used to test `!= $pre_img`, and that is satisfied by ANY image
+  # change, including one from an unrelated pipeline. pythonwebapp had TWO PipelineRuns in flight --
+  # ci-v8lx9 (14:06:20-14:06:54, triggered BEFORE the marker push at 14:10:00) and ci-5l22n
+  # (14:10:02-14:10:28, the marker's own build). The stray earlier run's tag write-back rolled the
+  # image before this wait even started, so it was satisfied with 0s delay where every other app
+  # took +5s. verify then polled for the marker in the WRONG image for ten minutes and died
+  # "end result not observed" -- an error naming the page, about a page that was never going to
+  # contain it. The image was real, the rollout was real, the build was somebody else's.
+  #
+  # A prefix test, not equality: the tag is an abbreviation whose length neither side pins.
+  # shellcheck disable=SC2329  # invoked indirectly (wait_for), same as _all_pods_on_img below
+  _img_is_marker_build() {
+    local cur tag
+    cur="$(kubectl -n "$ns" get deploy "$app" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)" || return 1
+    tag="${cur##*:}"
+    # A digest-pinned ref has no usable tag; a bare repo name leaves tag == cur. Both mean "cannot
+    # attribute this image to a commit", which must NOT read as success.
+    case "$cur" in *@sha256:*) return 1 ;; esac
+    [ -n "$tag" ] && [ "$tag" != "$cur" ] || return 1
+    # tag must be a PREFIX of the full sha (and non-trivially long, so a stray ":v1" cannot match).
+    [ "${#tag}" -ge 7 ] && [ "${marker_sha#"$tag"}" != "$marker_sha" ]
+  }
+  if ! wait_for "[${app}] ArgoCD rolls THIS marker's build (${marker_sha:0:7}, was ${pre_img:-none})" \
+       _img_is_marker_build; then
+    log_error "[${app}] ArgoCD did not converge on the build of ${marker_sha:0:7}"
+    log_error "  deployed now: $(kubectl -n "$ns" get deploy "$app" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)"
+    log_error "  If that names a DIFFERENT sha, an unrelated PipelineRun's write-back won the race;"
+    log_error "  this app's own build either has not finished or never wrote its tag back."
     kubectl --kubeconfig "${ARGOCD_KUBECONFIG:-$KUBECONFIG}" -n "$ARGOCD_NAMESPACE" \
       get application "$app" -o wide >&2 || true
     die "[${app}] ArgoCD did not converge on the new build"

@@ -9,8 +9,12 @@
 # Keep the versions here aligned with .env.example section 9 and .mise.toml.
 
 # ---- Container image builder (Tekton kaniko task) ----
-# renovate: datasource=docker depName=gcr.io/kaniko-project/executor
-gcr.io/kaniko-project/executor:v1.24.0-debug
+# MOVED TO images/selfbuilt.tsv. Upstream kaniko is ARCHIVED (v1.24.0 is its final release), the
+# maintained fork publishes no free image, and the fork's pinned go-containerregistry cannot push to
+# a registry on a private IP -- i.e. to any air-gapped Harbor. We therefore BUILD it, which is also
+# the only way to apply that dependency fix. See images/selfbuilt.tsv for the full measurement.
+# A row must live in EXACTLY ONE inventory: check-image-alignment checks images.txt FIRST, so leaving
+# it here would report DRIFT against the tag we build.
 
 # ---- Java runtime base image (app Dockerfile runtime stage) ----
 # The BUILD uses the maven:...-temurin image below; only the JRE runtime is mirrored.

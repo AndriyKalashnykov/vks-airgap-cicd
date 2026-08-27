@@ -1,0 +1,159 @@
+# selfbuilt.tsv — images this repo BUILDS FROM SOURCE because the only free published builds are
+# from an ARCHIVED project.
+#
+# ⚠️ CORRECTED 2026-08-27. This header used to say "no free published build exists", which is
+# FALSE: gcr.io/kaniko-project/executor still serves v1.23.x and v1.24.0 (+ -debug/-slim), free.
+# But that is NOT an option we are passing up, and the corrected wording must not read as if it
+# were -- MEASURED via the GitHub API:
+#   GoogleContainerTools/kaniko : archived = TRUE, last release v1.24.0 (2025-05-23),
+#                                 last push 2025-06-03. Dead for over a year. No CVE fixes.
+#   chainguard-forks/kaniko     : archived = false, pushed 2026-08-27 (today). The maintained line.
+# So v1.24.0 is not a shortcut we are ignoring; it is an unmaintained builder, and the thing this
+# repo builds is IMAGES -- running a frozen builder is a security posture, not a convenience.
+#
+# It is worth knowing WHY v1.24.0 has none of our problems, because it explains the whole file:
+# it pins go-containerregistry v0.20.4, which predates BOTH the bearer-realm SSRF guard (v0.21.5)
+# and the pull limiter (v0.21.6). Staying on it would mean buying "no ggcr grief" with "no security
+# updates" -- and the fork's v0.21.5 pin is precisely why the guard bites us at all.
+#
+# The real trade is therefore: BUILD the maintained fork (this file, plus a source patch) vs MIRROR
+# an archived image. Not 'build' vs 'nothing'.
+#
+# WHY THIS FILE IS SEPARATE FROM images/images.txt. images.txt is a MIRROR inventory: every row is
+# pulled from a public registry and pushed to Harbor. A row here has no upstream image to pull — we
+# build it on the internet box and carry the result. Putting one in images.txt would make
+# `make mirror-pull` try to pull a tag that does not exist.
+#
+# WHY NOT apps/registry.tsv. That registry is per-APP: 41 files consume app_names/for_each_app, and
+# every row implies a deploy dir, a Gitea repo pair, an ArgoCD Application, an ingress host and a
+# `make verify` marker assertion. An infra image has none of those. (MEASURED 2026-08-26:
+# `grep -rln 'app_names\|for_each_app' scripts/ Makefile` -> 41. An earlier draft said 40, taken before
+# 14-selfbuilt-build.sh existed and mentioned app_names in its own header.)
+#
+# REPRODUCIBILITY. The pin is the upstream GIT REF, and the anchor recorded after a build is the
+# RESULTING DIGEST. "Build from the default branch" is disqualifying for an air gap: two operators
+# cutting a bundle a day apart would carry different binaries under the same name, and the digest in
+# images.lock would stop meaning anything.
+#
+# Columns (TAB-separated):
+#   name      short id, used for the bundle tarball name
+#   git_url   upstream source
+#   git_ref   an IMMUTABLE tag — never a branch
+#   dockerfile  path within the checkout
+#   target      docker build --target (empty = default stage)
+#   repo_path   path under ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/
+#   tag         the tag the consuming manifest asks for.
+#               ⚠️ IT MUST ENCODE ANY go_get OVERRIDE, NOT JUST THE UPSTREAM REF. Our artifact is
+#               "fork v1.25.18 PLUS go-containerregistry v0.21.9" -- tagging that as plain
+#               `v1.25.18-debug` misrepresents its content, and it is not merely cosmetic: MEASURED
+#               2026-08-26, pushing different content under an already-cached tag left the KinD nodes
+#               running the OLD binary (Tekton steps are imagePullPolicy=IfNotPresent), so a verified
+#               fix appeared not to work and cost a full e2e cycle. Same mutable-tag class the repo's
+#               Harbor blob-store incident is about: the digest in selfbuilt.lock is the truth, the
+#               tag is only a label -- so make the label change whenever the content does.
+#   go_get      OPTIONAL, space-separated module@version overrides applied BEFORE the build
+#
+# WHY go_get EXISTS — and it is the single strongest argument for building rather than mirroring.
+# MEASURED 2026-08-26 on a live pipeline: fork v1.25.18 pins go-containerregistry v0.21.5, which
+# carries an SSRF guard that REFUSES a bearer-token realm whose host is a private/RFC1918 address:
+#     creating push check transport for 172.18.0.3 failed: invalid realm in www-authenticate:
+#     realm host "172.18.0.3" is a private or link-local address
+# ⚠️ SCOPE — CORRECTED 2026-08-26, and the first version of this line OVERSTATED it. The guard keys
+# on `net.ParseIP(host) != nil`, so it fires only when the realm host is an IP LITERAL. Measured
+# both ways: our KinD Harbor is addressed as 172.18.0.3 and echoes realm="https://172.18.0.3/..."
+# -> the guard FIRES. The VKS lab addresses Harbor as harbor.env1.lab.test and echoes
+# realm="https://harbor.env1.lab.test/..." -> NOT an IP -> the guard does NOT fire. So this breaks
+# an IP-ADDRESSED Harbor, not "every air-gapped Harbor". It still blocks our own e2e gate, which is
+# reason enough -- and an FQDN is a deployment choice a consumer may not make. Upstream
+# added an exemption for "realm matching the registry host:port" on 2026-05-18 (bf87c3bf, #2302),
+# first released in v0.21.6 -- `git compare v0.21.5...bf87c3bf` reports ahead_by=30, i.e. the fork
+# ships the guard WITHOUT its fix. Bumping the dependency is only possible because we BUILD; a
+# mirrored published image offers no such lever.
+# Proven behaviourally, both binaries against the real Harbor: v1.24.0 pushes, v1.25.18-as-shipped
+# FAILS, v1.25.18 rebuilt with v0.21.9 PUSHES.
+#
+# ✅ RESOLVED 2026-08-27 by BUMPING THE FORK to v1.25.19. Read this before touching the pins.
+#
+# THE DEADLOCK WAS NEVER A ggcr VERSION PROBLEM. It was kaniko's own bug: GetFSFromLayers had
+# `defer r.Close()` INSIDE `for i, l := range layers`, and Go's defer is FUNCTION-scoped, so every
+# layer reader stayed open until the whole image was unpacked. ggcr >= v0.21.6 gates concurrent
+# blob fetches behind a pullLimiter with defaultJobs = 4 and returns a slot only on close, so from
+# the fifth layer Uncompressed() blocked forever with no deadline.
+#
+# INHERITED, NOT A FORK REGRESSION (measured): the same defer-in-loop is in
+# GoogleContainerTools/kaniko v1.23.0 and v1.24.0 (line 178) and in the fork's v1.25.18 (line 179).
+# It was harmless for its whole life because the fork pins ggcr v0.21.5, which has NO limiter --
+# limiter.go is ABSENT at v0.21.5 and PRESENT from v0.21.6. What made it fatal was OUR go_get
+# override to v0.21.9, which we need because the bearer-realm SSRF exemption that lets kaniko push
+# to an IP-addressed Harbor landed in that same v0.21.6. The bug was theirs; the trigger was ours.
+#
+# UPSTREAM FIXED IT FIRST. chainguard-forks/kaniko PR #477 "fix(util): close each layer reader
+# before opening the next" merged 2026-08-26 20:38 UTC, extracting the loop body into extractLayer()
+# so the defer is scoped to ONE layer. Tag containment (measured): v1.25.17 ahead, v1.25.18 ahead,
+# v1.25.19 IDENTICAL to the merge commit. Our pin was exactly one release short.
+#
+# ⚠️ A LOCAL PATCH WAS BUILT AND PROVEN, THEN DELETED. Before finding #477 we carried
+# patches/kaniko/0001-release-pull-limiter-slot-per-layer.patch via an optional 9th column, and it
+# WORKED -- 8 build TaskRuns Succeeded, the javawebapp build in 63s where the three previous runs
+# hung 8-10 minutes and StepFailed. It was removed anyway: an upstream, reviewed fix (196/48 across
+# 2 files, with tests) beats a local patch that must be re-cut against every future git_ref. Do NOT
+# re-add it. If a future bug genuinely needs one, the 9th column is still supported by
+# scripts/lib/selfbuilt.sh (selfbuilt_patch) and 14-selfbuilt-build.sh, which git-apply --checks it
+# first so a stale patch fails loudly instead of silently not applying.
+#
+# THE go_get OVERRIDE STAYS. v1.25.19 still pins ggcr v0.21.5, so without the override the realm
+# guard still refuses an IP-addressed registry. A note here previously said "bumping the fork does
+# not help -- v1.25.19 still pins v0.21.5"; that was true about the ggcr pin and was used to dismiss
+# the bump, while v1.25.19 carried the leak fix. Two axes, one checked. Check both.
+#
+# 🔴 KEPT FOR HISTORY -- v0.21.9 alone DID NOT WORK, and why:
+# This block previously said v0.21.9 was "the first version that has both" the realm exemption and
+# the pull-limiter fix, and therefore usable. That was written after v0.21.6 was measured to
+# deadlock, and it was WRONG -- it assumed ggcr #2373 fixed the deadlock. It does not.
+#
+# MEASURED on a live pipeline, with the SERVED binary independently confirmed to embed v0.21.9
+# (2 build-info hits, 0 for v0.21.6): kaniko dies at the FIRST layer pull, identically to v0.21.6:
+#
+#   INFO Unpacking rootfs as cmd COPY .mvn/ .mvn/ requires it.
+#   fatal error: all goroutines are asleep - deadlock!
+#   goroutine 1 [select, locked to thread]:
+#   go-containerregistry/pkg/v1/remote.(*pullLimiter).acquire   .../remote/limiter.go:37
+#     <- (*fetcher).fetchBlobURL <- (*remoteImageLayer).Compressed
+#     <- partial.(*compressedLayerExtender).Uncompressed <- kaniko/pkg/util.GetFSFromLayers
+#
+# WHY #2373 CANNOT HELP. It releases a limiter slot when a body is read to EOF -- i.e. it fixes a
+# LEAK. This is not a leak. `defaultJobs = 4` (options.go:107, `o.limiter = newPullLimiter(o.jobs)`)
+# and the image has ELEVEN layers; kaniko's GetFSFromLayers holds layer bodies OPEN while it
+# unpacks, so once 4 slots are held the 5th acquire() blocks forever. One goroutine, nothing left to
+# release. Verified #2373 IS in v0.21.8/v0.21.9 (GitHub compare: merge commit b3a7149b is an
+# ancestor of both) -- so its presence is not the question; its scope is.
+#
+# THE REAL SHAPE OF THE PROBLEM, and why no pin in this series can be right:
+#   pkg/v1/remote/limiter.go is ABSENT at v0.21.5 and PRESENT at v0.21.6, .7, .8, .9, v0.22.0.
+#   The limiter arrived in the SAME RELEASE as the realm exemption.
+# So the two properties we need are in DIRECT CONFLICT along this axis:
+#   v0.21.5  -> no limiter (no deadlock), but the SSRF guard REFUSES our IP-literal registry
+#   v0.21.6+ -> exemption present, but the limiter deadlocks kaniko on any image with >4 layers
+# There is no version that has one without the other. Bumping further does not help; v0.22.0 still
+# has the limiter.
+#
+# THE PIN BELOW IS THEREFORE NOT KNOWN-GOOD. It is the last thing tried, and it FAILS. Do not read
+# it as a working configuration. The route under review is to stop feeding ggcr an IP LITERAL at
+# all: transport/bearer.go guards on `net.ParseIP(host) != nil` and says in as many words that
+# "DNS-based SSRF is out of scope here", so a DNS-named Harbor never trips the guard and v0.21.5 --
+# which has no limiter -- would work with NO override. That is a design change (cert SAN, containerd
+# certs.d keying, in-cluster + on-node name resolution) and is being reviewed before implementation.
+#
+# The override cannot be avoided by configuration either: there is NO env/flag alternative (zero
+# os.Getenv in either transport tree; --insecure gates only the SCHEME), upstream issue #2258 asked
+# for a disable option that was never implemented, and bumping the fork does not help -- v1.25.19
+# (2026-08-27) still pins v0.21.5.
+#
+# ⚠️ THE FORK VENDORS ITS DEPENDENCIES. `go get` alone leaves vendor/ stale and the build dies with
+# `go: inconsistent vendoring` at the credential-helper step -- an error naming neither the module
+# nor the override. The producer therefore runs `go mod vendor` after any go_get. And do NOT run
+# `go mod tidy`: it PRUNES the tool dependency that deploy/Dockerfile installs, which fails the same
+# step for a completely different reason.
+#
+# renovate: datasource=github-releases depName=chainguard-forks/kaniko
+kaniko	https://github.com/chainguard-forks/kaniko	v1.25.19	deploy/Dockerfile	kaniko-debug	kaniko-project/executor	v1.25.19-gcr0.21.9-debug	github.com/google/go-containerregistry@v0.21.9	

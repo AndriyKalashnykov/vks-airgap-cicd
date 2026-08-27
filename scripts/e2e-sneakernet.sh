@@ -89,6 +89,11 @@ make mirror-pull
 log_info "[internet box / host] building the offline Maven builder into the bundle (needs Maven Central; NOT Harbor)"
 make builder-build
 
+# The selfbuilt images have NO upstream to pull, so `mirror-pull` cannot supply them and only this
+# step can. Without it `make bundle` now dies (11-bundle.sh checks each tarball) -- which is the
+# cheapest failure available, on the box that can still re-cut.
+make selfbuilt-build
+
 log_info "[internet box / host] bundling into the transfer dir (stages crane + the builders into the bundle)"
 make bundle BUNDLE_OUT_DIR="$TRANSFER"
 
