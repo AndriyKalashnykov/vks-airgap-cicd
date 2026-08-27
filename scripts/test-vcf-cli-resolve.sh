@@ -24,16 +24,23 @@ case "$(uname -s)/$(uname -m)" in
   *) echo "SKIP: fixtures target linux/amd64; host is $(uname -s)/$(uname -m)"; exit 0 ;;
 esac
 
-# Effective pinned versions the installer will use (same resolution order as load_env:
-# .env.example → .env → .env.kind) so fixture filenames never rot against the source of truth.
+# Effective pinned versions THE INSTALLER WILL SEE. This must resolve them the way the installer
+# does, and the installer is driven with SKIP_DOTENV=1 (see run_installer below, and its measured
+# reason). This function used to hand-roll the precedence as .env.example -> .env -> .env.kind,
+# which included the ONE file SKIP_DOTENV exists to exclude -- so the expectations were computed
+# from the operator's `.env` while the code under test read `.env.example`. The moment those two
+# disagreed the test reported three failures in the PLUGIN cases and named none of the cause.
+# MEASURED: bumping VCF_PLUGINS_VERSION in .env.example while `.env` still held the old value ->
+# "8 passed, 3 failed", all three the plugin cases. That is the classic shape -- a test that passes
+# because of dev-machine state, and fails for a reason that has nothing to do with what it tests.
+# Delegating to load_env also means the precedence can never drift from the real one again: there
+# is now one implementation, not two.
 ev() {
   ( set -a
+    SKIP_DOTENV=1
     # shellcheck disable=SC1090,SC1091
-    . "$REPO_ROOT/.env.example"
-    # shellcheck disable=SC1090,SC1091
-    [ -f "$REPO_ROOT/.env" ]      && . "$REPO_ROOT/.env"
-    # shellcheck disable=SC1090,SC1091
-    [ -f "$REPO_ROOT/.env.kind" ] && . "$REPO_ROOT/.env.kind"
+    . "$REPO_ROOT/scripts/lib/os.sh" >/dev/null 2>&1
+    load_env >/dev/null 2>&1
     set +a
     printf '%s' "${!1}" )
 }

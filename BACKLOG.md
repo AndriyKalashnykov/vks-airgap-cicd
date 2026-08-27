@@ -3205,6 +3205,40 @@ supposed to exist.
 and either the gate's extraction matches `walk-doc.sh:452` or it states plainly that it is
 deliberately broader. Do NOT narrow it to match without checking what that stops catching.
 
+## 🟡 B496 — a NEWER VCF plugin bundle (0500) exists, and I could not confirm whether a matching CLI does
+
+Asked to check Broadcom for newer VCF CLI / plugin / service artifacts and update the pins, I found a
+newer **plugin bundle** on the portal:
+
+| artifact | pinned in `.env.example` | found on the portal |
+|---|---|---|
+| `VCF-Consumption-CLI-Linux_AMD64` | `9.1.0.0400.25509669` | 0400 (no newer seen) |
+| `VCF-Consumption-CLI-PluginBundle-Linux_AMD64` | `9.1.0.0400.25509793` | **`9.1.0.0500.25653839`** |
+| `argocd-cli` | `v3.0.19-vcf` | unchanged |
+
+**NOT APPLIED, deliberately.** Bumping the plugin bundle alone would ship a **0500 plugin bundle
+against a 0400 CLI**, and nothing in this repo or in the vendor docs states whether those two are a
+matched pair — `grep -iE 'match|pair|same|must'` across `docs/` and `01-install-vcf-clis.sh` returns
+**zero** hits, so the repo has no opinion either. These artifacts are licensed, real-lab-only, and
+`VCF_CLI_SRC_DIR` is empty on the dev box, so there is no way to test the pairing here. An untested
+version skew in the one component a real-lab operator installs first is not worth the bump.
+
+**What settles it, and it is one page:** sign in to the Broadcom portal and read the *VCF CLI*
+product-file group (`groupId=540529`) — if a `9.1.0.0500.*` CLI archive exists, bump BOTH pins
+together; if the CLI genuinely stops at 0400, then 0500-plugins-on-0400-CLI is the vendor's own
+shipped combination and the plugin bump alone is correct. My session could not read it: the portal
+had signed out, and I do not enter credentials into login forms.
+
+Note the failure mode if someone downloads 0500 and does *not* bump the pin: resolution is
+**arch- and version-bound** (`01-install-vcf-clis.sh:103` builds the glob from `VCF_PLUGINS_VERSION`),
+so the installer refuses with a message naming the pin rather than silently installing the wrong
+bundle. That is fail-closed, which is why this is 🟡 and not 🔴.
+
+**Done-when:** both pins reflect one confirmed vendor combination, `docs/scenario-1.md`'s download
+table matches them, and `make test-scripts` stays green. (The test that guards this was itself broken
+until PR #1040 — it read `.env` while the installer read `.env.example`, so it produced three
+unrelated-looking failures on exactly this kind of pin bump. Bump on top of that fix, not before it.)
+
 ## 🟡 B493 — one test is ~half of `static-check`, and the cause is a hardcoded `sleep 15` that the repo's own rule forbids
 
 MEASURED 2026-08-26, three consecutive runs: `test-argocd-address-classify.sh` reports **201s** —
