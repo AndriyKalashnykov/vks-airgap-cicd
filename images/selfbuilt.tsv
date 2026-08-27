@@ -72,7 +72,41 @@
 # Proven behaviourally, both binaries against the real Harbor: v1.24.0 pushes, v1.25.18-as-shipped
 # FAILS, v1.25.18 rebuilt with v0.21.9 PUSHES.
 #
-# 🔴 CORRECTED 2026-08-27 (LATER THE SAME DAY): v0.21.9 DOES NOT WORK EITHER.
+# ✅ RESOLVED 2026-08-27 by BUMPING THE FORK to v1.25.19. Read this before touching the pins.
+#
+# THE DEADLOCK WAS NEVER A ggcr VERSION PROBLEM. It was kaniko's own bug: GetFSFromLayers had
+# `defer r.Close()` INSIDE `for i, l := range layers`, and Go's defer is FUNCTION-scoped, so every
+# layer reader stayed open until the whole image was unpacked. ggcr >= v0.21.6 gates concurrent
+# blob fetches behind a pullLimiter with defaultJobs = 4 and returns a slot only on close, so from
+# the fifth layer Uncompressed() blocked forever with no deadline.
+#
+# INHERITED, NOT A FORK REGRESSION (measured): the same defer-in-loop is in
+# GoogleContainerTools/kaniko v1.23.0 and v1.24.0 (line 178) and in the fork's v1.25.18 (line 179).
+# It was harmless for its whole life because the fork pins ggcr v0.21.5, which has NO limiter --
+# limiter.go is ABSENT at v0.21.5 and PRESENT from v0.21.6. What made it fatal was OUR go_get
+# override to v0.21.9, which we need because the bearer-realm SSRF exemption that lets kaniko push
+# to an IP-addressed Harbor landed in that same v0.21.6. The bug was theirs; the trigger was ours.
+#
+# UPSTREAM FIXED IT FIRST. chainguard-forks/kaniko PR #477 "fix(util): close each layer reader
+# before opening the next" merged 2026-08-26 20:38 UTC, extracting the loop body into extractLayer()
+# so the defer is scoped to ONE layer. Tag containment (measured): v1.25.17 ahead, v1.25.18 ahead,
+# v1.25.19 IDENTICAL to the merge commit. Our pin was exactly one release short.
+#
+# ⚠️ A LOCAL PATCH WAS BUILT AND PROVEN, THEN DELETED. Before finding #477 we carried
+# patches/kaniko/0001-release-pull-limiter-slot-per-layer.patch via an optional 9th column, and it
+# WORKED -- 8 build TaskRuns Succeeded, the javawebapp build in 63s where the three previous runs
+# hung 8-10 minutes and StepFailed. It was removed anyway: an upstream, reviewed fix (196/48 across
+# 2 files, with tests) beats a local patch that must be re-cut against every future git_ref. Do NOT
+# re-add it. If a future bug genuinely needs one, the 9th column is still supported by
+# scripts/lib/selfbuilt.sh (selfbuilt_patch) and 14-selfbuilt-build.sh, which git-apply --checks it
+# first so a stale patch fails loudly instead of silently not applying.
+#
+# THE go_get OVERRIDE STAYS. v1.25.19 still pins ggcr v0.21.5, so without the override the realm
+# guard still refuses an IP-addressed registry. A note here previously said "bumping the fork does
+# not help -- v1.25.19 still pins v0.21.5"; that was true about the ggcr pin and was used to dismiss
+# the bump, while v1.25.19 carried the leak fix. Two axes, one checked. Check both.
+#
+# 🔴 KEPT FOR HISTORY -- v0.21.9 alone DID NOT WORK, and why:
 # This block previously said v0.21.9 was "the first version that has both" the realm exemption and
 # the pull-limiter fix, and therefore usable. That was written after v0.21.6 was measured to
 # deadlock, and it was WRONG -- it assumed ggcr #2373 fixed the deadlock. It does not.
@@ -122,4 +156,4 @@
 # step for a completely different reason.
 #
 # renovate: datasource=github-releases depName=chainguard-forks/kaniko
-kaniko	https://github.com/chainguard-forks/kaniko	v1.25.18	deploy/Dockerfile	kaniko-debug	kaniko-project/executor	v1.25.18-gcr0.21.9-limiterfix-debug	github.com/google/go-containerregistry@v0.21.9	patches/kaniko/0001-release-pull-limiter-slot-per-layer.patch
+kaniko	https://github.com/chainguard-forks/kaniko	v1.25.19	deploy/Dockerfile	kaniko-debug	kaniko-project/executor	v1.25.19-gcr0.21.9-debug	github.com/google/go-containerregistry@v0.21.9	
