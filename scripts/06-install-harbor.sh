@@ -35,6 +35,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # (12/12 -- its wiring cases asserted ORDER and TEXT, never DEFINEDNESS), shellcheck (clean), and
 # check-lib-sourcing.sh (OK over 917 call sites, blind here for two independent reasons -- see the
 # fix in that file). test-harbor-credential-settle.sh now asserts REACHABILITY via `type -t`.
+# shellcheck source=scripts/lib/harbor.sh
 . "${SCRIPT_DIR}/lib/harbor.sh"
 load_env
 

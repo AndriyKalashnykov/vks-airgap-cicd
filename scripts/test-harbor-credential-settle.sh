@@ -12,6 +12,9 @@
 # (_harbor_auth_code, _harbor_ca_args) so no network is touched. It does NOT prove the KinD DB
 # reconcile works -- that mechanism is UNVERIFIED on the pinned chart and --may-reconcile is
 # deliberately a no-op until it is measured on a throwaway Harbor.
+# The single-quoted $-strings below are grep PATTERNS matched against script TEXT; expanding
+# them is precisely the bug they exist to detect.
+# shellcheck disable=SC2016
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 pass=0; fail=0
