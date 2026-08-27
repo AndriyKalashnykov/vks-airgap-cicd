@@ -100,16 +100,27 @@ case "$out" in *"already built at"*) bad "SELFBUILT_FORCE=1 -> REBUILD" ;;
 rt_probe() {
   local d="$T/rt"; rm -rf "$d"; mkdir -p "$d/bin"
   # Fake git: clone produces a minimal tree. Fake engine: `save -o <f>` writes a non-empty file.
-  {
-    echo '#!/usr/bin/env bash'
-    echo 'if [ "${1:-}" = clone ]; then for a in "$@"; do t="$a"; done; mkdir -p "$t"; printf "FROM scratch\n" > "$t/Dockerfile"; fi'
-    echo 'exit 0'
-  } > "$d/bin/git"
-  {
-    echo '#!/usr/bin/env bash'
-    echo 'prev=""; for a in "$@"; do [ "$prev" = "-o" ] && printf "tar\n" > "$a"; prev="$a"; done'
-    echo 'exit 0'
-  } > "$d/bin/podman"
+  # Quoted heredocs: this is the TEXT of the fake binaries, so $@ / \n must stay literal.
+  # (Written with echo previously, which drew SC2016+SC2028 -- correct warnings about text that is
+  # deliberately unexpanded. A quoted heredoc makes that literal by construction, not by suppression.)
+  cat > "$d/bin/git" <<'FAKEGIT'
+#!/usr/bin/env bash
+if [ "${1:-}" = clone ]; then
+  for a in "$@"; do t="$a"; done
+  mkdir -p "$t"
+  printf 'FROM scratch\n' > "$t/Dockerfile"
+fi
+exit 0
+FAKEGIT
+  cat > "$d/bin/podman" <<'FAKEENGINE'
+#!/usr/bin/env bash
+prev=""
+for a in "$@"; do
+  [ "$prev" = "-o" ] && printf 'tar\n' > "$a"
+  prev="$a"
+done
+exit 0
+FAKEENGINE
   chmod +x "$d/bin/git" "$d/bin/podman"
   ( cd "$T" && PATH="$d/bin:$PATH" CONTAINER_ENGINE=podman SELFBUILT_FORCE=1 \
       bash "$T/scripts/14-selfbuilt-build.sh" >/dev/null 2>&1 ) || return 1

@@ -143,6 +143,15 @@ verify_app() {
     wait_for "Gitea reachable" curl -fsS "http://localhost:${GITEA_LOCAL_PORT}/api/healthz" || true
     git -C "$d" commit -q --allow-empty -m "verify: re-fire ${marker}" >/dev/null 2>&1 || true
     git -C "$d" push -q origin "$APP_BRANCH" >/dev/null 2>&1 || true
+    # RE-CAPTURE THE SHA. The re-fire COMMITS (--allow-empty above), so HEAD MOVED, and the
+    # pipeline it triggers builds the NEW sha. The image-attribution wait below tests the
+    # deployed tag against marker_sha, so leaving it at the pre-re-fire value makes that wait
+    # PERMANENTLY UNSATISFIABLE -- it would burn the full readiness timeout and die, on
+    # exactly the run the old "!= pre_img" test recovered from. Adversary-caught and
+    # RED-proven against a real re-fire commit (marker 13ddaa7..., re-fire tag fcfcd18 ->
+    # NO MATCH). Measured: 0 re-fires in 341 archived verify attempts, so this is latent,
+    # which is precisely why no test or run would have found it.
+    marker_sha="$(git -C "$d" rev-parse HEAD)"
     kill "$PF_PID" 2>/dev/null || true; PF_PID=""
   done
   if [ -z "$pr" ]; then
