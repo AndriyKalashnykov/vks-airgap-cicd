@@ -296,14 +296,40 @@ verify_app() {
       2>/dev/null | awk -v i="$img" '$2==i {print $1; exit}'
   }
   local pf_target; pf_target="$(_pick_pod)"
+  # ⚠️ THE REMOTE PORT DEPENDS ON THE TARGET, AND BINDING A POD ON :80 CAN NEVER CONNECT.
+  # 80 is the SERVICE port; the Service maps it to targetPort `http` = the container's 8080. When
+  # this bound `svc/`, :80 was right. Switching the target to a NAMED POD (so a death is
+  # attributable) kept :80 -- and a pod has nothing listening there.
+  #
+  # MEASURED on a healthy, Ready, 0-restart javawebapp pod:
+  #     port-forward <pod> L:80    -> http 000 (connection refused)   <- what shipped
+  #     port-forward <pod> L:8080  -> http 200
+  #     port-forward svc/<app> L:80-> http 200                        <- the pre-pod behaviour
+  # Every run that FOUND a Ready pod on the new image therefore could not connect, ever. It read as
+  # 114 "connection refused" tunnel deaths across the generation cap, ~10 minutes AFTER both pods
+  # were Ready (6s and 7s after creation) -- so it looked like a flaky tunnel or a slow app, and was
+  # neither. The svc/ FALLBACK below still worked, which is why this only bites when the pod lookup
+  # SUCCEEDS: the healthier the cluster, the more certain the failure.
+  local pf_port=80
+  if [ -n "$pf_target" ]; then
+    pf_port="$(kubectl -n "$ns" get pod "$pf_target" \
+                 -o jsonpath='{.spec.containers[0].ports[0].containerPort}' 2>/dev/null || true)"
+    if [ -z "$pf_port" ]; then
+      # A pod that declares no containerPort gives us nothing to bind. svc/ resolves the name for
+      # us, so fall back rather than guess a number.
+      log_warn "[${app}] pod ${pf_target} declares no containerPort — binding svc/ instead"
+      pf_target=""; pf_port=80
+    fi
+  fi
   if [ -z "$pf_target" ]; then
     # F5: falling back silently means a degraded run is indistinguishable from a fixed one.
-    pf_target="svc/${app}"
+    pf_target="svc/${app}"; pf_port=80
     log_warn "[${app}] no Ready pod reports ${img} — binding svc/, which is the PRE-FIX behaviour this fix exists to remove"
   fi
+  log_info "[${app}] tunnel target ${pf_target} remote port ${pf_port}"
   _start_pf() {
     [ -n "${PF_PID:-}" ] && { kill "$PF_PID" 2>/dev/null || true; }
-    kubectl -n "$ns" port-forward "$pf_target" "${app_local_port}:80" >/dev/null 2>&1 &
+    kubectl -n "$ns" port-forward "$pf_target" "${app_local_port}:${pf_port}" >/dev/null 2>&1 &
     PF_PID=$!
     PF_GEN=$((${PF_GEN:-0} + 1))
   }
