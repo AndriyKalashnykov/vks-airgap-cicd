@@ -1,0 +1,48 @@
+# selfbuilt.tsv — images this repo BUILDS FROM SOURCE because no free published build exists.
+#
+# WHY THIS FILE IS SEPARATE FROM images/images.txt. images.txt is a MIRROR inventory: every row is
+# pulled from a public registry and pushed to Harbor. A row here has no upstream image to pull — we
+# build it on the internet box and carry the result. Putting one in images.txt would make
+# `make mirror-pull` try to pull a tag that does not exist.
+#
+# WHY NOT apps/registry.tsv. That registry is per-APP: 40 files consume app_names/for_each_app, and
+# every row implies a deploy dir, a Gitea repo pair, an ArgoCD Application, an ingress host and a
+# `make verify` marker assertion. An infra image has none of those. (MEASURED 2026-08-26:
+# `grep -rln 'app_names\|for_each_app' scripts/ Makefile` -> 40.)
+#
+# REPRODUCIBILITY. The pin is the upstream GIT REF, and the anchor recorded after a build is the
+# RESULTING DIGEST. "Build from the default branch" is disqualifying for an air gap: two operators
+# cutting a bundle a day apart would carry different binaries under the same name, and the digest in
+# images.lock would stop meaning anything.
+#
+# Columns (TAB-separated):
+#   name      short id, used for the bundle tarball name
+#   git_url   upstream source
+#   git_ref   an IMMUTABLE tag — never a branch
+#   dockerfile  path within the checkout
+#   target      docker build --target (empty = default stage)
+#   repo_path   path under ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/
+#   tag         the tag the consuming manifest asks for
+#   go_get      OPTIONAL, space-separated module@version overrides applied BEFORE the build
+#
+# WHY go_get EXISTS — and it is the single strongest argument for building rather than mirroring.
+# MEASURED 2026-08-26 on a live pipeline: fork v1.25.18 pins go-containerregistry v0.21.5, which
+# carries an SSRF guard that REFUSES a bearer-token realm whose host is a private/RFC1918 address:
+#     creating push check transport for 172.18.0.3 failed: invalid realm in www-authenticate:
+#     realm host "172.18.0.3" is a private or link-local address
+# Every air-gapped Harbor is on a private address, so the fork CANNOT PUSH TO OURS at all. Upstream
+# added an exemption for "realm matching the registry host:port" on 2026-05-18 (bf87c3bf, #2302),
+# first released in v0.21.6 -- `git compare v0.21.5...bf87c3bf` reports ahead_by=30, i.e. the fork
+# ships the guard WITHOUT its fix. Bumping the dependency is only possible because we BUILD; a
+# mirrored published image offers no such lever.
+# Proven behaviourally, both binaries against the real Harbor: v1.24.0 pushes, v1.25.18-as-shipped
+# FAILS, v1.25.18 rebuilt with v0.21.9 PUSHES.
+#
+# ⚠️ THE FORK VENDORS ITS DEPENDENCIES. `go get` alone leaves vendor/ stale and the build dies with
+# `go: inconsistent vendoring` at the credential-helper step -- an error naming neither the module
+# nor the override. The producer therefore runs `go mod vendor` after any go_get. And do NOT run
+# `go mod tidy`: it PRUNES the tool dependency that deploy/Dockerfile installs, which fails the same
+# step for a completely different reason.
+#
+# renovate: datasource=github-releases depName=chainguard-forks/kaniko
+kaniko	https://github.com/chainguard-forks/kaniko	v1.25.18	deploy/Dockerfile	kaniko-debug	kaniko-project/executor	v1.25.18-debug	github.com/google/go-containerregistry@v0.21.9

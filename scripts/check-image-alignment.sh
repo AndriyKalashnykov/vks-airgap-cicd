@@ -31,7 +31,27 @@ while read -r ref; do
   # and skip the `[ -z "$itag" ]` WARN guard below. The captured value is already correct.
   itag="$(grep -oE "${repo}:[^[:space:]\"]+" images/images.txt | head -1 | sed "s|${repo}:||" || true)"
   if [ -z "$itag" ]; then
-    echo "WARN  ${repo}: referenced in a manifest but absent from images/images.txt (not mirrored?)"
+    # SECOND INVENTORY: images we BUILD from source rather than mirror (images/selfbuilt.tsv).
+    # Such a repo has NO upstream image to pull, so it is legitimately absent from images.txt.
+    # Same `|| true` reasoning as the grep above.
+    stag="$(awk -F'\t' -v r="$repo" '!/^#/ && NF>=7 && $6==r {print $7; exit}' images/selfbuilt.tsv 2>/dev/null || true)"
+    if [ -n "$stag" ]; then
+      if [ "$mtag" != "$stag" ]; then
+        echo "DRIFT ${repo}: manifest=${mtag} vs images/selfbuilt.tsv=${stag}"
+        drift=1
+      else
+        echo "ok    ${repo}=${mtag} (self-built)"
+      fi
+      continue
+    fi
+    # NEITHER INVENTORY. This used to be a WARN + continue, which SILENTLY DE-GATED the pin: a
+    # manifest ref that is neither mirrored nor built is an ImagePullBackOff at the far end of the
+    # pipeline, and the gate whose whole job is to catch that returned rc=0.
+    # MEASURED 2026-08-26 before promoting it: the baseline emits 34 ok rows and ZERO warns, so no
+    # existing ref relied on the old lenient branch.
+    echo "MISSING ${repo}: in NEITHER images/images.txt NOR images/selfbuilt.tsv"
+    echo "        Nothing mirrors it and nothing builds it, so the cluster cannot pull it."
+    drift=1
     continue
   fi
   if [ "$mtag" != "$itag" ]; then

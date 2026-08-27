@@ -1151,6 +1151,14 @@ check-image-alignment: ## Fail if any mirrored image tag drifts between k8s/tekt
 check-kind-kubeconfig: ## Fail if a `kind` invocation could write the AMBIENT $$KUBECONFIG (a LAB slot by default)
 	@$(SCRIPTS)/check-kind-kubeconfig.sh
 
+.PHONY: selfbuilt-build
+selfbuilt-build: ## INTERNET box: build the images that have no free published build (images/selfbuilt.tsv) into the bundle
+	@$(SCRIPTS)/14-selfbuilt-build.sh
+
+.PHONY: selfbuilt-push
+selfbuilt-push: ## AIR-GAP box: push the carried self-built images into Harbor (no container engine needed)
+	@$(SCRIPTS)/22-selfbuilt-push.sh
+
 .PHONY: check-cluster-template-vars
 check-cluster-template-vars: ## Fail if k8s/vks/cluster.yaml interpolates a $${VAR} that 25-vks-cluster-create.sh never binds
 	@$(SCRIPTS)/check-cluster-template-vars.sh
