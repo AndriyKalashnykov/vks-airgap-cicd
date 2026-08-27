@@ -269,6 +269,8 @@ env_check() {
       *:*) : ;;
       *) [ -s "${KUBECONFIG:-/nonexistent}" ] || missing+=("KUBECONFIG (file missing or EMPTY: '${KUBECONFIG:-}' — fetch the workload kubeconfig first; a cluster you just created writes ./secrets/\${VKS_CLUSTER_NAME}.kubeconfig)") ;;
     esac
+
+
     # ── B473 finding 9: a LOOPBACK server in the LAB slot ─────────────────────────────────────
     # PRESENCE is not identity. `./secrets/vks.kubeconfig` is the DOCUMENTED real-lab guest-cluster
     # default (lib/os.sh's `${KUBECONFIG:-${REPO_ROOT}/secrets/vks.kubeconfig}`), and a KinD run of an
@@ -327,6 +329,33 @@ env_check() {
       esac
     fi
   fi
+  # --- ARGOCD_KUBECONFIG: a SELECTOR pointing at a file that does not exist ---
+  # OPTIONAL by design: it is COMMENTED in .env.example, and the KinD / same-cluster flows leave
+  # it unset because ArgoCD lives in the cluster $KUBECONFIG already names. It matters only in
+  # the cross-cluster real-lab shape, where ArgoCD is a SUPERVISOR Service while the Applications
+  # it reconciles live in a guest cluster (docs/vks-services/argocd.md).
+  #
+  # WHY IT IS GATED HERE. env-validate is the tenant-safe validity gate (CLAUDE.md RULE ZERO-A0)
+  # and it existence-checked KUBECONFIG while never mentioning ARGOCD_KUBECONFIG at all.
+  # MEASURED: 0 occurrences of the name in this file, and
+  #     ARGOCD_KUBECONFIG=./secrets/DOES-NOT-EXIST make env-validate
+  # printed "KUBECONFIG reachable" and PASSED. The failure then surfaces much later, out of
+  # `make gitops` / `make verify`, as a bare
+  #     error: stat ./secrets/argocd.kubeconfig: no such file or directory
+  # an error naming a FILE rather than the variable that chose it. Same shape as a Harbor
+  # credential that only 401s ~20 minutes downstream in mirror-push.
+  #
+  # UNSET is correct and stays SILENT. SET-but-absent is the defect: an operator who edited .env
+  # for a lab session and moved on keeps a dangling selector that no gate ever mentions.
+  case "${ARGOCD_KUBECONFIG:-}" in
+    '') : ;;
+    *:*) : ;;
+    *) { [ -f "${ARGOCD_KUBECONFIG}" ] && [ -s "${ARGOCD_KUBECONFIG}" ]; } || missing+=("ARGOCD_KUBECONFIG (set to '${ARGOCD_KUBECONFIG}', which does not exist or is EMPTY).
+     ArgoCD is a SUPERVISOR Service, so this names the SUPERVISOR kubeconfig, not the guest one.
+     Either fetch it:   make fetch-argocd-kubeconfig
+     or, if ArgoCD runs in the SAME cluster as your workloads (the KinD stand-in, and any
+     single-cluster lab), COMMENT the line out in .env -- unset is the correct value there.") ;;
+  esac
   if [ "${#missing[@]}" -gt 0 ]; then
     # The remedy must be runnable FROM THE STATE THAT PRODUCED THIS ERROR. With no .env,
   # `make env-populate` itself FATALs ("no .env yet") -- measured -- so telling the reader to run
