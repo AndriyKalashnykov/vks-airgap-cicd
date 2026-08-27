@@ -268,6 +268,51 @@ are mutually independent, and the box is a 32-CPU machine.
 
 **The tell:** your reply is a status table and nothing is being started in the same turn.
 
+### RULE ZERO-S — THE BASH TOOL IS **ZSH** ON THIS BOX. WRAP ANY NON-TRIVIAL SNIPPET IN `bash -c` (BLOCKING)
+
+**MEASURED on this box, right now** — `$SHELL=/usr/bin/zsh`, and the Bash tool's own shell reports
+`zsh`. Not "may be"; **is**. Three constructs I used today returned garbage rather than an error:
+
+| construct | zsh (measured) | bash |
+|---|---|---|
+| `${!var}` indirect expansion | **`bad substitution`** -> empty | the value |
+| an unmatched glob (`ls /nope-*.zzz`) | **`no matches found` and the WHOLE COMMAND ABORTS** | passes through |
+| `for x in $var` (newline-separated) | **1 iteration** | 3 iterations |
+
+Also: `PIPESTATUS` is bash-only (zsh: `pipestatus`), and `status`/`path`/`argv` are **read-only**
+in zsh, so `read -r sha status concl` fails with `read-only variable: status`.
+
+**THE FAILURE MODE IS NOT AN ERROR — IT IS A CONFIDENT WRONG ANSWER.** Every one of these returns
+*something*: an empty string, one loop pass, a silently-truncated command. You then read that as
+data. Measured 2026-08-26, three times in one session:
+
+1. probing a helper with `${!1}` -> `bad substitution` -> **empty** -> read as "the variable is unset"
+2. a Monitor globbing `MATRIX-row*.log` before any row existed -> `no matches found` -> **the whole
+   monitor died**, silently, while the thing it watched ran on
+3. `ps | grep -c` self-match and an unmatched-glob abort, each read as a fact about the lab
+
+**THE REFLEX — mechanical, no judgement call:**
+
+> If a command contains `${!`, a glob that may not match, `for x in $var`, `PIPESTATUS`, `read -a`,
+> or a variable named `status`/`path`/`argv` — **wrap the whole thing in `bash -c '...'`.**
+> When in doubt, wrap. It costs nine characters and it removes the entire class.
+
+```bash
+bash -c 'set -o pipefail; ... ${!name} ... for f in $list; do ...; done'
+```
+
+For globs specifically, prefer `find` — it returns **empty** where a zsh glob **aborts**:
+
+```bash
+find "$d" -maxdepth 1 -name 'MATRIX-row*.log'    # empty is fine
+ls "$d"/MATRIX-row*.log                          # zsh: aborts the command
+```
+
+**AND WHEN A PROBE RETURNS NOTHING, SUSPECT THE SHELL BEFORE THE WORLD.** An empty result is a
+claim about your instrument first (`agents.md` §"a `ps` that finds NOTHING does not prove the
+process is GONE"). Prove the probe can produce a non-empty answer for a case you *know* is true
+before concluding anything from its silence.
+
 ### RULE ZERO-A — DERIVE THE CONTRACT FROM THE CODE BEFORE YOU CHANGE IT (BLOCKING)
 
 Before writing code that changes **what one side must provide to another** — the air gap, a wire
