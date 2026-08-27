@@ -181,33 +181,103 @@ ck "no code path assigns an empty pf_target" \
    "$(grep -vE '^[[:space:]]*#' "$V" | grep -c 'pf_target=""')" "0"
 
 # ---------------------------------------------------------------------------
-# F1 -- a REBUILD's bind must reach the ARCHIVE, not only the terminal.
-# MEASURED on TWO live e2e runs (2026-08-27): every app announced `rebuilding (generation 2)` while
-# its ONLY `tunnel target` line still read `generation 1` -- 6/6 in the second run. Every rebuild
-# site sits inside _pf_classify, which runs as a wait_for predicate, and wait_for invokes those as
-# `"$@" >/dev/null 2>&1`; _log writes to STDERR, so the line is discarded. A faithful reproduction
-# (stderr-writing _log) measured 3 generations -> 1 log-visible bind -> 0 recoverable; with _pf_ev
-# -> 3 recoverable. Without this, #1062's rebuild-site fix is unverifiable from any log.
-# Scope to the _start_pf BODY: a file-wide grep would match the comment block that explains it.
-_pf_body_f1="$(awk '/^  _start_pf\(\) \{/,/^  \}/' "$V" | grep -vE '^[[:space:]]*#')"
+# B502 -- a REBUILD's bind must reach the ARCHIVE, not only the terminal. Rebuild sites run inside a
+# wait_for predicate, invoked as `"$@" >/dev/null 2>&1`, and _log writes to STDERR -- so log_info
+# from a rebuild is discarded. PROVEN FIXED LIVE: a `make verify` recorded 6/6 apps with
+# `bound <pod> remote port 8080 (generation 2)`, against 0/6 on the old channel.
+# ⚠️ ANCHOR EVERY PRESENCE GREP AT LINE START. A body-presence grep is vacuous to a TRAILING
+# comment: measured, `:  # _pf_ev "bound ..."` scored a full green against the unanchored form.
+_b502="$(awk '/^  _start_pf\(\) \{/,/^  \}/' "$V")"
 ck "_start_pf reports its bind through _pf_ev (the channel wait_for cannot discard)" \
-   "$(printf '%s\n' "$_pf_body_f1" | grep -cE '_pf_ev .*bound .*generation')" "1"
+   "$(printf '%s\n' "$_b502" | grep -cE '^[[:space:]]*_pf_ev .*bound .*generation')" "1"
 ck "_start_pf still logs to the terminal too (the FIRST bind is worth a human-visible line)" \
-   "$(printf '%s\n' "$_pf_body_f1" | grep -cE 'log_info .*tunnel target')" "1"
+   "$(printf '%s\n' "$_b502" | grep -cE '^[[:space:]]*log_info .*tunnel target')" "1"
 
 # ---------------------------------------------------------------------------
-# F2 -- the verdict globals must NOT latch. Reproduced: identical tunnel deaths reported
-# `HARNESS-TUNNEL ... retry the row` without a transient not-Ready poll and `PRODUCT ... app not
-# serving /healthz` with one, because PF_RESTARTS_BLOCKED/PF_UNKNOWN were set once and never
-# cleared. Readiness periodSeconds=5 with replicas=2 and no `strategy:` means any re-sync rolls a
-# pod, so the transient is ORDINARY -- precedence by EARLIEST observation, the exact mis-attribution
-# this classifier exists to remove. Assert they are cleared as the FIRST executable act of a poll.
-_cl_body="$(awk '/^  _pf_classify\(\) \{/,/^  \}/' "$V" | grep -vE '^[[:space:]]*#')"
-_cl_first="$(printf '%s\n' "$_cl_body" | sed 1d | grep -vE '^[[:space:]]*($|local )' | head -1 | sed 's/^[[:space:]]*//')"
-ck "_pf_classify clears BOTH verdict globals before evaluating a poll" \
-   "$_cl_first" 'PF_RESTARTS_BLOCKED=""; PF_UNKNOWN=""'
-ck "the verdict globals are cleared per-poll, not only once per app" \
-   "$(printf '%s\n' "$_cl_body" | grep -cE 'PF_RESTARTS_BLOCKED=""')" "1"
+# B503 -- the verdict is decided by POLL CLASSES on the SAME SCALE. Four designs were measured and
+# THREE refuted: the latching string (one transient poll disabled HARNESS for the whole app); an
+# ever-unstable guard (2/4 -- worse than the bug); and clearing the string per poll (3/4 -- inverts
+# the error, telling a flapping app to "retry the row"). A fourth, PF_DEATHS vs PF_NOTREADY_POLLS,
+# was refuted by INTERACTION: B506 caps PF_DEATHS at the generation cap while NOTREADY is capped by
+# the poll count, so `D > N` became unwinnable after ~25s of any pod not-Ready -- and a rolling
+# update makes that ordinary. Two individually-correct changes destroying each other.
+# So: three UNCAPPED counters, one increment per poll, and PF_DEATHS kept only as the rebuild count.
+_b503="$(awk '/^  _pf_classify\(\) \{/,/^  \}/' "$V")"
+ck "not-Ready polls are counted as a CLASS" \
+   "$(printf '%s\n' "$_b503" | grep -cE '^[[:space:]]*PF_NOTREADY_POLLS=\$\(\(PF_NOTREADY_POLLS \+ 1\)\)')" "1"
+ck "could-not-ask polls are counted as a CLASS" \
+   "$(printf '%s\n' "$_b503" | grep -cE '^[[:space:]]*PF_UNKNOWN_POLLS=\$\(\(PF_UNKNOWN_POLLS \+ 1\)\)')" "1"
+ck "tunnel-dead polls are counted as a CLASS, OUTSIDE the generation-cap test" \
+   "$(printf '%s\n' "$_b503" | grep -B2 -E '^[[:space:]]*if \[ "\$PF_GEN" -lt' | grep -cE '^[[:space:]]*PF_TUNNEL_POLLS=\$\(\(PF_TUNNEL_POLLS \+ 1\)\)')" "1"
+# An ABSENCE check must NOT be anchored -- anchoring softens it. The most natural way to re-add the
+# refuted clear is to append it to the existing `local rc=...` line, which an anchored grep misses.
+ck "the REFUTED per-poll clear has not come back (unanchored on purpose)" \
+   "$(printf '%s\n' "$_b503" | grep -vE '^[[:space:]]*#' | grep -cE 'PF_RESTARTS_BLOCKED=""; *PF_UNKNOWN=""')" "0"
+# The arms must compare CLASSES. PF_DEATHS is capped, so any arm comparing it is the refuted design.
+ck "NO verdict arm compares the CAPPED PF_DEATHS against a poll-class counter" \
+   "$(grep -vE '^[[:space:]]*#' "$V" | grep -cE 'PF_DEATHS" -(gt|ge|lt|le) "\$PF_(NOTREADY|UNKNOWN|TUNNEL)_POLLS|PF_(NOTREADY|UNKNOWN|TUNNEL)_POLLS" -(gt|ge|lt|le) "\$PF_DEATHS')" "0"
+ck "both arms rank UNKNOWN by class, not by the capped death count" \
+   "$(grep -vE '^[[:space:]]*#' "$V" | grep -cE 'PF_UNKNOWN_POLLS" -ge "\$PF_TUNNEL_POLLS')" "2"
+ck "the tunnel arm requires tunnel-dead polls to DOMINATE not-Ready polls" \
+   "$(grep -vE '^[[:space:]]*#' "$V" | grep -cE 'PF_TUNNEL_POLLS" -gt "\$PF_NOTREADY_POLLS')" "1"
+ck "all three class counters are reset per app" \
+   "$(grep -cE '^  PF_NOTREADY_POLLS=0; PF_UNKNOWN_POLLS=0; PF_TUNNEL_POLLS=0' "$V")" "1"
+
+# ---------------------------------------------------------------------------
+# B508 -- BOTH arms must be able to say UNKNOWN, and must rank it FIRST. The first attempt added the
+# branch to the readiness arm but left it BELOW the tunnel branch and gated on `U <= D` -- measured a
+# TAUTOLOGY (both incremented adjacently), so over 4000 random interleavings `U > D` never occurred
+# and the branch could not fire for the tenant it was written for. Ranking the same evidence in
+# opposite orders in the two arms is the defect; assert the ORDER, not merely the presence.
+# MATCH THE MESSAGE, NOT THE VERB: a `(die|log_error)` pattern puts those literals in this file and
+# check-lib-sourcing reads a lib-function name inside a quoted grep argument as a CALL (B509).
+ck "BOTH verdict arms can report UNKNOWN" \
+   "$(grep -cE '"UNKNOWN \[\$\{app\}\]' "$V")" "2"
+ck "the readiness arm ranks UNKNOWN BEFORE the tunnel verdict (line order, both in the same arm)" \
+   "$(awk '/if ! wait_for "\[\$\{app\}\] app HTTP up"/,/^  fi$/' "$V" | grep -nE '"UNKNOWN \[|HARNESS-TUNNEL \[' | head -1 | grep -c UNKNOWN)" "1"
+
+# ---------------------------------------------------------------------------
+# B506 -- a death per DEATH, not per POLL, and each cap-spent event ONCE. Measured at the documented
+# defaults: 120 deaths / 120 event lines (6 distinct) -> 6 / 6 / 0 duplicates. The FIRST version
+# applied this to the pods-Ready path only; the kubectl-unqueryable path -- the one a broken
+# kubeconfig or stale token takes, i.e. the likeliest non-tunnel failure a tenant hits -- still
+# flooded 120/120. Both paths are guarded now.
+# ⚠️ ASSERT THE GUARD, NOT THE ASSIGNMENT. Measured: defeating the condition (`if true; then  #
+# PF_CAP_SPENT=1`) leaves the assignment line intact, so an assignment-only check stays green over a
+# restored flood. Same for the UNKNOWN branches -- prefixing `[ 1 -eq 0 ] &&` leaves both the message
+# and the line ORDER untouched, so neither a presence nor an order check can see it. Pin the exact
+# condition text; a constant-false conjunct then no longer matches.
+ck "the tunnel cap-spent emit is GUARDED by the one-shot flag" \
+   "$(printf '%s\n' "$_b503" | grep -cE '^[[:space:]]*if \[ -z "\$PF_CAP_SPENT" \]; then$')" "1"
+ck "the could-not-ask cap-spent emit is GUARDED by its own one-shot flag" \
+   "$(printf '%s\n' "$_b503" | grep -cE '^[[:space:]]*elif \[ -z "\$PF_UNKNOWN_ANNOUNCED" \]; then$')" "1"
+ck "neither UNKNOWN branch carries an extra conjunct (a constant-false one makes it unreachable)" \
+   "$(grep -cE '^[[:space:]]*(if|elif) \[ -n "\$PF_UNKNOWN" \] && \[ "\$PF_UNKNOWN_POLLS" -ge "\$PF_NOTREADY_POLLS" \] && \[ "\$PF_UNKNOWN_POLLS" -ge "\$PF_TUNNEL_POLLS" \]; then$' "$V")" "2"
+ck "the cap-spent event is emitted ONCE on the tunnel path" \
+   "$(printf '%s\n' "$_b503" | grep -cE '^[[:space:]]*PF_CAP_SPENT=1')" "1"
+ck "the cap-spent event is emitted ONCE on the could-not-ask path too" \
+   "$(printf '%s\n' "$_b503" | grep -cE '^[[:space:]]*PF_UNKNOWN_ANNOUNCED=1')" "1"
+ck "post-cap polls are counted separately from deaths" \
+   "$(printf '%s\n' "$_b503" | grep -cE '^[[:space:]]*PF_POSTCAP_POLLS=\$\(\(PF_POSTCAP_POLLS \+ 1\)\)')" "1"
+ck "post-cap polls are REPORTED to the operator, not silently dropped" \
+   "$(grep -vE '^[[:space:]]*#' "$V" | grep -cE 'further poll\(s\) after the cap was spent')" "2"
+
+# ---------------------------------------------------------------------------
+# B507 -- _start_pf must not RETURN until ITS OWN tunnel has bound. wait_for polls at t=0 and
+# kubectl's cold-start floor alone is 22-24ms, so generation 1 was burned deterministically (36/36
+# archived, 6/6 live). The first version probed the SOCKET without reaping the old listener: `kill`
+# is asynchronous, so the probe connected to the DYING previous generation and reported success
+# while the new kubectl failed EADDRINUSE -- measured, "broke after 0 attempts" against a corpse.
+ck "the previous generation is REAPED before the new bind" \
+   "$(printf '%s\n' "$_b502" | grep -cE '^[[:space:]]*_w=0; while kill -0 "\$PF_PID"')" "1"
+ck "_start_pf waits for its own bind before returning" \
+   "$(printf '%s\n' "$_b502" | grep -cE '^[[:space:]]*\(exec 3<>"/dev/tcp/127\.0\.0\.1/\$\{app_local_port\}"\)')" "1"
+ck "the bind wait aborts if the NEW kubectl is already dead" \
+   "$(printf '%s\n' "$_b502" | grep -cE '^[[:space:]]*kill -0 "\$PF_PID" .*DIED BEFORE BINDING')" "1"
+ck "the bind wait is BOUNDED" \
+   "$(printf '%s\n' "$_b502" | grep -cE '^[[:space:]]*while \[ "\$_b" -lt [0-9]+ \]')" "1"
+ck "the bind wait probes the LOCAL socket, never the app's health URL" \
+   "$(printf '%s\n' "$_b502" | grep -vE '^[[:space:]]*#' | grep -cE '^[[:space:]]*[^#]*curl ')" "0"
 
 if [ "$fail" -eq 0 ]; then echo "test-verify-pf-readiness: ${pass} passed, 0 failed"; exit 0; fi
 echo "test-verify-pf-readiness: ${pass} passed, ${fail} FAILED"; exit 1

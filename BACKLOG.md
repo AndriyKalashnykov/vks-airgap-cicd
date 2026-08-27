@@ -3785,26 +3785,77 @@ Consequences it had while open:
 Fix: a `_pf_ev` bind report beside the `log_info`. Pinned by two cases in
 `test-verify-pf-readiness.sh`, RED-proven (removing it → 1 FAILED).
 
-## ✅ B503 — the classifier's verdict LATCHED, so one transient not-Ready poll flipped the arm
+## ✅ B503 — the classifier's verdict LATCHED (and my FIRST fix for it was refuted)
 
-**DONE** (this branch). `PF_RESTARTS_BLOCKED` and `PF_UNKNOWN` were set and never cleared. The
-rebuild *decision* re-derived per poll; the *verdict* did not. So a single transient not-Ready poll
-permanently disabled the `HARNESS-TUNNEL` arm, and one kubectl blip forced `UNKNOWN` for the rest of
-the app.
+**DONE** (this branch), but **not by the fix this row originally described** — read the arc, because
+two plausible fixes were measured and both are wrong.
 
-Reproduced, identical tunnel deaths both times:
+The defect: `PF_RESTARTS_BLOCKED` and `PF_UNKNOWN` are set and never cleared. The rebuild *decision*
+re-derived per poll; the *verdict* did not. So one transient not-Ready poll permanently disabled the
+`HARNESS-TUNNEL` arm. The transient is **ordinary** — readiness `periodSeconds: 5`, `replicas: 2`,
+no `strategy:`, so any re-sync rolls a pod.
 
-| | verdict |
-|---|---|
-| no transient poll | `HARNESS-TUNNEL … retry the row` |
-| ONE transient not-Ready poll first | `PRODUCT … app not serving /healthz` |
+Three candidate rules, measured across four scenarios:
 
-The transient is **ordinary**, not exotic: readiness `periodSeconds: 5` with `replicas: 2` and no
-`strategy:` means any re-sync rolls a pod. This is precedence by EARLIEST observation — the exact
-mis-attribution the classifier exists to remove.
+| scenario | latch (the bug) | clear per poll (my fix) | ever-unstable guard (adversary's fix) | **counts (shipped)** | want |
+|---|---|---|---|---|---|
+| flap ×3, then 1 death | PRODUCT ✓ | HARNESS ✗ | wrong reason ✗ | **PRODUCT ✓** | PRODUCT |
+| 1 transient, then ×3 deaths | PRODUCT ✗ | HARNESS ✓ | PRODUCT ✗ | **HARNESS ✓** | HARNESS |
+| pure tunnel deaths | HARNESS ✓ | HARNESS ✓ | HARNESS ✓ | **HARNESS ✓** | HARNESS |
+| pure not-Ready | PRODUCT ✓ | PRODUCT ✓ | PRODUCT ✓ | **PRODUCT ✓** | PRODUCT |
+| **score** | 3/4 | 3/4 | **2/4** | **4/4** | |
 
-Fix: clear both as the first executable act of `_pf_classify`. Pinned by two cases, RED-proven
-(removing it → 2 FAILED).
+- **My first fix (clear per poll) inverts the error** — it decides on the LAST poll instead of the
+  first, so a flapping app that takes one tunnel death is told to "retry the row". An
+  implementation-round adversary caught it.
+- **The adversary's prescribed fix is worse than the bug** (2/4): a binary "was it ever unstable"
+  cannot separate a flapping app from a single transient, and it re-breaks the very case the change
+  exists for. A prescription is a claim; this one was refuted by running it.
+
+**A FOURTH design was then refuted, by INTERACTION rather than by logic.** Comparing `PF_DEATHS`
+against `PF_NOTREADY_POLLS` looked right and scored 4/4 on the table above — but B506, in the same
+change, caps `PF_DEATHS` at the generation cap (5) while `PF_NOTREADY_POLLS` is capped by the poll
+count (120). So `deaths > not-Ready` becomes **unwinnable after ~25s of any pod being not-Ready**,
+and a rolling update makes that the ordinary case. Measured against the shipped classifier:
+
+| polls | shipped-then | with B506 reverted |
+|---|---|---|
+| notReady=4, tunnel-dead=116 | HARNESS ✓ | HARNESS ✓ |
+| notReady=5, tunnel-dead=115 | **PRODUCT ✗** | HARNESS ✓ |
+| notReady=30, tunnel-dead=90 | **PRODUCT ✗** | HARNESS ✓ |
+
+Two individually-correct changes destroying each other — neither reviewable in isolation.
+
+Shipped: **three uncapped POLL-CLASS counters on the same scale** — `PF_NOTREADY_POLLS`,
+`PF_TUNNEL_POLLS`, `PF_UNKNOWN_POLLS`, one increment per poll — with `PF_DEATHS` kept purely as the
+rebuild count for messages. Every arm decides on which **class dominates**; ties favour the app, so
+an operator is never told to retry a row when their workload is flapping. The latching strings
+survive as message detail only. Verified 8/8 across every scenario in this row plus the two that
+refuted its predecessor.
+
+Pinned by cases asserting the class counters, that no arm compares the capped `PF_DEATHS` against a
+poll class, and that the refuted per-poll clear has **not** come back — the absence check
+deliberately **unanchored**, because anchoring an absence assertion *softens* it (the natural way to
+re-add the clear is to append it to the existing `local rc=…` line, which an anchored grep misses).
+
+## ✅ B508 — the readiness arm could not say UNKNOWN, so an RBAC-limited tenant was told a falsehood
+
+**DONE** (this branch). Pre-existing, found out-of-scope by an adversary. `_health_up`'s failure arm
+had **no** `PF_UNKNOWN` branch, so a tenant whose RBAC denies `pods/list` was told
+`PRODUCT … app not serving /healthz` — a fact the harness had explicitly recorded it *could not
+determine* — and "retry the row" then loops forever. The sibling `marker_visible` arm has carried
+that branch all along.
+
+Per RULE ZERO-B the limited-RBAC tenant is this repo's **default** audience, which is what makes a
+missing UNKNOWN branch a correctness bug rather than a cosmetic one.
+
+⚠️ **The first attempt at this fix was itself unreachable.** It added the branch but left it *below*
+the tunnel verdict and gated on `PF_UNKNOWN_POLLS <= PF_DEATHS` — a **tautology**, because both were
+incremented adjacently on the same poll. Measured over **4000 random interleavings, `U > D` never
+occurred**, so the branch could not fire for the very tenant it was written for, while the tunnel arm
+above it said "retry the row" forever. The two arms were ranking identical evidence in **opposite
+orders**. Both now test UNKNOWN first, on poll classes, and a test pins the ORDER — not merely the
+presence of the message, which a constant-false guard leaves untouched.
 
 ## ✅ B504 — CORRECTION: the "13% of runs reach generation 2" figure was a DENOMINATOR ERROR
 
@@ -3841,7 +3892,7 @@ it. Observed: **0 anomalies in 280 attempts**.
 If `_pick_pod` is edited for another reason, emitting `.status.containerStatuses[0].ready` and
 adding `&& $3=="true"` is ~20 characters and strictly narrows the set. Not worth its own change.
 
-## 🔴 B506 — the post-cap event FLOOD buries the diagnostic at the moment of failure
+## ✅ B506 — the post-cap event FLOOD buries the diagnostic at the moment of failure
 
 Reproduced at defaults (600s / 5s / cap 5): **120** reported deaths vs **4** real rebuilds, and
 `PF_EVENTS` is **120 lines of which 5 are distinct** — 116 repetitions of "the generation cap is
@@ -3850,10 +3901,16 @@ failure is 120 lines with 4 informative ones. That buries the channel B502 just 
 
 The counter overcount is cosmetic; the flood is not.
 
-Fix: emit the cap-spent event once (flag-guarded); move `PF_DEATHS++` inside the rebuild branch and
-add a separate `PF_POSTCAP_POLLS`.
+Fixed on **both** death paths. The first attempt guarded only the pods-Ready path; the
+kubectl-unqueryable path — the one a broken kubeconfig or a stale token takes, i.e. the likeliest
+non-tunnel failure a tenant hits — still incremented a death and emitted an event on **every** poll,
+uncapped (measured 120/120 there against 5/5 on the fixed path). Both are now flag-guarded, with
+`PF_DEATHS++` inside the rebuild branch and `PF_POSTCAP_POLLS` counted and **reported** rather than
+dropped.
+Measured before/after at the documented defaults: **120 deaths / 120 event lines (6 distinct)** →
+**6 deaths / 6 event lines / 0 duplicates**, with 115 post-cap polls reported separately.
 
-## 🔴 B507 — generation 1 is burned deterministically by a startup race
+## ✅ B507 — generation 1 is burned deterministically by a startup race
 
 `wait_for` polls at t=0, before the backgrounded port-forward can bind. Measured: the archive's
 bind→health-up gap is **exactly one poll interval, 36/36** (29×5s, 7×6s — `POLL_INTERVAL_SECONDS=5`,
@@ -3867,6 +3924,42 @@ Cost, in order of importance:
 - The real generation budget is **4**, not 5.
 - ~5.5s × 6 apps ≈ **33s per e2e**, ~3m18s per six-row matrix run.
 
-Fix: in `_start_pf`, after backgrounding, poll `/dev/tcp/127.0.0.1/$app_local_port` for up to ~2s
-before returning. Do **NOT** add a sleep to `wait_for` — that taxes all six other waits, including
-the Gitea forward, which has the identical race.
+Fixed, and the first version had a race of its own: `kill` is **asynchronous**, so the probe
+connected to the **dying previous generation** and reported a bind that never happened while the new
+`kubectl` failed `EADDRINUSE` (measured — "broke after 0 attempts" against a corpse). `PF_PID` would
+then point at a dead process and every rebuild would re-run the same race, burning the generation cap
+on a tunnel that never rebuilt. Shipped: reap the old listener first, then probe, and abort the wait
+if the **new** `kubectl` is already dead (reported through `_pf_ev`, the channel that survives).
+
+`_start_pf` polls `/dev/tcp/127.0.0.1/$app_local_port` for up to ~2s after backgrounding, before
+returning. **PROVEN LIVE**: a full `make verify` after the fix returned 6/6 apps at **1 generation
+and 0 tunnel deaths**, against 6/6 at 2 generations with 1 death each before. The probe is the **local socket**, so it asks only "did kubectl bind?" and cannot
+mask a slow or broken app. Deliberately **not** a sleep in `wait_for` — that would tax all six other
+waits, including the Gitea forward, which has the identical race.
+
+## 🔴 B509 — `check-lib-sourcing` reads a lib-function name inside a QUOTED GREP ARGUMENT as a call
+
+Measured 2026-08-27. A test asserting that both verdict arms can report UNKNOWN was written as
+`grep -cE '^[[:space:]]*(die|log_error) "UNKNOWN' "$V"`. That puts the literals `die` and
+`log_error` in the file as **grep pattern text**, and the gate reported:
+
+    ERROR: scripts/test-verify-pf-readiness.sh calls die() but never sources lib/os.sh
+    ERROR: scripts/test-verify-pf-readiness.sh calls log_error() but never sources lib/os.sh
+    make: *** [Makefile:1686: check-lib-sourcing] Error 1
+
+Neither is a call. The workaround was to match the **message** rather than the verb, with the reason
+recorded inline so nobody reverts it.
+
+Worth knowing before attempting a fix: this gate was repaired on 2026-08-27 (#1055 arc) and its
+commit body records **four plausible fixes that were implemented and REFUTED by running them** — in
+particular `executable_text()` is *not* the fix on the source side, because it blanks quoted string
+contents and the lib path lives inside the quotes. The same function would be the obvious fix here
+and would break the source side again.
+
+So this is a **known false-positive shape, not an open bug to patch casually**. The cheap mitigation
+is the one applied: do not put a lib-function name inside a quoted grep argument. Any real fix must
+distinguish a call position from a pattern position, which is the shell-grammar problem the gate has
+already lost twice.
+
+Severity is LOW — the gate fails **closed** (a false RED, not a false green), which is the safe
+direction.

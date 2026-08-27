@@ -435,6 +435,8 @@ verify_app() {
     # it. MEASURED to self-correct a stale port in both directions (a pod carrying 80 binds 8080; an
     # svc/ carrying 8080 binds 80).
     _resolve_pf_port
+    local _b=0 _w=0   # bind probe + reap wait. Declared AFTER _resolve_pf_port: a gate asserts that
+                       # call is the FIRST executable line of this function.
     # LOG WHAT WAS ACTUALLY BOUND, from inside the bind. This line used to sit outside, fed by a
     # SECOND standalone _resolve_pf_port -- so the initial bind issued `kubectl get pod` TWICE
     # (measured GETPOD=2) and the two could DISAGREE: with only the second failing, the log read
@@ -445,17 +447,44 @@ verify_app() {
     # One resolution, at the bind, reported through BOTH channels. The log_info reaches a
     # terminal only for the FIRST bind: every REBUILD site sits inside _pf_classify, which
     # runs as a wait_for predicate -- and wait_for invokes those as `"$@" >/dev/null 2>&1`
-    # (lib/os.sh), so stdout AND stderr are discarded. Measured 2026-08-27 on a live e2e: 2
+    # (99-verify.sh:46), so stdout AND stderr are discarded. Measured 2026-08-27 on a live e2e: 2
     # rebuilds announced `(generation 2)` via _pf_ev while both `tunnel target` lines still
     # read `generation 1` -- the rebuild bind was invisible, making #1062 unverifiable from
     # any log. _pf_ev is the channel that survives (it appends to PF_EVENTS, which the
     # failure arms replay); _resolve_pf_port already learned this at :417. Adversary-caught.
     log_info "[${app}] tunnel target ${pf_target} remote port ${pf_port} (generation $((${PF_GEN:-0} + 1)))"
     _pf_ev "bound ${pf_target} remote port ${pf_port} (generation $((${PF_GEN:-0} + 1)))"
-    [ -n "${PF_PID:-}" ] && { kill "$PF_PID" 2>/dev/null || true; }
+    # REAP THE OLD LISTENER BEFORE BINDING. `kill` is asynchronous, so the previous generation
+    # still holds the port for a few ms. Without this wait the bind probe below connects to the
+    # DYING listener and reports success while the new kubectl fails EADDRINUSE — measured, the
+    # probe "broke after 0 attempts" against a corpse. PF_PID would then point at a dead process
+    # and every rebuild would re-run the same race, burning the generation cap on a tunnel that
+    # never actually rebuilt. Adversary-caught.
+    if [ -n "${PF_PID:-}" ]; then
+      kill "$PF_PID" 2>/dev/null || true
+      _w=0; while kill -0 "$PF_PID" 2>/dev/null && [ "$_w" -lt 20 ]; do _w=$((_w + 1)); sleep 0.1; done
+    fi
     kubectl -n "$ns" port-forward "$pf_target" "${app_local_port}:${pf_port}" >/dev/null 2>&1 &
     PF_PID=$!
     PF_GEN=$((${PF_GEN:-0} + 1))
+    # B507: WAIT FOR THE BIND. wait_for polls its predicate at t=0, and kubectl cannot have
+    # bound by then -- its cold-start floor alone is 22-24ms against a ~1ms first curl. So
+    # generation 1 was burned DETERMINISTICALLY: measured 36/36 in the archive and 6/6 on a
+    # live e2e, with a bind->health-up gap of exactly one poll interval (29x5s, 7x6s, zero
+    # variance). The cost is not the ~5s: it makes "1 tunnel death, 2 generations" the HEALTHY
+    # baseline, so a genuine single death is invisible -- a counter green at the same value as
+    # a healthy run is blind to the thing it counts. Poll the LOCAL socket (not the app): this
+    # asks only "did kubectl bind?", so it cannot mask a slow or broken app.
+    # Bounded at ~2s; a tunnel that has not bound by then is dead and the caller will classify
+    # it. Do NOT put this sleep in wait_for -- that taxes all six other waits, including the
+    # Gitea forward, which has the identical race.
+    while [ "$_b" -lt 20 ]; do
+      # A dead kubectl can never bind, and a probe that keeps polling would spend the whole
+      # 2s budget before the caller learns anything. Say so in the channel that survives.
+      kill -0 "$PF_PID" 2>/dev/null || { _pf_ev "generation $((${PF_GEN:-0})) DIED BEFORE BINDING"; break; }
+      (exec 3<>"/dev/tcp/127.0.0.1/${app_local_port}") 2>/dev/null && break
+      _b=$((_b + 1)); sleep 0.1
+    done
   }
   # An explicit APP_LOCAL_PORT wins (single-app debugging); otherwise a fresh port PER APP.
   app_local_port="${APP_LOCAL_PORT:-$(pick_port)}"
@@ -477,7 +506,8 @@ verify_app() {
   # HTTP 200 through the ingress, both pods were 1/1 Running, and NO kubectl port-forward process
   # existed. That is verbatim the mis-attribution B497 exists to remove, one step earlier in the
   # same function: the fix covered the marker check and not the wait above it.
-  PF_LAST_BODY=""; PF_DEATHS=0; PF_POLL_FAILS=0; PF_RESTARTS_BLOCKED=""; PF_UNKNOWN=""   # PF_EVENTS is initialised earlier, before the first bind
+  PF_LAST_BODY=""; PF_DEATHS=0; PF_POLL_FAILS=0; PF_RESTARTS_BLOCKED=""; PF_UNKNOWN=""; PF_POSTCAP_POLLS=0; PF_CAP_SPENT=""
+  PF_NOTREADY_POLLS=0; PF_UNKNOWN_POLLS=0; PF_TUNNEL_POLLS=0; PF_UNKNOWN_ANNOUNCED=""   # B503: POLL CLASSES — see _pf_classify   # PF_EVENTS is initialised earlier, before the first bind
   # ⚠️ EVENTS GO IN A VARIABLE, NOT log_warn: `wait_for` invokes its predicate as `"$@" >/dev/null
   # 2>&1`, so anything _log writes from in here is DISCARDED. Collected, printed in the arms below.
 
@@ -487,15 +517,21 @@ verify_app() {
   # shellcheck disable=SC2329  # invoked indirectly (from the predicates below)
   _pf_classify() {
     local rc="$1" ready restarts krc
-    # CLEAR THE VERDICT GLOBALS EACH POLL. The rebuild DECISION re-derives per poll, but the
-    # verdict used to LATCH: PF_RESTARTS_BLOCKED/PF_UNKNOWN were set and never cleared, so ONE
-    # transient not-Ready poll (readiness periodSeconds=5, replicas=2, no strategy: -- any
-    # re-sync rolls a pod) permanently disabled the HARNESS-TUNNEL arm, and one kubectl blip
-    # forced UNKNOWN for the rest of the app. Adversary-reproduced: identical tunnel deaths
-    # reported `HARNESS-TUNNEL ... retry the row` without the transient and `PRODUCT ... app
-    # not serving /healthz` with it -- precedence by EARLIEST observation, which is exactly
-    # the mis-attribution this classifier exists to remove.
-    PF_RESTARTS_BLOCKED=""; PF_UNKNOWN=""
+    # B503: THE VERDICT IS DECIDED BY COUNTS, NOT BY A LATCHED STRING. PF_RESTARTS_BLOCKED and
+    # PF_UNKNOWN are set and never cleared, so ONE transient not-Ready poll (readiness
+    # periodSeconds=5, replicas=2, no strategy: -- any re-sync rolls a pod) used to disable
+    # the HARNESS-TUNNEL arm for the rest of the app: precedence by EARLIEST observation,
+    # the exact mis-attribution this classifier exists to remove.
+    # ⚠️ CLEARING THEM PER POLL WAS MY FIRST FIX AND IT IS REFUTED -- it inverts the error,
+    # deciding on the LAST poll instead of the first, so an app that flapped for three polls
+    # and then took one tunnel death was reported `HARNESS-TUNNEL ... retry the row`. An
+    # adversary caught that and prescribed a monotonic "was it EVER unstable" guard; MEASURED
+    # across four scenarios that scores 2/4 -- WORSE than either the bug or my fix -- because
+    # it re-breaks the single-transient case the whole change exists for. Counts score 4/4:
+    #   flap x3 then 1 death   -> not-Ready dominates -> PRODUCT   (my clear said HARNESS)
+    #   1 transient then x3    -> deaths dominate     -> HARNESS   (the latch said PRODUCT)
+    # Ties favour the app: never tell an operator to "retry the row" on a flapping workload.
+    # The strings survive as the MESSAGE detail; they no longer choose the arm.
     # 22 IS A SUCCESSFUL ROUND TRIP: `curl -f` exits 22 on an HTTP error STATUS, so the tunnel
     # carried the request and the app answered 4xx/5xx. Never a tunnel death.
     if [ "$rc" -eq 22 ]; then
@@ -510,11 +546,19 @@ verify_app() {
                -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{" "}{end}' 2>/dev/null)" && krc=0 || krc=$?
     if [ "$krc" -ne 0 ]; then
       PF_UNKNOWN="kubectl could not be queried (rc=${krc}) — cannot tell the app from the tunnel"
-      PF_DEATHS=$((PF_DEATHS + 1))
-      _pf_ev "curl failed ($(_curl_rc_label "$rc")) AND kubectl rc=${krc}; rebuilding the tunnel anyway"
+      PF_UNKNOWN_POLLS=$((PF_UNKNOWN_POLLS + 1))
+      # B506 applies HERE TOO. This path used to increment a death and emit an event on EVERY
+      # poll, uncapped: measured 120 deaths / 120 event lines against the ready path's 5 / 5.
+      # It is the path a broken kubeconfig or a stale token takes — the likeliest non-tunnel
+      # failure a tenant hits — so the flood survived exactly where it hurts most.
       if [ "$PF_GEN" -lt "${VERIFY_PF_MAX_GENERATIONS:-5}" ]; then
+        PF_DEATHS=$((PF_DEATHS + 1))
+        _pf_ev "curl failed ($(_curl_rc_label "$rc")) AND kubectl rc=${krc}; rebuilding the tunnel anyway"
         pf_target="$(_pick_pod)"; [ -n "$pf_target" ] || { pf_target="svc/${app}"; _pf_ev "no Ready pod on ${img} — FALLING BACK TO svc/"; }
         _start_pf
+      elif [ -z "$PF_UNKNOWN_ANNOUNCED" ]; then
+        PF_UNKNOWN_ANNOUNCED=1
+        _pf_ev "curl failed ($(_curl_rc_label "$rc")) AND kubectl rc=${krc}; the generation cap is spent"
       fi
       return 1
     fi
@@ -522,18 +566,33 @@ verify_app() {
                   -o jsonpath='{range .items[*]}{.status.containerStatuses[0].restartCount}{"+"}{end}' 2>/dev/null)"
     if grep -q false <<< "$ready" || [ -z "$ready" ]; then
       PF_RESTARTS_BLOCKED="pods not Ready (ready=[${ready}] restarts=[${restarts}])"
+      PF_NOTREADY_POLLS=$((PF_NOTREADY_POLLS + 1))
       PF_POLL_FAILS=$((PF_POLL_FAILS + 1))
       _pf_ev "curl failed ($(_curl_rc_label "$rc")) and the pods are NOT Ready — this is the APP, not the tunnel"
       return 1     # do NOT paper over an unstable app by rebuilding
     fi
-    # Pods Ready and curl cannot reach them: the tunnel. Count a DEATH only here.
-    PF_DEATHS=$((PF_DEATHS + 1))
+    # Pods Ready and curl cannot reach them: the tunnel.
+    # B506: COUNT A DEATH PER DEATH, NOT PER POLL. This increment used to sit here, before
+    # the cap test, so every post-cap poll counted another "death": measured 120 reported
+    # deaths against 4 real rebuilds at the documented defaults (600s/5s/cap 5). Worse, the
+    # cap-spent event below fired every poll too, so PF_EVENTS became 120 lines of which 5
+    # were distinct -- and BOTH failure arms replay the whole channel, burying the four
+    # informative events at the exact moment of failure. That channel is now load-bearing
+    # (B502 routes every rebuild bind through it), so the flood is the real harm; the
+    # miscount is secondary. Post-cap polls are counted separately and REPORTED, not lost.
+    PF_TUNNEL_POLLS=$((PF_TUNNEL_POLLS + 1))
     if [ "$PF_GEN" -lt "${VERIFY_PF_MAX_GENERATIONS:-5}" ]; then
+      PF_DEATHS=$((PF_DEATHS + 1))
       _pf_ev "the port-forward stopped ($(_curl_rc_label "$rc")); pods are Ready, so this is the TUNNEL — rebuilding (generation $((PF_GEN + 1)))"
       pf_target="$(_pick_pod)"; [ -n "$pf_target" ] || { pf_target="svc/${app}"; _pf_ev "no Ready pod on ${img} — FALLING BACK TO svc/"; }
       _start_pf
     else
-      _pf_ev "the port-forward stopped ($(_curl_rc_label "$rc")) and the generation cap (${VERIFY_PF_MAX_GENERATIONS:-5}) is spent"
+      PF_POSTCAP_POLLS=$((PF_POSTCAP_POLLS + 1))
+      if [ -z "$PF_CAP_SPENT" ]; then
+        PF_CAP_SPENT=1
+        PF_DEATHS=$((PF_DEATHS + 1))   # the death that EXHAUSTED the cap is real; the polls after it are not
+        _pf_ev "the port-forward stopped ($(_curl_rc_label "$rc")) and the generation cap (${VERIFY_PF_MAX_GENERATIONS:-5}) is spent"
+      fi
     fi
     return 1
   }
@@ -549,10 +608,29 @@ verify_app() {
   }
   if ! wait_for "[${app}] app HTTP up" _health_up; then
     [ -n "$PF_EVENTS" ] && log_error "[${app}] tunnel events:${PF_EVENTS}"
-    if [ "$PF_DEATHS" -gt 0 ] && [ -z "$PF_RESTARTS_BLOCKED" ]; then
-      die "HARNESS-TUNNEL [${app}] ${health} was NEVER reached — ${PF_DEATHS} tunnel death(s) across ${PF_GEN} generation(s) to ${pf_target}. The pods were Ready, so this is the PORT-FORWARD, not the app; retry the row."
+    # B503: the DOMINANT POLL CLASS decides, and the classes must be on the SAME SCALE.
+    # Three refuted predecessors, each measured:
+    #   `-z "$PF_RESTARTS_BLOCKED"`  — demanded the app had NEVER been seen unstable, so one
+    #                                  transient poll suppressed this arm for the whole app.
+    #   clear-the-string-per-poll    — inverted it: decided on the LAST poll, so a flapping app
+    #                                  that took one tunnel death was told to "retry the row".
+    #   PF_DEATHS vs PF_NOTREADY     — DEATHS is capped by VERIFY_PF_MAX_GENERATIONS (5) while
+    #                                  NOTREADY is capped by the poll count (120), so `D > N`
+    #                                  became unwinnable after ~25s of any pod not-Ready. A
+    #                                  rolling update makes that the ORDINARY case: measured,
+    #                                  111 consecutive pods-Ready-tunnel-dead polls could not
+    #                                  produce HARNESS-TUNNEL. Two individually-correct changes
+    #                                  (B503 + B506) destroying each other.
+    # So: count POLL CLASSES (uncapped, one per poll), and keep PF_DEATHS purely as the REBUILD
+    # count for the message. UNKNOWN is tested FIRST, mirroring marker_visible — ranking the same
+    # evidence in opposite orders in the two arms is what made the B508 branch unreachable.
+    if [ -n "$PF_UNKNOWN" ] && [ "$PF_UNKNOWN_POLLS" -ge "$PF_NOTREADY_POLLS" ] && [ "$PF_UNKNOWN_POLLS" -ge "$PF_TUNNEL_POLLS" ]; then
+      die "UNKNOWN [${app}] ${PF_UNKNOWN}. Do NOT read this as an app failure OR a tunnel failure: the harness could not ask the cluster. Check RBAC (a tenant may hold pods/portforward without pods/list) and the kubeconfig."
     fi
-    die "PRODUCT [${app}] app not serving ${health} (tunnel to ${pf_target}, generation ${PF_GEN}${PF_RESTARTS_BLOCKED:+, ${PF_RESTARTS_BLOCKED}})"
+    if [ "$PF_TUNNEL_POLLS" -gt 0 ] && [ "$PF_TUNNEL_POLLS" -gt "$PF_NOTREADY_POLLS" ]; then
+      die "HARNESS-TUNNEL [${app}] ${health} was NEVER reached — ${PF_DEATHS} tunnel death(s) across ${PF_GEN} generation(s) to ${pf_target} (${PF_POSTCAP_POLLS} further poll(s) after the cap was spent). The pods were Ready on ${PF_TUNNEL_POLLS} poll(s) against ${PF_NOTREADY_POLLS} not-Ready and ${PF_UNKNOWN_POLLS} could-not-ask, over ${PF_DEATHS} rebuild(s), so this is the PORT-FORWARD, not the app; retry the row."
+    fi
+die "PRODUCT [${app}] app not serving ${health} (tunnel to ${pf_target}, generation ${PF_GEN}; ${PF_NOTREADY_POLLS} not-Ready poll(s) vs ${PF_TUNNEL_POLLS} tunnel-dead and ${PF_UNKNOWN_POLLS} could-not-ask${PF_RESTARTS_BLOCKED:+; last readiness seen: ${PF_RESTARTS_BLOCKED}})"
   fi
 
   # Capture the page, THEN grep the variable: `curl | grep -q` lets grep close the pipe on its
@@ -597,15 +675,17 @@ verify_app() {
     # NAME THE ACTUAL CAUSE. Still FATAL either way -- a certification cannot pass on an unobserved
     # end result -- but the token tells the operator whether to retry the row or debug the app.
     [ -n "$PF_EVENTS" ] && log_error "[${app}] tunnel events:${PF_EVENTS}"
-    if [ -n "$PF_UNKNOWN" ]; then
+    # B503: counts, not latched strings — see the classifier. UNKNOWN wins only when the harness
+    # was blind at least as often as it saw anything else; not-Ready wins on a tie with deaths.
+    if [ -n "$PF_UNKNOWN" ] && [ "$PF_UNKNOWN_POLLS" -ge "$PF_NOTREADY_POLLS" ] && [ "$PF_UNKNOWN_POLLS" -ge "$PF_TUNNEL_POLLS" ]; then
       log_error "UNKNOWN [${app}] ${PF_UNKNOWN}. Do NOT read this as an app failure OR a tunnel failure: the harness could not ask the cluster. Check RBAC (a tenant may hold pods/portforward without pods/list) and the kubeconfig."
-    elif [ -n "$PF_RESTARTS_BLOCKED" ]; then
-      log_error "PRODUCT [${app}] the app never became stable: ${PF_RESTARTS_BLOCKED} (deployed image: ${img})"
+    elif [ -n "$PF_RESTARTS_BLOCKED" ] && [ "$PF_NOTREADY_POLLS" -ge "$PF_TUNNEL_POLLS" ]; then
+      log_error "PRODUCT [${app}] the app never became stable: ${PF_RESTARTS_BLOCKED} on ${PF_NOTREADY_POLLS} poll(s) against ${PF_TUNNEL_POLLS} tunnel-dead and ${PF_UNKNOWN_POLLS} could-not-ask (deployed image: ${img})"
     elif [ -n "$PF_LAST_BODY" ]; then
       log_error "PRODUCT [${app}] the page WAS served and does NOT show '${marker}' (deployed image: ${img}, ${PF_DEATHS} tunnel death(s), ${PF_GEN} generation(s))"
       grep -i 'class="message"' <<< "$PF_LAST_BODY" >&2 || printf '%s\n' "$PF_LAST_BODY" | head -5 >&2
     else
-      log_error "HARNESS-TUNNEL [${app}] the page was NEVER successfully fetched — ${PF_DEATHS} tunnel death(s) across ${PF_GEN} generation(s) to ${pf_target}. This is the PORT-FORWARD, not the app; retry the row."
+      log_error "HARNESS-TUNNEL [${app}] the page was NEVER successfully fetched — ${PF_DEATHS} tunnel death(s) across ${PF_GEN} generation(s) to ${pf_target} (${PF_POSTCAP_POLLS} further poll(s) after the cap was spent). This is the PORT-FORWARD, not the app; retry the row."
       # `|| true`: a DIAGNOSTIC, not a gate. Without it `set -e` pre-empts the `die` on the next
       # line, so a failing kubectl here (a stale kubeconfig -- the very state that puts you in
       # this branch) prints the ERROR and exits 1 with NO "FATAL ... end result not observed".
