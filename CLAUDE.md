@@ -919,85 +919,87 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-25 — MATRIX 6/6 GREEN on a fresh cut, all three pairs IDENTICAL
+## ▶️ HANDOFF 2026-08-27 — MATRIX 6/6 GREEN on VKS 3.7.1; the walk is INVARIANT across the upgrade
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
-### The certification
+### The certification — and read the CAVEAT, the headline overclaims without it
 
-All six rows green. **The pair symmetry is the evidence, not the greens** — a flake shows up as an
-asymmetry long before it shows up as a red, and all three pairs match exactly:
+All six rows green, all three pairs byte-identical:
 
 | pair | rows | ledger | |
 |---|---|---|---|
-| NOTHING exists | 1 ↔ 3 | `37 ran / 0 FAILED / 7 skipped` | ✅ identical |
-| EVERYTHING exists | 2 ↔ 4 | `31 ran / 0 FAILED / 13 skipped` | ✅ identical |
-| scenario-2 | 5 ↔ 6 | `18 ran / 0 FAILED / 10 skipped` | ✅ identical |
+| NOTHING exists | 1 ↔ 3 | `37 ran, 0 FAILED, 7 skipped, 5 neut` | ✅ identical |
+| EVERYTHING exists | 2 ↔ 4 | `31 ran, 0 FAILED, 13 skipped, 5 neut` | ✅ identical |
+| scenario-2 | 5 ↔ 6 | `18 ran, 0 FAILED, 10 skipped, 0 neut` | ✅ identical |
 
-Row 1's green is REAL, not skips: zero load-bearing blocks in its skipped list
-(`install-all`, `verify`, `verify-ingress`, `install-harbor-service`, `install-argocd-service` all
-RAN), **6/6 apps served their own marker**, and 8 UIs reachable through the istio ingress.
+⚠️ **ONLY ROWS 3, 4 AND 6 RAN ON VKS 3.7.1.** Rows 1, 2, 5 ran on 3.6.3, and every pair also
+spans a Kubernetes minor. Measured per row:
 
-Evidence: `run-20260825T221952Z-2864413` (row 1, fresh cut) · `run-20260825T165856Z-1691298`
-(rows 3/4/6) · `run-20260825T133210Z-62319` (row 2) · `run-20260825T114908Z-3753525` (row 5).
+| row | run | VKS service | guest k8s |
+|---|---|---|---|
+| 1 | `run-20260825T221952Z-2864413` | 3.6.3 | **v1.34.9**+vmware.2-vkr.4 (created its own) |
+| 2 | `run-20260826T110115Z-1192477` | 3.6.3 | inherited **v1.35.5** |
+| 5 | `run-20260826T110115Z-1192477` | 3.6.3 | inherited v1.35.x |
+| 3 | `run-20260826T234028Z-3674688` | **3.7.1** | **v1.36.2**+vmware.2-vkr.3 (created its own) |
+| 6 | `run-20260826T234028Z-3674688` | **3.7.1** | inherited v1.36.2 |
+| 4 | `run-20260827T012942Z-688162` | **3.7.1** | reused row 3's cluster (v1.36.2) |
 
-⚠️ **Read the 1 ↔ 3 pair with this caveat: it is NOT like-for-like on Kubernetes version.** Both rows
-used the same "newest Ready+Compatible" selector and got different answers, because the lab was
-re-cut between them — row 3 built its cluster on `v1.35.6+vmware.2-vkr.3`, row 1 on
-`v1.34.9+vmware.2-vkr.4` (the rebuilt Supervisor's newer TKrs were not `Ready` yet; the cluster
-reports `UpdatesAvailable: True`). The identical ledger across two Kubernetes minors is arguably
-STRONGER evidence — but it is not the same test twice, and nothing in the ledger says so.
+So the defensible claim is **INVARIANCE**, not "six rows on 3.7.1": each 3.7.1 row reproduced,
+ledger for ledger, the row it pairs with from the 3.6.3 era. Only cluster-CREATING rows (1 and 3)
+print a TKr; the rest inherit, which is why the table says "inherited". 1↔3 spans **two** minors.
 
-### Why the lab was re-cut (do not re-derive this)
+Other facts the runs themselves record: ClusterClass **in effect** `builtin-generic-v3.7.0` (the
+request was `v3.6.0` — the Supervisor rewrites it, and `#1034`'s read-back is the only reason we
+know); ArgoCD `3.0.19+vmware.1-vks.1`; Harbor `2.14.3+vmware.2-vks.1`; kaniko `v1.24.0-debug`; 6 apps.
 
-`walk-reset` timed out at its full 1800s with `cicd` stuck `Terminating` on six
-`applications.argoproj.io` holding `resources-finalizer.argocd.argoproj.io`. Root cause was ORDERING
-and it is now FIXED UPSTREAM (lab PR #105, B463): `walk-reset-cell.sh` step 1 was headed *"THE
-CLUSTER FIRST"* while this repo's own `scripts/98-uninstall-all.sh:122-125` says an Application's
-finalizer *"can only complete while ArgoCD can still REACH the destination cluster"* — and
-`walk-reset` never called `make uninstall-all`. It now has a **step 0** that deletes Applications
-before the cluster.
-
-**Clearing the finalizers was IMPOSSIBLE, not merely risky** — measured, so do not retry it: the
-drain had already deleted the namespace's RoleBindings, so the SAME identity had
-`patch`/`delete`/`rolebindings` = **no** in the Terminating namespace and **yes** in an Active one.
-**The drain revokes the permission needed to unblock the drain**, and `can-i * *` is `no`.
-Reinstalling ArgoCD cannot help either: the instance lived IN `cicd`, and a Terminating namespace
-rejects creates.
+**Row 3 and row 1 walked DIFFERENT `scenario-1.md`** (23 commits between them). Proven equivalent by
+extracting the walkable command set from both trees: **92 lines each, zero differences**; all 10
+walk-visible changes are prose. That check was MANUAL — lab `#121` makes the harness record the
+WALK_REPO SHA so it stops being manual.
 
 ### 🔴 DISTRUST FIRST
 
-- **`make env-validate` returns rc=2 / HTTP 401 and that is CORRECT** after any matrix run — the
-  walkboxes are destroyed with their Harbor credential. Recover per RULE ZERO-A0's chain.
+- **Row 4 FAILED on its first attempt and passed on re-run — that was not a product defect.**
+  `make verify`'s `port-forward svc/X` binds ONE pod and does not follow endpoints; the rollout it
+  has just triggered terminates old pods, so binding a doomed one kills the tunnel and the harness
+  then blames THE PAGE. MEASURED in a throwaway cluster: `t+33s rc=0 → t+36s rc=52 → t+39s rc=7,
+  pf dead`. Archive rate: **1 failure in 237 app-verify attempts (0.42%)**, ≈14% of full matrix runs.
+  Fixed in `#1047` (B497). Note **rc=52 arrives BEFORE rc=7** — a discriminator keyed on 7 alone
+  misreads the first failure.
+- **`make env-validate` returns rc=2 / HTTP 401 after any matrix run** — the walkboxes are destroyed
+  with their Harbor credential. Recover per RULE ZERO-A0's chain.
 - **`static-check` is SKIPPED on a PR** (paths-filtered). Run `env -u GOROOT make static-check`
-  locally before merging anything touching `scripts/` — 101 offline tests, ~400s.
-- **`kubectl get all` does NOT list custom resources.** A probe reported "0 objects remaining" while
-  six CRs were the entire problem; the namespace's `status.conditions` named them.
-- **`pgrep`/`ps | grep` SELF-MATCH.** Read argv and compare against `$$`; a count is not evidence.
-  `ps -p ""` (empty PID from a failed extraction) dumps EVERY process.
-- **A leaked `vks-walkbox-*` VM per run is lab B453** — the sweep runs at row START, so the last
-  row's box is never swept, and `make destroy`'s teardown does not own it. `make walkbox-vm-down`.
+  locally before merging anything touching `scripts/` — ~120 tests.
+- **One worktree per branch.** Switching a worktree's branch while a gate runs in it is the same
+  frozen-tree violation as touching WALK_REPO mid-matrix; I did it once today and the gate returned
+  rc=0 over a tree that had changed underneath it.
+- **`pgrep`/`ps | grep` SELF-MATCH.** A "1 matrix still running" reading was my own monitor loop; a
+  `pkill` of it killed my own shell (exit 144).
 
-### What landed this session (all merged, `main` green at every post-merge run)
+### What landed (all merged, main green)
 
-| PR | what |
-|---|---|
-| **#1011** | 🔴 live tenant-blocking bug: `make vks-login` died FATAL asserting the CLUSTER-SCOPED `list nodes` a tenant cannot hold, while `lib/capacity.sh` calls that "normal for a tenant" |
-| **#1014** | the tenant e2e MUTATED a shared ArgoCD with nothing undoing it; added a key-scoped revert trap, verified by re-reading the cluster |
-| **#1010** | walkthrough promised a hostname its table never carried, and named ONE app in a generic table |
-| **#1009** | the only tenant-RBAC test was wired to nothing AND broken |
-| lab **#104/#105** | B462 (refusal names an already-done remedy) and B463 (the ordering fix above) |
+`#1038` vks-shape · `#1039` RULE ZERO-S (the Bash tool is zsh) · `#1041` B496 + the vcf-cli test fix
+· `#1042` the standing rule said an uncommitted edit was "harmless" — it is not · `#1043` B492 ·
+`#1044` B494 (an ORPHAN escape matched the literal `B471` against prose) · `#1045` a worktree is not
+automatically safe · `#1048` B498 (kaniko archived). Lab: `#119` skip-rebuild guard · `#120`
+walk-reset fail-closed · `#121` freeze the walk inputs + record the SHA.
 
 ### Open
 
-- **B483** — the tenant e2e now has its revert trap, so WIRING it into an automated path is finally
-  safe to design. Deliberately still open: it needs a live KinD cluster with ArgoCD and mutates it.
-- **B471** — RE-SCOPED. An idea round refuted most of it and its central evidence was inverted; the
-  surviving axis is **Harbor**. A second round then refuted its OWN prescription to add `can-i`
-  probes to lab-preflight, measuring both as false-BAD generators. Three refuted designs are
-  recorded in the row so nobody rebuilds them.
-- **B213, B206, B480, B482** unchanged.
+- **`#1046`** B493 — `test-argocd-address-classify` 201s → 41s, and a **3.1× budget overshoot that
+  ships today** (both poll loops counted sleep, not elapsed). Implementation round OUT.
+- **`#1047`** B497 — the port-forward fix above. Idea + implementation rounds both in; the impl round
+  found **two HIGH bugs I had introduced** (an app serving 5xx read as a tunnel death; "kubectl
+  failed" read as a PRODUCT verdict *and* the rebuild skipped). Fixed, RED-proven 5 ways.
+- **`v1.0.0` re-cut** — the tag must claim INVARIANCE, not "six rows on 3.7.1". The existing tag says
+  "six-row certification against VKS 3.6.3", which has the same overclaim shape.
+- **B498 kaniko** — Google archived it; `chainguard-forks/kaniko` is alive (`v1.25.18`, ≥100 commits)
+  but publishes NO image (`push: false`), so it is a SELF-BUILD via the existing
+  `14-builder-build.sh`/`22-builder-push.sh` pattern. Do it AFTER the tag: kaniko is on the walked
+  path, so swapping it invalidates the certification the tag records, and it needs its own matrix.
+- **B213, B206, B480, B482, B471** unchanged.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
