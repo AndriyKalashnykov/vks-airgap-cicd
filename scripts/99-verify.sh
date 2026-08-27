@@ -316,9 +316,88 @@ verify_app() {
   #    accept-then-hang peer was still running at 8s. The sibling 98-verify-ingress.sh already
   #    passes --max-time for exactly this reason.
   local CT="--connect-timeout ${VERIFY_CURL_CONNECT_TIMEOUT_SECONDS:-5} --max-time ${VERIFY_CURL_MAX_TIME_SECONDS:-10}"
-  # shellcheck disable=SC2086  # CT is a deliberate word-split flag list
-  wait_for "[${app}] app HTTP up" curl -fsS $CT "${url}${health}" \
-    || die "[${app}] app not serving ${health} (tunnel to ${pf_target}, generation ${PF_GEN})"
+
+  # ── B497 RESIDUAL, MEASURED 2026-08-27 ─────────────────────────────────────────────────────────
+  # The tunnel-death classifier used to live ONLY inside marker_visible(), which runs AFTER this
+  # readiness wait. So a port-forward that died during the READINESS wait was never detected and
+  # never rebuilt: the wait burned its full VERIFY_READY_TIMEOUT_SECONDS and then blamed the APP.
+  # Measured on a KinD e2e:
+  #   04:10:09 FATAL [javawebapp] app not serving /healthz (tunnel to javawebapp-...-cxhjq, generation 1)
+  # `generation 1` is the tell -- the tunnel was NEVER rebuilt. At that same moment the app served
+  # HTTP 200 through the ingress, both pods were 1/1 Running, and NO kubectl port-forward process
+  # existed. That is verbatim the mis-attribution B497 exists to remove, one step earlier in the
+  # same function: the fix covered the marker check and not the wait above it.
+  PF_LAST_BODY=""; PF_DEATHS=0; PF_POLL_FAILS=0; PF_RESTARTS_BLOCKED=""; PF_UNKNOWN=""; PF_EVENTS=""
+  # ⚠️ EVENTS GO IN A VARIABLE, NOT log_warn: `wait_for` invokes its predicate as `"$@" >/dev/null
+  # 2>&1`, so anything _log writes from in here is DISCARDED. Collected, printed in the arms below.
+  # shellcheck disable=SC2329  # invoked indirectly (from the predicates below)
+  _pf_ev() { PF_EVENTS="${PF_EVENTS}
+  - $*"; }
+
+  # SHARED classifier: given a FAILING curl rc, decide tunnel-vs-app and rebuild when it is the
+  # tunnel. EXTRACTED rather than duplicated -- two copies would drift, and the entire point is that
+  # both waits agree on what a dead tunnel looks like.
+  # shellcheck disable=SC2329  # invoked indirectly (from the predicates below)
+  _pf_classify() {
+    local rc="$1" ready restarts krc
+    # 22 IS A SUCCESSFUL ROUND TRIP: `curl -f` exits 22 on an HTTP error STATUS, so the tunnel
+    # carried the request and the app answered 4xx/5xx. Never a tunnel death.
+    if [ "$rc" -eq 22 ]; then
+      PF_POLL_FAILS=$((PF_POLL_FAILS + 1))
+      _pf_ev "the app answered with an HTTP ERROR STATUS ($(_curl_rc_label "$rc")) — the tunnel worked"
+      return 1
+    fi
+    # Ask the CLUSTER, not curl's exit code: rc=7 is only ONE death shape (56 = accept-then-RST,
+    # 28 = accept-then-hang). Capture kubectl's OWN rc -- an empty answer means "not Ready" only if
+    # the query SUCCEEDED; folding them together reports a PRODUCT verdict for "I could not ask".
+    ready="$(kubectl -n "$ns" get pod -l "app.kubernetes.io/name=${app}" \
+               -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{" "}{end}' 2>/dev/null)" && krc=0 || krc=$?
+    if [ "$krc" -ne 0 ]; then
+      PF_UNKNOWN="kubectl could not be queried (rc=${krc}) — cannot tell the app from the tunnel"
+      PF_DEATHS=$((PF_DEATHS + 1))
+      _pf_ev "curl failed ($(_curl_rc_label "$rc")) AND kubectl rc=${krc}; rebuilding the tunnel anyway"
+      if [ "$PF_GEN" -lt "${VERIFY_PF_MAX_GENERATIONS:-5}" ]; then
+        pf_target="$(_pick_pod)"; [ -n "$pf_target" ] || { pf_target="svc/${app}"; _pf_ev "no Ready pod on ${img} — FALLING BACK TO svc/"; }
+        _start_pf
+      fi
+      return 1
+    fi
+    restarts="$(kubectl -n "$ns" get pod -l "app.kubernetes.io/name=${app}" \
+                  -o jsonpath='{range .items[*]}{.status.containerStatuses[0].restartCount}{"+"}{end}' 2>/dev/null)"
+    if grep -q false <<< "$ready" || [ -z "$ready" ]; then
+      PF_RESTARTS_BLOCKED="pods not Ready (ready=[${ready}] restarts=[${restarts}])"
+      PF_POLL_FAILS=$((PF_POLL_FAILS + 1))
+      _pf_ev "curl failed ($(_curl_rc_label "$rc")) and the pods are NOT Ready — this is the APP, not the tunnel"
+      return 1     # do NOT paper over an unstable app by rebuilding
+    fi
+    # Pods Ready and curl cannot reach them: the tunnel. Count a DEATH only here.
+    PF_DEATHS=$((PF_DEATHS + 1))
+    if [ "$PF_GEN" -lt "${VERIFY_PF_MAX_GENERATIONS:-5}" ]; then
+      _pf_ev "the port-forward stopped ($(_curl_rc_label "$rc")); pods are Ready, so this is the TUNNEL — rebuilding (generation $((PF_GEN + 1)))"
+      pf_target="$(_pick_pod)"; [ -n "$pf_target" ] || { pf_target="svc/${app}"; _pf_ev "no Ready pod on ${img} — FALLING BACK TO svc/"; }
+      _start_pf
+    else
+      _pf_ev "the port-forward stopped ($(_curl_rc_label "$rc")) and the generation cap (${VERIFY_PF_MAX_GENERATIONS:-5}) is spent"
+    fi
+    return 1
+  }
+
+  # shellcheck disable=SC2329  # invoked indirectly (wait_for)
+  _health_up() {
+    local rc
+    # shellcheck disable=SC2086
+    curl -fsS $CT "${url}${health}" >/dev/null 2>&1 && rc=0 || rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    _pf_classify "$rc"
+    return 1
+  }
+  if ! wait_for "[${app}] app HTTP up" _health_up; then
+    [ -n "$PF_EVENTS" ] && log_error "[${app}] tunnel events:${PF_EVENTS}"
+    if [ "$PF_DEATHS" -gt 0 ] && [ -z "$PF_RESTARTS_BLOCKED" ]; then
+      die "HARNESS-TUNNEL [${app}] ${health} was NEVER reached — ${PF_DEATHS} tunnel death(s) across ${PF_GEN} generation(s) to ${pf_target}. The pods were Ready, so this is the PORT-FORWARD, not the app; retry the row."
+    fi
+    die "PRODUCT [${app}] app not serving ${health} (tunnel to ${pf_target}, generation ${PF_GEN}${PF_RESTARTS_BLOCKED:+, ${PF_RESTARTS_BLOCKED}})"
+  fi
 
   # Capture the page, THEN grep the variable: `curl | grep -q` lets grep close the pipe on its
   # first match and SIGPIPE curl (141), which under `set -o pipefail` reads as "marker absent" —
@@ -330,7 +409,6 @@ verify_app() {
   # 5. CACHE THE LAST NON-EMPTY BODY. The old diagnostic re-fetched down the SAME dead tunnel and
   #    therefore printed nothing, leaving the archive unable to distinguish "the tunnel died" from
   #    "the page never had the marker". This is the change that makes the next occurrence legible.
-  PF_LAST_BODY=""; PF_DEATHS=0; PF_POLL_FAILS=0; PF_RESTARTS_BLOCKED=""; PF_UNKNOWN=""; PF_EVENTS=""
   # ⚠️ EVENTS GO IN A VARIABLE, NOT log_warn. `wait_for` invokes this predicate as
   # `"$@" >/dev/null 2>&1` and _log writes to STDERR, so every log line emitted from in here is
   # DISCARDED -- including the curl failure-mode label that is the whole point of classifying. A
@@ -341,59 +419,19 @@ verify_app() {
     - $*"; }
   # shellcheck disable=SC2329  # invoked indirectly (wait_for)
   marker_visible() {
-    local b rc ready restarts krc
+    local b rc
     # shellcheck disable=SC2086
     b="$(curl -fsS $CT "${url}/" 2>/dev/null)" && rc=0 || rc=$?
     if [ "$rc" -eq 0 ]; then
       [ -n "$b" ] && PF_LAST_BODY="$b"
+      # Capture the page, THEN grep the variable: `curl | grep -q` lets grep close the pipe on its
+      # first match and SIGPIPE curl (141), which under pipefail reads as "marker absent".
       grep -q "$marker" <<< "$b"; return $?
     fi
-    # ⚠️ 22 IS A SUCCESSFUL ROUND TRIP. `curl -f` exits 22 on an HTTP error STATUS -- the tunnel
-    # carried the request and the app answered 4xx/5xx. Treating it as a tunnel death (which the
-    # first version of this classifier did) reports "the page was NEVER fetched ... retry the row"
-    # about an app regression, rebuilds the tunnel 5 times for nothing, and tells the operator to
-    # retry a row that will fail again. That is WORSE than the message this file used to print.
-    if [ "$rc" -eq 22 ]; then
-      PF_POLL_FAILS=$((PF_POLL_FAILS + 1))
-      [ -n "$PF_LAST_BODY" ] || PF_LAST_BODY="<HTTP error status; body suppressed by curl -f>"
-      _pf_ev "the app answered with an HTTP ERROR STATUS ($(_curl_rc_label "$rc")) — the tunnel worked"
-      return 1
-    fi
-    # Ask the cluster. Capture kubectl's OWN rc: an empty answer means "not Ready" ONLY if the query
-    # SUCCEEDED. Folding the two together reports a PRODUCT verdict for "I could not ask" -- and a
-    # tenant may hold pods/portforward without pods/list (RULE ZERO-B), which is exactly that input.
-    ready="$(kubectl -n "$ns" get pod -l "app.kubernetes.io/name=${app}" \
-      -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{" "}{end}' 2>/dev/null)" && krc=0 || krc=$?
-    if [ "$krc" -ne 0 ]; then
-      PF_UNKNOWN="kubectl could not be queried (rc=${krc}) — cannot tell the app from the tunnel"
-      PF_DEATHS=$((PF_DEATHS + 1))
-      _pf_ev "curl failed ($(_curl_rc_label "$rc")) AND kubectl rc=${krc}; rebuilding the tunnel anyway"
-      if [ "$PF_GEN" -lt "${VERIFY_PF_MAX_GENERATIONS:-5}" ]; then
-        pf_target="$(_pick_pod)"; [ -n "$pf_target" ] || { pf_target="svc/${app}"; _pf_ev "no Ready pod on ${img} — FALLING BACK TO svc/, which is the PRE-FIX binding"; }
-        _start_pf
-      fi
-      return 1
-    fi
-    restarts="$(kubectl -n "$ns" get pod -l "app.kubernetes.io/name=${app}" \
-      -o jsonpath='{range .items[*]}{.status.containerStatuses[0].restartCount}{"+"}{end}' 2>/dev/null)"
-    if grep -q false <<< "$ready" || [ -z "$ready" ]; then
-      PF_RESTARTS_BLOCKED="pods not Ready (ready=[${ready}] restarts=[${restarts}])"
-      PF_POLL_FAILS=$((PF_POLL_FAILS + 1))
-      _pf_ev "curl failed ($(_curl_rc_label "$rc")) and the pods are NOT Ready — this is the APP, not the tunnel"
-      return 1     # do NOT paper over an unstable app by rebuilding
-    fi
-    # Pods are Ready and curl could not reach them: the tunnel. Count a DEATH only here -- counting
-    # every failing poll (as the first version did) reported "10 tunnel death(s) across 5
-    # generation(s)" when there had been 4 rebuilds, i.e. a misleading number in the message that
-    # exists to end misleading numbers.
-    PF_DEATHS=$((PF_DEATHS + 1))
-    if [ "$PF_GEN" -lt "${VERIFY_PF_MAX_GENERATIONS:-5}" ]; then
-      _pf_ev "the port-forward stopped ($(_curl_rc_label "$rc")); pods are Ready, so this is the TUNNEL — rebuilding (generation $((PF_GEN + 1)))"
-      pf_target="$(_pick_pod)"; [ -n "$pf_target" ] || { pf_target="svc/${app}"; _pf_ev "no Ready pod on ${img} — FALLING BACK TO svc/, which is the PRE-FIX binding"; }
-      _start_pf
-    else
-      _pf_ev "the port-forward stopped ($(_curl_rc_label "$rc")) and the generation cap (${VERIFY_PF_MAX_GENERATIONS:-5}) is spent"
-    fi
+    # CACHE THE LAST NON-EMPTY BODY so a later diagnostic does not re-fetch down a dead tunnel and
+    # print nothing -- that is what made the previous incident illegible in the archive.
+    [ "$rc" -eq 22 ] && [ -z "$PF_LAST_BODY" ] && PF_LAST_BODY="<HTTP error status; body suppressed by curl -f>"
+    _pf_classify "$rc"
     return 1
   }
   if wait_for "[${app}] deployed page shows marker ${marker}" marker_visible; then
