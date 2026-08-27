@@ -3756,3 +3756,117 @@ a one-line move.
   fail non-fast-forward. Not reached in run 8, but the seed burst makes it likelier.
 - `test-verify-marker-build.sh` reconstructs the predicate with no drift gate (disclosed in its
   own header). Fix: extract the predicate to `lib/` and source it from both.
+
+## ✅ B502 — a tunnel REBUILD's bind was invisible, so #1062 was unverifiable from any log
+
+**DONE** (this branch). `_start_pf` reported its bind with `log_info` only. Every rebuild site sits
+inside `_pf_classify`, which runs as a `wait_for` predicate — and `wait_for` invokes predicates as
+`"$@" >/dev/null 2>&1` while `_log` writes to **stderr**, so the line is discarded. Only the FIRST
+bind (called outside the predicate) ever reached a terminal.
+
+Measured on two live e2e runs, 2026-08-27:
+
+| run | apps | rebuilds announced | `tunnel target` lines | of which generation 2 |
+|---|---|---|---|---|
+| mid-run peek | 2 | 2 | 2 | **0** |
+| full organic e2e | 6 | 6 | 6 | **0** |
+
+Faithful reproduction (stderr-writing `_log`, as `lib/os.sh`): 3 generations → **1** log-visible
+bind → **0** recoverable; with `_pf_ev` → **3** recoverable.
+
+Consequences it had while open:
+
+- #1062's rebuild-site port fix could not be verified from any log — the handoff's "all six bound a
+  pod on 8080" describes the **initial** bind only.
+- The round-4 comment asserting "every generation reports its own target" was **false**, and it is
+  the third time this file's `wait_for`-discards-output trap has been hit. `_resolve_pf_port` already
+  carried a `_pf_ev` companion for exactly this reason; the `log_info` two functions later did not.
+
+Fix: a `_pf_ev` bind report beside the `log_info`. Pinned by two cases in
+`test-verify-pf-readiness.sh`, RED-proven (removing it → 1 FAILED).
+
+## ✅ B503 — the classifier's verdict LATCHED, so one transient not-Ready poll flipped the arm
+
+**DONE** (this branch). `PF_RESTARTS_BLOCKED` and `PF_UNKNOWN` were set and never cleared. The
+rebuild *decision* re-derived per poll; the *verdict* did not. So a single transient not-Ready poll
+permanently disabled the `HARNESS-TUNNEL` arm, and one kubectl blip forced `UNKNOWN` for the rest of
+the app.
+
+Reproduced, identical tunnel deaths both times:
+
+| | verdict |
+|---|---|
+| no transient poll | `HARNESS-TUNNEL … retry the row` |
+| ONE transient not-Ready poll first | `PRODUCT … app not serving /healthz` |
+
+The transient is **ordinary**, not exotic: readiness `periodSeconds: 5` with `replicas: 2` and no
+`strategy:` means any re-sync rolls a pod. This is precedence by EARLIEST observation — the exact
+mis-attribution the classifier exists to remove.
+
+Fix: clear both as the first executable act of `_pf_classify`. Pinned by two cases, RED-proven
+(removing it → 2 FAILED).
+
+## ✅ B504 — CORRECTION: the "13% of runs reach generation 2" figure was a DENOMINATOR ERROR
+
+**CLOSED as a correction.** I measured 36 of 280 archived SUCCESS lines carrying `2 generation(s)`
+and reported **13%**. Only **36 of the 280** carry the counter at all — the other 244 predate the
+instrumentation and could not have reported a generation. The true rate is **36/36 = 100%**.
+
+Confirmed at a SECOND operating point the same day: the organic e2e above was **6/6**. Two trees,
+two runs, 42/42 — so this is a mechanism, not a rate.
+
+It inverts the conclusion I had drawn: I argued the generation-1 burn might be worth keeping because
+it was "the only thing exercising the rebuild path". That reading is **refuted by evidence, not by
+argument** — the rebuild path was traversed 42/42 times and did **not** catch the stale-`pf_port`
+bug that lived precisely there, because the only organic transition is **pod→pod**, which inherits a
+correct port. The broken transitions need a downgrade, and there are **0 in 280**. Accidental
+traversal with no assertion is not coverage.
+
+Also unverifiable and withdrawn: the "113 tunnel deaths" figure. The archive contains **zero**
+`HARNESS-TUNNEL` lines and the only death count ever recorded is `1`; run 8's logs died in `/tmp`
+(B454). That number survives only in prose.
+
+## ✅ B505 — `_pick_pod` binding a Terminating pod: CLOSED on evidence, not fixed
+
+**CLOSED.** Filed as a race worth fixing; it is guarded by construction. `_all_pods_on_img` lists
+`.items[*]` with **no** phase or `deletionTimestamp` filter and requires *every* labelled pod to
+report the new image — so an old-image Terminating pod (default grace **30s**, none of the six
+manifests set `terminationGracePeriodSeconds`) keeps it false. **The rollout the verify itself
+triggers is waited out by construction, so it is not the trigger.**
+
+Reaching `_pick_pod` with a doomed pod needs a NEW-image pod deleted *after* that gate, caught in
+the ≤5s before its readiness flips; at the rebuild sites `_pf_classify`'s readiness check pre-empts
+it. Observed: **0 anomalies in 280 attempts**.
+
+If `_pick_pod` is edited for another reason, emitting `.status.containerStatuses[0].ready` and
+adding `&& $3=="true"` is ~20 characters and strictly narrows the set. Not worth its own change.
+
+## 🔴 B506 — the post-cap event FLOOD buries the diagnostic at the moment of failure
+
+Reproduced at defaults (600s / 5s / cap 5): **120** reported deaths vs **4** real rebuilds, and
+`PF_EVENTS` is **120 lines of which 5 are distinct** — 116 repetitions of "the generation cap is
+spent". Both failure arms replay the whole channel, so the diagnostic printed at the exact moment of
+failure is 120 lines with 4 informative ones. That buries the channel B502 just made load-bearing.
+
+The counter overcount is cosmetic; the flood is not.
+
+Fix: emit the cap-spent event once (flag-guarded); move `PF_DEATHS++` inside the rebuild branch and
+add a separate `PF_POSTCAP_POLLS`.
+
+## 🔴 B507 — generation 1 is burned deterministically by a startup race
+
+`wait_for` polls at t=0, before the backgrounded port-forward can bind. Measured: the archive's
+bind→health-up gap is **exactly one poll interval, 36/36** (29×5s, 7×6s — `POLL_INTERVAL_SECONDS=5`,
+zero variance), and `kubectl`'s cold-start floor alone is 22–24ms against a ~1ms first curl.
+
+Cost, in order of importance:
+
+- **It destroys the discriminating power of the counters #1052 added.** `1 tunnel death, 2
+  generations` is now the *healthy* baseline, so a genuine single death is invisible — a gate green
+  at the same count is blind to the thing it counts.
+- The real generation budget is **4**, not 5.
+- ~5.5s × 6 apps ≈ **33s per e2e**, ~3m18s per six-row matrix run.
+
+Fix: in `_start_pf`, after backgrounding, poll `/dev/tcp/127.0.0.1/$app_local_port` for up to ~2s
+before returning. Do **NOT** add a sleep to `wait_for` — that taxes all six other waits, including
+the Gitea forward, which has the identical race.

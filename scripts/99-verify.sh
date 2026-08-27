@@ -442,8 +442,16 @@ verify_app() {
     # what the warning above calls the PRE-FIX behaviour. The doubling is also exactly what
     # motivates `[ "${PF_GEN:-0}" -eq 0 ] && _resolve_pf_port` -- a de-dup that reintroduces the
     # stale port on every rebuild, and which an adversary measured GREEN against the old gate.
-    # One resolution, at the bind, logged here -- so every generation reports its own target.
+    # One resolution, at the bind, reported through BOTH channels. The log_info reaches a
+    # terminal only for the FIRST bind: every REBUILD site sits inside _pf_classify, which
+    # runs as a wait_for predicate -- and wait_for invokes those as `"$@" >/dev/null 2>&1`
+    # (lib/os.sh), so stdout AND stderr are discarded. Measured 2026-08-27 on a live e2e: 2
+    # rebuilds announced `(generation 2)` via _pf_ev while both `tunnel target` lines still
+    # read `generation 1` -- the rebuild bind was invisible, making #1062 unverifiable from
+    # any log. _pf_ev is the channel that survives (it appends to PF_EVENTS, which the
+    # failure arms replay); _resolve_pf_port already learned this at :417. Adversary-caught.
     log_info "[${app}] tunnel target ${pf_target} remote port ${pf_port} (generation $((${PF_GEN:-0} + 1)))"
+    _pf_ev "bound ${pf_target} remote port ${pf_port} (generation $((${PF_GEN:-0} + 1)))"
     [ -n "${PF_PID:-}" ] && { kill "$PF_PID" 2>/dev/null || true; }
     kubectl -n "$ns" port-forward "$pf_target" "${app_local_port}:${pf_port}" >/dev/null 2>&1 &
     PF_PID=$!
@@ -479,6 +487,15 @@ verify_app() {
   # shellcheck disable=SC2329  # invoked indirectly (from the predicates below)
   _pf_classify() {
     local rc="$1" ready restarts krc
+    # CLEAR THE VERDICT GLOBALS EACH POLL. The rebuild DECISION re-derives per poll, but the
+    # verdict used to LATCH: PF_RESTARTS_BLOCKED/PF_UNKNOWN were set and never cleared, so ONE
+    # transient not-Ready poll (readiness periodSeconds=5, replicas=2, no strategy: -- any
+    # re-sync rolls a pod) permanently disabled the HARNESS-TUNNEL arm, and one kubectl blip
+    # forced UNKNOWN for the rest of the app. Adversary-reproduced: identical tunnel deaths
+    # reported `HARNESS-TUNNEL ... retry the row` without the transient and `PRODUCT ... app
+    # not serving /healthz` with it -- precedence by EARLIEST observation, which is exactly
+    # the mis-attribution this classifier exists to remove.
+    PF_RESTARTS_BLOCKED=""; PF_UNKNOWN=""
     # 22 IS A SUCCESSFUL ROUND TRIP: `curl -f` exits 22 on an HTTP error STATUS, so the tunnel
     # carried the request and the app answered 4xx/5xx. Never a tunnel death.
     if [ "$rc" -eq 22 ]; then

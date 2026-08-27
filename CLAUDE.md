@@ -1037,8 +1037,12 @@ text, never definedness**; they now assert `type -t` reachability against a sour
 ### Proven live — the 6/6 `make verify` below is the #1054 TREE; a separate cold `make e2e-kind` on the #1062 tree was also 6/6 (0 FATAL, create-ordering exercised, all six bound a pod on 8080), but logged 0 DOWNGRADING events, so it exercised the INITIAL bind and NOT the rebuild path
 
 - `make verify` **6/6** on KinD: every app logs `tunnel target <pod> remote port 8080`, zero bind
-  `:80`, and dotnetwebapp took a real tunnel death and **rebuilt to generation 2** — #1052 and #1054
-  validated on the same run.
+  `:80`, and dotnetwebapp took a real tunnel death and **rebuilt to generation 2** — #1052
+  validated on that run. ⚠️ **#1054 was NOT**: every one of those `tunnel target` lines is the
+  INITIAL bind. The rebuild sites call `_start_pf` from inside a `wait_for` predicate, which
+  runs as `"$@" >/dev/null 2>&1`, so their bind was **discarded** — measured 2026-08-27 on two
+  live runs (6 rebuilds, 6 `tunnel target` lines, 0 of them generation 2). B502 fixes it with a
+  `_pf_ev` companion; until that lands anywhere, no log can show a rebuild bound 8080.
 - `make env-check` flags the dangling `ARGOCD_KUBECONFIG` with the right message; its own remedy
   clears it.
 

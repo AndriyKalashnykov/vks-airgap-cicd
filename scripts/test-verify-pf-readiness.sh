@@ -180,5 +180,34 @@ ck "the no-containerPort fallback assigns svc/, never an empty target" \
 ck "no code path assigns an empty pf_target" \
    "$(grep -vE '^[[:space:]]*#' "$V" | grep -c 'pf_target=""')" "0"
 
+# ---------------------------------------------------------------------------
+# F1 -- a REBUILD's bind must reach the ARCHIVE, not only the terminal.
+# MEASURED on TWO live e2e runs (2026-08-27): every app announced `rebuilding (generation 2)` while
+# its ONLY `tunnel target` line still read `generation 1` -- 6/6 in the second run. Every rebuild
+# site sits inside _pf_classify, which runs as a wait_for predicate, and wait_for invokes those as
+# `"$@" >/dev/null 2>&1`; _log writes to STDERR, so the line is discarded. A faithful reproduction
+# (stderr-writing _log) measured 3 generations -> 1 log-visible bind -> 0 recoverable; with _pf_ev
+# -> 3 recoverable. Without this, #1062's rebuild-site fix is unverifiable from any log.
+# Scope to the _start_pf BODY: a file-wide grep would match the comment block that explains it.
+_pf_body_f1="$(awk '/^  _start_pf\(\) \{/,/^  \}/' "$V" | grep -vE '^[[:space:]]*#')"
+ck "_start_pf reports its bind through _pf_ev (the channel wait_for cannot discard)" \
+   "$(printf '%s\n' "$_pf_body_f1" | grep -cE '_pf_ev .*bound .*generation')" "1"
+ck "_start_pf still logs to the terminal too (the FIRST bind is worth a human-visible line)" \
+   "$(printf '%s\n' "$_pf_body_f1" | grep -cE 'log_info .*tunnel target')" "1"
+
+# ---------------------------------------------------------------------------
+# F2 -- the verdict globals must NOT latch. Reproduced: identical tunnel deaths reported
+# `HARNESS-TUNNEL ... retry the row` without a transient not-Ready poll and `PRODUCT ... app not
+# serving /healthz` with one, because PF_RESTARTS_BLOCKED/PF_UNKNOWN were set once and never
+# cleared. Readiness periodSeconds=5 with replicas=2 and no `strategy:` means any re-sync rolls a
+# pod, so the transient is ORDINARY -- precedence by EARLIEST observation, the exact mis-attribution
+# this classifier exists to remove. Assert they are cleared as the FIRST executable act of a poll.
+_cl_body="$(awk '/^  _pf_classify\(\) \{/,/^  \}/' "$V" | grep -vE '^[[:space:]]*#')"
+_cl_first="$(printf '%s\n' "$_cl_body" | sed 1d | grep -vE '^[[:space:]]*($|local )' | head -1 | sed 's/^[[:space:]]*//')"
+ck "_pf_classify clears BOTH verdict globals before evaluating a poll" \
+   "$_cl_first" 'PF_RESTARTS_BLOCKED=""; PF_UNKNOWN=""'
+ck "the verdict globals are cleared per-poll, not only once per app" \
+   "$(printf '%s\n' "$_cl_body" | grep -cE 'PF_RESTARTS_BLOCKED=""')" "1"
+
 if [ "$fail" -eq 0 ]; then echo "test-verify-pf-readiness: ${pass} passed, 0 failed"; exit 0; fi
 echo "test-verify-pf-readiness: ${pass} passed, ${fail} FAILED"; exit 1
