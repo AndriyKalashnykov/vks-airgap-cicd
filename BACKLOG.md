@@ -3358,6 +3358,7 @@ mirrored image (`curlimages/curl` is not in `images/images.txt`) plus `restricte
 discarded `rollout status` rc; it returned in **<1s**) vs a pure tunnel death — **cannot be recovered
 from the archive**, because the harness captured no page content and no pod state. The cached-body
 instrumentation is what settles it on the next occurrence. Not verified against a live cluster.
+
 ## 🔴 B498 — Kaniko is ARCHIVED by Google; a MAINTAINED FORK exists but publishes NO image
 
 **MEASURED 2026-08-27** against the GitHub API and the registries. I filed an earlier version of
