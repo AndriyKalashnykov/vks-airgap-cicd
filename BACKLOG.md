@@ -3412,6 +3412,56 @@ discarded `rollout status` rc; it returned in **<1s**) vs a pure tunnel death �
 from the archive**, because the harness captured no page content and no pod state. The cached-body
 instrumentation is what settles it on the next occurrence. Not verified against a live cluster.
 
+## 🔴 B500 — `harbor_credential_settle --may-reconcile` is a NO-OP, and two of its premises are unmeasured
+
+**Shipped 2026-08-27 in #1055.** The verify half is real and RED-proven; the reconcile half is a
+deliberately-unimplemented placeholder, disclosed at the call site and in `lib/harbor.sh`. This row
+exists so that disclosure does not quietly become permanent.
+
+### What is real today
+
+`06-install-harbor.sh` step 8b AUTHENTICATES once at the end of the install. Harbor honours
+`HARBOR_ADMIN_PASSWORD` only at ITS OWN first bootstrap (goharbor `updateInitPasswordWithMgr()`,
+v2.15.2 lines 76-92 — cite the SYMBOL, the line numbers move), so a re-install silently keeps the
+old password while every readiness probe passes, because `/api/v2.0/health` is UNAUTHENTICATED. A
+401 now dies at the install instead of ~20 minutes later in `21-mirror-push.sh`.
+
+### 1. `--may-reconcile` does nothing
+
+It behaves exactly like `--verify-only`; the only difference is one extra `log_error` line. ArgoCD
+(`07-install-argocd.sh:163-181`) and Gitea (`50-seed-gitea-repos.sh:139`) both RECONCILE their admin
+password, and a KinD-only Harbor equivalent — reset `harbor_user.salt`, restart `harbor-core` — is
+the obvious generalisation. It is NOT implemented because **the mechanism is unverified on the
+pinned chart**, and this will not mutate a database on an unmeasured hypothesis.
+
+**Settles it:** on a throwaway KinD Harbor, confirm the admin row can be re-seeded by clearing the
+salt and restarting core, and that the restart does not take the registry blob store with it (see
+the emptyDir/Redis-descriptor incident in `CLAUDE.md` — the blob store now has a PVC, but the
+interaction is exactly the kind that has bitten here before).
+
+### 2. An un-bootstrapped Harbor's status code is UNMEASURED, and it decides the retry design
+
+The retry path assumes a FRESH Harbor may answer **401** on `/api/v2.0/users/current` before its
+admin row is seeded, and retries that. If it actually answers **5xx**, the probe returns
+`unchecked:the probe did not complete` — which also retries on fresh, so the shipped behaviour is
+correct either way — but the *rationale* in the code names 401 specifically and would be wrong.
+
+**Settles it, in one command during the first 60s of a fresh install:**
+`curl -o /dev/null -w '%{http_code}' -u admin:x https://<harbor>/api/v2.0/users/current`
+
+### 3. `HARBOR_FIRST_INSTALL` keys on "no helm release", NOT "the DB is fresh"
+
+`helm uninstall` that leaves the PVC yields `FIRST_INSTALL=1` against a DB that already has a salted
+admin → ~25s of pointless retries before the (correct) die. The converse (release present, PVC
+deleted) yields `FIRST_INSTALL=0` and no retry where retrying would have helped. Both are cosmetic;
+measuring them needs a live KinD Harbor.
+
+### 4. NOT YET EXECUTED LIVE
+
+`make verify` has passed 6/6 since these fixes; a cold `make e2e-kind` has **not** completed, so
+step 8b has never run against a real fresh Harbor. That run is what exercises the
+`HARBOR_FIRST_INSTALL=1` path and would settle (2) for free.
+
 ## 🔴 B498 — Kaniko is ARCHIVED by Google; a MAINTAINED FORK exists but publishes NO image
 
 **MEASURED 2026-08-27** against the GitHub API and the registries. I filed an earlier version of
