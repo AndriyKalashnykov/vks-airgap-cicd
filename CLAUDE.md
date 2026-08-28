@@ -959,90 +959,72 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-27 (night) — a build regression that only Photon could see, and two selectors that steered nothing
+## ▶️ HANDOFF 2026-08-28 — the matrix has never measured whether the demo SERVES, and `make creds` lied
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
 ### 🔴 DISTRUST FIRST
 
-- **A green ubuntu row says NOTHING about the photon rows, and today it hid a total build failure.**
-  `#1051` put a container BUILD (`selfbuilt-image`) at the head of `install-all` without inheriting
-  `engine_build_isolation` — which `14-builder-build.sh` has called since 2026-08-16. Ubuntu boots
-  cgroup v2 and passed; both photon rows died at `RUN mkdir -p /kaniko/.docker` with
-  `crun ... open /sys/fs/cgroup/devices/buildah-...`. Fixed in `#1067`, in **three** build paths —
-  a class-keyed gate found two I did not know about, and both had the WORSE failure mode
-  (`16-engine-trust-check.sh` reports a Harbor **trust** failure; `jumpbox-run.sh`'s own comment
-  blames **unqualified-search-registries**) — a confidently wrong cause on the box an operator can
-  least debug.
+- **A green matrix row is a claim about the HARNESS, not about the demo serving.** The walk grades a
+  block on its EXIT CODE, and `make creds-show` is documented never-gating — so its output is
+  printed and never read. MEASURED: rows 5 and 6 printed `<needs ingress>` for **all eight hosts** in
+  **20 logs across 12 runs since 2026-08-20**, every one graded `0 FAILED`. Meanwhile the lab those
+  rows left behind serves **10/10** (8 hosts through the Gateway LB `192.168.101.135`, plus Harbor
+  and ArgoCD on their own LBs). Reading `WALK DONE — 0 FAILED` as "the demo works" is a proxy.
 
-- **⚠️ THE EVIDENCE FOR A "GONE" ENVIRONMENT IS USUALLY STILL ON DISK.** I graded that fix
-  `INFERRED` because the walkbox was unreachable and had been swept. The BOX was swept; the
-  EVIDENCE was not. Four greps over `~/walk-evidence` produce a clean natural A/B at the same
-  podman **5.8.5**, cgroup v1 throughout:
+- **⚠️ MY OWN FIRST ROOT CAUSE WAS WRONG, and an adversary refuted it.** I wrote *"scenario-2 is a
+  tenant flow that installs nothing, so its overlay has no `INGRESS_LB_IP`"*. Measured FALSE:
+  scenario-2 DOES install (`scenario-2.md:885` → `47-attach-istio.sh:118` publishes it). Row 6 never
+  reached it — `28 blocks: 18 ran, 0 FAILED, **10 skipped**`. The real cause needed no walk at all.
 
-  | runs | chroot fired | crun failures | tagged |
-  |---|---|---|---|
-  | 06:51 + 09:25 — builder path, fix PRESENT | 6 | 0 | 6 |
-  | 22:12 — selfbuilt path, fix ABSENT | 0 | 2 | 0 |
+- **`make creds` re-read a state overlay the LOADER REFUSED and called it DISCOVERED.** Running it by
+  hand against the guest cluster, reading EVERY line, the header contradicts the loader's own ERROR
+  six lines above it. Three symptoms, one defect: it greps the sink FILE instead of reading
+  `_VKS_STATE_SOURCED`, which `load_env` has exported all along (`os.sh:657,659`) and `state.sh:90`
+  has keyed on since B142. `creds.sh` referenced it **zero** times. (#1076, open.)
 
-  Before grading a claim inferred because the environment is gone, grep what that environment
-  already wrote down.
+- **⚠️ A LONG GATE READS THE TREE CONTINUOUSLY — editing it mid-run makes the verdict measure a
+  mixture, silently, in BOTH directions.** Three times in one session. Two `static-check` runs
+  reported `115 test(s), 0 failed` for trees that no longer existed, and one was about to be quoted
+  as PR evidence; a third reported *"the PARALLEL shellcheck pass failed but the SERIAL pass found
+  nothing … suspect nproc/-P/xargs"* over a tree where nothing was wrong with xargs. **Run any gate
+  whose verdict you intend to QUOTE against an immutable detached worktree at a pinned SHA.** The
+  authoritative run then caught two lint findings the mutated runs had missed. `scripts/gate-at.sh`
+  is drafted for this and under adversary review — not committed.
 
-- **`VKS_SUPERVISOR` never steered anything, and I said twice that it did.** MEASURED:
-  `git show 259fed2:stages/nested-vsphere/vks-upgrade.sh | grep -c _ss_supervisor_id` → **0**.
-  `vks_main` has never called it. The upgrade targets the Supervisor of the vSphere cluster named by
-  **`CLUSTER_NAME`** (`PUT /clusters/<moid>/supervisor-services/...`), while `VKS_SUPERVISOR`
-  matches the V2 supervisor **UUID**. The `vks-*` verbs now refuse it and name the real control.
-  Its only two callers are on the `services-*` REMOVAL path.
-
-- **A gate that greps an ASSIGNMENT does not test the FIX.** The first version of the build-isolation
-  gate checked `_iso="$(engine_build_isolation)"` and not `export BUILDAH_ISOLATION`. Measured:
-  deleting the export left it GREEN and shellcheck silent. It also matched ONE syntax — a bare
-  `"$ENGINE" build`, a literal `podman build`, a `buildah bud` and a build inside `{ }` all walked
-  past, and the bare form is already used in three scripts here. `{` **is** a command position.
-
-- **`local x=$(f)` under `set -Eeuo pipefail` makes the guard BELOW it dead code.** The lister's
-  `die` — the one naming "the session is stale" — could never run, because the assignment tripped
-  `set -e` first and the operator saw only the ERR trap blaming jq. Same mechanism had already bitten
-  that function once; the earlier fix moved the call, this one fixed the mechanism (`|| true`).
+- **The denominator is the signal a new test is actually running.** `static-check` went **115 → 116**
+  when `test-doc-ingress-step.sh` landed. A green at an unchanged count is blind to your change.
 
 ### Merged today
 
 | PR | what |
 |---|---|
-| #1065 | the verify verdict decides by POLL CLASS; every rebuild bind is recoverable |
-| #1066 | §A5 step 0 was missing `kubectl-login` — it cost a cut-A launch |
-| #1067 | the cgroup-v1 build regression; the gate was refuted three times before it was right |
-| lab #124 | VKS version registration over the API, `make vks-supervisors`, and the selector correction |
-
-### Proven live
-
-- `make verify` on KinD: **6/6 rebuild binds recovered** (`bound <pod> remote port 8080
-  (generation 2)`) against **0/6** on the old channel — also the first direct evidence #1062's
-  rebuild-site port fix works.
-- `make verify` after B507: **6/6 apps at 1 generation, 0 tunnel deaths** (was 6/6 at 2 generations
-  with 1 death each).
-- Full `make e2e-kind` on merged main: **6/6, 0 FATAL, 0 ERROR**, 6 at 1 generation, 0 at 2.
-- Lab, unattended, no UI: `make vks-register VKS_VERSION=3.7.1` → vCenter knows 3.6.3-embedded AND
-  3.7.1; `make vks-upgrade` → **3.7.1+v1.36 CONFIGURED in 2m00s**; a second register prints
-  "already registered — nothing was written".
+| #1072 | the `go_get` probe could verify the wrong version |
+| #1073 | `selfbuilt.lock` self-erased on every warm run; then five adversary residuals — the `clean` guard let `..` walk out of the repo (14/14 RED-proven against the real recipe with `rm` neutered) |
+| #1074 | B517's root cause corrected |
+| #1075 | scenario-2's ingress step lived only in a TABLE, so no matrix row could ever run it |
 
 ### In flight
 
-- **Lab step 0 is re-running** (destroy → lab → trust-vcsa → kubectl-login → vks-register 3.7.1 →
-  vks-upgrade). The previous cut A left the lab dirty — vSphere Namespace `cicd` and guest cluster
-  `cicd-gc0827181215` — and row 1 requires that nothing exists, while §A5 says cut A does not
-  rebuild.
-- **Cut A has not completed.** Attempt 1 refused (no Supervisor kubeconfig — the §A5 gap, now fixed
-  in #1066). Attempt 2 got through row 1 (ubuntu, 0 FAILED) and died on rows 2 and 5 at
-  `selfbuilt-image` — the cgroup regression, now fixed in #1067. Neither failure has been re-tested.
-- ⚠️ **The cgroup-v1 half of #1067 is measured from the ARCHIVE, not re-run.** The next photon row
-  is the live re-proof. The cgroup-**v2** half is proven: a forced 44-step rebuild including the
-  exact failing step, `Successfully tagged`, 0 isolation warnings.
-- **B453 (sibling repo) bit twice today**: the matrix leaks one walkbox VM per run and has no `trap`.
-  One had been running **10h34m** holding 8 GiB. Sweep `virsh list --all` for `vks-walkbox-*` after
-  every matrix run.
+- **#1076** — the `creds` fix. CI CLEAN; `static-check` 115/0 in an untouched worktree; its
+  implementation adversary is still running. **Do not merge before it reports.**
+- **`scripts/gate-at.sh`** — drafted at `/tmp/gate-at-draft.sh`, under review. The reviewer was asked
+  the question I most expect to be wrong: **which gates change verdict in a fresh worktree because a
+  gitignored file (`.env`, `.env.state`, `secrets/`, `bundle/`) is absent** — and whether a wrapper
+  is even the right shape versus having `static-check` itself record the tree hash at start and end
+  and refuse to report a verdict if they differ.
+- **B518 / B519** filed and measured; **B520 filed as REFUTED** — an adversary called
+  `verify-ingress` vacuous against a leftover KinD cluster, having measured the HTTP layer and
+  inferred the gate's verdict. Measuring the gate gives **rc=2 both ways** (`state_check` refuses a
+  mismatched overlay before `INGRESS_LB_IP` is read). Recorded so nobody rebuilds a fix for it.
+
+### The next thing worth doing
+
+The matrix still cannot fail on "the demo does not serve" for scenario-2 **rows that skip the ingress
+step** — #1075 makes the step runnable and adds a verify, but a row whose preflight is inconclusive
+still skips both branches and then fails the verify with a message naming a command the walk
+deliberately declined to run. Decide whether that is the right shape before the next full matrix.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
