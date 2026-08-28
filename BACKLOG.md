@@ -4488,3 +4488,43 @@ B15's safety argument stands. Do not "fix" this.
 verified.** A run that legitimately verified the KinD stand-in and a run that verified the lab
 produce the same success text. Printing the resolved context/server alongside the LB IP is cheap and
 would remove the ambiguity that made this finding plausible.
+
+## 🔴 B521 — the registry lock is per-WORKTREE, so the serialization it promises "on this host" is not host-wide
+
+Surfaced 2026-08-28 by the adversary round that refuted the `gate-at` worktree wrapper, as a finding
+neither the brief nor I asked for — and confirmed independently.
+
+`scripts/lib/os.sh:52`:
+
+    local lock="${REGISTRY_LOCK_FILE:-${REPO_ROOT}/.registry.lock}"
+
+while the function's own header at `:35` says, verbatim:
+
+    with_registry_lock — serialize every registry-MUTATING operation on this host.
+
+`.registry.lock` is gitignored and per-`REPO_ROOT`, and a git WORKTREE has its own `REPO_ROOT`. So
+two worktrees of the same repo hold two different files, two different inodes, and `flock` grants
+BOTH. MEASURED, both halves:
+
+    main checkout      .registry.lock inode 30176617
+    /tmp/wt-gate-…     no lock file at all — a run there CREATES its own
+    two flocks, same path       -> second REFUSED   (correct)
+    two flocks, different paths -> both ACQUIRED    (this is the case)
+
+**Why it matters here specifically.** The operations this lock serializes are the ones that mutate a
+shared registry — `mirror`, `builder-push`, `selfbuilt-push`, `e2e-kind`. This repo has already been
+burned by unserialized registry work: the Harbor "blob-store corruption" incident (settled
+2026-07-13) was a wipe, not a race, but the reason mirrors are still run serially is precisely that
+they mutate a shared cluster and registry, and parallel work makes any failure unattributable.
+
+**Latent today, not theoretical.** Worktrees are in active use in this session — three at once — and
+running a registry-mutating target from one while another runs in the main checkout is exactly the
+shape that defeats it. Nothing warns.
+
+**Done when:** the default lock path is shared across worktrees of the same repository —
+`$(git rev-parse --git-common-dir)/registry.lock` is identical from every worktree (measured:
+`.git` from the main checkout, and an absolute path to the same directory from a linked one), so it
+is a one-line change with no new state. `REGISTRY_LOCK_FILE` keeps its override. RED-prove it by
+taking the lock in one worktree and asserting a second worktree is REFUSED — which today it is not.
+Also correct the header comment if the scope ends up narrower than "this host" (it is per-REPOSITORY,
+not per-host: two clones still hold two locks, and that is a different, larger claim to walk back).
