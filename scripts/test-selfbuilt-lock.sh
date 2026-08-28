@@ -51,7 +51,12 @@ TAG="$(reg selfbuilt_tag "$NAME")"
 [ -n "${NAME:-}" ] && [ -n "${TAG:-}" ] || { echo "  FAIL  could not read the registry"; exit 1; }
 
 OUT="$TMP/bundle/selfbuilt"; mkdir -p "$OUT"
-REC="$(printf '%s\tv1.2.3\tsha256:deadbeef\tsome/repo:%s\t2026-01-01T00:00:00Z' "$NAME" "$TAG")"
+# Field 4 is `<repo>:<tag>` and the script now REFUSES to re-emit a record naming a different push
+# target, so the fixture must carry the REAL repo path (registry field 6, env-independent) -- an
+# arbitrary `some/repo` here would be refused, and the case would fail for a fixture reason.
+REPO_PATH="$(reg selfbuilt_repo_path "$NAME")"
+[ -n "${REPO_PATH:-}" ] || { echo "  FAIL  could not read the repo path from the registry"; exit 1; }
+REC="$(printf '%s\tv1.2.3\tsha256:deadbeef\t%s:%s\t2026-01-01T00:00:00Z' "$NAME" "$REPO_PATH" "$TAG")"
 printf 'fake-image-bytes\n' > "$OUT/${NAME}.tar"
 printf '%s\n%s\n' "$TAG" "$REC" > "$OUT/.${NAME}.built"
 
@@ -92,6 +97,34 @@ if [ -n "$c" ]; then ok "an OLD one-line stamp still leaves the lock NON-EMPTY (
 else bad "an old one-line stamp EMPTIED the lock — the migration path re-emits nothing, so the erasure survives the fix"; fi
 if printf '%s' "$c" | grep -qF "$REC"; then ok "and the recovered record is the previous one, verbatim"
 else bad "the recovered record is not the previous one (got: '$c')"; fi
+
+# ⚠️ THE UNRECOVERABLE BRANCH. Old one-line stamp AND no record for this image in the previous
+# lock: nothing can be re-emitted, so the lock is legitimately written EMPTY and the ONLY signal is
+# the warning. That branch was previously untested -- the two lock-content cases above REPLACED the
+# warning case rather than joining it -- so if the warn were dropped or the condition inverted,
+# nothing would catch it. Assert BOTH halves: rc=0 (a missing record is not fatal) and the warn.
+: > "$OUT/selfbuilt.lock"
+printf '%s\n' "$TAG" > "$OUT/.${NAME}.built"
+run_warm; rc4=$?
+d="$(cat "$OUT/selfbuilt.lock" 2>/dev/null)"
+if [ "$rc4" -eq 0 ]; then ok "an unrecoverable stamp is NOT fatal (rc=0)"
+else bad "an unrecoverable stamp aborted the run (rc=$rc4) — a missing provenance record must not stop a build"; fi
+if grep -q 'no record for it survives' "$TMP/run.log"; then ok "and it WARNS that the lock is being written empty for that image"
+else bad "the unrecoverable path emitted NO warning — the lock silently goes empty"; sed -n '1,8p' "$TMP/run.log" | sed 's/^/        | /'; fi
+if [ -z "$d" ]; then ok "and the lock is empty, as the warning says (single-image registry)"
+else bad "the warning says the lock is empty but it is not: '$d'"; fi
+
+# ⚠️ A STALE record must NOT be re-emitted: field 4 naming a different push target means the row
+# describes an image we did not build here, and a silent re-emit is self-perpetuating (it becomes
+# the next run's recovery source and never re-validates).
+printf '%s\tv9.9.9\tsha256:stale\tSOMEONE/ELSE:%s\t2020-01-01T00:00:00Z\n' "$NAME" "$TAG" > "$OUT/selfbuilt.lock"
+printf '%s\n' "$TAG" > "$OUT/.${NAME}.built"
+run_warm; rc5=$?
+e="$(cat "$OUT/selfbuilt.lock" 2>/dev/null)"
+if [ "$rc5" -eq 0 ] && ! printf '%s' "$e" | grep -qF 'SOMEONE/ELSE'; then ok "a record naming a DIFFERENT push target is refused, not re-emitted"
+else bad "a stale record for '$(printf '%s' "$e" | cut -f4)' was re-emitted (rc=$rc5) — provenance now asserts an image we did not build"; fi
+if grep -q 'different push target' "$TMP/run.log"; then ok "and the refusal says WHICH target it names"
+else bad "the stale record was dropped SILENTLY — the operator cannot tell an empty lock from a refused one"; fi
 
 real_after="$(stat -c %Y "$REAL_LOCK" 2>/dev/null || echo none)"
 if [ "$real_before" = "$real_after" ]; then ok "the repo's own bundle was NOT touched (CWD isolation holds)"

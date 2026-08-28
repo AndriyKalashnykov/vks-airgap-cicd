@@ -1746,20 +1746,30 @@ clean: ## Remove the air-gap bundle (NOT app build output — see the note below
 # The BUNDLE_DIR guard. Passing that variable on the command line DOES reach this recipe (make
 # exports a command-line variable) while the same flag does NOT reach `bundle`, because load_env
 # re-sources .env.example over it (B515). So the deleting half obeys a flag the writing half
-# ignores, and an operator can delete a directory they never populated. Refuse anything outside the
-# repo.
+# ignores, and an operator can delete a directory they never populated.
+#
+# CANONICALISE FIRST. A `case` over the raw string is defeated by `..`: MEASURED, `./../../tmp/X`,
+# `$(CURDIR)/../../tmp/X` and `./bundle/../../../tmp/X` all matched `./*` and were ALLOWED, and the
+# trailing-slash forms `./` and `$(CURDIR)/` allowed rm -rf of the REPO ITSELF. `realpath -m`
+# collapses `..` without requiring the path to exist (the bundle dir usually does not yet) and is
+# present on both targets -- MEASURED on bare photon:5.0 (toybox 0.8.9, `realpath -m -- /a/b/../c`
+# -> /a/c rc=0) and ubuntu:24.04 (GNU coreutils 9.4); WITHOUT -m toybox errors rc=1 on a
+# nonexistent path, so the flag is load-bearing. A missing realpath falls back to `/`, which the
+# case refuses -- fail-closed. The `?*` (not `*`) requires a NON-EMPTY remainder, so `$(CURDIR)`
+# itself is refused rather than deleted.
 #
 # ⚠️ The prose above deliberately avoids writing the literal `make <target> <VAR>=` form: that is
 # how check-env-clobber's arm (b) detects a REAL per-run override site, and a comment containing it
 # reads to the gate as one. Measured — an earlier wording of this block turned the gate RED with
 # `in: Makefile` while adding no override at all.
-	@case "$(BUNDLE_DIR)" in \
-	  ./*|$(CURDIR)/*) ;; \
+	@real="$$(realpath -m -- "$(BUNDLE_DIR)" 2>/dev/null || echo /)"; \
+	 case "$$real" in \
+	  "$(CURDIR)"/?*) ;; \
 	  *) [ "$${CLEAN_FORCE:-0}" = 1 ] || { \
-	       echo "clean: refusing to rm -rf '$(BUNDLE_DIR)' — it is outside $(CURDIR)."; \
+	       echo "clean: refusing to rm -rf '$(BUNDLE_DIR)' (resolves to '$$real') — it is outside $(CURDIR)."; \
 	       echo "       'make bundle' would NOT have written there (B515: the override is clobbered),"; \
 	       echo "       so this is very likely a path nothing of ours created. CLEAN_FORCE=1 to override."; \
 	       exit 1; } ;; \
-	esac
-	@rm -rf $(BUNDLE_DIR)
+	 esac
+	@rm -rf -- "$(BUNDLE_DIR)"
 	@echo "clean: removed $(BUNDLE_DIR). App build output is NOT cleaned (six languages, no registry column for it)."

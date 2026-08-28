@@ -4323,3 +4323,56 @@ populated. `clean` now refuses a `BUNDLE_DIR` outside `$(CURDIR)` unless `CLEAN_
 why. Verified all three paths for real (not `make -n`, which prints the recipe regardless of which
 branch runs): inside-repo removes and exits 0; outside-repo refuses and the directory survives;
 `CLEAN_FORCE=1` deletes.
+
+## 🔴 B517 — `make creds` claims "no ingress is installed, so nothing serves those hosts" while all 8 hosts serve HTTP 200
+
+MEASURED 2026-08-28, on the lab left by the cut-B matrix (rows 3 4 6), found only because the owner
+asked whether the URLs had actually been checked after the last row. They had not been — the matrix
+verdict (`WALK DONE — 0 FAILED`) had been read as the result, which is a proxy: it says the walk's
+blocks ran, not that the demo serves.
+
+Row 6 (scenario-2) ran `make creds` itself and printed:
+
+    Gitea / Tekton / all six apps   <needs ingress>
+    note: no ingress is installed, so Gitea / Tekton / the apps have NO *.vks.local URL —
+          nothing serves those hosts. Reach them with a port-forward ...
+
+**Every one of those hosts serves 200.** Measured against the Gateway's own LB:
+
+    gitea.vks.local  tekton.vks.local  javawebapp  gowebapp  nodejswebapp
+    pythonwebapp     rustwebapp        dotnetwebapp          -> HTTP 200 x8   (192.168.101.135)
+    https://harbor.env1.lab.test -> 200      ArgoCD https://192.168.101.131 -> 200
+
+and the cluster agrees: `Gateway vks-ingress/vks-uis  Accepted=True Programmed=True`, all eight
+HTTPRoutes `Accepted=True ResolvedRefs=True`.
+
+**Root cause — the report reasons from a STATE FILE, not from the world.** `scripts/creds.sh:144`:
+
+    _ing="${INGRESS_LB_IP:-}"
+    ingress_url() { if [ -n "$_ing" ]; then printf 'http://%s' "$1"; else printf '<needs ingress>'; fi }
+
+`INGRESS_LB_IP` is published to `.env.state` by whichever flow INSTALLS the ingress. Scenario-2 is a
+TENANT flow — it deliberately installs nothing — so its state overlay has no such value, and the
+report concludes none exists. But rows 3/4 (scenario-1) had installed one into the same guest
+cluster, and `creds` has a working kubeconfig it never asks.
+
+**Why this matters more than a cosmetic wrong URL:** the note is a claim about the world, and it is
+false. It sends the operator to a port-forward they do not need, and an operator who believes it will
+conclude the demo is incomplete when it is serving. It is the same class this repo already fixed for
+the cgroup remediation — an operator-facing message naming a cause that is not the lever.
+
+⚠️ **The obvious fix has a trap the file already documents.** `creds.sh:150-155` records that a
+FIRST version printed `<ingress NOT ANSWERING>` in the URL column and was refused, because "with an
+ingress, those URLs are exactly what the operator wants" and a liveness warning "belongs ABOVE the
+table, once, not smeared across every row". So the fix is NOT to probe liveness per row. It is to
+DISCOVER the address when the state file has none — the Gateway's `.status.addresses[0].value`, or
+the ingress Service's LB ingress — and fall back to `<needs ingress>` only when discovery also finds
+nothing.
+
+**Open questions for the idea round (do not implement before it):** does `creds` always have a
+usable kubeconfig (it is documented as read-only and must never gate)? What should it print when the
+cluster is unreachable — today's marker, or something that distinguishes "no ingress" from "could not
+look"? And does a tenant who genuinely has no ingress still get an honest answer?
+
+**Done when:** on a cluster with a working ingress, `make creds` prints the real URLs regardless of
+which flow stamped the overlay; and the note appears only when there is genuinely nothing serving.

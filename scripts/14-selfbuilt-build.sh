@@ -117,6 +117,21 @@ for name in $NAMES; do
     if [ -z "$_sb_rec" ]; then
       _sb_rec="$(awk -F'\t' -v n="$name" '$1==n{print;exit}' "$LOCK" 2>/dev/null || true)"
     fi
+    # ⚠️ A RECOVERED RECORD IS UNTRUSTED UNTIL IT DESCRIBES *THIS* BUILD. Field 4 is `<repo>:<tag>`;
+    # if it names a different push target the record is stale, and re-emitting it would assert a
+    # ref/digest/tag we did not build here -- silently, and self-perpetuating (the re-emit becomes
+    # next run's recovery source, so it never re-validates). Not script-reachable today (a pin bump
+    # takes the rebuild path, and a script-written stamp's line 2 is written in the same iteration
+    # as line 1, so it always agrees) -- it needs a restored, hand-edited, or foreign lock. Applied
+    # to BOTH sources anyway: it cannot false-fire on a record this script wrote, and the file's
+    # only purpose is provenance, which a wrong record silently destroys.
+    if [ -n "$_sb_rec" ]; then
+      _sb_f4="$(printf '%s' "$_sb_rec" | cut -f4 || true)"
+      if [ "$_sb_f4" != "${repo}:${tag}" ]; then
+        log_warn "[${name}] the surviving lock record names '${_sb_f4}' but this build targets '${repo}:${tag}' -- refusing to re-emit a record for a different push target. That image's row will be MISSING from ${LOCK}; SELFBUILT_FORCE=1 rebuilds and restores it."
+        _sb_rec=""
+      fi
+    fi
     if [ -n "$_sb_rec" ]; then
       printf '%s\n' "$_sb_rec" >> "${LOCK}.tmp"
     else
@@ -366,7 +381,13 @@ done
 # ⚠️ WRITE VIA A TEMP AND RENAME. `sort -u ... > "$LOCK"` truncates $LOCK BEFORE sort runs, so ANY
 # sort failure (unreadable tmp, ENOSPC, an interrupt) leaves it at zero — a second erasure path
 # inside the very statement this change exists to fix. MEASURED: unreadable tmp -> lock 0 bytes.
-sort -u "${LOCK}.tmp" > "${LOCK}.new" && mv -f "${LOCK}.new" "$LOCK"; rm -f "${LOCK}.tmp" "${LOCK}.new"
+# The `if` (not `A && B || C`) so a sort/mv failure is REPORTED rather than swallowed: preserving
+# the previous rows beats truncating to zero, but a just-built image's record would then be silently
+# missing from a file whose only job is provenance. Truncation was at least loud.
+if sort -u "${LOCK}.tmp" > "${LOCK}.new" && mv -f "${LOCK}.new" "$LOCK"; then :; else
+  log_warn "could not rewrite ${LOCK} -- it still holds the PREVIOUS run's rows, so this run's records are missing from it."
+fi
+rm -f "${LOCK}.tmp" "${LOCK}.new"
 log_info "self-built images saved into the bundle: ${NAMES}"
 log_info "next: make bundle   (bundle/selfbuilt/ is inside BUNDLE_DIR, so the existing tar carries it)"
 log_info "then, on the air-gap box: make selfbuilt-push"
