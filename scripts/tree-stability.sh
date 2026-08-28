@@ -122,6 +122,13 @@ esac
 
 case "${1:-}" in
   record)
+    # ⚠️ REAP OLD SNAPSHOTS. `verify` deliberately KEEPS the snapshot on a RED -- it is the only
+    # evidence of what the tree looked like when the run started -- so nothing removed them and they
+    # accumulated: MEASURED, 364 KB across 4 files, one of them a leaked run from earlier the same
+    # day. Bounded three ways so this cannot become a `rm -rf` in someone's TMPDIR: -maxdepth 1, the
+    # full literal prefix, and older than a day (today's RED stays inspectable). Failures ignored --
+    # a reaper must never be able to fail the gate it runs inside.
+    find "${TMPDIR:-/tmp}" -maxdepth 1 -name '.tree-stability-*' -type f -mtime +0 -delete 2>/dev/null || true
     _snapshot > "$SNAP" 2>/dev/null
     exit 0 ;;
   verify)
@@ -146,7 +153,13 @@ case "${1:-}" in
       # PRINT THE DENOMINATOR. A gate that cannot tell you what it looked at cannot be trusted to
       # have looked -- and this one is silent by nature, so its green would otherwise be
       # indistinguishable from its not having run at all.
-      printf 'tree-stability: OK — %s file(s) unchanged for the whole run\n' "$(wc -l < "$SNAP" | tr -d ' ')"
+      # ⚠️ COUNT RECORDS, NOT LINES. `find -printf '%p'` does not escape a newline in a filename, so
+      # `wc -l` over-counts: MEASURED, 3 files reported as 4. The verdict is unaffected (`cmp` is
+      # byte-exact) -- but the DENOMINATOR is the only number this control prints, and a denominator
+      # that can disagree with reality is exactly what this repo keeps getting caught by. Each record
+      # carries two TABs, and a spilled continuation line carries none.
+      printf 'tree-stability: OK — %s file(s) unchanged for the whole run\n' \
+        "$(grep -c "$(printf '\t')" "$SNAP" | tr -d ' ')"
       rm -f "$SNAP"
       exit 0
     fi
