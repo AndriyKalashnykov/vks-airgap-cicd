@@ -243,17 +243,70 @@ for name in $NAMES; do
       _want_mod="${_mod%@*}"; _want_ver="${_mod##*@}"
       # The dep record is "<module><TAB><version>"; `.` matches the tab without needing to quote it.
       # Measured on a correct build: 2 hits. A wrong version: 0.
-      if _hits="$("$ENGINE" run --rm --entrypoint /busybox/sh "$local_ref" \
-                    -c "grep -ac '${_want_mod}.${_want_ver}' /kaniko/executor 2>/dev/null || echo 0" 2>/dev/null)"; then
-        case "$_hits" in
-          ''|0|*[!0-9]*) die "[${name}] the go_get override did not reach the binary: '${_want_mod} ${_want_ver}'
+      # ⚠️ THE PROBE REPORTS ITS OWN STATUS IN-BAND (`HITS=<n>:RC=<n>`), AND THE CAUSE COMES FROM
+      # THE EXIT CODE -- NEVER FROM MATCHING STDERR TEXT. Both were refuted by measurement:
+      #
+      #  * the OLD `grep -ac ... || echo 0` COLLAPSED TWO OPPOSITE EVENTS into the literal 0:
+      #    grep RAN and found nothing (rc 1 -- the real finding, `die` is right) and grep FAILED TO
+      #    RUN (rc 2 -- path moved, busybox built without -a). The second then died with a
+      #    maximum-alarm supply-chain message for a tooling problem. `grep -c` already prints 0 on
+      #    no-match, so `|| echo 0` only ever swallowed ERRORS. The sentinel keeps grep's three-way
+      #    status, so RC=2 is a WARN and only HITS=0:RC=1 is fatal.
+      #  * classifying on stderr TEXT cannot discriminate on a cgroup-v1 host. MEASURED in
+      #    ~/walk-evidence: podman prints `Using cgroups-v1 which is deprecated` on EVERY
+      #    invocation (12 occurrences in a row2-photon run that finished 0 FAILED), and it is
+      #    emitted by `podman save` too -- so a "cgroup" matcher fires on the GENUINE no-shell
+      #    case and would ship a NEW confidently-wrong cause. `no such file` is no better: it
+      #    matches both the missing shell and crun's v1 devices-controller failure.
+      #  * the exit code DOES discriminate, identically on both engines (measured docker 29.7.2,
+      #    podman 4.9.3): 0 shell ran · 127 command not found (no shell) · 125 the engine could
+      #    not start the container. chroot(1)/OCI convention, documented in `man podman-run`.
+      #
+      # ⚠️ `-w` IS LOAD-BEARING, AND ITS ABSENCE WAS A SILENT FALSE-VERIFY. The pattern is an
+      # UNANCHORED SUBSTRING, so asking for v0.21.1 MATCHES an embedded v0.21.19 -- measured on the
+      # real image: HITS=1:RC=0, i.e. `verified in the binary` for a version we did not ask for.
+      # That needs no malformed TSV: `go get mod@X` plus Go's minimal-version-selection can resolve
+      # HIGHER than the request, which is precisely the "we asked" vs "it happened" gap this probe
+      # exists to close, so the probe was blind to its own subject. `-w` requires a non-word char
+      # either side; the build info is TAB-separated, so the real match still lands (measured
+      # HITS=2:RC=0 on the real artifact) while the v0.21.1-vs-v0.21.19 case becomes HITS=0:RC=1.
+      # The inner `2>/dev/null` is also gone: stderr is unredirected outward now, so grep's own
+      # message reaches the log and the RC=2 WARN can say WHICH failure it was.
+      #
+      # NO TEMP FILE AND NO NEW `trap ... EXIT`: a second EXIT trap REPLACES the one above, which is
+      # the only thing that removes the kaniko `git clone` in $src. Stderr is deliberately NOT
+      # redirected -- the runtime's own message belongs in the log the operator already reads.
+      #
+      # ⚠️ HONESTY: the runtime-failure arm below has NEVER FIRED. There are zero `<engine> run`
+      # invocations anywhere in ~/walk-evidence, podman documents rootless-on-cgroup-v1 as
+      # supported (it stops MANAGING cgroups rather than failing), and the known v1 breakage is
+      # buildah's unconditional `mkdir /sys/fs/cgroup/devices/buildah-<n>` -- a BUILD path, not
+      # this one. It is a correct label for a case we have not observed, not a fix for a known bug.
+      # (rc 125 itself IS measured reachable on both engines -- `podman run --badoption` produces it.
+      # What has never been observed is the engine failing to start THIS container on a v1 host.)
+      #
+      # ⚠️ On a cgroup-v1 host podman prints its deprecation WARNING immediately BEFORE the
+      # `verified` line below, because stderr is deliberately unredirected. That is noise, not a
+      # failure -- the verdict is the HITS=/RC= sentinel, never the surrounding text.
+      _out="$("$ENGINE" run --rm --entrypoint /busybox/sh "$local_ref" \
+                -c "n=\$(grep -acw '${_want_mod}.${_want_ver}' /kaniko/executor); r=\$?; printf 'HITS=%s:RC=%s' \"\$n\" \"\$r\"")" \
+        && _rc=0 || _rc=$?
+      case "$_out" in
+        HITS=0:RC=1)
+          die "[${name}] the go_get override did not reach the binary: '${_want_mod} ${_want_ver}'
   is not in /kaniko/executor's embedded build info. The Dockerfile text was injected and the build
   exited 0, so this is the difference between 'we asked' and 'it happened'." ;;
-          *) log_info "[${name}] verified in the binary: ${_want_mod} ${_want_ver} (${_hits} build-info hit(s))" ;;
-        esac
-      else
-        log_warn "[${name}] no shell in ${local_ref} — the go_get override is UNVERIFIED in the artifact"
-      fi
+        HITS=*[1-9]*:RC=0)
+          log_info "[${name}] verified in the binary: ${_want_mod} ${_want_ver} (${_out})" ;;
+        HITS=*:RC=2)
+          log_warn "[${name}] grep could not READ /kaniko/executor (moved path, or a busybox without -a) — the go_get override is UNVERIFIED. This is a TOOLING failure, not a finding about the binary." ;;
+        *)
+          case "$_rc" in
+            125) log_warn "[${name}] the container RUNTIME could not start ${local_ref} — the go_get override is UNVERIFIED. This is the ENGINE, not the image: run 'make engine-check'." ;;
+            126|127) log_warn "[${name}] no /busybox/sh in ${local_ref} — the go_get override is UNVERIFIED (a non-debug kaniko image legitimately has no shell)." ;;
+            *) log_warn "[${name}] the verification probe was inconclusive (rc=${_rc}, out='${_out}') — the go_get override is UNVERIFIED." ;;
+          esac ;;
+      esac
     done
   fi
 

@@ -74,6 +74,20 @@ selfbuilt_validate() {
         case "$_m" in
           *@latest|*@master|*@main|*@upgrade|*@patch|*@none)
             echo "selfbuilt: row '$n' go_get '${_m}' is not a concrete version — the build would not be reproducible" >&2; rc=1 ;;
+          # An EMPTY version passed the `*@*` arm below and reached the verification probe as the
+          # pattern '<module>.' -- which matches EVERY build-info line. MEASURED on the real image:
+          # HITS=1197:RC=0, i.e. the probe reported the override VERIFIED having checked no version
+          # at all. The probe's own `grep -w` also rejects it, but then the row dies claiming "the
+          # override did not reach the binary", which names the wrong cause: the TSV is malformed.
+          *@) echo "selfbuilt: row '$n' go_get '${_m}' has an EMPTY version — pin a concrete one" >&2; rc=1 ;;
+          # A single quote TERMINATES the quoting of the verification probe's inner `sh -c`, which
+          # interpolates this value. MEASURED: a crafted module name ran an arbitrary command inside
+          # the container and returned rc=127, matching no arm, so it degraded to a silent
+          # "inconclusive" WARN. This file already condemns exactly this shape at lines 55-61 for the
+          # trap ("a stray apostrophe silently corrupts the exit code, which is a fake-green
+          # generator") -- the fix was applied there and the shape re-created in the probe. The TSV
+          # is committed, so this is a fake-green guard, not a privilege boundary.
+          *\'*) echo "selfbuilt: row '$n' go_get '${_m}' contains a single quote — refused (it breaks the verification probe's quoting)" >&2; rc=1 ;;
           *@*) : ;;
           *) echo "selfbuilt: row '$n' go_get '${_m}' has no @version — pin it" >&2; rc=1 ;;
         esac
