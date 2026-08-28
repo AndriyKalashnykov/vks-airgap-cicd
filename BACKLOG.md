@@ -4414,3 +4414,77 @@ FOURTH state — the file exists, was refused, its values are NOT in play — in
 rather than a fact about the world; (3) a gating sibling validates the FULL outcome so the matrix can
 catch it — design under adversary review. Each RED-proven with a stamped-for-another-cluster overlay,
 which reproduces in one command.
+
+## 🔴 B518 — `istio_discover` is BLIND to Gateway-API gateways, and its ambiguity guard cannot fire
+
+MEASURED 2026-08-28 on the live lab guest cluster, by an idea round and confirmed independently.
+`scripts/lib/istio.sh:68-75` finds the ingress gateway with a jq that requires a `spec.selector.istio`
+key:
+
+    port == 15021  AND  .spec.selector.istio != null
+
+An Istio gateway auto-provisioned by the **Kubernetes Gateway API** does not have one — its selector
+is `gateway.networking.k8s.io/gateway-name=<name>`. So on a Gateway-API cluster the jq returns
+exactly ONE candidate, the classic `istio-ingress/istio-ingressgateway`, and because the count is 1
+the `count -gt 1` ambiguity error at `istio.sh:85` **structurally cannot fire**.
+
+On the lab that one candidate is the DEAD one:
+
+    istio-ingress/istio-ingressgateway   192.168.101.134   tcp/80 OPEN   curl rc=56   HTTP 000
+    vks-ingress/vks-uis-istio            192.168.101.135   tcp/80 OPEN   curl rc=0    HTTP 200
+    Gateway vks-ingress/vks-uis          addr=192.168.101.135  attachedRoutes=8
+
+Zero VirtualServices and zero classic Gateways exist there; all eight routes are HTTPRoutes. So
+`.134` has nothing attached and can never serve these hosts — it is a permanent decoy, not a
+transient.
+
+`make istio-preflight` reports on the same basis, so its verdict inherits the blindness.
+
+**Done when:** discovery prefers a Gateway whose `status.addresses[0].value` is set, `Programmed=True`
+and whose listeners report `attachedRoutes > 0`, falling back to the classic selector only when no
+Gateway is found; and the ambiguity guard counts candidates from BOTH APIs so it can fire. Use the
+`{range .items[*]}` jsonpath form — MEASURED, `{.items[0]...}` exits **rc=1** on an empty list, which
+under `set -euo pipefail` kills the caller — and wrap it in `timeout`, since `kubectl get` costs ~15s
+against an unreachable API even with `--request-timeout=3s` (API discovery runs first).
+
+## 🔴 B519 — the ingress liveness probe is a bare TCP connect, which cannot tell a dead gateway from a live one
+
+MEASURED 2026-08-28, both IPs on the lab guest cluster:
+
+    192.168.101.134   tcp/80 = OPEN    curl HTTP 000  rc=56 (connection reset)   <- DEAD, zero routes
+    192.168.101.135   tcp/80 = OPEN    curl HTTP 200  rc=0                       <- serving 8 hosts
+
+`scripts/creds.sh:147` probes with `/dev/tcp`. Envoy accepts the connection and then resets, so a
+TCP-level probe reports the dead gateway as ANSWERING and the `NOT ANSWERING` banner at `:459` never
+fires for the one case it exists for. Any design that reuses this probe inherits the blindness.
+
+**Done when:** the probe is at HTTP wherever the claim is "serving" (a response code, not a socket),
+bounded by the existing `CURL_MAX_TIME_SECONDS`, and still off under `CREDS_NO_PROBE=1`.
+
+## ✅ B520 (REFUTED 2026-08-28 — recorded so it is not rebuilt) — `verify-ingress` does NOT go green against a leftover KinD cluster
+
+An idea round reported a CRITICAL: a leftover KinD stand-in satisfies `make verify-ingress` including
+its per-host body markers, so it would certify the wrong cluster — and that this refutes the shipped
+safety argument at `98-verify-ingress.sh:29-33` (B15), which says a false-green *"would require the
+stale IP to actually route these hosts to these backends serving the right body markers, i.e. it is
+not stale."*
+
+**It measured the HTTP layer and inferred the gate's verdict. The gate never reaches that layer.**
+Running the gate itself on this box, where `.env.state` holds `INGRESS_LB_IP=172.18.0.6` and
+`VKS_STATE_KIND=1`, and where those hosts really do serve 200 at that IP:
+
+    with an explicit lab KUBECONFIG   -> rc=2   state: written for a DIFFERENT cluster ... NOT sourcing it
+    with no explicit KUBECONFIG       -> rc=2   (same: .env sets KUBECONFIG=./secrets/vks.kubeconfig)
+    ...both abort at 98-verify-ingress.sh:41   INGRESS_LB_IP not set
+
+`state_check`'s cluster stamp refuses the overlay before `INGRESS_LB_IP` is ever read, and the `:?`
+aborts loudly — which is exactly the second half of the comment the round quoted only the first half
+of. To reach the reported false-green the overlay would have to be sourced, which requires the
+selected cluster to BE the KinD one — in which case a green about KinD is correct.
+
+B15's safety argument stands. Do not "fix" this.
+
+⚠️ The one true residual is smaller and worth keeping: **the gate never names WHICH cluster it
+verified.** A run that legitimately verified the KinD stand-in and a run that verified the lab
+produce the same success text. Printing the resolved context/server alongside the LB IP is cheap and
+would remove the ambiguity that made this finding plausible.

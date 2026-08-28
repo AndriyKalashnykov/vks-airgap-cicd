@@ -436,6 +436,10 @@ check-doc-novels: ## Gate: no multi-line re-litigation blockquotes ("this page u
 check-doc-robot-quoting: ## Gate: a Harbor robot credential (robot$<name>) in docs or .env.example must be SINGLE-QUOTED or set -a expands $<name> away -> 401
 	@$(SCRIPTS)/check-doc-robot-quoting.sh
 
+.PHONY: check-doc-ingress-step
+check-doc-ingress-step: ## Gate: a scenario doc's ingress step must be FENCED (the walk runs fences, not tables) and followed by a verify
+	@$(SCRIPTS)/check-doc-ingress-step.sh
+
 .PHONY: check-how-provenance
 check-how-provenance: ## Gate: every `# how:` acquisition command must be runnable-by-us, a real make target, or provenance-tagged
 	@$(SCRIPTS)/check-how-provenance.sh
@@ -1654,7 +1658,7 @@ vendor-diagrams: ## Re-download the pinned C4-PlantUML stdlib into docs/diagrams
 	echo "vendor-diagrams: refreshed docs/diagrams/c4/ @ $(C4_PLANTUML_VERSION) — now run 'make diagrams' and verify the offline render"
 
 .PHONY: docs-lint
-docs-lint: check-readme-scenarios check-doc-expect-leak check-expect-literals check-doc-command-count check-doc-make-targets check-doc-greeting-paths check-doc-target-coverage check-vks-terminology check-doc-novels check-doc-robot-quoting check-vks-provenance ## Lint markdown + the README-scenario, command-count, target-coverage, VKS-terminology, doc-novels and robot-quoting gates
+docs-lint: check-readme-scenarios check-doc-expect-leak check-expect-literals check-doc-command-count check-doc-make-targets check-doc-greeting-paths check-doc-target-coverage check-vks-terminology check-doc-novels check-doc-robot-quoting check-vks-provenance check-doc-ingress-step ## Lint markdown + the README-scenario, command-count, target-coverage, VKS-terminology, doc-novels and robot-quoting gates
 	@# NOTE: diagrams-check is deliberately NOT a prerequisite here. It `docker run`s the pinned
 	@# PlantUML image (a ~478 MB pull, cold) and re-renders every .puml — so making it unconditional
 	@# meant a README-only PR paid for a full JVM render of seven diagrams it never touched. `make ci`

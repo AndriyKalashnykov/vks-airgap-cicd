@@ -885,6 +885,45 @@ make istio-preflight     # read-only: is Istio here? what does it require of me?
 | **Istio is here** (the expected tenant case) | `make install-ingress INGRESS_CONTROLLER=istio-existing` — installs **nothing**, attaches routes only. **Never** the bare `make install-ingress` against a mesh you did not install: its default would **helm-install a second istiod over the platform's**. |
 | **NO Istio detected** | `make install-ingress` (installs our own; images come from your Harbor) or `INGRESS_CONTROLLER=traefik` for a lighter option. |
 
+Run the one it named — and **only** that one:
+
+```bash
+make install-ingress INGRESS_CONTROLLER=istio-existing   # a mesh is already here — attach only
+```
+
+**Expect:** `attaching to an Istio we did NOT install` — the attach path installs nothing, which is
+the whole point of it.
+
+```bash
+make install-ingress                                     # NO Istio detected — install it
+```
+
+Then **check the routes actually work**, before you rely on those hostnames:
+
+```bash
+make verify-ingress           # each *.vks.local host must reach ITS OWN backend
+```
+
+**Expect:** one OK per host — gitea, tekton and each app — ending in `UI(s) reachable through the`.
+It sends a `Host:` header to the ingress LB IP, so it does not need `/etc/hosts` to be right yet;
+it asserts each host reaches ITS OWN backend, not merely that something answers.
+
+Now re-read the access table. The `make creds-show` you ran in step 6 was **before** the ingress
+existed, so every `*.vks.local` row said `<needs ingress>` — correct at that moment, and stale now:
+
+```bash
+make creds-show    # re-read it: the *.vks.local rows carry real URLs once the ingress is up
+```
+
+**Expect:** Gitea, Tekton and every app row now shows an `http://…vks.local` URL instead of
+`<needs ingress>`, and the note above the table names the ingress LB IP to add to `/etc/hosts`.
+
+⚠️ **Run exactly one of the two, and let `istio-preflight` choose it.** The attach variant installs
+nothing; the bare variant helm-installs a mesh. Running the wrong one against a mesh you did not
+install puts a second istiod over the platform's. If the preflight did not say clearly which case you
+are in, stop and read its output rather than picking one — a wrong choice here is disruptive to other
+tenants and hard to attribute to you.
+
 `istio-preflight` also prints the exact `Gateway` selector the mesh requires, what your kubeconfig
 may actually do, and what (if anything) to **request from the mesh admin**. It picks the route API:
 the **Kubernetes Gateway API** when Istio is an Accepted `GatewayClass` (Istio then auto-provisions
