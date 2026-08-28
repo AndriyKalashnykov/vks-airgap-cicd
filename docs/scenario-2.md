@@ -915,8 +915,9 @@ existed, so every `*.vks.local` row said `<needs ingress>` — correct at that m
 make creds-show    # re-read it: the *.vks.local rows carry real URLs once the ingress is up
 ```
 
-**Expect:** Gitea, Tekton and every app row now shows an `http://…vks.local` URL instead of
-`<needs ingress>`, and the note above the table names the ingress LB IP to add to `/etc/hosts`.
+**Expect:** `add once to /etc/hosts` — the hint `creds` prints ONLY when it has an ingress LB IP, so
+its presence is what distinguishes a table of real URLs from a table of `<needs ingress>` markers.
+Gitea, Tekton and every app row now shows an `http://…vks.local` URL.
 
 ⚠️ **Run exactly one of the two, and let `istio-preflight` choose it.** The attach variant installs
 nothing; the bare variant helm-installs a mesh. Running the wrong one against a mesh you did not

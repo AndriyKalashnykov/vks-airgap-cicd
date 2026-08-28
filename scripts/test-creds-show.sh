@@ -743,6 +743,49 @@ else
   ok "B207: SILENT when every vks-login requirement is met"
 fi
 
+# ── STATE 12 — the branch the MATRIX hits, which the B517 fix left unrepaired. ────────────────────
+# `state-overlay: SOURCED`, `values-provenance: STORED`, no INGRESS_LB_IP: a box that simply has not
+# installed an ingress, i.e. EVERY scenario-2 row. The B517 fix repaired the REFUSED arm and stopped
+# there, so the false world-claim survived in the arm that actually runs. MEASURED on one cluster,
+# 72m30s apart: row 3 printed `SUCCESS — all 8 UI(s) reachable ... at 192.168.101.134` with 8/8 body
+# markers; row 6 printed `<needs ingress>` x8 plus `nothing serves those hosts`.
+_kc12="$(mktemp)"
+cat > "$_kc12" <<'KC12'
+apiVersion: v1
+kind: Config
+current-context: c
+clusters:
+- name: c
+  cluster: {server: 'https://127.0.0.1:1'}
+contexts:
+- name: c
+  context: {cluster: c, user: u}
+users:
+- name: u
+  user: {token: t}
+KC12
+# ⚠️ ITS OWN RENDER, NOT `render`. Routing this case through the shared helper produced an $out in
+# which the note was ABSENT -- measured: the identical fixture rendered by hand contained the
+# mutated sentence (1 match) while the suite reported 0 FAILs, so the case pinned NOTHING and its
+# green was indistinguishable from a passing product. `render` resolves the sink through
+# `state_file()`; this pins VKS_STATE_FILE explicitly, which is the form proven to reach the arm.
+_sink12="$(mktemp)"
+printf 'VKS_STATE_KIND=1\nVKS_STATE_SERVER=https://127.0.0.1:1\nHARBOR_URL=h.example\n' > "$_sink12"
+out="$( VKS_STATE_FILE="$_sink12" KUBECONFIG="$_kc12" SKIP_DOTENV=1 CREDS_TOKEN=1 \
+        timeout 90 ./scripts/creds.sh 2>/dev/null )"
+rm -f "$_kc12" "$_sink12"
+
+if [ -z "$out" ]; then bad "STATE 12: creds.sh produced NO OUTPUT — every assertion below is vacuous"; fi
+if printf '%s' "$out" | grep -q '^state-overlay: SOURCED'; then ok "STATE 12: the overlay IS in play — this is the matrix's own cell, not the refused one"
+else bad "STATE 12: state-overlay is '$(printf '%s' "$out" | grep -m1 '^state-overlay:' || echo NONE)'; the fixture never reached the SOURCED arm, so this case tests nothing"; fi
+if printf '%s' "$out" | grep -q 'nothing serves those hosts'; then
+  bad "STATE 12: the SOURCED arm still asserts 'nothing serves those hosts' — a claim about the CLUSTER derived from a variable about THIS BOX, in the arm every scenario-2 row hits"
+else ok "STATE 12: the SOURCED arm makes no claim about the cluster"; fi
+if printf '%s' "$out" | grep -q 'not about the cluster'; then ok "STATE 12: ...and says so explicitly, so a reader cannot infer one"
+else bad "STATE 12: the note never says the absence is about this report; a reader will take it as a fact about the cluster"; fi
+if printf '%s' "$out" | grep -q 'port-forward'; then ok "STATE 12: and the port-forward remedy survives"
+else bad "STATE 12: the port-forward is gone — the only remedy correct in every persona"; fi
+
 # ⚠️ THE VERDICT IS RE-EVALUATED HERE, and it must be. The `if [ "$fail" = 0 ]` that opens at ~line 300
 # is a FAIL-FAST gate deciding whether to RUN the later states — it is not the verdict. It was also
 # PRINTING the verdict from inside its own branch, so its condition was read ONCE at line 300 and the

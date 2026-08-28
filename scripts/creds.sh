@@ -693,10 +693,25 @@ else
     printf '            kubectl -n <namespace> port-forward svc/<service> 8080:<port>\n'
     printf '        Harbor and ArgoCD are unaffected — own LBs.\n'
     else
-    printf '\n  note: no ingress is installed, so Gitea / Tekton / the apps have NO *.vks.local URL —\n'
-    printf '        nothing serves those hosts. Reach them with a port-forward:\n'
+    # ⚠️ THIS BRANCH IS THE ONE THE MATRIX HITS, AND IT WAS LEFT UNREPAIRED. The B517 fix repaired the
+    # REFUSED arm directly above and stopped there, so the false world-claim survived in the arm that
+    # actually runs: `state-overlay: SOURCED`, `values-provenance: STORED`, no INGRESS_LB_IP -- i.e. a
+    # box that simply has not installed an ingress, which is every scenario-2 row. MEASURED on one
+    # cluster, 72m30s apart: row 3 at 05:08:15Z printed `SUCCESS — all 8 UI(s) reachable through the
+    # istio ingress at 192.168.101.134` with 8/8 body markers; row 6 at 06:20:45Z printed
+    # `<needs ingress>` x8 plus `nothing serves those hosts`. In row 6's ENTIRE log the string
+    # `vks.local` occurs exactly ONCE -- inside that sentence.
+    #
+    # `INGRESS_LB_IP` is a fact about THIS BOX'S STATE OVERLAY. It is not a fact about the cluster,
+    # and this report has no other evidence about the cluster's ingress -- so it must not make one.
+    # The port-forward STAYS: a first repair of the sibling arm deleted it and that was a regression,
+    # because it is the only remedy correct in every persona (:681-687 records it).
+    printf '\n  note: this box has no ingress LB IP, so Gitea / Tekton / the apps have no *.vks.local\n'
+    printf '        URL to show. That is a fact about THIS REPORT, not about the cluster: nothing here\n'
+    printf '        has asked it whether an ingress exists. Reach the services without one:\n'
     printf '            kubectl -n <namespace> port-forward svc/<service> 8080:<port>\n'
-    printf '        or install one: make install-ingress   (Harbor and ArgoCD are unaffected — own LBs).\n'
+    printf '        To find out, or to install one: make verify-ingress / make install-ingress\n'
+    printf '        (Harbor and ArgoCD are unaffected — own LBs).\n'
     fi
   fi
   if [ "$argocd_url" = "<not set>" ]; then
