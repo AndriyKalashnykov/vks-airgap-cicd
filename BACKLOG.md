@@ -3969,18 +3969,18 @@ direction.
 **FIXED — and the adversary rounds found a WORSE defect in the same block that neither the row nor
 the brief mentioned.** Two idea-round adversaries independently refuted the design I brought them:
 
-* **Refuted: classifying on stderr TEXT.** On a cgroup-v1 host podman prints `Using cgroups-v1 which
+- **Refuted: classifying on stderr TEXT.** On a cgroup-v1 host podman prints `Using cgroups-v1 which
   is deprecated` on EVERY invocation — measured in `~/walk-evidence`, 12 occurrences inside a
   row2-photon run that finished `0 FAILED`, and `podman save` emits it too. A "cgroup" matcher
   therefore fires on the GENUINE no-shell case, shipping a NEW confidently-wrong cause. `no such
   file` is no better: it matches both the missing shell and crun's v1 devices-controller failure.
-* **Refuted: a temp file for stderr.** A second `trap ... EXIT` REPLACES the existing one, which is
+- **Refuted: a temp file for stderr.** A second `trap ... EXIT` REPLACES the existing one, which is
   the only thing that removes the kaniko `git clone` in `$src`. Stderr is now simply left
   unredirected, so the runtime's own message lands in the log the operator already reads.
-* **The exit code already discriminates**, identically on both engines (measured docker 29.7.2,
+- **The exit code already discriminates**, identically on both engines (measured docker 29.7.2,
   podman 4.9.3): `0` the shell ran · `127` command not found · `125` the engine could not start the
   container.
-* **The worse defect:** `grep -ac ... 2>/dev/null || echo 0` collapsed two OPPOSITE events into the
+- **The worse defect:** `grep -ac ... 2>/dev/null || echo 0` collapsed two OPPOSITE events into the
   literal `0` — grep RAN and found nothing (rc 1, the real finding, `die` is right) and grep FAILED
   TO RUN (rc 2: moved path, or a busybox without `-a`). The second aborted the build with a
   maximum-alarm supply-chain message for a tooling problem. `grep -c` already prints `0` on
@@ -4117,14 +4117,14 @@ Both ended `make: *** [Makefile:1486: walk-matrix] Terminated` — i.e. the reci
 
 **What was ruled OUT, by measurement, not by reasoning:**
 
-* not the box: 76 GB available, load 4.16, no OOM in `dmesg`, nothing in the user journal.
-* not a self-inflicted `pkill`: `walk-matrix.sh`, `walkbox-vm.sh` and `lib/*.sh` contain **zero**
+- not the box: 76 GB available, load 4.16, no OOM in `dmesg`, nothing in the user journal.
+- not a self-inflicted `pkill`: `walk-matrix.sh`, `walkbox-vm.sh` and `lib/*.sh` contain **zero**
   `pkill`/`killall`/`kill --` (grepped). `destroy_stale_walkboxes` only calls `virsh`.
-* not an internal timeout: every `timeout` in `walk-matrix.sh` is per-command (60/120s) and would
+- not an internal timeout: every `timeout` in `walk-matrix.sh` is per-command (60/120s) and would
   surface as that command failing, not as the recipe being signalled.
-* not my own kill-by-process-group: the transcript has exactly one, at **2026-08-27T05:06:24Z** —
+- not my own kill-by-process-group: the transcript has exactly one, at **2026-08-27T05:06:24Z** —
   about 20 hours before attempt 5.
-* not a `timeout` wrapper on the launch: none of the recorded launches carries one.
+- not a `timeout` wrapper on the launch: none of the recorded launches carries one.
 
 **The mitigation, and the evidence for it.** Attempt 6 was launched through `setsid --wait`, giving
 the run its **own session and process group** (`pid=pgid=sid=1485896`, distinct from the launching
