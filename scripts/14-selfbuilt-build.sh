@@ -243,70 +243,88 @@ for name in $NAMES; do
       _want_mod="${_mod%@*}"; _want_ver="${_mod##*@}"
       # The dep record is "<module><TAB><version>"; `.` matches the tab without needing to quote it.
       # Measured on a correct build: 2 hits. A wrong version: 0.
-      # ⚠️ THE PROBE REPORTS ITS OWN STATUS IN-BAND (`HITS=<n>:RC=<n>`), AND THE CAUSE COMES FROM
-      # THE EXIT CODE -- NEVER FROM MATCHING STDERR TEXT. Both were refuted by measurement:
+      # ⚠️ NO CONTAINER IS CREATED OR STARTED. We grep the TARBALL this script already wrote at
+      # `"$ENGINE" save -o "$tarball"` a few lines up. That is not a micro-optimisation -- it is the
+      # whole fix, and it was arrived at by refuting two designs that came before it:
       #
-      #  * the OLD `grep -ac ... || echo 0` COLLAPSED TWO OPPOSITE EVENTS into the literal 0:
-      #    grep RAN and found nothing (rc 1 -- the real finding, `die` is right) and grep FAILED TO
-      #    RUN (rc 2 -- path moved, busybox built without -a). The second then died with a
-      #    maximum-alarm supply-chain message for a tooling problem. `grep -c` already prints 0 on
-      #    no-match, so `|| echo 0` only ever swallowed ERRORS. The sentinel keeps grep's three-way
-      #    status, so RC=2 is a WARN and only HITS=0:RC=1 is fatal.
-      #  * classifying on stderr TEXT cannot discriminate on a cgroup-v1 host. MEASURED in
-      #    ~/walk-evidence: podman prints `Using cgroups-v1 which is deprecated` on EVERY
-      #    invocation (12 occurrences in a row2-photon run that finished 0 FAILED), and it is
-      #    emitted by `podman save` too -- so a "cgroup" matcher fires on the GENUINE no-shell
-      #    case and would ship a NEW confidently-wrong cause. `no such file` is no better: it
-      #    matches both the missing shell and crun's v1 devices-controller failure.
-      #  * the exit code DOES discriminate, identically on both engines (measured docker 29.7.2,
-      #    podman 4.9.3): 0 shell ran · 127 command not found (no shell) · 125 the engine could
-      #    not start the container. chroot(1)/OCI convention, documented in `man podman-run`.
+      #  * `<engine> run --entrypoint /busybox/sh` (the original) CANNOT RUN on a cgroup-v1 host.
+      #    MEASURED on a Photon 5 walkbox (podman 5.8.5, crun 1.29, rootless uid 1000):
+      #        Error: crun: open `/sys/fs/cgroup/devices/<ctr-id>`: No such file or directory
+      #    crun cannot create the container cgroup under the root-owned v1 `devices` controller --
+      #    v1 has no delegation model (v2 introduced it). podman maps it to rc 127, the SAME code as
+      #    a genuinely missing shell, so no exit-code classification can separate them. It fired in
+      #    production: matrix row2 (photon, v1) logged "no shell in <ref> ... UNVERIFIED" while row1
+      #    (ubuntu, v2) logged "verified in the binary (2 hits)" -- same commit, same tag. The image
+      #    was later pulled by digest and is FINE (/busybox/sh present; the probe returns HITS=2:RC=0
+      #    against it on a v2 host). Photon 5 boots v1 BY DEFAULT and Photon is a jump-box OS we are
+      #    handed, so v1 is the NORM here, not an edge case.
+      #  * `<engine> create` + `<engine> cp` + host grep (the obvious next idea) is REFUTED:
+      #    `docker cp` and `podman cp` have OPPOSITE symlink semantics (docker copies a 4-byte broken
+      #    link, podman follows it) and `podman cp -L` does not exist -- so if /kaniko/executor ever
+      #    became a symlink, docker would report 0 hits and this code would `die` accusing the supply
+      #    chain, on ONE engine only. `create` on an absent image also makes a NETWORK call with
+      #    retries, which is exactly wrong on an air-gap box.
       #
-      # ⚠️ `-w` IS LOAD-BEARING, AND ITS ABSENCE WAS A SILENT FALSE-VERIFY. The pattern is an
-      # UNANCHORED SUBSTRING, so asking for v0.21.1 MATCHES an embedded v0.21.19 -- measured on the
-      # real image: HITS=1:RC=0, i.e. `verified in the binary` for a version we did not ask for.
-      # That needs no malformed TSV: `go get mod@X` plus Go's minimal-version-selection can resolve
-      # HIGHER than the request, which is precisely the "we asked" vs "it happened" gap this probe
-      # exists to close, so the probe was blind to its own subject. `-w` requires a non-word char
-      # either side; the build info is TAB-separated, so the real match still lands (measured
-      # HITS=2:RC=0 on the real artifact) while the v0.21.1-vs-v0.21.19 case becomes HITS=0:RC=1.
-      # The inner `2>/dev/null` is also gone: stderr is unredirected outward now, so grep's own
-      # message reaches the log and the RC=2 WARN can say WHICH failure it was.
-      #
-      # NO TEMP FILE AND NO NEW `trap ... EXIT`: a second EXIT trap REPLACES the one above, which is
-      # the only thing that removes the kaniko `git clone` in $src. Stderr is deliberately NOT
-      # redirected -- the runtime's own message belongs in the log the operator already reads.
-      #
-      # ⚠️ HONESTY: the runtime-failure arm below has NEVER FIRED. There are zero `<engine> run`
-      # invocations anywhere in ~/walk-evidence, podman documents rootless-on-cgroup-v1 as
-      # supported (it stops MANAGING cgroups rather than failing), and the known v1 breakage is
-      # buildah's unconditional `mkdir /sys/fs/cgroup/devices/buildah-<n>` -- a BUILD path, not
-      # this one. It is a correct label for a case we have not observed, not a fix for a known bug.
-      # (rc 125 itself IS measured reachable on both engines -- `podman run --badoption` produces it.
-      # What has never been observed is the engine failing to start THIS container on a v1 host.)
-      #
-      # ⚠️ On a cgroup-v1 host podman prints its deprecation WARNING immediately BEFORE the
-      # `verified` line below, because stderr is deliberately unredirected. That is noise, not a
-      # failure -- the verdict is the HITS=/RC= sentinel, never the surrounding text.
-      _out="$("$ENGINE" run --rm --entrypoint /busybox/sh "$local_ref" \
-                -c "n=\$(grep -acw '${_want_mod}.${_want_ver}' /kaniko/executor); r=\$?; printf 'HITS=%s:RC=%s' \"\$n\" \"\$r\"")" \
-        && _rc=0 || _rc=$?
-      case "$_out" in
-        HITS=0:RC=1)
-          die "[${name}] the go_get override did not reach the binary: '${_want_mod} ${_want_ver}'
-  is not in /kaniko/executor's embedded build info. The Dockerfile text was injected and the build
-  exited 0, so this is the difference between 'we asked' and 'it happened'." ;;
-        HITS=*[1-9]*:RC=0)
-          log_info "[${name}] verified in the binary: ${_want_mod} ${_want_ver} (${_out})" ;;
-        HITS=*:RC=2)
-          log_warn "[${name}] grep could not READ /kaniko/executor (moved path, or a busybox without -a) — the go_get override is UNVERIFIED. This is a TOOLING failure, not a finding about the binary." ;;
-        *)
-          case "$_rc" in
-            125) log_warn "[${name}] the container RUNTIME could not start ${local_ref} — the go_get override is UNVERIFIED. This is the ENGINE, not the image: run 'make engine-check'." ;;
-            126|127) log_warn "[${name}] no /busybox/sh in ${local_ref} — the go_get override is UNVERIFIED (a non-debug kaniko image legitimately has no shell)." ;;
-            *) log_warn "[${name}] the verification probe was inconclusive (rc=${_rc}, out='${_out}') — the go_get override is UNVERIFIED." ;;
-          esac ;;
-      esac
+      # The tarball has none of those problems: no cgroups, no engine call, no symlink divergence,
+      # no temp copy, nothing to leak, and grep's three-way status stays intact. MEASURED on the real
+      # artifact, and identical for a docker-saved and a podman-saved tar:
+      #     correct v0.21.9 -> HITS=4 RC=0   |   v0.21.1 (substring) -> HITS=0 RC=1   |   absent -> 0/1
+      # (FOUR hits, not the two the in-image grep saw: the tar carries the layer plus its blob.)
+      _hits="$(grep -acw "${_want_mod}.${_want_ver}" "$tarball")" && _grc=0 || _grc=$?
+
+      # VACUITY GUARD. The tar also carries manifest.json and the image config, and the config's
+      # history records the very `RUN go get <mod>@<ver>` line THIS SCRIPT injects. Today the go_get
+      # runs in a discarded BUILDER stage, so the metadata contributes ZERO hits (measured) and the
+      # count is all binary. If the override is ever moved into the final stage, the metadata alone
+      # would satisfy the check and it would verify itself -- the purest vacuous green. So count the
+      # JSON members separately and refuse to report VERIFIED if they contribute anything.
+      # Portable on purpose: `tar -tf` + `tar -xOf <member>` are POSIX; `--wildcards` is GNU-only and
+      # Photon's tar is toybox.
+      # ⚠️ SELECT METADATA BY CONTENT, NEVER BY FILENAME. An earlier version of this loop matched
+      # `*.json` and was VACUOUS ON DOCKER: `docker save` emits an OCI layout whose members are all
+      # `blobs/sha256/<digest>` with NO EXTENSION, so the name filter saw only index.json and
+      # manifest.json and MISSED THE CONFIG BLOB -- which is exactly where the `created_by` history
+      # (our injected `RUN go get`) lives. `podman save` emits docker-archive v1 instead, where the
+      # config IS `<sha>.json` but 12 further `<layer>/json` members are also missed. Both engines,
+      # different blind spots, same class. Matching `blobs/sha256/*` by name is ALSO wrong -- on
+      # docker that includes the LAYERS, one of which legitimately contains the binary we are trying
+      # to find, so the guard would fire on the real hit.
+      # `$1 !~ /^d/` SKIPS DIRECTORY MEMBERS, and that is not cosmetic: `tar -xOf <dir>` dumps
+      # EVERYTHING BENEATH IT, so a directory re-yields its children's bytes and the same metadata
+      # is counted once per ancestor. Measured on a 3-member fixture: 3 hits for 1 real match ->
+      # an inflated _json_hits can raise a FALSE vacuity warning and refuse a good build.
+      # Size bound is a COST bound, not the correctness gate: config/manifest/index are KB-scale and
+      # layers are MB-scale, so we only pay to inspect small members; the `{` content check is what
+      # actually decides. `tar -tvf`/`tar -xOf` are POSIX (Photon's tar is toybox; no --wildcards).
+      _json_hits=0
+      while read -r _jsz _jm; do
+        case "$_jsz" in ''|*[!0-9]*) continue ;; esac
+        [ "$_jsz" -le 1048576 ] || continue            # a layer is never the metadata we mean
+        case "$(tar -xOf "$tarball" "$_jm" 2>/dev/null | head -c 1)" in '{') ;; *) continue ;; esac
+        _jh="$(tar -xOf "$tarball" "$_jm" 2>/dev/null | grep -acw "${_want_mod}.${_want_ver}" || true)"
+        case "$_jh" in ''|*[!0-9]*) _jh=0 ;; esac
+        _json_hits=$((_json_hits + _jh))
+      done <<EOF
+$(tar -tvf "$tarball" 2>/dev/null | awk '$1 !~ /^d/ { for (i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) { print $i, $NF; break } }')
+EOF
+
+      if [ "$_json_hits" -gt 0 ]; then
+        log_warn "[${name}] the image METADATA in ${tarball} contains '${_want_mod} ${_want_ver}' (${_json_hits} hit(s)) — this check cannot tell metadata from binary, so the go_get override is UNVERIFIED. The go_get must run in a DISCARDED build stage, not the final one."
+      else
+        case "$_grc" in
+          0) case "$_hits" in
+               ''|0|*[!0-9]*) log_warn "[${name}] the probe returned rc=0 with a non-positive count ('${_hits}') — the go_get override is UNVERIFIED (this should not happen; suspect the archive)." ;;
+               *) log_info "[${name}] verified in the binary: ${_want_mod} ${_want_ver} (${_hits} build-info hit(s) in the saved image)" ;;
+             esac ;;
+          # NOT "not in /kaniko/executor" -- a grep of the saved image cannot localise to a path.
+          # What it proves is absence from the whole saved image; the vacuity guard above is what
+          # separates binary from metadata.
+          1) die "[${name}] the go_get override did not reach the artifact: '${_want_mod} ${_want_ver}'
+  is not present anywhere in the saved image (${tarball}). The Dockerfile text was injected and the
+  build exited 0, so this is the difference between 'we asked' and 'it happened'." ;;
+          *) log_warn "[${name}] could not read ${tarball} (grep rc=${_grc}) — the go_get override is UNVERIFIED. This is a TOOLING failure, not a finding about the binary." ;;
+        esac
+      fi
     done
   fi
 

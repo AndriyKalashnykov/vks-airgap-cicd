@@ -59,9 +59,28 @@ if [ "$ENGINE" = podman ]; then
     if [ "$_cg" = cgroup2fs ]; then
       note "cgroup v2 - rootless builds run with normal isolation"
     else
-      note "cgroup v1 (${_cg}) - rootless podman cannot create a container cgroup here, so builds"
-      note "  run with BUILDAH_ISOLATION=chroot (weaker, bounded: our Dockerfile, our base)."
-      note "  Photon 5 boots v1 by default; systemd.unified_cgroup_hierarchy=1 gives v2."
+      note "cgroup v1 (${_cg}) - rootless podman cannot create a container cgroup here."
+      note "  BUILDS are handled: engine_build_isolation switches them to BUILDAH_ISOLATION=chroot"
+      note "  (weaker, bounded: our Dockerfile, our base)."
+      note "  '<engine> run' DOES NOT WORK AT ALL here — crun cannot create the container cgroup"
+      note "  under the root-owned v1 devices controller, and podman reports rc 127, the SAME code"
+      note "  as a missing command. Nothing in the operator flow depends on it (measured)."
+      # ⚠️ DO NOT PRINT A REMEDY HERE. This note used to say "systemd.unified_cgroup_hierarchy=1
+      # gives v2", echoing Broadcom KB 380364. MEASURED 2026-08-28 on the stock Photon 5 GCE image
+      # we build walkboxes from: that remedy is INERT. /boot/systemd.cfg ALREADY contains
+      # `systemd.unified_cgroup_hierarchy=yes`, and /boot/grub2/grub.cfg expands $systemd_cmdline
+      # exactly ZERO times -- it loads the env block and discards it, and the menuentry's `linux`
+      # line is hardcoded (it matches /proc/cmdline byte for byte). grub2-editenv, grub2-mkconfig,
+      # update-grub and /etc/default/grub are ALL ABSENT, and there is exactly ONE menuentry with no
+      # fallback, so the only edit that could work is a hand edit of a static grub.cfg on a box we
+      # were LENT -- with recovery only from a VM console a tenant may not have. An operator who
+      # followed the old hint would edit a file that already says yes, reboot someone else's jump
+      # box, still get v1, and have the KB's own verification fail with no diagnosis. So: report
+      # what we MEASURED, and let the operator decide. The one command that decides whether the KB
+      # applies to a given image is printed below.
+      note "  Enabling v2 is NOT prescribed here: on the stock Photon 5 image /boot/systemd.cfg"
+      note "  already sets it and grub discards it. To check YOUR image:"
+      note "    grep -c '\\\$systemd_cmdline' /boot/grub2/grub.cfg   # 0 = the documented fix is inert"
     fi
   fi
   

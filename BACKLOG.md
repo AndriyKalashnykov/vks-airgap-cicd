@@ -3986,20 +3986,66 @@ the brief mentioned.** Two idea-round adversaries independently refuted the desi
   maximum-alarm supply-chain message for a tooling problem. `grep -c` already prints `0` on
   no-match, so `|| echo 0` only ever swallowed ERRORS.
 
-The probe now reports its status in-band as `HITS=<n>:RC=<n>` and classifies on the exit code. All
-four arms proven against a real container:
+⚠️ **THAT EXIT-CODE DESIGN WAS ITSELF SUPERSEDED THE SAME DAY — do not rebuild it.** It classified
+the container failure by exit code (0 / 125 / 126|127). MEASURED on a real cgroup-v1 Photon host, a
+RUNTIME failure returns **127**, the same code as a genuinely missing shell, so the classification
+cannot discriminate and its `125` arm is unreachable. An adversary ran the shipped classifier against
+those inputs and it emitted, for the v1 failure, *"a non-debug kaniko image legitimately has no
+shell"* — i.e. it asserted a benign cause for a good image on a broken host, **worse than the text it
+replaced**.
 
-    match          HITS=1:RC=0   -> verified
-    no match       HITS=0:RC=1   -> die (the real finding)
-    grep errored   HITS=:RC=2    -> WARN tooling   (was a FALSE FATAL)
-    no shell       rc=127        -> WARN no-shell
+`create` + `cp` + host-grep was the next idea and is also REFUTED: `docker cp` and `podman cp` have
+OPPOSITE symlink semantics with no portable `-L`, and `create` on an absent image makes a NETWORK
+call with retries — wrong on an air-gap box.
 
-⚠️ **Recorded in the code comment, because it would otherwise be inherited as measured:** the
-runtime-failure arm has NEVER FIRED. There are zero `<engine> run` invocations anywhere in
-`~/walk-evidence`, podman documents rootless-on-cgroup-v1 as supported (it stops MANAGING cgroups
-rather than failing), and the known v1 breakage is buildah's unconditional `mkdir
-/sys/fs/cgroup/devices/buildah-<n>` — a BUILD path, not this one. It is a correct label for a case
-we have not observed, not a fix for a known bug.
+**What shipped instead: the probe makes NO ENGINE CALL AT ALL.** `14-selfbuilt-build.sh:219` already
+does `"$ENGINE" save -o "$tarball"` before the probe runs, so the probe greps that tarball on the
+host. No container is created or started, so the cgroup version is irrelevant; identical on podman
+and docker; nothing to leak; no trap change. Measured on the real artifact:
+
+    correct v0.21.9     HITS=4  RC=0   -> verified
+    substring v0.21.1   HITS=0  RC=1   -> die   (the false-verify this row opened on)
+    absent v9.99.99     HITS=0  RC=1   -> die
+    unreadable archive          RC=2   -> WARN tooling
+
+A **vacuity guard** counts metadata hits separately, because the tar also carries the image config
+whose history records the very `RUN go get` line this script injects; if the go_get ever moved into
+the final stage the metadata alone would satisfy the check. Two defects were found in that guard by
+an implementation round and fixed: it selected members by **filename** (`*.json`), which is VACUOUS
+ON DOCKER — `docker save` emits an OCI layout whose members are all extensionless
+`blobs/sha256/<digest>`, so it missed the config blob, i.e. was blind exactly where the RUN text
+lands; and `tar -xOf <dir>` dumps everything beneath it, so directory members re-yielded their
+children and one real match counted as **3**, which would raise a FALSE vacuity warning and refuse a
+good build. It now selects by CONTENT (first byte `{`) and skips directories; the test pins the count
+at EXACTLY 1 so double-counting fails too.
+
+⚠️ **CORRECTED SAME DAY — the runtime arm is NOT hypothetical, it FIRED, and the old message lied
+about it on every photon row.** This row and the code comment both said the arm "has never fired",
+reasoning from zero `<engine> run` invocations in `~/walk-evidence`. That was an argument from an
+archive that PREDATED the probe — only three archived rows carry a verdict at all. Measured in one
+matrix run, same commit, same Dockerfile, same tag, back to back:
+
+    row1 ubuntu  cgroup v2  ->  "verified in the binary ... (2 build-info hit(s))"
+    row2 photon  cgroup v1  ->  "no shell in <ref> — the go_get override is UNVERIFIED"
+
+Row 2's image was then **pulled by digest from Harbor and inspected directly** (image id
+`f312857733c3`, matching row 2's own `COMMIT`). It is fine: `/busybox/sh`, `/busybox/ln` and
+`/bin/sh` all present, and this very probe run against it on a cgroup-v2 host returns
+**`HITS=2:RC=0` — it VERIFIES**. So the image had the shell all along; the `<engine> run` is what
+failed, and the old else-branch blamed the artifact for a container-runtime failure, silently, on
+every photon row.
+
+That makes this fix load-bearing rather than tidy-up: with it, that row would have said *"the
+container RUNTIME could not start <ref> — run `make engine-check`"* instead of accusing the image.
+
+**Still NOT measured:** that cgroup v1 is the MECHANISM. The correlation is **n=1** on the v1 side,
+and podman documents rootless-on-v1 as supported (it stops MANAGING cgroups rather than failing).
+What is established is the CLASSIFICATION — a runtime failure, not an image defect — which is the
+thing this code has to get right.
+
+⚠️ It also means the adversary's grading of my original premise ("claim 2 — NOT ESTABLISHED, evidence
+points the other way") was **right about the evidence available at the time and wrong about the
+world**. The evidence it reasoned from — an empty archive — could not have settled it either way.
 
 `14-selfbuilt-build.sh` verifies the `go_get` override by running the built image:
 

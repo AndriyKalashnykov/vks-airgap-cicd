@@ -98,13 +98,71 @@ else bad "WITH -w, the real version stopped matching (HITS=$n_right_w RC=$rc_rig
 # ---- the source still carries the fix --------------------------------------------------------
 # Greps the USAGE FORM, not a bare word: the rationale comment above the line contains "-w" in prose,
 # so matching the word alone would pass on a source that had lost the flag.
-if grep -q "grep -acw '" "$SCRIPT_DIR/14-selfbuilt-build.sh"; then
-  ok "14-selfbuilt-build.sh still invokes grep with -w"
+if grep -q 'grep -acw' "$SCRIPT_DIR/14-selfbuilt-build.sh"; then
+  ok "14-selfbuilt-build.sh still greps with -w"
 else bad "14-selfbuilt-build.sh no longer uses 'grep -acw' — the substring false-verify is back"; fi
 
-if grep -q 'HITS=%s:RC=%s' "$SCRIPT_DIR/14-selfbuilt-build.sh"; then
-  ok "the probe still reports its status in-band (HITS=:RC= sentinel)"
-else bad "the HITS=/RC= sentinel is gone — grep's three-way status is collapsed again"; fi
+# The probe must NOT start a container. On a cgroup-v1 host (Photon 5 boots v1 by DEFAULT, and
+# Photon is a jump-box OS we are handed) rootless `<engine> run` cannot start at all: crun cannot
+# create the container cgroup under the root-owned v1 `devices` controller, and podman reports rc
+# 127 -- the SAME code as a genuinely missing shell. The old code fell through to its else-branch
+# and blamed the IMAGE, silently, on every photon row. Grepping the already-saved tarball has no
+# runtime at all, so it works on v1 and v2 alike.
+# shellcheck disable=SC2016  # literal source text — see the note on the first such grep below.
+if grep -qE '"\$ENGINE" run|\$\{ENGINE\} run|podman run|docker run' "$SCRIPT_DIR/14-selfbuilt-build.sh"; then
+  bad "the probe starts a CONTAINER again — that cannot run rootless on cgroup v1 (Photon 5 default)"
+else ok "the probe starts no container (works on cgroup v1, where rootless run cannot)"; fi
+
+# ---- the vacuity guard must select metadata by CONTENT, not by filename ----------------------
+# `docker save` emits an OCI layout whose members are ALL `blobs/sha256/<digest>` with NO EXTENSION,
+# and the config blob among them carries the `created_by` history — i.e. exactly where our injected
+# `RUN go get` text lands. A `*.json` name filter is therefore VACUOUS ON DOCKER, blind precisely to
+# the case the guard exists for. This fixture reproduces that member shape.
+FIX="$TMP/fix"; mkdir -p "$FIX/blobs/sha256"
+printf '{"history":[{"created_by":"RUN go get github.com/example/mod@v1.2.3"}]}' \
+  > "$FIX/blobs/sha256/deadbeef"
+( cd "$FIX" && tar -cf "$TMP/oci.tar" blobs ) 2>/dev/null
+by_name=$(tar -tf "$TMP/oci.tar" 2>/dev/null | grep -c '\.json$' || true)
+by_content=0
+while read -r _sz _m; do
+  case "$_sz" in ''|*[!0-9]*) continue ;; esac
+  [ "$_sz" -le 1048576 ] || continue
+  case "$(tar -xOf "$TMP/oci.tar" "$_m" 2>/dev/null | head -c 1)" in '{') ;; *) continue ;; esac
+  h=$(tar -xOf "$TMP/oci.tar" "$_m" 2>/dev/null | grep -acw 'github.com/example/mod.v1.2.3' || true)
+  case "$h" in ''|*[!0-9]*) h=0 ;; esac
+  by_content=$((by_content + h))
+done <<EOF
+$(tar -tvf "$TMP/oci.tar" 2>/dev/null | awk '$1 !~ /^d/ { for (i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) { print $i, $NF; break } }')
+EOF
+if [ "$by_name" -eq 0 ]; then
+  ok "fixture reproduces the docker blind spot: a *.json filter sees 0 members"
+else bad "fixture no longer reproduces the blind spot (by_name=$by_name) — the case below is vacuous"; fi
+# EXACTLY 1: `tar -xOf <dir>` dumps everything beneath it, so without the directory skip
+# each ancestor re-yields the same bytes and this reads 3. An inflated count is a FALSE
+# vacuity warning in production, so pin the exact value, not ">= 1".
+if [ "$by_content" -eq 1 ]; then
+  ok "the CONTENT filter DOES find the metadata hit a name filter misses (${by_content})"
+else bad "content filter returned $by_content, want exactly 1 (0 = vacuous on docker; >1 = directory members double-counted -> false vacuity warnings)"; fi
+
+# shellcheck disable=SC2016  # single quotes are DELIBERATE: this greps for the LITERAL source
+# text of the probe. Expanding it here would search for this test's own (empty) variables and the
+# assertion would pass on any file, which is the vacuous-green this case exists to prevent.
+if grep -q 'grep -acw "${_want_mod}.${_want_ver}" "$tarball"' "$SCRIPT_DIR/14-selfbuilt-build.sh"; then
+  ok "the probe greps the SAVED TARBALL (no engine call, no cgroups)"
+else bad "the probe no longer greps \$tarball — the cgroup-v1-proof route is gone"; fi
+
+# The tar also carries manifest.json and the image config, whose history records the very
+# `RUN go get <mod>@<ver>` this script injects. Today the go_get runs in a DISCARDED builder stage
+# so the metadata contributes zero hits; if it ever moved to the final stage the metadata alone
+# would satisfy the check and it would verify itself.
+# ⚠️ Grep the USAGE FORM, not the bare name: `_json_hits` also appears inside the warn MESSAGE, so
+# a name-only grep stays green when the guard is deleted. Caught by RED-proving this very test —
+# removing the guard left it passing. Both the accumulate and the branch must be present.
+# shellcheck disable=SC2016  # literal source text again — see the note above.
+if grep -q '_json_hits=$((_json_hits + _jh))' "$SCRIPT_DIR/14-selfbuilt-build.sh" \
+   && grep -q '\[ "$_json_hits" -gt 0 \]' "$SCRIPT_DIR/14-selfbuilt-build.sh"; then
+  ok "the vacuity guard is present (metadata hits counted separately)"
+else bad "the vacuity guard is gone — image METADATA could satisfy the check on its own"; fi
 
 rm -rf "$TMP"
 printf '  %d passed, %d failed\n' "$pass" "$fail"
