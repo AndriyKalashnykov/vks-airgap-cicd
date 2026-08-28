@@ -98,8 +98,22 @@ for name in $NAMES; do
   _sb_stamp="${OUT_DIR}/.${name}.built"
   if [ "${SELFBUILT_FORCE:-0}" != "1" ] \
      && [ -s "$tarball" ] \
-     && [ "$(cat "$_sb_stamp" 2>/dev/null)" = "${tag}" ]; then
+     && [ "$(head -1 "$_sb_stamp" 2>/dev/null)" = "${tag}" ]; then
     log_info "[${name}] already built at ${tag} (${tarball}) — skipping. SELFBUILT_FORCE=1 to rebuild."
+    # ⚠️ RE-EMIT THIS IMAGE'S LOCK RECORD. Without this the lock SELF-ERASES on every warm run, and
+    # the skip is the COMMON path: line 70 truncates ${LOCK}.tmp, this `continue` jumps past the
+    # append below, and the tail then overwrites $LOCK with the empty tmp. MEASURED on a real box --
+    # kaniko.tar 113 MB at 19:22, selfbuilt.lock 0 BYTES at 20:02, i.e. emptied by a later warm run.
+    # Nothing reads the lock today, so this has cost nothing yet; that is not a reason to keep
+    # writing an empty provenance journal, and it IS a reason not to build anything on top of one.
+    # `head -1` above, not `cat`: the stamp now carries the tag on line 1 and the lock record on
+    # line 2, so an OLD one-line stamp still compares equal and simply has no record to re-emit.
+    _sb_rec="$(sed -n '2p' "$_sb_stamp" 2>/dev/null || true)"
+    if [ -n "$_sb_rec" ]; then
+      printf '%s\n' "$_sb_rec" >> "${LOCK}.tmp"
+    else
+      log_warn "[${name}] skipped, and its stamp predates the lock-record fix — this image will be absent from ${LOCK} until it is next built (SELFBUILT_FORCE=1 to restore it now)."
+    fi
     continue
   fi
 
@@ -328,10 +342,15 @@ EOF
     done
   fi
 
-  printf '%s\t%s\t%s\t%s:%s\t%s\n' "$name" "$ref" "$engine_id" "$repo" "$tag" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${LOCK}.tmp"
+  # Built once and reused for the stamp, so a warm run re-emits the SAME bytes rather than a
+  # reconstruction with a fresh timestamp (which would make the lock churn on every skip).
+  _sb_rec="$(printf '%s\t%s\t%s\t%s:%s\t%s' "$name" "$ref" "$engine_id" "$repo" "$tag" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+  printf '%s\n' "$_sb_rec" >> "${LOCK}.tmp"
   # Written ONLY here, i.e. after the save succeeded — a build that dies leaves no stamp, so the
   # next run rebuilds rather than trusting a partial artifact.
-  printf '%s\n' "$tag" > "$_sb_stamp"
+  # LINE 1 = the tag (what the skip comparison reads, via head -1 -- so an old one-line stamp is
+  # still valid). LINE 2 = this image's lock record, so a skipped image can re-emit it.
+  printf '%s\n%s\n' "$tag" "$_sb_rec" > "$_sb_stamp"
 
   rm -rf -- "$src"; src=""
 done

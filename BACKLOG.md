@@ -4119,7 +4119,44 @@ Settle it read-only, on a live lab:
 If a cluster field DOES exist, the refusal can become a real selector — map the chosen Supervisor to
 its cluster moid and steer the upgrade properly, which is what an operator asked for.
 
-## 🔴 B513 — `selfbuilt.lock` has NO verification column, so a VERIFIED build and an UNVERIFIED one write byte-identical lines
+## ✅ B513 (REFUTED AS BRIEFED; the REAL defect found underneath it is FIXED 2026-08-28)
+
+⚠️ **BOTH OF MY BRIEFING CLAIMS WERE WRONG, and the real defect is worse.** An idea-round adversary:
+
+- *"the re-run skip logic reads the lock"* — **FALSE.** The skip reads `${OUT_DIR}/.${name}.built`,
+  a per-image stamp holding only the tag. `selfbuilt.lock` has **one writer and ZERO readers**,
+  repo-wide, so the "chain restored for a later reader" has no later reader.
+- *"a verified and an unverified build write identical lines"* — **understated in the wrong
+  direction.** On the common path they write **no lines at all**: the file is truncated to zero.
+
+MEASURED on this box, before any fix — note the lock is written AFTER the build and is empty:
+
+    -rw-rw-r--  113337344  Aug 27 19:22  kaniko.tar
+    -rw-rw-r--          0  Aug 27 20:02  selfbuilt.lock     <- ZERO BYTES
+
+Three lines conspire, and the skip is the COMMON path: `: > "${LOCK}.tmp"` truncates it, the skip
+branch `continue`s past the append, and `sort -u "${LOCK}.tmp" > "$LOCK"` overwrites the lock with
+the empty temp. A verdict column would have been decoration on an empty file.
+
+**FIXED:** the stamp carries the tag on line 1 and the image's lock record on line 2; the skip path
+re-emits it. The comparison reads `head -1`, so an OLD one-line stamp still compares equal and warns
+that it has no record to re-emit rather than silently emptying the lock.
+`scripts/test-selfbuilt-lock.sh` (7 cases) pins it, RED-proven: restoring the erasure fails 4.
+
+**NOT done, deliberately — do not revive:** the verdict column, and any gate on it.
+`22-selfbuilt-push.sh:103-116` already tried gating on a local lock and REMOVED it, recording three
+measured defects (a one-shot tripwire the operator's re-run clears; a name-keyed compare that fires
+on the operator following its own printed remedy; nothing to check on a first run — exactly what a
+fresh air-gap box does). A verdict column inherits all three plus the erasure. If the verdict is ever
+needed air-gap-side, **re-derive** it at push time from the carried tarball (`tar` + `grep` are both
+in the air-gap OS floor) — the move that file already made 60 lines away.
+
+Also refuted: recording it as an image LABEL. The vacuity guard greps metadata for `<mod>.<ver>`
+where `.` matches the `@`, so a label carrying `mod@ver` scores a hit and the probe reports
+UNVERIFIED **permanently** — the stamp would destroy the check it records. And `crane config` has no
+`--tarball` (measured), so a label is unreadable on the air-gap box, which has crane and no engine.
+
+--- original filing follows ---
 
 Surfaced 2026-08-27 by the two adversary rounds on B510, as a finding neither the brief nor I asked
 for. `14-selfbuilt-build.sh` proves a `go_get` dependency override actually reached the built binary,
@@ -4189,3 +4226,32 @@ The wrapper (`/tmp/cutA6-run.sh`) traps TERM/HUP/INT/QUIT and dumps a full `ps` 
 **Done when:** either a signal is caught and attributed, or three consecutive `setsid` runs complete
 while a non-setsid control dies — at which point launch through `setsid --wait` becomes the
 documented way to run the matrix and this row closes with the mechanism named.
+
+## 🔴 B515 — `BUNDLE_DIR` CANNOT be overridden: `.env.example` sets it uncommented, so `make bundle BUNDLE_DIR=...` is silently ignored
+
+MEASURED 2026-08-28, found while building an isolated harness for B513:
+
+    BUNDLE_DIR=/tmp/probe-bundle  ->  after load_env: ./bundle
+    SKIP_DOTENV=1                 ->  still ./bundle   (it skips .env, NOT .env.example)
+
+`.env.example:1710` carries `BUNDLE_DIR=./bundle` **uncommented**, and `load_env` sources it with
+`set -a` AFTER the environment is established, so the value replaces any per-run override. This is
+the documented `.env.example` clobber class — the one that previously broke `GITEA_LOCAL_PORT`,
+`BUNDLE_OUT_DIR` and `BUNDLE_TARBALL` — and `Makefile:231` advertises `BUNDLE_DIR ?= ./bundle`, a
+`?=` promising an override the loader defeats.
+
+**Why `check-env-clobber` did not catch it:** that gate's invariant covers the hand-typed `SELECTORS`
+list (`KUBECONFIG`, `HARBOR_URL`, ...). `BUNDLE_DIR` is not a selector in its sense, so it was never
+examined. The gate is not wrong; its scope is narrower than the class.
+
+**Not fixed here, because the fix has blast radius and needs its own round.** Commenting it out
+leaves `BUNDLE_DIR` unset for any script run outside `make` (several do `: "${BUNDLE_DIR:?}"`), and a
+plain `VAR ?=` is not exported to recipes without `export`. So it is "comment it AND export it AND
+check every direct-invocation path" — a design, not a one-liner.
+
+**Workaround that DOES work, and is what the new test uses:** isolate by CWD. `OUT_DIR` is
+`${BUNDLE_DIR}/selfbuilt` = `./bundle/selfbuilt`, so running from a different working directory
+relocates the bundle without touching the variable.
+
+**Done when:** `BUNDLE_DIR=/somewhere make bundle` writes to `/somewhere`, proven by a test, and the
+clobber gate's scope covers path-valued settables rather than only selectors.

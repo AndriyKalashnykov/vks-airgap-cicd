@@ -127,9 +127,16 @@ FAKEENGINE
   [ -s "$STAMP" ] || return 1
 }
 if rt_probe; then
-  got="$(cat "$STAMP" 2>/dev/null)"
-  if [ "$got" = "$TAG" ]; then ok "round-trip: the script WRITES the tag (write bound to compare)"
+  # LINE 1, not the whole file: the stamp now carries the tag on line 1 and the image's lock record
+  # on line 2, so a SKIPPED image can re-emit its record instead of the lock self-erasing (the
+  # 0-byte selfbuilt.lock measured 2026-08-28). The skip comparison reads `head -1` for the same
+  # reason, which is also what keeps an OLD one-line stamp valid.
+  got="$(head -1 "$STAMP" 2>/dev/null)"
+  if [ "$got" = "$TAG" ]; then ok "round-trip: the script WRITES the tag on line 1 (write bound to compare)"
   else bad "round-trip: the script writes the tag (wrote [$got], want [$TAG])"
+  fi
+  if [ -n "$(sed -n '2p' "$STAMP" 2>/dev/null)" ]; then ok "round-trip: line 2 carries the lock record (so a skip can re-emit it)"
+  else bad "round-trip: the stamp has no line 2 — a skipped image would vanish from selfbuilt.lock"
   fi
   if [ "$(decide)" = skip ]; then ok "round-trip: the NEXT run skips on what the script itself wrote"
   else bad "round-trip: the NEXT run skips on what the script itself wrote"
