@@ -1711,20 +1711,7 @@ static-check-fast: check-notfound-discriminator check-jumpbox-shadow check-tekto
 # finding: add a check-* to one and not the other and coverage silently drops with nothing red.
 # Prereqs run left-to-right serially, so this is ORDER-PRESERVING — proven, not assumed:
 #   `make -n static-check` is byte-identical before and after (112 lines, md5 37ed5550e16947fbd8a47ae40d19b6b9).
-# ⚠️ `_tree-snapshot` IS FIRST AND THE RECIPE VERIFIES, and that pair is the point: this gate reads
-# the working tree for MINUTES, so editing it mid-run makes the verdict measure a MIXTURE of two
-# states -- silently, in both directions. Measured three times in one session: two runs reported
-# `115 test(s), 0 failed` for trees that no longer existed (one was seconds from being quoted on a
-# PR), and one reported "the PARALLEL shellcheck pass failed but the SERIAL pass found nothing ...
-# suspect nproc/-P/xargs" over a tree where nothing was wrong with xargs. The check costs 0.02s over
-# 464 files. See scripts/tree-stability.sh, which also records why a detached-worktree WRAPPER was
-# designed for this and REFUTED.
-static-check: _tree-snapshot static-check-fast lint validate sec test-scripts ## Composite code gate (alignment + lint + manifests + security + script unit tests). NO app builds — see app-verify.
-	@$(SCRIPTS)/tree-stability.sh verify
-
-.PHONY: _tree-snapshot
-_tree-snapshot:
-	@$(SCRIPTS)/tree-stability.sh record
+static-check: static-check-fast lint validate sec test-scripts ## Composite code gate (alignment + lint + manifests + security + script unit tests). NO app builds — see app-verify.
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)

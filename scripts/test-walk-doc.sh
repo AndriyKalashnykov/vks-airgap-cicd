@@ -14,15 +14,6 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 W="${SCRIPT_DIR}/walk-doc.sh"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
-# ⚠️ SANDBOX EVERY WALK, NOT SOME OF THEM. `walk-doc.sh` writes the document's table values into the
-# `.env` of its START DIR, which defaults to `$PWD` (walk-doc.sh:114) -- the REPO ROOT when this
-# suite runs from there. Only 6 of 26 invocations set it, so the other 20 wrote the operator's real
-# `.env`. MEASURED 2026-08-28 by the tree-stability detector on its first honest run: `make
-# test-scripts` moved the mtime of `./.env`, and this file was the only one of 116 tests that did.
-# Exported ONCE so a case added later inherits it; a case that needs its own dir still overrides it
-# inline (the poison case does).
-mkdir -p "$T/sandbox"
-export WALK_START_DIR="$T/sandbox"
 pass=0; fail=0
 ok()  { printf '  PASS  %s\n' "$1"; pass=$((pass + 1)); }
 bad() { printf '  FAIL  %s — %s\n' "$1" "$2"; fail=$((fail + 1)); }
@@ -247,14 +238,7 @@ assert "...and the main path still runs" "$c" "skipping the alternative also ski
 # pointed at the SUPERVISOR, where they failed with true-but-irrelevant errors that named neither
 # the variable nor the cluster. That one missed cell cost Steps 7-13 of a row.
 printf '## S\n\n**set in `./.env`:**\n\n| key | example | how |\n|---|---|---|\n| `WALK_TBL_DEMO` | `kubeconfig` | set it |\n\n```bash\necho "mode=[$WALK_TBL_DEMO]"\n```\n' > "$T/tbl.md"
-# (the sandbox is exported once at the top of this suite -- see the WALK_START_DIR block there)
-# ⚠️ WALK_START_DIR IS THE SANDBOX, and it used to be set on only 6 of 26 invocations: `walk-doc.sh` writes the
-# document's table values into the `.env` of its START DIR, which defaults to the CWD -- the REPO
-# ROOT when this suite runs from there. MEASURED 2026-08-28 by the tree-stability detector on its
-# first honest run: `make test-scripts` changed the mtime of the operator's real `./.env`, and this
-# file was the only one of 116 tests that did it. An offline unit test must never write a file that
-# carries live credentials; the poison case below already knew that.
-o="$(WALK_DOC="$T/tbl.md" WALK_START_DIR="$T/sandbox" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_ISTIO=existing WALK_MIN_BLOCKS=1 bash "$W" 2>&1)"
+o="$(WALK_DOC="$T/tbl.md" WALK_EXISTS=1 WALK_ROBOT_EXISTS=1 WALK_ISTIO=existing WALK_MIN_BLOCKS=1 bash "$W" 2>&1)"
 if printf '%s' "$o" | grep -q 'mode=\[kubeconfig\]'; then c=0; else c=1; fi
 assert "a value the doc sets in a TABLE reaches the commands" "$c" "table instructions are ignored"
 
