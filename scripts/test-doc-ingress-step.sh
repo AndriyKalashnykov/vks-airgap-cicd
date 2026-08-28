@@ -18,9 +18,14 @@
 # needs a repo context and nine WALK_* variables — so it proves the gate implements the walk's rules
 # as WRITTEN HERE, not that the two parsers can never drift again. If walk-doc's extractor changes,
 # this suite stays green and the gate is wrong; the header of the gate names that coupling.
+# EVERY fixture below is MARKDOWN, so backticks are its subject matter -- the ``` fences are the
+# thing under test. Inside the single quotes they are literal, which is exactly right; the linter
+# reads them as a would-be expansion. Suppressed file-wide with the reason stated here rather than
+# per line, because there is a fixture on nearly every one. (A comment whose first word after the
+# hash is the linter's own name is parsed as a DIRECTIVE, not prose -- hence this wording.)
+# shellcheck disable=SC2016
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 pass=0; fail=0
 ok()  { pass=$((pass+1)); printf '  ok    %s\n' "$1"; }
 bad() { fail=$((fail+1)); printf '  FAIL  %s\n' "$1"; }
