@@ -398,17 +398,54 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
     The same applies, with **no guard at all**, to **`nested-vsphere-lab` itself**: `:770`
     (`walkbox-vm.sh`, every row), `:714` (`dns-record.sh`), `:237` (`supervisor-endpoint.sh`) are
     read per-row from that repo's working tree, and `assert_repo_published` does not cover it.
-3. **One matrix at a time.** Two concurrent runs against the same lab make any failure
+3. **VALIDATE `make creds`' FULL OUTPUT AFTER EVERY ROW, against a snapshot taken THEN — not at the
+    end, and not by reading its exit code.** Standing instruction, 2026-08-28.
+
+    The walk grades a block on its EXIT CODE, and `make creds-show` is documented never-gating — it
+    exits 0 with no cluster at all. So its output has never been read by anything. MEASURED: rows 5
+    and 6 printed `<needs ingress>` for all eight hosts — the whole demo — in **20 logs across 12
+    runs since 2026-08-20**, every one graded `0 FAILED`, while the cluster those rows left behind
+    served **8/8 HTTP 200**. A green row was a claim about the harness, never about the demo.
+
+    ⚠️ **"You cannot check a row after it finishes because the next row mutates the lab" is FALSE,
+    and I said it before measuring.** The window is minutes, and a state capture takes seconds:
+
+    ```text
+    row 3 ends            05:08:16
+    row 4 first output    05:09:22   (+66s — and that is `make deps` on a fresh walkbox VM, which
+                                      runs for MINUTES before anything touches the lab)
+    ```
+
+    plus the walkbox VM is BUILT before that (`vm-r<N>.log`). So there is no race to lose: watch for
+    the row's completion line, capture the cluster immediately, and validate that row's printed
+    claims against THAT capture. Every row gets a real verdict, not just the last one of each cut.
+
+    What to check, per row: every `http(s)://` cell must actually serve; every MARKER cell
+    (`<needs ingress>`, `<not set>`, `<held by the REFUSED overlay…>`, `<not published…>`) must be
+    TRUE of the cluster at that moment. A marker is a claim like any other — that is exactly what
+    B517 was.
+
+    ⚠️ **Resolve the ingress address from the GATEWAY, not from `istio_discover`.** B518, measured:
+    its jq requires `.spec.selector.istio`, which a Gateway-API-provisioned proxy does not have, so
+    on such a cluster it returns exactly one candidate — the DEAD `istio-ingressgateway` (`curl
+    rc=56`, zero attached routes) — and its `count -gt 1` ambiguity guard cannot fire.
+
+4. **One matrix at a time.** Two concurrent runs against the same lab make any failure
     unattributable.
-4. **Kill by process group**, not by PID — killing a driver by PID orphans its children, and an
+5. **Kill by process group**, not by PID — killing a driver by PID orphans its children, and an
     orphaned lab-rebuild (nested-vsphere-lab's `lab` target) will rebuild the lab underneath you.
-5. Run multi-statement shell blocks under `bash`, not the login shell. The agent's shell is zsh,
+6. Run multi-statement shell blocks under `bash`, not the login shell. The agent's shell is zsh,
     where an unmatched glob **aborts** the command and `read -a` leaves variables empty — producing
     confident false negatives.
 
 ## Notes
 
-- The rule count in B176 was **24**; writing them out yields **34** numbered items, because several
+- The rule count in B176 was **24**; writing them out yields **38** numbered items, because several
   of its groups bundle more than one obligation into a sentence. The content is the same.
+  ⚠️ That figure is MEASURED, not maintained by hand, and the hand-maintained one had already
+  drifted: it read **34** when the file contained **37**, so adding one rule and bumping it to 35
+  would have shipped a number that was wrong before I touched it. Derive it, do not increment it:
+  `grep -cE '^[0-9]+\. ' docs/matrix-standing-rules.md` — every hit is a top-level rule in A–H
+  (A 5, B 3, C 7, D 5, E 3, F 4, G 5, H 6), nothing else in the file starts a line that way.
 - The during-a-run rules are the ones most often violated under time pressure, and each has a recorded incident
   behind it.
