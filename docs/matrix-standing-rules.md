@@ -139,6 +139,37 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
    ⚠️ **One attempt only.** The SSO account locks out PERMANENTLY after 3 failed attempts; never
    loop `kubectl-login`.
 
+   ⚠️ **A KILLED OR FAILED RUN LEAVES A PARTIAL CELL, AND THE REMEDY IS `walk-reset` — NOT A
+   REBUILD.** Rows refuse on the cell they observe, so a run that died mid-row leaves the lab in a
+   state no row walks, and every subsequent attempt refuses. MEASURED 2026-08-27, three attempts:
+
+   ```text
+   ROW 1 REFUSED — the lab already has 1 of 4 (harbor=1) — CREATE-FROM-NOTHING branch
+   ROW 2 REFUSED — only 1 of 4 present — ALREADY-EXISTS branch
+   ROW 5 UNRUNNABLE — argocd-server has no LoadBalancer address
+   ```
+
+   The refusals are correct and are the harness working: *"a walk told a resource exists when it
+   does not takes the skip branch and tests NOTHING."*
+
+   The lab repo ships a `walk-reset` target for precisely this — *"put the lab back in the
+   NOTHING-EXISTS cell rows 1/3 walk"*. It removes the guest cluster, the Harbor and ArgoCD
+   Supervisor Services and the vSphere Namespace, on a POSITIVE ALLOWLIST, so it cannot touch the
+   platform's `tkg.vsphere.vmware.com` or the lab's own `lab` namespace.
+
+   ⚠️ **I rebuilt the whole lab (~45 min) for this before finding that target.** A rebuild also
+   works, but it costs step 0 again — including the TKr wait above. Reach for the reset target
+   first, and only rebuild if it cannot bring the cell back.
+
+   ⚠️ **Cleaning up by hand is INCOMPLETE and the failure is delayed.** Deleting just the `cicd`
+   namespace looked sufficient — the next attempt still refused, because the killed run had already
+   installed **Harbor**, which lives on the Supervisor and not in that namespace. The four things a
+   row observes are ns / harbor / argocd / cluster; a partial cleanup leaves a partial cell.
+
+   ⚠️ **A `kubectl delete ns` cannot remove a vSphere Namespace anyway** — measured, an admission
+   webhook refuses: *"Principal administrator on domain vsphere.local and type USER is not
+   associated with namespace cicd."* Use the lab repo's `namespace-delete` target instead (it takes `NS=` plus a confirm).
+
    ⚠️ **The two halves are then TWO run directories and TWO verdicts**, so the pair-symmetry read
    (§D) spans them: 1↔3, 2↔4, 5↔6 still have to match, and nothing prints that for you.
 
