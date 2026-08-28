@@ -885,6 +885,36 @@ make istio-preflight     # read-only: is Istio here? what does it require of me?
 | **Istio is here** (the expected tenant case) | `make install-ingress INGRESS_CONTROLLER=istio-existing` — installs **nothing**, attaches routes only. **Never** the bare `make install-ingress` against a mesh you did not install: its default would **helm-install a second istiod over the platform's**. |
 | **NO Istio detected** | `make install-ingress` (installs our own; images come from your Harbor) or `INGRESS_CONTROLLER=traefik` for a lighter option. |
 
+Run the one it named — and **only** that one:
+
+```bash
+make install-ingress INGRESS_CONTROLLER=istio-existing   # a mesh is already here — attach only
+```
+
+**Expect:** `attaching to an Istio we did NOT install` — the attach path installs nothing, which is
+the whole point of it.
+
+```bash
+make install-ingress                                     # NO Istio detected — install it
+```
+
+Then **check the routes actually work**, before you rely on those hostnames:
+
+```bash
+make verify-ingress           # each *.vks.local host must reach ITS OWN backend
+```
+
+**Expect:** one OK per host — gitea, tekton and each app — ending in `UI(s) reachable through the`.
+It sends a `Host:` header to the ingress LB IP, so it does not need `/etc/hosts` to be right yet;
+it asserts each host reaches ITS OWN backend, not merely that something answers.
+
+⚠️ **These three blocks are the step, not decoration.** Until 2026-08-28 this branch existed ONLY as
+the table above and as prose — no fenced command — so the certification matrix, which executes fenced
+blocks, could never run it. MEASURED: every scenario-2 row published no `INGRESS_LB_IP` and printed
+`<needs ingress>` for all eight hosts, in 20 logs across 12 runs, each graded `0 FAILED`. The walk
+picks the branch the way you do: from what `make istio-preflight` printed above. If it did not say,
+the walk SKIPS rather than guessing.
+
 `istio-preflight` also prints the exact `Gateway` selector the mesh requires, what your kubeconfig
 may actually do, and what (if anything) to **request from the mesh admin**. It picks the route API:
 the **Kubernetes Gateway API** when Istio is an Accepted `GatewayClass` (Istio then auto-provisions
