@@ -23,34 +23,78 @@
 # `docs/scenario-*.md`; this file is not in that glob. The `make ...` forms above are deliberately
 # written inside backticks in PROSE, never as a fenced block, so a future move of this text into a
 # scanned document still could not satisfy the gate.
+#
+# ⚠️ "FENCED" MEANS WHAT `walk-doc.sh` MEANS BY IT, AND A DIVERGENCE IS A FALSE GREEN. A first
+# version toggled on any line starting with ``` and was measured wrong THREE ways, each certifying a
+# document the walk cannot run:
+#   * INFO STRING IGNORED — an ingress step in a ```text or ```console fence passed the gate while
+#     the walk extracted ZERO blocks. Both scenario docs already contain ```text and ```yaml fences,
+#     and `istio-preflight` PRINTS the command to run, so showing its output in ```console is the
+#     natural authoring move.
+#   * 4-BACKTICK DESYNC — a ````-wrapped block containing an odd number of ``` lines INVERTS the
+#     toggle for the rest of the file; measured, three prose lines were then read as fenced.
+#   * <details> — scenario-2 already collapses alternatives that way, and the walk SKIPS them
+#     ("inside a <details> alternative"). Collapsing the two mutually-exclusive branches into one is
+#     exactly what an author does, and it reintroduces the original bug under a green gate.
+# The parser below mirrors `walk-doc.sh` (its extractor, at the `re.match(r'^(\s*)(`{3,})(\S*)'`
+# line): >=3 backticks, close on a run of AT LEAST that many, info string must be bash|sh|shell,
+# <details> blocks skipped). `test-doc-ingress-step.sh` pins all three divergences.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 cd "$REPO_ROOT" || exit 1
 
 rc=0; scanned=0
-# Emit "<file>:<lineno>:<line>" for lines INSIDE a ``` fence only. Tracking the fence state is the
-# whole point: a table cell and a fenced command are the same characters to a naive grep, and the
-# table cell is exactly what shipped.
+# Emit the lines the WALK would execute. Tracking fence state is the whole point: a table cell and a
+# fenced command are the same characters to a naive grep, and the table cell is exactly what shipped.
+# Python, not awk, because the rules above (matched close length, info string, <details>) are not
+# expressible as a one-line toggle -- and because this must read the same way walk-doc.sh does.
 fenced_lines() {
-  awk '
-    /^[[:space:]]*```/ { infence = !infence; next }
-    infence            { printf "%d:%s\n", FNR, $0 }
-  ' "$1"
+  python3 - "$1" <<'PYEOF'
+import re, sys
+fence = None          # (info, backtick_count) while open
+details = False
+for line in open(sys.argv[1], encoding='utf-8', errors='replace'):
+    m = re.match(r'^(\s*)(`{3,})(\S*)', line)
+    if fence is None:
+        if line.lstrip().startswith('<details'):
+            details = True
+        elif line.lstrip().startswith('</details>'):
+            details = False
+        elif m:
+            fence = (m.group(3).split(':')[0].lower(), len(m.group(2)))
+        continue
+    # inside a fence: close on a run of AT LEAST the opening length, with no info string
+    if m and m.group(3) == '' and len(m.group(2)) >= fence[1]:
+        fence = None
+        continue
+    if not details and fence[0] in ('bash', 'sh', 'shell'):
+        sys.stdout.write(line)
+PYEOF
 }
 
 for doc in docs/scenario-*.md; do
   [ -f "$doc" ] || continue
+  # A notes file RECORDS an incident and quotes the commands involved -- that is what it is for.
+  # Demanding a fenced verify block in one is a false RED, and `docs/scenario-1-notes.md` is in the
+  # glob today (which is why the denominator reads 3, not 2).
+  case "$doc" in *-notes.md) printf '  %s: notes file — records incidents, does not prescribe steps\n' "$doc"; continue ;; esac
   scanned=$((scanned + 1))
   body="$(fenced_lines "$doc")"
 
   # Does the document ASK for an ingress at all (anywhere — prose, table or fence)?
+  # Allow anything make itself takes between the verb and the target -- flags AND their arguments
+  # (`make -C .. install-ingress` is two words, not one flag). Bounded to the same command by
+  # excluding ; & | so `make foo && echo install-ingress` is not read as an ingress step. A bare
+  # literal reported
+  # "no ingress step at all", rc=0, on a document that installs an ingress and never verifies it --
+  # a swallow arm whose message reads as reassurance rather than as "I could not see one".
   asks=0
-  grep -q 'make install-ingress' "$doc" && asks=1
-  [ "$asks" -eq 1 ] || { printf '  %s: no ingress step at all — nothing to check\n' "$doc"; continue; }
+  grep -qE 'make[[:space:]]+([^;&|[:space:]]+[[:space:]]+)*install-ingress' "$doc" && asks=1
+  [ "$asks" -eq 1 ] || { printf '  %s: no ingress step MATCHED — if this document HAS one, the gate cannot see it\n' "$doc"; continue; }
 
-  inst="$(printf '%s' "$body" | grep -c 'make install-ingress' || true)"
-  veri="$(printf '%s' "$body" | grep -c 'make verify-ingress'  || true)"
+  inst="$(printf '%s' "$body" | grep -cE 'make[[:space:]]+([^;&|[:space:]]+[[:space:]]+)*install-ingress' || true)"
+  veri="$(printf '%s' "$body" | grep -cE 'make[[:space:]]+([^;&|[:space:]]+[[:space:]]+)*verify-ingress'  || true)"
   case "$inst" in ''|*[!0-9]*) inst=0 ;; esac
   case "$veri" in ''|*[!0-9]*) veri=0 ;; esac
 

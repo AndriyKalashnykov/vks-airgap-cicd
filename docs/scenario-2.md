@@ -908,12 +908,21 @@ make verify-ingress           # each *.vks.local host must reach ITS OWN backend
 It sends a `Host:` header to the ingress LB IP, so it does not need `/etc/hosts` to be right yet;
 it asserts each host reaches ITS OWN backend, not merely that something answers.
 
-⚠️ **These three blocks are the step, not decoration.** Until 2026-08-28 this branch existed ONLY as
-the table above and as prose — no fenced command — so the certification matrix, which executes fenced
-blocks, could never run it. MEASURED: every scenario-2 row published no `INGRESS_LB_IP` and printed
-`<needs ingress>` for all eight hosts, in 20 logs across 12 runs, each graded `0 FAILED`. The walk
-picks the branch the way you do: from what `make istio-preflight` printed above. If it did not say,
-the walk SKIPS rather than guessing.
+Now re-read the access table. The `make creds-show` you ran in step 6 was **before** the ingress
+existed, so every `*.vks.local` row said `<needs ingress>` — correct at that moment, and stale now:
+
+```bash
+make creds-show    # re-read it: the *.vks.local rows carry real URLs once the ingress is up
+```
+
+**Expect:** Gitea, Tekton and every app row now shows an `http://…vks.local` URL instead of
+`<needs ingress>`, and the note above the table names the ingress LB IP to add to `/etc/hosts`.
+
+⚠️ **Run exactly one of the two, and let `istio-preflight` choose it.** The attach variant installs
+nothing; the bare variant helm-installs a mesh. Running the wrong one against a mesh you did not
+install puts a second istiod over the platform's. If the preflight did not say clearly which case you
+are in, stop and read its output rather than picking one — a wrong choice here is disruptive to other
+tenants and hard to attribute to you.
 
 `istio-preflight` also prints the exact `Gateway` selector the mesh requires, what your kubeconfig
 may actually do, and what (if anything) to **request from the mesh admin**. It picks the route API:
