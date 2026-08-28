@@ -1719,12 +1719,24 @@ static-check-fast: check-notfound-discriminator check-jumpbox-shadow check-tekto
 # suspect nproc/-P/xargs" over a tree where nothing was wrong with xargs. The check costs 0.02s over
 # 464 files. See scripts/tree-stability.sh, which also records why a detached-worktree WRAPPER was
 # designed for this and REFUTED.
-static-check: _tree-snapshot static-check-fast lint validate sec test-scripts ## Composite code gate (alignment + lint + manifests + security + script unit tests). NO app builds — see app-verify.
-	@$(SCRIPTS)/tree-stability.sh verify
-
-.PHONY: _tree-snapshot
-_tree-snapshot:
-	@$(SCRIPTS)/tree-stability.sh record
+# ⚠️ THE GATES ARE A SUB-MAKE, NOT PREREQUISITES, AND THAT IS THE WHOLE POINT. With them as
+# prerequisites and the verify in the recipe, make ABORTS on the first failing gate and the recipe
+# NEVER RUNS -- so the detector was blind to one of the two incidents in its own header, and the
+# worse one: "RED NAMING THE WRONG CAUSE" was `lint` failing, which is exactly the case that skips
+# the verify. MEASURED on a minimal makefile of the identical shape: a failing prerequisite -> make
+# rc=2, `VERIFY RAN` never printed. The detector then covered only the green-that-measured-nothing
+# half. Running them under `$(MAKE)` lets the verify run either way, and the gates' own rc is
+# preserved and returned.
+#
+# TREE_STABILITY_ID is EXPORTED because the sub-make has a different PID, and the snapshot key
+# defaults to $PPID -- without pinning it the record and the verify would key on different files and
+# the verify would find no snapshot, i.e. silently report nothing.
+static-check: ## Composite code gate (alignment + lint + manifests + security + script unit tests). NO app builds — see app-verify.
+	@export TREE_STABILITY_ID="static-check-$$$$"; \
+	 $(SCRIPTS)/tree-stability.sh record; \
+	 rc=0; $(MAKE) --no-print-directory static-check-fast lint validate sec test-scripts || rc=$$?; \
+	 $(SCRIPTS)/tree-stability.sh verify --required || exit 1; \
+	 exit $$rc
 
 .PHONY: ci
 ci: static-check docs-lint diagrams-check ## Full local pipeline (offline-verifiable parts)
