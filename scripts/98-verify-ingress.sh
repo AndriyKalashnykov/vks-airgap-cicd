@@ -38,7 +38,27 @@ require_cmd curl
 # overlay → INGRESS_LB_IP unset → the :? aborts loudly). So do NOT "fix" this into a re-resolve
 # dispatcher: it would duplicate installer logic and depend on INGRESS_CONTROLLER, which is published
 # state with the identical read-back class — no net gain. (Verification-disproved backlog item B15.)
-: "${INGRESS_LB_IP:?INGRESS_LB_IP not set — run 'make install-ingress' first (it writes the LB IP to .env.state)}"
+# ⚠️ THREE CAUSES, AND THE OLD MESSAGE NAMED ONLY ONE. "run install-ingress first" is right when the
+# operator simply has not; it is MISLEADING in the other two, and one of them is a case the walk
+# creates deliberately:
+#   * the scenario walk SKIPPED both install branches because `make istio-preflight` was
+#     INCONCLUSIVE -- a walk must not guess which mesh case a cluster is in, so it declined. Telling
+#     the operator to run the command the harness deliberately did not run sends them to do the one
+#     thing the preflight could not justify.
+#   * `state_check` REFUSED the overlay (it is stamped for a DIFFERENT cluster), so the value exists
+#     on disk and is not in scope. The loader prints its own ERROR block above this line; without
+#     naming it here, the two messages read as unrelated.
+# Naming all three costs four lines and removes a wrong-cause diagnosis, which this repo treats as
+# worse than a crash.
+if [ -z "${INGRESS_LB_IP:-}" ]; then
+  log_error "INGRESS_LB_IP is not set, so there is no ingress address to verify. Three causes:"
+  log_error "  1. no ingress has been installed on this box yet   -> make install-ingress"
+  log_error "  2. a scenario walk SKIPPED the install because 'make istio-preflight' was"
+  log_error "     inconclusive about this cluster -> read that output; do NOT just pick a branch"
+  log_error "  3. the state overlay was REFUSED (stamped for a different cluster) -> see the state"
+  log_error "     ERROR above, and 'make state-show'. The value exists on disk and is not in scope."
+  exit 1
+fi
 : "${GITEA_HOST:?}"; : "${TEKTON_DASHBOARD_HOST:?}"
 # Every app's host comes from the registry — a hardcoded list would silently stop checking a new app.
 # shellcheck source=scripts/lib/apps.sh
