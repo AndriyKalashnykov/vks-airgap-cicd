@@ -3963,3 +3963,59 @@ already lost twice.
 
 Severity is LOW — the gate fails **closed** (a false RED, not a false green), which is the safe
 direction.
+
+## 🔴 B510 — the go_get verification `podman run` is UNTESTED on cgroup v1, and its failure names the wrong cause
+
+`14-selfbuilt-build.sh` verifies the `go_get` override by running the built image:
+
+    "$ENGINE" run --rm --entrypoint /busybox/sh "$local_ref" ...
+
+`BUILDAH_ISOLATION` does **not** apply to `podman run` — measured, it is a buildah knob and `run`
+ignores it. So the cgroup-v1 fix that makes the BUILD work says nothing about this line. If
+`podman run` also fails there, the `if` takes its else branch and warns:
+
+    no shell in <ref> — the go_get override is UNVERIFIED
+
+which is a confidently wrong cause: it blames the image's contents for a container-runtime failure.
+That is the same class as the two paths B-fixed in #1067 (`16-engine-trust-check.sh` blaming Harbor
+trust, `jumpbox-run.sh` blaming unqualified-search-registries).
+
+Genuinely unknown: no walk log reaches this line, because `selfbuilt` never got past the build on a
+photon row. The next photon row that completes a self-built image settles it.
+
+Fix if it does fail: distinguish "the runtime could not start a container" from "the image has no
+shell" before choosing the message — the two need different remedies and only one is about the image.
+
+## 🔴 B511 — rootless DOCKER on cgroup v1 has no mitigation and no diagnostic, and the matrix has that cell
+
+`engine_build_isolation` correctly returns empty for docker: `BUILDAH_ISOLATION` is a buildah knob
+and `docker build` ignores it entirely (measured — a bogus value changes nothing). So the cgroup-v1
+mitigation covers podman only.
+
+`jumpbox-matrix` includes a **photon × docker** cell. Whether rootless docker builds on a cgroup-v1
+host is **UNVERIFIED** — Docker's rootless documentation does not address cgroup versions. If it
+cannot, that cell fails with no mitigation available and no message naming the cause, since
+`18-engine-check.sh`'s new cgroup note is podman-scoped.
+
+Settle it by running the photon × docker jumpbox cell and reading whether the build's RUN step
+survives. If it does not, the honest fix is a DISCLOSURE in `engine-check` (as the rootful-docker
+sudo cost is disclosed) rather than a mitigation that does not exist.
+
+## 🔴 B512 — `/supervisors/summaries`'s `.info` carries more fields than the lister enumerates
+
+`_ss_supervisors_list` reads `.supervisor`, `.info.name` and `.info.config_status`. The repo's own
+evidence docs record `.info.APIEndpoint` and other `.items[0].info.*` fields, so the enumeration in
+the code comment — and the claim that the payload carries no cluster field — is narrower than
+measured reality.
+
+The claim that matters is the negative one: **that summaries carries no cluster moid**, which is why
+`VKS_SUPERVISOR` cannot be joined to the upgrade's `_SS_MOID`. That is the load-bearing fact behind
+the refusal shipped in lab #124, and it is currently `inferred` from the fields the code happens to
+read, not from the payload.
+
+Settle it read-only, on a live lab:
+
+    curl ... /api/vcenter/namespace-management/supervisors/summaries | jq '.items[0] | keys, (.info | keys)'
+
+If a cluster field DOES exist, the refusal can become a real selector — map the chosen Supervisor to
+its cluster moid and steer the upgrade properly, which is what an operator asked for.
