@@ -1709,9 +1709,24 @@ static-check-fast: check-notfound-discriminator check-jumpbox-shadow check-tekto
 # static-check is the UNION, so there is exactly ONE list. Defining the fast set separately and
 # leaving static-check with its own hand-typed copy is the enumerated-list rot this repo keeps
 # finding: add a check-* to one and not the other and coverage silently drops with nothing red.
-# Prereqs run left-to-right serially, so this is ORDER-PRESERVING — proven, not assumed:
-#   `make -n static-check` is byte-identical before and after (112 lines, md5 37ed5550e16947fbd8a47ae40d19b6b9).
-# ⚠️ `_tree-snapshot` IS FIRST AND THE RECIPE VERIFIES, and that pair is the point: this gate reads
+# ⚠️ THE md5 CITATION THAT USED TO SIT HERE IS GONE, and its removal is the point. It read
+# "`make -n static-check` is byte-identical before and after (112 lines, md5 37ed5550…)" and was
+# already unreproducible on this box (the dry run is environment-dependent through the `-include`
+# overlays); re-measuring across the sub-make rewrite below gave 68 lines / 24ca5665… before and
+# 72 / d72e8836… after — neither matching the cited digest, and differing from each other. A frozen
+# digest beside a target that keeps changing is a claim nobody can check, which is worse than none.
+# What SURVIVES, and what actually matters, was re-measured: `diff` of the two dry runs shows an
+# IDENTICAL GATE SET — the only deltas are the recipe line, the added test, and this comment.
+#
+# ⚠️ `make -n static-check` EXECUTES THIS RECIPE. GNU make runs any recipe line containing `$(MAKE)`
+# even under `-n`, so the snapshot is taken and the verify runs (the sub-make inherits `-n` via
+# MAKEFLAGS, so the GATES are only printed). Accepted deliberately rather than worked around: the
+# alternative is a dry-run guard that is itself untested branching inside the control. Blast radius
+# measured — nothing in this repo greps `make -n static-check`. Note `scripts/test-e2e-fresh.sh`
+# states in prose that `make -n` never executes a recipe; that was already false in general
+# (`e2e-kind` also contains `$(MAKE)`), and its safety conclusion still holds for a different reason.
+#
+# ⚠️ THE GATES ARE A SUB-MAKE, NOT PREREQUISITES, and that pair with the verify is the point: this gate reads
 # the working tree for MINUTES, so editing it mid-run makes the verdict measure a MIXTURE of two
 # states -- silently, in both directions. Measured three times in one session: two runs reported
 # `115 test(s), 0 failed` for trees that no longer existed (one was seconds from being quoted on a
@@ -1719,7 +1734,7 @@ static-check-fast: check-notfound-discriminator check-jumpbox-shadow check-tekto
 # suspect nproc/-P/xargs" over a tree where nothing was wrong with xargs. The check costs 0.02s over
 # 464 files. See scripts/tree-stability.sh, which also records why a detached-worktree WRAPPER was
 # designed for this and REFUTED.
-# ⚠️ THE GATES ARE A SUB-MAKE, NOT PREREQUISITES, AND THAT IS THE WHOLE POINT. With them as
+# With them as
 # prerequisites and the verify in the recipe, make ABORTS on the first failing gate and the recipe
 # NEVER RUNS -- so the detector was blind to one of the two incidents in its own header, and the
 # worse one: "RED NAMING THE WRONG CAUSE" was `lint` failing, which is exactly the case that skips

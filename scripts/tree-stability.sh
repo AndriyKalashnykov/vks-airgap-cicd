@@ -60,7 +60,18 @@ SNAP="${TMPDIR:-/tmp}/.tree-stability-${_key}-${TREE_STABILITY_ID:-${PPID}}"
 # an 11-minute run would false-fire for a reason the operator cannot act on. A control that fires on
 # a clean run is a control that gets deleted.
 #
-# `.claude` is excluded because THIS REPO'S OWN MANDATED WORKFLOW writes there. Rule Zero requires
+# ⚠️ THE `.claude` EXCLUSION IS PATH-ANCHORED, and a `-name .claude` version of it OVERSHOT: it
+# blinded the TWO TRACKED files under there -- `.claude/settings.json` and
+# `.claude/hooks/adversary-first-gate.py`, the BLOCKING control that gates every write in this repo.
+# `static-check` genuinely reads the latter: `test-adversary-gate-rearm.sh` carries no `# ci-tier:`
+# line, so it is in TEST_OFFLINE, so it runs inside `test-scripts`, and it EXECUTES the hook, parses
+# its source and awks it. MEASURED: touching that file mid-run reported `OK — 467 file(s) unchanged`,
+# rc=0, while touching `scripts/tree-stability.sh` on the same tree gave rc=1 -- so the detector
+# certified a run whose security-control input had been rewritten underneath it. Unlike
+# `node_modules`, the two classes that actually false-fire are ROOT-anchored, so a path prune is both
+# safe and sufficient here.
+#
+# Those two classes are what THIS REPO'S OWN MANDATED WORKFLOW writes. Rule Zero requires
 # `isolation:"worktree"` on every adversary, which nests a 467-file checkout under
 # `.claude/worktrees/`; and `adversary-first-gate.py` writes a receipt into `.claude/state/` on EVERY
 # adversary spawn -- 31 are already in this checkout. Rule Zero-0's own hook demands you start an
@@ -78,7 +89,9 @@ SNAP="${TMPDIR:-/tmp}/.tree-stability-${_key}-${TREE_STABILITY_ID:-${PPID}}"
 _snapshot() {
   find . \
     -name .git -prune -o \
-    -name .claude -prune -o \
+    -path ./.claude/worktrees -prune -o \
+    -path ./.claude/state -prune -o \
+    -path ./.claude/settings.local.json -prune -o \
     -name secrets -prune -o \
     -name bundle -prune -o \
     -name node_modules -prune -o \
@@ -94,6 +107,19 @@ _snapshot() {
 # addition plus a modification -- the same file named three times, which reads as three problems.
 # TAB-separated so a path containing spaces still parses as one field.
 
+# ⚠️ VALIDATE THE SECOND ARGUMENT. It used to be read as a bare `${2:-}` comparison, so a TYPO --
+# measured with `--requred` -- was silently ignored and the missing-snapshot path then printed
+# "(invoked by hand)" and exited 0. That is fail-OPEN, from the recipe, in the one place this script
+# exists to fail closed.
+_required=0
+case "${2:-}" in
+  --required) _required=1 ;;
+  '')         ;;
+  *)          printf 'tree-stability: unknown argument %s\n' "$2" >&2
+              printf 'usage: tree-stability.sh record | verify [--required]\n' >&2
+              exit 2 ;;
+esac
+
 case "${1:-}" in
   record)
     _snapshot > "$SNAP" 2>/dev/null
@@ -106,7 +132,7 @@ case "${1:-}" in
       # honest answer there is a FAILURE, not a shrug. Hence --required, which the recipe passes.
       printf 'tree-stability: NO SNAPSHOT was taken, so nothing was verified.\n' >&2
       printf '                expected: %s\n' "$SNAP" >&2
-      if [ "${2:-}" = "--required" ]; then
+      if [ "$_required" = 1 ]; then
         printf '                This was invoked BY THE GATE, so the record should have run. Its\n' >&2
         printf '                verdict cannot be trusted; failing rather than passing silently.\n' >&2
         exit 1
@@ -144,6 +170,6 @@ case "${1:-}" in
     printf '\n                the starting snapshot is kept for inspection: %s\n' "$SNAP" >&2
     exit 1 ;;
   *)
-    printf 'usage: tree-stability.sh record|verify\n' >&2
+    printf 'usage: tree-stability.sh record | verify [--required]\n' >&2
     exit 2 ;;
 esac

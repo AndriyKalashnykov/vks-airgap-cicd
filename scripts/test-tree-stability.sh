@@ -68,7 +68,12 @@ for c in modified:touch added:new removed:gone; do
 done
 
 # ── THE TWO FALSE-RED CLASSES. These are the cases that decide whether it can ship. ───────────────
-for d in .claude/state .claude/worktrees/agent-x src/node_modules apps/x/target apps/y/obj secrets; do
+# ⚠️ EVERY PRUNE GETS A CASE. A first version pinned 5 of 10, and a mutation sweep proved the gap:
+# neutering `.git`, `bundle`, `bin`, `.env.state` or `*.tsbuildinfo` left the suite at 18/18 GREEN.
+# `bin` is the one that mattered -- it is the broadest name the prune list carries and `bin/` is a
+# conventional SOURCE directory, so deleting it cost nothing red.
+for d in .claude/state .claude/worktrees/agent-x src/node_modules apps/x/target apps/y/obj secrets \
+         .git bundle src/bin; do
   run record
   mkdir -p "$T/$d"; : > "$T/$d/probe"
   run verify
@@ -79,6 +84,33 @@ for d in .claude/state .claude/worktrees/agent-x src/node_modules apps/x/target 
   # from ever becoming `rm -rf /…` (SC2115).
   rm -rf "${T:?}/${d}"
 done
+
+for f in .env.state x.tsbuildinfo; do
+  run record
+  : > "$T/$f"
+  run verify
+  if [ "$RC" -eq 0 ]; then ok "writing $f does NOT fire"
+  else bad "$f fired a FALSE RED: $(cat "$OUT")"; fi
+  rm -f "${T:?}/$f"
+done
+
+# ⚠️ THE EXCLUSION MUST NOT OVERSHOOT. A `-name .claude` prune blinded the two TRACKED files under
+# there -- including `.claude/hooks/adversary-first-gate.py`, the BLOCKING control that gates every
+# write in this repo and which `test-adversary-gate-rearm.sh` executes, parses and awks INSIDE
+# `test-scripts`. MEASURED: touching it mid-run reported OK, rc=0. The two classes that actually
+# false-fire are root-anchored, so the prune is path-anchored and `hooks/` stays in scope.
+run record
+mkdir -p "$T/.claude/hooks"; : > "$T/.claude/hooks/adversary-first-gate.py"
+run verify
+if [ "$RC" -ne 0 ]; then ok ".claude/HOOKS is still WATCHED — the exclusion did not swallow the blocking control"
+else bad "a write to .claude/hooks went unseen; the prune overshot and the detector certifies a run whose security-control input was rewritten"; fi
+rm -rf "${T:?}/.claude"
+
+# An unknown argument must FAIL, not be silently ignored: the old bare-positional read made a typo
+# (`--requred`) fall through to the by-hand path and exit 0 -- fail-OPEN, from the recipe.
+run verify --requred
+if [ "$RC" -eq 2 ]; then ok "an unknown argument is REFUSED (a typo used to fail open)"
+else bad "verify --requred returned $RC; a typo silently degrades to the by-hand path"; fi
 
 # ...while a REAL edit beside them still fires, so the prunes did not blind it.
 run record
