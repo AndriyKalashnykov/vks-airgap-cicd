@@ -140,5 +140,41 @@ if ls "${TMPDIR:-/tmp}"/.tree-stability-*-"test-$$" >/dev/null 2>&1; then ok "th
 else bad "the RED deleted its own evidence"; fi
 rm -f "${TMPDIR:-/tmp}"/.tree-stability-*-"test-$$"
 
+# ── THE DENOMINATOR MUST COUNT FILES, NOT LINES. `find -printf '%p'` does not escape a newline in a
+# filename, so `wc -l` over-counts -- measured, 3 files reported as 4. The verdict is unaffected
+# (`cmp` is byte-exact); the denominator is the only number this control prints, and one that can
+# disagree with reality is what this repo keeps getting caught by.
+if printf 'a\nb' > "$T/src/$(printf 'two\nline')" 2>/dev/null; then
+  run record
+  run verify
+  # ⚠️ COMPUTE THE EXPECTATION WITH THE BUG ABSENT. A first version used `find … -print | wc -l`,
+  # which has the IDENTICAL newline flaw — so it expected 4 and the correct answer 3 read as a
+  # failure. `-printf 'x\n'` emits one line per file whatever the name contains.
+  _want=$(cd "$T" && find . -type f -printf 'x\n' 2>/dev/null | wc -l | tr -d ' ')
+  _got=$(grep -oE 'OK — [0-9]+' "$OUT" | grep -oE '[0-9]+')
+  if [ "${_got:-0}" = "$_want" ]; then ok "the denominator counts FILES ($_want) even with a newline in a filename"
+  else bad "the denominator says ${_got:-none} for $_want files — it is counting LINES"; fi
+  rm -f "$T/src/$(printf 'two\nline')"
+else
+  printf '  skip  denominator-vs-newline: this filesystem refuses a newline in a filename\n'
+fi
+
+# ── THE REAPER IS BOUNDED. `verify` deliberately KEEPS the snapshot on a RED (it is the only
+# evidence of the starting tree), so nothing removed them and they accumulated -- measured, 364 KB.
+# The reap must take OLD snapshots, leave TODAY's (a RED you may still want to inspect), and be
+# unable to touch anything that is not one.
+_old="${TMPDIR:-/tmp}/.tree-stability-REAPCASE-old"; _new="${TMPDIR:-/tmp}/.tree-stability-REAPCASE-new"
+_other="${TMPDIR:-/tmp}/tree-stability-REAPCASE-not-ours"
+: > "$_old"; touch -d '3 days ago' "$_old"; : > "$_new"; : > "$_other"; touch -d '3 days ago' "$_other"
+run record
+# `if`, not `A && B || C` — that form runs C when B fails too, and this repo bans it outright.
+if [ -e "$_old" ];   then bad "a 3-day-old snapshot was NOT reaped; they accumulate"
+                    else ok "an OLD snapshot is reaped"; fi
+if [ -e "$_new" ];   then ok "TODAY's snapshot survives — a RED stays inspectable"
+                    else bad "the reaper destroyed today's evidence"; fi
+if [ -e "$_other" ]; then ok "a file that is not one of ours is untouched (the prefix bounds it)"
+                    else bad "the reaper deleted a file outside its own prefix"; fi
+rm -f "$_old" "$_new" "$_other"
+
 printf '  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

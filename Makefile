@@ -1718,6 +1718,20 @@ static-check-fast: check-notfound-discriminator check-jumpbox-shadow check-tekto
 # What SURVIVES, and what actually matters, was re-measured: `diff` of the two dry runs shows an
 # IDENTICAL GATE SET — the only deltas are the recipe line, the added test, and this comment.
 #
+# ⚠️ `make static-check lint` RUNS `lint` TWICE. Naming an overlapping goal alongside this target
+# used to be deduplicated by make; with the gates behind a sub-make it is not — MEASURED, 1 bare
+# `lint.sh` invocation before this change, 2 after -- and re-measured on a REAL run, not only a dry
+# one, because my own dry-run count was wrong FOUR times getting here (a comment mentioning the
+# script counted as an invocation; an over-anchored regex; `origin/main` used as "before" when it
+# already contained this change; and a `sed` that re-indented the lines the regex anchored on).
+# `grep -cx './scripts/lint.sh'` against the raw output is the form that discriminates.
+# `make ci` is UNAFFECTED (1 -> 1, measured both trees) and CI runs
+# `static-check-pr`, so no documented or automated path is touched; the cost is a slower run for a
+# human who types both, never a wrong verdict. Accepted rather than filed: a backlog row for "a
+# command nobody runs is slower" is a row that never gets actioned, and this comment is where
+# somebody who hits it will actually look. It is the price of the verify running when a gate FAILS,
+# which is the half of the header's own incidents the prerequisite form was blind to.
+#
 # ⚠️ `make -n static-check` EXECUTES THIS RECIPE. GNU make runs any recipe line containing `$(MAKE)`
 # even under `-n`, so the snapshot is taken and the verify runs (the sub-make inherits `-n` via
 # MAKEFLAGS, so the GATES are only printed). Accepted deliberately rather than worked around: the
