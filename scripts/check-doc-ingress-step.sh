@@ -63,7 +63,10 @@ for doc in docs/scenario-*.md; do
   fi
   if [ "$veri" -eq 0 ]; then
     printf 'ERROR %s: installs an ingress and never verifies it.\n' "$doc"
-    printf '      Add a FENCED `make verify-ingress` after the install/attach block: it sends a\n'
+    # No backticks in this message: shellcheck reads them as a would-be expansion inside the single
+    # quotes (SC2016) even though literal is exactly what is wanted, and terminal output gains
+    # nothing from markdown emphasis anyway.
+    printf '      Add a FENCED verify-ingress block after the install/attach block: it sends a\n'
     printf '      Host: header to the LB IP and asserts each host reaches ITS OWN backend, which\n'
     printf '      is the only assertion in the walk that can fail when the routes are wrong.\n'
     rc=1
