@@ -955,7 +955,7 @@ asserts a per-host body marker, not just a 200, because a mis-wired route return
 make creds-show
 ```
 
-**Expect:** every URL and login — `Harbor`, `ArgoCD`, Gitea, `Tekton`, one row per app — above a `Lab access` section, and a provenance line reading `values below :` followed by `DISCOVERED` (an overlay stamped for the cluster you are talking to), `STORED` (an overlay NOT confirmed to belong to it), or a line naming `your .env`.
+**Expect:** `add once to /etc/hosts` — the hint `creds` prints ONLY when it has an ingress LB IP; every URL and login — `Harbor`, `ArgoCD`, Gitea, `Tekton`, one row per app — above a `Lab access` section, and a provenance line reading `values below :` followed by `DISCOVERED` (an overlay stamped for the cluster you are talking to), `STORED` (an overlay NOT confirmed to belong to it), or a line naming `your .env`.
 **Expect:** a `Lab access` section listing `vCenter`, `VKS / SSO` and `vcf CLI` — the values YOU supplied in `.env` — and a `guest node SSH` row whose password is read LIVE from the Supervisor, with the username `vmware-system-user`.
 **Expect:** the `guest node SSH` row shows the secret name it read (a `-ssh-password` secret) when it succeeds, or a short token such as `<forbidden>` / `<no kubeconfig>` when it could not ask — never a blank that would read as *this cluster has none*.
 **Expect:** a warning that vCenter SSO locks the account `PERMANENTLY after 3 failed attempts`, and that this report SHOWS these values and never authenticates with them.
