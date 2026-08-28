@@ -959,117 +959,90 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-27 (later) — a port-forward bound the SERVICE port against a POD; it failed everything
+## ▶️ HANDOFF 2026-08-27 (night) — a build regression that only Photon could see, and two selectors that steered nothing
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
 ### 🔴 DISTRUST FIRST
 
-- **The previous handoff's "MATRIX 6/6 GREEN" is still true for the tree it names, and that tree
-  could not have passed today.** #1047 (merged 2026-08-27 ~03:0x) switched the verify tunnel from
-  `svc/<app>` to a NAMED POD and kept the remote port at `80`. 80 is the SERVICE port; the Service
-  maps it to `targetPort: http` = the container's **8080**. A pod has nothing on 80. MEASURED
-  against a healthy, Ready, 0-restart pod:
+- **A green ubuntu row says NOTHING about the photon rows, and today it hid a total build failure.**
+  `#1051` put a container BUILD (`selfbuilt-image`) at the head of `install-all` without inheriting
+  `engine_build_isolation` — which `14-builder-build.sh` has called since 2026-08-16. Ubuntu boots
+  cgroup v2 and passed; both photon rows died at `RUN mkdir -p /kaniko/.docker` with
+  `crun ... open /sys/fs/cgroup/devices/buildah-...`. Fixed in `#1067`, in **three** build paths —
+  a class-keyed gate found two I did not know about, and both had the WORSE failure mode
+  (`16-engine-trust-check.sh` reports a Harbor **trust** failure; `jumpbox-run.sh`'s own comment
+  blames **unqualified-search-registries**) — a confidently wrong cause on the box an operator can
+  least debug.
 
-  | target | result |
-  |---|---|
-  | `port-forward <pod> L:80` | **http 000** (connection refused) |
-  | `port-forward <pod> L:8080` | http 200 |
-  | `port-forward svc/<app> L:80` | http 200 |
+- **⚠️ THE EVIDENCE FOR A "GONE" ENVIRONMENT IS USUALLY STILL ON DISK.** I graded that fix
+  `INFERRED` because the walkbox was unreachable and had been swept. The BOX was swept; the
+  EVIDENCE was not. Four greps over `~/walk-evidence` produce a clean natural A/B at the same
+  podman **5.8.5**, cgroup v1 throughout:
 
-  The `svc/` FALLBACK still works, so this **only bites when the pod lookup SUCCEEDS** — the
-  healthier the cluster, the more certain the failure. Fixed in #1054 **for the INITIAL bind
-  only** — verified from its own diff. Both tunnel-REBUILD sites kept inheriting the stale
-  port until **#1062**, which re-derived it at both rebuild sites — and the resolution only moved
-  INSIDE `_start_pf` in the FOLLOW-UP to #1062 (verified: #1062's own `_start_pf` body contains no
-  `_resolve_pf_port`). Reading this as "fixed in #1054" is what let the rebuild half survive
-  another **twelve hours** — #1054 landed 01:42 and #1062 13:36 the SAME DAY. An earlier draft of
-  this line said "three more weeks", a 42x overstatement that would have told a reader to distrust
-  three weeks of matrix runs over a bug that lived one session.
+  | runs | chroot fired | crun failures | tagged |
+  |---|---|---|---|
+  | 06:51 + 09:25 — builder path, fix PRESENT | 6 | 0 | 6 |
+  | 22:12 — selfbuilt path, fix ABSENT | 0 | 2 | 0 |
 
-- **It did not look like a port bug, and that is the lesson.** It presented as 114 "connection
-  refused" tunnel deaths across the generation cap, ending ~10 minutes AFTER both pods were Ready —
-  and they were Ready in **6s and 7s**. "Slow app" and "flaky tunnel" were both plausible and both
-  wrong; the app was serving the entire time. What settled it was `kubectl get pod -o
-  jsonpath='{...containerPort}'` plus two 20-second port-forwards, not more log reading.
+  Before grading a claim inferred because the environment is gone, grep what that environment
+  already wrote down.
 
-- **One bug, three failures**: two KinD e2e runs and **row 1 of the recert matrix**, which died
-  `app not serving /healthz (tunnel to javawebapp-..., generation 1)` — a message naming the page,
-  about a page that was fine.
+- **`VKS_SUPERVISOR` never steered anything, and I said twice that it did.** MEASURED:
+  `git show 259fed2:stages/nested-vsphere/vks-upgrade.sh | grep -c _ss_supervisor_id` → **0**.
+  `vks_main` has never called it. The upgrade targets the Supervisor of the vSphere cluster named by
+  **`CLUSTER_NAME`** (`PUT /clusters/<moid>/supervisor-services/...`), while `VKS_SUPERVISOR`
+  matches the V2 supervisor **UUID**. The `vks-*` verbs now refuse it and name the real control.
+  Its only two callers are on the `services-*` REMOVAL path.
 
-- **#1052 neither caused nor hid it.** It is the reason the run reported `HARNESS-TUNNEL` with death
-  and generation counts instead of blaming the app, which is what made the port visible at all.
+- **A gate that greps an ASSIGNMENT does not test the FIX.** The first version of the build-isolation
+  gate checked `_iso="$(engine_build_isolation)"` and not `export BUILDAH_ISOLATION`. Measured:
+  deleting the export left it GREEN and shellcheck silent. It also matched ONE syntax — a bare
+  `"$ENGINE" build`, a literal `podman build`, a `buildah bud` and a build inside `{ }` all walked
+  past, and the bare form is already used in three scripts here. `{` **is** a command position.
 
-- **A dangling `ARGOCD_KUBECONFIG` in an operator `.env` costs ~5 MINUTES PER APP, silently.** The
-  ArgoCD refresh nudge fails (`error: stat ./secrets/argocd.kubeconfig: no such file or directory`)
-  and every app falls back to ArgoCD's reconcile timer — "SLOW, not broken", exactly as the warning
-  says. This repo's own `.env` had it. #1053 now catches it at `env-check`; the remedy is to COMMENT
-  the line (unset is correct whenever ArgoCD shares `$KUBECONFIG`).
-
-- **`check-lib-sourcing.sh` was nearly vacuous and is now repaired.** Its `have` set was built from
-  raw text INCLUDING COMMENTS, and os.sh names `lib/harbor.sh` 10 times in comments — exempting all
-  **249** scripts that source os.sh from harbor.sh (and apps.sh, govc.sh, istio.sh, state.sh,
-  vcenter.sh). Its CALL regex was also blind to the `VAR=x func` prefix: fixing that took the call
-  count **917 → 936**. If you touch it, note that four plausible fixes were implemented and REFUTED
-  by running them (see the commit body) — in particular `executable_text()` is NOT the fix on the
-  source side, because it blanks quoted string contents and the lib path lives inside the quotes.
+- **`local x=$(f)` under `set -Eeuo pipefail` makes the guard BELOW it dead code.** The lister's
+  `die` — the one naming "the session is stale" — could never run, because the assignment tripped
+  `set -e` first and the operator saw only the ERR trap blaming jq. Same mechanism had already bitten
+  that function once; the earlier fix moved the call, this one fixed the mechanism (`|| true`).
 
 ### Merged today
 
 | PR | what |
 |---|---|
-| #1053 | `env-check` catches a dangling `ARGOCD_KUBECONFIG` (found live in this repo's `.env`) |
-| #1054 | the port-forward derives its remote port from the target at the INITIAL bind; `80` only for `svc/` |
-| #1062 | the derivation added at BOTH rebuild sites — they had inherited the stale port. (Moving it INSIDE `_start_pf` is the follow-up, not this PR.) |
-| #1055 | Harbor's admin credential is VERIFIED at install time (`harbor_credential_settle`) |
+| #1065 | the verify verdict decides by POLL CLASS; every rebuild bind is recoverable |
+| #1066 | §A5 step 0 was missing `kubectl-login` — it cost a cut-A launch |
+| #1067 | the cgroup-v1 build regression; the gate was refuted three times before it was right |
+| lab #124 | VKS version registration over the API, `make vks-supervisors`, and the selector correction |
 
-**#1055's own story is worth reading before extending it.** Harbor honours `HARBOR_ADMIN_PASSWORD`
-only at ITS OWN first bootstrap (goharbor `updateInitPasswordWithMgr()`, v2.15.2 lines 76-92 — cite
-the SYMBOL, the line numbers move), so a re-install silently keeps the old password while every
-readiness probe passes, because `/api/v2.0/health` is UNAUTHENTICATED. Both adversary rounds then
-REFUTED the first version: `06-install-harbor.sh` never sourced `lib/harbor.sh`, so the call was
-`command not found` (rc 127) at the last step of every install. Three green signals missed it — the
-new 12/12 suite, shellcheck, and the sourcing gate. The suite's wiring cases asserted **order and
-text, never definedness**; they now assert `type -t` reachability against a source set DERIVED from
-`06`.
+### Proven live
 
-### Proven live — the 6/6 `make verify` below is the #1054 TREE; a separate cold `make e2e-kind` on the #1062 tree was also 6/6 (0 FATAL, create-ordering exercised, all six bound a pod on 8080), but logged 0 DOWNGRADING events, so it exercised the INITIAL bind and NOT the rebuild path
-
-- `make verify` **6/6** on KinD: every app logs `tunnel target <pod> remote port 8080`, zero bind
-  `:80`, and dotnetwebapp took a real tunnel death and **rebuilt to generation 2** — #1052
-  validated on that run. ⚠️ **#1054 was NOT**: every one of those `tunnel target` lines is the
-  INITIAL bind. The rebuild sites call `_start_pf` from inside a `wait_for` predicate, which
-  runs as `"$@" >/dev/null 2>&1`, so their bind was **discarded** — measured 2026-08-27 on two
-  live runs (6 rebuilds, 6 `tunnel target` lines, 0 of them generation 2). B502 fixes it with a
-  `_pf_ev` companion; until that lands anywhere, no log can show a rebuild bound 8080.
-- `make env-check` flags the dangling `ARGOCD_KUBECONFIG` with the right message; its own remedy
-  clears it.
+- `make verify` on KinD: **6/6 rebuild binds recovered** (`bound <pod> remote port 8080
+  (generation 2)`) against **0/6** on the old channel — also the first direct evidence #1062's
+  rebuild-site port fix works.
+- `make verify` after B507: **6/6 apps at 1 generation, 0 tunnel deaths** (was 6/6 at 2 generations
+  with 1 death each).
+- Full `make e2e-kind` on merged main: **6/6, 0 FATAL, 0 ERROR**, 6 at 1 generation, 0 at 2.
+- Lab, unattended, no UI: `make vks-register VKS_VERSION=3.7.1` → vCenter knows 3.6.3-embedded AND
+  3.7.1; `make vks-upgrade` → **3.7.1+v1.36 CONFIGURED in 2m00s**; a second register prints
+  "already registered — nothing was written".
 
 ### In flight
 
-- **The lab is being REBUILT.** The recert cut A refused in 2s and CORRECTLY: cut A does **not**
-  rebuild (the rebuild happens BETWEEN cuts), so it evaluated the rows against the lab a killed run
-  left dirty — row 1 wants "nothing exists" and found 4 of 4. Read
-  [`docs/matrix-standing-rules.md`](docs/matrix-standing-rules.md) §A5 before launching: a default
-  run certifies on **3.6.3**, and 3.7 needs the split (cut A rows 1 2 5 → destroy+lab+register+
-  upgrade → cut B rows 3 4 6 with `WALK_SKIP_REBUILD=1` and a MANDATORY `WALK_CLUSTER_NAME`).
-  ⚠️ That split **WAS exercised end to end on 2026-08-27** (both halves COMPLETE, all six rows
-  `0 FAILED`) — superseding the earlier warning. It remains two verdicts in two run directories,
-  and nothing prints the pair-symmetry read for you. Treat a first attempt on a NEW lab as part of the
-  certification, not as setup.
-- ⚠️ CORRECTED 2026-08-27: **#1051 (self-built kaniko) is MERGED** (`ebb5895`, an ancestor of
-  this tree) and the `make e2e-kind` it was pending IS the cold run cited above — that run
-  logs `self-built images pushed + verified: kaniko`. This bullet was doubly false and sat
-  BETWEEN two bullets that were corrected, which is how it survived: a correction pass reads
-  the lines it came to change. It has since also passed two-box sneakernet on photon+ubuntu.
-- ⚠️ CORRECTED 2026-08-27: a cold `make e2e-kind` (`E2E_FRESH=1`) HAS since completed — exit 0,
-  6/6 apps, 0 deadlocks, and the harness's own closing line `OK — create-ordering EXERCISED`.
-  The warm run was green too (exit 0, 6/6). This line previously said the cold run had not
-  completed; that was true when written and is now false. Separately, and NOT derived from
-  the above (the previous wording said "therefore", which no longer follows): #1055 has
-  never executed against a live fresh Harbor — that run is what would exercise its
-  `HARBOR_FIRST_INSTALL=1` retry path.
+- **Lab step 0 is re-running** (destroy → lab → trust-vcsa → kubectl-login → vks-register 3.7.1 →
+  vks-upgrade). The previous cut A left the lab dirty — vSphere Namespace `cicd` and guest cluster
+  `cicd-gc0827181215` — and row 1 requires that nothing exists, while §A5 says cut A does not
+  rebuild.
+- **Cut A has not completed.** Attempt 1 refused (no Supervisor kubeconfig — the §A5 gap, now fixed
+  in #1066). Attempt 2 got through row 1 (ubuntu, 0 FAILED) and died on rows 2 and 5 at
+  `selfbuilt-image` — the cgroup regression, now fixed in #1067. Neither failure has been re-tested.
+- ⚠️ **The cgroup-v1 half of #1067 is measured from the ARCHIVE, not re-run.** The next photon row
+  is the live re-proof. The cgroup-**v2** half is proven: a forced 44-step rebuild including the
+  exact failing step, `Successfully tagged`, 0 isolation warnings.
+- **B453 (sibling repo) bit twice today**: the matrix leaks one walkbox VM per run and has no `trap`.
+  One had been running **10h34m** holding 8 GiB. Sweep `virsh list --all` for `vks-walkbox-*` after
+  every matrix run.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
