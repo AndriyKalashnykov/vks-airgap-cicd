@@ -98,8 +98,45 @@ for name in $NAMES; do
   _sb_stamp="${OUT_DIR}/.${name}.built"
   if [ "${SELFBUILT_FORCE:-0}" != "1" ] \
      && [ -s "$tarball" ] \
-     && [ "$(cat "$_sb_stamp" 2>/dev/null)" = "${tag}" ]; then
+     && [ "$(head -1 "$_sb_stamp" 2>/dev/null)" = "${tag}" ]; then
     log_info "[${name}] already built at ${tag} (${tarball}) — skipping. SELFBUILT_FORCE=1 to rebuild."
+    # ⚠️ RE-EMIT THIS IMAGE'S LOCK RECORD. Without this the lock SELF-ERASES on every warm run, and
+    # the skip is the COMMON path: line 70 truncates ${LOCK}.tmp, this `continue` jumps past the
+    # append below, and the tail then overwrites $LOCK with the empty tmp. MEASURED on a real box --
+    # kaniko.tar 113 MB at 19:22, selfbuilt.lock 0 BYTES at 20:02, i.e. emptied by a later warm run.
+    # Nothing reads the lock today, so this has cost nothing yet; that is not a reason to keep
+    # writing an empty provenance journal, and it IS a reason not to build anything on top of one.
+    # `head -1` above, not `cat`: the stamp now carries the tag on line 1 and the lock record on
+    # line 2, so an OLD one-line stamp still compares equal and simply has no record to re-emit.
+    _sb_rec="$(sed -n '2p' "$_sb_stamp" 2>/dev/null || true)"
+    # ⚠️ MIGRATION: an OLD one-line stamp has no line 2, and that is the state EVERY existing box is
+    # in — so without this the erasure survives the fix for exactly the boxes it was written for.
+    # MEASURED: valid 74-byte lock + old stamp + one warm run -> 0 bytes, identical to pre-fix.
+    # The record is recoverable from the PREVIOUS $LOCK, which is not read until the final sort, so
+    # at skip time it still holds the last run's rows. Keyed on field 1 (the image name).
+    if [ -z "$_sb_rec" ]; then
+      _sb_rec="$(awk -F'\t' -v n="$name" '$1==n{print;exit}' "$LOCK" 2>/dev/null || true)"
+    fi
+    # ⚠️ A RECOVERED RECORD IS UNTRUSTED UNTIL IT DESCRIBES *THIS* BUILD. Field 4 is `<repo>:<tag>`;
+    # if it names a different push target the record is stale, and re-emitting it would assert a
+    # ref/digest/tag we did not build here -- silently, and self-perpetuating (the re-emit becomes
+    # next run's recovery source, so it never re-validates). Not script-reachable today (a pin bump
+    # takes the rebuild path, and a script-written stamp's line 2 is written in the same iteration
+    # as line 1, so it always agrees) -- it needs a restored, hand-edited, or foreign lock. Applied
+    # to BOTH sources anyway: it cannot false-fire on a record this script wrote, and the file's
+    # only purpose is provenance, which a wrong record silently destroys.
+    if [ -n "$_sb_rec" ]; then
+      _sb_f4="$(printf '%s' "$_sb_rec" | cut -f4 || true)"
+      if [ "$_sb_f4" != "${repo}:${tag}" ]; then
+        log_warn "[${name}] the surviving lock record names '${_sb_f4}' but this build targets '${repo}:${tag}' -- refusing to re-emit a record for a different push target. That image's row will be MISSING from ${LOCK}; SELFBUILT_FORCE=1 rebuilds and restores it."
+        _sb_rec=""
+      fi
+    fi
+    if [ -n "$_sb_rec" ]; then
+      printf '%s\n' "$_sb_rec" >> "${LOCK}.tmp"
+    else
+      log_warn "[${name}] skipped, its stamp predates the lock-record fix, AND no record for it survives in ${LOCK} — so that file is being written EMPTY for this image. With a single-image registry that means the whole lock is truncated. SELFBUILT_FORCE=1 rebuilds and restores it."
+    fi
     continue
   fi
 
@@ -328,15 +365,29 @@ EOF
     done
   fi
 
-  printf '%s\t%s\t%s\t%s:%s\t%s\n' "$name" "$ref" "$engine_id" "$repo" "$tag" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${LOCK}.tmp"
+  # Built once and reused for the stamp, so a warm run re-emits the SAME bytes rather than a
+  # reconstruction with a fresh timestamp (which would make the lock churn on every skip).
+  _sb_rec="$(printf '%s\t%s\t%s\t%s:%s\t%s' "$name" "$ref" "$engine_id" "$repo" "$tag" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+  printf '%s\n' "$_sb_rec" >> "${LOCK}.tmp"
   # Written ONLY here, i.e. after the save succeeded — a build that dies leaves no stamp, so the
   # next run rebuilds rather than trusting a partial artifact.
-  printf '%s\n' "$tag" > "$_sb_stamp"
+  # LINE 1 = the tag (what the skip comparison reads, via head -1 -- so an old one-line stamp is
+  # still valid). LINE 2 = this image's lock record, so a skipped image can re-emit it.
+  printf '%s\n%s\n' "$tag" "$_sb_rec" > "$_sb_stamp"
 
   rm -rf -- "$src"; src=""
 done
 
-sort -u "${LOCK}.tmp" > "$LOCK"; rm -f "${LOCK}.tmp"
+# ⚠️ WRITE VIA A TEMP AND RENAME. `sort -u ... > "$LOCK"` truncates $LOCK BEFORE sort runs, so ANY
+# sort failure (unreadable tmp, ENOSPC, an interrupt) leaves it at zero — a second erasure path
+# inside the very statement this change exists to fix. MEASURED: unreadable tmp -> lock 0 bytes.
+# The `if` (not `A && B || C`) so a sort/mv failure is REPORTED rather than swallowed: preserving
+# the previous rows beats truncating to zero, but a just-built image's record would then be silently
+# missing from a file whose only job is provenance. Truncation was at least loud.
+if sort -u "${LOCK}.tmp" > "${LOCK}.new" && mv -f "${LOCK}.new" "$LOCK"; then :; else
+  log_warn "could not rewrite ${LOCK} -- it still holds the PREVIOUS run's rows, so this run's records are missing from it."
+fi
+rm -f "${LOCK}.tmp" "${LOCK}.new"
 log_info "self-built images saved into the bundle: ${NAMES}"
 log_info "next: make bundle   (bundle/selfbuilt/ is inside BUNDLE_DIR, so the existing tar carries it)"
 log_info "then, on the air-gap box: make selfbuilt-push"

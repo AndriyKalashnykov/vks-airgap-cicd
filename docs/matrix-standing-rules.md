@@ -83,6 +83,12 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
    # 2. cut B's lab, BY HAND, so the 3.7 registration can be re-applied before the rows run
    make -C ~/projects/nested-vsphere-lab destroy CONFIRM=yes
    make -C ~/projects/nested-vsphere-lab lab
+   #    trust-vcsa is NOT optional here, and step 2 used to omit it. A rebuilt lab has a NEW VMCA,
+   #    so the anchor must be re-pinned before any credential is sent. MEASURED 2026-08-28: without
+   #    it kubectl-login exits 1 with "no trust anchor at .../vmca-root.pem — run: make trust-vcsa",
+   #    after the 47-minute build, i.e. at the most expensive possible moment. Step 0 lists it; this
+   #    step did not — the same asymmetry #1066 fixed on the other side.
+   make -C ~/projects/nested-vsphere-lab trust-vcsa
    make -C ~/projects/nested-vsphere-lab kubectl-login
    #    Register over the API, exactly as step 0 does — NOT "in the UI", which this line used to
    #    say. The lab repo's vks-register target landed in lab #124 and is proven unattended; it is

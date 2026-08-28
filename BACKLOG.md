@@ -4119,7 +4119,44 @@ Settle it read-only, on a live lab:
 If a cluster field DOES exist, the refusal can become a real selector — map the chosen Supervisor to
 its cluster moid and steer the upgrade properly, which is what an operator asked for.
 
-## 🔴 B513 — `selfbuilt.lock` has NO verification column, so a VERIFIED build and an UNVERIFIED one write byte-identical lines
+## ✅ B513 (REFUTED AS BRIEFED; the REAL defect found underneath it is FIXED 2026-08-28)
+
+⚠️ **BOTH OF MY BRIEFING CLAIMS WERE WRONG, and the real defect is worse.** An idea-round adversary:
+
+- *"the re-run skip logic reads the lock"* — **FALSE.** The skip reads `${OUT_DIR}/.${name}.built`,
+  a per-image stamp holding only the tag. `selfbuilt.lock` has **one writer and ZERO readers**,
+  repo-wide, so the "chain restored for a later reader" has no later reader.
+- *"a verified and an unverified build write identical lines"* — **understated in the wrong
+  direction.** On the common path they write **no lines at all**: the file is truncated to zero.
+
+MEASURED on this box, before any fix — note the lock is written AFTER the build and is empty:
+
+    -rw-rw-r--  113337344  Aug 27 19:22  kaniko.tar
+    -rw-rw-r--          0  Aug 27 20:02  selfbuilt.lock     <- ZERO BYTES
+
+Three lines conspire, and the skip is the COMMON path: `: > "${LOCK}.tmp"` truncates it, the skip
+branch `continue`s past the append, and `sort -u "${LOCK}.tmp" > "$LOCK"` overwrites the lock with
+the empty temp. A verdict column would have been decoration on an empty file.
+
+**FIXED:** the stamp carries the tag on line 1 and the image's lock record on line 2; the skip path
+re-emits it. The comparison reads `head -1`, so an OLD one-line stamp still compares equal and warns
+that it has no record to re-emit rather than silently emptying the lock.
+`scripts/test-selfbuilt-lock.sh` (7 cases) pins it, RED-proven: restoring the erasure fails 4.
+
+**NOT done, deliberately — do not revive:** the verdict column, and any gate on it.
+`22-selfbuilt-push.sh:103-116` already tried gating on a local lock and REMOVED it, recording three
+measured defects (a one-shot tripwire the operator's re-run clears; a name-keyed compare that fires
+on the operator following its own printed remedy; nothing to check on a first run — exactly what a
+fresh air-gap box does). A verdict column inherits all three plus the erasure. If the verdict is ever
+needed air-gap-side, **re-derive** it at push time from the carried tarball (`tar` + `grep` are both
+in the air-gap OS floor) — the move that file already made 60 lines away.
+
+Also refuted: recording it as an image LABEL. The vacuity guard greps metadata for `<mod>.<ver>`
+where `.` matches the `@`, so a label carrying `mod@ver` scores a hit and the probe reports
+UNVERIFIED **permanently** — the stamp would destroy the check it records. And `crane config` has no
+`--tarball` (measured), so a label is unreadable on the air-gap box, which has crane and no engine.
+
+--- original filing follows ---
 
 Surfaced 2026-08-27 by the two adversary rounds on B510, as a finding neither the brief nor I asked
 for. `14-selfbuilt-build.sh` proves a `go_get` dependency override actually reached the built binary,
@@ -4189,3 +4226,153 @@ The wrapper (`/tmp/cutA6-run.sh`) traps TERM/HUP/INT/QUIT and dumps a full `ps` 
 **Done when:** either a signal is caught and attributed, or three consecutive `setsid` runs complete
 while a non-setsid control dies — at which point launch through `setsid --wait` becomes the
 documented way to run the matrix and this row closes with the mechanism named.
+
+## 🟢 B515 (RE-SCOPED — the DEFECT reproduces, the FIX is REFUTED, and my claim about the gate was WRONG)
+
+⚠️ **THREE CORRECTIONS, all measured by an idea-round adversary, two of them to claims I wrote below.**
+
+1. **"`check-env-clobber` did not catch it because its invariant covers a hand-typed SELECTORS
+   list" — FALSE.** The gate has **five** arms (dynamic fallback, imperative guard, per-run
+   override ×2, selector, boolean toggle). It is green because arm (b) finds **ZERO per-run
+   override sites for `BUNDLE_DIR` anywhere in the repo** — measured, `grep -rlE '(MAKE\)[^#]*|make )[^#]*\bBUNDLE_DIR='` over `Makefile scripts` returns nothing. **The gate is correct**; there is
+   no override to protect. It even prints `ok 'HARBOR_CA_FILE' is uncommented but
+   SNAPSHOT-PROTECTED`, so it is more accurate than the rule I proposed to replace it with.
+2. **"an operator plausibly wants `make bundle BUNDLE_DIR=/media/usb/...`" — that use case is
+   ALREADY SERVED.** `BUNDLE_OUT_DIR` is correctly **commented** at `.env.example:967` and
+   documented as *"a per-run destination, e.g. a USB mount"*. `BUNDLE_DIR` is the staging **cache**
+   dir, not the carry destination. I conflated them.
+3. **The proposed fix is CRITICAL-broken.** Commenting it leaves `BUNDLE_DIR` **UNSET**, because
+   make does not export a `?=` variable to a recipe (measured, GNU Make 4.3: bare `make` -> UNSET;
+   command-line and env forms -> exported). `load_env` applies code defaults for `KUBECONFIG` and
+   others but **not** for `BUNDLE_DIR`. **11 hard `${BUNDLE_DIR:?}` sites die**, and they are NOT
+   confined to sneakernet — `23-mirror-verify.sh:37` is on **`make mirror`**, `41-install-tekton.sh:18`
+   is on **`make platform`**, both therefore on `install-all`.
+
+**AND THE DENOMINATOR SAYS THIS IS THE DESIGN, NOT A DEFECT.** All 56 uncommented `.env.example`
+variables were probed with a per-run override plus a control: **54 are defeated, 2 survive** — and
+the 2 (`HARBOR_CA_FILE`, `INGRESS_CONTROLLER`) are exactly the two the snapshot mechanism protects.
+Mechanism and gate agree perfectly. "A default in the defaults file beats the environment" is what
+makes it the defaults file; it is a bug only when a fallback, per-run override or toggle depends on
+it — precisely the five arms the gate implements. And the documented channel works: `BUNDLE_DIR` in
+`.env` is honoured (measured).
+
+**IF the capability is ever wanted, the mechanism is the SNAPSHOT LIST, not commenting** — measured
+working both ways with the real `load_env` against the real `.env.example`, zero blast radius, and
+it is the only variant that also works for someone who has the value in `.env` (commenting does not:
+`.env` still wins). Two things come with it, both measured: `IMAGE_CACHE_DIR` is a **coupled pair**
+(uncommented, hardcodes `./bundle/images`, has no `?=` at all) and must move together or the
+override is unusable; and `PROTECTED` must be a subset of `SELECTORS`, so adding one without the
+other self-inflicts a RED.
+
+**Left as-is deliberately.** The defect is real and reproduces; the capability is not wanted, the
+fix is worse than the defect, and the gate is right.
+
+--- original filing follows ---
+
+MEASURED 2026-08-28, found while building an isolated harness for B513:
+
+    BUNDLE_DIR=/tmp/probe-bundle  ->  after load_env: ./bundle
+    SKIP_DOTENV=1                 ->  still ./bundle   (it skips .env, NOT .env.example)
+
+`.env.example:1710` carries `BUNDLE_DIR=./bundle` **uncommented**, and `load_env` sources it with
+`set -a` AFTER the environment is established, so the value replaces any per-run override. This is
+the documented `.env.example` clobber class — the one that previously broke `GITEA_LOCAL_PORT`,
+`BUNDLE_OUT_DIR` and `BUNDLE_TARBALL` — and `Makefile:231` advertises `BUNDLE_DIR ?= ./bundle`, a
+`?=` promising an override the loader defeats.
+
+**Why `check-env-clobber` did not catch it:** that gate's invariant covers the hand-typed `SELECTORS`
+list (`KUBECONFIG`, `HARBOR_URL`, ...). `BUNDLE_DIR` is not a selector in its sense, so it was never
+examined. The gate is not wrong; its scope is narrower than the class.
+
+**Not fixed here, because the fix has blast radius and needs its own round.** Commenting it out
+leaves `BUNDLE_DIR` unset for any script run outside `make` (several do `: "${BUNDLE_DIR:?}"`), and a
+plain `VAR ?=` is not exported to recipes without `export`. So it is "comment it AND export it AND
+check every direct-invocation path" — a design, not a one-liner.
+
+**Workaround that DOES work, and is what the new test uses:** isolate by CWD. `OUT_DIR` is
+`${BUNDLE_DIR}/selfbuilt` = `./bundle/selfbuilt`, so running from a different working directory
+relocates the bundle without touching the variable.
+
+**Done when:** `BUNDLE_DIR=/somewhere make bundle` writes to `/somewhere`, proven by a test, and the
+clobber gate's scope covers path-valued settables rather than only selectors.
+
+## ✅ B516 (FIXED 2026-08-28) — `make clean` expanded an UNDEFINED variable into `rm -rf /target`, and lied about what it removed
+
+Found by the B515 idea round while establishing the denominator; verified independently.
+
+    $ grep -cE '^APP_DIR[[:space:]]*[:?]?=' Makefile   -> 0
+    $ make -p -n | grep -cE '^APP_DIR[[:space:]]*[:?]?=' -> 0     (not in make's database either)
+    $ make -n clean
+        rm -rf ./bundle /target
+        echo "clean: removed ./bundle and app target/"
+
+`APP_DIR` was defined **nowhere**, so `$(APP_DIR)/target` expanded to **`/target`** — an absolute
+path at filesystem root handed to `rm -rf`. Silent today (an unprivileged user, no such directory);
+not silent under `sudo`, or in a container where it exists. And the echo **claimed** it had removed
+"app target/", so `clean` lied about work it never did.
+
+**Not replaced with a per-app loop, deliberately.** There are SIX apps across six languages and
+`apps/registry.tsv` has no build-output column, so a loop would mean hand-typing
+`target/ bin/ obj/ dist/ ...` — the enumerated list that rots on the next app. Cleaning app output
+is therefore not claimed; the echo now says exactly what was removed.
+
+**Also guarded:** `make clean BUNDLE_DIR=<path>` DOES honour the override (make exports a
+command-line variable) while `make bundle BUNDLE_DIR=<path>` does NOT (B515). So the deleting half
+obeyed a flag the writing half ignored, and an operator could `rm -rf` a directory they had never
+populated. `clean` now refuses a `BUNDLE_DIR` outside `$(CURDIR)` unless `CLEAN_FORCE=1`, and says
+why. Verified all three paths for real (not `make -n`, which prints the recipe regardless of which
+branch runs): inside-repo removes and exits 0; outside-repo refuses and the directory survives;
+`CLEAN_FORCE=1` deletes.
+
+## 🔴 B517 — `make creds` claims "no ingress is installed, so nothing serves those hosts" while all 8 hosts serve HTTP 200
+
+MEASURED 2026-08-28, on the lab left by the cut-B matrix (rows 3 4 6), found only because the owner
+asked whether the URLs had actually been checked after the last row. They had not been — the matrix
+verdict (`WALK DONE — 0 FAILED`) had been read as the result, which is a proxy: it says the walk's
+blocks ran, not that the demo serves.
+
+Row 6 (scenario-2) ran `make creds` itself and printed:
+
+    Gitea / Tekton / all six apps   <needs ingress>
+    note: no ingress is installed, so Gitea / Tekton / the apps have NO *.vks.local URL —
+          nothing serves those hosts. Reach them with a port-forward ...
+
+**Every one of those hosts serves 200.** Measured against the Gateway's own LB:
+
+    gitea.vks.local  tekton.vks.local  javawebapp  gowebapp  nodejswebapp
+    pythonwebapp     rustwebapp        dotnetwebapp          -> HTTP 200 x8   (192.168.101.135)
+    https://harbor.env1.lab.test -> 200      ArgoCD https://192.168.101.131 -> 200
+
+and the cluster agrees: `Gateway vks-ingress/vks-uis  Accepted=True Programmed=True`, all eight
+HTTPRoutes `Accepted=True ResolvedRefs=True`.
+
+**Root cause — the report reasons from a STATE FILE, not from the world.** `scripts/creds.sh:144`:
+
+    _ing="${INGRESS_LB_IP:-}"
+    ingress_url() { if [ -n "$_ing" ]; then printf 'http://%s' "$1"; else printf '<needs ingress>'; fi }
+
+`INGRESS_LB_IP` is published to `.env.state` by whichever flow INSTALLS the ingress. Scenario-2 is a
+TENANT flow — it deliberately installs nothing — so its state overlay has no such value, and the
+report concludes none exists. But rows 3/4 (scenario-1) had installed one into the same guest
+cluster, and `creds` has a working kubeconfig it never asks.
+
+**Why this matters more than a cosmetic wrong URL:** the note is a claim about the world, and it is
+false. It sends the operator to a port-forward they do not need, and an operator who believes it will
+conclude the demo is incomplete when it is serving. It is the same class this repo already fixed for
+the cgroup remediation — an operator-facing message naming a cause that is not the lever.
+
+⚠️ **The obvious fix has a trap the file already documents.** `creds.sh:150-155` records that a
+FIRST version printed `<ingress NOT ANSWERING>` in the URL column and was refused, because "with an
+ingress, those URLs are exactly what the operator wants" and a liveness warning "belongs ABOVE the
+table, once, not smeared across every row". So the fix is NOT to probe liveness per row. It is to
+DISCOVER the address when the state file has none — the Gateway's `.status.addresses[0].value`, or
+the ingress Service's LB ingress — and fall back to `<needs ingress>` only when discovery also finds
+nothing.
+
+**Open questions for the idea round (do not implement before it):** does `creds` always have a
+usable kubeconfig (it is documented as read-only and must never gate)? What should it print when the
+cluster is unreachable — today's marker, or something that distinguishes "no ingress" from "could not
+look"? And does a tenant who genuinely has no ingress still get an honest answer?
+
+**Done when:** on a cluster with a working ingress, `make creds` prints the real URLs regardless of
+which flow stamped the overlay; and the note appears only when there is genuinely nothing serving.
