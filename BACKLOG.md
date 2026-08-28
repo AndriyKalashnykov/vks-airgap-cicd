@@ -3964,7 +3964,88 @@ already lost twice.
 Severity is LOW — the gate fails **closed** (a false RED, not a false green), which is the safe
 direction.
 
-## 🔴 B510 — the go_get verification `podman run` is UNTESTED on cgroup v1, and its failure names the wrong cause
+## ✅ B510 (FIXED 2026-08-27) — the go_get verification `podman run` is UNTESTED on cgroup v1, and its failure names the wrong cause
+
+**FIXED — and the adversary rounds found a WORSE defect in the same block that neither the row nor
+the brief mentioned.** Two idea-round adversaries independently refuted the design I brought them:
+
+- **Refuted: classifying on stderr TEXT.** On a cgroup-v1 host podman prints `Using cgroups-v1 which
+  is deprecated` on EVERY invocation — measured in `~/walk-evidence`, 12 occurrences inside a
+  row2-photon run that finished `0 FAILED`, and `podman save` emits it too. A "cgroup" matcher
+  therefore fires on the GENUINE no-shell case, shipping a NEW confidently-wrong cause. `no such
+  file` is no better: it matches both the missing shell and crun's v1 devices-controller failure.
+- **Refuted: a temp file for stderr.** A second `trap ... EXIT` REPLACES the existing one, which is
+  the only thing that removes the kaniko `git clone` in `$src`. Stderr is now simply left
+  unredirected, so the runtime's own message lands in the log the operator already reads.
+- **The exit code already discriminates**, identically on both engines (measured docker 29.7.2,
+  podman 4.9.3): `0` the shell ran · `127` command not found · `125` the engine could not start the
+  container.
+- **The worse defect:** `grep -ac ... 2>/dev/null || echo 0` collapsed two OPPOSITE events into the
+  literal `0` — grep RAN and found nothing (rc 1, the real finding, `die` is right) and grep FAILED
+  TO RUN (rc 2: moved path, or a busybox without `-a`). The second aborted the build with a
+  maximum-alarm supply-chain message for a tooling problem. `grep -c` already prints `0` on
+  no-match, so `|| echo 0` only ever swallowed ERRORS.
+
+⚠️ **THAT EXIT-CODE DESIGN WAS ITSELF SUPERSEDED THE SAME DAY — do not rebuild it.** It classified
+the container failure by exit code (0 / 125 / 126|127). MEASURED on a real cgroup-v1 Photon host, a
+RUNTIME failure returns **127**, the same code as a genuinely missing shell, so the classification
+cannot discriminate and its `125` arm is unreachable. An adversary ran the shipped classifier against
+those inputs and it emitted, for the v1 failure, *"a non-debug kaniko image legitimately has no
+shell"* — i.e. it asserted a benign cause for a good image on a broken host, **worse than the text it
+replaced**.
+
+`create` + `cp` + host-grep was the next idea and is also REFUTED: `docker cp` and `podman cp` have
+OPPOSITE symlink semantics with no portable `-L`, and `create` on an absent image makes a NETWORK
+call with retries — wrong on an air-gap box.
+
+**What shipped instead: the probe makes NO ENGINE CALL AT ALL.** `14-selfbuilt-build.sh:219` already
+does `"$ENGINE" save -o "$tarball"` before the probe runs, so the probe greps that tarball on the
+host. No container is created or started, so the cgroup version is irrelevant; identical on podman
+and docker; nothing to leak; no trap change. Measured on the real artifact:
+
+    correct v0.21.9     HITS=4  RC=0   -> verified
+    substring v0.21.1   HITS=0  RC=1   -> die   (the false-verify this row opened on)
+    absent v9.99.99     HITS=0  RC=1   -> die
+    unreadable archive          RC=2   -> WARN tooling
+
+A **vacuity guard** counts metadata hits separately, because the tar also carries the image config
+whose history records the very `RUN go get` line this script injects; if the go_get ever moved into
+the final stage the metadata alone would satisfy the check. Two defects were found in that guard by
+an implementation round and fixed: it selected members by **filename** (`*.json`), which is VACUOUS
+ON DOCKER — `docker save` emits an OCI layout whose members are all extensionless
+`blobs/sha256/<digest>`, so it missed the config blob, i.e. was blind exactly where the RUN text
+lands; and `tar -xOf <dir>` dumps everything beneath it, so directory members re-yielded their
+children and one real match counted as **3**, which would raise a FALSE vacuity warning and refuse a
+good build. It now selects by CONTENT (first byte `{`) and skips directories; the test pins the count
+at EXACTLY 1 so double-counting fails too.
+
+⚠️ **CORRECTED SAME DAY — the runtime arm is NOT hypothetical, it FIRED, and the old message lied
+about it on every photon row.** This row and the code comment both said the arm "has never fired",
+reasoning from zero `<engine> run` invocations in `~/walk-evidence`. That was an argument from an
+archive that PREDATED the probe — only three archived rows carry a verdict at all. Measured in one
+matrix run, same commit, same Dockerfile, same tag, back to back:
+
+    row1 ubuntu  cgroup v2  ->  "verified in the binary ... (2 build-info hit(s))"
+    row2 photon  cgroup v1  ->  "no shell in <ref> — the go_get override is UNVERIFIED"
+
+Row 2's image was then **pulled by digest from Harbor and inspected directly** (image id
+`f312857733c3`, matching row 2's own `COMMIT`). It is fine: `/busybox/sh`, `/busybox/ln` and
+`/bin/sh` all present, and this very probe run against it on a cgroup-v2 host returns
+**`HITS=2:RC=0` — it VERIFIES**. So the image had the shell all along; the `<engine> run` is what
+failed, and the old else-branch blamed the artifact for a container-runtime failure, silently, on
+every photon row.
+
+That makes this fix load-bearing rather than tidy-up: with it, that row would have said *"the
+container RUNTIME could not start <ref> — run `make engine-check`"* instead of accusing the image.
+
+**Still NOT measured:** that cgroup v1 is the MECHANISM. The correlation is **n=1** on the v1 side,
+and podman documents rootless-on-v1 as supported (it stops MANAGING cgroups rather than failing).
+What is established is the CLASSIFICATION — a runtime failure, not an image defect — which is the
+thing this code has to get right.
+
+⚠️ It also means the adversary's grading of my original premise ("claim 2 — NOT ESTABLISHED, evidence
+points the other way") was **right about the evidence available at the time and wrong about the
+world**. The evidence it reasoned from — an empty archive — could not have settled it either way.
 
 `14-selfbuilt-build.sh` verifies the `go_get` override by running the built image:
 
@@ -3998,7 +4079,25 @@ cannot, that cell fails with no mitigation available and no message naming the c
 `18-engine-check.sh`'s new cgroup note is podman-scoped.
 
 Settle it by running the photon × docker jumpbox cell and reading whether the build's RUN step
-survives. If it does not, the honest fix is a DISCLOSURE in `engine-check` (as the rootful-docker
+survives.
+
+⚠️ **THAT SETTLEMENT METHOD IS REFUTED — the jumpbox harness CANNOT reach the v1 cell.** MEASURED
+2026-08-27: cgroups are a HOST kernel facility and a container inherits the host's version, so a
+`photon:5.0` container on this cgroup-v2 box reports v2, whatever the OS inside it:
+
+    host                          stat -fc %T /sys/fs/cgroup -> cgroup2fs
+    podman run --rm photon:5.0    /sys/fs/cgroup has cgroup.controllers  -> v2 (0x63677270)
+
+`18-engine-check.sh:64` already records the real source of v1: **"Photon 5 boots v1 by default;
+systemd.unified_cgroup_hierarchy=1 gives v2"** — i.e. the exposure belongs to a Photon 5 **VM or bare
+jump box**, not to `make jumpbox`. So `jumpbox-matrix`'s photon x docker cell measures the HOST's
+cgroup version and is structurally incapable of answering this row, on any v2 developer box.
+
+**What this leaves:** the question is only answerable on a genuinely v1-booted host, and the honest
+interim deliverable is the DISCLOSURE this row already proposes — `engine-check`'s cgroup note is
+podman-scoped (it names `BUILDAH_ISOLATION`, which `docker build` ignores entirely), so a docker
+operator on a v1 Photon box gets no message naming the cause. Extending that note is not a
+mitigation and must not be written as one. If it does not, the honest fix is a DISCLOSURE in `engine-check` (as the rootful-docker
 sudo cost is disclosed) rather than a mitigation that does not exist.
 
 ## 🔴 B512 — `/supervisors/summaries`'s `.info` carries more fields than the lister enumerates
@@ -4019,3 +4118,74 @@ Settle it read-only, on a live lab:
 
 If a cluster field DOES exist, the refusal can become a real selector — map the chosen Supervisor to
 its cluster moid and steer the upgrade properly, which is what an operator asked for.
+
+## 🔴 B513 — `selfbuilt.lock` has NO verification column, so a VERIFIED build and an UNVERIFIED one write byte-identical lines
+
+Surfaced 2026-08-27 by the two adversary rounds on B510, as a finding neither the brief nor I asked
+for. `14-selfbuilt-build.sh` proves a `go_get` dependency override actually reached the built binary,
+and on failure it warns. Then it writes:
+
+    printf '%s\t%s\t%s\t%s:%s\t%s\n' "$name" "$ref" "$engine_id" "$repo" "$tag" "<date>" >> "${LOCK}.tmp"
+
+`name · ref · engine_id · repo:tag · date`. **No field records whether the probe verified anything.**
+So a build whose override was confirmed in the binary and a build that warned `UNVERIFIED` produce
+the same lock line, and the only difference is one `log_warn` inside a matrix log whose ubuntu row
+runs past 2,500 lines.
+
+**Why that matters:** the probe exists precisely to break the chain *text injected -> build exited 0
+-> INFERRED that the dependency is what we asked for*. For any later reader of the lock — which is
+the durable artifact, and what `22-selfbuilt-push.sh` appends the digest to — that chain is fully
+restored. The proof is real and then discarded.
+
+This is the same class the repo already fixed for the builder: `14-builder-build.sh` stamps
+`io.vks.builder.inputs` so a stale builder announces itself rather than relying on someone noticing.
+
+**Fix shape (needs its own idea round — it changes a file format two scripts read):** add a
+verification field, e.g. `verified:2` / `unverified:no-shell` / `unverified:runtime` /
+`unverified:grep-tooling`, mirroring the four arms the probe now distinguishes. Then a consumer can
+gate on it, and `mirror-verify`-style tooling can report how many artifacts are actually proven.
+
+**Done when:** the lock records the probe's verdict per row, `22-selfbuilt-push.sh` still parses it,
+and a test pins that an unverified build's line is DISTINGUISHABLE from a verified one.
+
+## 🟡 B514 — two matrix runs were SIGTERM'd ~5 minutes in; a `setsid` launch survives, but the CAUSE is NOT established
+
+MEASURED 2026-08-27/28. Two cut-A launches died identically, mid-walk, on a healthy box:
+
+| attempt | row-1 banner | death | elapsed | log ends |
+|---|---|---|---|---|
+| 3 | 00:53:10Z | ~00:56:52Z | ~3m 42s | mid-walk |
+| 5 | 01:12:42Z | 01:17:53Z | 5m 11s | after the walk-env manifest + DNS registration |
+
+Both ended `make: *** [Makefile:1486: walk-matrix] Terminated` — i.e. the recipe shell took
+**SIGTERM** — and the harness's own task record reads `[killed]`. Each left an orphaned
+`vks-walkbox-<os>` VM, because the signal reached `make` and not its children.
+
+**What was ruled OUT, by measurement, not by reasoning:**
+
+- not the box: 76 GB available, load 4.16, no OOM in `dmesg`, nothing in the user journal.
+- not a self-inflicted `pkill`: `walk-matrix.sh`, `walkbox-vm.sh` and `lib/*.sh` contain **zero**
+  `pkill`/`killall`/`kill --` (grepped). `destroy_stale_walkboxes` only calls `virsh`.
+- not an internal timeout: every `timeout` in `walk-matrix.sh` is per-command (60/120s) and would
+  surface as that command failing, not as the recipe being signalled.
+- not my own kill-by-process-group: the transcript has exactly one, at **2026-08-27T05:06:24Z** —
+  about 20 hours before attempt 5.
+- not a `timeout` wrapper on the launch: none of the recorded launches carries one.
+
+**The mitigation, and the evidence for it.** Attempt 6 was launched through `setsid --wait`, giving
+the run its **own session and process group** (`pid=pgid=sid=1485896`, distinct from the launching
+shell's). It passed 19 minutes and the whole walk phase — mirror pull at `[22/28]` — where both
+earlier attempts died at 4–5. That is consistent with a **process-group-directed signal** reaching
+the launching shell's group, which a new session is immune to.
+
+⚠️ **It is consistent with, not proof of.** One surviving run against two deaths is a weak
+denominator, and a signal aimed at the tool call's PID rather than its group would produce the same
+observation (setsid would die and the child would be orphaned but keep running — which did NOT
+happen here, the wrapper is still alive, so that variant is at least disfavoured).
+
+The wrapper (`/tmp/cutA6-run.sh`) traps TERM/HUP/INT/QUIT and dumps a full `ps` snapshot to
+`/tmp/cutA6.trace` on any signal, so the next occurrence names its own moment. The trace is empty.
+
+**Done when:** either a signal is caught and attributed, or three consecutive `setsid` runs complete
+while a non-setsid control dies — at which point launch through `setsid --wait` becomes the
+documented way to run the matrix and this row closes with the mechanism named.

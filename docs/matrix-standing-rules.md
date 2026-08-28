@@ -84,8 +84,11 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
    make -C ~/projects/nested-vsphere-lab destroy CONFIRM=yes
    make -C ~/projects/nested-vsphere-lab lab
    make -C ~/projects/nested-vsphere-lab kubectl-login
-   #    ... register the -legacy- YAML in the UI, then:
-   make -C ~/projects/nested-vsphere-lab vks-upgrade VKS_VERSION=<ver> CONFIRM=<ver>
+   #    Register over the API, exactly as step 0 does — NOT "in the UI", which this line used to
+   #    say. The lab repo's vks-register target landed in lab #124 and is proven unattended; it is
+   #    idempotent ("already registered — nothing was written"), so a re-run is free.
+   make -C ~/projects/nested-vsphere-lab vks-register VKS_VERSION=<ver>
+   make -C ~/projects/nested-vsphere-lab vks-upgrade  VKS_VERSION=<ver> CONFIRM=<ver>
 
    # 3. cut B. WALK_SKIP_REBUILD stops it destroying the lab you just prepared.
    #    WALK_CLUSTER_NAME is MANDATORY with that flag (the script refuses without it): the name

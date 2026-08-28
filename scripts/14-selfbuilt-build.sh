@@ -243,16 +243,87 @@ for name in $NAMES; do
       _want_mod="${_mod%@*}"; _want_ver="${_mod##*@}"
       # The dep record is "<module><TAB><version>"; `.` matches the tab without needing to quote it.
       # Measured on a correct build: 2 hits. A wrong version: 0.
-      if _hits="$("$ENGINE" run --rm --entrypoint /busybox/sh "$local_ref" \
-                    -c "grep -ac '${_want_mod}.${_want_ver}' /kaniko/executor 2>/dev/null || echo 0" 2>/dev/null)"; then
-        case "$_hits" in
-          ''|0|*[!0-9]*) die "[${name}] the go_get override did not reach the binary: '${_want_mod} ${_want_ver}'
-  is not in /kaniko/executor's embedded build info. The Dockerfile text was injected and the build
-  exited 0, so this is the difference between 'we asked' and 'it happened'." ;;
-          *) log_info "[${name}] verified in the binary: ${_want_mod} ${_want_ver} (${_hits} build-info hit(s))" ;;
-        esac
+      # ⚠️ NO CONTAINER IS CREATED OR STARTED. We grep the TARBALL this script already wrote at
+      # `"$ENGINE" save -o "$tarball"` a few lines up. That is not a micro-optimisation -- it is the
+      # whole fix, and it was arrived at by refuting two designs that came before it:
+      #
+      #  * `<engine> run --entrypoint /busybox/sh` (the original) CANNOT RUN on a cgroup-v1 host.
+      #    MEASURED on a Photon 5 walkbox (podman 5.8.5, crun 1.29, rootless uid 1000):
+      #        Error: crun: open `/sys/fs/cgroup/devices/<ctr-id>`: No such file or directory
+      #    crun cannot create the container cgroup under the root-owned v1 `devices` controller --
+      #    v1 has no delegation model (v2 introduced it). podman maps it to rc 127, the SAME code as
+      #    a genuinely missing shell, so no exit-code classification can separate them. It fired in
+      #    production: matrix row2 (photon, v1) logged "no shell in <ref> ... UNVERIFIED" while row1
+      #    (ubuntu, v2) logged "verified in the binary (2 hits)" -- same commit, same tag. The image
+      #    was later pulled by digest and is FINE (/busybox/sh present; the probe returns HITS=2:RC=0
+      #    against it on a v2 host). Photon 5 boots v1 BY DEFAULT and Photon is a jump-box OS we are
+      #    handed, so v1 is the NORM here, not an edge case.
+      #  * `<engine> create` + `<engine> cp` + host grep (the obvious next idea) is REFUTED:
+      #    `docker cp` and `podman cp` have OPPOSITE symlink semantics (docker copies a 4-byte broken
+      #    link, podman follows it) and `podman cp -L` does not exist -- so if /kaniko/executor ever
+      #    became a symlink, docker would report 0 hits and this code would `die` accusing the supply
+      #    chain, on ONE engine only. `create` on an absent image also makes a NETWORK call with
+      #    retries, which is exactly wrong on an air-gap box.
+      #
+      # The tarball has none of those problems: no cgroups, no engine call, no symlink divergence,
+      # no temp copy, nothing to leak, and grep's three-way status stays intact. MEASURED on the real
+      # artifact, and identical for a docker-saved and a podman-saved tar:
+      #     correct v0.21.9 -> HITS=4 RC=0   |   v0.21.1 (substring) -> HITS=0 RC=1   |   absent -> 0/1
+      # (FOUR hits, not the two the in-image grep saw: the tar carries the layer plus its blob.)
+      _hits="$(grep -acw "${_want_mod}.${_want_ver}" "$tarball")" && _grc=0 || _grc=$?
+
+      # VACUITY GUARD. The tar also carries manifest.json and the image config, and the config's
+      # history records the very `RUN go get <mod>@<ver>` line THIS SCRIPT injects. Today the go_get
+      # runs in a discarded BUILDER stage, so the metadata contributes ZERO hits (measured) and the
+      # count is all binary. If the override is ever moved into the final stage, the metadata alone
+      # would satisfy the check and it would verify itself -- the purest vacuous green. So count the
+      # JSON members separately and refuse to report VERIFIED if they contribute anything.
+      # Portable on purpose: `tar -tf` + `tar -xOf <member>` are POSIX; `--wildcards` is GNU-only and
+      # Photon's tar is toybox.
+      # ⚠️ SELECT METADATA BY CONTENT, NEVER BY FILENAME. An earlier version of this loop matched
+      # `*.json` and was VACUOUS ON DOCKER: `docker save` emits an OCI layout whose members are all
+      # `blobs/sha256/<digest>` with NO EXTENSION, so the name filter saw only index.json and
+      # manifest.json and MISSED THE CONFIG BLOB -- which is exactly where the `created_by` history
+      # (our injected `RUN go get`) lives. `podman save` emits docker-archive v1 instead, where the
+      # config IS `<sha>.json` but 12 further `<layer>/json` members are also missed. Both engines,
+      # different blind spots, same class. Matching `blobs/sha256/*` by name is ALSO wrong -- on
+      # docker that includes the LAYERS, one of which legitimately contains the binary we are trying
+      # to find, so the guard would fire on the real hit.
+      # `$1 !~ /^d/` SKIPS DIRECTORY MEMBERS, and that is not cosmetic: `tar -xOf <dir>` dumps
+      # EVERYTHING BENEATH IT, so a directory re-yields its children's bytes and the same metadata
+      # is counted once per ancestor. Measured on a 3-member fixture: 3 hits for 1 real match ->
+      # an inflated _json_hits can raise a FALSE vacuity warning and refuse a good build.
+      # Size bound is a COST bound, not the correctness gate: config/manifest/index are KB-scale and
+      # layers are MB-scale, so we only pay to inspect small members; the `{` content check is what
+      # actually decides. `tar -tvf`/`tar -xOf` are POSIX (Photon's tar is toybox; no --wildcards).
+      _json_hits=0
+      while read -r _jsz _jm; do
+        case "$_jsz" in ''|*[!0-9]*) continue ;; esac
+        [ "$_jsz" -le 1048576 ] || continue            # a layer is never the metadata we mean
+        case "$(tar -xOf "$tarball" "$_jm" 2>/dev/null | head -c 1)" in '{') ;; *) continue ;; esac
+        _jh="$(tar -xOf "$tarball" "$_jm" 2>/dev/null | grep -acw "${_want_mod}.${_want_ver}" || true)"
+        case "$_jh" in ''|*[!0-9]*) _jh=0 ;; esac
+        _json_hits=$((_json_hits + _jh))
+      done <<EOF
+$(tar -tvf "$tarball" 2>/dev/null | awk '$1 !~ /^d/ { for (i=1;i<=NF;i++) if ($i ~ /^[0-9]+$/) { print $i, $NF; break } }')
+EOF
+
+      if [ "$_json_hits" -gt 0 ]; then
+        log_warn "[${name}] the image METADATA in ${tarball} contains '${_want_mod} ${_want_ver}' (${_json_hits} hit(s)) — this check cannot tell metadata from binary, so the go_get override is UNVERIFIED. The go_get must run in a DISCARDED build stage, not the final one."
       else
-        log_warn "[${name}] no shell in ${local_ref} — the go_get override is UNVERIFIED in the artifact"
+        case "$_grc" in
+          0) case "$_hits" in
+               ''|0|*[!0-9]*) log_warn "[${name}] the probe returned rc=0 with a non-positive count ('${_hits}') — the go_get override is UNVERIFIED (this should not happen; suspect the archive)." ;;
+               *) log_info "[${name}] verified in the binary: ${_want_mod} ${_want_ver} (${_hits} build-info hit(s) in the saved image)" ;;
+             esac ;;
+          # NOT "not in /kaniko/executor" -- a grep of the saved image cannot localise to a path.
+          # What it proves is absence from the whole saved image; the vacuity guard above is what
+          # separates binary from metadata.
+          1) die "[${name}] the go_get override did not reach the artifact: '${_want_mod} ${_want_ver}'
+  is not present anywhere in the saved image (${tarball}). The Dockerfile text was injected and the
+  build exited 0, so this is the difference between 'we asked' and 'it happened'." ;;
+          *) log_warn "[${name}] could not read ${tarball} (grep rc=${_grc}) — the go_get override is UNVERIFIED. This is a TOOLING failure, not a finding about the binary." ;;
+        esac
       fi
     done
   fi

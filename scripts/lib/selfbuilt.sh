@@ -74,6 +74,24 @@ selfbuilt_validate() {
         case "$_m" in
           *@latest|*@master|*@main|*@upgrade|*@patch|*@none)
             echo "selfbuilt: row '$n' go_get '${_m}' is not a concrete version — the build would not be reproducible" >&2; rc=1 ;;
+          # An EMPTY version passed the `*@*` arm below and reached the verification probe as the
+          # pattern '<module>.' -- which matches EVERY build-info line. MEASURED on the real image:
+          # HITS=1197:RC=0, i.e. the probe reported the override VERIFIED having checked no version
+          # at all. The probe's own `grep -w` also rejects it, but then the row dies claiming "the
+          # override did not reach the binary", which names the wrong cause: the TSV is malformed.
+          *@) echo "selfbuilt: row '$n' go_get '${_m}' has an EMPTY version — pin a concrete one" >&2; rc=1 ;;
+          # ⚠️ THE REASON HERE IS THE DOCKERFILE, NOT THE PROBE. This comment used to say a single
+          # quote "breaks the verification probe's inner `sh -c`" -- true when the probe RAN a
+          # container, and FALSE since it stopped. Left as written, the next reader deletes a LIVE
+          # guard as obsolete. The durable reason: this value is also awk-injected into the generated
+          # `RUN go get <gg> && go mod vendor`, and a Dockerfile `RUN` IS `/bin/sh -c`. MEASURED: a
+          # quote-bearing value makes the real build fail with
+          #     /bin/sh: -c: line 1: unexpected EOF while looking for matching `''
+          # i.e. inside the artifact's own supply chain, which is worse than a probe misread. Same
+          # shape this file condemns at lines 55-61 for the trap ("a stray apostrophe silently
+          # corrupts the exit code, which is a fake-green generator"). The TSV is committed, so this
+          # is a fake-green guard, not a privilege boundary.
+          *\'*) echo "selfbuilt: row '$n' go_get '${_m}' contains a single quote — refused (it breaks the verification probe's quoting)" >&2; rc=1 ;;
           *@*) : ;;
           *) echo "selfbuilt: row '$n' go_get '${_m}' has no @version — pin it" >&2; rc=1 ;;
         esac
