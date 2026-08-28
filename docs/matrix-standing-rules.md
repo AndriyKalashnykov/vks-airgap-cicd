@@ -96,6 +96,30 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
         WALK_ROWS="3 4 6" WALK_SKIP_REBUILD=1 WALK_CLUSTER_NAME=cicd-gc<stamp>
    ```
 
+   ⚠️ **AND `vks-upgrade` MUST WAIT FOR THE TKr CATALOGUE TO SETTLE — a freshly built lab REFUSES
+   the upgrade, and the error says "not compatible", which reads as permanent.** MEASURED
+   2026-08-27, on the second step-0 run of the night:
+
+   ```text
+   PUT /api/vcenter/namespace-management/clusters/<moid>/supervisor-services/tkg.vsphere.vmware.com
+     -> HTTP 500: Supervisor Service (tkg.vsphere.vmware.com) version (3.7.1+v1.36) on cluster
+        (<uuid>) is not compatible. ... use the getPrecheckResult API.
+   ```
+
+   It is NOT an incompatibility. The Supervisor's TKr catalogue populates ASYNCHRONOUSLY after the
+   build reports success, and for the first minutes it holds only ancient releases — measured, the
+   list at failure time was v1.17/v1.18/v1.20, all `False False`, ages in seconds. With nothing
+   v1.36-compatible present, the precheck correctly refuses. Twenty seconds later the catalogue had
+   **18 TKrs, 7 Ready, 2 at v1.35/36**, and the identical `vks-upgrade` reached `CONFIGURED`.
+
+   This is invisible if you build the lab and come back later — which is why it did not appear on the
+   first rebuild of the night and did appear when step 0 ran as one unattended chain. Wait for it:
+
+   ```sh
+   # after kubectl-login, before vks-upgrade
+   until kubectl get tkr --no-headers 2>/dev/null | awk '$3=="True"' | grep -q 'v1\.3[56]'; do sleep 20; done
+   ```
+
    ⚠️ **`kubectl-login` IS PART OF STEP 0, and it was missing from it until 2026-08-27 — which cost
    a cut-A launch.** Step 2 listed it for cut B's lab; step 0 did not, because step 0 was written as
    one prose line assuming a lab *already* prepared. Rebuild the lab and you are in step 2's
