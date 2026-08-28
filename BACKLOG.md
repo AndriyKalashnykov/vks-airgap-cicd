@@ -4227,7 +4227,47 @@ The wrapper (`/tmp/cutA6-run.sh`) traps TERM/HUP/INT/QUIT and dumps a full `ps` 
 while a non-setsid control dies — at which point launch through `setsid --wait` becomes the
 documented way to run the matrix and this row closes with the mechanism named.
 
-## 🔴 B515 — `BUNDLE_DIR` CANNOT be overridden: `.env.example` sets it uncommented, so `make bundle BUNDLE_DIR=...` is silently ignored
+## 🟢 B515 (RE-SCOPED — the DEFECT reproduces, the FIX is REFUTED, and my claim about the gate was WRONG)
+
+⚠️ **THREE CORRECTIONS, all measured by an idea-round adversary, two of them to claims I wrote below.**
+
+1. **"`check-env-clobber` did not catch it because its invariant covers a hand-typed SELECTORS
+   list" — FALSE.** The gate has **five** arms (dynamic fallback, imperative guard, per-run
+   override ×2, selector, boolean toggle). It is green because arm (b) finds **ZERO per-run
+   override sites for `BUNDLE_DIR` anywhere in the repo** — measured, `grep -rlE '(MAKE\)[^#]*|make )[^#]*\bBUNDLE_DIR='` over `Makefile scripts` returns nothing. **The gate is correct**; there is
+   no override to protect. It even prints `ok 'HARBOR_CA_FILE' is uncommented but
+   SNAPSHOT-PROTECTED`, so it is more accurate than the rule I proposed to replace it with.
+2. **"an operator plausibly wants `make bundle BUNDLE_DIR=/media/usb/...`" — that use case is
+   ALREADY SERVED.** `BUNDLE_OUT_DIR` is correctly **commented** at `.env.example:967` and
+   documented as *"a per-run destination, e.g. a USB mount"*. `BUNDLE_DIR` is the staging **cache**
+   dir, not the carry destination. I conflated them.
+3. **The proposed fix is CRITICAL-broken.** Commenting it leaves `BUNDLE_DIR` **UNSET**, because
+   make does not export a `?=` variable to a recipe (measured, GNU Make 4.3: bare `make` -> UNSET;
+   command-line and env forms -> exported). `load_env` applies code defaults for `KUBECONFIG` and
+   others but **not** for `BUNDLE_DIR`. **11 hard `${BUNDLE_DIR:?}` sites die**, and they are NOT
+   confined to sneakernet — `23-mirror-verify.sh:37` is on **`make mirror`**, `41-install-tekton.sh:18`
+   is on **`make platform`**, both therefore on `install-all`.
+
+**AND THE DENOMINATOR SAYS THIS IS THE DESIGN, NOT A DEFECT.** All 56 uncommented `.env.example`
+variables were probed with a per-run override plus a control: **54 are defeated, 2 survive** — and
+the 2 (`HARBOR_CA_FILE`, `INGRESS_CONTROLLER`) are exactly the two the snapshot mechanism protects.
+Mechanism and gate agree perfectly. "A default in the defaults file beats the environment" is what
+makes it the defaults file; it is a bug only when a fallback, per-run override or toggle depends on
+it — precisely the five arms the gate implements. And the documented channel works: `BUNDLE_DIR` in
+`.env` is honoured (measured).
+
+**IF the capability is ever wanted, the mechanism is the SNAPSHOT LIST, not commenting** — measured
+working both ways with the real `load_env` against the real `.env.example`, zero blast radius, and
+it is the only variant that also works for someone who has the value in `.env` (commenting does not:
+`.env` still wins). Two things come with it, both measured: `IMAGE_CACHE_DIR` is a **coupled pair**
+(uncommented, hardcodes `./bundle/images`, has no `?=` at all) and must move together or the
+override is unusable; and `PROTECTED` must be a subset of `SELECTORS`, so adding one without the
+other self-inflicts a RED.
+
+**Left as-is deliberately.** The defect is real and reproduces; the capability is not wanted, the
+fix is worse than the defect, and the gate is right.
+
+--- original filing follows ---
 
 MEASURED 2026-08-28, found while building an isolated harness for B513:
 
@@ -4255,3 +4295,31 @@ relocates the bundle without touching the variable.
 
 **Done when:** `BUNDLE_DIR=/somewhere make bundle` writes to `/somewhere`, proven by a test, and the
 clobber gate's scope covers path-valued settables rather than only selectors.
+
+## ✅ B516 (FIXED 2026-08-28) — `make clean` expanded an UNDEFINED variable into `rm -rf /target`, and lied about what it removed
+
+Found by the B515 idea round while establishing the denominator; verified independently.
+
+    $ grep -cE '^APP_DIR[[:space:]]*[:?]?=' Makefile   -> 0
+    $ make -p -n | grep -cE '^APP_DIR[[:space:]]*[:?]?=' -> 0     (not in make's database either)
+    $ make -n clean
+        rm -rf ./bundle /target
+        echo "clean: removed ./bundle and app target/"
+
+`APP_DIR` was defined **nowhere**, so `$(APP_DIR)/target` expanded to **`/target`** — an absolute
+path at filesystem root handed to `rm -rf`. Silent today (an unprivileged user, no such directory);
+not silent under `sudo`, or in a container where it exists. And the echo **claimed** it had removed
+"app target/", so `clean` lied about work it never did.
+
+**Not replaced with a per-app loop, deliberately.** There are SIX apps across six languages and
+`apps/registry.tsv` has no build-output column, so a loop would mean hand-typing
+`target/ bin/ obj/ dist/ ...` — the enumerated list that rots on the next app. Cleaning app output
+is therefore not claimed; the echo now says exactly what was removed.
+
+**Also guarded:** `make clean BUNDLE_DIR=<path>` DOES honour the override (make exports a
+command-line variable) while `make bundle BUNDLE_DIR=<path>` does NOT (B515). So the deleting half
+obeyed a flag the writing half ignored, and an operator could `rm -rf` a directory they had never
+populated. `clean` now refuses a `BUNDLE_DIR` outside `$(CURDIR)` unless `CLEAN_FORCE=1`, and says
+why. Verified all three paths for real (not `make -n`, which prints the recipe regardless of which
+branch runs): inside-repo removes and exits 0; outside-repo refuses and the directory survives;
+`CLEAN_FORCE=1` deletes.

@@ -109,10 +109,18 @@ for name in $NAMES; do
     # `head -1` above, not `cat`: the stamp now carries the tag on line 1 and the lock record on
     # line 2, so an OLD one-line stamp still compares equal and simply has no record to re-emit.
     _sb_rec="$(sed -n '2p' "$_sb_stamp" 2>/dev/null || true)"
+    # ⚠️ MIGRATION: an OLD one-line stamp has no line 2, and that is the state EVERY existing box is
+    # in — so without this the erasure survives the fix for exactly the boxes it was written for.
+    # MEASURED: valid 74-byte lock + old stamp + one warm run -> 0 bytes, identical to pre-fix.
+    # The record is recoverable from the PREVIOUS $LOCK, which is not read until the final sort, so
+    # at skip time it still holds the last run's rows. Keyed on field 1 (the image name).
+    if [ -z "$_sb_rec" ]; then
+      _sb_rec="$(awk -F'\t' -v n="$name" '$1==n{print;exit}' "$LOCK" 2>/dev/null || true)"
+    fi
     if [ -n "$_sb_rec" ]; then
       printf '%s\n' "$_sb_rec" >> "${LOCK}.tmp"
     else
-      log_warn "[${name}] skipped, and its stamp predates the lock-record fix — this image will be absent from ${LOCK} until it is next built (SELFBUILT_FORCE=1 to restore it now)."
+      log_warn "[${name}] skipped, its stamp predates the lock-record fix, AND no record for it survives in ${LOCK} — so that file is being written EMPTY for this image. With a single-image registry that means the whole lock is truncated. SELFBUILT_FORCE=1 rebuilds and restores it."
     fi
     continue
   fi
@@ -355,7 +363,10 @@ EOF
   rm -rf -- "$src"; src=""
 done
 
-sort -u "${LOCK}.tmp" > "$LOCK"; rm -f "${LOCK}.tmp"
+# ⚠️ WRITE VIA A TEMP AND RENAME. `sort -u ... > "$LOCK"` truncates $LOCK BEFORE sort runs, so ANY
+# sort failure (unreadable tmp, ENOSPC, an interrupt) leaves it at zero — a second erasure path
+# inside the very statement this change exists to fix. MEASURED: unreadable tmp -> lock 0 bytes.
+sort -u "${LOCK}.tmp" > "${LOCK}.new" && mv -f "${LOCK}.new" "$LOCK"; rm -f "${LOCK}.tmp" "${LOCK}.new"
 log_info "self-built images saved into the bundle: ${NAMES}"
 log_info "next: make bundle   (bundle/selfbuilt/ is inside BUNDLE_DIR, so the existing tar carries it)"
 log_info "then, on the air-gap box: make selfbuilt-push"

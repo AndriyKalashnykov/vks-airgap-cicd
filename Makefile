@@ -1730,6 +1730,36 @@ renovate-validate: ## Validate renovate.json (pinned renovate — needs node on 
 
 ##@ Housekeeping
 .PHONY: clean
-clean: ## Remove build output and the air-gap bundle
-	@rm -rf $(BUNDLE_DIR) $(APP_DIR)/target
-	@echo "clean: removed $(BUNDLE_DIR) and app target/"
+clean: ## Remove the air-gap bundle (NOT app build output — see the note below)
+# ⚠️ `$(APP_DIR)/target` USED TO BE HERE AND APP_DIR IS DEFINED NOWHERE. MEASURED:
+#     $ make -n clean   ->   rm -rf ./bundle /target
+# an undefined variable expanded to an ABSOLUTE PATH AT FILESYSTEM ROOT, passed to `rm -rf`.
+# Harmless as an unprivileged user on a box with no /target; not harmless under sudo, or in a
+# container where it exists. The echo also CLAIMED it had removed "app target/", so `clean` lied
+# about work it never did.
+#
+# It is not replaced with a per-app loop, deliberately. There are SIX apps across six languages and
+# the registry records no build-output column, so a loop would mean hand-typing target/ bin/ obj/
+# dist/ ... — the enumerated list that rots on the next app. Cleaning app output is therefore NOT
+# claimed here; the echo says exactly what was removed.
+#
+# The BUNDLE_DIR guard. Passing that variable on the command line DOES reach this recipe (make
+# exports a command-line variable) while the same flag does NOT reach `bundle`, because load_env
+# re-sources .env.example over it (B515). So the deleting half obeys a flag the writing half
+# ignores, and an operator can delete a directory they never populated. Refuse anything outside the
+# repo.
+#
+# ⚠️ The prose above deliberately avoids writing the literal `make <target> <VAR>=` form: that is
+# how check-env-clobber's arm (b) detects a REAL per-run override site, and a comment containing it
+# reads to the gate as one. Measured — an earlier wording of this block turned the gate RED with
+# `in: Makefile` while adding no override at all.
+	@case "$(BUNDLE_DIR)" in \
+	  ./*|$(CURDIR)/*) ;; \
+	  *) [ "$${CLEAN_FORCE:-0}" = 1 ] || { \
+	       echo "clean: refusing to rm -rf '$(BUNDLE_DIR)' — it is outside $(CURDIR)."; \
+	       echo "       'make bundle' would NOT have written there (B515: the override is clobbered),"; \
+	       echo "       so this is very likely a path nothing of ours created. CLEAN_FORCE=1 to override."; \
+	       exit 1; } ;; \
+	esac
+	@rm -rf $(BUNDLE_DIR)
+	@echo "clean: removed $(BUNDLE_DIR). App build output is NOT cleaned (six languages, no registry column for it)."

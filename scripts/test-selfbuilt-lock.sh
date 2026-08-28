@@ -57,7 +57,11 @@ printf '%s\n%s\n' "$TAG" "$REC" > "$OUT/.${NAME}.built"
 
 REAL_LOCK="$REPO/bundle/selfbuilt/selfbuilt.lock"
 real_before="$(stat -c %Y "$REAL_LOCK" 2>/dev/null || echo none)"
-run_warm() { ( cd "$TMP" && timeout 120 bash "$SCRIPT_DIR/14-selfbuilt-build.sh" ) >"$TMP/run.log" 2>&1; }
+# CONTAINER_ENGINE=none: the script `die`s in container_engine() when no engine is on PATH, and this
+# test is in the FAST per-PR tier. Without it, an engine-less runner reports 5 FAILs reading "the
+# erasure is back" / "not backward compatible" — wrong causes for a missing binary, the class this
+# repo calls worse than a crash. The skip path never touches the engine, so pinning it is faithful.
+run_warm() { ( cd "$TMP" && CONTAINER_ENGINE=none timeout 120 bash "$SCRIPT_DIR/14-selfbuilt-build.sh" ) >"$TMP/run.log" 2>&1; }
 
 run_warm; rc1=$?
 a="$(cat "$OUT/selfbuilt.lock" 2>/dev/null)"
@@ -68,7 +72,9 @@ if [ -n "$a" ]; then ok "warm run 1 leaves selfbuilt.lock NON-EMPTY"
 else bad "warm run 1 left selfbuilt.lock EMPTY (rc=$rc1) — the erasure is back"; sed -n '1,8p' "$TMP/run.log" | sed 's/^/        | /'; fi
 if [ -n "$b" ]; then ok "warm run 2 leaves selfbuilt.lock NON-EMPTY"
 else bad "warm run 2 left selfbuilt.lock EMPTY (rc=$rc2) — the erasure is back"; fi
-if [ "$a" = "$b" ]; then ok "the record is BYTE-IDENTICAL across warm runs (no churn)"
+# `[ -n "$a" ]` first: comparing "" = "" PASSED in BOTH broken states (fix reverted, and no engine),
+# so without it this case contributes nothing exactly when things are wrong.
+if [ -n "$a" ] && [ "$a" = "$b" ]; then ok "the record is BYTE-IDENTICAL across warm runs (no churn)"
 else bad "the record changed between warm runs — a re-emit must not re-timestamp"; fi
 if printf '%s' "$a" | grep -qF "$REC"; then ok "the re-emitted record is the stamped one, verbatim"
 else bad "the lock does not carry the stamped record (got: '$a')"; fi
@@ -77,8 +83,15 @@ printf '%s\n' "$TAG" > "$OUT/.${NAME}.built"
 run_warm; rc3=$?
 if [ "$rc3" -eq 0 ]; then ok "an OLD one-line stamp is still accepted (head -1, not cat)"
 else bad "an old one-line stamp broke the run (rc=$rc3) — not backward compatible"; fi
-if grep -qi 'predates the lock-record fix' "$TMP/run.log"; then ok "and it SAYS the record is unavailable rather than silently emptying the lock"
-else bad "an old stamp emptied the lock with no warning"; fi
+# ⚠️ THE LOCK ITSELF, not just the message. This case used to assert only the warning, so it stayed
+# GREEN while the lock was being emptied — invisible to the very defect it names. An old one-line
+# stamp is the state EVERY existing box is in, and the record is recoverable from the previous
+# $LOCK, so the correct outcome is a PRESERVED lock, not a warning.
+c="$(cat "$OUT/selfbuilt.lock" 2>/dev/null)"
+if [ -n "$c" ]; then ok "an OLD one-line stamp still leaves the lock NON-EMPTY (record recovered from the previous lock)"
+else bad "an old one-line stamp EMPTIED the lock — the migration path re-emits nothing, so the erasure survives the fix"; fi
+if printf '%s' "$c" | grep -qF "$REC"; then ok "and the recovered record is the previous one, verbatim"
+else bad "the recovered record is not the previous one (got: '$c')"; fi
 
 real_after="$(stat -c %Y "$REAL_LOCK" 2>/dev/null || echo none)"
 if [ "$real_before" = "$real_after" ]; then ok "the repo's own bundle was NOT touched (CWD isolation holds)"
