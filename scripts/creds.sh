@@ -216,6 +216,22 @@ tekton_url="$(ingress_url "${TEKTON_DASHBOARD_HOST:-tekton.vks.local}")"  # Tekt
 _sink="$(state_file)"
 _have_sink=0; [ -f "$_sink" ] && _have_sink=1
 
+# ⚠️ `_VKS_STATE_SOURCED=0` CONFLATES TWO STATES — "refused" and "there was nothing to source".
+# `load_env` sets it from `state_check`, which is false in BOTH cases, so keying on it alone made the
+# no-overlay case report REFUSED instead of DEFAULT. STATE 1 of test-creds-show caught that
+# immediately ("the output does NOT declare values-provenance: DEFAULT ... the exact lie this gate
+# exists for") -- a fix landing a new defect in the opposite direction. A refusal REQUIRES a sink to
+# have existed. `if`, not `A && B && C=1`: that form returns non-zero when A is false.
+# ⚠️ COMPUTED HERE, NOT AT THE FLOW BLOCK 130 LINES DOWN, because its FIRST USE is `_unset_pw`
+# below -- and under `set -u` a later definition is an ABORT, not a default. MEASURED: the first
+# version set it at the flow block and `creds.sh` died with `line 240: _sink_refused: unbound
+# variable` on any box whose .env does NOT carry HARBOR_PASSWORD, i.e. exactly the fresh-box state
+# the KinD e2e reproduces with SKIP_DOTENV=1. It passed a live run only because the author's .env
+# happened to supply the password, so `_unset_pw` was never called -- a fixture accident.
+_sink_refused=0
+if [ "$_have_sink" = 1 ] && [ "${_VKS_STATE_SOURCED-1}" = "0" ]; then _sink_refused=1; fi
+
+
 # --- resolve logins -------------------------------------------------------------------
 #
 # NOTE (a fix I wrote and then DELETED, so nobody re-writes it): I added a "still the .env.example
@@ -231,7 +247,14 @@ _have_sink=0; [ -f "$_sink" ] && _have_sink=1
 # same defect as the old ArgoCD note. Only a REAL LAB must supply one (there, Harbor/ArgoCD are given to
 # you, not created by us).
 _unset_pw() {  # _unset_pw <VAR> -> what an unset password actually means, per flow
-  if [ "$_have_sink" = 1 ]; then printf '<not published — check the state overlay>'
+  # ⚠️ "check the state overlay" IS THE FOURTH FALSE CLAIM, and the most dangerous of them: under a
+  # REFUSAL the password WAS published -- for another cluster -- so this sent the operator to read a
+  # foreign credential out of the very file the Context block four lines above has just said is not
+  # in play. Reachable in B517's own scenario: on a KinD box 05-kind-up.sh GENERATES these into the
+  # overlay (.env.example leaves them commented), so an operator who ran KinD and then pointed at a
+  # lab lands here.
+  if [ "$_sink_refused" = 1 ]; then printf '<held by the REFUSED overlay — it is another cluster'"'"'s; do NOT use it>'
+  elif [ "$_have_sink" = 1 ]; then printf '<not published — check the state overlay>'
   else printf '<generated at install (KinD) — or set %s in .env for a real lab>' "$1"; fi
 }
 harbor_user="${HARBOR_USERNAME:-admin}"
@@ -329,8 +352,30 @@ fi
 # So: say which state sink is in effect, whose it is, whether the cluster answers, and — the line that
 # actually matters — whether the values below are DISCOVERED or DEFAULT.
 
+# ⚠️ THE SINK MAY EXIST AND STILL NOT BE IN PLAY. `load_env` REFUSES an overlay stamped for another
+# cluster (state.sh: "NOT sourcing it — its LB IPs, CA paths and passwords belong to the other
+# cluster") and publishes `_VKS_STATE_SOURCED=0` when it does. Every question below used to be
+# answered by GREPPING THE FILE, so a refused overlay was read as authoritative anyway:
+#
+#   MEASURED 2026-08-28, one command against a real lab guest cluster --
+#     level=ERROR  state: .env.state was written for a DIFFERENT cluster. NOT sourcing it
+#     ...six lines later...
+#       values below : DISCOVERED — the overlay is stamped for the cluster you are talking to
+#       flow         : KinD stand-in (the state overlay is stamped by the KinD flow)
+#
+#   The header contradicted the loader's own ERROR block, and `_ing` below was empty for the same
+#   reason, so all eight hosts read `<needs ingress>` while the cluster served 8/8 HTTP 200. One
+#   defect, three symptoms. (B517.)
+#
+# `state.sh:90` has keyed on this signal since B142 ("do not edit a sink this process never
+# sourced"); this file referenced it ZERO times. `${_VKS_STATE_SOURCED-1}` defaults to 1 so a
+# caller that never ran load_env is unchanged.
+
 # Whose state is it? The KinD flow STAMPS the sink (VKS_STATE_KIND=1); a real lab's does not.
-if [ "$_have_sink" = 1 ] && grep -q '^VKS_STATE_KIND=1' "$_sink" 2>/dev/null; then
+if [ "$_sink_refused" = 1 ]; then
+  _flow="undetermined — a state overlay exists but was REFUSED (stamped for another cluster), so
+                   nothing in it is in play here"
+elif [ "$_have_sink" = 1 ] && grep -q '^VKS_STATE_KIND=1' "$_sink" 2>/dev/null; then
   _flow="KinD stand-in (the state overlay is stamped by the KinD flow)"
 elif [ "$_have_sink" = 1 ]; then
   _flow="real lab (a state overlay exists and is NOT KinD-stamped)"
@@ -400,7 +445,16 @@ _stamp="$(grep -m1 '^VKS_STATE_SERVER=' "$_sink" 2>/dev/null | cut -d= -f2- | tr
 # a correctly-stamped, current overlay. One definition, because the normalisation is the drift-prone
 # part. (It parses the file and never dials, so it needs no --request-timeout.)
 _live_srv="$(state_kubeconfig_server "${KUBECONFIG:-}" || true)"
-if   [ "$_have_sink" != 1 ];                                   then _prov=DEFAULT
+# ⚠️ A REFUSED OVERLAY IS, FOR PROVENANCE PURPOSES, NO OVERLAY -- and it must NOT become a fourth
+# enum value. B204 refuted that exact move eight days ago, on the ground that `_prov` and
+# `env-populated` are ORTHOGONAL axes: a fourth value either duplicates the pair or wins whenever
+# .env is populated and DESTROYS the DISCOVERED/STORED split. Measured on the first version of this
+# fix, both losses arrived: with env-populated=0 it asserted "from YOUR .env ONLY" when there was NO
+# .env (the values were .env.example PLACEHOLDERS, printed unmarked), and it was the only arm naming
+# no remedy at all. So the refusal is reported on its OWN line and its own token -- B204's own
+# prescribed shape -- and `_prov` keeps its three values, computed as if the sink were absent, which
+# when it was refused is literally true. (B517.)
+if   [ "$_sink_refused" = 1 ] || [ "$_have_sink" != 1 ];       then _prov=DEFAULT
 elif grep -q '^VKS_STATE_KIND=1' "$_sink" 2>/dev/null;                 then _prov=DISCOVERED
 elif [ -n "$_stamp" ] && [ "$_stamp" = "${_live_srv:-__none__}" ]; then _prov=DISCOVERED
 else                                                                _prov=STORED
@@ -426,6 +480,14 @@ if [ "${SKIP_DOTENV:-0}" != "1" ] && [ -f "${REPO_ROOT}/.env" ] \
 fi
 [ "${CREDS_TOKEN:-0}" = "1" ] && printf 'values-provenance: %s\n' "$_prov"
 [ "${CREDS_TOKEN:-0}" = "1" ] && printf 'env-populated: %s\n' "$_env_populated"
+# The THIRD orthogonal axis, on its own line for the same reason `env-populated` is: an overlay can
+# be absent, in play, or present-and-REFUSED, and that is not the same question as where the values
+# came from. A machine keys on this; the prose below is for the human.
+if   [ "$_sink_refused" = 1 ]; then _overlay_state=REFUSED
+elif [ "$_have_sink"    = 1 ]; then _overlay_state=SOURCED
+else                               _overlay_state=NONE
+fi
+[ "${CREDS_TOKEN:-0}" = "1" ] && printf 'state-overlay: %s\n' "$_overlay_state"
 printf '\n  Context\n'
 case "$_prov" in
   DISCOVERED) printf '    values below : DISCOVERED — the overlay is stamped for the cluster you are talking to\n' ;;
@@ -447,8 +509,17 @@ case "$_prov" in
                 printf '    values below : DEFAULTS from .env / .env.example — these ARE PLACEHOLDERS, not credentials\n'
               fi ;;
 esac
-printf '    state overlay: %s\n' \
-  "$([ "$_have_sink" = 1 ] && echo "$_sink" || echo "none — no installer has published anything")"
+if [ "$_sink_refused" = 1 ]; then
+  printf '    state overlay: %s — REFUSED\n' "$_sink"
+  printf '                   It is stamped for a DIFFERENT cluster, so none of its LB IPs, CA paths\n'
+  printf '                   or passwords are in play here. Anything an installer published is\n'
+  printf '                   therefore MISSING from this report, which is NOT the same as absent\n'
+  printf '                   from the cluster. The ERROR block above names which cluster it belongs\n'
+  printf '                   to; inspect it with: make state-show\n'
+else
+  printf '    state overlay: %s\n' \
+    "$([ "$_have_sink" = 1 ] && echo "$_sink" || echo "none — no installer has published anything")"
+fi
 printf '    flow         : %s\n' "$_flow"
 printf '    cluster      : %s\n' "$_cluster"
 
@@ -602,14 +673,44 @@ elif [ "$_have_sink" = 0 ]; then
   printf '                     see docs/scenario-1.md (you install) or docs/scenario-2.md (you are a tenant).\n'
 else
   if [ -z "$_ing" ]; then
+    # ⚠️ SAY WHAT WE KNOW, NOT A FACT ABOUT THE WORLD. "no ingress is installed ... nothing serves
+    # those hosts" is a claim about the CLUSTER derived from a VARIABLE. When the overlay was
+    # refused the variable is merely absent, and the measured case had all eight hosts serving 200
+    # while this note said nothing did. (B517.)
+    if [ "$_sink_refused" = 1 ]; then
+    # ⚠️ DO NOT PRESCRIBE `make verify-ingress` HERE. It is HARD-GUARDED on the very variable whose
+    # absence produced this note (98-verify-ingress.sh aborts with INGRESS_LB_IP unset), so it dies
+    # without checking anything -- a remedy that cannot run. Nor `make install-ingress`: its default
+    # INGRESS_CONTROLLER=istio HELM-INSTALLS a mesh, and a Scenario-2 TENANT does not own the
+    # cluster's mesh (they attach with istio-existing). The port-forward is the only remedy that is
+    # read-only and correct in EVERY persona, which is why the arm below has always carried it and
+    # why a first version of this note deleting it was a regression: it repaired the CLAIM and broke
+    # the ACTION.
+    printf '\n  note: this box has no ingress LB IP — the state overlay that would carry one was REFUSED\n'
+    printf '        (stamped for a different cluster), so the *.vks.local URLs cannot be shown. This says\n'
+    printf '        NOTHING about whether the cluster HAS an ingress; this report simply cannot see one.\n'
+    printf '        Reach the services without it:\n'
+    printf '            kubectl -n <namespace> port-forward svc/<service> 8080:<port>\n'
+    printf '        Harbor and ArgoCD are unaffected — own LBs.\n'
+    else
     printf '\n  note: no ingress is installed, so Gitea / Tekton / the apps have NO *.vks.local URL —\n'
     printf '        nothing serves those hosts. Reach them with a port-forward:\n'
     printf '            kubectl -n <namespace> port-forward svc/<service> 8080:<port>\n'
     printf '        or install one: make install-ingress   (Harbor and ArgoCD are unaffected — own LBs).\n'
+    fi
   fi
   if [ "$argocd_url" = "<not set>" ]; then
+    # Same class as the ingress note one row up, and it was left untouched by the first fix: under a
+    # REFUSAL the overlay's ARGOCD_LB_IP is not ABSENT, it is out of scope -- so a flow claim
+    # ("KinD fills it in automatically") explains a MISSING as an absence, on a report whose flow
+    # line now reads "undetermined".
+    if [ "$_sink_refused" = 1 ]; then
+    printf '\n  note: ArgoCD'\''s address is not shown because the state overlay that would carry it was\n'
+    printf '        REFUSED — not because none exists. Set ARGOCD_SERVER in .env to name it explicitly.\n'
+    else
     printf '\n  note: ArgoCD'\''s address is not set. KinD fills it in automatically when ArgoCD is installed;\n'
     printf '        on a real lab, set ARGOCD_SERVER in .env.\n'
+    fi
   fi
 fi
 
