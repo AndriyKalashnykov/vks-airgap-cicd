@@ -4346,33 +4346,75 @@ Row 6 (scenario-2) ran `make creds` itself and printed:
 and the cluster agrees: `Gateway vks-ingress/vks-uis  Accepted=True Programmed=True`, all eight
 HTTPRoutes `Accepted=True ResolvedRefs=True`.
 
-**Root cause — the report reasons from a STATE FILE, not from the world.** `scripts/creds.sh:144`:
+**ROOT CAUSE — `creds` re-reads a state overlay the loader REFUSED, and reports it as DISCOVERED.**
 
-    _ing="${INGRESS_LB_IP:-}"
-    ingress_url() { if [ -n "$_ing" ]; then printf 'http://%s' "$1"; else printf '<needs ingress>'; fi }
+⚠️ **My first root cause was WRONG and an adversary refuted it.** I wrote *"scenario-2 is a TENANT
+flow that deliberately installs nothing, so its overlay has no INGRESS_LB_IP"*. MEASURED false:
+scenario-2 DOES install (`docs/scenario-2.md:885` runs `make install-ingress
+INGRESS_CONTROLLER=istio-existing`) and that path publishes the value (`47-attach-istio.sh:118`).
+Row 6 simply never reached it — `28 blocks: 18 ran, 0 FAILED, **10 skipped**`.
 
-`INGRESS_LB_IP` is published to `.env.state` by whichever flow INSTALLS the ingress. Scenario-2 is a
-TENANT flow — it deliberately installs nothing — so its state overlay has no such value, and the
-report concludes none exists. But rows 3/4 (scenario-1) had installed one into the same guest
-cluster, and `creds` has a working kubeconfig it never asks.
+The real trigger needs no walk at all. Running it by hand against the guest cluster the matrix left
+behind, and reading EVERY line rather than one column:
+
+```
+level=ERROR msg=state: .env.state was written for a DIFFERENT cluster.
+level=ERROR msg=  NOT sourcing it — its LB IPs, CA paths and passwords belong to the other cluster
+...
+    values below : DISCOVERED — the overlay is stamped for the cluster you are talking to   <- FALSE
+    flow         : KinD stand-in (the state overlay is stamped by the KinD flow)            <- FALSE
+    cluster      : reachable — context 'cicd-gc08280348-admin@cicd-gc08280348'              <- true
+  Gitea/Tekton/6 apps   <needs ingress>                                                     <- FALSE
+  note: no ingress is installed, so ... nothing serves those hosts                          <- FALSE
+```
+
+The two header lines contradict the ERROR block **six lines above them**. Three symptoms, one defect
+— `creds` greps the sink FILE instead of asking whether it was SOURCED:
+
+```sh
+# creds.sh:404
+elif grep -q '^VKS_STATE_KIND=1' "$_sink" 2>/dev/null;  then _prov=DISCOVERED
+# creds.sh:334
+  _flow="KinD stand-in (the state overlay is stamped by the KinD flow)"
+# creds.sh:144
+_ing="${INGRESS_LB_IP:-}"        # never sourced -> empty -> every host reads <needs ingress>
+```
+
+`.env.state` carries `VKS_STATE_KIND=1` (the KinD flow wrote it), so the grep matches whatever
+cluster you point at.
+
+**The signal ALREADY EXISTS and `creds` does not read it.** `load_env` exports
+`_VKS_STATE_SOURCED=1|0` (`lib/os.sh:657,659`), and `lib/state.sh:90` already gates on it for exactly
+this class — B142, *"do not edit a sink this process never sourced"*. MEASURED:
+`grep -c _VKS_STATE_SOURCED scripts/creds.sh` -> **0**.
 
 **Why this matters more than a cosmetic wrong URL:** the note is a claim about the world, and it is
 false. It sends the operator to a port-forward they do not need, and an operator who believes it will
-conclude the demo is incomplete when it is serving. It is the same class this repo already fixed for
-the cgroup remediation — an operator-facing message naming a cause that is not the lever.
+conclude the demo is incomplete when it is serving. Same class as the cgroup remediation this repo
+already fixed — an operator-facing message naming a cause that is not the lever.
 
-⚠️ **The obvious fix has a trap the file already documents.** `creds.sh:150-155` records that a
-FIRST version printed `<ingress NOT ANSWERING>` in the URL column and was refused, because "with an
-ingress, those URLs are exactly what the operator wants" and a liveness warning "belongs ABOVE the
-table, once, not smeared across every row". So the fix is NOT to probe liveness per row. It is to
-DISCOVER the address when the state file has none — the Gateway's `.status.addresses[0].value`, or
-the ingress Service's LB ingress — and fall back to `<needs ingress>` only when discovery also finds
-nothing.
+**AND THE MATRIX HAS NEVER MEASURED IT.** `make creds-show` is in BOTH documents
+(scenario-1.md:955, scenario-2.md:802) and the walk DOES run it — but the walk grades a block on its
+EXIT CODE, and `creds` is documented never-gating, so its output is printed and never read. Rows 5
+and 6 have printed `<needs ingress>` for all eight hosts in **20 logs across 12 runs since
+2026-08-20**, every one graded `0 FAILED`. A green row is a claim about the harness, not about the
+demo serving.
 
-**Open questions for the idea round (do not implement before it):** does `creds` always have a
-usable kubeconfig (it is documented as read-only and must never gate)? What should it print when the
-cluster is unreachable — today's marker, or something that distinguishes "no ingress" from "could not
-look"? And does a tenant who genuinely has no ingress still get an honest answer?
+⚠️ **TWO fixes are already REFUTED — do not rebuild them.** (1) `creds.sh:150-155` records that a
+first version printed `<ingress NOT ANSWERING>` per row and was refused: with an ingress, those URLs
+are exactly what the operator wants, and a liveness warning "belongs ABOVE the table, once, not
+smeared across every row". (2) An idea round measured that the obvious resolver, `istio_discover`
+(`lib/istio.sh:68-75`), is **blind to Gateway-API gateways** — its jq requires
+`.spec.selector.istio != null`, which the auto-provisioned proxy lacks — so it returns the DEAD
+`istio-ingressgateway` at .134 (zero routes, `curl (56) connection reset`) and its `count -gt 1`
+ambiguity guard cannot fire at count==1. It also measured `kubectl get gateway -A -o
+jsonpath='{.items[0]...}'` returning **rc=1** on an empty list, which under `set -euo pipefail` kills
+the printer — the `{range .items[*]}` form is required, plus a `timeout` wrapper (`kubectl get` costs
+~15s against an unreachable API even with `--request-timeout=3s`).
 
-**Done when:** on a cluster with a working ingress, `make creds` prints the real URLs regardless of
-which flow stamped the overlay; and the note appears only when there is genuinely nothing serving.
+**Done when:** (1) `_prov`/`_flow`/`_ing` key on `_VKS_STATE_SOURCED`, so a refused overlay reports a
+FOURTH state — the file exists, was refused, its values are NOT in play — instead of DISCOVERED;
+(2) the note states what we KNOW (*"this box's overlay records no ingress and was not sourced"*)
+rather than a fact about the world; (3) a gating sibling validates the FULL outcome so the matrix can
+catch it — design under adversary review. Each RED-proven with a stamped-for-another-cluster overlay,
+which reproduces in one command.
