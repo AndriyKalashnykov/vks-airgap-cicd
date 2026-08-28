@@ -4357,28 +4357,24 @@ Row 6 simply never reached it — `28 blocks: 18 ran, 0 FAILED, **10 skipped**`.
 The real trigger needs no walk at all. Running it by hand against the guest cluster the matrix left
 behind, and reading EVERY line rather than one column:
 
-```
-level=ERROR msg=state: .env.state was written for a DIFFERENT cluster.
-level=ERROR msg=  NOT sourcing it — its LB IPs, CA paths and passwords belong to the other cluster
-...
-    values below : DISCOVERED — the overlay is stamped for the cluster you are talking to   <- FALSE
-    flow         : KinD stand-in (the state overlay is stamped by the KinD flow)            <- FALSE
-    cluster      : reachable — context 'cicd-gc08280348-admin@cicd-gc08280348'              <- true
-  Gitea/Tekton/6 apps   <needs ingress>                                                     <- FALSE
-  note: no ingress is installed, so ... nothing serves those hosts                          <- FALSE
-```
+    level=ERROR msg=state: .env.state was written for a DIFFERENT cluster.
+    level=ERROR msg=  NOT sourcing it — its LB IPs, CA paths and passwords belong to the other cluster
+    ...
+        values below : DISCOVERED — the overlay is stamped for the cluster you are talking to   <- FALSE
+        flow         : KinD stand-in (the state overlay is stamped by the KinD flow)            <- FALSE
+        cluster      : reachable — context 'cicd-gc08280348-admin@cicd-gc08280348'              <- true
+      Gitea/Tekton/6 apps   <needs ingress>                                                     <- FALSE
+      note: no ingress is installed, so ... nothing serves those hosts                          <- FALSE
 
 The two header lines contradict the ERROR block **six lines above them**. Three symptoms, one defect
 — `creds` greps the sink FILE instead of asking whether it was SOURCED:
 
-```sh
-# creds.sh:404
-elif grep -q '^VKS_STATE_KIND=1' "$_sink" 2>/dev/null;  then _prov=DISCOVERED
-# creds.sh:334
-  _flow="KinD stand-in (the state overlay is stamped by the KinD flow)"
-# creds.sh:144
-_ing="${INGRESS_LB_IP:-}"        # never sourced -> empty -> every host reads <needs ingress>
-```
+    # creds.sh:404
+    elif grep -q '^VKS_STATE_KIND=1' "$_sink" 2>/dev/null;  then _prov=DISCOVERED
+    # creds.sh:334
+      _flow="KinD stand-in (the state overlay is stamped by the KinD flow)"
+    # creds.sh:144
+    _ing="${INGRESS_LB_IP:-}"        # never sourced -> empty -> every host reads <needs ingress>
 
 `.env.state` carries `VKS_STATE_KIND=1` (the KinD flow wrote it), so the grep matches whatever
 cluster you point at.
