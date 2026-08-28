@@ -46,6 +46,25 @@ if [ "$ENGINE" = podman ]; then
   # failure surfaced ~20 minutes into `make install-all` at `builder-image`:
   #     user namespaces are not enabled in /proc/sys/kernel/unprivileged_userns_clone
   #     Error: cannot re-exec process
+  # CGROUP VERSION — the condition that actually killed two walk-matrix rows, and which this
+  # preflight never mentioned (measured: 0 occurrences of "cgroup" before this). A rootless podman
+  # build on a cgroup-v1 host dies at its FIRST RUN step with
+  #     crun ... open `/sys/fs/cgroup/devices/buildah-...`: exit status 1
+  # an error naming neither podman, nor cgroups, nor the user. It is HANDLED —
+  # engine_build_isolation switches the build to chroot — so this is a NOTE, not a problem. The
+  # point is that a preflight whose job is "can this box build rootless?" should say it up front
+  # instead of letting it surface mid-build. Adversary-found 2026-08-27.
+  if [ "$(container_engine)" = podman ]; then
+    _cg="$(stat -fc %T /sys/fs/cgroup 2>/dev/null || echo unknown)"
+    if [ "$_cg" = cgroup2fs ]; then
+      note "cgroup v2 - rootless builds run with normal isolation"
+    else
+      note "cgroup v1 (${_cg}) - rootless podman cannot create a container cgroup here, so builds"
+      note "  run with BUILDAH_ISOLATION=chroot (weaker, bounded: our Dockerfile, our base)."
+      note "  Photon 5 boots v1 by default; systemd.unified_cgroup_hierarchy=1 gives v2."
+    fi
+  fi
+  
   if [ -e /proc/sys/kernel/unprivileged_userns_clone ] \
      && [ "$(cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || echo 1)" = 0 ]; then
     prob "kernel.unprivileged_userns_clone=0 — rootless podman cannot create a user namespace, so

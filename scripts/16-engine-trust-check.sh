@@ -41,7 +41,14 @@ fi
 # ~/.docker/config.json. We do not touch their file.
 if [ -z "${DOCKER_CONFIG:-}" ]; then
   DOCKER_CONFIG="$(mktemp -d)"; export DOCKER_CONFIG
-  trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+  # ⚠️ ONE ACCUMULATING LIST, NOT THREE TRAPS. `trap ... EXIT` REPLACES the previous handler, and
+  # this file had three: the two below silently disabled this one, so $DOCKER_CONFIG — which exists
+  # precisely because `login` writes an auth entry into it — was LEAKED on every run, accumulating
+  # registry credentials in /tmp on the operator's jump box. Measured: a second `trap ... EXIT`
+  # leaves the first directory behind. Adversary-found 2026-08-27.
+  _CLEAN=("$DOCKER_CONFIG")
+  # shellcheck disable=SC2064  # expand the array NOW is wrong here; we want it at EXIT time
+  trap 'rm -rf "${_CLEAN[@]}"' EXIT
 fi
 
 : "${HARBOR_URL:?run 'make install-harbor' first}"
@@ -103,7 +110,7 @@ if [ "${HARBOR_INSECURE:-0}" != "1" ]; then
   [ -n "$CA" ] && [ -f "$CA" ] || die "HARBOR_CA_FILE ('${CA:-<unset>}') not found — the CA is written by 'make install-harbor' (secure mode)"
   CA_METHOD="$(engine_trust_ca "$ENGINE" "$HARBOR_URL" "$CA")"
   if [ "$ENGINE" = podman ]; then
-    CERTD="$(mktemp -d)"; trap 'rm -rf "$CERTD"' EXIT
+    CERTD="$(mktemp -d)"; _CLEAN+=("$CERTD")
     cp "$CA" "${CERTD}/ca.crt"
     CERT_ARGS=(--cert-dir "$CERTD")
   fi
@@ -123,9 +130,21 @@ log_info "pull  ${BASE}"
 run "$ENGINE" pull "${TLS_ARGS[@]}" "$BASE"
 
 # --- 4. BUILD (2 lines — we are testing the ENGINE, not a dependency cache) -------------------------
-WORK="$(mktemp -d)"; trap 'rm -rf "${WORK}" ${CERTD:-}' EXIT
+WORK="$(mktemp -d)"; _CLEAN+=("$WORK")
 printf 'FROM %s\nRUN true\n' "$BASE" > "${WORK}/Dockerfile"
 TAG="${HARBOR_URL}/${PROJECT}/engine-probe:${ENGINE}-$(date -u +%Y%m%d%H%M%S)"
+# A cgroup-v1 box cannot build rootless at all (see engine_build_isolation() in lib/engine.sh for the
+# measured A/B). That matters MORE here than in a normal build: this script exists to answer "does the
+# engine TRUST Harbor", and without this it dies at `RUN true` and reports a TRUST failure whose real
+# cause is cgroups — an error naming the wrong thing, on the one box the operator is least able to
+# debug. Found 2026-08-27 by a class-keyed check added after the same omission broke the self-built
+# image build on the walk matrix's photon rows.
+_iso="$(engine_build_isolation)"
+if [ -n "$_iso" ]; then
+  export BUILDAH_ISOLATION="$_iso"
+  log_warn "cgroup v1 detected — probing with BUILDAH_ISOLATION=${_iso} (rootless podman cannot"
+  log_warn "  create a container cgroup here). This is about the BOX, not about Harbor's trust."
+fi
 log_info "build ${TAG}"
 run "$ENGINE" build -t "$TAG" "$WORK"
 

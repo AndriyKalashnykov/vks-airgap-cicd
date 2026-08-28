@@ -118,6 +118,12 @@ engine_mode() {
 #     did not get container create message from subprocess: EOF
 # an error naming neither podman, nor cgroups-v1, nor the user.
 #
+# ⚠️ OPERATING POINT DRIFT: the A/B below was taken on podman 4.5.1, and the walkbox now runs 5.8.5
+# (measured across the walk archive: 4.5.1 on 08-21/24/25, 5.8.5 on 08-26/27). Podman 5 is the
+# release that DEPRECATED cgroup v1, so the justification could easily have been a 4.x measurement
+# applied to a 5.x failure. It is not: the archive carries a natural A/B at 5.8.5 too — the builder
+# path (fix present) fired chroot 6x with 0 crun failures and 6 images tagged, while the selfbuilt
+# path (fix absent) fired 0x and died. Re-confirm on the next major podman bump.
 # MEASURED 2026-08-16 on a Photon 5 walkbox (podman 4.5.1, crun 1.29, `stat -fc %T /sys/fs/cgroup` =
 # tmpfs i.e. v1, no systemd user delegation), A/B on the same box, same Dockerfile, one RUN step:
 #     default isolation        -> "while running runtime: exit status 1"
@@ -125,9 +131,16 @@ engine_mode() {
 # Ubuntu boots cgroup v2 (cgroup2fs) and is unaffected -- which is exactly why only the Photon rows
 # of the walk matrix failed, and why a green ubuntu row said nothing about it.
 #
-# chroot isolation runs RUN steps without a container cgroup. It IS weaker isolation, and that is a
-# deliberate, bounded trade: we build OUR OWN Dockerfile FROM OUR OWN pinned base, on a box the
-# operator controls. It is not applied on cgroup v2, where nothing is wrong.
+# WHAT chroot ISOLATION ACTUALLY COSTS — four changes, not one. A comment written to make a security
+# trade auditable must state the trade. Per buildah-build(1) --isolation, chroot "reus[es] the host's
+# control group, NETWORK, IPC, and PID namespaces, and creat[es] private mount and UTS namespaces,
+# and creat[es] user namespaces ONLY when they're required for ID mapping". So relative to the
+# default rootless build: cgroup + IPC + PID move to the HOST, the user namespace becomes
+# conditional, and UTS actually becomes MORE isolated. An earlier version of this comment said only
+# "without a container cgroup", which understated it by three namespaces. Adversary-found.
+#
+# It is still a deliberate, bounded trade: we build OUR OWN Dockerfile FROM OUR OWN pinned base, on a
+# box the operator controls, and it is not applied on cgroup v2 where nothing is wrong.
 #
 # Photon 5 CAN run v2 (`systemd.unified_cgroup_hierarchy=1` on the kernel cmdline) but does not by
 # default, and that is a boot-time parameter -- not something this repo can set on someone else's
