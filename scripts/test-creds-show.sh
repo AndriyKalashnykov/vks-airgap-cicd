@@ -770,14 +770,22 @@ fi
 #
 # The fixture needs a REAL kubeconfig file (creds.sh parses it; it never dials for this), stamped
 # against a DIFFERENT server. That mismatch is the whole trigger.
-_refused_kc="$(mktemp)"; _refused_sink=""
+# ⚠️ 127.0.0.1:1, NOT A ROUTABLE ADDRESS. A first version used 10.255.255.9, which `ip route get`
+# resolves via the box's DEFAULT GATEWAY -- so this "offline" suite DIALLED a third-party host on
+# every CI run (`test-creds-show` carries no ci-tier marker, so it is in TEST_FAST -> test-scripts ->
+# static-check -> make ci). MEASURED: the suite went 3.92s -> 17.63s, one render 13.33s vs 2.22s,
+# attributable to argocd-password.sh (10.1s) + `kubectl version` (3.03s) against that address. On a
+# corporate LAN with a 10/8 route it reaches someone else's machine. 127.0.0.1:1 gives the identical
+# REFUSED verdict in 0.36s with zero off-box packets. It also DEFEATS the KUBECONFIG sandbox this
+# file RED-proved at its top (78s -> 0s), which is the reason that sandbox exists.
+_refused_kc="$(mktemp)"
 cat > "$_refused_kc" <<'KCEOF'
 apiVersion: v1
 kind: Config
 current-context: refused-test
 clusters:
 - name: refused-test
-  cluster: {server: 'https://10.255.255.9:6443'}
+  cluster: {server: 'https://127.0.0.1:1'}
 contexts:
 - name: refused-test
   context: {cluster: refused-test, user: refused-test}
@@ -791,22 +799,64 @@ _refused_sink="$(printf 'VKS_STATE_KIND=1\nVKS_STATE_SERVER=https://127.0.0.1:44
 out="$(KUBECONFIG="$_refused_kc" render "$_refused_sink")"
 rm -f "$_refused_kc"
 
-if printf '%s' "$out" | grep -q 'values-provenance: REFUSED'; then
-  ok "STATE 11: a REFUSED overlay reports provenance REFUSED, not DISCOVERED"
+# ⚠️ THE OVERLAY AXIS IS ITS OWN TOKEN, NOT A FOURTH `values-provenance` VALUE. B204 refuted a 4th
+# enum on the ground that `_prov` and `env-populated` are ORTHOGONAL; a REFUSED overlay is a THIRD
+# axis and gets a third token. So the pin is the TRIPLE: the overlay is REFUSED, and provenance
+# behaves exactly as it would with no overlay at all -- which, when it was refused, is literally true.
+# ⚠️ AN EMPTY RENDER MAKES EVERY ABSENCE ASSERTION BELOW PASS VACUOUSLY. Measured: an unbound
+# variable killed creds.sh, `$out` was empty, and the three "the report does NOT say X" cases went
+# GREEN over a report that did not exist. Check the render produced something FIRST.
+if [ -z "$out" ]; then
+  bad "STATE 11: creds.sh produced NO OUTPUT — it died. Every assertion below is vacuous; run it by hand with the same fixture and read stderr."
+fi
+if printf '%s' "$out" | grep -q '^state-overlay: REFUSED'; then
+  ok "STATE 11: a REFUSED overlay is reported on its OWN token"
 else
-  bad "STATE 11: provenance is '$(printf '%s' "$out" | grep -m1 'values-provenance:' || echo NONE)' for an overlay load_env refused — the KinD arm greps the FILE, so it matches whatever cluster you point at"
+  bad "STATE 11: state-overlay is '$(printf '%s' "$out" | grep -m1 '^state-overlay:' || echo NONE)' for an overlay load_env refused — the KinD arm greps the FILE, so it matches whatever cluster you point at"
+fi
+if printf '%s' "$out" | grep -q 'values-provenance: DEFAULT'; then
+  ok "STATE 11: and provenance is DEFAULT — not DISCOVERED, and not a fourth enum value (B204)"
+else
+  bad "STATE 11: provenance is '$(printf '%s' "$out" | grep -m1 'values-provenance:' || echo NONE)'; a refused overlay is, for provenance, NO overlay"
 fi
 if printf '%s' "$out" | grep -q 'flow *: *undetermined — a state overlay exists but was REFUSED'; then
   ok "STATE 11: and the flow line does not claim the refused overlay's flow"
 else
   bad "STATE 11: flow says '$(printf '%s' "$out" | grep -m1 'flow ' || echo NONE)' — computed from a file that is not in scope"
 fi
-# The note is the operator-facing half, and it was the FALSE one: a claim about the CLUSTER derived
-# from a VARIABLE. It must say what we KNOW.
-if printf '%s' "$out" | grep -q 'This says'; then
-  ok "STATE 11: the ingress note states what THIS BOX knows, not a fact about the cluster"
+# ⚠️ ASSERT THE ABSENCE OF THE DEFECT'S OWN SENTENCE, NOT THE PRESENCE OF A NEW ONE. A first version
+# grepped for two words of the replacement ("This says") and was MUTATION-PROVEN worthless: restoring
+# the ORIGINAL FALSE note verbatim and appending "This says it all." kept the suite at 46/46 GREEN,
+# including this very case. A gate that greps prose is testing the prose -- STATE 1's own comment
+# says so. The defect is the sentence `no ingress is installed, so ... nothing serves those hosts`,
+# and its absence is the property.
+if printf '%s' "$out" | grep -q 'no ingress is installed'; then
+  bad "STATE 11: the ingress note still asserts 'no ingress is installed ... nothing serves those hosts' from a REFUSED overlay — the measured case had all eight hosts serving 200"
 else
-  bad "STATE 11: the ingress note still asserts 'nothing serves those hosts' from a refused overlay — the measured case had all eight serving 200"
+  ok "STATE 11: the ingress note does NOT assert the cluster has no ingress"
+fi
+# ...and it must still hand the operator a remedy that WORKS in this state. `make verify-ingress` is
+# hard-guarded on the very variable whose absence produced the note, so it dies without checking
+# anything; `make install-ingress` would helm-install a mesh into a cluster this report has just
+# disclaimed, which a Scenario-2 tenant must never do. The port-forward is read-only and correct in
+# every persona.
+if printf '%s' "$out" | grep -q 'port-forward'; then
+  ok "STATE 11: and it offers the port-forward — the only remedy correct in every persona"
+else
+  bad "STATE 11: the refused note names no working remedy; a fix that repairs the CLAIM and breaks the ACTION is not a fix"
+fi
+if printf '%s' "$out" | grep -qE 'note:.*(make verify-ingress|make install-ingress)'; then
+  bad "STATE 11: the note prescribes verify-ingress (hard-dies on the missing variable) or install-ingress (installs a mesh into a disclaimed cluster)"
+else
+  ok "STATE 11: and it prescribes neither a command that cannot run nor one that installs a mesh"
+fi
+# THE FOURTH FALSE CLAIM. Under a refusal the password WAS published -- for another cluster -- so
+# "check the state overlay" sent the operator to read a FOREIGN credential out of the file the
+# Context block has just said is not in play.
+if printf '%s' "$out" | grep -q 'not published — check the state overlay'; then
+  bad "STATE 11: the password column still says 'check the state overlay' — that overlay is another cluster's, and this points the operator straight at its credential"
+else
+  ok "STATE 11: the password column does not send the operator to a foreign cluster's credential"
 fi
 # ...and the refused values must not leak into the table. HARBOR_URL=harbor.elsewhere belongs to the
 # other cluster; if it appears, the sink was sourced after all and the refusal is cosmetic.
