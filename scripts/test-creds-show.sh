@@ -750,6 +750,72 @@ fi
 # suite printed two `FAIL` lines and then "SUCCESS — creds-show tells the truth in every state".
 # `exit "$fail"` was correct throughout, so CI never mis-reported — but a HUMAN reading the output saw
 # SUCCESS above their own failures, which is the one thing this gate exists to not do.
+# ── STATE 11 — B517: an overlay the LOADER REFUSED must not be reported as authoritative ──────────
+# THE STATE THAT WAS UNREACHABLE HERE. Every case above varies the overlay's CONTENT while the
+# kubeconfig stays sandboxed, so "a sink exists, is well-formed, and `load_env` REFUSED it because it
+# is stamped for a DIFFERENT cluster" could not be constructed — and that is precisely the state the
+# owner hit. MEASURED 2026-08-28, one command against a real lab guest cluster:
+#
+#     level=ERROR  state: .env.state was written for a DIFFERENT cluster. NOT sourcing it
+#     ...six lines later...
+#       values below : DISCOVERED — the overlay is stamped for the cluster you are talking to
+#       flow         : KinD stand-in (the state overlay is stamped by the KinD flow)
+#       Gitea / Tekton / all six apps   <needs ingress>
+#       note: no ingress is installed, so ... nothing serves those hosts
+#
+# while that cluster served 8/8 HTTP 200 through a Gateway with attachedRoutes=8. The header
+# contradicted the loader's own ERROR six lines above it, because every question was answered by
+# GREPPING THE SINK rather than by reading `_VKS_STATE_SOURCED`, which `load_env` has exported all
+# along and `state.sh:90` has keyed on since B142.
+#
+# The fixture needs a REAL kubeconfig file (creds.sh parses it; it never dials for this), stamped
+# against a DIFFERENT server. That mismatch is the whole trigger.
+_refused_kc="$(mktemp)"; _refused_sink=""
+cat > "$_refused_kc" <<'KCEOF'
+apiVersion: v1
+kind: Config
+current-context: refused-test
+clusters:
+- name: refused-test
+  cluster: {server: 'https://10.255.255.9:6443'}
+contexts:
+- name: refused-test
+  context: {cluster: refused-test, user: refused-test}
+users:
+- name: refused-test
+  user: {token: not-a-real-token}
+KCEOF
+# Stamped for a DIFFERENT server than the kubeconfig above, and KinD-stamped so the arm that used to
+# short-circuit to DISCOVERED is the one under test.
+_refused_sink="$(printf 'VKS_STATE_KIND=1\nVKS_STATE_SERVER=https://127.0.0.1:44444\nVKS_STATE_CONTEXT=kind-elsewhere\nINGRESS_LB_IP=10.9.9.9\nHARBOR_URL=harbor.elsewhere\n')"
+out="$(KUBECONFIG="$_refused_kc" render "$_refused_sink")"
+rm -f "$_refused_kc"
+
+if printf '%s' "$out" | grep -q 'values-provenance: REFUSED'; then
+  ok "STATE 11: a REFUSED overlay reports provenance REFUSED, not DISCOVERED"
+else
+  bad "STATE 11: provenance is '$(printf '%s' "$out" | grep -m1 'values-provenance:' || echo NONE)' for an overlay load_env refused — the KinD arm greps the FILE, so it matches whatever cluster you point at"
+fi
+if printf '%s' "$out" | grep -q 'flow *: *undetermined — a state overlay exists but was REFUSED'; then
+  ok "STATE 11: and the flow line does not claim the refused overlay's flow"
+else
+  bad "STATE 11: flow says '$(printf '%s' "$out" | grep -m1 'flow ' || echo NONE)' — computed from a file that is not in scope"
+fi
+# The note is the operator-facing half, and it was the FALSE one: a claim about the CLUSTER derived
+# from a VARIABLE. It must say what we KNOW.
+if printf '%s' "$out" | grep -q 'This says'; then
+  ok "STATE 11: the ingress note states what THIS BOX knows, not a fact about the cluster"
+else
+  bad "STATE 11: the ingress note still asserts 'nothing serves those hosts' from a refused overlay — the measured case had all eight serving 200"
+fi
+# ...and the refused values must not leak into the table. HARBOR_URL=harbor.elsewhere belongs to the
+# other cluster; if it appears, the sink was sourced after all and the refusal is cosmetic.
+if printf '%s' "$out" | grep -q 'harbor.elsewhere'; then
+  bad "STATE 11: a REFUSED overlay's HARBOR_URL reached the table — it was sourced despite the refusal"
+else
+  ok "STATE 11: and none of the refused overlay's values reached the table"
+fi
+
 if [ "$fail" = 0 ]; then
   printf '\nSUCCESS — creds-show tells the truth in every state (nothing installed / no ingress /\n         fully installed / UNSTAMPED overlay = the real-lab state / stamped-and-matching /\n         NO overlay but a POPULATED .env / a REACHABLE cluster / the LAB ACCESS rows)\n'
 else
