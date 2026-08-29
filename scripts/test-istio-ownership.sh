@@ -72,8 +72,20 @@ guard() {   # <mode> <helm|package> -> echoes the rc
     bash -c ". scripts/lib/os.sh >/dev/null 2>&1; . scripts/lib/istio.sh >/dev/null 2>&1; istio_refuse_foreign_owner istio-system $2" >/dev/null 2>&1
     printf '%s' "$?" )
 }
-expect_token() { local got; got="$(probe "$1")"; [ "$got" = "$2" ] && ok "$3" || bad "$3 (want '$2', got '$got')"; }
-expect_rc()    { local got; got="$(guard "$1" "$2")"; [ "$got" = "$3" ] && ok "$4" || bad "$4 (want rc=$3, got rc=$got)"; }
+# if/then/else, NOT `A && B || C`: as the LAST statement of a function that form makes
+# the function RETURN C's status (or B's), so a caller under `set -e` dies on a case that
+# merely reported a failure. Same class as rules/shell §"a function whose LAST statement
+# is `A && B`". `ok`/`bad` also tally, so their status must not leak out of here.
+expect_token() {
+  local got; got="$(probe "$1")"
+  if [ "$got" = "$2" ]; then ok "$3"; else bad "$3 (want '$2', got '$got')"; fi
+  return 0
+}
+expect_rc() {
+  local got; got="$(guard "$1" "$2")"
+  if [ "$got" = "$3" ]; then ok "$4"; else bad "$4 (want rc=$3, got rc=$got)"; fi
+  return 0
+}
 
 echo "== istio_ownership: the classifier"
 expect_token helm    helm    "helm-owned istiod    -> helm"
@@ -108,8 +120,11 @@ drc="$( ( set +e
   PATH="$STUB:$PATH" OWNERSHIP_MODE_FILE="$MODE" KUBECONFIG="$KC" SKIP_DOTENV=1 DRY_RUN=1 \
   bash -c '. scripts/lib/os.sh >/dev/null 2>&1; . scripts/lib/istio.sh >/dev/null 2>&1; istio_refuse_foreign_owner istio-system package' >/dev/null 2>&1
   printf '%s' "$?" ) )"
-[ "$drc" = 0 ] && ok "DRY_RUN=1 with an UNREACHABLE cluster -> proceeds (43 already skips its probe under it)" \
-                || bad "DRY_RUN=1 -> want rc=0, got rc=$drc"
+if [ "$drc" = 0 ]; then
+  ok "DRY_RUN=1 with an UNREACHABLE cluster -> proceeds (43 already skips its probe under it)"
+else
+  bad "DRY_RUN=1 -> want rc=0, got rc=$drc"
+fi
 
 printf '\n%s: %d case(s), %s\n' "$(basename "$0")" "$ran" "$( [ "$fail" -eq 0 ] && printf 'ALL PASS' || printf 'FAILURES ABOVE' )"
 exit "$fail"
