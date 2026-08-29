@@ -846,9 +846,38 @@ and needs its own idea round.
 >
 > **The VKS-3.7 collision risk is REFUTED, lab-verified 2026-08-26.** The lab was upgraded to
 > `3.7.1+v1.36` and the guest rebased to `builtin-generic-v3.7.0` / k8s `v1.35.6`: the guest still
-> carries **0 addon CRDs** — the addon framework is Supervisor-side only — so nothing competes with
-> our `PackageInstall`. The tripwire stays (it costs one `kubectl get crd`) and is now proven silent
-> on the version it guards. Details: `docs/vks-services/istio.md`.
+> carries **0 addon CRDs** — the addon framework is Supervisor-side only.
+>
+> ⚠️ **SUPERSEDED 2026-08-28 — this paragraph said "the tripwire stays … now proven silent on the
+> version it guards", which CONTRADICTED the entry above it ("IS DEAD CODE … Re-point or delete").
+> A reader could quote either, which is why the question kept re-opening. RESOLVED: the tripwire was
+> DELETED.** An adversary round RAN both prescriptions:
+>
+> - **"Re-point at `supervisor_kubeconfig()`" is REFUTED.** That resolver emits `${KUBECONFIG}` as
+>   its LAST candidate (`lib/os.sh:872-874`), and `vks-package.sh:77-88` forces `${KUBECONFIG}` to be
+>   a GUEST — so on a tenant box it probes the guest again: the same dead code wearing a fix. Where
+>   it DOES resolve a Supervisor (a maintainer box), it warns on 100% of VKS 3.7+ labs, because those
+>   CRDs are the FRAMEWORK being installed, not an addon-managed `istio`.
+> - **It also failed OPEN.** `kubectl get crd … | grep -c … || true` yields 0 when kubectl exits
+>   non-zero, indistinguishable from a healthy guest with no addon CRDs — silent for exactly the
+>   namespaced tenant who is the default audience (RULE ZERO-B), and the same fail-open class this
+>   very row fixed 25 lines above it in the same file.
+> - **It was REDUNDANT.** The hazard is refused by `vks-package.sh`'s B489 divergence gate — by
+>   OBJECT, fail-CLOSED, at the moment of apply — whose own comment names "later the VKS 3.7 addon
+>   framework" as the scenario.
+> - **The stated MECHANISM was also wrong** and is corrected in `istio.md`: "no addon controller on
+>   the guest" is a bad inference. Platform-created `PackageInstall`s DO land in the guest's
+>   `vmware-system-tkg`. What protects us is the `<cluster>-<component>` naming convention plus B489.
+>
+> Swept in one commit: `43-install-istio-package.sh` (tripwire + 2 header refs), `vks-package.sh`
+> header, `istio.md` x2, and the now-dead `*"get crd -o name"*` stub arms in
+> `test-istio-package-version-probe.sh` (both fell through to `*) exit 0`, so removal is
+> behaviour-identical; the 9 cases stay green).
+>
+> **Open, NOT settled:** whether 3.7.1's new `helm-controller` PackageInstall is
+> `<cluster>-helm-controller` or a bare `helm-controller`. If bare, the naming invariant broke at
+> 3.7.1 and the counting row in `istio.md` could not see it. One read-only command on a guest settles
+> it: `kubectl -n vmware-system-tkg get pkgi -o custom-columns=NAME:.metadata.name`.
 >
 > Note `ISTIO_INSTALL_METHOD` defaults to **`helm`** (`44-install-ingress.sh:45`), so #1 sits on an
 > **opt-in** path — it is not a blocker for the default walk.

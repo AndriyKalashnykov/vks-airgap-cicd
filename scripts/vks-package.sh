@@ -25,8 +25,11 @@
 # Measured on VKr v1.34.9 (VKS 3.6.0), 2026-08-25: the guest has ZERO addon CRDs, `tkg-system` is
 # EMPTY (kapp-controller runs there but owns no pkgr/pkgi), and the 8 platform installs are all
 # named <cluster>-<component> -- so our `istio` collides with nothing. The conflict the docs warn
-# about becomes real on VKS 3.7+, where the addon framework reconciles this namespace; 43-install-
-# istio-package.sh warns when addon CRDs are present. See docs/vks-services/istio.md.
+# about becomes real on VKS 3.7+, where the addon framework reconciles this namespace. It is
+# refused by the B489 divergence gate below -- by OBJECT, fail-closed -- and NOT by any CRD probe:
+# 43-install-istio-package.sh carried one until 2026-08-28, when it was deleted as unfireable (the
+# addon CRDs are SUPERVISOR-side; that script is structurally guest-only). See
+# docs/vks-services/istio.md and BACKLOG.md B484.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh

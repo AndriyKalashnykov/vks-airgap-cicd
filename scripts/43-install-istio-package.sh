@@ -105,24 +105,23 @@ if [ -z "$PKG_NS_RESOLVED" ]; then
   log_warn "  Override with VKS_PACKAGE_NAMESPACE=<ns>."
 fi
 
-# VKS 3.7+ TRIPWIRE. We install into `vmware-system-tkg`, which is the SYSTEM's namespace -- a
-# deliberate trade-off (see vks-package.sh's header and docs/vks-services/istio.md). On VKS 3.7+
-# the ADDON FRAMEWORK reconciles that namespace, so an addon-managed `istio` and our hand-applied
-# PackageInstall would be two writers on one name. Measured on VKr v1.34.9 / VKS 3.6.0
-# (2026-08-25): ZERO addon CRDs on the guest, so the conflict cannot occur there. The presence of
-# an addon CRD is the discriminator -- cheap, and it does not enumerate versions.
-if [ "${DRY_RUN:-0}" != 1 ]; then
-  _addon_crds="$(kubectl get crd -o name 2>/dev/null | grep -c 'addons\.kubernetes\.vmware\.com' || true)"
-  if [ "${_addon_crds:-0}" -gt 0 ] 2>/dev/null; then
-    log_warn "this guest carries the VKS ADDON framework (${_addon_crds} addon CRD(s))."
-    log_warn "  We are about to hand-apply a PackageInstall into '${PKG_NS_RESOLVED}',"
-    log_warn "  which the addon controller also reconciles. If '${PKG}' is ALSO installed as an addon,"
-    log_warn "  the two are competing writers on one name. Check before proceeding:"
-    log_warn "      kubectl get addoninstall,clusteraddon -A 2>/dev/null | grep -i istio"
-    log_warn "  If it is addon-managed, install it that way instead ('vcf addon install create istio')"
-    log_warn "  and set INGRESS_CONTROLLER=istio-existing here."
-  fi
-fi
+# VKS 3.7+ ADDON-FRAMEWORK COLLISION -- NAMED HERE, GATED IN vks-package.sh. There is deliberately
+# NO probe at this point. A tripwire lived here until 2026-08-28 and could never fire: it ran
+# `kubectl get crd` against the AMBIENT kubeconfig, which vks-package.sh:77-88 forces to be a
+# GUEST, while the addon CRDs are SUPERVISOR-side (MEASURED on the 3.7 lab: Supervisor 9, guest 0).
+# It also failed OPEN -- a kubectl exiting non-zero yields the same count 0 as a healthy guest with
+# no addon CRDs -- so it was silent for exactly the namespaced tenant who is the default audience.
+#
+# Do NOT "fix" it by re-pointing at supervisor_kubeconfig(). That resolver emits ${KUBECONFIG} as
+# its LAST candidate (lib/os.sh:872-874), so on a tenant box it returns the GUEST again -- the same
+# dead code wearing a fix -- and where it DOES resolve a Supervisor it warns on 100% of VKS 3.7+
+# labs, because those CRDs are the FRAMEWORK being installed, not an addon-managed istio.
+# (Adversary round 2026-08-28 RAN both; see BACKLOG.md B484.)
+#
+# WHERE THE HAZARD IS ACTUALLY REFUSED: vks-package.sh's B489 divergence gate, which reads the
+# PackageInstall OBJECT before the apply and refuses a foreign owned-by label, a different refName
+# under the same derived name, and -- fail-CLOSED -- a read it cannot perform. By object, at the
+# moment it matters, whatever created the competitor. NOTHING is verified here.
 
 # WHICH Package do we inspect? The one that will actually be INSTALLED -- and that is not what a
 # refName-only filter gives you. MEASURED on the lab 2026-08-26: istio ships EIGHT Package objects,

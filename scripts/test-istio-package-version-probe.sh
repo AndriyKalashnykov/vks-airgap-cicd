@@ -48,7 +48,6 @@ mk_kubectl() { # $1 = mode
 #!/usr/bin/env bash
 MODE=$1
 case "\$*" in
-  *"get crd -o name"*)        exit 0 ;;
   *"version"*|*"current-context"*) echo ctx; exit 0 ;;
   *"get package"*"-o json"*)
      case "\$MODE" in
@@ -112,7 +111,6 @@ hostcase() { # $1=HARBOR_URL  $2=bundle image ref
   cat > "$STUB/kubectl" <<EOF
 #!/usr/bin/env bash
 case "\$*" in
-  *"get crd -o name"*) exit 0 ;;
   *"get package"*"-o json"*)
     cat <<'J'
 {"items":[{"metadata":{"name":"p"},"spec":{"refName":"istio.kubernetes.vmware.com","version":"1.30.2+vmware.1-vks.1",

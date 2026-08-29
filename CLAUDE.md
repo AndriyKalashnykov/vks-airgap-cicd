@@ -959,72 +959,71 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-28 — the matrix has never measured whether the demo SERVES, and `make creds` lied
+## ▶️ HANDOFF 2026-08-29 — the matrix is GREEN 6/6 on 3.7.1, and I merged a regression my own check could not see
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
 ### 🔴 DISTRUST FIRST
 
-- **A green matrix row is a claim about the HARNESS, not about the demo serving.** The walk grades a
-  block on its EXIT CODE, and `make creds-show` is documented never-gating — so its output is
-  printed and never read. MEASURED: rows 5 and 6 printed `<needs ingress>` for **all eight hosts** in
-  **20 logs across 12 runs since 2026-08-20**, every one graded `0 FAILED`. Meanwhile the lab those
-  rows left behind serves **10/10** (8 hosts through the Gateway LB `192.168.101.135`, plus Harbor
-  and ArgoCD on their own LBs). Reading `WALK DONE — 0 FAILED` as "the demo works" is a proxy.
+- **Comparing failure COUNTS instead of NAMES hides a SUBSTITUTION, and it hid one of mine.** I
+  gated the merged tree against main, both showed **8 not-ok**, and I read that as "no regression".
+  One environment-dependent failure had cleared while a new one of mine appeared. By NAME it was
+  obvious (`ok` at baseline → `not ok` after). **Diff the failing test NAMES; a count cannot see a
+  swap.** The regression shipped and needed #130 to undo.
 
-- **⚠️ MY OWN FIRST ROOT CAUSE WAS WRONG, and an adversary refuted it.** I wrote *"scenario-2 is a
-  tenant flow that installs nothing, so its overlay has no `INGRESS_LB_IP`"*. Measured FALSE:
-  scenario-2 DOES install (`scenario-2.md:885` → `47-attach-istio.sh:118` publishes it). Row 6 never
-  reached it — `28 blocks: 18 ran, 0 FAILED, **10 skipped**`. The real cause needed no walk at all.
+- **A green matrix row does NOT mean the demo serves.** Measured both cuts: rows report `0 FAILED`
+  while `make creds` on the walkbox shows `<needs ingress>` for all 8 hosts in the **scenario-2**
+  rows (5 and 6, both cuts) — yet the cluster served **10/10** each time. It is a reporting gap in
+  the walkbox's state, reproducible, not a product failure. Scenario-1 rows (2, 4) show full URLs.
+  The serve check is a SEPARATE measurement and the matrix still never makes it.
 
-- **`make creds` re-read a state overlay the LOADER REFUSED and called it DISCOVERED.** Running it by
-  hand against the guest cluster, reading EVERY line, the header contradicts the loader's own ERROR
-  six lines above it. Three symptoms, one defect: it greps the sink FILE instead of reading
-  `_VKS_STATE_SOURCED`, which `load_env` has exported all along (`os.sh:657,659`) and `state.sh:90`
-  has keyed on since B142. `creds.sh` referenced it **zero** times. (#1076, open.)
+- **Every cut mints a NEW VMCA with a BYTE-IDENTICAL subject, so a stale anchor looks correct.**
+  Measured: 47 archived generations, 47 distinct MD5s and serials, identical subjects. After cut B
+  rebuilt the lab, `make walk-reset` REFUSED with a TLS failure. Remedy is
+  `make fetch-vcenter-ca` in this repo. Only a handshake distinguishes them.
 
-- **⚠️ A LONG GATE READS THE TREE CONTINUOUSLY — editing it mid-run makes the verdict measure a
-  mixture, silently, in BOTH directions.** Three times in one session. Two `static-check` runs
-  reported `115 test(s), 0 failed` for trees that no longer existed, and one was about to be quoted
-  as PR evidence; a third reported *"the PARALLEL shellcheck pass failed but the SERIAL pass found
-  nothing … suspect nproc/-P/xargs"* over a tree where nothing was wrong with xargs. **Run any gate
-  whose verdict you intend to QUOTE against an immutable detached worktree at a pinned SHA.** The
-  authoritative run then caught two lint findings the mutated runs had missed. `scripts/gate-at.sh`
-  is drafted for this and under adversary review — not committed.
+- **The Supervisor VIP DRIFTS per cut.** Measured across 47 kubeconfig generations: **40× .128,
+  7× .129**. Cut B landed on **.129**. It is allocator-assigned, NOT MAC-derived, so "the MACs are
+  deterministic" does not cover it. Being right ~85% of the time is the worst shape.
 
-- **The denominator is the signal a new test is actually running.** `static-check` went **115 → 116**
-  when `test-doc-ingress-step.sh` landed. A green at an unchanged count is blind to your change.
+- **`kubectl get virtualmachineimagecaches -A` returns `Forbidden` for the SSO user.** I read that
+  empty output as "none exist" and drew a conclusion. An absence is a claim about the QUERY first.
 
-### Merged today
+- **Backticks inside a double-quoted `die` message EXECUTE.** A refusal message referencing a make
+  target would have STARTED A LAB BUILD. Proven: `msg="x \`echo EXECUTED\` y"` → `x EXECUTED y`.
+  shellcheck calls it style (SC2006); in a live string it is a bug.
 
-| PR | what |
-|---|---|
-| #1072 | the `go_get` probe could verify the wrong version |
-| #1073 | `selfbuilt.lock` self-erased on every warm run; then five adversary residuals — the `clean` guard let `..` walk out of the repo (14/14 RED-proven against the real recipe with `rm` neutered) |
-| #1074 | B517's root cause corrected |
-| #1075 | scenario-2's ingress step lived only in a TABLE, so no matrix row could ever run it |
+### Merged this session
 
-### In flight
+| repo | PR | what |
+|---|---|---|
+| lab | #127 | blank-credential guard — a blank password POSTs and burns an SSO lockout attempt; 1 → **5 of 5** sites |
+| lab | #128 | local VKr mirror + `lab-golden` capture/restore |
+| lab | #129 | `WALK_TKR_WAIT_SECONDS` 900 → 2400 (900 was **75% of a measured 1202 s wait**) |
+| lab | #130 | undo the regression above |
+| cicd | #1085 | delete the pasted TKr wait loop |
 
-- **#1076** — the `creds` fix. CI CLEAN; `static-check` 115/0 in an untouched worktree; its
-  implementation adversary is still running. **Do not merge before it reports.**
-- **`scripts/gate-at.sh`** — drafted at `/tmp/gate-at-draft.sh`, under review. The reviewer was asked
-  the question I most expect to be wrong: **which gates change verdict in a fresh worktree because a
-  gitignored file (`.env`, `.env.state`, `secrets/`, `bundle/`) is absent** — and whether a wrapper
-  is even the right shape versus having `static-check` itself record the tree hash at start and end
-  and refuse to report a verdict if they differ.
-- **B518 / B519** filed and measured; **B520 filed as REFUTED** — an adversary called
-  `verify-ingress` vacuous against a leftover KinD cluster, having measured the HTTP layer and
-  inferred the gate's verdict. Measuring the gate gives **rc=2 both ways** (`state_check` refuses a
-  mismatched overlay before `INGRESS_LB_IP` is read). Recorded so nobody rebuilds a fix for it.
+Lab suite **1280 → 1311** tests, **8 → 1** failure (the survivor is pre-existing).
 
-### The next thing worth doing
+### The matrix
 
-The matrix still cannot fail on "the demo does not serve" for scenario-2 **rows that skip the ingress
-step** — #1075 makes the step runnable and adds a verify, but a row whose preflight is inconclusive
-still skips both branches and then fails the verify with a message naming a command the walk
-deliberately declined to run. Decide whether that is the right shape before the next full matrix.
+**6/6 rows, 0 FAILED, VKS 3.7.1, both cuts off the same frozen tree (`ff6c88e`).** Cut A rows 1/2/5,
+cut B rows 3/4/6. Both labs served 10/10 afterwards. Evidence in `~/walk-evidence/run-*`.
+
+### In flight / NOT proven
+
+- **`lab-golden` capture and restore have NEVER run against a real lab.** The mechanism is measured
+  (pool-overlay create **0.062 s**; deleting the canonical volume leaves the golden present; SATA
+  targets derived from `domblklist`, not the `vda` an early draft assumed; the quiescence gate
+  live-verified and RED-proven both ways). Restore BEHAVIOUR is inferred.
+- **Open question: does ESXi boot from a libvirt-recreated varstore?** Libvirt does recreate it from
+  `<nvram template=…>` (measured on a throwaway domain), but ESXi's boot entry lives in NVRAM. The
+  NVRAM is deliberately NOT captured — it is `0600 libvirt-qemu:kvm` and `cp` fails even in group
+  `kvm`, so capturing it would need sudo symmetrically and destroy the sudo-free property.
+- **`make walk-reset` timing is still unmeasured.** It is the number that decides whether the golden
+  is the right tool for putting a cell back: it returns the lab to the NOTHING-EXISTS cell while
+  PRESERVING `tkg.vsphere.vmware.com`, with NO reboot, against a 31m31s restore.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
