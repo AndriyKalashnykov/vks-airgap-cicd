@@ -22,6 +22,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# argocd_endpoint_probe/_answers live here (B486/F7). This file used to hand-roll the probe and so
+# needed nothing from lib/argocd.sh; delegating without sourcing it left `_answers` calling an
+# undefined function -- rc 127, "never answers", and the wait loop ran its full budget on an address
+# that was replying 403. Caught by test-argocd-address-classify.sh's call-COUNT assertion (want 1,
+# got 5) and by its `curl-ran` marker, not by reading the diff.
+# shellcheck source=scripts/lib/argocd.sh
+. "${SCRIPT_DIR}/lib/argocd.sh"
 load_env
 require_cmd kubectl
 
