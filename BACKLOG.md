@@ -16,6 +16,69 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
+## 🔴 B522 — `check-env-clobber` treats SNAPSHOT-PROTECTED as automatically safe, and it is not 🔴 open
+
+**Found while fixing the `INGRESS_CONTROLLER` ambient clobber (2026-08-29). The fix landed; this row
+is the CLASS the fix did not close.**
+
+The gate has an arm that passes any uncommented `.env.example` value whose variable is in `load_env`'s
+SELECTORS snapshot:
+
+```
+ok  'INGRESS_CONTROLLER' is uncommented but SNAPSHOT-PROTECTED by load_env — a per-run override survives
+```
+
+That reasoning is correct about **per-run overrides** and blind to the **other direction**. The
+snapshot cannot distinguish an explicit `VAR=x make …` from a value the shell merely **inherited** —
+both are just environment variables by the time `load_env` runs. So for a variable that is *also*
+**published to `.env.state`**, an ambient value from a sourced `.env` is restored **over the overlay**,
+and the published value loses.
+
+MEASURED, both directions, with `.env.state` publishing `istio-existing`:
+
+```
+no ambient value                  -> EFFECTIVE=istio-existing   (correct)
+ambient INGRESS_CONTROLLER=istio  -> EFFECTIVE=istio            (the bug)
+```
+
+⚠️ **Removing the `EXEMPT` entry does NOT make the gate see it.** That was the obvious fix and it was
+RED-proven **not to work**: with `INGRESS_CONTROLLER` un-exempted *and* uncommented, the gate still
+prints `ok` twice and exits 0, because the snapshot arm passes it first. The exemption was redundant,
+not load-bearing — it has been removed as hygiene, and it closed nothing.
+
+### The class is small and measurable
+
+A variable is exposed when it is **(a)** snapshot-protected **and (b)** uncommented in `.env.example`
+**and (c)** published by a `state_set`. Measured across the snapshot list, exactly **two** members:
+
+| var | status |
+|---|---|
+| `INGRESS_CONTROLLER` | **FIXED** — commented in `.env.example` |
+| `HARBOR_CA_FILE` | **still exposed**, and it is a TRUST ANCHOR |
+
+`06-install-harbor.sh:307,311` publishes `HARBOR_CA_FILE=""` in insecure mode and
+`"${CERT_DIR}/ca.crt"` in secure mode, while `.env.example:137` sets `./secrets/harbor-ca.crt`.
+
+⚠️ **It is NOT obviously a bug, which is why it was not changed on a hunch.** Its flow differs: on a
+real lab the operator *supplies* that path (`make fetch-harbor-ca` writes it) and there is no
+installer publishing over them, while the KinD e2e — the one flow where both exist — already sets
+`SKIP_DOTENV=1` so `.env` is never sourced. Every consumer guards `${HARBOR_CA_FILE:-}`, so commenting
+it would be *safe*; whether it is *right* is the open question.
+
+### What a fix would have to decide, and why it needs an idea round first
+
+Tightening the snapshot arm to *"…and not published to `.env.state`"* would immediately flag
+`HARBOR_CA_FILE` — which may be legitimate. So the gate change and the `HARBOR_CA_FILE` decision are
+the same question and must be answered together:
+
+- is "published to `.env.state`" the right discriminator, or is it "published **by a flow that also
+  sources `.env`**"?
+- can the gate see the difference between the two flows at all, offline?
+- if it cannot, is the honest answer a **printer** rather than a stricter arm?
+
+⚠️ **Do not simply tighten the arm.** A gate that flags a legitimate operator-supplied default is one
+that gets loosened again within a week, and the loosening will take the real finding with it.
+
 ## 🟢 B499 — `kind` wrote the AMBIENT `$KUBECONFIG`, a LAB slot on every lab box 🟢 closed
 
 **CLOSED by #1050.** Kept because the *gate design* was refuted once and should not be rebuilt.

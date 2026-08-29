@@ -52,7 +52,11 @@ mapfile -t UNCOMMENTED < <(grep -oE '^[A-Z][A-Z0-9_]*=' "$ENV_EXAMPLE" | tr -d '
 #                       exemption is therefore belt-and-braces now, not the mechanism.
 #
 # Anything added here needs the same treatment: an empirical check, and the reason written down.
-EXEMPT='APP_DEV_PORT|INGRESS_CONTROLLER'
+# INGRESS_CONTROLLER was exempted here and should not have been: it is BOTH a selector and a
+# per-run toggle, i.e. exactly what this gate exists to flag. The exemption made the gate blind to
+# a real misresolution on the lab (see .env.example's INGRESS_CONTROLLER block). It is commented
+# in .env.example now, so no exemption is needed.
+EXEMPT='APP_DEV_PORT'
 
 # (c) SELECTOR VARS — a var that chooses WHICH SYSTEM you are talking to (which cluster, which
 # registry, which trust anchor). KUBECONFIG was UNCOMMENTED, so `make <target> KUBECONFIG=/other` was
