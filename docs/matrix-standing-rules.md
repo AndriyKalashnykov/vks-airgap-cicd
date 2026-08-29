@@ -122,11 +122,56 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
    **18 TKrs, 7 Ready, 2 at v1.35/36**, and the identical `vks-upgrade` reached `CONFIGURED`.
 
    This is invisible if you build the lab and come back later — which is why it did not appear on the
-   first rebuild of the night and did appear when step 0 ran as one unattended chain. Wait for it:
+   first rebuild of the night and did appear when step 0 ran as one unattended chain.
+
+   ⚠️ **A PASTED `until kubectl get tkr …` LOOP USED TO SIT HERE. It is DELETED, and it should never
+   have been written — the wait already exists, it was measured TWO WEEKS EARLIER, and the loop had
+   three defects of its own.** An adversary round refuted it on all four counts:
+
+   - **It duplicates `resolve_tkr`** (`nested-vsphere-lab/scripts/walk-matrix.sh`), which is bounded
+     by `WALK_TKR_WAIT_SECONDS`, checks auth FIRST so "no credentials" cannot masquerade as "not
+     synced", and prints a denominator (*"0 usable of 81 published"*). Its own comment records the
+     race as MEASURED 2026-08-12: *"the lab build returns before the Supervisor has finished syncing its
+     TKr content library; nothing in the build waits for it, so the race is STRUCTURAL, not bad
+     luck."* One race with two implementations is one that drifts.
+   - **`tkr` is not the name this repo family uses.** `tanzukubernetesrelease` appears **0** times in
+     the lab repo; `kubernetesreleases`/`kr` is what all ~15 call sites use. If `tkr` is not a
+     registered short name on a given Supervisor, `kubectl` errors, `2>/dev/null` swallows it, the
+     pipeline is empty — and the `until` **never exits**. In an unattended step-0 chain that is a
+     silent, unbounded hang.
+   - **`awk '$3=="True"'` is column-position filtering**, which `guest-cluster.sh:115-118` explicitly
+     refuted: *"`kubectl get kr` columns are CRD additionalPrinterColumns — vendor-controlled and
+     version-sensitive — so an awk on `$3`/`$4` silently reads the wrong booleans if the order ever
+     changes, and an empty result then looks like 'the Supervisor offers nothing'."*
+   - **The predicate is the wrong gate anyway.** `supervisor-service.sh:2465-2472` MEASURED that a KR
+     is **born `Ready=True Compatible=True`**, so a presence test is satisfied from second zero and
+     released **~8 minutes early** for a sibling consumer; what actually lagged there was **OSImage**,
+     a separate resource. My 20-minute observation is ONE data point supporting a mechanism that a
+     sibling measurement contradicts.
+
+   So: **do not paste a loop.** `walk-matrix` already waits. What step 0 needs is only that the
+   budget be large enough — see the sizing note below.
+
+   ⚠️ **AND THE SAME HTTP 500 HAS A SECOND, PERMANENT CAUSE, so waiting can be exactly the wrong
+   response.** `nested-vsphere-lab/docs/VKS-UPGRADE.md:346-385` records a **depot fossil**: Broadcom
+   ships two files per version, and the non-legacy one carries
+   `image: depot.kube-system.svc/…` — an in-cluster depot Service this Supervisor does not run. A
+   Package built from those bytes fails signature verification and returns the IDENTICAL *"is not
+   compatible"* 500, permanently. Verbatim: *"a compatibility error that never mentions the registry
+   … Only the UI wizard's Validate step names the real cause — Signature Verification: Error … The
+   Compatibility Check beside it is a Warning … so it does NOT discriminate. A `wcp` restart does not
+   clear any of it."* Recovery is UI-only and costs an afternoon.
+
+   The two are indistinguishable from the error text, so **before waiting out a 500, check which one
+   you have** — the Supervisor's Package image is the discriminator, and the vCenter-side view is a
+   measured FALSE NEGATIVE (the catalogue said `projects.packages.broadcom.com` while the Package
+   said `depot.kube-system.svc`):
 
    ```sh
-   # after kubectl-login, before vks-upgrade
-   until kubectl get tkr --no-headers 2>/dev/null | awk '$3=="True"' | grep -q 'v1\.3[56]'; do sleep 20; done
+   kubectl -n vmware-system-supervisor-services get package tkg.vsphere.vmware.com.<ver> \
+     -o jsonpath='{.spec.template.spec.fetch[0].imgpkgBundle.image}{"\n"}'
+   # projects.packages.broadcom.com/... -> healthy; the 500 is the catalogue race, wait it out
+   # depot.kube-system.svc/...          -> FOSSIL; waiting cannot fix it, see VKS-UPGRADE.md
    ```
 
    ⚠️ **`kubectl-login` IS PART OF STEP 0, and it was missing from it until 2026-08-27 — which cost
