@@ -853,19 +853,19 @@ and needs its own idea round.
 > A reader could quote either, which is why the question kept re-opening. RESOLVED: the tripwire was
 > DELETED.** An adversary round RAN both prescriptions:
 >
-> * **"Re-point at `supervisor_kubeconfig()`" is REFUTED.** That resolver emits `${KUBECONFIG}` as
+> - **"Re-point at `supervisor_kubeconfig()`" is REFUTED.** That resolver emits `${KUBECONFIG}` as
 >   its LAST candidate (`lib/os.sh:872-874`), and `vks-package.sh:77-88` forces `${KUBECONFIG}` to be
 >   a GUEST — so on a tenant box it probes the guest again: the same dead code wearing a fix. Where
 >   it DOES resolve a Supervisor (a maintainer box), it warns on 100% of VKS 3.7+ labs, because those
 >   CRDs are the FRAMEWORK being installed, not an addon-managed `istio`.
-> * **It also failed OPEN.** `kubectl get crd … | grep -c … || true` yields 0 when kubectl exits
+> - **It also failed OPEN.** `kubectl get crd … | grep -c … || true` yields 0 when kubectl exits
 >   non-zero, indistinguishable from a healthy guest with no addon CRDs — silent for exactly the
 >   namespaced tenant who is the default audience (RULE ZERO-B), and the same fail-open class this
 >   very row fixed 25 lines above it in the same file.
-> * **It was REDUNDANT.** The hazard is refused by `vks-package.sh`'s B489 divergence gate — by
+> - **It was REDUNDANT.** The hazard is refused by `vks-package.sh`'s B489 divergence gate — by
 >   OBJECT, fail-CLOSED, at the moment of apply — whose own comment names "later the VKS 3.7 addon
 >   framework" as the scenario.
-> * **The stated MECHANISM was also wrong** and is corrected in `istio.md`: "no addon controller on
+> - **The stated MECHANISM was also wrong** and is corrected in `istio.md`: "no addon controller on
 >   the guest" is a bad inference. Platform-created `PackageInstall`s DO land in the guest's
 >   `vmware-system-tkg`. What protects us is the `<cluster>-<component>` naming convention plus B489.
 >
