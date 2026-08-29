@@ -24,9 +24,7 @@ is the CLASS the fix did not close.**
 The gate has an arm that passes any uncommented `.env.example` value whose variable is in `load_env`'s
 SELECTORS snapshot:
 
-```
-ok  'INGRESS_CONTROLLER' is uncommented but SNAPSHOT-PROTECTED by load_env — a per-run override survives
-```
+    ok  'INGRESS_CONTROLLER' is uncommented but SNAPSHOT-PROTECTED by load_env — a per-run override survives
 
 That reasoning is correct about **per-run overrides** and blind to the **other direction**. The
 snapshot cannot distinguish an explicit `VAR=x make …` from a value the shell merely **inherited** —
@@ -36,10 +34,8 @@ and the published value loses.
 
 MEASURED, both directions, with `.env.state` publishing `istio-existing`:
 
-```
-no ambient value                  -> EFFECTIVE=istio-existing   (correct)
-ambient INGRESS_CONTROLLER=istio  -> EFFECTIVE=istio            (the bug)
-```
+    no ambient value                  -> EFFECTIVE=istio-existing   (correct)
+    ambient INGRESS_CONTROLLER=istio  -> EFFECTIVE=istio            (the bug)
 
 ⚠️ **Removing the `EXEMPT` entry does NOT make the gate see it.** That was the obvious fix and it was
 RED-proven **not to work**: with `INGRESS_CONTROLLER` un-exempted *and* uncommented, the gate still
