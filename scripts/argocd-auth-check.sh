@@ -132,9 +132,13 @@ if [ -n "$pw" ] && [ "$fail" -eq 0 ]; then
     # "503 no healthy upstream", breaks the loop and reports readiness during the exact race
     # this poll exists to wait out. F8: honour the scheme hook the session path already honours,
     # or this reports "did NOT answer" against a live stub while the session below returns 401.
-    _hc="$(curl -s "${ARGOCD_CURL_TLS[@]}" -o /dev/null -w '%{http_code}' --max-time 3 \
-             "${ARGOCD_SESSION_SCHEME:-https}://${srv}/healthz" 2>/dev/null || true)"
-    if [ "$_hc" != 000 ]; then
+    # B486/F7: single-sourced. It polls with -k DELIBERATELY -- this was the only CA-aware
+    # poller, and with a stale CA (the default after any lab re-cut) it reported a healthy,
+    # listening ArgoCD as "did NOT answer" after ~150s. ARGOCD_TLS_MODE is still disclosed
+    # independently below, and the SESSION call keeps ARGOCD_CURL_TLS.
+    argocd_endpoint_probe "$srv" 3
+    _hc="${ARGOCD_ENDPOINT_HTTP:-}"
+    if [ -n "$_hc" ] && [ "$_hc" != 000 ]; then
       _ready=1; break
     fi
     sleep "${ARGOCD_READY_INTERVAL_SECONDS:-2}"

@@ -389,6 +389,60 @@ argocd_curl_tls_init() {
   fi
 }
 
+# ── the endpoint probe, ONE copy (B486/F7) ────────────────────────────────────────────────────────
+# THREE sites hand-rolled this and disagreed on TWO axes. Promoted from 09-argocd-address.sh, which
+# was the only one already correct on both; the other two are now thin callers.
+#
+# IT CLAIMS EXACTLY ONE THING: something is LISTENING at this address. NOT "ArgoCD is ready" --
+# 91-e2e-tenant-mechanism.sh:303 records that /healthz "can be answered by a pod that is not yet
+# serving the API", which is why the e2e retries the SESSION call separately for readiness.
+#
+# ⚠️ `-k` IS DELIBERATE, and it is the CORRECT choice, not a downgrade. MEASURED across 7 server
+# states x 3 TLS modes: with a WRONG-but-present CA a healthy, listening server reports http=000
+# (and rc=60) -- so the CA-aware form calls a serving ArgoCD "not serving" and burns
+# 30x(3+2) ~= 150s before printing a line that is false. And a stale CA is the DEFAULT state after
+# any lab re-cut: every cut mints a new VMCA with a BYTE-IDENTICAL subject, while ARGOCD_CA_FILE is
+# gitignored operator state nothing cleans up. argocd_curl_tls_init falls back to -k only when the
+# CA is UNSET or EMPTY -- never when it is present-and-wrong -- so the axis is not moot.
+# Nothing is read and no credential is sent here (-o /dev/null); VERIFICATION belongs to the session
+# call, which carries the password and keeps ARGOCD_CURL_TLS.
+#
+# ⚠️ %{http_code}, not curl's rc. MEASURED: a peer that sends 200 headers then stalls yields rc=28
+# with http=200 -- the rc-only predicate calls that "never answered" and dies against a server
+# demonstrably listening.
+#
+# rc AND http are BOTH preserved, to a diag FILE, because a boolean re-commits the exact
+# five-causes-collapse that B163 fixed for argocd_session_token: refused(7), stale-CA(60), reset(56)
+# and timeout(28) all become one `false`, and a reader follows the wrong list to the wrong file.
+# argocd_session_explain already turns the pair into ONE named cause and needs no change.
+# STDOUT STAYS EMPTY -- it is not this function's return value.
+_argocd_endpoint_diag_path() {
+  printf '%s' "${ARGOCD_ENDPOINT_DIAG:-${TMPDIR:-/tmp}/.argocd-endpoint-diag.$(id -u)}"
+}
+
+# argocd_endpoint_last — echo `rc=<n> http=<code>` from the most recent probe, or `rc= http=`.
+argocd_endpoint_last() {
+  local f; f="$(_argocd_endpoint_diag_path)"
+  if [ -s "$f" ]; then cat "$f"; else printf 'rc= http=\n'; fi
+}
+
+# argocd_endpoint_probe <host[:port]> [max-time] — sets ARGOCD_ENDPOINT_RC / _HTTP and records both.
+# ARGOCD_SESSION_SCHEME is honoured so an offline stub can drive this, exactly as the session path does.
+argocd_endpoint_probe() {
+  local host="${1:?argocd_endpoint_probe: need <host[:port]>}" maxt="${2:-5}"
+  ARGOCD_ENDPOINT_HTTP="$(curl -sk -o /dev/null -w '%{http_code}' --max-time "$maxt" \
+      "${ARGOCD_SESSION_SCHEME:-https}://${host}/healthz" 2>/dev/null)" \
+    && ARGOCD_ENDPOINT_RC=0 || ARGOCD_ENDPOINT_RC=$?
+  printf 'rc=%s http=%s\n' "${ARGOCD_ENDPOINT_RC}" "${ARGOCD_ENDPOINT_HTTP:-}" \
+    > "$(_argocd_endpoint_diag_path)" 2>/dev/null || true
+}
+
+# argocd_endpoint_answers <host[:port]> [max-time] — rc 0 iff something is LISTENING.
+argocd_endpoint_answers() {
+  argocd_endpoint_probe "$@"
+  [ -n "${ARGOCD_ENDPOINT_HTTP:-}" ] && [ "${ARGOCD_ENDPOINT_HTTP}" != 000 ]
+}
+
 # argocd_session_token <server> <password> [resolve-host:port:addr] — echo a JWT, or nothing.
 #
 # The password reaches jq through the ENVIRONMENT and the JSON reaches curl on STDIN, so it is in
