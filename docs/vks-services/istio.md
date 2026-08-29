@@ -537,8 +537,9 @@ potential conflicts with automated system updates."* On **this** cluster that co
   pinniped, …) — our `istio` collides with none of them.
 
 So it is a **MEDIUM that becomes live on VKS 3.7+**, where the addon framework actively reconciles
-that namespace and an addon-managed `istio` and ours would be two writers on one name. `43-install-
-istio-package.sh` warns when addon CRDs are present.
+that namespace and an addon-managed `istio` and ours would be two writers on one name. It is refused
+by `vks-package.sh`'s B489 divergence gate (by OBJECT, fail-closed), not by a CRD probe — see the
+3.7.1 measurement below for why the probe that used to live here was deleted.
 
 **Discrepancy left OPEN, not guessed.** Bauer names the system repo's namespace **`vmware-vks-system`**;
 on this lab that namespace **does not exist** and the repository is in `vmware-system-tkg`. Either the
@@ -636,11 +637,28 @@ k8s `v1.34.9 -> v1.35.6+vmware.2` (9m04s, every Machine replaced).
 | existing PackageInstalls | 8 `<cluster>-<component>` | 9 (`+helm-controller`) — our `istio` collides with none |
 | `tkg-system` | empty | **still empty** |
 
-**The collision risk documented for "VKS 3.7+" does NOT materialise.** There is no addon controller
-on the guest at 3.7.1 to compete with a hand-applied `PackageInstall`, so
-`43-install-istio-package.sh`'s tripwire stays silent — now proven silent on the version it was
-built for, not merely on 3.6. Keep the tripwire: it costs one `kubectl get crd` and it fires the day
-the framework does land guest-side.
+**The collision risk documented for "VKS 3.7+" does NOT materialise — but NOT for the reason this
+section used to give.** It said "there is no addon controller on the guest", and that inference is
+**wrong**: platform-created `PackageInstall`s demonstrably DO land in the guest's
+`vmware-system-tkg` (the 9 counted above; the guest's own CRDs did not create them), and
+`98-uninstall-all.sh` names a `tkg.tanzu.vmware.com/addon` finalizer held on the Cluster object.
+Controllers write remotely — residence is not reach.
+
+What actually protects us is two things, neither of which is the absence of a controller:
+
+1. **Naming.** Every platform-created install is `<cluster>-<component>`; ours is a bare `istio`,
+   which collides with none of them.
+2. **`vks-package.sh`'s B489 divergence gate**, which reads the `PackageInstall` OBJECT before the
+   apply and refuses a foreign `owned-by` label, a different `refName` under the same derived name,
+   and — fail-CLOSED — a read it cannot perform. By object, at the moment it matters, whatever
+   created the competitor.
+
+⚠️ **The addon-CRD tripwire that used to be cited here was DELETED 2026-08-28.** It could not fire:
+it probed the AMBIENT kubeconfig, which `vks-package.sh` forces to be a GUEST, while the addon CRDs
+are SUPERVISOR-side (measured: Supervisor 9, guest 0); and it failed OPEN, so it was silent for the
+namespaced tenant who is the default audience. Do NOT rebuild it, and do NOT "fix" it by re-pointing
+at `supervisor_kubeconfig()` — that resolver returns `${KUBECONFIG}` (the guest) on a tenant box.
+See BACKLOG.md B484.
 
 **Two things this SHARPENS rather than settles:**
 
