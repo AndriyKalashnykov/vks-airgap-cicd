@@ -228,6 +228,156 @@ istio_gwapi_crds_present() {
 # Sets ISTIO_ROUTE_API to: gateway-api | classic | none
 # Honours an explicit ISTIO_ROUTE_API=gateway-api|classic to override the preference.
 # ---------------------------------------------------------------------------
+# ── B480: which installer owns the ONE colliding object ──────────────────────
+# The helm path (46-install-istio.sh) and the package path (43-install-istio-package.sh)
+# BOTH create Deployment/istiod in $ISTIO_NAMESPACE, and neither used to check whether the
+# other already owned it. MEASURED on the live lab 2026-08-25: running the DOCUMENTED
+# commands in the DOCUMENTED order let kapp ADOPT 30 of 50 helm-created objects; kapp then
+# wants kapp.k14s.io/app inside istiod's spec.selector, Kubernetes forbids that as
+# immutable, and the reconcile CAN NEVER CONVERGE. Not self-healing, not reversible: the
+# mesh is left permanently mixed, with istio-cni-node still pulling from the PUBLIC
+# registry -- the exact air-gap invariant `make verify-gateway-image` exists to assert.
+#
+# ⚠️ THE TWO DIRECTIONS ARE NOT SYMMETRIC. helm 3+ REFUSES to adopt an object lacking its
+# ownership metadata -- measured, the pinned helm 4.2.4 binary carries the strings
+# "invalid ownership metadata" and "cannot be imported into the current release". kapp does
+# not refuse. So the PACKAGE-side guard prevents permanent measured damage, while the
+# HELM-side guard only prevents REACHING helm's own refusal after the cluster has already
+# been mutated. Do not build the cheap one and bank it as if it were the other.
+#
+# ⚠️ WHY THE DEPLOYMENT AND NOT sh.helm.release.v1.istiod.* -- that marker is wrong in BOTH
+# directions. ABSENT while helm owns the mesh: a release under a different name (this repo
+# already knows release names vary -- the gateway's `istio:` selector derives from one),
+# HELM_DRIVER=configmap|sql (no Secret at all), and the gateway release, which lives in a
+# DIFFERENT namespace. PRESENT while helm owns nothing: `helm uninstall --keep-history`
+# leaves a status=uninstalled record with zero objects, and a failed install leaves
+# status=failed. Deployment/istiod is the object BOTH paths create and the one that carries
+# the damage; the helm fields read below are exactly the ones helm's OWN ownership check
+# reads, so this verdict and helm's agree by construction.
+#
+# echoes exactly one of: helm | kapp | both | foreign | none | unknown
+# FAILS CLOSED -- only a PROVABLE NotFound yields `none`.
+istio_ownership() {   # <namespace>
+  local ns="${1:?istio_ownership: namespace required}"
+  local err json rc=0
+  err="$(mktemp)"
+  json="$(kubectl -n "$ns" get deploy istiod -o json --request-timeout=15s 2>"$err")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # An absent namespace and an absent Deployment are BOTH legitimate first-install states.
+    # Anything else -- Forbidden, unreachable, a kubeconfig naming a missing file -- must NOT
+    # read as "nothing is installed", or a tenant who merely cannot READ istio-system walks
+    # straight into the adoption. kube_is_notfound requires the server's own NotFound prefix
+    # AND the token on the SAME line, so a client-side error can never satisfy it.
+    if kube_is_notfound "$err" istiod || kube_is_notfound "$err" "$ns"; then
+      rm -f "$err"; printf 'none'; return 0
+    fi
+    rm -f "$err"; printf 'unknown'; return 0
+  fi
+  rm -f "$err"
+  local kapp helm_by helm_rel is_kapp=0 is_helm=0
+  kapp="$(printf '%s' "$json"     | jq -r '.metadata.labels["kapp.k14s.io/app"] // ""')"
+  helm_by="$(printf '%s' "$json"  | jq -r '.metadata.labels["app.kubernetes.io/managed-by"] // ""')"
+  helm_rel="$(printf '%s' "$json" | jq -r '.metadata.annotations["meta.helm.sh/release-name"] // ""')"
+  # `if`, never `[ x ] && y=1` -- a false test is a non-zero statement and trips the caller's set -e.
+  if [ -n "$kapp" ]; then is_kapp=1; fi
+  if [ "$helm_by" = "Helm" ] || [ -n "$helm_rel" ]; then is_helm=1; fi
+  if [ "$is_kapp" -eq 1 ] && [ "$is_helm" -eq 1 ]; then printf 'both';    return 0; fi
+  if [ "$is_kapp" -eq 1 ];                          then printf 'kapp';    return 0; fi
+  if [ "$is_helm" -eq 1 ];                          then printf 'helm';    return 0; fi
+  printf 'foreign'
+}
+
+# Refuse to install over an installer that is not us. Call this BEFORE the first cluster
+# mutation -- in 46 that means before istio_ensure_gwapi_crds
+# (a cluster-scoped --server-side CRD apply), and in 43 before the namespace create + PSA
+# relabel, which would otherwise re-label a FOREIGN istio-system on its way to refusing.
+#
+# ⚠️ THE REMEDIES ARE ASYMMETRIC AND NEITHER IS A --force FLAG. There is no supported
+# migration between the two paths (they install different Istio minors -- 1.28.5 vs 1.30.3 --
+# and the package path is opt-in until one live run exists), so the package side gets a hard
+# refusal with NO CONFIRM escape: a CONFIRM would let an operator opt into damage that cannot
+# be undone. The helm side's real answer is not force either -- it is
+# INGRESS_CONTROLLER=istio-existing, which attaches to a platform-owned mesh and installs
+# nothing.
+istio_refuse_foreign_owner() {   # <namespace> <this-path: helm|package>
+  local ns="${1:?}" me="${2:?}" own
+  # DRY_RUN must not require a live cluster -- 43 already skips its cluster probe under it.
+  if [ "${DRY_RUN:-0}" = "1" ]; then
+    log_info "istio-ownership: DRY_RUN=1 -- not reading the cluster"
+    return 0
+  fi
+  own="$(istio_ownership "$ns")"
+  log_info "istio-ownership: Deployment/istiod in '${ns}' is owned by: ${own}"
+  local _installer=helm
+  if [ "$me" = "package" ]; then _installer=kapp; fi
+
+  local uninstall_hint="  There is no 'make uninstall-istio'. The helm releases to remove are:
+      helm -n ${ns} uninstall istiod
+      helm -n ${ns} uninstall istio-base
+      helm -n \${ISTIO_GATEWAY_NAMESPACE} uninstall istio-ingressgateway"
+
+  case "${me}:${own}" in
+    # Greenfield: nothing owns it. Both paths proceed -- this is the ONLY state in which a
+    # first install is correct, and it is reached only via a PROVABLE NotFound.
+    *:none) return 0 ;;
+
+    # Own-path retry MUST stay green, or the guard breaks the idempotency of the very script
+    # it protects. This pair is the load-bearing GREEN of the whole design.
+    helm:helm)    return 0 ;;
+    package:kapp) return 0 ;;
+
+    package:helm|package:both)
+      die "REFUSING to install the Istio PACKAGE over a HELM-owned mesh in '${ns}'.
+
+  kapp does NOT refuse to adopt. Measured on the live lab: it claimed 30 of 50 helm-created
+  objects, then wanted kapp.k14s.io/app inside istiod's IMMUTABLE spec.selector -- after which
+  the reconcile can never converge, and removing the reconciler leaves the mesh permanently
+  MIXED (istio-cni-node still pulling from the PUBLIC registry). It is not reversible.
+
+  There is no supported migration between the two paths and NO override here on purpose: an
+  override would only let you opt into damage you cannot undo.
+
+  To switch deliberately, remove the helm install FIRST:
+${uninstall_hint}
+  Or stay on the helm path: make install-ingress   (ISTIO_INSTALL_METHOD=helm, the default)" ;;
+
+    helm:kapp|helm:both)
+      die "REFUSING to run the HELM Istio install over a kapp/package-owned mesh in '${ns}'.
+
+  helm would refuse this itself -- 'invalid ownership metadata ... cannot be imported into the
+  current release' -- but only AFTER this script had already applied cluster-scoped Gateway API
+  CRDs and relabelled the namespace. Refusing here costs you nothing and mutates nothing.
+
+  If this mesh belongs to the PLATFORM (on a real VKS lab, Istio is a Standard Package and is
+  legitimately kapp-managed), you do not want this path at all -- attach instead:
+      make install-ingress INGRESS_CONTROLLER=istio-existing
+  That installs NOTHING and applies routes only." ;;
+
+    *:foreign)
+      die "REFUSING: Deployment/istiod exists in '${ns}' but carries NEITHER installer's marker
+  (no kapp.k14s.io/app label, no helm ownership metadata).
+
+  Something else installed this mesh -- istioctl, an operator, or a hand-applied manifest.
+  Proceeding would hand a third party's control plane to ${_installer}.
+
+  Inspect it, then either remove it or attach without installing:
+      kubectl -n ${ns} get deploy istiod -o yaml | head -40
+      make install-ingress INGRESS_CONTROLLER=istio-existing" ;;
+
+    *:unknown)
+      die "REFUSING: could not establish who owns Deployment/istiod in '${ns}'.
+
+  The read did not return a provable NotFound, so 'nothing is installed' is NOT a conclusion
+  this script may draw -- a Forbidden, an unreachable API server, or a kubeconfig naming a
+  missing file all look identical to an empty result, and treating any of them as greenfield
+  is how the adoption happens.
+
+  Establish access first:  make argocd-preflight   (or check \$KUBECONFIG)" ;;
+
+    *) die "istio_refuse_foreign_owner: unhandled state '${me}:${own}' -- refusing rather than guessing" ;;
+  esac
+}
+
 istio_detect_route_api() {
   local have_classic=0 have_gwapi=0 gwclass_ok=""
 
