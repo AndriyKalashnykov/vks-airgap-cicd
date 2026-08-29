@@ -46,8 +46,7 @@ start_stub() {  # $1 = status code. Sets STUB_PID and PORT in THIS shell -- neve
   python3 "$STUB_OUT.py" "$1" > "$STUB_OUT" 2>/dev/null &
   STUB_PID=$!
   PORT=""
-  local i
-  for i in $(seq 1 60); do
+  for _ in $(seq 1 60); do
     PORT="$(cat "$STUB_OUT" 2>/dev/null | tr -d '[:space:]')"
     [ -n "$PORT" ] && break
     sleep 0.1
