@@ -222,6 +222,13 @@ fi
 # The package does not ship them and Istio never has. On a VKS guest cluster they are usually
 # already present as their own Standard Package (gateway-api.tanzu.vmware.com); this is idempotent
 # either way and is the same helper the helm path uses.
+
+# B480: REFUSE before ANY mutation. Below this line the script applies cluster-scoped Gateway
+# API CRDs and then creates + PSA-RELABELS $ISTIO_NAMESPACE -- so a guard placed near the
+# package install would first relabel a FOREIGN istio-system, which 48-istio-preflight.sh
+# already names as a harm. This is the direction that matters: kapp does NOT refuse to adopt.
+istio_refuse_foreign_owner "$ISTIO_NAMESPACE" package
+
 istio_ensure_gwapi_crds
 
 # --- 2. Namespaces, PSA-LABELLED BEFORE ANYTHING SCHEDULES --------------------

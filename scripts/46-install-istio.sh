@@ -63,6 +63,14 @@ export ISTIO_GATEWAY_SERVICE ISTIO_GATEWAY_LABEL
 log_info "adding/updating helm repo '${CHART_REPO_NAME}' (${CHART_REPO_URL})"
 # The Gateway API CRDs. Nothing else installs them (Istio does not ship them), and on KinD they
 # only appeared because cloud-provider-kind force-installs its own — which made our gateway-api
+
+# B480: REFUSE before the first cluster mutation. istio_ensure_gwapi_crds below is a
+# CLUSTER-SCOPED --server-side apply, so a guard placed near the helm install (99 lines down)
+# would already have changed the cluster on its way to refusing. helm would itself reject a
+# kapp-owned mesh ("invalid ownership metadata"), but only after that CRD apply -- refusing
+# here costs nothing and mutates nothing.
+istio_refuse_foreign_owner "$ISTIO_NAMESPACE" helm
+
 # e2e leg green for a KinD-only reason. We own this cluster on this path, so install them.
 istio_ensure_gwapi_crds
 
