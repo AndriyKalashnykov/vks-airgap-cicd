@@ -263,7 +263,10 @@ admin_pw="$(kubectl -n "$NS" get secret argocd-initial-admin-secret -o jsonpath=
 log_info "waiting for argocd-server to answer on its LoadBalancer (${argocd_lb})"
 ok=0
 for _ in $(seq 1 60); do
-  if curl -sS -k -o /dev/null --max-time 3 "https://${argocd_lb}/healthz" 2>/dev/null; then ok=1; break; fi
+  # B486/F7: single-sourced. This used curl's RC, which calls a peer that sends 200 headers and
+  # then stalls "never answered" (rc=28, http=200) and dies after ~300s against a live server.
+  # It also hardcoded https://, making it the one poller the ARGOCD_SESSION_SCHEME stub cannot drive.
+  if argocd_endpoint_answers "$argocd_lb" 3; then ok=1; break; fi
   sleep 2
 done
 [ "$ok" = 1 ] || die "argocd-server never answered on https://${argocd_lb} after the restart"

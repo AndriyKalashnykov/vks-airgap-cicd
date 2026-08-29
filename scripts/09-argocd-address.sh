@@ -101,12 +101,9 @@ _state() {                       # absent | pending | <ip>
 #     finished re-wiring (91-e2e-tenant-mechanism.sh:303) -- so a 200 would not prove readiness here.
 # This probe therefore claims exactly ONE thing: something is LISTENING at this address. curl writes
 # 000 when it never got a response, and that is the only distinction being drawn.
-_answers() {
-  local code
-  code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 \
-            "${ARGOCD_SESSION_SCHEME:-https}://${1}/healthz" 2>/dev/null || true)"
-  [ -n "$code" ] && [ "$code" != 000 ]
-}
+# B486/F7: this body was the only one of the three correct on BOTH measured axes, so it was
+# PROMOTED to lib/argocd.sh rather than rewritten. The local name stays; the logic has one home.
+_answers() { argocd_endpoint_answers "$1" 5; }
 
 # Is `absent` worth WAITING on? Only if the namespace exists and the Service has not appeared yet.
 # A missing NAMESPACE, an unusable kubeconfig, a stale CA or a rejected credential are all states
