@@ -33,7 +33,12 @@ spec:
       containers:
         - name: pythonwebapp
           image: pythonwebapp
-          imagePullPolicy: IfNotPresent
+          # ⚠️ Always, NOT IfNotPresent — the deployed tag is now the app's DECLARED VERSION,
+          # which MOVES: rebuilding without a bump re-points the same tag at a new digest. Under
+          # IfNotPresent a node holding a cached layer would keep serving the OLD build forever and
+          # the page would silently lie. With an immutable sha tag IfNotPresent was correct; it is
+          # not correct for a moving tag.
+          imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 8080

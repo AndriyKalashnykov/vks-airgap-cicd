@@ -788,8 +788,16 @@ if [ "$_no_probe_snapshot" = "1" ]; then
   headlamp_tok="<not read: CREDS_NO_PROBE=1 (minting a token is a live cluster call)>"
 elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
   _hl_ns="${HEADLAMP_NAMESPACE:-headlamp}"; _hl_sa="${HEADLAMP_SA:-headlamp-viewer}"
+  # ⚠️ --duration, OR THE TOKEN DIES IN AN HOUR. `kubectl create token` with no --duration gets the
+  # API SERVER DEFAULT, which is 3600s — MEASURED on this lab by decoding the JWT's exp-iat. An
+  # operator who opens Headlamp, works for an hour and refreshes gets "Cluster main is not healthy:
+  # Unauthorized" and is bounced to the paste-a-token screen, with nothing on either screen saying
+  # the token merely expired. MEASURED on the same lab: --duration=24h is HONOURED, not capped
+  # (86400s), so the server's --service-account-max-token-expiration is at least 24h here.
+  # A shorter cap elsewhere silently clamps this, which is fine: the request is a ceiling.
   _hl_t="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s \
-             -n "$_hl_ns" create token "$_hl_sa" </dev/null 2>/dev/null || true)"
+             -n "$_hl_ns" create token "$_hl_sa" --duration="${HEADLAMP_TOKEN_DURATION:-24h}" \
+             </dev/null 2>/dev/null || true)"
   # _mask, NOT _lab_secret: that wrapper is defined ~380 lines BELOW this line, so calling it
   # here dies `_lab_secret: command not found`. It only ever fired once headlamp was installed AND
   # a token minted — a path that did not exist until 2026-09-05, which is why it shipped green.

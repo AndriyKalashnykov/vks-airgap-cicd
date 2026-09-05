@@ -713,6 +713,10 @@ trust-harbor: check-env ## Make YOUR engine trust the self-signed Harbor — and
 harbor-robot: ## Create a least-privilege Harbor CI robot account (push+pull) → secrets/harbor-robot.env AND published to .env (nothing to copy)
 	@$(SCRIPTS)/22-harbor-robot.sh
 
+.PHONY: build-apps
+build-apps: check-env ## Build EVERY app through the real pipeline (empty commit -> webhook -> Tekton -> Harbor) and wait; idempotent — skips what Harbor already holds
+	@$(SCRIPTS)/75-build-apps.sh
+
 .PHONY: harbor-robot-ensure
 harbor-robot-ensure: check-env ## Same as harbor-robot but IDEMPOTENT: skips (loudly) when a working credential already exists. What install-all runs; `harbor-robot` stays strict
 	@harbor_robot_ensure=1 $(SCRIPTS)/22-harbor-robot.sh
@@ -985,7 +989,7 @@ e2e-sneakernet-both: ## The sneakernet OS matrix: the SAME carried tarball unpac
 # `make verify` still proves the GitOps loop over a port-forward with no ingress at all; the
 # ingress is what makes the result REACHABLE, which is the difference between a green run and a
 # usable demo.
-install-all: preflight selfbuilt-image mirror mirror-verify builder-image vks-login harbor-robot-ensure platform install-headlamp install-ingress gitops ## Run the complete air-gap install end to end (preflight FIRST, mirror integrity-verified, CI robot ensured BEFORE platform bakes the push/pull Secrets, then platform -> headlamp -> ingress -> gitops)
+install-all: preflight selfbuilt-image mirror mirror-verify builder-image vks-login harbor-robot-ensure platform install-headlamp install-ingress gitops build-apps ## Run the complete air-gap install end to end (preflight FIRST, mirror integrity-verified, CI robot ensured BEFORE platform bakes the push/pull Secrets, then platform -> headlamp -> ingress -> gitops -> build-apps, so the demo actually SERVES)
 	@echo ""
 	@echo "  ── install-all finished. WHAT IS AND IS NOT RUNNING ──────────────────────────"
 	@echo "  Installed and serving:  Gitea, Tekton, headlamp, the ingress, and (already"

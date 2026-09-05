@@ -467,31 +467,139 @@ app_toolchain() {
 # was declared in three of the six sources, rendered onto the web page via APP_VERSION, and NEVER
 # became a Harbor tag — the owner looked at the artifact list and asked "where are my tags?".
 #
-# ⚠️ THIS IS NOT WHAT THE PAGE SHOWS. The page's `Image tag` comes from APP_VERSION, injected at
-# deploy time from the image tag (the sha), which is how it proves WHICH build is running. This
-# function feeds a SECOND, human-facing tag on the same digest.
+# The DECLARED SEMANTIC VERSION — the app's own release identity, and the tag the pipeline deploys.
 #
-# ⚠️ LANGUAGE KNOWLEDGE LIVES HERE, NOT IN TEKTON. kaniko-build.yaml says in as many words that the
-# task "knows no language"; app_build_args() above is the same shape. 60-configure-tekton.sh renders
-# the value into the pipeline, so the cluster never parses a manifest.
+# ⚠️ NOT the same thing as the page's `Deployed tag` field's SOURCE: that value arrives as the
+# APP_VERSION container env, which kustomize's `replacements` block derives from the image ref. The
+# two agree because the pipeline tags the image with THIS value — not because either reads the other.
 #
-# Prints EMPTY when the app declares none — the caller must then push only the sha tag rather than
-# invent a version. It does NOT die: an app is allowed to have no declared version.
-app_version() {
-  local d; d="$(app_src "$1")"
+# ⚠️ LANGUAGE KNOWLEDGE LIVES HERE, NOT IN TEKTON. app_build_args() below is the same shape. The
+# cluster runs a command this file hands it; it never learns what a pom or a Cargo.toml is.
+# app_version_cmd <name> — the POSIX shell one-liner that prints the declared version when run
+# WITH THE APP'S CHECKOUT AS THE CWD. This is the SINGLE source of the extraction: app_version_in()
+# below runs it locally, and 60-configure-tekton.sh base64-renders it into the git-clone Task so the
+# PIPELINE reads the version from the CLONE it just made.
+#
+# ⚠️ POSIX/busybox ONLY — no jq, no `sed -E`. It runs in `alpine/git` (busybox ash) in-cluster as
+# well as in bash here, and a GNU-only construct would work locally and silently return EMPTY in the
+# cluster (which then tags with no version at all). sed/grep -oE are the whole vocabulary.
+app_version_cmd() {
   case "$(app_lang "$1")" in
     # The FIRST <version> after the project's own <artifactId>: a pom's parent block carries its own
     # <version>, and grabbing that would tag every java app with Spring Boot's version.
-    java)   sed -n "/<artifactId>$1<\/artifactId>/,/<\/version>/p" "${REPO_ROOT}/${d}/pom.xml" 2>/dev/null \
-              | grep -oE '<version>[^<]+' | head -1 | sed 's/<version>//' ;;
-    nodejs) jq -r '.version // empty' "${REPO_ROOT}/${d}/package.json" 2>/dev/null ;;
-    # [package] only: a [dependencies] entry can carry `version = "..."` too.
-    rust)   sed -n '/^\[package\]/,/^\[/p' "${REPO_ROOT}/${d}/Cargo.toml" 2>/dev/null \
-              | grep -m1 -oE '^version *= *"[^"]+' | sed -E 's/.*"//' ;;
-    go)     grep -m1 -oE '^const appVersion = "[^"]+' "${REPO_ROOT}/${d}/main.go" 2>/dev/null | sed -E 's/.*"//' ;;
-    python) grep -m1 -oE '^__version__ = "[^"]+' "${REPO_ROOT}/${d}/app.py" 2>/dev/null | sed -E 's/.*"//' ;;
-    dotnet) grep -m1 -oE '<Version>[^<]+' "${REPO_ROOT}/${d}"/*.csproj 2>/dev/null | sed 's/.*<Version>//' ;;
-    *)      die "app '$1': add a branch to app_version()" ;;
+    java)   printf '%s' "sed -n '/<artifactId>$1<\\/artifactId>/,/<\\/version>/p' pom.xml | grep -oE '<version>[^<]+' | head -1 | sed 's/<version>//'" ;;
+    # ⚠️ `^[[:space:]]*` does NOT exclude nested keys — indentation is what a nested key looks like.
+    # MEASURED: an npm `\"scripts\": {\"version\": \"npm run build\"}` lifecycle hook placed above the
+    # top-level key made this return `npm run build`. Requiring a LEADING DIGIT is what excludes it;
+    # git-clone's read-version step then validates the shape again before anything consumes it.
+    nodejs) printf '%s' "grep -m1 -oE '^[[:space:]]*\"version\"[[:space:]]*:[[:space:]]*\"[0-9][^\"]*' package.json | sed 's/.*\"//'" ;;
+    # [package] only: a [dependencies] entry can carry `version = \"...\"` too.
+    rust)   printf '%s' "sed -n '/^\\[package\\]/,/^\\[/p' Cargo.toml | grep -m1 -oE '^version *= *\"[^\"]+' | sed 's/.*\"//'" ;;
+    go)     printf '%s' "grep -m1 -oE '^const appVersion = \"[^\"]+' main.go | sed 's/.*\"//'" ;;
+    python) printf '%s' "grep -m1 -oE '^__version__ = \"[^\"]+' app.py | sed 's/.*\"//'" ;;
+    dotnet) printf '%s' "grep -m1 -oE '<Version>[^<]+' *.csproj | sed 's/.*<Version>//'" ;;
+    *)      die "app '$1': add a branch to app_version_cmd()" ;;
+  esac
+}
+
+# app_version <name> — the DECLARED version from the repo's own tree.
+app_version() { app_version_in "$1" "${REPO_ROOT}/$(app_src "$1")"; }
+
+# app_version_in <name> <dir> — the same read, against ANY checkout. `make verify` needs this for
+# the GITEA clone, not the local tree: the two can differ, and tagging from the local tree would
+# make the image's version lie about the commit that built it.
+#
+# Prints EMPTY when the app declares none — the caller must then push only the sha tag rather than
+# invent a version. It does NOT die: an app is allowed to have no declared version. The `|| true`
+# is load-bearing: a missing file makes grep exit 2 and would kill a `set -e` caller.
+app_version_in() {
+  local d="$2" cmd
+  cmd="$(app_version_cmd "$1")"
+  ( cd "$d" 2>/dev/null && sh -c "$cmd" 2>/dev/null ) || true
+}
+
+# app_set_version_in <name> <dir> <version> — write the DECLARED version into the app's own
+# manifest inside <dir>. The mirror of app_version_in, and the reason `make verify` can deploy at
+# all now that the DEPLOYED TAG IS THE VERSION: a marker commit that does not bump the version
+# leaves <app>-deploy byte-identical, so ArgoCD never rolls and verify would wait forever.
+# ⚠️ Each language's own file, exactly as app_set_message does it — this repo keeps language
+# knowledge here and nowhere else.
+app_set_version_in() {
+  local name="$1" d="$2" v="$3" f
+  # Resolve the file FIRST and guard it BEFORE writing. The previous order checked `[ -f ]` AFTER
+  # the write, which is not a guard at all — and under `set -e` the dotnet arm's `$( )` killed the
+  # script before the check could run.
+  case "$(app_lang "$name")" in
+    java)   f="${d}/pom.xml" ;;
+    nodejs) f="${d}/package.json" ;;
+    rust)   f="${d}/Cargo.toml" ;;
+    go)     f="${d}/main.go" ;;
+    python) f="${d}/app.py" ;;
+    dotnet) f="$(find "${d}" -maxdepth 1 -name '*.csproj' | sort | head -1 || true)" ;;
+    *)      die "app '$name': add a branch to app_set_version_in()" ;;
+  esac
+  [ -n "$f" ] && [ -f "$f" ] || die "app_set_version_in: no manifest for '${name}' under ${d}"
+  case "$(app_lang "$name")" in
+    # ONLY the project's own <version>, the one after its <artifactId>. A pom's PARENT block
+    # carries a <version> too, and rewriting that would repoint Spring Boot itself.
+    java)   V="$v" N="$name" perl -0pi -e 's{(<artifactId>\Q$ENV{N}\E</artifactId>\s*<version>)[^<]+}{$1$ENV{V}}s' "$f" ;;
+    nodejs) jq --arg v "$v" '.version = $v' "$f" > "${f}.tmp" && mv "${f}.tmp" "$f"
+            # package-lock.json carries the root package's version TWICE (top level and
+            # .packages[""]). `npm ci` compares them against package.json; same class as Cargo.lock
+            # above, so fix it here rather than wait for the day npm starts refusing.
+            if [ -f "${d}/package-lock.json" ]; then
+              jq --arg v "$v" '.version = $v | if has("packages") and (.packages | has("")) then .packages[""].version = $v else . end' \
+                "${d}/package-lock.json" > "${d}/package-lock.json.tmp" && mv "${d}/package-lock.json.tmp" "${d}/package-lock.json"
+              [ "$(jq -r '.version' "${d}/package-lock.json")" = "$v" ] \
+                || die "app_set_version_in: package-lock.json still does not carry ${v}"
+            fi ;;
+    # [package] only: a [dependencies] entry can carry `version = ...` too.
+    rust)   V="$v" perl -0pi -e 's{(\[package\][^\[]*?^version\s*=\s*")[^"]+}{$1$ENV{V}}ms' "$f"
+            # ⚠️ AND THE LOCKFILE. Cargo.lock carries this crate's OWN [[package]] version, and the
+            # test task runs `cargo test --offline --locked` — so bumping Cargo.toml alone makes the
+            # lock stale and cargo REFUSES: "cannot update the lock file ... because --locked was
+            # passed". MEASURED: it failed rustwebapp's pipeline on the lab at the `test` step, with
+            # clone/read-version already green.
+            if [ -f "${d}/Cargo.lock" ]; then
+              V="$v" N="$name" perl -0pi -e 's{(\[\[package\]\]\nname = "\Q$ENV{N}\E"\nversion = ")[^"]+}{$1$ENV{V}}s' "${d}/Cargo.lock"
+              # Herestring, NOT `grep … | grep -q`: under pipefail `grep -q` exits at the first
+              # match and SIGPIPEs the producer, which reports a FOUND pattern as ABSENT at
+              # random. check-grep-q-pipe caught this exact line.
+              grep -qF "version = \"${v}\"" <<< "$(grep -A1 "^name = \"${name}\"$" "${d}/Cargo.lock")" \
+                || die "app_set_version_in: Cargo.lock still does not carry ${v} for ${name} — cargo --locked will refuse"
+            fi ;;
+    go)     sed -i "s#^const appVersion = \".*\"#const appVersion = \"${v}\"#" "$f" ;;
+    python) sed -i "s#^__version__ = \".*\"#__version__ = \"${v}\"#" "$f" ;;
+    dotnet) sed -i "s#<Version>[^<]*</Version>#<Version>${v}</Version>#" "$f" ;;
+  esac
+  # READ BACK. app_set_message two functions up does exactly this, and these writers did not: a
+  # perl/sed pattern that stops matching (an extra element between <artifactId> and <version>, a
+  # reformatted file) exits 0 having changed NOTHING, and the caller then waits out a timeout for a
+  # deploy that can never happen.
+  local got; got="$(app_version_in "$name" "$d")"
+  [ "$got" = "$v" ] || die "app_set_version_in: wrote '${v}' to ${f} but it still reads '${got:-<empty>}' — the writer's pattern did not match"
+}
+
+# app_bump_patch <version> — 0.1.0 -> 0.1.1. Used by `make verify` to make each run a real release.
+app_bump_patch() {
+  # ⚠️ REFUSES anything that is not a plain numeric X.Y.Z. The old form did
+  # `cut -d. -f3 | tr -cd '0-9'`, which turns `0.1.0-rc8` into `08` -> `$((08+1))` is
+  # "value too great for base" (rc=1, no message, dead script under `set -e`), and turns
+  # `0.2.0-SNAPSHOT` into `0.2.1`, SILENTLY DESTROYING the -SNAPSHOT in the operator's repo.
+  # Dying names the file the operator must edit; guessing corrupts it.
+  case "$1" in
+    '') printf '0.0.1'; return 0 ;;
+    # `*[!0-9.]*` alone only rejects NON-NUMERIC input. `1.2.3.4` is all digits and dots, so it
+    # passed, `cut -f3` took `3`, and the writer stored `1.2.4` — SILENTLY DROPPING `.4`, in the
+    # operator's own repo, with the read-back agreeing. `<Version>1.2.3.4</Version>` is idiomatic
+    # .NET. Reject anything that is not exactly three numeric components.
+    *[!0-9.]*|*.*.*.*|*..*|.*|*.) die "app_bump_patch: '$1' is not a plain X.Y.Z version — bump it by hand" ;;
+  esac
+  case "$1" in
+    *.*.*) printf '%s.%s.%s' "${1%%.*}" "$(printf '%s' "$1" | cut -d. -f2)" \
+             "$(( 10#$(printf '%s' "$1" | cut -d. -f3) + 1 ))" ;;
+    *.*)   printf '%s.%s.1' "${1%%.*}" "$(printf '%s' "$1" | cut -d. -f2)" ;;
+    *)     printf '%s.0.1' "$1" ;;
   esac
 }
 
@@ -629,16 +737,21 @@ app_export() {
   APP_BUILDER_IMAGE="$(app_builder_image "$name")"
   APP_RUNTIME_IMAGE="$(app_runtime_image "$name")"
   APP_BUILD_ARGS="$(app_build_args "$name")"   # extra kaniko --build-arg flags (may be empty)
-  APP_DECLARED_VERSION="$(app_version "$name")"         # declared semantic version -> 2nd image tag (may be empty)
-  # ⚠️ APP_DECLARED_VERSION MUST BE EXPORTED (renamed from APP_VERSION: that name ALREADY means
+  # ⚠️ NO render-time version is exported any more. It used to be `APP_DECLARED_VERSION`, read
+  # from THIS tree and envsubst'd into the pipeline — which meant an operator who bumped the version
+  # in Gitea got the jump box's OLD version tagged onto their build, silently. The pipeline reads it
+  # from the CLONE now (git-clone's read-version step); re-adding a render-time copy would
+  # re-introduce a value that can disagree with the artifact it names.
+  APP_VERSION_CMD_B64="$(app_version_cmd "$name" | base64 | tr -d '\n')"   # the EXTRACTION COMMAND, not a version
+  # ⚠️ APP_VERSION_CMD_B64 MUST BE EXPORTED (NOT named APP_VERSION: that name ALREADY means
   # "the deployed image TAG" — it is the container env var in all six deployments, sourced by
   # kustomize from the image ref. One identifier meaning two things makes `grep` useless forever.)
-  # It, not merely assigned: envsubst reads the ENVIRONMENT, so an
+  # It must be EXPORTED, not merely assigned: envsubst reads the ENVIRONMENT, so an
   # unexported var renders as the EMPTY STRING with no error — and an empty version-tag param means
   # the second --destination is silently skipped and the `0.1.0` tag never appears in Harbor.
   export APP_NAME APP_LANG APP_SRC APP_DEPLOY_DIR APP_HOST APP_TEST_TASK \
          APP_NAMESPACE APP_GIT_REPO APP_DEPLOY_REPO APP_IMAGE \
-         APP_BUILDER_IMAGE APP_RUNTIME_IMAGE APP_BUILD_ARGS APP_DECLARED_VERSION
+         APP_BUILDER_IMAGE APP_RUNTIME_IMAGE APP_BUILD_ARGS APP_VERSION_CMD_B64
 }
 
 # for_each_app <fn> — run <fn> <app> for every app, in registry order, with app_export already

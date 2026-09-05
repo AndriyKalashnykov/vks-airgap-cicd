@@ -79,7 +79,7 @@ ck "an unexpected status is REPORTED, not swallowed"  "$(probe c418.local)" "HTT
 ck "CREDS_NO_PROBE=1 short-circuits"  \
    "$(eval "$_fn"; CREDS_NO_PROBE=1 _ing=1.2.3.4 _ing_live=1 _reach_ingress h.local)" "not probed"
 ck "no ingress -> no ingress"         \
-   "$(eval "$_fn"; CREDS_NO_PROBE=0 _ing= _ing_live=1 _reach_ingress h.local)"        "no ingress"
+   "$(eval "$_fn"; CREDS_NO_PROBE=0 _ing='' _ing_live=1 _reach_ingress h.local)"        "no ingress"
 ck "LB not live -> silent (never a per-host verdict)" \
    "$(eval "$_fn"; CREDS_NO_PROBE=0 _ing=1.2.3.4 _ing_live=0 _reach_ingress h.local)" "silent"
 # An empty host cannot name a vhost; sending `Host: ` would earn a 404 and INVENT a "no route".

@@ -30,11 +30,6 @@ const env = (key, fallback) => process.env[key] || fallback;
 const page = {
   appName: env('APP_NAME', 'nodejswebapp'),
   message: env('APP_MESSAGE', defaultMessage),
-  // The DECLARED semantic version, read from this app's OWN package.json at startup.
-  // import.meta.url anchors the path to THIS file, so it resolves identically whether the app runs
-  // from the repo or from /app in the image. Not injected: kustomize can only source a value from
-  // the deployed image tag (the sha), so no env var could carry the declared version.
-  appVersion: JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version,
   version: env('APP_VERSION', 'dev'),
   commit: env('APP_COMMIT', 'unknown'),
 };
@@ -76,7 +71,6 @@ export const render = (p) => `<!DOCTYPE html>
         <h1>${esc(p.appName)}</h1>
         <p class="message">${esc(p.message)}</p>
         <dl>
-            <dt>Version</dt><dd>${esc(p.appVersion)}</dd>
             <dt>Deployed tag</dt><dd>${esc(p.version)}</dd>
             <dt>Commit</dt><dd>${esc(p.commit)}</dd>
         </dl>

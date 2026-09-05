@@ -73,7 +73,6 @@ def render(p: dict) -> str:
         <h1>{escape(p['app_name'])}</h1>
         <p class="message">{escape(p['message'])}</p>
         <dl>
-            <dt>Version</dt><dd>{escape(p['app_version'])}</dd>
             <dt>Deployed tag</dt><dd>{escape(p['version'])}</dd>
             <dt>Commit</dt><dd>{escape(p['commit'])}</dd>
         </dl>
@@ -104,9 +103,6 @@ def page_from_env() -> dict:
     return {
         "app_name": env("APP_NAME", "pythonwebapp"),
         "message": env("APP_MESSAGE", DEFAULT_MESSAGE),
-        # The DECLARED semantic version, compiled in from __version__ above. Not injected:
-        # kustomize can only source from the deployed image tag (the sha).
-        "app_version": __version__,
         "version": env("APP_VERSION", "dev"),
         "commit": env("APP_COMMIT", "unknown"),
     }
