@@ -69,7 +69,7 @@ def render(p: dict) -> str:
         <h1>{escape(p['app_name'])}</h1>
         <p class="message">{escape(p['message'])}</p>
         <dl>
-            <dt>Version</dt><dd>{escape(p['version'])}</dd>
+            <dt>Image tag</dt><dd>{escape(p['version'])}</dd>
             <dt>Commit</dt><dd>{escape(p['commit'])}</dd>
         </dl>
     </main>

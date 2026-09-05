@@ -68,7 +68,7 @@ export const render = (p) => `<!DOCTYPE html>
         <h1>${esc(p.appName)}</h1>
         <p class="message">${esc(p.message)}</p>
         <dl>
-            <dt>Version</dt><dd>${esc(p.version)}</dd>
+            <dt>Image tag</dt><dd>${esc(p.version)}</dd>
             <dt>Commit</dt><dd>${esc(p.commit)}</dd>
         </dl>
     </main>

@@ -85,7 +85,7 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
         <h1>{{.AppName}}</h1>
         <p class="message">{{.Message}}</p>
         <dl>
-            <dt>Version</dt><dd>{{.Version}}</dd>
+            <dt>Image tag</dt><dd>{{.Version}}</dd>
             <dt>Commit</dt><dd>{{.Commit}}</dd>
         </dl>
     </main>

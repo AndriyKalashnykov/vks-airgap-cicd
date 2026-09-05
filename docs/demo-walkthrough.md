@@ -25,8 +25,9 @@ gives.
 
 ## The loop
 
-1. **See the current greeting.** Open the **app** URL. It shows a greeting with the app version and git
-   commit — this is what will change. (If you arrived straight from `make e2e-kind`, its own `make verify`
+1. **See the current greeting.** Open the **app** URL. It shows a greeting, the deployed **image
+   tag**, and the **git commit** it was built from — the pipeline tags every image with the commit
+   sha, so those two match by construction, and the greeting is what will change. (If you arrived straight from `make e2e-kind`, its own `make verify`
    step already deployed a marker like `vks-airgap-cicd-verify-<epoch>`, so you'll see **that**, not the
    `Hello from vks-airgap-cicd` default. Either is fine — you're about to change it.)
 

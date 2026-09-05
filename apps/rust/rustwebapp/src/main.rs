@@ -81,7 +81,7 @@ pub fn render(p: &Page) -> String {
         <h1>{name}</h1>
         <p class="message">{msg}</p>
         <dl>
-            <dt>Version</dt><dd>{ver}</dd>
+            <dt>Image tag</dt><dd>{ver}</dd>
             <dt>Commit</dt><dd>{commit}</dd>
         </dl>
     </main>
