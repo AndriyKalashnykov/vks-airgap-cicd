@@ -721,6 +721,14 @@ argocd-address: ## Wait for ArgoCD's LoadBalancer address and write ARGOCD_SERVE
 vks-k8s-version: ## Pick the newest Ready+Compatible TKr and write VKS_K8S_VERSION to ./.env (waits; a fresh Supervisor syncs them over minutes)
 	@$(SCRIPTS)/24-vks-k8s-version.sh
 
+.PHONY: vcenter-check
+vcenter-check: ## Read-only: EXERCISE vCenter's real APIs (a hot restore can leave one 500ing while it self-reports HEALTHY). Skips cleanly with no VCENTER_* creds
+	@$(SCRIPTS)/29-vcenter-service-check.sh
+
+.PHONY: vcenter-repair
+vcenter-repair: ## MUTATING (opt-in): exercise vCenter's APIs, then RESTART whichever services actually failed, then re-exercise to prove it
+	@$(SCRIPTS)/29-vcenter-service-check.sh --remediate
+
 .PHONY: lab-preflight
 lab-preflight: ## Read-only: three cluster preconditions that each kill the run LATER (CRD-create · a DEFAULT StorageClass · a working LoadBalancer provider)
 	@$(SCRIPTS)/24-lab-preflight.sh
