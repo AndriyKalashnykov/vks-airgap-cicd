@@ -106,9 +106,34 @@ $(sed 's/^/      /' "$_pf_err" | head -4)" ;;
 # The VARIABLE NAME is the message — the operator needs to know WHICH kubeconfig to fix, so these
 # stay single-quoted deliberately (expanding them would print the path and never the name).
 # shellcheck disable=SC2016
-kg version -o json >/dev/null 2>"$_pf_err" || _pf_classify GUEST  '$KUBECONFIG'        "make vks-login"
+_pf_guest_rc=0
+# shellcheck disable=SC2016  # the VARIABLE NAME is the message; expanding it would print the path
+kg version -o json >/dev/null 2>"$_pf_err" || { _pf_guest_rc=1; _pf_classify GUEST  '$KUBECONFIG'        "make vks-login"; }
 # shellcheck disable=SC2016
-ka version -o json >/dev/null 2>"$_pf_err" || _pf_classify ARGOCD '$ARGOCD_KUBECONFIG' "make fetch-argocd-kubeconfig"
+_pf_argo_rc=0
+# shellcheck disable=SC2016  # the VARIABLE NAME is the message; expanding it would print the path
+ka version -o json >/dev/null 2>"$_pf_err" || { _pf_argo_rc=1; _pf_classify ARGOCD '$ARGOCD_KUBECONFIG' "make fetch-argocd-kubeconfig"; }
+
+# ⚠️ BOTH-FAIL AND ONE-FAIL ARE DIFFERENT DIAGNOSES, and nothing said so until now.
+# One cluster unreachable is a fact about THAT cluster. BOTH unreachable is nearly always a
+# fact about THIS BOX -- its network, DNS, or an egress proxy -- and an operator who reads two
+# separate "go fix that cluster" blocks fixes neither, because neither is broken.
+# This is the CONTROL-ROW idea 29-vcenter-service-check.sh already carries (a probe whose job is
+# to distinguish a broken INSTRUMENT from a broken ESTATE), applied here. It costs one
+# comparison and needs no retry loop -- and an adversary rated it worth MORE than the bounded-
+# wait design it refuted: that design would have retried UNREACHABLE, while the shape it was
+# built for (an apiserver answering 503 while starting) classifies as UNKNOWN and never would.
+# ⚠️ ON KIND THESE ARE THE SAME FILE (ARGOCD_KUBECONFIG defaults to $KUBECONFIG above), so
+# "both failed" is then ONE endpoint failing twice, NOT corroboration. Say which case it is.
+if [ "${_pf_guest_rc:-0}" = 1 ] && [ "${_pf_argo_rc:-0}" = 1 ]; then
+  if [ "$ARGOCD_KUBECONFIG" = "$KUBECONFIG" ]; then
+    log_warn "both probes used the SAME kubeconfig ($KUBECONFIG) — that is ONE endpoint failing,"
+    log_warn "  not two independent confirmations. Treat the blocks above as a single fault."
+  else
+    log_warn "BOTH clusters failed, and they are DIFFERENT endpoints. Suspect THIS BOX before"
+    log_warn "  either lab: network route, DNS, or an egress proxy. Two labs rarely break together."
+  fi
+fi
 rm -f "$_pf_err"
 
 OFF=0

@@ -167,7 +167,19 @@ if have helm; then
     for c in base istiod gateway; do
       mirror_retry "${MIRROR_RETRIES:-5}" run helm pull "istio-airgap/${c}" --version "$ISTIO_VERSION" --destination "$CHART_DIR"
     done
-    # ---- headlamp, same carry pattern, same reason -------------------------------------------
+    log_info "charts carried: $(find "$CHART_DIR" -name '*.tgz' -printf '%f ' 2>/dev/null)"
+  else
+    log_warn "ISTIO_VERSION is unset — NOT carrying the istio charts. The air-gapped box will only be able to use INGRESS_CONTROLLER=traefik or istio-existing."
+  fi
+    # ---- headlamp: a SIBLING of the istio block, NOT nested inside it -------------------------
+    # ⚠️ THIS USED TO SIT INSIDE `if [ -n "$ISTIO_VERSION" ]`, and that was a real bug.
+    # INGRESS_CONTROLLER=traefik is a first-class supported mode, so an operator may legitimately
+    # leave ISTIO_VERSION unset -- and then NO headlamp chart was carried, while the only warning
+    # emitted said "ISTIO_VERSION is unset — NOT carrying the istio charts", silent about headlamp.
+    # On the air-gap box the install then died with "your bundle predates it, or HEADLAMP_VERSION
+    # changed since it was cut" -- BOTH FALSE, and the real cause (a variable set on the OTHER box)
+    # is undiscoverable from the box that hit the error. An error that names the wrong cause is
+    # worse than a crash.
     # `helm repo add` CANNOT WORK on the air-gap box (46-install-istio.sh:77-78 records this), so
     # the chart is pulled HERE, on the box with the internet, and consumed from bundle/charts.
     # An adversary verified the chart has NO `dependencies:` block and no `charts/` directory, so a
@@ -184,10 +196,6 @@ if have helm; then
     else
       log_warn "HEADLAMP_VERSION is unset — NOT carrying the headlamp chart; the air-gap box cannot install headlamp."
     fi
-    log_info "charts carried: $(find "$CHART_DIR" -name '*.tgz' -printf '%f ' 2>/dev/null)"
-  else
-    log_warn "ISTIO_VERSION is unset — NOT carrying the istio charts. The air-gapped box will only be able to use INGRESS_CONTROLLER=traefik or istio-existing."
-  fi
 else
   log_warn "helm is not installed here, so the istio charts are NOT being carried. On the air-gap box only INGRESS_CONTROLLER=traefik / istio-existing will work."
 fi
