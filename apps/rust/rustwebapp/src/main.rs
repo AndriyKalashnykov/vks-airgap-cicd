@@ -144,6 +144,11 @@ async fn shutdown_signal() {
     while !TERMINATE.load(Ordering::SeqCst) {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
+    // ⚠️ NO DRAIN CAP HERE, deliberately — unlike the nodejs app, which caps at 10s. axum's
+    // `with_graceful_shutdown` awaits `close_tx.closed()` with no timeout, so the only bound is
+    // Kubernetes' terminationGracePeriodSeconds (default 30s), after which the pod is SIGKILLed and
+    // the in-flight request is dropped anyway. These handlers are sub-millisecond, so a cap would
+    // add a knob with nothing to protect. Revisit if this app ever grows a long-running endpoint.
 }
 
 #[tokio::main]

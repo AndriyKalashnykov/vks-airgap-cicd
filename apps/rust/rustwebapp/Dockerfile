@@ -21,9 +21,21 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 # Tests then build, in ONE layer (hadolint DL3059), so a broken app cannot produce an image.
 # --locked: the lockfile is authoritative; a resolver that wanted to CHANGE it would fail instead.
-RUN cargo test --offline --locked --quiet \
-    && cargo build --release --offline --locked \
-    && strip target/release/rustwebapp
+# ⚠️ `--release` ON THE TEST IS THE PERFORMANCE FIX, and it is one word. A dev-profile `cargo test`
+# followed by `cargo build --release` compiles the ENTIRE dependency graph TWICE, into target/debug
+# and target/release. Sharing the profile makes the second compile reuse the first's artefacts.
+# MEASURED in the real builder image, --network none: 26s -> 16s, with all 4 tests still running.
+# (`RUN_TESTS=0` was considered and REJECTED: it saves less AND makes the path that SHIPS the path
+# that never runs tests.)
+# Cost, stated so nobody re-derives it: --release disables debug_assertions and integer-overflow
+# checks. None of this app's tests rely on either; a future test that does would be silently
+# weakened, so keep k8s/tekton/tasks/rust-test.yaml on the DEV profile — that keeps both profiles
+# exercised in the pipeline and makes this copy complementary rather than duplicate.
+#
+# `strip` is NOT here: Cargo.toml already sets [profile.release] strip = true. MEASURED — the
+# binary is byte-identical (1,418,216 bytes) with and without it, so the explicit strip was dead.
+RUN cargo test --release --offline --locked --quiet \
+    && cargo build --release --offline --locked
 
 # hadolint ignore=DL3006
 FROM ${RUNTIME_IMAGE} AS runtime

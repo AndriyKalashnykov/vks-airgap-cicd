@@ -115,6 +115,13 @@ if __name__ == "__main__":
     # without an explicit handler the process IGNORES SIGTERM, the kubelet waits out the full 30s
     # terminationGracePeriod and SIGKILLs it. MEASURED over 114 samples across 19 runs: apps that
     # handle it drain in 5s, this one took 35s (30s grace + the harness's 5s poll).
+    #
+    # ⚠️ THIS EXITS PROMPTLY; IT DOES NOT DRAIN. Werkzeug's ThreadedWSGIServer sets
+    # daemon_threads = True, and CPython's socketserver skips daemon threads in its join — so
+    # server_close() waits for nothing and an in-flight response is cut. MEASURED: a 2.4s request
+    # came back truncated (111 of 113 bytes, no complete body). That is still strictly better than
+    # accepting traffic for 30s and then being SIGKILLed, but it is NOT graceful. The real fix is to
+    # stop shipping Flask's dev server in a container (waitress drains); that is a separate change.
     def _shutdown(_signum, _frame):  # noqa: ANN001
         sys.exit(0)
 

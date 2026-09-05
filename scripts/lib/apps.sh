@@ -636,7 +636,7 @@ app_sigterm_pattern() {
   case "$(app_lang "$1")" in
     go)     printf '%s' 'signal\.Notify\(.*SIGTERM' ;;
     rust)   printf '%s' 'libc::SIGTERM|tokio::signal' ;;
-    nodejs) printf '%s' "process\.on\(sig|'SIGTERM'" ;;
+    nodejs) printf '%s' 'process\.on\(sig|process\.on\(.SIGTERM' ;;
     python) printf '%s' 'signal\.signal\(signal\.SIGTERM' ;;
     java)   printf '%s' 'shutdown: *graceful' ;;
     dotnet) printf '%s' 'WebApplication\.CreateBuilder' ;;
