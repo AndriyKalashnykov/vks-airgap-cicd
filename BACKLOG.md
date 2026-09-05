@@ -5086,51 +5086,60 @@ moment the version can actually change.
 filtering). One minute to settle offline: `cd apps/java/javawebapp && ./mvnw -q -B package && unzip -p
 target/*.jar BOOT-INF/classes/application.yml | grep -n version`.
 
-## B535 — 🔴 `seed-gitea` pushes the operator's HOST BUILD OUTPUT into the Gitea app repos, and three Dockerfiles `COPY . .` it into the image
+## B535 — 🟡 `seed-gitea` pushes the operator's HOST BUILD OUTPUT into the Gitea app repos (bloat + clone cost; it does NOT reach the image)
 
-MEASURED 2026-09-05, by replaying exactly what `push_repo` does (`cp -a "$src/." "$d/"` then
-`rm -rf "$d/target" "$d/.git"`, then `git init` + `git add -A`) for every registry row:
+⚠️ **FILED 🔴, CORRECTED TO 🟡 THE SAME HOUR — the original central claim was FALSE.** I wrote that
+the junk is "copied into the image by `COPY . .`". It is not: **all six apps already carry a
+`.dockerignore`** excluding exactly these paths (`bin/`, `obj/`, `**/bin/`, `**/obj/`,
+`node_modules/`, `target/`, `__pycache__/`, `.venv/`), added 2026-08-25 off the SAME measurement
+(438 MB across six apps). I checked that the Dockerfiles do `COPY . .` and never checked whether a
+`.dockerignore` intercepts it — one axis of a two-axis mechanism, the RULE ZERO-P failure.
 
-| app | files pushed | build junk | size | Dockerfile `COPY . .` |
-|---|---|---|---|---|
-| dotnetwebapp | 244 | **236** (`tests/bin/`, `tests/obj/`) | 51M | **yes — `Dockerfile:20`** |
-| nodejswebapp | 609 | **601** (`node_modules/`) | 4.4M | **yes — `Dockerfile:28`** |
-| pythonwebapp | 14 | 3 | 88K | yes — `Dockerfile:30` |
-| javawebapp | 15 | 0 | 160K | no |
-| gowebapp | 9 | 0 | 15M | no |
-| rustwebapp | 7 | 0 | 52K | no |
+That the exclusion is **in force in-cluster (kaniko, not just docker) is MEASURED**, in
+`apps/dotnet/dotnetwebapp/Dockerfile:22-30`: the instant a `.dockerignore` excluded `obj/`, the
+in-cluster build failed in ten seconds with `error NETSDK1004: Assets file
+'/src/obj/project.assets.json' not found`. A build cannot fail on the absence of a file the context
+still contains, so kaniko demonstrably honours it.
 
-**This is not bloat, it is a correctness defect.** The junk is cloned by the Tekton `git-clone` task
-and then copied into the build context by `COPY . .`, so:
+**WHAT SURVIVES, measured 2026-09-05** by replaying exactly what `push_repo` does (`cp -a "$src/."`,
+`rm -rf "$d/target" "$d/.git"`, `git init`, `git add -A`) for every registry row:
 
-1. the image contents depend on **whether the operator happened to run a local build before seeding**
-   — the same commit produces different images on different boxes;
-2. a **host-arch** artifact can ship into the container (`node_modules` with native bindings, a
-   `net10.0` publish output built for the operator's runtime);
-3. it defeats the pinned-offline-builder story this repo exists to demonstrate — the whole point of
-   `Dockerfile.builder` is that dependencies come from a **mirrored, pinned** builder, not from
-   whatever is lying in the operator's working tree.
+| app | files pushed to Gitea | build junk | size |
+|---|---|---|---|
+| dotnetwebapp | 244 | **236** (`tests/bin/`, `tests/obj/`) | 51M |
+| nodejswebapp | 609 | **601** (`node_modules/`) | 4.4M |
+| pythonwebapp | 14 | 3 | 88K |
+| javawebapp | 15 | 0 | 160K |
+| gowebapp | 9 | 0 | 15M |
+| rustwebapp | 7 | 0 | 52K |
 
-**ROOT CAUSE — a `.gitignore` scope mismatch, and it is invisible in the outer repo.** The root
-`.gitignore:94-97` correctly carries `apps/**/node_modules/`, `apps/**/obj/`, `apps/**/bin/`,
-`apps/**/target/`, so `git ls-files apps/dotnet/dotnetwebapp | grep -cE '/(bin|obj)/'` is **0** and
-the outer repo looks clean. But `push_repo` builds a **fresh repo whose root IS the app directory**,
-where the path is `tests/obj/…`, not `apps/dotnet/dotnetwebapp/tests/obj/…` — so an `apps/**/`-anchored
-pattern **cannot match**, and no per-app `.gitignore` exists (measured: 0 of 6). `push_repo` deletes
-only `target` and `.git`, which is why rust (346M of `target/`) is clean and dotnet is not.
+So ~55 MB of the operator's local build output is committed into `<app>-app` on every seed, then
+cloned by the Tekton `git-clone` task into the workspace PVC on every build. That is bloat and clone
+time, and it makes the Gitea repo a poor representation of the source — **not** an image-correctness
+defect. Severity 🟡 accordingly.
 
-**Do NOT fix it by enumerating `rm -rf bin obj node_modules …`** — that is the enumerated-list rot
-`patterns.md` forbids, and it goes stale on the first new language. DERIVE it: the root `.gitignore`
-already declares the answer, so strip the `apps/**/` prefix off those patterns and write the result
-into the fresh repo's `.git/info/exclude` before `git add -A`. One source of truth, new languages
-covered for free.
+**ROOT CAUSE — a `.gitignore` SCOPE mismatch, invisible in the outer repo.** The root
+`.gitignore:94-97` carries `apps/**/node_modules/`, `apps/**/obj/`, `apps/**/bin/`, `apps/**/target/`,
+so `git ls-files apps/dotnet/dotnetwebapp | grep -cE '/(bin|obj)/'` is **0** and the outer repo looks
+clean. But `push_repo` builds a **fresh repo whose root IS the app directory**, where the path is
+`tests/obj/…`, not `apps/dotnet/dotnetwebapp/tests/obj/…` — an `apps/**/`-anchored pattern cannot
+match there, and no per-app `.gitignore` exists (measured: 0 of 6). `push_repo` deletes only `target`
+and `.git`, which is why rust (346M of `target/`) is clean and dotnet is not.
 
-⚠️ **Needs an idea-round before implementation** — it changes the seed mechanism, which is the
-"inventing a control feels exempt" class in RULE ZERO.
+**Do NOT fix by enumerating `rm -rf bin obj node_modules …`** — enumerated-list rot, stale on the
+first new language. Two derived options, neither implemented:
+ (a) strip the `apps/**/` prefix off the root `.gitignore` patterns into the fresh repo's
+     `.git/info/exclude` before `git add -A`; or
+ (b) **reuse each app's existing `.dockerignore`**, which already declares precisely this set per app
+     and is maintained for the same reason — one source of truth, new languages covered for free.
+Option (b) is probably right and did not exist in my first draft, because I had not read those files.
 
-**Cheap RED-proof available:** `find` the replayed push dir for `/(bin|obj|node_modules)/` and assert
-0; today it returns 236 for dotnet and 601 for nodejs.
+⚠️ **Needs an idea-round before implementation** — it changes the seed mechanism ("inventing a
+control feels exempt", RULE ZERO).
 
-**Residual NOT measured:** whether the junk actually changes the built image's digest (it is copied
-into the context, but a later build stage may not consume it). Settle by building dotnetwebapp twice
-— once with `tests/bin` present, once absent — and diffing the digests.
+**RED-proof available:** replay the push into a temp dir and assert 0 files match
+`/(bin|obj|node_modules)/`; today it returns 236 for dotnet and 601 for nodejs.
+
+**Residual, now correctly scoped:** whether the Gitea-side bloat measurably slows `git-clone` or fills
+the workspace PVC. Not measured. The image-digest question in the first draft is CLOSED by the
+`.dockerignore` evidence above.
