@@ -5024,13 +5024,12 @@ everything else LOOPS). Six apps behaving two different ways is the defect, not 
 2. The deployment STOPS setting `APP_VERSION` (env wins over the baked value, so leaving it set —
    at `"dev"` or anything else — defeats step 1).
 3. The kustomize `replacements` block targets `APP_COMMIT` ONLY.
-
-Result, identically for all six: `Version` = the declared project version, `Commit` = the deployed
-image tag. Two labels, two facts.
-
 4. GATE IT, or it rots back: assert (a) every app in the registry declares a version its build bakes
    in, and (b) no `deploy/*/deployment.yaml` sets `APP_VERSION`. Both are offline greps over the
    registry — the same shape as `check-app-hardcodes` and `check-pull-secret-alignment`.
+
+Result, identically for all six: `Version` = the declared project version, `Commit` = the deployed
+image tag. Two labels, two facts.
 
 ⚠️ Re-run `make verify` after: its assertion reads the rendered page. Confirm it keys on the MARKER
 (the greeting) and not on the version field, or this change reddens it.
