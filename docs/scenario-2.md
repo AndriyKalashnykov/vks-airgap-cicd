@@ -697,6 +697,12 @@ make harbor-robot                                  # → secrets/harbor-robot.en
 **Expect:** `robot account` created, then `credentials written to` a 0600 file. The secret is
 shown ONCE — if you miss it you must mint another robot.
 
+ℹ️ If you cannot mint one (two projects and no system-admin is the DEFAULT here — `.env.example`
+ships `HARBOR_INFRA_PROJECT=cicd` and `HARBOR_APP_PROJECT=apps`), `make install-all` does **not**
+stop: it runs `make harbor-robot-ensure`, which warns and continues, and the pipeline authenticates
+as your own user instead of a least-privilege robot. Ask your platform team for a system-level robot,
+or point both project variables at the one project you administer.
+
 `make harbor-robot` authenticates with the **current** `HARBOR_USERNAME`/`HARBOR_PASSWORD` and asks Harbor
 *"am I project/system-admin?"* (`GET /users/current`) before minting a robot — **a robot cannot mint a
 robot.** So to self-service one, put a **USER** credential (with project- or system-admin) in `.env`
@@ -796,7 +802,7 @@ box very often cannot do both.
 **Then install:**
 
 ```bash
-make install-all   # preflight -> selfbuilt-image -> mirror -> mirror-verify -> builder-image -> vks-login -> platform -> install-headlamp -> install-ingress -> gitops
+make install-all   # preflight -> selfbuilt-image -> mirror -> mirror-verify -> builder-image -> vks-login -> harbor-robot-ensure -> platform -> install-headlamp -> install-ingress -> gitops
 make psa-check     # NOW it can measure something — expect `PSA OK — … (N measured)`, not `PSA UNPROVEN`
 make verify        # push a marked change → Tekton → Harbor → ArgoCD → live app serves it
 make creds-show    # every URL + login for THIS context — one row per app in apps/registry.tsv

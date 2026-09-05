@@ -866,6 +866,13 @@ the pipeline runs as the **robot**, not as admin.
 ⚠️ A robot cannot mint robots, so re-running `make harbor-robot` now stops and says so. To mint
 another, restore the admin credential first with `make harbor-admin-password`.
 
+ℹ️ **`make install-all` does NOT stop here.** It runs `make harbor-robot-ensure`, the idempotent
+variant: when a robot already exists — or `HARBOR_USERNAME` is already the robot — it asks Harbor
+whether that credential still **authenticates**, and skips loudly if it does rather than failing the
+install. It is deliberately gated on a live check and not on the presence of
+`./secrets/harbor-robot.env`, because that file survives a lab re-cut while each cut mints a fresh
+Harbor. `make harbor-robot` itself stays strict: you asked for a robot, so you get a refusal.
+
 ⚠️ **Already exists?** It stops rather than overwriting: Harbor shows a robot secret **once**, so an
 existing one cannot be re-read and re-creating it would hand you a credential that does not work.
 **Which remedy applies depends on whether `./secrets/harbor-robot.env` is on THIS box** — the command
@@ -955,7 +962,7 @@ rejected, and it takes 8–10 minutes to say so. Fix it here — the Harbor step
 comes from.
 
 ```bash
-make install-all      # preflight -> selfbuilt-image -> mirror -> mirror-verify -> builder-image -> vks-login -> platform -> install-headlamp -> install-ingress -> gitops
+make install-all      # preflight -> selfbuilt-image -> mirror -> mirror-verify -> builder-image -> vks-login -> harbor-robot-ensure -> platform -> install-headlamp -> install-ingress -> gitops
 make verify           # pushes a marked change and follows it to the running app
 ```
 
