@@ -5196,3 +5196,60 @@ today it is 8.
 
 **Not started.** Needs its own idea round: the per-cell right answer differs by row, and the vcf CLI
 row's endpoint cell is a literal that must not gain a marker at all.
+
+## B537 — 🔴 `make kind-down` DELETES two credentials the LAB flow also writes, on a false ownership claim
+
+**IT FIRED LIVE, 2026-09-05**, on a box whose lab was fully installed and serving 11/11. Verbatim
+from the teardown log:
+
+      removing kind-cluster-scoped credential .../secrets/gitea-ci-token
+      removing kind-cluster-scoped credential .../secrets/webhook-token
+
+**"kind-cluster-scoped" is FALSE for both.** Measured, the writers and readers are flow-agnostic:
+
+| file | written by | read by |
+|---|---|---|
+| `secrets/webhook-token` | `50-seed-gitea-repos.sh:164` (`ensure_secret_token`) | `60-configure-tekton.sh` -> the k8s `gitea-webhook-secret` |
+| `secrets/gitea-ci-token` | `50-seed-gitea-repos.sh:45` | **`70-configure-argocd.sh:579`** |
+
+`50-seed-gitea-repos.sh` is the SHARED seeder — `make platform` runs it on a real lab exactly as the
+KinD flow does. This is `rules/common/patterns.md`'s teardown rule ("delete only what you CREATED";
+"'only the local flow writes these' was FALSE") recurring, and the earlier fix only made the deletion
+conditional on a cluster having actually been removed — it did not correct the **ownership** claim.
+
+**The damage is LATENT, which is why it will not be noticed.** The cluster keeps working: the k8s
+Secrets (`gitea-webhook-secret`, `gitea-git-auth`) are untouched, and `make verify` passes. It bites at
+the NEXT `make seed-gitea` on the lab: with the file gone, `ensure_secret_token` mints a NEW token and
+re-registers Gitea's hooks with it, while k8s still holds the OLD one unless `configure-tekton` also
+runs. `50-seed-gitea-repos.sh:330-340` documents that exact outcome, measured on walk row 2
+(2026-08-12): *"the core-interceptor's HMAC check then rejects every delivery, silently, forever."*
+`make platform` runs both so it self-heals; `make seed-gitea` alone does not.
+
+**REPAIR (used here, and it is worth keeping as a target).** The cluster is the authoritative copy:
+
+      ( umask 077
+        rm -f secrets/webhook-token          # umask applies at CREATION only — an existing file keeps its mode
+        kubectl -n "$CI_NAMESPACE" get secret gitea-webhook-secret \
+          -o jsonpath='{.data.secretToken}' | base64 -d > secrets/webhook-token
+        rm -f secrets/gitea-ci-token
+        kubectl -n "$CI_NAMESPACE" get secret gitea-git-auth \
+          -o jsonpath='{.data.password}'    | base64 -d > secrets/gitea-ci-token )
+
+Restored 48 and 40 bytes at mode 0600; consistent by construction, since `configure-tekton` set the
+cluster Secret from the same file the last seed used.
+
+**FIX — do NOT just drop the two `rm`s.** On a genuine KinD-only box they SHOULD go: a stale
+kind-scoped token surviving into the next cluster is the failure the deletion was added for. The
+ownership question is *"did THIS teardown's flow create them?"*, which the current code does not ask.
+Two candidates, neither implemented:
+ (a) record the path when the KinD flow writes it (`state_set KIND_WEBHOOK_TOKEN …`) and delete only a
+     recorded path — the pattern `patterns.md` prescribes and `state_claim_kind` already implements for
+     `.env.state` (measured the same day: the lab's `.env.state` survived this very teardown *because*
+     it was claimed);
+ (b) refuse when the sink is not kind-claimed, printing what it is leaving and why.
+
+⚠️ **Needs an idea round.** It is a destructive-path change, and getting it wrong in the other
+direction re-creates the stale-token bug.
+
+**Cheap RED-proof:** on a lab box, `touch secrets/webhook-token && make kind-down && ls secrets/` —
+today the file is gone.
