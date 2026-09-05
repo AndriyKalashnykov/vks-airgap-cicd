@@ -144,7 +144,18 @@ fi
 _ing="${INGRESS_LB_IP:-}"
 _ing_live=1
 if [ -n "$_ing" ]; then
-  timeout 2 bash -c "exec 3<>/dev/tcp/${_ing}/${INGRESS_PROBE_PORT:-80}" 2>/dev/null || _ing_live=0
+  # ⚠️ GATED ON THE SNAPSHOT, and the literal 2 replaced by the documented variable.
+  # MEASURED 2026-09-05 (adversary, HIGH): with CREDS_NO_PROBE=1 -- which this report ITSELF
+  # advertises as "skip every probe and report configuration only" -- this call still ran. Two
+  # points, CREDS_NO_PROBE=1 in both: no INGRESS_LB_IP -> 0.190s; a black-holed INGRESS_LB_IP ->
+  # 2.188s. The delta IS this hardcoded `timeout 2`. So the product's own escape hatch did not
+  # reach it, the OFFLINE test suite dialled the operator's network from inside `make ci`, and
+  # the report printed "nothing probed" after having probed.
+  # `$_no_probe_snapshot` (:52) rather than the live variable, for the same reason SHOW_SECRETS is
+  # snapshotted: load_env's `set -a` can clobber it from the operator's .env.
+  if [ "$_no_probe_snapshot" != "1" ]; then
+    timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" bash -c "exec 3<>/dev/tcp/${_ing}/${INGRESS_PROBE_PORT:-80}" 2>/dev/null || _ing_live=0
+  fi
 fi
 ingress_url() {  # ingress_url <host> -> the URL, or an honest marker when no ingress exists
   # ⚠️ DO NOT WITHHOLD THE URL WHEN THE PROBE FAILS. A first version printed
@@ -356,11 +367,32 @@ _argo_rc=0; _argo_err="$(mktemp)"
 # reachability probes were 0.06 s. An ACCESS command that takes 22 s to tell you what you can reach
 # has failed at its job. `--wait 0` bounds the script's own polling; it does not bound the kubectl
 # underneath it, so the timeout must be here.
-argo_pw="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" "${SCRIPT_DIR}/argocd-password.sh" --wait 0 --raw 2>"$_argo_err")" || _argo_rc=$?
+# ⚠️ UNDER CREDS_NO_PROBE THIS IS SKIPPED -- but ONLY when the value is not already configured.
+# MEASURED 2026-09-05 by tracing the script: with CREDS_NO_PROBE=1 the report still spent the FULL
+# ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s here (a 3.00s gap at this line), i.e. it made a live cluster
+# call while printing "nothing probed" -- slow AND untrue, the two complaints that opened this work.
+# It is NOT gated unconditionally: argocd-password.sh has TWO exit-0 paths, one of which returns an
+# operator-supplied ARGOCD_ADMIN_PASSWORD without touching a cluster. That value is CONFIGURATION,
+# and "report configuration only" must still report it. So we skip only the arm that would dial.
+if [ "$_no_probe_snapshot" = "1" ]; then
+  # Under no-probe we do not shell out AT ALL. Configuration is still reported: if the operator
+  # supplied ARGOCD_ADMIN_PASSWORD we use it directly.
+  # ⚠️ WHY NOT CALL THE CHILD WITH THE VALUE SET -- MEASURED 2026-09-05, and it is a PRE-EXISTING
+  # defect this exposed rather than caused: `SKIP_DOTENV=1 ARGOCD_ADMIN_PASSWORD=x
+  # argocd-password.sh --wait 0 --raw` HANGS to rc=124, i.e. it does not short-circuit on the
+  # configured value under SKIP_DOTENV. Without SKIP_DOTENV the same call is rc=0 and fast. So
+  # delegating here would spend the full timeout to rediscover a value we are already holding.
+  if [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]; then argo_pw="$ARGOCD_ADMIN_PASSWORD"; _argo_rc=0
+  else                                         argo_pw=""; _argo_rc=0; _argo_noprobe=1; fi
+else
+  argo_pw="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" "${SCRIPT_DIR}/argocd-password.sh" --wait 0 --raw 2>"$_argo_err")" || _argo_rc=$?
+fi
 _argo_initial=0
 grep -q 'INITIAL admin password' "$_argo_err" 2>/dev/null && _argo_initial=1
 rm -f "$_argo_err"
-if [ "$_argo_rc" = 0 ]; then
+if [ "${_argo_noprobe:-0}" = 1 ]; then
+  argo_pw="<not read: CREDS_NO_PROBE=1 (reading it is a live cluster call)>"
+elif [ "$_argo_rc" = 0 ]; then
   # A REAL secret was obtained — mask it. The `<- INITIAL secret; superseded …` annotation is
   # appended further down, OUTSIDE this, so the provenance survives masking. That annotation is the
   # reason a column-level mask was refused: it exists precisely so a bare value is not read as

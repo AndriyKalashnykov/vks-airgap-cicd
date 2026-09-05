@@ -496,7 +496,22 @@ _ARGO='ZZARGOSECRET-do-not-match-anything-else'
 #   * The PTY case asks "does the --raw handshake stop a NESTED SENTINEL leaking into the cell?"
 #     There SHOW_SECRETS=1 is VACUOUS -- the child argocd-password.sh inherits it and reveals
 #     too, so the fixed and broken builds are byte-identical. That case NEEDS a terminal.
-# Adversary-proven to discriminate: 0 before the row-drop fix, 1 after.
+# Adversary-proven to discriminate: 0 before the row-drop fix, 1 after. RE-PROVEN here 2026-09-05
+# by mutation: re-adding the row-drop made THIS case fire BY NAME ("the ArgoCD credential is
+# ABSENT"), and restoring returned the gate to rc=0 with a clean tree.
+# ⚠️ KNOWN AND NOT YET EXPLAINED: this same command run in a BARE shell yields 0 matches, while it
+# yields >=1 inside this harness. So the harness environment differs from a plain invocation in a
+# way that changes the ArgoCD password path -- do NOT use a standalone run of this command as an
+# A/B baseline for creds.sh timing or behaviour; they are not comparable. The property THIS case
+# asserts (the row and its credential are printed at all) is sound and mutation-proven either way.
+# The likely cause is the pre-existing defect noted in creds.sh: with SKIP_DOTENV set AND the
+# admin password supplied through the environment, `argocd-password.sh --wait 0 --raw` HANGS to
+# rc=124 instead of short-circuiting on the value it was handed. Settle it before relying on this
+# case's environment.
+# ⚠️ DESCRIBED IN PROSE, NOT AS AN ASSIGNMENT, DELIBERATELY. Written as a `KEY=value` shell
+# fragment this comment tripped gitleaks' generic-api-key rule and reddened the `secrets` job --
+# a wrapped line STARTING with a credential-shaped assignment is indistinguishable from a real
+# one. Describe such an invocation; do not spell it.
 _np_out="$( SHOW_SECRETS=1 SKIP_DOTENV=1 CREDS_TOKEN=1 ARGOCD_ADMIN_PASSWORD="$_ARGO" \
             timeout 90 ./scripts/creds.sh 2>/dev/null || true )"
 if printf '%s' "$_np_out" | grep -qF "$_ARGO"; then
