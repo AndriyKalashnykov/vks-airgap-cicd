@@ -552,6 +552,38 @@ form refuses immediately rather than spending 30 minutes to reach the same answe
 **Expect:** the waiting command reprints a table every 15 s, then prints `conditions hold AND every expected node is Ready` and exits `0` with every node
 `Ready`. *(**4–9 min** — the Timings table's own runs span 3 m 45 s to 8 m 49 s; the command waits up to 30 min, so give it that before calling it stuck.)* A non-zero exit is not a pass — do not continue to the preflight.
 
+### If you need to delete it and start over
+
+**Use `make vks-cluster-delete` — do NOT hand-roll `kubectl delete cluster`.** Deleting is
+asynchronous (two controllers hold finalizers) and, crucially, the control-plane VIP is held by the
+cluster's **VirtualMachineService**, a *separate* object from the `Cluster` with its own deletion
+path — measured on this lab, created 14 seconds later.
+
+If you create a replacement before that VIP is released, the platform writes the **predecessor's**
+address into the new cluster's `spec.controlPlaneEndpoint`. That field is **immutable** and CAPI
+never revisits it, so the new cluster advertises an address nothing serves and can **never** become
+Ready — `RemoteConnectionProbe` fails forever. Measured: a replacement advertised `.132` while its
+own LoadBalancer got `.133`.
+
+```bash
+make vks-cluster-delete CONFIRM=<your-cluster-name>
+```
+
+It blocks until the `Cluster`, its `VirtualMachineService` **and** that Service are all gone, then
+tells you it is safe to create again.
+
+**Expect:** a `waiting on:` line listing whichever of the three objects is still present, narrowing
+as each disappears, then `released: cluster, virtualmachineservice and svc are all gone`. *(Typically a few minutes.)*
+It refuses without `CONFIRM=<name>`, and refuses to delete a cluster this repo did not create.
+
+⚠️ It waits for the strongest signal a tenant can observe; it does **not** prove the address is
+immediately reusable — the platform may briefly quarantine a freed VIP. If the next
+`make vks-cluster-create` reports `*** DIVERGENT ***`, that is what happened: wait and retry, or
+create under a different `VKS_CLUSTER_NAME`.
+
+Tunables: `VKS_CLUSTER_DELETE_WAIT_SECONDS` (default 900), `VKS_CLUSTER_DELETE_POLL_SECONDS`
+(default 10). Both are documented in `.env.example`.
+
 ### Get its kubeconfig
 
 **If that command exited `0`, it already wrote one** — at `./secrets/<VKS_CLUSTER_NAME>.kubeconfig`,
@@ -849,6 +881,26 @@ Accounts**) and run it again.
 `make gitops` talks to **both** clusters: ArgoCD on the Supervisor, your apps in the guest.
 
 **Nothing to set here** — Step 3 published `ARGOCD_KUBECONFIG` when you logged in.
+
+> ⚠️ **Unless you previously ran [scenario-2](scenario-2.md) with this `.env`.** That walk tells a
+> tenant to pin two values — `ARGOCD_MECHANISM=api` and `ARGOCD_REGISTER=never` — and they are
+> correct **there** and wrong **here**. They do not un-set themselves, and this walk fails on them
+> one at a time, ~20 s apart, with three different messages:
+>
+> | pinned value | what you get | why |
+> |---|---|---|
+> | `ARGOCD_MECHANISM=api` | `ARGOCD_MECHANISM=api, but this box is missing: ARGOCD_SERVER ARGOCD_AUTH_TOKEN` | `api` is the tenant path; as an admin you have Kubernetes RBAC and need no token |
+> | `ARGOCD_REGISTER=never` | `NO guest cluster is registered as an ArgoCD destination … Refusing` | registration is admin-only, and here you **are** the admin |
+>
+> Both defaults are `auto`, which MEASURES what is open to you and picks. So the fix is to remove
+> the pins, not to set them differently:
+>
+> ```bash
+> sed -i 's/^ARGOCD_MECHANISM=.*/ARGOCD_MECHANISM=auto/; s/^ARGOCD_REGISTER=.*/ARGOCD_REGISTER=auto/' .env
+> ```
+>
+> The refusal in row 2 is doing its job, not misfiring: deploying with the in-cluster destination
+> would install your apps **into the Supervisor**, with prune and selfHeal on.
 
 ```bash
 make fetch-argocd-kubeconfig

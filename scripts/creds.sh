@@ -601,20 +601,12 @@ fi
 printf '\n  Context\n'
 case "$_prov" in
   DISCOVERED) printf '    values below : DISCOVERED — the overlay is stamped for the cluster you are talking to\n' ;;
-  STORED)     printf '    values below : STORED — read from a state overlay that is NOT confirmed to belong to\n'
-              printf '                   this cluster. An overlay SURVIVES A REBUILD, so a password or an IP\n'
-              printf '                   here may be from a lab that no longer exists. Run: make state-stamp\n'
-              printf '                   after an install to make it self-identifying; re-run any value that\n'
-              printf '                   is rejected rather than assuming it is wrong.\n'
-              _settle_note '                   ' ;;
+  STORED)     printf '    values below : STORED — from a state overlay not stamped for this cluster, so a value\n'
+              printf '                   here may be from a lab that no longer exists. Settle it: make env-validate\n' ;;
   *)          if [ "$_env_populated" = 1 ]; then
-                printf '    values below : from YOUR .env — no installer has published anything, so these are the\n'
-                printf '                   values you supplied, not placeholders. .env carries NO cluster stamp, so\n'
-                printf '                   this report cannot confirm they belong to the cluster you are talking to;\n'
-                printf '                   a value left over from a destroyed lab looks identical to one you just\n'
-                printf '                   typed. Treat every credential here as LIVE until you know\n'
-                printf '                   otherwise; re-run any value that is rejected rather than assuming it is wrong.\n'
-                _settle_note '                   '
+                printf '    values below : from YOUR .env — the values you supplied, not placeholders. .env carries\n'
+                printf '                   no cluster stamp, so this report cannot confirm they are current.\n'
+                printf '                   Settle it: make env-validate\n'
               else
                 printf '    values below : DEFAULTS from .env / .env.example — these ARE PLACEHOLDERS, not credentials\n'
               fi ;;
@@ -647,7 +639,7 @@ if [ -n "${INGRESS_LB_IP:-}" ] && [ "$_ing_live" != 1 ]; then
 elif [ -n "${INGRESS_LB_IP:-}" ]; then
   echo
   echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"
-  echo "    ${INGRESS_LB_IP}  ${GITEA_HOST:-gitea.vks.local} ${TEKTON_DASHBOARD_HOST:-tekton.vks.local} $(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)"
+  echo "    ${INGRESS_LB_IP}  $(ingress_infra_hosts)$(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)"
 fi
 
 # --- table ----------------------------------------------------------------------------
@@ -678,10 +670,34 @@ _probe_tcp() {                    # <host> <port> -> 0 if something answers, non
 }
 # ingress-backed rows (Gitea, Tekton, and EVERY app) resolve from the SINGLE _ing_live probe that
 # this script already took -- zero extra cost, and the expensive case cannot occur (F12).
+#
+# ⚠️ IT MUST ALSO ASK WHETHER THE NAME RESOLVES *HERE*, and that is not a nicety.
+# MEASURED 2026-09-05: this reported `serving` for headlamp.vks.local while a browser on the same
+# box got DNS_PROBE_FINISHED_NXDOMAIN. Both facts were true — the LB really does serve it (curl with
+# an explicit `Host:` header returns 200) — but the probe reached the LB *by IP* and so measured a
+# path NO HUMAN TAKES. The one thing standing between the operator and the UI was the very thing
+# the probe skipped. A report that says `serving` about a URL you cannot open is worse than one
+# that says nothing: it sends you to debug the app instead of your resolver.
+# So the verdict is now two facts, not one:
+#   serving       — the LB answers AND this machine can resolve the name (you can click it)
+#   no DNS here   — the LB answers, the NAME does not resolve on this box (add the /etc/hosts line
+#                   printed above, or create the A records; the service itself is fine)
+#   silent        — the LB itself does not answer
+# `getent` on a non-resolving name is FREE (measured 0.002 s) and is already bounded by timeout
+# above, so this costs nothing on the happy path.
 _reach_ingress() {
   [ "${CREDS_NO_PROBE:-0}" = 1 ] && { printf 'not probed'; return; }
   [ -n "${_ing:-}" ] || { printf 'no ingress';  return; }
-  [ "${_ing_live:-0}" = 1 ] && printf 'serving' || printf 'silent'
+  if [ "${_ing_live:-0}" != 1 ]; then printf 'silent'; return; fi
+  local _h="${1:-}"
+  if [ -n "$_h" ] && ! timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent hosts "$_h" >/dev/null 2>&1; then
+    # NOTE: do NOT set a global here to signal the footnote — this function runs inside $( ),
+    # a SUBSHELL, so any assignment is discarded (rules/shell). The caller detects the condition
+    # by scanning the rendered rows instead.
+    printf 'no DNS here'
+    return
+  fi
+  printf 'serving'
 }
 _reach_harbor() {
   [ "${CREDS_NO_PROBE:-0}" = 1 ] && { printf 'not probed'; return; }
@@ -712,8 +728,8 @@ add_row() { rows="${rows}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\t'"${5:--}"$'\
 
 
 # Ordered by the pipeline flow: Gitea (push) -> Tekton (build) -> Harbor (registry) -> ArgoCD (deploy) -> apps.
-add_row "Gitea"  "$gitea_url"  "$gitea_user"  "$gitea_pw"  "$(_reach_ingress)"
-add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)" "$(_reach_ingress)"
+add_row "Gitea"  "$gitea_url"  "$gitea_user"  "$gitea_pw"  "$(_reach_ingress "${GITEA_HOST:-}")"
+add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)" "$(_reach_ingress "${TEKTON_DASHBOARD_HOST:-}")"
 
 # ---- headlamp -------------------------------------------------------------------------------
 # ⚠️ THE TOKEN IS MINTED HERE, AT REPORT TIME, AND STORED NOWHERE. `kubectl create token` issues a
@@ -734,12 +750,15 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
   _hl_ns="${HEADLAMP_NAMESPACE:-headlamp}"; _hl_sa="${HEADLAMP_SA:-headlamp-viewer}"
   _hl_t="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s \
              -n "$_hl_ns" create token "$_hl_sa" </dev/null 2>/dev/null || true)"
-  if [ -n "$_hl_t" ]; then headlamp_tok="$(_lab_secret "$_hl_t")"
+  # _mask, NOT _lab_secret: that wrapper is defined ~380 lines BELOW this line, so calling it
+  # here dies `_lab_secret: command not found`. It only ever fired once headlamp was installed AND
+  # a token minted — a path that did not exist until 2026-09-05, which is why it shipped green.
+  if [ -n "$_hl_t" ]; then headlamp_tok="$(_mask "$_hl_t")"
   else                     headlamp_tok="<not read — is headlamp installed? make install-headlamp>"; fi
 else
   headlamp_tok="<not read — no KUBECONFIG>"
 fi
-add_row "headlamp" "$headlamp_url" "(token)" "$headlamp_tok" "$(_reach_ingress)"
+add_row "headlamp" "$headlamp_url" "(token)" "$headlamp_tok" "$(_reach_ingress "${HEADLAMP_HOST:-}")"
 # ── WHY THIS ROW IS NOT READ LIVE FROM THE CLUSTER (B202 F5/D) ──────────────────────────────────
 # NOT because "a printer must not probe" — it demonstrably does: the guest-node SSH row below runs
 # two live kubectl calls (PR #901). Stating that as the reason would be refuted by this very file.
@@ -805,7 +824,7 @@ while read -r _a; do
   # This arms the moment one does -- app_build_args' go arm (an intentional empty printf) is the
   # precedent for a per-language accessor that legitimately prints nothing.
   [ -n "$_health" ] || die "app '$_a': app_health_path() returned nothing — refusing to print a credentials row with a blank health path."
-  add_row "$_a" "$_url" "-" "(no login; health at ${_health})" "$(_reach_ingress)"
+  add_row "$_a" "$_url" "-" "(no login; health at ${_health})" "$(_reach_ingress "$(app_host "$_a")")"
 done <<EOF
 ${_apps}
 EOF
@@ -817,6 +836,29 @@ if [ "${CREDS_NO_PROBE:-0}" != 1 ]; then
   _probe_t1=$(date +%s 2>/dev/null || echo 0)
   printf '  reachability checks done in %ss.\n' "$(( _probe_t1 - _probe_t0 ))" >&2
 fi
+
+# --- NO SINGLE VALUE MAY BLOW OUT THE TABLE ------------------------------------------------------
+# MEASURED 2026-09-05: adding headlamp put a ~1000-character ServiceAccount JWT in the Password
+# cell. The widths below are a MAX OVER ALL ROWS, so that one token padded EVERY row to ~1000
+# columns and the table became unreadable on any screen. A JWT is not a password and does not
+# belong in a fixed-width cell.
+# So: any cell longer than CREDS_MAX_CELL is replaced by a short marker and its full value is
+# printed BELOW the table, one per line, where width does not matter. The reader still gets the
+# value; the table stays a table.
+CREDS_MAX_CELL="${CREDS_MAX_CELL:-44}"
+_long_notes=""
+_rows_capped=""
+while IFS=$'\t' read -r c1 c2 c3 c4 c5; do
+  [ -n "$c1" ] || continue
+  if [ "${#c4}" -gt "$CREDS_MAX_CELL" ]; then
+    _long_notes="${_long_notes}${c1}"$'\t'"${c4}"$'\n'
+    c4="<full value below>"
+  fi
+  _rows_capped="${_rows_capped}${c1}"$'\t'"${c2}"$'\t'"${c3}"$'\t'"${c4}"$'\t'"${c5}"$'\n'
+done <<EOF
+$rows
+EOF
+rows="${_rows_capped%$'\n'}"
 
 # Measure every column against every row (headers included), then print.
 w1=7; w2=3; w3=8; w4=8   # header widths are the floor: Service, URL, Username, Password
@@ -875,6 +917,32 @@ while IFS=$'\t' read -r c1 c2 c3 c4 c5; do
 done <<EOF
 $rows
 EOF
+
+# THE ONE THING BETWEEN THE OPERATOR AND THE UI. If any row came back `no DNS here`, the service is
+# fine and the NAME is what is broken — say so, and say it right under the table rather than leaving
+# the reader to conclude the app is down. (2026-09-05: a browser got DNS_PROBE_FINISHED_NXDOMAIN on
+# a host this report had just called `serving`.)
+case "$rows" in
+  *'no DNS here'*)
+    printf '\n  ⚠️  Some hosts above are SERVED by the ingress but do not RESOLVE on this machine,\n'
+    printf '      so a browser here gets DNS_PROBE_FINISHED_NXDOMAIN. The service is not broken —\n'
+    printf '      the name is. Add the /etc/hosts line printed above (needs root):\n'
+    printf '        sudo sh -c '"'"'printf "%%s  %%s\\n" "%s" "%s" >> /etc/hosts'"'"'\n' \
+      "${INGRESS_LB_IP:-<ingress-lb-ip>}" "$(ingress_infra_hosts)$(app_names | while read -r _a; do if [ -n "$_a" ]; then printf '%s ' "$(app_host "$_a")"; fi; done)"
+    printf '      Or create those names as A records pointing at %s in your DNS: make show-dns-records\n' "${INGRESS_LB_IP:-<ingress-lb-ip>}"
+    ;;
+esac
+
+# The values too long to sit in a cell, printed where width does not matter. One per line, the
+# service named, so it is still copy-pasteable — which is the whole point of this report.
+if [ -n "${_long_notes:-}" ]; then
+  while IFS=$'\t' read -r _ln_svc _ln_val; do
+    [ -n "$_ln_svc" ] || continue
+    printf '\n  %s — full value (too long for the table):\n    %s\n' "$_ln_svc" "$_ln_val"
+  done <<EOF
+$(printf '%s' "$_long_notes")
+EOF
+fi
 # ⚠️ THE NOTE MAY ONLY STATE A FACT ABOUT THIS REPORT, NEVER ABOUT THE CLUSTER (B517, and it
 # took two PRs to land). "no ingress, so no URL to show" READS AS a cluster claim -- and we
 # frequently cannot support it: when the guest cluster is unreachable we do not know whether an
@@ -884,10 +952,8 @@ EOF
 # "port-forward" (the only remedy correct in every persona). Do not drop either.
 if [ -n "${_un_ing:-}" ]; then
   printf '\n  no URL in this report for: %s\n' "$_un_ing"
-  printf '    That is a fact about THIS REPORT, not about the cluster: no ingress address is\n'
-  printf '    configured here, so there is no host to print. Those services may be serving.\n'
-  printf '    Give them a URL:  make install-ingress\n'
-  printf '    Reach one now:    kubectl -n <ns> port-forward svc/<svc> 8080:<port>\n'
+  printf '    That is a fact about THIS REPORT, not about the cluster — no ingress address\n'
+  printf '    is configured here.  URL: make install-ingress   |   now: kubectl -n <ns> port-forward svc/<svc> 8080:<port>\n'
 fi
 if [ -n "${_un_oth:-}" ]; then
   printf '\n  no address configured here for: %s\n' "$_un_oth"
@@ -922,12 +988,8 @@ fi
 # as sourced and is worse than no marker at all. Display text is not a control channel.
 case "${_argo_tls_flag:-0}" in
   1)
-    printf '\n  note: ArgoCD is reached at a BARE IP above. Its serving certificate is self-signed\n'
-    printf '        and carries DNS names only (no IP SAN), so TLS can never verify against an IP.\n'
-    printf '        Measured: curl to the IP gives rc=60 (cannot verify); curl -k gives HTTP 200.\n'
-    printf '        So --insecure lets you LOG IN and is NOT a general remedy -- a verifying path\n'
-    printf '        needs a NAME the certificate carries, plus ARGOCD_CA_FILE. Giving ArgoCD a DNS\n'
-    printf '        record is the real fix; nothing in this repo creates one for it today.\n' ;;
+    printf '\n  note: ArgoCD is at a BARE IP; its self-signed cert has no IP SAN, so TLS cannot\n'
+    printf '        verify it. --insecure logs you in; a verifying path needs a DNS name.\n' ;;
 esac
 
 # --- footnote: WHAT IS NOT REAL YET, and whose job it is to fix ------------------------
@@ -1155,6 +1217,35 @@ _lab_add "vcf CLI"   "(the VKS / SSO account)"  "$(_lab_plain "${VKS_USERNAME:-}
 #
 # The LISTING MUST NOT BE A PIPELINE. `kubectl ... | sed | grep | head` yields HEAD's status, so the
 # rc is meaningless before it is even discarded. Capture kubectl alone, read its rc, then filter.
+# _ssh_pick <newline-separated-candidates> <cluster-name> — echo the chosen secret name, or
+# NOTHING when the choice is not determinable. PURE: no kubectl, no globals, no side effects, so
+# scripts/test-creds-ssh-pick.sh can exercise every branch OFFLINE.
+#
+# WHY IT IS A FUNCTION (adversary HIGH, 2026-09-05): the gate sets CREDS_NO_PROBE=1 for every
+# rendered case, and this whole block short-circuits on that flag — so the gate could not execute
+# ONE line of the selection logic and its green was evidence about a subset that EXCLUDED the
+# change. Extracting the choice is what makes it testable at all.
+#
+# ORDER, and each arm earns its place:
+#   1. EXACT `${cluster}-ssh-password` if present  — the only answer that is certainly right.
+#   2. the SOLE candidate                          — preserves single-cluster behaviour, and the
+#      recorded lab where .env said cicd-gc1 while the live secret was cicd-gc0819222721-ssh-password
+#      (which is why the list is DISCOVERED and never constructed from the name).
+#   3. otherwise NOTHING                           — >=2 candidates and no match is not determinable;
+#      the caller refuses. A wrong password is worse than "I could not tell".
+# grep -Fx: FIXED-string, WHOLE-line. A name carrying a regex metachar must not alternate into a
+# sibling entry (rules/shell: interpolating a derived value into a regex).
+_ssh_pick() {
+  local _list="$1" _cl="$2" _hit="" _n
+  if [ -n "$_cl" ]; then
+    _hit="$(printf '%s\n' "$_list" | grep -Fx -- "${_cl}-ssh-password" || true)"
+  fi
+  if [ -n "$_hit" ]; then printf '%s' "$_hit"; return 0; fi
+  _n="$(printf '%s' "$_list" | grep -c . || true)"
+  if [ "${_n:-0}" -eq 1 ]; then printf '%s' "$(printf '%s' "$_list" | tr -d '\n')"; fi
+  return 0
+}
+
 _ssh_pw=""; _lab_err=""; _ssh_sec=""; _ssh_state="not probed"; _ssh_tok="<not probed>"
 _ssh_ep="<not probed>"   # the ENDPOINT cell: an address, or a marker naming why there is none
 if [ "$_no_probe_snapshot" = "1" ]; then
@@ -1177,9 +1268,38 @@ else
       # THE WHOLE POINT: name WHY we could not ask, so it is never mistaken for "there is none".
       _ssh_classify "$_lab_err" "could not ask"
     else
-      _ssh_sec="$(printf '%s' "$_ssh_list" | sed 's|^secret/||' | grep -E -- '-ssh-password$' | head -1 || true)"
+      # SCOPE TO THIS CLUSTER (B-scope). MEASURED 2026-09-05: with cicd-gc1 and cicd-gc2 both in
+      # namespace 'cicd', the old `| head -1` picked cicd-gc1's secret ALPHABETICALLY and the report
+      # printed a DELETED cluster's SSH password as if it were live. `head -1` over a multi-cluster
+      # namespace is a silent wrong answer, not a missing one.
+      # The comment above still stands — do NOT CONSTRUCT the name (a lab had
+      # `cicd-gc0819222721-ssh-password` while .env said cicd-gc1) — so this DISCOVERS the list
+      # first and only then PREFERS the entry matching this cluster. Order: exact match -> the one
+      # and only candidate -> REFUSE (naming what it saw), never an arbitrary pick.
+      _ssh_cands="$(printf '%s' "$_ssh_list" | sed 's|^secret/||' | grep -E -- '-ssh-password$' || true)"
+      # COUNT with grep -c, not a `for` over an unquoted var: measured, `for x in $C` counts 2 under
+      # bash and 1 under zsh on the same newline-separated capture, and the unquoted expansion is
+      # also subject to pathname expansion. grep -c is shell-independent and cannot glob.
+      _ssh_nc="$(printf '%s' "$_ssh_cands" | grep -c . || true)"; _ssh_nc="${_ssh_nc:-0}"
+      _ssh_sec="$(_ssh_pick "$_ssh_cands" "${VKS_CLUSTER_NAME:-}")"
+      if [ -z "$_ssh_sec" ] && [ "$_ssh_nc" -gt 1 ]; then
+        _ssh_tok="<ambiguous>"
+        _ssh_state="$(printf '%s candidates in %s and none is %s-ssh-password: %s— set VKS_CLUSTER_NAME in .env to one of these' \
+                        "$_ssh_nc" "${VKS_NAMESPACE}" "${VKS_CLUSTER_NAME:-<unset>}" \
+                        "$(printf '%s' "$_ssh_cands" | tr '\n' ' ')")"
+      fi
+      # GUARD ON "WE HAVE A NAME", NOT ON THE COUNT (adversary CRITICAL, 2026-09-05).
+      # It read `[ -z "$_ssh_sec" ] && [ "$_ssh_nc" -eq 0 ]`, so the AMBIGUOUS case (>=2 candidates,
+      # none matching) fell through to the else and ran `kubectl get secret ""` with an EMPTY name.
+      # That fails, and _ssh_classify then OVERWRITES the `<ambiguous>` refusal with
+      # `<kubectl failed>` — so the refusal this whole block exists to produce was UNREACHABLE, in
+      # exactly the two-cluster namespace it was written for, and it wasted a Supervisor request.
       if [ -z "$_ssh_sec" ]; then
-        _ssh_tok="<none>"; _ssh_state="none in '${VKS_NAMESPACE}' — this cluster publishes no node-SSH secret"
+        if [ "$_ssh_nc" -eq 0 ]; then
+          _ssh_tok="<none>"; _ssh_state="none in '${VKS_NAMESPACE}' — this cluster publishes no node-SSH secret"
+        fi
+        # >=2 candidates: _ssh_tok/_ssh_state were set to the <ambiguous> refusal above. Do NOT
+        # read, and do NOT overwrite them.
       else
         # stderr to a FILE, never 2>&1: a server `Warning:` header concatenates in front of the
         # base64 on a SUCCESSFUL read and base64 -d then emits partial garbage (lib/argocd.sh:327).
@@ -1211,10 +1331,25 @@ else
     # here, and asserting reachability we have not measured is exactly how this report earned the
     # complaint that started this work. We print what the cluster says, and nothing more.
     _ssh_verr="$(mktemp)"
+    # SCOPE TO THIS CLUSTER. MEASURED 2026-09-05: an unfiltered `get vm` over a namespace holding
+    # TWO clusters returned the DELETED cluster's node first (.38, while this cluster's nodes are
+    # .45/.46/.43), so the report handed the operator an address that answers for the wrong cluster
+    # -- or for nothing at all. CAPI labels every node VM `cluster.x-k8s.io/cluster-name`; measured
+    # on this lab, the selector returns exactly this cluster's 3 nodes.
+    # FALL BACK, never fail: an older//different platform may not carry the label, and a report that
+    # prints nothing is worse than one that prints an unscoped address AND SAYS SO.
+    _ssh_scoped=1
     _ssh_addr="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
-                   -n "$VKS_NAMESPACE" get vm \
+                   -n "$VKS_NAMESPACE" get vm -l "cluster.x-k8s.io/cluster-name=${VKS_CLUSTER_NAME:-}" \
                    -o jsonpath='{range .items[*]}{.status.network.primaryIP4}{" "}{end}' \
                    </dev/null 2>"$_ssh_verr")" && _ssh_vrc=0 || _ssh_vrc=$?
+    if [ "${_ssh_vrc:-1}" -eq 0 ] && [ -z "$(printf '%s' "${_ssh_addr:-}" | tr -d ' \n\t')" ]; then
+      _ssh_scoped=0
+      _ssh_addr="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
+                     -n "$VKS_NAMESPACE" get vm \
+                     -o jsonpath='{range .items[*]}{.status.network.primaryIP4}{" "}{end}' \
+                     </dev/null 2>"$_ssh_verr")" && _ssh_vrc=0 || _ssh_vrc=$?
+    fi
     # squeeze the jsonpath separators; an item with no primaryIP4 contributes an empty field.
     _ssh_addr="$(printf '%s' "${_ssh_addr:-}" | tr -s ' \n\t' ' ' | sed 's/^ *//; s/ *$//')"
     # ⚠️ ONE address in the cell, the rest in the note. MY OWN BUG, caught by an adversary: the
@@ -1230,7 +1365,11 @@ else
     elif [ -z "$_ssh_addr" ]; then
       _ssh_ep="<no node address yet>"
     elif [ "$_ssh_n" -gt 1 ]; then
-      _ssh_ep="${_ssh_first} (+$((_ssh_n - 1)) more — see note)"
+      if [ "${_ssh_scoped:-1}" = 1 ]; then
+        _ssh_ep="${_ssh_first} (+$((_ssh_n - 1)) more — see note)"
+      else
+        _ssh_ep="${_ssh_first} (+$((_ssh_n - 1)) more; NOT cluster-scoped)"
+      fi
     else
       _ssh_ep="$_ssh_first"
     fi
@@ -1303,10 +1442,6 @@ if [ -n "$_um" ]; then
   printf '     one not satisfied is %s — not set in .env or in this environment.\n' "$_um"
   printf '     %s. Set it before any step that needs a kubeconfig.\n' "$(_unmet_why "$_um")"
 fi
-printf '\n  Showing the lab-access values the scenario documents ask you to set: VCENTER_HOST,\n'
-printf '  VCENTER_USERNAME, VCENTER_PASSWORD, VKS_USERNAME, VKS_PASSWORD, VCF_CLI_VSPHERE_PASSWORD\n'
-printf '  and SUPERVISOR_HOST. There is no ssh row in .env because this repo never asks you for one —\n'
-printf '  that credential is not yours to supply, it is the cluster'"'"'s to hand you.\n'
 # ⚠️ CONDITIONAL, and that is the whole point (impl round, MED). These sentences printed
 # UNCONDITIONALLY, so a run that read NOTHING still claimed "READ LIVE from the Supervisor" and
 # asserted `Source: <none found>` — an absence about a namespace we may never have been able to

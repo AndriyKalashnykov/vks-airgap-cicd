@@ -4616,3 +4616,330 @@ is a one-line change with no new state. `REGISTRY_LOCK_FILE` keeps its override.
 taking the lock in one worktree and asserting a second worktree is REFUSED — which today it is not.
 Also correct the header comment if the scope ends up narrower than "this host" (it is per-REPOSITORY,
 not per-host: two clones still hold two locks, and that is a different, larger claim to walk back).
+
+---
+
+## B523 — 🔴 `25-vks-cluster-create.sh` states an UNSUPPORTED cause: "the reused NAME is cursed"
+
+An `adversary-k8s` round on 2026-09-05 refuted the header's own recorded cause, with live reads of
+this lab. The observation in that header is true; the causal attribution is not.
+
+`secrets/*.kubeconfig` is an accidental **13-entry allocation ledger** — every kubeconfig embeds
+`server: https://<VIP>:6443`, so it records which address each historical cluster actually got:
+
+    cicd-gc0824214053 .132   cicd-gc0827025143 .132     cicd-gc0827212756 .136
+    cicd-gc0825125856 .132   cicd-gc08270525   .132     cicd-gc0826194028 .133
+    cicd-gc0826070115 .132   cicd-gc0827181215 .132     cicd-gc1          .132  <- 05:03Z
+    cicd-gc0826145548 .132   cicd-gc08280348   .132     cicd-gc2          .134  <- 12:46Z
+                             cicd-gc0828151932 .132
+                             cicd-gc08282225   .132
+
+**Thirteen clusters, thirteen never-before-used names, ELEVEN on the same `.132`.** The name does
+not select the address. And the diverged `cicd-gc1` created at 12:15:29Z advertised `.132`, which is
+byte-identical to the `server` recorded in `cicd-gc1.kubeconfig` written at 05:03Z by its
+PREDECESSOR — it is the predecessor's address READ BACK, not a curse bound to a string.
+
+Two further live measurements give the real mechanism:
+
+| observation | value | consequence |
+|---|---|---|
+| all LB VIPs cluster-wide | `.128 .129 .130 .131 .133 .134` | `.132` is a HOLE, held by nothing |
+| `IPPool …128 .status.allocated` | `6` (== 6 live LB svcs) | `.132` genuinely RELEASED, not leaked |
+| gc2 allocated 12:46 | `.134`, **not** the free `.132` | the allocator **QUARANTINES** a just-freed address |
+
+That last row kills the free-list-ordering hypothesis and explains everything: a just-released
+address is quarantined, so the predictor reading `.132` and the allocator refusing `.132` are two
+sides of one freshly-deleted predecessor. **The name is the lookup key, not the cause.**
+
+Why "use a new name" nonetheless WORKS: a never-used name has no same-named predecessor artifact to
+read, so it is immune under both hypotheses — which is exactly why the header's cited experiment is
+NOT discriminating. It excluded "lab freshness" and nothing else.
+
+**⚠️ DO NOT CORRECT THE HEADER YET.** The load-bearing unknown is whether incarnations #2–#5 were
+all delete-then-immediate-recreate. No artifact survives (a non-converging cluster writes no
+kubeconfig) and namespace events reach back only ~57 min. If any followed a settled teardown, the
+race hypothesis is in trouble and the name cause revives.
+
+**Done when:** Experiment A has run and the header is corrected to match its outcome.
+
+> **Experiment A (run FIRST — needs no "released" observable).** Delete a cluster, then within ~5s
+> create a **never-used** name. Name-curse predicts AGREE; termination/quarantine race predicts
+> DIVERGE. A DIVERGE refutes the name cause outright in one create cycle.
+>
+> **Experiment B (confirmation only).** Delete, wait until `virtualmachineservice/$NAME` AND
+> `svc/$NAME` are both NotFound, recreate the SAME name. AGREE refutes the curse; DIVERGE is
+> INCONCLUSIVE (the quarantine window may outlive absence — see B525).
+
+Sentences to correct once settled: `scripts/25-vks-cluster-create.sh:246` ("THE CAUSE IS A REUSED
+NAME, and that is measured"), `:246-249`, `:249-252` (the non-discriminating experiment), `:278-279`.
+KEEP the advice at `:283` — it is empirically sound — but change its stated reason from "under the
+same name" to "without waiting for the predecessor's VirtualMachineService to disappear". Minor:
+`:249-251` cites `adv .142 == svc .142`; today's run was `.134`, so that "measured" claim rests on a
+run not reproducible from this repo — date it and name the lab.
+
+## B524 — 🔴 MISSING TARGET `make vks-cluster-delete`, and `98-uninstall-all.sh` waits on the WRONG OBJECT
+
+There is no per-cluster delete target. The only delete path is inside `make uninstall-all` (a full
+teardown requiring `CONFIRM=`), so anyone deleting one cluster hand-rolls `kubectl delete` — which
+is how B523's incident happened (RULE ZERO-A0: "the missing target IS the finding").
+
+Worse, the sanctioned path is **insufficient even when followed**. `scripts/98-uninstall-all.sh:266-271`:
+
+    k -n "$VKS_NAMESPACE" delete cluster "$VKS_CLUSTER_NAME" --wait=false
+    while …; do k … get cluster "$VKS_CLUSTER_NAME" >/dev/null 2>&1 || break; …
+
+It polls until the **Cluster** object disappears. But the VIP is held by the
+**VirtualMachineService**, a SEPARATE object with its own deletion path — measured, it is created
+14s AFTER the Cluster (`12:15:29Z` -> `12:15:43Z`). So an operator who did everything right can
+still recreate into the race.
+
+Measured, the objects to watch (adversary-verified):
+
+| candidate | verdict |
+|---|---|
+| Cluster gone | **NOT sufficient** — separate object, separate deletion path |
+| `ipaddressallocations.netoperator.vmware.com` | **do not use — EMPTY (0 items)** despite 3 live LB svcs |
+| **`virtualmachineservice/$NAME`** | ✅ the object to watch; the core `Service` is `ownerReferences: [VMService]` |
+| `IPPool.status.allocated` | cross-check only — cluster-scoped (tenant-hostile) and a COUNT (races other tenants) |
+
+**Done when:** `make vks-cluster-delete` exists, deletes ONE cluster, and BLOCKS until BOTH
+`virtualmachineservice/$NAME` and `svc/$NAME` are NotFound (namespaced, tenant-readable, no
+persisted state); `98-uninstall-all.sh`'s wait loop is extended to the same condition; both are
+configurable (a `*_WAIT_SECONDS`), documented in scenario-1, and RED-proven.
+
+**REFUTED, do not build:** a name-reuse LEDGER (`secrets/vks-used-cluster-names`). It fails open on
+every fresh clone/CI runner/`secrets/` wipe while reading as protection, the repo already HAS an
+equivalent de-facto ledger in `secrets/*.kubeconfig` with the same hole, and it would freeze B523's
+refuted cause into a permanent control. Also refuted: a pre-create live check keyed on the
+**Cluster** object — measured, the replacement's `creationTimestamp` proves no same-named Cluster
+existed at create time, so it is structurally blind to the incident that motivated it. If a
+pre-create check is built at all it must key on the **VirtualMachineService**.
+
+Note `Makefile:960` `install-all` does NOT include `vks-cluster-create` (only `Makefile:643` calls
+it) and `docs/scenario-1.md:492` already says to skip the target when a cluster exists — so
+refusing-on-presence costs far less than feared, and a healthy-vs-clobber discriminator is NOT
+needed (`26-vks-cluster-status.sh` already owns that judgement).
+
+## B525 — 🟡 the VIP QUARANTINE WINDOW is unmeasured
+
+`gc2` skipped a released `.132` and took `.134`, so absence of the VirtualMachineService may not be
+sufficient — the address may need to AGE OUT. This is why B523's Experiment B is inconclusive on a
+DIVERGE, and it is the one thing that could defeat B524's wait-for-release target.
+
+**Done when:** measured — time how long after a delete the pool will re-hand the freed address.
+
+Also unmeasured: `IPPool` tenant-readability (read as SSO admin; INFERRED for a tenant). Do not put
+it on a tenant path without checking. And the pool has a **hard ceiling**: `addressCount: 32`
+(`.128–.159`), 6 allocated, **26 left** — while `secrets/` already holds 13 dead clusters'
+kubeconfigs. Every abandoned cluster burns a VIP plus a quarantine slot.
+
+## B526 — 🔴 the adversary-first gate has a BASH-SHAPED HOLE, and auto-mode routes every edit through it
+
+`.claude/settings.json` wires `adversary-first-gate.py` on
+`Agent|Workflow|Edit|Write|NotebookEdit|MultiEdit`. **`Bash` is not in the matcher.** MEASURED
+2026-09-05, same file, same edit:
+
+    {"tool_name":"Write","tool_input":{"file_path":"<repo>/scripts/creds.sh"}}      -> rc=2 BLOCKED
+    {"tool_name":"Bash","tool_input":{"command":"sed -i s/a/b/ scripts/creds.sh"}}  -> rc=0 ALLOWED
+
+Every edit in the 2026-09-05 session went through `python3 - <<PY` heredocs and `sed -i`, so the gate
+never fired on any of them — including on a scoping fix to `creds.sh` that was designed AND
+implemented with zero adversary rounds. Compounding: that session's harness auto-mode instruction
+says *"make file changes with sed, heredocs, or short scripts, rather than using the dedicated Read,
+Edit, or Write tools"* — the DEFAULT path is the hole.
+
+**Not obviously fixable by widening the matcher.** `rules/common/hooks.md` already refutes a
+Bash-write gate for the sibling `subagent-readonly` hook on denominator grounds (107/109 of this
+repo's own `scripts/*.sh` write the tree; `make ci` itself does `rm -rf`; any interpreter or
+unlisted writer defeats a verb list). Whether that refutation TRANSFERS is the open question — the
+threat models differ (evasion vs haste), and a partial gate may be acceptable against haste where it
+is not against evasion, or may be the "partial gate that reads as handled is worse than none" trap.
+
+**Done when:** ruled on by an adversary round, and ONE of: (a) a scoped Bash arm shipped with a
+MEASURED false-RED rate against real history; (b) a `PostToolUse` printer that cannot gate but is not
+silent; (c) the hole DISCLOSED in the hook's own docstring so nobody believes the tree is protected.
+Whatever ships must not block the adversary's own evidence tools (`git log/diff/status`, `grep`,
+running the gates) — `hooks.md` records that such a gate gets ripped out.
+
+## B527 — 🟡 a registry 401 is the NORMAL auth challenge — it does NOT mean bad credentials, and a bare `curl` cannot tell you anything
+
+MEASURED 2026-09-05: `istiod` failed `ImagePullBackOff` with
+`401 Unauthorized` on `harbor.env1.lab.test/v2/cicd/istio/pilot/manifests/1.30.3`. That read as an
+auth failure and was diagnosed as one — wrongly, TWICE.
+
+**First wrong diagnosis: "bad credentials."** `make env-validate` reported
+`Harbor credentials accepted (HTTP 200)`. The real state: the only project present was `library`
+(0 repos) — **the `cicd` project did not exist**. The lab had been rebuilt and Harbor came back
+empty; nothing had ever been mirrored to it. `make mirror` fixed it (30 repos).
+
+**Second wrong diagnosis: "Harbor returns 401 for a missing project."** ⚠️ That was recorded here
+and is UNPROVEN — the probe could not discriminate. A bare `curl` to `/v2/.../manifests/...`
+returns 401 for EVERY repository, public or private, present or absent: it is the Docker Registry
+v2 **auth challenge**, not a denial. MEASURED, after the mirror, on a public project holding the
+image:
+
+    curl -skI .../v2/cicd/istio/pilot/manifests/1.30.3
+      HTTP/1.1 401 Unauthorized
+      Www-Authenticate: Bearer realm=".../service/token",service="harbor-registry",
+                        scope="repository:cicd/istio/pilot:pull"
+
+    # follow the challenge, as containerd does:
+    tok=$(curl -sk ".../service/token?service=harbor-registry&scope=repository:cicd/istio/pilot:pull" | jq -r .token)
+    curl -sk -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $tok" \
+      -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+      .../v2/cicd/istio/pilot/manifests/1.30.3          # -> 200
+
+**So a bare-curl 401 is worthless as a signal** — it is the instrument, not the world. Any probe of
+registry content MUST follow the token flow (or use `crane`/`skopeo`, which do). This is the
+"distrust the INSTRUMENT before the product" rule: an absence is a claim about the QUERY first.
+
+`scripts/lib/harbor.sh:114` creates projects `"public": ${HARBOR_PUBLIC_PROJECTS:-true}`, so in the
+air-gap design a public project needs NO imagePullSecret — which is why `46-install-istio.sh` sets
+`global.hub` and creates none. That design is sound; the missing piece is that nothing checks the
+images are actually THERE before a 5-minute helm `--wait` dies with a misleading error.
+
+**Done when:** an installer preflight asserts the image it is about to pull EXISTS in Harbor and
+says `run make mirror`, instead of failing later with a 401 that names the wrong cause. An error
+that names the wrong cause is worse than a crash — it sent this session to debug credentials that
+were fine. Prefer reusing `23-mirror-verify.sh`'s existing per-image check over a new probe.
+
+## B528 — 🔴 `make creds` says `serving` for a route whose BACKEND is dead (it probes the LB, not the app)
+
+MEASURED 2026-09-05 on the live lab, with every app pod in `ImagePullBackOff`:
+
+    javawebapp.vks.local  -> HTTP 503     but `make creds` printed:  serving
+    gitea.vks.local       -> HTTP 200                                serving
+    headlamp.vks.local    -> HTTP 200                                serving
+
+`_reach_ingress` (scripts/creds.sh) decides the verdict from ONE TCP probe of the ingress LB
+(`_ing_live`), shared by every ingress-backed row. That probe cannot see a backend, and `serving`
+is a claim ABOUT THE BACKEND — the reader clicks a URL the report promised works and gets an error
+page. Same class as the DNS overclaim fixed the same day (the probe used a path no human takes).
+
+A fix was drafted and NOT applied (the operator interrupted to redirect to a more urgent issue —
+`install-all`, B529). The draft: keep the LB probe as the cheap gate, then ask the ROUTE itself with
+the Host header, bounded by `CREDS_PROBE_TIMEOUT_SECONDS`:
+
+    2xx/3xx -> serving      the route resolves to a healthy backend
+    503     -> no backend   route RENDERED, nothing healthy behind it (the not-yet-built case)
+    404     -> no route     the ingress does not know this host
+    000     -> silent
+
+⚠️ Cost check before shipping: that is one HTTP request per ingress row (9 today), where the current
+design deliberately takes ONE probe total. Measure it — a credentials report that takes 20s to print
+will be abandoned, and `CREDS_NO_PROBE=1` must still skip everything.
+
+⚠️ And it needs an ADVERSARY ROUND it has not had: the verdict set above is a design, and the
+`no backend` wording asserts a cause (dead backend) from a status code that also has other causes.
+
+**Done when:** the verdict distinguishes LB-up from backend-up, with a measured print time, and the
+gate covers it (today `test-creds-show.sh` sets `CREDS_NO_PROBE=1` for every rendered case, so it is
+structurally blind to this whole function — see B530).
+
+## B529 — 🔴 `make install-all` says "complete air-gap install end to end" and ALWAYS ends with every app in ImagePullBackOff
+
+`Makefile` `install-all: preflight selfbuilt-image mirror mirror-verify builder-image vks-login
+platform install-headlamp install-ingress gitops`.
+
+MEASURED 2026-09-05: after those steps, ArgoCD has created one Application per app pointing at
+`harbor/<project>/<app>:<tag>`, the Harbor `apps` project holds **0 repositories**, all 6 app pods
+are `ImagePullBackOff`, and every app host answers **503**. `grep` for any target that builds an app
+image returns **ZERO** — nothing builds one except the Tekton pipeline, triggered by a git push.
+
+And `gitops` does not wait for the apps: `70-configure-argocd.sh:889` waits for "each Application to
+fetch a revision" (`reconciledAt` advanced AND no ComparisonError, :780-782). That proves ArgoCD can
+CLONE the repo. Nothing in `install-all` looks at pod health, which is why it exits 0 on a demo that
+does not work. `:848` records that this was deliberate — it used to be `argocd app wait --sync`,
+changed because that cannot prove a fetch happened. The gate is correct; it just answers a different
+question than "is the demo up".
+
+**The walked scenarios are NOT affected** — `scenario-1.md:957-958` and `scenario-2.md:799-801` both
+put `make verify` directly after `make install-all`, and `:1059`/`:904` add `make verify-ingress`.
+So the matrix walks a COMPLETE sequence; only the target, run alone, is incomplete. (That is the
+answer to "how was the matrix green?" — it was green for a real reason.)
+
+**SHIPPED 2026-09-05 (correct under either outcome below):** `install-all` now ends by printing what
+IS and IS NOT running, that the apps are pending their first build BY DESIGN, and the exact next
+command (`make verify`). A target that leaves the demo unusable must not exit silently.
+
+**STILL OPEN — under adversary review:** whether to add a `make build-apps` that triggers each app's
+PipelineRun so `install-all` produces a working demo, or whether stopping before the first build is
+DELIBERATE (this repo's thesis is GitOps CD: the app is built by a git push, and pre-building it
+would demonstrate the wrong thing). If the latter, the closing message above IS the whole fix.
+Open sub-questions handed to the round: does it duplicate `99-verify.sh`; how to trigger a build
+without mutating the operator's git history on every re-run; idempotency (skip when the tag already
+exists — WITHOUT the bare-curl 401 trap, see B527); and whether a scenario-2 TENANT can build at all
+(Kaniko needs `baseline`, VKS enforces `restricted`), since making it a prerequisite would newly
+FAIL for them.
+
+## B530 — 🟡 `test-creds-show.sh` sets `CREDS_NO_PROBE=1` for every rendered case, so it is blind to all probe logic
+
+Adversary-measured 2026-09-05: `scripts/test-creds-show.sh:603` sets `CREDS_NO_PROBE=1` for every
+`render_with_cluster` case, and `scripts/creds.sh` short-circuits the entire SSH-selection and
+reachability blocks on that flag. `grep -c` over the gate for `_ssh` / `ssh-password` /
+`cluster-name` / `ambiguous` / `NOT cluster-scoped` = **0 occurrences**. So the gate's green is
+evidence about a subset that EXCLUDES the probe code, and adding 13 lines of selection logic did not
+move its denominator by one case — the exact signal `gates.md` names as "blind to it".
+
+Partly addressed: the secret choice was extracted into a PURE `_ssh_pick <list> <cluster>` so it can
+be exercised offline with no cluster and no stub kubectl. **Done when:** that function has its 5
+cases committed (exact match / sole candidate / 2-with-match / 2-without-match must REFUSE, not read
+/ none), and the reachability verdict (B528) has equivalent offline coverage.
+
+## B531 — 🔴 `check-image-alignment` read ONLY `.env.example`, never `.env` — the file that actually drives a run
+
+MEASURED 2026-09-05, and it cost three failed pipeline runs. `.env` carried
+`TEMURIN_JRE_TAG=25.0.3_9-jre-jammy` while `images/images.txt` (and `.env.example`) said
+`25.0.4_7-jre-jammy`. Kaniko asked Harbor for the 25.0.3_9 tag, got
+`NOT_FOUND: artifact cicd/eclipse-temurin:25.0.3_9-jre-jammy not found`, and the whole build died —
+while `make check-image-alignment` reported **"all mirrored image tags aligned"**.
+
+The gate compared `images.txt` against `.env.example` only (`:161`). `load_env` sources BOTH files
+with `.env` LAST, so `.env` OVERRIDES the template at runtime: the gate was measuring a file that,
+on its own, no run uses.
+
+**FIXED + RED-proven.** The loop now checks the same var in `.env` against the SAME expectation it
+already derives from `images.txt`, skipping cleanly when `.env` is absent (it is gitignored, so a
+fresh clone and CI have none) and counting what it checked. The RED shows both arms in one run:
+
+    ok    TEMURIN_JRE_TAG (.env.example -> eclipse-temurin)=25.0.4_7-jre-jammy     <- old arm, GREEN
+    DRIFT TEMURIN_JRE_TAG (.env -> eclipse-temurin): 25.0.3_9 vs images.txt=25.0.4_7  <- new arm, RED
+
+**THE WIDER FINDING, and it is the pattern behind FIVE separate failures in one session:** `.env`
+silently drifts from `.env.example` and nothing notices. Measured on this box: **9 of 106** values
+differed — 8 stale version pins (`ARGOCD_VERSION`, `ARGOCD_CLI_VERSION`, `KUBECTL_VERSION`,
+`TKN_VERSION`, `TEKTON_TRIGGERS_VERSION`, `TEKTON_DASHBOARD_VERSION`, `GOLANG_BUILD_TAG`,
+`DISTROLESS_STATIC_TAG`) plus one legitimate operator choice (`GITEA_ADMIN_USER`). Each stale pin is
+a latent NOT_FOUND of exactly the kind above. The five failures this caused today, each discovered
+serially ~20 s apart with a different message:
+
+| stale `.env` value | symptom |
+|---|---|
+| `VKS_CLUSTER_NAME` / `KUBECONFIG` | pointed at a deleted cluster |
+| `ARGOCD_MECHANISM=api` | `missing: ARGOCD_SERVER ARGOCD_AUTH_TOKEN` (a scenario-2 pin in a scenario-1 run) |
+| `ARGOCD_REGISTER=never` | `NO guest cluster is registered ... Refusing` (same cause) |
+| `TEMURIN_JRE_TAG` | Kaniko `NOT_FOUND`, 3 wasted pipeline runs |
+
+The `_VERSION`/`_TAG` half is now gated (above). The SCENARIO-PIN half is not: nothing detects
+`ARGOCD_MECHANISM=api` with no token while the kubectl path is open, or `ARGOCD_REGISTER=never`
+while you hold Supervisor admin. **Done when:** a preflight reports every scenario-inconsistent pin
+AT ONCE instead of the operator discovering them one FATAL at a time. Needs an idea round — the
+naive "`.env` must equal `.env.example`" is WRONG (an operator may legitimately override), so the
+predicate has to be "this pin contradicts the access you actually have", which is a judgement.
+Docs half shipped: scenario-1 now carries a cross-scenario warning table.
+
+## B532 — 🟡 fixing `.env` is NOT enough: the CLUSTER keeps the value it was rendered with
+
+Second-order, measured in the same incident. After correcting `TEMURIN_JRE_TAG` in `.env`, the very
+next `make verify` STILL failed with `25.0.3_9` — because the Tekton TriggerTemplate in the cluster
+had been rendered by an earlier `configure-tekton` and carries its own copy. `make configure-tekton`
+re-rendered it (verified: the cluster then reported `eclipse-temurin:25.0.4_7-jre-jammy`).
+
+Nothing tells the operator this. They fix the config, re-run, see the identical error, and
+reasonably conclude the fix did not work.
+
+**Done when:** either (a) the failure message for an image NOT_FOUND names the re-render step, or
+(b) a check compares the tag the CLUSTER carries against `images.txt` (not just the files on disk) —
+the same "verify the end result, not a proxy" move that B531 applied to `.env`. (b) is stronger and
+would have caught this directly; it needs a live cluster, so it belongs with `psa-check` /
+`argocd-preflight` in the read-only lab-preflight family rather than in `static-check`.
