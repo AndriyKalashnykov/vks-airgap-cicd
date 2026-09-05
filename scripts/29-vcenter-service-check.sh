@@ -44,14 +44,33 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/os.sh"
 load_env
 
-REMEDIATE=0
-for a in "$@"; do case "$a" in --remediate) REMEDIATE=1 ;; --help|-h)
-  sed -n '2,40p' "$0"; exit 0 ;; esac; done
+REMEDIATE=0; _wait_override=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --remediate) REMEDIATE=1 ;;
+    --wait)      _wait_override="${2:-}"; shift ;;
+    --wait=*)    _wait_override="${1#--wait=}" ;;
+    --help|-h)   sed -n '2,40p' "$0"; exit 0 ;;
+  esac
+  shift
+done
 
 # Tunables. Documented in .env.example; all COMMENTED there so a per-run override survives
 # load_env's `set -a` (the .env.example clobber rule).
 VC_TIMEOUT="${VCENTER_API_TIMEOUT_SECONDS:-20}"
 VC_RESTART_SETTLE="${VCENTER_RESTART_SETTLE_SECONDS:-45}"
+# ⚠️ A SINGLE-SHOT PROBE IS WRONG RIGHT AFTER A REBOOT, and that is the exact moment this tool is
+# most likely to be run. MEASURED 2026-09-05 minutes after a VCSA reboot: content-library answered
+# **503** while vcenter/vm answered 200 -- the services were STARTING, not broken, and a single shot
+# reported FAIL. An operator reads that as "still broken" and reaches for a bigger hammer.
+# 503 and 500 mean DIFFERENT things and the loop keys on that:
+#     503  Service Unavailable -> starting. RETRY; it clears on its own.
+#     500  Internal Server Error -> the frozen-credential fault. Retrying NEVER clears it, so we
+#          fail fast rather than burning the whole deadline on something a restart must fix.
+# Default 0 = single shot (a plain preflight should not hang). Pass --wait N, or set the variable.
+VC_WAIT="${_wait_override:-${VCENTER_CHECK_WAIT_SECONDS:-0}}"
+case "$VC_WAIT" in ''|*[!0-9]*) die "--wait/VCENTER_CHECK_WAIT_SECONDS must be whole seconds, got '${VC_WAIT}'" ;; esac
+VC_POLL="${VCENTER_CHECK_POLL_SECONDS:-15}"
 
 if [ -z "${VCENTER_HOST:-}" ] || [ -z "${VCENTER_USERNAME:-}" ] || [ -z "${VCENTER_PASSWORD:-}" ]; then
   log_info "vcenter-service-check: SKIPPED — VCENTER_HOST/USERNAME/PASSWORD not all set."
@@ -105,27 +124,50 @@ vcenter/storage/policies|-|Storage policy selection for guest-cluster PVCs.
 vcenter/namespaces/instances|-|vSphere Namespaces — where Harbor/ArgoCD Supervisor Services live.
 "
 
-log_info "vcenter-service-check: exercising the REAL APIs on ${VCENTER_HOST} (never the health field)"
-checked=0; failed=0; _failed_svcs=""
-while IFS='|' read -r p svc why; do
-  [ -n "${p:-}" ] || continue
-  checked=$((checked + 1))
-  code="$(_http "$p")"
-  case "$code" in
-    2*) printf '  ok    %-34s %s\n' "$p" "$code" ;;
-    *)  failed=$((failed + 1))
-        printf '  FAIL  %-34s %s   %s\n' "$p" "$code" "$why"
-        # the body names the real exception; it is the thing worth reading
-        head -c 300 "$BODY" 2>/dev/null | tr -d '\n' | sed 's/^/        /'; echo
-        case "$svc" in -) : ;; *) case " $_failed_svcs " in *" $svc "*) : ;; *) _failed_svcs="${_failed_svcs} ${svc}" ;; esac ;; esac ;;
-  esac
-done <<EOF
+# One full pass over the probe table. Sets: checked, failed, hard, _failed_svcs.
+# `hard` counts failures that are NOT 503 -- i.e. ones a retry can never clear.
+_probe_pass() {
+  checked=0; failed=0; hard=0; _failed_svcs=""
+  local p svc why code
+  while IFS='|' read -r p svc why; do
+    [ -n "${p:-}" ] || continue
+    checked=$((checked + 1))
+    code="$(_http "$p")"
+    case "$code" in
+      2*) printf '  ok    %-34s %s\n' "$p" "$code" ;;
+      503) failed=$((failed + 1))
+           printf '  WARM  %-34s %s   (starting — 503 is not the frozen-credential fault)\n' "$p" "$code" ;;
+      *)  failed=$((failed + 1)); hard=$((hard + 1))
+          printf '  FAIL  %-34s %s   %s\n' "$p" "$code" "$why"
+          # the body names the real exception; it is the thing worth reading
+          head -c 300 "$BODY" 2>/dev/null | tr -d '\n' | sed 's/^/        /'; echo ;;
+    esac
+    case "$code" in
+      2*) : ;;
+      *) case "$svc" in -) : ;; *) case " $_failed_svcs " in *" $svc "*) : ;; *) _failed_svcs="${_failed_svcs} ${svc}" ;; esac ;; esac ;;
+    esac
+  done <<EOF
 $(printf '%s\n' "$PROBES" | sed '/^[[:space:]]*$/d')
 EOF
+}
+
+log_info "vcenter-service-check: exercising the REAL APIs on ${VCENTER_HOST} (never the health field)"
+_deadline=$(( $(date +%s) + VC_WAIT ))
+while :; do
+  _probe_pass
+  [ "$failed" -eq 0 ] && break
+  # A HARD failure never clears by waiting -- 500 is the frozen-credential fault and needs a
+  # restart, 4xx is ours (a bad path or a dead session). Spending the whole deadline on it would
+  # turn a 5-second answer into a 10-minute one and teach people to stop trusting the wait.
+  [ "$hard" -gt 0 ] && break
+  [ "$(date +%s)" -ge "$_deadline" ] && break
+  log_info "  ${failed} service(s) still starting (503) — retrying in ${VC_POLL}s, up to $(( _deadline - $(date +%s) ))s left"
+  sleep "$VC_POLL"
+done
 
 # ALWAYS print the denominator. A check that cannot say what it looked at cannot be trusted to
 # have looked (this repo has shipped two gates that passed by not looking).
-log_info "vcenter-service-check: exercised ${checked} endpoint(s), ${failed} failing"
+log_info "vcenter-service-check: exercised ${checked} endpoint(s), ${failed} failing (${hard} hard, $(( failed - hard )) still starting)"
 
 if [ "$failed" -eq 0 ]; then
   log_info "vcenter-service-check: OK — every exercised service actually served."
@@ -153,18 +195,19 @@ for svc in $_failed_svcs; do
   log_info "  restart ${svc}: http=${rc}"
 done
 
-log_info "vcenter-service-check: settling ${VC_RESTART_SETTLE}s before re-exercising"
-sleep "$VC_RESTART_SETTLE"
-
-# RE-EXERCISE. The restart's own 204 is a proxy; the endpoint serving again is the result.
-again=0
-while IFS='|' read -r p svc why; do
-  [ -n "${p:-}" ] || continue
-  code="$(_http "$p")"
-  case "$code" in 2*) ;; *) again=$((again + 1)); printf '  STILL FAILING  %-30s %s\n' "$p" "$code" ;; esac
-done <<EOF
-$(printf '%s\n' "$PROBES" | sed '/^[[:space:]]*$/d')
-EOF
+# ⚠️ POLL, DO NOT JUST SLEEP. A restarted vCenter service answers 503 for a while before it
+# serves, so a fixed sleep followed by ONE probe reports failure on a service that was merely
+# still starting -- the same false negative the check itself was just taught to avoid. We wait up
+# to VCENTER_RESTART_SETTLE_SECONDS, re-exercising as we go, and stop early the moment it serves.
+log_info "vcenter-service-check: re-exercising for up to ${VC_RESTART_SETTLE}s (503 = still starting)"
+_deadline=$(( $(date +%s) + VC_RESTART_SETTLE ))
+while :; do
+  _probe_pass
+  [ "$failed" -eq 0 ] && break
+  [ "$(date +%s)" -ge "$_deadline" ] && break
+  sleep "$VC_POLL"
+done
+again="$failed"
 
 if [ "$again" -eq 0 ]; then
   log_info "vcenter-service-check: REPAIRED — every endpoint serves again."
