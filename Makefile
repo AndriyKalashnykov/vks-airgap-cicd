@@ -1012,8 +1012,12 @@ install-all: preflight selfbuilt-image mirror mirror-verify builder-image vks-lo
 	@echo "  ─────────────────────────────────────────────────────────────────────────────"
 
 
+.PHONY: prune-runs
+prune-runs: check-env ## Reclaim Tekton PipelineRuns (and their 2Gi workspace PVCs) beyond the newest PRUNE_KEEP per app
+	@$(SCRIPTS)/78-prune-runs.sh
+
 .PHONY: verify
-verify: check-env ## e2e: push a change → Tekton build → Harbor → ArgoCD sync → HTTP check (LIVE cluster)
+verify: check-env prune-runs ## e2e: push a change → Tekton build → Harbor → ArgoCD sync → HTTP check (LIVE cluster)
 	@$(SCRIPTS)/99-verify.sh
 
 .PHONY: verify-gateway-image
