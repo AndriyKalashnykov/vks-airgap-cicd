@@ -928,6 +928,37 @@ kubectl annotate sc <name> storageclass.kubernetes.io/is-default-class=true
 
 ---
 
+## 11.5 headlamp (optional)
+
+A Kubernetes web UI for the guest cluster, installed from **your Harbor by helm** — deliberately not
+via the VKS Standard Package path, which resolves against a VMware-hosted package repository and so
+needs the internet.
+
+```bash
+make install-headlamp
+```
+
+**Expect:** the images it names resolve to `${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/...`, and the
+rollout completes. *(~1–2 min)*
+
+Three things it does that are easy to get wrong on your own:
+
+- **It forces `view`, not `cluster-admin`.** The upstream chart ships
+  `clusterRoleBinding.clusterRoleName=cluster-admin`, so a plain `helm install` is itself a
+  cluster-admin grant. `view` still gives the full browsing UI *and* pod logs; it drops
+  edit/delete and the in-browser terminal.
+- **It pins the node-shell image to your mirror.** headlamp's frontend otherwise falls back to
+  `docker.io/library/busybox:latest` **at runtime** — so the install is green and the first person
+  who clicks "Node Shell" gets `ImagePullBackOff` on an air-gapped cluster.
+- **It passes the Pod Security overrides.** The chart's default pod spec fails `restricted` on
+  three counts, and VKS enforces `restricted` by default on guest clusters. KinD enforces nothing,
+  so this is invisible locally and rejects at admission on the lab.
+
+Log in with a token from `make creds`. Tokens are minted **fresh each time and they expire** — that
+is deliberate, so the report can never show you a credential that has already gone stale.
+
+---
+
 ## 12. Ingress (optional)
 
 Reach the UIs at `*.vks.local` instead of port-forwarding.

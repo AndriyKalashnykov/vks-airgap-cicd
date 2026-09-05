@@ -216,6 +216,34 @@ proxyv2_itag="$(grep -oE 'istio/proxyv2:[^[:space:]"]+' images/images.txt | head
 check_pinned "ISTIO_VERSION (.env.example)" "$(grep -E '^ISTIO_VERSION=' .env.example | cut -d= -f2)" "$istio_itag"
 check_pinned "istio/proxyv2 (images.txt)" "$proxyv2_itag" "$istio_itag"
 
+# headlamp — SAME CLASS AS ISTIO, and MUTATION-PROVEN ungated before this arm existed. An
+# adversary changed images.txt to `headlamp:v9.99.9` in a scratch copy and this gate's DRIFT count
+# did NOT move: arm 4 skips any inventory entry containing a registry host, and 5 of 17 entries
+# fall in that bucket -- including both new ones.
+# WHY IT MATTERS: HEADLAMP_VERSION feeds BOTH the chart 10-mirror-pull.sh pulls AND the image tag
+# passed as `--set image.tag=v${HEADLAMP_VERSION}`, while images.txt carries the mirrored tag under
+# a DIFFERENT Renovate datasource (docker vs helm) in a DIFFERENT file -- so they bump in SEPARATE
+# PRs. Bump one and not the other and `make mirror` pushes v0.46.0 while the Deployment asks for
+# v0.45.0: ImagePullBackOff on the air-gapped cluster, every offline gate green.
+# ⚠️ THE `v` PREFIX IS LOAD-BEARING. images.txt carries `headlamp:v0.45.0` (the chart renders
+# `printf "v%s" .Chart.AppVersion`) while HEADLAMP_VERSION is a bare `0.45.0`. Compare with the v
+# re-attached, or this arm false-fails on a correctly-aligned tree.
+# `|| true`: standalone `set -e` assignments; a head -1 SIGPIPE would abort before the checks run.
+hl_itag="$(grep -oE 'headlamp-k8s/headlamp:[^[:space:]"]+' images/images.txt | head -1 | sed 's|.*:||' || true)"
+hl_env="$(grep -E '^HEADLAMP_VERSION=' .env.example | cut -d= -f2 || true)"
+check_pinned "HEADLAMP_VERSION (.env.example)" "v${hl_env}" "$hl_itag"
+
+# busybox — headlamp's node-shell/pod-debug image, hardcoded in 49-install-headlamp.sh AND listed
+# in images.txt; the same mutation proved it ungated. Drift means the mirror lacks the tag the
+# script asks for, and Node Shell hits ImagePullBackOff -- the EXACT failure that entry prevents.
+# ⚠️ ANCHORED TO REAL SYNTAX, NOT PROSE. A first version grepped `library/busybox:` anywhere and
+# matched the WORD `busybox:latest` inside the explanatory COMMENTS in both files -- the gate then
+# reported DRIFT `latest'. On an air-gapped cluster` against `latest'.`, comparing two fragments of
+# English. images.txt entries start at column 0; comments start with '#'.
+bb_itag="$(grep -E '^docker\.io/library/busybox:' images/images.txt | head -1 | sed 's|.*:||' || true)"
+bb_script="$(grep -oE 'mirror_target_ref "docker\.io/library/busybox:[^"]+"' scripts/49-install-headlamp.sh | head -1 | sed 's|.*:||; s|"$||' || true)"
+check_pinned "busybox (49-install-headlamp.sh)" "$bb_script" "$bb_itag"
+
 # The following are NOT registry-derived on purpose: they guard the Java OFFLINE-BUILDER apparatus
 # (Dockerfile.builder + 15-build-push-builder.sh), which exists because an in-cluster build cannot
 # reach its language's package registry. As of 2026-08-22 EVERY app ships one (owner decision: one

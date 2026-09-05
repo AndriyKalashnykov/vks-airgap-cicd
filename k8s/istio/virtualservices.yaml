@@ -52,3 +52,20 @@ spec:
             host: tekton-dashboard.${TEKTON_NAMESPACE}.svc.cluster.local
             port:
               number: 9097
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: headlamp
+  namespace: ${HEADLAMP_NAMESPACE}
+spec:
+  hosts:
+    - ${HEADLAMP_HOST}
+  gateways:
+    - ${ISTIO_GATEWAY_REF}
+  http:
+    - route:
+        - destination:
+            host: headlamp.${HEADLAMP_NAMESPACE}.svc.cluster.local
+            port:
+              number: 80

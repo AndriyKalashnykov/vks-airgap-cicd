@@ -714,6 +714,32 @@ add_row() { rows="${rows}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\t'"${5:--}"$'\
 # Ordered by the pipeline flow: Gitea (push) -> Tekton (build) -> Harbor (registry) -> ArgoCD (deploy) -> apps.
 add_row "Gitea"  "$gitea_url"  "$gitea_user"  "$gitea_pw"  "$(_reach_ingress)"
 add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)" "$(_reach_ingress)"
+
+# ---- headlamp -------------------------------------------------------------------------------
+# ⚠️ THE TOKEN IS MINTED HERE, AT REPORT TIME, AND STORED NOWHERE. `kubectl create token` issues a
+# BOUND, EXPIRING token (1h by default), so writing one into .env or the state overlay would
+# reproduce exactly the stale-credential complaint this whole report exists to fix: the operator
+# copies it, gets 401, and nothing says why. A long-lived Secret-based token was REJECTED for the
+# same reason plus a worse one -- it is a permanent credential at rest in etcd that survives every
+# teardown. This mirrors what the ArgoCD row already does by shelling out per run.
+# ⚠️ AND IT MUST NOT HANG OR DIE. This is a READ-ONLY summary that runs against labs that are half
+# up; every failure degrades to a marker. Bounded by the same CREDS_KUBE_TIMEOUT_SECONDS as every
+# other cluster call, `</dev/null` because kubectl blocks forever on an open pipe, and `|| true` so
+# a failure cannot trip `set -e`.
+headlamp_url="$(ingress_url "${HEADLAMP_HOST:-headlamp.vks.local}")"
+headlamp_tok="<not read>"
+if [ "$_no_probe_snapshot" = "1" ]; then
+  headlamp_tok="<not read: CREDS_NO_PROBE=1 (minting a token is a live cluster call)>"
+elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
+  _hl_ns="${HEADLAMP_NAMESPACE:-headlamp}"; _hl_sa="${HEADLAMP_SA:-headlamp-viewer}"
+  _hl_t="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s \
+             -n "$_hl_ns" create token "$_hl_sa" </dev/null 2>/dev/null || true)"
+  if [ -n "$_hl_t" ]; then headlamp_tok="$(_lab_secret "$_hl_t")"
+  else                     headlamp_tok="<not read — is headlamp installed? make install-headlamp>"; fi
+else
+  headlamp_tok="<not read — no KUBECONFIG>"
+fi
+add_row "headlamp" "$headlamp_url" "(token)" "$headlamp_tok" "$(_reach_ingress)"
 # ── WHY THIS ROW IS NOT READ LIVE FROM THE CLUSTER (B202 F5/D) ──────────────────────────────────
 # NOT because "a printer must not probe" — it demonstrably does: the guest-node SSH row below runs
 # two live kubectl calls (PR #901). Stating that as the reason would be refuted by this very file.

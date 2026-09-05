@@ -33,3 +33,4 @@ spec:
       hosts:
         - ${GITEA_HOST}
         - ${TEKTON_DASHBOARD_HOST}
+        - ${HEADLAMP_HOST}

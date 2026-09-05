@@ -785,6 +785,10 @@ install-tekton: check-env ## Install Tekton Pipelines + Triggers (image refs rem
 configure-tekton: check-env ## Apply pipeline/tasks/triggers + registry/git secrets
 	@$(SCRIPTS)/60-configure-tekton.sh
 
+.PHONY: install-headlamp
+install-headlamp: check-env ## Install headlamp (Kubernetes web UI) into the GUEST cluster from Harbor — helm, NOT the VKS package path (air-gapped by default)
+	@$(SCRIPTS)/49-install-headlamp.sh
+
 .PHONY: platform
 platform: install-gitea seed-gitea install-tekton configure-tekton ## Install + wire Gitea and Tekton
 
