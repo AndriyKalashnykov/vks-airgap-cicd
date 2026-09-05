@@ -172,6 +172,24 @@ argo_scheme="https"; [ "${ARGOCD_INSECURE:-0}" = "1" ] && argo_scheme="http"
 # which os.sh:560 sources with no stamp at all), because every KinD sink carrying ARGOCD_LB_IP
 # also carries the stamp — the added conjuncts are true exactly when the bug fires. Inverting
 # the precedence repairs 3 of 3 with no stamp, no discriminator and no new mechanism.
+# ── TELL THE OPERATOR SOMETHING IS HAPPENING ───────────────────────────────────────────────────
+# ⚠️ Six seconds of SILENCE reads as HUNG, and this notice MUST PRECEDE THE FIRST BLOCKING CALL.
+# MEASURED: a first version sat just above the table and printed "checks done in 0s" while the
+# command had already taken 6.33 s -- the wait is the CLUSTER lookups below, not the reachability
+# probes. A progress line printed after the wait is decoration. This command exists to be run interactively when someone
+# wants in, so it must say what it is doing and bound the wait out loud. To STDERR deliberately:
+# stdout is the report, and test-creds-show captures it -- progress must not become data.
+# The numbers are the real bounds, read from the same variables the probes use, so this line cannot
+# drift from the behaviour it describes.
+if [ "${CREDS_NO_PROBE:-0}" = 1 ]; then
+  printf '  (CREDS_NO_PROBE=1 — reporting configuration only, nothing probed)\n' >&2
+else
+  printf '  checking what is reachable — up to %ss per endpoint, %ss per cluster call; a few seconds total.\n' \
+    "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" >&2
+  printf '  (set CREDS_NO_PROBE=1 to skip every probe and report configuration only)\n' >&2
+fi
+_probe_t0=$(date +%s 2>/dev/null || echo 0)
+
 if [ -n "${ARGOCD_SERVER:-}" ]; then
   # A REAL LAB. ARGOCD_LB_IP is published only by the KinD flow (07-install-argocd.sh), so on a lab
   # this used to print the literal '<your lab's ArgoCD URL>' — while the operator had ALREADY told us
@@ -520,8 +538,8 @@ case "$_prov" in
                 printf '                   values you supplied, not placeholders. .env carries NO cluster stamp, so\n'
                 printf '                   this report cannot confirm they belong to the cluster you are talking to;\n'
                 printf '                   a value left over from a destroyed lab looks identical to one you just\n'
-                printf '                   typed. Treat every credential here as LIVE until you know otherwise; re-run\n'
-                printf '                   is wrong.\n'
+                printf '                   typed. Treat every credential here as LIVE until you know\n'
+                printf '                   otherwise; re-run any value that is rejected rather than assuming it is wrong.\n'
                 _settle_note '                   '
               else
                 printf '    values below : DEFAULTS from .env / .env.example — these ARE PLACEHOLDERS, not credentials\n'
@@ -563,6 +581,7 @@ fi
 # `javawebapp` is 10 chars (so it pushed every following column out of line), and a long value in the URL
 # cell shunted Username/Password off into the distance. A table whose alignment depends on nobody ever
 # adding a longer app name is a table that will be misaligned — and the registry EXISTS so people add apps.
+
 rows=""
 # ── REACHABILITY: a FOURTH column, never a replacement for the provenance tokens ────────────────
 # ⚠️ B204 refuted collapsing these axes, and the reason is sharper than tidiness: a TCP/HTTP probe
@@ -607,6 +626,7 @@ _reach_argocd() {
   _probe_tcp "$_h" "$_port" && printf 'serving' || printf 'silent'
 }
 add_row() { rows="${rows}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\t'"${5:--}"$'\n'; }
+
 
 # Ordered by the pipeline flow: Gitea (push) -> Tekton (build) -> Harbor (registry) -> ArgoCD (deploy) -> apps.
 add_row "Gitea"  "$gitea_url"  "$gitea_user"  "$gitea_pw"  "$(_reach_ingress)"
@@ -673,6 +693,14 @@ while read -r _a; do
 done <<EOF
 ${_apps}
 EOF
+
+# how long the probing ACTUALLY took -- printed so the estimate above stays honest. If this ever
+# reads much larger than the stated bounds, a probe has escaped its timeout, and that is a defect
+# the operator can see rather than one they merely endure.
+if [ "${CREDS_NO_PROBE:-0}" != 1 ]; then
+  _probe_t1=$(date +%s 2>/dev/null || echo 0)
+  printf '  reachability checks done in %ss.\n' "$(( _probe_t1 - _probe_t0 ))" >&2
+fi
 
 # Measure every column against every row (headers included), then print.
 w1=7; w2=3; w3=8; w4=8   # header widths are the floor: Service, URL, Username, Password
