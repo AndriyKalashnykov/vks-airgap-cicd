@@ -37,7 +37,7 @@ test('html-significant characters are escaped', () => {
 // MUTUALLY DISTINCT — distinctness is the only reason a field SWAP (appName rendered where version
 // belongs) is caught by the diff.
 test('ui contract producer', { skip: !process.env.UI_CONTRACT_OUT }, async () => {
-  const s = await listen(newApp({ appName: 'APPNAME', message: 'MESSAGE', version: 'VERSION', commit: 'COMMIT' }));
+  const s = await listen(newApp({ appName: 'APPNAME', message: 'MESSAGE', appVersion: 'APPVERSION', version: 'VERSION', commit: 'COMMIT' }));
   writeFileSync(process.env.UI_CONTRACT_OUT, await (await fetch(url(s, '/'))).text());
   s.close();
 });

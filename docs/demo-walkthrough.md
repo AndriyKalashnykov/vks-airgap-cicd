@@ -45,6 +45,30 @@ gives.
    | `rustwebapp` | `src/main.rs` | `const DEFAULT_MESSAGE: &str = "Hello from vks-airgap-cicd";` |
    | `dotnetwebapp` | `Program.cs` | `public const string DefaultMessage = "Hello from vks-airgap-cicd";` |
 
+   **Want to change the `Version` field instead (or as well)?** Same loop, different file — edit the
+   app's **declared semantic version** in its own manifest. It is compiled into the image at build
+   time, so it can never disagree with the artifact it describes, and the build tags the image with
+   it (see step 4).
+
+   | app | file to edit | the line |
+   |-----|--------------|----------|
+   | `javawebapp` | `pom.xml` | `<version>0.1.0</version>` (the one under the project's own `<artifactId>`) |
+   | `gowebapp` | `main.go` | `const appVersion = "0.1.0"` |
+   | `nodejswebapp` | `package.json` | `"version": "0.1.0"` |
+   | `pythonwebapp` | `app.py` | `__version__ = "0.1.0"` |
+   | `rustwebapp` | `Cargo.toml` | `version = "0.1.0"` under `[package]` |
+   | `dotnetwebapp` | `dotnetwebapp.csproj` | `<Version>0.1.0</Version>` |
+
+   Each app declares its own, in its own file, so bumping one changes **only that app** — java to
+   `0.2.0` leaves the other five on `0.1.0`, and only java's next image gains a `0.2.0` tag.
+
+   ⚠️ `Version` and `Deployed tag` are different facts and are meant to differ. `Version` is what
+   YOU declare. `Deployed tag` is the tag the running pod was **pulled with** — the git sha — and it
+   is deliberately NOT `0.1.0`, even though the image carries BOTH tags on one digest: ArgoCD
+   deploys by sha because a sha is unique per build, while a moving `0.1.0` under
+   `imagePullPolicy: IfNotPresent` could serve a node's cached older layer. A bump changes the first
+   immediately and the second to a new sha.
+
    Change only the **text inside the quotes** to anything you like, e.g. `Hello from the air-gapped
    pipeline`. If you have already run `make verify` (or `make e2e-kind`, which calls it), that text
    is a `vks-airgap-cicd-verify-<epoch>` marker rather than the default — edit it anyway.
@@ -61,8 +85,13 @@ gives.
    | `build` | **Kaniko** builds the image and pushes it to Harbor |
    | `deploy-update` | writes the new tag back into `<app>-deploy` — the GitOps hand-off |
 
-4. **See the image in Harbor.** Project **`apps`** → repository **`<app>`**. A new tag appears:
-   the **git short SHA** of your commit.
+4. **See the image in Harbor.** Project **`apps`** → repository **`<app>`**. The new artifact
+   carries **two tags on one digest** (Harbor's Tags column shows both, e.g. `0.1.0, bfe621e`): the
+   **git short SHA** of your commit, and the app's
+   **declared semantic version** (`0.1.0` — from its own `pom.xml` / `package.json` / `Cargo.toml` /
+   `main.go` / `app.py` / `.csproj`, so each app can bump independently). The sha is what ArgoCD
+   deploys; the version is there so the artifact list says what the app *is*, not only which build
+   it was.
 
 5. **See the tag written back in Gitea.** **`demo/<app>-deploy`** → `kustomization.yaml` has a
    new commit by **`ci-bot`** (`ci: deploy <app> <sha>`) bumping `images[0].newTag`. ArgoCD

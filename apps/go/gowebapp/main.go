@@ -34,6 +34,14 @@ import (
 // defaultMessage is the demo "deploy me" value. `make verify` rewrites THIS line with a unique
 // marker, pushes it, and then asserts the marker appears on the deployed page — the same trick it
 // plays on javawebapp's application.yml. Keep it on one line, in this exact shape.
+// appVersion is the app's DECLARED semantic version — the analogue of pom.xml <version>,
+// package.json "version" and Cargo.toml version. Go has no manifest that carries one, so it lives
+// here. scripts/lib/apps.sh:app_version() reads it, and the Tekton build tags the pushed image with
+// it ALONGSIDE the commit sha, so Harbor shows `0.1.0, <sha>` on one digest.
+// ⚠️ It is NOT what the page renders: that is APP_VERSION, injected at deploy time from the image
+// tag, which is how the page proves WHICH build is running.
+const appVersion = "0.1.0"
+
 const defaultMessage = "Hello from vks-airgap-cicd"
 
 // env returns the value of key, or fallback when unset/empty.
@@ -47,8 +55,12 @@ func env(key, fallback string) string {
 type page struct {
 	AppName string
 	Message string
-	Version string
-	Commit  string
+	// AppVersion is the app's DECLARED semantic version, COMPILED IN from appVersion above. It is
+	// deliberately NOT injected: kustomize can only source a value from the deployed image tag,
+	// which is the sha, so an env var could never carry it. Version/Commit below ARE injected.
+	AppVersion string
+	Version    string
+	Commit     string
 }
 
 // The page is self-contained — no external CSS/JS/CDN, because the cluster is air-gapped.
@@ -85,7 +97,8 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
         <h1>{{.AppName}}</h1>
         <p class="message">{{.Message}}</p>
         <dl>
-            <dt>Image tag</dt><dd>{{.Version}}</dd>
+            <dt>Version</dt><dd>{{.AppVersion}}</dd>
+            <dt>Deployed tag</dt><dd>{{.Version}}</dd>
             <dt>Commit</dt><dd>{{.Commit}}</dd>
         </dl>
     </main>
@@ -155,9 +168,12 @@ func main() {
 
 	p := page{
 		AppName: env("APP_NAME", "gowebapp"),
-		Message: env("APP_MESSAGE", defaultMessage),
-		Version: env("APP_VERSION", "dev"),
-		Commit:  env("APP_COMMIT", "unknown"),
+		// Compiled in from appVersion above — NOT env-overridable, because APP_VERSION already
+		// carries the deployed image tag (the sha).
+		AppVersion: appVersion,
+		Message:    env("APP_MESSAGE", defaultMessage),
+		Version:    env("APP_VERSION", "dev"),
+		Commit:     env("APP_COMMIT", "unknown"),
 	}
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))

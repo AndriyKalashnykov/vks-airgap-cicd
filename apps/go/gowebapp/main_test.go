@@ -92,7 +92,7 @@ func TestUIContractRender(t *testing.T) {
 	}
 	// FIXED inputs, shared verbatim by every app's producer. They are masked by the gate, so their
 	// VALUES do not matter -- but they must be the same everywhere so the masking is uniform.
-	p := page{AppName: "APPNAME", Message: "MESSAGE", Version: "VERSION", Commit: "COMMIT"}
+	p := page{AppName: "APPNAME", Message: "MESSAGE", AppVersion: "APPVERSION", Version: "VERSION", Commit: "COMMIT"}
 	// Rendered through the REAL router (newMux -> chi -> the GET / handler), not by calling
 	// indexTmpl.Execute directly. The java sibling renders through MockMvc and its javadoc says the
 	// artifact must be "what a user would actually be served"; a direct template render is the

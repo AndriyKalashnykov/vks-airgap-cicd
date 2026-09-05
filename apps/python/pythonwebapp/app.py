@@ -26,6 +26,10 @@ from markupsafe import escape
 # DEFAULT_MESSAGE is the demo "deploy me" value. `make verify` rewrites THIS line with a unique
 # marker, pushes it, and asserts the marker appears on the deployed page — the same trick it plays
 # on javawebapp's application.yml and gowebapp's main.go. Keep it on one line, in this exact shape.
+# The app's DECLARED semantic version (see gowebapp/main.go:appVersion for why it lives in source
+# for the languages with no manifest slot). Read by scripts/lib/apps.sh:app_version().
+__version__ = "0.1.0"
+
 DEFAULT_MESSAGE = "Hello from vks-airgap-cicd"
 
 
@@ -69,7 +73,8 @@ def render(p: dict) -> str:
         <h1>{escape(p['app_name'])}</h1>
         <p class="message">{escape(p['message'])}</p>
         <dl>
-            <dt>Image tag</dt><dd>{escape(p['version'])}</dd>
+            <dt>Version</dt><dd>{escape(p['app_version'])}</dd>
+            <dt>Deployed tag</dt><dd>{escape(p['version'])}</dd>
             <dt>Commit</dt><dd>{escape(p['commit'])}</dd>
         </dl>
     </main>
@@ -99,6 +104,9 @@ def page_from_env() -> dict:
     return {
         "app_name": env("APP_NAME", "pythonwebapp"),
         "message": env("APP_MESSAGE", DEFAULT_MESSAGE),
+        # The DECLARED semantic version, compiled in from __version__ above. Not injected:
+        # kustomize can only source from the deployed image tag (the sha).
+        "app_version": __version__,
         "version": env("APP_VERSION", "dev"),
         "commit": env("APP_COMMIT", "unknown"),
     }

@@ -6,6 +6,9 @@
        restored. The builder image below still exists (every app has one, by decision) and still
        does a real `dotnet restore`, which is what makes the in-cluster build offline-safe. -->
   <PropertyGroup>
+    <!-- The app's DECLARED semantic version. Read by scripts/lib/apps.sh:app_version(); the
+         Tekton build tags the pushed image with it alongside the commit sha. -->
+    <Version>0.1.0</Version>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

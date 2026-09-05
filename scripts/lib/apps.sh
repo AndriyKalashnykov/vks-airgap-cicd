@@ -461,6 +461,40 @@ app_toolchain() {
 # Prints a SPACE-SEPARATED list of `--build-arg=K=V` flags (empty for a language that needs none).
 # It is threaded to the Kaniko task as the `build-args` param (Trigger -> Pipeline -> Task), where
 # it is word-split into individual kaniko flags — so no flag may contain whitespace.
+# app_version <name> — the app's DECLARED semantic version, read from its own idiomatic manifest.
+#
+# WHY IT EXISTS. The pipeline tagged every image with the git short sha and nothing else, so `0.1.0`
+# was declared in three of the six sources, rendered onto the web page via APP_VERSION, and NEVER
+# became a Harbor tag — the owner looked at the artifact list and asked "where are my tags?".
+#
+# ⚠️ THIS IS NOT WHAT THE PAGE SHOWS. The page's `Image tag` comes from APP_VERSION, injected at
+# deploy time from the image tag (the sha), which is how it proves WHICH build is running. This
+# function feeds a SECOND, human-facing tag on the same digest.
+#
+# ⚠️ LANGUAGE KNOWLEDGE LIVES HERE, NOT IN TEKTON. kaniko-build.yaml says in as many words that the
+# task "knows no language"; app_build_args() above is the same shape. 60-configure-tekton.sh renders
+# the value into the pipeline, so the cluster never parses a manifest.
+#
+# Prints EMPTY when the app declares none — the caller must then push only the sha tag rather than
+# invent a version. It does NOT die: an app is allowed to have no declared version.
+app_version() {
+  local d; d="$(app_src "$1")"
+  case "$(app_lang "$1")" in
+    # The FIRST <version> after the project's own <artifactId>: a pom's parent block carries its own
+    # <version>, and grabbing that would tag every java app with Spring Boot's version.
+    java)   sed -n "/<artifactId>$1<\/artifactId>/,/<\/version>/p" "${REPO_ROOT}/${d}/pom.xml" 2>/dev/null \
+              | grep -oE '<version>[^<]+' | head -1 | sed 's/<version>//' ;;
+    nodejs) jq -r '.version // empty' "${REPO_ROOT}/${d}/package.json" 2>/dev/null ;;
+    # [package] only: a [dependencies] entry can carry `version = "..."` too.
+    rust)   sed -n '/^\[package\]/,/^\[/p' "${REPO_ROOT}/${d}/Cargo.toml" 2>/dev/null \
+              | grep -m1 -oE '^version *= *"[^"]+' | sed -E 's/.*"//' ;;
+    go)     grep -m1 -oE '^const appVersion = "[^"]+' "${REPO_ROOT}/${d}/main.go" 2>/dev/null | sed -E 's/.*"//' ;;
+    python) grep -m1 -oE '^__version__ = "[^"]+' "${REPO_ROOT}/${d}/app.py" 2>/dev/null | sed -E 's/.*"//' ;;
+    dotnet) grep -m1 -oE '<Version>[^<]+' "${REPO_ROOT}/${d}"/*.csproj 2>/dev/null | sed 's/.*<Version>//' ;;
+    *)      die "app '$1': add a branch to app_version()" ;;
+  esac
+}
+
 app_build_args() {
   case "$(app_lang "$1")" in
     java) printf -- '--build-arg=MVN_OFFLINE=-o' ;;
@@ -595,9 +629,16 @@ app_export() {
   APP_BUILDER_IMAGE="$(app_builder_image "$name")"
   APP_RUNTIME_IMAGE="$(app_runtime_image "$name")"
   APP_BUILD_ARGS="$(app_build_args "$name")"   # extra kaniko --build-arg flags (may be empty)
+  APP_DECLARED_VERSION="$(app_version "$name")"         # declared semantic version -> 2nd image tag (may be empty)
+  # ⚠️ APP_DECLARED_VERSION MUST BE EXPORTED (renamed from APP_VERSION: that name ALREADY means
+  # "the deployed image TAG" — it is the container env var in all six deployments, sourced by
+  # kustomize from the image ref. One identifier meaning two things makes `grep` useless forever.)
+  # It, not merely assigned: envsubst reads the ENVIRONMENT, so an
+  # unexported var renders as the EMPTY STRING with no error — and an empty version-tag param means
+  # the second --destination is silently skipped and the `0.1.0` tag never appears in Harbor.
   export APP_NAME APP_LANG APP_SRC APP_DEPLOY_DIR APP_HOST APP_TEST_TASK \
          APP_NAMESPACE APP_GIT_REPO APP_DEPLOY_REPO APP_IMAGE \
-         APP_BUILDER_IMAGE APP_RUNTIME_IMAGE APP_BUILD_ARGS
+         APP_BUILDER_IMAGE APP_RUNTIME_IMAGE APP_BUILD_ARGS APP_DECLARED_VERSION
 }
 
 # for_each_app <fn> — run <fn> <app> for every app, in registry order, with app_export already

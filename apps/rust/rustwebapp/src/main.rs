@@ -28,6 +28,11 @@ const DEFAULT_MESSAGE: &str = "Hello from vks-airgap-cicd";
 pub struct Page {
     pub app_name: String,
     pub message: String,
+    /// The app's DECLARED semantic version. The real construction below fills it from
+    /// `env!("CARGO_PKG_VERSION")` (resolved BY THE COMPILER from Cargo.toml's [package] version);
+    /// it is a field rather than read inline so all six apps source it the SAME way and the
+    /// ui-contract fixtures can set a placeholder. `version` below is the deployed IMAGE TAG.
+    pub app_version: String,
     pub version: String,
     pub commit: String,
 }
@@ -81,13 +86,15 @@ pub fn render(p: &Page) -> String {
         <h1>{name}</h1>
         <p class="message">{msg}</p>
         <dl>
-            <dt>Image tag</dt><dd>{ver}</dd>
+            <dt>Version</dt><dd>{appver}</dd>
+            <dt>Deployed tag</dt><dd>{ver}</dd>
             <dt>Commit</dt><dd>{commit}</dd>
         </dl>
     </main>
 </body>
 </html>
 "#,
+        appver = esc(&p.app_version),
         name = esc(&p.app_name),
         msg = esc(&p.message),
         ver = esc(&p.version),
@@ -112,6 +119,9 @@ pub fn page_from_env() -> Page {
     Page {
         app_name: env("APP_NAME", "rustwebapp"),
         message: env("APP_MESSAGE", DEFAULT_MESSAGE),
+        // Compiled in from Cargo.toml's [package] version — NOT env-overridable, because
+        // APP_VERSION below already carries the deployed image tag (the sha).
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
         version: env("APP_VERSION", "dev"),
         commit: env("APP_COMMIT", "unknown"),
     }
@@ -132,7 +142,7 @@ mod tests {
 
     fn p() -> Page {
         Page { app_name: "rustwebapp".into(), message: "marker-4711-hello".into(),
-               version: "1.2.3".into(), commit: "abc1234".into() }
+               app_version: "0.1.0".into(), version: "1.2.3".into(), commit: "abc1234".into() }
     }
 
     // The deployed page MUST render the message: `make verify` proves the whole GitOps loop by
@@ -167,6 +177,7 @@ mod tests {
         let Ok(out) = std::env::var("UI_CONTRACT_OUT") else { return };
         if out.is_empty() { return; }
         let page = Page { app_name: "APPNAME".into(), message: "MESSAGE".into(),
+                          app_version: "APPVERSION".into(),
                           version: "VERSION".into(), commit: "COMMIT".into() };
         std::fs::write(&out, render(&page)).expect("write UI_CONTRACT_OUT");
     }

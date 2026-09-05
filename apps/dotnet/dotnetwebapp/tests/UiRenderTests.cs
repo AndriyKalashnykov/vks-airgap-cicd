@@ -11,7 +11,7 @@ namespace DotnetWebapp.Tests;
 public sealed class UiRenderTests
 {
     private static Page Sample(string message) =>
-        new(AppName: "dotnetwebapp", Message: message, Version: "1.2.3", Commit: "abc1234");
+        new(AppName: "dotnetwebapp", Message: message, AppVersion: "0.1.0", Version: "1.2.3", Commit: "abc1234");
 
     [Test]
     public async Task RenderCarriesEveryAppSpecificField()

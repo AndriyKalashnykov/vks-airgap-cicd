@@ -21,7 +21,10 @@ using System.Text;
 
 namespace DotnetWebapp;
 
-public sealed record Page(string AppName, string Message, string Version, string Commit);
+// AppVersion is the DECLARED semantic version, from the csproj <Version> baked into the assembly.
+// It is a FIELD (not a static) so all six apps source it the SAME way and the ui-contract fixtures
+// can set a placeholder; Version is the deployed IMAGE TAG.
+public sealed record Page(string AppName, string Message, string AppVersion, string Version, string Commit);
 
 public static class Ui
 {
@@ -76,7 +79,8 @@ public static class Ui
         <h1>{{Esc(p.AppName)}}</h1>
         <p class="message">{{Esc(p.Message)}}</p>
         <dl>
-            <dt>Image tag</dt><dd>{{Esc(p.Version)}}</dd>
+            <dt>Version</dt><dd>{{Esc(p.AppVersion)}}</dd>
+            <dt>Deployed tag</dt><dd>{{Esc(p.Version)}}</dd>
             <dt>Commit</dt><dd>{{Esc(p.Commit)}}</dd>
         </dl>
     </main>
@@ -88,6 +92,9 @@ public static class Ui
     public static Page FromEnv() => new(
         Env("APP_NAME", "dotnetwebapp"),
         Env("APP_MESSAGE", DefaultMessage),
+        // The DECLARED version, from the csproj <Version> baked into the assembly at build time.
+        // NOT env-overridable: APP_VERSION below already carries the deployed image tag (the sha).
+        typeof(Page).Assembly.GetName().Version?.ToString(3) ?? "0.0.0",
         Env("APP_VERSION", "dev"),
         Env("APP_COMMIT", "unknown"));
 }
@@ -103,7 +110,7 @@ public static class Program
         var contractOut = Environment.GetEnvironmentVariable("UI_CONTRACT_OUT");
         if (!string.IsNullOrEmpty(contractOut))
         {
-            File.WriteAllText(contractOut, Ui.Render(new Page("APPNAME", "MESSAGE", "VERSION", "COMMIT")));
+            File.WriteAllText(contractOut, Ui.Render(new Page("APPNAME", "MESSAGE", "APPVERSION", "VERSION", "COMMIT")));
             return;
         }
 

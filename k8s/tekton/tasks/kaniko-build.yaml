@@ -20,6 +20,13 @@ spec:
     - name: tag
       type: string
       description: Image tag (typically the app commit SHA)
+    - name: version-tag
+      type: string
+      default: ""
+      description: |
+        OPTIONAL second tag: the app's DECLARED semantic version (scripts/lib/apps.sh:app_version).
+        Empty means "this app declares none" — push only the sha tag rather than invent one.
+        Both tags name ONE digest, so Harbor's Tags column reads `0.1.0, <sha>`.
     - name: builder-image
       type: string
     - name: runtime-image
@@ -66,6 +73,13 @@ spec:
           "--build-arg=RUNTIME_IMAGE=$(params.runtime-image)" \
           "--digest-file=$(results.image-digest.path)" \
           "--ignore-path=/product_uuid"
+        # A SECOND --destination for the declared semantic version. kaniko pushes ONE build to
+        # every destination given, so both tags resolve to the SAME digest — which is the whole
+        # point: Harbor shows `0.1.0, <sha>` on one artifact rather than two copies.
+        # Guarded because an app may declare no version; an empty tag would push `<image>:` .
+        if [ -n "$(params.version-tag)" ]; then
+          set -- "$@" "--destination=$(params.image):$(params.version-tag)"
+        fi
         # /product_uuid is a kubelet-mounted file; kaniko's between-stage filesystem
         # delete can't unlink it ("device or resource busy") -> ignore it.
         #

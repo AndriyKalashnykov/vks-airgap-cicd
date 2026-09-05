@@ -22,6 +22,15 @@ info:
     # Baked in at build time from the Maven project version (@...@ delimiters are
     # filtered by spring-boot-starter-parent). Overridable at runtime by env.
     version: ${APP_VERSION:@project.version@}
+    # The DECLARED semantic version — the Maven project version, filtered in at BUILD time and
+    # deliberately NOT env-overridable. `version` above is overridden at deploy time by APP_VERSION,
+    # which kustomize sources from the image TAG (the sha), so it cannot also carry this.
+    # ⚠️ QUOTED: `@` is a YAML RESERVED INDICATOR and a plain scalar may not begin with one, so
+    # the unquoted form is invalid YAML IN SOURCE (it only survives because Maven filtering rewrites
+    # it before Spring parses). That is exactly why the sibling line above is written
+    # `${APP_VERSION:@project.version@}` — it starts with `$`. Filtering is delimiter-based and
+    # unaffected by the quotes.
+    declared-version: "@project.version@"
     # Commit is supplied by the build/CI (env or JVM arg); "unknown" when absent.
     commit: ${APP_COMMIT:unknown}
 
