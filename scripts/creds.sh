@@ -1190,7 +1190,32 @@ _lab_secret() { if [ -n "${1:-}" ]; then _mask "$1"; else printf '<not set>'; fi
 _vc_ep=""; if [ -n "${VCENTER_HOST:-}" ]; then _vc_ep="https://${VCENTER_HOST}"; fi
 _sup_ep=""; if [ -n "${SUPERVISOR_HOST:-}" ]; then _sup_ep="https://${SUPERVISOR_HOST}"; fi
 _lab_add "vCenter"   "$(_lab_plain "$_vc_ep")"  "$(_lab_plain "${VCENTER_USERNAME:-}")" "$(_lab_secret "${VCENTER_PASSWORD:-}")"
-_lab_add "VKS / SSO" "$(_lab_plain "$_sup_ep")" "$(_lab_plain "${VKS_USERNAME:-}")"     "$(_lab_secret "${VKS_PASSWORD:-}")"
+# VKS / SSO's password cell is the ONE lab row that does not use _lab_secret, because a bare
+# `<not set>` here is FALSE-BY-CONTRAST: the rows above and below show a value for the SAME account
+# (administrator@vsphere.local), so the operator reads "you are missing something" when they are not.
+# MEASURED on a live 9.1 lab: VKS_USERNAME == VCENTER_USERNAME, VCENTER_PASSWORD set,
+# VCF_CLI_VSPHERE_PASSWORD set, VKS_PASSWORD unset — and unset is CORRECT, because .env.example:1761
+# documents VKS_PASSWORD as "vsphere method only" and every reader confirms it (02-env.sh:245,
+# 30-vks-login.sh:486-488, and the vsphere arm of _vks_login_requires below). This is creds.sh:318's
+# own doctrine — AN UNSET PASSWORD IS NOT AUTOMATICALLY "YOU MUST SET IT" — which the services table
+# already applies via _unset_pw() and the lab rows never got.
+#
+# ⚠️ TWO REFUTED FIXES, recorded so they are not rebuilt (idea round, 2026-09-05):
+#  1. "show VCF_CLI_VSPHERE_PASSWORD here instead" — WRONG SECRET UNDER THE WRONG LABEL.
+#     .env.example:1591 says the two keys are the same value "on a STANDARD lab", which is permission
+#     to differ, not identity; and the vcf CLI row one line below ALREADY shows it. An operator whose
+#     keys differ would take that value to `kubectl vsphere login` and spend one of THREE attempts
+#     before PERMANENT SSO lockout. Under a pipe both cells render `<hidden…>`, so the wrong-secret
+#     render is invisible in exactly the walk logs that would catch it.
+#  2. "render `<not needed: VKS_AUTH_METHOD=…>`" — has FOUR states, and the fourth is the SHIPPED
+#     DEFAULT: .env.example:1192 ships VKS_AUTH_METHOD COMMENTED, and creds.sh reads it as
+#     `${VKS_AUTH_METHOD:-}` (not the `:-kubeconfig` that 02-env.sh/30-vks-login.sh apply), so the
+#     commonest configuration renders `<not needed: VKS_AUTH_METHOD=>`. It is also a claim about the
+#     OPERATOR'S OBLIGATION, which docs/matrix-standing-rules.md:469 requires to be TRUE of the
+#     cluster at that moment — and it is false under the vsphere method.
+# So the marker states what is unconditionally true of the VARIABLE. Whether it BLOCKS you now is
+# answered where it belongs: _vks_login_requires' vsphere arm already names VKS_PASSWORD as a blocker.
+_lab_add "VKS / SSO" "$(_lab_plain "$_sup_ep")" "$(_lab_plain "${VKS_USERNAME:-}")"     "$(if [ -n "${VKS_PASSWORD:-}" ]; then _mask "$VKS_PASSWORD"; else printf '<not set — vsphere method only>'; fi)"
 _lab_add "vcf CLI"   "(the VKS / SSO account)"  "$(_lab_plain "${VKS_USERNAME:-}")"     "$(_lab_secret "${VCF_CLI_VSPHERE_PASSWORD:-}")"
 
 # ── guest-node SSH — READ LIVE, because the END USER CAN READ IT ────────────────────────────────

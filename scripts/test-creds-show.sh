@@ -687,6 +687,76 @@ fi
 # NEVER VERIFIED: this printer must not authenticate to vCenter — 3 failed binds lock the SSO account
 # PERMANENTLY. Harbor's penalty is a ~1.5s per-principal sleep and Gitea has none, so "we verify
 # Harbor" is not an argument for touching this one. Guards the file against a future convenience.
+# ---- STATE 9b: the VKS / SSO password cell must not INVENT A CHORE (idea round, 2026-09-05) ----
+# MEASURED on a live 9.1 lab: VKS_USERNAME == VCENTER_USERNAME (same account), VCENTER_PASSWORD and
+# VCF_CLI_VSPHERE_PASSWORD set, VKS_PASSWORD unset — and unset is CORRECT (.env.example:1761,
+# "vsphere method only"). The row rendered a bare `<not set>` between two rows showing a value for
+# that same account, so it lied BY CONTRAST: the operator reads a missing credential they do not owe.
+#
+# ⚠️ CASE (ii) IS THE RED-PROOF, NOT CASE (i). A blanket "not needed" would pass (i) and be FALSE
+# under the vsphere method, where the operator genuinely does owe VKS_PASSWORD. Only (ii) catches
+# that over-correction — which is why the fix states a fact about the VARIABLE, not about the method.
+_ss_vcf="$(render_with_env '
+SUPERVISOR_HOST=10.0.0.9
+VKS_USERNAME=administrator@vsphere.local
+VKS_AUTH_METHOD=vcf
+VCF_CLI_VSPHERE_PASSWORD=vcf-secret
+')"
+# Vacuity guard FIRST: every assertion below is a grep over $out, so an empty render passes them all.
+if printf '%s' "$_ss_vcf" | grep -q 'Lab access'; then
+  ok "VKS/SSO (i) vcf: the Lab access section rendered at all (vacuity guard)"
+else
+  bad "VKS/SSO (i) vcf: nothing rendered" "the cases below would pass vacuously on empty output"
+fi
+if printf '%s' "$_ss_vcf" | grep -qE 'VKS / SSO.*<not set>[[:space:]]*$'; then
+  bad "VKS/SSO (i) vcf: cell is a bare <not set>" "invents a chore: unset is CORRECT under the vcf method"
+else
+  ok "VKS/SSO (i) vcf: cell is not a bare <not set>"
+fi
+# (ii) vsphere + unset: the operator DOES owe it here, so the obligation must stay visible.
+# ⚠️ THE FIXTURE MUST SATISFY EVERY EARLIER REQUIREMENT. _vks_login_requires' vsphere arm is ordered
+# SUPERVISOR_HOST -> VKS_NAMESPACE -> VKS_CLUSTER_NAME -> VKS_USERNAME -> VKS_PASSWORD, and STATE 10
+# pins that the trailer names only the FIRST unmet one and then goes silent. My first draft omitted
+# VKS_NAMESPACE/VKS_CLUSTER_NAME, so the trailer correctly named VKS_NAMESPACE and this case failed
+# against a CORRECT product — the instrument, not the product (rules/common/gates.md: distrust your
+# own RED-test first). Setting them makes VKS_PASSWORD genuinely first-unmet, which is the state
+# whose obligation this case exists to assert.
+_ss_vsp="$(render_with_env '
+SUPERVISOR_HOST=10.0.0.9
+VKS_NAMESPACE=demo-ns
+VKS_CLUSTER_NAME=demo-cluster
+VKS_USERNAME=administrator@vsphere.local
+VKS_AUTH_METHOD=vsphere
+')"
+if printf '%s' "$_ss_vsp" | grep -q 'VKS_PASSWORD'; then
+  ok "VKS/SSO (ii) vsphere+unset: VKS_PASSWORD is still named as a requirement"
+else
+  bad "VKS/SSO (ii) vsphere+unset: the obligation vanished" "under vsphere the operator DOES owe VKS_PASSWORD; a blanket 'not needed' is FALSE here"
+fi
+# (iii) vsphere + set: the normal path must be unbroken — the value reaches the cell.
+_ss_set="$(render_with_env '
+SUPERVISOR_HOST=10.0.0.9
+VKS_USERNAME=administrator@vsphere.local
+VKS_AUTH_METHOD=vsphere
+VKS_PASSWORD=vks-secret
+')"
+if printf '%s' "$_ss_set" | grep -qE 'VKS / SSO.*(vks-secret|<hidden)'; then
+  ok "VKS/SSO (iii) vsphere+set: the value renders (masked or revealed)"
+else
+  bad "VKS/SSO (iii) vsphere+set: the value did not render" "the marker swallowed a real credential"
+fi
+# (iv) VKS_AUTH_METHOD UNSET — the SHIPPED DEFAULT (.env.example:1192 ships it COMMENTED), and the
+# state a method-keyed marker would render as gibberish (`<not needed: VKS_AUTH_METHOD=>`).
+_ss_dflt="$(render_with_env '
+SUPERVISOR_HOST=10.0.0.9
+VKS_USERNAME=administrator@vsphere.local
+')"
+if printf '%s' "$_ss_dflt" | grep -qE 'VKS_AUTH_METHOD=[[:space:]>]'; then
+  bad "VKS/SSO (iv) method unset: gibberish marker" "a method-keyed cell renders an empty value in the SHIPPED default state"
+else
+  ok "VKS/SSO (iv) method unset: no gibberish marker in the shipped default state"
+fi
+
 # ── B202 F6: the ATOMIC-PAIR guard, as an ASSERTION rather than a comment ───────────────────────
 # A Harbor credential read that sets the password WITHOUT the username in the same statement rebuilds
 # the mixed pair whose 401 is MEASURED at 22-harbor-robot.sh:200-206, and promotes admin over the
