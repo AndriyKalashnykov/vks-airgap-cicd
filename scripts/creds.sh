@@ -697,7 +697,47 @@ _reach_ingress() {
     printf 'no DNS here'
     return
   fi
-  printf 'serving'
+  # ── B528: ASK THE ROUTE, NOT JUST THE LB ────────────────────────────────────────────────────────
+  # MEASURED 2026-09-05 on the live lab with every app pod in ImagePullBackOff:
+  #     javawebapp.vks.local -> HTTP 503     and this column printed:  serving
+  #     gitea.vks.local      -> HTTP 200                               serving
+  # The `_ing_live` TCP probe above is shared by EVERY ingress-backed row and cannot see a backend,
+  # but `serving` is a claim ABOUT THE BACKEND — the reader clicks a URL the report promised works
+  # and gets an error page. Same class as the DNS overclaim fixed the same day.
+  #
+  # The status DISCRIMINATES three things a single verdict cannot, and each sends the reader
+  # somewhere different — which is the whole reason not to collapse them:
+  #   2xx/3xx -> serving      the route resolves to a healthy backend
+  #   503     -> no backend   the route is RENDERED, nothing healthy behind it. This is the NORMAL
+  #                           state after `make install-all`, which builds no app image (B529) —
+  #                           so it means "run the pipeline", not "the ingress is broken".
+  #   404     -> no route     the ingress does not know this host: a rendering/attach fault.
+  #   000     -> silent       nothing answered at all (curl could not complete).
+  #
+  # ⚠️ HOST HEADER, NOT DNS. We reach the LB by IP and name the vhost, so this works on a box with
+  # no /etc/hosts entry — and it must, because the DNS arm above already returned for that case.
+  # ⚠️ `--max-time` is the SAME knob the rest of this file uses, so one env var still bounds the
+  # whole report: CREDS_PROBE_TIMEOUT_SECONDS.
+  # ⚠️ -o /dev/null: we want the STATUS, never the body — a 12 MB error page must not land in a
+  # command substitution that becomes a table cell.
+  # No host to name => we cannot ask the ROUTE, only the LB. Say what we actually know rather than
+  # sending `Host: ` (which the ingress answers 404 for, i.e. we would invent a "no route" fault).
+  [ -n "$_h" ] || { printf 'LB up'; return; }
+  local _code
+  _code="$(curl -sS -o /dev/null -w '%{http_code}' \
+             --max-time "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" \
+             -H "Host: ${_h}" "http://${_ing}/" 2>/dev/null || true)"
+  case "$_code" in
+    # 000 is curl's "the request did not complete" (connect refused, timeout, TLS abort). It is
+    # NUMERIC, so it would fall past every arm below into the catch-all and print `HTTP 000` — which
+    # reads as a status a server returned. Nothing answered; that is `silent`, the same word the
+    # LB-down arm above uses. Caught by test-creds-reach-ingress.sh, not by review.
+    ''|000|*[!0-9]*) printf 'silent' ;;
+    2??|3??)     printf 'serving' ;;
+    404)         printf 'no route' ;;
+    5??)         printf 'no backend' ;;
+    *)           printf 'HTTP %s' "$_code" ;;
+  esac
 }
 _reach_harbor() {
   [ "${CREDS_NO_PROBE:-0}" = 1 ] && { printf 'not probed'; return; }
