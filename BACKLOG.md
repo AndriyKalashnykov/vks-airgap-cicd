@@ -4943,3 +4943,94 @@ reasonably conclude the fix did not work.
 the same "verify the end result, not a proxy" move that B531 applied to `.env`. (b) is stronger and
 would have caught this directly; it needs a live cluster, so it belongs with `psa-check` /
 `argocd-preflight` in the read-only lab-preflight family rather than in `static-check`.
+
+## B533 — 🟡 `make verify` PERMANENTLY defaces every app's greeting, and never restores it
+
+`scripts/99-verify.sh:111` calls `app_set_message "$app" "$d" "$marker"` (`lib/apps.sh:124`), which
+rewrites each app's default greeting to `vks-airgap-cicd-verify-<epoch>-<app>`, commits it, and
+pushes it to that app's Gitea repo. `cleanup()` kills the port-forward and removes the temp clone —
+there is **no revert anywhere in the file** (verified: 2 total occurrences of
+`app_set_message|restore|revert`).
+
+So after `docs/scenario-1.md` Step 11 — the documented, expected path — the demo's steady state is
+six apps whose front page reads a verify marker instead of their real greeting. The marker is pushed
+to the GITEA repo, not this tree, so `git status` here is clean and nothing hints at it.
+
+Rewriting the greeting is a legitimate technique: it is what makes the assertion honest (the app
+must serve THIS build, not a cached one). The defect is that it is never undone.
+
+⚠️ Do NOT fold this into B529's `build-apps` design. `build-apps` would give a clean first build
+that `verify` immediately defaces again, so it does not fix this — an adversary flagged the
+temptation to use a true finding to launder a design it does not actually support.
+
+**Done when:** either the assertion is followed by a restoring commit, or the marker moves off the
+user-visible greeting (e.g. a build-info endpoint / an image label), so the demo's steady state is
+the demo rather than a test fixture.
+
+## B534 — 🟡 the app UI shows ONE fact under TWO labels: `Version` and `Commit` are both the image tag
+
+MEASURED 2026-09-05 on the live demo — `javawebapp.vks.local` renders:
+
+    Version   a712689
+    Commit    a712689
+
+It is deliberate. `deploy/<app>/kustomization.yaml` has a kustomize `replacements` block with ONE
+source (the container image, `delimiter: ":"` `index: 1` -> the tag) and TWO targets:
+
+    - ...env.[name=APP_VERSION].value
+    - ...env.[name=APP_COMMIT].value
+
+and its comment gives the motive: *"Carry the DEPLOYED image tag into the app's own version/commit
+display ... so it always matches what is really running."* That motive is sound — for COMMIT. The
+Tekton write-back sets `newTag` to the app repo's short sha, so `Commit` is correct and useful.
+
+For VERSION it destroys information. `apps/java/javawebapp/pom.xml` declares `0.1.0`, and the app
+already bakes it in: `application.yml` reads `version: ${APP_VERSION:@project.version@}` (the
+`@...@` delimiters are filtered by spring-boot-starter-parent at build time). But the deployment
+sets an `APP_VERSION` env, and env WINS over the yaml default — so the baked project version can
+never surface, and the reader sees the same seven characters twice.
+
+**Done when:** the `replacements` target list keeps only `APP_COMMIT`, AND the `APP_VERSION` env is
+DELETED from `deploy/<app>/deployment.yaml` (leaving it at `"dev"` would be worse — that is what
+would then show). Then `Version` reads the real project version and `Commit` reads the sha.
+
+MEASURED across all six on the live cluster — every one has `APP_VERSION == APP_COMMIT == <sha>`
+(a712689 / 1e250d1 / ab9f22b / e159b70 / be1b6c2 / 9ba099a), so this is systematic, not a one-off.
+But only THREE actually lose information, and the fix is worth doing for those:
+
+| app | declares a version | fate |
+|---|---|---|
+| javawebapp | `pom.xml` -> `0.1.0` | OVERWRITTEN by the sha |
+| nodejswebapp | `package.json` -> `0.1.0` | OVERWRITTEN |
+| rustwebapp | `Cargo.toml` -> `0.1.0` | OVERWRITTEN |
+| gowebapp | none — its `page` struct's Version field is env-fed only | nothing lost |
+| pythonwebapp | no `pyproject.toml` at all (app.py + requirements.txt) | nothing lost |
+| dotnetwebapp | no `<Version>` in the csproj | nothing lost |
+
+⚠️ MY FIRST PRESCRIPTION HERE WAS "fix the three, leave the other three" — and the operator was
+right to reject it. That perpetuates exactly the per-app divergence this repo's registry doctrine
+exists to kill (`apps/registry.tsv` + `lib/apps.sh` + `check-app-hardcodes`: one row per app,
+everything else LOOPS). Six apps behaving two different ways is the defect, not the starting point.
+
+**ALIGN ALL SIX ON ONE METHOD:**
+
+1. Every app DECLARES a project version in its own native manifest — the three that already do keep
+   theirs; the three that do not get one:
+   - gowebapp: Go has no manifest field. Use `-ldflags "-X main.version=..."` in its Dockerfile
+     (its `page` struct already has a `Version` field), sourced from a single place.
+   - pythonwebapp: it has only `app.py` + `requirements.txt` — add a `pyproject.toml` with
+     `version`, or a `__version__` the app reads.
+   - dotnetwebapp: add `<Version>` to the csproj (today it inherits .NET's implicit `1.0.0`).
+2. The deployment STOPS setting `APP_VERSION` (env wins over the baked value, so leaving it set —
+   at `"dev"` or anything else — defeats step 1).
+3. The kustomize `replacements` block targets `APP_COMMIT` ONLY.
+
+Result, identically for all six: `Version` = the declared project version, `Commit` = the deployed
+image tag. Two labels, two facts.
+
+4. GATE IT, or it rots back: assert (a) every app in the registry declares a version its build bakes
+   in, and (b) no `deploy/*/deployment.yaml` sets `APP_VERSION`. Both are offline greps over the
+   registry — the same shape as `check-app-hardcodes` and `check-pull-secret-alignment`.
+
+⚠️ Re-run `make verify` after: its assertion reads the rendered page. Confirm it keys on the MARKER
+(the greeting) and not on the version field, or this change reddens it.

@@ -893,11 +893,12 @@ Accounts**) and run it again.
 > | `ARGOCD_REGISTER=never` | `NO guest cluster is registered as an ArgoCD destination … Refusing` | registration is admin-only, and here you **are** the admin |
 >
 > Both defaults are `auto`, which MEASURES what is open to you and picks. So the fix is to remove
-> the pins, not to set them differently:
+> the pins, not to set them differently — set both back to `auto` in `.env`, or:
+> `sed -i 's/^ARGOCD_MECHANISM=.*/ARGOCD_MECHANISM=auto/; s/^ARGOCD_REGISTER=.*/ARGOCD_REGISTER=auto/' .env`
 >
-> ```bash
-> sed -i 's/^ARGOCD_MECHANISM=.*/ARGOCD_MECHANISM=auto/; s/^ARGOCD_REGISTER=.*/ARGOCD_REGISTER=auto/' .env
-> ```
+> (Inline, not a fenced block, deliberately: a fence inside a blockquote is counted by
+> `walk-doc.sh`'s independent block counter but is INVISIBLE to its parser, so the two disagree and
+> `test-walk-doc.sh` fails — and the walk must not run a command that rewrites `.env` anyway.)
 >
 > The refusal in row 2 is doing its job, not misfiring: deploying with the in-cluster destination
 > would install your apps **into the Supervisor**, with prune and selfHeal on.
@@ -954,7 +955,7 @@ rejected, and it takes 8–10 minutes to say so. Fix it here — the Harbor step
 comes from.
 
 ```bash
-make install-all      # preflight -> selfbuilt-image -> mirror -> mirror-verify -> builder-image -> vks-login -> platform -> gitops
+make install-all      # preflight -> selfbuilt-image -> mirror -> mirror-verify -> builder-image -> vks-login -> platform -> install-headlamp -> install-ingress -> gitops
 make verify           # pushes a marked change and follows it to the running app
 ```
 

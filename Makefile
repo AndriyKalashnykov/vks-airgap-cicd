@@ -387,10 +387,6 @@ check-doc-make-targets: ## Gate: every `make X` a runbook tells the operator to 
 check-doc-expect-leak: ## Gate: an `**Expect:**` line must not quote a name the reader was never introduced to
 	@$(SCRIPTS)/check-doc-expect-leak.sh
 
-.PHONY: check-infra-hosts-single-source
-check-infra-hosts-single-source: ## Fail if any script hand-enumerates the ingress infra hostnames instead of calling ingress_infra_hosts()
-	@$(SCRIPTS)/check-infra-hosts-single-source.sh
-
 .PHONY: check-expect-literals
 check-expect-literals: ## Gate: every literal an `**Expect:**` line asserts must exist in the code meant to print it
 	@$(SCRIPTS)/check-expect-literals.sh
@@ -1209,6 +1205,11 @@ app-run: check-ports ## Run ONE app locally (APP=javawebapp|gowebapp; default ja
 	@$(SCRIPTS)/app-run.sh $(APP)
 
 ##@ Quality gates
+
+.PHONY: check-infra-hosts-single-source
+check-infra-hosts-single-source: ## Fail if any script hand-enumerates the ingress infra hostnames instead of calling ingress_infra_hosts()
+	@$(SCRIPTS)/check-infra-hosts-single-source.sh
+
 .PHONY: lint
 lint: ## shellcheck scripts, yamllint manifests, hadolint Dockerfile
 	@$(SCRIPTS)/lint.sh

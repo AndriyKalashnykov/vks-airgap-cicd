@@ -95,7 +95,7 @@ if [ -t 1 ] || [ "$_show_secrets_snapshot" = "1" ]; then _reveal=1; else _reveal
 # the annotation is appended OUTSIDE it.
 _mask() {
   if [ "$_reveal" = 1 ]; then printf '%s' "$1"
-  else printf '<hidden: not a terminal — re-run with SHOW_SECRETS=1>'; fi
+  else printf '<hidden: not a terminal; SHOW_SECRETS=1>'; fi
 }
 
 # ── _settle_note <indent> — the ONE place that names the remedies (B202 F3) ──────────────────────
@@ -850,7 +850,12 @@ _long_notes=""
 _rows_capped=""
 while IFS=$'\t' read -r c1 c2 c3 c4 c5; do
   [ -n "$c1" ] || continue
-  if [ "${#c4}" -gt "$CREDS_MAX_CELL" ]; then
+  # A MARKER (`<...>`) is a placeholder, not a value — never footnote one. Measured: capping at 44
+  # sent the 53-char "hidden, re-run with SHOW_SECRETS=1" marker to the footnote, which then read
+  # "full value (too long for the table): <hidden: ...>". The cap exists for real secrets that are
+  # genuinely too long (a JWT), not for text the report wrote itself.
+  case "$c4" in '<'*'>') _is_marker=1 ;; *) _is_marker=0 ;; esac
+  if [ "$_is_marker" = 0 ] && [ "${#c4}" -gt "$CREDS_MAX_CELL" ]; then
     _long_notes="${_long_notes}${c1}"$'\t'"${c4}"$'\n'
     c4="<full value below>"
   fi
