@@ -3969,8 +3969,16 @@ Also unverifiable and withdrawn: the "113 tunnel deaths" figure. The archive con
 
 **CLOSED.** Filed as a race worth fixing; it is guarded by construction. `_all_pods_on_img` lists
 `.items[*]` with **no** phase or `deletionTimestamp` filter and requires *every* labelled pod to
-report the new image — so an old-image Terminating pod (default grace **30s**, none of the six
-manifests set `terminationGracePeriodSeconds`) keeps it false. **The rollout the verify itself
+report the new image — so an old-image Terminating pod keeps it false.
+
+⚠️ **The EMPIRICAL BASE of that argument (0 anomalies in 280 attempts) was collected when four of
+the six apps IGNORED SIGTERM and therefore sat Terminating for the full 30s grace.** They now drain
+in 5-6s (measured live, run C vs run D: java 36s->6s, nodejs 35s->6s, python 35s->5s, rust 36s->5s),
+so the window in which a Terminating pod holds `_all_pods_on_img` false is ~6x narrower than when
+those 280 attempts were counted. The CLOSED verdict still stands — `_all_pods_on_img` is a STATE
+predicate and `rollout status` gates on readiness before `_pick_pod` runs, so nothing depends on the
+drain being slow — but the 280-attempt number no longer describes today's timing. Do not re-cite it
+as if it does. **The rollout the verify itself
 triggers is waited out by construction, so it is not the trigger.**
 
 Reaching `_pick_pod` with a doomed pod needs a NEW-image pod deleted *after* that gate, caught in
