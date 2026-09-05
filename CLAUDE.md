@@ -491,6 +491,34 @@ KinD stand-in is a convenience. Design for the tenant first.
    precisely because it silently does nothing on a box that has no such directory — and it is kept
    OUT of `.env.example` so it never enters the end user's config surface.
 
+### 🔴 AND THAT BINDS *ME*, NOT ONLY THE DOCS: NEVER REACH INTO THE LAB REPO TO PAPER OVER A GAP (BLOCKING)
+
+RULE ZERO-B says the end user has only this repo. The operational half — which is the half I keep
+breaking — is that **I** must reason and act from that same surface:
+
+1. **Anything I do to make the demo work must be doable from THIS repo plus `.env`.** If it is not,
+   that is a **FINDING TO REPORT**, not a gap to paper over with `nested-vsphere-lab`. Reaching for
+   the lab repo does not solve the hole; it HIDES it, and the end user falls into it later.
+2. **The lab repo is legitimate ONLY for BEING the lab** — cutting/restoring the estate, and acting
+   as the DNS authority that a real operator's DNS server would be. It is **never** a source of
+   *product* steps.
+3. **When the line is crossed, say so, and label the result honestly**: `validated-by-equivalence`,
+   NOT `validated-by-following-the-documented-path`.
+
+⚠️ **The tell is a rationalisation, not an error.** Measured 2026-09-05: Harbor's LoadBalancer came
+up and needed an A record. This repo's `make show-dns-records` prints the exact records AND the
+`virsh net-update` recipe — the documented end-user path. I instead ran the LAB repo's
+`make dns-record` because I happen to have it, and then described that as "the right division of
+labour". The outcome is equivalent (that target runs the same `virsh net-update` on both networks),
+but **equivalence is luck, not validation**: I exercised my convenience path and left the
+operator's path untested. Nothing went red, because nothing was watching.
+
+**Reflex:** before any step that makes the demo work, ask *"can the end user do this with this repo
+and `.env`?"* If the answer needs `make -C ~/projects/nested-vsphere-lab`, STOP — either find this
+repo's path, or report the gap. (Measured the same night: `README.md`, `docs/scenario-1.md` and
+`docs/scenario-2.md` contain **zero** references to `nested-vsphere-lab`, so the DOCS hold the line;
+it was my execution that did not.)
+
 **Therefore:**
 
 1. **Never point the end user at `nested-vsphere-lab`** — not at its targets, its files, or its output. For

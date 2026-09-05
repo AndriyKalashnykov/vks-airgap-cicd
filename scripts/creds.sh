@@ -616,7 +616,14 @@ _reach_harbor() {
 }
 _reach_argocd() {
   [ "${CREDS_NO_PROBE:-0}" = 1 ] && { printf 'not probed'; return; }
-  local _h="${ARGOCD_SERVER:-}"; [ -n "$_h" ] || { printf 'not set'; return; }
+  # ⚠️ PROBE THE ADDRESS THE ROW ACTUALLY SHOWS, not just ARGOCD_SERVER. MEASURED 2026-09-05: with
+  # ARGOCD_SERVER unset but the address DISCOVERED from the cluster, the row printed
+  # "https://192.168.101.131 (discovered from the cluster)" while this column said "not set" --
+  # the table contradicting itself in adjacent cells, which is worse than either answer alone.
+  # $argocd_url is the rendered cell and may carry a trailing "(discovered ...)" note, so strip it.
+  local _h="${ARGOCD_SERVER:-}"
+  [ -n "$_h" ] || _h="${argocd_url%% *}"
+  case "$_h" in ''|'<not set>') printf 'not set'; return ;; esac
   _h="${_h#https://}"; _h="${_h#http://}"; _h="${_h%%/*}"
   local _port="${_h##*:}"; case "$_h" in *:*) : ;; *) _port=443 ;; esac
   _h="${_h%%:*}"
