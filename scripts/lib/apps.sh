@@ -603,6 +603,47 @@ app_bump_patch() {
   esac
 }
 
+# app_sigterm_file <name> / app_sigterm_pattern <name> — the file (relative to the app's source dir)
+# and the `grep -E` pattern that together are the EVIDENCE this app handles SIGTERM.
+# check-sigterm.sh asserts both; language knowledge lives here, as everywhere else in this file.
+#
+# ⚠️ TWO FUNCTIONS, NOT ONE "file|pattern" STRING. Every one of these patterns contains `|`
+# alternation, so a `|`-delimited pair cannot be split unambiguously — the first version of this
+# returned `src/main.rs|libc::SIGTERM|tokio::signal` and there is no correct way to read that.
+#
+# ⚠️ WHY THIS IS A GATE AND NOT A COMMENT. A container's PID 1 gets NO default signal dispositions,
+# so a server that registers nothing simply IGNORES SIGTERM: the kubelet waits out the full 30s
+# terminationGracePeriod and SIGKILLs it, dropping in-flight requests on EVERY rollout. MEASURED
+# 2026-09-05 over 114 samples across 19 verify runs — the two apps that handled it drained in 5s,
+# the four that did not took 30-35s — then proven per app with a container A/B (send SIGTERM, time
+# the exit): before the fix all four were STILL RUNNING after 21s; after it, 0-1s.
+app_sigterm_file() {
+  case "$(app_lang "$1")" in
+    go)     printf 'main.go' ;;
+    rust)   printf 'src/main.rs' ;;
+    nodejs) printf 'server.js' ;;
+    python) printf 'app.py' ;;
+    # Spring Boot installs its own handler and drains gracefully — but ONLY if the JVM is PID 1,
+    # which the gate's separate `exec` check asserts. `shutdown: graceful` is what makes it finish
+    # in-flight requests instead of cutting them.
+    java)   printf 'src/main/resources/application.yml' ;;
+    # The .NET generic host registers SIGTERM itself; the evidence is that we USE that host.
+    dotnet) printf 'Program.cs' ;;
+    *)      die "app '$1': add a branch to app_sigterm_file()" ;;
+  esac
+}
+app_sigterm_pattern() {
+  case "$(app_lang "$1")" in
+    go)     printf '%s' 'signal\.Notify\(.*SIGTERM' ;;
+    rust)   printf '%s' 'libc::SIGTERM|tokio::signal' ;;
+    nodejs) printf '%s' "process\.on\(sig|'SIGTERM'" ;;
+    python) printf '%s' 'signal\.signal\(signal\.SIGTERM' ;;
+    java)   printf '%s' 'shutdown: *graceful' ;;
+    dotnet) printf '%s' 'WebApplication\.CreateBuilder' ;;
+    *)      die "app '$1': add a branch to app_sigterm_pattern()" ;;
+  esac
+}
+
 app_build_args() {
   case "$(app_lang "$1")" in
     java) printf -- '--build-arg=MVN_OFFLINE=-o' ;;

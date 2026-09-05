@@ -2,6 +2,9 @@
 # Every operator-tunable value is externalized via Spring's ${VAR:default}
 # placeholder syntax (ONE colon). Defaults mirror the repo-root .env.example.
 server:
+  # Finish in-flight requests instead of dropping them when SIGTERM arrives. Needs the JVM to BE
+  # PID 1 (see the Dockerfile's `exec`) — Spring never sees the signal otherwise.
+  shutdown: graceful
   # BLOCKING: port MUST be externalized. Do not hardcode.
   port: ${APP_INTERNAL_PORT:8080}
 

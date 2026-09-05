@@ -1214,6 +1214,10 @@ app-run: check-ports ## Run ONE app locally (APP=javawebapp|gowebapp; default ja
 
 ##@ Quality gates
 
+.PHONY: check-sigterm
+check-sigterm: ## Offline: every app is PID 1 (or execs into it) AND registers a SIGTERM handler
+	@bash $(SCRIPTS)/check-sigterm.sh
+
 .PHONY: check-infra-hosts-single-source
 check-infra-hosts-single-source: ## Fail if any script hand-enumerates the ingress infra hostnames instead of calling ingress_infra_hosts()
 	@$(SCRIPTS)/check-infra-hosts-single-source.sh

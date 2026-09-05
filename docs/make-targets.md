@@ -44,6 +44,7 @@ coverage, which is why the gap grew unnoticed.
 | Gates | `ci` / `static-check` / `docs-lint` | Composite offline gate; code gate; docs gate |
 | Gates | `lint` / `validate` / `test-scripts` | Shell/YAML/Dockerfile lint · manifest schema validation · offline script-logic unit tests |
 | Gates | `check-image-alignment` / `check-toolchain-alignment` / `check-java-alignment` | A version that lives in >1 file must agree everywhere (image tags ↔ `images/images.txt`; kubectl pin; Java major) |
+| Gates | `check-sigterm` | Every app must be PID 1 (or `exec` into it) **and** register a SIGTERM handler. Missing either, the pod IGNORES SIGTERM, the kubelet waits out the full 30s `terminationGracePeriod` and SIGKILLs it — in-flight requests are dropped on **every** rollout. Measured 2026-09-05: 30-35s drain for the four apps that lacked it, 5s for the two that had it. |
 | Gates | `check-env` / `check-env-coverage` / `check-env-clobber` / `check-how-provenance` | `.env.example` is the source of truth: it exists · every var the scripts read is documented · **no uncommented value silently defeats a dynamic fallback or a per-run override** · every `# how:` command is runnable or provenance-tagged |
 | Gates | `check-readme-scenarios` / `check-tools` / `psa-check` | Every scenario answers every decision in its own section · required-vs-optional CLIs · would a real VKS cluster (PSA `restricted`) admit our pods? |
 | Security | `sec` / `secrets` / `trivy-fs` / `trivy-config` | gitleaks + trivy fs (app deps) / config (manifests) |

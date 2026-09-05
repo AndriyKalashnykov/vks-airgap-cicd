@@ -12,7 +12,11 @@ edition = "2021"
 # stable (0.9 does NOT exist), tokio 1.53.1.
 [dependencies]
 axum = "0.8.9"
-tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "time"] }
+# For the SIGTERM handler (see src/main.rs). ALREADY in Cargo.lock and in the builder's
+# vendored registry, so it costs no fetch — unlike tokio's "signal" feature, which pulls
+# signal-hook-registry and would break the offline build.
+libc = "0.2.189"
 
 [dev-dependencies]
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net"] }
