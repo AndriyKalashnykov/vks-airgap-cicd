@@ -158,6 +158,7 @@ gitea_url="${GITEA_URL:-$(ingress_url "${GITEA_HOST:-gitea.vks.local}")}"
 # ArgoCD is on its OWN LoadBalancer (like real VKS): KinD publishes ARGOCD_LB_IP to .env.state
 # (scheme https unless ARGOCD_INSECURE=1); a real lab uses the lab's own ArgoCD URL.
 argo_scheme="https"; [ "${ARGOCD_INSECURE:-0}" = "1" ] && argo_scheme="http"
+_argo_tls_flag=0   # set when the URL is https AT A BARE IP; the footnote below keys on THIS, not on text
 # ⚠️ ARGOCD_SERVER IS TESTED FIRST, AND THE ORDER IS THE FIX (B168). It used to be the other
 # way round, so a DISCOVERED, file-sourced ARGOCD_LB_IP outranked an operator's EXPLICIT
 # ARGOCD_SERVER — inverting this repo's own rule that config may supply a DEFAULT but may not
@@ -190,6 +191,29 @@ else
 fi
 _probe_t0=$(date +%s 2>/dev/null || echo 0)
 
+# _argo_tls_note — append a SHORT marker when the ArgoCD URL is https AT A BARE IP.
+# WHY AN IP IS THE DISCRIMINATOR, measured 2026-09-05 against this lab's live ArgoCD:
+#     subject/issuer  O = Argo CD   (self-signed)
+#     SANs            DNS:localhost, argocd-server, argocd-server.<ns>, ...   -- NO IP SAN
+#     curl https://<ip>/     -> rc=60, http=000      (cannot verify)
+#     curl -sk https://<ip>/ -> http=200             (works with --insecure)
+# So a BARE IP can never verify against that cert, whereas a NAME the cert carries can. We only
+# mark what we know: the IP case is a fact, the name case is not ours to assert (an operator may
+# have installed a properly-named cert).
+# ⚠️ THE SENTENCE GOES IN A FOOTNOTE, NOT THE CELL. creds.sh already states the rule -- "A SENTENCE
+# IN A URL COLUMN DESTROYS THE TABLE" -- and an adversary measured the table at 171 chars with ONE
+# data row, so it already wraps at 80 AND 120. This marker is 22 chars.
+# ⚠️ AND --insecure IS NOT A BLANKET REMEDY. docs/scenario-2.md:482 records that the WRITE path does
+# not accept it, so this must never read as "just add --insecure and you are fine". The footnote
+# says what the verifying path actually needs.
+_argo_tls_note() {
+  case "$1" in
+    https://[0-9]*.[0-9]*.[0-9]*.[0-9]*|https://[0-9]*.[0-9]*.[0-9]*.[0-9]*[:/]*)
+      printf ' (--insecure; see note)' ;;
+    *) : ;;
+  esac
+}
+
 if [ -n "${ARGOCD_SERVER:-}" ]; then
   # A REAL LAB. ARGOCD_LB_IP is published only by the KinD flow (07-install-argocd.sh), so on a lab
   # this used to print the literal '<your lab's ArgoCD URL>' — while the operator had ALREADY told us
@@ -199,6 +223,8 @@ if [ -n "${ARGOCD_SERVER:-}" ]; then
     http://*|https://*) argocd_url="$ARGOCD_SERVER" ;;
     *)                  argocd_url="${argo_scheme}://${ARGOCD_SERVER}" ;;
   esac
+  _argo_note="$(_argo_tls_note "$argocd_url")"
+  if [ -n "$_argo_note" ]; then argocd_url="${argocd_url}${_argo_note}"; _argo_tls_flag=1; fi
 elif [ -n "${ARGOCD_LB_IP:-}" ]; then
   # KinD publishes this (07-install-argocd.sh). It is a DEFAULT — it applies only when the
   # operator has not said otherwise.
@@ -226,7 +252,11 @@ else
     fi
   fi
   if [ -n "$_argo_ip" ]; then
-    argocd_url="${argo_scheme}://${_argo_ip} (discovered from the cluster)"
+    # ONE parenthetical, not two. `(discovered) (--insecure; see note)` reads as a stutter and
+    # cost 24 columns in a table already measured at 171 chars with one data row.
+    _argo_note="$(_argo_tls_note "${argo_scheme}://${_argo_ip}")"
+    if [ -n "$_argo_note" ]; then argocd_url="${argo_scheme}://${_argo_ip} (discovered; --insecure — see note)"; _argo_tls_flag=1
+    else                          argocd_url="${argo_scheme}://${_argo_ip} (discovered)"; fi
   else
     # A SENTENCE IN A URL COLUMN DESTROYS THE TABLE. Keep the cell short; the instruction goes in a footnote.
     argocd_url="<not set>"
@@ -658,9 +688,16 @@ add_row "Harbor" "$harbor_url" "$harbor_user" "$harbor_pw" "$(_reach_harbor)"
 # Render the PROVENANCE with the value. A bare secret here reads as "this is your password",
 # and on the primary runbook it is the pre-rotation one from Step 5 onward — which is the state
 # that produced a live 401 and a backlog row proposing a network probe to detect it.
-if [ "${_argo_initial:-0}" = 1 ] && [ -n "$argo_pw" ]; then
-  argo_pw="${argo_pw}   <- INITIAL secret; superseded if you ran 'argocd account update-password'"
-fi
+# ⚠️ THE SENTENCE LEAVES THE CELL. It used to be appended to the PASSWORD cell -- 77 characters
+# inside a column whose width is a max over all rows. An adversary measured the table at 171 chars
+# with ONE data row (header 171, Harbor row 170), i.e. already wrapping on BOTH 80- and 120-col
+# terminals, and identified this sentence -- not the URL markers -- as the offender. creds.sh's own
+# rule at the ArgoCD URL arm says it: "A SENTENCE IN A URL COLUMN DESTROYS THE TABLE. Keep the cell
+# short; the instruction goes in a footnote." That rule was enforced for the URL column and violated
+# for the Password column. The provenance is NOT dropped: the flag survives and the footnote states
+# it in full, where it costs no width.
+_argo_initial_note=0
+if [ "${_argo_initial:-0}" = 1 ] && [ -n "$argo_pw" ]; then _argo_initial_note=1; fi
 add_row "ArgoCD" "$argocd_url" "$argo_user"   "$argo_pw"   "$(_reach_argocd)"
 # CAPTURE INTO VARIABLES FIRST -- do NOT inline these `$( )` into add_row's ARGUMENTS.
 # MEASURED 2026-08-22 with a newly-enrolled app whose app_health_path() branch did not yet exist:
@@ -784,6 +821,28 @@ if [ -n "${_un_oth:-}" ]; then
   printf '\n  no address configured here for: %s\n' "$_un_oth"
   printf '    Again a fact about THIS REPORT, not about the cluster.\n'
 fi
+
+# ---- notes the TABLE CELLS point at. A cell may carry a short marker; the sentence lives here.
+# A marker that says "see note" with no note is a citation that resolves to nothing -- worse than no
+# marker at all, because it reads as sourced.
+if [ "${_argo_initial_note:-0}" = 1 ]; then
+  printf '\n  note: the ArgoCD password above is the INITIAL admin secret. If anyone has run\n'
+  printf "        'argocd account update-password', it has been superseded and will 401.\n"
+fi
+# ⚠️ KEYED ON A FLAG, NOT ON THE RENDERED STRING. This case used to match the URL text, and the
+# very next edit -- rewording the marker from `(--insecure; see note)` to
+# `(discovered; --insecure — see note)` -- silently stopped matching it. MEASURED: the note count
+# went to 0 while the cell still said "see note", i.e. a citation resolving to NOTHING, which reads
+# as sourced and is worse than no marker at all. Display text is not a control channel.
+case "${_argo_tls_flag:-0}" in
+  1)
+    printf '\n  note: ArgoCD is reached at a BARE IP above. Its serving certificate is self-signed\n'
+    printf '        and carries DNS names only (no IP SAN), so TLS can never verify against an IP.\n'
+    printf '        Measured: `curl https://<ip>/` -> rc=60; `curl -sk https://<ip>/` -> HTTP 200.\n'
+    printf '        So --insecure lets you LOG IN and is NOT a general remedy -- a verifying path\n'
+    printf '        needs a NAME the certificate carries, plus ARGOCD_CA_FILE. Giving ArgoCD a DNS\n'
+    printf '        record is the real fix; nothing in this repo creates one for it today.\n' ;;
+esac
 
 # --- footnote: WHAT IS NOT REAL YET, and whose job it is to fix ------------------------
 #
