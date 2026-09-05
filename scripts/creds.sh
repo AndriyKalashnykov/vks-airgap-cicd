@@ -728,12 +728,62 @@ printf '  %-*s  %-*s  %-*s  %-*s  %s\n' \
   "$w3" "$(printf '%*s' "$w3" '' | tr ' ' '-')" \
   "$w4" "$(printf '%*s' "$w4" '' | tr ' ' '-')" \
   "$(printf '%*s' 9 '' | tr ' ' '-')"
+# ── PRINT WHAT IS AVAILABLE; SUMMARISE THE REST IN ONE LINE ────────────────────────────────────
+# ⚠️ The contract is "show a picture of the cluster and let me access what is available". Eight rows
+# for services that do not exist are NOISE, and they buried the two rows that mattered: measured,
+# 55 lines of which 2 carried a usable URL+credential. test-creds-show:160 states the licence for
+# this explicitly -- "Nothing serves those hosts (the ingress is OPTIONAL). Say <needs ingress>, OR
+# SAY NOTHING." So: reachable rows get the table; the rest get one line naming them and the command.
+# ⚠️ They are SUMMARISED, NOT DROPPED. creds.sh's own history records that deleting rows outright is
+# a defect (a degraded registry read must not delete Gitea/Harbor/ArgoCD), and an operator still
+# needs to know the thing EXISTS and is merely unreachable.
+_un_ing=""; _un_oth=""
 while IFS=$'\t' read -r c1 c2 c3 c4 c5; do
   [ -n "$c1" ] || continue
+  # ⚠️ SPLIT ON "IS THERE AN ADDRESS TO GIVE YOU", **NOT** ON THE PROBE RESULT.
+  # A first version sent every non-`serving` row to the summary line, and test-creds-show caught it
+  # immediately: with an ingress PRESENT but the probe unable to confirm (a fixture, no network,
+  # CREDS_NO_PROBE), the *.vks.local URLs DISAPPEARED -- "over-correcting into silence is its own
+  # defect", which this file already records. A probe that COULD NOT ASK is not a service that said
+  # no. So: if the row has a real URL, it stays in the table WITH its reachability, whatever that
+  # says; only rows with nothing to show (<needs ingress>, <not set>) collapse into one line.
+  # THE ROW IS ALWAYS PRINTED. The summary below is an ADDITION, never a replacement.
+  # MEASURED 2026-09-05 (adversary, CRITICAL): the previous form DROPPED the row whenever the URL
+  # cell was empty -- and the row carries the PASSWORD. Two runs differing only in ARGOCD_SERVER:
+  #     unset        -> `grep -c ZZARGOSECRET` = 0   (the credential was GONE from the report)
+  #     =10.0.0.9    -> `grep -c ZZARGOSECRET` = 1
+  # The password was in a variable in BOTH runs. The URL is the half a user can often discover for
+  # themselves; the credential is the half they cannot get anywhere else -- so the drop threw away
+  # the irreplaceable one. The block's own comment claimed "SUMMARISED, NOT DROPPED"; measured, the
+  # summary line carries ONLY the service name -- no username, no password, no reachability.
+  # It also left the --raw nested-sentinel SECURITY assertion permanently vacuous (no row => nothing
+  # to assert on: a red converted into a green that can never fire) and re-opened B517.
   printf '  %-*s  %-*s  %-*s  %-*s  %s\n' "$w1" "$c1" "$w2" "$c2" "$w3" "$c3" "$w4" "$c4" "$c5"
+  case "$c2" in
+    '<needs ingress>') _un_ing="${_un_ing:-}${_un_ing:+, }${c1}" ;;
+    '<not set>'|'')    _un_oth="${_un_oth:-}${_un_oth:+, }${c1}" ;;
+  esac
 done <<EOF
 $rows
 EOF
+# ⚠️ THE NOTE MAY ONLY STATE A FACT ABOUT THIS REPORT, NEVER ABOUT THE CLUSTER (B517, and it
+# took two PRs to land). "no ingress, so no URL to show" READS AS a cluster claim -- and we
+# frequently cannot support it: when the guest cluster is unreachable we do not know whether an
+# ingress exists, whether the component is installed, or whether it is happily serving. What we
+# DO know is that no ingress address is configured HERE, which is a fact about this box.
+# The phrase "not about the cluster" is asserted by STATE 12 in test-creds-show.sh; so is
+# "port-forward" (the only remedy correct in every persona). Do not drop either.
+if [ -n "${_un_ing:-}" ]; then
+  printf '\n  no URL in this report for: %s\n' "$_un_ing"
+  printf '    That is a fact about THIS REPORT, not about the cluster: no ingress address is\n'
+  printf '    configured here, so there is no host to print. Those services may be serving.\n'
+  printf '    Give them a URL:  make install-ingress\n'
+  printf '    Reach one now:    kubectl -n <ns> port-forward svc/<svc> 8080:<port>\n'
+fi
+if [ -n "${_un_oth:-}" ]; then
+  printf '\n  no address configured here for: %s\n' "$_un_oth"
+  printf '    Again a fact about THIS REPORT, not about the cluster.\n'
+fi
 
 # --- footnote: WHAT IS NOT REAL YET, and whose job it is to fix ------------------------
 #
@@ -788,12 +838,9 @@ else
     # read-only and correct in EVERY persona, which is why the arm below has always carried it and
     # why a first version of this note deleting it was a regression: it repaired the CLAIM and broke
     # the ACTION.
-    printf '\n  note: this box has no ingress LB IP — the state overlay that would carry one was REFUSED\n'
-    printf '        (stamped for a different cluster), so the *.vks.local URLs cannot be shown. This says\n'
-    printf '        NOTHING about whether the cluster HAS an ingress; this report simply cannot see one.\n'
-    printf '        Reach the services without it:\n'
-    printf '            kubectl -n <namespace> port-forward svc/<service> 8080:<port>\n'
-    printf '        Harbor and ArgoCD are unaffected — own LBs.\n'
+    # ⚠️ the ingress explanation now lives in the ONE grouped line above the table.
+    # It was printed twice: once there and once here, in different words.
+    :
     else
     # ⚠️ THIS BRANCH IS THE ONE THE MATRIX HITS, AND IT WAS LEFT UNREPAIRED. The B517 fix repaired the
     # REFUSED arm directly above and stopped there, so the false world-claim survived in the arm that
@@ -808,12 +855,9 @@ else
     # and this report has no other evidence about the cluster's ingress -- so it must not make one.
     # The port-forward STAYS: a first repair of the sibling arm deleted it and that was a regression,
     # because it is the only remedy correct in every persona (:681-687 records it).
-    printf '\n  note: this box has no ingress LB IP, so Gitea / Tekton / the apps have no *.vks.local\n'
-    printf '        URL to show. That is a fact about THIS REPORT, not about the cluster: nothing here\n'
-    printf '        has asked it whether an ingress exists. Reach the services without one:\n'
-    printf '            kubectl -n <namespace> port-forward svc/<service> 8080:<port>\n'
-    printf '        To find out, or to install one: make verify-ingress / make install-ingress\n'
-    printf '        (Harbor and ArgoCD are unaffected — own LBs).\n'
+    # ⚠️ The ingress explanation now lives in the ONE grouped line printed above, beside the
+    # rows it concerns. It used to be said TWICE, in different words, in the same report.
+    :
     fi
   fi
   if [ "$argocd_url" = "<not set>" ]; then
@@ -967,6 +1011,7 @@ _lab_add "vcf CLI"   "(the VKS / SSO account)"  "$(_lab_plain "${VKS_USERNAME:-}
 # The LISTING MUST NOT BE A PIPELINE. `kubectl ... | sed | grep | head` yields HEAD's status, so the
 # rc is meaningless before it is even discarded. Capture kubectl alone, read its rc, then filter.
 _ssh_pw=""; _lab_err=""; _ssh_sec=""; _ssh_state="not probed"; _ssh_tok="<not probed>"
+_ssh_ep="<not probed>"   # the ENDPOINT cell: an address, or a marker naming why there is none
 if [ "$_no_probe_snapshot" = "1" ]; then
   _ssh_state="not probed (CREDS_NO_PROBE=1)"; _ssh_tok="<not probed>"
 elif [ -z "${VKS_NAMESPACE:-}" ]; then
@@ -1008,6 +1053,35 @@ else
         fi
       fi
     fi
+
+    # ---- node ADDRESS: what the Endpoint column is supposed to contain ---------------------
+    # THE ENDPOINT COLUMN MAY NEVER CARRY A LOOKUP KEY. This row used to render $_ssh_sec -- a
+    # SECRET NAME -- under a header reading `Endpoint` (verified: header at the `_lab_add` widths
+    # block below), so the report invited `ssh vmware-system-user@cicd-gc1-ssh-password`, which
+    # cannot resolve to anything. The secret name is PROVENANCE and already appears in the note
+    # under the table; it does not belong in a column that promises an address.
+    # NOTE THE RULE IS "NO LOOKUP KEY", NOT "ONLY AN ADDRESS": the sibling `vcf CLI` row correctly
+    # renders `(the VKS / SSO account)` because a local binary has no endpoint at all.
+    # WE DO NOT CLAIM ROUTABILITY. Whether a jump box can reach the node network is UNVERIFIED
+    # here, and asserting reachability we have not measured is exactly how this report earned the
+    # complaint that started this work. We print what the cluster says, and nothing more.
+    _ssh_verr="$(mktemp)"
+    _ssh_addr="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
+                   -n "$VKS_NAMESPACE" get vm \
+                   -o jsonpath='{range .items[*]}{.status.network.primaryIP4}{" "}{end}' \
+                   </dev/null 2>"$_ssh_verr")" && _ssh_vrc=0 || _ssh_vrc=$?
+    # squeeze the jsonpath separators; an item with no primaryIP4 contributes an empty field.
+    _ssh_addr="$(printf '%s' "${_ssh_addr:-}" | tr -s ' \n\t' ' ' | sed 's/^ *//; s/ *$//')"
+    if [ "${_ssh_vrc:-1}" -ne 0 ]; then
+      # An absence is a claim about the QUERY first. A tenant may simply not be allowed to list VMs.
+      if grep -qi 'forbidden' "$_ssh_verr" 2>/dev/null; then _ssh_ep="<not allowed to read addresses>"
+      else                                                   _ssh_ep="<could not read node addresses>"; fi
+    elif [ -z "$_ssh_addr" ]; then
+      _ssh_ep="<no node address yet>"
+    else
+      _ssh_ep="$_ssh_addr"
+    fi
+    rm -f "$_ssh_verr"
   fi
 fi
 # `vmware-system-user` — VERIFIED 2026-08-20 on VKS GUEST NODES, and scoped to that claim: `ssh -i <ssh-privatekey from the
@@ -1022,13 +1096,18 @@ fi
 # nothing was tried, so "not readable" would imply a failed read that never happened, which is the
 # very conflation this block exists to fix.
 if [ -n "$_ssh_pw" ]; then
-  _lab_add "guest node SSH" "$(_lab_plain "$_ssh_sec")" "vmware-system-user" "$(_lab_secret "$_ssh_pw")"
+  _lab_add "guest node SSH" "$(_lab_plain "$_ssh_ep")" "vmware-system-user" "$(_lab_secret "$_ssh_pw")"
 else
-  case "$_ssh_state" in
-    "not probed"*) _ssh_pwcell="<not attempted>" ;;
-    *)             _ssh_pwcell="<not readable>" ;;
-  esac
-  _lab_add "guest node SSH" "$_ssh_tok" "vmware-system-user" "$_ssh_pwcell"
+  # `_ssh_tok` IS the classification, and it is finer than the two buckets this used to carry:
+  # <forbidden> / <auth failed> / <stale CA> / <no kubeconfig> / <none> / <no key> / <empty>, versus
+  # a flat <not readable>. It lived in the ENDPOINT column until 2026-09-05, which was the wrong
+  # home -- "why the password is missing" is a fact about the PASSWORD, not an address. Moving it
+  # here preserves every distinction AND keeps the NOT-ATTEMPTED vs ATTEMPTED-AND-FAILED split the
+  # previous form existed to make: every not-probed arm already sets _ssh_tok="<not probed>", so
+  # nothing here implies a read that never happened. Without this move _ssh_tok would be assigned
+  # on eight paths and read on none.
+  _ssh_pwcell="$_ssh_tok"
+  _lab_add "guest node SSH" "$_ssh_ep" "vmware-system-user" "$_ssh_pwcell"
 fi
 
 # Widths, mirroring the table above. `if/then/fi` and NOT `[ ] && x` — a false test as the loop
