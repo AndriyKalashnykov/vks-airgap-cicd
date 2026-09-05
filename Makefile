@@ -713,6 +713,10 @@ trust-harbor: check-env ## Make YOUR engine trust the self-signed Harbor — and
 harbor-robot: ## Create a least-privilege Harbor CI robot account (push+pull) → secrets/harbor-robot.env AND published to .env (nothing to copy)
 	@$(SCRIPTS)/22-harbor-robot.sh
 
+.PHONY: harbor-robot-ensure
+harbor-robot-ensure: ## Same as harbor-robot but IDEMPOTENT: skips (loudly) when a working credential already exists. What install-all runs; `harbor-robot` stays strict
+	@harbor_robot_ensure=1 $(SCRIPTS)/22-harbor-robot.sh
+
 .PHONY: harbor-reachable
 harbor-reachable: ## Read-only: is HARBOR_URL actually SERVING? (scenario-1 §4 — a REINSTALLED Harbor takes a NEW LoadBalancer IP). Needs no cluster
 	@$(SCRIPTS)/04-harbor-reachable.sh
@@ -981,7 +985,7 @@ e2e-sneakernet-both: ## The sneakernet OS matrix: the SAME carried tarball unpac
 # `make verify` still proves the GitOps loop over a port-forward with no ingress at all; the
 # ingress is what makes the result REACHABLE, which is the difference between a green run and a
 # usable demo.
-install-all: preflight selfbuilt-image mirror mirror-verify builder-image vks-login platform install-headlamp install-ingress gitops ## Run the complete air-gap install end to end (preflight FIRST, mirror integrity-verified, then platform -> ingress -> headlamp -> gitops)
+install-all: preflight selfbuilt-image mirror mirror-verify builder-image vks-login harbor-robot-ensure platform install-headlamp install-ingress gitops ## Run the complete air-gap install end to end (preflight FIRST, mirror integrity-verified, CI robot ensured BEFORE platform bakes the push/pull Secrets, then platform -> headlamp -> ingress -> gitops)
 	@echo ""
 	@echo "  ── install-all finished. WHAT IS AND IS NOT RUNNING ──────────────────────────"
 	@echo "  Installed and serving:  Gitea, Tekton, headlamp, the ingress, and (already"

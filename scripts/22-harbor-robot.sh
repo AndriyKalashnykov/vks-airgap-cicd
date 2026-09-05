@@ -36,7 +36,64 @@ OUT_FILE="${HARBOR_ROBOT_OUT:-secrets/harbor-robot.env}"
 # harbor_username_is_robot (lib/harbor.sh) — SINGLE-SOURCED with the guard in
 # 28-harbor-admin-password.sh, which had drifted to a DIFFERENT SPELLING of this same
 # predicate, so neither guard was findable by grepping the other.
+# ENSURE MODE (harbor_robot_ensure=1, set only by `make harbor-robot-ensure`, which is what
+# `install-all` runs). `make harbor-robot` itself stays STRICT: the operator asked for a robot and
+# deserves a refusal, not a shrug.
+#
+# ⚠️ THE SKIP IS GATED ON A VERDICT, NEVER ON A STRING OR ON A FILE. An idea-round adversary
+# refuted both of the predicates this was first written with:
+#   * `harbor_username_is_robot` (lib/harbor.sh:244) is `case $x in 'robot$'*)` — a PURE STRING TEST
+#     that makes ZERO API calls. CLAUDE.md records the measured state it cannot see: a 12-day-old
+#     robot credential that read "works" from three separate probes and was DEAD (UNAUTHORIZED on
+#     push). Skipping on it ships an unverified credential into `platform`, which BAKES it into
+#     `harbor-dockerconfig` (60-configure-tekton.sh:80,89) and the per-app pull Secret
+#     (70-configure-argocd.sh) — so the failure surfaces as ImagePullBackOff, far from here.
+#   * `[ -f "$OUT_FILE" ]` is worse: MEASURED, nothing in this repo READS harbor-robot.env
+#     (grep -rn finds only the writer, a comment, a test fixture and help text). The credential is
+#     consumed from .env. And `secrets/` survives every lab re-cut while each cut mints a FRESH
+#     Harbor, so a present file is compatible with a Harbor that has never seen that robot.
+#
+# harbor_auth_verdict (lib/harbor.sh:251) returns THREE outcomes, and "could not tell" is not "fine".
+# ⚠️ Use harbor_auth_verdict / harbor_auth_ok, NEVER harbor_auth_report — lib/harbor.sh:213 records
+# the measured fake-green where a wrong CA *and* a wrong password still returned 0.
+# lowercase ON PURPOSE, matching argocd-password.sh: an UPPERCASE name reads as an OPERATOR KNOB to
+# check-env-coverage, which then (correctly) demands it be documented in .env.example. The
+# operator-facing knob is the TARGET (`make harbor-robot-ensure`); this variable is internal plumbing.
+ensure_mode() { [ "${harbor_robot_ensure:-0}" = 1 ]; }
+
+# ensure_skip_if_credential_works <why> — in ensure mode only. Exits 0 on `accepted`, dies otherwise.
+# SCOPE, stated so the green is not over-read: `accepted` maps 200 AND 403 (lib/harbor.sh:260) because
+# a project-scoped robot is authenticated and still 403s a system endpoint. It proves AUTHENTICATION,
+# not authorization to PUSH — only a real push discriminates that, and `mirror` does it two steps later.
+ensure_skip_if_credential_works() {
+  local why="$1" v
+  v="$(harbor_auth_verdict)"
+  case "$v" in
+    accepted)
+      log_warn "harbor-robot: SKIPPING the mint — ${why}, and the credential in .env AUTHENTICATES."
+      log_warn "  scope: this proves the credential is accepted (HTTP 200/403), NOT that it may PUSH."
+      log_warn "  'make mirror' performs the first real push and is where a permissions fault surfaces."
+      exit 0 ;;
+    rejected)
+      die "harbor-robot: ${why}, but Harbor REJECTED that credential (HTTP 401).
+       A robot secret is shown ONCE and cannot be read back, so there is nothing to recover locally.
+       Refresh it in the Harbor UI (Administration -> Robot Accounts -> Refresh Secret) and put the new
+       value in .env as HARBOR_USERNAME/HARBOR_PASSWORD, or ask whoever minted it. If you are a TENANT,
+       this is a REQUEST to your platform team — there is no self-service path (see docs/scenario-2.md)." ;;
+    *)
+      die "harbor-robot: ${why}, but the credential could NOT BE CHECKED: ${v#unchecked:}.
+       'could not tell' is not 'fine' — continuing would bake an unverified credential into the
+       pipeline's push Secret and the workload's pull Secret. Resolve the reason above and re-run." ;;
+  esac
+}
+
 if harbor_username_is_robot; then
+  if ensure_mode; then
+    # The verdict needs harbor_setup (CA args + the auth probe), so do it here and never fall through.
+    HARBOR_TMP="$(mktemp -d)"; trap 'rm -rf "$HARBOR_TMP"' EXIT
+    harbor_setup "$HARBOR_TMP"
+    ensure_skip_if_credential_works "HARBOR_USERNAME is already the robot '${HARBOR_USERNAME}'"
+  fi
   die "HARBOR_USERNAME is '${HARBOR_USERNAME}', a ROBOT — and a robot cannot mint robots.
        This is the credential Step 9 told you to save, so this is the expected state after a first run.
        Set HARBOR_USERNAME/HARBOR_PASSWORD back to the Harbor ADMIN for this one command."
@@ -120,6 +177,18 @@ EOF
   log_error "       app: bare <app>), so one project holds both safely."
   log_error "    2. ASK your platform team for a SYSTEM-level robot with push+pull on both projects,"
   log_error "       and put its name + secret in .env as HARBOR_USERNAME / HARBOR_PASSWORD."
+  # ensure mode: this is not an error, it is "we cannot self-service least-privilege HERE".
+  # MEASURED: .env.example:138,148 ship HARBOR_INFRA_PROJECT=cicd and HARBOR_APP_PROJECT=apps —
+  # two DISTINCT projects — so a project-admin tenant reaches this branch ON DEFAULT SETTINGS.
+  # Today that tenant CAN run install-all (they push with their own credential; 22-selfbuilt-push.sh
+  # and 21-mirror-push.sh already tolerate a 403 from ensure_project). Dying here would hard-stop
+  # the one command scenario-2 tells them to run, on a step they never asked for. RULE ZERO-B.
+  if ensure_mode; then
+    log_warn "harbor-robot: CONTINUING WITHOUT A ROBOT — the guidance above applies, but this is not"
+    log_warn "  fatal to the install. The pipeline will authenticate as '${HARBOR_USERNAME}' instead of a"
+    log_warn "  least-privilege robot. Run 'make harbor-robot' (strict) once you can act on option 1 or 2."
+    exit 0
+  fi
   die "cannot create a robot that spans two projects without Harbor system-admin."
 fi
 
@@ -150,10 +219,20 @@ if [ -z "$secret" ] || [ -z "$rname" ]; then
     401|403)
       die "Harbor refused to create robot '$ROBOT_NAME' (http $(harbor_last_code)): you do not have permission. If you are a project-admin, you may only create a robot in a project you administer — see the guidance above."
       ;;
-    409) die "$(robot_exists_message)" ;;
+    409)
+      # MEASURED (walk evidence, 2026-08-28 certified run): matrix rows 2/4/5/6 land here — the robot
+      # was minted by row 1/3 on the SAME cut, and walk-matrix.sh DELIBERATELY excludes gitignored
+      # secrets/ from the box (:733), carrying back only vks.kubeconfig and harbor-ca.crt. So the
+      # secret file is absent BY CONSTRUCTION and the old code died. Those four rows are certified
+      # green today only because walk-doc.sh:140 skips the DOCUMENTED `make harbor-robot` line — a
+      # skip it cannot apply to a step buried inside `install-all`.
+      if ensure_mode; then ensure_skip_if_credential_works "robot '${ROBOT_NAME}' already exists in Harbor"; fi
+      die "$(robot_exists_message)" ;;
   esac
   case "$msg" in
-    *conflict*|*exists*|*already*) die "$(robot_exists_message)" ;;
+    *conflict*|*exists*|*already*)
+      if ensure_mode; then ensure_skip_if_credential_works "robot '${ROBOT_NAME}' already exists in Harbor"; fi
+      die "$(robot_exists_message)" ;;
     *) die "failed to create robot '$ROBOT_NAME' (http $(harbor_last_code)): $msg" ;;
   esac
 fi
