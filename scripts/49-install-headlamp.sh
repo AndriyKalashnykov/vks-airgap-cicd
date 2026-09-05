@@ -35,6 +35,18 @@
 #    rendered and confirmed to produce all four required fields, so headlamp does NOT need a
 #    `baseline` namespace.
 # ─────────────────────────────────────────────────────────────────────────────────────────────
+# ⚠️ SINGLE-NAMESPACE ONLY, DELIBERATELY, AND THE OBVIOUS FIX DOES NOT WORK.
+# The CHART's own ClusterRoleBinding renders `{{ include "headlamp.fullname" . }}-admin` -> a
+# CLUSTER-SCOPED object named from the release. A second install in a second namespace therefore
+# fails with helm's "resource already exists ... belongs to release headlamp in namespace X".
+# The tempting fix -- vary the release name per namespace -- breaks the ROUTES: fullname derives
+# from the release, so the Service stops being `headlamp` while k8s/istio/*.yaml and
+# k8s/traefik/ingress.yaml all name `headlamp`. And `fullnameOverride` does not help either: it
+# pins fullname back to `headlamp`, which re-collides the very ClusterRoleBinding it was meant to
+# separate. So there is no override that gives distinct cluster-scoped names AND stable route
+# targets; the honest answer is to install headlamp ONCE per cluster.
+# It fails LOUDLY (helm refuses), which is why this is documented rather than guarded.
+# OUR OWN binding is namespace-suffixed (`headlamp-viewer-<ns>`) and is collision-free.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
