@@ -52,7 +52,10 @@ _show_secrets_snapshot="${SHOW_SECRETS:-0}"
 _no_probe_snapshot="${CREDS_NO_PROBE:-0}"
 
 # creds.sh had NO trap at all — the pre-existing `_argo_err` mktemp leaks on every error path.
-trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" 2>/dev/null || true' EXIT
+# ⚠️ _ssh_verr ADDED 2026-09-05. It was MY OWN leak, and it is precisely the class this trap was
+# introduced for (the pre-existing _argo_err mktemp leaked on every error path): any death between
+# its mktemp and its rm left a temp file per run.
+trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" "${_ssh_verr:-}" 2>/dev/null || true' EXIT
 
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
@@ -519,7 +522,7 @@ _cluster="not reachable (or KUBECONFIG unset)"
 # I twice mis-diagnosed this as a network/address problem and "fixed" it twice without fixing it;
 # every standalone probe was fast because an interactive shell's stdin is a terminal.
 if [ -n "${KUBECONFIG:-}" ] && have kubectl \
-   && kubectl --request-timeout=3s version -o json >/dev/null 2>&1 </dev/null; then
+   && timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s version -o json >/dev/null 2>&1 </dev/null; then
   _cluster="reachable — context '$(kubectl config current-context </dev/null 2>/dev/null || echo '?')'"
 fi
 
@@ -1188,14 +1191,22 @@ else
                    </dev/null 2>"$_ssh_verr")" && _ssh_vrc=0 || _ssh_vrc=$?
     # squeeze the jsonpath separators; an item with no primaryIP4 contributes an empty field.
     _ssh_addr="$(printf '%s' "${_ssh_addr:-}" | tr -s ' \n\t' ' ' | sed 's/^ *//; s/ *$//')"
+    # ⚠️ ONE address in the cell, the rest in the note. MY OWN BUG, caught by an adversary: the
+    # jsonpath collects EVERY node's primaryIP4 space-separated, so a 3-node guest cluster puts
+    # ~44 chars into a column whose width is a max over all rows -- re-creating the width defect
+    # fixed in the same session. It is also not pasteable into ssh.
+    _ssh_n=0; for _a in ${_ssh_addr:-}; do _ssh_n=$((_ssh_n + 1)); done
+    _ssh_first="${_ssh_addr%% *}"
     if [ "${_ssh_vrc:-1}" -ne 0 ]; then
       # An absence is a claim about the QUERY first. A tenant may simply not be allowed to list VMs.
       if grep -qi 'forbidden' "$_ssh_verr" 2>/dev/null; then _ssh_ep="<not allowed to read addresses>"
       else                                                   _ssh_ep="<could not read node addresses>"; fi
     elif [ -z "$_ssh_addr" ]; then
       _ssh_ep="<no node address yet>"
+    elif [ "$_ssh_n" -gt 1 ]; then
+      _ssh_ep="${_ssh_first} (+$((_ssh_n - 1)) more — see note)"
     else
-      _ssh_ep="$_ssh_addr"
+      _ssh_ep="$_ssh_first"
     fi
     rm -f "$_ssh_verr"
   fi

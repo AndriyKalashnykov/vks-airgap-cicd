@@ -32,8 +32,9 @@ _CREDS_REPO="$(pwd)"
 export REPO_ROOT="$PWD"
 
 fail=0
-ok()  { printf 'ok    %s\n' "$1"; }
-bad() { printf 'FAIL  %s\n' "$1" >&2; fail=1; }
+_ran=0
+ok()  { _ran=$((_ran + 1)); printf 'ok    %s\n' "$1"; }
+bad() { _ran=$((_ran + 1)); printf 'FAIL  %s\n' "$1" >&2; fail=1; }
 
 # The state overlay is the thing under test, so it must be OURS — and the way to make it ours is to
 # POINT SOMEWHERE ELSE, not to borrow the operator's file and promise to give it back.
@@ -938,10 +939,19 @@ fi
 # THE FOURTH FALSE CLAIM. Under a refusal the password WAS published -- for another cluster -- so
 # "check the state overlay" sent the operator to read a FOREIGN credential out of the file the
 # Context block has just said is not in play.
-if printf '%s' "$out" | grep -q 'not published — check the state overlay'; then
+# ⚠️ THIS WENT VACUOUS ON 2026-09-05 AND WAS CAUGHT THE SAME DAY. It asserted the ABSENCE of the
+# literal 'not published — check the state overlay'. That string was then shortened to
+# '<not published — see note>' when the password sentences moved to a footnote, so the grep could
+# never match again and the case passed unconditionally -- a guard measuring nothing.
+# An absence-only assertion cannot distinguish "the product is right" from "my needle no longer
+# exists". It now carries a POSITIVE control: the REFUSED arm must SAY it refused.
+if printf '%s' "$out" | grep -q 'check the state overlay'; then
   bad "STATE 11: the password column still says 'check the state overlay' — that overlay is another cluster's, and this points the operator straight at its credential"
+elif ! printf '%s' "$out" | grep -q 'REFUSED'; then
+  bad "STATE 11: the report never says the overlay was REFUSED, so the negative above is VACUOUS —
+      it cannot tell a correct report from one whose wording merely changed."
 else
-  ok "STATE 11: the password column does not send the operator to a foreign cluster's credential"
+  ok "STATE 11: the password column does not send the operator to a foreign cluster's credential, and does say the overlay was REFUSED"
 fi
 # ...and the refused values must not leak into the table. HARBOR_URL=harbor.elsewhere belongs to the
 # other cluster; if it appears, the sink was sourced after all and the refusal is cosmetic.
@@ -951,6 +961,18 @@ else
   ok "STATE 11: and none of the refused overlay's values reached the table"
 fi
 
+# ⚠️ SAY HOW MANY ASSERTIONS ACTUALLY RAN. MEASURED by an adversary: mutating creds.sh to print
+# zero rows took `ok` from 52 to 24 while FAIL only went 2 -> 7 -- ~28 assertions VANISHED,
+# including BOTH secret-guard cases and the .env-immunity case, with no notice of any kind. A
+# reader sees a smaller count and no explanation. This file's own rule, stated on the pty case, is
+# that a skipped case saying nothing is indistinguishable from a passing one.
+# NO HARDCODED EXPECTED TOTAL, deliberately -- that number rots on the next assertion added, and a
+# rotting constant is how a gate starts lying. The honest signal is the count plus the fact that
+# the fail-fast block was entered.
+if [ "$fail" != 0 ]; then
+  printf '\n  %s assertion(s) ran. The fail-fast block stops later STATES once one fails, so cases\n' "$_ran" >&2
+  printf '  after the first failure did NOT run -- fix the failure above and re-run for full coverage.\n' >&2
+fi
 if [ "$fail" = 0 ]; then
   printf '\nSUCCESS — creds-show tells the truth in every state (nothing installed / no ingress /\n         fully installed / UNSTAMPED overlay = the real-lab state / stamped-and-matching /\n         NO overlay but a POPULATED .env / a REACHABLE cluster / the LAB ACCESS rows)\n'
 else
