@@ -52,7 +52,10 @@ _show_secrets_snapshot="${SHOW_SECRETS:-0}"
 _no_probe_snapshot="${CREDS_NO_PROBE:-0}"
 
 # creds.sh had NO trap at all — the pre-existing `_argo_err` mktemp leaks on every error path.
-trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" 2>/dev/null || true' EXIT
+# ⚠️ _ssh_verr ADDED 2026-09-05. It was MY OWN leak, and it is precisely the class this trap was
+# introduced for (the pre-existing _argo_err mktemp leaked on every error path): any death between
+# its mktemp and its rm left a temp file per run.
+trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" "${_ssh_verr:-}" 2>/dev/null || true' EXIT
 
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
@@ -92,7 +95,7 @@ if [ -t 1 ] || [ "$_show_secrets_snapshot" = "1" ]; then _reveal=1; else _reveal
 # the annotation is appended OUTSIDE it.
 _mask() {
   if [ "$_reveal" = 1 ]; then printf '%s' "$1"
-  else printf '<hidden: not a terminal — re-run with SHOW_SECRETS=1>'; fi
+  else printf '<hidden: not a terminal; SHOW_SECRETS=1>'; fi
 }
 
 # ── _settle_note <indent> — the ONE place that names the remedies (B202 F3) ──────────────────────
@@ -144,7 +147,18 @@ fi
 _ing="${INGRESS_LB_IP:-}"
 _ing_live=1
 if [ -n "$_ing" ]; then
-  timeout 2 bash -c "exec 3<>/dev/tcp/${_ing}/${INGRESS_PROBE_PORT:-80}" 2>/dev/null || _ing_live=0
+  # ⚠️ GATED ON THE SNAPSHOT, and the literal 2 replaced by the documented variable.
+  # MEASURED 2026-09-05 (adversary, HIGH): with CREDS_NO_PROBE=1 -- which this report ITSELF
+  # advertises as "skip every probe and report configuration only" -- this call still ran. Two
+  # points, CREDS_NO_PROBE=1 in both: no INGRESS_LB_IP -> 0.190s; a black-holed INGRESS_LB_IP ->
+  # 2.188s. The delta IS this hardcoded `timeout 2`. So the product's own escape hatch did not
+  # reach it, the OFFLINE test suite dialled the operator's network from inside `make ci`, and
+  # the report printed "nothing probed" after having probed.
+  # `$_no_probe_snapshot` (:52) rather than the live variable, for the same reason SHOW_SECRETS is
+  # snapshotted: load_env's `set -a` can clobber it from the operator's .env.
+  if [ "$_no_probe_snapshot" != "1" ]; then
+    timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" bash -c "exec 3<>/dev/tcp/${_ing}/${INGRESS_PROBE_PORT:-80}" 2>/dev/null || _ing_live=0
+  fi
 fi
 ingress_url() {  # ingress_url <host> -> the URL, or an honest marker when no ingress exists
   # ⚠️ DO NOT WITHHOLD THE URL WHEN THE PROBE FAILS. A first version printed
@@ -158,6 +172,7 @@ gitea_url="${GITEA_URL:-$(ingress_url "${GITEA_HOST:-gitea.vks.local}")}"
 # ArgoCD is on its OWN LoadBalancer (like real VKS): KinD publishes ARGOCD_LB_IP to .env.state
 # (scheme https unless ARGOCD_INSECURE=1); a real lab uses the lab's own ArgoCD URL.
 argo_scheme="https"; [ "${ARGOCD_INSECURE:-0}" = "1" ] && argo_scheme="http"
+_argo_tls_flag=0   # set when the URL is https AT A BARE IP; the footnote below keys on THIS, not on text
 # ⚠️ ARGOCD_SERVER IS TESTED FIRST, AND THE ORDER IS THE FIX (B168). It used to be the other
 # way round, so a DISCOVERED, file-sourced ARGOCD_LB_IP outranked an operator's EXPLICIT
 # ARGOCD_SERVER — inverting this repo's own rule that config may supply a DEFAULT but may not
@@ -172,6 +187,47 @@ argo_scheme="https"; [ "${ARGOCD_INSECURE:-0}" = "1" ] && argo_scheme="http"
 # which os.sh:560 sources with no stamp at all), because every KinD sink carrying ARGOCD_LB_IP
 # also carries the stamp — the added conjuncts are true exactly when the bug fires. Inverting
 # the precedence repairs 3 of 3 with no stamp, no discriminator and no new mechanism.
+# ── TELL THE OPERATOR SOMETHING IS HAPPENING ───────────────────────────────────────────────────
+# ⚠️ Six seconds of SILENCE reads as HUNG, and this notice MUST PRECEDE THE FIRST BLOCKING CALL.
+# MEASURED: a first version sat just above the table and printed "checks done in 0s" while the
+# command had already taken 6.33 s -- the wait is the CLUSTER lookups below, not the reachability
+# probes. A progress line printed after the wait is decoration. This command exists to be run interactively when someone
+# wants in, so it must say what it is doing and bound the wait out loud. To STDERR deliberately:
+# stdout is the report, and test-creds-show captures it -- progress must not become data.
+# The numbers are the real bounds, read from the same variables the probes use, so this line cannot
+# drift from the behaviour it describes.
+if [ "${CREDS_NO_PROBE:-0}" = 1 ]; then
+  printf '  (CREDS_NO_PROBE=1 — reporting configuration only, nothing probed)\n' >&2
+else
+  printf '  checking what is reachable — up to %ss per endpoint, %ss per cluster call; a few seconds total.\n' \
+    "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" >&2
+  printf '  (set CREDS_NO_PROBE=1 to skip every probe and report configuration only)\n' >&2
+fi
+_probe_t0=$(date +%s 2>/dev/null || echo 0)
+
+# _argo_tls_note — append a SHORT marker when the ArgoCD URL is https AT A BARE IP.
+# WHY AN IP IS THE DISCRIMINATOR, measured 2026-09-05 against this lab's live ArgoCD:
+#     subject/issuer  O = Argo CD   (self-signed)
+#     SANs            DNS:localhost, argocd-server, argocd-server.<ns>, ...   -- NO IP SAN
+#     curl https://<ip>/     -> rc=60, http=000      (cannot verify)
+#     curl -sk https://<ip>/ -> http=200             (works with --insecure)
+# So a BARE IP can never verify against that cert, whereas a NAME the cert carries can. We only
+# mark what we know: the IP case is a fact, the name case is not ours to assert (an operator may
+# have installed a properly-named cert).
+# ⚠️ THE SENTENCE GOES IN A FOOTNOTE, NOT THE CELL. creds.sh already states the rule -- "A SENTENCE
+# IN A URL COLUMN DESTROYS THE TABLE" -- and an adversary measured the table at 171 chars with ONE
+# data row, so it already wraps at 80 AND 120. This marker is 22 chars.
+# ⚠️ AND --insecure IS NOT A BLANKET REMEDY. docs/scenario-2.md:482 records that the WRITE path does
+# not accept it, so this must never read as "just add --insecure and you are fine". The footnote
+# says what the verifying path actually needs.
+_argo_tls_note() {
+  case "$1" in
+    https://[0-9]*.[0-9]*.[0-9]*.[0-9]*|https://[0-9]*.[0-9]*.[0-9]*.[0-9]*[:/]*)
+      printf ' (--insecure; see note)' ;;
+    *) : ;;
+  esac
+}
+
 if [ -n "${ARGOCD_SERVER:-}" ]; then
   # A REAL LAB. ARGOCD_LB_IP is published only by the KinD flow (07-install-argocd.sh), so on a lab
   # this used to print the literal '<your lab's ArgoCD URL>' — while the operator had ALREADY told us
@@ -181,6 +237,8 @@ if [ -n "${ARGOCD_SERVER:-}" ]; then
     http://*|https://*) argocd_url="$ARGOCD_SERVER" ;;
     *)                  argocd_url="${argo_scheme}://${ARGOCD_SERVER}" ;;
   esac
+  _argo_note="$(_argo_tls_note "$argocd_url")"
+  if [ -n "$_argo_note" ]; then argocd_url="${argocd_url}${_argo_note}"; _argo_tls_flag=1; fi
 elif [ -n "${ARGOCD_LB_IP:-}" ]; then
   # KinD publishes this (07-install-argocd.sh). It is a DEFAULT — it applies only when the
   # operator has not said otherwise.
@@ -195,15 +253,24 @@ else
   _argo_ip=""
   if [ -n "${ARGOCD_KUBECONFIG:-}${KUBECONFIG:-}" ] && have kubectl; then
     _argo_ns="${ARGOCD_NAMESPACE:-}"
-    [ -n "$_argo_ns" ] || _argo_ns="$(KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s </dev/null \
+    [ -n "$_argo_ns" ] || _argo_ns="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" env KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s </dev/null \
         get svc -A -o jsonpath='{range .items[?(@.metadata.name=="argocd-server")]}{.metadata.namespace}{end}' 2>/dev/null || true)"
     if [ -n "$_argo_ns" ]; then
-      _argo_ip="$(KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s </dev/null -n "$_argo_ns" \
+      # ⚠️ `timeout` AS WELL AS `--request-timeout`. MEASURED 2026-09-05: this exact call took
+      # 9.17 s against an unreachable API server DESPITE --request-timeout=3s, because that flag
+      # bounds the API REQUEST, not the DNS resolution and TCP connect that precede it. It was the
+      # single largest cost in `make creds` (21.7 s total, of which the reachability probes are
+      # 0.02 s). An access command must never inherit an unbounded wait from a dead cluster.
+      _argo_ip="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" env KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s </dev/null -n "$_argo_ns" \
           get svc argocd-server -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
     fi
   fi
   if [ -n "$_argo_ip" ]; then
-    argocd_url="${argo_scheme}://${_argo_ip} (discovered from the cluster)"
+    # ONE parenthetical, not two. `(discovered) (--insecure; see note)` reads as a stutter and
+    # cost 24 columns in a table already measured at 171 chars with one data row.
+    _argo_note="$(_argo_tls_note "${argo_scheme}://${_argo_ip}")"
+    if [ -n "$_argo_note" ]; then argocd_url="${argo_scheme}://${_argo_ip} (discovered; --insecure — see note)"; _argo_tls_flag=1
+    else                          argocd_url="${argo_scheme}://${_argo_ip} (discovered)"; fi
   else
     # A SENTENCE IN A URL COLUMN DESTROYS THE TABLE. Keep the cell short; the instruction goes in a footnote.
     argocd_url="<not set>"
@@ -211,6 +278,14 @@ else
 fi
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
+# ⚠️ lib/harbor.sh is sourced for harbor_reachable_state() — the THREE-STATE reachability probe
+# (unresolved | silent | serving) that already existed and that this script structurally could not
+# call, because it sourced only os.sh and apps.sh. os.sh:1938 records that exact class as measured:
+# calling a harbor.sh function from a non-sourcing script is `command not found` under
+# `set -euo pipefail`, ON THE FAILURE PATH ONLY, which a green run never reaches.
+# VERIFIED side-effect-free to source (ran-it): rc=0, no output, no env change, +17 functions.
+# shellcheck source=scripts/lib/harbor.sh
+. "${SCRIPT_DIR}/lib/harbor.sh"
 tekton_url="$(ingress_url "${TEKTON_DASHBOARD_HOST:-tekton.vks.local}")"  # Tekton Dashboard (read-only UI)
 
 _sink="$(state_file)"
@@ -253,9 +328,18 @@ _unset_pw() {  # _unset_pw <VAR> -> what an unset password actually means, per f
   # in play. Reachable in B517's own scenario: on a KinD box 05-kind-up.sh GENERATES these into the
   # overlay (.env.example leaves them commented), so an operator who ran KinD and then pointed at a
   # lab lands here.
-  if [ "$_sink_refused" = 1 ]; then printf '<held by the REFUSED overlay — it is another cluster'"'"'s; do NOT use it>'
-  elif [ "$_have_sink" = 1 ]; then printf '<not published — check the state overlay>'
-  else printf '<generated at install (KinD) — or set %s in .env for a real lab>' "$1"; fi
+  # ⚠️ SHORT CELL, SENTENCE IN THE FOOTNOTE. These arms were 40-76 chars inside a column whose
+  # width is a max over ALL rows, and an adversary measured the table at 171-173 chars -- wrapping
+  # on BOTH 80- and 120-col terminals -- with the nothing-installed arm (the COMMONEST state) the
+  # dominant driver. creds.sh already states the rule at the ArgoCD URL arm: "A SENTENCE IN A URL
+  # COLUMN DESTROYS THE TABLE. Keep the cell short; the instruction goes in a footnote." It was
+  # enforced for the URL column and violated here.
+  # NOTHING IS LOST: the footnote re-derives WHICH arm fired from the same two globals
+  # ($_sink_refused, $_have_sink). It cannot use a flag set in here -- `_unset_pw` is always
+  # called inside `$( )`, a SUBSHELL, so an assignment could never escape.
+  if [ "$_sink_refused" = 1 ]; then printf '<REFUSED overlay — see note>'
+  elif [ "$_have_sink" = 1 ]; then printf '<not published — see note>'
+  else printf '<generated at install — see note>'; fi
 }
 harbor_user="${HARBOR_USERNAME:-admin}"
 # The `:-` form cannot be kept: it would feed the PLACEHOLDER through _mask and hide the one thing a
@@ -290,11 +374,37 @@ _argo_rc=0; _argo_err="$(mktemp)"
 # in `$( )` -- always a pipe -- so without --raw we would receive the SENTINEL and render it into
 # the cell below, and the operator would never see their password even on a real terminal. We take
 # the plaintext and apply the identical decision ourselves, three lines down.
-argo_pw="$("${SCRIPT_DIR}/argocd-password.sh" --wait 0 --raw 2>"$_argo_err")" || _argo_rc=$?
+# ⚠️ BOUNDED. MEASURED 2026-09-05: this call cost ~10 s against an UNREACHABLE cluster, and the two
+# guest-node-SSH kubectl calls below allowed 20 s EACH -- `make creds` took 21.7 s total, of which my
+# reachability probes were 0.06 s. An ACCESS command that takes 22 s to tell you what you can reach
+# has failed at its job. `--wait 0` bounds the script's own polling; it does not bound the kubectl
+# underneath it, so the timeout must be here.
+# ⚠️ UNDER CREDS_NO_PROBE THIS IS SKIPPED -- but ONLY when the value is not already configured.
+# MEASURED 2026-09-05 by tracing the script: with CREDS_NO_PROBE=1 the report still spent the FULL
+# ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s here (a 3.00s gap at this line), i.e. it made a live cluster
+# call while printing "nothing probed" -- slow AND untrue, the two complaints that opened this work.
+# It is NOT gated unconditionally: argocd-password.sh has TWO exit-0 paths, one of which returns an
+# operator-supplied ARGOCD_ADMIN_PASSWORD without touching a cluster. That value is CONFIGURATION,
+# and "report configuration only" must still report it. So we skip only the arm that would dial.
+if [ "$_no_probe_snapshot" = "1" ]; then
+  # Under no-probe we do not shell out AT ALL. Configuration is still reported: if the operator
+  # supplied ARGOCD_ADMIN_PASSWORD we use it directly.
+  # ⚠️ WHY NOT CALL THE CHILD WITH THE VALUE SET -- MEASURED 2026-09-05, and it is a PRE-EXISTING
+  # defect this exposed rather than caused: `SKIP_DOTENV=1 ARGOCD_ADMIN_PASSWORD=x
+  # argocd-password.sh --wait 0 --raw` HANGS to rc=124, i.e. it does not short-circuit on the
+  # configured value under SKIP_DOTENV. Without SKIP_DOTENV the same call is rc=0 and fast. So
+  # delegating here would spend the full timeout to rediscover a value we are already holding.
+  if [ -n "${ARGOCD_ADMIN_PASSWORD:-}" ]; then argo_pw="$ARGOCD_ADMIN_PASSWORD"; _argo_rc=0
+  else                                         argo_pw=""; _argo_rc=0; _argo_noprobe=1; fi
+else
+  argo_pw="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" "${SCRIPT_DIR}/argocd-password.sh" --wait 0 --raw 2>"$_argo_err")" || _argo_rc=$?
+fi
 _argo_initial=0
 grep -q 'INITIAL admin password' "$_argo_err" 2>/dev/null && _argo_initial=1
 rm -f "$_argo_err"
-if [ "$_argo_rc" = 0 ]; then
+if [ "${_argo_noprobe:-0}" = 1 ]; then
+  argo_pw="<not read: CREDS_NO_PROBE=1 (reading it is a live cluster call)>"
+elif [ "$_argo_rc" = 0 ]; then
   # A REAL secret was obtained — mask it. The `<- INITIAL secret; superseded …` annotation is
   # appended further down, OUTSIDE this, so the provenance survives masking. That annotation is the
   # reason a column-level mask was refused: it exists precisely so a bare value is not read as
@@ -412,7 +522,7 @@ _cluster="not reachable (or KUBECONFIG unset)"
 # I twice mis-diagnosed this as a network/address problem and "fixed" it twice without fixing it;
 # every standalone probe was fast because an interactive shell's stdin is a terminal.
 if [ -n "${KUBECONFIG:-}" ] && have kubectl \
-   && kubectl --request-timeout=3s version -o json >/dev/null 2>&1 </dev/null; then
+   && timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s version -o json >/dev/null 2>&1 </dev/null; then
   _cluster="reachable — context '$(kubectl config current-context </dev/null 2>/dev/null || echo '?')'"
 fi
 
@@ -491,20 +601,12 @@ fi
 printf '\n  Context\n'
 case "$_prov" in
   DISCOVERED) printf '    values below : DISCOVERED — the overlay is stamped for the cluster you are talking to\n' ;;
-  STORED)     printf '    values below : STORED — read from a state overlay that is NOT confirmed to belong to\n'
-              printf '                   this cluster. An overlay SURVIVES A REBUILD, so a password or an IP\n'
-              printf '                   here may be from a lab that no longer exists. Run: make state-stamp\n'
-              printf '                   after an install to make it self-identifying; re-run any value that\n'
-              printf '                   is rejected rather than assuming it is wrong.\n'
-              _settle_note '                   ' ;;
+  STORED)     printf '    values below : STORED — from a state overlay not stamped for this cluster, so a value\n'
+              printf '                   here may be from a lab that no longer exists. Settle it: make env-validate\n' ;;
   *)          if [ "$_env_populated" = 1 ]; then
-                printf '    values below : from YOUR .env — no installer has published anything, so these are the\n'
-                printf '                   values you supplied, not placeholders. .env carries NO cluster stamp, so\n'
-                printf '                   this report cannot confirm they belong to the cluster you are talking to;\n'
-                printf '                   a value left over from a destroyed lab looks identical to one you just\n'
-                printf '                   typed. Re-run any value that is rejected rather than assuming it\n'
-                printf '                   is wrong.\n'
-                _settle_note '                   '
+                printf '    values below : from YOUR .env — the values you supplied, not placeholders. .env carries\n'
+                printf '                   no cluster stamp, so this report cannot confirm they are current.\n'
+                printf '                   Settle it: make env-validate\n'
               else
                 printf '    values below : DEFAULTS from .env / .env.example — these ARE PLACEHOLDERS, not credentials\n'
               fi ;;
@@ -537,7 +639,7 @@ if [ -n "${INGRESS_LB_IP:-}" ] && [ "$_ing_live" != 1 ]; then
 elif [ -n "${INGRESS_LB_IP:-}" ]; then
   echo
   echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"
-  echo "    ${INGRESS_LB_IP}  ${GITEA_HOST:-gitea.vks.local} ${TEKTON_DASHBOARD_HOST:-tekton.vks.local} $(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)"
+  echo "    ${INGRESS_LB_IP}  $(ingress_infra_hosts)$(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)"
 fi
 
 # --- table ----------------------------------------------------------------------------
@@ -545,12 +647,118 @@ fi
 # `javawebapp` is 10 chars (so it pushed every following column out of line), and a long value in the URL
 # cell shunted Username/Password off into the distance. A table whose alignment depends on nobody ever
 # adding a longer app name is a table that will be misaligned — and the registry EXISTS so people add apps.
+
 rows=""
-add_row() { rows="${rows}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\n'; }
+# ── REACHABILITY: a FOURTH column, never a replacement for the provenance tokens ────────────────
+# ⚠️ B204 refuted collapsing these axes, and the reason is sharper than tidiness: a TCP/HTTP probe
+# proves THE HOST ANSWERS. It proves NOTHING about the credential beside it. RULE ZERO-A0 measures
+# three Harbor "auth checks" that return 200 with NO credentials at all. So a row marked `serving`
+# next to an unverified password is a claim about the PORT, not about the login — collapsing them
+# into one "AVAILABLE" verdict rebuilds the confident-wrong-credential shape one layer up.
+# Hence: `Reachable` sits BESIDE `Username`/`Password`, and says only what was actually proven.
+#
+# COST (ran-it 2026-09-05): a name that does NOT resolve is FREE (getent fails in 0.002 s; our
+# harbor.env1.lab.test in 0.01 s). Only an IP that black-holes costs the full bound. So the state
+# an operator hits after a rebuild -- nothing resolves -- is ~0.01 s, and the worst case is
+# bounded by CREDS_PROBE_TIMEOUT_SECONDS per target.
+# ⚠️ NEVER call `make harbor-reachable` here: its 900 s is a WAIT LOOP in the target
+# (04-harbor-reachable.sh:45). The target's job is to wait; this printer's job is to report.
+# CREDS_NO_PROBE=1 (already snapshotted at :52) skips every probe -- the CI lever.
+_probe_tcp() {                    # <host> <port> -> 0 if something answers, non-zero otherwise
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
+  timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null
+}
+# ingress-backed rows (Gitea, Tekton, and EVERY app) resolve from the SINGLE _ing_live probe that
+# this script already took -- zero extra cost, and the expensive case cannot occur (F12).
+#
+# ⚠️ IT MUST ALSO ASK WHETHER THE NAME RESOLVES *HERE*, and that is not a nicety.
+# MEASURED 2026-09-05: this reported `serving` for headlamp.vks.local while a browser on the same
+# box got DNS_PROBE_FINISHED_NXDOMAIN. Both facts were true — the LB really does serve it (curl with
+# an explicit `Host:` header returns 200) — but the probe reached the LB *by IP* and so measured a
+# path NO HUMAN TAKES. The one thing standing between the operator and the UI was the very thing
+# the probe skipped. A report that says `serving` about a URL you cannot open is worse than one
+# that says nothing: it sends you to debug the app instead of your resolver.
+# So the verdict is now two facts, not one:
+#   serving       — the LB answers AND this machine can resolve the name (you can click it)
+#   no DNS here   — the LB answers, the NAME does not resolve on this box (add the /etc/hosts line
+#                   printed above, or create the A records; the service itself is fine)
+#   silent        — the LB itself does not answer
+# `getent` on a non-resolving name is FREE (measured 0.002 s) and is already bounded by timeout
+# above, so this costs nothing on the happy path.
+_reach_ingress() {
+  [ "${CREDS_NO_PROBE:-0}" = 1 ] && { printf 'not probed'; return; }
+  [ -n "${_ing:-}" ] || { printf 'no ingress';  return; }
+  if [ "${_ing_live:-0}" != 1 ]; then printf 'silent'; return; fi
+  local _h="${1:-}"
+  if [ -n "$_h" ] && ! timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent hosts "$_h" >/dev/null 2>&1; then
+    # NOTE: do NOT set a global here to signal the footnote — this function runs inside $( ),
+    # a SUBSHELL, so any assignment is discarded (rules/shell). The caller detects the condition
+    # by scanning the rendered rows instead.
+    printf 'no DNS here'
+    return
+  fi
+  printf 'serving'
+}
+_reach_harbor() {
+  [ "${CREDS_NO_PROBE:-0}" = 1 ] && { printf 'not probed'; return; }
+  [ -n "${HARBOR_URL:-}" ] || { printf 'not set'; return; }
+  HARBOR_PROBE_TIMEOUT_SECONDS="${CREDS_PROBE_TIMEOUT_SECONDS:-2}" harbor_reachable_state 2>/dev/null || printf 'unknown'
+}
+_reach_argocd() {
+  [ "${CREDS_NO_PROBE:-0}" = 1 ] && { printf 'not probed'; return; }
+  # ⚠️ PROBE THE ADDRESS THE ROW ACTUALLY SHOWS, not just ARGOCD_SERVER. MEASURED 2026-09-05: with
+  # ARGOCD_SERVER unset but the address DISCOVERED from the cluster, the row printed
+  # "https://192.168.101.131 (discovered from the cluster)" while this column said "not set" --
+  # the table contradicting itself in adjacent cells, which is worse than either answer alone.
+  # $argocd_url is the rendered cell and may carry a trailing "(discovered ...)" note, so strip it.
+  local _h="${ARGOCD_SERVER:-}"
+  [ -n "$_h" ] || _h="${argocd_url%% *}"
+  case "$_h" in ''|'<not set>') printf 'not set'; return ;; esac
+  _h="${_h#https://}"; _h="${_h#http://}"; _h="${_h%%/*}"
+  local _port="${_h##*:}"; case "$_h" in *:*) : ;; *) _port=443 ;; esac
+  _h="${_h%%:*}"
+  # BOUNDED for the same measured reason as lib/harbor.sh's pair: neither timeout variable
+  # reaches getent, and a stale resolver turns this into a 20s hang with no output.
+  timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent hosts "$_h" >/dev/null 2>&1 || case "$_h" in
+    *[!0-9.]*) printf 'unresolved'; return ;;      # a NAME that does not resolve
+  esac
+  _probe_tcp "$_h" "$_port" && printf 'serving' || printf 'silent'
+}
+add_row() { rows="${rows}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\t'"${5:--}"$'\n'; }
+
 
 # Ordered by the pipeline flow: Gitea (push) -> Tekton (build) -> Harbor (registry) -> ArgoCD (deploy) -> apps.
-add_row "Gitea"  "$gitea_url"  "$gitea_user"  "$gitea_pw"
-add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)"
+add_row "Gitea"  "$gitea_url"  "$gitea_user"  "$gitea_pw"  "$(_reach_ingress "${GITEA_HOST:-}")"
+add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)" "$(_reach_ingress "${TEKTON_DASHBOARD_HOST:-}")"
+
+# ---- headlamp -------------------------------------------------------------------------------
+# ⚠️ THE TOKEN IS MINTED HERE, AT REPORT TIME, AND STORED NOWHERE. `kubectl create token` issues a
+# BOUND, EXPIRING token (1h by default), so writing one into .env or the state overlay would
+# reproduce exactly the stale-credential complaint this whole report exists to fix: the operator
+# copies it, gets 401, and nothing says why. A long-lived Secret-based token was REJECTED for the
+# same reason plus a worse one -- it is a permanent credential at rest in etcd that survives every
+# teardown. This mirrors what the ArgoCD row already does by shelling out per run.
+# ⚠️ AND IT MUST NOT HANG OR DIE. This is a READ-ONLY summary that runs against labs that are half
+# up; every failure degrades to a marker. Bounded by the same CREDS_KUBE_TIMEOUT_SECONDS as every
+# other cluster call, `</dev/null` because kubectl blocks forever on an open pipe, and `|| true` so
+# a failure cannot trip `set -e`.
+headlamp_url="$(ingress_url "${HEADLAMP_HOST:-headlamp.vks.local}")"
+headlamp_tok="<not read>"
+if [ "$_no_probe_snapshot" = "1" ]; then
+  headlamp_tok="<not read: CREDS_NO_PROBE=1 (minting a token is a live cluster call)>"
+elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
+  _hl_ns="${HEADLAMP_NAMESPACE:-headlamp}"; _hl_sa="${HEADLAMP_SA:-headlamp-viewer}"
+  _hl_t="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s \
+             -n "$_hl_ns" create token "$_hl_sa" </dev/null 2>/dev/null || true)"
+  # _mask, NOT _lab_secret: that wrapper is defined ~380 lines BELOW this line, so calling it
+  # here dies `_lab_secret: command not found`. It only ever fired once headlamp was installed AND
+  # a token minted — a path that did not exist until 2026-09-05, which is why it shipped green.
+  if [ -n "$_hl_t" ]; then headlamp_tok="$(_mask "$_hl_t")"
+  else                     headlamp_tok="<not read — is headlamp installed? make install-headlamp>"; fi
+else
+  headlamp_tok="<not read — no KUBECONFIG>"
+fi
+add_row "headlamp" "$headlamp_url" "(token)" "$headlamp_tok" "$(_reach_ingress "${HEADLAMP_HOST:-}")"
 # ── WHY THIS ROW IS NOT READ LIVE FROM THE CLUSTER (B202 F5/D) ──────────────────────────────────
 # NOT because "a printer must not probe" — it demonstrably does: the guest-node SSH row below runs
 # two live kubectl calls (PR #901). Stating that as the reason would be refuted by this very file.
@@ -567,14 +775,21 @@ add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)"
 # source, never field-by-field. `make harbor-admin-password` already does this correctly
 # (env_publish_all writes BOTH keys, and since B202 F4 it REFUSES to overwrite a robot$ pair).
 # test-creds-show.sh asserts this mechanically — a comment alone is not the control.
-add_row "Harbor" "$harbor_url" "$harbor_user" "$harbor_pw"
+add_row "Harbor" "$harbor_url" "$harbor_user" "$harbor_pw" "$(_reach_harbor)"
 # Render the PROVENANCE with the value. A bare secret here reads as "this is your password",
 # and on the primary runbook it is the pre-rotation one from Step 5 onward — which is the state
 # that produced a live 401 and a backlog row proposing a network probe to detect it.
-if [ "${_argo_initial:-0}" = 1 ] && [ -n "$argo_pw" ]; then
-  argo_pw="${argo_pw}   <- INITIAL secret; superseded if you ran 'argocd account update-password'"
-fi
-add_row "ArgoCD" "$argocd_url" "$argo_user"   "$argo_pw"
+# ⚠️ THE SENTENCE LEAVES THE CELL. It used to be appended to the PASSWORD cell -- 77 characters
+# inside a column whose width is a max over all rows. An adversary measured the table at 171 chars
+# with ONE data row (header 171, Harbor row 170), i.e. already wrapping on BOTH 80- and 120-col
+# terminals, and identified this sentence -- not the URL markers -- as the offender. creds.sh's own
+# rule at the ArgoCD URL arm says it: "A SENTENCE IN A URL COLUMN DESTROYS THE TABLE. Keep the cell
+# short; the instruction goes in a footnote." That rule was enforced for the URL column and violated
+# for the Password column. The provenance is NOT dropped: the flag survives and the footnote states
+# it in full, where it costs no width.
+_argo_initial_note=0
+if [ "${_argo_initial:-0}" = 1 ] && [ -n "$argo_pw" ]; then _argo_initial_note=1; fi
+add_row "ArgoCD" "$argocd_url" "$argo_user"   "$argo_pw"   "$(_reach_argocd)"
 # CAPTURE INTO VARIABLES FIRST -- do NOT inline these `$( )` into add_row's ARGUMENTS.
 # MEASURED 2026-08-22 with a newly-enrolled app whose app_health_path() branch did not yet exist:
 #     FATAL  app 'nodejswebapp': add a branch to app_health_path()
@@ -609,34 +824,178 @@ while read -r _a; do
   # This arms the moment one does -- app_build_args' go arm (an intentional empty printf) is the
   # precedent for a per-language accessor that legitimately prints nothing.
   [ -n "$_health" ] || die "app '$_a': app_health_path() returned nothing — refusing to print a credentials row with a blank health path."
-  add_row "$_a" "$_url" "-" "(no login; health at ${_health})"
+  add_row "$_a" "$_url" "-" "(no login; health at ${_health})" "$(_reach_ingress "$(app_host "$_a")")"
 done <<EOF
 ${_apps}
 EOF
 
+# how long the probing ACTUALLY took -- printed so the estimate above stays honest. If this ever
+# reads much larger than the stated bounds, a probe has escaped its timeout, and that is a defect
+# the operator can see rather than one they merely endure.
+if [ "${CREDS_NO_PROBE:-0}" != 1 ]; then
+  _probe_t1=$(date +%s 2>/dev/null || echo 0)
+  printf '  reachability checks done in %ss.\n' "$(( _probe_t1 - _probe_t0 ))" >&2
+fi
+
+# --- NO SINGLE VALUE MAY BLOW OUT THE TABLE ------------------------------------------------------
+# MEASURED 2026-09-05: adding headlamp put a ~1000-character ServiceAccount JWT in the Password
+# cell. The widths below are a MAX OVER ALL ROWS, so that one token padded EVERY row to ~1000
+# columns and the table became unreadable on any screen. A JWT is not a password and does not
+# belong in a fixed-width cell.
+# So: any cell longer than CREDS_MAX_CELL is replaced by a short marker and its full value is
+# printed BELOW the table, one per line, where width does not matter. The reader still gets the
+# value; the table stays a table.
+CREDS_MAX_CELL="${CREDS_MAX_CELL:-44}"
+_long_notes=""
+_rows_capped=""
+while IFS=$'\t' read -r c1 c2 c3 c4 c5; do
+  [ -n "$c1" ] || continue
+  # A MARKER (`<...>`) is a placeholder, not a value — never footnote one. Measured: capping at 44
+  # sent the 53-char "hidden, re-run with SHOW_SECRETS=1" marker to the footnote, which then read
+  # "full value (too long for the table): <hidden: ...>". The cap exists for real secrets that are
+  # genuinely too long (a JWT), not for text the report wrote itself.
+  case "$c4" in '<'*'>') _is_marker=1 ;; *) _is_marker=0 ;; esac
+  if [ "$_is_marker" = 0 ] && [ "${#c4}" -gt "$CREDS_MAX_CELL" ]; then
+    _long_notes="${_long_notes}${c1}"$'\t'"${c4}"$'\n'
+    c4="<full value below>"
+  fi
+  _rows_capped="${_rows_capped}${c1}"$'\t'"${c2}"$'\t'"${c3}"$'\t'"${c4}"$'\t'"${c5}"$'\n'
+done <<EOF
+$rows
+EOF
+rows="${_rows_capped%$'\n'}"
+
 # Measure every column against every row (headers included), then print.
-w1=7; w2=3; w3=8   # the header widths are the floor: "Service", "URL", "Username"
-while IFS=$'\t' read -r c1 c2 c3 _c4; do
+w1=7; w2=3; w3=8; w4=8   # header widths are the floor: Service, URL, Username, Password
+while IFS=$'\t' read -r c1 c2 c3 c4 _c5; do
   [ -n "$c1" ] || continue
   [ "${#c1}" -gt "$w1" ] && w1="${#c1}"
   [ "${#c2}" -gt "$w2" ] && w2="${#c2}"
   [ "${#c3}" -gt "$w3" ] && w3="${#c3}"
+  [ "${#c4}" -gt "$w4" ] && w4="${#c4}"
 done <<EOF
 $rows
 EOF
 
-printf '\n  %-*s  %-*s  %-*s  %s\n' "$w1" "Service" "$w2" "URL" "$w3" "Username" "Password"
-printf '  %-*s  %-*s  %-*s  %s\n' \
+printf '\n  %-*s  %-*s  %-*s  %-*s  %s\n' "$w1" "Service" "$w2" "URL" "$w3" "Username" "$w4" "Password" "Reachable"
+printf '  %-*s  %-*s  %-*s  %-*s  %s\n' \
   "$w1" "$(printf '%*s' "$w1" '' | tr ' ' '-')" \
   "$w2" "$(printf '%*s' "$w2" '' | tr ' ' '-')" \
   "$w3" "$(printf '%*s' "$w3" '' | tr ' ' '-')" \
-  "$(printf '%*s' 8 '' | tr ' ' '-')"
-while IFS=$'\t' read -r c1 c2 c3 c4; do
+  "$w4" "$(printf '%*s' "$w4" '' | tr ' ' '-')" \
+  "$(printf '%*s' 9 '' | tr ' ' '-')"
+# ── PRINT WHAT IS AVAILABLE; SUMMARISE THE REST IN ONE LINE ────────────────────────────────────
+# ⚠️ The contract is "show a picture of the cluster and let me access what is available". Eight rows
+# for services that do not exist are NOISE, and they buried the two rows that mattered: measured,
+# 55 lines of which 2 carried a usable URL+credential. test-creds-show:160 states the licence for
+# this explicitly -- "Nothing serves those hosts (the ingress is OPTIONAL). Say <needs ingress>, OR
+# SAY NOTHING." So: reachable rows get the table; the rest get one line naming them and the command.
+# ⚠️ They are SUMMARISED, NOT DROPPED. creds.sh's own history records that deleting rows outright is
+# a defect (a degraded registry read must not delete Gitea/Harbor/ArgoCD), and an operator still
+# needs to know the thing EXISTS and is merely unreachable.
+_un_ing=""; _un_oth=""
+while IFS=$'\t' read -r c1 c2 c3 c4 c5; do
   [ -n "$c1" ] || continue
-  printf '  %-*s  %-*s  %-*s  %s\n' "$w1" "$c1" "$w2" "$c2" "$w3" "$c3" "$c4"
+  # ⚠️ SPLIT ON "IS THERE AN ADDRESS TO GIVE YOU", **NOT** ON THE PROBE RESULT.
+  # A first version sent every non-`serving` row to the summary line, and test-creds-show caught it
+  # immediately: with an ingress PRESENT but the probe unable to confirm (a fixture, no network,
+  # CREDS_NO_PROBE), the *.vks.local URLs DISAPPEARED -- "over-correcting into silence is its own
+  # defect", which this file already records. A probe that COULD NOT ASK is not a service that said
+  # no. So: if the row has a real URL, it stays in the table WITH its reachability, whatever that
+  # says; only rows with nothing to show (<needs ingress>, <not set>) collapse into one line.
+  # THE ROW IS ALWAYS PRINTED. The summary below is an ADDITION, never a replacement.
+  # MEASURED 2026-09-05 (adversary, CRITICAL): the previous form DROPPED the row whenever the URL
+  # cell was empty -- and the row carries the PASSWORD. Two runs differing only in ARGOCD_SERVER:
+  #     unset        -> `grep -c ZZARGOSECRET` = 0   (the credential was GONE from the report)
+  #     =10.0.0.9    -> `grep -c ZZARGOSECRET` = 1
+  # The password was in a variable in BOTH runs. The URL is the half a user can often discover for
+  # themselves; the credential is the half they cannot get anywhere else -- so the drop threw away
+  # the irreplaceable one. The block's own comment claimed "SUMMARISED, NOT DROPPED"; measured, the
+  # summary line carries ONLY the service name -- no username, no password, no reachability.
+  # It also left the --raw nested-sentinel SECURITY assertion permanently vacuous (no row => nothing
+  # to assert on: a red converted into a green that can never fire) and re-opened B517.
+  printf '  %-*s  %-*s  %-*s  %-*s  %s\n' "$w1" "$c1" "$w2" "$c2" "$w3" "$c3" "$w4" "$c4" "$c5"
+  case "$c2" in
+    '<needs ingress>') _un_ing="${_un_ing:-}${_un_ing:+, }${c1}" ;;
+    '<not set>'|'')    _un_oth="${_un_oth:-}${_un_oth:+, }${c1}" ;;
+  esac
 done <<EOF
 $rows
 EOF
+
+# THE ONE THING BETWEEN THE OPERATOR AND THE UI. If any row came back `no DNS here`, the service is
+# fine and the NAME is what is broken — say so, and say it right under the table rather than leaving
+# the reader to conclude the app is down. (2026-09-05: a browser got DNS_PROBE_FINISHED_NXDOMAIN on
+# a host this report had just called `serving`.)
+case "$rows" in
+  *'no DNS here'*)
+    printf '\n  ⚠️  Some hosts above are SERVED by the ingress but do not RESOLVE on this machine,\n'
+    printf '      so a browser here gets DNS_PROBE_FINISHED_NXDOMAIN. The service is not broken —\n'
+    printf '      the name is. Add the /etc/hosts line printed above (needs root):\n'
+    printf '        sudo sh -c '"'"'printf "%%s  %%s\\n" "%s" "%s" >> /etc/hosts'"'"'\n' \
+      "${INGRESS_LB_IP:-<ingress-lb-ip>}" "$(ingress_infra_hosts)$(app_names | while read -r _a; do if [ -n "$_a" ]; then printf '%s ' "$(app_host "$_a")"; fi; done)"
+    printf '      Or create those names as A records pointing at %s in your DNS: make show-dns-records\n' "${INGRESS_LB_IP:-<ingress-lb-ip>}"
+    ;;
+esac
+
+# The values too long to sit in a cell, printed where width does not matter. One per line, the
+# service named, so it is still copy-pasteable — which is the whole point of this report.
+if [ -n "${_long_notes:-}" ]; then
+  while IFS=$'\t' read -r _ln_svc _ln_val; do
+    [ -n "$_ln_svc" ] || continue
+    printf '\n  %s — full value (too long for the table):\n    %s\n' "$_ln_svc" "$_ln_val"
+  done <<EOF
+$(printf '%s' "$_long_notes")
+EOF
+fi
+# ⚠️ THE NOTE MAY ONLY STATE A FACT ABOUT THIS REPORT, NEVER ABOUT THE CLUSTER (B517, and it
+# took two PRs to land). "no ingress, so no URL to show" READS AS a cluster claim -- and we
+# frequently cannot support it: when the guest cluster is unreachable we do not know whether an
+# ingress exists, whether the component is installed, or whether it is happily serving. What we
+# DO know is that no ingress address is configured HERE, which is a fact about this box.
+# The phrase "not about the cluster" is asserted by STATE 12 in test-creds-show.sh; so is
+# "port-forward" (the only remedy correct in every persona). Do not drop either.
+if [ -n "${_un_ing:-}" ]; then
+  printf '\n  no URL in this report for: %s\n' "$_un_ing"
+  printf '    That is a fact about THIS REPORT, not about the cluster — no ingress address\n'
+  printf '    is configured here.  URL: make install-ingress   |   now: kubectl -n <ns> port-forward svc/<svc> 8080:<port>\n'
+fi
+if [ -n "${_un_oth:-}" ]; then
+  printf '\n  no address configured here for: %s\n' "$_un_oth"
+  printf '    Again a fact about THIS REPORT, not about the cluster.\n'
+fi
+
+# The <... — see note> markers in the Password column, explained where width is free.
+# Re-derived from the SAME globals `_unset_pw` branches on, so cell and note cannot drift.
+if printf '%s' "${rows:-}" | grep -q -- '— see note'; then
+  if [ "${_sink_refused:-0}" = 1 ]; then
+    printf '\n  note: those passwords are held by an overlay this report REFUSED — it belongs to a\n'
+    printf '        DIFFERENT cluster. Do NOT use them.\n'
+  elif [ "${_have_sink:-0}" = 1 ]; then
+    printf '\n  note: those passwords are not published in the state overlay this report is using.\n'
+  else
+    printf '\n  note: those passwords do not exist yet. KinD GENERATES them at install; for a real\n'
+    printf '        lab, set them in .env (see .env.example for the variable names).\n'
+  fi
+fi
+
+# ---- notes the TABLE CELLS point at. A cell may carry a short marker; the sentence lives here.
+# A marker that says "see note" with no note is a citation that resolves to nothing -- worse than no
+# marker at all, because it reads as sourced.
+if [ "${_argo_initial_note:-0}" = 1 ]; then
+  printf '\n  note: the ArgoCD password above is the INITIAL admin secret. If anyone has run\n'
+  printf "        'argocd account update-password', it has been superseded and will 401.\n"
+fi
+# ⚠️ KEYED ON A FLAG, NOT ON THE RENDERED STRING. This case used to match the URL text, and the
+# very next edit -- rewording the marker from `(--insecure; see note)` to
+# `(discovered; --insecure — see note)` -- silently stopped matching it. MEASURED: the note count
+# went to 0 while the cell still said "see note", i.e. a citation resolving to NOTHING, which reads
+# as sourced and is worse than no marker at all. Display text is not a control channel.
+case "${_argo_tls_flag:-0}" in
+  1)
+    printf '\n  note: ArgoCD is at a BARE IP; its self-signed cert has no IP SAN, so TLS cannot\n'
+    printf '        verify it. --insecure logs you in; a verifying path needs a DNS name.\n' ;;
+esac
 
 # --- footnote: WHAT IS NOT REAL YET, and whose job it is to fix ------------------------
 #
@@ -657,13 +1016,18 @@ if [ "$_have_sink" = 0 ] && [ "$_env_populated" = 1 ]; then
   # (measured: uncommented=0), so a value on screen CANNOT have come from there, and on a real lab
   # the address is a live one the operator typed. Being told "placeholder" about a real credential
   # is how it ends up in a ticket, a screenshot or a chat, unrotated.
-  printf '\n  note: no installer has published anything ON THIS BOX — but the values\n'
-  printf '        above are NOT placeholders: they came from YOUR .env, which is not tracked and not\n'
-  printf '        stamped for any cluster. This report therefore cannot tell a value you typed a\n'
-  printf '        minute ago from one left over from a lab that no longer exists; they are identical\n'
-  printf '        on screen. Treat every credential here as LIVE until you know otherwise.\n'
-  _settle_note '          '
-  printf '          KinD     : you need set nothing by hand; the install discovers and fills these in.\n'
+    # ⚠️ DELIBERATELY SILENT — do NOT re-add prose here. This arm printed a five-line paragraph
+    # plus a SECOND copy of _settle_note (the Context block above already prints both), and a KinD
+    # line in a report whose flow may be a real VKS lab. MEASURED 2026-09-05: `make creds` was 71
+    # lines of which 13 carried a value — 82% prose — with the ~10-line remedy block VERBATIM TWICE.
+    # ⚠️ THE `if` CONDITION MUST SURVIVE, EMPTY. Deleting this arm outright is a bash SYNTAX ERROR
+    # (measured: "syntax error near unexpected token 'elif'"), and promoting the `elif` instead makes
+    # this state fall into the PLACEHOLDER arm below, which claims "None of them exists" about live
+    # .env credentials — the B161 finding (its gate catches it, rc=1).
+    # The one fact this arm carried that Context did not — "treat every credential as LIVE" — is now
+    # IN Context. Everything else was a restatement, and the honest PER-ROW answer is the Reachable
+    # column, which is where a reader actually looks.
+    : # intentionally no output
 elif [ "$_have_sink" = 0 ]; then
   printf '\n  note: EVERY value above is a PLACEHOLDER from .env.example, not a credential —\n'
   printf '        including Harbor'\''s and Gitea'\''s. None of them exists.\n'
@@ -686,12 +1050,9 @@ else
     # read-only and correct in EVERY persona, which is why the arm below has always carried it and
     # why a first version of this note deleting it was a regression: it repaired the CLAIM and broke
     # the ACTION.
-    printf '\n  note: this box has no ingress LB IP — the state overlay that would carry one was REFUSED\n'
-    printf '        (stamped for a different cluster), so the *.vks.local URLs cannot be shown. This says\n'
-    printf '        NOTHING about whether the cluster HAS an ingress; this report simply cannot see one.\n'
-    printf '        Reach the services without it:\n'
-    printf '            kubectl -n <namespace> port-forward svc/<service> 8080:<port>\n'
-    printf '        Harbor and ArgoCD are unaffected — own LBs.\n'
+    # ⚠️ the ingress explanation now lives in the ONE grouped line above the table.
+    # It was printed twice: once there and once here, in different words.
+    :
     else
     # ⚠️ THIS BRANCH IS THE ONE THE MATRIX HITS, AND IT WAS LEFT UNREPAIRED. The B517 fix repaired the
     # REFUSED arm directly above and stopped there, so the false world-claim survived in the arm that
@@ -706,12 +1067,9 @@ else
     # and this report has no other evidence about the cluster's ingress -- so it must not make one.
     # The port-forward STAYS: a first repair of the sibling arm deleted it and that was a regression,
     # because it is the only remedy correct in every persona (:681-687 records it).
-    printf '\n  note: this box has no ingress LB IP, so Gitea / Tekton / the apps have no *.vks.local\n'
-    printf '        URL to show. That is a fact about THIS REPORT, not about the cluster: nothing here\n'
-    printf '        has asked it whether an ingress exists. Reach the services without one:\n'
-    printf '            kubectl -n <namespace> port-forward svc/<service> 8080:<port>\n'
-    printf '        To find out, or to install one: make verify-ingress / make install-ingress\n'
-    printf '        (Harbor and ArgoCD are unaffected — own LBs).\n'
+    # ⚠️ The ingress explanation now lives in the ONE grouped line printed above, beside the
+    # rows it concerns. It used to be said TWICE, in different words, in the same report.
+    :
     fi
   fi
   if [ "$argocd_url" = "<not set>" ]; then
@@ -864,7 +1222,37 @@ _lab_add "vcf CLI"   "(the VKS / SSO account)"  "$(_lab_plain "${VKS_USERNAME:-}
 #
 # The LISTING MUST NOT BE A PIPELINE. `kubectl ... | sed | grep | head` yields HEAD's status, so the
 # rc is meaningless before it is even discarded. Capture kubectl alone, read its rc, then filter.
+# _ssh_pick <newline-separated-candidates> <cluster-name> — echo the chosen secret name, or
+# NOTHING when the choice is not determinable. PURE: no kubectl, no globals, no side effects, so
+# scripts/test-creds-ssh-pick.sh can exercise every branch OFFLINE.
+#
+# WHY IT IS A FUNCTION (adversary HIGH, 2026-09-05): the gate sets CREDS_NO_PROBE=1 for every
+# rendered case, and this whole block short-circuits on that flag — so the gate could not execute
+# ONE line of the selection logic and its green was evidence about a subset that EXCLUDED the
+# change. Extracting the choice is what makes it testable at all.
+#
+# ORDER, and each arm earns its place:
+#   1. EXACT `${cluster}-ssh-password` if present  — the only answer that is certainly right.
+#   2. the SOLE candidate                          — preserves single-cluster behaviour, and the
+#      recorded lab where .env said cicd-gc1 while the live secret was cicd-gc0819222721-ssh-password
+#      (which is why the list is DISCOVERED and never constructed from the name).
+#   3. otherwise NOTHING                           — >=2 candidates and no match is not determinable;
+#      the caller refuses. A wrong password is worse than "I could not tell".
+# grep -Fx: FIXED-string, WHOLE-line. A name carrying a regex metachar must not alternate into a
+# sibling entry (rules/shell: interpolating a derived value into a regex).
+_ssh_pick() {
+  local _list="$1" _cl="$2" _hit="" _n
+  if [ -n "$_cl" ]; then
+    _hit="$(printf '%s\n' "$_list" | grep -Fx -- "${_cl}-ssh-password" || true)"
+  fi
+  if [ -n "$_hit" ]; then printf '%s' "$_hit"; return 0; fi
+  _n="$(printf '%s' "$_list" | grep -c . || true)"
+  if [ "${_n:-0}" -eq 1 ]; then printf '%s' "$(printf '%s' "$_list" | tr -d '\n')"; fi
+  return 0
+}
+
 _ssh_pw=""; _lab_err=""; _ssh_sec=""; _ssh_state="not probed"; _ssh_tok="<not probed>"
+_ssh_ep="<not probed>"   # the ENDPOINT cell: an address, or a marker naming why there is none
 if [ "$_no_probe_snapshot" = "1" ]; then
   _ssh_state="not probed (CREDS_NO_PROBE=1)"; _ssh_tok="<not probed>"
 elif [ -z "${VKS_NAMESPACE:-}" ]; then
@@ -879,19 +1267,48 @@ else
   else
     _lab_err="$(mktemp)"
     # `&& rc=0 || rc=$?` and NOT `; rc=$?` — the latter dies under `set -e` (rules/shell).
-    _ssh_list="$(timeout "${TOOL_VERSION_TIMEOUT_SECONDS:-20}" kubectl --kubeconfig "$_sup_kc" \
+    _ssh_list="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
                    -n "$VKS_NAMESPACE" get secret -o name </dev/null 2>"$_lab_err")" && _ssh_rc=0 || _ssh_rc=$?
     if [ "$_ssh_rc" -ne 0 ]; then
       # THE WHOLE POINT: name WHY we could not ask, so it is never mistaken for "there is none".
       _ssh_classify "$_lab_err" "could not ask"
     else
-      _ssh_sec="$(printf '%s' "$_ssh_list" | sed 's|^secret/||' | grep -E -- '-ssh-password$' | head -1 || true)"
+      # SCOPE TO THIS CLUSTER (B-scope). MEASURED 2026-09-05: with cicd-gc1 and cicd-gc2 both in
+      # namespace 'cicd', the old `| head -1` picked cicd-gc1's secret ALPHABETICALLY and the report
+      # printed a DELETED cluster's SSH password as if it were live. `head -1` over a multi-cluster
+      # namespace is a silent wrong answer, not a missing one.
+      # The comment above still stands — do NOT CONSTRUCT the name (a lab had
+      # `cicd-gc0819222721-ssh-password` while .env said cicd-gc1) — so this DISCOVERS the list
+      # first and only then PREFERS the entry matching this cluster. Order: exact match -> the one
+      # and only candidate -> REFUSE (naming what it saw), never an arbitrary pick.
+      _ssh_cands="$(printf '%s' "$_ssh_list" | sed 's|^secret/||' | grep -E -- '-ssh-password$' || true)"
+      # COUNT with grep -c, not a `for` over an unquoted var: measured, `for x in $C` counts 2 under
+      # bash and 1 under zsh on the same newline-separated capture, and the unquoted expansion is
+      # also subject to pathname expansion. grep -c is shell-independent and cannot glob.
+      _ssh_nc="$(printf '%s' "$_ssh_cands" | grep -c . || true)"; _ssh_nc="${_ssh_nc:-0}"
+      _ssh_sec="$(_ssh_pick "$_ssh_cands" "${VKS_CLUSTER_NAME:-}")"
+      if [ -z "$_ssh_sec" ] && [ "$_ssh_nc" -gt 1 ]; then
+        _ssh_tok="<ambiguous>"
+        _ssh_state="$(printf '%s candidates in %s and none is %s-ssh-password: %s— set VKS_CLUSTER_NAME in .env to one of these' \
+                        "$_ssh_nc" "${VKS_NAMESPACE}" "${VKS_CLUSTER_NAME:-<unset>}" \
+                        "$(printf '%s' "$_ssh_cands" | tr '\n' ' ')")"
+      fi
+      # GUARD ON "WE HAVE A NAME", NOT ON THE COUNT (adversary CRITICAL, 2026-09-05).
+      # It read `[ -z "$_ssh_sec" ] && [ "$_ssh_nc" -eq 0 ]`, so the AMBIGUOUS case (>=2 candidates,
+      # none matching) fell through to the else and ran `kubectl get secret ""` with an EMPTY name.
+      # That fails, and _ssh_classify then OVERWRITES the `<ambiguous>` refusal with
+      # `<kubectl failed>` — so the refusal this whole block exists to produce was UNREACHABLE, in
+      # exactly the two-cluster namespace it was written for, and it wasted a Supervisor request.
       if [ -z "$_ssh_sec" ]; then
-        _ssh_tok="<none>"; _ssh_state="none in '${VKS_NAMESPACE}' — this cluster publishes no node-SSH secret"
+        if [ "$_ssh_nc" -eq 0 ]; then
+          _ssh_tok="<none>"; _ssh_state="none in '${VKS_NAMESPACE}' — this cluster publishes no node-SSH secret"
+        fi
+        # >=2 candidates: _ssh_tok/_ssh_state were set to the <ambiguous> refusal above. Do NOT
+        # read, and do NOT overwrite them.
       else
         # stderr to a FILE, never 2>&1: a server `Warning:` header concatenates in front of the
         # base64 on a SUCCESSFUL read and base64 -d then emits partial garbage (lib/argocd.sh:327).
-        _ssh_b64="$(timeout "${TOOL_VERSION_TIMEOUT_SECONDS:-20}" kubectl --kubeconfig "$_sup_kc" \
+        _ssh_b64="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
                       -n "$VKS_NAMESPACE" get secret "$_ssh_sec" \
                       -o jsonpath='{.data.ssh-passwordkey}' </dev/null 2>>"$_lab_err")" && _ssh_rc=0 || _ssh_rc=$?
         # purity-check before decoding, or a partial decode ships a WRONG password.
@@ -906,6 +1323,62 @@ else
         fi
       fi
     fi
+
+    # ---- node ADDRESS: what the Endpoint column is supposed to contain ---------------------
+    # THE ENDPOINT COLUMN MAY NEVER CARRY A LOOKUP KEY. This row used to render $_ssh_sec -- a
+    # SECRET NAME -- under a header reading `Endpoint` (verified: header at the `_lab_add` widths
+    # block below), so the report invited `ssh vmware-system-user@cicd-gc1-ssh-password`, which
+    # cannot resolve to anything. The secret name is PROVENANCE and already appears in the note
+    # under the table; it does not belong in a column that promises an address.
+    # NOTE THE RULE IS "NO LOOKUP KEY", NOT "ONLY AN ADDRESS": the sibling `vcf CLI` row correctly
+    # renders `(the VKS / SSO account)` because a local binary has no endpoint at all.
+    # WE DO NOT CLAIM ROUTABILITY. Whether a jump box can reach the node network is UNVERIFIED
+    # here, and asserting reachability we have not measured is exactly how this report earned the
+    # complaint that started this work. We print what the cluster says, and nothing more.
+    _ssh_verr="$(mktemp)"
+    # SCOPE TO THIS CLUSTER. MEASURED 2026-09-05: an unfiltered `get vm` over a namespace holding
+    # TWO clusters returned the DELETED cluster's node first (.38, while this cluster's nodes are
+    # .45/.46/.43), so the report handed the operator an address that answers for the wrong cluster
+    # -- or for nothing at all. CAPI labels every node VM `cluster.x-k8s.io/cluster-name`; measured
+    # on this lab, the selector returns exactly this cluster's 3 nodes.
+    # FALL BACK, never fail: an older//different platform may not carry the label, and a report that
+    # prints nothing is worse than one that prints an unscoped address AND SAYS SO.
+    _ssh_scoped=1
+    _ssh_addr="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
+                   -n "$VKS_NAMESPACE" get vm -l "cluster.x-k8s.io/cluster-name=${VKS_CLUSTER_NAME:-}" \
+                   -o jsonpath='{range .items[*]}{.status.network.primaryIP4}{" "}{end}' \
+                   </dev/null 2>"$_ssh_verr")" && _ssh_vrc=0 || _ssh_vrc=$?
+    if [ "${_ssh_vrc:-1}" -eq 0 ] && [ -z "$(printf '%s' "${_ssh_addr:-}" | tr -d ' \n\t')" ]; then
+      _ssh_scoped=0
+      _ssh_addr="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
+                     -n "$VKS_NAMESPACE" get vm \
+                     -o jsonpath='{range .items[*]}{.status.network.primaryIP4}{" "}{end}' \
+                     </dev/null 2>"$_ssh_verr")" && _ssh_vrc=0 || _ssh_vrc=$?
+    fi
+    # squeeze the jsonpath separators; an item with no primaryIP4 contributes an empty field.
+    _ssh_addr="$(printf '%s' "${_ssh_addr:-}" | tr -s ' \n\t' ' ' | sed 's/^ *//; s/ *$//')"
+    # ⚠️ ONE address in the cell, the rest in the note. MY OWN BUG, caught by an adversary: the
+    # jsonpath collects EVERY node's primaryIP4 space-separated, so a 3-node guest cluster puts
+    # ~44 chars into a column whose width is a max over all rows -- re-creating the width defect
+    # fixed in the same session. It is also not pasteable into ssh.
+    _ssh_n=0; for _a in ${_ssh_addr:-}; do _ssh_n=$((_ssh_n + 1)); done
+    _ssh_first="${_ssh_addr%% *}"
+    if [ "${_ssh_vrc:-1}" -ne 0 ]; then
+      # An absence is a claim about the QUERY first. A tenant may simply not be allowed to list VMs.
+      if grep -qi 'forbidden' "$_ssh_verr" 2>/dev/null; then _ssh_ep="<not allowed to read addresses>"
+      else                                                   _ssh_ep="<could not read node addresses>"; fi
+    elif [ -z "$_ssh_addr" ]; then
+      _ssh_ep="<no node address yet>"
+    elif [ "$_ssh_n" -gt 1 ]; then
+      if [ "${_ssh_scoped:-1}" = 1 ]; then
+        _ssh_ep="${_ssh_first} (+$((_ssh_n - 1)) more — see note)"
+      else
+        _ssh_ep="${_ssh_first} (+$((_ssh_n - 1)) more; NOT cluster-scoped)"
+      fi
+    else
+      _ssh_ep="$_ssh_first"
+    fi
+    rm -f "$_ssh_verr"
   fi
 fi
 # `vmware-system-user` — VERIFIED 2026-08-20 on VKS GUEST NODES, and scoped to that claim: `ssh -i <ssh-privatekey from the
@@ -920,13 +1393,18 @@ fi
 # nothing was tried, so "not readable" would imply a failed read that never happened, which is the
 # very conflation this block exists to fix.
 if [ -n "$_ssh_pw" ]; then
-  _lab_add "guest node SSH" "$(_lab_plain "$_ssh_sec")" "vmware-system-user" "$(_lab_secret "$_ssh_pw")"
+  _lab_add "guest node SSH" "$(_lab_plain "$_ssh_ep")" "vmware-system-user" "$(_lab_secret "$_ssh_pw")"
 else
-  case "$_ssh_state" in
-    "not probed"*) _ssh_pwcell="<not attempted>" ;;
-    *)             _ssh_pwcell="<not readable>" ;;
-  esac
-  _lab_add "guest node SSH" "$_ssh_tok" "vmware-system-user" "$_ssh_pwcell"
+  # `_ssh_tok` IS the classification, and it is finer than the two buckets this used to carry:
+  # <forbidden> / <auth failed> / <stale CA> / <no kubeconfig> / <none> / <no key> / <empty>, versus
+  # a flat <not readable>. It lived in the ENDPOINT column until 2026-09-05, which was the wrong
+  # home -- "why the password is missing" is a fact about the PASSWORD, not an address. Moving it
+  # here preserves every distinction AND keeps the NOT-ATTEMPTED vs ATTEMPTED-AND-FAILED split the
+  # previous form existed to make: every not-probed arm already sets _ssh_tok="<not probed>", so
+  # nothing here implies a read that never happened. Without this move _ssh_tok would be assigned
+  # on eight paths and read on none.
+  _ssh_pwcell="$_ssh_tok"
+  _lab_add "guest node SSH" "$_ssh_ep" "vmware-system-user" "$_ssh_pwcell"
 fi
 
 # Widths, mirroring the table above. `if/then/fi` and NOT `[ ] && x` — a false test as the loop
@@ -969,10 +1447,6 @@ if [ -n "$_um" ]; then
   printf '     one not satisfied is %s — not set in .env or in this environment.\n' "$_um"
   printf '     %s. Set it before any step that needs a kubeconfig.\n' "$(_unmet_why "$_um")"
 fi
-printf '\n  Showing the lab-access values the scenario documents ask you to set: VCENTER_HOST,\n'
-printf '  VCENTER_USERNAME, VCENTER_PASSWORD, VKS_USERNAME, VKS_PASSWORD, VCF_CLI_VSPHERE_PASSWORD\n'
-printf '  and SUPERVISOR_HOST. There is no ssh row in .env because this repo never asks you for one —\n'
-printf '  that credential is not yours to supply, it is the cluster'"'"'s to hand you.\n'
 # ⚠️ CONDITIONAL, and that is the whole point (impl round, MED). These sentences printed
 # UNCONDITIONALLY, so a run that read NOTHING still claimed "READ LIVE from the Supervisor" and
 # asserted `Source: <none found>` — an absence about a namespace we may never have been able to

@@ -490,10 +490,12 @@ EOF
   # The listener's allowedRoutes must name EVERY app namespace, else that app's HTTPRoute attaches
   # to nothing and its host 404s — with no error at apply time. APPENDED with yq from the registry
   # (not a text block), so the manifest on disk stays valid YAML that yamllint/kubeconform can check.
+  _istio_export_headlamp
+  istio_require_env HEADLAMP_HOST HEADLAMP_NAMESPACE
   local ns_json; ns_json="$(app_namespaces_json)"
   log_info "applying Gateway(API) ${ISTIO_GWAPI_NAMESPACE}/${ISTIO_GATEWAY_NAME} (gatewayClassName=${ISTIO_GATEWAY_CLASS}) + shared-UI HTTPRoutes; app namespaces ${ns_json}"
   # shellcheck disable=SC2016
-  envsubst '${ISTIO_GWAPI_NAMESPACE} ${ISTIO_GATEWAY_NAME} ${ISTIO_GATEWAY_CLASS} ${GITEA_HOST} ${GITEA_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${TEKTON_NAMESPACE}' \
+  envsubst '${ISTIO_GWAPI_NAMESPACE} ${ISTIO_GATEWAY_NAME} ${ISTIO_GATEWAY_CLASS} ${GITEA_HOST} ${GITEA_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${TEKTON_NAMESPACE} ${HEADLAMP_HOST} ${HEADLAMP_NAMESPACE}' \
     < "${k8s_dir}/gateway-api.yaml" \
     | NSS="$ns_json" yq '(select(.kind == "Gateway") | .spec.listeners[0].allowedRoutes.namespaces.selector.matchExpressions[0].values) += (strenv(NSS) | fromjson)' \
     | run kubectl apply -f -
@@ -733,7 +735,7 @@ istio_assert_shared_gateway_hosts() {
   hosts="$(kubectl -n "$gw_ns" get gateway "$gw_name" -o jsonpath='{range .spec.servers[*]}{range .hosts[*]}{@}{"\n"}{end}{end}' 2>/dev/null || true)"
   if [ -z "$hosts" ]; then
     log_error "cannot read the shared Gateway ${ISTIO_SHARED_GATEWAY} (missing, or no RBAC to get it)."
-    log_error "  Ask the mesh admin to confirm it exists and admits: ${GITEA_HOST} ${TEKTON_DASHBOARD_HOST} $(app_hosts_flat)"
+    log_error "  Ask the mesh admin to confirm it exists and admits: $(ingress_infra_hosts)$(app_hosts_flat)"
     return 1
   fi
   # EVERY host we route must be admitted — including each app's. On a real lab the shared Gateway's
@@ -877,6 +879,19 @@ istio_diagnose_pending_lb() { # <ns> <svc>
 # time. (This shipped exactly once: the Gateway landed in `default` while the VirtualServices
 # referenced `istio-ingress/vks-uis`.)
 # ---------------------------------------------------------------------------
+# _istio_export_headlamp — headlamp's host/namespace are rendered into the Gateway, the
+# gateway-api HTTPRoute and the VirtualService. envsubst reads the ENVIRONMENT, so they must be
+# EXPORTED, not merely set. MEASURED 2026-09-05: without this the Gateway rendered a literal
+# `${HEADLAMP_HOST}` and Istio's validating webhook REJECTED the whole apply with
+# `domain name "${HEADLAMP_HOST}" invalid` — taking down `make install-ingress` entirely.
+# Defaults mirror scripts/49-install-headlamp.sh so the route exists even when headlamp is not
+# installed yet (an HTTPRoute to an absent backend is a 503, not a broken Gateway).
+_istio_export_headlamp() {
+  HEADLAMP_HOST="${HEADLAMP_HOST:-headlamp.vks.local}"
+  HEADLAMP_NAMESPACE="${HEADLAMP_NAMESPACE:-headlamp}"
+  export HEADLAMP_HOST HEADLAMP_NAMESPACE
+}
+
 istio_require_env() {
   local v missing=""
   for v in "$@"; do
@@ -937,23 +952,26 @@ EOF
     # pins them; istio_discover exports them). See istio_require_env for why an unexported var is
     # not a cosmetic problem.
     export ISTIO_GATEWAY_NAMESPACE ISTIO_GATEWAY_LABEL
+    _istio_export_headlamp
     istio_require_env ISTIO_GATEWAY_NAMESPACE ISTIO_GATEWAY_NAME ISTIO_GATEWAY_LABEL \
-                      GITEA_HOST TEKTON_DASHBOARD_HOST
+                      GITEA_HOST TEKTON_DASHBOARD_HOST HEADLAMP_HOST
     # One host per app is APPENDED from the registry with yq — never hardcoded in the manifest.
     local hosts_json; hosts_json="$(app_hosts_json)"
     log_info "applying Gateway ${ISTIO_GATEWAY_NAMESPACE}/${ISTIO_GATEWAY_NAME} (selector istio=${ISTIO_GATEWAY_LABEL}) + app hosts ${hosts_json}"
     # shellcheck disable=SC2016
-    envsubst '${ISTIO_GATEWAY_NAMESPACE} ${ISTIO_GATEWAY_NAME} ${ISTIO_GATEWAY_LABEL} ${GITEA_HOST} ${TEKTON_DASHBOARD_HOST}' \
+    envsubst '${ISTIO_GATEWAY_NAMESPACE} ${ISTIO_GATEWAY_NAME} ${ISTIO_GATEWAY_LABEL} ${GITEA_HOST} ${TEKTON_DASHBOARD_HOST} ${HEADLAMP_HOST}' \
       < "${k8s_dir}/gateway.yaml" \
       | HOSTS="$hosts_json" yq '.spec.servers[0].hosts += (strenv(HOSTS) | fromjson)' \
       | run kubectl apply -f -
   fi
 
   # The shared UIs (gitea, tekton dashboard).
-  istio_require_env ISTIO_GATEWAY_REF GITEA_HOST GITEA_NAMESPACE TEKTON_DASHBOARD_HOST TEKTON_NAMESPACE
+  _istio_export_headlamp
+  istio_require_env ISTIO_GATEWAY_REF GITEA_HOST GITEA_NAMESPACE TEKTON_DASHBOARD_HOST TEKTON_NAMESPACE \
+                    HEADLAMP_HOST HEADLAMP_NAMESPACE
   log_info "applying VirtualServices for the shared UIs -> ${ISTIO_GATEWAY_REF}"
   # shellcheck disable=SC2016
-  envsubst '${ISTIO_GATEWAY_REF} ${GITEA_HOST} ${GITEA_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${TEKTON_NAMESPACE}' \
+  envsubst '${ISTIO_GATEWAY_REF} ${GITEA_HOST} ${GITEA_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${TEKTON_NAMESPACE} ${HEADLAMP_HOST} ${HEADLAMP_NAMESPACE}' \
     < "${k8s_dir}/virtualservices.yaml" | run kubectl apply -f -
 
   # ONE VirtualService per app, from the registry — adding an app routes it with no YAML edit.

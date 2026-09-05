@@ -552,6 +552,38 @@ form refuses immediately rather than spending 30 minutes to reach the same answe
 **Expect:** the waiting command reprints a table every 15 s, then prints `conditions hold AND every expected node is Ready` and exits `0` with every node
 `Ready`. *(**4–9 min** — the Timings table's own runs span 3 m 45 s to 8 m 49 s; the command waits up to 30 min, so give it that before calling it stuck.)* A non-zero exit is not a pass — do not continue to the preflight.
 
+### If you need to delete it and start over
+
+**Use `make vks-cluster-delete` — do NOT hand-roll `kubectl delete cluster`.** Deleting is
+asynchronous (two controllers hold finalizers) and, crucially, the control-plane VIP is held by the
+cluster's **VirtualMachineService**, a *separate* object from the `Cluster` with its own deletion
+path — measured on this lab, created 14 seconds later.
+
+If you create a replacement before that VIP is released, the platform writes the **predecessor's**
+address into the new cluster's `spec.controlPlaneEndpoint`. That field is **immutable** and CAPI
+never revisits it, so the new cluster advertises an address nothing serves and can **never** become
+Ready — `RemoteConnectionProbe` fails forever. Measured: a replacement advertised `.132` while its
+own LoadBalancer got `.133`.
+
+```bash
+make vks-cluster-delete CONFIRM=<your-cluster-name>
+```
+
+It blocks until the `Cluster`, its `VirtualMachineService` **and** that Service are all gone, then
+tells you it is safe to create again.
+
+**Expect:** a `waiting on:` line listing whichever of the three objects is still present, narrowing
+as each disappears, then `released: cluster, virtualmachineservice and svc are all gone`. *(Typically a few minutes.)*
+It refuses without `CONFIRM=<name>`, and refuses to delete a cluster this repo did not create.
+
+⚠️ It waits for the strongest signal a tenant can observe; it does **not** prove the address is
+immediately reusable — the platform may briefly quarantine a freed VIP. If the next
+`make vks-cluster-create` reports `*** DIVERGENT ***`, that is what happened: wait and retry, or
+create under a different `VKS_CLUSTER_NAME`.
+
+Tunables: `VKS_CLUSTER_DELETE_WAIT_SECONDS` (default 900), `VKS_CLUSTER_DELETE_POLL_SECONDS`
+(default 10). Both are documented in `.env.example`.
+
 ### Get its kubeconfig
 
 **If that command exited `0`, it already wrote one** — at `./secrets/<VKS_CLUSTER_NAME>.kubeconfig`,
@@ -627,6 +659,41 @@ make psa-check
 ```
 
 **Expect:** `LAB PREFLIGHT OK`. `PSA UNPROVEN` on a bare cluster is expected, not a failure. *(~1 min)*
+
+### If the lab was RESTORED from a snapshot, check vCenter itself
+
+A vCenter service can come back from a snapshot **alive but unable to serve**, and it will not tell
+you. Measured on this lab, 2026-09-05:
+
+```text
+vCenter reported:  content-library  state=STARTED  health=HEALTHY
+every actual call: HTTP 500                        for 5.5 days
+govc about:        passed
+```
+
+The cause is a credential frozen in process memory: a RAM snapshot preserves an in-flight token,
+the wall clock keeps moving, and the service resumes days later still holding something expired.
+The clock and the certificates are fine — both were measured and ruled out. Only exercising the
+real API finds it, which is what this does:
+
+```bash
+make vcenter-check              # read-only; exercises each service's REAL API
+```
+
+**Expect:** `OK — every exercised service actually served`. If anything reports `FAIL`, restart
+just what failed and re-verify:
+
+```bash
+make vcenter-repair             # restarts ONLY the services that actually failed, then re-exercises
+```
+
+Why it matters here: VKr node images are delivered through the content library, so while it is down
+a guest cluster sits at `ImageCacheReady=False` **forever** with no error anywhere that names the
+cause. Skip this and you can lose an hour to a cluster that was never going to come up.
+
+Both targets need `VCENTER_HOST` / `VCENTER_USERNAME` / `VCENTER_PASSWORD` from `.env` (Step 1).
+As a **tenant** you will not have those — the check skips cleanly and `make lab-preflight` above
+already covers the half you *can* see. *(~10 s)*
 
 ---
 
@@ -815,6 +882,27 @@ Accounts**) and run it again.
 
 **Nothing to set here** — Step 3 published `ARGOCD_KUBECONFIG` when you logged in.
 
+> ⚠️ **Unless you previously ran [scenario-2](scenario-2.md) with this `.env`.** That walk tells a
+> tenant to pin two values — `ARGOCD_MECHANISM=api` and `ARGOCD_REGISTER=never` — and they are
+> correct **there** and wrong **here**. They do not un-set themselves, and this walk fails on them
+> one at a time, ~20 s apart, with three different messages:
+>
+> | pinned value | what you get | why |
+> |---|---|---|
+> | `ARGOCD_MECHANISM=api` | `ARGOCD_MECHANISM=api, but this box is missing: ARGOCD_SERVER ARGOCD_AUTH_TOKEN` | `api` is the tenant path; as an admin you have Kubernetes RBAC and need no token |
+> | `ARGOCD_REGISTER=never` | `NO guest cluster is registered as an ArgoCD destination … Refusing` | registration is admin-only, and here you **are** the admin |
+>
+> Both defaults are `auto`, which MEASURES what is open to you and picks. So the fix is to remove
+> the pins, not to set them differently — set both back to `auto` in `.env`, or:
+> `sed -i 's/^ARGOCD_MECHANISM=.*/ARGOCD_MECHANISM=auto/; s/^ARGOCD_REGISTER=.*/ARGOCD_REGISTER=auto/' .env`
+>
+> (Inline, not a fenced block, deliberately: a fence inside a blockquote is counted by
+> `walk-doc.sh`'s independent block counter but is INVISIBLE to its parser, so the two disagree and
+> `test-walk-doc.sh` fails — and the walk must not run a command that rewrites `.env` anyway.)
+>
+> The refusal in row 2 is doing its job, not misfiring: deploying with the in-cluster destination
+> would install your apps **into the Supervisor**, with prune and selfHeal on.
+
 ```bash
 make fetch-argocd-kubeconfig
 make argocd-preflight           # CLI vs running-server versions; can ArgoCD reach your cluster?
@@ -867,7 +955,7 @@ rejected, and it takes 8–10 minutes to say so. Fix it here — the Harbor step
 comes from.
 
 ```bash
-make install-all      # preflight -> selfbuilt-image -> mirror -> mirror-verify -> builder-image -> vks-login -> platform -> gitops
+make install-all      # preflight -> selfbuilt-image -> mirror -> mirror-verify -> builder-image -> vks-login -> platform -> install-headlamp -> install-ingress -> gitops
 make verify           # pushes a marked change and follows it to the running app
 ```
 
@@ -890,6 +978,37 @@ line is not runnable as written:
 ```bash
 kubectl annotate sc <name> storageclass.kubernetes.io/is-default-class=true
 ```
+
+---
+
+## 11.5 headlamp (optional)
+
+A Kubernetes web UI for the guest cluster, installed from **your Harbor by helm** — deliberately not
+via the VKS Standard Package path, which resolves against a VMware-hosted package repository and so
+needs the internet.
+
+```bash
+make install-headlamp
+```
+
+**Expect:** the images it names resolve to `${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/...`, and the
+rollout completes. *(~1–2 min)*
+
+Three things it does that are easy to get wrong on your own:
+
+- **It forces `view`, not `cluster-admin`.** The upstream chart ships
+  `clusterRoleBinding.clusterRoleName=cluster-admin`, so a plain `helm install` is itself a
+  cluster-admin grant. `view` still gives the full browsing UI *and* pod logs; it drops
+  edit/delete and the in-browser terminal.
+- **It pins the node-shell image to your mirror.** headlamp's frontend otherwise falls back to
+  `docker.io/library/busybox:latest` **at runtime** — so the install is green and the first person
+  who clicks "Node Shell" gets `ImagePullBackOff` on an air-gapped cluster.
+- **It passes the Pod Security overrides.** The chart's default pod spec fails `restricted` on
+  three counts, and VKS enforces `restricted` by default on guest clusters. KinD enforces nothing,
+  so this is invisible locally and rejects at admission on the lab.
+
+Log in with a token from `make creds`. Tokens are minted **fresh each time and they expire** — that
+is deliberate, so the report can never show you a credential that has already gone stale.
 
 ---
 

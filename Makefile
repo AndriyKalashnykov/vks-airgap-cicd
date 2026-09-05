@@ -642,6 +642,14 @@ vks-login: ## Authenticate to VKS (VCF 9 + Supervisor) → writes KUBECONFIG/con
 vks-cluster-create: vks-shape-set ## Provision the guest VKS cluster from the VKS_* topology keys (scenario-1 §4b); server-side dry-run gates it
 	@$(SCRIPTS)/25-vks-cluster-create.sh
 
+.PHONY: vks-cluster-delete
+# DESTRUCTIVE, and it WAITS -- deliberately. It blocks until the Cluster, its
+# VirtualMachineService AND that Service are all gone, because the control-plane VIP is held by the
+# VMService, not the Cluster (B524). Recreating before that releases produces a cluster whose
+# immutable spec.controlPlaneEndpoint is the PREDECESSOR's address, which can never converge.
+vks-cluster-delete: ## DESTRUCTIVE (CONFIRM=<cluster-name>): delete ONE guest cluster and BLOCK until its control-plane VIP is released
+	@$(SCRIPTS)/97-vks-cluster-delete.sh
+
 .PHONY: vks-cluster-status
 vks-cluster-status: ## Read-only: is the guest cluster ACTUALLY ready? (conditions + observedGeneration + nodes — phase=Provisioned is NOT readiness)
 	@$(SCRIPTS)/26-vks-cluster-status.sh
@@ -721,6 +729,14 @@ argocd-address: ## Wait for ArgoCD's LoadBalancer address and write ARGOCD_SERVE
 vks-k8s-version: ## Pick the newest Ready+Compatible TKr and write VKS_K8S_VERSION to ./.env (waits; a fresh Supervisor syncs them over minutes)
 	@$(SCRIPTS)/24-vks-k8s-version.sh
 
+.PHONY: vcenter-check
+vcenter-check: ## Read-only: EXERCISE vCenter's real APIs (a hot restore can leave one 500ing while it self-reports HEALTHY). Skips cleanly with no VCENTER_* creds
+	@$(SCRIPTS)/29-vcenter-service-check.sh
+
+.PHONY: vcenter-repair
+vcenter-repair: ## MUTATING (opt-in): exercise vCenter's APIs, then RESTART whichever services actually failed, then re-exercise to prove it
+	@$(SCRIPTS)/29-vcenter-service-check.sh --remediate
+
 .PHONY: lab-preflight
 lab-preflight: ## Read-only: three cluster preconditions that each kill the run LATER (CRD-create · a DEFAULT StorageClass · a working LoadBalancer provider)
 	@$(SCRIPTS)/24-lab-preflight.sh
@@ -776,6 +792,10 @@ install-tekton: check-env ## Install Tekton Pipelines + Triggers (image refs rem
 .PHONY: configure-tekton
 configure-tekton: check-env ## Apply pipeline/tasks/triggers + registry/git secrets
 	@$(SCRIPTS)/60-configure-tekton.sh
+
+.PHONY: install-headlamp
+install-headlamp: check-env ## Install headlamp (Kubernetes web UI) into the GUEST cluster from Harbor — helm, NOT the VKS package path (air-gapped by default)
+	@$(SCRIPTS)/49-install-headlamp.sh
 
 .PHONY: platform
 platform: install-gitea seed-gitea install-tekton configure-tekton ## Install + wire Gitea and Tekton
@@ -945,7 +965,44 @@ e2e-sneakernet-both: ## The sneakernet OS matrix: the SAME carried tarball unpac
 # platform / gitops consume them — so a corrupt/incomplete Harbor copy fails HERE (the
 # integrity gate) instead of surfacing later as a mid-pipeline Kaniko MANIFEST_UNKNOWN.
 # Read-only + non-disruptive to a healthy mirror. Prereqs update left-to-right (sequential).
-install-all: preflight selfbuilt-image mirror mirror-verify builder-image vks-login platform gitops ## Run the complete air-gap install end to end (preflight FIRST, then mirror integrity-verified, then the pipeline)
+# ORDER IS LOAD-BEARING, and every step earns its place:
+#   preflight FIRST      — read-only; stops a 20-min mirror on a box that cannot finish
+#   mirror/mirror-verify — a push you have not verified is not a mirror
+#   platform             — gitea + tekton must EXIST before anything routes to them
+#   install-headlamp     — BEFORE the ingress, not after. MEASURED 2026-09-05: the ingress applies
+#                          a VirtualService INTO namespace `headlamp`, so with headlamp last the
+#                          apply dies `namespaces "headlamp" not found`. Headlamp creates its own
+#                          namespace (49-install-headlamp.sh:114) and references the ingress
+#                          nowhere, so it is the one that must go first.
+#   install-ingress      — gives gitea/tekton/headlamp/the apps a URL. WITHOUT IT `make creds`
+#                          prints `<needs ingress>` for 9 of 11 services, which is what an
+#                          operator reads as "the install did not work" (2026-09-05).
+#   gitops LAST          — ArgoCD syncs the apps once there is somewhere to route them.
+# `make verify` still proves the GitOps loop over a port-forward with no ingress at all; the
+# ingress is what makes the result REACHABLE, which is the difference between a green run and a
+# usable demo.
+install-all: preflight selfbuilt-image mirror mirror-verify builder-image vks-login platform install-headlamp install-ingress gitops ## Run the complete air-gap install end to end (preflight FIRST, mirror integrity-verified, then platform -> ingress -> headlamp -> gitops)
+	@echo ""
+	@echo "  ── install-all finished. WHAT IS AND IS NOT RUNNING ──────────────────────────"
+	@echo "  Installed and serving:  Gitea, Tekton, headlamp, the ingress, and (already"
+	@echo "                          present as Supervisor Services) Harbor and ArgoCD."
+	@echo ""
+	@echo "  NOT YET RUNNING:        your apps. ArgoCD has created one Application each and"
+	@echo "                          points them at harbor/<project>/<app>:<tag> — but NO APP"
+	@echo "                          IMAGE HAS BEEN BUILT YET, so every app pod sits in"
+	@echo "                          ImagePullBackOff and its URL answers 503. That is the"
+	@echo "                          expected state here, not a failure: this demo builds an"
+	@echo "                          app the GitOps way, from a git push."
+	@echo ""
+	@echo "  DO THIS NEXT:           make verify"
+	@echo "                          It pushes a marked commit to each <app>-app repo, Tekton"
+	@echo "                          builds and pushes the image to Harbor, ArgoCD syncs it,"
+	@echo "                          and it HTTP-checks the result. (~3 min; scenario-1 §11.)"
+	@echo ""
+	@echo "  THEN:                   make creds     endpoints + logins, with what each is"
+	@echo "                                         actually serving right now."
+	@echo "  ─────────────────────────────────────────────────────────────────────────────"
+
 
 .PHONY: verify
 verify: check-env ## e2e: push a change → Tekton build → Harbor → ArgoCD sync → HTTP check (LIVE cluster)
@@ -1148,6 +1205,11 @@ app-run: check-ports ## Run ONE app locally (APP=javawebapp|gowebapp; default ja
 	@$(SCRIPTS)/app-run.sh $(APP)
 
 ##@ Quality gates
+
+.PHONY: check-infra-hosts-single-source
+check-infra-hosts-single-source: ## Fail if any script hand-enumerates the ingress infra hostnames instead of calling ingress_infra_hosts()
+	@$(SCRIPTS)/check-infra-hosts-single-source.sh
+
 .PHONY: lint
 lint: ## shellcheck scripts, yamllint manifests, hadolint Dockerfile
 	@$(SCRIPTS)/lint.sh
@@ -1329,7 +1391,7 @@ check-clean-context: ## Build EVERY app from a git-archive (tracked-files-only) 
 	@$(SCRIPTS)/test-clean-context-build.sh
 
 .PHONY: test-scripts
-test-scripts: ## Run all offline script-logic unit tests
+test-scripts: test-creds-ssh-pick## Run all offline script-logic unit tests
 	@$(SCRIPTS)/run-test-set.sh "all offline" $(TEST_OFFLINE)
 
 .PHONY: test-scripts-fast
@@ -1496,6 +1558,10 @@ test-e2e-fresh: ## Offline: E2E_FRESH=1 makes e2e-kind cold (kind-down first) + 
 .PHONY: test-secret-quoting
 test-secret-quoting: ## Offline: a secret reaching a curl -K config / a .env line must round-trip and cannot inject
 	@$(SCRIPTS)/test-secret-quoting.sh
+
+.PHONY: test-creds-ssh-pick
+test-creds-ssh-pick: ## Offline: creds.sh picks the RIGHT node-SSH secret in a multi-cluster namespace (and REFUSES rather than guessing)
+	@$(SCRIPTS)/test-creds-ssh-pick.sh
 
 .PHONY: test-creds-show
 test-creds-show: ## creds-show must not claim anything the state does not support (renders it in every state)
@@ -1760,7 +1826,7 @@ static-check-fast: check-notfound-discriminator check-jumpbox-shadow check-tekto
 # TREE_STABILITY_ID is EXPORTED because the sub-make has a different PID, and the snapshot key
 # defaults to $PPID -- without pinning it the record and the verify would key on different files and
 # the verify would find no snapshot, i.e. silently report nothing.
-static-check: ## Composite code gate (alignment + lint + manifests + security + script unit tests). NO app builds — see app-verify.
+static-check: check-infra-hosts-single-source## Composite code gate (alignment + lint + manifests + security + script unit tests). NO app builds — see app-verify.
 	@export TREE_STABILITY_ID="static-check-$$$$"; \
 	 $(SCRIPTS)/tree-stability.sh record; \
 	 rc=0; $(MAKE) --no-print-directory static-check-fast lint validate sec test-scripts || rc=$$?; \

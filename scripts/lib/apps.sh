@@ -61,6 +61,38 @@ app_deploy() { app_field "$1" 4; }
 # made "adding an app is ONE ROW" false (the row died at `app_host` until you ALSO added the var to
 # .env.example), and no gate could see that second edit. Deriving it removes the second edit instead
 # of policing it: the only tunable left is the DOMAIN, and it is ONE global.
+# ingress_infra_hosts — the NON-APP hostnames the ingress serves, in ONE place.
+#
+# WHY IT EXISTS (2026-09-05). Seven sites hand-enumerated `${GITEA_HOST} ${TEKTON_DASHBOARD_HOST}`
+# to build the /etc/hosts hint, the "then browse:" line, the mesh-admin request and the rendered-
+# route check. Adding headlamp updated the MANIFESTS but none of those seven lists, so the ingress
+# routed headlamp.vks.local correctly while every operator-facing line omitted it -- the operator
+# pastes a hosts line without headlamp and the UI is unreachable although it is installed and
+# routed. That is the enumerated-list rot: the list and the thing it describes drift silently.
+#
+# Adding a fourth infra UI is now ONE line here, and `check-infra-hosts-single-source` fails any
+# script that re-enumerates them instead.
+#
+# Emits a TRAILING space per host (the callers interpolate it mid-line), skips an empty value, and
+# ALWAYS returns 0 -- a bare `[ -n ... ] && printf` as the last statement would return non-zero on
+# an empty final host and trip the caller's `set -e` (rules/shell: the A && B tail).
+ingress_infra_hosts() {
+  local h
+  for h in "${GITEA_HOST:-}" "${TEKTON_DASHBOARD_HOST:-}" "${HEADLAMP_HOST:-}"; do
+    if [ -n "$h" ]; then printf '%s ' "$h"; fi
+  done
+  return 0
+}
+
+# ingress_infra_urls — the same set as ingress_infra_hosts, as http:// URLs (the "then browse:"
+# lines). Two functions rather than one with a flag: the callers interpolate them mid-sentence and a
+# flag argument reads worse at every call site than a second name.
+ingress_infra_urls() {
+  local h
+  for h in $(ingress_infra_hosts); do printf 'http://%s  ' "$h"; done
+  return 0
+}
+
 app_host() {
   printf '%s.%s' "$1" "${APP_DOMAIN:?APP_DOMAIN is not set (it is in .env.example; scripts get it via load_env)}"
 }

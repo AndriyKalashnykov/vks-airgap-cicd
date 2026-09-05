@@ -99,7 +99,7 @@ infra_checked=0   # reported, not guarded — see the note at the bottom
 app_checked=0
 
 # --- the infra hosts DO have backends here: they must route AND serve their own marker -----------
-for pair in "${GITEA_HOST}|gitea|Gitea UI" "${TEKTON_DASHBOARD_HOST}|tekton|Tekton Dashboard UI"; do
+for pair in "${GITEA_HOST}|gitea|Gitea UI" "${TEKTON_DASHBOARD_HOST}|tekton|Tekton Dashboard UI" "${HEADLAMP_HOST}|headlamp|headlamp UI"; do
   host="${pair%%|*}"; rest="${pair#*|}"; marker="${rest%%|*}"; label="${rest#*|}"
   code=""; end=$((SECONDS + READY_TIMEOUT_SECONDS))
   while [ "$SECONDS" -lt "$end" ]; do

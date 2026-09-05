@@ -472,7 +472,12 @@ _harbor_serving_code() {
 # treats `silent` and `unresolved` alike turns a one-second true positive into a 15-minute one.
 harbor_reachable_state() {
   [ -n "${HARBOR_URL:-}" ]                          || { printf 'unresolved'; return; }
-  getent hosts "${HARBOR_URL%%:*}" >/dev/null 2>&1  || { printf 'unresolved'; return; }
+  # ⚠️ BOUNDED. `getent hosts` is NOT covered by either creds timeout variable, and it is the
+  # path that can hang an end user with NO OUTPUT. MEASURED 2026-09-05 with a slow resolver and
+  # BOTH CREDS_PROBE_TIMEOUT_SECONDS=2 and CREDS_KUBE_TIMEOUT_SECONDS=3 set explicitly:
+  # 0.298s -> 20.103s. The real trigger is an air-gap jump box with a stale `nameserver` line
+  # (glibc defaults: timeout:5, attempts:2, per resolv.conf(5)) -- exactly our target box.
+  timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent hosts "${HARBOR_URL%%:*}" >/dev/null 2>&1 || { printf 'unresolved'; return; }
   case "$(_harbor_serving_code)" in 000|'') printf 'silent' ;; *) printf 'serving' ;; esac
 }
 
@@ -483,7 +488,7 @@ harbor_reachable_report() {
   [ -n "${HARBOR_URL:-}" ] || { printf '%sHARBOR_URL is not set — nothing to check\n' "$note_p" >&2; return 0; }
 
   local hip
-  hip="$(getent hosts "${HARBOR_URL%%:*}" 2>/dev/null | awk '{print $1; exit}' || true)"
+  hip="$(timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent hosts "${HARBOR_URL%%:*}" 2>/dev/null | awk '{print $1; exit}' || true)"
   if [ -z "$hip" ]; then
     printf '%sHARBOR_URL=%s does not resolve yet — expected before you create the A record\n' "$note_p" "$HARBOR_URL" >&2
     printf '%s  that '\''make show-dns-records'\'' prints. It must resolve before '\''make mirror'\''.\n' "$note_p" >&2

@@ -108,7 +108,8 @@ TEKTON_NAMESPACE:41-install-tekton.sh
 tekton-pipelines-resolvers:41-install-tekton.sh
 CI_NAMESPACE:60-configure-tekton.sh
 TRAEFIK_NAMESPACE:45-install-traefik.sh
-ISTIO_GWAPI_NAMESPACE:lib/istio.sh'
+ISTIO_GWAPI_NAMESPACE:lib/istio.sh
+HEADLAMP_NAMESPACE:49-install-headlamp.sh'
 
 HITS=()
 checked=0

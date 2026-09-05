@@ -41,7 +41,7 @@ K8S_DIR="${REPO_ROOT}/k8s/traefik"
 # shellcheck disable=SC2016
 CTRL_ALLOWLIST='${HARBOR_URL} ${HARBOR_INFRA_PROJECT} ${TRAEFIK_NAMESPACE}'
 # shellcheck disable=SC2016
-ING_ALLOWLIST='${GITEA_NAMESPACE} ${GITEA_HOST} ${TEKTON_NAMESPACE} ${TEKTON_DASHBOARD_HOST}'
+ING_ALLOWLIST='${GITEA_NAMESPACE} ${GITEA_HOST} ${TEKTON_NAMESPACE} ${TEKTON_DASHBOARD_HOST} ${HEADLAMP_NAMESPACE} ${HEADLAMP_HOST}'
 # shellcheck disable=SC2016
 APP_ING_ALLOWLIST='${APP_NAME} ${APP_NAMESPACE} ${APP_HOST}'
 
@@ -134,8 +134,8 @@ log_info "published INGRESS_LB_IP=${LB_IP} to $(state_file)"
 
 log_info "Traefik installed. Add ONE line to /etc/hosts on the jump box / your client:"
 log_info ""
-log_info "    ${LB_IP}  ${GITEA_HOST} ${TEKTON_DASHBOARD_HOST} $(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)"
+log_info "    ${LB_IP}  $(ingress_infra_hosts)$(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)"
 log_info ""
-log_info "then browse: http://${GITEA_HOST}  http://${TEKTON_DASHBOARD_HOST}  $(app_names | while read -r a; do if [ -n "$a" ]; then printf 'http://%s  ' "$(app_host "$a")"; fi; done)"
+log_info "then browse: $(ingress_infra_urls)$(app_names | while read -r a; do if [ -n "$a" ]; then printf 'http://%s  ' "$(app_host "$a")"; fi; done)"
 log_info "(ArgoCD is on its own LoadBalancer IP, not the ingress — see 'make creds')"
 log_info "(no more 'kubectl port-forward' for the UIs; Harbor keeps its own LB IP)"

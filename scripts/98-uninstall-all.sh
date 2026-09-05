@@ -265,13 +265,26 @@ if read_state -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME"; then
     note "  tkg.tanzu.vmware.com/addon), so this is asynchronous."
     k -n "$VKS_NAMESPACE" delete cluster "$VKS_CLUSTER_NAME" --wait=false >/dev/null 2>&1 || true
     deleted
+    # ⚠️ WAIT ON THE VirtualMachineService TOO, NOT JUST THE Cluster (B524, adversary-measured).
+    # The control-plane VIP is held by the VMService -- a SEPARATE object with its own deletion
+    # path, created 14s AFTER the Cluster (measured 12:15:29Z -> 12:15:43Z). Polling only `cluster`
+    # returned "gone" while the VIP was still allocated, so a recreate raced the release and got a
+    # Cluster whose immutable spec.controlPlaneEndpoint was the PREDECESSOR's address -- which can
+    # never converge. This wait was insufficient even when followed correctly.
+    # `get` exits non-zero on NotFound, which is the SUCCESS case, hence the explicit rc handling
+    # rather than a bare `$(k get ...)` that `set -e` would kill at the moment it succeeds.
+    _cl_gone() { k -n "$VKS_NAMESPACE" get "$1" "$VKS_CLUSTER_NAME" >/dev/null 2>&1 && return 1 || return 0; }
     _end=$((SECONDS + ${UNINSTALL_CLUSTER_WAIT_SECONDS:-900}))
     while [ "$SECONDS" -lt "$_end" ]; do
-      k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" >/dev/null 2>&1 || break
+      _left=""
+      _cl_gone cluster               || _left="${_left} cluster"
+      _cl_gone virtualmachineservice || _left="${_left} virtualmachineservice"
+      _cl_gone svc                   || _left="${_left} svc"
+      [ -z "$_left" ] && break
       sleep "${UNINSTALL_POLL_INTERVAL_SECONDS:-10}"
     done
-    if k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" >/dev/null 2>&1; then
-      note "! still present after the timeout. NOT stripping finalizers — that orphans VMs and FCDs."
+    if [ -n "${_left:-}" ]; then
+      note "! still present after the timeout:${_left}. NOT stripping finalizers — that orphans VMs and FCDs."
       note "  Inspect what is holding it:"
       note "    kubectl --kubeconfig $SUP -n $VKS_NAMESPACE get cluster $VKS_CLUSTER_NAME -o jsonpath='{.metadata.finalizers}'"
       left "Cluster ${VKS_CLUSTER_NAME} still terminating"
