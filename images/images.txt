@@ -85,3 +85,31 @@ python:3.14-alpine
 mcr.microsoft.com/dotnet/sdk:10.0-alpine
 # renovate: datasource=docker depName=mcr.microsoft.com/dotnet/aspnet
 mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled
+
+# ---- headlamp (Kubernetes web UI, guest cluster) ----
+# INSTALLED VIA HELM FROM HARBOR, NOT via the VKS Standard Package path. Owner's ruling, and the
+# mechanism backs it: scripts/vks-package.sh creates a Carvel PackageInstall that resolves against
+# the SYSTEM-managed PackageRepository in vmware-system-tkg, whose imgpkgBundle is VMware-hosted --
+# internet-dependent unless the whole repo is mirrored. Same correction the owner made for Istio,
+# where the package path (43-install-istio-package.sh) carries no global.hub and so proves nothing
+# about the air gap, while the helm path (46-install-istio.sh) points global.hub at Harbor.
+# The `v` PREFIX IS LOAD-BEARING: the chart's deployment template defaults image.tag to
+# `printf "v%s" .Chart.AppVersion`, so the rendered ref is v0.45.0. An adversary rendered the chart
+# and independently computed this repo's mirror_target_ref for this line; both produce the
+# IDENTICAL string. Drop the `v` and they diverge silently.
+# renovate: datasource=docker depName=ghcr.io/headlamp-k8s/headlamp
+ghcr.io/headlamp-k8s/headlamp:v0.45.0
+
+# ⚠️ NOT OPTIONAL, AND NOT OBVIOUS: headlamp's FRONTEND pulls this at RUNTIME.
+# chart values.yaml defaults config.podDebugImage and config.nodeShellImage to "", and the backend
+# flags default to "" too, so NOTHING is passed and the frontend falls back to its hardcoded
+# DEFAULT_NODE_SHELL_LINUX_IMAGE = 'docker.io/library/busybox:latest'. On an air-gapped guest
+# cluster the mirror is green, the install is green, the Deployment is Running -- and the first
+# person who clicks "Node Shell" or "Debug" gets ImagePullBackOff forever, because docker.io is
+# unreachable. No offline gate in this repo can see that; upstream states it plainly
+# (kubernetes-sigs/headlamp#5930: "clusters without access to docker.io will fail to spawn debug
+# pods by default").
+# PINNED, not `:latest` -- images.txt forbids a moving tag, and upstream's default IS a moving tag.
+# The install must pass BOTH config.nodeShellImage and config.podDebugImage at the Harbor ref.
+# renovate: datasource=docker depName=busybox
+docker.io/library/busybox:1.37.0
