@@ -325,9 +325,18 @@ _unset_pw() {  # _unset_pw <VAR> -> what an unset password actually means, per f
   # in play. Reachable in B517's own scenario: on a KinD box 05-kind-up.sh GENERATES these into the
   # overlay (.env.example leaves them commented), so an operator who ran KinD and then pointed at a
   # lab lands here.
-  if [ "$_sink_refused" = 1 ]; then printf '<held by the REFUSED overlay — it is another cluster'"'"'s; do NOT use it>'
-  elif [ "$_have_sink" = 1 ]; then printf '<not published — check the state overlay>'
-  else printf '<generated at install (KinD) — or set %s in .env for a real lab>' "$1"; fi
+  # ⚠️ SHORT CELL, SENTENCE IN THE FOOTNOTE. These arms were 40-76 chars inside a column whose
+  # width is a max over ALL rows, and an adversary measured the table at 171-173 chars -- wrapping
+  # on BOTH 80- and 120-col terminals -- with the nothing-installed arm (the COMMONEST state) the
+  # dominant driver. creds.sh already states the rule at the ArgoCD URL arm: "A SENTENCE IN A URL
+  # COLUMN DESTROYS THE TABLE. Keep the cell short; the instruction goes in a footnote." It was
+  # enforced for the URL column and violated here.
+  # NOTHING IS LOST: the footnote re-derives WHICH arm fired from the same two globals
+  # ($_sink_refused, $_have_sink). It cannot use a flag set in here -- `_unset_pw` is always
+  # called inside `$( )`, a SUBSHELL, so an assignment could never escape.
+  if [ "$_sink_refused" = 1 ]; then printf '<REFUSED overlay — see note>'
+  elif [ "$_have_sink" = 1 ]; then printf '<not published — see note>'
+  else printf '<generated at install — see note>'; fi
 }
 harbor_user="${HARBOR_USERNAME:-admin}"
 # The `:-` form cannot be kept: it would feed the PLACEHOLDER through _mask and hide the one thing a
@@ -854,6 +863,20 @@ fi
 if [ -n "${_un_oth:-}" ]; then
   printf '\n  no address configured here for: %s\n' "$_un_oth"
   printf '    Again a fact about THIS REPORT, not about the cluster.\n'
+fi
+
+# The <... — see note> markers in the Password column, explained where width is free.
+# Re-derived from the SAME globals `_unset_pw` branches on, so cell and note cannot drift.
+if printf '%s' "${rows:-}" | grep -q -- '— see note'; then
+  if [ "${_sink_refused:-0}" = 1 ]; then
+    printf '\n  note: those passwords are held by an overlay this report REFUSED — it belongs to a\n'
+    printf '        DIFFERENT cluster. Do NOT use them.\n'
+  elif [ "${_have_sink:-0}" = 1 ]; then
+    printf '\n  note: those passwords are not published in the state overlay this report is using.\n'
+  else
+    printf '\n  note: those passwords do not exist yet. KinD GENERATES them at install; for a real\n'
+    printf '        lab, set them in .env (see .env.example for the variable names).\n'
+  fi
 fi
 
 # ---- notes the TABLE CELLS point at. A cell may carry a short marker; the sentence lives here.
