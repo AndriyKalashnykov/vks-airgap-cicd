@@ -4969,67 +4969,79 @@ the demo rather than a test fixture.
 
 ## B534 — 🟡 the app UI shows ONE fact under TWO labels: `Version` and `Commit` are both the image tag
 
-MEASURED 2026-09-05 on the live demo — `javawebapp.vks.local` renders:
+MEASURED 2026-09-05 from the RENDERED PAGES (not from env), all six:
 
-    Version   a712689
-    Commit    a712689
+    javawebapp a712689/a712689   gowebapp 1e250d1/1e250d1   nodejswebapp ab9f22b/ab9f22b
+    pythonwebapp e159b70/e159b70 rustwebapp be1b6c2/be1b6c2 dotnetwebapp 9ba099a/9ba099a
 
-It is deliberate. `deploy/<app>/kustomization.yaml` has a kustomize `replacements` block with ONE
-source (the container image, `delimiter: ":"` `index: 1` -> the tag) and TWO targets:
+`deploy/<app>/kustomization.yaml` has a kustomize `replacements` block with ONE source (the container
+image, `delimiter: ":"` `index: 1` -> the tag) and TWO targets: `APP_VERSION` and `APP_COMMIT`.
 
-    - ...env.[name=APP_VERSION].value
-    - ...env.[name=APP_COMMIT].value
+## ⚠️ MY FIRST TWO PRESCRIPTIONS WERE BOTH WRONG — an adversary round REFUTED the second
 
-and its comment gives the motive: *"Carry the DEPLOYED image tag into the app's own version/commit
-display ... so it always matches what is really running."* That motive is sound — for COMMIT. The
-Tekton write-back sets `newTag` to the app repo's short sha, so `Commit` is correct and useful.
+**Attempt 1 — "fix the three that lose a version, leave the other three."** The operator rejected it:
+it perpetuates the per-app divergence the registry doctrine exists to kill.
 
-For VERSION it destroys information. `apps/java/javawebapp/pom.xml` declares `0.1.0`, and the app
-already bakes it in: `application.yml` reads `version: ${APP_VERSION:@project.version@}` (the
-`@...@` delimiters are filtered by spring-boot-starter-parent at build time). But the deployment
-sets an `APP_VERSION` env, and env WINS over the yaml default — so the baked project version can
-never surface, and the reader sees the same seven characters twice.
+**Attempt 2 — "give every app a real declared version; stop setting `APP_VERSION`; target
+`APP_COMMIT` only; gate it."** REFUTED, on four measured grounds:
 
-**Done when:** the `replacements` target list keeps only `APP_COMMIT`, AND the `APP_VERSION` env is
-DELETED from `deploy/<app>/deployment.yaml` (leaving it at `"dev"` would be worse — that is what
-would then show). Then `Version` reads the real project version and `Commit` reads the sha.
+1. **It would REVERT A DOCUMENTED FIX.** `deploy/javawebapp/deployment.yaml:48-53` records verbatim
+   that showing baked defaults WAS the defect being fixed: *"Before this, both apps showed only their
+   in-code defaults — javawebapp "0.1.0", gowebapp "dev" … while the running image was :ecae614. The
+   information existed and never reached the app."* Dropping the env re-creates that symptom across
+   FIVE apps (go/node/python/rust/dotnet all default to the literal `"dev"`).
+2. **My premise was FALSE on 2 of 6.** nodejswebapp and rustwebapp DECLARE `0.1.0` and NEVER READ IT
+   (`server.js:30` and `main.rs:115` both read `env(APP_VERSION,'dev')`; zero hits for
+   `CARGO_PKG_VERSION`). Their version was never plumbed, not "discarded". Only javawebapp reads a
+   project version at all (`application.yml:24`, `${APP_VERSION:@project.version@}`). So apps needing
+   NEW build plumbing is **five**, not three.
+3. **The new field would carry ZERO information.** Every app declares `0.1.0`, and a demo has no
+   release cadence — so `Version` would be constant across all time AND identical across all six. The
+   status quo at least changes on every deploy. Trading a mislabelled field for an uninformative one,
+   for ~20 files + 5 build plumbings + a new gate, is a net loss.
+4. **`apps/registry.tsv` is the wrong home for it**, and the registry's own header says why about this
+   exact column shape: a 5th column was REMOVED because it made adding an app "a row here PLUS a line
+   in .env.example, and no gate could see the second edit". A version column re-adds a hand-maintained
+   per-app value that, unlike the host, cannot be derived.
 
-MEASURED across all six on the live cluster — every one has `APP_VERSION == APP_COMMIT == <sha>`
-(a712689 / 1e250d1 / ab9f22b / e159b70 / be1b6c2 / 9ba099a), so this is systematic, not a one-off.
-But only THREE actually lose information, and the fix is worth doing for those:
+Also settled by the round: `make verify` does NOT read these fields (`99-verify.sh:287` asserts the
+image TAG is a prefix of the marker sha; `:660` greps for the MARKER), so no change here reddens the
+headline e2e. And a partial application fails LOUDLY offline — measured with kustomize v5.8.1,
+removing the env while leaving the replacement target gives `rc=1 unable to find field ... in
+replacement target`, and `validate.sh:191-207` kustomize-builds every app inside `static-check`.
 
-| app | declares a version | fate |
-|---|---|---|
-| javawebapp | `pom.xml` -> `0.1.0` | OVERWRITTEN by the sha |
-| nodejswebapp | `package.json` -> `0.1.0` | OVERWRITTEN |
-| rustwebapp | `Cargo.toml` -> `0.1.0` | OVERWRITTEN |
-| gowebapp | none — its `page` struct's Version field is env-fed only | nothing lost |
-| pythonwebapp | no `pyproject.toml` at all (app.py + requirements.txt) | nothing lost |
-| dotnetwebapp | no `<Version>` in the csproj | nothing lost |
+## THE PRESCRIPTION THAT SURVIVED: keep the mechanism, fix the LABEL
 
-⚠️ MY FIRST PRESCRIPTION HERE WAS "fix the three, leave the other three" — and the operator was
-right to reject it. That perpetuates exactly the per-app divergence this repo's registry doctrine
-exists to kill (`apps/registry.tsv` + `lib/apps.sh` + `check-app-hardcodes`: one row per app,
-everything else LOOPS). Six apps behaving two different ways is the defect, not the starting point.
+The field shows the deployed image tag. The tag IS `git rev-parse --short HEAD`
+(`k8s/tekton/tasks/git-clone.yaml:40`), so `Commit` is ACCURATE. Only `Version` lies.
 
-**ALIGN ALL SIX ON ONE METHOD:**
+**Relabel `Version` -> `Image tag` (or drop the row and keep `Commit`) at six one-line sites:**
 
-1. Every app DECLARES a project version in its own native manifest — the three that already do keep
-   theirs; the three that do not get one:
-   - gowebapp: Go has no manifest field. Use `-ldflags "-X main.version=..."` in its Dockerfile
-     (its `page` struct already has a `Version` field), sourced from a single place.
-   - pythonwebapp: it has only `app.py` + `requirements.txt` — add a `pyproject.toml` with
-     `version`, or a `__version__` the app reads.
-   - dotnetwebapp: add `<Version>` to the csproj (today it inherits .NET's implicit `1.0.0`).
-2. The deployment STOPS setting `APP_VERSION` (env wins over the baked value, so leaving it set —
-   at `"dev"` or anything else — defeats step 1).
-3. The kustomize `replacements` block targets `APP_COMMIT` ONLY.
-4. GATE IT, or it rots back: assert (a) every app in the registry declares a version its build bakes
-   in, and (b) no `deploy/*/deployment.yaml` sets `APP_VERSION`. Both are offline greps over the
-   registry — the same shape as `check-app-hardcodes` and `check-pull-secret-alignment`.
+    apps/java/javawebapp/src/main/resources/templates/index.html:35
+    apps/nodejs/nodejswebapp/server.js:71
+    apps/python/pythonwebapp/app.py:72
+    apps/dotnet/dotnetwebapp/Program.cs:79
+    apps/rust/rustwebapp/src/main.rs:84
+    apps/go/gowebapp/main.go:88
 
-Result, identically for all six: `Version` = the declared project version, `Commit` = the deployed
-image tag. Two labels, two facts.
+Self-verifying: `check-ui-contract.sh` diffs the NORMALISED RENDERED PAGE across all six, so missing
+one app is a RED. The producers need no change — they render fixed literals (`main_test.go:95`:
+`page{AppName:"APPNAME", …, Version:"VERSION", Commit:"COMMIT"}`), so only the label moves.
 
-⚠️ Re-run `make verify` after: its assertion reads the rendered page. Confirm it keys on the MARKER
-(the greeting) and not on the version field, or this change reddens it.
+**Plus a ~3-line LIVE assertion**, because no offline gate can witness this: `check-ui-contract.sh`
+deliberately MASKS both fields (they are "app-specific data the requirement explicitly ALLOWS to
+differ"), and the value is injected at deploy time, so neither the template nor the manifest can see
+it. `99-verify.sh:655` already holds the rendered page in `$b` — assert there that the Commit field
+is a prefix of `$marker_sha`, which verify already computes at `:121`.
+
+⚠️ **The relabel needs its own idea-round before it is written** — it is a UI-contract change across
+six apps, and the round that prescribed it explicitly did not review it.
+
+⚠️ **RE-OPEN THE REFUTED DESIGN IF the apps ever gain a real release cadence** — finding 3 flips the
+moment the version can actually change.
+
+**Residual the round could NOT settle:** whether java renders `0.1.0` or the literal
+`@project.version@` when `APP_VERSION` is unset was read from the POM, not executed (no explicit
+`<resources>` filtering block; it relies on spring-boot-starter-parent's default @-delimiter
+filtering). One minute to settle offline: `cd apps/java/javawebapp && ./mvnw -q -B package && unzip -p
+target/*.jar BOOT-INF/classes/application.yml | grep -n version`.
