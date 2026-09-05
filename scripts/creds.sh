@@ -195,10 +195,15 @@ else
   _argo_ip=""
   if [ -n "${ARGOCD_KUBECONFIG:-}${KUBECONFIG:-}" ] && have kubectl; then
     _argo_ns="${ARGOCD_NAMESPACE:-}"
-    [ -n "$_argo_ns" ] || _argo_ns="$(KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s </dev/null \
+    [ -n "$_argo_ns" ] || _argo_ns="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" env KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s </dev/null \
         get svc -A -o jsonpath='{range .items[?(@.metadata.name=="argocd-server")]}{.metadata.namespace}{end}' 2>/dev/null || true)"
     if [ -n "$_argo_ns" ]; then
-      _argo_ip="$(KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s </dev/null -n "$_argo_ns" \
+      # ⚠️ `timeout` AS WELL AS `--request-timeout`. MEASURED 2026-09-05: this exact call took
+      # 9.17 s against an unreachable API server DESPITE --request-timeout=3s, because that flag
+      # bounds the API REQUEST, not the DNS resolution and TCP connect that precede it. It was the
+      # single largest cost in `make creds` (21.7 s total, of which the reachability probes are
+      # 0.02 s). An access command must never inherit an unbounded wait from a dead cluster.
+      _argo_ip="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" env KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s </dev/null -n "$_argo_ns" \
           get svc argocd-server -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
     fi
   fi
@@ -211,6 +216,14 @@ else
 fi
 # shellcheck source=scripts/lib/apps.sh
 . "${SCRIPT_DIR}/lib/apps.sh"
+# ⚠️ lib/harbor.sh is sourced for harbor_reachable_state() — the THREE-STATE reachability probe
+# (unresolved | silent | serving) that already existed and that this script structurally could not
+# call, because it sourced only os.sh and apps.sh. os.sh:1938 records that exact class as measured:
+# calling a harbor.sh function from a non-sourcing script is `command not found` under
+# `set -euo pipefail`, ON THE FAILURE PATH ONLY, which a green run never reaches.
+# VERIFIED side-effect-free to source (ran-it): rc=0, no output, no env change, +17 functions.
+# shellcheck source=scripts/lib/harbor.sh
+. "${SCRIPT_DIR}/lib/harbor.sh"
 tekton_url="$(ingress_url "${TEKTON_DASHBOARD_HOST:-tekton.vks.local}")"  # Tekton Dashboard (read-only UI)
 
 _sink="$(state_file)"
@@ -290,7 +303,12 @@ _argo_rc=0; _argo_err="$(mktemp)"
 # in `$( )` -- always a pipe -- so without --raw we would receive the SENTINEL and render it into
 # the cell below, and the operator would never see their password even on a real terminal. We take
 # the plaintext and apply the identical decision ourselves, three lines down.
-argo_pw="$("${SCRIPT_DIR}/argocd-password.sh" --wait 0 --raw 2>"$_argo_err")" || _argo_rc=$?
+# ⚠️ BOUNDED. MEASURED 2026-09-05: this call cost ~10 s against an UNREACHABLE cluster, and the two
+# guest-node-SSH kubectl calls below allowed 20 s EACH -- `make creds` took 21.7 s total, of which my
+# reachability probes were 0.06 s. An ACCESS command that takes 22 s to tell you what you can reach
+# has failed at its job. `--wait 0` bounds the script's own polling; it does not bound the kubectl
+# underneath it, so the timeout must be here.
+argo_pw="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" "${SCRIPT_DIR}/argocd-password.sh" --wait 0 --raw 2>"$_argo_err")" || _argo_rc=$?
 _argo_initial=0
 grep -q 'INITIAL admin password' "$_argo_err" 2>/dev/null && _argo_initial=1
 rm -f "$_argo_err"
@@ -502,7 +520,7 @@ case "$_prov" in
                 printf '                   values you supplied, not placeholders. .env carries NO cluster stamp, so\n'
                 printf '                   this report cannot confirm they belong to the cluster you are talking to;\n'
                 printf '                   a value left over from a destroyed lab looks identical to one you just\n'
-                printf '                   typed. Re-run any value that is rejected rather than assuming it\n'
+                printf '                   typed. Treat every credential here as LIVE until you know otherwise; re-run\n'
                 printf '                   is wrong.\n'
                 _settle_note '                   '
               else
@@ -546,11 +564,53 @@ fi
 # cell shunted Username/Password off into the distance. A table whose alignment depends on nobody ever
 # adding a longer app name is a table that will be misaligned — and the registry EXISTS so people add apps.
 rows=""
-add_row() { rows="${rows}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\n'; }
+# ── REACHABILITY: a FOURTH column, never a replacement for the provenance tokens ────────────────
+# ⚠️ B204 refuted collapsing these axes, and the reason is sharper than tidiness: a TCP/HTTP probe
+# proves THE HOST ANSWERS. It proves NOTHING about the credential beside it. RULE ZERO-A0 measures
+# three Harbor "auth checks" that return 200 with NO credentials at all. So a row marked `serving`
+# next to an unverified password is a claim about the PORT, not about the login — collapsing them
+# into one "AVAILABLE" verdict rebuilds the confident-wrong-credential shape one layer up.
+# Hence: `Reachable` sits BESIDE `Username`/`Password`, and says only what was actually proven.
+#
+# COST (ran-it 2026-09-05): a name that does NOT resolve is FREE (getent fails in 0.002 s; our
+# harbor.env1.lab.test in 0.01 s). Only an IP that black-holes costs the full bound. So the state
+# an operator hits after a rebuild -- nothing resolves -- is ~0.01 s, and the worst case is
+# bounded by CREDS_PROBE_TIMEOUT_SECONDS per target.
+# ⚠️ NEVER call `make harbor-reachable` here: its 900 s is a WAIT LOOP in the target
+# (04-harbor-reachable.sh:45). The target's job is to wait; this printer's job is to report.
+# CREDS_NO_PROBE=1 (already snapshotted at :52) skips every probe -- the CI lever.
+_probe_tcp() {                    # <host> <port> -> 0 if something answers, non-zero otherwise
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
+  timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null
+}
+# ingress-backed rows (Gitea, Tekton, and EVERY app) resolve from the SINGLE _ing_live probe that
+# this script already took -- zero extra cost, and the expensive case cannot occur (F12).
+_reach_ingress() {
+  [ "${CREDS_NO_PROBE:-0}" = 1 ] && { printf 'not probed'; return; }
+  [ -n "${_ing:-}" ] || { printf 'no ingress';  return; }
+  [ "${_ing_live:-0}" = 1 ] && printf 'serving' || printf 'silent'
+}
+_reach_harbor() {
+  [ "${CREDS_NO_PROBE:-0}" = 1 ] && { printf 'not probed'; return; }
+  [ -n "${HARBOR_URL:-}" ] || { printf 'not set'; return; }
+  HARBOR_PROBE_TIMEOUT_SECONDS="${CREDS_PROBE_TIMEOUT_SECONDS:-2}" harbor_reachable_state 2>/dev/null || printf 'unknown'
+}
+_reach_argocd() {
+  [ "${CREDS_NO_PROBE:-0}" = 1 ] && { printf 'not probed'; return; }
+  local _h="${ARGOCD_SERVER:-}"; [ -n "$_h" ] || { printf 'not set'; return; }
+  _h="${_h#https://}"; _h="${_h#http://}"; _h="${_h%%/*}"
+  local _port="${_h##*:}"; case "$_h" in *:*) : ;; *) _port=443 ;; esac
+  _h="${_h%%:*}"
+  getent hosts "$_h" >/dev/null 2>&1 || case "$_h" in
+    *[!0-9.]*) printf 'unresolved'; return ;;      # a NAME that does not resolve
+  esac
+  _probe_tcp "$_h" "$_port" && printf 'serving' || printf 'silent'
+}
+add_row() { rows="${rows}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\t'"${5:--}"$'\n'; }
 
 # Ordered by the pipeline flow: Gitea (push) -> Tekton (build) -> Harbor (registry) -> ArgoCD (deploy) -> apps.
-add_row "Gitea"  "$gitea_url"  "$gitea_user"  "$gitea_pw"
-add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)"
+add_row "Gitea"  "$gitea_url"  "$gitea_user"  "$gitea_pw"  "$(_reach_ingress)"
+add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)" "$(_reach_ingress)"
 # ── WHY THIS ROW IS NOT READ LIVE FROM THE CLUSTER (B202 F5/D) ──────────────────────────────────
 # NOT because "a printer must not probe" — it demonstrably does: the guest-node SSH row below runs
 # two live kubectl calls (PR #901). Stating that as the reason would be refuted by this very file.
@@ -567,14 +627,14 @@ add_row "Tekton" "$tekton_url" "-"            "(no login; read-only dashboard)"
 # source, never field-by-field. `make harbor-admin-password` already does this correctly
 # (env_publish_all writes BOTH keys, and since B202 F4 it REFUSES to overwrite a robot$ pair).
 # test-creds-show.sh asserts this mechanically — a comment alone is not the control.
-add_row "Harbor" "$harbor_url" "$harbor_user" "$harbor_pw"
+add_row "Harbor" "$harbor_url" "$harbor_user" "$harbor_pw" "$(_reach_harbor)"
 # Render the PROVENANCE with the value. A bare secret here reads as "this is your password",
 # and on the primary runbook it is the pre-rotation one from Step 5 onward — which is the state
 # that produced a live 401 and a backlog row proposing a network probe to detect it.
 if [ "${_argo_initial:-0}" = 1 ] && [ -n "$argo_pw" ]; then
   argo_pw="${argo_pw}   <- INITIAL secret; superseded if you ran 'argocd account update-password'"
 fi
-add_row "ArgoCD" "$argocd_url" "$argo_user"   "$argo_pw"
+add_row "ArgoCD" "$argocd_url" "$argo_user"   "$argo_pw"   "$(_reach_argocd)"
 # CAPTURE INTO VARIABLES FIRST -- do NOT inline these `$( )` into add_row's ARGUMENTS.
 # MEASURED 2026-08-22 with a newly-enrolled app whose app_health_path() branch did not yet exist:
 #     FATAL  app 'nodejswebapp': add a branch to app_health_path()
@@ -609,31 +669,33 @@ while read -r _a; do
   # This arms the moment one does -- app_build_args' go arm (an intentional empty printf) is the
   # precedent for a per-language accessor that legitimately prints nothing.
   [ -n "$_health" ] || die "app '$_a': app_health_path() returned nothing — refusing to print a credentials row with a blank health path."
-  add_row "$_a" "$_url" "-" "(no login; health at ${_health})"
+  add_row "$_a" "$_url" "-" "(no login; health at ${_health})" "$(_reach_ingress)"
 done <<EOF
 ${_apps}
 EOF
 
 # Measure every column against every row (headers included), then print.
-w1=7; w2=3; w3=8   # the header widths are the floor: "Service", "URL", "Username"
-while IFS=$'\t' read -r c1 c2 c3 _c4; do
+w1=7; w2=3; w3=8; w4=8   # header widths are the floor: Service, URL, Username, Password
+while IFS=$'\t' read -r c1 c2 c3 c4 _c5; do
   [ -n "$c1" ] || continue
   [ "${#c1}" -gt "$w1" ] && w1="${#c1}"
   [ "${#c2}" -gt "$w2" ] && w2="${#c2}"
   [ "${#c3}" -gt "$w3" ] && w3="${#c3}"
+  [ "${#c4}" -gt "$w4" ] && w4="${#c4}"
 done <<EOF
 $rows
 EOF
 
-printf '\n  %-*s  %-*s  %-*s  %s\n' "$w1" "Service" "$w2" "URL" "$w3" "Username" "Password"
-printf '  %-*s  %-*s  %-*s  %s\n' \
+printf '\n  %-*s  %-*s  %-*s  %-*s  %s\n' "$w1" "Service" "$w2" "URL" "$w3" "Username" "$w4" "Password" "Reachable"
+printf '  %-*s  %-*s  %-*s  %-*s  %s\n' \
   "$w1" "$(printf '%*s' "$w1" '' | tr ' ' '-')" \
   "$w2" "$(printf '%*s' "$w2" '' | tr ' ' '-')" \
   "$w3" "$(printf '%*s' "$w3" '' | tr ' ' '-')" \
-  "$(printf '%*s' 8 '' | tr ' ' '-')"
-while IFS=$'\t' read -r c1 c2 c3 c4; do
+  "$w4" "$(printf '%*s' "$w4" '' | tr ' ' '-')" \
+  "$(printf '%*s' 9 '' | tr ' ' '-')"
+while IFS=$'\t' read -r c1 c2 c3 c4 c5; do
   [ -n "$c1" ] || continue
-  printf '  %-*s  %-*s  %-*s  %s\n' "$w1" "$c1" "$w2" "$c2" "$w3" "$c3" "$c4"
+  printf '  %-*s  %-*s  %-*s  %-*s  %s\n' "$w1" "$c1" "$w2" "$c2" "$w3" "$c3" "$w4" "$c4" "$c5"
 done <<EOF
 $rows
 EOF
@@ -657,13 +719,18 @@ if [ "$_have_sink" = 0 ] && [ "$_env_populated" = 1 ]; then
   # (measured: uncommented=0), so a value on screen CANNOT have come from there, and on a real lab
   # the address is a live one the operator typed. Being told "placeholder" about a real credential
   # is how it ends up in a ticket, a screenshot or a chat, unrotated.
-  printf '\n  note: no installer has published anything ON THIS BOX — but the values\n'
-  printf '        above are NOT placeholders: they came from YOUR .env, which is not tracked and not\n'
-  printf '        stamped for any cluster. This report therefore cannot tell a value you typed a\n'
-  printf '        minute ago from one left over from a lab that no longer exists; they are identical\n'
-  printf '        on screen. Treat every credential here as LIVE until you know otherwise.\n'
-  _settle_note '          '
-  printf '          KinD     : you need set nothing by hand; the install discovers and fills these in.\n'
+    # ⚠️ DELIBERATELY SILENT — do NOT re-add prose here. This arm printed a five-line paragraph
+    # plus a SECOND copy of _settle_note (the Context block above already prints both), and a KinD
+    # line in a report whose flow may be a real VKS lab. MEASURED 2026-09-05: `make creds` was 71
+    # lines of which 13 carried a value — 82% prose — with the ~10-line remedy block VERBATIM TWICE.
+    # ⚠️ THE `if` CONDITION MUST SURVIVE, EMPTY. Deleting this arm outright is a bash SYNTAX ERROR
+    # (measured: "syntax error near unexpected token 'elif'"), and promoting the `elif` instead makes
+    # this state fall into the PLACEHOLDER arm below, which claims "None of them exists" about live
+    # .env credentials — the B161 finding (its gate catches it, rc=1).
+    # The one fact this arm carried that Context did not — "treat every credential as LIVE" — is now
+    # IN Context. Everything else was a restatement, and the honest PER-ROW answer is the Reachable
+    # column, which is where a reader actually looks.
+    : # intentionally no output
 elif [ "$_have_sink" = 0 ]; then
   printf '\n  note: EVERY value above is a PLACEHOLDER from .env.example, not a credential —\n'
   printf '        including Harbor'\''s and Gitea'\''s. None of them exists.\n'
@@ -879,7 +946,7 @@ else
   else
     _lab_err="$(mktemp)"
     # `&& rc=0 || rc=$?` and NOT `; rc=$?` — the latter dies under `set -e` (rules/shell).
-    _ssh_list="$(timeout "${TOOL_VERSION_TIMEOUT_SECONDS:-20}" kubectl --kubeconfig "$_sup_kc" \
+    _ssh_list="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
                    -n "$VKS_NAMESPACE" get secret -o name </dev/null 2>"$_lab_err")" && _ssh_rc=0 || _ssh_rc=$?
     if [ "$_ssh_rc" -ne 0 ]; then
       # THE WHOLE POINT: name WHY we could not ask, so it is never mistaken for "there is none".
@@ -891,7 +958,7 @@ else
       else
         # stderr to a FILE, never 2>&1: a server `Warning:` header concatenates in front of the
         # base64 on a SUCCESSFUL read and base64 -d then emits partial garbage (lib/argocd.sh:327).
-        _ssh_b64="$(timeout "${TOOL_VERSION_TIMEOUT_SECONDS:-20}" kubectl --kubeconfig "$_sup_kc" \
+        _ssh_b64="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s --kubeconfig "$_sup_kc" \
                       -n "$VKS_NAMESPACE" get secret "$_ssh_sec" \
                       -o jsonpath='{.data.ssh-passwordkey}' </dev/null 2>>"$_lab_err")" && _ssh_rc=0 || _ssh_rc=$?
         # purity-check before decoding, or a partial decode ships a WRONG password.
