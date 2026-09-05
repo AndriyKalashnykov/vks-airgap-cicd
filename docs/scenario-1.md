@@ -628,6 +628,41 @@ make psa-check
 
 **Expect:** `LAB PREFLIGHT OK`. `PSA UNPROVEN` on a bare cluster is expected, not a failure. *(~1 min)*
 
+### If the lab was RESTORED from a snapshot, check vCenter itself
+
+A vCenter service can come back from a snapshot **alive but unable to serve**, and it will not tell
+you. Measured on this lab, 2026-09-05:
+
+```text
+vCenter reported:  content-library  state=STARTED  health=HEALTHY
+every actual call: HTTP 500                        for 5.5 days
+govc about:        passed
+```
+
+The cause is a credential frozen in process memory: a RAM snapshot preserves an in-flight token,
+the wall clock keeps moving, and the service resumes days later still holding something expired.
+The clock and the certificates are fine — both were measured and ruled out. Only exercising the
+real API finds it, which is what this does:
+
+```bash
+make vcenter-check              # read-only; exercises each service's REAL API
+```
+
+**Expect:** `OK — every exercised service actually served`. If anything reports `FAIL`, restart
+just what failed and re-verify:
+
+```bash
+make vcenter-repair             # restarts ONLY the services that actually failed, then re-exercises
+```
+
+Why it matters here: VKr node images are delivered through the content library, so while it is down
+a guest cluster sits at `ImageCacheReady=False` **forever** with no error anywhere that names the
+cause. Skip this and you can lose an hour to a cluster that was never going to come up.
+
+Both targets need `VCENTER_HOST` / `VCENTER_USERNAME` / `VCENTER_PASSWORD` from `.env` (Step 1).
+As a **tenant** you will not have those — the check skips cleanly and `make lab-preflight` above
+already covers the half you *can* see. *(~10 s)*
+
 ---
 
 ## 8. Harbor's CA

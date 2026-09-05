@@ -898,7 +898,7 @@ case "${_argo_tls_flag:-0}" in
   1)
     printf '\n  note: ArgoCD is reached at a BARE IP above. Its serving certificate is self-signed\n'
     printf '        and carries DNS names only (no IP SAN), so TLS can never verify against an IP.\n'
-    printf '        Measured: `curl https://<ip>/` -> rc=60; `curl -sk https://<ip>/` -> HTTP 200.\n'
+    printf '        Measured: curl to the IP gives rc=60 (cannot verify); curl -k gives HTTP 200.\n'
     printf '        So --insecure lets you LOG IN and is NOT a general remedy -- a verifying path\n'
     printf '        needs a NAME the certificate carries, plus ARGOCD_CA_FILE. Giving ArgoCD a DNS\n'
     printf '        record is the real fix; nothing in this repo creates one for it today.\n' ;;

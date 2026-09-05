@@ -167,6 +167,23 @@ if have helm; then
     for c in base istiod gateway; do
       mirror_retry "${MIRROR_RETRIES:-5}" run helm pull "istio-airgap/${c}" --version "$ISTIO_VERSION" --destination "$CHART_DIR"
     done
+    # ---- headlamp, same carry pattern, same reason -------------------------------------------
+    # `helm repo add` CANNOT WORK on the air-gap box (46-install-istio.sh:77-78 records this), so
+    # the chart is pulled HERE, on the box with the internet, and consumed from bundle/charts.
+    # An adversary verified the chart has NO `dependencies:` block and no `charts/` directory, so a
+    # plain `helm pull` is COMPLETE -- no --dependency-update needed. It is also not published to
+    # an OCI registry (kubernetes-sigs/headlamp#2987), so a classic repo is the only source.
+    # Pinned to the SAME variable the install passes as image.tag: the chart otherwise derives the
+    # tag from its OWN appVersion, a second source of truth that would let a bot bump images.txt
+    # while the Deployment still asked for the old tag.
+    if [ -n "${HEADLAMP_VERSION:-}" ]; then
+      HEADLAMP_CHART_REPO="${HEADLAMP_CHART_REPO:-https://kubernetes-sigs.github.io/headlamp/}"
+      mirror_retry "${MIRROR_RETRIES:-5}" run helm repo add headlamp-airgap "$HEADLAMP_CHART_REPO" --force-update 1>&2
+      mirror_retry "${MIRROR_RETRIES:-5}" run helm repo update headlamp-airgap 1>&2
+      mirror_retry "${MIRROR_RETRIES:-5}" run helm pull headlamp-airgap/headlamp --version "$HEADLAMP_VERSION" --destination "$CHART_DIR"
+    else
+      log_warn "HEADLAMP_VERSION is unset — NOT carrying the headlamp chart; the air-gap box cannot install headlamp."
+    fi
     log_info "charts carried: $(find "$CHART_DIR" -name '*.tgz' -printf '%f ' 2>/dev/null)"
   else
     log_warn "ISTIO_VERSION is unset — NOT carrying the istio charts. The air-gapped box will only be able to use INGRESS_CONTROLLER=traefik or istio-existing."
