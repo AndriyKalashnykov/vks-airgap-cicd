@@ -5015,7 +5015,13 @@ replacement target`, and `validate.sh:191-207` kustomize-builds every app inside
 The field shows the deployed image tag. The tag IS `git rev-parse --short HEAD`
 (`k8s/tekton/tasks/git-clone.yaml:40`), so `Commit` is ACCURATE. Only `Version` lies.
 
-**Relabel `Version` -> `Image tag` (or drop the row and keep `Commit`) at six one-line sites:**
+**PREFERRED: DELETE the `Version` row.** The operator's question — *"what is the difference between
+Version and Commit on the web UI?"* — has the answer "none", and that is the whole defect. Both rows
+render the SAME string. `Commit` is accurate (the tag IS `git rev-parse --short HEAD`). So the
+honest UI is ONE fact under ONE label; a second row showing the identical value is noise whatever
+you call it. Relabelling to `Image tag` is the fallback if a two-row layout must be preserved.
+
+Either way it is the same six one-line sites:
 
     apps/java/javawebapp/src/main/resources/templates/index.html:35
     apps/nodejs/nodejswebapp/server.js:71
