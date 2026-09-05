@@ -4944,7 +4944,7 @@ the same "verify the end result, not a proxy" move that B531 applied to `.env`. 
 would have caught this directly; it needs a live cluster, so it belongs with `psa-check` /
 `argocd-preflight` in the read-only lab-preflight family rather than in `static-check`.
 
-## B533 — 🟡 `make verify` PERMANENTLY defaces every app's greeting, and never restores it
+## B533 — ⚪ WITHDRAWN: the verify marker is DOCUMENTED expected behaviour, not a defect
 
 `scripts/99-verify.sh:111` calls `app_set_message "$app" "$d" "$marker"` (`lib/apps.sh:124`), which
 rewrites each app's default greeting to `vks-airgap-cicd-verify-<epoch>-<app>`, commits it, and
@@ -4956,8 +4956,21 @@ So after `docs/scenario-1.md` Step 11 — the documented, expected path — the 
 six apps whose front page reads a verify marker instead of their real greeting. The marker is pushed
 to the GITEA repo, not this tree, so `git status` here is clean and nothing hints at it.
 
-Rewriting the greeting is a legitimate technique: it is what makes the assertion honest (the app
-must serve THIS build, not a cached one). The defect is that it is never undone.
+⚠️ **WITHDRAWN 2026-09-05, and the withdrawal is the lesson.** I filed this without reading
+`docs/demo-walkthrough.md:28-31`, which documents it explicitly: *"If you arrived straight from
+`make e2e-kind`, its own `make verify` step already deployed a marker like
+`vks-airgap-cicd-verify-<epoch>`, so you'll see THAT, not the `Hello from vks-airgap-cicd` default.
+**Either is fine** — you're about to change it."*
+
+So the marker is expected, the walkthrough's step 1 tells the reader to expect it, and step 2 has
+them change it immediately. There is nothing to restore: the demo's next act IS overwriting it.
+
+The lesson is the one this session kept re-learning: I read the CODE (`99-verify.sh:111`, no revert)
+and filed a defect without reading the DOC that describes the behaviour. A missing revert in the
+script is only a defect if the product claims the greeting is stable — and it claims the opposite.
+
+Rewriting the greeting is a legitimate technique: it is what makes the assertion honest (the app must
+serve THIS build, not a cached one).
 
 ⚠️ Do NOT fold this into B529's `build-apps` design. `build-apps` would give a clean first build
 that `verify` immediately defaces again, so it does not fix this — an adversary flagged the
@@ -5015,7 +5028,28 @@ replacement target`, and `validate.sh:191-207` kustomize-builds every app inside
 The field shows the deployed image tag. The tag IS `git rev-parse --short HEAD`
 (`k8s/tekton/tasks/git-clone.yaml:40`), so `Commit` is ACCURATE. Only `Version` lies.
 
-**PREFERRED: DELETE the `Version` row.** The operator's question — *"what is the difference between
+⚠️ **I PROMOTED "DELETE THE ROW" AND IT IS WRONG — MEASURED 2026-09-05.** Deleting the row removes
+the VALUE from the page, and the apps' own contract tests assert that value is present. Measured on
+nodejswebapp (`server.test.js:26`):
+
+    for (const want of [p.message, p.version, p.commit, p.appName])
+      assert.ok(body.includes(want), `missing ${want}`);
+
+A/B on the same file, same test, 40s timeout:
+
+    original (Version row present)  -> rc=0, 0s, 1418 bytes rendered
+    row DELETED                     -> rc=124, HANGS 40s, 'Promise resolution is still pending'
+
+It HANGS rather than failing cleanly because the assertion throws while the test's HTTP server is
+still open, so the event loop never drains — an unfamiliar failure shape that reads like a broken
+harness rather than a broken change. Other apps carry the same assertion.
+
+So DELETING costs six template edits PLUS a test edit per app; RELABELLING costs six template edits
+and nothing else, because the value stays on the page. The adversary prescribed the relabel and I
+overrode it with a "cleaner" idea that is strictly more expensive. **VERIFIED: after relabelling,
+nodejswebapp's test is rc=0 untouched, and the page renders `<dt>Image tag</dt><dd>VERSION</dd>`.**
+
+**PREFERRED: RELABEL `Version` -> `Image tag`.** (The rejected alternative, DELETE the row:) The operator's question — *"what is the difference between
 Version and Commit on the web UI?"* — has the answer "none", and that is the whole defect. Both rows
 render the SAME string. `Commit` is accurate (the tag IS `git rev-parse --short HEAD`). So the
 honest UI is ONE fact under ONE label; a second row showing the identical value is noise whatever

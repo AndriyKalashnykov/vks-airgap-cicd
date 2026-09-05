@@ -76,7 +76,7 @@ public static class Ui
         <h1>{{Esc(p.AppName)}}</h1>
         <p class="message">{{Esc(p.Message)}}</p>
         <dl>
-            <dt>Version</dt><dd>{{Esc(p.Version)}}</dd>
+            <dt>Image tag</dt><dd>{{Esc(p.Version)}}</dd>
             <dt>Commit</dt><dd>{{Esc(p.Commit)}}</dd>
         </dl>
     </main>
