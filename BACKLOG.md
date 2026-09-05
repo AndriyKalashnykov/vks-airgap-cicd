@@ -5143,3 +5143,56 @@ control feels exempt", RULE ZERO).
 **Residual, now correctly scoped:** whether the Gitea-side bloat measurably slows `git-clone` or fills
 the workspace PVC. Not measured. The image-digest question in the first draft is CLOSED by the
 `.dockerignore` evidence above.
+
+## B536 — 🟡 the lab-access table's `<not set>` is ONE token for THREE different facts — 8 cells, and the tenant sees all of them
+
+B535's sibling, surfaced by the idea round that produced #1096. #1096 fixed **one** cell (VKS / SSO);
+this is the class it belongs to, filed rather than reported closed.
+
+`_lab_plain` / `_lab_secret` (`creds.sh:1187-1188`) render a bare `<not set>` at **8 cells** across the
+three static lab rows: `:1192` vCenter (3), `:1193` VKS / SSO (3 — one now fixed), `:1194` vcf CLI (2;
+its endpoint is a literal). One token is doing three jobs:
+
+| what is true | what the reader should do |
+|---|---|
+| you must set it | act |
+| you do not need it under this method | ignore it |
+| you will never have it (tenant) | ignore it, permanently |
+
+**The tenant render is the worst instance, and it is the RULE ZERO-B audience.** Measured from
+fixtures, scenario 2, `VKS_AUTH_METHOD=kubeconfig`, no vCenter credential:
+
+      vCenter         <not set>                <not set>  <not set>
+      VKS / SSO       <not set>                <not set>  <not set>
+      vcf CLI         (the VKS / SSO account)  <not set>  <not set>
+
+…under a header reading **"you supplied these in .env"**. Eight invented chores, aimed at the reader
+least able to act on any of them. And a tenant may legitimately be on the `vcf` method
+(`docs/scenario-2.md:413-419`), so a fix cannot assume tenant ⇒ kubeconfig.
+
+**THE CONTRAST IS THE FINDING.** In the *same table*, the SSH row carries **eight** distinct tokens
+(`<forbidden>`, `<auth failed>`, `<stale CA>`, `<no kubeconfig>`, `<none>`, `<no key>`, `<empty>`,
+`<not probed>`) precisely so "I could not ask" is never read as "the answer is no". The three static
+rows have one.
+
+**Three constraints any fix must satisfy — each already cost something:**
+
+1. **Do NOT change `_lab_plain`/`_lab_secret`'s literal.** `docs/scenario-2.md:806` carries a live
+   `**Expect:**` asserting the vCenter row reads `<not set>`; `check-expect-literals` would go RED,
+   and worse, the next matrix row would fail EXPECT UNMET ~25 minutes into a lab.
+   `check-expect-literals.sh:22-26` records that one line of prose already killed a whole run.
+2. **Do NOT key the marker on `VKS_AUTH_METHOD`.** It has FOUR states and the fourth is the shipped
+   default: `.env.example:1192` ships it COMMENTED, and `creds.sh` reads `${VKS_AUTH_METHOD:-}` at all
+   three of its sites (`:492`, `:1138`, `:1446`) — not the `:-kubeconfig` that `02-env.sh` applies —
+   so the commonest configuration renders an empty method. Fixing that default-drift is its own change
+   with its own blast radius (it moves the flow line and `_vks_login_requires`).
+3. **Keep long text OUT of the Endpoint and Username columns.** They are `%-*s` with a max-over-rows
+   width, so a long marker widens the whole table — the defect `creds.sh` already records twice (a
+   110-char `_ssh_state`, a ~44-char multi-IP cell). The Password column is last and unpadded, which
+   is why #1096's marker was safe there.
+
+**Cheap RED-proof:** render the tenant fixture above and assert fewer than 8 bare `<not set>` cells;
+today it is 8.
+
+**Not started.** Needs its own idea round: the per-cell right answer differs by row, and the vcf CLI
+row's endpoint cell is a literal that must not gain a marker at all.
