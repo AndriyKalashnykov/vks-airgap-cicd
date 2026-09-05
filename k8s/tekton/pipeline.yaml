@@ -73,6 +73,18 @@ spec:
         - { name: subdir, value: app }
         - { name: image, value: $(params.image) }
         - { name: tag, value: $(tasks.clone-app.results.commit) }
+        # Block style: a `${VAR}` inside a YAML flow mapping is a SYNTAX ERROR (see taskRef above).
+        # Rendered per app by 60-configure-tekton.sh from scripts/lib/apps.sh:app_version.
+        - name: version-tag
+          # ⚠️ QUOTED. Unquoted, YAML infers the type and `0.1.0` is a string only BY LUCK — two
+          # dots make it a non-number. The first app to bump to `1.0`/`2.0`/`0.2` yields a FLOAT,
+          # and `1.10` becomes `1.1` with the trailing zero destroyed. Tekton's ParamValue then
+          # fails `json: cannot unmarshal number into Go value of type string`, so `kubectl apply`
+          # REJECTS the Pipeline and `make platform` dies with an error naming `params` — nowhere
+          # near app_version. The walkthrough's own new text invites exactly that bump.
+          # validate.sh maps any unmatched ${VAR} to the literal `placeholder`, so `make validate`
+          # is structurally blind to this: it never sees a numeric value.
+          value: "${APP_DECLARED_VERSION}"
         - { name: builder-image, value: $(params.builder-image) }
         - { name: runtime-image, value: $(params.runtime-image) }
         - { name: build-args, value: $(params.build-args) }

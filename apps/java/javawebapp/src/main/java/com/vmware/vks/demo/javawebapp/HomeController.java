@@ -15,16 +15,19 @@ public class HomeController {
     private final String appName;
     private final String message;
     private final String version;
+    private final String declaredVersion;
     private final String commit;
 
     public HomeController(
             @Value("${spring.application.name:javawebapp}") String appName,
             @Value("${app.message:Hello from vks-airgap-cicd}") String message,
             @Value("${info.app.version:dev}") String version,
+            @Value("${info.app.declared-version:dev}") String declaredVersion,
             @Value("${info.app.commit:unknown}") String commit) {
         this.appName = appName;
         this.message = message;
         this.version = version;
+        this.declaredVersion = declaredVersion;
         this.commit = commit;
     }
 
@@ -32,6 +35,7 @@ public class HomeController {
     public String index(Model model) {
         model.addAttribute("appName", appName);
         model.addAttribute("message", message);
+        model.addAttribute("appVersion", declaredVersion);
         model.addAttribute("version", version);
         model.addAttribute("commit", commit);
         return "index";

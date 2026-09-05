@@ -39,7 +39,7 @@ fail=0
 t "this marker's build (7-char tag)"      "reg/apps/py:5981b0e"                     MATCH
 t "this marker's build (12-char tag)"     "reg/apps/py:5981b0ecafe1"                MATCH
 t "A DIFFERENT build (the run-8 bug)"     "reg/apps/py:d443b2a"                     no
-t "the seeded pre-image 0.1.0"            "reg/apps/py:0.1.0"                       no
+t "the seeded UNPULLABLE placeholder"     "reg/apps/py:NEVER-BUILT-RUN-THE-PIPELINE" no
 t "no tag at all"                         "reg/apps/py"                             no
 t "digest-pinned (unattributable)"        "reg/apps/py@sha256:5981b0ecafe1234567890" no
 t "empty (kubectl returned nothing)"      ""                                        no

@@ -13,7 +13,19 @@ resources:
 images:
   - name: nodejswebapp
     newName: harbor.vks.local/apps/nodejswebapp
-    newTag: "0.1.0"
+    # ⚠️ THIS MUST BE UNPULLABLE, BY CONSTRUCTION. It is the SEEDED value: 50-seed-gitea-repos.sh
+    # rewrites newName/namespace/replicas and DELIBERATELY NOT this, so ArgoCD syncs it on a fresh
+    # install — before any build exists — and the pods go ImagePullBackOff. That LOUD failure is the
+    # correct baseline: `install-all` builds no app image (B529), so "nothing is deployed yet" must
+    # be visible, not silently satisfied.
+    #
+    # It used to be "0.1.0", which was safe only because nothing ever pushed that tag. The build now
+    # tags every image with the app's DECLARED version (scripts/lib/apps.sh:app_version) alongside
+    # the sha — so "0.1.0" became REAL and PULLABLE, and this placeholder would have silently
+    # deployed a PREVIOUS run's build instead of failing. With imagePullPolicy: IfNotPresent (6/6)
+    # a node holding a cached layer would never even re-pull. Caught by an idea round before it
+    # shipped; the tag write-back replaces this on the first successful build.
+    newTag: "NEVER-BUILT-RUN-THE-PIPELINE"
 
 replicas:
   - name: nodejswebapp

@@ -35,11 +35,22 @@ fail=0; n=0
 # and killed the script mid-run. A row is ours iff its first cell is a name the registry knows.
 _known=" $(app_names | tr '\n' ' ')"
 
+# ⚠️ ONLY THE FIRST APP-ROW TABLE. The walkthrough now carries a SECOND per-app table — the
+# DECLARED-VERSION bump (pom.xml / package.json / Cargo.toml / main.go / app.py / .csproj) — and its
+# rows have the identical shape. Without this stop the gate stats those files too and fails with
+# "pom.xml exists but no longer contains 'Hello from vks-airgap-cicd'", which is TRUE and irrelevant:
+# a pom is not where a greeting lives. MEASURED when the version table landed: 4 false REDs.
+# Keyed on the block ENDING (a non-app row after we have seen app rows), not on a heading string or
+# a row count — a heading is prose that moves, and a count would silently pass if a row were dropped.
+_seen_block=0
 # Rows look like:  | `gowebapp` | `main.go` | `const defaultMessage = "..."` |
 while IFS='|' read -r _ app file _rest; do
   app="$(printf '%s' "$app" | tr -d ' `')"
   file="$(printf '%s' "$file" | tr -d ' `')"
-  case "$_known" in *" ${app} "*) : ;; *) continue ;; esac
+  case "$_known" in
+    *" ${app} "*) _seen_block=1 ;;
+    *) [ "$_seen_block" = 1 ] && break; continue ;;
+  esac
   [ -n "$file" ] || continue
   n=$((n+1))
   src="$(app_src "$app" 2>/dev/null || true)"
