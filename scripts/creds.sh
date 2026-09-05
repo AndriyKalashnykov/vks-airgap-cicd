@@ -657,7 +657,9 @@ _reach_argocd() {
   _h="${_h#https://}"; _h="${_h#http://}"; _h="${_h%%/*}"
   local _port="${_h##*:}"; case "$_h" in *:*) : ;; *) _port=443 ;; esac
   _h="${_h%%:*}"
-  getent hosts "$_h" >/dev/null 2>&1 || case "$_h" in
+  # BOUNDED for the same measured reason as lib/harbor.sh's pair: neither timeout variable
+  # reaches getent, and a stale resolver turns this into a 20s hang with no output.
+  timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent hosts "$_h" >/dev/null 2>&1 || case "$_h" in
     *[!0-9.]*) printf 'unresolved'; return ;;      # a NAME that does not resolve
   esac
   _probe_tcp "$_h" "$_port" && printf 'serving' || printf 'silent'

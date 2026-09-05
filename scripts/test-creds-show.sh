@@ -481,6 +481,33 @@ fi
 # `script(1)` gives us that terminal, and this is also the pty behaviour docs/access-uis.md now
 # documents: a pty capture COUNTS as a terminal and reveals.
 _ARGO='ZZARGOSECRET-do-not-match-anything-else'
+
+# ---- NON-PTY POSITIVE CONTROL. This is the ONLY guard for the row itself on a box without
+# script(1), and it is the box this repo targets: bare Photon and minimal containers ship no
+# util-linux. MEASURED 2026-09-05 by an adversary: with script(1) simulated absent, the gate
+# printed "SUCCESS -- creds-show tells the truth in every state" at rc=0, 52 ok, 0 FAIL, while
+# `grep -c ZZARGOSECRET` over the report was 0 -- the ArgoCD row AND its password had been
+# deleted and CI was green. A guard that self-skips on the target platform is not a guard.
+#
+# WHY THIS ONE DISCRIMINATES WHERE THE PTY CASE BELOW DOES NOT, and vice versa -- they test
+# DIFFERENT properties and neither replaces the other:
+#   * THIS case asks "is the row, and the credential it carries, IN THE REPORT AT ALL?"
+#     SHOW_SECRETS=1 is fine here: we want the value revealed so we can grep for it.
+#   * The PTY case asks "does the --raw handshake stop a NESTED SENTINEL leaking into the cell?"
+#     There SHOW_SECRETS=1 is VACUOUS -- the child argocd-password.sh inherits it and reveals
+#     too, so the fixed and broken builds are byte-identical. That case NEEDS a terminal.
+# Adversary-proven to discriminate: 0 before the row-drop fix, 1 after.
+_np_out="$( SHOW_SECRETS=1 SKIP_DOTENV=1 CREDS_TOKEN=1 ARGOCD_ADMIN_PASSWORD="$_ARGO" \
+            timeout 90 ./scripts/creds.sh 2>/dev/null || true )"
+if printf '%s' "$_np_out" | grep -qF "$_ARGO"; then
+  ok "no pty needed: the ArgoCD row still carries its password (the row was not dropped)"
+else
+  bad "the ArgoCD credential is ABSENT from the report. A row whose URL cell is empty must still
+      be printed -- it carries the PASSWORD, which is the half the operator cannot obtain any
+      other way. This guard runs WITHOUT script(1), so it is the one that fires on Photon."
+fi
+unset _np_out
+
 if ! command -v script >/dev/null 2>&1; then
   # LOUD, not silent. A skipped case that says nothing is indistinguishable from a passing one.
   printf '  SKIP  --raw handshake: script(1) not on PATH, so no pty is available to discriminate\n' >&2
