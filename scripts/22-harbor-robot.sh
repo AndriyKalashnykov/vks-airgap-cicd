@@ -70,7 +70,11 @@ ensure_skip_if_credential_works() {
   v="$(harbor_auth_verdict)"
   case "$v" in
     accepted)
-      log_warn "harbor-robot: SKIPPING the mint — ${why}, and the credential in .env AUTHENTICATES."
+      # F4: name the IDENTITY. "the robot exists" and "you ARE the robot" are different facts, and
+      # on matrix rows 2/4/5/6 the credential that authenticates is admin — so the pipeline runs as
+      # admin, not as the robot, and saying only "the credential authenticates" reads as the opposite.
+      log_warn "harbor-robot: SKIPPING the mint — ${why}, and the credential in .env"
+      log_warn "  (${HARBOR_USERNAME}) AUTHENTICATES. The pipeline will run as THAT identity."
       log_warn "  scope: this proves the credential is accepted (HTTP 200/403), NOT that it may PUSH."
       log_warn "  'make mirror' performs the first real push and is where a permissions fault surfaces."
       exit 0 ;;
@@ -80,16 +84,59 @@ ensure_skip_if_credential_works() {
        Refresh it in the Harbor UI (Administration -> Robot Accounts -> Refresh Secret) and put the new
        value in .env as HARBOR_USERNAME/HARBOR_PASSWORD, or ask whoever minted it. If you are a TENANT,
        this is a REQUEST to your platform team — there is no self-service path (see docs/scenario-2.md)." ;;
+    unchecked:no*)
+      # F2 (implementation round): "we could not ASK" is NOT "the probe failed". _harbor_ca_args
+      # (lib/harbor.sh:204) refuses whenever there is neither HARBOR_CA_FILE nor HARBOR_INSECURE=1 —
+      # and docs/scenario-2.md:466 tells a tenant with a publicly-trusted Harbor cert to leave
+      # HARBOR_CA_FILE EMPTY. MEASURED: in that state harbor_setup returns 0, curl uses the system
+      # store, every real API call works, and only the verdict declares itself blind. Dying here would
+      # hard-stop `install-all` for that tenant on EVERY run, quoting "Step 8 fetches it" — the step
+      # their own doc told them to skip. That is the RULE ZERO-B hard-stop this script's two-projects
+      # branch already refuses to make.
+      # This also aligns with the repo's settled policy for the SAME verdict on an install path:
+      # harbor_credential_settle (lib/harbor.sh:319-337) warns and returns 0, commenting "An error
+      # naming the wrong cause is worse than none." Two sites, one verdict — now one policy.
+      log_warn "harbor-robot: ${why}, and the credential could not be CHECKED (${v#unchecked:})."
+      log_warn "  That is NOT a verdict — nothing was sent to Harbor. Continuing with what is in .env."
+      log_warn "  If your Harbor's certificate is publicly trusted this is EXPECTED (scenario-2 Step 2)."
+      exit 0 ;;
     *)
-      die "harbor-robot: ${why}, but the credential could NOT BE CHECKED: ${v#unchecked:}.
-       'could not tell' is not 'fine' — continuing would bake an unverified credential into the
-       pipeline's push Secret and the workload's pull Secret. Resolve the reason above and re-run." ;;
+      # A probe that RAN and did not complete still stops: that is evidence, not absence of evidence.
+      die "harbor-robot: ${why}, but the credential probe did not complete: ${v#unchecked:}.
+       Continuing would bake an unverified credential into the pipeline's push Secret and the
+       workload's pull Secret. Resolve the reason above and re-run." ;;
   esac
 }
 
+# ⚠️ F1 (implementation round, 2026-09-05) — CRITICAL: NEVER RUN THIS WHERE .env IS IGNORED.
+# `make e2e-kind` runs `install-all` with SKIP_DOTENV=1 (Makefile:203 E2E_SKIP_DOTENV ?= 1, exported
+# at :902 and inherited by the sub-make). On a Harbor with no robot yet, this script would MINT one
+# and then call env_publish_all (:289), which writes .env — IGNORED under SKIP_DOTENV — *and*
+# state_unset s both keys from .env.state, THE ONLY SINK THAT RUN READS. MEASURED with the real
+# env_publish_all: it returns 0 and logs success (assert_env_effective re-reads with SKIP_DOTENV=0,
+# finds the value in .env, warns and returns 0), then the very next target resolves
+# USER=<UNSET> PASS=<UNSET> and 60-configure-tekton.sh:21 dies "set HARBOR_USERNAME in .env" on a box
+# whose .env contains it. And it is STICKY: the NEXT e2e-kind dies in 05-kind-up.sh:177-185 ("the
+# sink has lost it"), recoverable only by tearing the cluster down.
+#
+# It is invisible on a warm box: a Harbor that already holds the robot takes the 409 -> skip path and
+# never publishes. The break is on the FIRST run after kind-down / E2E_FRESH=1 — i.e. CI-shaped runs
+# and everyone else's box. Doing nothing here restores EXACTLY the pre-change behaviour (install-all
+# had no robot step at all), so it cannot regress the e2e.
+if ensure_mode && [ "${SKIP_DOTENV:-0}" = 1 ]; then
+  log_warn "harbor-robot: SKIP_DOTENV=1 — .env is IGNORED by this run, so publishing a robot would"
+  log_warn "  CLEAR the state overlay (the only credential sink here) and strand HARBOR_USERNAME/"
+  log_warn "  HARBOR_PASSWORD for every later step. Leaving the existing credential in place."
+  log_warn "  Run 'make harbor-robot' on a box with a .env to mint one."
+  exit 0
+fi
+
 if harbor_username_is_robot; then
   if ensure_mode; then
-    # The verdict needs harbor_setup (CA args + the auth probe), so do it here and never fall through.
+    # F3 (implementation round): harbor_setup is needed here to NORMALIZE HARBOR_URL (lib/harbor.sh:20
+    # strips a scheme and a trailing slash). Without it, HARBOR_URL=https://harbor... yields
+    # https://https://harbor... -> curl error 6 -> code 000 -> unchecked -> die. The verdict itself
+    # reads NONE of harbor_setup's globals (measured) — so do not delete this call as dead weight.
     HARBOR_TMP="$(mktemp -d)"; trap 'rm -rf "$HARBOR_TMP"' EXIT
     harbor_setup "$HARBOR_TMP"
     ensure_skip_if_credential_works "HARBOR_USERNAME is already the robot '${HARBOR_USERNAME}'"

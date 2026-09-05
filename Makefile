@@ -714,7 +714,7 @@ harbor-robot: ## Create a least-privilege Harbor CI robot account (push+pull) â†
 	@$(SCRIPTS)/22-harbor-robot.sh
 
 .PHONY: harbor-robot-ensure
-harbor-robot-ensure: ## Same as harbor-robot but IDEMPOTENT: skips (loudly) when a working credential already exists. What install-all runs; `harbor-robot` stays strict
+harbor-robot-ensure: check-env ## Same as harbor-robot but IDEMPOTENT: skips (loudly) when a working credential already exists. What install-all runs; `harbor-robot` stays strict
 	@harbor_robot_ensure=1 $(SCRIPTS)/22-harbor-robot.sh
 
 .PHONY: harbor-reachable
