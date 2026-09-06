@@ -994,6 +994,35 @@ is what those PRs actually touched, and rewriting them would falsify the record.
 
 ### 🔴 DISTRUST FIRST
 
+- **I STATED OUR OWN SCRIPT'S POLICY AS A PLATFORM CONSTRAINT, AND IT SENT THE OPERATOR TOWARD A
+  NEEDLESS LAB REBUILD.** Asked whether a newer Kubernetes version was available for the guest
+  cluster, I answered that moving up "means a new cluster name", quoting
+  `25-vks-cluster-create.sh`'s create-guard. That guard is OUR refusal to `kubectl apply` over an
+  existing object; it says NOTHING about upgrades. A `vks-adversary` round dry-ran it on the live
+  Supervisor: `1.35.5 -> 1.36.2` is **ACCEPTED** (and a downgrade and a bogus version are REJECTED,
+  so the accept is real). The guard's stated rationale was also false — the webhook PROTECTS a live
+  cluster (*"ClusterClass version cannot be downgraded ... will continue to be used"*). Both
+  comments are corrected in #1110. **I had merged THREE separate things**: a create-guard, the
+  measured "never re-create a cluster under a deleted name" VIP bug (`scenario-1-notes.md` — that
+  one is about RE-CREATION and is still true), and an upgrade question.
+- **The constraint that actually governs an upgrade here is the OS IMAGE, and I never mentioned it.**
+  The content library is subscribed **on-demand**: 138 items catalogued, **1 downloaded** (the
+  3992 MB photon image the nodes run). The 1.36.2 image is a catalogue entry with no bytes. On a
+  real air gap the upgrade is accepted and then STALLS fetching ~4 GB — and a new cluster needs the
+  same image, so rebuilding would not have avoided it.
+- **SAME CLASS, SMALLER: I said the VKS_* cluster keys are all operator-typed. `make vks-shape-set`
+  DISCOVERS some of them** — it reads the storage policies assigned to the vSphere Namespace and
+  writes the unambiguous one, refuses to write when ambiguous, and never overwrites a pin. It is a
+  prerequisite of `vks-cluster-create`. `make vks-shape-show` also prints each ClusterClass's
+  SUPPORTED K8S RANGE (`builtin-generic-v3.7.0  k8s v1.33..v1.36`), which is the fastest answer to
+  "can this cluster reach 1.36" and which I answered the long way round. Read the target before
+  describing the mechanism.
+- **`VKS_CONTEXT` drifted from `KUBECONFIG` because someone hand-edited `.env`.** `make
+  use-guest-kubeconfig` writes all three keys atomically; pointing `KUBECONFIG` at gc2 by hand left
+  the other two on gc1. Outcome was benign (one warning, correct fallback) and the fix was that one
+  target — **not** a new gate. Recorded because the reflex to build a gate here was wrong: the code
+  already detects and names it.
+
 - **I reported "both directions verified" on a warning that was a COIN FLIP, and the green sample
   was luck.** The first headlamp fix compared the cookie TTL against the token's *remaining* life
   (`exp - now`), which decays. Measured on the lab, three consecutive runs: **1s elapsed → WOULD
