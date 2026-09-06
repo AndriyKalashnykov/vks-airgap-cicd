@@ -987,71 +987,73 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-08-29 — the matrix is GREEN 6/6 on 3.7.1, and I merged a regression my own check could not see
+## ▶️ HANDOFF 2026-09-06 — headlamp root-caused and fixed; the pipeline collapse shipped after the lab refuted it
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
 ### 🔴 DISTRUST FIRST
 
-- **Comparing failure COUNTS instead of NAMES hides a SUBSTITUTION, and it hid one of mine.** I
-  gated the merged tree against main, both showed **8 not-ok**, and I read that as "no regression".
-  One environment-dependent failure had cleared while a new one of mine appeared. By NAME it was
-  obvious (`ok` at baseline → `not ok` after). **Diff the failing test NAMES; a count cannot see a
-  swap.** The regression shipped and needed #130 to undo.
+- **I reported "both directions verified" on a warning that was a COIN FLIP, and the green sample
+  was luck.** The first headlamp fix compared the cookie TTL against the token's *remaining* life
+  (`exp - now`), which decays. Measured on the lab, three consecutive runs: **1s elapsed → WOULD
+  WARN, 0s → silent, 0s → silent** — on the perfectly ALIGNED 24h/24h config the fix exists to
+  produce. My single "0 warnings" reading landed on the lucky side and I wrote it up as verified.
+  Two adversary rounds caught it. **A one-sample green on anything with a clock in it is not a
+  measurement.**
 
-- **A green matrix row does NOT mean the demo serves.** Measured both cuts: rows report `0 FAILED`
-  while `make creds` on the walkbox shows `<needs ingress>` for all 8 hosts in the **scenario-2**
-  rows (5 and 6, both cuts) — yet the cluster served **10/10** each time. It is a reporting gap in
-  the walkbox's state, reproducible, not a product failure. Scenario-1 rows (2, 4) show full URLs.
-  The serve check is a SEPARATE measurement and the matrix still never makes it.
+- **`make static-check` (125 offline tests) and `make validate` are BOTH BLIND to Tekton param
+  wiring.** Both were green while **every** PipelineRun failed at admission with
+  `missing values for these params which have no default values: [deploy-url app]`. kubeconform
+  validates each object's schema in isolation; **nothing offline cross-checks a `taskRef`'s params
+  against the Task it names.** Only a real PipelineRun catches this class.
 
-- **Every cut mints a NEW VMCA with a BYTE-IDENTICAL subject, so a stale anchor looks correct.**
-  Measured: 47 archived generations, 47 distinct MD5s and serials, identical subjects. After cut B
-  rebuilt the lab, `make walk-reset` REFUSED with a TLS failure. Remedy is
-  `make fetch-vcenter-ca` in this repo. Only a handshake distinguishes them.
+- **A LIVE test can be vacuous through the `.env` clobber, and it looks like a pass.**
+  `make creds HEADLAMP_NAMESPACE=nope-does-not-exist` "proved" the table survives a missing
+  Deployment. It proved nothing: `HEADLAMP_NAMESPACE` is uncommented in `.env.example`, so
+  `load_env`'s `set -a` overwrote the override and the table survived for the **wrong reason**
+  (measured: `HEADLAMP_NAMESPACE=probe-value … load_env` → `headlamp`). Filed as **B700**. The real
+  proof was the direct call: `headlamp_deployed_ttl nope-does-not-exist` → `value=[] rc=0`.
 
-- **The Supervisor VIP DRIFTS per cut.** Measured across 47 kubeconfig generations: **40× .128,
-  7× .129**. Cut B landed on **.129**. It is allocator-assigned, NOT MAC-derived, so "the MACs are
-  deterministic" does not cover it. Being right ~85% of the time is the worst shape.
+- **`git commit -a` does NOT stage new files.** The headlamp rework's two NEW files
+  (`lib/headlamp.sh`, `test-headlamp-ttl.sh`) were absent from the commit; only reading
+  `git show --stat` caught it. Read the `--stat` every time.
 
-- **`kubectl get virtualmachineimagecaches -A` returns `Forbidden` for the SSO user.** I read that
-  empty output as "none exist" and drew a conclusion. An absence is a claim about the QUERY first.
+- **`secrets/vks.kubeconfig` is STALE (Aug 26).** The live one is `./secrets/cicd-gc2.kubeconfig`,
+  named in `.env`. Hand-rolled `kubectl` probes against the stale file **hang** (timeout 124) and
+  read as "the cluster is unreachable". That is RULE ZERO-A0 firing: I hand-rolled a probe instead
+  of using the repo's own resolution, and got a confidently wrong answer.
 
-- **Backticks inside a double-quoted `die` message EXECUTE.** A refusal message referencing a make
-  target would have STARTED A LAB BUILD. Proven: `msg="x \`echo EXECUTED\` y"` → `x EXECUTED y`.
-  shellcheck calls it style (SC2006); in a live string it is a bug.
+- **The Tekton namespace is `ci`, not `cicd`.** `cicd` is the vSphere Namespace.
 
 ### Merged this session
 
-| repo | PR | what |
-|---|---|---|
-| lab | #127 | blank-credential guard — a blank password POSTs and burns an SSO lockout attempt; 1 → **5 of 5** sites |
-| lab | #128 | local VKr mirror + `lab-golden` capture/restore |
-| lab | #129 | `WALK_TKR_WAIT_SECONDS` 900 → 2400 (900 was **75% of a measured 1202 s wait**) |
-| lab | #130 | undo the regression above |
-| cicd | #1085 | delete the pasted TKr wait loop |
+| PR | what |
+|---|---|
+| **#1103** | headlamp cookie TTL coupled to `HEADLAMP_TOKEN_DURATION`; `creds.sh` warns on divergence. Reworked after **both** adversary rounds refuted v1 (CRITICAL: the read-back was the only unguarded cluster call in `creds.sh` and killed the whole table; HIGH ×3). New `scripts/lib/headlamp.sh` single-sources the derivation; `scripts/test-headlamp-ttl.sh` is 28 RED-proven cases including a command-injection canary. |
+| **#1104** | the GitOps write-back folded into `kaniko-build` — one fewer pod per app per run. **Lab-validated: `make verify` rc=0, 6/6 apps SUCCESS.** Also fixes the param wiring that made every run fail at admission. |
+| **#1105** | retired 8 comments still naming the deleted `update-deploy` task. |
 
-Lab suite **1280 → 1311** tests, **8 → 1** failure (the survivor is pre-existing).
+Post-merge `main` green each time (real `conclusion` read, not the watch exit).
 
-### The matrix
+### In flight / NOT done
 
-**6/6 rows, 0 FAILED, VKS 3.7.1, both cuts off the same frozen tree (`ff6c88e`).** Cut A rows 1/2/5,
-cut B rows 3/4/6. Both labs served 10/10 afterwards. Evidence in `~/walk-evidence/run-*`.
-
-### In flight / NOT proven
-
-- **`lab-golden` capture and restore have NEVER run against a real lab.** The mechanism is measured
-  (pool-overlay create **0.062 s**; deleting the canonical volume leaves the golden present; SATA
-  targets derived from `domblklist`, not the `vda` an early draft assumed; the quiescence gate
-  live-verified and RED-proven both ways). Restore BEHAVIOUR is inferred.
-- **Open question: does ESXi boot from a libvirt-recreated varstore?** Libvirt does recreate it from
-  `<nvram template=…>` (measured on a throwaway domain), but ESXi's boot entry lives in NVRAM. The
-  NVRAM is deliberately NOT captured — it is `0600 libvirt-qemu:kvm` and `cp` fails even in group
-  `kvm`, so capturing it would need sudo symmetrically and destroy the sudo-free property.
-- **`make walk-reset` timing is still unmeasured.** It is the number that decides whether the golden
-  is the right tool for putting a cell back: it returns the lab to the NOTHING-EXISTS cell while
-  PRESERVING `tkg.vsphere.vmware.com`, with NO reboot, against a 31m31s restore.
+- **The Tekton param gate is DESIGNED, not built.** The idea-round returned **`build_with_changes`**
+  and its findings are the reason not to build the obvious version:
+  `@ibm/tekton-lint` reproduces the lab error byte-identically **but CRASHES on our
+  `eventlistener.yaml`** (it assumes `spec.triggers`; ours discovers Triggers by `labelSelector` —
+  the mechanism that makes "add an app" one registry row), so a `k8s/tekton/**` glob dies rc=1 with
+  **zero findings** and reads as a param bug. My own hand-rolled design would have **silently
+  skipped the `test` task** (its `taskRef` is `${APP_TEST_TASK}`) — the one task that varies across
+  all six apps. And rendering via `validate.sh`'s placeholder renderer makes that `taskRef:
+  placeholder`, trading a visible gap for an invisible one. **Recommended: extend `validate.sh`'s
+  existing per-app loop, rendering with REAL values from `apps/registry.tsv`, scoped glob, and add
+  an unused-param rule** — the half my design could not see (it would have caught
+  `deploy-repo-url`/`deploy-revision` orphaned by the collapse).
+- **B700** — `HEADLAMP_NAMESPACE` clobber (above). Commenting it ACTIVATES every `empty →` branch in
+  its consumers, so each must be checked first; `creds.sh:792` is safe, the others are UNCHECKED.
+- **The retired `update-deploy` Task object still exists on the cluster.** `kubectl apply` does not
+  prune. Nothing references it; it is cruft an operator will find in a file that does not exist.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
