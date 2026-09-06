@@ -53,12 +53,46 @@ check "mismatched digest (the integrity verdict)" CORRUPT \
   'Error: validating layer sha256:abc: mismatched digest: got sha256:def, want sha256:abc'
 check "undersized layer" CORRUPT \
   'Error: undersized layer: wanted 12345 bytes, got 999'
-check "MANIFEST_UNKNOWN (image deleted from Harbor)" CORRUPT \
-  'Error: GET https://harbor/v2/cicd/x/manifests/v1: MANIFEST_UNKNOWN: manifest unknown'
 check "BLOB_UNKNOWN (the 2026-07-13 shape)" CORRUPT \
   'Error: GET https://harbor/v2/cicd/x/blobs/sha256:abc: BLOB_UNKNOWN: blob unknown to registry'
 check "Content-Length mismatch" CORRUPT \
   'Error: Content-Length 100 does not match expected size 200'
+# --- ABSENT: the artifact is NOT THERE. Its remedy is "re-push this one image", NEVER "re-carry
+# the 12 GB bundle" -- which is what it used to get, because ABSENT had no class and fell to CORRUPT.
+# MANIFEST_UNKNOWN LIVES HERE, NOT IN CORRUPT (B703 finding (b)). It is the OCI-STANDARD signature
+# for an absent tag -- measured 3/3 on Docker Hub, gcr.io and ghcr.io. This fixture's own label said
+# "image deleted from Harbor" while asserting CORRUPT: the test documented an ABSENT scenario and
+# pinned the wrong verdict. The 2026-07-13 corruption shape was "153 manifest links, ZERO blobs" --
+# manifests PRESENT, blobs gone -- i.e. BLOB_UNKNOWN, which stays CORRUPT above.
+check "MANIFEST_UNKNOWN (OCI-standard absent tag)" ABSENT \
+  'Error: GET https://harbor/v2/cicd/x/manifests/v1: MANIFEST_UNKNOWN: manifest unknown'
+# The strings below are MEASURED against the live Harbor 2026-09-06, committed as fixtures so that a
+# Harbor upgrade which reworded them fails HERE rather than in front of an operator.
+check "Harbor absent TAG (measured)" ABSENT \
+  'Error: GET https://harbor.env1.lab.test/v2/: NOT_FOUND: artifact cicd/tektoncd/pipeline/controller:v1.14.0 not found'
+check "Harbor absent REPO (measured)" ABSENT \
+  'Error: GET https://harbor.env1.lab.test/v2/: NOT_FOUND: repository library/foo not found'
+
+# --- AUTH: the credential was REJECTED. Nothing is known to be missing or corrupt.
+# ORDER IS THE WHOLE POINT HERE. Harbor's absent/invisible-PROJECT error carries BOTH UNAUTHORIZED
+# and "not found", so a PROSE match lets ORDER decide the verdict -- and AUTH's remedy ("request a
+# fresh credential") vs ABSENT's ("re-mirror this image") is exactly the expensive inversion for the
+# RULE ZERO-B tenant who CANNOT self-renew. Matching the CODE TOKEN and ordering AUTH first is what
+# makes this deterministic rather than accidental.
+check "Harbor absent/invisible PROJECT -- BOTH tokens present, AUTH must win (measured)" AUTH \
+  'Error: GET https://harbor.env1.lab.test/v2/: UNAUTHORIZED: project nosuchproject not found: project nosuchproject not found'
+check "Docker Hub unauthenticated" AUTH \
+  'Error: GET https://index.docker.io/v2/library/x/manifests/v1: UNAUTHORIZED: authentication required'
+check "quay.io unauthorized" AUTH \
+  'Error: GET https://quay.io/v2/x/manifests/v1: UNAUTHORIZED: access to the requested resource is not authorized'
+check "gcr.io denied" AUTH \
+  'Error: GET https://gcr.io/v2/x/manifests/v1: DENIED: Unauthenticated request'
+# SYNTHETIC, and labelled so nobody mistakes it for a measured string. No registry has been
+# observed emitting BOTH code tokens, but if one ever does, the AUTH-before-ABSENT ordering is
+# what decides it -- and an ordering that no fixture can RED-prove is decoration. Swapping the
+# two arms in _verify_class must turn THIS case red.
+check "SYNTHETIC: both code tokens present -- AUTH must win over ABSENT" AUTH \
+  'Error: GET https://reg/v2/: UNAUTHORIZED: denied; NOT_FOUND: also absent'
 
 # ── UNCLASSIFIED is FAIL-SAFE, and that is a decision, not an oversight ──────────────────────────
 # `unexpected EOF` is BOTH the network-cut signature AND the 2026-07-13 corruption signature. A
@@ -69,20 +103,49 @@ check "ambiguous unexpected-EOF stays UNCLASSIFIED" UNCLASSIFIED \
 check "an error nobody has seen before stays UNCLASSIFIED" UNCLASSIFIED \
   'Error: something entirely new that no pattern here anticipates'
 
-# ⚠️ AND THE FAIL-SAFE IS ASSERTED, NOT ASSUMED. The classifier returning UNCLASSIFIED is only
-# safe if the CALLER counts it as corrupt. Read that from the script rather than trusting it: the
-# transport branch must test for TRANSPORT explicitly, so everything else falls to the fails
-# tally. If someone later flips this to `[ "$cls" != CORRUPT ]`, UNCLASSIFIED silently becomes a
-# warning and this file must go red.
-# shellcheck disable=SC2016  # the single quotes are the POINT: we are grepping for the literal
-# text `"$cls"` in another file's source. Double quotes would expand $cls (unset here) and the
-# check would silently match `if [ "" = TRANSPORT ]` — i.e. never, making this case vacuous.
-if grep -q 'if \[ "\$cls" = TRANSPORT \]; then' scripts/23-mirror-verify.sh; then
-  ok "the caller branches on = TRANSPORT, so UNCLASSIFIED falls through to the corrupt tally"
+# AND THE FAIL-SAFE IS ASSERTED, NOT ASSUMED. The classifier returning UNCLASSIFIED is only safe
+# if the CALLER counts it as corrupt.
+#
+# THIS GUARD WAS REWRITTEN WHEN ABSENT/AUTH WERE ADDED (B703), AND THE REWRITE IS THE POINT.
+# It used to grep for: if [ "$cls" = TRANSPORT ]; then
+# B703 predicted the exact failure mode of extending that shape -- adding an `elif` for a new class
+# makes the guard's COMMENT false while its GREP still MATCHES, so the one check protecting the
+# fail-safe goes on passing while no longer describing the code. The caller is therefore a `case`
+# whose LAST arm is the catch-all, and this guard asserts that SHAPE: any class without an explicit
+# arm falls to `fails`. A `case` cannot be extended in a way that silently bypasses the tally.
+# ⚠️ THERE IS MORE THAN ONE `case "$cls" in` IN THAT FILE. The probe guard added for the
+# CORRUPT-is-definitive fix is also one, and it deliberately has a `*)` arm that does NOT touch the
+# tally — so an extractor that grabs the FIRST block measures the wrong thing and this guard went
+# RED on a correct change. (It failing was the guard working; a guard that had silently passed would
+# have been the defect.) Select the block by its CONTENT — the one that tallies — not by position,
+# so neither adding another `case` nor reordering them can point this at the wrong one.
+_case_block="$(awk '
+  /case "\$cls" in/ { inblk=1; buf=""; }
+  inblk               { buf = buf $0 "\n" }
+  inblk && /^    esac/ { if (buf ~ /INTEGRITY FAIL/) { printf "%s", buf; exit } inblk=0 }
+' scripts/23-mirror-verify.sh)"
+_last_arm="$(printf '%s\n' "$_case_block" | grep -E '^[[:space:]]+[A-Za-z*]+\)' | tail -1 || true)"
+if printf '%s' "$_last_arm" | grep -qE '^[[:space:]]+\*\)'; then
+  ok "the caller's case on \$cls ends with the catch-all arm"
 else
-  bad "23-mirror-verify.sh must branch on '\$cls = TRANSPORT'. Any other shape risks routing
-        UNCLASSIFIED (which includes 'unexpected EOF', a REAL corruption signature) to the
-        non-fatal path — silently downgrading the failure this gate exists to catch."
+  bad "23-mirror-verify.sh's case on \$cls must END with the '*)' catch-all so an unhandled class
+        reaches the fails tally" "last arm seen: '${_last_arm}'"
+fi
+if printf '%s\n' "$_case_block" | awk '/^[[:space:]]+\*\)/{f=1} f && /fails=\$\(\(fails\+1\)\)/{found=1} END{exit !found}'; then
+  ok "the catch-all arm increments the corrupt tally (UNCLASSIFIED is treated as CORRUPT)"
+else
+  bad "the '*)' arm of 23-mirror-verify.sh's case must increment 'fails'" \
+      "without it UNCLASSIFIED -- which includes 'unexpected EOF', a REAL corruption signature --
+        becomes silently non-fatal"
+fi
+# And the success line must be UNREACHABLE when any tally is non-zero. B703's REFUTED design gave a
+# new class a non-fatal branch, so with fails=0 NO die fired and the gate printed "N images intact"
+# while exiting 0 -- a false green on the gate that stands before an air-gap install.
+if grep -q 'refusing to report the mirror intact' scripts/23-mirror-verify.sh; then
+  ok "a total-tally guard stands between the verdicts and the success line"
+else
+  bad "23-mirror-verify.sh must refuse the success line when any failure tally is non-zero" \
+      "otherwise a future class added without its own die passes silently"
 fi
 
 # The truncation width: the real message is 339 bytes, so anything at or below it removes the

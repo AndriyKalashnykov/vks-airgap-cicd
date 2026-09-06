@@ -41,20 +41,20 @@ miss=""
 for o in GONEAPP-builder.tar istiod-0.0.1-orphan.tgz OLDTOOL.tar; do
   printf '%s' "$out" | grep -q "$o" || miss="$miss $o"
 done
-[ -z "$miss" ] && ok "case1: all 3 planted orphans reported (builders + charts + selfbuilt)" \
-                || bad "case1: NOT reported:$miss"
+if [ -z "$miss" ]; then ok "case1: all 3 planted orphans reported (builders + charts + selfbuilt)"
+else bad "case1: NOT reported:$miss"; fi
 
 # ---- case 2: THE DISCRIMINATION — no live artefact is reported ----------------------
 falsepos=""
 for l in "${live_app}-builder.tar" "istiod-${live_ver}.tgz" "${live_sb}.tar"; do
   printf '%s' "$out" | grep -q "ORPHAN.*$l" && falsepos="$falsepos $l"
 done
-[ -z "$falsepos" ] && ok "case2: no LIVE artefact flagged (registry row / pinned version / tsv row)" \
-                   || bad "case2: FALSE POSITIVE on:$falsepos"
+if [ -z "$falsepos" ]; then ok "case2: no LIVE artefact flagged (registry row / pinned version / tsv row)"
+else bad "case2: FALSE POSITIVE on:$falsepos"; fi
 
 # ---- case 3: it is a PRINTER — exit 0 even with orphans present ---------------------
-[ "$rc" -eq 0 ] && ok "case3: exits 0 WITH orphans (a printer, not the gate B706 refuted)" \
-                || bad "case3: rc=$rc — it gated; B706's die was refuted as a false-block"
+if [ "$rc" -eq 0 ]; then ok "case3: exits 0 WITH orphans (a printer, not the gate B706 refuted)"
+else bad "case3: rc=$rc — it gated; B706's die was refuted as a false-block"; fi
 
 # ---- case 4: a clean tree reports none, and prints a DENOMINATOR --------------------
 C="$TMP/clean"; mkdir -p "$C/builders" "$C/charts" "$C/selfbuilt"

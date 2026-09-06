@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
-# 24-mirror-verify-red-test.sh — NEGATIVE test proving the mirror-verify integrity
-# gate actually CATCHES a corrupt/missing image in Harbor.
+# 24-mirror-verify-red-test.sh — NEGATIVE test proving the mirror-verify gate actually CATCHES an
+# image that is MISSING from Harbor.
+#
+# ⚠️ IT PROVES **ABSENT**, NOT **CORRUPT** — and saying so is the point (B703). This test DELETES a
+# manifest, and since B703 a deleted manifest classifies **ABSENT** (`NOT_FOUND` from Harbor, or the
+# OCI-standard `MANIFEST_UNKNOWN`), not CORRUPT. It still exits non-zero, so nothing LOOKED broken —
+# which is exactly why this header had to change: moving `MANIFEST_UNKNOWN` out of CORRUPT silently
+# re-pointed this test at a different verdict while its prose went on claiming the old one. A test
+# asserting only `rc != 0` cannot notice that, so the assertion below now checks the CLASS.
+#
+# ⚠️ CONSEQUENCE, STATED PLAINLY: the **CORRUPT** verdict (`fails`) has **NO live RED anywhere in
+# this repo** — it is covered by fixtures in `test-mirror-verify-class.sh` only. Producing a real one
+# needs a genuinely damaged BLOB with an intact manifest (the 2026-07-13 shape), which this test does
+# not create. Do not read a green here as evidence that the corruption path works.
+#
+# ⚠️ AND IT CANNOT RUN WITH THE CREDENTIAL THIS REPO MINTS (B711). MEASURED 2026-09-06: the delete
+# fails `UNAUTHORIZED: ... action: delete` because `22-harbor-robot.sh` mints push+pull only, by
+# design. Use an admin credential, or expect this to stop at the delete step.
 #
 # Why this exists: `make mirror-verify` (23) is only ever OBSERVED green — a gate's
 # real value is its demonstrated RED (see rules/common/testing.md "a gate's value is
@@ -83,10 +99,20 @@ log_info "deleting $dst from Harbor (simulating registry corruption)"
 run crane delete "${INSECURE[@]}" "$dst"
 
 # 3. ASSERT RED — mirror-verify MUST now fail non-zero. `if verify; then` inverts cleanly.
-log_info "asserting mirror-verify now FAILS (the integrity gate must catch the missing image)"
-if verify; then
-  die "RED-TEST FAILED: mirror-verify PASSED after $dst was deleted — the integrity gate does NOT catch corruption!"
+log_info "asserting mirror-verify now FAILS, and FAILS AS 'ABSENT' (not as corruption)"
+# Assert the CLASS, not merely the exit code. `rc != 0` alone cannot tell "the gate caught it" from
+# "the gate failed for some unrelated reason", and it is what let this test go on passing while the
+# verdict it exercises changed underneath it.
+_out="$(verify 2>&1)" && _vrc=0 || _vrc=$?
+if [ "$_vrc" -eq 0 ]; then
+  die "RED-TEST FAILED: mirror-verify PASSED after $dst was deleted — the gate does NOT catch a missing image!"
+fi
+if ! printf '%s' "$_out" | grep -q 'ABSENT'; then
+  printf '%s\n' "$_out" | tail -20 >&2
+  die "RED-TEST FAILED: mirror-verify failed, but NOT with the ABSENT verdict. A deleted manifest must
+  classify ABSENT (remedy: re-push this one image), never CORRUPT (remedy: re-carry a 12 GB bundle).
+  See the output above for what it said instead."
 fi
 
-log_info "RED-TEST PASSED: mirror-verify correctly FAILED after $dst was deleted — restoring via the EXIT trap"
+log_info "RED-TEST PASSED: mirror-verify FAILED with the ABSENT verdict after $dst was deleted — restoring via the EXIT trap"
 # 4. restore() fires on EXIT.

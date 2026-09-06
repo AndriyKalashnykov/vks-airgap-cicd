@@ -77,6 +77,9 @@ else bad "case3: set-aside did not move the directory"; fi
 
 # ---- case 4: the fix is WIRED — 20-bundle-load.sh must replace, not merge -----------
 # Grep the CODE SHAPE, not a name that also appears in the comment above it.
+# shellcheck disable=SC2016  # the single quotes are the POINT: this greps another
+# file's SOURCE for a literal `$name`. Double quotes would expand it here (unset), so the
+# pattern would silently become one that matches nothing — a vacuous, always-green check.
 if grep -qE '^\s*mv -- "\$_mfst" "\$_mfst_old"' scripts/20-bundle-load.sh; then
   ok "case4: 20-bundle-load.sh sets the previous manifest dir aside before extracting"
 else bad "case4: 20-bundle-load.sh does NOT set the manifest dir aside — tar -x will MERGE"; fi

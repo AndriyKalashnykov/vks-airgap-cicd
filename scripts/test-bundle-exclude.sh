@@ -59,12 +59,21 @@ else bad "case4: blanket exclude unexpectedly kept selfbuilt — the anchoring r
 
 # ---- case 5: WIRING — the guards are present and the SIGPIPE-safe form is used -------
 w=0
+# shellcheck disable=SC2016  # the single quotes are the POINT: this greps another
+# file's SOURCE for a literal `$name`. Double quotes would expand it here (unset), so the
+# pattern would silently become one that matches nothing — a vacuous, always-green check.
 grep -qE '^\[ -L "\$BUNDLE_DIR" \] && die' scripts/11-bundle.sh || { bad "case5a: no symlink die in 11-bundle.sh"; w=1; }
 grep -qE '_bundle_abs="\$\(realpath' scripts/11-bundle.sh          || { bad "case5b: the inside-check still uses logical cd+pwd"; w=1; }
+# shellcheck disable=SC2016  # the single quotes are the POINT: this greps another
+# file's SOURCE for a literal `$name`. Double quotes would expand it here (unset), so the
+# pattern would silently become one that matches nothing — a vacuous, always-green check.
 grep -qE -- '--exclude="\$\(basename "\$BUNDLE_DIR"\)/vks-airgap-cicd-bundle-\*"' scripts/11-bundle.sh \
                                                                     || { bad "case5c: the anchored exclude is missing"; w=1; }
 # The post-tar check must NOT use `grep -q` on the far end of a pipe: tar -tf writes once per
 # member, so an early -q exit SIGPIPEs it and pipefail reports the pipeline CLEAN.
+# shellcheck disable=SC2016  # the single quotes are the POINT: this greps another
+# file's SOURCE for a literal `$name`. Double quotes would expand it here (unset), so the
+# pattern would silently become one that matches nothing — a vacuous, always-green check.
 grep -qE 'tar -tf "\$tarball" \| grep -q ' scripts/11-bundle.sh     && { bad "case5d: post-tar check uses grep -q — it will SIGPIPE and false-clean"; w=1; }
 [ "$w" -eq 0 ] && ok "case5: symlink die + realpath + anchored exclude present; no grep -q on the pipe"
 

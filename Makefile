@@ -508,6 +508,17 @@ mirror-push: check-env ## Push all mirrored images into Harbor
 	@$(SCRIPTS)/21-mirror-push.sh
 
 .PHONY: mirror-verify
+# ⚠️ NO `harbor-auth-check` PREREQ HERE, DELIBERATELY (B703 prescribed one; the implementation
+# round refuted it). `09-harbor-auth-check.sh` is written for `mirror`: on failure it exits 1
+# saying "refusing to start a ~20-minute mirror that cannot push" — a sentence that is simply
+# FALSE in front of a read-only verification that pushes nothing. Worse, `jumpbox-run.sh:155`
+# runs `make mirror-verify` on the AIR-GAP box, so a Harbor answering 401 for a robot would
+# hard-block a RULE ZERO-B tenant, telling them to fix a credential that works. `mirror-verify`
+# now has its own AUTH verification class whose remedy is the correct tenant-aware one
+# ("request a fresh credential", never "re-mirror"), so the substance is covered; what the
+# prereq added was a fail-fast that costs ~30 crane calls to skip and a wrong message to keep.
+# `mirror` keeps the prereq (Makefile:524) — there it is correct, and there a push really does
+# follow a ~20-minute pull.
 mirror-verify: check-env ## Verify every mirrored image is INTACT in Harbor (crane validate blobs + images.lock digest match) — run after 'make mirror'
 	@$(SCRIPTS)/23-mirror-verify.sh
 
