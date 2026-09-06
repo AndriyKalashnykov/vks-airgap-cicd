@@ -89,10 +89,32 @@ log_info "supervisor:   ${SUP}"
 # `kubectl apply` over an existing Cluster is a successful no-op ("unchanged", exit 0) — which is
 # NOT "the cluster I asked for". Report what is actually there and stop.
 if k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" >/dev/null 2>&1; then
-  # ⚠️ SECOND EFFECT, worth naming: this also stops a re-apply from letting the mutating webhook
-  # bump a LIVE cluster's ClusterClass and roll its nodes. That is a rebase, not a create, and it is
-  # not something a re-run should do by accident. To move onto a newer class deliberately, create a
-  # cluster under a NEW name (see the reused-name note below) rather than re-applying over this one.
+  # ⚠️ CORRECTED 2026-09-06 — THE PARAGRAPH THAT WAS HERE WAS FALSE, AND IT PRODUCED A WRONG
+  # ANSWER TO AN OPERATOR. It claimed this guard "stops a re-apply from letting the mutating webhook
+  # bump a LIVE cluster's ClusterClass and roll its nodes", and concluded that moving to a newer
+  # Kubernetes line needs a cluster under a NEW name. Both halves are wrong:
+  #
+  #   1. The webhook does the OPPOSITE — it PROTECTS the live cluster. MEASURED (server-side
+  #      dry-run, re-applying the pinned v3.6.0 manifest over a live v3.7.0 cluster):
+  #        Warning: ClusterClass version cannot be downgraded.
+  #                 builtin-generic-v3.7.0 ClusterClass will continue to be used
+  #      class unchanged, version unchanged. Broadcom documents the same intent: existing
+  #      ClusterClass objects stay put "so that clusters do not automatically undergo a rolling
+  #      update after a VKS upgrade".
+  #   2. IN-PLACE UPGRADE IS SUPPORTED AND ROUTINE. Editing spec.topology.version on the live
+  #      Cluster is the documented path ("Update a v1beta1/v1beta2 VKS Cluster by Editing the VKr
+  #      Version", and via the vcf CLI). MEASURED on a live 9.1 Supervisor: 1.35.5 -> 1.36.2 was
+  #      ACCEPTED (rc=0), while a downgrade and a bogus version were REJECTED — so the accept is
+  #      real, not a permissive webhook. Telling someone to rebuild a lab for this costs hours and
+  #      buys nothing.
+  #
+  # WHAT THIS GUARD IS ACTUALLY FOR, which is legitimate and unchanged: `kubectl apply` over an
+  # existing Cluster is a successful NO-OP, and a create script must not report success for a
+  # cluster it did not create. It says nothing about upgrades, and must not be read as policy on
+  # them. The real upgrade constraints (one minor per hop, no chaining until the previous completes,
+  # CP-then-workers with +1 surge each, and the node OS image having to be CACHED in the content
+  # library — ours is subscribed on-demand and the target image was metadata only) belong to the
+  # upgrade path, which this repo deliberately does not automate: the demo cluster is disposable.
   log_warn "${VKS_NAMESPACE}/${VKS_CLUSTER_NAME} ALREADY EXISTS — not re-applying."
   k -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME" >&2
   log_info "inspect it with:  make vks-cluster-status"
