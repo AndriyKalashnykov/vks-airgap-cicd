@@ -72,6 +72,44 @@ t NO_KUBE_TARGET 'E0809 memcache.go:265] "Unhandled Error" err="couldn'"'"'t get
 # the localhost arm could be widened to swallow every "was refused" and nobody would notice.
 t UNREACHABLE "The connection to the server 192.168.101.128:6443 was refused - did you specify the right host or port?"
 
+# ── A CLIENT-SIDE TIMEOUT IS UNREACHABLE (B704) ────────────────────────────────────────────────
+# MEASURED, kubectl 1.36.4 against a black-holed endpoint: WITHOUT --request-timeout the error is
+# `dial tcp ...: i/o timeout` (already UNREACHABLE above); WITH it, Go's http client cancels first
+# and emits the string below, which matched NONE of the 12 literals -> UNKNOWN -> the caller loses
+# the UNREACHABLE remedy and falls to its catch-all. Not forward-looking: --request-timeout is
+# already passed at 47 call sites across 15 files, 6 of which classify.
+t UNREACHABLE "Unable to connect to the server: net/http: request canceled while waiting for connection (Client.Timeout exceeded while awaiting headers)"
+# Go's other client-timeout shape, matched by the same single signature.
+t UNREACHABLE "Unable to connect to the server: net/http: request canceled (Client.Timeout exceeded while reading body)"
+
+# ⚠️ THE STRING THE REAL LAB ACTUALLY PRODUCES, and it is NOT the one above.
+# MEASURED on this box: kubectl v1.36.4, `--request-timeout=15s`, against the lab's dead
+# 192.168.101.133:6443 emits exactly this. An idea round had measured `Client.Timeout exceeded`
+# instead (kubectl 1.36.4 against a synthetic blackhole) and, on that basis, told me to REJECT
+# `context deadline exceeded` outright — which would have left this fix INERT on the only path it
+# exists for. Both strings are real; the axis is WHERE in the connection lifecycle the timeout fires.
+# Without this case the fix passes its own tests and does nothing in production.
+t UNREACHABLE "Unable to connect to the server: context deadline exceeded"
+
+# ⚠️ THE NEGATIVE CONTROL, AND IT PINS A DELIBERATE REJECTION — DO NOT "FIX" THIS BY ADDING
+# `context deadline exceeded` TO THE UNREACHABLE ARM.
+# It looks like a sibling of the timeout above and it is not: it is the canonical Go/gRPC DEADLINE
+# string, which a REACHABLE, AUTHENTICATED apiserver emits — e.g. for an admission-webhook timeout.
+# Adopting it would (a) tell an operator whose cluster is healthy but whose Istio injection webhook
+# is sick to go check their networking, and (b) SILENTLY DISABLE `classify_argocd_failure`, which
+# refines ONLY when the base verdict is UNKNOWN/KUBECONFIG_UNUSABLE/NO_KUBE_TARGET — argocd's CLI is
+# gRPC, so its deadline errors land in UNKNOWN today and get refined; returning UNREACHABLE here
+# would bypass that at 3 live call sites in 70-configure-argocd.sh, re-creating the token-swallow
+# that function's own comment says it exists to prevent.
+# ⚠️ THE DISCRIMINATOR IS THE PREFIX, and these two cases are what pin it. UNREACHABLE matches the
+# full sentence `Unable to connect to the server: context deadline exceeded` — kubectl'"'"'s
+# COULD-NOT-CONNECT wrapper. The two strings below carry the SAME token from a server that DID
+# answer (`Error from server` / `Internal error occurred`), so they must stay UNKNOWN. If someone
+# broadens the arm to the bare token, BOTH go red.
+# This case going RED means someone did. Read the note above before changing anything.
+t UNKNOWN "Error from server (Timeout): request did not complete within requested timeout - context deadline exceeded"
+t UNKNOWN "Internal error occurred: failed calling webhook \"sidecar-injector.istio.io\": context deadline exceeded"
+
 # UNREACHABLE — the negative control for the narrowing above: `no such host` must stay a network
 # verdict. Without this case the narrowing has no guard. The third form is kubectl's own
 # format-string, which contains NEITHER "connection refused" NOR "dial tcp".

@@ -78,7 +78,19 @@ log_info "cluster: $(kubectl config current-context 2>/dev/null || echo '<unknow
 # is the ONLY one in the repo that produces the terse form, so without this wiring that arm would be
 # unreachable — a classifier branch no caller can hit is a branch that measures nothing.
 _lp_err="$(mktemp)"
-if ! kubectl version -o json >/dev/null 2>"$_lp_err"; then
+# ⚠️ BOUNDED, because an UNBOUNDED probe here HANGS ~30s per dead endpoint (measured 30.04s) — in
+# the very command RULE ZERO-A0 tells operators to run first, and on the DEFAULT path: `load_env`
+# defaults KUBECONFIG to secrets/vks.kubeconfig, which on a box between lab cuts routinely points at
+# a dead address. 15s is the value this repo already chose for a GATE (23-argocd-preflight.sh:47:
+# "generous enough not to false-block a live-but-slow Supervisor"; the version PEEK uses 3s), so the
+# win is 30s -> 15s, not 30s -> something new. KUBECTL_REQUEST_TIMEOUT is COMMENTED in .env.example,
+# so a per-run override actually reaches this.
+#
+# ⚠️ THIS FLAG IS ONLY SAFE BECAUSE classify_kube_failure NOW KNOWS `Client.Timeout exceeded`.
+# Adding it first would have SILENTLY converted every timeout from UNREACHABLE into UNKNOWN --
+# measured -- and landed it on the one case that must be handled gently: a powered-off lab, which
+# must never be read as "your credential is dead". Order is load-bearing; do not reverse it.
+if ! kubectl version -o json --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-15s}" >/dev/null 2>"$_lp_err"; then
   _lp_srv="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)"
   case "$(classify_kube_failure "$_lp_err")" in
     STALE_CA)     die "the kubeconfig's CA does not match ${_lp_srv:-the server it points at}.
@@ -99,8 +111,9 @@ if ! kubectl version -o json >/dev/null 2>"$_lp_err"; then
   Nothing was dialled, so this says NOTHING about whether the lab is up.  Fix it:  make vks-login" ;;
     PLAINTEXT)    die "${_lp_srv:-the server} is not speaking TLS on that port — EVERY CA remedy is
   wrong here, so do not re-fetch a trust anchor. Check the scheme and port in your kubeconfig." ;;
-    UNREACHABLE)  die "cannot reach ${_lp_srv:-the cluster} — it never answered.
-  This is NOT evidence your kubeconfig is stale. Is the lab up, and routable from this jump box?" ;;
+    UNREACHABLE)  die "cannot reach ${_lp_srv:-the cluster} — it did not answer within ${KUBECTL_REQUEST_TIMEOUT:-15s}.
+  This is NOT evidence your kubeconfig is stale. Is the lab up, and routable from this jump box?
+  If the lab IS up but heavily loaded, raise KUBECTL_REQUEST_TIMEOUT and re-run before believing this." ;;
     KUBECONFIG_UNUSABLE) die "a file named in your kube configuration is missing, unreadable or
   malformed, so NOTHING WAS DIALLED — this says NOTHING about whether the lab is up. It is not
   always \$KUBECONFIG itself: it may be a certificate-authority or client-cert it points at, an

@@ -2196,7 +2196,49 @@ classify_kube_failure() {
     # A real lab endpoint is never localhost:8080; the one false positive is an operator genuinely
     # using `kubectl proxy`, so the message hedges rather than asserting.
     *"localhost:8080"*|*"127.0.0.1:8080"*)                                       printf 'NO_KUBE_TARGET' ;;
+    # ⚠️ `Client.Timeout exceeded` — a CLIENT-SIDE timeout. Without it, ADDING `--request-timeout`
+    # to any probe silently converts a real UNREACHABLE into UNKNOWN: MEASURED, kubectl 1.36.4
+    # against a black-holed endpoint emits `dial tcp ...: i/o timeout` with NO flag (-> UNREACHABLE)
+    # but `net/http: request canceled while waiting for connection (Client.Timeout exceeded while
+    # awaiting headers)` WITH one, which matched 0 of the 12 literals here. The same text appears at
+    # --request-timeout=30s, so "use a longer timeout" is not a fix.
+    #
+    # This is not hypothetical or forward-looking: `--request-timeout` is ALREADY passed at 47 call
+    # sites across 15 files, SIX of which also call this function -- so those six were already losing
+    # the UNREACHABLE remedy and falling to `*)`. `make harbor-admin-password` against a dead
+    # Supervisor is the live example: 28-harbor-admin-password.sh already passes the flag, so it hit
+    # `*)` and died "refusing to report Harbor absent on the strength of a probe that did not
+    # complete" while its own UNREACHABLE arm -- which names the address and the network -- never fired.
+    #
+    # ⚠️ ONE SIGNATURE, DELIBERATELY. Two siblings were considered and REJECTED; do not add them:
+    #   `request canceled`          — unnecessary breadth. `Client.Timeout exceeded` already matches
+    #     the measured string AND Go's other shape (`...while reading body`), so it adds no coverage
+    #     and only collision surface in an arm that sits ABOVE UNAUTHORIZED and FORBIDDEN. This file
+    #     has already paid for one unanchored token (see the `*"401"*` note above, which matched a
+    #     klog microsecond timestamp in 4 of 60 runs).
+    # ⚠️ THE SECOND SIGNATURE IS THE FULL SENTENCE, NEVER THE BARE TOKEN — and that distinction was
+    # MEASURED, not reasoned. An idea round told me to reject `context deadline exceeded` outright,
+    # with a sound reason (below). Implementing that left the fix INERT on the real path: measured on
+    # THIS box, kubectl v1.36.4 with `--request-timeout=15s` against the lab's dead `.133` emits
+    #     Unable to connect to the server: context deadline exceeded
+    # -- NOT `Client.Timeout exceeded`, which is what the round measured against a synthetic
+    # blackhole. Both strings are real; the axis is WHERE in the connection lifecycle the timeout
+    # fires, so the arm needs BOTH.
+    # The prefix is what makes it safe: `Unable to connect to the server:` is kubectl's COULD-NOT-
+    # CONNECT wrapper. A webhook/apiserver deadline arrives FROM a server that DID answer, so it
+    # reads `Error from server (Timeout): ...` or `Internal error occurred: failed calling webhook
+    # ...` and can never carry this prefix. Pinned in both directions by the tests.
+    #   `context deadline exceeded` (BARE) — WOULD BE A REGRESSION. It is the canonical Go/gRPC DEADLINE
+    #     string, which a REACHABLE, AUTHENTICATED apiserver emits for e.g. an admission-webhook
+    #     timeout. MEASURED against these arms: an Istio injection-webhook timeout goes UNKNOWN ->
+    #     UNREACHABLE, so an operator with a healthy cluster and a sick webhook is sent to check
+    #     their networking. Worse, `classify_argocd_failure` (above) refines ONLY when the base
+    #     verdict is UNKNOWN/KUBECONFIG_UNUSABLE/NO_KUBE_TARGET -- and argocd's CLI is gRPC, so its
+    #     deadline errors land in UNKNOWN today and GET refined. Returning UNREACHABLE from here
+    #     would silently bypass that refinement at 3 live call sites in 70-configure-argocd.sh,
+    #     re-creating the very token-swallow its own comment says it exists to prevent.
     *"no route to host"*|*"connection refused"*|*"i/o timeout"*|*"dial tcp"*|*"no such host"*|\
+    *"Client.Timeout exceeded"*|*"Unable to connect to the server: context deadline exceeded"*|\
     *"did you specify the right host or port"*) \
                                                                                        printf 'UNREACHABLE' ;;
 
