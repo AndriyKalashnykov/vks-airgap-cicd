@@ -256,6 +256,76 @@ EOF
 log_info "test tasks: checked ${_tasks_checked} app(s)"
 [ -z "$_missing" ] || log_error "  a pipeline referencing a missing Task fails at RUN time (CouldntGetTask), never at build time."
 
+echo "== every pipeline taskRef must PASS the params its Task REQUIRES =="
+# WHY: a Task param with no `default` that the Pipeline does not pass is refused by Tekton at
+# ADMISSION -- `PipelineValidationFailed ... missing values for these params which have no default
+# values: [deploy-url app]`. MEASURED 2026-09-06: that took out all six apps while `make
+# static-check` (125 offline tests) and `make validate` were BOTH GREEN, because kubeconform
+# validates each object's SCHEMA IN ISOLATION and nothing cross-checked a taskRef against the Task
+# it names. Only a real PipelineRun caught it -- a lab and ~8 minutes per attempt.
+#
+# ⚠️ THE `test` TASK MUST BE RESOLVED PER APP. Its taskRef is the literal `${APP_TEST_TASK}`, so a
+# naive reader either SKIPS it (a silent hole in the one task that VARIES across all six apps) or
+# reports it missing (a false RED). The idea-round caught exactly that in my first design. It is
+# resolved from apps/registry.tsv, which needs no .env -- and NOT by rendering with validate.sh's
+# placeholder renderer, which would turn it into `taskRef: placeholder`, a plausible Task name that
+# does not exist: that trades a VISIBLE gap for an invisible one.
+_pl="${REPO_ROOT}/k8s/tekton/pipeline.yaml"
+_param_checks=0
+# name<TAB>hasDefault, for every Task we ship.
+# shellcheck disable=SC2016  # `$n` is a YQ variable, not a shell one -- it must reach yq unexpanded.
+_task_params="$(yq -r '.metadata.name as $n | .spec.params[]? | [$n, .name, (has("default"))] | @tsv' \
+                  "${REPO_ROOT}"/k8s/tekton/tasks/*.yaml 2>/dev/null || true)"
+[ -n "$_task_params" ] || die "validate: parsed 0 Task params from k8s/tekton/tasks/. The gate has gone BLIND."
+
+while read -r _app; do
+  [ -n "$_app" ] || continue
+  _tt="$(app_test_task "$_app")"
+  # pipelineTaskName<TAB>taskRef<TAB>comma-separated params passed
+  while IFS=$'\t' read -r _ptn _ref _passed; do
+    [ -n "$_ptn" ] || continue
+    # shellcheck disable=SC2016  # matching the LITERAL token as it appears in the YAML.
+    case "$_ref" in '${APP_TEST_TASK}') _ref="$_tt" ;; esac
+    # Every param this Task declares WITHOUT a default must appear in what the pipeline passes.
+    while IFS=$'\t' read -r _tname _pname _hasdef; do
+      [ "$_tname" = "$_ref" ] || continue
+      [ "$_hasdef" = "false" ] || continue
+      _param_checks=$((_param_checks + 1))
+      case ",${_passed}," in
+        *",${_pname},"*) : ;;
+        *) log_error "pipeline task '${_ptn}' (${_app}) references Task '${_ref}' but does not pass required param '${_pname}'"
+           log_error "  Tekton refuses this at ADMISSION: PipelineValidationFailed, missing values for params with no default."
+           rc=1 ;;
+      esac
+    done <<TASKPARAMS
+$_task_params
+TASKPARAMS
+  done <<PIPELINETASKS
+$(yq -r '.spec.tasks[] | [.name, .taskRef.name, ([.params[]?.name] | join(","))] | @tsv' "$_pl" 2>/dev/null || true)
+PIPELINETASKS
+done <<EOF
+$_apps
+EOF
+[ "$_param_checks" -gt 0 ] || die "validate: checked 0 required Task param(s). The gate has gone BLIND."
+log_info "taskRef params: ${_param_checks} required-param check(s) across the pipeline x apps"
+
+# UNUSED PIPELINE PARAMS -- the half my own design could not see, and the collapse orphaned two.
+# A Pipeline param nothing references is not fatal, but it is the fingerprint of a half-finished
+# refactor: `deploy-repo-url` and `deploy-revision` were declared and used NOWHERE for exactly as
+# long as the write-back was broken.
+_unused=""
+while read -r _pp; do
+  [ -n "$_pp" ] || continue
+  grep -q "params\.${_pp})" "$_pl" || _unused="${_unused} ${_pp}"
+done <<EOF
+$(yq -r '.spec.params[]?.name' "$_pl" 2>/dev/null || true)
+EOF
+if [ -n "$_unused" ]; then
+  log_error "pipeline declares param(s) nothing references:${_unused}"
+  log_error "  that is the fingerprint of a half-finished refactor -- the same collapse that broke the write-back orphaned two."
+  rc=1
+fi
+
 # ---------------------------------------------------------------------------------------------
 # RENDER BEFORE VALIDATING. k8s/ manifests are TEMPLATES — 20 of them carry ${VAR} tokens that
 # envsubst fills in at install time. Handing kubeconform the raw template validates something that
