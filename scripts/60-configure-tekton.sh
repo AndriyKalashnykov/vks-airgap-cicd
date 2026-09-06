@@ -119,7 +119,7 @@ render_and_apply() {
   # shellcheck disable=SC2016
   envsubst "$ALLOWLIST" < "$f" | run kubectl apply -f -
 }
-# SHARED, applied once: the RBAC, every Task (git-clone/kaniko-build/update-deploy + each
+# SHARED, applied once: the RBAC, every Task (git-clone/kaniko-build + each
 # language's test task), and the ONE EventListener that label-selects the per-app Triggers.
 render_and_apply "${REPO_ROOT}/k8s/tekton/rbac.yaml"
 for t in "${REPO_ROOT}"/k8s/tekton/tasks/*.yaml; do render_and_apply "$t"; done

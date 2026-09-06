@@ -101,8 +101,7 @@ gives.
    |---------|------|
    | `clone-app` | clones `<app>-app`, and reads two things out of that clone: its short commit SHA, and the app's **declared version** (the deployed tag) |
    | `test` | runs the app's own test command **offline**, against its deps-baked builder image (java: `./mvnw -B -o test`; go: `go test`; and so on per language) |
-   | `build` | **Kaniko** builds the image and pushes it to Harbor |
-   | `deploy-update` | writes the new tag back into `<app>-deploy` — the GitOps hand-off |
+   | `build` | **Kaniko** builds the image and pushes it to Harbor, then — as three further steps, `clone-deploy` -> `set-tag` -> `commit-push` — writes the new tag back into `<app>-deploy`. **That write-back is the GitOps hand-off**; it was its own TaskRun until it was merged here to save a pod per app per run. The Tekton dashboard still shows the three steps separately. |
 
 4. **See the image in Harbor.** Project **`apps`** → repository **`<app>`**. The new artifact
    carries **two tags on one digest** (Harbor's Tags column shows both, e.g. `0.1.0, bfe621e`): the
