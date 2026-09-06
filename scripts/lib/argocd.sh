@@ -28,7 +28,7 @@ ARGOCD_INCLUSTER_SERVER='https://kubernetes.default.svc'
 # deploy/<app>/deployment.yaml, and those manifests are the GitOps source of truth — ArgoCD applies
 # them verbatim from the Gitea repo, so they are never envsubst-rendered and CANNOT follow an
 # operator override. Making it settable would let the Secret and the Deployment disagree, and the
-# only symptom would be ImagePullBackOff. `make check-pull-secret-alignment` gates the two.
+# only symptom would be ImagePullBackOff. `make check-deploy-manifests` gates the two.
 # shellcheck disable=SC2034  # consumed by the scripts that source this library
 HARBOR_PULL_SECRET='harbor-pull'
 

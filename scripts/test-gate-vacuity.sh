@@ -334,7 +334,7 @@ assert_starved check-prose-secrets.sh     "check-prose-secrets dies with no line
 assert_starved check-how-provenance.sh    "check-how-provenance dies with no '# how:' lines"       '.env.example'
 assert_starved check-app-hardcodes.sh     "check-app-hardcodes dies with no (file,app) pairs"      'apps/registry.tsv'
 assert_starved check-app-toolchains.sh    "check-app-toolchains dies with no toolchains checked"   'apps/registry.tsv'
-assert_starved check-pull-secret-alignment.sh "check-pull-secret-alignment dies with no apps"      'apps/registry.tsv'
+assert_starved check-deploy-manifests.sh "check-deploy-manifests dies with no apps"              'apps/registry.tsv'
 assert_starved check-env-clobber.sh       "check-env-clobber dies with nothing uncommented"        '.env.example'
 
 # check-expect-literals: its corpus is the WALKED DOCUMENTS, not scripts/, so starving `docs/*.md`

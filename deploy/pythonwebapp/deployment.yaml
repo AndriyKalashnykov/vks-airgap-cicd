@@ -7,6 +7,19 @@ metadata:
     app.kubernetes.io/part-of: vks-airgap-cicd-demo
 spec:
   replicas: 2
+  # ⚠️ A LITERAL, NOT A ${VAR}. These manifests are seeded VERBATIM into the <app>-deploy
+  # Gitea repo and applied by ArgoCD as-is -- 50-seed-gitea-repos.sh runs no envsubst, so a
+  # token would reach the API server unrendered. It is therefore a KEEP-as-constant value:
+  # externalising it to .env would create a second source of truth that nothing renders.
+  # check-deploy-manifests.sh asserts all six agree, which is what a duplicated constant
+  # needs in place of a variable.
+  #
+  # 3, not the Kubernetes default of 10. Every `make verify` run is one rollout, so the
+  # ReplicaSet list is a log of verify runs: MEASURED 2026-09-06, 11 ReplicaSets per app at
+  # revision 23. They hold 0 replicas and exist only for `kubectl rollout undo`, so the cost
+  # is API objects and an unreadable ArgoCD resource tree rather than compute. 3 keeps two
+  # rollbacks available -- enough to step back past a bad build and the one before it.
+  revisionHistoryLimit: 3
   selector:
     matchLabels:
       app.kubernetes.io/name: pythonwebapp
