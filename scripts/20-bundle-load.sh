@@ -48,6 +48,34 @@ tar_supports() {
   return $rc
 }
 dest="$(dirname "$BUNDLE_DIR")"
+
+# --- THE MANIFEST DIR IS BUNDLE-OWNED: REPLACE IT, DO NOT MERGE INTO IT ------------------------
+# B705. `tar -x` MERGES. It never deletes a file the archive does not contain. That was harmless
+# while the internet box also accumulated manifests forever -- the bundle carried every version's
+# image cache too, so the wanted-set and the cache agreed (wastefully, but they agreed).
+#
+# B702's prune broke that symmetry and this is its air-gap half. The internet box now ships ONLY
+# the pinned manifests and ONLY their images, while THIS box still holds the previous bundle's
+# superseded manifest. mirror_collect_images greps EVERY file in this directory and is called by
+# 21-mirror-push.sh:64 and 23-mirror-verify.sh:54 -- BOTH of which run HERE, on the air-gap box.
+# The wanted-set therefore names images the new cache does not carry, and 21-mirror-push.sh:73
+# reports "cache missing for <img>" and :84 DIES -- naming images the operator never asked for,
+# on the box with no internet and no way to diagnose it.
+#
+# The bundle is the SOLE authority for this directory, so replace it wholesale.
+#
+# Moved aside rather than deleted: if tar fails, THIS box cannot re-download anything, so the
+# previous generation is the only copy in the building. The assertion below restores it on
+# failure and only then dies.
+_mfst="${BUNDLE_DIR}/manifests"
+_mfst_old=""
+if [ -d "$_mfst" ]; then
+  _mfst_old="${_mfst}.prev.$$"
+  mv -- "$_mfst" "$_mfst_old" \
+    || die "could not set aside the previous ${_mfst} — refusing to merge a stale manifest set into the new bundle"
+  log_info "set aside the previous manifest set ($(find "$_mfst_old" -maxdepth 1 -type f -name '*.yaml' | wc -l) file(s)); the bundle is the sole authority for it"
+fi
+
 log_info "extracting $tarball into $dest"
 case "$tarball" in
   # A plain .tar is the DEFAULT and needs no compressor and no tar flag — it works on toybox, busybox,
@@ -70,7 +98,17 @@ esac
 # Gateway API CRDs are carried here. A bundle with images but no manifests gets all the way to
 # `make install-ingress` before dying — and until recently it died reaching for github.com, which on
 # an air-gapped box is a network timeout that names nothing useful.
+if [ ! -d "${BUNDLE_DIR}/manifests" ]; then
+  # Put the previous generation back BEFORE dying: on an air-gapped box it is the only copy.
+  if [ -n "$_mfst_old" ] && [ -d "$_mfst_old" ]; then
+    mv -- "$_mfst_old" "$_mfst" && log_warn "extraction produced no manifests — restored the previous set"
+  fi
+fi
 [ -d "${BUNDLE_DIR}/manifests" ] || die "extraction did not produce ${BUNDLE_DIR}/manifests — this bundle carries images but no manifests (Tekton install YAML, Gateway API CRDs). Re-cut it: make mirror-pull && make bundle"
+# Extraction produced a manifest set: the saved copy has served its purpose.
+if [ -n "$_mfst_old" ] && [ -d "$_mfst_old" ]; then
+  rm -rf -- "$_mfst_old"
+fi
 # --- INSTALL THE CARRIED TOOLCHAIN ------------------------------------------------------------------
 # This box cannot download ANY of it — that is what "air-gapped" means. The bundle carries the static
 # binaries the flow needs (crane for the mirror; kubectl/helm/jq/yq for the install), and this is the step
