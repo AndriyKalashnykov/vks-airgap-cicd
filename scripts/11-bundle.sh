@@ -56,9 +56,24 @@ OUT_DIR="${BUNDLE_OUT_DIR:-$REPO_ROOT}"
 # The tarball must NOT land inside the directory we are archiving: tar would be reading a file that
 # is still growing and abort with "file changed as we read it" (it did — it broke e2e-sneakernet).
 # Fail fast and say why, instead of producing a corrupt/failed bundle.
-_bundle_abs="$(cd "$BUNDLE_DIR" 2>/dev/null && pwd)" || die "BUNDLE_DIR does not exist: $BUNDLE_DIR"
+# B708. A SYMLINKED BUNDLE_DIR ships a 10 KB ARCHIVE AND REPORTS SUCCESS.
+# `tar -C parent -cf out bundle` archives the LINK, not what it points at. MEASURED: a 24 MB
+# payload behind a symlink produced a 10,240-byte archive holding ONE dangling symlink member,
+# rc=0 — and every existing guard passed, including the selfbuilt check (it follows the link).
+# On the real lab that is an 8 GB bundle carried across an air gap as 10 KB, with the sha256
+# written and "bundle ready" logged; the far side then dies naming the WRONG cause
+# ("carries images but no manifests -- re-cut it"), after the carry.
+#
+# Symlinking an 8 GB bundle/ onto a bigger disk is the obvious operator move, so this is a
+# likely input, not an exotic one.
+[ -L "$BUNDLE_DIR" ] && die "BUNDLE_DIR ($BUNDLE_DIR) is a SYMLINK. tar would archive the LINK (a ~10 KB archive holding one dangling entry) and report success. Pass the real path: BUNDLE_DIR=$(realpath "$BUNDLE_DIR" 2>/dev/null || echo '<target>')"
+
+# realpath, NOT `cd && pwd`: the logical form returns the SYMLINK path, so the inside-check below
+# compares the wrong string. MEASURED to differ (logical .../parent/bundle vs real .../real/bundle).
+_bundle_abs="$(realpath "$BUNDLE_DIR" 2>/dev/null)" || die "BUNDLE_DIR does not exist: $BUNDLE_DIR"
+[ -d "$_bundle_abs" ] || die "BUNDLE_DIR does not exist: $BUNDLE_DIR"
 mkdir -p "$OUT_DIR"
-_out_abs="$(cd "$OUT_DIR" && pwd)"
+_out_abs="$(realpath "$OUT_DIR")"
 case "$_out_abs/" in
   "$_bundle_abs"/*) die "BUNDLE_OUT_DIR ($_out_abs) is INSIDE BUNDLE_DIR ($_bundle_abs) — tar cannot archive a directory into itself. Point BUNDLE_OUT_DIR somewhere else (default: the repo root)." ;;
 esac
@@ -265,8 +280,46 @@ log_info "toolchain staged ($(du -sh "$TOOLS_DIR" | cut -f1), $(uname -m)) — t
 
 log_info "creating bundle $tarball from $BUNDLE_DIR"
 # -C the parent so the archive unpacks to a predictable 'bundle/' dir name.
+# --exclude BEFORE the member: GNU tar 1.35 errors loudly if it comes after, toybox accepts it
+# silently — so the safe order is the one that works on both. ANCHORED to the top level on
+# purpose: a blanket '*.tar' eats selfbuilt/kaniko.tar, which is what `make selfbuilt-push`
+# reads on the air-gap box (see the header). MEASURED on GNU 1.35 AND toybox 0.8.9: this drops
+# a top-level vks-airgap-cicd-bundle-* (and its .sha256, and an unpacked stale bundle DIR) while
+# keeping selfbuilt/kaniko.tar and a nested images/sub/vks-airgap-cicd-bundle-DECOY.tar.
+# busybox tar has no --exclude and fails LOUD (rc=1, no archive) rather than silently shipping it.
+_stale=()
+while IFS= read -r f; do [ -n "$f" ] && _stale+=("$f"); done < <(
+  find "$_bundle_abs" -maxdepth 1 -mindepth 1 -name 'vks-airgap-cicd-bundle-*' -printf '%f\t%s\n' 2>/dev/null
+)
+if [ "${#_stale[@]}" -gt 0 ]; then
+  # WARN, never die: with the exclude in place these are not shipped, so blocking a legitimate
+  # build over disk waste on the INTERNET box would be a false-block. Name them WITH sizes so the
+  # operator can reclaim the space deliberately.
+  log_warn "${#_stale[@]} stale bundle artefact(s) in $_bundle_abs — EXCLUDED from this bundle, but still on disk:"
+  for f in "${_stale[@]}"; do log_warn "    ${f%%$'\t'*}  ($(( ${f##*$'\t'} / 1048576 )) MiB) — rm it to reclaim the space"; done
+fi
+
 run tar -C "$(dirname "$BUNDLE_DIR")" "${comp[@]}" \
+  --exclude="$(basename "$BUNDLE_DIR")/vks-airgap-cicd-bundle-*" \
   -cf "$tarball" "$(basename "$BUNDLE_DIR")"
+
+# VERIFY THE ARTEFACT, not the prediction. A pre-flight can only say what the exclude SHOULD do;
+# it cannot see what tar DID -- which is how the symlink case above produced a green 10 KB bundle.
+# Cheap: for an UNCOMPRESSED archive `tar -tf` SEEKS (measured 0.01s at 20,000 members; this
+# bundle has ~612). gzip/zstd would decompress everything, so skip them LOUDLY rather than lie.
+if [ "${BUNDLE_COMPRESSOR:-none}" = none ]; then
+  # `| grep -q` here would SIGPIPE the producer: `tar -tf` issues one write() per member, and under
+  # `set -o pipefail` an early grep exit makes the pipeline rc=141 -- reported as "clean". MEASURED
+  # 400/400 false-clean on an IDLE box when the match is early. Drop -q so grep DRAINS its input.
+  _members="$(tar -tf "$tarball" | wc -l)"
+  if tar -tf "$tarball" | grep "vks-airgap-cicd-bundle-" >/dev/null; then
+    die "the bundle CONTAINS a previous bundle artefact — the --exclude did not take effect on this tar. Do not carry this: it would ship a stale tarball across the gap."
+  fi
+  [ "$_members" -ge 10 ] || die "the bundle holds only ${_members} member(s) — that is not a bundle. A SYMLINKED BUNDLE_DIR produces exactly this (one dangling entry). Pass the real path."
+  log_info "bundle verified: ${_members} members, no stale bundle artefact carried"
+else
+  log_warn "BUNDLE_COMPRESSOR=${BUNDLE_COMPRESSOR} — SKIPPING the post-tar content check (it would decompress the whole archive). The exclude is applied but UNVERIFIED for this bundle."
+fi
 
 # The checksum is MANDATORY, not best-effort. This bundle crosses a gap on REMOVABLE MEDIA — the one
 # situation where you genuinely want the hash, and the one place a silent bit-flip is plausible. It used
