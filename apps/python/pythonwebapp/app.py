@@ -19,6 +19,8 @@ Every operator-tunable value is env-driven with a documented default (mirrors .e
 
 import json
 import os
+import signal
+import sys
 
 from flask import Flask, Response
 from markupsafe import escape
@@ -73,7 +75,6 @@ def render(p: dict) -> str:
         <h1>{escape(p['app_name'])}</h1>
         <p class="message">{escape(p['message'])}</p>
         <dl>
-            <dt>Version</dt><dd>{escape(p['app_version'])}</dd>
             <dt>Deployed tag</dt><dd>{escape(p['version'])}</dd>
             <dt>Commit</dt><dd>{escape(p['commit'])}</dd>
         </dl>
@@ -104,15 +105,28 @@ def page_from_env() -> dict:
     return {
         "app_name": env("APP_NAME", "pythonwebapp"),
         "message": env("APP_MESSAGE", DEFAULT_MESSAGE),
-        # The DECLARED semantic version, compiled in from __version__ above. Not injected:
-        # kustomize can only source from the deployed image tag (the sha).
-        "app_version": __version__,
         "version": env("APP_VERSION", "dev"),
         "commit": env("APP_COMMIT", "unknown"),
     }
 
 
 if __name__ == "__main__":
+    # k8s sends SIGTERM on rollout. A container's PID 1 gets NO default signal dispositions, so
+    # without an explicit handler the process IGNORES SIGTERM, the kubelet waits out the full 30s
+    # terminationGracePeriod and SIGKILLs it. MEASURED over 114 samples across 19 runs: apps that
+    # handle it drain in 5s, this one took 35s (30s grace + the harness's 5s poll).
+    #
+    # ⚠️ THIS EXITS PROMPTLY; IT DOES NOT DRAIN. Werkzeug's ThreadedWSGIServer sets
+    # daemon_threads = True, and CPython's socketserver skips daemon threads in its join — so
+    # server_close() waits for nothing and an in-flight response is cut. MEASURED: a 2.4s request
+    # came back truncated (111 of 113 bytes, no complete body). That is still strictly better than
+    # accepting traffic for 30s and then being SIGKILLed, but it is NOT graceful. The real fix is to
+    # stop shipping Flask's dev server in a container (waitress drains); that is a separate change.
+    def _shutdown(_signum, _frame):  # noqa: ANN001
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
     new_app(page_from_env()).run(
         host=env("APP_BIND_HOST", "0.0.0.0"),
         port=int(env("APP_INTERNAL_PORT", "8080")),

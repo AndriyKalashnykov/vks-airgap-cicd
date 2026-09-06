@@ -33,7 +33,6 @@ import org.springframework.test.web.servlet.MockMvc;
         "spring.application.name=APPNAME",
         "app.message=MESSAGE",
         "info.app.version=VERSION",
-        "info.app.declared-version=APPVERSION",
         "info.app.commit=COMMIT"
 })
 @EnabledIfEnvironmentVariable(named = "UI_CONTRACT_OUT", matches = ".+")

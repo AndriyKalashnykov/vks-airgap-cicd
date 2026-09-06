@@ -25,9 +25,9 @@ gives.
 
 ## The loop
 
-1. **See the current greeting.** Open the **app** URL. It shows a greeting, the deployed **image
-   tag**, and the **git commit** it was built from — the pipeline tags every image with the commit
-   sha, so those two match by construction, and the greeting is what will change. (If you arrived straight from `make e2e-kind`, its own `make verify`
+1. **See the current greeting.** Open the **app** URL. It shows a greeting, the **deployed tag** —
+   the app's own declared version, which is what the image is deployed BY — and the **git commit**
+   it was built from. The greeting is what will change. (If you arrived straight from `make e2e-kind`, its own `make verify`
    step already deployed a marker like `vks-airgap-cicd-verify-<epoch>`, so you'll see **that**, not the
    `Hello from vks-airgap-cicd` default. Either is fine — you're about to change it.)
 
@@ -45,7 +45,23 @@ gives.
    | `rustwebapp` | `src/main.rs` | `const DEFAULT_MESSAGE: &str = "Hello from vks-airgap-cicd";` |
    | `dotnetwebapp` | `Program.cs` | `public const string DefaultMessage = "Hello from vks-airgap-cicd";` |
 
-   **Want to change the `Version` field instead (or as well)?** Same loop, different file — edit the
+   (Building every app at once, without editing anything — e.g. right after an install, when Harbor
+   is empty and the pods are in `ImagePullBackOff` — is `make build-apps`. It pushes an empty commit
+   per app so the real pipeline runs, and skips any app whose image Harbor already holds.)
+
+   ℹ️ **A greeting change alone DOES deploy.** The deployed image tag is the app's declared version,
+   and ArgoCD only rolls when `<app>-deploy` changes in git — but the write-back also stamps the
+   build's **commit sha** into `deployment.yaml`, and that changes on every build. So the deploy
+   repo changes, ArgoCD rolls, and your greeting appears. (`imagePullPolicy: Always` is what makes
+   the pod actually re-pull the re-pointed tag.)
+
+   Bump the **version** when you want the release identity to change — that is what the `Deployed
+   tag` on the page shows.
+
+   ⚠️ MEASURED, and I had this backwards at first: with the commit stamped into the manifest, the
+   version bump is NOT required for a redeploy. It would be if the tag were the only thing written.
+
+   **The version to bump — the file per app.** Edit the
    app's **declared semantic version** in its own manifest. It is compiled into the image at build
    time, so it can never disagree with the artifact it describes, and the build tags the image with
    it (see step 4).
@@ -62,12 +78,15 @@ gives.
    Each app declares its own, in its own file, so bumping one changes **only that app** — java to
    `0.2.0` leaves the other five on `0.1.0`, and only java's next image gains a `0.2.0` tag.
 
-   ⚠️ `Version` and `Deployed tag` are different facts and are meant to differ. `Version` is what
-   YOU declare. `Deployed tag` is the tag the running pod was **pulled with** — the git sha — and it
-   is deliberately NOT `0.1.0`, even though the image carries BOTH tags on one digest: ArgoCD
-   deploys by sha because a sha is unique per build, while a moving `0.1.0` under
-   `imagePullPolicy: IfNotPresent` could serve a node's cached older layer. A bump changes the first
-   immediately and the second to a new sha.
+   ℹ️ The page shows `Deployed tag` and `Commit`, and nothing else — `Deployed tag` IS this app's
+   declared version, because the image is deployed by it. There is deliberately no separate
+   `Version` row: it would carry the identical value, and one fact under two labels is the defect
+   this page was corrected for once already. The image still carries the sha as a second Harbor tag,
+   so every artifact remains traceable to the commit that built it, which `Commit` shows.
+
+   Because the deployed tag now MOVES (a rebuild without a bump re-points it), the deployments use
+   `imagePullPolicy: Always` — under `IfNotPresent` a node holding a cached layer would keep serving
+   the old build and the page would silently lie.
 
    Change only the **text inside the quotes** to anything you like, e.g. `Hello from the air-gapped
    pipeline`. If you have already run `make verify` (or `make e2e-kind`, which calls it), that text
@@ -80,7 +99,7 @@ gives.
 
    | TaskRun | Does |
    |---------|------|
-   | `clone-app` | clones `<app>-app`; its short commit SHA becomes the image tag |
+   | `clone-app` | clones `<app>-app`, and reads two things out of that clone: its short commit SHA, and the app's **declared version** (the deployed tag) |
    | `test` | runs the app's own test command **offline**, against its deps-baked builder image (java: `./mvnw -B -o test`; go: `go test`; and so on per language) |
    | `build` | **Kaniko** builds the image and pushes it to Harbor |
    | `deploy-update` | writes the new tag back into `<app>-deploy` — the GitOps hand-off |
@@ -88,13 +107,14 @@ gives.
 4. **See the image in Harbor.** Project **`apps`** → repository **`<app>`**. The new artifact
    carries **two tags on one digest** (Harbor's Tags column shows both, e.g. `0.1.0, bfe621e`): the
    **git short SHA** of your commit, and the app's
-   **declared semantic version** (`0.1.0` — from its own `pom.xml` / `package.json` / `Cargo.toml` /
-   `main.go` / `app.py` / `.csproj`, so each app can bump independently). The sha is what ArgoCD
-   deploys; the version is there so the artifact list says what the app *is*, not only which build
-   it was.
+   **declared semantic version** (`0.1.0` — read out of the clone's own `pom.xml` / `package.json` /
+   `Cargo.toml` / `main.go` / `app.py` / `.csproj`, so each app bumps independently). **The version
+   is what ArgoCD deploys** — it is what the write-back puts in `newTag`; the sha rides along as a
+   second tag so the artifact stays traceable to the commit that built it.
 
 5. **See the tag written back in Gitea.** **`demo/<app>-deploy`** → `kustomization.yaml` has a
-   new commit by **`ci-bot`** (`ci: deploy <app> <sha>`) bumping `images[0].newTag`. ArgoCD
+   new commit by **`ci-bot`** (`ci: deploy <app> <version> (<sha>)`) setting `images[0].newTag`
+   to your version and `APP_COMMIT` in `deployment.yaml` to the sha. ArgoCD
    watches **this** repo — which is why the *write-back*, not your source push, is what deploys.
 
 6. **Watch ArgoCD deploy it.** The **`<app>`** Application flips **`OutOfSync` → `Synced`** and

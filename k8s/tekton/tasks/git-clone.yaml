@@ -17,11 +17,33 @@ spec:
     - name: subdir
       type: string
       default: repo
+    - name: version-cmd-b64
+      type: string
+      default: ""
+      description: >-
+        base64 of a POSIX shell one-liner that prints the app's DECLARED VERSION when run with the
+        clone as its cwd. Rendered per app by 60-configure-tekton.sh from
+        scripts/lib/apps.sh:app_version_cmd, so language knowledge stays in that library and the
+        cluster parses no manifest itself.
+        ⚠️ THE VERSION MUST BE READ FROM THE CLONE, NOT FROM THE JUMP BOX'S TREE. It used to be
+        envsubst'd into the pipeline at `make platform` time, which meant an operator who bumped the
+        version in Gitea — the flow every app README documents — got the jump box's OLD version
+        tagged onto their new build, silently, and `make verify` then waited out its whole timeout
+        for a deploy that could never happen.
+        base64 because the raw command carries quotes, `<`, `>` and `[`, none of which survive
+        unquoted in a YAML scalar.
   workspaces:
     - name: output
   results:
     - name: commit
       description: Short commit SHA of the checked-out revision.
+    - name: version
+      description: >-
+        The app's declared semantic version, read out of the CLONE, trimmed and validated against
+        the OCI tag grammar. Empty ONLY when the app declares none — which kaniko tolerates (it
+        pushes just the sha tag) but update-deploy REFUSES, because an empty newTag breaks
+        kustomize's replacements block. Treat "every app declares a version" as required;
+        scripts/test-app-version.sh asserts it offline.
   steps:
     - name: clone
       image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/alpine/git:v2.54.0
@@ -39,3 +61,39 @@ spec:
         fi
         printf '%s' "$(git -C "$dest" rev-parse --short HEAD)" > "$(results.commit.path)"
         echo "cloned $(params.url)@$(params.revision) -> $dest"
+    - name: read-version
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/alpine/git:v2.54.0
+      env:
+        # Via env, not textual substitution into the script: the decoded command contains quotes.
+        - name: VERSION_CMD_B64
+          value: $(params.version-cmd-b64)
+      script: |
+        #!/bin/sh
+        set -eu
+        cd "$(workspaces.output.path)/$(params.subdir)"
+        v=''
+        if [ -n "${VERSION_CMD_B64:-}" ]; then
+          # `|| true`: an app that declares no version is legal, and grep exits 1 (no match) or
+          # 2 (no such file) — either would kill this step under `set -e`.
+          v="$(sh -c "$(printf '%s' "$VERSION_CMD_B64" | base64 -d)" 2>/dev/null || true)"
+        fi
+        # ⚠️ OUTPUT CONTRACT. This value is now read from the CLONE — i.e. from a repo the operator
+        # edits — and it ends up interpolated into an image reference and a git commit message. An
+        # unvalidated read is both a correctness bug and an injection primitive: MEASURED, a
+        # `<version>0.1.0"; echo pwned; echo "</version>` in a pom executes inside the kaniko pod,
+        # which holds the Harbor push credential. Trim, then accept only OCI-tag characters.
+        v="$(printf '%s' "$v" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        first="$(printf '%s' "$v" | head -1)"
+        if [ "$first" != "$v" ]; then
+          echo "ERROR: the version read is MULTI-LINE ('$v') — the manifest has more than one match" >&2
+          echo "       (scripts/lib/apps.sh:app_version_cmd names the file and the pattern)." >&2
+          exit 1
+        fi
+        case "$v" in
+          '') : ;;                                  # legal: this app declares no version
+          *[!A-Za-z0-9._-]*)
+            echo "ERROR: '$v' is not a usable image tag — fix the version in the app's manifest" >&2
+            exit 1 ;;
+        esac
+        printf '%s' "$v" | tr -d '\n' > "$(results.version.path)"
+        echo "declared version: ${v:-<none declared>}"

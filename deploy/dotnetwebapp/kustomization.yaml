@@ -19,7 +19,7 @@ images:
     # It used to be "0.1.0", which was safe only because nothing ever pushed that tag. The build now
     # tags every image with the app's DECLARED version (scripts/lib/apps.sh:app_version) alongside
     # the sha — so "0.1.0" became REAL and PULLABLE, and this placeholder would have silently
-    # deployed a PREVIOUS run's build instead of failing. With imagePullPolicy: IfNotPresent (6/6)
+    # deployed a PREVIOUS run's build instead of failing. With imagePullPolicy: Always (6/6)
     # a node holding a cached layer would never even re-pull. Caught by an idea round before it
     # shipped; the tag write-back replaces this on the first successful build.
     newTag: "NEVER-BUILT-RUN-THE-PIPELINE"
@@ -43,5 +43,8 @@ replacements:
           kind: Deployment
           name: dotnetwebapp
         fieldPaths:
+          # APP_COMMIT is NOT here. It used to be, and it was only ever correct by accident:
+          # the tag WAS the sha. The tag is the declared VERSION now, so deriving the commit from it
+          # rendered `Commit: 0.1.0` — the same value in all three rows. update-deploy writes
+          # APP_COMMIT into deployment.yaml directly, from the sha the build actually used.
           - spec.template.spec.containers.[name=dotnetwebapp].env.[name=APP_VERSION].value
-          - spec.template.spec.containers.[name=dotnetwebapp].env.[name=APP_COMMIT].value

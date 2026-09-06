@@ -38,8 +38,10 @@ import (
 // package.json "version" and Cargo.toml version. Go has no manifest that carries one, so it lives
 // here. scripts/lib/apps.sh:app_version() reads it, and the Tekton build tags the pushed image with
 // it ALONGSIDE the commit sha, so Harbor shows `0.1.0, <sha>` on one digest.
-// ⚠️ It is NOT what the page renders: that is APP_VERSION, injected at deploy time from the image
-// tag, which is how the page proves WHICH build is running.
+// ⚠️ The page does NOT render this constant. It renders `Deployed tag`, injected at deploy time
+// from the image tag — which, since the write-back now deploys BY the declared version, carries the
+// same value. Showing both would be one fact under two labels, which is the defect this demo's UI
+// was corrected for once already.
 const appVersion = "0.1.0"
 
 const defaultMessage = "Hello from vks-airgap-cicd"
@@ -55,10 +57,6 @@ func env(key, fallback string) string {
 type page struct {
 	AppName string
 	Message string
-	// AppVersion is the app's DECLARED semantic version, COMPILED IN from appVersion above. It is
-	// deliberately NOT injected: kustomize can only source a value from the deployed image tag,
-	// which is the sha, so an env var could never carry it. Version/Commit below ARE injected.
-	AppVersion string
 	Version    string
 	Commit     string
 }
@@ -97,7 +95,6 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
         <h1>{{.AppName}}</h1>
         <p class="message">{{.Message}}</p>
         <dl>
-            <dt>Version</dt><dd>{{.AppVersion}}</dd>
             <dt>Deployed tag</dt><dd>{{.Version}}</dd>
             <dt>Commit</dt><dd>{{.Commit}}</dd>
         </dl>
@@ -168,9 +165,6 @@ func main() {
 
 	p := page{
 		AppName: env("APP_NAME", "gowebapp"),
-		// Compiled in from appVersion above — NOT env-overridable, because APP_VERSION already
-		// carries the deployed image tag (the sha).
-		AppVersion: appVersion,
 		Message:    env("APP_MESSAGE", defaultMessage),
 		Version:    env("APP_VERSION", "dev"),
 		Commit:     env("APP_COMMIT", "unknown"),

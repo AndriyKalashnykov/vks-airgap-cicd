@@ -24,8 +24,9 @@ spec:
       type: string
       default: ""
       description: |
-        OPTIONAL second tag: the app's DECLARED semantic version (scripts/lib/apps.sh:app_version).
-        Empty means "this app declares none" — push only the sha tag rather than invent one.
+        The app's DECLARED semantic version, read from the CLONE by git-clone's read-version step
+        and validated there against the OCI tag grammar. Empty means "this app declares none" —
+        push only the sha tag rather than invent one.
         Both tags name ONE digest, so Harbor's Tags column reads `0.1.0, <sha>`.
     - name: builder-image
       type: string
@@ -62,6 +63,11 @@ spec:
       env:
         - name: DOCKER_CONFIG
           value: $(workspaces.dockerconfig.path)
+        # Via env, NOT textual substitution into the script. Tekton does not escape a param's
+        # contents (tekton.dev/docs/pipelines/variables), and this one is now read from the app
+        # clone — MEASURED: a crafted <version> executes here, in the pod holding DOCKER_CONFIG.
+        - name: VERSION_TAG
+          value: $(params.version-tag)
       script: |
         #!/busybox/sh
         set -e
@@ -77,8 +83,8 @@ spec:
         # every destination given, so both tags resolve to the SAME digest — which is the whole
         # point: Harbor shows `0.1.0, <sha>` on one artifact rather than two copies.
         # Guarded because an app may declare no version; an empty tag would push `<image>:` .
-        if [ -n "$(params.version-tag)" ]; then
-          set -- "$@" "--destination=$(params.image):$(params.version-tag)"
+        if [ -n "${VERSION_TAG:-}" ]; then
+          set -- "$@" "--destination=$(params.image):${VERSION_TAG}"
         fi
         # /product_uuid is a kubelet-mounted file; kaniko's between-stage filesystem
         # delete can't unlink it ("device or resource busy") -> ignore it.

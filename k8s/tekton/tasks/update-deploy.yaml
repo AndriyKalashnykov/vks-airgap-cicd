@@ -17,7 +17,18 @@ spec:
       default: main
     - name: tag
       type: string
-      description: New image tag to write into kustomization.yaml.
+      description: New image tag to write into kustomization.yaml. This is the app's DECLARED
+        VERSION — bumping it is what makes ArgoCD roll, because a change to this file is the only
+        thing ArgoCD reacts to.
+    - name: commit
+      type: string
+      default: ""
+      description: >-
+        The git sha this image was built from, written into the deployment's APP_COMMIT env.
+        ⚠️ It CANNOT come from the image tag any more. kustomization.yaml's `replacements` block
+        derived BOTH APP_VERSION and APP_COMMIT from the tag, which worked only while the tag WAS
+        the sha; once the tag became the version, the page rendered `Commit: 0.1.0` — three
+        identical rows, which is the duplication this UI was fixed for once already.
     - name: app
       type: string
       description: >-
@@ -54,16 +65,59 @@ spec:
       env:
         - name: TAG
           value: $(params.tag)
+        - name: COMMIT
+          value: $(params.commit)
+        - name: APP
+          value: $(params.app)
       script: |
         #!/bin/sh
         set -eu
         cd "$(workspaces.scratch.path)/deploy"
+        # ⚠️ REFUSE AN EMPTY TAG. app_version_cmd is allowed to print nothing (an app may declare no
+        # version), and `yq` writes `newTag: ""` for it with rc=0 — which renders the image with no
+        # `:tag`, so kustomization.yaml's `replacements` block (delimiter ':', index 1) then has
+        # nothing to split and `kustomize build` fails ArgoCD's sync with
+        # "options.index 1 is out of bounds". MEASURED. Die here, naming the fix.
+        if [ -z "${TAG:-}" ]; then
+          echo "ERROR: empty tag. $(params.app) declares no version — add one to its manifest" >&2
+          echo "       (scripts/lib/apps.sh:app_version_cmd names the file per language)." >&2
+          exit 1
+        fi
         # kustomization.yaml is at the deploy repo root (seeded from the app's deploy/ dir).
         yq -i '.images[0].newTag = strenv(TAG)' kustomization.yaml
         echo "set image tag -> $TAG"
         yq '.images' kustomization.yaml
+        # APP_COMMIT is written DIRECTLY, not derived from the tag. Guarded because an empty value
+        # would blank the field and make the page claim the build has no commit.
+        if [ -n "${COMMIT:-}" ]; then
+          # By container NAME, not [0]: a sidecar inserted at index 0 would silently send this to
+          # the wrong container. And READ BACK — yq exits 0 having written nothing when the path
+          # does not match (no APP_COMMIT env, a renamed container), which would leave the page
+          # reading `Commit: unknown` forever AND make a greeting-only change produce no manifest
+          # diff, so nothing would deploy.
+          yq -i '(.spec.template.spec.containers[]|select(.name == strenv(APP)).env[]|select(.name == "APP_COMMIT")).value = strenv(COMMIT)' deployment.yaml
+          got="$(APP="$APP" yq '(.spec.template.spec.containers[]|select(.name == strenv(APP)).env[]|select(.name == "APP_COMMIT")).value' deployment.yaml)"
+          if [ "$got" != "$COMMIT" ]; then
+            echo "ERROR: wrote APP_COMMIT=$COMMIT but deployment.yaml reads '$got'" >&2
+            echo "       (container named '$APP' with an APP_COMMIT env is required)." >&2
+            exit 1
+          fi
+          echo "set APP_COMMIT -> $COMMIT"
+        else
+          echo "WARNING: no commit param — leaving APP_COMMIT as-is"
+        fi
     - name: commit-push
       image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/alpine/git:v2.54.0
+      env:
+        # Via env, not textual substitution: `tag` is read from the app clone now, and Tekton does
+        # not escape a param's contents — a crafted version would execute in this pod, which holds
+        # the Gitea CI token in ~/.git-credentials.
+        - name: TAG
+          value: $(params.tag)
+        - name: COMMIT
+          value: $(params.commit)
+        - name: APP
+          value: $(params.app)
       script: |
         #!/bin/sh
         set -eu
@@ -71,11 +125,19 @@ spec:
         git config user.name  "$(params.git-user-name)"
         git config user.email "$(params.git-user-email)"
         git config --global credential.helper store
+        # A genuine no-op: same version AND same commit. Rebuilding an identical tree is allowed to
+        # change nothing, and must not fail the pipeline.
         if git diff --quiet; then
-          echo "no manifest change (tag already current) — nothing to push"
+          echo "no manifest change (version and commit already current) — nothing to push"
           exit 0
         fi
-        git add kustomization.yaml
-        git commit -m "ci: deploy $(params.app) $(params.tag)"
+        # ⚠️ STAGE BOTH FILES. This staged only kustomization.yaml, which was correct while the tag
+        # was the sha (every build changed it). The tag is the declared VERSION now, so rebuilding
+        # WITHOUT a bump leaves kustomization.yaml byte-identical and changes only deployment.yaml's
+        # APP_COMMIT — `git diff` above sees the change, `git add kustomization.yaml` stages
+        # NOTHING, and `git commit` exits non-zero with "no changes added to commit". MEASURED: it
+        # failed javawebapp's pipeline exactly that way, AFTER the write-back had already succeeded.
+        git add kustomization.yaml deployment.yaml
+        git commit -m "ci: deploy ${APP} ${TAG} (${COMMIT})"
         git push origin "HEAD:$(params.deploy-revision)"
-        echo "pushed deploy update for tag $(params.tag)"
+        echo "pushed deploy update for tag ${TAG}"

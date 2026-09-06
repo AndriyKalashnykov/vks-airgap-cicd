@@ -17,6 +17,7 @@
 //!
 //! Every operator-tunable value is env-driven with a documented default (mirrors .env.example).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use axum::{http::header, response::{Html, IntoResponse}, routing::get, Router};
 
 /// The demo "deploy me" value. `make verify` rewrites THIS line with a unique marker, pushes it,
@@ -28,11 +29,6 @@ const DEFAULT_MESSAGE: &str = "Hello from vks-airgap-cicd";
 pub struct Page {
     pub app_name: String,
     pub message: String,
-    /// The app's DECLARED semantic version. The real construction below fills it from
-    /// `env!("CARGO_PKG_VERSION")` (resolved BY THE COMPILER from Cargo.toml's [package] version);
-    /// it is a field rather than read inline so all six apps source it the SAME way and the
-    /// ui-contract fixtures can set a placeholder. `version` below is the deployed IMAGE TAG.
-    pub app_version: String,
     pub version: String,
     pub commit: String,
 }
@@ -86,7 +82,6 @@ pub fn render(p: &Page) -> String {
         <h1>{name}</h1>
         <p class="message">{msg}</p>
         <dl>
-            <dt>Version</dt><dd>{appver}</dd>
             <dt>Deployed tag</dt><dd>{ver}</dd>
             <dt>Commit</dt><dd>{commit}</dd>
         </dl>
@@ -94,7 +89,6 @@ pub fn render(p: &Page) -> String {
 </body>
 </html>
 "#,
-        appver = esc(&p.app_version),
         name = esc(&p.app_name),
         msg = esc(&p.message),
         ver = esc(&p.version),
@@ -119,12 +113,42 @@ pub fn page_from_env() -> Page {
     Page {
         app_name: env("APP_NAME", "rustwebapp"),
         message: env("APP_MESSAGE", DEFAULT_MESSAGE),
-        // Compiled in from Cargo.toml's [package] version — NOT env-overridable, because
-        // APP_VERSION below already carries the deployed image tag (the sha).
-        app_version: env!("CARGO_PKG_VERSION").to_string(),
         version: env("APP_VERSION", "dev"),
         commit: env("APP_COMMIT", "unknown"),
     }
+}
+
+
+/// k8s sends SIGTERM on rollout. A container's PID 1 gets NO default signal dispositions, so
+/// without an explicit handler the process IGNORES SIGTERM, the kubelet waits out the full 30s
+/// terminationGracePeriod and SIGKILLs it — dropping in-flight requests. MEASURED over 114 samples
+/// across 19 runs: apps that handle it drain in 5s, this one took 31s.
+///
+/// ⚠️ WHY `libc` AND NOT `tokio::signal`. tokio's `signal` feature pulls `signal-hook-registry`,
+/// which is NOT in Cargo.lock and NOT in the builder image's vendored cargo registry — so enabling
+/// it breaks `cargo build --offline --locked`, i.e. the air-gapped build. `libc` is ALREADY locked
+/// (0.2.189) and already vendored, so this adds no fetch.
+static TERMINATE: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn on_signal(_sig: libc::c_int) {
+    // Async-signal-safe: an atomic store is all that is allowed in a handler.
+    TERMINATE.store(true, Ordering::SeqCst);
+}
+
+async fn shutdown_signal() {
+    // SAFETY: installing a handler before any request is served; the handler only stores an atomic.
+    unsafe {
+        libc::signal(libc::SIGTERM, on_signal as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGINT, on_signal as *const () as libc::sighandler_t);
+    }
+    while !TERMINATE.load(Ordering::SeqCst) {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    // ⚠️ NO DRAIN CAP HERE, deliberately — unlike the nodejs app, which caps at 10s. axum's
+    // `with_graceful_shutdown` awaits `close_tx.closed()` with no timeout, so the only bound is
+    // Kubernetes' terminationGracePeriodSeconds (default 30s), after which the pod is SIGKILLed and
+    // the in-flight request is dropped anyway. These handlers are sub-millisecond, so a cap would
+    // add a knob with nothing to protect. Revisit if this app ever grows a long-running endpoint.
 }
 
 #[tokio::main]
@@ -133,7 +157,10 @@ async fn main() {
     let addr = format!("{}:{}", env("APP_BIND_HOST", "0.0.0.0"), env("APP_INTERNAL_PORT", "8080"));
     println!(r#"{{"level":"INFO","msg":"starting","app":"{}","addr":"{}"}}"#, p.app_name, addr);
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");
-    axum::serve(listener, new_router(p)).await.expect("serve");
+    axum::serve(listener, new_router(p))
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("serve");
 }
 
 #[cfg(test)]
@@ -142,7 +169,7 @@ mod tests {
 
     fn p() -> Page {
         Page { app_name: "rustwebapp".into(), message: "marker-4711-hello".into(),
-               app_version: "0.1.0".into(), version: "1.2.3".into(), commit: "abc1234".into() }
+               version: "1.2.3".into(), commit: "abc1234".into() }
     }
 
     // The deployed page MUST render the message: `make verify` proves the whole GitOps loop by
@@ -177,7 +204,6 @@ mod tests {
         let Ok(out) = std::env::var("UI_CONTRACT_OUT") else { return };
         if out.is_empty() { return; }
         let page = Page { app_name: "APPNAME".into(), message: "MESSAGE".into(),
-                          app_version: "APPVERSION".into(),
                           version: "VERSION".into(), commit: "COMMIT".into() };
         std::fs::write(&out, render(&page)).expect("write UI_CONTRACT_OUT");
     }

@@ -109,16 +109,27 @@ verify_app() {
   # WHERE the greeting lives is the only language-specific thing here (application.yml vs main.go);
   # lib/apps.sh owns that, so this script has no per-language knowledge.
   app_set_message "$app" "$d" "$marker"
-  git -C "$d" commit -aqm "verify: ${marker}"
+  # ⚠️ BUMP THE VERSION — not because nothing would deploy otherwise, but because the version IS
+  # this function's deploy PREDICATE. A greeting-only commit DOES deploy (the write-back stamps the
+  # build's sha into deployment.yaml's APP_COMMIT, so <app>-deploy changes either way), but it
+  # leaves the TAG identical, and then nothing distinguishes this run's rollout from the previous
+  # one — the wait would pass on a stale pod, or hang. Bumping is also what a developer actually
+  # does, which is the point of the demo.
+  # Read from the CLONE, not the local tree: the pipeline now reads the version from the clone too
+  # (git-clone's read-version step -> results.version), so these two agree by construction.
+  local new_ver; new_ver="$(app_bump_patch "$(app_version_in "$app" "$d")")"
+  app_set_version_in "$app" "$d" "$new_ver"
+  git -C "$d" commit -aqm "verify: ${marker} (release ${new_ver})"
   git -C "$d" push -q origin "$APP_BRANCH"
-  # The FULL sha of the commit we just pushed. The deployed image tag is the app repo's
-  # `git rev-parse --short HEAD` (k8s/tekton/tasks/git-clone.yaml:40 -> results.commit ->
-  # kaniko --destination=$(params.image):$(params.tag) -> update-deploy.yaml newTag), so the tag is
-  # an ABBREVIATION of this. Full sha + prefix test, never equality: `--short` length is not fixed
-  # (git widens it as a repo grows, and core.abbrev may differ between this clone and Tekton's), so
-  # an equality test against our own --short output would be comparing two independently-chosen
-  # abbreviation lengths.
-  local marker_sha; marker_sha="$(git -C "$d" rev-parse HEAD)"
+  # The commit we just pushed is what the build will carry as its SECOND Harbor tag and as the
+  # page's Commit field. The DEPLOYED tag, though, is the version — so the predicate below is an
+  # equality test on `new_ver`, which is exact and needs none of the `--short` abbreviation-length
+  # care a sha comparison did.
+  # ⚠️ marker_sha IS GONE. It existed solely to be the deploy predicate — the wait compared the
+  # deployed tag against this commit's sha. The deployed tag is the declared VERSION now, so nothing
+  # reads it, and shellcheck (SC2034) said so. Keeping a variable that only ever gets ASSIGNED is
+  # how a reader concludes it still matters. The sha is still the image's second Harbor tag; the
+  # page's `Commit` field is where a human reads it.
   kill "$PF_PID" 2>/dev/null || true; PF_PID=""
   log_info "[${app}] pushed marker to ${APP_GIT_REPO}"
 
@@ -143,15 +154,10 @@ verify_app() {
     wait_for "Gitea reachable" curl -fsS "http://localhost:${GITEA_LOCAL_PORT}/api/healthz" || true
     git -C "$d" commit -q --allow-empty -m "verify: re-fire ${marker}" >/dev/null 2>&1 || true
     git -C "$d" push -q origin "$APP_BRANCH" >/dev/null 2>&1 || true
-    # RE-CAPTURE THE SHA. The re-fire COMMITS (--allow-empty above), so HEAD MOVED, and the
-    # pipeline it triggers builds the NEW sha. The image-attribution wait below tests the
-    # deployed tag against marker_sha, so leaving it at the pre-re-fire value makes that wait
-    # PERMANENTLY UNSATISFIABLE -- it would burn the full readiness timeout and die, on
-    # exactly the run the old "!= pre_img" test recovered from. Adversary-caught and
-    # RED-proven against a real re-fire commit (marker 13ddaa7..., re-fire tag fcfcd18 ->
-    # NO MATCH). Measured: 0 re-fires in 341 archived verify attempts, so this is latent,
-    # which is precisely why no test or run would have found it.
-    marker_sha="$(git -C "$d" rev-parse HEAD)"
+    # The re-fire COMMITS (--allow-empty above), so HEAD moves. That used to require re-capturing
+    # the sha, because the deploy wait compared against it; the wait compares the declared VERSION
+    # now — which the re-fire does NOT change — so a re-fire is a pure retrigger with nothing to
+    # re-capture. That is also why the re-fire still works: the version it needs is already pushed.
     kill "$PF_PID" 2>/dev/null || true; PF_PID=""
   done
   if [ -z "$pr" ]; then
@@ -251,8 +257,27 @@ verify_app() {
   _refresh_err="$(mktemp)"
   kubectl --kubeconfig "${ARGOCD_KUBECONFIG:-$KUBECONFIG}" -n "$ARGOCD_NAMESPACE" \
     annotate application "$app" argocd.argoproj.io/refresh=hard --overwrite >/dev/null 2>"$_refresh_err" || _refresh_rc=$?
+  # ⚠️ SECOND CHANNEL, and it is worth ~13 MINUTES on a tenant run. The annotate above authorizes
+  # through KUBERNETES RBAC on the Application CR, which a scenario-2 tenant does not have
+  # (get-but-not-patch -> Forbidden). `argocd app get --refresh` authorizes through the ARGOCD API
+  # instead — a channel scenario-2 demonstrably HAS, because `argocd app create --upsert` succeeds
+  # there (lib/argocd.sh:991). MEASURED over 54 archived verify runs: the per-app ArgoCD wait is 5s
+  # when the nudge lands and 137s when it does not, and the slow case is 14/14 scenario-2 rows,
+  # 0/41 scenario-1 — i.e. six apps sitting out ArgoCD's 180s reconcile timer, one after another.
+  # `timeout` is MANDATORY: `argocd app get` has no --timeout flag and hangs on a booting
+  # application-controller (lib/argocd.sh:904). Bounded well under the 137s it replaces, so even the
+  # worst case (no CLI session) is still faster than doing nothing.
+  if [ "$_refresh_rc" -ne 0 ] && have argocd; then
+    local _api_rc=0
+    timeout "${ARGOCD_REFRESH_TIMEOUT_SECONDS:-30}" \
+      argocd app get "$app" --refresh -o json >/dev/null 2>>"$_refresh_err" || _api_rc=$?
+    if [ "$_api_rc" -eq 0 ]; then
+      log_info "[${app}] kubectl annotate was rejected — refreshed through the ArgoCD API instead"
+      _refresh_rc=0
+    fi
+  fi
   if [ "$_refresh_rc" -ne 0 ]; then
-    log_warn "[${app}] ArgoCD refresh nudge FAILED (rc=${_refresh_rc}, $(classify_kube_failure "$_refresh_err")) — the"
+    log_warn "[${app}] ArgoCD refresh nudge FAILED on BOTH channels (kubectl rc=${_refresh_rc}, $(classify_kube_failure "$_refresh_err")) — the"
     log_warn "  wait below falls back to ArgoCD's own reconcile timer, so expect SLOW, not broken."
     log_warn "  (that timer is argocd-cm's timeout.reconciliation; this repo overrides it NOWHERE, so"
     log_warn "   its default applies here — but a platform team's lab may have changed it.)"
@@ -283,12 +308,15 @@ verify_app() {
     # attribute this image to a commit", which must NOT read as success.
     case "$cur" in *@sha256:*) return 1 ;; esac
     [ -n "$tag" ] && [ "$tag" != "$cur" ] || return 1
-    # tag must be a PREFIX of the full sha (and non-trivially long, so a stray ":v1" cannot match).
-    [ "${#tag}" -ge 7 ] && [ "${marker_sha#"$tag"}" != "$marker_sha" ]
+    # EQUALITY against the version we just pushed — not a sha prefix. The deployed tag is the
+    # DECLARED VERSION now, and a version is exact: nobody abbreviates it, so the prefix test this
+    # replaced (written for an abbreviated sha, whose length neither side pins) would never match
+    # and verify would wait out its timeout on a perfectly good pipeline.
+    [ "$tag" = "$new_ver" ]
   }
-  if ! wait_for "[${app}] ArgoCD rolls THIS marker's build (${marker_sha:0:7}, was ${pre_img:-none})" \
+  if ! wait_for "[${app}] ArgoCD rolls release ${new_ver} (was ${pre_img:-none})" \
        _img_is_marker_build; then
-    log_error "[${app}] ArgoCD did not converge on the build of ${marker_sha:0:7}"
+    log_error "[${app}] ArgoCD did not converge on release ${new_ver}"
     log_error "  deployed now: $(kubectl -n "$ns" get deploy "$app" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)"
     log_error "  If that names a DIFFERENT sha, an unrelated PipelineRun's write-back won the race;"
     log_error "  this app's own build either has not finished or never wrote its tag back."

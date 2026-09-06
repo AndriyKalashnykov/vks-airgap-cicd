@@ -713,6 +713,10 @@ trust-harbor: check-env ## Make YOUR engine trust the self-signed Harbor — and
 harbor-robot: ## Create a least-privilege Harbor CI robot account (push+pull) → secrets/harbor-robot.env AND published to .env (nothing to copy)
 	@$(SCRIPTS)/22-harbor-robot.sh
 
+.PHONY: build-apps
+build-apps: check-env ## Build EVERY app through the real pipeline (empty commit -> webhook -> Tekton -> Harbor) and wait; idempotent — skips what Harbor already holds
+	@$(SCRIPTS)/75-build-apps.sh
+
 .PHONY: harbor-robot-ensure
 harbor-robot-ensure: check-env ## Same as harbor-robot but IDEMPOTENT: skips (loudly) when a working credential already exists. What install-all runs; `harbor-robot` stays strict
 	@harbor_robot_ensure=1 $(SCRIPTS)/22-harbor-robot.sh
@@ -985,7 +989,7 @@ e2e-sneakernet-both: ## The sneakernet OS matrix: the SAME carried tarball unpac
 # `make verify` still proves the GitOps loop over a port-forward with no ingress at all; the
 # ingress is what makes the result REACHABLE, which is the difference between a green run and a
 # usable demo.
-install-all: preflight selfbuilt-image mirror mirror-verify builder-image vks-login harbor-robot-ensure platform install-headlamp install-ingress gitops ## Run the complete air-gap install end to end (preflight FIRST, mirror integrity-verified, CI robot ensured BEFORE platform bakes the push/pull Secrets, then platform -> headlamp -> ingress -> gitops)
+install-all: preflight selfbuilt-image mirror mirror-verify builder-image vks-login harbor-robot-ensure platform install-headlamp install-ingress gitops build-apps ## Run the complete air-gap install end to end (preflight FIRST, mirror integrity-verified, CI robot ensured BEFORE platform bakes the push/pull Secrets, then platform -> headlamp -> ingress -> gitops -> build-apps, so the demo actually SERVES)
 	@echo ""
 	@echo "  ── install-all finished. WHAT IS AND IS NOT RUNNING ──────────────────────────"
 	@echo "  Installed and serving:  Gitea, Tekton, headlamp, the ingress, and (already"
@@ -1008,8 +1012,12 @@ install-all: preflight selfbuilt-image mirror mirror-verify builder-image vks-lo
 	@echo "  ─────────────────────────────────────────────────────────────────────────────"
 
 
+.PHONY: prune-runs
+prune-runs: check-env ## Reclaim Tekton PipelineRuns (and their 2Gi workspace PVCs) beyond the newest PRUNE_KEEP per app
+	@$(SCRIPTS)/78-prune-runs.sh
+
 .PHONY: verify
-verify: check-env ## e2e: push a change → Tekton build → Harbor → ArgoCD sync → HTTP check (LIVE cluster)
+verify: check-env prune-runs ## e2e: push a change → Tekton build → Harbor → ArgoCD sync → HTTP check (LIVE cluster)
 	@$(SCRIPTS)/99-verify.sh
 
 .PHONY: verify-gateway-image
@@ -1209,6 +1217,10 @@ app-run: check-ports ## Run ONE app locally (APP=javawebapp|gowebapp; default ja
 	@$(SCRIPTS)/app-run.sh $(APP)
 
 ##@ Quality gates
+
+.PHONY: check-sigterm
+check-sigterm: ## Offline: every app is PID 1 (or execs into it) AND registers a SIGTERM handler
+	@bash $(SCRIPTS)/check-sigterm.sh
 
 .PHONY: check-infra-hosts-single-source
 check-infra-hosts-single-source: ## Fail if any script hand-enumerates the ingress infra hostnames instead of calling ingress_infra_hosts()
@@ -1774,7 +1786,7 @@ check-tekton-scripts: ## Every Tekton `script:` block: shebang is /bin/sh AND th
 
 .PHONY: static-check-fast
 #check-static-fast: @ The CHEAP half of static-check: the alignment/doc/env gates only (~9s, no toolchain)
-static-check-fast: check-notfound-discriminator check-jumpbox-shadow check-tekton-scripts check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-walk-env-manifest check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-how-provenance check-vks-provenance check-image-alignment check-kind-kubeconfig check-pull-secret-alignment check-cluster-template-vars check-dockerfile-no-install check-selfbuilt ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
+static-check-fast: check-notfound-discriminator check-jumpbox-shadow check-tekton-scripts check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-walk-env-manifest check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-sigterm check-how-provenance check-vks-provenance check-image-alignment check-kind-kubeconfig check-pull-secret-alignment check-cluster-template-vars check-dockerfile-no-install check-selfbuilt ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
 
 # static-check is the UNION, so there is exactly ONE list. Defining the fast set separately and
 # leaving static-check with its own hand-typed copy is the enumerated-list rot this repo keeps
