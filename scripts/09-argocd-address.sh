@@ -61,8 +61,11 @@ POLL="${ARGOCD_ADDRESS_POLL_INTERVAL_SECONDS:-15}"
 # actually took, so a zero sleep still terminated after WAIT/interval iterations. Normalise with
 # `10#` (which also rejects `015`, that would otherwise sleep 15s against a 2s budget, AND avoids
 # `[ 015 -gt 0 ]` reading it as octal).
+# ENUMERATED, not [0-9]: a bash bracket RANGE is COLLATION-based, so in a UTF-8 locale it accepts
+# non-ASCII digits and the arithmetic below then dies with a FATAL shell expansion error, past the
+# `die` that was written to catch exactly this. Measured on the sibling site in lib/headlamp.sh.
 case "$POLL" in
-  ''|*[!0-9]*) die "ARGOCD_ADDRESS_POLL_INTERVAL_SECONDS must be a POSITIVE whole number of seconds, got '${POLL}'" ;;
+  ''|*[!0123456789]*) die "ARGOCD_ADDRESS_POLL_INTERVAL_SECONDS must be a POSITIVE whole number of seconds, got '${POLL}'" ;;
 esac
 [ "$((10#$POLL))" -gt 0 ] || die "ARGOCD_ADDRESS_POLL_INTERVAL_SECONDS must be a POSITIVE whole number of seconds, got '${POLL}'"
 POLL="$((10#$POLL))"

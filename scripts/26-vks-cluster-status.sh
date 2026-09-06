@@ -46,7 +46,14 @@ KC="${REPO_ROOT}/secrets/${VKS_CLUSTER_NAME}.kubeconfig"
 # nodes_ready — the END RESULT, not a claim about it. Requires every expected node present AND
 # Ready, because a cluster can report healthy conditions with zero schedulable workers.
 nodes_ready() {
-  local want=$(( ${VKS_CONTROL_PLANE_COUNT:-1} + ${VKS_NODE_COUNT:-2} ))
+  # Both of these are documented operator-settable (.env.example), so they are operator input
+  # reaching `$(( ))` -- which executes commands via an array subscript and dies with a FATAL shell
+  # expansion error on a non-numeric value. It had NO guard; `set -u` happened to catch some shapes,
+  # which is a coincidence, not a control. Enumerated classes, never [0-9] (collation-based in UTF-8).
+  local _cp="${VKS_CONTROL_PLANE_COUNT:-1}" _nd="${VKS_NODE_COUNT:-2}" want
+  case "$_cp" in ''|*[!0123456789]*|????????*) die "VKS_CONTROL_PLANE_COUNT must be a whole number, got '${_cp}'" ;; esac
+  case "$_nd" in ''|*[!0123456789]*|????????*) die "VKS_NODE_COUNT must be a whole number, got '${_nd}'" ;; esac
+  want=$(( 10#$_cp + 10#$_nd ))
   k -n "$VKS_NAMESPACE" get secret "${VKS_CLUSTER_NAME}-kubeconfig" >/dev/null 2>&1 || return 1
   ( umask 077
     k -n "$VKS_NAMESPACE" get secret "${VKS_CLUSTER_NAME}-kubeconfig" \

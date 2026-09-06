@@ -55,17 +55,45 @@ reject 'h'      "unit with no number"
 
 echo
 echo "== INJECTION: bash arithmetic EXECUTES commands via an array subscript =="
-# MEASURED by the adversary round against the naive version: this payload ran `id`, wrote the file,
-# and the script CONTINUED with rc=0, because the payload's own `echo 0` satisfied the digit guard
-# that ran afterwards. In the tenant posture .env is supplied by a platform team.
+# ⚠️ THE PAYLOAD IS DIGIT-LEADING AND RUNS UNDER `set +u`, BOTH DELIBERATELY. The first version of
+# this case was VACUOUS IN ITS OWN HARNESS and a confirming adversary round measured it: under this
+# file's `set -u`, `a[$(...)]` dies as "unbound variable" BEFORE the subscript evaluates, and the
+# leading `a` is rejected by the `[0-9]*h` case ANCHOR anyway -- so it exercised NEITHER guard it
+# sits beside, and passed identically against the naive version it names. A refactor deleting both
+# guards would have passed all 28 cases while being exploitable for any caller not using `set -u`.
+# `1+a[...]` reaches the arithmetic; `set +u` removes the accidental protection so the test measures
+# THIS FILE'S guards rather than the harness's.
 canary=$(mktemp -u /tmp/hl-canary-XXXXXX)
-reject "a[\$(touch $canary; echo 0)]h" "command substitution in an array subscript"
+inj_rc=$( set +u; headlamp_ttl_seconds "1+a[\$(touch $canary)]h" >/dev/null 2>&1; echo $? )
+if [ "$inj_rc" -ne 0 ]; then ok "REJECTS a digit-leading array-subscript payload (rc=$inj_rc)"
+else bad "ACCEPTED the injection payload (rc=$inj_rc)"; fi
 if [ -e "$canary" ]; then bad "INJECTION EXECUTED — $canary was created"; rm -f "$canary"
 else ok "no command ran (canary absent)"; fi
 # shellcheck disable=SC2016  # SINGLE QUOTES ARE THE POINT: the payload must reach the function
-# UNEXPANDED, exactly as it would arrive from a .env line. Letting the shell expand it here would
-# test a different string than the one an operator can actually supply.
-reject 'a[$(echo 1)]s' "second injection shape"
+# UNEXPANDED, exactly as it would arrive from a .env line.
+reject '1+a[$(echo 1)]s' "second injection shape, digit-leading"
+
+echo
+echo "== NON-ASCII DIGITS: a bash [0-9] RANGE is COLLATION-based and accepts them in UTF-8 =="
+# MEASURED before the fix, same function, same input, only the locale changed:
+#   LC_ALL=en_US.UTF-8 -> PASSED both guards -> `10#: invalid integer constant`
+#   LC_ALL=C           -> rejected cleanly
+# That error is a FATAL SHELL EXPANSION error, so the `|| true` at both call sites cannot absorb it
+# and the whole credentials table dies. Locale-dependent, so invisible on a C-locale CI runner.
+# These cases only mean anything in a UTF-8 locale; force one so CI cannot pass them vacuously.
+# ⚠️ NO SUBSHELL. `( ... )` here would swallow the pass/fail counters -- a global assigned inside a
+# subshell is LOST -- so a FAILING unicode case would print FAIL and the suite would still exit 0.
+# Caught by the denominator: the count read 29 instead of 33.
+_saved_lc="${LC_ALL:-}"
+export LC_ALL=en_US.UTF-8
+reject '１２h' "fullwidth digits (U+FF11 U+FF12)"
+reject '١٢h'  "arabic-indic digits (U+0661 U+0662)"
+reject '１h'   "single fullwidth digit"
+if [ -n "$_saved_lc" ]; then export LC_ALL="$_saved_lc"; else unset LC_ALL; fi
+
+echo
+echo "== OVERFLOW: the range check runs AFTER the multiply, so a 64-bit wrap can land inside it =="
+reject 1152921504606847000h "2^60+24 hours wrapped back to a plausible 86400 before the digit-count bound"
 
 echo
 echo "== headlamp_deployed_ttl can NEVER fail (creds.sh must not die) =="
@@ -97,6 +125,13 @@ case "$out" in "28800|0") ok "reads the = form -> 28800" ;; *) bad "= form -> $o
 mk_kubectl 'echo "[\"-in-cluster\",\"-session-ttl 28800\"]"'
 out="$(run_deployed_ttl)"
 case "$out" in "28800|0") ok "reads the SPACE form too (rot surface on a chart bump)" ;; *) bad "space form -> $out" ;; esac
+
+# The k8s-CANONICAL rendering: flag and value as SEPARATE argv elements. This returned EMPTY before
+# `paste -sd' '` was added, which silently disabled BOTH consumers together -- the installer's
+# assert stops asserting and creds.sh skips the comparison, neither saying a word.
+mk_kubectl 'echo "[\"-in-cluster\",\"-session-ttl\",\"28800\"]"'
+out="$(run_deployed_ttl)"
+case "$out" in "28800|0") ok "reads the TWO-ELEMENT form (flag and value as separate argv entries)" ;; *) bad "two-element form -> $out" ;; esac
 
 echo
 printf 'headlamp-ttl: %d passed, %d failed\n' "$pass" "$fail"

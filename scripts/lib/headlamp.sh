@@ -25,10 +25,20 @@
 #      shape, because it passes every guard and simply deploys the wrong number.
 headlamp_ttl_seconds() {
   local _d="${1:-}" _n _u _s
+  # ⚠️ THE CHARACTER CLASSES ARE ENUMERATED, NOT A RANGE, AND THAT IS LOAD-BEARING.
+  # Bash bracket RANGES like [0-9] are COLLATION-based: in a UTF-8 locale they match non-ASCII
+  # digits too. MEASURED on this box, same function, same input `１２h` (fullwidth):
+  #     LC_ALL=en_US.UTF-8 -> PASSES both guards -> `10#: invalid integer constant`
+  #     LC_ALL=C           -> rejected cleanly, rc=1, empty
+  # That error is a FATAL SHELL EXPANSION ERROR, not a failed command, so the `|| true` at both
+  # call sites CANNOT absorb it -- it re-opens the exact table-killing CRITICAL this file exists to
+  # close, and it is LOCALE-DEPENDENT, so it is invisible on a C-locale CI runner and live on an
+  # operator's UTF-8 desktop. An enumerated class is byte-exact in every locale.
+  # (357 of 400 non-ASCII Unicode digits passed the range form.)
   # Reject the whole string first. This class catches `1.5h` (a `.`), `24H` (an `H`), and every
   # injection payload (`[`, `(`, `$`, backtick) before a single arithmetic expansion happens.
   case "$_d" in
-    ''|*[!0-9hms]*) return 1 ;;
+    ''|*[!0123456789hms]*) return 1 ;;
     [0-9]*h) _n="${_d%h}"; _u=3600 ;;
     [0-9]*m) _n="${_d%m}"; _u=60 ;;
     [0-9]*s) _n="${_d%s}"; _u=1 ;;
@@ -39,7 +49,12 @@ headlamp_ttl_seconds() {
   esac
   # `1h30m` reaches here as _n="1h30" (it ends in `m`); compound durations are refused rather than
   # silently mis-derived. kubectl accepts them; this derivation cannot, so say so instead of lying.
-  case "$_n" in ''|*[!0-9]*) return 1 ;; esac
+  case "$_n" in ''|*[!0123456789]*) return 1 ;; esac
+  # Bound the DIGIT COUNT before the multiply. The range check below runs AFTER it, so a 64-bit
+  # wrap can land back INSIDE the valid range and yield a plausible wrong number: measured,
+  # `1152921504606847000h` (2^60+24) returned 86400 silently. >7 digits cannot be in range for any
+  # unit, so this is a pure narrowing.
+  case "$_n" in ????????*) return 1 ;; esac
   _s=$(( 10#$_n * _u ))
   # The chart's values.schema.json is `integer, minimum 1, maximum 31536000`. Out of range, helm
   # fails with a schema error that never names HEADLAMP_TOKEN_DURATION, so bound it here where the
@@ -56,7 +71,9 @@ headlamp_ttl_seconds() {
 # must all read as "unknown", never as an exit.
 headlamp_deployed_ttl() {
   local _ns="${1:-headlamp}" _args
-  _args="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s \
+  # Its OWN knob. It used to read CREDS_KUBE_TIMEOUT_SECONDS, so an operator lowering that to
+  # speed up `make creds` silently weakened the INSTALLER's assert to "UNVERIFIED".
+  _args="$(timeout "${HEADLAMP_READBACK_TIMEOUT_SECONDS:-${CREDS_KUBE_TIMEOUT_SECONDS:-10}}" kubectl --request-timeout=3s \
              -n "$_ns" get deploy headlamp \
              -o jsonpath='{.spec.template.spec.containers[?(@.name=="headlamp")].args}' \
              </dev/null 2>/dev/null || true)"
@@ -65,6 +82,11 @@ headlamp_deployed_ttl() {
   # ordering coincidence rather than a guarantee. The selector costs nothing.
   # `[= ]` because a chart bump could switch to the space-separated flag form; matching only `=`
   # would make this silently return empty and the comparison silently never fire.
-  printf '%s' "$_args" | tr ',' '\n' \
-    | sed -n 's/.*-session-ttl[= ]"*\([0-9][0-9]*\).*/\1/p' | head -1 || true
+  # `paste -sd' '` REJOINS the elements first, so the k8s-canonical TWO-ELEMENT rendering
+  # (`["-session-ttl","28800"]`, the flag and its value as separate argv entries) is covered. The
+  # `=` and single-element-with-a-space forms were covered before; the two-element one returned
+  # EMPTY, which silently disabled BOTH consumers -- the installer's assert stops asserting and
+  # creds.sh skips the comparison, together and without a word.
+  printf '%s' "$_args" | tr ',' '\n' | tr -d '"[]' | paste -sd' ' - \
+    | sed -n 's/.*-session-ttl[= ][ ]*\([0-9][0-9]*\).*/\1/p' | head -1 || true
 }
