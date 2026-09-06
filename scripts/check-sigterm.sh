@@ -100,7 +100,20 @@ check_app() {
   fi
 }
 
-for_each_app check_app
+# ⚠️ NOT `for_each_app`: that calls app_export(), which needs HARBOR_URL — and HARBOR_URL is
+# COMMENTED in .env.example (it is a SELECTOR; an uncommented value would clobber a per-run
+# override). So on CI, which has no .env, for_each_app dies `HARBOR_URL: unbound variable`. This
+# gate needs only app_src/app_lang/app_sigterm_*, none of which touch the registry. MEASURED: it
+# passed locally (where .env supplies HARBOR_URL) and failed on the runner — the exact
+# green-local/red-CI shape.
+# The heredoc (not a pipe) keeps `checked`/`fail` in THIS shell; a `while read` off a pipe would
+# run in a subshell and both counters would come back zero, which is the floor this gate relies on.
+while IFS= read -r _app; do
+  [ -n "$_app" ] || continue
+  check_app "$_app"
+done <<APPS
+$(app_names)
+APPS
 
 [ "$checked" -gt 0 ] || die "check-sigterm: scanned ZERO apps — apps/registry.tsv is empty or unreadable"
 if [ "$fail" -ne 0 ]; then
