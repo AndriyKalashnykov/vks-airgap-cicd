@@ -38,7 +38,19 @@ export VKS_CLUSTER_NAME="${VKS_CLUSTER_NAME:?set VKS_CLUSTER_NAME in .env (the g
 export VKS_NAMESPACE="${VKS_NAMESPACE:?set VKS_NAMESPACE in .env (the vSphere Namespace it lives in)}"
 export VKS_CLUSTERCLASS="${VKS_CLUSTERCLASS:-builtin-generic-v3.6.0}"
 export VKS_CLUSTERCLASS_NAMESPACE="${VKS_CLUSTERCLASS_NAMESPACE:-vmware-system-vks-public}"
-export VKS_K8S_VERSION="${VKS_K8S_VERSION:?set VKS_K8S_VERSION in .env (a PREFIX; admission resolves it to a TKr)}"
+# ⚠️ THE MESSAGE NAMES THE TARGET, because there IS one and not naming it was the whole gap.
+# `make vks-k8s-version` (scripts/24-vks-k8s-version.sh) picks the newest Ready+Compatible release
+# that also has an OSImage for the node OS, waits for a fresh Supervisor to finish syncing them, and
+# writes the FULL name into ./.env. docs/scenario-1.md runs it on the line above `vks-cluster-create`
+# and tells the reader to leave this key EMPTY. A message that says only "set it in .env" sends an
+# operator to hand-pick a value the repo already resolves for them -- and a hand-picked one rots:
+# .env.example's own example, v1.32.10+vmware.1-fips-vkr.2, now reads Ready=False Compatible=False
+# on this lab and admission DENIES it.
+export VKS_K8S_VERSION="${VKS_K8S_VERSION:?VKS_K8S_VERSION is unset.
+  Run \`make vks-k8s-version\` -- it picks the newest Ready+Compatible release that has an OSImage
+  for your node OS and writes the full name into ./.env. (scenario-1 runs it immediately before
+  this target, and says to leave the key empty.)  It is a PREFIX selector: admission resolves it
+  to a concrete TKr, so a bare v1.35 is accepted and then FLOATS.}"
 export VKS_VM_CLASS="${VKS_VM_CLASS:-best-effort-small}"
 export VKS_STORAGE_CLASS="${VKS_STORAGE_CLASS:-wcp-vmfs}"
 export VKS_CONTROL_PLANE_COUNT="${VKS_CONTROL_PLANE_COUNT:-1}"

@@ -201,8 +201,24 @@ fi
 
 # NON-DESTRUCTIVE. VKS_K8S_VERSION is a deliberate PIN: an operator who chose an older release to
 # match something else must not have it silently moved forward by a target they ran for information.
-if ! is_placeholder "${VKS_K8S_VERSION:-}" && [ "${VKS_K8S_VERSION}" != "$v" ]; then
-  log_warn "VKS_K8S_VERSION is already pinned to '${VKS_K8S_VERSION}' - NOT overwriting it with the newest (${v})."
+# ⚠️ READ THE PIN FROM THE FILE, NOT THE ENVIRONMENT. Under SKIP_DOTENV=1 load_env does NOT read
+# .env, so ${VKS_K8S_VERSION} is UNSET while the file still holds a deliberate pin -- and this
+# script WRITES to that file. MEASURED, both operating points, same .env:
+#     normal run    -> VKS_K8S_VERSION=[v1.35.5+vmware.1-vkr.1]  -> pin PRESERVED
+#     SKIP_DOTENV=1 -> VKS_K8S_VERSION=[<UNSET>]                 -> pin CLOBBERED
+# "Ignore .env for reading" plus "write .env" is exactly how a tool produces the wrong pin its own
+# header warns about. scripts/vks-shape.sh already fixed this class and records the same measurement
+# for VKS_STORAGE_CLASS; 22-harbor-robot.sh refuses outright under SKIP_DOTENV. This was the last of
+# the three sites still reading the environment.
+  # ⚠️ `|| true` IS LOAD-BEARING. `sed` on a MISSING file exits 2 (not 1), `pipefail` promotes it to
+  # the pipeline's status, and the assignment then trips `set -e` -- killing the script with NO
+  # message of its own. MEASURED: this broke test-tkr-classify.sh in 3 arms (rc=2 where UNKNOWN /
+  # FORBIDDEN / happy-path were expected), because the harness runs in a temp dir with no .env.
+  # `2>/dev/null` hides sed's stderr, NOT its exit status.
+_pin_of() { sed -n "s/^$1=//p" "${REPO_ROOT}/.env" 2>/dev/null | tail -1 || true; }
+_pin="$(_pin_of VKS_K8S_VERSION)"
+if ! is_placeholder "${_pin:-}" && [ "${_pin}" != "$v" ]; then
+  log_warn "VKS_K8S_VERSION is already pinned to '${_pin}' - NOT overwriting it with the newest (${v})."
   log_warn "  Change it in .env yourself if you want to move."
 else
   set_env_var VKS_K8S_VERSION "$v" "${REPO_ROOT}/.env"

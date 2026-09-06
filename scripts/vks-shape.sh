@@ -149,7 +149,10 @@ wrote=0
 # script still WRITES to that file. Measured: SKIP_DOTENV=1 ... set replaced a
 # `my-deliberate-vsan-policy` pin with this lab's `wcp-vmfs`. "Ignore .env for reading" plus
 # "write .env" is exactly how a tool produces the wrong pin its own header warns about.
-pin_of() { sed -n "s/^$1=//p" "$ENV_FILE" | tail -1; }
+# ⚠️ `|| true`: sed on a MISSING file exits 2, pipefail promotes it, and `set -e` then kills the
+# script with no message. Untriggered here only because every current caller happens to have a
+# .env; the sibling in 24-vks-k8s-version.sh WAS triggered (3 test arms, measured).
+pin_of() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | tail -1 || true; }
 sc_pin="$(pin_of VKS_STORAGE_CLASS)"; cc_pin="$(pin_of VKS_CLUSTERCLASS)"
 
 # ⚠️ TWO REVIEW FINDINGS COLLIDE HERE AND THE TIE IS BROKEN DELIBERATELY. "Never destroy a
