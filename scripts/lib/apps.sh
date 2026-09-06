@@ -240,7 +240,11 @@ BUILDER_IMAGE_TAG_DEFAULT="0.3.0"
 # digest) was the obvious fix and was REFUTED: the two divergent images above share an IDENTICAL
 # base digest (both rust:1.98-alpine @ sha256:3ffeca71…), so a base-digest tag reports MATCH on the
 # exact defect that motivated it; and BUILDER_IMAGE_TAG is the HARBOR ref that 22-builder-push.sh,
-# 60-configure-tekton.sh, 24-builder-probe.sh and builders.tsv all consume, so rewriting it changes
+# 60-configure-tekton.sh and 24-builder-probe.sh consume it, so rewriting it changes
+# ⚠️ NOT builders.tsv. MEASURED 2026-09-06 (B709): `grep -rn 'builders.tsv' scripts/ Makefile` finds
+# only its two WRITER lines (14-builder-build.sh:133,137) — the file has ZERO readers in the repo.
+# 22-builder-push.sh takes the tag from app_builder_image (env BUILDER_IMAGE_TAG), never the file,
+# so 14-builder-build.sh:131-132's rationale describes a carried-tag mechanism THAT DOES NOT EXIST.
 # the air-gap contract for a check that does not check the right thing. A LABEL touches none of it.
 #
 # WHY ONE SHARED LIST AND NOT A PER-LANGUAGE `case`. lib/apps.sh is actively DELETING per-language

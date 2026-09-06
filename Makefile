@@ -1531,6 +1531,10 @@ worktree-status: ## PRINTS ONLY: which worktrees/branches look prunable, and the
 handoff-status: ## PRINTS ONLY (never gates, always exits 0): what merged since the handoff was last edited — read it against what the handoff CLAIMS
 	@./scripts/handoff-status.sh
 
+.PHONY: bundle-orphans
+bundle-orphans: ## PRINTS ONLY (never gates, always exits 0): artefacts in bundle/ that no keep-set wants — carried across the gap every generation
+	@./scripts/bundle-orphans.sh $(BUNDLE_ORPHANS_DIR)
+
 .PHONY: test-psa-ownership
 test-psa-ownership: ## Offline: 49-psa-check's mesh-OWNERSHIP branch via a fake kubectl (it had ZERO behavioural coverage)
 	@./scripts/test-psa-ownership.sh
