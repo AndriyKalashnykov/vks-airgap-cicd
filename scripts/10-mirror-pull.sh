@@ -81,7 +81,7 @@ for f in "${!MANIFESTS[@]}"; do
 done
 
 # ---- 1b. Prune SUPERSEDED manifests -----------------------------------------
-# B700: MANIFEST_DIR accumulated one file per version FOREVER, and
+# B702: MANIFEST_DIR accumulated one file per version FOREVER, and
 # mirror_collect_images greps EVERY file in it -- so the wanted-set grew
 # monotonically and every superseded Tekton release stayed mirrored, TAGGED, and
 # therefore permanently un-GC-able. This is a LEAK, not a capacity shortfall.

@@ -3,7 +3,7 @@
 #
 # test-manifest-prune.sh — RED-proof for mirror_prune_manifests (lib/mirror.sh).
 #
-# THE DEFECT IT PINS (B700, MEASURED 2026-09-06 on the real lab):
+# THE DEFECT IT PINS (B702, MEASURED 2026-09-06 on the real lab):
 #   10-mirror-pull.sh writes version-stamped manifests (tekton-pipelines-${VER}.yaml)
 #   and NEVER deleted the superseded ones. mirror_collect_images greps EVERY file in
 #   that directory, so the wanted-set grew monotonically: three concurrent pipeline
