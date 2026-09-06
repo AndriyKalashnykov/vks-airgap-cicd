@@ -211,13 +211,35 @@ if ! k apply --dry-run=server -f "$RENDERED" >/dev/null 2>"${RENDERED}.err"; the
       # reads the NAMESPACE-scoped storagepolicyquota, which is the usable set.
       VKS_STORAGE_CLASS) log_error "     list what YOUR namespace can use:  make vks-shape-show"
                          log_error "     or write it for you:               make vks-shape-set" ;;
-      VKS_K8S_VERSION)   log_error "     list yours:  kubectl get kubernetesreleases   (need Ready=True AND Compatible=True)" ;;
+      VKS_K8S_VERSION)
+        # ⚠️ DO NOT LEAD WITH "list yours". That sends the operator to HAND-PICK a value, which is
+        # the exact act `make vks-k8s-version` exists to remove -- and a hand-picked one ROTS: a
+        # release goes Ready=False/Compatible=False as the Supervisor's VKS service version moves
+        # its ceiling, and then THIS denial is what they get. scenario-1 runs that target
+        # immediately before this one and says to leave the key EMPTY.
+        log_error "     let the repo resolve it:  make vks-k8s-version"
+        log_error "       (newest Ready+Compatible release that also has an OSImage for your node OS)"
+        if [ -f "${REPO_ROOT}/.env" ] && grep -q '^VKS_K8S_VERSION=' "${REPO_ROOT}/.env" 2>/dev/null; then
+          log_error "     ⚠️ IT IS PINNED IN ./.env, and that pin is what was just refused."
+          log_error "        make vks-k8s-version will NOT overwrite a pin -- DELETE the line first:"
+          log_error "          sed -i '/^VKS_K8S_VERSION=/d' ./.env && make vks-k8s-version"
+        fi
+        log_error "     to inspect by hand:  kubectl get kubernetesreleases   (need Ready=True AND Compatible=True)" ;;
     esac
   fi
 
-  # The ten with code-side defaults, DERIVED from this script's own export block so the list
-  # cannot rot, printed with the value actually in effect. A hand-typed copy would drift the
-  # first time someone adds an input; this cannot.
+  # DERIVED from this script's own export block so the list cannot rot. A hand-typed copy would
+  # drift the first time someone adds an input; this cannot.
+  #
+  # ⚠️ IT USED TO MISS `VKS_K8S_VERSION` -- the ONE variable whose failure mode IS "a stale pin in
+  # .env" was the only one never reported as pinned. It was excluded TWICE OVER, independently:
+  #   1. `[A-Z_]*` CANNOT MATCH THE `8`. Measured: VKS_NODE_COUNT matches ^VKS_[A-Z_]+$,
+  #      VKS_K8S_VERSION does not. So even fixing (2) alone would not have added it.
+  #   2. it is declared with `:?` (it has no code default), and the pattern demanded `:-`.
+  # Now `[A-Z0-9_]*` and `:[-?]`, which also picks up VKS_CLUSTER_NAME and VKS_NAMESPACE -- both
+  # `:?`-declared, both legitimately pinnable in .env, both previously invisible here.
+  # A digit-bearing key added later (VKS_K8S_*, an IPv6/CIDR variant) is now covered by
+  # construction rather than by someone remembering.
   # ⚠️ DO NOT STATE THE PROVENANCE UNCONDITIONALLY. This block used to assert "these default IN
   # CODE and are NOT in .env" for all ten — which became FALSE for VKS_STORAGE_CLASS and
   # VKS_CLUSTERCLASS the moment `make vks-shape-set` started writing them there. A header that is
@@ -232,7 +254,7 @@ if ! k apply --dry-run=server -f "$RENDERED" >/dev/null 2>"${RENDERED}.err"; the
       printf '       %-28s = %-24s   (code default)\n' "$_d" "${!_d-}" >&2
     fi
   done <<EOF
-$(sed -n 's/^export \(VKS_[A-Z_]*\)="\${\1:-.*/\1/p' "$0" || true)
+$(sed -n 's/^export \(VKS_[A-Z0-9_]*\)="\${\1:[-?].*/\1/p' "$0" || true)
 EOF
 
   rm -f "${RENDERED}.err"
