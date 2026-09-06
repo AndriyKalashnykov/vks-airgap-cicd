@@ -839,7 +839,18 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
     # headlamp_deployed_ttl() cannot fail by construction; the `|| true` is belt and braces.
     _hl_ttl="$(headlamp_deployed_ttl "$_hl_ns" || true)"
     _hl_want="$(headlamp_ttl_seconds "${HEADLAMP_TOKEN_DURATION:-24h}" || true)"
-    if [ -n "${_hl_ttl:-}" ] && [ -n "${_hl_want:-}" ] && [ "$_hl_ttl" -gt "$_hl_want" ]; then
+    # ⚠️ A DURATION WE CANNOT MODEL MUST BE LOUD, NOT SILENT. kubectl's parser is a strict
+    # SUPERSET of ours: `--duration=1h30m` and `=1.5h` are ACCEPTED by kubectl (measured -- they
+    # reach the connection attempt) while headlamp_ttl_seconds rejects them, so `_hl_want` is empty
+    # and the comparison was SKIPPED WITHOUT A WORD. That is a 5400s token in an 86400s cookie: a
+    # 23-hour dead-cookie window, with the row still printing "(valid until ...)" so it reads
+    # healthy. .env.example promises the opposite in as many words -- "creds.sh warns when they
+    # disagree" -- so silence here makes the documentation a lie.
+    if [ -n "${_hl_ttl:-}" ] && [ -z "${_hl_want:-}" ]; then
+      log_warn "headlamp: HEADLAMP_TOKEN_DURATION='${HEADLAMP_TOKEN_DURATION:-24h}' is a duration"
+      log_warn "  kubectl accepts but this check cannot model, so the cookie-vs-token comparison was"
+      log_warn "  SKIPPED. Use a SINGLE unit (<n>h, <n>m or <n>s) so both halves agree."
+    elif [ -n "${_hl_ttl:-}" ] && [ -n "${_hl_want:-}" ] && [ "$_hl_ttl" -gt "$_hl_want" ]; then
       log_warn "headlamp: the session COOKIE lives ${_hl_ttl}s but this token lasts only ${_hl_want}s"
       log_warn "  (HEADLAMP_TOKEN_DURATION=${HEADLAMP_TOKEN_DURATION:-24h}). For the difference the"
       log_warn "  browser re-presents a DEAD token: 401 everywhere and a bounce to the paste screen,"

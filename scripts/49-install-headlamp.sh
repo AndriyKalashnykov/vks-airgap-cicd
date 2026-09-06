@@ -172,16 +172,22 @@ run helm upgrade --install headlamp "$CHART_REF" \
 # Without this check a chart bump that renames the key silently reverts every install to 86400 and
 # re-opens the dead-cookie window -- and `creds.sh`'s remedy ("re-run make install-headlamp") would
 # then be the action that just failed, so the operator loops. Verify the END RESULT, not the rc.
-_hl_landed="$(headlamp_deployed_ttl "$HEADLAMP_NAMESPACE")"
-if [ -z "$_hl_landed" ]; then
-  log_warn "headlamp: could not read back -session-ttl from the Deployment; the cookie TTL is UNVERIFIED."
-elif [ "$_hl_landed" != "$HEADLAMP_SESSION_TTL_SECONDS" ]; then
-  die "headlamp: asked for -session-ttl=${HEADLAMP_SESSION_TTL_SECONDS} but the Deployment carries ${_hl_landed}.
-  The chart ignored --set config.sessionTTL -- almost certainly the key was RENAMED in a chart bump
-  (helm accepts an unknown --set key with rc=0 and no warning). Find the new key with:
-    helm show values <chart> --version <pinned> | grep -i sessionttl"
-else
-  log_info "headlamp: verified -session-ttl=${_hl_landed} on the Deployment"
+# ⚠️ NOT UNDER DRY_RUN. helm never ran, so the Deployment still carries the OLD value and this
+# would `die` on a HEALTHY tree, telling the operator to hunt a chart bug that does not exist.
+# Same guard shape as 43-install-istio-package.sh, whose own test asserts DRY_RUN proceeds against
+# an unreachable cluster.
+if [ "${DRY_RUN:-0}" != 1 ]; then
+  _hl_landed="$(headlamp_deployed_ttl "$HEADLAMP_NAMESPACE")"
+  if [ -z "$_hl_landed" ]; then
+    log_warn "headlamp: could not read back -session-ttl from the Deployment; the cookie TTL is UNVERIFIED."
+  elif [ "$_hl_landed" != "$HEADLAMP_SESSION_TTL_SECONDS" ]; then
+    die "headlamp: asked for -session-ttl=${HEADLAMP_SESSION_TTL_SECONDS} but the Deployment carries ${_hl_landed}.
+    The chart ignored --set config.sessionTTL -- almost certainly the key was RENAMED in a chart bump
+    (helm accepts an unknown --set key with rc=0 and no warning). Find the new key with:
+      helm show values <chart> --version <pinned> | grep -i sessionttl"
+  else
+    log_info "headlamp: verified -session-ttl=${_hl_landed} on the Deployment"
+  fi
 fi
 
 # ---- the login credential ------------------------------------------------------------------------
