@@ -813,6 +813,26 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
     case $(( ${#_hl_p} % 4 )) in 2) _hl_p="${_hl_p}==" ;; 3) _hl_p="${_hl_p}=" ;; esac
     _hl_exp="$(printf '%s' "$_hl_p" | tr '_-' '/+' | base64 -d 2>/dev/null \
                  | sed -n 's/.*"exp":\([0-9]*\).*/\1/p' | head -1)"
+    # ⚠️ WARN WHEN THE COOKIE WILL OUTLIVE THIS TOKEN. headlamp's `-session-ttl` is a DEPLOY-TIME
+    # flag: it cannot track a token minted here. So `make creds HEADLAMP_TOKEN_DURATION=8h` against
+    # a deployment still at 24h hands the operator an 8h token in a 24h cookie — and for the other
+    # 16h the browser re-presents a DEAD credential, 401s on everything, and bounces to the paste
+    # screen with no message. MEASURED: a 600s token was stored in an 86400s cookie.
+    # 49-install-headlamp.sh derives the flag from the same variable, so they agree AFTER an
+    # install; this catches the window where they do not.
+    _hl_ttl="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s \
+                 -n "$_hl_ns" get deploy headlamp \
+                 -o jsonpath='{.spec.template.spec.containers[0].args}' </dev/null 2>/dev/null \
+               | tr ',' '\n' | sed -n 's/.*-session-ttl=\([0-9]*\).*/\1/p' | head -1)"
+    if [ -n "${_hl_ttl:-}" ] && [ -n "${_hl_exp:-}" ]; then
+      _hl_left=$(( _hl_exp - $(date -u +%s) ))
+      if [ "$_hl_ttl" -gt "$_hl_left" ]; then
+        log_warn "headlamp: this token lives ${_hl_left}s but the session COOKIE lives ${_hl_ttl}s."
+        log_warn "  For the difference the browser will re-present a DEAD token: 401 everywhere and"
+        log_warn "  a bounce to the paste screen, with nothing saying why. Re-run"
+        log_warn "  'make install-headlamp' with the same HEADLAMP_TOKEN_DURATION to align them."
+      fi
+    fi
     if [ -n "${_hl_exp:-}" ]; then
       headlamp_tok="${headlamp_tok} (valid until $(date -u -d "@${_hl_exp}" '+%Y-%m-%dT%H:%MZ' 2>/dev/null || printf 'epoch %s' "$_hl_exp"))"
     fi
@@ -1045,7 +1065,12 @@ fi
 # A marker that says "see note" with no note is a citation that resolves to nothing -- worse than no
 # marker at all, because it reads as sourced.
 if [ "${_argo_initial_note:-0}" = 1 ]; then
-  printf '\n  note: the ArgoCD password above is the INITIAL admin secret. If anyone has run\n'
+  printf '\n  note: bounced straight back to the Headlamp token screen after pasting? You pasted a STALE
+        token. The /set-token endpoint accepts ANY string with a 200 and stores it, so a dead token
+        re-pastes "successfully" and fails identically. Take a fresh one from the line above; its
+        expiry is printed beside it.
+
+  note: the ArgoCD password above is the INITIAL admin secret. If anyone has run\n'
   printf "        'argocd account update-password', it has been superseded and will 401.\n"
 fi
 # ⚠️ KEYED ON A FLAG, NOT ON THE RENDERED STRING. This case used to match the URL text, and the

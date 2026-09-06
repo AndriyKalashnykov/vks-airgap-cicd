@@ -113,6 +113,40 @@ log_info "node-shell img : ${BUSYBOX_IMG}   (the one the FRONTEND pulls at runti
 
 ensure_namespace "$HEADLAMP_NAMESPACE" restricted
 
+# ⚠️ THE COOKIE'S LIFETIME AND THE TOKEN'S MUST MATCH, and headlamp does NOT couple them.
+#
+# ROOT CAUSE, measured on this lab: headlamp v0.45.0 does not keep the pasted token in
+# localStorage — it keeps it in an HttpOnly cookie whose Max-Age is `-session-ttl`, set
+# INDEPENDENTLY of the JWT's own exp. Measured at two operating points: a 600-SECOND token was
+# stored in an 86400-SECOND cookie. So a cookie that outlives its token leaves the browser
+# confidently re-presenting a DEAD credential for the remainder — 401 on every endpoint, and the
+# UI bounces to /c/main/token with no message saying why.
+#
+# It cannot self-heal, for two measured reasons:
+#   - the frontend's auto-logout fires only on a 401 that carried an `authorization` header, and
+#     it never sends one (the token is HttpOnly), so the dead cookie survives its full life;
+#   - POST /clusters/<c>/set-token VALIDATES NOTHING — an expired token, a truncated token and
+#     the literal string "this-is-not-a-jwt-at-all" all returned 200 and got a fresh cookie. So
+#     re-pasting the stale token from scrollback "succeeds" and bounces identically. That is the
+#     "expired AGAIN" loop the operator hit repeatedly.
+#
+# Deriving the seconds from HEADLAMP_TOKEN_DURATION is what makes them ONE fact. Before this, the
+# two were coincidentally equal at 24h — and `.env.example` documents `make creds
+# HEADLAMP_TOKEN_DURATION=8h`, which would have re-opened a SIXTEEN-HOUR dead-cookie window.
+HEADLAMP_SESSION_TTL_SECONDS="$(
+  _d="${HEADLAMP_TOKEN_DURATION:-24h}"
+  case "$_d" in
+    *h) printf '%s' "$(( ${_d%h} * 3600 ))" ;;
+    *m) printf '%s' "$(( ${_d%m} * 60 ))" ;;
+    *s) printf '%s' "${_d%s}" ;;
+    *)  printf '%s' "$_d" ;;                     # already seconds
+  esac
+)"
+case "$HEADLAMP_SESSION_TTL_SECONDS" in
+  ''|*[!0-9]*) die "HEADLAMP_TOKEN_DURATION='${HEADLAMP_TOKEN_DURATION:-24h}' is not <n>h/<n>m/<n>s — cannot derive the cookie TTL" ;;
+esac
+log_info "headlamp: session cookie TTL ${HEADLAMP_SESSION_TTL_SECONDS}s, derived from HEADLAMP_TOKEN_DURATION=${HEADLAMP_TOKEN_DURATION:-24h}"
+
 run helm upgrade --install headlamp "$CHART_REF" \
   --namespace "$HEADLAMP_NAMESPACE" \
   --set "image.registry=${HL_REGISTRY}" \
@@ -122,6 +156,7 @@ run helm upgrade --install headlamp "$CHART_REF" \
   --set "config.nodeShellImage=${BUSYBOX_IMG}" \
   --set "config.podDebugImage=${BUSYBOX_IMG}" \
   --set "config.nodeShellNamespace=${HEADLAMP_NAMESPACE}" \
+  --set "config.sessionTTL=${HEADLAMP_SESSION_TTL_SECONDS}" \
   --set "config.oidc.secret.create=false" \
   --set "podSecurityContext.seccompProfile.type=RuntimeDefault" \
   --set "securityContext.allowPrivilegeEscalation=false" \
