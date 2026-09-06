@@ -56,6 +56,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/mirror.sh"
 # shellcheck source=scripts/lib/psa.sh
 . "${SCRIPT_DIR}/lib/psa.sh"
+# shellcheck source=scripts/lib/headlamp.sh
+. "${SCRIPT_DIR}/lib/headlamp.sh"
 load_env
 
 require_cmd helm
@@ -113,6 +115,38 @@ log_info "node-shell img : ${BUSYBOX_IMG}   (the one the FRONTEND pulls at runti
 
 ensure_namespace "$HEADLAMP_NAMESPACE" restricted
 
+# ⚠️ THE COOKIE'S LIFETIME AND THE TOKEN'S MUST MATCH, and headlamp does NOT couple them.
+#
+# ROOT CAUSE, measured on this lab: headlamp v0.45.0 does not keep the pasted token in
+# localStorage — it keeps it in an HttpOnly cookie whose Max-Age is `-session-ttl`, set
+# INDEPENDENTLY of the JWT's own exp. Measured at two operating points: a 600-SECOND token was
+# stored in an 86400-SECOND cookie. So a cookie that outlives its token leaves the browser
+# confidently re-presenting a DEAD credential for the remainder — 401 on every endpoint, and the
+# UI bounces to /c/main/token with no message saying why.
+#
+# It cannot self-heal, for two measured reasons:
+#   - the frontend's auto-logout fires only on a 401 that carried an `authorization` header, and
+#     it never sends one (the token is HttpOnly), so the dead cookie survives its full life;
+#   - POST /clusters/<c>/set-token VALIDATES NOTHING — an expired token, a truncated token and
+#     the literal string "this-is-not-a-jwt-at-all" all returned 200 and got a fresh cookie. So
+#     re-pasting the stale token from scrollback "succeeds" and bounces identically. That is the
+#     "expired AGAIN" loop the operator hit repeatedly.
+#
+# Deriving the seconds from HEADLAMP_TOKEN_DURATION is what makes them ONE fact. Before this, the
+# two were coincidentally equal at 24h — and `.env.example` documents `make creds
+# HEADLAMP_TOKEN_DURATION=8h`, which would have re-opened a SIXTEEN-HOUR dead-cookie window.
+# ⚠️ DERIVED IN A LIB, not inline, so `creds.sh` computes the SAME number from the SAME string.
+# Two adversary rounds refuted the inline version: `$(( ${_d%h} * 3600 ))` on operator input is a
+# COMMAND-EXECUTION path (bash arithmetic runs commands via an array subscript -- measured), it
+# treats `010h` as OCTAL (silently 8h, not 10h), and it aborts under `set -e` BEFORE the guard
+# written to catch bad input, so that guard was dead code. See scripts/lib/headlamp.sh.
+HEADLAMP_SESSION_TTL_SECONDS="$(headlamp_ttl_seconds "${HEADLAMP_TOKEN_DURATION:-24h}" || true)"
+[ -n "$HEADLAMP_SESSION_TTL_SECONDS" ] || die "HEADLAMP_TOKEN_DURATION='${HEADLAMP_TOKEN_DURATION:-24h}' is not a duration this can use.
+  Accepted: <n>h, <n>m or <n>s -- a SINGLE unit, 1s..8760h (the chart schema's 1..31536000).
+  NOT accepted: a compound like 1h30m (kubectl takes it, this derivation cannot), a fraction like
+  1.5h, an uppercase unit, or a bare number (kubectl create token needs a unit)."
+log_info "headlamp: session cookie TTL ${HEADLAMP_SESSION_TTL_SECONDS}s, derived from HEADLAMP_TOKEN_DURATION=${HEADLAMP_TOKEN_DURATION:-24h}"
+
 run helm upgrade --install headlamp "$CHART_REF" \
   --namespace "$HEADLAMP_NAMESPACE" \
   --set "image.registry=${HL_REGISTRY}" \
@@ -122,6 +156,7 @@ run helm upgrade --install headlamp "$CHART_REF" \
   --set "config.nodeShellImage=${BUSYBOX_IMG}" \
   --set "config.podDebugImage=${BUSYBOX_IMG}" \
   --set "config.nodeShellNamespace=${HEADLAMP_NAMESPACE}" \
+  --set "config.sessionTTL=${HEADLAMP_SESSION_TTL_SECONDS}" \
   --set "config.oidc.secret.create=false" \
   --set "podSecurityContext.seccompProfile.type=RuntimeDefault" \
   --set "securityContext.allowPrivilegeEscalation=false" \
@@ -129,6 +164,25 @@ run helm upgrade --install headlamp "$CHART_REF" \
   --set "securityContext.capabilities.drop={ALL}" \
   --set "securityContext.seccompProfile.type=RuntimeDefault" \
   --wait --timeout "${HEADLAMP_INSTALL_TIMEOUT:-5m}"
+
+# ⚠️ ASSERT THE FLAG ACTUALLY LANDED. `--set` with a key the chart does not know is a SILENT no-op:
+# MEASURED 2026-09-06 against the pinned chart -- `--set config.sessionTtl=28800` (one letter) exits
+# 0, prints ZERO bytes of stderr, and renders the DEFAULT `-session-ttl=86400`. values.schema.json
+# omits `additionalProperties`, which JSON-Schema defaults to true, so unknown keys are accepted.
+# Without this check a chart bump that renames the key silently reverts every install to 86400 and
+# re-opens the dead-cookie window -- and `creds.sh`'s remedy ("re-run make install-headlamp") would
+# then be the action that just failed, so the operator loops. Verify the END RESULT, not the rc.
+_hl_landed="$(headlamp_deployed_ttl "$HEADLAMP_NAMESPACE")"
+if [ -z "$_hl_landed" ]; then
+  log_warn "headlamp: could not read back -session-ttl from the Deployment; the cookie TTL is UNVERIFIED."
+elif [ "$_hl_landed" != "$HEADLAMP_SESSION_TTL_SECONDS" ]; then
+  die "headlamp: asked for -session-ttl=${HEADLAMP_SESSION_TTL_SECONDS} but the Deployment carries ${_hl_landed}.
+  The chart ignored --set config.sessionTTL -- almost certainly the key was RENAMED in a chart bump
+  (helm accepts an unknown --set key with rc=0 and no warning). Find the new key with:
+    helm show values <chart> --version <pinned> | grep -i sessionttl"
+else
+  log_info "headlamp: verified -session-ttl=${_hl_landed} on the Deployment"
+fi
 
 # ---- the login credential ------------------------------------------------------------------------
 # A SEPARATE ServiceAccount bound to `view`, so the printed token is never attached to whatever the
