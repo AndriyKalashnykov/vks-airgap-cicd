@@ -141,7 +141,7 @@ mirror_cache_dir() {
 # The keep-set is passed in, DERIVED by the caller from the version pins, so it
 # follows a Renovate bump automatically and cannot rot into an enumerated list.
 # Without this, mirror_collect_images (below) greps superseded manifests forever
-# and re-mirrors every historical version -- see B700 and 10-mirror-pull.sh 1b.
+# and re-mirrors every historical version -- see B702 and 10-mirror-pull.sh 1b.
 #
 # Prints its denominator: a prune that cannot say what it looked at is not a prune.
 mirror_prune_manifests() {
