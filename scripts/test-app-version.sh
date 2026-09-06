@@ -42,7 +42,7 @@ else
   printf '  SKIP  busybox not installed — the cluster-shell arm did not run\n'
 fi
 
-echo "== every app declares a NON-EMPTY version (an empty one makes update-deploy die) =="
+echo "== every app declares a NON-EMPTY version (an empty one makes the build task's write-back die) =="
 for a in $(app_names); do
   v="$(app_version "$a")"
   if [ -n "$v" ]; then ok "declares a version: $a ($v)"; else bad "declares a version: $a (EMPTY)"; fi

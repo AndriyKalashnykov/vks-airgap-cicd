@@ -41,7 +41,7 @@ spec:
       description: >-
         The app's declared semantic version, read out of the CLONE, trimmed and validated against
         the OCI tag grammar. Empty ONLY when the app declares none — which kaniko tolerates (it
-        pushes just the sha tag) but update-deploy REFUSES, because an empty newTag breaks
+        pushes just the sha tag) but the build task's set-tag step REFUSES, because an empty newTag breaks
         kustomize's replacements block. Treat "every app declares a version" as required;
         scripts/test-app-version.sh asserts it offline.
   steps:
