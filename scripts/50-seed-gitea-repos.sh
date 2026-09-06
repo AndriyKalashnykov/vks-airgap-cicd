@@ -388,3 +388,31 @@ EOF
 for_each_app seed_app
 
 log_info "Gitea seeded: org '${GITEA_ORG}' — for each app: <app>-app + <app>-deploy ($(app_names | tr '\n' ' '))"
+
+# ---- SEEDING IS HALF AN OPERATION — say so ----------------------------------
+# B701. push_repo force-pushes deploy/ VERBATIM, and every deploy/*/kustomization.yaml
+# commits `newTag: NEVER-BUILT-RUN-THE-PIPELINE`. That sentinel is DELIBERATE and it is
+# READ: 75-build-apps.sh treats NEVER-BUILT-* as "must build" and clears it. On the
+# documented path that is coherent, because Makefile `install-all` runs `build-apps`
+# AFTER `platform` (which is what calls this script).
+#
+# But `make seed-gitea` STANDALONE — exactly what an operator runs to land a manifest
+# change — has no successor, and used to print nothing. It returns 0 having reset every
+# app's deploy tag to a tag that does not exist in Harbor, so the next ArgoCD sync stalls
+# EVERY app's rollout at ImagePullBackOff.
+#
+# The stall is invisible in the obvious places: the OLD ReplicaSet keeps serving, so every
+# app still answers HTTP 200 and `make verify`-style page checks pass. Only
+# readyReplicas < replicas shows it.
+#
+# MEASURED 2026-09-06: a standalone seed-gitea to land `revisionHistoryLimit: 3` stalled
+# all six apps at 2/3 for ~20 minutes. `make build-apps` repaired every one.
+#
+# ⚠️ Do NOT "fix" this by kubectl set image on the stalled Deployment: k8s/argocd/
+# application.yaml sets syncPolicy.automated.selfHeal=true, so ArgoCD reverts any live
+# patch within a reconcile interval. Git is authoritative — the fix is to build.
+log_warn "every <app>-deploy now carries newTag=NEVER-BUILT-RUN-THE-PIPELINE (the seeded value)."
+log_warn "  Until images are built, ArgoCD will stall each app's rollout on ImagePullBackOff"
+log_warn "  while the OLD pods keep serving — so the apps still answer HTTP 200 and look fine."
+log_warn "  NEXT STEP:  make build-apps      (install-all does this for you; a standalone seed does not)"
+
