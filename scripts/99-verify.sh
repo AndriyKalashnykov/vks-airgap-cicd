@@ -214,11 +214,17 @@ verify_app() {
   # ⚠️ NO `date -d` ARITHMETIC. The walk box is Photon (toybox) as often as Ubuntu (GNU). Raw
   # timestamps are portable; a wrong delta would be worse than two honest timestamps.
   #
-  # Rows print in NAME order, not execution order (build, clone-app, deploy-update, test) -- each
-  # row carries its own timestamps, so read those, not the order.
+  # Rows print in NAME order, not execution order (build, clone-app, test) -- each row carries its
+  # own timestamps, so read those, not the order.
+  #
+  # ⚠️ `steps[0]` WAS A CASUALTY OF MERGING deploy-update INTO build (2026-09-06). `build` now has
+  # FOUR steps -- build-and-push, clone-deploy, set-tag, commit-push -- and step0 is only the first,
+  # so the write-back's timings became invisible exactly when they stopped having their own TaskRun.
+  # `steps[-1:]` is jsonpath for the LAST step, so `done=` and the last step's end now bracket the
+  # whole task, and a slow write-back shows up instead of hiding inside the gap.
   _pr_name="${pr##*/}"
   _timing="$(kubectl -n "$CI_NAMESPACE" get taskruns -l "tekton.dev/pipelineRun=${_pr_name}" \
-    -o jsonpath='{range .items[*]}{.metadata.name} sched={.status.startTime} step0={.status.steps[0].terminated.startedAt} done={.status.completionTime}{"\n"}{end}' \
+    -o jsonpath='{range .items[*]}{.metadata.name} sched={.status.startTime} step0={.status.steps[0].terminated.startedAt} laststep={.status.steps[-1:].terminated.finishedAt} done={.status.completionTime}{"\n"}{end}' \
     2>/dev/null || true)"
   # A COUNT, always. Silence has five indistinguishable causes (no TaskRuns matched, RBAC denied,
   # CRD not served, jsonpath errored, kubectl absent) -- and printing nothing would reproduce the

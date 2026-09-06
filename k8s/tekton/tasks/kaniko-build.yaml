@@ -47,6 +47,24 @@ spec:
     - name: insecure
       type: string
       default: "false"
+    - name: deploy-url
+      type: string
+      description: The <app>-deploy repo to write the new tag back to (the GitOps hand-off).
+    - name: deploy-revision
+      type: string
+      default: main
+    - name: app
+      type: string
+      description: >-
+        Which app this write-back is for. The task is SHARED by every app, so the commit message
+        must name the app it actually deployed — hardcoding one would make every app's write-back
+        claim it deployed that one. It is also the CONTAINER NAME the APP_COMMIT write selects on.
+    - name: git-user-name
+      type: string
+      default: ci-bot
+    - name: git-user-email
+      type: string
+      default: ci-bot@vks-airgap-cicd.local
   workspaces:
     - name: source
     - name: dockerconfig
@@ -103,3 +121,120 @@ spec:
         fi
         echo "kaniko $*"
         exec /kaniko/executor "$@"
+
+    # ── THE GITOPS HAND-OFF ─────────────────────────────────────────────────────────────────────
+    # These three steps were a SEPARATE `update-deploy` TaskRun until 2026-09-06. Merging them here
+    # removes one pod per app per run. MEASURED on the lab: a TaskRun's own pod costs ~5s
+    # (PodScheduled -> first container started was 1s median for test/build/deploy-update, and the
+    # TaskRun wall-minus-step overhead was ~5s each), so this is ~30s off a six-app run.
+    #
+    # ⚠️ WHAT IS PRESERVED, because the demo is ABOUT this hand-off: the three steps keep their
+    # names, so the Tekton dashboard still shows `clone-deploy` -> `set-tag` -> `commit-push` as
+    # distinct stages, and a failure still reports WHICH of them failed via
+    # `.status.steps[].terminated`. What is lost is TaskRun-level granularity — they no longer
+    # appear as their own row. docs/demo-walkthrough.md describes them as steps for that reason.
+    #
+    # ⚠️ NO stepTemplate. update-deploy used one to run every step as root (yq's default non-root
+    # user cannot overwrite the root-owned kustomization.yaml). A stepTemplate here would also
+    # apply to the kaniko step above and silently change its securityContext, so the setting is on
+    # the three steps that need it instead. kaniko already runs as uid 0, so this is a strict no-op
+    # for it — but "already true" is not "declared", and a stepTemplate would make it MY assertion.
+    #
+    # ⚠️ TWO PARAMS FEWER THAN update-deploy HAD. It took `tag` (the VERSION) and `commit` (the
+    # SHA); this task already carries both under different names — `version-tag` and `tag`. Passing
+    # them twice was a chance for the pipeline to wire them crosswise, which is exactly the defect
+    # that once rendered `Commit: 0.1.0` on every page.
+    - name: clone-deploy
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/alpine/git:v2.54.0
+      securityContext: { runAsUser: 0, runAsGroup: 0 }
+      script: |
+        #!/bin/sh
+        set -eu
+        git config --global credential.helper store
+        rm -rf "$(workspaces.source.path)/deploy"
+        git clone -b "$(params.deploy-revision)" "$(params.deploy-url)" \
+          "$(workspaces.source.path)/deploy"
+    - name: set-tag
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/mikefarah/yq:4.53.6
+      securityContext: { runAsUser: 0, runAsGroup: 0 }
+      env:
+        - name: TAG
+          value: $(params.version-tag)
+        - name: COMMIT
+          value: $(params.tag)
+        - name: APP
+          value: $(params.app)
+      script: |
+        #!/bin/sh
+        set -eu
+        cd "$(workspaces.source.path)/deploy"
+        # ⚠️ REFUSE AN EMPTY TAG. app_version_cmd is allowed to print nothing (an app may declare no
+        # version), and `yq` writes `newTag: ""` for it with rc=0 — which renders the image with no
+        # `:tag`, so kustomization.yaml's `replacements` block (delimiter ':', index 1) then has
+        # nothing to split and `kustomize build` fails ArgoCD's sync with
+        # "options.index 1 is out of bounds". MEASURED. Die here, naming the fix.
+        if [ -z "${TAG:-}" ]; then
+          echo "ERROR: empty tag. ${APP} declares no version — add one to its manifest" >&2
+          echo "       (scripts/lib/apps.sh:app_version_cmd names the file per language)." >&2
+          exit 1
+        fi
+        # kustomization.yaml is at the deploy repo root (seeded from the app's deploy/ dir).
+        yq -i '.images[0].newTag = strenv(TAG)' kustomization.yaml
+        echo "set image tag -> $TAG"
+        yq '.images' kustomization.yaml
+        # APP_COMMIT is written DIRECTLY, not derived from the tag. Guarded because an empty value
+        # would blank the field and make the page claim the build has no commit.
+        if [ -n "${COMMIT:-}" ]; then
+          # By container NAME, not [0]: a sidecar inserted at index 0 would silently send this to
+          # the wrong container. And READ BACK — yq exits 0 having written nothing when the path
+          # does not match (no APP_COMMIT env, a renamed container), which would leave the page
+          # reading `Commit: unknown` forever AND make a greeting-only change produce no manifest
+          # diff, so nothing would deploy.
+          yq -i '(.spec.template.spec.containers[]|select(.name == strenv(APP)).env[]|select(.name == "APP_COMMIT")).value = strenv(COMMIT)' deployment.yaml
+          got="$(APP="$APP" yq '(.spec.template.spec.containers[]|select(.name == strenv(APP)).env[]|select(.name == "APP_COMMIT")).value' deployment.yaml)"
+          if [ "$got" != "$COMMIT" ]; then
+            echo "ERROR: wrote APP_COMMIT=$COMMIT but deployment.yaml reads '$got'" >&2
+            echo "       (container named '$APP' with an APP_COMMIT env is required)." >&2
+            exit 1
+          fi
+          echo "set APP_COMMIT -> $COMMIT"
+        else
+          echo "WARNING: no commit param — leaving APP_COMMIT as-is"
+        fi
+    - name: commit-push
+      image: ${HARBOR_URL}/${HARBOR_INFRA_PROJECT}/alpine/git:v2.54.0
+      securityContext: { runAsUser: 0, runAsGroup: 0 }
+      env:
+        # Via env, not textual substitution: the version is read from the app clone, and Tekton does
+        # not escape a param's contents — a crafted version would execute in this pod, which holds
+        # the Gitea CI token in ~/.git-credentials.
+        - name: TAG
+          value: $(params.version-tag)
+        - name: COMMIT
+          value: $(params.tag)
+        - name: APP
+          value: $(params.app)
+      script: |
+        #!/bin/sh
+        set -eu
+        cd "$(workspaces.source.path)/deploy"
+        git config user.name  "$(params.git-user-name)"
+        git config user.email "$(params.git-user-email)"
+        git config --global credential.helper store
+        # A genuine no-op: same version AND same commit. Rebuilding an identical tree is allowed to
+        # change nothing, and must not fail the pipeline. `exit 0` ends THIS STEP only; as the last
+        # step of the task that is also the end of the task, which is what it was as its own TaskRun.
+        if git diff --quiet; then
+          echo "no manifest change (version and commit already current) — nothing to push"
+          exit 0
+        fi
+        # ⚠️ STAGE BOTH FILES. This staged only kustomization.yaml, which was correct while the tag
+        # was the sha (every build changed it). The tag is the declared VERSION now, so rebuilding
+        # WITHOUT a bump leaves kustomization.yaml byte-identical and changes only deployment.yaml's
+        # APP_COMMIT — `git diff` above sees the change, `git add kustomization.yaml` stages
+        # NOTHING, and `git commit` exits non-zero with "no changes added to commit". MEASURED: it
+        # failed javawebapp's pipeline exactly that way, AFTER the write-back had already succeeded.
+        git add kustomization.yaml deployment.yaml
+        git commit -m "ci: deploy ${APP} ${TAG} (${COMMIT})"
+        git push origin "HEAD:$(params.deploy-revision)"
+        echo "pushed deploy update for tag ${TAG}"

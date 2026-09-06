@@ -91,31 +91,22 @@ spec:
         - { name: build-args, value: $(params.build-args) }
         - { name: registry, value: $(params.registry) }
         - { name: insecure, value: $(params.insecure-registry) }
+        # ---- THE GITOPS WRITE-BACK, folded in from the retired `update-deploy` task ----
+        # These are what the merged `clone-deploy` -> `set-tag` -> `commit-push` steps consume.
+        # ⚠️ `deploy-url` and `app` have NO default on the task, so omitting them is NOT a silent
+        # no-op: Tekton refuses the PipelineRun outright with
+        #   PipelineValidationFailed ... missing values for these params which have no default
+        # MEASURED on the lab 2026-09-06 — the task grew these params and THIS block did not, and
+        # every app failed at admission. `make static-check` and `make validate` were both GREEN,
+        # because neither resolves Tekton param references: kubeconform checks the SCHEMA of each
+        # object in isolation, and nothing offline cross-checks a taskRef's params against the
+        # Task it names. The gate that caught it was a real PipelineRun.
+        - { name: deploy-url, value: $(params.deploy-repo-url) }
+        - { name: deploy-revision, value: $(params.deploy-revision) }
+        # Block style: a `${VAR}` inside a YAML FLOW mapping is a syntax error (see taskRef above).
+        - name: app
+          value: ${APP_NAME}
       workspaces:
         - { name: source, workspace: shared-data }
         - { name: dockerconfig, workspace: dockerconfig }
         - { name: ca, workspace: ca }
-
-    - name: deploy-update
-      runAfter: [build]
-      taskRef: { name: update-deploy }
-      params:
-        - { name: deploy-url, value: $(params.deploy-repo-url) }
-        - { name: deploy-revision, value: $(params.deploy-revision) }
-        # ⚠️ THE DEPLOYED TAG IS THE DECLARED VERSION, NOT THE SHA. Bumping the version in the app's
-        # own manifest is what changes this file, and a change to this file is the ONLY thing that
-        # makes ArgoCD roll — so the bump IS the deploy signal for the release IDENTITY.
-        # ⚠️ A code change WITHOUT a bump STILL DEPLOYS: the write-back also stamps the build's
-        # commit sha into deployment.yaml's APP_COMMIT, so the deploy repo changes either way.
-        # The image still carries the sha as a second tag, so the artifact remains traceable to its
-        # commit; the page shows the commit separately.
-        - name: tag
-          value: $(tasks.clone-app.results.version)
-        # The sha the image was ACTUALLY built from — for the page's Commit field, which can no
-        # longer be derived from the tag now that the tag is the version.
-        - { name: commit, value: $(tasks.clone-app.results.commit) }
-        # Block style: a `${VAR}` inside a YAML flow mapping is a syntax error (see the taskRef above).
-        - name: app
-          value: ${APP_NAME}
-      workspaces:
-        - { name: scratch, workspace: shared-data }
