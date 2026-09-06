@@ -136,6 +136,39 @@ mirror_cache_dir() {
 #       `-el-image`; the entrypoint/nop/sidecarlogresults/workingdirinit images
 #       via controller flags), so an `image:`-only grep silently misses them and
 #       they ImagePullBackOff in a real air gap.
+# Delete every *.yaml in <dir> that is NOT in the caller's keep-set.
+#
+# The keep-set is passed in, DERIVED by the caller from the version pins, so it
+# follows a Renovate bump automatically and cannot rot into an enumerated list.
+# Without this, mirror_collect_images (below) greps superseded manifests forever
+# and re-mirrors every historical version -- see B700 and 10-mirror-pull.sh 1b.
+#
+# Prints its denominator: a prune that cannot say what it looked at is not a prune.
+mirror_prune_manifests() {
+  local dir="${1:?mirror_prune_manifests: dir}"; shift
+  local keep_n=$# pruned=0 p b stale
+  [ -d "$dir" ] || { log_info "manifests: no ${dir} yet, nothing to prune"; return 0; }
+
+  local -A KEEP=()
+  for b in "$@"; do KEEP["$b"]=1; done
+
+  while IFS= read -r stale; do
+    [ -n "$stale" ] || continue
+    log_warn "pruning superseded manifest $(basename "$stale") (not in the pinned set)"
+    rm -f -- "$stale"
+    pruned=$((pruned + 1))     # NOT ((pruned++)) -- returns rc=1 when pruned is 0
+  done < <(
+    find "$dir" -maxdepth 1 -type f -name '*.yaml' -print 2>/dev/null \
+    | while IFS= read -r p; do
+        b="$(basename "$p")"
+        # ${KEEP[$b]+x} is a MEMBERSHIP test -- correct even for an empty value.
+        if [ -z "${KEEP[$b]+x}" ]; then printf '%s\n' "$p"; fi
+      done
+  )
+  log_info "manifests: ${keep_n} pinned, ${pruned} superseded pruned"
+  return 0
+}
+
 mirror_collect_images() {
   local list="${REPO_ROOT}/images/images.txt" mdir="${BUNDLE_DIR:?}/manifests"
   {

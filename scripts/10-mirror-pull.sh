@@ -80,6 +80,23 @@ for f in "${!MANIFESTS[@]}"; do
   assert_k8s_manifest "${MANIFEST_DIR}/${f}" "${MANIFESTS[$f]}"
 done
 
+# ---- 1b. Prune SUPERSEDED manifests -----------------------------------------
+# B700: MANIFEST_DIR accumulated one file per version FOREVER, and
+# mirror_collect_images greps EVERY file in it -- so the wanted-set grew
+# monotonically and every superseded Tekton release stayed mirrored, TAGGED, and
+# therefore permanently un-GC-able. This is a LEAK, not a capacity shortfall.
+#
+# MEASURED 2026-09-06 on the real lab: 3 concurrent pipeline versions (v1.4.0,
+# v1.14.0, v1.15.0) + 3 triggers + 2 dashboard = 25 stale artifacts = 5.85 GB =
+# 47% of the entire mirror, on a 10Gi PVC that had hit 100% and was failing kaniko
+# pushes with ENOSPC. Harbor GC could not touch ANY of it: every artifact is
+# tagged, so `delete_untagged` had nothing to delete.
+#
+# Ordering is deliberate: AFTER the download loop. A failed download dies before we
+# prune, so a transient network error can never leave the bundle holding neither the
+# new manifest nor the old one.
+mirror_prune_manifests "$MANIFEST_DIR" "${!MANIFESTS[@]}"
+
 # ---- 2. Collect the full image list ----
 mapfile -t IMAGES < <(mirror_collect_images)
 [ "${#IMAGES[@]}" -gt 0 ] || die "no images collected (empty images.txt and no manifest images)"
