@@ -987,102 +987,85 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-06 — headlamp root-caused and fixed; the pipeline collapse shipped after the lab refuted it
+## ▶️ HANDOFF 2026-09-06b — a 47% mirror LEAK filled Harbor; three confident fixes were refuted before shipping
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
 ### 🔴 DISTRUST FIRST
 
-- **I STATED OUR OWN SCRIPT'S POLICY AS A PLATFORM CONSTRAINT, AND IT SENT THE OPERATOR TOWARD A
-  NEEDLESS LAB REBUILD.** Asked whether a newer Kubernetes version was available for the guest
-  cluster, I answered that moving up "means a new cluster name", quoting
-  `25-vks-cluster-create.sh`'s create-guard. That guard is OUR refusal to `kubectl apply` over an
-  existing object; it says NOTHING about upgrades. A `vks-adversary` round dry-ran it on the live
-  Supervisor: `1.35.5 -> 1.36.2` is **ACCEPTED** (and a downgrade and a bogus version are REJECTED,
-  so the accept is real). The guard's stated rationale was also false — the webhook PROTECTS a live
-  cluster (*"ClusterClass version cannot be downgraded ... will continue to be used"*). Both
-  comments are corrected in #1110. **I had merged THREE separate things**: a create-guard, the
-  measured "never re-create a cluster under a deleted name" VIP bug (`scenario-1-notes.md` — that
-  one is about RE-CREATION and is still true), and an upgrade question.
-- **The constraint that actually governs an upgrade here is the OS IMAGE, and I never mentioned it.**
-  The content library is subscribed **on-demand**: 138 items catalogued, **1 downloaded** (the
-  3992 MB photon image the nodes run). The 1.36.2 image is a catalogue entry with no bytes. On a
-  real air gap the upgrade is accepted and then STALLS fetching ~4 GB — and a new cluster needs the
-  same image, so rebuilding would not have avoided it.
-- **SAME CLASS, SMALLER: I said the VKS_* cluster keys are all operator-typed. `make vks-shape-set`
-  DISCOVERS some of them** — it reads the storage policies assigned to the vSphere Namespace and
-  writes the unambiguous one, refuses to write when ambiguous, and never overwrites a pin. It is a
-  prerequisite of `vks-cluster-create`. `make vks-shape-show` also prints each ClusterClass's
-  SUPPORTED K8S RANGE (`builtin-generic-v3.7.0  k8s v1.33..v1.36`), which is the fastest answer to
-  "can this cluster reach 1.36" and which I answered the long way round. Read the target before
-  describing the mechanism.
-- **`VKS_CONTEXT` drifted from `KUBECONFIG` because someone hand-edited `.env`.** `make
-  use-guest-kubeconfig` writes all three keys atomically; pointing `KUBECONFIG` at gc2 by hand left
-  the other two on gc1. Outcome was benign (one warning, correct fallback) and the fix was that one
-  target — **not** a new gate. Recorded because the reflex to build a gate here was wrong: the code
-  already detects and names it.
+- **THREE designs I was confident in were REFUTED by adversary rounds, and each would have shipped a
+  false green.** (a) A scheduled Harbor GC — measured **ZERO untagged artifacts** in both projects, so
+  `delete_untagged` has nothing to delete and a nightly GC reclaims **~0 bytes in steady state** while
+  reading as "storage is handled". (b) A `HARBOR_REGISTRY_STORAGE_SIZE` knob — `vc_ss_install` **POSTs**
+  (a CREATE) and returns 0 with *"already installed - nothing to do"*, so the rendered data-values are
+  **never transmitted to a running service**: the knob is a NO-OP on every existing lab. (c) An `ABSENT`
+  class for `_verify_class` — scored **1 of 9** measured crane strings. Full refutations in B702/B703.
+- **My "non-fatal like TRANSPORT" premise was flatly FALSE.** `23-mirror-verify.sh:129-131` **dies**.
+  Had I built on it, `fails=0, transport_fails=0, absent_fails=N` fires NEITHER die → the gate prints
+  `✓ mirror-verify: N images intact` and **exits 0 with N absent**. Verify a premise about a gate by
+  reading the gate.
+- **`MANIFEST_UNKNOWN` is the OCI-standard ABSENT signature** (measured 3/3 on Docker Hub, gcr.io,
+  ghcr.io), NOT corruption. I argued the opposite from the 2026-07-13 lying-registry incident, whose own
+  root cause is *"153 manifest links, ZERO blobs"* — manifests PRESENT. The corruption signature is
+  **`BLOB_UNKNOWN`**.
+- **I claimed a safety property I never measured.** Before deleting 20 Harbor artifacts I "checked"
+  `images.lock` — at `./images.lock`, which **does not exist** (it is `bundle/images.lock`). `grep -c`
+  exited 2 and my `|| echo 0` turned a missing file into a reassuring "0 references". Run against the
+  real path it reads **8 / 8 / 4** — exactly the 20 artifacts I deleted.
+- **A pin is NOT the deployment.** My delete rule keyed on `.env.example` pins would have removed the
+  **live EventListener image**: the cluster ran triggers **v0.36.0** / dashboard **v0.70.0** while the
+  pins said v0.37.0 / v0.71.0. The rule that shipped is *neither PINNED nor RUNNING*. That drift still
+  exists on `cicd-gc3` — deliberately not reconciled (see below).
+- **I ran `git reset --hard` mid-`static-check`** and the tree-stability gate correctly refused its own
+  verdict (128 tests had passed; the verdict was unusable because 4 files moved under it).
+- **I restored a lab golden without checking what a golden CONTAINS.** All pre-existing goldens are
+  **pre-demo baselines** — no guest cluster, no Harbor/ArgoCD Services. It cost a working lab and a
+  ~90-minute rebuild. Fixed forward: `3.7.1-demo+v1.36` now exists (below).
 
-- **I reported "both directions verified" on a warning that was a COIN FLIP, and the green sample
-  was luck.** The first headlamp fix compared the cookie TTL against the token's *remaining* life
-  (`exp - now`), which decays. Measured on the lab, three consecutive runs: **1s elapsed → WOULD
-  WARN, 0s → silent, 0s → silent** — on the perfectly ALIGNED 24h/24h config the fix exists to
-  produce. My single "0 warnings" reading landed on the lucky side and I wrote it up as verified.
-  Two adversary rounds caught it. **A one-sample green on anything with a clock in it is not a
-  measurement.**
-
-- **`make static-check` (125 offline tests) and `make validate` are BOTH BLIND to Tekton param
-  wiring.** Both were green while **every** PipelineRun failed at admission with
-  `missing values for these params which have no default values: [deploy-url app]`. kubeconform
-  validates each object's schema in isolation; **nothing offline cross-checks a `taskRef`'s params
-  against the Task it names.** Only a real PipelineRun catches this class.
-
-- **A LIVE test can be vacuous through the `.env` clobber, and it looks like a pass.**
-  `make creds HEADLAMP_NAMESPACE=nope-does-not-exist` "proved" the table survives a missing
-  Deployment. It proved nothing: `HEADLAMP_NAMESPACE` is uncommented in `.env.example`, so
-  `load_env`'s `set -a` overwrote the override and the table survived for the **wrong reason**
-  (measured: `HEADLAMP_NAMESPACE=probe-value … load_env` → `headlamp`). Filed as **B700**. The real
-  proof was the direct call: `headlamp_deployed_ttl nope-does-not-exist` → `value=[] rc=0`.
-
-- **`git commit -a` does NOT stage new files.** The headlamp rework's two NEW files
-  (`lib/headlamp.sh`, `test-headlamp-ttl.sh`) were absent from the commit; only reading
-  `git show --stat` caught it. Read the `--stat` every time.
-
-- **`secrets/vks.kubeconfig` is STALE (Aug 26).** The live one is `./secrets/cicd-gc2.kubeconfig`,
-  named in `.env`. Hand-rolled `kubectl` probes against the stale file **hang** (timeout 124) and
-  read as "the cluster is unreachable". That is RULE ZERO-A0 firing: I hand-rolled a probe instead
-  of using the repo's own resolution, and got a confidently wrong answer.
-
-- **The Tekton namespace is `ci`, not `cicd`.** `cicd` is the vSphere Namespace.
-
-### Merged this session
+### Merged this session (7 PRs, #1113–#1119)
 
 | PR | what |
 |---|---|
-| **#1103** | headlamp cookie TTL coupled to `HEADLAMP_TOKEN_DURATION`; `creds.sh` warns on divergence. Reworked after **both** adversary rounds refuted v1 (CRITICAL: the read-back was the only unguarded cluster call in `creds.sh` and killed the whole table; HIGH ×3). New `scripts/lib/headlamp.sh` single-sources the derivation; `scripts/test-headlamp-ttl.sh` is 28 RED-proven cases including a command-injection canary. |
-| **#1104** | the GitOps write-back folded into `kaniko-build` — one fewer pod per app per run. **Lab-validated: `make verify` rc=0, 6/6 apps SUCCESS.** Also fixes the param wiring that made every run fail at admission. |
-| **#1105** | retired 8 comments still naming the deleted `update-deploy` task. |
+| **#1115** | **the load-bearing one.** `10-mirror-pull.sh` wrote version-stamped manifests and never deleted superseded ones; `mirror_collect_images` greps EVERY file in `bundle/manifests/`, so the wanted-set grew monotonically. **25 stale artifacts = 5.85 GB = 47% of `cicd`** on a 10Gi PVC at 100%, failing kaniko with `Err:28`. `mirror_prune_manifests` (in `lib/mirror.sh`, beside the function it protects) with a keep-set DERIVED from the pins. Same PR: `seed-gitea` now warns it is HALF an operation and names `make build-apps`. |
+| #1113 | `revisionHistoryLimit: 3` on all six deploys + a gate they agree |
+| #1114 | the "PINNED IN .env" diagnostic could never name `VKS_K8S_VERSION` (10 → 13 vars) |
+| #1116–#1119 | B701–B704 + a `B700` citation collision (my comments cited a row that was already the headlamp clobber) |
 
-Post-merge `main` green each time (real `conclusion` read, not the watch exit).
+### Lab state — REBUILT and verified
+
+The restore test left a bare estate; it was rebuilt along the documented scenario-1 path.
+**Guest cluster is now `cicd-gc3`** (NOT gc2), k8s **v1.36.2+vmware.2**, 3 nodes.
+Harbor ns is **`svc-harbor-f6120`**, ArgoCD **`svc-argocd-service-t90xm`** (`argocd-1`, `3.0.19+vmware.1-vks.1`).
+
+Measured after the rebuild: `make verify` **rc=0 for every app**, `make creds` **rc=0, 11/11 serving**,
+`mirror-verify` **30/30 intact**, `static-check` **128 tests / 0 failed / tree-stability OK**.
+
+**The storage answer, measured on a clean rebuild:** `cicd` = **3.48 GiB** (was 8.59 with the leak),
+`/storage` **36% — 6.2 G free**. The leak was **59%** of everything Harbor held. 10Gi is adequate;
+**20Gi was treating a symptom**, and the knob to set it is a no-op anyway.
+
+**Golden `3.7.1-demo+v1.36`** (RESUMES, 48GiB, exp 2026-11-27) was cut from a verified state, so the
+next restore gives a working demo in ~1 min instead of a 90-min rebuild. Host-state sidecar at
+`~/.local/state/vks-airgap-cicd-hoststate/3.7.1-demo+v1.36.tar.gz` — the golden freezes VMs only.
 
 ### In flight / NOT done
 
-- **The Tekton param gate is DESIGNED, not built.** The idea-round returned **`build_with_changes`**
-  and its findings are the reason not to build the obvious version:
-  `@ibm/tekton-lint` reproduces the lab error byte-identically **but CRASHES on our
-  `eventlistener.yaml`** (it assumes `spec.triggers`; ours discovers Triggers by `labelSelector` —
-  the mechanism that makes "add an app" one registry row), so a `k8s/tekton/**` glob dies rc=1 with
-  **zero findings** and reads as a param bug. My own hand-rolled design would have **silently
-  skipped the `test` task** (its `taskRef` is `${APP_TEST_TASK}`) — the one task that varies across
-  all six apps. And rendering via `validate.sh`'s placeholder renderer makes that `taskRef:
-  placeholder`, trading a visible gap for an invisible one. **Recommended: extend `validate.sh`'s
-  existing per-app loop, rendering with REAL values from `apps/registry.tsv`, scoped glob, and add
-  an unused-param rule** — the half my design could not see (it would have caught
-  `deploy-repo-url`/`deploy-revision` orphaned by the collapse).
-- **B700** — `HEADLAMP_NAMESPACE` clobber (above). Commenting it ACTIVATES every `empty →` branch in
-  its consumers, so each must be checked first; `creds.sh:792` is safe, the others are UNCHECKED.
-- **The retired `update-deploy` Task object still exists on the cluster.** `kubectl apply` does not
-  prune. Nothing references it; it is cruft an operator will find in a file that does not exist.
+- **`/etc/hosts` still points `*.vks.local` at the PREVIOUS lab's ingress** (`.135`; current is `.134`).
+  Root-owned, no tty for sudo: `sudo sed -i 's/^192\.168\.101\.135\b/192.168.101.134/' /etc/hosts`.
+- **B703 — UNIMPLEMENTED, and the row carries the REFUTATION, not my broken design.** Build the
+  *ask-don't-parse* version: on a `crane validate` failure run `crane manifest`; **rc=0 ⇒ CORRUPT**
+  (manifest served, so the failure is in the blobs — the 2026-07-13 shape); rc≠0 ⇒ only THEN split
+  ABSENT/AUTH/TRANSPORT by text. AUTH is a genuinely missing FIFTH class, and `mirror-verify` has **no
+  auth precondition** while `mirror` depends on `harbor-auth-check`.
+- **B704 — the read-only stale-state reporter is unbuilt.** 15 of 17 kubeconfigs in `secrets/` point at
+  an unreachable API server. A dead `KUBECONFIG` makes `kubectl` **HANG** (measured `timeout 124`),
+  which reads as "the cluster is unreachable" rather than "you are pointed at a corpse".
+- **Tekton pin/running drift on `cicd-gc3`**: triggers **v0.36.0** and dashboard **v0.70.0** are running
+  against pins of v0.37.0 / v0.71.0. Both pinned images ARE in Harbor, so `make install-tekton`
+  reconciles it. Deliberately deferred — it restarts the EventListener.
+- **`bundle/images.lock` still names the 20 deleted artifacts.** Harmless (the wanted-set no longer
+  does); the next `make mirror` regenerates it. Do not read the stale entries as a broken mirror.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
