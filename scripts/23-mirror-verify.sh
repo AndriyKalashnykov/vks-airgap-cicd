@@ -74,18 +74,87 @@ log_info "verifying ${#IMAGES[@]} images in Harbor $HARBOR_URL/$HARBOR_INFRA_PRO
 # classifier that guessed "transient" there would silently downgrade a real corruption to a
 # warning, which is the one failure this gate exists to prevent. Fail toward corrupt, and print the
 # FULL stderr so the operator can judge what the classifier could not.
+# ⚠️ MATCH THE ERROR **CODE TOKEN**, NEVER THE TRAILING PROSE (B703, measured on live Harbor).
+# Harbor's absent-PROJECT error is:
+#     UNAUTHORIZED: project nosuchproject not found: project nosuchproject not found
+# It contains BOTH `UNAUTHORIZED` and `not found`, so a prose match makes ORDER decide the verdict,
+# and AUTH's remedy ("request a fresh credential") vs ABSENT's ("re-mirror this one image") is
+# exactly the expensive inversion for the RULE ZERO-B tenant who CANNOT self-renew a credential.
+# Matching `UNAUTHORIZED:` (the code token, first field after the URL colon) removes the ambiguity.
+#
+# ORDER: CORRUPT, then TRANSPORT, then AUTH, then ABSENT.
+#   TRANSPORT before ABSENT — a plain-HTTP-behind-https endpoint's stderr carries BOTH
+#     `server gave HTTP response to HTTPS client` AND `not found`; test-mirror-verify-class.sh
+#     already ships that exact shape as a committed TRANSPORT fixture.
+#
+# ⚠️ ABSENT SYSTEMATICALLY UNDER-DETECTS, and that is inherent to the code token, not a bug to fix.
+# Registries hide EXISTENCE behind authorization — MEASURED: Docker Hub returns `UNAUTHORIZED:
+# authentication required` for an absent REPOSITORY (MANIFEST_UNKNOWN only for an absent TAG in a
+# repo that exists), and Harbor returns `UNAUTHORIZED: project ... not found` for an absent PROJECT.
+# So an artifact genuinely ABSENT because its project or repo is gone is reported as AUTH, sending a
+# tenant to their platform team for a credential that is fine. That is the SAFE direction (its remedy
+# is "ask", not "re-carry 12 GB"), and no text rule can separate the two — the registry declines to
+# say. Named here rather than silently mis-attributed.
+#   AUTH before ABSENT — DEFENSIVE, and the justification is weaker than it first looks.
+#     ⚠️ MEASURED 2026-09-06: swapping these two arms does NOT change the verdict for the real
+#     Harbor project string, because that string's only CODE TOKEN is `UNAUTHORIZED:` — its
+#     "not found" is lowercase PROSE, which this classifier deliberately does not match. So
+#     code-token matching is what removes the ambiguity; the ordering is a second line of defence
+#     for a hypothetical stderr carrying BOTH code tokens. That case is not observed in the wild,
+#     so it is pinned by a SYNTHETIC fixture (clearly labelled as such) rather than left as an
+#     untested claim — an ordering nothing can RED-prove is decoration.
+#
+# ⚠️ MANIFEST_UNKNOWN MOVED FROM CORRUPT TO ABSENT (B703 finding (b)). It is the OCI-STANDARD
+# signature for an ABSENT tag — measured 3/3 on Docker Hub, gcr.io and ghcr.io. The corruption
+# signature of the 2026-07-13 lying-registry incident was "153 manifest links, ZERO blobs", i.e.
+# manifests PRESENT and blobs gone, which is **BLOB_UNKNOWN** — that stays CORRUPT.
 _verify_class() {
   case "$1" in
     *"mismatched digest"*|*"mismatched diffid"*|*"undersized layer"* \
-      |*"does not match expected size"*|*MANIFEST_UNKNOWN*|*BLOB_UNKNOWN*) printf 'CORRUPT' ;;
+      |*"does not match expected size"*|*BLOB_UNKNOWN*) printf 'CORRUPT' ;;
     *"no such host"*|*"connection refused"*|*"i/o timeout"*|*"no route to host"* \
       |*"certificate signed by unknown authority"*|*"x509:"*|*"TLS handshake"* \
       |*"server gave HTTP response to HTTPS client"*|*"context deadline exceeded"*) printf 'TRANSPORT' ;;
+    *UNAUTHORIZED:*|*DENIED:*|*FORBIDDEN:*) printf 'AUTH' ;;
+    *NOT_FOUND:*|*MANIFEST_UNKNOWN:*) printf 'ABSENT' ;;
     *) printf 'UNCLASSIFIED' ;;
   esac
 }
 
-fails=0; warns=0; transport_fails=0
+# ⚠️ THERE IS NO harbor-auth-check PRECONDITION ON THIS TARGET, and that is deliberate — see the
+# comment above `mirror-verify:` in the Makefile. The AUTH class below IS the mechanism: it gives a
+# rejected credential its own verdict and its own remedy, instead of letting it reach the corrupt
+# tally and prescribe a 12 GB re-carry. Related and unfixed: B710 measured that `harbor-auth-check`
+# is a NO-OP for the default `robot$...` credential anyway (HTTP 412 -> "inconclusive" -> exit 0),
+# so it could not have been the backstop even where it does run.
+# _verify_probe <dst> — ASK, DON'T PARSE (B703's surviving design).
+#
+# The only distinction that costs 12 GB is CORRUPT-vs-ABSENT, and it is structurally decidable with
+# ZERO text parsing: after a `crane validate` failure, fetch the MANIFEST.
+#   rc=0  => the manifest is served => the failure was in the layers/blobs => CORRUPT
+#            (exactly the 2026-07-13 shape: manifests present, blobs gone)
+#   rc!=0 => the manifest itself is unreachable; only THEN split by text, where all remaining
+#            remedies agree on "do NOT re-carry the bundle", so a mistake is cheap.
+# Immune to upstream rewording, registry choice and Harbor version.
+#
+# ⚠️ This does NOT reintroduce the 2026-07-13 HEAD-lies hazard: that lie was a *blob* HEAD served
+# from Redis's descriptor cache; `crane manifest` is a GET of the manifest BODY.
+# ⚠️ On a multi-arch index `crane manifest` fetches the INDEX only, so a dangling child gives rc=0
+# => CORRUPT — which is the correct verdict per spec (MANIFEST_BLOB_UNKNOWN).
+# Cost: one extra request, for FAILING images only.
+# ⚠️ NOT SOUND UNDER MIRROR_VERIFY_FAST=1, so the caller must not rely on it there. `crane validate
+# --fast` is "Skip downloading/digesting layers" (measured from --help), so "manifest served =>
+# the failure was in the layers/blobs" cannot hold — no layers were fetched. validate and this probe
+# would then fetch nearly the same object, and a transient manifest flake would be labelled CORRUPT,
+# i.e. "re-carry 12 GB". FAST is a documented operator knob (docs/scenario-1-notes.md), not
+# hypothetical, so the caller SKIPS the probe in fast mode and leaves the text verdict standing.
+_verify_probe() {
+  local _mout _mrc=0
+  _mout="$(crane manifest "$1" "${INSECURE[@]}" 2>&1)" || _mrc=$?
+  if [ "$_mrc" -eq 0 ]; then printf 'CORRUPT'; else _verify_class "$_mout"; fi
+}
+
+fails=0; warns=0; transport_fails=0; absent_fails=0; auth_fails=0
 pg_init "${#IMAGES[@]}"
 for src in "${IMAGES[@]}"; do
   dst="$(mirror_target_ref "$src")"
@@ -93,15 +162,50 @@ for src in "${IMAGES[@]}"; do
   # 1. INTEGRITY (hard gate)
   if ! err="$(crane validate --remote "$dst" "${FAST[@]}" "${INSECURE[@]}" 2>&1)"; then
     cls="$(_verify_class "$err")"
-    if [ "$cls" = TRANSPORT ]; then
-      # NOT an integrity verdict. Say so in the label, because the label is what a hurried operator
-      # reads, and "INTEGRITY FAIL" on a DNS error is how the 12 GB re-carry gets started.
-      log_error "  UNREACHABLE     $dst  (transport/trust — NOT an integrity verdict)"
-      transport_fails=$((transport_fails+1))
-    else
-      log_error "  INTEGRITY FAIL  $dst${cls:+  [${cls}]}"
-      fails=$((fails+1))
-    fi
+    # FLAPPING-LINK MITIGATION (B703, graded `inferred` — the hole this guards is reasoned, not
+    # observed). `crane validate` fetches EVERY blob (long, many requests) while `_verify_probe`'s
+    # `crane manifest` is ONE small GET immediately afterwards. Under a flapping link a transient
+    # fault kills validate and lets manifest succeed => rc=0 => CORRUPT => "re-carry 12 GB": the
+    # exact expensive answer this design exists to prevent, reachable by a network blip. So when the
+    # VALIDATE stderr already looks like transport, trust that and do NOT probe.
+    # ⚠️ CORRUPT IS DEFINITIVE AND MUST NOT BE OVERWRITTEN (found by the implementation round).
+    # The first version guarded only one direction (validate=TRANSPORT -> skip the probe) and left
+    # the mirror image wide open. MEASURED with an injected crane: `BLOB_UNKNOWN` (the documented
+    # 2026-07-13 corruption signature) + a probe that times out => FINAL=TRANSPORT, and with fails==0
+    # the transport die then says verbatim "Harbor's copy is NOT known to be bad ... Do NOT re-mirror
+    # on the strength of this." A PROVEN corruption downgraded into an instruction not to fix it —
+    # the exact inversion of this script's own "fail toward corrupt". The trigger is not exotic: a
+    # registry pod rolling makes validate see a blob error and the follow-up manifest GET time out,
+    # i.e. the same event as the 2026-07-13 incident.
+    # So probe ONLY when the text classifier was inconclusive. Also saves a request.
+    case "$cls" in
+      TRANSPORT|CORRUPT) : ;;                       # already definitive — do not second-guess it
+      *) # see _verify_probe's header: the probe's inference is UNSOUND with --fast, so in fast
+         # mode leave the text verdict standing rather than manufacture a CORRUPT.
+         if [ "${MIRROR_VERIFY_FAST:-0}" != "1" ]; then
+           cls="$(_verify_probe "$dst")"
+         fi ;;
+    esac
+    # ⚠️ THE `*)` ARM IS THE FAIL-SAFE AND MUST STAY LAST. Every class that is not explicitly
+    # non-integrity falls to `fails`, which is what makes UNCLASSIFIED behave as CORRUPT — see the
+    # "UNCLASSIFIED IS TREATED AS CORRUPT, DELIBERATELY" note above. A `case` is used rather than an
+    # if/elif chain precisely so that adding a class cannot silently bypass the tally.
+    case "$cls" in
+      TRANSPORT)
+        # NOT an integrity verdict. Say so in the label, because the label is what a hurried operator
+        # reads, and "INTEGRITY FAIL" on a DNS error is how the 12 GB re-carry gets started.
+        log_error "  UNREACHABLE     $dst  (transport/trust — NOT an integrity verdict)"
+        transport_fails=$((transport_fails+1)) ;;
+      ABSENT)
+        log_error "  ABSENT          $dst  (not present in Harbor — NOT corruption)"
+        absent_fails=$((absent_fails+1)) ;;
+      AUTH)
+        log_error "  UNAUTHORIZED    $dst  (credential rejected — NOT an integrity verdict)"
+        auth_fails=$((auth_fails+1)) ;;
+      *)
+        log_error "  INTEGRITY FAIL  $dst${cls:+  [${cls}]}"
+        fails=$((fails+1)) ;;
+    esac
     # 800, not 200: the real message is 339 bytes and the discriminating words are at the END of
     # it. Truncating below the length of the thing you are truncating is how the evidence for the
     # correct diagnosis gets removed while the wrong one is printed in full.
@@ -127,17 +231,49 @@ done
 # FIRST: when Harbor is simply unreachable EVERY image "fails", and telling the operator to re-carry
 # 12 GB because their DNS is wrong is the most expensive wrong answer this script can give.
 if [ "$transport_fails" -gt 0 ] && [ "$fails" -eq 0 ]; then
-  die "$transport_fails/${#IMAGES[@]} images could not be REACHED — this is NOT an integrity verdict and Harbor's copy is NOT known to be bad. Check the endpoint, DNS and CA trust (make harbor-reachable), then re-run. Do NOT re-mirror on the strength of this."
+  die "$transport_fails/${#IMAGES[@]} images could not be REACHED — this is NOT an integrity verdict and Harbor's copy is NOT known to be bad. Check the endpoint, DNS and CA trust (make harbor-reachable), then re-run. Do NOT re-mirror on the strength of this.${_also}"
 fi
+# ⚠️ BUILT ONCE, ABOVE ALL FOUR DIES. The first version built `_also` inside the `fails` branch
+# only, so the TRANSPORT die swallowed the ABSENT and AUTH counts entirely — MEASURED across all 11
+# tally combinations: (transport=1, absent=1, auth=1, fails=0) printed only "1/N could not be
+# REACHED" and never mentioned the other two. The operator fixes DNS, re-runs, and only then learns
+# there was more. On a gate whose stated principle is that the verdict line is the one sentence an
+# operator acts on, a two-pass discovery is a defect.
+#
+# ⚠️ NOT `${transport_fails:+...}`. `:+` tests for a NON-EMPTY string, and "0" is non-empty, so that
+# form appends the suffix even when the count is zero. Test the NUMBER. And `if`, not
+# `[ ... ] && _also=...`: the AND-list returns 1 on the false branch, and under `set -e` that kills
+# the script one line before the die it was decorating.
+_also=""
+if [ "$transport_fails" -gt 0 ]; then
+  _also="${_also} — plus ${transport_fails} UNREACHABLE, a SEPARATE problem and not evidence of corruption"
+fi
+if [ "$absent_fails" -gt 0 ]; then
+  _also="${_also} — plus ${absent_fails} ABSENT (not present in Harbor), a SEPARATE problem"
+fi
+if [ "$auth_fails" -gt 0 ]; then
+  _also="${_also} — plus ${auth_fails} UNAUTHORIZED (credential rejected), a SEPARATE problem"
+fi
+
 if [ "$fails" -gt 0 ]; then
-  # ⚠️ NOT `${transport_fails:+...}`. `:+` tests for a NON-EMPTY string, and "0" is non-empty, so
-  # that form appends the suffix even when there were zero transport failures. Test the NUMBER.
-  # `if`, not `[ ... ] && _also=...`: the AND-list returns 1 on the false branch, and under
-  # `set -e` that kills the script one line before the die it was decorating.
-  _also=""
-  if [ "$transport_fails" -gt 0 ]; then
-    _also=" — plus ${transport_fails} UNREACHABLE, which are a SEPARATE problem and not evidence of corruption"
-  fi
   die "$fails/${#IMAGES[@]} images FAILED integrity — Harbor's copy is corrupt/incomplete (re-mirror; see the no-concurrent-load rule)${_also}"
+fi
+# AUTH before ABSENT: an expired credential can render a present image as absent-looking, so a
+# credential problem must never be reported as "these images are missing, re-mirror them".
+if [ "$auth_fails" -gt 0 ]; then
+  die "$auth_fails/${#IMAGES[@]} images could not be read because Harbor REJECTED the credential — this is NOT an integrity verdict and NOTHING is known to be missing or corrupt. Per RULE ZERO-B the common case is a tenant whose robot credential was handed over and CANNOT be self-renewed: request a fresh one, then re-run. Do NOT re-mirror and do NOT re-carry the bundle."
+fi
+if [ "$absent_fails" -gt 0 ]; then
+  die "$absent_fails/${#IMAGES[@]} images are ABSENT from Harbor — the manifest is not served, so Harbor's copy of the REMAINING images is NOT known to be bad. Re-push just these ('make mirror' is resumable and cache-skips what is already intact). Do NOT re-carry the 12 GB bundle on the strength of this."
+fi
+# ⚠️ BELT AND BRACES — the success line below is the one sentence an operator acts on, and B703
+# records the exact way it goes wrong: give a new class a NON-FATAL branch and, with fails=0, NO die
+# fires, so the gate prints "N images intact" and EXITS 0 while N are absent. That is a false green
+# carrying a literally false sentence, on the gate that stands before an air-gap install. This guard
+# makes the success line structurally unreachable whenever ANY tally is non-zero, so a future class
+# added without its own die fails LOUD instead of passing silently.
+_tot=$((fails + transport_fails + absent_fails + auth_fails))
+if [ "$_tot" -gt 0 ]; then
+  die "INTERNAL: ${_tot} image(s) failed but no specific verdict fired (fails=$fails transport=$transport_fails absent=$absent_fails auth=$auth_fails) — refusing to report the mirror intact. A verification class was added without a matching die."
 fi
 pg_done "mirror-verify: ${#IMAGES[@]} images intact in Harbor${warns:+ (${warns} provenance warnings)}"
