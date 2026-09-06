@@ -45,6 +45,19 @@ ING_ALLOWLIST='${GITEA_NAMESPACE} ${GITEA_HOST} ${TEKTON_NAMESPACE} ${TEKTON_DAS
 # shellcheck disable=SC2016
 APP_ING_ALLOWLIST='${APP_NAME} ${APP_NAMESPACE} ${APP_HOST}'
 
+# ⚠️ EXPORT WHAT THE ALLOWLIST NAMES. envsubst substitutes from the ENVIRONMENT, not the shell's
+# variable table, so an un-EXPORTED name renders as the EMPTY STRING -- silently. An empty
+# `namespace:` makes kubectl apply into `default`, which presents later as a 404 from a listener
+# that plainly exists, pointing nowhere near the template.
+# These were exported only BY ACCIDENT: load_env sources .env.example with `set -a`, so whatever is
+# UNCOMMENTED there is exported. The moment one of them is commented -- which a per-run-overridable
+# var MUST be, or `set -a` clobbers the override -- this render breaks. istio does this explicitly
+# in _istio_export_headlamp(); traefik did not, so it was one comment away from the bug.
+# Defaults mirror scripts/49-install-headlamp.sh and lib/istio.sh.
+HEADLAMP_HOST="${HEADLAMP_HOST:-headlamp.vks.local}"
+HEADLAMP_NAMESPACE="${HEADLAMP_NAMESPACE:-headlamp}"
+export HEADLAMP_HOST HEADLAMP_NAMESPACE
+
 # --- 1. Install the controller (namespace, RBAC, IngressClass, Deployment, LB) ---
 log_info "installing Traefik controller into namespace '${TRAEFIK_NAMESPACE}'"
 
