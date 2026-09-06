@@ -110,6 +110,32 @@ fi
 rm -f "$_ns_err"
 # ONLY NOW is an empty result a fact about the world.
 n="$(printf '%s\n' "$ns" | grep -c . || true)"
+# B210. `get ns -l <anything>` is rc=0-BY-CONSTRUCTION on ANY cluster -- namespaces exist everywhere
+# and labels are freeform -- so an empty result is ambiguous: it is the TRUE answer on a Supervisor
+# with no Harbor yet, and it is ALSO exactly what a GUEST kubeconfig returns. The die below is right
+# for the first and confidently wrong for the second, telling an operator to install a Harbor that is
+# running. Ask the discriminator before saying anything.
+#
+# ⚠️ `|| _sup_rc=$?`, NOT `kubeconfig_is_supervisor "$SUP"; _sup_rc=$?`. MEASURED 2026-09-06 under
+# this script's own `set -euo pipefail`: the bare form is KILLED by set -e before the next line, so
+# the branch below would be DEAD CODE on exactly the path it exists for. The siblings at 24 and 26
+# get away with the bare form only because their call sites sit inside functions invoked as
+# `$(fn || true)` / `if fn && ...`, where set -e is suspended; THIS call is at top level, like
+# vks-package.sh:81, which already uses this safe form.
+#
+# rc==1 ONLY. rc==2 means we could not determine (unreachable / stale CA / dead credential) and must
+# NOT be read as "not a Supervisor" -- that would swap one confidently-wrong message for another.
+if [ "$n" = 0 ]; then
+  _sup_rc=0; kubeconfig_is_supervisor "$SUP" || _sup_rc=$?
+  if [ "$_sup_rc" -eq 1 ]; then
+    not_a_supervisor_note >&2   # called directly, not via $( ): command substitution strips the
+                                # trailing newline and the die would run into the note's last line.
+    die "cannot find Harbor's namespace: '${SUP}' does not serve vmoperator.vmware.com, so it is not
+  a Supervisor (see above). Harbor is a SUPERVISOR Service, so NOTHING was learned about whether it
+  is installed. NOTE: strong evidence, not proof -- an identity that authenticates but may not
+  perform API discovery would look identical."
+  fi
+fi
 [ "$n" = 1 ] || die "expected EXACTLY ONE namespace labelled serviceId=harbor, got ${n}:
 $(printf '%s\n' "$ns" | sed 's/^/    /')
   Refusing to guess — an empty value would silently target 'default'."
