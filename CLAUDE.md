@@ -1064,6 +1064,18 @@ next restore gives a working demo in ~1 min instead of a 90-min rebuild. Host-st
 
 - **`/etc/hosts` still points `*.vks.local` at the PREVIOUS lab's ingress** (`.135`; current is `.134`).
   Root-owned, no tty for sudo: `sudo sed -i 's/^192\.168\.101\.135\b/192.168.101.134/' /etc/hosts`.
+- **B706 — a 5.64 GB STALE TARBALL sits inside `bundle/`, and the next `make bundle` CARRIES it.**
+  `bundle/vks-airgap-cicd-bundle-20260712-184355.tar.zst`, dated Jul 12; `bundle/` totals 14 G.
+  `11-bundle.sh:268` tars with **no `--exclude`**, so a ~12 GB sneakernet becomes ~18 GB — larger
+  than the leak B702 fixed. ⚠️ A blanket `--exclude='*.tar'` BREAKS the selfbuilt path. **Do this
+  before the next `make bundle`.**
+- **B707 — there is ZERO Harbor reclamation in the repo**, so B702's prune SLOWS growth rather than
+  bounding it: one Tekton release-set is 2.84 GiB, so 6.2 G free is ~2 bumps. GC is worthless for the
+  tagged classes and **necessary** for the constant-tag builder class (`lib/apps.sh:220`). The manual
+  delete predicate was wrong 2:1 — deleting `:0.1.0` makes #1113's rollback guarantee vacuous.
+- **B705 — FIXED in #1121**, recorded because it is the shape to watch for: a fix that ships on ONE
+  of the two boxes. The prune ran on the internet box while the wanted-set is consumed on the
+  air-gap box, and `tar -x` MERGES.
 - **B703 — UNIMPLEMENTED, and the row carries the REFUTATION, not my broken design.** Build the
   *ask-don't-parse* version: on a `crane validate` failure run `crane manifest`; **rc=0 ⇒ CORRUPT**
   (manifest served, so the failure is in the blobs — the 2026-07-13 shape); rc≠0 ⇒ only THEN split
