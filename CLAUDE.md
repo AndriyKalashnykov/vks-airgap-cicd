@@ -1042,8 +1042,19 @@ Measured after the rebuild: `make verify` **rc=0 for every app**, `make creds` *
 `mirror-verify` **30/30 intact**, `static-check` **128 tests / 0 failed / tree-stability OK**.
 
 **The storage answer, measured on a clean rebuild:** `cicd` = **3.48 GiB** (was 8.59 with the leak),
-`/storage` **36% — 6.2 G free**. The leak was **59%** of everything Harbor held. 10Gi is adequate;
-**20Gi was treating a symptom**, and the knob to set it is a no-op anyway.
+`/storage` **36% — 6.2 G free**. The leak was **59%** of everything Harbor held, and the knob to set
+20Gi is a no-op anyway (B702).
+
+⚠️ **CORRECTED by the before-done round — do NOT quote the session's original numbers.** (a) The
+per-cycle figure I published (~130 MB) summed Harbor's per-artifact sizes, which count shared base
+layers once per artifact; the **deduplicated** cost of a six-app cycle is **33.77 MiB** — wrong by
+3.9x. (b) Cycle count is NOT the binding constraint: one Tekton release-set is **2.84 GiB**, so 6.2 G
+free is **~2 Tekton bumps**. (c) The prune bounds the BUNDLE's wanted-set, **not Harbor** — there is
+**zero reclamation anywhere in the repo** (B707), so growth is slowed, not bounded. (d) The 36%
+reading is a **4-hour-old PVC that never carried the leak**; it is consistent with the fix and cannot
+discriminate it from a fresh lab. (e) "A GC would reclaim ~0" is true NOW and false as a mechanism —
+builders use a CONSTANT tag, so every rebuild orphans the previous artifact into exactly what
+`delete_untagged` takes.
 
 **Golden `3.7.1-demo+v1.36`** (RESUMES, 48GiB, exp 2026-11-27) was cut from a verified state, so the
 next restore gives a working demo in ~1 min instead of a 90-min rebuild. Host-state sidecar at
