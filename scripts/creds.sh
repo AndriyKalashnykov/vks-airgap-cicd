@@ -286,6 +286,8 @@ fi
 # VERIFIED side-effect-free to source (ran-it): rc=0, no output, no env change, +17 functions.
 # shellcheck source=scripts/lib/harbor.sh
 . "${SCRIPT_DIR}/lib/harbor.sh"
+# shellcheck source=scripts/lib/headlamp.sh
+. "${SCRIPT_DIR}/lib/headlamp.sh"
 tekton_url="$(ingress_url "${TEKTON_DASHBOARD_HOST:-tekton.vks.local}")"  # Tekton Dashboard (read-only UI)
 
 _sink="$(state_file)"
@@ -813,25 +815,38 @@ elif [ -n "${KUBECONFIG:-}" ] && have kubectl; then
     case $(( ${#_hl_p} % 4 )) in 2) _hl_p="${_hl_p}==" ;; 3) _hl_p="${_hl_p}=" ;; esac
     _hl_exp="$(printf '%s' "$_hl_p" | tr '_-' '/+' | base64 -d 2>/dev/null \
                  | sed -n 's/.*"exp":\([0-9]*\).*/\1/p' | head -1)"
-    # ⚠️ WARN WHEN THE COOKIE WILL OUTLIVE THIS TOKEN. headlamp's `-session-ttl` is a DEPLOY-TIME
+    # ⚠️ WARN WHEN THE COOKIE WILL OUTLIVE THE TOKEN DURATION. `-session-ttl` is a DEPLOY-TIME
     # flag: it cannot track a token minted here. So `make creds HEADLAMP_TOKEN_DURATION=8h` against
-    # a deployment still at 24h hands the operator an 8h token in a 24h cookie — and for the other
-    # 16h the browser re-presents a DEAD credential, 401s on everything, and bounces to the paste
-    # screen with no message. MEASURED: a 600s token was stored in an 86400s cookie.
-    # 49-install-headlamp.sh derives the flag from the same variable, so they agree AFTER an
-    # install; this catches the window where they do not.
-    _hl_ttl="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s \
-                 -n "$_hl_ns" get deploy headlamp \
-                 -o jsonpath='{.spec.template.spec.containers[0].args}' </dev/null 2>/dev/null \
-               | tr ',' '\n' | sed -n 's/.*-session-ttl=\([0-9]*\).*/\1/p' | head -1)"
-    if [ -n "${_hl_ttl:-}" ] && [ -n "${_hl_exp:-}" ]; then
-      _hl_left=$(( _hl_exp - $(date -u +%s) ))
-      if [ "$_hl_ttl" -gt "$_hl_left" ]; then
-        log_warn "headlamp: this token lives ${_hl_left}s but the session COOKIE lives ${_hl_ttl}s."
-        log_warn "  For the difference the browser will re-present a DEAD token: 401 everywhere and"
-        log_warn "  a bounce to the paste screen, with nothing saying why. Re-run"
-        log_warn "  'make install-headlamp' with the same HEADLAMP_TOKEN_DURATION to align them."
-      fi
+    # a Deployment still at 24h hands the operator an 8h token in a 24h cookie, and for the other
+    # 16h the browser re-presents a DEAD credential. MEASURED: a 600s token in an 86400s cookie.
+    #
+    # ⚠️ COMPARE THE TWO *CONFIGURED* NUMBERS, NEVER THE TOKEN'S REMAINING LIFE. Two adversary
+    # rounds refuted the first version, which did `ttl > (exp - now)`. That decays: at 24h/24h --
+    # the perfectly ALIGNED state this whole fix exists to produce -- `left` is 86399 one second
+    # after the mint, so it warned. MEASURED on the lab, three consecutive runs: 1s elapsed ->
+    # WOULD WARN, 0s -> silent, 0s -> silent. A coin flip on API round-trip latency, and this
+    # repo's own memory records that a RESUMED estate's clock is uniformly behind, which makes it
+    # deterministic there. Worse, its remedy ("re-run install-headlamp") cannot change elapsed
+    # time, so the operator would loop -- the same shape as the bug being fixed. Configured vs
+    # configured has no clock in it at all.
+    #
+    # ⚠️ `|| true` IS LOAD-BEARING (both rounds, CRITICAL). This file's own header says the report
+    # "MUST NOT HANG OR DIE ... every failure degrades to a marker". Under `set -euo pipefail` an
+    # unguarded cluster call here KILLS the whole table -- Gitea, Harbor, ArgoCD, VKS and SSH rows
+    # all lost, at line ~820 of 1570. Reachable on routine paths: a tenant kubeconfig that may
+    # `create token` but not `get deploy` (the DEFAULT posture), or headlamp installed by a
+    # platform team under another release name, or the 3s timeout expiring on a slow lab.
+    # headlamp_deployed_ttl() cannot fail by construction; the `|| true` is belt and braces.
+    _hl_ttl="$(headlamp_deployed_ttl "$_hl_ns" || true)"
+    _hl_want="$(headlamp_ttl_seconds "${HEADLAMP_TOKEN_DURATION:-24h}" || true)"
+    if [ -n "${_hl_ttl:-}" ] && [ -n "${_hl_want:-}" ] && [ "$_hl_ttl" -gt "$_hl_want" ]; then
+      log_warn "headlamp: the session COOKIE lives ${_hl_ttl}s but this token lasts only ${_hl_want}s"
+      log_warn "  (HEADLAMP_TOKEN_DURATION=${HEADLAMP_TOKEN_DURATION:-24h}). For the difference the"
+      log_warn "  browser re-presents a DEAD token: 401 everywhere and a bounce to the paste screen,"
+      log_warn "  with nothing saying why. Fix BOTH halves:"
+      log_warn "    make install-headlamp HEADLAMP_TOKEN_DURATION=${HEADLAMP_TOKEN_DURATION:-24h}"
+      log_warn "  then paste a FRESH token in the browser -- a Max-Age is fixed when the cookie is"
+      log_warn "  created, so the one already in your browser keeps its old lifetime regardless."
     fi
     if [ -n "${_hl_exp:-}" ]; then
       headlamp_tok="${headlamp_tok} (valid until $(date -u -d "@${_hl_exp}" '+%Y-%m-%dT%H:%MZ' 2>/dev/null || printf 'epoch %s' "$_hl_exp"))"
@@ -841,6 +856,17 @@ else
   headlamp_tok="<not read — no KUBECONFIG>"
 fi
 add_row "headlamp" "$headlamp_url" "(token)" "$headlamp_tok" "$(_reach_ingress "${HEADLAMP_HOST:-}")"
+# ⚠️ KEYED ON A HEADLAMP FACT, NOT ON AN ARGOCD ONE. This note first shipped nested inside
+# `if [ "${_argo_initial_note:-0}" = 1 ]`, which is set only when ArgoCD's INITIAL admin secret is
+# still readable -- so the one sentence that breaks the "paste a stale token -> bounce -> paste
+# again" loop was INVISIBLE on a hardened lab (someone ran `argocd account update-password`), on a
+# tenant with no ArgoCD access, and on any cluster with headlamp but no ArgoCD at all. Both
+# adversary rounds flagged it, and it sat two lines above this file's own warning about keying a
+# note on the wrong flag. It is now gated on the token having actually been read.
+case "$headlamp_tok" in
+  '<not read'*) : ;;
+  *) _headlamp_note=1 ;;
+esac
 # ── WHY THIS ROW IS NOT READ LIVE FROM THE CLUSTER (B202 F5/D) ──────────────────────────────────
 # NOT because "a printer must not probe" — it demonstrably does: the guest-node SSH row below runs
 # two live kubectl calls (PR #901). Stating that as the reason would be refuted by this very file.
@@ -1064,13 +1090,14 @@ fi
 # ---- notes the TABLE CELLS point at. A cell may carry a short marker; the sentence lives here.
 # A marker that says "see note" with no note is a citation that resolves to nothing -- worse than no
 # marker at all, because it reads as sourced.
-if [ "${_argo_initial_note:-0}" = 1 ]; then
+if [ "${_headlamp_note:-0}" = 1 ]; then
   printf '\n  note: bounced straight back to the Headlamp token screen after pasting? You pasted a STALE
         token. The /set-token endpoint accepts ANY string with a 200 and stores it, so a dead token
         re-pastes "successfully" and fails identically. Take a fresh one from the line above; its
-        expiry is printed beside it.
-
-  note: the ArgoCD password above is the INITIAL admin secret. If anyone has run\n'
+        expiry is printed beside it.\n'
+fi
+if [ "${_argo_initial_note:-0}" = 1 ]; then
+  printf '\n  note: the ArgoCD password above is the INITIAL admin secret. If anyone has run\n'
   printf "        'argocd account update-password', it has been superseded and will 401.\n"
 fi
 # ⚠️ KEYED ON A FLAG, NOT ON THE RENDERED STRING. This case used to match the URL text, and the

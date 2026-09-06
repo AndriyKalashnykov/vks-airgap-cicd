@@ -56,6 +56,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/lib/mirror.sh"
 # shellcheck source=scripts/lib/psa.sh
 . "${SCRIPT_DIR}/lib/psa.sh"
+# shellcheck source=scripts/lib/headlamp.sh
+. "${SCRIPT_DIR}/lib/headlamp.sh"
 load_env
 
 require_cmd helm
@@ -133,18 +135,16 @@ ensure_namespace "$HEADLAMP_NAMESPACE" restricted
 # Deriving the seconds from HEADLAMP_TOKEN_DURATION is what makes them ONE fact. Before this, the
 # two were coincidentally equal at 24h — and `.env.example` documents `make creds
 # HEADLAMP_TOKEN_DURATION=8h`, which would have re-opened a SIXTEEN-HOUR dead-cookie window.
-HEADLAMP_SESSION_TTL_SECONDS="$(
-  _d="${HEADLAMP_TOKEN_DURATION:-24h}"
-  case "$_d" in
-    *h) printf '%s' "$(( ${_d%h} * 3600 ))" ;;
-    *m) printf '%s' "$(( ${_d%m} * 60 ))" ;;
-    *s) printf '%s' "${_d%s}" ;;
-    *)  printf '%s' "$_d" ;;                     # already seconds
-  esac
-)"
-case "$HEADLAMP_SESSION_TTL_SECONDS" in
-  ''|*[!0-9]*) die "HEADLAMP_TOKEN_DURATION='${HEADLAMP_TOKEN_DURATION:-24h}' is not <n>h/<n>m/<n>s — cannot derive the cookie TTL" ;;
-esac
+# ⚠️ DERIVED IN A LIB, not inline, so `creds.sh` computes the SAME number from the SAME string.
+# Two adversary rounds refuted the inline version: `$(( ${_d%h} * 3600 ))` on operator input is a
+# COMMAND-EXECUTION path (bash arithmetic runs commands via an array subscript -- measured), it
+# treats `010h` as OCTAL (silently 8h, not 10h), and it aborts under `set -e` BEFORE the guard
+# written to catch bad input, so that guard was dead code. See scripts/lib/headlamp.sh.
+HEADLAMP_SESSION_TTL_SECONDS="$(headlamp_ttl_seconds "${HEADLAMP_TOKEN_DURATION:-24h}" || true)"
+[ -n "$HEADLAMP_SESSION_TTL_SECONDS" ] || die "HEADLAMP_TOKEN_DURATION='${HEADLAMP_TOKEN_DURATION:-24h}' is not a duration this can use.
+  Accepted: <n>h, <n>m or <n>s -- a SINGLE unit, 1s..8760h (the chart schema's 1..31536000).
+  NOT accepted: a compound like 1h30m (kubectl takes it, this derivation cannot), a fraction like
+  1.5h, an uppercase unit, or a bare number (kubectl create token needs a unit)."
 log_info "headlamp: session cookie TTL ${HEADLAMP_SESSION_TTL_SECONDS}s, derived from HEADLAMP_TOKEN_DURATION=${HEADLAMP_TOKEN_DURATION:-24h}"
 
 run helm upgrade --install headlamp "$CHART_REF" \
@@ -164,6 +164,25 @@ run helm upgrade --install headlamp "$CHART_REF" \
   --set "securityContext.capabilities.drop={ALL}" \
   --set "securityContext.seccompProfile.type=RuntimeDefault" \
   --wait --timeout "${HEADLAMP_INSTALL_TIMEOUT:-5m}"
+
+# ⚠️ ASSERT THE FLAG ACTUALLY LANDED. `--set` with a key the chart does not know is a SILENT no-op:
+# MEASURED 2026-09-06 against the pinned chart -- `--set config.sessionTtl=28800` (one letter) exits
+# 0, prints ZERO bytes of stderr, and renders the DEFAULT `-session-ttl=86400`. values.schema.json
+# omits `additionalProperties`, which JSON-Schema defaults to true, so unknown keys are accepted.
+# Without this check a chart bump that renames the key silently reverts every install to 86400 and
+# re-opens the dead-cookie window -- and `creds.sh`'s remedy ("re-run make install-headlamp") would
+# then be the action that just failed, so the operator loops. Verify the END RESULT, not the rc.
+_hl_landed="$(headlamp_deployed_ttl "$HEADLAMP_NAMESPACE")"
+if [ -z "$_hl_landed" ]; then
+  log_warn "headlamp: could not read back -session-ttl from the Deployment; the cookie TTL is UNVERIFIED."
+elif [ "$_hl_landed" != "$HEADLAMP_SESSION_TTL_SECONDS" ]; then
+  die "headlamp: asked for -session-ttl=${HEADLAMP_SESSION_TTL_SECONDS} but the Deployment carries ${_hl_landed}.
+  The chart ignored --set config.sessionTTL -- almost certainly the key was RENAMED in a chart bump
+  (helm accepts an unknown --set key with rc=0 and no warning). Find the new key with:
+    helm show values <chart> --version <pinned> | grep -i sessionttl"
+else
+  log_info "headlamp: verified -session-ttl=${_hl_landed} on the Deployment"
+fi
 
 # ---- the login credential ------------------------------------------------------------------------
 # A SEPARATE ServiceAccount bound to `view`, so the printed token is never attached to whatever the
