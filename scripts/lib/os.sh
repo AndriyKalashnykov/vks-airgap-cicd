@@ -585,7 +585,26 @@ load_env() {
   #                            DISCOVERED value SHOULD come from the overlay; it is the inverse
   #                            control that proves this list is still a list and not "everything".
   # Of the 5 operator-settable credentials `state_set` writes, 3 were protected and 2 were not.
-  for _sel in ISTIO_INSTALL_METHOD SUPERVISOR_HOST VCENTER_HOST KUBECONFIG VKS_AUTH_METHOD ARGOCD_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT VKS_CLUSTER_NAME VKS_NAMESPACE VKS_STORAGE_CLASS VKS_VM_CLASS VKS_CLUSTERCLASS INGRESS_CONTROLLER HARBOR_CA_FILE VKS_CA_CERT_FILE ARGOCD_CA_FILE HARBOR_URL HARBOR_USERNAME HARBOR_PASSWORD VCF_CLI_SRC_DIR VKS_CA_SHA256 VCENTER_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256 HARBOR_INSECURE ARGOCD_INSECURE MIRROR_VERIFY_FAST ARGOCD_ADMIN_PASSWORD GITEA_ADMIN_PASSWORD VCENTER_CA_FILE VCENTER_INSECURE VKS_INSECURE_SKIP_TLS_VERIFY; do
+  # ⚠️ ARGOCD_MECHANISM / ARGOCD_REGISTER ADDED 2026-09-07 (B531 F1). They are SELECTORS — they
+  # choose WHICH WRITE PATH runs — and they were absent, so `.env`'s uncommented value beat a
+  # per-run prefix. MEASURED with an inverse control, so the probe cannot be lying either way:
+  #     ARGOCD_MECHANISM=CALLER  -> load_env resolved `auto`    DEFEATED (.env:1027)
+  #     ARGOCD_REGISTER=CALLER   -> load_env resolved `auto`    DEFEATED (.env:1028)
+  #     ARGOCD_SERVER=CALLER     -> load_env resolved `CALLER`  PROTECTED — already in this list
+  #     INGRESS_LB_IP=CALLER     -> the overlay's value         INVERSE control: a DISCOVERED value
+  #                                 must STILL come from the overlay, and does.
+  # ⚠️ The first inverse control tried was ARGOCD_LB_IP, which NO sourced file sets — so nothing
+  # could overwrite the caller and it "failed" for a reason that proved nothing. A control that
+  # cannot discriminate is not a control.
+  # The live cost was an E2E-FIDELITY defect, not a crash: `91-e2e-tenant-mechanism.sh` passes
+  # `ARGOCD_MECHANISM=api` as a per-run prefix to test the TENANT branch; `.env` overrode it to
+  # `auto`, so the test still PASSED (auto measures kubectl=no/api=yes and picks api) while no
+  # longer exercising the branch it exists to test — and `70`'s own comment at the api arm records
+  # that the two paths DIFFER ("an explicit `api` BYPASSES the unknown-guard").
+  # Corroboration that this class was already known and worked around in the WRONG place:
+  # `71-argocd-register-guest.sh:39-53` hand-rolls a snapshot/restore for the sibling
+  # ARGOCD_REGISTER_INSECURE rather than adding it to this list.
+  for _sel in ISTIO_INSTALL_METHOD SUPERVISOR_HOST VCENTER_HOST KUBECONFIG VKS_AUTH_METHOD ARGOCD_KUBECONFIG VKS_SUPERVISOR_KUBECONFIG ARGOCD_SERVER ARGOCD_AUTH_TOKEN ARGOCD_MECHANISM ARGOCD_REGISTER ARGOCD_DEST_SERVER ARGOCD_DEST_CLUSTER_NAME ARGOCD_NAMESPACE VKS_CONTEXT VKS_CLUSTER_NAME VKS_NAMESPACE VKS_STORAGE_CLASS VKS_VM_CLASS VKS_CLUSTERCLASS INGRESS_CONTROLLER HARBOR_CA_FILE VKS_CA_CERT_FILE ARGOCD_CA_FILE HARBOR_URL HARBOR_USERNAME HARBOR_PASSWORD VCF_CLI_SRC_DIR VKS_CA_SHA256 VCENTER_CA_SHA256 HARBOR_CA_SHA256 ARGOCD_CA_SHA256 HARBOR_INSECURE ARGOCD_INSECURE MIRROR_VERIFY_FAST ARGOCD_ADMIN_PASSWORD GITEA_ADMIN_PASSWORD VCENTER_CA_FILE VCENTER_INSECURE VKS_INSECURE_SKIP_TLS_VERIFY; do
     if [ -n "${!_sel:-}" ]; then
       _snap_names="${_snap_names} ${_sel}"
       _snap_vals="${_snap_vals}${_sel}=${!_sel}"$'\n'

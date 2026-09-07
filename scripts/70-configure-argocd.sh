@@ -344,6 +344,15 @@ if [ "$MECH" = kubectl ] && [ "$can_kubectl" != yes ] ; then
   die "ARGOCD_MECHANISM=kubectl, but this kubeconfig may not create Applications in '$ARGOCD_NAMESPACE' on $ARGOCD_API."
 fi
 if [ "$MECH" = api ] && [ "$argocd_api_ready" != yes ]; then
+  # NAME THE SCENARIO, not just the missing vars. `can_kubectl` was measured ~80 lines above, so
+  # the evidence that this is a scenario-2 pin in a scenario-1 run is already in scope here.
+  if [ "$can_kubectl" = yes ]; then
+    log_error "ARGOCD_MECHANISM=api, but this box is missing: ${_api_missing}"
+    log_error "  — AND kubectl CAN create Applications in '${ARGOCD_NAMESPACE}' here."
+    log_error "  That is a SCENARIO-2 (tenant) pin in a SCENARIO-1 (admin) run. The default is"
+    log_error "  'auto', which MEASURES both paths and picks. Fix it by EDITING .env:"
+    die "    sed -i 's/^ARGOCD_MECHANISM=.*/ARGOCD_MECHANISM=auto/' .env      (see docs/scenario-1.md)"
+  fi
   die "ARGOCD_MECHANISM=api, but this box is missing: ${_api_missing}. See .env.example."
 fi
 
@@ -512,6 +521,14 @@ if [ "$ARGOCD_OFF_CLUSTER" = "1" ]; then
     log_error "ArgoCD is off-cluster, but NO guest cluster is registered as an ArgoCD destination."
     log_error "  Deploying with the in-cluster destination would install the app INTO THE ARGOCD"
     log_error "  CLUSTER (on a real lab: the Supervisor) — with prune+selfHeal. Refusing."
+    # ⚠️ DO NOT prescribe the target when ARGOCD_REGISTER=never — `gitops` ALREADY ran 71, which
+    # logged a skip and exited 0. Telling the operator to re-run it sends them to a command that
+    # will silently no-op again: an error message that names the wrong cause is worse than a crash.
+    if [ "${ARGOCD_REGISTER:-auto}" = never ]; then
+      log_error "  ARGOCD_REGISTER=never SKIPPED registration at step 71 — so 'make argocd-register-guest'"
+      log_error "  will silently no-op if you re-run it. That is a SCENARIO-2 (tenant) pin; as an admin:"
+      die "    sed -i 's/^ARGOCD_REGISTER=.*/ARGOCD_REGISTER=auto/' .env      (see docs/scenario-1.md)"
+    fi
     die "run 'make argocd-register-guest' first (ADMIN-only; a tenant REQUESTS it from the platform team)."
   fi
 
