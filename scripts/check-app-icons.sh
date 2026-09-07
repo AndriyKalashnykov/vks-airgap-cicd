@@ -97,15 +97,32 @@ check_app() {
     esac
   done
 
-  # ── 3. THE JOIN. The route, the markup and the test must all name ICON_PATH. ─────────────────
-  # Herestrings, NOT `find | xargs grep -q`: under pipefail `grep -q` exits at its first match and
+  # ── 3. THE JOIN. A ROUTE must be registered at ICON_PATH, not merely the markup pointing there. ─
+  # It EXCLUDES href=/src= occurrences. MEASURED while RED-proving this gate: without that exclusion
+  # the condition was VACUOUS — the shared markup's own `href="/favicon.svg"` satisfied it, so moving
+  # the route to /icon.svg left it GREEN. (The RED it did produce came from condition 4, i.e. the
+  # right verdict from the wrong guard, which is not a proof.) It also accepts BOTH quote styles:
+  # nodejs registers `app.get('/favicon.svg'`, and a double-quote-only match passed it off the markup.
+  #
+  # Herestring, NOT `find | xargs grep -q`: under pipefail `grep -q` exits at its first match and
   # SIGPIPEs the producer, so a FOUND pattern reports ABSENT at random (check-grep-q-pipe).
-  local all
-  all="$(_src_files "$d" -print0 2>/dev/null | xargs -0 grep -hao "\"${ICON_PATH}\"" 2>/dev/null || true)"
-  if [ -z "$all" ]; then
-    log_error "[${app}] nothing under $(app_src "$app") names \"${ICON_PATH}\". The markup in the shared page"
-    log_error "        points there, so the route MUST be registered at exactly that path — a route at any"
-    log_error "        other path leaves check-ui-contract green over a broken image."
+  # COMMENTS STRIPPED FIRST: measured, gowebapp's own test COMMENT quotes "/favicon.svg" while
+  # explaining the join, and that alone satisfied this condition over a route moved to /icon.svg —
+  # a gate passing off prose, the third time that bypass appeared while building this file.
+  local tf
+  routes=""
+  while IFS= read -r tf; do
+    [ -n "$tf" ] || continue
+    routes="${routes}$(sed -E 's@^[[:space:]]*(//|#|--|\*|/\*).*@@' "$tf" \
+                        | grep -haoE "[^=][\"']${ICON_PATH}[\"']" \
+                        | grep -vE '(href|src)=' || true)"
+  done <<SRC
+$(_src_files "$d" 2>/dev/null || true)
+SRC
+  if [ -z "$routes" ]; then
+    log_error "[${app}] no ROUTE is registered at ${ICON_PATH} (only the markup points there)."
+    log_error "        The shared page's href is byte-identical across all six apps, so a route at any"
+    log_error "        OTHER path leaves check-ui-contract green over a broken image."
     fail=1
   fi
 
