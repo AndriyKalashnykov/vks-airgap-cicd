@@ -4874,7 +4874,92 @@ silent; (c) the hole DISCLOSED in the hook's own docstring so nobody believes th
 Whatever ships must not block the adversary's own evidence tools (`git log/diff/status`, `grep`,
 running the gates) — `hooks.md` records that such a gate gets ripped out.
 
-## B527 — 🟡 a registry 401 is the NORMAL auth challenge — it does NOT mean bad credentials, and a bare `curl` cannot tell you anything
+## B527 — 🔴 ROUND VERDICT: the row's MECHANISM and SCOPE are both REFUTED; the fix is ONE anonymous 21ms call
+
+An idea round measured this against the **live lab Harbor** and refuted both halves of the row's
+prescription. **Do not build what this row asks for.**
+
+⚠️ **THE ROW'S SECOND DIAGNOSIS IS NO LONGER UNPROVEN — it is MEASURED TRUE, and the row's own probe
+threw the evidence away.** Measured, anonymous token flow:
+
+| state | HTTP | body |
+|---|---|---|
+| present tag | **200** | the manifest |
+| absent TAG, repo present | **404** | `artifact cicd/istio/pilot:9.9.9 not found` |
+| absent REPO, project present | **404** | `repository cicd/nosuchrepo not found` |
+| **absent PROJECT** | **401** | **`project nosuchproject not found`** |
+| no token, any state | 401 | `authorize header needed…` — **zero discrimination** |
+
+The row's diagnostic was `curl -skI` — a **HEAD**, which returns headers only, and the discriminating
+sentence is in the **body**. So "a bare-curl 401 is worthless" is true *of an unauthenticated HEAD*
+and false of a token-flow GET. The instrument discarded the evidence and the row generalised that
+into a property of the world.
+
+**F1 CRITICAL — "prefer reusing `23-mirror-verify.sh`" would REPRODUCE the incident's first wrong
+diagnosis VERBATIM and FORBID THE FIX.** Its `_verify_class` orders `*UNAUTHORIZED:*` → AUTH
+**before** `*NOT_FOUND:*` → ABSENT, and a missing project returns `UNAUTHORIZED: project … not
+found`. So it classifies AUTH and dies with *"Harbor REJECTED the credential … **Do NOT re-mirror**"*
+— when `make mirror` is exactly what fixed it. `23-mirror-verify.sh`'s own header already concedes
+this. **Replace the row's "prefer reusing" line with this refutation so nobody re-derives it.**
+
+**F2 CRITICAL — the premise is FALSE for `install-all`, and the class is 7 installers, not istio.**
+`install-all` names `mirror-verify` twice (once inside `mirror`), before `install-ingress`, over an
+inventory containing both istio images — **the incident is not reachable that way**. It is reachable
+via a STANDALONE installer, which `docs/scenario-1.md` explicitly tells the operator to run
+(`:1052`, `:1062`, `:1077`). Every installer target is `<name>: check-env` and nothing else, and
+**7** numbered installers pull from Harbor. Fixing istio alone leaves six identical traps and makes
+the tree look protected.
+
+**F3 HIGH — a `harbor_setup`-based preflight would ADD A MANDATORY CREDENTIAL to five installers
+that today need none, and hard-die without it.** Measured: `46/40/41/49/45-install-*.sh` contain
+ZERO references to `HARBOR_USERNAME`/`lib/harbor.sh`; they pull **anonymously** from a public
+project, which is why `46-install-istio.sh` creates no imagePullSecret. `lib/harbor.sh:13,27` are
+`:?` hard dies. Under RULE ZERO-B a tenant with a public URL and no credential is a normal state —
+and the check written to help them would block the install.
+
+**F4 HIGH — `make preflight` cannot host it**: it is `install-all`'s FIRST prerequisite and `mirror`
+is third, so an image-existence assertion there is RED on every greenfield install. The check belongs
+at each installer's own call site, immediately before its helm/kubectl call — the shape
+`capacity_assert_fits` (`46-install-istio.sh:236`) already uses, loud-SKIP discipline and escape
+hatch included. **NOT** in `44-install-ingress.sh`: `INGRESS_CONTROLLER=istio-existing` installs
+nothing, so a check there is a false block on the attach path.
+
+**F5 HIGH — deriving the image list from the chart render DOES NOT WORK for istio.** Measured
+against the carried charts with the install's exact `--set` args: the gateway chart renders
+`image: auto` (proxyv2 is **not in the render** — only the injection webhook rewrites it), and
+istiod's render yields 9 `image:` lines of which **1** is usable, the rest un-rendered Go templates
+plus a literal `busybox:1.28`. Per-installer derivation is bespoke seven times over.
+
+**F8 — the row's preferred reuse is ~95x slower per image than a manifest probe.** Measured on
+`istio/pilot:1.30.3`: `crane validate --remote` **7.04s / 139.8 MiB**; `crane manifest` **0.43s /
+529 B**; token+manifest GET **0.121s**; `GET /api/v2.0/projects?name=` **0.021s**. The repo's own
+`docs/scenario-1.md:1159` records `mirror-verify` at **5m46s** for ~30 images — more than the push
+it verifies.
+
+**F9 — `23-mirror-verify.sh` exposes no reusable per-image function.** `harbor_setup` at file scope,
+`mapfile` over the whole inventory, an inline loop; its only functions are private and coupled to
+four tallies and five `die`s. "Reuse" means either running the full 5m46s or refactoring the one gate
+standing in front of an air-gap install.
+
+**THE PRESCRIBED FIX, in order:**
+
+1. **One credential-free call, shared by all 7 installers**:
+   `GET /api/v2.0/projects?name=${HARBOR_INFRA_PROJECT}` → `[]` ⇒ *"project does not exist —
+   nothing has been mirrored to this Harbor; run `make mirror`"*; `repo_count == 0` ⇒ same;
+   unreachable ⇒ **INCONCLUSIVE, not a pass**. **INDEPENDENTLY RE-MEASURED on the live lab
+   2026-09-07: 15–30 ms, no credential, `[]` for a missing project, and `repo_count` visible
+   anonymously (`library` reads 0 today — the exact shape the incident presented).**
+2. A per-installer image assertion in a NEW `lib/harbor-probe.sh` (anonymous token flow; 200 /
+   404 NOT_FOUND / 401-naming-our-project), called with the SAME expressions the install uses —
+   never a chart-render grep, never `harbor_setup`, with an escape hatch and loud SKIP.
+3. The helm `--wait` failure-message improvement, as the residual net — **after**, not instead.
+
+⚠️ **Residual named by the round:** a **private** project also returns `[]` anonymously, so without a
+credential that arm must report INCONCLUSIVE, never ABSENT. Not measured (all three lab projects are
+public). And `project <X> not found` is Harbor **prose**, not a code token — pair it with the
+structured `projects?name=` JSON, which does not depend on message text.
+
+## B527 (original) — 🟡 a registry 401 is the NORMAL auth challenge — it does NOT mean bad credentials, and a bare `curl` cannot tell you anything
 
 MEASURED 2026-09-05: `istiod` failed `ImagePullBackOff` with
 `401 Unauthorized` on `harbor.env1.lab.test/v2/cicd/istio/pilot/manifests/1.30.3`. That read as an
