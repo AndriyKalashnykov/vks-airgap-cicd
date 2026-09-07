@@ -44,10 +44,37 @@ in `.mise.toml`, two lines in `images/images.txt` (builder base + runtime base),
 `.env.example`.
 
 So a **new language** is a row plus roughly a dozen edits. A new app in an **existing** language is
-genuinely one row. The gates name the missing pieces rather than letting them surface at runtime:
-`make check-app-toolchains` catches an unpinned toolchain, `make validate` catches a missing Tekton
-task, and `make check-image-alignment` executes `app_builder_base` for every app that ships a
-`Dockerfile.builder` and compares it to `images/images.txt`.
+genuinely one row **plus one file** — see below. The gates name the missing pieces rather than
+letting them surface at runtime: `make check-app-toolchains` catches an unpinned toolchain,
+`make validate` catches a missing Tekton task, `make check-image-alignment` executes
+`app_builder_base` for every app that ships a `Dockerfile.builder` and compares it to
+`images/images.txt`, and `make check-app-gitignore` catches the one file below.
+
+## The one file every new app needs: its own `.gitignore`
+
+`make seed-gitea` force-pushes each app directory **verbatim** into a fresh Gitea repo, and the root
+`.gitignore` cannot protect that repo — its build-output rules are `apps/**/`-anchored, and at the
+fresh repo's root there is no `apps/` prefix left to match. Measured 2026-09-07 on a built box: of
+911 staged files the outer repo ignores **845**, and the fresh-repo anchoring ignores **3**.
+
+⚠️ **And it is not only build output.** The seeded repo is created **`"private":false`** and
+force-pushed, and the root `.gitignore`'s *secret* patterns (`.env`, `*.key`, `*.pem`,
+`*.kubeconfig`) are **unanchored** — so they protect the outer repo at any depth and are **absent**
+from the seeded one. Every per-app file therefore mirrors those lines too, negation included. Keep
+them when you write a new one; nothing in the tree matches them today, so they cost nothing and they
+are what stops a stray kubeconfig becoming public.
+
+So write `apps/<lang>/<app>/.gitignore` for whatever your app builds locally. `gitignore(5)` says
+those patterns match *relative to the file's own location*, which is exactly why this works in both
+repos at once. `make check-app-gitignore` fails until it is **tracked** — present-but-untracked does
+not count, because `cp -a` copies it while nobody else ever receives it.
+
+⚠️ **Do not copy your `.dockerignore` into it.** The grammars differ on anchoring:
+`apps/go/gowebapp/.dockerignore` carries a bare `gowebapp` token, which as a gitignore line would
+also exclude `cmd/gowebapp/` and `internal/gowebapp/`. The go file uses an anchored `/gowebapp`
+instead. Run **`make app-gitignore-show`** to see every app's rules beside the root's `apps/**` rules
+before you write yours — it prints and never gates, because which patterns an app needs is a
+judgement call.
 
 ## Every app must render the SAME page
 

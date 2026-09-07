@@ -5330,7 +5330,7 @@ moment the version can actually change.
 filtering). One minute to settle offline: `cd apps/java/javawebapp && ./mvnw -q -B package && unzip -p
 target/*.jar BOOT-INF/classes/application.yml | grep -n version`.
 
-## B535 — 🔴 the GATE I was about to build is REFUTED (0.35% catch rate); the fix is option (c)
+## B535 — ✅ SHIPPED (option c) — the gate I was about to build was REFUTED at a 0.35% catch rate
 
 An idea round **refuted the gate**, measured. I was going to stage each app with `push_repo`'s
 copy step and assert `git check-ignore --no-index --stdin` finds nothing. Replayed for all six apps:
@@ -5383,6 +5383,49 @@ call and an enumerated list — make that a **printer** that always exits 0, not
 (`.env`, `*.key`, `*.pem`, `*.kubeconfig`) is *unanchored*, so it WOULD fire at fresh-repo root.
 Latent today (no such files exist). A secret gate on that force-push is a real control — and its own
 idea round.
+
+**SHIPPED 2026-09-07.** Six hand-written per-app `.gitignore` files + `check-app-gitignore` (wired
+into `static-check-fast`) + `scripts/test-app-gitignore.sh` (6 cases) + `make app-gitignore-show`
+(the content PRINTER — content is a judgement call and an enumerated list, so it is deliberately not
+gated).
+
+**MEASURED end-to-end** by replaying `push_repo`'s exact staging (`cp -a` → `rm -rf target .git` →
+`git init` → `git add -A`) per app and counting `git ls-files`:
+
+| app | staged | pushed | EXCLUDED |
+|---|---|---|---|
+| javawebapp | 17 | 17 | 0 — `push_repo` already `rm -rf target`; the file is defence-in-depth |
+| gowebapp | 11 | 10 | **1** — the 15,269,674-byte ELF |
+| nodejswebapp | 611 | 10 | **601** |
+| pythonwebapp | 16 | 9 | 7 |
+| rustwebapp | 9 | 9 | 0 — same as java |
+| dotnetwebapp | 247 | 11 | **236** |
+| **TOTAL** | **911** | **66** | **845** |
+
+**845 — the exact figure the round measured independently by a different method.**
+
+⚠️ **My first run of that measurement was CONTAMINATED BY ITS OWN INSTRUMENT**: it wrote its scratch
+count file *inside* the tree it was measuring, so `git add -A` counted it and two apps reported
+`pushed` GREATER than `staged`. The tell was the instrument disagreeing with itself (a negative
+"excluded"). Moving the scratch to `mktemp` outside the tree produced the 845 above.
+
+**Two preconditions verified rather than assumed:** all **6 of 6** `.dockerignore` files exclude
+`.gitignore` (so no image context changes), and `push_repo` uses `cp -a "$src/."`, which carries
+dotfiles.
+
+**The gate asserts TRACKED, not present** — `git ls-files --error-unmatch`, not `test -f`. That is
+the whole point: the defect is untracked build output, so a CI checkout has none of it and a gate
+over the junk is vacuous there; the `.gitignore` is a TRACKED artifact, so this gate is meaningful on
+a clean checkout, which is the only place `static-check` runs. Case 3 of the test pins exactly this —
+a **present-but-untracked** file must still be RED, because `cp -a` copies it while the operator
+never receives it. RED-proven on the real tree too: rc=1 with all six untracked, rc=0 once tracked.
+
+**STILL OPEN:** the secret-leak finding is untouched and is a different row's work — the seeded repos
+are `"private":false` and force-pushed, and every secret pattern in the root `.gitignore` (`.env`,
+`*.key`, `*.pem`, `*.kubeconfig`) is UNANCHORED, so it WOULD fire at fresh-repo root. Latent today
+(no such files exist), and now *partly* covered by the per-app files — but only where an app's own
+`.gitignore` happens to name it, which none do. A deliberate secret gate on that force-push needs its
+own idea round.
 
 **Residual:** `push_repo`'s second call site (`:378`, a `yq`-rendered `$deploy_src` outside the repo)
 is not covered by any of this; measured benign today (18 files, all tracked). And whether a carried
