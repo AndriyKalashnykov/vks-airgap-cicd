@@ -52,8 +52,10 @@ TOKEN_FILE="${REPO_ROOT}/secrets/gitea-ci-token"
 # `create org failed (http 401)` — an error that names authorization and points nowhere near the
 # stale file that caused it.
 #
-# It is only reachable because `make kind-down` (correctly) removes these credentials ONLY when it
-# actually deleted a cluster — so a no-op teardown leaves the token behind for the next run.
+# Since B537 `make kind-down` NEVER removes this file (it used to, on a false "kind-cluster-scoped"
+# claim, and destroyed a real lab's credentials). So a leftover token is not an edge case reachable
+# only after a no-op teardown — it is the NORMAL state on any box that has run this before, which is
+# precisely why the decision below belongs with the live Gitea and not with a file's existence.
 #
 # So: the file is a CANDIDATE. Whether it works is decided by the live Gitea, below (mint_token), the
 # same way we detect anything else — by the artifact, never by a file's existence.
