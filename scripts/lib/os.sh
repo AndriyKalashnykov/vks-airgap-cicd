@@ -2270,7 +2270,37 @@ classify_kube_failure() {
     # when it was wrong.
     *"You must be logged in to the server"*|*"asked for the client to provide credentials"*) \
                                                                                        printf 'UNAUTHORIZED' ;;
-    *"Unauthorized"*|*" 401 "*|*"(401)"*|*'"code":401'*|*"code: 401"*)                  printf 'UNAUTHORIZED' ;;
+    # ⚠️ THE BARE ` 401 ` TOKEN WAS DELETED 2026-09-07 (B549). It had ZERO measured true positives
+    # and one measured, reproducible FALSE positive with an SSO-lockout consequence.
+    #
+    # klog's line format is `Lmmdd hh:mm:ss.uuuuuu <PID> file:line]` and it SPACE-PADS the pid to 7
+    # (klog v2.140.0 internal/buffer/buffer.go:29 — `buf.nDigits(7, 22, Pid, ' ')`). A process whose
+    # pid is exactly 401 therefore emits ` 401 ` inside ordinary klog METADATA, so an UNREACHABLE
+    # cluster classified UNAUTHORIZED — whose remedy is `make vks-login`, i.e. one of THREE vCenter
+    # SSO attempts before PERMANENT lockout, spent on a lab that is merely switched off. Measured,
+    # everything else byte-identical: pid 2667264 -> UNKNOWN, pid 401 -> UNAUTHORIZED, pid 4010 ->
+    # UNKNOWN. Reproduced independently by two reviewers.
+    #
+    # DELETING IT LOSES NOTHING, and that is measured, not assumed: against a real HTTP-401 server
+    # kubectl 1.36.4 emits the literal `401` ZERO times — it says "You must be logged in to the
+    # server", which the NEXT pattern on this line already matches; at -v=6 it appears only as
+    # `status="401 Unauthorized"`, matched by *"Unauthorized"*. Ablation: 29/29 corpus green, the
+    # reproducing case falls to UNKNOWN, every real 401 still UNAUTHORIZED.
+    #
+    # ⚠️ DO NOT "FIX" THIS BY STRIPPING THE KLOG PREFIX INSTEAD. That was the original proposal and
+    # an adversary refuted it by running it: the natural regex (`[0-9:.]+ [0-9]+`) demands ONE space
+    # and klog emits FIVE for a 3-digit pid, so the strip left the reproducing line BYTE-IDENTICAL —
+    # an inert fix over a corpus that could not see it. A strip also needs `[^]]*\.go` (15 of 444
+    # real basenames break `[a-z_]+\.go`: openapi3.go, int64.go, zz_generated.prerelease-lifecycle.go)
+    # and must replace the prefix with a SPACE, not nothing, or `] 401 received from server` loses
+    # its own anchor. And `os.sh` uses `sed -E` zero times today (lib/apps.sh:487: "POSIX/busybox
+    # ONLY"), while this function IS reached on the Photon/toybox air-gap box (99-verify.sh:286).
+    # One deleted token beats all of that.
+    #
+    # The ` 401 ` token originally guarded a MICROSECOND-timestamp collision (`.380401`). That is
+    # NOT a second colliding field: the µs are glued to a `.`, so they can never emit ` 401 `.
+    # Exhaustive over 26,880 prefix variants, the PID is the ONLY field that can.
+    *"Unauthorized"*|*"(401)"*|*'"code":401'*|*"code: 401"*)                  printf 'UNAUTHORIZED' ;;
 
     *"forbidden"*|*"Forbidden"*|*"cannot list resource"*)                              printf 'FORBIDDEN' ;;
     *)                                                                                 printf 'UNKNOWN' ;;
