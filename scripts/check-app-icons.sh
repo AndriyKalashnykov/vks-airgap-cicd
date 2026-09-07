@@ -53,22 +53,28 @@ _hashes=""   # "<sha>  <app>" lines, for the distinctness pass
 # The app's source files, excluding build output and vendored trees. A generated copy of the icon
 # under obj/ or node_modules/ would otherwise be counted as a second icon and fail condition 1 for
 # the wrong reason.
+# GIT-DRIVEN, not `find`. MEASURED 2026-09-07: with `find`, an ordinary editor/merge leftover
+# (`cp main.go main.go.orig`) makes the gate report "[gowebapp] ships 2 icons" and go RED on a tree
+# whose COMMITTED content is perfectly correct — a developer-only false RED that CI, on a clean
+# checkout, can never reproduce. It also deletes the hand-typed exclusion list, which was a
+# near-copy of .gitignore and had ALREADY drifted by one entry (.pytest_cache/). Everything that
+# list excluded is gitignored, so `git ls-files` subsumes it and cannot drift.
+# The sibling gate check-notfound-discriminator is git-driven for the same reason, zero-guard included.
 _src_files() {
   local _d="$1"; shift
-  find "$_d" -type f \
-    ! -path '*/node_modules/*' ! -path '*/target/*' ! -path '*/obj/*' ! -path '*/bin/*' \
-    ! -path '*/.git/*' ! -path '*/__pycache__/*' ! -name '*.svg' "$@"
+  git -C "${REPO_ROOT}" ls-files -- "${_d#"${REPO_ROOT}/"}" 2>/dev/null \
+    | sed "s@^@${REPO_ROOT}/@" | grep -v '\.svg$' || true
 }
 
 check_app() {
-  local app="$1" d n icon sha lt gt want
+  local app="$1" d n icon sha lt gt want routes
   d="${REPO_ROOT}/$(app_src "$app")"
   checked=$((checked + 1))
 
   # ── 1. EXACTLY ONE icon in the app's source ──────────────────────────────────────────────────
   # -h (no filename), -o (the match only), -a (treat binaries as text so one stray blob cannot
   # abort the scan). The shape is OUR generated shape, so a greedy .* is safe: there is one SVG.
-  icon="$(_src_files "$d" -print0 2>/dev/null | xargs -0 grep -hao \
+  icon="$(_src_files "$d" 2>/dev/null | tr '\n' '\0' | xargs -0 -r grep -hao \
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32".*</svg>' 2>/dev/null || true)"
   n="$(printf '%s' "$icon" | grep -c . || true)"
   if [ "$n" -eq 0 ]; then
@@ -113,9 +119,19 @@ check_app() {
   routes=""
   while IFS= read -r tf; do
     [ -n "$tf" ] || continue
-    routes="${routes}$(sed -E 's@^[[:space:]]*(//|#|--|\*|/\*).*@@' "$tf" \
-                        | grep -haoE "[^=][\"']${ICON_PATH}[\"']" \
-                        | grep -vE '(href|src)=' || true)"
+    # ATTRIBUTE ASSIGNMENTS ARE STRIPPED, not guessed at. The previous form leaned on a single
+    # `[^=]` to mean "not an attribute", and MEASURED 2026-09-07 that is defeated by legal
+    # whitespace: writing the markup as `href = "/favicon.svg"` re-opened the very vacuity this
+    # condition was rewritten to close. It cannot be otherwise as a one-char test — java's REAL
+    # route is `@GetMapping(value = "/favicon.svg"`, so the detector and the excluder were one
+    # space apart. The companion `grep -vE '(href|src)='` was also DEAD CODE: `grep -o` has
+    # already truncated the line to the match, so it could never see `href=`.
+    # ⚠️ The WHOLE attribute goes, VALUE INCLUDED. MEASURED: stripping only the `href=` prefix
+    # leaves `"/favicon.svg"` standing on the line, which then matches as if it WERE a route --
+    # the prescribed fix, implemented literally, re-opened the hole it was meant to close.
+    # `(^|...)` because a route literal at column 0 otherwise never matches.
+    routes="${routes}$(sed -E 's@^[[:space:]]*(//|#|--|\*|/\*).*@@; s@(href|src)[[:space:]]*=[[:space:]]*[^[:space:]>]*@@g' "$tf" \
+                        | grep -haoE "(^|[^=])[\"']${ICON_PATH}[\"']" || true)"
   done <<SRC
 $(_src_files "$d" 2>/dev/null || true)
 SRC
@@ -134,6 +150,21 @@ SRC
   # COMMENTS ARE STRIPPED FIRST. Measured while writing this gate: checking for ICON_PATH passed
   # java, go and dotnet purely because their test COMMENTS name the path — a gate satisfied by
   # prose, and the same bypass check-sigterm.sh records as its #5.
+  # ── 3b. THE MARKUP'S ATTRIBUTE ORDER, asserted rather than assumed. ──────────────────────────
+  # Condition 4 below tells a test's EXTRACTOR from the TEMPLATE by requiring `rel="icon"` NOT to be
+  # followed by a space. That is a one-character discriminator resting on the markup always being
+  # `rel="icon" type=`, and check-ui-contract pins only that the six pages match EACH OTHER — not
+  # their attribute order. MEASURED 2026-09-07: reorder the tag to `<link type=... href=...
+  # rel="icon"/>` and delete a test's extractor, and condition 4 goes GREEN off the template, with
+  # that app having no test at all. One grep converts the assumption into an assertion.
+  if ! grep -qF '<link rel="icon" type=' <<< "$(_src_files "$d" 2>/dev/null | tr '\n' '\0' \
+        | xargs -0 -r grep -hao '<link rel="icon"[^>]*>' 2>/dev/null || true)"; then
+    log_error "[${app}] the icon <link> is not written as \`<link rel=\"icon\" type=...\`."
+    log_error "        Condition 4 below distinguishes a test's EXTRACTOR from this TEMPLATE by that exact"
+    log_error "        shape; reorder the attributes and the test-exists check passes off the markup."
+    fail=1
+  fi
+
   # NOT filtered to files NAMED *test*: rustwebapp has no separate test file at all — its tests are a
   # `#[cfg(test)] mod tests` inside src/main.rs, the same file that holds the template.
   #
@@ -158,7 +189,14 @@ TESTS
     fail=1
   fi
 
-  sha="$(printf '%s' "$icon" | sha256sum | cut -d' ' -f1)"
+  # THE LABEL IS STRIPPED BEFORE HASHING. MEASURED 2026-09-07: without this, distinctness was
+  # decided by `aria-label="<app>"` — a string that is per-app BY CONSTRUCTION and that a browser
+  # never draws. Copying gowebapp's colour AND glyph into pythonwebapp, keeping python's own label,
+  # left the gate GREEN over two PIXEL-IDENTICAL icons; copying the label too made it RED. So the
+  # condition was passing on the one token that carries no visual information, which is the exact
+  # defect it names. It is also the likely path for app #7: the label is the app name and is the
+  # first thing a copy-paster edits; the rgb triple is the thing they must look up.
+  sha="$(printf '%s' "$icon" | sed -E 's/ aria-label="[^"]*"//' | sha256sum | cut -d' ' -f1)"
   _hashes="${_hashes}${sha}  ${app}"$'\n'
 }
 

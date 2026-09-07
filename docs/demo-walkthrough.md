@@ -45,21 +45,74 @@ gives.
    | `rustwebapp` | `src/main.rs` | `const DEFAULT_MESSAGE: &str = "Hello from vks-airgap-cicd";` |
    | `dotnetwebapp` | `Program.cs` | `public const string DefaultMessage = "Hello from vks-airgap-cicd";` |
 
+   ⚠️ **Edit the file the table names — not the greeting you can SEE somewhere else.** One app in
+   this repo renders through a template engine, and its template carries a line like
+
+   ```html
+   <p class="message" th:text="${message}">Hello from vks-airgap-cicd</p>
+   ```
+
+   where `th:text` **REPLACES the element's body at render time**. The literal between the tags is a
+   *design-time placeholder* — it exists so the raw `.html` looks right if opened directly in a
+   browser, and it is discarded on every render. Editing it changes nothing on the served page: the
+   pipeline runs, the image is pushed, ArgoCD rolls, the `Commit` row on the page updates to your
+   sha — and the greeting does not move. It is the one edit in this repo that produces a fully
+   GREEN, fully deployed **no-op**, which is why it is worth naming.
+
+   MEASURED 2026-09-07: a commit changing that literal to `Hello777 …` deployed correctly (the page's
+   `Commit` became the new sha, pods 60s old) while the served HTML still read
+   `<p class="message">Hello from vks-airgap-cicd</p>`.
+
+   The other five apps interpolate into a plain string literal, so there the visible text IS the
+   text. If in doubt: the table above is authoritative for every app.
+
    (Building every app at once, without editing anything — e.g. right after an install, when Harbor
    is empty and the pods are in `ImagePullBackOff` — is `make build-apps`. It pushes an empty commit
-   per app so the real pipeline runs, and skips any app whose image Harbor already holds.)
+   per app so the real pipeline runs, and skips an app only when Harbor holds BOTH its deployed
+   tag AND that app repo's current commit — so after an edit it always builds.)
 
-   ℹ️ **A greeting change alone DOES deploy.** The deployed image tag is the app's declared version,
-   and ArgoCD only rolls when `<app>-deploy` changes in git — but the write-back also stamps the
-   build's **commit sha** into `deployment.yaml`, and that changes on every build. So the deploy
-   repo changes, ArgoCD rolls, and your greeting appears. (`imagePullPolicy: Always` is what makes
-   the pod actually re-pull the re-pointed tag.)
+   ℹ️ **A greeting change alone DOES deploy — you never need to bump the version.** The mechanism,
+   because it is easy to get backwards:
+
+   ```text
+   push to demo/<app>-app  (a Gitea UI commit, `make build-apps`, or `make verify`)
+        |
+        |  Gitea webhook  ->  http://el-apps.ci.svc:8080   (Tekton EventListener "apps")
+        v
+   PipelineRun
+        clone-app   reads BOTH the commit sha AND the app's declared version
+        test
+        build       kaniko pushes ONE digest under TWO tags: <version> and <sha>
+                    then, in the same task: clone-deploy -> set-tag -> commit-push, writing
+                      kustomization.yaml  newTag: "<version>"   <- usually UNCHANGED
+                      deployment.yaml     APP_COMMIT: "<sha>"   <- changes on every push
+        |
+        v
+   ArgoCD auto-syncs <app>-deploy. The sha line moved, so the pod template moved,
+   so a new ReplicaSet rolls — and `imagePullPolicy: Always` makes it RE-PULL
+   <version>, which kaniko just overwrote. New image, same tag string.
+   ```
+
+   **The sha is the trigger; the version is not.** MEASURED: two consecutive builds of the same app,
+   **both version `0.1.0`**, produced an `<app>-deploy` diff of exactly one line —
+   `-value: "781c02e"` / `+value: "5b06119"`. That is `APP_COMMIT`, and it is the whole reason a
+   rebuild rolls without a bump.
+
+   | piece | what it is for |
+   |-------|----------------|
+   | the commit sha in `deployment.yaml` | the **trigger** — it makes `<app>-deploy` differ, so ArgoCD rolls |
+   | `imagePullPolicy: Always` | the **enabler** — under `IfNotPresent` a node holding a cached `<version>` keeps serving the old build and the page silently lies |
+   | the declared version | **release identity only**; it is what the page shows as `Deployed tag` |
+   | `make build-apps` | a **backstop**, not the path. It skips an app only when Harbor holds **both** its deployed tag **and** the app repo's current commit — so after an edit it always builds |
+
+   ⚠️ A push does not *guarantee* a rollout, and the ways it can stop are worth knowing rather than
+   discovering: the edit went to a **branch other than `main`** (Gitea's edit page offers exactly
+   that as a radio button, and the trigger filters on `refs/heads/main`); the **test task failed**,
+   so nothing was built; or the new pods are in **ImagePullBackOff**, in which case ArgoCD reports
+   Synced while the OLD pods keep serving HTTP 200 and the page does not change.
 
    Bump the **version** when you want the release identity to change — that is what the `Deployed
    tag` on the page shows.
-
-   ⚠️ MEASURED, and I had this backwards at first: with the commit stamped into the manifest, the
-   version bump is NOT required for a redeploy. It would be if the tag were the only thing written.
 
    **The version to bump — the file per app.** Edit the
    app's **declared semantic version** in its own manifest. It is compiled into the image at build

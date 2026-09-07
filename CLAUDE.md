@@ -450,7 +450,11 @@ Scenario 1); in Scenario 2 they already exist and you discover them as a tenant.
 Gitea + Tekton and the demo app. The KinD stand-in installs
 Harbor + ArgoCD locally to mimic that.
 
-End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor/tag write-back) → ArgoCD sync → web UI`.
+End-to-end flow: `git push (Gitea) → Tekton (test/build/kaniko→Harbor; write the version tag AND the
+commit sha back to <app>-deploy) → ArgoCD sync → web UI`. The **sha** is what makes the deploy repo
+differ, so it is what makes ArgoCD roll; the version tag is what gets deployed. Saying only "tag
+write-back" reads as "bump the version or nothing happens", which is FALSE and was asserted to the
+owner three times on 2026-09-07 — see `docs/demo-walkthrough.md` for the measured diff.
 
 **"Jump box" names up to three DIFFERENT machines — prefer *internet box* / *air-gap box* when it matters.** In a **dual-homed** run there is one box that reaches both the internet and the lab. In a **sneakernet** run there are two: the **internet box** (`mirror-pull`/`builder-build`/`bundle`) and the **air-gap box** (`bundle-load`/`mirror-push`/`builder-push`/`platform` — it CANNOT run `make deps`; see RULE ZERO-A). Separately, `make jumpbox*` builds a **test** jump-box container that itself needs the internet (it runs `make deps`). Note `docs/sneakernet.md` uses **internet box** / **air-gap box** for its two boxes (matching the README Delivery note — B59 reconciled the old inversion, 2026-07-23).
 
