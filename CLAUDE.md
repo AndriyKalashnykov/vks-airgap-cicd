@@ -1035,108 +1035,66 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-06b — a 47% mirror LEAK filled Harbor; three confident fixes were refuted before shipping
+## ▶️ HANDOFF 2026-09-07 — three rounds refuted MY premises; two of them refuted my FIXES
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
 ### 🔴 DISTRUST FIRST
 
-- **THREE designs I was confident in were REFUTED by adversary rounds, and each would have shipped a
-  false green.** (a) A scheduled Harbor GC — measured **ZERO untagged artifacts** in both projects, so
-  `delete_untagged` has nothing to delete and a nightly GC reclaims **~0 bytes in steady state** while
-  reading as "storage is handled". (b) A `HARBOR_REGISTRY_STORAGE_SIZE` knob — `vc_ss_install` **POSTs**
-  (a CREATE) and returns 0 with *"already installed - nothing to do"*, so the rendered data-values are
-  **never transmitted to a running service**: the knob is a NO-OP on every existing lab. (c) An `ABSENT`
-  class for `_verify_class` — scored **1 of 9** measured crane strings. Full refutations in B702/B703.
-- **My "non-fatal like TRANSPORT" premise was flatly FALSE.** `23-mirror-verify.sh:129-131` **dies**.
-  Had I built on it, `fails=0, transport_fails=0, absent_fails=N` fires NEITHER die → the gate prints
-  `✓ mirror-verify: N images intact` and **exits 0 with N absent**. Verify a premise about a gate by
-  reading the gate.
-- **`MANIFEST_UNKNOWN` is the OCI-standard ABSENT signature** (measured 3/3 on Docker Hub, gcr.io,
-  ghcr.io), NOT corruption. I argued the opposite from the 2026-07-13 lying-registry incident, whose own
-  root cause is *"153 manifest links, ZERO blobs"* — manifests PRESENT. The corruption signature is
-  **`BLOB_UNKNOWN`**.
-- **I claimed a safety property I never measured.** Before deleting 20 Harbor artifacts I "checked"
-  `images.lock` — at `./images.lock`, which **does not exist** (it is `bundle/images.lock`). `grep -c`
-  exited 2 and my `|| echo 0` turned a missing file into a reassuring "0 references". Run against the
-  real path it reads **8 / 8 / 4** — exactly the 20 artifacts I deleted.
-- **A pin is NOT the deployment.** My delete rule keyed on `.env.example` pins would have removed the
-  **live EventListener image**: the cluster ran triggers **v0.36.0** / dashboard **v0.70.0** while the
-  pins said v0.37.0 / v0.71.0. The rule that shipped is *neither PINNED nor RUNNING*. That drift still
-  exists on `cicd-gc3` — deliberately not reconciled (see below).
-- **I ran `git reset --hard` mid-`static-check`** and the tree-stability gate correctly refused its own
-  verdict (128 tests had passed; the verdict was unusable because 4 files moved under it).
-- **I restored a lab golden without checking what a golden CONTAINS.** All pre-existing goldens are
-  **pre-demo baselines** — no guest cluster, no Harbor/ArgoCD Services. It cost a working lab and a
-  ~90-minute rebuild. Fixed forward: `3.7.1-demo+v1.36` now exists (below).
+- **A BACKLOG ROW'S STATUS IS A CLAIM, and B528's was stale by two days and three commits.** It said
+  the fix was *"drafted and NOT applied"*; `26640c2` was already an ancestor of `main`. I briefed an
+  adversary from it and was one step from re-deriving merged work. `git log -S'<a string the fix
+  introduced>' -- <file>` settles it in one command. This is RULE ZERO-P applied to our OWN merged
+  PRs, and `gates.md` already says it.
+- **I generalised a happy-path measurement into a cost claim.** I wrote *"0.1s for 9 probes, so
+  B528's 20s objection is refuted."* All nine rows had answered instantly. The real worst case is
+  **18.1s**, which I then reproduced myself. One operating point is not a mechanism.
+- **My RED-proof was a SUBSET, and I called it 13/13.** Every forge probe I typed put a space after
+  `>`, so `echo 9 >`-with-no-space — the shortest forge there is — sailed through the new Bash arm.
+  An implementation round measured 10 of 15 shapes bypassing.
+- **Fixing a self-mint on one arm, I opened the same hole on the other.** Closing the `Workflow`
+  prose mint, I added a role regex to the `Agent` arm that matched `REFUTE this claim: kaniko needs
+  root.` — 37 characters of ordinary research prompt. Both now fixed and RED-proven.
+- **A typo can be load-bearing for a test.** Fixing a duplicated word in `creds.sh` took
+  `test-creds-show.sh` from 63 assertions to 31 — the grep matched the *duplicate*. I had
+  pre-flighted the change against `docs/` Expect literals and not against `scripts/test-*.sh`.
+- **`make ci`'s tree-stability failed on MY OWN probe**: an `importlib` of the hook wrote a
+  gitignored `.pyc` mid-run. Use `PYTHONDONTWRITEBYTECODE=1` when probing Python during a gate run.
+  Filed as B541 — the fix is a decision, not obvious.
 
-### Merged this session (7 PRs, #1113–#1119)
+### Merged this session (3 PRs)
 
 | PR | what |
 |---|---|
-| **#1115** | **the load-bearing one.** `10-mirror-pull.sh` wrote version-stamped manifests and never deleted superseded ones; `mirror_collect_images` greps EVERY file in `bundle/manifests/`, so the wanted-set grew monotonically. **25 stale artifacts = 5.85 GB = 47% of `cicd`** on a 10Gi PVC at 100%, failing kaniko with `Err:28`. `mirror_prune_manifests` (in `lib/mirror.sh`, beside the function it protects) with a keep-set DERIVED from the pins. Same PR: `seed-gitea` now warns it is HALF an operation and names `make build-apps`. |
-| #1113 | `revisionHistoryLimit: 3` on all six deploys + a gate they agree |
-| #1114 | the "PINNED IN .env" diagnostic could never name `VKS_K8S_VERSION` (10 → 13 vars) |
-| #1116–#1119 | B701–B704 + a `B700` citation collision (my comments cited a row that was already the headlamp clobber) |
+| **#1135** | `make kind-down` no longer deletes `secrets/gitea-ci-token` / `secrets/webhook-token`. Both deletions refuted: one a fossil, the other SYMMETRIC — deleting it CREATES the HMAC divergence it claimed to prevent. ⚠️ Its own test destroyed my real credentials twice (`lib/os.sh` EXPORTS `REPO_ROOT`); both call sites now pin it and a self-canary watches. |
+| **#1136** | `_reach_ingress`: a port mismatch reported a FALSE DEAD on a healthy lab (the gate honours `INGRESS_PROBE_PORT`, the route probe hardcoded 80, `_ing` is a bare IP); 18.1s worst case, now 1.0s via a short-circuit; 401/403 now `serving`. Plus a duplicated word and a MEASURED-FALSE `/etc/hosts` claim. Tests 14 → 21. |
+| **#1137** | The adversary gate was forgeable three ways: a 3-byte `inf` receipt cleared it FOREVER, `Workflow` prose minted a clearance, and there was no `Bash` matcher at all. Tests 18 → 41. |
 
-### Lab state — REBUILT and verified
+### Verified on the LIVE lab, not in code
 
-The restore test left a bare estate; it was rebuilt along the documented scenario-1 path.
-**Guest cluster is now `cicd-gc3`** (NOT gc2), k8s **v1.36.2+vmware.2**, 3 nodes.
-Harbor ns is **`svc-harbor-f6120`**, ArgoCD **`svc-argocd-service-t90xm`** (`argocd-1`, `3.0.19+vmware.1-vks.1`).
+`make creds` 12/12 serving, prints in 0.91s, ArgoCD password state CURRENT. All six favicons served,
+**six distinct hashes**, each page referencing both the `<link>` and the `<img>`. The build→deploy
+doc confirmed against real history — three write-backs at version `0.1.0`, newest diff exactly the
+two `APP_COMMIT` lines. `main` green post-merge.
 
-Measured after the rebuild: `make verify` **rc=0 for every app**, `make creds` **rc=0, 11/11 serving**,
-`mirror-verify` **30/30 intact**, `static-check` **128 tests / 0 failed / tree-stability OK**.
+### The previous handoff's three "in flight" items are all RESOLVED (measured)
 
-**The storage answer, measured on a clean rebuild:** `cicd` = **3.48 GiB** (was 8.59 with the leak),
-`/storage` **36% — 6.2 G free**. The leak was **59%** of everything Harbor held, and the knob to set
-20Gi is a no-op anyway (B702).
-
-⚠️ **CORRECTED by the before-done round — do NOT quote the session's original numbers.** (a) The
-per-cycle figure I published (~130 MB) summed Harbor's per-artifact sizes, which count shared base
-layers once per artifact; the **deduplicated** cost of a six-app cycle is **33.77 MiB** — wrong by
-3.9x. (b) Cycle count is NOT the binding constraint: one Tekton release-set is **2.84 GiB**, so 6.2 G
-free is **~2 Tekton bumps**. (c) The prune bounds the BUNDLE's wanted-set, **not Harbor** — there is
-**zero reclamation anywhere in the repo** (B707), so growth is slowed, not bounded. (d) The 36%
-reading is a **4-hour-old PVC that never carried the leak**; it is consistent with the fix and cannot
-discriminate it from a fresh lab. (e) "A GC would reclaim ~0" is true NOW and false as a mechanism —
-builders use a CONSTANT tag, so every rebuild orphans the previous artifact into exactly what
-`delete_untagged` takes.
-
-**Golden `3.7.1-demo+v1.36`** (RESUMES, 48GiB, exp 2026-11-27) was cut from a verified state, so the
-next restore gives a working demo in ~1 min instead of a 90-min rebuild. Host-state sidecar at
-`~/.local/state/vks-airgap-cicd-hoststate/3.7.1-demo+v1.36.tar.gz` — the golden freezes VMs only.
+`/etc/hosts` now points at `192.168.101.134`; `bundle/` carries **no** tarball (B706's 5.64 GB stale
+artifact is gone; the dir is 8.1G of image cache); Tekton **RUNNING** triggers `v0.37.0` + dashboard
+`v0.71.0`, matching the pins, all images from the Harbor mirror digest-pinned. That last one was
+checked on the DEPLOYMENT, not the pin — this file's own rule.
 
 ### In flight / NOT done
 
-- **`/etc/hosts` still points `*.vks.local` at the PREVIOUS lab's ingress** (`.135`; current is `.134`).
-  Root-owned, no tty for sudo: `sudo sed -i 's/^192\.168\.101\.135\b/192.168.101.134/' /etc/hosts`.
-- **B706 — a 5.64 GB STALE TARBALL sits inside `bundle/`, and the next `make bundle` CARRIES it.**
-  `bundle/vks-airgap-cicd-bundle-20260712-184355.tar.zst`, dated Jul 12; `bundle/` totals 14 G.
-  `11-bundle.sh:268` tars with **no `--exclude`**, so a ~12 GB sneakernet becomes ~18 GB — larger
-  than the leak B702 fixed. ⚠️ A blanket `--exclude='*.tar'` BREAKS the selfbuilt path. **Do this
-  before the next `make bundle`.**
-- **B707 — there is ZERO Harbor reclamation in the repo**, so B702's prune SLOWS growth rather than
-  bounding it: one Tekton release-set is 2.84 GiB, so 6.2 G free is ~2 bumps. GC is worthless for the
-  tagged classes and **necessary** for the constant-tag builder class (`lib/apps.sh:220`). The manual
-  delete predicate was wrong 2:1 — deleting `:0.1.0` makes #1113's rollback guarantee vacuous.
-- **B705 — FIXED in #1121**, recorded because it is the shape to watch for: a fix that ships on ONE
-  of the two boxes. The prune ran on the internet box while the wanted-set is consumed on the
-  air-gap box, and `tar -x` MERGES.
-- **B703 — UNIMPLEMENTED, and the row carries the REFUTATION, not my broken design.** Build the
-  *ask-don't-parse* version: on a `crane validate` failure run `crane manifest`; **rc=0 ⇒ CORRUPT**
-  (manifest served, so the failure is in the blobs — the 2026-07-13 shape); rc≠0 ⇒ only THEN split
-  ABSENT/AUTH/TRANSPORT by text. AUTH is a genuinely missing FIFTH class, and `mirror-verify` has **no
-  auth precondition** while `mirror` depends on `harbor-auth-check`.
-- **B704 — the read-only stale-state reporter is unbuilt.** 15 of 17 kubeconfigs in `secrets/` point at
-  an unreachable API server. A dead `KUBECONFIG` makes `kubectl` **HANG** (measured `timeout 124`),
-  which reads as "the cluster is unreachable" rather than "you are pointed at a corpse".
-- **Tekton pin/running drift on `cicd-gc3`**: triggers **v0.36.0** and dashboard **v0.70.0** are running
-  against pins of v0.37.0 / v0.71.0. Both pinned images ARE in Harbor, so `make install-tekton`
-  reconciles it. Deliberately deferred — it restarts the EventListener.
-- **`bundle/images.lock` still names the 20 deleted artifacts.** Harmless (the wanted-set no longer
-  does); the next `make mirror` regenerates it. Do not read the stale entries as a broken mirror.
+- **B538 needs a controlled run** (~12 min + a `make build-apps` to restore the demo). Non-disruptive
+  findings are in the row: Gitea 1.27.2 does expose `active`, but deactivate/reactivate loses the
+  SAME race; the loop SHAPE is the likely fix. Mechanism still unmeasured.
+- **B540/B541** are new and both need a decision, not a patch.
+- **B536's own RED-proof is stale** — it asserts "fewer than 8 bare `<not set>`" and the count is
+  now 7, so it would PASS while the defect stands.
+- **The `.env` scenario-pin half of B531** is still open and still needs an idea round; the drift
+  half measured clean today.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 

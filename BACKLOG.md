@@ -4741,7 +4741,24 @@ it on a tenant path without checking. And the pool has a **hard ceiling**: `addr
 (`.128–.159`), 6 allocated, **26 left** — while `secrets/` already holds 13 dead clusters'
 kubeconfigs. Every abandoned cluster burns a VIP plus a quarantine slot.
 
-## B526 — 🔴 the adversary-first gate has a BASH-SHAPED HOLE, and auto-mode routes every edit through it
+## B526 — ✅ SHIPPED (#1137) — the gate was forgeable in one command, and in one SENTENCE
+
+**Closed 2026-09-07.** Three forges, and the cheapest needed no shell: a 3-byte `inf` receipt
+cleared it FOREVER (`float("inf")` > every commit epoch, surviving every re-arm); the `Workflow`
+arm was a bare substring over agent-authored prose, so `summarise the adversary findings` minted
+a clearance; and there was no `Bash` matcher at all. All three closed — see #1137 for the
+measurements. Two of my own fixes were refuted by the implementation round and are recorded there:
+my RED-proof was a SUBSET (every probe typed a space after `>`, so `echo 9 >`-with-no-space
+bypassed a matcher I had called 13/13), and closing the prose mint on `Workflow` REOPENED it on
+`Agent` via a role regex that matched 37 characters of ordinary prose.
+
+⚠️ The uncited **"17-18% false blocks"** that used to justify not building a Bash arm had ZERO
+provenance anywhere in either repo. Measured properly over 27,299 real commands: the receipt-scoped
+arm costs **0.040%**. Do not re-derive the old refutation.
+
+**ORIGINAL ROW BELOW.**
+
+## B526 (original) — 🔴 the adversary-first gate has a BASH-SHAPED HOLE, and auto-mode routes every edit through it
 
 `.claude/settings.json` wires `adversary-first-gate.py` on
 `Agent|Workflow|Edit|Write|NotebookEdit|MultiEdit`. **`Bash` is not in the matcher.** MEASURED
@@ -4811,7 +4828,23 @@ says `run make mirror`, instead of failing later with a 401 that names the wrong
 that names the wrong cause is worse than a crash — it sent this session to debug credentials that
 were fine. Prefer reusing `23-mirror-verify.sh`'s existing per-image check over a new probe.
 
-## B528 — 🔴 `make creds` says `serving` for a route whose BACKEND is dead (it probes the LB, not the app)
+## B528 — ✅ SHIPPED (#1100, 2026-09-05; iterated #1129/#1133; three further defects fixed in #1136)
+
+⚠️ **THIS ROW WAS STALE FOR TWO DAYS AND NEARLY COST A DAY'S WORK.** It said the fix was *"drafted
+and NOT applied"* while `26640c2` was already an ancestor of `main`. A 2026-09-07 adversary round
+opened by refuting its own brief — `git log -S'no backend' -- scripts/creds.sh` settles it in one
+command. That is RULE ZERO-P applied to our OWN merged PRs, not just third-party code; and
+`gates.md` already says a backlog row's STATUS is a CLAIM.
+
+Its **cost objection was RIGHT, not refuted**: measured 18.1s worst case for 9 rows against a
+responder that accepts TCP then never replies. My "0.1s refutes it" was a happy-path-only
+measurement — the ONE-OPERATING-POINT error. Fixed in #1136 along with two more defects found by
+reviewing the SHIPPED code: a port mismatch that reported a FALSE DEAD on a healthy lab, and
+401/403 filed under the `HTTP %s` catch-all.
+
+**ORIGINAL ROW BELOW.**
+
+## B528 (original) — 🔴 `make creds` says `serving` for a route whose BACKEND is dead (it probes the LB, not the app)
 
 MEASURED 2026-09-05 on the live lab, with every app pod in `ImagePullBackOff`:
 
@@ -4902,7 +4935,20 @@ exists — WITHOUT the bare-curl 401 trap, see B527); and whether a scenario-2 T
 (Kaniko needs `baseline`, VKS enforces `restricted`), since making it a prerequisite would newly
 FAIL for them.
 
-## B530 — 🟡 `test-creds-show.sh` sets `CREDS_NO_PROBE=1` for every rendered case, so it is blind to all probe logic
+## B530 — ✅ STALE — the function IS gated, by a test this row did not know about
+
+**Measured 2026-09-07.** `scripts/test-creds-reach-ingress.sh` exists, is tracked, carries
+`# ci-tier: fast`, and is picked up by `TEST_ALL := $(sort $(wildcard $(SCRIPTS)/test-*.sh))` —
+**DISCOVERED, not enumerated**, which is why nobody had to wire it. It runs a real HTTP responder
+on 127.0.0.1 keyed on the `Host` header. Now **21 cases** (was 14; #1136 added the port, auth-code
+and short-circuit arms).
+
+⚠️ The separate claim that `test-creds-show.sh` sets `CREDS_NO_PROBE=1` everywhere is ALSO no longer
+true — its STATE 8 deliberately does not set it, and carries its own anti-vacuity check.
+
+**ORIGINAL ROW BELOW.**
+
+## B530 (original) — 🟡 `test-creds-show.sh` sets `CREDS_NO_PROBE=1` for every rendered case, so it is blind to all probe logic
 
 Adversary-measured 2026-09-05: `scripts/test-creds-show.sh:603` sets `CREDS_NO_PROBE=1` for every
 `render_with_cluster` case, and `scripts/creds.sh` short-circuits the entire SSH-selection and
@@ -4957,6 +5003,17 @@ AT ONCE instead of the operator discovering them one FATAL at a time. Needs an i
 naive "`.env` must equal `.env.example`" is WRONG (an operator may legitimately override), so the
 predicate has to be "this pin contradicts the access you actually have", which is a judgement.
 Docs half shipped: scenario-1 now carries a cross-scenario warning table.
+
+**RE-MEASURED 2026-09-07 — the DRIFT half is currently CLEAN, so only the scenario-pin half is
+open.** On this box: **1** value differs from the template (`GITEA_ADMIN_USER`, a legitimate
+operator choice), and **102 of 105** `.env` vars are documented — **49 of them deliberately
+COMMENTED**, which is the clobber protection working as designed. All 8 stale version pins from
+2026-09-05 are gone. The 3 undocumented ones (`WALK_DEMO_MODE`, `WALK_TBL_DEMO`, `WALK_TBL_SEQ`)
+belong to the OTHER repo's walkthrough matrix and leaked into `.env` from walk runs.
+
+⚠️ **My first measurement of this said "52 undocumented" and was MY OWN INSTRUMENT**: the loader
+skipped `#` lines, so every deliberately-commented var read as absent. `check-env-coverage.sh:163`
+matches `^#?` and does NOT share that blind spot — verified.
 
 ## B532 — 🟡 fixing `.env` is NOT enough: the CLUSTER keeps the value it was rendered with
 
@@ -5174,7 +5231,13 @@ control feels exempt", RULE ZERO).
 the workspace PVC. Not measured. The image-digest question in the first draft is CLOSED by the
 `.dockerignore` evidence above.
 
-## B536 — 🟡 the lab-access table's `<not set>` is ONE token for THREE different facts — 8 cells, and the tenant sees all of them
+## B536 — 🟡 the lab-access table's `<not set>` is ONE token for THREE different facts — **7** cells, and the tenant sees all of them
+
+⚠️ **COUNT CORRECTED 2026-09-07: it is 7, not 8.** Re-measured on the tenant fixture
+(`SKIP_DOTENV=1`, no vCenter vars, throwaway state file): **7** bare `<not set>` plus one
+`<not set — vsphere method only>` (the cell #1096 fixed). The row's own cheap RED-proof — "render
+the tenant fixture and assert fewer than 8" — would therefore PASS TODAY while the defect stands.
+Re-key it to 7, or better to *zero bare tokens*.
 
 B535's sibling, surfaced by the idea round that produced #1096. #1096 fixed **one** cell (VKS / SSO);
 this is the class it belongs to, filed rather than reported closed.
@@ -5227,7 +5290,24 @@ today it is 8.
 **Not started.** Needs its own idea round: the per-cell right answer differs by row, and the vcf CLI
 row's endpoint cell is a literal that must not gain a marker at all.
 
-## B537 — 🔴 `make kind-down` DELETES two credentials the LAB flow also writes, on a false ownership claim
+## B537 — ✅ SHIPPED (#1135) — `make kind-down` no longer deletes flow-agnostic credentials
+
+**Closed 2026-09-07.** Both deletions refuted independently: `gitea-ci-token` was a FOSSIL (the
+seeder validates the candidate against the live Gitea and re-mints, so a stale file cannot cause
+the HTTP 401 the deletion was written for), and `webhook-token` is SYMMETRIC — deleting it CREATES
+the HMAC divergence it claimed to prevent, because one file feeds both Gitea's hook and the k8s
+Secret. `KIND_CLUSTER_REMOVED` went with them.
+
+⚠️ **The test could do the exact damage the row is about while certifying that it could not.**
+`lib/os.sh` EXPORTS `REPO_ROOT`, so a sandboxed `kind-down.sh` inherited the real repo root and
+destroyed my own credentials TWICE during the RED-proof. Both call sites now pin it, and a
+SELF-CANARY fingerprints the real credentials before and after. That canary is **vacuously green
+where there is no `secrets/`** (a fresh clone, the GitHub runner) — it is a developer-box control,
+and reading a green CI as proof it works would be wrong.
+
+**ORIGINAL ROW BELOW.**
+
+## B537 (original) — 🔴 `make kind-down` DELETES two credentials the LAB flow also writes, on a false ownership claim
 
 **IT FIRED LIVE, 2026-09-05**, on a box whose lab was fully installed and serving 11/11. Verbatim
 from the teardown log:
@@ -5336,7 +5416,22 @@ sentence that lists `make seed-gitea` as a non-triggering step.
 seed-gitea` on a warm cluster, count again — and either the guard is made drain-safe (e.g. deactivate
 rather than delete, or re-create only after a verified quiet period) or the ordering test is replaced
 by one that asserts the OBSERVABLE (zero new PipelineRuns across a seed), which is what actually
-matters. ⚠️ The controlled run resets every `<app>-deploy` to `NEVER-BUILT-RUN-THE-PIPELINE` and
+matters. **NON-DISRUPTIVE FINDINGS 2026-09-07 (no controlled run — the demo was left green).** Gitea
+**1.27.2** DOES expose `active` on both `CreateHookOption` and `EditHookOption` (read from the live
+swagger), so "deactivate rather than delete" is available — **but it probably does not fix this**,
+and the reason is the hypothesis itself: if Gitea resolves a push's webhooks when it DRAINS the
+queue, then what the hook looks like AT DRAIN TIME is what matters, and a deactivate/reactivate
+variant re-activates on the same ~1s schedule. Drain at +4s reads `active: true` either way. Same
+race, one more API call.
+
+**The implication this row does not draw: the LOOP SHAPE is the bug, not the verb.** Today it is
+per-app `DELETE -> push -> push -> CREATE`, so every app re-arms the hook ~1s after its own push.
+Hoisting ALL hook creation to AFTER the whole seed loop turns a ~1s window into a whole-loop window
+at zero API cost and needs no `active` support. ⚠️ It changes failure semantics — a mid-loop death
+leaves NO app with a hook, where today the completed ones keep theirs — so it needs its own idea
+round. And the MECHANISM is still unmeasured: both variants treat a cause nobody has confirmed.
+
+⚠️ The controlled run resets every `<app>-deploy` to `NEVER-BUILT-RUN-THE-PIPELINE` and
 needs a `make build-apps` afterwards to restore the demo — budget ~12 minutes, do not run it against
 a lab someone is watching.
 
@@ -5363,3 +5458,41 @@ sentence? A gate that fires on ordinary prose is the one people delete.
 
 **Done when:** ruled on by a round, and either the gate ships with a measured false-RED rate over
 the real `docs/` tree, or the refutation is recorded here so nobody rebuilds it.
+
+## B540 — 🟡 five gates grep the tree with no `-I`, so a gitignored `.pyc` prints `binary file matches` into every CI log
+
+**Measured 2026-09-07.** `scripts/lib/__pycache__/capacity-probe.cpython-314.pyc` is gitignored and
+untracked, yet it produced **8** `grep: … binary file matches` lines in one `make ci` log. The gates
+that scan without `-I`, an `--exclude-dir`, or a `git ls-files`-derived list:
+
+    check-classifier-consumers  check-doc-target-coverage  check-env-clobber
+    check-psa-defaults          check-env-coverage
+
+**Cosmetic UNLESS a denominator counts it** — and which of them, if any, does is **UNVERIFIED**. That
+is the part worth settling, because a denominator inflated by a build artifact is the
+`gates.md` "print the denominator, then reconcile it against an independent count" defect.
+
+**Done when:** each gate is run with and without the `.pyc` present and its printed denominator is
+shown to be identical, or the gate is fixed. Cheap: `-I` on the grep, or derive the file list from
+`git ls-files`.
+
+## B541 — 🟡 `tree-stability` watches GITIGNORED build artifacts, so importing a hook mid-run fails the gate
+
+**Measured 2026-09-07**, twice in one session. `make ci` failed with:
+
+    tree-stability: THE TREE CHANGED WHILE THIS GATE RAN
+      modified: ./.claude/hooks/__pycache__/adversary-first-gate.cpython-314.pyc
+
+The `.pyc` is **gitignored and untracked**; it was created because a probe in another shell did
+`importlib` on the hook. The gate's verdict was correct in the narrow sense (the tree did change)
+and useless in the useful sense: nothing that ships changed, and the 135-test run it invalidated was
+entirely green.
+
+Two candidate fixes, neither yet chosen: exclude gitignored paths from the snapshot (matches what
+the gate is FOR — "did the artifact under test move"), or keep watching everything and document
+`PYTHONDONTWRITEBYTECODE=1` as required discipline for anyone probing a Python file during a run.
+⚠️ The first is not obviously right: a gate that ignores gitignored files cannot see an operator
+editing `.env` mid-run, which is a state it may legitimately want to catch. Needs an idea round.
+
+**Done when:** the decision is made and RED-proven — a `.pyc` appearing mid-run does or does not
+fail the gate, deliberately, with the reason recorded.
