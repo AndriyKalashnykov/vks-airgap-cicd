@@ -83,10 +83,9 @@ else
 fi
 
 # --- 3. Delete the kind cluster ----------------------------------------------
-KIND_CLUSTER_REMOVED=0
 # `kind get clusters` shells out to docker, so a 2>/dev/null here had the SAME defect: an unusable
-# socket made "the cluster is gone" and "I could not ask" identical, and this is the read that decides
-# KIND_CLUSTER_REMOVED — which gates the secrets/ removal further down.
+# socket made "the cluster is gone" and "I could not ask" identical. That distinction still matters
+# for the log the operator reads, even though nothing gates a DELETION on it any more (see §5).
 _kind_out=""; _kind_rc=0
 if have kind; then _kind_out="$(kind get clusters 2>"$_DPS_ERR")" || _kind_rc=$?; else _kind_rc=127; fi
 if [ "$_kind_rc" -ne 0 ] && have kind; then _cannot_ask "kind clusters"; fi
@@ -96,7 +95,6 @@ if [ "$_kind_rc" -eq 0 ] && printf '%s\n' "$_kind_out" | grep -xF "$CLUSTER_NAME
   # passwords -- so make it 0700 first rather than letting kind decide.
   ensure_secret_dir "$(dirname "$KIND_KUBECONFIG_PATH")"
   run kind delete cluster --name "$CLUSTER_NAME" --kubeconfig "$KIND_KUBECONFIG_PATH"
-  KIND_CLUSTER_REMOVED=1
 else
   log_info "kind cluster '$CLUSTER_NAME' not present (or kind absent) — skipping"
 fi
@@ -140,25 +138,31 @@ elif [ -n "$KUBECONFIG_PATH" ]; then
   log_info "leaving KUBECONFIG ($KUBECONFIG_PATH) untouched — the KinD flow did not write it"
 fi
 
-# --- 5. Remove cluster-specific credentials so the NEXT fresh cluster re-mints
-# them. These are bound to the torn-down cluster's Gitea: the CI access token and the webhook shared
-# secret. If left behind, seed-gitea "reuses" a stale token against a fresh Gitea that never issued
-# it -> HTTP 401.
+# --- 5. CREDENTIALS: LEAVE THEM. -----------------------------------------------------------------
+# This block used to `rm` secrets/gitea-ci-token and secrets/webhook-token, logging them as
+# "kind-cluster-scoped". That label is FALSE — 50-seed-gitea-repos.sh writes BOTH in EITHER flow —
+# and it FIRED LIVE on 2026-09-05 against a fully-installed lab serving 11/11 (B537). Gating it on
+# KIND_CLUSTER_REMOVED did NOT help: the live box HAD torn down a kind cluster. A kind cluster and a
+# lab on one machine is this repo's normal dev posture, not an exotic state.
 #
-# BUT ONLY IF WE ACTUALLY TORE A KIND CLUSTER DOWN. The old code deleted them unconditionally, on the
-# claim that "only the kind flow writes these; real-VKS runs use their own". That is FALSE:
-# 50-seed-gitea-repos.sh writes secrets/gitea-ci-token and secrets/webhook-token in EITHER flow. So a
-# real-lab operator following Step 0 of their own runbook ("make kind-down — if you ran the local
-# flow") destroyed their LAB Gitea credentials.
-if [ "${KIND_CLUSTER_REMOVED:-0}" = "1" ]; then
-  for stale in "${REPO_ROOT}/secrets/gitea-ci-token" "${REPO_ROOT}/secrets/webhook-token"; do
-    if [ -f "$stale" ]; then
-      log_info "removing kind-cluster-scoped credential $stale"
-      run rm -f "$stale"
-    fi
-  done
-else
-  log_info "no kind cluster was torn down — leaving secrets/ untouched (they may be a real lab's)."
+# DO NOT RE-ADD IT. Both halves of its justification are dead, for different reasons:
+#
+#   gitea-ci-token — the deletion is a FOSSIL. It was added 2026-07-09 for "seed-gitea reuses a
+#     stale token -> HTTP 401". That was fixed AT THE CONSUMER four days later: the seeder asks the
+#     live Gitea whether the candidate token works (`token_works`, 50-seed-gitea-repos.sh:182,
+#     used at :207) and re-mints on failure. Deleting the file now buys nothing.
+#
+#   webhook-token — it CANNOT go stale. It is a SYMMETRIC secret we generate, pushed to both sides
+#     from the same file: 50-seed-gitea-repos.sh:164 -> :382 (the Gitea hook's HMAC) and
+#     60-configure-tekton.sh:93 -> :103 (the k8s Secret). No external authority issues it, so reuse
+#     on a fresh cluster is not merely safe — it is CORRECT. Deleting it CREATES the divergence it
+#     claimed to prevent: a lone `make seed-gitea` re-mints and re-registers Gitea's hooks with a
+#     NEW token while k8s keeps the OLD one, and every delivery is HMAC-rejected SILENTLY, forever.
+#
+# docs/matrix-standing-rules.md:360 has said so all along: these are "never blanket-deleted".
+if [ -f "${REPO_ROOT}/secrets/gitea-ci-token" ] || [ -f "${REPO_ROOT}/secrets/webhook-token" ]; then
+  log_info "leaving secrets/gitea-ci-token + secrets/webhook-token in place — they are flow-agnostic"
+  log_info "  (the seeder validates the CI token against the live Gitea; the webhook token is symmetric)"
 fi
 
 log_info "kind teardown complete"

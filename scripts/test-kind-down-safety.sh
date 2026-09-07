@@ -63,17 +63,29 @@ else
 fi
 
 # 3. The Gitea/webhook credentials may only be removed when a kind cluster was ACTUALLY torn down.
-if grep -q 'KIND_CLUSTER_REMOVED' "$KD"; then
-  ok "the gitea/webhook credentials are removed only when a kind cluster was actually deleted"
+# ⚠️ THIS CHECK USED TO GREP FOR `KIND_CLUSTER_REMOVED` and certify "removed only when a kind
+# cluster was actually deleted". It was GREEN THROUGHOUT the live 2026-09-05 incident, because
+# that condition WAS satisfied: the box had a kind cluster AND a lab — this repo's normal dev
+# posture. A check that passes over the defect it names is worse than none, and after the fix
+# it would have certified a property no longer present in the file.
+if grep -qE '^[[:space:]]*run rm -f .*secrets/(gitea-ci-token|webhook-token)' "$KD"; then
+  bad "kind-down still DELETES secrets/gitea-ci-token or secrets/webhook-token — 50-seed-gitea-repos.sh writes both in EITHER flow (B537, fired live 2026-09-05)"
 else
-  bad "kind-down removes secrets/gitea-ci-token + secrets/webhook-token UNCONDITIONALLY — a real lab writes those too (50-seed-gitea-repos.sh)"
+  ok "kind-down does not delete the gitea/webhook credentials at all — they are flow-agnostic"
 fi
 
 # 4. The false comment must be gone: 50-seed writes those credentials in EITHER flow.
-if grep -q 'Only the kind flow writes these' "$KD"; then
-  bad "kind-down still claims 'only the kind flow writes these' — 50-seed-gitea-repos.sh writes them on a real lab too"
+# ⚠️ THIS CHECK USED TO GREP a COMMENT — 'Only the kind flow writes these', capital O — which
+# MEASURED 0 hits at ANY case: the wording had already been reworded, so it could never fire in
+# either direction. The live incident's actual output was `removing kind-cluster-scoped
+# credential ...`, a string this test never mentioned. Assert what the OPERATOR READS.
+# COMMENTS STRIPPED FIRST. Without that this fires on kind-down.sh's own comment explaining why
+# the label was false — the self-scanning trap (gates.md): documenting a defect makes it
+# ungreppable, and the "fix" people reach for is deleting the explanation.
+if grep -q 'kind-cluster-scoped' <<< "$(sed -E 's@^[[:space:]]*#.*@@' "$KD")"; then
+  bad "kind-down still calls those credentials 'kind-cluster-scoped' — the FALSE label it printed on 2026-09-05 while destroying a real lab's"
 else
-  ok "the false 'only the kind flow writes these' claim is gone"
+  ok "the false 'kind-cluster-scoped' label the operator used to read is gone"
 fi
 
 # 5. Ground truth for #4: the seeder really does write them unconditionally.
@@ -106,6 +118,19 @@ _sandbox() {                      # _sandbox <docker-behaviour> -> echoes the sa
     empty)   # a WORKING docker with genuinely nothing to clean — the positive control
       printf '#!/usr/bin/env bash\nexit 0\n' > "$sb/fakebin/docker"
       printf '#!/usr/bin/env bash\nexit 0\n' > "$sb/fakebin/kind" ;;
+      # ⚠️ The stub DERIVES the cluster name from .env.example rather than echoing a literal.
+      # SKIP_DOTENV=1 skips `.env` but NOT `.env.example`, whose KIND_CLUSTER_NAME wins over the
+      # environment — the clobber class this repo documents. MEASURED: the run resolved
+      # `vks-airgap-cicd`, not the `probe-cluster` the harness exports, so a hardcoded stub answer
+      # never matched and the CONTROL correctly read "nothing was deleted".
+      present) # a WORKING docker AND the cluster IS there -- THE LIVE 2026-09-05 SHAPE (B537).
+               # This is exactly the state the old KIND_CLUSTER_REMOVED guard was SATISFIED by,
+               # which is why that guard stayed green while a real lab's credentials were
+               # destroyed. A kind cluster AND a lab on one box is this repo's normal posture.
+        printf '#!/usr/bin/env bash\nexit 0\n' > "$sb/fakebin/docker"
+        # shellcheck disable=SC2016  # the $1 belongs to the STUB SCRIPT being written, not to us:
+        # single quotes are load-bearing, expansion here would bake OUR $1 into the stub.
+        printf '#!/usr/bin/env bash\ncase "$1" in get) sed -n "s/^KIND_CLUSTER_NAME=//p" .env.example | head -1 ;; *) exit 0 ;; esac\n' > "$sb/fakebin/kind" ;;
   esac
   chmod +x "$sb/fakebin"/* 2>/dev/null || true
   printf 'VKS_STATE_KIND=1\nHARBOR_PASSWORD=canary-do-not-delete\n' > "$sb/.env.state"
@@ -114,7 +139,19 @@ _sandbox() {                      # _sandbox <docker-behaviour> -> echoes the sa
 # Only $KD_OUT and the on-disk artifacts are asserted — the rc is deliberately NOT part of the
 # contract, because a cannot-ask run legitimately still exits 0 after doing the file half.
 _run_kd() {                       # _run_kd <sandbox> -> writes $KD_OUT
-  KD_OUT="$(cd "$1" && PATH="$1/fakebin:$PATH" KIND_CLUSTER_NAME=probe-cluster \
+  # ⚠️ REPO_ROOT="$1" IS LOAD-BEARING, AND ITS ABSENCE MADE THIS WHOLE SANDBOX A FICTION.
+  #
+  # `scripts/lib/os.sh:31` does `export REPO_ROOT`, and THIS TEST sources os.sh — so the child
+  # kind-down.sh INHERITED the REAL repo root and every `${REPO_ROOT}/secrets/...` path it touched
+  # was the developer's own. MEASURED 2026-09-07, while RED-proving the B537 fix: a mutation that
+  # re-added the credential deletion DESTROYED THE REAL secrets/gitea-ci-token and
+  # secrets/webhook-token on this box, and the test reported ok — because the sandbox copy it
+  # asserted on was never the file being deleted.
+  #
+  # So the test could do the exact damage B537 is about, while certifying that it could not. Every
+  # case that asserts on a `$sb/...` artifact was vacuous in the same way, including the .env.state
+  # canary that exists to prevent data loss.
+  KD_OUT="$(cd "$1" && PATH="$1/fakebin:$PATH" KIND_CLUSTER_NAME=probe-cluster REPO_ROOT="$1" \
             VKS_STATE_FILE="$1/.env.state" SKIP_DOTENV=1 bash "$1/scripts/kind-down.sh" 2>&1)" || true
 }
 
@@ -136,6 +173,84 @@ rm -rf "$sb"
 # 8. POSITIVE CONTROL: a WORKING docker with genuinely nothing to clean must still proceed and
 #    delete the stamped overlay. Without this, "always refuse" would pass check 6 and be useless.
 sb="$(_sandbox empty)"; _run_kd "$sb"
+
+# ── SELF-CANARY: this test must not be able to damage the REAL repo. ───────────────────────────
+#
+# It could, and it did — TWICE, on 2026-09-07, while RED-proving the B537 fix. `lib/os.sh:31` does
+# `export REPO_ROOT`, and this test sources os.sh, so a sandboxed kind-down.sh INHERITED the real
+# repo root: every `${REPO_ROOT}/secrets/...` it touched was the developer's own. A mutation that
+# re-added the credential deletion destroyed the real secrets/gitea-ci-token and
+# secrets/webhook-token — the exact incident B537 is about — while this test reported `ok`, because
+# the sandbox copy it asserted on was never the file being deleted.
+#
+# Both call sites now pin REPO_ROOT to the sandbox. This canary is what makes that a PROPERTY rather
+# than a thing someone remembered: it fingerprints the real credentials before the sandboxed runs and
+# re-checks them after. It is deliberately the FIRST thing set up and the LAST thing asserted.
+_canary_real=""
+for _cf in "${REPO_ROOT}/secrets/gitea-ci-token" "${REPO_ROOT}/secrets/webhook-token" "${REPO_ROOT}/.env.state"; do
+  [ -f "$_cf" ] && _canary_real="${_canary_real}$(md5sum "$_cf" 2>/dev/null || true)"
+done
+
+# ── B537: THE LIVE 2026-09-05 SHAPE — a kind cluster AND a lab on one box. ──────────────────────
+#
+# ⚠️ THE CONTROL BELOW IS NOT OPTIONAL. Without it a kind-down that refuses to do ANYTHING passes
+# the survival case — the teardown would be dead and this test would call that safety.
+sb="$(_sandbox present)"
+mkdir -p "$sb/secrets"
+printf 'ci-token-canary\n'      > "$sb/secrets/gitea-ci-token"
+printf 'webhook-token-canary\n' > "$sb/secrets/webhook-token"
+_run_kd "$sb"
+
+if [ -f "$sb/secrets/gitea-ci-token" ] && [ -f "$sb/secrets/webhook-token" ]; then
+  ok "B537: both credentials SURVIVE a teardown that really deleted a kind cluster"
+else
+  bad "B537 REGRESSION: kind-down deleted a flow-agnostic credential — the 2026-09-05 live incident"
+fi
+
+# CONTENT, not just existence: a silent re-mint is a loss too, and a worse one for webhook-token
+# (Gitea and k8s would then hold different HMAC secrets and every delivery is rejected silently).
+if [ "$(cat "$sb/secrets/gitea-ci-token" 2>/dev/null)" = "ci-token-canary" ] \
+   && [ "$(cat "$sb/secrets/webhook-token" 2>/dev/null)" = "webhook-token-canary" ]; then
+  ok "B537: their CONTENT is unchanged (a re-mint would desynchronise the webhook HMAC)"
+else
+  bad "B537: a credential's CONTENT changed — Gitea and k8s would now disagree"
+fi
+
+case "$KD_OUT" in
+  *kind-cluster-scoped*) bad "B537: the false 'kind-cluster-scoped' label is back in the OUTPUT" ;;
+  *)                     ok "B537: the operator is not told those credentials are kind-scoped" ;;
+esac
+
+case "$KD_OUT" in
+  *"deleting kind cluster"*) ok "B537 CONTROL: the kind cluster WAS deleted (the teardown is not inert)" ;;
+  *)                         bad "B537 CONTROL: nothing was deleted — the survival case would pass on a DEAD teardown" ;;
+esac
+rm -rf "$sb"
+
+# GROUND TRUTH for the whole verdict: the seeder really does validate the CI token against the live
+# Gitea. If that ever goes, the stale-token premise returns and this rule must be re-argued.
+# shellcheck disable=SC2016  # a grep PATTERN — it must match the literal text in the seeder,
+# so $CANDIDATE_TOKEN must NOT expand here.
+if grep -q 'token_works "$CANDIDATE_TOKEN"' "${SCRIPT_DIR}/50-seed-gitea-repos.sh"; then
+  ok "B537 ground truth: the seeder still VALIDATES the CI token against the live Gitea"
+else
+  bad "B537 ground truth GONE: 50-seed no longer validates the CI token — re-argue before trusting this"
+fi
+
+
+# THE CANARY, ASSERTED LAST — after every sandboxed kind-down has run.
+_canary_now=""
+for _cf in "${REPO_ROOT}/secrets/gitea-ci-token" "${REPO_ROOT}/secrets/webhook-token" "${REPO_ROOT}/.env.state"; do
+  [ -f "$_cf" ] && _canary_now="${_canary_now}$(md5sum "$_cf" 2>/dev/null || true)"
+done
+if [ "$_canary_real" = "$_canary_now" ]; then
+  ok "SELF-CANARY: this test did not touch the REAL repo's credentials or state overlay"
+else
+  bad "SELF-CANARY FAILED: a sandboxed run reached OUTSIDE its sandbox and changed the REAL repo.
+       A kind-down invocation is missing REPO_ROOT=<sandbox> — lib/os.sh EXPORTS REPO_ROOT, so the
+       child inherits the developer's repo. Grep EVERY 'kind-down.sh' invocation in this file."
+fi
+
 if [ ! -f "$sb/.env.state" ]; then
   ok "genuinely-empty: the stamped overlay IS removed (the fix did not degenerate into always-refuse)"
 else
@@ -165,7 +280,10 @@ if command -v docker >/dev/null 2>&1 && PATH="$sb/purebin" command -v docker >/d
 else
   ok "curated PATH carries no docker (so case 9 measures something)"
 fi
-KD_OUT="$(cd "$sb" && PATH="$sb/purebin" KIND_CLUSTER_NAME=probe-cluster \
+# REPO_ROOT="$sb" for the same reason as in _run_kd -- see the note there. This SECOND
+# invocation was missed on the first pass and destroyed the real credentials a SECOND time,
+# minutes after the first was fixed: one call site pinned, one not. Grep EVERY invocation.
+KD_OUT="$(cd "$sb" && PATH="$sb/purebin" KIND_CLUSTER_NAME=probe-cluster REPO_ROOT="$sb" \
           VKS_STATE_FILE="$sb/.env.state" SKIP_DOTENV=1 bash "$sb/scripts/kind-down.sh" 2>&1)" || true
 # ASSERT A POSITIVE MARKER, not the ABSENCE of the FATAL. A negative assertion also passes when the
 # script dies for an unrelated reason — measured: with dirname missing it died at line 11 and the
