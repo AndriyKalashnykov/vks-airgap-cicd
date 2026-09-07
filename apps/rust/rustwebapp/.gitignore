@@ -13,3 +13,17 @@
 # `apps/rust/*/[a-z]*webapp` for a root-level compiled binary; anchored for the same reason as go.
 target/
 /rustwebapp
+
+# ⚠️ SECRETS — the SAME mechanism, the worse consequence. The seeded repo is created
+# `"private":false` (50-seed-gitea-repos.sh) and FORCE-PUSHED, and the root .gitignore's secret
+# patterns are UNANCHORED, so they protect the outer repo at any depth and are ABSENT here.
+# Nothing in this tree matches them today (verified), so this excludes nothing legitimate — it is
+# here so that the day someone drops a kubeconfig beside an app, it does not become public.
+# Mirrors the root's own lines, negation included.
+.env
+.env.*
+!.env.example
+kubeconfig
+*.kubeconfig
+*.pem
+*.key

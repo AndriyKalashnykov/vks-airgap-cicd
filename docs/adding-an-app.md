@@ -57,6 +57,13 @@ letting them surface at runtime: `make check-app-toolchains` catches an unpinned
 fresh repo's root there is no `apps/` prefix left to match. Measured 2026-09-07 on a built box: of
 911 staged files the outer repo ignores **845**, and the fresh-repo anchoring ignores **3**.
 
+⚠️ **And it is not only build output.** The seeded repo is created **`"private":false`** and
+force-pushed, and the root `.gitignore`'s *secret* patterns (`.env`, `*.key`, `*.pem`,
+`*.kubeconfig`) are **unanchored** — so they protect the outer repo at any depth and are **absent**
+from the seeded one. Every per-app file therefore mirrors those lines too, negation included. Keep
+them when you write a new one; nothing in the tree matches them today, so they cost nothing and they
+are what stops a stray kubeconfig becoming public.
+
 So write `apps/<lang>/<app>/.gitignore` for whatever your app builds locally. `gitignore(5)` says
 those patterns match *relative to the file's own location*, which is exactly why this works in both
 repos at once. `make check-app-gitignore` fails until it is **tracked** — present-but-untracked does

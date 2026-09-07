@@ -27,29 +27,58 @@ set -uo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
+# shellcheck source=scripts/lib/apps.sh
+. "${SCRIPT_DIR}/lib/apps.sh"
 
-reg="${REPO_ROOT}/apps/registry.tsv"
-[ -f "$reg" ] || die "check-app-gitignore: apps/registry.tsv not found at ${reg}"
+# ⚠️ THE REGISTRY IS PARSED BY app_rows(), NOT BY A HAND-ROLLED `while read < file`. Three reasons,
+# each a measured defect in the hand-rolled version this replaced:
+#   1. a registry with NO TRAILING NEWLINE silently loses its LAST row, and the gate then reports
+#      "OK — all 5 app(s)" having never looked at the app that contributes 236 of the 845 files.
+#      `read` returns non-zero on the final unterminated line, so the loop body never runs for it.
+#   2. it hardcoded the path and ignored APPS_REGISTRY — the ONLY lever
+#      `test-registry-fail-open.sh` has. A gate that cannot be pointed at a broken registry cannot
+#      be proven to fail closed on one, and wiring it into that harness would have made every case
+#      read the REAL registry and report PASS: a vacuous green inside the anti-vacuity harness.
+#   3. TAB is IFS-*whitespace*, so consecutive tabs collapse and an empty middle field shifts every
+#      later field LEFT. app_rows/app_field are the forms the rest of the repo already uses.
+# app_rows() dies when the registry is missing, so the explicit existence check is redundant here.
+
+# ⚠️ THIS GATE ASSERTS THE INDEX **AND** THE DISK, and it needs both — they are DIFFERENT SETS.
+#   `git ls-files` answers "will the operator receive it"; `[ -f ]` answers "will `cp -a` copy it".
+#   push_repo does `cp -a "$src/."`, i.e. it reads the DISK. So:
+#     tracked but DELETED locally -> ls-files says yes, cp -a copies nothing -> the ELF ships
+#     present but UNTRACKED       -> cp -a copies it, nobody else ever receives it
+#   MEASURED: with `apps/go/gowebapp/.gitignore` deleted-but-still-in-the-index, the index-only
+#   form returned rc=0 and printed "the seeded repos are protected" while staging the tree the way
+#   push_repo does stages `gowebapp`, the 15,269,674-byte ELF. And the blind state is the SEEDING
+#   state: it cannot happen in CI (a fresh checkout makes index == disk) and it is exactly a dirty
+#   working tree, which is where `make platform` / `make seed-gitea` actually run.
+git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1 || die \
+  "check-app-gitignore: ${REPO_ROOT} is not a git repository. This gate asserts INDEX membership,
+  so it cannot run on an unpacked tarball copy — it would report every app as missing a file that
+  is sitting right there. That is a wrong-cause message, which is why it refuses instead."
 
 missing=""; n=0; ok=0
 while IFS=$'\t' read -r name _lang src _rest; do
-  case "$name" in ''|'#'*) continue ;; esac
-  [ -n "${src:-}" ] || continue
+  [ -n "${name:-}" ] || continue
+  [ -n "${src:-}" ]  || continue
   n=$((n + 1))
-  # `git ls-files --error-unmatch` is the membership question; anything else answers a different one.
-  if git -C "$REPO_ROOT" ls-files --error-unmatch "${src}/.gitignore" >/dev/null 2>&1; then
+  if git -C "$REPO_ROOT" ls-files --error-unmatch "${src}/.gitignore" >/dev/null 2>&1 \
+     && [ -f "${REPO_ROOT}/${src}/.gitignore" ]; then
     ok=$((ok + 1))
   else
-    missing="${missing} ${src}"
+    missing="${missing}${src}"$'\n'   # NEWLINE-delimited: a src containing a space must stay ONE path
   fi
-done < "$reg"
+done < <(app_rows)
 
 [ "$n" -gt 0 ] || die "check-app-gitignore: parsed ZERO apps from registry.tsv — the gate looked at
   nothing. That is a broken gate, not a clean repo."
 
 if [ -n "$missing" ]; then
   log_error "check-app-gitignore: these app dir(s) have no TRACKED .gitignore:"
-  for d in $missing; do log_error "    ${d}/.gitignore"; done
+  # NOT `for d in $missing` — unquoted word-splitting turns "apps/java/my app" into two
+  # nonexistent paths and sends the operator to create phantom files.
+  while IFS= read -r d; do [ -n "$d" ] && log_error "    ${d}/.gitignore"; done <<< "$missing"
   log_error "  Each app dir is force-pushed VERBATIM into a fresh Gitea repo, where the root"
   log_error "  .gitignore's apps/**-anchored rules DO NOT APPLY. Without one, the operator's local"
   log_error "  build output ships: measured 601 files for nodejs, 236 for dotnet, and a 15 MB ELF"
