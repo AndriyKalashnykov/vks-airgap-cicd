@@ -903,6 +903,7 @@ Accounts**) and run it again.
 > |---|---|---|
 > | `ARGOCD_MECHANISM=api` | `ARGOCD_MECHANISM=api, but this box is missing: ARGOCD_SERVER ARGOCD_AUTH_TOKEN` | `api` is the tenant path; as an admin you have Kubernetes RBAC and need no token |
 > | `ARGOCD_REGISTER=never` | `NO guest cluster is registered as an ArgoCD destination … Refusing` | registration is admin-only, and here you **are** the admin |
+> | `KUBECONFIG` / `VKS_CLUSTER_NAME` | a `kubectl` that HANGS to its timeout, then a cluster-unreachable message | the pins still name a cluster that was deleted; nothing re-points them |
 >
 > Both defaults are `auto`, which MEASURES what is open to you and picks. So the fix is to remove
 > the pins, not to set them differently — set both back to `auto` in `.env`, or:

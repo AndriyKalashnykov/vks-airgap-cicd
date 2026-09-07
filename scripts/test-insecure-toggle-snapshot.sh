@@ -112,6 +112,35 @@ else
   bad "MIRROR_VERIFY_FAST: with no caller value the .env setting must apply; got '${got}'."
 fi
 
+# ── THE WRITE-PATH SELECTOR CLASS (B531 F1, 2026-09-07) ──────────────────────────────────────────
+# ARGOCD_MECHANISM / ARGOCD_REGISTER choose WHICH WRITE PATH `70-configure-argocd.sh` takes. They
+# were absent from the snapshot, so an uncommented `.env` value beat a per-run prefix.
+#
+# THE COST WAS NOT A CRASH — it was E2E FIDELITY. `91-e2e-tenant-mechanism.sh` passes
+# ARGOCD_MECHANISM=api as a per-run prefix to exercise the TENANT path; `.env:1027` overrode it to
+# `auto`, and the run still PASSED, because `auto` measures kubectl=no/api=yes and lands on api
+# anyway. A green that no longer tests the branch it names. `70`'s own comment at the api arm
+# records that the paths DIFFER: an explicit `api` bypasses the unknown-guard `auto` goes through.
+#
+# The class was already known and worked around in the WRONG PLACE: 71-argocd-register-guest.sh
+# :39-53 hand-rolls a snapshot/restore for the sibling ARGOCD_REGISTER_INSECURE instead of adding
+# it to the list. This test exists so the next one is fixed in the list.
+for v in ARGOCD_MECHANISM ARGOCD_REGISTER; do
+  got="$(probe .env "${v}=auto" "$v" CALLER)"
+  if [ "$got" = CALLER ]; then
+    ok "${v}: a per-run value beats a .env pin (the e2e tests the path it names)"
+  else
+    bad "${v}: caller said CALLER, got '${got}'. A per-run prefix is CLOBBERED, so
+        91-e2e-tenant-mechanism.sh silently exercises the WRONG write path and still passes."
+  fi
+  got="$(probe .env "${v}=api" "$v" '')"
+  if [ "$got" = api ]; then
+    ok "${v}: caller silent -> the .env pin still applies (the knob still works)"
+  else
+    bad "${v}: with no caller value the .env setting must apply; got '${got}'."
+  fi
+done
+
 # ── THE CREDENTIAL CLASS — the same defect, found by an adversary round on the commit above. ─────
 # ARGOCD_ADMIN_PASSWORD / GITEA_ADMIN_PASSWORD are `state_set` into the overlay (05-kind-up.sh:131,
 # :142) and ship in .env.example as `# VAR=<SET-IN-.env>`, i.e. documented operator-settable —

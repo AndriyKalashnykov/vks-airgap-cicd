@@ -5050,7 +5050,76 @@ be exercised offline with no cluster and no stub kubectl. **Done when:** that fu
 cases committed (exact match / sole candidate / 2-with-match / 2-without-match must REFUSE, not read
 / none), and the reachability verdict (B528) has equivalent offline coverage.
 
-## B531 — 🔴 `check-image-alignment` read ONLY `.env.example`, never `.env` — the file that actually drives a run
+## B531 — ✅ SHIPPED (scenario-pin half) — the control I proposed was REFUTED, and the defect under it was worse
+
+The row asked for a preflight that reports every scenario-inconsistent pin at once. **An idea round
+refuted it** and found a CRITICAL defect the row had not seen.
+
+**Why the control is refuted (all measured by the round):**
+
+- **The predicate inverts on the DEFAULT audience.** `docs/scenario-2.md:361,365` *prescribes* both
+  flagged values — for a tenant, `ARGOCD_MECHANISM=api` + `ARGOCD_REGISTER=never` are CORRECT. And
+  the capability probe that would exonerate them is exactly the one a tenant cannot run.
+- **It is unreachable where the brief worried.** Run in a worktree with no `.env` and no cluster,
+  `23-argocd-preflight.sh` exits at section 1; the write-mechanism section holding `can_kubectl` /
+  `can_api` **never runs**. On a fresh clone, in CI, and on the air-gap box the control cannot fire.
+- **My false-positive estimate measured the wrong axis.** I said "1 of 105 differs". Measured: **52
+  of 105** uncommented vars are commented in the template — nearly all legitimate and
+  doc-prescribed. A template-divergence predicate is **~96% false-RED**.
+- **The list is not the problem — duplication is.** Only **2** vars are scenario pins, and
+  `70-configure-argocd.sh`'s `auto` branch **already derives** the answer. A second enumeration of
+  the same logic is the duplication this repo keeps getting bitten by.
+
+**F1 — CRITICAL, and the reason this row shipped anything at all.** `ARGOCD_MECHANISM` and
+`ARGOCD_REGISTER` were **absent from `load_env`'s selector snapshot**, so `.env`'s uncommented value
+beat a per-run prefix. MEASURED with an inverse control:
+
+| passed by caller | before | after |
+|---|---|---|
+| `ARGOCD_MECHANISM=CALLER` | `auto` — **DEFEATED** | `CALLER` ✅ |
+| `ARGOCD_REGISTER=CALLER` | `auto` — **DEFEATED** | `CALLER` ✅ |
+| `ARGOCD_SERVER=CALLER` (control, already listed) | `CALLER` | `CALLER` |
+| `INGRESS_LB_IP=CALLER` (INVERSE control — a DISCOVERED value) | the overlay's value | the overlay's value ✅ |
+
+⚠️ **My first inverse control was VACUOUS** and I nearly banked it: I used `ARGOCD_LB_IP`, which
+**no sourced file sets**, so nothing could overwrite the caller's value and it "failed" for a reason
+that proved nothing. `INGRESS_LB_IP` (set in `.env.state`) is the one that discriminates.
+
+**The live cost was an E2E-FIDELITY defect, not a crash.** `91-e2e-tenant-mechanism.sh` passes
+`ARGOCD_MECHANISM=api` as a per-run prefix to exercise the TENANT path; `.env:1027` overrode it to
+`auto`, and the run still **PASSED** (auto measures kubectl=no/api=yes and lands on api anyway)
+while no longer testing the branch it names. `70`'s own comment records that the paths DIFFER — an
+explicit `api` bypasses the unknown-guard `auto` goes through. Same class as "a test that passes
+because of your `/etc/hosts`": its meaning depended on a gitignored file.
+
+**The class was already known and worked around in the WRONG place**:
+`71-argocd-register-guest.sh:39-53` hand-rolls a snapshot/restore for the sibling
+`ARGOCD_REGISTER_INSECURE` instead of adding it to the list.
+
+**Shipped:** both pins added to the selector snapshot (with the measurement recorded inline) and to
+`check-env-clobber`'s `SELECTORS`; **4 RED-proven cases** in `test-insecure-toggle-snapshot.sh` (the
+existing home for this class) — removing the two names turns the two caller-beats-pin arms RED with
+the exact expected text while the two caller-silent arms correctly stay green; a mechanism-survival
+assertion in `91` mirroring the existing `ARGOCD_SERVER` one; and **F4** — both die sites in `70`
+now name the SCENARIO. The second had been prescribing the wrong remedy: with
+`ARGOCD_REGISTER=never`, `gitops` already ran `71`, which skipped and exited 0, so
+*"run `make argocd-register-guest` first"* sent the operator to a command that silently no-ops again.
+**F7** shipped too — the scenario-1 table said "three different messages" and listed two.
+
+**STILL OPEN, and deliberately not built:**
+
+- the **live-lab WARN** (F2/F3): may fire ONLY on a positive `can_kubectl=yes && argocd_api_ready=no`,
+  never on the pin alone, never on `unknown` — and its header must say it answers only for a live lab.
+- **F6**: `check-env-clobber` reads `.env.example` only, so it is structurally blind to the operator's
+  own `.env`. Needs care — after F1 an uncommented *selector* in `.env` is no longer a clobber, so the
+  predicate is "uncommented AND has a fallback/override AND is NOT snapshot-protected".
+- **residual named by the round:** `ARGOCD_PROJECT` and `ARGOCD_OPTS` are also passed as env prefixes
+  by `91` and are also absent from the selector list — same shape, unexamined.
+
+⚠️ **Do NOT report `.env` drift as handled.** It is handled for **two** variables, at **two** die
+sites. A box with no live cluster still cannot see any of it.
+
+## B531 (original) — 🔴 `check-image-alignment` read ONLY `.env.example`, never `.env` — the file that actually drives a run
 
 MEASURED 2026-09-05, and it cost three failed pipeline runs. `.env` carried
 `TEMURIN_JRE_TAG=25.0.3_9-jre-jammy` while `images/images.txt` (and `.env.example`) said
@@ -5261,7 +5330,65 @@ moment the version can actually change.
 filtering). One minute to settle offline: `cd apps/java/javawebapp && ./mvnw -q -B package && unzip -p
 target/*.jar BOOT-INF/classes/application.yml | grep -n version`.
 
-## B535 — 🟡 `seed-gitea` pushes the operator's HOST BUILD OUTPUT into the Gitea app repos (bloat + clone cost; it does NOT reach the image)
+## B535 — 🔴 the GATE I was about to build is REFUTED (0.35% catch rate); the fix is option (c)
+
+An idea round **refuted the gate**, measured. I was going to stage each app with `push_repo`'s
+copy step and assert `git check-ignore --no-index --stdin` finds nothing. Replayed for all six apps:
+
+| paths as they'd be in the FRESH repo (**the design**) | paths as they are in the OUTER repo |
+|---|---|
+| **3** of 905 flagged | **845** of 905 flagged |
+
+**0.35%.** Green on 100% of dotnet, 100% of nodejs, and on the 15 MB ELF the row singles out. The 3
+it catches are python `__pycache__` — caught only because `.gitignore:70` happens to be *unanchored*,
+while `.pytest_cache` in the same directory is missed because `:99` is `apps/**/`-anchored.
+
+**Why: the anchoring translation I claimed to have escaped is still there**, just hidden inside
+`check-ignore`. 17 of 102 `.gitignore` lines are `apps/**/`-anchored — exactly the build-output
+rules — and they all evaporate at fresh-repo root. Three more independent refutations:
+
+- **Vacuous in CI under EITHER anchoring.** The defect is *untracked local build output*; a CI
+  checkout has none. Measured on a fresh worktree: 61 files, **0** flagged. Wired into
+  `static-check` it would be green forever, having never looked at one junk file.
+- **`rc=128` on a `mktemp -d`** (`'…' is outside repository`), and **both** natural idioms read it as
+  PASS: `if …; then FAIL; fi` (128 is non-zero → else) and `hits=$(…|wc -l)` (measured `hits=0`).
+  Two fail-open channels, no denominator. Empty stdin is `rc=1` = "none ignored" too.
+- **The seam is on the WRONG SIDE of the decision.** What decides content is `git add -A` (`:275`),
+  not the copy. Both real fixes act there, so after a correct fix the gate would stay **RED forever**
+  — and the cheapest way to silence that is to weaken the gate.
+
+**THE FIX IS OPTION (c) — a per-app `.gitignore`** (unlisted in the original row). It is
+**anchoring-invariant by construction**: `gitignore(5)` — *"these patterns match relative to the
+location of the `.gitignore` file"* — so it anchors identically in the outer repo and the seeded one.
+That is exactly the property whose absence refutes options (a)/(b) and the gate.
+
+**MEASURED end-to-end in a scratch repo** (the round could not run this; the read-only hook refused
+its `git init && git add`):
+
+    /gowebapp            -> root ELF-analogue EXCLUDED from `git ls-files`
+    cmd/gowebapp/main.go -> KEPT
+
+…which also proves the trap that killed option (b) is avoided: a **bare** `gowebapp` token would have
+excluded `cmd/gowebapp/` and `internal/gowebapp/`. **Write the six files by hand; do NOT generate
+them from the `.dockerignore`.** All six `.dockerignore` files already exclude `.gitignore`, so no
+image context changes.
+
+**And the gate that goes with it is a different, non-vacuous one:** *every app dir has a tracked
+`.gitignore`* — **RED today (0 of 6)**, visible on a clean checkout because the artifact is TRACKED,
+air-gap safe (no `.git` needed), and it directly guards the fix. The **content** check is a judgement
+call and an enumerated list — make that a **printer** that always exits 0, not a gate.
+
+**Also found, and it is a different row's worth of work:** the seeded repos are created
+`"private":false` (`:252`) and force-pushed, and every **secret** pattern in the root `.gitignore`
+(`.env`, `*.key`, `*.pem`, `*.kubeconfig`) is *unanchored*, so it WOULD fire at fresh-repo root.
+Latent today (no such files exist). A secret gate on that force-push is a real control — and its own
+idea round.
+
+**Residual:** `push_repo`'s second call site (`:378`, a `yq`-rendered `$deploy_src` outside the repo)
+is not covered by any of this; measured benign today (18 files, all tracked). And whether a carried
+air-gap tarball contains `.git` at all is still unmeasured — settle it on a real tarball.
+
+## B535 (original) — 🟡 `seed-gitea` pushes the operator's HOST BUILD OUTPUT into the Gitea app repos (bloat + clone cost; it does NOT reach the image)
 
 ⚠️ **FILED 🔴, CORRECTED TO 🟡 THE SAME HOUR — the original central claim was FALSE.** I wrote that
 the junk is "copied into the image by `COPY . .`". It is not: **all six apps already carry a
@@ -5466,7 +5593,91 @@ today the file is gone.
 | **B712** | 🔴 **The `adversary-first-gate` cannot require the IMPLEMENTATION round, because it guards WRITING and re-arms on COMMIT — so a session that implements, commits, pushes and merges without another guarded write never meets the re-armed gate.** MEASURED 2026-09-06, by doing it: PRs **#1127** (B210) and **#1128** (B704) were merged on an **idea-round clearance alone**. Both had a design round; neither had a round on the DIFF. `CLAUDE.md` RULE ZERO trigger 2 requires both, and `rules/common/agents.md` states outright that *an idea-round clearance authorizes IMPLEMENTING, never SHIPPING* — the diff you then write is un-reviewed until an implementation round reads it. **The mechanism, read from the hook rather than assumed:** `.claude/hooks/adversary-first-gate.py` matches `Edit`/`Write` and allows a guarded write only while the receipt is newer than `_head_commit_epoch()`. So committing re-arms it — which is correct and is what closes the *session-lifetime receipt* hole its header describes. But the re-armed gate is only ever felt by the NEXT guarded write, and a session that ships instead of continuing to edit has no next write. The shipping path (`git push`, `gh pr create`, `gh pr merge`) is not guarded at all. ⚠️ **This is a COVERAGE observation, not a fix request, and the fix is NOT obvious — do not build one without its own idea round.** The nearby designs are already refuted in `rules/common/hooks.md`: a path-scoped receipt (the prompt that NAMES the file AUTHORISES it; negations authorise too; 34% false-block), and more broadly *"a hook cannot gate a JUDGMENT act"* — whether a round RAN is observable, whether its verdict was READ and APPLIED is not. A receipt keyed on `gh pr create` would be self-mintable in exactly the same way. The honest read may well be that this is DISCIPLINE with a human gate, like idea-first — in which case the deliverable is this row, not a control. **What actually caught it: the operator asking** *"are you proving your design AND code by adversaries?"* — which `rules/common/agents.md` already names as the signal that the impl round was skipped. **Done when:** either a reviewed mechanism exists, or this row records the refutation of every candidate so nobody rebuilds one. Retroactive rounds on #1127 and #1128 were dispatched the moment it was noticed; their findings will be fixed forward. |
 | **B713** | 🔴 **`make vks-login` is a NO-OP for the Supervisor credential in the DEFAULT auth method, yet it is the remedy `make creds` and `argocd-password` prescribe when the Supervisor rejects that credential — and it exits 0, so the operator reads the no-op as a fix.** MEASURED 2026-09-06 on the live lab, from an operator hitting it: `make argocd-password` printed `argocd-initial-admin-secret is not in ns/cicd yet — the ArgoCD instance is still reconciling` and began `waiting up to 900s`. Root cause: `secrets/supervisor.kubeconfig` was expired — `kubectl version` against it returned `You must be logged in to the server`, which `classify_kube_failure` correctly calls **UNAUTHORIZED**. `make creds` had already said so (*"the Supervisor REJECTED this kubeconfig. Re-run: make vks-login"*). **But that remedy does nothing here.** `.env` carries `VKS_AUTH_METHOD=kubeconfig` (`.env:1045`), and `30-vks-login.sh:38-44`'s `kubeconfig` arm only validates the GUEST kubeconfig — the Supervisor file is written exclusively by the **`vcf`** arm (`:395-400`, `vcf context create`, and `:503` says so outright). Measured: `make vks-login` returned **rc=0**, logged *"VKS auth method: kubeconfig ... connected. Current context: cicd-gc3-admin@cicd-gc3"*, and left `supervisor.kubeconfig`'s mtime **unchanged at 03:40:50**. `make vks-login VKS_AUTH_METHOD=vcf` refreshed it (mtime 20:02:32) and `make argocd-password` then returned in **0s instead of 900s**. ⚠️ **The 900s wait makes it far worse than a bad message**: the script's own text blames the ArgoCD *instance* for *reconciling*, so an operator waits a quarter-hour on a diagnosis that is wrong in both its subject and its remedy — the `classify_kube_failure` verdict UNAUTHORIZED was available and is not consulted on that path. ⚠️ **A namespace theory I formed was REFUTED by measurement, and the row must not repeat it:** I inferred from the handoff that `argocd_namespace()`'s `cicd` was wrong because the ArgoCD Service namespace is `svc-argocd-service-t90xm`. Measured on the Supervisor: the `argocd-initial-admin-secret` object EXISTS in `ns/cicd`, and is `NotFound` in `ns/svc-argocd-service-t90xm`. `cicd` is CORRECT — the vSphere Namespace holds the instance, the `svc-` namespace holds the operator. The stale credential was the only fault. **Done when:** (a) the remedy names the arm that actually refreshes the Supervisor file, or `vks-login` refreshes it in every method that can; and (b) `argocd-password` consults `classify_kube_failure` BEFORE entering its wait, so an UNAUTHORIZED Supervisor fails in seconds naming the credential rather than waiting 900s blaming reconciliation. ⚠️ Needs its own idea round: (b) touches a wait loop whose timeout exists for a real reason (a genuinely reconciling instance), so a naive fail-fast could false-block a legitimate first install. |
 
-## B538 — 🔴 the seed's push FIRES the webhook despite the delete-before-push guard, and `test-seed-hook-ordering.sh` cannot see it
+## B538 — 🔴 the MECHANISM is now SETTLED from source; my hoist fix is REFUTED; the fix is to move the CREATE into `60-configure-tekton.sh`
+
+An idea round read **Gitea v1.27.2 source** and settled what this row called a hypothesis. It also
+**refuted the fix this row proposed** (hoist all hook creation after the seed loop).
+
+**The hypothesis was substantively right and named the WRONG QUEUE — and that is not pedantry.**
+The **delivery** queue is not where resolution happens: `PrepareWebhooks` queries the repo's active
+hooks and builds a `HookTask` immediately; the queue then holds only a `taskID`, and the drain
+handler never re-queries. The deferral is one layer earlier — `PushUpdates` pushes to an async
+**`pushQueue`**, and the "which hooks does this repo have" query runs inside *that* handler, at an
+unbounded time after `git push` returns.
+
+That correction kills three fixes **by construction**, including two this row floated:
+
+| candidate | why it is dead |
+|---|---|
+| wait for the DELIVERY queue to drain | wrong queue — the task is already bound by then |
+| `active:false` then PATCH `true` | `IsActive` is a predicate of the **same query at the same instant** |
+| `branch_filter` matching nothing, flip after | `checkBranchFilter` runs inside the same `PrepareWebhook` |
+
+So this row's own guess — *"deactivate probably does not fix this"* — is **CONFIRMED, with the real
+reason** (same query, same instant; not "the same ~1s schedule").
+
+⚠️ **And it corrects this row twice more.** (a) The firing set was **{1, 2, 5}** — it matches neither
+registry position nor source size (java 168 KB fired, python 40 KB did not). Only the *consequence*
+is position-dependent; calling the FIRING deterministic is unsupported. (b) The row lists **two** EL
+delivery timestamps for a **three**-app burst — either the excerpt is partial or the third arrived by
+another path. One grep on the saved logs closes it, and it should be closed before this is called
+settled.
+
+**WHY THE HOIST IS REFUTED:** per-app loop ≈ 2–3 s; observed handler latency spans **<1 s to ~4 s**.
+Under the hoist the LAST app's window is ~2–2.5 s — **a coin flip**. Worse, it concentrates the
+residual at a LATE registry position, which the 2026-08-27 gradient says is exactly the shape that
+fails `verify`. It can be worse at the position that matters.
+
+**THE RE-MOTIVATION THIS ROW MISSED, and it is the strongest argument here.** `Makefile:825` —
+`platform: install-gitea seed-gitea install-tekton configure-tekton`. **`seed-gitea` runs BEFORE
+Tekton is configured.** `60-configure-tekton.sh` is what applies the HMAC secret, the Harbor
+dockerconfig + CA, the tasks, the pipeline and the EventListener. So on a WARM cluster a seed-fired
+run executes against the **PREVIOUS run's Tekton definitions**, and `build-apps`' skip predicate
+(tag exists + Harbor holds it) **cannot tell which pipeline produced it**. An operator who edits
+anything under `k8s/tekton/` can ship an artifact built by the stale definition, with `[app] SKIP` as
+the only trace. Keep this 🔴 — but on THIS, not on the SKIP. "Benign this time" ≠ "benign".
+
+**THE PRESCRIBED FIX (F4), not yet built:** keep the DELETE in `50-seed` (it is load-bearing — it
+puts the refuse-rather-than-guess gate ahead of two destructive force-pushes) and move the **POST**
+into `60-configure-tekton.sh`, after the EventListener exists. The window becomes minutes against a
+2–4 s latency; it fixes the stale-definition class outright; and it co-locates both halves of the
+HMAC pair, which are today split across two scripts with two force-pushes in between. **Cost:**
+`60` needs `WEBHOOK_TOKEN`, `GITEA_ORG`, the API token and the port-forward that only `50` sets up —
+real plumbing, and it deserves its own idea round before implementation.
+
+**RUN THIS FIRST — a ~1-minute probe that touches NO app (F6).** The 12-minute controlled run
+measures the SYMPTOM; what is needed is the WINDOW. Create a scratch repo, push one commit with **no
+hook**, `sleep S`, then POST a hook pointing at a **dead** address (`http://127.0.0.1:9/` — no Tekton
+involvement is possible), and watch the gitea log for `Unable to deliver webhook task[`. Sweep
+`S` over 0,1,2,4,8; the smallest `S` at which nothing fires IS the window. Zero PipelineRuns, zero
+deploy-repo resets, no `build-apps`. It self-checks: if nothing fires even at `S=0`, the source-read
+is wrong somewhere. Add a read-only `GET .../hooks` per **deploy** repo on the same trip — the DELETE
+only targets the app repo, so a stray deploy-repo hook would never be reaped.
+
+**DO NOT replace the ordering test with the single-arm observable** — `test-seed-hook-ordering.sh`'s
+own header already refutes it: *"zero PipelineRuns across a seed" is ALSO the exact signature of the
+worst regression this change can cause* (hook deleted and never recreated). The two-armed version is
+sound but LIVE-only, so its home is `make e2e-kind` (which reuses a warm cluster — the condition that
+reproduces this), not CI. **Keep the ordering test regardless**; it guards the DELETE-before-push
+invariant, which is independent.
+
+**Cheap and independent of which fix wins:** there is **no trap on the hook path** (`:39` covers only
+the port-forward + tmpdir), so a mid-loop death leaves apps hookless and silent. Add an `EXIT` trap
+that NAMES the apps left without a hook, and collect POST failures so one does not abandon the rest.
+Note the repair is not cheap: re-running `seed-gitea` force-pushes every `<app>-deploy` back to
+`NEVER-BUILT-RUN-THE-PIPELINE`, so it is a ~12-minute repair with a silent-degradation window.
+
+**The only construction-proof alternative:** a CEL filter on the seed's fixed commit message
+(`seed: initial <repo>`, `50-seed-gitea-repos.sh:276`). It does not race at all. Two costs: a CEL
+filter that matches nothing is a webhook that silently no-ops (needs a positive control), and it is a
+string agreement across two files — but **that half IS offline-gateable** with a cheap `check-*`.
+Credible second line behind F4.
+
+⚠️ Also correct the DELETE+POST rationale comment in `50-seed`: it says `editHook` reads *"only url,
+content_type and the Slack keys"*, but `editHook` **does** set `IsActive`. A load-bearing source-read
+that is incomplete.
+
+## B538 (original) — 🔴 the seed's push FIRES the webhook despite the delete-before-push guard, and `test-seed-hook-ordering.sh` cannot see it
 
 `50-seed-gitea-repos.sh:289-386` deliberately orders each app as **DELETE the webhook -> push
 `<app>-app` -> push `<app>-deploy` -> POST-create the webhook**, so the seed's own push happens with
