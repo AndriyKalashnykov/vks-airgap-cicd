@@ -60,7 +60,13 @@ while read -r ref; do
   else
     echo "ok    ${repo}=${mtag}"
   fi
-done < <( { grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"}<>]+:[^[:space:]"}<>]+' k8s/ 2>/dev/null || true
+# ⚠️ `-I` (skip binary files) is not cosmetic housekeeping — without it a gitignored
+# scripts/lib/__pycache__/*.pyc makes grep print `binary file matches` to STDERR, MEASURED 12 times
+# in one run, straight into the CI log. It cannot change the verdict (measured: byte-identical
+# output with and without the .pyc, md5 fca7bef8), but it buries real diagnostics in noise and it
+# sent one reader to file a row naming five innocent gates. `-I` suppresses the message AND the
+# match, which is what we want: a compiled artifact is never a source of image refs.
+done < <( { grep -rIhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"}<>]+:[^[:space:]"}<>]+' k8s/ 2>/dev/null || true
             # Gitea's ref lives in the SCRIPT's default, not the manifest: the manifest carries
             # ${GITEA_IMAGE} so a Harbor-less test (e2e-cross-cluster) can override it. A gate that
             # only greps k8s/ would have gone BLIND to the gitea tag the moment that changed — the
@@ -87,7 +93,7 @@ done < <( { grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]
             # NEVER RUNS — so the gitea mitigation directly above was defeated by exactly the
             # scenario it was written for. Measured 2026-07-19: k8s/ emptied -> 0 iterations, while
             # running the gitea grep alone still yields its ref.
-            grep -rhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"}<>]+:[^[:space:]"}<>]+' scripts/ 2>/dev/null || true
+            grep -rIhoE '\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/[^:[:space:]"}<>]+:[^[:space:]"}<>]+' scripts/ 2>/dev/null || true
           } | sed -E 's|\$\{HARBOR_URL\}/\$\{HARBOR_INFRA_PROJECT\}/||' | sort -u)
 
 # `die` is NOT available here — lib/os.sh is sourced further down (see the source line below), so a
@@ -391,8 +397,16 @@ while read -r inv; do
       echo "DRIFT bare ref ${brepo}:${htag} does not match images/images.txt (${binv_tag})"
       drift=1
     fi
-  done < <(find scripts k8s -type f ! -name 'test-*.sh' -print0 2>/dev/null \
-             | xargs -0 grep -hvE '^[[:space:]]*#' \
+  # ⚠️ `! -path '*/__pycache__/*'` and `grep -I` are BOTH here, and neither is housekeeping.
+  # `find -type f` happily hands over a gitignored `scripts/lib/__pycache__/*.pyc`, and this
+  # pipeline runs ONCE PER IMAGE — MEASURED, that is 12 `binary file matches` lines on stderr in a
+  # single run, straight into the CI log. It cannot change the verdict (measured: byte-identical
+  # output with and without the .pyc, md5 fca7bef8) but it buries real diagnostics, and it cost one
+  # session two wrong attributions before a `bash -x` trace found this line. The `find` prune is the
+  # precise fix (a compiled artifact is never a source of image refs, and xargs stops carrying it);
+  # `-I` is the belt-and-braces for any other binary that lands under scripts/ or k8s/.
+  done < <(find scripts k8s -type f ! -name 'test-*.sh' ! -path '*/__pycache__/*' -print0 2>/dev/null \
+             | xargs -0 grep -IhvE '^[[:space:]]*#' \
              | grep -oE "(^|[^A-Za-z0-9./_-])${brepo}:(\\\$\{[A-Za-z_][A-Za-z0-9_]*\}|[-A-Za-z0-9._]+)" \
              | sed -E 's|^[^A-Za-z0-9$]||' || true)
 done < <(grep -vE '^[[:space:]]*#|^[[:space:]]*$' images/images.txt)

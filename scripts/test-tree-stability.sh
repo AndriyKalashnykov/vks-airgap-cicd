@@ -72,8 +72,13 @@ done
 # neutering `.git`, `bundle`, `bin`, `.env.state` or `*.tsbuildinfo` left the suite at 18/18 GREEN.
 # `bin` is the one that mattered -- it is the broadest name the prune list carries and `bin/` is a
 # conventional SOURCE directory, so deleting it cost nothing red.
+# `scripts/lib/__pycache__` joined this list 2026-09-07 (B541). It is COMPILED OUTPUT, exactly like
+# target/obj/node_modules beside it — and it was the ONLY one of the six languages' build dirs the
+# prune list had never carried. MEASURED: `importlib`-ing a hook from another shell mid-run wrote a
+# `.pyc` and failed a fully green 135-test run. That is a false RED, and the two cases after this
+# loop prove the prune did not overshoot into `.py` SOURCE.
 for d in .claude/state .claude/worktrees/agent-x src/node_modules apps/x/target apps/y/obj secrets \
-         .git bundle src/bin; do
+         .git bundle src/bin scripts/lib/__pycache__; do
   run record
   mkdir -p "$T/$d"; : > "$T/$d/probe"
   run verify
@@ -84,6 +89,18 @@ for d in .claude/state .claude/worktrees/agent-x src/node_modules apps/x/target 
   # from ever becoming `rm -rf /…` (SC2115).
   rm -rf "${T:?}/${d}"
 done
+
+# ⚠️ THE PRUNE MUST NOT OVERSHOOT INTO SOURCE. `__pycache__` is a directory name, so a `.py` beside
+# it stays in scope — if this ever goes green the prune has been widened to `*.py` or to a parent.
+run record
+mkdir -p "$T/scripts/lib"; : > "$T/scripts/lib/probe_src.py"
+run verify
+if [ "$RC" -ne 0 ] && grep -q 'probe_src.py' "$OUT"; then
+  ok "a .py SOURCE write beside __pycache__ STILL fires (the prune did not overshoot)"
+else
+  bad "the __pycache__ prune blinded .py source: a real edit went unreported"
+fi
+rm -f "${T:?}/scripts/lib/probe_src.py"
 
 for f in .env.state x.tsbuildinfo; do
   run record
