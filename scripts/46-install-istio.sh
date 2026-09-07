@@ -233,6 +233,19 @@ ISTIOD_SET=(
   --set pilot.autoscaleEnabled=false
   --set pilot.resources.requests.memory="${ISTIOD_MEMORY_REQUEST:-768Mi}"
 )
+# ── Is there anything in this Harbor to pull? (B527) ─────────────────────────────────────────────
+# MEASURED 2026-09-05: the lab was rebuilt, Harbor came back EMPTY, the `cicd` project did not exist,
+# and THIS install died `ImagePullBackOff` on `.../istio/pilot/manifests/1.30.3` with `401
+# Unauthorized`. That 401 is the Docker Registry v2 AUTH CHALLENGE — returned for every repository,
+# present or absent — so it read as a credential problem and was diagnosed as one TWICE. The fix was
+# `make mirror`. One anonymous, credential-OPTIONAL call (15-30 ms measured) says so up front.
+# ⚠️ It lives HERE and not in 44-install-ingress.sh: that dispatcher also serves
+# INGRESS_CONTROLLER=istio-existing, which installs nothing and pulls nothing, so a check there
+# would be a false block on the attach path.
+# shellcheck source=scripts/lib/harbor-probe.sh
+. "${SCRIPT_DIR}/lib/harbor-probe.sh"
+harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:?}" "istio"
+
 # Refuse a pod the scheduler cannot place, BEFORE helm burns its --wait discovering it.
 capacity_assert_fits \
   "$(capacity_chart_request "$CHART_ISTIOD" "$ISTIO_VERSION" "${ISTIOD_SET[@]}")" istiod \

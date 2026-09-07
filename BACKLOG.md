@@ -4874,7 +4874,57 @@ silent; (c) the hole DISCLOSED in the hook's own docstring so nobody believes th
 Whatever ships must not block the adversary's own evidence tools (`git log/diff/status`, `grep`,
 running the gates) — `hooks.md` records that such a gate gets ripped out.
 
-## B527 — 🔴 ROUND VERDICT: the row's MECHANISM and SCOPE are both REFUTED; the fix is ONE anonymous 21ms call
+## B527 — ✅ SHIPPED — one credential-OPTIONAL call, wired into SIX installers (not seven)
+
+**Shipped** `scripts/lib/harbor-probe.sh` (`harbor_project_state` / `harbor_assert_mirrored`), wired
+into `40-install-gitea`, `41-install-tekton`, `45-install-traefik`, `46-install-istio`,
+`49-install-headlamp` and `60-configure-tekton`, with `scripts/test-harbor-probe.sh` (12 cases).
+
+⚠️ **THE ROUND SAID SEVEN INSTALLERS; IT IS SIX.** `43-install-istio-package.sh` is a FALSE member —
+measured: **zero** Harbor refs, **zero** project vars, and its own header says the images come from
+"wherever the Package CR's imgpkgBundle lives — which this repo does not control". Adding the probe
+there would assert a project that path never reads. `49-install-headlamp` looked like a non-member
+for the opposite reason (no explicit project var) and IS one: it resolves through
+`mirror_target_ref`, which uses `HARBOR_INFRA_PROJECT:?`.
+
+**FOUR verdicts, not two, and the third is the point.** A **private** project answers an anonymous
+query with `[]` — byte-identical to a MISSING one. Collapsing that would tell a tenant to run
+`make mirror` against a Harbor that is fine, which is the same wrong-cause class the probe exists to
+remove. So `[]` is decisive **only** when a credential was supplied; otherwise it is `inconclusive`,
+which never blocks (RULE ZERO-B). Verified against the **live lab**:
+
+    cicd (37 repos)    -> present        library (0 repos) -> empty      <- the incident's 2nd half
+    nosuchproject      -> absent         192.0.2.1         -> inconclusive
+
+**Credential-OPTIONAL by construction.** It does NOT source `lib/harbor.sh`, whose first lines are
+`: "${HARBOR_USERNAME:?}"` / `: "${HARBOR_PASSWORD:?}"` — hard dies. Five of the six installers
+contain **zero** references to those vars and pull anonymously from a public project; sourcing that
+library would have added a mandatory credential and blocked the very tenant the check is for.
+
+**The credential never reaches argv** — a `umask 077` `-K` config file, the discipline
+`lib/harbor.sh` and `lib/vcenter.sh` already use. **RED-proven**: replacing `-K` with
+`-u user:pass` turns exactly that assertion RED.
+
+**Shaped after `capacity_assert_fits`**: `HARBOR_IMAGE_PREFLIGHT=0` escape hatch, and every unknown
+is a LOUD SKIP that says *"not a pass"* — never a silent one.
+
+**Placement:** in `46-install-istio.sh` beside `capacity_assert_fits`, deliberately **NOT** in
+`44-install-ingress.sh` — that dispatcher also serves `INGRESS_CONTROLLER=istio-existing`, which
+installs and pulls nothing, so a check there would be a false block on the attach path.
+
+**STILL OPEN** (the round's steps 2 and 3, both deliberately not built here):
+
+- a **per-installer image** assertion (anonymous token flow; `200` / `404 NOT_FOUND` /
+  `401 naming our project`), called with the SAME expressions the install uses — never a
+  chart-render grep, because the istio gateway chart renders `image: auto` and istiod's render
+  yields **1** usable ref among 9.
+- the helm `--wait` **failure-message** improvement, as the residual net for "the project exists but
+  this one image is missing". It fires only after `READY_TIMEOUT_SECONDS` and needs pod-event
+  parsing that nothing in `scripts/` currently does.
+- ⚠️ `project <X> not found` is Harbor **prose**, not a code token; the shipped probe deliberately
+  keys on the structured `projects?name=` JSON instead, which does not depend on message text.
+
+## B527 (round verdict) — 🔴: the row's MECHANISM and SCOPE are both REFUTED; the fix is ONE anonymous 21ms call
 
 An idea round measured this against the **live lab Harbor** and refuted both halves of the row's
 prescription. **Do not build what this row asks for.**
