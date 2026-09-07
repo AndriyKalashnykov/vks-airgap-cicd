@@ -1231,6 +1231,48 @@ else
   ok "STATE 14: the remedy sentence covers BOTH arms of harbor-admin-password"
 fi
 
+# ── B548: an ABSENT Supervisor kubeconfig must NOT prescribe `make vks-login` ────────────────────
+# THE PARTIAL-FIX CASE. f0b7d07 fixed the Harbor cell's identical branch (creds.sh:1116-1121) and
+# LEFT THIS SIBLING, so the shipped file carried the written refutation of its own other half. This
+# pins both halves so a future fix cannot be 1-of-2 again.
+#
+# `absent` is undecidable — tenant-normal (RULE ZERO-B default) vs scenario-1-not-yet-logged-in — and
+# the remedy is what encodes the guess. `make vks-login` spends one of THREE vCenter SSO attempts
+# before PERMANENT lockout, so guessing here has an irreversible tail.
+# ⚠️ VKS_LAB_STATE_DIR MUST BE NEUTRALISED, and finding that out was itself the B547 defect firing
+# inside this test. Without it `supervisor_kubeconfig` falls through its candidate list to
+# ~/.local/state/nested-lab/kubeconfig — ANOTHER REPO's lab state dir, which exists on a maintainer
+# box — so the fixture silently took the "cluster publishes no node-SSH secret" branch and every
+# assertion below was vacuous while printing ok. An end user has no such directory; a maintainer does.
+_b548="$(render_with_cluster 'VKS_NAMESPACE=cicd
+HARBOR_URL=10.0.0.1
+VKS_LAB_STATE_DIR=/nonexistent-for-this-test
+' 1)"
+if printf '%s' "$_b548" | grep -q 'Guest-node SSH password NOT read'; then
+  ok "B548: the tenant fixture reaches the SSH-absent branch (the case is not vacuous)"
+else
+  bad "B548: fixture never reached the SSH branch — every assertion below would be vacuous."
+fi
+if printf '%s' "$_b548" | grep -qE 'no Supervisor kubeconfig.*run: make vks-login'; then
+  bad "B548: an ABSENT Supervisor kubeconfig prescribes 'make vks-login'. It is undecidable whether
+      the reader is a tenant (normal) or an operator who has not logged in, and a wrong guess spends
+      one of three vCenter SSO attempts before PERMANENT lockout."
+else
+  ok "B548: ...and it does NOT prescribe make vks-login for an absent kubeconfig"
+fi
+if printf '%s' "$_b548" | grep -q 'ask your platform team'; then
+  ok "B548: ...it names the only remedy a tenant can actually perform"
+else
+  bad "B548: it went silent instead. 'I could not ask' must still say WHERE the value lives."
+fi
+# THE CONTROL, and it is what stops this becoming a blanket ban: the UNAUTHORIZED arm names
+# `make vks-login` CORRECTLY, because a kubeconfig that EXISTS and was REJECTED is a DECIDABLE state.
+if grep -q 'the Supervisor REJECTED this kubeconfig. Re-run: make vks-login' "${_CREDS_REPO}/scripts/creds.sh"; then
+  ok "B548: the DECIDABLE arm (UNAUTHORIZED) still prescribes it — the rule is decidability, not the string"
+else
+  bad "B548: the UNAUTHORIZED arm lost its remedy. A rejected kubeconfig IS decidable and re-auth is right."
+fi
+
 if [ "$fail" != 0 ]; then
   printf '\n  %s assertion(s) ran. The fail-fast block stops later STATES once one fails, so cases\n' "$_ran" >&2
   printf '  after the first failure did NOT run -- fix the failure above and re-run for full coverage.\n' >&2

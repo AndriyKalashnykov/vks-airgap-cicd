@@ -6455,24 +6455,38 @@ B548), and the other four non-test call sites are audited — **`08-install-argo
 `24-vks-k8s-version.sh:27`, `vks-shape.sh:27`, `argocd-password.sh:120`, plus
 `jumpbox-launch.sh:105`** — none of which I have checked.
 
-## B548 — 🟡 `creds.sh` contradicts itself on whether "no Supervisor kubeconfig" may name a remedy
+## B548 — ✅ FIXED: an ABSENT Supervisor kubeconfig no longer prescribes `make vks-login`
 
-`creds.sh:1116-1121` states the adjudicated rule, verbatim: *"A TENANT HAS NO SUPERVISOR AND THAT IS
-NORMAL (RULE ZERO-B: it is the DEFAULT posture), so this is not an error and **must not name `make
-vks-login`** — the round refuted that: `absent` cannot be told apart from 'scenario-1 operator who
-has not logged in yet'."*
+`creds.sh:1116-1121` states the adjudicated rule; `:1741` did the opposite, in the same file. Ranked
+**#1 of 13** by an independent round, on three grounds:
 
-`creds.sh:1741` does the opposite, in the same file:
-`_ssh_state="no Supervisor kubeconfig — run: make vks-login"`.
+- **Irreversible tail.** `make vks-login` spends one of THREE vCenter SSO attempts before PERMANENT
+  lockout. Guessing here can cost the lab.
+- **It fired for the DEFAULT persona.** MEASURED on a configured Scenario-2 tenant (`VKS_NAMESPACE`
+  set, no Supervisor kubeconfig): `Guest-node SSH password NOT read: no Supervisor kubeconfig — run:
+  make vks-login`, on **every** `make creds`.
+- **It was a 1-of-2 PARTIAL FIX.** `f0b7d07` fixed the Harbor sibling and left this one, so the
+  shipped file carried the written refutation of its own other half.
 
-The principle is that **undecidability is a property of the EVIDENCE, not of the consumer** — a gate
-and a printer are equally bound. Either may say *"skipped: no Supervisor kubeconfig"*; neither may
-attach a remedy, because the remedy is what encodes the guess. And the guess costs one of three
-vCenter SSO attempts before permanent lockout when it is wrong.
+**The rule is DECIDABILITY, not the string.** `:1076` still names `make vks-login` and that is
+CORRECT — the UNAUTHORIZED arm means a kubeconfig that EXISTS and was REJECTED, which is decidable
+and where re-authenticating is the right answer. `absent` cannot be told apart from
+"scenario-1 operator who has not logged in yet", and the remedy is what encodes the guess. A report
+may say "I could not ask"; it may not attach a remedy to an undecidable state.
 
-**Done when:** `:1741` stops naming a remedy it cannot justify. Note B547 first — per that row the
-branch is close to unreachable today, so fixing the wording without fixing the reachability would be
-correcting a sentence nobody sees.
+The `_first_unmet` clause is kept but gated on `VKS_AUTH_METHOD` being set — i.e. only for an
+operator who has already declared they intend to run it — because on the default it would smuggle
+the same prescription back in through a subordinate clause.
+
+Pinned by four assertions in `test-creds-show.sh`, including a **control** that the decidable arm
+keeps its remedy (so the fix cannot degrade into a blanket ban) and a **vacuity guard** that the
+fixture actually reaches the branch. RED-proven: restoring the old string -> rc=1, 2 failures.
+
+⚠️ **Writing that test surfaced B547 firing inside it.** The first fixture never reached the branch
+at all: `supervisor_kubeconfig` fell through to `~/.local/state/nested-lab/kubeconfig` — ANOTHER
+REPO's lab state dir, which exists on a maintainer box — so every assertion passed vacuously while
+printing ok. The fixture now sets `VKS_LAB_STATE_DIR=/nonexistent`. An end user has no such
+directory; a maintainer does, which is exactly B547's measured split.
 
 ## B549 — 🔴 SSO HAZARD: a klog THREAD-ID of `401` makes an UNREACHABLE cluster classify UNAUTHORIZED
 
