@@ -28,6 +28,32 @@
 > (`kubectl -n <ns> get deploy argocd-server -o jsonpath='{...containers[0].image}'`) for the server.
 > `make argocd-preflight` prints **both**, plus `kubectl explain argocd.spec.version`.
 
+## The admin password — where it lives, and why a stale one is served forever
+
+The question this answers: *"if someone changes the ArgoCD admin password, can `make creds` still
+show me the current one?"* **No — and worse, it will keep showing the OLD one with full confidence.**
+
+| Fact | Value | Confidence |
+|---|---|---|
+| Initial password | `argocd-initial-admin-secret` -> `.data.password`, cleartext base64 | lab-verified [src: cmd="kubectl -n cicd get secret argocd-initial-admin-secret -o jsonpath={.data.password}" out="non-empty base64" date=2026-09-07] |
+| Who creates it | `argocd-server` at runtime, NOT the VKS operator — it carries **zero** annotations, labels and ownerReferences, where the operator-managed `argocd-secret` carries `kapp.k14s.io/*` | lab-verified [src: cmd="kubectl -n cicd get secret argocd-initial-admin-secret -o jsonpath={.metadata.annotations}{.metadata.ownerReferences}" out="empty" date=2026-09-07] |
+| **Is it ever deleted?** | **NO.** Not by ArgoCD, not by the operator, not by kapp. Upstream only *advises a human* to delete it. Measured still present 20 h after install | lab-verified [src: cmd="kubectl -n cicd get secret argocd-initial-admin-secret -o jsonpath={.metadata.creationTimestamp}" out="2026-09-06T07:45:25Z, still present 2026-09-07" date=2026-09-07] |
+| Where a CHANGED password goes | the **same** Secret and key: `argocd-secret` -> `admin.password`, replaced by a **bcrypt hash** (`$2a$`, 60 bytes), plus `admin.passwordMtime` | lab-verified [src: cmd="kubectl -n cicd get secret argocd-secret -o jsonpath={.data}" out="keys: admin.password admin.passwordMtime server.secretkey tls.crt tls.key" date=2026-09-07] |
+| Is there another secret? | **No.** `ns/cicd` holds exactly 4 `argocd-*` secrets; the operator namespace holds 3 with no password field; the VMware CRD `argocds.argocd-service.vsphere.vmware.com` has **no** password field (`localAccounts` is a list of NAMES); no SSO/dex; nothing on the guest cluster | lab-verified [src: cmd="kubectl explain argocds.spec --recursive then grep -ci password" out="0" date=2026-09-07] |
+| Recoverable after a change? | **No.** Only a bcrypt hash exists — not recoverable by us, by a VKS admin, or by Broadcom. It can only be RESET | lab-verified [src: cmd="kubectl -n cicd get secret argocd-secret -o jsonpath={.data.admin.password} then base64 -d, first 4 chars" out="$2a$" date=2026-09-07] |
+| Telling CURRENT from STALE | `argocd-secret`'s `admin.passwordMtime` vs `argocd-initial-admin-secret`'s `creationTimestamp`. **Equal ⇒ never changed**; mtime newer ⇒ changed | lab-verified [src: cmd="kubectl -n cicd get secret argocd-secret argocd-initial-admin-secret" out="both 2026-09-06T07:45:25Z on an unchanged instance" date=2026-09-07] |
+| What we do with it | `make creds` reports CURRENT / STALE / UNKNOWN instead of one unconditional hedge | code [src: code:scripts/argocd-password.sh:1] |
+
+⚠️ **The ordering premise is `inferred`, not measured.** That `mtime > creationTimestamp` implies a
+change follows from upstream's write order (the server saves `admin.password` + mtime, *then*
+creates the initial secret). Only the EQUAL case is measured. A rotation inside the same second as
+bootstrap would read as CURRENT — harmless, and named rather than hidden.
+
+**The definitive test is a login, not a timestamp:** `make argocd-auth-check`. It posts to the
+session API with the body on **stdin**, never argv. A local bcrypt verification would settle
+staleness definitively too, but every CLI that does it takes the password as a command-line
+argument — which `security.md` forbids, because argv is world-readable via `ps`.
+
 ## Registering the guest cluster (the cross-cluster case)
 
 ### Is it needed?

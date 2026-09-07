@@ -64,6 +64,22 @@ trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" "${_ssh_verr:-}" 2>/dev/null || tru
 # fact in plain English. Every other caller of load_env still gets the warning.
 load_env 2> >(grep -v "does not record which cluster it belongs to" >&2)
 
+# NOW RE-ARM THE SNAPSHOT ONE-WAY: probe-OFF wins, probe-ON can never be granted by a file.
+#
+# The snapshot above is taken BEFORE load_env on purpose — a `.env` line must never be able to
+# turn probing back ON, because two offline fixtures carry REAL lab IPs and a unit test would then
+# dial real infrastructure. That guard is right and stays.
+#
+# But it was SYMMETRIC, and only one direction is a safety property. MEASURED 2026-09-07 with
+# `CREDS_NO_PROBE=1` in `.env` — the placement `.env.example` itself documents — the report made
+# FIVE live calls, including `kubectl -n headlamp create token --duration=24h`, which MINTS A
+# CREDENTIAL. The operator's own documented lever did nothing, and (before this commit) the banner
+# read the live variable and cheerfully announced "nothing was probed" over all five.
+#
+# So: OR the two. A `.env` may only ever make the report QUIETER, never louder.
+[ "${CREDS_NO_PROBE:-0}" = 1 ] && _no_probe_snapshot=1
+export CREDS_NO_PROBE="$_no_probe_snapshot"   # child scripts (argocd-password.sh, …) inherit the DECIDED value
+
 # ── the reveal decision, made once ───────────────────────────────────────────────────────────────
 # A terminal is the operator reading their own screen — the intended function, and unchanged.
 # A NON-terminal is a redirect, a pipe, a CI capture, an agent transcript, or the walk harness, which
@@ -199,7 +215,7 @@ _argo_tls_flag=0   # set when the URL is https AT A BARE IP; the footnote below 
 # stdout is the report, and test-creds-show captures it -- progress must not become data.
 # The numbers are the real bounds, read from the same variables the probes use, so this line cannot
 # drift from the behaviour it describes.
-if [ "${CREDS_NO_PROBE:-0}" = 1 ]; then
+if [ "$_no_probe_snapshot" = 1 ]; then
   printf '  (reporting configuration only — nothing was probed)\n' >&2
 fi
 _probe_t0=$(date +%s 2>/dev/null || echo 0)
@@ -260,8 +276,12 @@ else
       # bounds the API REQUEST, not the DNS resolution and TCP connect that precede it. It was the
       # single largest cost in `make creds` (21.7 s total, of which the reachability probes are
       # 0.02 s). An access command must never inherit an unbounded wait from a dead cluster.
-      _argo_ip="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" env KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s </dev/null -n "$_argo_ns" \
-          get svc argocd-server -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+      # Guarded like every other probe: MEASURED 2026-09-07 this still fired
+      # under CREDS_NO_PROBE while the banner said nothing had been probed.
+      if [ "$_no_probe_snapshot" != 1 ]; then
+        _argo_ip="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" env KUBECONFIG="${ARGOCD_KUBECONFIG:-$KUBECONFIG}" kubectl --request-timeout=3s </dev/null -n "$_argo_ns" \
+        get svc argocd-server -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+      fi
     fi
   fi
   if [ -n "$_argo_ip" ]; then
@@ -400,8 +420,18 @@ if [ "$_no_probe_snapshot" = "1" ]; then
 else
   argo_pw="$(timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" "${SCRIPT_DIR}/argocd-password.sh" --wait 0 --raw 2>"$_argo_err")" || _argo_rc=$?
 fi
-_argo_initial=0
-grep -q 'INITIAL admin password' "$_argo_err" 2>/dev/null && _argo_initial=1
+# THREE states now, not one hedge. argocd-password.sh compares argocd-secret's admin.passwordMtime
+# against argocd-initial-admin-secret's creationTimestamp — free, because it already talks to that
+# namespace. UNKNOWN keeps the old honest hedge rather than guessing CURRENT.
+_argo_initial=0; _argo_state=UNKNOWN; _argo_changed_at=""
+if grep -q 'ArgoCD admin password: CURRENT' "$_argo_err" 2>/dev/null; then
+  _argo_initial=1; _argo_state=CURRENT
+elif grep -q 'ArgoCD admin password: STALE' "$_argo_err" 2>/dev/null; then
+  _argo_initial=1; _argo_state=STALE
+  _argo_changed_at="$(grep -oE 'CHANGED at [^,]+' "$_argo_err" 2>/dev/null | head -1 | sed 's/CHANGED at //' || true)"
+elif grep -q 'INITIAL admin password' "$_argo_err" 2>/dev/null; then
+  _argo_initial=1
+fi
 rm -f "$_argo_err"
 if [ "${_argo_noprobe:-0}" = 1 ]; then
   argo_pw="<not read: CREDS_NO_PROBE=1 (reading it is a live cluster call)>"
@@ -522,7 +552,8 @@ _cluster="not reachable (or KUBECONFIG unset)"
 #     stdin=/dev/null -> rc=1 in 0s | stdin=open pipe -> HUNG | open pipe + </dev/null -> rc=1 in 0s
 # I twice mis-diagnosed this as a network/address problem and "fixed" it twice without fixing it;
 # every standalone probe was fast because an interactive shell's stdin is a terminal.
-if [ -n "${KUBECONFIG:-}" ] && have kubectl \
+  # `_no_probe_snapshot` FIRST: this is a live cluster call, and the banner claims none was made.
+if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl \
    && timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s version -o json >/dev/null 2>&1 </dev/null; then
   _cluster="reachable — context '$(kubectl config current-context </dev/null 2>/dev/null || echo '?')'"
 fi
@@ -691,7 +722,7 @@ _probe_tcp() {                    # <host> <port> -> 0 if something answers, non
 # `getent` on a non-resolving name is FREE (measured 0.002 s) and is already bounded by timeout
 # above, so this costs nothing on the happy path.
 _reach_ingress() {
-  [ "${CREDS_NO_PROBE:-0}" = 1 ] && { printf 'not probed'; return; }
+  [ "${_no_probe_snapshot:-${CREDS_NO_PROBE:-0}}" = 1 ] && { printf 'not probed'; return; }
   [ -n "${_ing:-}" ] || { printf 'no ingress';  return; }
   if [ "${_ing_live:-0}" != 1 ]; then printf 'silent'; return; fi
   local _h="${1:-}"
@@ -780,12 +811,12 @@ _reach_ingress() {
   esac
 }
 _reach_harbor() {
-  [ "${CREDS_NO_PROBE:-0}" = 1 ] && { printf 'not probed'; return; }
+  [ "${_no_probe_snapshot:-${CREDS_NO_PROBE:-0}}" = 1 ] && { printf 'not probed'; return; }
   [ -n "${HARBOR_URL:-}" ] || { printf 'not set'; return; }
   HARBOR_PROBE_TIMEOUT_SECONDS="${CREDS_PROBE_TIMEOUT_SECONDS:-2}" harbor_reachable_state 2>/dev/null || printf 'unknown'
 }
 _reach_argocd() {
-  [ "${CREDS_NO_PROBE:-0}" = 1 ] && { printf 'not probed'; return; }
+  [ "${_no_probe_snapshot:-${CREDS_NO_PROBE:-0}}" = 1 ] && { printf 'not probed'; return; }
   # ⚠️ PROBE THE ADDRESS THE ROW ACTUALLY SHOWS, not just ARGOCD_SERVER. MEASURED 2026-09-05: with
   # ARGOCD_SERVER unset but the address DISCOVERED from the cluster, the row printed
   # "https://192.168.101.131 (discovered from the cluster)" while this column said "not set" --
@@ -946,11 +977,17 @@ add_row "Harbor (registry)" "$harbor_url" "$harbor_user" "$harbor_pw" "$(_reach_
 if harbor_username_is_robot "${HARBOR_USERNAME:-}"; then
   _h_admin_pw="<not read — run: make harbor-admin-password>"
   _h_sup="$(supervisor_kubeconfig 2>/dev/null || true)"
-  if [ -n "$_h_sup" ] && [ "${CREDS_NO_PROBE:-0}" != 1 ]; then
+  if [ -n "$_h_sup" ] && [ "$_no_probe_snapshot" != 1 ]; then
     _h_ns="${HARBOR_SERVICE_NAMESPACE:-}"
+    # `|| true` IS LOAD-BEARING, and its absence killed the WHOLE report. MEASURED 2026-09-07:
+    # without it a failing kubectl makes the pipeline non-zero, and because the substitution is the
+    # LAST command of the `[ -n ] ||` list, `set -e` fires — the run exited rc=7 having printed only
+    # the Context block. The services table, the lab-access table and every footnote were LOST.
+    # Its SIBLING two lines down already had the guard; this one did not. Reachable whenever the
+    # Supervisor is slow, the token has expired, or the caller is a tenant (Forbidden).
     [ -n "$_h_ns" ] || _h_ns="$(KUBECONFIG="$_h_sup" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl \
         --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-5s}" get ns \
-        -l appplatform.vmware.com/serviceId=harbor -o name 2>/dev/null | head -1 | sed 's|namespace/||')"
+        -l appplatform.vmware.com/serviceId=harbor -o name 2>/dev/null | head -1 | sed 's|namespace/||' || true)"
     if [ -n "$_h_ns" ]; then
       _h_enc="$(KUBECONFIG="$_h_sup" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl \
           --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-5s}" -n "$_h_ns" get secret harbor-core-ver-1 \
@@ -1021,7 +1058,7 @@ EOF
 # how long the probing ACTUALLY took -- printed so the estimate above stays honest. If this ever
 # reads much larger than the stated bounds, a probe has escaped its timeout, and that is a defect
 # the operator can see rather than one they merely endure.
-if [ "${CREDS_NO_PROBE:-0}" != 1 ]; then
+if [ "$_no_probe_snapshot" != 1 ]; then
   _probe_t1=$(date +%s 2>/dev/null || echo 0)
 fi
 
@@ -1198,7 +1235,16 @@ if [ "${_headlamp_note:-0}" = 1 ]; then
   printf '\n  Headlamp: if the token screen comes straight back, the token expired — copy a fresh one above.\n'
 fi
 if [ "${_argo_initial_note:-0}" = 1 ]; then
-  printf '\n  ArgoCD: this is the initial admin password; it stops working once someone changes it.\n'
+  case "${_argo_state}" in
+    CURRENT)
+      printf '\n  ArgoCD: this password is CURRENT — it has not been changed since the instance was created.\n' ;;
+    STALE)
+      printf '\n  ArgoCD: the password above is DEAD — it was changed%s. The current one cannot be\n' \
+        "${_argo_changed_at:+ at ${_argo_changed_at}}"
+      printf '          recovered (only a hash is kept); ask whoever changed it, or reset it.\n' ;;
+    *)
+      printf '\n  ArgoCD: cannot tell whether this password is still current. Check: make argocd-auth-check\n' ;;
+  esac
 fi
 # ⚠️ KEYED ON A FLAG, NOT ON THE RENDERED STRING. This case used to match the URL text, and the
 # very next edit -- rewording the marker from `(--insecure; see note)` to

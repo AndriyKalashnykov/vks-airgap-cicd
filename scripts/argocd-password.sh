@@ -145,6 +145,59 @@ _read_secret() {
 # Split what _read_secret printed. Sets ANSWERED_KC + ENC in the CALLER's shell.
 _split_answer() { ANSWERED_KC="${1%%$'\t'*}"; ENC="${1#*$'\t'}"; }
 
+
+# CURRENT or STALE — because NOTHING deletes argocd-initial-admin-secret, so a stale value is
+# served with full confidence, forever.
+#
+# MEASURED 2026-09-07 on cicd-gc3: the secret was still present 20h after install, with ZERO
+# annotations, labels and ownerReferences — i.e. created by `argocd-server` at runtime, not by
+# kapp (contrast argocd-secret, which carries kapp.k14s.io/*). So the operator neither deletes nor
+# recreates it, and upstream's Getting Started only ADVISES a human to delete it. The previous
+# wording ("it no longer works if you have run update-password") was an unconditional hedge: the
+# reader could never tell a live value from a dead one.
+#
+# THE DISCRIMINATOR IS FREE. argocd-secret carries `admin.passwordMtime`, rewritten on every
+# password change; the initial secret carries its own creationTimestamp. MEASURED equal to the
+# second on an unchanged instance (both 2026-09-06T07:45:25Z). mtime NEWER ⇒ changed.
+#
+# ⚠️ Bounded and tolerant: a missing argocd-secret, an RBAC refusal or a slow API must degrade to
+# UNKNOWN and the old honest hedge — never to a confident CURRENT. Absence is a claim about the
+# QUERY first (this file has been bitten by that: see the 89%-of-runtime retry note above).
+_password_state() {
+  local kc="$1" mt ct
+  mt="$(KUBECONFIG="$kc" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl --request-timeout=5s \
+          -n "$ARGOCD_NAMESPACE" get secret argocd-secret \
+          -o jsonpath='{.data.admin\.passwordMtime}' </dev/null 2>/dev/null || true)"
+  [ -n "$mt" ] || { printf 'UNKNOWN'; return 0; }
+  mt="$(printf '%s' "$mt" | base64 -d 2>/dev/null || true)"
+  ct="$(KUBECONFIG="$kc" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl --request-timeout=5s \
+          -n "$ARGOCD_NAMESPACE" get secret argocd-initial-admin-secret \
+          -o jsonpath='{.metadata.creationTimestamp}' </dev/null 2>/dev/null || true)"
+  [ -n "$mt" ] && [ -n "$ct" ] || { printf 'UNKNOWN'; return 0; }
+  # String compare is correct here: both are RFC3339 UTC (Z), so lexical order IS chronological.
+  if [ "$mt" \> "$ct" ]; then printf 'STALE\t%s' "$mt"; else printf 'CURRENT'; fi
+}
+
+# The one line the operator reads about whether this value works. It replaces an unconditional
+# hedge, so the wording per state is the deliverable, not decoration.
+_say_state() {
+  local st="$1" when="${2:-}"
+  case "$st" in
+    CURRENT)
+      log_info "ArgoCD admin password: CURRENT — unchanged since this instance was created, so this value works." ;;
+    STALE)
+      log_warn "ArgoCD admin password: STALE — it was CHANGED at ${when}, after this value was issued."
+      log_warn "  This value NO LONGER WORKS, and the current one is NOT RECOVERABLE: ArgoCD keeps only a"
+      log_warn "  bcrypt hash in argocd-secret's admin.password. Nothing deletes the stale secret, so this"
+      log_warn "  report will keep showing this value. Confirm with: make argocd-auth-check" ;;
+    *)
+      log_warn "this is the INITIAL admin password. Nothing ever deletes argocd-initial-admin-secret, so"
+      log_warn "  this report keeps printing it even after someone changes the password — it does NOT"
+      log_warn "  self-correct. Could not tell CURRENT from STALE here (argocd-secret unreadable)."
+      log_warn "  Check with: make argocd-auth-check" ;;
+  esac
+}
+
 # 1. The auto-generated initial-admin secret — if it EXISTS, it is the password in force.
 if command -v kubectl >/dev/null 2>&1; then
   # BOUNDED, and stdin CLOSED. This is the single most expensive call in `make creds-show`:
@@ -169,7 +222,8 @@ if command -v kubectl >/dev/null 2>&1; then
     # changed, and scenario-1 Step 5 tells the reader to run `argocd account update-password`
     # immediately after reading it — so from that moment this value is stale while still being
     # served. Say so; a wrong password presented as fact costs more than no password.
-    log_warn "this is the INITIAL admin password — if you have run 'argocd account update-password' it no longer works."
+    _st="$(_password_state "$ANSWERED_KC")"
+    _say_state "${_st%%$'\t'*}" "${_st#*$'\t'}"
     _emit "$(printf '%s' "$enc" | base64 -d)"
     exit 0
   fi
@@ -188,7 +242,8 @@ if command -v kubectl >/dev/null 2>&1; then
       if ans="$(_read_secret)" && [ -n "$ans" ]; then
         _split_answer "$ans"; enc="$ENC"
         log_info "read argocd-initial-admin-secret from ns/${ARGOCD_NAMESPACE} via ${ANSWERED_KC} (after ${_w}s)"
-        log_warn "this is the INITIAL admin password — if you have run 'argocd account update-password' it no longer works."
+        _st="$(_password_state "$ANSWERED_KC")"
+        _say_state "${_st%%$'\t'*}" "${_st#*$'\t'}"
         _emit "$(printf '%s' "$enc" | base64 -d)"
         exit 0
       fi
