@@ -89,6 +89,31 @@ ck "empty host -> LB up (does not invent a route fault)" \
 ck "dead endpoint -> silent" \
    "$(eval "$_fn"; _ing=127.0.0.1:1; _ing_live=1; CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=2 _reach_ingress h.local)" "silent"
 
+# ── STALE DNS: it RESOLVES, but not to THIS ingress (2026-09-06) ───────────────────────────────
+# MEASURED on the live lab: /etc/hosts still carried a PREVIOUS lab's ingress (192.168.101.135)
+# while the current one was .134. The name resolved, so the DNS arm passed; the route probe reaches
+# the LB BY IP with a Host header and got 200; and the table printed `serving` for NINE rows a
+# browser could not open. Verified three ways — curl on the URL as printed: HTTP 000 x9; Chrome:
+# error page; curl --resolve to .134: 200 x9, each app serving its own marker. The LAB was healthy
+# and the REPORT was wrong.
+#
+# `localhost` resolves to 127.0.0.1 everywhere, so pointing _ing elsewhere is a genuine stale
+# condition needing no stub and no network.
+# ⚠️ REAL RESOLVER, stub OFF PATH — like the DNS case below. The stub is `exit 0` with NO OUTPUT,
+# which is deliberate (it isolates the route arm), but this case needs an actual ADDRESS to compare.
+# Under the stub it correctly falls through to the route probe, which is the right behaviour and the
+# wrong test.
+ck "resolves to a DIFFERENT address than the ingress -> stale DNS" \
+   "$(PATH="$_REAL_PATH" bash -c 'eval "$1"; CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _ing=203.0.113.9 _ing_live=1 _reach_ingress localhost' _ "$_fn")" "stale DNS"
+# THE CONTROL. If a MATCHING address also read `stale DNS`, the check would flag every healthy host
+# and the state would be worthless — a verdict that cannot be false is not a verdict.
+ck "resolves to the ingress itself -> NOT stale (falls through to the route probe)" \
+   "$(PATH="$_REAL_PATH" bash -c 'eval "$1"; CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _ing=127.0.0.1 _ing_live=1 _reach_ingress localhost' _ "$_fn")" "silent"
+# An ingress given as a NAME cannot be compared to a resolved ADDRESS. Claiming `stale DNS` there
+# would INVENT a fault, so the guard must fall through and let the route probe speak instead.
+ck "ingress is a NAME, not an address -> must NOT claim stale" \
+   "$(PATH="$_REAL_PATH" bash -c 'eval "$1"; CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _ing=ingress.example.test _ing_live=1 _reach_ingress localhost' _ "$_fn")" "silent"
+
 # The DNS arm must still win when a host genuinely does not resolve — with the stub OFF PATH.
 ck "unresolvable host -> no DNS here (the arm still short-circuits)" \
    "$(PATH="$_REAL_PATH" bash -c 'eval "$1"; _ing="127.0.0.1:'"$PORT"'"; _ing_live=1; CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _reach_ingress definitely-not-a-real-host.invalid' _ "$_fn")" \

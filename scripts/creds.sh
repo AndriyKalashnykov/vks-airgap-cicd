@@ -684,6 +684,12 @@ _probe_tcp() {                    # <host> <port> -> 0 if something answers, non
 #   serving       — the LB answers AND this machine can resolve the name (you can click it)
 #   no DNS here   — the LB answers, the NAME does not resolve on this box (add the /etc/hosts line
 #                   printed above, or create the A records; the service itself is fine)
+#   stale DNS     — the LB answers and the NAME resolves, but to a DIFFERENT address than this
+#                   ingress: almost always a /etc/hosts line left by a PREVIOUS lab. The service is
+#                   fine and the link is dead, which is the case a plain "does it resolve" check
+#                   cannot see. ⚠️ Its remedy is NOT the append the `no DNS here` note gives:
+#                   /etc/hosts honours the FIRST match, so appending a second line for the same
+#                   host changes NOTHING. The stale line must be REPLACED.
 #   silent        — the LB itself does not answer
 # `getent` on a non-resolving name is FREE (measured 0.002 s) and is already bounded by timeout
 # above, so this costs nothing on the happy path.
@@ -692,12 +698,47 @@ _reach_ingress() {
   [ -n "${_ing:-}" ] || { printf 'no ingress';  return; }
   if [ "${_ing_live:-0}" != 1 ]; then printf 'silent'; return; fi
   local _h="${1:-}"
-  if [ -n "$_h" ] && ! timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent hosts "$_h" >/dev/null 2>&1; then
+  # ⚠️ RESOLVING IS NOT ENOUGH — IT MUST RESOLVE TO *THIS* INGRESS.
+  # MEASURED 2026-09-06 on the live lab: /etc/hosts still carried a PREVIOUS lab's ingress
+  # (192.168.101.135) while the current one was .134. The name RESOLVED, so this arm passed; the
+  # probe below then reached the LB BY IP with a Host header and got 200; and the table printed
+  # `serving` for NINE rows that a browser could not open. Verified three ways -- curl on the URL as
+  # printed: HTTP 000 x9; Chrome: error page; curl --resolve to .134: 200 x9 with each app serving
+  # its own marker. So the LAB was healthy and the REPORT was wrong, which is the worse failure.
+  #
+  # This is the THIRD overclaim in this family (the two fixed 2026-09-05 are recorded above), and it
+  # slipped past both because it sits in the gap between them: the DNS arm asked "does it resolve AT
+  # ALL", the route arm asked "does the LB answer", and NEITHER asked "does the name this reader will
+  # click resolve to the LB we just probed". `serving` is defined ten lines up as "you can click it".
+  local _raw="" _res="" _grc=0
+  if [ -n "$_h" ]; then
     # NOTE: do NOT set a global here to signal the footnote — this function runs inside $( ),
     # a SUBSHELL, so any assignment is discarded (rules/shell). The caller detects the condition
     # by scanning the rendered rows instead.
-    printf 'no DNS here'
-    return
+    #
+    # ⚠️ "DOES IT RESOLVE" IS THE EXIT-STATUS QUESTION, exactly as before this change — do NOT
+    # re-key it on whether output was captured. A first version did, and test-creds-reach-ingress
+    # caught it immediately: that test stubs `getent` as `#!/bin/sh exit 0`, i.e. SUCCESS WITH NO
+    # OUTPUT, so an output-keyed check reported `no DNS here` for every host and took 9 of 14 cases
+    # red — including cases that had nothing to do with DNS. Real getent ties rc and output
+    # together, so the two forms agree in production and disagree only under the stub; the stub is
+    # right to isolate the arm, and the status is the honest question.
+    _raw="$(timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent hosts "$_h" 2>/dev/null)" || _grc=$?
+    [ "$_grc" -eq 0 ] || { printf 'no DNS here'; return; }
+    _res="$(printf '%s\n' "$_raw" | awk 'NR==1{print $1}')"
+    # Only claim STALE when we actually know the ingress address. If `$_ing` is a NAME rather than an
+    # address, or is empty, comparing them would invent a fault -- say nothing and fall through to
+    # the route probe, which is still a true statement about the LB.
+    # Compare ONLY when we actually have an address AND the ingress is one. An empty `$_res`
+    # (a resolver that succeeded but printed nothing) or a NAME-shaped `$_ing` cannot be compared,
+    # and claiming `stale DNS` there would INVENT a fault — fall through and let the route probe
+    # make the weaker, true statement instead.
+    case "$_res" in '') : ;; *)
+      case "$_ing" in
+        *[!0-9.]*|'') : ;;
+        *) [ "$_res" = "$_ing" ] || { printf 'stale DNS'; return; } ;;
+      esac ;;
+    esac
   fi
   # ── B528: ASK THE ROUTE, NOT JUST THE LB ────────────────────────────────────────────────────────
   # MEASURED 2026-09-05 on the live lab with every app pod in ImagePullBackOff:
@@ -1047,6 +1088,16 @@ EOF
 # the reader to conclude the app is down. (2026-09-05: a browser got DNS_PROBE_FINISHED_NXDOMAIN on
 # a host this report had just called `serving`.)
 case "$rows" in
+  *'stale DNS'*)
+    printf '\n  ⚠️  Some hosts above RESOLVE ON THIS MACHINE TO A DIFFERENT ADDRESS than the ingress\n'
+    printf '      that is serving them — almost always an /etc/hosts line left by a PREVIOUS lab.\n'
+    printf '      The service is NOT broken; the link is. A browser here will fail to connect.\n'
+    printf '      ⚠️ APPENDING A NEW LINE WILL NOT HELP: /etc/hosts uses the FIRST match, so the\n'
+    printf '      stale entry keeps winning. REPLACE it (needs root) — check what is there first:\n'
+    printf '        grep -n vks.local /etc/hosts\n'
+    printf '        sudo sed -i "s/^[0-9.]\\+\\( \\+.*vks\\.local\\)/%s\\1/" /etc/hosts\n' "${INGRESS_LB_IP:-<ingress-lb-ip>}"
+    printf '      Then re-run this report; every affected row should turn to serving.\n'
+    ;;
   *'no DNS here'*)
     printf '\n  ⚠️  Some hosts above are SERVED by the ingress but do not RESOLVE on this machine,\n'
     printf '      so a browser here gets DNS_PROBE_FINISHED_NXDOMAIN. The service is not broken —\n'
