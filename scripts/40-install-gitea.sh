@@ -53,6 +53,18 @@ log_info "installing Gitea into namespace '$GITEA_NAMESPACE' (Service type: ${GI
 # and says so in its own comment — gitea and tekton were simply left behind.
 # shellcheck source=scripts/lib/psa.sh
 . "${SCRIPT_DIR}/lib/psa.sh"
+
+# ── Is there anything in this Harbor to pull? (B527) ─────────────────────────────────────────────
+# MEASURED 2026-09-05: the lab was rebuilt, Harbor came back EMPTY, the project did not exist, and
+# this install died `ImagePullBackOff / 401 Unauthorized`. That 401 is the Docker Registry v2 AUTH
+# CHALLENGE — returned for every repository, present or absent — so it read as a credential problem
+# and was diagnosed as one TWICE. Nothing checked whether the images were there.
+# One anonymous, credential-OPTIONAL API call (measured 15-30 ms on the live lab) answers it before
+# a helm --wait burns READY_TIMEOUT_SECONDS discovering it. Same shape as capacity_assert_fits:
+# an escape hatch, and every unknown is a LOUD SKIP that says it is not a pass.
+# shellcheck source=scripts/lib/harbor_probe.sh
+. "${SCRIPT_DIR}/lib/harbor_probe.sh"
+harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:-}" "gitea"
 ensure_namespace "$GITEA_NAMESPACE" "${PSA_LEVEL_GITEA:-restricted}"
 
 # shellcheck disable=SC2016

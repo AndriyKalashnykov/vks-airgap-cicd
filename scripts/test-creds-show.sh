@@ -228,10 +228,25 @@ fi
 # copies with nothing asserting they agree, and here the second copy lived in a TEST, not a doc, so
 # `check-expect-literals` could not see it. Match a fragment that is on ONE line and carries no
 # accident: `be from a lab that no longer exists`.
-if printf '%s' "$out" | grep -qi 'be from a lab that no longer exists'; then
-  ok "...and warns the HUMAN that the values may predate this cluster"
+#
+# ⚠️ THE ASSERTION MOVED 2026-09-07, and the INVARIANT it protects did not. It used to require the
+# literal "be from a lab that no longer exists". That sentence was removed on purpose: it fires on
+# EVERY real lab, always (nothing on the real-lab path calls state_stamp — see :211 above), so it
+# could not vary and therefore carried no information while reading as an alarm. The operator
+# complaint that produced the change was, verbatim, "what is this shit" over a fully-serving lab.
+# What must still hold is the ORIGINAL intent: the human is told, not just the machine token. Grep a
+# one-line fragment of the replacement that states the actual reason.
+if printf '%s' "$out" | grep -qi 'carries no cluster stamp'; then
+  ok "...and tells the HUMAN why (no cluster stamp), not just the token"
 else
-  bad "...but the human is not told. The token alone is not the deliverable."
+  bad "...but the human is not told WHY. The token alone is not the deliverable."
+fi
+# The banner must NOT re-acquire an alarm it cannot justify. This is the RED-proof for the change:
+# re-adding the old sentence turns this red, so nobody can quietly restore it.
+if printf '%s' "$out" | grep -qi 'no longer exists'; then
+  bad "the unconditional 'lab that no longer exists' alarm is back — it fires on EVERY real lab"
+else
+  ok "...and makes no staleness claim it cannot support"
 fi
 
 # ---- B168: an operator's EXPLICIT ARGOCD_SERVER must OUTRANK a discovered ARGOCD_LB_IP. ---------
@@ -318,6 +333,41 @@ else
       the mechanism under test; every older state bypasses it via VKS_STATE_KIND=1."
 fi
 
+
+# ⚠️ DEFINED HERE, ABOVE THE FAIL-GATE, DELIBERATELY. It used to live inside the
+# `if [ "$fail" = 0 ]` block below while a caller sat outside it, so the FIRST real failure
+# produced three extra `render_with_cluster: command not found` FAILs that buried it — and,
+# worse, a NEGATIVE assertion ("must be SILENT") passed VACUOUSLY on the empty string an
+# undefined function returns. RED-proved by an implementation round: injecting `fail=1` before
+# the gate yielded 3 false FAILs and 1 vacuous ok. `render` and `render_with_env` were already
+# top-level; this was the odd one out.
+render_with_cluster() {
+  local envbody="$1" reachable="$2" t
+  t="$(mktemp -d)"; mkdir -p "$t/bin"
+  cp .env.example "$t/.env.example"
+  printf '%s' "$envbody" > "$t/.env"
+  if [ "$reachable" = 1 ]; then
+    printf '#!/bin/sh\ncase "$*" in\n  *current-context*) echo stub-ctx ;;\n  *version*) exit 0 ;;\nesac\nexit 0\n' > "$t/bin/kubectl"
+  else
+    printf '#!/bin/sh\nexit 1\n' > "$t/bin/kubectl"
+  fi
+  chmod +x "$t/bin/kubectl"
+  : > "$t/kc"
+      # curl + getent stubbed TOO, so the isolation is the stubbed PATH and nothing else.
+      #
+      # ⚠️ THIS STATE DELIBERATELY DOES NOT SET CREDS_NO_PROBE. It used to, and that made the
+      # whole axis VACUOUS the moment creds.sh began honouring the flag properly (2026-09-07):
+      # the reachability probe short-circuited before the stub was ever consulted, and this
+      # STATE's own anti-vacuity check caught it -- "the stub was NOT honoured, so every
+      # assertion in STATE 8 is vacuous." A state that asserts on a probe cannot also switch
+      # the probe off. B530 records the same defect one level up.
+      printf '#!/bin/sh\nexit 1\n' > "$t/bin/curl"
+      printf '#!/bin/sh\nexit 1\n' > "$t/bin/getent"
+      chmod +x "$t/bin/curl" "$t/bin/getent"
+  ( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+      KUBECONFIG="$t/kc" CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )
+  rm -rf "$t"
+}
 
 if [ "$fail" = 0 ]; then
   _kc_hostile="${TMPDIR:-/tmp}/creds-hostile-kc.$$"
@@ -594,33 +644,6 @@ rm -rf "$_envdir"
 #
 # The stub is the whole point: no cluster, no credentials, no SSO attempt — just a kubectl on PATH that
 # answers `version` 0. creds.sh:324 gates reachability on exactly that call.
-render_with_cluster() {
-  local envbody="$1" reachable="$2" t
-  t="$(mktemp -d)"; mkdir -p "$t/bin"
-  cp .env.example "$t/.env.example"
-  printf '%s' "$envbody" > "$t/.env"
-  if [ "$reachable" = 1 ]; then
-    printf '#!/bin/sh\ncase "$*" in\n  *current-context*) echo stub-ctx ;;\n  *version*) exit 0 ;;\nesac\nexit 0\n' > "$t/bin/kubectl"
-  else
-    printf '#!/bin/sh\nexit 1\n' > "$t/bin/kubectl"
-  fi
-  chmod +x "$t/bin/kubectl"
-  : > "$t/kc"
-      # curl + getent stubbed TOO, so the isolation is the stubbed PATH and nothing else.
-      #
-      # ⚠️ THIS STATE DELIBERATELY DOES NOT SET CREDS_NO_PROBE. It used to, and that made the
-      # whole axis VACUOUS the moment creds.sh began honouring the flag properly (2026-09-07):
-      # the reachability probe short-circuited before the stub was ever consulted, and this
-      # STATE's own anti-vacuity check caught it -- "the stub was NOT honoured, so every
-      # assertion in STATE 8 is vacuous." A state that asserts on a probe cannot also switch
-      # the probe off. B530 records the same defect one level up.
-      printf '#!/bin/sh\nexit 1\n' > "$t/bin/curl"
-      printf '#!/bin/sh\nexit 1\n' > "$t/bin/getent"
-      chmod +x "$t/bin/curl" "$t/bin/getent"
-  ( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
-      KUBECONFIG="$t/kc" CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )
-  rm -rf "$t"
-}
 
 _real_env='HARBOR_URL=harbor.example.test
 HARBOR_USERNAME=admin
@@ -1128,6 +1151,84 @@ if printf '%s' "$out" | grep -q 'The vCenter row is blank'; then
        directly beneath a filled-in vCenter row, which is the defect this change exists to remove"
 else
   ok "STATE 13: vCenter populated + another row blank -> the note is SILENT (the F1 RED-proof)"
+fi
+
+
+# ── STATE 14 — the HARBOR ADMIN-PASSWORD footnote. Added 2026-09-07 after an implementation round
+# found FOUR defects in it that a green 66/66 had shipped: it rendered only when the HEADLAMP token
+# had been read; the classifier on the secret read was dead code; a kubectl that SUCCEEDED with no
+# matching namespace was reported as "kubectl failed"; and the remedy sentence stated an absolute
+# that is false in the healthy state. `grep -c` for its strings in this file was 0 — the change moved
+# the suite's denominator by +1, and that +1 was a different change entirely.
+_h_render() {  # _h_render <kubectl-body> <headlamp-token-readable:0|1> -> the rendered report
+  local kbody="$1" hl="$2" t
+  t="$(mktemp -d)"; mkdir -p "$t/bin"
+  cp .env.example "$t/.env.example"
+  # A ROBOT username is what makes the Harbor web-UI row render at all; without it the block is
+  # skipped and every assertion here would be vacuous.
+  # ⚠️ SINGLE-QUOTED. `load_env` sources .env with `set -a`, so an unquoted `robot$probe` has its
+  # `$probe` EXPANDED BY THE SHELL to empty and HARBOR_USERNAME arrives as plain `robot` — which is
+  # not a robot by `harbor_username_is_robot`, so the row is skipped and every assertion below goes
+  # vacuous. That is the trap `check-doc-robot-quoting` exists for, and this fixture fell into it on
+  # its first run: three assertions failed for a reason that had nothing to do with the code.
+  printf "HARBOR_URL=10.0.0.1\nHARBOR_USERNAME='robot\$probe'\nHARBOR_PASSWORD=x\n" > "$t/.env"
+  : > "$t/kc"; : > "$t/sup"
+  { printf '#!/bin/sh\n'
+    printf 'case "$*" in\n'
+    printf '  *current-context*) echo stub-ctx; exit 0 ;;\n'
+    printf '  *version*) exit 0 ;;\n'
+    if [ "$hl" = 1 ]; then printf '  *"create token"*) echo hl-token; exit 0 ;;\n'; fi
+    printf '%s\n' "$kbody"
+    printf 'esac\nexit 0\n'; } > "$t/bin/kubectl"
+  printf '#!/bin/sh\nexit 1\n' > "$t/bin/curl"
+  printf '#!/bin/sh\nexit 1\n' > "$t/bin/getent"
+  chmod +x "$t/bin/kubectl" "$t/bin/curl" "$t/bin/getent"
+  ( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
+      KUBECONFIG="$t/kc" VKS_SUPERVISOR_KUBECONFIG="$t/sup" CREDS_TOKEN=1 \
+      "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )
+  rm -rf "$t"
+}
+
+# (a) the Supervisor REJECTS us -> the footnote must be present AND name the class, not a bare token.
+_hout="$(_h_render '  *"get ns"*) echo "error: You must be logged in to the server (Unauthorized)" >&2; exit 1 ;;' 1)"
+if printf '%s' "$_hout" | grep -q 'Harbor admin password NOT read'; then
+  ok "STATE 14: a rejected Supervisor -> the Harbor footnote EXPLAINS it"
+else
+  bad "STATE 14: a rejected Supervisor -> NO footnote. The cell shows a token with nothing to read it by."
+fi
+
+# (b) THE FINDING-1 RED-PROOF. Identical failure, headlamp token NOT readable. The footnote must
+# still render: it was nested inside `if [ "${_headlamp_note:-0}" = 1 ]`, so it did not, and the
+# persona who lost it was the tenant with neither a Supervisor nor headlamp.
+_hout="$(_h_render '  *"get ns"*) echo "error: You must be logged in to the server (Unauthorized)" >&2; exit 1 ;;' 0)"
+if printf '%s' "$_hout" | grep -q 'Harbor admin password NOT read'; then
+  ok "STATE 14: ...and it does NOT depend on the headlamp token having been read"
+else
+  bad "STATE 14: the footnote vanished when headlamp was unread — it is nested inside the headlamp
+      block again. Two unrelated facts must not be welded together."
+fi
+
+# (c) kubectl SUCCEEDS with no matching namespace. rc=0 is a SUCCESS: Harbor simply is not a
+# Supervisor Service here. Reporting "kubectl failed" is the conflation this change exists to remove.
+_hout="$(_h_render '  *"get ns"*) exit 0 ;;' 1)"
+if printf '%s' "$_hout" | grep -q 'has NO namespace labelled'; then
+  ok "STATE 14: rc=0 with no match is reported as ABSENT, not as a kubectl failure"
+else
+  bad "STATE 14: rc=0 + empty was reported as a failure. kubectl exited 0 and answered correctly;
+      saying it failed is the same wrong-cause class, inverted."
+fi
+if printf '%s' "$_hout" | grep -qi 'kubectl failed for a reason we do not classify'; then
+  bad "STATE 14: it claims kubectl failed when kubectl exited 0 (empty errfile -> UNKNOWN)."
+else
+  ok "STATE 14: ...and makes no claim about a kubectl that did not fail"
+fi
+
+# (d) the remedy sentence must not state the refusal as an absolute — 28-harbor-admin-password.sh
+# ALSO has an exit-0 arm that leaves a working robot credential alone.
+if printf '%s' "$_hout" | grep -q 'REFUSES by design'; then
+  bad "STATE 14: the footnote asserts an unconditional refusal. The healthy arm exits 0 instead."
+else
+  ok "STATE 14: the remedy sentence covers BOTH arms of harbor-admin-password"
 fi
 
 if [ "$fail" != 0 ]; then

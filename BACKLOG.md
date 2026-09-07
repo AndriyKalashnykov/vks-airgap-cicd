@@ -4874,7 +4874,86 @@ silent; (c) the hole DISCLOSED in the hook's own docstring so nobody believes th
 Whatever ships must not block the adversary's own evidence tools (`git log/diff/status`, `grep`,
 running the gates) — `hooks.md` records that such a gate gets ripped out.
 
-## B527 — 🔴 ROUND VERDICT: the row's MECHANISM and SCOPE are both REFUTED; the fix is ONE anonymous 21ms call
+## B527 — 🟡 IN FLIGHT on `feat/harbor-project-preflight-b527` — NOT shipped, NOT merged
+
+⚠️ **STATUS CORRECTED 2026-09-07.** This row said `✅ SHIPPED` while the branch was unmerged AND
+carrying a defect that hard-broke `make install-all`. A row's status is a CLAIM; this one was false
+in the direction that invites a later session to build on work that is not there. An independent
+round measured it: `git merge-base --is-ancestor` says the commit is not an ancestor of `main`, and
+`grep -rn harbor_assert_mirrored` on `main` returns **0 hits**.
+
+**On the branch** (`scripts/lib/harbor_probe.sh` — note the UNDERSCORE; `check-lib-sourcing` matches
+`lib/[a-z_]+\.sh` and rejects a hyphen): `harbor_project_state` / `harbor_assert_mirrored`, wired
+into `40-install-gitea`, `41-install-tekton`, `45-install-traefik`, `46-install-istio`,
+`49-install-headlamp` and `60-configure-tekton`, with `scripts/test-harbor-probe.sh` (13 cases).
+
+### ⚠️ IMPLEMENTATION ROUND 2026-09-07 — the first cut was hard-broken; fixed, re-proven
+
+The design round cleared the idea; the implementation round on the diff refuted it, which is the
+two-round rule earning its keep for the fourth time in this repo.
+
+- **It conflated an empty listing with a missing project.** The probe read the FUZZY
+  `?name=<p>` listing and treated `[]` as `absent`, so `make install-headlamp` — and therefore
+  `make install-all` — was unconditionally hard-broken. Fixed: probe the EXACT endpoint
+  `/api/v2.0/projects/<name>`, read the HTTP status via `-w`, and treat **only 200 as a verdict**;
+  404 is `absent`, anything else is `inconclusive`.
+- **It sent credentials into an unverifiable TLS context.** Now they go only when there is a CA or
+  an explicit `HARBOR_INSECURE=1`, reusing the three-way `_harbor_ca_args` shape.
+- **headlamp's probe ran BEFORE `load_env`**, so it read an empty `HARBOR_INFRA_PROJECT`. Moved
+  after it (line 78, `load_env` is at 62).
+- **The test stub was silent about status**, so two fixtures were asserting the old shape. The stub
+  now emits a status line and the suite is **13 passed, 0 failed**.
+
+**Still open on this branch:** the six-installer set is hand-maintained with no gate — a seventh
+installer would be silently missing. `43-install-istio-package.sh` is a correct exclusion (VKS
+Package path; measured **zero** Harbor refs). Whether to gate that is a NEW CONTROL and needs its
+own idea round before anything is built.
+
+⚠️ **THE ROUND SAID SEVEN INSTALLERS; IT IS SIX.** `43-install-istio-package.sh` is a FALSE member —
+measured: **zero** Harbor refs, **zero** project vars, and its own header says the images come from
+"wherever the Package CR's imgpkgBundle lives — which this repo does not control". Adding the probe
+there would assert a project that path never reads. `49-install-headlamp` looked like a non-member
+for the opposite reason (no explicit project var) and IS one: it resolves through
+`mirror_target_ref`, which uses `HARBOR_INFRA_PROJECT:?`.
+
+**FOUR verdicts, not two, and the third is the point.** A **private** project answers an anonymous
+query with `[]` — byte-identical to a MISSING one. Collapsing that would tell a tenant to run
+`make mirror` against a Harbor that is fine, which is the same wrong-cause class the probe exists to
+remove. So `[]` is decisive **only** when a credential was supplied; otherwise it is `inconclusive`,
+which never blocks (RULE ZERO-B). Verified against the **live lab**:
+
+    cicd (37 repos)    -> present        library (0 repos) -> empty      <- the incident's 2nd half
+    nosuchproject      -> absent         192.0.2.1         -> inconclusive
+
+**Credential-OPTIONAL by construction.** It does NOT source `lib/harbor.sh`, whose first lines are
+`: "${HARBOR_USERNAME:?}"` / `: "${HARBOR_PASSWORD:?}"` — hard dies. Five of the six installers
+contain **zero** references to those vars and pull anonymously from a public project; sourcing that
+library would have added a mandatory credential and blocked the very tenant the check is for.
+
+**The credential never reaches argv** — a `umask 077` `-K` config file, the discipline
+`lib/harbor.sh` and `lib/vcenter.sh` already use. **RED-proven**: replacing `-K` with
+`-u user:pass` turns exactly that assertion RED.
+
+**Shaped after `capacity_assert_fits`**: `HARBOR_IMAGE_PREFLIGHT=0` escape hatch, and every unknown
+is a LOUD SKIP that says *"not a pass"* — never a silent one.
+
+**Placement:** in `46-install-istio.sh` beside `capacity_assert_fits`, deliberately **NOT** in
+`44-install-ingress.sh` — that dispatcher also serves `INGRESS_CONTROLLER=istio-existing`, which
+installs and pulls nothing, so a check there would be a false block on the attach path.
+
+**STILL OPEN** (the round's steps 2 and 3, both deliberately not built here):
+
+- a **per-installer image** assertion (anonymous token flow; `200` / `404 NOT_FOUND` /
+  `401 naming our project`), called with the SAME expressions the install uses — never a
+  chart-render grep, because the istio gateway chart renders `image: auto` and istiod's render
+  yields **1** usable ref among 9.
+- the helm `--wait` **failure-message** improvement, as the residual net for "the project exists but
+  this one image is missing". It fires only after `READY_TIMEOUT_SECONDS` and needs pod-event
+  parsing that nothing in `scripts/` currently does.
+- ⚠️ `project <X> not found` is Harbor **prose**, not a code token; the shipped probe deliberately
+  keys on the structured `projects?name=` JSON instead, which does not depend on message text.
+
+## B527 (round verdict) — 🔴: the row's MECHANISM and SCOPE are both REFUTED; the fix is ONE anonymous 21ms call
 
 An idea round measured this against the **live lab Harbor** and refuted both halves of the row's
 prescription. **Do not build what this row asks for.**
@@ -4949,7 +5028,7 @@ standing in front of an air-gap install.
    unreachable ⇒ **INCONCLUSIVE, not a pass**. **INDEPENDENTLY RE-MEASURED on the live lab
    2026-09-07: 15–30 ms, no credential, `[]` for a missing project, and `repo_count` visible
    anonymously (`library` reads 0 today — the exact shape the incident presented).**
-2. A per-installer image assertion in a NEW `lib/harbor-probe.sh` (anonymous token flow; 200 /
+2. A per-installer image assertion in a NEW `lib/harbor_probe.sh` (anonymous token flow; 200 /
    404 NOT_FOUND / 401-naming-our-project), called with the SAME expressions the install uses —
    never a chart-render grep, never `harbor_setup`, with an escape hatch and loud SKIP.
 3. The helm `--wait` failure-message improvement, as the residual net — **after**, not instead.
@@ -5272,6 +5351,49 @@ reasonably conclude the fix did not work.
 the same "verify the end result, not a proxy" move that B531 applied to `.env`. (b) is stronger and
 would have caught this directly; it needs a live cluster, so it belongs with `psa-check` /
 `argocd-preflight` in the read-only lab-preflight family rather than in `static-check`.
+
+### ⚠️ ROUND 2026-09-07 — the PRESCRIPTION above is REFUTED. The defect stands and is UNDER-SCOPED
+
+Do not implement (b) as written, and do not close this row on B527.
+
+- **B527 cannot subsume it, at two levels.** It is on an unmerged branch — and even merged,
+  `harbor_project_state` answers at PROJECT granularity (`present`/`empty`/`absent`). In this
+  incident the `cicd` project existed and held 37 repos *including* `eclipse-temurin`; only the
+  TAG differed. It returns `present` and passes. Structurally blind to the thing that broke.
+- **`images.txt` is the wrong oracle, and the scope is 2 of 19.** `60-configure-tekton.sh` copies
+  15 envsubst vars + 3 Secrets + 1 ConfigMap into the cluster. Exactly two have an `images.txt`
+  counterpart. `APP_IMAGE` is a push destination with no tag and no row; a Secret has no row at
+  all. Across `70-configure-argocd.sh`, `lib/istio.sh`, `40-install-gitea.sh` and
+  `45-install-traefik.sh` the class is **>=41 instances — this row fixes 2**, which is B527 F2
+  ("makes the tree look protected") one row later.
+- **Two members of the class have ALREADY fired live** and are recorded in this same file:
+  `secrets/webhook-token` -> `gitea-webhook-secret` (walk row 2, 2026-08-12) and
+  `secrets/gitea-ci-token` -> `gitea-git-auth` (2026-09-05). `HARBOR_URL` is in the allowlist too,
+  and CLAUDE.md records it moving `.130 -> .135` in one afternoon on a lab rebuild.
+- **The stated placement was refuted here ten days ago.** `preflight` is `install-all`'s FIRST
+  prerequisite and `configure-tekton` runs inside `platform`, so on a greenfield there is no
+  TriggerTemplate and the check is vacuous or false-RED. That is B527 F4 verbatim.
+- **A naive cluster read is GREEN on a cluster that has NOTHING.** An empty `kubectl get` is rc=0,
+  so it never reaches `classify_kube_failure`. Needs a denominator: one TriggerTemplate per row of
+  `apps/registry.tsv`; `0 found` is its own verdict, never a pass.
+- **Do not classify on `NOT_FOUND`** for (a). `RUNTIME_IMAGE` reaches kaniko as a `--build-arg` and
+  fails INSIDE the kaniko step's stdout — not an event, not `ImagePullBackOff`. String-classifying
+  it is B527 F1 (the arm ordering that produced the OPPOSITE remedy).
+- **Never considered: ELIMINATING the copy.** `lib/apps.sh`'s `app_export` already chose exactly
+  that for this class ("re-adding a render-time copy would re-introduce a value that can disagree
+  with the artifact it names"). Honest residual: hard for `RUNTIME_IMAGE`, whose Dockerfile default
+  is the public ref, unusable air-gapped — a design question, not a drop-in.
+
+**Re-scoped Done-when:** a PRINTER (`scripts/NN-render-drift.sh`, always exits 0), scoped to the
+CLASS not to image tags. For each app recompute the refs from `.env` using `lib/apps.sh`'s own
+functions (zero enumerated list), read the TriggerTemplate's param defaults, print both columns.
+Denominator = N TriggerTemplates vs N registry rows. `FORBIDDEN`/`UNREACHABLE` -> loud SKIP via
+`classify_kube_failure`. Call it from `99-verify.sh:183-187` alongside a `kubectl logs` of the
+failed step, so it prints unconditionally on any PipelineRun failure and needs no classifier.
+Extend to the Secrets/ConfigMap to take coverage 2/19 -> ~5/19 and cover the two that have already
+fired. If a GATE is wanted anyway, use the `96-verify-gateway-image.sh` slot with a `*_FIXTURE`
+dir + an offline `make test-*` RED-proof — never `preflight`, never RED-proven by drifting a live
+lab.
 
 ## B533 — ⚪ WITHDRAWN: the verify marker is DOCUMENTED expected behaviour, not a defect
 
@@ -6116,3 +6238,121 @@ real detector: a `.pyc` written mid-run is now rc=0, while a mid-run `.env` edit
 mid-run script edit is still rc=1 — so the coverage that actually matters is intact.
 
 `scripts/test-tree-stability.sh` 29 -> 31 cases.
+
+## B542 — ⛔ REFUTED, DO NOT BUILD: a gate asserting every installer calls `harbor_assert_mirrored`
+
+Idea round 2026-09-07, before a line was written. Recorded so it is not rebuilt.
+
+- **The trigger has a MEASURED 0/1 catch rate on the only true positive in its lifetime.**
+  `49-install-headlamp.sh` (the newest installer, 2026-09-05) composes its Harbor refs through
+  `mirror_target_ref` (`:109-110` -> `lib/mirror.sh:65`), so `HARBOR_INFRA_PROJECT` never appears in
+  it. Run against `main` — where 49 genuinely lacks the preflight, the real defect state — the
+  proposed trigger flagged `06,40,41,45,46,60` and **not 49**. Worse, 49's own comment at `:107`
+  explains why that will keep happening: hand-composing the ref is the thing the repo's
+  image-alignment gate exists to prevent. **The trigger is anti-correlated with the house idiom** —
+  the more correctly a future installer is written, the more invisible it is to the gate.
+- **It is CIRCULAR.** On the branch, 49 matches only because the FIX LINE spells the variable. Absent
+  the call -> not triggered -> green. Present -> triggered -> green. A gate whose population is
+  defined by having already been fixed cannot detect its own absence.
+- **~90% false-RED as specified** (20 of 28 matching scripts are push-side, uninstall, libs, tests).
+- **The one allowlist entry I proposed is the one that must not exist.**
+  `43-install-istio-package.sh` has ZERO matches, so it is excluded DERIVATIONALLY. Enumerating it
+  converts a self-maintaining exclusion into a permanent waiver that would wave the VKS Package path
+  through forever if it ever gained an image override.
+- **DECISIVE — omission here is LOUD, and this repo gates the SILENT ones.** Without the preflight
+  you get the `ImagePullBackOff` + 401 you would have got anyway, ~5 minutes later. Contrast
+  `ensure_namespace`: 10/10 coverage, two gates, because its omission is INVISIBLE (unlabelled ns,
+  fine on KinD, pods REJECTED on VKS). `capacity_assert_fits` — the shape `harbor_probe.sh:104` says
+  it copies — has sat at **1-of-7** coverage with no gate and nobody has minded.
+- **N=0 for the actual defect.** Installer adds run ~1 per 12 days and only `49` qualified; it
+  predates the control by two days. There has never been an installer added AFTER the preflight
+  existed that omitted it.
+
+If it is ever revisited, the only defensible shape is in the round: glob
+`scripts/[0-9][0-9]-{install,configure}-*.sh` (which is also the self-match fix, no exclude-by-name),
+trigger on `mirror_target_ref|app_builder_image|app_runtime_image|HARBOR_INFRA_PROJECT`, match the
+VAR not just the function name, one allowlist entry (`06`, which INSTALLS Harbor), die on a zero
+denominator. Measured 7 triggered / 1 allowlisted / 0 false REDs. RED-prove against `main`'s `49`.
+
+## B543 — 🟡 the B527 round prescribed SEVEN installers; the branch ships SIX, and nothing records which was dropped
+
+`BACKLOG.md`'s own B527 verdict says "One credential-free call, shared by all **7** installers". The
+branch wires **6**. `43-install-istio-package.sh` is a correct exclusion (zero Harbor refs), but that
+accounts for the seventh only if it was the intended seventh — and nothing says so.
+
+**Done when:** the candidate is named and decided, one line each. Start from
+`grep -lE 'HARBOR_URL' scripts/[0-9][0-9]-*.sh | xargs grep -L harbor_assert_mirrored`, and decide
+PER FILE whether `make mirror` is the right remedy — it is **not** for `HARBOR_APP_PROJECT`
+(`70-configure-argocd.sh` references Harbor 10x but only that var, whose emptiness is fixed by the
+PIPELINE, not by mirroring; prescribing `make mirror` there reproduces the wrong-cause class B527
+exists to remove).
+
+## B544 — 🟡 `classify_kube_failure` misses the `memcache.go` phrasing of a timeout (NOT all timeouts)
+
+⚠️ **CORRECTED 2026-09-07, same day.** This row first said the classifier returns UNKNOWN "for a
+TIMEOUT". An implementation round refuted that, citing `lib/os.sh:2260` — and it was itself half
+wrong (it said my fixture "wrote nothing to stderr"; it wrote plenty). Measured, both phrasings:
+
+    Unable to connect to the server: context deadline exceeded          -> UNREACHABLE   OK
+    E0907 ... memcache.go:265] "Unhandled Error" err="couldn't get
+      current server API group list: Get "https://.../api?timeout=3s":
+      context deadline exceeded"                                       -> UNKNOWN       MISS
+
+So the classifier handles the plain form and **not** the `memcache.go` form — which is what
+`kubectl get ns -l <selector>` actually emits against an unreachable server, i.e. exactly the call
+`creds.sh`'s Harbor block makes. The report then says *"kubectl failed for a reason we do not
+classify"*: honest (it claims no cause) but uninformative in a state where UNREACHABLE is knowable.
+
+The stakes are why it is worth closing: a slow-or-dead lab must never be reported as an expired
+credential, because that advice spends one of **THREE** vCenter SSO attempts before permanent
+lockout. UNREACHABLE's sentence names the network, not a login — which is the right answer and the
+one currently being lost.
+
+**Done when:** the `memcache.go`/`couldn't get current server API group list … context deadline
+exceeded` shape maps to UNREACHABLE, with the existing arm's comment extended to say why there are
+two spellings. Cheap: it is one more pattern in an arm that already exists, so it does not add a
+class and does not disturb `check-classifier-consumers`. **Do NOT map a timeout onto UNAUTHORIZED to
+make the message prettier.**
+
+## B545 — 🟢 `test-creds-show.sh` reports a CASCADE that hides the real failure
+
+`if [ "$fail" = 0 ]` at `:337` gates a block that DEFINES `render_with_cluster` (`:597`) while a
+caller at `:867` runs regardless. So the FIRST real assertion failure produces three extra
+`render_with_cluster: command not found` FAILs that look like independent defects. Measured
+2026-09-07: one genuine failure presented as four, and the three noisy ones sent the reader to a
+function that was fine.
+
+✅ **FIXED 2026-09-07** — `render_with_cluster` hoisted above the gate, beside its two already
+top-level siblings `render` and `render_with_env`. RED-proved by injecting `fail=1` before the gate:
+3 spurious `command not found` FAILs before, **0** after.
+
+⚠️ The noise was not the worst of it. An implementation round RED-proved that the same gap produced a
+**VACUOUS ok**: `B207: SILENT when every vks-login requirement is met` is a NEGATIVE assertion, and
+it was satisfied by the empty string an undefined function returns. A green that means nothing is
+worse than three loud false FAILs.
+
+## B546 — ⛔ REFUTED, NOT A DEFECT: the `VKS / SSO ... <not set — vsphere method only>` row
+
+Recorded because it has now been "discovered" twice and the obvious fix is dangerous.
+
+The row LOOKS self-contradicting — it sits directly above `vcf CLI (the VKS / SSO account)` showing a
+real password. But `creds.sh:1489-1491` already states that exact problem and the marker IS the
+applied fix; `:1512` records the design rule ("the marker states what is unconditionally true of the
+VARIABLE"). Measured: every live `VKS_PASSWORD` reader is in the vsphere arm
+(`30-vks-login.sh:486,488`, `02-env.sh:245`, `creds.sh:1435`), so the marker is TRUE.
+
+**Both obvious remedies are refuted**, one on lockout grounds:
+
+- *"show the sibling password here"* — **wrong secret under the wrong label.** `creds.sh:1514` reads
+  `VCF_CLI_VSPHERE_PASSWORD`, NOT `VCENTER_PASSWORD`; `.env` carries both independently and nothing
+  defaults one from the other. `.env.example:1759` says they are the same value **"on a standard
+  lab"** — permission to differ, not identity. An operator whose keys differ takes the wrong one to
+  `kubectl vsphere login` and **spends one of three attempts before permanent SSO lockout**. Under a
+  pipe both cells render masked, so the wrong-secret render is INVISIBLE in the walk logs that would
+  otherwise catch it.
+- *"render `<not needed: VKS_AUTH_METHOD=...>`"* — four states, and the fourth is the shipped default
+  (`.env.example:1240` ships it COMMENTED; `creds.sh` reads `${VKS_AUTH_METHOD:-}`), so the commonest
+  config renders `<not needed: VKS_AUTH_METHOD=>`.
+
+If the wording is revisited a third time, lead with the variable NAME rather than `<not set`, and
+treat it as a third attempt after two refutations — with its own round.

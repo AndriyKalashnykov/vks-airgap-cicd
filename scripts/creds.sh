@@ -55,7 +55,7 @@ _no_probe_snapshot="${CREDS_NO_PROBE:-0}"
 # ⚠️ _ssh_verr ADDED 2026-09-05. It was MY OWN leak, and it is precisely the class this trap was
 # introduced for (the pre-existing _argo_err mktemp leaked on every error path): any death between
 # its mktemp and its rm left a temp file per run.
-trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" "${_ssh_verr:-}" "${_route_dead:-}" 2>/dev/null || true' EXIT
+trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" "${_ssh_verr:-}" "${_h_err:-}" "${_route_dead:-}" 2>/dev/null || true' EXIT
 
 # B528/F3 — the route probe's COST BOUND. Every ingress row targets the SAME LB, so once one HTTP
 # probe fails to complete, the remaining eight will too — and each costs a full timeout.
@@ -642,8 +642,53 @@ fi
 printf '\n  Context\n'
 case "$_prov" in
   DISCOVERED) printf '    values below : read from the cluster you are talking to now\n' ;;
-  STORED)     printf '    values below : saved by an earlier run, and not tied to this cluster — some may\n'
-              printf '                   be from a lab that no longer exists. Check: make env-validate\n' ;;
+  # ⚠️ REWORDED 2026-09-07. It used to read "saved by an earlier run, and not tied to this cluster
+  # — some may be from a lab that no longer exists." Every word of that is defensible and the whole
+  # sentence was still wrong to print, because it fires on EVERY real lab, ALWAYS: `state_stamp` has
+  # exactly two callers (05-kind-up.sh and a manual `make state-stamp`) and NOTHING on the real-lab
+  # path calls it — recorded at test-creds-show.sh:211 (B87). A warning that cannot vary carries no
+  # information while reading as one, and an operator staring at a fully-serving lab reasonably asks
+  # what the hell it means.
+  #
+  # MEASURED: this arm is reached ONLY when the sink is UNSTAMPED. A stamped-and-contradicted sink is
+  # refused by state_check, which sets _sink_refused=1 -> _prov=DEFAULT (the branch above) and gets
+  # its own REFUSED block. So STORED does not mean "possibly stale"; it means "carries no stamp",
+  # which on a real lab is simply the normal state.
+  #
+  # A round refuted the obvious fix (make the real-lab path call `state_stamp`): a guest-side stamp
+  # ARMS state_check's mismatch-refusal against the Supervisor-side commands both scenario docs tell
+  # you to run, and the report then loses all six live overlay keys and downgrades to "nothing is
+  # installed yet" — strictly worse. BACKLOG.md:1811 (B86) refuted it once already, with an A/B.
+  # So: no writes. Say what is true, and point at the column that carries the per-row answer.
+  #
+  # ⚠️ THE ARM IS SPLIT, because "STORED means unstamped" is FALSE. I asserted it, and an
+  # implementation round REFUTED it by running the thing: line 610's `elif [ -n "$_stamp" ] && [
+  # "$_stamp" = "$_live_srv" ]` sends a MATCHING stamp to DISCOVERED, and everything else — including
+  # a stamp for a DIFFERENT cluster — falls to this `else`. It reaches here rather than being refused
+  # because `state_check` returns 0 early when `_VKS_EXPLICIT_KUBECONFIG` is empty; lib/os.sh:666-669
+  # records that measurement in the repo's own words ("three keys were stripped from a sink stamped
+  # for ANOTHER cluster and state_check never refused").
+  #
+  # MEASURED with a sink stamped `https://192.168.101.999:6443` and no explicit KUBECONFIG: the
+  # single-arm reword printed "carries no cluster stamp" over a sink that carries one for a dead lab,
+  # and printed that lab's Harbor and ArgoCD endpoints as the operator's. The sentence I deleted was
+  # CORRECT AND ACTIONABLE in exactly that state — so removing it traded real noise for real silence.
+  #
+  # The original complaint stands: an alarm that cannot vary carries no information. The fix is to
+  # make it VARY, not to delete it. Unstamped (the normal real-lab state) is neutral; stamped-and-
+  # contradicted names BOTH servers, so it is a fact the reader can check rather than a mood.
+  STORED)     if [ -z "$_stamp" ]; then
+                printf '    values below : your .env plus a state overlay that carries no cluster stamp — which is\n'
+                printf '                   NORMAL on a real lab, and does NOT mean they are stale. Nothing here\n'
+                printf '                   proves either way; the Reachable column in the services table above is\n'
+                printf '                   the live answer for those rows. To re-check credentials: make env-validate\n'
+              else
+                printf '    values below : ⚠️ the state overlay is stamped for a DIFFERENT cluster. Its endpoints and\n'
+                printf '                   passwords below belong to that one, not to the cluster you are talking to.\n'
+                printf '                   stamped for : %s\n' "$_stamp"
+                printf '                   you are on  : %s\n' "${_live_srv:-<could not read a server from KUBECONFIG>}"
+                printf '                   Inspect it with: make state-show   |   re-check: make env-validate\n'
+              fi ;;
   *)          if [ "$_env_populated" = 1 ]; then
                 printf '    values below : from YOUR .env — the values you supplied. This report cannot\n'
                 printf '                   confirm they are still current. Check: make env-validate\n'
@@ -662,6 +707,18 @@ elif [ "$_have_sink" != 1 ]; then
   printf '    values below : nothing has been installed yet\n'
 fi
 printf '    flow         : %s\n' "$_flow"
+# ⚠️ "cluster", NOT "guest cluster" — and the ambiguity is DELIBERATE until something can resolve it.
+# On a real lab there are always TWO (the Supervisor, where Harbor and ArgoCD run as Services, and
+# the guest/workload cluster). Relabelling this "guest cluster:" was tried on 2026-09-07 and REVERTED
+# the same day: `_cluster` is computed from whatever $KUBECONFIG names, with ZERO guest/Supervisor
+# discrimination, so the label is an assertion the code cannot support. MEASURED by an implementation
+# round: with a Supervisor kubeconfig it rendered `guest cluster: reachable — context
+# '192.168.101.128'`. That state is DOCUMENTED, not hypothetical — docs/scenario-1.md:322 exports
+# KUBECONFIG=./secrets/supervisor.kubeconfig and never re-exports the guest before :357 invites
+# `make creds-show` 35 lines later, in the same shell (scenario-2.md:148 is the same).
+# An ambiguous label is worse than a precise one; a FALSE one is worse than both.
+# To revisit: give it a real discriminator (does the server match VKS_STATE_SERVER? does the context
+# resolve a Cluster CRD?) and label it only when the answer is known.
 printf '    cluster      : %s\n' "$_cluster"
 
 echo
@@ -998,6 +1055,34 @@ esac
 # (env_publish_all writes BOTH keys, and since B202 F4 it REFUSES to overwrite a robot$ pair).
 # test-creds-show.sh asserts this mechanically — a comment alone is not the control.
 add_row "Harbor (registry)" "$harbor_url" "$harbor_user" "$harbor_pw" "$(_reach_harbor)"
+# ── _kube_classify <errfile> <prefix> — ONE mapping of a kube failure class to (token, sentence) ──
+# BOTH call sites in the SSH probe go through this. The first version had two: a full case at the
+# listing site and a THREE-ARM case at the read site, whose `*)` swallowed five real classes. The
+# repo's own `check-classifier-consumers` gate caught it (Makefile:383) — it requires every consumer
+# of classify_kube_failure to handle EVERY class, precisely because a `*)` that says "not one we
+# classify" is FALSE for a class that exists and drops the remedy that class carries.
+# One function = one place to be complete, and the gate has one consumer to check.
+#
+# HOISTED 2026-09-07 and renamed off `_ssh_`: the HARBOR admin-password cell needs the same
+# mapping, and it renders ~450 lines EARLIER. Outputs are `_kube_tok`/`_kube_state` so the SSH
+# block keeps `_ssh_tok`/`_ssh_state` as its own state (it sets them on arms this function never
+# sees — <ambiguous>, <none>, <no key>, <empty>); each SSH call site copies across explicitly.
+# A second hand-rolled taxonomy was REFUTED (round 2026-09-07): a 4-value enum drops five of the
+# eight classes, and `check-classifier-consumers` exists precisely to stop that.
+_kube_classify() {
+  local _e="$1" _p="$2"
+  case "$(classify_kube_failure "$_e")" in
+    FORBIDDEN)           _kube_tok="<forbidden>";     _kube_state="${_p} — FORBIDDEN: this identity may not read that in '${VKS_NAMESPACE:-?}'. Ask your platform admin." ;;
+    UNAUTHORIZED)        _kube_tok="<auth failed>";   _kube_state="${_p} — the Supervisor REJECTED this kubeconfig. Re-run: make vks-login" ;;
+    STALE_CA)            _kube_tok="<stale CA>";      _kube_state="${_p} — the Supervisor answered but its CA does not verify (kubeconfig from a destroyed lab?)" ;;
+    UNREACHABLE)         _kube_tok="<unreachable>";   _kube_state="${_p} — the Supervisor is unreachable from here" ;;
+    PLAINTEXT)           _kube_tok="<plaintext>";     _kube_state="${_p} — the Supervisor endpoint answered PLAINTEXT where TLS was expected" ;;
+    NO_KUBE_TARGET)      _kube_tok="<no target>";     _kube_state="${_p} — the kubeconfig names no cluster" ;;
+    KUBECONFIG_UNUSABLE) _kube_tok="<bad kubeconfig>"; _kube_state="${_p} — the kubeconfig is unusable (something it NAMES is missing)" ;;
+    *)                   _kube_tok="<kubectl failed>"; _kube_state="${_p} — kubectl failed for a reason we do not classify" ;;
+  esac
+}
+
 # A ROBOT CANNOT LOG INTO THE HARBOR WEB UI -- measured on the live lab: the `robot$...` pair returns
 # 412 from /api/v2.0/users/current while admin returns 200 (controls: admin+wrong-password 401,
 # no-credentials 401). The row above is the REGISTRY credential the pipeline pushes with, which is
@@ -1008,27 +1093,96 @@ add_row "Harbor (registry)" "$harbor_url" "$harbor_user" "$harbor_pw" "$(_reach_
 # ⚠️ ATOMIC PAIR FROM ONE SOURCE, per the rule above: the username is `admin` BY DEFINITION of this
 # secret and the password comes from that same secret -- never field-by-field from two places.
 # Supervisor-only by nature (RULE ZERO-B): a tenant without it gets the command, not a broken cell.
+#
+# 🔴 THE REMEDY THIS CELL USED TO NAME COULD NEVER WORK. It printed
+# `<not read — run: make harbor-admin-password>`. But this whole block is gated on
+# `harbor_username_is_robot`, so whenever that sentence renders, HARBOR_USERNAME *is* a robot — and
+# in exactly that state `28-harbor-admin-password.sh` either exits 0 without reading the admin
+# secret (:60-62, "already authenticates - leaving it alone") or DIES REFUSING (:79, "is a ROBOT
+# account ... that would silently downgrade a least-privilege setup"). So the report sent the
+# operator to a command that, in the only state where the advice appeared, cannot produce the value.
+# A shipped RULE ZERO-V violation, found by a round on 2026-09-07 that was chartered to look at
+# something else entirely. Falsifier, non-mutating:
+#   bash -c 'set -a; . .env; set +a; case "$HARBOR_USERNAME" in robot\$*) echo "cell renders AND the
+#            command refuses";; esac'
+#
+# It now says WHAT HAPPENED, from `_kube_classify` — the same eight-class mapping the SSH row uses,
+# so "expired" and "forbidden" and "the lab is off" stop collapsing into one sentence. The reason is
+# a FOOTNOTE, not a cell: the password column's width is a max over every row (the SSH block records
+# the measurement that forced that split).
 if harbor_username_is_robot "${HARBOR_USERNAME:-}"; then
-  _h_admin_pw="<not read — run: make harbor-admin-password>"
+  _h_admin_pw="<not read>"; _h_admin_why=""
   _h_sup="$(supervisor_kubeconfig 2>/dev/null || true)"
+  if [ -z "$_h_sup" ]; then
+    # A TENANT HAS NO SUPERVISOR AND THAT IS NORMAL (RULE ZERO-B: it is the DEFAULT posture), so this
+    # is not an error and must not name `make vks-login` — the round refuted that: `absent` cannot be
+    # told apart from "scenario-1 operator who has not logged in yet", and asserting the wrong one at
+    # a persona who is fine reads as a broken product.
+    _h_admin_why="no Supervisor kubeconfig here — this password lives on the Supervisor, so ask your platform team for it"
+  elif [ "$_no_probe_snapshot" = 1 ]; then
+    _h_admin_why="not probed (CREDS_NO_PROBE=1)"
+  fi
   if [ -n "$_h_sup" ] && [ "$_no_probe_snapshot" != 1 ]; then
-    _h_ns="${HARBOR_SERVICE_NAMESPACE:-}"
+    _h_err="$(mktemp)"; _h_ns="${HARBOR_SERVICE_NAMESPACE:-}"
     # `|| true` IS LOAD-BEARING, and its absence killed the WHOLE report. MEASURED 2026-09-07:
     # without it a failing kubectl makes the pipeline non-zero, and because the substitution is the
     # LAST command of the `[ -n ] ||` list, `set -e` fires — the run exited rc=7 having printed only
     # the Context block. The services table, the lab-access table and every footnote were LOST.
     # Its SIBLING two lines down already had the guard; this one did not. Reachable whenever the
     # Supervisor is slow, the token has expired, or the caller is a tenant (Forbidden).
-    [ -n "$_h_ns" ] || _h_ns="$(KUBECONFIG="$_h_sup" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl \
-        --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-5s}" get ns \
-        -l appplatform.vmware.com/serviceId=harbor -o name 2>/dev/null | head -1 | sed 's|namespace/||' || true)"
+    # stderr is CAPTURED, not discarded. `2>/dev/null` is what made every failure here look
+    # identical — the conflation of "I could not ask" with "the answer is no" that this file's own
+    # comment says was already fixed twice elsewhere.
+    # ⚠️ THE rc IS CAPTURED, NOT INFERRED FROM EMPTINESS. The first cut of this block branched on
+    # "is the output empty", and an implementation round MEASURED two ways that is wrong:
+    #   * rc=0 + EMPTY is a SUCCESS — kubectl asked and there is genuinely no namespace labelled
+    #     serviceId=harbor (Harbor not installed as a Supervisor Service, a routine Scenario-2
+    #     shape). Classifying it printed "kubectl failed for a reason we do not classify" about a
+    #     kubectl that exited 0. That is the SAME conflation this change exists to remove, inverted.
+    #   * classify_kube_failure on an EMPTY errfile returns UNKNOWN, so the sentence was not merely
+    #     wrong, it was maximally uninformative.
+    # No `| head -1 | sed` either: a pipeline hides the rc, and `head` early-exits (the SIGPIPE trap
+    # in rules/shell/coding-style.md). Parameter expansion does the same job with no forks and no
+    # status to lose.
+    if [ -z "$_h_ns" ]; then
+      _h_nsraw="$(KUBECONFIG="$_h_sup" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl \
+          --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-5s}" get ns \
+          -l appplatform.vmware.com/serviceId=harbor -o name 2>"$_h_err")" && _h_rc=0 || _h_rc=$?
+      _h_ns="${_h_nsraw%%$'\n'*}"; _h_ns="${_h_ns#namespace/}"
+      if [ "$_h_rc" -ne 0 ]; then
+        _kube_classify "$_h_err" "could not ask the Supervisor for the Harbor service namespace"
+        _h_admin_pw="$_kube_tok"; _h_admin_why="$_kube_state"
+      elif [ -z "$_h_ns" ]; then
+        _h_admin_pw="<no harbor ns>"
+        _h_admin_why="the Supervisor answered, and has NO namespace labelled appplatform.vmware.com/serviceId=harbor — Harbor is not a Supervisor Service on this lab, so there is no admin secret here to read"
+      fi
+    fi
     if [ -n "$_h_ns" ]; then
+      # ⚠️ SAME TREATMENT, and the guard that used to be here was DEAD CODE. It read
+      # `[ -z "$_h_admin_pw" ]`, but the initialiser two blocks up sets `<not read>` — a 10-character
+      # string — so the test was ALWAYS false and `_kube_classify` was NEVER reached on this call.
+      # MEASURED with two stubs (NotFound rc=1; rc=0 with the key renamed): both rendered a bare
+      # `<not read>` with no footnote at all. The stderr capture added on the same line was written
+      # to a file nothing read.
       _h_enc="$(KUBECONFIG="$_h_sup" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl \
           --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-5s}" -n "$_h_ns" get secret harbor-core-ver-1 \
-          -o jsonpath='{.data.HARBOR_ADMIN_PASSWORD}' 2>/dev/null || true)"
-      if [ -n "$_h_enc" ]; then _h_admin_pw="$(printf '%s' "$_h_enc" | base64 -d 2>/dev/null || true)"; fi
-      [ -n "$_h_admin_pw" ] || _h_admin_pw="<not read — run: make harbor-admin-password>"
+          -o jsonpath='{.data.HARBOR_ADMIN_PASSWORD}' 2>"$_h_err")" && _h_rc2=0 || _h_rc2=$?
+      if [ "$_h_rc2" -ne 0 ]; then
+        _kube_classify "$_h_err" "could not read harbor-core-ver-1 in ${_h_ns}"
+        _h_admin_pw="$_kube_tok"; _h_admin_why="$_kube_state"
+      elif [ -z "$_h_enc" ]; then
+        # rc=0 and nothing back: the SECRET is there, the KEY is not. Do not say kubectl failed.
+        _h_admin_pw="<no key>"
+        _h_admin_why="harbor-core-ver-1 in ${_h_ns} carries no HARBOR_ADMIN_PASSWORD key (renamed upstream?)"
+      else
+        _h_admin_pw="$(printf '%s' "$_h_enc" | base64 -d 2>/dev/null || true)"
+        if [ -z "$_h_admin_pw" ]; then
+          _h_admin_pw="<undecodable>"
+          _h_admin_why="harbor-core-ver-1 in ${_h_ns} holds a HARBOR_ADMIN_PASSWORD that is not valid base64"
+        fi
+      fi
     fi
+    rm -f "$_h_err"
   fi
   case "$_h_admin_pw" in
     '<'*) : ;;                                   # a placeholder — print it, never mask it
@@ -1269,6 +1423,30 @@ fi
 if [ "${_headlamp_note:-0}" = 1 ]; then
   printf '\n  Headlamp: if the token screen comes straight back, the token expired — copy a fresh one above.\n'
 fi
+# WHY the Harbor admin password is missing, and what to ACTUALLY do about it. Printed only when the
+# cell did not resolve, so a healthy run stays quiet.
+#
+# ⚠️ TOP-LEVEL, and it was NOT. The first cut landed INSIDE `if [ "${_headlamp_note:-0}" = 1 ]`, so
+# it rendered only when the HEADLAMP token had been read — two unrelated facts welded together. An
+# implementation round MEASURED perfect discrimination on identical input: headlamp read -> footnote
+# present; headlamp unread -> footnote SILENT while the cell still showed its token. The persona who
+# loses most is the one this whole change is for: a tenant (RULE ZERO-B default) with no Supervisor
+# AND no headlamp, who got a bare token and no explanation — strictly LESS than the wrong-remedy
+# sentence it replaced.
+#
+# ⚠️ THE REFUSAL SENTENCE IS NOT AN ABSOLUTE. 28-harbor-admin-password.sh has TWO robot behaviours:
+# :58-62 exits 0 leaving a WORKING robot credential alone, and :78-89 dies refusing. Saying it
+# "REFUSES" unconditionally is false in the healthy state scenario-1 Step 9 produces — the operator
+# runs it, gets rc=0 and two INFO lines, and still has no password. Say what is true of BOTH arms.
+if [ -n "${_h_admin_why:-}" ]; then
+  printf '\n  Harbor admin password NOT read: %s\n' "$_h_admin_why"
+  # No backticks: shellcheck reads them as command substitution inside a single-quoted printf
+  # (SC2016), and they are pure decoration in terminal output.
+  printf '    make harbor-admin-password will NOT produce it: with a robot HARBOR_USERNAME (yours\n'
+  printf '    is one, which is why this row is here at all) it either leaves the working robot\n'
+  printf '    credential alone and exits 0, or refuses outright rather than downgrade a\n'
+  printf '    least-privilege credential to full admin. This value is read from the Supervisor.\n'
+fi
 if [ "${_argo_initial_note:-0}" = 1 ]; then
   case "${_argo_state}" in
     CURRENT)
@@ -1458,26 +1636,6 @@ _first_unmet() {
   done < <(_vks_login_requires)
   return 1
 }
-# ── _ssh_classify <errfile> <prefix> — ONE mapping of a kube failure class to (token, sentence) ──
-# BOTH call sites in the SSH probe go through this. The first version had two: a full case at the
-# listing site and a THREE-ARM case at the read site, whose `*)` swallowed five real classes. The
-# repo's own `check-classifier-consumers` gate caught it (Makefile:383) — it requires every consumer
-# of classify_kube_failure to handle EVERY class, precisely because a `*)` that says "not one we
-# classify" is FALSE for a class that exists and drops the remedy that class carries.
-# One function = one place to be complete, and the gate has one consumer to check.
-_ssh_classify() {
-  local _e="$1" _p="$2"
-  case "$(classify_kube_failure "$_e")" in
-    FORBIDDEN)           _ssh_tok="<forbidden>";     _ssh_state="${_p} — FORBIDDEN: this identity may not read that in '${VKS_NAMESPACE:-?}'. Ask your platform admin." ;;
-    UNAUTHORIZED)        _ssh_tok="<auth failed>";   _ssh_state="${_p} — the Supervisor REJECTED this kubeconfig. Re-run: make vks-login" ;;
-    STALE_CA)            _ssh_tok="<stale CA>";      _ssh_state="${_p} — the Supervisor answered but its CA does not verify (kubeconfig from a destroyed lab?)" ;;
-    UNREACHABLE)         _ssh_tok="<unreachable>";   _ssh_state="${_p} — the Supervisor is unreachable from here" ;;
-    PLAINTEXT)           _ssh_tok="<plaintext>";     _ssh_state="${_p} — the Supervisor endpoint answered PLAINTEXT where TLS was expected" ;;
-    NO_KUBE_TARGET)      _ssh_tok="<no target>";     _ssh_state="${_p} — the kubeconfig names no cluster" ;;
-    KUBECONFIG_UNUSABLE) _ssh_tok="<bad kubeconfig>"; _ssh_state="${_p} — the kubeconfig is unusable (something it NAMES is missing)" ;;
-    *)                   _ssh_tok="<kubectl failed>"; _ssh_state="${_p} — kubectl failed for a reason we do not classify" ;;
-  esac
-}
 
 _lab_plain() { if [ -n "${1:-}" ]; then printf '%s' "$1"; else printf '<not set>'; fi; }
 _lab_secret() { if [ -n "${1:-}" ]; then _mask "$1"; else printf '<not set>'; fi; }
@@ -1591,7 +1749,7 @@ else
                    -n "$VKS_NAMESPACE" get secret -o name </dev/null 2>"$_lab_err")" && _ssh_rc=0 || _ssh_rc=$?
     if [ "$_ssh_rc" -ne 0 ]; then
       # THE WHOLE POINT: name WHY we could not ask, so it is never mistaken for "there is none".
-      _ssh_classify "$_lab_err" "could not ask"
+      _kube_classify "$_lab_err" "could not ask"; _ssh_tok="$_kube_tok"; _ssh_state="$_kube_state"
     else
       # SCOPE TO THIS CLUSTER (B-scope). MEASURED 2026-09-05: with cicd-gc1 and cicd-gc2 both in
       # namespace 'cicd', the old `| head -1` picked cicd-gc1's secret ALPHABETICALLY and the report
@@ -1616,7 +1774,7 @@ else
       # GUARD ON "WE HAVE A NAME", NOT ON THE COUNT (adversary CRITICAL, 2026-09-05).
       # It read `[ -z "$_ssh_sec" ] && [ "$_ssh_nc" -eq 0 ]`, so the AMBIGUOUS case (>=2 candidates,
       # none matching) fell through to the else and ran `kubectl get secret ""` with an EMPTY name.
-      # That fails, and _ssh_classify then OVERWRITES the `<ambiguous>` refusal with
+      # That fails, and _kube_classify then OVERWRITES the `<ambiguous>` refusal with
       # `<kubectl failed>` — so the refusal this whole block exists to produce was UNREACHABLE, in
       # exactly the two-cluster namespace it was written for, and it wasted a Supervisor request.
       if [ -z "$_ssh_sec" ]; then
@@ -1634,7 +1792,7 @@ else
         # purity-check before decoding, or a partial decode ships a WRONG password.
         case "$_ssh_b64" in ''|*[!A-Za-z0-9+/=]*) _ssh_b64="" ;; esac
         if [ "$_ssh_rc" -ne 0 ]; then
-          _ssh_classify "$_lab_err" "could not read ${_ssh_sec}"
+          _kube_classify "$_lab_err" "could not read ${_ssh_sec}"; _ssh_tok="$_kube_tok"; _ssh_state="$_kube_state"
         elif [ -z "$_ssh_b64" ]; then
           _ssh_tok="<no key>"; _ssh_state="${_ssh_sec} carries no usable ssh-passwordkey"
         else
@@ -1753,7 +1911,7 @@ EOF
 # literal in scenario-1.md:1100,:1101 and scenario-2.md:812. The TAIL is free — measured, the
 # phrase "the values you put in .env" appears nowhere else in the repo.
 # ⚠️ THE ABSOLUTE IS SCOPED TO `<not set>` ON PURPOSE. A first draft said "a blank is ... never a
-# statement about the lab", which the FOURTH ROW OF THIS TABLE contradicts: `_ssh_classify` renders
+# statement about the lab", which the FOURTH ROW OF THIS TABLE contradicts: `_kube_classify` renders
 # `<auth failed>` ("the Supervisor REJECTED this kubeconfig"), `<forbidden>`, `<none>` ("this cluster
 # publishes no node-SSH secret"), `<unreachable>` and `<stale CA>` — every one of them a statement
 # about the lab, and scenario-1.md:1102 documents that intent ("never a blank that would read as
