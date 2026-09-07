@@ -1233,6 +1233,10 @@ app-run: check-ports ## Run ONE app locally (APP=javawebapp|gowebapp; default ja
 check-sigterm: ## Offline: every app is PID 1 (or execs into it) AND registers a SIGTERM handler
 	@bash $(SCRIPTS)/check-sigterm.sh
 
+.PHONY: check-app-icons
+check-app-icons: ## Offline: every app ships ONE structurally-sound icon, serves it at the same path, tests it, and no two are identical
+	@bash $(SCRIPTS)/check-app-icons.sh
+
 .PHONY: check-infra-hosts-single-source
 check-infra-hosts-single-source: ## Fail if any script hand-enumerates the ingress infra hostnames instead of calling ingress_infra_hosts()
 	@$(SCRIPTS)/check-infra-hosts-single-source.sh
@@ -1801,7 +1805,7 @@ check-tekton-scripts: ## Every Tekton `script:` block: shebang is /bin/sh AND th
 
 .PHONY: static-check-fast
 #check-static-fast: @ The CHEAP half of static-check: the alignment/doc/env gates only (~9s, no toolchain)
-static-check-fast: check-notfound-discriminator check-jumpbox-shadow check-tekton-scripts check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-walk-env-manifest check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-sigterm check-how-provenance check-vks-provenance check-image-alignment check-kind-kubeconfig check-deploy-manifests check-cluster-template-vars check-dockerfile-no-install check-selfbuilt ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
+static-check-fast: check-notfound-discriminator check-jumpbox-shadow check-tekton-scripts check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-walk-env-manifest check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-sigterm check-app-icons check-how-provenance check-vks-provenance check-image-alignment check-kind-kubeconfig check-deploy-manifests check-cluster-template-vars check-dockerfile-no-install check-selfbuilt ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
 
 # static-check is the UNION, so there is exactly ONE list. Defining the fast set separately and
 # leaving static-check with its own hand-typed copy is the enumerated-list rot this repo keeps
