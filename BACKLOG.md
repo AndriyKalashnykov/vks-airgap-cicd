@@ -5459,40 +5459,48 @@ sentence? A gate that fires on ordinary prose is the one people delete.
 **Done when:** ruled on by a round, and either the gate ships with a measured false-RED rate over
 the real `docs/` tree, or the refutation is recorded here so nobody rebuilds it.
 
-## B540 — 🟡 five gates grep the tree with no `-I`, so a gitignored `.pyc` prints `binary file matches` into every CI log
+## B540 — ✅ SHIPPED — it was ONE gate, not five, and it was NEVER a denominator risk
 
-**Measured 2026-09-07.** `scripts/lib/__pycache__/capacity-probe.cpython-314.pyc` is gitignored and
-untracked, yet it produced **8** `grep: … binary file matches` lines in one `make ci` log. The gates
-that scan without `-I`, an `--exclude-dir`, or a `git ls-files`-derived list:
+**Closed 2026-09-07. The row as filed was wrong twice, and both errors are the same shape: I
+attributed by HEURISTIC instead of measuring.**
 
-    check-classifier-consumers  check-doc-target-coverage  check-env-clobber
-    check-psa-defaults          check-env-coverage
+It named five gates picked by "greps recursively without `-I`". **All five were innocent.** The
+emitter is `check-image-alignment.sh`, and not via either of its two `grep -r` calls — it is a
+`find scripts k8s -type f | xargs -0 grep -hvE '^#'` pipeline that runs **once per image**, so a
+gitignored `scripts/lib/__pycache__/*.pyc` produced **12** `binary file matches` lines on stderr in
+one run. A `bash -x` trace found it in seconds; two rounds of reading the source had not.
 
-**Cosmetic UNLESS a denominator counts it** — and which of them, if any, does is **UNVERIFIED**. That
-is the part worth settling, because a denominator inflated by a build artifact is the
-`gates.md` "print the denominator, then reconcile it against an independent count" defect.
+**The open question is settled and the answer is NO.** Byte-identical output with and without the
+`.pyc` (md5 `fca7bef8`) on every candidate gate — no denominator moves, no verdict changes. It was
+pure log noise. The worry that motivated the row does not exist.
 
-**Done when:** each gate is run with and without the `.pyc` present and its printed denominator is
-shown to be identical, or the gate is fixed. Cheap: `-I` on the grep, or derive the file list from
-`git ls-files`.
+⚠️ **My first measurement of this was VACUOUS** and would have "proved" the same thing for the wrong
+reason: I planted a synthetic `.pyc` (400 bytes of `/bin/true`) that contains none of the strings
+the gates grep for, so it could never match and produced **zero** noise. A fixture has to be
+genuinely defective — `py_compile` the real source.
 
-## B541 — 🟡 `tree-stability` watches GITIGNORED build artifacts, so importing a hook mid-run fails the gate
+Fixed at the `find` (`! -path '*/__pycache__/*'`) plus `grep -I` as belt-and-braces. RED-proven that
+`-I` did not blind it: planting a drift in `images/images.txt` still exits 1 with the correct
+message on two independent arms (`TEMURIN_JRE_TAG` and `BUILDER_IMAGE`), and restores to 0.
 
-**Measured 2026-09-07**, twice in one session. `make ci` failed with:
+## B541 — ✅ SHIPPED — it was a MISSING PRUNE, not a gitignored-files policy question
 
-    tree-stability: THE TREE CHANGED WHILE THIS GATE RAN
-      modified: ./.claude/hooks/__pycache__/adversary-first-gate.cpython-314.pyc
+**Closed 2026-09-07, and the row's own framing was wrong.** It offered two candidates and called the
+choice an idea round. Candidate (a) — *exclude gitignored paths* — was **already refuted in
+`tree-stability.sh`'s own header**, which I had not read: *"DO NOT SIMPLIFY THIS TO `git ls-files`.
+That drops gitignored files, and the gitignored `./.env` is the ONLY thing this detector has ever
+actually caught."* Filing a candidate the target already refutes is the same defect as B540's
+heuristic attribution: I reasoned about the script instead of reading it.
 
-The `.pyc` is **gitignored and untracked**; it was created because a probe in another shell did
-`importlib` on the hook. The gate's verdict was correct in the narrow sense (the tree did change)
-and useless in the useful sense: nothing that ships changed, and the 135-test run it invalidated was
-entirely green.
+**The real answer needed no policy decision.** The snapshot already prunes `node_modules`, `target`,
+`obj`, `bin`, `.tsbuildinfo`, `secrets/`, `bundle` — the DERIVED-BUILD-OUTPUT category. Python's
+`__pycache__` was the only one of six languages' build dirs missing from that list. Adding it is
+consistent with the existing design and is **not** "exclude gitignored": `.env`, `secrets/` and
+`.env.state` all stay in scope.
 
-Two candidate fixes, neither yet chosen: exclude gitignored paths from the snapshot (matches what
-the gate is FOR — "did the artifact under test move"), or keep watching everything and document
-`PYTHONDONTWRITEBYTECODE=1` as required discipline for anyone probing a Python file during a run.
-⚠️ The first is not obviously right: a gate that ignores gitignored files cannot see an operator
-editing `.env` mid-run, which is a state it may legitimately want to catch. Needs an idea round.
+RED-proven four ways. Remove the prune -> the `.pyc` case fires a false RED. Widen it to `*.py` ->
+the new overshoot case fires AND the pre-existing `.claude/hooks` guard fires. Live, against the
+real detector: a `.pyc` written mid-run is now rc=0, while a mid-run `.env` edit is still rc=1 and a
+mid-run script edit is still rc=1 — so the coverage that actually matters is intact.
 
-**Done when:** the decision is made and RED-proven — a `.pyc` appearing mid-run does or does not
-fail the gate, deliberately, with the reason recorded.
+`scripts/test-tree-stability.sh` 29 -> 31 cases.

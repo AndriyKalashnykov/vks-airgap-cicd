@@ -86,6 +86,15 @@ SNAP="${TMPDIR:-/tmp}/.tree-stability-${_key}-${TREE_STABILITY_ID:-${PPID}}"
 #
 # ⚠️ DO NOT "SIMPLIFY" THIS TO `git ls-files`. That drops gitignored files, and the gitignored
 # `./.env` is the ONLY thing this detector has ever actually caught.
+#
+# `__pycache__` joins target/obj/bin/node_modules/*.tsbuildinfo for the SAME reason they are there:
+# it is COMPILED OUTPUT, regenerated deterministically from a tracked source, and nothing any gate
+# reads depends on it. It was simply never added — Python's build dir, missing from a list that
+# already had four other languages'. MEASURED 2026-09-07: `importlib`-ing a hook from another shell
+# during a run wrote `.claude/hooks/__pycache__/*.pyc` and FAILED the gate, invalidating a fully
+# green 135-test run. That is a false RED — the artifact under test did not move.
+# ⚠️ This is NOT "exclude gitignored files", which the note above refutes: `.env`, `secrets/` and
+# `.env.state` stay in scope, and the RED-proof below still fires on a mid-run `.env` edit.
 _snapshot() {
   find . \
     -name .git -prune -o \
@@ -96,6 +105,7 @@ _snapshot() {
     -name bundle -prune -o \
     -name node_modules -prune -o \
     -name target -prune -o \
+    -name '__pycache__' -prune -o \
     -name obj -prune -o \
     -name bin -prune -o \
     -name '.env.state' -prune -o \
