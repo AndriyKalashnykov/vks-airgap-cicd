@@ -34,7 +34,8 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         host = self.headers.get('Host', '')
         code = 200
-        for tok, c in (('c503', 503), ('c404', 404), ('c302', 302), ('c418', 418)):
+        for tok, c in (('c503', 503), ('c404', 404), ('c302', 302), ('c418', 418),
+                       ('c401', 401), ('c403', 403)):
             if tok in host: code = c
         self.send_response(code); self.send_header('Content-Length', '0'); self.end_headers()
     def log_message(self, *a): pass
@@ -74,6 +75,41 @@ ck "503 -> no backend (NOT serving: the B528 defect)" "$(probe c503.local)" "no 
 ck "404 -> no route (a rendering fault, not a dead pod)" "$(probe c404.local)" "no route"
 ck "302 -> serving (a redirect IS a working route)"   "$(probe c302.local)" "serving"
 ck "an unexpected status is REPORTED, not swallowed"  "$(probe c418.local)" "HTTP 418"
+
+# ── F6: an auth challenge is the STRONGEST confirmation this row's URL works ────────────────────
+# 401/403 proves the route resolved AND a live app answered AND it wants the very credential
+# printed beside it. They used to fall into the `HTTP %s` catch-all and read as an anomaly.
+ck "401 -> serving (an auth challenge means the app ANSWERED)" "$(probe c401.local)" "serving"
+ck "403 -> serving (ditto — the backend is up)"                "$(probe c403.local)" "serving"
+
+# ── F2: THE PORT, in the shape PRODUCTION actually produces ─────────────────────────────────────
+# ⚠️ `probe` above sets `_ing=127.0.0.1:$PORT` — a shape creds.sh NEVER produces (`_ing` is
+# `${INGRESS_LB_IP}`, a BARE IP) — which is exactly why 14/14 passed while the route probe
+# hardcoded port 80 and the TCP gate honoured INGRESS_PROBE_PORT. This case uses the real shape.
+# RED-PROOF: revert the `_u`/`case` lines in _reach_ingress and this returns `silent`.
+probe_bare() { # bare `_ing` + the documented port knob, i.e. what creds.sh really passes
+  ( eval "$_fn"
+    _ing="127.0.0.1"; _ing_live=1
+    CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 INGRESS_PROBE_PORT="$PORT" _reach_ingress "$1" )
+}
+ck "bare-IP ingress + INGRESS_PROBE_PORT -> serving (not a false 'silent')" \
+   "$(probe_bare ok.local)" "serving"
+
+# ── F3: one dead route must not cost eight more timeouts ────────────────────────────────────────
+# Every ingress row targets the SAME LB, so after one HTTP probe fails to complete the rest will
+# too. MEASURED: 9 rows serial at the 2s default = 18.1s; 1.0s once the first stops the rest.
+# `LB up` is what this function already says when it cannot ask about a route — not a new meaning.
+_sc="$T/route-dead"
+ck "after a 000 the sentinel is SET (the first row still says silent)" \
+   "$( ( eval "$_fn"; _ing="127.0.0.1:1"; _ing_live=1; _route_dead="$_sc"
+         CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=1 _reach_ingress dead.local ) )" "silent"
+ck "the sentinel file was created" "$( [ -e "$_sc" ] && echo yes || echo no )" "yes"
+ck "a LATER row short-circuits to LB up instead of timing out again" \
+   "$( ( eval "$_fn"; _ing="127.0.0.1:${PORT}"; _ing_live=1; _route_dead="$_sc"
+         CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _reach_ingress ok.local ) )" "LB up"
+ck "with NO sentinel the same row probes normally (the short-circuit is not always-on)" \
+   "$( ( eval "$_fn"; _ing="127.0.0.1:${PORT}"; _ing_live=1; _route_dead="$T/never-created"
+         CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _reach_ingress ok.local ) )" "serving"
 
 # The short-circuits must still win, or the probe would run where the report promised it would not.
 ck "CREDS_NO_PROBE=1 short-circuits"  \

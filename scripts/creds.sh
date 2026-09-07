@@ -55,7 +55,16 @@ _no_probe_snapshot="${CREDS_NO_PROBE:-0}"
 # ⚠️ _ssh_verr ADDED 2026-09-05. It was MY OWN leak, and it is precisely the class this trap was
 # introduced for (the pre-existing _argo_err mktemp leaked on every error path): any death between
 # its mktemp and its rm left a temp file per run.
-trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" "${_ssh_verr:-}" 2>/dev/null || true' EXIT
+trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" "${_ssh_verr:-}" "${_route_dead:-}" 2>/dev/null || true' EXIT
+
+# B528/F3 — the route probe's COST BOUND. Every ingress row targets the SAME LB, so once one HTTP
+# probe fails to complete, the remaining eight will too — and each costs a full timeout.
+# MEASURED 2026-09-07 against a responder that accepts TCP then never replies (the shape a rolling
+# or outlier-ejected Envoy presents): 9 rows serial at the 2s default = 18.1s, at 1s = 9.1s, and
+# 1.0s once the first failure stops the rest. An 18-second credentials report is one nobody runs.
+# It is a FILE and not a variable ON PURPOSE: `_reach_ingress` is called inside $( ), a SUBSHELL,
+# so an assignment there is discarded — the function's own comment says so. A file crosses.
+_route_dead="${TMPDIR:-/tmp}/.creds-route-dead.$$"
 
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
@@ -634,7 +643,7 @@ printf '\n  Context\n'
 case "$_prov" in
   DISCOVERED) printf '    values below : read from the cluster you are talking to now\n' ;;
   STORED)     printf '    values below : saved by an earlier run, and not tied to this cluster — some may\n'
-              printf '                   may be from a lab that no longer exists. Check: make env-validate\n' ;;
+              printf '                   be from a lab that no longer exists. Check: make env-validate\n' ;;
   *)          if [ "$_env_populated" = 1 ]; then
                 printf '    values below : from YOUR .env — the values you supplied. This report cannot\n'
                 printf '                   confirm they are still current. Check: make env-validate\n'
@@ -715,9 +724,16 @@ _probe_tcp() {                    # <host> <port> -> 0 if something answers, non
 #   stale DNS     — the LB answers and the NAME resolves, but to a DIFFERENT address than this
 #                   ingress: almost always a /etc/hosts line left by a PREVIOUS lab. The service is
 #                   fine and the link is dead, which is the case a plain "does it resolve" check
-#                   cannot see. ⚠️ Its remedy is NOT the append the `no DNS here` note gives:
-#                   /etc/hosts honours the FIRST match, so appending a second line for the same
-#                   host changes NOTHING. The stale line must be REPLACED.
+#                   cannot see. ⚠️ Its remedy is NOT the append the `no DNS here` note gives —
+#                   but NOT for the reason this comment used to give ("/etc/hosts honours the
+#                   FIRST match"), which is false. MEASURED 2026-09-07, ubuntu:24.04, glibc, two
+#                   /etc/hosts lines for one name on ordinary LAN addresses: with `multi on` in
+#                   /etc/host.conf `getent` returns BOTH, and the client tries them in order, so
+#                   an appended line helps ONLY IF THE STALE ADDRESS IS DEAD (served the new
+#                   backend) and does nothing if the previous lab is still up (served the stale
+#                   one). Replacing works in both cases, which is why we say replace.
+#                   ⚠️ Do not re-derive this on loopback: RFC 6724 sorts 127/8 specially and an
+#                   early arm there wrongly showed "append always works".
 #   silent        — the LB itself does not answer
 # `getent` on a non-resolving name is FREE (measured 0.002 s) and is already bounded by timeout
 # above, so this costs nothing on the happy path.
@@ -725,6 +741,10 @@ _reach_ingress() {
   [ "${_no_probe_snapshot:-${CREDS_NO_PROBE:-0}}" = 1 ] && { printf 'not probed'; return; }
   [ -n "${_ing:-}" ] || { printf 'no ingress';  return; }
   if [ "${_ing_live:-0}" != 1 ]; then printf 'silent'; return; fi
+  # A previous row already proved the LB does not complete an HTTP request (see _route_dead above).
+  # `LB up` is the SAME thing this function says when it has no host to name: the TCP probe passed
+  # and we did not learn anything about this route. It is not a new meaning.
+  [ -e "${_route_dead:-/nonexistent}" ] && { printf 'LB up'; return; }
   local _h="${1:-}"
   # ⚠️ RESOLVING IS NOT ENOUGH — IT MUST RESOLVE TO *THIS* INGRESS.
   # MEASURED 2026-09-06 on the live lab: /etc/hosts still carried a PREVIOUS lab's ingress
@@ -794,17 +814,31 @@ _reach_ingress() {
   # No host to name => we cannot ask the ROUTE, only the LB. Say what we actually know rather than
   # sending `Host: ` (which the ingress answers 404 for, i.e. we would invent a "no route" fault).
   [ -n "$_h" ] || { printf 'LB up'; return; }
+  # ⚠️ F2 — THE PORT. `_ing` is `${INGRESS_LB_IP}`, a BARE IP (creds.sh:166), while the TCP gate at
+  # :179 dials `${INGRESS_PROBE_PORT:-80}`. This curl used to hardcode port 80, so the two probes
+  # disagreed: on an ingress listening anywhere else the gate said ALIVE and every one of the nine
+  # rows then reported `silent` on a completely healthy lab — the `false dead` this file's own
+  # comment calls THE RISK TO AVOID. `.env.example` documents the knob as "the port your ingress
+  # actually listens on", so it exists for exactly this case.
+  # The `*:*` arm keeps `test-creds-reach-ingress.sh` green: it sets `_ing=127.0.0.1:$PORT`, a shape
+  # production never produces, which is why 14/14 passed over this defect for the arm's whole life.
+  local _u="$_ing"
+  case "$_ing" in *:*) : ;; *) _u="${_ing}:${INGRESS_PROBE_PORT:-80}" ;; esac
   local _code
   _code="$(curl -sS -o /dev/null -w '%{http_code}' \
-             --max-time "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" \
-             -H "Host: ${_h}" "http://${_ing}/" 2>/dev/null || true)"
+             --max-time "${CREDS_ROUTE_TIMEOUT_SECONDS:-${CREDS_PROBE_TIMEOUT_SECONDS:-2}}" \
+             -H "Host: ${_h}" "http://${_u}/" 2>/dev/null || true)"
   case "$_code" in
     # 000 is curl's "the request did not complete" (connect refused, timeout, TLS abort). It is
     # NUMERIC, so it would fall past every arm below into the catch-all and print `HTTP 000` — which
     # reads as a status a server returned. Nothing answered; that is `silent`, the same word the
     # LB-down arm above uses. Caught by test-creds-reach-ingress.sh, not by review.
-    ''|000|*[!0-9]*) printf 'silent' ;;
+    ''|000|*[!0-9]*) : > "${_route_dead:-/dev/null}" 2>/dev/null || true; printf 'silent' ;;
     2??|3??)     printf 'serving' ;;
+    # 401/403 proves MORE than a 200 would about the thing this row is about: the route resolved
+    # AND a live app answered AND it wants the credential printed beside it. Filing that under the
+    # `HTTP %s` catch-all made the strongest possible confirmation read as an anomaly.
+    401|403)     printf 'serving' ;;
     404)         printf 'no route' ;;
     5??)         printf 'no backend' ;;
     *)           printf 'HTTP %s' "$_code" ;;
@@ -1171,8 +1205,9 @@ case "$rows" in
     printf '\n  ⚠️  Some hosts above RESOLVE ON THIS MACHINE TO A DIFFERENT ADDRESS than the ingress\n'
     printf '      that is serving them — almost always an /etc/hosts line left by a PREVIOUS lab.\n'
     printf '      The service is NOT broken; the link is. A browser here will fail to connect.\n'
-    printf '      ⚠️ APPENDING A NEW LINE WILL NOT HELP: /etc/hosts uses the FIRST match, so the\n'
-    printf '      stale entry keeps winning. REPLACE it (needs root) — check what is there first:\n'
+    printf '      ⚠️ APPENDING a second line is UNRELIABLE: it helps only if the stale address is\n'
+    printf '      dead, and if that lab is still running the stale entry keeps winning. REPLACING\n'
+    printf '      works either way (needs root) — check what is there first:\n'
     printf '        grep -n vks.local /etc/hosts\n'
     printf '        sudo sed -i "s/^[0-9.]\\+\\( \\+.*vks\\.local\\)/%s\\1/" /etc/hosts\n' "${INGRESS_LB_IP:-<ingress-lb-ip>}"
     printf '      Then re-run this report; every affected row should turn to serving.\n'

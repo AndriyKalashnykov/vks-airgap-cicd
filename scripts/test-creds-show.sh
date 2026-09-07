@@ -222,7 +222,13 @@ else
   bad "unstamped overlay, non-KinD -> did NOT declare STORED. This is the REAL-LAB state, and the
       whole point of the tri-state is that it is distinguishable from DISCOVERED."
 fi
-if printf '%s' "$out" | grep -qi 'may be from a lab that no longer exists'; then
+# ⚠️ The phrase this greps for spans a LINE BREAK in the rendered output, and it used to match
+# only because of a DUPLICATED WORD ("...some may\n   may be from a lab..."). Fixing that typo
+# (2026-09-07) took this assertion red — an Expect literal and the string that satisfies it are two
+# copies with nothing asserting they agree, and here the second copy lived in a TEST, not a doc, so
+# `check-expect-literals` could not see it. Match a fragment that is on ONE line and carries no
+# accident: `be from a lab that no longer exists`.
+if printf '%s' "$out" | grep -qi 'be from a lab that no longer exists'; then
   ok "...and warns the HUMAN that the values may predate this cluster"
 else
   bad "...but the human is not told. The token alone is not the deliverable."
@@ -371,7 +377,7 @@ HARBOR_PASSWORD=fixture-value-not-a-real-secret
 # (DEFAULT, env-populated=1) already identifies "no overlay, but YOUR .env supplied real values"
 # uniquely. A fourth enum value (`SUPPLIED`) was proposed and REFUTED: it is either exactly that pair
 # (redundant), or it wins whenever .env is populated and DESTROYS the DISCOVERED/STORED split — the
-# branch carrying "may be from a lab that no longer exists", built after a measured 3-way failure.
+# branch carrying "be from a lab that no longer exists", built after a measured 3-way failure.
 # So: NO product change. Pin the PAIR, which nothing did before — STATE 1 pins DEFAULT with
 # env-populated=0, and this state pinned env-populated=1 while saying NOTHING about provenance.
 if printf '%s' "$out" | grep -q 'values-provenance: DEFAULT'; then
