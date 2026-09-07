@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ci-tier: fast — offline; a stub curl on PATH. No network, no cluster.
 #
-# test-harbor_probe.sh — RED-proofs for lib/harbor_probe.sh (B527).
+# test-harbor-probe.sh — RED-proofs for lib/harbor_probe.sh (B527).
 #
 # WHY THE THREE-VERDICT SHAPE IS THE THING UNDER TEST. A **private** project answers an anonymous
 # query with `[]` — byte-identical to a MISSING one. Collapsing that to two verdicts would tell a
