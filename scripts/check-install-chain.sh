@@ -56,6 +56,11 @@ for _t in $WANT; do
   esac
 done
 
+# DERIVED, not typed: the first prerequisite of install-all. A prose chain that does not START
+# here is not a copy of this list, whatever else it says on the line.
+FIRST="${WANT%% *}"
+[ -n "$FIRST" ] || die "check-install-chain: could not derive the first prerequisite from '${WANT}'"
+
 scanned=0; bad=0
 # ⚠️ `-I` skips binary files: docs/diagrams/out/ holds PNGs, and B540 closed two days ago on exactly
 # this class of grep noise.
@@ -68,11 +73,13 @@ while IFS= read -r _hit; do
   # the same reason every tree-walking gate here excludes it.
   # `*/X` already covers the `./X` form grep emits (the glob `*` matches the leading `.`), so a
   # second `./X` alternative is DEAD — shellcheck SC2222 proves it. Do not "restore" it.
+  # ⚠️ NO `*/Makefile` ARM. It was here and it was DEAD CODE: the producer below is
+  # `grep --include='*.md'`, so a Makefile can never be a hit. Its "negative control" in
+  # test-install-chain.sh was therefore measuring nothing. Do not re-add it.
   case "$_f" in
     ./.claude/*)       continue ;;
     */BACKLOG.md)      continue ;;
     */docs/reviews/*)  continue ;;
-    */Makefile)        continue ;;
   esac
   # The chain on this line: the longest run of arrow-joined target-shaped tokens.
   # ⚠️ TOLERATE THE WHITESPACE THE SUBSTITUTION ITSELF CREATES. `s/→/ -> /g` turns `a → b` into
@@ -85,6 +92,22 @@ while IFS= read -r _hit; do
             | head -1 || true)"
   [ -n "$_got" ] || continue
   _got="$(printf '%s' "$_got" | sed 's/[[:space:]]*->[[:space:]]*/ /g' | tr -s ' ')"
+  # ⚠️ IS THIS ACTUALLY AN install-all CHAIN? Mentioning `install-all` and carrying four
+  # arrow-joined words does NOT make a line a copy of install-all's prerequisite list. MEASURED —
+  # all of these extract cleanly and have nothing to do with it:
+  #     "After install-all, the demo flow is push -> tekton -> argocd -> browser."
+  #     "install-all is preceded by bundle-load -> mirror-push -> builder-push -> platform."
+  #     "install-all covers istio -> gateway -> virtualservice -> lb"
+  # Comparing those to WANT is a FALSE RED whose only remedy is to rewrite a CORRECT sentence into
+  # a wrong one — the exact test this gate's own header applies to BACKLOG.md and docs/reviews/.
+  # DISCRIMINATOR: a genuine copy of the chain starts where install-all starts. That is DERIVED
+  # from the Makefile ($FIRST below), never typed here, so it cannot rot when the chain changes.
+  # Measured against the real tree: 35 `.md` lines mention install-all AND carry an arrow; this
+  # keeps exactly the 3 that are chains and drops the rest, instead of accusing 32 correct lines.
+  case "$_got " in
+    "${FIRST} "*) : ;;
+    *) continue ;;
+  esac
   scanned=$((scanned + 1))
   if [ "$_got" = "$WANT" ]; then
     log_info "ok    ${_f}:${_ln}"

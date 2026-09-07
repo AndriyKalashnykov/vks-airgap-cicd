@@ -27,3 +27,11 @@ kubeconfig
 *.kubeconfig
 *.pem
 *.key
+# ⚠️ MIRROR THE ROOT'S testdata NEGATION. gitignore precedence gives the DEEPER file priority, so
+# the `*.key` above OVERRIDES the root's `!**/testdata/**/*.key` (.gitignore:18) — a deliberate
+# carve-out, present since the scaffold commit, so crypto/TLS test fixtures can be committed.
+# WITHOUT this line the per-app file does not merely fail to add protection at fresh-repo root; it
+# REMOVES protection in the OUTER repo, and `git add` on a new testdata/*.key silently does nothing.
+# MEASURED before this line: apps/go/gowebapp/testdata/ca.key was ignored by *.key here, while a
+# root-level testdata/root.key was correctly negated by the root — the discriminating control.
+!**/testdata/**/*.key

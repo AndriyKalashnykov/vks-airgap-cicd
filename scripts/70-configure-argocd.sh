@@ -343,6 +343,25 @@ log_info "write mechanism: ${MECH}  (kubectl=${can_kubectl}, argocd-api=${can_ap
 if [ "$MECH" = kubectl ] && [ "$can_kubectl" != yes ] ; then
   die "ARGOCD_MECHANISM=kubectl, but this kubeconfig may not create Applications in '$ARGOCD_NAMESPACE' on $ARGOCD_API."
 fi
+# ── WHERE DID THIS PIN COME FROM? ────────────────────────────────────────────────────────────────
+# ⚠️ `sed -i .env` is a SILENT NO-OP when the pin is not a live line in `.env`: sed exits 0 and
+# changes nothing, so the operator re-runs and gets the byte-identical die. Forever.
+# This case did not exist before the selector-snapshot change (B531 F1): `.env` used to beat a
+# per-run/exported value, so if you saw the pin it WAS in `.env`. Now an exported value — or
+# `make gitops VAR=x`, which GNU make exports into the recipe — OUTRANKS `.env`, and `sed` cannot
+# reach it. So NAME THE CHANNEL before prescribing a remedy for it.
+_pin_remedy() { # _pin_remedy <VAR> <wanted-value>
+  if printenv "$1" >/dev/null 2>&1; then
+    printf 'the pin is in your ENVIRONMENT, not .env — run: unset %s\n' "$1"
+    printf '      (a per-run/exported value now OUTRANKS .env for this variable; sed .env cannot reach it)'
+  elif grep -qE "^[[:space:]]*${1}=" "${REPO_ROOT}/.env" 2>/dev/null; then
+    printf "run: sed -i 's/^%s=.*/%s=%s/' .env      (see docs/scenario-1.md)" "$1" "$1" "$2"
+  else
+    printf 'the pin is neither exported nor a live line in .env — check .env.state and .env.kind,\n'
+    printf '      which load_env sources AFTER .env, then re-run.'
+  fi
+}
+
 if [ "$MECH" = api ] && [ "$argocd_api_ready" != yes ]; then
   # NAME THE SCENARIO, not just the missing vars. `can_kubectl` was measured ~80 lines above, so
   # the evidence that this is a scenario-2 pin in a scenario-1 run is already in scope here.
@@ -351,7 +370,7 @@ if [ "$MECH" = api ] && [ "$argocd_api_ready" != yes ]; then
     log_error "  — AND kubectl CAN create Applications in '${ARGOCD_NAMESPACE}' here."
     log_error "  That is a SCENARIO-2 (tenant) pin in a SCENARIO-1 (admin) run. The default is"
     log_error "  'auto', which MEASURES both paths and picks. Fix it by EDITING .env:"
-    die "    sed -i 's/^ARGOCD_MECHANISM=.*/ARGOCD_MECHANISM=auto/' .env      (see docs/scenario-1.md)"
+    die "    $(_pin_remedy ARGOCD_MECHANISM auto)"
   fi
   die "ARGOCD_MECHANISM=api, but this box is missing: ${_api_missing}. See .env.example."
 fi
@@ -524,12 +543,21 @@ if [ "$ARGOCD_OFF_CLUSTER" = "1" ]; then
     # ⚠️ DO NOT prescribe the target when ARGOCD_REGISTER=never — `gitops` ALREADY ran 71, which
     # logged a skip and exited 0. Telling the operator to re-run it sends them to a command that
     # will silently no-op again: an error message that names the wrong cause is worse than a crash.
+    # ⚠️ THE ADMIN ADVICE IS GATED ON can_kubectl, NOT ON THE PIN'S VALUE. `ARGOCD_REGISTER=never`
+    # is the value scenario-2 PRESCRIBES, so inferring "you are an admin who mis-set it" from the
+    # value alone tells a TENANT to perform an admin-only operation — a dead end dressed as an
+    # answer (RULE ZERO-B). `can_kubectl` is already in scope here and is what distinguishes them.
+    # And the tenant sentence is printed in EVERY branch: it is the only actionable line a tenant has.
     if [ "${ARGOCD_REGISTER:-auto}" = never ]; then
       log_error "  ARGOCD_REGISTER=never SKIPPED registration at step 71 — so 'make argocd-register-guest'"
-      log_error "  will silently no-op if you re-run it. That is a SCENARIO-2 (tenant) pin; as an admin:"
-      die "    sed -i 's/^ARGOCD_REGISTER=.*/ARGOCD_REGISTER=auto/' .env      (see docs/scenario-1.md)"
+      log_error "  will silently no-op if you re-run it."
+      if [ "${can_kubectl:-no}" = yes ]; then
+        log_error "  kubectl CAN create Applications here, so this looks like a SCENARIO-2 pin in a"
+        log_error "  SCENARIO-1 run. As an admin: $(_pin_remedy ARGOCD_REGISTER auto)"
+      fi
     fi
-    die "run 'make argocd-register-guest' first (ADMIN-only; a tenant REQUESTS it from the platform team)."
+    die "registration is ADMIN-only — a tenant REQUESTS it from the platform team (and asks them to
+  register the guest cluster as an ArgoCD destination). As an admin, run 'make argocd-register-guest'."
   fi
 
   if [ -z "$REGISTERED" ]; then

@@ -360,13 +360,24 @@ if [ "$eff_server" != "$argocd_lb" ]; then
 fi
 log_info "ARGOCD_SERVER survives load_env: ${eff_server} (the green does not depend on /etc/hosts)"
 
-# The SAME assertion for the MECHANISM — and this one was RED until 2026-09-07 (B531 F1). This
-# script's whole purpose is to exercise the TENANT (`api`) write path, and `api` is passed below as
-# a per-run prefix. `ARGOCD_MECHANISM` was NOT in load_env's selector snapshot, so an uncommented
-# `.env` value overrode it to `auto` — and the run still PASSED, because `auto` measures
-# kubectl=no/api=yes and lands on api anyway. A green that no longer tests the branch it names.
-# `70`'s own comment at the api arm records that the paths DIFFER: an explicit `api` bypasses the
-# unknown-guard that `auto` goes through.
+# The SAME assertion for the MECHANISM. ⚠️ READ ITS SCOPE BEFORE TRUSTING IT — CORRECTED 2026-09-07
+# by a session-end round, which measured that the first version of this comment OVERSTATED it.
+#
+# WHAT IT GUARDS: that a per-run `ARGOCD_MECHANISM` survives `load_env`. `ARGOCD_MECHANISM` was NOT
+# in the selector snapshot until B531 F1, so an uncommented `.env` value overrode it to `auto` — and
+# `auto` measures kubectl=no/api=yes and lands on api anyway, so the run still PASSED while no longer
+# exercising the branch it names (`70`'s api arm records that the paths DIFFER: an explicit `api`
+# bypasses the unknown-guard `auto` goes through).
+#
+# WHAT IT CANNOT SEE, and this is the honest part: `Makefile` sets `E2E_SKIP_DOTENV ?= 1` for this
+# target, and `SKIP_DOTENV=1` means `load_env` DOES NOT SOURCE `.env` AT ALL. Both vars also ship
+# COMMENTED in `.env.example`. So under this target's own DEFAULT there is nothing to clobber, this
+# assertion passes with or without the fix, and it cannot catch the regression it guards. MEASURED:
+# `SKIP_DOTENV=1 ARGOCD_MECHANISM=api` resolves to `api` against BOTH the pre- and post-fix os.sh.
+# It bites only with `E2E_SKIP_DOTENV=0` — and, more importantly, in ordinary operator runs
+# (`make gitops ARGOCD_MECHANISM=api` on a box whose `.env` pins it), which this target never covers.
+# The REAL RED-proof for the selector list is `test-insecure-toggle-snapshot.sh` (4 cases), which
+# drives `load_env` with a fixture `.env` and does turn RED when the names are removed.
 eff_mech="$(ARGOCD_MECHANISM=api bash -c '. "'"${SCRIPT_DIR}"'/lib/os.sh"; load_env; printf "%s" "${ARGOCD_MECHANISM:-}"')"
 if [ "$eff_mech" != api ]; then
   die "ARGOCD_MECHANISM was CLOBBERED: passed 'api', load_env resolved '${eff_mech}'.

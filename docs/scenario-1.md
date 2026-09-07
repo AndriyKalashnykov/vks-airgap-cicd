@@ -909,6 +909,14 @@ Accounts**) and run it again.
 > the pins, not to set them differently — set both back to `auto` in `.env`, or:
 > `sed -i 's/^ARGOCD_MECHANISM=.*/ARGOCD_MECHANISM=auto/; s/^ARGOCD_REGISTER=.*/ARGOCD_REGISTER=auto/' .env`
 >
+> ⚠️ **First check WHERE the pin actually is — that `sed` is a silent no-op unless it is a live
+> line in `.env`.** `printenv ARGOCD_MECHANISM ARGOCD_REGISTER`: if either prints, the pin is in
+> your **environment** and outranks `.env`, so the fix is `unset` — `sed` exits 0, changes nothing,
+> and you get the identical error again. (A per-run/exported value began outranking `.env` for
+> these two on 2026-09-07; before that, seeing the pin meant it was in `.env`.) If neither prints
+> and `grep -E '^\s*ARGOCD_(MECHANISM|REGISTER)=' .env` finds nothing, look in `.env.state` and
+> `.env.kind`, which `load_env` sources **after** `.env`.
+>
 > (Inline, not a fenced block, deliberately: a fence inside a blockquote is counted by
 > `walk-doc.sh`'s independent block counter but is INVISIBLE to its parser, so the two disagree and
 > `test-walk-doc.sh` fails — and the walk must not run a command that rewrites `.env` anyway.)
