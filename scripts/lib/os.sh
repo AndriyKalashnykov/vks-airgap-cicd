@@ -2365,3 +2365,159 @@ newest_versioned_file() {
 
 # versioned_file_version <path> — public name; ONE extractor shared with the sort above.
 versioned_file_version() { _file_version "$1"; }
+
+# vks_vip_holders <kubeconfig> <namespace> <cluster> — print every object still holding a
+# LoadBalancer VIP for this cluster, one per line. Empty output + rc 0 means genuinely none left.
+#
+#   rc 0  the queries SUCCEEDED.
+#   rc 2  a query FAILED. The caller MUST treat that as STILL PRESENT, never as "none left".
+#
+# WHY THIS EXISTS (B524). Deleting a guest cluster releases THREE VIPs, not one — MEASURED on
+# cicd-gc3 2026-09-07:
+#
+#     cicd-gc3                        .132   owner=VSphereCluster/…   <- the CONTROL PLANE
+#     cicd-gc3-39bf68c1a97350babccd3  .133   owner=Cluster/cicd-gc3   <- a workload LB (gitea)
+#     cicd-gc3-b040aa492542c22aa31e3  .134   owner=Cluster/cicd-gc3   <- a workload LB (istio)
+#
+# The old wait did `get virtualmachineservice $NAME` — an EXACT-name lookup that sees only the
+# first. And the two workload VMServices carry a plain ownerReference with NO `controller: true`
+# and NO `blockOwnerDeletion: true`, so they are removed by BACKGROUND GARBAGE COLLECTION, which
+# runs AFTER the owner is gone. The old loop therefore reported "released" at precisely the moment
+# two VIPs were still held. That is not a race that might happen; it is the documented ordering of
+# Kubernetes GC.
+#
+# ⚠️ WHY NOT "any VMService whose ownerReferences MENTION $NAME". A substring test is a prefix
+# collision waiting to happen: the CP VMService's owner is `VSphereCluster/cicd-gc3-b7r2n`, which
+# CONTAINS `cicd-gc3`, and a sibling `cicd-gc30` is one create away from a ledger that already holds
+# cicd-gc1/gc2/gc3. Both tests below are EXACT: a server-side label selector, and a whole-field
+# `Cluster/<name>` match. The old exact-name form was immune to this and a fuzzy rewrite would
+# REGRESS it.
+#
+# ⚠️ THE LABEL IS A ONE-CLUSTER OBSERVATION, not a contract — `run.tanzu.vmware.com/cluster.name`
+# is vendor-set and was measured on exactly one cluster. That is why the ownerReference check runs
+# as an OR beside it rather than being replaced by it.
+vks_vip_holders() {
+  local _kc="$1" _ns="$2" _cn="$3" _out _rc _held="" _err _cls _l _nm _owners _o
+  _err="$(mktemp)"; # freed below on every path
+
+  # _probe <kind> <name> — "is this object PRESENT?", three-valued, never two.
+  #   0 present · 1 genuinely NotFound · 2 COULD NOT ASK
+  # ⚠️ THE THREE-VALUED FORM IS THE WHOLE POINT, and the first version of this helper got it wrong
+  # for exactly the object that matters. Arms 1 and 4 were `if kubectl …; then held; fi`, so ANY
+  # non-zero read as "absent" — and MEASURED, a single dropped request on the CONTROL-PLANE read
+  # (each arm carries its own 15s timeout, so a SELECTIVE failure is ordinary) returned rc=0 with an
+  # empty holder list. The caller then printed "released … control-plane AND workload … are gone"
+  # and pointed at `make vks-cluster-create`. That is the B523 incident, delivered by the wait built
+  # to prevent it — while this function's own comment claimed it failed closed. `kubectl` exits 1
+  # for NotFound, unreachable AND forbidden alike (scripts/test-uninstall-honesty.sh exists for this
+  # exact confusion), so the STDERR is the only discriminator.
+  _probe() {
+    kubectl --kubeconfig "$_kc" --request-timeout=15s -n "$_ns" get "$1" "$2" \
+      >/dev/null 2>"$_err" </dev/null && return 0
+    # ⚠️ USE THE REPO'S OWN DISCRIMINATOR, not a bare substring. `check-notfound-discriminator`
+    # caught my first version (`*NotFound*|*"not found"*`) and it was right to: that matches a
+    # CLIENT-side "no such file or directory" and an HTTP 404 body, neither of which is the API
+    # server saying the object is absent. kube_is_notfound anchors on the server's own
+    # `Error from server (NotFound)` prefix AND requires the resource token on the SAME line,
+    # because kubectl batches several such lines into one stderr.
+    kube_is_notfound "$_err" "$2" && return 1   # the object is genuinely absent
+    return 2                                    # we could not ask — NEVER evidence of release
+  }
+
+  # 1. the CONTROL-PLANE VMService — exact name, immune to prefix collisions.
+  _probe virtualmachineservice "$_cn"; _rc=$?
+  case "$_rc" in
+    0) _held="${_held}virtualmachineservice/${_cn} " ;;
+    2) _cls="$(classify_kube_failure "$_err")"
+       printf 'QUERY-FAILED(control-plane-vmservice,%s)\n' "$_cls"; rm -f "$_err"; return 2 ;;
+  esac
+
+  # 2. WORKLOAD VMServices by the vendor label — server-side and exact, no client string handling.
+  _out="$(kubectl --kubeconfig "$_kc" --request-timeout=15s -n "$_ns" \
+            get virtualmachineservice -l "run.tanzu.vmware.com/cluster.name=${_cn}" \
+            -o name 2>"$_err" </dev/null)" && _rc=0 || _rc=$?
+  # ⚠️ FAIL CLOSED. `wc -l` on a FORBIDDEN or timed-out query is 0, exactly like "nothing left" —
+  # so an rc-blind version reads a broken read as "released, go ahead and recreate".
+  if [ "$_rc" -ne 0 ]; then
+    _cls="$(classify_kube_failure "$_err")"
+    printf 'QUERY-FAILED(workload-label,%s)\n' "$_cls"; rm -f "$_err"; return 2
+  fi
+  while IFS= read -r _l; do
+    [ -n "$_l" ] || continue
+    _nm="${_l#*/}"
+    # dedup against BOTH spellings: arm 1 stores `virtualmachineservice/<name>`, this stores a bare
+    # name, so a CP object that ever gained the label would otherwise be counted twice.
+    case " $_held " in *" $_nm "*|*" virtualmachineservice/$_nm "*) : ;; *) _held="${_held}${_nm} " ;; esac
+  done <<EOF
+$_out
+EOF
+
+  # 3. ...OR by an EXACT ownerReference `Cluster/<name>`, in case the label is absent on some build.
+  # (MEASURED: a MISSING ownerReferences emits `name|` and exits 0 — it does not error.)
+  _out="$(kubectl --kubeconfig "$_kc" --request-timeout=15s -n "$_ns" \
+            get virtualmachineservice \
+            -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{range .metadata.ownerReferences[*]}{.kind}/{.name}{" "}{end}{"\n"}{end}' \
+            2>"$_err" </dev/null)" && _rc=0 || _rc=$?
+  if [ "$_rc" -ne 0 ]; then
+    _cls="$(classify_kube_failure "$_err")"
+    printf 'QUERY-FAILED(workload-owner,%s)\n' "$_cls"; rm -f "$_err"; return 2
+  fi
+  while IFS='|' read -r _nm _owners; do
+    [ -n "$_nm" ] || continue
+    for _o in $_owners; do
+      [ "$_o" = "Cluster/${_cn}" ] || continue          # EXACT, never a substring
+      case " $_held " in *" $_nm "*|*" virtualmachineservice/$_nm "*) : ;; *) _held="${_held}${_nm} " ;; esac
+    done
+  done <<EOF
+$_out
+EOF
+
+  # 4. the core Service the CP VMService owns.
+  # ⚠️ REDUNDANT BY CONSTRUCTION, KEPT DELIBERATELY: measured, every core Service is
+  # `controller: true, blockOwnerDeletion: true` on its VMService, so it cannot outlive it. It is a
+  # cheap cross-check, not coverage — and it is three-valued for the same reason arm 1 is.
+  _probe svc "$_cn"; _rc=$?
+  case "$_rc" in
+    0) _held="${_held}svc/${_cn} " ;;
+    2) _cls="$(classify_kube_failure "$_err")"
+       printf 'QUERY-FAILED(svc,%s)\n' "$_cls"; rm -f "$_err"; return 2 ;;
+  esac
+
+  rm -f "$_err"
+  [ -z "$_held" ] || printf '%s\n' "$_held"
+  return 0
+}
+
+# vks_wait_vip_release <kubeconfig> <ns> <cluster> <wait-seconds> <poll-seconds>
+# Block until nothing holds a VIP for this cluster. rc 0 released, rc 1 timed out.
+#
+# ⚠️ ONE COPY, TWO CALLERS. 97-vks-cluster-delete.sh and 98-uninstall-all.sh had byte-identical
+# loops, and the first fix of this defect landed in only one of them — which is exactly how the
+# class survives to the next session. Whatever is true of this wait is now true of both.
+vks_wait_vip_release() {
+  local _kc="$1" _ns="$2" _cn="$3" _wait="$4" _poll="$5"
+  local _end=$((SECONDS + _wait)) _still="" _holders _hrc _last=""
+  while [ "$SECONDS" -lt "$_end" ]; do
+    _still=""
+    if kubectl --kubeconfig "$_kc" --request-timeout=15s -n "$_ns" get cluster "$_cn" \
+         >/dev/null 2>&1 </dev/null; then _still="cluster "; fi
+    _holders="$(vks_vip_holders "$_kc" "$_ns" "$_cn")" && _hrc=0 || _hrc=$?
+    if [ "$_hrc" -ne 0 ]; then
+      _still="${_still}${_holders:-vip-query-failed} "     # a broken read is NOT a release
+    else
+      [ -z "$_holders" ] || _still="${_still}${_holders}"
+    fi
+    # shellcheck disable=SC2034  # out-parameter; see the note at the timeout path below.
+    [ -n "$_still" ] || { VKS_VIP_STILL=""; return 0; }
+    [ "$_still" = "$_last" ] || { log_info "  waiting on: ${_still}"; _last="$_still"; }
+    sleep "$_poll"
+  done
+  # ⚠️ EXPORTED, and initialised on EVERY path. The caller renders the timeout message from it, and
+  # MEASURED at HEAD: `VKS_CLUSTER_DELETE_WAIT_SECONDS=0` (a documented tunable) skipped the loop
+  # entirely and the guidance block died on `_still: unbound variable` under `set -u` — replacing
+  # the whole "NOT stripping finalizers / do NOT recreate yet" advice with a bash internal error.
+  # shellcheck disable=SC2034  # the OUT-PARAMETER: read by 97-vks-cluster-delete.sh and
+  # 98-uninstall-all.sh to render their timeout messages. Not unused — used by the callers.
+  VKS_VIP_STILL="${_still:-}"
+  return 1
+}

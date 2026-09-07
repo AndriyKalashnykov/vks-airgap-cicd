@@ -4668,6 +4668,27 @@ all delete-then-immediate-recreate. No artifact survives (a non-converging clust
 kubeconfig) and namespace events reach back only ~57 min. If any followed a settled teardown, the
 race hypothesis is in trouble and the name cause revives.
 
+**⚠️ 2026-09-07 — A CHALLENGE TO THIS ROW'S EVIDENCE WAS RAISED AND REFUTED. The row stands.**
+I claimed the `.132` hole was an INSTRUMENT ARTIFACT — that the CP VIP is not a guest LoadBalancer
+Service, so an enumeration of LB Services would systematically miss it. **Measured, that is wrong
+three ways**, and the word doing the damage was "guest": the enumeration is SUPERVISOR-side, and
+
+    cicd/cicd-gc3   type=LoadBalancer   192.168.101.132   owner=VirtualMachineService/cicd-gc3
+
+is itself a `type: LoadBalancer` Service there. Further: this row's own list already CONTAINS a
+control-plane VIP (`.134` == `secrets/cicd-gc2.kubeconfig`'s `server:`), and the IPPool cross-check
+reconciles exactly — measured today, **7 LB Services == 7 distinct IPs == allocated 7**, and
+`allocated` counts the CP VIP. So when this row measured `allocated: 6` with `.132` absent, `.132`
+was genuinely unallocated. **The hole was real.**
+
+An ALTERNATIVE to the quarantine hypothesis, offered as an alternative and not a correction: the
+allocator behaves **lowest-free-first** (measured — `.128`–`.134` contiguous, no holes, and gc3 took
+`.132`, the lowest free at its creation). Under that model gc2 skipping `.132` for `.134` needs BOTH
+`.132` and `.133` unavailable at that instant — which is satisfied if gc1's WORKLOAD VMService still
+held `.133`, i.e. the predecessor had simply not finished releasing. That is exactly the defect B524
+now fixes, and it would mean no quarantine is needed to explain the incident. Unmeasured: the events
+are long gone. Its discriminating test is B525's.
+
 **Done when:** Experiment A has run and the header is corrected to match its outcome.
 
 > **Experiment A (run FIRST — needs no "released" observable).** Delete a cluster, then within ~5s
@@ -4685,7 +4706,74 @@ same name" to "without waiting for the predecessor's VirtualMachineService to di
 `:249-251` cites `adv .142 == svc .142`; today's run was `.134`, so that "measured" claim rests on a
 run not reproducible from this repo — date it and name the lab.
 
-## B524 — 🔴 MISSING TARGET `make vks-cluster-delete`, and `98-uninstall-all.sh` waits on the WRONG OBJECT
+## B524 — ✅ SHIPPED — the wait was UNDER-SCOPED (1 of 3 VIPs); the "MISSING TARGET" half was STALE
+
+⚠️ **THE HEADLINE WAS WRONG WHEN I PICKED THIS UP.** `make vks-cluster-delete` and
+`scripts/97-vks-cluster-delete.sh` have existed since **2026-09-05** — with `CONFIRM=<cluster-name>`,
+an owned-by label guard, tunables correctly COMMENTED in `.env.example`, and a scenario-1 mention.
+I briefed an adversary to design a target that already existed. **That is the THIRD stale row this
+session** (B528, B530, B524): a row's status is a claim, and `ls`/`grep` settles it in seconds.
+
+**What was genuinely wrong is the second half of the row, and it was worse than stated.** Deleting a
+cluster releases **THREE** VIPs — measured on cicd-gc3:
+
+    cicd-gc3                        .132   owner=VSphereCluster/…   <- control plane
+    cicd-gc3-39bf68c1a97350babccd3  .133   owner=Cluster/cicd-gc3   <- gitea's LB
+    cicd-gc3-b040aa492542c22aa31e3  .134   owner=Cluster/cicd-gc3   <- istio ingress
+
+Both wait loops did `get virtualmachineservice $NAME`, an EXACT-name lookup that sees only the first.
+And the workload VMServices carry a plain ownerReference with **no `controller: true` and no
+`blockOwnerDeletion: true`**, so they are reaped by **background garbage collection** — which runs
+*after* the owner is gone. The loop therefore reported "released" at precisely the moment two VIPs
+were still held. **Not a race that might happen: the documented ordering of Kubernetes GC.**
+
+Fixed in ONE place (`vks_vip_holders`, `lib/os.sh`) consumed by BOTH call sites — `97:91` and
+`98-uninstall-all.sh:281`, which the row did not mention and which is how this class survives to the
+next session. `25-vks-cluster-create.sh:323` is deliberately LEFT by-name (it compares the CP LB
+against `spec.controlPlaneEndpoint`; exact is correct there).
+
+**AND THE IMPLEMENTATION ROUND FOUND MY FIX FAILED OPEN ON THE OBJECT THE FEATURE GUARDS.** I wrote
+a fail-closed comment and two of the four arms did not honour it: the control-plane and `svc` arms
+were `if kubectl …; then held; fi`, so NotFound, a 15s timeout, a 403 and a missing binary were
+byte-identical. Each arm has its own timeout, so a SELECTIVE failure is ordinary — and it returns
+rc=0 with an empty holder list, i.e. "released".
+
+**Proven on the live lab, by accident:** the Supervisor token expired mid-session, and against that
+real expired credential the OLD two-valued arm reports **ABSENT** — the loop would print
+*"released … are all gone"* and point at `make vks-cluster-create` — while the new three-valued arm
+returns `rc=2 QUERY-FAILED(control-plane-vmservice,UNAUTHORIZED)`.
+
+⚠️ **My test could not have caught it.** Its `FAIL-CLOSED` case injected failure only on an arm that
+ALREADY failed closed — the CP arm had no failure knob at all. A RED-proof over a subset, which is
+exactly how the defect shipped.
+
+⚠️ **And the repo already had the right primitive plus a gate that caught me not using it.** My first
+discriminator was a bare `*NotFound*` substring; `check-notfound-discriminator` failed the build and
+named `kube_is_notfound`, which anchors on the server's own `Error from server (NotFound)` prefix AND
+requires the resource token on the SAME line. Switching to it took the test to 6/14 because my STUB
+emitted a placeholder resource name — a double that models the exit code but not the output.
+
+Three things the idea round changed about my design, each RED-proven:
+
+- **exact, never substring.** My first predicate was "any VMService whose ownerReferences NAME
+  `$NAME`". The CP VMService's owner is `VSphereCluster/cicd-gc3-b7r2n`, which CONTAINS `cicd-gc3`,
+  and a sibling `cicd-gc30` is one create away from a ledger holding gc1/gc2/gc3. The old exact form
+  was immune; a fuzzy rewrite would have REGRESSED it.
+- **fail CLOSED.** `wc -l` is 0 for "nothing left" AND for "forbidden/timed out", so an rc-blind
+  list would read a broken query as "released, go ahead and recreate" — the very incident.
+- **SUPERVISOR-ONLY, said out loud.** Measured: a guest kubeconfig serves *no* Cluster and *no*
+  VirtualMachineService API at all, so a tenant cannot do this and it is not an RBAC gap they can
+  ask to have widened. The old message sent them to `make vks-login`, a dead end. Now in RULE
+  ZERO-A0's table.
+
+`scripts/test-vks-cluster-delete.sh` — 9 cases, fully offline, driving the REAL script with a
+stateful stub. RED-proven: restore the by-name wait -> the defect case fires; fail open -> the
+fail-closed case fires; substring-match -> the prefix case fires.
+
+⚠️ **The quarantine disclaimer is UNCHANGED and must stay.** This wait observes the strongest signal
+a tenant can see; it does NOT prove the VIP is immediately reusable (B525).
+
+## B524 (original) — 🔴 MISSING TARGET `make vks-cluster-delete`, and `98-uninstall-all.sh` waits on the WRONG OBJECT
 
 There is no per-cluster delete target. The only delete path is inside `make uninstall-all` (a full
 teardown requiring `CONFIRM=`), so anyone deleting one cluster hand-rolls `kubectl delete` — which

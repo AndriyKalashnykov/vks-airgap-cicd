@@ -569,11 +569,16 @@ own LoadBalancer got `.133`.
 make vks-cluster-delete CONFIRM=<your-cluster-name>
 ```
 
-It blocks until the `Cluster`, its `VirtualMachineService` **and** that Service are all gone, then
-tells you it is safe to create again.
+It blocks until the `Cluster`, **every** `VirtualMachineService` belonging to it — the control-plane
+one *and* the hash-suffixed ones behind each workload LoadBalancer — and that Service are all gone,
+then tells you it is safe to create again. Deleting a cluster releases **three** VIPs on a lab like
+this one, and the workload ones are reaped *after* the Cluster disappears.
 
-**Expect:** a `waiting on:` line listing whichever of the three objects is still present, narrowing
-as each disappears, then `released: cluster, virtualmachineservice and svc are all gone`. *(Typically a few minutes.)*
+**Expect:** a `waiting on:` line naming whichever objects are still present, narrowing as each
+disappears, then `released: nothing in` … `still holds a VIP for` … followed by a note that the
+address may still be **quarantined** by the platform allocator — this waits for the strongest
+signal a tenant can observe, it does not prove the VIP is immediately reusable. *(Typically a few
+minutes.)*
 It refuses without `CONFIRM=<name>`, and refuses to delete a cluster this repo did not create.
 
 ⚠️ It waits for the strongest signal a tenant can observe; it does **not** prove the address is
