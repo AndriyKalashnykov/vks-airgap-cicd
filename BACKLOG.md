@@ -4876,9 +4876,9 @@ running the gates) — `hooks.md` records that such a gate gets ripped out.
 
 ## B527 — ✅ SHIPPED — one credential-OPTIONAL call, wired into SIX installers (not seven)
 
-**Shipped** `scripts/lib/harbor-probe.sh` (`harbor_project_state` / `harbor_assert_mirrored`), wired
+**Shipped** `scripts/lib/harbor_probe.sh` (`harbor_project_state` / `harbor_assert_mirrored`), wired
 into `40-install-gitea`, `41-install-tekton`, `45-install-traefik`, `46-install-istio`,
-`49-install-headlamp` and `60-configure-tekton`, with `scripts/test-harbor-probe.sh` (12 cases).
+`49-install-headlamp` and `60-configure-tekton`, with `scripts/test-harbor_probe.sh` (12 cases).
 
 ⚠️ **THE ROUND SAID SEVEN INSTALLERS; IT IS SIX.** `43-install-istio-package.sh` is a FALSE member —
 measured: **zero** Harbor refs, **zero** project vars, and its own header says the images come from
@@ -4999,7 +4999,7 @@ standing in front of an air-gap install.
    unreachable ⇒ **INCONCLUSIVE, not a pass**. **INDEPENDENTLY RE-MEASURED on the live lab
    2026-09-07: 15–30 ms, no credential, `[]` for a missing project, and `repo_count` visible
    anonymously (`library` reads 0 today — the exact shape the incident presented).**
-2. A per-installer image assertion in a NEW `lib/harbor-probe.sh` (anonymous token flow; 200 /
+2. A per-installer image assertion in a NEW `lib/harbor_probe.sh` (anonymous token flow; 200 /
    404 NOT_FOUND / 401-naming-our-project), called with the SAME expressions the install uses —
    never a chart-render grep, never `harbor_setup`, with an escape hatch and loud SKIP.
 3. The helm `--wait` failure-message improvement, as the residual net — **after**, not instead.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ci-tier: fast — offline; a stub curl on PATH. No network, no cluster.
 #
-# test-harbor-probe.sh — RED-proofs for lib/harbor-probe.sh (B527).
+# test-harbor_probe.sh — RED-proofs for lib/harbor_probe.sh (B527).
 #
 # WHY THE THREE-VERDICT SHAPE IS THE THING UNDER TEST. A **private** project answers an anonymous
 # query with `[]` — byte-identical to a MISSING one. Collapsing that to two verdicts would tell a
@@ -27,8 +27,8 @@ export PATH="$STUB:$PATH"
 
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh" >/dev/null 2>&1
-# shellcheck source=scripts/lib/harbor-probe.sh
-. "${SCRIPT_DIR}/lib/harbor-probe.sh"
+# shellcheck source=scripts/lib/harbor_probe.sh
+. "${SCRIPT_DIR}/lib/harbor_probe.sh"
 
 _probe() { # _probe <body> <rc> <user> <pass> -> the verdict
   STUB_BODY="$1" STUB_RC="$2" HARBOR_URL=h.example \
@@ -36,41 +36,50 @@ _probe() { # _probe <body> <rc> <user> <pass> -> the verdict
 }
 
 # ── the decisive cases: a credential is present, so `[]` MEANS absent ────────────────────────────
-[ "$(_probe '[]' 0 u p)" = absent ] \
-  && ok "credentialed + [] -> absent (decisive)" || bad "credentialed [] must be absent"
-[ "$(_probe '[{"name":"cicd","repo_count":37}]' 0 u p)" = present ] \
-  && ok "a project with repositories -> present" || bad "a populated project must be present"
+if [ "$(_probe '[]' 0 u p)" = absent ]; then ok "credentialed + [] -> absent (decisive)"
+else bad "credentialed [] must be absent"; fi
+if [ "$(_probe '[{"name":"cicd","repo_count":37}]' 0 u p)" = present ]; then
+  ok "a project with repositories -> present"
+else bad "a populated project must be present"; fi
 
 # `repo_count: 0` is the SECOND half of the measured incident — the project exists and holds
 # nothing. A per-image probe would call that "one image missing"; it is "nothing was ever mirrored".
-[ "$(_probe '[{"name":"cicd","repo_count":0}]' 0 u p)" = empty ] \
-  && ok "an EXISTING but EMPTY project -> empty (the incident's second half)" || bad "repo_count 0 must be empty"
+if [ "$(_probe '[{"name":"cicd","repo_count":0}]' 0 u p)" = empty ]; then
+  ok "an EXISTING but EMPTY project -> empty (the incident's second half)"
+else bad "repo_count 0 must be empty"; fi
 
 # ── the honest cases: no credential, so `[]` is AMBIGUOUS with a private project ─────────────────
-[ "$(_probe '[]' 0 '' '')" = inconclusive ] \
-  && ok "ANONYMOUS + [] -> inconclusive, NOT absent (a private project looks identical)" \
-  || bad "an anonymous [] must never be reported as absent — it would send a tenant to make mirror
+if [ "$(_probe '[]' 0 '' '')" = inconclusive ]; then
+  ok "ANONYMOUS + [] -> inconclusive, NOT absent (a private project looks identical)"
+else
+  bad "an anonymous [] must never be reported as absent — it would send a tenant to make mirror
         against a Harbor that is fine"
+fi
 
 # ── an unreachable Harbor is not an empty one ───────────────────────────────────────────────────
-[ "$(_probe '' 7 u p)" = inconclusive ] \
-  && ok "curl failure -> inconclusive (reachability is lab-preflight's job, not this probe's)" \
-  || bad "a curl failure must not be reported as absent"
+if [ "$(_probe '' 7 u p)" = inconclusive ]; then
+  ok "curl failure -> inconclusive (reachability is lab-preflight's job, not this probe's)"
+else bad "a curl failure must not be reported as absent"; fi
 
 # ── garbage body -> inconclusive, never a pass and never a false accusation ──────────────────────
-[ "$(_probe '<html>502 Bad Gateway' 0 u p)" = inconclusive ] \
-  && ok "an unparseable body -> inconclusive" || bad "garbage must be inconclusive"
+if [ "$(_probe '<html>502 Bad Gateway' 0 u p)" = inconclusive ]; then
+  ok "an unparseable body -> inconclusive"
+else bad "garbage must be inconclusive"; fi
 
 # ── THE CREDENTIAL MUST NEVER REACH ARGV ────────────────────────────────────────────────────────
 # The repo's standing rule: anything in argv is world-readable via ps/proc for the call's lifetime.
 _argv="$STUB/argv"; : > "$_argv"
+# A literal `$` in the username on purpose: Harbor robots are named `robot$<project>`, and it must
+# reach the -K file UNEXPANDED. Single quotes are required; that is what SC2016 would object to.
+# shellcheck disable=SC2016
 STUB_ARGV="$_argv" _probe '[]' 0 'robot$ci' 'sup3rs3cret' >/dev/null
 if grep -q 'sup3rs3cret' "$_argv"; then
   bad "the Harbor password REACHED curl's argv" "it must travel in a umask-077 -K config file"
 else
   ok "the credential never reaches argv (it goes in a -K config file)"
 fi
-grep -q -- '-K' "$_argv" && ok "curl was invoked with -K (the config-file path)" || bad "expected -K in argv"
+if grep -q -- '-K' "$_argv"; then ok "curl was invoked with -K (the config-file path)"
+else bad "expected -K in argv"; fi
 
 # ── the escape hatch, and the loud-SKIP discipline ───────────────────────────────────────────────
 out="$(HARBOR_IMAGE_PREFLIGHT=0 HARBOR_URL=h.example harbor_assert_mirrored cicd x 2>&1)"; rc=$?

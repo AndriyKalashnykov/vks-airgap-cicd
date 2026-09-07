@@ -242,8 +242,8 @@ ISTIOD_SET=(
 # ⚠️ It lives HERE and not in 44-install-ingress.sh: that dispatcher also serves
 # INGRESS_CONTROLLER=istio-existing, which installs nothing and pulls nothing, so a check there
 # would be a false block on the attach path.
-# shellcheck source=scripts/lib/harbor-probe.sh
-. "${SCRIPT_DIR}/lib/harbor-probe.sh"
+# shellcheck source=scripts/lib/harbor_probe.sh
+. "${SCRIPT_DIR}/lib/harbor_probe.sh"
 harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:?}" "istio"
 
 # Refuse a pod the scheduler cannot place, BEFORE helm burns its --wait discovering it.

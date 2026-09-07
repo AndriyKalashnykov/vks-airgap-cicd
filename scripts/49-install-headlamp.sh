@@ -67,8 +67,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # One anonymous, credential-OPTIONAL API call (measured 15-30 ms on the live lab) answers it before
 # a helm --wait burns READY_TIMEOUT_SECONDS discovering it. Same shape as capacity_assert_fits:
 # an escape hatch, and every unknown is a LOUD SKIP that says it is not a pass.
-# shellcheck source=scripts/lib/harbor-probe.sh
-. "${SCRIPT_DIR}/lib/harbor-probe.sh"
+# shellcheck source=scripts/lib/harbor_probe.sh
+. "${SCRIPT_DIR}/lib/harbor_probe.sh"
 harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:?}" "headlamp"
 load_env
 

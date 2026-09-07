@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# harbor-probe.sh — "is there anything in this Harbor?", answered WITHOUT a credential (B527).
+# ⚠️ THE UNDERSCORE IN THE FILENAME IS LOAD-BEARING. `check-lib-sourcing.sh` matches libs with
+# `lib/[a-z_]+\.sh` — NO HYPHEN — so a `harbor-probe.sh` is INVISIBLE to it: the gate reported
+# "calls harbor_assert_mirrored() but never sources lib/harbor-probe.sh" for six files that plainly
+# did source it. Every other lib in this directory is `[a-z_]+`, so the gate is enforcing a
+# convention rather than being wrong. Do not rename this with a hyphen.
+# harbor_probe.sh — "is there anything in this Harbor?", answered WITHOUT a credential (B527).
 #
 # WHY THIS IS NOT IN lib/harbor.sh. That library's FIRST LINES are `: "${HARBOR_USERNAME:?}"` and
 # `: "${HARBOR_PASSWORD:?}"` — hard dies. MEASURED: `40/41/45/46/49-install-*.sh` contain ZERO
