@@ -59,6 +59,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/headlamp.sh
 . "${SCRIPT_DIR}/lib/headlamp.sh"
 
+load_env
+
+# ⚠️ AFTER load_env, NOT BEFORE. This block sat at line 72 with `load_env` on 73, so it ran with
+# NOTHING LOADED: HARBOR_URL was unset, the probe took its skip arm, and the check was a SILENT
+# NO-OP on every run — green because it never looked. (Before that it used `${VAR:?}` and HARD
+# BROKE `make install-all`.) The other five installers already source and load before their call.
 # ── Is there anything in this Harbor to pull? (B527) ─────────────────────────────────────────────
 # MEASURED 2026-09-05: the lab was rebuilt, Harbor came back EMPTY, the project did not exist, and
 # this install died `ImagePullBackOff / 401 Unauthorized`. That 401 is the Docker Registry v2 AUTH
@@ -70,7 +76,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/harbor_probe.sh
 . "${SCRIPT_DIR}/lib/harbor_probe.sh"
 harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:-}" "headlamp"
-load_env
 
 require_cmd helm
 require_cmd kubectl

@@ -38,33 +38,65 @@
 # as ABSENT would tell a tenant to run `make mirror` against a Harbor that is fine. So: decisive
 # only when we HAVE a credential; otherwise `inconclusive`, which never blocks.
 harbor_project_state() {
-  local _p="${1:?harbor_project_state: project name required}" _sch _body _rc _cfg=""
-  _sch="$([ "${HARBOR_INSECURE:-0}" = 1 ] && printf 'http' || printf 'https')"
-  local _args=(-sS --max-time "${HARBOR_PROBE_TIMEOUT_SECONDS:-10}")
-  [ "${HARBOR_INSECURE:-0}" = 1 ] || _args+=(-k)   # self-signed lab CA; this is a READ of public metadata
+  local _p="${1:?harbor_project_state: project name required}" _out _rc _cfg="" _code _body
 
-  # Credentials are OPTIONAL. When present they make `[]` decisive. Never in argv — a -K config
-  # file under umask 077, the same discipline lib/harbor.sh uses.
-  if [ -n "${HARBOR_USERNAME:-}" ] && [ -n "${HARBOR_PASSWORD:-}" ]; then
+  # ⚠️ esc_curlk lives in lib/os.sh and this file does not source it (every caller sources os.sh
+  # first — measured). If that order ever changes, esc_curlk yields EMPTY, the -K file becomes
+  # `user = ":"`, `_cfg` is non-empty, and `[]` becomes DECISIVE -> a false `absent` -> a false die.
+  # Fail to `inconclusive` instead of trusting a credential we could not build.
+  command -v esc_curlk >/dev/null 2>&1 || { printf 'inconclusive'; return 0; }
+
+  local _args=(-sS --max-time "${HARBOR_PROBE_TIMEOUT_SECONDS:-10}" -w '\n%{http_code}')
+
+  # ⚠️ NEVER SEND THE CREDENTIAL OVER A CONNECTION WE CANNOT VERIFY. A first version passed a blanket
+  # `-k` AND `-K <credential>` together, so the Harbor password went to an unverified peer on every
+  # run of six installers — while `HARBOR_CA_FILE` (uncommented in .env.example) sat unused.
+  # `lib/harbor.sh:202`'s comment predicts exactly this: "Three functions were each re-deriving this;
+  # the moment they drift, one of them sends a password over a connection another one refused to."
+  # These three branches MIRROR `_harbor_ca_args`. This file cannot SOURCE it: lib/harbor.sh's first
+  # lines are `: "${HARBOR_USERNAME:?}"` / `: "${HARBOR_PASSWORD:?}"`, which would add a mandatory
+  # credential to five installers that pull anonymously. The durable fix is to move
+  # `_harbor_ca_args` beside `harbor_scheme` in lib/os.sh — filed, not done here.
+  local _verified=0
+  if   [ -n "${HARBOR_CA_FILE:-}" ] && [ -s "${HARBOR_CA_FILE}" ]; then _args+=(--cacert "$HARBOR_CA_FILE"); _verified=1
+  elif [ "${HARBOR_INSECURE:-0}" = 1 ];                            then _args+=(-k);                        _verified=1
+  fi   # else: system trust, NO -k — and anonymous, because we cannot verify the peer.
+
+  if [ "$_verified" = 1 ] && [ -n "${HARBOR_USERNAME:-}" ] && [ -n "${HARBOR_PASSWORD:-}" ]; then
     _cfg="$(mktemp)"; ( umask 077; printf 'user = "%s:%s"\n' \
       "$(esc_curlk "$HARBOR_USERNAME")" "$(esc_curlk "$HARBOR_PASSWORD")" > "$_cfg" )
     _args+=(-K "$_cfg")
   fi
-  _body="$(curl "${_args[@]}" "${_sch}://${HARBOR_URL:?}/api/v2.0/projects?name=${_p}" 2>/dev/null)"; _rc=$?
-  [ -n "$_cfg" ] && rm -f "$_cfg"
 
-  # An unreachable Harbor is NOT an empty one. `lab-preflight` owns reachability; here it is
-  # inconclusive, because reporting `absent` for a network problem names the wrong cause.
+  # ⚠️ THE EXACT PROJECT, NOT `?name=`. `?name=` is a FUZZY match, so asking for `ci` can return
+  # `cicd`, and reading `repo_count` out of the WHOLE BODY then means a sibling project with 0 repos
+  # makes a healthy Harbor read `empty` and BLOCKS the install — the wrong-cause class this probe
+  # exists to remove, reproduced inside it. `/projects/<name>` returns one object or 404; it is the
+  # endpoint 98-uninstall-all.sh already uses.
+  _out="$(curl "${_args[@]}" "$(harbor_scheme)://${HARBOR_URL:?}/api/v2.0/projects/${_p}" 2>/dev/null)"; _rc=$?
+  [ -n "$_cfg" ] && rm -f "$_cfg"
   [ "$_rc" -eq 0 ] || { printf 'inconclusive'; return 0; }
 
-  case "$_body" in
-    '[]'|'') [ -n "$_cfg" ] && printf 'absent' || printf 'inconclusive' ;;
-    *"\"name\":\"${_p}\""*)
-      # `repo_count: 0` is the SECOND half of the measured incident state — the project exists and
-      # holds nothing, which a per-image probe would report as one missing image out of many.
-      case "$_body" in *'"repo_count":0'*) printf 'empty' ;; *) printf 'present' ;; esac ;;
-    *) printf 'inconclusive' ;;
+  _code="${_out##*$'\n'}"; _body="${_out%$'\n'*}"
+
+  # ⚠️ READ THE STATUS, and never conflate an EMPTY BODY with a negative answer. A 500/502/503 with
+  # an empty body — a proxy, or a Harbor still restarting, which is precisely the rebuilt-lab context
+  # this probe is for — was previously reported as `absent` and DIED. Only 200 and 404 are answers.
+  case "$_code" in
+    404) printf 'absent'; return 0 ;;
+    200) : ;;
+    *)   printf 'inconclusive'; return 0 ;;
   esac
+
+  # Tolerant of whitespace: a proxy that reformats the JSON must not turn every verdict into a
+  # permanent silent skip. `repo_count: 0` (with spaces) is the same answer as `"repo_count":0`.
+  if printf '%s' "$_body" | grep -qE '"repo_count"[[:space:]]*:[[:space:]]*0([^0-9]|$)'; then
+    printf 'empty'
+  elif printf '%s' "$_body" | grep -qE '"repo_count"[[:space:]]*:[[:space:]]*[0-9]+'; then
+    printf 'present'
+  else
+    printf 'inconclusive'
+  fi
 }
 
 # harbor_assert_mirrored <project> <what-is-installing> — die with the RIGHT cause, or warn loudly.

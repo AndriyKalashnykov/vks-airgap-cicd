@@ -19,7 +19,7 @@ STUB="$(mktemp -d)"; trap 'rm -rf "$STUB"' EXIT
 cat > "$STUB/curl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${STUB_ARGV:-/dev/null}"
-printf '%s' "${STUB_BODY:-}"
+printf '%s\n%s' "${STUB_BODY:-}" "${STUB_CODE:-200}"
 exit "${STUB_RC:-0}"
 EOF
 chmod +x "$STUB/curl"
@@ -30,30 +30,33 @@ export PATH="$STUB:$PATH"
 # shellcheck source=scripts/lib/harbor_probe.sh
 . "${SCRIPT_DIR}/lib/harbor_probe.sh"
 
-_probe() { # _probe <body> <rc> <user> <pass> -> the verdict
-  STUB_BODY="$1" STUB_RC="$2" HARBOR_URL=h.example \
+# _probe <body> <rc> <user> <pass> [http-code] -> the verdict
+# HARBOR_INSECURE=1 gives a VERIFIABLE context (the operator chose it), which is what lets the
+# credential be sent at all — see the "never send a credential we cannot verify" arm.
+_probe() {
+  STUB_BODY="$1" STUB_RC="$2" STUB_CODE="${5:-200}" HARBOR_URL=h.example HARBOR_INSECURE=1 \
   HARBOR_USERNAME="${3:-}" HARBOR_PASSWORD="${4:-}" harbor_project_state cicd
 }
 
 # ── the decisive cases: a credential is present, so `[]` MEANS absent ────────────────────────────
-if [ "$(_probe '[]' 0 u p)" = absent ]; then ok "credentialed + [] -> absent (decisive)"
-else bad "credentialed [] must be absent"; fi
-if [ "$(_probe '[{"name":"cicd","repo_count":37}]' 0 u p)" = present ]; then
+if [ "$(_probe '' 0 u p 404)" = absent ]; then ok "HTTP 404 -> absent (the exact-project endpoint answers directly)"
+else bad "a 404 from /projects/<name> must be absent"; fi
+if [ "$(_probe '{"name":"cicd","repo_count":37}' 0 u p)" = present ]; then
   ok "a project with repositories -> present"
 else bad "a populated project must be present"; fi
 
 # `repo_count: 0` is the SECOND half of the measured incident — the project exists and holds
 # nothing. A per-image probe would call that "one image missing"; it is "nothing was ever mirrored".
-if [ "$(_probe '[{"name":"cicd","repo_count":0}]' 0 u p)" = empty ]; then
+if [ "$(_probe '{"name":"cicd","repo_count":0}' 0 u p)" = empty ]; then
   ok "an EXISTING but EMPTY project -> empty (the incident's second half)"
 else bad "repo_count 0 must be empty"; fi
 
 # ── the honest cases: no credential, so `[]` is AMBIGUOUS with a private project ─────────────────
-if [ "$(_probe '[]' 0 '' '')" = inconclusive ]; then
-  ok "ANONYMOUS + [] -> inconclusive, NOT absent (a private project looks identical)"
+if [ "$(_probe '' 0 '' '' 403)" = inconclusive ]; then
+  ok "a 403 (private, not visible to me) -> inconclusive, never absent"
 else
-  bad "an anonymous [] must never be reported as absent — it would send a tenant to make mirror
-        against a Harbor that is fine"
+  bad "a 403 must never be reported as absent — it would send a tenant to make mirror against a
+        Harbor that is fine"
 fi
 
 # ── an unreachable Harbor is not an empty one ───────────────────────────────────────────────────
@@ -62,7 +65,7 @@ if [ "$(_probe '' 7 u p)" = inconclusive ]; then
 else bad "a curl failure must not be reported as absent"; fi
 
 # ── garbage body -> inconclusive, never a pass and never a false accusation ──────────────────────
-if [ "$(_probe '<html>502 Bad Gateway' 0 u p)" = inconclusive ]; then
+if [ "$(_probe '<html>502 Bad Gateway' 0 u p 502)" = inconclusive ]; then
   ok "an unparseable body -> inconclusive"
 else bad "garbage must be inconclusive"; fi
 
@@ -93,17 +96,17 @@ if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'not a pass'; then
 else bad "an unset HARBOR_URL must skip loudly, never silently pass; rc=$rc"; fi
 
 # ── and the assertion DIES on the measured incident state, naming `make mirror` ──────────────────
-out="$(STUB_BODY='[]' STUB_RC=0 HARBOR_URL=h.example HARBOR_USERNAME=u HARBOR_PASSWORD=p \
-       harbor_assert_mirrored cicd istio 2>&1)"; rc=$?
+out="$(STUB_BODY='' STUB_CODE=404 STUB_RC=0 HARBOR_URL=h.example HARBOR_INSECURE=1 \
+       HARBOR_USERNAME=u HARBOR_PASSWORD=p harbor_assert_mirrored cicd istio 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'make mirror'; then
   ok "the incident state -> DIES naming 'make mirror' (not a credential problem)"
 else bad "an absent project must die and name make mirror; rc=$rc"; fi
 
 # ...but an ANONYMOUS caller in the same state must NOT be blocked.
-out="$(STUB_BODY='[]' STUB_RC=0 HARBOR_URL=h.example HARBOR_USERNAME='' HARBOR_PASSWORD='' \
+out="$(STUB_BODY='' STUB_CODE=403 STUB_RC=0 HARBOR_URL=h.example HARBOR_USERNAME='' HARBOR_PASSWORD='' \
        harbor_assert_mirrored cicd istio 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'not a pass'; then
-  ok "an ANONYMOUS tenant is never BLOCKED by an ambiguous [] (RULE ZERO-B)"
+  ok "an ANONYMOUS tenant is never BLOCKED by an ambiguous 403 (RULE ZERO-B)"
 else bad "an anonymous caller must not be blocked on an ambiguous result; rc=$rc"; fi
 
 # ── an EMPTY project name must SKIP, never die. The call sites used to pass
