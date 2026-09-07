@@ -1738,9 +1738,31 @@ elif [ -z "${VKS_NAMESPACE:-}" ]; then
 else
   _sup_kc="$(supervisor_kubeconfig 2>/dev/null || true)"
   if [ -z "$_sup_kc" ] || [ ! -f "$_sup_kc" ]; then
-    _ssh_state="no Supervisor kubeconfig — run: make vks-login"
+    # ⚠️ THIS MUST NOT NAME `make vks-login`, and it did until 2026-09-07 (B548). The rule is
+    # already adjudicated and written out at :1116-1121 for the Harbor cell — the SIBLING of this
+    # branch, fixed in f0b7d07 while THIS one was left behind. A 1-of-2 partial fix, and the half
+    # that shipped carries the refutation of the half that did not.
+    #
+    # `absent` is UNDECIDABLE: it cannot be told apart from "scenario-1 operator who has not logged
+    # in yet", and for the DEFAULT persona — a scenario-2 tenant, RULE ZERO-B — having no Supervisor
+    # kubeconfig is NORMAL, not a fault. Undecidability is a property of the EVIDENCE, not of the
+    # consumer: a report may say "I could not ask"; it may not attach a remedy, because THE REMEDY IS
+    # WHAT ENCODES THE GUESS.
+    #
+    # 🔴 And this particular guess has an irreversible tail: `make vks-login` spends one of THREE
+    # vCenter SSO attempts before PERMANENT lockout. Measured by a round: on a configured tenant
+    # (VKS_NAMESPACE set, no Supervisor kubeconfig) this fired on EVERY `make creds`.
+    #
+    # ⚠️ NOT A BLANKET BAN — :1076 legitimately names it. That arm is UNAUTHORIZED: a kubeconfig that
+    # EXISTS and was REJECTED. That state is DECIDABLE and re-authenticating is the right answer. The
+    # distinction is decidability, not the string.
+    _ssh_state="no Supervisor kubeconfig here — the node password lives on the Supervisor, so ask your platform team for it"
+    # `_first_unmet` describes what `make vks-login` would stop on. Keep it ONLY for an operator who
+    # has already declared they intend to run it by choosing a method; on the default it would
+    # smuggle the same prescription back in through a subordinate clause.
     _um_ssh="$(_first_unmet || true)"
-    [ -z "$_um_ssh" ] || _ssh_state="${_ssh_state} (which needs ${_um_ssh}, not set)"
+    [ -z "$_um_ssh" ] || [ -z "${VKS_AUTH_METHOD:-}" ] \
+      || _ssh_state="${_ssh_state} (and if you DO own this lab: make vks-login needs ${_um_ssh}, not set)"
     _ssh_tok="<no kubeconfig>"
   else
     _lab_err="$(mktemp)"
