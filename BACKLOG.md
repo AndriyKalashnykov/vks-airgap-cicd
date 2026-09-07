@@ -5224,7 +5224,42 @@ temptation to use a true finding to launder a design it does not actually suppor
 user-visible greeting (e.g. a build-info endpoint / an image label), so the demo's steady state is
 the demo rather than a test fixture.
 
-## B534 — 🟡 the app UI shows ONE fact under TWO labels: `Version` and `Commit` are both the image tag
+## B534 — ✅ SHIPPED 2026-09-05 (#1093 → #1101 → #1102) — the row was STALE and I briefed a round from it
+
+⚠️ **THE SECOND STALE ROW I BRIEFED FROM IN ONE SESSION.** The handoff already records B528's
+version of this failure; this is the same mistake one row later. The prescription below was merged
+**two days before** the round that "recommended" it, and then superseded TWICE:
+
+| PR | what it did |
+|---|---|
+| `181782c` **#1093** | relabel `Version` → `Image tag` — **exactly this row's prescription** |
+| `41219d7` **#1101** | renamed `Image tag` → **`Deployed tag`**, stating why: *"the artifact has TWO tags, so 'image tag' is ambiguous"* |
+| `b24082f` **#1102** | the deployed tag became the **declared version**; *"the duplicate `Version` row is gone from every page"* |
+
+**Measured at HEAD:** every one of the six pages renders `<dt>Deployed tag</dt>` and
+`<dt>Commit</dt>` — two rows, **two different facts**. `deploy/*/kustomization.yaml` now has ONE
+replacement target; `APP_COMMIT` is written from the real sha in `kaniko-build.yaml` with a
+read-back assert. **So applying this row would REGRESS a label that was deliberately changed, and
+turn `check-ui-contract` RED.**
+
+**The one-command check I should have run BEFORE briefing:** `git log -S'<dt>Version' -- apps/`.
+RULE ZERO-P prescribes exactly this for third-party code; it applies to OUR OWN merged PRs too.
+
+**Settled while checking (do not re-derive):** Maven DOES filter `@project.version@` — javawebapp
+renders `0.1.0` when `APP_VERSION` is unset, not the literal. The app also already carries a
+separate `declared-version: "0.1.0"` that is deliberately NOT env-overridable.
+
+**One real defect came out of it, now fixed:** `99-verify.sh` carried a stale comment — *"A prefix
+test, not equality: the tag is an abbreviation…"* — **11 lines above** code doing
+`[ "$tag" = "$new_ver" ]` and a comment saying *"EQUALITY … not a sha prefix"*. A #1102 leftover, and
+an active hazard: a reader trusting the nearer comment could "fix" the equality back and
+re-introduce the bug #1102 removed. Deleted.
+
+**Also confirmed by the round, worth keeping:** `check-ui-contract.sh`'s `norm()` is now only
+`grep -v '^[[:space:]]*$'`, so **labels are compared byte-for-byte** — a five-of-six relabel cannot
+ship silently. RED-proven by the round in a scratch copy.
+
+## B534 (original) — 🟡 the app UI shows ONE fact under TWO labels: `Version` and `Commit` are both the image tag
 
 MEASURED 2026-09-05 from the RENDERED PAGES (not from env), all six:
 
@@ -5535,7 +5570,74 @@ control feels exempt", RULE ZERO).
 the workspace PVC. Not measured. The image-digest question in the first draft is CLOSED by the
 `.dockerignore` evidence above.
 
-## B536 — 🟡 the lab-access table's `<not set>` is ONE token for THREE different facts — **7** cells, and the tenant sees all of them
+## B536 — ✅ SHIPPED — but the round REFUTED my count, my design, AND one of the three constraints
+
+**MY COUNT WAS A FIXTURE ARTIFACT.** 7 is what a `SKIP_DOTENV=1`-with-nothing-set fixture renders —
+the CI/e2e state, not a person. A tenant who supplies what `docs/scenario-2.md` actually ASKS FOR
+(`VKS_USERNAME`, `SUPERVISOR_HOST`, `VCF_CLI_VSPHERE_PASSWORD`) sees **3**, all on the vCenter row,
+all with ONE meaning. Measured, three fixtures:
+
+| fixture | bare tokens | rows |
+|---|---|---|
+| nothing set (the row's fixture) | 7 | vCenter 3, VKS/SSO 2, vcf CLI 2 |
+| + what scenario-2 asks for | 3 | **vCenter only** |
+| + all `VCENTER_*` (admin) | 0 | — |
+
+**So the three-meanings table collapses for the reader it was filed about**, and the row's severity
+with it. The mix — two rows populated, one blank — is itself the signal.
+
+**MY LEGEND DESIGN WAS REFUTED, and the objection I raised against it myself was the right one, only
+worse than I thought.** The draft said *"a tenant is not given vCenter credentials and is not
+expected to have them"* — a claim about **who the reader is and what they possess**, which the report
+cannot know (a colleague of the VI admin may hold them). `creds.sh:537-549` already legislates
+exactly this for the adjacent flow line. So the legend would have shipped a NEW false claim in the
+change written to remove one.
+
+**AND THE 8th TOKEN IS ALREADY LEGENDED — by the very design I proposed.** The services table's
+`ArgoCD <not set>` already prints *"no address configured here for: ArgoCD / Again a fact about THIS
+REPORT, not about the cluster"* (`_un_oth`, accumulated in the print loop — the derived condition I
+was going to invent). Including it would have added a SECOND legend and my `.env` wording would have
+REGRESSED a sentence that took two PRs to get right.
+
+⚠️ **CONSTRAINT 1 WAS VACUOUS AS STATED.** It claimed `check-expect-literals` would go RED and a walk
+row would fail EXPECT UNMET. **Both extractors DROP the literal**: `walk-doc.sh:733`
+(`len(lit) < 6 or re.search(r'[<>]|\.\.\.|…')`) and `check-expect-literals.sh:348`
+(`lit ~ /[<>]/`). `<not set>` contains `<` and `>`, so no gate can see it. The real constraint is a
+two-file **prose** coordination, not a red build — a materially different cost that would have
+mis-ranked every future option.
+
+⚠️ **AND THE ROUND'S OWN FINDING 2 WAS WRONG — measured.** It reported `test-creds-show` (136
+assertions) as "invoked by NOTHING", making everything here ungated. **It runs**: `TEST_ALL :=
+$(sort $(wildcard $(SCRIPTS)/test-*.sh))` DISCOVERS it, it is neither `manual` nor `slow`, and it
+ran in the last `make ci` at **11s**. **My own probe was blind the same way** (`test-scripts:` names
+`$(TEST_OFFLINE)`, not the file). So the two comments it flagged as resting on a non-existent chain
+— `argocd-password.sh:27`, `creds.sh:391` — are CORRECT, and I nearly "fixed" them. Same wildcard
+blindness the B535 round caught in itself.
+
+**SHIPPED:** the HEADER (`creds.sh`) — it read *"the values you put in .env"* above a row of blanks,
+asserting an action the reader had not taken, so a reader who had done everything right would
+conclude they had missed something. `Lab access` stays the LEADING word — `test-creds-show.sh:191`
+splits the report with `sed '/Lab access/,$d'` and with no match sed deletes NOTHING, so
+`out_services` silently becomes the whole report — a QUIET failure, unlike the three sibling
+`grep -q` assertions. The tail was free (measured: it appears nowhere else).
+
+Plus a **vCenter-row-scoped** note stated about the **DOCUMENTS** — measured 13 `VCENTER_*` mentions
+in scenario-1, **0** in scenario-2 — which hands the reader the discriminator instead of guessing
+who they are. Gated by the new `check-vcenter-scenario-split` (both arms RED-proven), so the note
+goes RED the day it stops being true. Verified both directions: it fires on the tenant render and is
+SILENT for an admin. `test-creds-show` still 136/136.
+
+**Also settled, so nobody re-derives it: there is NO admin-vs-tenant discriminator in scope.** Four
+candidates, all refuted: `SUPERVISOR_HOST` (scenario-2 tells a tenant to set it), `HARBOR_USERNAME`'s
+`robot$` shape (`install-all` mints robots in scenario 1 too, and `creds.sh:1200` says that string
+test must never GATE), `ARGOCD_MECHANISM` (0 references in `creds.sh`; defaults to `auto`), and a
+readable Supervisor kubeconfig (the SSH probe's `<forbidden>` arm exists because a tenant can hold
+one). That is why the note is about files.
+
+**Residual:** a per-cell marker remains structurally blocked — Endpoint and Username are `%-*s`
+padded, so only the Password cell has room, and fixing 1 of 3 would read as handled.
+
+## B536 (original) — 🟡 the lab-access table's `<not set>` is ONE token for THREE different facts — **7** cells, and the tenant sees all of them
 
 ⚠️ **COUNT CORRECTED 2026-09-07: it is 7, not 8.** Re-measured on the tenant fixture
 (`SKIP_DOTENV=1`, no vCenter vars, throwaway state file): **7** bare `<not set>` plus one
