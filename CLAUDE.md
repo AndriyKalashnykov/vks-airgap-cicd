@@ -353,6 +353,50 @@ claim about your instrument first (`agents.md` §"a `ps` that finds NOTHING does
 process is GONE"). Prove the probe can produce a non-empty answer for a case you *know* is true
 before concluding anything from its silence.
 
+### RULE ZERO-V — EVERY SENTENCE YOU PRINT TO AN OPERATOR IS A CLAIM. VALIDATE IT OR DO NOT PRINT IT (BLOCKING)
+
+`make creds` is the ONLY end-user credentials surface, and RULE ZERO-B means the operator has this
+repo and nothing else. So a false sentence there is not one misleading line among many — it is the
+WHOLE of what they know, and they have no way to cross-check it.
+
+**And prose has no failure mode.** Wrong code eventually goes red somewhere. A wrong sentence in a
+report is GREEN FOREVER.
+
+**THE TEST — mechanical, so it does not depend on judgement about what "looks like" design:**
+
+> **A sentence is a CLAIM if it can be FALSE** — if you can write a command that returns yes/no for
+> it. Three tells, ANY ONE sufficient: (1) a verb about the system's behaviour — *stops working,
+> expires, is deleted, cannot, only, always, never, refuses*; (2) you could write a command that
+> would disprove it; (3) if it were wrong, the reader would **DO SOMETHING DIFFERENT**.
+>
+> In an operator-facing report almost NOTHING is wording. The wording is the column headers and the
+> layout. **Every sentence is a claim.**
+
+A claim ships only with EVIDENCE — a command you ran, a file you read, or a cited source — and, for
+anything about a credential, a lifecycle, or a failure mode, an adversary round. "It reads right" is
+not evidence. Neither is "I only changed the wording".
+
+⚠️ **THE FAILURE THIS RULE EXISTS FOR IS KEYING ON THE SHAPE OF THE WORK.** Code and configs get an
+adversary; prose does not — so a factual claim written as prose ships unvalidated. That is the bug,
+and it is not rare: MEASURED 2026-09-07, `scripts/creds.sh` printed **20 falsifiable claims** and
+**zero** had required evidence to ship. The ones that were true were true by accident, because they
+had been measured for some other reason.
+
+**The incident.** `make creds` told the operator *"ArgoCD: this is the initial admin password; it
+stops working once someone changes it."* Written during a cleanup, as wording. Three tells out of
+three. A round then measured it **wrong in the dangerous direction**: NOTHING deletes
+`argocd-initial-admin-secret` — not ArgoCD, not the VKS operator (it never created it;
+`argocd-server` did at runtime, with zero annotations/labels/ownerRefs), not kapp; upstream only
+ADVISES a human to delete it. So the report does not go quiet when the password changes, it goes
+**WRONG**, serving a dead password with full confidence, forever. And the repo's own
+`scripts/argocd-password.sh` already said so, one read away.
+
+**The residual, named honestly.** `check-vks-provenance` gates every Confidence-table fact row in
+`docs/vks-services/*.md` (94 rows, 15 code-refs verified) — and its own header records that
+load-bearing PROSE claims are a **documented phase-2 residual**. Operator-facing output is exactly
+that residual. Until something gates it, this is DISCIPLINE, labelled as discipline. Do not report
+it as handled.
+
 ### RULE ZERO-A — DERIVE THE CONTRACT FROM THE CODE BEFORE YOU CHANGE IT (BLOCKING)
 
 Before writing code that changes **what one side must provide to another** — the air gap, a wire

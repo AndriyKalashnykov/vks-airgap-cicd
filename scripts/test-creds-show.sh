@@ -600,8 +600,19 @@ render_with_cluster() {
   fi
   chmod +x "$t/bin/kubectl"
   : > "$t/kc"
+      # curl + getent stubbed TOO, so the isolation is the stubbed PATH and nothing else.
+      #
+      # ⚠️ THIS STATE DELIBERATELY DOES NOT SET CREDS_NO_PROBE. It used to, and that made the
+      # whole axis VACUOUS the moment creds.sh began honouring the flag properly (2026-09-07):
+      # the reachability probe short-circuited before the stub was ever consulted, and this
+      # STATE's own anti-vacuity check caught it -- "the stub was NOT honoured, so every
+      # assertion in STATE 8 is vacuous." A state that asserts on a probe cannot also switch
+      # the probe off. B530 records the same defect one level up.
+      printf '#!/bin/sh\nexit 1\n' > "$t/bin/curl"
+      printf '#!/bin/sh\nexit 1\n' > "$t/bin/getent"
+      chmod +x "$t/bin/curl" "$t/bin/getent"
   ( cd "$t" && PATH="$t/bin:$PATH" REPO_ROOT="$t" VKS_STATE_FILE="$t/.env.state" \
-      KUBECONFIG="$t/kc" CREDS_TOKEN=1 CREDS_NO_PROBE=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )
+      KUBECONFIG="$t/kc" CREDS_TOKEN=1 "${_CREDS_REPO}/scripts/creds.sh" 2>/dev/null )
   rm -rf "$t"
 }
 
