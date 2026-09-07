@@ -34,9 +34,16 @@ while [ $i -lt ${#args[@]} ]; do case "${args[$i]}" in
   *) sub="${args[$i]}"; res="${args[$((i+1))]:-}"; break;; esac; done
 case "$sub" in
   version) echo "Client Version: v1.34.0"; exit 0 ;;
-  api-resources) echo 'virtualmachineclasses  vmclass  vmoperator.vmware.com/v1alpha5  false  VirtualMachineClass'; exit 0 ;;  # a REAL SUPERVISOR: the modes here inject a failure into the READ, not into what the cluster IS.
+  # `guest` is the one mode where the cluster IS something else: a real, reachable GUEST cluster
+  # serves no vmoperator API group, so the discriminator returns 1. Every other mode injects a
+  # failure into a READ and must keep answering as a Supervisor.
+  api-resources) case "${STUB_MODE:-ok}" in
+                   guest) : ;;
+                   *) echo 'virtualmachineclasses  vmclass  vmoperator.vmware.com/v1alpha5  false  VirtualMachineClass' ;;
+                 esac; exit 0 ;;  # a REAL SUPERVISOR: the modes here inject a failure into the READ, not into what the cluster IS.
 
   get) case "${STUB_MODE:-ok}" in
+         guest) echo 'No resources found' >&2; exit 1 ;;
          stale_ca)  echo 'Unable to connect to the server: tls: failed to verify certificate: x509: certificate signed by unknown authority' >&2; exit 1 ;;
          forbidden) echo 'Error from server (Forbidden): kubernetesreleases is forbidden: User "u" cannot list resource "kubernetesreleases"' >&2; exit 1 ;;
          none)      exit 0 ;;                                  # reachable, genuinely nothing Ready
@@ -156,6 +163,20 @@ _env_after=""
 [ -f "$SCRIPT_DIR/../.env" ] && _env_after="$(cksum < "$SCRIPT_DIR/../.env")"
 if [ "$_env_before" = "$_env_after" ]; then ok "the repo's real ./.env is byte-unchanged (REPO_ROOT sandbox holds)"
 else bad "THE SUITE WROTE ./.env" "REPO_ROOT is not being honoured — every later run inherits it"; fi
+
+# -- A GUEST kubeconfig must be NAMED, not die in silence (B210 F1) -----------------------------
+# MEASURED against the LIVE guest cluster 2026-09-06: `kubeconfig_is_supervisor "$SUP"; _sup_rc=$?`
+# is killed by `set -e` before `_sup_rc=$?` runs, so the not_a_supervisor branch was DEAD CODE and
+# this script exited rc=1 showing only unrelated OSImages warnings and `Error 1`. NINETEEN cases
+# existed here and NONE covered the guest path -- which is exactly why it shipped. This is that
+# coverage; if the rc capture at 24-vks-k8s-version.sh:137 regresses to the bare form, case 2 dies.
+_g="$(run guest 0)"; _grc="${_g%% *}"
+if [ "$_grc" -ne 0 ]; then ok "guest: still fails (a guest cannot list TKr releases)"
+else bad "guest: must fail" "rc=$_grc"; fi
+if grep -qi "NOT a Supervisor" "$TMP/out"; then ok "guest: NAMES the wrong-cluster cause"
+else bad "guest: names the wrong-cluster cause" "branch is dead again - check the rc capture at :137"; fi
+if grep -qi "vmoperator" "$TMP/out"; then ok "guest: says WHICH capability was missing"
+else bad "guest: says which capability was missing" "$(tail -2 "$TMP/out")"; fi
 
 echo "tkr classify: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ] || exit 1

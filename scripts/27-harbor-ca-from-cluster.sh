@@ -119,21 +119,35 @@ n="$(printf '%s\n' "$ns" | grep -c . || true)"
 # ⚠️ `|| _sup_rc=$?`, NOT `kubeconfig_is_supervisor "$SUP"; _sup_rc=$?`. MEASURED 2026-09-06 under
 # this script's own `set -euo pipefail`: the bare form is KILLED by set -e before the next line, so
 # the branch below would be DEAD CODE on exactly the path it exists for. The siblings at 24 and 26
-# get away with the bare form only because their call sites sit inside functions invoked as
-# `$(fn || true)` / `if fn && ...`, where set -e is suspended; THIS call is at top level, like
-# vks-package.sh:81, which already uses this safe form.
+# ⚠️ THAT CLAIM WAS PARTLY FALSE AND IS CORRECTED HERE. An implementation round MEASURED it: `26`
+# is genuinely safe (its call sits in `report`, invoked as `report || _rep_first=$?`), but **`24` was
+# NOT** -- its call is at nesting depth 0 inside an if-BODY, so `set -e` killed it and its branch was
+# DEAD CODE. Confirmed against the LIVE guest cluster: `make vks-k8s-version` exited rc=1 with no
+# diagnostic. Fixed in the same change as this comment. The discriminator is the DEPTH-0 IF-BODY,
+# not "inside a function" -- that wording is what made the wrong call read as safe.
+# vks-package.sh:81 already uses this safe form; so, now, do 24 and this script.
 #
 # rc==1 ONLY. rc==2 means we could not determine (unreachable / stale CA / dead credential) and must
 # NOT be read as "not a Supervisor" -- that would swap one confidently-wrong message for another.
 if [ "$n" = 0 ]; then
   _sup_rc=0; kubeconfig_is_supervisor "$SUP" || _sup_rc=$?
+  # rc==2 is COULD-NOT-DETERMINE, and falling through to the die below would assert as FACT that
+  # zero Harbor namespaces exist -- the exact class this block exists to close, one branch over.
+  # MEASURED: before this arm, the rc==2 and rc==0 paths produced BYTE-IDENTICAL output.
+  if [ "$_sup_rc" -eq 2 ]; then
+    die "could not determine whether '${SUP}' is a Supervisor at all (the probe did not complete),
+  so the EMPTY namespace list above is NOT a fact about Harbor. Nothing here says whether Harbor is
+  installed. Settle the kubeconfig first:  make vks-login   (see 'make preflight' for the cause)."
+  fi
   if [ "$_sup_rc" -eq 1 ]; then
     not_a_supervisor_note >&2   # called directly, not via $( ): command substitution strips the
                                 # trailing newline and the die would run into the note's last line.
     die "cannot find Harbor's namespace: '${SUP}' does not serve vmoperator.vmware.com, so it is not
   a Supervisor (see above). Harbor is a SUPERVISOR Service, so NOTHING was learned about whether it
   is installed. NOTE: strong evidence, not proof -- an identity that authenticates but may not
-  perform API discovery would look identical."
+  perform API discovery would look identical. If discovery is denied to you, this kubeconfig may
+  still BE the Supervisor -- set HARBOR_SERVICE_NAMESPACE in .env (the escape hatch this script
+  already honours above), or ask for the system:discovery grant."
   fi
 fi
 [ "$n" = 1 ] || die "expected EXACTLY ONE namespace labelled serviceId=harbor, got ${n}:
