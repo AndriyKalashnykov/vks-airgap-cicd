@@ -4844,7 +4844,29 @@ will be abandoned, and `CREDS_NO_PROBE=1` must still skip everything.
 gate covers it (today `test-creds-show.sh` sets `CREDS_NO_PROBE=1` for every rendered case, so it is
 structurally blind to this whole function — see B530).
 
-## B529 — 🔴 `make install-all` says "complete air-gap install end to end" and ALWAYS ends with every app in ImagePullBackOff
+## B529 — ✅ SHIPPED — `install-all` now builds the apps; the FALSE BANNER it left behind is fixed too
+
+> ✅ **CLOSED 2026-09-07.** `build-apps` joined the chain in **`b24082f` (PR #1102)** — the same day
+> this row was measured, and AFTER the measurement, which is why the row read as open. An adversary
+> round found the row's own "STILL OPEN" text stale by 28 hours.
+>
+> ⚠️ **And it left a defect that was WORSE than the original, live for two days.** `build-apps` is a
+> PREREQUISITE and the "what is and is not running" message is the RECIPE BODY, so make ran the
+> builds to completion and *then* printed *"NOT YET RUNNING: your apps … every app pod sits in
+> ImagePullBackOff and its URL answers 503"* — over a demo that was working. B529 was a true target
+> under a false claim of completeness; this was a HEALTHY system under an authoritative assertion
+> that it was broken, which sends the operator to debug nothing and burns the credibility of every
+> other line in the banner. Fixed in the same commit as this closure.
+>
+> Also fixed: both scenario docs enumerated the chain and BOTH omitted `build-apps`; the Timings
+> table's figures pre-date it and are now marked rather than guessed at; and `75-build-apps.sh`'s
+> header claimed it waits for the pod to be RUNNING, which it does not (the word appeared ONLY on
+> that line and nowhere in the code — it waits for the PipelineRun to Succeed).
+>
+> **Rejected, with the reason recorded so it is not re-proposed:** a terminal readiness gate inside
+> `install-all`. `make verify` already IS that assertion, both scenario docs run it immediately
+> after, and a third wait gives `install-all` a new false-RED surface on a slow-but-healthy ArgoCD
+> reconcile — the shape `70-configure-argocd.sh:848` already had to back out of once.
 
 `Makefile` `install-all: preflight selfbuilt-image mirror mirror-verify builder-image vks-login
 platform install-headlamp install-ingress gitops`.
@@ -5317,3 +5339,27 @@ by one that asserts the OBSERVABLE (zero new PipelineRuns across a seed), which 
 matters. ⚠️ The controlled run resets every `<app>-deploy` to `NEVER-BUILT-RUN-THE-PIPELINE` and
 needs a `make build-apps` afterwards to restore the demo — budget ~12 minutes, do not run it against
 a lab someone is watching.
+
+## B539 — 🟡 nothing gates a doc's `install-all` CHAIN STRING against the Makefile, which is why B529's fix shipped half-done
+
+Both scenario docs spell the install chain out as prose — `preflight -> selfbuilt-image -> ... ->
+gitops` — and when `build-apps` joined `install-all` in `b24082f`, **neither was updated**. Measured
+2026-09-07: `docs/scenario-1.md:965` and `docs/scenario-2.md:805` both still ended at `gitops`, two
+days later. `scripts/11-bundle.sh:122` carries a THIRD chain (`platform -> gitops -> install-ingress
+-> verify`, the sneakernet half) whose correctness is unjudged.
+
+This is the repo's own *"a value that lives in >1 file needs a gate asserting they agree"* class —
+`check-image-alignment` and `check-toolchain-alignment` exist for exactly this — and its absence is
+why the omission survived a merge.
+
+**Shape of the fix:** extract `install-all`'s prerequisite list from the Makefile and assert every
+` -> `-joined chain string under `docs/` matches it, in order. RED-prove by deleting one link.
+
+⚠️ **This is a NEW CONTROL, so it gets its own idea round first** (RULE ZERO). Two questions the
+round must answer before a line is written: (1) is the sneakernet chain in `11-bundle.sh` in scope,
+or a legitimately different sequence? (2) what is the false-RED rate on prose that mentions targets
+without meaning to enumerate the chain — `make help` output, a doc quoting two targets in a
+sentence? A gate that fires on ordinary prose is the one people delete.
+
+**Done when:** ruled on by a round, and either the gate ships with a measured false-RED rate over
+the real `docs/` tree, or the refutation is recorded here so nobody rebuilds it.
