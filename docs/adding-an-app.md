@@ -60,9 +60,16 @@ fresh repo's root there is no `apps/` prefix left to match. Measured 2026-09-07 
 ⚠️ **And it is not only build output.** The seeded repo is created **`"private":false`** and
 force-pushed, and the root `.gitignore`'s *secret* patterns (`.env`, `*.key`, `*.pem`,
 `*.kubeconfig`) are **unanchored** — so they protect the outer repo at any depth and are **absent**
-from the seeded one. Every per-app file therefore mirrors those lines too, negation included. Keep
-them when you write a new one; nothing in the tree matches them today, so they cost nothing and they
-are what stops a stray kubeconfig becoming public.
+from the seeded one. Every per-app file therefore mirrors those lines too. Keep them when you write
+a new one; nothing in the tree matches them today, so they cost nothing and they are what stops a
+stray kubeconfig becoming public.
+
+⚠️ **Copy BOTH negations, and know why each is there.** gitignore precedence gives the **deeper**
+file priority, so a per-app `*.key` **overrides** the root's `!**/testdata/**/*.key` — a deliberate
+carve-out so crypto/TLS fixtures can be committed. Omitting it does not merely fail to protect the
+seeded repo; it **removes protection in this repo**, and `git add` on a new `testdata/*.key` then
+silently does nothing. `!.env.example` is the same shape. Both are in all six files; measured after
+adding them: `git ls-files apps/ | git check-ignore --no-index --stdin` returns **nothing**.
 
 So write `apps/<lang>/<app>/.gitignore` for whatever your app builds locally. `gitignore(5)` says
 those patterns match *relative to the file's own location*, which is exactly why this works in both

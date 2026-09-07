@@ -56,6 +56,37 @@ _m "duplicate a link -> RED"         's/→ gitops → build-apps/→ gitops →
 _m "a target added to the MAKEFILE only -> RED (the historical failure)" \
    's/^install-all: preflight/install-all: preflight zz-new/' Makefile
 
+# ── THE EXCLUSIONS MUST BE TESTED WITH THE FILES PRESENT AND STALE ──────────────────────────────
+# ⚠️ CORRECTED 2026-09-07 by a session-end round: the previous "negative controls" never copied
+# BACKLOG.md or docs/reviews/ into the fixture, so they asserted the ABSENCE OF A FILE, not the
+# exclusion — they passed identically with every exclusion DELETED. A control that passes when the
+# thing it guards is removed is not a control. These plant a DELIBERATELY STALE chain in each.
+mkdir -p "$T/docs/reviews"
+# ⚠️ EACH PLANTED LINE MUST CONTAIN THE LITERAL `install-all`. The producer is
+# `grep -rnI 'install-all'`, so a line without it is never a hit and the control is VACUOUS —
+# measured: the first version of these two lines omitted it, and the case passed with the
+# BACKLOG.md exclusion DELETED (verified the deletion landed, 1 -> 0 occurrences, before believing
+# the green). A control that passes when the thing it guards is removed is not a control.
+printf 'B999: install-all used to read preflight -> mirror -> gitops -> build-apps; it drifted.\n' > "$T/BACKLOG.md"
+printf 'On 2026-07-14 install-all read preflight -> mirror -> gitops -> build-apps (stale).\n' > "$T/docs/reviews/audit.md"
+run
+if [ "$RC" -eq 0 ]; then ok "a STALE chain in BACKLOG.md and docs/reviews/ is excluded (files PRESENT)"
+else bad "the exclusions must hold with the files present and stale — rc=$RC:
+$(tail -3 "$T/.out" 2>/dev/null)"; fi
+rm -f "$T/BACKLOG.md" "$T/docs/reviews/audit.md"
+
+# ── AN UNRELATED ARROW CHAIN ON AN install-all LINE MUST BE SKIPPED, NOT ACCUSED ────────────────
+# The gate triggers on "mentions install-all AND carries 4 arrow-joined tokens", which is NOT the
+# same as "is a copy of install-all's prerequisite list". Measured false REDs before the fix:
+#   "the demo flow is push -> tekton -> argocd -> browser", the sneakernet sequence, an ingress
+#   sequence. Their only remedy would be rewriting a CORRECT sentence into a wrong one.
+printf 'After install-all, the demo flow is push -> tekton -> argocd -> browser.\n' > "$T/unrelated.md"
+run
+if [ "$RC" -eq 0 ]; then ok "an UNRELATED arrow chain beside install-all is skipped, not accused"
+else bad "a chain that does not start with install-all's first prereq must be SKIPPED — rc=$RC:
+$(tail -3 "$T/.out" 2>/dev/null)"; fi
+rm -f "$T/unrelated.md"
+
 # ⚠️ THE LHS SANITY GATE. Forgetting the '##' strip yields ~49 tokens instead of 12 and then BOTH
 # correct docs go RED — with a message that reads as a DOC defect and sends the fixer to the wrong
 # file. The gate must name ITSELF as the fault instead.
@@ -70,14 +101,20 @@ else
 fi
 cp "$REPO/scripts/check-install-chain.sh" "$T/scripts/"
 
-# NEGATIVE CONTROLS. Each is excluded for a written reason; if any is scanned the gate has 4 false
-# REDs in 7 hits and gets deleted.
+# NEGATIVE CONTROLS — kept, but they are the WEAK half and now say so. They assert the exclusions
+# are not scanned; the STRONG version (files present and STALE) is the case above, which is what
+# actually fails if an exclusion is deleted.
+# ⚠️ `Makefile` is NOT listed. It was, and it measured NOTHING: the producer is
+# `grep --include='*.md'`, so a Makefile can never be a hit, and the gate's dead `*/Makefile` arm
+# has been removed. A control over an unreachable path is not a control.
+# ⚠️ The figure here used to read "4 false REDs in 7 hits". It did not reproduce: applying the
+# gate's own extractor tree-wide gives 6 chain-bearing hits, 3 of them excluded — 3 in 6.
 run
-for excl in BACKLOG.md docs/reviews Makefile; do
+for excl in BACKLOG.md docs/reviews; do
   if printf '%s' "$OUT" | grep -q "$excl"; then
     bad "negative control: $excl is being scanned (it is excluded for a reason)"
   else
-    ok "negative control: $excl is not scanned"
+    ok "negative control: $excl is not scanned (weak arm — the stale-file case above is the strong one)"
   fi
 done
 
