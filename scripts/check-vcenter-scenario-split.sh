@@ -32,10 +32,45 @@ for f in "$_s1" "$_s2"; do
 done
 
 _pat='VCENTER_HOST|VCENTER_USERNAME|VCENTER_PASSWORD'
-# `grep -c` prints 0 AND EXITS 1 on no match, which under `set -e` would kill the script on exactly
-# the healthy case. `|| true` is load-bearing here, not decoration.
-_n1="$(grep -cE "$_pat" "$_s1" || true)"
-_n2="$(grep -cE "$_pat" "$_s2" || true)"
+
+# ⚠️ A MENTION IS NOT AN ASK, and conflating them made this gate go RED on a CORRECT document.
+# `docs/scenario-2.md:812` ALREADY says "This document never asks you for vCenter credentials".
+# The moment someone makes that sentence more precise — naming the three variables — a
+# mention-counting gate reddens `static-check` on the doc that makes creds.sh's note MORE true, and
+# the cheapest way to go green is to DELETE the clarification. A gate whose only remedy degrades the
+# artifact is refuted on sight (configuration.md). So DISCLAIMING lines are excluded from the count.
+_disclaim='never asks|does not ask|do NOT set|don.t set|Expect:'
+
+# ⚠️ `grep -c` EXITS 2 ON AN UNREADABLE FILE and prints 0 — the HEALTHY value. With `|| true` that
+# rc was swallowed and the gate reported "OK — scenario-2 does not (0)" for a file it could not
+# read, positively asserting a number it never obtained. MEASURED with `chmod 000`. The `[ -f ]`
+# guard above catches MISSING, not UNREADABLE. rc 0 = matched, 1 = no match (the healthy case this
+# gate exists for), >=2 = a real error that must be fatal.
+# ⚠️ NOT `x="$(grep … | grep … | wc -l)"; rc="${PIPESTATUS[0]}"`. That was the first fix and it is
+# BROKEN: after an ASSIGNMENT, PIPESTATUS[0] is the assignment's own status, not the pipeline's.
+# MEASURED on an unreadable file — the assignment form reports rc=1 (indistinguishable from the
+# healthy no-match case) while the bare pipeline reports grep's real rc=2. So the read-error arm
+# would never have fired, and the gate would have looked fixed while still failing open.
+# ⚠️ THE READABILITY CHECK IS OUT HERE, NOT INSIDE _count — AND THAT IS THE WHOLE POINT.
+# A first fix put `die` inside a helper called as `_n2="$(_count "$_s2")"`. `die` calls `exit`, and
+# `exit` inside a COMMAND SUBSTITUTION terminates only the SUBSHELL. This script is `set -uo
+# pipefail` with NO `-e`, so the failed assignment did not stop anything: `_n2` came back EMPTY,
+# `${_n2:-0}` turned it into 0 — the HEALTHY value — and the gate printed its own die message and
+# then reported OK with rc=0. MEASURED on a `chmod 000` file: the error text appeared AND rc was 0.
+# That is worse than the bug it replaced, because the message makes it look handled.
+for _f in "$_s1" "$_s2"; do
+  [ -r "$_f" ] || die "check-vcenter-scenario-split: ${_f} exists but is NOT READABLE. This gate
+  cannot answer without it, and reporting '0 mentions' would assert a number it never obtained."
+done
+
+_count() { # _count <file> -> mentions that are not disclaimers. Readability is guaranteed above.
+  local _f="$1" _hits
+  _hits="$(grep -E "$_pat" "$_f" || true)"
+  [ -n "$_hits" ] || { printf '0'; return 0; }  # grep -c on empty input would count a phantom line
+  printf '%s\n' "$_hits" | grep -cvE "$_disclaim" || true
+}
+_n1="$(_count "$_s1")"
+_n2="$(_count "$_s2")"
 
 _bad=0
 if [ "${_n1:-0}" -eq 0 ]; then

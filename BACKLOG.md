@@ -5606,8 +5606,10 @@ row would fail EXPECT UNMET. **Both extractors DROP the literal**: `walk-doc.sh:
 two-file **prose** coordination, not a red build — a materially different cost that would have
 mis-ranked every future option.
 
-⚠️ **AND THE ROUND'S OWN FINDING 2 WAS WRONG — measured.** It reported `test-creds-show` (136
-assertions) as "invoked by NOTHING", making everything here ungated. **It runs**: `TEST_ALL :=
+⚠️ **AND THE ROUND'S OWN FINDING 2 WAS WRONG — measured.** It reported `test-creds-show` as
+"invoked by NOTHING", making everything here ungated. (It quoted "136 assertions" back from MY
+brief; the real figure is **65 executed** — 63 before the two cases added here. The 136 was mine
+and it was wrong.) **It runs**: `TEST_ALL :=
 $(sort $(wildcard $(SCRIPTS)/test-*.sh))` DISCOVERS it, it is neither `manual` nor `slow`, and it
 ran in the last `make ci` at **11s**. **My own probe was blind the same way** (`test-scripts:` names
 `$(TEST_OFFLINE)`, not the file). So the two comments it flagged as resting on a non-existent chain
@@ -5625,7 +5627,7 @@ Plus a **vCenter-row-scoped** note stated about the **DOCUMENTS** — measured 1
 in scenario-1, **0** in scenario-2 — which hands the reader the discriminator instead of guessing
 who they are. Gated by the new `check-vcenter-scenario-split` (both arms RED-proven), so the note
 goes RED the day it stops being true. Verified both directions: it fires on the tenant render and is
-SILENT for an admin. `test-creds-show` still 136/136.
+SILENT for an admin. `test-creds-show` still green — and it now has two cases that can SEE this change (STATE 13), because it was byte-identical before and after without them.
 
 **Also settled, so nobody re-derives it: there is NO admin-vs-tenant discriminator in scope.** Four
 candidates, all refuted: `SUPERVISOR_HOST` (scenario-2 tells a tenant to set it), `HARBOR_USERNAME`'s

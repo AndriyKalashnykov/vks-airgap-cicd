@@ -66,5 +66,38 @@ T="$(mkfix)"; printf '\nAlso set `VCENTER_HOST` for the second vCenter.\n' >> "$
 if [ "$rc" -eq 0 ]; then ok "an EXTRA scenario-1 mention stays GREEN (the split is pinned, not the count)"
 else bad "adding a scenario-1 mention must NOT be RED — the gate pins the split; rc=$rc"; fi; rm -rf "$T"
 
+# ── 6. An UNREADABLE document -> RED, and NO false OK. This is the arm that shipped broken TWICE.
+#      (a) `x="$(grep …|…|wc -l)"; rc="${PIPESTATUS[0]}"` reports the ASSIGNMENT's status (1), not
+#          grep's (2) — indistinguishable from the healthy no-match case.
+#      (b) moving the check into a helper called as `n="$(_count f)"` made it worse: `die` calls
+#          `exit`, and `exit` inside a COMMAND SUBSTITUTION ends only the SUBSHELL. With `set -uo
+#          pipefail` and no `-e`, the gate PRINTED ITS OWN DIE MESSAGE AND THEN REPORTED OK, rc=0.
+#      So this case asserts BOTH halves: non-zero rc AND the absence of the success line.
+T="$(mkfix)"; chmod 000 "$T/docs/scenario-2.md"; rc="$(run "$T")"
+if [ "$rc" -ne 0 ] && grep -q 'NOT READABLE' "$T/.out" && ! grep -q 'scenario-2 does not' "$T/.out"; then
+  ok "an UNREADABLE document -> RED, names it, and prints NO success line"
+else bad "unreadable must be RED with no success line; rc=$rc: $(tail -1 "$T/.out")"; fi
+chmod 644 "$T/docs/scenario-2.md" 2>/dev/null; rm -rf "$T"
+
+# ── 7. A DISCLAIMING sentence that NAMES the variables must stay GREEN. A mention is not an ask,
+#      and scenario-2.md ALREADY says "This document never asks you for vCenter credentials" — so
+#      the obvious precision edit (naming the three vars) would have reddened static-check on the
+#      document that makes creds.sh's note MORE true, with deleting the clarification as the
+#      cheapest way back to green. A gate whose only remedy degrades the artifact is refuted.
+T="$(mkfix)"
+printf '\nThis document never asks you for `VCENTER_HOST`, `VCENTER_USERNAME` or `VCENTER_PASSWORD`.\n' \
+  >> "$T/docs/scenario-2.md"
+rc="$(run "$T")"
+if [ "$rc" -eq 0 ]; then ok "a DISCLAIMER naming the vars stays GREEN (a mention is not an ask)"
+else bad "a 'never asks' sentence must not redden the gate; rc=$rc: $(tail -1 "$T/.out")"; fi; rm -rf "$T"
+
+# ── 8. ...but a REAL ask on the very next line must still be RED, so 7 is not a blanket exemption.
+T="$(mkfix)"
+printf '\nThis document never asks you for `VCENTER_HOST`.\nSet `VCENTER_HOST` in your .env.\n' \
+  >> "$T/docs/scenario-2.md"
+rc="$(run "$T")"
+if [ "$rc" -ne 0 ]; then ok "a REAL ask beside a disclaimer is still RED (7 is not a blanket exemption)"
+else bad "an actual instruction to set VCENTER_* must be RED even next to a disclaimer; rc=$rc"; fi; rm -rf "$T"
+
 printf '\ntest-vcenter-scenario-split: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
