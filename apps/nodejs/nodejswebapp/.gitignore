@@ -1,0 +1,13 @@
+# This app directory is force-pushed VERBATIM into a fresh Gitea repo by
+# scripts/50-seed-gitea-repos.sh (push_repo: cp -a -> git init -> git add -A -> push -f).
+#
+# The root .gitignore CANNOT protect that repo: its build-output rules are `apps/**/`-anchored,
+# and at the fresh repo's root there is no `apps/` prefix left to match. Measured 2026-09-07:
+# 845 of 905 staged files are ignored by the OUTER repo and 3 by the fresh-repo anchoring.
+#
+# gitignore(5): "these patterns match relative to the location of the .gitignore file" — so a file
+# HERE anchors identically in both repos. That is the whole reason it exists; it is NOT redundant.
+# Every .dockerignore in this tree excludes .gitignore, so this changes no image context.
+
+# 735 files measured on a built box — the single largest contributor to the seeded-repo bloat.
+node_modules/
