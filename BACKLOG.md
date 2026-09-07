@@ -5523,29 +5523,64 @@ round. And the MECHANISM is still unmeasured: both variants treat a cause nobody
 needs a `make build-apps` afterwards to restore the demo — budget ~12 minutes, do not run it against
 a lab someone is watching.
 
-## B539 — 🟡 nothing gates a doc's `install-all` CHAIN STRING against the Makefile, which is why B529's fix shipped half-done
+## B539 — ✅ SHIPPED — and BOTH my design AND my proposed closure were refuted first
 
-Both scenario docs spell the install chain out as prose — `preflight -> selfbuilt-image -> ... ->
-gitops` — and when `build-apps` joined `install-all` in `b24082f`, **neither was updated**. Measured
-2026-09-07: `docs/scenario-1.md:965` and `docs/scenario-2.md:805` both still ended at `gitops`, two
-days later. `scripts/11-bundle.sh:122` carries a THIRD chain (`platform -> gitops -> install-ingress
--> verify`, the sneakernet half) whose correctness is unjudged.
+**Closed 2026-09-07 by `check-install-chain` + `test-install-chain` (10 cases).**
 
-This is the repo's own *"a value that lives in >1 file needs a gate asserting they agree"* class —
-`check-image-alignment` and `check-toolchain-alignment` exist for exactly this — and its absence is
-why the omission survived a merge.
+⚠️ **I measured the two files the row NAMED and concluded there was nothing to fix.** Both scenario
+docs did match the Makefile exactly, so I was ready to close this as "no longer motivated". The
+round measured the CLASS instead and found the drift **live** in `CLAUDE.md:649` — **5 of 12
+targets missing**, including **`build-apps`**, the very target this row was filed for:
 
-**Shape of the fix:** extract `install-all`'s prerequisite list from the Makefile and assert every
-` -> `-joined chain string under `docs/` matches it, in order. RED-prove by deleting one link.
+    Makefile      preflight selfbuilt-image mirror mirror-verify builder-image vks-login
+                  harbor-robot-ensure platform install-headlamp install-ingress gitops build-apps
+    CLAUDE.md:649 preflight → mirror → mirror-verify → builder-image → vks-login → platform → gitops
 
-⚠️ **This is a NEW CONTROL, so it gets its own idea round first** (RULE ZERO). Two questions the
-round must answer before a line is written: (1) is the sneakernet chain in `11-bundle.sh` in scope,
-or a legitimately different sequence? (2) what is the false-RED rate on prose that mentions targets
-without meaning to enumerate the chain — `make help` output, a doc quoting two targets in a
-sentence? A gate that fires on ordinary prose is the one people delete.
+Byte-identical since before `ebb5895` (2026-08-27) while `install-all` gained those five across four
+commits in 11 days. **And it is a RECURRENCE**: `docs/reviews/2026-07-14-doc-truth-audit.md:213`
+flagged this same line stale on 2026-07-14; it was fixed, and it drifted again. `Makefile`'s
+install-all line has changed 8 times, 4 of them in 12 days — it is a hot line, so this gate will not
+sit green and rot.
 
-**Done when:** ruled on by a round, and either the gate ships with a measured false-RED rate over
-the real `docs/` tree, or the refutation is recorded here so nobody rebuilds it.
+**The blast radius is why it is the copy that matters most:** `CLAUDE.md` is auto-loaded into every
+session AND re-injected into every subagent, so a stale chain there misinforms every reviewer, every
+time — including the adversaries dispatched to review designs. A `docs/` copy misinforms one
+operator, once.
+
+**MY PROPOSED SCOPE WAS BLIND TO IT ON THREE AXES AT ONCE** — not under `docs/`, a UNICODE arrow, no
+`#` comment — and prototyped **GREEN** over the live drift. What shipped instead:
+
+    *.md tree-wide · grep -rnI · exclude BACKLOG.md, docs/reviews/, .claude/ and the Makefile
+    match: a line naming install-all + >=4 arrow-joined target-shaped tokens
+    normalise BOTH arrows; compare the JOINED STRING, never a sorted set
+
+⚠️ Four things that are load-bearing, each measured:
+
+- **compare the joined string.** A sort/set compare passes on REORDERED links, and a sorted compare
+  is the natural implementation.
+- **normalise `→` too.** 18 doc files use it, and the one live defect was on that side.
+- **strip the Makefile's `##` help prose** — and SANITY-GATE the result (8–20 target-shaped tokens).
+  Forgetting the strip yields ~49 tokens and BOTH correct docs go RED, with a message that reads as
+  a doc defect and sends the fixer to the wrong file.
+- **the four exclusions have written reasons.** The `Makefile` is the LHS and its `##` prose is
+  legitimately ABBREVIATED (it names `headlamp`/`ingress`, which are not targets); `BACKLOG.md` and
+  `docs/reviews/` deliberately quote stale chains — a gate whose only remedy is to falsify the
+  record is refuted on sight; `.claude/` holds subagent worktrees (a nested repo copy defeated the
+  path-anchored exclusions on the gate's first run — B540's class again).
+
+⚠️ **My own FP figures in the round brief (259 / 45) did not reproduce** — measured 98 / 15. Mine
+were over `docs/` **plus root `*.md`** (BACKLOG.md dominates) but reported as "under `docs/`". The
+direction held; the label did not.
+
+⚠️ **And my first implementation was GREEN over the drift for a fourth reason nobody predicted:**
+`sed 's/→/ -> /g'` produces DOUBLE spaces (the arrow already had spaces), so a pattern demanding
+single spaces matched nothing and the gate scanned 2 files instead of 3. Caught by counting what it
+scanned, not by reading it.
+
+**Single-sourcing was considered and refuted:** this repo has zero `regen`/`diff --exit-code`
+pattern, and the house rule is that a generated committed artifact still needs a drift gate — so a
+generator ADDS a mechanism rather than replacing one. Pointing at `make help` is worse: it prints
+the abbreviated prose naming two non-targets.
 
 ## B540 — ✅ SHIPPED — it was ONE gate, not five, and it was NEVER a denominator risk
 
