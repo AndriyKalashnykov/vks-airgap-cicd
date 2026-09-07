@@ -473,6 +473,10 @@ check-env-clobber: ## Gate: an UNCOMMENTED .env.example value must not shadow a 
 check-app-gitignore: ## Gate: every app dir must carry a TRACKED .gitignore (it is force-pushed to Gitea VERBATIM)
 	@$(SCRIPTS)/check-app-gitignore.sh
 
+.PHONY: check-vcenter-scenario-split
+check-vcenter-scenario-split: ## Gate: creds.sh's vCenter note claims scenario-1 asks for VCENTER_* and scenario-2 does not
+	@$(SCRIPTS)/check-vcenter-scenario-split.sh
+
 .PHONY: app-gitignore-show
 app-gitignore-show: ## Print each app's .gitignore beside the root's apps/** rules (PRINTS ONLY, never gates)
 	@printf 'The root .gitignore apps/** rules (they do NOT apply inside a seeded repo):\n'
@@ -1820,7 +1824,7 @@ check-tekton-scripts: ## Every Tekton `script:` block: shebang is /bin/sh AND th
 
 .PHONY: static-check-fast
 #check-static-fast: @ The CHEAP half of static-check: the alignment/doc/env gates only (~9s, no toolchain)
-static-check-fast: check-install-chain check-notfound-discriminator check-jumpbox-shadow check-tekton-scripts check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-walk-env-manifest check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-gitignore check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-sigterm check-app-icons check-how-provenance check-vks-provenance check-image-alignment check-kind-kubeconfig check-deploy-manifests check-cluster-template-vars check-dockerfile-no-install check-selfbuilt ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
+static-check-fast: check-install-chain check-notfound-discriminator check-jumpbox-shadow check-tekton-scripts check-help-row-ids check-lib-sourcing check-namespace-labelled check-ns-chokepoint check-grep-q-pipe check-pod-inject-label check-psa-defaults check-doc-target-coverage check-walk-env-manifest check-expect-literals check-doc-make-targets check-toolchain-alignment check-java-alignment check-gwapi-istio-alignment check-vks-terminology check-env check-env-coverage check-env-clobber check-app-gitignore check-vcenter-scenario-split check-classifier-consumers check-vks-login-requires check-doc-prereq-order check-app-hardcodes check-app-toolchains check-sigterm check-app-icons check-how-provenance check-vks-provenance check-image-alignment check-kind-kubeconfig check-deploy-manifests check-cluster-template-vars check-dockerfile-no-install check-selfbuilt ## The CHEAP half of static-check — alignment/doc/env gates only (~9s, no mise toolchain needed)
 
 # static-check is the UNION, so there is exactly ONE list. Defining the fast set separately and
 # leaving static-check with its own hand-typed copy is the enumerated-list rot this repo keeps

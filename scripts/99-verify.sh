@@ -304,7 +304,6 @@ verify_app() {
   # "end result not observed" -- an error naming the page, about a page that was never going to
   # contain it. The image was real, the rollout was real, the build was somebody else's.
   #
-  # A prefix test, not equality: the tag is an abbreviation whose length neither side pins.
   # shellcheck disable=SC2329  # invoked indirectly (wait_for), same as _all_pods_on_img below
   _img_is_marker_build() {
     local cur tag

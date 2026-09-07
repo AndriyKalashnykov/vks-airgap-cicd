@@ -1096,6 +1096,40 @@ fi
 # NO HARDCODED EXPECTED TOTAL, deliberately -- that number rots on the next assertion added, and a
 # rotting constant is how a gate starts lying. The honest signal is the count plus the fact that
 # the fail-fast block was entered.
+# ── STATE 13 — THE vCenter NOTE (B536). Added because this suite was byte-identical before and
+# after the change that introduced the note: deleting the header change AND the note left it GREEN.
+# "still 136/136" was true and VACUOUS — the corpus had never grown to cover it (gates.md).
+#
+# The SECOND case is the one that matters. The note's first condition globbed the rendered
+# multi-row blob (`case "$_lab_rows" in *"vCenter"*"<not set>"*`), and a glob SPANS NEWLINES — so a
+# blank in ANY LATER row satisfied it and the note printed "The vCenter row is blank" directly
+# beneath a FULLY POPULATED vCenter row. Worst case measured: VCENTER_* all set but SUPERVISOR_HOST
+# not yet, which is the DOCUMENTED INTERMEDIATE STATE of scenario-1 — the note told that reader
+# "you have not set them yet" about values they had just typed.
+out="$(render_with_env 'VKS_USERNAME=admin@vsphere.local
+SUPERVISOR_HOST=sup.example.test
+VCF_CLI_VSPHERE_PASSWORD=x')"
+if printf '%s' "$out" | grep -q 'The vCenter row is blank'; then
+  ok "STATE 13: a tenant with NO VCENTER_* gets the vCenter note (the true positive)"
+else
+  bad "STATE 13: the vCenter note did not fire for a tenant" \
+      "the note is the whole B536 fix; without it the three blanks are unexplained again"
+fi
+
+# THE RED-PROOF: vCenter POPULATED, another row blank. Must be SILENT.
+out="$(render_with_env 'VCENTER_HOST=vc.example.test
+VCENTER_USERNAME=administrator@vsphere.local
+VCENTER_PASSWORD=p
+VKS_USERNAME=administrator@vsphere.local
+SUPERVISOR_HOST=sup.example.test')"
+if printf '%s' "$out" | grep -q 'The vCenter row is blank'; then
+  bad "STATE 13: the note fired with vCenter POPULATED" \
+      "a blank in a LATER row satisfied the condition — the note is now a FALSE claim, printed
+       directly beneath a filled-in vCenter row, which is the defect this change exists to remove"
+else
+  ok "STATE 13: vCenter populated + another row blank -> the note is SILENT (the F1 RED-proof)"
+fi
+
 if [ "$fail" != 0 ]; then
   printf '\n  %s assertion(s) ran. The fail-fast block stops later STATES once one fails, so cases\n' "$_ran" >&2
   printf '  after the first failure did NOT run -- fix the failure above and re-run for full coverage.\n' >&2

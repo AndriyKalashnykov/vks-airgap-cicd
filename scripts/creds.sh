@@ -1739,7 +1739,27 @@ done <<EOF
 $_lab_rows
 EOF
 
-printf '\n  Lab access — the values you put in .env\n'
+# ⚠️ THE HEADER IS A CLAIM, AND IT WAS FALSE FOR THE READER WHO DID EVERYTHING RIGHT (B536).
+# It read "the values you put in .env". On a scenario-2 TENANT render the vCenter row is three
+# blanks — because `docs/scenario-2.md` never asks for those values (measured: 13 VCENTER_* mentions
+# in scenario-1, ZERO in scenario-2). So the header asserted an action the reader had not taken,
+# above a row they were never supposed to fill, and a reader who had done everything right would
+# conclude they had missed something and go hunting. RULE ZERO-V tell (3): they would DO something
+# different.
+# ⚠️ `Lab access` MUST REMAIN THE LEADING TOKEN. `test-creds-show.sh:191` splits the report with
+# `sed '/Lab access/,$d'`, and with no match sed deletes NOTHING — `out_services` silently becomes
+# the whole report and every services assertion starts scanning the lab rows. That failure is
+# QUIET; the three sibling `grep -q 'Lab access'` assertions are loud. It is also a live Expect
+# literal in scenario-1.md:1100,:1101 and scenario-2.md:812. The TAIL is free — measured, the
+# phrase "the values you put in .env" appears nowhere else in the repo.
+# ⚠️ THE ABSOLUTE IS SCOPED TO `<not set>` ON PURPOSE. A first draft said "a blank is ... never a
+# statement about the lab", which the FOURTH ROW OF THIS TABLE contradicts: `_ssh_classify` renders
+# `<auth failed>` ("the Supervisor REJECTED this kubeconfig"), `<forbidden>`, `<none>` ("this cluster
+# publishes no node-SSH secret"), `<unreachable>` and `<stale CA>` — every one of them a statement
+# about the lab, and scenario-1.md:1102 documents that intent ("never a blank that would read as
+# this cluster has none"). A reader applying the absolute would discount an actionable lab fact.
+printf '\n  Lab access — from your .env. A <not set> is a value THIS REPORT does not have; the\n'
+printf '                guest node SSH row is different — its tokens DO report the lab.\n'
 printf '\n  %-*s  %-*s  %-*s  %s\n' "$_lw1" "Target" "$_lw2" "Endpoint" "$_lw3" "Username" "Password"
 printf '  %-*s  %-*s  %-*s  %s\n' \
   "$_lw1" "$(printf '%*s' "$_lw1" '' | tr ' ' '-')" \
@@ -1752,6 +1772,40 @@ while IFS=$'\t' read -r c1 c2 c3 c4; do
 done <<EOF
 $_lab_rows
 EOF
+
+# ⚠️ SCOPED TO THE vCenter ROW, AND STATED ABOUT THE DOCUMENTS — NOT THE READER (B536).
+# A whole-table condition would re-import the three-meanings problem this note exists to remove:
+# on a doc-following tenant render the ONLY bare tokens left are these three, and they carry ONE
+# meaning. MEASURED: nothing-set fixture = 7 bare tokens (the CI/e2e state, not a person);
+# a tenant who supplies what scenario-2 ASKS FOR (VKS_USERNAME, SUPERVISOR_HOST,
+# VCF_CLI_VSPHERE_PASSWORD) = 3, all on this row.
+#
+# ⚠️ IT MUST NOT SAY "you are a tenant" OR "you are not expected to have these". That is a claim
+# about WHO THE READER IS and what they possess, which this report cannot know — a colleague of the
+# VI admin may well hold vCenter credentials. `creds.sh` already legislates this for the flow line
+# ("IT MUST NOT CLAIM WHAT IS INSTALLED — it cannot know"). So the note states a fact about two
+# FILES, hands the reader the discriminator, and lets them place themselves.
+# The fact is CHECKABLE and GATED: `check-vcenter-scenario-split` asserts scenario-1 mentions
+# VCENTER_* and scenario-2 does not, so this note goes RED the day it stops being true.
+# ⚠️ TEST THE THREE SOURCE VARS, NOT THE RENDERED BLOB. The first version was
+#     case "$_lab_rows" in *"vCenter"*"<not set>"*)
+# and its comment claimed it was "scoped to the vCenter row". IT WAS NOT: `_lab_rows` is a
+# MULTI-ROW blob and a glob spans newlines, so `*"vCenter"*` matched row 1 and `*"<not set>"*`
+# matched ANY LATER ROW. MEASURED — the note printed "The vCenter row is blank" directly beneath a
+# FULLY POPULATED vCenter row on 3 of 3 reachable triggers (VCF_CLI_VSPHERE_PASSWORD, SUPERVISOR_HOST
+# or VKS_USERNAME unset). The worst is SUPERVISOR_HOST: `.env.example` stages VCENTER_* "before Step
+# 1b" and scenario-1 Step 0 collects the vCenter FQDN explicitly "NOT the Supervisor IP", so
+# "vCenter filled, Supervisor not yet" is the DOCUMENTED INTERMEDIATE STATE of scenario-1 — and the
+# note told that reader "you have not set them yet" about values they had just typed. That is this
+# change's own defect, restored one screen lower and contradicted by the table directly above it.
+# ⚠️ My admin fixture had NO other bare token, so it could not discriminate — a control that cannot
+# fail in the direction you are testing is not a control.
+if [ -z "${VCENTER_HOST:-}" ] && [ -z "${VCENTER_USERNAME:-}" ] && [ -z "${VCENTER_PASSWORD:-}" ]; then
+    printf '\n  The vCenter row is blank. That is expected on the scenario-2 walk: docs/scenario-2.md\n'
+    printf '     never asks for VCENTER_HOST / VCENTER_USERNAME / VCENTER_PASSWORD, while\n'
+    printf '     docs/scenario-1.md does. If you are following scenario-1 and it is blank, you have\n'
+    printf '     not set them yet.\n'
+fi
 
 printf '\n  ⚠️ vCenter SSO locks the account PERMANENTLY after 3 failed attempts. This report SHOWS these\n'
 printf '     values and NEVER authenticates with them, so a wrong one is not spent here. If one is\n'
