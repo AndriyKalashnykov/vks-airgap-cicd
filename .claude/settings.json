@@ -3,7 +3,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Agent|Workflow|Edit|Write|NotebookEdit|MultiEdit",
+        "matcher": "Agent|Workflow|Edit|Write|NotebookEdit|MultiEdit|Bash",
         "hooks": [
           {
             "type": "command",
