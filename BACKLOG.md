@@ -6287,32 +6287,60 @@ PER FILE whether `make mirror` is the right remedy — it is **not** for `HARBOR
 PIPELINE, not by mirroring; prescribing `make mirror` there reproduces the wrong-cause class B527
 exists to remove).
 
-## B544 — 🟡 `classify_kube_failure` misses the `memcache.go` phrasing of a timeout (NOT all timeouts)
+## B544 — 🔴 NINE `creds.sh` probes set the OUTER timeout EQUAL to the INNER one, so they can never classify
 
-⚠️ **CORRECTED 2026-09-07, same day.** This row first said the classifier returns UNKNOWN "for a
-TIMEOUT". An implementation round refuted that, citing `lib/os.sh:2260` — and it was itself half
-wrong (it said my fixture "wrote nothing to stderr"; it wrote plenty). Measured, both phrasings:
+⚠️ **THIS ROW HAS BEEN WRONG TWICE AND IS NOW REPLACED.** v1 said `classify_kube_failure` returns
+UNKNOWN "for a TIMEOUT"; v2 said it misses the `memcache.go` shape. **Both refuted, by me, by
+measurement.** kubectl writes N `memcache.go` retry lines and THEN the summary line `Unable to
+connect to the server: context deadline exceeded`, which the UNREACHABLE arm already matches. My
+"UNKNOWN" readings came from a hand-built fixture missing that line and a real run wrapped in an
+outer `timeout 10` that killed kubectl before it printed. I measured my own reconstruction, twice.
 
-    Unable to connect to the server: context deadline exceeded          -> UNREACHABLE   OK
-    E0907 ... memcache.go:265] "Unhandled Error" err="couldn't get
-      current server API group list: Get "https://.../api?timeout=3s":
-      context deadline exceeded"                                       -> UNKNOWN       MISS
+**THE REAL DEFECT is a call-site constraint.** Measured, unreachable server, `--request-timeout=3s`,
+varying ONLY the outer timeout:
 
-So the classifier handles the plain form and **not** the `memcache.go` form — which is what
-`kubectl get ns -l <selector>` actually emits against an unreachable server, i.e. exactly the call
-`creds.sh`'s Harbor block makes. The report then says *"kubectl failed for a reason we do not
-classify"*: honest (it claims no cause) but uninformative in a state where UNREACHABLE is knowable.
+    OUTER timeout          lines   summary line?   CLASS
+    timeout 5s  + req 3s     1       no            UNKNOWN
+    timeout 10s + req 3s     3       no            UNKNOWN
+    timeout 25s + req 3s     6       YES           UNREACHABLE
 
-The stakes are why it is worth closing: a slow-or-dead lab must never be reported as an expired
-credential, because that advice spends one of **THREE** vCenter SSO attempts before permanent
-lockout. UNREACHABLE's sentence names the network, not a login — which is the right answer and the
-one currently being lost.
+**NINE sites in `creds.sh` set outer == inner** (measured at `:280,291,566,960,1748,1789,1825,1831`
+and one more): `timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s`. The outer
+budget expires at or before the first attempt resolves, so the classifiable line can never be
+emitted. Every one of them feeds an empty errfile to the classifier and gets UNKNOWN.
 
-**Done when:** the `memcache.go`/`couldn't get current server API group list … context deadline
-exceeded` shape maps to UNREACHABLE, with the existing arm's comment extended to say why there are
-two spellings. Cheap: it is one more pattern in an arm that already exists, so it does not add a
-class and does not disturb `check-classifier-consumers`. **Do NOT map a timeout onto UNAUTHORIZED to
-make the message prettier.**
+**DO NOT "FIX" THIS BY WIDENING THE CLASSIFIER.** `lib/os.sh:2246-2258` records a measured
+regression from a previous widening: a bare `context deadline exceeded` bypasses
+`classify_argocd_failure`'s refinement at 3 live call sites in `70-configure-argocd.sh`.
+
+**AND DO NOT DERIVE A BUDGET — a round measured that it is not derivable.** Against a blackhole
+(`10.255.255.1:443`) at `--request-timeout=3s`, kubectl emitted **0 bytes of stderr at 60s**, where
+my unreachable endpoint emitted 6 lines by 25s. `--request-timeout` bounds nothing on that fault
+shape. Two points disagreeing by >2x is not a model; "outer > request-timeout x retries" would be a
+guess wearing a formula.
+
+**THE DISCRIMINATOR IS THE EXIT CODE.** `timeout` exits **124** on expiry — measured, deterministic,
+fault-independent, needs zero retry knowledge:
+
+    out="$(timeout "$N" kubectl ... 2>"$err")" && rc=0 || rc=$?
+    if [ "$rc" -eq 124 ]; then
+      state="could not ask — MY OWN ${N}s budget expired. This says NOTHING about the lab."
+    else
+      state="$(classify_kube_failure "$err")"
+    fi
+
+**MEASURED: `124` appears in exactly ONE COMMENT across `creds.sh` + `lib/os.sh` +
+`24-lab-preflight.sh` (`creds.sh:424`) and is branched on NOWHERE.** So today none of the nine can
+tell "my budget expired" from "the server said something I do not recognise".
+
+🔴 **THE SSO CONSTRAINT, and it is why this is red: `rc=124` MUST NEVER MAP TO UNAUTHORIZED.** That
+remedy is `make vks-login`, which spends one of THREE vCenter SSO attempts before PERMANENT lockout.
+Keying on the exit code guarantees this regardless of fault shape — a stronger guarantee than any
+retry model. It is BLOCKING for anything that adds a `timeout`-wrapped Supervisor probe.
+
+**Done when:** the nine sites branch on rc=124 before consulting the classifier, and a test pins that
+124 never yields an UNAUTHORIZED-class remedy. Note `rc=137` (`timeout -s KILL`) is untested; if any
+site grows `-s KILL`/`-k` the discriminator needs both codes.
 
 ## B545 — 🟢 `test-creds-show.sh` reports a CASCADE that hides the real failure
 
@@ -6356,3 +6384,111 @@ VARIABLE"). Measured: every live `VKS_PASSWORD` reader is in the vsphere arm
 
 If the wording is revisited a third time, lead with the variable NAME rather than `<not set`, and
 treat it as a third attempt after two refutations — with its own round.
+
+## B547 — 🔴 `supervisor_kubeconfig` can promote a GUEST or a FOREIGN LAB's Supervisor, and rc is always 0
+
+Measured 2026-09-07, two ways, both on a real box.
+
+`supervisor_kubeconfig`'s candidate list ends `… "${_lab:+$_lab/kubeconfig}" "${KUBECONFIG:-}"`
+(`lib/os.sh:891-893`), and `load_env` guarantees `KUBECONFIG` is always set (`:711`). So it
+essentially never returns empty, and **three** failure modes follow:
+
+| mode | what gets labelled "the Supervisor" | measured |
+|---|---|---|
+| 1 | the **GUEST** kubeconfig (candidate 5) | a round, in a fixture with the lab dir absent |
+| 2 | a **FOREIGN lab's** Supervisor (candidate 4) | me: with no Supervisor file and no `VKS_SUPERVISOR_KUBECONFIG`/`ARGOCD_KUBECONFIG` it resolved to `/home/andriy/.local/state/nested-lab/kubeconfig` — a DIFFERENT repo's state dir — in BOTH the guest-file-exists and no-file-at-all shapes |
+| 3 | rc=**0** in every case, so **no emptiness test can distinguish either** | both |
+
+**Mode 2 is the dangerous one, because it is PLAUSIBLE.** A foreign Supervisor answers,
+authenticates, and returns real objects, so every downstream check goes green against the wrong
+estate. Two consumers of this resolver **CREATE** (`25-vks-cluster-create.sh:81`) and **DESTROY**
+(`98-uninstall-all.sh:60`).
+
+⚠️ **`kubeconfig_is_supervisor` rc==1 does NOT cover mode 2.** It is a **TYPE** test — "does this
+cluster serve `vmoperator.vmware.com`?" A foreign lab's Supervisor *is* a Supervisor, so it returns
+**rc=0**: correctly, and uselessly. Mode 2 needs an **IDENTITY** test, which that function cannot
+provide. (Its header is still load-bearing for mode 1: three states, and callers MUST branch on
+`rc==1` only, because `rc==2` means "cannot tell" — a stale CA returns empty from `api-resources`.)
+
+**Live consequence already shipped (#1147):** `creds.sh:1116`'s `if [ -z "$_h_sup" ]` tenant branch —
+which I added — is effectively **unreachable**, so its carefully-worded tenant sentence never prints,
+and on a tenant box `creds` probes the guest (or a foreign lab) for Harbor while labelling it the
+Supervisor. Same shape at `:1739-1740`. An emptiness test standing in for an identity test.
+
+**Prescribed shape (type AND identity, abstain when unknown):**
+
+    kc="$(supervisor_kubeconfig)" || kc=""
+    kubeconfig_is_supervisor "$kc"; t=$?          # TYPE: rejects a guest. rc==1 ONLY.
+    srv="$(argocd_api_server "$kc")"              # IDENTITY: offline `config view --minify`, tenant-safe
+    # t==1 -> not a Supervisor, abstain.  t==2 -> cannot tell, abstain.
+    # t==0 + SUPERVISOR_HOST set + mismatch -> NAME BOTH ADDRESSES and abstain.
+    # t==0 + SUPERVISOR_HOST unset -> type-only claim, and SAY it is type-only.
+
+The abstain-when-unset arm is required: `SUPERVISOR_HOST` is mandatory only on the `vcf` path
+(`30-vks-login.sh:59`), so on the default `kubeconfig` path it may legitimately be unset — and
+asserting a match you could not test is the class this repo keeps paying for.
+
+**Done when:** the two `creds.sh` sites use type+identity, the `:1741` contradiction is resolved (see
+B548), and the other four non-test call sites are audited — **`08-install-argocd-service.sh:78`,
+`24-vks-k8s-version.sh:27`, `vks-shape.sh:27`, `argocd-password.sh:120`, plus
+`jumpbox-launch.sh:105`** — none of which I have checked.
+
+## B548 — 🟡 `creds.sh` contradicts itself on whether "no Supervisor kubeconfig" may name a remedy
+
+`creds.sh:1116-1121` states the adjudicated rule, verbatim: *"A TENANT HAS NO SUPERVISOR AND THAT IS
+NORMAL (RULE ZERO-B: it is the DEFAULT posture), so this is not an error and **must not name `make
+vks-login`** — the round refuted that: `absent` cannot be told apart from 'scenario-1 operator who
+has not logged in yet'."*
+
+`creds.sh:1741` does the opposite, in the same file:
+`_ssh_state="no Supervisor kubeconfig — run: make vks-login"`.
+
+The principle is that **undecidability is a property of the EVIDENCE, not of the consumer** — a gate
+and a printer are equally bound. Either may say *"skipped: no Supervisor kubeconfig"*; neither may
+attach a remedy, because the remedy is what encodes the guess. And the guess costs one of three
+vCenter SSO attempts before permanent lockout when it is wrong.
+
+**Done when:** `:1741` stops naming a remedy it cannot justify. Note B547 first — per that row the
+branch is close to unreachable today, so fixing the wording without fixing the reachability would be
+correcting a sentence nobody sees.
+
+## B549 — 🔴 SSO HAZARD: a klog THREAD-ID of `401` makes an UNREACHABLE cluster classify UNAUTHORIZED
+
+**Reproduced deterministically, twice, by two independent parties.** `lib/os.sh:2273` anchors the
+unauthorized arm as `*"Unauthorized"*|*" 401 "*|…`. The ` 401 ` anchor was added to stop a
+MICROSECOND-TIMESTAMP collision (its own comment records that `.380401` matched in 4 of 60 runs).
+But klog's line format is `Lmmdd hh:mm:ss.uuuuuu <THREAD-ID> file:line]` and **the thread-id field is
+also space-delimited**. Real memcache line, thread-id varied, everything else byte-identical:
+
+    thread-id=2667264  -> UNKNOWN
+    thread-id=401      -> UNAUTHORIZED     *** FALSE POSITIVE ***
+    thread-id=4010     -> UNKNOWN
+    thread-id=1401     -> UNKNOWN
+
+🔴 **Why this is red and not merely wrong.** UNAUTHORIZED's remedy is `make vks-login`
+(`24-lab-preflight.sh:103`, `02-env.sh:447`, `creds.sh:1076`). vCenter SSO locks the account
+**PERMANENTLY after 3 failed attempts**. So a lab that is simply switched off can tell the operator
+to spend one — and the trigger is a process id, i.e. effectively random per invocation. Low
+thread-ids are ordinary on a freshly-booted box or in a container.
+
+**Scope, honestly bounded:**
+
+- It needs stderr carrying **no** network token, because UNREACHABLE is matched ABOVE UNAUTHORIZED.
+  That means the **truncated** state (B544's nine `creds.sh` sites) or a single-retry capture.
+- **`version` probes are IMMUNE** — measured with `cat -A`, `kubectl version` emits no klog line at
+  all. So `23-argocd-preflight.sh:115` and `24-lab-preflight.sh:88` cannot hit it.
+- **Discovery probes are exposed**: `creds.sh:1148` (`get ns -l …`), `24-lab-preflight.sh` checks
+  1/2/3, and `02-env.sh`'s `cluster-info` — all klog-emitting, all with an UNAUTHORIZED arm that
+  names `make vks-login`.
+
+**The inverse is safe but still wrong:** a genuine 401 whose discovery lines happen to carry
+`dial tcp` classifies UNREACHABLE (measured), because UNREACHABLE sits above. Safe for SSO, wrong as
+a diagnosis.
+
+**Done when:** the 401 anchors cannot match a klog metadata field. The klog prefix is structurally
+identifiable (`^[EWIF][0-9]{4} [0-9:.]+ [0-9]+ [a-z_]+\.go:[0-9]+\]`), so the cheap fix is to STRIP
+the klog prefix from each line before matching, rather than to add yet another anchor — the anchor
+approach has now been patched twice (microseconds, then this) and the field it must avoid keeps
+being a different one. Pin BOTH regressions in `test-classify-kube-failure.sh`: `.380401` in the
+timestamp AND `401` as the thread-id, each with a real memcache body. Related: B544 (the truncation
+that makes this reachable at all).
