@@ -4,6 +4,7 @@
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title th:text="${appName} + ' — VKS CI/CD demo'">VKS CI/CD demo</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
     <!--/* Self-contained: no external CSS/JS/CDN (air-gapped). Thymeleaf parser-level
          comment: it is stripped at render time, so it cannot break the shared-UI contract. */-->
     <style>
@@ -17,6 +18,7 @@
             background: #1e293b; border-radius: 16px; padding: 2.5rem 3rem;
             box-shadow: 0 10px 40px rgba(0,0,0,.4); max-width: 40rem; width: 90%;
         }
+        .logo { display: block; width: 44px; height: 44px; margin: 0 0 1rem; }
         h1 { margin: 0 0 .25rem; font-size: 1.4rem; color: #94a3b8; font-weight: 600; }
         .message {
             font-size: 2rem; font-weight: 700; margin: .5rem 0 1.5rem;
@@ -29,6 +31,7 @@
 </head>
 <body>
     <main class="card">
+        <img class="logo" src="/favicon.svg" alt="" width="44" height="44"/>
         <h1 th:text="${appName}">javawebapp</h1>
         <p class="message" th:text="${message}">Hello from vks-airgap-cicd</p>
         <dl>

@@ -2,8 +2,9 @@
 state, so they behave identically on a dev box, in the Tekton task, and on a cold CI runner."""
 
 import os
+import re
 
-from app import new_app, render
+from app import ICON, new_app, render
 
 
 def _client(p=None):
@@ -45,3 +46,22 @@ def test_ui_contract_producer():
         .get("/").get_data(as_text=True)
     with open(out, "w", encoding="utf-8") as fh:
         fh.write(body)
+
+
+def test_icon_route_answers_at_the_href_the_page_renders():
+    # Extracted from the RENDERED PAGE, never typed as a literal here. check-ui-contract proves the
+    # href is byte-identical across all six apps and this proves a route answers; nothing else JOINS
+    # those two strings, so a hardcoded path here would let a route registered elsewhere pass both
+    # gates over a broken image.
+    c = _client()
+    body = c.get("/").get_data(as_text=True)
+    m = re.search(r'<link rel="icon"[^>]*href="([^"]+)"', body)
+    assert m, 'the rendered page has no <link rel="icon" ... href="...">'
+    href = m.group(1)
+
+    r = c.get(href)
+    assert r.status_code == 200, f"GET {href} (the href the page renders)"
+    assert r.mimetype == "image/svg+xml"
+    # Compared against the app's OWN constant, so the colour lives in exactly ONE place.
+    assert r.get_data(as_text=True) == ICON
+    assert f'src="{href}"' in body, "the <img> and the <link> disagree"

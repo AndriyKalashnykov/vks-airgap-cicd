@@ -146,9 +146,12 @@ done
 # redirect to the real page. (ArgoCD is NOT fronted by the ingress — it has its own
 # LoadBalancer IP, like real VKS; see scripts/07-install-argocd.sh + make creds.)
 if [ "$rc" -eq 0 ]; then
-  assert_body() { # <host> <grep-ERE> <label>
+  assert_body() { # <host> <grep-ERE> <label> [path, default /]
     local b
-    b="$(curl -sL -H "Host: $1" --max-time "$CURL_MAX_TIME_SECONDS" "http://${INGRESS_LB_IP}/" 2>/dev/null || true)"
+    # The PATH is a parameter because the icon lives at its own route: the landing page and
+    # /favicon.svg are two different bodies through the same host, and hardcoding "/" made the
+    # second unreachable from here.
+    b="$(curl -sL -H "Host: $1" --max-time "$CURL_MAX_TIME_SECONDS" "http://${INGRESS_LB_IP}${4:-/}" 2>/dev/null || true)"
     # Drop `-q` so grep DRAINS all of printf's output: on a page larger than the 64KB pipe
     # buffer, `grep -q` exits on its first match and SIGPIPEs `printf` (exit 141), which under
     # `set -o pipefail` misreads as "marker absent" → a false "wrong backend" on a page that WAS
@@ -167,6 +170,11 @@ if [ "$rc" -eq 0 ]; then
   while read -r _a; do
     [ -n "$_a" ] || continue
     assert_body "$(app_host "$_a")" 'class="message"' "${_a} greeting page"
+    # The icon the page points at must ACTUALLY be served through the ingress. Offline,
+    # check-app-icons proves the six icons exist, differ and are wired to this path; only a live
+    # request proves the route survives the ingress — a rewrite or an exact-path rule here would
+    # 404 it while every offline gate stays green.
+    assert_body "$(app_host "$_a")" '</svg>'          "${_a} icon"          '/favicon.svg'
   done <<EOF
 $(app_names)
 EOF

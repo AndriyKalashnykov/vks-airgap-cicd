@@ -49,6 +49,7 @@ def render(p: dict) -> str:
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>{escape(p['app_name'])} — VKS CI/CD demo</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
     <style>
         :root {{ color-scheme: light dark; }}
         body {{
@@ -60,6 +61,7 @@ def render(p: dict) -> str:
             background: #1e293b; border-radius: 16px; padding: 2.5rem 3rem;
             box-shadow: 0 10px 40px rgba(0,0,0,.4); max-width: 40rem; width: 90%;
         }}
+        .logo {{ display: block; width: 44px; height: 44px; margin: 0 0 1rem; }}
         h1 {{ margin: 0 0 .25rem; font-size: 1.4rem; color: #94a3b8; font-weight: 600; }}
         .message {{
             font-size: 2rem; font-weight: 700; margin: .5rem 0 1.5rem;
@@ -72,6 +74,7 @@ def render(p: dict) -> str:
 </head>
 <body>
     <main class="card">
+        <img class="logo" src="/favicon.svg" alt="" width="44" height="44"/>
         <h1>{escape(p['app_name'])}</h1>
         <p class="message">{escape(p['message'])}</p>
         <dl>
@@ -84,6 +87,22 @@ def render(p: dict) -> str:
 """
 
 
+# The app's icon, served at a CONSTANT path.
+#
+# WHY A ROUTE AND NOT AN INLINE data: URI. Not because of any escaper -- a LITERAL data URI in a
+# template survives Go's html/template and Thymeleaf untouched (measured; only an action is rewritten
+# to #ZgotmplZ). The reason is `make check-ui-contract`: the six apps' rendered pages must be
+# BYTE-IDENTICAL, so a per-app icon CANNOT live in the shared markup at all. Behind a constant URL it
+# can -- the markup is the same six times, and the per-app difference is this response body.
+#
+# The colour APPROXIMATES the language's brand family; it is not an official value, and the label is
+# an abbreviation, not a wordmark. rgb() not #rrggbb: a `#` would truncate the SVG at a URL fragment
+# if anyone ever inlines it.
+ICON = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="pythonwebapp"><rect width="32" height="32" rx="7" fill="rgb(55,118,171)"/><text x="16" y="21" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" font-weight="700" fill="rgb(255,255,255)">Py</text></svg>'
+)
+
+
 def new_app(p: dict) -> Flask:
     """Build the app. Split out from the listener so the tests exercise the REAL handlers over
     Flask's test client — hermetic, no network, no fixed port."""
@@ -93,6 +112,10 @@ def new_app(p: dict) -> Flask:
     def healthz() -> Response:
         return Response(json.dumps({"status": "UP"}, separators=(",", ":")),
                         mimetype="application/json")
+
+    @app.get("/favicon.svg")
+    def favicon() -> Response:
+        return Response(ICON, mimetype="image/svg+xml")
 
     @app.get("/")
     def index() -> Response:

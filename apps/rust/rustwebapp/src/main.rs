@@ -56,6 +56,7 @@ pub fn render(p: &Page) -> String {
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>{name} — VKS CI/CD demo</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
     <style>
         :root {{ color-scheme: light dark; }}
         body {{
@@ -67,6 +68,7 @@ pub fn render(p: &Page) -> String {
             background: #1e293b; border-radius: 16px; padding: 2.5rem 3rem;
             box-shadow: 0 10px 40px rgba(0,0,0,.4); max-width: 40rem; width: 90%;
         }}
+        .logo {{ display: block; width: 44px; height: 44px; margin: 0 0 1rem; }}
         h1 {{ margin: 0 0 .25rem; font-size: 1.4rem; color: #94a3b8; font-weight: 600; }}
         .message {{
             font-size: 2rem; font-weight: 700; margin: .5rem 0 1.5rem;
@@ -79,6 +81,7 @@ pub fn render(p: &Page) -> String {
 </head>
 <body>
     <main class="card">
+        <img class="logo" src="/favicon.svg" alt="" width="44" height="44"/>
         <h1>{name}</h1>
         <p class="message">{msg}</p>
         <dl>
@@ -96,12 +99,28 @@ pub fn render(p: &Page) -> String {
     )
 }
 
+/// The app's icon, served at a CONSTANT path.
+///
+/// WHY A ROUTE AND NOT AN INLINE data: URI. Not because of any escaper -- a LITERAL data URI in a
+/// template survives Go's html/template and Thymeleaf untouched (measured; only an action is rewritten
+/// to #ZgotmplZ). The reason is `make check-ui-contract`: the six apps' rendered pages must be
+/// BYTE-IDENTICAL, so a per-app icon CANNOT live in the shared markup at all. Behind a constant URL it
+/// can -- the markup is the same six times, and the per-app difference is this response body.
+///
+/// The colour APPROXIMATES the language's brand family; it is not an official value, and the label is
+/// an abbreviation, not a wordmark. rgb() not #rrggbb: a `#` would truncate the SVG at a URL fragment
+/// if anyone ever inlines it.
+const ICON: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="rustwebapp"><rect width="32" height="32" rx="7" fill="rgb(222,165,132)"/><text x="16" y="21" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" font-weight="700" fill="rgb(255,255,255)">Rs</text></svg>"#;
+
 /// Build the router. Split out from `main` so the tests exercise the REAL handlers — hermetic,
 /// no network, no fixed port.
 pub fn new_router(p: Page) -> Router {
     Router::new()
         .route("/healthz", get(|| async {
             ([(header::CONTENT_TYPE, "application/json")], r#"{"status":"UP"}"#).into_response()
+        }))
+        .route("/favicon.svg", get(|| async {
+            ([(header::CONTENT_TYPE, "image/svg+xml")], ICON).into_response()
         }))
         .route("/", get(move || {
             let body = render(&p);
@@ -193,6 +212,54 @@ mod tests {
     #[test]
     fn env_falls_back_when_unset_or_empty() {
         assert_eq!(env("VKS_DEFINITELY_UNSET_XYZ", "fb"), "fb");
+    }
+
+    /// The icon route must answer at the path the RENDERED PAGE points to — extracted from the
+    /// page, never typed as a literal here.
+    ///
+    /// `make check-ui-contract` proves href="/favicon.svg" is byte-identical in all six apps and
+    /// this proves a route answers; nothing else JOINS those two strings, so a hardcoded path here
+    /// would let a route registered elsewhere pass both gates over a broken image.
+    ///
+    /// Over a REAL socket with a hand-written HTTP/1.1 request, not `tower::oneshot`: tower is not
+    /// a dev-dependency and adding one would need a fetch the OFFLINE builder cannot make (the same
+    /// reason Cargo.toml pins libc instead of tokio's "signal" feature).
+    #[tokio::test]
+    async fn icon_route_answers_at_the_href_the_page_rendered() {
+        use std::io::{Read, Write};
+
+        let body = render(&p());
+        let href = body
+            .split_once(r#"<link rel="icon""#)
+            .and_then(|(_, rest)| rest.split_once(r#"href=""#))
+            .and_then(|(_, rest)| rest.split_once('"'))
+            .map(|(h, _)| h.to_string())
+            .expect(r#"the rendered page has no <link rel="icon" ... href="...">"#);
+        assert!(body.contains(&format!(r#"src="{href}""#)), "the <img> and the <link> disagree");
+
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = l.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(l, new_router(p())).await.expect("serve") });
+
+        let req = href.clone();
+        let raw = tokio::task::spawn_blocking(move || {
+            // std, NOT tokio::io: AsyncReadExt lives behind tokio's "io-util" feature, which pulls
+            // `bytes` -- a crate the OFFLINE builder's vendored registry does not carry. Blocking
+            // I/O on a spawn_blocking thread needs no feature at all.
+            let mut c = std::net::TcpStream::connect(addr).expect("connect");
+            c.write_all(format!("GET {req} HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n").as_bytes())
+                .expect("write");
+            let mut raw = String::new();
+            c.read_to_string(&mut raw).expect("read");
+            raw
+        })
+        .await
+        .expect("client");
+
+        assert!(raw.starts_with("HTTP/1.1 200"), "GET {href} (the href the page rendered): {raw:.60}");
+        assert!(raw.to_lowercase().contains("content-type: image/svg+xml"), "wrong content-type: {raw:.200}");
+        // Compared against the app's OWN constant, so the colour lives in exactly ONE place.
+        assert!(raw.ends_with(ICON), "GET {href}: body is not this app's icon");
     }
 
     // THE SHARED-UI CONTRACT PRODUCER (see scripts/check-ui-contract.sh). Writes the rendered page

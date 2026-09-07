@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -115,5 +116,52 @@ func TestUIContractRender(t *testing.T) {
 	}
 	if err := os.WriteFile(out, body, 0o644); err != nil {
 		t.Fatalf("write %s: %v", out, err)
+	}
+}
+
+// The icon route must answer at the path the RENDERED PAGE points to — extracted from the page,
+// never typed as a literal here.
+//
+// WHY EXTRACTED. `make check-ui-contract` proves href="/favicon.svg" is byte-identical in all six
+// apps; this test proves a route answers. Nothing joins those two strings, so a test that GETs a
+// hardcoded "/favicon.svg" while the route were registered at "/icon.svg" would pass, the contract
+// gate would pass, and the page would show a broken image with both gates green. Reading the href
+// out of the real render is what makes this test a JOIN instead of a second, independent claim.
+func TestIconRouteMatchesRenderedHref(t *testing.T) {
+	srv := httptest.NewServer(newMux(page{AppName: "a", Message: "b", Version: "c", Commit: "d"}))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	m := regexp.MustCompile(`<link rel="icon"[^>]*href="([^"]+)"`).FindSubmatch(body)
+	if m == nil {
+		t.Fatal(`the rendered page has no <link rel="icon" ... href="...">`)
+	}
+	href := string(m[1])
+
+	ir, err := http.Get(srv.URL + href)
+	if err != nil {
+		t.Fatalf("GET %s: %v", href, err)
+	}
+	defer ir.Body.Close()
+	if ir.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s (the href the page renders): want 200, got %d", href, ir.StatusCode)
+	}
+	if ct := ir.Header.Get("Content-Type"); ct != "image/svg+xml" {
+		t.Fatalf("GET %s: want Content-Type image/svg+xml, got %q", href, ct)
+	}
+	icon, _ := io.ReadAll(ir.Body)
+	// Compared against the app's OWN constant, not a hardcoded colour: that keeps the colour in
+	// exactly ONE place instead of mirroring it into the test.
+	if string(icon) != iconSVG {
+		t.Fatalf("GET %s: body is not this app's icon", href)
+	}
+	if !strings.Contains(string(body), `src="`+href+`"`) {
+		t.Fatalf("the page's <img> does not point at %s — the on-page mark and the tab icon disagree", href)
 	}
 }

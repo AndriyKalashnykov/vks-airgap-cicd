@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
-import { newApp, render } from './server.js';
+import { newApp, render, ICON } from './server.js';
 
 const listen = (app) => new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
 const url = (s, p) => `http://127.0.0.1:${s.address().port}${p}`;
@@ -39,5 +39,25 @@ test('html-significant characters are escaped', () => {
 test('ui contract producer', { skip: !process.env.UI_CONTRACT_OUT }, async () => {
   const s = await listen(newApp({ appName: 'APPNAME', message: 'MESSAGE', appVersion: 'APPVERSION', version: 'VERSION', commit: 'COMMIT' }));
   writeFileSync(process.env.UI_CONTRACT_OUT, await (await fetch(url(s, '/'))).text());
+  s.close();
+});
+
+// The icon route must answer at the path the RENDERED PAGE points to — extracted from the page,
+// never typed as a literal here. check-ui-contract proves the href is byte-identical across all six
+// apps and this proves a route answers; nothing else JOINS those two strings, so a hardcoded path
+// here would let a route registered elsewhere pass both gates over a broken image.
+test('the icon route answers at the href the page renders', async () => {
+  const s = await listen(newApp({ appName: 'a', message: 'm', version: 'v', commit: 'c' }));
+  const body = await (await fetch(url(s, '/'))).text();
+  const m = body.match(/<link rel="icon"[^>]*href="([^"]+)"/);
+  assert.ok(m, 'the rendered page has no <link rel="icon" ... href="...">');
+  const href = m[1];
+
+  const res = await fetch(url(s, href));
+  assert.equal(res.status, 200, `GET ${href} (the href the page renders)`);
+  assert.equal(res.headers.get('content-type'), 'image/svg+xml; charset=utf-8');
+  // Compared against the app's OWN constant, so the colour lives in exactly ONE place.
+  assert.equal(await res.text(), ICON);
+  assert.ok(body.includes(`src="${href}"`), 'the <img> and the <link> disagree');
   s.close();
 });
