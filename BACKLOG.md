@@ -4874,13 +4874,21 @@ silent; (c) the hole DISCLOSED in the hook's own docstring so nobody believes th
 Whatever ships must not block the adversary's own evidence tools (`git log/diff/status`, `grep`,
 running the gates) — `hooks.md` records that such a gate gets ripped out.
 
-## B527 — 🟡 IN FLIGHT on `feat/harbor-project-preflight-b527` — NOT shipped, NOT merged
+## B527 — ✅ SHIPPED in #1147 (verified ON MAIN, not inferred from the PR)
 
-⚠️ **STATUS CORRECTED 2026-09-07.** This row said `✅ SHIPPED` while the branch was unmerged AND
-carrying a defect that hard-broke `make install-all`. A row's status is a CLAIM; this one was false
-in the direction that invites a later session to build on work that is not there. An independent
-round measured it: `git merge-base --is-ancestor` says the commit is not an ancestor of `main`, and
-`grep -rn harbor_assert_mirrored` on `main` returns **0 hits**.
+⚠️ **STATUS CORRECTED TWICE IN ONE DAY, 2026-09-07 — the row was WRONG IN BOTH DIRECTIONS.**
+It first said `✅ SHIPPED` while the branch was unmerged and carrying a defect that hard-broke
+`make install-all`; a round measured `grep -rn harbor_assert_mirrored` on `main` = **0 hits** and it
+was corrected to `NOT merged`. Then the branch merged **as PR #1147** (the creds work rode the same
+branch), and the corrected row went stale in the opposite direction within hours.
+
+**VERIFIED ON MAIN, by reading main rather than the PR:** `git cat-file -e origin/main:scripts/lib/harbor_probe.sh`
+succeeds; `git grep -l harbor_assert_mirrored origin/main -- scripts/` returns **7** paths (six
+installers + the lib); `bash scripts/test-harbor-probe.sh` -> **13 passed, 0 failed**.
+
+The lesson is the one this file keeps paying for: **a status is a CLAIM with a timestamp.** Verify it
+against the artifact (`git cat-file`/`git grep` on `origin/main`), never against a PR number and
+never against what the row said an hour ago.
 
 **On the branch** (`scripts/lib/harbor_probe.sh` — note the UNDERSCORE; `check-lib-sourcing` matches
 `lib/[a-z_]+\.sh` and rejects a hyphen): `harbor_project_state` / `harbor_assert_mirrored`, wired
@@ -6274,18 +6282,32 @@ trigger on `mirror_target_ref|app_builder_image|app_runtime_image|HARBOR_INFRA_P
 VAR not just the function name, one allowlist entry (`06`, which INSTALLS Harbor), die on a zero
 denominator. Measured 7 triggered / 1 allowlisted / 0 false REDs. RED-prove against `main`'s `49`.
 
-## B543 — 🟡 the B527 round prescribed SEVEN installers; the branch ships SIX, and nothing records which was dropped
+## B543 — ✅ CLOSED: the seventh installer is `43-install-istio-package.sh`, and excluding it is CORRECT
 
-`BACKLOG.md`'s own B527 verdict says "One credential-free call, shared by all **7** installers". The
-branch wires **6**. `43-install-istio-package.sh` is a correct exclusion (zero Harbor refs), but that
-accounts for the seventh only if it was the intended seventh — and nothing says so.
+Settled 2026-09-07 by measurement, not by taking either round's word.
 
-**Done when:** the candidate is named and decided, one line each. Start from
-`grep -lE 'HARBOR_URL' scripts/[0-9][0-9]-*.sh | xargs grep -L harbor_assert_mirrored`, and decide
-PER FILE whether `make mirror` is the right remedy — it is **not** for `HARBOR_APP_PROJECT`
-(`70-configure-argocd.sh` references Harbor 10x but only that var, whose emptiness is fixed by the
-PIPELINE, not by mirroring; prescribing `make mirror` there reproduces the wrong-cause class B527
-exists to remove).
+The B527 round prescribed "all **7** installers"; the branch wired **6**. The candidate set is the
+25 scripts matching `grep -lE 'HARBOR_URL' scripts/[0-9][0-9]-*.sh` that do NOT call
+`harbor_assert_mirrored`. Nearly all are trivially not-installers — push-side (`14-builder-build`,
+`21-mirror-push`, `22-builder-push`, `22-selfbuilt-push`), verify (`23-mirror-verify`,
+`24-builder-probe`, `16-engine-trust-check`, `09-harbor-auth-check`, `04-harbor-reachable`), Harbor's
+own installers (`06-install-harbor`, `04-install-harbor-service`), robot minting, teardown, e2e.
+
+**The only real candidate is `43-install-istio-package.sh`, and it must NOT be wired.** An earlier
+round justified excluding it as "zero Harbor refs" — that is *false*, and the true reason is
+stronger. It references `HARBOR_URL` four times (`:182,194,201,204`) for exactly one purpose: to
+**check where the VKS Package's images resolve from**. It reads the Package CR's
+`spec.template.spec.fetch[].imgpkgBundle.image`, extracts the host with `registry_hostport`, and
+WARNS when it is not your mirror — `:204` verbatim: *"package images resolve from ${BUNDLE_HOST},
+which is NOT ${HARBOR_URL:-your mirror}."*
+
+So the package path does not CONSUME `HARBOR_INFRA_PROJECT`; it OBSERVES whether the images came
+from Harbor at all. `harbor_assert_mirrored "${HARBOR_INFRA_PROJECT}"` there would assert a project
+that path never reads, and would fail on a perfectly correct lab whose Istio package legitimately
+ships from Broadcom's registry.
+
+**The set is six, and six is right.** Note B542 (⛔ do not build a coverage gate for this) already
+established that the omission class here is LOUD, so nothing needs to enforce the count.
 
 ## B544 — 🔴 NINE `creds.sh` probes set the OUTER timeout EQUAL to the INNER one, so they can never classify
 
