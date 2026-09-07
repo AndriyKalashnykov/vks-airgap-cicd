@@ -143,6 +143,7 @@ is unavailable to the audience that needs it most, and telling a tenant to run o
 | the Harbor CA when it is not on the wire | `make harbor-ca-from-cluster` | ❌ **SUPERVISOR ONLY** (`make fetch-harbor-ca` is the tenant path — it reads the wire) |
 | ArgoCD's LB address | `make argocd-address` | ❌ **SUPERVISOR ONLY** |
 | the Supervisor kubeconfig for ArgoCD | `make fetch-argocd-kubeconfig` | ❌ **SUPERVISOR ONLY** |
+| delete ONE guest cluster (waits for ALL its VIPs) | `make vks-cluster-delete` | ❌ **SUPERVISOR ONLY** — the guest serves no Cluster/VMService API at all |
 
 **A TENANT WHOSE CREDENTIAL IS STALE CANNOT RECOVER IT — they must REQUEST a new one.** There is no
 self-service path, and no target will invent one. `make env-validate` is how they learn it is stale

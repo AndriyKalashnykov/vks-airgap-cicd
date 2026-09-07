@@ -273,16 +273,14 @@ if read_state -n "$VKS_NAMESPACE" get cluster "$VKS_CLUSTER_NAME"; then
     # never converge. This wait was insufficient even when followed correctly.
     # `get` exits non-zero on NotFound, which is the SUCCESS case, hence the explicit rc handling
     # rather than a bare `$(k get ...)` that `set -e` would kill at the moment it succeeds.
-    _cl_gone() { k -n "$VKS_NAMESPACE" get "$1" "$VKS_CLUSTER_NAME" >/dev/null 2>&1 && return 1 || return 0; }
-    _end=$((SECONDS + ${UNINSTALL_CLUSTER_WAIT_SECONDS:-900}))
-    while [ "$SECONDS" -lt "$_end" ]; do
-      _left=""
-      _cl_gone cluster               || _left="${_left} cluster"
-      _cl_gone virtualmachineservice || _left="${_left} virtualmachineservice"
-      _cl_gone svc                   || _left="${_left} svc"
-      [ -z "$_left" ] && break
-      sleep "${UNINSTALL_POLL_INTERVAL_SECONDS:-10}"
-    done
+    # ⚠️ THE SAME WAIT AS 97's, and now LITERALLY the same code. These two loops were
+    # byte-identical, the first fix of this defect landed in only ONE of them, and that is how the
+    # class survives to the next session. `_cl_gone virtualmachineservice` was an EXACT-name lookup
+    # that saw only the CONTROL-PLANE VMService while the workload ones — reaped by BACKGROUND GC,
+    # i.e. strictly AFTER the Cluster disappears — still held their VIPs.
+    vks_wait_vip_release "$SUP" "$VKS_NAMESPACE" "$VKS_CLUSTER_NAME" \
+      "${UNINSTALL_CLUSTER_WAIT_SECONDS:-900}" "${UNINSTALL_POLL_INTERVAL_SECONDS:-10}" || true
+    _left="${VKS_VIP_STILL:-}"
     if [ -n "${_left:-}" ]; then
       note "! still present after the timeout:${_left}. NOT stripping finalizers — that orphans VMs and FCDs."
       note "  Inspect what is holding it:"

@@ -41,7 +41,18 @@ DELETE_WAIT_SECONDS="${VKS_CLUSTER_DELETE_WAIT_SECONDS:-900}"
 POLL_INTERVAL_SECONDS="${VKS_CLUSTER_DELETE_POLL_SECONDS:-10}"
 
 SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kubeconfig")"
-[ -f "$SUP" ] || die "no Supervisor kubeconfig at ${SUP} — run: make vks-login"
+# ⚠️ SUPERVISOR-ONLY, and the old message did not say so. MEASURED 2026-09-07: a guest kubeconfig
+# has NO CAPI and NO VirtualMachineService API at all (`api-resources` returns nothing for either) —
+# so a Scenario-2 tenant cannot delete their cluster, and it is not an RBAC gap they can ask to have
+# widened. Sending them to `make vks-login` is a dead end: it would fail for a different reason and
+# tell them nothing. Name the actual situation instead.
+[ -f "$SUP" ] || die "no Supervisor kubeconfig at ${SUP}.
+
+Deleting a guest cluster is a SUPERVISOR-ONLY operation: the guest cluster does not serve the
+Cluster or VirtualMachineService APIs at all, so this cannot be done with a guest kubeconfig.
+
+  Scenario 1 (you run the Supervisor): run 'make vks-login' first.
+  Scenario 2 (you are a TENANT):       you cannot delete this cluster — ask the platform team."
 k() { kubectl --kubeconfig "$SUP" --request-timeout=15s "$@" </dev/null; }
 
 # --- DESTRUCTIVE: require an explicit confirmation naming the cluster -----------------------------
@@ -78,37 +89,43 @@ log_info "deleting ${VKS_NAMESPACE}/${VKS_CLUSTER_NAME} (asynchronous — two co
 k -n "$VKS_NAMESPACE" delete cluster "$VKS_CLUSTER_NAME" --wait=false >/dev/null 2>&1 || true
 
 # --- WAIT FOR THE VIP TO BE RELEASED -------------------------------------------------------------
-# THREE objects, and the Cluster is the WEAKEST of them. We wait for all three to be NotFound.
-# `|| true` on every read: `get` exits non-zero on NotFound, which is the SUCCESS case here, and a
-# bare `$(k get ...)` under `set -e` would kill the script at the moment it succeeds.
-_gone() { k -n "$VKS_NAMESPACE" get "$1" "$VKS_CLUSTER_NAME" >/dev/null 2>&1 && return 1 || return 0; }
+# The Cluster is the WEAKEST of the objects here — see vks_wait_vip_release / vks_vip_holders in
+# lib/os.sh for what is actually waited on and why a two-valued "present or absent" read of any of
+# them is unsafe.
 
-_end=$((SECONDS + DELETE_WAIT_SECONDS))
-_last=""
-while [ "$SECONDS" -lt "$_end" ]; do
-  _still=""
-  _gone cluster                || _still="${_still} cluster"
-  _gone virtualmachineservice  || _still="${_still} virtualmachineservice"
-  _gone svc                    || _still="${_still} svc"
-  if [ -z "$_still" ]; then
-    log_info "released: cluster, virtualmachineservice and svc are all gone (${SECONDS}s)"
-    log_info "  ⚠️ the address may still be QUARANTINED by the platform allocator (B525 — the window"
-    log_info "     is UNMEASURED). This waits for the strongest signal observable from a tenant; it"
-    log_info "     does NOT prove the VIP is immediately reusable."
-    log_info "  next: make vks-cluster-create   (it gates on the endpoint AGREEING within 90s)"
-    exit 0
-  fi
-  if [ "$_still" != "$_last" ]; then
-    log_info "  waiting on:${_still}"
-    _last="$_still"
-  fi
-  sleep "$POLL_INTERVAL_SECONDS"
-done
+# ONE implementation, shared with 98-uninstall-all.sh (see vks_wait_vip_release in lib/os.sh).
+# The first fix of this defect landed in only ONE of the two identical loops; hoisting them is what
+# stops that recurring.
+if vks_wait_vip_release "$SUP" "$VKS_NAMESPACE" "$VKS_CLUSTER_NAME" \
+     "$DELETE_WAIT_SECONDS" "$POLL_INTERVAL_SECONDS"; then
+  log_info "released: nothing in ${VKS_NAMESPACE} still holds a VIP for ${VKS_CLUSTER_NAME} (${SECONDS}s)"
+  log_info "  (its Cluster, the VirtualMachineServices found by exact name / cluster label / an exact"
+  log_info "   Cluster ownerReference, and its Service. Anything linked by some OTHER mechanism is"
+  log_info "   outside what this can see.)"
+  log_info "  ⚠️ the address may still be QUARANTINED by the platform allocator (B525 — the window"
+  log_info "     is UNMEASURED). This waits for the strongest signal observable from a tenant; it"
+  log_info "     does NOT prove the VIP is immediately reusable."
+  log_info "  next: make vks-cluster-create   (it gates on the endpoint AGREEING within 90s)"
+  exit 0
+fi
 
-log_error "still present after ${DELETE_WAIT_SECONDS}s:${_still}"
+_still="${VKS_VIP_STILL:-}"
+log_error "still present after ${DELETE_WAIT_SECONDS}s: ${_still:-<the wait never ran: check VKS_CLUSTER_DELETE_WAIT_SECONDS>}"
 log_error "  NOT stripping finalizers — that orphans VMs and FCDs."
 log_error "  Inspect what is holding it:"
 log_error "    kubectl --kubeconfig ${SUP} -n ${VKS_NAMESPACE} get cluster ${VKS_CLUSTER_NAME} -o jsonpath='{.metadata.finalizers}'"
-log_error "  Do NOT create a replacement yet: recreating while the VirtualMachineService still holds"
-log_error "  the control-plane VIP produces a cluster that can never converge (B523/B524)."
+# ⚠️ THE ADVICE DEPENDS ON *WHICH* OBJECT IS LEFT, and the old message did not branch. The
+# control-plane VIP is the one whose reuse produces a cluster that can never converge; a leftover
+# WORKLOAD VMService is pool hygiene — the CP address is already free and a never-used name is
+# unaffected by it. Telling an operator to stop for a hazard that does not apply is the same class
+# of defect as an error that names the wrong cause.
+case " ${_still} " in
+  *" cluster "*|*"virtualmachineservice/${VKS_CLUSTER_NAME}"*|*"QUERY-FAILED"*)
+    log_error "  Do NOT create a replacement yet: the control-plane VIP may still be held (or we could"
+    log_error "  not ask), and recreating into that produces a cluster that never converges (B523/B524)." ;;
+  *)
+    log_error "  The CONTROL-PLANE VIP is already released — what remains is a WORKLOAD"
+    log_error "  VirtualMachineService (pool hygiene, not a converge hazard). Creating a cluster under a"
+    log_error "  name that has never been used is unaffected." ;;
+esac
 exit 1
