@@ -8,7 +8,7 @@ Reference implementation of an end-to-end CI/CD pipeline for a **fully air-gappe
 (VMware vSphere Kubernetes Service, VCF 9 + Supervisor).
 
 - **Pipeline** — self-hosted **Gitea** + **Tekton**: test → **Kaniko** build → **Harbor** push →
-  GitOps tag write-back → **ArgoCD** sync → the live page.
+  GitOps write-back (the version tag AND the commit sha) → **ArgoCD** sync → the live page.
 - **Delivery** — an OS-portable (Ubuntu / PhotonOS) jump-box image mirror (**crane**, dual-homed or
   **[sneakernet](docs/sneakernet.md)**), a pre-baked offline builder image per language, an optional
   ingress fronting the UIs at `*.vks.local`, and a **KinD** end-to-end that proves the flow locally.

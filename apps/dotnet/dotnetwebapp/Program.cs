@@ -134,11 +134,18 @@ public static class Program
     // socket. This mirrors gowebapp's newMux, pythonwebapp's new_app, nodejswebapp's newApp and
     // rustwebapp's new_router — all five exist for the same reason, and without it the icon route
     // below would be reachable only by reading the source.
-    public static WebApplication Build(Page p, string url)
+    // `quiet` is for TESTS ONLY. MEASURED 2026-09-07: calling ClearProviders() unconditionally --
+    // which the first version of this method did -- takes dotnetwebapp's stdout+stderr from 1179
+    // bytes / 22 lines ("Now listening on", "Application started", per-request logs, "shutting
+    // down") to ZERO. In a repo whose debugging surface IS `kubectl logs`, that is a silent
+    // production regression, and it made dotnet the ONLY one of six apps that logs nothing: go
+    // emits slog.Info("starting"), nodejs console.log({msg:'starting'}), rust a println! of the
+    // same JSON. No gate covers app logging, so nothing would have caught it.
+    public static WebApplication Build(Page p, string url, bool quiet = false)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls(url);
-        builder.Logging.ClearProviders();
+        if (quiet) { builder.Logging.ClearProviders(); }
         var app = builder.Build();
 
         app.MapGet("/healthz", () => Results.Content("{\"status\":\"UP\"}", "application/json", Encoding.UTF8, (int)HttpStatusCode.OK));

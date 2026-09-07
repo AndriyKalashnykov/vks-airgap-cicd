@@ -19,7 +19,7 @@ public sealed class IconRouteTests
     {
         var p = new Page(AppName: "dotnetwebapp", Message: "m", Version: "v", Commit: "c");
         // Port 0: the OS picks a free one, so this cannot collide with a parallel run.
-        var app = Program.Build(p, "http://127.0.0.1:0");
+        var app = Program.Build(p, "http://127.0.0.1:0", quiet: true);
         await app.StartAsync();
         try
         {

@@ -174,7 +174,11 @@ if [ "$rc" -eq 0 ]; then
     # check-app-icons proves the six icons exist, differ and are wired to this path; only a live
     # request proves the route survives the ingress — a rewrite or an exact-path rule here would
     # 404 it while every offline gate stays green.
-    assert_body "$(app_host "$_a")" '</svg>'          "${_a} icon"          '/favicon.svg'
+    # Asserts THIS app's own label, not a generic '</svg>'. Because check-ui-contract MANDATES the
+    # six landing pages be byte-identical, the icon's aria-label is the ONLY per-app response body
+    # in the whole system — the one thing that can ever prove WHICH app answered. A generic
+    # '</svg>' throws that away and passes a cross-host mis-route pointing two hosts at one backend.
+    assert_body "$(app_host "$_a")" "aria-label=\"${_a}\"" "${_a} icon"     '/favicon.svg'
   done <<EOF
 $(app_names)
 EOF
