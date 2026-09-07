@@ -5420,12 +5420,58 @@ a clean checkout, which is the only place `static-check` runs. Case 3 of the tes
 a **present-but-untracked** file must still be RED, because `cp -a` copies it while the operator
 never receives it. RED-proven on the real tree too: rc=1 with all six untracked, rc=0 once tracked.
 
-**STILL OPEN:** the secret-leak finding is untouched and is a different row's work — the seeded repos
-are `"private":false` and force-pushed, and every secret pattern in the root `.gitignore` (`.env`,
-`*.key`, `*.pem`, `*.kubeconfig`) is UNANCHORED, so it WOULD fire at fresh-repo root. Latent today
-(no such files exist), and now *partly* covered by the per-app files — but only where an app's own
-`.gitignore` happens to name it, which none do. A deliberate secret gate on that force-push needs its
-own idea round.
+**ROUND 2 — the implementation round CLEARED the content half and REFUTED the gate half.** Six
+findings, all measured, all fixed in the same PR:
+
+- **HIGH — the gate asserted the INDEX while `cp -a` copies the DISK.** With
+  `apps/go/gowebapp/.gitignore` deleted-but-still-in-the-index it returned **rc=0** printing *"the
+  seeded repos are protected"*, while staging the tree the way `push_repo` does staged the
+  15,269,674-byte ELF. The header had correctly refuted `test -f` ALONE and drawn the wrong
+  conclusion — the answer is BOTH. The blind state IS the seeding state: impossible in CI (fresh
+  checkout ⇒ index == disk), routine on the dirty tree where `make seed-gitea` runs.
+- **MED** — a registry with no trailing newline dropped its LAST row (the app contributing 236 of
+  the 845 files) while reporting `OK — all 5`. **MED** — `APPS_REGISTRY` was ignored, so the gate
+  was undrivable by `test-registry-fail-open.sh`, and wiring it there would have made every case
+  read the REAL registry and report PASS. Both fixed by parsing through `app_rows()`.
+- **MED — the SECRET half is now CLOSED, not deferred.** All six files mirror the root's unanchored
+  secret lines (negation included), verified both ways: zero tracked files lost, and a positive
+  control proving `.env`/`tls.key`/`ca.pem`/`admin.kubeconfig` are excluded while `.env.example` is
+  KEPT. `docs/adding-an-app.md` says so.
+- **LOW ×2** — `for d in $missing` word-split a path containing a space into phantom files; and
+  outside a git repo the message blamed the apps instead of naming the gate.
+
+⚠️ **The fix broke my own fixture and the ZERO-apps vacuity guard caught it.** `mkfix` copied only
+`lib/os.sh`, but the gate now sources `lib/apps.sh` → `lib/mirror.sh`; a missing `source` under
+`set -uo pipefail` (no `-e`) does not abort, so `app_rows` was undefined and `n` stayed 0. Without
+that guard the cases would have gone GREEN over a gate that parsed nothing.
+
+**ROUND 3 (session-end) — it found that ROUND 2's secret fix REVERSED an existing protection.**
+gitignore precedence gives the DEEPER file priority, so the per-app `*.key` **overrode** the root's
+`!**/testdata/**/*.key` (`.gitignore:18`) — a deliberate carve-out, present since the scaffold
+commit, so crypto/TLS fixtures can be committed. The per-app files did not merely fail to add
+protection at fresh-repo root; they **REMOVED protection in the OUTER repo**, and `git add` on a new
+`testdata/*.key` would silently do nothing. MEASURED, with the discriminating control:
+
+    apps/go/gowebapp/testdata/ca.key                 -> IGNORED by apps/go/gowebapp/.gitignore:30
+    apps/java/.../testdata/server.key                -> IGNORED by apps/java/.../.gitignore:28
+    testdata/root.key  (root level, no per-app file) -> negated by .gitignore:18   <- the CONTROL
+
+Both the in-file comment ("mirrors the root's own lines, negation included") and
+`docs/adding-an-app.md` claimed the negations were included; only `!.env.example` was, and the doc
+**propagated the omission to every future app**. Fixed: `!**/testdata/**/*.key` in all six,
+re-measured — testdata keys trackable again, a non-testdata `tls.key` still excluded, and
+`git ls-files apps/ | git check-ignore --no-index --stdin` returns nothing.
+
+**STILL OPEN — TWO residuals, not one** (an earlier version of this row said "the only residual"
+twice, three lines apart, naming different things):
+
+- `check-app-gitignore` is **not declared in `test-gate-vacuity.sh`** (0 references), so corpus
+  starvation for it is unaudited. ⚠️ Picking its corpus is NOT mechanical: starving `apps/` also
+  empties `registry.tsv`, so the gate would go RED via its VACUITY guard rather than the
+  missing-file check — the "which guard fired" trap. Needs its own idea round.
+- `push_repo`'s second call site (`:378`, the `yq`-rendered `$deploy_src` outside the repo) is
+  covered by none of this, and `deploy/` has no `.gitignore` — the same secret-at-fresh-repo-root
+  mechanism applies. Measured benign today (18 files, all tracked).
 
 **Residual:** `push_repo`'s second call site (`:378`, a `yq`-rendered `$deploy_src` outside the repo)
 is not covered by any of this; measured benign today (18 files, all tracked). And whether a carried
