@@ -962,12 +962,14 @@ rejected, and it takes 8–10 minutes to say so. Fix it here — the Harbor step
 comes from.
 
 ```bash
-make install-all      # preflight -> selfbuilt-image -> mirror -> mirror-verify -> builder-image -> vks-login -> harbor-robot-ensure -> platform -> install-headlamp -> install-ingress -> gitops
+make install-all      # preflight -> selfbuilt-image -> mirror -> mirror-verify -> builder-image -> vks-login -> harbor-robot-ensure -> platform -> install-headlamp -> install-ingress -> gitops -> build-apps
 make verify           # pushes a marked change and follows it to the running app
 ```
 
 **Expect:** `install-all` completes; `make verify` exits **0** for every app.
-*(**install-all 8–11 min** — the Timings table records 10 m 26 s — **verify 3–4 min**)*
+*(**install-all** — ⚠️ the Timings table's figures were measured BEFORE `build-apps` joined the
+chain (b24082f); the real duration is now longer by six cold app builds and has not been
+re-measured. **verify 3–4 min**)*
 
 `install-all` begins with `lab-preflight`, which stops in the first seconds on anything the lab is
 missing. Most often: **no default StorageClass**. Fix it and re-run `install-all`:
@@ -1139,7 +1141,7 @@ a forecast.
 | 7 | `make lab-preflight` | 2 s | 2 s |
 | 8 | `make harbor-ca-from-cluster` | <1 s | <1 s |
 | 11 | `make env-check`, `make env-validate` | <1 s each | <1 s each |
-| 11 | `make install-all` | **10 m 26 s** | **8 m 14 s** |
+| 11 | `make install-all` | ⚠️ 10 m 26 s (pre-`build-apps`) | ⚠️ 8 m 14 s (pre-`build-apps`) |
 | ↳ | `mirror-pull` / `mirror-push` / `mirror-verify` | 22 s / 2 m 38 s / 5 m 46 s | — |
 | ↳ | `builder-image` + `platform` + `gitops` | ≈1 m 40 s | — |
 | 11 | `make verify` | **3 m 6 s** | **3 m 27 s** |
@@ -1152,5 +1154,5 @@ same lab, measured start to `End-to-end verified`:
 |---|---|
 | Step 0–1 install `git`/`make`, clone, `make deps`, install the CLIs | ≈ 2 m 30 s |
 | Step 6 cluster created → every node `Ready` | **8 m 49 s** |
-| Step 11 `make install-all` + `make verify` | **10 m 08 s** |
+| Step 11 `make install-all` + `make verify` | ⚠️ 10 m 08 s *(pre-`build-apps`; re-measure)* |
 | **whole run, clone → verified** | **21 m 31 s** |

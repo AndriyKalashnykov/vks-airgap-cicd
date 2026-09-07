@@ -802,7 +802,7 @@ box very often cannot do both.
 **Then install:**
 
 ```bash
-make install-all   # preflight -> selfbuilt-image -> mirror -> mirror-verify -> builder-image -> vks-login -> harbor-robot-ensure -> platform -> install-headlamp -> install-ingress -> gitops
+make install-all   # preflight -> selfbuilt-image -> mirror -> mirror-verify -> builder-image -> vks-login -> harbor-robot-ensure -> platform -> install-headlamp -> install-ingress -> gitops -> build-apps
 make psa-check     # NOW it can measure something — expect `PSA OK — … (N measured)`, not `PSA UNPROVEN`
 make verify        # push a marked change → Tekton → Harbor → ArgoCD → live app serves it
 make creds-show    # every URL + login for THIS context — one row per app in apps/registry.tsv

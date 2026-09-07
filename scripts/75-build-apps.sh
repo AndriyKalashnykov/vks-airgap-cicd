@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# B529 — build every app's image through the REAL pipeline, then wait for it to be RUNNING.
+# build every app's image through the REAL pipeline, then wait for its PipelineRun to SUCCEED.
+# It does NOT wait for the pod: ArgoCD rolls on its own reconcile timer, and `make verify` is
+# the live assertion. MEASURED 2026-09-07: the word RUNNING appeared ONLY on this line and
+# nowhere in the code — a claim the file made about itself and did not keep.
 #
 # WHY THIS EXISTS. `make install-all` advertised "the complete air-gap install end to end" and
 # ALWAYS finished with every app in ImagePullBackOff. MEASURED: after install-all, ArgoCD holds one
