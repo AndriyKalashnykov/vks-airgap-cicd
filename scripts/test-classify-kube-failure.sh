@@ -152,5 +152,38 @@ t FORBIDDEN    'Error from server (Forbidden): applications.argoproj.io is forbi
 t UNKNOWN "Unable to connect to the server: EOF"
 
 echo
+
+# ── B549: a klog PID of 401 must NOT read as UNAUTHORIZED ────────────────────────────────────────
+# THE EXISTING CASES ABOVE COULD NOT SEE THIS, AND THAT IS THE POINT. They are hand-written one-line
+# messages (or `E0809 memcache.go:265]` with no timestamp and no pid), so an adversary instrumented
+# the corpus and measured that a klog-prefix matcher fires on ZERO of the 29. A fix could therefore
+# be INERT and still show 29/29 — which is exactly what happened to the first proposed fix.
+#
+# So these cases are built FAITHFULLY: klog space-pads the pid to 7 columns
+# (klog v2.140.0 internal/buffer/buffer.go:29, `buf.nDigits(7, 22, Pid, ' ')`), which is why the
+# 3-digit pid below carries FIVE leading spaces. A hand-typed single-space version matches a naive
+# regex and the real line does not, so writing it "neatly" would re-create the vacuum.
+_klog() { printf 'E0907 15:15:51.244598 %7s memcache.go:265] "Unhandled Error" err="couldn'"'"'t get current server API group list: Get \\"https://192.0.2.99:6443/api?timeout=3s\\": context deadline exceeded"' "$1"; }
+
+# THE RED-PROOF. Before the fix this was UNAUTHORIZED, whose remedy is `make vks-login` — one of
+# THREE vCenter SSO attempts before PERMANENT lockout, spent on a cluster that is merely off.
+t UNKNOWN "$(_klog 401)"
+# Controls: neighbouring pids must be unchanged, so a future "fix" cannot pass by flattening the arm.
+t UNKNOWN "$(_klog 2667264)"
+t UNKNOWN "$(_klog 4010)"
+t UNKNOWN "$(_klog 1401)"
+# The MICROSECOND field the deleted token was originally added for. It is glued to a `.`, so it can
+# never emit ` 401 ` — pinned so nobody re-adds the token believing this case needs it.
+t UNKNOWN 'E0907 15:15:51.380401 2667264 memcache.go:265] "Unhandled Error" err="couldn'"'"'t get current server API group list: context deadline exceeded"'
+# AND THE COVERAGE THAT MUST SURVIVE: deleting the token must not cost a single real 401.
+t UNAUTHORIZED "error: You must be logged in to the server (the server has asked for the client to provide credentials)"
+t UNAUTHORIZED 'the server has asked for the client to provide credentials (401)'
+t UNAUTHORIZED 'Response Status: 401 Unauthorized'
+
+# ⚠️ NEW CASES GO ABOVE THIS LINE. The verdict and its `exit 1` are the NEXT two lines, so a
+# case appended to the END of this file PRINTS its FAIL and the suite still exits 0 — measured
+# 2026-09-07 when the B549 cases were first appended: the RED-proof printed
+# `FAIL want UNKNOWN, got UNAUTHORIZED` and the script exited **0**. A test outside the verdict
+# is not a test.
 echo "classify_kube_failure: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ] || exit 1
