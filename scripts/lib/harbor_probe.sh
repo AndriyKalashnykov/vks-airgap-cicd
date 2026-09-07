@@ -72,9 +72,15 @@ harbor_project_state() {
 # Shaped after `capacity_assert_fits` (lib/capacity.sh): an escape hatch, and every unknown is a
 # LOUD SKIP that says it is not a pass.
 harbor_assert_mirrored() {
-  local _p="${1:?}" _what="${2:-this install}" _state
+  local _p="${1:-}" _what="${2:-this install}" _state
   [ "${HARBOR_IMAGE_PREFLIGHT:-1}" = 0 ] && { log_warn "harbor: image preflight disabled (HARBOR_IMAGE_PREFLIGHT=0)"; return 0; }
   [ -n "${HARBOR_URL:-}" ] || { log_warn "harbor: HARBOR_URL is unset — mirror check SKIPPED (not a pass)"; return 0; }
+  # ⚠️ SKIP, do NOT `:?`. Call sites used to pass `"${HARBOR_INFRA_PROJECT:?}"`, which turns an
+  # unset var into a hard die AT MY LINE. In 49-install-headlamp.sh that line is 49 lines ABOVE the
+  # first `mirror_target_ref` — the code that genuinely needs the variable and dies with a message
+  # naming what it was resolving. So the preflight would have PRE-EMPTED a better error with a bare
+  # "parameter null or not set". A check added to improve a diagnostic must not degrade one.
+  [ -n "$_p" ] || { log_warn "harbor: no Harbor project name given — mirror check SKIPPED (not a pass)"; return 0; }
 
   _state="$(harbor_project_state "$_p")"
   case "$_state" in

@@ -69,7 +69,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # an escape hatch, and every unknown is a LOUD SKIP that says it is not a pass.
 # shellcheck source=scripts/lib/harbor_probe.sh
 . "${SCRIPT_DIR}/lib/harbor_probe.sh"
-harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:?}" "headlamp"
+harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:-}" "headlamp"
 load_env
 
 require_cmd helm

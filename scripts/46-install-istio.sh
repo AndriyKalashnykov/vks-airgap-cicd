@@ -244,7 +244,7 @@ ISTIOD_SET=(
 # would be a false block on the attach path.
 # shellcheck source=scripts/lib/harbor_probe.sh
 . "${SCRIPT_DIR}/lib/harbor_probe.sh"
-harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:?}" "istio"
+harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:-}" "istio"
 
 # Refuse a pod the scheduler cannot place, BEFORE helm burns its --wait discovering it.
 capacity_assert_fits \

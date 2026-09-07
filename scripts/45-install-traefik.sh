@@ -84,7 +84,7 @@ log_info "installing Traefik controller into namespace '${TRAEFIK_NAMESPACE}'"
 # an escape hatch, and every unknown is a LOUD SKIP that says it is not a pass.
 # shellcheck source=scripts/lib/harbor_probe.sh
 . "${SCRIPT_DIR}/lib/harbor_probe.sh"
-harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:?}" "traefik"
+harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:-}" "traefik"
 ensure_namespace "$TRAEFIK_NAMESPACE" "${PSA_LEVEL_TRAEFIK:-restricted}"
 
 # shellcheck disable=SC2016

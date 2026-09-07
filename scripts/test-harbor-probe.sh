@@ -106,5 +106,15 @@ if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'not a pass'; then
   ok "an ANONYMOUS tenant is never BLOCKED by an ambiguous [] (RULE ZERO-B)"
 else bad "an anonymous caller must not be blocked on an ambiguous result; rc=$rc"; fi
 
+# ── an EMPTY project name must SKIP, never die. The call sites used to pass
+#    `"${HARBOR_INFRA_PROJECT:?}"`, and in 49-install-headlamp.sh that line sits 49 lines ABOVE the
+#    first `mirror_target_ref` — the code that genuinely needs the var and dies naming what it was
+#    resolving. A preflight added to improve a diagnostic must not PRE-EMPT a better one with a bare
+#    "parameter null or not set".
+out="$(HARBOR_URL=h.example harbor_assert_mirrored "" istio 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'not a pass'; then
+  ok "an EMPTY project name -> SKIPPED loudly, never a die that pre-empts a better error"
+else bad "an empty project must skip, not die; rc=$rc"; fi
+
 printf '\ntest-harbor-probe: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -64,7 +64,7 @@ log_info "installing Gitea into namespace '$GITEA_NAMESPACE' (Service type: ${GI
 # an escape hatch, and every unknown is a LOUD SKIP that says it is not a pass.
 # shellcheck source=scripts/lib/harbor_probe.sh
 . "${SCRIPT_DIR}/lib/harbor_probe.sh"
-harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:?}" "gitea"
+harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:-}" "gitea"
 ensure_namespace "$GITEA_NAMESPACE" "${PSA_LEVEL_GITEA:-restricted}"
 
 # shellcheck disable=SC2016

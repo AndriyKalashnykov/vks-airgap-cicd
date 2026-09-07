@@ -35,7 +35,7 @@ kubeconfig_ready
 # an escape hatch, and every unknown is a LOUD SKIP that says it is not a pass.
 # shellcheck source=scripts/lib/harbor_probe.sh
 . "${SCRIPT_DIR}/lib/harbor_probe.sh"
-harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:?}" "the tekton pipeline"
+harbor_assert_mirrored "${HARBOR_INFRA_PROJECT:-}" "the tekton pipeline"
 # AFTER lib/apps.sh, not before: this reads BUILDER_IMAGE_TAG_DEFAULT, which that file defines.
 # MEASURED 2026-08-23 — placing it above the source made `make e2e-sneakernet` die with
 # "BUILDER_IMAGE_TAG_DEFAULT: lib/apps.sh must be sourced first". It is LATENT: `make e2e-kind`
