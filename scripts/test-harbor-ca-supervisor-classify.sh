@@ -64,17 +64,24 @@ saw() { grep -qi -- "$1" "$TMP/out"; }
 # required <out-file> argument, so it exited at its usage line and TWO cases reported PASS having
 # tested nothing. This asserts the script actually reached the namespace probe.
 control() {
-  if saw "usage:"; then
-    bad "POSITIVE CONTROL" "27 exited at its usage line — the harness never reached the code, so
-        every negative assertion below would pass vacuously"
+  # ⚠️ REQUIRE A POSITIVE MARKER, not merely the ABSENCE of one known failure. The first version
+  # tested only for "usage:" — the single early-exit shape I had personally hit — and an
+  # implementation round MEASURED it insufficient: inserting `exit 7` after `require_cmd openssl`
+  # left it silent and case 3 PASSED having tested nothing. Every assertion here is a NEGATIVE, and
+  # a negative passes trivially when the script never ran, so the control must prove the script
+  # REACHED the namespace probe. All three modes print this string.
+  if ! saw "EXACTLY ONE namespace" && ! saw "not a Supervisor" && ! saw "could not determine"; then
+    bad "POSITIVE CONTROL" "27 produced none of the namespace-probe outputs — it exited early, so
+        every negative assertion below would pass vacuously. Last lines: $(tail -2 "$TMP/out")"
     return 1
   fi
   return 0
 }
 
 # --- 1. a GUEST kubeconfig must be NAMED, not reported as "Harbor is missing" -------------------
-run guest || true
+run guest && _rc=0 || _rc=$?
 control || true
+if [ "${_rc:-0}" -ne 0 ]; then ok "guest: exits NON-ZERO"; else bad "guest: exits non-zero" "rc=0 — it did not refuse"; fi
 if saw 'not a Supervisor'; then ok "guest: the message names the WRONG-CLUSTER cause"
 else bad "guest: the message names the WRONG-CLUSTER cause" "$(tail -3 "$TMP/out")"; fi
 if saw 'vmoperator'; then ok "guest: it says WHICH capability was missing (not a bare assertion)"
@@ -88,8 +95,9 @@ else bad "guest: hedged" "it asserts more than the probe can support"; fi
 # This is the true-negative pin. scenario-1 puts every new operator in exactly this state before
 # Step 4, so a change that made THIS case say "not a Supervisor" would be a false-block on the
 # repo's own documented happy path.
-run bare_sup || true
+run bare_sup && _rc=0 || _rc=$?
 control || true
+if [ "${_rc:-0}" -ne 0 ]; then ok "bare Supervisor: exits NON-ZERO"; else bad "bare Supervisor: exits non-zero" "rc=0"; fi
 if saw 'not a Supervisor'; then bad "bare Supervisor must NOT be called a guest" "it was"
 else ok "bare Supervisor: does NOT claim 'not a Supervisor'"; fi
 if saw 'EXACTLY ONE namespace'; then ok "bare Supervisor: keeps the original serviceId message"
@@ -98,10 +106,17 @@ else bad "bare Supervisor: keeps the original message" "$(tail -3 "$TMP/out")"; 
 # --- 3. COULD-NOT-DETERMINE must not be reported as a verdict -----------------------------------
 # rc==2, not rc==1. Reading "unreachable" as "not a Supervisor" would swap one confidently-wrong
 # message for another — which is the entire failure class B210 exists to close.
-run undetermined || true
+run undetermined && _rc=0 || _rc=$?
 control || true
+if [ "${_rc:-0}" -ne 0 ]; then ok "unreachable: exits NON-ZERO"; else bad "unreachable: exits non-zero" "rc=0"; fi
 if saw 'not a Supervisor'; then bad "unreachable must NOT be called 'not a Supervisor'" "it was"
-else ok "unreachable: makes no claim about what the cluster is"; fi
+else ok "unreachable: does NOT call it a guest"; fi
+# ⚠️ AND IT MUST SAY SO POSITIVELY. Before the rc==2 arm, this mode produced output BYTE-IDENTICAL
+# to a bare Supervisor: the script fell through and asserted as FACT that zero Harbor namespaces
+# exist, right after the probe said it could determine nothing. A test that only checked for the
+# ABSENCE of the guest claim PINNED that gap instead of catching it.
+if saw 'could not determine'; then ok "unreachable: NAMES the inconclusive probe (does not assert 0 = fact)"
+else bad "unreachable: names the inconclusive probe" "it fell through to the world-claim: $(tail -2 "$TMP/out")"; fi
 
 printf '\nharbor-ca supervisor classify: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

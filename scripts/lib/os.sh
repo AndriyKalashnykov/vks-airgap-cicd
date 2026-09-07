@@ -986,9 +986,9 @@ kubeconfig_is_supervisor() {
   local kc="${1:-${KUBECONFIG:-}}" res
   [ -n "$kc" ] || return 2
   # Tier 1: can we talk to an API server at all? If not, we know NOTHING about what it serves.
-  KUBECONFIG="$kc" kubectl version --request-timeout=20s >/dev/null 2>&1 || return 2
+  KUBECONFIG="$kc" kubectl version --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-20s}" >/dev/null 2>&1 || return 2
   res="$(KUBECONFIG="$kc" kubectl api-resources --api-group=vmoperator.vmware.com \
-           --no-headers --request-timeout=20s 2>/dev/null || true)"
+           --no-headers --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-20s}" 2>/dev/null || true)"
   # Drop a NAME/APIVERSION header line before testing for emptiness. --no-headers above should make
   # this unreachable -- but if it is ever dropped, `[ -n "$res" ]` alone reads the HEADER as content
   # and the probe silently answers SUPERVISOR for EVERY cluster, which is B210 restored with a green

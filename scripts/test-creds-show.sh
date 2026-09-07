@@ -613,6 +613,46 @@ VKS_AUTH_METHOD=vcf'
 
 out="$(render_with_cluster "$_real_env" 1)"
 
+# -- A ROBOT CANNOT LOG INTO THE HARBOR WEB UI (2026-09-06) -------------------------------------
+# MEASURED on the live lab: the configured `robot$...` credential returns HTTP 412 from
+# /api/v2.0/users/current, while the Supervisor's admin returns 200 -- with both controls
+# (admin+wrong-password 401, no-credentials 401). This table's heading is "Access the UIs", so
+# printing a robot there hands the reader a credential that cannot do the thing the row is for.
+# The operator who hit it put it plainly: "why not admin? where is admin for harbor?"
+#
+# BOTH DIRECTIONS. A footnote that always prints is worthless -- the admin fixture above must NOT
+# produce it, or this case cannot fail.
+_robot_env="$(cat <<'ROBOTENV'
+HARBOR_URL=harbor.example.test
+HARBOR_USERNAME='robot$fixture-not-a-real-robot'
+HARBOR_PASSWORD=fixture-value-not-a-real-secret
+VKS_AUTH_METHOD=vcf
+ROBOTENV
+)"
+_rout="$(render_with_cluster "$_robot_env" 1)"
+# The UI credential must be a ROW, not prose. A first version shipped a nine-line footnote
+# EXPLAINING why admin was absent; the operator's response was "what the fuck is this poem for? i
+# want Harbor admin here" -- and this repo's own rule says it: docs say WHAT, not WHY, and a
+# mechanism essay does not belong in an instruction slot. The credential goes in the table.
+if printf '%s' "$_rout" | grep -qE '^  Harbor \(web UI\)'; then
+  ok "harbor: a ROBOT registry credential gets a separate 'Harbor (web UI)' row"
+else
+  bad "harbor: a 'Harbor (web UI)' row must appear when the registry credential is a robot" \
+      "the table offers only a robot under 'Access the UIs', and a robot cannot log in there"
+fi
+if printf '%s' "$_rout" | grep -qE '^  Harbor \(web UI\).*  admin '; then
+  ok "harbor: the UI row names the admin USER"
+else
+  bad "harbor: the UI row names admin" "$(printf '%s' "$_rout" | grep -E '^  Harbor' | head -2)"
+fi
+# THE CONTROL: with a non-robot username there is nothing to disambiguate, so no extra row.
+if printf '%s' "$out" | grep -qE '^  Harbor \(web UI\)'; then
+  bad "harbor: the web UI row must NOT appear for a non-robot username" \
+      "it printed for HARBOR_USERNAME=admin -- a row that always appears is not a signal"
+else
+  ok "harbor: no extra UI row when the credential is already admin (it discriminates)"
+fi
+
 # POSITIVE CONTROL FIRST. Without it the assertion below passes VACUOUSLY whenever the stub is not
 # found, the probe changes shape, or creds.sh stops consulting PATH — i.e. exactly when the gate has
 # stopped measuring anything. A negative assertion needs proof the mechanism fired.

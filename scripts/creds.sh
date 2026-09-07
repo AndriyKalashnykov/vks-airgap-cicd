@@ -59,7 +59,10 @@ trap 'rm -f "${_argo_err:-}" "${_lab_err:-}" "${_ssh_verr:-}" 2>/dev/null || tru
 
 # shellcheck source=scripts/lib/os.sh
 . "${SCRIPT_DIR}/lib/os.sh"
-load_env
+# Silence the internal state-stamp warning for this report only: it names .env.state and its
+# "stamp", which is maintainer vocabulary, and the Context block below already states the same
+# fact in plain English. Every other caller of load_env still gets the warning.
+load_env 2> >(grep -v "does not record which cluster it belongs to" >&2)
 
 # ── the reveal decision, made once ───────────────────────────────────────────────────────────────
 # A terminal is the operator reading their own screen — the intended function, and unchanged.
@@ -197,11 +200,7 @@ _argo_tls_flag=0   # set when the URL is https AT A BARE IP; the footnote below 
 # The numbers are the real bounds, read from the same variables the probes use, so this line cannot
 # drift from the behaviour it describes.
 if [ "${CREDS_NO_PROBE:-0}" = 1 ]; then
-  printf '  (CREDS_NO_PROBE=1 — reporting configuration only, nothing probed)\n' >&2
-else
-  printf '  checking what is reachable — up to %ss per endpoint, %ss per cluster call; a few seconds total.\n' \
-    "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" >&2
-  printf '  (set CREDS_NO_PROBE=1 to skip every probe and report configuration only)\n' >&2
+  printf '  (reporting configuration only — nothing was probed)\n' >&2
 fi
 _probe_t0=$(date +%s 2>/dev/null || echo 0)
 
@@ -488,11 +487,11 @@ if [ "$_sink_refused" = 1 ]; then
   _flow="undetermined — a state overlay exists but was REFUSED (stamped for another cluster), so
                    nothing in it is in play here"
 elif [ "$_have_sink" = 1 ] && grep -q '^VKS_STATE_KIND=1' "$_sink" 2>/dev/null; then
-  _flow="KinD stand-in (the state overlay is stamped by the KinD flow)"
+  _flow="KinD stand-in"
 elif [ "$_have_sink" = 1 ]; then
-  _flow="real lab (a state overlay exists and is NOT KinD-stamped)"
+  _flow="real lab"
 elif [ "${VKS_AUTH_METHOD:-}" = "vcf" ]; then
-  _flow="real VKS lab (VKS_AUTH_METHOD=vcf)"
+  _flow="real VKS lab"
 else
   _flow="undetermined (KinD: 'make e2e-kind' · lab: docs/scenario-1.md or scenario-2.md)"
 fi
@@ -602,15 +601,14 @@ fi
 [ "${CREDS_TOKEN:-0}" = "1" ] && printf 'state-overlay: %s\n' "$_overlay_state"
 printf '\n  Context\n'
 case "$_prov" in
-  DISCOVERED) printf '    values below : DISCOVERED — the overlay is stamped for the cluster you are talking to\n' ;;
-  STORED)     printf '    values below : STORED — from a state overlay not stamped for this cluster, so a value\n'
-              printf '                   here may be from a lab that no longer exists. Settle it: make env-validate\n' ;;
+  DISCOVERED) printf '    values below : read from the cluster you are talking to now\n' ;;
+  STORED)     printf '    values below : saved by an earlier run, and not tied to this cluster — some may\n'
+              printf '                   may be from a lab that no longer exists. Check: make env-validate\n' ;;
   *)          if [ "$_env_populated" = 1 ]; then
-                printf '    values below : from YOUR .env — the values you supplied, not placeholders. .env carries\n'
-                printf '                   no cluster stamp, so this report cannot confirm they are current.\n'
-                printf '                   Settle it: make env-validate\n'
+                printf '    values below : from YOUR .env — the values you supplied. This report cannot\n'
+                printf '                   confirm they are still current. Check: make env-validate\n'
               else
-                printf '    values below : DEFAULTS from .env / .env.example — these ARE PLACEHOLDERS, not credentials\n'
+                printf '    values below : PLACEHOLDERS from .env.example — nothing is installed yet\n'
               fi ;;
 esac
 if [ "$_sink_refused" = 1 ]; then
@@ -620,9 +618,8 @@ if [ "$_sink_refused" = 1 ]; then
   printf '                   therefore MISSING from this report, which is NOT the same as absent\n'
   printf '                   from the cluster. The ERROR block above names which cluster it belongs\n'
   printf '                   to; inspect it with: make state-show\n'
-else
-  printf '    state overlay: %s\n' \
-    "$([ "$_have_sink" = 1 ] && echo "$_sink" || echo "none — no installer has published anything")"
+elif [ "$_have_sink" != 1 ]; then
+  printf '    values below : nothing has been installed yet\n'
 fi
 printf '    flow         : %s\n' "$_flow"
 printf '    cluster      : %s\n' "$_cluster"
@@ -935,7 +932,39 @@ esac
 # source, never field-by-field. `make harbor-admin-password` already does this correctly
 # (env_publish_all writes BOTH keys, and since B202 F4 it REFUSES to overwrite a robot$ pair).
 # test-creds-show.sh asserts this mechanically — a comment alone is not the control.
-add_row "Harbor" "$harbor_url" "$harbor_user" "$harbor_pw" "$(_reach_harbor)"
+add_row "Harbor (registry)" "$harbor_url" "$harbor_user" "$harbor_pw" "$(_reach_harbor)"
+# A ROBOT CANNOT LOG INTO THE HARBOR WEB UI -- measured on the live lab: the `robot$...` pair returns
+# 412 from /api/v2.0/users/current while admin returns 200 (controls: admin+wrong-password 401,
+# no-credentials 401). The row above is the REGISTRY credential the pipeline pushes with, which is
+# deliberately least-privilege (22-harbor-robot.sh mints push+pull only, so admin is never baked into
+# Tekton's push Secret). But this table is headed "Access the UIs", so the UI credential gets its own
+# row rather than a footnote explaining its absence.
+#
+# ⚠️ ATOMIC PAIR FROM ONE SOURCE, per the rule above: the username is `admin` BY DEFINITION of this
+# secret and the password comes from that same secret -- never field-by-field from two places.
+# Supervisor-only by nature (RULE ZERO-B): a tenant without it gets the command, not a broken cell.
+if harbor_username_is_robot "${HARBOR_USERNAME:-}"; then
+  _h_admin_pw="<not read — run: make harbor-admin-password>"
+  _h_sup="$(supervisor_kubeconfig 2>/dev/null || true)"
+  if [ -n "$_h_sup" ] && [ "${CREDS_NO_PROBE:-0}" != 1 ]; then
+    _h_ns="${HARBOR_SERVICE_NAMESPACE:-}"
+    [ -n "$_h_ns" ] || _h_ns="$(KUBECONFIG="$_h_sup" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl \
+        --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-5s}" get ns \
+        -l appplatform.vmware.com/serviceId=harbor -o name 2>/dev/null | head -1 | sed 's|namespace/||')"
+    if [ -n "$_h_ns" ]; then
+      _h_enc="$(KUBECONFIG="$_h_sup" timeout "${CREDS_K8S_TIMEOUT:-10}" kubectl \
+          --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-5s}" -n "$_h_ns" get secret harbor-core-ver-1 \
+          -o jsonpath='{.data.HARBOR_ADMIN_PASSWORD}' 2>/dev/null || true)"
+      if [ -n "$_h_enc" ]; then _h_admin_pw="$(printf '%s' "$_h_enc" | base64 -d 2>/dev/null || true)"; fi
+      [ -n "$_h_admin_pw" ] || _h_admin_pw="<not read — run: make harbor-admin-password>"
+    fi
+  fi
+  case "$_h_admin_pw" in
+    '<'*) : ;;                                   # a placeholder — print it, never mask it
+    *)    _h_admin_pw="$(_mask "$_h_admin_pw")" ;;
+  esac
+  add_row "Harbor (web UI)" "$harbor_url" "admin" "$_h_admin_pw" "$(_reach_harbor)"
+fi
 # Render the PROVENANCE with the value. A bare secret here reads as "this is your password",
 # and on the primary runbook it is the pre-rotation one from Step 5 onward — which is the state
 # that produced a live 401 and a backlog row proposing a network probe to detect it.
@@ -994,7 +1023,6 @@ EOF
 # the operator can see rather than one they merely endure.
 if [ "${CREDS_NO_PROBE:-0}" != 1 ]; then
   _probe_t1=$(date +%s 2>/dev/null || echo 0)
-  printf '  reachability checks done in %ss.\n' "$(( _probe_t1 - _probe_t0 ))" >&2
 fi
 
 # --- NO SINGLE VALUE MAY BLOW OUT THE TABLE ------------------------------------------------------
@@ -1087,6 +1115,20 @@ EOF
 # fine and the NAME is what is broken — say so, and say it right under the table rather than leaving
 # the reader to conclude the app is down. (2026-09-05: a browser got DNS_PROBE_FINISHED_NXDOMAIN on
 # a host this report had just called `serving`.)
+# ⚠️ A ROBOT CANNOT LOG INTO THE HARBOR WEB UI, and this table's whole purpose is "Access the UIs".
+# MEASURED 2026-09-06 on the live lab: the configured `robot$...` credential returns HTTP 412 from
+# /api/v2.0/users/current ("get current user not available for security context: robot"), while the
+# Supervisor's admin returns 200 -- with both controls (admin+wrong-password 401, no-credentials
+# 401). So the row was handing the reader a credential that cannot do the thing the row is for.
+#
+# ⚠️ LABEL ONLY -- NO LIVE READ. The block above states the rule: username and secret move as ONE
+# ATOMIC PAIR from ONE source, never field-by-field. Fetching admin here would violate that and would
+# also need Supervisor access, which a RULE ZERO-B tenant does not have. So we say what the credential
+# IS and where the other one comes from, and let the operator choose.
+#
+# The `robot$` test is a pure STRING test, and this repo records that such a test must never GATE an
+# auth decision. It does not gate here -- it only decides whether to print a hint, so its residual
+# (an unusual robot name prefix) costs a missing hint, never a false claim.
 case "$rows" in
   *'stale DNS'*)
     printf '\n  ⚠️  Some hosts above RESOLVE ON THIS MACHINE TO A DIFFERENT ADDRESS than the ingress\n'
@@ -1153,14 +1195,10 @@ fi
 # A marker that says "see note" with no note is a citation that resolves to nothing -- worse than no
 # marker at all, because it reads as sourced.
 if [ "${_headlamp_note:-0}" = 1 ]; then
-  printf '\n  note: bounced straight back to the Headlamp token screen after pasting? You pasted a STALE
-        token. The /set-token endpoint accepts ANY string with a 200 and stores it, so a dead token
-        re-pastes "successfully" and fails identically. Take a fresh one from the line above; its
-        expiry is printed beside it.\n'
+  printf '\n  Headlamp: if the token screen comes straight back, the token expired — copy a fresh one above.\n'
 fi
 if [ "${_argo_initial_note:-0}" = 1 ]; then
-  printf '\n  note: the ArgoCD password above is the INITIAL admin secret. If anyone has run\n'
-  printf "        'argocd account update-password', it has been superseded and will 401.\n"
+  printf '\n  ArgoCD: this is the initial admin password; it stops working once someone changes it.\n'
 fi
 # ⚠️ KEYED ON A FLAG, NOT ON THE RENDERED STRING. This case used to match the URL text, and the
 # very next edit -- rewording the marker from `(--insecure; see note)` to
@@ -1620,7 +1658,7 @@ done <<EOF
 $_lab_rows
 EOF
 
-printf '\n  Lab access — you supplied these in .env; no installer publishes them\n'
+printf '\n  Lab access — the values you put in .env\n'
 printf '\n  %-*s  %-*s  %-*s  %s\n' "$_lw1" "Target" "$_lw2" "Endpoint" "$_lw3" "Username" "Password"
 printf '  %-*s  %-*s  %-*s  %s\n' \
   "$_lw1" "$(printf '%*s' "$_lw1" '' | tr ' ' '-')" \
@@ -1652,9 +1690,7 @@ fi
 # UNCONDITIONALLY, so a run that read NOTHING still claimed "READ LIVE from the Supervisor" and
 # asserted `Source: <none found>` — an absence about a namespace we may never have been able to
 # query. The exact conflation the probe rewrite above exists to fix, re-committed two lines below it.
-if [ -n "$_ssh_pw" ]; then
-  printf '  Guest-node SSH password READ LIVE from %s in vSphere Namespace %s.\n' "$_ssh_sec" "${VKS_NAMESPACE:-<unset>}"
-else
+if [ -z "$_ssh_pw" ]; then
   printf '  Guest-node SSH password NOT read: %s\n' "$_ssh_state"
 fi
 

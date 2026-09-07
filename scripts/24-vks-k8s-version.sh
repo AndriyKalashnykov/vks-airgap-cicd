@@ -134,7 +134,15 @@ if [ "$_TKR_RC" -ne 0 ]; then
   # what is installed.
   # rc==1 ONLY: rc==2 means we could not determine (unreachable / stale CA), and that must fall
   # through to classify_kube_failure, which has the right words for those.
-  kubeconfig_is_supervisor "$SUP"; _sup_rc=$?
+  # ⚠️ `|| _sup_rc=$?`, NOT the bare `cmd; _sup_rc=$?`. MEASURED 2026-09-06 against the LIVE guest
+  # cluster: with the bare form this call is the LAST statement that executes -- `set -e` kills the
+  # script before `_sup_rc=$?` runs, so the `-eq 1` branch below was DEAD CODE on exactly the path it
+  # exists for, and `make vks-k8s-version` on a guest kubeconfig died rc=1 showing only unrelated
+  # OSImages warnings and a bare `Error 1`. Post-#957 that was strictly WORSE than before: it died
+  # before classify_kube_failure could name any cause.
+  # This function is at nesting depth 0 inside an if-BODY, so the exemptions that save the identical
+  # form elsewhere do not apply -- the discriminator is the DEPTH-0 if-body, not "inside a function".
+  _sup_rc=0; kubeconfig_is_supervisor "$SUP" || _sup_rc=$?
   if [ "$_sup_rc" -eq 1 ]; then
     not_a_supervisor_note >&2   # called directly: $( ) strips the trailing newline, so the
                                 # die below would run straight into the last line of the note.
