@@ -51,7 +51,9 @@ Exit 0 = allow. Exit 2 = BLOCK (stderr is fed back to the calling agent).
 Fails OPEN on anything unexpected: a hook that crashes must never wedge a session.
 """
 import json
+import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -104,9 +106,18 @@ def _receipt_epoch(session_id: str):
     valid receipt (missing, or an old content-free 'engaged' receipt from before the re-arm fix)."""
     try:
         with open(_receipt_path(session_id)) as f:
-            return float(f.read().strip())
+            v = float(f.read().strip())
     except Exception:
         return None
+    # ⚠️ MEASURED 2026-09-07: `float("inf")` (and `1e999`) is GREATER THAN EVERY commit epoch, so a
+    # THREE-BYTE receipt cleared this gate permanently — it survived every re-arm, forever. `nan`
+    # and an empty file already failed closed; `inf` did not. A future-dated receipt is the same
+    # defect with a bigger number, so bound the upper end too (60s of clock skew).
+    # This closes the class INDEPENDENTLY of any matcher: whatever writes the file, the value must
+    # be a plausible past timestamp.
+    if not math.isfinite(v) or not (0 < v <= time.time() + 60):
+        return None
+    return v
 
 
 def _head_commit_epoch() -> int:
@@ -149,14 +160,130 @@ def _last_nonexempt_commit_epoch() -> int:
     return _head_commit_epoch()
 
 
+# The roster, DERIVED from the agents directory — never an enumerated list here, which would rot the
+# first time a specialist is added or renamed. An adversary agent TYPE is an identifier; the word
+# "adversary" in a sentence is not.
+def _roster_pattern():
+    """A regex over the installed adversary agent TYPE names, or None if none can be read."""
+    names = set()
+    for d in (os.path.expanduser("~/.claude/agents"),
+              os.path.join(_project_root(), ".claude", "agents")):
+        try:
+            for f in os.listdir(d):
+                if f.endswith(".md") and "adversary" in f.lower():
+                    names.add(os.path.splitext(f)[0])
+        except Exception:
+            continue
+    if not names:
+        return None
+    return re.compile(r"\b(?:" + "|".join(re.escape(n) for n in sorted(names)) + r")\b", re.I)
+
+
+# A prompt that ASSERTS an adversary role. Used ONLY to widen the Agent arm: `agents.md` PRESCRIBES
+# inlining a persona into `general-purpose` when an agent file is too new to dispatch by name, and
+# that path minted NOTHING — so doing the documented thing left you blocked. Measured: it catches 2
+# such dispatches in this repo's transcripts. It can only turn a block into an allow.
+# The floor that separates a pasted PERSONA from a sentence. See the use site for the measurement.
+_ROLE_MIN_CHARS = 800
+_ROLE = re.compile(
+    r"(?:you\s+are\s+(?:a|an|the)\s+[^.\n]{0,60}?adversar(?:y|ial)"
+    r"|adversar(?:y|ial)\s+(?:round|review|persona|reviewer)"
+    r"|REFUTE\s+(?:this|the|my)\b)", re.I)
+
+
+# ── THE BASH ARM: the RECEIPT, and nothing else. ─────────────────────────────────────────────────
+#
+# WHY IT EXISTS. The Edit/Write arm below already refuses a `Write` to the receipt — but the matcher
+# had no `Bash`, so `printf 9 > .claude/state/adversary-<session>.receipt` minted a clearance with
+# ONE command and every guarded write then sailed through. That SUBSUMES every question about when
+# the receipt is minted: it does not matter, if the agent can simply write it.
+#
+# WHY IT DOES NOT GUARD THE GUARDED PATHS TOO. MEASURED 2026-09-07 over 27,299 real Bash commands
+# from this repo's own transcripts: porting the sibling repo's full guarded-path arm matches 652
+# (2.38%), of which 85% of the cp-arm catches are `/tmp/*.bak -> scripts/*` RED-PROOF RESTORES,
+# while MISSING 2,644 `python3 - <<PY ... open(p,"w")` writes — this repo's DOMINANT editing idiom.
+# It blocks the safe half of a mutate/restore cycle and permits the dangerous half, 4.4x more misses
+# than catches. That is not a regex-quality problem and a better-aimed regex will not fix it: an
+# interpreter body is unbounded. Do NOT "improve" this by widening it to guarded paths.
+#
+# THE PREDICATE IS A CONJUNCTION, NOT ADJACENCY, AND THAT IS THE WHOLE POINT. Requiring the write
+# verb to sit NEXT TO the path is what leaves `R=<path>; echo 9 > "$R"`, `$HOME/...` and
+# `cd .claude/state && echo 9 > x.receipt` unreachable — the three classes an adversary round called
+# irreducible. Asking instead for "a receipt path ANYWHERE and a write construct ANYWHERE" reaches
+# all three, because nothing legitimate does both. MEASURED: 13/13 forge shapes blocked (bare,
+# single- AND double-quoted, $VAR, $HOME, python -c, python heredoc, perl, dd, cp, rsync, tee,
+# cd-split), 11 of 27,299 commands matched (0.040%) — every one a command investigating this gate —
+# and read-only investigation (`cat`/`ls`/`stat`/`grep`/`rm` on the receipt) is untouched, which
+# matters because a gate that blocks its own evidence tools is one that gets deleted.
+#
+# ⚠️ NOT A BOUNDARY. It is a string matcher over shell; an interpreter can compose the path from
+# pieces no regex sees. It is a reflex aid against the one-command forge, which is the only shape
+# that was actually occurring.
+_RCPT_FULL  = re.compile(r"\.claude/state/[^\s'\"]*\.receipt")
+_RCPT_DIR   = re.compile(r"\.claude/state\b")
+_RCPT_BASE  = re.compile(r"\badversary-[A-Za-z0-9_-]*\.receipt\b")
+# ⚠️ THE `\s` THAT USED TO FOLLOW THE REDIRECT WAS A HOLE, and it made my own RED-proof a SUBSET:
+# every forge shape I tested happened to put a space after `>`, so `echo 9 >.claude/state/x.receipt`
+# — a ONE-COMMAND forge — sailed through a matcher I had just called 13/13. An implementation round
+# measured 10 of 15 shapes bypassing. Dropping the `\s` and excluding only the two things a redirect
+# can be that are NOT a write to a file takes it to 20/20 at ZERO extra cost: measured 0 false blocks
+# on 10 legitimate read-only commands and the SAME 11 hits in 27,299 real commands (0.040%).
+#   (?!\s*&)          `2>&1`, `>&2` — an fd DUP, not a file write.
+#   (?!\s*/dev/null)  `cat <receipt> 2>/dev/null` is READING one; blocking it would take out the
+#                     investigation tools, which is how a gate gets deleted.
+_RCPT_WRITE = re.compile(
+    r"(?<!-)>>?\|?(?!\s*&|\s*/dev/null)"   # (?<!-) keeps `git commit -m 'a -> b'` out
+    r"|\btee\b|\bsponge\b|\btruncate\b"
+    r"|\bsed\b[^|;&\n]*-i|\bperl\b[^|;&\n]*\s-\w*i"
+    r"|\b(?:cp|mv|install|ln|rsync|dd)\s"
+    r"|\bopen\s*\(|\bwrite_text\b|\bwriteFileSync\b|\bFile\.write\b|\bfputs?\b", re.I)
+
+
+def _bash_forges_receipt(cmd: str) -> str:
+    """The receipt path this command names, IF it also writes something. Empty string otherwise."""
+    cmd = cmd or ""
+    if not _RCPT_WRITE.search(cmd):
+        return ""
+    m = _RCPT_FULL.search(cmd)
+    if m:
+        return m.group(0)
+    if _RCPT_DIR.search(cmd):             # the path split by a `cd`
+        m = _RCPT_BASE.search(cmd)
+        if m:
+            return m.group(0)
+    return ""
+
+
 def _is_adversary_spawn(data: dict) -> bool:
     ti = data.get("tool_input") or {}
     tool = data.get("tool_name")
+    roster = _roster_pattern()
     if tool == "Agent":
-        return "adversary" in str(ti.get("subagent_type", "")).lower()
+        st = str(ti.get("subagent_type", ""))
+        if "adversary" in st.lower():
+            return True
+        # The PRESCRIBED inline-persona path (see _ROLE) — but a LENGTH floor, because the first
+        # version of this arm reopened on `Agent` the exact prose self-mint that was just closed on
+        # `Workflow`: MEASURED, `REFUTE this claim: kaniko needs root.` (37 chars, an ordinary
+        # research prompt) minted a full clearance with no review and no shell. A pasted roster
+        # persona is kilobytes. MEASURED on this repo's real dispatches: the two genuine inline
+        # personas are 4308 and 4606 chars; the largest prose probe is 38. Any floor in (38, 4308]
+        # separates them — 800 is 21x above the probes and 5x below the real personas.
+        _blob = f"{ti.get('description','')}\n{ti.get('prompt','')}"
+        return bool(_ROLE.search(_blob)) and len(_blob) >= _ROLE_MIN_CHARS
     if tool == "Workflow":
-        blob = f"{ti.get('script','')}{ti.get('name','')}{ti.get('prompt','')}".lower()
-        return "adversary" in blob
+        blob = f"{ti.get('script','')}{ti.get('name','')}{ti.get('prompt','')}"
+        # ⚠️ MEASURED 2026-09-07 over this repo's 11 real Workflow dispatches: the old test was a
+        # BARE SUBSTRING over agent-authored prose, so `summarise the adversary findings` MINTED a
+        # clearance with no review — a self-mint needing no shell at all, in a tool this hook
+        # already matches. In every REAL round the word appears as a roster agent TYPE
+        # (`agent: 'adversary-k8s'`), never as prose. Keying on the roster mints 10/11 — IDENTICAL
+        # to the substring, so nothing legitimate was lost — while refusing both prose probes.
+        # Fall back to the old behaviour if the roster cannot be read: a gate that cannot be
+        # cleared blocks all work, and this is a reflex aid, not a boundary.
+        if roster is not None:
+            return bool(roster.search(blob))
+        return "adversary" in blob.lower()
     return False
 
 
@@ -184,16 +311,32 @@ def main() -> int:
             pass  # fail OPEN: never block a legitimate spawn because we could not write a file
         return 0
 
-    if data.get("tool_name") not in ("Edit", "Write", "NotebookEdit", "MultiEdit"):
-        return 0
+    _tool = data.get("tool_name")
+    _ti = data.get("tool_input") or {}
 
-    path = (data.get("tool_input") or {}).get("file_path") or ""
-    root = _project_root()
-    try:
-        rel = os.path.relpath(os.path.abspath(path), os.path.abspath(root))
-    except Exception:
+    if _tool == "Bash":
+        # A shell write that NAMES the receipt. `rel` is set to the receipt's own path so this falls
+        # into the SAME receipt clause the Edit/Write arm uses below — one gate, not two.
+        _hit = _bash_forges_receipt(str(_ti.get("command", "")))
+        if not _hit:
+            return 0
+        rel = ".claude/state/" + os.path.basename(_hit)
+        if not rel.endswith(".receipt"):
+            rel += ".receipt"
+    elif _tool in ("Edit", "Write", "NotebookEdit", "MultiEdit"):
+        # NotebookEdit carries `notebook_path`, NOT `file_path` — reading only the latter left every
+        # notebook write resolving to an empty path, which fell through every arm below to return 0.
+        path = _ti.get("file_path") or _ti.get("notebook_path") or ""
+        if not path:
+            return 0
+        root = _project_root()
+        try:
+            rel = os.path.relpath(os.path.abspath(path), os.path.abspath(root))
+        except Exception:
+            return 0
+        rel = rel.replace(os.sep, "/")
+    else:
         return 0
-    rel = rel.replace(os.sep, "/")
 
     if rel.startswith("../"):          # outside the project — not ours to police
         return 0

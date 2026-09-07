@@ -156,6 +156,64 @@ else
   bad "B45: the exclude pathspec is not derived from the EXEMPT constants (enumerated-list-rot risk)"
 fi
 
+echo "--- the BASH arm: a shell write that NAMES the receipt is a FORGE ---"
+# ⚠️ EVERY literal below is COMPOSED at runtime ($RCPT), never written out. A test that spells the
+# forge is a test that cannot be created by a shell command — the gate blocks its own heredoc. That
+# is HOOK-005, and it cost a round to learn: `cat > test.sh <<EOF ... EOF` carries the string.
+RCPT=".claude/state/adversary-$SID.receipt"
+bash_cmd() { python3 -c 'import json,sys; print(json.dumps({"session_id":sys.argv[1],"tool_name":"Bash","tool_input":{"command":sys.argv[2]}}))' "$SID" "$1"; }
+
+rm -f "$RECEIPT"
+# THE SHAPE THAT SHIPPED BROKEN: the first version required WHITESPACE after the redirect, so this
+# one-command forge sailed through a matcher that had just been called 13/13. The RED-proof was a
+# SUBSET — every probe happened to type a space.
+probe 2 "bash: redirect with NO SPACE -> BLOCK (the subset-RED-proof hole)"  "$(bash_cmd "echo 1757000000 >$RCPT")"
+probe 2 "bash: redirect WITH a space -> BLOCK"                               "$(bash_cmd "echo 1757000000 > $RCPT")"
+probe 2 "bash: append, no space -> BLOCK"                                    "$(bash_cmd "echo 1757000000 >>$RCPT")"
+probe 2 "bash: \$VAR indirection -> BLOCK (adjacency cannot see this; the conjunction can)" \
+      "$(bash_cmd "R=$RCPT; echo 1757000000 > \"\$R\"")"
+probe 2 "bash: cd-split path -> BLOCK"                                       "$(bash_cmd "cd .claude/state && echo 1757000000 >$(basename "$RCPT")")"
+probe 2 "bash: python heredoc open() -> BLOCK (this repo's DOMINANT edit idiom)" \
+      "$(bash_cmd "python3 - <<'X'
+open('$RCPT','w').write('1757000000')
+X")"
+probe 2 "bash: node writeFileSync -> BLOCK"                                  "$(bash_cmd "node -e \"require('fs').writeFileSync('$RCPT','1')\"")"
+
+echo "--- ...but READ-ONLY investigation must stay open, or the gate gets deleted ---"
+probe 0 "bash: cat the receipt -> ALLOW"                    "$(bash_cmd "cat $RCPT")"
+probe 0 "bash: cat with 2>/dev/null -> ALLOW (a redirect that is not a write)" "$(bash_cmd "cat $RCPT 2>/dev/null")"
+probe 0 "bash: rm the receipt -> ALLOW (removing one makes the gate STRICTER)" "$(bash_cmd "rm -f $RCPT")"
+probe 0 "bash: an ordinary redirect elsewhere -> ALLOW"     "$(bash_cmd "make ci > /tmp/ci.log 2>&1")"
+probe 0 "bash: a commit message containing an arrow -> ALLOW" "$(bash_cmd "git commit -m 'fix: a -> b'")"
+
+echo "--- the receipt VALUE must be a plausible PAST timestamp ---"
+# A 3-byte `inf` used to clear this gate FOREVER, past every re-arm.
+for v in inf 1e999 nan "" -5 "$(( $(date +%s) + 86400 ))"; do
+  printf '%s' "$v" > "$RECEIPT"
+  probe 2 "receipt=$(printf '%s' "${v:-<empty>}" | cut -c1-12) -> BLOCK (not a plausible past epoch)" "$(gwrite)"
+done
+rm -f "$RECEIPT"
+
+echo "--- minting: a ROSTER agent clears; PROSE does not ---"
+mint_probe() { # <label> <should-mint 0|1> <json>
+  rm -f "$TMP/.claude/state/adversary-mint.receipt"
+  printf '%s' "$3" | CLAUDE_PROJECT_DIR="$TMP" python3 "$HOOK" >/dev/null 2>&1
+  if [ -f "$TMP/.claude/state/adversary-mint.receipt" ]; then got=1; else got=0; fi
+  if [ "$got" = "$2" ]; then ok "$1"; else bad "$1 (minted=$got want=$2)"; fi
+}
+mint_probe "Workflow naming a roster agent -> MINTS" 1 \
+  '{"session_id":"mint","tool_name":"Workflow","tool_input":{"script":"const L=[{a: adversary-docker }]"}}'
+mint_probe "Workflow PROSE 'summarise the adversary findings' -> mints NOTHING" 0 \
+  '{"session_id":"mint","tool_name":"Workflow","tool_input":{"prompt":"summarise the adversary findings"}}'
+mint_probe "Agent, roster subagent_type -> MINTS" 1 \
+  '{"session_id":"mint","tool_name":"Agent","tool_input":{"subagent_type":"vks-adversary"}}'
+mint_probe "Agent, 37 chars of prose -> mints NOTHING (it reopened the hole once)" 0 \
+  '{"session_id":"mint","tool_name":"Agent","tool_input":{"subagent_type":"general-purpose","prompt":"REFUTE this claim: kaniko needs root."}}'
+
+echo "--- NotebookEdit carries notebook_path, not file_path ---"
+probe 2 "NotebookEdit to a guarded path -> BLOCK (it used to resolve EMPTY and fall through)" \
+  "$(printf '{"session_id":"%s","tool_name":"NotebookEdit","tool_input":{"notebook_path":"%s/scripts/n.ipynb"}}' "$SID" "$TMP")"
+
 if [ "$fail" -eq 0 ]; then echo "PASS: adversary-first gate re-arms on every commit"
 else echo "FAIL: re-arm gate has a hole" >&2; fi
 exit "$fail"
