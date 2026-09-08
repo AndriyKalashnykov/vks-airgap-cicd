@@ -591,9 +591,18 @@ _cluster="not reachable (or KUBECONFIG unset)"
 # I twice mis-diagnosed this as a network/address problem and "fixed" it twice without fixing it;
 # every standalone probe was fast because an interactive shell's stdin is a terminal.
   # `_no_probe_snapshot` FIRST: this is a live cluster call, and the banner claims none was made.
-if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl \
-   && timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s version -o json >/dev/null 2>&1 </dev/null; then
-  _cluster="reachable — context '$(kubectl config current-context </dev/null 2>/dev/null || echo '?')'"
+if [ "$_no_probe_snapshot" != 1 ] && [ -n "${KUBECONFIG:-}" ] && have kubectl; then
+  # ⚠️ CAPTURE THE EXIT CODE. The default above claims "not reachable", which is a statement about
+  # the WORLD — and it is false when our OWN budget expired: `timeout` exits 124 without the server
+  # having said anything at all. MEASURED (B544): with the outer budget equal to `--request-timeout`
+  # the process is killed before kubectl can print, so "not reachable" was being asserted on the
+  # strength of us not waiting. Say what we know instead.
+  timeout "${CREDS_KUBE_TIMEOUT_SECONDS:-3}" kubectl --request-timeout=3s version -o json \
+    >/dev/null 2>&1 </dev/null && _reach_rc=0 || _reach_rc=$?
+  case "$_reach_rc" in
+    0)       _cluster="reachable — context '$(kubectl config current-context </dev/null 2>/dev/null || echo '?')'" ;;
+    124|137) _cluster="UNDETERMINED — my own ${CREDS_KUBE_TIMEOUT_SECONDS:-3}s budget expired before it answered (rc=${_reach_rc}); this is not a statement about the cluster" ;;
+  esac
 fi
 
 # CANONICAL PROVENANCE TOKEN — the machine-checkable claim, independent of any wording around it.
@@ -1137,7 +1146,32 @@ _rejected_why() {
 # A second hand-rolled taxonomy was REFUTED (round 2026-09-07): a 4-value enum drops five of the
 # eight classes, and `check-classifier-consumers` exists precisely to stop that.
 _kube_classify() {
-  local _e="$1" _p="$2"
+  local _e="$1" _p="$2" _rc="${3:-}"
+  # 🔴 OUR OWN BUDGET EXPIRING IS NOT A FACT ABOUT THE LAB — branch on it BEFORE the classifier.
+  # `timeout` exits 124 on expiry (137 with -s KILL/-k). MEASURED: with the outer budget equal to
+  # `--request-timeout`, kubectl is killed before it can print the summary line the UNREACHABLE arm
+  # matches, so the errfile arrives EMPTY and the classifier correctly says UNKNOWN — a true answer
+  # to the wrong question. NINE call sites in this file set outer == inner, so this was the normal
+  # case, not an edge one.
+  #
+  # ⚠️ WHY IT IS THE EXIT CODE AND NOT A BIGGER BUDGET. A round measured that no budget is
+  # derivable: against an unreachable endpoint kubectl emitted 6 stderr lines by 25s, but against a
+  # blackhole (10.255.255.1:443) it emitted ZERO BYTES at 60s — `--request-timeout` bounds nothing on
+  # that fault shape. Two points disagreeing by >2x is not a model. The exit code is deterministic
+  # and fault-independent and needs no retry knowledge.
+  #
+  # ⚠️ AND IT IS THE SSO GUARANTEE. This arm must NEVER fall through to UNAUTHORIZED, whose remedy
+  # names a vSphere SSO bind — and vCenter locks out PERMANENTLY after THREE failures. Keying on the
+  # exit code guarantees that regardless of what the fault happens to write to stderr, which no
+  # string-matching model can promise.
+  case "$_rc" in
+    124|137)
+      _kube_tok="<could not ask>"
+      _kube_state="${_p} — MY OWN timeout expired before the server answered (rc=${_rc}). This says
+      NOTHING about the lab: give it longer with CREDS_KUBE_TIMEOUT_SECONDS (or CREDS_K8S_TIMEOUT
+      for the Supervisor reads) and re-run."
+      return 0 ;;
+  esac
   case "$(classify_kube_failure "$_e")" in
     FORBIDDEN)           _kube_tok="<forbidden>";     _kube_state="${_p} — FORBIDDEN: this identity may not read that in '${VKS_NAMESPACE:-?}'. Ask your platform admin." ;;
     # ⚠️ "Re-run: make vks-login" WAS A NO-OP FOR THIS FAILURE, and it cost a real session.
@@ -1232,7 +1266,7 @@ if harbor_username_is_robot "${HARBOR_USERNAME:-}"; then
           -l appplatform.vmware.com/serviceId=harbor -o name 2>"$_h_err")" && _h_rc=0 || _h_rc=$?
       _h_ns="${_h_nsraw%%$'\n'*}"; _h_ns="${_h_ns#namespace/}"
       if [ "$_h_rc" -ne 0 ]; then
-        _kube_classify "$_h_err" "could not ask the Supervisor for the Harbor service namespace"
+        _kube_classify "$_h_err" "could not ask the Supervisor for the Harbor service namespace" "$_h_rc"
         _h_admin_pw="$_kube_tok"; _h_admin_why="$_kube_state"
       elif [ -z "$_h_ns" ]; then
         _h_admin_pw="<no harbor ns>"
@@ -1250,7 +1284,7 @@ if harbor_username_is_robot "${HARBOR_USERNAME:-}"; then
           --request-timeout="${KUBECTL_REQUEST_TIMEOUT:-5s}" -n "$_h_ns" get secret harbor-core-ver-1 \
           -o jsonpath='{.data.HARBOR_ADMIN_PASSWORD}' 2>"$_h_err")" && _h_rc2=0 || _h_rc2=$?
       if [ "$_h_rc2" -ne 0 ]; then
-        _kube_classify "$_h_err" "could not read harbor-core-ver-1 in ${_h_ns}"
+        _kube_classify "$_h_err" "could not read harbor-core-ver-1 in ${_h_ns}" "${_h_rc2:-${_h_rc:-}}"
         _h_admin_pw="$_kube_tok"; _h_admin_why="$_kube_state"
       elif [ -z "$_h_enc" ]; then
         # rc=0 and nothing back: the SECRET is there, the KEY is not. Do not say kubectl failed.
@@ -1856,7 +1890,7 @@ else
                    -n "$VKS_NAMESPACE" get secret -o name </dev/null 2>"$_lab_err")" && _ssh_rc=0 || _ssh_rc=$?
     if [ "$_ssh_rc" -ne 0 ]; then
       # THE WHOLE POINT: name WHY we could not ask, so it is never mistaken for "there is none".
-      _kube_classify "$_lab_err" "could not ask"; _ssh_tok="$_kube_tok"; _ssh_state="$_kube_state"
+      _kube_classify "$_lab_err" "could not ask" "$_ssh_rc"; _ssh_tok="$_kube_tok"; _ssh_state="$_kube_state"
     else
       # SCOPE TO THIS CLUSTER (B-scope). MEASURED 2026-09-05: with cicd-gc1 and cicd-gc2 both in
       # namespace 'cicd', the old `| head -1` picked cicd-gc1's secret ALPHABETICALLY and the report
@@ -1899,7 +1933,7 @@ else
         # purity-check before decoding, or a partial decode ships a WRONG password.
         case "$_ssh_b64" in ''|*[!A-Za-z0-9+/=]*) _ssh_b64="" ;; esac
         if [ "$_ssh_rc" -ne 0 ]; then
-          _kube_classify "$_lab_err" "could not read ${_ssh_sec}"; _ssh_tok="$_kube_tok"; _ssh_state="$_kube_state"
+          _kube_classify "$_lab_err" "could not read ${_ssh_sec}" "$_ssh_rc"; _ssh_tok="$_kube_tok"; _ssh_state="$_kube_state"
         elif [ -z "$_ssh_b64" ]; then
           _ssh_tok="<no key>"; _ssh_state="${_ssh_sec} carries no usable ssh-passwordkey"
         else
