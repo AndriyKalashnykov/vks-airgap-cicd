@@ -80,6 +80,14 @@ export VKS_SERVICE_CIDR="${VKS_SERVICE_CIDR:-172.21.0.0/16}"
 # the prefixed name always agreed. Collapsed to one name; do not reintroduce a second.
 SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kubeconfig")"   # lib/os.sh: ONE resolver, first that EXISTS
 [ -f "$SUP" ] || { supervisor_kubeconfig_hint >&2; die "no Supervisor kubeconfig — see the search order above"; }
+# 🔴 SAY WHICH ESTATE. This script CREATES a guest cluster on whichever Supervisor the resolver
+# picked from a candidate ladder (B547 mode 2). A different lab's kubeconfig answers and
+# authenticates just as well, so every downstream check would go green against the wrong estate.
+# Reading the server out of the FILE costs nothing (state_kubeconfig_server parses it -- no network,
+# no RBAC) and it is the only thing here that names the estate rather than the cluster.
+_sup_srv="$(state_kubeconfig_server "$SUP" 2>/dev/null || true)"
+log_info "Supervisor resolved from: ${SUP}"
+log_info "  which points at: ${_sup_srv:-<could not read a server URL from that file>}"
 k() { kubectl --kubeconfig "$SUP" "$@"; }
 
 log_info "cluster:      ${VKS_NAMESPACE}/${VKS_CLUSTER_NAME}"
