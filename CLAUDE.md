@@ -1036,124 +1036,79 @@ Harbor path (`apps/javawebapp`), the Tekton objects, the deploy dir (`deploy/jav
 ingress host (`javawebapp.vks.local`). **Git history and `docs/reviews/*` still say `webui`** — that
 is what those PRs actually touched, and rewriting them would falsify the record.
 
-## ▶️ HANDOFF 2026-09-07 — five designs of mine were refuted before they shipped; four rows closed
+## ▶️ HANDOFF 2026-09-08 — an air-gap breach closed, and FOUR of my designs refuted before they shipped
 
 **ONE handoff section; the next session OVERWRITES it.** Facts → the docs. Tasks →
 [`BACKLOG.md`](BACKLOG.md). History → git. Only "what is in flight and what to distrust" here.
 
 ### 🔴 DISTRUST FIRST
 
-- **I ran `git reset --hard` on a DIRTY tree and destroyed ~90 minutes of my own work** — seven
-  files, never committed, no stash, nothing in the reflog. The command's stated purpose was a
-  READ-ONLY freshness check; the reset was trailing boilerplate copied from the canonical
-  start-a-branch recipe, wearing `-q 2>/dev/null || true` so every channel that could have objected
-  was closed in the same line. **An empty `git status` right after is the receipt, not reassurance.**
-  It was fully recovered only because every edit had been made as an exact-string `python3`
-  transform still in context — **luck, not a method.** The standing rule said "a tree I don't own";
-  ownership is not the discriminator, a **dirty tree** is. `git switch -c` carries a dirty tree free,
-  so there is never a reason to hold uncommitted work through a long gate run.
-- **FIVE of my designs were refuted by adversary rounds this session, all before shipping.** That is
-  the loop working, and it is also the reason not to trust an unreviewed design of mine:
-  the B539 scope (blind on three axes at once), the B531 preflight (inverts on the tenant, ~96%
-  false-RED), the B535 gate (**0.35%** catch rate), the B538 hoist (a coin flip that lands the
-  residual at the worst registry position), and my own "close B539 as no-longer-motivated".
-- **TWO of my measuring instruments lied, in opposite directions.** An inverse control using
-  `ARGOCD_LB_IP` was **vacuous** (nothing sets it, so it could not discriminate) and I nearly banked
-  it; and a bloat measurement **wrote its scratch file inside the tree it was measuring**, so
-  `git add -A` counted it and two apps reported more files pushed than staged. Both tells were the
-  instrument disagreeing with itself.
-- **`gh pr checks` shows `static-check: skipping` on every PR — that is BY DESIGN, not a hole.** The
-  gates run in **`static-check-fast`** (~1m47s). Verify a gate by grepping THAT job's log for its own
-  output line, not by reading the checks list.
+- **THERE ARE TWO `grep`s ON THIS BOX, and they disagree.** The interactive shell resolves `grep` to
+  **ugrep 7.8.4**, which honours `\t` in an ERE; a script gets **GNU grep 3.11**, which does NOT —
+  it matches a literal `t`. Measured on the same file with the same pattern: **ugrep 4 matches, GNU
+  grep 0**. I verified a new gate's pattern at the prompt, watched it find 4, and shipped it — and
+  in the test it found 0 and reported `ok — no recipe re-pins` over a Makefile with the defect
+  deliberately reinstated. **Verify any pattern destined for a script with `bash -c`, never at the
+  prompt**, and never write `\t` in a portable ERE.
+- **`static-check` does NOT run on a PR** (`ci.yml:199` gates it on `schedule || workflow_dispatch`),
+  and **nothing invokes `static-check-pr`** although four comments say a PR runs it — filed as
+  **B571**. The per-PR job is `static-check-fast`, which contains **neither `lint` nor
+  `test-scripts-fast`**. So a green PR check is not evidence for the change in it. Standing rule G.4
+  (`docs/matrix-standing-rules.md:375`) exists for this, and **skipping it reddened `main` twice
+  today** — 3× SC2016, then a 21/21 → 12/9 test regression.
+- **Three of my own RED-proofs were vacuous, each caught only by checking the instrument.** A `sed`
+  mutation that silently did not match (reported 21/21 as proof); a probe using
+  `printf "%s" "$(...)"`, where `set -e` does not fire, so it passed 15/15 with the fix removed; and
+  a guard whose grep was dead (the ugrep split above). **Verify the mutation LANDED, then read WHICH
+  case failed.** A non-zero exit is not a proof.
+- **An adversary's prescribed FIX is a separate claim from the bug it found**, and two were wrong
+  this session: the B569 round prescribed RED-proving via `make -n` diffing (impossible — `make -n`
+  prints recipe TEXT and the pin is an `export`, so it is byte-identical by design in BOTH the fixed
+  and broken tree), and the B564 round's `cmd && exit 0` sketch worried me under `bash -e` until I
+  measured it safe. Both findings were right; both prescriptions needed checking.
 
-### Merged this session (5 PRs)
+### Merged today — **32 PRs** (#1152–#1183), the ones that decide what comes next
 
 | PR | what |
 |---|---|
-| **#1141** | `check-install-chain` — `CLAUDE.md:649` carried a **5-of-12** stale `install-all` chain, including `build-apps`, byte-identical since before 2026-08-27 and **a recurrence** of a 2026-07-14 fix. My first implementation was GREEN over it because `sed 's/→/ -> /g'` yields **double** spaces. |
-| **#1142** | `ARGOCD_MECHANISM`/`ARGOCD_REGISTER` were absent from `load_env`'s selector snapshot, so `.env` beat a per-run prefix. The cost was **e2e fidelity, not a crash**: `91-e2e-tenant-mechanism.sh` passes `api` to test the tenant path, `.env` overrode it to `auto`, and it still PASSED while testing the wrong branch. Both `70` die sites now name the SCENARIO — one had been prescribing a remedy that silently no-ops. |
-| **#1143** | six per-app `.gitignore` files + `check-app-gitignore` + `make app-gitignore-show`. Measured: the seeded Gitea repos carried **845 of 911** staged files (601 nodejs, 236 dotnet, one 15 MB ELF); **0** false positives. Its implementation round then **refuted my gate** — see below. |
+| **#1178** | **the air-gap breach itself**: Tekton injects `place-scripts` from a hardcoded `-shell-image` FLAG STRING, so `cgr.dev/chainguard/busybox` was pulled **from the public internet on every TaskRun**. Single-sourced `MIRROR_REGISTRY_HOSTS`; added the `source` line without which the rewrite corrupts every path (`gcr.io/x/y` → `gcr.ioH/xH/y`). |
+| **#1179** | **B568** — the complementary gate: which host-shaped refs are **NOT** covered? Runs in `10-mirror-pull.sh`, not `static-check` (`bundle/` is gitignored, so CI would scan an empty dir and pass vacuously). Its own round then found it **fail-open** (`chmod 000` → `rc=0, "OK"`) and a **truncation forging an exemption** (`EU.gcr.io/…` reported as `gcr.io`). Both fixed; suite 15 → 21. |
+| **#1180 · #1182** | B564's stated mechanism measured FALSE; four rounds' verdicts recorded; **B570/B571/B572** filed. |
+| **#1181** | **B569** — `make e2e-kind INGRESS_CONTROLLER=traefik` silently ran istio. A goal-list assignment is a sub-make command-line variable, which outranks the caller's own. **Shipped by me in #1170**, 13 lines below a comment condemning that exact form. |
+| **#1183** | **B564 Stage 1** — the jobs API lags the `needs` context (measured 5.2–7.3s, 4 events); re-read once on refuse. Safe because **monotone**: it can convert a refuse into a pass and never a pass into a refuse. |
 
-### The implementation round on #1143 is why two rounds are not one
+### The rounds are the story: 4 dispatched, 4 substantive, 2 designs killed
 
-It cleared the **content** half under measurement and refuted the **gate** half. The HIGH is worth
-carrying forward as a pattern: the gate asserted the **INDEX** (`git ls-files`) while `push_repo`'s
-`cp -a` copies the **DISK**. Measured — a `.gitignore` **tracked but deleted locally** returned
-**rc=0** printing *"the seeded repos are protected"* while the 15 MB ELF staged. My header had
-correctly refuted `test -f` *alone* and then drawn the wrong conclusion: the answer is **both**.
-And the blind state **is the seeding state** — impossible in CI (fresh checkout ⇒ index == disk),
-routine on the dirty tree where `make seed-gitea` actually runs.
+- **B561 REFUTED** — `state_check` discriminates in **1 of 3 reachable cells**, and the two it misses
+  are the DEFAULT posture (`.env.example` ships `KUBECONFIG` commented; on a real lab
+  `30-vks-login.sh` writes it **into `.env.state` itself**, so the selector lives inside the file
+  being judged). All three permissive arms are deliberate and adversary-forced. **Ship a PRINTER
+  keyed on the FILE, not a gate keyed on the stamp.**
+- **The verdict-token consumer REFUTED** — it could never fire (all three SKIP arms unreachable at
+  its only call site). But it surfaced B569, which was real.
+- ⛔ **The one design to never build**: cross-checking the `needs` context in `ci-pass`. Replay the
+  founding incident plus the measured lag and it goes **green over a failed security scan**.
 
-Also fixed there: a registry without a trailing newline silently dropped its **last** row (the app
-contributing 236 files) while reporting OK; `APPS_REGISTRY` was ignored, making the gate undrivable
-by `test-registry-fail-open.sh`; and the **secret** half of the class was left open — the repos are
-`"private":false` and force-pushed, and the root's secret patterns are unanchored, so they are
-absent at fresh-repo root. All six files now mirror them, proven in both directions.
+### NOT done — next units
 
-⚠️ **The fix broke my own fixture and the vacuity guard caught it**: `mkfix` copied only
-`lib/os.sh`, but the gate now sources `lib/apps.sh` → `lib/mirror.sh`. A missing `source` under
-`set -uo pipefail` (no `-e`) does not abort — `app_rows` was undefined, the loop read nothing, `n`
-stayed 0. Without that guard the cases would have gone **green over a gate that parsed nothing**.
-
-### The session-end round found a REGRESSION I had already merged
-
-It refuted two of the three PRs **inside the half each commit message declared fixed**. Both are
-now corrected, but the pattern matters more than the fixes:
-
-- **#1143's secret patterns REVERSED a deliberate protection.** gitignore precedence gives the
-  **deeper** file priority, so my per-app `*.key` **overrode** the root's
-  `!**/testdata/**/*.key` — a carve-out present since the scaffold commit so crypto/TLS fixtures
-  can be committed. The per-app files did not merely fail to protect the seeded repo; they
-  **removed protection in this repo**, and `git add` on a new `testdata/*.key` would silently do
-  nothing. My in-file comment *and* `docs/adding-an-app.md` both claimed "negation included" —
-  only `!.env.example` was, and the doc propagated the omission to every future app.
-- **#1142's new die-site remedies were silent no-ops in the case #1142 itself created.** `sed -i
-  .env` exits 0 and changes nothing when the pin is exported rather than a live `.env` line — and
-  #1142 is precisely what made an exported value outrank `.env`. I relocated the wrong-cause
-  failure from the target to the remedy, in the commit that claimed to fix it.
-- **#1142's RED-proof in `91` is vacuous under its own target's default.** `E2E_SKIP_DOTENV ?= 1`
-  means `.env` is never sourced and both vars ship commented, so the assertion passes with or
-  without the fix. "The tenant e2e was testing the wrong path" holds only at
-  `E2E_SKIP_DOTENV=0`. The real RED-proof is `test-insecure-toggle-snapshot.sh`.
-- **#1141's three negative controls were vacuous** (the files were never copied into the fixture,
-  so they asserted the absence of a file), one exclusion was **dead code**, and the gate
-  false-REDs any line mentioning `install-all` that carries an unrelated arrow chain — whose only
-  remedy would be rewriting a *correct* sentence.
-
-⚠️ **And my first attempt at fixing those controls was ALSO vacuous** — the planted lines did not
-contain the literal `install-all`, so the producer never saw them. I caught it only by verifying
-the mutation landed (1 → 0 occurrences) before believing the green. **Verify the mutation, then
-the verdict** — three times this session that step was the only thing between me and a false green.
-
-### NOT done — next units, in the order the rounds prescribed
-
-- **B538 — run the ~1-minute probe FIRST, before building either fix.** The mechanism is now settled
-  from Gitea v1.27.2 source: resolution happens in the **`push_update`** queue, not the delivery
-  queue, which kills three candidate fixes by construction. What is missing is the **window size**. A
-  skeleton with its three open questions is drafted at `/tmp/probe-gitea-hook-window.sh` — it is NOT
-  in the repo, deliberately: the Gitea log source, the argv-safe auth, and cleanup-on-every-exit are
-  unsettled. ⚠️ The row's re-motivation is stronger than the row says: `seed-gitea` runs **before**
-  `install-tekton`/`configure-tekton`, so a seed-fired run uses the **previous** run's Tekton
-  definitions and `build-apps`' skip predicate cannot tell.
-- **B535 residuals — TWO, not one.** (a) `check-app-gitignore` is **not declared in
-  `test-gate-vacuity.sh`** (0 references), so corpus starvation for it is unaudited — and picking
-  its corpus is **not mechanical**: starving `apps/` also empties `registry.tsv`, so the gate would
-  go RED via its **vacuity guard** rather than the missing-file check (the "which guard fired"
-  trap). Needs its own idea round. (b) `push_repo`'s second call site (`:378`, the `yq`-rendered
-  `$deploy_src` outside the repo) is covered by none of this and `deploy/` has no `.gitignore` —
-  same secret-at-fresh-repo-root mechanism, measured benign today (18 files, all tracked).
-- **B531 residual** — `check-env-clobber` still reads `.env.example` only, so it is blind to the
-  operator's own `.env`; `ARGOCD_PROJECT`/`ARGOCD_OPTS` are also passed as env prefixes by `91` and
-  also absent from the selector list. **Do NOT report `.env` drift as handled.**
-- Still open and untouched: **B523** (needs a destructive experiment), **B525**, **B527**, **B532**,
-  **B534**, **B536**.
+- **B570** (`.env.kind` bypasses `state_check` at BOTH layers — measured with no `.env.state` at all:
+  `state_sourced=0` and the KinD values won anyway). Needs an idea round. **Do not fold into B561.**
+- **B571** (`static-check-pr` invoked by nothing) and **B572** (~5 uninstrumented rc=0 skip arms).
+- **B561's printer** and **B564 Stage 2** — both scoped, both explicitly gated on evidence that has
+  not arrived (Stage 2 only if the lag recurs; on current incidence you would be building against
+  one day's GitHub weather).
+- Untouched and open, in rough order of bite: **B563** (no running-image provenance assertion for our
+  own workloads on ANY path — the sibling of the breach fixed today), **B484** (a fail-open air-gap
+  check where Forbidden reads as absent), **B498** (Kaniko is ARCHIVED and the maintained fork
+  publishes no image), **B480** (the two Istio install paths silently ADOPT each other's objects),
+  **B565**, **B523**.
+  ⚠️ B532 and B536 are **SHIPPED**, not pending — I nearly listed them here off memory; the row
+  headings say so.
 
 ### Lab
 
-Green throughout: **`make creds` 12/12 serving**, guest cluster `cicd-gc3`. The previous handoff's
-`/etc/hosts` item is **STALE** — it reads `192.168.101.134` and matches the current ingress LB.
-The Supervisor token is still expired, so Supervisor-only targets need `make vks-login` first
-(⚠️ vCenter SSO locks out permanently after 3 failed attempts — never guess).
+Not touched this session. The Supervisor token is still expired, so Supervisor-only targets need
+`make vks-login` first — ⚠️ vCenter SSO locks out **permanently after 3 failed attempts**; never guess.
 
 ## Backlog / resume state → [`BACKLOG.md`](BACKLOG.md)
 
