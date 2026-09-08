@@ -97,6 +97,45 @@ done
 # new manifest nor the old one.
 mirror_prune_manifests "$MANIFEST_DIR" "${!MANIFESTS[@]}"
 
+# ---- 1c. Refuse to carry a manifest naming a registry NOTHING will mirror ----
+# B568, from the cgr.dev incident: Tekton injects a `place-scripts` init container from a hardcoded
+# `-shell-image` FLAG STRING, not an `image:` field. Neither the mirror alternation nor the
+# install-time rewrite carried `cgr.dev`, so on a LIVE air-gapped lab every TaskRun pulled busybox
+# from the public internet -- and nothing anywhere could have noticed, because every check in this
+# repo either searched for hosts we already knew or looked at `image:` fields.
+#
+# This asks the COMPLEMENTARY question -- which host-shaped refs are NOT covered? -- so the host
+# nobody has thought of is exactly what it reports.
+#
+# ⚠️ IT RUNS HERE, NOT IN static-check. `bundle/` is gitignored (`git ls-files bundle/` = 0), so in
+# CI it would scan an empty directory and pass VACUOUSLY -- the same refutation 96-verify-gateway-
+# image.sh's header records. Here the manifests are guaranteed present (asserted above) and the
+# operator is still on the internet side, where an unmirrored host can actually be fixed.
+# shellcheck source=scripts/lib/hostscan.sh
+. "${SCRIPT_DIR}/lib/hostscan.sh"
+# THE DENOMINATOR FIRST. `hostscan_unhandled` tolerates I/O errors by design (2>/dev/null, || true),
+# which is right -- and is PRECISELY what makes an unreadable corpus indistinguishable from a clean
+# one. MEASURED: `chmod 000` on the single file holding a real violation gave an empty result and
+# rc=0, i.e. this gate printed OK over the exact air-gap breach it exists to catch. A plausible
+# trigger on the internet-side box is a root-owned leftover from an earlier `sudo` run, or the
+# uid-1000-vs-1001 asymmetry this repo already documents for the jump-box containers.
+_nfiles="$(hostscan_nfiles "$MANIFEST_DIR")"
+_nrefs="$(hostscan_nrefs "$MANIFEST_DIR")"
+[ "${_nfiles:-0}" -gt 0 ] || die "manifest registry-host scan read ZERO files from ${MANIFEST_DIR} — refusing rather than reporting a vacuous OK"
+[ "${_nrefs:-0}" -gt 0 ] || die "manifest registry-host scan found ZERO tagged image refs in ${_nfiles} file(s) — the carried manifests are full of them (measured: 15), so this means the corpus is unreadable, not clean"
+_unhandled="$(hostscan_unhandled "$MANIFEST_DIR")"
+if [ -n "$_unhandled" ]; then
+  log_error "carried manifests name registry host(s) that NOTHING will mirror or rewrite:"
+  printf '%s\n' "$_unhandled" | while IFS=$'\t' read -r _h _n _ex; do
+    log_error "  ${_h}  (${_n} ref(s), e.g. ${_ex})"
+  done
+  log_error "  Add the host to MIRROR_REGISTRY_HOSTS (lib/mirror.sh) so it is mirrored AND rewritten,"
+  log_error "  or, if it genuinely cannot execute on this cluster, add it to HOSTSCAN_ALLOW_DEFAULT"
+  log_error "  (lib/hostscan.sh) WITH the reason and the measurement that supports it."
+  die "refusing to build a bundle that would pull from the public internet at run time"
+fi
+log_info "manifest registry hosts: OK — ${_nrefs} tagged ref(s) across ${_nfiles} file(s), all on mirrored hosts"
+
 # ---- 2. Collect the full image list ----
 mapfile -t IMAGES < <(mirror_collect_images)
 [ "${#IMAGES[@]}" -gt 0 ] || die "no images collected (empty images.txt and no manifest images)"
