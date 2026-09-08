@@ -934,7 +934,15 @@ _reach_ingress() {
     # right to isolate the arm, and the status is the honest question.
     _raw="$(timeout "${CREDS_PROBE_TIMEOUT_SECONDS:-2}" getent hosts "$_h" 2>/dev/null)" || _grc=$?
     [ "$_grc" -eq 0 ] || { printf 'no DNS here'; return; }
-    _res="$(printf '%s\n' "$_raw" | awk 'NR==1{print $1}')"
+    # ⚠️ ALL ADDRESSES, NOT `NR==1`. `getent hosts` returns every family, and the ORDER is the
+    # resolver's -- on a GitHub runner `localhost` comes back `::1` FIRST. Taking only the first row
+    # compared an IPv6 address against an IPv4 ingress and printed `stale DNS`, which is precisely
+    # the INVENTED FAULT the comment below says this arm must never produce. It is not a test
+    # artifact: on any dual-stack operator box whose ingress name resolves IPv6-first, `make creds`
+    # would tell them their DNS is stale when it is fine, and send them to fix nothing.
+    # MEASURED 2026-09-08: with a stub returning `::1` then `127.0.0.1`, `_ing=127.0.0.1` reported
+    # `stale DNS`; with this fix it is silent, and a genuinely different address still reports stale.
+    _res="$(printf '%s\n' "$_raw" | awk '{print $1}')"
     # Only claim STALE when we actually know the ingress address. If `$_ing` is a NAME rather than an
     # address, or is empty, comparing them would invent a fault -- say nothing and fall through to
     # the route probe, which is still a true statement about the LB.
@@ -945,7 +953,9 @@ _reach_ingress() {
     case "$_res" in '') : ;; *)
       case "$_ing" in
         *[!0-9.]*|'') : ;;
-        *) [ "$_res" = "$_ing" ] || { printf 'stale DNS'; return; } ;;
+        # -x -F: whole line, fixed string. A substring or regex compare would make `10.0.0.1`
+        # match `10.0.0.10`, and an address is not a pattern.
+        *) printf '%s\n' "$_res" | grep -qxF "$_ing" || { printf 'stale DNS'; return; } ;;
       esac ;;
     esac
   fi

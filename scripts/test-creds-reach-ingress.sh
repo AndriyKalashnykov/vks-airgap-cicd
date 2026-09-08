@@ -196,6 +196,26 @@ ck "resolves to a DIFFERENT address than the ingress -> stale DNS" \
 # and the state would be worthless — a verdict that cannot be false is not a verdict.
 ck "resolves to the ingress itself -> NOT stale (falls through to the route probe)" \
    "$(PATH="$_REAL_PATH" bash -c 'eval "$1"; CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _ing=127.0.0.1 _ing_live=1 _reach_ingress localhost' _ "$_fn")" "silent"
+
+# ⚠️ THE CASE ABOVE USES THE REAL RESOLVER, AND THAT MADE IT ENVIRONMENT-DEPENDENT: it passed on
+# this box and FAILED on a GitHub runner, where `localhost` resolves `::1` FIRST. It was invisible
+# for weeks because the fast set does not run per-PR (B571) and the weekly was already red for an
+# unrelated reason (B573) -- two layers of masking over a real operator-facing bug.
+#
+# `getent hosts` returns EVERY family and the order is the resolver's, so the product must compare
+# against ALL of them. The cases below pin that with a DETERMINISTIC multi-family stub rather than
+# whatever the host happens to answer. RED-proof: restore `awk 'NR==1{print $1}'` in creds.sh and
+# the first of the two goes red.
+mkdir -p "$T/bin6"
+# shellcheck disable=SC2016  # single quotes REQUIRED: "$2" is the STUB's positional, not ours.
+printf '#!/bin/sh\nprintf "::1             %%s\\n127.0.0.1       %%s\\n" "$2" "$2"\n' > "$T/bin6/getent"
+chmod +x "$T/bin6/getent"
+ck "IPv6 FIRST, ingress is the IPv4 -> NOT stale (all families are compared, not just the first)" \
+   "$(PATH="$T/bin6:$_REAL_PATH" bash -c 'eval "$1"; CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _ing=127.0.0.1 _ing_live=1 _reach_ingress localhost' _ "$_fn")" "silent"
+# THE CONTROL: the arm must still fire when NO family matches, or the fix above would have made the
+# verdict unfalsifiable — a check that cannot say `stale DNS` is not a check.
+ck "IPv6 FIRST, ingress matches NEITHER family -> still stale DNS" \
+   "$(PATH="$T/bin6:$_REAL_PATH" bash -c 'eval "$1"; CREDS_NO_PROBE=0 CREDS_PROBE_TIMEOUT_SECONDS=5 _ing=203.0.113.9 _ing_live=1 _reach_ingress localhost' _ "$_fn")" "stale DNS"
 # An ingress given as a NAME cannot be compared to a resolved ADDRESS. Claiming `stale DNS` there
 # would INVENT a fault, so the guard must fall through and let the route probe speak instead.
 ck "ingress is a NAME, not an address -> must NOT claim stale" \
