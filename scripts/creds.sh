@@ -1073,7 +1073,17 @@ _kube_classify() {
   local _e="$1" _p="$2"
   case "$(classify_kube_failure "$_e")" in
     FORBIDDEN)           _kube_tok="<forbidden>";     _kube_state="${_p} — FORBIDDEN: this identity may not read that in '${VKS_NAMESPACE:-?}'. Ask your platform admin." ;;
-    UNAUTHORIZED)        _kube_tok="<auth failed>";   _kube_state="${_p} — the Supervisor REJECTED this kubeconfig. Re-run: make vks-login" ;;
+    # ⚠️ "Re-run: make vks-login" WAS A NO-OP FOR THIS FAILURE, and it cost a real session.
+    # MEASURED 2026-09-07: with VKS_AUTH_METHOD=kubeconfig that arm (30-vks-login.sh:42-45) is a
+    # [ -s ] test on the GUEST kubeconfig plus `kubectl cluster-info`; it never touches the
+    # Supervisor. docs/scenario-1.md:616-626 already said so and this file had not heard.
+    # 🔴 IT DELIBERATELY NAMES NO SSO COMMAND. The obvious remedy — VKS_AUTH_METHOD=vcf make
+    # vks-login — performs a vSphere SSO BIND (30-vks-login.sh:397). Today's message costs ZERO
+    # attempts; prescribing that one costs >=1 PER INVOCATION of a report people re-run, and this
+    # arm cannot tell "token expired, password fine" from "password rotated" (30-vks-login.sh:582-585
+    # says so), so on the second it burns an attempt every time. vCenter locks out PERMANENTLY at 3.
+    # The NEGATIVE below is decidable and free, and it is the half that actually unblocks the reader.
+    UNAUTHORIZED)        _kube_tok="<auth failed>";   _kube_state="${_p} — the Supervisor REJECTED this kubeconfig (usually an EXPIRED token). Note a bare 'make vks-login' renews the GUEST kubeconfig, NOT this one; docs/scenario-1.md (Supervisor token) has the renewal for your auth method." ;;
     STALE_CA)            _kube_tok="<stale CA>";      _kube_state="${_p} — the Supervisor answered but its CA does not verify (kubeconfig from a destroyed lab?)" ;;
     UNREACHABLE)         _kube_tok="<unreachable>";   _kube_state="${_p} — the Supervisor is unreachable from here" ;;
     PLAINTEXT)           _kube_tok="<plaintext>";     _kube_state="${_p} — the Supervisor endpoint answered PLAINTEXT where TLS was expected" ;;

@@ -1267,10 +1267,31 @@ else
 fi
 # THE CONTROL, and it is what stops this becoming a blanket ban: the UNAUTHORIZED arm names
 # `make vks-login` CORRECTLY, because a kubeconfig that EXISTS and was REJECTED is a DECIDABLE state.
-if grep -q 'the Supervisor REJECTED this kubeconfig. Re-run: make vks-login' "${_CREDS_REPO}/scripts/creds.sh"; then
-  ok "B548: the DECIDABLE arm (UNAUTHORIZED) still prescribes it — the rule is decidability, not the string"
+# ⚠️ KEYED ON THE PROPERTY, NOT ON ONE LITERAL. This used to grep
+# 'the Supervisor REJECTED this kubeconfig. Re-run: make vks-login' — and that exact string was
+# MEASURED WRONG on 2026-09-07: under VKS_AUTH_METHOD=kubeconfig, `make vks-login` verifies the
+# GUEST kubeconfig (30-vks-login.sh:42-45) and never touches the Supervisor, so the remedy was a
+# no-op for the failure it was printed for. A control pinned to a defective literal fires RED on the
+# FIX and green on the defect, so it now asserts what B548 actually adjudicated — the decidable arm
+# still points somewhere actionable — plus the specific regression, so the no-op cannot come back.
+_ua="$(sed -n '/UNAUTHORIZED)/,/;;/p' "${_CREDS_REPO}/scripts/creds.sh")"
+if printf '%s' "$_ua" | grep -q 'REJECTED this kubeconfig'; then
+  ok "B548: the DECIDABLE arm (UNAUTHORIZED) still says what happened"
 else
-  bad "B548: the UNAUTHORIZED arm lost its remedy. A rejected kubeconfig IS decidable and re-auth is right."
+  bad "B548: the UNAUTHORIZED arm lost its diagnosis. A rejected kubeconfig IS a decidable state."
+fi
+if printf '%s' "$_ua" | grep -qE 'GUEST kubeconfig|docs/scenario-1'; then
+  ok "B548: ...and points somewhere actionable without prescribing a bare 'make vks-login'"
+else
+  bad "B548: the arm names no way forward. Naming only the diagnosis leaves the reader knowing they
+      are broken with no path (lib/os.sh:1964-1965 records that as its own defect)."
+fi
+if printf '%s' "$_ua" | grep -qE 'Re-run: make vks-login'; then
+  bad "the arm prescribes a bare 'make vks-login' again. MEASURED 2026-09-07: under
+      VKS_AUTH_METHOD=kubeconfig that renews the GUEST kubeconfig and does NOTHING for the
+      Supervisor — it is a no-op for the very failure it is printed for."
+else
+  ok "B548: ...and has not regressed to the no-op remedy"
 fi
 
 if [ "$fail" != 0 ]; then
