@@ -986,7 +986,7 @@ e2e-kind: ## Full local end-to-end in KinD (+ ingress route check + PSA/VKS admi
 # exported value BEATS a stale `.env.state` -- with state=traefik and env=istio the effective value
 # is istio; (2) `$(origin)` still defaults it to istio when the operator says nothing. So the hole
 # stays closed by two independent mechanisms while the command line is honoured again.
-	@$(MAKE) kind-up install-harbor install-argocd install-all install-ingress verify-gateway-image verify verify-ingress
+	@$(MAKE) kind-up install-harbor install-argocd install-all install-ingress verify-gateway-image verify verify-workload-images verify-ingress
 # psa-check in a SEPARATE make invocation, deliberately. It is also a prerequisite of `preflight`
 # (:301), which `install-all` (:459) needs — so in ONE invocation make runs it EARLY, against an
 # empty cluster, and then reports `Nothing to be done for 'psa-check'` at the end. Measured
@@ -1095,6 +1095,14 @@ prune-runs: check-env ## Reclaim Tekton PipelineRuns (and their 2Gi workspace PV
 .PHONY: verify
 verify: check-env prune-runs ## e2e: push a change → Tekton build → Harbor → ArgoCD sync → HTTP check (LIVE cluster)
 	@$(SCRIPTS)/99-verify.sh
+
+.PHONY: verify-workload-images
+# ⚠️ AFTER `verify`, NOT after `install-all`, and its idea round is why. Before the pipeline has run,
+# the build-side pods do not exist, the gate finds zero containers and passes VACUOUSLY. Its own
+# INCOMPLETE arm refuses that, but the ordering is what makes the assertion meaningful rather than
+# merely non-fatal.
+verify-workload-images: ## LIVE: every running container in the namespaces WE build in (ci, tekton) came from OUR registry
+	@./scripts/97-verify-workload-images.sh
 
 .PHONY: verify-gateway-image
 verify-gateway-image: ## LIVE: every running Istio container image came from OUR Harbor (catches a silently-ignored --set global.hub on a dual-homed box)

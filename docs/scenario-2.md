@@ -813,6 +813,26 @@ make verify        # push a marked change → Tekton → Harbor → ArgoCD → l
 make creds-show    # every URL + login for THIS context — one row per app in apps/registry.tsv
 ```
 
+Then assert that the pipeline itself pulled only from your registry:
+
+```bash
+make verify-workload-images   # every RUNNING container in ci/ and tekton-pipelines came from YOUR registry
+```
+
+**Expect:** `workload image provenance: OK` — preceded by a line counting how many containers
+it checked, so a pass you cannot reconcile is visible as one. Unlike
+`verify-gateway-image` below, this one applies on **both** ingress branches: the build-side
+namespaces are yours whoever owns the mesh.
+
+It exists because a build-side container can reach the public internet without anything noticing.
+Tekton injects a `place-scripts` init container from a hardcoded flag string, and for the life of
+this repo that pulled `cgr.dev/chainguard/busybox` from the internet on every TaskRun, inside the
+air gap. `mirror-verify` could not see it (Harbor genuinely had what we mirrored) and
+`check-image-alignment` could not either (it aligns tags in files). Only the running pod knows.
+
+⚠️ It cannot see a public `FROM`: kaniko's pod image is the destination it pushes, not the base it
+pulled. Run it **after** `make verify`, or the pods do not exist yet and it reports `SKIPPED`.
+
 **Expect:** `make gitops` logs `write mechanism: api`.
 **Expect:** `make creds-show` prints a `Lab access` section — as a TENANT you supplied `VKS_USERNAME` and `SUPERVISOR_HOST` in `.env`, so those rows carry YOUR values, not placeholders. This document never asks you for vCenter credentials, so unless you set them yourself the vCenter row reads `<not set>`.
 **Expect:** the `guest node SSH` row is the one a tenant is most likely to see FAIL: if your identity may not list secrets in the vSphere Namespace it shows `<forbidden>` and a note telling you to ask your platform admin — that is a permissions answer, NOT `this cluster has no such secret`.
