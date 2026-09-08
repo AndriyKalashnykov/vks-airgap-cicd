@@ -306,7 +306,7 @@ for v in "${UNCOMMENTED[@]}"; do
   # Both are now matched. $_TOGQ is an optional single-or-double quote, hoisted out because the
   # nested quoting is unreadable inline.
   #
-  # ⚠️ AND THE 56 IN THE PARAGRAPH ABOVE HAD ROTTED: the gate reports 54 uncommented values today.
+  # ⚠️ AND THE 56 IN THE PARAGRAPH ABOVE HAD ROTTED: the gate reports 58 uncommented values today (2026-09-08; it read 54 when written).
   # An adversary read 56 out of THIS COMMENT and reported my brief as wrong, when the comment was
   # the stale artifact. Corrected in place — a number in prose is a claim with a date.
   # ⚠️ THIRD SHAPE ADDED 2026-08-21 (B196/F9): `is_true "${V:-}"` - an EMPTY default, so the
