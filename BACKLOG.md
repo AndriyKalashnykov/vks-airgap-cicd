@@ -6528,3 +6528,105 @@ approach has now been patched twice (microseconds, then this) and the field it m
 being a different one. Pin BOTH regressions in `test-classify-kube-failure.sh`: `.380401` in the
 timestamp AND `401` as the thread-id, each with a real memcache body. Related: B544 (the truncation
 that makes this reachable at all).
+
+## B550 — 🟡 ArgoCD is the ONLY trust anchor absent from BOTH `env-validate` AND `ca_status_report`
+
+Two rounds, 2026-09-07, after I filed a finding that was itself wrong (see B551).
+
+**The measured asymmetry, after the instrument was corrected.** My first table claimed die-sites
+`2/6/4/0` across `HARBOR_CA_FILE` / `VKS_CA_CERT_FILE` / `VCENTER_CA_FILE` / `ARGOCD_CA_FILE`. A round
+reproduced my grep verbatim, then refuted it: **it counts error-message MENTIONS and `case` ARMS, not
+decision points.** VKS's "6" is four arms of ONE `case` in `30-vks-login.sh:187/205/252/278` plus a
+missing-VARIABLE die. Corrected: **1 / 1 / 1 / 0**. The apparent gradient was an artifact of how
+verbosely each script spells the variable name.
+
+**The residual is real but narrower than "die vs warn" — it is REPORTABILITY.** Of the five CA
+resolvers, four signal non-verification to their caller and one does not:
+
+| resolver | signals? |
+|---|---|
+| `_harbor_ca_args` (`lib/harbor.sh:204-208`) | `return 1` |
+| `_vc_tls` (`lib/vcenter.sh:75-79`) | `return 1`, and `_vc_tls_args` defaults FATAL |
+| `harbor_project_state` (`lib/harbor_probe.sh:60-69`) | sets `_verified=0` and WITHHOLDS the credential |
+| `argocd_curl_tls_init` (`lib/argocd.sh:384-390`) | sets `ARGOCD_TLS_MODE`, which `argocd-auth-check.sh:184` PRINTS |
+| **`argocd_tls_opts` (`lib/os.sh:1895-1907`)** | **nothing** — returns 0 in both the present and the set-but-missing case |
+
+So `70-configure-argocd.sh:27` cannot tell an operator whether its argocd calls verified. Note
+`lib/os.sh` ~1863-1873 — **15 lines above** — states the repo's own doctrine: *"⚠️ TWO STATES IS THE
+BUG … these return a THIRD state, `unknown`"*.
+
+**And the gate coverage gap, measured by mention-count in the gate that owns validity:**
+
+    02-env.sh  HARBOR_CA_FILE  = 15   (a 6-arm ladder, incl. "exists but is EMPTY")
+    02-env.sh  ARGOCD_CA_FILE  =  0
+    02-env.sh  VCENTER_CA_FILE =  0   (covered instead by a die at first use)
+
+`ca_status_report` (`lib/tls.sh:461-462`) builds its pair list from exactly TWO anchors — Harbor and
+Supervisor. **ArgoCD is absent.** So it is the only anchor that is simultaneously non-fatal at use,
+absent from `env-validate`, AND absent from `ca_status_report`.
+
+**Done when:** ArgoCD is added to `ca_status_report`'s pair list — ONE line beside the existing two:
+
+    [ -n "${ARGOCD_CA_FILE:-}" ] && [ -n "${ARGOCD_SERVER:-}" ] && \
+      pairs="${pairs}ArgoCD CA|${ARGOCD_CA_FILE}|$(_ca_hostport "$ARGOCD_SERVER")|fetch-argocd-ca"$'\n'
+
+⚠️ **Do NOT make `argocd_tls_opts` die.** `lib/tls.sh:488-497` records the persona reasoning that a
+block would violate: *"scenario-1 §7 legitimately runs BEFORE §8 saves the CA, so a missing file is
+expected and must not fail. WARN."* The `CA_STATUS_STRICT` mechanism (`Makefile:790`) already solves
+WARN-vs-BLOCK correctly and was simply never extended to ArgoCD. Its `rc=3` arm
+(`lib/tls.sh:539-542`) already prints exactly the message this lab needed: *"that certificate is NOT
+VALID FOR THIS ADDRESS … Use the DNS name the certificate was issued for, not an IP."*
+
+## B551 — ⛔ MY OWN REMEDIATION BROKE THE LAB, and the repo's own text prescribed it
+
+Recorded because the failure shape is more instructive than the fix.
+
+**What I did.** Found `ARGOCD_CA_FILE` set with the file missing, called it a security hole
+("silently falls back, does not verify, then submits a bearer token"), and fetched the CA.
+
+**What was actually true.** It **fails CLOSED**, measured two independent ways — at the CLI
+(`Proceed insecurely (y/n)?` -> EOF -> fatal) and at the transport (`curl 60`). And the CA is **moot**
+at an IP endpoint: the failure is `no IP SANs`, not `unknown authority`. `make creds` already prints
+that fact and I had read it hours earlier.
+
+**What my fix did.** Writing the file flipped `lib/argocd.sh:385` into the *verified* branch, which
+cannot succeed at an IP. MEASURED: `make argocd-auth-check` went from `PASS (credential only)` to
+`NO token (curl rc=60, HTTP 000)`. `91-e2e-tenant-mechanism.sh:288` takes the same branch, so that
+leg could not have completed either. Reverted; the CA is PARKED at
+`secrets/argocd-ca.crt.parked-by-claude` (it is authenticated and valid — just unusable at an IP).
+
+🔴 **The sting: `91`'s own else-branch text (`:296-298`) prescribes exactly what I did** — *"To close
+that gap: make fetch-argocd-ca, then re-run with ARGOCD_CA_FILE set."* Following the repo's own
+prescription is what breaks it. That is the prescribed-remedy-cannot-work class.
+
+**Two corrections to my own claims:** the file is a SELF-SIGNED **LEAF**, not a CA (subject == issuer
+== `O = Argo CD`), so the pin must be re-taken on every ArgoCD cert regeneration, not only on a lab
+re-cut. And mode **644 is CORRECT** — `fetch-supervisor-ca.sh:150` documents it: *"a CA is public
+trust material, not a secret"*.
+
+**The discipline, labelled as discipline:** after changing operator state, RE-RUN THE DIAGNOSTIC THAT
+COVERS IT. `make argocd-auth-check` would have told me in 30 seconds. No gate can enforce that.
+
+## B552 — 🟡 scenario-1 NEVER tells you to fetch the ArgoCD CA, and `scenario-2:469` is false
+
+**Q: how did `ARGOCD_CA_FILE` come to be set with no file? A: it was never fetched.** Measured:
+`fetch-argocd-ca` appears **1x** in `docs/scenario-1.md` (`:464`) and only as an ASIDE explaining why
+a probe proved nothing — **never as a step**. In `docs/scenario-2.md` it appears **6x**, as real
+steps. There is no deleter to find: `fetch-ca.sh`'s old `rm -f "$OUT"` refusal path is already fixed
+(`:127-129`) and nothing else touches the file. The operator hand-set the variable following
+`fetch-ca.sh:288`'s own success text, and scenario-1 never told them to fetch.
+
+**A round also refuted its OWN hypothesis here** — that `.env.example` once shipped the line
+uncommented: `git show a03dbe1:.env.example` -> `94:# ARGOCD_CA_FILE=…` and
+`git show 4bf0fd6^:.env.example` -> `391:# ARGOCD_CA_FILE=…`. Commented in both eras.
+
+**Separately, `docs/scenario-2.md:469` makes two false claims in one sentence** — *"Run `make
+fetch-argocd-ca` (writes `ARGOCD_CA_FILE`); `ARGOCD_SERVER` is already set from discovery."*
+(a) it does NOT write the variable — zero writers exist; `fetch-ca.sh:288` only PRINTS a suggestion;
+(b) discovery yields an **IP**, and the same document at `:301` and `:318-341` spends thirty lines
+arguing that an IP is exactly what must not be used. L469 contradicts L301-348 and sends the reader
+down the path the document elsewhere forbids.
+
+**Done when:** scenario-1 gains the fetch step (or `09-argocd-address.sh` says, where it prints the
+`--insecure` login line, that this address cannot be verified and why — it already knows, it just
+wrote an IP), and `:469` is replaced by a pointer to the Step at `:310-350`.
