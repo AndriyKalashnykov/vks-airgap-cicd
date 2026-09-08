@@ -803,6 +803,50 @@ forbid".
 documented step of scenario-1 §5 exactly as §4 does it for Harbor; the LB IP is published separately
 as `ARGOCD_LB_IP` in `.env.state`. Then `-k` stops being load-bearing and TLS can be *verified*.
 
+**⚠️ RE-SCOPED 2026-09-07 — THE DONE-WHEN AS WRITTEN IS UNSATISFIABLE, MEASURED.** It asks for
+"`ARGOCD_SERVER` carries a name the certificate actually presents, with the A record a documented
+step of scenario-1 §5 exactly as §4 does it for Harbor". Read off the live cert
+(`openssl s_client -connect 192.168.101.131:443`), the SANs are:
+
+    DNS:localhost, DNS:argocd-server, DNS:argocd-server.cicd,
+    DNS:argocd-server.cicd.svc, DNS:argocd-server.cicd.svc.cluster.local
+
+**Zero of those are externally routable.** `localhost` is reserved; the rest are cluster-internal.
+So there is no name to point an A record AT, and the Harbor analogy does not carry: Harbor's cert
+is issued for a real FQDN, ArgoCD's is self-generated. This is not a gap in the work — the clause
+describes something that cannot exist while the cert is the default one.
+
+**Upstream confirms it is unreachable by configuration alone.** `util/settings/settings.go` (v3.0.19)
+hardcodes that SAN list and populates `IPAddresses` only when the configured host parses as an IP,
+and `spec.url` does not re-mint (the gate is `Certificate == nil`). So you cannot get a routable SAN
+by setting a URL.
+
+**THE ACTUAL MECHANISM, measured on the live CR.** `argocds.argocd-service.vsphere.vmware.com`
+exposes `spec.server.tlsCert` with `ca` / `cert` / `key` (base64), documented as: *"If not specified,
+ArgoCD will generate a self-signed certificate."* On `cicd/argocd-1` (`3.0.19+vmware.1-vks.1`) it is
+**not set** — which is exactly why we get the cluster-internal cert. Supplying a cert there, with
+either a routable DNS SAN or an IP SAN for the VIP, is the sanctioned path and the only one that
+makes `ARGOCD_CA_FILE` verifiable.
+
+**Revised Done-when, in dependency order:**
+
+1. **(shipped, B553)** the tooling must stop PRESCRIBING a CA that cannot verify. `fetch-ca.sh` now
+   checks the anchor against the address it was fetched from and emits `set it in .env` only when it
+   verifies chain AND name. This is the clause the original Done-when was missing, and it is what
+   turns the incident from "silently breaks the lab" into "tells you why".
+2. **(open, but NOT yet — and NOT zero-risk-and-useful, which is what I first wrote)** publish the
+   LB IP separately as `ARGOCD_LB_IP`. Measured: `07-install-argocd.sh:156` publishes it on **KinD**;
+   `09-argocd-address.sh` publishes `ARGOCD_SERVER` on the **lab** and never `ARGOCD_LB_IP`, and
+   `Makefile:733` picks whichever exists (`ARGOCD_SERVER` first — B168, because a discovered LB IP
+   once outranked an operator's explicit `ARGOCD_SERVER` and fetched the KinD CA on a box running
+   both). **Today `ARGOCD_SERVER` on the lab IS that IP**, so publishing `ARGOCD_LB_IP` beside it
+   would store the same value twice and create a drift candidate for no gain. This clause only
+   becomes meaningful AFTER (3) makes `ARGOCD_SERVER` a name; do it then, not before.
+3. **(open, needs a CR write)** decide whether we own the cert. If yes, mint one carrying the VIP as
+   an IP SAN (or a routable name), set `spec.server.tlsCert`, and only THEN does clause (i) of the
+   original Done-when become meaningful. `kubectl auth can-i patch argocds -n cicd` says yes.
+4. **(refuted, do not build)** "an A record exactly as §4 does for Harbor" — see above.
+
 **Also open, from the same review:**
 
 - **F6 SETTLED 2026-08-26, MEASURED: the CR DOES carry a status stanza, and this repo has ZERO
@@ -6630,3 +6674,36 @@ down the path the document elsewhere forbids.
 **Done when:** scenario-1 gains the fetch step (or `09-argocd-address.sh` says, where it prints the
 `--insecure` login line, that this address cannot be verified and why — it already knows, it just
 wrote an IP), and `:469` is replaced by a pointer to the Step at `:310-350`.
+
+## B553 — ✅ `fetch-ca.sh` proved the CHAIN and prescribed the anchor anyway ✅ closed
+
+**The incident.** `openssl verify -CAfile X X` is `verify(X,X)` for a self-signed leaf — true for
+ANY self-signed cert, as `fetch-ca.sh:141-143` already conceded in a comment. The script proved
+that, printed `AUTHENTICATED`, and closed with `set it in .env, e.g. ARGOCD_CA_FILE=…`. Following
+that on this lab (IP endpoint, DNS-only cert) flipped `lib/argocd.sh:385` into its verified branch,
+which cannot succeed there: `make argocd-auth-check` went `PASS (credential only)` -> `NO token
+(curl rc=60)`. The tool whose help text says "and VERIFY it" is the tool that broke the lab, and its
+last line was the instruction that armed it.
+
+**Fixed** (PR pending): the anchor is checked against the address it was fetched from, on the
+CANDIDATE, before anything is written; `set it in .env` is emitted only when it verifies chain AND
+name. Proven live both ways — same cert, same digest, address the only variable.
+
+**What two adversary rounds then found in that fix, all measured, all fixed:**
+
+| | |
+|---|---|
+| the refusal ran AFTER `install` | it destroyed the operator's anchor while saying "do NOT set this" about a file it had already replaced; `secrets/` is gitignored ⇒ unrecoverable. Re-entered the class `fetch-ca.sh:125-131` records from 2026-08-05. 3 of the 4 CA producers already checked before writing |
+| a CN-only cert passed | openssl's `-verify_hostname` falls back to the CN; every Go client refuses it, and crane/Kaniko/podman/containerd/argocd are all Go ⇒ rc=0 was a false green of the same shape as the incident |
+| three siblings still said "run fetch-argocd-ca" | post-fix that tool refuses on a bare IP ⇒ a non-terminating instruction cycle, on the DEFAULT path |
+| SANs were read from the CA | a real CA has no SAN, so on a chain the remedy printed an empty list and said "point the address at a name above" |
+| the refusal went to stdout, rc=0 | `make fetch-argocd-ca > log` swallowed it — the lesson `:229` already paid for on 2026-08-05 |
+| it said "VERIFIES" | directly under "⚠️ NOT AUTHENTICATED", for a property a MITM forges by choosing its own SANs |
+
+**Test:** `test-fetch-ca-name.sh`, 9 assertions, auto-discovered into `TEST_FAST` by the
+`test-*.sh` glob. RED-proven against the pre-fix tree: **3 passed / 6 failed**.
+
+**Residual, named not hidden:** every measurement is a local `openssl s_server` oracle plus one live
+lab; IPv6 endpoints are unparsed by `${hostport%%:*}` and untested (pre-existing); and
+`make env-validate` has **zero** ArgoCD anchor coverage (`grep -c ARGOCD_CA_FILE scripts/02-env.sh`
+-> 0) where Harbor has a graded arm — filed as its own row.
