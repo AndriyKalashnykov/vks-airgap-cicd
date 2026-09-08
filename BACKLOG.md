@@ -453,6 +453,72 @@ It is not a leftover nobody has: `kind-down.sh:105` **deliberately** no longer r
 `make state-migrate` is manual opt-in, and `scripts/creds.sh:229` already records this same
 regression independently.
 
+### ⛔ IDEA ROUND DONE 2026-09-08 — REFUTED, and TWO of this row's own evidence sentences are FALSE
+
+I wrote this row. The round refuted the design **and** the row, and I re-measured both myself:
+
+**1. `kind-down.sh` does NOT "deliberately no longer remove" `.env.kind` — it never touches it.**
+`kind-down.sh:109` is `env_kind="$(state_file)"`, and `state_file()` returns **`.env.state`**
+(`lib/state.sh:45`). The variable name is a legacy MISNOMER and the `:105` comment describes the
+sink's OLD NAME. Every arm of that block acts on `.env.state`. So there is no deliberate decision to
+leave `.env.kind` behind; it is outside the teardown contract entirely — and this row cited that as
+evidence of a live population mechanism, which inflated its urgency.
+
+**2. A printer naming `.env.kind` ALREADY SHIPS**, at `lib/os.sh:788`, for every `load_env` caller:
+
+    reading legacy .env.kind — run 'make state-migrate' to move it to .env.state
+
+Measured with a discriminating control (present → the warning; absent → 0 matches). So the design's
+core deliverable — "print one loud line naming the file" — is already done for ~100 scripts. The
+genuinely silent surface is **two** make targets funnelling into **one** script (`fetch-ca.sh`), not
+a list; and that is [[B561]]'s unshipped Done-when, verbatim. **Building this brief would have
+closed B561 and labelled it B570** — mirroring the exact sin this row warns of.
+
+**3. THE REAL DEFECT IS ORDERING, AND NO PRINTER CAN TOUCH IT: the DEAD sink outranks the LIVE one.**
+Measured by the round at make level, and I confirmed it at `load_env` level with a control:
+
+    .env.state=STATE-WINS  +  .env.kind=KIND-WINS   ->  effective HARBOR_URL=[KIND-WINS]
+
+The file that **nothing writes** (the only non-test writer is `Makefile`'s `state-migrate`, which
+REMOVES it), that `state_check` does not govern, and that no teardown cleans, **beats** the file
+`state_set` writes, `state_check` governs and `kind-down` cleans. A printer leaves the wrong value in
+ARGV; it only narrates it.
+
+⚠️ **And `lib/os.sh:786`'s comment asserts the OPPOSITE of what the code does** — *"a legacy
+.env.kind is still read (last, so the new sink wins)"*. Sourcing last means it **wins**. Measured
+above. A false fact inside a control is worse than no comment: it is the sentence that stops the next
+reader looking.
+
+### 🔴 RE-SCOPED — B570 is now the ORDERING, and it needs its own round
+
+Two candidates, both with MEASURED costs; do not line-edit either:
+
+- **(a) demote `.env.kind` below `.env.state`.** Keys unique to it (the generated passwords) still
+  apply, so the rescue survives. ⚠️ It is a CONTRACT CHANGE: `test-env-precedence.sh:5` documents
+  *"the OPERATOR's environment > .env.kind > .env.state > .env > the Makefile's `?=` defaults"* and
+  case 3 pins it. `Makefile:77-88` explains the include order is the faithful mirror of `load_env`'s
+  last-wins, so the two layers AGREE by design — this is not a second, independent bug.
+- **(b) retire the back-compat** — `load_env` dies with the `state-migrate` instruction instead of
+  sourcing. The window is **57 days expired** (the rename landed 2026-07-13; `os.sh:787` calls it
+  *"One release of back-compat"*), and nothing has written the file since.
+  ⚠️ `.env.kind` is load-bearing TEST infrastructure in three files, and one degrades **SILENTLY**:
+  `test-env-publish.sh` case 7 plants it as a deliberate shadow *because* it cannot win, which is
+  "what makes the all-or-nothing property observable at all". Remove the sourcing and that case goes
+  VACUOUS — green whether or not the defect is present. Any removal must re-instrument it in the same
+  change and prove the new shadow RED first.
+
+⚠️ **Do NOT reach for a `VKS_STATE_KIND=1` discriminator**: `creds.sh:228-232` records it as measured
+and refuted across 5 states (repairs 1 of 3 defective states, REGRESSES one — a legacy `.env.kind`
+sink). Grade that carefully — it concerns value-precedence *inside* `creds.sh`, not file ordering, so
+it is evidence that stamp-keying is the wrong axis here and precedent that precedence-inversion beat
+a discriminator; it is **not** a measurement of file-order inversion.
+
+**Reachability is ~0 and unmeasurable from here.** This box has no `.env.kind`; the file is
+gitignored, so no gate and no repo state can ever answer whether an operator has one. **"Do nothing
+beyond B561" is a defensible null option** — such an operator is already warned on essentially every
+command, with the one-command remedy in the message. Settle it by asking the owner whether any box
+predates 2026-07-13 without a migrate; if nobody, this closes as documentation.
+
 **Done when — NEEDS AN IDEA ROUND.** Any fix must key on **the file a value came from**, not on the
 cluster stamp, and must cover `.env.kind`. Hardening `.env.state` alone is worse than nothing here:
 it advertises the class as closed.
