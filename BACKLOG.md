@@ -569,7 +569,7 @@ depending on dev-machine state is invisible here **and** per-PR (the fast set do
 |---|---|---|
 | `test-creds-reach-ingress` | the host's **resolver order**. `getent hosts` returns every family and CI's `localhost` is `::1` first; `_reach_ingress` compared only `awk 'NR==1'`. **Not a test artifact** — on any dual-stack operator box `make creds` invents a `stale DNS` fault. | ✅ fixed |
 | `test-adversary-gate-rearm` | **`~/.claude/agents`**. The hook derives its roster from there and falls back to a bare substring when no roster is readable; CI has neither directory (`git ls-files .claude/agents/` = 0), so the fallback ran and the prose probe minted. The HOOK is right; the TEST was asserting roster behaviour it could only exercise on my box. | ✅ fixed |
-| `test-creds-show` | **`$HOME`**, mechanism NOT yet diagnosed. | 🔴 **open** |
+| `test-creds-show` | **`$HOME`** — via the SIBLING lab repo's state dir. Diagnosed below. | 🔴 **open** |
 
 **The remaining one, measured:** `HOME=$(mktemp -d) bash scripts/test-creds-show.sh` reproduces it
 locally — `FAIL STATE 14: rc=0 + empty was reported as a failure. kubectl exited 0 and answered
@@ -577,6 +577,39 @@ correctly; saying it failed is the same wrong-cause class, inverted.` The test f
 **zero** `HOME` references, so the dependence is indirect (creds.sh reaching a default kubeconfig
 path is the obvious candidate, unverified). Start there; the reproduction is one command and needs
 no cluster.
+
+#### 🔴 the third failure is now DIAGNOSED, and it is a PRODUCT bug, not fixture hygiene
+
+MEASURED, deterministic (3 runs each): `HOME=$(mktemp -d) bash scripts/test-creds-show.sh` →
+**`FAIL STATE 14: rc=0 + empty was reported as a failure`**; with the real `$HOME` → **pass**.
+
+**The mechanism.** The fixture writes an EMPTY `$t/sup` and passes it as
+`VKS_SUPERVISOR_KUBECONFIG`. An empty kubeconfig is unusable, so the resolver falls through to
+`supervisor_kubeconfig_candidates()` (`lib/os.sh:949`), whose last slot is
+`${VKS_LAB_STATE_DIR:-$HOME/.local/state/nested-lab}` — **the SIBLING lab repo's state dir**.
+Measured candidate lists:
+
+    real $HOME  -> secrets/supervisor.kubeconfig   ~/.local/state/nested-lab/kubeconfig   (2)
+    empty $HOME -> secrets/supervisor.kubeconfig                                          (1)
+
+so a different branch is taken, and the assertion — *"rc=0 with no match is reported as ABSENT, not
+as a kubectl failure"* — fails in the 1-candidate case.
+
+⚠️ **DO NOT "FIX" THIS BY PINNING `VKS_LAB_STATE_DIR` IN THE FIXTURE AND STOPPING THERE.** I tried
+it: the fixture becomes hermetic and correctly reproduces CI, and the test then **fails on this box
+too** — because the underlying behaviour is wrong, not the fixture. Pinning alone converts a
+CI-only red into an everywhere red without fixing anything.
+
+**And the 1-candidate case is the OPERATOR's case.** RULE ZERO-B: the end user has only this repo.
+Nobody outside this machine has `~/.local/state/nested-lab`, so **every real operator takes the
+branch that misreports**. `make creds` is their only credentials surface, and the wrong-cause class
+is exactly what the assertion's own text calls out — inverted.
+
+**Done when:** `creds.sh` reports rc=0-with-no-match as ABSENT in the 1-candidate case too; the
+fixture pins `VKS_LAB_STATE_DIR` so it can never again pass because of a sibling repo; and both are
+RED-proven. ⚠️ NEEDS AN IDEA ROUND — it is a change to what an operator-facing report CLAIMS
+(RULE ZERO-V), and the two arms it must distinguish are the ones the row above shows are easy to
+invert.
 
 **Done when:** that third failure is diagnosed and fixed, a dispatched run of `ci.yml` concludes
 `success`, and the weekly is green — verified by reading the run, not by inferring it from a merge.
