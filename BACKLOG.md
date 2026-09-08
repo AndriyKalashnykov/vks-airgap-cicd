@@ -6481,6 +6481,73 @@ which I added — is effectively **unreachable**, so its carefully-worded tenant
 and on a tenant box `creds` probes the guest (or a foreign lab) for Harbor while labelling it the
 Supervisor. Same shape at `:1739-1740`. An emptiness test standing in for an identity test.
 
+⚠️ **RE-SCOPED 2026-09-07 by an idea round — the row's own premise is PARTLY FALSE and the
+prescribed shape below is REFUTED. Do not build it.**
+
+**The premise is narrower than stated.** The resolver tests `[ -s "$c" ]`, so `load_env` setting
+`KUBECONFIG` does NOT make the file exist: with `KUBECONFIG` pointing at the (absent) default path
+the resolver returns **rc=1, EMPTY** and `creds.sh:1116` IS reachable. Mode 1 needs `KUBECONFIG` to
+point at a **real** guest file. Real, but not "essentially never returns empty".
+
+**The identity test is refuted — it discriminates 0 of the 2 modes.**
+
+- *Mode 1:* `SUPERVISOR_HOST` is required only for `VKS_AUTH_METHOD=vcf|vsphere` (`02-env.sh:238-245`),
+  and `scenario-2.md:409` puts the DEFAULT tenant on `kubeconfig` — the exact persona mode 1 describes.
+  So the identity half is unavailable precisely where it was wanted, and the TYPE test alone already
+  covers mode 1.
+- *Mode 2:* MEASURED, both paths on this box — `secrets/supervisor.kubeconfig` and
+  `~/.local/state/nested-lab/kubeconfig` both resolve to **`https://192.168.101.128:443`**. The one
+  observed "FOREIGN lab" is a different PATH TO THE SAME ESTATE, so identity returns MATCH and
+  changes nothing. This row called mode 2 "the dangerous one, because it is PLAUSIBLE" — the
+  plausibility is inferred; the measurement says same-estate.
+- The comparison is also unspecified and the naive form never matches: `argocd_api_server` returns
+  `https://host:443` while `SUPERVISOR_HOST` is a bare host by contract (`.env.example:142`), so
+  `[ "$srv" = "$SUPERVISOR_HOST" ]` is a 100% false-abstain gate.
+
+**Two further defects in the prescribed shape:**
+
+- **It regresses B548, which shipped hours earlier.** `kc=""` is DECIDABLE ("absent"), and B548's
+  adjudicated rule is that absent gets the tenant sentence and NO remedy — because the remedy encodes
+  a guess and `make vks-login` spends one of three vCenter SSO attempts before PERMANENT lockout.
+  Collapsing *absent* into `rc==2` "cannot tell" destroys that wording. `[ -z "$kc" ]` must be a
+  separate FIRST arm, before any probe.
+- **It violates the `CREDS_NO_PROBE` contract.** The current order puts a free `stat` before the
+  no-probe guard, so a probe at that position runs even under `CREDS_NO_PROBE=1`. Measured against a
+  blackholed endpoint: **20.035s** per site (42ms healthy), × 2 sites. `creds.sh:179-181` already
+  records a measured HIGH for this exact class. Invisible on a healthy box; fires exactly when the
+  operator most needs the report.
+
+**And Q5 is answered NO:** the destroy path is already guarded — `98-uninstall-all.sh:53-56` requires
+`CONFIRM=$VKS_CLUSTER_NAME`, a typed value, not y/n. "Silently" was the wrong word. The residual is
+that the confirmation proves the operator knows the NAME, not the ESTATE — which a resolver-level
+check cannot close either; it belongs at the destructive caller, printing the resolved endpoint.
+
+**BUILD THIS INSTEAD:**
+
+1. **Drop `"${KUBECONFIG:-}"` from the candidate list** — one line, kills mode 1, and makes
+   `Makefile:263-267` ("`KUBECONFIG=` does not work for Supervisor-scoped targets") TRUE rather than
+   approximately true. No test asserts KUBECONFIG-as-winner (`test-supervisor-kubeconfig.sh` uses
+   `env -u KUBECONFIG` and `KUBECONFIG=/does/not/exist`).
+2. At the two `creds.sh` sites: `[ -z "$kc" ]` FIRST (preserving B548 verbatim) -> then the
+   no-probe guard -> only then `kubeconfig_is_supervisor`, branching on `rc==1` ONLY.
+3. **Do not build the identity test.** For mode-2 coverage, print the resolved PATH and ENDPOINT as a
+   diagnostic — honest, and needs no `SUPERVISOR_HOST`.
+4. Mode 2 belongs at the destructive callers as endpoint-confirmation, not in the resolver.
+
+**Prior art to copy (F8):** `argocd-password.sh:113-125` hit this exact ambiguity, says in as many
+words "NOT `supervisor_kubeconfig` ALONE, WHICH WOULD INVERT THE SAME BUG", and resolves it by trying
+both candidates and taking the first that ANSWERS, then naming which one did — *evidence, not
+ranking*. That needs no `SUPERVISOR_HOST` at all.
+
+⚠️ **OPEN BEFORE (1) SHIPS — measure, do not reason.** Five NON-test callers take the resolver with
+no fallback (`09-argocd-address.sh:86`, `creds.sh:1580`, `creds.sh:1690`, `24-vks-k8s-version.sh:27`,
+`43-install-istio-package.sh:115`). Today on a KinD box they silently receive `$KUBECONFIG`; after
+(1) they receive empty. Measured so far: none is reachable from `make e2e-kind` (the first two are
+standalone Makefile targets, the last is unreferenced by Makefile/e2e/kind-up). Confirm that before
+merging, and give each an explicit die rather than an empty `--kubeconfig`.
+
+**The REFUTED shape follows, kept so it is not rebuilt.**
+
 **Prescribed shape (type AND identity, abstain when unknown):**
 
     kc="$(supervisor_kubeconfig)" || kc=""
