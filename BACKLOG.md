@@ -6599,7 +6599,20 @@ REPO's lab state dir, which exists on a maintainer box — so every assertion pa
 printing ok. The fixture now sets `VKS_LAB_STATE_DIR=/nonexistent`. An end user has no such
 directory; a maintainer does, which is exactly B547's measured split.
 
-## B549 — 🔴 SSO HAZARD: a klog THREAD-ID of `401` makes an UNREACHABLE cluster classify UNAUTHORIZED
+## B549 — ✅ SSO HAZARD: a klog THREAD-ID of `401` makes an UNREACHABLE cluster classify UNAUTHORIZED
+
+**✅ FIXED — verified both directions 2026-09-08.** `lib/os.sh:2335` no longer carries a bare `401`;
+it anchors on `(401)` / `"code":401` / `code: 401`, none of which a klog thread-id can match.
+MEASURED with `classify_kube_failure`:
+
+| errfile | classifies |
+|---|---|
+| `E0908 05:34:23.123456     401 memcache.go:265] ... connect: connection refused` | **UNREACHABLE** ✓ |
+| `error: You must be logged in to the server (Unauthorized)` | **UNAUTHORIZED** ✓ |
+
+The hazard was that an unreachable cluster reading as UNAUTHORIZED tells the operator their
+credential is bad — and acting on that costs one of the THREE vCenter SSO attempts before
+permanent lockout.
 
 **Reproduced deterministically, twice, by two independent parties.** `lib/os.sh:2273` anchors the
 unauthorized arm as `*"Unauthorized"*|*" 401 "*|…`. The ` 401 ` anchor was added to stop a

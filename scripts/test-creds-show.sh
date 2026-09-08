@@ -1278,18 +1278,30 @@ fi
 # no-op for the failure it was printed for. A control pinned to a defective literal fires RED on the
 # FIX and green on the defect, so it now asserts what B548 actually adjudicated — the decidable arm
 # still points somewhere actionable — plus the specific regression, so the no-op cannot come back.
+# B556: the arm now DELEGATES to `_rejected_why`, so the sentence lives one indirection away.
+# Pinning to the arm's own text made this control fire RED on a FIX (measured 2026-09-08) -- the
+# same location-vs-property defect the comment above already records. Follow the delegation:
+# extract the arm AND, if it calls a helper, that helper's body. A control that cannot see where
+# the sentence moved is not a weaker control, it is a WRONG one.
 _ua="$(sed -n '/UNAUTHORIZED)/,/;;/p' "${_CREDS_REPO}/scripts/creds.sh")"
+_ua="${_ua}
+$(sed -n '/^_rejected_why() {/,/^}/p' "${_CREDS_REPO}/scripts/creds.sh")"
 if printf '%s' "$_ua" | grep -q 'REJECTED this kubeconfig'; then
   ok "B548: the DECIDABLE arm (UNAUTHORIZED) still says what happened"
 else
   bad "B548: the UNAUTHORIZED arm lost its diagnosis. A rejected kubeconfig IS a decidable state."
 fi
-if printf '%s' "$_ua" | grep -qE 'GUEST kubeconfig|docs/scenario-1'; then
-  ok "B548: ...and points somewhere actionable without prescribing a bare 'make vks-login'"
+if printf '%s' "$_ua" | grep -qE 'VKS_AUTH_METHOD=vcf'; then
+  ok "B548: ...and NAMES the remedy command (make vks-login VKS_AUTH_METHOD=vcf), not a section"
 else
   bad "B548: the arm names no way forward. Naming only the diagnosis leaves the reader knowing they
       are broken with no path (lib/os.sh:1964-1965 records that as its own defect)."
 fi
+# ⚠️ Do NOT try to catch "a bare make vks-login" by pattern. MEASURED 2026-09-08: `make vks-login[^V]*$`
+# fires on the arm's own EXPLANATION of why the bare form is wrong -- a false RED on correct text,
+# and its only remedy is deleting the explanation. The regression is caught POSITIVELY instead, by
+# the VKS_AUTH_METHOD=vcf assertion above: reverting to the bare form removes that string and turns
+# THAT control red. This one keeps only the exact defective literal B548 adjudicated.
 if printf '%s' "$_ua" | grep -qE 'Re-run: make vks-login'; then
   bad "the arm prescribes a bare 'make vks-login' again. MEASURED 2026-09-07: under
       VKS_AUTH_METHOD=kubeconfig that renews the GUEST kubeconfig and does NOTHING for the
