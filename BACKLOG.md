@@ -412,6 +412,64 @@ does for four of its cases), and only then is a PR job costable; or (b) the job 
 alone, which has no network dependency and catches #1157 but not #1165; or (c) it is not built.
 ⚠️ Do NOT quote a runtime for this job without stating how many draws it is averaged over.
 
+## 🔴 B570 — `.env.kind` bypasses `state_check` at BOTH layers, and it is WIDER than [[B561]] 🔴 open
+
+Found by B561's round, which **explicitly refused to fold it in**: a fix scoped to `.env.state`
+would read as closing this, and it does not.
+
+MEASURED with **no `.env.state` at all** — so `state_check` had already refused:
+
+    make -n   ->  ./scripts/fetch-ca.sh "172.18.0.99" "/LEGACY/kind/ca.crt" harbor
+    load_env  ->  HARBOR_URL=172.18.0.99  HARBOR_CA_FILE=/LEGACY/kind/ca.crt  state_sourced=0
+
+`state_sourced=0` means `state_check` **refused**, and the KinD values won anyway. Two independent
+channels put them there: `load_env` sources the legacy sink **outside** the `if state_check` block
+(`lib/os.sh`), and `Makefile:135` `-include`s it **first**, i.e. at the highest `?=` precedence.
+
+It is not a leftover nobody has: `kind-down.sh:105` **deliberately** no longer removes `.env.kind`,
+`make state-migrate` is manual opt-in, and `scripts/creds.sh:229` already records this same
+regression independently.
+
+**Done when — NEEDS AN IDEA ROUND.** Any fix must key on **the file a value came from**, not on the
+cluster stamp, and must cover `.env.kind`. Hardening `.env.state` alone is worse than nothing here:
+it advertises the class as closed.
+
+## 🔴 B571 — `static-check-pr` is invoked by NOTHING, while four comments say a PR runs it 🔴 open
+
+Found by B568's round. MEASURED: `grep static-check-pr .github/workflows/*.yml` returns **only
+comments**. The `static-check` job is gated `github.event_name == 'schedule' || … 'workflow_dispatch'`
+(`ci.yml:199`), and the live checks show `static-check  skipping` on every PR. `static-check-fast`
+— the job that does run — contains **neither `lint` nor `test-scripts-fast`** (measured: 0 matches
+in its prereq list).
+
+So on a PR, shellcheck and the entire offline unit-test suite **do not execute**. That is exactly
+why standing rule G.4 (`docs/matrix-standing-rules.md:375`) requires `env -u GOROOT make static-check`
+locally before every merge — and it is why a green check on a PR is not evidence for the change in
+it. Twice today a merge on CI-green alone reddened `main` (3× SC2016; then a 21/21 → 12/9 test
+regression), both because G.4 was skipped.
+
+**Done when — NEEDS AN IDEA ROUND.** Either wire `static-check-pr` into the PR path (it exists and
+is unreferenced), or delete it and correct the four comments that claim it runs. Do not line-edit:
+the reason `static-check` is dispatch-gated is a deliberate cost decision (trivy's cold DB download
+per run), and the round did not evaluate whether the PR path can afford the fast half.
+
+## 🔴 B572 — ~5 rc=0 SKIP arms emit NO machine-readable verdict, and that is the wider class 🔴 open
+
+Found by the round that **refuted** a `--require-asserted` consumer for `gateway-image-verdict`
+(see [[B482]]). Its closing measurement is the useful part:
+
+`gateway-image-verdict` is **1 of 1** emitted verdict tokens in the repo. Meanwhile ~6 scripts have
+rc=0 SKIP arms with **no token at all** — `08-install-argocd-service`, `14-selfbuilt-build`,
+`22-harbor-robot`, `check-gwapi-istio-alignment`, … So the one gate that IS instrumented is the one
+whose skip is **least** dangerous (it is pinned), while five uninstrumented ones are not.
+
+**Done when — NEEDS AN IDEA ROUND, and the FIRST question is which of those skips is REACHABLE and
+WRONG at its call site.** Instrumenting all of them is the enumerated-list reflex; the round's point
+is that the denominator, not the token, is the finding. Do NOT build a consumer for the existing
+token: measured, all three of its SKIP arms are unreachable at its only call site, so a
+`--require-asserted` flag could never fire — and once [[B569]] removed the goal-list pin it would
+hard-fail a *correct* `make e2e-kind INGRESS_CONTROLLER=traefik`.
+
 ## 🔴 B564 — `ci-pass` REFUSES after `gh run rerun --failed`, because a partial attempt has a partial job list 🔴 open
 
 MEASURED 2026-09-08 on PR #1167: a raced `ci-pass` (it read `static-check-fast conclusion=none` while
@@ -480,6 +538,61 @@ required job reports `none`, with a bounded timeout — but that trades a false 
 hang, and the timeout's expiry is then a THIRD state the current two-state verdict cannot express.
 Do not line-edit it.
 
+### ✅ IDEA ROUND DONE 2026-09-08 — `cleared-with-changes`, and it REFUTED my own refutation in part
+
+The correction above says "the list was never partial". **Measured against the `ci-pass` STEP LOGS**
+— what the API returned *at read time*, not the settled state I inspected — that is half wrong:
+
+    att 1: static-check-fast none 3  -> "unrecognised conclusion=none"   7 rows
+    att 2: `changes` NOT IN THE OUTPUT AT ALL -> "changes ABSENT"        6 rows
+
+So the list **was** partial *at read time*; the settled list has 7 because GitHub back-fills the
+copied-forward rows asynchronously. The row's OBSERVATION was right, its MECHANISM wrong, and my
+correction over-swung. Both halves are still ONE bug — but it presents as **two conditions with
+different operator remedies** (`none` = replication lag; ABSENT = lag *or* list rot), which the
+diagnostics must not collapse.
+
+**The lag is bounded and mechanistic** (4 events, measured): 5.2s / 5.7s / 5.9s / 7.3s, and in every
+one the lagging job is the one that finished **last** — the job whose completion released `ci-pass`.
+⚠️ 4 events, one hour, one day: an OBSERVATION, not a bound. Budget 60s, not 10s, and log the
+elapsed time so the next session gets a second operating point for free.
+
+**Incidence says this is a one-day anomaly**, which changes the cost/benefit: of the last 200 runs,
+12 failed — **10 are real gate failures**, and the only 2 `ci-pass`-only refusals are both 2026-09-08
+(plus 2 more hidden inside re-run attempts). Zero in the preceding ~96 runs.
+
+**SHIP STAGE 1 ONLY — read, verdict, and if it REFUSED, sleep 15s, re-read, use the second rc.** No
+`grep -c`, no arithmetic, no break condition, so the `bash -e {0}` trap below cannot occur; the
+parser stays `ci-pass-verdict.sh`; and it is **monotone** — if the first read would have passed, the
+second is byte-identical, so a retry can convert refuses into passes and can NEVER convert a pass
+into a refuse. Emit `::notice::` on the retry so the incidence counter exists.
+
+**Stage 2 (a bounded poll in `scripts/ci-pass-fetch.sh` with an injectable reader and 4 RED cases)
+ONLY if it recurs after Stage 1.** On this incidence you would otherwise be building a tested
+control against a single day's GitHub weather.
+
+**DO NOT BUILD — each refuted, with the reason:**
+
+| option | verdict |
+|---|---|
+| **(b) cross-check the `needs` context** | ⛔ **CRITICAL FAIL-OPEN.** Replay the founding incident + a 5s race: API says `secrets none` (measured lag), needs context renders `if false` (measured, runs 32041902265/32043952216/32044803928) -> rule ACCEPTS -> **green over a failed security scan.** A "second opinion" does not save it: the second opinion is the one measured lying, and here it is the *only* opinion because the trustworthy source is silent. |
+| (c) `gh run watch` | deadlocks by construction — it blocks until the RUN completes, and the run cannot complete while `ci-pass` (its caller) runs |
+| (d) accept `none` when `status == completed` | refuted on both branches: if the whole record lags there is no signal; if only `conclusion` lags, accepting it is *guessing the conclusion* — the founding incident's exact shape |
+
+⚠️ **A trap in the obvious implementation, measured:** GitHub runs `run:` as `/usr/bin/bash -e {0}`,
+and `n=$(cut -f2 p.tsv | grep -c '^none$')` with **zero** matches exits 1 → the step dies **on the
+happy path**, with no output, indistinguishable from the `gh api` outage case. Never `$(grep -c)`;
+use `if ! grep -qF …; then break; fi`. Counter-note so nobody over-corrects: `[ cond ] && break` as
+a loop-body tail under `bash -e` is **safe** (measured rc=0) — don't guard what isn't broken.
+
+⚠️ **The existing 23-case harness would go GREEN over any poll bug** — it tests `ci-pass-verdict.sh`,
+a pure TSV→rc function, and the change is to the FETCH. Its case *"a DECLARED job still running
+fails CLOSED"* keeps passing. Inline YAML is the one place this repo has no harness; that is the
+argument for Stage 2's separate script, not for skipping the RED.
+
+Residual, unmeasured: whether `status`/`total_count` lag identically (one probe settles both); and
+whether a copy-forward can ever land a *wrong* value (only absent→success was observed).
+
 ### The original row follows
 
 ## 🔴 B482 (original) — `verify-gateway-image` WORKS, and can never run on the lab path 🔴 open
@@ -492,6 +605,13 @@ unable to run where the defect lives**:
 |---|---|
 | wired into | `Makefile:845` only — the **KinD** e2e (`e2e-kind`) |
 | named in `docs/scenario-1.md` / `scenario-2.md` | **0 times** — the lab path never invokes it |
+
+⚠️ **The `0 times` row above is HISTORY, and it is now FALSE — do not re-derive a closed gap from
+it.** MEASURED 2026-09-08: `scenario-1.md` and `scenario-2.md` each invoke `make verify-gateway-image`
+once (landed in #1177), and scenario-1 says in as many words that the gate *"correctly SKIPS"* on the
+attach branch. The DONE row at the top of B482 is the current state. The sharper residual to carry
+forward is the one that survives: the gate is now invoked on the lab **and SKIPs there by design**,
+so the lab path is still unasserted — see [[B572]] for the wider skip-instrumentation class.
 | the lab rows run | `INGRESS_CONTROLLER=istio-existing`, and `96-verify-gateway-image.sh:60` **SKIPs** in that mode |
 
 So on the one platform where a mesh can silently reach a public registry, the check is absent twice
@@ -1726,6 +1846,66 @@ file.
 
 ⚠️ **NOT currently exposed on this box**: today's `.env.state` carries 6 keys, none of them
 `HARBOR_CA_FILE`. The row's "14 variables / 172.18.0.3" describes the 2026-08-24 file.
+
+### ⛔ IDEA ROUND DONE 2026-09-08 — the proposed fix is REFUTED; ship a PRINTER, not a gate
+
+**The bug reproduces exactly as written** (measured, with a discriminating control: the same probe
+against a clean sink resolves the LAB values, so it is not clobbering everything). **The fix does
+not work**, on four independent counts:
+
+1. **`state_check` discriminates in 1 of 3 reachable cells** (measured, 4 cells under a clean
+   `env -i`), and the two it misses are the DEFAULT posture. It only refuses when the sink is
+   stamped AND `KUBECONFIG` is in `.env` AND the lab kubeconfig exists. But `.env.example:1251`
+   ships `# KUBECONFIG=…` **commented**, and on a real lab `30-vks-login.sh` writes `KUBECONFIG`
+   **into `.env.state` itself** — so the selector `state_check` needs lives inside the file it is
+   judging. It returns 0 early. Circular.
+   ⚠️ All three permissive arms are **deliberate and adversary-forced** — `lib/state.sh`'s own
+   header records that "refuse a mismatched overlay" was killed because it destroys the only copy of
+   the generated passwords and breaks the air-gap jumpbox. Wrong lever, not a bug to fix.
+2. **Blind to `.env.kind`**, which bypasses `state_check` at both layers — filed as [[B570]],
+   deliberately NOT folded in here.
+3. **A no-op in `27-harbor-ca-from-cluster.sh`**, which already calls `load_env` (`:37`) — so
+   `state_check` runs there today and does not help, because `OUT="$1"` was substituted by make
+   before the process existed. Half the design has shipped and been measured for months.
+4. **In `fetch-ca.sh` it would convert a LOUD refusal into a SILENT authenticated write.** Measured
+   on a local TLS oracle: no pin + non-TTY → **rc=1, nothing written**; a **matching**
+   `HARBOR_CA_SHA256` → **rc=0, writes, no prompt**. Adding `load_env` opens a channel by which a
+   stale sink supplies the *pin* for the CA it also mis-selects. Latent today (nothing writes that
+   key to a sink), still a hole the fix creates.
+
+Also refuted: alternative (a), provenance via `$(origin)` — measured, it returns `file` for BOTH
+`.env` and `.env.state` and cannot name *which*. And (`fetch-ca.sh` being generic) an ARGV-ignoring
+variant is impossible for the `argocd` caller: `Makefile:735` picks `ARGOCD_SERVER` **or**
+`ARGOCD_LB_IP`, so there is no `${UPPER}_URL` to re-resolve.
+
+**The severity is LOWER than the row implies, and the harm is different.** The failure is **loud,
+then wrong**: `fetch-ca.sh` announces `fetching the harbor CA from 172.18.0.3:443` and cannot write
+without a pin or a TTY `y` — so this is NOT the air-gap silent class. And `$OUT` is the **KinD**
+anchor (`06-install-harbor.sh:64`), so the operator's lab anchor is **not overwritten**, merely
+never fetched. Two real harms survive:
+
+- a **pinned** operator gets `FATAL CA FINGERPRINT MISMATCH … something is intercepting this
+  connection` — sent to report a security incident that does not exist;
+- the success path prints `set it in .env, e.g. HARBOR_CA_FILE=<the KinD path>`, converting a
+  transient overlay poisoning into a **permanent** `.env` line that outlives `kind-down`.
+
+**Done when — a PRINTER at the point of use, keyed on the FILE, not the stamp.** Grep the two
+overlays directly; if either effective value came from a sink carrying `VKS_STATE_KIND=1` or from
+`.env.kind` at all, print one loud line naming **the file and the value** before fetching. Immune to
+all three permissive arms; covers `.env.kind`; zero false positives for a tenant (their values live
+in `.env`); contradicts neither documented rationale. The discriminator is already battle-tested
+in-repo (`creds.sh:568,:665`, `02-env.sh:305`). Order it **BEFORE** the pin check, so the operator
+sees provenance before the MITM accusation. Fix the misleading remedy in the same change.
+
+RED both ways: stamped sink → prints and names `.env.state`; `.env.kind` → prints (the case that
+refutes the `state_check` design); controls — no sink → absent; an unstamped real-lab sink (the
+shape live on this box today) → absent.
+
+⚠️ Also measured: the window is **wider** than the row states. `kind-down` deliberately leaves the
+sink when it cannot confirm the cluster is gone (the `ENGINE_ASKABLE=0` arm — a documented, expected
+outcome), plus every pre-#192 `.env.kind` never migrated. Two of three arms are not negligence.
+✅ Confirmed: the row's inference that B553's SAN guard cannot help is RIGHT — make hijacks both
+arguments coherently, so the cert genuinely presents the address requested (measured).
 
 **Done when — NEEDS AN IDEA ROUND FIRST (RULE ZERO-A).** The candidate is to resolve the path AFTER
 `load_env` so `state_check` governs a mismatched stamp — but that contradicts a documented ARGV
