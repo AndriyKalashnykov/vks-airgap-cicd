@@ -184,6 +184,9 @@ verify_app() {
     log_error "[${app}] PipelineRun did not succeed — diagnostics:"
     kubectl -n "$CI_NAMESPACE" get "$pr" -o wide >&2 || true
     kubectl -n "$CI_NAMESPACE" get taskruns -l "$sel" >&2 || true
+    # ...and the FAILING STEP'S OWN STDOUT, which the three lines above never show. B532.
+    pipeline_failure_log "$CI_NAMESPACE" "${pr#*/}"
+    pipeline_rerender_hint
     die "[${app}] pipeline failed"
   fi
   log_info "[${app}] PipelineRun succeeded"

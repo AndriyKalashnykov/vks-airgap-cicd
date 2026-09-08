@@ -16,7 +16,61 @@
 > most as open rows, and `B42` as a *closed* one recorded in the session-3 note below. A citation
 > that lands on a closed row is still resolved — it tells you the gate's reason shipped.
 
-## 🔴 B522 — `check-env-clobber` treats SNAPSHOT-PROTECTED as automatically safe, and it is not 🔴 open
+## ⚪ B522 — REFUTED-IN-PART: the mechanism is real and LATENT, and BOTH prescriptions break scenario-1
+
+An idea round reproduced the mechanism exactly — with a discriminating control — and then refuted
+this row's causal story, its safety argument, and both of its remedies.
+
+**REPRODUCED (measured).** With `.env.state` publishing a different value: a protected var takes the
+AMBIENT value; an unprotected CONTROL var correctly takes the state value. So the snapshot *is* the
+mechanism, not "ambient always wins". The row's two numbers hold.
+
+**BUT THE SAFETY ARGUMENT IS WRONG.** This row said KinD is safe because it sets `SKIP_DOTENV=1`.
+`SKIP_DOTENV` skips **`.env` only** — `. "$example"` sits OUTSIDE that branch, and `.env.example:193`
+ships `HARBOR_CA_FILE` uncommented. Measured under `SKIP_DOTENV=1`: the consumer got
+`./secrets/harbor-ca.crt` while the freshly-published discovered CA was discarded. **`.env` is not the
+channel that arms this — `.env.example` is.**
+
+**AND THE CAUSAL STORY IS WRONG.** "An ambient value inherited from a sourced `.env`" does NOT
+reproduce it: a plain parent->child chain shows no divergence, because the parent already resolved to
+the state value and exports THAT. The reachable shape is narrower — a parent that ran `load_env`
+BEFORE the publish, then spawns a child. It is a **stale-snapshot-across-a-publish window**.
+
+**THE EXPOSURE IS LATENT, NOT LIVE (measured sub-facts + an audit).** For `HARBOR_CA_FILE` no
+reachable flow was found: `06-install-harbor.sh` is the only publisher and spawns ZERO children (all
+same-process `source`); make does not export it; no recipe chains two numbered scripts in one shell;
+and `06:329-334` already re-exports the correct values after publishing. The trust anchor cannot be
+mis-selected today — but it is one refactor away, silently.
+
+**🔴 WHY BOTH REMEDIES ARE REFUTED — this is the finding that decides the row.**
+This row claimed "every consumer guards `${HARBOR_CA_FILE:-}`, so commenting it would be safe". True
+for "won't crash under `set -u`", FALSE for behaviour: guarded means they **skip the CA**
+(`lib/harbor.sh:31` `elif` not taken -> `SSL_CERT_FILE` unset -> crane falls back to system trust).
+And **scenario-1 never tells the operator to set `HARBOR_CA_FILE`** — 0 mentions; it writes
+`./secrets/harbor-ca.crt` at `:739` and relies entirely on that uncommented `.env.example` line.
+**Commenting it breaks scenario-1 at `make mirror` with `x509: certificate signed by unknown
+authority`.** scenario-2 sets it in `.env`, so only scenario-1 breaks — the asymmetry that makes it
+easy to miss. Tightening the arm has an EXCELLENT false-RED rate (1 of 58, zero false REDs) and is
+still refuted, because **its only remedy is the thing that breaks scenario-1**.
+
+**The live set is 1, not 2** (the row's "two" counted `INGRESS_CONTROLLER`, already fixed). But
+(protected ∧ `state_set`-published) = **15**, including `KUBECONFIG` and four credentials — so
+"published to `.env.state`" is the right discriminator over an INCOMPLETE channel: the operator's own
+`.env` is the other, and no gate can read it.
+
+**DECISION: do nothing to the gate.** Optional future work, each needing its own round: a derived
+guard asserting that any script which `state_set`s a snapshot-protected var also re-exports it
+(generalising what `06:329-334` hand-rolls); or teaching `load_env` to distinguish inherited-from-file
+from explicit via a sentinel (closes all 15 at one site, but is substantial machinery in the most
+load-bearing function in the repo, for a latent bug).
+
+**Residual:** unreachability is an AUDIT, not a run. A full `make e2e-kind` logging `HARBOR_CA_FILE`
+at each consumer would settle it. `KUBECONFIG` has the identical shape and was not traced — if any of
+the 15 is live, it is the one that matters most.
+
+---
+
+## 🔴 B522 (original) — `check-env-clobber` treats SNAPSHOT-PROTECTED as automatically safe, and it is not
 
 **Found while fixing the `INGRESS_CONTROLLER` ambient clobber (2026-08-29). The fix landed; this row
 is the CLASS the fix did not close.**
@@ -5465,7 +5519,42 @@ belong to the OTHER repo's walkthrough matrix and leaked into `.env` from walk r
 skipped `#` lines, so every deliberately-commented var read as absent. `check-env-coverage.sh:163`
 matches `^#?` and does NOT share that blind spot — verified.
 
-## B532 — 🟡 fixing `.env` is NOT enough: the CLUSTER keeps the value it was rendered with
+## ✅ B532 — SHIPPED 2026-09-08 as something BETTER than either option this row proposed
+
+A round refuted (a), (b) AND the later re-scoped placement, then supplied the real answer.
+
+**The proposed hook point was on a path the operator never walks.** `install-all` ends at
+`build-apps`; there is no `verify` in the chain. So an operator hitting this lands at
+`75-build-apps.sh`, and a fix in `99-verify.sh` alone would never fire for them.
+
+**(a) cannot be implemented as written.** The stale ref reaches kaniko as a `--build-arg`, so the
+failure string lives in a STEP'S STDOUT — not an event, not a Pod condition. Classifying it means
+string-matching the very log nothing was printing.
+
+**What was actually missing:** nothing in this repo printed that log. Both arms showed object STATUS
+and never the container output — while the cause is IN it, naming the stale image verbatim. Same
+class as CLAUDE.md RULE ZERO-P, one script over.
+
+**Shipped:** `pipeline_failure_log` + a GUARDED `pipeline_rerender_hint` (lib/os.sh), called from all
+THREE failure arms (75-build-apps' reason-matched and timeout arms, 99-verify). Unconditional — no
+classifier, no oracle, no denominator, no false-RED surface — and it never gates. The hint names
+`make configure-tekton` only when `secrets/webhook-token` exists, because `ensure_secret_token` MINTS
+a new token when it is absent and a blind re-run would rotate the HMAC and desync the Gitea webhook.
+
+`scripts/test-pipeline-failure-log.sh`, 7 cases, kubectl stubbed, offline. TWO were VACUOUS on their
+first run and were caught only by mutating what they claimed to protect: a read-loop guard that could
+never fire (the heredoc already supplied the newline — deleted as dead code) and a `>= 1` call check
+that passed when one of two arms was deleted (now an exact per-file count). Both RED-proven after.
+
+**Residual, named by the round and NOT closed:** the Secrets/ConfigMap half of the class
+(`gitea-webhook-secret`, `gitea-git-auth`) has already fired live and nothing here covers it; nor does
+it cover `GITEA_IMAGE` in the Gitea Deployment, `70-configure-argocd.sh`, or the ingress routes.
+`kaniko`'s exact stderr string is unverified — recommendation 1 is precisely what makes it available
+on the next real failure.
+
+---
+
+## B532 (original) — 🟡 fixing `.env` is NOT enough: the CLUSTER keeps the value it was rendered with
 
 Second-order, measured in the same incident. After correcting `TEMURIN_JRE_TAG` in `.env`, the very
 next `make verify` STILL failed with `25.0.3_9` — because the Tekton TriggerTemplate in the cluster
@@ -6123,6 +6212,32 @@ today the file is gone.
 | **B713** | 🔴 **`make vks-login` is a NO-OP for the Supervisor credential in the DEFAULT auth method, yet it is the remedy `make creds` and `argocd-password` prescribe when the Supervisor rejects that credential — and it exits 0, so the operator reads the no-op as a fix.** MEASURED 2026-09-06 on the live lab, from an operator hitting it: `make argocd-password` printed `argocd-initial-admin-secret is not in ns/cicd yet — the ArgoCD instance is still reconciling` and began `waiting up to 900s`. Root cause: `secrets/supervisor.kubeconfig` was expired — `kubectl version` against it returned `You must be logged in to the server`, which `classify_kube_failure` correctly calls **UNAUTHORIZED**. `make creds` had already said so (*"the Supervisor REJECTED this kubeconfig. Re-run: make vks-login"*). **But that remedy does nothing here.** `.env` carries `VKS_AUTH_METHOD=kubeconfig` (`.env:1045`), and `30-vks-login.sh:38-44`'s `kubeconfig` arm only validates the GUEST kubeconfig — the Supervisor file is written exclusively by the **`vcf`** arm (`:395-400`, `vcf context create`, and `:503` says so outright). Measured: `make vks-login` returned **rc=0**, logged *"VKS auth method: kubeconfig ... connected. Current context: cicd-gc3-admin@cicd-gc3"*, and left `supervisor.kubeconfig`'s mtime **unchanged at 03:40:50**. `make vks-login VKS_AUTH_METHOD=vcf` refreshed it (mtime 20:02:32) and `make argocd-password` then returned in **0s instead of 900s**. ⚠️ **The 900s wait makes it far worse than a bad message**: the script's own text blames the ArgoCD *instance* for *reconciling*, so an operator waits a quarter-hour on a diagnosis that is wrong in both its subject and its remedy — the `classify_kube_failure` verdict UNAUTHORIZED was available and is not consulted on that path. ⚠️ **A namespace theory I formed was REFUTED by measurement, and the row must not repeat it:** I inferred from the handoff that `argocd_namespace()`'s `cicd` was wrong because the ArgoCD Service namespace is `svc-argocd-service-t90xm`. Measured on the Supervisor: the `argocd-initial-admin-secret` object EXISTS in `ns/cicd`, and is `NotFound` in `ns/svc-argocd-service-t90xm`. `cicd` is CORRECT — the vSphere Namespace holds the instance, the `svc-` namespace holds the operator. The stale credential was the only fault. **Done when:** (a) the remedy names the arm that actually refreshes the Supervisor file, or `vks-login` refreshes it in every method that can; and (b) `argocd-password` consults `classify_kube_failure` BEFORE entering its wait, so an UNAUTHORIZED Supervisor fails in seconds naming the credential rather than waiting 900s blaming reconciliation. ⚠️ Needs its own idea round: (b) touches a wait loop whose timeout exists for a real reason (a genuinely reconciling instance), so a naive fail-fast could false-block a legitimate first install. |
 
 ## B538 — 🔴 the MECHANISM is now SETTLED from source; my hoist fix is REFUTED; the fix is to move the CREATE into `60-configure-tekton.sh`
+
+**⚠️ 2026-09-08 — THE WINDOW IS MEASURED: 2 SECONDS.** `scripts/probe-gitea-hook-window.sh` (F6,
+now in the repo) run against the live lab, twice, same result:
+
+| S | hook fired? |
+|---|---|
+| 0 | **YES** <- the self-check: if this were silent the source-read would be wrong somewhere |
+| 1 | YES |
+| 2, 4, 8 | no |
+
+**WINDOW = 2s.** Monotone boundary, reproduced, zero PipelineRuns, zero leftover repos (the cleanup
+trap was verified by re-listing the org). The S=0 arm is what makes it trustworthy — without it a
+broken probe and a zero window are the same output. It also confirms a contents-API commit takes the
+same notify path as `git push`, which is what let the probe avoid git credentials entirely.
+
+**Consequences.** The HOIST stays REFUTED and now with a number: a ~2–2.5s hoist window against a
+measured 2s window is exactly the coin flip this row called it. **F4** (move the POST into
+`60-configure-tekton.sh`) turns a 2s race into minutes and remains the right fix.
+
+⚠️ **ONE OPERATING POINT**, on an idle-ish lab. The pushQueue handler's latency is load-dependent, so
+this is an OBSERVATION, not a mechanism — re-run the probe on a loaded cluster before treating 2s as
+a bound.
+
+**Also measured on the same trip (the row's extra ask):** all SIX `*-deploy` repos carry **0** hooks,
+so the "the seed's DELETE only targets the APP repo, a stray deploy-repo hook would never be reaped"
+concern is clean today.
 
 An idea round read **Gitea v1.27.2 source** and settled what this row called a hypothesis. It also
 **refuted the fix this row proposed** (hoist all hook creation after the seed loop).
