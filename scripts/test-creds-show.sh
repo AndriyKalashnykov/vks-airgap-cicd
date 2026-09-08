@@ -1347,12 +1347,30 @@ _sso_names() {
     *vks-login*) ;;
     *) return 1 ;;
   esac
-  local _pre _near
-  _pre="${1%%vks-login*}"; _near="$(printf '%s' "$_pre" | tail -c 24)"
-  case "$_near" in
-    *[Nn][Oo][Tt]" "*|*[Nn][Ee][Vv][Ee][Rr]" "*|*"without "*) return 1 ;;
-  esac
-  return 0
+  # ⚠️ EVERY MENTION, NOT THE FIRST. `${1%%vks-login*}` takes the text before the FIRST occurrence,
+  # so "…do NOT run make vks-login blindly; if you own the lab, run: make vks-login …" was silent —
+  # the warn-then-prescribe shape this matcher exists to catch. Any UNNEGATED mention counts.
+  # ⚠️ CHARACTERS, NOT BYTES. `tail -c 24` shrinks the window by 2 chars per em-dash, and this
+  # corpus is full of them; it can also start mid-UTF-8-sequence.
+  local _rest="$1" _pre _near
+  while :; do
+    case "$_rest" in *vks-login*) ;; *) return 1 ;; esac
+    _pre="${_rest%%vks-login*}"; _near="${_pre: -24}"
+    # ⚠️ THE IMMEDIATE CLAUSE, not a raw window. "if the token is not fresh, run: make vks-login"
+    # has "not" 20 chars before the mention — but it negates "fresh", not the command, and the
+    # comma proves it. Trim to the last clause boundary so only a negation that governs the VERB
+    # counts. Measured: "so do NOT run make vks-login" stays silent; "...not fresh, run: make
+    # vks-login" and "...not sure, run: make vks-login" are now FLAGGED.
+    _near="${_near##*,}"; _near="${_near##*;}"; _near="${_near##*. }"
+    case "$_near" in
+      # `without ` is NOT here on purpose: "without running make vks-login you cannot proceed" is a
+      # PRESCRIPTION, not a warning, and treating it as negated would be a false GREEN. Dropping it
+      # also fails toward FLAG, which is the safe direction for this gate.
+      *[Nn][Oo][Tt]" "*|*[Nn][Ee][Vv][Ee][Rr]" "*) ;;                  # negated -> keep looking
+      *) return 0 ;;                                                 # an UNNEGATED mention
+    esac
+    _rest="${_rest#*vks-login}"
+  done
 }
 
 # ── 🔴 THE SSO-LOCKOUT SAFETY PROPERTY. It regressed TWICE and the suite did not notice. ─────────
@@ -1453,14 +1471,25 @@ else
   # The floor is DERIVED: at least 2 arms per consumer file. A hardcoded 9 went RED when a block
   # was legitimately removed, accusing the scanner and inviting the maintainer to edit the number
   # DOWN -- i.e. to weaken the gate as the cheapest way to go green.
-  # DERIVED FROM BLOCKS, not files: creds.sh holds TWO consumer blocks, so a per-file floor was
-  # 4 against a true 9 — 44% of truth, which is why every merged-arm defect slid under it.
-  _nblocks="$(printf '%s\n' "$_arms" | awk -F'\t' '$2 ~ /EXPIRED/ {n++} END{print n+0}')"
-  _floor=$(( (_nblocks > 0 ? _nblocks : _nfiles) * 2 ))
+  # 🔴 THE FLOOR MUST NOT COME FROM THE SCAN IT POLICES. It was derived from `$_arms`, so anything
+  # that made a block INVISIBLE also lowered the floor and erased the evidence: writing one label
+  # as `(EXPIRED*)` dropped a whole block (9 arms -> 6, floor 6 -> 4) and 6 >= 4 passed, while that
+  # block's undecidable arm literally prescribed the command. MEASURED, end-to-end, suite green.
+  # An INDEPENDENT grep cannot be shrunk by a scanner bug. (It was also an ARM count wearing a
+  # block count's name: two EXPIRED-ish labels in one block inflated it.)
+  # shellcheck disable=SC2086  # deliberate word-splitting: one path per line, no spaces in them
+  _nblocks="$(grep -hcE '^[[:space:]]*\(?EXPIRED\*?\)' $_cfiles 2>/dev/null | awk '{t+=$1} END{print t+0}')"
+  _floor=$(( (_nblocks > 0 ? _nblocks : _nfiles) * 3 ))
   if [ "${_narms:-0}" -lt "$_floor" ]; then
     bad "SSO gate: EITHER a consumer block was legitimately removed OR the scanner desynced — it returned ${_narms:-0} arms across ${_nfiles} consumer file(s), expected >= ${_floor}"
   else
     _viol=0; _named=0
+    # ⚠️ SYNTHETIC RECORDS GO THROUGH THE SAME LOOP. The two fixtures above call `_sso_names`
+    # DIRECTLY, so they pin the FUNCTION and not the ROUTE: deleting the call inside this loop left
+    # the whole suite byte-identically green — the very defect they were added to close, moved one
+    # line down. These two must contribute exactly ONE violation between them.
+    _arms="$(printf '%s\nSELFTEST\tSELFTEST-BAD*)\tunknown state, run: make vks-login now\nSELFTEST\tSELFTEST-OK*)\tthis is undecidable, so do NOT run make vks-login here' "$_arms")"
+    _synth=0
     while IFS="$(printf '\t')" read -r _af _al _at; do
       [ -n "${_al:-}" ] || continue
       # does this arm name the SSO command, by EITHER route?
@@ -1475,22 +1504,44 @@ else
       # empty flag — both expand to ZERO arguments, i.e. the DEFAULT mode, which NAMES the command.
       # An allowlist of what is wrong is another enumerated list; an allowlist of what is RIGHT
       # cannot be out-run by a new way of being wrong.
-      case "$_at" in
-        *"renew_how --ask-only"*|*"renew_how --no-command"*|*"renew_how)"*) ;;
-        *renew_how*) _viol=$((_viol + 1))
-          printf '        ^ %s %s calls the remedy with an unrecognised mode\n' "$_af" "$_al" >&2 ;;
-      esac
+      # ⚠️ PER OCCURRENCE, not per arm. A whole-arm `case` meant ONE sanctioned call exempted every
+      # other call in the same arm — and an arm that BRANCHES between two remedies (an `if` with a
+      # sanctioned call in one leg and `$(_renew_how $flag)` in the other) is exactly that shape.
+      # Measured: viol=0 while the other leg rendered the SSO command at runtime.
+      while IFS= read -r _call; do
+        [ -n "$_call" ] || continue
+        case "$_call" in
+          "renew_how --ask-only"|"renew_how --no-command"|"renew_how") ;;
+          *) _viol=$((_viol + 1))
+             printf '        ^ %s %s calls the remedy as [%s] — unrecognised mode\n' "$_af" "$_al" "$_call" >&2 ;;
+        esac
+      done <<CALLS
+$(printf '%s' "$_at" | grep -o 'renew_how[^)"]*' || true)
+CALLS
       # EXPIRED is the ONLY label allowed to name it. Anything unrecognised counts as NOT-expired,
       # so a new or oddly-spelled label fails SAFE instead of inheriting the exempting value --
       # measured, the previous tracker never reset `_arm`, so 6 of 6 alternative label spellings
       # inherited EXPIRED and went green.
-      case "$_al" in
-        *EXPIRED*) [ "$_names" -eq 1 ] && _named=$((_named + 1)) ;;
-        *)         [ "$_names" -eq 1 ] && { _viol=$((_viol + 1)); printf '        ^ %s %s names the SSO command\n' "$_af" "$_al" >&2; } ;;
+      # ⚠️ ANCHORED. `*EXPIRED*` matches `!(EXPIRED)*)` — the NEGATION of expired — and exempted
+      # it, which is the one label that must never be exempt. Strip a leading `(` and a leading
+      # quote, then require the label to BEGIN with EXPIRED.
+      _lb="${_al#UNPARSED }"; _lb="${_lb#(}"; _lb="${_lb#\"}"; _lb="${_lb#\'}"
+      case "$_lb" in
+        EXPIRED*) [ "$_names" -eq 1 ] && _named=$((_named + 1)) ;;
+        *)         if [ "$_names" -eq 1 ]; then
+                     if [ "$_af" = SELFTEST ]; then _synth=$((_synth + 1))
+                     else _viol=$((_viol + 1)); printf '        ^ %s %s names the SSO command\n' "$_af" "$_al" >&2
+                     fi
+                   fi ;;
       esac
     done <<INNER
 $_arms
 INNER
+    if [ "$_synth" -ne 1 ]; then
+      bad "SSO gate: the self-test records produced $_synth violation(s), expected exactly 1 — the detection ROUTE through this loop is dead, so every real arm is passing unexamined"
+    else
+      ok "SSO gate: the detection route is live (self-test records classify correctly through it)"
+    fi
     if [ "$_viol" -ne 0 ]; then
       bad "SSO gate: $_viol non-EXPIRED arm(s) name the SSO command — that prescribes a vCenter bind for a cause the report cannot decide, and vCenter locks out PERMANENTLY after 3 failures"
     else
