@@ -4518,7 +4518,45 @@ why. Verified all three paths for real (not `make -n`, which prints the recipe r
 branch runs): inside-repo removes and exits 0; outside-repo refuses and the directory survives;
 `CLEAN_FORCE=1` deletes.
 
-## 🔴 B517 — `make creds` claims "no ingress is installed, so nothing serves those hosts" while all 8 hosts serve HTTP 200
+## 🟡 B517 — parts (1) and (2) are DONE and TESTED; only the GATING SIBLING (3) remains
+
+⚠️ **THE ROW BELOW IS STALE and I nearly briefed a round from it.** It states
+`grep -c _VKS_STATE_SOURCED scripts/creds.sh` -> **0**. Measured 2026-09-08: `_sink_refused` (derived
+from that very signal) is used in **11** places, and `_prov` keys on it at `:640` before the grep the
+row blames ever runs.
+
+**REPRODUCED the row's own scenario** — a `.env.state` carrying `VKS_STATE_KIND=1` and a
+`VKS_STATE_SERVER` for a different cluster, against a live server that disagrees. What it prints now:
+
+    state-overlay: REFUSED
+    values below : from YOUR .env — the values you supplied
+    state overlay: <path> — REFUSED
+    flow         : undetermined — a state overlay exists but was REFUSED (stamped for another
+                   cluster), so nothing in it is in play here
+    note: those passwords are held by an overlay this report REFUSED — it belongs to a
+          DIFFERENT cluster. Do NOT use them.
+
+and for the hosts that have no address:
+
+    no URL in this report for: Gitea, Tekton, headlamp
+      That is a fact about THIS REPORT, not about the cluster — no ingress address is configured here.
+
+That is Done-when (2) verbatim: it states what we KNOW instead of a fact about the world. The false
+sentence the row is titled after — *"no ingress is installed, so nothing serves those hosts"* — no
+longer appears in the output at all. **And it cannot silently regress:** `test-creds-show.sh` carries
+a `_refused_sink` fixture and 16 assertions over this state.
+
+**WHAT IS ACTUALLY LEFT — Done-when (3), and it is the reason the defect survived 12 runs.** The
+matrix has never measured this: `make creds-show` is in BOTH scenario documents and the walk DOES run
+it, but a block is graded on its EXIT CODE and `creds` is documented never-gating, so its output is
+printed and never read. Rows 5 and 6 printed `<needs ingress>` for eight serving hosts in **20 logs
+across 12 runs** — every one graded `0 FAILED`. A green row is a claim about the harness, not about
+the demo serving. A gating sibling that validates the full outcome is a NEW CONTROL and needs its own
+idea round; the two refuted designs below are still refuted and must not be rebuilt.
+
+---
+
+## 🔴 B517 (original) — `make creds` claims "no ingress is installed, so nothing serves those hosts" while all 8 hosts serve HTTP 200
 
 MEASURED 2026-08-28, on the lab left by the cut-B matrix (rows 3 4 6), found only because the owner
 asked whether the URLs had actually been checked after the last row. They had not been — the matrix
