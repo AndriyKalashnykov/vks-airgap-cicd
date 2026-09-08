@@ -767,7 +767,9 @@ if [ -n "${INGRESS_LB_IP:-}" ] && [ "$_ing_live" != 1 ]; then
 elif [ -n "${INGRESS_LB_IP:-}" ]; then
   echo
   echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"
-  echo "    ${INGRESS_LB_IP}  $(ingress_infra_hosts)$(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)"
+  # The trailing space the per-app loop leaves is TRIMMED: this line is COPIED into /etc/hosts.
+  _hosts_line="$(printf '%s' "$(ingress_infra_hosts)$(app_names | while read -r a; do if [ -n "$a" ]; then printf '%s ' "$(app_host "$a")"; fi; done)" | sed 's/[[:space:]]*$//')"
+  echo "    ${INGRESS_LB_IP}  ${_hosts_line}"
 fi
 
 # --- table ----------------------------------------------------------------------------
