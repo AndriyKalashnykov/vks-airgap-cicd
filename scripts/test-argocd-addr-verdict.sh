@@ -250,8 +250,13 @@ fi
 # and the function answers LEAVE for the unset and placeholder states -- backwards -- while the
 # granted-NAME state accidentally agrees, so a test exercising only that row goes green over it.
 # check-lib-sourcing.sh globs scripts/*.sh (:165) and cannot see a lib->lib dependency.
-# shellcheck source=scripts/lib/argocd.sh
-if ( . "${SCRIPT_DIR}/lib/argocd.sh" 2>/dev/null; command -v is_placeholder >/dev/null 2>&1 ); then
+# ⚠️ A FRESH `bash -c`, NOT A SUBSHELL. The first version of this case used ( . lib/argocd.sh; ... )
+# and was VACUOUS: a subshell INHERITS the parent's functions, and this file has already pulled in
+# lib/os.sh, so is_placeholder was defined no matter what argocd.sh does. Measured -- deleting the
+# source line from lib/argocd.sh left standalone is_placeholder MISSING and this case still said ok.
+# That is the positive control failing to control, in the very case written for a SILENT inversion.
+# Shell functions are not exported without `export -f`, so a fresh bash sees only what it sources.
+if bash -c '. "$1/lib/argocd.sh" 2>/dev/null; command -v is_placeholder >/dev/null 2>&1' _ "${SCRIPT_DIR}"; then
   ok "...and it carries is_placeholder with it (lib/os.sh is sourced from lib/argocd.sh)"
 else
   bad "lib/argocd.sh does not bring is_placeholder -- argocd_effective_addr then INVERTS its answer
