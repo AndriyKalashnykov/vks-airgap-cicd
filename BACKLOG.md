@@ -544,6 +544,44 @@ and unattended.
 `gh workflow run ci.yml --ref main` reproduces the same job on demand, and that is how to get the
 step. One was dispatched 2026-09-08 (run 34284426866) for exactly this.
 
+### 🔴 CORRECTION 2026-09-08 — the kubeconform fix cleared ONE cause, NOT the weekly; it is still RED
+
+⚠️ **#1188's message says "This fixes the CAUSE" and the handoff read as though the weekly were
+green. Neither is true, and the correction matters more than the fix.** A verification run dispatched
+immediately after #1188 merged (34286472692, on `b2d440b`, which contains the fix) shows `validate`
+**passing** — and `static-check` still **failing**, on a SECOND, independent breakage the fail-fast
+composite had been hiding underneath the first. This is `git-workflow.md`'s "main can carry MULTIPLE
+independent breakages" exactly: fixing one unmasks the next, and "fixed the red ⇒ green" is the
+assumption it warns against.
+
+    run-test-set [all offline]: 150 test(s) run in 471s, 3 failed
+      ./scripts/test-adversary-gate-rearm.sh   (rc=1)
+      ./scripts/test-creds-reach-ingress.sh    (rc=1)
+      ./scripts/test-creds-show.sh             (rc=1)
+
+**All three PASS locally and FAIL in CI** — measured, on the same tree. They are three DISTINCT
+environment dependences, and the pattern is the finding: a test that asserts the product while
+depending on dev-machine state is invisible here **and** per-PR (the fast set does not run on a PR,
+[[B571]]), so its only home was the weekly — which was already red for the kubeconform reason.
+**Two layers of masking over three real defects, one of them operator-facing.**
+
+| test | dependence | status |
+|---|---|---|
+| `test-creds-reach-ingress` | the host's **resolver order**. `getent hosts` returns every family and CI's `localhost` is `::1` first; `_reach_ingress` compared only `awk 'NR==1'`. **Not a test artifact** — on any dual-stack operator box `make creds` invents a `stale DNS` fault. | ✅ fixed |
+| `test-adversary-gate-rearm` | **`~/.claude/agents`**. The hook derives its roster from there and falls back to a bare substring when no roster is readable; CI has neither directory (`git ls-files .claude/agents/` = 0), so the fallback ran and the prose probe minted. The HOOK is right; the TEST was asserting roster behaviour it could only exercise on my box. | ✅ fixed |
+| `test-creds-show` | **`$HOME`**, mechanism NOT yet diagnosed. | 🔴 **open** |
+
+**The remaining one, measured:** `HOME=$(mktemp -d) bash scripts/test-creds-show.sh` reproduces it
+locally — `FAIL STATE 14: rc=0 + empty was reported as a failure. kubectl exited 0 and answered
+correctly; saying it failed is the same wrong-cause class, inverted.` The test file itself contains
+**zero** `HOME` references, so the dependence is indirect (creds.sh reaching a default kubeconfig
+path is the obvious candidate, unverified). Start there; the reproduction is one command and needs
+no cluster.
+
+**Done when:** that third failure is diagnosed and fixed, a dispatched run of `ci.yml` concludes
+`success`, and the weekly is green — verified by reading the run, not by inferring it from a merge.
+⚠️ Do not report this row closed on a local green: local is precisely what could not see any of it.
+
 **Done when:** the cause is named from a step log, fixed, and the weekly is green — plus a decision
 on whether a three-week-red scheduled gate should be *noticed* by anything. Nothing alerts on it
 today, which is why it ran red for three weeks with an operator and an agent both active in the repo
