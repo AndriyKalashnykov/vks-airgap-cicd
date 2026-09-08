@@ -285,4 +285,55 @@ if [ "$verdict" -eq 0 ]; then
 else
   printf '  ⚠️  NOT AUTHENTICATED — accepted on your confirmation alone. Set %s to make this a check.\n' "$pin_var"
 fi
-printf '  set it in .env, e.g.  %s_CA_FILE=%s\n' "$UPPER" "$OUT"
+
+# ⚠️ THE ANCHOR IS NOW CHECKED AGAINST THE ADDRESS IT WAS FETCHED FROM, and until 2026-09-07 it was
+# not. Everything above proves the chain (`openssl verify -CAfile`), which for a SELF-SIGNED leaf is
+# `verify(X,X)` — true for ANY self-signed cert, as :141-143 already concedes. Nothing asked the only
+# question that matters to a caller: WILL THIS ANCHOR VERIFY THIS ENDPOINT?
+#
+# MEASURED CONSEQUENCE, on a live lab: with ARGOCD_SERVER a bare IP and the cert carrying no IP SAN,
+# this script fetched the leaf, "verified" it vacuously, printed `wrote …` + `AUTHENTICATED`, and told
+# the operator to `set it in .env`. Doing so flipped lib/argocd.sh:385 into its VERIFIED branch, which
+# cannot succeed against that address — `make argocd-auth-check` went from `PASS (credential only)` to
+# `NO token (curl rc=60)`. The tool whose stated job is "and VERIFY it" (Makefile:732) is the tool
+# that broke the lab, and the last line it printed was the instruction that armed it.
+#
+# `ca_verifies_endpoint` (lib/tls.sh:123) is the primitive built for exactly this, and its own header
+# records the same trap one layer down: "-verify_return_error CHECKS THE CHAIN AND NOT THE NAME …
+# a green here meant 'the chain is good', NOT 'this connection will work'". 02-env.sh:560 already
+# calls it for Harbor. Harbor was safe only BY ACCIDENT — HARBOR_URL happens to be a name its cert
+# carries.
+#
+# It is graded, so each rc gets its own remedy; conflating them is the wrong-cause class this repo
+# keeps paying for. rc=3 is the incident: the ANCHOR is right and the ADDRESS is wrong.
+_ep_rc=0
+ca_verifies_endpoint "$host" "$port" "$OUT" >/dev/null 2>&1 || _ep_rc=$?
+case "$_ep_rc" in
+  0)
+    printf '  VERIFIES %s — chain AND name.\n' "$hostport"
+    printf '  set it in .env, e.g.  %s_CA_FILE=%s\n' "$UPPER" "$OUT"
+    ;;
+  3)
+    # THE ONE THAT BIT US. Do NOT print "set it in .env" here: that is the instruction that arms the
+    # break. Name the real fix instead — the addresses this certificate WILL verify.
+    printf '\n  🔴 THIS ANCHOR CANNOT VERIFY %s.\n' "$hostport"
+    printf '     The chain is fine; the ADDRESS is wrong. The certificate does not present this\n'
+    printf '     name (an IP needs an IP SAN, and most self-signed server certs carry none).\n'
+    printf '     It presents:\n'
+    openssl x509 -in "$OUT" -noout -ext subjectAltName 2>/dev/null | sed -n '2p' | sed 's/^/       /'
+    printf '\n     So do NOT set %s_CA_FILE while the address is %s — a CA-present\n' "$UPPER" "$host"
+    printf '     path will FAIL CLOSED where the current --insecure path works.\n'
+    printf '     Point the address at a name above (add it to /etc/hosts if it does not resolve),\n'
+    printf '     re-run this, and THEN set %s_CA_FILE.\n' "$UPPER"
+    ;;
+  2)
+    printf '  ⚠️  could not re-check against %s (unreachable/timed out) — the anchor is written,\n' "$hostport"
+    printf '     but nothing here proves it verifies that endpoint.\n'
+    ;;
+  5)
+    printf '  ⚠️  the file just written is not usable as a trust anchor. Do NOT set %s_CA_FILE.\n' "$UPPER"
+    ;;
+  *)
+    printf '  ⚠️  the anchor did NOT verify %s (rc=%s). Do NOT set %s_CA_FILE until that is resolved.\n' "$hostport" "$_ep_rc" "$UPPER"
+    ;;
+esac
