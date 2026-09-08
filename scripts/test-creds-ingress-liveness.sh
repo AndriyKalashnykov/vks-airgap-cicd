@@ -22,7 +22,8 @@ bad() { fail=$((fail+1)); printf '  FAIL  %s\n' "$1"; }
 
 export VKS_STATE_FILE; VKS_STATE_FILE="$(mktemp)"
 _srv=""
-cleanup() { [ -n "$_srv" ] && kill "$_srv" 2>/dev/null; rm -f "$VKS_STATE_FILE" "${_LISTENER:-}" "/tmp/.b560-port.$$"; }
+_kill_srv() { local _p; _p="$(cat "/tmp/.b560-pid.$$" 2>/dev/null || true)"; [ -n "$_p" ] && kill "$_p" 2>/dev/null; : > "/tmp/.b560-pid.$$"; }
+cleanup() { _kill_srv; rm -f "$VKS_STATE_FILE" "${_LISTENER:-}" "/tmp/.b560-port.$$" "/tmp/.b560-pid.$$" "/tmp/.b560-conns.$$"; }
 trap cleanup EXIT
 
 # listen <mode> -> echoes the port; sets $_srv to the listener's pid. Killed by PID, never by pkill:
@@ -38,7 +39,7 @@ trap cleanup EXIT
 # which is why the obvious two-line check does NOT reproduce it.
 _LISTENER="$(mktemp)"
 cat > "$_LISTENER" <<'PYEOF'
-import socket, sys, threading, time
+import os, socket, sys, threading, time
 mode = sys.argv[1]
 s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(('127.0.0.1', 0)); s.listen(16)
@@ -50,6 +51,8 @@ def serve():
         if mode == 'rst':          # Envoy with no routes: accept, then RST
             c.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b'\x01\x00\x00\x00\x00\x00\x00\x00')
             c.close(); continue
+        if mode == 'count':
+            open('/tmp/.b560-conns.' + os.environ.get('B560_PPID',''), 'a').write('x\n')
         if mode == 'slow': time.sleep(5)
         try:
             c.recv(4096)
@@ -59,11 +62,16 @@ def serve():
 threading.Thread(target=serve, daemon=True).start()
 time.sleep(180)
 PYEOF
+# ⚠️ THE PID GOES THROUGH A FILE, because `port="$(listen rst)"` runs this in a COMMAND
+# SUBSTITUTION -- a subshell -- so a bare `_srv=$!` never reaches the parent and EVERY kill here was
+# a no-op: measured, 4 python listeners survived a 5s run, each living 180s. That is the same
+# subshell trap creds.sh:65-67 documents and solves with a file for _route_dead, reintroduced here;
+# the careful comment below about killing by PID was describing something that never happened.
 listen() {
   local _pf="/tmp/.b560-port.$$"
   rm -f "$_pf"
-  python3 "$_LISTENER" "$1" > "$_pf" 2>&1 &
-  _srv=$!
+  B560_PPID="$$" python3 "$_LISTENER" "$1" > "$_pf" 2>&1 &
+  printf '%s' "$!" > "/tmp/.b560-pid.$$"
   local _t
   for _t in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
     grep -qE '^[0-9]{4,5}$' "$_pf" 2>/dev/null && break
@@ -81,16 +89,17 @@ listen() {
 # render <ip> <port> [extra-env-assignment...] -> creds.sh's stdout
 render() {
   local _ip="$1" _port="$2"; shift 2
+  rm -f "/tmp/.b560-conns.$$"
   printf 'INGRESS_LB_IP=%s\nINGRESS_PROBE_PORT=%s\n' "$_ip" "$_port" > "$VKS_STATE_FILE"
   env "$@" SKIP_DOTENV=1 CREDS_TOKEN=1 CREDS_PROBE_TIMEOUT_SECONDS=2 ./scripts/creds.sh 2>/dev/null
 }
 
 _HINT='add once to /etc/hosts'
-_WARN='accepts TCP connections but completes no HTTP request'
+_WARN='accepts TCP connections but completed no HTTP request'
 _DEAD='is NOT ANSWERING on port'
 
 # ── 1. THE RED. Accept-then-RST: TCP says alive, HTTP completes nothing. ─────────────────────────
-port="$(listen rst)"; out="$(render 127.0.0.1 "$port")"; kill "$_srv" 2>/dev/null; _srv=""
+port="$(listen rst)"; out="$(render 127.0.0.1 "$port")"; _kill_srv
 if grep -qF "$_WARN" <<< "$out"; then
   ok "accept-then-RST: the routeless-gateway warning appears"
 else
@@ -105,7 +114,7 @@ else
 fi
 
 # ── 2. THE DISCRIMINATING CONTROL. A healthy 404 must NOT warn. ──────────────────────────────────
-port="$(listen ok)"; out="$(render 127.0.0.1 "$port")"; kill "$_srv" 2>/dev/null; _srv=""
+port="$(listen ok)"; out="$(render 127.0.0.1 "$port")"; _kill_srv
 if grep -qF "$_HINT" <<< "$out" && ! grep -qF "$_WARN" <<< "$out"; then
   ok "healthy 404 at the bare IP: hint printed, no warning (404 is ALIVE -- no vhost was named)"
 else
@@ -124,7 +133,7 @@ fi
 # ── 4. FALSE-DEAD GUARD: a slow ingress must not lose the hint. ──────────────────────────────────
 # 5 s against a 2 s budget. Replacing the socket verdict with an HTTP one -- the REFUTED design --
 # fails here, which is the point of measuring it.
-port="$(listen slow)"; out="$(render 127.0.0.1 "$port")"; kill "$_srv" 2>/dev/null; _srv=""
+port="$(listen slow)"; out="$(render 127.0.0.1 "$port")"; _kill_srv
 if grep -qF "$_HINT" <<< "$out"; then
   ok "slow (5s) ingress: the hint still prints -- a timeout must not read as a dead LB"
 else
@@ -137,13 +146,52 @@ _stub="$(mktemp -d)"
 for _b in bash sed grep awk cut tr sort head tail printf date mktemp rm cat wc kubectl python3 timeout env dirname basename tput stat find id; do
   _p="$(command -v "$_b" 2>/dev/null)" && ln -sf "$_p" "$_stub/$_b"
 done
-port="$(listen ok)"; out="$(render 127.0.0.1 "$port" "PATH=$_stub")"; kill "$_srv" 2>/dev/null; _srv=""
+port="$(listen ok)"; out="$(render 127.0.0.1 "$port" "PATH=$_stub")"; _kill_srv
 rm -rf "$_stub"
 if grep -qF "$_HINT" <<< "$out"; then
   ok "no curl on PATH: the hint still prints (/dev/tcp is a bash builtin and needs nothing)"
 else
   bad "no curl: the hint was suppressed. curl is an UNDECLARED dependency of this report -- there
       is no require_cmd curl anywhere in creds.sh -- so a bare jump box would lose the line."
+fi
+# ⚠️ AND IT MUST NOT WARN. Case 5 originally asserted only that the HINT prints, so it never tested
+# the guard it is named for: an implementation round measured that deleting `have curl` leaves this
+# suite 6/6 GREEN while a curl-less box FABRICATES the routeless warning against a HEALTHY listener.
+if grep -qF "$_WARN" <<< "$out"; then
+  bad "no curl: the report FABRICATED the routeless warning against a healthy 404 listener.
+      Absent curl means we could not ask, not that the gateway is dead."
+else
+  ok "...and does NOT warn (a missing curl is 'could not ask', never 'dead')"
+fi
+
+# ── 6. CREDS_NO_PROBE=1 must make NO connection at all. ──────────────────────────────────────────
+# The report's own escape hatch. Removing the `_no_probe_snapshot` guard leaves the suite 6/6 green,
+# and the recorded HIGH at creds.sh:179-186 is exactly this: an offline `make ci` dialling a real
+# lab, because two fixtures carry REAL lab IPs. Measured with a connection-counting listener:
+# pristine 0, mutant 1.
+port="$(listen count)"; out="$(render 127.0.0.1 "$port" CREDS_NO_PROBE=1)"; _kill_srv
+_conns="$(cat "/tmp/.b560-conns.$$" 2>/dev/null | wc -l | tr -d " ")"
+if [ "${_conns:-0}" -eq 0 ] && ! grep -qF "$_WARN" <<< "$out"; then
+  ok "CREDS_NO_PROBE=1: zero connections and no warning (the escape hatch reaches the new probe)"
+else
+  bad "CREDS_NO_PROBE=1 still probed ($_conns connection(s)) or still warned. The report advertises
+      this flag as 'skip every probe and report configuration only'."
+fi
+
+# ── 7. A DEAD LB must not pay for the HTTP probe. ────────────────────────────────────────────────
+# Removing the `_ing_live = 1` guard also leaves the suite green, at +2.02s on a black-holed LB.
+# ⚠️ MEASURED AS A DELTA, not an absolute. An absolute threshold measures the WHOLE creds.sh run
+# (13s on this box -- kubectl probes dominate), so it is load-dependent and says nothing about the
+# guard. The baseline is the same report with NO ingress at all, which takes neither probe.
+_t0=$(date +%s); out="$(render 127.0.0.1 1)";  _t1=$(date +%s)
+_b0=$(date +%s); _=$(render "" "");            _b1=$(date +%s)
+_delta=$(( (_t1 - _t0) - (_b1 - _b0) ))
+_budget=$(( 2 * 2 + 2 ))   # one TCP timeout at the 2s default, plus slack; a SECOND one exceeds it
+if [ "$_delta" -lt "$_budget" ] && grep -qF "$_DEAD" <<< "$out"; then
+  ok "dead LB: NOT ANSWERING, and the HTTP probe is skipped (+${_delta}s over no-ingress, budget ${_budget}s)"
+else
+  bad "dead LB cost +${_delta}s over the no-ingress baseline (budget ${_budget}s) or lost its banner.
+      The _ing_live guard is gone, so a black-holed ingress pays the TCP timeout AND the HTTP one."
 fi
 
 printf '\n%s: %s passed, %s failed\n' "${0##*/}" "$pass" "$fail"

@@ -816,10 +816,24 @@ if [ -n "${INGRESS_LB_IP:-}" ] && [ "$_ing_live" != 1 ]; then
 elif [ -n "${INGRESS_LB_IP:-}" ]; then
   echo
   if [ "$_ing_http_dead" = 1 ]; then
-    echo "  ⚠️  ${INGRESS_LB_IP} accepts TCP connections but completes no HTTP request — the signature"
-    echo "      of a gateway with no routes attached. The line below is correct IF this is your"
-    echo "      current ingress; if the UIs still do not load after adding it, re-run the ingress"
-    echo "      install rather than debugging your browser."
+    # ⚠️ THE CLAIM IS WHAT WAS OBSERVED, NOT A DIAGNOSIS. An earlier version said this was "the
+    # signature of a gateway with no routes attached" and told the reader to re-run the ingress
+    # install. An implementation round measured both halves wrong:
+    #   - the comment above claims every false-dead vector "costs a warning you do not get". FALSE
+    #     for 2 of its own 4: a 5s-slow ingress at the 2s budget FIRES this, and so does a TLS-only
+    #     listener on the probe port. The vectors are harmless for the HINT, which is what matters --
+    #     but they are not silent here.
+    #   - "no routes attached" is NOT exclusive, and the repo documents two other producers for
+    #     which the correct action is to WAIT: 98-verify-ingress.sh:14-18 (K1.5 -- cloud-provider-kind
+    #     wires the data path 5-60s AFTER the IP is assigned) and creds.sh:62-63 (a rolling or
+    #     outlier-ejected Envoy). `make creds` is routinely run right after `make install-ingress`,
+    #     i.e. INSIDE that window -- the highest-probability moment for this warning -- where
+    #     "re-run the ingress install" tears down a healthy ingress that was merely starting.
+    echo "  ⚠️  ${INGRESS_LB_IP} accepts TCP connections but completed no HTTP request within"
+    echo "      ${CREDS_ROUTE_TIMEOUT_SECONDS:-${CREDS_PROBE_TIMEOUT_SECONDS:-2}}s. That is a gateway with no routes attached, an ingress still"
+    echo "      starting (a fresh LoadBalancer can take 5-60s to wire its data path), or TLS on"
+    echo "      port ${INGRESS_PROBE_PORT:-80}. The line below is correct IF this is your current ingress."
+    echo "      Re-run 'make creds' in a minute; only if it persists, re-run the ingress install."
     echo
   fi
   echo "  add once to /etc/hosts so the *.vks.local hosts resolve to the ingress LB:"

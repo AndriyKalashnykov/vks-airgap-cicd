@@ -17,12 +17,38 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Extract by function name up to its closing brace at column 0 — deliberately NOT a line range, so a
 # shifted file cannot silently yield a fragment. An empty extraction is a HARD FAILURE: a test that
 # passes over an empty function is worse than no test.
-_fn="$(awk '/^_reach_ingress\(\) \{/{p=1} p{print} p&&/^\}/{exit}' "${REPO_ROOT}/scripts/creds.sh")"
+# ⚠️ EXTRACT ITS DEPENDENCIES TOO, AND GUARD EACH ONE SEPARATELY. This suite went 21/21 -> 12/9
+# the moment _reach_ingress grew a call to _ing_authority (B560, #1165): the extraction pulled the
+# body and not the helper, so 13 cases died on `_ing_authority: command not found` and every route
+# status collapsed to `silent` -- the "false dead" creds.sh:173 calls THE RISK TO AVOID. Production
+# was never affected (the helper is defined above both call sites); only this suite was.
+# The FATAL guard below did not fire because it tests for "printf 'serving'", which is still in the
+# extracted text -- a content guard is structurally blind to a NEW DEPENDENCY. So each extraction
+# gets its own non-empty check, and adding a dependency here is a one-line change with a loud
+# failure rather than a silent 9-case collapse.
+_extract() {  # _extract <fn-name> -> its source, or die
+  local _n="$1" _o
+  # index()==1, not a dynamic regex: `_ing_authority() {` is full of ERE metacharacters, and
+  # building the pattern in the shell produced `awk: warning: escape sequence \( treated as plain (`
+  # on gawk -- a warning, not an error, so it would have degraded silently on another awk.
+  _o="$(awk -v f="${_n}() {" 'index($0,f)==1{p=1} p{print} p&&/^\}/{exit}' "${REPO_ROOT}/scripts/creds.sh")"
+  [ -n "$_o" ] || { echo "FATAL: could not extract ${_n}() from scripts/creds.sh — renamed or reshaped."
+                    echo "       Fix the extraction; do NOT let this test pass over an empty function."; exit 1; }
+  printf '%s' "$_o"
+}
+_helpers="$(_extract _ing_authority)"
+_fn="$(_extract _reach_ingress)"
 case "$_fn" in
   *"printf 'serving'"*) : ;;
-  *) echo "FATAL: could not extract _reach_ingress from scripts/creds.sh — renamed or reshaped."
-     echo "       Fix the extraction; do NOT let this test pass over an empty function."; exit 1 ;;
+  *) echo "FATAL: _reach_ingress extracted but does not contain \`printf 'serving'\` — reshaped."
+     echo "       Fix the extraction; do NOT let this test pass over a fragment."; exit 1 ;;
 esac
+case "$_helpers" in
+  *'INGRESS_PROBE_PORT'*) : ;;
+  *) echo "FATAL: _ing_authority extracted but does not read INGRESS_PROBE_PORT — reshaped."; exit 1 ;;
+esac
+_fn="${_helpers}
+${_fn}"
 
 T="$(mktemp -d)"; trap 'rm -rf "$T"; [ -n "${SRV_PID:-}" ] && kill "$SRV_PID" 2>/dev/null' EXIT
 
