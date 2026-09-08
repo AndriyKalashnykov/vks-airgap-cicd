@@ -23,9 +23,16 @@ __VKS_ARGOCD_SH_LOADED=1
 # and placeholder states -- i.e. exactly backwards -- while the granted-NAME state ACCIDENTALLY
 # agrees, so a test exercising only that row goes green over it. check-lib-sourcing.sh globs
 # scripts/*.sh (:165) and is structurally blind to a lib->lib dependency, so nothing else catches it.
-# os.sh carries its own __VKS_OS_SH_LOADED guard, and all three callers already source it FIRST
-# (70-configure-argocd.sh:25, 91-e2e-tenant-mechanism.sh:29, 09-argocd-address.sh:24), so in
-# production this is a no-op; what it buys is that this library is safe to source STANDALONE.
+# os.sh carries its own __VKS_OS_SH_LOADED guard, and every non-test sourcer already pulls it in
+# FIRST, so in production this is a no-op; what it buys is that this library is safe to source
+# STANDALONE -- which one caller already does (test-argocd-endpoint-probe.sh:19 sources this file
+# and never sources os.sh).
+#
+# ⚠️ THIS FIXES ONE INSTANCE OF A CLASS, NOT THE CLASS. An implementation round measured 8 of 11
+# scripts/lib/*.sh using os.sh/state.sh functions without sourcing os.sh -- lib/harbor.sh uses
+# `is_placeholder`, the SAME function with the SAME silent-inversion mode, and lib/tls.sh (which
+# 09 newly sources for ca_addr_kind) uses die/have/log_*/run and sources nothing, so it works only
+# because its callers source os.sh first. Do not read this line as "the class is closed".
 # shellcheck source=scripts/lib/os.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/os.sh"
 
@@ -1057,6 +1064,9 @@ which MISDIAGNOSES an update-RBAC denial.
 # `[ "$eff" = "$ip" ]`, because `eff == ip` is BICONDITIONAL with "the guard writes" -- verified
 # over 72 states (12 server values x 6 source values), 0 violations, and true by construction: the
 # LEAVE arm requires `server != ip`, so its result can never equal ip; the WRITE arm returns ip.
+# ⚠️ Modulo the trailing newline `$( )` strips: a hand-edited multi-line ARGOCD_SERVER is the one
+# shape where the caller's branch and this function disagree (measured 4/80). Consequence is nil --
+# both then write the same address -- and only 09 writes this key.
 # An earlier design kept the inline `if` AND added this function. An adversary round refuted it by
 # measurement: deleting `&& [ "$SRC" != discovered ]` from the inline guard alone made .env keep the
 # stale value while the report claimed the new one, and the function-based test stayed GREEN. Two

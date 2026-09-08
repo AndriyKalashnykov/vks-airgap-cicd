@@ -225,8 +225,16 @@ fi
 #   2. it must use ca_addr_kind (lib/tls.sh), whose own header records that two hand-typed copies of
 #      this predicate once disagreed. A third copy here disagreed on host:port -- measured below.
 #   3. lib/tls.sh must actually be SOURCED, or the call is an unbound command at runtime.
-# STRUCTURAL + UNIT, NOT A RENDER: driving 09 far enough to emit the block needs a live Supervisor.
-# These pin the decision and its inputs, not the printed text.
+# STRUCTURAL + UNIT. These pin the DECISION and its inputs, not the printed text.
+#
+# ⚠️ AN EARLIER VERSION OF THIS HEADER SAID "driving 09 far enough to emit the block needs a live
+# Supervisor". THAT WAS FALSE, and the false premise is what kept a live defect invisible:
+# test-argocd-address-classify.sh:77-80 has rendered 09 with a fake kubectl+curl on PATH since long
+# before this section existed -- ~1s, no cluster. The four anchored greps below cannot see
+# reachability, ordering, or printed TEXT, and an implementation round reused that harness and found
+# on its FIRST render that the IP arm's step 3 carried a second, uncollapsed predicate: it told an
+# operator holding a GRANTED IP to remove a marker from a file that does not exist. The RENDER cases
+# now live in test-argocd-address-classify.sh, where the harness is; these stay structural.
 # ${SCRIPT_DIR}, not a relative path: run from any other cwd the relative form yields an EMPTY
 # _body and both greps below fail for the wrong reason.
 _body="$(sed '/^[[:space:]]*#/d' "${SCRIPT_DIR}/09-argocd-address.sh")"
@@ -256,7 +264,14 @@ fi
 # source line from lib/argocd.sh left standalone is_placeholder MISSING and this case still said ok.
 # That is the positive control failing to control, in the very case written for a SILENT inversion.
 # Shell functions are not exported without `export -f`, so a fresh bash sees only what it sources.
-if bash -c '. "$1/lib/argocd.sh" 2>/dev/null; command -v is_placeholder >/dev/null 2>&1' _ "${SCRIPT_DIR}"; then
+# ⚠️ `env -u BASH_ENV` + `--noprofile --norc` + `unset -f`, not a bare `bash -c`. A round measured
+# TWO ambient conditions that silently defeat the bare form with the source line REMOVED -- a
+# BASH_ENV shim defining is_placeholder, and an exported function (BASH_FUNC_is_placeholder%%) --
+# either of which turns this control green over the exact regression it exists to catch.
+# shellcheck disable=SC2016  # $1 is the INNER bash's positional -- it must not expand out here
+if env -u BASH_ENV bash --noprofile --norc -c \
+     'unset -f is_placeholder 2>/dev/null; . "$1/lib/argocd.sh" 2>/dev/null; command -v is_placeholder >/dev/null 2>&1' \
+     _ "${SCRIPT_DIR}"; then
   ok "...and it carries is_placeholder with it (lib/os.sh is sourced from lib/argocd.sh)"
 else
   bad "lib/argocd.sh does not bring is_placeholder -- argocd_effective_addr then INVERTS its answer

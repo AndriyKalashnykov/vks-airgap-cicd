@@ -200,4 +200,47 @@ ck "never answers -> rc 0" "$(printf '%s' "$r" | cut -d: -f2)" "0"
 
 rm -f "$T/bin/curl"
 
+# ── B552 round: RENDER the --insecure disclosure. Three states, three different texts. ───────────
+# ⚠️ THIS EXISTS BECAUSE A STRUCTURAL-ONLY TEST MISSED A LIVE DEFECT. test-argocd-addr-verdict.sh
+# asserted the disclosure by grepping 09's SOURCE, on the stated premise that "driving 09 far enough
+# to emit the block needs a live Supervisor". That premise was FALSE -- this harness has rendered 09
+# with a fake kubectl+curl since long before -- and the four anchored greps are blind to what the
+# block PRINTS. An implementation round reused this harness and found, on the first render, that the
+# IP arm's step 3 carried a SECOND predicate: it told an operator holding a GRANTED IP to remove a
+# marker from a file that does not exist, with a reason that is false for that state.
+_render() {  # _render <ARGOCD_SERVER> <ARGOCD_SERVER_SOURCE> -> the printed block
+  # ⚠️ CLEAR THE STATE OVERLAY, NOT JUST .env. The first render takes the WRITE branch and
+  # `state_set ARGOCD_SERVER_SOURCE discovered` into $T/.env.state; `load_env` then SOURCES that on
+  # every later render -- SKIP_DOTENV=1 gates `.env` but NOT `.env.state` (B461) -- and
+  # ARGOCD_SERVER_SOURCE is not in load_env's snapshot-protected list, so the file BEAT the value
+  # this function passes explicitly. Measured: the granted-IP and granted-NAME cases both failed
+  # while the code was correct, because render N inherited render N-1's marker.
+  rm -f "$T/kc" "$T/.env" "$T/.env.state"
+  mk_kubectl '' 0 '10.20.30.40'
+  printf '#!/usr/bin/env bash\nprintf 403\nexit 0\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
+  PATH="$T/bin:$PATH" VKS_SUPERVISOR_KUBECONFIG="$T/sup.kubeconfig" REPO_ROOT="$T" \
+    ARGOCD_NAMESPACE=cicd ARGOCD_ADDRESS_WAIT_SECONDS=4 ARGOCD_ADDRESS_POLL_INTERVAL_SECONDS=1 \
+    SKIP_DOTENV=1 ARGOCD_SERVER="$1" ARGOCD_SERVER_SOURCE="$2" \
+    bash "$SCRIPT_DIR/09-argocd-address.sh" 2>&1
+  rm -f "$T/bin/curl"
+}
+
+_o="$(_render '' '')"
+ck "unset -> the IP arm fires"                 "$(grep -qF 'That address is an IP' <<< "$_o" && echo y || echo n)" "y"
+ck "unset -> step 3 says REMOVE the marker"    "$(grep -qF 'ARGOCD_SERVER_SOURCE=discovered from' <<< "$_o" && echo y || echo n)" "y"
+
+# A GRANTED IP: the arm still fires (it IS an IP) but nothing here wrote it, so the marker advice
+# is WRONG -- there is no marker and no run of this script will change the value.
+_o="$(_render '10.9.9.9' '')"
+ck "granted IP -> the IP arm still fires"      "$(grep -qF 'That address is an IP' <<< "$_o" && echo y || echo n)" "y"
+ck "granted IP -> NO marker advice"            "$(grep -qF 'ARGOCD_SERVER_SOURCE=discovered from' <<< "$_o" && echo y || echo n)" "n"
+ck "granted IP -> says nothing will change it" "$(grep -qF 'no run of this script will change it' <<< "$_o" && echo y || echo n)" "y"
+
+# A GRANTED NAME: the other arm entirely, and it must carry the same platform-issued escape hatch
+# the IP arm has -- this branch IS the platform-issued case.
+_o="$(_render 'argocd.lab.test' '')"
+ck "granted NAME -> the NAME arm fires"        "$(grep -qF 'That address is a NAME' <<< "$_o" && echo y || echo n)" "y"
+ck "granted NAME -> the IP arm does NOT"       "$(grep -qF 'That address is an IP' <<< "$_o" && echo y || echo n)" "n"
+ck "granted NAME -> keeps the platform hedge"  "$(grep -qF 'platform team issued that cert' <<< "$_o" && echo y || echo n)" "y"
+
 printf '\n  %d passed, %d failed\n' "$p" "$f"; [ "$f" -eq 0 ]

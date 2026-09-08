@@ -263,7 +263,9 @@ ip="$st"
 # ⚠️ ONE PREDICATE, CALLED ONCE. `argocd_effective_addr` (lib/argocd.sh) IS this decision -- not a
 # second copy of it -- and the branch below keys on its RESULT because `eff == ip` is biconditional
 # with "we write" -- 50 states over the SHIPPED is_placeholder (lib/os.sh), 0 violations, and true
-# by construction since the leave arm requires `server != ip`, so its result can never equal ip. An adversary round REFUTED the obvious alternative of keeping this `if` and
+# by construction since the leave arm requires `server != ip`, so its result can never equal ip
+# (modulo the trailing newline `$( )` strips -- see lib/argocd.sh). An adversary round REFUTED the
+# obvious alternative of keeping this `if` and
 # adding the function beside it: deleting one clause from the inline copy left .env holding the
 # stale value while the report claimed the new one, and the function-based test stayed GREEN.
 _eff="$(argocd_effective_addr "${ARGOCD_SERVER:-}" "${ARGOCD_SERVER_SOURCE:-}" "$ip")"
@@ -317,24 +319,56 @@ if [ "$(ca_addr_kind "$_eff")" = ip ]; then
   echo "      the login line above says --insecure. If your platform team issued a cert WITH an IP SAN,"
   echo "      this does not apply to you; 'make fetch-argocd-ca' will tell you either way."
   echo "      To verify instead of bypassing, in THIS order:"
-  echo "        1. choose the name the certificate carries (your platform team's, or argocd-server)"
-  echo "        2. set ARGOCD_HOST to it, then: make show-dns-records   # it prints that name's A record"
-  echo "           (with an IP it prints 'NO A record applies' — the name has to come first)"
-  echo "        3. publish the record, set ARGOCD_SERVER to the same name in .env, and REMOVE"
-  echo "           ARGOCD_SERVER_SOURCE=discovered from $(state_file) — otherwise the next run of this"
-  echo "           script treats the name as ours to correct and overwrites it back to ${ip}"
-  echo "        4. make fetch-argocd-ca    # dials ARGOCD_SERVER, so it needs step 3 done first"
+  # ⚠️ STEP 1 IS THE COMMAND, NOT A GUESS. The first version said "choose the name the certificate
+  # carries (your platform team's, or argocd-server)" -- at step 1, while naming the tool that
+  # PRINTS that list as step 4. So a reader following "in THIS order" guessed at exactly the moment
+  # the tool would have told them, and the guess is right only for the DEFAULT cert, which the
+  # paragraph above has just carved out. At an IP, fetch-ca.sh takes its rc=3 arm and emits the
+  # certificate's ACTUAL SANs plus "Point the address at one of those" -- and the names are
+  # namespace-dependent (argocd-server.<ns>), which .env.example warns about explicitly.
+  echo "        1. make fetch-argocd-ca    # at an IP it REFUSES and prints the cert's real SANs"
+  echo "        2. choose a name from that list, set ARGOCD_HOST to it, then: make show-dns-records"
+  echo "           (it prints that name's A record; with an IP it prints 'NO A record applies')"
+  # ⚠️ STEP 3 HAS ITS OWN PREDICATE, AND IT IS NOT THIS ARM'S. The arm fires on IP-ness; the
+  # "remove the marker" advice only applies when WE wrote the value. On a GRANTED IP -- routine for
+  # a tenant handed `ARGOCD_SERVER=10.9.9.9` -- the guard takes the LEAVE branch, so there is no
+  # marker and often no state file at all: measured, it named a path that DOES NOT EXIST and gave a
+  # reason ("otherwise the next run overwrites it back") that is FALSE, since the guard leaves it
+  # alone precisely because the marker is absent. That is this PR's own "three expressions that
+  # could disagree" class, surviving one level down inside the fix. Found by an implementation round.
+  #
+  # ⚠️ AND THE PREDICATE IS `_eff = ip`, NOT `ARGOCD_SERVER_SOURCE = discovered`. The obvious form
+  # is WRONG IN THE COMMONEST STATE, and wrong for the reason this whole PR is about: on the WRITE
+  # branch `state_set` writes the marker to the FILE and does not export it, so the variable is
+  # still empty when this line runs, three lines after we set it. Measured -- the unset case
+  # printed the granted-value text having just published the marker. `_eff = ip` IS the write
+  # branch (biconditional, see above), so it needs no third expression to drift.
+  if [ "$_eff" = "$ip" ]; then
+    echo "        3. publish the record, set ARGOCD_SERVER to the same name in .env, and REMOVE"
+    echo "           ARGOCD_SERVER_SOURCE=discovered from ${VKS_STATE_FILE:-.env.state} — otherwise the"
+    echo "           this script treats the name as ours to correct and overwrites it back to ${ip}"
+  else
+    echo "        3. publish the record and set ARGOCD_SERVER to the same name in .env"
+    echo "           (nothing here wrote the current value, so no run of this script will change it)"
+  fi
+  echo "        4. make fetch-argocd-ca    # again, to VERIFY: it dials ARGOCD_SERVER, so it needs 3"
 else
   # ⚠️ DO NOT SHIP SILENCE AS "FIXED". Keying the block on IP-ness is right; leaving the NAME case
   # with NO explanation is not, because the login line above says --insecure UNCONDITIONALLY. An
   # adversary round caught the first version doing exactly that: the false sentence was gone and the
   # operator was left with an unexplained --insecure, which is better than a lie and is not the job.
-  # Every clause here is checkable: the cert is self-signed (lab-verified, docs/vks-services/argocd.md);
-  # a SAN match is necessary but not sufficient for verification; and fetch-ca.sh:270 selects `DNS:`
-  # for a name exactly as it selects `IP Address:` for an IP, so it genuinely answers for this case.
+  # Provenance, graded honestly: "self-signed by DEFAULT" is `9.0-doc` (docs/vks-services/argocd.md:20),
+  # NOT lab-verified -- an earlier version of this comment claimed lab-verified and an implementation
+  # round measured that no lab-verified row asserts it. Nothing in this repo measures the issuer.
+  # The rest is checkable: a SAN match is necessary but not sufficient for verification, and
+  # fetch-ca.sh:270 selects `DNS:` for a name exactly as it selects `IP Address:` for an IP.
+  # ⚠️ AND THIS ARM CARRIES THE SAME ESCAPE HATCH THE IP ARM HAS. The NAME arm IS the LEAVE/granted
+  # branch -- i.e. exactly the platform-issued case where "self-signed" is MOST likely to be false --
+  # so asserting it flat here, while hedging it on the IP arm, had the hedge on the wrong one.
   echo "  ⚠️  That address is a NAME, so --insecure above is about the ISSUER, not the address:"
-  echo "      argocd-server's certificate is self-signed, and a matching SAN is necessary but not"
-  echo "      sufficient — this machine must also trust the CA that issued it."
+  echo "      argocd-server's DEFAULT certificate is self-signed, and a matching SAN is necessary"
+  echo "      but not sufficient — this machine must also trust the CA that issued it. If your"
+  echo "      platform team issued that cert from a CA you already trust, this does not apply."
   echo "        make fetch-argocd-ca    # fetches it and says whether it verifies for this address"
 fi
 echo
