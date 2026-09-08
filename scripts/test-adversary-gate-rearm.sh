@@ -201,10 +201,35 @@ mint_probe() { # <label> <should-mint 0|1> <json>
   if [ -f "$TMP/.claude/state/adversary-mint.receipt" ]; then got=1; else got=0; fi
   if [ "$got" = "$2" ]; then ok "$1"; else bad "$1 (minted=$got want=$2)"; fi
 }
+# PLANT A ROSTER, or these two cases assert behaviour the box cannot exercise. `_roster_pattern()`
+# reads ~/.claude/agents and <project>/.claude/agents and returns None when NEITHER is readable, in
+# which case the hook FALLS BACK to a bare `"adversary" in blob` -- a deliberate fail-open ("a gate
+# that cannot be cleared blocks all work"). On this box ~/.claude/agents holds the roster, so the
+# roster path was taken and the prose case passed; in CI `git ls-files .claude/agents/` is 0 and
+# $HOME has none, so the FALLBACK ran, the prose matched, and the case failed. Green here, red
+# there, for weeks -- the fast set does not run per-PR (B571) and the weekly was already red (B573).
+# Planting into the temp project makes the roster path deterministic on ANY box: the two
+# directories are UNIONed, so adding one is enough.
+mkdir -p "$TMP/.claude/agents"
+: > "$TMP/.claude/agents/adversary-docker.md"
 mint_probe "Workflow naming a roster agent -> MINTS" 1 \
   '{"session_id":"mint","tool_name":"Workflow","tool_input":{"script":"const L=[{a: adversary-docker }]"}}'
 mint_probe "Workflow PROSE 'summarise the adversary findings' -> mints NOTHING" 0 \
   '{"session_id":"mint","tool_name":"Workflow","tool_input":{"prompt":"summarise the adversary findings"}}'
+
+# THE OTHER ARM, asserted rather than left to whichever box runs the suite: with NO roster readable
+# the hook falls back to the substring ON PURPOSE. Neutralise BOTH directories -- $HOME (expanduser
+# honours it) and the project -- so the fallback is what actually runs.
+_noroster="$TMP/noroster"; mkdir -p "$_noroster"
+_rcp="$_noroster/.claude/state/adversary-mint.receipt"
+rm -f "$_rcp"
+printf '%s' '{"session_id":"mint","tool_name":"Workflow","tool_input":{"prompt":"summarise the adversary findings"}}' \
+  | HOME="$_noroster" CLAUDE_PROJECT_DIR="$_noroster" python3 "$HOOK" >/dev/null 2>&1
+if [ -f "$_rcp" ]; then
+  ok "with NO roster readable the hook FALLS BACK to the substring (fail-open, by design)"
+else
+  bad "the no-roster fallback did not mint — a gate that cannot be cleared blocks all work"
+fi
 mint_probe "Agent, roster subagent_type -> MINTS" 1 \
   '{"session_id":"mint","tool_name":"Agent","tool_input":{"subagent_type":"vks-adversary"}}'
 mint_probe "Agent, 37 chars of prose -> mints NOTHING (it reopened the hole once)" 0 \
