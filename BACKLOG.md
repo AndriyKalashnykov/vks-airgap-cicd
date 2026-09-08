@@ -6848,12 +6848,10 @@ alerts would CLOSE while the built image still ships the vulnerable dependency.
 
 **The bump itself is settled — MEASURED 2026-09-08, so do not re-derive it:**
 
-```sh
-# qs: transitive via express 5.2.0, which allows ^6.14.0 -- so 6.16.0 is IN RANGE and needs no
-# `overrides` entry. `npm view express@5.2.0 dependencies.qs` -> ^6.14.0
-cd apps/nodejs/nodejswebapp && npm update qs --package-lock-only     # 6.15.3 -> 6.16.0, rc=0
-sed -i 's/^Flask==3\.1\.2$/Flask==3.1.3/' apps/python/pythonwebapp/requirements.txt
-```
+    # qs: transitive via express 5.2.0, which allows ^6.14.0 -- so 6.16.0 is IN RANGE and needs
+    # no `overrides` entry. `npm view express@5.2.0 dependencies.qs` -> ^6.14.0
+    cd apps/nodejs/nodejswebapp && npm update qs --package-lock-only     # 6.15.3 -> 6.16.0, rc=0
+    sed -i 's/^Flask==3\.1\.2$/Flask==3.1.3/' apps/python/pythonwebapp/requirements.txt
 
 Both were applied and reverted in a dry run. `make builder-freshness` then reported **exactly**
 `nodejswebapp` and `pythonwebapp` STALE and the other four fresh — the stamp discriminating
