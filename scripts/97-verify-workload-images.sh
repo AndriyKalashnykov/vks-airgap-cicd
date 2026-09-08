@@ -29,6 +29,12 @@
 #
 # The three Istio namespaces are covered by 96-verify-gateway-image.sh and are NOT repeated here.
 #
+# ⚠️ A ROUND ASKED WHETHER THE INCOMPLETE ARM CAN FALSE-RED on tekton-pipelines-resolvers (a
+# namespace that exists but might legitimately run no pods). SETTLED statically, no e2e needed: the
+# carried Tekton manifest declares a `tekton-pipelines-remote-resolvers` Deployment in it, so it
+# normally has pods. An ABSENT namespace is skipped cleanly either way; only existing-but-empty is
+# INCOMPLETE.
+#
 # B567 is the motivating incident: Tekton's controller injects a `place-scripts` init container from
 # a hardcoded `-shell-image` FLAG STRING, so `cgr.dev/chainguard/busybox` was pulled from the public
 # internet on every TaskRun, inside the air gap, for the life of the repo.
