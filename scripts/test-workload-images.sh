@@ -11,7 +11,7 @@ pass=0; fail=0
 ok()  { pass=$((pass+1)); printf '  ok    %s\n' "$1"; }
 bad() { fail=$((fail+1)); printf '  FAIL  %s\n' "$1"; }
 
-T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
+T="$(mktemp -d)"
 GATE=./scripts/97-verify-workload-images.sh
 
 # run <label> <want-rc> <want-verdict-substring>; fixtures already written into $T
@@ -59,9 +59,35 @@ mk ci '{"items":[{"metadata":{"name":"p"},"status":{
 run "an EPHEMERAL debug container from a public registry is caught" 1 FAILED
 mk ci "$ALL_OURS"
 
+# ── THE LOOKALIKE HOST: a substring test reported these `ok` and closed ASSERTED ──────────────────
+# MEASURED by an implementation round against the real gate, with this lab's own hostname shape.
+# A sibling/stale registry in the same domain is exactly what an enterprise lab has.
+mk ci '{"items":[{"metadata":{"name":"look"},"status":{"containerStatuses":[
+  {"image":"oldharbor.h.local/infra/gitea:1","imageID":"oldharbor.h.local/infra/gitea@sha256:ee"}]}}]}'
+run "a LOOKALIKE registry in the same domain is FOREIGN, not a substring match" 1 FAILED
+mk ci "$ALL_OURS"
+
+# ── the three HARBOR_URL spellings lib/harbor.sh documents as real .env inputs ────────────────────
+# Each of these reported 3/3 FOREIGN before the fix and died accusing the operator of an air-gap
+# breach. A gate that is always red for a benign reason gets loosened or deleted.
+for _spell in 'https://h.local' 'h.local/' 'h.local:443'; do
+  _o="$(PODIMAGES_FIXTURE="$T" HARBOR_URL="$_spell" SKIP_DOTENV=1 "$GATE" 2>&1)"; _rc=$?
+  if [ "$_rc" = 0 ] && printf '%s' "$_o" | grep -q 'workload-image-verdict: ASSERTED'; then
+    ok "HARBOR_URL spelled '${_spell}' still recognises our own images"
+  else
+    bad "HARBOR_URL='${_spell}' false-RED: rc=$_rc"
+  fi
+done
+
 # ── VACUITY: a namespace we OWN with no pods must NOT pass ────────────────────────────────────────
+mk tekton-pipelines-resolvers '{"items":[]}'
+run "a namespace we OWN that EXISTS but has no containers is INCOMPLETE, never a pass" 1 INCOMPLETE
+mk tekton-pipelines-resolvers "$ALL_OURS"
+
+# ...and an ABSENT namespace is a clean skip, not a gap. The two must not be conflated: on a real
+# lab we do not install traefik when istio is the ingress, and that is not a hole.
 rm -f "$T/tekton-pipelines-resolvers.json"
-run "a namespace we OWN yielding no containers is INCOMPLETE, never a pass" 1 INCOMPLETE
+run "an ABSENT namespace is skipped cleanly, not reported as a gap" 0 ASSERTED
 mk tekton-pipelines-resolvers "$ALL_OURS"
 
 rm -f "$T"/*.json
@@ -77,12 +103,31 @@ else
 fi
 
 # ── the ownership typo guard (mirrors 49-psa-check.sh) ────────────────────────────────────────────
-_g="$T/typo.sh"; sed 's/^tekton-pipelines-resolvers|ours$/tekton-pipelines-resolvers|OURS/' "$GATE" > "$_g"; chmod +x "$_g"
-if ! PODIMAGES_FIXTURE="$T" HARBOR_URL=h.local SKIP_DOTENV=1 "$_g" >/dev/null 2>&1; then
-  ok "an unrecognised ownership value DIES rather than silently un-gating a namespace"
+# ⚠️ THE MUTATED COPY MUST LIVE IN scripts/, and the first version of this case did not -- which made
+# it 100% VACUOUS. The gate resolves SCRIPT_DIR from BASH_SOURCE, so a copy in $T sourced
+# "$T/lib/os.sh", which does not exist: it died rc=1 at line 27 and NEVER REACHED the NS_SPEC loop.
+# An implementation round proved it discriminates nothing by running an UNMUTATED copy in the same
+# place -- identical error, identical rc. The case passed with the mutation entirely removed.
+# So: copy beside the real one, assert the gate's own DIE TEXT (not merely rc!=0), and RED-prove by
+# confirming an UNMUTATED copy in the same location PASSES.
+_g="./scripts/.typo-probe-$$.sh"
+trap 'rm -f "$_g"; rm -rf "$T"' EXIT
+sed 's/^tekton-pipelines-resolvers|ours$/tekton-pipelines-resolvers|OURS/' "$GATE" > "$_g"; chmod +x "$_g"
+_o="$(PODIMAGES_FIXTURE="$T" HARBOR_URL=h.local SKIP_DOTENV=1 "$_g" 2>&1)" || true
+if printf '%s' "$_o" | grep -q 'expected ours|not-ours'; then
+  ok "an unrecognised ownership value DIES, naming the expected values"
 else
-  bad "an ownership typo was accepted — a namespace can be un-gated by a typo"
+  bad "ownership typo not caught — got: $(printf '%s' "$_o" | tail -1)"
 fi
+# THE POSITIVE CONTROL for the case above: the same copy, UNMUTATED, must pass. Without this the
+# case cannot tell "the guard fired" from "the copy is broken" -- which is exactly what happened.
+cp "$GATE" "$_g"; chmod +x "$_g"
+if PODIMAGES_FIXTURE="$T" HARBOR_URL=h.local SKIP_DOTENV=1 "$_g" >/dev/null 2>&1; then
+  ok "control: an UNMUTATED copy in the same location PASSES (so the case above measured the guard)"
+else
+  bad "control FAILED — the typo case cannot discriminate; it is measuring a broken copy"
+fi
+rm -f "$_g"
 
 printf '\n%s: %s passed, %s failed\n' "${0##*/}" "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

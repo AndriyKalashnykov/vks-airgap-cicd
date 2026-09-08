@@ -119,25 +119,19 @@ GWAPI_NS="${ISTIO_GWAPI_NAMESPACE:-vks-ingress}"          # the AUTO-PROVISIONED
 # init/ephemeral are read too: `kube-gateway.yaml` has no initContainers today and autoInject is
 # disabled, but the chart exposes an annotation-driven image override, so the surface is not closed
 # by construction.
-# jq, not jsonpath: a nested `{range .status.containerStatuses[*]}` cannot carry the POD NAME out of
-# the outer range, so the naive jsonpath silently mislabels every row. Verified offline against
-# synthetic pod JSON (including a pod with an empty .status, which must yield nothing and not error).
-# shellcheck disable=SC2016  # `$p` and `\(…)` are JQ syntax and MUST NOT be shell-expanded here.
-JQ_IMAGES='.items[] | .metadata.name as $p
-  | ((.status.containerStatuses // []) + (.status.initContainerStatuses // []) + (.status.ephemeralContainerStatuses // []))[]
-  | "\($p)\t\(.image)\t\(.imageID // "")"'
-
-# SELF-TEST HOOK: GATEWAY_IMAGE_FIXTURE=<dir> makes each namespace read <dir>/<ns>.json instead of
-# the cluster, so the classifier is RED/GREEN-provable OFFLINE — without it, this gate could only ever
-# be proven by a ~30-minute e2e, which is how gates end up shipped unproven.
-images_in() { # <ns> -> "<pod>\t<image>\t<imageID>" per container
-  if [ -n "${GATEWAY_IMAGE_FIXTURE:-}" ]; then
-    [ -f "${GATEWAY_IMAGE_FIXTURE}/$1.json" ] || return 0
-    jq -r "$JQ_IMAGES" "${GATEWAY_IMAGE_FIXTURE}/$1.json" 2>/dev/null || true
-    return 0
-  fi
-  kubectl -n "$1" get pods -o json 2>/dev/null | jq -r "$JQ_IMAGES" 2>/dev/null || true
-}
+# ⚠️ THE READER AND THE PREDICATE LIVE IN lib/podimages.sh, NOT HERE. They used to be inline, and an
+# implementation round measured the cost: the inline imageID arm was an unanchored SUBSTRING test, so
+# `oldharbor.h.local/istio/pilot` reported `ok ... (matched via imageID)` against HARBOR_URL=h.local
+# and this gate closed ASSERTED over a lookalike registry. The lib compares HOSTS via
+# registry_hostport() -- "THE ONE HOST PARSER" -- which also fixes the mirror-image false RED on the
+# `https://`, trailing-slash and `:443` spellings of HARBOR_URL that lib/harbor.sh documents as real
+# .env inputs. Two copies of one predicate is B567's root cause; this is now one.
+#
+# The public self-test hook keeps its own name (GATEWAY_IMAGE_FIXTURE) because 16 committed cases use
+# it; it simply feeds the lib's.
+# shellcheck source=scripts/lib/podimages.sh
+. "${SCRIPT_DIR}/lib/podimages.sh"
+[ -z "${GATEWAY_IMAGE_FIXTURE:-}" ] || export PODIMAGES_FIXTURE="${GATEWAY_IMAGE_FIXTURE}"
 
 checked=0; bad=0; cp_seen=0; dp_seen=0
 for ns in "$CP_NS" "$GW_NS" "$GWAPI_NS"; do
@@ -149,18 +143,17 @@ for ns in "$CP_NS" "$GW_NS" "$GWAPI_NS"; do
     checked=$((checked + 1))
     # if/else, not `A && B || C`: the repo bans that shape even where an assignment makes it safe.
     if [ "$ns" = "$CP_NS" ]; then cp_seen=$((cp_seen + 1)); else dp_seen=$((dp_seen + 1)); fi
-    case "$img" in
-      "${HARBOR_URL}"/*) printf 'ok    %s/%s <- %s\n' "$ns" "$pod" "$img" ;;
-      *)
-        # imageID too: containerStatuses[].image is what the CRI REPORTS and runtimes normalise
-        # (a docker.io/ prefix, a digest form), so a prefix test is only as good as that round-trip.
-        case "${imgid:-}" in
-          *"${HARBOR_URL}"/*) printf 'ok    %s/%s <- %s (matched via imageID)\n' "$ns" "$pod" "$img" ;;
-          *) printf 'FAIL  %s/%s pulled %s\n        imageID: %s\n        NOT from %s — on a dual-homed box this mesh reached the PUBLIC registry, so the air gap is UNPROVEN.\n' \
-               "$ns" "$pod" "$img" "${imgid:-<none>}" "$HARBOR_URL"; bad=$((bad + 1)) ;;
-        esac ;;
-    esac
-  done <<< "$(images_in "$ns")"
+    if podimages_is_ours "$img" "${imgid:-}" "$HARBOR_URL"; then
+      if [ "${PODIMAGES_MATCHED_VIA:-}" = imageID ]; then
+        printf 'ok    %s/%s <- %s (matched via imageID)\n' "$ns" "$pod" "$img"
+      else
+        printf 'ok    %s/%s <- %s\n' "$ns" "$pod" "$img"
+      fi
+    else
+      printf 'FAIL  %s/%s pulled %s\n        imageID: %s\n        NOT from %s — on a dual-homed box this mesh reached the PUBLIC registry, so the air gap is UNPROVEN.\n' \
+        "$ns" "$pod" "$img" "${imgid:-<none>}" "$HARBOR_URL"; bad=$((bad + 1))
+    fi
+  done <<< "$(podimages_in "$ns")"
 done
 
 # PER-WORKLOAD denominator. A raw image count cannot tell "I checked everything" from "I checked one

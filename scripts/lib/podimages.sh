@@ -11,6 +11,12 @@
 [ -n "${__VKS_PODIMAGES_SH_LOADED:-}" ] && return 0
 __VKS_PODIMAGES_SH_LOADED=1
 
+# registry_hostport() lives in os.sh. Source it here rather than relying on every caller to have
+# done so first -- lib/argocd.sh sets the precedent, and a lib that silently needs a sibling already
+# loaded is a lib that fails in whichever caller forgets.
+# shellcheck source=scripts/lib/os.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/os.sh"
+
 # jq, not jsonpath: a nested `{range .status.containerStatuses[*]}` cannot carry the POD NAME out of
 # the outer range, so the naive jsonpath silently mislabels every row. Init and ephemeral containers
 # are included -- an init container is exactly where a build-side image hides (Tekton's own
@@ -37,14 +43,45 @@ podimages_in() { # <ns>
 
 # podimages_is_ours <image> <imageID> <registry> -> rc 0 if it came from <registry>.
 #
-# ⚠️ TWO-TIER, AND THE SECOND TIER IS NOT OPTIONAL. `containerStatuses[].image` is what the CRI
-# REPORTS, and runtimes NORMALISE it: containerd resolves a digest-pinned ref and reports a bare
-# `sha256:…` with no registry host at all, so a `.image`-only prefix test FALSE-REDs the great
-# majority of legitimately-mirrored containers. `.imageID` carries the resolved reference and is the
-# rescue arm. A gate that checks only `.image` is not stricter -- it is broken.
+# ⚠️ IT COMPARES HOSTS VIA registry_hostport(), NOT SUBSTRINGS, and an implementation round MEASURED
+# why. A substring test on imageID FALSE-PASSES any registry whose ref merely CONTAINS ours:
+#     oldharbor.env1.lab.test/infra/gitea   vs HARBOR_URL=harbor.env1.lab.test  -> reported ok
+#     evil.example.com/h.local/x            vs HARBOR_URL=h.local               -> reported ok
+# A sibling/stale/lookalike registry in the same domain is exactly what an enterprise lab has, and
+# the gate would close with "OK — every running container came from harbor.env1.lab.test".
+#
+# A raw-string compare ALSO false-REDs in the other direction, on spellings lib/harbor.sh:24-26 and
+# registry_hostport's own header document as real .env inputs -- MEASURED, all containers
+# legitimately ours: `https://h.local`, `h.local/` and `h.local:443` each reported 3/3 FOREIGN and
+# died accusing the operator of an air-gap breach. One parser closes both directions.
+#
+# registry_hostport() is "THE ONE HOST PARSER" (lib/os.sh), itself promoted from lib/tls.sh after a
+# measured incident, with a header saying two implementations of one predicate is the hazard it
+# exists to avoid. This is its third caller, not a third copy.
+# On success it sets PODIMAGES_MATCHED_VIA to `image` or `imageID`. That is not decoration: 96's
+# operator line says "(matched via imageID)", and a committed case asserts it -- knowing WHICH tier
+# matched is what tells a reader the CRI normalised the ref rather than the registry being named
+# outright. A plain global is safe because no caller invokes this inside a command substitution.
 podimages_is_ours() { # <image> <imageID> <registry>
-  local img="${1:-}" imgid="${2:-}" reg="${3:?podimages_is_ours: registry required}"
-  case "$img"   in "${reg}"/*)  return 0 ;; esac
-  case "$imgid" in *"${reg}"/*) return 0 ;; esac
+  local img="${1:-}" imgid="${2:-}" reg="${3:?podimages_is_ours: registry required}" ours
+  ours="$(registry_hostport "$reg")"
+  export PODIMAGES_MATCHED_VIA=""
+  if _podimages_host_matches "$img" "$ours";   then export PODIMAGES_MATCHED_VIA=image;   return 0; fi
+  if _podimages_host_matches "$imgid" "$ours"; then export PODIMAGES_MATCHED_VIA=imageID; return 0; fi
   return 1
+}
+
+# A ref's host is everything before the first `/`, and ONLY if it looks like one. `busybox:1` and a
+# CRI-normalised bare `sha256:cafe` carry no host (the first is an implied docker.io, the second is
+# a digest) -- neither is ours, and neither must be mistaken for a host named `busybox` or `sha256`.
+_podimages_host_matches() { # <ref> <ours-hostport>
+  local ref="${1:-}" ours="${2:-}" first
+  [ -n "$ref" ] || return 1
+  first="${ref%%/*}"
+  [ "$first" != "$ref" ] || return 1            # no `/` at all -> no host
+  case "$first" in
+    *.*|*:*|localhost) ;;                        # a host has a dot, a port, or is localhost
+    *) return 1 ;;
+  esac
+  [ "$(registry_hostport "$first")" = "$ours" ]
 }

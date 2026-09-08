@@ -9,13 +9,29 @@
 # Harbor HAS the image; `check-image-alignment` aligns TAGS IN FILES. None of them can see what the
 # cluster actually pulled.
 #
-# ⚠️ THE SCOPE IS THE BUILD-SIDE NAMESPACES, AND THAT IS DELIBERATE. Its idea round measured that an
-# assertion over the APP namespaces is VACUOUS: those pods run images our own pipeline built and
-# pushed to Harbor, so their refs are Harbor by construction and the assertion could not fail for the
-# right reason. The pods that can silently carry a public image are the BUILD-side ones -- and B567
-# is the proof: Tekton's controller injects a `place-scripts` init container from a hardcoded
-# `-shell-image` FLAG STRING, so `cgr.dev/chainguard/busybox` was pulled from the public internet on
-# every TaskRun, inside the air gap, for the life of the repo.
+# ⚠️ SCOPE: the namespaces running MIRRORED THIRD-PARTY images. The APP namespaces are deliberately
+# EXCLUDED because an assertion there is VACUOUS -- those pods run images our own pipeline built and
+# pushed to Harbor, so their refs are Harbor by construction and the gate could not fail for the
+# right reason (verified: every deploy/*/deployment.yaml is a single container with
+# `sidecar.istio.io/inject: "false"`, enforced by check-pod-inject-label.sh, so no mesh sidecar or
+# init container lands there either).
+#
+# ⚠️ AN EARLIER DRAFT COVERED ONLY ci + tekton, AND ITS ROUND REFUTED THAT: it used the app-namespace
+# vacuity argument to exclude gitea, headlamp and traefik, which are NOT pipeline-built -- they are
+# mirrored third-party images, the SAME class as tekton. headlamp is a second, already-documented
+# instance of the exact shape this gate exists for: 49-install-headlamp.sh's own header records that
+# the chart's podDebugImage/nodeShellImage default to "" and the frontend falls back to a hardcoded
+# `docker.io/library/busybox:latest`, and the override is a `--set` key -- which helm accepts with
+# rc=0 when unknown. gitea is the same: `image: ${GITEA_IMAGE}`, and e2e-cross-cluster.sh sets that
+# to a RAW PUBLIC ref. Closing over 3 of those namespaces while printing "every running container in
+# the namespaces we own" is a denominator overclaim, and that kind of green is what let the headlamp
+# busybox be diagnosed twice.
+#
+# The three Istio namespaces are covered by 96-verify-gateway-image.sh and are NOT repeated here.
+#
+# B567 is the motivating incident: Tekton's controller injects a `place-scripts` init container from
+# a hardcoded `-shell-image` FLAG STRING, so `cgr.dev/chainguard/busybox` was pulled from the public
+# internet on every TaskRun, inside the air gap, for the life of the repo.
 #
 # ⚠️ WHAT IT CANNOT SEE, named rather than implied: kaniko's `.image` is the DESTINATION it pushes,
 # not the base it pulled FROM. A public `FROM` in a Dockerfile is therefore INVISIBLE to any run-time
@@ -48,6 +64,9 @@ NS_SPEC="
 ${CI_NAMESPACE:-ci}|ours
 ${TEKTON_NAMESPACE:-tekton-pipelines}|ours
 tekton-pipelines-resolvers|ours
+${GITEA_NAMESPACE:-gitea}|ours
+${HEADLAMP_NAMESPACE:-headlamp}|ours
+${TRAEFIK_NAMESPACE:-traefik}|ours
 "
 
 checked=0; bad=0; foreign_ns=0
@@ -59,7 +78,13 @@ while IFS='|' read -r ns own; do
     ours|not-ours) ;;
     *) die "97-verify-workload-images: NS_SPEC row '${ns}' has ownership '${own:-<empty>}' — expected ours|not-ours. A namespace must not be un-gated by a typo." ;;
   esac
-  if [ -z "${PODIMAGES_FIXTURE:-}" ]; then
+  # ABSENT vs PRESENT-BUT-EMPTY is the distinction the vacuity guard below rests on, so the fixture
+  # path must model it the same way the live path does: a MISSING fixture file means the namespace
+  # does not exist (skip), and a file containing `{"items":[]}` means it exists with no pods (which
+  # is INCOMPLETE, not a pass). Conflating them made every namespace without a fixture look empty.
+  if [ -n "${PODIMAGES_FIXTURE:-}" ]; then
+    [ -f "${PODIMAGES_FIXTURE}/${ns}.json" ] || { log_info "  (namespace ${ns} absent — skipping)"; continue; }
+  else
     kubectl get ns "$ns" >/dev/null 2>&1 || { log_info "  (namespace ${ns} absent — skipping)"; continue; }
   fi
   while IFS=$'\t' read -r pod img imgid; do
@@ -88,6 +113,12 @@ missing=""
 while IFS='|' read -r ns own; do
   [ -n "${ns:-}" ] || continue
   [ "${own:-}" = ours ] || continue
+  # only a namespace that EXISTS can be "empty" -- an absent one was skipped above and is not a gap.
+  if [ -n "${PODIMAGES_FIXTURE:-}" ]; then
+    [ -f "${PODIMAGES_FIXTURE}/${ns}.json" ] || continue
+  else
+    kubectl get ns "$ns" >/dev/null 2>&1 || continue
+  fi
   if [ -z "${SEEN[$ns]:-}" ]; then missing="${missing} ${ns}"; fi
 done <<< "$NS_SPEC"
 
