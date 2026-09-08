@@ -32,7 +32,15 @@ export REPO_ROOT
 
 
 # ---------------------------------------------------------------------------
-# with_registry_lock — serialize every registry-MUTATING operation on this host.
+# with_registry_lock — serialize every registry-MUTATING operation IN THIS REPOSITORY.
+#
+# ⚠️ THE SCOPE IS PER-REPOSITORY, NOT PER-HOST, and the header said "host" until 2026-09-08. Two
+# separate CLONES pointed at the SAME Harbor are STILL NOT serialized by this. That is the honest
+# residual; keying the lock on registry identity instead was considered and rejected — it needs a
+# host-wide writable dir (a predictable path in world-writable /tmp lets any local user hold the
+# lock forever and permanently deny `make mirror`), HARBOR_URL is EMPTY at lock time in a fresh
+# worktree (.env and .env.state are both per-REPO_ROOT), and the incident shape below shares a kind
+# CLUSTER, not only a registry.
 #
 # Concurrent container/registry mutation CORRUPTS the target registry's blob store: a partial or
 # interleaved push leaves tags/manifests referencing blobs that HEAD-200 but are not actually
@@ -47,28 +55,94 @@ export REPO_ROOT
 #
 # Usage:  with_registry_lock <label> <command...>
 # ---------------------------------------------------------------------------
+# _registry_common_dir <repo-root> — print the git dir SHARED by every worktree, or return 1.
+#
+# ⚠️ PURE SHELL, ON PURPOSE — no `git`. The obvious implementation is
+# `git -C "$REPO_ROOT" rev-parse --git-common-dir`, and an adversary round MEASURED three reasons
+# not to:
+#   1. from a NON-repo nested inside a repo it returns `../../../.git` with rc=0, so the caller
+#      anchors the lock into a STRANGER'S repository — and if that repo is unwritable, a working
+#      `make mirror-push` becomes a hard `die`. (This helper simply returns 1 there: it can only
+#      ever look at $r/.git, so it cannot walk up.)
+#   2. GIT_DIR / GIT_COMMON_DIR in the environment silently override `-C`, and a
+#      `--show-toplevel` guard does NOT catch it (measured).
+#   3. `22-builder-push.sh:8-10` states the air-gap box's toolchain verbatim as "tar + curl +
+#      sha256sum + the carried crane" — git is NOT in it. `sed` and `cat` already are: os.sh uses
+#      them 9x and 6x, so every box that sources this file already needs them.
+# Layout per gitrepository-layout(5): a linked worktree's `.git` is a FILE holding `gitdir: <path>`,
+# and that dir holds `commondir` pointing at the shared `.git`.
+_registry_common_dir() {
+  local r="$1" gd c
+  [ -d "$r/.git" ] && { printf '%s' "$r/.git"; return 0; }   # main checkout
+  [ -f "$r/.git" ] || return 1                               # not a repo -> caller falls back
+  gd="$(sed -n 's/^gitdir: *//p' "$r/.git")"; [ -n "$gd" ] || return 1
+  case "$gd" in /*) ;; *) gd="$r/$gd" ;; esac                # a relative `gitdir:` is legal
+  [ -f "$gd/commondir" ] || return 1
+  c="$(cat "$gd/commondir")"
+  case "$c" in /*) ;; *) c="$gd/$c" ;; esac
+  # NORMALISE. flock keys on the inode, so `.../worktrees/x/../..` already locks the right file —
+  # but this path is PRINTED to the operator inside a `rm -f '<path>'` remedy when the lock is
+  # refused, and a path with `/../..` in it invites deleting the wrong thing. Pure shell; falls
+  # back to the raw form rather than failing if the dir is unreadable.
+  ( cd "$c" 2>/dev/null && pwd -P ) || printf '%s' "$c"
+}
+
 with_registry_lock() {
   local label="$1"; shift
-  local lock="${REGISTRY_LOCK_FILE:-${REPO_ROOT}/.registry.lock}"
+  # A git WORKTREE has its own REPO_ROOT, so the old `${REPO_ROOT}/.registry.lock` gave two
+  # worktrees two different FILES and flock granted BOTH — measured: main held inode 30176617 while
+  # a worktree ACQUIRED inode 80249353, with the same-file control correctly REFUSED. e2e-kind
+  # reaches this lock transitively (install-all -> mirror -> mirror-push) and KIND_CLUSTER_NAME is
+  # FIXED, so both worktrees target the same cluster and the same Harbor. That is the 2026-07-13
+  # blob-store incident shape, re-enabled.
+  # The shared git dir is identical from every worktree, so both now open ONE file. flock keys on
+  # the INODE, not the path string, so the worktree's unnormalised `.../worktrees/x/../..` form
+  # locks the same file as the main checkout's plain `.git` — measured REFUSED across the two.
+  local lock legacy _cd
+  legacy="${REPO_ROOT}/.registry.lock"
+  if [ -n "${REGISTRY_LOCK_FILE:-}" ]; then
+    lock="$REGISTRY_LOCK_FILE"                               # explicit override wins, untouched
+  elif _cd="$(_registry_common_dir "$REPO_ROOT")" && [ -d "$_cd" ]; then
+    # NOT `registry.lock`: git's own convention is `<file>.lock` as a sentinel FOR `<file>`, and
+    # `.git/registry.lock` would read as a lock for a nonexistent `.git/registry`.
+    lock="${_cd}/vks-registry.lock"
+  else
+    lock="$legacy"                                           # no git repo -> pre-2026-09-08 behaviour
+  fi
 
   if ! have flock; then
     log_warn "flock not available — cannot serialize registry work. Do NOT run another mirror/e2e concurrently."
     "$@"; return $?
   fi
 
-  exec 9>"$lock" || die "cannot open the registry lock file: $lock"
-  if ! flock -n 9; then
-    local holder; holder="$(cat "$lock" 2>/dev/null || true)"
+  _registry_lock_refused() {   # <lock-path>
+    local l="$1" holder; holder="$(cat "$l" 2>/dev/null || true)"
     log_error "another registry-mutating operation is already running${holder:+ (${holder})}."
     log_error "  These share a cluster + registry, so running two at once makes any failure unattributable."
     log_error "  Wait for it to finish, then re-run."
-    log_error "  Lock: $lock   (stale after a hard kill? remove it: rm -f '$lock')"
+    log_error "  Lock: $l   (stale after a hard kill? remove it: rm -f '$l')"
     exit 1
+  }
+
+  exec 9>"$lock" || die "cannot open the registry lock file: $lock"
+  flock -n 9 || _registry_lock_refused "$lock"
+
+  # ALSO take the LEGACY per-worktree lock, when it is a different file. A process that started
+  # BEFORE this change holds ${REPO_ROOT}/.registry.lock and knows nothing about the shared one, so
+  # without this a mid-mirror upgrade lets two mutators run — and the recovery for that is
+  # "rebuild the registry". Deliberately NOT dated for removal: taking it costs one fd, it can
+  # never deadlock (every caller takes them in this order), and a dated note would just rot.
+  local _took_legacy=0
+  if [ "$lock" != "$legacy" ] && exec 8>"$legacy" 2>/dev/null; then
+    _took_legacy=1
+    flock -n 8 || _registry_lock_refused "$legacy"
   fi
+
   printf '%s pid=%s started=%s\n' "$label" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >&9
   "$@"
   local rc=$?
   flock -u 9; exec 9>&-
+  if [ "$_took_legacy" = 1 ]; then flock -u 8 2>/dev/null || true; exec 8>&-; fi
   return "$rc"
 }
 

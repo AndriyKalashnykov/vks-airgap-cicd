@@ -4675,7 +4675,38 @@ is a different (and, on this evidence, intractable) control.
 
 ---
 
-## 🔴 B521 — the registry lock is per-WORKTREE, so the serialization it promises "on this host" is not host-wide
+## ✅ B521 — SHIPPED 2026-09-08. The lock now lives in the SHARED git dir; the fix I designed was REFUTED first
+
+The round CLEARED the defect and **refuted my implementation**, HIGH: `git rev-parse
+--git-common-dir` returns `../../../.git` with **rc=0** from a non-repo nested inside a repo, so my
+`case` would have anchored the lock into a **stranger's** `.git` — and if that repo is unwritable,
+`exec 9>` fails and a working `make mirror-push` becomes a hard `die`. Two more against the git
+route: `GIT_DIR`/`GIT_COMMON_DIR` silently override `-C` (and a `--show-toplevel` guard does NOT
+catch it), and `22-builder-push.sh:8-10` states the air-gap toolchain verbatim as *"tar + curl +
+sha256sum + the carried crane"* — git is not in it, and three of this lock's four callers run there.
+
+Shipped instead: a **pure-shell** `_registry_common_dir` reading `$REPO_ROOT/.git` (dir, or the
+`gitdir:`/`commondir` files of a linked worktree). It cannot walk up, cannot be redirected by an env
+var, and adds no binary — `os.sh` already uses `sed` 9x and `cat` 6x. Verified end-to-end through the
+REAL function: main holds -> worktree **REFUSED**; after release -> worktree succeeds; a different
+repo is never blocked. The legacy per-worktree lock is also taken (undated, because taking it costs
+one fd, cannot deadlock, and a dated removal note would rot), so a process started before this
+change is still seen. Path is normalised because it is PRINTED in a `rm -f` remedy.
+
+`scripts/test-registry-lock.sh` (8 cases) — the control had **no test at all** despite its absence
+having caused the 2026-07-13 incident. The worktree fixture is HAND-BUILT per
+`test-namespace-gates.sh:19-22` (worktrees race on `.git/worktrees/` and `git worktree add` is
+blocked by the read-only hook). One case FALSE-RED on first run: `\bgit\b` matched the `.git` in a
+path, not the git binary — fixed to a command-position match and given a positive control.
+
+**Residual, in the header:** two separate CLONES against one Harbor are still not serialized.
+Keying on registry identity was considered and rejected (needs a host-wide writable dir; a
+predictable path in world-writable `/tmp` lets any local user hold it forever; `HARBOR_URL` is empty
+at lock time in a fresh worktree; and the incident shape shares a kind CLUSTER, not only a registry).
+
+---
+
+## B521 (original) — the registry lock is per-WORKTREE, so the serialization it promises "on this host" is not host-wide
 
 Surfaced 2026-08-28 by the adversary round that refuted the `gate-at` worktree wrapper, as a finding
 neither the brief nor I asked for — and confirmed independently.
