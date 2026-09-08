@@ -6891,11 +6891,27 @@ re-creates it; the CLI's `Token is still active. Skipped the token refresh` is t
 
 **Residuals — NOT closed, named honestly:**
 
-- **`creds.sh` still has ~26 `tr` uses**, two of them bare assignments under `set -euo pipefail`.
-  Bare `photon:5.0` has **no `tr`** (measured), so on such a box `make creds` would *die*, not
-  degrade. Only the two base64url decoders were de-`tr`'d here. Whether this is reachable in
-  practice is unsettled: CLAUDE.md says the air-gap box provisions coreutils from its internal
-  mirror, so `tr` is expected there — the exposure is a bare container, not a provisioned box.
+- ⚠️ **CORRECTED — this row first said "~26 `tr` uses … the remaining ~10 are table separators".
+  Measured at round 4: 12 sites, and THREE were VALUE-BEARING, not separators.** All three are now
+  fixed: the state stamp (`:624` — empty made a correctly-stamped overlay fall through to the "may
+  be from a lab that no longer exists" banner, the exact false alarm its own comment says was
+  fixed), the sole-candidate secret NAME (`:1808`), and the candidate list in the "set
+  VKS_CLUSTER_NAME to one of these" message (`:1874`), which would have named no options. The **9**
+  that remain really are table separators (`printf | tr ' ' '-'`), and a `tr`-less box renders them
+  blank — cosmetic. Bare `photon:5.0` has **no `tr`** (measured); reachability is still unsettled,
+  since CLAUDE.md says the air-gap box provisions coreutils from its internal mirror, so the
+  exposure is a bare container rather than a provisioned box.
+- **The SSO-lockout property was guarded by PROSE for three commits and regressed twice.**
+  Re-applying the regression left the suite byte-identically green (77 ok / 0 FAIL) because the
+  delegation-follower pulls the helper's whole body, which names the command in one branch. It now
+  has a behavioural control (render both states, assert zero `make vks-login` on the undecidable
+  one) plus a structural one. **The general lesson: a refactor that makes a POSITIVE control robust
+  can make the NEGATIVE control unexpressible by the same technique.**
+- **A padding mutation is UNDETECTABLE on GNU `base64`**, which recovers unpadded input — so that
+  half of the decoder looked like dead code. On **busybox** (the air-gap class) unpadded input is
+  TRUNCATED: `{"a":"x","exp":1000000000}` loses its last digit and renders **1973-03-03 as fact**.
+  The test now decodes through busybox. Arm 2 remains **unprovable** and says so: it loses one
+  byte, and valid JSON's last byte is always `}`, never a digit.
 - **The nested-`exp` case is proven as a PARSER divergence, not as an observed lab failure.** No
   real vCenter OIDC JWT was checked for a nested `"exp"`. Settle it: decode a live token's payload
   and `grep -c '"exp":'`.
