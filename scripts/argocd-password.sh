@@ -287,7 +287,7 @@ if command -v kubectl >/dev/null 2>&1; then
         # DISAGREEING on the undecidable arm, and "locks out PERMANENTLY" missing from this file's
         # arms entirely: the clause that is the whole REASON the command is withheld.
         EXPIRED*) log_warn "the Supervisor token EXPIRED at ${_ap_exp#EXPIRED } — $(supervisor_renew_how)" ;;
-        VALID*)   log_warn "the cluster REJECTED this kubeconfig although its token has NOT expired (valid until ${_ap_exp#VALID }) — that is a ROTATED or REVOKED credential, not an expiry. $(supervisor_renew_how --no-command)" ;;
+        VALID*)   log_warn "the cluster REJECTED this kubeconfig although its token has NOT expired (valid until ${_ap_exp#VALID }) — that is a ROTATED or REVOKED credential, not an expiry. $(supervisor_renew_how --ask-only)" ;;
         *)        log_warn "the cluster REJECTED this kubeconfig and its token carries no readable expiry (a client-cert kubeconfig has none, and an ambiguous one is refused rather than guessed), so this may be a ROTATED credential rather than an expired one. $(supervisor_renew_how --no-command)" ;;
       esac
     fi

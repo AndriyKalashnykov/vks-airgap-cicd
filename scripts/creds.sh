@@ -1111,7 +1111,7 @@ _rejected_why() {
       # would discard the one discrimination kubectl cannot make.
       # Delegates like the others: a hand-written arm is invisible to the structural control (it
       # has no call to count) and is how "both consumers share ONE sentence" became false on 1 of 3.
-      printf 'the token has NOT expired (valid until %s), so the Supervisor rejected a LIVE token — this is a ROTATED or REVOKED credential, not an expiry. Re-authenticating will NOT help. %s' "${_e#VALID }" "$(_renew_how --no-command)" ;;
+      printf 'the token has NOT expired (valid until %s), so the Supervisor rejected a LIVE token — this is a ROTATED or REVOKED credential, not an expiry. Re-authenticating will NOT help. %s' "${_e#VALID }" "$(_renew_how --ask-only)" ;;
     *)
       printf 'the Supervisor REJECTED this kubeconfig, and its token carries no readable expiry (a client-cert kubeconfig has none, and an ambiguous one is refused rather than guessed), so this is NOT necessarily expiry — it may be a rotated or revoked credential. Do not re-authenticate blind: vCenter SSO locks out PERMANENTLY after 3 failures. %s' "$(_renew_how --no-command)" ;;
   esac

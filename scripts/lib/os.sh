@@ -2160,9 +2160,19 @@ kube_is_notfound() {
 # state that is undecidable"); removing the VKS_AUTH_METHOD gate re-opened it for every reader
 # until this flag was added. A round measured the rendered footnote putting "Do not re-authenticate
 # blind" and the command FOUR WORDS APART. EXPIRED (a fact) names the command; nothing else does.
+# ⚠️ THREE MODES, because two were not enough and the two-mode version made an arm CONTRADICT
+# ITSELF. The VALID arm has a DEFINITE diagnosis ("the token is live, so this is rotated/revoked"),
+# and appending "this report cannot tell you which fix applies" to it asserted both at once. That
+# clause belongs ONLY to the arm that genuinely cannot decide. Measured, rendered, and caught by a
+# round; the pre-delegation text had no contradiction, so this is production text that was made
+# worse to satisfy a control.
+#   (default)     the cause is a FACT (EXPIRED)      -> name the command
+#   --ask-only    the cause is KNOWN but not expiry  -> no command, no "cannot tell"
+#   --no-command  the cause is UNDECIDABLE           -> no command, plus "cannot tell"
 supervisor_renew_how() {
-  if [ "${1:-}" = --no-command ]; then
-    printf 'Do not re-authenticate blind: vCenter SSO locks out PERMANENTLY after 3 failures. Ask whoever owns the lab for a current credential — this report cannot tell you which fix applies, and guessing costs one of those three attempts.'
+  if [ "${1:-}" = --ask-only ] || [ "${1:-}" = --no-command ]; then
+    printf 'Do not re-authenticate blind: vCenter SSO locks out PERMANENTLY after 3 failures. Ask whoever owns the lab for a current credential.'
+    [ "${1:-}" = --no-command ] && printf ' This report cannot tell you which fix applies, and guessing costs one of those three attempts.'
     return 0
   fi
   printf 'If you minted this kubeconfig here (scenario-1): VKS_AUTH_METHOD=vcf make vks-login — the AUTH_METHOD is required because Step 6 leaves .env on kubeconfig, so a bare make vks-login renews the GUEST kubeconfig instead (docs/scenario-1.md, "3. Log in to the Supervisor"). If it was HANDED to you (scenario-2 tenant): nothing here renews it — ask whoever owns the lab.'

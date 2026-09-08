@@ -1365,58 +1365,55 @@ else
 
   # STRUCTURAL, because the behavioural pair above cannot see a CALL SITE that forgot the flag.
   #
-  # ⚠️ BOTH CONSUMERS. The first version read `_rejected_why` in creds.sh ONLY — and the commit that
-  # wrote it had just created THREE more arms in argocd-password.sh. MEASURED: dropping
-  # --no-command there left the suite BYTE-IDENTICALLY green, i.e. the exact defect this control
-  # exists to catch, in the file that same commit changed. 4 arms must withhold the command;
-  # creds.sh holds 1 of them.
+  # ⚠️ THE CONSUMER SET IS DERIVED, NEVER HAND-TYPED. Two successive versions of this control used a
+  # hand-typed list, and BOTH missed a consumer — the second missed a THIRD block that had been in
+  # creds.sh all along, and reported ok while an arm there named the SSO command. This repo already
+  # states the rule: check-classifier-consumers.sh:14, "a second hand-typed list is the same rot one
+  # level up." lib/armscan.awk derives every `case` block whose arms include an EXPIRED label.
   #
-  # ⚠️ IT TRACKS THE CASE LABEL, NOT PROSE. The first version decided which arm a line belonged to
-  # with `grep -v EXPIRED` — a substring test on the MESSAGE. It failed both ways, measured:
-  #   false GREEN: reword the `*)` arm to "...rather than an EXPIRED one" (wording already used in
-  #                argocd-password.sh) and drop the flag -> 4/4 ok, command restored to the
-  #                undecidable arm.
-  #   false RED:   wrap the correct EXPIRED arm across two lines -> "1 non-EXPIRED arm(s)", naming
-  #                the WRONG arm, and its cheapest remedy (add --no-command to EXPIRED) silently
-  #                re-opens the defect lib/os.sh records as closed.
-  _bare=0; _blocks=0
-  for _spec in "creds.sh:/^_rejected_why() {/,/^}/" "argocd-password.sh:/case \"\$_ap_exp\" in/,/esac/"; do
-    _f="${_spec%%:*}"; _range="${_spec#*:}"
-    _blk="$(sed -n "${_range}p" "${_CREDS_REPO}/scripts/${_f}" 2>/dev/null || true)"
-    # VACUITY GUARD, per block. Without it, renaming the function makes this control silently
-    # measure NOTHING and report ok — and note the asymmetry: the B548 follower's empty extract
-    # fires a false RED (safe), this one's fires a false GREEN (not).
-    if [ -z "$_blk" ]; then
-      bad "SSO gate: the arm block for ${_f} came back EMPTY — this control is measuring NOTHING"
-      continue
-    fi
-    _blocks=$((_blocks + 1))
-    _arm=""
-    while IFS= read -r _l; do
-      _t="${_l#"${_l%%[![:space:]]*}"}"        # strip leading whitespace
-      case "$_t" in
-        EXPIRED\*\)*) _arm=EXPIRED ;;
-        VALID\*\)*)   _arm=VALID ;;
-        \*\)*)        _arm=OTHER ;;
-      esac
-      case "$_l" in
-        *renew_how*)
-          case "$_l" in
-            *--no-command*) ;;
-            *"renew_how() {"*|*"renew_how()"*) ;;   # a DEFINITION, not a call
-            *) [ "$_arm" = EXPIRED ] || _bare=$((_bare + 1)) ;;
-          esac ;;
+  # ⚠️ IT ASSERTS THE PROPERTY, NOT THE MECHANISM. The previous version keyed on "does this arm call
+  # the helper with the flag", so an arm naming `make vks-login` LITERALLY was never examined —
+  # measured, the whole suite stayed byte-identical. The property is "no undecidable arm may name
+  # the SSO command", and it is checked BOTH ways: a literal, and an unflagged helper call.
+  _arms="$(awk -f "${_CREDS_REPO}/scripts/lib/armscan.awk" \
+             "${_CREDS_REPO}/scripts/creds.sh" "${_CREDS_REPO}/scripts/argocd-password.sh" 2>/dev/null || true)"
+  _narms="$(printf '%s\n' "$_arms" | grep -c . || true)"
+  # VACUITY: a scanner that returns nothing, or too little, is measuring nothing. Three blocks x
+  # three arms is the floor; a PARTIAL extract (a comment truncating a block) is what an
+  # emptiness-only guard misses.
+  if [ "${_narms:-0}" -lt 9 ]; then
+    bad "SSO gate: the arm scanner returned ${_narms:-0} arms, expected >= 9 — it is measuring almost NOTHING"
+  else
+    _viol=0; _named=0
+    while IFS="$(printf '\t')" read -r _af _al _at; do
+      [ -n "${_al:-}" ] || continue
+      # does this arm name the SSO command, by EITHER route?
+      _names=0
+      case "$_at" in *vks-login*) _names=1 ;; esac
+      case "$_at" in *"renew_how)"*|*'renew_how "'*) _names=1 ;; esac
+      # EXPIRED is the ONLY label allowed to name it. Anything unrecognised counts as NOT-expired,
+      # so a new or oddly-spelled label fails SAFE instead of inheriting the exempting value --
+      # measured, the previous tracker never reset `_arm`, so 6 of 6 alternative label spellings
+      # inherited EXPIRED and went green.
+      case "$_al" in
+        *EXPIRED*) [ "$_names" -eq 1 ] && _named=$((_named + 1)) ;;
+        *)         [ "$_names" -eq 1 ] && { _viol=$((_viol + 1)); printf '        ^ %s %s names the SSO command\n' "$_af" "$_al" >&2; } ;;
       esac
     done <<INNER
-$_blk
+$_arms
 INNER
-  done
-  if [ "$_blocks" -ne 2 ]; then
-    bad "SSO gate: read $_blocks of 2 arm blocks — a consumer moved and this control cannot see it"
-  elif [ "$_bare" -eq 0 ]; then
-    ok "SSO gate: across BOTH consumers, no non-EXPIRED arm names the remedy without --no-command"
-  else
-    bad "SSO gate: $_bare non-EXPIRED arm(s) call the remedy WITHOUT --no-command — that prescribes an SSO bind for a cause the report cannot decide"
+    if [ "$_viol" -ne 0 ]; then
+      bad "SSO gate: $_viol non-EXPIRED arm(s) name the SSO command — that prescribes a vCenter bind for a cause the report cannot decide, and vCenter locks out PERMANENTLY after 3 failures"
+    else
+      ok "SSO gate: across $_narms DERIVED arms, only EXPIRED ones name the SSO command"
+    fi
+    # ...and the inverse, so the fix cannot be withheld everywhere. NOT every EXPIRED arm must name
+    # it: creds.sh's ArgoCD cell correctly prescribes `make argocd-password`, which performs no bind.
+    if [ "$_named" -eq 0 ]; then
+      bad "SSO gate: NO EXPIRED arm names the remedy — the fix is withheld from the reader who HAS it"
+    else
+      ok "SSO gate: $_named EXPIRED arm(s) do name it (the decidable case keeps its remedy)"
+    fi
   fi
 
 fi
