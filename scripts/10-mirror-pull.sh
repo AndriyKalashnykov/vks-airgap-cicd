@@ -97,6 +97,35 @@ done
 # new manifest nor the old one.
 mirror_prune_manifests "$MANIFEST_DIR" "${!MANIFESTS[@]}"
 
+# ---- 1c. Refuse to carry a manifest naming a registry NOTHING will mirror ----
+# B568, from the cgr.dev incident: Tekton injects a `place-scripts` init container from a hardcoded
+# `-shell-image` FLAG STRING, not an `image:` field. Neither the mirror alternation nor the
+# install-time rewrite carried `cgr.dev`, so on a LIVE air-gapped lab every TaskRun pulled busybox
+# from the public internet -- and nothing anywhere could have noticed, because every check in this
+# repo either searched for hosts we already knew or looked at `image:` fields.
+#
+# This asks the COMPLEMENTARY question -- which host-shaped refs are NOT covered? -- so the host
+# nobody has thought of is exactly what it reports.
+#
+# ⚠️ IT RUNS HERE, NOT IN static-check. `bundle/` is gitignored (`git ls-files bundle/` = 0), so in
+# CI it would scan an empty directory and pass VACUOUSLY -- the same refutation 96-verify-gateway-
+# image.sh's header records. Here the manifests are guaranteed present (asserted above) and the
+# operator is still on the internet side, where an unmirrored host can actually be fixed.
+# shellcheck source=scripts/lib/hostscan.sh
+. "${SCRIPT_DIR}/lib/hostscan.sh"
+_unhandled="$(hostscan_unhandled "$MANIFEST_DIR")"
+if [ -n "$_unhandled" ]; then
+  log_error "carried manifests name registry host(s) that NOTHING will mirror or rewrite:"
+  printf '%s\n' "$_unhandled" | while IFS=$'\t' read -r _h _n _ex; do
+    log_error "  ${_h}  (${_n} ref(s), e.g. ${_ex})"
+  done
+  log_error "  Add the host to MIRROR_REGISTRY_HOSTS (lib/mirror.sh) so it is mirrored AND rewritten,"
+  log_error "  or, if it genuinely cannot execute on this cluster, add it to HOSTSCAN_ALLOW_DEFAULT"
+  log_error "  (lib/hostscan.sh) WITH the reason and the measurement that supports it."
+  die "refusing to build a bundle that would pull from the public internet at run time"
+fi
+log_info "manifest registry hosts: OK — every tagged/digested ref is on a mirrored host"
+
 # ---- 2. Collect the full image list ----
 mapfile -t IMAGES < <(mirror_collect_images)
 [ "${#IMAGES[@]}" -gt 0 ] || die "no images collected (empty images.txt and no manifest images)"
