@@ -1358,6 +1358,21 @@ else
     "")                 bad "SSO gate: the undecidable remedy rendered EMPTY — cannot tell 'no command' from 'no output'" ;;
     *)                  ok "SSO gate: the UNDECIDABLE remedy names NO SSO command" ;;
   esac
+  # --ask-only was introduced with no coverage at all. Deleting it from the helper's guard is a
+  # plausible edit and makes BOTH VALID arms name the command while contradicting themselves.
+  _sso_ask="$(bash -c ". '${_CREDS_REPO}/scripts/lib/os.sh' 2>/dev/null; supervisor_renew_how --ask-only" 2>/dev/null || true)"
+  case "$_sso_ask" in
+    "")                 bad "SSO gate: --ask-only rendered EMPTY" ;;
+    *"make vks-login"*) bad "SSO gate: --ask-only NAMES the SSO command — a definite non-expiry diagnosis must not prescribe a bind" ;;
+    *"cannot tell you which fix"*) bad "SSO gate: --ask-only carries the UNDECIDABLE clause — that arm HAS a definite diagnosis, so this contradicts it" ;;
+    *)                  ok "SSO gate: --ask-only names no command and makes no undecidable claim" ;;
+  esac
+  # ...and the helper must REFUSE an unknown mode rather than fall through to naming the command.
+  if bash -c ". '${_CREDS_REPO}/scripts/lib/os.sh' 2>/dev/null; supervisor_renew_how --nocommand" >/dev/null 2>&1; then
+    bad "SSO gate: an UNKNOWN mode was accepted — a one-character flag typo then prescribes an SSO bind"
+  else
+    ok "SSO gate: an unknown mode is REFUSED (a flag typo cannot silently name the command)"
+  fi
   case "$_sso_non" in
     *"locks out PERMANENTLY"*) ok "SSO gate: the undecidable remedy still states WHY there is no command" ;;
     *)                         bad "SSO gate: the undecidable remedy dropped 'locks out PERMANENTLY' — the clause that is the whole reason the command is withheld" ;;
@@ -1375,22 +1390,50 @@ else
   # the helper with the flag", so an arm naming `make vks-login` LITERALLY was never examined —
   # measured, the whole suite stayed byte-identical. The property is "no undecidable arm may name
   # the SSO command", and it is checked BOTH ways: a literal, and an unflagged helper call.
-  _arms="$(awk -f "${_CREDS_REPO}/scripts/lib/armscan.awk" \
-             "${_CREDS_REPO}/scripts/creds.sh" "${_CREDS_REPO}/scripts/argocd-password.sh" 2>/dev/null || true)"
+  # ⚠️ THE FILE LIST IS DERIVED TOO. Deriving the BLOCKS while hand-typing the FILES is the same
+  # rot one level up — measured: a third consumer added to another script, with TWO arms naming the
+  # SSO command, left the suite reporting `ok ... across 9 DERIVED arms`. A consumer is any
+  # non-test script that reads a token-expiry verdict.
+  _cfiles="$(grep -rl 'kube_token_expiry' "${_CREDS_REPO}"/scripts/*.sh 2>/dev/null | grep -v '/test-' || true)"
+  _nfiles="$(printf '%s\n' "$_cfiles" | grep -c . || true)"
+  # shellcheck disable=SC2086  # deliberate word-splitting: one path per line, no spaces in them
+  _arms="$(awk -f "${_CREDS_REPO}/scripts/lib/armscan.awk" $_cfiles 2>/dev/null || true)"
   _narms="$(printf '%s\n' "$_arms" | grep -c . || true)"
+  if [ "${_nfiles:-0}" -lt 2 ]; then
+    bad "SSO gate: derived ${_nfiles:-0} consumer file(s), expected >= 2 — the derivation is broken, not the code"
+  fi
   # VACUITY: a scanner that returns nothing, or too little, is measuring nothing. Three blocks x
   # three arms is the floor; a PARTIAL extract (a comment truncating a block) is what an
   # emptiness-only guard misses.
-  if [ "${_narms:-0}" -lt 9 ]; then
-    bad "SSO gate: the arm scanner returned ${_narms:-0} arms, expected >= 9 — it is measuring almost NOTHING"
+  # The floor is DERIVED: at least 2 arms per consumer file. A hardcoded 9 went RED when a block
+  # was legitimately removed, accusing the scanner and inviting the maintainer to edit the number
+  # DOWN -- i.e. to weaken the gate as the cheapest way to go green.
+  _floor=$((_nfiles * 2))
+  if [ "${_narms:-0}" -lt "$_floor" ]; then
+    bad "SSO gate: EITHER a consumer block was legitimately removed OR the scanner desynced — it returned ${_narms:-0} arms across ${_nfiles} consumer file(s), expected >= ${_floor}"
   else
     _viol=0; _named=0
     while IFS="$(printf '\t')" read -r _af _al _at; do
       [ -n "${_al:-}" ] || continue
       # does this arm name the SSO command, by EITHER route?
       _names=0
-      case "$_at" in *vks-login*) _names=1 ;; esac
+      # ⚠️ NOT a bare substring: prose that WARNS AGAINST the command ("do NOT run make vks-login")
+      # contains it too, and flagging that is the false-RED class this file records as refuted at
+      # :1321-1325 — whose only remedy is deleting the warning. Require the literal to be a
+      # PRESCRIPTION: preceded by `run`/`:`/`then` and not by a negation.
+      case "$_at" in
+        *[Nn][Oo][Tt]\ *vks-login*|*[Nn][Ee][Vv][Ee][Rr]\ *vks-login*|*"do not "*vks-login*) ;;
+        *"run: "*vks-login*|*"then: "*vks-login*|*"Run "*vks-login*|*"run "*vks-login*) _names=1 ;;
+      esac
       case "$_at" in *"renew_how)"*|*'renew_how "'*) _names=1 ;; esac
+      # A FLAG THE HELPER DOES NOT KNOW is now refused (it returns 2 and prints nothing), so the
+      # arm renders an EMPTY remedy instead of prescribing a bind — safe, but still a defect, and
+      # the property check above cannot see it because nothing is named. Catch it here.
+      case "$_at" in
+        *"renew_how --ask-only"*|*"renew_how --no-command"*) ;;
+        *"renew_how --"*) _viol=$((_viol + 1))
+          printf '        ^ %s %s calls the remedy with an UNKNOWN mode — it renders EMPTY\n' "$_af" "$_al" >&2 ;;
+      esac
       # EXPIRED is the ONLY label allowed to name it. Anything unrecognised counts as NOT-expired,
       # so a new or oddly-spelled label fails SAFE instead of inheriting the exempting value --
       # measured, the previous tracker never reset `_arm`, so 6 of 6 alternative label spellings

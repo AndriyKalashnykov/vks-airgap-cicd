@@ -1109,8 +1109,11 @@ _rejected_why() {
       # Supervisor rejected a token that has NOT expired. Sending this to the hedge below would
       # assert "carries no readable expiry" about an expiry we just read — a false sentence — and
       # would discard the one discrimination kubectl cannot make.
-      # Delegates like the others: a hand-written arm is invisible to the structural control (it
-      # has no call to count) and is how "both consumers share ONE sentence" became false on 1 of 3.
+      # Delegates like the others, so the wording cannot drift between the two consumers.
+      # (An earlier version of this comment said a hand-written arm is "invisible to the structural
+      # control" — that stopped being true when the control began matching the LITERAL command as
+      # well as the call, so a hand-written prescription is now caught either way. Delegation is
+      # about single-sourcing the sentence, not about evading a blind spot that no longer exists.)
       printf 'the token has NOT expired (valid until %s), so the Supervisor rejected a LIVE token — this is a ROTATED or REVOKED credential, not an expiry. Re-authenticating will NOT help. %s' "${_e#VALID }" "$(_renew_how --ask-only)" ;;
     *)
       printf 'the Supervisor REJECTED this kubeconfig, and its token carries no readable expiry (a client-cert kubeconfig has none, and an ambiguous one is refused rather than guessed), so this is NOT necessarily expiry — it may be a rotated or revoked credential. Do not re-authenticate blind: vCenter SSO locks out PERMANENTLY after 3 failures. %s' "$(_renew_how --no-command)" ;;

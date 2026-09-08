@@ -2170,6 +2170,17 @@ kube_is_notfound() {
 #   --ask-only    the cause is KNOWN but not expiry  -> no command, no "cannot tell"
 #   --no-command  the cause is UNDECIDABLE           -> no command, plus "cannot tell"
 supervisor_renew_how() {
+  # 🔴 REJECT AN UNKNOWN ARGUMENT, LOUDLY. Falling through to the command-naming branch made a
+  # ONE-CHARACTER TYPO (`--nocommand`) silently prescribe a vCenter bind for an undecidable cause,
+  # in BOTH consumers, with the whole suite BYTE-IDENTICAL to baseline. MEASURED. This is the
+  # highest-leverage guard in the file: it converts an entire silent class — every misspelling,
+  # every unset `$flag`, every `-n` — into a loud failure, and it does not depend on any caller-side
+  # detector enumerating call spellings correctly.
+  case "${1:-}" in
+    ''|--ask-only|--no-command) ;;
+    *) printf 'BUG: supervisor_renew_how got unknown mode %s — refusing to render a remedy\n' "$1" >&2
+       return 2 ;;
+  esac
   if [ "${1:-}" = --ask-only ] || [ "${1:-}" = --no-command ]; then
     printf 'Do not re-authenticate blind: vCenter SSO locks out PERMANENTLY after 3 failures. Ask whoever owns the lab for a current credential.'
     [ "${1:-}" = --no-command ] && printf ' This report cannot tell you which fix applies, and guessing costs one of those three attempts.'
