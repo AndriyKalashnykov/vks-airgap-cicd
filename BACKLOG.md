@@ -301,7 +301,94 @@ at `98-verify-ingress.sh:180`.
    already reads. Needs its own idea round; `rc=2` (could-not-ask) must degrade to a warning, since
    preflight's verdict is currently a two-way boolean with no third state.
 
-## 🔴 B482 — `verify-gateway-image` WORKS, and can never run on the lab path 🔴 open
+## 🔴 B482 — RE-SCOPED: the gate is never INVOKED on the lab branch where it WOULD assert 🔴 open
+
+⚠️ **The old title — "can never run on the lab path" — is FALSE, and its framing sends the next
+session to the wrong arm.** An idea round (2026-09-08) measured it.
+
+`docs/scenario-1.md:1044-1082` documents **two** ingress branches, not one:
+
+    istio-preflight says "PREFLIGHT OK"        -> make install-ingress INGRESS_CONTROLLER=istio-existing
+    istio-preflight says "NO Istio detected."  -> make install-ingress          <- INGRESS_CONTROLLER=istio
+
+The second resolves to `ISTIO_INSTALL_METHOD:-helm` → `46-install-istio.sh`, **the only code in the
+repo that passes `--set global.hub`** (`:229`, `:263`) — precisely the mode whose silently-ignored
+`--set` key this gate exists to catch, and on which it asserts normally. So the defect is not
+"structurally unable to run"; it is **never invoked**:
+`grep -c verify-gateway-image docs/scenario-1.md docs/scenario-2.md README.md` → **0, 0, 0**.
+
+**Done when:** a `make verify-gateway-image` step in `scenario-1.md` §12 under the
+**`make install-ingress`** (no-Istio-detected) branch ONLY, and the same in `scenario-2.md:897`'s
+"NO Istio detected" row. **Not** under the `istio-existing` branch, where the skip is correct.
+
+### 🔴 Two of its three candidates are REFUTED — do not rebuild them
+
+| candidate | verdict |
+|---|---|
+| report without failing on `istio-existing` (a printer) | **survives**, and is worth less than the two doc lines above |
+| assert only over objects **we** created | **REFUTED.** On the DEFAULT attach route API (`auto` → gateway-api), Istio **auto-provisions** the proxy from OUR `Gateway` object into `ISTIO_GWAPI_NAMESPACE` — ours by creation, with the platform istiod's `.ProxyImage`. This REDs a correct attach. |
+| key the skip on evidence of our own install | **REFUTED in practice.** The marker is a helm release secret in `ISTIO_NAMESPACE`, which EXISTS in the measured lab state (we helm-installed, package later adopted — B480). It fires on the state this row itself calls *"a deliberate, warned override, not damage"*. |
+
+⚠️ **The row is also stale by construction and contradicts its own evidence.** A SECOND skip arm
+(`ISTIO_INSTALL_METHOD=package`) landed **13h25m after** the row was filed (#1023) and the row never
+mentions it — so "the skip" is ambiguous, and the package arm is the one the lab most likely hits.
+And the row asserts the lab rows run `istio-existing` while its own measured output shows
+`istio-ingress/istio-ingressgateway`, the namespace **only our own helm install** creates.
+
+⚠️ **Cited line numbers unverified for the walk driver**: `walk-matrix.sh` lives in
+`nested-vsphere-lab`, so what the six rows actually pass for `INGRESS_CONTROLLER` was NOT read.
+The re-scoping rests on the row's internal inconsistency.
+
+## ✅ B562 — SHIPPED (#1170): a SKIP was a PASS, and `e2e-kind` could reach it on DEFAULT settings
+
+Found by B482's round. MEASURED against a fixture carrying the exact defect the gate exists for:
+
+    INGRESS_CONTROLLER=istio                      -> rc=1  "FAILED — 1 of 2 ... NOT from h.local"
+    INGRESS_CONTROLLER unset, .env.state=traefik  -> rc=0  "NOTHING was verified here."
+
+The second is the `e2e-kind` shape with **no override anywhere**: `E2E_FRESH ?= 0` so the overlay
+survives, `verify-ingress-both` publishes traefik, and `44-install-ingress.sh` lets the stale state
+win — so the e2e installed traefik, the gate skipped, and `verify`/`verify-ingress` passed because
+traefik routes fine. `grep -rn provenance scripts/*.sh Makefile` → **zero** consumers of the verdict
+line, so skip == pass == rc 0.
+
+Fixed both ends: `e2e-kind` names `INGRESS_CONTROLLER=istio` explicitly, and the gate emits
+`gateway-image-verdict: ASSERTED|SKIPPED:<mode>` on every path. Its harness went 9 → 15 cases (the
+mode is now a parameter; the two skip arms had **zero** coverage), with a positive control that a
+clean tree emits `ASSERTED` — without it the token is decoration.
+
+## 🔴 B563 — NO running-image provenance assertion exists for our own WORKLOADS, on any path 🔴 open
+
+From B482's round, and it is wider than B482. `grep -rl containerStatuses` finds only
+`96-verify-gateway-image.sh`, `99-verify.sh`, `vks-trust-probe.sh`, `lib/istio.sh` and their test.
+`99-verify.sh:363` compares running pods against `$img` — but `$img` is read from the **deployment
+spec** (`:335`), **not** from `HARBOR_URL`, so it is a rollout-completion check that would pass on a
+spec pointing at `docker.io`. `mirror-verify` proves Harbor HAS the image; `check-image-alignment`
+aligns tags in FILES. Neither can see what the cluster actually pulled.
+
+So on **every** path — attach included — a dual-homed kaniko build that fell back to a public runtime
+base produces a running app nothing asserts. **Needs an idea round**: the assertion is cheap, but its
+scope (which namespaces, which of the six apps, and what to do about images we deliberately do not
+own) is a design question.
+
+## 🔴 B564 — `ci-pass` REFUSES after `gh run rerun --failed`, because a partial attempt has a partial job list 🔴 open
+
+MEASURED 2026-09-08 on PR #1167: a raced `ci-pass` (it read `static-check-fast conclusion=none` while
+that job was still running) was re-run with `gh run rerun --failed`. The re-run then reported
+`FAIL changes ABSENT from the jobs list — it never reported` and `ci-pass: REFUSED`.
+
+The gate reads the jobs API with **no `filter` parameter**, i.e. the LATEST attempt — and its own
+header explains why: with `filter=all` a run that is genuinely green after a re-run would be refused
+on attempt 1's failure. But a **partial** re-run's latest attempt contains only the jobs that were
+re-run, so every job that passed the first time is ABSENT and the gate fail-closes on it.
+
+Both directions are therefore broken, and the workaround is undocumented: **`gh run rerun` (full),
+never `--failed`**. Worth a line in the gate's header at minimum; a real fix needs the attempt's job
+list to be merged with the previous attempt's, which is a design question.
+
+### The original row follows
+
+## 🔴 B482 (original) — `verify-gateway-image` WORKS, and can never run on the lab path 🔴 open
 
 **Measured 2026-08-25.** The air-gap breakage in [[B477]] went unnoticed for hours even though this
 repo ships a gate whose entire job is to catch it. The gate is not broken — it is **structurally
