@@ -77,7 +77,21 @@ _registry_common_dir() {
   [ -f "$r/.git" ] || return 1                               # not a repo -> caller falls back
   gd="$(sed -n 's/^gitdir: *//p' "$r/.git")"; [ -n "$gd" ] || return 1
   case "$gd" in /*) ;; *) gd="$r/$gd" ;; esac                # a relative `gitdir:` is legal
-  [ -f "$gd/commondir" ] || return 1
+  # NO `commondir` => $gd IS the shared dir. Two shapes reach here and BOTH want that answer:
+  #   --separate-git-dir  — the MAIN checkout's `.git` is a FILE pointing at an external git dir
+  #                         that has no commondir, while its linked worktree's commondir resolves to
+  #                         that SAME dir. Returning 1 here made the main checkout fall back to the
+  #                         per-worktree legacy lock while its worktree took the shared one, and
+  #                         flock granted BOTH — B521, re-opened. MEASURED, with the ordinary-repo
+  #                         control REFUSED alongside it.
+  #   a SUBMODULE         — `gitdir:` points into `<super>/.git/modules/<name>`, which is likewise
+  #                         stable per-repository and shared by every worktree of that submodule.
+  #                         That is the right lock for it; no special case is needed.
+  if [ ! -f "$gd/commondir" ]; then
+    [ -d "$gd" ] || return 1
+    ( cd "$gd" 2>/dev/null && pwd -P ) || printf '%s' "$gd"
+    return 0
+  fi
   c="$(cat "$gd/commondir")"
   case "$c" in /*) ;; *) c="$gd/$c" ;; esac
   # NORMALISE. flock keys on the inode, so `.../worktrees/x/../..` already locks the right file —
@@ -133,7 +147,14 @@ with_registry_lock() {
   # "rebuild the registry". Deliberately NOT dated for removal: taking it costs one fd, it can
   # never deadlock (every caller takes them in this order), and a dated note would just rot.
   local _took_legacy=0
-  if [ "$lock" != "$legacy" ] && exec 8>"$legacy" 2>/dev/null; then
+  # ⚠️ THE BRACES ARE LOAD-BEARING. `exec 8>"$legacy" 2>/dev/null` makes BOTH redirections
+  # PERMANENT — `exec` with no command applies every redirection to the current shell — so the
+  # `2>/dev/null` intended to swallow one open error silently sent stderr to /dev/null for the REST
+  # OF THE PROCESS. Measured: the payload's stderr vanished, and the legacy guard's own refusal
+  # (four log_error lines, including the `rm -f` remedy) printed NOTHING while exiting 1. All four
+  # callers re-exec themselves as "$@", so the whole script ran blind. Scoping the redirection to a
+  # GROUP applies it only to the exec inside it.
+  if [ "$lock" != "$legacy" ] && { exec 8>"$legacy"; } 2>/dev/null; then
     _took_legacy=1
     flock -n 8 || _registry_lock_refused "$legacy"
   fi

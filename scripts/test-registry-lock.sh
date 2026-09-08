@@ -66,9 +66,13 @@ case $? in
 esac
 
 # 3. The control for case 2: a genuinely different repository must NOT be blocked.
+# WARN THE FIRST LOCK MUST BE HELD FOR THE DURATION. Without that this only proves "an unrelated
+#    file is lockable", which is true even if the helper returns ONE GLOBAL dir for every repo --
+#    measured: a global-dir mutation left this case ok while three OTHER cases went red.
 mkdir -p "$T/other/.git"
 _o="$(_registry_common_dir "$T/other" || true)"
-if ( exec 7>"$_o/vks-registry.lock" && flock -n 7 ) 2>/dev/null; then
+if ( exec 9>"$_m/vks-registry.lock"; flock -n 9 || exit 3
+     ( exec 7>"$_o/vks-registry.lock" && flock -n 7 ) 2>/dev/null ) ; then
   ok "a DIFFERENT repository is not blocked (the lock is not global)"
 else
   bad "a different repo was refused — over-blocking; every clone would serialize against every other"
@@ -102,10 +106,15 @@ else
 fi
 
 # 7. The explicit operator override must still win, untouched.
-if [ "$(REGISTRY_LOCK_FILE=/tmp/x.lock; printf '%s' "${REGISTRY_LOCK_FILE}")" = /tmp/x.lock ]; then
-  ok "REGISTRY_LOCK_FILE remains the operator's escape hatch"
+# WARN CALL THE REAL FUNCTION. The first version read back a variable it had just assigned in a
+#    subshell and touched no code from os.sh at all -- measured VACUOUS: deleting the
+#    REGISTRY_LOCK_FILE branch from with_registry_lock entirely left this case ok.
+( REPO_ROOT="$T/repo" REGISTRY_LOCK_FILE="$T/override.lock" \
+    with_registry_lock "override-probe" true ) >/dev/null 2>&1
+if grep -q 'override-probe pid=' "$T/override.lock" 2>/dev/null; then
+  ok "REGISTRY_LOCK_FILE remains the operator's escape hatch (the label landed in THAT file)"
 else
-  bad "REGISTRY_LOCK_FILE no longer overrides"
+  bad "REGISTRY_LOCK_FILE no longer overrides -- the lock went somewhere else entirely"
 fi
 
 # 8. No new binary on the air-gap floor: 22-builder-push.sh:8-10 states that box's toolchain as
@@ -117,12 +126,62 @@ fi
 #    ABSENT when grep exits early and the producer takes SIGPIPE — and in a scan gate that direction
 #    is a FALSE CLEAN, i.e. this case would go `ok` over a body that DOES call git. The repo's
 #    check-grep-q-pipe gate caught exactly this line.
-if grep -qE '(^|[;&|`]|\$\()[[:space:]]*(sudo[[:space:]]+)?git[[:space:]]' \
-     <<< "$(sed -n '/^_registry_common_dir() {/,/^}/p' scripts/lib/os.sh)"; then
+_gitre='(^|[;&|`]|\$\()[[:space:]]*(sudo[[:space:]]+)?git[[:space:]]'
+_body="$(sed -n '/^_registry_common_dir() {/,/^}/p' scripts/lib/os.sh)"
+# THE POSITIVE CONTROL, which the first version CLAIMED to have and did not: prove the matcher can
+# still flag a real invocation. Without it a rename or a brace reformat empties $_body and this case
+# passes forever over anything at all.
+if ! grep -qE "$_gitre" <<< "$(printf 'x() {\n  git rev-parse --git-common-dir\n}\n')"; then
+  bad "case 8's matcher is DEAD -- it no longer flags a plain 'git ' call, so its verdict is noise"
+elif [ -z "$_body" ]; then
+  bad "case 8 extracted ZERO bytes -- the '_registry_common_dir() {' anchor drifted, so this case
+      measured NOTHING and would pass forever."
+elif grep -qE "$_gitre" <<< "$_body"; then
   bad "_registry_common_dir invokes git — but git is NOT in the air-gap box's stated toolchain, and
       three of this lock's four callers run there."
 else
   ok "_registry_common_dir uses no git (sed/cat only — both already required by lib/os.sh)"
+fi
+
+# 9. THE FUNCTION ITSELF, not just its path helper. Until 2026-09-08 this suite named
+#    with_registry_lock only in a comment, and that gap is exactly what let a CRITICAL ship: the
+#    legacy-lock line was `exec 8>"$legacy" 2>/dev/null`, and `exec` with no command makes EVERY
+#    redirection PERMANENT -- so stderr went to /dev/null for the rest of the process. Measured: the
+#    refusal path printed NOTHING while exiting 1, and all four callers re-exec themselves as "$@",
+#    so an entire mirror-push ran blind. Every offline gate in the repo was green over it.
+_e="$T/stderr.probe"
+( REPO_ROOT="$T/repo" with_registry_lock "stderr-probe" \
+    bash -c 'echo MARKER-THE-OPERATOR-NEEDS >&2' ) >/dev/null 2>"$_e"
+if grep -q 'MARKER-THE-OPERATOR-NEEDS' "$_e" 2>/dev/null; then
+  ok "with_registry_lock does not swallow the payload's stderr"
+else
+  bad "the payload's stderr VANISHED. Something in with_registry_lock redirects fd 2 permanently --
+      look for a bare 'exec' carrying a '2>' redirection; it must be scoped with braces."
+fi
+
+# 10. --separate-git-dir: the MAIN checkout's .git is a FILE whose external git dir has NO
+#     commondir, while its worktree's commondir points at that same dir. Returning 1 for the main
+#     checkout sent it to the per-worktree legacy lock while the worktree took the shared one, and
+#     flock granted BOTH -- B521 re-opened, measured, with the ordinary-repo control REFUSED.
+#     HAND-BUILT, like the worktree fixture above and for the same reasons -- and because
+#     `git worktree add` needs a commit, which would put a committing command in this file. The
+#     layout below was captured from a REAL `git init --separate-git-dir` on 2026-09-08:
+#       work/.git                 -> "gitdir: <ext>"          (absolute)
+#       <ext>/commondir           -> ABSENT                    <- the whole defect
+#       wt/.git                   -> "gitdir: <ext>/worktrees/wt"
+#       <ext>/worktrees/wt/commondir -> "../.."
+mkdir -p "$T/ext/worktrees/wt" "$T/sgd" "$T/sgdwt"
+printf 'gitdir: %s\n' "$T/ext"              > "$T/sgd/.git"
+printf 'gitdir: %s\n' "$T/ext/worktrees/wt" > "$T/sgdwt/.git"
+printf '../..\n'                            > "$T/ext/worktrees/wt/commondir"
+printf 'ref: refs/heads/x\n'                 > "$T/ext/worktrees/wt/HEAD"
+_sm="$(_registry_common_dir "$T/sgd"   2>/dev/null || true)"
+_sw="$(_registry_common_dir "$T/sgdwt" 2>/dev/null || true)"
+if [ -n "$_sm" ] && [ -n "$_sw" ] && _same "$_sm" "$_sw"; then
+  ok "a --separate-git-dir checkout and its worktree share one lock"
+else
+  bad "--separate-git-dir main=[$_sm] worktree=[$_sw] -- they disagree, so flock grants both. That
+      is B521 for a layout the first fix did not cover."
 fi
 
 printf '\n  %s passed, %s failed\n' "$_pass" "$_fail"
