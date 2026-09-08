@@ -396,10 +396,43 @@ if require_gate_tool kubeconform; then
       # Render each template into a temp dir and validate THAT — see render_for_validation above.
       _rdir="$(mktemp -d)"; _rendered=()
       for _f in "${_files[@]}"; do
-        _out="${_rdir}/$(printf '%s' "${_f#"$REPO_ROOT"/}" | tr '/' '_')"
+        _rel="${_f#"$REPO_ROOT"/}"
+        # ⚠️ NOT EVERY .yaml UNDER k8s/ IS A KUBERNETES RESOURCE, and feeding one that is not to
+        # kubeconform is what kept the weekly `schedule` run RED for THREE WEEKS (B573).
+        # k8s/istio/vks-package-values.yaml is a DATA-VALUES document for a VKS Standard Package --
+        # measured: zero `apiVersion:` and zero `kind:` lines. kubeconform counts it as a resource
+        # whose schema could not be resolved, and CI sets KUBECONFORM_REQUIRE_SCHEMAS=1, which turns
+        # that into a failure. MEASURED both ways: with the file present `KUBECONFORM_REQUIRE_SCHEMAS=1
+        # make validate` reports "1 of 11 resource(s) could not have their schema downloaded" and
+        # exits 1; with it removed, rc=0.
+        #
+        # ⚠️ THE DEFAULT IS A HARD FAIL, DELIBERATELY. "Skip any file without a kind" would be the
+        # fake-green: a genuinely malformed manifest -- a bad indent that swallows the `kind:` key --
+        # would silently stop being validated, and the gate would go green having looked at less.
+        # So a kindless file is a DEFECT unless it is named here WITH a reason, and adding a name is
+        # a deliberate act someone reviews.
+        if ! grep -qE '^kind:' "$_f"; then
+          case "$_rel" in
+            k8s/istio/vks-package-values.yaml)
+              log_info "  (skipping ${_rel} — data-values for a VKS Package, not a k8s resource)"
+              continue ;;
+            *)
+              log_error "${_rel} has no top-level 'kind:' — it is under k8s/ but is not a Kubernetes"
+              log_error "  resource, and kubeconform cannot validate it. If that is deliberate (a"
+              log_error "  data-values or config document), add it to the allowlist in this file WITH"
+              log_error "  the reason. If it is a manifest, the 'kind:' key is missing or mis-indented."
+              rc=1; continue ;;
+          esac
+        fi
+        _out="${_rdir}/$(printf '%s' "$_rel" | tr '/' '_')"
         render_for_validation "$_f" "$_out"
         _rendered+=("$_out")
       done
+      # Every file in this directory was excluded -- validating nothing is not a pass.
+      if [ "${#_rendered[@]}" -eq 0 ]; then
+        log_warn "  (k8s/$name/: no validatable manifest after exclusions — nothing was checked here)"
+        rm -rf "$_rdir"; continue
+      fi
       log_info "validating k8s/$name/ (${#_files[@]} manifests, rendered)"
       kc -ignore-missing-schemas "${_rendered[@]}" || rc=1
       rm -rf "$_rdir"
