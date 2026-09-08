@@ -4629,6 +4629,52 @@ verified.** A run that legitimately verified the KinD stand-in and a run that ve
 produce the same success text. Printing the resolved context/server alongside the LB IP is cheap and
 would remove the ambiguity that made this finding plausible.
 
+## ✅ B557 — the SSO arm scanner is DELETED; the property is measured on the RENDERED report
+
+Shipped 2026-09-08. Eleven adversary rounds on one property; ten refuted the PREVIOUS round's fix.
+The enumerated thing moved every round — label character class -> whitespace test -> `^[^(]*\)` ->
+the `;;` terminator set -> COMMENT CONTENT (an apostrophe in a trailing comment hid the terminator
+and merged the next arm into EXPIRED). Round 11 measured that closing that opens the complementary
+hole: there is no correct fix at that layer.
+
+**The finding that ended it was not a bug.** `scripts/check-vks-login-requires.sh:14-15` already
+said, in its own header: *"arm-scoping a shell parser is exactly the tractability problem that got
+derivation refuted."* This repo had run the idea round (B207), refuted the design, and written the
+conclusion down one file over. It was built anyway.
+
+**What replaces it** asks the question directly instead of parsing the code that answers it: render
+each consumer against each verdict `kube_token_expiry` can return, and COUNT mentions of
+`make vks-login` in the output an operator actually sees. 2 binaries x EXPIRED/VALID/UNKNOWN. No
+shell parsing, no arm list, no ratchet — an arm's TEXT is now irrelevant; only what PRINTS matters.
+Measured 1/0/0 per binary. Suite 1616 -> 1480 lines, assertions 88 -> 89 (the count MOVED, so the
+change is visible to the suite).
+
+RED-proven four ways, each restored after:
+
+| mutation | result |
+|---|---|
+| `creds.sh` VALID arm names the command | FAIL — the dangerous defect |
+| `argocd-password.sh` VALID arm names it | FAIL |
+| `kube_token_expiry` pinned to UNKNOWN | FAIL, 4 cells "VACUOUS" |
+| a FOURTH verdict shape added | FAIL, "add its cell" |
+
+The third is the positive control: two of three cells expect a count of ZERO, the classic shape that
+passes by not looking, so each cell asserts its arm was ENTERED before its count is trusted.
+
+**One defect found in my own instrument, by asking it the question I had put to the reviewer:** the
+stub's first arm was `*"config view"*`, which is not specific to the token — FIVE other sites read
+that subcommand for `.clusters[0].cluster.server` (`lib/argocd.sh:42`, `lib/state.sh:52`,
+`lib/os.sh:957`) and every one was handed a JWT. Narrowed to `*user.token*`; both REDs re-verified
+after the change, not assumed.
+
+**Residual, named:** the grid covers exactly the three verdicts the function can return, pinned by a
+`printf '<VERDICT>` shape count. A verdict emitted via a variable or a helper would evade that count.
+Adding a `REVOKED*)` arm to a consumer does NOT turn the grid red — correctly, since it is
+unreachable dead code — so the grid measures BEHAVIOUR, not arm hygiene. If you want the latter, it
+is a different (and, on this evidence, intractable) control.
+
+---
+
 ## 🔴 B521 — the registry lock is per-WORKTREE, so the serialization it promises "on this host" is not host-wide
 
 Surfaced 2026-08-28 by the adversary round that refuted the `gate-at` worktree wrapper, as a finding
