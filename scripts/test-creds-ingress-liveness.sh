@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ci-tier: slow
 # test-creds-ingress-liveness.sh — B560: the /etc/hosts hint, the NOT ANSWERING banner, and the
 # third state between them.
 #
