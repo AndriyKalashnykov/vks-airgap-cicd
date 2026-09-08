@@ -1,8 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-
   "enabled": false,
-
   "extends": [
     "config:best-practices",
     ":semanticCommitType(chore)"
@@ -29,7 +27,7 @@
   "prConcurrentLimit": 50,
   "prHourlyLimit": 0,
   "description": [
-    "TEMPORARY — Renovate is PAUSED for a six-row walkthrough-matrix certification run. It has automerge:true, and matrix-standing-rules.md section H.2 requires the tree be FROZEN while the matrix is armed or running: walk-matrix.sh ships `git archive HEAD` at ROW time, so a mid-run automerge SPLITS the run across two commits and voids the certification. This is not hypothetical -- the previous run records a Renovate CLI pin auto-merging TWELVE SECONDS before row 1 started. Re-enable by deleting this key and the `enabled` line below, once the run has produced its verdict. Paused 2026-08-23.",
+    "TEMPORARY \u2014 Renovate is PAUSED for a six-row walkthrough-matrix certification run. It has automerge:true, and matrix-standing-rules.md section H.2 requires the tree be FROZEN while the matrix is armed or running: walk-matrix.sh ships `git archive HEAD` at ROW time, so a mid-run automerge SPLITS the run across two commits and voids the certification. This is not hypothetical -- the previous run records a Renovate CLI pin auto-merging TWELVE SECONDS before row 1 started. Re-enable by deleting this key and the `enabled` line below, once the run has produced its verdict. Paused 2026-08-23.",
     "platformAutomerge is deliberately false: main requires the ci-pass status check, and true triggers the registration race (native auto-merge completes in the ~1s window before ci-pass registers, landing a red bump). false makes Renovate merge via its own run after re-confirming green."
   ],
   "platformAutomerge": false,
@@ -114,7 +112,7 @@
     },
     {
       "customType": "regex",
-      "description": "images/selfbuilt.tsv column 8 (go_get) — the DEPENDENCY OVERRIDE, tracked separately from the git_ref in column 3. The manager above captures column 3 only, so this pin was invisible to every manager in this file: measured 2026-08-27, managerFilePatterns across all eight managers cover .env.example, images/images.txt, k8s/**.yaml, Makefile and scripts/**, and `gomod` does not apply to a TSV. That is the exact failure the manager above exists to prevent, on the same row — and this one is the SECURITY-hardening pin (it carries the go-containerregistry realm-check exemption), so a future upstream fix would never land. Anchored on a leading TAB so it can only match the data row: the module@version form appears nowhere else in the file (verified).",
+      "description": "images/selfbuilt.tsv column 8 (go_get) \u2014 the DEPENDENCY OVERRIDE, tracked separately from the git_ref in column 3. The manager above captures column 3 only, so this pin was invisible to every manager in this file: measured 2026-08-27, managerFilePatterns across all eight managers cover .env.example, images/images.txt, k8s/**.yaml, Makefile and scripts/**, and `gomod` does not apply to a TSV. That is the exact failure the manager above exists to prevent, on the same row \u2014 and this one is the SECURITY-hardening pin (it carries the go-containerregistry realm-check exemption), so a future upstream fix would never land. Anchored on a leading TAB so it can only match the data row: the module@version form appears nowhere else in the file (verified).",
       "managerFilePatterns": [
         "/^images\\/selfbuilt\\.tsv$/"
       ],
@@ -122,6 +120,16 @@
         "\\t(?<depName>github\\.com/[^\\s@\\t]+)@(?<currentValue>v[^\\s\\t]+)"
       ],
       "datasourceTemplate": "go"
+    },
+    {
+      "customType": "regex",
+      "description": "mise binary version pinned on jdx/mise-action (CI resolves no 'latest' at run time).",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)\\n(?:[^\\n]*\\n){1,4}?\\s*version:\\s*(?<currentValue>[0-9][^\\s]*)"
+      ]
     }
   ],
   "vulnerabilityAlerts": {
