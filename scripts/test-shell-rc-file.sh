@@ -30,7 +30,10 @@ bad() { FAIL=$((FAIL+1)); printf 'FAIL  %s\n' "$1"; [ -n "${2:-}" ] && printf ' 
 
 # ── 1. the resolver answers for every shell the repo claims to support ───────────────────────
 #    HOME is pinned so the expectation is exact rather than "contains .zshrc".
-H=/tmp/rcprobe-home
+# Per-run: a fixed /tmp path collides between concurrent runs (two checkouts, or the fast set run
+# twice). Same class as validate.sh's RENDERED -- see the note there.
+H="$(mktemp -d -t rcprobe-home.XXXXXX)"
+trap 'rm -rf "$H"' EXIT
 while IFS='|' read -r sh want; do
   [ -n "$sh" ] || continue
   got="$(SHELL="$sh" HOME="$H" ZDOTDIR="" shell_rc_file)"
