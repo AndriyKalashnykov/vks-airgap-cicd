@@ -2379,6 +2379,70 @@ kube_token_expiry() {
 }
 
 
+# pipeline_failure_log <namespace> <pipelinerun-name> — print the FAILING step's own stdout.
+#
+# NOTHING IN THIS REPO PRINTED IT. Both pipeline-failure arms (75-build-apps.sh, 99-verify.sh) show
+# object STATUS — `describe`, `get -o wide`, `get taskruns` — and never the container log. But the
+# cause is IN that log: a stale image ref reaches kaniko as a `--build-arg`
+# (k8s/tekton/tasks/kaniko-build.yaml), so the failure reads `NOT_FOUND: artifact … not found`
+# NAMING THE IMAGE. An operator who has just corrected `.env` sees the OLD tag and reasonably
+# concludes the fix did not work — the cluster's TriggerTemplate still carries the value it was
+# rendered with, and only `make configure-tekton` re-renders it (B532).
+#
+# ⚠️ UNCONDITIONAL, AND THAT IS THE DESIGN. An earlier proposal was to classify the failure as
+# NOT_FOUND and print a targeted message. That is refuted twice over: the string lives in a step's
+# stdout (not an event, not a Pod condition), so classifying it means string-matching the very log
+# we are not printing; and a classifier can only ever show you the failures someone enumerated.
+# Every pipeline failure has a log. Printing it needs no oracle, no denominator, and has no
+# false-RED surface — it is strictly more informative than any arm-ordering we could get right.
+#
+# Never gates: always returns 0. A missing pod (garbage-collected, or the failure was before any
+# pod existed) is a legitimate state and says so rather than failing the caller.
+pipeline_failure_log() {
+  local ns="${1:-}" prname="${2:-}" n="${PIPELINE_LOG_TAIL_LINES:-60}" pods p
+  [ -n "$ns" ] && [ -n "$prname" ] || return 0
+  pods="$(kubectl -n "$ns" get pods -l "tekton.dev/pipelineRun=${prname}" \
+            -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)"
+  if [ -z "$pods" ]; then
+    log_warn "  no pods labelled tekton.dev/pipelineRun=${prname} — already garbage-collected, or"
+    log_warn "  the run failed before any pod was created. Nothing to print; this is not an error."
+    return 0
+  fi
+  # NO `|| [ -n "$p" ]` GUARD. A command substitution strips the trailing newline, which normally
+  # makes a bare `read` loop drop the LAST item — but the HEREDOC below re-adds one unconditionally,
+  # so the guard could never fire and its test case could not be made to go red. Deleted rather than
+  # kept as decoration. ⚠️ If this is ever refactored to `printf '%s' "$pods" | while read`, the
+  # guard becomes load-bearing again and its absence is silent: one pod would print nothing.
+  while IFS= read -r p; do
+    [ -n "${p:-}" ] || continue
+    log_error "  ---- last ${n} lines of ${p} (all containers) ----"
+    kubectl -n "$ns" logs "$p" --all-containers --tail="$n" 2>&1 | sed 's/^/    /' >&2 || true
+  done <<PIPELINE_POD_LIST
+$pods
+PIPELINE_POD_LIST
+  return 0
+}
+
+# pipeline_rerender_hint — the one line of context that turns the log above into an action.
+#
+# ⚠️ GUARDED, because the obvious remedy is a SECOND failure in the state that produces it.
+# `ensure_secret_token` reuses an existing file but MINTS A NEW ONE when it is absent, so on a fresh
+# clone or a wiped `secrets/` a blind `make configure-tekton` rotates the HMAC token and desyncs the
+# Gitea webhook — converting a legible NOT_FOUND into an illegible "no PipelineRun appeared", which
+# 99-verify.sh already carries a separate diagnostic for. Name the command only when re-running it
+# is safe; otherwise say what to do instead.
+pipeline_rerender_hint() {
+  log_error "  If the image ref above differs from the one in .env / images.txt: the cluster's"
+  log_error "  TriggerTemplate carries the value it was RENDERED with, not the one on disk."
+  if [ -s "${REPO_ROOT:-.}/secrets/webhook-token" ]; then
+    log_error "  Re-render it:  make configure-tekton"
+  else
+    log_error "  It is re-rendered by 'make configure-tekton' — but secrets/webhook-token is MISSING,"
+    log_error "  so that would mint a NEW HMAC token and desync the Gitea webhook. Restore that file"
+    log_error "  (or re-run 'make platform', which re-seeds both halves) rather than re-rendering alone."
+  fi
+}
+
 classify_kube_failure() {
   local errfile="${1:-/dev/null}" e=""
   [ -r "$errfile" ] && e="$(cat "$errfile" 2>/dev/null || true)"

@@ -149,11 +149,18 @@ build_app() {
       Succeeded) log_info "[${app}] ${pr#*/} Succeeded"; built=$((built+1)); return ;;
       Failed|CouldntGetTask|PipelineRunTimeout|Cancelled)
         log_error "[${app}] ${pr#*/} ${rc} — kubectl -n ${CI_NAMESPACE} describe ${pr}"
+        # THE LOG, not just the status. `install-all` ends at build-apps and never reaches
+        # `make verify`, so THIS is where an operator actually lands — and the cause (a stale
+        # image ref reaching kaniko as a --build-arg) is only ever in the step's stdout. B532.
+        pipeline_failure_log "$CI_NAMESPACE" "${pr#*/}"
+        pipeline_rerender_hint
         failed=$((failed+1)); return ;;
     esac
     sleep "$BUILD_APPS_POLL_SECONDS"; elapsed=$((elapsed + BUILD_APPS_POLL_SECONDS))
   done
   log_error "[${app}] ${pr#*/} still running after ${BUILD_APPS_TIMEOUT_SECONDS}s (BUILD_APPS_TIMEOUT_SECONDS)"
+  # A run that never finished has a log too, and it is the only thing that says WHERE it stuck.
+  pipeline_failure_log "$CI_NAMESPACE" "${pr#*/}"
   failed=$((failed+1))
 }
 for_each_app build_app
