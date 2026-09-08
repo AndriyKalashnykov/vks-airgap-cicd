@@ -372,9 +372,29 @@ is no NOTHING cell to walk. `2x2x2` is a category error — see B43 and B108.
     conclusions adversary rounds had refuted hours later. Committing it unread would have published
     refuted findings under a "validated batch" label — and that label is exactly what stops the next
     reader from checking.
-4. Run `env -u GOROOT make static-check` locally before every merge. A PR runs only
-    `static-check-pr`, which omits `sec` (gitleaks, trivy-fs, trivy-config) and the wall-clock tests;
-    the full target runs per-PR only on the weekly schedule.
+4. Run `env -u GOROOT make static-check` locally before every merge — and it is the ONLY thing that
+    runs `lint` or the unit tests at all before a merge.
+
+    ⚠️ **This rule used to say "A PR runs only `static-check-pr`". That is FALSE, and it misinforms
+    the reader it exists to protect.** MEASURED 2026-09-08: **nothing invokes `static-check-pr`.**
+    `ci.yml:199` gates the `static-check` job on `schedule || workflow_dispatch`, and the job that
+    DOES gate a PR — `static-check-fast` — runs 40 `check-*.sh` gates with **no `lint` and no
+    `test-*.sh` at all**. So a PR gets neither the linters nor a single unit test.
+
+    The cost of believing the old sentence is measured, twice in one day: **#1157** shipped 3×
+    SC2016 and left `make lint` RED on `main` for ~6 hours, and **#1165** took
+    `test-creds-reach-ingress.sh` from 21/21 to **12 passed / 9 FAILED** on `main`. Both merged
+    green. Both were found afterwards by adversary rounds, not by any gate.
+
+    ⚠️ **A local green is not automatically a real green either.** `scripts/lint.sh` is fail-OPEN
+    when the linters are off PATH — measured: `lint: OK`, rc=0, with 8 "not installed" skips — and
+    fail-CLOSED only under `CI=true`. Confirm the run named the tools it used
+    (`using shellcheck: …`), not merely that it exited 0.
+
+    ⚠️ **Run gates SERIALLY.** `scripts/validate.sh:15` renders to a FIXED path
+    (`/tmp/vks-deploy-rendered.yaml`), so two concurrent `make static-check` runs corrupt each
+    other's input regardless of which git worktree they run in — measured, it surfaced as
+    `kubeconform: examined ZERO resources`. A git worktree isolates the TREE, not `/tmp`.
 5. **Run `make app-verify` locally before every merge that touches `apps/**`.** As of 2026-08-23 the
     app builds (`app-test`, `check-ui-contract`, `trivy-fs`) are deliberately OUT of both CI gates: they build all
     six toolchains — java, go, node, python, rust, dotnet — for a repo whose subject is the AIR-GAP
