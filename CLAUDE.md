@@ -1067,7 +1067,7 @@ is what those PRs actually touched, and rewriting them would falsify the record.
   and broken tree), and the B564 round's `cmd && exit 0` sketch worried me under `bash -e` until I
   measured it safe. Both findings were right; both prescriptions needed checking.
 
-### Merged today — **32 PRs** (#1152–#1183), the ones that decide what comes next
+### Merged today — **38 PRs** (#1152–#1189), the ones that decide what comes next
 
 | PR | what |
 |---|---|
@@ -1088,6 +1088,31 @@ is what those PRs actually touched, and rewriting them would falsify the record.
   its only call site). But it surfaced B569, which was real.
 - ⛔ **The one design to never build**: cross-checking the `needs` context in `ci-pass`. Replay the
   founding incident plus the measured lag and it goes **green over a failed security scan**.
+
+### The second half of the day: four more rounds, and a THREE-WEEK-RED gate nobody had noticed
+
+- **#1185 · B563** — a running-image provenance gate for the namespaces we build in. Its round found
+  the predicate FALSE-PASSED a **lookalike registry** (`oldharbor.h.local` vs `h.local`) — and
+  **96-verify-gateway-image.sh, already shipped, had the identical bug**. Both fixed by calling
+  `registry_hostport()`, the repo's existing "ONE HOST PARSER"; I had written a third copy. The same
+  fix closed a mirror-image false RED on the `https://`, trailing-slash and `:443` spellings of
+  `HARBOR_URL`. 96 now sources the shared lib and its 16 cases caught a real loss on the first try.
+- **#1186 · B570 REFUTED** — including **two false evidence sentences I had written into the row**:
+  `kind-down.sh` never touches `.env.kind` (the variable is a legacy misnomer for `.env.state`), and
+  a printer already ships at `os.sh:788`. The real defect is **ordering** — measured, the DEAD sink
+  outranks the LIVE one — which no printer can touch.
+- **#1187 · B571 — all five options refuted.** The dispatch gate's rationale ("the ONLY thing that
+  installs the six app toolchains") **died 4h22m after it was written**: `4d15c09` 11:33,
+  `f8c38dc` 15:55 removed those toolchains, nobody re-opened it. Verified from the two timestamps.
+- **#1188 · B573** — **the weekly `schedule` run had been RED since 2026-08-24**, and it is the ONLY
+  place `lint`, the unit suite and `sec` run in CI. Cause, diagnosed by dispatching a fresh run
+  because the logs had aged out: a VKS **data-values** file (no `apiVersion`, no `kind`) was being
+  fed to kubeconform. Fixed with a **hard-fail default** — a kindless file is a defect unless
+  allowlisted with a reason, because "skip files without a kind" would silently stop validating a
+  manifest whose `kind:` was mis-indented.
+- **#1189 · G.4 did not mirror CI**, and that is why nobody saw it: `make validate` reports **0
+  errors** while `KUBECONFORM_REQUIRE_SCHEMAS=1 make validate` — what CI runs — reproduces the
+  failure. The rule now carries the variable, in both of its homes.
 
 ### NOT done — next units
 
