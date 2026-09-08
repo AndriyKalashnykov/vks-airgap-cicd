@@ -25,6 +25,7 @@ T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT; mkdir -p "$T/bin"
 _stub() {
   { printf '#!/bin/sh\ncase "$*" in\n'
     printf '  *"get pods"*) printf %%s%%s "%s" "" ;;\n' "$1"
+    # shellcheck disable=SC2016  # $3 is the GENERATED stub's positional -- it must not expand here
     printf '  *logs*) echo "STEP-STDOUT-MARKER for $3" ;;\n'
     printf '  *) : ;;\nesac\nexit 0\n'; } > "$T/bin/kubectl"
   chmod +x "$T/bin/kubectl"
@@ -48,6 +49,7 @@ fi
 #    old `|| [ -n "$p" ]` guard changed nothing, because the heredoc already covered it.
 _stub 'only-pod'
 _out="$( PATH="$T/bin:$PATH" pipeline_failure_log ci my-run 2>&1 )"
+# shellcheck disable=SC2016  # the literal $pods is the POINT: these grep SOURCE text, not a value
 if ! grep -q 'only-pod' <<< "$_out"; then
   bad "the only pod was dropped -- the single-pod case printed NOTHING while returning 0."
 elif grep -qE 'pods"[[:space:]]*\|[[:space:]]*while|printf.*\$pods.*\|' \
@@ -95,6 +97,7 @@ fi
 #    one and the timeout one); with `>= 1`, deleting either still passed -- measured.
 for _spec in 'scripts/75-build-apps.sh:2' 'scripts/99-verify.sh:1'; do
   _f="${_spec%:*}"; _want="${_spec##*:}"
+  # shellcheck disable=SC2016  # the literal $CI_NAMESPACE is the POINT: this greps SOURCE text
   _n="$(grep -cE '^[[:space:]]*pipeline_failure_log[[:space:]]+"\$CI_NAMESPACE"' \
           <<< "$(sed '/^[[:space:]]*#/d' "$_f")" || true)"
   if [ "${_n:-0}" -eq "$_want" ]; then
