@@ -1002,9 +1002,14 @@ supervisor_kubeconfig_candidates() {
   # (98-uninstall-all.sh) clusters. Removing it also makes Makefile:263-267 ("KUBECONFIG= does not
   # work for Supervisor-scoped targets") TRUE rather than approximately true.
   #
-  # MEASURED BEFORE REMOVING, because the failure direction flips: five non-test callers take this
-  # resolver, and they previously received $KUBECONFIG silently where they now receive empty. All
-  # five were already defended -- 09-argocd-address.sh has a fallback AND a [ -f ] die,
+  # MEASURED BEFORE REMOVING, because the failure direction flips: the callers previously received
+  # $KUBECONFIG silently where they now receive empty. ⚠️ MY FIRST COUNT SAID "five" AND WAS ~3x LOW
+  # -- a round derived 19 referencing files, 14 non-test/non-lib, ~16 call sites, and this repo's own
+  # rules say such a number must be DERIVED, not typed: grep -rl supervisor_kubeconfig scripts/
+  # The safety conclusion survived the correction -- every site was traced and none regressed:
+  # 8 use `|| printf .../secrets/supervisor.kubeconfig` + [ -f ] (they now DIE rather than silently
+  # running Supervisor ops against a guest -- an improvement), 1 uses _or_die, and 7 use `|| true`
+  # and guard empty explicitly. Representative sites -- 09-argocd-address.sh has a fallback AND a [ -f ] die,
   # 24-vks-k8s-version.sh uses the _or_die variant, 43-install-istio-package.sh declines to call it
   # at all (its comment says so), and creds.sh's four sites each handle empty explicitly. No test
   # asserted KUBECONFIG-as-winner either: test-supervisor-kubeconfig.sh uses env -u KUBECONFIG and

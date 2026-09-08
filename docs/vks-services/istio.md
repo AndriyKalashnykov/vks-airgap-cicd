@@ -657,7 +657,8 @@ What actually protects us is two things, neither of which is the absence of a co
 it probed the AMBIENT kubeconfig, which `vks-package.sh` forces to be a GUEST, while the addon CRDs
 are SUPERVISOR-side (measured: Supervisor 9, guest 0); and it failed OPEN, so it was silent for the
 namespaced tenant who is the default audience. Do NOT rebuild it, and do NOT "fix" it by re-pointing
-at `supervisor_kubeconfig()` — that resolver returns `${KUBECONFIG}` (the guest) on a tenant box.
+at `supervisor_kubeconfig()` — that resolver does not consider `${KUBECONFIG}` at all (the slot was
+removed 2026-09-08, B547: it is by construction the GUEST) and returns EMPTY on a tenant box.
 See BACKLOG.md B484.
 
 **Two things this SHARPENS rather than settles:**

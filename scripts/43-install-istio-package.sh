@@ -112,8 +112,9 @@ fi
 # It also failed OPEN -- a kubectl exiting non-zero yields the same count 0 as a healthy guest with
 # no addon CRDs -- so it was silent for exactly the namespaced tenant who is the default audience.
 #
-# Do NOT "fix" it by re-pointing at supervisor_kubeconfig(). That resolver emits ${KUBECONFIG} as
-# its LAST candidate (lib/os.sh:872-874), so on a tenant box it returns the GUEST again -- the same
+# Do NOT "fix" it by re-pointing at supervisor_kubeconfig(). That resolver does NOT consider ${KUBECONFIG} at all
+# (the slot was removed 2026-09-08, B547: it is by construction the GUEST); on a tenant box it
+# returns EMPTY. The conclusion is unchanged -- do not re-point at it -- only the mechanism is.
 # dead code wearing a fix -- and where it DOES resolve a Supervisor it warns on 100% of VKS 3.7+
 # labs, because those CRDs are the FRAMEWORK being installed, not an addon-managed istio.
 # (Adversary round 2026-08-28 RAN both; see BACKLOG.md B484.)

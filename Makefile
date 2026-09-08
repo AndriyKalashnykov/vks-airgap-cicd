@@ -261,8 +261,8 @@ help: ## Show this help
 	@printf '    GUEST-scoped       make <target> KUBECONFIG=/path/to/guest.kubeconfig\n'
 	@printf '    SUPERVISOR-scoped  make <target> VKS_SUPERVISOR_KUBECONFIG=/path/to/supervisor.kubeconfig\n\n'
 	@printf '  KUBECONFIG= does NOT work for a Supervisor-scoped target: supervisor_kubeconfig()\n'
-	@printf '  resolves by a RANKED candidate list in which $$KUBECONFIG is deliberately LAST, so an\n'
-	@printf '  explicit one loses to any higher candidate that exists. Use the scoped variable.\n'
+	@printf '  resolves by a RANKED candidate list in which $$KUBECONFIG is NOT A CANDIDATE AT ALL, so\n'
+	@printf '  an explicit one never applies to a Supervisor-scoped target. Use the scoped variable.\n'
 	@printf '  A target is Supervisor-scoped iff its script calls supervisor_kubeconfig (14 files):\n'
 	@printf '    grep -rl supervisor_kubeconfig scripts/\n'
 	@echo ""

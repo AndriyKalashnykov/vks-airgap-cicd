@@ -58,13 +58,28 @@ k() { kubectl --kubeconfig "$SUP" --request-timeout=15s "$@" </dev/null; }
 # --- DESTRUCTIVE: require an explicit confirmation naming the cluster -----------------------------
 # Deleting a guest cluster destroys its VMs and PVCs. `CONFIRM=<name>` and not a bare `yes`, so a
 # copy-pasted command cannot delete a cluster the operator did not mean to name.
+# 🔴 SAY WHICH ESTATE — and this script is the SHARPEST case of it. Its whole job is to delete a
+# cluster BY NAME, so a same-named cluster on a FOREIGN estate passes CONFIRM and is destroyed. The
+# name is typed from memory; the Supervisor comes from a candidate ladder, and a different lab's
+# kubeconfig answers and authenticates just as well (B547 mode 2). This was the third destructive
+# caller and it got no disclosure when the other two did -- found by a round, not by me.
+# Reading the server out of the FILE costs nothing: state_kubeconfig_server PARSES it, no network,
+# no RBAC, works on a torn-down cluster. It runs BEFORE the gate so the FIRST, REFUSED run informs.
+_sup_srv="$(state_kubeconfig_server "$SUP" 2>/dev/null || true)"
+
 if [ "${CONFIRM:-}" != "$VKS_CLUSTER_NAME" ]; then
   log_error "REFUSING: this DESTROYS the guest cluster '${VKS_CLUSTER_NAME}' in namespace '${VKS_NAMESPACE}',"
   log_error "  including its node VMs and every PersistentVolume it owns. There is no undo."
-  log_error "  Re-run naming the cluster you mean:"
+  log_error "  It would act on the Supervisor resolved from: ${SUP}"
+  log_error "                                which points at: ${_sup_srv:-<could not read a server URL from that file>}"
+  log_error "  CONFIRM proves you know the cluster NAME, not the ESTATE. If that is not the estate"
+  log_error "  you meant, do NOT re-run with the name below."
+  log_error "  Otherwise re-run naming the cluster you mean:"
   log_error "      make vks-cluster-delete CONFIRM=${VKS_CLUSTER_NAME}"
   exit 1
 fi
+log_warn "deleting on the Supervisor resolved from: ${SUP}"
+log_warn "  which points at: ${_sup_srv:-<could not read a server URL from that file>}"
 
 # --- OWNERSHIP: never delete a cluster this repo did not create ----------------------------------
 # Same guard as 98-uninstall-all.sh:262 and for the same reason: on a real lab this namespace also

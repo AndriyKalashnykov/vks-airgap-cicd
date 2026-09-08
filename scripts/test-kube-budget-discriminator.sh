@@ -73,12 +73,41 @@ else
 fi
 
 # 2. THE SSO GUARANTEE. Under a pure budget expiry nothing may prescribe the vCenter bind.
-if grep -q 'make vks-login' <<< "$_out"; then
+#
+# ⚠️ ITS POSITIVE CONTROL IS THE WHOLE CASE. A round MEASURED that without one this asserted the
+# ABSENCE of a string that cannot appear in this fixture on ANY branch: the SSO command is emitted
+# only by supervisor_renew_how's DEFAULT mode, reached only from _rejected_why's EXPIRED arm, which
+# needs kube_token_expiry to read a real expiring JWT -- and this fixture's kubeconfig carries no
+# token at all. So the single claim this file is proudest of was UNPROVEN by its own test.
+# The control below renders the SAME binary with a Supervisor kubeconfig carrying an EXPIRED JWT and
+# a stub that answers instantly with Unauthorized; if THAT does not print the command, this case can
+# discriminate nothing and says so instead of passing.
+_b64u() { printf '%s' "$1" | { base64 -w0 2>/dev/null || base64 | tr -d '\n'; } | tr -d '=' | tr '+/' '-_'; }
+_ctl="$(mktemp -d)"; mkdir -p "$_ctl/bin"
+cp .env.example "$_ctl/.env.example"
+printf "HARBOR_URL=10.0.0.1\nHARBOR_USERNAME='robot\$p'\nHARBOR_PASSWORD=x\n" > "$_ctl/.env"
+: > "$_ctl/kc"; printf 'apiVersion: v1\nkind: Config\n' > "$_ctl/sup"
+{ printf '#!/bin/sh\ncase "$*" in\n'
+  printf '  *user.token*) printf %%s %s; exit 0 ;;\n' "'h.$(_b64u '{"exp":1000000000}').s'"
+  printf '  *current-context*) echo c; exit 0 ;;\n  *version*) exit 0 ;;\n'
+  printf '  *"get ns"*|*"get secret"*) echo "error: You must be logged in to the server (Unauthorized)" >&2; exit 1 ;;\n'
+  printf 'esac\nexit 0\n'; } > "$_ctl/bin/kubectl"
+printf '#!/bin/sh\nexit 1\n' > "$_ctl/bin/curl"; cp "$_ctl/bin/curl" "$_ctl/bin/getent"
+chmod +x "$_ctl/bin/kubectl" "$_ctl/bin/curl" "$_ctl/bin/getent"
+_ctl_out="$( cd "$_ctl" && PATH="$_ctl/bin:$PATH" REPO_ROOT="$_ctl" VKS_STATE_FILE="$_ctl/.env.state" \
+    KUBECONFIG="$_ctl/kc" VKS_SUPERVISOR_KUBECONFIG="$_ctl/sup" CREDS_TOKEN=1 \
+    "${_R}/scripts/creds.sh" 2>&1 )"
+rm -rf "$_ctl"
+if ! grep -q 'make vks-login' <<< "$_ctl_out"; then
+  bad "case 2 is VACUOUS: its control -- an EXPIRED Supervisor token, the one state that SHOULD
+      prescribe the bind -- did not print 'make vks-login' either. Asserting its absence under a
+      timeout therefore measures nothing at all."
+elif grep -q 'make vks-login' <<< "$_out"; then
   bad "an expired budget produced a report naming make vks-login. That remedy performs a vSphere
       SSO bind and vCenter locks out PERMANENTLY after THREE failures -- it must never be
       prescribed for a state we could not even ask about."
 else
-  ok "an expired budget names no SSO command"
+  ok "an expired budget names no SSO command (and the control proves it CAN be printed)"
 fi
 
 # 3. THE POSITIVE CONTROL. Without it, cases 1-2 pass identically on a report that never ran a

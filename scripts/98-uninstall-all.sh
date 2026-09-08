@@ -47,28 +47,35 @@ for v in VKS_CLUSTER_NAME VKS_NAMESPACE ARGOCD_NAMESPACE HARBOR_INFRA_PROJECT HA
   esac
 done
 
+# ⚠️ RESOLVE AND DISCLOSE BEFORE THE GATE. A round measured that printing the estate AFTER the
+# CONFIRM check, immediately before the deletion, tells the operator to "STOP now" when they have
+# already committed -- a race against the script. Resolving first costs nothing
+# (state_kubeconfig_server PARSES the file: no network, no RBAC) and it means the FIRST, REFUSED run
+# is what informs them, and the second is deliberate.
+SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kubeconfig")"
+_sup_srv="$(state_kubeconfig_server "$SUP" 2>/dev/null || true)"
+
 # The operator must TYPE the cluster name. Not a y/n — a value that proves they know which lab this is.
+# 🔴 AND THE NAME IS NOT THE ESTATE. CONFIRM proves they know which CLUSTER; the Supervisor comes
+# from a candidate ladder, and a different lab's kubeconfig answers and authenticates just as well
+# (B547 mode 2). So the refusal names the estate it would have acted on.
 [ "${CONFIRM:-}" = "$VKS_CLUSTER_NAME" ] || die "refusing to delete anything without confirmation.
-  This removes what scenario-1 created on a REAL, SHARED lab. Re-run with the cluster name:
+  This removes what scenario-1 created on a REAL, SHARED lab.
+  It would act on the Supervisor resolved from: ${SUP}
+                              which points at: ${_sup_srv:-<could not read a server URL from that file>}
+  If that is not the estate you meant, do NOT re-run with the name below.
+  Otherwise re-run with the cluster name:
     make uninstall-all CONFIRM=${VKS_CLUSTER_NAME}"
+
+log_warn "acting on the Supervisor resolved from: ${SUP}"
+log_warn "  which points at: ${_sup_srv:-<could not read a server URL from that file>}"
 
 # ⚠️ VKS_SUPERVISOR_KUBECONFIG is the ONLY name — that is what the WRITER (30-vks-login.sh)
 # honours. An unprefixed SUPERVISOR_KUBECONFIG alias existed until 2026-08-24. MEASURED against git
 # history (2790ef7, #479): these readers accepted BOTH, prefixed first — so the alias was reachable
 # only by an operator who explicitly set the UNPREFIXED one, which the writer never wrote. Setting
 # the prefixed name always agreed. Collapsed to one name; do not reintroduce a second.
-SUP="$(supervisor_kubeconfig || printf '%s' "${REPO_ROOT}/secrets/supervisor.kubeconfig")"   # lib/os.sh: ONE resolver, first that EXISTS
 [ -f "$SUP" ] || { supervisor_kubeconfig_hint >&2; die "no Supervisor kubeconfig — see the search order above"; }
-# 🔴 SAY WHICH ESTATE. CONFIRM proves the operator knows the cluster NAME; it proves nothing about
-# WHICH SUPERVISOR the resolver just picked (B547 mode 2). The name is typed from memory, the estate
-# is resolved from a candidate ladder, and those are different facts. This reads the server URL out
-# of the kubeconfig FILE (state_kubeconfig_server: kubectl config view PARSES it -- no network, no
-# RBAC, works on a torn-down cluster), so it costs nothing and cannot itself fail the run.
-_sup_srv="$(state_kubeconfig_server "$SUP" 2>/dev/null || true)"
-log_warn "about to act on the Supervisor resolved from: ${SUP}"
-log_warn "  which points at: ${_sup_srv:-<could not read a server URL from that file>}"
-log_warn "  If that is not the estate you meant, STOP now: the resolver picks the first EXISTING"
-log_warn "  candidate, and a different lab's kubeconfig answers and authenticates just as well."
 # </dev/null and --request-timeout are LOAD-BEARING, not hygiene. MEASURED: kubectl against an
 # endpoint it cannot authenticate to emits `Please enter Username:` — an INTERACTIVE PROMPT. Every
 # call here is `>/dev/null 2>&1`, so the prompt is INVISIBLE, and the step-4 wait loop polls for up
