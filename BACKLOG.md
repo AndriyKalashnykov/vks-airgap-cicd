@@ -4691,7 +4691,53 @@ rather than a fact about the world; (3) a gating sibling validates the FULL outc
 catch it — design under adversary review. Each RED-proven with a stamped-for-another-cluster overlay,
 which reproduces in one command.
 
-## 🔴 B518 — `istio_discover` is BLIND to Gateway-API gateways, and its ambiguity guard cannot fire
+## 🔴 B518 — `istio_discover` is BLIND to Gateway-API gateways 🔴 open — but its Done-when is REFUTED
+
+⚠️ **DO NOT IMPLEMENT THE DONE-WHEN BELOW.** An idea round (2026-09-08) refuted it with two
+CRITICALs, and re-scoped the row. The blindness is real; the prescribed cure is not.
+
+1. **The discriminator is evaluated BEFORE the object it discriminates on exists**, so the fix is a
+   NO-OP on every first attach. `47-attach-istio.sh:81` calls `istio_discover`; `:83` calls
+   `istio_apply_routes_gwapi`, which **creates** the Gateway. On a fresh guest cluster there is no
+   Gateway and no HTTPRoute, so `Programmed=True and attachedRoutes>0` matches nothing and discovery
+   falls back to the classic decoy — byte-identical to today. It changes behaviour only from run 2,
+   where the thing it finds is **our own object**. A warm lab always has the Gateway, so no cluster
+   test would catch it.
+2. **A Gateway-API gateway makes `jq -r '.spec.selector.istio'` print the STRING `null`** — four
+   characters, not empty — and `istio_require_env` tests `[ -n "${!v:-}" ]`, which PASSES it. MEASURED.
+   `k8s/istio/gateway.yaml:24` then renders `istio: null`; the API server accepts it with no error and
+   it binds nothing → connection refused. That is verbatim the failure `istio_discover`'s own header
+   (`istio.sh:9-15`) says the function exists to prevent, re-created by the fix. Reachable today:
+   `ISTIO_ROUTE_API=classic` is a supported override that `48-istio-preflight.sh:145` recommends.
+3. **`Programmed=True` + an address is the exact pair this repo has already measured as insufficient,
+   at the very IP the row calls healthy.** `istio.sh:552-570` (B477, lab 2026-08-25): *"the Gateway was
+   Programmed with LB IP 192.168.101.135 while its proxy pod sat in CrashLoopBackOff"*. The
+   discriminator was TRUE while the data plane served nothing.
+4. **Widening the ambiguity guard fires on the HEALTHY lab** (one classic gateway Service + one
+   GW-API-provisioned Service = 2) and hard-blocks a tenant who can delete neither — converting a
+   cosmetic reporting inaccuracy into a refusal, which is worse for the default audience (RULE ZERO-B).
+
+**Two premises of the row are also wrong.** `make istio-preflight` does NOT inherit the blindness:
+`48-istio-preflight.sh:122` branches on `ISTIO_ROUTE_API == gateway-api` and exits 0 at `:146`,
+**28 lines before** `istio_discover` at `:150`. And `vks-ingress/vks-uis` is **ours**, not the
+platform's (`istio.sh:470-471` defaults) — so the "correct answer" the Done-when wants discovery to
+return is an artifact of our own previous run.
+
+**Re-scoped:** the row's real, measured harm is a REPORT naming a dead address, and the reporter is
+what B560 fixed. Leave `istio_discover` as the classic-gateway resolver. If a report must name the
+serving Gateway, do it AFTER `istio_apply_routes_gwapi`, from `istio_wait_gwapi_address`'s own return
+value, which already resolves it. Any GW-API preference must NOT populate `ISTIO_GATEWAY_LABEL` — that
+variable's contract is "the value of `spec.selector.istio`", and a GW-API gateway has none.
+
+⚠️ Residual: no cluster was reachable during the round, so live behaviour is inferred. Three read-only
+commands settle it, in order: (1) `make istio-preflight` on the lab — does it print `.134` at all, or
+exit 0 at `:146`? (2) `kubectl -n vks-ingress get svc vks-uis-istio -o jsonpath='{.spec.ports[*].port}'`
+— does it expose 15021, i.e. is the both-APIs ambiguity count really 2? (3) a FIRST attach on a fresh
+guest cluster with `INGRESS_CONTROLLER=istio-existing`, logging discovery's result at `47:81`.
+
+### The original row follows
+
+## 🔴 B518 (original) — `istio_discover` is BLIND to Gateway-API gateways, and its ambiguity guard cannot fire
 
 MEASURED 2026-08-28 on the live lab guest cluster, by an idea round and confirmed independently.
 `scripts/lib/istio.sh:68-75` finds the ingress gateway with a jq that requires a `spec.selector.istio`
@@ -4723,19 +4769,88 @@ Gateway is found; and the ambiguity guard counts candidates from BOTH APIs so it
 under `set -euo pipefail` kills the caller — and wrap it in `timeout`, since `kubectl get` costs ~15s
 against an unreachable API even with `--request-timeout=3s` (API discovery runs first).
 
-## 🔴 B519 — the ingress liveness probe is a bare TCP connect, which cannot tell a dead gateway from a live one
+## ✅ B519 — CLOSED as filed: its Done-when was met by B528 (26640c2, #1100)
 
-MEASURED 2026-08-28, both IPs on the lab guest cluster:
+Its Done-when was *"the probe is at HTTP **wherever the claim is `serving`**"*. B528 did exactly
+that on 2026-09-05: `_reach_ingress` (`creds.sh:929`) now curls each host **by IP with a `Host:`
+header** and the `case` at `:938-948` discriminates `serving` / `no backend` (5xx) / `no route`
+(404) / `silent` (000). The row's own cited lines are stale (`creds.sh:147`/`:459` are now `:188`/
+`:769`), which is what made it read as untouched.
 
-    192.168.101.134   tcp/80 = OPEN    curl HTTP 000  rc=56 (connection reset)   <- DEAD, zero routes
-    192.168.101.135   tcp/80 = OPEN    curl HTTP 200  rc=0                       <- serving 8 hosts
+⚠️ The **banner** is a different claim and is NOT `serving`, so it is a NEW row — see below. Filing
+it as a B519 residual hid that the Done-when had been met and mis-scoped the work.
 
-`scripts/creds.sh:147` probes with `/dev/tcp`. Envoy accepts the connection and then resets, so a
-TCP-level probe reports the dead gateway as ANSWERING and the `NOT ANSWERING` banner at `:459` never
-fires for the one case it exists for. Any design that reuses this probe inherits the blindness.
+## ✅ B560 — SHIPPED (#1165, 2026-09-08): the `/etc/hosts` hint was printed for a gateway that RSTs every connection, and the rows called it healthy
 
-**Done when:** the probe is at HTTP wherever the claim is "serving" (a response code, not a socket),
-bounded by the existing `CURL_MAX_TIME_SECONDS`, and still off under `CREDS_NO_PROBE=1`.
+MEASURED 2026-09-08, driving the real `creds.sh` against a listener that accepts then RSTs
+(`SO_LINGER 0`) — a model of a routeless Envoy, and the same shape B519 measured on the lab
+(`192.168.101.134`: tcp/80 OPEN, `curl` 000; `.135`: 200):
+
+    TCP connect (creds.sh:188, what _ing_live does)   -> rc=0    => _ing_live stays 1
+    curl -H 'Host: gitea.vks.local'                   -> "000"
+
+So the `NOT ANSWERING` banner at `:769` never fires in the one case it exists for, and the `elif`
+prints the **`add once to /etc/hosts`** block for an LB that completes no request — precisely what
+that block's own comment says it exists to prevent (*"a hosts entry pointing at nothing sends you to
+debug your browser"*).
+
+**And the rows do not merely fail to warn — they affirm the opposite.** In the state the hint exists
+for (the operator has NOT yet added `/etc/hosts`), the DNS arm at `:867` returns **before** the curl:
+
+    row a.notresolving.invalid -> no DNS here      _route_dead: NEVER WRITTEN
+    row b.notresolving.invalid -> no DNS here
+    row c.notresolving.invalid -> no DNS here
+
+`no DNS here` is defined at `:816-818` as *"the LB answers, the NAME does not resolve on this box …
+**the service itself is fine**."* When names DO resolve it is `silent` / `LB up` / `LB up` — `LB up`
+beside a hosts hint, on a gateway that RSTs.
+
+### 🔴 REFUTED — do NOT make `_ing_live` an HTTP verdict
+
+The obvious fix (replace the `/dev/tcp` connect with a `curl` status, any numeric code = alive) was
+designed and **refuted by an idea round, with four measured false-dead vectors**. `_ing_live` is not
+banner-local: `:843` short-circuits **every** ingress row to `silent`, so a false dead blanks all
+nine `Reachable` cells and destroys B528's discrimination.
+
+| vector | measured |
+|---|---|
+| slow / cold-start ingress | a 5 s responder: `/dev/tcp` ALIVE in 0.00 s, curl `000` at the 2 s default (control `--max-time 8` → 200) |
+| **curl absent** (bare Photon) | healthy 404 backend: curl present → alive; curl absent → `[]` → DEAD. `/dev/tcp` is a bash builtin and needs nothing |
+| IPv6 `INGRESS_LB_IP` | `http://::1:18090/` is not a URL: `/dev/tcp ::1` ALIVE, unbracketed curl `000` → DEAD (bracketed control: 404) |
+| TLS on the probe port | TLS-only listener: `/dev/tcp` ALIVE, plaintext `http://` → curl (56) reset → `000` → DEAD |
+
+**A false dead also reddens the six-row walk matrix**, hours later, pointing at a document:
+`docs/scenario-1.md:1099` and `docs/scenario-2.md:929` each carry `add once to /etc/hosts` as their
+**only** checkable Expect literal, and `test-creds-show.sh:1549-1578` pins it in both directions for
+exactly this reason. Verified independently.
+
+Also refuted: **moving the banner below the table to consume `_route_dead`** — in the target state
+the DNS arm returns first for every row, so the curl never runs and the sentinel is never written.
+
+### What shipped — a THIRD state; the socket verdict is untouched
+
+    TCP fails              -> NOT ANSWERING banner        (unchanged)
+    TCP ok + HTTP numeric  -> /etc/hosts hint             (unchanged)
+    TCP ok + HTTP 000      -> hint STILL PRINTED, plus a warning that the LB accepts connections
+                              but completes no HTTP request -- the signature of a gateway with no
+                              routes -- so the line below is correct IF this is the current ingress
+
+Every false-dead vector then costs a **warning you do not get**, never a suppressed hosts line and
+never nine blanked cells. Gate the extra probe on `have curl`; build the URL through ONE shared
+helper carrying `_reach_ingress:928`'s `*:*` arm **and** IPv6 brackets (two sibling URL builders
+will otherwise drift); bound it with `CREDS_ROUTE_TIMEOUT_SECONDS`.
+
+⚠️ **Neither suite can host the RED-proof.** `test-creds-reach-ingress.sh` extracts only
+`_reach_ingress` and sets `_ing_live` by hand in all 21 cases, so a top-level edit at `:176-190` is
+invisible to it; `test-creds-show.sh`'s hosts pin uses `render_with_env`, which sets
+`CREDS_NO_PROBE=1`. Both are green today. The proof must drive the **real `creds.sh`** against five
+`python3` listeners — accept-then-RST (the RED that fails today), plain 404 (the discriminating
+control), nothing listening, a slow 5 s responder, and a TLS-only port / a `PATH` without curl. The
+last three are the ones that matter: without them the fix passes over its own defect exactly as the
+14/14 did.
+
+⚠️ `.env.example:356-359` documents the CURRENT bias as a contract — *"anything other than a
+refused/timed-out connect counts as alive"* — so it changes in the same diff or the bias stands.
 
 ## ✅ B520 (REFUTED 2026-08-28 — recorded so it is not rebuilt) — `verify-ingress` does NOT go green against a leftover KinD cluster
 
