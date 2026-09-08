@@ -50,6 +50,31 @@ esac
 _fn="${_helpers}
 ${_fn}"
 
+# ⚠️ AND A GUARD FOR THE *NEXT* ONE. The per-extraction non-empty checks above catch a RENAME; they
+# are structurally blind to a NEW DEPENDENCY -- which is the defect that took this suite 21/21 ->
+# 12/9 (#1165), and the same blindness the old content guard had. So: scan what we extracted for
+# calls to functions creds.sh defines but we did NOT extract, and die naming them. Adding a
+# dependency then costs one line here with a loud failure, instead of nine silent collapses.
+_defined="$(grep -oE '^[a-z_][a-z0-9_]*\(\) \{' "${REPO_ROOT}/scripts/creds.sh" | sed 's/() {//' | sort -u)"
+_missing=""
+for _d in $_defined; do
+  case "$_fn" in
+    *"${_d}()"*) continue ;;                       # it IS one of the functions we extracted
+  esac
+  # A call is the name at a command position: line start, or after ( | && || ; $( -- not a substring
+  # of a longer identifier, and not inside a word.
+  if grep -qE "(^|[;&|(]|\\$\()[[:space:]]*${_d}([[:space:]]|\)|;|\||\$)" <<< "$_fn"; then
+    _missing="${_missing} ${_d}"
+  fi
+done
+if [ -n "$_missing" ]; then
+  echo "FATAL: the extracted code calls creds.sh function(s) that were NOT extracted:${_missing}"
+  echo "       That is exactly how this suite went 21/21 -> 12/9 (#1165): _reach_ingress grew a call"
+  echo "       to _ing_authority and the extraction did not pull it, so every route status collapsed"
+  echo "       to 'silent'. Add it to the _extract list above."
+  exit 1
+fi
+
 T="$(mktemp -d)"; trap 'rm -rf "$T"; [ -n "${SRV_PID:-}" ] && kill "$SRV_PID" 2>/dev/null' EXIT
 
 # A responder that returns whatever status the request's Host asks for, so one server covers every
