@@ -153,7 +153,7 @@ harbor_url="${harbor_scheme}://${HARBOR_URL:-harbor.vks.local}"
 # same lie-by-contrast that made the ArgoCD/Harbor rows inconsistent before: the reader concludes Harbor's
 # cert is trusted and ArgoCD's is not. Found by reading the REAL post-install table, not a simulated one.
 if [ "${HARBOR_INSECURE:-0}" != "1" ] && [ -n "${HARBOR_CA_FILE:-}" ]; then
-  harbor_url="${harbor_url} (self-signed; --insecure)"
+  harbor_url="${harbor_url} (untrusted cert)"
 fi
 # GITEA / TEKTON / THE APPS ARE ONLY REACHABLE AT *.vks.local IF THE INGRESS EXISTS.
 # The ingress is OPTIONAL in this repo (`make verify` proves the whole GitOps loop over a port-forward,
@@ -247,7 +247,7 @@ _probe_t0=$(date +%s 2>/dev/null || echo 0)
 _argo_tls_note() {
   case "$1" in
     https://[0-9]*.[0-9]*.[0-9]*.[0-9]*|https://[0-9]*.[0-9]*.[0-9]*.[0-9]*[:/]*)
-      printf ' (--insecure; see note)' ;;
+      printf ' (untrusted cert; see note)' ;;
     *) : ;;
   esac
 }
@@ -266,7 +266,7 @@ if [ -n "${ARGOCD_SERVER:-}" ]; then
 elif [ -n "${ARGOCD_LB_IP:-}" ]; then
   # KinD publishes this (07-install-argocd.sh). It is a DEFAULT — it applies only when the
   # operator has not said otherwise.
-  argocd_url="${argo_scheme}://${ARGOCD_LB_IP} (self-signed; --insecure)"
+  argocd_url="${argo_scheme}://${ARGOCD_LB_IP} (untrusted cert)"
 else
   # DISCOVER IT before giving up. MEASURED 2026-08-05: this printed `<not set>` and a footnote telling
   # the operator to "set ARGOCD_SERVER in .env" — while `kubectl -n <ns> get svc argocd-server` returned
@@ -678,10 +678,10 @@ case "$_prov" in
   # make it VARY, not to delete it. Unstamped (the normal real-lab state) is neutral; stamped-and-
   # contradicted names BOTH servers, so it is a fact the reader can check rather than a mood.
   STORED)     if [ -z "$_stamp" ]; then
-                printf '    values below : your .env plus a state overlay that carries no cluster stamp — which is\n'
-                printf '                   NORMAL on a real lab, and does NOT mean they are stale. Nothing here\n'
-                printf '                   proves either way; the Reachable column in the services table above is\n'
-                printf '                   the live answer for those rows. To re-check credentials: make env-validate\n'
+                printf '    values below : your .env, plus values discovered at install time. Nothing here records\n'
+                printf '                   WHICH cluster they came from, which is NORMAL on a real lab and does NOT\n'
+                printf '                   mean they are stale. The Reachable column BELOW is the live answer.\n'
+                printf '                   To re-check credentials: make env-validate\n'
               else
                 printf '    values below : ⚠️ the state overlay is stamped for a DIFFERENT cluster. Its endpoints and\n'
                 printf '                   passwords below belong to that one, not to the cluster you are talking to.\n'
@@ -1476,8 +1476,10 @@ fi
 # as sourced and is worse than no marker at all. Display text is not a control channel.
 case "${_argo_tls_flag:-0}" in
   1)
-    printf '\n  note: ArgoCD is at a BARE IP; its self-signed cert has no IP SAN, so TLS cannot\n'
-    printf '        verify it. --insecure logs you in; a verifying path needs a DNS name.\n' ;;
+    printf '\n  note: rows marked "untrusted cert" are not signed by a CA your machine trusts.\n'
+    printf '        In a browser: click through the warning. With curl/CLI: --insecure.\n'
+    printf '        ArgoCD is also at a BARE IP and its cert carries no IP SAN, so no client can\n'
+    printf '        verify it at that address at all; a verifying path needs a DNS name.\n' ;;
 esac
 
 # --- footnote: WHAT IS NOT REAL YET, and whose job it is to fix ------------------------
@@ -1948,8 +1950,8 @@ EOF
 # publishes no node-SSH secret"), `<unreachable>` and `<stale CA>` — every one of them a statement
 # about the lab, and scenario-1.md:1102 documents that intent ("never a blank that would read as
 # this cluster has none"). A reader applying the absolute would discount an actionable lab fact.
-printf '\n  Lab access — from your .env. A <not set> is a value THIS REPORT does not have; the\n'
-printf '                guest node SSH row is different — its tokens DO report the lab.\n'
+printf '\n  Lab access — from your .env. A <not set> means THIS REPORT does not have the value;\n'
+printf '                it does not mean the lab lacks one. The guest node SSH row is read live.\n'
 printf '\n  %-*s  %-*s  %-*s  %s\n' "$_lw1" "Target" "$_lw2" "Endpoint" "$_lw3" "Username" "Password"
 printf '  %-*s  %-*s  %-*s  %s\n' \
   "$_lw1" "$(printf '%*s' "$_lw1" '' | tr ' ' '-')" \

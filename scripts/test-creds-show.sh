@@ -236,8 +236,12 @@ fi
 # complaint that produced the change was, verbatim, "what is this shit" over a fully-serving lab.
 # What must still hold is the ORIGINAL intent: the human is told, not just the machine token. Grep a
 # one-line fragment of the replacement that states the actual reason.
-if printf '%s' "$out" | grep -qi 'carries no cluster stamp'; then
-  ok "...and tells the HUMAN why (no cluster stamp), not just the token"
+# ⚠️ KEYED ON THE PROPERTY, NOT THE PHRASE. This grepped 'carries no cluster stamp' — the exact
+# wording — so it fired RED when that phrase was replaced for being internal jargon a reader cannot
+# parse ("cluster stamp" is our word, not theirs). The intent above is that the human is told the
+# REASON; assert THAT, so the reason can be worded better without breaking the control.
+if printf '%s' "$out" | grep -qiE 'which cluster they came from|carries no cluster stamp'; then
+  ok "...and tells the HUMAN why (it cannot tell which cluster), not just the token"
 else
   bad "...but the human is not told WHY. The token alone is not the deliverable."
 fi
