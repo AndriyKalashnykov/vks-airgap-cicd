@@ -1352,22 +1352,45 @@ _sso_names() {
   # the warn-then-prescribe shape this matcher exists to catch. Any UNNEGATED mention counts.
   # ⚠️ CHARACTERS, NOT BYTES. `tail -c 24` shrinks the window by 2 chars per em-dash, and this
   # corpus is full of them; it can also start mid-UTF-8-sequence.
-  local _rest="$1" _pre _near
+  local _rest="$1" _pre _near _post
   while :; do
     case "$_rest" in *vks-login*) ;; *) return 1 ;; esac
     _pre="${_rest%%vks-login*}"; _near="${_pre: -24}"
+    # ⚠️ `${s: -24}` returns EMPTY when the string is SHORTER than 24 — measured, bash 5.2.21, and
+    # the threshold is exact (24 -> full, 23 -> empty). `tail -c 24` returned the whole string. So
+    # this "characters not bytes" fix introduced a false-RED generator: every mention in the first
+    # 24 chars got an empty negation window and was always FLAGGED, including
+    # "never run make vks-login on a state we cannot decide".
+    [ -n "$_near" ] || _near="$_pre"
     # ⚠️ THE IMMEDIATE CLAUSE, not a raw window. "if the token is not fresh, run: make vks-login"
     # has "not" 20 chars before the mention — but it negates "fresh", not the command, and the
     # comma proves it. Trim to the last clause boundary so only a negation that governs the VERB
     # counts. Measured: "so do NOT run make vks-login" stays silent; "...not fresh, run: make
     # vks-login" and "...not sure, run: make vks-login" are now FLAGGED.
+    # `-` and `:` are clause boundaries too, and `:` matters because the house style is literally
+    # "run: make vks-login" — measured SILENT before this: "do not delay - run make vks-login" and
+    # "this is not optional: run make vks-login".
     _near="${_near##*,}"; _near="${_near##*;}"; _near="${_near##*. }"
+    _near="${_near##* - }"; _near="${_near##*: }"
     case "$_near" in
       # `without ` is NOT here on purpose: "without running make vks-login you cannot proceed" is a
       # PRESCRIPTION, not a warning, and treating it as negated would be a false GREEN. Dropping it
       # also fails toward FLAG, which is the safe direction for this gate.
-      *[Nn][Oo][Tt]" "*|*[Nn][Ee][Vv][Ee][Rr]" "*) ;;                  # negated -> keep looking
-      *) return 0 ;;                                                 # an UNNEGATED mention
+      # `avoid ` joins the negations.
+      *[Nn][Oo][Tt]" "*|*[Nn][Ee][Vv][Ee][Rr]" "*|*[Aa][Vv][Oo][Ii][Dd]" "*) ;;   # negated BEFORE
+      *)
+        # ⚠️ A NEGATION CAN FOLLOW THE MENTION: "make vks-login is not safe here" reads as a
+        # warning, and the governing word is AFTER. Checking only the preceding window flagged
+        # three such warnings — false REDs whose only remedy is deleting a correct warning, which
+        # this file records as a refuted class. Scope it to the same clause on the other side.
+        _post="${_rest#*vks-login}"
+        _post="${_post%%,*}"; _post="${_post%%;*}"; _post="${_post%%. *}"
+        case "$_post" in
+          # `" cannot "` is NOT here: "without running make vks-login you cannot proceed" is a
+          # PRESCRIPTION, and treating it as negated was a false GREEN. Measured.
+          *" is not "*|*" must not "*|*" would be wrong"*|*" is unsafe"*) ;;      # negated AFTER
+          *) return 0 ;;
+        esac ;;
     esac
     _rest="${_rest#*vks-login}"
   done
@@ -1464,6 +1487,9 @@ else
   _narms="$(printf '%s\n' "$_arms" | grep -c . || true)"
   if [ "${_nfiles:-0}" -lt 2 ]; then
     bad "SSO gate: derived ${_nfiles:-0} consumer file(s), expected >= 2 — the derivation is broken, not the code"
+    # ⚠️ AND STOP. `bad` does not exit, and awk/grep with ZERO file operands read STDIN — measured
+    # consuming /dev/zero until a 3s timeout. A derivation failure must go red, not hang.
+    _cfiles=/dev/null
   fi
   # VACUITY: a scanner that returns nothing, or too little, is measuring nothing. Three blocks x
   # three arms is the floor; a PARTIAL extract (a comment truncating a block) is what an
@@ -1471,25 +1497,38 @@ else
   # The floor is DERIVED: at least 2 arms per consumer file. A hardcoded 9 went RED when a block
   # was legitimately removed, accusing the scanner and inviting the maintainer to edit the number
   # DOWN -- i.e. to weaken the gate as the cheapest way to go green.
-  # 🔴 THE FLOOR MUST NOT COME FROM THE SCAN IT POLICES. It was derived from `$_arms`, so anything
-  # that made a block INVISIBLE also lowered the floor and erased the evidence: writing one label
-  # as `(EXPIRED*)` dropped a whole block (9 arms -> 6, floor 6 -> 4) and 6 >= 4 passed, while that
-  # block's undecidable arm literally prescribed the command. MEASURED, end-to-end, suite green.
-  # An INDEPENDENT grep cannot be shrunk by a scanner bug. (It was also an ARM count wearing a
-  # block count's name: two EXPIRED-ish labels in one block inflated it.)
-  # shellcheck disable=SC2086  # deliberate word-splitting: one path per line, no spaces in them
-  _nblocks="$(grep -hcE '^[[:space:]]*\(?EXPIRED\*?\)' $_cfiles 2>/dev/null | awk '{t+=$1} END{print t+0}')"
-  _floor=$(( (_nblocks > 0 ? _nblocks : _nfiles) * 3 ))
+  # 🔴 A RATCHET, because NOTHING DERIVED FROM THE TREE SURVIVES THE ATTACK. Two attempts failed:
+  #   - derived from `$_arms`  : anything that hid a block ALSO lowered the floor and erased its own
+  #                              evidence (measured: 9 arms -> 6, floor 6 -> 4, green over a live
+  #                              `make vks-login` prescription).
+  #   - an "independent" grep  : keyed on the same LABEL SPELLING, so `'EXPIRED'*)` blinded BOTH the
+  #                              scanner and the floor in lockstep — measured, identical failure.
+  #   - `kube_token_expiry` call sites: 6 (comments included) against 9 arms -> false RED.
+  # A committed constant is the only signal a scanner bug cannot shrink. It is NOT the hardcoded
+  # floor that was removed earlier: that one accused the SCANNER when a consumer was legitimately
+  # removed. This one names both possibilities and says which edit is correct.
+  _SSO_MIN_ARMS=9   # 3 consumer blocks x 3 arms. Adding a consumer RAISES this; removing one lowers
+                    # it — and either edit must appear in the diff, which is the point.
+  _floor="$_SSO_MIN_ARMS"
   if [ "${_narms:-0}" -lt "$_floor" ]; then
-    bad "SSO gate: EITHER a consumer block was legitimately removed OR the scanner desynced — it returned ${_narms:-0} arms across ${_nfiles} consumer file(s), expected >= ${_floor}"
+    bad "SSO gate: ${_narms:-0} arms across ${_nfiles} consumer file(s), expected >= ${_floor}.
+      EITHER the scanner desynced (a label or terminator shape it cannot see — CHECK THAT FIRST,
+      it is how every previous defect here presented) OR a consumer was legitimately removed, in
+      which case lower _SSO_MIN_ARMS deliberately and say so in the commit."
   else
     _viol=0; _named=0
     # ⚠️ SYNTHETIC RECORDS GO THROUGH THE SAME LOOP. The two fixtures above call `_sso_names`
     # DIRECTLY, so they pin the FUNCTION and not the ROUTE: deleting the call inside this loop left
     # the whole suite byte-identically green — the very defect they were added to close, moved one
     # line down. These two must contribute exactly ONE violation between them.
-    _arms="$(printf '%s\nSELFTEST\tSELFTEST-BAD*)\tunknown state, run: make vks-login now\nSELFTEST\tSELFTEST-OK*)\tthis is undecidable, so do NOT run make vks-login here' "$_arms")"
-    _synth=0
+    # THREE synthetics, because there are TWO detection routes and each needs its own. The third
+    # pins the per-occurrence call check: deleting THAT loop left the suite byte-identically green
+    # while an arm called `$(_renew_how --typo)` — the guard reporting "the detection route is live"
+    # over precisely the state its own message describes as dead.
+    # shellcheck disable=SC2016  # the `$( )` in the synthetic record is DATA — the literal text an
+    # arm would contain — not a substitution to perform. Single quotes are the point.
+    _arms="$(printf '%s\nSELFTEST\tSELFTEST-BAD*)\tunknown state, run: make vks-login now\nSELFTEST\tSELFTEST-OK*)\tthis is undecidable, so do NOT run make vks-login here\nSELFTEST-CALL\tSELFTEST-CALL*)\tremedy is $(_renew_how --bogus)' "$_arms")"  # single-quoted: the $( ) is DATA, not a call
+    _synth=0; _synth_call=0
     while IFS="$(printf '\t')" read -r _af _al _at; do
       [ -n "${_al:-}" ] || continue
       # does this arm name the SSO command, by EITHER route?
@@ -1512,8 +1551,10 @@ else
         [ -n "$_call" ] || continue
         case "$_call" in
           "renew_how --ask-only"|"renew_how --no-command"|"renew_how") ;;
-          *) _viol=$((_viol + 1))
-             printf '        ^ %s %s calls the remedy as [%s] — unrecognised mode\n' "$_af" "$_al" "$_call" >&2 ;;
+          *) if [ "$_af" = SELFTEST-CALL ]; then _synth_call=$((_synth_call + 1))
+             else _viol=$((_viol + 1))
+               printf '        ^ %s %s calls the remedy as [%s] — unrecognised mode\n' "$_af" "$_al" "$_call" >&2
+             fi ;;
         esac
       done <<CALLS
 $(printf '%s' "$_at" | grep -o 'renew_how[^)"]*' || true)
@@ -1537,6 +1578,11 @@ CALLS
     done <<INNER
 $_arms
 INNER
+    if [ "$_synth_call" -ne 1 ]; then
+      bad "SSO gate: the self-test call record produced $_synth_call violation(s), expected exactly 1 — the per-occurrence MODE check is dead, so an arm can call the remedy with any flag unexamined"
+    else
+      ok "SSO gate: the call-mode route is live too (a bogus mode is caught through the loop)"
+    fi
     if [ "$_synth" -ne 1 ]; then
       bad "SSO gate: the self-test records produced $_synth violation(s), expected exactly 1 — the detection ROUTE through this loop is dead, so every real arm is passing unexamined"
     else

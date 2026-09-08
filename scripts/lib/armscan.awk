@@ -28,14 +28,20 @@ function label_end(s,   i, d, c) {          # index of the ")" that closes the l
 FNR == 1 { depth = 0; n = 0; has = 0; lab = ""; buf = ""; want = 0 }
 { line = $0
   sub(/^[[:space:]]+/, "", line)
+  # A TRAILING COMMENT must not hide the arm terminator. `;;   # the cause is a FACT here` made the
+  # NEXT arm merge into this one — and since EXPIRED is first in every consumer, it inherited the
+  # exempting label. Measured: 10 of 11 label spellings false-GREEN under that terminator, the
+  # spelling being irrelevant. (Quotes are excluded from the strip so a `#` inside a string stays.)
+  sub(/[[:space:]]+#[^"'\'']*$/, "", line)
   sub(/[[:space:]]+$/, "", line)
   if (line ~ /^#/) next                       # a COMMENT is not code
   if (line == "") next
 
   # A one-line `case … in … esac` opens and closes on the same line: it must not move depth, but it
   # IS part of the enclosing arm's body and can carry the remedy.
-  if (line ~ /^case[[:space:]]/ && line ~ /esac[[:space:]]*(;;)?[[:space:]]*$/) {
+  if (line ~ /^case[[:space:]]/ && line ~ /esac[[:space:]]*(;;&?|;&)?[[:space:]]*$/) {
     if (lab != "") buf = buf " " line
+    if (depth == 1 && line ~ /;;&?$|;&$/) want = 1   # it CLOSED the enclosing arm too
     next
   }
   if (line ~ /^case[[:space:]]/) {
@@ -43,6 +49,7 @@ FNR == 1 { depth = 0; n = 0; has = 0; lab = ""; buf = ""; want = 0 }
     if (depth == 1) { n = 0; has = 0; lab = ""; buf = ""; want = 1 }   # next line is a LABEL
     next
   }
+  if (depth >= 2 && line ~ /^esac/ && line ~ /;;&?$|;&$/) { depth--; if (depth == 1) want = 1; next }
   if (depth >= 1 && line ~ /^esac/) {
     if (depth == 1) {
       flush_arm()
